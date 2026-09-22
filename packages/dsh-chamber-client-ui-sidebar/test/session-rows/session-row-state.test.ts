@@ -10,7 +10,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { sessionRowState } from '../../src/shared/session-row-state.ts'
+import { sessionRowState, subagentActivityOf } from '../../src/shared/session-row-state.ts'
 
 const read = (rel: string): string => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8')
 const SECTION = [
@@ -47,6 +47,29 @@ test('the source names where the displayed reading came from', () => {
   assert.equal(sessionRowState({ running: true, stale: true }).source, 'stale')
 })
 
+test('P5: subagent activity is tri-state, and unknown never claims the subagent ring', () => {
+  assert.equal(subagentActivityOf({ runningSubagents: 2 }), 'running')
+  assert.equal(subagentActivityOf({ runningSubagents: 0 }), 'none')
+  assert.equal(subagentActivityOf({ runningSubagents: 2, stale: true }), 'unknown')
+  assert.equal(subagentActivityOf({ runningSubagents: 2 }, true), 'unknown', 'the report-level stale flag is the same guard')
+  assert.equal(subagentActivityOf({ subagentActivity: 'running', runningSubagents: 2, stale: true }), 'unknown')
+  assert.equal(subagentActivityOf({ subagentActivity: 'unknown', runningSubagents: 2 }), 'unknown')
+  assert.equal(subagentActivityOf({ subagentActivity: 'none', runningSubagents: 2 }), 'none', 'the declared fact wins over the raw count')
+  assert.equal(subagentActivityOf(undefined), 'none')
+  // The marker: a stale subagent count never outranks completed/running, and the
+  // source still reports stale (the user learns the reading may be old).
+  assert.deepEqual(sessionRowState({ runningSubagents: 2, completed: true, stale: true }).state, 'completed')
+  assert.deepEqual(sessionRowState({ runningSubagents: 2, completed: true, stale: true }).source, 'stale')
+  assert.deepEqual(sessionRowState({ subagentActivity: 'unknown', running: true }).state, 'running')
+})
+
+test('P5: the upstream completeness-signal ask is pinned until upstream lands it', () => {
+  const proposals = read('../../../../docs/progress/todo/upstream-proposals.md')
+  assert.match(proposals, /## 7\. 子代理生命周期\/计数与完整性信号/)
+  // The local fallback this test retires: an ABSENT lineage index is unknown, never "none".
+  assert.match(read('../../src/shared/derive.ts'), /subagentRunning === undefined\s*\n\s*\? 'unknown'/)
+})
+
 test('the row and the todo strip carry the markers (no copy/class-name dependence)', () => {
   assert.match(SECTION, /data-chamber-session-state=\{sessionStateMarker\(server, session\)\.state\}/)
   assert.match(SECTION, /data-chamber-state-source=\{sessionStateMarker\(server, session\)\.source\}/)
@@ -63,7 +86,10 @@ test('the row marker reads the same inputs as the dot (facts + resolved ring bit
   assert.match(SECTION, /completed: facts\?\.completed/)
   assert.match(SECTION, /pending: facts\?\.pending/)
   assert.match(SECTION, /runningSubagents: facts\?\.runningSubagents/)
+  assert.match(SECTION, /subagentActivity: facts\?\.subagentActivity/)
   assert.match(SECTION, /stale: server\.runtime\?\.stale/)
+  // 读数与圆点共用同一个三值守卫：unknown 不宣称在跑。
+  assert.match(SECTION, /subagentActivityOf\(facts, server\.runtime\?\.stale\) === 'running'/)
 })
 
 /**

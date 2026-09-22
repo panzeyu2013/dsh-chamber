@@ -100,6 +100,16 @@ export function swiftAssertions(tablesPath) {
     'check("rebuild denied in same window", !CarrierDecision.shouldRebuild(phaseClosed: false, pendingRebuildInFlight: false, rebuildsAt: [0], at: 30000, tables: tables))',
     'check("rebuild admitted at window edge", CarrierDecision.shouldRebuild(phaseClosed: false, pendingRebuildInFlight: false, rebuildsAt: [0], at: 60000, tables: tables))',
     'check("closed carrier never rebuilds", !CarrierDecision.shouldRebuild(phaseClosed: true, pendingRebuildInFlight: false, rebuildsAt: [], at: 0, tables: tables))',
+    // G-F: the TS reducer refuses an unusable clock (decideRebuild: !isFinite(at) =>
+    // false). The mirror must agree, or the shell rebuilds the carrier on a clock
+    // the page would hold on.
+    'check("NaN at never rebuilds", !CarrierDecision.shouldRebuild(phaseClosed: false, pendingRebuildInFlight: false, rebuildsAt: [], at: Double.nan, tables: tables))',
+    'check("+inf at never rebuilds", !CarrierDecision.shouldRebuild(phaseClosed: false, pendingRebuildInFlight: false, rebuildsAt: [], at: Double.infinity, tables: tables))',
+    'check("-inf at never rebuilds", !CarrierDecision.shouldRebuild(phaseClosed: false, pendingRebuildInFlight: false, rebuildsAt: [], at: -Double.infinity, tables: tables))',
+    // G-B in Swift: the progress SLA only applies while the shell is LOADING. The
+    // probeSucceeded path leaves loadingSinceMs behind, so "late" must be a phase
+    // predicate, not a timestamp predicate.
+    'check("a settled shell is never late", !cleared.isLate(now: 1000000, env: env))',
     'check("stall denied below streak", !CarrierDecision.stallEscalationAllowed(streak: 1, tables: tables))',
     'check("stall allowed at streak", CarrierDecision.stallEscalationAllowed(streak: 2, tables: tables))',
     'check("teardown silent on zero frames + long life", CarrierDecision.teardownMayJudgeSilent(frameDelta: 0, streamLifeMs: 20000, tables: tables))',

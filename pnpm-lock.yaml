@@ -208,6 +208,9 @@ importers:
       '@dsh-chamber/dsh-chamber-client-ui-sidebar':
         specifier: workspace:^
         version: link:../dsh-chamber-client-ui-sidebar
+      '@dsh-chamber/dsh-stream-state':
+        specifier: workspace:^
+        version: link:../dsh-stream-state
       react-dom:
         specifier: ^19.0.0
         version: 19.2.8(react@19.2.8)

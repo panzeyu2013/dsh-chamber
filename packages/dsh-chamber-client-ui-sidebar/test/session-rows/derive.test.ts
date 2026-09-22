@@ -538,7 +538,7 @@ function legacyMergeRuntimeFacts(
 
 const RUNTIME_FACTS: InstanceRuntimeReport = {
   current: 's1',
-  sessionFactReconcile: { requestedAt: 1_000, settledAt: 2_000, ok: true, attempts: 1 },
+  sessionAuthority: { requestedAt: 1_000, settledAt: 2_000, ok: true, progressStamp: 1, probes: 0, corrections: 0, recent: [] },
   sessions: {
     s1: { running: true },
     s2: { running: false, pending: 'approval', runningSubagents: 2 },
@@ -634,12 +634,30 @@ test('projectRuntimeFacts: live bits, pending kinds, subagent and sparse lineage
   assert.deepEqual(report, {
     current: 's1',
     sessions: {
-      s1: { running: true, completed: true, pending: 'question', runningSubagents: 2 },
-      s2: { running: false, completed: true },
-      c: { running: false },
+      s1: { running: true, completed: true, pending: 'question', runningSubagents: 2, subagentActivity: 'running' },
+      s2: { running: false, completed: true, subagentActivity: 'none' },
+      c: { running: false, subagentActivity: 'none' },
     },
   }, 'subagent rows and unknown kinds never enter the report; zero counts stay sparse')
   assert.deepEqual(projectRuntimeFacts({}), { sessions: {} })
+})
+
+test('P5: subagent activity is tri-state, and a stale report downgrades running to unknown', () => {
+  const snapshot = {
+    byId: {
+      s1: { running: false },
+      sub1: { running: true, origin: 'subagent' as const, parentId: 's1' },
+    },
+  }
+  // The lineage index is absent: honest answer is unknown, never "none".
+  assert.deepEqual(projectRuntimeFacts(snapshot).sessions.s1, { running: false, subagentActivity: 'unknown' })
+  const withIndex = projectRuntimeFacts(snapshot, new Map([['s1', 1]]))
+  assert.deepEqual(withIndex.sessions.s1, { running: false, runningSubagents: 1, subagentActivity: 'running' })
+  // A disconnected source's leftover count is not evidence of live work: the merge
+  // downgrades the claim (neutral), while the count itself stays for diagnosis.
+  const merged = mergeRuntimeFacts(withIndex, undefined, undefined, true)
+  assert.deepEqual(merged?.sessions.s1, { running: false, runningSubagents: 1, subagentActivity: 'unknown' })
+  assert.equal(merged?.stale, true)
 })
 
 // ---- labels / schedule / blank reuse ----
@@ -807,10 +825,10 @@ test('reconcileCompletedFacts: a background edge arms, the read session never ar
 })
 
 test('runtimeReportSignature: the L1 receipt, onlyIds and listComplete identity discipline', () => {
-  const receipt: InstanceRuntimeReport = { sessions: { p: { running: true } }, sessionFactReconcile: { requestedAt: 1_000, settledAt: 2_000, ok: true, attempts: 1 } }
+  const receipt: InstanceRuntimeReport = { sessions: { p: { running: true } }, sessionAuthority: { requestedAt: 1_000, settledAt: 2_000, ok: true, progressStamp: 1, probes: 0, corrections: 0, recent: [] } }
   assert.notEqual(runtimeReportSignature({ sessions: { p: { running: true } } }), runtimeReportSignature(receipt),
     'a receipt-only settlement must re-sign, or the liveness guard never sees the verdict')
-  assert.equal(runtimeReportSignature(receipt), runtimeReportSignature({ ...receipt, sessionFactReconcile: { requestedAt: 1_000, settledAt: 2_000, ok: true, attempts: 1 } }))
+  assert.equal(runtimeReportSignature(receipt), runtimeReportSignature({ ...receipt, sessionAuthority: { requestedAt: 1_000, settledAt: 2_000, ok: true, progressStamp: 1, probes: 0, corrections: 0, recent: [] } }))
   const hidden = { current: 's1', sessions: { s1: { running: true }, s2: { completed: true } } }
   assert.equal(runtimeReportSignature(hidden, new Set(['s1'])),
     runtimeReportSignature({ ...hidden, sessions: { s1: { running: true }, s2: { completed: true, running: true } } }, new Set(['s1'])),
@@ -1121,7 +1139,7 @@ test('round-3 restore: reconcile composition, replaced receipt variants and repo
   assert.notEqual(runtimeReportSignature({ sessions: { p: { running: false } } }), runtimeReportSignature({ sessions: { p: { running: false, runningSubagents: 2 } } }), 'subagent counts matter')
   assert.notEqual(runtimeReportSignature({ sessions: { p: { running: false } } }), runtimeReportSignature({ sessions: { p: { running: false, pending: 'approval' } } }), 'pending kinds matter')
   assert.notEqual(runtimeReportSignature({ sessions: { p: { pending: 'approval' } } }, undefined, false), runtimeReportSignature({ sessions: { p: { pending: 'question' } } }, undefined, false))
-  assert.notEqual(runtimeReportSignature({ sessions: {}, sessionFactReconcile: { requestedAt: 1_000, settledAt: 2_000, ok: true, attempts: 1 } }), '', 'a receipt-only report is content')
+  assert.notEqual(runtimeReportSignature({ sessions: {}, sessionAuthority: { requestedAt: 1_000, settledAt: 2_000, ok: true, progressStamp: 1, probes: 0, corrections: 0, recent: [] } }), '', 'a receipt-only report is content')
   assert.equal(runtimeReportSignature({ sessions: {} }), '', 'a truly empty report stays empty')
   assert.equal(runtimeReportSignature({ current: 's1', sessions: { s1: { running: true } } }, undefined, false), runtimeReportSignature({ current: 's1', sessions: { s1: { running: false } } }, undefined, false), 'the projection path drops the running bit')
   assert.notEqual(runtimeReportSignature({ sessions: { s1: { completed: true } } }, undefined, false), runtimeReportSignature({ sessions: { s1: {} } }, undefined, false), 'rendered facts still matter in the projection path')

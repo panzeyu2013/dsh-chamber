@@ -8,15 +8,29 @@
  *   - the session-surface hold keeps it while the requested session is not on
  *     screen (session-surface.ts:76/82: 2s for a missing root, 70s for hero/settling);
  *   - the App's open lifecycle releases the intent (up to 68s queued).
- * Nothing computes the TOTAL bound, so 'is there a state the user can be parked in
- * forever?' is not answerable from the code. Here it is: {@link veilUpperBoundMs}
+ * Nothing computed the TOTAL bound, so 'is there a state the user can be parked in
+ * forever?' was not answerable from the code. Here it is: {@link veilUpperBoundMs}
  * is the only calculator, and {@link presentationBoundWithinGoal} proves the goal's
  * 155s invariant holds for every phase.
  *
- * PURITY: zero imports, no clock reads, no DOM. All facts and all thresholds
- * arrive as inputs (the wiring supplies them from the existing modules), so this
- * file is the single place the composition is defined.
+ * THE FRAME IS AN ABSOLUTE DEADLINE, NOT A DELAY. A delay cannot answer when the
+ * veil will be lifted: a 0 ms re-arm leaves the tenant hidden with nothing saying
+ * when it will be shown. A frame therefore carries:
+ *   - `mode` - which face the shell renders;
+ *   - `veil` - whether the TENANT is covered (`held`), released with an exit
+ *     (`actionable`), or released (`released`);
+ *   - `actions` - whether recovery controls belong on screen;
+ *   - `releaseAtMonoMs` - the absolute monotonic moment the held veil must be
+ *     re-evaluated, finite for every non-released frame.
+ * {@link planVeilTimer} is the only translator from that absolute moment to a timer
+ * delay, and it refuses to arm a 0 ms timer for a held frame.
+ *
+ * PURITY: zero imports beyond the sibling time helpers, no clock reads, no DOM. All
+ * facts and all thresholds arrive as inputs, so this file is the single place the
+ * composition is defined.
  */
+
+import { elapsedSince, normalizeAt } from './time.ts'
 
 /** What the shell itself reports about the requested session (session-surface.ts).
  * `unknown` is a distinct state: an unreadable `data-phase` must not fold into
@@ -62,15 +76,22 @@ export type PresentationMode =
   | 'loading-stuck' // progress face WITH actions (retry/switch/reload)
   | 'contents'      // the tenant is visible (no veil)
 
+/** Whether the TENANT is covered by the frame. */
+export type VeilState =
+  | 'released'   // tenant visible, nothing pending
+  | 'held'       // tenant covered; releaseAtMonoMs is a finite future moment
+  | 'actionable' // tenant visible AND recovery actions belong on screen
+
 export interface PresentationFrame {
   readonly mode: PresentationMode
-  /** Whether the tenant shell must be hidden (veil held). */
-  readonly veilVisible: boolean
-  /** Whether the progress face must offer actions. */
+  /** Coverage of the tenant, not of the boot face: a deferred source has no tenant
+   * and is `actionable` (the connect face IS the exit). */
+  readonly veil: VeilState
+  /** Whether the progress face must offer recovery actions. */
   readonly actions: boolean
-  /** Deadline for THIS frame, in ms from now: the caller re-evaluates then.
-   *  Infinity when nothing is pending (contents/failure/deferred). */
-  readonly reevaluateInMs: number
+  /** Absolute monotonic release/evaluation moment. Finite for every frame; for
+   * `held` it is strictly in the future relative to the `nowMs` that produced it. */
+  readonly releaseAtMonoMs: number
 }
 
 /** The bound for one surface phase, from the threshold table. `unknown` shares the
@@ -81,91 +102,147 @@ export function surfaceBoundMs(
   phase: SessionSurfacePhase,
   thresholds: PresentationThresholds,
 ): number {
+  const safe = usableThresholds(thresholds)
   switch (phase) {
     case 'active':
       return 0
     case 'hero':
     case 'settling':
-      return thresholds.surfaceMaxHoldMs
+      return safe.surfaceMaxHoldMs
     case 'absent':
     case 'unknown':
-      return thresholds.surfaceAbsentFallbackMs
+      return safe.surfaceAbsentFallbackMs
   }
 }
 
-function elapsedSince(startedAt: number | null, nowMs: number): number | null {
-  if (startedAt === null) return null
-  const elapsed = nowMs - startedAt
-  // A non-finite or negative elapsed (clock rollback) must never release: hold on
-  // and let the caller re-arm. Same discipline as reveal-gate.ts.
-  return Number.isFinite(elapsed) && elapsed >= 0 ? elapsed : null
+/**
+ * A threshold set with every unusable value replaced by the largest finite one (0
+ * when none is usable). An unusable threshold must not become a NaN deadline: a
+ * held veil whose deadline is NaN can never be scheduled for release.
+ */
+function usableThresholds(thresholds: PresentationThresholds): PresentationThresholds {
+  const candidates = [thresholds.veilActionsAfterMs, thresholds.surfaceMaxHoldMs, thresholds.surfaceAbsentFallbackMs]
+    .filter((value) => Number.isFinite(value) && value >= 0)
+  const fallback = candidates.length > 0 ? Math.max(...candidates) : 0
+  const usable = (value: number): number => (Number.isFinite(value) && value >= 0 ? value : fallback)
+  return {
+    veilActionsAfterMs: usable(thresholds.veilActionsAfterMs),
+    surfaceMaxHoldMs: usable(thresholds.surfaceMaxHoldMs),
+    surfaceAbsentFallbackMs: usable(thresholds.surfaceAbsentFallbackMs),
+  }
+}
+
+/** A finite anchor for frames produced while the clock is unusable. */
+function anchorOf(nowMs: number): number {
+  return Number.isFinite(nowMs) ? nowMs : 0
+}
+
+function releasedFrame(mode: PresentationMode, actions: boolean, nowMs: number): PresentationFrame {
+  return { mode, veil: 'released', actions, releaseAtMonoMs: anchorOf(nowMs) }
+}
+
+function actionableFrame(mode: PresentationMode, nowMs: number): PresentationFrame {
+  return { mode, veil: 'actionable', actions: true, releaseAtMonoMs: anchorOf(nowMs) }
+}
+
+function heldFrame(mode: PresentationMode, actions: boolean, releaseAtMonoMs: number): PresentationFrame {
+  return { mode, veil: 'held', actions, releaseAtMonoMs }
+}
+
+/**
+ * Translate the frame's absolute deadline into the timer delay the caller arms.
+ * - a non-held frame needs no timer (0);
+ * - a held frame with a non-finite clock returns Infinity: the veil holds until the
+ *   next state change re-evaluates it, but a broken clock can never arm an immediate
+ *   (0 ms) re-arm;
+ * - a held frame with a finite clock must release in the FUTURE, so a fabricated or
+ *   stale frame is rejected loudly instead of covered up.
+ */
+export function planVeilTimer(frame: PresentationFrame, nowMonoMs: number): number {
+  if (frame.veil !== 'held') return 0
+  if (!Number.isFinite(frame.releaseAtMonoMs)) {
+    throw new Error('planVeilTimer: a held frame must carry a finite releaseAtMonoMs')
+  }
+  if (!Number.isFinite(nowMonoMs)) return Number.POSITIVE_INFINITY
+  const delay = frame.releaseAtMonoMs - nowMonoMs
+  if (!(delay > 0)) {
+    throw new Error(
+      'planVeilTimer: a held frame must release in the future (releaseAt=' +
+      String(frame.releaseAtMonoMs) + ', now=' + String(nowMonoMs) + ')',
+    )
+  }
+  return delay
 }
 
 /**
  * Decide the visible frame. Total function: every input combination returns a
- * mode, a veil flag and a re-evaluation deadline.
+ * mode, a coverage state, an actions flag and an absolute release moment.
  *
  * Precedence (highest first): failure overlay, contents when the surface says so,
  * deferred, then the boot-veil ladder. The surface can only RELEASE - it never
  * invents a hold: `holdForOpenIntent === false` means the App has already decided
  * the session is not its business any more.
+ *
+ * Boundary semantics:
+ * - hero/settling past `surfaceMaxHoldMs` are `actionable` (tenant visible, actions
+ *   offered) - the b73bce74 70s reveal, not an opaque veil re-armed at 0 ms;
+ * - absent/unknown past `surfaceAbsentFallbackMs` are `released`;
+ * - a deferred source is `actionable` immediately (its connect face is the exit);
+ * - an unanchored or rolled-back clock, and a non-finite `nowMs`, HOLD with a finite
+ *   future deadline instead of releasing (I4) or re-arming at 0 ms.
  */
 export function decidePresentation(
   facts: PresentationFacts,
   thresholds: PresentationThresholds,
 ): PresentationFrame {
+  const safe = usableThresholds(thresholds)
   if (facts.failureOverlayVisible) {
-    return { mode: 'failure', veilVisible: false, actions: false, reevaluateInMs: Number.POSITIVE_INFINITY }
+    return releasedFrame('failure', false, facts.nowMs)
   }
 
   if (!facts.settled) {
     if (facts.bootDeferred) {
-      return { mode: 'deferred', veilVisible: true, actions: true, reevaluateInMs: Number.POSITIVE_INFINITY }
+      // No tenant exists to cover: the connect face with its action IS the exit.
+      return actionableFrame('deferred', facts.nowMs)
     }
-    const stuck = facts.waitedMs >= thresholds.veilActionsAfterMs
-    const remaining = Math.max(0, thresholds.veilActionsAfterMs - facts.waitedMs)
-    return {
-      mode: stuck ? 'loading-stuck' : 'loading',
-      veilVisible: true,
-      actions: stuck,
-      reevaluateInMs: remaining,
+    const waitedMs = normalizeAt(facts.waitedMs)
+    if (waitedMs < safe.veilActionsAfterMs) {
+      const releaseAt = anchorOf(facts.nowMs) + Math.max(1, safe.veilActionsAfterMs - waitedMs)
+      return heldFrame('loading', false, releaseAt)
     }
+    return actionableFrame('loading-stuck', facts.nowMs)
   }
 
   // Settled. The only reason to keep the veil is an open intent whose target is not
   // on screen yet.
   if (!facts.holdForOpenIntent) {
-    return { mode: 'contents', veilVisible: false, actions: false, reevaluateInMs: Number.POSITIVE_INFINITY }
+    return releasedFrame('contents', false, facts.nowMs)
   }
   const phase = facts.surfacePhase
   if (phase === null) {
-    // Clock not anchored / no observation yet: hold without releasing, and ask to
-    // be re-evaluated as soon as the caller anchors (remaining = 0).
-    return { mode: 'loading', veilVisible: true, actions: false, reevaluateInMs: 0 }
+    // No observation yet: hold, but with a finite outer deadline rather than a 0 ms
+    // re-arm - an unanchored clock must never keep the veil forever.
+    return heldFrame('loading', false, anchorOf(facts.nowMs) + safe.surfaceMaxHoldMs)
   }
   if (phase === 'active') {
-    return { mode: 'contents', veilVisible: false, actions: false, reevaluateInMs: Number.POSITIVE_INFINITY }
+    return releasedFrame('contents', false, facts.nowMs)
   }
-  const bound = surfaceBoundMs(phase, thresholds)
-  const base = phase === 'absent' || phase === 'unknown' ? (facts.absentSinceMs ?? facts.holdStartedAtMs) : facts.holdStartedAtMs
+  const bound = surfaceBoundMs(phase, safe)
+  const base = phase === 'absent' || phase === 'unknown'
+    ? (facts.absentSinceMs ?? facts.holdStartedAtMs)
+    : facts.holdStartedAtMs
   const elapsed = elapsedSince(base, facts.nowMs)
   if (elapsed === null) {
-    // Clock not anchored (or rolled back): hold, but ask for an immediate retry.
-    // Returning "the full bound" here would be a silent lie - the caller would arm a
-    // timer for a window that has not started, and an unanchored clock could then
-    // keep the veil forever if the caller never anchors it.
-    return { mode: 'loading', veilVisible: true, actions: false, reevaluateInMs: 0 }
+    // Clock not anchored or rolled back: hold with a finite future deadline. The next
+    // evaluation either anchors or reveals at the bound; it never re-arms at 0 ms.
+    return heldFrame('loading', false, anchorOf(facts.nowMs) + bound)
   }
   if (elapsed >= bound) {
-    // Bound reached: reveal and hand the explanation to the shell's own surface and
-    // the boot-gap banner. `absent`/`unknown` reveal as 'contents' (the shell is
-    // settled, show it); hero/settling reveal as 'loading-stuck' (there is a real
-    // loading face inside the shell worth showing with actions).
     return phase === 'absent' || phase === 'unknown'
-      ? { mode: 'contents', veilVisible: false, actions: false, reevaluateInMs: Number.POSITIVE_INFINITY }
-      : { mode: 'loading-stuck', veilVisible: true, actions: true, reevaluateInMs: 0 }
+      ? releasedFrame('contents', false, facts.nowMs)
+      : actionableFrame('loading-stuck', facts.nowMs)
   }
-  return { mode: 'loading', veilVisible: true, actions: false, reevaluateInMs: Math.max(0, bound - elapsed) }
+  return heldFrame('loading', false, anchorOf(facts.nowMs) + (bound - elapsed))
 }
 
 /**

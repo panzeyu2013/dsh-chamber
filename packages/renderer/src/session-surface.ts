@@ -31,8 +31,8 @@
  * settle 时刻——温壳上 settle 早已是几分钟前，用它会让持有窗在第一帧就过期，揭示门在温壳
  * 上整体退化为无操作。
  *  - `active` ⇒ 立即释放；
- *  - `absent` ⇒ 以 {@link SURFACE_ABSENT_FALLBACK_MS} 为界（观察不到会话根：降级形态）；
- *  - `hero` / `settling` ⇒ 保持遮罩，只留 {@link SURFACE_MAX_HOLD_MS} 外层保险
+ *  - `absent` / `unknown` ⇒ 以共享表的 2s 兜底为界（观察不到会话根 / 读不懂相位：降级形态）；
+ *  - `hero` / `settling` ⇒ 保持遮罩，只留共享表的 70s 外层保险
  *    （> 68s 排队预算；正常路径由 App 的 open 生命周期先释放意图）；
  *  - 未 settle ⇒ 永不释放（boot 期遮罩由 `!settled` 契约负责）；
  *  - 时钟未建立 ⇒ 永不释放（新一次持有的第一帧，相位可能还是上一代的残留）。
@@ -44,8 +44,10 @@
  * {@link readSessionSurfacePhase} 的入参接口上（观察器接线在 InstanceView）。
  */
 
-/** 会话根相位（脚本与移动插件共用的上游锚点取值域）。 */
-export type SessionSurfacePhase = 'absent' | 'hero' | 'settling' | 'active'
+/** 会话根相位（脚本与移动插件共用的上游锚点取值域）。
+ * `unknown` 是 P2 引入的独立取值：本 build 读不懂的取值不得折进 `hero`（那会按 70s
+ * 外层保险持有），而应与 `absent` 同走 2s 兜底——版本歪斜的锚点不能把用户按在遮罩上。 */
+export type SessionSurfacePhase = 'absent' | 'hero' | 'settling' | 'active' | 'unknown'
 
 /** 会话根相位属性的名字（观察器 attributeFilter 与查询共用一处定义）。 */
 export const SESSION_PHASE_ATTRIBUTE = 'data-phase'
@@ -59,18 +61,6 @@ export const SESSION_PHASE_ATTRIBUTE = 'data-phase'
 export const SESSION_SCROLL_ANCHOR = '[data-conversation-scroll]'
 
 /**
- * `absent`（观察不到会话根）的兜底窗：到期即揭幕，把解释交给壳自身的装载面与既有
- * `.boot-gap-layer` 降级横幅——绝不出现无出口的加载层。
- */
-export const SURFACE_ABSENT_FALLBACK_MS = 2_000
-
-/**
- * `hero`/`settling`（观察得到但尚无正当内容）的外层保险：只防"持有永不到期"，
- * 取在 App 的 open 排队预算（68s）之上；正常路径由 App 释放意图，本上界不会触发。
- */
-export const SURFACE_MAX_HOLD_MS = 70_000
-
-/**
  * 相位采样（MutationObserver → 相位落 state）的最小间隔，
  * 每次 DOM 变更排一帧的采样在 boot 窗口（各来源壳 + 插件同时装载）等于每帧
  * 一次 React 状态更新；Apple 符号化的崩溃栈正是"rAF 回调内一个热函数 OSR 进入时
@@ -79,10 +69,10 @@ export const SURFACE_MAX_HOLD_MS = 70_000
  */
 export const SURFACE_SAMPLE_MIN_INTERVAL_MS = 100
 
-// 相位 → 上界映射由共享 arbiter 提供：
-// @dsh-chamber/dsh-stream-state 的 surfaceBoundMs(phase, thresholds) 是唯一一份，
-// 组件只消费 decidePresentation 帧里的 reevaluateInMs。本模块保留相位读取与两个常量
-// （它们是 arbiter 阈值表的输入，仍是本模块的导出契约）。
+// 相位 → 上界映射与两个阈值（2s 兜底 / 70s 外层保险）由共享包提供：
+// `surfaceBoundMs`/`decidePresentation` 是唯一判定，阈值在
+// `@dsh-chamber/dsh-stream-state` 的 `PRESENTATION_THRESHOLDS`（tables.ts/tables.json 同源），
+// 组件只消费帧里的 `veil`/`releaseAtMonoMs`。本模块只保留相位读取与采样间隔常量。
 
 /** 读取相位所需的最小 DOM 面（node 测试用桩即可，不依赖真实 DOM）。 */
 export interface SessionSurfaceRoot {
@@ -93,8 +83,9 @@ export interface SessionSurfaceRoot {
 
 /**
  * 读取容器内的会话根相位：`[data-conversation-scroll]` → 最近的 `[data-phase]` 祖先。
- * 取不到锚点或祖先时返回 `absent`（有界出口由 {@link SURFACE_ABSENT_FALLBACK_MS} 给）；
- * 祖先存在但取值未知时保守返回 `hero`（保持遮罩），绝不把"没看懂"读成"已就绪"。
+ * 取不到锚点或祖先时返回 `absent`（有界出口由共享表的 2s 兜底给）；
+ * 祖先存在但取值未知时返回 `unknown`（与 absent 同界），绝不把"没看懂"读成"已就绪"，
+ * 也绝不用 hero 的 70s 外层保险把一个版本歪斜的锚点按在遮罩上。
  */
 export function readSessionSurfacePhase(root: SessionSurfaceRoot): SessionSurfacePhase {
   const anchor = root.querySelector(SESSION_SCROLL_ANCHOR)
@@ -102,5 +93,5 @@ export function readSessionSurfacePhase(root: SessionSurfaceRoot): SessionSurfac
   if (node === null) return 'absent'
   const raw = node.getAttribute(SESSION_PHASE_ATTRIBUTE)
   if (raw === 'active' || raw === 'settling' || raw === 'hero') return raw
-  return 'hero'
+  return 'unknown'
 }

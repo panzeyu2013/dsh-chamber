@@ -26,6 +26,15 @@ import { fileURLToPath } from 'node:url'
 const PACKAGE_ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)))
 
 export const GROUPS = {
+  // wiring: the declared lifecycle faces (event/effect literals) must each have a
+  // producer or executor - a union member nothing performs is a dead promise. G-A.
+  wiring: [
+    'test/wiring/emission-coverage.test.ts',
+  ],
+  // forensics: the bounded resident tail buffer every export path drains.
+  forensics: [
+    'test/forensics/forensics.test.ts',
+  ],
   // carrier: the single-owner carrier lifecycle reducer + its throttle tables.
   carrier: [
     'test/carrier/carrier-lifecycle.test.ts',
@@ -35,6 +44,11 @@ export const GROUPS = {
   // window bound, no-exitless-spinner bound).
   invariants: [
     'test/invariants/reducer-invariants.test.ts',
+    // G-B: NaN / Inf / rollback fuzz over every waiting decision - an unusable
+    // clock may only hold, never release and never produce a 0 ms deadline.
+    'test/invariants/time-discipline.test.ts',
+    // G-C: the rolling ledgers are pruned to the window their readers use.
+    'test/invariants/ledger-bounds.test.ts',
   ],
   // equivalence: the action normalizer used by scripts/refactor/equivalence.mjs
   // to compare an old wiring against a new one without false-red on wording.
@@ -58,17 +72,23 @@ export const GROUPS = {
     // the per-source container (incarnation keying + the ref projections the
     // App reads, one ledger at a time).
     'test/source/source-container.test.ts',
-    // the sidebar receipt chain's decision (verdict branches + write-back outcome).
-    'test/authority/authority-decision.test.ts',
+    // session-authority: the single running-bit truth reducer + its scenario corpus.
+    'test/authority/session-authority.test.ts',
     // the shell's load state machine (generation fence).
     'test/load-state/load-state.test.ts',
     // the prewarm ledgers' events (Set-shaped ledgers need methods, not views).
     'test/source/source-prewarm-ledger.test.ts',
+    // G-D: one source id has one live incarnation - stale events are dropped and
+    // the projections never merge two generations of the same id.
+    'test/source/incarnation-fence.test.ts',
   ],
   // presentation: the single veil/reveal decision that replaces four
   // independent timers and computes the total bound in one place.
   presentation: [
     'test/presentation/presentation-arbiter.test.ts',
+    // G-E: a held veil carries a finite absolute releaseAtMonoMs, and
+    // planVeilTimer refuses to arm a 0 ms timer for a held frame.
+    'test/presentation/veil-release.test.ts',
   ],
   // ladder: the unified recovery-ladder engine that all four ladders
   // (liveness / reconcile / stream-health / mobile stall) become instances of.

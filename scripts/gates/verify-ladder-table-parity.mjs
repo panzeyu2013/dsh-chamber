@@ -11,12 +11,17 @@
  * WHY A GATE AND NOT A UNIT TEST: the modules live in four different packages, and the
  * dependency direction is "modules import the package", so a package test cannot read
  * them. This script reads their source declarations (the values are literal constants)
- * and compares.
+ * and compares. Plain constants are read by name; the config-object defaults are read
+ * by field inside the exported object literal.
  *
  * A module that no longer declares a constant is NOT a failure: that is the
  * retirement working. A constant that EXISTS with a different value IS a failure.
  *
- * Usage: node scripts/gates/verify-ladder-table-parity.mjs
+ * NEGATIVE CONTROL: `--self-test` runs the same comparison against a synthetic entry
+ * whose table expectation is deliberately wrong and asserts that it is reported; a
+ * gate that cannot fail is not a gate.
+ *
+ * Usage: node scripts/gates/verify-ladder-table-parity.mjs [--self-test]
  */
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -28,9 +33,10 @@ const TABLES = join(REPO_ROOT, 'packages', 'dsh-stream-state', 'tables.json')
 
 /**
  * Each entry: the table path, and the declaration it must match while the module
- * still owns it. `source` is repo-relative; `name` is the exported/local const.
+ * still owns it. `source` is repo-relative; `name` is the exported/local const, or
+ * the field name when `object` names the exported config object holding it.
  */
-const LOCKSTEP = [
+export const LOCKSTEP = [
   {
     table: 'tables.ladders.mobile.thresholdMs',
     source: 'packages/dsh-chamber-client-ui-mobile/src/client/session-stall.ts',
@@ -61,34 +67,15 @@ const LOCKSTEP = [
     source: 'packages/dsh-chamber-client-ui-mobile/src/client/session-stall.ts',
     name: 'STALL_FAILED_MS',
   },
-  {
-    table: 'tables.ladders.factReconcile.maxAttempts',
-    source: 'packages/dsh-chamber-client-ui-sidebar/src/shared/session-fact-reconcile.ts',
-    name: 'DEFAULT_MAX_ATTEMPTS',
-  },
-  {
-    table: 'tables.ladders.factReconcile.retryMs',
-    source: 'packages/dsh-chamber-client-ui-sidebar/src/shared/session-fact-reconcile.ts',
-    name: 'DEFAULT_RETRY_MS',
-  },
-  {
-    table: 'tables.ladders.factReconcile.attemptTimeoutMs',
-    source: 'packages/dsh-chamber-client-ui-sidebar/src/shared/session-fact-reconcile.ts',
-    name: 'DEFAULT_ATTEMPT_TIMEOUT_MS',
-  },
-  {
-    table: 'tables.ladders.factReconcile.verifyTimeoutMs',
-    source: 'packages/dsh-chamber-client-ui-sidebar/src/shared/session-fact-reconcile.ts',
-    name: 'DEFAULT_VERIFY_TIMEOUT_MS',
-  },
-  {
-    table: 'tables.ladders.factReconcile.correctivePhaseTimeoutMs',
-    source: 'packages/dsh-chamber-client-ui-sidebar/src/shared/session-fact-reconcile.ts',
-    name: 'CORRECTIVE_PHASE_TIMEOUT_MS',
-  },
+  // The last surviving copies are retired: the authority probe ladder reads
+  // LADDER_TABLES.authority directly, mobile reads LADDER_TABLES.mobile, and open-in
+  // reads LADDER_TABLES.streamHealth. The list stays as the guard for any future
+  // module that declares a local copy again (a found constant with a different value
+  // is a failure; a missing one is the retirement working).
 ]
 
-function readTable(path) {
+/** Read a dotted table path, array indices included. */
+export function readTable(path) {
   let node = JSON.parse(readFileSync(TABLES, 'utf8'))
   for (const key of path.split('.')) {
     if (node === undefined || node === null || !(key in node)) return undefined
@@ -97,9 +84,9 @@ function readTable(path) {
   return node
 }
 
-/** Read `const NAME = <numeric literal>` from source, tolerating underscores. */
-function readConstant(source, name) {
-  const absolute = join(REPO_ROOT, source)
+/** Read a plain `const NAME = <numeric literal>`, tolerating underscores. */
+export function readConstant(source, name, repoRoot = REPO_ROOT) {
+  const absolute = join(repoRoot, source)
   if (!existsSync(absolute)) return { state: 'missing-file' }
   const text = readFileSync(absolute, 'utf8')
   const pattern = new RegExp('^\\s*(?:export\\s+)?const\\s+' + name + '\\s*=\\s*([0-9_]+)', 'mu')
@@ -108,44 +95,112 @@ function readConstant(source, name) {
   return { state: 'found', value: Number(match[1].replace(/_/gu, '')) }
 }
 
-let failures = 0
-let checked = 0
-let retired = 0
-for (const entry of LOCKSTEP) {
-  const expected = readTable(entry.table)
-  if (expected === undefined) {
-    console.error('✗ tables.json is missing ' + entry.table + ' (the single table must name it)')
-    failures += 1
-    continue
-  }
-  const actual = readConstant(entry.source, entry.name)
-  if (actual.state === 'missing-file') {
-    console.error('✗ ' + entry.source + ': file does not exist (declared in the lockstep list)')
-    failures += 1
-    continue
-  }
-  if (actual.state === 'retired') {
-    // The module stopped owning it: retirement. Informational, never a failure.
-    retired += 1
-    continue
-  }
-  checked += 1
-  if (actual.value !== expected) {
-    console.error(
-      '✗ ' + entry.name + ' (' + entry.source + ') = ' + String(actual.value) +
-      ' but tables.json ' + entry.table + ' = ' + String(expected),
-    )
-    failures += 1
-  }
+/** Read `field: <numeric literal>` inside an exported config object literal. */
+export function readObjectField(source, objectName, fieldName, repoRoot = REPO_ROOT) {
+  const absolute = join(repoRoot, source)
+  if (!existsSync(absolute)) return { state: 'missing-file' }
+  const text = readFileSync(absolute, 'utf8')
+  const startMatch = new RegExp('^\\s*(?:export\\s+)?const\\s+' + objectName + '\\b[\\s\\S]*?=\\s*\\{', 'mu').exec(text)
+  if (startMatch === null) return { state: 'retired' }
+  const end = text.indexOf('\n}', startMatch.index)
+  const block = text.slice(startMatch.index, end === -1 ? text.length : end)
+  const pattern = new RegExp('^\\s*' + fieldName + '\\s*:\\s*([0-9_]+)', 'mu')
+  const match = pattern.exec(block)
+  if (match === null) return { state: 'retired' }
+  return { state: 'found', value: Number(match[1].replace(/_/gu, '')) }
 }
 
-if (failures > 0) {
-  console.error('')
-  console.error('ladder-table parity: ' + String(failures) + ' mismatch(es). The single table is the authority;')
-  console.error('either fix the table or the module - do not let the two drift while both exist.')
+/**
+ * Compare one lockstep list. Pure: all I/O arrives through `resolve` so the
+ * self-test can drive a fabricated expectation without touching the tree.
+ * @returns {{ failures: number, checked: number, retired: number, lines: string[] }} verdict.
+ */
+export function compareLockstep(entries, resolve) {
+  let failures = 0
+  let checked = 0
+  let retired = 0
+  const lines = []
+  for (const entry of entries) {
+    const expected = resolve.table(entry.table)
+    if (expected === undefined) {
+      failures += 1
+      lines.push('x tables.json is missing ' + entry.table + ' (the single table must name it)')
+      continue
+    }
+    const actual = entry.object === undefined
+      ? resolve.constant(entry.source, entry.name)
+      : resolve.objectField(entry.source, entry.object, entry.name)
+    if (actual.state === 'missing-file') {
+      failures += 1
+      lines.push('x ' + entry.source + ': file does not exist (declared in the lockstep list)')
+      continue
+    }
+    if (actual.state === 'retired') {
+      // The module stopped owning it: retirement. Informational, never a failure.
+      retired += 1
+      continue
+    }
+    checked += 1
+    if (actual.value !== expected) {
+      failures += 1
+      lines.push(
+        'x ' + entry.name + ' (' + entry.source + ') = ' + String(actual.value) +
+        ' but tables.json ' + entry.table + ' = ' + String(expected),
+      )
+    }
+  }
+  return { failures, checked, retired, lines }
+}
+
+/** Negative control: the comparison must flag a deliberately wrong expectation. */
+function selfTest() {
+  const resolve = {
+    table: (path) => (path === 'tables.handshakeTimeoutMs' ? 1 : readTable(path)),
+    constant: (source, name) => readConstant(source, name),
+    objectField: (source, object, name) => readObjectField(source, object, name),
+  }
+  const wrong = [{
+    table: 'tables.handshakeTimeoutMs',
+    source: 'packages/dsh-stream-state/src/tables.ts',
+    name: 'HANDSHAKE_TIMEOUT_MS',
+  }]
+  const verdict = compareLockstep(wrong, resolve)
+  const detected = verdict.failures === 1 && verdict.lines.length === 1
+  const retiredVerdict = compareLockstep(
+    [{ table: 'tables.silentTeardownMinMs', source: 'packages/dsh-stream-state/src/tables.ts', name: 'DEFINITELY_NOT_A_CONSTANT' }],
+    { table: () => 1, constant: readConstant, objectField: readObjectField },
+  )
+  const retirementQuiet = retiredVerdict.failures === 0 && retiredVerdict.retired === 1
+  if (detected && retirementQuiet) {
+    console.log('ladder-table parity self-test: ok (a wrong expectation is flagged, a retired constant is quiet)')
+    return
+  }
+  console.error('ladder-table parity self-test: FAIL (detected=' + String(detected) + ', retirementQuiet=' + String(retirementQuiet) + ')')
   process.exit(1)
 }
-console.log(
-  '✓ ladder-table parity: ' + String(checked) + ' constant(s) locked to tables.json' +
-  (retired > 0 ? ', ' + String(retired) + ' already retired by B4' : ''),
-)
+
+function main() {
+  if (process.argv.includes('--self-test')) {
+    selfTest()
+    return
+  }
+  const { failures, checked, retired, lines } = compareLockstep(LOCKSTEP, {
+    table: readTable,
+    constant: readConstant,
+    objectField: readObjectField,
+  })
+  for (const line of lines) console.error(line)
+  if (failures > 0) {
+    console.error('')
+    console.error('ladder-table parity: ' + String(failures) + ' mismatch(es). The single table is the authority;')
+    console.error('either fix the table or the module - do not let the two drift while both exist.')
+    process.exit(1)
+  }
+  console.log(
+    'ok ladder-table parity: ' + String(checked) + ' constant(s) locked to tables.json' +
+    (retired > 0 ? ', ' + String(retired) + ' already retired' : ''),
+  )
+}
+
+const isEntry = process.argv[1] !== undefined && process.argv[1].endsWith('verify-ladder-table-parity.mjs')
+if (isEntry) main()

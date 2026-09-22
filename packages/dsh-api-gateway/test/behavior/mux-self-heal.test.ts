@@ -17,10 +17,14 @@ import {
   REMOTE_STREAM_MAINTAIN_MAX_INTERVAL_MS,
   REMOTE_STREAM_MAINTAIN_MIN_INTERVAL_MS,
   REMOTE_STREAM_NO_GENERATION_WAIT_MAX_MS,
-  REMOTE_STREAM_OPENING_TIMEOUT_MS,
   REMOTE_STREAM_RETRY_BASE_MS,
-  REMOTE_STREAM_SILENT_TEARDOWN_MIN_MS,
 } from '../../src/client/remote-retry-policy.ts'
+// P3: the opening budget and the teardown floor are table values now (the fork
+// copies were retired with their G-G lockstep entries).
+import { OPENING_TIMEOUT_LADDER_MS, SILENT_TEARDOWN_MIN_MS } from '@dsh-chamber/dsh-stream-state'
+
+const REMOTE_STREAM_OPENING_TIMEOUT_MS = OPENING_TIMEOUT_LADDER_MS[0] as number
+const REMOTE_STREAM_SILENT_TEARDOWN_MIN_MS = SILENT_TEARDOWN_MIN_MS
 
 class FakeSocket {
   static readonly CONNECTING = 0
@@ -265,7 +269,9 @@ test('a silent socket is REPLACED when an opening item times out on it', async (
   // start a fresh attempt.
   assert.equal(FakeSocket.instances.length, 2, 'the silent socket must be replaced at once')
   assert.equal(FakeSocket.instances[0].readyState, FakeSocket.CLOSED)
-  assert.deepEqual(facts.map(fact => fact.kind), ['opening-timeout', 'socket-silent'])
+  // P5/P3: the executor records the reducer's decision when it executes it, and the
+  // caller labels the evidence afterwards — so `carrier-rebuild` precedes the label.
+  assert.deepEqual(facts.map(fact => fact.kind), ['opening-timeout', 'carrier-rebuild', 'socket-silent'])
   await client.close()
   t.mock.timers.reset()
 })
@@ -302,7 +308,7 @@ test('a logical stream torn down on a socket that never delivered a frame replac
   await flushMicrotasks()
   assert.equal(FakeSocket.instances.length, 2, 'the silent socket must be replaced on teardown')
   assert.equal(FakeSocket.instances[0].readyState, FakeSocket.CLOSED)
-  assert.deepEqual(facts.map(fact => fact.kind), ['socket-silent'])
+  assert.deepEqual(facts.map(fact => fact.kind), ['carrier-rebuild', 'socket-silent'])
   await client.close()
   t.mock.timers.reset()
 })

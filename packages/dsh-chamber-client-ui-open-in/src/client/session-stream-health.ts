@@ -97,6 +97,8 @@
  * can repeat the call, which the seat serializes (double-click guard).
  */
 
+import { LADDER_TABLES, planLadder, streamHealthLadder } from '@dsh-chamber/dsh-stream-state'
+
 /** Official session lifecycle state (`SessionSnapshot.openState`). */
 export type SessionOpenState = 'cold' | 'loading' | 'open' | 'error'
 
@@ -203,21 +205,11 @@ export interface SessionStreamHealthConfig {
 }
 
 /**
- * Defaults. The grace is short because an `error` state is not a state the
- * user can read anything new from (the window is already frozen); the loading
- * threshold sits far above the loopback/gateway p99 open latency, so it only
- * fires on a genuinely parked open.
+ * Defaults: the single table (`LADDER_TABLES.streamHealth`), never literals
+ * here. The grace is short because an `error` state is not a state the user can
+ * read anything new from (the window is already frozen).
  */
-export const SESSION_STREAM_HEALTH_DEFAULTS: SessionStreamHealthConfig = {
-  errorGraceMs: 8_000,
-  loadingStallMs: 20_000,
-  loadingFailedMs: 90_000,
-  healCooldownMs: 120_000,
-  healBudgetWindowMs: 600_000,
-  healBudgetMax: 3,
-  healSettleMs: 20_000,
-  carrierChurnMs: 10_000,
-}
+export const SESSION_STREAM_HEALTH_DEFAULTS: SessionStreamHealthConfig = LADDER_TABLES.streamHealth
 
 /**
  * What the plan asks of the seat this tick.
@@ -235,6 +227,30 @@ export interface SessionStreamHealthPlan {
   readonly state: SessionStreamHealthState
   readonly action: SessionStreamHealthAction
   readonly notice: SessionStreamNotice | null
+}
+
+/** One engine tick: the session's executed levers are the record's dispatch
+ *  history, the caller supplies the host signals, and the engine owns grace +
+ *  cooldown + budget + evidence; the phase machine stays here. */
+function planHealthEngine(
+  state: SessionStreamHealthState,
+  now: number,
+  config: SessionStreamHealthConfig,
+  symptomSinceMs: number,
+  escalationBlocked: boolean,
+) {
+  // The engine reads the cooldown anchor from the history tail and the budget
+  // from every entry inside the window. A backwards clock leaves stamps in the
+  // future: they still spend budget, so a window-edge sentinel rides the tail.
+  const stamps = state.healStamps
+  const anchor = state.lastHealAt !== undefined && state.lastHealAt <= now ? state.lastHealAt : undefined
+  const tail = anchor ?? (stamps.length === 0 ? undefined : now - Math.max(config.healBudgetWindowMs, config.healCooldownMs))
+  const history = anchor === undefined
+    ? (tail === undefined ? [] : [...stamps, tail])
+    : [...stamps.filter(stamp => stamp !== anchor), anchor]
+  const record = { symptomSinceMs, progressStamp: 0, dispatches: { heal: history, 'auto-resync': history } }
+  const observation = { sticky: true, symptomSinceMs, progressStamp: 0, stuckEvidence: false, escalationBlocked }
+  return planLadder(streamHealthLadder(config), { session: record }, { session: observation }, now)
 }
 
 /**
@@ -255,10 +271,9 @@ export function sessionStreamLeversAvailable(
   now: number,
   config: SessionStreamHealthConfig = SESSION_STREAM_HEALTH_DEFAULTS,
 ): boolean {
-  const sinceHeal = state.lastHealAt === undefined ? undefined : now - state.lastHealAt
-  const cooling = sinceHeal !== undefined && sinceHeal >= 0 && sinceHeal < config.healCooldownMs
-  const inBudget = state.healStamps.filter(stamp => now - stamp < config.healBudgetWindowMs).length < config.healBudgetMax
-  return !cooling && inBudget
+  // Back-dating the symptom to the grace makes the first tier due, so the
+  // answer is the ledger alone (the cooldown and the rolling budget).
+  return planHealthEngine(state, now, config, now - config.errorGraceMs, false).actions.length > 0
 }
 
 /** A state that holds nothing (used for the initial value and after recovery). */
@@ -348,9 +363,11 @@ export function planSessionStreamHealth(
     if (state.recoveredSinceHeal !== true
         && sinceHeal !== undefined && sinceHeal >= config.healSettleMs) latched = true
 
-    const cooling = sinceHeal !== undefined && sinceHeal >= 0 && sinceHeal < config.healCooldownMs
-    const inBudget = healStamps.length < config.healBudgetMax
-    if (held >= config.errorGraceMs && !cooling && inBudget && observation.neighborAvailable) {
+    // One engine call answers grace + cooldown + budget + executability; its
+    // `exhausted` is the exhausted budget the notice projection still reads.
+    const engine = planHealthEngine(state, now, config, since, !observation.neighborAvailable)
+    const inBudget = engine.exhausted.length === 0
+    if (engine.actions.some(action => action.tier === 'heal')) {
       // The seat executes the heal and marks it; 'since' restarts at execution.
       return {
         state: {
@@ -379,12 +396,10 @@ export function planSessionStreamHealth(
     const resyncArmed = held >= config.errorGraceMs
       && observation.resyncAvailable === true
 
-    // No usable lever (no neighbor and no resync face, budget spent, or cooling):
-    // say so once the hold has clearly outlived a repair attempt — never on the
-    // first frames, where an in-flight open can still resolve the state on its own.
-    // Without the resync face the only remaining exits are a stage move (needs a
-    // neighbour AND budget) and the full reload, so an exhausted budget or a
-    // missing neighbour is what makes the hold hopeless then.
+    // No usable lever (no neighbor, no resync face, budget spent or cooling):
+    // report it once the hold has outlived a repair attempt, never on the first
+    // frames. Without the resync face the only exits left are a stage move
+    // (needs a neighbour AND budget) and the full reload.
     const hopeless = held >= config.errorGraceMs + config.healSettleMs
       && observation.resyncAvailable !== true
       && (!inBudget || !observation.neighborAvailable)

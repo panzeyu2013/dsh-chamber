@@ -91,6 +91,10 @@ enum CarrierDecision {
         at: Double,
         tables: CarrierTables
     ) -> Bool {
+        // G-F: a clock the shell cannot compare never authorizes a replacement.
+        // Without this guard every comparison against NaN/Infinity is false and the
+        // carrier rebuilds on an unusable timestamp.
+        if !at.isFinite { return false }
         if phaseClosed { return false }
         let latest = rebuildsAt.max() ?? -Double.infinity
         if pendingRebuildInFlight && at - latest < tables.inFlightGraceMs { return false }

@@ -15,8 +15,9 @@
  *     `error`（快速重试耗尽）也烧满 60s 的 serving 预算；这里让 `error`
  *     在一个短宽限后立即判「不可服务」，把 60s 白等收敛到秒级；而
  *     `connecting`/`degraded`（恢复中）继续在预算内等。
- *  3. `veilState` / `veilShowsActions` / `shouldAnnounceRetryQueue`：遮罩何时从
- *     纯转圈升级为可操作态，以及重试在途时是否必须如实播报排队。
+ *  3. `shouldAnnounceRetryQueue`：重试在途时是否必须如实播报排队。
+ *     遮罩何时从纯转圈升级为可操作态已收归共享包（`decidePresentation` 的
+ *     `veil`/`actions` 帧字段），本模块不再持有第二份遮罩分类。
  *  4. `isDeferredReclaimDue`：被推迟（来源未连接）挂载的回收裁决——只接管
  *     从未 settle 的挂载，且绝不碰设置面板正在编辑的来源。
  *  5. `graphGapKindFor`：上浮边界——非本地来源的
@@ -153,36 +154,6 @@ export type GraphGapKind = Extract<ShellDegradedKind, 'graph-unavailable' | 'loc
 export function graphGapKindFor(diagnosticState: string, instanceId: string): GraphGapKind | null {
   if (diagnosticState !== 'not-injected') return 'graph-unavailable'
   return instanceId === 'local' ? 'local-graph-not-injected' : null
-}
-
-/**
- * 遮罩从「纯转圈」升级为「可操作态」的反馈窗。取 10s：与
- * `HEALTH_ERROR_GRACE_MS` 同量级，长于正常冷启动（控制面 3s 量级），
- * 短到用户不会以为程序死了。
- */
-export const VEIL_ACTIONS_AFTER_MS = 10_000
-
-/** 一次遮罩呈现的分类。 */
-export type VeilState =
-  /** 来源未连接：boot 被推迟，遮罩直接是可操作态（立即，不等反馈窗）。 */
-  | 'boot-deferred'
-  /** 正在 boot，仍在反馈窗内（纯转圈）。 */
-  | 'loading'
-  /** 正在 boot 且已超过反馈窗：升级为可操作态（**不是**失败声明）。 */
-  | 'loading-stuck'
-  /** boot 已 settle（壳或失败覆盖层接管）。 */
-  | 'settled'
-
-/** 遮罩呈现判定（纯函数）。 */
-export function veilState(facts: { deferred: boolean; settled: boolean; waitedMs: number }): VeilState {
-  if (facts.settled) return 'settled'
-  if (facts.deferred) return 'boot-deferred'
-  return facts.waitedMs >= VEIL_ACTIONS_AFTER_MS ? 'loading-stuck' : 'loading'
-}
-
-/** 遮罩是否显示动作（可操作态）。 */
-export function veilShowsActions(state: VeilState): boolean {
-  return state === 'loading-stuck' || state === 'boot-deferred'
 }
 
 /**

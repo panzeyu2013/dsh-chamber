@@ -7,7 +7,7 @@ import type { ReactNode } from 'react'
 import { IconChecklistOutline14, IconQuestionOutline14, IconWarningOutline16, StateDot } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ChamberServerAggregate } from '../shared/aggregate-store.ts'
 import { runningRingVisible } from '../shared/derive.ts'
-import { sessionRowState } from '../shared/session-row-state.ts'
+import { sessionRowState, subagentActivityOf } from '../shared/session-row-state.ts'
 import { useSidebarSection } from './sidebar-context.ts'
 import cc from './sidebar-chamber.module.css'
 
@@ -39,8 +39,10 @@ export function useServerSectionSessionState() {
         : pending === 'plan-review' ? t('status.planReview')
         : t('status.waitingAnswer')
     }
-    const runningSubagents = facts?.runningSubagents ?? 0
-    if (runningSubagents > 0) {
+    // P5：只有确证在跑才播报「N 个子代理运行中」；来源 stale 或索引缺席时读数是
+    // unknown，中性呈现（不宣称在跑，也不冒充已完成）。
+    if (subagentActivityOf(facts, server.runtime?.stale) === 'running') {
+      const runningSubagents = facts?.runningSubagents ?? 0
       return t(runningSubagents === 1 ? 'status.subagentsRunning.one' : 'status.subagentsRunning.other', { n: runningSubagents })
     }
     if (facts?.completed === true) return t('status.completed')
@@ -62,16 +64,19 @@ export function useServerSectionSessionState() {
       completed: facts?.completed,
       pending: facts?.pending,
       runningSubagents: facts?.runningSubagents,
+      subagentActivity: facts?.subagentActivity,
       stale: server.runtime?.stale,
     })
   }
   const sessionStateDot = (server: ChamberServerAggregate, session: { id: string; running?: boolean }): ReactNode => {
     const facts = server.runtime?.sessions[session.id]
     const pending = facts?.pending
-    const runningSubagents = facts?.runningSubagents ?? 0
+    // P5：子代理环只在确证在跑时点亮；unknown 中性（同 sessionStateLabel 的守卫）。
+    const subagentsRunning = subagentActivityOf(facts, server.runtime?.stale) === 'running'
+      && (facts?.runningSubagents ?? 0) > 0
     // 运行环只信完整 snapshot（runningRingVisible，见 sessionStateLabel）。
     const running = runningRingVisible(facts?.running, session.running)
-    if (pending === undefined && runningSubagents === 0 && facts?.completed !== true && running !== true) return null
+    if (pending === undefined && !subagentsRunning && facts?.completed !== true && running !== true) return null
     if (pending === 'approval') {
       return <IconWarningOutline16 className={cc.statePendingApproval} />
     }
@@ -81,7 +86,7 @@ export function useServerSectionSessionState() {
     if (pending === 'question') {
       return <IconQuestionOutline14 className={cc.statePendingQuestion} />
     }
-    if (runningSubagents > 0) {
+    if (subagentsRunning) {
       // 后台子 agent 存活：父回合虽已结束，会话仍处工作中（官方语义——
       // 子 agent 计数压过父 completed），绝不让蓝色完成点在此阶段亮起。
       return <StateDot state="ongoing" size={10} />

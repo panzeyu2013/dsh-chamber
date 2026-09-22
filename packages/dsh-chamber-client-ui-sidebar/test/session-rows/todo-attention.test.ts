@@ -251,7 +251,7 @@ test('R14 row-absent branch: the offline-unread group is opt-in and uses the ses
   assert.deepEqual(run([pendingOnly], { offlineUnread: true }), [])
 })
 
-test('R14 row-absent branch: row-present ids never duplicate, filters and subagents still gate', () => {
+test('R14 row-absent branch: row-present ids never duplicate, and a stale subagent count never suppresses', () => {
   const mixed = server('r1', [workspace('w', [session('s1')])], {
     stale: true,
     sessions: {
@@ -260,11 +260,14 @@ test('R14 row-absent branch: row-present ids never duplicate, filters and subage
       busyGone: { completed: true, runningSubagents: 2 },
     },
   }, { connected: false })
+  const entries = run([mixed], { offlineUnread: true })
   assert.deepEqual(
-    run([mixed], { offlineUnread: true }).map(entry => entry.sessionId),
-    ['s1', 'gone'],
-    'row entry once + offline group; the row-present id and the subagent-busy fact must not duplicate/leak',
+    entries.map(entry => entry.sessionId),
+    ['s1', 'busyGone', 'gone'],
+    'row entry once + offline group; a stale subagent count is unknown and must not hide the unread entry',
   )
+  // P5：残留计数仍然呈现，但带 stale 标签——用户看到的是「可能过期」，不是被静默吞掉。
+  assert.equal(entries.find(entry => entry.sessionId === 'busyGone')?.stale, true)
   // completed gate off ⇒ both the row entry and the offline group disappear.
   assert.deepEqual(run([mixed], { offlineUnread: true, filters: { completed: false, ask: true, request: true } }), [])
   // The option only affects disconnected stale sources; a CONNECTED source with

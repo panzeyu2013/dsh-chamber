@@ -82,8 +82,12 @@ public struct LoadState: Equatable {
   /// Whether the load has outlived its progress SLA. A predicate: the retry schedule
   /// is what acts on it.
   public func isLate(now: Double, env: LoadEnv) -> Bool {
-    guard let since = loadingSinceMs else { return false }
-    return now - since > env.progressSlaMs
+    // Late is a PHASE predicate: loadingSinceMs is an arming stamp, and a settled
+    // shell must not read as late from a leftover one. A non-finite or rolled-back
+    // clock can never make it late either.
+    guard phase == .loading, let since = loadingSinceMs else { return false }
+    let elapsed = now - since
+    return elapsed.isFinite && elapsed > env.progressSlaMs
   }
 }
 
@@ -167,6 +171,7 @@ public enum LoadStateMachine {
       var next = state
       next.phase = .loaded
       next.probeStrikes = 0
+      next.loadingSinceMs = nil
       return (next, [])
 
     case let .probeFailed(_, at):
@@ -201,6 +206,7 @@ public enum LoadStateMachine {
       next.phase = .failurePage
       next.giveUpSpent = true
       next.recoveringFromCrash = false
+      next.loadingSinceMs = nil
       return (next, [.showFailurePage])
 
     case .crashRecovered:
@@ -208,6 +214,7 @@ public enum LoadStateMachine {
       next.recoveringFromCrash = false
       next.phase = .probing
       next.probeStrikes = 0
+      next.loadingSinceMs = nil
       return (next, [])
     }
   }

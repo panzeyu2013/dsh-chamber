@@ -51,13 +51,11 @@ import {
 import { runViewTransition } from '../view-transition.ts'
 import { createFrameCoalescer } from '../frame-coalescer.ts'
 import {
-  isTerminalUnreadyPhase, shouldAnnounceRetryQueue, VEIL_ACTIONS_AFTER_MS,
+  isTerminalUnreadyPhase, shouldAnnounceRetryQueue,
 } from '../source-readiness.ts'
-import { decidePresentation } from '@dsh-chamber/dsh-stream-state'
+import { decidePresentation, planVeilTimer, PRESENTATION_THRESHOLDS } from '@dsh-chamber/dsh-stream-state'
 import {
   readSessionSurfacePhase, SESSION_PHASE_ATTRIBUTE,
-  SURFACE_ABSENT_FALLBACK_MS,
-  SURFACE_MAX_HOLD_MS,
   SURFACE_SAMPLE_MIN_INTERVAL_MS,
   type SessionSurfacePhase,
 } from '../session-surface.ts'
@@ -338,9 +336,13 @@ export default function InstanceView({
     // （同 id 重开时身份不变，不重置）。
   }, [surfaceHoldActive, retryToken, openIntentId])
   //  ONE decision for everything the user sees: the boot veil's classification, the
-  // surface hold and the fallback timer's re-arm
-  // moment all come from this single frame, so the three can
-  // not disagree — they are one computation over one threshold table.
+  // surface hold and the fallback timer's re-arm moment all come from this single
+  // frame, so the three can not disagree — they are one computation over one
+  // threshold table.
+  // One clock read for the whole decision: the frame's releaseAtMonoMs is absolute,
+  // and planVeilTimer must be given the SAME moment the frame was computed with so a
+  // held frame can never be stale by the time the effect runs.
+  const frameNowMs = monotonicNow()
   const presentation = decidePresentation(
     {
       settled,
@@ -350,15 +352,12 @@ export default function InstanceView({
       surfacePhase,
       holdStartedAtMs: holdStartedAt,
       absentSinceMs: absentSince,
-      nowMs: monotonicNow(),
+      nowMs: frameNowMs,
       failureOverlayVisible: failureOverlayVisible === true,
     },
-    {
-      veilActionsAfterMs: VEIL_ACTIONS_AFTER_MS,
-      // Both read from their owners, not re-typed: the arbiter's table is data.
-      surfaceMaxHoldMs: SURFACE_MAX_HOLD_MS,
-      surfaceAbsentFallbackMs: SURFACE_ABSENT_FALLBACK_MS,
-    },
+    // The thresholds are the shared table's presentation section: one owner for the
+    // renderer and the arbiter, no module-local copies to drift (P2).
+    PRESENTATION_THRESHOLDS,
   )
   // 相位观察器在**整个持有窗**内运行（不因一次释放而断开）。释放是"电平"而不是
   // "闩锁"：官方初始导航可能先显示持久化的真实会话（active）再复用/新建 blank 会话
@@ -407,28 +406,27 @@ export default function InstanceView({
   // （ui-chat 未注册等降级形态）2s 即揭；hero/settling = 保持，只留 70s 外层保险（> 68s
   // 排队预算，正常路径由 App 的 open 生命周期先释放意图）。延时扣除已走过部分，避免
   // "窗口已到期但定时器未到"把持有拖长。
+  // The frame's releaseAtMonoMs is ABSOLUTE, so the timer delay is the distance
+  // from the moment the frame was computed (frameNowMs) — no window re-derivation and
+  // no "re-arm until released" loop. planVeilTimer refuses a 0 ms held timer; a
+  // non-finite delay (broken clock) means "hold until the next state change". The tick
+  // is only the re-render trigger at the deadline: the next frame reveals or releases.
   useEffect(() => {
-    if (!surfaceHoldActive || holdStartedAt === null) return
-    // The delay IS the frame's own re-arm moment; recomputing it here from thresholds
-    // would be a second copy that could drift from the judge's.
-    const delay = presentation.reevaluateInMs
-    // A non-finite moment means the frame already settled the question (revealed, or
-    // deferred/unbounded): arming setTimeout(Infinity) would fire immediately and spin,
-    // so arm nothing — a state change re-renders through this effect anyway.
+    const delay = planVeilTimer(presentation, frameNowMs)
     if (!Number.isFinite(delay)) return
     const handle = setTimeout(
       () => setSurfaceFallbackTick(tick => tick + 1),
       delay,
     )
     return () => { clearTimeout(handle) }
-    // surfaceFallbackTick 进依赖是加固：定时器若被浏览器提前触发（或判定
-    // 因别的原因此刻不放行），"没有释放"的 tick 必须重臂一次，否则本次持有的外层保险
-    // 就此消失。单调钟下重臂不会空转：真正到期后判定必然放行，持有窗随之关闭。
-  }, [surfaceHoldActive, holdStartedAt, absentSince, surfacePhase, surfaceFallbackTick])
+  }, [presentation.veil, presentation.releaseAtMonoMs, frameNowMs, surfaceFallbackTick])
   const veilActions = presentation.actions
-  // The veil is the frame's answer, verbatim: shown while booting, while a held intent
-  // has not released, and never under the failure overlay.
-  const veilVisible = presentation.veilVisible
+  // The veil is the frame's answer, verbatim. Two questions are answered from it:
+  // shellHeld (below) covers the TENANT while the veil is HELD, while the boot face
+  // stays on screen until the shell settles even when the frame is actionable (a
+  // deferred connect face, or the post-feedback boot face with retry/switch).
+  const veilHeld = presentation.veil === 'held'
+  const veilVisible = veilHeld || (!settled && presentation.veil === 'actionable')
   // 只有**前一次尝试尚未 settle**时重试才排队；那种情况必须如实播报。
   // 推迟态（来源未连接）例外：那儿根本没有 boot 在跑，"排队"会和「未连接 + 连接」
   // 自相矛盾。
@@ -437,12 +435,12 @@ export default function InstanceView({
   const waitedSeconds = String(Math.round(waitedMs / 1000))
   const retryQueueSeconds = String(Math.round(INSTANCE_TAIL_WAIT_CAP_MS / 1000))
   const sourceFailed = isTerminalUnreadyPhase(sourcePhase)
-  // 遮罩在**已 settle** 的壳上仍然可见，就是打开意图
-  // 揭示门在持有它（boot 期 settled 为假）——这段时间遮罩是唯一可见面，租客整体
-  // 不可见。判断耦合的是合成后的 veilVisible 而不是 holdVeil 入参：会话面
-  // 信号一旦释放遮罩，同一 commit 里壳也跟着恢复可见，绝不出现"遮罩没了壳还藏着"。
+  // 遮罩在**已 settle** 的壳上仍然可见，就是打开意图揭示门在持有它（boot 期
+  // settled 为假）——这段时间遮罩是唯一可见面，租客整体不可见。隐藏判定耦合的是
+  // **合成后**的 veilHeld，而不是 holdVeil 入参：帧一旦 actionable/released（含 70s
+  // 外层保险到期），同一 commit 里壳也跟着恢复可见，绝不出现"遮罩没了壳还藏着"。
   // 类挂在**外层视图 div** 上——容器 div 的 JSX 被 baseline-harvest 用例逐字钉住。
-  const shellHeld = settled && veilVisible
+  const shellHeld = settled && veilHeld
   const viewClass = active
     ? 'instance-view'
     : settled
@@ -506,7 +504,7 @@ export default function InstanceView({
                 {frameText(locale, 'boot.elapsed', { seconds: waitedSeconds })}
               </div>
             )}
-            {/* 排队事实一成立就播报——它挂在反馈窗（`VEIL_ACTIONS_AFTER_MS`）之外：
+            {/* 排队事实一成立就播报——它挂在反馈窗（`PRESENTATION_THRESHOLDS.veilActionsAfterMs`）之外：
                 "点了重试却先等 10 秒看不到任何解释"正是这条文案要消除的形态
                 （放进动作块会让它恰好晚 10s 出现）。 */}
             {retryQueued && (

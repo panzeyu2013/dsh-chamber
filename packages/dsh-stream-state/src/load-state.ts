@@ -88,10 +88,16 @@ export function contentIsBelievable(state: LoadState): boolean {
 }
 
 /** Whether the load has outlived its progress SLA (the shell reports this, it does
- *  not act on it: the retry schedule is what acts). */
+ *  not act on it: the retry schedule is what acts).
+ *
+ *  LATE IS A PHASE PREDICATE. `loadingSinceMs` is an arming stamp, not a status:
+ *  probeSucceeded/recoveryFailed used to leave it behind, so a settled shell with a
+ *  stale stamp read as late forever. Only an ACTIVE load can outlive its SLA, and a
+ *  non-finite or rolled-back clock can never make it late (I4). */
 export function loadIsLate(state: LoadState, now: number, env: LoadEnv): boolean {
-  if (state.loadingSinceMs === null) return false
-  return now - state.loadingSinceMs > env.progressSlaMs
+  if (state.phase !== 'loading' || state.loadingSinceMs === null) return false
+  const elapsed = now - state.loadingSinceMs
+  return Number.isFinite(elapsed) && elapsed > env.progressSlaMs
 }
 
 export function reduceLoadState(
@@ -146,7 +152,7 @@ export function reduceLoadState(
       }
 
     case 'probeSucceeded':
-      return { state: { ...state, phase: 'loaded', probeStrikes: 0 }, effects: [] }
+      return { state: { ...state, phase: 'loaded', probeStrikes: 0, loadingSinceMs: null }, effects: [] }
 
     case 'probeFailed': {
       // A failed probe is a STRIKE. It never marks the shell loaded.
@@ -179,14 +185,14 @@ export function reduceLoadState(
         return { state, effects: [{ e: 'log', name: 'recovery-failed-again', detail: String(event.generation) }] }
       }
       return {
-        state: { ...state, phase: 'failurePage', giveUpSpent: true, recoveringFromCrash: false },
+        state: { ...state, phase: 'failurePage', giveUpSpent: true, recoveringFromCrash: false, loadingSinceMs: null },
         effects: [{ e: 'showFailurePage' }],
       }
     }
 
     case 'crashRecovered':
       return {
-        state: { ...state, recoveringFromCrash: false, phase: 'probing', probeStrikes: 0 },
+        state: { ...state, recoveringFromCrash: false, phase: 'probing', probeStrikes: 0, loadingSinceMs: null },
         effects: [],
       }
 

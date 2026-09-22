@@ -175,8 +175,6 @@ export type SourceEffect =
   | { readonly e: 'reclaim' }
   /** Ask the sidebar to re-boot a settled-degraded mount (once per ready epoch). */
   | { readonly e: 'degradedSelfHeal' }
-  /** Bounded observability. */
-  | { readonly e: 'note'; readonly name: string; readonly detail?: string }
 
 /** Consecutive hidden time needed before retention may reclaim (table value is
  * owned by the App; the reducer only compares). */

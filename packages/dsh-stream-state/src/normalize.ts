@@ -54,8 +54,8 @@ export function normalizeEffect(effect: RecoveryEffect): NormalizedEffect {
       return { kind: 'rebuildCarrier', target: 'carrier', reasonClass: reasonClassOf(effect.reason) }
     case 'reopenLogicalStream':
       return { kind: 'reopenLogicalStream', target: effect.streamId, reasonClass: reasonClassOf(effect.reason) }
-    case 'reconcileFacts':
-      return { kind: 'reconcileFacts', target: effect.scope, reasonClass: 'n/a' }
+    case 'armOpeningDeadline':
+      return { kind: 'armOpeningDeadline', target: effect.streamId, reasonClass: 'n/a' }
     case 'throttled':
       return { kind: 'throttled', target: 'carrier', reasonClass: reasonClassOf(effect.reason) }
     case 'forensic':

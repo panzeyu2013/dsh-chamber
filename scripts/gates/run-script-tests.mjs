@@ -43,6 +43,11 @@ export const GROUPS = {
     'scripts/gates/verify-test-wiring.test.mjs',
     'scripts/gates/verify-workflow-action-pins.test.mjs',
     'scripts/gates/install-gateway-pure.test.mjs',
+    // The ladder-table parity gate's own comparison (G-G negative control) and the
+    // dead-export gate's surface resolver (G-H negative control).
+    'scripts/gates/verify-ladder-table-parity.test.mjs',
+    'scripts/gates/verify-no-dead-exports.test.mjs',
+    'scripts/gates/verify-upstream-lifecycle-contract.test.mjs',
     'scripts/gates/verify-workflow-yaml-scalars.test.mjs',
     // Shared package-test runner (its zero-case guard is a repository gate
     // helper, so it runs with the gate suites).

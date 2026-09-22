@@ -1,17 +1,21 @@
 /**
- * Per-source container: ONE state object per source instead of six refs.
+ * Per-source registry: ONE current generation per source id.
  *
- * WHY A CONTAINER AND NOT JUST THE REDUCER. The App's ledgers key by view id,
- * but the thing whose lifetime they describe is a source INCARNATION - the pair
- * (sourceId, fingerprint). A container keyed by that pair is what lets a registry
- * re-registration be a fence (the old incarnation's counters cannot leak into the
- * new one) while a reclaim/re-mount cycle stays the SAME incarnation (the once-per-
- * ready-epoch rules keep their meaning).
+ * WHY A REGISTRY AND NOT A KEYED RECORD. Keying records by the pair
+ * (sourceId, fingerprint) makes a re-registration start a NEW record - but
+ * nothing removes the old one, and every projection walks all records of the
+ * id. Two incarnations of one source therefore show through as a merged,
+ * contradictory view (a flag from one incarnation, a hidden window from another),
+ * and an event dispatched with a stale fingerprint would still reduce the old
+ * record and emit its effects. The invariant is one sentence: a source id
+ * has exactly ONE live generation, and an event carrying any other generation is
+ * dropped without an effect.
  *
- * The projections below are PURE VIEWS of the container for the existing refs
- * (hiddenSince / degradedRetried / autoPrewarmed / prewarmSuppressed / abandoned /
- * harvest): a caller can read one ledger from the container while the rest keep
- * the refs, and the projection guarantees the two readings agree.
+ * The registry makes that structural: the key is the source id, the entry stores
+ * its epoch, and {@link reincarnate} is the only way a new incarnation appears (it
+ * bumps the epoch and starts the record clean, so no penalties are inherited).
+ * Callers that arm a callback for one generation capture the epoch and pass it with
+ * every event; a late callback from a superseded generation can only be dropped.
  *
  * PURITY: no imports beyond the sibling reducer; no clock, no DOM.
  */
@@ -26,88 +30,111 @@ import type {
   SourceLifecycleState,
 } from './source.ts'
 
-export interface SourceContainerReduction {
-  readonly states: Readonly<Record<string, SourceLifecycleState>>
-  /** Effects paired with the source they belong to. */
-  readonly effects: readonly { readonly sourceId: string; readonly effect: SourceEffect }[]
+/** One source id's live generation. The epoch is monotone per source id. */
+export interface SourceRegistryEntry {
+  readonly epoch: number
+  readonly incarnation: SourceIncarnation
+  readonly state: SourceLifecycleState
 }
 
-/** Stable key for an incarnation: the pair, never the bare id. */
-export function incarnationKey(incarnation: SourceIncarnation): string {
-  return incarnation.sourceId + '\u0000' + incarnation.fingerprint
+export type SourceRegistry = Readonly<Record<string, SourceRegistryEntry>>
+
+export interface SourceRegistryReduction {
+  readonly registry: SourceRegistry
+  /** Effects paired with the source they belong to. */
+  readonly effects: readonly { readonly sourceId: string; readonly effect: SourceEffect }[]
+  /** false when the source is unknown or the event belonged to a superseded epoch. */
+  readonly accepted: boolean
+}
+
+/** The current generation number for a source, or undefined when unregistered. */
+export function epochOf(registry: SourceRegistry, sourceId: string): number | undefined {
+  return registry[sourceId]?.epoch
 }
 
 /**
- * Dispatch one event for one source.
+ * Register (or re-register) a source incarnation. Same fingerprint = the SAME
+ * generation and the same registry reference (a reclaim/re-mount cycle keeps its
+ * history); a different fingerprint = a new epoch whose record starts clean.
+ */
+export function reincarnate(registry: SourceRegistry, incarnation: SourceIncarnation): SourceRegistry {
+  const previous = registry[incarnation.sourceId]
+  if (previous !== undefined && previous.incarnation.fingerprint === incarnation.fingerprint) return registry
+  return {
+    ...registry,
+    [incarnation.sourceId]: {
+      epoch: (previous?.epoch ?? 0) + 1,
+      incarnation,
+      state: initialSourceLifecycle(incarnation),
+    },
+  }
+}
+
+/**
+ * Dispatch one event for one source generation.
  *
- * INCARNATION FENCE: when the fingerprint differs from the stored one, the record is
- * rebuilt from scratch. That is the whole point of keying by the pair - a registry
- * re-registration legitimately starts with no history, and carrying the old
- * incarnation's suppression/quota into it would make a re-registered source inherit
- * a previous life's penalties.
+ * The fence lives here: an unknown source and an event whose epoch is not the
+ * entry's current epoch are dropped (accepted: false) with no effect. The event is
+ * not reduced against a stale record, so a retired life cannot move anything.
  */
 export function dispatchSource(
-  states: Readonly<Record<string, SourceLifecycleState>>,
-  incarnation: SourceIncarnation,
-  event: SourceEvent,
+  registry: SourceRegistry,
+  sourceId: string,
+  event: SourceEvent & { readonly epoch: number },
   env: SourceEnv,
-): SourceContainerReduction {
-  const key = incarnationKey(incarnation)
-  const previous = states[key]
-  const base = previous !== undefined && previous.incarnation.fingerprint === incarnation.fingerprint
-    ? previous
-    : initialSourceLifecycle(incarnation)
-  const reduction = reduceSource(base, event, env)
+): SourceRegistryReduction {
+  const entry = registry[sourceId]
+  if (entry === undefined) return { registry, effects: [], accepted: false }
+  if (event.epoch !== entry.epoch) return { registry, effects: [], accepted: false }
+  const { epoch: _epoch, ...sourceEvent } = event
+  const reduction = reduceSource(entry.state, sourceEvent, env)
   return {
-    states: { ...states, [key]: reduction.state },
-    effects: reduction.effects.map((effect) => ({ sourceId: incarnation.sourceId, effect })),
+    registry: { ...registry, [sourceId]: { ...entry, state: reduction.state } },
+    effects: reduction.effects.map((effect) => ({ sourceId, effect })),
+    accepted: true,
   }
 }
 
-/** Drop records whose source is no longer registered (mirrors the App's
- * `live` sweep). Returns the same reference when nothing changed, so a caller can
- * use identity to skip a re-render. */
-export function retainSources(
-  states: Readonly<Record<string, SourceLifecycleState>>,
-  liveKeys: ReadonlySet<string>,
-): Readonly<Record<string, SourceLifecycleState>> {
+/** Drop entries whose source is no longer registered. Returns the same reference when
+ * nothing changed, so a caller can use identity to skip a re-render. */
+export function retainSourceIds(
+  registry: SourceRegistry,
+  liveSourceIds: ReadonlySet<string>,
+): SourceRegistry {
   let changed = false
-  const next: Record<string, SourceLifecycleState> = {}
-  for (const [key, state] of Object.entries(states)) {
-    if (liveKeys.has(key)) next[key] = state
+  const next: Record<string, SourceRegistryEntry> = {}
+  for (const [sourceId, entry] of Object.entries(registry)) {
+    if (liveSourceIds.has(sourceId)) next[sourceId] = entry
     else changed = true
   }
-  return changed ? next : states
+  return changed ? next : registry
 }
 
 // ---------------------------------------------------------------------------
-// Projections: each one mirrors exactly one of the App's refs.
+// Projections: each one mirrors exactly one of the App's refs. Every projection
+// reads the CURRENT generation only - the registry cannot express another.
 // ---------------------------------------------------------------------------
 
-/** App's hiddenSinceRef: view id -> hidden-window start (only hidden views appear). */
-export function projectHiddenSince(
-  states: Readonly<Record<string, SourceLifecycleState>>,
-): Record<string, number> {
+/** App's hiddenSinceRef: source id -> hidden-window start (only hidden views appear). */
+export function projectHiddenSince(registry: SourceRegistry): Record<string, number> {
   const out: Record<string, number> = {}
-  for (const state of Object.values(states)) {
-    if (state.hiddenSince !== null) out[state.incarnation.sourceId] = state.hiddenSince
+  for (const [sourceId, entry] of Object.entries(registry)) {
+    if (entry.state.hiddenSince !== null) out[sourceId] = entry.state.hiddenSince
   }
   return out
 }
 
 /** App's degradedRetriedRef. */
-export function projectDegradedRetried(
-  states: Readonly<Record<string, SourceLifecycleState>>,
-): Record<string, boolean> {
+export function projectDegradedRetried(registry: SourceRegistry): Record<string, boolean> {
   const out: Record<string, boolean> = {}
-  for (const state of Object.values(states)) {
-    if (state.degradedRetried) out[state.incarnation.sourceId] = true
+  for (const [sourceId, entry] of Object.entries(registry)) {
+    if (entry.state.degradedRetried) out[sourceId] = true
   }
   return out
 }
 
 /**
- * A Set-shaped ledger backed by the container, for call sites that mutate a Set
+ * A Set-shaped ledger backed by the registry, for call sites that mutate a Set
  * through METHODS.
  *
  * WHY THIS SHAPE AND NOT A PROPERTY VIEW. A `Set` is mutated with `add`/`delete`,
@@ -160,27 +187,23 @@ export function createSetLedgerView(options: {
 }
 
 /** App's autoPrewarmedRef (a Set of source ids). */
-export function projectAutoPrewarmed(
-  states: Readonly<Record<string, SourceLifecycleState>>,
-): Set<string> {
+export function projectAutoPrewarmed(registry: SourceRegistry): Set<string> {
   const out = new Set<string>()
-  for (const state of Object.values(states)) {
-    if (state.autoPrewarmed) out.add(state.incarnation.sourceId)
+  for (const [sourceId, entry] of Object.entries(registry)) {
+    if (entry.state.autoPrewarmed) out.add(sourceId)
   }
   return out
 }
 
 /**
- * App's harvestStateRef: view id -> HarvestRecord. The container's `harvest` field
- * is the SAME shape (its doc says so explicitly), so this projection is lossless.
- * A source with no record yet is simply ABSENT from the map.
+ * App's harvestStateRef: source id -> HarvestRecord. The registry entry's `harvest`
+ * field is the SAME shape (its doc says so explicitly), so this projection is
+ * lossless. A source with no record yet is simply ABSENT from the map.
  */
-export function projectHarvest(
-  states: Readonly<Record<string, SourceLifecycleState>>,
-): Record<string, HarvestState> {
+export function projectHarvest(registry: SourceRegistry): Record<string, HarvestState> {
   const out: Record<string, HarvestState> = {}
-  for (const state of Object.values(states)) {
-    if (state.harvest !== null) out[state.incarnation.sourceId] = state.harvest
+  for (const [sourceId, entry] of Object.entries(registry)) {
+    if (entry.state.harvest !== null) out[sourceId] = entry.state.harvest
   }
   return out
 }
@@ -190,7 +213,7 @@ export function projectHarvest(
  * record, runs a PURE function over it (baseline-harvest's harvestAttemptStarted /
  * harvestSatisfied), and stores the RESULT back. Translating that assignment is not
  * possible losslessly (the reducer would have to reverse-engineer which function
- * ran), so the container accepts the finished record instead: storage is owned,
+ * ran), so the registry accepts the finished record instead: storage is owned,
  * the policy functions stay where they are.
  */
 export function createHarvestView(options: {
@@ -236,7 +259,7 @@ export function createHarvestView(options: {
 }
 
 /**
- * A Map-shaped ledger backed by the container (the record-shaped views could
+ * A Map-shaped ledger backed by the registry (the record-shaped views could
  * translate ASSIGNMENTS; Map/Set ledgers mutate through METHODS, so they need an
  * adapter that owns the read surface).
  *
@@ -281,26 +304,22 @@ export function createMapLedgerView(options: {
   } as never
 }
 
-/** App's abandonedViewsRef: view id -> the view it was switched TO. */
-export function projectAbandonedTargets(
-  states: Readonly<Record<string, SourceLifecycleState>>,
-): Map<string, string> {
+/** App's abandonedViewsRef: source id -> the view it was switched TO. */
+export function projectAbandonedTargets(registry: SourceRegistry): Map<string, string> {
   const out = new Map<string, string>()
-  for (const state of Object.values(states)) {
-    if (state.abandoned && state.abandonedTarget !== undefined) {
-      out.set(state.incarnation.sourceId, state.abandonedTarget)
+  for (const [sourceId, entry] of Object.entries(registry)) {
+    if (entry.state.abandoned && entry.state.abandonedTarget !== undefined) {
+      out.set(sourceId, entry.state.abandonedTarget)
     }
   }
   return out
 }
 
 /** App's prewarmSuppressedRef (a Set of source ids). */
-export function projectPrewarmSuppressed(
-  states: Readonly<Record<string, SourceLifecycleState>>,
-): Set<string> {
+export function projectPrewarmSuppressed(registry: SourceRegistry): Set<string> {
   const out = new Set<string>()
-  for (const state of Object.values(states)) {
-    if (state.prewarmSuppressed) out.add(state.incarnation.sourceId)
+  for (const [sourceId, entry] of Object.entries(registry)) {
+    if (entry.state.prewarmSuppressed) out.add(sourceId)
   }
   return out
 }

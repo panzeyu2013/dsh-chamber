@@ -2,21 +2,24 @@
  * Presentation arbiter - behavior contract.
  *
  * Each test pins one rule. The last test pins the total-bound invariant: there is
- * NO input combination in which the veil has no deadline.
+ * NO input combination in which the veil has no deadline. The frame is an ABSOLUTE
+ * release moment (\`veil\` + \`releaseAtMonoMs\`), so the same property is asserted
+ * directly: every frame carries a finite release moment, and a held frame is always
+ * in the future (never a 0 ms re-arm).
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
   decidePresentation,
+  planVeilTimer,
   surfaceBoundMs,
   veilUpperBoundMs,
 } from '../../src/presentation.ts'
 import type { PresentationFacts, PresentationThresholds } from '../../src/presentation.ts'
 
-// Production thresholds, mirrored from their owning modules (session-surface.ts,
-// source-readiness.ts). The wiring reads them from their owners; the reducer takes
-// them as data so this file can exercise the boundaries.
+// Production thresholds (the shared table's presentation section). The reducer
+// takes them as data so this file can exercise the boundaries.
 const TH: PresentationThresholds = {
   veilActionsAfterMs: 10000,
   surfaceMaxHoldMs: 70000,
@@ -46,29 +49,33 @@ test('the failure overlay outranks everything, including a held veil', () => {
     holdForOpenIntent: true,
     surfacePhase: 'hero',
   }), TH)
-  assert.deepEqual(frame, { mode: 'failure', veilVisible: false, actions: false, reevaluateInMs: Number.POSITIVE_INFINITY })
+  assert.deepEqual(frame, { mode: 'failure', veil: 'released', actions: false, releaseAtMonoMs: 0 })
 })
 
 test('a deferred source is actionable immediately (no 10s wait)', () => {
   const frame = decidePresentation(facts({ bootDeferred: true }), TH)
   assert.equal(frame.mode, 'deferred')
   assert.equal(frame.actions, true)
-  assert.equal(frame.veilVisible, true)
+  assert.equal(frame.veil, 'actionable')
+  assert.equal(frame.releaseAtMonoMs, 0)
 })
 
 test('the boot veil upgrades to actions exactly at the feedback window', () => {
   const early = decidePresentation(facts({ waitedMs: 9999 }), TH)
   assert.equal(early.mode, 'loading')
   assert.equal(early.actions, false)
-  assert.equal(early.reevaluateInMs, 1)
+  assert.equal(early.veil, 'held')
+  assert.equal(early.releaseAtMonoMs, 1, 'the held deadline is the remaining feedback window')
+  assert.equal(planVeilTimer(early, 0), 1)
   const late = decidePresentation(facts({ waitedMs: 10000 }), TH)
   assert.equal(late.mode, 'loading-stuck')
   assert.equal(late.actions, true)
+  assert.equal(late.veil, 'actionable', 'past the feedback window the boot face is the exit, not an opaque hold')
 })
 
 test('a settled shell with no open intent shows contents', () => {
   const frame = decidePresentation(facts({ settled: true, holdForOpenIntent: false }), TH)
-  assert.deepEqual(frame, { mode: 'contents', veilVisible: false, actions: false, reevaluateInMs: Number.POSITIVE_INFINITY })
+  assert.deepEqual(frame, { mode: 'contents', veil: 'released', actions: false, releaseAtMonoMs: 0 })
 })
 
 test('an active surface releases the veil immediately', () => {
@@ -80,7 +87,7 @@ test('an active surface releases the veil immediately', () => {
     nowMs: 1,
   }), TH)
   assert.equal(frame.mode, 'contents')
-  assert.equal(frame.veilVisible, false)
+  assert.equal(frame.veil, 'released')
 })
 
 test('hero and settling are bounded by the outer hold, not the absent fallback', () => {
@@ -103,6 +110,8 @@ test('an unreadable phase no longer holds for the hero bound (the P4 fix)', () =
     nowMs: 1999,
   }), TH)
   assert.equal(at1999.mode, 'loading', 'still holding inside the fallback window')
+  assert.equal(at1999.veil, 'held')
+  assert.equal(at1999.releaseAtMonoMs, 2000)
   const at2000 = decidePresentation(facts({
     settled: true,
     holdForOpenIntent: true,
@@ -111,10 +120,10 @@ test('an unreadable phase no longer holds for the hero bound (the P4 fix)', () =
     nowMs: 2000,
   }), TH)
   assert.equal(at2000.mode, 'contents', 'released at the fallback bound, not at 70s')
-  assert.equal(at2000.veilVisible, false)
+  assert.equal(at2000.veil, 'released')
 })
 
-test('hero past the outer bound reveals as loading-stuck (honest, with actions)', () => {
+test('hero past the outer bound becomes actionable and reveals the tenant', () => {
   const frame = decidePresentation(facts({
     settled: true,
     holdForOpenIntent: true,
@@ -124,7 +133,9 @@ test('hero past the outer bound reveals as loading-stuck (honest, with actions)'
   }), TH)
   assert.equal(frame.mode, 'loading-stuck')
   assert.equal(frame.actions, true)
-  assert.equal(frame.veilVisible, true)
+  assert.equal(frame.veil, 'actionable', 'the b73bce74 70s reveal: the exit is offered, the tenant is not left covered')
+  assert.equal(frame.releaseAtMonoMs, 70000)
+  assert.equal(planVeilTimer(frame, 70000), 0, 'an actionable frame needs no timer')
 })
 
 test('absent uses its own streak start, so a one-frame disappearance cannot reset the hold', () => {
@@ -139,10 +150,12 @@ test('absent uses its own streak start, so a one-frame disappearance cannot rese
     nowMs: 61000,
   }), TH)
   assert.equal(frame.mode, 'loading', 'inside the absent fallback measured from the streak')
-  assert.equal(frame.reevaluateInMs, 1000)
+  assert.equal(frame.veil, 'held')
+  assert.equal(frame.releaseAtMonoMs, 62000)
+  assert.equal(planVeilTimer(frame, 61000), 1000)
 })
 
-test('an unanchored clock never releases, and asks to be re-evaluated at once', () => {
+test('an unanchored clock holds with a finite future deadline instead of a 0 ms re-arm', () => {
   const frame = decidePresentation(facts({
     settled: true,
     holdForOpenIntent: true,
@@ -150,8 +163,9 @@ test('an unanchored clock never releases, and asks to be re-evaluated at once', 
     holdStartedAtMs: null,
     nowMs: 5000,
   }), TH)
-  assert.equal(frame.veilVisible, true)
-  assert.equal(frame.reevaluateInMs, 0)
+  assert.equal(frame.veil, 'held')
+  assert.equal(frame.releaseAtMonoMs, 75000, 'the outer bound measured from the evaluation moment')
+  assert.equal(planVeilTimer(frame, 5000), 70000)
 })
 
 test('a clock rollback never releases the veil', () => {
@@ -162,8 +176,9 @@ test('a clock rollback never releases the veil', () => {
     holdStartedAtMs: 10000,
     nowMs: 5000,
   }), TH)
-  assert.equal(frame.veilVisible, true)
+  assert.equal(frame.veil, 'held')
   assert.equal(frame.mode, 'loading')
+  assert.equal(frame.releaseAtMonoMs, 75000)
 })
 
 test('the phase to bound mapping is total and lives here (one copy)', () => {
@@ -190,12 +205,14 @@ test('the absent boundary is INCLUSIVE, and hero/settling never use the 2s windo
     absentSinceMs: start,
     nowMs,
   }), TH)
-  assert.equal(at('absent', start + 1_999).veilVisible, true, 'inside the bound: hold')
-  assert.equal(at('absent', start + 2_000).veilVisible, false, 'boundary is inclusive: release')
+  assert.equal(at('absent', start + 1_999).veil, 'held', 'inside the bound: hold')
+  assert.equal(at('absent', start + 2_000).veil, 'released', 'boundary is inclusive: release')
   for (const phase of ['hero', 'settling'] as const) {
-    assert.equal(at(phase, start + 2_000).veilVisible, true, phase + ': the 2s window is not its bound')
-    assert.equal(at(phase, start + 69_999).veilVisible, true, phase + ': still inside the outer hold')
-    assert.equal(at(phase, start + 70_000).mode, 'loading-stuck', phase + ': the outer hold is the bounded exit')
+    assert.equal(at(phase, start + 2_000).veil, 'held', phase + ': the 2s window is not its bound')
+    assert.equal(at(phase, start + 69_999).veil, 'held', phase + ': still inside the outer hold')
+    const past = at(phase, start + 70_000)
+    assert.equal(past.mode, 'loading-stuck', phase + ': the outer hold is the bounded exit')
+    assert.equal(past.veil, 'actionable', phase + ': releasing the hold reveals the tenant')
   }
 })
 
@@ -210,8 +227,17 @@ test('G4: the veil bound is computable and within the 155s goal', () => {
   }
 })
 
-test('every frame either has a deadline or is terminal', () => {
-  // The no-exitless-spinner property over the whole input space.
+test('planVeilTimer refuses a fabricated held frame at or before now', () => {
+  const held = decidePresentation(facts({ settled: true, holdForOpenIntent: true, surfacePhase: 'hero', holdStartedAtMs: 0, nowMs: 1 }), TH)
+  assert.equal(held.veil, 'held')
+  assert.throws(() => planVeilTimer({ ...held, releaseAtMonoMs: 1 }, 1), /held/i)
+  assert.throws(() => planVeilTimer({ ...held, releaseAtMonoMs: Number.NaN }, 1), /finite/i)
+  assert.equal(planVeilTimer(held, Number.NaN), Number.POSITIVE_INFINITY, 'a broken clock holds, it never arms 0 ms')
+})
+
+test('every frame has a finite release moment, and every held frame releases in the future', () => {
+  // The no-exitless-spinner property over the whole input space, restated on the
+  // absolute deadline.
   for (const settled of [false, true]) {
     for (const phase of [null, 'absent', 'hero', 'settling', 'active', 'unknown'] as const) {
       for (const hold of [false, true]) {
@@ -222,11 +248,17 @@ test('every frame either has a deadline or is terminal', () => {
           holdStartedAtMs: 0,
           nowMs: 1,
         }), TH)
-        const terminal = frame.mode === 'contents' || frame.mode === 'failure' || frame.mode === 'deferred'
         assert.ok(
-          terminal || Number.isFinite(frame.reevaluateInMs),
-          'no deadline: settled=' + String(settled) + ' phase=' + String(phase) + ' hold=' + String(hold),
+          Number.isFinite(frame.releaseAtMonoMs),
+          'release moment is not finite: settled=' + String(settled) + ' phase=' + String(phase) + ' hold=' + String(hold),
         )
+        if (frame.veil === 'held') {
+          assert.ok(
+            planVeilTimer(frame, 1) > 0,
+            'held frame with a 0 ms re-arm: settled=' + String(settled) + ' phase=' + String(phase) + ' hold=' + String(hold),
+          )
+          assert.ok(frame.releaseAtMonoMs > 1, 'held frames must release in the future')
+        }
       }
     }
   }

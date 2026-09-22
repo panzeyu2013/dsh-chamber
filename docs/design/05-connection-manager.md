@@ -228,7 +228,7 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
   （重新连接 / 重新加载 / 忽略）对「无法验证」与停滞来源同权；下一次成功读取（push 或 unary）
   立即恢复事实并撤下呈现。判定与界限在 `packages/renderer/src/aggregate-refresh.ts`
   （`shouldDropUnverifiedRunningFacts`，纯函数 + 单测），接线（判定 → 只清 running 位 → 进同一
-  横幅）由 `packages/renderer/test/wiring/session-liveness-wiring.test.ts` 钉住。**取舍**：无法
+  横幅）由 `packages/renderer/test/wiring/session-authority-wiring.test.ts` 钉住。**取舍**：无法
   验证时保留断言等于陈述一个没有证据的事实，而清位 + 可见提示是「不知道」的诚实表达，且恢复路径
   无条件幂等；已知残余 = 宿主其实仍在跑、只是读路径坏掉时用户会暂时看不到运行环（由横幅的
   「重新加载」收口；「重新连接」只对仍持有壳的来源有效——已回收来源的该出口是 no-op，见 STATUS ⑭）。
@@ -278,13 +278,16 @@ interface InstanceRuntimeReport {
     pending?: 'approval'|'plan-review'|'question'
     runningSubagents?: number     // 运行中子 agent 计数（>0 稀疏；06 §4.5）
   }>
-  sessionFactReconcile?: {        // design 14 §D4：运行位活性守卫的 L1 对账回执（可选；旧 producer 不带）
-    requestedAt: number           // producer 时钟；仅诊断（守卫只用 settledAt 水位）
-    settledAt?: number            // 缺省 = 在途（守卫忽略未结算回执）
-    ok: boolean                   // 是否拿到权威结论（false ≠ 一定失败，见 verdict）
-    attempts: number
-    verdict?: 'converged'|'stale'|'unknown'  // converged = 权威一致（可能经写回纠正）；stale = 权威正面证伪，或 refresh 相位失败/超时且缺 verify seam；unknown（探针失败/超时/两次读数不一致）不升级也不清等待
-    corrected?: boolean           // 本轮结束时 store 已无陈旧 running 位（写过 store，或 probe 与写回之间已自然收敛）⇒ 与 ok:true + converged 同现；守卫不据此升级
+  sessionAuthority?: {            // design 14 §D4：单一权威快照（可选；旧 producer 不带）
+    requestedAt: number           // producer 时钟；仅诊断
+    settledAt?: number            // 缺省 = 在途
+    ok: boolean                   // 最近一次结算无 stuck 证据（拿不到权威结论 = false）
+    runningSince?: number         // 当前 running 时段起点（App 升级 ladder 的症状年龄）
+    stuckSince?: number           // 首次「拿不到权威结论」且尚未被健康裁决清除的时刻
+    progressStamp: number         // 健康裁决计数；前进即重 base 升级 streak
+    probes: number                // 诊断计数（配额内）
+    corrections: number           // 诊断计数（成功的 tier-3 写回）
+    recent: Array<{ at: number; kind: 'probe'|'read-failed'|'correct'|'correct-failed'|'complete'|'recovered'; detail?: string }>  // 有界动作 ring（真机取证）
   }
 }
 export const chamberBridge: {
@@ -303,7 +306,7 @@ export const chamberBridge: {
   onWorkspaceRemoved(listener: (fact: WorkspaceRemovedFact) => void): () => void
   reportWorkspaceRenamed(fact: WorkspaceRenamedFact): void     // 侧栏 rename 成功后上报（改名回声）
   onWorkspaceRenamed(listener: (fact: WorkspaceRenamedFact) => void): () => void
-  requestSessionListRefresh(sourceId: string): void       // design 24 §12：请求该来源挂载 ctx 重跑官方 session.list（purge 幽灵行收敛；§12 由生产端校验式收敛链处理：reject/hung 有界重试，越界一律保持抑制——resolve 不构成权威）。**第二消费者（design 14 §D4）**：运行位活性守卫的 L1 也经本通道请求对账；producer 订阅端另驱动 SessionFactReconciler，回执经上面的 sessionFactReconcile 字段回流
+  requestSessionListRefresh(sourceId: string): void       // design 24 §12：请求该来源挂载 ctx 重跑官方 session.list（purge 幽灵行收敛；§12 由生产端校验式收敛链处理：reject/hung 有界重试，越界一律保持抑制——resolve 不构成权威）。**第二消费者（design 14 §D4）**：App 的 30s tick 也经本通道请求对账；producer 订阅端驱动 SessionAuthorityReconciler（reducer + probe ladder + I/O），快照经上面的 sessionAuthority 字段回流
   onRequestSessionListRefresh(listener: (sourceId: string) => void): () => void // 各挂载 ctx 的 sidebar 插件订阅；仅 chamberInstanceId === sourceId 者动作（§12：插件自身观测到归档集收缩也会直接触发同一链，不依赖本通道送达）
   requestActivateSource(sourceId: string): void           // 点击来源分组头调用
   onActivateSource(listener: (sourceId: string) => void): () => void  // App 层订阅

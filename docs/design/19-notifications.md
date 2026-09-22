@@ -140,6 +140,12 @@ function detectNotificationEdges(
   与 `prevRunningRef` 同生命周期纪律；主进程 claim 兜底）。
 - subagent 会话不产生事件（事实通道不含 subagent 行；父会话的 `runningSubagents`
   只驱动子代理计数徽标）。
+- **2026-12 P3 单入口修订**：裁决模块为 `packages/renderer/src/notification-projection.ts`——
+  `planRuntimeNotifications`（壳边沿；有可判 facts 的来源只发 ask/request，complete 归 facts）
+  与 `planFactsNotifications`（observed 完成，host 域水位严格前进才通知，reconstructed 只出未读）
+  共用 `complete-ledger` 的键空间与唯一 `emitSessionNotification` 出口。原 `usableFacts` 抑制
+  分支与 App 内的第二完成循环已删除；有 usable facts 的来源 complete 只从 facts 入口发出，
+  无 facts 的来源只从壳边沿发出——同一完成恰好一条通知由水位/武装两轨在该模块内保证。
 
 ### 3.3 通知事件与 IPC
 
@@ -411,7 +417,7 @@ completedBySource（App 完成未读蓝点集，06 §4.1，只读复用——徽
   show/failed/timeout/hostile error、严格 `local | ssh-<raw-id>` 来源、opaque proof
   校验与 same-id replacement、active-only Map churn、notification-open
   retain-until-ACK/FIFO/reload replay/旧 attempt 隔离；badge 校验/裁决/平台门用例。
-- `test:renderer-shell`：`notification-edges` 纯函数单测（complete 边沿与 dedupe 去重、
+- `test:renderer-shell`：`notification-projection` 单点裁决单测（两条证据、水位/武装两轨去重、首报播种）、`notification-edges` 纯函数单测（complete 边沿与 dedupe 去重、
   ask/request 值变化边沿（含直切）、首报播种、断连重连的重放不重复——注意**不是**「断连
   补发」，见 §3.5、同 tick 去重）；`badge-count` 投影用例。
 - `test:sidebar`：`projectRuntimeFacts` 的 subagent 行排除用例。

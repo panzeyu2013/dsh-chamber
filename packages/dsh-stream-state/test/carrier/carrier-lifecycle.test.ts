@@ -77,7 +77,10 @@ test('an allowed event during the in-flight connect is denied (never-stabilizes 
 test('after the window and spacing expire a new rebuild is admitted', () => {
   const first = reduceCarrier(initialCarrierState(), { kind: 'rebuildRequested', at: 0, reason: 'socketNoFrame' }, env)
   const later = reduceCarrier(first.state, { kind: 'rebuildRequested', at: 61000, reason: 'laneReconnect' }, env)
-  assert.equal(later.state.rebuildsAt.length, 2)
+  // The ledger keeps only what the throttle window can still see: the stamp at 0 is
+  // outside (0 > 1000 is false), so the admission replaces it rather than stacking
+  // (G-C pins the general bound).
+  assert.deepEqual(later.state.rebuildsAt, [61000])
   assert.equal(later.effects[0]?.e, 'rebuildCarrier')
 })
 
@@ -215,3 +218,106 @@ test('T2 a replaced carrier fails EVERY logical stream, not only the one that no
   assert.deepEqual(closed.state.openStreams, [], 'socket-level failure clears every stream')
 })
 
+
+test('P3: zero frames turn an opening stall into a dead-carrier rebuild, without the streak gate', () => {
+  // A below-threshold stall (streak 0) on a socket that delivered NOTHING is the
+  // silent-carrier case: the reducer derives socketNoFrame, and the threshold no
+  // longer applies because the whole budget WAS the evidence window.
+  const silent = reduceCarrier(initialCarrierState(), {
+    kind: 'rebuildRequested', at: 1000, reason: 'openingStall', streak: 0, streamId: 's1', framesSinceSend: 0,
+  }, env)
+  assert.deepEqual(silent.effects, [{ e: 'rebuildCarrier', reason: 'socketNoFrame', at: 1000 }])
+  assert.equal(silent.state.pendingRebuild, 'socketNoFrame')
+})
+
+test('P3: a socket that delivered keeps the stall threshold and cannot be called silent', () => {
+  const delivered = reduceCarrier(initialCarrierState(), {
+    kind: 'rebuildRequested', at: 1000, reason: 'openingStall', streak: 0, streamId: 's1', framesSinceSend: 3,
+  }, env)
+  assert.ok(!delivered.effects.some((effect) => effect.e === 'rebuildCarrier'), 'first miss on a live socket is not a rebuild')
+  assert.ok(delivered.effects.some((effect) => effect.e === 'forensic' && effect.name === 'stall-below-threshold'))
+  // Proven threshold + delivered frames = a threshold-gated stall, not silence.
+  const proven = reduceCarrier(initialCarrierState(), {
+    kind: 'rebuildRequested', at: 1000, reason: 'openingStall', streak: 2, streamId: 's1', framesSinceSend: 3,
+  }, env)
+  assert.deepEqual(proven.effects, [{ e: 'rebuildCarrier', reason: 'openingStall', at: 1000 }])
+  // An EXPLICIT silent reason on a socket that delivered is denied outright.
+  const denied = reduceCarrier(initialCarrierState(), {
+    kind: 'rebuildRequested', at: 1000, reason: 'socketNoFrame', streamId: 's1', framesSinceSend: 3,
+  }, env)
+  assert.deepEqual(denied.effects, [
+    { e: 'forensic', name: 'silent-not-proven', detail: '3' },
+    { e: 'reopenLogicalStream', streamId: 's1', reason: 'silent-not-proven' },
+  ])
+})
+
+test('P3: an unusable frame delta is never proof of silence', () => {
+  // Absent keeps the pre-P3 contract (the threshold decides a stall)...
+  const absent = reduceCarrier(initialCarrierState(), {
+    kind: 'rebuildRequested', at: 1000, reason: 'openingStall', streak: 0, streamId: 's1',
+  }, env)
+  assert.ok(!absent.effects.some((effect) => effect.e === 'rebuildCarrier'))
+  // ...and a non-finite delta cannot satisfy an explicit silent reason either.
+  const nan = reduceCarrier(initialCarrierState(), {
+    kind: 'rebuildRequested', at: 1000, reason: 'teardownNoFrame', streamId: 's1', framesSinceSend: Number.NaN,
+  }, env)
+  assert.ok(!nan.effects.some((effect) => effect.e === 'rebuildCarrier'))
+  assert.ok(nan.effects.some((effect) => effect.e === 'reopenLogicalStream'))
+})
+
+test('P3: an opening is armed with the widening budget for its own episode', () => {
+  const first = reduceCarrier(initialCarrierState(), { kind: 'openingSent', at: 1000, streamId: 's1', requestKey: 'k1' }, env)
+  assert.deepEqual(first.effects, [{ e: 'armOpeningDeadline', streamId: 's1', budgetMs: 30_000, streak: 0 }])
+  assert.equal(first.state.streamRequestKeys.s1, 'k1')
+  // First expiry widens the NEXT attempt; a frame-answering socket is below the
+  // stall threshold, so nothing rebuilds yet.
+  const expired = reduceCarrier(first.state, { kind: 'openingExpired', at: 2000, streamId: 's1', requestKey: 'k1', framesSinceSend: 3 }, env)
+  assert.equal(expired.state.openingStreaks.k1, 1)
+  assert.ok(!expired.effects.some((effect) => effect.e === 'rebuildCarrier'), 'first miss is below the stall threshold')
+  const second = reduceCarrier(expired.state, { kind: 'openingSent', at: 3000, streamId: 's2', requestKey: 'k1' }, env)
+  assert.deepEqual(second.effects, [{ e: 'armOpeningDeadline', streamId: 's2', budgetMs: 60_000, streak: 1 }])
+})
+
+test('P3: an answered opening resets only its own episode widening', () => {
+  let state = initialCarrierState()
+  state = reduceCarrier(state, { kind: 'openingSent', at: 1000, streamId: 's1', requestKey: 'k1' }, env).state
+  state = reduceCarrier(state, { kind: 'openingExpired', at: 2000, streamId: 's1', requestKey: 'k1', framesSinceSend: 1 }, env).state
+  state = reduceCarrier(state, { kind: 'openingSent', at: 3000, streamId: 's2', requestKey: 'k2' }, env).state
+  assert.equal(state.openingStreaks.k1, 1)
+  const answered = reduceCarrier(state, { kind: 'openingAnswered', at: 4000, streamId: 's1', requestKey: 'k1' }, env)
+  assert.equal(answered.state.openingStreaks.k1, undefined)
+  assert.equal(answered.state.openingStreaks.k2, undefined, 'an unrelated episode is untouched')
+})
+
+test('P3: a closing episode releases its widening unless it timed out or a sibling owns it', () => {
+  const expire = (state: ReturnType<typeof initialCarrierState>, streamId: string, requestKey: string) =>
+    reduceCarrier(state, { kind: 'openingExpired', at: 2000, streamId, requestKey, framesSinceSend: 1 }, env).state
+  let unshared = reduceCarrier(initialCarrierState(), { kind: 'openingSent', at: 1000, streamId: 's1', requestKey: 'k1' }, env).state
+  unshared = expire(unshared, 's1', 'k1')
+  const closed = reduceCarrier(unshared, { kind: 'episodeClosed', at: 3000, episodeId: 's1' }, env)
+  assert.equal(closed.state.openingStreaks.k1, undefined, 'a consumer-ended episode starts the next one tight')
+  assert.equal(closed.state.streamRequestKeys.s1, undefined)
+  let timedOut = reduceCarrier(initialCarrierState(), { kind: 'openingSent', at: 1000, streamId: 's1', requestKey: 'k1' }, env).state
+  timedOut = expire(timedOut, 's1', 'k1')
+  const kept = reduceCarrier(timedOut, { kind: 'episodeClosed', at: 3000, episodeId: 's1', timedOut: true }, env)
+  assert.equal(kept.state.openingStreaks.k1, 1, 'the retry lane inherits the widening it earned')
+  let shared = reduceCarrier(initialCarrierState(), { kind: 'openingSent', at: 1000, streamId: 's1', requestKey: 'k1' }, env).state
+  shared = expire(shared, 's1', 'k1')
+  shared = reduceCarrier(shared, { kind: 'openingSent', at: 2500, streamId: 's2', requestKey: 'k1' }, env).state
+  const siblingClosed = reduceCarrier(shared, { kind: 'episodeClosed', at: 3000, episodeId: 's1' }, env)
+  assert.equal(siblingClosed.state.openingStreaks.k1, 1, 'a live sibling still owns the key')
+})
+
+test('P3: the opening ledger is bounded and evicts oldest-first', () => {
+  let state = initialCarrierState()
+  const max = env.openingEpisodeKeysMax
+  for (let index = 0; index < max + 8; index += 1) {
+    const streamId = 's' + String(index)
+    const requestKey = 'k' + String(index)
+    state = reduceCarrier(state, { kind: 'openingSent', at: 1000 + index, streamId, requestKey }, env).state
+    state = reduceCarrier(state, { kind: 'openingExpired', at: 2000 + index, streamId, requestKey, framesSinceSend: 1 }, env).state
+  }
+  assert.equal(Object.keys(state.openingStreaks).length, max)
+  assert.equal(state.openingStreaks.k0, undefined, 'the oldest key is evicted first')
+  assert.equal(state.openingStreaks['k' + String(max + 7)], 1)
+})

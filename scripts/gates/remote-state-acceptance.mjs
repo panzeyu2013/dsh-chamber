@@ -62,12 +62,13 @@ const GROUPS = [
   { id: 'renderer-state', cwd: 'packages/renderer', files: [
     'packages/renderer/test/aggregate/badge-count.test.ts',
     'packages/renderer/test/aggregate/notification-edges.test.ts',
+    'packages/renderer/test/aggregate/notification-projection.test.ts',
     'packages/renderer/test/aggregate/notification-dedupe.test.ts',
     'packages/renderer/test/view-runtime/retention.test.ts',
     'packages/renderer/test/view-runtime/reveal-gate.test.ts',
     'packages/renderer/test/view-runtime/switch-frame-verdict.test.ts',
     'packages/renderer/test/view-runtime/switch-frame-instruments.test.ts',
-    'packages/renderer/test/wiring/session-liveness-wiring.test.ts',
+    'packages/renderer/test/wiring/session-authority-wiring.test.ts',
     'packages/renderer/test/lifecycle/source-readiness.test.ts',
     'packages/renderer/test/lifecycle/source-refresh-hint.test.ts',
     // 事实接线（probe/SSE 源 + v2 未读落盘 + 派生）

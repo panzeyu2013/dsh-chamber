@@ -62,7 +62,7 @@ test('added observability is allowed; removed observability is not', () => {
 test('a missing behavioral effect is always caught', () => {
   const a: RecoveryEffect[] = [
     { e: 'rebuildCarrier', reason: 'socketNoFrame', at: 0 },
-    { e: 'reconcileFacts', scope: 'running' },
+    { e: 'throttled', reason: 'openingStall', at: 0 },
   ]
   const b: RecoveryEffect[] = [{ e: 'rebuildCarrier', reason: 'socketNoFrame', at: 0 }]
   assert.equal(equivalents(a, b), false)

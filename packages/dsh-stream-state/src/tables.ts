@@ -41,6 +41,30 @@ export const SILENT_TEARDOWN_MIN_MS = 15_000
  * socket - is stuck. */
 export const OPENING_STALL_STREAK = 2
 
+/** Bound on the reducer's opening-ledger maps (provenance:
+ * OPENING_BUDGET_KEYS_MAX = 256 in the retired mux copy): a page that times out on
+ * many sessions must not grow the ledger without a limit. Oldest-first eviction
+ * only resets a key's widening; it never changes a decision already made. */
+const OPENING_EPISODE_KEYS_MAX = 256
+
+/** Deadline for one WebSocket handshake (provenance:
+ * REMOTE_STREAM_HANDSHAKE_TIMEOUT_MS). A socket that never fires open/error/close
+ * must fail the attempt, not park every open() until the connection lane's own
+ * readiness timeout. G-G locks the fork-side constant to this value until P3
+ * moves the decision into the carrier reducer. */
+export const HANDSHAKE_TIMEOUT_MS = 30_000
+
+/** Presentation-arbiter thresholds (provenance: source-readiness.ts
+ * VEIL_ACTIONS_AFTER_MS, session-surface.ts SURFACE_MAX_HOLD_MS /
+ * SURFACE_ABSENT_FALLBACK_MS). P2 moved them here so the renderer imports ONE table
+ * instead of owning module-local copies; the frame carries the resulting absolute
+ * release deadline. */
+export const PRESENTATION_THRESHOLDS = {
+  veilActionsAfterMs: 10_000,
+  surfaceMaxHoldMs: 70_000,
+  surfaceAbsentFallbackMs: 2_000,
+} as const
+
 /** Environment handed to the carrier reducer - tables, never literals at the
  * call site, so the executor cannot drift from the table. */
 export const CARRIER_ENV = {
@@ -49,6 +73,7 @@ export const CARRIER_ENV = {
   minRebuildSpacingMs: MIN_REBUILD_SPACING_MS,
   inFlightGraceMs: IN_FLIGHT_GRACE_MS,
   openingStallStreak: OPENING_STALL_STREAK,
+  openingEpisodeKeysMax: OPENING_EPISODE_KEYS_MAX,
 } as const
 
 /** Opening deadline for an episode that has already timed out `streak` times. */
@@ -82,13 +107,36 @@ export const LADDER_TABLES = {
     resyncMax: 3,
     failedMs: 90_000,
   },
-  /** sidebar session-fact-reconcile.ts: the 190 s-class receipt chain. */
-  factReconcile: {
-    maxAttempts: 2,
-    retryMs: 1_500,
-    attemptTimeoutMs: 20_000,
-    verifyTimeoutMs: 65_000,
-    correctivePhaseTimeoutMs: 5_000,
+  /**
+   * The session-fact authority (docs/progress/todo/session-authority-refactor.md):
+   * ONE set of numbers for two hosts of the same engine - the sidebar executor's
+   * probe cadence and the App's reconnect/notice escalation. They replace the
+   * former renderer-local SESSION_LIVENESS_DEFAULTS and the sidebar's 190 s
+   * receipt chain (both retired by P2).
+   */
+  authority: {
+    /** Probes (independent authority reads) per running episode. */
+    probeAfterMs: 60_000,
+    probeCoalesceMs: 200_000,
+    probeWindowMs: 600_000,
+    maxProbesPerWindow: 3,
+    /** Reconnect only with stuck evidence (a probe that could not conclude). */
+    reconnectAfterMs: 190_000,
+    reconnectCooldownMs: 300_000,
+    maxReconnects: 1,
+    /** Notice = reconnectAfterMs + the former 120 s grace, preserving tier order. */
+    noticeAfterMs: 310_000,
+  },
+  /** open-in session-stream-health.ts: the conversation-stream health ladder. */
+  streamHealth: {
+    errorGraceMs: 8_000,
+    loadingStallMs: 20_000,
+    loadingFailedMs: 90_000,
+    healCooldownMs: 120_000,
+    healBudgetWindowMs: 600_000,
+    healBudgetMax: 3,
+    healSettleMs: 20_000,
+    carrierChurnMs: 10_000,
   },
 } as const
 
@@ -101,5 +149,8 @@ export const TABLE_SNAPSHOT = {
   openingTimeoutLadderMs: OPENING_TIMEOUT_LADDER_MS,
   silentTeardownMinMs: SILENT_TEARDOWN_MIN_MS,
   openingStallStreak: OPENING_STALL_STREAK,
+  openingEpisodeKeysMax: OPENING_EPISODE_KEYS_MAX,
+  handshakeTimeoutMs: HANDSHAKE_TIMEOUT_MS,
+  presentation: PRESENTATION_THRESHOLDS,
   ladders: LADDER_TABLES,
 } as const
