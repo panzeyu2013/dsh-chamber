@@ -56,6 +56,35 @@ design 18 现行契约：apply 只置 pending，激活事务在下次启动相�
 | 不改 journal/override schema | 「立即 vs 下次启动」是宿主决策；`writeActivationIntent`/`queueActivationIntent` 已支持运行中排程（`dsh-runtime-store.ts`） |
 | 不改 activation-gate / snapshot-store / override-lifecycle / runtime-probes / runtime-operation-fence / known-good-monitor / runtime-metadata-recovery / registry-* | 全部已是宿主无关纯函数 |
 
+### 3.1 门控组合为何不共享（2026-12 单源化复核结论，M16）
+
+§2.2 的「两个宿主同一契约」指**执行序列**（停机前置 → 快照 → 切指针 → spawn → 探针门控），该序列已由
+本节共享核心（apply-phase / runtime-startup / activation-gate）承载。**各宿主的门控组合不共享**：它们是各自
+边界上的策略。逐行复核 `packages/desktop/apply-now-gate.ts` ↔ `packages/gateway/src/runtime-manager.ts` 的
+`applyNowPreflight()` 后，差异如下：
+
+| 维度 | desktop（IPC 面） | gateway（公网 HTTP 面） |
+|---|---|---|
+| 平台只读 | `managementSupported=false` → `not-allowed` | `win32` → 403 `platform_read_only` |
+| 占用 | `operationBusy || fenceBusy`（注入事实） | `assertMutationIdle()`（抛自身码/文案） |
+| env | `source === 'env'` → `env` | `envPath !== null` → `env_override_active` |
+| 激活 journal 损坏 | 无独立门（被 `runtimeBlocked` 家族的投影覆盖） | **显式** fail-closed → `runtime_busy` + recovery |
+| 崩溃续作相位 | `runtimeBlocked` → `blocked` | `startupBlockReason` → recovery retry 文案 |
+| 连接态 | ∉{ready,degraded} → `not-ready` | 同判定 → `applyNowNotRunningRefusal` |
+| 目标解析 | `pending ?? journalTarget ?? overridePending`（三源持久化事实） | `ordinaryPendingVersion()` 否则 `chosenVersion` + `shouldInvalidate` 过滤 |
+| 目标树 | 调用方预检 `treeValid` → `invalid-tree` | `listValidVersionTrees(...).includes(target)` → `invalid_target` |
+| snapshot-failed | 独立分流 → `snapshot-failed`（retry-apply 所有） | 并入 `startupBlockReason` → recovery retry |
+| no-op 目标 | **无此门**（由 `phase==='pending'` + 三源非空约束） | **显式**拒绝（active === target 且无在途事务） |
+| 返回形态 | `{ ok, reason }` 判别联合（8 个 reason） | 抛 `{ code }` 拒绝（409/403） |
+| 二次确认 | 确认前后各一次同构门（TOCTOU） | 202 + 异步 job（同步 preflight 是 202 前唯一权威门） |
+
+**被否方案（不共享门控组合）**：把两侧门控收敛为一个共享函数 + 宿主开关（target 解析策略 / 是否做
+no-op 检查 / blocked 的表达方式 / verdict 词汇映射）。否掉的理由：①两侧**谓词与后置条件不同**——
+gateway 多 journal-corrupt 与 no-op 门，desktop 多 snapshot-failed 分流与 TOCTOU 二次门，目标解析策略不同，
+把「同一契约」误读成「同一函数」会抹掉这些真实差异；②收敛需要四个宿主开关，正是 design 17 §2.3 与 N8
+反对的「共享函数 + 布尔开关」形态，独立性/可读性双输；③两侧门各有矩阵测试（desktop `apply-now-gate` 单测、
+gateway 路由 + manager 套件），共享化会同时改写两个边界，而收益只剩「少一个函数」。**保留双份**，差异表登记于此。
+
 ## 4. desktop 宿主改动（packages/desktop）
 
 ### 4.1 IPC 与动作
