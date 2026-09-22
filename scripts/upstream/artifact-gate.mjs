@@ -1,5 +1,5 @@
 /**
- * Pure helpers for the C8 committed-artifact gate (design 09 §3.6 / C8).
+ * Pure helpers for the C8 build-time-artifact gate (design 09 §3.6 / C8).
  *
  * Extracted so the gate's decision logic is unit-testable: the gate script
  * itself is a top-level program (not importable), and its skip/fail semantics
@@ -104,9 +104,9 @@ export function artifactGateVerdict({ stale, skipped }) {
   if (stale.length > 0) {
     return {
       ok: false,
-      message: `C8 提交态生成物与 src 不一致（重建后字节不同）: ${stale.join(', ')}`
+      message: `C8 构建期生成物与 src 不一致（重建后字节不同）: ${stale.join(', ')}`
         + ' — 跑 pnpm run build:host-packages / pnpm run build:dsh-runtime / '
-        + 'node packages/dsh-chamber-client-ui-mobile/scripts/build.mjs 后提交',
+        + 'node packages/dsh-chamber-client-ui-mobile/scripts/build.mjs 重建工作树产物',
     }
   }
   return { ok: true }

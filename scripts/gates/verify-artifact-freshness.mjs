@@ -16,7 +16,9 @@
  *
  * 语义（与 control-plane-freshness / build-smoke 同款豁免）：
  *   - 输入缺失（clean checkout、未 build 的环境）⇒ **loud SKIP**，不判红；
- *   - 产物缺失 ⇒ SKIP（源在而产物不在 = 未构建，不是陈旧）；
+ *   - seed 产物缺失（源目录在而 dist/index.js 不在）⇒ **FAIL**：这些产物已在
+ *     2026-12 移出 git，缺失不再是「未构建的合法态」，而是 clean checkout 未
+ *     自举；必须点名包与 `pnpm run build:artifacts`，不得静默跳过；
  *   - 产物在但与「从当前 src 重建/重算」的结果不一致 ⇒ **FAIL（陈旧）**，
  *     绝不自动修复（自动重建会让操作者以为产物被检查过——2026-12 review 的
  *     教训，见 build-smoke.test.ts:110-134）。
@@ -67,15 +69,26 @@ function checkHostPackages() {
 /** 2. seed dist：按各自 build.mjs 的同一组 esbuild 选项重建到临时文件再比对。 */
 async function checkSeedDist() {
   const seeds = ['dsh-chamber-seed-client-graph', 'dsh-chamber-seed-git-worktree', 'dsh-chamber-seed-archive-cleanup', 'dsh-chamber-seed-open-in']
+  // Missing-ness is decided BEFORE esbuild loads: a clean checkout without a
+  // build toolchain must not turn "artifact absent" into a skip (the seed
+  // artifacts left Git in 2026-12; their absence is a bootstrap failure, not an
+  // unbuilt-but-legal state).
+  const missing = []
+  const present = []
+  for (const seed of seeds) {
+    const pkgDir = join(ROOT, 'packages', seed)
+    if (!existsSync(join(pkgDir, 'src', 'index.ts'))) continue
+    const dist = join(pkgDir, 'dist', 'index.js')
+    if (existsSync(dist)) present.push({ seed, pkgDir, dist })
+    else missing.push(seed + '/dist/index.js')
+  }
   let compared = 0
   const stale = []
+  let rebuildError = null
   const work = mkdtempSync(join(tmpdir(), 'dsh-seed-fresh-'))
   try {
     const esbuild = await loadEsbuild(ROOT)
-    for (const seed of seeds) {
-      const pkgDir = join(ROOT, 'packages', seed)
-      const dist = join(pkgDir, 'dist', 'index.js')
-      if (!existsSync(dist) || !existsSync(join(pkgDir, 'src', 'index.ts'))) continue
+    for (const { seed, pkgDir, dist } of present) {
       const out = join(work, seed + '.js')
       await esbuild.build({
         entryPoints: [join(pkgDir, 'src', 'index.ts')],
@@ -92,15 +105,24 @@ async function checkSeedDist() {
       if (!sameBytes(out, dist)) stale.push(seed + '/dist/index.js')
     }
   } catch (error) {
-    const detail = String(error.message ?? error).split('\n')[0]
-    note('seed dist', 'skip', '无法重建（' + detail + '）——先 pnpm install / 物化 vendor 树')
-    return
+    rebuildError = String(error.message ?? error).split('\n')[0]
   } finally {
     rmSync(work, { recursive: true, force: true })
   }
-  if (compared === 0) note('seed dist', 'skip', '未构建（无 dist/index.js）')
-  else if (stale.length > 0) note('seed dist', 'stale', '与 src 重建结果不一致：' + stale.join(', ') + '（重建：各包 scripts/build.mjs）')
-  else note('seed dist', 'ok', compared + ' 包与 src 重建逐字节一致')
+  if (missing.length > 0 || stale.length > 0) {
+    const details = [
+      ...missing.map(file => file + '（缺失）'),
+      ...stale.map(file => file + '（与 src 重建不一致）'),
+    ]
+    const suffix = rebuildError !== null ? '；重建不可用：' + rebuildError : ''
+    note('seed dist', 'stale', '源在而产物不可用：' + details.join('、') + '（重建：pnpm run build:artifacts）' + suffix)
+  } else if (rebuildError !== null) {
+    note('seed dist', 'skip', '无法重建（' + rebuildError + '）——先 pnpm install / 物化 vendor 树')
+  } else if (compared === 0) {
+    note('seed dist', 'skip', '未构建（无 dist/index.js）')
+  } else {
+    note('seed dist', 'ok', compared + ' 包与 src 重建逐字节一致')
+  }
 }
 
 /** 3. preload.cjs：tsc -p tsconfig.preload.build.json --outDir <tmp> 后比对。 */
@@ -178,10 +200,10 @@ async function main() {
   }
   const skipped = results.filter(r => r.status === 'skip').length
   if (stale > 0) {
-    console.error('artifact freshness: ' + stale + ' 类产物陈旧（SKIP ' + skipped + ' 类未构建，不计通过）')
+    console.error('artifact freshness: ' + stale + ' 类产物陈旧或缺失（SKIP ' + skipped + ' 类无法比对；缺失类先跑 pnpm run build:artifacts）')
     process.exit(1)
   }
-  console.log('artifact freshness: 全部已构建产物与当前 src 一致（SKIP ' + skipped + ' 类未构建）')
+  console.log('artifact freshness: 全部已构建产物与当前 src 一致（SKIP ' + skipped + ' 类无法比对）')
 }
 
 await main()

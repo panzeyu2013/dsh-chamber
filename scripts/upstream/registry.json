@@ -234,7 +234,7 @@
           "tsconfig.json": "[patch-mod] chamber 构面（vendor paths + 本包 files）"
         },
         "own": {
-          "dist/index.js": "chamber 提交态产物（C8 逐字节重建-比对；上游无对应文件）",
+          "dist/index.js": "chamber 构建期生成产物（不提交；clean checkout 由 pnpm run build:artifacts 自举；C8 逐字节重建-比对；上游无对应文件）",
           "scripts/build.mjs": "chamber esbuild 产物构建",
           "src/core.ts": "chamber 域核心：上游 apply() 的目录/图标/拉起状态机（去掉路由与 SSH 门）"
         },

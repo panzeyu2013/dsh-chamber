@@ -19,7 +19,7 @@ export const CRITERIA = Object.freeze({
   C5: '过期锚扫描：shadow fork package.json 版本 == 上游；submodule HEAD == harness.commit',
   C6: 'EXCLUDED 上游存在性：ensure-harness-vendor 排除的 shadow fork 源目录仍在',
   C7: '种子域锁步：gateway HOST_PACKAGE_PROBE_DOMAINS == dsh-runtime HOST_DOMAIN_PROBE_NAMES',
-  C8: '提交态生成物 == src：确定性重建-比对（硬失败）',
+  C8: '构建期生成物 == src：确定性重建-比对（硬失败）',
   C9: 'vendor 源码补丁锚：每处 expect 在 pin 住的上游文件里恰好命中一次',
   C10: '版本锚一致性 + 活版本字面量白名单（运行时锁文件为单一来源）',
   C11: '运行时线族集合：受保护集合的 F 分量只认运行时锁文件闭包',

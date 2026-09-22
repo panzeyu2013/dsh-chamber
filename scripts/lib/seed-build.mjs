@@ -2,16 +2,16 @@
  * seed-build.mjs — the single esbuild bundler for the chamber seed host packages.
  *
  * The four seed packages (client-graph / git-worktree / archive-cleanup /
- * open-in) each ship a committed `dist/index.js` that the control plane seeds
+ * open-in) each ship a build-time `dist/index.js` that the control plane seeds
  * into managed profiles with zero build steps at runtime (design 09 §3.5,
  * design 20 §6.2). This module owns the whole bundle policy — esbuild resolution
  * through the renderer's vite tree, the fixed node/esm/target shape, the
- * `@deepseek-ai/*` external boundary and the committed-artifact existence
+ * `@deepseek-ai/*` external boundary and the built-artifact existence
  * check — so a package's `scripts/build.mjs` carries only its own
  * entry/outfile/external configuration.
  *
  * Determinism: `absWorkingDir` is the package root (esbuild renders source
- * comments relative to it), so the committed artifact is byte-identical from
+ * comments relative to it), so the built artifact is byte-identical from
  * any caller CWD. C8 in scripts/upstream/verify-upstream-touchpoints.mjs
  * rebuilds and byte-compares the four artifacts.
  *
@@ -29,7 +29,7 @@ import { dirname, join, resolve } from 'node:path'
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
 
 /**
- * Bundle one seed package's host entry into its committed dist artifact.
+ * Bundle one seed package's host entry into its build-time dist artifact.
  * @param args - package root + the package-specific bundle configuration.
  * @param args.packageRoot - absolute package root (the esbuild absWorkingDir).
  * @param args.entry - entry path relative to the package root.
@@ -62,7 +62,7 @@ export async function buildSeedBundle({
     logLevel: 'info',
   })
 
-  // The committed artifact must exist after a successful build.
+  // The built artifact must exist after a successful build.
   if (!existsSync(resolvedOutfile)) {
     console.error(`seed-build: esbuild reported success but ${resolvedOutfile} is missing`)
     process.exit(1)

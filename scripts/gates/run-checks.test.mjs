@@ -17,6 +17,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { MODES, pnpmInvocation, requestedMode, runMode, stepInvocation } from './run-checks.mjs'
+import { ARTIFACTS, ensureArtifacts, formatMissingArtifacts, missingArtifacts } from '../dev/ensure-artifacts.mjs'
 import { ciUnclassifiedGateCommands, jobBlock, staticGateParityProblems } from './static-gate-parity.mjs'
 import { judgeSwiftTestReport, parseSwiftTestReport, swiftTestArgs, swiftTestEnvironment } from './run-swift-tests.mjs'
 import { smokeDecision } from './compiled-sidecar-smoke.mjs'
@@ -505,4 +506,62 @@ test('G35: the fault-injection matrix runs on the push path too, not only from c
   const job = jobBlock(readFileSync(join(REPO_ROOT, '.github', 'workflows', 'ci.yml'), 'utf8'), 'test')
   const ciCommands = ciUnclassifiedGateCommands(job, scripts)
   assert.ok(ciCommands.some(command => command.includes('remote-state-injection-matrix')))
+})
+
+// ---- untracked build artifacts: ensure-artifacts + the run-checks pre-step
+// (2026-12 untrack-artifacts). The seed/runtime/mobile artifacts left Git, so
+// every check mode must either self-bootstrap or fail loudly; a mode that
+// silently skipped a gate because an artifact was absent is the regression
+// these tests pin.
+test('ensure-artifacts: an empty fixture root reports every manifest entry and names the build command', () => {
+  const empty = mkdtempSync(join(tmpdir(), 'dsh-ensure-artifacts-'))
+  try {
+    const missing = missingArtifacts(empty)
+    assert.equal(missing.length, ARTIFACTS.length, 'every tracked-removed artifact must be in the checklist')
+    const report = formatMissingArtifacts(missing).join('\n')
+    assert.match(report, /pnpm run build:artifacts/, 'the aggregate build command is the one-copy-paste fix')
+    for (const artifact of ARTIFACTS) assert.ok(report.includes(artifact.id), 'report must name ' + artifact.id)
+    // --check semantics (build: false) must report without writing.
+    const verdict = ensureArtifacts({ repoRoot: empty, build: false, log: () => {} })
+    assert.equal(verdict.ok, false)
+    assert.equal(verdict.built, false)
+    assert.equal(verdict.missing.length, ARTIFACTS.length)
+  } finally {
+    rmSync(empty, { recursive: true, force: true })
+  }
+})
+test('run-checks static fails loudly on missing artifacts; tests/typecheck/full self-bootstrap', () => {
+  const refusal = () => ({ ok: false, missing: [{ id: 'x', path: 'x', build: 'y' }], built: false })
+  const staticLogs = []
+  const staticRun = runMode('static', {
+    log: line => staticLogs.push(line),
+    ensureArtifacts: options => {
+      assert.equal(options.build, false, 'static is read-only: it must never build')
+      return refusal()
+    },
+  })
+  assert.equal(staticRun.ran, 0)
+  assert.deepEqual(staticRun.failed, ['ensure-artifacts (1 missing)'])
+  assert.ok(staticLogs.some(line => line.includes('pnpm run build:artifacts')),
+    'the static failure must name the build command')
+  for (const mode of ['typecheck', 'tests', 'full']) {
+    let requested
+    const run = runMode(mode, {
+      log: () => {},
+      ensureArtifacts: options => { requested = options.build; return refusal() },
+    })
+    assert.equal(requested, true, mode + ' must build what is missing')
+    assert.equal(run.ran, 0, mode + ' must not run steps when the artifacts cannot be ensured')
+  }
+})
+test('run-checks --list never runs the artifact pre-step', () => {
+  let called = false
+  const lines = []
+  runMode('tests', {
+    list: true,
+    log: line => lines.push(line),
+    ensureArtifacts: () => { called = true; return { ok: false, missing: [], built: false } },
+  })
+  assert.equal(called, false, 'listing runs nothing, including the pre-step')
+  assert.equal(lines.length, MODES.tests.length + 1)
 })

@@ -5,7 +5,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { readFileSync, statSync } from 'node:fs'
+import { existsSync, readFileSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { USAGE_EXIT_CODE, VERIFY_USAGE, parseVerifyArgs } from './verify-upstream-touchpoints-args.mjs'
@@ -17,8 +17,10 @@ import {
 
 const here = dirname(fileURLToPath(import.meta.url))
 const scriptPath = join(here, 'verify-upstream-touchpoints.mjs')
-/** Any committed artifact C8 rewrites in default mode (witness for "no write"). */
+/** Any build-time artifact C8 rewrites in default mode (witness for "no write"). */
 const witnessArtifact = join(here, '..', '..', 'packages', 'dsh-runtime', 'dist', 'index.js')
+/** mtime when the (untracked) witness artifact exists, `null` on a clean checkout. */
+const witnessMtime = () => (existsSync(witnessArtifact) ? statSync(witnessArtifact).mtimeMs : null)
 
 const run = (...argv) => spawnSync(process.execPath, [scriptPath, ...argv], {
   cwd: join(here, '..', '..'),
@@ -82,24 +84,24 @@ test('usage text documents every accepted flag and both exit codes', () => {
 })
 
 test('the script exits 2 on an unknown argument without running a single gate or writing an artifact', () => {
-  const before = statSync(witnessArtifact).mtimeMs
+  const before = witnessMtime()
   const result = run('--no-artifact-rebuid')
   assert.equal(result.status, USAGE_EXIT_CODE, `unknown argument must exit ${USAGE_EXIT_CODE} (got ${result.status})`)
   assert.match(result.stderr, /未知参数 --no-artifact-rebuid/)
   assert.match(result.stderr, /--no-artifact-rebuild/)
   assert.doesNotMatch(result.stdout, /[✓] C\d/, 'no gate may run before the guard')
   assert.doesNotMatch(result.stdout, /C8/, 'the in-place artifact rebuild must never start for a usage error')
-  assert.equal(statSync(witnessArtifact).mtimeMs, before, 'a usage error must not touch any artifact')
+  assert.equal(witnessMtime(), before, 'a usage error must not touch any artifact')
 })
 
 test('--help prints the usage text, runs no gate and exits 0', () => {
-  const before = statSync(witnessArtifact).mtimeMs
+  const before = witnessMtime()
   const result = run('--help')
   assert.equal(result.status, 0)
   assert.ok(result.stdout.includes(VERIFY_USAGE), '--help must print the module\'s single usage text')
   assert.doesNotMatch(result.stdout, /[✓] C\d/, '--help must short-circuit before the gates')
-  assert.doesNotMatch(result.stdout, /C8 提交态生成物/, '--help must never reach the rebuild gate')
-  assert.equal(statSync(witnessArtifact).mtimeMs, before, '--help must not touch any artifact')
+  assert.doesNotMatch(result.stdout, /C8 构建期生成物/, '--help must never reach the rebuild gate')
+  assert.equal(witnessMtime(), before, '--help must not touch any artifact')
 })
 
 /** Argument text of every `await import(...)` call in a source file (balanced-paren scan). */

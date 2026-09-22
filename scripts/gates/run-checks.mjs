@@ -21,6 +21,13 @@
  *   node scripts/gates/run-checks.mjs <mode> --list     # print the plan, run nothing
  *   node scripts/gates/run-checks.mjs <mode> --continue # keep going after a failure
  *
+ * Artifact pre-step (2026-12 untrack-artifacts): the artifacts that left Git
+ * (dsh-runtime / the four seed packages / the mobile dist+lib) are ensured
+ * before a mode runs. tests/typecheck/full build the missing ones
+ * (`pnpm run build:artifacts`); static is read-only and fails loudly with that
+ * command instead — a clean checkout bootstraps itself, and no mode silently
+ * skips a gate because an artifact was absent.
+ *
  * Exit status is 1 when any step fails (or when a mode resolves to no steps: a
  * mode that runs nothing has not passed).
  */
@@ -29,6 +36,7 @@ import { spawnSync } from 'node:child_process'
 import { realpathSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { ensureArtifacts } from '../dev/ensure-artifacts.mjs'
 
 /** Package test suites, in the order the CI job runs them. */
 const PACKAGE_TESTS = [
@@ -127,6 +135,16 @@ const STATIC_CHECKS = [
   'test:scripts',
 ]
 
+/**
+ * Modes whose steps consume the untracked build artifacts (scripts/dev/
+ * ensure-artifacts.mjs). `tests`/`typecheck`/`full` self-bootstrap: the
+ * pre-step builds what is missing before any step runs. `static` is the
+ * read-only gate set — it must NEVER write the working tree, so a missing
+ * artifact is a loud failure that names `pnpm run build:artifacts` instead of a
+ * silent skip or a hidden rebuild (2026-12 untrack-artifacts ruling).
+ */
+export const ARTIFACT_MODES = new Set(['static', 'typecheck', 'tests', 'full'])
+
 /** Named gate groups. Keep the names disjoint from script names to avoid confusion. */
 export const MODES = {
   static: STATIC_CHECKS,
@@ -189,7 +207,7 @@ export function stepInvocation(step, pnpm = pnpmInvocation()) {
 /**
  * Run one mode's steps in order.
  * @param {string} mode - mode name present in {@link MODES}.
- * @param {{ list?: boolean, keepGoing?: boolean, log?: (line: string) => void }} [options] - behaviour overrides.
+ * @param {{ list?: boolean, keepGoing?: boolean, log?: (line: string) => void, ensureArtifacts?: typeof ensureArtifacts }} [options] - behaviour overrides.
  * @returns {{ failed: string[], ran: number }} outcome.
  */
 export function runMode(mode, options = {}) {
@@ -201,6 +219,17 @@ export function runMode(mode, options = {}) {
     log(`run-checks ${mode}: ${steps.length} step(s)`)
     for (const step of steps) log(`  - ${stepInvocation(step, pnpm).display}`)
     return { failed: [], ran: 0 }
+  }
+  // Artifact pre-step: tests/typecheck/full build what is missing, static only
+  // reports. Must stay after the --list early return (listing runs nothing).
+  if (ARTIFACT_MODES.has(mode)) {
+    const ensure = options.ensureArtifacts ?? ensureArtifacts
+    const verdict = ensure({ build: mode !== 'static', log })
+    if (!verdict.ok) {
+      log(`run-checks: ${mode} 需要构建期产物且缺失 ${verdict.missing.length} 个——先跑 pnpm run build:artifacts`
+        + (mode === 'static' && verdict.built === false ? '（static 只读，不自动构建）' : ''))
+      return { failed: [`ensure-artifacts (${verdict.missing.length} missing)`], ran: 0 }
+    }
   }
   const failed = []
   let ran = 0

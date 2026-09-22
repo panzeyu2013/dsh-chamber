@@ -314,16 +314,22 @@ jobs:
       #      fast without node_modules (`--no-artifact-rebuild` = C8 mtime
       #      advisory, and nothing is written);
       #   2. below, after the install: the default mode re-runs everything AND
-      #      executes C8 (rebuild the committed host/mobile/dsh-runtime bundles
-      #      and byte-compare, hard failure, then restore). C8 is the gate most
+      #      executes C8 (rebuild the untracked build-time
+      #      host/mobile/dsh-runtime bundles and byte-compare, hard failure, then
+      #      restore). C8 is the gate most
       #      easily defeated by "edited src, forgot to rebuild the artifact", so
       #      a release must never be the first place it runs (2026-12 review P2).
       - name: Upstream touchpoint registry (C1/C3/C4/C5/C6/C7/C9/C10 + C11–C15)
         run: node scripts/upstream/verify-upstream-touchpoints.mjs --no-artifact-rebuild
       - run: pnpm install --frozen-lockfile
-      # C8 deterministic artifact gate (see the step above): rebuilds in place,
-      # byte-compares, restores. Needs node_modules/esbuild, hence post-install.
-      - name: Committed artifacts match sources (C8 rebuild gate)
+      # 2026-12 产物移出 git：C8 默认模式先快照再就地重建-比对，clean checkout
+      # 必须在它之前自举这 9 个构建期产物（缺席会被判成 stale）。
+      - name: Bootstrap untracked build-time artifacts (C8 input)
+        run: pnpm run ensure:artifacts
+      # C8 deterministic artifact gate (see the step above): rebuilds the
+      # untracked build-time bundles in place, byte-compares, restores. Needs
+      # node_modules/esbuild, hence post-install.
+      - name: Build-time artifacts match sources (C8 rebuild gate)
         run: node scripts/upstream/verify-upstream-touchpoints.mjs
       - name: Assert lockfile not rewritten
         run: git diff --exit-code -- pnpm-lock.yaml
@@ -454,6 +460,10 @@ jobs:
         run: git diff --exit-code -- pnpm-lock.yaml
       - name: Pack and smoke-test the installed gateway CLI
         run: |
+          # gateway build (via prepack) bundles @dsh-chamber/dsh-runtime into
+          # dist, so this fresh job needs the runtime dist before packing
+          # (same prerequisite ci.yml names before its own gateway pack).
+          pnpm run build:dsh-runtime
           mkdir -p packages/gateway/release /tmp/dsh-gateway-install
           pnpm --filter @dsh-chamber/gateway pack --pack-destination packages/gateway/release
           npm install --ignore-scripts --prefix /tmp/dsh-gateway-install packages/gateway/release/*.tgz
@@ -989,6 +999,10 @@ jobs:
             echo "signing identity: $IDENTITY"
             export KEYCHAIN_PASSWORD KEYCHAIN_FILE
           fi
+          # bundle:dsh below imports @dsh-chamber/dsh-runtime (dist), which the
+          # build:sidecar line would only ensure later; bootstrap the untracked
+          # build-time artifacts first.
+          pnpm run ensure:artifacts
           pnpm run build:host-packages
           pnpm run build:renderer
           # W8/R15③（2026-12 审计 S3）：release 腿此前**完全没有** scoper 标记门，

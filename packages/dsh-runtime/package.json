@@ -17,8 +17,8 @@
   "scripts": {
     "build": "node ./scripts/build.mjs",
     "prepack": "node ./scripts/build.mjs",
-    "test": "node ./scripts/test.mjs",
-    "test:win32": "node ./scripts/test.mjs --win32"
+    "test": "node ../../scripts/dev/ensure-artifacts.mjs && node ./scripts/test.mjs",
+    "test:win32": "node ../../scripts/dev/ensure-artifacts.mjs && node ./scripts/test.mjs --win32"
   },
   "license": "MIT",
   "devDependencies": {

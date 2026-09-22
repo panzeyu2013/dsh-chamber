@@ -4,7 +4,6 @@
  * upstream-touchpoints.md 的机器侧）。
  *
  * 只读，唯一例外是默认模式的 C8（就地重建-还原生成物，见该条）；依赖只有 node
- * 内置模块 + 同目录三个 helper（artifact-gate.mjs /
  * 内置模块 + 同目录四个 helper（artifact-gate.mjs /
  * verify-upstream-touchpoints-args.mjs / verify-upstream-touchpoints-hover.mjs /
  * plugin-protection-gate.mjs）。
@@ -24,9 +23,10 @@
  *       非 shadow 的 fork（如 seed-open-in）必须留在 vendor 树作 C1 锚）
  *   C7  种子域锁步：gateway HOST_PACKAGE_PROBE_DOMAINS 值集 ==
  *       dsh-runtime HOST_DOMAIN_PROBE_NAMES 列表（文本双门；运行时已有 fail-loud）
- *   C8  提交态生成物 == src（确定性重建-比对，硬失败）：host dist ×4 +
- *       mobile dist/lib 四件；重建后字节不同 = 产物陈旧。写后原样还原，
- *       `--no-artifact-rebuild` 退回 mtime advisory（fresh checkout 会误报）
+ *   C8  构建期生成物 == src（确定性重建-比对，硬失败）：host dist ×4 +
+ *       dsh-runtime dist + mobile dist/lib 四件；重建后字节不同 = 产物陈旧。
+ *       写后原样还原，`--no-artifact-rebuild` 退回 mtime advisory（fresh checkout
+ *       会误报）
  *   C9  vendor 源码补丁锚（硬失败）：`packages/renderer/scripts/vendor-patches.mjs`
  *       注册的每处 expect 必须在 pin 住的上游文件里恰好命中一次——重锚后
  *       上游文本一漂移即红，避免「补丁静默失效」
@@ -446,10 +446,10 @@ for (const fork of FORKS) {
 // retired slots), while a freshly built tree could report a false positive
 // when the artifact was written a millisecond before its own source. Both
 // build scripts are deterministic (esbuild, fixed target/externals, LF-only
-// committed artifacts per .gitattributes), so the gate rebuilds each artifact
+// build-time artifacts), so the gate rebuilds each artifact
 // group in place and byte-compares against the bytes captured first, then
 // restores them verbatim — the repo is left unchanged, and the only observable
-// effect is the artifact mtime. A mismatch is a hard failure: the committed
+// effect is the artifact mtime. A mismatch is a hard failure: the working-tree
 // artifact no longer matches its source. `--no-artifact-rebuild` keeps the
 // old advisory mtime behavior for environments without esbuild.
 {
@@ -468,19 +468,19 @@ for (const fork of FORKS) {
     },
     {
       // design 20 §6: the open-in host domain (fork of upstream's open-in host
-      // half) is seeded into the local profile the same way, so its committed
+      // half) is seeded into the local profile the same way, so its built
       // bundle must equal a fresh rebuild too.
       script: 'packages/dsh-chamber-seed-open-in/scripts/build.mjs',
       outputs: ['packages/dsh-chamber-seed-open-in/dist/index.js'],
     },
     {
-      // The shared runtime core's committed bundle (the desktop/gateway
+      // The shared runtime core's build-time bundle (the desktop/gateway
       // installer ships it; a stale copy is as wrong as a stale seed bundle).
       script: 'packages/dsh-runtime/scripts/build.mjs',
       outputs: ['packages/dsh-runtime/dist/index.js'],
     },
     {
-      // The mobile browser half is a committed artifact too (package.json
+      // The mobile browser half is a build-time artifact too (package.json
       // exports ./client -> lib/client.js) and the gateway seeds it byte for
       // byte; a stale bundle silently keeps retired DOM anchors (2026-09 V1
       // review BLOCKER). lib/index.js is the mirrored host half.
@@ -647,7 +647,7 @@ for (const fork of FORKS) {
       for (const note of skipped) warn(`C8 跳过：${note}`)
       const verdict = artifactGateVerdict({ stale, skipped })
       if (!verdict.ok) fail(verdict.message)
-      else console.log(`✓ C8 提交态生成物与 src 一致（重建-比对，${groups.length} 组）`)
+      else console.log(`✓ C8 构建期生成物与 src 一致（重建-比对，${groups.length} 组）`)
     }
   }
 }

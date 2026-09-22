@@ -26,7 +26,7 @@
   "scripts": {
     "build": "node ./scripts/build.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node ./scripts/test.mjs",
+    "test": "node ../../scripts/dev/ensure-artifacts.mjs && node ./scripts/test.mjs",
     "prepack": "pnpm --filter @dsh-chamber/dsh-client-ui-mobile run build && pnpm run build"
   },
   "license": "MIT",

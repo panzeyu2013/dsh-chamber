@@ -14,9 +14,9 @@
     "dist:mac": "node ./node_modules/electron-builder/cli.js --mac",
     "dist:win": "node ./node_modules/electron-builder/cli.js --win --x64",
     "dist:linux": "node ./node_modules/electron-builder/cli.js --linux --x64",
-    "test": "node ./scripts/test.mjs",
-    "test:macos": "node ./scripts/test.mjs --macos",
-    "test:win32": "node ./scripts/test.mjs --win32"
+    "test": "node ../../scripts/dev/ensure-artifacts.mjs && node ./scripts/test.mjs",
+    "test:macos": "node ../../scripts/dev/ensure-artifacts.mjs && node ./scripts/test.mjs --macos",
+    "test:win32": "node ../../scripts/dev/ensure-artifacts.mjs && node ./scripts/test.mjs --win32"
   },
   "dependencies": {
     "@dsh-chamber/control-plane": "workspace:^",

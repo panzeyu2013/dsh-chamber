@@ -13,31 +13,10 @@ build/
 !scripts/release/
 !scripts/release/**
 *.tgz
-# The chamber host packages ship committed esbuild artifacts (design 08/09):
-# the control plane copies dist/index.js into profiles at seed time with zero
-# build dependencies, so the artifacts must be tracked despite the global
-# dist/ rule above (their build scripts still regenerate them on demand).
-!packages/dsh-chamber-seed-client-graph/dist/
-!packages/dsh-chamber-seed-client-graph/dist/index.js
-!packages/dsh-chamber-seed-git-worktree/dist/
-!packages/dsh-chamber-seed-git-worktree/dist/index.js
-!packages/dsh-chamber-seed-archive-cleanup/dist/
-!packages/dsh-chamber-seed-archive-cleanup/dist/index.js
-!packages/dsh-chamber-seed-open-in/dist/
-!packages/dsh-chamber-seed-open-in/dist/index.js
-# The shared runtime core's dist/index.js is likewise a committed esbuild
-# artifact: the desktop shims statically import the package main (dist) in
-# dev AND packaged mode, so a clean checkout must carry it. Regenerate via
-# `pnpm run build:dsh-runtime` after any packages/dsh-runtime/src change.
-!packages/dsh-runtime/dist/
-!packages/dsh-runtime/dist/index.js
-# The mobile client plugin's host/client-half artifacts are the same
-# committed-seed pattern (design 17 §18.3): the gateway build copies
-# package.json + dist/index.js + lib/client.js(+.map) + lib/index.js into
-# host-packages/ for the seed registry, so a clean checkout must carry
-# them. Regenerate via `pnpm --filter @dsh-chamber/dsh-client-ui-mobile run build`.
-!packages/dsh-chamber-client-ui-mobile/dist/
-!packages/dsh-chamber-client-ui-mobile/dist/index.js
+# 构建期生成；clean checkout 用 pnpm run build:artifacts 自举。dsh-runtime /
+# 四个 seed / mobile 的 dist+lib 曾在全局 dist/ 规则下用反选行 tracked 进仓，
+# 2026-12「产物移出 git」后不再反选（C8 仍按 src 重建-比对它们的新鲜度）。
+packages/dsh-chamber-client-ui-mobile/lib/
 
 # Local runtime state (control-plane data, audit log, dsh host state)
 data/
@@ -117,5 +96,5 @@ Thumbs.db
 *.local
 *.swp
 # Gateway build output: host packages are copied in by scripts/build.mjs
-# (the seed sources' dist artifacts are committed in their own packages).
+# (the seed sources' dist artifacts are build-time generated (pnpm run build:artifacts)).
 packages/gateway/host-packages/
