@@ -14,6 +14,7 @@ import { MAX_SSH_PASSWORD_CHARS, getSshPassword, setSshPassword, sshPasswordSupp
 import { canonicalizeTransportInstanceInput } from './transport-provider.ts'
 import { deleteConnectionTransaction, saveConnectionTransaction } from './connection-save.ts'
 import { describeError } from './describe-error.ts'
+import { admitClearOnly } from './clear-only-credentials.ts'
 import { describeUnknownError } from './deep-link.ts'
 import { discoverSshConfigHosts } from './ssh-config.ts'
 import { gatewayPasswordValidationError, gatewayProvider, gatewayTokenValidationError, getGatewayPassword, getGatewayToken, setGatewayPassword, setGatewayToken, setInstanceSecrets } from './gateway-provider.ts'
@@ -251,20 +252,30 @@ export function registerConnectionHandlers(ctx: ShellIpcCtx): void {
     }
     return publishRegistryTransition(before, result.instances);
   });
+  // clear-only 准入的三个描述符：字段 / 拒绝文案 / 注册表读取各自显式——没有布尔开关，
+  // token 与 password 的独立性因此留在类型面上（design 17 §2.3）。
+  const CLEAR_ONLY_SSH_PASSWORD = {
+    field: 'password',
+    refusal: 'desktop_ssh_set_password is clear-only; use desktop_ssh_save_connection to set credentials',
+    list: () => sm.listInstances(),
+  } as const;
+  const CLEAR_ONLY_GATEWAY_TOKEN = {
+    field: 'token',
+    refusal: 'desktop_gateway_set_token is clear-only; use desktop_ssh_save_connection to set credentials',
+    list: () => sm.listInstances(),
+  } as const;
+  const CLEAR_ONLY_GATEWAY_PASSWORD = {
+    field: 'password',
+    refusal: 'desktop_gateway_set_password is clear-only; use desktop_ssh_save_connection to set credentials',
+    list: () => sm.listInstances(),
+  } as const;
   // Legacy explicit SSH-password CLEAR action. Non-empty writes are owned
   // exclusively by desktop_ssh_save_connection so metadata + all credential
   // domains share one compensated transaction.
   deps.ipc.handle(IPC_CHANNELS.SSH_SET_PASSWORD, (payload: unknown) => {
-    const { id, password } = payload as { id?: unknown; password?: unknown };
-    const spec = typeof id === 'string'
-      ? sm.listInstances().find(instance => instance.id === id)
-      : undefined;
-    const clearing = password === null || password === '';
-    if (typeof id !== 'string' || !INSTANCE_ID_PATTERN.test(id) || spec === undefined
-      || (password !== null && typeof password !== 'string')) {
-      return { error: 'invalid or unknown instance id' };
-    }
-    if (!clearing) return { error: 'desktop_ssh_set_password is clear-only; use desktop_ssh_save_connection to set credentials' };
+    const admitted = admitClearOnly(CLEAR_ONLY_SSH_PASSWORD, payload);
+    if (!admitted.ok) return { error: admitted.error };
+    const { id, spec } = admitted;
     // Clearing remains available on platforms where accepting a new SSH
     // password is unsupported; non-empty writes never reach this handler.
     try {
@@ -293,16 +304,9 @@ export function registerConnectionHandlers(ctx: ShellIpcCtx): void {
   // Legacy explicit gateway-token CLEAR action. Non-empty writes use the
   // authoritative save_connection transaction above.
   deps.ipc.handle(IPC_CHANNELS.GATEWAY_SET_TOKEN, (payload: unknown) => {
-    const { id, token } = payload as { id?: unknown; token?: unknown };
-    const spec = typeof id === 'string'
-      ? sm.listInstances().find(instance => instance.id === id)
-      : undefined;
-    const clearing = token === null || token === '';
-    if (typeof id !== 'string' || !INSTANCE_ID_PATTERN.test(id) || spec === undefined
-      || (token !== null && typeof token !== 'string')) {
-      return { error: 'invalid or unknown instance id' };
-    }
-    if (!clearing) return { error: 'desktop_gateway_set_token is clear-only; use desktop_ssh_save_connection to set credentials' };
+    const admitted = admitClearOnly(CLEAR_ONLY_GATEWAY_TOKEN, payload);
+    if (!admitted.ok) return { error: admitted.error };
+    const { id, spec } = admitted;
     try {
       // Revoke the currently registered Authorization header BEFORE
       // clearing the token. disconnect() synchronously emits the old
@@ -331,17 +335,9 @@ export function registerConnectionHandlers(ctx: ShellIpcCtx): void {
   // Legacy explicit gateway-password CLEAR action. It also invalidates the
   // corresponding cached sessions; non-empty writes use save_connection.
   deps.ipc.handle(IPC_CHANNELS.GATEWAY_SET_PASSWORD, (payload: unknown) => {
-    const { id, password } = payload as { id?: unknown; password?: unknown };
-    const spec = typeof id === 'string'
-      ? sm.listInstances().find(instance => instance.id === id)
-      : undefined;
-    const clearing = password === null || password === '';
-    // Same id whitelist + registry-existence gate as the token clear.
-    if (typeof id !== 'string' || !INSTANCE_ID_PATTERN.test(id) || spec === undefined
-      || (password !== null && typeof password !== 'string')) {
-      return { error: 'invalid or unknown instance id' };
-    }
-    if (!clearing) return { error: 'desktop_gateway_set_password is clear-only; use desktop_ssh_save_connection to set credentials' };
+    const admitted = admitClearOnly(CLEAR_ONLY_GATEWAY_PASSWORD, payload);
+    if (!admitted.ok) return { error: admitted.error };
+    const { id, spec } = admitted;
     try {
       // Clearing a password invalidates every cached login session before
       // the target can reconnect. Both direct and SSH origins are owned by
