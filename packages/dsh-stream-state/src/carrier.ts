@@ -140,11 +140,7 @@ function reduceCarrierStep(state: CarrierState, event: CarrierEvent, env: Carrie
     }
 
     case 'rebuildRequested': {
-      const reason: RebuildReason = event.reason ?? 'laneReconnect'
-      // A frame-answering socket is protected by the streak THRESHOLD, not by the
-      // throttle: the legacy else-branch escalated on a single miss as soon as the
-      // time-based cooldown allowed it (DIVERGENCE D-5). A first-miss stall is
-      // therefore not a rebuild request at all - it stays an episode-level reopen.
+      const requested: RebuildReason = event.reason ?? 'laneReconnect'
       // INVARIANT (no exitless spinner): whatever the verdict, a rebuild request
       // must produce a path forward for the calling episode. Denied requests reopen
       // their logical stream - exactly what the legacy retry lane did by failing the
@@ -153,6 +149,30 @@ function reduceCarrierStep(state: CarrierState, event: CarrierEvent, env: Carrie
         event.streamId === undefined
           ? []
           : [{ e: 'reopenLogicalStream', streamId: event.streamId, reason: why }]
+      // P3: the silent-carrier VERDICT belongs here. When the caller reports the
+      // frame delta (P3 field), a socket that delivered nothing across a whole
+      // budget is a dead carrier - the opening stall is really `socketNoFrame`,
+      // which the threshold must not gate. A socket that DID deliver can never
+      // prove silence, so an explicit silent reason is denied outright. An absent
+      // or non-finite delta keeps the caller's reason verbatim (pre-P3 contract,
+      // pinned by the differential vectors).
+      const frames = event.framesSinceSend
+      const silent = frames !== undefined && Number.isFinite(frames) && frames <= 0
+      const delivered = frames !== undefined && (!Number.isFinite(frames) || frames > 0)
+      if (delivered && (requested === 'socketNoFrame' || requested === 'teardownNoFrame')) {
+        return {
+          state,
+          effects: [
+            { e: 'forensic', name: 'silent-not-proven', detail: String(frames) },
+            ...reopen('silent-not-proven'),
+          ],
+        }
+      }
+      const reason: RebuildReason = requested === 'openingStall' && silent ? 'socketNoFrame' : requested
+      // A frame-answering socket is protected by the streak THRESHOLD, not by the
+      // throttle: the legacy else-branch escalated on a single miss as soon as the
+      // time-based cooldown allowed it (DIVERGENCE D-5). A first-miss stall is
+      // therefore not a rebuild request at all - it stays an episode-level reopen.
       // An unusable streak must not clear the threshold either: NaN is neither below
       // nor above it, so a bare `<` would let it through (the retired predicate
       // rejected non-finite counts; this preserves that).

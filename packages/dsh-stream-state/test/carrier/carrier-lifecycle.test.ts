@@ -218,3 +218,49 @@ test('T2 a replaced carrier fails EVERY logical stream, not only the one that no
   assert.deepEqual(closed.state.openStreams, [], 'socket-level failure clears every stream')
 })
 
+
+test('P3: zero frames turn an opening stall into a dead-carrier rebuild, without the streak gate', () => {
+  // A below-threshold stall (streak 0) on a socket that delivered NOTHING is the
+  // silent-carrier case: the reducer derives socketNoFrame, and the threshold no
+  // longer applies because the whole budget WAS the evidence window.
+  const silent = reduceCarrier(initialCarrierState(), {
+    kind: 'rebuildRequested', at: 1000, reason: 'openingStall', streak: 0, streamId: 's1', framesSinceSend: 0,
+  }, env)
+  assert.deepEqual(silent.effects, [{ e: 'rebuildCarrier', reason: 'socketNoFrame', at: 1000 }])
+  assert.equal(silent.state.pendingRebuild, 'socketNoFrame')
+})
+
+test('P3: a socket that delivered keeps the stall threshold and cannot be called silent', () => {
+  const delivered = reduceCarrier(initialCarrierState(), {
+    kind: 'rebuildRequested', at: 1000, reason: 'openingStall', streak: 0, streamId: 's1', framesSinceSend: 3,
+  }, env)
+  assert.ok(!delivered.effects.some((effect) => effect.e === 'rebuildCarrier'), 'first miss on a live socket is not a rebuild')
+  assert.ok(delivered.effects.some((effect) => effect.e === 'forensic' && effect.name === 'stall-below-threshold'))
+  // Proven threshold + delivered frames = a threshold-gated stall, not silence.
+  const proven = reduceCarrier(initialCarrierState(), {
+    kind: 'rebuildRequested', at: 1000, reason: 'openingStall', streak: 2, streamId: 's1', framesSinceSend: 3,
+  }, env)
+  assert.deepEqual(proven.effects, [{ e: 'rebuildCarrier', reason: 'openingStall', at: 1000 }])
+  // An EXPLICIT silent reason on a socket that delivered is denied outright.
+  const denied = reduceCarrier(initialCarrierState(), {
+    kind: 'rebuildRequested', at: 1000, reason: 'socketNoFrame', streamId: 's1', framesSinceSend: 3,
+  }, env)
+  assert.deepEqual(denied.effects, [
+    { e: 'forensic', name: 'silent-not-proven', detail: '3' },
+    { e: 'reopenLogicalStream', streamId: 's1', reason: 'silent-not-proven' },
+  ])
+})
+
+test('P3: an unusable frame delta is never proof of silence', () => {
+  // Absent keeps the pre-P3 contract (the threshold decides a stall)...
+  const absent = reduceCarrier(initialCarrierState(), {
+    kind: 'rebuildRequested', at: 1000, reason: 'openingStall', streak: 0, streamId: 's1',
+  }, env)
+  assert.ok(!absent.effects.some((effect) => effect.e === 'rebuildCarrier'))
+  // ...and a non-finite delta cannot satisfy an explicit silent reason either.
+  const nan = reduceCarrier(initialCarrierState(), {
+    kind: 'rebuildRequested', at: 1000, reason: 'teardownNoFrame', streamId: 's1', framesSinceSend: Number.NaN,
+  }, env)
+  assert.ok(!nan.effects.some((effect) => effect.e === 'rebuildCarrier'))
+  assert.ok(nan.effects.some((effect) => effect.e === 'reopenLogicalStream'))
+})

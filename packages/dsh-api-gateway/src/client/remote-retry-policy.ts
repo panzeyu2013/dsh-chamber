@@ -209,39 +209,4 @@ export function remoteStreamOpeningTimeoutMs(streak: number): number {
   return Math.min(REMOTE_STREAM_OPENING_TIMEOUT_MS * 2 ** step, REMOTE_STREAM_OPENING_TIMEOUT_MAX_MS)
 }
 
-/**
- * Whether one opening-item timeout must escalate from "re-open the request" to
- * "replace the physical socket" (chamber fork, design 14 §D4, ).
- * ## Why a timeout alone is not enough
- * Re-issuing the request through the retry lane is the right answer for a dropped
- * frame — but only while the socket still delivers. A WebSocket can stay OPEN for
- * the page while the leg behind it is silently dead (an ssh tunnel or a direct
- * http gateway whose FIN never arrived): every open frame is written into it, no
- * frame ever comes back, and each retry re-issues into the same socket and fails
- * again. The widened budget then makes the wait LONGER
- * instead of repairing anything, so opening a session can sit on the vendor's
- * `chat.loadingHistory` hint (`openState === 'loading'`) until some unrelated
- * transport watchdog rebuilds the link. Nothing else in the page can see it: the
- * connection generation's readiness handshake already succeeded, and the health
- * arm's per-session rebuild also re-issues on the same socket.
- * ## The decision
- * `framesReceivedSinceSend` counts the frames the CURRENT socket delivered while
- * this attempt's opening item was pending. A healthy socket answers every open —
- * the `$events` opening frame arrives in ~25 ms through the proxy — so a socket
- * that delivered nothing at all across the whole budget window (≥ 30 s, three
- * orders of magnitude above the measured answer) is not distinguishable from a
- * dead one, and replacing it is the only lever that can restore the stream. A
- * socket that HAS delivered during the window is left alone: a genuinely slow
- * Host (huge session, cold link) keeps its widening and is never interrupted.
- * The escalation needs no extra rate limit: it can only fire from an opening
- * deadline, whose budget is at least {@link REMOTE_STREAM_OPENING_TIMEOUT_MS}, so
- * replacements are paced ≥ 30 s apart by construction.
- * @param framesReceivedSinceSend - frames the current socket delivered since this
- *   attempt sent its open frame (the baseline is captured at send time).
- * @returns true when the request's next attempt must run on a fresh socket.
- */
-export function shouldReplaceSilentSocket(framesReceivedSinceSend: number): boolean {
-  // An unknown baseline must not churn the carrier: keep upstream behaviour.
-  if (!Number.isFinite(framesReceivedSinceSend)) return false
-  return framesReceivedSinceSend <= 0
-}
+

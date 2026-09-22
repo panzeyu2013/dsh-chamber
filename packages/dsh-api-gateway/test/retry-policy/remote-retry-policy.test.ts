@@ -5,6 +5,7 @@
  * immediate once, then double up to a cap.
  */
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import {
   delayRemoteStreamRetry,
@@ -18,7 +19,6 @@ import {
   remoteStreamOpeningTimeoutMs,
   remoteStreamRetryDelayMs,
   REMOTE_STREAM_MAINTAIN_MIN_INTERVAL_MS,
-  shouldReplaceSilentSocket,
   streamOpeningKey,
 } from '../../src/client/remote-retry-policy.ts'
 import { DEFAULT_STREAM_STALL_TIMING } from '../../src/client/stream-stall-policy.ts'
@@ -184,20 +184,16 @@ test('degenerate opening streaks fail safe to the base budget', () => {
   }
 })
 
-test('a socket that delivered nothing across the opening window must be replaced', () => {
-  // A healthy socket answers every open (measured ~25 ms through the proxy), so a
-  // socket that produced ZERO frames through a ≥30 s window while an open was
-  // pending is dead, not slow: re-issuing on it can never succeed and the widened
-  // budget only makes the stall longer.
-  assert.equal(shouldReplaceSilentSocket(0), true)
-  assert.equal(shouldReplaceSilentSocket(1), false)
-  assert.equal(shouldReplaceSilentSocket(37), false)
-})
-
-test('an unknown frame baseline never churns the carrier', () => {
-  for (const frames of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
-    assert.equal(shouldReplaceSilentSocket(frames), false, String(frames))
-  }
+test('the silent-carrier verdict belongs to the reducer, not this module (P3)', () => {
+  // The predicate that used to live here is retired: stream-client reports the
+  // frame delta with the rebuild request and reads the verdict back off the
+  // effects (`socketNoFrame` vs the threshold-gated `openingStall`). The truth
+  // table now lives in the package carrier suite; this pins the wiring so the
+  // host cannot quietly reintroduce a second verdict.
+  const source = (relative: string): string =>
+    readFileSync(new URL('../../' + relative, import.meta.url), 'utf8')
+  assert.doesNotMatch(source('src/client/remote-retry-policy.ts'), /shouldReplaceSilentSocket|framesReceivedSinceSend/u)
+  assert.match(source('src/client/stream-client.ts'), /'openingStall', deadlineCycle, streamId, streak, this\.socketFrames - framesAtSend/u)
 })
 
 test('the teardown evidence window stays inside every window it must serve', () => {

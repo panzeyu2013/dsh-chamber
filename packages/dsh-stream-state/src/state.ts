@@ -69,6 +69,13 @@ export interface CarrierEvent {
    * way the legacy else-branch could. An explicit undefined is NOT proof of a
    * streak (see `isStallProven`). */
   readonly streak?: number | undefined
+  /** For a `rebuildRequested`: how many frames the CURRENT socket delivered
+   * since this attempt sent its open frame (P3). This is the observation that lets
+   * the reducer own the silent-carrier verdict: zero frames across a whole budget
+   * turns an `openingStall` request into `socketNoFrame`, while a socket that DID
+   * deliver can never satisfy an explicit silent reason. Absent keeps the caller's
+   * reason verbatim (the pre-P3 contract). */
+  readonly framesSinceSend?: number | undefined
   /** Which logical-stream EPISODE owns this request. An episode is the lifetime of
    * one logical stream (open -> ... -> consumer gone). The opening budget's
    * widening belongs to it, so when the episode closes, everything it left in

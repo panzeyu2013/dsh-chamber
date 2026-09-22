@@ -25,8 +25,6 @@ import {
   REMOTE_STREAM_MAINTAIN_MAX_INTERVAL_MS,
   REMOTE_STREAM_MAINTAIN_MIN_INTERVAL_MS,
   remoteStreamOpeningTimeoutMs,
-  REMOTE_STREAM_SILENT_TEARDOWN_MIN_MS,
-  shouldReplaceSilentSocket,
   streamOpeningKey,
 } from './remote-retry-policy.ts'
 // The opening-stall rule (streak threshold + 60 s cooldown) lives in the shared
@@ -35,6 +33,7 @@ import {
 import type { StreamForensicsReporter } from './stream-forensics.ts'
 import {
   CARRIER_ENV,
+  SILENT_TEARDOWN_MIN_MS,
   initialCarrierState,
   reduceCarrier,
   withDeadline,
@@ -199,8 +198,9 @@ export class RemoteStreamMuxClient {
     cycle: number,
     streamId?: string,
     streak?: number,
-  ): boolean {
-    if (this.decisionCycle === cycle) return false
+    framesSinceSend?: number,
+  ): readonly RecoveryEffect[] {
+    if (this.decisionCycle === cycle) return []
     this.decisionCycle = cycle
     const effects = this.observeCarrier({
       kind: 'rebuildRequested',
@@ -208,12 +208,15 @@ export class RemoteStreamMuxClient {
       reason,
       streak,
       streamId,
+      // P3: the frame delta is an OBSERVATION, not a verdict - the reducer owns
+      // whether it means a silent carrier.
+      framesSinceSend,
     })
     const decided = effects.some((effect) => effect.e === 'rebuildCarrier')
     if (decided) this.replaceSocket(failure, closeReason)
     // A refusal is paired with `reopenLogicalStream`: no exitless spinner.
     this.applyRecoveryEffects(effects, failure)
-    return decided
+    return effects
   }
 
   /** Execute the reducer's typed effects. Unknown effects are ignored so the package
@@ -252,7 +255,7 @@ export class RemoteStreamMuxClient {
    * for a socket the fork itself decided is unusable while the page still sees it
    * OPEN. Two callers: the connection lane's `reconnect()` (deliberate restart) and
    * the silent-socket escalation in `open()` (an opening item timed out on a socket
-   * that delivered nothing at all — see `shouldReplaceSilentSocket`).
+   * that delivered nothing at all — the reducer owns that verdict).
    * @param failure - carrier failure every active logical stream observes.
    * @param closeReason - WebSocket close reason (diagnostic; the lane and the
    *   escalation keep their own so the wire trace still names the caller).
@@ -376,20 +379,18 @@ export class RemoteStreamMuxClient {
         // teardown) and both are judged on the socket this attempt sent on, so a
         // replacement in the same turn can never borrow another socket's state.
         if (socket === this.socket && socket.readyState === WebSocket.OPEN) {
-          if (shouldReplaceSilentSocket(this.socketFrames - framesAtSend)) {
-            this.forensics?.('socket-silent', `${endpoint} timed out with no frame delivered on the current socket`)
-            this.requestCarrierRebuild(new RemoteStreamCarrierError(
-              'api gateway: Remote stream socket delivered no frame while an opening item was pending',
-            ), 'silent socket replaced', 'socketNoFrame', deadlineCycle, streamId)
-          } else {
-            //  the streak threshold AND the cooldown now live in the shared
-            // reducer, so this branch no longer pre-judges with a time comparison.
-            // It still reports the escalation before asking, because the forensics
-            // line is evidence a human reads, not a decision input.
-            const escalated = this.requestCarrierRebuild(new RemoteStreamCarrierError(
-              'api gateway: Remote stream carrier rebuilt after an unanswered opening item',
-            ), 'opening stall', 'openingStall', deadlineCycle, streamId, streak)
-            if (escalated) {
+          // P3: ONE request, no host-side silent branch. The frame delta is the
+          // observation; the reducer decides whether it is a dead carrier
+          // (socketNoFrame) or a threshold-gated stall, and the forensics label is
+          // read back off the effect it authorized.
+          const effects = this.requestCarrierRebuild(new RemoteStreamCarrierError(
+            'api gateway: Remote stream carrier rebuilt after an unanswered opening item',
+          ), 'opening stall', 'openingStall', deadlineCycle, streamId, streak, this.socketFrames - framesAtSend)
+          const rebuilt = effects.find((effect) => effect.e === 'rebuildCarrier')
+          if (rebuilt !== undefined && rebuilt.e === 'rebuildCarrier') {
+            if (rebuilt.reason === 'socketNoFrame') {
+              this.forensics?.('socket-silent', `${endpoint} timed out with no frame delivered on the current socket`)
+            } else {
               this.forensics?.(
                 'opening-stall-escalation',
                 `${endpoint} unanswered ${String(streak)}x; rebuilding the physical carrier`,
@@ -461,7 +462,7 @@ export class RemoteStreamMuxClient {
       // already opened could lose its carrier with no page-level signal at all. A
       // stream torn down (abort, dispose, consumer break) that never saw a single
       // frame on its socket during a life of at least
-      // REMOTE_STREAM_SILENT_TEARDOWN_MIN_MS is the same evidence, and escalates here:
+      // SILENT_TEARDOWN_MIN_MS is the same evidence, and escalates here:
       // receiving this stream's opening item would itself have advanced the socket's
       // frame counter, so a zero delta IS "still unanswered". The lifetime bound is
       // what keeps a healthy socket safe — every reconnect starts a socket whose frame
@@ -469,19 +470,20 @@ export class RemoteStreamMuxClient {
       // judge it. `!timedOut`: when the opening deadline already escalated, one
       // verdict per stream is enough.
       if (opened && !terminal && !timedOut
-        && Date.now() - sentAt >= REMOTE_STREAM_SILENT_TEARDOWN_MIN_MS
+        && Date.now() - sentAt >= SILENT_TEARDOWN_MIN_MS
         && this.running && !this.disposed
-        && carrier !== undefined && carrier === this.socket && carrier.readyState === WebSocket.OPEN
-        && shouldReplaceSilentSocket(this.socketFrames - framesAtSend)) {
-        this.forensics?.('socket-silent', endpoint + ' torn down with no frame delivered on the current socket')
-        //  a teardown is its own decision cycle, so a lane reconnect landing in the
-        // same turn can no longer be the SECOND replacement of one socket (the
-        // correlated-replacement defect). The legacy `!timedOut` guard above still
-        // enforces "one verdict per stream", so the two rules stack instead of
-        // duplicating: the token guards the turn, `!timedOut` guards the stream.
-        this.requestCarrierRebuild(new RemoteStreamCarrierError(
+        && carrier !== undefined && carrier === this.socket && carrier.readyState === WebSocket.OPEN) {
+        // P3: the frame delta is the observation; the reducer owns the verdict (a
+        // socket that DID deliver can never be proven silent, so it denies the
+        // request instead of replacing a healthy carrier). A teardown is its own
+        // decision cycle, so a lane reconnect landing in the same turn can no longer
+        // be the SECOND replacement of one socket (the correlated-replacement defect).
+        const effects = this.requestCarrierRebuild(new RemoteStreamCarrierError(
           'api gateway: Remote stream socket delivered no frame for the whole life of a logical stream',
-        ), 'silent socket replaced on teardown', 'teardownNoFrame', this.nextDecisionCycle(), streamId)
+        ), 'silent socket replaced on teardown', 'teardownNoFrame', this.nextDecisionCycle(), streamId, undefined, this.socketFrames - framesAtSend)
+        if (effects.some((effect) => effect.e === 'rebuildCarrier')) {
+          this.forensics?.('socket-silent', endpoint + ' torn down with no frame delivered on the current socket')
+        }
       }
       if (opened && !terminal && carrier?.readyState === WebSocket.OPEN) {
         this.send(carrier, { type: 'cancel', streamId })

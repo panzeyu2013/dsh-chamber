@@ -173,6 +173,9 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
 > **单一所有者（2026-12 会话链重构，Phase A + B1–B3 已落地）**：本节的判定与记忆不再散落在各执行器里。
 > ① **载波**：四条替换入口收敛为 `RemoteStreamMuxClient.requestCarrierRebuild`，判定由共享 reducer
 > （`packages/dsh-stream-state` 的 `reduceCarrier`/`decideRebuild` + `tables.json`）持有，执行器只执行返回的 effects；
+> **静默判定也在 reducer（P3）**：执行器随 `rebuildRequested` 上报 `framesSinceSend`（本次发帧以来自当前 socket 收到的帧数），
+> 零帧把 `openingStall` 归为 `socketNoFrame`（不受 streak 门限），有帧则任何显式静默 reason 都被拒绝；宿主只回读 effect 的
+> reason 作为取证标签，不再自判。余：加宽账本（episode 身份）与 `remote-retry-policy` 常量副本的删除见 STATUS；
 > ② **页面生命周期**：六个账本由**单世代注册表**（`sourceId → {epoch, incarnation, state}`，`packages/dsh-stream-state`）的投影持有——指纹变化只在权威 roster 刷新处 `reincarnate` 换代，事件携带捕获的 epoch（错代丢弃），退役经 `retainSourceIds` 出表；App 侧只剩活视图（P4：删 `incarnationKey`/`retainSources` 键式记录面）；
 > ③ **露屏**：遮罩分类与会话面持有合为一次 `decidePresentation`；帧带 `veil`（released/held/actionable）与绝对 `releaseAtMonoMs`，
 >    只有 `planVeilTimer` 能把期限换算成定时器（held 必 >0ms），hero/settling 越 70s 外层保险即 `actionable` 揭示租客、

@@ -268,9 +268,9 @@ test('a silent socket is REPLACED when an opening item times out on it', async (
   // which is exactly the permanent chat.loadingHistory state).
   assert.equal(FakeSocket.instances.length, 2, 'the silent socket must be replaced at once')
   assert.equal(FakeSocket.instances[0].readyState, FakeSocket.CLOSED)
-  // P5: the reducer's replacement decision is retained as its own fact on top of the
-  // executor's observations — the resident tail names WHY a socket was dropped.
-  assert.deepEqual(facts.map(fact => fact.kind), ['opening-timeout', 'socket-silent', 'carrier-rebuild'])
+  // P5/P3: the executor records the reducer's decision when it executes it, and the
+  // caller labels the evidence afterwards — so `carrier-rebuild` precedes the label.
+  assert.deepEqual(facts.map(fact => fact.kind), ['opening-timeout', 'carrier-rebuild', 'socket-silent'])
   await client.close()
   t.mock.timers.reset()
 })
@@ -307,7 +307,7 @@ test('a logical stream torn down on a socket that never delivered a frame replac
   await flushMicrotasks()
   assert.equal(FakeSocket.instances.length, 2, 'the silent socket must be replaced on teardown')
   assert.equal(FakeSocket.instances[0].readyState, FakeSocket.CLOSED)
-  assert.deepEqual(facts.map(fact => fact.kind), ['socket-silent', 'carrier-rebuild'])
+  assert.deepEqual(facts.map(fact => fact.kind), ['carrier-rebuild', 'socket-silent'])
   await client.close()
   t.mock.timers.reset()
 })
