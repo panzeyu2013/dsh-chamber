@@ -200,7 +200,7 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
 > ⑦ **取证**：包内 `forensics.ts` 是唯一常驻环形缓冲（默认 cap 256，记录时脱敏，非有限时间戳保守为 0）；api-gateway 的
 >    `StreamForensicsReporter` 记录每次载波决策（含 `carrier-rebuild`/`carrier-throttled` 事实），探针经
 >    `dsh-chamber:stream-forensics-request` 触发 `ForensicsSink` 导出（逐条 snapshot 事件），live 页事件不变（P5）。
-> 对照数据：`node scripts/refactor/stream-state-metrics.mjs --compare`（`_MS` 39→34、依赖文件 28→27、App 生命周期命中 115→114）。
+> 对照数据（2026-12 P0–P6 收口后基线）：`node scripts/refactor/stream-state-metrics.mjs --compare`（`_MS` 39→33、依赖文件 28→29（api-gateway 直连包内表/决策）、App 生命周期命中 115→114、Swift shell marker 命中 31→33）。
 
 **被否方案（2026-12 重构评审）**：
 
