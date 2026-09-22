@@ -229,7 +229,6 @@ export function apply(ctx: ClientContext): void {
     // deployment) the patched code falls back to upstream behaviour. Plain
     // props reach every slot scope: the vendor scoped-slots merges root
     // standard sources into each scope's standard props.
-    //
     // 2026-12 review P2: the cordis ctx proxy THROWS for a member it does not
     // carry, and this read sits BEFORE the frame's `ctx.slots.register('root',
     // …)` below — unguarded, it took the whole root/frame registration down on

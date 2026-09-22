@@ -125,7 +125,6 @@ function getRealAutoUpdater(): AutoUpdaterLike {
 // deliberate throw of OUR OWN, not a property of resolving the specifier —
 // 2026-09-13 review C5.) Also resolved LAZILY: an injected test never
 // touches the real app.
-//
 // HARD GUARD (2026-12): the `electron` SPECIFIER must never be required
 // outside the Electron runtime. Under plain node it resolves to the npm
 // package, whose index.js — when its `dist/` is absent, exactly the shape of
@@ -870,7 +869,6 @@ export function createUpdateController(options: UpdateControllerOptions, deps?: 
         // mid-exit, publish a stall, and make the host release the arming — which
         // cancels the only thing that finishes the quit (2026-09-13 review B4:
         // staged update not installed, window restored during the exit).
-        //
         // RE-ANCHOR, never disable (self-review round 2): this watchdog is the
         // ONLY release for `restartInFlight` when the native leg neither quits
         // nor errors — the `error` listener needs an event the macOS leg never

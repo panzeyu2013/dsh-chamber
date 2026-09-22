@@ -1379,7 +1379,6 @@ if (!gotTheLock) {
     // the main process; outputs to the renderer are non-secret status
     // projections (never a transport URL or credential material). The only
     // credential-bearing direction is save_connection's transient write-only input.
-    //
     // SSH password store (design 05 §8, user decision 2026-08 — plaintext
     // file fallback): passwords mirror to <userData>/ssh-passwords.json
     // (0600, atomic write) and load back at startup so password-only hosts

@@ -32,7 +32,6 @@ export interface SshInstanceSpec {
   transport: TransportMethod
   host: string
   user: string | null
-  /** SSH daemon port; null = ssh default (22 or the host's ~/.ssh/config Port). */
   sshPort: number | null
   /** SSH: tunnel destination port; HTTP: direct endpoint origin port. */
   remotePort: number
@@ -625,9 +624,7 @@ export interface ChamberSessionTodoSettings {
   enabled: boolean
   /** 会话完成未读时（默认 true）。 */
   onComplete: boolean
-  /** 代理提问等待回答（pending 'question'）时（默认 true）。 */
   onAsk: boolean
-  /** 工具调用/计划审批请求（pending 'approval' | 'plan-review'）时（默认 true）。 */
   onRequest: boolean
 }
 

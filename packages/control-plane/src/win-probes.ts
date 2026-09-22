@@ -58,8 +58,6 @@ export interface CimProcessRow {
   pid: number
   /** ParentProcessId; null when the property is absent/empty. */
   ppid: number | null
-  /** Full command line; null when the query could not read it (e.g. an
-   *  elevated peer). A null/empty command fails closed at the caller. */
   command: string | null
   /** CreationDate; null when the property is absent/unreadable. A residual
    *  pid is terminated only while this stable field (or the command line)
@@ -84,9 +82,7 @@ function execWindowsTool(file: string, args: string[]): { status: number | null;
   return { status: res.status, stdout: res.stdout ?? '', stderr: res.stderr ?? '' }
 }
 
-// ---------------------------------------------------------------------------
 // Pure parsers / builders (unit-tested on every platform)
-// ---------------------------------------------------------------------------
 
 /**
  * Parse the output of
@@ -133,8 +129,6 @@ function toFiniteInt(value: unknown): number | null {
   return null
 }
 
-/** PowerShell ConvertTo-Json renders DateTime as a string (PS 5.1:
- *  `\/Date(…)\/`, PS 7: ISO-8601); anything else is unreadable and null. */
 function toScalarString(value: unknown): string | null {
   return typeof value === 'string' && value !== '' ? value : null
 }
@@ -298,9 +292,7 @@ export function buildCimTableCommand(): string {
   ].join('; ')
 }
 
-// ---------------------------------------------------------------------------
 // Exec helpers (win32-gated; throw or fail closed off-platform)
-// ---------------------------------------------------------------------------
 
 /**
  * Query the full CIM process table (cached briefly so the reaper's poll
@@ -314,8 +306,6 @@ export function queryWindowsProcessTable(): CimProcessRow[] {
   return probeWindowsProcessTable()
 }
 
-/** Force a fresh CIM probe, bypassing the TTL cache: a pid identity must be
- *  re-proved from current state, never from the scan that found it. */
 function queryWindowsProcessTableFresh(): CimProcessRow[] {
   assertWindows()
   return probeWindowsProcessTable()
@@ -342,7 +332,6 @@ function probeWindowsProcessTable(): CimProcessRow[] {
 
 let tableCache: { at: number; rows: CimProcessRow[] } | null = null
 
-/** Verdict of re-proving one scanned residual pid against a fresh table. */
 export type CimIdentityVerdict = 'match' | 'mismatch' | 'unprovable'
 
 /**
@@ -576,11 +565,6 @@ export function treeKillWindows(pid: number): boolean {
   const residual = descendantPidsOf(rows, pid)
   let killedAny = false
   if (residual.length > 0) {
-    // Pids are recycled: re-probe the TABLE (bypassing the 500ms cache)
-    // immediately before terminating and kill only rows that still carry the
-    // scanned identity. A row that no longer matches is a different process
-    // and is skipped; an identity the fresh probe cannot establish fails
-    // closed (throw) instead of terminating on doubt.
     const scanned = new Map(rows.map(row => [row.pid, row]))
     let fresh: Map<number, CimProcessRow>
     try {

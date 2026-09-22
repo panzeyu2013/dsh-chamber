@@ -163,7 +163,6 @@ const resultError = (error: unknown, method = ''): string => {
   // probe's own method name is declared as a kept token: it is RPC vocabulary,
   // not path material, and the sanitizer would otherwise publish it as
   // `commands[path]` and hide which probe failed.
-  //
   // `method` is optional because the data.settings probe is not an RPC at all
   // (it reads the profile's settings.yaml), so it has no method name to keep —
   // its probe NAME would declare a literal that never appears in the text.

@@ -172,8 +172,6 @@ export class RemoteStreamMuxClient {
    * Open one logical stream on the persistent physical connection.
    * If no physical attempt is active, opening waits for Connection to request
    * one or for the signal to abort.
-   * @param endpoint - Typert Remote stream endpoint.
-   * @param payload - endpoint request encoded on the wire.
    * @param signal - cancellation for this logical stream.
    * @returns Host items until completion, cancellation, or failure.
    */
@@ -251,7 +249,6 @@ export class RemoteStreamMuxClient {
           `api gateway: Remote stream ${JSON.stringify(endpoint)} delivered no opening item within ${String(openingBudgetMs)}ms`,
         ))
         // TWO evidence paths, ONE teardown (design 14 §D4, 2026-09 + 2026-09-21):
-        //
         // 1. ZERO frames on this socket across the whole budget window — the carrier
         //    itself is dead (a half-open leg whose FIN never arrived), so re-issuing
         //    into it can never succeed and the widened budget (30 → 60 → 120 → 240 →
@@ -262,7 +259,6 @@ export class RemoteStreamMuxClient {
         //    opening item stays unanswered: the retry lane can only re-issue the same
         //    request on the same physical generation, so after a whole extra widened
         //    budget the carrier is rebuilt anyway — at most once per cooldown.
-        //
         // Both paths go through replaceSocket() (the lane-commanded reconnect's own
         // teardown) and both are judged on the socket this attempt sent on, so a
         // replacement in the same turn can never borrow another socket's state.
@@ -541,7 +537,6 @@ export class RemoteStreamMuxClient {
     // here — and RE-SCHEDULE, because a single throttled attempt is not enough:
     // a socket that dies inside the interval, or a replacement connect that fails
     // before opening, would otherwise park the mux forever.
-    //
     // Re-scheduled on the MICROTASK QUEUE as well (2026-09-21 review): a socket that
     // opens and closes inside ONE task leaves `keepAlive` still set when the
     // synchronous call below runs (its promise settles in a microtask), so that

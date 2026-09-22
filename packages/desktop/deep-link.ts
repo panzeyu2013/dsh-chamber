@@ -56,7 +56,6 @@ export interface VscodeLaunchContext {
   lookupInstance(id: string): { id: string; host: string; user: string | null; sshPort: number | null; transport: string } | null
   /** VS Code availability (the main-process probe, see detectVscodeAvailability). */
   vscodeAvailable(): boolean
-  /** Open a vscode:// URL (main-process shell.openExternal wrapper; loud failure). */
   openVscodeUrl(url: string): Promise<{ ok: true } | { ok: false; error: string }>
   /** Chamber setting `vscodeOpenInNewWindow` (design 16 §3.3): read lazily
    *  per launch like vscodeAvailable so a mid-session settings change applies
@@ -323,14 +322,12 @@ export function attemptDeepLinkProtocolRegistration(register: () => boolean):
   }
 }
 
-// ---------------------------------------------------------------------------
 // Linux desktop integration (design 21): Linux distributes BOTH protocol
 // handlers and XDG autostart through .desktop files. A packaged AppImage's
 // process.execPath is the per-launch squashfs mount (/tmp/.mount-*), which
 // disappears on exit — every persistent Linux desktop entry MUST target the
 // running AppImage itself ($APPIMAGE) instead. These helpers are pure /
 // injectable so the plain-node suite can test them.
-// ---------------------------------------------------------------------------
 
 /** Desktop Exec-field quoting (Desktop Entry Specification): a value is
  *  quoted only when it needs to be, and the spec-reserved characters are

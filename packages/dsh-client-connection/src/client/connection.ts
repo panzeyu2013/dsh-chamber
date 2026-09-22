@@ -16,7 +16,6 @@ export type { ConnectionRecoveryConfig } from '../recovery-config.ts'
 
 /** Stable Host facts delivered by one established Remote event generation. */
 export interface ConnectionHostInfo {
-  /** Host account home used only to abbreviate displayed filesystem paths. */
   readonly home: string
 }
 

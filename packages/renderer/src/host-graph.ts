@@ -93,7 +93,6 @@ export type { PluginGraphDiagnostic, PluginGraphDiagnosticState }
  *  multi-id combo BATCHES are ignored by the chamber merge (host-graph fetch
  *  reads `entries` only, see the fetch comment). */
 export interface HostGraphRow {
-  /** Entry name == package name (module-table key). */
   id: string
   /** Bundle endpoint, '/plugins/??<id>/client.js&rev=<rev>' (host-root-relative). */
   url: string

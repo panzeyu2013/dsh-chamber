@@ -13,9 +13,7 @@
  */
 
 export interface WorkspaceGitFlag {
-  /** True when this workspace IS a git worktree (derived workspace). */
   isWorktree: boolean
-  /** True when this workspace is the repository's MAIN checkout. */
   isMain: boolean
   /** For a derived worktree: the MAIN checkout workspace id of the same
    *  repository (drag boundary — a derived workspace cannot precede it). */

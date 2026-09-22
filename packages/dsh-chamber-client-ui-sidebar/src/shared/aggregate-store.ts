@@ -195,9 +195,7 @@ export interface ServerBootGap {
   kind: ServerBootGapKind
   /** `required-services-missing`: the unprovided composite services, roster order. */
   services?: readonly string[]
-  /** `required-services-missing`: registered plugins injecting them, roster order. */
   injectedBy?: readonly string[]
-  /** `deferred-registration-failed`: the row ids that never registered. */
   failedIds?: readonly string[]
 }
 

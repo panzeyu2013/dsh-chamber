@@ -457,12 +457,10 @@ export function readDshVersion(workspace: string | null): string | null {
   }
 }
 
-// ---------------------------------------------------------------------------
 // Dual-flavor parity helpers (deviations register P-04/P-11/G14/G15/G21).
 // The two flavors share these so a policy or a gate cannot drift into a
 // silently different behavior on one side; the Swift side consumes the same
 // spellings through the B bridge/assembly where one exists.
-// ---------------------------------------------------------------------------
 
 /** G15: the ONLY runtime-transaction abort reason (main.ts will-quit's
  *  runtimeOperationAbort.abort and the startup transaction's quit guard; the
@@ -653,9 +651,7 @@ export function localDshHomeDir(userData: string): string {
   return path.join(userData, 'state', 'dsh-home');
 }
 
-// ---------------------------------------------------------------------------
 // HostEdges — the host side-effect seam (design 25 §4.1; W-10 batch).
-//
 // Core business code reaches every Electron/host side effect ONLY through
 // this injected interface. The Electron main process implements it in
 // electron-edges.ts (createElectronEdges — W-10 S0 wires the rendererPush
@@ -666,7 +662,6 @@ export function localDshHomeDir(userData: string): string {
 // and no IPC registration or bare channel literals live here. Member-level
 // deviations from the design 25 §4.1 draft are annotated per member (v2
 // field set per design 25 §0.1 rows A10/B1/B3/B4/B9/B11/D3).
-// ---------------------------------------------------------------------------
 
 /** 原生通知 open intent / 来源代际 token（design 19 §3.3）——re-export 自纯逻辑
  *  模块 notifications.ts（electron-free，结构类型可直接跨 core/edges 使用）。 */
@@ -804,9 +799,7 @@ export interface HostEdges {
   isPackaged: boolean
 }
 
-// ---------------------------------------------------------------------------
 // Renderer delivery state machines (W-10 S2 notify/badge/ready batch).
-//
 // 迁自 main.ts 的渲染器侧队列状态机（design 16 §4.2 / design 19 §3.3 /
 // design 14 D4）：pendingRendererIntents + deepLinkRendererReady + drain、
 // pendingNotificationOpens + notificationOpenDrainReady + drain、来源代际/
@@ -819,7 +812,6 @@ export interface HostEdges {
 // 子集（deliveryEdges）与 quit 门（quittingLeaf）快照进本段——此后所有导出
 // 入口可用。Electron-free 不变式不变：本文件零 electron import，投递 send 叶
 // 一律 edges.rendererPush、窗口事实一律 edges 门。
-//
 // 迁移决策（逐条注记，施工图 S2）：
 // - drainPendingRendererDeepLinkIntents / drainPendingNotificationOpens 随队列
 //   迁入（send 叶改 edges.rendererPush(IPC_CHANNELS.DEEP_LINK_INTENT /
@@ -851,7 +843,6 @@ export interface HostEdges {
 //   did-finish-load / crashed / closed 由 main 窗口 glue 调用（每处先做
 //   mainWindow===win 身份守卫）；'show'（held-resume 补发点）经
 //   edges.onMainWindowShown → handleMainWindowShown，不占本入口。
-// ---------------------------------------------------------------------------
 
 /** 投递状态机实际使用的 HostEdges 子集（装配时自 installIpcHandlers 的
  *  deps.edges 快照——见上「单装配不变式」）。 */
@@ -1144,7 +1135,6 @@ export function onRendererLifecycle(event: RendererLifecycleEvent): void {
   if (event === 'did-finish-load') {
     // ready() can run while late subresources still keep isLoading() true. The
     // first drain then correctly holds; finish is the deterministic replay edge.
-    //
     // F2（2026-12 审计 S4）：渲染器重新可投递**也是**一次补发边沿。Swift 形态没有窗口
     // 'show' 事件（mainWindowShown 只在 NSApplication.didBecomeActive 发），于是「唤醒时
     // 渲染器不可投递 ⇒ lastResume 被 hold ⇒ 等下一次应用激活才 flush」——即时重连退化成
@@ -1192,7 +1182,6 @@ export function projectNotificationSourceInstances(
   return notificationSourceProofs.replaceRemoteInstances(instances);
 }
 
-// ---------------------------------------------------------------------------
 // W-10 S3（registry+凭据批）：registry 读时非秘密投影链迁入（自 main.ts 的
 // projectInstanceSecrets / projectInstances 局部闭包逐字搬迁，行为零变）。
 // sshPasswordSet/tokenSet/passwordSet 为凭据**存在性**布尔标记（读侧只判
@@ -1202,7 +1191,6 @@ export function projectNotificationSourceInstances(
 // main 装配侧经 ctx 注入）沿用本模块导出——S2 同款 core→main 单向依赖：
 // 注册表投影先经 projectNotificationSourceInstances 挂来源证明，再经
 // projectInstanceSecrets 挂凭据存在性标记。
-// ---------------------------------------------------------------------------
 export type ProjectedRegistryInstance = TransportInstanceSpec & {
   sshPasswordSet: boolean
   tokenSet: boolean
@@ -1265,9 +1253,7 @@ export function clearBadgeIntentForQuit(applyNativeClear: () => void): void {
   }
 }
 
-// ---------------------------------------------------------------------------
 // OS 深链启动队列 + 外链打开预算器（W-10 S9 open-in + update 批）。
-//
 // 迁自 main.ts 的模块级业务状态（design 16 §4.2）：pendingIntents（有界 64
 // single-flight OS 启动队列）+ draining 位 + 消费循环装配槽 + enqueueDeepLink
 // （OS 三入口 glue：macOS open-url / Win+Linux second-instance argv / 冷启动
@@ -1278,14 +1264,12 @@ export function clearBadgeIntentForQuit(applyNativeClear: () => void): void {
 // 后按触发消费（与原 main.ts「drainPendingIntents 在 whenReady 尾部赋值、冷启动
 // 到达的深链只入队、drain 就绪后消费」同语义）。quit 在途门 = quittingLeaf
 // （S2 快照——与原模块级 quitRequested 逐字同语义）。
-//
 // 外链打开统一入口（openExternally，原 main.ts 模块级函数整体迁入）：URL 规范
 // 化 + 10s 窗口 8 次预算 + 超限 30s 冷却（log-and-drop）。宿主打开叶 = 装配期
 // 快照的 edges.openExternal（externalOpenLeaf——B11「URL 白名单判定/预算/冷却/
 // 规范化留 core，edge 只执行 open」）；main.ts 窗口 glue（setWindowOpenHandler /
 // will-navigate / will-redirect 的 handleUntrustedNavigation）与后续边沿共用本
 // 入口。
-// ---------------------------------------------------------------------------
 const pendingIntents = new BoundedVscodeIntentQueue(64);
 let drainingPendingIntents = false;
 /** 消费循环装配槽：installIpcHandlers ② I 组段在 wiredCtx 宿主依赖束就绪后
@@ -1366,9 +1350,7 @@ export function openExternally(url: string): void {
   });
 }
 
-// ---------------------------------------------------------------------------
 // Runtime check cycle slot (W-10 S10 runtime A batch).
-//
 // runRuntimeCheck（原 main.ts whenReady 局部 const）随 RUNTIME_CHECK 注册体迁
 // 入 installIpcHandlers ② J 组段——main 装配侧的首检/周期计时器（15s 首检 +
 // 6h 周期）经本导出入口调用与 IPC 注册体**同一**实现与门（quit/事务在飞/动作
@@ -1376,7 +1358,6 @@ export function openExternally(url: string): void {
 // 门不变）。装配槽 = 下方 installIpcHandlers ② J 组段赋值（单装配不变式：
 // installIpcHandlers 先于任何计时器 tick——计时器在装配后创建并 15s/6h 才首
 // 次触发，槽位必已就绪；未装配时导出入口静默 no-op，同 S2 导出入口先例）。
-// ---------------------------------------------------------------------------
 let runtimeCheckRunner: (() => void) | null = null;
 
 /** 触发一次 idle-gated dsh runtime 检查（main 装配侧启动/周期计时器入口——
@@ -1386,11 +1367,9 @@ export function runRuntimeCheckCycle(): void {
   if (runner !== null) runner();
 }
 
-// ---------------------------------------------------------------------------
 // Shell IPC registration (design 25 §4.1 seam; W-10 S1 info+settings +
 // S2 notify/badge/ready + S3 registry/credentials + S4 ssh-connection-state
 // batch).
-//
 // installIpcHandlers is the single shell-core IPC registration point: the
 // Electron main only assembles it (main.ts — trustedIpc fence injected at the
 // registrar wrapper, core stays electron-free by construction). Relocated
@@ -1467,7 +1446,6 @@ export function runRuntimeCheckCycle(): void {
 //      OS 三入口 glue 本就是装配侧宿主职责，见 main.ts 顶部职责清单；Swift
 //      sidecar flavor 装配点与 HostEdges 余下边沿叶属 W-10 之外后续批，
 //      见 design 25 §4.1）。
-// ---------------------------------------------------------------------------
 
 /** IPC 注册面：core 经它注册处理器（channel 为 opaque 通道名；Electron 侧
  *  装配为 `(ch, h) => ipcMain.handle(ch, trustedIpc(h))`——trustedIpc 围栏在

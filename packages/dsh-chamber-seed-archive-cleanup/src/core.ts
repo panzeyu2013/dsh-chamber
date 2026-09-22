@@ -965,7 +965,6 @@ export class ArchiveCleanupCore {
       // against the same fresh set, so it could never fire; a genuine
       // mid-tree live flip now surfaces as the binding's
       // ArchiveCleanupError('running') and triggers the abort below).
-      //
       // ABORT SEMANTICS: the FIRST in-tree failure (any ArchiveCleanupError
       // from a member deletion — delete-time `running`/`storage`) stops
       // processing the REMAINING members of this
@@ -1070,7 +1069,6 @@ export class ArchiveCleanupCore {
     // inference that caused the 2026-12 blocker, because both bulk
     // enumerations can narrow silently. Three gates stand between a candidate
     // and its membership removal, and ALL must pass:
-    //
     //  G1 CREDIBILITY (this block): a snapshot corpus reporting ZERO records
     //     while members are archived is not credible, and a confirmation
     //     corpus that COLLAPSES to zero after a non-empty snapshot is not
@@ -1085,7 +1083,6 @@ export class ArchiveCleanupCore {
     //     read (`hasStoredContent`); it is swept ONLY when that read proves it
     //     cannot materialize the id. This is what makes "missing from both
     //     bulk reads" insufficient on its own.
-    //
     // Runs only when the snapshot actually shows orphan members, so a
     // converged instance keeps the single-scan contract.
     let sweptOrphanMembers: string[] = []

@@ -23,10 +23,8 @@
 /** Typert Remote namespace this host domain occupies. */
 export const OPEN_IN_APP_REMOTE_NAMESPACE = 'openInApp'
 
-/** The domain's methods, in probe/read/launch order. */
 export const OPEN_IN_APP_METHODS = ['probe', 'apps', 'icon', 'open'] as const
 
-/** One method name of {@link OPEN_IN_APP_METHODS}. */
 export type OpenInAppMethod = (typeof OPEN_IN_APP_METHODS)[number]
 
 /**
@@ -81,7 +79,6 @@ export const OPEN_IN_APP_ERROR_CODES = [
   'icon-unavailable',
 ] as const
 
-/** One code of {@link OPEN_IN_APP_ERROR_CODES}. */
 export type OpenInAppErrorCode = (typeof OPEN_IN_APP_ERROR_CODES)[number]
 
 /** One domain failure as it crosses the wire. */

@@ -35,7 +35,6 @@
 
 /* ---------------------------------------------------------------------------
  * 1. Legacy protection fallback (design 21 §6.11.7 — version skew only)
- * ---------------------------------------------------------------------------
  * 旧就地在场的 gateway 不返回 `rows`（§6.11.5 的加性字段），渲染端此时没有
  * 后端投影可消费，只能按旧口径兜底：官方域（@deepseek-ai/*）与本仓 chamber 域
  * （@dsh-chamber/*）都从可操作行里滤掉——旧服务端的写面按旧规则拒绝它们，所以
@@ -50,7 +49,6 @@ export function legacyProtectedName(name: string): boolean {
 
 /* ---------------------------------------------------------------------------
  * 2. Intent model (design 21 §3 matrix row: apply({add[], remove[], defer}))
- * ---------------------------------------------------------------------------
  * The ordered intent a batch apply submits: removes FIRST, then adds
  * (decision 5 — remove releases the old layer before the new one installs),
  * input order preserved within each group, duplicates stripped (first
@@ -116,7 +114,6 @@ export function orderApplyOps(input: ApplyInput): OrderedApplyOps {
 
 /* ---------------------------------------------------------------------------
  * 3. Apply-result normalization (both backends → one outcome)
- * ---------------------------------------------------------------------------
  * The unified outcome the result surface renders (partial「已完成 n/m」、
  * cancelled、failed copy, §6.6). Per-name attribution: the gateway result
  * names its installed/removed ops; the ssh result reports COUNTS only (see
@@ -310,7 +307,6 @@ export function partialTextOf(
 
 /* ---------------------------------------------------------------------------
  * 4. Batch failure policy — the SINGLE definition (design 21 §6.6)
- * ---------------------------------------------------------------------------
  * 「失败即停」与逐行隔离的分界，模型层单一定义（zh 措辞 5C 键表落位）：
  * - 提交面 fail-fast：registry/remove 整批一次提交（一次确认）；任一提交/
  *   预检拒绝即停——整批不执行（gateway 提交面 queue_busy/invalid/reserved，
@@ -351,7 +347,6 @@ export function describeBatchPolicy(): string {
 /* ---------------------------------------------------------------------------
  * 5. Gateway task projection → row model (design 21 §6.2/§6.3; GET
  * /chamber/plugins/tasks — read side of the 202 contract)
- * ---------------------------------------------------------------------------
  * The task endpoint answers {ok:true, tasks: JournalOp[], deferred:
  * DeferredIntent[], busy} (packages/gateway/src/routes.ts 1146-1150):
  * journal ops newest-first (retention-capped) + durable deferred install
@@ -465,7 +460,6 @@ export function projectTasks(shape: GatewayTasksShape): { rows: TaskRow[]; busy:
 
 /* ---------------------------------------------------------------------------
  * 6. Undo derive for 「撤销最近变更」(design 21 §6.4/§6.8 r2) — v1 policy
- * ---------------------------------------------------------------------------
  * V1 (UNDO_V1_POLICY = 'ok-only'): only ops that actually took effect are
  * undoable — a failed/blocked op never is (its recovery belongs to the
  * r2-r4 恢复阶梯 flows, driven backend-side from the journal + preImage
@@ -516,7 +510,6 @@ export function undoForLatest(rows: readonly TaskRow[]): UndoLatest {
 /* ---------------------------------------------------------------------------
  * 7. Protected rows: read-side projection + the diff/apply boundary
  *    (design 21 §6.11.5; 2026-09 行集修订)
- * ---------------------------------------------------------------------------
  * 后端三端各投影 `rows: PluginRow[]`（加性字段；`dependencies` 语义不变），
  * 渲染端只消费。本节提供三件事：
  * - projectInstalledRows：已安装列表的行投影。**行集 = profile 的依赖表**

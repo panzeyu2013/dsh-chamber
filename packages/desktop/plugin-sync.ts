@@ -239,10 +239,8 @@ export function describePluginDecision(decision: PluginMutationDecision): string
   return decision.suggest === undefined ? base : `${base}（建议 spec：${decision.suggest}）`
 }
 
-// ============================================================================
 // Contract A types: TransportExecAction / TransportRunPayload imported from
 // transport-provider.ts (single source, see the import note above).
-// ============================================================================
 
 
 /** The non-secret status surface `applyPlugins` needs for the ready recheck. */
@@ -377,16 +375,12 @@ export function scopeExecToOwnership(
   }
 }
 
-// ============================================================================
 // Whitelists (design 13 §7.2 — contract C): imported from the control-plane
 // shared module (plugin-spec.ts via control-plane-module.ts) and re-exported
 // for the main-process consumers; ENOENT_PATTERN comes from ssh-provider.ts
 // (see the import note above).
-// ============================================================================
 
-// ============================================================================
 // Path / value helpers
-// ============================================================================
 
 export const DEFAULT_REMOTE_DSH_HOME = '~/.dsh'
 export const WEB_PROFILE = 'web'
@@ -466,9 +460,7 @@ export function packageNameFromSpec(spec: string): string | null {
   return at === -1 ? spec : spec.slice(0, at)
 }
 
-// ============================================================================
 // Spec classification (design 13 §3)
-// ============================================================================
 
 export type SpecClass =
   | { kind: 'sync' }
@@ -544,9 +536,7 @@ export function classifyDependencyValue(spec: string): SpecClass {
   return { kind: 'unsyncable', reason: unsyncableReason(spec) }
 }
 
-// ============================================================================
 // Manifest types (contract B)
-// ============================================================================
 
 /**
  * Chamber-injected host-graph state (design 09 方案 A, module A+B; surfaced so
@@ -674,9 +664,7 @@ export interface PluginApplyResult {
 export type RemotePluginListResult = { ok: true; manifest: RemotePluginManifest } | { ok: false; error: string }
 export type ApplyPluginsResult = { ok: true; result: PluginApplyResult } | { ok: false; error: string }
 
-// ============================================================================
 // Manifest parsing
-// ============================================================================
 
 /** Parse a remote profile package.json into its projected dependencies + bundles. */
 export function parseRemoteManifest(text: string): { dependencies: Record<string, string>; bundles: string[]; error?: string } {
@@ -750,9 +738,7 @@ export function classifyLocalDependency(pkg: unknown): LocalPluginKind {
   return 'plain'
 }
 
-// ============================================================================
 // 1. localPluginList
-// ============================================================================
 
 /**
  * Read the LOCAL profile manifest from the authoritative local dsh home
@@ -882,9 +868,7 @@ export function localPluginList(localDshHome: string, facts?: PluginProtectionFa
   }
 }
 
-// ============================================================================
 // 1.5 Renderer projection + confirmation copy (design 09 §4 v1 mitigations)
-// ============================================================================
 
 /**
  * Mask for local-path dependency values in the renderer-facing projection.
@@ -1135,9 +1119,7 @@ function readDependencyManifest(profileDir: string, name: string): unknown {
   }
 }
 
-// ============================================================================
 // 2. remotePluginList
-// ============================================================================
 
 export async function remotePluginList(
   exec: ExecFn,
@@ -1330,9 +1312,7 @@ async function probeRemoteChamber(
   return { ok: true, packages }
 }
 
-// ============================================================================
 // 3. applyPlugins
-// ============================================================================
 
 export interface ApplyActions {
   add: string[]
@@ -1530,7 +1510,6 @@ export async function applyPlugins(
     // spec the touched name had before the op (add: null when the name was
     // absent; remove: the previous spec string — the undo journal's undoable
     // fact). An absent profile (ENOENT) is an empty snapshot.
-    //
     // FAIL-CLOSED (2026-12 P0-2): a snapshot that cannot be read (real ssh
     // failure, or an unparseable manifest) refuses the WHOLE batch before any
     // remote change. The journal cannot represent "unknown": a row recorded
@@ -1633,9 +1612,7 @@ export async function applyPlugins(
   }
 }
 
-// ============================================================================
 // 4. seedRemoteChamberHostPackages (design 13 §3, M2)
-// ============================================================================
 
 export interface ChamberHostPackageSeed {
   insertId: string
@@ -2004,9 +1981,7 @@ export async function seedRemoteChamberHostPackages(
   return { ok: true, wrote, patched, packages: states }
 }
 
-// ============================================================================
 // 5. materializeAndAdd (design 13 §3, M2 — optional fallback)
-// ============================================================================
 
 export type MaterializeResult = { ok: true; spec: string; remotePath: string } | { ok: false; error: string }
 
@@ -2497,9 +2472,7 @@ export async function materializeArchiveAndAdd(
   return installRemoteTarball(exec, spec, archive.name, archive.bytes)
 }
 
-// ============================================================================
 // 6. Local pnpm resolution + local `dsh plugin` exec (design 13 §5, M4)
-// ============================================================================
 
 function pathDelimiter(): string {
   return process.platform === 'win32' ? ';' : ':'

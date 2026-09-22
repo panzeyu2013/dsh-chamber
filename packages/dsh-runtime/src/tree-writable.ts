@@ -5,8 +5,6 @@
  * removable again. A missing/raced tree or a mid-walk error is fine — every
  * caller's `rmSync(..., { force: true })` remains authoritative.
  *
- * Deliberately NOT re-exported by index.ts (dist-sync lockstep); module-local
- * imports only.
  */
 import { chmodSync, existsSync, lstatSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'

@@ -1,5 +1,4 @@
 /**
- * 官方客户端包模板的构建配置（2026-12 复查登记，勿"修"成看似能直跑的样子）。
  *
  * 这里导入的 `clientBundle` 是**上游树内**的共享配置：在 dsh 仓里客户端包位于
  * `packages/client/<name>/`，共享文件即 `packages/client/tsdown.client.ts`

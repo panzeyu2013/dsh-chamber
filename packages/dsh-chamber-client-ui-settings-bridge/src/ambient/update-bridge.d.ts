@@ -8,8 +8,6 @@
  * full-shape declaration of window.dshChamber (interface merging requires
  * IDENTICAL property types, so a partial/subset declaration could never
  * merge with it). The update types are re-exported from that file, and the
- * Window property is declared with the FULL imported DshChamberBridge type —
- * identical to the renderer's own declaration, never a subset.
  */
 import type { DshChamberBridge, UpdatePhase, UpdateState, UpdateSurface } from '../../../../packages/renderer/src/global.d.ts'
 

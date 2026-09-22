@@ -77,9 +77,7 @@ import {
 // console→stderr 重定向（D2）已前移到文件头第一条 import 的
 // sidecar-console-redirect.ts 模块体内——先于本文件任何其它依赖求值。
 
-// ---------------------------------------------------------------------------
 // 1. 参数与环境解析
-// ---------------------------------------------------------------------------
 function parseArgs(argv: readonly string[]): {
   userDataDir: string
   dshPath: string | null
@@ -117,17 +115,14 @@ function parseArgs(argv: readonly string[]): {
 const args = parseArgs(process.argv.slice(2))
 mkdirSync(args.userDataDir, { recursive: true })
 
-// ---------------------------------------------------------------------------
 // 2. 目录锁复验（design 25 §6.3 B2：不二次 flock——Swift 侧持锁；本进程只读
 //    锁记录校验**父 pid**，防双 flavor 并发）。
-//
 //    语义（关键）：记录里的 pid 是**持锁方**（Swift 壳）的 pid，而本进程是它
 //    直接 spawn 的子进程 → 正常情形 `record.pid === process.ppid`，属「我方的
 //    父进程持锁」，**不是**冲突。只有记录 pid 既不是本进程也不是父进程、且仍
 //    存活时，才是「另一 flavor/实例正占用同一 userData」→ loud exit 3
 //    （Supervisor 对 exit 3 走 fatal 不重启，见 SidecarSupervisor）。
 //    记录 pid 已死 = 陈旧锁（flock 随进程死亡释放，内核已无持有者）→ 放行。
-// ---------------------------------------------------------------------------
 const lockFile = path.join(args.userDataDir, '.dsh-chamber.lock')
 if (existsSync(lockFile)) {
   try {
@@ -155,9 +150,7 @@ if (existsSync(lockFile)) {
   }
 }
 
-// ---------------------------------------------------------------------------
 // 3. B 桥协议服务端（stdin 入站；stdout 唯一协议写面）
-// ---------------------------------------------------------------------------
 type Handler = (payload: unknown) => unknown | Promise<unknown>
 const registry = new Map<string, Handler>()
 const ipcRegistrar: IpcRegistrar = {
@@ -460,12 +453,10 @@ async function handleInboundLine(line: string): Promise<void> {
   }
 }
 
-// ---------------------------------------------------------------------------
 // 4. 装配启动（async bootstrap）：无头 ctx（S-C-1/S-C-2 真实化装配）→
 //    shell-core 60/60 注册体（installIpcHandlers 恰一次、先于 ready）→
 //    control-plane 装配（本地 spawn 门 = headless.localSpawnGates——main
 //    1203-1220 同语义）→ bindPlane（plane 晚绑定）→ ready 帧 → 启动尾部。
-// ---------------------------------------------------------------------------
 const moduleDir = path.dirname(fileURLToPath(import.meta.url))
 /** P-04：Electron-free sidecar 的内建 dsh 工作区——显式 --dsh-path 优先；
  *  打包形态恒不探测仓库（打包行为不变：装配总是显式携带路径）；dev 形态按

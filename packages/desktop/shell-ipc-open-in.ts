@@ -1,8 +1,5 @@
 /**
  * shell-ipc-open-in — domain IPC registrations split out of shell-core.ts
- * (2026-12 stage-3 shell-core domain split). PURE MOVE: handler bodies, registration
- * order and error semantics are unchanged; the shared state/helpers arrive through
- * ShellIpcCtx, the assembly-side deps through ctx.deps.ctx.
  */
 import type { ShellIpcCtx } from './shell-core.ts'
 import type { OpenInLaunchContext, OpenInRequest } from './open-in.ts'

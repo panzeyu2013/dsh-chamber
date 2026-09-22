@@ -123,14 +123,12 @@ async function readUploadJsonBody(req: ApiRequest): Promise<unknown> {
   }
 }
 
-// ---------------------------------------------------------------------------
 // Gateway-owned browser assets (design 17 D6 / §10/§9). The full dsh frontend
 // remains proxied at `/`; `/chamber/` is a deliberately small operations
 // surface backed only by gateway-owned routes. 2026-12: the dashboard keeps
 // Credentials + dsh runtime management only (feature settings, approvals,
 // sessions, schedule and worktree blocks were removed with the orchestration
 // strip).
-// ---------------------------------------------------------------------------
 
 const CHAMBER_APP_CSP = "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'; connect-src 'self'"
 
@@ -160,9 +158,7 @@ function methodNotAllowed(res: ApiResponse): true {
   return true
 }
 
-// ---------------------------------------------------------------------------
 // A1 write-surface helpers (design 21 §6.2; plan Phase 4.4)
-// ---------------------------------------------------------------------------
 
 /** Uploaded materialize archive cap (design 21 §6.2: the materialize route
  * has its own STREAMED body reader — the 8 MiB readUploadJsonBody cap does

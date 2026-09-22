@@ -268,9 +268,7 @@ export function saveViewPrefs(prefs: ChamberSidebarViewPrefs, storage?: StorageL
   }
 }
 
-// ---------------------------------------------------------------------------
 // Shared live store (design 06 §3 — cross-ctx live sync).
-//
 // One module-level cache is the SINGLE source of truth for every ctx's
 // sidebar (this module rides the vite shared chunk, same instance across all
 // boots): reads/writes go through it, writes persist and notify every
@@ -280,7 +278,6 @@ export function saveViewPrefs(prefs: ChamberSidebarViewPrefs, storage?: StorageL
 // over the newer one another ctx persisted. localStorage stays the durable
 // backing (reloads pick the latest state); the sanitized load and
 // non-throwing storage fallbacks are unchanged.
-// ---------------------------------------------------------------------------
 
 type ViewPrefsListener = () => void
 const listeners = new Set<ViewPrefsListener>()
@@ -488,7 +485,6 @@ function canonicalEquals(a: ChamberSidebarViewPrefs, b: ChamberSidebarViewPrefs)
   }
 }
 
-// ---------------------------------------------------------------------------
 // 置顶写回防抖 — updated 模式的 promotion 簿记写回是「观察会话 updatedAt
 // 推进 → 置顶」的副作用：会话流式更新期间每个投影 tick 都会推进 updatedAt，
 // 若每个 tick 各自 updateViewPrefs，写盘（整份 prefs JSON.stringify）+ 全壳
@@ -508,7 +504,6 @@ function canonicalEquals(a: ChamberSidebarViewPrefs, b: ChamberSidebarViewPrefs)
 // 显示延迟而非数据丢失；渲染路径直接读持久账户
 // （updatedOrder/sessionUpdatedAtByAccount），无 render-time promotion 之类
 // 的中间派生面。
-// ---------------------------------------------------------------------------
 
 /** 置顶写回防抖窗（固定窗：首 arm 起 250ms）。突发流式 tick 收敛为 ≤1 次
  *  写回/窗。 */

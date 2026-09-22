@@ -340,7 +340,6 @@ export function createGatewayStore(stateDir: string, logger: GatewayStoreLogger)
   ensurePrivateDirectoryNoFollow(stateDir, 0o700)
   ensurePrivateDirectoryNoFollow(root, 0o700)
 
-  // -------------------------------------------------------------------------
   // Exclusive stateDir lock (Phase 1, fix round). O_EXCL-first acquisition;
   // a stale (dead-pid) lock is taken over via rename-claim + moved-content
   // verification (the moved file must be the exact stale lock we read; a
@@ -357,7 +356,6 @@ export function createGatewayStore(stateDir: string, logger: GatewayStoreLogger)
   // — a failed acquisition can never delete another process's lock.
   // close() releases; reacquire() re-takes it (gateway start() retry path,
   // design 17 §4.1).
-  // -------------------------------------------------------------------------
   const lockFile = join(stateDir, '.gateway.lock')
 
   /** Locks are not credential documents: preserve empty/corrupt bytes so a

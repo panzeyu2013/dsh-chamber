@@ -101,7 +101,6 @@ export interface GatewayProxyDeps {
   upstreamTimeoutMs?: number
   /** Upstream idle window for long-RPC paths (design 03 §3.4; default LONG_RPC_UPSTREAM_TIMEOUT_MS). */
   longRpcUpstreamTimeoutMs?: number
-  /** Long-RPC paths selecting the exemption (default LONG_RPC_PATHS; `[]` disables the exemption). */
   longRpcPaths?: readonly string[]
 }
 
@@ -178,7 +177,6 @@ export function createGatewayProxy(deps: GatewayProxyDeps): GatewayProxy {
     // favicon.svg / manifest.webmanifest / index.html can never match), and
     // only for a plain 200: a 206/304 or any range response keeps the upstream
     // framing.
-    //
     // Three guards keep the stamp from outliving its evidence (2026-12 review):
     // the upstream's own cache metadata wins (a `no-store`/ETag policy is the
     // owner's statement, not ours); the response must actually BE an asset of

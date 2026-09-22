@@ -1,6 +1,5 @@
 /** Registers the chamber sidebar shell (design 05 §2) into the layout-owned slot. */
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
-// Type-only: pulls the locale plugin's Context merge (ctx.locale).
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 // Type-only: pulls the SlotRegistry service merge (ctx.slots).
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
@@ -249,7 +248,6 @@ export function apply(ctx: ClientContext): void {
     // refreshList has no synchronous throw path in the pinned vendor, but a
     // bridge-listener throw would abort the rest of the App's push handling
     // for this notification.
-    //
     // 2026-09 修正轮 (F1/F2, see shared/purged-rows.ts): the App-side
     // convergence machine is a ONE-SHOT transition detector — it can only
     // request this refresh while an archive-set shrink is newly observed

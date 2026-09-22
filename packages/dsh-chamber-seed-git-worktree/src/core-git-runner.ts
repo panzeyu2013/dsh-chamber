@@ -1,8 +1,6 @@
 /**
  * core-git-runner.ts — The bounded child_process git runner.
  *
- * Extracted verbatim from core.ts (B5 split); core.ts re-exports the public
- * names so the package/test import surface is unchanged.
  */
 import { GitWorktreeError } from './core-errors.ts'
 import type { GitChildProcess, GitCommandResult, GitRunner, GitSpawner } from './core-types.ts'

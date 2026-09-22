@@ -141,7 +141,6 @@ import { RUNTIME_ABORT_REASON } from './shell-core.ts';
 import { createRuntimeStartupHost } from './runtime-startup-host.ts';
 import type { RuntimeStartupHostState } from './runtime-startup-host.ts';
 
-// ---------------------------------------------------------------------------
 // 打包布局锚点（P-13）与 host 包源目录解析（P-05）——具名纯/近纯函数，Swift 布局
 // 锁步测试（macos/.../PackagedLayoutTests.swift）读本段源文本与主锚点；调用方只在
 // buildHeadlessCtx 内。路径事实的单源：
@@ -149,7 +148,6 @@ import type { RuntimeStartupHostState } from './runtime-startup-host.ts';
 //     sidecarDir + "/dist/" + name；build-sidecar.sidecarLayout().hostPackageDist）；
 //   - 内嵌 pnpm 入口：<sidecarDir>/pnpm/bin/pnpm.cjs（sidecarLayout().pnpmEntry）。
 // 改这些拼写必须同时改 macos/scripts/build-sidecar.mjs 与 Swift 侧锚点断言。
-// ---------------------------------------------------------------------------
 
 /** 打包布局：host 包构建产物目录 = `<sidecarDir>/dist/<packageDirName>`。 */
 export function packagedHostPackageDir(sidecarDir: string, packageDirName: string): string {
@@ -585,8 +583,6 @@ export async function buildHeadlessCtx(
     // 语义与 main 1452-1466 逐字同向。
     console.error('[sidecar] 加载 SSH 实例失败：', loadError)
     const file = instancesFilePath(runtimeBaseDir)
-    // The rename itself is single-sourced in store-file-hygiene.preserveFileAside
-    // (2026-12 stage-2 item 5); only the wording stays flavor-specific.
     const aside = preserveFileAside(file, '.corrupt')
     if (aside.ok) console.warn(`[sidecar] 已保留损坏的实例文件为 ${aside.path}`)
     else console.error('[sidecar] 保留损坏实例文件失败：', aside.error)
@@ -1217,12 +1213,10 @@ export async function buildHeadlessCtx(
     return projectedSaved
   }
 
-  // =========================================================================
   // S-C-2 J/K 组：dsh runtime 管理宿主（design 18；main 2291-3560 行区的
   // 装配镜像——控制器现实例/证据刷新/启动门/启动事务/元数据恢复/apply-now
   // 门输入/事务槽/计时器；plane 依赖一律经 planeRef，runStartupTail 在
   // sidecar-entry bindPlane 后调用）。
-  // =========================================================================
 
   // pnpm 入口解析（main 2293-2295 的 packaged/dev 两分支 → sidecar 位）：
   //  - 装配（W-23 三审新增）：<moduleDir>/pnpm/bin/pnpm.cjs（build-sidecar

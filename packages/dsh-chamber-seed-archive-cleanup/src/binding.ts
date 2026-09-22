@@ -96,7 +96,6 @@ export function makeHostBinding(ctx: HostCtxServices): ArchiveCleanupHost {
     // only makes the sweep more conservative. Every header from BOTH legs is
     // shape-validated with the same loud F3 policy before it enters the union
     // (a drifted record refuses the whole read, never a silent per-item skip).
-    //
     // A leg that THROWS is never silently dropped: the failure propagates and
     // the caller maps it to `registry-unreadable` before mutating anything,
     // because "one leg is broken" is indistinguishable from "the other leg is
@@ -178,7 +177,6 @@ export function makeHostBinding(ctx: HostCtxServices): ArchiveCleanupHost {
       // across every project directory and every immutable format generation,
       // and answers `undefined` when the id has no materialized log — an
       // unknown cwd is therefore NOT a reason to report "no content".
-      //
       // Fail-closed mapping:
       //  - a resolved snapshot => true (the id still materializes);
       //  - `undefined` => false — the ONLY answer that may clear a membership.
@@ -195,7 +193,6 @@ export function makeHostBinding(ctx: HostCtxServices): ArchiveCleanupHost {
       //  - no stat surface at all => true (the sweep then skips entirely).
       // A false negative here would clear the membership of a session whose
       // content still exists — the exact blocker this probe closes.
-      //
       // The pre-alpha.1 `inspect(id)` surface this probe originally used no
       // longer exists upstream; `stat` carries the same semantics (see the
       // service face above).
@@ -314,7 +311,6 @@ export function makeHostBinding(ctx: HostCtxServices): ArchiveCleanupHost {
         // a second dsh process on the same sessions root is out of reach and is
         // the caller's responsibility (the domain's contract says "stop the
         // run first").
-        //
         // dsh >= 0.1.3-alpha.1 keeps ONE FILE PER IMMUTABLE FORMAT GENERATION
         // in this directory (`session.jsonl`, `session.vN.jsonl`, each with an
         // optional `.zstd`) plus the write lease `session.lock`; `locate()`
@@ -425,12 +421,10 @@ export function makeHostBinding(ctx: HostCtxServices): ArchiveCleanupHost {
   }
 }
 
-/* ------------------------------------------------------------------ */
 /* Single-flight gate (domain-level; the wire methods stay arg-free or   */
 /* optional-arg — preview is zero-arg, purge takes an OPTIONAL sessionIds */
 /* filter — so concurrency control is the host's job — design 24 §3,     */
 /* 2026-09 revision).                                                    */
-/* ------------------------------------------------------------------ */
 
 export class RunGate {
   private inFlight = false

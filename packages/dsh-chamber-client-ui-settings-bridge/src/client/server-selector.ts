@@ -32,13 +32,6 @@ export interface ServerProjectionRow extends ServerSelectorRow {
 }
 
 /**
- * Field-GENERIC identity of a settled-boot gap for publish signatures: every
- * payload field takes part (so a field added to the fact later cannot freeze a
- * subscription), fields are order-normalized, array order is preserved (roster
- * order is meaningful) — and "no payload" is one thing: an absent field, an
- * empty array, `null` and an empty string all encode to nothing, so a producer
- * that omits vs materializes an empty field cannot churn the gate. The
- * producer's sentence is not part of the projection at all.
  */
 function gapSignature(gap: ServerBootGap | undefined): string | null {
   if (gap === undefined) return null

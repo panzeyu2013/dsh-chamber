@@ -67,9 +67,7 @@ function execWindowsTool(file: string, args: string[]): { status: number | null;
   return { status: res.status, stdout: res.stdout ?? '', stderr: res.stderr ?? '' }
 }
 
-// ---------------------------------------------------------------------------
 // Pure parsers / builders (unit-tested on every platform)
-// ---------------------------------------------------------------------------
 
 /** Parse `ConvertTo-Json` output of a Win32_Process
  *  ProcessId/ParentProcessId/CommandLine/CreationDate projection into
@@ -165,9 +163,7 @@ export function processTableCommand(): string {
   ].join('; ')
 }
 
-// ---------------------------------------------------------------------------
 // Exec helpers (win32-gated)
-// ---------------------------------------------------------------------------
 
 /** Full CIM table (briefly cached so 25ms poll loops do not pay one
  *  interpreter start per tick). Throws when unavailable/unparseable. */

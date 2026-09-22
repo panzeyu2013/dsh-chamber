@@ -33,7 +33,6 @@
  * machine catalog's transport belongs to the page, not to a source.
  */
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
-// Type-only import activates the locale service's Context merge.
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import { OpenInButton, type OpenInInjected } from './OpenInButton.tsx'
 import { createOpenInSourceAdapter } from './source-adapter.ts'

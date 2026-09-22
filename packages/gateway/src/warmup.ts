@@ -500,7 +500,6 @@ export interface WarmupDeps {
   enabled: boolean
   /** The managed local dsh port; null = not ready. */
   getLocalDshPort(): number | null
-  /** The managed local dsh state ('ready' when serviceable). */
   getLocalState(): string
   /** Activation-aware exposure gate (defaults open). */
   canExposeLocal?: () => boolean

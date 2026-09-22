@@ -456,7 +456,6 @@ export function planSessionStreamHealth(
   // 'open' / 'cold': the stream is alive (or never asked for a window): clear
   // every clock and the notice. The heal budget survives recovery so a flapping
   // source cannot be healed once per recovery forever.
-  //
   // chamber (design 14 §D4): 'open' is no longer proof that events flow — the
   // gateway fork paces carrier failures instead of failing terminally, so a
   // recent churn fact is the user's only signal that the stream is reopening.

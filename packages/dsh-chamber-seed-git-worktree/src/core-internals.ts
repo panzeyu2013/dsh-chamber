@@ -1,8 +1,6 @@
 /**
  * core-internals.ts — Internal record/topology types and the per-common-dir mutex.
  *
- * Extracted verbatim from core.ts (B5 split); core.ts re-exports the public
- * names so the package/test import surface is unchanged.
  */
 import type { AgentFact, CreateBranch, CreateResult, PreviewCreateResult, RemoveResult, RollbackCreateResult, WorkspaceFact } from './core-types.ts'
 
@@ -139,7 +137,6 @@ export interface RemoveIntent {
   readonly discardChanges?: boolean
   branchDeleted?: boolean
   branchDeleteFailed?: boolean
-  /** Why the optional branch deletion failed (safe, bounded text). */
   branchDeleteError?: string
 }
 

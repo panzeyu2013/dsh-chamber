@@ -1,8 +1,6 @@
 /**
  * core-parse.ts — Git output parsing, attention probes and DSH_HOME resolution.
  *
- * Extracted verbatim from core.ts (B5 split); core.ts re-exports the public
- * names so the package/test import surface is unchanged.
  */
 import { MAX_PATH_LENGTH } from './core-constants.ts'
 import { GitWorktreeError } from './core-errors.ts'

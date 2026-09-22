@@ -449,7 +449,6 @@ function deriveServers(
       // 当前会话事实只给活动来源：blank（新建未首发的）会话行只在正在查看的
       // 来源投影（06 §4.3 全局单选纪律）——否则每个已挂载来源都会冒出它的
       // 空"新建会话"行。其他来源 blank 行照旧不进入导航列表。
-      //
       // chamber (2026-12，design 05 §2.2 修订)：该来源还有在途 open、且官方运行时
       // 当前选中的**不是**用户要打开的那个会话时，不投影 current——冷 boot 期间官方
       // 初始导航策略会先给自己选中一个 blank 会话，此刻投影它就会渲染出一行高亮的
@@ -469,7 +468,6 @@ function deriveServers(
       // blank-row currentness branch (and the sidebar ghost-key arming on the
       // REAL source id) actually fires; the ungrouped bucket title is
       // display-only (''), overridden by the sidebar's own t('list.ungrouped').
-      //
       // chamber (2026-12, design 05 §2.2 revision): the workspace-creation echo
       // rides the SAME projection pass — one choke point for every workspace
       // row (derived or echoed), so the echo needs no second copy inside the
@@ -977,7 +975,6 @@ export default function App() {
   // 从上报里的实时 running 位自行推导 running→idle 边沿，以 App 已知的
   // 「谁在阅读」（**屏上来源** paintedView + 各来源 current + 焦点）判定武装/解除。
   // 插件侧保持无状态（纯投影），避免在每 ctx 复制一套状态机。
-  //
   // 2026-12 facts wiring（主计划 §3.3-2 / R2）：completedBySource 不再是唯一
   // 来源，而是 deriveSourceUnread 的**派生投影**；durable 回退账本
   // （edgeLedgerRef）与读水位（readMarksRef）在首帧从 v2 落盘载入（此前仓内
@@ -3265,7 +3262,6 @@ export default function App() {
   // packages/dsh-chamber-client-ui-layout/src/client/document-theme.ts）。
   // useLayoutEffect：必须在切换视图的那一帧**绘制前**发布，否则主题不同的两个
   // 视图互切会先画一帧旧调色板（2026-12 复查 MINOR-2）。
-  //
   // 同一份「谁在屏上」的权威也是文档级 `<html lang>` 的归属来源（design 06
   // §4.6「页面语言归属」）：每个实例壳的官方 locale 服务都无条件写这个属性且无 teardown，
   // page-language 归属器只让**屏上来源、且其宿主设置已回答**的语言落地——默认
@@ -3747,7 +3743,6 @@ const HEALTH_ERROR_GRACE_MS = 10_000
                     // 与自动臂用同一记账（返回值 + 共享账本）：否则用户点一次之后
                     // S2 臂看不到、守卫预算也没消耗，会在同一窗口再自动重连一次
                     // （每次重连都要重放全部 baseline）。
-                    //
                     // 手动动作也要**有界**（2026-12 三轮复核）：连点/多按钮会各自
                     // 重放一份完整 baseline，所以沿用自动臂的 60s per-source 退避——
                     // 窗口内只记账不重连（但记账仍需发生，否则自动臂会马上补一次）。
@@ -3840,14 +3835,12 @@ const HEALTH_ERROR_GRACE_MS = 10_000
               // runtime current (never the gated projection value — the gate
               // exists to hide that very value) and that view's own blank flag
               // (blankCurrent, below).
-              //
               // Deliberately NOT "any pending open": a view that already shows
               // the requested session (idempotent re-open, or the boot-ctx
               // early-open arm having preempted the runtime's initial selection)
               // must not veil at all, and a warm visible shell that is switching
               // between two REAL sessions resolves synchronously — holding a veil
               // there would hide a working UI for no reason.
-              //
               // 2026-09-11 review S1: "shows nothing legitimate" is a REQUIRED
               // input of the shared rule (blankCurrent) — the hold is
               // `pendingIntent && !failed && !showsRequestedSession &&

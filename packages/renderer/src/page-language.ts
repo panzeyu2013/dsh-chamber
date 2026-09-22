@@ -228,7 +228,6 @@ interface PageOwner {
 /** Page-global slot holding {@link PageOwner} (one document, one owner). */
 const OWNER_SLOT = '__dshChamberPageLanguageOwner__'
 
-/** The global object as a plain bag: the slot is intentionally page-scoped. */
 const pageGlobal = globalThis as unknown as Record<string, unknown>
 
 /** Structural check for an owner installed by another evaluation of this module. */

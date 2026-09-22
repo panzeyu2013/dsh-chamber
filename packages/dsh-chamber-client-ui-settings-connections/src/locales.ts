@@ -1,6 +1,5 @@
 /** `dsh-chamber.settings.connections` namespace dictionaries: the connections settings section copy (design 05 §5). */
 
-/** Simplified Chinese dictionary (the key-set source of truth). */
 export const zh = {
   nav: '连接',
   sectionIntro: '管理本地实例与远程连接：通过 SSH 隧道或 HTTP(S) 直连 dsh 实例，或连接 Gateway 部署。',

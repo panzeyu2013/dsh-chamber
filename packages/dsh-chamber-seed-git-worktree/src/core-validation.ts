@@ -1,8 +1,6 @@
 /**
  * core-validation.ts — Untrusted-input validation helpers and the node filesystem adapter.
  *
- * Extracted verbatim from core.ts (B5 split); core.ts re-exports the public
- * names so the package/test import surface is unchanged.
  */
 import { GitWorktreeError } from './core-errors.ts'
 import { GIT_DIR_POINTER_MAX_BYTES } from './core-parse.ts'

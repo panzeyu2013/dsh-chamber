@@ -102,10 +102,8 @@ import {
 } from '@dsh-chamber/control-plane'
 import { readBoundedBody } from './http-utils.ts'
 
-// ---------------------------------------------------------------------------
 // Gateway-owned limits (blueprint section 4.3). Protocol constants are
 // imported, never re-declared: session-state-protocol.ts is the single source.
-// ---------------------------------------------------------------------------
 
 /** State root under the gateway stateDir. */
 export const SESSION_STATE_DIR_NAME = 'session-state'
@@ -173,9 +171,7 @@ export function normalizeHostState(state: string): SessionStateHostState {
   }
 }
 
-// ---------------------------------------------------------------------------
 // Store model
-// ---------------------------------------------------------------------------
 
 /** One completion edge the observer must classify with exactly one follow
  *  read. source: 'observed' = live true->false edge in this observer epoch;
@@ -1058,9 +1054,7 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
   }
 }
 
-// ---------------------------------------------------------------------------
 // Observer
-// ---------------------------------------------------------------------------
 
 export interface SessionStateObserverStatus {
   mode: SessionStateMode
@@ -1353,9 +1347,7 @@ export function createSessionStateObserver(deps: SessionStateObserverDeps): Sess
   }
 }
 
-// ---------------------------------------------------------------------------
 // Routes: snapshot / SSE stream / read / read-all
-// ---------------------------------------------------------------------------
 
 export interface ChamberSessionState {
   handle(req: ApiRequest, res: ApiResponse, pathname: string): Promise<boolean>
@@ -1687,9 +1679,7 @@ export function createChamberSessionState(deps: ChamberSessionStateDeps): Chambe
   }
 }
 
-// ---------------------------------------------------------------------------
 // Service assembly (index.ts wiring)
-// ---------------------------------------------------------------------------
 
 export interface SessionStateServiceDeps {
   stateDir: string

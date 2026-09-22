@@ -14,7 +14,6 @@
  * nothing here ever sees a tunnel URL.
  */
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
-// Type-only: pulls the locale plugin's Context merge (ctx.locale).
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import { en, zh, type SettingsConnectionsKey } from '../locales.ts'
 

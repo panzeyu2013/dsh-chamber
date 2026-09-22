@@ -43,16 +43,13 @@ export interface GitWorktreeInfo {
   /** null means the host could not determine status; never coerce to clean. */
   dirty: boolean | null
   locked: boolean
-  /** Path/repository health: ready | missing | invalid | not-a-repo. */
   status: 'ready' | 'missing' | 'invalid' | 'not-a-repo'
-  /** Git HEAD classification: branch | detached | unborn. */
   headState: 'branch' | 'detached' | 'unborn'
   /** Local-ref upstream facts from the status branch header; null/0 when
    *  there is no upstream or the host is older. */
   upstream: string | null
   ahead: number
   behind: number
-  /** In-progress Git operations detected in the worktree git dir (best-effort). */
   attention: string[]
   workspaceId: string | null
   sessionIds: string[]
@@ -135,7 +132,6 @@ export interface RemoveWorktreeResult {
   replayed: boolean
   repoId: string
   worktreeId: string
-  /** Absent when the removed worktree was UNREGISTERED. */
   workspaceId?: string
   commonDir: string
   path: string
@@ -144,10 +140,7 @@ export interface RemoveWorktreeResult {
   sessionIds: string[]
   next: 'delete-workspace' | 'none'
   branchPreserved: true
-  /** Set when `deleteBranch` was requested and deleted successfully. */
   branchDeleted?: boolean
-  /** Set when `deleteBranch` was requested but the branch delete failed —
-   *  the worktree removal still stands. */
   branchDeleteFailed?: boolean
 }
 

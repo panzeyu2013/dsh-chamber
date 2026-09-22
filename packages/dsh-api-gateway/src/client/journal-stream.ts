@@ -13,7 +13,6 @@ import type {
   RemoteStreamOptions,
 } from './remote-stream.ts'
 
-/** Host-side stream protocol violation, marked so consumers surface it as an error state. */
 function protocolViolation(message: string): RemoteError<'gateway/internal'> {
   return new RemoteError('gateway/internal', message, {})
 }
@@ -61,7 +60,6 @@ export interface RemoteStreamFactory {
 
 /** Domain publication and cursor operations for one addressed journal stream. */
 export interface RemoteJournalStreamOptions<Page, Entry, Cursor, Notification = never> {
-  /** Diagnostic stream name used in protocol failures. */
   readonly name: string
   /** Cursor representing a journal with no entries. */
   readonly emptyCursor: Cursor

@@ -307,7 +307,6 @@ export default function InstanceView({
   // 2026-12（design 05 §2.2 修订）：遮罩 = boot 期（未 settle）**或** App 判定的
   // 打开意图揭示门。判定规则（含"壳已经显示请求的会话就不遮"与"壳失败不遮"）在
   // sidebar 包 shared/open-intent.ts 内单测覆盖。
-  //
   // P3（2026-12 会话面绘制信号）：揭示门的"继续持有"不再只由 App 侧两个异步镜像
   // 事实（runtimeFacts.current / aggregates 的 blank 行）决定——它们迟到或抖动时
   // 遮罩会挂在已渲染的壳上，最长烧满 open 预算（单次 8s、排队 68s），正是"白屏 /

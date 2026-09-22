@@ -447,7 +447,6 @@ export interface SessionMuxStatus {
   /** Last full `session/list` baseline succeeded. */
   baselineOk: boolean
   lastBaselineAt: number | null
-  /** Waterfall frames currently held (never settled by us). */
   heldWaterfalls: number
   /** The socket opened but no ready frame arrived inside the handshake
    *  window ⇒ the caller should degrade to poll (R18). */

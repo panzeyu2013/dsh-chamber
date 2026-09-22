@@ -163,7 +163,6 @@ export interface PluginTaskTasksProjection {
   tasks: JournalOp[]
   /** Durable deferred intents (install/materialize awaiting a ready edge). */
   deferred: DeferredIntent[]
-  /** True while the executor has a mutation in flight. */
   busy: boolean
 }
 
@@ -420,10 +419,8 @@ export function createChamberPluginTasks(deps: ChamberPluginTasksDeps): ChamberP
    * (lazy rebuild — see the module header). */
   let executor: PluginExec | null = null
 
-  // -----------------------------------------------------------------------
   // Deferred intent store (deferred.json; same 0700/0600 no-follow
   // discipline as the journal, corrupt evidence renamed aside, ≤ 64 KiB)
-  // -----------------------------------------------------------------------
 
   /** Corruption observed on the deferred store by THIS instance (sticky): the
    * staged specs of the lost intents are unknown, so the boot sweep must not
@@ -601,9 +598,7 @@ export function createChamberPluginTasks(deps: ChamberPluginTasksDeps): ChamberP
     }
   }
 
-  // -----------------------------------------------------------------------
   // Executor lifecycle + lease bookkeeping
-  // -----------------------------------------------------------------------
 
   /** Lazy executor construction (see the module header). The spawn command
    * is the resolved NODE executable; the per-op argv prefix (node args +

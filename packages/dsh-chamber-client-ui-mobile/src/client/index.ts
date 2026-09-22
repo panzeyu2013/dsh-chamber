@@ -167,7 +167,6 @@ export function apply(ctx: ClientContext): void {
   // markup.ts) trigger a re-stamp; chat streaming and typing commit
   // thousands of deep childList batches that never match. The batch
   // decision is a pure function (shouldRestamp), unit-tested without a DOM.
-  //
   // alpha.2 anchor audit (2026-09): the official AppFrame renders the right
   // column SHELL and its [data-slot="rightbar"] outlet wrapper from first
   // paint (`[data-rightbar-col]`; the renderer emits the wrapper

@@ -82,7 +82,6 @@ export interface SessionStreamHealthInjected {
  * these runtime objects; see the same note on `OpenInProps`).
  */
 export interface SessionStreamHealthProps extends SessionStreamHealthInjected {
-  /** The session this header belongs to (framework-supplied). */
   sessionId: string
   /** Framework selector hook over the current session snapshot. */
   useSession: <S>(selector: (snapshot: { readonly openState: SessionOpenState }) => S) => S

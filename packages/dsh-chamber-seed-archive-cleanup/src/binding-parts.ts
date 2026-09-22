@@ -11,9 +11,7 @@ import { ArchiveCleanupError, type ArchivedSessionState } from './core.ts'
 
 export const BUSY_MESSAGE = 'archiveCleanup is already running on this instance — retry after it settles'
 
-/* ------------------------------------------------------------------ */
 /* Structural views of the official ctx services (design 24 §10 list). */
-/* ------------------------------------------------------------------ */
 
 export interface SessionHeaderLike {
   readonly id: string
@@ -151,9 +149,7 @@ export function isMigrationTempFilename(name: string): boolean {
   return /^session\.migration\.[0-9a-f]{16}\.jsonl(?:\.zstd)?\.tmp$/.test(name)
 }
 
-/* ------------------------------------------------------------------ */
 /* Binding implementation (design 24 §10: branch b, verified).     */
-/* ------------------------------------------------------------------ */
 
 export function headerToState(header: SessionHeaderLike): ArchivedSessionState {
   // F3: standalone-entry shape guard — a drifted header must throw here too

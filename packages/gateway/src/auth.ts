@@ -177,10 +177,8 @@ function coded(code: string, message: string): Error & { code: string } {
   return error
 }
 
-// ---------------------------------------------------------------------------
 // JWT (HS256) — the 12h session credential (design §7.1; aligned with
 // OpenChamber ui-auth.js, no library dependency added).
-// ---------------------------------------------------------------------------
 
 function base64url(value: Buffer | string): string {
   return Buffer.from(value).toString('base64url')
@@ -222,9 +220,7 @@ function verifyJwt(token: string, secret: string): Record<string, unknown> | nul
   }
 }
 
-// ---------------------------------------------------------------------------
 // Helpers
-// ---------------------------------------------------------------------------
 
 function parseCookie(header: string | undefined): Record<string, string> {
   const out: Record<string, string> = {}
@@ -358,9 +354,7 @@ function verifyCredentialAsync(plain: string, stored: string | null): Promise<bo
 
 const SILENT_LOGGER = { log() {}, warn() {}, error() {} }
 
-// ---------------------------------------------------------------------------
 // Config seeding (source-aware)
-// ---------------------------------------------------------------------------
 
 /**
  * Seed the persisted credentials from deployment config (called by
@@ -420,9 +414,7 @@ export function seedCredentialsFromConfig(config: AuthConfig, store: GatewayStor
   }
 }
 
-// ---------------------------------------------------------------------------
 // Leaf providers
-// ---------------------------------------------------------------------------
 
 /** `token` leaf: the shared bearer token (design 17 §7.2). Only the salted
  * scrypt hash is ever persisted (S5); the plaintext is dropped at seeding.
@@ -523,9 +515,7 @@ function createPasswordProvider(
   }
 }
 
-// ---------------------------------------------------------------------------
 // Dynamic facade
-// ---------------------------------------------------------------------------
 
 /** The dynamic AuthProvider facade (Phase 1): effective kind and verify/login
  * dispatch share the current generation-bound credential-presence snapshot;

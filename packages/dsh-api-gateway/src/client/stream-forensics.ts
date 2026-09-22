@@ -34,7 +34,6 @@ export type StreamForensicsKind =
 
 /** One bounded, non-secret lifecycle fact. */
 export interface StreamForensicsFact {
-  /** Chamber source id of the boot ctx that owns the stream, when published. */
   readonly instanceId: string | undefined
   /** Which transition happened. */
   readonly kind: StreamForensicsKind
@@ -50,11 +49,9 @@ export interface StreamForensicsFact {
 
 /** Environment seams for {@link createStreamForensicsReporter}. */
 export interface StreamForensicsEnvironment {
-  /** Chamber source id of the owning boot ctx. */
   readonly instanceId?: string | undefined
   /** Clock seam (tests). */
   readonly now?: (() => number) | undefined
-  /** Dispatch seam (tests); defaults to the page-level CustomEvent. */
   readonly dispatch?: ((fact: StreamForensicsFact) => void) | undefined
 }
 

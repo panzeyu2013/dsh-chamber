@@ -105,9 +105,7 @@ export interface RuntimeState {
   snapshotCount?: number
   latestSnapshotAt?: string | null
   snapshotError?: string | null
-  /** Number of safe pre-rollback stashes; absence/0 means none exist. */
   preRollbackCount?: number
-  /** Newest safe stash basename (never a userData path). */
   preRollbackLatestName?: string | null
   /** Explicit main-process capabilities; absence/false means no visible retry. */
   canRetryApply?: boolean

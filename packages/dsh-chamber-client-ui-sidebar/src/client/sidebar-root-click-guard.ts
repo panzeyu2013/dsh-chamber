@@ -17,7 +17,6 @@ export function useSidebarClickGuard(): void {
   // session enters inline rename, and every other click opens right away.
   // openSession is idempotent, so a misjudged slow second click only re-opens
   // (no-op) and can NEVER accidentally rename.
-  //
   // The pending lives in a MODULE-level singleton (shared/pending-click.ts,
   // vite shared chunk) shared by every N-ctx shell: each server boot mounts
   // its own SidebarRoot React tree, and a CROSS-SOURCE double-click (click1 on
@@ -27,7 +26,6 @@ export function useSidebarClickGuard(): void {
   // by sessionId (NOT a DOM node): session rows render data-session-id, and
   // the outside-click cancellation matches that attribute via closest(), so it
   // works even when the pending row lives in another shell's DOM.
-  //
   // The document-wide click listener only guards the rename window: a click
   // anywhere OUTSIDE the pending row
   // drops the pending — the row's own onClick runs before this listener and

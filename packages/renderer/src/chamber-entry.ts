@@ -473,7 +473,6 @@ async function registerDeferred(
   // so the report rides a macrotask — the settle (microtask chain) has always
   // won by then, and a report that a torn-down instance never sees is a no-op
   // in the shell's entries lookup rather than a leak.
-  //
   // Own kind since 2026-12 (design 05 §4): this verdict shares the SEAM with the
   // required-service probe but not its meaning — the probe names unprovided
   // services, this one names row ids whose chunk never registered. Sharing one
@@ -662,7 +661,6 @@ export function apply(ctx: Context): void {
   // api-gateway: apply(ctx) → Remote stream mux route), so the prefix is bound
   // per entry through configureContext, never through plugin config or a
   // page-global knob (2026-09 Batch 2: the config-passing form was retired).
-  //
   // A1 (2026-09-11 upstream-alignment): every first-screen registration also
   // RECORDS what its namespace injects, and the required-service probe below
   // probes exactly that union — the same declaration upstream reads off
@@ -672,7 +670,6 @@ export function apply(ctx: Context): void {
   // here stops being probed, and the recorded id is the mount identity (the
   // package / boot-graph id the fiber is named by), never a second service
   // list.
-  //
   // 2026-09-11 review-fix (finding 1): the deferred cluster joins the SAME
   // roster as each of its chunks mounts (registerDeferred below), and one probe
   // pass is re-armed when it does. Before this round those members were probed
@@ -912,7 +909,6 @@ function assertRequiredExtraRowServices(
         // it through the shell seam: the App re-boots the instance on the next
         // ready transition (a fresh boot re-fetches the graph and re-applies the
         // rows — the same effect a full page reload had).
-        //
         // Structured since 2026-12 (design 05 §4): the fact carries the service
         // names and their injectors so the frame's copy can name what is missing
         // (`sidebarRight`) instead of parsing the diagnostic line. The exact

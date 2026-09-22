@@ -1,8 +1,6 @@
 /**
  * core-errors.ts — Typed domain error, retryable set and the domain carrier.
  *
- * Extracted verbatim from core.ts (B5 split); core.ts re-exports the public
- * names so the package/test import surface is unchanged.
  */
 import type { GitWorktreeDomainResult } from './core-types.ts'
 

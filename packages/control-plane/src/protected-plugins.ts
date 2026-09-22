@@ -208,9 +208,7 @@ export function officialScope(name: string): boolean {
   return name.startsWith(OFFICIAL_SCOPE)
 }
 
-// ---------------------------------------------------------------------------
 // 版本语法与代比较
-// ---------------------------------------------------------------------------
 
 /** 精确版本：`X.Y.Z[-pre][+build]`（无 `^`/`~`/dist-tag/范围）。 */
 const EXACT_VERSION_RE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/
@@ -259,9 +257,7 @@ export function suggestExactSpec(name: string, runtimeVersion: string | null | u
   return isExactVersion(runtimeVersion) ? `${name}@${runtimeVersion}` : null
 }
 
-// ---------------------------------------------------------------------------
 // 写面判定
-// ---------------------------------------------------------------------------
 
 export type PluginMutationOp = 'install' | 'remove'
 
@@ -416,9 +412,7 @@ export function decidePluginMutation(input: DecidePluginMutationInput): PluginMu
   return { kind: 'allow' }
 }
 
-// ---------------------------------------------------------------------------
 // 事实源：运行时线族集合
-// ---------------------------------------------------------------------------
 
 /**
  * 运行时线为某个名字提供的**版本集合**（design 21 §6.11.3 的版本事实）。
@@ -596,7 +590,6 @@ export function resolveRuntimeFamily(
     }
   }
   // 只有在没有可用锁文件时才枚举实例树（每次 IPC 都 readdir 不值得）；树同样过可信性判据。
-  //
   // 树来源刻意**不**要求版本事实：枚举目录名本身就是这条兜底路径的用途（design 21 §6.11.1
   // 的实例侧等价性交叉校验只吃名字），而清单读不出的名字会退回世代比较——方向是"响亮误报"
   // 而非静默放行。反过来在这里拒绝，会让 `familyNames` 变成 null、写面进 `protected-set-unavailable`
@@ -624,9 +617,7 @@ export function resolveRuntimeFamily(
   }
 }
 
-// ---------------------------------------------------------------------------
 // 读面行投影
-// ---------------------------------------------------------------------------
 
 /**
  * 投影里 materialize 值（`file:`/`link:`/本地路径）的掩码。**保留 `file:` 前缀**，
@@ -856,7 +847,6 @@ export function verifyProfileFamilyConsistency(input: {
   // （2026-12 review：R2 在同一状态下是拒装，复验不能反而放行。）
   // 只有 runtimeVersion 未知才会进这里（代臂压根跑不成），所以 `unverified ⊆ family entries`
   // 蕴含 `familyEntries ≥ 1` —— 不存在"0===0 空真"把空族树误报成跳过那条老路。
-  //
   // 注意**不能**把"调用方给了版本事实表、但这个名字不在表里"也改成 skipped（2026-12 复核曾
   // 建议，实测被否）：那会让"没有版本事实的跨代副本"从**响亮失败**退化成**跳过放行**，
   // 方向正是设计禁止的"静默放行拆组合"。缺事实时退回世代比较仍是设计口径（§6.11.4），

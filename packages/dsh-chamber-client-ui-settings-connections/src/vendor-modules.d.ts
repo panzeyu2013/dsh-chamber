@@ -61,7 +61,6 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
   export type InjectFace<I> = I
   export type PropsLocale<N extends string> = Record<string, unknown>
   export type PropsRuntime<S extends string> = Record<string, unknown>
-  /** Augmented by each settings plugin for its own dictionary namespace. */
   export interface LocaleNamespaceMap {}
 }
 
@@ -75,7 +74,6 @@ declare module '@deepseek-ai/cordis' {
     on<K extends string>(name: K, fn: (...args: any[]) => void): () => void
     emit(name: string, ...args: unknown[]): void
     fiber: { dispose(): Promise<void> }
-    /** Service merges the mounted client plugins augment onto Context (chamber's loose face). */
     locale: {
       register(namespace: string, dictionaries: Record<string, Record<string, string>>): void
       bind(namespace: string): (key: string) => string

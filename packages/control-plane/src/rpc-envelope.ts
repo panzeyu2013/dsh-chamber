@@ -97,9 +97,7 @@ export function buildClientRequest(
   return { type: 'client-request', rpcId, method, payload }
 }
 
-// ---------------------------------------------------------------------------
 // Shared host-identity probe contract (single source)
-// ---------------------------------------------------------------------------
 // Every chamber identity/health/readiness probe that shares this package
 // boundary — control-plane local readiness + health (dsh-client.ts
 // probeHostIdentity) and the desktop SSH endpoint probes (ssh-provider.ts

@@ -508,7 +508,6 @@ function GatewayRuntimeSection({
 
   const envGatedRemote = remoteStatus?.source === 'env'
   // ---- live facts for accept-time re-validation (2026-09-11 review-fix F2) ----
-  //
   // WHY a ref mirror: every arm site below hands the in-app dialog a request whose
   // runner is launched on the CONFIRM click — which can land several polls later,
   // because this section re-polls its status every ~3s. A guard read from the
@@ -1458,7 +1457,6 @@ export function DshRuntimeSection({
   const [applyingRegistry, setApplyingRegistry] = useState(false)
 
   // ---- the section's ONE in-app confirmation (2026-09-11 upstream-alignment T2) ----
-  //
   // The armed request and its pending flag live above the shape branch, so the
   // local restart and every gateway mutation share one dialog, one cancel path
   // and one pending discipline. The transitions are the pure machine in

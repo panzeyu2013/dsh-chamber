@@ -98,7 +98,6 @@ export const MAX_GATEWAY_PASSWORD_CHARS = GATEWAY_PASSWORD_MAX_CHARS
 export const MIN_GATEWAY_PASSWORD_CHARS = GATEWAY_PASSWORD_MIN_CHARS
 const GATEWAY_CREDENTIAL_HEADER_PATTERN = GATEWAY_TOKEN_VISIBLE_ASCII_PATTERN
 
-// ---------------------------------------------------------------------------
 // SPKI certificate pinning (design 17 §13.4.2 / S23): shared single source in
 // control-plane spki-pin.ts — re-exported through the dual-path facade. The
 // identity probe AND the control-plane proxy forwarding gate import the SAME
@@ -110,7 +109,6 @@ const GATEWAY_CREDENTIAL_HEADER_PATTERN = GATEWAY_TOKEN_VISIBLE_ASCII_PATTERN
 // rejectUnauthorized:false + agent:false — a wrong-key peer sees zero HTTP
 // headers, credential bytes, or login body before this gate invokes
 // `dispatch`.
-// ---------------------------------------------------------------------------
 
 // Re-exported for module consumers (gateway-session.ts login pinning, tests)
 // — the implementations above come from the shared single source.
@@ -172,7 +170,6 @@ export function gatewayHttpFailureIsTerminal(statusCode: number): boolean {
   return statusCode >= 100 && statusCode < 600
 }
 
-// ---------------------------------------------------------------------------
 // Per-instance gateway credentials (design 17 §2.3/§7/§12): a gateway target
 // may carry a shared bearer TOKEN and/or a login PASSWORD (independent, both
 // nullable — §2.3). Held in main-process memory, mirrored to
@@ -185,7 +182,6 @@ export function gatewayHttpFailureIsTerminal(statusCode: number): boolean {
 // guessed from its characters and can therefore never be sent as plaintext.
 // Never in the registry, never logged, never exposed to the renderer. Entries
 // are dropped on instance removal / explicit clear (§12 删除实例/显式清除即删).
-// ---------------------------------------------------------------------------
 
 /** Encryption boundary for the credential mirror (design 17 §13.4.1):
  * `encrypt`/`decrypt` translate between a plaintext credential and its
@@ -707,7 +703,6 @@ function persistGatewaySecrets(
   durableSecretStorage = storage
 }
 
-// ---------------------------------------------------------------------------
 // Password-login session hooks (design 17 §7.3/§9.3): the provider does NOT
 // own the login exchange — the shell composes the gateway-session manager
 // (gateway-session.ts) onto the provider via configureGatewaySessionProvider
@@ -720,7 +715,6 @@ function persistGatewaySecrets(
 // hooks: the password-session flow is INERT and a password-configured target
 // probes without auth (the old behavior) until the shell wires the complete
 // all-or-none manager surface in; partial hooks are rejected at configuration.
-// ---------------------------------------------------------------------------
 
 /** The session hooks surface mirrors GatewaySessionManager. An empty object
  * disables password-session integration; any active configuration must
@@ -785,9 +779,7 @@ export function gatewaySecretStorageMode(): 'safeStorage' | 'plaintext' {
   return durableSecretStorage
 }
 
-// ---------------------------------------------------------------------------
 
-// ---------------------------------------------------------------------------
 // Gateway endpoint identity verification (design 17 §7 / design 18 §9.3): a
 // gateway transport is serviceable when its authenticated, gateway-owned
 // runtime controller answers — independently of the managed dsh lifecycle.
@@ -795,7 +787,6 @@ export function gatewaySecretStorageMode(): 'safeStorage' | 'plaintext' {
 // blocked/down. (dsh×http was disabled 2026-09 — a plain dsh target's only
 // transport is ssh, whose provider owns the dsh host-identity handshake:
 // session/canOpenWorkspacePath with its legacy session/list fallback.)
-// ---------------------------------------------------------------------------
 
 export const GATEWAY_RUNTIME_IDENTITY = 'dsh-chamber-gateway-runtime'
 
@@ -1275,7 +1266,6 @@ export const gatewayProvider: TransportProvider = {
   },
 }
 
-// ---------------------------------------------------------------------------
 // Desktop-synced chamber host packages (design 17 §9.3, 2026-12 Phase 3):
 // the gateway no longer ships the synced chamber host packages; a connecting
 // desktop uploads its own copies through the authenticated
@@ -1290,7 +1280,6 @@ export const gatewayProvider: TransportProvider = {
 // rebuilt package must bump its version to re-sync (pre-release iteration
 // included). The sync rides the REGISTERED transport origin (tunnel loopback
 // for ssh), with the tunnel authority override for the Host header.
-// ---------------------------------------------------------------------------
 
 /** One local chamber host package ready to sync (main-process files). */
 export interface LocalChamberHostPackage {
@@ -1538,7 +1527,6 @@ export async function syncGatewayChamberPlugins(options: {
   }
 }
 
-// ---------------------------------------------------------------------------
 // Gateway plugin batch apply + folder materialize (design 21 §6.5, plan
 // Phase 4.6): the /chamber/plugins write surface is 202-async — every
 // install/remove submission is accepted onto the gateway's serial executor
@@ -1559,15 +1547,12 @@ export async function syncGatewayChamberPlugins(options: {
 //     after ops were accepted carry the partial outcome so the caller can
 //     show exactly what executed before the failure (restart refusal is a
 //     failure, never silently swallowed).
-//
 // Materialize uploads a desktop-built tgz (folder pick → buildPluginTarball
 // in plugin-tarball.ts) with the x-plugin-name/x-plugin-version headers and
 // maps the 202/400/409/411/413/500 family honestly.
-//
 // All requests ride the REGISTERED transport origin + auth headers + SPKI
 // pin (the sync discipline above): never a renderer-supplied URL or
 // credential; `authority` is the ssh-tunnel Host-header override.
-// ---------------------------------------------------------------------------
 
 /** Batch apply request/option surface (main.ts maps the IPC payload here). */
 export interface GatewayPluginApplyOptions {

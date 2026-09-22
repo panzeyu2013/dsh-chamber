@@ -1,6 +1,5 @@
 /** `sidebar` namespace dictionaries: shell controls + chamber multi-source list copy. */
 
-/** Simplified Chinese dictionary (the key-set source of truth). */
 export const zh = {
   'session.new': '新会话',
   'session.new.label': '新建会话',

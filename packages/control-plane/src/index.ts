@@ -828,7 +828,6 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
   // verdict opens exposure. A candidate can move from ready to degraded,
   // restarting, or error while the full probe is still running; none of those
   // states (nor its port/error detail) may escape through public REST/SSE.
-  //
   // The ONE exception (F1): a start attempt that terminally failed before this
   // incarnation ever reached ready is not a quarantined candidate fact — it is
   // the user-visible reason the local instance cannot start. Masking it as
@@ -1040,11 +1039,9 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
   let stopPromise: Promise<void> | null = null
   let lifecycleEpoch = 0
 
-  // ---------------------------------------------------------------------------
   // Static frontend service (design 05 §7.3 / 04 §5): dist/ + __DSH_BOOT__,
   // assembled in static-serving.ts. Anonymous like every other surface (v1
   // has no authentication). Disabled when webDistDir is not configured.
-  // ---------------------------------------------------------------------------
 
   const staticServing = webDistDir === undefined
     ? null

@@ -44,7 +44,6 @@ export interface MachineCatalog {
    *  Concurrent callers share one probe — every entry asks the same question. */
   refresh(): Promise<void>
   subscribe(listener: () => void): () => void
-  /** Launch one catalog app on one absolute directory path; rejects on failure. */
   launch(appId: string, path: string): Promise<void>
 }
 

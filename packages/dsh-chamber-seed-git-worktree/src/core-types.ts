@@ -1,8 +1,6 @@
 /**
  * core-types.ts — Wire/domain/type surface of the git worktree core.
  *
- * Extracted verbatim from core.ts (B5 split); core.ts re-exports the public
- * names so the package/test import surface is unchanged.
  */
 
 export type MaybePromise<T> = T | Promise<T>

@@ -98,8 +98,6 @@ const hydration = createBridgeHydration<UpdateState, UpdateSurface>({
   slowReProbe: false,
 })
 
-// Start hydration as soon as the module loads (the bundle loads before the
-// preload bridge resolves; the retry chain covers the gap).
 hydration.hydrate()
 
 /** Stable snapshot (null = bridge absent / not hydrated yet). PURE — no side effects. */

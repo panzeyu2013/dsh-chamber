@@ -102,9 +102,6 @@ import { CHILD_LINE_MAX_CHARS, createBoundedLineProcessor } from './bounded-line
 import { getGatewayPassword, getGatewaySessionHooks, getGatewayToken, verifyGatewayPasswordSession, verifyGatewayRuntimeIdentity } from './gateway-provider.ts'
 import { INSTANCE_ID_PATTERN, MAX_INSTANCE_LABEL_CHARS, signalChild } from './transport-provider.ts'
 import { isCredentialBinding, sshCredentialBinding, sshCredentialBindingForEndpoint } from './credential-binding.ts'
-// Shared corrupt/unbound preserve + legacy-`.tmp` sweep mechanics for the
-// owner-only store files (single source, formerly duplicated in the
-// providers/ssh-plugin-journal/chamber-settings).
 import { isPlainRecord, preserveInvalidCredentialFile, preserveUnboundCredentialFile, removeLegacyTmpResidue } from './store-file-hygiene.ts'
 import type { UnboundCredentialFileWording } from './store-file-hygiene.ts'
 import type {
@@ -719,9 +716,6 @@ interface AskpassGeneration {
  */
 const askpassHelpers = new Map<string, Set<AskpassGeneration>>()
 
-/** This store's unbound-preserve wording — the shared mechanics and message
- *  shapes live in store-file-hygiene.ts; only these sentences are
- *  store-specific. */
 const UNBOUND_PASSWORD_FILE_WORDING: UnboundCredentialFileWording = {
   subject: 'legacy SSH password file',
   hasVerb: 'has',

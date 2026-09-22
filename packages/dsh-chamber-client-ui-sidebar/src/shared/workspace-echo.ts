@@ -78,7 +78,6 @@ export interface PendingWorkspace {
    * from `path`.
    */
   title: string
-  /** Epoch ms the echo was recorded; the TTL anchor. */
   at: number
   /**
    * Optional placement anchor (2026-12 revision, second entry point): the host

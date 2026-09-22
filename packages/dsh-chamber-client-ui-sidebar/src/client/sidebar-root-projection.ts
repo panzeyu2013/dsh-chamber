@@ -21,7 +21,6 @@ export function useSidebarProjection() {
   // the render-relevant signature before setState, so even an ungated
   // publisher can never make this list re-render on unchanged content
   // (mirrors the settings bridge's subscribeServers dedupe).
-  //
   // The dedupe baseline is the CURRENTLY RENDERED state (mirrored in a ref,
   // not getServers()): a publish landing in the window between useState's
   // initializer and this effect's subscribe would otherwise be treated as
@@ -226,7 +225,6 @@ export function useSidebarProjection() {
   // account each (`${server.id}/${workspace.id}`; the bucket's id is
   // UNGROUPED_WORKSPACE_ID), so the bucket's updated-mode drags and
   // promotions persist in updatedOrder instead of the manual ungroupedOrder.
-  //
   // The derivation reads the LIVE shared store (getViewPrefs — the same cache
   // updateViewPrefs mutates), NOT this render's viewPrefs snapshot: the
   // effect can flush after a drag commit or another shell's setOrderBy

@@ -17,9 +17,7 @@ export interface SessionTodoSettings {
   enabled: boolean
   /** 会话完成未读时（默认 true）。 */
   onComplete: boolean
-  /** 代理提问等待回答（pending 'question'）时（默认 true）。 */
   onAsk: boolean
-  /** 工具调用/计划审批请求（pending 'approval' | 'plan-review'）时（默认 true）。 */
   onRequest: boolean
 }
 
@@ -68,7 +66,5 @@ export function sessionTodoPatch(
   patch: Partial<SessionTodoSettings>,
 ): Partial<ChamberSettings> {
   // Partial<SessionTodoSettings> 的键全可选，与 ChamberSettings.sessionTodo
-  // （必填块）结构不匹配——经 Partial<ChamberSettings> 断言（partial 语义下
-  // 主进程 deep-merge 接受缺键）。
   return { sessionTodo: patch } as Partial<ChamberSettings>
 }

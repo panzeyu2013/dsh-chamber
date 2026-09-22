@@ -773,19 +773,16 @@ export function SettingsShell(props: SettingsShellProps) {
   }, [])
 
   // ---- settings.onboarding stage (2026-09-11 upstream-alignment T3) ----
-  //
   // Upstream's SettingsRoot mounts the first not-yet-completed ordered
   // `settings.onboarding` entry while the CURRENT SESSION is blank or absent,
   // and paints no chrome of its own. Chamber parity is read from exactly the
   // two facts upstream reads, both already delivered to this component:
-  //
   // - the CTX'S OWN ledger: this shell is that instance's `sidebar.settings`
   //   occupant, and the ctx-side half of its face (slots + locale) is published
   //   by this package's own `apply` in that ctx (settings-source-face.ts);
   // - the CTX'S OWN sessions seat: `props.useSessions` — the same seat the
   //   shell publishes for the panel (upstream: `useSessions` from
   //   PropsRuntime). No seat is invented, and no new fact channel is added.
-  //
   // The stage is deliberately per-ctx, NOT per selected source: a foreign
   // ctx's step would have to be driven through a foreign hook, and two mounted
   // shells selecting the same source would mount the same step twice. MOUNTING is
@@ -820,7 +817,6 @@ export function SettingsShell(props: SettingsShellProps) {
   // switch is not a new run, and resetting on the composite re-mounted an
   // acknowledged or explicitly deferred step over a still-blank session
   // (2026-09-11 review-fix F1; the probe is replayed in test/bridge/onboarding.test.ts).
-  //
   // RESIDUAL (registered deviation, 2026-09-11 review-fix F1): this set is
   // component-local, so a REMOUNT of this shell — the App reclaims the instance
   // and mounts it again — starts an empty set and re-mounts the step upstream

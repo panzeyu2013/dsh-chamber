@@ -19,7 +19,6 @@ function safeDispatchError(reason: unknown): Error {
       if (typeof reason.message === 'string') return reason
     }
   } catch {
-    // Fall through to the separately guarded primitive conversion.
   }
   try {
     const text = String(reason)

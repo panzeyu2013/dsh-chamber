@@ -42,13 +42,11 @@ import {
   PLUGIN_NAME_PATTERN,
 } from './control-plane-module.ts'
 
-// ---------------------------------------------------------------------------
 // Caps — exact mirrors of the gateway route / tgz-scan ceilings (design 21
 // §6.2 / §6.9; routes.ts MATERIALIZE_MAX_BYTES + tgz-scan.ts TGZ_MAX_ENTRIES
 // / TGZ_MAX_UNPACKED_BYTES). test/plugins/plugin-tarball.test.ts pins the literals against
 // the gateway sources so the desktop archive can never exceed what the route
 // accepts.
-// ---------------------------------------------------------------------------
 
 /** Entry-count cap (tar headers incl. directory entries). */
 export const TARBALL_MAX_ENTRIES = 4096
@@ -115,9 +113,7 @@ export interface PluginTarballBuildResult {
   manifest: FolderPluginManifest
 }
 
-// ---------------------------------------------------------------------------
 // ustar header writer
-// ---------------------------------------------------------------------------
 
 /** Width of the ustar `name` field (bytes 0-99). The bound is BYTES: the
  *  retired `archivePath.length > 100` check measured UTF-16 code units, so a
@@ -168,9 +164,7 @@ function paddedBlock(body: Buffer): Buffer {
   return padding === 0 ? body : Buffer.concat([body, Buffer.alloc(padding)])
 }
 
-// ---------------------------------------------------------------------------
 // Folder manifest reading
-// ---------------------------------------------------------------------------
 
 function manifestError(message: string): FolderPluginManifest {
   return { ok: false, error: message }
@@ -282,9 +276,7 @@ export function pluginNameFromFolder(folderPath: string): string | null {
   }
 }
 
-// ---------------------------------------------------------------------------
 // Walk + archive build
-// ---------------------------------------------------------------------------
 
 /** Directory subtrees deliberately excluded from a plugin source archive
  *  (same content pnpm pack would drop). */
@@ -485,14 +477,12 @@ function buildSync(
   return { tar: Buffer.concat(blocks), entries, skipped, manifest }
 }
 
-// ---------------------------------------------------------------------------
 // Bounded tgz manifest reader (roundtrip verification + archive-pick
 // classification, see below): gunzip + locate the manifest pnpm actually
 // INSTALLS — `package/package.json` in npm-pack layout — and read ≤ 64 KiB of
 // its text. A root `package.json` is only a fallback for archives that carry
 // no installed-path manifest at all; when both exist and declare different
 // identities the archive is refused loudly (never a guessed manifest).
-// ---------------------------------------------------------------------------
 
 /** The manifest path pnpm installs from an npm-pack archive (`pnpm add
  *  file:<archive>` extracts `package/*` into the dependency tree). */
@@ -617,7 +607,6 @@ function parseTgzManifestText(text: string): TgzPackageManifest | null {
   return name === null || version === null ? null : { name, version }
 }
 
-// ---------------------------------------------------------------------------
 // Picked-source classification (design 21 archive-pick flows): the materialize
 // pickers (local / ssh / gateway) accept a plugin SOURCE FOLDER (the existing
 // folder import) or a ready `.tgz` plugin ARCHIVE in npm-pack layout (e.g. a
@@ -627,7 +616,6 @@ function parseTgzManifestText(text: string): TgzPackageManifest | null {
 // package manifest. Name/version whitelist + the protected-set judgement stay in
 // each flow (ssh/gateway validate before the remote install; the LOCAL dsh CLI
 // is the local authority) — the same split the folder flows already use.
-// ---------------------------------------------------------------------------
 
 /** Archive filename suffix a pick must carry to be treated as a plugin
  *  package: npm-pack archives are always `<name>-<version>.tgz`. */

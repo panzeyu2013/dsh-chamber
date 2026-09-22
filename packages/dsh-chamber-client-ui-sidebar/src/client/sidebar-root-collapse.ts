@@ -64,7 +64,6 @@ export function useSidebarCollapse(collapsed: boolean, width: number) {
   // here, and the bars would stay drawn over a column nobody is pointing at.
   // The element's own leave stays as the one signal geometry cannot give: a
   // pointer that leaves the window emits no further moves.
-  //
   // The box is measured into a CACHED ref, never per pointermove: each
   // getBoundingClientRect() is a forced synchronous layout read, and the
   // pointer stream delivers far more events than the box changes. The column's

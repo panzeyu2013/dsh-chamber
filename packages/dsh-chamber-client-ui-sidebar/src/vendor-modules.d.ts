@@ -8,9 +8,6 @@
  * packages/renderer/src/vendor-modules.d.ts). The sidebar's own code stays
  * fully checked; the loose faces are the dsh seam.
  *
- * No top-level imports: a top-level import would turn this file into a module
- * and demote every `declare module` below to an augmentation of a module that
- * does not exist here. Types are referenced through inline `import(...)`.
  */
 
 declare module '@deepseek-ai/cordis' {
@@ -113,7 +110,6 @@ declare module '@deepseek-ai/dsh-client-ui-workspace/src/client/navigation.ts' {
 }
 
 declare module '@deepseek-ai/dsh-client-ui-workspace/src/client/subagent-lineage.ts' {
-  /** Descendant counts for one possible parent Session. */
   export interface SubagentDescendantSummary {
     count: number
     runningCount: number

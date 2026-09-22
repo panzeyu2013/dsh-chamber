@@ -1028,7 +1028,6 @@ export function runtimeReportSignature(
   // 签名——App 的运行时事实提交按本签名去重，回执若不入签名，一次「事实没变、
   // 只有回执结算」的上报会被整个丢弃，守卫永远看不到结论（随后误判为「对账
   // 通道无回执」并升级 reconnect/L3，属假升级风暴）。
-  //
   // 只签在 `includeRunning`（= App 的身份校验路径）：**投影**签名
   // （serversProjectionSignature，includeRunning=false）不得因回执变化而重发布
   // ——侧边栏不渲染回执，回执变化对它永远是 churn（与「channel-only running

@@ -140,7 +140,6 @@ export function installEnterToNewline(): () => void {
     // own input pipeline. WebKit (iOS Safari) does NOT support
     // insertLineBreak — fall back to insertText('\n') so Enter never
     // silently dies on the primary mobile platform (P2-1).
-    //
     // execCommand's boolean result only promises "supported and enabled",
     // NOT that the edit happened — engines are documented to return false
     // after actually inserting (and true without inserting). So before

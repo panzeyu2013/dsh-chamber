@@ -573,7 +573,6 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                           // 徽标（visibleSessionCount 已去 ghost）漂移 ±幽灵数。
                           // 窗口切片仍保留 ghost 行（占位防回流，见上），仅
                           // 对外文案减去窗口内的 ghost 数。
-                          //
                           // 2026-09-11 upstream-alignment T11: the disclosure's
                           // OWN window ignores the expansion flag (upstream's
                           // collapsedSessionRows is expansion-independent,

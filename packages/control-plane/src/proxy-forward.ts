@@ -30,13 +30,11 @@ import { startWsHeartbeat } from './ws-heartbeat.ts'
 /** Request body cap (design 03 §3.4, same as the v2 runtime proxy; aligned with the upstream dsh 0.1.2-alpha.4 300MiB request cap / 200MiB image admission). */
 export const MAX_REQUEST_BODY_BYTES = 300 * 1024 * 1024
 
-// ---------------------------------------------------------------------------
 // SPKI certificate pinning (design 17 §13.4.2 / S23): shared single source in
 // spki-pin.ts — the desktop identity probe (gateway-provider.ts) and this
 // proxy core both import it through their own package boundaries, so the two
 // owners can never drift again (they used to carry byte-identical copies).
 // Re-exported here for the instance-proxy gate and existing importers.
-// ---------------------------------------------------------------------------
 
 export {
   attachSpkiPinVerifier,
@@ -497,7 +495,6 @@ export interface ProxyForwardDeps {
   id: string
   /** Log-line prefix (instance-proxy vs gateway-proxy). */
   logPrefix: string
-  /** Injectable outbound request factory (defaults to node:http request). */
   httpRequest?: HttpRequestFactory
   /** Upstream timeout in ms (default UPSTREAM_TIMEOUT_MS; tests inject small values). */
   upstreamTimeoutMs: number
@@ -505,9 +502,7 @@ export interface ProxyForwardDeps {
   longRpcUpstreamTimeoutMs?: number
   /** Long-RPC paths selecting the exemption (default LONG_RPC_PATHS; `[]` disables the exemption entirely). */
   longRpcPaths?: readonly string[]
-  /** Client upload idle timeout in ms (tests inject small values). */
   clientBodyIdleTimeoutMs: number
-  /** WebSocket heartbeat ping cadence in ms (tests inject small values). */
   wsPingIntervalMs: number
   /** Consecutive ping cycles without a browser pong before the splice is torn down. */
   wsPingMissesBeforeTeardown: number
@@ -1294,7 +1289,6 @@ export async function forwardUpgrade(req: ProxyRequest, socket: ProxySocket, hea
     // already aborted the controller and logged their own cause. Counters are
     // deliberately untouched (this is a downstream abandon, not an upstream
     // failure) — the log line is the whole change.
-    //
     // ATTRIBUTION BOUNDARY (2026-12 review): "downstream" here means THIS
     // socket closed, not "the browser chose to leave" — the control plane's own
     // transport revocation (instance-proxy `closeAllStreams` /

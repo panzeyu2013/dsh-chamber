@@ -1097,9 +1097,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     }
   }
 
-  // ---------------------------------------------------------------------------
   // /chamber/runtime actions (design 18 §9.3 route table)
-  // ---------------------------------------------------------------------------
 
   function activationInProgress(): boolean {
     // `disposed` is intentionally sticky: once lifecycle quiescence starts,

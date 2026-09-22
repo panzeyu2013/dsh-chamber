@@ -321,7 +321,6 @@ export class AppWebEntry {
     // Entry creation order carries no semantics (fiber inject waiting owns
     // activation order); creating concurrently lets non-prefetched bundle
     // loads parallelize.
-    //
     // chamber patch (2026-08, version-tolerance): EXTRA rows (the per-instance
     // host-graph rows this shell does not cover) degrade instead of failing
     // the boot. The composite bundles ONE dsh client version; a backend of a
