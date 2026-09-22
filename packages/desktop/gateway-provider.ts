@@ -528,34 +528,98 @@ function migrateLegacyTokenFile(file: string): string | null {
  * instance's password. Transactional add/edit/delete flows use the grouped
  * `setInstanceSecrets` primitive to atomically commit or scrub both gateway
  * credential dimensions for a target-domain generation. */
-export function setGatewayToken(id: string, token: string | null, spec?: TransportInstanceSpec | null): void {
+/** 一个 gateway 凭据维度自己的写入面（design 17 §2.3：token 与 password 是相互独立的
+ *  nullable 凭据）。刻意**没有**布尔开关、没有 kind 分派——每个维度显式给出自己的校验、
+ *  自己的表操作与自己的文案，独立性因此留在类型面上（N8 的硬要求）。 */
+interface GatewayCredentialDimension {
+  /** 仅用于错误文案（`refusing <label> for ...` / `refusing to persist a gateway <label> ...`）。 */
+  label: 'token' | 'password'
+  /** 该维度的取值校验（返回错误文案或 null）。 */
+  validate: (value: string | null) => string | null
+  /** 该维度当前是否持有 id 的值（用于「清除不存在的维度 = 磁盘 no-op」）。 */
+  has: (id: string) => boolean
+  /** 把值写进本次事务副本（含绑定）。 */
+  write: (next: GatewaySecretMaps, id: string, value: string, binding: string | null) => void
+  /** 从本次事务副本移除该维度的值与绑定。 */
+  clear: (next: GatewaySecretMaps, id: string) => void
+}
+
+/** 一次写入的事务副本（四张表全部浅拷贝，成功才整体提交）。 */
+interface GatewaySecretMaps {
+  tokens: Map<string, string>
+  passwords: Map<string, string>
+  tokenBindings: Map<string, string>
+  passwordBindings: Map<string, string>
+}
+
+const GATEWAY_TOKEN_DIMENSION: GatewayCredentialDimension = {
+  label: 'token',
+  validate: gatewayTokenValidationError,
+  has: id => tokens.has(id),
+  write: (next, id, value, binding) => {
+    next.tokens.set(id, value)
+    if (binding === null) next.tokenBindings.delete(id)
+    else next.tokenBindings.set(id, binding)
+  },
+  clear: (next, id) => {
+    next.tokens.delete(id)
+    next.tokenBindings.delete(id)
+  },
+}
+
+const GATEWAY_PASSWORD_DIMENSION: GatewayCredentialDimension = {
+  label: 'password',
+  validate: gatewayPasswordValidationError,
+  has: id => passwords.has(id),
+  write: (next, id, value, binding) => {
+    next.passwords.set(id, value)
+    if (binding === null) next.passwordBindings.delete(id)
+    else next.passwordBindings.set(id, binding)
+  },
+  clear: (next, id) => {
+    next.passwords.delete(id)
+    next.passwordBindings.delete(id)
+  },
+}
+
+/** 两个维度共用的写入驱动：校验 →（清除本维不存在的 id 即 no-op）→ 目标绑定 → 单次
+ *  持久化 + 提交。**另一维度永不被读取或写入**：清除 token 永不触碰 password（反向同理）。 */
+function setGatewayCredential(
+  dimension: GatewayCredentialDimension,
+  id: string,
+  value: string | null,
+  spec?: TransportInstanceSpec | null,
+): void {
   if (id === 'local' || !INSTANCE_ID_PATTERN.test(id)) {
-    throw new Error(`refusing token for invalid instance id ${JSON.stringify(id)}`)
+    throw new Error(`refusing ${dimension.label} for invalid instance id ${JSON.stringify(id)}`)
   }
-  const tokenError = gatewayTokenValidationError(token)
-  if (tokenError !== null) throw new Error(tokenError)
-  // A clear of an id that owns no token is a disk no-op: do not manufacture
-  // or rewrite the secrets file (or make an otherwise-valid clear depend on
-  // that disk write). The password is deliberately NOT consulted here — the
-  // two dimensions are independent.
-  if ((token === null || token === '') && !tokens.has(id)) return
-  const nextTokens = new Map(tokens)
-  const nextPasswords = new Map(passwords)
-  const nextTokenBindings = new Map(tokenBindings)
-  const nextPasswordBindings = new Map(passwordBindings)
-  if (token === null || token === '') {
-    nextTokens.delete(id)
-    nextTokenBindings.delete(id)
+  const error = dimension.validate(value)
+  if (error !== null) throw new Error(error)
+  // A clear of an id that owns nothing in THIS dimension is a disk no-op: do not
+  // manufacture or rewrite the secrets file. The other dimension is deliberately
+  // not consulted — the two dimensions are independent (design 17 §2.3).
+  if ((value === null || value === '') && !dimension.has(id)) return
+  const next: GatewaySecretMaps = {
+    tokens: new Map(tokens),
+    passwords: new Map(passwords),
+    tokenBindings: new Map(tokenBindings),
+    passwordBindings: new Map(passwordBindings),
+  }
+  if (value === null || value === '') {
+    dimension.clear(next, id)
   } else {
     const bindingSpec = spec ?? secretSpecResolver?.(id) ?? null
     const binding = bindingSpec === null ? null : gatewayCredentialBinding(bindingSpec)
-    if (binding === null && secretFile !== null) throw new Error('refusing to persist a gateway token without a matching gateway target binding')
-    nextTokens.set(id, token)
-    if (binding === null) nextTokenBindings.delete(id)
-    else nextTokenBindings.set(id, binding)
+    if (binding === null && secretFile !== null) {
+      throw new Error(`refusing to persist a gateway ${dimension.label} without a matching gateway target binding`)
+    }
+    dimension.write(next, id, value, binding)
   }
-  persistGatewaySecrets(nextTokens, nextPasswords, nextTokenBindings, nextPasswordBindings)
-  commitGatewaySecrets(nextTokens, nextPasswords, nextTokenBindings, nextPasswordBindings)
+  persistGatewaySecrets(next.tokens, next.passwords, next.tokenBindings, next.passwordBindings)
+  commitGatewaySecrets(next.tokens, next.passwords, next.tokenBindings, next.passwordBindings)
+}
+export function setGatewayToken(id: string, token: string | null, spec?: TransportInstanceSpec | null): void {
+  setGatewayCredential(GATEWAY_TOKEN_DIMENSION, id, token, spec)
 }
 
 /** Set or clear the login password for one instance (null/'' = clear) —
@@ -563,29 +627,7 @@ export function setGatewayToken(id: string, token: string | null, spec?: Transpo
  * explicit password clear never touches the token. Write-through like the
  * token setter. */
 export function setGatewayPassword(id: string, password: string | null, spec?: TransportInstanceSpec | null): void {
-  if (id === 'local' || !INSTANCE_ID_PATTERN.test(id)) {
-    throw new Error(`refusing password for invalid instance id ${JSON.stringify(id)}`)
-  }
-  const passwordError = gatewayPasswordValidationError(password)
-  if (passwordError !== null) throw new Error(passwordError)
-  if ((password === null || password === '') && !passwords.has(id)) return
-  const nextTokens = new Map(tokens)
-  const nextPasswords = new Map(passwords)
-  const nextTokenBindings = new Map(tokenBindings)
-  const nextPasswordBindings = new Map(passwordBindings)
-  if (password === null || password === '') {
-    nextPasswords.delete(id)
-    nextPasswordBindings.delete(id)
-  } else {
-    const bindingSpec = spec ?? secretSpecResolver?.(id) ?? null
-    const binding = bindingSpec === null ? null : gatewayCredentialBinding(bindingSpec)
-    if (binding === null && secretFile !== null) throw new Error('refusing to persist a gateway password without a matching gateway target binding')
-    nextPasswords.set(id, password)
-    if (binding === null) nextPasswordBindings.delete(id)
-    else nextPasswordBindings.set(id, binding)
-  }
-  persistGatewaySecrets(nextTokens, nextPasswords, nextTokenBindings, nextPasswordBindings)
-  commitGatewaySecrets(nextTokens, nextPasswords, nextTokenBindings, nextPasswordBindings)
+  setGatewayCredential(GATEWAY_PASSWORD_DIMENSION, id, password, spec)
 }
 
 /** Set or clear BOTH credentials for one instance in a SINGLE atomic persist
