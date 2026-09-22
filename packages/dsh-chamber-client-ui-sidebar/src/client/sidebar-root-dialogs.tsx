@@ -1,5 +1,5 @@
 /**
- * Chamber dialog layers (extracted verbatim from SidebarRoot, 2026-12 split):
+ * Chamber dialog layers:
  * the add-workspace directory browser, the per-source archive manager and the
  * armed workspace-delete confirm. One hook owns the state, the openers and the
  * single-dialog-layer predicate; one component renders the three layers.
@@ -18,7 +18,7 @@ import type { RunActionWithOutcome } from './sidebar-root-actions.ts'
 import cc from './sidebar-chamber.module.css'
 
 /**
- * One armed workspace-delete confirmation (2026-09-11 upstream-alignment T2b).
+ * One armed workspace-delete confirmation.
  * The subject is resolved at ARM time (the row may unmount while the
  * confirmation is up — upstream's own reason for keeping the delete dialog
  * separate from the row, vendor ui-workspace WorkspaceBrowser.tsx:1088-1090).
@@ -40,25 +40,23 @@ export function useSidebarDialogs({ servers, runActionWithOutcome, setRowErrors 
 }) {
   const [addingWorkspace, setAddingWorkspace] = useState<string | null>(null)
   const [addingWorkspaceBusy, setAddingWorkspaceBusy] = useState(false)
-  // chamber (design 24 revision 2026-09): the ARCHIVE MANAGER dialog — one
+  // chamber (design 24): the ARCHIVE MANAGER dialog — one
   // per source. The manager lists the source's archived sessions (metadata
   // rides ChamberServerAggregate.archivedSessions; the dialog issues NO
   // session read of its own) and offers per-row and multi-select purges
   // through the optional sessionIds purge filter. Whole-set deletion has NO
-  // standalone button (2026 user decision): "delete everything" means
+  // standalone button: "delete everything" means
   // ticking the select-all checkbox and confirming the counted
   // delete-selected, so a purge never covers rows the dialog could not list.
-  // Supersedes the v1 server-row preview → native confirm → purge-everything
-  // flow (design 24 §6 as merged); destructive calls stay confirm-gated
-  // INSIDE the dialog.
+  // Destructive calls stay confirm-gated INSIDE the dialog.
   const [archiveCleanupServerId, setArchiveCleanupServerId] = useState<string | null>(null)
-  // Focus restore (review round 2026-09): the manager's opener trash button
+  // Focus restore: the manager's opener trash button
   // regains focus when the dialog closes — keyboard users otherwise land on
   // <body> after the dialog unmounts.
   const archiveCleanupOpenerRef = useRef<HTMLElement | null>(null)
 
   /**
-   * 2026-09-11 review-fix finding 2 (SYMMETRIC closure): at most ONE
+   * SYMMETRIC closure: at most ONE
    * chamber-owned Modal layer may be up at a time, in whichever ORDER the user
    * reaches it. The official Modal has no focus trap (vendor ui-primitives
    * Modal.tsx: a mask + one document-level BUBBLE Escape listener per open
@@ -70,7 +68,7 @@ export function useSidebarDialogs({ servers, runActionWithOutcome, setRowErrors 
    * the archive manager refuses a second layer for).
    *
    * ONE predicate owns the rule and EVERY opener consults it — gating only the
-   * delete arm left the reverse order open (Tab behind the delete confirm's
+   * delete arm would leave the reverse order open (Tab behind the delete confirm's
    * mask → archive manager / add-workspace browser on top):
    *   - `onDeleteWorkspace`     arms the workspace-delete confirm,
    *   - `onOpenArchiveCleanup`  opens the archive manager,
@@ -89,7 +87,7 @@ export function useSidebarDialogs({ servers, runActionWithOutcome, setRowErrors 
       || (self !== 'browser' && addingWorkspace !== null)
   }
 
-  /** 2026-09-11 review-fix finding 2 (symmetric closure): the add-workspace
+  /** Symmetric closure: the add-workspace
    *  entry (the source header's `+`, ServerSection) goes through THIS opener
    *  instead of exposing the raw setter to the section — the single
    *  one-dialog-layer rule must be enforced where the layer is opened, not at
@@ -100,7 +98,7 @@ export function useSidebarDialogs({ servers, runActionWithOutcome, setRowErrors 
   }
 
   const onOpenArchiveCleanup = (server: ChamberServerAggregate): void => {
-    // 2026-09-11 review-fix finding 2: the reverse direction. Reachable from the
+    // The reverse direction. Reachable from the
     // source header while the delete confirm's mask is up (no focus trap), so
     // it must refuse exactly like the other two openers.
     if (otherChamberDialogOpen('archive')) return
@@ -128,7 +126,7 @@ export function useSidebarDialogs({ servers, runActionWithOutcome, setRowErrors 
   }, [servers, archiveCleanupServerId])
 
   /**
-   * Best-effort workspace path for a withdraw fact (2026-09-11 review S3). The
+   * Best-effort workspace path for a withdraw fact. The
    * sidebar projection (`ChamberServerWorkspace`) carries no path, so the only
    * local source is the mounted ctx's own snapshot report on the bridge — read
    * BEFORE the wire call, while the row is still listed. An unmounted source has
@@ -140,7 +138,7 @@ export function useSidebarDialogs({ servers, runActionWithOutcome, setRowErrors 
       .find(row => row.workspaceId === workspaceId)?.path ?? ''
 
   /**
-   * 2026-09-11 upstream-alignment T2b: the ARMED workspace-delete confirm.
+   * The ARMED workspace-delete confirm.
    * Upstream renders this as an in-app Modal (vendor ui-workspace
    * WorkspaceBrowser.tsx:1393-1418 — outline cancel + outline destructive
    * confirm, a description sentence, and a role="status" pending line), never
@@ -148,9 +146,7 @@ export function useSidebarDialogs({ servers, runActionWithOutcome, setRowErrors 
    * state lives on the SHELL (not per row) for upstream's own reason: the
    * deleted row may unmount while the confirmation is still in flight.
    *
-   * 2026-09-11 review-fix finding 2: the retired claim here was "the nav rows
-   * are unreachable behind an open Modal's mask, so this confirm can never
-   * stack over the archive manager's dialog". That is FALSE — the orphan badge
+   * The nav rows ARE reachable behind an open Modal's mask: the orphan badge
    * is an always-rendered, tabbable button OUTSIDE the hover cluster
    * (ServerSection.tsx `cc.orphanBadge`), and the official Modal has no focus
    * trap (vendor ui-primitives Modal.tsx: mask + one document Escape listener
@@ -165,15 +161,14 @@ export function useSidebarDialogs({ servers, runActionWithOutcome, setRowErrors 
    */
   const [deleteTarget, setDeleteTarget] = useState<WorkspaceDeleteTarget | null>(null)
   const [deletePending, setDeletePending] = useState(false)
-  /** 2026-09-11 review-fix finding 3: the last failed delete's message, shown
+  /** The last failed delete's message, shown
    *  INSIDE the dialog (role="alert", upstream WorkspaceBrowser.tsx:1418) —
    *  the row-keyed rowErrors line has no surface once the deleted row has
    *  unmounted, which is exactly why `deleteTarget` lives on the shell. */
   const [deleteError, setDeleteError] = useState<string | null>(null)
   /** Keyboard focus lands inside the dialog on arm (the official Modal moves no
    *  focus itself); the opener is remembered so closing hands focus back —
-   *  native confirm did both, and dropping them would strand a keyboard user
-   *  behind the mask. */
+   *  otherwise a keyboard user would be stranded behind the mask. */
   const deleteBodyRef = useRef<HTMLDivElement | null>(null)
   const deleteOpenerRef = useRef<HTMLElement | null>(null)
   useEffect(() => {
@@ -182,8 +177,8 @@ export function useSidebarDialogs({ servers, runActionWithOutcome, setRowErrors 
   }, [deleteTarget])
   /** The confirm may only stay armed over a live source (mirrors the archive
    *  manager's guard): a source that vanishes or disconnects drops it — a
-   *  delete against a dead instance would fail into the void. 2026-09-11
-   *  review-fix finding 3: the auto-drop is SUSPENDED while a reported failure
+   *  delete against a dead instance would fail into the void. The auto-drop is
+   *  SUSPENDED while a reported failure
    *  is on screen — a delete that failed because its source vanished must not
    *  have its one visible explanation (the in-dialog `role="alert"`) unmounted
    *  with it; that alert stays until the user dismisses the dialog. */
@@ -198,7 +193,7 @@ export function useSidebarDialogs({ servers, runActionWithOutcome, setRowErrors 
     // confirmDeleteWorkspace, so nothing destructive can run before the user
     // accepts the dialog.
     if (deletePending) return
-    // 2026-09-11 review-fix finding 2: refuse to ARM over another chamber
+    // Refuse to ARM over another chamber
     // dialog. Both the archive manager and the add-workspace browser render the
     // official Modal, which has no focus trap: this handler is reachable from
     // the always-rendered orphan badge (tabbable behind either mask), and two
@@ -239,11 +234,11 @@ export function useSidebarDialogs({ servers, runActionWithOutcome, setRowErrors 
     dismissDeleteWorkspace()
   }
 
-  /** Accept the armed confirm: run the SAME keyed action as before (identical
+  /** Accept the armed confirm: run the SAME keyed action (identical
    *  rowErrors reporting), keep the dialog pending while the wire call is in
-   *  flight, and — on success — close it once the action settled. 2026-09-11
-   *  review-fix finding 3 (upstream WorkspaceBrowser.tsx:1117-1120, :1417-1418):
-   *  a FAILURE no longer closes the dialog. The row-keyed rowErrors line stays
+   *  flight, and — on success — close it once the action settled. A FAILURE
+   *  does not close the dialog (upstream WorkspaceBrowser.tsx:1117-1120,
+   *  :1417-1418). The row-keyed rowErrors line stays
    *  (harmless, and the only surface when the row is still mounted), but it has
    *  no surface at all once the deleted row unmounted — precisely the case the
    *  shell-level `deleteTarget` exists for — so the message is also rendered
@@ -257,8 +252,8 @@ export function useSidebarDialogs({ servers, runActionWithOutcome, setRowErrors 
     void runActionWithOutcome(`${target.sourceId}/workspace/${target.workspaceId}/delete`, async () => {
       try {
         const path = workspacePathForFact(target.sourceId, target.workspaceId)
-        // chamber (2026-09-11 review S3 / 2026-12 收口, design 05 §2.2.1): the
-        // WITHDRAW half of the workspace echo now rides the single funnel — the
+        // chamber (design 05 §2.2.1): the
+        // WITHDRAW half of the workspace echo rides the single funnel — the
         // wire call and the fact publish together, for the ROW's own source
         // (never for the publishing shell). An unmounted source has no
         // authoritative baseline listing this workspace, so
@@ -268,14 +263,14 @@ export function useSidebarDialogs({ servers, runActionWithOutcome, setRowErrors 
         await deleteWorkspaceForSource(target.sourceId, target.workspaceId, path)
         chamberBridge.requestRefresh(target.sourceId)
       } catch (reason) {
-        // The dialog's own copy of the failure (finding 3). Rethrown so the
-        // keyed rowErrors line keeps reporting it exactly as before.
+        // The dialog's own copy of the failure. Rethrown so the
+        // keyed rowErrors line keeps reporting it.
         setDeleteError(reason instanceof Error ? reason.message : String(reason))
         throw reason
       }
     }).then((ok) => {
       setDeletePending(false)
-      // Success keeps the reviewed behaviour: the removal fact + refresh already
+      // Success: the removal fact + refresh already
       // ran inside the action, and the dialog closes.
       if (ok) dismissDeleteWorkspace()
     })
@@ -322,15 +317,14 @@ export function useSidebarDialogs({ servers, runActionWithOutcome, setRowErrors 
         delete next[key]
         return next
       })
-      // chamber (2026-12, design 05 §2.2 revision): the HOST workspace identity
+      // chamber (design 05 §2.2): the HOST workspace identity
       // is published by the single funnel together with the wire call — the
       // only trustworthy "this workspace exists on that host" fact reachable
       // without a mounted shell. The unary fallback derives its groups from
       // session cwds (a brand-new workspace has none yet) and a previously-
       // pushed source keeps its workspace set frozen, so without the echo the
-      // row only appeared after the user clicked that server (2026-12 field
-      // report). The App echoes it immediately; the mounted follow baseline
-      // converges later.
+      // row appears only after the user clicks that server. The App echoes it
+      // immediately; the mounted follow baseline converges later.
       createWorkspaceForSource(sourceId, path)
         .then(() => {
           setAddingWorkspace(null)
@@ -360,7 +354,7 @@ export function useSidebarDialogs({ servers, runActionWithOutcome, setRowErrors 
   }
 }
 
-/** The three dialog layers, rendered at the shell root exactly as before. */
+/** The three dialog layers, rendered at the shell root. */
 export function SidebarRootDialogs({ dialogs, servers, t, directoryBrowserT }: {
   dialogs: ReturnType<typeof useSidebarDialogs>
   servers: readonly ChamberServerAggregate[]
@@ -388,7 +382,7 @@ export function SidebarRootDialogs({ dialogs, servers, t, directoryBrowserT }: {
           onClose={browseClose}
         />
       )}
-      {/* chamber (design 24 revision 2026-09): the per-source archive
+      {/* chamber (design 24): the per-source archive
           manager — lists what is archived (grouped by workspace, §6) and
           deletes per-row / selected rows (whole set only via the explicit
           select-all checkbox — no standalone delete-all, §6). Mounted only
@@ -400,14 +394,13 @@ export function SidebarRootDialogs({ dialogs, servers, t, directoryBrowserT }: {
           onClose={closeArchiveCleanup}
         />
       )}
-      {/* chamber (2026-09-11 upstream-alignment T2b): the workspace-delete
-          confirmation — the in-app Modal that replaced the retired native
-          confirm dialog (upstream chrome: outline cancel + outline destructive
-          confirm, a description sentence, a role="status" pending line and a
-          role="alert" failure line, vendor ui-workspace
-          WorkspaceBrowser.tsx:1393-1418). Mounted only
+      {/* chamber: the workspace-delete confirmation — the in-app Modal
+          (upstream chrome: outline cancel + outline destructive confirm, a
+          description sentence, a role="status" pending line and a role="alert"
+          failure line, vendor ui-workspace WorkspaceBrowser.tsx:1393-1418).
+          Mounted only
           while a target is armed; the row that opened it may already be gone.
-          Single-dialog-layer invariant (finding 2, symmetric): this confirm is
+          Single-dialog-layer invariant: this confirm is
           never mounted over another chamber dialog and never under one — all
           three openers (this arm handler, the archive manager's, the
           add-workspace browser's) consult `otherChamberDialogOpen`, so only one
@@ -421,7 +414,7 @@ export function SidebarRootDialogs({ dialogs, servers, t, directoryBrowserT }: {
           ? {}
           : {
             description: deleteTarget.orphaned
-              // 2026-09-11 review-fix finding 5e: the orphan case keeps its own
+              // The orphan case keeps its own
               // copy, but the DIALOG needs a statement (the long-standing
               // `confirm.deleteOrphan` question with its trailing "？" reads as a
               // question under a "删除工作区" title, and that key is still the
@@ -447,7 +440,7 @@ export function SidebarRootDialogs({ dialogs, servers, t, directoryBrowserT }: {
       >
         <div ref={deleteBodyRef} tabIndex={-1}>
           {deletePending && <div className={cc.deleteStatus} role="status">{t('delete.pending')}</div>}
-          {/* finding 3: the failure stays INSIDE the dialog (and the dialog
+          {/* The failure stays INSIDE the dialog (and the dialog
               stays open) — upstream WorkspaceBrowser.tsx:1418. */}
           {deleteError !== null && <div className={cc.deleteError} role="alert">{deleteError}</div>}
         </div>

@@ -1,9 +1,9 @@
 /**
- * Pure display projections for the dsh-runtime section (2026-12 audit phase 3):
- * badge maps, timestamp/registry-error/metadata-component formatting. Moved
- * verbatim out of DshRuntimeSection.tsx; the component keeps orchestration and
- * JSX. No React imports — plain formatting/mapping functions only. Also owns
- * the section RuntimeTranslate alias so component and helpers share one signature.
+ * Pure display projections for the dsh-runtime section: badge maps,
+ * timestamp/registry-error/metadata-component formatting. The component keeps
+ * orchestration and JSX; this module has no React imports — plain
+ * formatting/mapping functions only. Also owns the section RuntimeTranslate
+ * alias so component and helpers share one signature.
  */
 import css from './SettingsShell.module.css'
 import type { SettingsBridgeKey } from '../locales.ts'

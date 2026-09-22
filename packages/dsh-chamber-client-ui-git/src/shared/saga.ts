@@ -38,7 +38,7 @@ export class GitSagaError extends Error {
  *  both carry it). Such a refusal resolves a pending git-remove recovery that
  *  replays the SAME removal as "not removed", so the recovery may be cleared
  *  instead of retrying the same refusal forever (design 08 §6.2 bounded
- *  exception, 2026-09). Saga-minted recoveries (e.g. workspace-delete, which
+ *  exception). Saga-minted recoveries (e.g. workspace-delete, which
  *  exists only after a git-removal receipt) are never pre-mutation proofs and
  *  are excluded by the `recovery === undefined` guard — a future host path
  *  must never emit explicit `retryable: false` from a mutated path. */
@@ -90,7 +90,7 @@ function assertCreateCorrelation(
  *  targetPath under a symlinked $DSH_HOME, or a browser-picked directory).
  *  The host guarantees the returned entity IS the workspace at the requested
  *  path (resolveByPath || create), and the official client never compares —
- *  the same tolerance as the sidebar's decodeWorkspaceCreateValue (2026-09).
+ *  the same tolerance as the sidebar's decodeWorkspaceCreateValue.
  *  Validation stays structural: non-empty workspaceId plus the created
  *  boolean. */
 function assertWorkspaceCorrelation(
@@ -326,11 +326,11 @@ export interface RemoveSagaDeps {
   verifyTerminalRemove(): Promise<RemoveWorktreeResult>
   workspaceDelete(workspaceId: string): Promise<void>
   /** The original removal's optional branch deletion — echoed onto the
-   *  workspace-delete recovery so a replay fingerprint matches (P1-1). */
+   *  workspace-delete recovery so a replay fingerprint matches. */
   deleteBranch?: string
   /** The original removal's discard-changes authorization — echoed onto the
    *  workspace-delete recovery so a force-removal replay stays byte-identical
-   *  (2026-08, design 08 §5.3 amendment). */
+   *  (design 08 §5.3 amendment). */
   discardChanges?: boolean
   ambiguousRecovery(error: unknown): Extract<GitRecovery, { kind: 'git-remove' }> | undefined
 }
@@ -366,12 +366,11 @@ export async function runPreRemoveArchive(
 }
 
 /**
- * NO STOP-THEN-REMOVE HERE (2026-09 final rule, design 08 §5.2): a worktree
- * removal never stops, cancels or deletes a session. What blocks is the host's
- * archived-aware running fact (an archived session, or one under an archived
- * ancestor, is inert), so the git plugin needs no cancel loop at all. The
- * former local `runStopRunningSessions` + its deps were removed; the only
- * cancel/wait implementation left in the repo belongs to the archive manager
+ * NO STOP-THEN-REMOVE HERE (design 08 §5.2): a worktree removal never stops,
+ * cancels or deletes a session. What blocks is the host's archived-aware
+ * running fact (an archived session, or one under an archived ancestor, is
+ * inert), so the git plugin needs no cancel loop at all. The only cancel/wait
+ * implementation in the repo belongs to the archive manager
  * (`stopSessionsForPurge`, design 24 §5).
  */
 

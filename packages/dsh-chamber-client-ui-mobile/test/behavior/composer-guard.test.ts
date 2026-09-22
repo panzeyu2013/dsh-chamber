@@ -1,8 +1,7 @@
 /**
- * Composer visibility guard — BEHAVIORAL tests for the DOM-bound installer
- * (the 2026-12 review's F1/F3/F4/F5/F6/F8): the previous suite pinned only the
- * pure decisions and a source regex, so mutations of the poll, the seat query,
- * the verify loop and the teardown all stayed green.
+ * Composer visibility guard — BEHAVIORAL tests for the DOM-bound installer:
+ * pure decisions and source regexes alone would leave mutations of the poll,
+ * the seat query, the verify loop and the teardown green.
  *
  * Every case runs against test/support/guard-harness.ts: a plain-node DOM
  * double, a window with NO visualViewport (an engine that delivers no viewport
@@ -40,8 +39,8 @@ const spacerOf = (h: GuardHarness): FakeElement => {
 }
 
 test('MOBILE_KBD_VAR equals the custom property the sticky-bottom arm consumes (rename lock)', () => {
-  // F7: renaming the JS constant used to pass the whole suite — the arm in
-  // styles.ts kept consuming the literal. Parse the property name OUT of the
+  // Renaming the JS constant alone would pass the whole suite — the arm in
+  // styles.ts keeps consuming the literal. Parse the property name OUT of the
   // shipped CSS so the two sides can only move together.
   const arm = MOBILE_CSS.match(/\[data-mobile-frame\]\[data-mobile-kbd\][^\{]*\{([^\}]*)\}/)
   assert.ok(arm !== null, 'the single sticky-bottom arm must exist in MOBILE_CSS')
@@ -162,7 +161,7 @@ test('an engine that honors the sticky inset arms with one coherent 352px lift',
 })
 
 test('a requirement that GROWS during the write is corrected within the same sync, on the FINAL lift (F1)', () => {
-  // Narrowed 2026-09: with an unchanged requirement the loop cannot fire
+  // With an unchanged requirement the loop cannot fire
   // (`extra > 0` needs `residual > lift - 8`, while a partially honoured
   // engine leaves `residual <= nextKbdOffset(covered) - lift <= -8`) — a
   // partially honouring engine converges on the next event/poll tick instead.
@@ -171,7 +170,7 @@ test('a requirement that GROWS during the write is corrected within the same syn
   // 400px): the first residual (384px) is worse than the applied lift, so the
   // bounded loop adds exactly the missing delta (48px → total 400) instead of
   // re-applying the whole residual. Every surface must carry that FINAL lift —
-  // the attribute used to stay on the pre-verify target.
+  // not the pre-verify target.
   withGuard({ covered: 336, keyboardGrowthOnFirstWrite: 400 }, h => {
     assert.equal(h.frame.getAttribute(MOBILE_KBD_ATTR), '400')
     assert.equal(h.frame.style.getPropertyValue(MOBILE_KBD_VAR), '400px')
@@ -188,8 +187,8 @@ test('a non-converging engine ends still-covered with the FINAL lift everywhere,
     // KBD_MAX_VERIFY_STEPS times, then REPORTS instead of chasing.
     assert.equal(h.frame.getAttribute(MOBILE_KBD_STATE_ATTR), 'still-covered')
     // attr === var === spacer === the measured need (336 + 8 headroom → 352).
-    // The measured defect was attr=352 / var=1056 / spacer=1056 because each
-    // verify extra re-added the already-applied lift.
+    // The measured defect was attr=352 / var=1056 / spacer=1056, each verify
+    // extra re-adding the already-applied lift.
     assert.equal(h.frame.getAttribute(MOBILE_KBD_ATTR), '352')
     assert.equal(h.frame.style.getPropertyValue(MOBILE_KBD_VAR), '352px')
     const spacer = spacerOf(h)
@@ -206,10 +205,9 @@ test('a non-converging engine ends still-covered with the FINAL lift everywhere,
   })
 })
 /**
- * RESTORED BREAKPOINT / STYLESHEET INVARIANTS (2026-09-21 deletion review).
- * The deleted test/visual/breakpoints.test.ts pinned 27 stylesheet invariants;
- * this section restores the user-visible and accessibility ones compactly into
- * the surviving MOBILE_CSS suite: coarse guards + media-query scoping (desktop
+ * BREAKPOINT / STYLESHEET INVARIANTS. This section pins the user-visible and
+ * accessibility invariants compactly in the MOBILE_CSS suite: coarse guards +
+ * media-query scoping (desktop
  * untouched), drawer layering/chrome, the fullscreen right panel with safe-area
  * insets, the 44px touch floors, the settings-sheet shape, the aria-modal and
  * 16px focus-zoom floors, the viewport tokens and the header shrink order. All
@@ -407,7 +405,7 @@ test('breakpoints: retired mechanisms stay gone and sticky-hover stays suppresse
   assert.ok(coarseAt !== -1 && ruleAt > coarseAt && ruleAt < code.indexOf('@media (max-width: 1023px)'),
     'the suppression must live in the coarse+hover tier, not the touch tier')
   // The keyboard arm rides the plugin frame stamp and the scrollport padding
-  // arm stays removed (it double-lifts the seat).
+  // arm must stay absent (it double-lifts the seat).
   assert.ok(code.includes('[data-mobile-frame][data-mobile-kbd] [data-phase="active"] [data-composer-seat]'))
   assert.equal(code.includes('padding-bottom: var(--chamber-mobile-kbd-offset, 0px) !important;'), false,
     'the scrollport padding arm must stay removed')

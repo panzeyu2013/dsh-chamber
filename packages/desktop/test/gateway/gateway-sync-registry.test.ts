@@ -1,4 +1,4 @@
-/** gateway-sync-registry (design 21 §6.5, Phase 3b): the pure in-memory store of manual
+/** gateway-sync-registry (design 21 §6.5): the pure in-memory store of manual
  *  gateway_plugin_sync re-entry parameters — roundtrip, overwrite, clear-on-null, test-only reset.
  *  Pinned: stored headers are exactly what was stored (never widened); nothing else is exported. */
 

@@ -1,7 +1,7 @@
 /**
  * Gateway wire-protocol credential/session constants — THE single source for
  * the gateway session protocol facts shared by every owner of the gateway
- * transport chain (design 17 §7.1 / §13.5, S23):
+ * transport chain (design 17 §7.1 / §13.5):
  *
  *   - packages/gateway/src/auth.ts + config.ts — the SERVER (cookie issuer /
  *     token & password gates);
@@ -10,13 +10,13 @@
  *   - packages/desktop gateway-session.ts / gateway-provider.ts — the CLIENT
  *     (login exchange, cached-cookie expiry, form validation mirrors).
  *
- * Before this module each owner hard-coded the same facts (cookie name, 12h
- * TTL, 32–4096 visible-ASCII bearer, 12–1024-character password, 4096-char
- * cookie value) with zero cross-side tests: any single-site change passed CI
- * while silently breaking the chain (clock-skewed cookies, rejected tokens).
- * The gateway server and the desktop client both import this module (the
+ * Hard-coding these facts in each owner (cookie name, 12h TTL, 32–4096
+ * visible-ASCII bearer, 12–1024-character password, 4096-char cookie value)
+ * with zero cross-side tests lets any single-site change pass CI while
+ * silently breaking the chain (clock-skewed cookies, rejected tokens). The
+ * gateway server and the desktop client both import this module (the
  * desktop through control-plane-module.ts, the dual-path facade), so the
- * facts can no longer drift between the shapes. Unit choice: the wire
+ * facts cannot drift between the shapes. Unit choice: the wire
  * contract is the SERVER's — seconds for the TTL, characters for the
  * bounds. Owners derive their own clock units locally (e.g. the desktop
  * multiplies TTL by 1000 for Date.now arithmetic and subtracts its own

@@ -2,11 +2,11 @@
 //  StartupSettings.swift
 //  DSHChamber
 //
-//  S2（2026-12 审计）：Swift 启动期 chamber-settings reconcile。Electron flavor
+//  Swift 启动期 chamber-settings reconcile。Electron flavor
 //  在 main.ts:1428-1438 读 <userData>/chamber-settings.json 并应用
-//  keepAwake/launchAtLogin；Swift flavor 此前完全不读 settings 文件——持久化的
-//  keep-awake 重启后静默失效（sidecar-ctx.ts:506-511 声明启动期 reconcile 归
-//  Swift 宿主）。本文件补 keepAwake 一项（settings UI 同一 setKeepAwake 宿主腿）。
+//  keepAwake/launchAtLogin；启动期 reconcile 归 Swift 宿主
+//  （sidecar-ctx.ts:506-511），否则持久化的 keep-awake 重启后静默失效。
+//  本文件实现 keepAwake 一项（settings UI 同一 setKeepAwake 宿主腿）。
 //
 //  语义（与 chamber-settings.ts readSettingsFile 对齐）：
 //  - 缺文件 = 默认（keepAwake off），无日志噪音；
@@ -31,7 +31,7 @@ public enum StartupSettings {
 
     /// 读取 <userDataDir>/chamber-settings.json 的 keepAwake。
     ///
-    /// 与 Electron 的差异（有意，2026-12 三/四/五轮验证登记）：校验严格度整体更高
+    /// 与 Electron 的差异（有意）：校验严格度整体更高
     /// ——重复键（任意层级）、非 UTF-8 编码、>1 MiB、RTL/私用区/非 ASCII 数字主机、
     /// 端口前导 +、IPv6 字面量等一律判损坏（Electron 在这些形态上或放行或只做
     /// WHATWG 归一）；方向恒为 fail-closed，绝不会把 Electron 判损坏的字节流当合法
@@ -54,8 +54,7 @@ public enum StartupSettings {
     }
 
     /// 读取 <userDataDir>/chamber-settings.json 的 launchAtLogin（Electron
-    /// main.ts:1434-1440 启动期重放的对偶；2026-12 双端逐函数核对 S3·D5 /
-    /// S5·F6）。键缺失 / 文件不可用 / 损坏 → nil（本层不动作，绝不猜一个值去
+    /// main.ts:1434-1440 启动期重放的对偶）。键缺失 / 文件不可用 / 损坏 → nil（本层不动作，绝不猜一个值去
     /// 动登录项）；文件级纪律与 readKeepAwake 完全同一套（含 no-follow、inode
     /// 稳定性、重复键与编码拒绝）。
     public static func readLaunchAtLogin(userDataDir: String) -> Bool? {
@@ -63,11 +62,11 @@ public enum StartupSettings {
         case .missing:
             // 文件缺失 = Electron 的默认设置（chamber-settings 默认 launchAtLogin:
             // false）→ 同样要重放 false（注销残留登录项），与每次启动
-            // applyLaunchAtLogin 对偶（2026-12 审查 minor）。
+            // applyLaunchAtLogin 对偶。
             return false
         case .corrupt:
             // 损坏文件：Electron 也回落默认值，但这里选择**不动作**——绝不因为一个
-            // 读不懂的文件去改动系统登录项（有意偏离，已登记在台账）。
+            // 读不懂的文件去改动系统登录项（有意偏离）。
             return nil
         case .ok(let data):
             // 先跑整文件校验（编码/重复键/形状/已知键取值全规）再取键——与 keepAwake
@@ -93,7 +92,7 @@ public enum StartupSettings {
     }
 
     /// 文件级读取与校验（keepAwake / launchAtLogin 共用）。
-    /// 判据并集单源 = `PrivateFS`（2026-12 单源化）：lstat / fstat / 单硬链接 /
+    /// 判据并集单源 = `PrivateFS`：lstat / fstat / 单硬链接 /
     /// O_NOFOLLOW / inode 稳定性 / 1 MiB 尺寸上限（拒绝而非截断）/ 精确长度读取；
     /// 本层只把结果映射为 DataOutcome。
     private static func readValidatedData(userDataDir: String) -> DataOutcome {
@@ -112,13 +111,13 @@ public enum StartupSettings {
     /// **整文件形状**与 Electron readSettingsFile 的 isValidSettingsFile
     /// （chamber-settings.ts:222-262）逐键同规：顶层非对象/非 JSON → corrupt；
     /// 任一已知键类型或取值非法 → corrupt（跨键损坏同样意味着整个文件不可信，
-    /// 绝不因为 keepAwake 恰好合法就静默采信——2026-12 验证轮：旧实现只看
-    /// keepAwake 键，会把 Electron 判为损坏的文件当合法读）；未知键容忍
+    /// 绝不因为 keepAwake 恰好合法就静默采信——只看 keepAwake 键会把
+    /// Electron 判为损坏的文件当合法读）；未知键容忍
     /// （前瞻兼容）；keepAwake 缺省 = Electron 默认 false。
     public static func decodeKeepAwake(fromJSON data: Data) -> ReadOutcome {
         // JSON.parse 只接受 UTF-8：任何 BOM（UTF-8/16/32）与裸 NUL 都必须判损坏，
         // 否则 JSONSerialization 的自动识别会把 Electron 判损坏的文件当合法
-        // （2026-12 第二/三轮验证的 fail-open 组）。
+        // 读入（fail-open）。
         if hasRejectedEncoding(data) {
             return .corrupt(reason: "编码不受支持（BOM/UTF-16/UTF-32/NUL；JSON.parse 只接受 UTF-8）")
         }
@@ -177,7 +176,7 @@ public enum StartupSettings {
     }
 
     /// JSONSerialization 的布尔是 CFBoolean 型 NSNumber；判定单源 =
-    /// `StrictJSONNumber.bool`（2026-12 单源化），防把数字 1/0 静默当真值。
+    /// `StrictJSONNumber.bool`，防把数字 1/0 静默当真值。
     static func isBoolean(_ value: Any) -> Bool {
         StrictJSONNumber.bool(value) != nil
     }
@@ -185,9 +184,8 @@ public enum StartupSettings {
     /// normalizeRegistryOrigin（chamber-settings.ts:133-146）的镜像：https、
     /// 无 userinfo、无路径/查询/片段。按 WHATWG URL 的容错补齐（剥 tab/LF/CR、
     /// 允许省略 `//`、空 query/fragment 视为无、点段含 %2e 归一），并且
-    /// **不做 percent 解码**——/%2f 这类转义必须保持非根路径而被拒绝（2026-12
-    /// 第二轮验证：用 URLComponents 会 percent 解码，把 Electron 判非法的锚点
-    /// 当合法，方向恰好相反）。
+    /// **不做 percent 解码**——/%2f 这类转义必须保持非根路径而被拒绝（用
+    /// URLComponents 会 percent 解码，把 Electron 判非法的锚点当合法，方向恰好相反）。
     static func isAllowedRegistryOrigin(_ raw: String) -> Bool {
         let stripped = raw.filter { $0 != "\t" && $0 != "\n" && $0 != "\r" }
         guard stripped.lowercased().hasPrefix("https:") else { return false }
@@ -199,8 +197,8 @@ public enum StartupSettings {
         guard !authority.isEmpty, !authority.contains("@"), !authority.contains("\\") else { return false }
         let authorityParts = authority.split(separator: ":", omittingEmptySubsequences: false)
         guard let host = authorityParts.first, !host.isEmpty, authorityParts.count <= 2 else { return false }
-        // 端口：纯数字且 1...65535（WHATWG 会拒超界端口；2026-12 第三轮验证：
-        // 此前不查范围，:65536 / :99999999999999999999 这类锚点被放行）。
+        // 端口：纯数字且 1...65535（WHATWG 会拒超界端口：:65536 /
+        // :99999999999999999999 这类锚点必须被拒）。
         if authorityParts.count == 2 {
             let portText = String(authorityParts[1])
             // 纯 ASCII 数字（Int("+80") 会接受前导加号，WHATWG 会拒）。
@@ -208,8 +206,7 @@ public enum StartupSettings {
                   let port = Int(portText), port >= 1, port <= 65535 else { return false }
         }
         // 主机字符集：字母/数字/点/连字符/下划线或非 ASCII；显式拒绝空白、控制
-        // 字符、反斜杠、% 转义与方括号（WHATWG 会拒的 forbidden host code points，
-        // 2026-12 第三轮验证的 fail-open 组）。
+        // 字符、反斜杠、% 转义与方括号（WHATWG 会拒的 forbidden host code points）。
         for scalar in host.unicodeScalars {
             let value = scalar.value
             let asciiAllowed = (value >= 0x30 && value <= 0x39) || (value >= 0x41 && value <= 0x5A)
@@ -217,7 +214,7 @@ public enum StartupSettings {
                 || value == 0x5F /* _ */
             if asciiAllowed { continue }
             // 非 ASCII 面（IDN）：只放行 Unicode **LTR** 字母（U+00AA 这类 Lo 含在内）。
-            // 2026-12 第四/五轮验证：isLetter || isNumber 仍会 fail-open 于 RTL 字母
+            // isLetter || isNumber 会 fail-open 于 RTL 字母
             // （缺 bidi 上下文 = UTS46 CheckBidi 拒绝）、bidi 数字、私用区（Swift 对
             // U+F882 之类报 isLetter true）与 UTS46 不许的字母——这里逐类拒绝，绝不把
             // WHATWG 会拒的主机当合法信任锚。
@@ -279,7 +276,7 @@ public enum StartupSettings {
 
     /// 编码纪律：JSON.parse 只接受 UTF-8 文本。任何 BOM（UTF-8/UTF-16/UTF-32）
     /// 或裸 NUL 字节都判损坏——JSONSerialization 会自动识别 UTF-16/32，从而把
-    /// Electron 判损坏的字节流当合法文档（2026-12 第三轮验证 fail-open 组）。
+    /// Electron 判损坏的字节流当合法文档（fail-open）。
     static func hasRejectedEncoding(_ data: Data) -> Bool {
         let prefixes: [[UInt8]] = [
             [0x00, 0x00, 0xFE, 0xFF],  // UTF-32BE BOM
@@ -341,9 +338,8 @@ public enum StartupSettings {
 
     /// **任意层级**的键重复检测（JSON.parse 取最后一个、JSONSerialization 取
     /// 第一个——同一字节流会得出相反结论，见 decodeKeepAwake 注记）。键名先做转义
-    /// 解码，因此 \u006beepAwake 这类写法与明文同键也能识别（2026-12 第三轮；
-    /// 第四轮验证补上嵌套层级：只扫顶层时 {"notifications":{"enabled":false,
-    /// "enabled":1}} 仍会 fail-open）。
+    /// 解码，因此 \u006beepAwake 这类写法与明文同键也能识别（任意层级都必须扫：
+    /// 只扫顶层时 {"notifications":{"enabled":false,"enabled":1}} 会 fail-open）。
     static func hasDuplicateJSONKeys(_ text: String) -> Bool {
         /// 每个花括号对象一层键集合（栈顶 = 当前对象）。
         var stack: [Set<String>] = []

@@ -1,8 +1,7 @@
 // FrameCodec.swift —— B 桥 NDJSON 帧的编解码（纯函数，可 XCTest 直测）
 //
-// design 25 §4.4.2（B 桥 Swift ↔ sidecar，本机受信 stdio 通道）与 W-05
-// （垂直切片，design 25 §4.4.2）。协议与 sidecar
-// 服务端（packages/desktop/sidecar-entry.ts；W-05 桩 sidecar-stub.ts 同帧族，
+// design 25 §4.4.2（B 桥 Swift ↔ sidecar，本机受信 stdio 通道）。协议与 sidecar
+// 服务端（packages/desktop/sidecar-entry.ts；桩 sidecar-stub.ts 同帧族，
 // 保留为集成测试 fixture）逐字段一致，**字段名勿自行更改**：
 //
 //   请求   {"id":<Int>, "method":"<string>", "payload":<json|null>}
@@ -17,11 +16,11 @@
 //     （fail-loud，绝不静默继续；见 BridgeClient）。
 //   - 单帧上限 4 MiB：`maxFrameBytes` 与 A 桥护栏 TrustGuard.maxMessageBytes
 //     同值同源（design 25 §4.4.1 ③「信封结构/尺寸上限（≤4 MiB）」/ §4.4.2
-//     「帧长上限」）——本文件自带同值常量而不 import TrustGuard，避免
-//     B 桥编解码反向耦合 A 桥文件；两处若需调值必须同步。
+//     「帧长上限」）——由 BridgeLimits 单一定义，本文件只做别名，
+//     避免 B 桥编解码反向耦合 A 桥文件。
 //   - id 单调纪律由 BridgeClient 保证（Swift 是客户端、sidecar 是服务端，
 //     design 25 §3.1：请求必带自增 id，sidecar 原样 echo；事件帧无 id、
-//     sidecar 在 POC 期不发起请求）。本文件只保证“响应必须可配对上 id”。
+//     sidecar 不发起请求）。本文件只保证“响应必须可配对上 id”。
 //   - 帧内 method/event 字符串不校验：语义校验在 sidecar（60 invoke 处理器
 //     原样），方法白名单在 A 桥（MessageHandler/TrustGuard，B12），B 桥只做
 //     结构解码与尺寸护栏（design 25 §4.4.2 护栏条）。
@@ -29,7 +28,7 @@
 //     多余未知键忽略（前瞻兼容 edge:* 等演进）；缺 id / 结构非法 → nil
 //     （调用方 loud）。
 //
-// 纯 Foundation + AnyCodable（无 AppKit/WebKit）；Swift 5 语言模式；macOS 14.4+（支持矩阵下限，见 deviations S-30）。
+// 纯 Foundation + AnyCodable（无 AppKit/WebKit）；Swift 5 语言模式；macOS 14.4+（支持矩阵下限）。
 
 import Foundation
 
@@ -49,16 +48,14 @@ public enum BridgeFrame: Equatable {
 public enum FrameCodec {
 
     /// 单帧（行）上限：4 MiB。单一定义 = `BridgeLimits.maxMessageBytes`
-    /// （2026-12 单源化：A 桥信封与 B 桥帧共用同一预算；原「本文件自带同值常量、
-    /// 两处注释互指」的双写随之中止，TrustGuard 也不再被本文件引用）。
+    /// （A 桥信封与 B 桥帧共用同一预算）。
     public static let maxFrameBytes = BridgeLimits.maxMessageBytes
 
     // MARK: - 信封（仅 encodeRequest 使用；decode 走 classify 的类型判定，
     // 字段名以本结构为线格式权威）
 
     /// Swift → sidecar 请求帧的线格式（`{id,method,payload}`；payload 恒写，
-    /// 缺省载荷以 `.null` 填充——旧 Envelope 的“全字段可选 + 各帧族按需写”形态
-    /// 随 response/event 编码分支一并删除）。
+    /// 缺省载荷以 `.null` 填充）。
     private struct RequestEnvelope: Codable {
         var id: Int
         var method: String
@@ -71,9 +68,7 @@ public enum FrameCodec {
     /// FrameCodecError.frameTooLarge。
     ///
     /// 方向固定：Swift 是 B 桥客户端，只发 request；response/event 是 sidecar →
-    /// Swift 的入站帧族，只经 `classify` 解码——旧 `encode(_:)` 的
-    /// response/event 分支与 FrameCodecError.responseMissingErrorMessage
-    /// 生产零调用（仅测试用），2026-12 审计删除。
+    /// Swift 的入站帧族，只经 `classify` 解码。
     public static func encodeRequest(id: Int, method: String,
                                      payload: AnyCodable?) throws -> Data {
         let envelope = RequestEnvelope(id: id, method: method, payload: payload ?? .null)
@@ -90,7 +85,6 @@ public enum FrameCodec {
 
     /// 已解析顶层 JSON 对象 → 帧（唯一分类器；BridgeClient 每行只解析一次后
     /// 直接调用本函数，edge/notify 两族的分类只在 classify 归 nil 后接手）。
-    /// 旧 `decodeLine(_:)`（String 入口，仅测试使用）2026-12 审计删除——
     /// 生产入站解析只有 BridgeClient.handleIncomingLine 一条（Data 直入）。
     ///
     /// 分类规则（确定性，防歧义帧摇摆）：
@@ -102,15 +96,15 @@ public enum FrameCodec {
     ///     解析不到合法 id 族即 nil；
     ///   - 其余（空行/纯文本/数组顶层等）→ nil。
     ///
-    /// 严格性（与旧 JSONDecoder Envelope 解码逐条对齐，FrameCodecTests 钉住）：
+    /// 严格性（FrameCodecTests 钉住）：
     ///   1. 已知键**存在但类型不符** → 整行 nil——绝不忽略该键继续分类，否则
     ///      `{"id":1,"method":5,"ok":true}` 会从"非法行"变成合法 response 窃取
     ///      pending；显式 null 与键缺省同义（可选字段折叠为 nil）；
     ///   2. id 仅接受非布尔 NSNumber：非浮点存储走无损 Int64 桥接（域外无符号
     ///      大整数 → nil）；浮点存储要求精确可表示且排除 -2^63 边界（JSON 数字
-    ///      已被 JSONSerialization 归一成 Double、原始 token 不可得——与旧
-    ///      JSONDecoder 的极值边界差异见 intValue 注释，已用测试钉住；**不是**
-    ///      MessageHandler.exactInt 的 2^53 上限）；
+    ///      已被 JSONSerialization 归一成 Double、原始 token 不可得——极值边界
+    ///      见 intValue 注释，已用测试钉住；**不是** MessageHandler.exactInt 的
+    ///      2^53 上限）；
     ///   3. ok 仅接受 CFBoolean（`NSNumber(1) as? Bool == true` 是已知陷阱）。
     static func classify(jsonObject: [String: Any]) -> BridgeFrame? {
         let id = field(jsonObject, "id", intValue)
@@ -168,19 +162,17 @@ public enum FrameCodec {
     /// 整数域（id）：非布尔 NSNumber；非浮点存储无损取 Int64（域外无符号大整数
     /// → nil），浮点存储要求精确可表示。
     ///
-    /// 与旧 JSONDecoder 的实测差异（独立差分审查确认；影响面有界并已用测试钉住）：
-    /// JSONSerialization 已把数字归一成 Double、原始 token 不可得，因此
-    ///   - `{"id":9007199254740993e0}` 旧实现按 token 文本给出 …993，本实现给
-    ///     Double 舍入后的 …992；
-    ///   - `{"id":9223372036854775000.0}` 旧实现接受，本实现因 Double 表示不了
-    ///     而拒绝（fail-closed）；
+    /// 边界行为（影响面有界并已用测试钉住）：JSONSerialization 已把数字归一成
+    /// Double、原始 token 不可得，因此
+    ///   - `{"id":9007199254740993e0}` 按 Double 舍入给出 …992；
+    ///   - `{"id":9223372036854775000.0}` 因 Double 表示不了而拒绝
+    ///     （fail-closed）；
     ///   - 浮点存储恰好落在 -2^63 的字面量（如 `-9223372036854775809` 经 Double
-    ///     舍入）本实现**拒绝**——旧实现按 token 文本判越界同样拒绝；整数存储的
-    ///     Int64.min 不受影响。
+    ///     舍入）**拒绝**；整数存储的 Int64.min 不受影响。
     /// 线上 id 恒为 Swift `allocateID()` 的小整数（pending 只认这些），差异输入
     /// 只会落成「未知 id → loud 丢弃」，不影响配对。
-    /// 判定本体 = `StrictJSONNumber.int64(_:domain: .int64Exact)`（2026-12 单源化；
-    /// B 桥其余整数点共用同一实现）。
+    /// 判定本体 = `StrictJSONNumber.int64(_:domain: .int64Exact)`
+    /// （B 桥其余整数点共用同一实现）。
     private static func intValue(_ raw: Any) -> Int? {
         StrictJSONNumber.int64(raw, domain: .int64Exact).map { Int($0) }
     }

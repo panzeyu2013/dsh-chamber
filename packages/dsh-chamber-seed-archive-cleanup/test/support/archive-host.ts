@@ -81,7 +81,7 @@ export class FakeHost implements ArchiveCleanupHost {
    *  live archived set before returning (models a concurrent purge in another
    *  shell that cleared the membership first — gate G2 must not double-clear). */
   removeArchivedOnArchivedRead: { attempt: number; id: string } | null = null
-  /** DECISIVE existence-probe bookkeeping (2026-12 blocker fix). Default
+  /** DECISIVE existence-probe bookkeeping. Default
    *  notion of "content": a record exists in `states`. `contentIds` declares
    *  content-bearing ids the BULK reads omit (the blocker case). */
   readonly contentIds = new Set<string>()
@@ -113,10 +113,8 @@ export class FakeHost implements ArchiveCleanupHost {
     // persistence.list()): its live leg keeps serving a header for every
     // ATTACHED session even after that session's content is gone, so a resident
     // member never becomes record-less while the process lives (vendor
-    // session-query corpus.ts). Model it — a fixture that returned only the
-    // durable states made a resident member look record-less on the rerun,
-    // which is what let the old "the rerun plans no tree and stays silent"
-    // assertion pass (2026-13 review).
+    // session-query corpus.ts). Model it: a fixture returning only the
+    // durable states would make a resident member look record-less on the rerun.
     const attached = new Set([...this.live, ...this.loaded])
     const liveOnly = [...attached]
       .filter(id => !this.states.has(id))
@@ -139,7 +137,7 @@ export class FakeHost implements ArchiveCleanupHost {
 
   /** Attach this id when the orphan sweep probes content — i.e. AFTER every
    *  tree deletion and BEFORE the single archived-set write. That is the late
-   *  window the final live re-check exists for (2026-13 review). */
+   *  window the final live re-check exists for. */
   attachOnSweepProbe: string | null = null
 
   async hasStoredContent(sessionId: string): Promise<boolean> {

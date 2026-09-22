@@ -737,7 +737,7 @@ test('unknown management paths answer 404 not_found', async () => {
   try {
     for (const path of [
       '/api/projects', '/api/sessions', '/api/events', '/api/projects/capabilities', '/api/session/x/message',
-      // Route segment-count violations (2026-11, H3): extra segments on
+      // Route segment-count violations: extra segments on
       // exact-length routes must not reach the handler.
       '/health/x', '/api/host/logs/extra', '/api/host/health-events/x',
     ]) {

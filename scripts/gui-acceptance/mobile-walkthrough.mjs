@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
- * CDP 移动档走查（`--mobile`；STATUS 2026-09-13 移动档开放项 ⑤ / design 17 §18.6
- * 「CDP 设备模拟 + 真机抽检」里**缺失的那一半**）。
+ * CDP 移动档走查（`--mobile`；design 17 §18.6
+ * 「CDP 设备模拟 + 真机抽检」的 CDP 设备模拟的一半）。
  *
  * 与桌面走查（walkthrough.mjs）的关系：同一条 CDP 连接方式（`./cdp.mjs` 的
  * `discoverPageTarget` + `CdpSession`，零依赖、Node 内置 fetch/WebSocket）、
@@ -25,7 +25,7 @@
  *   M-8 WebSocket 帧捕获（`Network.webSocketFrameSent/Received`，落盘 JSON）
  *   M-9 走查期间的控制台/网络观察（观察项，判定沿用桌面走查的容忍表）
  *
- * 脱敏的**已知边界**（2026-12 第三轮复核）：能识别五种键名族（…token / …key /
+ * 脱敏的**已知边界**：能识别五种键名族（…token / …key /
  * authorization / cookie / password / secret / credential / session / sid / jwt）与
  * URL 查询串、JSON 转义形、`\u0022` 形；但**跨帧拼接**的凭据、URL **路径段/矩阵参数**里的
  * 值、以及 `webSocketFrameError.errorMessage` 里的自由文本，只有在值本身来自环境变量
@@ -201,8 +201,7 @@ export async function runMobileWalkthrough({
   env = process.env,
   // Test seams (defaults are the real CDP paths). Injectable so the whole run —
   // every sink the credentials could reach — is covered by a hermetic test
-  // instead of only by a live browser (2026-12 third review: the wiring fixes had
-  // no automated coverage at all).
+  // instead of only by a live browser.
   discover = discoverMobileTarget,
   connect = (webSocketDebuggerUrl) => CdpSession.connect(webSocketDebuggerUrl),
 } = {}) {
@@ -270,8 +269,8 @@ export async function runMobileWalkthrough({
     await session.reload()
     await sleep(3_000)
     session.beginObservationWindow()
-    // The mount wait used to be swallowed (`.catch(() => {})`): a 500/login page
-    // then produced a fully green walkthrough, because the emulation and
+    // The mount wait must not be swallowed (`.catch(() => {})`): a 500/login page
+    // would then produce a fully green walkthrough, because the emulation and
     // overflow legs pass on ANY page. Record it — INFO by default (the
     // walkthrough is also used to inspect a page mid-load), FAIL under
     // --require-run.
@@ -299,7 +298,7 @@ export async function runMobileWalkthrough({
 
     addGated('M-3', '无横向溢出（设备宽基准；task 的 innerWidth 断言一并报告）', overflowVerdict(deviceFacts, device))
 
-    // M-4 is GATED (2026-12 review F9): stamped = PASS with the keyboard
+    // M-4 is GATED: stamped = PASS with the keyboard
     // guard's diagnosis surface in the evidence; unstamped stays INFO for a
     // walkthrough of a page that simply lacks the plugin, but --require-run
     // (the "this leg must really execute" mode) turns it into a FAIL.
@@ -338,8 +337,8 @@ export async function runMobileWalkthrough({
 
     // ---- 帧落盘（脱敏后；--ws-frames off 不落盘） ----
     // 凭据可以出现在 URL 查询串里（`?token=…`），不只出现在帧载荷里：每个要落盘的
-    // 字符串都过一遍 redactSecrets（2026-12 review：旧版只脱敏了 payload，url /
-    // meta.target / netFailures 原样写盘，等于把凭据写进了持久层）。
+    // 字符串都过一遍 redactSecrets（url /
+    // meta.target / netFailures 同样落盘，漏一处等于把凭据写进了持久层）。
     const framesPath = wsFrames === 'off' ? null : path.join(outDir, 'mobile-ws-frames.json')
     if (framesPath !== null) {
       writeFileSync(framesPath, JSON.stringify({

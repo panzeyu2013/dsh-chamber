@@ -1,20 +1,19 @@
 /**
- * Pure judgement layer of the CDP mobile walkthrough (task: STATUS 2026-09-13
- * 移动档开放项 ⑤ —— `scripts/gui-acceptance/` 只有桌面走查，没有设备模拟)。
+ * Pure judgement layer of the CDP mobile walkthrough.
  *
  * 与 `checks.mjs` 同一套纪律：这里没有 CDP、没有 DOM、没有 fs —— 只有
  * 「把页面测出来的事实判成 PASS / FAIL / INFO」的纯函数与那两条**页面内探测
  * 表达式**。于是判定逻辑可以用合成事实做负例测试（mobile-checks.test.mjs），
  * 而驱动层（mobile-walkthrough.mjs）只负责连 CDP、装模拟、测量、落盘。
  *
- * 设备模拟的实证结论（Electron 41 / Chromium，2026-09 本机实测；这三条是**测量
+ * 设备模拟的实证结论（Electron 41 / Chromium 本机实测；这三条是**测量
  * 边界**，移动档的任何模拟结论都要按它们打折）：
  *   1. `Emulation.setTouchEmulationEnabled({enabled:true})` 是**唯一**能让
  *      `(pointer:coarse)` / `(hover:none)` / `(any-pointer:coarse)` 成立的手段
  *      （maxTouchPoints > 0 ⇒ Blink 的触摸设备判定）；
  *   2. `Emulation.setEmulatedMedia` 的 `pointer`/`hover` 特性被**忽略**——
  *      同一调用里 `prefers-color-scheme` 生效、`pointer`/`hover` 不生效，
- *      所以「用媒体特性覆写伪造 pointer:coarse」这条路不通（重要限制，已登记）；
+ *      所以「用媒体特性覆写伪造 pointer:coarse」这条路不通（重要限制）；
  *   3. `Emulation.setDeviceMetricsOverride({mobile:true})` 单独**不会**翻转
  *      pointer 媒体特性，且会把 `window.innerWidth` 变成**布局视口**宽度
  *      （收缩适配：390 的设备宽 + 900 宽的内容 ⇒ innerWidth 报 900），
@@ -23,7 +22,7 @@
  *      两条都算：设备宽（clientWidth）为准，innerWidth 一并报告并注明收缩适配。
  */
 
-/** 移动档设备模型（默认 390×844 / DPR 3 —— STATUS ⑤ 里点名的手机档）。 */
+/** 移动档设备模型（默认 390×844 / DPR 3）。 */
 export const MOBILE_DEVICE = Object.freeze({
   width: 390,
   height: 844,
@@ -106,12 +105,12 @@ export const DEVICE_FACTS_EXPRESSION = `(() => {
     mobileRoles: [...document.querySelectorAll('[data-mobile-role]')].map(el => el.getAttribute('data-mobile-role')),
     pluginStyle: document.querySelector('style[data-plugin="dsh-chamber-client-ui-mobile"]') !== null,
     // 键盘守卫（composer.ts installComposerVisibilityGuard）的诊断面：M-4 的
-    // 激活证据不再只是「frame 打了标」——已生效的 data-mobile-kbd 帧、state
+    // 激活证据不止「frame 打了标」：已生效的 data-mobile-kbd 帧、state
     // 取值（armed | idle | no-seat | no-frame | still-covered）与 spacer 高度
     // 决定「插件激活了但键盘面没有生效」能不能被看见。
     mobileKbdFrames: document.querySelectorAll('[data-mobile-frame][data-mobile-kbd]').length,
     // 状态面在 frame 与 <html> 上各镜像一份：按载体分别收集，否则同一状态恒出现
-    // 两次，走查证据会被读成「两个 frame / 两个载体」（2026-09 复核）。
+    // 两次，走查证据会被读成「两个 frame / 两个载体」。
     mobileKbdStates: [...document.querySelectorAll('[data-mobile-kbd-state]')]
       .map(el => (el.tagName === 'HTML' ? 'html:' : 'frame:') + el.getAttribute('data-mobile-kbd-state')),
     mobileKbdSpacers: [...document.querySelectorAll('[data-mobile-kbd-spacer]')]
@@ -207,8 +206,8 @@ export const HEADER_FACTS_EXPRESSION = `(() => {
  * @param {object} facts - {@link DEVICE_FACTS_EXPRESSION} 的结果。
  * @param {object} device - {@link MOBILE_DEVICE} 形状。
  * @returns {{ok: boolean, evidence: string}} 媒体特性不成立时硬失败——此后所有
- *   几何断言测到的都是**桌面**布局，整轮走查没有意义；这正是 task 要求「明确
- *   报告 CDP 能否伪造 pointer:coarse」的那一条。
+ *   几何断言测到的都是**桌面**布局，整轮走查没有意义；「明确报告 CDP 能否
+ *   伪造 pointer:coarse」指的正是这条。
  */
 export function deviceEmulationVerdict(facts, device = MOBILE_DEVICE) {
   const mediaOk = facts.pointerCoarse === true && facts.hoverNone === true
@@ -226,7 +225,7 @@ export function deviceEmulationVerdict(facts, device = MOBILE_DEVICE) {
  * 横向溢出判定。两条都算：
  *   - **设备宽基准**（`document.documentElement.clientWidth`，= 模拟设备宽）：
  *     内容比设备宽 = 真的溢出；
- *   - task 写的 `scrollWidth <= innerWidth + 1`：在 `mobile:true` 的收缩适配下
+ *   - `scrollWidth <= innerWidth + 1`：在 `mobile:true` 的收缩适配下
  *     innerWidth 会膨胀到内容宽，这条会假绿——所以它成立**不算通过**，只是
  *     被一起报告；它不成立就一定溢出。
  *
@@ -272,10 +271,10 @@ export function headerFirstRowVerdict(facts, maxPx = HEADER_FIRST_ROW_MAX_PX) {
  *
  * 两条信号：
  *   - **行盒数 > 1**（精确）：`Range.getClientRects()` 对每个行盒返回一个 rect；
- *   - **高度 > 行高 ×1.5**（task 点名的启发式）：只对「文本叶子」生效——无元素
+ *   - **高度 > 行高 ×1.5**（启发式）：只对「文本叶子」生效——无元素
  *     子节点、非交互控件（button/a/input…）、且 `display` 不是 flex/grid/contents。
  *     不设这个门槛，44px 高的图标按钮（`line-height: normal`）会全部假阳
- *     （本机实测踩过：三个 44×44 的 header 按钮被判成「换行」）。
+ *     （本机实测：三个 44×44 的 header 按钮会被判成「换行」）。
  *
  * `white-space: nowrap` 的元素按定义不换行（它的溢出是裁切问题，另论）。
  *
@@ -323,9 +322,8 @@ export function hitBoxVerdict(facts, minPx = HIT_BOX_MIN_PX) {
  * spacer 高度）。
  *
  * 未打标仍是 INFO 而不是硬 FAIL —— 可能本实例根本没装移动插件（对着别的实例
- * 走查）。但这条腿现在走 `addGated`/`applyRequireRun`：走查一旦用
- * `--require-run` 声明「插件必须在场」，INFO 就被改判 FAIL，不再靠人工注意
- * （2026-12 review F9：此前它连 --require-run 都不理，M-4 永远是 INFO）。
+ * 走查）。但这条腿走 `addGated`/`applyRequireRun`：走查一旦用
+ * `--require-run` 声明「插件必须在场」，INFO 就被改判 FAIL，不再靠人工注意。
  */
 export function pluginActivationVerdict(facts) {
   const stamped = facts.mobileFrames > 0
@@ -377,7 +375,7 @@ export function applyRequireRun(verdict, requireRun) {
  * and the summary is persisted (report md+json) and printed. `redact` is applied
  * to every snippet BEFORE slicing, so a handshake frame carrying
  * `Authorization: Bearer …` cannot ride the summary past the redaction the frame
- * FILE goes through (2026-12 review).
+ * FILE goes through.
  *
  * @param {Array<{direction: string, url?: string, opcode?: number, payload?: string, at?: number}>} frames
  * @param {{redact?: (value: string) => string}} [options]
@@ -408,8 +406,8 @@ export function summarizeWebSocketFrames(frames, { redact = value => value } = {
  * `token|authorization|cookie|password|secret=`，以及 `"token": …` 这类键值，
  * 都替换成 `***`。凭据只从环境变量来、永不打印——WS 帧与 URL 是唯一会把凭据
  * **间接**带出来的通道（握手/首帧/查询串可能带上它），所以任何落盘路径都必须过
- * 这一层（2026-12 review：旧版只脱敏 payload，且键值规则要求 ≥4 字符，`?token=1`
- * 这种短值会原样留下）。
+ * 这一层：只脱敏 payload 不够，键值规则也不设长度下限，`?token=1`
+ * 这种短值同样是凭据。
  *
  * @param {string} text
  * @param {string[]} secrets - 需要完全抹掉的值（去重、忽略空串）。
@@ -422,13 +420,12 @@ export function redactSecrets(text, secrets) {
     out = out.split(secret).join('***')
   }
   // JSON escapes one quote as `\u0022`, so an embedded payload can spell the same
-  // shape the rules below match — normalize that spelling first (2026-12 third
-  // review: `{"payload":"{\u0022Authorization\u0022:…}"}` went through untouched).
+  // shape the rules below match — normalize that spelling first, or
+  // `{"payload":"{\u0022Authorization\u0022:…}"}` rides through untouched.
   out = out.replace(/\\u0022/g, '"')
   // The key names that carry credentials. A prefix is allowed so the real-world
   // spellings match too: `access_token`, `refreshToken`, `x-api-key`,
-  // `sessionId`, `apiKey` (2026-12 third review: `apiKey`/`x-api-key`/`credential`
-  // /`sid`/`jwt` values rode through to disk).
+  // `sessionId`, `apiKey`.
   const key = '[A-Za-z0-9_.-]*(?:authorization|cookie|password|passwd|pwd|secret|credential|token|api[-_]?key|session|jwt|sid)'
   return out
     // URL query / fragment: length is irrelevant (a short token is a credential)
@@ -445,8 +442,7 @@ export function redactSecrets(text, secrets) {
     // Every other BARE value (header-dump shapes: `Authorization: Bearer X`):
     // one value token, optionally after an auth scheme. Deliberately does NOT run
     // to the end of the line — `"token":{"kind":"opaque","ttl":30}` is a token
-    // DESCRIPTOR and redacting into it produced unbalanced JSON in the very
-    // evidence a human reads (2026-12 third review), while prose after `token:`
-    // lost its tail.
+    // DESCRIPTOR and redacting into it would produce unbalanced JSON in the very
+    // evidence a human reads, while prose after `token:` would lose its tail.
     .replace(new RegExp(`(${key}(?:\\\\?")?\\s*[:=]\\s*)(?!\\\\?")(?:(?:Bearer|Basic|Digest|Token)\\s+)?[^\\s,}&{\\[]+`, 'gi'), '$1***')
 }

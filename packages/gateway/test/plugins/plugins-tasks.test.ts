@@ -1,5 +1,5 @@
 /**
- * A1 orchestrator tests (design 21 §6.2/§6.3; plan Phase 4.2-4.5 wiring):
+ * A1 orchestrator tests (design 21 §6.2/§6.3):
  * createChamberPluginTasks over REAL plugins-exec (injected fake spawn) +
  * real journal + real installed projection + a fake runtime manager whose
  * beginProfileWrite gate is controllable. Covers: the validation matrix,
@@ -25,8 +25,8 @@ import { writeManifestFixture, scratchDir, waitFor, makeSpawnHarness } from '../
 
 const silent: JournalLogger = { log() {}, warn() {} }
 
-/** Capturing logger: the data-loss fixes are only half-done unless the skip is
- *  LOUD (the audit's failure mode was a calm "removed N orphaned"). */
+/** Capturing logger: a skip must be LOUD, not a calm "removed N
+ *  orphaned". */
 function makeCaptureLogger(): { logger: JournalLogger; logs: string[]; warns: string[] } {
   const logs: string[] = []
   const warns: string[] = []
@@ -51,7 +51,7 @@ class FakeManager implements GatewayRuntimeManagerLike {
   held = 0
   released = 0
   /** 每次 beginProfileWrite 尝试（含 queue_full 拒绝）的事件内时间戳——
-   *  wave 排序断言的确定性锚（2026 flake 修复，见 wave 测试）。 */
+   *  wave 排序断言的确定性锚（见 wave 测试）。 */
   grantedAt: number[] = []
   refusal: { code: ProfileWriteRefusalCode; error: string } | null = null
   /** Runtime mutation execution window (canRun wiring; false = window open). */
@@ -501,7 +501,7 @@ test('a deferred materialize carries its declared version and drains once the ma
   })
   assert.ok(submitted.ok && submitted.deferred === true, JSON.stringify(submitted))
   // The declared version must survive the deferred store: without it the drain's
-  // R2 judgement sees no version and can never accept the intent (2026-12 review).
+  // R2 judgement sees no version and can never accept the intent.
   const stored = h.tasks.deferredIntents()[0]
   assert.equal(stored?.version, '1.2.3')
   h.managerRef.current = h.manager
@@ -515,9 +515,7 @@ test('a deferred materialize carries its declared version and drains once the ma
 test('the drain drops a permanently-refused intent and records it as a failed op (no silent zombie)', async t => {
   const h = makeHarness(t)
   // Inject a deferred intent that the judgement can never accept (its name is part
-  // of the runtime family F of the active workspace). Before the 2026-12 review
-  // this intent was re-submitted on every ready edge forever: refused each time,
-  // never dropped, never journaled — a silent zombie holding a staged archive.
+  // of the runtime family F of the active workspace).
   const deferredPath = deferredIntentsFilePath(h.stateDir)
   mkdirSync(join(deferredPath, '..'), { recursive: true })
   writeFileSync(deferredPath, JSON.stringify({
@@ -542,10 +540,7 @@ test('the drain drops a permanently-refused intent and records it as a failed op
 
 test('drain keeps a protected-set-unavailable intent deferred (gateway state, never a permanent drop)', async t => {
   // routes.ts maps this code to 503 — "the caller may retry once the instance is
-  // up" — and design 21 §6.11.3 lists it as a retryable gateway state. It used to
-  // sit in PERMANENT_DRAIN_REFUSALS, so a queued official-scope install was
-  // deleted for good (only a failed op left) whenever the runtime facts were
-  // momentarily unavailable during the drain (2026-09-13 round-2 review F4).
+  // up" — and design 21 §6.11.3 lists it as a retryable gateway state.
   const h = makeHarness(t)
   // A queued official-scope intent, injected the same way the zombie test does it:
   // this is the state an install reaches when it is deferred while no profile is up.
@@ -748,9 +743,9 @@ test('lease release survives a synchronous terminal (CLI resolution failure on t
 })
 
 // ---------------------------------------------------------------------------
-// Review-fix regressions: drain waves past the queue cap, one controlled
-// restart after drained installs (design 21 §6.3), crash-orphan reaping at
-// reconcile, and the masked outward task projection.
+// Drain waves past the queue cap, one controlled restart after drained
+// installs (design 21 §6.3), crash-orphan reaping at reconcile, and the
+// masked outward task projection.
 // ---------------------------------------------------------------------------
 
 /** Slow-close spawn: children succeed only after `delayMs`, so a burst of
@@ -791,7 +786,7 @@ test('drain WAVES past the queue cap: 10 deferred intents all clear on a healthy
   const spawnBase = makeSpawnHarness()
   // SLOW children (200 ms): a burst of 10 submissions far outpaces the
   // serial executor, so intents 9-10 hit the queue cap and the drain MUST
-  // wave — the pre-fix single-round drain would leave them behind.
+  // wave — a single-round drain would leave them behind.
   const slow = slowOkSpawn(spawnBase, 200)
   const tasks = createChamberPluginTasks({
     stateDir,
@@ -814,8 +809,8 @@ test('drain WAVES past the queue cap: 10 deferred intents all clear on a healthy
   assert.equal(tasks.deferredIntents().length, 10)
 
   // Ready edge: the drain paces itself against the queue cap (8) and clears
-  // every intent once the accepted ops terminate. The pre-fix single-round
-  // drain would stop at 8 (queue_full) — this must reach 10.
+  // every intent once the accepted ops terminate. A single-round drain would
+  // stop at 8 (queue_full) — this must reach 10.
   // (The ten deferral submissions above already consumed ten refused
   // beginProfileWrite calls — baseline the grant counter before the drain.)
   const grantedBaseline = manager.granted
@@ -830,7 +825,7 @@ test('drain WAVES past the queue cap: 10 deferred intents all clear on a healthy
   assert.equal(manager.held, 8, 'exactly the queue cap of leases is held after wave 1 (refused submissions released)')
   // Wave-2 proof: the 11th grant happens only after a first-wave child
   // terminated (~200 ms later) freed a slot — the drain's slot wait is real.
-  // 确定性断言（2026 flake 修复）：不用两次 waitFor 观察点之间的墙钟差
+  // 确定性断言：不用两次 waitFor 观察点之间的墙钟差
   // （轮询滞后会把真实 ~200ms 间隔压缩成 27ms 导致误报），改用事件内时间
   // 戳比较——首次波-2 grant 尝试（attempt 下标 grantedBaseline+10）不得
   // 早于首个波-1 child 的 close 时刻。closeAt 在 close 前落盘、grantedAt 在

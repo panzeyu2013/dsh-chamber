@@ -1,12 +1,12 @@
 /**
- * chamber patch (design 14 D4, extension — sleep/wake stuck-deep-diving fix):
+ * chamber patch (design 14 D4):
  * window/document liveness triggers that force an immediate connection
  * reconnect.
  *
  * ## Why
  *
- * The push carrier (currently the api-gateway `/api/remote.mux` WebSocket;
- * previously the `events.mux` / `events.host` downlinks) has no client-side
+ * The push carrier (currently the api-gateway `/api/remote.mux` WebSocket)
+ * has no client-side
  * heartbeat: after an OS sleep/wake or a network change the socket can
  * silently die (half-open TCP, flushed loopback state) WITHOUT ever firing
  * close/error — the generation loop then stays "connected" forever while
@@ -66,7 +66,7 @@ export interface LivenessTriggerOptions {
    */
   isOnline?: () => boolean
   /**
-   * Window events that BYPASS {@link isOnline} (2026-09 hardening): an OS
+   * Window events that BYPASS {@link isOnline}: an OS
    * wake is the one moment where the browser's offline flag is least
    * trustworthy — a page frozen across a suspend/resume can miss the
    * `online` event entirely and keep reporting `offline` while the link is

@@ -17,18 +17,14 @@ import {
 const HERE = dirname(fileURLToPath(import.meta.url))
 /**
  * 预算上限的独立钉：升级/迁移只能调低；上调必须同时改这里并说明理由——故意的两文件编辑（否则手改 anchors-budget.json
- * 就能把棘轮废掉）。当前钉为整合后的实测值，此后只降不升；批量语义化重锚仍按 D15 在全部在途分支落地后执行，届时逐批调低。
- *
- * 2026-12（remote-status 整合）上调到 1275，与 anchors-budget.json 的 note 同一次：整合前 main（525dc66d）树
- * 实测 665、remote-status 树实测 1279、整合后本树实测 1275，增量全部来自该分支新增的 7 份计划/蓝图文档
- * （它们的「现状盘点」按设计带 file:line 证据锚），main 侧零新增；本次按实测值对齐（无余量）。
+ * 就能把棘轮废掉）。当前上限按本树实测值钉定，只降不升。
  */
 const BUDGET_CEILING = 1275
 
 test('collectFiles：悬空软链与软链环不炸门（Chrome SingletonCookie 形态）', () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-anchors-walk-'))
   try {
-    // .tmp 下的 Chrome 配置：悬空软链（GUI 验收留下的真实形态）。
+    // .tmp 下的 Chrome 配置：悬空软链（GUI 验收的真实形态）。
     mkdirSync(join(dir, '.tmp', 'dev-user-data'), { recursive: true })
     symlinkSync('1374599200779130394', join(dir, '.tmp', 'dev-user-data', 'SingletonCookie'))
     // 非 .tmp 目录里的悬空软链：同样不得让门崩，且不得被当成锚点目标。
@@ -124,7 +120,7 @@ test('checkRegistrySymbols：临时目录上 ok / missing / 歧义不红', () =>
     assert.equal(findings.length, 1)
     assert.ok(findings[0].includes('seat.missing'))
 
-    // 锚点不得越出仓库根（评审实测的 ../ 逃逸面）
+    // 锚点不得越出仓库根（../ 逃逸面）
     const escaping = { entries: [{ id: 'seat.escape', ours: 'pkg', symbols: ['../../outside.ts#f'] }] }
     assert.ok(checkRegistrySymbols(escaping, root).some((item) => item.includes('越出仓库根')))
   } finally {

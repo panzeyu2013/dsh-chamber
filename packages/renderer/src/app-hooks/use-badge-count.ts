@@ -1,5 +1,5 @@
 /**
- * 未读徽标推送的 effect 簇（design 19 §3.7）——2026-12 阶段 3 从 App 抽出的命名 hook。
+ * 未读徽标推送的 effect 簇（design 19 §3.7）。
  *
  * 输入只有两个事实源（completedBySource / runtimeFacts）与 LISTENER_READY 重试预算；
  * 桥面经 window.dshChamber 读取（页面级单例）。App 只传当前事实与预算常量。
@@ -35,14 +35,14 @@ export function useBadgeCount(deps: BadgeCountDeps): void {
   // 通道-only 变化可能重推相同计数值——主进程 setBadgeCount 幂等，无副作用。
   // 桥未就绪（window.dshChamber 异步 expose）时静默跳过
   // ——计数变化发生在运行时上报之后（远晚于桥暴露），首个真实计数不会丢；
-  // 重载后复位为 0 的兜底推送由下方挂载 effect 负责。reject 兜底（review B1）：
+  // 重载后复位为 0 的兜底推送由下方挂载 effect 负责。reject 兜底：
   // 同进程 IPC 偶发拒绝不得让徽标停滞到下一次计数变化——按 LISTENER_READY 预算
   // 有界重推当前计数（badgeCountRef 始终最新），预算耗尽 loud 一次。
   const badgeCountRef = useRef(0)
   const badgeRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const pushBadgeWithRetry = useCallback((attemptsLeft: number): void => {
     const badge = window.dshChamber?.badge
-    // typeof 守卫（review C1）：与设置页 testNotifySurface 同款版本偏斜防护——
+    // typeof 守卫：与设置页 testNotifySurface 同款版本偏斜防护——
     // 旧主进程 + 新渲染端的窗口重建窗口内 badge 面可能缺失 set 方法。
     if (badge === undefined || typeof badge.set !== 'function') return
     void badge.set(badgeCountRef.current).catch(error => {
@@ -59,7 +59,7 @@ export function useBadgeCount(deps: BadgeCountDeps): void {
   useEffect(() => {
     const count = projectBadgeCount(completedBySource, runtimeFacts)
     badgeCountRef.current = count
-    // I3（plan §10）：把 renderer 派发的计数发布成只读回读值，验收可比对
+    // 把 renderer 派发的计数发布成只读回读值，可在测试中比对
     // 「徽标数 == 蓝点集合大小」，无需 IPC 或读主进程状态。
     publishBadgeCount(count)
     pushBadgeWithRetry(retryLimit)

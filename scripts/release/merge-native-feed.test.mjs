@@ -1,5 +1,5 @@
 /**
- * merge-native-feed.test.mjs —— 滚动 beta feed 跨通道合并（S-23；2026-09 增量更新）单测。
+ * merge-native-feed.test.mjs —— 滚动 beta feed 跨通道合并单测。
  *
  * 锁的是 merge-native-feed.mjs 的纯函数：beta 条目逐字保留、final 条目唯一且取最新、
  * 前缀改写只作用于 final 条目、缺 stable feed 时回退保留旧 final、重复版本/无 beta 条目 fail-closed。

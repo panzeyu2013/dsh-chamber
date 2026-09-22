@@ -1,26 +1,22 @@
 // AnyCodable.swift —— B 桥帧载荷的“任意 JSON”值模型（Swift ↔ sidecar，NDJSON）
 //
 // design 25 §4.4.2（B 桥信封 {id,method,payload} / {id,ok,result|error} /
-// {event,payload} 中 payload/result 字段可以是任意 JSON）与 W-05（垂直切片，
-// design 25 §4.4.2：Swift 侧 B 桥客户端原型）。
+// {event,payload} 中 payload/result 字段可以是任意 JSON）。
 // 本类型是 FrameCodec（帧编解码）与 A 桥 MessageHandler（web 桥接对象 → payload、
 // 页面字面量序列化）共享的载荷契约：
 //   - FrameCodec 经本类型的 Codable 编解码信封字段；
-//   - MessageHandler 经 `fromJSONObject(_:)` 单遍转换 web 侧对象（Phase 1 C2；
-//     旧的 JSONSerialization + JSONDecoder 往返已删除），深度上限见下；
-//   - MainWindowController 经 `jsonLiteralText` 单遍写出页面 JS 字面量
-//     （Phase 2 C7）。旧的 `jsonObject`（JSONSerialization 可写投影）生产零
-//     消费点、只服务测试与诊断，2026-12 审计删除；测试侧保留等价的 legacy
-//     基线辅助（AnyCodableTests.legacyJSONObject）。
+//   - MessageHandler 经 `fromJSONObject(_:)` 单遍转换 web 侧对象，深度上限见下；
+//   - MainWindowController 经 `jsonLiteralText` 单遍写出页面 JS 字面量。
+//     测试侧保留等价的 legacy 基线辅助（AnyCodableTests.legacyJSONObject）。
 //
 // 存储取舍（与 MessageHandler.swift 的 case 契约对应，勿擅改）：
 //   - 数值一律以 Double 承载：JSONDecoder 可无损还原 ≤ 2^53 的整数与常规
 //     小数；> 2^53 的整数文本在 JSON 文本 → Double 阶段按 IEEE754 就近取整
-//     （与 JS JSON.parse 的双精度行为同族；POC 载荷无此量级，声明为已知
+//     （与 JS JSON.parse 的双精度行为同族；当前载荷无此量级，声明为已知
 //     边界——id 等整数域字段绝不放入 .number 走 Double）。
 //   - 整值 Double 的文本形态：`jsonLiteralText` 直出整数（3.0 → “3”、-0.0 → “0”）；
-//     B 桥出帧走 JSONEncoder（Double 编码）。NSNumber/JSONSerialization 老口径
-//     已随 `jsonObject` 的删除退出生产面，其语义只由测试的 legacy 基线维持。
+//     B 桥出帧走 JSONEncoder（Double 编码）。NSNumber/JSONSerialization 口径的
+//     语义只由测试的 legacy 基线维持。
 //   - Bool 判别纪律（fromJSONObject）：实测 NSNumber(1) as? Bool 也会成功
 //     （Swift 动态转换不区分数值 NSNumber 与布尔桥接），因此一律先经
 //     CFTypeID 判定（CFBoolean vs CFNumber，CFNull/CFString/CFArray/
@@ -29,7 +25,7 @@
 //   - .null 只表示 JSON 字面 null；“payload 键缺省”与“payload:null”在帧层
 //     都折叠为 nil 可选字段（FrameCodec/本文件注释声明，协议容忍两者）。
 //
-// 纯 Foundation（无 AppKit/WebKit）；Swift 5 语言模式；macOS 14.4+（支持矩阵下限，见 deviations S-30）。
+// 纯 Foundation（无 AppKit/WebKit）；Swift 5 语言模式；macOS 14.4+（支持矩阵下限）。
 
 import Foundation
 
@@ -98,26 +94,25 @@ public enum AnyCodable: Codable, Equatable {
         }
     }
 
-    // MARK: - 单遍 JS 字面量（Phase 2 C7）
+    // MARK: - 单遍 JS 字面量
 
     /// 直接写出 JSON 文本：单遍、无中间对象树。页面字面量出口
     /// （MainWindowController.jsonLiteral(of:)）使用它。
     ///
     /// 同机量级参考（-O，约 800KB result ×60；随机器负载波动）：单遍写出
-    /// 524–532ms vs 旧路径（jsonObject 深拷贝 + JSONSerialization）636–654ms vs
-    /// JSONEncoder 1360–1393ms——既避免深拷贝的内存峰值，也是三者中最快的
-    /// （JSONEncoder 在深层嵌套的 AnyCodable 上反而退化约 2.1×，故不再使用）。
+    /// 524–532ms vs JSONEncoder 1360–1393ms——无深拷贝内存峰值，且更快
+    /// （JSONEncoder 在深层嵌套的 AnyCodable 上反而退化约 2.1×，故不使用）。
     ///
     /// 契约（AnyCodableTests 钉住；测试侧以 legacy 基线辅助做解析后语义等价断言）：
-    ///   - 数字：整值且 Int64 可表示 → 整数文本（与旧行为一致）；0 / -0.0 → "0"
-    ///     （旧 jsonObject 的 Int64(exactly:) 折叠同样丢符号）；其余 → Swift 最短
-    ///     往返表示（JS 求值后 Number 相同）；非有限 → "null"（旧路径会让
-    ///     JSONSerialization 抛 NSException 崩进程，这里诚实降级）。
+    ///   - 数字：整值且 Int64 可表示 → 整数文本；0 / -0.0 → "0"
+    ///     （Int64(exactly:) 折叠丢符号）；其余 → Swift 最短
+    ///     往返表示（JS 求值后 Number 相同）；非有限 → "null"（JSONSerialization 会
+    ///     抛 NSException 崩进程，这里诚实降级）。
     ///   - 字符串：JSON 转义集（引号/反斜杠/控制字符）+ U+2028/U+2029（JS 行
-    ///     分隔符，避免落进源码字面量时的历史坑）。
+    ///     分隔符，避免落进源码字面量时的坑）。
     ///   - 对象键序不保证（与 JSONSerialization/JSONEncoder 同）。
     ///   - 递归深度与载荷树同阶：解码侧已由 fromJSONObject 的 512 上限限制，
-    ///     sidecar 帧进不来超深树；旧路径的 jsonObject 同样是递归的。
+    ///     sidecar 帧进不来超深树。
     public var jsonLiteralText: String {
         var out = ""
         out.reserveCapacity(64)
@@ -201,11 +196,11 @@ public enum AnyCodable: Codable, Equatable {
 
     /// 是否需要 JSON 转义：`"`、`\`、C0 控制字符（< 0x20）或 U+2028/U+2029。
     ///
-    /// Phase 3（2026-09-18 实测）：单遍 UTF-8 扫描，供 writeJSONString 的
+    /// 单遍 UTF-8 扫描，供 writeJSONString 的
     /// 「无转义整段直出」快路径与 jsonUpperBoundByteCount 的尺寸门共用。
     /// U+2028/2029 的 UTF-8 编码是三字节序列 E2 80 A8 / E2 80 A9（自同步编码，
     /// 该前缀无歧义），故用两个回看字节识别——只查 `"`/`\`/控制字符会漏掉
-    /// 它们（历史上是 JS 字面量的坑，AnyCodableTests 有专例）。
+    /// 它们（JS 字面量的坑，AnyCodableTests 有专例）。
     static func requiresJSONEscaping(_ string: String) -> Bool {
         var prev: UInt8 = 0
         var prev2: UInt8 = 0
@@ -220,13 +215,10 @@ public enum AnyCodable: Codable, Equatable {
 
     /// JSON 字符串转义（含 U+2028/U+2029；非 BMP 字符原样保留，UTF-8 直出）。
     ///
-    /// Phase 3 / 3b（2026-09-18）：先做一次 requiresJSONEscaping 扫描，整串无需
+    /// 先做一次 requiresJSONEscaping 扫描，整串无需
     /// 转义（ASCII 路径/代码/日志/base64 主体）时**整段直出**；含转义时走下面的
-    /// 字节缓冲批量写出。两条路径输出与改动前的逐 scalar 实现**逐字节相同**
+    /// 字节缓冲批量写出。两条路径输出**逐字节相同**
     /// （AnyCodableTests 语义用例 + .tmp/perf/swiftbench{4,7,8} 对抗载荷 equal=y）。
-    /// 实测（-O，1 MB 级；bench8 = 对改动前基线的加速）：纯 ASCII 10.9x、
-    /// 引号每 100 字符 10.1x、转义点在末尾 5.4x、控制字符密布 2.1x、
-    /// U+2028/2029 密布 4.1x、CJK+emoji 2.3x。
     private static func writeJSONString(_ string: String, into out: inout String) {
         // 快路径：整串无需转义（ASCII 载荷/路径/base64 主体）→ 整段直出。
         if !requiresJSONEscaping(string) {
@@ -235,14 +227,13 @@ public enum AnyCodable: Codable, Equatable {
             out += "\""
             return
         }
-        // 慢路径（Phase 3b）：字节缓冲 + 干净段批量拷贝。
+        // 慢路径：字节缓冲 + 干净段批量拷贝。
         //
-        // 逐 scalar 的 switch+append 在含转义的大载荷上要 ~17.5 ms/MB（每字符
-        // 一次 append），是页面结果帧在**主线程**上最大的一笔；本实现把「无转义
-        // 的连续字节段」整段拷贝、只在转义点写 2/6 字节，实测（-O，1 MB）：
-        //   引号每 100 字符 17.412→1.9 ms（9.1x）、转义点在末尾 18.650→1.5 ms（12.6x）、
-        //   控制字符密布 15.475→8.2 ms（1.9x）、U+2028/2029 密布 4.820→3.4 ms（1.4x）、
-        //   CJK+emoji 混排 4.135→1.5 ms（2.7x）；纯 ASCII 交给上面的快路径。
+    // 逐 scalar 的 switch+append 在含转义的大载荷上要 ~17.5 ms/MB（每字符
+    // 一次 append），是页面结果帧在**主线程**上最大的一笔；本实现把「无转义
+    // 的连续字节段」整段拷贝、只在转义点写 2/6 字节，实测（-O，1 MB）：
+    //   引号每 100 字符 1.9 ms、转义点在末尾 1.5 ms、控制字符密布 8.2 ms、
+    //   U+2028/2029 密布 3.4 ms、CJK+emoji 混排 1.5 ms；纯 ASCII 交给上面的快路径。
         // 语义：与逐 scalar 路径**逐字节一致**（AnyCodableTests 的语义用例 + 
         // .tmp/perf/swiftbench7 的七类对抗载荷 equal=y）。代价是一次 utf8 数组
         // 拷贝与一次 String(decoding:)（4 MiB 载荷下瞬时多几 MB，可接受）。
@@ -296,10 +287,8 @@ public enum AnyCodable: Codable, Equatable {
 
     // MARK: - 桥接对象 → AnyCodable
 
-    /// JSON 嵌套深度上限（Phase 1 C2）：A 桥围栏（MessageHandler.fence ⑤）与 B
-    /// 桥解码共用本函数的 `maxDepth`，故深度门是**本常量单源**（原
-    /// MessageHandler.maxJSONDepth 与锁步断言已随 fence 预扫描的删除一并移除）。
-    /// **本文件不 import MessageHandler**——AnyCodable 是 A/B 桥共享的载荷模型，
+    /// JSON 嵌套深度上限：A 桥围栏（MessageHandler.fence ⑤）与 B
+    /// 桥解码共用本函数的 `maxDepth`，故深度门是**本常量单源**。
     /// 反向依赖 A 桥文件会造成耦合。
     public static let maxJSONDepth = 512
 
@@ -330,7 +319,7 @@ public enum AnyCodable: Codable, Equatable {
         case CFNumberGetTypeID():
             // JSON 文本里的 `-1e400` 会被 JSONSerialization 解析成 -inf；一旦
             // 落进 AnyCodable，下游 `Int(n)`（EdgePayload.int）会直接 trap 崩
-            // 进程（2026-09 二轮评审 P3）。非有限值一律拒绝（fail closed）。
+            // 进程。非有限值一律拒绝（fail closed）。
             let number = (object as! NSNumber).doubleValue
             guard number.isFinite else { return nil }
             return .number(number)

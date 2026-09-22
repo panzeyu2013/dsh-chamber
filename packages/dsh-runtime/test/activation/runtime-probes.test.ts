@@ -105,11 +105,9 @@ const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..',
 
 /** The pinned `commands/execute` arg descriptor, as the REAL typert gateway
  *  enforces it: an unknown or missing arg field is rejected with
- *  `gateway/arguments-invalid` before the controller runs. The previous fake
- *  threw session/not-found for ANY payload, which is exactly how the mistyped
- *  `attachments` key (never an upstream wire name) shipped green from the
- *  0.1.3-alpha.1 upgrade onward — a fresh install then failed the activation
- *  probe and its local instance was quarantined (2026-09 real-machine find). */
+ *  `gateway/arguments-invalid` before the controller runs. A fake that accepts
+ *  ANY payload would let a mistyped `attachments` key (never an upstream wire
+ *  name) ship green while every fresh install fails the activation probe. */
 const COMMANDS_EXECUTE_ARGS = new Set(['agentId', 'line', 'submittedAttachments'])
 
 function assertCommandsExecuteArgShape(payload: unknown): void {
@@ -153,15 +151,13 @@ test('real probe runner executes the closed read-only set with bounded RPCs', as
   }
 })
 test('the commands/execute probe arg name is locked to the pinned upstream signature', async () => {
-  // 2026-09 real-machine blocker: the probe sent a mistyped `attachments`
-  // (never an upstream wire name) while the runtime declares
-  // `submittedAttachments`, so the typert gateway answered
-  // gateway/arguments-invalid, the activation probe failed and every fresh
-  // install quarantined its local instance — from the 0.1.3-alpha.1 upgrade
-  // until the acceptance round found it. Read the vendored signature read-only
-  // (the open-in lockstep / C1 discipline) and require the probe payload to
+  // The probe must send the runtime's declared third-parameter name
+  // (`submittedAttachments`): the typert gateway answers
+  // gateway/arguments-invalid for anything else and the activation probe fails.
+  // Read the vendored signature read-only
+  // (the open-in lockstep discipline) and require the probe payload to
   // carry exactly the upstream third-parameter name, so a vendor rename can
-  // never silently desynchronize the probe again.
+  // never silently desynchronize the probe.
   const vendorSource = readFileSync(
     join(repoRoot, 'vendor', 'harness-checkout', 'packages', 'interaction', 'commands', 'src', 'index.ts'),
     'utf8',
@@ -188,10 +184,10 @@ test('the commands/execute probe arg name is locked to the pinned upstream signa
 })
 
 test('a failing probe reports its method name verbatim and still redacts paths', async () => {
-  // 2026-09 acceptance finding: the probe error rode the renderer projection as
+  // The probe error must not ride the renderer projection as
   // `commands[path]` because the path sanitizer matches `word/word` from inside
-  // the token — the failing METHOD disappeared from the only surface that shows
-  // a quarantined install. The method name is RPC vocabulary, not path material.
+  // the token — the failing METHOD would disappear from the only surface that
+  // shows a quarantined install. The method name is RPC vocabulary, not path material.
   const fx = fixture()
   try {
     const call: RuntimeProbeCall = async (_base, method, payload) => {
@@ -220,7 +216,7 @@ test('the both-404 legacy diagnosis keeps both method names through a projection
   // The composed text names the required identity method AND `session/list`,
   // which is deliberately NOT part of REQUIRED_ACTIVATION_PROBES. A projection
   // pass carrying only the required set republishes the legacy name as
-  // `session[path]`, so the vocabulary must cover it (2026-09 review).
+  // `session[path]`, so the vocabulary must cover it.
   const fx = fixture()
   try {
     const notFound = (): never => {
@@ -256,7 +252,7 @@ test('the probe text vocabulary covers every required probe name plus the legacy
 })
 
 test('the identity probe accepts value false; the closed set never reads session data', async () => {
-  // 2026 probe-contract: value true AND value false are both healthy — only
+  // The probe contract: value true AND value false are both healthy — only
   // method presence / protocol / controller assembly are under test, and no
   // probe may re-read the session list (its response grows with session data).
   const fx = fixture()
@@ -315,7 +311,7 @@ test('identity 404 legacy session/list fallback: success, double-404, malformed,
       // No raw carrier text, no paths — the closed combined constant wording.
       error: /neither session\/canOpenWorkspacePath nor the legacy session\/list method is registered \(HTTP 404\)/,
     },
-    // The pre-migration row rejected a value without the {items} session list.
+    // A value without the {items} session list is malformed.
     { name: 'legacy answer without items', identity: 404, legacy: 'no-items', expectOk: false, expectWarn: 0, error: /malformed session list/ },
     { name: 'legacy 503 propagates the carrier error', identity: 404, legacy: '503', expectOk: false, expectWarn: 0, error: /service down/ },
     // Only a 404 downgrades; a 401 never falls back.
@@ -701,7 +697,7 @@ test('activationProbeNamesForDomains: full list equals REQUIRED; unknown names t
     [...activationProbeNamesForDomains([])],
     [...PROBE_NAMES_WITHOUT_HOST_DOMAINS],
   )
-  // A drift name (e.g. the pre-2026-12 'archiveCleanup/preview') must FAIL
+  // A drift name (e.g. 'archiveCleanup/preview') must FAIL
   // LOUD — silently dropping it would remove the domain from the expected
   // set AND its run legs, letting a dead domain pass activation (fail-open).
   assert.throws(() => activationProbeNamesForDomains(['not-a-domain']), /unknown chamber host probe domain/)

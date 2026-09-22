@@ -1,9 +1,8 @@
 /**
  * The shared metadata-health projection (dsh-runtime/src/metadata-health-projection.ts).
  *
- * Before the 2026-12 single-sourcing pass the gateway status projection and the
- * desktop startup host carried the same five component predicates and the same
- * needsRecovery rule; this pins the derived facts both hosts publish.
+ * This pins the derived facts both hosts publish: the same five component
+ * predicates and the same needsRecovery rule.
  *
  * Run directly: node packages/dsh-runtime/test/store/metadata-health-projection.test.ts
  */

@@ -1,5 +1,5 @@
 /**
- * Cell dispatch tests (2026-09-11 upstream-alignment T4): the official outlet's keyed
+ * Cell dispatch tests: the official outlet's keyed
  * and list branches, as plain unit tests. The contract is the difference between the
  * raw ledger (`entries`: every live registration) and the shadowing winners per cell
  * (`entriesOfSlot`) — a cell whose registrations all abdicated has no winner but is

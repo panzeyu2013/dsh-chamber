@@ -4,7 +4,7 @@
  * point after every client entry activates.
  * @module @deepseek-ai/dsh-client-web/src/boot
  *
- * > chamber patch (dsh-chamber connection manager, design 05 §6 / design 09):
+ * > Chamber N-ctx sharing seam (design 05 §6 / design 09):
  * > the N-ctx sharing seam in {@link AppWebEntry.run} — one page hosts multiple
  * > shells (one per dsh instance); every boot after the first reuses the
  * > page-level module system from `window.__DSH_MODULES__` (see
@@ -39,7 +39,7 @@
  * shared module table next to the modules bootstrap, and its loader entry is
  * created by the kernel (sweep-checked) so the boot mounts through the
  * `uiRenderer` service it provides. The shell itself never installs the slot
- * renderer (rc.8 moved that into the renderer row).
+ * renderer (that lives in the renderer row).
  */
 import { Context } from '@deepseek-ai/cordis'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
@@ -64,7 +64,7 @@ import './base.css'
 export type BootSeams = Pick<ClientModuleCreateOptions, 'loadBundle'>
 
 /**
- * 启动性能 User Timing 埋点守卫（C2，2026-09 性能审计落点）。本包无法反向
+ * 启动性能 User Timing 埋点守卫。本包无法反向
  * 依赖 renderer，故内联同名守卫；标记名注册表（唯一规范，改名须同步）：
  * packages/renderer/src/perf-marks.ts。只做观测、零业务语义：缺失/抛错静默。
  */
@@ -103,12 +103,12 @@ function describeBootError(reason: unknown): string {
 
 /**
  * AppWebEntry construction options: the module-transport seams plus the
- * chamber patch's per-instance extra boot rows. Backward compatible with the
- * bare `BootSeams` callers used to pass (extraRows is optional).
+ * chamber's per-instance extra boot rows. Backward compatible with callers
+ * that pass a bare `BootSeams` (extraRows is optional).
  */
 export interface AppWebEntryOptions extends BootSeams {
   /**
-   * ## chamber patch (dsh-chamber connection manager, design 05 §6)
+   * ## Chamber extra rows (design 05 §6)
    *
    * Extra client-plugin rows from THIS instance's host boot graph
    * (per-instance: local and remote hosts compose different plugin sets —
@@ -121,7 +121,7 @@ export interface AppWebEntryOptions extends BootSeams {
    */
   extraRows?: BootModuleRow[]
   /**
-   * ## chamber patch (dsh-chamber connection manager, design 05 §4)
+   * ## Chamber context seam (design 05 §4)
    *
    * Per-entry context initializer. N-ctx boots may overlap after the shell's
    * bounded queue timeout, so instance identity and connection base paths must
@@ -155,7 +155,7 @@ export class AppWebEntry {
    * Draw the boot page; {@link run} starts the loader.
    * @param container - Application mount point.
    * @param options - Optional construction options: module transport overrides
-   *   for test environments plus the chamber patch's per-instance extra boot
+   *   for test environments plus the chamber's per-instance extra boot
    *   rows (bundles already pre-loaded by the chamber shell — see
    *   {@link AppWebEntryOptions.extraRows}).
    */
@@ -174,9 +174,9 @@ export class AppWebEntry {
    */
   async run(): Promise<void> {
     try {
-      // chamber patch (design 05 §4): install-or-reuse the page-level module
+      // (design 05 §4): install-or-reuse the page-level module
       // system. The chamber shell installs it BEFORE preloading any host-graph
-      // bundle (ensureWebModuleSystem — first-boot race fix), so run() must
+      // bundle (ensureWebModuleSystem — first-boot race guard), so run() must
       // adopt the parked instance instead of re-installing; the reuse branch
       // also skips the duplicate bootstrap registration.
       this.modules = ensureWebModuleSystem(this.seams)
@@ -231,7 +231,7 @@ export class AppWebEntry {
   }
 
   /**
-   * ## chamber patch (dsh-chamber connection manager, design 05 §6)
+   * ## Chamber runtime context handle (design 05 §6)
    *
    * Public read handle on the settled runtime context: the chamber shell
    * dispatches per-instance session opens through `ctx.sessions` (the
@@ -245,7 +245,7 @@ export class AppWebEntry {
   }
 
   /**
-   * ## chamber patch (dsh-chamber connection manager, design 05 §4)
+   * ## Chamber boot failure report (design 05 §4)
    *
    * The boot failure report (undefined while loading or after a clean settle).
    * run() resolves on boot-chain failures by design — the loading page stays
@@ -296,10 +296,9 @@ export class AppWebEntry {
     // The kernel adopts the modules entry itself (its record is pre-materialized
     // as the module-system bootstrap — see ensureWebModuleSystem) and the
     // ui-renderer entry (its factory is shell-static, registered on the shared
-    // module table in ensureWebModuleSystem — chamber patch, rc.8 baseline
-    // alignment), then the manifest rows, then — chamber patch (design 05 §6 /
-    // design 09) — the per-instance extra client-plugin rows from the host boot
-    // graph. The extra bundles were already executed by the chamber shell, so
+    // module table in ensureWebModuleSystem), then the manifest rows, then
+    // (design 05 §6 / design 09) the per-instance extra client-plugin rows from
+    // the host boot graph. The extra bundles were already executed by the chamber shell, so
     // their factories are registered on the shared module table — loader.create
     // resolves them through internal.import's factories branch without a graph
     // row (the modules view / graphRows has no entry for them;
@@ -321,7 +320,7 @@ export class AppWebEntry {
     // Entry creation order carries no semantics (fiber inject waiting owns
     // activation order); creating concurrently lets non-prefetched bundle
     // loads parallelize.
-    // chamber patch (2026-08, version-tolerance): EXTRA rows (the per-instance
+    // Version tolerance: EXTRA rows (the per-instance
     // host-graph rows this shell does not cover) degrade instead of failing
     // the boot. The composite bundles ONE dsh client version; a backend of a
     // NEWER/older dsh can ship rows the shell cannot run — a row whose id is
@@ -360,7 +359,7 @@ export class AppWebEntry {
   /**
    * Reject entries that failed import/apply or still wait on missing services.
    *
-   * ## chamber patch (2026-08, version-tolerance)
+   * ## Version tolerance
    *
    * `toleratedIds` (the per-instance EXTRA rows) are swept but never fail the
    * boot: a version-skewed foreign row simply marks 'failed' on the boot page
@@ -402,7 +401,7 @@ export class AppWebEntry {
    * Mount through a dependency fiber so replacing uiRenderer remounts the
    * application.
    *
-   * ## chamber patch (2026-08, rc.8 baseline alignment)
+   * ## Bounded uiRenderer wait
    *
    * The `uiRenderer` service arrives from the kernel-adopted ui-renderer
    * entry (sweep-checked like the modules entry — a renderer that fails to
@@ -438,7 +437,7 @@ const MOUNT_TIMEOUT_MS = 15_000
 
 /**
  * The page-level module table + registration sink (design 05 §4 / first-boot
- * race fix, 2026-08).
+ * race guard).
  *
  * The module system cannot arrive through itself: the HTML-installed
  * `window.__ModuleLoader__` facade (queue-mode pending registration sink +
@@ -453,11 +452,11 @@ const MOUNT_TIMEOUT_MS = 15_000
  * The chamber shell (shell.ts bootInstanceShell) calls this BEFORE preloading
  * any host-graph bundle: an extra bundle's script EVALUATES at load (the
  * script load event fires after evaluation) and its top level registers the
- * factory through the sink — so the sink must exist first. The old order
- * (preload → run() install) let a first-ever boot's extra scripts evaluate
- * before the sink existed; the official bundles' unguarded top-level handoff
- * (`window.__ModuleLoader__.load(...)`) threw, the factory was never
- * registered, and the boot failed with a confusing "cannot resolve".
+ * factory through the sink — so the sink must exist first. Preloading first
+ * would let a first-ever boot's extra scripts evaluate
+ * before the sink exists; the official bundles' unguarded top-level handoff
+ * (`window.__ModuleLoader__.load(...)`) throws, the factory is never
+ * registered, and the boot fails with a confusing "cannot resolve".
  *
  * Idempotent: the first call installs the facade, creates the module system
  * (switching the facade to live-registration mode) and parks it on
@@ -485,7 +484,7 @@ export function ensureWebModuleSystem(seams?: BootSeams): ClientModuleSystem {
   // the same package's ordinary bundle and the facade materializes it.
   // The facade contract carries a registration queue. A host that installed a
   // LIVE-mode facade instead makes these reads an opaque TypeError, so state
-  // the requirement once with the reason (2026-09 audit — the composite cannot
+  // the requirement once with the reason (the composite cannot
   // work in live mode, which is why the queue-mode facade is installed above).
   const pendingQueue = target.pendingQueue
   if (!Array.isArray(pendingQueue)) {
@@ -498,7 +497,7 @@ export function ensureWebModuleSystem(seams?: BootSeams): ClientModuleSystem {
     target.load({ id: UI_RENDERER_ID, factory: () => UiRenderer })
   }
 
-  // Aligned with upstream rc.2: a worker-preview transport may carry its own
+  // A worker-preview transport may carry its own
   // `loadBundle`; chamber has no such scenario, so this only keeps the
   // structure consistent. The transport hook wins over the constructor seams
   // only when the transport actually defines it.

@@ -1,12 +1,12 @@
 /**
  * Boot-time early-open arm (src/client/early-open.ts): behaviour through injected
  * clock/timer seams, plus the wiring locks on its registration inside client/index.ts
- * (design 05 §2.2 revision 2026-12; 2026-12 field report problem 1).
+ * (design 05 §2.2 revision).
  *
  * Contracts: one open per arm, the retry cadence, the LIVE intent read (a
  * post-first-read arm still opens; a replacement opens the NEWER session), the
  * deadline as the ONLY retirement of an absent slot, the bounded budget, a
- * missing/THROWING list face (2026-09-11 review F1/F2), and a refused open
+ * missing/THROWING list face, and a refused open
  * (warn once, never throw — the App owns the terminal report).
  */
 import { test } from 'node:test'
@@ -61,8 +61,8 @@ function harness(overrides: Partial<EarlyOpenArmDeps> = {}) {
 }
 
 test('an intent armed AFTER the arm first read the slot is still opened (an absent slot is "not yet")', () => {
-  // 2026-09-11 review F1: the first `attempt()` runs synchronously at plugin apply —
-  // BEFORE the user can click — so retiring on the first absent read killed the arm for a
+  // The first `attempt()` runs synchronously at plugin apply —
+  // BEFORE the user can click — so retiring on the first absent read would kill the arm for a
   // boot in flight (the blank-session cost the arm exists to avoid). Design 05 §2.2.1 gate
   // 3 sanctions only two retirements: a successful open and the 8s deadline.
   let intent: string | undefined
@@ -145,8 +145,8 @@ test('the intent is read LIVE: a replaced intent opens the newer session, a rele
   h.advance(EARLY_OPEN_RETRY_MS)
   assert.deepEqual(h.opened, ['s2'], 'the arm must follow the last request, never a stale capture')
 
-  // The App's own dispatch settled first and released the slot (2026-09-11
-  // review F1): the arm has nothing to preempt, but it is NOT retired — a click
+  // The App's own dispatch settled first and released the slot:
+  // the arm has nothing to preempt, but it is NOT retired — a click
   // that lands later in the same boot window must still be served.
   const released = harness({ readIntent: () => undefined, isAddressable: () => true })
   const disposeReleased = startEarlyOpenArm(released.deps)
@@ -169,8 +169,8 @@ test('a missing or hostile list face retires the arm silently (the producer owns
 })
 
 test('a THROWING addressability probe retires the arm silently instead of escaping the timer callback', () => {
-  // 2026-09-11 review F2: `attempt()` is a timer body — an escaped throw left no
-  // tick, no warning and no open, i.e. the arm died with no trace at all.
+  // `attempt()` is a timer body — an escaped throw would leave no
+  // tick, no warning and no open, i.e. the arm would die with no trace at all.
   let hostile = false
   const h = harness({
     readIntent: () => 's1',
@@ -231,15 +231,15 @@ test('dispose cancels a pending retry (ctx teardown never opens afterwards)', ()
 })
 
 /**
- * Wiring contract for the arm inside the sidebar plugin (design 05 §2.2 revision
- * 2026-12). `client/index.ts` is a cordis plugin body a node test cannot import, so
+ * Wiring contract for the arm inside the sidebar plugin (design 05 §2.2 revision).
+ * `client/index.ts` is a cordis plugin body a node test cannot import, so
  * this SHAPE-only lock (comment-stripped source)
  * pins the links that would silently disable or misfire the preemption:
  * 1. arm started inside a `ctx.effect` (ctx teardown must dispose it);
  * 2. intent read LIVE from the shared slot, never captured at apply time;
  * 3. the open goes through THIS ctx's own `sessions.open` (never detached/page-global);
- * 4. the SOURCE IDENTITY is proven before the arm mutates the host (2026-09-11
- *    review F3: the page-wide, sourceId-keyed slot would otherwise drive a same-id
+ * 4. the SOURCE IDENTITY is proven before the arm mutates the host (the
+ *    page-wide, sourceId-keyed slot would otherwise drive a same-id
  *    boot of another incarnation).
  */
 import { readFileSync } from 'node:fs'
@@ -270,9 +270,9 @@ test('the plugin starts the arm inside a ctx.effect, bound to its own instance i
 })
 
 test('the arm proves the source identity before it opens on that host (2026-09-11 review F3)', () => {
-  // Deleting this guard re-opens the hole the review found: the arm MUTATES
+  // Deleting this guard re-opens the hole: the arm MUTATES
   // (`sessions.open`) on a page-wide, sourceId-keyed intent, so a same-id boot of
-  // another incarnation could be driven by a previous one's intent (2026-09-11 F3).
+  // another incarnation could be driven by a previous one's intent.
   const body = armEffectBody(read('../../src/client/index.ts'))
   assert.match(
     body,

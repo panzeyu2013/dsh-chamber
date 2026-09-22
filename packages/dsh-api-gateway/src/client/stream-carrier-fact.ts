@@ -1,9 +1,9 @@
 /**
- * Page-level carrier-churn fact (chamber fork, design 14 §D4).
+ * Page-level carrier-churn fact (design 14 §D4).
  *
  * Upstream plumbs `carrierFailed` through the gateway and the session controller
- * but NOTHING consumes it, so once the retry patch removed the terminal escape a
- * sustained carrier fault inside a live connection generation became silent: the
+ * but NOTHING consumes it, so a sustained carrier fault inside a live connection
+ * generation is silent: the
  * transport lane is healthy, the stream keeps reopening every ≤10s, and no user
  * surface says a word. This module turns that seam into an addressable page fact.
  *

@@ -1,5 +1,5 @@
 /**
- * dsh 运行时版本管理（design 18）——编排守卫纯逻辑（M2）。纯逻辑、无 electron、
+ * dsh 运行时版本管理（design 18）——编排守卫纯逻辑。纯逻辑、无 electron、
  * 无 spawn / fetch / IPC，可用 node:test 直接单测（dsh-runtime-updater.test.ts）。
  *
  * 本模块只承担「守卫」职责（design 18 §3.6「单飞与幂等」 + §5 数据流）：
@@ -119,9 +119,9 @@ export function compareRuntimeVersions(a: string, b: string): -1 | 0 | 1 | null 
 
 /** Downgrade predicate for activation-intent arming — the single source of
  *  the `manualRollback: active !== null && compareRuntimeVersions(target,
- *  active) === -1` formula formerly inlined at the desktop controller install
+ *  active) === -1` formula shared by the desktop controller install
  *  (dsh-runtime-controller.ts), the gateway apply() and the gateway
- *  apply-now F2 arm (dedupe audit P3-3c, 2026-09). `active` is the EFFECTIVE
+ *  apply-now arm. `active` is the EFFECTIVE
  *  active version (pointer ?? builtin anchor on both owners): a builtin-
  *  active downgrade is still a real data rollback (manualRollback arms the
  *  pre-rollback stash + target-data restore, design 18 §3.7), not a plain
@@ -150,7 +150,7 @@ function isListable(
  *
  *   1. active 版本置顶（精确 semver 即可列出，并从其余列表中去重）；
  *   2. 其余按 semver 降序（compareSemverAsc 取反）。
- *      dist-tags.latest 只作数据标记（2026-10 决策 11：不再「推荐」钉位/展示——
+ *      dist-tags.latest 只作数据标记（不「推荐」钉位/展示——
  *      npm latest 可能是低于内建基线的旧版本，钉位会造成无解释的乱序）；
  *      active 本身就是 latest 时标记打在置顶条目上，不重复出现；
  *   3. cached 标记 = version ∈ cachedVersions（离线缓存版本）；
@@ -194,7 +194,7 @@ export function buildVersionList(
   }
 
   // 其余候选：registry 可列出版本 ∪ 本地缓存版本，统一降序。dist-tags.latest
-  // 不再钉位（2026-10 决策 11）：latest 只由 makeEntry 打数据标记，不参与排序。
+  // 只由 makeEntry 打数据标记，不参与排序。
   const candidates = new Set<string>();
   for (const version of meta.versions) {
     if (isListable(version, byVersion)) candidates.add(version);

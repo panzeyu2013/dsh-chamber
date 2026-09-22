@@ -2,14 +2,11 @@
 # side as of the last confirmed-consistent state. Both languages carry equal
 # authority; after editing either side, bring the other along and update both
 # hashes here (manually verified with `shasum -a 256`).
-# Chamber package (design 05 §5): created on 2026-08-15 with the 1a spec
-# sweep — descriptions of the self-built connections settings section
-# (zh = key source).
-# Re-recorded 2026-09-11 (upstream-alignment record duty): the recorded pair
-# had drifted from both files. Both sides were re-read section by section
-# first — same section list (Content / Data discipline / Styling / i18n),
+# Chamber package (design 05 §5): descriptions of the self-built connections
+# settings section (zh = key source).
+# The recorded pair is verified section by section before the hashes are
+# recomputed: same section list (Content / Data discipline / Styling / i18n),
 # same 7 bullets, same claims in the same order, the zh side spelling out
-# what "the exact unchanged normalized current roster" means — and only then
-# were both hashes recomputed with `sha256sum`.
+# what "the exact unchanged normalized current roster" means.
 README.md: a1bbb75eda17e030bab5d0ebe8d0323338d7009294972108a327efc4ba260827
 README.zh.md: 94ceedf825ac02bb20cd6114a1a21347fab0da55a7321383162a3a8aeb44e02c

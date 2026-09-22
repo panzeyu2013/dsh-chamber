@@ -44,7 +44,7 @@ export interface SourceSnapshot {
   readonly cwdDrift: readonly AgentRowDrift[]
   /** Running sessions that actually BLOCK a worktree removal: the non-inert
    *  ones (an archived session, or a SUBAGENT-origin descendant of an archived
-   *  ancestor, is inert — design 08 §5.2 amendment 2026-09). */
+   *  ancestor, is inert — design 08 §5.2 amendment). */
   readonly blockingRunningIds: ReadonlySet<string>
 }
 

@@ -1,5 +1,5 @@
 /**
- * Shared fakes for the gateway session-state tests (W1 / WS-B). Nothing here
+ * Shared fakes for the gateway session-state tests. Nothing here
  * ships: the real mux (control-plane session-mux.ts) is exercised through the
  * injectable socket/unary seams, and every scratch stateDir is a temp dir.
  *
@@ -56,12 +56,11 @@ export interface SessionSurfaceHarness {
 }
 
 /**
- * ONE session-state surface harness (2026-12 audit F40): the four suites each
- * carried their own store + fake observer + createChamberSessionState call.
- * Every injection point stays open (stateDir, mode, enabled, stream/keepalive
- * bounds, observer overrides); the fake observer object is a superset of the
- * per-file shapes and is mutated by setMode/setHost so live transitions still
- * work.
+ * ONE session-state surface harness shared by the suites: a single store +
+ * fake observer + createChamberSessionState call. Every injection point stays
+ * open (stateDir, mode, enabled, stream/keepalive bounds, observer overrides);
+ * the fake observer object is a superset of the per-file shapes and is mutated
+ * by setMode/setHost so live transitions still work.
  */
 export function sessionSurfaceFor(
   t: { after(fn: () => void): void },

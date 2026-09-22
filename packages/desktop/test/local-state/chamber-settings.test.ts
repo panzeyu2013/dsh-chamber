@@ -3,7 +3,7 @@
  * Covers normalize / atomic round-trip / corrupt preservation / platform gates /
  * close-window decision / quit-risk (update exemption) / patch validation.
  *
- * S-E settings-set → applySettingsPatch 行为族（parity 边界 #2）：installIpcHandlers
+ * settings-set → applySettingsPatch 行为族：installIpcHandlers
  * 装配 fake ctx/edges/registrar，叶 reject 与叶同步 throw 同汇于 catch 回滚
  * （{error} + keepAwake 反悔 + 绝不持久化 + settings-get 回旧值 + 无 push），
  * 叶 {ok:false,error} 原样 loud 返回；成功 = await 叶后 persist/commit/push。
@@ -510,7 +510,7 @@ test('validatePatch: nested sessionTodo — invalid values rejected loudly', () 
 });
 
 
-// --- P-12: shared strictness (Swift StartupSettings parity) ---
+// --- shared strictness (Swift StartupSettings parity) ---
 test('P-12: duplicate JSON keys at any nesting level are corruption (both flavors judge the same)', () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'chamber-settings-dup-keys-'))
   const file = path.join(dir, 'chamber-settings.json')
@@ -615,7 +615,7 @@ test('P-12: a persisted strict-rejected origin is preserved as corrupt (read pat
   }
 })
 test('computeSupported: launchAtLogin on all shipping platforms; closeToTray follows tray availability, always on darwin', () => {
-  // design 21 M4: win32 launchAtLogin unlocked (HKCU Run key).
+  // design 21: win32 launchAtLogin is supported (HKCU Run key).
   assert.deepEqual(computeSupported('win32', true), { launchAtLogin: true, closeToTray: true, badgeSupported: false });
   assert.deepEqual(computeSupported('win32', false), { launchAtLogin: true, closeToTray: false, badgeSupported: false });
   assert.deepEqual(computeSupported('darwin', false), { launchAtLogin: true, closeToTray: true, badgeSupported: true });
@@ -739,7 +739,7 @@ test('validatePatch: nested notifications — invalid values rejected loudly', (
 });
 
 // ---------------------------------------------------------------------------
-// S-08 / S-41 / P-20 纯判定（接线断言见 test/runtime/main-decision-gates.test.ts）。
+// 纯判定（接线断言见 test/runtime/main-decision-gates.test.ts）。
 // ---------------------------------------------------------------------------
 test('S-41 readSettingsFile: missing / ok / corrupt are distinguishable for side-effect callers', () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'dsh-chamber-settings-state-'));
@@ -872,7 +872,7 @@ test('S-08 decideMainWindowClose: a close that would quit is deferred until the 
   // A real quit already in flight (before-quit confirmed it) may close.
   assert.equal(decideMainWindowClose({
     behavior: 'hide-to-tray', recoveryAvailable: true, quitRequested: true, quitConfirmed: true, updateRestartArmed: false }), 'close');
-  // Quit requested but unconfirmed (dialog open): keep the window alive (S-08).
+  // Quit requested but unconfirmed (dialog open): keep the window alive.
   assert.equal(decideMainWindowClose({
     behavior: 'quit', recoveryAvailable: true, quitRequested: true, quitConfirmed: false, updateRestartArmed: false }), 'defer-quit');
   // An armed update restart owns teardown (macOS closes windows before before-quit).

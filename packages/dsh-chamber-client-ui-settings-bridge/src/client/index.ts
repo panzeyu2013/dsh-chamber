@@ -1,13 +1,13 @@
 /**
- * Chamber settings shell plugin (design discussion 2026-08), browser half:
+ * Chamber settings shell plugin, browser half:
  * registers the「设置 / Settings」shell into the `sidebar.settings` slot at a
  * LOWER priority than the official SettingsRoot registration, so the
  * official shell is shadowed (never conflicts — the official entry stays on
  * the ledger and its settings.* children declarations remain valid). The
  * shell itself (SettingsShell.tsx) renders the SELECTED source's OWN boot-ctx
  * `settings.section` ledger with the seats that ctx's own renderer bound —
- * nothing is mounted twice and no service is stubbed (2026-12 完整桥接修订,
- * design 05 §5) — and renders the chamber-global connections surface as a
+ * nothing is mounted twice and no service is stubbed (design 05 §5) — and
+ * renders the chamber-global connections surface as a
  * fixed nav entry. No chamber-side persistence, no new control-plane API;
  * every configuration fact stays on the target host.
  */
@@ -50,8 +50,8 @@ const CONNECTIONS_NS = 'dsh-chamber.settings.connections'
 /**
  * Shadow priority: the official SettingsRoot registers at the default 0; the
  * slot core's shadowing rule renders the LOWEST priority winner, so a lower
- * value replaces the official shell without touching its ledger entry. 2026-12:
- * the value is the documented RESERVED range (sidebar shared face
+ * value replaces the official shell without touching its ledger entry. The
+ * value is the documented RESERVED range (sidebar shared face
  * `settings-shell.ts`) — the chamber sidebar watchdog reports any registrant
  * that goes below it, because the shell is the only renderer of the
  * connections/general pages and of every per-source plugin settings section.
@@ -80,7 +80,7 @@ export function apply(ctx: ClientContext): void {
   const connectionsT = ctx.locale.bind(CONNECTIONS_NS)
   const chamberInstanceId = (ctx as ClientContext & { chamberInstanceId?: string }).chamberInstanceId
   const sourceFingerprint = (ctx as ClientContext & { chamberSourceFingerprint?: string }).chamberSourceFingerprint
-  // Complete-bridge face publication (design 05 §5, 2026-12 修订): this plugin
+  // Complete-bridge face publication (design 05 §5): this plugin
   // runs once per instance boot ctx, so it is the ONE place that can hand the
   // panel that source's own settings ledger and locale face. An invalid or
   // absent instance id keeps the plugin inert (a ctx without the chamber boot
@@ -114,7 +114,7 @@ export function apply(ctx: ClientContext): void {
 
 /**
  * Register this instance's own「dsh 运行时」settings section into its OWN
- * ledger (design 18 §3.6 修订 / design 05 §5, 2026-12 完整桥接修订).
+ * ledger (design 18 §3.6 / design 05 §5).
  *
  * WHY here and not per panel target: the panel renders the selected source's
  * own boot-ctx ledger, so a section that only exists because the CHAMBER adds
@@ -122,7 +122,7 @@ export function apply(ctx: ClientContext): void {
  * unchanged — local and gateway sources carry the section, a direct dsh target
  * carries none (no `/chamber` channel, no management surface).
  *
- * Failure policy: this now runs INSIDE a source's own frontend boot, so a
+ * Failure policy: this runs INSIDE a source's own frontend boot, so a
  * malformed projection is reported and skipped instead of throwing — a
  * settings-section derivation must never take down the instance's UI. The
  * projection is reconciled on every roster publish, so a source that becomes

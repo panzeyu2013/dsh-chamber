@@ -1,7 +1,7 @@
 /**
  * Archive cleanup core — preview/purge planning, retention, force, the event
- * contract, and the folded-in subset/orphan-sweep fail-closed legs (the deleted
- * subset-and-orphan-sweep.test.ts). Sibling: sweep-gates-and-protection.
+ * contract, and the subset/orphan-sweep fail-closed legs.
+ * Sibling: sweep-gates-and-protection.
  * Shared fixtures: support/archive-host.ts.
  */
 
@@ -93,7 +93,7 @@ test('purge: loaded-only subtrees are skipped by default and deleted under force
   assert.equal(host.states.has('s2'), false)
   assert.equal(host.states.has('s3'), true)
   assert.equal(host.states.has('b1'), true)
-  // RESIDENT RETENTION (design 24 §4 step 9, 2026-13): s2 is still attached
+  // RESIDENT RETENTION (design 24 §4 step 9): s2 is still attached
   // to this process, so its membership — the ONLY thing hiding its row from
   // the live-preferred session list — is KEPT instead of un-hiding a session
   // the user just deleted.
@@ -117,9 +117,7 @@ test('purge: a resident root whose content is already gone re-affirms retention 
   // the id is NOT record-less: the plan builds the tree again, this run's
   // deletion reports 'missing', and the membership is retained (and reported)
   // again. Only after the instance restarts does the id become record-less and
-  // get converged by the orphan sweep (2026-13 review: the earlier assertion
-  // here claimed the rerun planned no tree and reported nothing, which no real
-  // host does).
+  // get converged by the orphan sweep.
   const again = await core.purge(['s2'], true)
   assert.equal(again.deletedSessions, 0)
   assert.equal(again.forcedLoaded, 0)
@@ -175,9 +173,8 @@ test('purge: a DESCENDANT that becomes resident after the tree recheck also reta
   // own deletion instant, i.e. after the tree-level recheck already ran (force
   // lets the delete-time guard through). That per-member report is the only
   // signal this subagent is still being served — reading residency off the root
-  // alone dropped it, completed the tree and cleared the membership, so the
-  // subagent row could re-surface exactly like the user-reported root case
-  // (2026-13 self-review).
+  // alone would drop it, complete the tree and clear the membership, so the
+  // subagent row could re-surface exactly like the root case.
   host.attachOnDeleteOf = 'a1'
   const core = new ArchiveCleanupCore(host)
 
@@ -196,9 +193,9 @@ test('purge: an attach landing after the deletions but before the batched write 
   // The sweep runs after every tree deletion and before the single archived-set
   // write (up to MAX_SWEEP_CONTENT_PROBES content probes), so it is the last
   // window in which a session can attach while its root is already a completed
-  // tree. Without the final live re-check the membership was cleared there and
-  // the live-preferred corpus served the row again — the original symptom, one
-  // window later (2026-13 review).
+  // tree. Without the final live re-check the membership could be cleared there
+  // and the live-preferred corpus would serve the row again — the re-surfacing
+  // symptom one window later.
   host.attachOnSweepProbe = 's2'
   const core = new ArchiveCleanupCore(host)
 
@@ -558,10 +555,9 @@ test('purge: a converged set with no orphan members keeps the single-scan contra
   assert.deepEqual(host.removalCalls, [['s1', 's2']])
 })
 
-/* ---- subset/orphan-sweep invariants folded in from the deleted
- * subset-and-orphan-sweep.test.ts (2026-12 test-trim round 2): the
- * fail-closed and boundary legs only; the subset-mode happy paths were
- * covered by the purge/subset assertions above. ---- */
+/* ---- subset/orphan-sweep invariants: the fail-closed and boundary legs
+ * only; the subset-mode happy paths are covered by the purge/subset
+ * assertions above. ---- */
 test('purge subset: malformed filters refuse loudly before any mutation', async () => {
   const host = buildHost()
   const core = new ArchiveCleanupCore(host)
@@ -597,7 +593,6 @@ test('purge subset: a malformed filter refuses BEFORE any authoritative read (va
   assert.equal(host.removalCalls.length, 0)
 })
 test('purge subset: stale ids, named orphans and duplicate ids stay honest', async () => {
-  // Moved from the deleted subset-and-orphan-sweep.test.ts (2026-12 trim).
   const host = buildHost()
   const core = new ArchiveCleanupCore(host)
   // A stale (never-archived) id and the live non-archived sibling are no
@@ -783,8 +778,7 @@ test('purge: a failed single set write keeps the swept orphans archived too (hon
 })
 
 test('purge at the full MAX_PURGE_SESSIONS capacity completes linearly', async () => {
-  // Moved from the deleted scale-purge-linear.test.ts (2026-12 trim): the
-  // full-capacity purge and a linear-time bound.
+  // The full-capacity purge and a linear-time bound.
   const host = new FakeHost()
   for (let index = 0; index < MAX_PURGE_SESSIONS; index += 1) {
     const id = 'cap-' + index

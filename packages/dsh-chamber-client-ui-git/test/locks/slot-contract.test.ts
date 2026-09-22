@@ -7,7 +7,7 @@ function source(relative: string): string {
 }
 
 /** The sidebar shell sources that mount the git seat (layout-agnostic: the
- *  per-source subtree was extracted from SidebarRoot into ServerSection). */
+ *  render may live in either file). */
 function sidebarMountSources(): string[] {
   return [
     source('../../../dsh-chamber-client-ui-sidebar/src/client/SidebarRoot.tsx'),
@@ -27,10 +27,9 @@ test('the per-workspace Git seat is declared in the SlotMap, declared in the sid
   assert.match(slots, /'sidebar\.workspace\.git':\s*\{[\s\S]*?hookContext:\s*\{\s*sourceId:\s*string;\s*workspaceId:\s*string(?:;\s*repoKey\?:\s*string)?\s*\}/)
   assert.match(slots, /inject:\s*\{\s*hooks:\s*\{\s*workspaceGitContext:/)
   // The sidebar's runtime children table must declare the seat (a missing
-  // declaration silently stops the plugin's inject from ever registering —
-  // the P0 regression this test guards).
+  // declaration silently stops the plugin's inject from ever registering).
   assert.match(sidebarIndex, /'sidebar\.workspace\.git':\s*\{\s*kind:\s*'single',\s*scope:\s*'root',\s*inject:\s*\{\s*hooks:\s*\{\s*workspaceGitContext:/)
-  // Render sites (SidebarRoot or the extracted ServerSection): source-level
+  // Render sites (SidebarRoot or ServerSection): source-level
   // alert (workspaceId '') + per-workspace occupant rendered INSIDE the
   // workspace header row (before rowActions — OpenChamber-style, the row
   // itself is the git surface).

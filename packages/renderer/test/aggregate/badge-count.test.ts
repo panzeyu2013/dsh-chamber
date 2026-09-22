@@ -95,7 +95,7 @@ test('projectBadgeCount: suppression is per session and per source', () => {
     local: { sessions: { a: { runningSubagents: 1 } } },
     // x 有事实行且子代理存活 → 压制；y 无事实行 → 无压制信息不臆测，照计。
     'dsh-abc123': { sessions: { x: { runningSubagents: 1 } } },
-    // 无运行时事实通道快照的来源（gateway-xyz789）整体照旧计入。
+    // 无运行时事实通道快照的来源（gateway-xyz789）整体照常计入。
   }
   assert.equal(projectBadgeCount(completed, facts), 2) // b + y
   assert.equal(
@@ -111,7 +111,7 @@ test('projectBadgeCount: armed dot counts again once all subagents finished (or 
   // 子代理全部结束：runningSubagents 从行上消失（稀疏）→ 蓝点正常浮现。
   const finished = { local: { sessions: { a: { running: false } } } }
   assert.equal(projectBadgeCount(completed, finished), 1)
-  // 无运行时事实参数 = 旧语义（无压制通道的调用点不臆测）。
+  // 无运行时事实参数 = 不压制（无压制通道的调用点不臆测）。
   assert.equal(projectBadgeCount(completed), 1)
 })
 
@@ -136,9 +136,8 @@ test('projectBadgeCount: an explicit zero runningSubagents row is NOT suppressed
   assert.equal(projectBadgeCount(completed, explicitZero), 1)
 })
 
-// ---- 合并投影（plan §3.3-7 / 裁决 14）：vendor-only completed 必须计入，
-// 否则会出现「侧栏蓝点/待办有、Dock 徽标无」的诚实分叉（该分工从前登记为
-// 取舍，2026-12 收口为单一权威）。
+// ---- 合并投影（裁决 14）：vendor-only completed 必须计入，
+// 否则会出现「侧栏蓝点/待办有、Dock 徽标无」的诚实分叉。
 
 test('projectBadgeCount: a vendor-armed completion counts even with no ledger entry', () => {
   const facts = { local: { sessions: { a: { running: false, completed: true } } } }

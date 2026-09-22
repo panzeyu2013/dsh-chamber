@@ -1,15 +1,15 @@
 /**
  * test-runner-lockstep.test.mjs —— desktop 测试清单（scripts/test.mjs）锁步 +
- * 零测试守卫（D2b）与 macOS 腿跳过纪律（G2）。
+ * 零测试守卫与 macOS 腿跳过纪律。
  *
- * 2026-12（M1）：清单本身只保留数据表，判定与循环都在共享引擎
+ * 清单本身只保留数据表，判定与循环都在共享引擎
  * scripts/lib/test-manifest.mjs（引擎自测 scripts/lib/test-manifest.test.mjs 覆盖
  * 断言解析、零测试判定、平台腿与循环接线）。本文件因此只钉 desktop 独有的不变量：
  *  ② evaluateChildRun 的 fail-closed 负例（exit 0+无汇总 / tests 0 / 非 0 退出 /
  *     信号 / spawn error / allowlist 例外）——引擎实现，本包档为 executed；
- *  ②b macOS 腿 requireNoSkips：任一跳过硬失败（G2），且只在 macOS 腿启用；
+ *  ②b macOS 腿 requireNoSkips：任一跳过硬失败，且只在 macOS 腿启用；
  *  ③ 清单接线源码锁：本包确实把平台腿、allowlist 与 macOS 跳过纪律交给共享引擎，
- *     且本地不再持有 spawn 循环或本地判定；
+ *     且本地不持有 spawn 循环或本地判定；
  *  ⑤ 清单锁步：盘上每个 *.test.ts / *.test.mjs 都出现在 GROUPS ∪ WIN32_FILES ∪
  *     MACOS_FILES 中、组内无重复、清单文件都存在、ZERO_TEST_ALLOWLIST 条目
  *     有理由且指向真实文件。
@@ -53,8 +53,8 @@ const fileOf = entry => (typeof entry === 'string' ? entry : entry.file)
 test('② evaluateChildRun：零测试 / 无法 spawn 一律失败，例外须显式放行', () => {
   const pass = { status: 0, signal: null, stdout: 'ℹ tests 1\nℹ pass 1\n', stderr: '' }
   assert.deepEqual(evaluateChildRun('fixture.test.ts', pass), { ok: true })
-  // 2026-12 验证轮：全 skip 的文件报 tests 1 但没有任何测试体执行 → 必须失败
-  // （旧的计数守卫只看 tests，会把它放过）。
+  // 全 skip 的文件报 tests 1 但没有任何测试体执行 → 必须失败
+  // （只看 tests 的计数守卫会把它放过）。
   assert.equal(
     evaluateChildRun('fixture.test.ts', {
       status: 0, signal: null,

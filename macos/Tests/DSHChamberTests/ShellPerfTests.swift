@@ -2,7 +2,7 @@
 //  ShellPerfTests.swift
 //  DSHChamberTests
 //
-//  Phase 0（《最终设计方案 v2》）：ShellPerf 的记账与格式化契约。
+//  ShellPerf 的记账与格式化契约。
 //
 import XCTest
 @testable import DSHChamber

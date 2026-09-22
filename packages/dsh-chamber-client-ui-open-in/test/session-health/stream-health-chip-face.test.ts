@@ -1,15 +1,13 @@
 /**
- * Behavioural coverage for the chip's VISIBLE recovery surface (design 14 §D4,
- * 2026-09-21 review).
+ * Behavioural coverage for the chip's VISIBLE recovery surface (design 14 §D4).
  *
  * WHY THIS FILE EXISTS. The chip is a React component and this package has no
- * React/DOM test environment, so the component cannot be driven here — and its
- * decisions used to be pinned only by source-text locks: four behaviour-reversing
- * mutations (a notice rendered without its reload control, an armed rebuild
- * rendered with no button, a ticker that stops re-planning, a `setPlan` that
- * never de-duplicates) all stayed green. Those decisions now live in the pure
- * `session-stream-health-chip-face.ts` the component projects, and this suite
- * drives that module directly.
+ * React/DOM test environment, so the component cannot be driven here; its
+ * decisions live in the pure `session-stream-health-chip-face.ts` the component
+ * projects, and this suite drives that module directly — source-text locks alone
+ * would leave behaviour-reversing mutations (a notice rendered without its
+ * reload control, an armed rebuild rendered with no button, a ticker that stops
+ * re-planning, a `setPlan` that never de-duplicates) green.
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'

@@ -5,14 +5,12 @@
  *
  * Why the chamber owns this atom: the vendored HoverCard arms its grace close
  * against the last COMMITTED `open`, so a pointerleave handled while React's
- * commit of the dwell timer was still pending stranded a card on screen with no
- * pointer left to dismiss it (the measured defect and the reproduction live in
- * `hover-intent.ts`'s header). Vendor sources are read-only here (pinned
+ * commit of the dwell timer is still pending strands a card on screen with no
+ * pointer left to dismiss it. Vendor sources are read-only here (pinned
  * upstream), so the corrected machine lives in this package; the card box, the
  * 8px right-edge offset, the 200ms grace, the press-to-dismiss rule and the
- * copy-on-activation contract all mirror the atom it replaces.
- * `docs/design/06-sidebar-enhancements.md` §7 records the port and
- * `docs/progress/STATUS.md` carries the upstream defect as an open deviation.
+ * copy-on-activation contract all mirror the vendored atom.
+ * `docs/design/06-sidebar-enhancements.md` §7 records the port.
  *
  * Deliberate differences from the vendored atom, all pinned by
  * `test/session-rows/hover-card-wiring.test.ts`:
@@ -94,7 +92,7 @@ export function RowHoverCard({
   // One machine per card, created on the first render (its options are plain
   // values, so a later prop change cannot re-time a card already in flight) and
   // reused across StrictMode's double-invoked effects. NOTE what `dispose`
-  // really does (2026-09-13 review C6): it drops both timers AND releases the
+  // really does: it drops both timers AND releases the
   // page-global slot. Reusing the machine is still safe there only because a
   // remount happens with `open === false` (the dwell has not fired yet) — moving
   // `dispose()` into an effect with changing deps would release the slot of a
@@ -118,10 +116,10 @@ export function RowHoverCard({
   // still in flight when the card closes. Without it that write settles after
   // close→reopen and paints `copiedLabel` on the NEW card for a second, armed
   // with a timer nobody asked for; the same bump lives in the vendored atom's
-  // `close()` (upstream ui-primitives HoverCard.tsx:54-58), which this card
-  // replaces. The order of the two statements below carries no meaning: both run
-  // synchronously, and the stale write's continuation is a microtask that cannot
-  // interleave them — the epoch only has to be stale by the time it resumes.
+  // `close()` (upstream ui-primitives HoverCard.tsx:54-58). The order of the two
+  // statements below carries no meaning: both run synchronously, and the stale
+  // write's continuation is a microtask that cannot interleave them — the epoch
+  // only has to be stale by the time it resumes.
   useEffect(() => {
     if (open) return
     copyEpochRef.current += 1
@@ -185,7 +183,7 @@ export function RowHoverCard({
         // clamped card would float at an edge with no anchor to explain it.
         // Close through the machine — a plain render change could be
         // re-committed in the wrong order.
-        // Both axes, deliberately (2026-09-13 review C7c): the vertical case is
+        // Both axes, deliberately: the vertical case is
         // the reachable one (the sidebar only scrolls vertically), and the
         // horizontal arms are defensive symmetry so "off-screen anchor ⇒ close"
         // stays a two-axis contract instead of a one-axis special case.
@@ -205,11 +203,11 @@ export function RowHoverCard({
     // The wrapper's own box AND its containing block: a row inserted or removed
     // above this one moves the anchor without resizing it, and the container's
     // box is the closest observable signal for that reflow.
-    // Known bound (2026-09-13 review C7d, not reachable today): a reorder that
+    // Known bound (not reachable today): a reorder that
     // swaps two same-size rows changes NEITHER box, and with no scroll/resize
     // event there is nothing to observe — the card would keep the old
     // coordinates until the next scroll or resize. Upstream has no observer at
-    // all, so this is strictly narrower than the atom it replaces; fixing it
+    // all, so this is strictly narrower than the vendored atom; fixing it
     // would mean observing the list's child order, which is not worth a
     // MutationObserver for a transient mis-anchor.
     const observer = new ResizeObserver(place)
@@ -248,7 +246,7 @@ export function RowHoverCard({
     ? (
       <div
         ref={cardRef}
-        // Acceptance-probe hook (exact name; the review counts/locates the
+        // Acceptance-probe hook (exact name; acceptance probes locate the
         // portaled card by it).
         data-chamber-hovercard=""
         className={`${cc.hoverCard}${copyable ? ` ${cc.hoverCardCopyable}` : ''}${copied ? ` ${cc.hoverCardFeedback}` : ''}`}
@@ -288,7 +286,7 @@ export function RowHoverCard({
   return (
     <span
       ref={rootRef}
-      // Acceptance-probe hook (exact name; the review counts/locates anchors by
+      // Acceptance-probe hook (exact name; acceptance probes locate anchors by
       // it). See the card's twin marker above.
       data-chamber-hovercard-anchor=""
       className={cc.hoverAnchor}

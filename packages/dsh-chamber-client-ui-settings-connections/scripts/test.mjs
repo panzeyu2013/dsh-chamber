@@ -2,9 +2,8 @@
  * @dsh-chamber/dsh-chamber-client-ui-settings-connections test manifest -
  * authoritative file list for this package test script.
  * Grouped by subject area (mirrors test/<domain>/). Every listed file runs as its
- * own node child with inherited stdio; the first failure ends the run - the same
- * semantics as the inline && chain this replaces. A listed file that does not
- * exist is a failure, never a silent skip.
+ * own node child with inherited stdio; the first failure ends the run. A listed
+ * file that does not exist is a failure, never a silent skip.
  * Entries: a path, or { file, nodeArgs } when a loader (--import ...) is needed.
  */
 // Runner semantics (missing listed file, zero-test guard, first-failure stop,
@@ -39,9 +38,9 @@ const GROUPS = {
     'test/runtime-gate/restart-gates.test.ts',
     'test/runtime-gate/local-spawn-gate.test.ts',
     'test/runtime-gate/restart-action.test.ts',
-    // restart-refusal-parity.test.ts deleted 2026-12: the classifier and the
-    // verbatim-error projection are single-sourced on the sidebar shared face
-    // (test/shared/runtime-refusal.test.ts locks the body matrix absolutely).
+    // The classifier and the verbatim-error projection are single-sourced on
+    // the sidebar shared face (test/shared/runtime-refusal.test.ts locks the
+    // body matrix absolutely).
     'test/runtime-gate/error-text-parity.test.ts',
   ],
   // gateway: control-plane REST 客户端与网关就绪轮询
@@ -51,12 +50,12 @@ const GROUPS = {
   ],
   // connections-section: 连接页呈现面——视觉锁与本地卡片提示/通知投影
   'connections-section': [
-    // 凭据清除动作的共享契约（M9 单源化，2026-12）。
+    // 凭据清除动作的共享契约（单源化）。
     'test/connections-section/clear-credential.test.ts',
     'test/connections-section/action-hint.test.ts',
     'test/connections-section/writer-diagnosis.test.ts',
-    // S-29 residual: the secretStorageUnreadable settings-page hint (zh + en).
-    // F1: the local card must show why the instance could not start.
+    // The secretStorageUnreadable settings-page hint (zh + en); the local card
+    // must show why the instance could not start.
   ],
 }
 

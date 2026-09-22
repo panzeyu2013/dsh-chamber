@@ -1,5 +1,5 @@
 /**
- * Storage protocol (M3/M9 foundation) unit tests — design 04 §6 / 03 §2.1.
+ * Storage protocol unit tests — design 04 §6 / 03 §2.1.
  *
  * Covers json-store.ts + catalog.ts: backup-first atomic writes, recovery
  * from .bak with an explicit recovery state, double corruption throwing

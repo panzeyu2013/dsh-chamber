@@ -57,7 +57,7 @@ export type DropOver = { id: string; half: 'before' | 'after' }
 /**
  * Per-element accent CSS variable for the active source/session left inset:
  * the remote source's hue string, omitted for the local source so the CSS
- * falls back to the default ink (visual audit P2-3).
+ * falls back to the default ink.
  */
 export function sourceAccentStyle(server: ChamberServerAggregate): { '--chamber-source-accent': string } | undefined {
   const color = sourceAccentColor(server.id)
@@ -154,22 +154,22 @@ export interface SidebarSectionContextValue {
   /** Commit the active inline rename (wire call via the shell's runAction). */
   commitRename: () => void
   /** Server-row archive-cleanup entry: opens the archive manager dialog
-   *  (design 24 §6 revision 2026-09 — the manager lists what is archived and
+   *  (design 24 §6 — the manager lists what is archived and
    *  offers per-row / multi-select purges; whole-set deletion goes through
    *  the explicit select-all checkbox — no standalone delete-all). */
   onOpenArchiveCleanup: (server: ChamberServerAggregate) => void
   /** Source-header add-workspace entry (opens the directory browser).
-   *  2026-09-11 review-fix finding 2 (symmetric closure): this is the shell's
-   *  GUARDED opener, not the raw state setter — it refuses while another
-   *  chamber dialog layer is up, so the section cannot stack a second Modal by
-   *  calling it. Closing stays the shell's own business (`browseClose`). */
+   *  This is the shell's GUARDED opener, not the raw state setter — it refuses
+   *  while another chamber dialog layer is up, so the section cannot stack a
+   *  second Modal by calling it. Closing stays the shell's own business
+   *  (`browseClose`). */
   openWorkspaceBrowser: (sourceId: string) => void
 
   /** Row actions over the source's own unary API. */
   openSession: (serverId: string, sessionId: string) => void
   onNewSession: (server: ChamberServerAggregate, workspaceId: string) => void
-  /** 2026-09-11 review-fix finding 5d: no title parameter — the archive verb
-   *  runs immediately (T2a), so nothing consumes a title here. */
+  /** No title parameter — the archive verb runs immediately, so nothing
+   *  consumes a title here. */
   onArchiveSession: (server: ChamberServerAggregate, sessionId: string) => void
   onForkSession: (server: ChamberServerAggregate, session: { id: string; title: string }) => void
   onDeleteWorkspace: (server: ChamberServerAggregate, workspaceId: string, title: string) => void

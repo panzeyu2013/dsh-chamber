@@ -1,7 +1,6 @@
 // BridgeClient.swift —— B 桥进程客户端（Swift 侧 spawn + NDJSON 读写 + invoke）
 //
-// design 25 §4.4.2（B 桥 Swift ↔ sidecar）与 W-05（垂直切片，
-// design 25 §4.4.2）的 Swift 侧实现。AppDelegate
+// design 25 §4.4.2（B 桥 Swift ↔ sidecar）的 Swift 侧实现。AppDelegate
 // 与 MessageHandler 作者按本文件的公开契约引用（构造/start/stop/invoke/
 // onEvent），勿改名。
 //
@@ -16,16 +15,15 @@
 //   - 帧长上限 = FrameCodec.maxFrameBytes（4 MiB，与 TrustGuard 同源）。
 //   - **无握手帧**：start() 后不发任何帧——协议没有握手语义；真实 sidecar
 //     （sidecar-entry.ts）起动完成后主动输出 ready notify {port,shellVersion}
-//     （M3 W-15/16 起经 onReady 消费；design 25 §3.3 启动序列由上层编排）。
-//   - **出站面（sidecar → Swift；M3 W-15/16）**：sidecar 的宿主腿
+//     （经 onReady 消费；design 25 §3.3 启动序列由上层编排）。
+//   - **出站面（sidecar → Swift）**：sidecar 的宿主腿
 //     （node-edges.ts）会把 NOTIFY 类通道的宿主动作转成 B 桥线协议上的
 //     **edge 请求** {"edge":method,"payload":…,"edgeId":N}（期待应答
 //     {"edgeId":N,"ok":true,"result":…} | {"edgeId":N,"ok":false,"error":…}——
 //     sidecar 侧 pendingEdges 无超时，Swift 不应答 = 永久挂起）与 **notify
 //     单向帧** {"notify":event,"payload":…}（ready/rendererPush 等）。这两族
 //     帧既无 id 也无 event 键，FrameCodec.classify 按容忍语义归 nil——
-//     M3 前的本文件会把它们当非协议行 loud 丢弃；现由本文件的
-//     decodeOutboundFrame 在 BridgeClient 层先行分类（不改 FrameCodec，
+//     由本文件的 decodeOutboundFrame 在 BridgeClient 层先行分类（不改 FrameCodec，
 //     注释见该函数），edge 经 v1 默认应答策略（defaultEdgeResponse /
 //     setDefaultEdgeResponder）或自定义 onEdgeRequest 必答、绝不挂起。
 //   - sidecar 仍从不发起带 id+method 的 request 帧（B 桥 id 所有权恒在
@@ -35,11 +33,11 @@
 //   - id 自 1 起单调递增（NSLock 保护）；sidecar 原样 echo，pending 字典
 //     以 id 为键把响应配对回发起时的 continuation——**id 的所有权 = pending
 //     字典条目**：谁在锁内 removeValue 成功，谁负责 resume（恰好一次）。
-//   - 写帧 = **writeLock 串行**（2026-09 模块评审 minor：此前实际是锁外写，
-//     并发 invoke / edge 应答可在同一 FileHandle 上交错；现由独立 writeLock
-//     包住每次 write，单帧 ≤4 MiB）。帧率低、sidecar readline 持续消费，
-//     背压罕见；极端背压会阻塞调用线程——P1 换专用串行写队列 + stop 前显式
-//     排空（design 25 §3.3 退出链 5s 硬顶前需可证明无 in-flight 写）。
+//   - 写帧 = **writeLock 串行**（否则并发 invoke / edge 应答可在同一 FileHandle 上
+//     交错；每次 write 都由独立 writeLock 包住，单帧 ≤4 MiB）。帧率低、sidecar
+//     readline 持续消费，背压罕见；极端背压会阻塞调用线程——缓解方向是专用串行
+//     写队列 + stop 前显式排空（design 25 §3.3 退出链 5s 硬顶前需可证明无
+//     in-flight 写）。
 //   - **帧回调**（onEvent/onNotify/onReady/onEdgeRequest/响应分发）在**管道读取
 //     线程**（Foundation 内部队列）或**终止收尾线程**（handleTermination →
 //     finish*Reading 抽干残帧）回调，均为非主线程；两条路径的派发经 dispatchLock
@@ -57,18 +55,18 @@
 //     会话」或「stop 快路径撞自然死亡收尾」的窗口；start() 有界等待（超时抛 code 6）。
 //   - **全局锁序**：dispatchLock → lifecycleLock → lock →（readerLock | stderrLock）。
 //     任何新增路径都必须按此偏序取锁（反例：先在 lifecycleLock 下等 dispatchLock，
-//     会与「帧回调内 stop()」成环——已由独立验证者探针复现，务必保持）。
+//     会与「帧回调内 stop()」成环，务必保持）。
 //     本类自身对 pending 配对（lock + removeValue 所有权，按登记代际分桶结算）与
 //     edge 应答（帧代际透传 + 有界守卫，写失败回滚）保证恰好一次。
 //
 // 本文件为纯 Foundation（无 AppKit/WebKit；kill/SIGKILL/SIGPIPE 等 Darwin
 // 符号经 Foundation 再导出直接可用，无需额外 import）；Swift 5 语言模式；
-// macOS 14.4+（支持矩阵下限，见 deviations S-30）。
+// macOS 14.4+（支持矩阵下限）。
 
 import Foundation
 
 /// B 桥 stdout/stderr 的行缓冲读取器：Data 积累 + 按 \n 切分（兼容 \r\n），
-/// **输出原始字节**（R2：不在读取器里物化 String——stdout 直接喂 JSONSerialization，
+/// **输出原始字节**（不在读取器里物化 String——stdout 直接喂 JSONSerialization，
 /// 省掉每帧 Data→String→Data 一次完整往返；UTF-8 合法性由消费方判定；跨 read
 /// 块的多字节序列仍不会被腰斩）。
 ///
@@ -89,18 +87,18 @@ struct LineReader {
     /// FrameCodec.maxFrameBytes 同值 4 MiB）。
     private let maxBufferedBytes: Int
     private var buffer = Data()
-    /// 未消费字节起点（Phase 2 C5，**绝对索引**）：每行切分只推进游标，append
-    /// 末尾才压实一次（旧实现每切一行 removeSubrange 一次 = O(n·k) 字节搬移）。
+    /// 未消费字节起点（**绝对索引**）：每行切分只推进游标，append
+    /// 末尾才压实一次（每切一行 removeSubrange 一次 = O(n·k) 字节搬移）。
     /// Data 的 `removeFirst`/切片会推进 `startIndex` 而不回零，故游标必须是
     /// 绝对索引、压实后重置为 `buffer.startIndex`；溢出判定用未消费窗口
     /// `buffer.endIndex - cursor`。
     private var cursor: Data.Index = 0
-    /// 已确认「不含换行」的区间右界（绝对索引）。C2 增量扫描：append 只从
+    /// 已确认「不含换行」的区间右界（绝对索引）。增量扫描：append 只从
     /// max(cursor, scannedUpTo) 起找换行，避免每次 append 重扫整个未消费窗口
-    /// （审查者 C 实测 4MiB 单行 851ms → 7.7ms；旧行为是 O(window²/chunk)）。
+    /// （重扫是 O(window²/chunk)，实测 4MiB 单行 851ms → 7.7ms）。
     private var scannedUpTo: Data.Index = 0
     /// 超限重同步后置位：下一条换行前的字节仍属被丢弃的超长行，整段吞掉、
-    /// 绝不上抛（否则残片可能被当合法帧派发，B-BUG-1 的 forged suffix）。
+    /// 绝不上抛（否则残片可能被当合法帧派发）。
     private var discardingUntilNewline = false
     private var finished = false
 
@@ -157,7 +155,7 @@ struct LineReader {
             }
         } else if buffer.endIndex - cursor > maxBufferedBytes {
             // 海量无换行数据（协议违约流，永远切不出行）→ 清缓冲重新同步，
-            // 防内存无限增长；计数交调用方 loud（并作废未决请求，B-BUG-1）。
+            // 防内存无限增长；计数交调用方 loud（并作废未决请求）。
             // 判据是**未消费窗口**：已切出的行不参与（BridgeClientLineReadTests
             // 钉住「有换行的超长行不算无换行溢出」）。重同步后必须继续吞到下一个
             // 换行：否则被丢弃行的残尾会作为独立行上抛。
@@ -217,9 +215,9 @@ public final class BridgeClient {
     /// 6：生命周期过渡进行中（上一会话仍在终止收尾）——start 放弃，调用方可重试。
     public static let errorCodeLifecycleBusy = 6
 
-    // MARK: - Phase 0 观测
+    // MARK: - 观测
 
-    /// 入站行 JSON 解析次数（含解析失败的尝试）：Phase 1 C3 之后每行恰一次
+    /// 入站行 JSON 解析次数（含解析失败的尝试）：每行恰一次
     /// （超长行在解析前被挡下，不计入；`handleIncomingLine` 是唯一解析点）。
     /// internal 供测试读取/复位。诊断计数：写入点（read 回调 / 收尾抽干 / 直调测试
     /// 接缝）经 parseCountLock 同步——派发已由 dispatchLock 串行，但计数是进程级
@@ -249,8 +247,8 @@ public final class BridgeClient {
     }
 
     /// 会话读状态作废（stop() 与 handleTermination 共用）：只在代际仍匹配时清掉
-    /// 当前会话的读端句柄，使迟到的旧读回调一律落空。**必须带代际门**（独立验证者 2
-    /// RISK-1）：取状态与调用点之间调用方可能已完成 start()，无条件作废会把新会话的
+    /// 当前会话的读端句柄，使迟到的旧读回调一律落空。**必须带代际门**：取状态与
+    /// 调用点之间调用方可能已完成 start()，无条件作废会把新会话的
     /// 句柄清成 nil → 新会话 stdout 永久失聪（后续守卫全部落空）+ readabilityHandler
     /// 空转。暴露窗只有「捕获（lock 内）→ 调用」数条指令；stop() 收尸轮询那 ~7s
     /// 属于其后的终局结算窗（见 failAllPending 的代际分桶），不是本函数的窗口。
@@ -308,9 +306,9 @@ public final class BridgeClient {
         parseCountLock.unlock()
     }
 
-    /// 退出清理预算（S6）：SIGTERM 后等待 sidecar 优雅退出的宽限期，须与
+    /// 退出清理预算：SIGTERM 后等待 sidecar 优雅退出的宽限期，须与
     /// shell-core.ts `QUIT_CLEANUP_TIMEOUT_MS = 5_000`（AppDelegate
-    /// .quitCleanupTimeout 同一预算）对齐——旧 2s 会在 sidecar 仍在回收本地
+    /// .quitCleanupTimeout 同一预算）对齐——2s 会在 sidecar 仍在回收本地
     /// dsh/ssh 子进程时 SIGKILL，留下孤儿。跨语言锁步由
     /// CrossLanguageLockstepTests 钉住。
     public static let quitCleanupGracePeriod: TimeInterval = 5.0
@@ -321,10 +319,9 @@ public final class BridgeClient {
     private let arguments: [String]
     private let environment: [String: String]
 
-    /// 构造（AppDelegate 按此签名调用，勿改名——第四参数带默认值，既有三参
-    /// 调用不变）。
+    /// 构造（AppDelegate 按此签名调用，勿改名——第四参数带默认值）。
     /// - Parameters:
-    ///   - nodePath: Node 可执行文件路径（POC：系统 node 或 Electron 二进制
+    ///   - nodePath: Node 可执行文件路径（系统 node 或 Electron 二进制
     ///     + ELECTRON_RUN_AS_NODE=1，见 AppDelegate）。
     ///   - arguments: sidecar 脚本路径与参数（sidecar-entry.ts / sidecar.js）。
     ///   - environment: 附加环境变量（合并进当前进程环境，同名覆盖）。
@@ -346,24 +343,24 @@ public final class BridgeClient {
     // MARK: - 状态（除出站面回调属性外全部经 lock 保护）
 
     private let lock = NSLock()
-    /// stderr 环形专用锁（Phase 2 C6）：sidecar 日志逐行经过它，不再与
+    /// stderr 环形专用锁：sidecar 日志逐行经过它，不与
     /// invoke/pending 的主状态锁争用。`stderrTail` 是唯一受它保护的状态，
     /// 与 pipe/登记不构成任何不变式，故可独立；锁序恒为 lock → stderrLock。
     private let stderrLock = NSLock()
-    /// 行缓冲专用锁（Phase 2 C6 补口）：stdout/stderr 两个 LineReader 的
-    /// append/finish 都在它下面做（解码整块行是持锁耗时的大头），不再占用主
+    /// 行缓冲专用锁：stdout/stderr 两个 LineReader 的
+    /// append/finish 都在它下面做（解码整块行是持锁耗时的大头），不占用主
     /// 状态锁。两个 reader 之间无不变式，一个锁即可；锁序恒为
     /// lock → readerLock（start() 复位时持 lock 再取它，无反向路径）。
     private let readerLock = NSLock()
     /// 写串行锁（管道写不与其他帧交错；见文件头「写帧」注释）。
     private let writeLock = NSLock()
-    /// stdout 帧派发串行锁（第三轮审查 R1/R2/R7 收口）：`processStdoutOutcome` 全程持
+    /// stdout 帧派发串行锁：`processStdoutOutcome` 全程持
     /// 它，故回调绝不并发进入；同时**不引入无界异步队列**——派发仍在读回调/收尾线程
     /// 同步执行，保留「读线程 = 消费者」的天然背压（慢消费者会阻塞读端，而不是让队列与
     /// LineReader 父缓冲切片无界堆积）。stderr 中继不参与此锁：它有独立回调线程 +
     /// stderrLock，stderr 写端被挂起时只堵住日志，绝不拖住协议帧派发。
     ///
-    /// **全局锁序**（独立验证者 1 用冻结源码复现过反向锁序死锁，故必须遵守）：
+    /// **全局锁序**（反向锁序会死锁，故必须遵守）：
     ///   dispatchLock → lifecycleLock → lock →（readerLock | stderrLock）
     /// 即：持有外层锁的人**只能**按序获取更内层的锁；`handleTermination` 因此**先取
     /// dispatchLock 再取 lifecycleLock**（它要抽干并派发死前帧，而帧回调可能正持
@@ -377,40 +374,37 @@ public final class BridgeClient {
     private var outputReader = LineReader()
     private var stderrReader = LineReader()
     /// 流收尾标志（readerLock 保护）：EOF/终止收尾后不再接受该流的读回调。
-    /// 使「availableData + append/finish」在 readerLock 下成为原子段——修掉
-    /// read-then-lock 与收尾竞争导致的静默丢行，以及旧会话回调把旧进程字节
-    /// 注入新会话 reader 的路径。
+    /// 使「availableData + append/finish」在 readerLock 下成为原子段——读回调与
+    /// 收尾竞争不会静默丢行，旧会话回调也无法把旧进程字节注入新会话 reader。
     private var stdoutEOF = false
     private var stderrEOF = false
     /// 当前会话的读端句柄（readerLock 保护）：读回调的会话身份守卫只看它——
     /// 与 reader/EOF 同锁发布，避免跨锁读 outputPipe/errorPipe 的数据竞争，
-    /// 也避免旧会话回调注入新会话（独立审查 C-BUG-1）。
+    /// 也避免旧会话回调注入新会话。
     private var stdoutHandle: FileHandle?
     private var stderrHandle: FileHandle?
     /// 与 reader 状态同步的会话代际（readerLock）：终止收尾只在代际仍匹配时
-    /// 生效，防旧收尾把新会话 reader 标记 finished（A-BUG-3 restart-deaf）。
+    /// 生效，防旧收尾把新会话 reader 标记 finished。
     private var readerGeneration = 0
     private var nextID = 1
     /// 未决请求条目（锁保护）：续体与**登记时的会话代际**同处一条记录——二者同增
-    /// 同删，不再靠两张字典手工同步（第七轮重构：双表簿记是「漏更新其中一张」的
-    /// 隐患来源）。终局结算按代际分桶：既不误杀新会话的请求，也不让旧会话的
-    /// invoke 悬挂（最终验证者 RISK-1）。
+    /// 同删（分成两张表就有「漏更新其中一张」的隐患）。终局结算按代际分桶：既不误杀
+    /// 新会话的请求，也不让旧会话的 invoke 悬挂。
     private struct PendingEntry {
         let continuation: CheckedContinuation<AnyCodable, Error>
         let generation: Int
     }
     private var pending: [Int: PendingEntry] = [:]
     private var sigpipeIgnored = false
-    // —— M3 W-15/16 出站面状态 ——
+    // —— 出站面状态 ——
     /// 已应答 edgeId 守卫（锁保护）：edge 应答恰好一次的守卫（与 pending 字典
     /// 的 id 所有权纪律同构——edgeId 的所有权 = 本守卫的插入成功）。有界
-    /// （S14：长会话不无界增长；容量与淘汰语义见 BoundedEdgeReplyGuard）。
+    /// （长会话不无界增长；容量与淘汰语义见 BoundedEdgeReplyGuard）。
     private var answeredEdgeIDs = BoundedEdgeReplyGuard()
-    /// 生命周期过渡锁（第三轮残留清理重构）：start()/stop()/handleTermination **全程**
-    /// 互斥，取代此前「terminalInProgress 标志 + 10ms 轮询」的方案——过渡不再有
-    /// check-then-act 窗口，也不会出现「旧收尾与新会话交错」或「stop 快路径撞自然死亡
-    /// 收尾」。递归锁：onTerminated 内同一线程同步 start() 同一实例时允许重入（此刻旧
-    /// 会话的状态变更已全部完成，只剩回调本身）。
+    /// 生命周期过渡锁：start()/stop()/handleTermination **全程**
+    /// 互斥——过渡不留 check-then-act 窗口，也不会出现「旧收尾与新会话交错」或
+    /// 「stop 快路径撞自然死亡收尾」。递归锁：onTerminated 内同一线程同步 start() 同一
+    /// 实例时允许重入（此刻旧会话的状态变更已全部完成，只剩回调本身）。
     /// 锁序（与 dispatchLock 注释同源，必须遵守）：
     ///   dispatchLock → lifecycleLock → lock →（readerLock | stderrLock）
     /// 即终局收尾先取 dispatchLock 再取本锁；帧回调只可能沿此序向内取本锁。
@@ -424,25 +418,25 @@ public final class BridgeClient {
     private var lastTerminationStatusStorage: Int32?
     /// 有界日志汇聚（见 LogSink）：所有诊断日志的唯一出口。
     private let logSink = LogSink()
-    /// 最近 sidecar stderr 行（T-3：有界环形，只服务启动失败报告/失败页考古；
+    /// 最近 sidecar stderr 行（有界环形，只服务启动失败报告/失败页考古；
     /// 锁保护，start() 复位）。
     private var stderrTail: [String] = []
     /// stderr 环形保留行数上限。
     private static let stderrTailLimit = 40
     /// 单行入环前的字符截断（防一篇超长栈撑爆报告/日志）。
     private static let stderrLineCharLimit = 400
-    /// sidecar stderr 行的落盘出口（2026-12 取证修复）：`<userData>/logs/sidecar.log`。
+    /// sidecar stderr 行的落盘出口：
     /// nil = 只透传 stdout（单测/自定义形状）。注入方保证线程安全（生产端是
     /// ShellLog，自带 NSLock）；本属性在 start() 之前赋值、之后只读，
     /// 与管道读取线程不并发写（与 onEvent 同纪律）。
     ///
-    /// 2026-12 合并（perf 非阻塞日志通道）：调用点搬到 LogSink 的汇聚线程（见
+    /// 调用点在 LogSink 的汇聚线程（见
     /// relaySidecarLogLine / Entry.sidecar）；赋值时同步给汇聚线程的旁路消费者。
     public var sidecarLogSink: ((String) -> Void)? {
         didSet { logSink.sidecarSink = sidecarLogSink }
     }
 
-    /// 最近 sidecar stderr 摘要（T-3；启动失败报告在进程终止回调里同步读取，
+    /// 最近 sidecar stderr 摘要（启动失败报告在进程终止回调里同步读取，
     /// 见 handleTermination 的 finishStderrReading）。多行以换行连接。
     public var recentStderrSummary: String {
         stderrLock.lock()
@@ -455,7 +449,7 @@ public final class BridgeClient {
     /// 赋值方（controller）与读取线程不并发写）。
     public var onEvent: ((String, AnyCodable?) -> Void)?
 
-    // MARK: - 出站面（sidecar → Swift：edge 请求 / notify / ready；M3 W-15/16）
+    // MARK: - 出站面（sidecar → Swift：edge 请求 / notify / ready）
 
     /// sidecar→Swift 的 edge 请求出口。NOTIFY 类通道的宿主腿在 sidecar 侧
     /// await sendEdge 的应答（node-edges pendingEdges 无超时——不应答 =
@@ -483,7 +477,7 @@ public final class BridgeClient {
     /// 业务帧）。线程契约与 onEvent 相同（管道读取线程回调）。
     public var onReady: ((_ port: Int, _ shellVersion: String) -> Void)?
 
-    /// 自然终止出口（W-15 Supervisor 接线）：sidecar 崩溃/自行退出时回调
+    /// 自然终止出口：sidecar 崩溃/自行退出时回调
     /// terminationStatus（管道读取线程，即 SIGCHLD 处理线程）。**主动 stop()
     /// 不触发**（stop 先摘 terminationHandler 再 terminate）。赋值须在 start()
     /// 之前（与 onEvent/onReady 同契约）。
@@ -496,7 +490,7 @@ public final class BridgeClient {
         return process?.isRunning ?? false
     }
 
-    /// 未决请求数（测试/诊断用，G9：超长帧必须作废全部未决请求的可观察锚点；
+    /// 未决请求数（测试/诊断用：超长帧必须作废全部未决请求的可观察锚点；
     /// 与 pending 字典同锁保护）。
     var pendingRequestCount: Int {
         lock.lock()
@@ -514,17 +508,17 @@ public final class BridgeClient {
         return lastTerminationStatusStorage
     }
 
-    // MARK: - 出站面默认 edge 应答策略（M3 W-15/16）
+    // MARK: - 出站面默认 edge 应答策略
 
-    /// edge 应答兜底（W-15/16 语义：Swift 必须应答、绝不挂起；sidecar 侧
-    /// sendEdge 无超时）。宿主腿（W-19/20）非 nil 时先问 legs；legs 报
+    /// edge 应答兜底（Swift 必须应答、绝不挂起；sidecar 侧
+    /// sendEdge 无超时）。宿主腿非 nil 时先问 legs；legs 报
     /// unimplemented 前缀（本壳没有该腿）才落到这里。
-    /// G31（2026-12 审计）：兜底**恒为** loud 拒绝
-    /// {ok:false, error:"swift-edge-unimplemented:<method>"}——绝不假成功。
-    /// 此前 trayAvailable/notificationSupported/badgeCountApiAvailable/
-    /// mainWindowAlive/webViewContentAlive 恒 true、showNativeNotification 恒
-    /// 成功、showMessage 恒第 0 号按钮：未来新增未实现 edge 落入该表即静默
-    /// 成功，core 会据此做出错误裁决。ui-unavailable 是真实腿的诚实降级，
+    /// 兜底**恒为** loud 拒绝
+    /// {ok:false, error:"swift-edge-unimplemented:<method>"}——绝不假成功：
+    /// trayAvailable/notificationSupported/badgeCountApiAvailable/
+    /// mainWindowAlive/webViewContentAlive 若恒 true、showNativeNotification 恒
+    /// 成功、showMessage 恒第 0 号按钮，未实现 edge 落入该表即静默成功，
+    /// core 会据此做出错误裁决。ui-unavailable 是真实腿的诚实降级，
     /// 直接传播，绝不回落成本兜底。
     public var edgeHostLegs: SwiftEdgeHostLegs?
 
@@ -536,13 +530,13 @@ public final class BridgeClient {
         if let legs = edgeHostLegs {
             let outcome = legs.respond(method: method, payload: payload)
             let error = outcome.error ?? ""
-            // unimplemented（legs 未实现）→ 回落 v1 默认表（POC 无宿主不挂起）；
+            // unimplemented（legs 未实现）→ 回落 v1 默认表（无宿主也不挂起）；
             // ui-unavailable（真实腿的诚实降级）→ 直接传播，绝不回落成乐观成功。
             if !error.hasPrefix(SwiftEdgeHostLegs.unimplementedPrefix) {
                 return outcome
             }
         }
-        // G31：未实现 → 显式错误（绝不谎报可用/已显示/已选按钮）。
+        // 未实现 → 显式错误（绝不谎报可用/已显示/已选按钮）。
         return (nil, "swift-edge-unimplemented:\(method)")
     }
 
@@ -553,7 +547,7 @@ public final class BridgeClient {
         onEdgeRequest = { [weak self] method, payload, reply in
             guard let self else { return }
             if let legs = self.edgeHostLegs, legs.canHandleAsync(method: method) {
-                // W-21：异步宿主腿（通知调度等）——reply 恰一次由 sendEdgeReply
+                // 异步宿主腿（通知调度等）——reply 恰一次由 sendEdgeReply
                 // 守卫；legs 内部错误一律 loud，绝不挂起。
                 legs.respondAsync(method: method, payload: payload, completion: { result, error in
                     reply(result, error)
@@ -565,22 +559,22 @@ public final class BridgeClient {
         }
     }
 
-    // MARK: - 子进程环境（T-11）
+    // MARK: - 子进程环境
 
-    /// 打包态剔除全部 DSH_CHAMBER_SHELL_* 的**唯一实现**（2026-12 单源化）：
+    /// 打包态剔除全部 DSH_CHAMBER_SHELL_* 的**唯一实现**：
     /// 壳自身 env（AppDelegate 的路径/URL 解析基底）与 sidecar 子进程 env
     /// （childEnvironment）共用同一判据（前缀 + isPackaged）。dev（swift run /
-    /// 非 .app）原样返回——这些变量只服务 dev/POC。
+    /// 非 .app）原样返回——这些变量只服务 dev。
     public static func filteredShellEnvironment(base: [String: String],
                                                 isPackaged: Bool) -> [String: String] {
         guard isPackaged else { return base }
         return base.filter { !$0.key.hasPrefix("DSH_CHAMBER_SHELL_") }
     }
 
-    /// 子进程环境的合并规则（T-11）：打包态从基底与 overlay 都剔除全部
+    /// 子进程环境的合并规则：打包态从基底与 overlay 都剔除全部
     /// DSH_CHAMBER_SHELL_*（单源 = filteredShellEnvironment）。start() 把当前进程
     /// 环境当基底、构造参数当 overlay——若只过滤调用方传入的 overlay，基底里的
-    /// DSH_CHAMBER_SHELL_* 仍会经合并进入 sidecar（此前的实际泄漏路径）。打包判定与
+    /// DSH_CHAMBER_SHELL_* 仍会经合并进入 sidecar。打包判定与
     /// AppDelegate 相同：PackagedLayout.isAppBundle(executablePath:)。
     public static func childEnvironment(base: [String: String],
                                         overlay: [String: String],
@@ -619,7 +613,7 @@ public final class BridgeClient {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: nodePath)
         process.arguments = arguments
-        // T-11：打包态基底过滤 DSH_CHAMBER_SHELL_*（见 childEnvironment 注释）。
+        // 打包态基底过滤 DSH_CHAMBER_SHELL_*（见 childEnvironment 注释）。
         let executablePath = Bundle.main.executableURL?.path ?? CommandLine.arguments.first ?? ""
         process.environment = Self.childEnvironment(
             base: ProcessInfo.processInfo.environment,
@@ -657,12 +651,12 @@ public final class BridgeClient {
             self?.handleTermination(of: proc)
         }
 
-        // 会话读状态发布（独立审查 C-BUG-1）：reader/EOF/句柄必须**同处 readerLock
+        // 会话读状态发布：reader/EOF/句柄必须**同处 readerLock
         // 段内一次性发布，且早于 run()**。否则存在「新句柄已可见、reader 还没换」
         // 的窗口：读回调会把新会话首帧读进旧 LineReader，随后 start() 复位把它
         // 永久丢弃（丢 ready 帧 = A 桥永不放开、页面所有 invoke ipc_not_ready）。
         // 读回调只认 readerLock 下的句柄身份，故发布即原子；run() 抛错在下方回滚。
-        // 出站面会话状态复位 + **代际推进先于读状态发布**（独立验证者 2 RISK-2）：
+        // 出站面会话状态复位 + **代际推进先于读状态发布**：
         // 迟到收尾用 generation == readerGeneration 判新旧；若代际晚于句柄可见，
         // 迟到收尾会以旧代际匹配、把新 reader 直接 finish 并置 stdoutEOF → 新会话
         // 永久静音。故先推进 sessionGeneration，再在同一 readerLock 临界区内
@@ -697,7 +691,7 @@ public final class BridgeClient {
         self.inputPipe = input
         self.outputPipe = output
         self.errorPipe = error
-        // T-3：stderr 环形复位（新进程/重启只带自己的失败证据）。Phase 2 C6：
+        // stderr 环形复位（新进程/重启只带自己的失败证据）：
         // stderrTail 由独立 stderrLock 保护（与上面的主状态锁无关）。
         stderrLock.lock()
         stderrTail.removeAll()
@@ -705,7 +699,7 @@ public final class BridgeClient {
     }
 
     /// 停止 sidecar：SIGTERM → 等 ≤ quitCleanupGracePeriod（5s，与 shell-core
-    /// 清理预算同值，S6）→ SIGKILL 兜底 → ≤2s 有界收尸（内部注释：最坏 ≈7s）。
+    /// 清理预算同值）→ SIGKILL 兜底 → ≤2s 有界收尸（内部注释：最坏 ≈7s）。
     /// 仅 AppDelegate.applicationWillTerminate / 退出清理路径使用，注释声明。
     /// 幂等：重复 stop / 进程已自然退出均安全。
     public func stop() {
@@ -727,7 +721,7 @@ public final class BridgeClient {
             return
         }
         generation = sessionGeneration
-        // 立刻推进会话代际（第三轮审查 afterstop）：stop() 返回后绝不允许再有本会话的
+        // 立刻推进会话代际：stop() 返回后绝不允许再有本会话的
         // 帧进入回调（文件头/本方法注释承诺「stop 后不再处理任何子进程输出」）。代际
         // 推进后，在途/已切行的旧代际帧会在派发代际门被丢弃；本代际未决请求仍按下面
         // 捕获的 generation 分桶结算。
@@ -752,8 +746,7 @@ public final class BridgeClient {
         takenProcess.terminationHandler = nil
 
         // SIGTERM → 轮询 ≤ quitCleanupGracePeriod（5s，与 shell-core 的
-        // QUIT_CLEANUP_TIMEOUT_MS 同预算，S6）→ SIGKILL 兜底。（G10：旧注释写
-        // 「≤2s」与实现 5.0s 矛盾——改注释而非改值：5s 是跨语言冻结预算，
+        // QUIT_CLEANUP_TIMEOUT_MS 同预算）→ SIGKILL 兜底。（5s 是跨语言冻结预算，
         // 2s 会在 sidecar 回收本地 dsh/ssh 子进程时提前 SIGKILL 留孤儿。）
         if takenProcess.isRunning {
             takenProcess.terminate()
@@ -772,8 +765,8 @@ public final class BridgeClient {
         // 自然退出恰与 stop() 并发时（terminationHandler 已先行触发、Foundation
         // 已内部 waitpid 收尸，handleTermination 与 stop 竞争收尾——本文件注释
         // 声明的并发路径）waitUntilExit 存在永不返回的竞态（集成测试实测偶发
-        // 挂死）。改为：SIGKILL 后再有界轮询 ≤2s 等进程消亡——isRunning 转
-        // false 即 Foundation 已收尸（无僵尸残留），此时**不再** waitUntilExit；
+        // 挂死）。SIGKILL 后再有界轮询 ≤2s 等进程消亡——isRunning 转
+        // false 即 Foundation 已收尸（无僵尸残留），此时**不** waitUntilExit；
         // 仍存活（SIGKILL 后理论不可达）才 waitUntilExit 兜底。stop() 因此
         // 绝不无限阻塞调用线程，「同步收尸」契约不变（正常路径 <2s）。
         let reapDeadline = Date().addingTimeInterval(2.0)
@@ -787,7 +780,7 @@ public final class BridgeClient {
         // 记录本次终止退出码（测试/未来 Supervisor 用）：sidecar 处理 SIGTERM
         // 优雅退出 → 0；轮询超时后 SIGKILL 兜底 → Darwin 上报信号号 9。
         //
-        // 终局副作用的会话绑定（独立审查 C-RISK）：stop() 的收尸轮询最长 ~7s，
+        // 终局副作用的会话绑定：stop() 的收尸轮询最长 ~7s，
         // 期间 start() 会在 lifecycleLock 上等待（超时 code 6，不会真正并发），但
         // 代际分桶仍是必要保险：结算只清本次 stop 捕获的代际条目。
         // 记录退出码：本方法自己在上面推进了代际，故不按代际判定；lifecycleLock 保证
@@ -795,7 +788,7 @@ public final class BridgeClient {
         lock.lock()
         lastTerminationStatusStorage = takenProcess.terminationStatus
         lock.unlock()
-        // 代际分桶结算（验证者 1 TOCTOU + 最终验证者 RISK-1）：只结算本次 stop 捕获的
+        // 代际分桶结算：只结算本次 stop 捕获的
         // 代际登记的请求（旧会话不悬挂、新会话不被误杀）。
         // 本地化：bridge.pendingAborted（该 reason 同时是未决请求 NSError 的
         // localizedDescription，经 invoke 失败回页面）。
@@ -806,7 +799,7 @@ public final class BridgeClient {
     /// 自然退出收尾：sidecar 崩溃/自行 exit 时（SIGCHLD 回调线程）——置状态
     /// 为未运行、摘读回调、按 EOF 语义收尾行缓冲、未决请求全部作废（loud）。
     ///
-    /// 身份守卫（独立审查 A-BUG-1）：`triggered` 是 Foundation 传回的触发进程。
+    /// 身份守卫：`triggered` 是 Foundation 传回的触发进程。
     /// 若 `process` 已不是它（stop() 已清 → nil，或新会话已 start），说明这是
     /// 旧会话的迟到回调——直接忽略。绝不读**仍是存活新会话**进程的
     /// terminationStatus（对运行中的 Process 读该属性抛不可捕获 NSException，
@@ -815,8 +808,8 @@ public final class BridgeClient {
     private func handleTermination(of triggered: Process) {
         // **先**取 dispatchLock、**再**取 lifecycleLock（全局锁序，见 dispatchLock 注释）：
         // 收尾要抽干并派发死前帧，而帧回调可能正持 dispatchLock 调 start()/stop()——若
-        // 反过来先取 lifecycleLock 再等 dispatchLock 就形成死锁环（独立验证者 1 已用冻结
-        // 源码确定性复现）。这样帧回调内同步 stop()/start() 只会在内层锁上等待。
+        // 反过来先取 lifecycleLock 再等 dispatchLock 就形成死锁环。这样帧回调内同步
+        // stop()/start() 只会在内层锁上等待。
         dispatchLock.lock()
         defer { dispatchLock.unlock() }
         // 与 start()/stop() 互斥：终局收尾期间不可能有新会话发布（反之亦然）。
@@ -849,7 +842,7 @@ public final class BridgeClient {
 
         let status = triggered.terminationStatus
         let reason = triggered.terminationReason
-        // 退出码分级：Supervisor（W-15）据 status 决定重启退避 / fatal 分流
+        // 退出码分级：Supervisor 据 status 决定重启退避 / fatal 分流
         // （0 = 自行优雅退出；3 = 目录锁冲突；其余非零 = 崩溃），本类只上报。
         log("sidecar 进程退出：terminationStatus=\(status)（reason=\(reason.rawValue)）")
         lock.lock()
@@ -860,12 +853,12 @@ public final class BridgeClient {
         // 未决请求作废（作废先于残帧分发会丢“死前应答”——进程已亡，
         // 语义上桥已断，注释声明此取舍：宁可 loud 丢弃也不悬挂）。
         finishStdoutReading(takenOutput, generation: generation)
-        // T-3：stderr 同步抽干——terminationHandler 与 readabilityHandler 之间
+        // stderr 同步抽干——terminationHandler 与 readabilityHandler 之间
         // 没有先后保证，不抽干则「死前最后一行」（EADDRINUSE 等）会漏出
         // fatal 摘要（失败报告/失败页只能给笼统建议）。
         finishStderrReading(takenError, generation: generation)
 
-        // 终局副作用的会话绑定（独立审查 C-RISK）：抽干期间调用方可能已 stop+start，
+        // 终局副作用的会话绑定：抽干期间调用方可能已 stop+start，
         // 旧会话不得作废新会话的未决请求，也不得把旧退出码上报给 Supervisor
         // （后者会按同一实例把旧会话的退出当成本次会话崩溃）。
         // 本地化：bridge.pendingProcessExited（同上，作废文案随 invoke 失败回页面）。
@@ -876,8 +869,7 @@ public final class BridgeClient {
             return
         }
         // 最终复核 + 回调都在 lifecycleLock 保护下：本方法全程持锁，start()/stop() 与
-        // 之互斥，故「判定通过 → onTerminated 上报」之间不可能插入新会话（第三轮残留
-        // 清理：此前这里是 check-then-act，现已由生命周期锁闭合）。
+        // 之互斥，故「判定通过 → onTerminated 上报」之间不可能插入新会话。
         lock.lock()
         let stillCurrent = sessionGeneration == generation
         lock.unlock()
@@ -887,7 +879,7 @@ public final class BridgeClient {
         }
 
         // 终局之后推进会话代际：drain 已用旧代际派发（死前帧照常送达），此后任何
-        // 在途/迟到的本会话帧都会被派发代际门丢弃（第三轮审查 afterstop 的同款契约）。
+        // 在途/迟到的本会话帧都会被派发代际门丢弃。
         lock.lock()
         sessionGeneration += 1
         lock.unlock()
@@ -903,7 +895,7 @@ public final class BridgeClient {
 
     /// 读回调：只在 dispatch source 报告可读时进入（有数据或 EOF），故锁内
     /// availableData 不会阻塞——锁内阻塞 I/O 的禁令针对**无就绪契约**的抽干路径
-    /// （那里用 FIONREAD 探针，见 finishStdoutReading）；独立审查 A-BUG-2 复核点。
+    /// （那里用 FIONREAD 探针，见 finishStdoutReading）。
     private func readStdout(_ handle: FileHandle) {
         var outcome: LineReader.Outcome?
         var generation = 0
@@ -932,19 +924,19 @@ public final class BridgeClient {
     /// 一帧仍在管道缓冲里」的丢帧窗口（BridgeClientLineReadTests 的
     /// final-frame-at-exit 用例钉住）。抽干在 readerLock 内完成、分发在锁外
     /// （dispatch 会取主状态锁，锁序恒为 readerLock → lock，绝不反向）。
-    /// internal：测试接缝（与 handleIncomingLine/processStdoutOutcome 同规，G9）。
+    /// internal：测试接缝（与 handleIncomingLine/processStdoutOutcome 同规）。
     func finishStdoutReading(_ pipe: Pipe?, generation: Int) {
         var outcomes: [LineReader.Outcome] = []
         var probeFailed = false
         var capped = false
         readerLock.lock()
-        // 代际守卫（独立审查 A-BUG-3）：收尾窗口内调用方可能已 stop+start；本收尾
+        // 代际守卫：收尾窗口内调用方可能已 stop+start；本收尾
         // 属旧会话时，作用到新 reader 会把新会话 stdout 永久静音（帧全丢）。
         if generation == readerGeneration, !stdoutEOF {
             stdoutEOF = true
             if let handle = pipe?.fileHandleForReading {
                 var batches = 0
-                // 非阻塞抽干（A-BUG-2）：写端被第三方持有（无数据也无 EOF）时
+                // 非阻塞抽干：写端被第三方持有（无数据也无 EOF）时
                 // availableData 会阻塞——锁内阻塞 I/O 会把收尾与整个对象卡死。
                 // FIONREAD 探到 0 立即停，绝不等待。
                 while true {
@@ -961,13 +953,12 @@ public final class BridgeClient {
         }
         readerLock.unlock()
         dispatchStdout(outcomes, generation: generation)   // 释放 readerLock 后串行派发
-        // 日志一律锁外（log 会写 stderr，属阻塞 I/O：锁内做会重蹈 A-BUG-2 的
-        // 锁内阻塞原则；独立验证者 1 NIT）。
+        // 日志一律锁外（log 会写 stderr，属阻塞 I/O，锁内做就是锁内阻塞 I/O）。
         if probeFailed { log("stdout：FIONREAD 探测失败，收尾抽干提前结束（残帧可能丢失）") }
         if capped { log("stdout：收尾抽干达到批次上限，其余字节不再读取（会话已终止）") }
     }
 
-    /// stderr 残尾同步抽干（进程终止路径专用，T-3）：把传入管道里剩余字节全部
+    /// stderr 残尾同步抽干（进程终止路径专用）：把传入管道里剩余字节全部
     /// 读进 stderrReader 并 EOF 收尾；幂等（stderrEOF + LineReader.finished）。
     /// internal：测试接缝（同上）。
     func finishStderrReading(_ pipe: Pipe?, generation: Int) {
@@ -1010,7 +1001,7 @@ public final class BridgeClient {
     /// 测试接缝：在后台线程持有 lifecycleLock 指定时长（验证 start() 的有界等待与 code 6
     /// 超时路径）。返回的信号量在锁**已获取**后 signal。
     /// 注意：测试持锁时长须显著大于 terminalTransitionTimeout（默认 2s），否则
-    /// 调度抖动会让 start() 在锁释放后才进入判定、假红（验证者 1 NIT）。
+    /// 调度抖动会让 start() 在锁释放后才进入判定、假红。
     func holdLifecycleLockForTesting(seconds: TimeInterval)
         -> (acquired: DispatchSemaphore, released: DispatchSemaphore) {
         let acquired = DispatchSemaphore(value: 0)
@@ -1038,7 +1029,7 @@ public final class BridgeClient {
     func logLineForTesting(_ message: String) { log(message) }
 
     /// 测试接缝：走**生产派发路径**（dispatchLock 串行）投递一批 stdout 行——用于验证
-    /// 并发调用下回调绝不并发（第三轮验证 F1 回归网）。
+    /// 并发调用下回调绝不并发（回归网）。
     func dispatchStdoutForTesting(_ lines: [Data], generation: Int) {
         dispatchStdout([LineReader.Outcome(lines: lines, overflowResets: 0)], generation: generation)
     }
@@ -1085,13 +1076,13 @@ public final class BridgeClient {
     /// 计数 loud；每行先过超长检查再过结构解码，都不过即打印 + 丢弃（fail-loud，
     /// design 25 §4.4.2）。
     ///
-    /// B-BUG-1（独立审查实测）：真实管道按 16KiB 分块，>maxBufferedBytes 的单行
+    /// 真实管道按 16KiB 分块，>maxBufferedBytes 的单行
     /// 会先触发 LineReader 溢出重同步——被丢掉的字节可能正是某个响应的前半段，
     /// 该响应此后永远无法配对。故溢出即作废全部未决请求（fail-closed），绝不留下
     /// 悬挂到 stop() 的 invoke。
     func processStdoutOutcome(_ outcome: LineReader.Outcome, generation: Int) {
         reportLineReaderIssues(outcome, channel: "stdout")
-        // 派发前的会话代际门（最终验证者 RISK-2）：切行在 readerLock 内完成、派发在
+        // 派发前的会话代际门：切行在 readerLock 内完成、派发在
         // 锁外，收尾被 start() 插入时旧会话的帧不得进入新会话（响应/事件/edge 应答）。
         lock.lock()
         let isCurrent = sessionGeneration == generation
@@ -1101,10 +1092,10 @@ public final class BridgeClient {
             return
         }
         // 先派发本批已切出的完整行（它们在流序上先于被丢弃的残尾），再作废
-        // 未决请求：否则同批里已到达的响应会先被 code 4 顶掉（验证者 2 NIT；
+        // 未决请求：否则同批里已到达的响应会先被 code 4 顶掉（
         // 真实管道下不可达——单批 ≤64KiB < 4MiB，测试接缝可达）。
         //
-        // **逐行复核代际**（第三轮验证 BUG）：单批最多可含数千小帧（≤64KiB），
+        // **逐行复核代际**：单批最多可含数千小帧（≤64KiB），
         // stop()/重启可在批次派发中途推进代际——已过门的批次不得把剩余行继续
         // 投进回调（否则 stop() 返回后仍有旧会话事件到达）。每行一次无竞争
         // NSLock，与 deliverResponse 的每响应一次同量级。
@@ -1158,21 +1149,19 @@ public final class BridgeClient {
 
     /// 单条协议行 → 帧分发。超长/非法 → 打印错误并丢弃该帧，绝不静默继续。
     ///
-    /// G9：internal（非 private）是**测试接缝**——读路径（LineReader →
-    /// processStdoutOutcome → 本函数）此前零 XCTest 覆盖；@testable 只放开
+    /// internal（非 private）是**测试接缝**——读路径（LineReader →
+    /// processStdoutOutcome → 本函数）；@testable 只放开
     /// internal，本函数没有进入公开面，生产调用点仍只有 processStdoutOutcome。
     ///
-    /// Phase 1 C3：**每行只解析一次**——一次 JSONSerialization → [String: Any]
+    /// **每行只解析一次**——一次 JSONSerialization → [String: Any]
     /// 同时喂 `FrameCodec.classify`（id 族）与 `decodeOutboundFrame(jsonObject:)`
-    /// （edge/notify 族）。旧路径先 JSONDecoder 解一次、归 nil 后再
-    /// JSONSerialization 解第二次（另加两次 UTF-8 重编码与两次长度扫描）。
-    /// 严格性（类型不符毒化整行）集中在 FrameCodec.classify。
+    /// （edge/notify 族）。严格性（类型不符毒化整行）集中在 FrameCodec.classify。
     ///
-    /// R2：入口是**原始字节**（LineReader 不再物化 String），UTF-8 合法性由
+    /// 入口是**原始字节**（LineReader 不物化 String），UTF-8 合法性由
     /// JSONSerialization 判定；String 形态仅作测试接缝。
     func handleIncomingLine(_ data: Data, generation: Int?) {
         guard data.count <= FrameCodec.maxFrameBytes else {
-            // 2026-12 双端逐函数核对 F4：超长行连 id 都解析不出（响应被截断），
+            // 超长行连 id 都解析不出（响应被截断），
             // 若它正对应某个未决请求，该 continuation 会永久悬挂（Electron 侧
             // 无长度上限）。fail-closed：loud 上报并作废全部未决请求，绝不静默
             // 留一个永不 settle 的 Promise。
@@ -1198,7 +1187,7 @@ public final class BridgeClient {
                 deliverResponse(id: id, ok: ok, result: result, error: error)
             case .event(let event, let payload):
                 // 事件在读取线程回调（见文件头线程契约）；无订阅者 → loud
-                // （事件静默丢弃会让上层状态机漏状态，POC 宁响勿哑）。
+                // （事件静默丢弃会让上层状态机漏状态，宁响勿哑）。
                 if let handler = onEvent {
                     handler(event, payload)
                 } else {
@@ -1215,8 +1204,8 @@ public final class BridgeClient {
         }
         // id 族分类未命中 → 试出站面分类（edge/notify 两族——它们既无 id 也
         // 无 event 键，不在 request/response/event 三族内，见 decodeOutboundFrame
-        // 注释；M3 前这类帧在此被当非协议行 loud 丢弃，sidecar 的 sendEdge 因此
-        // 挂起——W-15/16 修复点）。
+        // 注释），分类命中即由 dispatchOutboundFrame 分发——sidecar 的 sendEdge
+        // 因此不会挂起）。
         if let outbound = Self.decodeOutboundFrame(jsonObject: object) {
             dispatchOutboundFrame(outbound, generation: generation)
             return
@@ -1234,7 +1223,7 @@ public final class BridgeClient {
         handleIncomingLine(Data(line.utf8), generation: nil)
     }
 
-    // MARK: - 出站帧（sidecar → Swift：edge/notify）解码与分发（M3 W-15/16）
+    // MARK: - 出站帧（sidecar → Swift：edge/notify）解码与分发
 
     /// 出站帧的原始行分类结果（B 桥线协议在 request/response/event 三族之外
     /// 的两族，sidecar → Swift 方向）。
@@ -1246,21 +1235,21 @@ public final class BridgeClient {
         case notify(event: String, payload: AnyCodable?)
     }
 
-    /// 已解析顶层 JSON 对象 → 出站帧分类（Phase 1 C3：对象来自
-    /// handleIncomingLine 的唯一一次解析，本函数不再自行 JSONSerialization）。
+    /// 已解析顶层 JSON 对象 → 出站帧分类（对象来自
+    /// handleIncomingLine 的唯一一次解析，本函数不自作 JSONSerialization）。
     /// **在 BridgeClient 层做而不扩 FrameCodec/
     /// BridgeFrame**：edge/notify 帧既无 id 也无 event 键，`classify` 按容忍
-    /// 语义归 nil（M3 前 → 非协议行 loud 丢弃）；若给 BridgeFrame 增加 case，
+    /// 语义归 nil；若给 BridgeFrame 增加 case，
     /// 需同步 FrameCodec 的分类与其既有单测断言族（FrameCodecTests
-    /// 的分类优先序/容忍断言），POC 取本层先行分类的最小侵入——注释声明：
-    /// W-17 协议族稳定后若收编回 FrameCodec，本函数与 dispatchOutboundFrame
-    /// 一并迁移，BridgeClient 公开出口不变。
+    /// 的分类优先序/容忍断言），故取本层先行分类的最小侵入；若日后收编回
+    /// FrameCodec，本函数与 dispatchOutboundFrame 一并迁移，BridgeClient
+    /// 公开出口不变。
     /// 分类确定性（防歧义帧摇摆）：edge 键优先于 notify 键（两族协议互斥）；
     /// 结构不合法（edge/notify 名非字符串、edgeId 非数值等）→ nil，调用方
     /// loud（与 `classify` 的 nil 语义同构）。
     private static func decodeOutboundFrame(jsonObject object: [String: Any]) -> OutboundFrame? {
-        // Phase 1 C3 补口（独立审查 RISK）：与 FrameCodec.classify 同规——**已知键
-        // 存在但类型不符毒化整行**。旧实现用 `as?` 链会让
+        // 与 FrameCodec.classify 同规——**已知键
+        // 存在但类型不符毒化整行**：若用 `as?` 链会让
         // {"edge":5,"notify":"ready",…} 跳过非法 edge 落到 notify 分类；两族
         // 协议互斥，类型不符即违约 → nil（调用方 loud 丢弃，fail closed）。
         if object.keys.contains("edge") {
@@ -1282,8 +1271,8 @@ public final class BridgeClient {
 
     /// 出站 edgeId 的严格整数取值：Bool 排除；非浮点存储无损取 Int64；浮点存储
     /// 要求精确可表示且排除 -2^63 边界。
-    /// 判定本体 = `StrictJSONNumber.int64(_:domain: .int64Exact)`（2026-12 单源化，
-    /// 与 FrameCodec.intValue 共用同一实现；JSONSerialization 已丢原始 token 的
+    /// 判定本体 = `StrictJSONNumber.int64(_:domain: .int64Exact)`（与
+    /// FrameCodec.intValue 共用同一实现；JSONSerialization 已丢原始 token 的
     /// 差异说明见 FrameCodec.intValue 注释）。
     private static func exactInt64(_ raw: Any?) -> Int64? {
         StrictJSONNumber.int64(raw, domain: .int64Exact)
@@ -1320,10 +1309,10 @@ public final class BridgeClient {
     ///   - 未设置 → v1 默认策略立即应答（defaultEdgeResponse，绝不挂起）。
     private func handleEdgeRequest(method: String, payload: AnyCodable?, edgeId: Int64,
                                    generation: Int?) {
-        // 应答代际 = 帧通过派发代际门时校验的那一代（第三轮审查 R5）：此前在应答时
-        // 重读 sessionGeneration，并发 start() 会让旧 edgeId 的迟到应答以**新**代际
+        // 应答代际 = 帧通过派发代际门时校验的那一代：若在应答时重读
+        // sessionGeneration，并发 start() 会让旧 edgeId 的迟到应答以**新**代际
         // 通过 sendEdgeReply 守卫，写进新会话 stdin。测试接缝（generation nil）回落
-        // 到**请求处理时**读取（第三轮验证 NIT：此前的注释写成「应答时读取」，与实现相悖）。
+        // 到**请求处理时**读取。
         let replyGeneration: Int
         if let generation {
             replyGeneration = generation
@@ -1427,10 +1416,10 @@ public final class BridgeClient {
             defer { writeLock.unlock() }
             try input?.write(contentsOf: data)
         } catch {
-            // 写失败回滚守卫（第三轮验证 NIT）：本 id 未被对端收到，撤销「已应答」
+            // 写失败回滚守卫：本 id 未被对端收到，撤销「已应答」
             // 标记，使同 id 的再次 reply 不被误判为重复。带**代际门**——若写抛错到
             // 回滚之间恰好完成 stop()+start()，新会话可能已为同号 edgeId 插入守卫，
-            // 此时回滚会误删新会话的标记（第四轮验证 NIT）。
+            // 此时回滚会误删新会话的标记。
             lock.lock()
             if generation == sessionGeneration { answeredEdgeIDs.remove(edgeId) }
             lock.unlock()
@@ -1458,7 +1447,7 @@ public final class BridgeClient {
     /// 唯一、写串行、pending 安全）。
     public func invoke(method: String, payload: AnyCodable? = nil) async throws -> AnyCodable {
         // 先占 id 后编码：编码失败（超限等）仅烧号、不登记、不悬挂——id
-        // 单调语义不受影响（静态审查 #3 注释修正）。
+        // 单调语义不受影响。
         let id = allocateID()
         let data = try FrameCodec.encodeRequest(id: id, method: method, payload: payload)
         return try await withCheckedThrowingContinuation { continuation in
@@ -1531,7 +1520,7 @@ public final class BridgeClient {
     /// throw（code 4）。与 deliverResponse 互斥，续体恰好一次由字典所有权保证。
     /// `reason` 既是落盘日志片段、也是该 NSError 的 localizedDescription——调用方
     /// 传 **NativeText 已本地化**的文案（日志尾注仍是壳内中文诊断）。
-    /// 代际分桶结算版本（最终验证者 RISK-1 + 独立验证者 1 的 TOCTOU）：判定、
+    /// 代际分桶结算版本：判定、
     /// 按代际取条目、排空在**同一次加锁**内完成。只结算 `generation`（nil = 全部）
     /// 登记的条目——既不误杀新会话刚登记的 invoke，也不让旧会话自己的请求悬挂
     /// （全局门跳过旧条目会把它永久留在 pending）。
@@ -1563,7 +1552,7 @@ public final class BridgeClient {
 
     // MARK: - 日志
 
-    /// 有界日志汇聚（第六轮残留清理）：`log()` 只把行**入队**（≤ maxQueueLines），由单条
+    /// 有界日志汇聚：`log()` 只把行**入队**（≤ maxQueueLines），由单条
     /// 后台线程写 stderr——因此持 lifecycleLock / dispatchLock / lock 的路径**绝不在锁内做
     /// 阻塞 I/O**。宿主 stderr 停止排水（管道满且无人读）时只堵住汇聚线程：队列满即丢弃并
     /// 计数，恢复后补一行汇总。FIFO 保序；正常排水下逐行即时送出（退出前未排空的行可能
@@ -1614,7 +1603,7 @@ public final class BridgeClient {
                         return
                     }
                     // 汇总行按**普通行**处理（仍在 draining=true 下）：单一 drainer、
-                    // FIFO 保持、sink 在锁内取快照（第七轮验证 RISK：此前解锁后再写，
+                    // FIFO 保持、sink 在锁内取快照（若解锁后再写，
                     // 窗口内新 enqueue 会起第二条 drainer 并让汇总行后置）。
                     let note = "[bridge] …日志队列满，丢弃 \(dropped) 行\n"
                     dropped = 0
@@ -1639,7 +1628,7 @@ public final class BridgeClient {
         logSink.enqueue("[bridge] \(message)\n")
     }
 
-    /// sidecar stderr 行 → 透传文本（S-29：Swift flavor 无 Electron safeStorage
+    /// sidecar stderr 行 → 透传文本（Swift flavor 无 Electron safeStorage
     /// adapter，Electron 写的 safeStorage 凭证文件不可读时，sidecar 的精确 loud
     /// 文案只经这条日志链到达用户——逐字保留，绝不截断/改写；抽成静态纯函数
     /// 供单测钉住）。
@@ -1647,7 +1636,7 @@ public final class BridgeClient {
         "[sidecar] \(line)\n"
     }
 
-    /// sidecar stderr 行透传（D2：stderr = 唯一日志通道，原样输出）+ T-3 入
+    /// sidecar stderr 行透传（D2：stderr = 唯一日志通道，原样输出）+ 入
     /// 有界环形（供启动失败报告读取同一份「死前证据」）。
     private func relaySidecarLogLine(_ line: String) {
         let captured = line.count > Self.stderrLineCharLimit
@@ -1659,11 +1648,11 @@ public final class BridgeClient {
             stderrTail.removeFirst(stderrTail.count - Self.stderrTailLimit)
         }
         stderrLock.unlock()
-        // 与 log() 同一条有界非阻塞通道（第七轮验证 BUG）：本方法经 handleTermination 的
+        // 与 log() 同一条有界非阻塞通道：本方法经 handleTermination 的
         // finishStderrReading 在 dispatchLock+lifecycleLock 内执行，绝不在此做阻塞写。
-        // 2026-12 取证修复（ui-chat 批次）同时保留 sidecar.log 兜底：落盘载荷经 sidecar
-        // 参数交给**同一汇聚线程**上的旁路消费者，仍然不在锁内做阻塞 I/O（合并两批的
-        // 契约：既不能丢证据，也不能在锁里写盘）。
+        // 同时保留 sidecar.log 兜底：落盘载荷经 sidecar
+        // 参数交给**同一汇聚线程**上的旁路消费者，仍然不在锁内做阻塞 I/O
+        // （既不能丢证据，也不能在锁里写盘）。
         logSink.enqueue(Self.relayedSidecarLogLine(line), sidecar: captured)
     }
 

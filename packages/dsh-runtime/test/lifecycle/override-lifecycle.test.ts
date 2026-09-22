@@ -51,7 +51,7 @@ test('invalidate: 保留 chosenVersion/resolvedVersion/pending（标记 ≠ 删�
   assert.equal(invalidated.resolvedVersion, RESOLVED);
   assert.equal(invalidated.pending, PENDING);
   assert.equal(invalidated.shellVersion, SHELL);
-  // 记录存活是 F4「自动恢复上一 override 树」的前提——绝非删除。
+  // 记录存活是「自动恢复上一 override 树」的前提——绝非删除。
   assert.deepEqual(
     { chosenVersion: invalidated.chosenVersion, resolvedVersion: invalidated.resolvedVersion, pending: invalidated.pending },
     { chosenVersion: CHOSEN, resolvedVersion: RESOLVED, pending: PENDING },

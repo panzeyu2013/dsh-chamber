@@ -1,7 +1,7 @@
 /**
- * Windows ACL privacy tightening (design 21 M2a; replaces the "inherit the
- * profile ACL and hope" posture on win32 — the standard Windows practice for
- * "private to the current user" is an explicit ACL, not a POSIX mode bit).
+ * Windows ACL privacy tightening (design 21): win32 privacy cannot rely on the
+ * inherited profile ACL — the standard Windows practice for "private to the
+ * current user" is an explicit ACL, not a POSIX mode bit.
  *
  * POSIX hosts get 0700/0600 through chmod (private-file.ts); Windows cannot
  * express that with mode bits, so owner-private state directories and secret
@@ -38,7 +38,7 @@ export interface WindowsAclTarget {
 }
 
 /**
- * Startup composite (design 21 M2a wiring): tighten every existing target and
+ * Startup composite (design 21 wiring): tighten every existing target and
  * collect failures loudly. Never throws and never blocks startup — a target
  * that cannot be proven private is REPORTED, because the caller (main) must
  * decide whether a failure is fatal for secrets. Pure orchestration with
@@ -132,10 +132,10 @@ function icaclsFlagTokens(flagsText: string): Set<string> {
  * Verify `icacls <target>` output proves privacy by ALLOWLIST: the current
  * user holds full control and EVERY remaining ACE's principal is that same
  * user (exact name or DOMAIN\user). Inherited (I) and DENY ACEs fail outright;
- * any other principal fails and is named in the reason. The old
- * Everyone/Users/SYSTEM name blacklist is subsumed by this rule — an unlisted
- * well-known group (Authenticated Users / INTERACTIVE / CREATOR OWNER) can no
- * longer pass, whatever language icacls rendered it in. Each ACE line is
+ * any other principal fails and is named in the reason. This allowlist
+ * subsumes any Everyone/Users/SYSTEM name blacklist — an unlisted well-known
+ * group (Authenticated Users / INTERACTIVE / CREATOR OWNER) cannot pass,
+ * whatever language icacls rendered it in. Each ACE line is
  * `<path> <principal>:<flags>`. The path may itself contain spaces and
  * drive-letter colons, so the ACE tail is anchored on the LAST colon:
  * everything after it is the flag text, and the whitespace-delimited token
@@ -176,13 +176,13 @@ export function verifyIcaclsOutput(
     // would be; it is not an ACE, so skip it (a marker alone still never
     // satisfies the user-grant check below).
     if (acePrincipal === 'directory' || acePrincipal === 'file') continue
-    // USER ALLOWLIST (2026-12 audit P1, fail-open fix): equality, or the same
+    // USER ALLOWLIST: equality, or the same
     // user under a domain prefix (DESKTOP-XX\\alice), is the ONLY accepted
     // principal. Anything else — Everyone, BUILTIN\\Users, NT AUTHORITY\\SYSTEM,
     // Authenticated Users, INTERACTIVE, CREATOR OWNER, an unrelated user —
     // fails the verification and is named. A bare substring match is never
     // used: a principal named "bobalice" must not satisfy a check for "alice".
-    // Localization caveat (documented boundary, design 21 M0.5 实证项): icacls
+    // Localization caveat (documented boundary, design 21): icacls
     // renders principals and deny/inheritance flags in the OS language (zh-CN
     // shows "所有人:" / "BUILTIN\\用户:" instead of Everyone/BUILTIN\\Users).
     // The allowlist makes that fail CLOSED — a localized foreign principal is
@@ -227,7 +227,7 @@ export function tightenWindowsAcl(
   if (userName === null) {
     return { ok: false, error: 'cannot tighten ACL: current user name unavailable (os.userInfo and USERNAME are both empty)' }
   }
-  // Verify-first (round-2 audit): startup runs this per target every launch —
+  // Verify-first: startup runs this per target every launch —
   // an already-private target is the common case, and rewriting its ACL each
   // boot is needless churn (and up to two icacls spawns per target). Only when
   // the current ACL does NOT already satisfy the private shape do we apply

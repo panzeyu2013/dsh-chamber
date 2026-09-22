@@ -1,18 +1,16 @@
 /**
- * Runtime gate decision single source (2026-12 audit F3): the pure formulas
- * both /chamber/runtime defense layers share, plus the in-flight writer matrix
- * the manager used to carry twice (throw version + return version).
+ * Runtime gate decision single source: the pure formulas both /chamber/runtime
+ * defense layers share, plus the in-flight writer matrix shared by the
+ * manager's throw and return versions.
  *
  *  - {@link recoveryGateRefusal}: the route pre-gate decision chain (phase →
- *    recovery block → pending terminal gate) over the projected /status. Moved
- *    verbatim out of runtime-routes.ts so the matrix is unit-testable; the
- *    engine of the chain (R2/R3/R4/H2/A-U2 semantics) is unchanged.
+ *    recovery block → pending terminal gate) over the projected /status, kept
+ *    here so the matrix is unit-testable.
  *  - {@link writerBusyRefusal}: the in-flight writer matrix for the manager's
  *    two surfaces — mutation (assertMutationIdle) and managed profile write
- *    (profileWriteRefusal). Every message reproduces the pre-refactor inline
- *    bytes for its surface.
+ *    (profileWriteRefusal). Every message keeps its surface's exact bytes.
  *
- * Refusal TEXTS stay in runtime-refusals.ts (audit N2 single source); this
+ * Refusal TEXTS stay in runtime-refusals.ts; this
  * module only decides which refusal a (state × operation) cell answers.
  * Deliberately preserved differences are documented in runtime-refusals.ts
  * (platform read-only wording, blocked-startup wording, pending-suppression
@@ -53,16 +51,16 @@ export interface RuntimeGateStatus {
 }
 
 /**
- * Route pre-gate decision (2026-12 audit F3): null means the action may
- * proceed to the manager; a refusal is answered 409 with its wire code.
+ * Route pre-gate decision: null means the action may proceed to the manager;
+ * a refusal is answered 409 with its wire code.
  *
- * The chain preserves the historical semantics exactly: a retry-apply /
+ * The chain preserves these semantics exactly: a retry-apply /
  * retry-restore phase only opens its own retry action; any projected startup
  * block closes every ordinary mutation and opens exactly the recovery route the
  * status advertises (recover-metadata whenever canRecoverMetadata, for
  * canonical FATAL sentinels and drifted free-text reasons alike); an allowed
  * recovery action returns BEFORE the pending terminal gate (a block outranks a
- * lingering pending — R3/H2); env-probe-failed says no route applies (A-U2);
+ * lingering pending); env-probe-failed says no route applies;
  * with no block armed, the pending terminal gate refuses everything except its
  * two escapes (restore-builtin, apply-now).
  */
@@ -85,8 +83,8 @@ export function recoveryGateRefusal(
     }
   }
 
-  // 2026-12 (M1 review fix): any projected startup block (FATAL metadata or
-  // a swap/restore recovery phase projected through startupBlockedReason)
+  // Any projected startup block (FATAL metadata or a swap/restore recovery
+  // phase projected through startupBlockedReason)
   // closes every ordinary mutation — desktop parity: only the exact recovery
   // surface stays open. Retry routes keep their phase-driven gates above.
   const blockedReason = typeof status.startupBlockedReason === 'string'
@@ -95,10 +93,10 @@ export function recoveryGateRefusal(
     : null
   // Authoritative recoverability: the status projection derives this from
   // the durable metadata health, not from the (possibly free-text) blocked
-  // reason above (R4 mid-run drift classification).
+  // reason above.
   const canRecoverMetadata = status.canRecoverMetadata === true
   if (blockedReason !== null) {
-    // Recovery-name classification single source (audit N2): the reason-token
+    // Recovery-name classification single source: the reason-token
     // sets are the same constants the manager's pending suppression and
     // status() block-outranks-pending projection classify with.
     const swapLike = RETRY_APPLY_REASONS.has(blockedReason)
@@ -115,19 +113,19 @@ export function recoveryGateRefusal(
       || (action === 'retry-restore' && restoreLike)
       || (action === 'recover-metadata' && recoverOpen)
     if (allowed) {
-      // 2026 audit R3 (FATAL + stale pending deadlock): an allowed recovery
-      // action returns HERE — a startup block OUTRANKS a lingering pending
+      // An allowed recovery action returns HERE — a startup block OUTRANKS a
+      // lingering pending
       // value. Falling through to the pending terminal gate below would
       // refuse recover-metadata with runtime_pending while restore-builtin
       // (pending's own escape) is simultaneously refused by this block
       // branch — the recovery surface would be fully locked behind a block
-      // that only the recovery route can clear (H2: blockOutranksPending
-      // only re-labels the projected phase; the gate itself must honor it).
+      // that only the recovery route can clear (blockOutranksPending only
+      // re-labels the projected phase; the gate itself must honor it).
       return null
     }
     // env-probe-failed has NO matching recovery route (the runtime is
     // externally pinned) — say so instead of promising a route that does
-    // not exist (A-U2 review): the operator must fix the
+    // not exist: the operator must fix the
     // DSH_GATEWAY_DSH_PATH target and restart the gateway.
     if (blockedReason === 'env-probe-failed') {
       return {
@@ -147,12 +145,12 @@ export function recoveryGateRefusal(
   // corruption beneath an armed pending must not hide recover-metadata
   // behind the pending terminal gate (the pending escape restore-builtin is
   // refused by the manager's durable guard for corrupt metadata —
-  // recover-metadata is the actual recovery surface; R4).
+  // recover-metadata is the actual recovery surface).
   if (action === 'recover-metadata' && canRecoverMetadata) return null
 
   // The ordinary-pending terminal gate applies only when NO startup block is
   // armed — a blocked startup projects its own recovery surface above and a
-  // stale pending must not relabel refusals (H2/2026 audit R3).
+  // stale pending must not relabel refusals.
   if (blockedReason === null
     && ((status.pending !== null && status.pending !== undefined) || phase === 'pending')) {
     if (action === 'restore-builtin') return null
@@ -164,7 +162,7 @@ export function recoveryGateRefusal(
       ? status.pending
       : 'unknown'
     // Same code/message the manager's assertNoPending/assertNoOrdinaryPending
-    // and profileWriteRefusal emit (audit N2 single source: pendingOnlyRefusal).
+    // and profileWriteRefusal emit (single source: pendingOnlyRefusal).
     return pendingOnlyRefusal(version)
   }
 
@@ -182,7 +180,7 @@ export interface RuntimeWriterFlags {
   start: boolean
   /** Only consulted for the 'runtime mutations' subject: the profile-write
    * surface IS the lease and must stay reentrant (a nested acquire is not
-   * refused), matching the pre-refactor profileWriteRefusal. */
+   * refused). */
   profileWrite: boolean
 }
 
@@ -191,11 +189,11 @@ export interface RuntimeWriterFlags {
 export type WriterBusyRefusal<C extends string = RuntimeRefusalCode | 'runtime_disposed'> = { error: string; code: C }
 
 /**
- * The in-flight writer matrix both manager surfaces share, in the historical
- * order: disposal → activation → install → restart → apply-now →
- * restart-exhausted rollback → start → profile-write lease.
+ * The in-flight writer matrix both manager surfaces share, in this order:
+ * disposal → activation → install → restart → apply-now → restart-exhausted
+ * rollback → start → profile-write lease.
  *
- * The first two rows keep the mutation surface's suffix-less historical text
+ * The first two rows use the mutation surface's suffix-less text
  * ('gateway runtime manager is disposing' / 'runtime activation in progress');
  * every other row appends the surface's refusal tail. The profile-write
  * surface never consults the profileWrite flag (see RuntimeWriterFlags).
@@ -204,8 +202,8 @@ export function writerBusyRefusal(flags: RuntimeWriterFlags, subject: 'runtime m
 export function writerBusyRefusal(flags: RuntimeWriterFlags, subject: 'managed profile write'): RuntimeRefusal<'runtime_busy'> | null
 export function writerBusyRefusal(flags: RuntimeWriterFlags, subject: 'runtime mutations' | 'managed profile write'): WriterBusyRefusal | null {
   const mutationSurface = subject === 'runtime mutations'
-  // The refused-operation tail (verb included): the mutation surface keeps its
-  // historical "runtime mutations are refused" plural.
+  // The refused-operation tail (verb included): the mutation surface uses the
+  // plural "runtime mutations are refused".
   const tail = mutationSurface ? 'runtime mutations are refused' : 'managed profile write refused'
   if (flags.disposed) {
     return mutationSurface

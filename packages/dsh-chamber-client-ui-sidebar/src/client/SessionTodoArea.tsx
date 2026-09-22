@@ -155,7 +155,7 @@ function kindStatusKey(kind: TodoAttentionKind): SidebarKey {
   }
 }
 
-/** Official display label (I3): the entry carries the resolved title, so the
+/** Official display label: the entry carries the resolved title, so the
  *  unnamed copy only survives as a defensive fallback for a pre-revision entry
  *  object — a session whose title the host could not read shows its project
  *  directory name, exactly like the session rows. */
@@ -219,7 +219,7 @@ function TodoRow({
       <button
         type="button"
         className={cc.todoRow}
-        // I2/I13（plan §10）：条目身份与 stale 的机器可读标记，验收直接断言集合。
+        // 条目身份与 stale 的机器可读标记，验收直接断言集合。
         data-chamber-todo={`${entry.sourceId}:${entry.sessionId}:${entry.kind}`}
         data-chamber-stale={entry.stale === true || undefined}
         aria-label={t('todo.row.aria', { state: status, title, source: sourceLabel })}
@@ -240,10 +240,10 @@ function TodoRow({
           {entry.kind === 'approval' && <IconWarningOutline16 className={cc.statePendingApproval} />}
           {entry.kind === 'plan-review' && <IconChecklistOutline14 className={cc.statePendingPlan} />}
           {entry.kind === 'question' && <IconQuestionOutline14 className={cc.statePendingQuestion} />}
-          {/* 2026-09 user decision: the strip reuses the list rows' state marks,
+          {/* The strip reuses the list rows' state marks,
               so its completed entry carries the same chamber brand-blue
               `.stateCompleted` dot as the rows (the official StateDot `done`
-              green was dropped: it equals the source header's connection dot
+              green is not used: it equals the source header's connection dot
               tone — see sidebar-chamber.module.css .stateCompleted). */}
           {entry.kind === 'completed' && <span className={cc.stateCompleted} />}
         </span>

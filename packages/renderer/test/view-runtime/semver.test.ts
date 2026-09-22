@@ -1,5 +1,5 @@
 /**
- * SemVer precedence 单一实现契约（2026-12 阶段 2 单源化）。
+ * SemVer precedence 单一实现契约。
  * 口径：非法输入 null；build metadata 不参与；prerelease 按规范方向。
  */
 import { test } from 'node:test'

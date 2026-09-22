@@ -6,10 +6,9 @@
  * (the one piece the vendor `Menu` cannot own) plus catalog icons, split-button
  * flow, per-source memory, in-flight pick semantics and re-probe on open. The
  * component is React + CSS + raster marks (not importable under plain node), so
- * the wiring is locked as SOURCE TEXT with comments stripped first — several
- * comments name the retired menu, and a lock satisfied by a comment is exactly
- * what these assertions exist to prevent. The pure owner-guard decision is
- * tested directly.
+ * the wiring is locked as SOURCE TEXT with comments stripped first — a lock
+ * satisfied by a comment is exactly what these assertions exist to prevent. The
+ * pure owner-guard decision is tested directly.
  */
 
 import { test } from 'node:test'
@@ -61,8 +60,8 @@ test('the official Menu primitive carries the chamber menu density', () => {
   )
   // Upstream's own menu composition (OpenInAppAction.tsx:181-198): fill
   // selection, end alignment, focus transfer + arrow navigation — with the
-  // chamber menu-density decision on top (2026-09: `compact` 26px/12px, never
-  // upstream's `dense`; design 06 §7, design 20 §1).
+  // chamber menu-density decision on top (`compact` 26px/12px, never upstream's
+  // `dense`; design 06 §7, design 20 §1).
   for (const prop of ['autoFocus', 'compact', 'selection="fill"', 'align="end"']) {
     assert.ok(button.includes(prop), `the official Menu must be opened with ${prop}`)
   }
@@ -71,7 +70,7 @@ test('the official Menu primitive carries the chamber menu density', () => {
   // The decode-failure memory is keyed by the icon URL, not by app id or
   // source: the page reads ONE machine catalog, so the same URL means the same
   // bytes in every source's button and a failure must fall back everywhere
-  // instead of re-decoding once per source (2026-09-12 machine-catalog move).
+  // instead of re-decoding once per source.
   assert.ok(button.includes('useState(failedIcons.has(url))'), 'the failed-icon memory is keyed by the icon URL')
   assert.ok(button.includes('failedIcons.add(url)'), 'failures are recorded under that URL')
   assert.ok(button.includes('aria-haspopup="menu"'), 'the chevron still advertises the menu')
@@ -79,8 +78,8 @@ test('the official Menu primitive carries the chamber menu density', () => {
 })
 
 test('the control uses upstream geometry and the machine catalog as its only icon source', () => {
-  // 2026-09-12 thorough unification: geometry, marks, glyphs and fallbacks are
-  // upstream's (OpenInAppAction.module.css / OpenInAppAction.tsx at the pin).
+  // Geometry, marks, glyphs and fallbacks are upstream's
+  // (OpenInAppAction.module.css / OpenInAppAction.tsx at the pin).
   // Sizes and shapes are locked here as source text because the component (and
   // its CSS module) cannot be imported under the plain node runner.
   assert.ok(
@@ -115,9 +114,9 @@ test('the control uses upstream geometry and the machine catalog as its only ico
 })
 
 test('the registration mirrors the official row (order), with our own id', () => {
-  // 2026-09-12 thorough unification: `order: -10` is the official `open-in-app`
-  // row's own value (the official plugin registers `order: -10` at this same
-  // slot), so any third-party row sorts exactly as it would upstream.
+  // `order: -10` is the official `open-in-app` row's own value (the official
+  // plugin registers `order: -10` at this same slot), so any third-party row
+  // sorts exactly as it would upstream.
   assert.ok(client.includes("'conversation.session.header.utilities'"), 'the official header utilities slot')
   assert.ok(client.includes('order: -10'), "the registration must keep upstream's -10 row order")
   assert.ok(!client.includes('order: -1,'), 'the retired chamber order must not come back')
@@ -131,14 +130,14 @@ test('the registration mirrors the official row (order), with our own id', () =>
 test('the .instance-view dismissal is the only bespoke menu behaviour kept', () => {
   assert.match(button, /useInstanceViewDismissal\(open, groupRef, \(\) => \{ setOpen\(false\) \}\)/u)
   assert.ok(button.includes('ref={groupRef}'), 'the guard anchors on the element the Menu wraps')
-  // The guard still reads every N-ctx signal the bespoke menu did.
+  // The guard reads every N-ctx signal the shell publishes.
   for (const signal of ["'instance-hidden'", "'instance-pending'", "'hidden'", "'aria-hidden'"]) {
     assert.ok(guard.includes(signal), `the owner guard must keep watching ${signal}`)
   }
   // The primitive owns dismissal while the owner lives.
   assert.ok(button.includes('onClose={() => { setOpen(false) }}'), 'the primitive dismissal closes the menu')
-  // Re-probe on open (the bespoke menu's `onOpening`) stays: the chevron
-  // refreshes the pools for BOTH the click and arrow-key paths.
+  // Re-probe on open: the chevron refreshes the pools for BOTH the click and
+  // arrow-key paths.
   assert.equal(
     [...button.matchAll(/void refresh\(\)/gu)].length,
     2,
@@ -153,9 +152,8 @@ test('T5: the main button uses the design-system Tooltip and the existing dictio
     1,
     'upstream has one split-button form, so the main button is wrapped once',
   )
-  // No native title bubble on either half of the split control: the chevron's
-  // own `title` was retired in the 2026-12 engine-alignment round (WebKit and
-  // Chromium draw native tooltips differently), so both halves share the
+  // No native title bubble on either half of the split control: WebKit and
+  // Chromium draw native tooltips differently, so both halves share the
   // design-system Tooltip source. The opening tag ends at the JSX attribute
   // list's own line, so the arrow functions inside it do not truncate the match.
   const mainButton = /className=\{styles\.button\}[\s\S]{0,600}?\n\s*>/u.exec(button)
@@ -207,14 +205,13 @@ test('the aligned launch semantics are unchanged (250ms busy dress, 2s error, in
 })
 
 /**
- * RESTORED STREAM-HEALTH SEAT/CHIP WIRING LOCKS (2026-09-21 deletion review).
+ * STREAM-HEALTH SEAT/CHIP WIRING LOCKS.
  *
- * The deleted test/session-health/stream-health-wiring.test.ts pinned the React
- * seat and chip as source text (neither is importable under plain node). These
- * are the invariants that review found had no behavioural replacement: the
- * registration order behind the open-in gates, the per-session ladder
- * ownership, the evidence-gated execution discipline, the inert chip, and the
- * cross-package churn constant shared with the api-gateway fork.
+ * The React seat and chip are not importable under plain node, so their wiring
+ * is pinned as source text. Covered: the registration order behind the open-in
+ * gates, the per-session ladder ownership, the evidence-gated execution
+ * discipline, the inert chip, and the cross-package churn constant shared with
+ * the api-gateway fork.
  */
 const seat = stripComments(source('../../src/client/session-stream-health-seat.ts'))
 const chip = stripComments(source('../../src/client/SessionStreamHealthChip.tsx'))

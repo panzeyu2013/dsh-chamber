@@ -1,8 +1,8 @@
 /**
  * Best-effort owner-mode tree walk shared by the runtime store's eviction /
  * explicit-cleanup paths and the runtime installer's removal paths: re-add
- * the write bits that read-only hardening removed so the tree becomes
- * removable again. A missing/raced tree or a mid-walk error is fine — every
+ * the write bits that read-only hardening strips so the tree becomes
+ * removable. A missing/raced tree or a mid-walk error is fine — every
  * caller's `rmSync(..., { force: true })` remains authoritative.
  *
  */

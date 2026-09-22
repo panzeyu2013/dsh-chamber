@@ -15,7 +15,7 @@
  * (`@deepseek-ai/dsh-client-ui-layout/src/client/…` — resolved to source by
  * the renderer's deepseekSource plugin) and the store to THIS fork's
  * `stores.ts` (shared + persisted sidebar width). Everything else mirrors the
- * upstream `dsh-v0.1.5-rc.2` client index — `inject: ['slots', 'theme',
+ * upstream client index — `inject: ['slots', 'theme',
  * 'locale']`, the eager root instance shared with the registration
  * (`store: { ...handle, create: () => instance }`), the SlotMap merges
  * (`sidebar` / keyed `main` / `rightbar` / `shell.overlay`),
@@ -74,7 +74,7 @@ export type UsePanelInfo = SnapshotSelectorHook<PanelInfo>
  * snapshot + subscription + the frame's collapsed derivation for cross-plugin
  * consumers (the mobile adaptation plugin), provided per-ctx as
  * `ctx.layoutFacts`. The root instance is minted EAGERLY by this plugin's
- * apply (the alpha.2 baseline), so the face binds to that one instance
+ * apply, so the face binds to that one instance
  * directly; per-ctx scoping is the ctx lifecycle's own. `getCollapsed()`
  * mirrors AppFrame's derivation (`narrow = viewportWidth < SIDEBAR_AUTO_COLLAPSE`,
  * then `narrow ? !narrowExpanded : sidebar === 0`), so consumers never restate
@@ -222,16 +222,16 @@ export function apply(ctx: ClientContext): void {
       getSnapshot: () => instance.getSnapshot().panelInfo,
       subscribe: listener => instance.subscribe(listener),
     }
-    // chamber patch (design 09 §3.6, D3): the per-entry API base path as a root
+    // chamber patch (design 09 §3.6): the per-entry API base path as a root
     // standard PROP — immutable per entry, so no observable is needed. The
     // renderer's registered vendor patch reads it in ui-chat to build the
     // file-API URL under this instance's proxy prefix; absent (official-layout
     // deployment) the patched code falls back to upstream behaviour. Plain
     // props reach every slot scope: the vendor scoped-slots merges root
     // standard sources into each scope's standard props.
-    // 2026-12 review P2: the cordis ctx proxy THROWS for a member it does not
+    // The cordis ctx proxy THROWS for a member it does not
     // carry, and this read sits BEFORE the frame's `ctx.slots.register('root',
-    // …)` below — unguarded, it took the whole root/frame registration down on
+    // …)` below — unguarded, it would take the whole root/frame registration down on
     // any ctx without the chamber boot fact, contradicting the fail-open this
     // very call implements ({} props). Same discipline as the document-theme
     // effect below (chamberInstanceId).
@@ -301,14 +301,14 @@ export function apply(ctx: ClientContext): void {
 
   // Theme presentation: pure DOM writes from resolved snapshots — initial
   // state through the getter once, then event-driven only; no React path.
-  // CHAMBER FORK (N-ctx hardening): the document is shared by every mounted
+  // CHAMBER FORK: the document is shared by every mounted
   // view, so only the ACTIVE view's instance may project onto it and teardown
   // must never retract it — see document-theme.ts.
   ctx.effect(() => {
     // The cordis ctx proxy THROWS for an un-provided service rather than
     // returning undefined, so a fork mounted on a ctx without the chamber boot
     // fact must be read defensively — otherwise apply() throws instead of the
-    // projector failing open (2026-12 review MINOR-1; same discipline as the
+    // projector failing open (same discipline as the
     // mobile plugin's layoutFacts probe).
     let instanceId: string | undefined
     try {
@@ -320,7 +320,7 @@ export function apply(ctx: ClientContext): void {
     // The first resolved snapshot is the runtime's PROVISIONAL value (the system
     // default before the settings scope answers), so it must never become a
     // source palette. `getTheme()` returns a stable reference until the next
-    // change, so identity is a sound settledness gate (W3 切源体验).
+    // change, so identity is a sound settledness gate.
     const initial = ctx.theme.getTheme()
     const projector = createDocumentThemeProjector(instanceId, {
       getActiveSource: () => chamberBridge.getActiveSource(),

@@ -1,15 +1,14 @@
 /**
  * Win32-only empirical decision gate for the eviction read-only handling
- * (design 21 M2a): does Node's `fs.rm` remove a FILE_ATTRIBUTE_READONLY tree
+ * (design 21): does Node's `fs.rm` remove a FILE_ATTRIBUTE_READONLY tree
  * on Windows without an explicit attribute-clearing pass?
  *
  * The runtime installer hardens published trees read-only via
  * chmodSync(readOnlyMode) (runtime-installer.ts); on Windows that chmod maps
  * to the read-only attribute. If rm handles it (Node's rm retries EPERM after
- * clearing attributes on Windows), eviction needs no extra work — this test
- * passing on the Windows CI leg closes that item. If it throws EPERM, the
- * eviction/prune paths must clear attributes first and this test's
- * expectation flips after that implementation.
+ * clearing attributes on Windows), eviction needs no extra work. If it
+ * throws EPERM, the eviction/prune paths must clear attributes first and this
+ * test's expectation must flip.
  *
  * Self-skips on POSIX: attribute semantics differ there (chmod 0o444 never
  * blocks an owner's unlink), so a POSIX run cannot decide the Windows
@@ -43,7 +42,7 @@ test(
       assert.equal(existsSync(root), false, 'read-only-marked tree removed')
     } catch (error) {
       // Decision gate result: if removal fails here, the eviction/prune paths
-      // must clear FILE_ATTRIBUTE_READONLY before rm (design 21 M2a item) —
+      // must clear FILE_ATTRIBUTE_READONLY before rm (design 21) —
       // the failure IS the finding. Cleanup is best-effort (runner temp sweep
       // covers leftovers).
       try { chmodSync(root, 0o600) } catch { /* ignore */ }

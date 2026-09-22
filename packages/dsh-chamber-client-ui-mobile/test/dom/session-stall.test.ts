@@ -35,8 +35,8 @@ import { FakeNode, attach } from '../support/dom-double.ts'
 const SOURCE_URL = new URL('../../src/client/session-stall.ts', import.meta.url)
 
 /**
- * The legacy decision projection (clock + notice) of the pre-
- * assertions: the automatic arm's `resync`/`resyncStamps` fields are asserted by
+ * The legacy decision projection (clock + notice) used by the assertions below.
+ * The automatic arm's `resync`/`resyncStamps` fields are asserted by
  * their own tests below, so these keep pinning exactly what they always pinned.
  */
 function decide(input: Parameters<typeof decideStallNotice>[0]): { since: number; show: boolean } {
@@ -61,8 +61,8 @@ interface ConversationTree {
 }
 
 /**
- * The empirical conversation shape, straight from markup.ts's re-audited DOM
- * map (alpha.2): `[data-slot="main"] > div.root[data-phase] >
+ * The empirical conversation shape, straight from markup.ts's DOM map:
+ * `[data-slot="main"] > div.root[data-phase] >
  * div[data-slot="conversation.session.header"] > <header>`, with the message
  * column below the same phase node:
  *   root slot > frame > conversation column > main outlet >
@@ -660,11 +660,10 @@ test('installations share one watcher and the LAST disposer tears it down', () =
     const first = installSessionStallNotice(key => zh[key])
     const second = installSessionStallNotice(key => zh[key])
     assert.equal(harness.intervals(), 1, 'a second install must not add a second watcher')
-    // Dispose the FIRST holder first: the pre-fix code handed every later
-    // install a dead disposer, so releasing the first stopped watching for a
-    // context that was still alive. Disposing the second first would pass under
-    // both versions (
-    // on the regression it named).
+    // Dispose the FIRST holder first: each install after the first must share
+    // the live disposer, so releasing the first must not stop watching for a
+    // context that is still alive. Disposing the second first would pass even
+    // when that sharing is broken.
     first()
     assert.equal(harness.intervals(), 1, 'releasing the first reference keeps the watcher alive')
     harness.at(mobileTable.thresholdMs)
@@ -763,7 +762,7 @@ test('sessionStallFace is fail-closed on every drifted shape and resolves late s
   assert.equal(sessionStallFace(undefined), undefined)
   assert.equal(sessionStallFace({}), undefined)
   assert.equal(sessionStallFace({ reflect: {} }), undefined, 'a ctx without reflect.get gets no arm')
-  // The service is resolved PER CALL (): an install that happens
+  // The service is resolved PER CALL: an install that happens
   // before the session controller registers must not disable the arm forever.
   let service: unknown
   const late = sessionStallFace({ reflect: { get: () => service } })
@@ -826,7 +825,7 @@ test('a parked open is rebuilt automatically once, and the copy turns into the f
 })
 
 /**
- * CROSS-TIER RECOVERY LOCKSTEP (restored ).
+ * CROSS-TIER RECOVERY LOCKSTEP.
  * The mobile stall observer and the desktop open-in stream-health ladder
  * implement the SAME recovery contract (design 14 §D4) on two tiers. These
  * assertions import BOTH pure decision modules and pin the shared ledger, the

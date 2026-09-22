@@ -47,7 +47,7 @@ export function createLayoutFactSource(ctx: ClientContext): LayoutFactSource {
   // The official ctx is a cordis proxy: touching an un-provided property
   // THROWS ("cannot get property without inject"). The chamber fork's
   // layoutFacts is a chamber-only service — the probe must be exception-
-  // safe (P2: the gateway-hosted official ui-layout is the plugin's PRIMARY
+  // safe (the gateway-hosted official ui-layout is the plugin's PRIMARY
   // deployment target).
   interface LayoutFactsFace {
     /** AppFrame's derived sidebar-collapsed flag (the fork's own derivation). */
@@ -102,7 +102,7 @@ export function createLayoutFactSource(ctx: ClientContext): LayoutFactSource {
     notify()
   }
   attach()
-  // Structural guard (S3): only childList mutations that ADD a root-slot or
+  // Structural guard: only childList mutations that ADD a root-slot or
   // frame candidate can change the frame identity — deep content mutations
   // (chat streaming, typing) must not re-query the document per batch.
   const isStructuralTarget = (node: Node): boolean =>

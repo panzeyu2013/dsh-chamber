@@ -1,5 +1,5 @@
 /**
- * coalesced-refresh.ts 单元测试（perf T3：节流/单飞/终态一次）。
+ * coalesced-refresh.ts 单元测试（节流/单飞/终态一次）。
  * 覆盖：突发共享 + 至多一遍补跑；串行请求各自新鲜一遍；错误传播与下次重试；
  * maxReruns 封顶不会死循环。
  */
@@ -53,15 +53,10 @@ test('error propagates to every joiner and the next request retries cleanly', as
 })
 
 test('maxReruns caps the trailing chain instead of looping forever', async () => {
-  // 确定性版（2026-09-11 CI 修复）：原实现用 30 次 `sleep(1)` 制造"运行期间
-  // 持续到达"，把断言建立在 sleep 精度上。Windows runner 的定时器粒度约
-  // 15ms（= 单遍时长），风暴（30×15ms）会跑赢第一条链（3×15ms），末尾到达
-  // 各自起新链；收尾的 `refresh()` 因此可能加入**某条正在跑封顶遍**的链——
-  // 那种加入者不会触发新一遍（cap 已到），于是 `runs > stormRuns` 为假，而它
-  // 上一行 `assert.equal(await refresh(), runs)` 仍为真。CI 形态正是如此
-  // （c7f12930 的 test-windows 腿：line 72 过 / line 73 挂）。现在改为 gate
-  // 驱动：放行时机与"到达发生在第几遍"全部显式可控，不看时间，也不受平台
-  // 定时器粒度影响。
+  // 确定性门闩驱动：放行时机与"到达发生在第几遍"全部显式可控，不看时间，
+  // 也不受平台定时器粒度影响（用 `sleep` 制造"运行期间持续到达"会把断言建立在
+  // 定时器精度上：末尾到达可能各自起新链，收尾请求加入**正在跑封顶遍**的链，
+  // 不触发新一遍，断言随之失真）。
   let runs = 0
   const gates: (() => void)[] = []
   const refresh = createCoalescedRefresher(async () => {

@@ -1,9 +1,9 @@
 /**
- * Escape ownership tests (2026-09-11 regression). The panel's document-level Escape
- * guard once asked `document.querySelector('[aria-modal="true"]') !== null` while the
- * panel itself is `role="dialog" aria-modal="true"`, so the query always self-matched
- * and Escape silently did nothing. The rule now excludes the panel's own node by
- * identity; the wiring lock below keeps the shell passing it.
+ * Escape ownership tests. The panel's document-level Escape guard excludes the
+ * panel's own node by identity: a blanket
+ * `document.querySelector('[aria-modal="true"]') !== null` query would self-match the
+ * panel (`role="dialog" aria-modal="true"`) and Escape would silently do nothing; the
+ * wiring lock below keeps the shell passing it.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

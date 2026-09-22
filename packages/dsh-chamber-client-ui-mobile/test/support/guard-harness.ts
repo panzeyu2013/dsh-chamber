@@ -1,6 +1,6 @@
 /**
  * Minimal DOM/window double for the composer visibility guard's behavioral
- * tests (F5/F6/F8): a plain-node tree with real descendant/attribute selector
+ * tests: a plain-node tree with real descendant/attribute selector
  * semantics, a fake window with NO visualViewport (so a test proves the poll —
  * not a viewport event — is the convergence path), a fake clock driving the
  * guard's 250ms interval, and an engine model that decides how fully the
@@ -248,7 +248,7 @@ export interface GuardHarnessOptions {
   /** Focus the composer before install (default true). */
   focused?: boolean
   /** Insert a second, HIDDEN [data-phase="active"] root (its scrollport rect
-   *  is 0x0) BEFORE the real one — the first-match seat trap (F3). */
+   *  is 0x0) BEFORE the real one — the first-match seat trap. */
   hiddenSeatFirst?: boolean
   /** The keyboard keeps RISING while the guard's first write lands: the
    *  visible bottom drops by this many px on the first custom-property write,

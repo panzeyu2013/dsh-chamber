@@ -1,5 +1,5 @@
 /**
- * Writer-quiescence notice model (2026-09-10, design 02 §3.4 / 04 §3.2).
+ * Writer-quiescence notice model (design 02 §3.4 / 04 §3.2).
  *
  * The local card must name the blocker and offer 清理并接管 EXACTLY when the control
  * plane says a takeover could clear it — never for a sticky verdict and never for a

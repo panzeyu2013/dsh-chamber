@@ -7,11 +7,11 @@
  * desktop-side `ControllerDeps`); the pure-Node fixture
  * `test/support/fake-adapter.ts` is the only implementor, for host-agnostic tests.
  *
- * This interface is a SKETCH per design 18 §9.1: M5 ships it exactly as
- * documented; the concrete desktop `StartupDeps`/`ApplyDeps` union plus gateway
- * needs finalize it in the M6 gateway wiring (clock injection `now`/`nowMs`,
- * the abort signal source, the outbound-proxy environment for install-child env
- * scrubbing, progress granularity via `notify`, and `restartHost()`).
+ * This interface is a SKETCH per design 18 §9.1: the concrete desktop
+ * `StartupDeps`/`ApplyDeps` union plus gateway wiring must finalize it (clock
+ * injection `now`/`nowMs`, the abort signal source, the outbound-proxy
+ * environment for install-child env scrubbing, progress granularity via
+ * `notify`, and `restartHost()`).
  */
 import type { ChildProcess } from 'node:child_process'
 import type { ProbeResult } from './activation-gate.ts'
@@ -19,8 +19,8 @@ import type { ProbeResult } from './activation-gate.ts'
 /**
  * RuntimeStatusProjection — sketch (§9.1): the runtime status snapshot a host
  * adapter forwards to its management surface (desktop IPC / gateway SSE-poll).
- * Finalized against the desktop `RuntimeLifecycleProjection` and the gateway
- * `/chamber/runtime/status` payload in M6/M7; M5 only pins the `notify` seam.
+ * It aligns with the desktop `RuntimeLifecycleProjection` and the gateway
+ * `/chamber/runtime/status` payload; only the `notify` seam is pinned.
  */
 export type RuntimeStatusProjection = Record<string, unknown>
 

@@ -10,8 +10,8 @@
  *
  * 编译隔离：tsconfig 只 include preload.cts，但 tsc 会把其本地 import 的
  * 类型来源文件一并纳入程序并整体 emit（preload.cts 的 3 个 type-only
- * import 会额外产出 ssh-config.js/transport-provider.js/updater.js 死文件，
- * 2026-09 打包闭包审计 P2-1）。因此先 emit 到临时目录再只搬入 preload.cjs，
+ * import 会额外产出 ssh-config.js/transport-provider.js/updater.js 死文件）。
+ * 因此先 emit 到临时目录再只搬入 preload.cjs，
  * 其余产物随目录删除——preload 必须保持自包含（仅 type-only 本地 import）；
  * 若未来引入运行时本地 import，请改为显式多文件打包而非依赖本清理。
  */

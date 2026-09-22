@@ -1,5 +1,5 @@
 /**
- * 启动性能 User Timing 标记注册表（C2，2026-09 性能审计落点）。
+ * 启动性能 User Timing 标记注册表。
  *
  * 本表注册 renderer 侧（shell.ts / App.tsx）直接 import 的启动埋点；boot 内核
  * （packages/dsh-client-web/src/boot.ts，独立包无法反向依赖本文件）的
@@ -10,7 +10,7 @@
  * perfMark(name, instanceId) 生成 `<name>:<instanceId>` 后缀形式
  * （PerformanceObserver 按前缀过滤即可聚合）。每个命名标记全页面只由一个
  * 打点者发出（shell settle/failed 由 shell.ts 在 settle 返回点统一打点，
- * App 的 handleShellState 只消费状态、不再重复打点）。
+ * App 的 handleShellState 只消费状态、不重复打点）。
  *
  * 埋点只做观测、零业务语义：performance.mark 缺失/抛错一律静默，生产与测试
  * 环境同路径（见 perfMark 的守卫）。
@@ -20,11 +20,11 @@ export const PERF_MARKS = {
   appMount: 'dsh:app:mount',
   /** /health（或 SSE 健康流）首次报告本地实例 ready。 */
   appLocalReady: 'dsh:app:local-ready',
-  /** W3：一次来源切换意图被接受（selectView 提交选择）。带目标来源后缀；
+  /** 一次来源切换意图被接受（selectView 提交选择）。带目标来源后缀；
    *  与 appViewReveal 配对给出 switchFrameMs（scripts/perf/switch-frame-probe.mjs
    *  消费；纯观测，零业务语义——注意它不是"首帧已绘制"的证明，只是 App 侧揭示时刻）。 */
   appViewRequest: 'dsh:app:view-request',
-  /** W3：揭示门把 painted 收敛到目标的那一提交。带目标来源后缀；
+  /** 揭示门把 painted 收敛到目标的那一提交。带目标来源后缀；
    *  与 appViewRequest 之差 = switchFrameMs（p95 是温壳档位的判据之一）。 */
   appViewReveal: 'dsh:app:view-reveal',
   /** bootInstanceShell 入口（含排队等待）。 */

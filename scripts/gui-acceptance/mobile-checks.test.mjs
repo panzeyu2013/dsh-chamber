@@ -120,8 +120,6 @@ test('命中盒：任一轴 < 44px 即红；无可见 button INFO；隐藏按钮
 })
 
 test('插件激活：打标即 PASS，未打标是 INFO 且 --require-run 下改判 FAIL（F9）', () => {
-  // 2026-12 review F9：这条腿此前恒为 INFO（连 --require-run 都不理），于是
-  // 「插件在移动档完全没生效」永远不会让走查变红。
   const activated = pluginActivationVerdict(deviceFacts())
   assert.equal(activated.ok, true)
   assert.equal(activated.evidence.includes('未打标'), false)
@@ -136,7 +134,7 @@ test('插件激活：打标即 PASS，未打标是 INFO 且 --require-run 下改
 test('插件激活证据读出键盘守卫的诊断面（kbd 帧 / state / spacer 高度）', () => {
   const verdict = pluginActivationVerdict(deviceFacts({
     mobileKbdFrames: 1,
-    // 载体前缀：状态在 frame 与 <html> 各镜像一份（2026-09 复核后按载体收集）。
+    // 载体前缀：状态在 frame 与 <html> 各镜像一份。
     mobileKbdStates: ['frame:still-covered', 'html:still-covered'],
     mobileKbdSpacers: [352],
   }))
@@ -187,7 +185,7 @@ test('脱敏：环境变量 secrets 列表的值也被抹掉（键值形之外�
 })
 
 test('脱敏：Bearer/Basic/Cookie 的**值**整段抹掉（只抹方案词等于没抹）', () => {
-  // 2026-12 review（P1）：值必须整段抹掉——只抹方案词等于没抹（`"Authorization":"*** SECRET"` 仍把
+  // 值必须整段抹掉——只抹方案词等于没抹（`"Authorization":"*** SECRET"` 仍把
   // 凭据写进持久层）；外层 JSON 里的转义引号形（`\"token\":\"x\"`）同样是 WS 帧里真会出现的形状。
   const secret = 'SECRETFRAMETOKEN'
   for (const [name, input] of [
@@ -209,7 +207,7 @@ test('脱敏：Bearer/Basic/Cookie 的**值**整段抹掉（只抹方案词等�
 })
 
 test('帧摘要里的 payload 片段也过脱敏（它同样会被落盘/打印）', () => {
-  // 2026-12 review（P1）：摘要里的「最后一帧上/下行」是另一条落盘通道（报告 md+json + M-8 证据 + stdout）。
+  // 摘要里的「最后一帧上/下行」是另一条落盘通道（报告 md+json + M-8 证据 + stdout）。
   const frames = [
     { direction: 'sent', opcode: 1, payload: '{"Authorization":"Bearer SECRETFRAMETOKEN"}' },
     { direction: 'received', opcode: 1, payload: '{"token":"abc12345"}' },
@@ -224,7 +222,7 @@ test('帧摘要里的 payload 片段也过脱敏（它同样会被落盘/打印�
 })
 
 test('脱敏：URL 查询串里的凭据也抹掉（长度不限——短 token 同样是凭据）', () => {
-  // 2026-12 review：帧 url / 报告 meta / 网络记录都会落盘，只脱敏 payload 等于把 `?token=…` 写进持久层；键值规则要求 ≥4 字符，`token=1` 会漏。
+  // 帧 url / 报告 meta / 网络记录都会落盘，只脱敏 payload 等于把 `?token=…` 写进持久层；键值规则不设长度下限，`token=1` 同样要抹。
   const redacted = redactSecrets('ws://127.0.0.1:17510/api/remote.mux?token=1&keep=1', [])
   assert.ok(!redacted.includes('token=1'), redacted)
   assert.match(redacted, /token=\*\*\*/)
@@ -233,15 +231,14 @@ test('脱敏：URL 查询串里的凭据也抹掉（长度不限——短 token 
   assert.ok(!headers.includes('password=pw'), headers)
   assert.ok(!headers.includes('cookie=session-abc'), headers)
   // A query VALUE is one unit even though `,` and `;` are legal in a URL: only the query rule can take
-  // the whole thing, so this is the case that pins it (2026-12 self-review: a
-  // plain `?token=1` is already covered by the bare-value rule, which made the
-  // mutation of the query rule invisible).
+  // the whole thing, so this is the case that pins it.
   const comma = redactSecrets('ws://h/x?token=abc,def&keep=1', [])
   assert.ok(!comma.includes('def'), comma)
   assert.match(comma, /token=\*\*\*&keep=1/)
   assert.ok(!redactSecrets('ws://h/x?token=a;b', []).includes(';b'))
-  // The FRAGMENT half needs its own case (2026-12 self-review: a `?token=` one cannot fail when
-  // fragment support is removed; neither the `#token=SECRET` case nor `?token=abc,def` pinned `#`).
+  // The FRAGMENT half needs its own case: a `?token=` one cannot fail when
+  // fragment support is removed, and neither the `#token=SECRET` case nor
+  // `?token=abc,def` pins `#`.
   const fragment = redactSecrets('https://h/#token=abc,def', [])
   assert.ok(!fragment.includes('def'), fragment)
   assert.match(fragment, /#token=\*\*\*/)

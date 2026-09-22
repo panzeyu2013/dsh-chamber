@@ -1,5 +1,5 @@
 /**
- * restart-window-reload.ts tests (2026-12): the PAGE-OWNED "wait for the restarted dsh to serve, then reload the
+ * restart-window-reload.ts tests: the PAGE-OWNED "wait for the restarted dsh to serve, then reload the
  * window once" completion behind 「重启 dsh」 and the other restart-to-apply entry points (design 18 §3.6 item 8).
  * Waiters/fetch/clock are injected and the page reload is spied through a stubbed window global, so the policy runs
  * in plain node.

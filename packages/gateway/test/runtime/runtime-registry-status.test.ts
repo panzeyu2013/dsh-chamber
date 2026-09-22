@@ -1,7 +1,6 @@
 /**
  * /chamber/runtime registry, status projection and install/startup gates:
  * registry origin validation, offline caches, disk limits and status facts.
- * Split from runtime-routes.test.ts.
  */
 
 import { test } from 'node:test'

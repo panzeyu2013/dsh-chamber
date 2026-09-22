@@ -1,7 +1,6 @@
 /**
  * /chamber/runtime apply-now recovery: journal-first arming, snapshot/recovery
- * failure paths, env-override parity and restore-builtin durable guards. Split
- * from runtime-routes.test.ts.
+ * failure paths, env-override parity and restore-builtin durable guards.
  */
 
 import { test } from 'node:test'
@@ -62,7 +61,7 @@ test('applyNow with only a staged selection (selectedOnly, no pending) arms the 
     })
     const accepted = await manager.applyNow()
     assert.equal(accepted.accepted, true)
-    // F2: the pending switch is armed journal-first, synchronously, before the
+    // The pending switch is armed journal-first, synchronously, before the
     // transaction — runStartupPhase requires effectivePending === targetVersion.
     const armed = readOverride(stateDir)
     assert.equal(armed?.pending, '1.0.0')
@@ -127,13 +126,12 @@ test('applyNow recovery startLocal runs OUTSIDE the activation window (gate-awar
   const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-applynow-gate-clean-'))
   try {
     armPendingSwitch(stateDir, '1.0.0')
-    // Gate-aware fake plane (P0 regression): models index.ts canStartLocal —
+    // Gate-aware fake plane: models index.ts canStartLocal —
     // activationInProgress() && !internalSpawnActive() → connection_busy. The
     // candidate spawn inside the transaction passes (the manager sets
-    // internalSpawn during spawnAndProbeCandidate); the OLD recovery
-    // startLocal ran INSIDE the window with internalSpawn=false, so the real
-    // gate rejected it → every production apply-now recovery threw
-    // connection_busy and the managed dsh stayed down.
+    // internalSpawn during spawnAndProbeCandidate); a recovery startLocal inside
+    // the window with internalSpawn=false would be rejected by the gate →
+    // connection_busy with the managed dsh left down.
     let quarantineActive = false
     let managerRef: { internalSpawnActive(): boolean } | null = null
     const order: string[] = []
@@ -205,8 +203,8 @@ test('applyNow recovery startLocal runs OUTSIDE the activation window (gate-awar
     // The snapshot seam throws (regular file where the snapshots dir must
     // live) → snapshot-failed → NO candidate spawn happens, so the ONLY
     // startLocal is the recovery one — the gate-aware plane pins that it runs
-    // after quarantine:off (the old implementation ran it inside the window,
-    // where the real canStartLocal gate throws connection_busy).
+    // after quarantine:off (inside the window the real canStartLocal gate would
+    // throw connection_busy).
     mkdirSync(join(stateDir, 'dsh-runtime'), { recursive: true })
     writeFileSync(join(stateDir, 'dsh-runtime', 'snapshots'), 'not a directory', { mode: 0o600 })
     let quarantineActive = false
@@ -254,10 +252,10 @@ test('apply-now preflight fails closed on a corrupt activation journal — 409 r
   try {
     makeValidTree(stateDir, '1.0.0')
     writeCurrentPointer(stateDir, '1.0.0')
-    // target === current + corrupt journal: the OLD preflight fell through the
-    // no-op check (corrupt is neither missing nor valid-intent) to a 202 →
-    // stopLocal → runStartupPhase answers journal-corrupt → the healthy
-    // managed dsh was left down with no recovery route armed.
+    // target === current + corrupt journal: the no-op check sees neither missing
+    // nor valid-intent, so a preflight that let it through would go 202 →
+    // stopLocal → runStartupPhase answers journal-corrupt → the healthy managed
+    // dsh left down with no recovery route armed.
     writeOverrideRow(stateDir, { chosenVersion: '1.0.0', pending: null, lastOutcome: 'applied' })
     writeFileSync(join(stateDir, 'dsh-runtime', 'activation-journal.json'), '{broken-json', { mode: 0o600 })
     const stops: string[] = []
@@ -288,9 +286,10 @@ test('apply-now preflight rejects an applied-monitoring no-op — 409 noop_targe
     writeCurrentPointer(stateDir, '1.0.0')
     writeOverrideRow(stateDir, { chosenVersion: '1.0.0', pending: null, lastOutcome: 'applied' })
     // Every successful apply-now/startup leaves the applied-monitoring
-    // journal. With no nextIntent, pending stays null and chosen == active —
-    // the OLD no-op gate (missing/intent only) let this through to a pointless
-    // stop → snapshot → spawn → probe cycle on the ALREADY-ACTIVE version.
+    // journal. With no nextIntent, pending stays null and chosen == active — a
+    // no-op gate limited to missing/intent would let this through to a
+    // pointless stop → snapshot → spawn → probe cycle on the ALREADY-ACTIVE
+    // version.
     const monitoring: ActivationJournal = {
       schemaVersion: 1,
       phase: 'applied-monitoring',
@@ -522,7 +521,7 @@ test('restore-builtin refuses without an override and route-gates FATAL blocks (
     writeOverride(stateDir, { shellVersion: gatewayPackageVersion, chosenVersion: '1.0.0', resolvedVersion: '1.0.0', pending: null, swapAttempted: false })
     // …but a BOOTED FATAL metadata block route-gates it to its own recovery
     // surface instead of running a blind reset against corrupt authority.
-    // Fixture (review fix): corrupt the journal FIRST, then run a real
+    // Fixture: corrupt the journal FIRST, then run a real
     // startup transaction so the manager arms its in-memory FATAL block —
     // the route gate reads status().startupBlockedReason, which is that
     // memory verdict, not a disk re-read.

@@ -7,13 +7,13 @@
  *
  * - every client plugin package the chamber composite bundle registers
  *   (chamber-entry.ts import list — one entry per package name): the
- *   first-screen families via static import (including the dsh-v0.1.2-alpha.1
- *   provider group that replaced dsh-client-runtime: the platform store word
+ *   first-screen families via static import (including the provider group:
+ *   the platform store word
  *   `@deepseek-ai/dsh-client-store`, the api session/workspace controllers,
  *   and the ui-session / ui-chat / ui-approval conversation families), the
- *   rc.8 deferred families (ui-attachment / ui-brand-official / ui-reference)
+ *   deferred families (ui-attachment / ui-brand-official / ui-reference)
  *   via the registerDeferred dynamic imports, and the C4 settings cluster
- *   (2026-09: official settings sections + the chamber settings shell &
+ *   (official settings sections + the chamber settings shell &
  *   connections — ui-settings itself stays first-screen, see its comments in
  *   both lists) via the same registerDeferred path. Loading any such row again
  *   from
@@ -25,9 +25,9 @@
  *   the chamber sidebar REPLACES (loading it would collide on the sidebar
  *   slot), `@deepseek-ai/dsh-client-modules` — the shell kernel adopts that
  *   entry itself (boot.ts MODULES_ID: statically registered, never fetched),
- *   so a second entry would provide `modules` twice, and (rc.8)
- *   `@deepseek-ai/dsh-client-ui-renderer` — rc.8 moved the slot-renderer
- *   install OUT of the shell into this row (app-shell no longer installs it;
+ *   so a second entry would provide `modules` twice, and
+ *   `@deepseek-ai/dsh-client-ui-renderer` — the slot-renderer
+ *   install lives in this row (the shell does not install it;
  *   the boot kernel mounts through the row's `ctx.uiRenderer`), so a
  *   host-graph row would install a second renderer / provide `uiRenderer`
  *   twice.
@@ -49,22 +49,22 @@
  * chamber-entry.ts, never a registered client plugin, and the host graph
  * cannot carry a row for it.
  *
- * dsh-v0.1.2-alpha.2 (decision D6): `@deepseek-ai/dsh-client-ui-cordis` (the
+ * Decision D6: `@deepseek-ai/dsh-client-ui-cordis` (the
  * debug-surface roster row) is intentionally absent too — the chamber
  * composite does not register it and never will; "no such plugin" is
  * behaviorally identical to "plugin absent" (the official row is an opt-in
  * debugger face), so it is absent from the chamber covered/factories tables;
  * the host-graph row still preloads through the same extra-rows mechanism as
  * any other roster entry — one extra combo preload at most, never a
- * duplicate registration (review-round7b P2-5 wording).
+ * duplicate registration.
  *
- * dsh-v0.1.2-alpha.2 roster rows without explicit coverage decisions:
- * `@deepseek-ai/dsh-client-ui-schedule` (new in alpha.2; the official row is
+ * Roster rows without explicit coverage decisions:
+ * `@deepseek-ai/dsh-client-ui-schedule` (the official row is
  * disabled and the modules loader skips disabled rows, so it never reaches
  * the host graph) and `@deepseek-ai/dsh-cordis-client-runner` (an active
  * official row the chamber composite leaves to the extra-rows preload, like
  * every non-covered active row) — both documented, no explicit exclusion
- * needed (check-round1b P2-1/P2-2).
+ * needed.
  *
  * This constant lives in its own module (re-exported by chamber-entry.ts) on
  * purpose: shell.ts must import it without pulling chamber-entry.ts's
@@ -77,17 +77,16 @@ export const CHAMBER_COVERED_IDS: readonly string[] = [
   '@deepseek-ai/dsh-typert-registry',
   '@deepseek-ai/dsh-api-gateway',
   '@deepseek-ai/dsh-api-remotes',
-  // dsh-v0.1.2-alpha.1 provider group (replaces dsh-client-runtime, which no
-  // longer exists): the platform store word (a PLATFORM_MODULES seed —
+  // provider group: the platform store word (a PLATFORM_MODULES seed —
   // every client bundle that value-imports the store engine emits a
   // `require("@deepseek-ai/dsh-client-store")` edge), the two api
   // controllers (ctx.sessions / ctx.workspaces), and the three conversation
-  // families the web roster added (ui-session root source, ui-chat chat
+  // families the web roster carries (ui-session root source, ui-chat chat
   // nodes, ui-approval approval surface). All six are composite-covered:
   // loading any of them again from a host graph would double-register on
   // one ctx (or split the store engine version).
   '@deepseek-ai/dsh-client-store',
-  // C3 (2026-09 性能审计): ui-primitives is NOT a loader row (never a
+  // C3: ui-primitives is NOT a loader row (never a
   // host-graph plugin) — it joins the covered + factory set so the composite
   // answers the platform-word require edges of extra bundles after the seed
   // dropped the word (dsh-client-web seed.ts/platform.ts deviation; the
@@ -95,7 +94,7 @@ export const CHAMBER_COVERED_IDS: readonly string[] = [
   // absent from a host graph is never filtered, so listing it is harmless —
   // the union-table lockstep asserts demand it (factory id ∈ covered).
   '@deepseek-ai/dsh-client-ui-primitives',
-  // alpha.2: ui-dockkit is a PLATFORM_MODULES word answered by the composite's
+  // ui-dockkit is a PLATFORM_MODULES word answered by the composite's
   // covered factory (the seed deliberately omits it — see chamber-entry.ts).
   // It has no `dsh.client`, so it is never a host-graph row; listing it keeps
   // the factory-id lockstep assert and the require edges of the right-sidebar
@@ -109,7 +108,7 @@ export const CHAMBER_COVERED_IDS: readonly string[] = [
   '@dsh-chamber/dsh-chamber-client-ui-sidebar',
   '@dsh-chamber/dsh-chamber-client-ui-git',
   '@dsh-chamber/dsh-chamber-client-ui-open-in',
-  // ui-settings stays FIRST-SCREEN (C4, 2026-09 性能审计): locale/ui-theme
+  // ui-settings stays FIRST-SCREEN (C4): locale/ui-theme
   // root-inject its settingsScope. Its section families + the chamber
   // settings shell/connections are deferred — the ids stay covered (see the
   // deferred group below).
@@ -131,12 +130,12 @@ export const CHAMBER_COVERED_IDS: readonly string[] = [
   '@deepseek-ai/dsh-client-ui-workflow-run',
   '@deepseek-ai/dsh-client-ui-agent-preset',
   '@deepseek-ai/dsh-client-ui-deliverables',
-  // ── dsh-v0.1.2-alpha.1 conversation families (decision D6: into the
+  // ── conversation families (decision D6: into the
   // ── composite; first-screen static imports, chamber-entry.ts):
   '@deepseek-ai/dsh-client-ui-session',
   '@deepseek-ai/dsh-client-ui-chat',
   '@deepseek-ai/dsh-client-ui-approval',
-  // 2026-09 三轮: the background-upload client is composite-covered for TWO
+  // The background-upload client is composite-covered for TWO
   // reasons — (1) `ui-conversation` and `api-session-controller` root-inject
   // `fileUpload`, and (2) the vendor bundle builds a same-origin absolute
   // upload URL (`location.origin + /api/session/uploadFileBinary`) that 404s
@@ -149,7 +148,7 @@ export const CHAMBER_COVERED_IDS: readonly string[] = [
   // picker-auto-mounted browse row is composite-covered too.
   '@deepseek-ai/dsh-client-ui-directory-picker-browse',
   '@deepseek-ai/dsh-client-ui-permission-presets',
-  // 2026-09 四轮: the session-log export client is composite-covered (deferred)
+  // The session-log export client is composite-covered (deferred)
   // for the same reason as file-upload — its vendor bundle builds a same-origin
   // absolute export URL (`/api/session.export`) that 404s under the N-ctx shell,
   // and only a composite-bundled copy can carry the registered vendor patch.
@@ -164,14 +163,14 @@ export const CHAMBER_COVERED_IDS: readonly string[] = [
   // same two single directoryFlow holes and fail the row.
   '@dsh-chamber/dsh-client-ui-mobile',
   '@deepseek-ai/dsh-client-ui-directory-picker-native',
-  // ── rc.8 deferred families (chamber-entry.ts registerDeferred dynamic
+  // ── deferred families (chamber-entry.ts registerDeferred dynamic
   // imports, design 09 §4 baseline alignment): registered after the boot
   // settles — composite-owned namespaces all the same, so a host-graph row
   // for any of them would double-register the package on the same ctx.
   '@deepseek-ai/dsh-client-ui-attachment',
   '@deepseek-ai/dsh-client-ui-brand-official',
   '@deepseek-ai/dsh-client-ui-reference',
-  // ── C4 settings cluster (2026-09 性能审计; chamber-entry.ts
+  // ── C4 settings cluster (chamber-entry.ts
   // ── registerDeferred): the official settings sections + the chamber
   // ── settings shell & connections register after settle (official ui-settings
   // ── itself stays first-screen — locale/ui-theme root-inject its
@@ -179,7 +178,7 @@ export const CHAMBER_COVERED_IDS: readonly string[] = [
   // ── graph would double-register once the deferred chunk registers it.
   // ── 可观测瞬态仅「设置入口缺席 ≈1 chunk 往返」（页面首个实例首冷启一次
   // ── 性；其后模块缓存同 tick 解析）；面板内容**就是**该来源 boot ctx 自己的
-  // ── settings.section 台账（2026-12 完整桥接修订），因此受本簇时序门控：
+  // ── settings.section 台账（完整桥接修订），因此受本簇时序门控：
   // ── 未落地时面板显示「正在启动该实例的前端」中间态；簇级失败面见
   // ── chamber-entry.ts registerDeferred 注释。
   '@deepseek-ai/dsh-client-ui-settings-general',
@@ -197,8 +196,8 @@ export const CHAMBER_COVERED_IDS: readonly string[] = [
   // one-declarer rule (ui-slots index.ts:800-803).
   '@deepseek-ai/dsh-client-ui-layout',
   '@deepseek-ai/dsh-client-modules',
-  // rc.8 (design 09 §4 baseline alignment): the renderer install moved OUT of
-  // the shell into this row (the shell kernel adopts it — the boot mounts
+  // design 09 §4 baseline alignment: the renderer install lives in this row
+  // (the shell kernel adopts it — the boot mounts
   // through the row's ctx.uiRenderer), so a second entry would install a
   // second slot renderer / provide `uiRenderer` twice. NOT part of the
   // composite: chamber-entry never imports it (page-own only, no factory).
@@ -214,14 +213,13 @@ export const CHAMBER_COVERED_IDS: readonly string[] = [
   // chamber-owned, chamber-entry.ts header), so the row is skipped, never
   // loaded — page-own, no factory.
   '@deepseek-ai/dsh-client-hmr',
-  // dsh-v0.1.3-alpha.2: the official open-in client row (ui-open-in-app).
-  // 2026-09-11 (fork & supersede, design 20 §2.2): our
+  // The official open-in client row (ui-open-in-app).
+  // Fork & supersede (design 20 §2.2): our
   // dsh-chamber-client-ui-open-in is a SUPERSET of this client and REPLACES
   // its registration at the same conversation utility slot — an official row
   // materialized from the host graph would add a second entry. Skipped like
-  // the other page-own official rows (ui-sidebar / ui-layout), and the
-  // rationale is now replacement, not the older "the official button
-  // self-hides under the N-ctx shell" double guard: the local app catalog is
+  // the other page-own official rows (ui-sidebar / ui-layout): our
+  // registration replaces the official one, and the local app catalog is
   // served by our own instance host package
   // (@dsh-chamber/dsh-chamber-seed-open-in), never by the official host half.
   // Page-own, no factory.
@@ -249,11 +247,11 @@ export const CHAMBER_COVERED_FACTORY_IDS: readonly string[] = [
   '@deepseek-ai/dsh-typert-registry',
   '@deepseek-ai/dsh-api-gateway',
   '@deepseek-ai/dsh-api-remotes',
-  // dsh-v0.1.2-alpha.1 provider group (replaces dsh-client-runtime): the
+  // provider group: the
   // store is a platform word (module-table seed — registered factory, no
   // ctx.plugin: it is not a cordis plugin); the controllers and the three
   // conversation families are first-screen plugins (chamber-entry.ts).
-  // C3 (2026-09 性能审计): ui-primitives joins here — platform word the
+  // C3: ui-primitives joins here — platform word the
   // composite answers since the seed dropped it (see the CHAMBER_COVERED_IDS
   // comment; factory only, never a ctx.plugin).
   '@deepseek-ai/dsh-client-store',
@@ -268,21 +266,21 @@ export const CHAMBER_COVERED_FACTORY_IDS: readonly string[] = [
   '@dsh-chamber/dsh-chamber-client-ui-sidebar',
   '@dsh-chamber/dsh-chamber-client-ui-git',
   '@dsh-chamber/dsh-chamber-client-ui-open-in',
-  // ui-settings stays FIRST-SCREEN (C4, 2026-09 性能审计 — locale/ui-theme
+  // ui-settings stays FIRST-SCREEN (C4 — locale/ui-theme
   // root-inject its settingsScope); the C4-deferred settings sections + the
   // chamber settings shell/connections have NO static factory (registered
   // after settle from their deferred chunks — see CHAMBER_COVERED_IDS).
   '@deepseek-ai/dsh-client-ui-settings',
   '@deepseek-ai/dsh-client-ui-conversation',
-  // commands + input-trigger are first-screen covered factories (2026-08
-  // review fix): ui-model-selection's root inject requires commandUi from
+  // commands + input-trigger are first-screen covered factories:
+  // ui-model-selection's root inject requires commandUi from
   // commands, commands requires inputTriggers from input-trigger — the three
   // move as one (chamber-entry.ts import comments).
   '@deepseek-ai/dsh-client-ui-commands',
   '@deepseek-ai/dsh-client-ui-input-trigger',
   '@deepseek-ai/dsh-client-ui-workspace',
   '@deepseek-ai/dsh-client-ui-model-selection',
-  // dsh-v0.1.2-alpha.1 conversation families (decision D6: first-screen, so
+  // conversation families (decision D6: first-screen, so
   // their factories must be registered before any loader entry materializes).
   '@deepseek-ai/dsh-client-ui-session',
   '@deepseek-ai/dsh-client-ui-chat',

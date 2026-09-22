@@ -187,7 +187,7 @@ test('真语料：本包源码抽出的每一条上游锚点，都能被「只�
   assert.ok(upstreamRows.length > 30, `抽到的上游锚点太少：${upstreamRows.length}`)
   // 任何一条上游锚点不命中合成语料，即说明抽取器抽出了语料未覆盖的形态——补语料或修抽取器，不允许放宽判定。
   assert.deepEqual(upstreamRows.filter(row => row.verdict !== 'ok').map(row => row.token), [])
-  // 方向 B 也必须在同一份合成语料上成立（旧版用 required: [] 把这一半关掉了）。
+  // 方向 B 也必须在同一份合成语料上成立（不得用 required: [] 把这一半关掉）。
   assert.deepEqual(findings.violations, [])
 })
 
@@ -201,8 +201,8 @@ test('防伪：只有写入形算发射；注释/数组/文案/选择器/attr() 
   const verdicts = text => anchorFindings({
     anchors, upstream: [{ path: 'upstream/all.js', text }], chamber: [], required: [],
   }).rows.map(row => row.verdict)
-  // 消费形（CSS 规则 / 选择器 / attr()）与裸提及都不证明上游还在**写**这个属性：§4 登记行当初把
-  // `[data-x]` 选择器也算证据，于是「上游删掉写入点、只留死 CSS」的漂移照样绿（data-ds-dark-theme 即此形）。
+  // 消费形（CSS 规则 / 选择器 / attr()）与裸提及都不证明上游还在**写**这个属性：若把
+  // `[data-x]` 选择器也算证据，「上游删掉写入点、只留死 CSS」的漂移照样绿（data-ds-dark-theme 即此形）。
   const decoys = [
     '// upstream still emits "data-chat-flow" somewhere',
     '// historically: jsx("div", { "data-chat-flow": "" })',
@@ -262,8 +262,8 @@ test('防伪：只有写入形算发射；注释/数组/文案/选择器/attr() 
 })
 
 test('防伪：role 的「文案」不算发射，只有对象键/选择器形才算', () => {
-  // 与属性锚点同一类假绿：`console.warn('role: "dialog" is gone')` 这类**文案**在旧判定下能让已被
-  // 改名的 role 继续绿；真实发射形（编译后 JSX 属性表）值后必是 `,`/`}` 收尾，故冒号形加收尾要求。
+  // 与属性锚点同一类假绿：`console.warn('role: "dialog" is gone')` 这类**文案**若被当成发射，已被
+  // 改名的 role 会继续绿；真实发射形（编译后 JSX 属性表）值后必是 `,`/`}` 收尾，故冒号形加收尾要求。
   const decoy = anchorFindings({
     anchors: [{ kind: 'role', token: 'dialog', path: 'x.ts', line: 1 }],
     upstream: [{ path: 'upstream/all.js', text: `console.warn('role: "dialog" is gone')` }],
@@ -295,7 +295,7 @@ test('防伪：role 的「文案」不算发射，只有对象键/选择器形�
 })
 
 test('防伪：slot 也只有写入形算发射（注册 API / 选择器不算）', () => {
-  // 这一层原先没有分级，于是「上游删掉 renderSlot、只留 slots.inject 或选择器」在 16 个 slot 锚点（含最小断言集一半）上照样绿。
+  // slot 锚点只认写入形：把 slots.inject 或选择器当发射，会让「上游删掉 renderSlot」在 16 个 slot 锚点（含最小断言集一半）上照样绿。
   const anchors = [{ kind: 'slot', token: 'main', path: 'x.ts', line: 1 }]
   const verdict = text => anchorFindings({ anchors, upstream: [{ path: 'upstream/all.js', text }], chamber: [], required: [] })
   for (const text of [
@@ -427,7 +427,6 @@ function makeStrictRoot(t, { frontendVersion, shell = false }) {
 }
 
 test('严格模式的语料完整性：只有 client 半、没有 shell 产物 ⇒ exit 1', () => {
-  // 2026-12 第三轮复核：这两条严格分支当时没有任何反例（把分支还原，21 个测试仍全绿）。
   const t = { after: () => {} }
   const { root, anchor } = makeStrictRoot(t, { frontendVersion: pinnedFrontendVersion(), shell: false })
   const run = args => spawnSync(process.execPath, ['scripts/upstream/verify-mobile-anchors.mjs', ...args], { cwd: root, encoding: 'utf8' })
@@ -472,12 +471,12 @@ test('最小断言集本身：无重复、kind 合法，且与 §4 登记行逐�
     assert.ok(['plugin', 'external'].includes(item.declared), item.declared)
     assert.ok(typeof item.note === 'string' && item.note.length > 0)
   }
-  // Doc lockstep (2026-12 review): a count alone just restates a constant — the registry row is the
+  // Doc lockstep: a count alone just restates a constant — the registry row is the
   // human half of this gate, so every required token must still be named there.
   const registry = readFileSync(join(ROOT, 'docs/checklists/upstream-touchpoints.md'), 'utf8')
   // Pick the LONGEST line that names the gate: a positional `find` would silently
   // retarget to any earlier passing mention (§7 names it too) and then assert
-  // against the wrong text (2026-12 third review).
+  // against the wrong text.
   const candidates = registry.split('\n').filter(line => line.includes('verify-mobile-anchors.mjs'))
   const row = [...candidates].sort((a, b) => b.length - a.length)[0] ?? ''
   assert.ok(row.length > 200, 'the §4 registry row for the mobile anchor gate must exist')

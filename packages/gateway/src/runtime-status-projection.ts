@@ -1,8 +1,8 @@
 /**
- * Gateway runtime status projection (2026-12 audit F2 split): the metadata
- * health disk-facts cache (F4) and the desktop-shaped projection, moved out of
- * runtime-manager.ts. The in-memory recoverability gate is injected as getters,
- * so writer-busy / disposed transitions stay immediate on every call.
+ * Gateway runtime status projection: the metadata health disk-facts cache and
+ * the desktop-shaped projection. The in-memory recoverability gate is injected
+ * as getters, so writer-busy / disposed transitions stay immediate on every
+ * call.
  */
 import { statSync } from 'node:fs'
 import { join } from 'node:path'
@@ -43,8 +43,8 @@ export interface MetadataStatusProjection {
 
 export function createMetadataStatusProjection(deps: MetadataStatusProjectionDeps): MetadataStatusProjection {
   const { platform, baseDir, shellVersion } = deps
-  /** Disk-derived metadata health facts (2026-12 audit F4): detectRuntimeMetadataHealth
-   *  scans CURRENT/OVERRIDE/JOURNAL/recovery evidence on every /status call
+  /** Disk-derived metadata health facts: detectRuntimeMetadataHealth scans
+   *  CURRENT/OVERRIDE/JOURNAL/recovery evidence on every /status call
    *  (probed every 3s by the UI). Only the DISK facts are cached — the
    *  in-memory recoverability gate is recomputed per call, so a writer becoming
    *  busy still stops advertising recovery immediately. Every transaction
@@ -82,10 +82,10 @@ export function createMetadataStatusProjection(deps: MetadataStatusProjectionDep
     return parts.join('|')
   }
 
-  /** Disk-derived metadata facts behind a short TTL (the scan the audit F4
-   *  finding targets): status + category-only components + whether any
-   *  recovery condition is on disk. null = unavailable (win32 or unreadable).
-   *  Cached ONLY here; invalidated by every writer transaction. */
+  /** Disk-derived metadata facts behind a short TTL: status + category-only
+   *  components + whether any recovery condition is on disk. null = unavailable
+   *  (win32 or unreadable). Cached ONLY here; invalidated by every writer
+   *  transaction. */
   function metadataHealthFacts(): {
     status: MetadataHealthStatus
     components: string[]
@@ -103,7 +103,7 @@ export function createMetadataStatusProjection(deps: MetadataStatusProjectionDep
     try {
       const health = detectRuntimeMetadataHealth(baseDir, shellVersion)
       // The component set and needsRecovery are the shared projection
-      // (dsh-runtime/src/metadata-health-projection.ts, M14); the marker rescue
+      // (dsh-runtime/src/metadata-health-projection.ts); the marker rescue
       // stays here because it inspects THIS host's base directory.
       const projected = projectMetadataHealthFacts(health, {
         markerRescueAvailable: health.status === 'recovery-marker-corrupt'
@@ -137,7 +137,7 @@ export function createMetadataStatusProjection(deps: MetadataStatusProjectionDep
     // restore/swap recovery phases resume through their retry.
     const recoverableBlock = startupBlockReason === null
       || RECOVERABLE_METADATA_BLOCKS.has(startupBlockReason)
-    // L4 review fix: no busy-phase/task gate may advertise recovery while an
+    // No busy-phase/task gate may advertise recovery while an
     // activation/install/restart owns the writer.
     const writerBusy = deps.isWriterBusy()
     const builtinVersion = deps.getBuiltinVersion()

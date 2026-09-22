@@ -1,10 +1,9 @@
 // MessageHandler.swift — A 桥 Swift 端消息处理器（传输层护栏 + invoke 上行 +
 // 事件下行出口）
 //
-// W-04（A 桥雏形，design 25 §4.4.1）/ design 25
-// §4.4.1（A 桥 web↔Swift）与 §0.1-B3（渲染器可用性门：ready 前期望 origin
+// A 桥 web↔Swift（design 25 §4.4.1）与 §0.1-B3（渲染器可用性门：ready 前期望 origin
 // 未开放 → origin 护栏一律拒绝、渲染端有界重试自愈——与 preload「先 info 后
-// expose」对偶，D1 二选一取「documentStart 预定义 + 就绪前 reject」）。
+// expose」对偶，取「documentStart 预定义 + 就绪前 reject」）。
 //
 // 完整消息流（design 25 §3.1 / §4.4.1）：
 //
@@ -36,9 +35,9 @@
 //     BridgeClient.onNotify → MainWindowController.notify 路由解包 →
 //     evaluateJS 直写 __dshChamberEmit(event, payload) → web shim 订阅表派发
 //     （通道名以 IPC_CHANNELS / 05 §7.4 为权威，manifest 8 push 通道）。
-//     本 handler 不参与事件下行（W-04 双写纪律「乙」：事件唯一入口是
-//     controller 的 notify 路由；原 emit/onEvent 降级面自 2026-12 审计 S14
-//     删除——生产接线从未调用它）。event 帧族仅 W-05 桩 fixture
+//     本 handler 不参与事件下行（双写纪律「乙」：事件唯一入口是
+//     controller 的 notify 路由）。
+//     event 帧族仅桩 fixture
 //     （sidecar-stub.ts / BridgeClientStubIntegrationTests）使用，壳内无消费面。
 //
 // 线程与持有关系：
@@ -51,7 +50,7 @@
 //     WKWebView.evaluateJavaScript 均主线程语义）；controller 侧若从后台
 //     线程喂入事件，需自行切主线程再调 emit（赋入方责任，注释声明）。
 //
-// 可测性（S15/S17）：WKScriptMessage 无公开构造器（WebKit 不能伪造
+// 可测性：WKScriptMessage 无公开构造器（WebKit 不能伪造
 // frameInfo），didReceive 不可在单测驱动；四道护栏 + app_quitting 门收敛到
 // 纯函数 fence(_:)（didReceive 只做输入取值与结果执行），origin/白名单/
 // 拒绝/app_quitting 路径由 MessageHandlerTests 直接覆盖。
@@ -66,7 +65,7 @@ final class ChamberMessageHandler: NSObject, WKScriptMessageHandler {
     // MARK: - 构造参数（共享契约，MainWindowController 按此构造，勿改名）
 
     /// 方法白名单：MainWindowController 实传 BridgeManifest.invokeChannels
-    /// （W-18 生成物，60 invoke 通道；design 25 §4.4.3），其余通道一律
+    /// （生成物，60 invoke 通道；design 25 §4.4.3），其余通道一律
     /// method_not_allowed。事件订阅面（8 push 通道）属 shim 侧 PUSH_EVENTS，
     /// 不经本白名单。
     private let whitelist: Set<String>
@@ -77,7 +76,7 @@ final class ChamberMessageHandler: NSObject, WKScriptMessageHandler {
     /// 重试」自愈），ready / 重启落闸由 noteSidecarReady 驱动。
     private let expectedOrigin: () -> String?
 
-    /// 退出清理是否已开始（S7）：镜像 renderer-trust.ts createTrustedIpc 的
+    /// 退出清理是否已开始：镜像 renderer-trust.ts createTrustedIpc 的
     /// app_quitting 门——before-quit/will-quit teardown 开始后，late invoke
     /// 不得再向 shutdown 注入传输/运行时工作。
     private let isQuitting: () -> Bool
@@ -91,7 +90,7 @@ final class ChamberMessageHandler: NSObject, WKScriptMessageHandler {
     /// 反向强持 webView 会成环；闭包内捕获 controller/webView 应 weak）。
     var evaluateJavaScript: ((String) -> Void)?
 
-    /// 原生通道令牌（S-06）：controller 注入 shim 时使用同一个值，护栏回执必须
+    /// 原生通道令牌：controller 注入 shim 时使用同一个值，护栏回执必须
     /// 带上它（shim 的 requireNativeToken 校验）。未赋值时拒绝回写并 loud——绝不下发
     /// 一个必然被 shim 抛错的无令牌调用。
     var nativeChannelToken: String?
@@ -125,7 +124,7 @@ final class ChamberMessageHandler: NSObject, WKScriptMessageHandler {
 
     func userContentController(_ userContentController: WKUserContentController,
                                didReceive message: WKScriptMessage) {
-        // S17：判定全部收敛到纯函数 fence（WKScriptMessage 不可构造的替代
+        // 判定全部收敛到纯函数 fence（WKScriptMessage 不可构造的替代
         // 接缝）；本回调只做输入取值（实时 URL 优先、noteCommitted 兜底——
         // 进程终止后/测试桩无 webView 时用后者）与结果执行。
         let decision = Self.fence(FenceInput(
@@ -152,7 +151,7 @@ final class ChamberMessageHandler: NSObject, WKScriptMessageHandler {
         }
     }
 
-    // MARK: - 入站围栏（S17：didReceive 的纯逻辑接缝）
+    // MARK: - 入站围栏（didReceive 的纯逻辑接缝）
 
     /// 围栏输入（把判定与 WKScriptMessage 解耦）。
     struct FenceInput {
@@ -175,18 +174,18 @@ final class ChamberMessageHandler: NSObject, WKScriptMessageHandler {
         case drop
     }
 
-    /// 围栏流水线（纯函数，顺序与拒绝语义 = 原 didReceive）：
+    /// 围栏流水线（纯函数）：
     ///   ① 通道名 + 主 frame（对应 Electron event.senderFrame ===
     ///      webContents.mainFrame，renderer-trust.ts 同族）；
     ///   ② origin 文档信任（ready 前 expectedOrigin == nil → 一律
     ///      ipc_sender_forbidden）；
-    ///   ③ app_quitting 门（S7：镜像 renderer-trust.ts createTrustedIpc——
+    ///   ③ app_quitting 门（镜像 renderer-trust.ts createTrustedIpc——
     ///      sender 校验后、handler 前；退出清理开始后 late invoke 不得再向
     ///      shutdown 注入传输/运行时工作）；
     ///   ④ 信封结构（[String: Any] + id 整值 + method 字符串）；
-    ///   ⑤ 尺寸上限（≤4 MiB）：先做整封 JSON 可表示性/深度校验（Phase 2 起由
-    ///      同一遍 AnyCodable.fromJSONObject 顺带完成），再量字节——Phase 3 起
-    ///      先用 jsonUpperBoundByteCount 做安全上界短路，上界超限才 JSON 序列化
+    ///   ⑤ 尺寸上限（≤4 MiB）：先做整封 JSON 可表示性/深度校验（由
+    ///      同一遍 AnyCodable.fromJSONObject 顺带完成），再量字节——先
+    ///      用 jsonUpperBoundByteCount 做安全上界短路，上界超限才 JSON 序列化
     ///      原始信封精确计数（JSONSerialization 遇 NaN/±Infinity 抛 NSException
     ///      （try? 拦不住），必须先判可表示；上界恒 ≥ 实际字节，故接受集不变）；
     ///   ⑥ 方法白名单；⑦ payload → AnyCodable（失败 = 信封不合法）。
@@ -195,14 +194,14 @@ final class ChamberMessageHandler: NSObject, WKScriptMessageHandler {
         let envelope = input.body as? [String: Any]
         let addressableID = envelope.flatMap { Self.exactInt(from: $0["id"]) }
         guard let expected = input.expectedOrigin else {
-            // 就绪门与信任拒绝分开编码（2026-12 双端逐函数核对 S1·F3）：sidecar
+            // 就绪门与信任拒绝分开编码：sidecar
             // 尚未 ready / 重启落闸期间 expectedOrigin 恒 nil，此时回
             // ipc_not_ready，渲染端可据此重试；把「未就绪」混进永久性的
-            // sender-forbidden 会让一次失败被当成不可恢复（update-store 曾因此
-            // 整会话 latch）。
-            // 排序是**有意**的（2026-12 审查）：expectedOrigin 为 nil 时没有可比较
+            // sender-forbidden 会让一次失败被当成不可恢复（update-store 的整会话
+            // latch 即此类后果）。
+            // 排序是**有意**的：expectedOrigin 为 nil 时没有可比较
             // 的可信 origin，无法先做信任判定；此分支只在「sidecar 未就绪」这个
-            // 短暂窗口成立，且它不授予任何能力（只是可重试状态码）——M5 起 shim
+            // 短暂窗口成立，且它不授予任何能力（只是可重试状态码）——shim
             // 也只在 info 成功后暴露公开面，正常启动序不会走到这里。
             return .reject(id: addressableID, code: Self.codeNotReady)
         }
@@ -215,11 +214,10 @@ final class ChamberMessageHandler: NSObject, WKScriptMessageHandler {
         guard let envelope, let id = addressableID, let method = envelope["method"] as? String else {
             return .reject(id: addressableID, code: Self.codeMalformedEnvelope)
         }
-        // Phase 2（独立审查 C 实测 1.74MB 信封 113.7ms → 69.6ms，-39%）：把
-        // 「JSON 可表示性/深度/有限性预扫」与「payload → AnyCodable 转换」合成
-        // 一次整封转换——AnyCodable.fromJSONObject 的接受集与原预扫逐条等价
+        // 把「JSON 可表示性/深度/有限性预扫」与「payload → AnyCodable 转换」合成
+        // 一次整封转换——AnyCodable.fromJSONObject 的接受集与预扫逐条等价
         // （同类白名单、同 512 深度上限）。随后量尺寸先走**安全上界短路**
-        // （Phase 3，见 ⑤）；只有上界超限才回退对**原始信封**做 JSONSerialization
+        // （见 ⑤）；只有上界超限才回退对**原始信封**做 JSONSerialization
         // （线格式字节数语义不变，且因已过可表示性校验，这一步不可能再抛
         // NSException/爆栈）。
         // 取舍：超限信封会先建一棵转换树再被尺寸门拒绝（峰值多一层树；信封本身
@@ -227,20 +225,20 @@ final class ChamberMessageHandler: NSObject, WKScriptMessageHandler {
         guard let convertedEnvelope = AnyCodable.fromJSONObject(envelope) else {
             return .reject(id: id, code: Self.codeMalformedEnvelope)
         }
-        // Phase 3（2026-09-18 性能，主线程）：先做 O(n) 的**安全上界短路**——
+        // 主线程先做 O(n) 的**安全上界短路**——
         // `jsonUpperBoundByteCount` 恒 ≥ 该值实际序列化后的字节数（AnyCodable
         // 处推导，AnyCodableTests 的 upper-bound 用例钉住该不等式），因此
         // 「上界 ≤ maxMessageBytes ⇒ 必过」，无需再序列化整封。只有上界超限时
-        // 才回退 Phase 1 C1 的精确计量——接受集与逐字节判定完全不变
-        // （MessageHandlerTests 的 frame_too_large 用例原样通过）。
-        // 收益（2026-09-18 实测，1 MB 信封）：上界遍历 1.57 ms vs JSONSerialization
+        // 才回退精确计量——接受集与逐字节判定完全不变
+        // （MessageHandlerTests 的 frame_too_large 用例覆盖该路径）。
+        // 收益（实测，1 MB 信封）：上界遍历 1.57 ms vs JSONSerialization
         // 3.01 ms → 净省 ~1.4 ms/MB（37%）；上界本身要扫过每个字符串的字节，
         // 故净收益小于「完全去掉序列化」的直觉值，但零语义风险、且随载荷线性。
         if convertedEnvelope.jsonUpperBoundByteCount > TrustGuard.maxMessageBytes {
             guard let envelopeData = try? JSONSerialization.data(withJSONObject: envelope) else {
                 return .reject(id: id, code: Self.codeMalformedEnvelope)
             }
-            // Phase 1 C1：直接按 JSONSerialization 产出的字节数判定（合法 UTF-8，
+            // 直接按 JSONSerialization 产出的字节数判定（合法 UTF-8，
             // 与 String(decoding:) 的 utf8.count 逐字节等价），省一次 4MiB 级 String 分配。
             guard TrustGuard.envelopeSizeOK(envelopeData) else {
                 return .reject(id: id, code: Self.codeFrameTooLarge)
@@ -268,13 +266,13 @@ final class ChamberMessageHandler: NSObject, WKScriptMessageHandler {
     /// Electron 侧为 { code: 'ipc_sender_forbidden' } 等，web 侧 shim 据码
     /// reject Promise，UI 按既有错误投影呈现——loud，绝不静默吞错）。
     static let codeSenderForbidden = "ipc_sender_forbidden"   // origin / 主 frame 信任失败
-    /// 就绪门（S1·F3）：expectedOrigin 为 nil（sidecar 未 ready / 重启落闸）。
+    /// 就绪门：expectedOrigin 为 nil（sidecar 未 ready / 重启落闸）。
     /// 与信任拒绝分开编码——渲染端可安全重试，不是「这个发送方永远非法」。
     static let codeNotReady = "ipc_not_ready"
     static let codeMethodNotAllowed = "method_not_allowed"    // method ∉ 白名单
     static let codeFrameTooLarge = "frame_too_large"          // 信封 > 4 MiB
     static let codeMalformedEnvelope = "malformed_envelope"   // 结构/JSON 表示不合法
-    /// 退出清理已开始（S7）：与 renderer-trust.ts createTrustedIpc 的
+    /// 退出清理已开始：与 renderer-trust.ts createTrustedIpc 的
     /// error.code = 'app_quitting'（Error('app is quitting')）同码同语义；
     /// A 桥回执通道只传错误码字符串（与 ipc_sender_forbidden 同款编码）。
     static let codeAppQuitting = "app_quitting"
@@ -294,25 +292,19 @@ final class ChamberMessageHandler: NSObject, WKScriptMessageHandler {
     /// JS 数字常以 int64 存储直通，> 2^53 的双精度路径会丢精度——如未来 id
     /// 源变为大整数，需按 CFNumber 存储类型重做严格解析）。
     static func exactInt(from value: Any?) -> Int? {
-        // 判定本体 = StrictJSONNumber（2026-12 单源化）：Bool 拒绝、非浮点存储
+        // 判定本体 = StrictJSONNumber：Bool 拒绝、非浮点存储
         // 无损取 Int64（WebKit 对整值 JS 数字常走 int64 直通，统一走 double 会把
         // Int.max 判成 2^63 而误拒）、浮点存储按 JS 精确整数域（±2^53）收口。
-        // 与迁移前的唯一差异：非浮点存储改用无损 `as? Int64`（UInt64 域外存储 →
-        // nil），旧实现的 `int64Value` 会回绕；该输入不可能来自 WebKit 桥接，
+        // 非浮点存储用无损 `as? Int64`（UInt64 域外存储 →
+        // nil，而 `int64Value` 会回绕）；该输入不可能来自 WebKit 桥接，
         // 方向为 fail-closed。
         StrictJSONNumber.int64(value, domain: .jsExact).map { Int($0) }
     }
 
-    // 2026-12 审计删除（生产零调用，只服务测试）：
-    //   - `anyCodablePayload(from:)`：fence ② 起已改为「整封信封一次
-    //     AnyCodable.fromJSONObject 转换」（见 fence ⑤ 注释），单点包装无生产调用；
-    //   - `isJSONSerializableValue(_:depth:)` 与 `maxJSONDepth`：Phase 2 起
-    //     fence 不再走预扫描，接受集/深度门单源 = AnyCodable.fromJSONObject
-    //     （AnyCodable.maxJSONDepth）。
     // 若将来需要「先判 JSON 可表示性再序列化」的独立预扫，应新建显式类型并入
     // AnyCodable 单源，而不是在 A 桥文件里复制第二份深度/类型表。
 
-    /// JS 字符串字面量：**单源 = AnyCodable 的单遍写出器**（2026-12 单源化）——
+    /// JS 字符串字面量：**单源 = AnyCodable 的单遍写出器**——
     /// 与页面字面量出口（MainWindowController.jsonLiteral(of:)）逐字节同源，
     /// 转义集：引号 / 反斜杠 / C0 控制字符（\uXXXX，大写十六进制）/ U+2028 /
     /// U+2029；非 ASCII 原样保留（合法 JS 字符串）。本函数只保留调用点语义。

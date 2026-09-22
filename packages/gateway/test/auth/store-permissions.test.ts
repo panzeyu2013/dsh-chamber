@@ -74,10 +74,9 @@ test('gateway tightens a loose existing stateDir to 0700 on POSIX', { skip: proc
 })
 
 test('gateway tightens a loose pre-existing gateway/ subdirectory to 0700 on POSIX', { skip: process.platform === 'win32' }, t => {
-  // The stateDir is already 0700 but the gateway/ child predates the store as
-  // a loose 0755 directory (the layout an old installer left behind). This is
-  // the regression guard for the root call site: reverting it to
-  // existingMode:'require' would NOT be caught by the stateDir-only test
+  // The stateDir is already 0700 but the gateway/ child exists as a loose 0755
+  // directory (an installer-created layout). This test covers the root call
+  // site: existingMode:'require' would NOT be caught by the stateDir-only test
   // above (there the child is freshly created).
   const stateDir = mkdtempSync(join(tmpdir(), 'gateway-loose-root-'))
   t.after(() => rmSync(stateDir, { recursive: true, force: true }))
@@ -140,7 +139,7 @@ test('pre-existing JWT and password verifier files are tightened before reading'
 
   chmodSync(jwtSecretFile, 0o644)
   chmodSync(passwordCredentialFile, 0o644)
-  // The stateDir exclusive lock must be released before reopening (Phase 1).
+  // The stateDir exclusive lock must be released before reopening.
   store.close()
   const reloaded = createGatewayStore(stateDir, { log() {}, warn() {}, error() {} })
 
@@ -387,7 +386,7 @@ test('a FAILED lock acquisition never deletes the live owner lock on process exi
 
   // A child process attempts to open the same directory (live lock → throws),
   // then exits normally. Its failure path must NOT register an exit listener
-  // that removes the owner's lock (M2 fix round regression).
+  // that removes the owner's lock.
   const script = [
     `import { createGatewayStore } from ${JSON.stringify(new URL('../../src/store.ts', import.meta.url).href)};`,
     `try { createGatewayStore(${JSON.stringify(stateDir)}, console); process.exit(3); } catch (error) { process.exit(1); }`,
@@ -519,8 +518,7 @@ test('concurrent stale-lock takeovers never double-hold the directory (pair stre
     `  writeFileSync(process.argv[1], JSON.stringify({ pid: process.pid }));`,
     // Hold the lock long enough that a slightly delayed second contender
     // (slow node startup under CI load) still sees the live lock instead of
-    // legitimately taking over after our release — a 100ms hold made the
-    // "at most one winner" assertion flaky (scanner A finding).
+    // legitimately taking over after our release.
     `  setTimeout(() => { store.close(); process.exit(0); }, 1000);`,
     `} catch { process.exit(1); }`,
   ].join('\n')

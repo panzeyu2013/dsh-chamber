@@ -49,7 +49,7 @@ const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 /**
  * Native-flavor aliases of the shared assembly resolver
  * (scripts/lib/sidecar-assembly.mjs — ONE implementation for the G4 smoke, this
- * toolbox and remote-state-acceptance; P1-4 of the 13-scripts audit).
+ * toolbox and remote-state-acceptance).
  */
 export { resolveNodeBinary, resolveSidecarDir as resolveNativeSidecarDir }
 
@@ -80,8 +80,8 @@ export function nativePreflight({ sidecarDir = DEFAULT_SIDECAR_DIR } = {}) {
 
 /**
  * The argv the native sidecar is launched with — the shared launch contract
- * (scripts/lib/sidecar-launch.mjs, M13: the G4 smoke gate carried the same
- * argv/env assembly). Exported so the contract stays a testable pure function.
+ * (scripts/lib/sidecar-launch.mjs). Exported so the contract stays a testable
+ * pure function.
  * @param {{ userDataDir: string, port: number }} input - launch inputs.
  * @returns {string[]} argv.
  */
@@ -90,7 +90,7 @@ export function nativeSidecarArgs({ userDataDir, port }) {
 }
 
 /** The environment the shipped sidecar.js requires — the shared launch contract
- * (scripts/lib/sidecar-launch.mjs, M13: compiled marker + update-check opt-out).
+ * (scripts/lib/sidecar-launch.mjs: compiled marker + update-check opt-out).
  * @param {NodeJS.ProcessEnv} [base] - the environment to extend.
  * @returns {NodeJS.ProcessEnv} the launch environment.
  */

@@ -1,5 +1,5 @@
 /**
- * Mobile read-watermark reporter (plan W5, design 17 §18).
+ * Mobile read-watermark reporter (design 17 §18).
  *
  * THE GAP. When the user reads a session on the gateway-hosted phone client,
  * the desktop must stop showing that session's completed-unread dot. The two
@@ -14,8 +14,8 @@
  *      therefore injects `sessions` (an official service, no new dependency);
  *   2. the read watermark comes from the GATEWAY MIRROR row
  *      (`GET /chamber/session-state` → `max(updatedAt, completedAt)`), NEVER
- *      from the phone's wall clock: the plan's hard rule is that read marks and
- *      the unread comparison live in the host domain only (§5-13/R2);
+ *      from the phone's wall clock: read marks and the unread comparison live
+ *      in the host domain only (§5-13);
  *   3. the mark is POSTed to `/chamber/session-state/read` with a per-install
  *      client id, monotonically (same/lower watermark is dropped) and throttled.
  *

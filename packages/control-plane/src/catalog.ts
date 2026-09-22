@@ -8,7 +8,7 @@
  * synchronous write-through mutations, backup-first atomic writes (random
  * O_EXCL temp + fsync + rename for .bak, then main), a monotonic revision, an explicit recovery state, and
  * "corrupt is never a fake-empty". (The store-level If-Match/409 protocol —
- * json-store mutateIfMatch — is no longer surfaced through the catalog row
+ * json-store mutateIfMatch — is not surfaced through the catalog row
  * APIs; the catalog mutates unconditionally, serialized only within this
  * store instance.) A schemaVersion-less file
  * is treated as v1 and migrated in place to v2 at load, with the original v1
@@ -18,7 +18,7 @@
  * v4 narrowing (01 §4/§5): projects/bindings/adapters are gone — the dsh
  * frontend runtime owns session business and the desktop main process owns
  * the remote-instance registry. Rows whose kind is not 'local' are dropped
- * and counted at load (thin-shell era ssh rows never silently kept).
+ * and counted at load, never silently kept.
  * Only user-editable fields (label/accentColor) persist in the row.
  * status/dshPort/error are PlaneHandle runtime projections and never enter
  * this document (03 §2.1). Legacy copies of those fields are ignored on load
@@ -148,7 +148,7 @@ function persistedConnectionRow(row: Record<string, unknown>): CatalogConnection
  * down the .bak recovery path. A schemaVersion-less document is v1:
  * migrated in place (schemaVersion 2, revision 0, migration block), with the
  * original v1 document returned as the backup content. v2 legacy documents
- * may still carry a `projects` array (thin-shell era); it is stripped at
+ * may still carry a `projects` array; it is stripped at
  * load — v4 has no project table (01 §4).
  * @param raw - the parsed document, read from disk.
  * @returns {doc, dropped, migrated, backupDoc?} — the cleaned document and

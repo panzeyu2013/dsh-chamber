@@ -2,9 +2,8 @@
  * Source lock for the chamber carrier-retry patch (design 14 §D4).
  * An upstream re-sync replaces `src/client/remote-stream.ts` wholesale, so review
  * alone cannot hold the patch: this lock fails loudly when the replayed file drops
- * the live-generation retry branch (the regression that froze the conversation
- * surface: second rapid carrier failure => gateway/internal => a failEventStream()
- * latch with no retry).
+ * the live-generation retry branch (dropping it means a second rapid carrier
+ * failure => gateway/internal => a failEventStream() latch with no retry).
  * `REMOTE_STREAM_NO_GENERATION_WAIT_MAX_MS` and reports its expiry through the
  * carrier seam. Upstream's timer-less wait parked every new logical stream on a
  * parked lane — the `openState='loading'` forever shape with no error edge and
@@ -27,8 +26,8 @@ const policy = source('src/client/remote-retry-policy.ts')
  */
 function liveGenerationBranch(sourceText: string): string {
   const start = sourceText.indexOf('if (connection.generation.getSnapshot() !== undefined) {')
-  // The no-generation wait begins at its Promise ( it is now the operation the
-  // shared bound races, so the exact generic no longer names the upstream outcome).
+  // The no-generation wait begins at its Promise (it is the operation the
+  // shared bound races, so the exact generic does not name the upstream outcome).
   const end = sourceText.indexOf('new Promise', start)
   assert.ok(start >= 0 && end > start, 'the live-generation branch must be locatable in the carrier')
   return sourceText.slice(start, end)
@@ -79,12 +78,12 @@ test('the abortable wait lives in the import-free policy module with the shared 
 })
 
 test('the no-generation wait keeps the upstream probe AND is bounded', () => {
-  //  the wait's SHAPE moved to the shared primitive, so the locks below pin the
-  // pieces that carry the behaviour instead of the retired hand-written timer:
-  //   - the push subscription and the snapshot probe are still the condition;
-  //   - the bound is still the exported policy constant, now handed to withDeadline;
-  //   - expiry still resolves 'expired' (never rejects).
-  // "Exactly one timer, always cleared" is no longer this lock's job: the primitive
+  //  the wait's SHAPE lives in the shared primitive, so the locks below pin the
+  // pieces that carry the behaviour:
+  //   - the push subscription and the snapshot probe are the condition;
+  //   - the bound is the exported policy constant, passed to withDeadline;
+  //   - expiry resolves 'expired' (never rejects).
+  // "Exactly one timer, always cleared" is not this lock's job: the primitive
   // owns it, and test/async-op/async-op.test.ts pins it there. What must NOT happen
   // is the bound silently disappearing - hence the withDeadline assertion.
   assert.match(carrier, /dispose = connection\.generation\.subscribe\(inspect\)/u)

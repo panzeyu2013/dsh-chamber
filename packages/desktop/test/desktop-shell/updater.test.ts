@@ -485,10 +485,9 @@ test('start() schedules checks on a linux AppImage build (shape gate open)', () 
 })
 
 // ---------------------------------------------------------------------------
-// part 1b — cache maintenance, compressed from updater-cache-maintenance.test.ts
-// (round-2 trim: same production module updater.ts, sibling suite deleted).
+// part 1b — cache maintenance against the same production module updater.ts.
 // Whitelist-class assertions (path traversal / relative-root / never-delete-
-// newer / never-throw) are carried over verbatim in semantics.
+// newer / never-throw) are pinned here.
 // ---------------------------------------------------------------------------
 
 test('sanitizeErrorText redacts absolute paths on both platforms and leaves URLs intact', () => {
@@ -542,7 +541,7 @@ test('resolveUpdaterCacheDir: packaged resolves; dev/unreadable/traversal/relati
   assert.equal(await resolveUpdaterCacheDir({ isPackaged: false, readFile: read }), null, 'dev never resolves')
   assert.equal(await resolveUpdaterCacheDir({ isPackaged: true, resourcesPath: '/nonexistent', readFile: async () => { throw new Error('ENOENT') } }), null, 'unreadable yml')
   assert.equal(await resolveUpdaterCacheDir({ isPackaged: true, home: '/Users/t', resourcesPath: '/r', readFile: async () => 'updaterCacheDirName: ../../evil\n' }), null, 'traversal name refused')
-  // A relative XDG_CACHE_HOME / LOCALAPPDATA / home must never yield a relative deletion target (F7).
+  // A relative XDG_CACHE_HOME / LOCALAPPDATA / home must never yield a relative deletion target.
   const rel = async () => "updaterCacheDirName: '@dsh-chamberdesktop-updater'\n"
   assert.equal(await resolveUpdaterCacheDir({ isPackaged: true, platform: 'linux', env: { XDG_CACHE_HOME: 'relative/cache' }, home: 'relative/home', resourcesPath: '/opt/dsh-chamber/resources', readFile: rel }), null)
   assert.equal(await resolveUpdaterCacheDir({ isPackaged: true, platform: 'win32', env: { LOCALAPPDATA: 'Relative\\AppData\\Local' }, resourcesPath: 'C:\\dsh-chamber\\resources', readFile: rel }), null)

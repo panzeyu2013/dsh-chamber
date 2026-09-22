@@ -1,5 +1,5 @@
 /**
- * Differential equivalence CLI (refactor plan A1).
+ * Differential equivalence CLI.
  *
  * Runs the recorded scenarios through BOTH readings - the legacy reference trace
  * and the new carrier reducer - and reports where they agree and where they

@@ -506,8 +506,8 @@ test('writer: a removed backing file near the compaction threshold never resurre
   await writer.flush()
 
   // Lose the entire backing generation. The next write fails; the following
-  // write recreates the file. The pre-fix writer retained its old
-  // ring and immediately compacted it over the new file, reviving 400 lines.
+  // write recreates the file. The old ring must not be compacted over the new
+  // file, or 400 deleted lines would come back.
   rmSync(logPathFor(stateDir, port))
   assert.equal(writer.write('lost while absent', 'stderr'), true)
   await writer.flush()

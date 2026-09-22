@@ -1,6 +1,6 @@
 /**
  * Notifications-settings helpers for the「通用」notifications control group
- * (design 19 §3.4, merged into General per the 2026-09 user decision). Pure
+ * (design 19 §3.4). Pure
  * logic only — no React, no DOM — so it is node:test-runnable (same role as
  * update-gate.ts for the update button).
  */

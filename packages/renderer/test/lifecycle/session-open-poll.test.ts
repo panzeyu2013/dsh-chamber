@@ -1,7 +1,6 @@
 /**
- * openInstanceSession polling/deadline/supersede tests, split out of
- * shell.test.ts (05 §4 session-open path). Shared harness:
- * test/support/shell-harness.ts.
+ * openInstanceSession polling/deadline/supersede tests (05 §4 session-open
+ * path). Shared harness: test/support/shell-harness.ts.
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -204,8 +203,8 @@ test('openInstanceSession: a sessions service that never registers fails loud at
   let settled = false
   void opening.then(() => { settled = true }, () => { settled = true })
   await Promise.resolve()
-  // Pins the fail-fast removal: pre-fix code rejected synchronously here,
-  // so `settled` would already be true with the same terminal message.
+  // The rejection must not be synchronous: `settled` would otherwise already be
+  // true with the same terminal message.
   assert.equal(settled, false)
 
   // Still polling halfway through the 8s budget — the failure must land on
@@ -273,12 +272,12 @@ test('openInstanceSession: a service that arrives after the first attempt but ne
   assert.deepEqual(__testOpenedSessions(), [])
 })
 
-// ── C3 gate (2026-09 性能审计): the chamber prefetch must fire before the
+// ── The chamber prefetch must fire before the
 // extra-row channel is consulted, and its failure is swallowed by the shell
 // gate (the loud path is run()'s create-side import; a boot with no extra
-// rows never even reaches the gate's await). The fixture now returns the
+// rows never even reaches the gate's await). The fixture returns the
 // module-system face (manifest + prefetch) so these paths are exercised for
-// real instead of degrading through a swallowed TypeError.
+// real.
 test('C3 gate: chamber prefetch fires after the module system install and before the boot settles', async (t) => {
   const instanceId = 'local'
   shellTestScope(t, { timers: false, silentConsole: false }, instanceId)
@@ -303,8 +302,8 @@ test('C3 gate: a chamber prefetch rejection is swallowed — the boot still sett
 })
 
 test('openInstanceSession: a request superseded by a newer one on the same source resolves quietly and never opens', async (t) => {
-  // 2026-12 (design 05 §2.2 revision): per-source open requests are a
-  // last-intent-wins stream, and the queued (cold-boot) path is where they can
+  // Per-source open requests are a last-intent-wins stream (design 05 §2.2
+  // revision), and the queued (cold-boot) path is where they can
   // actually race: both clicks land in the pending queue, the settle flush then
   // walks them in FIFO order. The boot-ctx early-open arm has already opened the
   // LATEST intent during boot, so dispatching the abandoned older request would
@@ -345,7 +344,7 @@ test('openInstanceSession: a request superseded by a newer one on the same sourc
 })
 
 test('openInstanceSession: the supersede record is PER SOURCE — an open on another source never swallows this one', async (t) => {
-  // 2026-09-11 review F4(a): the supersede rule is "last intent wins WITHIN one
+  // The supersede rule is "last intent wins WITHIN one
   // source" (design 05 §2.2 revision). A single page-wide "last requested
   // session" would make two different servers interfere: clicking a session on B
   // while A's cold-boot open is still queued would drop A's request silently at
@@ -374,7 +373,7 @@ test('openInstanceSession: the supersede record is PER SOURCE — an open on ano
 })
 
 test('openInstanceSession: the request record is dropped for a same-id re-add — the new incarnation is never judged superseded', async (t) => {
-  // 2026-09-11 review F4(b): this is the invariant disposeInstanceShell's own
+  // This is the invariant disposeInstanceShell's own
   // comment states ("a same-id re-add is a new generation, and its first open
   // must not be judged as superseded by the previous incarnation's last
   // request").
@@ -382,10 +381,10 @@ test('openInstanceSession: the request record is dropped for a same-id re-add �
   // The record is asserted DIRECTLY (`__testLastRequestedSession`), because the
   // behavior alone cannot see it: every dispatch follows the write of its own
   // request, so the re-added source's first open overwrites the leftover record
-  // before the supersede check can compare it. A behavioral-only version of this
-  // test passes with the retirement deleted (mutation-verified 2026-09-11) — it
-  // would be a lock that proves nothing. The user-visible half (the re-added
-  // source's first open still reaches the runtime) is asserted too.
+  // before the supersede check can compare it. A behavioral-only test would pass
+  // with the retirement deleted — a lock that proves nothing. The user-visible
+  // half (the re-added source's first open still reaches the runtime) is asserted
+  // too.
   const instanceId = 'ssh-test-supersede-readd'
   shellTestScope(t, { silentConsole: false }, instanceId)
   const first = await bootInstanceShell(instanceId, `/api/i/${instanceId}`, {} as HTMLElement, () => {})

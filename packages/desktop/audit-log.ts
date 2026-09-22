@@ -1,5 +1,5 @@
 /**
- * Desktop audit log (design 17 §13.4.4, S24): append-only JSONL of
+ * Desktop audit log (design 17 §13.4.4): append-only JSONL of
  * NON-SECRET events with an owner-only (0600) file and size-based rotation
  * to `<file>.1`.
  *
@@ -7,7 +7,7 @@
  * leaves, descriptor/path identity checks, loose legacy modes tightened at
  * open, fsync + directory fsync on creation) are the control-plane
  * audit-trail SINGLE SOURCE — the gateway server audit runs the same core,
- * so the two surfaces can no longer drift (dedupe audit E-4/N11, 2026-09).
+ * so the two surfaces cannot drift.
  * This file keeps only the desktop-facing shape: the loud-but-non-fatal
  * append contract (a broken audit log must not break connection management or
  * auth — the log is a record, not a gate).
@@ -27,7 +27,7 @@ import {
 export const AUDIT_LOG_MAX_BYTES = AUDIT_TRAIL_MAX_BYTES
 
 /** One non-secret audit event. Every field is public metadata only; no field
- * may ever carry a credential, cookie or session body (S24). */
+ * may ever carry a credential, cookie or session body. */
 export type AuditEvent = AuditTrailEvent
 
 /** Append one non-secret audit event (JSONL). Never throws into the caller;

@@ -5,7 +5,7 @@
  * 参数契约在 `verify-mobile-anchors-args.mjs`（两个都可被测试 import；本文件是
  * 顶层过程式程序，与 verify-upstream-touchpoints.mjs 同一套拆法））。
  *
- * 背景（2026-09-13 STATUS 移动档开放项 ⑤）：`packages/dsh-chamber-client-ui-mobile`
+ * 背景：`packages/dsh-chamber-client-ui-mobile`
  * 的锚点由 README「Anchor baseline」+ `test/behavior/composer-guard.test.ts` 钉住，但那套是
  * **自证**（只读本包文件），上游把 `data-*`/slot key 改名时不会红——插件样式
  * 静默 no-op，只有真机才看得见。本门把「插件声明的锚点」与「上游真实发射的
@@ -107,10 +107,10 @@ function readMobileSources() {
 
 /**
  * 上游 client 产物语料：
- *   - `<root>/node_modules/@deepseek-ai/**\/lib/*.js`（各 client 半，task 指定的主来源）；
+ *   - `<root>/node_modules/@deepseek-ai/**\/lib/*.js`（各 client 半的主来源）；
  *   - `<root>/node_modules/@deepseek-ai/dsh-web-frontend/dist/assets/*.js`（shell 打包产物：
  *     未单独发布的 client 包——如 ui-dockkit——只在这里，缺了它 `data-dockkit-strip`
- *     这类锚点会假红；首版就踩过）。
+ *     这类锚点会假红）。
  * 两部分同属一个 pin，命中任一即视为「上游确实在发射」。
  *
  * @returns {{clientHalves: Array<object>, shellBundles: Array<object>} | null} 目录不存在时 null。
@@ -118,7 +118,7 @@ function readMobileSources() {
 function readUpstreamFiles(anchorRoot) {
   const packagesDir = join(anchorRoot, 'node_modules', '@deepseek-ai')
   if (!existsSync(packagesDir)) return null
-  // `.mjs`/`.cjs` 一并读：真实树里已各有若干（第三轮复核），未来某个 client 半只发 ESM
+  // `.mjs`/`.cjs` 一并读：真实树里已各有若干，未来某个 client 半只发 ESM
   // 时不能成为盲区；`.js.map` 不在其列（它不能作为发射证据，读了只会引入噪声）。
   const all = walkFiles(packagesDir, name => /\.(?:js|mjs|cjs)$/.test(name), [])
   const read = files => files.map(absolute => ({ path: repoRel(absolute), text: readText(absolute) }))
@@ -234,7 +234,7 @@ function main() {
   }
   // pin 身份：锚点树与仓内 pin 不是同一个上游时，这个门证明的是另一个版本。
   // 注意身份是**版本级**的：同版本的本地重打树同样通过；内容级摘要需要仓内快照，
-  // 见 docs/progress/STATUS.md 的登记项（2026-12 第三轮复核）。
+  // 见 docs/progress/STATUS.md 的登记项。
   const pin = compareAnchorPin(root)
   if (pin === null) {
     const detail = `[note] pin 身份无法判定：读不到 ${join(ROOT, 'packages', 'desktop', 'vendor', 'dsh', 'pnpm-lock.yaml')}`

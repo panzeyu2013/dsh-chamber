@@ -11,9 +11,9 @@ import { HEAD, PREVIEW_BASE, REPO_ID, WORKTREE_ID } from '../support/fixtures.ts
 const PREVIEW: PreviewCreateResult = { ...PREVIEW_BASE, previewToken: 'preview-fixed' }
 
 /**
- * One carrier envelope (2026-09 transport convergence): the git client posts
- * through the shared sidebar carrier, whose `server-response` requires the
- * rpcId to ECHO the request body — a mismatch rejects before any git decode.
+ * One carrier envelope: the git client posts through the shared sidebar
+ * carrier, whose `server-response` requires the rpcId to ECHO the request body —
+ * a mismatch rejects before any git decode.
  */
 function carrierEnvelope(requestBody: string, result: unknown): Response {
   const body = JSON.parse(requestBody) as { rpcId?: string }
@@ -146,7 +146,7 @@ test('a carrier RPC-layer refusal keeps the rpc-failed vocabulary and its detail
     await assert.rejects(gitWorktreeApi.snapshot('local'), (error: unknown) => {
       assert.ok(error instanceof GitWorktreeRpcError)
       assert.equal(error.code, 'rpc-failed')
-      // GitWorktreeRpcError.message carries the code prefix (unchanged shape).
+      // GitWorktreeRpcError.message carries the code prefix.
       assert.equal(error.message, 'rpc-failed: remote threw')
       assert.deepEqual(error.details, { phase: 'open' })
       assert.equal(isAmbiguousGitRpcFailure(error), true)
@@ -172,7 +172,7 @@ test('the not-ready 503 class stays an ambiguous transport failure', async () =>
 
 test('worktree-submodules is a deterministic pre-mutation rejection; git refusals stay ambiguous unless the host proves otherwise', () => {
   // The typed submodule refusal can NEVER have committed a mutation: like
-  // worktree-dirty it must surface as a plain dismissible error (2026-09).
+  // worktree-dirty it must surface as a plain dismissible error.
   assert.equal(
     isDeterministicGitRejection(new GitWorktreeRpcError('worktree-submodules', 'refused')),
     true,

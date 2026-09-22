@@ -10,11 +10,10 @@
  * is not among the current entries (see `OpenInButton`), so a stale or foreign
  * memory can never leave the entry pointing at an impossible app.
  *
- * MIGRATION: chamber builds before the per-source split (and, historically, the
- * official client) wrote the page-wide key `dsh.open-in-app.choice`. That key
- * is still READ once, as the initial value for the LOCAL source, so a user's
- * remembered application survives the upgrade; it is never written again by
- * this package.
+ * MIGRATION: the page-wide key `dsh.open-in-app.choice` (written by builds
+ * before the per-source split) is still READ once, as the initial value for the
+ * LOCAL source, so a user's remembered application survives the upgrade; this
+ * package never writes it.
  *
  * Persistence is best-effort: an opaque origin or disabled storage degrades to
  * the in-memory value instead of throwing (the button always works, the choice

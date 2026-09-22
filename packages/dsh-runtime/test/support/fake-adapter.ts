@@ -1,5 +1,5 @@
 /**
- * Pure-Node fake host adapter (design 18 §9.1 M5 deliverable).
+ * Pure-Node fake host adapter (design 18 §9.1).
  *
  * Implements `RuntimeHostAdapter` with no Electron/userData/IPC dependency so
  * the shared core's tests can run entirely against `node:test` fixtures:
@@ -9,9 +9,9 @@
  *     fakes (probe results are injectable);
  *   - `pnpmBin`/`nodeExecutable` are inert string/argv fixtures.
  *
- * The existing runtime-startup/apply-phase tests already build their own
- * `StartupDeps`/`ApplyDeps` fakes (the concrete seams this adapter will front in
- * the M6 wiring); this class is the canonical shared fixture for host-agnostic
+ * The runtime-startup/apply-phase tests build their own
+ * `StartupDeps`/`ApplyDeps` fakes (the concrete seams this adapter fronts);
+ * this class is the canonical shared fixture for host-agnostic
  * tests and the adapter seam itself. The apply-now run-phase tests (design 18
  * addendum, `test/activation/apply-now.test.ts`) drive it through the shared thin bridge
  * `test/support/run-phase-fixture.ts`, which adapts the adapter's clock/spawn/stop

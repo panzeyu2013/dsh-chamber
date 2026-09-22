@@ -1,7 +1,7 @@
 /**
  * Shared gateway-provider TLS fixtures: two self-signed certificate/key
  * pairs and the hex sha256 SPKI pins of their public keys (the real
- * mismatch-case fixtures for the S23 pin gates).
+ * mismatch-case fixtures for the pin gates).
  * Bare helper file — never registered in scripts/test.mjs.
  */
 

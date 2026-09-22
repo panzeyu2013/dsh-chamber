@@ -8,12 +8,9 @@
  * prevents a future carrier refactor from silently dropping the prefix from
  * the carrier.
  *
- * Rebased for upstream v0.1.2-alpha.1: the WebApiClient/IApiClient half is
- * gone (the upstream API-client surface was deleted with the downlinks), so
- * the assembly now owns the generic RPC carrier only — plus the worker-local
- * stream opener when the page-owned transport provides one. The module shape
- * (resolve one prefix, fan it into every carrier) and the export names are
- * unchanged.
+ * The assembly owns the generic RPC carrier — plus the worker-local stream
+ * opener when the page-owned transport provides one; it resolves one prefix
+ * and fans it into every carrier.
  */
 import { resolveInstanceBasePath } from '../api-path.ts'
 import type { RpcFetch, RpcStreamOpen } from './rpc.ts'
@@ -41,8 +38,7 @@ export interface ConnectionCarrierAssembly<Rpc> {
  *
  * The page-owned transport keeps its upstream precedence: even when it
  * replaces the fetch/stream halves, the generic RPC factory still receives the
- * same basePath plus that transport's hooks. The upstream browser-fixture
- * carrier branch is gone with `src/client/fixture.ts` (registry dropped).
+ * same basePath plus that transport's hooks.
  */
 export function assembleConnectionCarriers<Rpc>(
   explicitBasePath: string | undefined,

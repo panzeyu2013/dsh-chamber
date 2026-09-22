@@ -5,8 +5,7 @@
  * logs — plus the remote host roster: registry CRUD, connect/disconnect,
  * on-demand systemd control, ring-buffer logs). The page itself is rendered by
  * the chamber settings shell through its fixed nav id; this plugin owns the
- * copy and the section component (2026-12: the old host-ctx `settings.section`
- * registration was removed — see apply).
+ * copy and the section component.
  *
  * All data rides page-level surfaces (window.dshChamber.desktopSsh IPC +
  * the control-plane REST client) — no host frames, no dsh runtime objects.
@@ -43,12 +42,10 @@ export const inject = ['locale']
 export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'dsh-chamber: settings connections dictionaries')
 
-  // 2026-12 (audit D-5 resolved): the host-ctx (chamber boot ctx)
-  // `settings.section` registration is GONE. It never had a renderer in any
-  // shape — the desktop chamber settings shell renders ConnectionsSection
-  // through its fixed nav id (`__connections`, SettingsShell.tsx +
-  // nav-active.ts CONNECTIONS_SECTION_ID), and since the 2026-12
-  // complete-bridge revision the panel renders the SELECTED source's own
+  // No host-ctx (chamber boot ctx) `settings.section` registration: the
+  // desktop chamber settings shell renders ConnectionsSection through its
+  // fixed nav id (`__connections`, SettingsShell.tsx + nav-active.ts
+  // CONNECTIONS_SECTION_ID), and the panel renders the SELECTED source's own
   // settings ledger instead of assembling a second plugin set, so nothing
   // mounts this plugin anywhere else. The settings
   // cluster is registered all-or-nothing (chamber-entry registerDeferred), so

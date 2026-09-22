@@ -4,7 +4,7 @@
  * body validation, and the runtime manager's resolution chain + single-owner
  * guard. Fakes stand in for the plane; no real dsh, no fixed ports.
  *
- * P0 split siblings: runtime-ownership.test.ts, runtime-registry-status.test.ts,
+ * Sibling suites: runtime-ownership.test.ts, runtime-registry-status.test.ts,
  * runtime-apply-now-preflight.test.ts, runtime-activation-probes.test.ts,
  * runtime-apply-now-recovery.test.ts, runtime-builtin-selection.test.ts,
  * runtime-restart-exhausted.test.ts, runtime-route-gates.test.ts and
@@ -130,7 +130,7 @@ test('select/rollback require a version body and registry PUT validates the orig
 })
 
 // ---------------------------------------------------------------------------
-// S19 sanitization (F5 review fix)
+// S19 sanitization
 // ---------------------------------------------------------------------------
 test('sanitizeRouteError redacts URL userinfo, paths and credential patterns', () => {
   // The shared sanitizeErrorText runs first and strips paths (the trailing
@@ -142,9 +142,9 @@ test('sanitizeRouteError redacts URL userinfo, paths and credential patterns', (
 })
 
 test('sanitizeRouteError keep tokens never widen path or credential redaction', () => {
-  // Moved from boundary/sanitize-route-error.test.ts: the kept scoped-package
-  // name already has route-level coverage (feature-lifecycle.test.ts, the
-  // /chamber/plugins refusal), so only the keep-safety half is preserved here.
+  // The kept scoped-package name already has route-level coverage
+  // (feature-lifecycle.test.ts, the /chamber/plugins refusal); this pins the
+  // keep-safety half.
   const kept = '@dsh-chamber/dsh-chamber-seed-client-graph'
   const message = `unsyncable package ${JSON.stringify(kept)} while reading /Users/alice/private/state.json token=abc123`
   const out = sanitizeRouteError(message, [kept])
@@ -153,7 +153,7 @@ test('sanitizeRouteError keep tokens never widen path or credential redaction', 
   assert.match(out, /\[path\]/)
   assert.match(out, /token=\[redacted\]/)
   // An empty or non-string keep entry never widens the output, and without the
-  // keep token the scoped name falls back to the pre-fix [path] shape.
+  // keep token the scoped name falls back to the [path] shape.
   assert.match(sanitizeRouteError(message, ['']), /\[path\]/)
   assert.match(sanitizeRouteError(message, []), /@dsh-chamber\[path\]/)
 })
@@ -380,9 +380,10 @@ test('mid-run metadata drift: recover-metadata opens through the free-text block
     mkdirSync(join(stateDir, 'dsh-runtime'), { recursive: true })
     // A healthy selection whose CURRENT pointer then rots MID-RUN (no boot
     // verdict since the corruption): status projects the resolution error
-    // text AND reports canRecoverMetadata — the route gate must classify by
-    // the flag, not the free text (the old gate refused the very recovery
-    // route it advertised, locking every mutation until a gateway restart).
+    // text AND reports canRecoverMetadata — the route gate must classify by the
+    // flag, not the free text; classifying by the text would refuse the very
+    // recovery route it advertises, locking every mutation until a gateway
+    // restart.
     writeOverrideRow(stateDir, { chosenVersion: '1.0.0', pending: null })
     writeFileSync(join(stateDir, 'dsh-runtime', 'current'), '{corrupt', { mode: 0o600 })
     const home = writeDshHome(stateDir, '{"source":"preserved"}')

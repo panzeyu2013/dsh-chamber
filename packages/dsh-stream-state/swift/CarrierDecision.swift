@@ -1,6 +1,6 @@
 //
 //  CarrierDecision.swift
-//  B5 (Swift mirror) - the shell-side authority for the three carrier decisions.
+//  Swift mirror - the shell-side authority for the three carrier decisions.
 //
 //  WHY THIS FILE EXISTS. The Swift shell's recovery policy and the page's carrier
 //  reducer are two implementations of one contract. Today they share no source, so

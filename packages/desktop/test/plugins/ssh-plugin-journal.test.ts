@@ -1,6 +1,6 @@
 /**
- * ssh-plugin-journal.ts tests (design 21 §6.4 ssh undo journal, plan Phase
- * 5): record/latestOk semantics, per-file retention, corrupt-aside recovery,
+ * ssh-plugin-journal.ts tests (design 21 §6.4 ssh undo journal):
+ * record/latestOk semantics, per-file retention, corrupt-aside recovery,
  * bounded no-follow reads, 0600 atomic writes and never-throw persistence.
  */
 

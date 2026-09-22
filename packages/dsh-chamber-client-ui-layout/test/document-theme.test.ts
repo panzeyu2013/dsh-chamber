@@ -5,7 +5,7 @@
  * and that an unpublished active source fails open to the vendor's
  * unconditional behavior; plus the page-wide per-source palette cache
  * (cold-boot priming, mounted/provisional guards, per-activation de-dup; design
- * 06 §4.6, W3 切源体验). The environment is injected exactly as the production
+ * 06 §4.6). The environment is injected exactly as the production
  * wiring injects chamberBridge + the vendor ThemePresenter (see
  * document-theme.ts / theme-cache.ts).
  */
@@ -101,7 +101,7 @@ test('the production wiring keeps one page-wide presenter and reads the instance
   // boot snapshot with every test above still green.
   assert.match(index, /ctx\.on\('theme\/change'/, 'the projector must stay subscribed to theme changes')
 })
-// ---- source theme cache + cold-boot priming (merged from document-theme-cache.test.ts) ----
+// ---- source theme cache + cold-boot priming ----
 
 test('the pure priming decision covers self, mounted, cached, fallback and de-dup', () => {
   const base = { active: 'ssh' as string | undefined, self: 'local', hasCached: false, activeMounted: false, primedFor: undefined as string | undefined, hasFallback: false }

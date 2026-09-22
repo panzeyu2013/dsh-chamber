@@ -2,8 +2,7 @@
  * The settled-boot gap identity used by BOTH publish signatures (sidebar
  * derive.ts projection signature + settings-bridge roster signature).
  *
- * This is the contract the two copies used to share by hand; after the 2026-12
- * single-sourcing pass it is one implementation with one test.
+ * It is one implementation with one test.
  *
  * Run directly: node packages/dsh-chamber-client-ui-sidebar/test/shared/boot-gap-signature.test.ts
  */

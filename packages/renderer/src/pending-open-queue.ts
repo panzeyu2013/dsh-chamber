@@ -13,8 +13,7 @@ interface PendingOpen {
   resolve(): void
   reject(error: Error): void
   /** Cancel this entry's own bound. Called by #take: a taken entry must never
-   *  settle by its own deadline any more (that is what the hand-written timer's
-   *  `clearTimeout` used to do). */
+   *  settle by its own deadline. */
   cancel(): void
 }
 
@@ -49,11 +48,11 @@ export class PendingOpenQueue {
   }
 
   enqueue(instanceId: string, sessionId: string): Promise<void> {
-    //  (W5): the bound is the shared primitive. One deadline is expressed as
-    // pollMs === boundMs (the first inspection equals the whole window), and the
-    // cancellation the old #take did with `clearTimeout` is now an AbortSignal -
-    // that separation is exactly why waitForCondition is the right primitive here
-    // and withDeadline is not: it exposes no cancel handle at all.
+    //  The bound is the shared primitive. One deadline is expressed as
+    // pollMs === boundMs (the first inspection equals the whole window), and
+    // cancellation is an AbortSignal - that separation is exactly why
+    // waitForCondition is the right primitive here and withDeadline is not:
+    // it exposes no cancel handle at all.
     const controller = new AbortController()
     let entry: PendingOpen | undefined
     // The executor runs synchronously, so `entry` is assigned before the wait starts.

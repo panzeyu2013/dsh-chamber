@@ -1,8 +1,8 @@
 /**
  * The shared Node-side record guard (control-plane/src/record-read.ts).
  *
- * readStringArray was byte-identical in the desktop main process and the
- * gateway server before the 2026-12 single-sourcing pass; this locks the
+ * readStringArray is shared with the desktop main process and the
+ * gateway server; this locks the
  * "absent is empty, never guessed" behavior all three hosts rely on.
  *
  * Run directly: node packages/control-plane/test/protocol/record-read.test.ts

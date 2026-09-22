@@ -1,5 +1,5 @@
 /**
- * `settings.onboarding` coordinator tests (2026-09-11 upstream-alignment T3): pure
+ * `settings.onboarding` coordinator tests: pure
  * facts only, no DOM, no renderer. The stage mounts exactly one ordered step, and only
  * while the instance's current session is blank or absent — upstream's readiness
  * selector, verbatim. The React wiring is pinned by the source-text locks in
@@ -94,7 +94,7 @@ test('seat narrowing: only a delivered function counts as the sessions seat', ()
   assert.equal(sessionsSeatOf({ useSessions: null }), undefined);
 });
 
-// ---- F1 (2026-09-11 review): the two axes of the stage ----
+// ---- the two axes of the stage ----
 // The probe: switch the view away and back while the session is still blank — the
 // reset must follow the SESSIONS fact alone, never the composite (sessions AND
 // active view), or an acknowledged step re-mounts.

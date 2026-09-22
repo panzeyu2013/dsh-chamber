@@ -4,13 +4,13 @@
  * projection remain internal; the static module table and its platform words
  * form the package's build-time contract.
  *
- * ## chamber patch (dsh-chamber connection manager, design 05 §6/§4)
+ * ## Chamber N-ctx seam (design 05 §6/§4)
  *
  * The N-ctx module-table sharing seam: `ensureWebModuleSystem` (install-or-
  * reuse the page-level module system + `__ModuleLoader__` registration sink —
- * the first-boot race fix) and the `AppWebEntryOptions.extraRows` per-instance
- * host-graph boot-row merge. The boot page is the rc.8 framework-free BootPage
- * (the React loading gate moved to the ui-renderer with the application).
+ * the first-boot race guard) and the `AppWebEntryOptions.extraRows` per-instance
+ * host-graph boot-row merge. The boot page is the framework-free BootPage;
+ * the React loading gate lives in the ui-renderer with the application.
  * @module @deepseek-ai/dsh-client-web
  */
 

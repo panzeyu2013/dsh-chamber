@@ -244,7 +244,7 @@ test('domain carrier preserves stable business errors and lets true internal fai
   // An EXPLICIT retryable: false (a host-proven pre-mutation refusal) is
   // serialized distinctly from "not in RETRYABLE_CODES" (no flag at all):
   // the client clears a pending uncertain-outcome recovery only on this
-  // proof. (2026-09 submodule/deterministic-refusal amendment.)
+  // proof.
   assert.deepEqual(await domainResult(async () => {
     throw new GitWorktreeError('worktree-submodules', 'submodule refusal', { retryable: false })
   }), {
@@ -256,8 +256,8 @@ test('domain carrier preserves stable business errors and lets true internal fai
     },
   })
   // An EXPLICIT retryable: true serializes as-is even for codes NOT in
-  // RETRYABLE_CODES (2026-09: the earlier spread only ever emitted true for
-  // inferred/in-set codes, silently dropping an explicit true).
+  // RETRYABLE_CODES (an inferred/in-set spread would silently drop an
+  // explicit true).
   assert.deepEqual(await domainResult(async () => {
     throw new GitWorktreeError('worktree-locked', 'explicit true', { retryable: true })
   }), {

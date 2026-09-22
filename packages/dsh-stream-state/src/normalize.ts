@@ -1,5 +1,5 @@
 /**
- * Action equivalence normalizer (refactor plan section 4.1, review finding A-1).
+ * Action equivalence normalizer.
  *
  * The differential oracle compares an old wiring against a new one. Their
  * DIAGNOSTIC strings are expected to differ - the new reducer names things
@@ -66,8 +66,8 @@ export function normalizeEffect(effect: RecoveryEffect): NormalizedEffect {
 }
 
 /**
- * Compare two effect sequences under three allowed divergence classes
- * (refactor plan section 4.1): wording, intra-tick ordering, and added
+ * Compare two effect sequences under three allowed divergence classes:
+ * wording, intra-tick ordering, and added
  * observability. Concretely: `forensic` effects are compared as a set (their
  * order and count are diagnostic), while every other effect is compared as an
  * ordered multiset per target.

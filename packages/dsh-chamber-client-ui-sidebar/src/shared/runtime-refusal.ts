@@ -1,13 +1,11 @@
 /**
  * Gateway runtime-action refusal projection — the repository's single
- * classifier and verbatim-error projection (2026-12 single-sourcing pass).
+ * classifier and verbatim-error projection.
  *
  * Two client plugins render this projection from their own dictionaries:
  * settings-connections (connection card + plugin dialog: managed-restart.ts)
- * and settings-bridge (runtime section: restart-refusal.ts). Each used to keep
- * a byte-identical copy plus a hand-written lockstep test
- * (settings-connections/test/runtime-gate/restart-refusal-parity.test.ts).
- * Both pieces are pure functions over (status, body) with no dictionary,
+ * and settings-bridge (runtime section: restart-refusal.ts). Both pieces are
+ * pure functions over (status, body) with no dictionary,
  * transport or privilege dependency, so the pure core lives on the sidebar
  * shared face — the same §5.2 split the gateway-runtime core already uses — and
  * each plugin keeps only its own key mapping and wording.
@@ -46,8 +44,7 @@ export function classifyRuntimeRefusal(body: unknown, status: number): { kind: R
 
 /**
  * Project a refusal body: body.error verbatim when the server carried one
- * ({error, code} shape — 409/400), else a status-anchored fallback. Byte-equal
- * on both plugin sides before this module existed.
+ * ({error, code} shape — 409/400), else a status-anchored fallback.
  * @param body - the parsed response body.
  * @param fallbackStatus - the status to anchor the fallback on.
  * @returns the text to render.

@@ -1,22 +1,18 @@
 /**
- * Test-only stand-in for the vendored `@deepseek-ai/dsh-client-store`
- * (2026-09-12 CI fix), used ONLY by this package's node unit tests.
+ * Test-only stand-in for the vendored `@deepseek-ai/dsh-client-store`,
+ * used ONLY by this package's node unit tests.
  *
  * WHY: the real factory lives in vendor source whose module imports bare
  * `zustand`/`immer`. Whether those resolve depends on the install shape of the
- * vendored workspace member, which differs between a developer machine and CI
- * (run 34667681904: `ERR_MODULE_NOT_FOUND: Cannot find package 'zustand'`
- * imported from the vendor store's `src/index.ts`, both through the raw
- * submodule path and through the workspace member path). A unit test must not
- * depend on that: this file implements the ONE contract
+ * vendored workspace member, which differs between a developer machine and CI.
+ * A unit test must not depend on that: this file implements the ONE contract
  * `src/client/panel-source.ts` consumes — `createSnapshotStore(initial)` and its
  * `getSnapshot()` / `subscribe()` / `set()` — with the engine's observable
  * semantics (sync notify, and notification only when the value reference
  * actually changed).
  *
- * What still guarantees production rides the REAL engine:
- *   1. the A5 rule (its source-text lock was removed by the 2026-12 ruling) pins
- *      `panel-source.ts` to `import { createSnapshotStore } from
+ * What guarantees production rides the REAL engine:
+ *   1. `panel-source.ts` is pinned to `import { createSnapshotStore } from
  *      '@deepseek-ai/dsh-client-store'` and to `set()` as the write path, with
  *      the hand-rolled listener Set / observable forbidden;
  *   2. `pnpm run build:renderer` resolves that same specifier to the vendor
@@ -24,7 +20,7 @@
  *      build, not a test;
  *   3. `test/plugin-kernel/panel-source.test.ts` keeps asserting the contract shape
  *      (`set`/`update` present, plain arrays, notify-only-on-change), so a
- *      return to a hand-rolled observable still fails.
+ *      hand-rolled observable fails.
  *
  * Never imported by `src`, the bundle or the typecheck.
  */

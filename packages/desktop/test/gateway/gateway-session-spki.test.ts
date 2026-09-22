@@ -1,5 +1,5 @@
 /** gateway provider — part 2: password-session hooks (ensureSession login, 401 re-login once,
- *  Bearer+Cookie coexistence, inert default) and the S23 SPKI-pinned https probe/login over real
+ *  Bearer+Cookie coexistence, inert default) and the SPKI-pinned https probe/login over real
  *  TLS (siblings: gateway-provider / gateway-chamber-apply-materialize). */
 
 import { test } from 'node:test'
@@ -301,7 +301,7 @@ test('configureGatewaySessionProvider accepts only disabled or complete security
 })
 
 // ---------------------------------------------------------------------------
-// SPKI certificate pinning (design 17 §13.4.2 / S23): self-signed fixture
+// SPKI certificate pinning (design 17 §13.4.2): self-signed fixture
 // certificates EMBEDDED as test constants (no openssl dependency at test
 // time), served by a real node:https server. The pin IS the trust anchor: a
 // pinned probe succeeds against the matching certificate without any CA
@@ -336,9 +336,9 @@ test('validateSpec: an SPKI pin must be a 64-hex sha256, https-only AND gateway-
   assert.equal(gatewayProvider.validateSpec({ id: 'pin-nonhex', label: 'g', kind: 'gateway', transport: 'http', host: 'gw.example.com', remotePort: 443, spkiPin: 'g'.repeat(64) }), null, 'non-hex characters are refused')
   assert.equal(gatewayProvider.validateSpec({ id: 'pin-num', label: 'g', kind: 'gateway', transport: 'http', host: 'gw.example.com', remotePort: 443, spkiPin: 123456 }), null, 'a non-string pin is refused')
   // http mode + pin → refused: TLS 保护不存在时 pin 无意义，不得声称任何 TLS
-  // 保护（design 17 §13.4.2 / S23）.
+  // 保护（design 17 §13.4.2）.
   assert.equal(gatewayProvider.validateSpec({ id: 'pin-http', label: 'g', kind: 'gateway', transport: 'http', host: 'gw.example.com', remotePort: 8080, insecureHttp: true, spkiPin: PIN_A }), null)
-  // P2-2: the pin is a GATEWAY-kind-only gate — a non-gateway kind over https
+  // The pin is a GATEWAY-kind-only gate — a non-gateway kind over https
   // carrying a pin would HALF-execute (the identity probe pins, the reverse
   // proxy refuses pins for non-gateway transports), so the spec is refused
   // outright instead of claiming protection that never happens.
@@ -347,7 +347,7 @@ test('validateSpec: an SPKI pin must be a 64-hex sha256, https-only AND gateway-
 })
 
 
-/** An https gateway spec (no insecureHttp → https): the S23 pin probes. */
+/** An https gateway spec (no insecureHttp → https): the pin probes. */
 function httpsSpec(id: string, port: number, extra: Record<string, unknown> = {}): ReturnType<typeof gatewayProvider.validateSpec> {
   return gatewayProvider.validateSpec({ id, label: 'g', kind: 'gateway', transport: 'http', host: '127.0.0.1', remotePort: port, ...extra })
 }
@@ -370,7 +370,7 @@ test('verifyUp over https: pin match probes ok, pin mismatch is terminal, no pin
     assert.equal(receivedRequests, 1)
 
     // Pin mismatch: the server presents cert A, the pin is cert B's — the
-    // peer's key is not the pinned key → TERMINAL with the S23 detail.
+    // peer's key is not the pinned key → TERMINAL with the pin detail.
     const specBad = httpsSpec('tls-pin-bad', server.port, { spkiPin: PIN_B })
     assert.ok(specBad !== null)
     setGatewayToken('tls-pin-bad', TOKEN)
@@ -421,8 +421,8 @@ test('P1-2: the password LOGIN is SPKI-pinned exactly like the probe — a misma
   const origin: GatewaySessionOrigin = { baseUrl: `https://127.0.0.1:${server.port}`, insecureHttp: false, scope: 'test:tls-login' }
   try {
     // Matching pin: the login succeeds against the self-signed server — the
-    // pin IS the trust anchor (the internal-CA case that used to fail as
-    // 'network' and could never reach ready).
+    // pin IS the trust anchor for the internal-CA case (which otherwise fails
+    // as 'network' and can never reach ready).
     const match = await mgr.ensureSession({ ...origin, spkiPin: PIN_A }, PASSWORD)
     assert.equal(match.ok, true, 'a login against the pinned peer succeeds')
     if (match.ok) assert.equal(match.cookie, SESSION_COOKIE)
@@ -451,7 +451,7 @@ test('P1-2: the password LOGIN is SPKI-pinned exactly like the probe — a misma
 
     // End-to-end verifyUp with the REAL session manager wired as the hooks: a
     // pin-mismatched login is TERMINAL — the connect verdict lands immediately
-    // instead of cycling 'network' forever (the 永不 ready bug P1-2 fixes).
+    // instead of cycling 'network' forever (which would never reach ready).
     configureGatewaySessionProvider({
       ensureSession: (o, password) => mgr.ensureSession(o, password),
       generation: o => mgr.generation(o),

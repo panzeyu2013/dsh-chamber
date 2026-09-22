@@ -980,11 +980,10 @@ test('disposeRuntimeInstaller: aborts and awaits an active download before clean
 })
 
 test('disposeRuntimeInstaller reopens the DEFAULT supervisor for a same-process restart (gateway stop → start)', async () => {
-  // Review-fix regression: the module latch used to reset in `finally`, but
-  // the default supervisor's `disposing` flag stayed true, so every later
-  // install/prune through the DEFAULT runner was rejected forever with
-  // 'runtime installer is shutting down' — exactly the gateway stop→start
-  // scenario the comment claimed to fix. This test exercises the DEFAULT
+  // The module latch must reset with the supervisor's `disposing` flag: a
+  // later install/prune through the DEFAULT runner must not be rejected with
+  // 'runtime installer is shutting down' — the gateway stop→start scenario.
+  // This test exercises the DEFAULT
   // runner (no deps.run injection): a post-dispose prune must reach the pnpm
   // child (which fails fast on its own — process.execPath as the pnpm entry
   // is not a pnpm script), NOT the supervisor latch.

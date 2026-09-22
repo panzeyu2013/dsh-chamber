@@ -1,8 +1,7 @@
 /**
- * Notification decision ledger（仪表 I4，plan §10 与
- * `notes/residual-verifiability-review.md` §5-I4）。
+ * Notification decision ledger。
  *
- * WHY：R6/R3 的判据里有**负断言**（"离线完成不补发通知"）——通知路径整体坏掉时负断言
+ * WHY：判据里有**负断言**（"离线完成不补发通知"）——通知路径整体坏掉时负断言
  * 也会通过。同一次运行内的正对照需要「这次实时完成**发了一条**」，而两条断言都必须看到
  * **主进程的诚实结果**（shown / suppressed + 原因），不能只看"我们调用了通知"。
  *
@@ -12,7 +11,7 @@
  *   - `skipped`：根本没有通知桥，或组装/调用抛错（这时**没有**发生任何投递）。
  *
  * 边界：有界环（默认 200）、只存 id/种类/水位/决定与错误串，不存正文；发布为**函数**的
- * 只读全局（活视图，无周期性对象），供验收仪器/CDP 直接读。
+ * 只读全局（活视图，无周期性对象），供仪器/CDP 直接读。
  */
 import { createBoundedList } from './bounded-ledger.ts'
 
@@ -36,7 +35,7 @@ export interface NotificationLedgerCounts {
 }
 
 export function createNotificationLedger(options: { limit?: number } = {}) {
-  // 有界环走内核（阶段 2 单源化）：尾部入队、超限头部淘汰，语义与旧 splice 版逐字等价。
+  // 有界环走内核：尾部入队、超限头部淘汰。
   const ring = createBoundedList<NotificationLedgerEntry>(options.limit ?? 200)
   const counts: NotificationLedgerCounts = { sent: 0, suppressed: 0, skipped: 0 }
   return {
@@ -74,7 +73,7 @@ export function publishNotificationInstrument(target: unknown = globalThis): voi
   }
 }
 
-/** 徽标回读（I3）：renderer **已派发**的计数（与蓝点集合同源；主进程只做透传/去重）。 */
+/** 徽标回读：renderer **已派发**的计数（与蓝点集合同源；主进程只做透传/去重）。 */
 export function publishBadgeCount(count: number, target: unknown = globalThis): void {
   ;(target as { __dshChamberBadgeCount?: number }).__dshChamberBadgeCount = count
   publishNotificationInstrument(target)

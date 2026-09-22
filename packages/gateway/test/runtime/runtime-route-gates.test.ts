@@ -1,7 +1,6 @@
 /**
  * /chamber/runtime route gates: env/read-only fencing, restart verdicts,
- * retry-apply/retry-restore targets and FATAL block handling. Split from
- * runtime-routes.test.ts.
+ * retry-apply/retry-restore targets and FATAL block handling.
  */
 
 import { test } from 'node:test'
@@ -166,7 +165,7 @@ test('restart outcome lifecycle: status().restart projects running → ok, and f
     assert.ok(!operationError.includes('/secret'), 'paths redacted')
     assert.ok(!operationError.includes('token=abc'), 'credentials redacted')
     // RESOLVE ≠ SUCCESS (design 18 §9.3): restartLocal() also resolves from
-    // restart-exhausted — that must be 'failed', never 'ok' (review fix).
+    // restart-exhausted — that must be 'failed', never 'ok'.
     plane.restartLocal = async () => { plane._state.connectionState = 'restart-exhausted' }
     await assert.rejects(manager.restart(), /did not reach ready \(restart-exhausted\)/)
     assert.equal((await manager.status()).restart, 'failed')
@@ -294,7 +293,7 @@ test('real manager: retry-apply/retry-restore refuse without a matching blocked 
     assert.equal(result.blockedReason, null)
     // The interrupted-switch marker is gone: a second retry refuses.
     await assert.rejects(manager.retryApply(), /no interrupted apply to retry/)
-    // snapshot-failed (review fix): a non-destructive recovery exists too —
+    // snapshot-failed: a non-destructive recovery exists too —
     // retryApply accepts lastOutcome === 'snapshot-failed', clears it and
     // re-runs the startup transaction (desktop canRetryApply parity).
     writeOverrideRow(stateDir, { chosenVersion: '1.2.3', pending: null, lastOutcome: 'snapshot-failed', lastError: 'snapshot failed' })
@@ -453,8 +452,8 @@ test('connection_busy maps to 409; oversized bodies release input, write 413, th
   assert.ok((fakeRes.body ?? '').includes('body too large'))
   assert.equal((req as unknown as { destroyed: boolean }).destroyed, true, 'socket destroyed only after the 413 was written')
 
-  // Streaming regression: once the cap trips, later data is not inspected or
-  // retained while the route unwinds to its write-then-destroy error path.
+  // Once the cap trips, later data is not inspected or retained while the route
+  // unwinds to its write-then-destroy error path.
   const streamingReq = new EventEmitter() as EventEmitter & Partial<ApiRequest> & { destroyed: boolean }
   streamingReq.method = 'POST'
   streamingReq.url = '/chamber/runtime/select'
@@ -525,13 +524,13 @@ test('FATAL idle block refuses ordinary mutations and keeps recover-metadata ope
   for (const name of ['cleanup-version', 'restore-pre-rollback', 'recover-metadata']) {
     assert.ok(routesList.includes(name), `route list exposes ${name}`)
   }
-  // H2: the same FATAL block with a stale pending must keep the recovery
-  // surface open — a startup block OUTRANKS a lingering pending value in the
-  // gate itself (2026 audit R3: falling through to the pending terminal gate
-  // used to refuse recover-metadata with runtime_pending while
-  // restore-builtin was simultaneously refused by the block branch — a fully
-  // locked recovery surface). Restore-builtin/ordinary mutations stay
-  // refused, labeled by the startup block, never by the stale pending.
+  // The same FATAL block with a stale pending must keep the recovery surface
+  // open — a startup block OUTRANKS a lingering pending value in the gate
+  // itself; if the pending terminal gate won, recover-metadata would be refused
+  // with runtime_pending while restore-builtin stays refused by the block
+  // branch — a fully locked recovery surface. Restore-builtin/ordinary
+  // mutations stay refused, labeled by the startup block, never by the stale
+  // pending.
   pending = '1.0.0'
   const recoverWithPending = await runRoute(routes, 'POST', '/chamber/runtime/recover-metadata')
   assert.equal(recoverWithPending.status, 200, 'recover stays open even with a stale pending (block outranks pending)')
@@ -562,8 +561,8 @@ test('real manager: FATAL journal + stale pending projects idle+blocked with rec
     assert.equal(status.startupBlockedReason, 'journal-corrupt')
     assert.equal(status.canRecoverMetadata, true, 'the recovery route is advertised and reachable')
     // Route-level parity on the REAL manager: the gate must let
-    // recover-metadata through (block outranks the stale pending — 2026
-    // audit R3) while restore-builtin stays refused as a startup block.
+    // recover-metadata through (block outranks the stale pending) while
+    // restore-builtin stays refused as a startup block.
     const routes = createRuntimeRoutes(() => manager, silentLogger)
     const restore = await runRoute(routes, 'POST', '/chamber/runtime/restore-builtin', '{}')
     assert.equal(restore.status, 409)

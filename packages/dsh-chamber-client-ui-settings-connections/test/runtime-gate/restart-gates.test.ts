@@ -148,7 +148,7 @@ test('runtimeRefusalText: a 409 becomes localized copy with the code; every othe
   assert.equal(runtimeRefusalText(null, 400, keys, t), serverRefusalText(null, 400))
 })
 
-/* ---- 4. The READ-side fence (design 21 §6.2 读/写面共享栅栏, 2026-12 接线) ---- */
+/* ---- 4. The READ-side fence (design 21 §6.2 读/写面共享栅栏) ---- */
 
 test('classifyGatewayReadFence: only the 409 fence family is classified, with the server code', () => {
   // The SAME 409 classifier as the runtime actions — one taxonomy, not two.

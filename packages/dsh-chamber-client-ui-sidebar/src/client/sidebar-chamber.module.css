@@ -17,8 +17,8 @@
    per-session state indicators in a fixed trailing slot (normal = empty;
    running = the official dsh ongoing blue ring; pending = a 14px icon badge;
    completed-but-unread
-   = the chamber brand-blue 6px dot `.stateCompleted` — 2026-09 user decision,
-   restoring the pre-T10 mark because the official `StateDot state="done"`
+   = the chamber brand-blue 6px dot `.stateCompleted`, because the official
+   `StateDot state="done"`
    green is the source connection dot's own token — the slot is NOT a
    server-identity marker, 06
    §4.3), no relative-time cells (sessions show no "x前" text), per-source
@@ -26,7 +26,7 @@
    rows and workspace groups, 2px rule, 06 §2.2), hover icon actions
    (workspace header: `+` new-session + three-dot kebab menu with
    rename/delete; session row: three-dot kebab menu with
-   rename/fork/archive — 2026-09-11 upstream-alignment T2a moved archive INTO
+   rename/fork/archive — archive lives IN
    that menu, so no dedicated archive button exists), inline rename, the
    snapshot-fetch error line
    and inline failure text. Rides the official shell geometry (SidebarRoot
@@ -162,10 +162,9 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  /* Same ink step as the session rows (v0.2.4 language, RESTORED 2026-09-14
-     with the row titles): a result row carries a session title, so it takes
-     the same rest → hover step. The 12/18 size (and the result row's geometry)
-     still belongs to the deferred B2 item. */
+  /* Same ink step as the session rows: a result row carries a session title, so
+     it takes the same rest → hover step. The 12/18 size (and the result row's
+     geometry) is not applied here. */
   font-size: 12px;
   line-height: 18px;
   color: var(--dsw-alias-label-secondary);
@@ -186,8 +185,8 @@
 }
 
 .searchStatus {
-  /* Official `searchStatus` metrics (2026-09 batch 1, B3): 10px 12px / 12-18.
-     The line is a status panel, not a caption — at 2px 4px it read as another
+  /* Official `searchStatus` metrics: 10px 12px / 12-18.
+     The line is a status panel, not a caption — at 2px 4px it reads as another
      list row. */
   padding: 10px 12px;
   font-size: 12px;
@@ -195,7 +194,7 @@
   color: var(--dsw-alias-label-tertiary);
 }
 
-/* 来源级"数据不可信"说明行（2026-12：托管 dsh 停机 / 会话基线未就绪）——
+/* 来源级"数据不可信"说明行（托管 dsh 停机 / 会话基线未就绪）——
    与 searchStatus 同级的次级文本，但语义是来源状态而非搜索状态，故独立成类
    （搜索样式改名/移除时不该连带影响它）。 */
 .sourceNote {
@@ -212,7 +211,7 @@
   line-height: 0;
 }
 
-/* 降级说明（2026-12, 05 §4「降级呈现」第二批）：同一说明行的修饰类——缺口是
+/* 降级说明（05 §4「降级呈现」）：同一说明行的修饰类——缺口是
    "该来源现在能点但界面不完整"，比"数据不可信"更需要被看见，故用警示状态色而不
    是次级灰。状态色 token 与仓库其它状态边框同源（S1 认得的名字），这里是文字色，
    不涉及 S3/S5 的边框规则。 */
@@ -220,12 +219,12 @@
   color: var(--dsw-alias-state-warn-primary);
 }
 
-/* 会话行渲染窗口的"还有 N 个会话"展开条（2026 性能整改 B2）——整行可点，
+/* 会话行渲染窗口的"还有 N 个会话"展开条——整行可点，
    视觉与 searchStatus 同级（次级文本），hover 转主文本。 */
 .sessionRowsMore {
   display: block;
   width: 100%;
-  /* Official `sessionOverflowButton` geometry (2026-09 batch 1, A10): 28px
+  /* Official `sessionOverflowButton` geometry: 28px
      control, 8px corners, hover stays secondary (never primary). Two deliberate
      deltas: the left inset is 26px — chamber's own session-title column — where
      upstream uses 28px, and `line-height: 18px` is chamber's (upstream's button
@@ -249,9 +248,8 @@
 /* Content-search failure banner (06 §1.2). */
 .searchWarning {
   /* Same box as .searchStatus (official WorkspaceBrowser has the two classes in
-     one rule and only overrides the ink) — the 2026-09 batch 1 B3 pass first
-     aligned only the status half, which left the failure banner on a 4px inset
-     and 16px leading beside it (follow-up). */
+     one rule and only overrides the ink); aligning only one of them would leave
+     the failure banner on a 4px inset and 16px leading beside it. */
   padding: 10px 12px;
   font-size: 12px;
   line-height: 18px;
@@ -314,7 +312,7 @@
   pointer-events: none;
 }
 
-/* chamber (2026-09, 06 §2.4): server-group drag insert
+/* chamber (06 §2.4): server-group drag insert
    markers — the same 2px-rule vocabulary as the workspace groups, on the
    SECTION boundary: before = above the header, after = below the whole group
    (the section wraps header + workspace list, so the after boundary is the
@@ -344,15 +342,15 @@
   bottom: -2px;
 }
 
-/* chamber (06 §4.3, revised 2026-08): per-session STATE indicators — this
+/* chamber (06 §4.3): per-session STATE indicators — this
    slot is NOT a server-identity marker (the source header dot owns
    identity). It sits at the row's RIGHT edge (trailing the hover actions,
    never replaced by them). Fixed 10px slot (always laid out, empty for the
    normal state) so row right edges stay aligned across states. Running
    renders the official StateDot ongoing ring; completed-but-unread renders the
-   chamber brand-blue 6px `.stateCompleted` dot (2026-09 user decision — the
-   official `StateDot` `done` green was dropped: it is the source header
-   connection dot's own token). Pending interactions (approval / plan-review / question)
+   chamber brand-blue 6px `.stateCompleted` dot, not the
+   official `StateDot` `done` green: it is the source header
+   connection dot's own token. Pending interactions (approval / plan-review / question)
    widen the slot to 14px and render a distinguishable icon badge INSTEAD of
    the running ring — a session waiting for the user must be recognizable at
    a glance (question `?`, plan-review checklist, approval warning triangle;
@@ -361,7 +359,7 @@
    (amber) — the 06 §4.3 "all-blue" unification is intentionally revised for
    pending rows. The todo strip rows reuse these very slot/mark classes
    (SessionTodoArea TodoRow), so the pinned strip's dots/badges paint in the
-   same trailing column and band as the list rows' (2026-12 style fix). */
+   same trailing column and band as the list rows'. */
 .sessionStateSlot {
   flex: none;
   display: inline-flex;
@@ -389,9 +387,8 @@
   color: var(--dsw-alias-state-warn-primary);
 }
 
-/* Completed-but-unread: the chamber brand-blue dot, RESTORED (2026-09 user
-   decision — reversing the 2026-09-11 upstream-alignment T10 swap to the
-   official `StateDot state="done"`). Reason: that mark's tone is
+/* Completed-but-unread: the chamber brand-blue dot, not the
+   official `StateDot state="done"`. Reason: that mark's tone is
    `--dsw-alias-state-success-primary`, byte-identical to the source header's
    own connection dot (.statusOk below), so "this session finished, unread" and
    "this server is connected" painted the same green in the same sidebar. The
@@ -411,7 +408,7 @@
   background: var(--dsw-static-deepseek-450);
 }
 
-/* Active-Schedule marker (2026-09-11 upstream-alignment T7): the official
+/* Active-Schedule marker: the official
    ActiveScheduleIndicator box — a 16px alarm-clock glyph in a 16x20 flex-none
    slot, tertiary ink (vendor ui-workspace Rows.module.css .scheduleIndicator).
    DELIBERATE deviation, documented: upstream also sets `margin-right: 6px`
@@ -433,15 +430,15 @@
   color: var(--dsw-alias-label-tertiary);
 }
 
-/* .stateCompleted (RESTORED 2026-09, see its own rule below): the
+/* .stateCompleted (see its own rule below): the
    completed-but-unread brand-blue dot at both render sites — the session rows
    (ServerSection) and the pinned todo strip (SessionTodoArea). The official
-   `StateDot` `done` tone it briefly carried (2026-09-11 upstream-alignment
-   T10) is NOT used: `--dsw-alias-state-success-primary` is the source header's
+   `StateDot` `done` tone is NOT used: `--dsw-alias-state-success-primary` is
+   the source header's
    connection-dot token (`.statusOk`), so completion and "server connected"
-   painted one green. */
+   would paint one green. */
 
-/* Row hover card (chamber-owned port, 2026-09-13): RowHoverCard portals the
+/* Row hover card (chamber-owned port): RowHoverCard portals the
    card to document.body with the official HoverCard's card box — 244 wide, r12,
    pad 12/16, the menu card's elevation, #2C2C2E in both themes (figma value,
    not a theme token, exactly as ui-primitives/HoverCard.module.css declares
@@ -540,9 +537,9 @@
   overflow-y: auto;
   padding: 2px 8px 12px 0;
   box-sizing: border-box;
-  /* POINTER (2026-08 review, NIT): the list bottom and the gaps between
-     source groups / rows fell back to the arrow while every row/header is
-     pointer — under a moving pointer the cursor flipped arrow↔pointer at
+  /* POINTER: the list bottom and the gaps between
+     source groups / rows must not fall back to the arrow while every row/header
+     is pointer — under a moving pointer the cursor would flip arrow↔pointer at
      those boundaries (same pattern the fixed-height row rules document).
      The whole list is a navigation surface, so the container carries the
      pointer too, matching the pointer-everywhere discipline (.sourceHeader).
@@ -572,7 +569,7 @@
   box-sizing: border-box;
   height: 28px;
   border-radius: 8px;
-  /* POINTER (2026-08): the ACTIVE (local) source header's single click is a
+  /* POINTER: the ACTIVE (local) source header's single click is a
      no-op (onClick only switches for non-active sources), but it is still a
      hover-interactive control surface — hovering reveals the search /
      add-workspace / sort cluster, all real buttons — and the arrow here
@@ -658,7 +655,7 @@
 }
 
 /* Source-header right cluster (sort menu + search + add-workspace `+` +
-   archive-cleanup manager — design 24 §6, revision 2026-09): NOT
+   archive-cleanup manager — design 24 §6): NOT
    rendered at rest (display:none — zero layout space, so the connection
    status really sits at the header's right end). Hovering the header swaps
    the cluster IN and the status OUT — a true replacement. While a search
@@ -669,10 +666,9 @@
   flex: none;
   display: none;
   align-items: center;
-  /* 2px = the v0.2.4 value, restored 2026-09-14 with the rest of the 2026-09
-     hit-area pass: `33238ffe` widened this to 4px only so two adjacent 24px hit
-     rims would stay distinct (the like-named change in the 2026-09-13 rhythm
-     revision was `.rowActions`, the user-reported cluster, not this header). */
+  /* 2px. A 4px gap would only serve to keep two adjacent 24px hit rims
+     distinct; the like-named rhythm value belongs to `.rowActions`, not this
+     header. */
   gap: 2px;
 }
 
@@ -701,7 +697,7 @@
   /* POINTER across the group: the 2px row/header margins hit-test to this
      container (not to the rows), so without a cursor here the pointer would
      flip to the default arrow at every row boundary while scanning the
-     session list — paired with the pre-fix row-height shift this read as
+     session list — with a row-height shift it reads as
      continuous cursor toggling (see .sessionRow). Rows and their gaps now
      share one pointer affordance, like the packed official ui-workspace
      rows. */
@@ -719,10 +715,10 @@
      rationale. */
   box-sizing: border-box;
   height: 26px;
-  /* POINTER (2026-08): the header is not itself clickable (fold/actions live
+  /* POINTER: the header is not itself clickable (fold/actions live
      in their own buttons; a single click on the header does nothing — rename
-     is the double click, the `+`/kebab are the hover actions), but the arrow
-     it previously restored under the .workspaceGroup pointer made the cursor
+     is the double click, the `+`/kebab are the hover actions), but an arrow
+     under the .workspaceGroup pointer would make the cursor
      flip arrow↔pointer at every workspace header while scanning the list.
      The official ui-workspace rows are pointer everywhere; the header is a
      hover-interactive control surface (hover tint + revealed action
@@ -730,14 +726,14 @@
      consistency (design 05 §2 parity with the official surface). */
   cursor: pointer;
   /* Uniform 3px vertical margin for EVERY workspace — derived worktree and
-     plain workspace alike (2026-08: the project-start 10px gap is removed so
+     plain workspace alike (the project-start 10px gap is removed so
      spacing stays consistent; grouping is expressed by order + drag clamp). */
   margin: 3px 0;
   border-radius: 8px;
 }
 
 /* Hover wash shared by the nav workspace header and the archive-manager
-   dialog's group header (2026 matching refactor — one rule list, the same
+   dialog's group header (one rule list, the same
    token; the dialog's header is a sibling surface, not a .workspaceHeader
    subclass). */
 .workspaceHeader:hover,
@@ -748,7 +744,7 @@
 /* Workspace group fold toggle: a right chevron that points down while the
    group is expanded and rotates back to the right when folded. The glyph
    (folder / git-branch / chevron) carries the workspace's own accent color
-   (chamber 2026-09): an inline --chamber-workspace-accent set per header row,
+   (chamber): an inline --chamber-workspace-accent set per header row,
    with the old caption ink as fallback (the ungrouped bucket sets none). */
 .foldToggle {
   flex: none;
@@ -801,7 +797,7 @@
   display: inline-flex;
 }
 
-/* The archive-manager group headers (2026 grouping revision) reuse the SAME
+/* The archive-manager group headers reuse the SAME
    folder↔chevron hover/focus swap: the manager header has no kebab/actions,
    so the .rowActionsVisible variant below is a no-op for it — one shared
    rule list, no duplicate table to keep in sync. */
@@ -849,8 +845,8 @@
   transform: rotate(0deg);
 }
 
-/* chamber (2026-09, 06 §2.4; glyph 2026-10 user
-   feedback): SOURCE-level fold toggle (collapses the server's whole
+/* chamber (06 §2.4, glyph per user feedback): SOURCE-level fold toggle
+   (collapses the server's whole
    workspace list) — workspace-parity swap: a MONITOR glyph at rest (server =
    machine; the workspace FOLDER glyph would read as another workspace), the
    collapse chevron on header hover / KEYBOARD focus, same 16px slot, so
@@ -916,7 +912,7 @@
    Sits at the workspace header's right end at rest (the actions take no
    space until shown); on hover / keyboard focus / open-menu its slot is
    taken by the row actions (+ / kebab) — a true swap. Digits are
-   RIGHT-aligned (2026-09): the pill is the trailing element of every row,
+   RIGHT-aligned: the pill is the trailing element of every row,
    so a shared right edge gives every workspace's count the same distance
    from the row end regardless of digit count — centered text inside the
    min-width content box set 1-digit counts visibly further left than
@@ -987,14 +983,14 @@
 }
 
 /* Hover wash shared by the nav session rows and the archive-manager
-   dialog's rows (select-all row included — 2026 matching refactor, one rule
+   dialog's rows (select-all row included — one rule
    list, the same token). */
 .sessionRow:hover,
 .archiveManagerRow:hover {
   background: var(--dsw-alias-interactive-bg-hover);
 }
 
-/* 2026-08 review (ghost slot, design 06 §2.2): a blank "new session" row
+/* Ghost slot (design 06 §2.2): a blank "new session" row
    that just stopped being the source's current session keeps its layout slot
    for BLANK_GHOST_GRACE_MS so the list cannot shift inside the 350ms
    double-click-to-rename window (click2 would otherwise hit the row that was
@@ -1017,14 +1013,13 @@
      deliberate compromise — 13px keeps rows traceable in one shared list. */
   font-size: 13px;
   line-height: 18px;
-  /* v0.2.4 ink step, RESTORED 2026-09-14 (user request 「把 hover 变色加回来」):
-     secondary at rest, primary on row hover. The 2026-09 batch-1 A1 pass had
-     aligned the resting ink with the official `.title` (primary at rest, no
-     hover step) — deliberate parity, but it removed the row's only immediate
+  /* Ink step: secondary at rest, primary on row hover. Aligning the resting ink
+     with the official `.title` (primary at rest, no
+     hover step) would remove the row's only immediate
      hover feedback: the row wash alone is a very low-contrast tint, so before
-     the 500ms card appeared, hovering a row changed nothing the eye could
-     catch. The step is the feedback (rule below); the official parity claim of
-     A1 now holds for the FONT SIZE only. */
+     the 500ms card appears, hovering a row changes nothing the eye can
+     catch. The step is the feedback (rule below); the official parity claim
+     holds for the FONT SIZE only. */
   color: var(--dsw-alias-label-secondary);
 }
 
@@ -1042,8 +1037,7 @@
 }
 
 /* Hover swap (official pattern): the row actions replace the trailing state
-   slot when they show — handled by the .rowActions rules above. The session
-   relative-time cell no longer exists (sessions show no "x前" text). */
+   slot when they show — handled by the .rowActions rules above. */
 
 @media (prefers-reduced-motion: reduce) {
   .statusSpinner {
@@ -1060,9 +1054,9 @@
 /* Hover-swap actions: NOT rendered at rest (display:none — zero layout
    space, so the state icon really sits at the row end). Hovering the row
    (or keeping a kebab menu open, .rowActionsVisible) swaps them IN while
-   the trailing state slot and the session-time slot are swapped OUT — a
+   the trailing state slot is swapped OUT — a
    true replacement, not a fade-over-an-invisible-gap.
-   Reveal is pointer-safe (2026-09): the occupant/action reveal keys on
+   Reveal is pointer-safe: the occupant/action reveal keys on
    row hover, kebab-open and KEYBOARD focus (:has(:focus-visible)) — never
    on plain :focus. Chromium focuses a clicked button on mousedown, so a
    :focus-within reveal would keep the hover-revealed content (git occupant
@@ -1073,20 +1067,19 @@
   flex: none;
   display: none;
   align-items: center;
-  /* ONE visible cluster, ONE rhythm (2026-09-13 user report). The cluster's
+  /* ONE visible cluster, ONE rhythm. The cluster's
      real membership on a git workspace header is THREE buttons, not the
      official two: the git occupant's revealed branch action (`[data-git-action]`
      inside the sibling `.headerGit` span, SidebarGit.module.css) is the
      cluster's leftmost member and sits in the HEADER's 4px gap. The official
-     `Rows .rowActions` 12px (2026-09 batch 1, A8b) therefore fell INSIDE one
-     cluster and split it 4px + 12px — the kebab read as detached
-     (「+ 与省略号之间的间隔明显更大」). The cluster now takes the header /
+     `Rows .rowActions` 12px would therefore fall INSIDE one
+     cluster and split it 4px + 12px — the kebab reads as detached
+     (「+ 与省略号之间的间隔明显更大」). The cluster takes the header /
      sheet icon rhythm, and the session row's cluster holds a single kebab,
      where any gap is inert. The state slot / count badge these actions replace
      are swapped out while the cluster is visible, so the gap never competes
      with them. (`.headerGit` / `.sourceActions` are NOT party to this value:
-     the 2026-09 hit-area pass raised those two, and the 2026-09-14 rollback
-     returned them to their v0.2.4 2px.) */
+     they keep their 2px.) */
   gap: 4px;
 }
 
@@ -1094,8 +1087,7 @@
   display: inline-flex;
 }
 
-/* 2026-09-11 upstream-alignment（git 侧同批：`git-ws-action` → data-* 钩子）：
-   样式钩子用 data 属性（本仓 mobile 包记录的规则，
+/* 样式钩子用 data 属性（本仓 mobile 包记录的规则，
    packages/dsh-chamber-client-ui-mobile/src/client/styles.ts:10-20，design 08 §3.2
    描述的就是这条 hover/kebab 揭示），属性选择器不被 CSS Modules 哈希，
    所以跨包选择器只在属性形式上成立。 */
@@ -1113,8 +1105,8 @@
 
 /* The git occupant's disabled actions must stay visibly disabled even when
    revealed (the reveal rules set display; these keep the disabled opacity on
-   every reveal path — client review P3-6/P3-1). Same data-* hook as the reveal
-   rules above (2026-09-11 upstream-alignment). */
+   every reveal path). Same data-* hook as the reveal
+   rules above. */
 .workspaceHeader:hover [data-git-action]:disabled,
 .workspaceHeader:has(:focus-visible) [data-git-action]:disabled,
 .workspaceHeader:has(.rowActionsVisible) [data-git-action]:disabled {
@@ -1134,11 +1126,10 @@
   display: none;
 }
 
-/* Icon action button (the `+`, the three-dot kebab trigger —
-   2026-09-11 upstream-alignment T2a removed the third instance, the dedicated
-   archive button, whose verb now rides the session row's kebab menu): 20px hit
-   box. Glyph sizes differ per icon — the kebab is the official 16px ellipsis
-   (2026-09 batch 1 A8), the `+` is still 14px (candidate for the next batch). The full reset (appearance/
+/* Icon action button (the `+`, the three-dot kebab trigger — the dedicated
+   archive verb rides the session row's kebab menu): 20px hit
+   box. Glyph sizes differ per icon — the kebab is the official 16px ellipsis,
+   the `+` is 14px. The full reset (appearance/
    outline/line-height/font-size) kills every UA chrome artifact — Safari's
    button chrome and the click-focus ring must never draw a frame around the
    button; the grid centering pins the glyph to the exact center regardless
@@ -1180,28 +1171,28 @@
   cursor: default;
 }
 
-/* Destructive icon-action modifier — the archive manager's row trash (2026
-   refactor): hover turns the glyph error-primary ink. Color-only hover is
+/* Destructive icon-action modifier — the archive manager's row trash:
+   hover turns the glyph error-primary ink. Color-only hover is
    the module icon-button language (no box — the row pill carries the hover
    background); disabled dim and the focus ring come free from the
    .actionIcon base rules. Hit area 20px = the module icon-button standard
-   (nav actions alike) — the v0.2.4 geometry, RESTORED 2026-09-14. */
-/* 2026-09-14 (user directive 「按照 v0.2.4 恢复」): the 2026-09 hit-area pass
-   (`33238ffe`, "24px hit areas") is ROLLED BACK for this whole sheet — its six
-   invisible rims AND the two cluster gaps it widened (`.sourceActions` 2 -> 4px
-   here; the git sheet's `.headerGit` likewise). What it bought was WCAG 2.2
-   2.5.8 target size:
+   (nav actions alike). */
+/* Hit-area discipline for this whole sheet: NO invisible rims, and the icon
+   controls keep their visual boxes — 
+   `.sourceActions` 2px, the git sheet's `.headerGit` likewise:
 
-     .actionIcon 20 -> 24 (-2px), .searchButton 20 -> 24 (-2px),
-     .searchClear 18 -> 24 (-3px), .foldToggle/.sourceFoldToggle/
-     .railDotButton 16 -> 24 (-4px)
+     .actionIcon 20px, .searchButton 20px,
+     .searchClear 18px, .foldToggle/.sourceFoldToggle/
+     .railDotButton 16px
 
-   WHY (the canonical statement; design 06 §7 / 08 §3.4 / 24 §13-17 / STATUS
+   The rims served WCAG 2.2 2.5.8 target size. 
+   WHY they are not used (the canonical statement; design 06 §7 / 08 §3.4 /
+   24 §13-17 / STATUS
    only register the deviation and point here). A rim is hit-testable, so it
    shrinks the PLAIN band inside the control's own row/header. Measured with an
    elementFromPoint sweep in the shipping engine (0.5px sampling, so treat the
-   edges as +/-0.5px): with the rim, `.actionIcon`'s hit band inside a 26px row
-   was 24px — ~0px of plain row above the button and ~1px below; without it the
+   edges as +/-0.5px): with a rim, `.actionIcon`'s hit band inside a 26px row
+   is 24px — ~0px of plain row above the button and ~1px below; without it the
    box is its 20px visual box, i.e. ~3px above and below (the fold toggles go
    from ~1px to 5px in the 26px workspace header and to 6px in the 28px source
    header). That band is what decides whether React ever hears the leave:
@@ -1222,23 +1213,19 @@
    workspace headers (both carry a RowHoverCard), `.foldToggle` in the workspace
    headers, and the git sheet's pair. `.searchButton` has no card but an official
    Tooltip inside the hover-revealed `.sourceActions`, which can strand the same
-   way; the rail/source-fold/clear rims are inert for this class and are reverted
-   only because the pass is reverted as a unit. `cluster-leave__away.json`,
-   `wheel-cluster*.json`, `row-move.json` and `blur-dwell.json` (audit scratch,
-   .tmp/audit2) record the strand; `band-after-report.json` records this geometry
-   change (24 -> 20px band, ~0-1 -> ~2-3px plain band).
+   way; the rail/source-fold/clear rims are inert for this class.
 
    HONEST SCOPE: this is a MITIGATION of the rank-1 trigger (the everyday exit
    through the action cluster), not a cure for the class. The missing-pointerout
    class also fires with NO pointer exit at all — wheel/trackpad with the pointer
    parked on the band, list reflow/insert/remove, and a blur with a dwell pending
-   — and a single-event fling can still jump the restored 3px band. The cure is a
+   — and a single-event fling can still jump the 3px band. The cure is a
    delivery channel that does not depend on React's synthesis (native
    pointerenter/pointerleave on the wrapper + portaled card, plus a dwell-time
    geometry veto); it is NOT implemented — see the hover-port note in design 06
    §7 and `src/shared/hover-intent.ts`.
 
-   Consequence, accepted and registered: WCAG 2.2 2.5.8 target size is again a
+   Consequence, accepted and registered: WCAG 2.2 2.5.8 target size is a
    module deviation for every < 24px icon button here (design 24 §13 item 17,
    design 08 §3.4, design 06 §7). Do not re-add a rim without re-measuring the
    plain band between the button's hit box and the row/header edge. */
@@ -1246,32 +1233,31 @@
   color: var(--dsw-alias-state-error-primary);
 }
 
-/* 2026-09 (P2-B, B-2; rim removed 2026-09-14 with the rest of G1-4): the
+/* The
    archive row's delete button keeps its 20px visual box and the row keeps its
    height (content-sized: 20px button + 5px + 5px padding = 30px). A 24px VISUAL
-   box would have made the row 34px and re-opened the layout-shift discipline
-   rows protect, and the invisible rim that used to square the target with WCAG
-   2.2 2.5.8 is gone again — see the block above (design 24 §13 item 17). */
+   box would make the row 34px and re-open the layout-shift discipline
+   rows protect; the invisible rim that would square the target with WCAG
+   2.2 2.5.8 is not used — see the block above (design 24 §13 item 17). */
 
-/* P2-5: 排序按钮的 updated（按更新时间）态——品牌色 + 浅底，视觉可辨
-   （菜单勾选之外的可感知样式；hover 保持文字色变化）。2026-08: 按钮改为
-   菜单入口（aria-pressed 换成 .sortActive 状态类——菜单按钮的 pressed
-   语义由菜单内勾选承担）。 */
+/* 排序按钮的 updated（按更新时间）态——品牌色 + 浅底，视觉可辨
+   （菜单勾选之外的可感知样式；hover 保持文字色变化）。按钮是
+   菜单入口，.sortActive 状态类承载选中态——菜单按钮的 pressed
+   语义由菜单内勾选承担。 */
 .actionIcon.sortActive {
   color: var(--dsw-alias-brand-primary);
   background: color-mix(in srgb, var(--dsw-alias-brand-primary) 14%, transparent);
 }
 
 /* Keyboard focus ring — ONE shared constants table for every icon-family
-   control (2026 matching refactor): .actionIcon buttons (incl. the archive
+   control: .actionIcon buttons (incl. the archive
    manager's .actionIconDanger row trash) AND the archive-manager group
-   header's fold toggle ride the same brand 1px OUTWARD ring (the 2026 a11y
-   review ring; constants realigned from the earlier -1px inset). Note the
+   header's fold toggle ride the same brand 1px OUTWARD ring. Note the
    NAV workspace fold toggle deliberately has no branded ring (UA default;
    its keyboard cue is the glyph swap) — the dialog rule below is the §19-5
    a11y improvement, sharing constants, not nav parity. */
 .actionIcon:focus-visible,
-/* 2026-09-11 upstream-alignment T7: the rail's per-source dot buttons join the
+/* The rail's per-source dot buttons join the
    same shared ring table (they are icon-family controls in the rail). */
 .railDotButton:focus-visible,
 .archiveManagerGroupHeader .foldToggle:focus-visible {
@@ -1279,10 +1265,10 @@
   outline-offset: 1px;
 }
 
-/* The kebab renders the primitives glyph AS IS (2026-09 batch 1, A8): the
-   official 16px horizontal triple-dot row at its native size. The retired
-   `.verticalDots` rule rotated it 90° at 14px; the `.actionIcon` box stays
-   20×20, so the hit area did not shrink with the glyph. */
+/* The kebab renders the primitives glyph AS IS: the
+   official 16px horizontal triple-dot row at its native size. No
+   rotated-90° 14px variant is used; the `.actionIcon` box stays
+   20×20, so the hit area does not shrink with the glyph. */
 
 .actionButton {
   /* flex: none — the rename-form buttons must never be squeezed by the
@@ -1314,9 +1300,9 @@
   flex: 1;
   min-width: 0;
   box-sizing: border-box;
-  /* Official in-row rename field (2026-09 batch 1, A11): upstream's
+  /* Official in-row rename field: upstream's
      `.renameInput` is 14px/20px, r4, padding 0 2px. The chamber session title
-     is 13/18 (A4 density trade-off), so edit mode shows the field at the
+     is 13/18 (the density trade-off), so edit mode shows the field at the
      official 14px — a deliberate 1px step up from the resting title, matching
      upstream instead of the local title. The box is 21px (20px line-height +
      two 0.5px hairlines), so it exceeds the row's 20px content box and the
@@ -1334,8 +1320,8 @@
 .rowError {
   margin: 2px 4px 4px 20px;
   font-size: 12px;
-  /* Official failure copy runs 12/18 (`renameError`); 16px leading read as a
-     footnote under the row it belongs to (2026-09 batch 1, A12). */
+  /* Official failure copy runs 12/18 (`renameError`); 16px leading reads as a
+     footnote under the row it belongs to. */
   line-height: 18px;
   color: var(--dsw-alias-state-error-primary);
   white-space: normal;
@@ -1366,11 +1352,10 @@
 /* While the workspace header hosts the rename input, its FIXED 26px height
    is relaxed (an input is taller than the 18px title line): padding and
    margins are kept, so the row only grows for the duration of the edit and
-   nothing is clipped or overlaps the neighbors. Since the 2026-09 batch 1
-   A11 pass the in-row field is 14/20 with `padding: 0 2px`, i.e. a 21px box —
-   so the header now grows by ~1px (27px vs 26px) for the duration of the edit
-   instead of the old +5px (the ±6px the design doc long claimed; a 25px box
-   measured against the pre-change build); the one-time, one-directional shift
+   nothing is clipped or overlaps the neighbors. The in-row field is 14/20 with
+   `padding: 0 2px`, i.e. a 21px box —
+   so the header grows by ~1px (27px vs 26px) for the duration of the edit;
+   the one-time, one-directional shift
    per transition
    still holds (the fixed heights exist to prevent HOVER-driven flicker, which
    cannot engage here: the row content is static for the whole edit). */
@@ -1407,8 +1392,8 @@
 .boundaryError {
   padding: 4px 6px;
   font-size: 12px;
-  /* 12/18 like every other failure line (2026-09 batch 1 A12 follow-up: the
-     first pass moved .rowError/.searchWarning and left these two on 16px). */
+  /* 12/18 like every other failure line (aligned with
+     .rowError/.searchWarning). */
   line-height: 18px;
   color: var(--dsw-alias-state-error-primary);
   white-space: normal;
@@ -1471,8 +1456,8 @@
 
 .empty {
   /* Official empty-state box is 16px 12px; chamber trims it to 8px so an
-     empty source group does not push the next source off screen (2026-09
-     batch 1, A12 — the 4px of old was visually glued to the group header). */
+     empty source group does not push the next source off screen (4px would be
+     visually glued to the group header). */
   padding: 8px;
   font-size: 13px;
   line-height: 18px;
@@ -1480,11 +1465,11 @@
 }
 
 /* Rail state: one control per source (05 §2.1 — codex-style compact rail).
-   2026-09-11 upstream-alignment T7: the rail dots are named, operable BUTTONS
+   The rail dots are named, operable BUTTONS
    (upstream rail controls are buttons with an accessible name, vendor
-   ui-sidebar SidebarRoot.tsx:63-68) instead of inert title-only spans. The dot
+   ui-sidebar SidebarRoot.tsx:63-68), not inert title-only spans. The dot
    itself is unchanged: the button is a bare hit target and the coloured source
-   dot + active accent ring stay on the inner span, exactly as before.
+   dot + active accent ring stay on the inner span.
    The button is 16px with a -4px vertical margin, so the dot's own geometry is
    untouched; the dot PITCH is this column gap + 8px (the margins are subtracted
    from it), which is why the gap carries the hit-box floor below. */
@@ -1494,12 +1479,10 @@
   flex-direction: column;
   align-items: center;
   /* 12px column gap and a `-4px 0` margin on the dot buttons: the SAME 20px box
-     pitch (= 16px button - 8px margins + 12px gap) the rail has had since the
-     dot spans were turned into named buttons, i.e. the v0.2.4 dot rhythm. The
-     2026-09 rim pass raised only the GAP to 16px (so two 24px rims could not
-     overlap the way a 12px gap would make them); that is the half rolled back
-     on 2026-09-14. The margin is NOT part of the rim work — it compensates the
-     button box (16px) down to the old 8px dot element — so it stays: dropping
+     pitch (= 16px button - 8px margins + 12px gap) as the v0.2.4 dot rhythm;
+     16px would only be needed to keep two 24px rims from overlapping. The
+     margin is NOT part of the rim work — it compensates the
+     button box (16px) down to the 8px dot element — so it stays: dropping
      it without also dropping the gap would read 20px visible gaps instead of
      the shipped 12px. */
   gap: 12px;
@@ -1513,11 +1496,9 @@
   justify-content: center;
   width: 16px;
   height: 16px;
-  /* Buttonization compensation (NOT the 2026-09 rim work — see the .railDots
+  /* Buttonization compensation (NOT the rim work — see the .railDots
      note): the 16px button box carries the 8px dot, and this margin takes the
-     extra 8px back out of the column pitch so the dots keep the 20px rhythm the
-     old dot spans had. The rim pass's own half (the 16px column gap) is the one
-     that was rolled back. */
+     extra 8px back out of the column pitch so the dots keep the 20px rhythm. */
   margin: -4px 0;
   padding: 0;
   border: 0;
@@ -1540,13 +1521,13 @@
   box-shadow: 0 0 0 2px var(--chamber-source-accent, var(--dsw-alias-label-primary));
 }
 
-/* 会话待办区（sidebar todo area, 2026-12）: pinned block between the New
+/* 会话待办区（sidebar todo area）: pinned block between the New
    Session control and the scroll region (wide only — the rail carries no
    strip). Pure projection derivation: the whole area renders only while at
    least one attention entry exists (zero footprint), capped at 3 rows + a
    「还有 N 项」toggle. Never inside the scroll container, so long lists can
    never push it out of view; never mutates shared fold/view prefs.
-   POINTER (2026-12): the strip is one attention surface — the container
+   POINTER: the strip is one attention surface — the container
    carries the pointer (like .chamberList's pointer-everywhere discipline) so
    the caption band and the row margins never flip the cursor to the arrow
    while scanning the strip. */
@@ -1554,10 +1535,10 @@
   flex: none;
   box-sizing: border-box;
   min-width: 0;
-  /* 2026-09 (P2-B, B-1): the strip is a banner, not another list row — it takes
+  /* The strip is a banner, not another list row — it takes
      the file's neutral divider token at 0.5px instead of the official TodoPanel's
      full card chrome (`.5px border-l1` outline + `--dsw-specific-tip` fill + r12).
-     BOTTOM EDGE ONLY (audit finding): the strip's only upward neighbour is the New
+     BOTTOM EDGE ONLY: the strip's only upward neighbour is the New
      Session card 8px above, which already draws its own rounded outline — a top
      hairline here separated nothing and blinked in/out with the strip's
      mount/unmount. */
@@ -1592,7 +1573,7 @@
 .todoCount {
   flex: none;
   /* 12px: the design's own type floor (06 §7 排版条) and the size of the
-     .workspaceCount pill this one is column-matched to (2026-09 batch 1, C2). */
+     .workspaceCount pill this one is column-matched to. */
   font-size: 12px;
   line-height: 16px;
   padding: 0 6px;
@@ -1604,9 +1585,8 @@
 /* The row box — BOUNDED when expanded: a weekend backlog must never squeeze
    the session list to zero or bury the toggle (the toggle itself lives
    OUTSIDE this box, pinned below it). Max shows 7 full rows before the
-   internal scroll takes over (208px / the strip's 28px pitch = 7.4; the box
-   stepped 26px before the 2026-09 batch 1 C2 alignment, so the old "~8 rows
-   (26px pitch)" note was true then, not now). The box carries the pointer everywhere
+   internal scroll takes over (208px / the strip's 28px pitch = 7.4). The box
+   carries the pointer everywhere
    (gaps/rows are all part of the same attention surface — list discipline).
    The scrollport bleeds 8px right (margin-right -8 + padding-right 8 —
    reserving the same right-hand gutter .chamberList reserves with its own
@@ -1622,8 +1602,7 @@
   flex-direction: column;
   /* Flex margins do NOT collapse, so the 2px rhythm must come from the gap:
      rows carrying their own 2px margins would step 30px against the list's
-     28px (session rows sit in a block container where margins collapse).
-     2026-09 batch 1 C2 follow-up. */
+     28px (session rows sit in a block container where margins collapse). */
   gap: 2px;
   max-height: 208px;
   overflow-y: auto;
@@ -1632,12 +1611,11 @@
   padding-right: 8px;
 }
 
-/* FIXED height (26px, border-box; raised from 24px by the 2026-09 batch 1 C2
-   alignment) — same layout-shift discipline as
+/* FIXED height (26px, border-box) — same layout-shift discipline as
    .sessionRow: hover must never change the row height under the moving
    pointer. The whole row is a button; the click is the authoritative open
    (jump to the session), identical to a session-row click.
-   Horizontal grid (2026-12 style fix, user feedback): row content runs
+   Horizontal grid (user feedback): row content runs
    6px/4px (left/right) so the strip's columns line up with the list below
    it — the leading slot sits in the source-header glyph column (the same
    6px inset as .sourceHeader) and the trailing slot ends 4px short of the
@@ -1646,7 +1624,7 @@
    .chamberList and .todoRows sit to the right of both, never over the
    slots). Unlike session rows there is no hover action swap: the trailing
    state slot stays visible on row hover. Ink follows the session rows: primary
-   at rest (both changed together in 2026-09 batch 1 A1), hover only paints the
+   at rest, hover only paints the
    row tint. */
 .todoRow {
   display: flex;
@@ -1656,17 +1634,16 @@
   box-sizing: border-box;
   /* Session-row geometry (26px) with the 2px rhythm owned by .todoRows' gap,
      so the strip and the list step at the same 28px and their trailing marks
-     share one column and one pixel band — the contract 06 §8 行列定格 declares
-     (2026-09 batch 1, C2 + follow-up). */
+     share one column and one pixel band — the contract 06 §8 行列定格 declares. */
   height: 26px;
   margin: 0;
   padding: 3px 4px 3px 6px;
   border: 0;
   border-radius: 8px;
   background: transparent;
-  /* v0.2.4 language, RESTORED 2026-09-14 with the row titles: the row's own
+  /* The row's own
      inherited ink is secondary at rest and primary on hover. The row TITLE
-     (.todoRowTitle, no colour of its own — both here and in v0.2.4) reads this
+     (.todoRowTitle, no colour of its own) reads this
      layer, so the strip's titles step exactly like the session rows'. The
      strip's HEADER caption (.todoTitle) and its count pill (.todoCount) live in
      .todoHeader, a sibling of .todoRows, and are untouched by this rule. */
@@ -1715,7 +1692,7 @@
    inline style for remotes); the local source falls back to the default ink
    — the source-header identity discipline. Rendered inside the leading
    .todoLeadSlot (never trailing: state lives at the row END, identity at the
-   head — session-row order, 2026-12 style fix). */
+   head — session-row order). */
 .todoSourceDot {
   flex: none;
   width: 6px;
@@ -1739,8 +1716,8 @@
   box-sizing: border-box;
   /* This toggle is a SIBLING of .todoRows (its parent .todoArea is a block
      box), so it does not see that flex gap: its own 2px bottom margin is what
-     keeps the tail step at the same 28px as the rows (2026-09 batch 1 C2
-     follow-up — flex and block rhythm meet here). */
+     keeps the tail step at the same 28px as the rows (flex and block rhythm
+     meet here). */
   height: 26px;
   margin: 2px 0;
   padding: 2px 4px 2px 28px;
@@ -1756,7 +1733,7 @@
 }
 
 .todoMore:hover {
-  /* Same hover ink as .sessionRowsMore (2026-09 batch 1 A10 follow-up): both are
+  /* Same hover ink as .sessionRowsMore: both are
      the same overflow disclosure, and the official control stays secondary. */
   background: var(--dsw-alias-interactive-bg-hover);
   color: var(--dsw-alias-label-secondary);
@@ -1768,8 +1745,8 @@
 }
 
 /* ---------------------------------------------------------------------------
- * chamber archive manager dialog (design 24 §6 revision 2026-09; style pass
- * 2026; matching refactor 2026): the dialog chrome is the OFFICIAL
+ * chamber archive manager dialog (design 24 §6): the dialog chrome is the
+ * OFFICIAL
  * primitives Modal — this file only sizes the card and styles the bespoke
  * row list (native checkboxes + title/project rows + the per-row trash,
  * which is the module's .actionIcon + .actionIconDanger — no bespoke icon
@@ -1795,7 +1772,7 @@
   outline: none;
 }
 
-/* In-dialog two-stage confirm bar (2026 refactor; ArchiveManagerDialog
+/* In-dialog two-stage confirm bar (ArchiveManagerDialog
    module doc): rendered INSIDE the panel — above the view content — while a
    destructive action is armed. Single Modal, no second layer, no native OS
    confirm dialog. Danger-tinted wash uses the color-mix-over-token pattern
@@ -1806,12 +1783,12 @@
    brand precedent) because error-primary's higher visual weight reads at
    lower alpha — both themes verified at 目检 (design 24 §13); the bar
    message font rides the shared dialog small-text rule list below.
-   ARMED-freeze note (2026 a11y review): while armed every row dims
+   ARMED-freeze note: while armed every row dims
    (.archiveManagerRow:has(.archiveManagerCheck:disabled) 0.6) and the
    trash additionally dims (.actionIcon:disabled 0.42) — the ~0.25 composite
    is intentional freeze feedback (rows are inert until 取消/确认删除);
-   token contrast at the dimmed state still clears AA (review-computed,
-   design 24 §13). */
+   token contrast at the dimmed state still clears AA
+   (design 24 §13). */
 .archiveManagerConfirmBar {
   display: flex;
   align-items: center;
@@ -1835,8 +1812,7 @@
 }
 
 /* Scrollable row list (long archive sets scroll internally; the card keeps
-   its fixed footer). Rows breathe on the nav rows' 8px pill (2026-09 batch 1
-   D2 lowered it from 10px). */
+   its fixed footer). Rows breathe on the nav rows' 8px pill. */
 .archiveManagerList {
   display: flex;
   flex-direction: column;
@@ -1860,7 +1836,7 @@
 /* 归档管理器的行勾选/全选（原生 checkbox + accent token）：取 dsh 业务蓝
    `--dsw-alias-state-business-primary`（`--dsw-static-deepseek-500` / `-400`，
    浅色 #4176e6、深色 #679efe）。
-   2026-09 用户裁决：与设置页的"开/选中"态（复选框 accent / 分段滑块 / 开关轨道）
+   与设置页的"开/选中"态（复选框 accent / 分段滑块 / 开关轨道）
    统一到业务蓝，不用官方中性 `--dsw-alias-brand-primary`——官方 token 表里它是
    中性档（浅色 `--dsw-static-neutral-bluish-1000` 近黑、深色
    `--dsw-static-neutral-bluish-50` 近白），浅色主题下勾选态会发黑；与侧栏既有语言
@@ -1877,7 +1853,7 @@
   opacity: 0.6;
 }
 
-/* Busy dim for the group HEADER only dims its checkbox (2026 a11y review):
+/* Busy dim for the group HEADER only dims its checkbox:
    the fold toggle stays usable while a run is in flight (view state only),
    so dimming the whole header would make it look disabled. The rows below
    are individually dimmed by their own rule above. */
@@ -1921,13 +1897,13 @@
   text-overflow: ellipsis;
 }
 
-/* Residency tag (design 24 §4 step 9, 2026-13): this row's CONTENT was
+/* Residency tag (design 24 §4 step 9): this row's CONTENT was
    deleted, but the session still lives in the instance process, so the host
    kept its archived membership and the row stays hidden in the workspace
    until that instance restarts. Informational ink only — it must read as
    "done, waiting", never as an error (the deletion DID happen) and never as
    an actionable control (there is nothing left to delete).
-   Layout (2026-13 review): the row is a nowrap flex line, so the tag must
+   Layout: the row is a nowrap flex line, so the tag must
    YIELD before the title does — it is capped and ellipsized (full text on
    hover via its title attribute), never a fixed block that squeezes the
    session name off a narrow card. */
@@ -1949,9 +1925,9 @@
 /* (The fold-toggle keyboard ring shares the .actionIcon:focus-visible
    constants table above — one rule list, no duplicate to sync.) */
 
-/* Workspace group sections of the archived list (2026 grouping revision):
+/* Workspace group sections of the archived list:
    one collapsible header per workspace with its rows underneath (rows nest
-   one tree level under the header — 2026 indent revision, see
+   one tree level under the header, see
    .archiveManagerGroupRows below; the header hover wash is shared with
    .workspaceHeader — see the nav rule above). The header
    reuses the NAV workspace chrome — the SAME module's fold-toggle classes
@@ -1981,8 +1957,8 @@
   border-radius: 8px;
 }
 
-/* Session rows nest one tree level under their group header (2026 indent
-   revision — see also the ArchiveManagerDialog module doc). Nesting is
+/* Session rows nest one tree level under their group header (see also the
+   ArchiveManagerDialog module doc). Nesting is
    ancestor-side: each expanded group renders its rows inside
    .archiveManagerGroupRows, whose 24px left padding indents the whole
    subtree once. The step is chosen so the row TITLE column lands exactly
@@ -2027,10 +2003,10 @@
   color: var(--dsw-alias-label-secondary);
 }
 
-/* Dialog small-text family (2026 matching refactor — one rule list): the
+/* Dialog small-text family (one rule list): the
    view-state/outcome note rows, the error row and the two-stage confirm
-   bar's message share the 12/18 wrapped metrics (2026-09 batch 1 D3 rounded
-   the former 12.5px up to the 12px floor); only
+   bar's message share the 12/18 wrapped metrics (the former 12.5px rounded
+   up to the 12px floor); only
    display/padding/color and the confirm message's flex layout differ per
    rule below (NoteRow/Error duplication is pre-existing; ConfirmText was
    new — it joins the shared list instead of re-declaring). */
@@ -2055,8 +2031,8 @@
   color: var(--dsw-alias-state-error-primary);
 }
 
-/* Workspace-delete confirm (2026-09-11 upstream-alignment T2b): the in-app
-   Modal that replaced the retired native confirm — upstream's
+/* Workspace-delete confirm: the in-app
+   Modal — upstream's
    WorkspaceBrowser.module.css .deleteStatus metrics for the in-flight
    role="status" line. */
 .deleteStatus {
@@ -2065,7 +2041,7 @@
   color: var(--dsw-alias-label-secondary);
 }
 
-/* 2026-09-11 review-fix finding 3: the workspace-delete failure INSIDE the
+/* The workspace-delete failure INSIDE the
    dialog (role="alert"), mirroring upstream's WorkspaceBrowser.module.css
    .renameError (8px top margin, 12/18px, the error token) — the row-keyed
    inline error line stays, but it has no surface once the deleted row has

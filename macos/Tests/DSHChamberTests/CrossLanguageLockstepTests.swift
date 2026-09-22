@@ -2,7 +2,7 @@
 //  CrossLanguageLockstepTests.swift
 //  DSHChamberTests
 //
-//  S16：Swift 侧与 TS 侧必须逐值相等的常量锁步（读 TS 源文本；改一侧必须
+//  Swift 侧与 TS 侧必须逐值相等的常量锁步（读 TS 源文本；改一侧必须
 //  同步另一侧）。数值单源在 TS（main.ts / shell-core.ts / sidecar-entry.ts），
 //  Swift 是镜像——沿用 RendererRecoveryTests 的 #filePath 读源模式。
 //
@@ -11,8 +11,8 @@ import XCTest
 
 final class CrossLanguageLockstepTests: XCTestCase {
 
-    /// P-02（2026-12 二轮）：B 桥**出站**帧上限必须与入站同源常量，且 writeProtocolLine
-    /// 真的读它。出站此前无上限：一个 >4 MiB 的结果帧会先把 Swift 侧 LineReader 推入
+    /// B 桥**出站**帧上限必须与入站同源常量，且 writeProtocolLine
+    /// 真的读它。出站无上限时：一个 >4 MiB 的结果帧会先把 Swift 侧 LineReader 推入
     /// 溢出重同步并 fail-closed 作废该会话全部未决请求（BridgeClient.processStdoutOutcome）。
     func testSidecarOutboundFrameLimitIsLockstep() throws {
         let edges = try source("packages/desktop/node-edges.ts")
@@ -23,7 +23,7 @@ final class CrossLanguageLockstepTests: XCTestCase {
                         "入站别名必须与协议常量同源（不得各自写字面量）")
         XCTAssertEqual(FrameCodec.maxFrameBytes, 4 * 1024 * 1024,
                        "Swift 侧上限必须仍是 4 MiB（锁步同一护栏）")
-        // 函数体按花括号/首个顶层 } 收紧（第三轮审查 B6：通用 functionBody 会抽到下一个
+        // 函数体按花括号/首个顶层 } 收紧（通用 functionBody 会抽到下一个
         // 顶层 function，423 行的弱锚能被注释里的常量名满足）。
         guard let start = entry.range(of: "function writeProtocolLine(") else {
             return XCTFail("sidecar-entry.ts 必须保留 writeProtocolLine")
@@ -66,11 +66,11 @@ final class CrossLanguageLockstepTests: XCTestCase {
         return String(rest[..<end.lowerBound])
     }
 
-    /// 2026-12 复核（G21 文本锚）：渲染恢复的预算/门判定已迁到 shell-core.ts 的
+    /// 渲染恢复的预算/门判定单源在 shell-core.ts 的
     /// 共享常量 + 纯函数（`noteRendererReload` / `shouldScheduleHangReload` /
-    /// `shouldReloadAfterCrash`；main.ts 只留计时器 glue），旧锚点 `}, 500);`、
-    /// `60_000`、`reloadCount <= 3` 已不在 installRendererRecovery 体内——锚点随
-    /// 单源迁移到 shell-core（否则该文件假红且 Electron 侧失去唯一文本钉）。
+    /// `shouldReloadAfterCrash`；main.ts 只留计时器 glue）——文本锚在
+    /// shell-core 而不是 installRendererRecovery 体内，否则该文件假红且
+    /// Electron 侧失去唯一文本钉。
     func testRendererRecoveryPolicyMatchesMainTs() throws {
         let mainText = try source("packages/desktop/main.ts")
         guard let body = functionBody(mainText, named: "function installRendererRecovery") else {
@@ -117,10 +117,7 @@ final class CrossLanguageLockstepTests: XCTestCase {
                        "A 桥信封上限与 B 桥帧上限必须同值（4 MiB）")
     }
 
-    /// G12（2026-12 审计）：旧断言 AppDelegate.quitCleanupTimeout ==
-    /// BridgeClient.quitCleanupGracePeriod 恒真——前者就是后者的别名（AppDelegate
-    /// 里 `static let quitCleanupTimeout = BridgeClient.quitCleanupGracePeriod`），
-    /// 两个值一起改错也照样通过。现在期望字面量从**两侧源码**读出：Electron
+    /// 期望字面量从**两侧源码**读出：Electron
     /// （shell-core.ts 的 `QUIT_CLEANUP_TIMEOUT_MS = 5_000`）与 Swift
     /// （BridgeClient.swift 的 `quitCleanupGracePeriod: TimeInterval = 5.0`）；
     /// 先断言两侧字面量相等，再把两个 Swift 常量分别钉到这个共享字面量。
@@ -160,7 +157,7 @@ final class CrossLanguageLockstepTests: XCTestCase {
     func testInteractiveEdgeTimeoutMatchesSidecarEntry() throws {
         let text = try source("packages/desktop/sidecar-entry.ts")
         XCTAssertTrue(text.contains("const EDGE_TIMEOUT_MS = 30_000"))
-        // S2·F4：node 侧不再与 Swift 同值（同值会让 node 恒先超时，用户 10 分钟后的
+        // node 侧不与 Swift 同值（同值会让 node 恒先超时，用户 10 分钟后的
         // 答案被丢弃）——node = Swift 上限 + 60s 缓冲，Swift 侧仍是 600s。
         XCTAssertTrue(text.contains("const SWIFT_INTERACTIVE_LEG_TIMEOUT_MS = 600_000"),
                       "sidecar-entry 应镜像 Swift 侧 600000ms 交互腿上限")
@@ -181,9 +178,9 @@ final class CrossLanguageLockstepTests: XCTestCase {
                        "手工转录清单必须删除（S16a）")
     }
 
-    // MARK: - S3：页面事实载波与 TS 帧语言常量锁步
+    // MARK: - 页面事实载波与 TS 帧语言常量锁步
 
-    /// S3：document 语言属性名的单源在 TS（locales.ts 的
+    /// document 语言属性名的单源在 TS（locales.ts 的
     /// DOCUMENT_LANGUAGE_ATTRIBUTE），zh 族前缀规则也必须与 Swift
     /// ShellPageLanguage.resolve 逐值一致。注意两侧对 nil/空是有意分歧：
     /// TS 回落到 served markup 默认 zh（FALLBACK_FRAME_LOCALE），Swift 侧
@@ -215,7 +212,7 @@ final class CrossLanguageLockstepTests: XCTestCase {
         }
     }
 
-    /// S3：served markup 的默认语言是 zh-CN（packages/renderer/index.html 的
+    /// served markup 的默认语言是 zh-CN（packages/renderer/index.html 的
     /// html lang="zh-CN"）——冷启动兜底与静态骨架都依赖这个锚。
     func testServedMarkupDeclaresZhCnDefaultLanguage() throws {
         let html = try source("packages/renderer/index.html")

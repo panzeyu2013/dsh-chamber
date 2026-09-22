@@ -1,5 +1,5 @@
 /**
- * Source lock for the chamber journal silence watchdog (design 14 §D4, 2026-09).
+ * Source lock for the chamber journal silence watchdog (design 14 §D4).
  *
  * `src/client/journal-stream.ts` is upstream-verbatim plus this one patch, so an
  * upstream re-sync replaces it wholesale and review alone cannot hold the change.
@@ -67,8 +67,8 @@ test('the user-initiated page read carries its own deadline', () => {
 test('the probe compares the Host opening cursor against the applied one', () => {
   assert.match(probe, /this\.follow\(this\.initialRequest, signal\)/u)
   // A sibling follow yields the FRAME (not a RemoteStreamItem): next.value is the
-  // frame itself. Reading next.value.value threw on every probe and killed the
-  // restart arm silently (2026-09 review BLOCKER) — this lock plus the behavioral
+  // frame itself. Reading next.value.value would throw on every probe and kill the
+  // restart arm silently — this lock plus the behavioral
   // probe test both pin the unwrapping.
   assert.match(probe, /next\.value\.type !== 'opened'/u)
   assert.match(probe, /this\.options\.compare\(next\.value\.cursor, applied\) > 0/u)

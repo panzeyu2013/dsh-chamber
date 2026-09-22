@@ -1,5 +1,5 @@
 /**
- * 揭示门（W3 延迟揭示，2026-12）：把「选中」与「屏上」拆开之后，本叶子回答唯一的
+ * 揭示门（延迟揭示）：把「选中」与「屏上」拆开之后，本叶子回答唯一的
  * 问题——**这一拍该把 painted 收敛到 selected，还是继续持有旧视图**。
  *
  * 为什么需要它（事实，见 view-transition.ts:6-11 的语义）：`runViewTransition` 的
@@ -26,7 +26,7 @@
  * 因此 `nowMs - holdStartedAtMs < 0` 按「未到期」处理——宁可多持有到下一次重算，
  * 也不因时钟异常提前揭示。
  *
- * 与动效无关（裁决，见蓝图 §2.4）：持有是**内容决策**；prefers-reduced-motion 只让
+ * 与动效无关（裁决）：持有是**内容决策**；prefers-reduced-motion 只让
  * `view-transition.ts` 的过渡节退化，持有窗与截止窗不变。`revealHoldRemainingMs` 只
  * 是给调用方重臂定时器的算术，不产生任何动画语义。
  */

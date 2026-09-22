@@ -1,12 +1,12 @@
 /**
- * Source lock for the 2026-12 "invisible but clickable" blank-icon fix: an entrance
+ * Source lock for the "invisible but clickable" blank-icon fix: an entrance
  * animation first-framed at `opacity: 0` freezes invisible-but-hit-testable in a hidden
- * or occluded shell (no self-heal until remount; WKWebView measurement recorded in
- * STATUS/design 06/14), so content-bearing UI carries no entrance animation at all and
- * the renderer refuses to create one inside a shell nobody renders.
+ * or occluded shell (no self-heal until remount; WKWebView measurement in design 06/14),
+ * so content-bearing UI carries no entrance animation at all and the renderer refuses
+ * to create one inside a shell nobody renders.
  *
- * 2026-09-20 correction: the same symptom still reproduces after the animation retirement.
- * This lock covers the ANIMATION face only; the current root cause (document-level duplicate
+ * The same symptom still reproduces after the animation retirement. This lock covers the
+ * ANIMATION face only; the current root cause (document-level duplicate
  * SVG resource ids x hidden shells) and its fix live in design 05 §4.2.
  */
 import assert from 'node:assert/strict'
@@ -40,8 +40,8 @@ test('the state-driven collapse fade is the only opacity transition left', () =>
 })
 
 test('the removed animations are documented and their class hooks stay mounted', () => {
-  // Lock the 2026-09-20 correction, not the (superseded) animation-only attribution:
-  // the retirement removed an animation-face risk, the blank-icon root cause is design 05 §4.2.
+  // The animation retirement covers the animation-face risk; the blank-icon root
+  // cause is design 05 §4.2.
   assert.match(sidebarCss, /2026-09-20 更正/u)
   assert.match(sidebarCss, /design 05 §4\.2/u)
   assert.match(sidebarTsx, /clsx\(css\.brand, css\.wide\)/u, 'the wide hook still marks the brand row')
@@ -54,7 +54,7 @@ test('the settings shell panel body carries no entrance animation either', () =>
 })
 
 test('no chamber stylesheet reintroduces an invisible first frame (repo-wide sweep)', () => {
-  // The three files above are the ones this fix touched; the INVARIANT is repo-wide, so a
+  // The three files above are the ones this lock covers; the INVARIANT is repo-wide, so a
   // new entrance animation in any other chamber package must fail here.
   const offenders: string[] = []
   const walk = (dir: URL): void => {
@@ -74,11 +74,11 @@ test('no chamber stylesheet reintroduces an invisible first frame (repo-wide swe
 })
 
 test('the renderer forbids creating animations inside a shell nobody renders', () => {
-  // 2026-12：遮罩持有期（`.instance-veil-held`，renderer 的 P1 兜底不变量）加入同一门。
-  // 这里不再逐字钉"两条选择器 + 紧跟 {"，而是要求**三条隐藏态选择器都在门里**——
-  // 语义是"新增隐藏态必须进门"（原来那条正则会在新增第三条时失配，正是本轮 review
-  // 抓到的 BLOCKER）；声明体仍逐字断言，门本身没有被放宽。
-  // 先剥注释再匹配（二轮 review NIT-1）：否则把第三条选择器写成 `/* … */` 就能骗过本锁。
+  // 遮罩持有期（`.instance-veil-held`，renderer 的 P1 兜底不变量）也在同一门里。
+  // 这里不逐字钉"两条选择器 + 紧跟 {"，而是要求**三条隐藏态选择器都在门里**——
+  // 语义是"新增隐藏态必须进门"（逐字钉两条选择器的正则会在新增第三条时失配）；
+  // 声明体仍逐字断言，门本身没有被放宽。
+  // 先剥注释再匹配：否则把第三条选择器写成 `/* … */` 就能骗过本锁。
   const block = /\.instance-hidden \.instance-shell \*,[\s\S]*?\{([\s\S]*?)\}/u.exec(
     rendererCss.replace(/\/\*[\s\S]*?\*\//gu, ''),
   )

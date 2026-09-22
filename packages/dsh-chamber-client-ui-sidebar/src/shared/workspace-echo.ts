@@ -1,6 +1,6 @@
 /**
  * Workspace creation echo — the local half of "新建工作区应立刻可见"
- * (design 05 §2.2 revision 2026-12; problem 2 of the 2026-12 field report).
+ * (design 05 §2.2 revision).
  *
  * WHY an echo exists at all. The sidebar's per-source project is authoritative
  * only while that source's shell is MOUNTED: the official `workspace/follow`
@@ -36,13 +36,13 @@
  *   in the store unused (render-side lookup skips unknown ids — the documented
  *   accepted residue) and the group can appear expanded once. Cosmetic,
  *   one-time, and strictly better than the duplicate row it prevents. The
- *   replacement carries the replaced row's `sessionIds` (2026-09-11 review B1):
+ *   replacement carries the replaced row's `sessionIds`:
  *   an echo with no membership would drop the directory's sessions into
  *   未分组 for the whole TTL;
  * - a REAL row with the same path but another id wins (host identity is
  *   authoritative) and the echo row is not rendered at all;
  * - the SIDEBAR's own later actions on that same workspace are echoed too, on
- *   the same one-way channel (2026-09-11 review S3): a successful
+ *   the same one-way channel: a successful
  *   `workspace.delete` retires the entry ({@link removePendingWorkspace}) and a
  *   successful `workspace.rename` patches its title
  *   ({@link renamePendingWorkspace}). Both are needed for exactly the unmounted
@@ -80,8 +80,8 @@ export interface PendingWorkspace {
   title: string
   at: number
   /**
-   * Optional placement anchor (2026-12 revision, second entry point): the host
-   * workspace id this row sits immediately AFTER in the projection. The Git
+   * Optional placement anchor: the host workspace id this row sits immediately
+   * AFTER in the projection. The Git
    * plugin registers a new worktree directly below its main checkout
    * (`workspace.insertBefore` on the host), so appending the echo at the tail
    * would render it in the wrong place and then make it jump once the source
@@ -138,13 +138,13 @@ export function recordPendingWorkspace(
   const next: PendingWorkspace = {
     workspaceId: created.workspaceId,
     path: created.path,
-    // Producer title hint wins (2026-12 review): the Git adopt path renames the
+    // Producer title hint wins: the Git adopt path renames the
     // workspace to its branch right after the saga, so a row born from the path
     // basename would flip a few RPCs later. Absent = the path-basename rule the
     // cwd-derived groups use.
     title: created.title ?? basenameOf(created.path),
     at: now,
-    // Sparse on purpose: an anchor-less create keeps the pre-anchor entry shape
+    // Sparse on purpose: an anchor-less create keeps the entry shape
     // byte-identical (the ledger is compared by value in tests and re-published
     // on identity).
     ...(created.afterWorkspaceId === undefined ? {} : { afterWorkspaceId: created.afterWorkspaceId }),
@@ -187,8 +187,8 @@ export function reconcilePendingWorkspaces(
 }
 
 /**
- * Retire the echo of one DELETED workspace — the withdraw half of the echo
- * (2026-09-11 review S3). Matching is by EITHER identity: the host
+ * Retire the echo of one DELETED workspace — the withdraw half of the echo.
+ * Matching is by EITHER identity: the host
  * `workspaceId` (the primary key — the create result returned it, and the row's
  * delete action carries it) or the same canonical path. The path is
  * best-effort: `key.path` is empty when the source's mounted snapshot has not
@@ -213,7 +213,7 @@ export function removePendingWorkspace(
 
 /**
  * Patch the title of one echo after a successful `workspace.rename` — the patch
- * half of the echo (2026-09-11 review S3). An echo row's title is its path
+ * half of the echo. An echo row's title is its path
  * basename, so this is the only way a renamed workspace shows its new name
  * before the source mounts. Identity-preserving when the source/id is absent or
  * the recorded title already matches.
@@ -286,7 +286,7 @@ export function withWorkspaceEcho(
       continue
     }
     echoByPath.delete(canonicalPathKey(row.path))
-    // B1 (2026-09-11 review): a replaced group keeps its MEMBERSHIP. Sessions
+    // A replaced group keeps its MEMBERSHIP. Sessions
     // reach a group only through `workspace.sessionIds` (derive.ts), so an echo
     // row carrying `sessionIds: []` dropped every member of that directory into
     // 未分组 for the echo's whole TTL (10 min), and each 30s unary pull
@@ -303,13 +303,13 @@ export function withWorkspaceEcho(
     additions.push(entry)
   }
   if (!replaced && additions.length === 0) return aggregate
-  // Anchor-aware placement (2026-12, second entry point). Group by anchor and
+  // Anchor-aware placement. Group by anchor and
   // insert each anchor's block with a FRESH lookup: several creations anchored
   // to one checkout stay in ledger order (one splice), and an insertion for
   // another anchor — even one that lands earlier in the list — cannot skew the
-  // position of a later block. (The previous cursor-based form stored absolute
-  // indices, so a block inserted before a cursor shifted it and the next row of
-  // that anchor landed one slot early; reachable with two repos' checkouts
+  // position of a later block. (A cursor-based form would store absolute
+  // indices, so a block inserted before a cursor would shift it and the next row
+  // of that anchor would land one slot early; reachable with two repos' checkouts
   // alternating.) An anchor that is not in the projection (the source's pushed
   // set predates that row, or another client removed it) degrades to the
   // append-at-tail behavior rather than dropping the row.

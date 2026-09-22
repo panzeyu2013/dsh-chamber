@@ -1,10 +1,10 @@
 /**
- * Remote plugin sync orchestration (design 13 M2+M3) unit tests — part 1:
+ * Remote plugin sync orchestration (design 13) unit tests — part 1:
  * localPluginList classification (bundle/client/plain/materialize/unsyncable +
  * path-traversal defense, registry-driven chamber projection, bundleLines) and
  * the spec/dependency classifiers.
- * Sibling part: plugin-sync-apply.test.ts. Round-2 trim merged the remote-read,
- * renderer-projection and seed fail-closed assertions in as part 1b.
+ * Sibling part: plugin-sync-apply.test.ts. Part 1b carries the remote-read,
+ * renderer-projection and seed fail-closed assertions.
  */
 
 import { test } from 'node:test'
@@ -183,11 +183,9 @@ test('resolveLocalMaterializeDirectory: MAIN resolves the manifest entry and enf
   if (!mismatched.ok) assert.match(mismatched.error, /does not match/)
 })
 test('localPluginList: the chamber projection is REGISTRY-DRIVEN — one row per control-plane host package (never a hardcoded pair)', () => {
-  // The user-reported gap (2026-09): the plugin-management page showed only
-  // client-graph + git-worktree because the projection hardcoded the pair, so
-  // the seeded archive-cleanup package was invisible. The projection now maps
-  // the control-plane registry 1:1 — a NEW registry row appears here (and in
-  // the page) with no code change.
+  // The projection maps the control-plane registry 1:1 — a new registry row
+  // appears here (and in the page) with no code change. A hardcoded pair would
+  // make every other seeded package invisible to the plugin-management page.
   const home = join(tempDir(), 'home')
   writeLocalProfile(home, {}, [])
   const manifest = localPluginList(home)
@@ -354,10 +352,7 @@ test('localPluginList: bundleLines collects bundle-declaring dependency names', 
 
 // ============================================================================
 // part 1b — remote read face, renderer boundaries and the seed fail-closed
-// matrix. Round-2 trim: the sibling suites plugin-sync-remote-read.test.ts,
-// plugin-sync-renderer-projection.test.ts and plugin-sync-seed.test.ts were
-// deleted as per-module duplicates; their security / boundary / fail-closed
-// assertions are carried over here (net line reduction positive).
+// matrix (security / boundary / fail-closed assertions).
 // ============================================================================
 
 test('remotePluginList: ENOENT is an absent profile; any other ssh failure is loud', async () => {
@@ -630,8 +625,6 @@ test('seedRemoteChamberHostPackages: preflight / read / write failures all stop 
   assert.ok(!writeFails.written.some(entry => entry.path === '~/.dsh/profiles/web/cordis.patch.yml'), 'no patch without the package files')
 })
 
-// remotePluginList read-face baseline restored from the deleted
-// plugin-sync-remote-read.test.ts (round-2 trim merge was fail-closed-only).
 test('remotePluginList: parses dependencies/bundles and projects the registry rows (open-in is localOnly)', async () => {
   const exec: ExecFn = async (_id, action, payload) => {
     if (action === 'run' && payload?.op === 'exec' && payload.command === 'cat') {
@@ -735,8 +728,8 @@ test('remotePluginList: the loader insert and each row live state are judged ind
   }
 })
 
-// Confirmation copy restored from the deleted plugin-sync-renderer-projection.test.ts
-// (every mutating path must name its target and effect before the action runs).
+// Confirmation copy: every mutating path must name its target and effect
+// before the action runs.
 test('confirmation copy: every mutating path names the target and its effect', () => {
   const materialize = describeMaterializeConfirmation({ pluginName: '@scope/pkg', pluginPath: '/Users/x/pkg', targetLabel: 'prod-server', targetId: 'ssh-1' })
   assert.match(materialize.message, /@scope\/pkg/)
@@ -754,8 +747,8 @@ test('confirmation copy: every mutating path names the target and its effect', (
   assert.match(seed.detail, /写入 chamber host 包/)
 })
 
-// cordis.patch.yml seed merge restored from the deleted plugin-sync-seed.test.ts
-// (template rewrite / dedup / legacy fold / append-without-clobber).
+// cordis.patch.yml seed merge: template rewrite / dedup / legacy fold /
+// append-without-clobber.
 test('seed: the init template is rewritten, an existing row deduped, and the pre-rename row folded, never refused', () => {
   const inserts = [{ insertId: CLIENT_GRAPH_INSERT_ID, packageName: CLIENT_GRAPH_PACKAGE_NAME }]
   const rewritten = computeCordisPatchUpdate('# Your patch layer\n[]\n', inserts)

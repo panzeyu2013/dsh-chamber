@@ -27,13 +27,13 @@ test('fetchInstanceSnapshot derives workspace groups from session cwd facts', as
   assert.equal(snapshot.workspaces[0].sessionIds.join(','), 's3')
   assert.equal(snapshot.workspaces[1].sessionIds.join(','), 's1,s2')
   // cwd-derived groups are DISPLAY-ONLY: every row carries the synthetic
-  // marker so the sidebar disables its host-scoped mutations (2026-11 fix).
+  // marker so the sidebar disables its host-scoped mutations.
   assert.ok(snapshot.workspaces.every(workspace => workspace.synthetic === true))
   // Subagent rows never surface.
   assert.deepEqual(snapshot.sessions.map(row => row.sessionId), ['s1', 's2', 's3', 's4'])
   // Archive set has no unary wire source — documented degradation. The
   // snapshot must mark its archive set NOT known so consumers never read the
-  // empty set as "no archived sessions" (2026-09 review round).
+  // empty set as "no archived sessions".
   assert.deepEqual(snapshot.archivedSessionIds, [])
   assert.equal(snapshot.archiveSetKnown, false)
 })
@@ -168,7 +168,7 @@ test('purgeArchivedSessions decodes counts and per-item errors (partial failure 
   assert.equal(result.deletedSubagents, 2)
   assert.equal(result.skippedRunning, 1)
   assert.deepEqual(result.errors, [{ sessionId: 's2', code: 'storage', message: 'fake failure' }])
-  // The host's registry-global orphan sweep count (design 24 §12 F4)
+  // The host's registry-global orphan sweep count (design 24 §12)
   // is absent when the host did not report it.
   assert.equal(result.clearedOrphanMembers, undefined)
 })
@@ -361,7 +361,7 @@ test('503 classification: not-ready answers surface as InstanceUnavailableError 
   const notReady = (async () => jsonResponse({ code: 'instance_unavailable', error: 'instance is still starting' }, 503)) as typeof fetch
   await withFetch(notReady, async () => {
     const client = getInstanceClient('local')
-    // Prefix added by the wrapper-level wrapWireError.
+    // The prefix comes from the wrapper-level wrapWireError.
     await assert.rejects(
       () => client.archiveCleanup.purge(['s1'], true, []),
       (error: unknown) => error instanceof InstanceUnavailableError,
@@ -502,11 +502,11 @@ test('stopSessionsForPurge catches a failed session/list read (never throws) and
 })
 
 // ---------------------------------------------------------------------------
-// 2026-09 P1 round: the pre-purge stop pass covers the CLOSURE of the
+// The pre-purge stop pass covers the CLOSURE of the
 // selected roots. The host skips an archived tree whose ANY member runs, and
 // a running subagent descendant has no row in the manager — roots-only
 // cancels can never settle such a tree.
-// 2026-09 fail-open fix: the closure follows SUBAGENT-origin edges only (a
+// The closure follows SUBAGENT-origin edges only (a
 // running FORK of a selected root is never cancelled — the purge tree never
 // contains it), and the currently-viewed session is excluded from the CLOSURE.
 // ---------------------------------------------------------------------------
@@ -741,7 +741,7 @@ test('stopArchivedSubtree: the archive-time stop is the exclusion-free closure p
   assert.equal(result.lineage, null)
 })
 
-// 2026-09-11 upstream-alignment T7: the unary fallback publishes the session's
+// The unary fallback publishes the session's
 // registered projections (`projections.values` — the same block `titleOf`
 // reads), so an unmounted source's rows carry the active-Schedule fact exactly
 // like the mounted-store projection (derive.ts projectInstanceSnapshot) does.

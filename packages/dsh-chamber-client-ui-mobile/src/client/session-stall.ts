@@ -1,14 +1,14 @@
 import { LADDER_TABLES } from '@dsh-chamber/dsh-stream-state'
 import type { MobileKey } from './locales.ts'
 
-//  this module no longer OWNS its six ladder thresholds - they are read from the
+//  this module does not OWN its six ladder thresholds - they are read from the
 // shared table (@dsh-chamber/dsh-stream-state, LADDER_TABLES.mobile) at each use site
-// below. The values are unchanged; the single table is now their only owner.
-// NOTE ON THE TIER DEVIATION that used to be documented on LADDER_TABLES.mobile.thresholdMs: this
+// below, which is their only owner.
+// NOTE ON THE TIER DEVIATION on LADDER_TABLES.mobile.thresholdMs: this
 // tier has no openState channel (it observes a DOM-only shape a healthy slow load can
 // also produce), so its notice threshold is deliberately LONGER than the desktop
-// ladder's 20s. That deviation is intentional and still locked by the cross-tier
-// parity test; it now lives with the value in src/tables.ts rather than here.
+// ladder's 20s. That deviation is intentional and locked by the cross-tier
+// parity test; it lives with the value in src/tables.ts, not here.
 
 /** The conversation root's phase attribute. The emitter is upstream
  *  `ConversationRoot`'s `phase` attribute (ui-conversation): the value space is
@@ -16,7 +16,7 @@ import type { MobileKey } from './locales.ts'
  *  a continuable subagent is waiting for its parent catalog), `hero` (no
  *  session presented) and `active` (everything else). The `conversationPhase()`
  *  contract's `blank` / `engaging` names are internal and NEVER reach this
- *  attribute (). The composer node's own `data-phase` carries a
+ *  attribute. The composer node's own `data-phase` carries a
  *  different value set (`input.phase` / `inert`) and is never an ancestor of
  *  the chat flow, so the nearest-ancestor read below can only land on the
  *  root. */
@@ -173,7 +173,7 @@ export function decideStallNotice(input: StallNoticeInput): StallDecision {
   return {
     since,
     show: !input.dismissed && stalled,
-    // BOTH evidences are required (): the concrete state must be
+    // BOTH evidences are required: the concrete state must be
     // `loading` (not a healthy open session whose first turn is merely slow), and
     // nothing may be in flight. Either one unknown ⇒ no automatic write.
     resync: stalled
@@ -188,7 +188,7 @@ export function decideStallNotice(input: StallNoticeInput): StallDecision {
  * Timestamps still inside the rolling budget window. FUTURE stamps are dropped
  * too: a wall clock that stepped backwards (NTP correction, VM restore) would
  * otherwise keep them "inside the window" for up to that whole step and the
- * budget would count them forever (). Dropping them resets the
+ * budget would count them forever. Dropping them resets the
  * ledger to "nothing spent" instead, which is the desktop ladder's ruling for a
  * negative elapsed time.
  */
@@ -389,7 +389,7 @@ export function sessionStallFace(
   // otherwise need its own narrowing (typecheck:mobile is a gate).
   const get = reflect.get.bind(reflect)
   /**
-   * Re-resolve the service on EVERY call (): the
+   * Re-resolve the service on EVERY call: the
    * mobile plugin deliberately does not inject `sessions`, so its apply order is
    * not guaranteed to be after the session controller registers — resolving once at
    * install time would silently disable the arm for that whole install lifetime.
@@ -465,7 +465,7 @@ export function sessionStallFace(
  * its own disposer.
  * @param t - the bound locale lookup for the notice copy.
  * @param session - the guarded concrete face for the automatic arm; absent means
- *   notice-only (the pre-).
+ *   notice-only.
  * @returns the disposer (idempotent; the watcher stops when the last one runs).
  */
 export function installSessionStallNotice(t: (key: MobileKey) => string, session?: StallSessionFace): () => void {

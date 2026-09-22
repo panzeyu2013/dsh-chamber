@@ -35,7 +35,7 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
      */
     'sidebar.brand.name': { kind: 'single'; scope: 'root'; owner: SidebarBrandNameOwnerProps }
     /**
-     * Global panel icons (alpha.2): each list id addresses the matching main
+     * Global panel icons: each list id addresses the matching main
      * panel key; the shell owns the button and resolves its label from list
      * metadata, then asks `ctx.layout.selectPanel(id)`.
      */
@@ -107,7 +107,6 @@ export interface SidebarBrandNameOwnerProps {
 
 /** Icon presentation supplied by a global panel row. */
 export interface SidebarPanelIconOwnerProps {
-  /** Requested square edge in pixels. */
   size: number
   /** Whether this panel is selected in the main column. */
   active: boolean
@@ -144,7 +143,6 @@ export interface SidebarWorkspaceGitOwnerProps {
 
 /** Owner share of an action rendered beside Settings at the sidebar foot. */
 export interface SidebarFooterActionOwnerProps {
-  /** Whether the sidebar renders wide content (false = 56px rail). */
   wide: boolean
 }
 
@@ -163,7 +161,7 @@ export type SidebarRootInjected = {
   startSession: (workspaceId?: WorkspaceId) => void
   /** Toggle the sidebar column through the layout service. */
   toggleSidebar: () => void
-  /** Select the global panel addressed by a sidebar row (alpha.2). */
+  /** Select the global panel addressed by a sidebar row. */
   selectPanel: (id: MainPanelId) => void
   /** Private reactive sources bound to framework selector hooks. */
   hooks: { panels: HostObservable<readonly SidebarPanelMetadata[]> }

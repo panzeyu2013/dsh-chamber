@@ -2,65 +2,6 @@
 # side as of the last confirmed-consistent state. Both languages carry equal
 # authority; after editing either side, bring the other along and update both
 # hashes here (manually verified with `shasum -a 256`).
-# Chamber package (design 05 §2): the official ui-sidebar README copies were replaced on
-# 2026-08-15 by descriptions of the self-built multi-source sidebar plugin (zh = key source).
-# Re-recorded 2026-09-11 (upstream-alignment record duty): both sides were rewritten
-# together for the same behavioural change set — the row actions moved into the row
-# menus (archive is a menu verb running WITHOUT a confirm), workspace delete is now an
-# in-app Modal, completed rows carry the official StateDot `done` tone, the row window
-# is a two-way disclosure, row-action accessible names are `{name}`-parameterized, the
-# rail renders named operable buttons, header controls ride the official Tooltip and the
-# browse tree is labelled. Claim-by-claim comparison (Interactions bullet list, Structure
-# bullets) came first; only then were both hashes recomputed with `sha256sum`.
-# Re-recorded again (2026-09-11 review-fix round, findings 2/3/5c/5e): the same comparison
-# duty, this time for the workspace-delete bullet (in-dialog role="alert" failure that keeps
-# the dialog open, the statement-form orphan description key `delete.descOrphan`, and the
-# "arming is gated on no other chamber dialog" invariant replacing the false "can never
-# stack" claim) plus the rail bullet's aria-disabled clarification (a NON-active
-# non-activatable source; the active one rides aria-current). Nothing else changed.
-# Re-recorded again (2026-09-11 review-fix round, second half — the invariant is now TOTAL):
-# the same workspace-delete bullet states the symmetric opener gate instead of the
-# arm-only one — at most ONE chamber Modal layer, all three openers (arm the confirm /
-# archive manager / add-workspace browser) refusing while any other layer is up, either
-# order; both sides re-compared claim by claim (six claims each) before hashing.
-# Re-recorded again (2026-09-11 review-fix round, docs lane): ONE further claim in the same
-# bullet was brought in line with the code — the source-vanish auto-drop of the armed
-# confirm is SUSPENDED while a reported failure is on screen (the in-dialog
-# `role="alert"` is then the only surviving explanation, `SidebarRoot.tsx`'s effect reads
-# `deleteError`). Both sides re-read against that bullet and rehashed.
-# Re-recorded again (2026-09 review round, the completed-mark decision; both sides
-# carried together): the status bullet now states that completed-but-unread renders
-# the chamber brand-blue `.stateCompleted` dot again and WHY the official `StateDot`
-# `done` tone is not used — that tone's `--dsw-alias-state-success-primary` is the
-# source header's connection-dot token, so "session finished, unread" and "server
-# connected" painted the same green. The same single claim was re-read on the zh and
-# en sides before rehashing both. Nothing else changed.
-# Re-recorded again (2026-09 phase 2, the menu-density decision): the menu bullet now
-# states that all three menus (session kebab / workspace kebab / sort) use the
-# primitive's `compact` form — the v0.2.4 behaviour, restored after the 2026-09-11
-# alignment round had moved them to the official default (40px rows / 14px labels) and
-# `dense` (34px), which read a full size larger than our own 26px rows;
-# `closeOnPointerLeave` stays. Justification and the abandoned-rounding trade-off live
-# in design 06 §7 and STATUS「菜单密度 = chamber 档」. The same single claim was re-read
-# on the zh and en sides before rehashing both. Nothing else changed.
-# Re-recorded once more in the same round: the sort-menu clause was restored to its
-# precise wording ("its label naming the active mode" / "由标签报出当前模式" — `orderBy.label`
-# names the section and the trigger's accessible name carries the active mode), an
-# audit finding about read-back ambiguity. Same single claim re-read on both sides.
-# Re-recorded again (2026-12, the session echo; both sides carried together): the
-# section now also covers the session-echo ledger and its single funnel
-# (shared/session-echo.ts + shared/session-mutations.ts) — a session minted over
-# the source's unary client reaches the projection only via the host's ASYNC
-# api-session/added broadcast, so the "+"/fork/archive verbs publish a one-way
-# fact and the App projects the row into its workspace immediately. The same
-# heading and the new bullet were written on the zh and en sides in one pass,
-# then both hashes were recomputed with shasum -a 256. Nothing else changed.
-# Re-recorded again (2026-12, the second session-echo pass — the local ARCHIVE
-# tombstone and the placement rule): the session bullet now also states that the
-# membership is inserted at the workspace HEAD (the host's own attachSession
-# order, so the row never jumps) and that the archive verb's removal fact feeds
-# a local tombstone which filters the row on a source whose shell is not mounted
-# until an authoritative archive set names it. Both sides were written in one
-# pass and re-compared claim by claim, then rehashed with shasum -a 256.
+# Chamber package (design 05 §2): the READMEs describe the self-built multi-source sidebar plugin (zh = key source).
 README.md: ff71e0c765f972c8f94faa90485ad5672614723b667a9c8c6dbcc93375fed1d3
 README.zh.md: dd27bede2a66722f814f273be5aa95c83cc378b3c7c188aa408af18e61381a59

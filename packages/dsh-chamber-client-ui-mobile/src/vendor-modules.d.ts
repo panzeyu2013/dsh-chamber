@@ -44,7 +44,7 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 // bundle requests it without declaring a package dependency — the same table
 // entry that answers `react` and `ui-slots`. The mobile plugin consumes
 // exactly one face: the official panel glyph the official sidebar toggle
-// draws (2026-09-11 upstream-alignment T17a).
+// draws.
 declare module '@deepseek-ai/dsh-client-ui-primitives' {
   import type { ReactElement } from 'react'
   /** Official icon face: glyphs take size + className and draw currentColor. */
@@ -58,8 +58,8 @@ declare module '@deepseek-ai/dsh-client-ui-primitives' {
 
 // No `'@deepseek-ai/dsh-client-ui-slots/client'` block: upstream `ui-slots`
 // exports only `.`, `./src/*` and `./package.json`, so that specifier is not
-// resolvable and nothing in this plugin imports it (2026-09 audit). The
-// `…-ui-layout/client` block below IS a real export and stays.
+// resolvable and nothing in this plugin imports it. The
+// `…-ui-layout/client` block below IS a real export.
 
 declare module '@deepseek-ai/dsh-client-ui-layout/client' {
   /** Layout facts face (design 17 §18) — provided per-ctx by the chamber

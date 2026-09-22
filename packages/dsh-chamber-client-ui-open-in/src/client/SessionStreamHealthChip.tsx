@@ -13,7 +13,7 @@
  * re-check, the React wiring and the markup; the VISIBLE surface (which notice,
  * which controls, whether to keep ticking, whether a re-plan changed anything)
  * is the pure projection in `session-stream-health-chip-face.ts`, so it can be
- * behaviour-tested without a DOM (2026-09-21 review).
+ * behaviour-tested without a DOM.
  *
  * It renders at most one line of text plus up to two user actions: the page
  * reload every (non-churn) notice offers, and — while the pure plan arms it (a
@@ -56,7 +56,7 @@ export interface SessionStreamHealthInjected {
    */
   step(sessionId: string, openState: SessionOpenState, presented: boolean, now: number): SessionStreamHealthPlan
   /**
-   * Subscribe to carrier-churn facts for this source (C1 wiring fix, 2026-09).
+   * Subscribe to carrier-churn facts for this source.
    * The fact itself stays in the seat's closure; the chip only learns that a new
    * observation is due. Without this the churn notice could never be planned
    * while the session kept `openState === 'open'` (the ticker is off then, so
@@ -124,7 +124,7 @@ export function SessionStreamHealthChip(props: SessionStreamHealthProps): ReactE
   // Carrier-churn facts arrive as EVENTS — the seat's closure owns the fact, so
   // no prop changes when one lands. Bump the tick to re-plan the ladder (the
   // "reconnecting…" notice appears), and because a visible notice keeps the
-  // ticker alive it expires on its own afterwards (C1 wiring fix, 2026-09).
+  // ticker alive it expires on its own afterwards.
   useEffect(() => subscribe(() => setTick(value => value + 1)), [subscribe])
 
   // One ladder step per render-relevant change. The seat is where the state and

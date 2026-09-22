@@ -198,8 +198,7 @@ test('the gateway audit serializer is a fixed whitelist: credentials never reach
 
 test('the audit rotation cap is 5 MiB per the design contract', _t => {
   // The gateway's default cap IS the shared core constant (audit.ts aliases
-  // AUDIT_TRAIL_MAX_BYTES); the gateway entry's own alias was removed with the
-  // dead exports (2026-12 audit F23), so the pin targets the single source.
+  // AUDIT_TRAIL_MAX_BYTES), so the pin targets the single source.
   assert.equal(AUDIT_TRAIL_MAX_BYTES, 5 * 1024 * 1024)
 })
 
@@ -404,7 +403,7 @@ async function runRequest(
   return res
 }
 
-/** Deterministic clock + window-end scheduler for the M3-5 rejection debounce:
+/** Deterministic clock + window-end scheduler for the rejection debounce:
  * no real timers, so a window closes exactly when the test says so. */
 function debounceHarness(): {
   options: AuthRejectionDebounce
@@ -511,7 +510,7 @@ test('a rejected request writes exactly one event; a successful login adds no ga
   assert.equal(login.status, 302)
   assert.deepEqual(readEvents(file).map(event => event.event), ['auth_rejected', 'login_success'])
 
-  // A repeated refusal is still ONE event per window (M3-5 coalescing, not a
+  // A repeated refusal is still ONE event per window (coalescing, not a
   // duplicate from the same request): nothing is appended for the in-window
   // repeat, and the login event above is untouched.
   const second = await runRequest(dispatch, 'GET', '/api/connections')
@@ -725,7 +724,7 @@ test('no audit file configured → gate rejections still answer without writing'
 })
 
 // ---------------------------------------------------------------------------
-// credential_changed / credential_change_rejected event shapes (Phase 2)
+// credential_changed / credential_change_rejected event shapes
 // ---------------------------------------------------------------------------
 
 test('credential changes are audited as credential_changed with only non-secret detail (S24)', async t => {

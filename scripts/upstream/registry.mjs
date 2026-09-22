@@ -108,8 +108,8 @@ export function classifiedEntries(registry) {
 }
 
 /**
- * 触点门消费的形状（与迁移前的内嵌 FORKS 逐字段等价：name/rel/upstream/versionAnchor/
- * patched/own/ownPrefix/dropped；ownNotes/droppedNotes 是纯文档字段，不进 verifier）。
+ * 触点门消费的形状：name/rel/upstream/versionAnchor/
+ * patched/own/ownPrefix/dropped；ownNotes/droppedNotes 是纯文档字段，不进 verifier。
  */
 export function verifierForks(registry) {
   return classifiedEntries(registry).map((entry) => {
@@ -190,7 +190,7 @@ export function validateRegistry(registry) {
       // 现行分类条目必须二选一：shadow（上游进入 excludedUpstreamDirs）或 chamber-named
       // （本仓路径进入 chamberNamedForks）。否则删掉 exclusion/naming 关联后覆盖面静默消失。
       // 退役形态（upstream: null + upstreamFormer + status accepted/not-applicable）豁免此不变量：
-      // 那时上游目录可能已不存在，强行二选一会让"退役"本身不可能（review F2）。
+      // 那时上游目录可能已不存在，强行二选一会让"退役"本身不可能。
       if (entry.upstream !== null) {
         const isExcluded = Array.isArray(registry.excludedUpstreamDirs) && registry.excludedUpstreamDirs.includes(entry.upstream)
         const isNamed = Array.isArray(registry.chamberNamedForks) && registry.chamberNamedForks.includes(entry.ours)

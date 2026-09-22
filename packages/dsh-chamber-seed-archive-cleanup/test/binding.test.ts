@@ -1,8 +1,8 @@
-/** Real-binding tests (design 24 §10 + security/perf review 2026-12):
+/** Real-binding tests (design 24 §10):
  *  `src/binding.ts` is decorator-free, so the ACTUAL factory and gate run
  *  under node:test against in-memory service fakes + a real temp filesystem
  *  for the locate/remove content leg. The gateway class (index.ts) keeps TS
- *  decorators and is exercised by typecheck + M4 gateway-boot E2E. */
+ *  decorators and is exercised by typecheck + gateway-boot E2E. */
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -144,9 +144,8 @@ test('binding: official setState failures map to item code storage', async () =>
 })
 
 test('binding: deleteSessionContent refuses running (always) and loaded (unless forced)', async () => {
-  // A unique temp dir: the previous hardcoded join(tmpdir(), 'x') collided
-  // with any real /tmp/x and turned the artifact leg into a false storage
-  // refusal (2026-09 audit).
+  // A unique temp dir: a hardcoded join(tmpdir(), 'x') could collide with any
+  // real /tmp/x and turn the artifact leg into a false storage refusal.
   await withTempDir('archive-cleanup-missing-', async missingDir => {
     const ctx: HostCtxServices = {
       agents: { list: () => [{ id: 'live-1', status: 'running' }, { id: 'idle-1', status: 'idle' }] },
@@ -246,7 +245,7 @@ test('binding: a drifted live-store shape fails the live read loudly (fail-close
   // sessions.list() is the LIVE LEG of the official corpus AND the source of
   // the residency report: an entry this read silently dropped would stop
   // counting as loaded AND let the core un-hide a session the host still
-  // serves (2026-13 review). Every drifted shape refuses instead.
+  // serves. Every drifted shape refuses instead.
   const notAnArray = makeHostBinding({ agents: { list: () => [] }, sessions: { list: () => ({ not: 'an array' }) } } as never)
   await assert.rejects(() => notAnArray.listLiveSessionFacts(), codeIs('registry-unreadable', { message: /did not answer an array/ }))
   const noId = makeHostBinding({ agents: { list: () => [] }, sessions: { list: () => [{ id: 'ok-1' }, {}] } } as never)
@@ -337,8 +336,7 @@ test('binding: content removal removes the official artifact and reclaims an emp
     assert.equal(existsSync(tempy), false, 'generation + leftover temp removed, dir reclaimed')
 
     // A leftover MIGRATION staging file (an interrupted vN->vM migration) is
-    // this session's own content staging and purges with the rest (2026-09
-    // 二轮 W2 F5: without recognition the session was permanently unpurgeable).
+    // this session's own content staging and purges with the rest.
     const migrated = join(dir, 'proj5', 's6')
     mkdirSync(migrated, { recursive: true })
     writeFileSync(join(migrated, 'session.v2.jsonl'), '{}')
@@ -421,7 +419,7 @@ test('binding: the purge refuses symlink/subdirectory entries and accepts every 
 
     // An out-of-range version is NOT canonical upstream either
     // (`Number.isSafeInteger` in parseSessionFormatLogFilename), so the
-    // whitelist must refuse it instead of deleting it (2026-09 二轮 N13).
+    // whitelist must refuse it instead of deleting it.
     const hugeDir = join(dir, 'huge', 's5')
     mkdirSync(hugeDir, { recursive: true })
     writeFileSync(join(hugeDir, 'session.v99999999999999999999.jsonl'), '{}')
@@ -430,7 +428,7 @@ test('binding: the purge refuses symlink/subdirectory entries and accepts every 
     assert.equal(existsSync(join(hugeDir, 'session.v99999999999999999999.jsonl')), true, 'nothing removed on refusal')
 
     // Near-miss names stay refused: uppercase suffix, leading-zero version, and
-    // a lease name that merely PREFIXES the real lease (2026-09 三轮 Q3 G1–G4).
+    // a lease name that merely PREFIXES the real lease.
     const caseInsensitive = isCaseInsensitiveFs()
     for (const [project, name] of [
       ['upper', 'session.v3.JSONL'],
@@ -468,14 +466,12 @@ test('binding: the purge refuses symlink/subdirectory entries and accepts every 
 })
 
 test('binding regression: locate runs AS a method on the persistence service (this-sensitive official locate)', async () => {
-  // Real-machine E2E find (2026-09): the previous destructured
-  // `const locate = persistence.locate` + detached invocation made the
-  // OFFICIAL jsonl locate crash on every deletion with "Cannot read
-  // properties of undefined (reading 'root')" — the official
+  // A destructured `const locate = persistence.locate` + detached invocation
+  // would make the OFFICIAL jsonl locate crash on every deletion with "Cannot
+  // read properties of undefined (reading 'root')" — the official
   // SessionPersistence implementations are instance-state classes (locate
   // reads this.root / this.compression). The fake below mirrors that shape
-  // (a this-sensitive method, like the official class); the old binding code
-  // fails it, the fixed binding passes.
+  // (a this-sensitive method, like the official class).
   await withTempDir('archive-cleanup-locate-this-', async dir => {
     const sessionDir = join(dir, 's9')
     mkdirSync(sessionDir, { recursive: true })
@@ -522,7 +518,7 @@ test('binding: listSessionStates carries cwd + lineage into snapshot states', as
   assert.equal(sub?.parentSessionId, 'top')
 })
 
-// Malformed official header shapes (review F3): the binding keys its whole
+// Malformed official header shapes: the binding keys its whole
 // cascade on these fields structurally — a vendor rename/retype must refuse
 // LOUDLY with registry-unreadable (naming the session and field), never
 // silently empty the lineage/deletion cascade.
@@ -671,8 +667,7 @@ test('binding retention (design 24 §4 step 9): a session this process still ser
   // End-to-end over the REAL binding + REAL core: the archived member has
   // content and is ATTACHED to this process (live store). Deleting its content
   // must NOT clear its membership — the live-preferred session list keeps
-  // serving the row, and the archived set is the only thing hiding it
-  // (2026-13 user report: the row came back into the workspace).
+  // serving the row, and the archived set is the only thing hiding it.
   await withTempDir('archive-cleanup-resident-', async dir => {
     const projectDir = join(dir, 'proj')
     const sessionDir = join(projectDir, 'resident-1')
@@ -700,8 +695,7 @@ test('binding retention (design 24 §4 step 9): a session this process still ser
 })
 
 test('binding: assertHostSurface passes on the full surface and refuses otherwise (probe leg)', () => {
-  // Full surface (merge-round Minor-3 hardened the probe to the complete
-  // domain surface): registry + session enumeration + storage locate + the
+  // Full surface: registry + session enumeration + storage locate + the
   // `stat` existence probe the sweep depends on.
   assertHostSurface({
     workspaceRegistry: { archivedSessionIds: [], list: () => [], setState: async () => {} },
@@ -749,7 +743,7 @@ test('binding: a non-array enumeration leg refuses the read loudly (no silent na
 })
 
 /* ------------------------------------------------------------------ */
-/* Orphan-sweep blocker fix (2026-12): enumeration UNION + the decisive */
+/* Orphan-sweep protection: enumeration UNION + the decisive */
 /* hasStoredContent existence probe, over the REAL binding + REAL core. */
 /* ------------------------------------------------------------------ */
 
@@ -778,8 +772,8 @@ test('binding hasStoredContent: a resolved snapshot ⇒ true; undefined ⇒ fals
   //    skips entirely rather than guessing.
   assert.equal(await makeHostBinding({ sessionPersistence: { list: async () => [] } } as never).hasStoredContent('s1'), true)
   assert.equal(await makeHostBinding({} as never).hasStoredContent('s1'), true)
-  // 6. stat runs AS A METHOD on the service (instance-state classes — the
-  //    2026-09 detached-locate real-machine regression).
+  // 6. stat runs AS A METHOD on the service (instance-state classes — a
+  //    detached method call would lose `this`).
   const thisSensitive = {
     root: '/r',
     async stat(this: { root: string }, id: string) {
@@ -847,10 +841,10 @@ test('binding union: a failing enumeration leg refuses loudly instead of returni
 })
 
 test('binding BLOCKER: a content-bearing member missing from BOTH bulk reads keeps its membership (real binding + real core)', async () => {
-  // The reviewer's repro over the REAL seam: two archived members whose
+  // Over the REAL seam: two archived members whose
   // artifacts exist on disk but which NEITHER bulk read reports (the corpus is
   // non-empty — `other-1` — so the G1 credibility guard does not mask the
-  // probe). Pre-fix this purge cleared both memberships with clearedOrphanMembers=2.
+  // probe). Both memberships must survive the purge.
   await withTempDir('archive-cleanup-blocker-', async dir => {
     const projectDir = join(dir, 'proj')
     for (const id of ['keep-1', 'keep-2']) {

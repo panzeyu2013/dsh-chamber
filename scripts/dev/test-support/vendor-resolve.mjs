@@ -1,13 +1,12 @@
 /**
- * Shared node ESM resolve-hook factory for the test-only vendor loaders
- * (2026-12 single-sourcing pass).
+ * Shared node ESM resolve-hook factory for the test-only vendor loaders.
  *
  * Three package loaders (sidebar, settings-bridge, seed-open-in) and the
- * scripts/dev loaders all carried the same hook body — "table lookup, else
- * nextResolve; short-circuit with the mapped URL" — while differing only in
+ * scripts/dev loaders share the same hook body — "table lookup, else
+ * nextResolve; short-circuit with the mapped URL" — and differ only in
  * WHICH specifiers they map (a local double, vendor source, or fail-loud
- * stubs). The mapping genuinely belongs to each package; the hook contract
- * (shortCircuit semantics, fallthrough) does not, and now lives here.
+ * stubs). The mapping belongs to each package; the hook contract
+ * (shortCircuit semantics, fallthrough) does not, and lives here.
  *
  * Test-only: never used by the build, the bundle, or the typecheck.
  */

@@ -1,5 +1,5 @@
 /**
- * Mobile read-watermark reporter tests (plan W5). Pure node:test — no DOM, no
+ * Mobile read-watermark reporter tests. Pure node:test — no DOM, no
  * network: the official list face, fetch and storage are all injected.
  */
 import { test } from 'node:test'

@@ -1,7 +1,7 @@
 /**
- * bridge-shim.test.ts —— W-18 后半 A：E8 shim 存根与 manifest 映射一致性
+ * bridge-shim.test.ts —— E8 shim 存根与 manifest 映射一致性
  *
- * design 25 §4.4.3 E8；companion W-18。断言链：
+ * design 25 §4.4.3 E8。断言链：
  *  ① CLI 重生成（json+swift+stub 三产物到临时目录）== 提交物（stub 逐字节）；
  *  ② stub 内 invoke/push 通道数组 == bridge-manifest.json（同序）；
  *  ③ counts 一致；

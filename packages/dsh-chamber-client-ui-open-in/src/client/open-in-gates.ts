@@ -1,8 +1,8 @@
 /**
  * Pure render-gate logic for the OpenInButton (design 16 §6.3): the three
- * gates and the launch instance-id derivation, extracted from the component
- * (which imports React, CSS and a raster mark — untestable under plain node).
- * Everything here is a pure function over plain data, so the node test suite
+ * gates and the launch instance-id derivation. Everything here is a pure
+ * function over plain data — the component itself imports React, CSS and a
+ * raster mark, untestable under plain node — so the node test suite
  * (`test/launch-flow/open-in-view-model.test.ts`) covers the button's decision surface without a
  * DOM: which apps a source may use, whether a header's session maps to a
  * concrete workspace path, and the view-id → raw-registry-id strip.
@@ -19,8 +19,8 @@ import { buildOpenInViewModel } from '../shared/open-in-view-model.ts'
  *   vscode-remote is a transport capability, not a target-kind capability.
  * The bridge's `available` flag is honored as a hard filter.
  *
- * Since Batch 3 Phase 0 this is a thin adapter over the shared per-source
- * view-model (`shared/open-in-view-model.ts`) — the single decision surface
+ * This is a thin adapter over the shared per-source view-model
+ * (`shared/open-in-view-model.ts`) — the single decision surface
  * the unified open-in entry consumes; the returned apps are the input objects
  * in view-model order.
  *

@@ -2,7 +2,7 @@
 //  SidecarStartupFailureTests.swift
 //  DSHChamberTests
 //
-//  T-3（2026-12 实测残留）：端口占用等启动失败的诚实报错——退出码 + stderr
+//  端口占用等启动失败的诚实报错——退出码 + stderr
 //  摘要（含 EADDRINUSE host:port）+ 可执行提示；并钉住真实 BridgeClient →
 //  SidecarSupervisor 的 stderr 捕获接线（只测纯函数会漏掉这条捕获链）。
 //
@@ -42,7 +42,7 @@ final class SidecarStartupFailureTests: XCTestCase {
         XCTAssertTrue(failure.message.contains("127.0.0.1:17500"))
         XCTAssertTrue(failure.message.contains(SidecarStartupFailure.portInUseHint))
         // 期望值动态取自键表（sidecar.portInUseSuffix，%@ = host:port）：
-        // 机器语言是 en 时同样成立，不再钉中文片段。
+        // 机器语言是 en 时同样成立，不钉中文片段。
         XCTAssertTrue(failure.message.contains(
             NativeText.format(.sidecarPortInUseSuffix, "127.0.0.1:17500")),
             "必须带端口被占用的可执行后缀（含被占用端口）：\(failure.message)")
@@ -93,7 +93,7 @@ final class SidecarStartupFailureTests: XCTestCase {
         XCTAssertTrue(summary.hasSuffix("…"))
     }
 
-    /// 真实进程接线（G11 同款）：/bin/sh 在 stderr 打出 Node 形状的 EADDRINUSE
+    /// 真实进程接线：/bin/sh 在 stderr 打出 Node 形状的 EADDRINUSE
     /// 行后 exit 70——BridgeClient 捕获 → Supervisor fatal 文案必须含退出码、
     /// errno、端口与可执行提示。
     func testSupervisorFatalCarriesRealStderrEvidence() throws {

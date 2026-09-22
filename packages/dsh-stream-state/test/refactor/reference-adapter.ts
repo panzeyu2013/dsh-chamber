@@ -15,8 +15,8 @@
  *   3. the teardown zero-frame branch               (>=15 s life, cooldown NOT consulted)
  * plus the connection lane's reconnect, which tears the socket down with no
  * throttle at all. Nothing above the call sites enforces one-at-a-time, which is
- * why the same window can carry more than one replacement - the defects the
- * refactor encodes as DIVERGENCE entries rather than reproducing.
+ * why the same window can carry more than one replacement - defects recorded as
+ * DIVERGENCE entries rather than reproduced by the reducer.
  */
 import type { CarrierEvent, RecoveryEffect } from '../../src/state.ts'
 
@@ -146,7 +146,7 @@ export function legacyEffects(events: readonly LegacyTraceEvent[]): RecoveryEffe
 
 /** The NEW path's events, produced from the same scenario. Kept next to the
  * legacy generator so the two readings of one scenario stay visible side by
- * side; the equivalence suite asserts the intended (post-refactor) trace. */
+ * side; the equivalence suite asserts the intended trace. */
 export function modernCarrierEvents(events: readonly LegacyTraceEvent[]): CarrierEvent[] {
   const out: CarrierEvent[] = []
   const streaks = new Map<string, number>()

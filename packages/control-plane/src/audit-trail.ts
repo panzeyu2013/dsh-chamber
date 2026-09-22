@@ -1,13 +1,13 @@
 /**
- * Owner-only append-only audit trail core (design 17 §13.4.4, S24) — the
+ * Owner-only append-only audit trail core (design 17 §13.4.4) — the
  * single source for BOTH audit surfaces:
  *
  *  - packages/gateway/src/audit.ts (public request boundary), and
  *  - packages/desktop/audit-log.ts (desktop main process), reached through
  *    the desktop control-plane facade (control-plane-module.ts).
  *
- * Shared here (dedupe audit E-4/N11, 2026-09): the rotation cap, the
- * non-secret event shape, the whitelist serializer (S24 — the written JSON
+ * Shared here: the rotation cap, the
+ * non-secret event shape, the whitelist serializer (the written JSON
  * is rebuilt from a fixed field whitelist so a stray secret field a caller
  * wrongly attaches can never reach disk), and the hardened append/rotate
  * mechanics (no-follow single-link leaves with descriptor/path identity
@@ -16,7 +16,7 @@
  * wrapper keeps its own loud-but-non-fatal contract (an audit trail must
  * never take auth/connection management down with it).
  *
- * Since 2026-12 the no-follow/identity/mode/fsync primitives themselves are
+ * The no-follow/identity/mode/fsync primitives themselves are
  * single-sourced in private-file.ts (inspectPrivateLeafNoFollow,
  * openPrivateAppendNoFollow, writePrivateFdAll, removePrivateFileNoFollow,
  * ensurePrivateDirectoryNoFollow); this module keeps only the audit-specific
@@ -45,7 +45,7 @@ import {
 export const AUDIT_TRAIL_MAX_BYTES = 5 * 1024 * 1024
 
 /** One non-secret audit event. Every field is public metadata only; no field
- * may ever carry a credential, cookie or session body (S24). */
+ * may ever carry a credential, cookie or session body. */
 export interface AuditTrailEvent {
   /** ISO-8601 timestamp (e.g. new Date().toISOString()). */
   ts: string
@@ -63,7 +63,7 @@ export interface AuditTrailEvent {
   detail?: string
 }
 
-/** The ONLY fields ever written (whitelist serializer, S24). */
+/** The ONLY fields ever written (whitelist serializer). */
 const WRITTEN_FIELDS: ReadonlyArray<keyof AuditTrailEvent> = ['ts', 'event', 'sourceId', 'kind', 'transport', 'detail']
 
 /** Rebuild the JSON line from the whitelist only; throw on a missing required
@@ -134,9 +134,9 @@ function rotateIfNeeded(file: string, maxBytes: number): PrivateFileIdentity | n
  * loud-but-non-fatal wrapper contracts. */
 export function appendAuditTrailLine(file: string, line: string, maxBytes: number): void {
   if (!line.endsWith('\n')) {
-    // The historical double-newline bug (2026-09) appended a second newline
-    // here; the contract is: the line arrives COMPLETE from the serializer
-    // wrapper. Assert it so a future wrapper cannot reintroduce the bug.
+    // The contract is: the line arrives COMPLETE from the serializer
+    // wrapper, with exactly one trailing newline. Assert it so a future
+    // wrapper cannot append a second one.
     throw new Error('audit line must be a complete JSONL line ending with a newline')
   }
   const parent = dirname(file)

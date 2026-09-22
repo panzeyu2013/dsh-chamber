@@ -1,6 +1,5 @@
 /**
- * chamber patch (2026-09, Batch 2 follow-up): per-source connection-recovery
- * timing.
+ * Per-source connection-recovery timing.
  *
  * ## Why this exists
  *

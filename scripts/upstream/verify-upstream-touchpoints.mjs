@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * verify-upstream-touchpoints.mjs — 上游触点保鲜门（T4，docs/checklists/
+ * verify-upstream-touchpoints.mjs — 上游触点保鲜门（docs/checklists/
  * upstream-touchpoints.md 的机器侧）。
  *
  * 只读，唯一例外是默认模式的 C8（就地重建-还原生成物，见该条）；依赖只有 node
@@ -53,7 +53,7 @@
  *       三方一致（control-plane `PluginRow` ↔ preload/renderer `PluginRowProjection`：
  *       字段名 + role/owner 字面量并集，`?` 不属于字段名，producer 的命名类型别名在同源内
  *       解析后一起比较，声明了却读不出并集按违规；ipc-surface-mirror 只覆盖后两者）
- *   C15 悬停卡自持移植的上游退役门（硬失败；2026-09-13 登记）：chamber 的
+ *   C15 悬停卡自持移植的上游退役门（硬失败）：chamber 的
  *       `RowHoverCard` + `shared/hover-intent.ts` 取代 vendor `HoverCard`，退役
  *       条件是「上游修掉 leave 落在 dwell→commit 窗口就残留的竞态」。本门在**冻结
  *       pin** 上读 ① 该竞态形状仍在（HoverCard 组件内 onPointerLeave 的**每一个**
@@ -63,8 +63,7 @@
  *       任一不成立即红——上游修掉竞态那天必须做退役/再登记裁决（判定逻辑纯函数，
  *       单测随 args 测试同文件）
  *
- * 登记纪律：单一来源 = scripts/upstream/registry.json（本文件启动即读它，形状与迁移前
- * 的内嵌 FORKS 逐字段一致）。给某个文件打 chamber 补丁 = 在 entry.classify.patched 里登记
+ * 登记纪律：单一来源 = scripts/upstream/registry.json（本文件启动即读它）。给某个文件打 chamber 补丁 = 在 entry.classify.patched 里登记
  * （含原因）；新增 chamber 自有文件 = own；上游文件有意不镜像 = dropped。任何对 pure 文件
  * 的修改都会在此硬失败——升级/重锚后改 registry，并跑 registry-views.mjs --write 重生成
  * docs/checklists/upstream-touchpoints.md 的 GENERATED 块（每 tag 维护循环见文档 §7）。
@@ -75,9 +74,9 @@
  *   node scripts/upstream/verify-upstream-touchpoints.mjs --tags <old> <new>  # +C2
  *   node scripts/upstream/verify-upstream-touchpoints.mjs --help
  *
- * 参数守卫（2026-12 review P2）：默认模式会**就地重建并还原**生成物（唯一写盘
+ * 参数守卫：默认模式会**就地重建并还原**生成物（唯一写盘
  * 路径），因此任何未知参数/位置参数都由 verify-upstream-touchpoints-args.mjs
- * 判为用法错误并 exit 2——一个拼错的 flag 以前会被静默忽略并照跑全量写盘门。
+ * 判为用法错误并 exit 2——一个拼错的 flag 不得被静默忽略并照跑全量写盘门。
  */
 
 import { createHash } from 'node:crypto'
@@ -108,9 +107,8 @@ const PIN_FILE = join(ROOT, 'harness.commit')
  * (`src\api-path.ts`) never matches the `/`-keyed `own`/`patched`/`dropped`
  * tables, `within()` prefixes or the C10 `ALLOWED` allowlist — C1/C3 then
  * reports every file as "未登记补丁 / 未登记 dropped / 未登记 own" and the
- * Windows leg hard-fails (2026-09: `test-windows` step 8, 35 violations for the
- * first fork alone, while the Linux leg on the same commit was green). Same
- * normalization `preflight-vendor-pin.mjs` already applies.
+ * Windows leg hard-fails while the Linux leg on the same commit stays green.
+ * Same normalization `preflight-vendor-pin.mjs` already applies.
  * @param {string} from - absolute base directory.
  * @param {string} to - absolute target path.
  * @returns {string} - `/`-separated relative path.
@@ -120,7 +118,7 @@ const repoRel = (from, to) => relative(from, to).split(sep).join('/')
 // ---------------------------------------------------------------------------
 // 触点登记：单一来源 = scripts/upstream/registry.json
 // 生成视图（checklist §2/§9 的 GENERATED 块）由 registry-views.mjs 产出；
-// 本文件不再内嵌登记表（迁移前那种'两侧同源、维护时同步'的手抄已删）。
+// 本文件不内嵌登记表（避免'两侧同源、维护时同步'的手抄）。
 // ---------------------------------------------------------------------------
 
 /**
@@ -203,7 +201,7 @@ function within(rel, prefixes) {
 }
 
 // ---------------------------------------------------------------------------
-// 0 —— 参数守卫（在任何门、任何写盘动作之前；2026-12 review P2）
+// 0 —— 参数守卫（在任何门、任何写盘动作之前）
 //
 // 守卫必须最先执行：默认模式的 C8 会就地重建-还原生成物，而 `--help` 与用法
 // 错误都必须在不碰任何文件的前提下返回。判定逻辑单测在
@@ -232,7 +230,7 @@ const REGISTRY = loadRegistryOrExit()
 
 /**
  * forks[].rel 相对仓库根；upstream 相对 submodule 根。
- * 形状与迁移前内嵌 FORKS 逐字段一致（ownNotes/droppedNotes 是纯文档字段，不进 verifier）：
+ * ownNotes/droppedNotes 是纯文档字段，不进 verifier：
  * - patched: { <相对 fork 文件>: 原因 } —— 允许与上游不一致的 chamber 补丁面
  * - own:     fork 自有文件（上游无对应物），ownPrefix 覆盖整目录（如 test/）
  * - dropped: 上游文件有意不镜像（exact 或 prefix）
@@ -414,7 +412,7 @@ for (const fork of FORKS) {
     return end === -1 ? rest : rest.slice(0, end)
   }
   const mapBlock = blockOf(gatewaySrc, 'HOST_PACKAGE_PROBE_DOMAINS:', '}')
-  // 两种形态同门：① 字面表（逐行 `'<name>': '<domain>'`）；② 2026-09 起的
+  // 两种形态同门：① 字面表（逐行 `'<name>': '<domain>'`）；②
   // 注册表派生表（`Object.fromEntries(CHAMBER_HOST_PACKAGES.map(...))`）——
   // 派生形态的值唯一来源是控制面注册表，故改读 host-graph-seed.ts 的
   // `{ insert: …, probe: { method: '<domain>' } }` 行（与 chamber-seed-drift
@@ -437,13 +435,11 @@ for (const fork of FORKS) {
   }
 }
 
-// C8 —— 生成物陈旧（确定性重建-比对；2026-09 二轮改为内容门）
+// C8 —— 生成物陈旧（确定性重建-比对）
 //
-// The 2026-09 V1 review found the previous mtime comparison to be a paper
-// gate: on a fresh checkout every file carries the checkout time, so a
-// committed-but-stale bundle was never detected (exactly the BLOCKER shape:
-// the alpha.2 slot rename lived in src while lib/client.js still walked the
-// retired slots), while a freshly built tree could report a false positive
+// An mtime comparison is a paper gate: on a fresh checkout every file carries
+// the checkout time, so a committed-but-stale bundle is never detected, while
+// a freshly built tree could report a false positive
 // when the artifact was written a millisecond before its own source. Both
 // build scripts are deterministic (esbuild, fixed target/externals, LF-only
 // build-time artifacts), so the gate rebuilds each artifact
@@ -451,7 +447,7 @@ for (const fork of FORKS) {
 // restores them verbatim — the repo is left unchanged, and the only observable
 // effect is the artifact mtime. A mismatch is a hard failure: the working-tree
 // artifact no longer matches its source. `--no-artifact-rebuild` keeps the
-// old advisory mtime behavior for environments without esbuild.
+// advisory mtime behavior for environments without esbuild.
 {
   const groups = [
     {
@@ -482,8 +478,8 @@ for (const fork of FORKS) {
     {
       // The mobile browser half is a build-time artifact too (package.json
       // exports ./client -> lib/client.js) and the gateway seeds it byte for
-      // byte; a stale bundle silently keeps retired DOM anchors (2026-09 V1
-      // review BLOCKER). lib/index.js is the mirrored host half.
+      // byte; a stale bundle silently keeps retired DOM anchors.
+      // lib/index.js is the mirrored host half.
       script: 'packages/dsh-chamber-client-ui-mobile/scripts/build.mjs',
       outputs: [
         'packages/dsh-chamber-client-ui-mobile/dist/index.js',
@@ -552,9 +548,9 @@ for (const fork of FORKS) {
         rmSync(lockPath, { force: true })
       }
     }
-    // P2-15: every path that leaves the lock un-taken must be a hard failure.
+    // Every path that leaves the lock un-taken must be a hard failure.
     // A live holder already reported itself via fail(); anything else (the lock
-    // stolen between rm and retry, or a stale file whose PID is gone) used to
+    // stolen between rm and retry, or a stale file whose PID is gone) must not
     // fall through this no-op branch and end the run green WITHOUT rebuilding
     // the artifacts the gate exists to verify.
     if (!lockTaken) {
@@ -690,8 +686,7 @@ for (const fork of FORKS) {
     // The manifest is DERIVED local state (gitignored, rewritten by
     // `bundle:dsh`); a mismatch means this worktree has not rebundled yet, not
     // that the anchored line is wrong. The tracked lockfile stays the
-    // authority, so this is loud but advisory (2026-09 merge-time finding:
-    // a stale workdir turned every post-merge gate run red).
+    // authority, so this is loud but advisory.
     warn(`C10 本工作目录的 bundle 清单 ${manifestVersion} 落后于锁文件 ${current}（派生本地状态；跑 bundle:dsh 刷新即可，不影响锚）`)
     console.log(`✓ C10 版本锚 = ${current}（单一来源 = bundle 锁文件；六锚 + 3 fork 一致）`)
   } else {
@@ -766,10 +761,9 @@ for (const fork of FORKS) {
     }
 
     // Derived LOCAL state that a fresh checkout never has: the scan polices
-    // production source/scripts/config only, so walking it made a clean local
+    // production source/scripts/config only, so walking it would make a clean local
     // worktree red on literals inside an old packaged app or a dev dsh-home
-    // checkout (2026-09 local replay: 232 hits, all 0.1.1-rc.2, zero in tracked
-    // files). CI was unaffected because none of it exists there.
+    // checkout. CI is unaffected because none of it exists there.
     // .gitignore is the single source for that set, so ask git for it — and use
     // ONLY that answer when git provided one. `--exclude-per-directory=.gitignore`
     // (not `--exclude-standard`) keeps the set down to the repo's own ignore
@@ -900,7 +894,7 @@ for (const fork of FORKS) {
     } else if (stale.length > 0) {
       fail(`C10 版本锚不一致: ${stale.join('; ')}`)
     } else if (skipped.length > 0) {
-      // P2-16: the degraded form must never read as a full pass. Default mode
+      // The degraded form must never read as a full pass. Default mode
       // fails (the tree is not installed); the CI pre-install step passes
       // --no-artifact-rebuild, which is the one documented exemption — and even
       // there the summary says PARTIAL instead of printing the ✓ line.
@@ -976,7 +970,7 @@ for (const fork of FORKS) {
   reportFindings('C14', 'manifest 三方字段集镜像 + rows 行类型（plugin-sync.ts / preload.cts / renderer/global.d.ts / control-plane protected-plugins.ts）', c14)
 }
 
-// C15 —— 悬停卡自持移植的上游退役门（硬失败；2026-09-13 登记，design 06 §7）
+// C15 —— 悬停卡自持移植的上游退役门（硬失败，design 06 §7）
 //
 // chamber 的侧栏行卡片用自己的 `RowHoverCard` + `shared/hover-intent.ts` 取代
 // vendor 的 `ui-primitives HoverCard`：vendor 原子以**上一次已提交的 `open`**
@@ -996,7 +990,7 @@ for (const fork of FORKS) {
 // 已挂的 sibling 测试文件，新开测试文件不会进 CI）。登记行见
 // docs/checklists/upstream-touchpoints.md §4/§6。
 //
-// 防伪纪律（2026-09-13 对抗验证后的加固）：形状与常数都读**去注释 + 去字符串/
+// 防伪纪律：形状与常数都读**去注释 + 去字符串/
 // 模板字面量**后的代码投影（诱饵字符串/注释不能伪证）；形状判定限定在 HoverCard
 // 组件体内、并对每个 arm 调用点单独判定（同语句里无关的 `open &&` 不算守卫）；
 // 常数取值必须唯一（零命中=漂移，多值=歧义，都硬失败）。

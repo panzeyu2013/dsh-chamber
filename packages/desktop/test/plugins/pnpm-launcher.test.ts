@@ -44,7 +44,7 @@ test('resolvePnpmLauncher: win32 runs the pnpm script through execPath', () => {
       env: {},
     },
   )
-  // No launcher may ever name a .cmd/.bat shim (the defective pre-fix spawn).
+  // No launcher may ever name a .cmd/.bat shim.
   const launcher = resolvePnpmLauncher({
     platform: 'win32',
     execPath: 'C:\\node.exe',
@@ -142,7 +142,7 @@ test('windowsPnpmSearchDirs: missing bundled copy and empty env roots are skippe
 
 test('plugin-sync packDirectory spawns the resolved launcher, never the .cmd shim', () => {
   // The pure resolver only matters if the call site uses it: pin the wiring so
-  // the defective `process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm'` spawn
+  // a `process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm'` spawn
   // cannot come back (source-assertion style, same as the IPC surface mirror).
   const source = readFileSync(join(import.meta.dirname, '..', '..', 'plugin-sync.ts'), 'utf8')
   assert.equal(/process\.platform === 'win32' \? 'pnpm\.cmd'/.test(source), false)

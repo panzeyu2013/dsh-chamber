@@ -1,5 +1,5 @@
 /**
- * Test fixture shared by the packages/renderer/test/lifecycle/shell*.test.ts split —
+ * Test fixture shared by the packages/renderer/test/lifecycle/shell*.test.ts —
  * the controllable
  * `@deepseek-ai/dsh-client-web` face shell.ts consumes.
  *
@@ -11,7 +11,7 @@
  * it is test-only — the build/typecheck never load it.
  */
 let bootError = undefined
-// Loader-entry face of the failed boot (T15): tests hand in the exact sweep
+// Loader-entry face of the failed boot: tests hand in the exact sweep
 // result the chamber overlay must turn into a plugin-id list.
 let loaderEntries = []
 let runError = undefined
@@ -129,7 +129,7 @@ export class AppWebEntry {
   }
 }
 
-// C3 gate face (2026-09): mirrors the slice of the real ClientModuleSystem
+// Gate face: mirrors the slice of the real ClientModuleSystem
 // that shell.ts consumes after C3 — `manifest` (the chamber boot row) and
 // `prefetch(id)`. prefetch pushes an event synchronously so tests can pin
 // call order, and honors two knobs: an injected error (the shell gate
@@ -161,7 +161,7 @@ export function ensureWebModuleSystem() {
   // must precede any host-graph fetch / bundle preload). The real module-system
   // install itself is not exercised here (that logic is boot.ts's; verified
   // by typecheck/build) — this only simulates its failure gate and hands back
-  // the C3 face above (shell.ts fireChamberPrefetch / awaitBeforeLoad).
+  // the gate face above (shell.ts fireChamberPrefetch / awaitBeforeLoad).
   eventLog.push('ensure')
   if (moduleSystemError !== undefined) throw moduleSystemError
   return moduleSystemFace
@@ -180,7 +180,7 @@ export function __testSetModuleSystemError(value) {
   moduleSystemError = value
 }
 
-/** Make the C3 chamber prefetch reject (shell gate swallows; create-side loud untested). */
+/** Make the chamber prefetch reject (shell gate swallows; create-side loud untested). */
 export function __testSetChamberPrefetchError(value) {
   chamberPrefetchError = value
 }
@@ -281,7 +281,7 @@ export function __testSetSessionsOpenError(value) {
   sessionsOpenError = value
 }
 
-/** The failed boot's loader entries (T15 sweep: `{ options.name, fiber.state }`). */
+/** The failed boot's loader entries (sweep: `{ options.name, fiber.state }`). */
 export function __testSetLoaderEntries(value) {
   loaderEntries = value ?? []
 }

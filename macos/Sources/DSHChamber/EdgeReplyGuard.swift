@@ -2,9 +2,8 @@
 //  EdgeReplyGuard.swift
 //  DSHChamber
 //
-//  S14（2026-12 审计）：edge 应答「恰好一次」守卫此前是无限增长的
-//  Set<Int64>——长会话（edgeId 单调递增）下内存无界。改为有界 FIFO：满员
-//  淘汰最旧一个 id。窗口外重复应答不再被识别为重复，但 sidecar 侧
+//  edge 应答「恰好一次」守卫：有界 FIFO，满员淘汰最旧一个 id——长会话
+//  （edgeId 单调递增）下内存有界。窗口外重复应答不被识别为重复，但 sidecar 侧
 //  pendingEdges 首次应答即出表，窗口外重复本就无对端可伤（协议违约，非正确性
 //  依赖）。
 //

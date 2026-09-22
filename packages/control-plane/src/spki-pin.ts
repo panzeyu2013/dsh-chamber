@@ -5,14 +5,13 @@
  * fingerprint and BOTH the desktop login probe and the reverse proxy reject
  * any peer whose public key does not match.
  *
- * These helpers used to exist as byte-identical copies in
- * desktop/gateway-provider.ts and control-plane/proxy-forward.ts, kept in
- * sync by a comment ("the packaged desktop cannot import the control
- * plane"). The desktop's dual-path facade (control-plane-module.ts +
- * build:control-plane dist artifact) removed that packaging constraint, so
- * the copy was deleted and both owners import this module.
+ * Both owners (desktop/gateway-provider.ts and
+ * control-plane/proxy-forward.ts) import this module; the desktop's dual-path
+ * facade (control-plane-module.ts + build:control-plane dist artifact) carries
+ * it across the packaging boundary, so the two owners do not keep
+ * byte-identical copies in sync by comment.
  *
- * Mechanism note (verified on Node 22.22.3): checkServerIdentity's error
+ * Mechanism note: checkServerIdentity's error
  * return is silently IGNORED when `rejectUnauthorized: false`, and with
  * `rejectUnauthorized: true` an untrusted (internal-CA) chain fails BEFORE
  * checkServerIdentity runs — so neither combination can enforce a pin against

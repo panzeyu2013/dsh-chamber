@@ -3,9 +3,7 @@
  * → reconnect with jittered backoff, real dsh identity verification through the
  * tunnel, ring-buffer bounds, disconnect, provider routing / askpass-lease /
  * ready-heartbeat and the reconnectStaleTransports leaf. Sibling part:
- * transport-manager (harness: test/support); the former per-topic
- * transport-exec-and-registry / transport-providers / transport-reconnect
- * files were merged into the two survivors (2026-12 trim round 2).
+ * transport-manager (harness: test/support).
  */
 
 import { test, type TestContext } from 'node:test'
@@ -200,7 +198,7 @@ test('slow re-probe: burst exhaustion lands on error but keeps retrying and reco
   assert.equal(status.requiresUserAction, false, 'burst exhaustion is not a user-action failure')
   assert.ok(status.logSummary.includes('retrying periodically'), 'the projection announces the slow re-probe')
   assert.ok(manager.logs('s1').some(entry => entry.message.includes('slow re-probe')), 'the slow re-probe is logged')
-  // 静默期：快速突发已耗尽，错误态下不再立即重试（慢速重探尚未到点）。
+  // 静默期：快速突发已耗尽，错误态下不立即重试（慢速重探尚未到点）。
   await sleep(15)
   assert.equal(spawnCalls.length, maxRetryAttempts + 1, 'no fast retries after error')
   // 慢速重探：底层条件修复后无需用户操作自动恢复。
@@ -322,9 +320,9 @@ test('a real dsh identity handshake through the tunnel destination is required f
   manager.dispose()
 })
 test('a session-list-heavy dsh destination attaches via the fixed-size identity probe', async t => {
-  // 2026 probe-contract regression: the endpoint's session/list answer grows
-  // with session data (here a 1 MiB+ list that would overflow the legacy
-  // probe cap). The identity probe never reads it, so attach stays healthy.
+  // The endpoint's session/list answer grows with session data (here a 1 MiB+
+  // list that would overflow the legacy probe cap). The identity probe never
+  // reads it, so attach stays healthy.
   const dir = tempDir(t)
   let sessionListCalls = 0
   const padding = 'x'.repeat(1024 * 1024 + 64)
@@ -477,7 +475,7 @@ test('probeChamberHostLive classifies every registry host package the same way: 
   // Parameterized over the control-plane registry (CHAMBER_HOST_PACKAGES), so a
   // package added to the registry is covered automatically — the probe is
   // generic (method + args from the descriptor) and must not grow a per-package
-  // branch. Same discipline as the deleted per-package probes:
+  // branch. Classification:
   // 200 + ok:true = the running instance resolved the method; 404 = the gateway
   // does not claim the namespace (injected, restart pending); no answer /
   // unclassifiable body = unknown, never a guessed claim.
@@ -491,8 +489,8 @@ test('probeChamberHostLive classifies every registry host package the same way: 
   const silentPort = await listen(t, () => { /* never answer */ })
   // A well-formed envelope with result.ok:false = the gateway answered but the
   // method is not resolvable: deterministic not-live (the running instance
-  // booted before the injection). Kept from the deleted per-package probes —
-  // the classification lives in the ONE generic path now.
+  // booted before the injection). The classification lives in the ONE generic
+  // path.
   const unresolvedPort = await listen(t, (req, res) => {
     readBody(req, body => {
       const envelope = JSON.parse(body) as { rpcId?: unknown }
@@ -706,12 +704,10 @@ test('onStatusChanged pushes non-secret projections and unsubscribe works', asyn
 })
 
 // ---------------------------------------------------------------------------
-// Provider routing / askpass-lease / ready-heartbeat suite. Merged (2026-12
-// trim round 2) from the deleted test/transport/transport-providers.test.ts and
-// test/transport/transport-reconnect.test.ts. The lease-lifecycle primitives
-// (helper generation, exact-owner spawn, five-generation retention) stay in
-// ssh-provider.test.ts:96-259; the frame-level askpass env contract in
-// ssh-provider-exec.test.ts:184.
+// Provider routing / askpass-lease / ready-heartbeat suite. The lease-lifecycle
+// primitives (helper generation, exact-owner spawn, five-generation retention)
+// are pinned in ssh-provider.test.ts:96-259; the frame-level askpass env
+// contract in ssh-provider-exec.test.ts:184.
 // ---------------------------------------------------------------------------
 
 /** A minimal transport-provider spec projection for the process-less providers. */

@@ -1,6 +1,6 @@
 /**
  * dragOverState：三处拖拽闭包（服务器分组 / 工作区 / 会话行）共用的「over 目标」
- * 推进（2026-12 单源化）。不变量：目标未变时返回**原对象**（避免无变化的 state churn）。
+ * 推进。不变量：目标未变时返回**原对象**（避免无变化的 state churn）。
  *
  * Run directly: node packages/dsh-chamber-client-ui-sidebar/test/session-rows/drag-over-state.test.ts
  */

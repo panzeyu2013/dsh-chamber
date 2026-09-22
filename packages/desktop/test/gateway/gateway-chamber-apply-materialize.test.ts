@@ -1,7 +1,7 @@
 /** gateway provider — part 4: gatewayChamberApplyBatch / gatewayChamberMaterialize — the apply
  *  flow, refusals and partial outcomes, settle/restart polls, tarball upload headers and the
  *  client-side pre-flight gates (siblings: gateway-provider / gateway-session-spki; part 4b carries
- *  the syncGatewayChamberPlugins security/fail-closed assertions merged in during the round-2 trim). */
+ *  the syncGatewayChamberPlugins security/fail-closed assertions). */
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -11,7 +11,7 @@ import { CERT_A, KEY_A, PIN_B } from '../support/gateway-tls-fixtures.ts'
 import { startHttpsProbeServer, startSyncHttpServer } from '../support/gateway-test-servers.ts'
 
 // ---------------------------------------------------------------------------
-// Gateway batch apply + folder materialize (design 21 §6.5, plan Phase 4.6)
+// Gateway batch apply + folder materialize (design 21 §6.5)
 // ---------------------------------------------------------------------------
 
 /** JSON helper used by the fixture servers below. */
@@ -737,9 +737,8 @@ test('gatewayChamberMaterialize: an SPKI-pinned https gateway receives zero byte
 })
 
 // ---------------------------------------------------------------------------
-// part 4b — syncGatewayChamberPlugins security / fail-closed (merged from
-// gateway-chamber-sync.test.ts, round-2 trim: same production module
-// gateway-provider.ts, this integration suite kept).
+// part 4b — syncGatewayChamberPlugins security / fail-closed, integration
+// level against the same production module gateway-provider.ts.
 // ---------------------------------------------------------------------------
 
 const SYNC_GRAPH: LocalChamberHostPackage = {

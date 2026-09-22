@@ -1,10 +1,9 @@
 /**
- * Discard-authorization decisions of the remove-worktree dialog
- * (2026-09-11 review-fix, F1/F2).
+ * Discard-authorization decisions of the remove-worktree dialog.
  *
  * A removal needs at most ONE explicit discard authorization, and BOTH ways of
  * needing it — a dirty working tree (design 08 §5.3) and a submodule checkout
- * Git refuses to drop without force (2026-09, refusal code
+ * Git refuses to drop without force (refusal code
  * `worktree-submodules`) — are collected by the official `RiskConfirmation` and
  * then ride the SAME `discardChanges` wire flag (the host's `--force`).
  *
@@ -12,8 +11,8 @@
  * HOLDS that kind in state for as long as the gate is up. The answer goes back
  * to `null` the moment the acknowledgement it named is ticked, so deriving the
  * gate's own `open` from it would dismiss the gate before its confirm could ever
- * run — the confirm became dead code and the removal needed a second `Remove`
- * click (2026-09-11 review-fix, F1). `discardAuthorized` is the other half:
+ * run — the confirm would become dead code and the removal would need a second
+ * `Remove` click. `discardAuthorized` is the other half:
  * whether the removal may send `discardChanges: true`.
  */
 

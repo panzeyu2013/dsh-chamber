@@ -7,8 +7,7 @@
  * the managed instance — so neither can import the other. This test reads the
  * host side's SOURCE TEXT (the authoritative strings) and fails on any drift of
  * the namespace, the method list, the qualified method names, the error-code
- * set, the `@Remote` surface or the icon media types. It replaces the retired
- * route/byte mirror (`shared/open-in-app-protocol.ts`, design 20 §8).
+ * set, the `@Remote` surface or the icon media types.
  */
 
 import { test } from 'node:test'

@@ -2,14 +2,14 @@
 //  ShellPageFactsTests.swift
 //  DSHChamberTests
 //
-//  S3：ShellPageFacts —— 页面 document 是语言/主题的唯一事实源
+//  ShellPageFacts —— 页面 document 是语言/主题的唯一事实源
 //  （语言 = documentElement.lang；主题 = body[data-ds-dark-theme] /
 //  html color-scheme）。本文件不构造 WKWebView：钉 resolve 解析、store 的
 //  合并/幂等/revision/持久化、系统语言与外观策略，以及内联 JS 的形状。
 //
 //  载荷契约（与 ShellPageFactsScript 的 postMessage 载荷同值）：
 //    - "lang": String；空串/缺失/NSNull = 不构成语言事实（保留旧值）
-//    - "pageIsDark": Bool；缺失 = 不改变旧暗色事实（首次出现默认 false）
+//    - "dark": Bool；缺失 = 不改变旧暗色事实（首次出现默认 false）
 //
 import XCTest
 import AppKit

@@ -343,7 +343,7 @@ test('a plaintext mirror written without crypto still loads when crypto becomes 
 
 /** Raw-base64 crypto adapter — the SHAPE the real Electron safeStorage
  * adapter produces (`encryptString(...).toString('base64')`, no test prefix):
- * the S22-flip cases must exercise exactly what the shell writes. */
+ * the flip cases must exercise exactly what the shell writes. */
 function rawBase64Crypto(): SecretCryptoAdapter {
   return {
     isAvailable: () => true,
@@ -369,10 +369,9 @@ test('P1-1/S-29: an encrypted mirror loaded without crypto is loud + fail-closed
     assert.equal((stored as { storage?: unknown }).storage, 'safeStorage', 'the explicit discriminator, not blob punctuation, controls decoding')
     // Startup 2: crypto UNAVAILABLE (cross-flavor / safeStorage availability
     // flip) — the blobs must NOT silently load as the plaintext credentials
-    // (their base64 passes the ASCII/length gates — the exact violation S22
-    // fixes). S-29: this is NOT a corrupt file — it is exactly what the
-    // Electron flavor writes; renaming it away would make those credentials
-    // unreadable on the other side too.
+    // (their base64 passes the ASCII/length gates). This is NOT a corrupt file
+    // — it is exactly what the Electron flavor writes; renaming it away would
+    // make those credentials unreadable on the other side too.
     const notice = configureGatewaySecretStore(file)
     assert.notEqual(notice, null, 'a crypto-unavailable load of encrypted blobs is LOUD, never silently plaintext')
     assert.match(notice ?? '', /safeStorage-encrypted by the Electron flavor/, 'the notice is precise and actionable (S-29)')
@@ -415,7 +414,7 @@ test('S22: a pure-alphanumeric safeStorage ciphertext is still never mistaken fo
 
     const notice = configureGatewaySecretStore(file)
     assert.notEqual(notice, null, 'crypto unavailable + safeStorage tag fails closed')
-    // S-29: precise cross-flavor wording, file preserved in place (no .corrupt).
+    // Precise cross-flavor wording, file preserved in place (no .corrupt).
     assert.match(notice ?? '', /safeStorage-encrypted by the Electron flavor/)
     assert.equal(existsSync(`${file}.corrupt`), false)
     assert.equal(existsSync(file), true)
@@ -557,9 +556,9 @@ test('a legacy gateway-tokens.json beside a valid bound v3 file stays preserved 
   try {
     // Simulate the residue of a migration whose current bound write succeeded
     // but whose legacy rmSync failed: BOTH files exist, the v3 file is authoritative.
-    // (The store cannot manufacture this state itself — a migration only runs
-    // on a MISSING current file, which is exactly the bug being fixed: the leftover
-    // was never retried because later startups loaded the bound v3 file directly.)
+    // (The store cannot otherwise reach this state — a migration only runs on a
+    // MISSING current file, so the leftover is never retried once later startups
+    // load the bound v3 file directly.)
     writeFileSync(legacy, JSON.stringify({ schemaVersion: 1, tokens: { 'r-token-1': TOKEN } }))
     writeFileSync(file, JSON.stringify(boundPlaintextFile({ 'r-token-2': `${TOKEN}2` }, {})))
     assert.equal(configureGatewaySecretStore(file, crypto), null, 'the bound v3 file remains authoritative')
@@ -654,9 +653,9 @@ test('gateway validateSpec normalizes http for shipped kinds and refuses future 
     assert.equal(viaKind.transport, 'http')
     assert.equal(viaKind.insecureHttp, false)
   }
-  // kind 'dsh' over http is REFUSED — the dsh×http combination is disabled
-  // (2026-09): direct-attaching a dsh web profile over http is hard-blocked
-  // on the 0.1.2 line (browser-auth launch token unrecoverable remotely);
+  // kind 'dsh' over http is REFUSED — the dsh×http combination is disabled:
+  // direct-attaching a dsh web profile over http is hard-blocked
+  // (browser-auth launch token unrecoverable remotely);
   // ssh is the only dsh transport.
   assert.equal(gatewayProvider.validateSpec({ id: 'g1d', label: 'g', kind: 'dsh', transport: 'http', host: 'dsh.example.com', remotePort: 3080 }), null, 'dsh×http refused')
   // insecureHttp normalized to a strict boolean.
@@ -671,7 +670,7 @@ test('gateway validateSpec normalizes http for shipped kinds and refuses future 
   assert.equal(gatewayProvider.validateSpec({ id: 'g3b', label: 'g', kind: 'dsh', transport: 'ssh', host: 'gw.example.com', remotePort: 3080 }), null)
   // transport omitted + kind 'dsh' → inferred ssh → refused (this provider
   // serves http + gateway only); a missing kind defaults to {dsh, ssh} →
-  // refused; an explicit dsh×http is refused by the 2026-09 disable.
+  // refused; an explicit dsh×http is refused.
   assert.equal(gatewayProvider.validateSpec({ id: 'g4', label: 'g', kind: 'dsh', host: 'dsh.example.com', remotePort: 3080 }), null)
   assert.equal(gatewayProvider.validateSpec({ id: 'g5', label: 'g', host: 'gw.example.com', remotePort: 443 }), null)
   // A future target needs its own provider: accepting it here would let the
@@ -743,7 +742,7 @@ test('verifyUp: the gateway-owned runtime identity answers ok even while managed
     assert.equal(result.ok, true, 'the gateway boundary remains serviceable independently of managed dsh')
     assert.equal(seenMethod, 'GET')
     assert.equal(seenUrl, '/chamber/runtime/status')
-    // P2-5: a direct-probe SUCCESS is the pure {ok:true} shape (the ssh
+    // A direct-probe SUCCESS is the pure {ok:true} shape (the ssh
     // provider's contract) — never a stray statusCode:undefined key that
     // deep-compare callers would trip on.
     assert.deepEqual(result, { ok: true }, 'the success result is exactly {ok:true}')

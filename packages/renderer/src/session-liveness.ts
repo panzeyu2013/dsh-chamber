@@ -1,7 +1,7 @@
 /**
- * 会话运行位活性守卫（2026-12；Swift 原生版 ui-chat「深度求索中」卡死根因修复）。
+ * 会话运行位活性守卫（Swift 原生版 ui-chat「深度求索中」卡死根因修复）。
  *
- * ## 缺陷（已定位，两 flavor 共享）
+ * ## 缺陷（两 flavor 共享）
  *
  * ui-chat 的运行指示器由官方 session 的 running 位驱动
  * （`dsh-client-ui-chat`: `const running = useSession(s => s.running)` →
@@ -27,15 +27,15 @@
  *   shared/session-fact-reconcile.ts 的 `correct` seam）。
  * - **L2 有界**：仅当 L1 的**回执**证明对账通道已坏（refresh 失败，或请求后
  *   `refreshOutcomeTimeoutMs` 内没有回执）时，才升级
- *   `reconnectInstanceConnection`（复用既有 S2 watchdog 的纪律与记账）。
+ *   `reconnectInstanceConnection`（复用既有 watchdog 的纪律与记账）。
  * - **L3 可见**：L2 用尽且仍无「健康回执」时，交给 App 渲染非模态提示
  *   （绝不自动重载；与 mobile `session-stall.ts` 同纪律：用户选择才动作）。
  *
  * ## 为什么不能只按「静默时长」升级（本模块的核心取舍）
  *
- * 长工具执行与长推理的合法静默（本仓实测 `ttftMs=75s`，长工具可数分钟）与
+ * 长工具执行与长推理的合法静默（`ttftMs=75s`，长工具可数分钟）与
  * 真卡死在 App 层不可区分；每次 reconnect 都要重放全部打开会话的 baseline，
- * 误升级会引入比原缺陷更糟的 reconnect 风暴。因此升级的唯一依据是
+ * 误升级会引入 reconnect 风暴。因此升级的唯一依据是
  * **「权威对账拿不到结论」**，而不是「沉默很久」。L1 是读操作、幂等、单飞，
  * 所以可以在长时间 running 上廉价重复（`refreshCoalesceMs` 限频、
  * `maxRefreshRequests` 封顶）。
@@ -76,7 +76,7 @@ export interface SessionFactReconcileFacts {
    * **既不升级也不清等待**——守卫保留「等回执」计时，持续拿不到权威结论仍会在
    * 超期后升级；同时把升级期限挂起（见 {@link SessionLivenessRecord.unknownAbsorbedAt}），
    * 直到"吸收之后再发过一次 L1"才重新起算，使单次探针抖动不会在 coalesce 允许
-   * 下一次 L1 之前就制造假 reconnect（2026-12 二轮复核 + 独立复核的时间线仿真）。
+   * 下一次 L1 之前就制造假 reconnect。
    */
   readonly verdict?: 'converged' | 'stale' | 'unknown'
   /** 本轮链内尝试次数（诊断用）。 */
@@ -95,10 +95,10 @@ export interface SessionLivenessSourceInput {
    * App 侧共享重连账本的事实：该来源此刻**不可执行** L2（同一 tick 里另一条臂
    * 刚重连过，或落在 60s 退避窗内）。守卫据此**不派遣**，而不是派遣后被 App 丢弃
    * ——被丢弃的派遣已经在守卫里记账（`lastReconnectDispatchAt` 置位、等待计时清零），
-   * 会让这条臂静默整个退避窗且 L1 一并停摆，同时 no-op 账不增长（2026-12 独立
-   * 复核抓出的记账缺口）。账本事实由 App 提供（它拥有 S2/fallback 两条臂的写入）。
+   * 会让这条臂静默整个退避窗且 L1 一并停摆，同时 no-op 账不增长。
+   * 账本事实由 App 提供（它拥有两条臂的写入）。
    *
-   * 边界（二轮复核记录为已知形态）：另一条臂**每 ≤60s 都在重连**时，这条臂始终不允许
+   * 边界（已知形态）：另一条臂**每 ≤60s 都在重连**时，这条臂始终不允许
    * 派遣，L3 的 no-op 出口也不会增长——此时"自愈动作"由那条臂持续执行，本臂只保留 L1
    * 对账（读 + 可能的权威写回）。不把它计成假 L3：用户看到的应该是那条臂的失败面，而不是一条"我重连过但
    * 没用"的重复横幅。
@@ -121,7 +121,7 @@ export interface SessionLivenessConfig {
   /** 同一来源两次 L1 之间的最小间隔（限频；官方 refresh 是 disk walk）。 */
   readonly refreshCoalesceMs: number
   /** 滚动窗口 {@link refreshWindowMs} 内最多请求几次 L1（**不是**整个 running 时段的总量：
-   *  总量封顶会让长任务的第 4 分钟之后彻底失明——2026-12 独立复核抓出的缺陷）。 */
+   *  总量封顶会让长任务的第 4 分钟之后彻底失明）。 */
   readonly maxRefreshRequests: number
   /** L1 配额的滚动窗口（默认 10 分钟）。 */
   readonly refreshWindowMs: number
@@ -134,7 +134,7 @@ export interface SessionLivenessConfig {
   /**
    * 连续 no-op 派遣达到该次数后允许 L3（默认 3；配合 reconnectBackoffMs 约 15 分钟）。
    * L2 杠杆长期不可用（shell/ctx/connection 缺失）时，只看 reconnectCount 永远不满足
-   * L3 门 ⇒ 用户永远看不到提示（2026-12 三轮复核指出的死路）。
+   * L3 门 ⇒ 用户永远看不到提示。
    */
   readonly maxNoopReconnects: number
   /** L2 用尽后多久仍无健康回执才亮 L3 提示。 */
@@ -142,15 +142,15 @@ export interface SessionLivenessConfig {
 }
 
 /**
- * 默认时序。取值依据（2026-12 实测）：活跃 turn 期间宿主 durable 进展
+ * 默认时序。取值依据：活跃 turn 期间宿主 durable 进展
  * 5–21s/次（median 11s，161s 13 次），而合法静默可达 75s（TTFT）到数分钟
- * （长工具）——L1 门槛取 60s（2026-12 彻底修复后由「事实年龄」驱动：动作只是读 +
+ * （长工具）——L1 门槛取 60s（由「事实年龄」驱动：动作只是读 +
  * 官方 refresh，**不是**升级；每个 running 时段的探测次数仍由 coalesce/配额封顶，
  * 60s 与 120s 的稳态次数相同，只是首次探测提前一个 coalesce 窗 ⇒ 陈旧位更快掉落）；
  * L1 等回执 190s 覆盖对账链最坏时延（2 次尝试 × (refresh 20s + verify 65s) +
  * 退避 1.5s ≈ 171.5s；相位预算拆开后不能再取 90s，否则慢宿主会被误判；verify 必须
  * 覆盖 N=2 的两次串行探针，故 65s）；L2 退避
- * 300s 是「重连是重动作」的量级（同类的 S2 臂用 60s，但那条臂每 ~2min 就会自己重连，
+ * 300s 是「重连是重动作」的量级（另一条 watchdog 臂用 60s，但那条臂每 ~2min 就会自己重连，
  * 不需要同值）；L3 在 L2 后 120s。
  */
 export const SESSION_LIVENESS_DEFAULTS: SessionLivenessConfig = {
@@ -158,8 +158,8 @@ export const SESSION_LIVENESS_DEFAULTS: SessionLivenessConfig = {
   // 生产 tick 30s（AGGREGATE_FALLBACK_POLL_MS）+ 门槛 60s ⇒ L1 落在 60/260/460s…
   // （**均匀**铺开；coalesce = refreshWindowMs / maxRefreshRequests ⇒ 每 10 分钟仍
   // 至多 3 次，与门槛 120s 的稳态成本相同，只是首次探测提前一个 coalesce 窗）。
-  // 2026-12 彻底修复：本轮动作从「只升级」变成「refresh + 本地判定 + 权威探针 +
-  // 写回」，修复成功后陈旧位立刻掉落、守卫记录随之清除 —— 更短的首探**不**增加稳态
+  // 动作是「refresh + 本地判定 + 权威探针 +
+  // 写回」，对账成功后陈旧位立刻掉落、守卫记录随之清除 —— 更短的首探**不**增加稳态
   // 成本，只把可见陈旧窗口从 ~200s 级压到 60s 级。
   refreshCoalesceMs: 200_000,
   maxRefreshRequests: 3,
@@ -167,10 +167,10 @@ export const SESSION_LIVENESS_DEFAULTS: SessionLivenessConfig = {
   // 必须 > 对账链最坏回执时延（2 次尝试 × (refresh 20s + verify 65s) + 退避 1.5s
   // ≈ 171.5s，见 sidebar/src/shared/session-fact-reconcile.ts 的默认值）：相位预算
   // 拆开之后，90s 会在「一切正常但宿主很慢」时误判成「拿不到结论」⇒ 假 L2
-  // （2026-12 三轮自审发现的跨模块不变量，由 wiring 测试锁住；四轮复核把 verify
-  // 抬到覆盖 N=2 的两次串行探针后，本值同步抬到 190s）。
+  // （跨模块不变量，由 wiring 测试锁住；verify
+  // 覆盖 N=2 的两次串行探针，本值因而取 190s）。
   // 本值 190s < coalesce 200s：单次「探针无结论」（unknown）由 unknownAbsorbedAt
-  // 挂起期限，直到下一次 L1 发出，否则它必然抢在下一次 L1 之前到点（2026-12 独立复核实测）。
+  // 挂起期限，直到下一次 L1 发出，否则它必然抢在下一次 L1 之前到点。
   refreshOutcomeTimeoutMs: 190_000,
   reconnectBackoffMs: 300_000,
   maxReconnects: 1,
@@ -186,10 +186,10 @@ export interface SessionLivenessRecord {
    */
   generation: string
   /**
-   * 运行会话 id → **首次被观测到 running 的时刻**（每会话计时，2026-12 复核后
-   * 的第二版身份模型）。原版按「running 集合字符串」重起算，看似能挡「A 结束、
+   * 运行会话 id → **首次被观测到 running 的时刻**（每会话计时）。
+   * 按「running 集合字符串」重起算看似能挡「A 结束、
    * B 开始继承旧状态」，但同一来源下出现**短会话反复开始/结束**时会把一个真正
-   * 卡住的长会话的时段反复重置 ⇒ 长会话永不进入对账（保护被旁路）。现在：
+   * 卡住的长会话的时段反复重置 ⇒ 长会话永不进入对账（保护被旁路）。因此：
    * 只有「当前集合与上一 tick **不相交**」（真换代）或代际变化才重置计数器；
    * 有会话存活就保留它的计时。
    */
@@ -203,7 +203,7 @@ export interface SessionLivenessRecord {
    *
    * 默认 `maxReconnects = 1` 下真实重连会把预算用满，于是本字段唯一生效的场景是
    * 「每次派遣都是 no-op」（shell/ctx/connection 缺失）——那时它防止**每个 tick**
-   * 都重连一次并饿死 L1（2026-12 三轮复核实测：退避=0 时 116 次重连/小时、L1 只剩
+   * 都重连一次并饿死 L1（退避=0 时 116 次重连/小时、L1 只剩
    * 1 次）。**不要把它当冗余状态删掉**。
    */
   lastReconnectDispatchAt?: number
@@ -211,10 +211,9 @@ export interface SessionLivenessRecord {
   lastRefreshRequestedAt?: number
   /**
    * 「仍在等回执」的起始时刻（升级依据）。**刻意不被 coalesce 重复请求刷新**：
-   * 若每次请求都重置它，只要 coalesce < 等回执期限（生产值 200s < 190s 不成立时
-   * 才需要担心；此处的原始缺陷发生在早期 60s/90s 组合下），
-   * 对账通道静默时这个计时器永不到期 ⇒ L2 永不触发（本守卫最初的实现缺陷，
-   * 由 lifecycle 测试抓出）。**唯一例外**是 {@link SessionLivenessRecord.unknownAbsorbedAt}
+   * 若每次请求都重置它，只要 coalesce < 等回执期限，
+   * 对账通道静默时这个计时器永不到期 ⇒ L2 永不触发
+   * （lifecycle 测试锁住这一不变量）。**唯一例外**是 {@link SessionLivenessRecord.unknownAbsorbedAt}
    * 挂起后的「之后新发 L1」重新起算——只发生一次。
    */
   awaitingOutcomeSince?: number
@@ -224,10 +223,10 @@ export interface SessionLivenessRecord {
    * 生产常量下 `refreshOutcomeTimeoutMs`(190s) < `refreshCoalesceMs`(200s)：探针一次
    * 无结论（502/代理重启/慢 session.list）若还让原期限生效，期限会比下一次 L1 先到点，
    * 把「探针无法裁决」误判成「对账通道已坏」⇒ 一次假 L2 并吃掉该 running 时段唯一的
-   * 重连预算（2026-12 独立复核的时间线仿真）。因此门控是：**吸收过 unknown 之后，必须
+   * 重连预算。因此门控是：**吸收过 unknown 之后，必须
    * 再发过一次 L1（`lastRefreshRequestedAt > unknownAbsorbedAt`）才允许按期限升级**
    * ——快 unknown（L1 后 1s 就结算）与慢 unknown 同判，绝不抢在下一次 L1 前面；单靠
-   * "从 unknown 时刻顺延"对快 unknown 无效（期限仍在下一次 L1 之前到点，二轮复核）。
+   * "从 unknown 时刻顺延"对快 unknown 无效（期限仍在下一次 L1 之前到点）。
    * 顺延只做一次：之后仍长期无权威结论，由「unknown 之后那次 L1 + 期限」收口（有界：
    * ≤ coalesce + 期限，配额耗尽时由滚动窗口的下一个 L1 兜底）。拿到非 unknown 结论或
    * 真实 L2 之后清零。
@@ -243,8 +242,7 @@ export interface SessionLivenessRecord {
    * 绝不能拿 {@link outcomeSeenAt} 代替：那个水位被**每一次**结算推进（含 unknown），
    * 于是「重连前留下 ok:false + 重连后一次 unknown」会让失败证据看起来发生在重连之后
    * ⇒ 重连 + noticeAfterMs 亮一条假 L3 横幅，而那次 unknown 恰恰**没有**给出任何结论
-   * （2026-12 三轮独立复核的时间线仿真：L1@120 → stale@180 → L2@180 → L1@210 →
-   * unknown@240 → 假 notice@330）。契约见 design 14 §D4「最近一次**非 unknown** 结算」。
+   * 契约见 design 14 §D4「最近一次**非 unknown** 结算」。
    */
   lastVerdictAt?: number
 
@@ -252,15 +250,14 @@ export interface SessionLivenessRecord {
   reconnectCount: number
   /**
    * 本时段内**派遣了但没执行**（`reconnectInstanceConnection` 返回 false）的 L2 次数。
-   * 它是 L3 的第二条出口：杠杆长期不可用时也要让用户看到提示，而不是永远静默
-   * （2026-12 三轮复核的完整性缺口）。
+   * 它是 L3 的第二条出口：杠杆长期不可用时也要让用户看到提示，而不是永远静默。
    */
   noopReconnects: number
   /**
    * 本时段内**因 App 共享账本被挡下**（本来该派遣 L2，但另一条臂已在同一退避窗内
    * 重连）且同时带未收敛证据的 tick 数。它是 L3 的第三条出口：否则另一条臂静默地
    * 每 60s 重连一次就能把这条臂的 L3 出口永久封死——用户既看不到横幅、也没有可用
-   * 的自愈动作（2026-12 三轮独立复核的 MEDIUM 缺口；那条臂自己没有用户可见面）。
+   * 的自愈动作（那条臂自己没有用户可见面）。
    */
   blockedReconnects: number
   /** 最近一次 L2 执行时刻。 */
@@ -269,8 +266,7 @@ export interface SessionLivenessRecord {
    * **升级梯子到顶的时刻**（真实预算用尽，或连续 no-op 达到门槛），只记一次。
    *
    * L3 的宽限锚点必须是它而不是"最近一次派遣"：no-op 路径会按 backoff 反复派遣，
-   * 若用最近派遣时刻当锚，锚点每 300s 向前滑动 ⇒ 宽限永远重新起算、横幅永远不亮
-   * （2026-12 三轮复核的 no-op 死路在修复过程中的第二次形态）。
+   * 若用最近派遣时刻当锚，锚点每 300s 向前滑动 ⇒ 宽限永远重新起算、横幅永远不亮。
    */
   ladderAnchorAt?: number
   /** L3 提示是否已亮（同一时段只亮一次）。 */
@@ -340,9 +336,9 @@ export function planSessionLiveness(
     const isNewSpell = generationChanged || !overlaps
     // 代际变化（同 id 被退役再挂载 = 新 producer）时**不继承任何年龄**：整条记录
     // 重起算（否则新代际的第一个 tick 会带着旧代际的 since 立刻发 L1，与「代际围栏」
-    // 的措辞不符——2026-12 三轮复核）。同代际内只有「整组换代（不相交）」重起算，
+    // 的措辞不符）。同代际内只有「整组换代（不相交）」重起算，
     // 部分重叠时存活会话保留自己的计时。
-    // 残余（2026-12 独立复核，已裁决**保留**）：一个卡住的会话若在某一 tick 里从
+    // 残余（有意保留）：一个卡住的会话若在某一 tick 里从
     // 事实通道消失、下一 tick 又出现，它会重新 seed（检测最多推迟一个 refreshAfterMs）。
     // 不保留"墓碑"是为了不把"退役后再以同 id 挂载/新会话复用同 id"的形态继承旧时钟
     // ——那会把上一会话的年龄算到新会话头上（假升级方向），两害相权取假阴性。
@@ -362,8 +358,7 @@ export function planSessionLiveness(
           blockedReconnects: 0,
           noticed: false,
           // 旧时段的回执水位：只消费「本时段开始之后结算」的回执，否则上一
-          // 时段的失败裁决会让新时段第一个 tick 就无依据地升级（2026-12
-          // 复核抓出的假升级风暴路径）。
+          // 时段的失败裁决会让新时段第一个 tick 就无依据地升级（假升级风暴路径）。
           ...(source.reconcile?.settledAt === undefined
             ? {}
             : { outcomeSeenAt: source.reconcile.settledAt }),
@@ -392,11 +387,11 @@ export function planSessionLiveness(
         // 等待周期结束：下一次 unknown 可以重新吸收一次。
         record.unknownAbsorbedAt = undefined
         // 拿到健康结论 ⇒ 通道已恢复，撤下 L3 提示（否则一次恢复会把横幅永久
-        // latch 到 running 结束，之后真断链也不再提示——2026-12 复核修复）。
+        // latch 到 running 结束，之后真断链也不再提示）。
         // 刻意**不**重置 ladderAnchorAt：梯子已到顶（自愈预算用尽）之后再次出现未收敛
         // 证据就该立刻提示，不该再等一个 noticeAfterMs 宽限——否则用户在一个已耗尽自愈
-        // 的链路上看不到第二次故障。宽限只在梯子到顶的那一刻给一次（2026-12 独立复核
-        // 记为有意裁决，lifecycle 测试钉住）。
+        // 的链路上看不到第二次故障。宽限只在梯子到顶的那一刻给一次（有意裁决，
+        // lifecycle 测试钉住）。
         if (reconcile.ok === true && record.noticed) record.noticed = false
       }
     }
@@ -407,9 +402,9 @@ export function planSessionLiveness(
     // 计数**不在这里**自增：App 拿到 reconnectInstanceConnection 的真实返回值
     // 后才经 markSessionLivenessReconnect 记账（no-op 不得消耗唯一预算）。
     // 被吸收的 unknown 之后**还没发过 L1** ⇒ 期限一律不生效：这是快 unknown（L1 后
-    // 一个 tick 内结算）也会假 L2 的根因（二轮独立复核的时间线仿真）；慢 unknown 由
+    // 一个 tick 内结算）也会假 L2 的根因；慢 unknown 由
     // 这条一并覆盖，且不会无限推迟——下一次 L1 一到就重新起算期限。
-    // 边界（三轮复核记录，保守方向）：与吸收**同一 tick** 发出的 L1 算「之前」
+    // 边界（保守方向）：与吸收**同一 tick** 发出的 L1 算「之前」
     // （两个时间戳相等），期限再多等一个 coalesce 窗口才生效——最多多等 200s，
     // 换掉"同毫秒顺序歧义 ⇒ 可能重开假 L2"这类风险；生产常量下要求一次 >190s 的
     // 结算才可能走到，且仍在 coalesce 上界之内。
@@ -421,13 +416,13 @@ export function planSessionLiveness(
       && !unknownAwaitingNextL1
     // 「失败证据」必须是**本时段内、最近一次真实重连之后**的结论：重连前的 sticky
     // 失败若继续记账，会在重连后 +noticeAfterMs 先亮一条 30s 的假横幅（慢而最终
-    // 健康的回执随后才到并撤下；2026-12 三轮复核的 flash 复现）。静默链仍由
+    // 健康的回执随后才到并撤下）。静默链仍由
     // outcomeMissing 收口，真卡死路径不受影响。
     const outcomeFailed = record.lastOutcomeOk === false
       && (record.lastVerdictAt ?? 0) > (record.lastReconnectAt ?? 0)
     // App 侧共享账本挡住派遣时**不派遣**：派遣会在守卫里记账（lastReconnectDispatchAt
     // 置位、等待计时清零），被 App 丢弃后这条臂会静默一整个退避窗、连 L1 也一并停摆，
-    // 且 no-op 账不增长（2026-12 独立复核的记账缺口）。不派遣则本 tick 走 L1 路径，
+    // 且 no-op 账不增长。不派遣则本 tick 走 L1 路径，
     // 退避窗一过即可升级。
     // 账本挡下的派遣也记账（第三条 L3 出口，见 blockedReconnects）：只统计"本来
     // 就该派遣"的情形——仍有预算、且带着未收敛证据。
@@ -445,15 +440,14 @@ export function planSessionLiveness(
       record.lastReconnectDispatchAt = now
       // 回到「请求前」状态：清在途回执与 coalesce 锚（重连本身会重放官方基线，
       // 不需要马上再发 L1）。**刻意不清 refreshHistory**：清了会让一次 L2 之后
-      // 600s 窗口内的 L1 达到 4 次、突破 maxRefreshRequests=3（2026-12 三轮复核
-      // 的仿真），而这份配额的意义正是「连重连都不能变成探测风暴」。
+      // 600s 窗口内的 L1 达到 4 次、突破 maxRefreshRequests=3，而这份配额的意义正是
+      // 「连重连都不能变成探测风暴」。
       record.lastRefreshRequestedAt = undefined
       record.awaitingOutcomeSince = undefined
       record.unknownAbsorbedAt = undefined
       // 刻意**不**清 lastOutcomeOk：它是「最后一次权威结论」，正是重连之后
       // L3 门（要求未收敛证据）与 noticeAfterMs 宽限所依赖的事实；抹掉它会让
-      // 守卫在重连后立刻失忆（提示永远不亮或立刻亮），也是 2026-12 二轮复核
-      // 抓出的时序缺陷。
+      // 守卫在重连后立刻失忆（提示永远不亮或立刻亮）——时序缺陷。
       actions.push({ kind: 'reconnect', sourceId })
     } else {
       // L1：对账（幂等、单飞、限频、**滚动窗口**配额——总量封顶会让长
@@ -481,7 +475,7 @@ export function planSessionLiveness(
     // L3：L2 已真正执行过、且**当前这一轮等待**（最近一次未结算的请求，或最近
     // 一次重连）之后仍没有健康回执 ⇒ 用户可见提示。用「关注起点」而不是单调
     // 的 lastReconnectAt：否则一次重连后的健康回执会把 L3 永久关掉。
-    // L3 门 = **真实失败证据** + 重连之后的一段宽限（2026-12 二轮复核修复）：
+    // L3 门 = **真实失败证据** + 重连之后的一段宽限：
     //  - 只用时间锚点（「很久没有健康结论」）会把守卫因滚动窗口配额没发请求的
     //    间隙当成通道静默 ⇒ 健康通道上的长任务会周期性亮/灭假横幅；
     //  - 只要求「有失败证据」又会在重连成功的瞬间就亮横幅（新代际还没被验证）。
@@ -489,8 +483,8 @@ export function planSessionLiveness(
     // 执行的重连已过 noticeAfterMs。
     //  - 还有第二条出口：L2 杠杆**一直不可用**（每次派遣都是 no-op）时
     //    reconnectCount 永远到不了 maxReconnects ⇒ 只要连续 no-op 达到
-    //    maxNoopReconnects，同样按「重连之后的一段宽限」亮提示（三轮复核抓出的
-    //    死路：用户既看不到横幅、也没有可用的自愈动作）。
+    //    maxNoopReconnects，同样按「重连之后的一段宽限」亮提示（死路：用户既看不到
+    //    横幅、也没有可用的自愈动作）。
     const ladderExhausted = record.reconnectCount >= config.maxReconnects
       || record.noopReconnects >= config.maxNoopReconnects
       || record.blockedReconnects >= config.maxNoopReconnects
@@ -509,26 +503,13 @@ export function planSessionLiveness(
     records[sourceId] = record
   }
 
-  // 返回**新**状态（不再做「13 字段逐项比较决定是否复用旧引用」）：消费点只有
+  // 返回**新**状态：不做「13 字段逐项比较决定是否复用旧引用」——消费点只有
   // App 的一个 ref，引用身份不触发 React；而手工字段表一旦漏登记就会返回旧
-  // state、把本轮全部 mutation 静默丢弃（2026-12 二轮复核：功能丢失 > 省一个
-  // 对象分配）。未出现在输入里的来源（断连/退役）与不再 running 的会话在这里
+  // state、把本轮全部 mutation 静默丢弃（功能丢失 > 省一个对象分配）。未出现在输入里的来源（断连/退役）与不再 running 的会话在这里
   // 自然被剔除（records 只由本 tick 的输入构建）。
   return { state: { records }, actions, stalled }
 }
 
-/**
- * 记账一次**真正执行**的 L2 reconnect（App 侧在
- * `reconnectInstanceConnection` 返回 true 后调用）。
- *
- * 为什么不在 planner 里自增：该杠杆在「壳未 boot / ctx 缺失」时是 no-op 并返回
- * false（`shell.ts` 的 M4 纪律），若在派发时就消耗唯一预算，用户会得到
- * 「一次都没试过」的 L3 提示。
- * @param state - 当前状态。
- * @param sourceId - 执行成功的来源。
- * @param now - 当前时刻。
- * @returns 新状态（无记录时原样返回）。
- */
 /**
  * 记账一次 **no-op 派遣**（`reconnectInstanceConnection` 返回 false：壳未 boot /
  * ctx 缺失 / 连接不可用）。与 {@link markSessionLivenessReconnect} 相对：真实执行
@@ -551,6 +532,18 @@ export function markSessionLivenessReconnectNoop(
   }
 }
 
+/**
+ * 记账一次**真正执行**的 L2 reconnect（App 侧在
+ * `reconnectInstanceConnection` 返回 true 后调用）。
+ *
+ * 为什么不在 planner 里自增：该杠杆在「壳未 boot / ctx 缺失」时是 no-op 并返回
+ * false（`shell.ts` 的 no-op 纪律），若在派发时就消耗唯一预算，用户会得到
+ * 「一次都没试过」的 L3 提示。
+ * @param state - 当前状态。
+ * @param sourceId - 执行成功的来源。
+ * @param now - 当前时刻。
+ * @returns 新状态（无记录时原样返回）。
+ */
 export function markSessionLivenessReconnect(
   state: SessionLivenessState,
   sourceId: string,

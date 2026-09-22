@@ -282,7 +282,3 @@ function pickLatest(distTags: { latest?: unknown } | undefined, versions: readon
   return versions.length > 0 ? versions[0] : null
 }
 
-// (The former local "semver-ish" compareVersionsDesc was removed in the
-// 2026-12 single-source pass: it parsed numeric identifiers through Number(),
-// mixed build metadata into the comparison and inverted the prerelease
-// longest-list rule. Registry ordering now consumes compareSemverAsc.)

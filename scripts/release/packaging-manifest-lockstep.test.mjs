@@ -1,5 +1,5 @@
 /**
- * packaging-manifest-lockstep.test.mjs —— 打包清单同源锁步门禁（2026-12 P10）：手工维护的
+ * packaging-manifest-lockstep.test.mjs —— 打包清单同源锁步门禁：手工维护的
  * 清单会漂移，而漂移的后果都不在本地，因此五处必须同源——① HOST_PACKAGES
  * （build-sidecar.mjs：.app 内 Swift 装配的 seed 源与注入 flag）② control-plane 的
  * DEFAULT_HOST_*_PACKAGE_SOURCE_DIR（dev/CI 缺省源）③ root build:host-packages 链（顺序与
@@ -46,9 +46,7 @@ test('host 包清单五处同源：build-sidecar / control-plane 常量 / 构建
   assert.deepEqual(chainPackages, names,
     'root build:host-packages 必须构建 HOST_PACKAGES 的全部四个包且顺序一致')
 
-  // ④ Electron 侧拷贝行集（含 main.ts 打包态读取的 label/outDir 形态；2026-12 从
-  // build-host-graph-package.test.mjs 并入：那份文件的独有断言只剩行形态，行集本身
-  // 已由本锁步覆盖）。
+  // ④ Electron 侧拷贝行集（含 main.ts 打包态读取的 label/outDir 形态；行集本身已由本锁步覆盖）。
   assert.deepEqual(HOST_PACKAGE_BUILD_ROWS.map((row) => path.basename(row.sourceDir)), names,
     'build-host-graph-package 的行集必须与 HOST_PACKAGES 同集且同序')
   assert.deepEqual(HOST_PACKAGE_BUILD_ROWS.map((row) => row.label), ['host-graph', 'git-worktree', 'archive-cleanup', 'open-in'],

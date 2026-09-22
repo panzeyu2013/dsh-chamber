@@ -26,12 +26,12 @@ import {
   verifySignedMacEntitlements,
 } from './after-pack-adhoc-sign.mjs';
 // The executed-artifact gate discovers a staged product itself; its discovery
-// helper is asserted here so the packaging suite keeps it covered (2026-12 A1/F3).
+// helper is asserted here so the packaging suite keeps it covered.
 import { MAC_APP_ENV, resolvePackagedMacApp } from '../../../scripts/gates/verify-electron-artifacts.mjs';
-// Cross-module pin lockstep (G18): the Swift sidecar assembly reads the same
+// Cross-module pin lockstep: the Swift sidecar assembly reads the same
 // desktop manifest field, so a drift between the two builds fails HERE.
 import { PNPM_PINNED_VERSION } from './build-sidecar.mjs';
-// 安装期抽样（S4）与本文件的打包期抽样必须一一对应：两个模块不能各写一份
+// 安装期抽样与本文件的打包期抽样必须一一对应：两个模块不能各写一份
 // 名单后各自漂移（.mjs import .ts 运行时由 node 类型擦除支持；typecheck 面
 // 不含 scripts/，故这里不会给 tsc 引入 .mjs 声明问题）。
 import { RUNTIME_CLIENT_CLOSURE_SAMPLE } from '../runtime-tree-check.ts';
@@ -49,7 +49,7 @@ function fixture(platform = 'darwin-arm64', version = '0.1.1-rc.2') {
     dsh: { platform },
   }));
   writeFileSync(path.join(dshDir, 'package.json'), JSON.stringify({ version }));
-  // 上游 client-plugin 闭包抽样（S4）：真实封装里这些包由 pnpm 安装进
+  // 上游 client-plugin 闭包抽样：真实封装里这些包由 pnpm 安装进
   // node_modules/@deepseek-ai/，fixture 必须造出同一形态，否则"完整运行时"
   // 用例本身就缺件。
   for (const name of PACKAGED_CLIENT_CLOSURE_SAMPLE) {
@@ -75,7 +75,7 @@ function supportFixture() {
   return resourcesDir;
 }
 
-/** Build a real app.asar containing the complete Electron payload (G27), or
+/** Build a real app.asar containing the complete Electron payload, or
  * omit the named asar-relative entries to prove the assertion fails closed. */
 async function withPayloadAsar(resourcesDir, omit = []) {
   const asar = require('@electron/asar');
@@ -316,7 +316,7 @@ test('a real staged release app, when present, satisfies the payload assertion (
 
 test('desktop packaging config keeps pnpm and asserted runtime modules in lockstep', () => {
   const manifest = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
-  // G18: no second hardcoded literal — the packaged assertion, the Swift sidecar
+  // No second hardcoded literal — the packaged assertion, the Swift sidecar
   // assembly and the manifest all read/compare the same dependencies.pnpm.
   assert.equal(PACKAGED_PNPM_VERSION, manifest.dependencies.pnpm);
   assert.equal(PNPM_PINNED_VERSION, manifest.dependencies.pnpm, 'the Swift sidecar build must read the same pin');
@@ -342,7 +342,7 @@ test('beta builder config inherits the complete stable package config and change
   const resolved = await getConfig(projectDir, 'electron-builder.beta.yml', null);
 
   // The desktop manifest version is the released chamber version; asserting the
-  // LITERAL would break on every bump (2026-09 anchor sweep). The release
+  // LITERAL would break on every bump. The release
   // preflight pins every chamber package to the root version, so compare
   // against that single source instead.
   const rootVersion = JSON.parse(readFileSync(new URL('../../../package.json', import.meta.url), 'utf8')).version;
@@ -423,7 +423,7 @@ test('packaged locale assertion passes when every declared locale survives (A1/F
 });
 
 test('packaged locale assertion fails closed when electronLanguages deleted a declared locale (A1 regression)', () => {
-  // The A1 shape: config said zh-CN, app-builder-lib deleted zh_CN.lproj.
+  // The failure shape: config says zh-CN while app-builder-lib deletes zh_CN.lproj.
   const appPath = macAppFixture(['en']);
   try {
     assert.throws(

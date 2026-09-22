@@ -1,7 +1,7 @@
 /**
  * Shared reverse-proxy forwarding core (design 17 §8, 方案 A).
  *
- * Extracted from instance-proxy.ts so that gateway-proxy.ts reuses
+ * Shared by instance-proxy.ts and gateway-proxy.ts so both reuse
  * the exact Host/Origin rewrite, header-stripping, error semantics, rate
  * limiting, WebSocket splice and heartbeat — no fork, no drift. The two
  * proxies differ only in target resolution, which the caller passes in as a
@@ -13,7 +13,7 @@
  *     and forwards the path verbatim (no prefix stripping).
  *
  * The wire behavior (forwarded headers, JSON error bodies, status codes,
- * body caps, WS splice, heartbeat) stays identical for both owners. Log lines
+ * body caps, WS splice, heartbeat) is identical for both owners. Log lines
  * are the only parameterized surface: callers
  * pass `deps.logPrefix` (instance-proxy → 'instance-proxy', gateway-proxy →
  * 'gateway-proxy') and `deps.id` (the /api/i/<id> id, or a fixed label).
@@ -27,13 +27,13 @@ import type { Duplex } from 'node:stream'
 import type { Logger } from './types.ts'
 import { startWsHeartbeat } from './ws-heartbeat.ts'
 
-/** Request body cap (design 03 §3.4, same as the v2 runtime proxy; aligned with the upstream dsh 0.1.2-alpha.4 300MiB request cap / 200MiB image admission). */
+/** Request body cap (design 03 §3.4; aligned with the upstream 300MiB request cap / 200MiB image admission). */
 export const MAX_REQUEST_BODY_BYTES = 300 * 1024 * 1024
 
 // SPKI certificate pinning (design 17 §13.4.2 / S23): shared single source in
 // spki-pin.ts — the desktop identity probe (gateway-provider.ts) and this
 // proxy core both import it through their own package boundaries, so the two
-// owners can never drift again (they used to carry byte-identical copies).
+// owners can never drift again.
 // Re-exported here for the instance-proxy gate and existing importers.
 
 export {
@@ -44,7 +44,7 @@ export {
 } from './spki-pin.ts'
 import { attachSpkiPinVerifier } from './spki-pin.ts'
 
-/** Response body cap for non-SSE responses (design 03 §3.4; aligned with the upstream dsh 0.1.2-alpha.4 300MiB request cap / 200MiB image admission). */
+/** Response body cap for non-SSE responses (design 03 §3.4; aligned with the upstream 300MiB request cap / 200MiB image admission). */
 export const MAX_RESPONSE_BODY_BYTES = 300 * 1024 * 1024
 
 /** HTML-document injection budget (S0): an upstream text/html response is
@@ -78,7 +78,7 @@ export function getProcessBufferedRequestBytes(): number {
  * responses — how long its body may idle before the proxy gives up with an
  * explicit 504 (upstream_timeout). SSE streams and upgraded WebSockets are
  * long-lived by nature: the timeout only covers reaching the response/101,
- * never the stream lifetime. A hung upstream can no longer stall the request
+ * never the stream lifetime. A hung upstream cannot stall the request
  * indefinitely.
  *
  * The chamber Git host has a 30s mutation budget and may emit no bytes while
@@ -103,13 +103,13 @@ export const UPSTREAM_TIMEOUT_MS = 45_000
  * — for chamber host domains — a documented event no-op with idempotent
  * convergence), so the HTTP response is only a completion echo. Cutting them
  * on the ordinary idle window would fabricate a client disconnect that never
- * happened and cancel legitimate host work. Measured 2026-09: a manual
- * `/compact` (commands/execute → dsh-command-compact → dsh-compaction-basic,
- * an LLM summarization call replaying a ~627k-token history) was aborted at
+ * happened and cancel legitimate host work. A manual `/compact`
+ * (commands/execute → dsh-command-compact → dsh-compaction-basic, an LLM
+ * summarization call replaying a ~627k-token history) can be aborted at
  * exactly 45 001 ms — the proxy idle window — with `compaction/end {error:
- * "DeepSeek request aborted by caller"}` and the session unchanged.
+ * "DeepSeek request aborted by caller"}`, leaving the session unchanged.
  *
- * Members (2026-09): `/api/commands/execute` (the single funnel for every
+ * Members: `/api/commands/execute` (the single funnel for every
  * upstream slash command — /compact is currently the only LLM-blocking
  * handler, future long commands arrive through the same path for free) and
  * `/api/archiveCleanup/purge` (chamber archived-session cleanup host domain,
@@ -148,12 +148,10 @@ export const CLIENT_BODY_IDLE_TIMEOUT_MS = 30_000
 
 /**
  * WebSocket heartbeat (design 14 extension — sleep/wake stuck-deep-diving
- * fix): ping cadence for the spliced mux downstream. 0.1.2 FACT CORRECTION:
- * the original motivation was the 0.1.1 events.mux/events.host downlinks
- * (downlink-only, no heartbeat from either side); the 0.1.2 `/api/remote.mux`
+ * fix): ping cadence for the spliced mux downstream. The `/api/remote.mux`
  * host pings every downstream every `websocketHeartbeatIntervalMs` (default
- * 2s) and terminates after two missed pongs (~6s, see ws-heartbeat.ts), so
- * this proxy-side BROWSER-leg ping is now a REDUNDANT FALLBACK for the
+ * 2s) and terminates after two missed pongs (~6s, see ws-heartbeat.ts), but
+ * this proxy-side BROWSER-leg ping remains necessary for the
  * sleep/wake case: the host heartbeat cannot guard the browser leg across an
  * OS sleep/wake (its pings simply fail during sleep), where the half-open
  * browser leg may fire no 'error'/'close' — the splice would hold forever
@@ -170,7 +168,7 @@ export const CLIENT_BODY_IDLE_TIMEOUT_MS = 30_000
  * death is covered by SSH keepalive for remote tunnels
  * (`ServerAliveInterval=30 × CountMax=3` ≈ 90s, ssh-provider), socket
  * 'error'/'close' for local host death/restart, the host's own send-failure
- * close, and — for direct-http targets only — the S2 OS-level TCP keepalive
+ * close, and — for direct-http targets only — the OS-level TCP keepalive
  * (instance-proxy passes tcpKeepAliveMs; initial idle 30s, OS-default probes,
  * see instance-proxy.ts). A proxy-side upstream APPLICATION ping would only
  * race SSH keepalive into a reconnect flap against a half-open tunnel
@@ -204,9 +202,7 @@ export const RESPONSE_HEADER_WHITELIST = new Set([
 ])
 
 /** WS stream path forwarded to the instance (03 §3.1 / 05 §3.1): the Typert
- * Remote stream mux. The old /api/events.mux and /api/events.host downlinks
- * were deleted upstream (dsh 0.1.2-alpha.1), so the set now admits exactly
- * /api/remote.mux. */
+ * Remote stream mux; the set admits exactly /api/remote.mux. */
 export const WS_STREAM_PATHS = new Set(['/api/remote.mux'])
 
 /** Hop-by-hop and credential headers never forwarded upstream. */
@@ -226,7 +222,7 @@ export const STRIPPED_REQUEST_HEADERS = new Set([
   'transfer-encoding',
   'upgrade',
   // Never let a browser/client impersonate reverse-proxy routing identity at
-  // the attached dsh instance (main 163622b).
+  // the attached dsh instance.
   'forwarded',
   'via',
   'x-forwarded-for',
@@ -234,8 +230,8 @@ export const STRIPPED_REQUEST_HEADERS = new Set([
   'x-forwarded-proto',
   'x-forwarded-port',
   'x-real-ip',
-  // NOTE (M3-2', revising the 2026 audit M3b verdict): accept-encoding is NOT
-  // in this always-strip set any more. Only the requests that must stay
+  // NOTE: accept-encoding is NOT in this always-strip set. Only the requests
+  // that must stay
   // identity keep it off the wire — HTML document navigations (S0 injection
   // precondition) and text/event-stream streams (transport insurance); see
   // requiresIdentityUpstreamEncoding + the strip site in forwardHttp. Every
@@ -255,7 +251,7 @@ export const WS_RESPONSE_HEADER_WHITELIST = new Set([
 ])
 
 /**
- * Whether one request is an HTML *document navigation* (M3-2', the only
+ * Whether one request is an HTML *document navigation* (the only
  * request class whose accept-encoding must stay identity).
  *
  * Why this class: the S0 trust injection (gateway html-inject.ts) is the
@@ -303,15 +299,15 @@ export function isHtmlDocumentNavigation(method: string | undefined, pathname: s
 }
 
 /**
- * Content-addressed static asset path (M3-3 seam contract): Vite's
+ * Content-addressed static asset path: Vite's
  * `[name]-[hash][extname]` output under `/assets/`, hash = exactly 8 base64url
  * characters (Vite's default hash width — every measured upstream name has 8),
  * extension exactly `js | css | woff2 | woff | ttf | svg`, and at most ONE nested
  * directory (the pinned dist keeps fonts in `assets/fonts/` and the per-language
  * chunks in `assets/langs/`; without the optional segment the rule could only
- * ever reach the four top-level files — 2026-12 review).
+ * ever reach the four top-level files).
  *
- * Measured 2026-12 upstream names: `index-BKQ_L1z6.js`, `cpp-DIPi6g--.js`,
+ * Upstream names: `index-BKQ_L1z6.js`, `cpp-DIPi6g--.js`,
  * `KaTeX_AMS-Regular-BQhdFMY1.woff2` (the last one under `assets/fonts/`). Deliberately NOT matched: unhashed root
  * files (`favicon.svg`, `manifest.webmanifest`, `index.html`) — they carry no
  * `-<hash>` segment and/or an extension outside the set. The EXACT width is
@@ -323,7 +319,7 @@ export function isHtmlDocumentNavigation(method: string | undefined, pathname: s
  *
  * Still a heuristic over the path alone: the caller decides status/caching
  * policy (this module never caches anything itself). Exported as the shared
- * naming rule for the M3-3 response-header seam's owner-side implementation.
+ * naming rule for the response-header seam's owner-side implementation.
  */
 const HASHED_STATIC_ASSET_PATTERN = /^\/assets\/(?:[^/]+\/)?[^/]+-[A-Za-z0-9_-]{8}\.(?:js|css|woff2?|ttf|svg)$/
 
@@ -339,7 +335,7 @@ export function isHashedStaticAssetPath(pathname: string): boolean {
 }
 
 /**
- * Whether a request advertises a server-sent-event stream (M3-2′ follow-up).
+ * Whether a request advertises a server-sent-event stream.
  * This is NOT a document-navigation rule — it is TRANSPORT-LAYER INSURANCE:
  * a conformant EventSource sends `Accept: text/event-stream`, and letting an
  * upstream compress that long-lived, latency-critical text stream turns it
@@ -358,7 +354,7 @@ export function acceptsEventStream(accept: string | string[] | undefined): boole
 }
 
 /**
- * The ONE decision the accept-encoding strip consumes (M3-2′): which requests
+ * The ONE decision the accept-encoding strip consumes: which requests
  * must reach the upstream with NO compression negotiation. Two disjoint
  * identity-only classes — everything else forwards the client's negotiation to
  * the upstream gzip middleware:
@@ -504,11 +500,10 @@ export interface ProxyForwardDeps {
   longRpcPaths?: readonly string[]
   clientBodyIdleTimeoutMs: number
   wsPingIntervalMs: number
-  /** Consecutive ping cycles without a browser pong before the splice is torn down. */
   wsPingMissesBeforeTeardown: number
   /**
    * Optional OS-level TCP keepalive for the UPSTREAM leg of a spliced
-   * WebSocket, armed before the splice (S2 sidebar-stability patch). Only a
+   * WebSocket, armed before the splice. Only a
    * direct-http target enables it: the upstream leg deliberately has no
    * application heartbeat (see the WS_PING_* notes) — an ssh-tunneled target
    * is covered by ssh keepalive, but a direct http(s) target has no such
@@ -544,7 +539,7 @@ export interface ProxyForwardDeps {
    */
   readonly injectHtmlDocument?: (html: string) => string | null
   /**
-   * Optional upstream-response header seam (M3-3): called exactly once per
+   * Optional upstream-response header seam: called exactly once per
    * upstream HTTP response — SSE included — after the response whitelist and
    * the Location rewrite assembled the browser-facing header map, and before
    * `writeHead`. It exists so an owner can attach representation metadata the
@@ -884,9 +879,9 @@ export async function forwardHttp(req: ProxyRequest, res: ProxyResponse, target:
   // same-origin shape.
   const effectiveHost = authority ?? target.host
   const headers: Record<string, string> = { host: effectiveHost }
-  // Compression negotiation (M3-2', revising the 2026 audit M3b verdict): the
-  // audit stripped accept-encoding on EVERY request, which forced the whole
-  // proxied surface (the 10.65 MiB Vite shell included) to identity. Keep the
+  // Compression negotiation: stripping accept-encoding on EVERY request would
+  // force the whole proxied surface (the 10.65 MiB Vite shell included) to
+  // identity. Keep the
   // strip for the two identity-only classes only (see
   // requiresIdentityUpstreamEncoding): HTML document navigations — their
   // upstream reply must stay unencoded so S0 trust injection can rewrite it
@@ -1065,7 +1060,7 @@ export async function forwardHttp(req: ProxyRequest, res: ProxyResponse, target:
       }
       headers[name] = value as string | string[]
     }
-    // M3-3 response-header seam: the owner may add representation metadata the
+    // Response-header seam: the owner may add representation metadata the
     // upstream omitted (see ProxyForwardDeps.onUpstreamResponseHeaders). It is
     // fail-soft because this is an event listener (an escaping throw would be
     // an uncaught exception), and WHITELIST-BOUNDED: the map is re-filtered
@@ -1245,8 +1240,7 @@ export async function forwardHttp(req: ProxyRequest, res: ProxyResponse, target:
 }
 
 /** Forward a WS upgrade to a fully-resolved target (the /api/remote.mux
- * stream mux; the old events.mux / events.host downlinks were deleted
- * upstream in dsh 0.1.2-alpha.1).
+ * stream mux).
  * `tls` carries the optional gateway SPKI pin (S23) — when set and the target
  * is https, the pin gates the handshake connection exactly like forwardHttp;
  * a mismatch surfaces as an upstream 'error' → 502 upstream_failed. */
@@ -1256,7 +1250,7 @@ export async function forwardUpgrade(req: ProxyRequest, socket: ProxySocket, hea
   // the upgrade handshake internally (it never accepts a ws: URL).
   const headers: Record<string, string> = { host: authority ?? target.host }
   // The handshake allowlist is NOT the HTTP strip set: accept-encoding simply
-  // never rides an upgrade. M3-2' leaves that as-is — a 101 has no body to
+  // never rides an upgrade. That stays as-is — a 101 has no body to
   // compress, and a non-101 reply is drained and replaced by rejectUpgrade, so
   // there is no representation to negotiate; isHtmlDocumentNavigation is an
   // HTTP document-navigation decision and an upgrade is never one.
@@ -1279,8 +1273,8 @@ export async function forwardUpgrade(req: ProxyRequest, socket: ProxySocket, hea
   const controller = new AbortController()
   const upgradeStartedAt = Date.now()
   const onClientClose = () => {
-    // Forensic line (2026-12 freeze investigation): a downstream leg that went
-    // away while the upstream handshake was still running left NO trace at all —
+    // A downstream leg that went away while the upstream handshake was still
+    // running left NO trace at all —
     // the abort path is deliberately silent (the upstream 'error' handler
     // returns early when the controller aborted), so a mux reconnect whose
     // first attempt never reached the host was indistinguishable from a
@@ -1288,8 +1282,8 @@ export async function forwardUpgrade(req: ProxyRequest, socket: ProxySocket, hea
     // branch (timeout / non-101 / upstream error) logs: those branches have
     // already aborted the controller and logged their own cause. Counters are
     // deliberately untouched (this is a downstream abandon, not an upstream
-    // failure) — the log line is the whole change.
-    // ATTRIBUTION BOUNDARY (2026-12 review): "downstream" here means THIS
+    // failure) — the log line is the whole diagnostic.
+    // ATTRIBUTION BOUNDARY: "downstream" here means THIS
     // socket closed, not "the browser chose to leave" — the control plane's own
     // transport revocation (instance-proxy `closeAllStreams` /
     // `revokeTransportTraffic`) destroys these sockets without aborting the
@@ -1388,13 +1382,12 @@ export async function forwardUpgrade(req: ProxyRequest, socket: ProxySocket, hea
     // pump reconnects. Declared before tearDown (which stops it); started
     // once the splice is wired.
     let heartbeat: { stop(): void } | null = null
-    // Forensic instrument (mobile stability round, 2026-12): the gateway used
-    // to log ONLY its own heartbeat teardown, so a mux socket ended by the
-    // INSTANCE side (the official api-gateway server terminates a silent
-    // socket after MAX_MISSED_HEARTBEATS=2 x its 2s heartbeat) or by the
-    // browser left no trace at all and could not be told apart from a
-    // client-initiated reconnect. One bounded line per stream records which
-    // leg ended the splice and how long it lived — the cause strings are
+    // One bounded line per stream records which leg ended the splice and how
+    // long it lived. Without it, a mux socket ended by the INSTANCE side (the
+    // official api-gateway server terminates a silent socket after
+    // MAX_MISSED_HEARTBEATS=2 x its 2s heartbeat) or by the browser left no
+    // trace at all and could not be told apart from a client-initiated
+    // reconnect. The cause strings are
     // stable so the journal is greppable ("upstream close" = the dsh host /
     // tunnel dropped the socket, "browser close" = the page's socket went
     // away, "heartbeat lost" = this proxy's own browser-leg watchdog). No
@@ -1442,7 +1435,7 @@ export async function forwardUpgrade(req: ProxyRequest, socket: ProxySocket, hea
     // Client head bytes (pre-sent frame data, RFC 6455 pipelining) flow to
     // the upstream socket only after the upstream accepted the upgrade.
     if (head.length > 0) upstreamSocket.write(head)
-    // chamber patch (S2): OS-level TCP keepalive for the upstream leg of a
+    // OS-level TCP keepalive for the upstream leg of a
     // direct-http target, armed before the splice. Only owners that opted in
     // (instance-proxy passes tcpKeepAliveMs for NON-loopback resolved targets
     // — direct http(s), whatever the source-id kind) hit

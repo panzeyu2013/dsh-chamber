@@ -73,11 +73,10 @@ import type { ApiCorsEvaluator, ApiRequest, ApiResponse, ApiSurface } from './ap
 
 /** Browser hardening shared by static, API, proxy, and error responses.
  *
- * `referrer-policy` is `same-origin`, deliberately NOT `no-referrer` (live
- * finding 2026-09, reproduced on Chrome 151): per the fetch spec "append a
- * request Origin header" algorithm (2019; Chromium and WebKit
- * r259036/2020 — Safari — compliant), a document with no-referrer policy
- * serializes the Origin of same-origin HTML form submissions as `null`,
+ * `referrer-policy` is `same-origin`, deliberately NOT `no-referrer`: per the
+ * fetch spec "append a request Origin header" algorithm (2019; Chromium and
+ * WebKit r259036/2020 — Safari — compliant), a document with no-referrer
+ * policy serializes the Origin of same-origin HTML form submissions as `null`,
  * which the chamber origin fences (loopback API + gateway request policy)
  * reject fail-closed — a self-inflicted 403 on any same-origin form
  * (gateway login, /chamber/runtime actions). `same-origin` preserves the
@@ -231,7 +230,7 @@ export interface ControlPlaneOptions {
    */
   hostOpenInPackageSourceDir?: string
   /**
-   * Seed registry (2026-12 interface): additional chamber seed entries beyond
+   * Seed registry: additional chamber seed entries beyond
    * the four base host packages (client-graph / git-worktree /
    * archive-cleanup / open-in) — the seam for browser-side chamber client plugins
    * in hosted frontends (e.g. the gateway mobile slot). Every entry rides the
@@ -242,7 +241,7 @@ export interface ControlPlaneOptions {
    */
   extraSeedEntries?: readonly SeedEntry[]
   /**
-   * Optional request middleware (design 17 §2.1 改动③): runs after the
+   * Optional request middleware (design 17 §2.1): runs after the
    * security headers + CSP + URL parse and BEFORE the default dispatch. A
    * truthy return CLAIMS the request (the default dispatch is skipped); a
    * falsy return falls through. The gateway uses it to inject its auth gate
@@ -269,7 +268,7 @@ export interface ControlPlaneOptions {
 }
 
 /** The internal surfaces handed to a composing gateway's middleware (design 17
- * §2.1 改动③): the management REST handle + CORS decision + per-instance proxy. */
+ * §2.1): the management REST handle + CORS decision + per-instance proxy. */
 export interface PlaneMiddlewareContext {
   api: ApiSurface
   instanceProxy: InstanceProxy
@@ -294,7 +293,7 @@ export interface PlaneHandle {
   readonly instanceId: string
   /**
    * The activation-probe domains backed by the host packages **actually
-   * seeded** into the local profile (2026-09 模块评审 D#2）：desktop 两个
+   * seeded** into the local profile：desktop 两个
    * owner 在启动探针时按此派生期望集，避免 host 包缺失时仍按「全 3 域」做
    * exact-set 裁决而误判激活失败并回滚。
    */
@@ -329,7 +328,7 @@ export interface PlaneHandle {
   /** Re-publish the public local lifecycle after canExposeLocal changes. */
   refreshLocalExposure(): void
   /**
-   * Writer-quiescence diagnosis (2026-09-10, 04 §3.2): the last scan's verdict
+   * Writer-quiescence diagnosis (04 §3.2): the last scan's verdict
    * plus per-record detail, WITHOUT acting. The connections page uses it to
    * name what blocks the local instance; a stale view is refreshed by the
    * re-proof the start path runs anyway.
@@ -389,7 +388,7 @@ export interface LocalHostGraphOverlayInput {
   readonly env?: NodeJS.ProcessEnv
   /**
    * Receives the probe domains backed by the host packages this resolution
-   * actually seeds (2026-09 模块评审 D#2): the plane's spawn thunk records
+   * actually seeds: the plane's spawn thunk records
    * them on `PlaneHandle.seededProbeDomains`, so the desktop's activation
    * expectation set follows the real seed set. Optional — direct test callers
    * omit it and keep the resolver a pure overlay producer.
@@ -410,7 +409,7 @@ export interface LocalHostGraphOverlayInput {
  * user-owned in the profile patch) REMOVE a leftover overlay file. That keeps
  * one invariant the desktop probe relies on: the file exists exactly when the
  * spawn about to run passes it, so reading it is reading this spawn's mount
- * set — never a previous spawn's (T20).
+ * set — never a previous spawn's.
  *
  * @param input - state root, managed dsh home, resolved seed entries, sinks.
  * @returns the `--patch` overlay path, or null (no overlay passed).
@@ -423,8 +422,8 @@ export function resolveLocalHostGraphOverlay(input: LocalHostGraphOverlayInput):
   // Opt-in managed-dsh application-log bridge (host-log-bridge.ts): ONE extra
   // seed entry while DSH_CHAMBER_HOST_LOG_LEVEL is set for this spawn, carrying
   // the generated logger-exporter plugin. With the switch absent the entry list
-  // (and therefore every write, row and overlay byte below) is exactly what it
-  // was before the bridge existed.
+  // (and therefore every write, row and overlay byte below) carries no bridge
+  // entry.
   const bridgeEntry = planHostLogBridge({ stateDir, env: input.env ?? {}, warn })
   const entries = bridgeEntry === null ? baseEntries : [...baseEntries, bridgeEntry]
   // An extra entry with no packaged source is warned, never fatal — but the
@@ -441,9 +440,9 @@ export function resolveLocalHostGraphOverlay(input: LocalHostGraphOverlayInput):
       continue
     }
     // A sourceDir that EXISTS without <sourceDir>/dist/index.js is filtered out
-    // of `available` below (no seed, no --patch row). Only the fully ABSENT
-    // source used to be loud; a packaged host package missing its artifact is a
-    // real packaging defect and must not disappear silently (2026-09 D6a).
+    // of `available` below (no seed, no --patch row). A packaged host package
+    // missing its artifact is a real packaging defect and must not disappear
+    // silently.
     const artifact = join(entry.sourceDir, 'dist', 'index.js')
     if (!existsSync(artifact)) {
       const message = `seed entry '${entry.insert.id}' (${entry.insert.name}): built artifact missing at ${artifact}; skipped — this spawn has no --patch row for it`
@@ -452,7 +451,7 @@ export function resolveLocalHostGraphOverlay(input: LocalHostGraphOverlayInput):
     }
   }
   // 影子条目（extraSeedEntries 覆盖同 id）若缺 probeDomains，会让该宿主域在
-  // 激活期望集中静默消失（2026-09 二轮评审 P2）——必须 loud。桥接条目由
+  // 激活期望集中静默消失——必须 loud。桥接条目由
   // resolver 自己追加（无宿主域），不在用户声明的 seed 集合里，故排除在外。
   for (const entry of baseEntries) {
     if (entry.kind === 'host' && (entry.probeDomains ?? []).length === 0) {
@@ -528,18 +527,18 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
   const getDshWorkspacePath = options.getDshWorkspacePath ?? (() => defaultWorkspacePath)
   const webDistDir = options.webDistDir === undefined ? undefined : options.webDistDir
   // The console default satisfies every module's logger option ({log,warn,error}).
-  // 2026-12 取证修复：控制面自己的日志同时落盘 <stateDir>/logs/control-plane.log
+  // 控制面自己的日志同时落盘 <stateDir>/logs/control-plane.log
   // （有界轮转）——打包态从 Finder/Dock 启动时 stdout/stderr 不落盘，WS splice
   // 的 'WebSocket stream <id> closed (<cause>, Nms)' / 'heartbeat lost …' 这两类
-  // 归因证据此前在两类 flavor 上都等于丢失。控制面拥有 stateDir，故两 flavor
+  // 归因证据在两类 flavor 上都会丢失。控制面拥有 stateDir，故两 flavor
   // 共用同一实现，不产生新的 flavor 偏差；写失败只降级不阻断。
   const logger = withControlLogFile((options.logger ?? console) as Logger, stateDir)
   // logger.reopen() 在 start() 里调用（stop 后重启必须重开句柄）。
   const reapManagedHosts = options.reaper ?? runReaper
   let localWritersQuiescent = false
   /**
-   * Why the writer-quiescence latch is closed, as of the last scan
-   * (2026-09-10). Published to the connections page so a blocked local
+   * Why the writer-quiescence latch is closed, as of the last scan.
+   * Published to the connections page so a blocked local
    * instance names its blocker (pid, what was verified, whether the explicit
    * 清理并接管 action can clear it) instead of returning a bare 409 whose only
    * advice is "restart the app".
@@ -629,7 +628,7 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
   }
 
   /**
-   * Re-prove writer quiescence inside a running plane (2026-09-10). The startup
+   * Re-prove writer quiescence inside a running plane. The startup
    * scan runs once; without this, a record that only BECOMES stale later (the
    * orphan exited, or the ps identity probe was unavailable at startup) keeps
    * the latch closed for the whole session — the local instance then answers
@@ -661,10 +660,10 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
     ?? DEFAULT_HOST_ARCHIVE_CLEANUP_PACKAGE_SOURCE_DIR
   const hostOpenInPackageSourceDir = options.hostOpenInPackageSourceDir
     ?? DEFAULT_HOST_OPEN_IN_PACKAGE_SOURCE_DIR
-  // Seed registry (2026-12): the base chamber host packages are DERIVED from
+  // Seed registry: the base chamber host packages are DERIVED from
   // the authoritative registry (CHAMBER_HOST_PACKAGES — insert row, package
   // name and probe domain all come from that one list; a hand-written
-  // parallel row table here was the defect the registry exists to prevent).
+  // parallel row table here is the defect the registry exists to prevent).
   // The ONLY per-package desktop input is its packaged source directory,
   // looked up by insert id — the public option names are unchanged. Any extra
   // entry (client-plugin slots like the gateway mobile stub) is appended; an
@@ -706,7 +705,7 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
     }
     for (const entry of options.extraSeedEntries ?? []) byId.set(entry.insert.id, entry)
     const entries = [...byId.values()]
-    // Fail-loud naming pin (Batch 1 naming unification, 2026-09): every
+    // Fail-loud naming pin: every
     // host-kind entry — base or extra — lives in the canonical
     // `@dsh-chamber/dsh-chamber-seed-<loader-id>` namespace, so a rename that
     // forgets one call site cannot reach the profile seed at all.
@@ -746,8 +745,8 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
    * and restarts alike — so a seed that a profile-internal pnpm operation
    * pruned is re-seeded right before the next spawn. The seeded package is
    * extraneous to the web profile's dependency graph (it is not declared in
-   * profiles/web/package.json), and `dsh plugin add/remove` (chamber M4's
-   * runLocalDshPlugin included) re-links profile node_modules, which prunes
+   * profiles/web/package.json), and `dsh plugin add/remove` (runLocalDshPlugin
+   * included) re-links profile node_modules, which prunes
    * such packages: without the per-spawn re-seed the next instance restart
    * would boot with a --patch row that cannot resolve and fail loudly, the
    * only self-heal being a desktop-app restart. This thunk is idempotent
@@ -776,7 +775,7 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
       // generated plugin needs nothing from the child env). Passing it here is
       // the only production wiring; the resolver's own default stays "off".
       env: process.env,
-      // 2026-09 模块评审 D#2：宿主期望集必须跟随本次实际 seed 的条目（host 包
+      // 宿主期望集必须跟随本次实际 seed 的条目（host 包
       // 缺失时 exact-set 裁决仍按全量域会误判激活失败并回滚）；见
       // PlaneHandle.seededProbeDomains。
       onSeededProbeDomains: domains => { seededProbeDomains = domains },
@@ -785,9 +784,8 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
 
   // The managed local connection adapter (design 02): spawn/health/reaper
   // owner; readiness = TCP + unified host-identity probe inside spawn-dsh
-  // (0.1.2 wire; probeHostIdentity speaks session/canOpenWorkspacePath with
-  // a legacy session/list fallback — host.describe was deleted upstream in
-  // dsh 0.1.2-alpha.1). Runtime state is process-local
+  // (probeHostIdentity speaks session/canOpenWorkspacePath with a legacy
+  // session/list fallback). Runtime state is process-local
   // and is merged with durable catalog metadata only at the management/wire
   // projection below (design 03 §2.1).
   const local = createLocalConnection({
@@ -828,13 +826,13 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
   // verdict opens exposure. A candidate can move from ready to degraded,
   // restarting, or error while the full probe is still running; none of those
   // states (nor its port/error detail) may escape through public REST/SSE.
-  // The ONE exception (F1): a start attempt that terminally failed before this
+  // The ONE exception: a start attempt that terminally failed before this
   // incarnation ever reached ready is not a quarantined candidate fact — it is
-  // the user-visible reason the local instance cannot start. Masking it as
-  // 'starting' forever hid the failure; a start failure now projects the
-  // honest 'error' status plus its concrete reason (the spawn error already
-  // carries the per-port causes, exit codes and stderr digests). A candidate
-  // that DID reach ready and later failed keeps the quarantine above.
+  // the user-visible reason the local instance cannot start, and it projects
+  // the honest 'error' status plus its concrete reason (the spawn error
+  // already carries the per-port causes, exit codes and stderr digests). A
+  // candidate that DID reach ready and later failed keeps the quarantine
+  // above.
   const publicLocalSnapshot = (snapshot: { status: string; port: number | null; error: string | null }) => {
     if (!localExposureAllowed()) {
       const startFailure = local.getStartFailure()
@@ -910,7 +908,7 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
   const startLocalConnection = async (label?: string, accentColor?: string) => {
     // A closed writer latch is re-proven before refusing: the usual cause is a
     // managed-host record whose orphan has since exited, which the startup-only
-    // scan can never notice (2026-09-10).
+    // scan can never notice.
     if (!localWritersQuiescent) await reproveLocalWriters()
     const gate = localStartGate()
     if (gate?.ok === false) {
@@ -932,7 +930,7 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
   }
 
   /**
-   * Explicit 清理并接管 (2026-09-10): one takeover scan (records that provably
+   * Explicit 清理并接管: one takeover scan (records that provably
    * belong to this state directory and whose owning control plane is gone),
    * then the ordinary start. Returning the reclaim report lets the UI say what
    * was cleared; a still-live foreign writer surfaces as connection_busy with
@@ -1120,9 +1118,8 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
               return
             }
             if (staticServing !== null) {
-              // serve is async now (fs/promises read + async zlib off the event
-              // loop): a rejection takes exactly the same 500 fallback the sync
-              // try/catch used to own.
+              // serve is async (fs/promises read + async zlib off the event
+              // loop): a rejection takes the same 500 fallback.
               void staticServing.serve(req, res, url.pathname).catch((staticError: unknown) => {
                 logger.error(`static handler failure: ${String(staticError)}`)
                 if (!res.headersSent) {
@@ -1146,7 +1143,7 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
             ;(res as ApiResponse)._cspNonce = cspNonce
             res.setHeader(
               'content-security-policy',
-              // frame-src blob:（S-35 CSP 半面）：文档预览把 HTML/PDF/图片内容注入
+              // frame-src blob:（CSP）：文档预览把 HTML/PDF/图片内容注入
               // blob: iframe（HtmlBody.tsx / pdf/runtime.ts / ImageBody.tsx）。
               // 没有显式 frame-src 时 default-src 'self' 会把这类子 frame 一并拒掉
               // （两种 flavor 同因）。范围收窄到消费点实际所需：只放行 blob:
@@ -1154,10 +1151,10 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
               // ⚠ style-src 'self' 'unsafe-inline' 是 macOS 原生壳视口越界策略的
               // 运行时前提（design 25 §5.2 / deviations S-50，ShellOverscrollPolicy）：
               // 壳注入的 <style> 没有 nonce 可挂。三种改法都会让它被拦、整页弹性回弹
-              // 静默复现（对抗复核用本地 HTTP fixture 逐项实测）：① 删掉 'unsafe-inline'；
+              // 静默复现：① 删掉 'unsafe-inline'；
               // ② 在同一 style-src 里再加 'nonce-…'/'sha256-…'（CSP3：出现 nonce/hash 即
               // 忽略 unsafe-inline）；③ 新增 style-src-elem（它覆盖 style-src 对 <style> 的管辖）。
-              // 改本行必须同时复核 S-50；static-serving.test.ts 三条断言钉住这三种形态。
+              // 改本行必须同时保持 S-50 成立；static-serving.test.ts 三条断言钉住这三种形态。
               `default-src 'self'; base-uri 'none'; object-src 'none'; frame-src blob:; frame-ancestors 'none'; form-action 'none'; script-src 'self' 'unsafe-eval' 'nonce-${cspNonce}'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:`,
             )
             let url: URL
@@ -1338,7 +1335,7 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
       return instanceId
     },
 
-    /** The managed local dsh host's port (design 17 §2.1 改动①). */
+    /** The managed local dsh host's port (design 17 §2.1). */
     getLocalDshPort() {
       return local.getDshPort()
     },
@@ -1394,12 +1391,12 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
 export { resolveNodeExecutable, sanitizeManagedDshEnv, spawnDsh } from './spawn-dsh.ts'
 // Unary RPC remains the ordinary control-plane client. Design 17's separately
 // invoked gateway composes the same unary client (runtime-manager.ts) — the
-// retired client-response/event-stream helpers (respond/openEventStream) were
-// deleted with the control-plane session-runtime domain, not re-exported
-// (2026-09-11 review).
+// client-response/event-stream helpers (respond/openEventStream) belong to the
+// removed control-plane session-runtime domain and are not part of this export
+// surface.
 export { call, probeHostIdentity, RpcBusinessError, RpcTransportError } from './dsh-client.ts'
 export type { ProbeHostIdentityOptions } from './dsh-client.ts'
-// The dsh RPC wire envelope single source (A2 cross-package protocol
+// The dsh RPC wire envelope single source (cross-package protocol
 // single-sourcing): envelope construction, server-response parse/validation
 // and the raw node:http unary carrier shared with the desktop probes
 // (ssh-provider.ts consumes them through desktop/control-plane-module.ts).
@@ -1423,7 +1420,7 @@ export type {
   ServerResponseEnvelope,
   ServerResponseParse,
 } from './rpc-envelope.ts'
-// The cordis loader `insert` row render/parse/conflict single source (A2):
+// The cordis loader `insert` row render/parse/conflict single source:
 // shared with the desktop remote seed (plugin-sync.ts) and the local overlay
 // seed above (host-graph-seed.ts).
 export {
@@ -1450,7 +1447,7 @@ export {
   // The seeded file set + the local `--patch` overlay filename: forwarded so
   // EVERY naming of either fact (desktop remote seed / install probes /
   // gateway upload, overlay resolution) derives from host-graph-seed.ts
-  // instead of re-typing a literal (A2 cross-package protocol
+  // instead of re-typing a literal (cross-package protocol
   // single-sourcing). Cross-side equality is pinned by
   // packages/desktop/test/ipc/cross-package-contract.test.ts.
   HOST_GRAPH_PATCH_FILENAME,
@@ -1460,14 +1457,13 @@ export {
 } from './host-graph-seed.ts'
 export type { ChamberHostPackageDescriptor, HostPackageInsert, HostPackageSeedFile } from './host-graph-seed.ts'
 export type { ApiCorsDecision, ApiCorsEvaluator, ApiRequest, ApiResponse, ApiSurface } from './api.ts'
-// Shared forwarding core (design 17 §8, 方案 A): extracted from
-// instance-proxy.ts so `gateway-proxy.ts` reuses the same Host/Origin
-// rewrite + WS splice + limits/errors without forking.
+// Shared forwarding core (design 17 §8, 方案 A): the Host/Origin rewrite +
+// WS splice + limits/errors shared by instance-proxy.ts and
+// `gateway-proxy.ts` without forking.
 export * from './proxy-forward.ts'
 export * from './browser-auth-cookie.ts'
 // Node-side primitives shared with the desktop main process and the gateway
-// server (2026-12 single-sourcing pass; the browser-side twins live in the
-// sidebar's shared face).
+// server (the browser-side twins live in the sidebar's shared face).
 export * from './record-read.ts'
 export * from './error-text.ts'
 export { createJsonStore, JsonStorePersistError, JsonStoreRevisionConflictError } from './json-store.ts'
@@ -1487,13 +1483,13 @@ export type {
   PrivateFileRead,
   PrivateFileReadOptions,
 } from './private-file.ts'
-// The shared owner-only audit-trail core (design 17 §13.4.4, S24): one
+// The shared owner-only audit-trail core (design 17 §13.4.4): one
 // serializer + append/rotate implementation for the gateway server audit and
-// the desktop audit log (dedupe audit E-4/N11, 2026-09).
+// the desktop audit log.
 export { AUDIT_TRAIL_MAX_BYTES, appendAuditTrailLine, serializeAuditEvent } from './audit-trail.ts'
 export type { AuditTrailEvent } from './audit-trail.ts'
-// The plugin spec/name whitelist family (the reserved-name deny predicate is
-// retired: `protected-plugins.ts` owns the judgement, design 21 §6.11)
+// The plugin spec/name whitelist family (the reserved-name DENY predicate
+// lives in `protected-plugins.ts`, which owns the judgement, design 21 §6.11)
 // (design 21 §6.2/§6.7 — single source for the desktop main via
 // control-plane-module.ts and the gateway executor). Renderer mirrors stay
 // hand-written and are pinned by the gateway lockstep test
@@ -1507,8 +1503,8 @@ export {
   RUN_STDOUT_MAX_BYTES,
   WRITE_FILE_MAX_BYTES,
 } from './plugin-spec.ts'
-// The protected-plugin set + generation coupling (design 21 §6.11, decision 19
-// 2026-12 revision): P = B₀ ∪ S ∪ F derivation, the op-phased write-face
+// The protected-plugin set + generation coupling (design 21 §6.11, decision 19):
+// P = B₀ ∪ S ∪ F derivation, the op-phased write-face
 // decision (install/remove judge P alike; remove never judges a version;
 // official-scope installs must pin the instance's exact generation) and the
 // read-face row projection the three backends emit — single source for the
@@ -1555,7 +1551,7 @@ export type {
   RuntimeFamilyResolution,
 } from './protected-plugins.ts'
 // Gateway wire-protocol credential/session facts + SPKI pin helpers (design
-// 17 §7.1/§9.3/§13.4.2/S23) — the single source shared by the gateway server
+// 17 §7.1/§9.3/§13.4.2) — the single source shared by the gateway server
 // (auth.ts/config.ts), the proxy injection gate (instance-proxy.ts) and the
 // desktop client (gateway-session.ts / gateway-provider.ts through
 // control-plane-module.ts). spki-pin.ts exports ride the proxy-forward

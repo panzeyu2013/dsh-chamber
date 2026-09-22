@@ -1,4 +1,4 @@
-/** IPC surface mirror lockstep (2026 audit L3): preload.cts (the surface contract),
+/** IPC surface mirror lockstep: preload.cts (the surface contract),
  *  renderer/src/global.d.ts and the settings-connections global.d.ts are hand-mirrored;
  *  METHOD-set AND FIELD-set comparison turns a silent drift into a loud failure. */
 
@@ -42,7 +42,7 @@ function interfaceBlock(source: string, typeName: string): string {
 
 /** Strip block + line comments so comment prose cannot pollute the scans.
  *  Line comments are stripped only at line START (after optional indentation)
- *  — a `//` inside a string literal must survive (2026 review hardening). */
+ *  — a `//` inside a string literal must survive. */
 // Local variant of the shared stripComments: regex-based block stripping plus line-start-only line comments, so a `//` inside a string literal survives (scripts/dev/test-support/source-text.ts)
 function stripComments(text: string): string {
   return text
@@ -121,8 +121,8 @@ function interfaceFieldNames(source: string, typeName: string): string[] {
   return [...fields].sort()
 }
 
-/** `name: type` signatures of one FLAT interface, type- and optionality-sensitive (M2 /
- *  round-2 A3): a `string` → `string | null` or a required↔optional drift must fail.
+/** `name: type` signatures of one FLAT interface, type- and optionality-sensitive:
+ *  a `string` → `string | null` or a required↔optional drift must fail.
  *  Union-shaped types use interfaceFieldNames. */
 function interfaceFieldSignatures(source: string, typeName: string): string[] {
   const signatures: string[] = []
@@ -159,7 +159,7 @@ function interfaceMethodSignatures(source: string, typeName: string): string[] {
 }
 
 // ---------------------------------------------------------------------------
-// 2026-12 review P2: the five surfaces with NEITHER a golden nor a mirror comparison
+// The five surfaces with NEITHER a golden nor a mirror comparison
 // (systemResume / openIn / deepLink / notifications / badge) join the golden + signature
 // matrix. They are the only mirrors naming their inline payloads differently, so the
 // helpers below normalize exactly that difference — local type expansion, field-order /
@@ -379,17 +379,17 @@ test('system-resume channel name stays in lockstep across all three sites (H2)',
 const transportProvider = readFileSync(join(ROOT, 'packages/desktop/transport-provider.ts'), 'utf8')
 const connectionSave = readFileSync(join(ROOT, 'packages/desktop/connection-save.ts'), 'utf8')
 
-/** The IPC *registration* owner split across the W-10 seam (design 25 §4.1): main.ts keeps
- *  the not-yet-migrated ipcMain.handle(...) registrations while shell-core.installIpcHandlers
- *  registers the S1–S3 channels through the injected registrar, so the send-side references
+/** The IPC *registration* owner split (design 25 §4.1): main.ts owns the
+ *  ipcMain.handle(...) registrations while shell-core.installIpcHandlers
+ *  registers its channels through the injected registrar, so the send-side references
  *  may sit in any of the three files. Scanning the union (main.ts ∪ shell-core.ts ∪
  *  electron-edges.ts) preserves the lockstep strength: the handle/send sets must still equal
  *  the preload invoke/on sets, handle spellings accept both main-side spellings, and the
  *  per-test text anchors stay anchored to the union rather than one file. */
 const MAIN_SIDE_FILES = [
   'main.ts', 'shell-core.ts', 'electron-edges.ts',
-  // 2026-12 stage-3 域拆分：installIpcHandlers 的注册体迁入 shell-ipc-*.ts——
-  // channel 集合/唯一性断言的读取面必须与注册面同步（否则集合静默缩小）。
+  // installIpcHandlers 的注册体分布在 shell-ipc-*.ts——channel 集合/唯一性断言的
+  // 读取面必须与注册面同步（否则集合静默缩小）。
   'shell-ipc-settings.ts', 'shell-ipc-connections.ts', 'shell-ipc-plugins-ssh.ts',
   'shell-ipc-plugins-gateway.ts', 'shell-ipc-plugins-local.ts', 'shell-ipc-open-in.ts',
   'shell-ipc-update.ts', 'shell-ipc-runtime.ts',
@@ -522,7 +522,7 @@ test('UpdateSurface and SettingsSurface stay in lockstep across preload and rend
       `${surface} renderer mirror drifted`,
     )
     // Method NAMES alone cannot see a return-type/parameter drift — compare
-    // full normalized signatures too (2026-12 review L1). preload.cts is the
+    // full normalized signatures too. preload.cts is the
     // surface contract; renderer global.d.ts must mirror it byte-for-byte in
     // shape. Both are also checked against their golden baselines above.
     assert.deepEqual(
@@ -534,7 +534,7 @@ test('UpdateSurface and SettingsSurface stay in lockstep across preload and rend
 })
 
 // ---------------------------------------------------------------------------
-// 2026-12 review P2: the five bridge surfaces (`preload.cts` ↔ renderer global.d.ts)
+// The five bridge surfaces (`preload.cts` ↔ renderer global.d.ts)
 // that had neither a golden nor a mirror comparison now pass the full matrix —
 // golden method sets for BOTH mirrors, normalized signature lockstep, and a payload
 // golden that also catches a drift synchronized across both mirrors.
@@ -552,8 +552,8 @@ const P2_PAYLOAD_GOLDEN: Record<string, string[]> = {
   NotificationRequest: [
     'body: string', "kind: 'complete' | 'ask' | 'request' | 'test'", 'requireHidden: boolean',
     'sessionId: string', 'sourceFingerprint: string', 'sourceId: string', 'title: string',
-    // 内容水位（主计划 §5-16）：desktop 侧 notifications.ts 与 preload.cts 双侧
-    // 可选字段；renderer global.d.ts 必须同批镜像（P2 的 renderer leg）。
+    // 内容水位：desktop 侧 notifications.ts 与 preload.cts 双侧
+    // 可选字段；renderer global.d.ts 必须同步镜像。
     'watermark?: number',
   ],
   NotificationOpenRequest: ['attempt: number', 'deliveryId: number', 'sessionId: string', 'sourceFingerprint: string', 'sourceId: string'],
@@ -619,7 +619,7 @@ test('the notification authority (notifications.ts) and its preload mirror agree
   const authority = interfaceFieldSignatures(notifications, 'NotificationRequest')
   assert.ok(
     authority.includes('watermark?:number'),
-    'notifications.ts must declare the optional watermark (plan §5-16)',
+    'notifications.ts must declare the optional watermark',
   )
   assert.deepEqual(
     interfaceFieldSignatures(preload, 'NotificationRequest'),
@@ -714,7 +714,7 @@ test("the open-in plugin's private bridge face stays a structural subset of the 
 test('UpdateState and UpdatePhase stay locked between updater.ts and the renderer mirror (L3)', () => {
   // preload.cts imports UpdateState/UpdatePhase from updater.ts (type-only, erased at build), so the
   // desktop side cannot drift; renderer/global.d.ts hand-mirrors them for the settings plugins with no
-  // guard (2026-12 review L2). Field signatures are type-sensitive; the phase union compares as alias text.
+  // guard. Field signatures are type-sensitive; the phase union compares as alias text.
   const updater = readFileSync(join(ROOT, 'packages/desktop/updater.ts'), 'utf8')
   assert.deepEqual(
     interfaceFieldSignatures(renderer, 'UpdateState'),
@@ -729,10 +729,10 @@ test('UpdateState and UpdatePhase stay locked between updater.ts and the rendere
 })
 
 test('interfaceFieldSignatures compares the OPTIONALITY marker — a required↔optional drift fails (A3)', () => {
-  // The signature helper itself must be self-honest: before round-2 review A3
-  // the `\??` was matched but DROPPED, so a `restartFailureText: string` vs
-  // `restartFailureText?: string` drift between updater.ts and the renderer
-  // mirror passed silently. Pin the property directly on the helper.
+  // The signature helper itself must be self-honest: dropping the `\??` marker
+  // would let a `restartFailureText: string` vs `restartFailureText?: string`
+  // drift between updater.ts and the renderer mirror pass silently. Pin the
+  // property directly on the helper.
   const required = 'interface X {\n  restartFailureText: string\n}'
   const optional = 'interface X {\n  restartFailureText?: string\n}'
   assert.notDeepEqual(
@@ -791,7 +791,7 @@ test('the IPC result unions carry identical FIELD SETS across the mirrors that n
     ['error', 'ok', 'skipped', 'uploaded'],
     'gateway_plugin_sync result union must remain exact',
   )
-  // GatewayPluginApplyIpcResult (design 21 §6.5, plan Phase 4.6): cancelled ONLY on the
+  // GatewayPluginApplyIpcResult (design 21 §6.5): cancelled ONLY on the
   // ok:true/cancelled member, installed/removed/restarted/deferred ONLY on the completed
   // member, partial/error ONLY on ok:false — a dropped or widened member must fail here. */
   assert.deepEqual(
@@ -893,9 +893,9 @@ test('the desktop chamber-settings store mirrors preload\'s settings types (L3 �
 })
 
 test('settings-connections re-exports the whole IPC face from the renderer (single source of truth, L3)', () => {
-  // T1 (2026 review): the settings plugin no longer structurally mirrors the
-  // IPC types — it re-exports them from the renderer's authoritative
-  // global.d.ts. Assert the re-export statement covers the critical names.
+  // The settings plugin does not structurally mirror the IPC types — it
+  // re-exports them from the renderer's authoritative global.d.ts. Assert the
+  // re-export statement covers the critical names.
   const start = settings.indexOf('export type {')
   assert.ok(start !== -1, 'settings-connections must re-export the IPC face')
   const exportBlock = settings.slice(start, settings.indexOf("} from '../../renderer/src/global.d.ts'", start))
@@ -912,7 +912,7 @@ test('ChamberInjectionState / ChamberHostPackageState / ChamberSettings stay in 
 })
 
 // ---------------------------------------------------------------------------
-// B8: channel-name lockstep. Main registers every channel through IPC_CHANNELS (single
+// channel-name lockstep. Main registers every channel through IPC_CHANNELS (single
 // source of truth); preload cannot import it and duplicates the literals on purpose.
 // Assert: main handle/send sets == preload invoke/on sets, and every preload literal is
 // a known IPC_CHANNELS value.
@@ -920,9 +920,9 @@ test('ChamberInjectionState / ChamberHostPackageState / ChamberSettings stay in 
 
 const { IPC_CHANNELS } = await import('../../ipc-events.ts')
 
-/** Handle-side registration spellings across the W-10 seam split (S1): main.ts owns the
- *  not-yet-migrated ipcMain.handle(...) registrations, installIpcHandlers registers through
- *  deps.ipc.handle(...). The union counts every registration once. */
+/** Handle-side registration spellings: main.ts owns the ipcMain.handle(...)
+ *  registrations, installIpcHandlers registers through deps.ipc.handle(...). The
+ *  union counts every registration once. */
 const MAIN_HANDLE_CALLS = ['ipcMain.handle', 'deps.ipc.handle']
 
 function mainSideSource(): string {
@@ -997,9 +997,8 @@ test('every preload channel literal is a known IPC_CHANNELS value (B8 — consta
 })
 
 test('no IPC_CHANNELS constant is dead or duplicated across the main-side files (B12/E8 — 68/68 恰用一次由事实变断言)', () => {
-  // W-10 S11：installIpcHandlers 的 60 个 handler 注册点与 send 叶迁入后，
-  // 「68 个 channel 常量在 MAIN_SIDE_FILES 的代码引用中各恰用一次」由事实变断言：
-  // 0 次 = 死 channel（注册/发送随某批迁出丢失），>1 次 = 意外双引用（镜像集合
+  // 每个 channel 常量必须在 MAIN_SIDE_FILES 的代码引用中各恰用一次：
+  // 0 次 = 死 channel（注册/发送丢失），>1 次 = 意外双引用（镜像集合
   // 相等看不见）。计数只认 `IPC_CHANNELS.<KEY>` 拼写，注释剥离用下方单趟状态机
   // （正则助手只适用于短 interface 块，整文件 union 会吞掉真实代码）。
   const code = stripCommentsRobust(mainSideSource())
@@ -1016,8 +1015,8 @@ test('no IPC_CHANNELS constant is dead or duplicated across the main-side files 
 
 // ---------------------------------------------------------------------------
 // design 19 §3.7: badge wiring pin — the handler has no direct unit seam, so the load-bearing
-// call shapes are pinned as source assertions. W-10 S2 moved the BADGE_COUNT registration
-// (deps.ipc.handle) and the intent holder into shell-core, while the quit-time clear keeps its
+// call shapes are pinned as source assertions. The BADGE_COUNT registration
+// (deps.ipc.handle) and the intent holder live in shell-core, while the quit-time clear keeps its
 // "had an intent" guard and the native app.setBadgeCount(0) leaf stays injected from main.ts.
 // ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------

@@ -2,13 +2,6 @@
  * Public request boundary: the no-listen policy/dispatch matrix plus the single
  * real-socket proof that the same evaluator threads through the control-plane
  * shell (design 17 sections 5-6).
- *
- * Merged from test/request-policy.test.ts and test/public-http.test.ts. Both
- * sources cover the same wiring chain (createGatewayRequestPolicy ->
- * createGatewayDispatch -> control-plane middleware); every test title,
- * assertion and behaviour is carried over verbatim. The only unified text is
- * the duplicated "const TOKEN" declaration, hoisted once to the shared header
- * below.
  */
 
 import { request as httpRequest } from 'node:http'
@@ -26,8 +19,6 @@ import { createGatewayDispatch } from '../../src/dispatch.ts'
 import { createGatewayRequestPolicy } from '../../src/middleware.ts'
 
 const TOKEN = '0123456789abcdef0123456789abcdef'
-
-// --- merged from test/request-policy.test.ts ---
 
 /** Gateway public-boundary matrix: one policy covers HTTP, preflight and WS. */
 
@@ -252,8 +243,6 @@ test('every rejection carries the failing-check reason for diagnostics; allowanc
   const allowed = boundary.evaluate(request({ host: 'gateway.example:3000' }, '203.0.113.8'))
   assert.equal(allowed.reason, undefined)
 })
-
-// --- merged from test/public-http.test.ts ---
 
 /** One real-socket proof that the gateway evaluator threads through the
  * control-plane shell; the rest of the boundary matrix stays no-listen. */

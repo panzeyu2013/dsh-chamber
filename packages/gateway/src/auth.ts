@@ -11,7 +11,7 @@
  *                 (S12), login rate limit (S8), and rotate-jwt-secret on
  *                 password changes (S13).
  *
- * Phase 1 — runtime credential management: credentials are SERVER STATE, not
+ * Runtime credential management: credentials are SERVER STATE, not
  * deployment config. `createAuth` seeds the persisted store from config via
  * `seedCredentialsFromConfig` (config-asserted only while the persisted source
  * is `'config'`; `'runtime'` credentials are authoritative and config seeding
@@ -103,16 +103,16 @@ export interface AuthProvider {
   /** Capture an unforgeable, generation-bound proof for a principal returned
    * by this provider. Dispatch uses it to avoid repeating bearer scrypt. */
   captureChangeProof?(principal: AuthPrincipal): AuthChangeProof | null
-  /** Runtime password change (Phase 1; wire errors documented in the module
+  /** Runtime password change (wire errors documented in the module
    * docstring). `remove:true` deletes the password; otherwise `newPassword`
    * must be 12–1024 characters. */
   changePassword?(input: ChangePasswordInput, req: AuthRequest, proof?: AuthChangeProof): Promise<ChangePasswordResult>
-  /** Runtime token change (Phase 1). `remove:true` deletes the token;
+  /** Runtime token change. `remove:true` deletes the token;
    * otherwise `newToken` (optional, 32–4096 visible ASCII) or a CSPRNG
    * generated value is set. The plaintext `token` is returned exactly once
    * when a new value was set. */
   changeToken?(input: ChangeTokenInput, req: AuthRequest, proof?: AuthChangeProof): Promise<ChangeTokenResult>
-  /** Non-secret projection of the CURRENT persisted credentials (Phase 2, S5):
+  /** Non-secret projection of the CURRENT persisted credentials (S5):
    * per-dimension provenance and last-write time ONLY — the verifier/hash
    * values never leave the store and never appear in the projection. `null`
    * means the dimension currently has no credential. */
@@ -517,7 +517,7 @@ function createPasswordProvider(
 
 // Dynamic facade
 
-/** The dynamic AuthProvider facade (Phase 1): effective kind and verify/login
+/** The dynamic AuthProvider facade: effective kind and verify/login
  * dispatch share the current generation-bound credential-presence snapshot;
  * changePassword/changeToken mutate it (serialized by a promise-chain mutex,
  * with stale pre-authentication proofs rejected between queued mutations).
@@ -707,8 +707,6 @@ function createDynamicAuthProvider(config: AuthConfig, store: GatewayStore, deps
       if (input.currentPassword !== undefined && typeof input.currentPassword !== 'string') {
         throw coded('bad_request', 'currentPassword must be a string')
       }
-      // remove and a new value are mutually exclusive — never silently ignore
-      // a conflicting field (honest failure over silent surprise).
       if (remove && input.newToken !== undefined) {
         throw coded('bad_request', 'newToken must not be present with remove')
       }
@@ -825,7 +823,7 @@ function createDynamicAuthProvider(config: AuthConfig, store: GatewayStore, deps
     },
     changePassword,
     changeToken,
-    // Phase 2 projection: strip the verifier/hash before anything leaves the
+    // Projection: strip the verifier/hash before anything leaves the
     // provider — the wire contract is provenance + updatedAt only (S5).
     credentialProjection() {
       const passwordRecord = store.getPasswordCredentialRecord()

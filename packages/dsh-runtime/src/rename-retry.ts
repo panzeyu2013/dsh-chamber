@@ -1,5 +1,5 @@
 /**
- * Windows-safe directory rename with bounded retry (design 21 M2a / C5
+ * Windows-safe directory rename with bounded retry (design 21 / C5
  * mitigation). On Windows a directory rename fails with EPERM/EBUSY while any
  * third-party handle holds the tree (Defender scanning, search indexer, an
  * Explorer window, …). Windows never grants POSIX-style atomic directory
@@ -9,8 +9,8 @@
  * an interrupted transaction on the next startup (续作), so a bounded retry
  * here shrinks the transient window without inventing false atomicity.
  *
- * POSIX behavior is byte-for-byte unchanged: off-win32 hosts call the plain
- * `rename` and never touch the retry schedule. Pure policy functions are
+ * POSIX behavior is the plain `rename`: off-win32 hosts call it and never
+ * touch the retry schedule. Pure policy functions are
  * unit-tested on every CI leg; only the schedule constants are exported for
  * owners who need a visible policy.
  */

@@ -54,8 +54,8 @@ test('legacyProtectedName: the official and chamber domains stay refused on the 
   ]) {
     assert.equal(legacyProtectedName(refused), true, `${refused} must be refused by the legacy fallback`)
   }
-  // 官方 opt-in 层（@deepseek-ai/dsh-experimental-*）在新投影里可装可卸，但旧
-  // 服务端仍按旧规则拒绝整个官方域 —— 回退路径不猜 opt-in 白名单（§6.11.7）。
+  // 官方 opt-in 层（@deepseek-ai/dsh-experimental-*）在投影里可装可卸，但未升级
+  // 服务端仍拒绝整个官方域 —— 回退路径不猜 opt-in 白名单（§6.11.7）。
   assert.equal(legacyProtectedName('@deepseek-ai/dsh-experimental-x'), true)
   // A versioned full spec still matches by prefix when a caller forgets to
   // extract the name first.
@@ -450,7 +450,7 @@ test('pluginRowsOf: absent/non-array rows answer null (the §6.11.7 fallback tri
   assert.equal(pluginRowsOf(null), null)
   assert.equal(pluginRowsOf({}), null)
   assert.equal(pluginRowsOf({ rows: undefined }), null)
-  // 形状校验：非数组同样走回退，绝不抛（旧 producer 的意外载荷不是崩溃点）。
+  // 形状校验：非数组同样走回退，绝不抛（producer 的意外载荷不是崩溃点）。
   assert.equal(pluginRowsOf({ rows: 'nope' as unknown as PluginRowShape[] }), null)
   const rows = [row({ name: 'a' })]
   const copy = pluginRowsOf({ rows })
@@ -462,7 +462,7 @@ test('isActionableRow: every UNPROTECTED row enters the diff boundary (layers in
   assert.equal(isActionableRow(row({ name: 't', role: 'third-party' })), true)
   assert.equal(isActionableRow(row({ name: 'm', role: 'materialized' })), true)
   // 角色不参与判据：用户自己加的层（layer）同样是用户内容，必须可同步——按角色收窄
-  // 会把它们从对账视图里静默抹掉（功能回归，2026-12 review 修正）。
+  // 会把它们从对账视图里静默抹掉（功能回归）。
   assert.equal(isActionableRow(row({ name: 'l', role: 'layer' })), true)
   assert.equal(isActionableRow(row({ name: 'u', role: 'unknown' })), true)
   // protected 是后端判定：即使角色看起来像第三方（运行时线族的非层成员），
@@ -521,7 +521,7 @@ test('sshSyncableDependencies: the ssh transport filter drops official scope (wh
     'third-party-a': '^1.0.0',
     'local-copy': 'file:../p',
   })
-  // rows 缺失（旧 producer，§6.11.7）：legacy 回退同样滤掉官方 scope（旧前缀规则）。
+  // rows 缺失（旧 producer，§6.11.7）：legacy 回退同样滤掉官方 scope（前缀规则）。
   assert.deepEqual(
     Object.keys(sshSyncableDependencies({ 'pkg-a': '^1.0.0', '@deepseek-ai/old': '^1.0.0' }, null)),
     ['pkg-a'],
@@ -551,12 +551,12 @@ test('actionableDependencies: rows absent (old gateway) falls back to the legacy
     '@scope/third-party': '^2.0.0',
   })
   // 空 rows 不是「缺失」：后端明确投影了空集 ⇒ 没有任何可操作行（绝不静默退回
-  // 按域名的旧过滤——新口径下官方 opt-in 层也可装卸）。
+  // 按域名的过滤——官方 opt-in 层也可装卸）。
   assert.deepEqual(actionableDependencies(dependencies, []), {})
 })
 
 test('projectInstalledRows: rows mode renders one row per declared dependency (protected flagged read-only)', () => {
-  // 行集口径（design 21 §6.11.5 的 2026-09 修订）：后端只按依赖表投影，所以受保护行
+  // 行集口径（design 21 §6.11.5）：后端只按依赖表投影，所以受保护行
   // 也**带依赖值**（`@deepseek-ai/dsh-base` 若出现，是因为该 profile 自己声明了它）。
   const dependencies = {
     '@deepseek-ai/dsh-base': '^0.1.0', '@dsh-chamber/dsh-chamber-seed-client-graph': '0.3.1',
@@ -599,7 +599,7 @@ test('projectInstalledRows: rows absent falls back to the legacy dependencies fi
   assert.deepEqual(projected.rows, [
     { name: 'third-party-a', spec: '^1.0.0', version: null, role: 'unknown', protected: false, removable: true },
   ])
-  // 空 rows（新后端投影了空集）不是回退：legacy:false、行集为空。
+  // 空 rows（后端投影了空集）不是回退：legacy:false、行集为空。
   const empty = projectInstalledRows({ 'third-party-a': '^1.0.0' }, [])
   assert.equal(empty.legacy, false)
   assert.deepEqual(empty.rows, [])

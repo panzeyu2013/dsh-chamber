@@ -54,7 +54,7 @@ export function fakeHttpRequest(handler: (url: URL, options: any) => UpstreamBeh
         upstreamSocket.write = () => true
         upstreamSocket.pipe = (target: unknown) => target
         upstreamSocket.destroy = () => {}
-        // S2: NON-loopback (direct-http) splices arm OS-level TCP keepalive
+        // NON-loopback (direct-http) splices arm OS-level TCP keepalive
         // on the upstream leg — real node sockets carry net.Socket.setKeepAlive;
         // record the configuration here so wiring tests can assert it.
         upstreamSocket.keepAliveCalls = []

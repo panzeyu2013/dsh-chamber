@@ -1,11 +1,11 @@
 /**
  * Win32-only lifecycle integration tests for the Windows process probes
- * (design 02 §5.1 parity work, M1). These SELF-SKIP on POSIX hosts and run
+ * (design 02 §5.1 parity work). These SELF-SKIP on POSIX hosts and run
  * only on the Windows CI leg: they spawn real detached process trees and
  * exercise CIM identity, netstat port ownership, residual-tree discovery and
  * taskkill /T /F tree termination against the real Windows tooling.
  *
- * Fixture-generation note (audit fix, 2026): every path embedded into the
+ * Fixture-generation note: every path embedded into the
  * generated child script goes through JSON.stringify — a raw Windows
  * tmpdir path (`C:\Users\…\Temp\…`) interpolated into a single-quoted JS
  * literal would be parsed as escape sequences (`\U`, `\r`, …) and silently

@@ -7,7 +7,7 @@ import {
   type ReclaimDecisionInput,
 } from '../../src/retention.ts'
 
-// N-ctx 视图保留策略（2026 性能整改，见 src/retention.ts 头注）：local 恒留、
+// N-ctx 视图保留策略（见 src/retention.ts 头注）：local 恒留、
 // 隐藏壳上限 RETAINED_HIDDEN_VIEWS=1、回收候选 = 已 settle + 非
 // active/pending/prewarm-inflight + 连续隐藏 ≥ VIEW_RECLAIM_GRACE_MS。
 // App 接线（计时维护/回收动作/可见性补偿）不在本文件测试范围（React 组件
@@ -80,12 +80,12 @@ test('在途预热（prewarm inflight）不计入隐藏壳数，既不回收它�
     prewarmInflightId: 'dsh-b',
     hiddenSince: hiddenFor(['dsh-a', 'dsh-b'], LONG_AGO),
     // 在途壳在 App 里必然是**未 settle** 的（settle 会清 prewarmInflightRef），
-    // 夹具必须复现该形态，否则钉不住真正的场景（2026-12 复查 NIT）。
+    // 夹具必须复现该形态，否则钉不住真正的场景。
     settled: settledSet(['dsh-a']),
   }
   // 在途壳本身不可回收；它若计入上限，唯一候选就是用户的 dsh-a（会被回收并写入
   // 抑制键，用户最近用过的源白白失去温壳）。正确行为：本轮不回收——在途壳由
-  // 收割（推送/截止/放弃上限）或 settle 后的下一轮负责（2026-12 复查 MINOR）。
+  // 收割（推送/截止/放弃上限）或 settle 后的下一轮负责。
   assert.deepEqual(decide(input), [])
   // 在途结束后恢复既有语义：超限回收最久未用者。
   assert.deepEqual(decide({ ...input, prewarmInflightId: null }), ['dsh-a'])
@@ -126,8 +126,7 @@ test('超窗即进入候选', () => {
 test('恰好等于安全窗边界即可回收（≥ 语义，2026 评审修正）', () => {
   // 判别构造：A 恰在边界（now - GRACE）、B 超窗更久、C 仍在窗内；隐藏 3
   // 超限 2 → 候选须含 A。若实现是严格大于（>），A 被排除、只回收 B——
-  // 本测试钉住与 docs「≥60s」一致的语义（旧单视图构造经 excess==0 早退，
-  // 从未触达边界过滤，标题与实现矛盾）。
+  // 本测试钉住与 docs「≥60s」一致的语义。
   const atBoundary = NOW - VIEW_RECLAIM_GRACE_MS
   const result = decide({
     mountedViews: [LOCAL, 'dsh-a', 'dsh-b', 'dsh-c'],

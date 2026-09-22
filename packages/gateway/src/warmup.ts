@@ -1,5 +1,5 @@
 /**
- * Login-phase background pre-warm (design 17 §10.6, 2026-12 revision): the ONE
+ * Login-phase background pre-warm (design 17 §10.6): the ONE
  * pre-auth route that may touch the managed dsh.
  *
  * While an unauthenticated visitor sits on /auth/login typing the password,
@@ -10,18 +10,18 @@
  * instead of paying the measured ~4.35 MiB gzip download.
  *
  * WHY THE URL IS THE REAL ONE (measured, Chrome 152): the HTTP cache is
- * URL-keyed. The previous token wrapper /chamber/warmup/<token>?u=<url> stored
- * a DIFFERENT cache entry than the app's own fetch of the real URL, so the app
- * still hit the server and the pre-warm bought nothing. Keeping the real URL
- * makes the prefetch and the app's own <script src> share one cache entry. The
- * capability that lets the anonymous prefetch through therefore travels as a
- * short-lived COOKIE, never in the URL.
+ * URL-keyed. A token wrapper such as /chamber/warmup/<token>?u=<url> would
+ * store a DIFFERENT cache entry than the app's own fetch of the real URL: the
+ * app would still hit the server and the pre-warm would buy nothing. Keeping
+ * the real URL makes the prefetch and the app's own <script src> share one
+ * cache entry. The capability that lets the anonymous prefetch through
+ * therefore travels as a short-lived COOKIE, never in the URL.
  *
  * The boundary discipline (the reason this is allowed to exist pre-auth):
  *
  *  - CAPABILITY COOKIE: GET /auth/login sets dsh_gateway_warmup — an
- *    HMAC-SHA256 over exp|warmup|<client address>, domain-separated from both
- *    the session signing key and the retired URL token. HttpOnly,
+ *    HMAC-SHA256 over exp|warmup|<client address>, domain-separated from the
+ *    session signing key. HttpOnly,
  *    SameSite=Lax, Secure when the request is secure, Max-Age 120 s. The
  *    cookie is NOT path-bound: one grant covers every prefetched URL, and the
  *    path allowlist lives on the route. A request without a valid grant is
@@ -38,7 +38,7 @@
  *  - RATE LIMIT: a bounded per-client-address token bucket keeps anonymous
  *    traffic from abusing the route (429 warmup_rate_limited).
  *  - AGGREGATE BUDGET: a max concurrent upstream-fetch count and a global
- *    buffered-byte cap bound the reviewer-measured multi-hundred-MiB replay
+ *    buffered-byte cap bound the measured multi-hundred-MiB replay
  *    (40 concurrent 8 MiB bundles); over budget answers 503 warmup_capacity.
  *  - KILL SWITCH: config.warmup (DSH_GATEWAY_WARMUP / --no-warmup, default
  *    ON) disables discovery, rendering and the route.
@@ -114,8 +114,8 @@ export const MAX_WARMUP_RESPONSE_BYTES = 32 * 1024 * 1024
 export const MAX_WARMUP_CONCURRENT_FETCHES = 8
 
 /** Aggregate budget: total bytes buffered across ALL in-flight warm-up
- * fetches. The security review measured +581 MiB RSS from 40 concurrent
- * replays of an 8 MiB bundle; this cap bounds the whole feature's buffer
+ * fetches. 40 concurrent replays of an 8 MiB bundle measured +581 MiB RSS;
+ * this cap bounds the whole feature's buffer
  * (release happens on every settle, including failures). */
 export const MAX_WARMUP_TOTAL_BUFFERED_BYTES = 64 * 1024 * 1024
 
@@ -173,8 +173,7 @@ export const WARMUP_PASSED_RESPONSE_HEADERS = [
 
 /** Domain label for the capability cookie grant: the signing key is derived
  * from the store's jwt secret through this label, so a grant can never be a
- * session token and a session JWT can never satisfy the grant verifier. (The
- * retired URL-bound token universe was removed together with its route.) */
+ * session token and a session JWT can never satisfy the grant verifier. */
 const WARMUP_COOKIE_DOMAIN_LABEL = 'dsh-gateway/warmup-cookie/v1'
 
 /** The cookie payload subject marker; a token blindly replayed as a cookie
@@ -310,10 +309,10 @@ export function isWarmupPathAllowed(pathAndQuery: string): boolean {
   for (const segment of path.split('/')) {
     if (segment === '.' || segment === '..') return false
   }
-  // The single-row shape is judged on the PATH only (2026-09 review): the raw
-  // target's `[^/]+` used to swallow a '?' — `/plugins/foo?x=y/client.js`
-  // passed and reached the loopback as `/plugins/foo`, so any visitor holding
-  // an auto-issued login cookie could probe arbitrary one-segment /plugins
+  // The single-row shape is judged on the PATH only: a `[^/]+` match against
+  // the raw target could swallow a '?' — `/plugins/foo?x=y/client.js` would
+  // reach the loopback as `/plugins/foo`, letting any visitor holding
+  // an auto-issued login cookie probe arbitrary one-segment /plugins
   // paths (upstream 404) instead of this gateway's uniform 401. A query is a
   // COMBO-only form; the combination request keeps its query.
   if (WARMUP_COMBO_PATH_RE.test(pathAndQuery)) {
@@ -545,10 +544,10 @@ async function fetchIndexDocument(url: string, signal: AbortSignal, authCookie: 
   const response = await fetch(url, { method: 'GET', redirect: 'manual', signal, headers })
   if (!response.ok) throw new Error('HTTP ' + response.status)
   if (response.body === null) return ''
-  // Streaming bound (2026-09 review, MAJOR): `response.text()` read the WHOLE
-  // body before the cap was checked — a 12.5 MiB index was fully delivered
-  // (measured +32.9 MiB RSS for one request) and only then rejected. Cancel as
-  // soon as the cap is crossed, so the memory cost is one chunk over it.
+  // Streaming bound: `response.text()` would read the WHOLE body before the
+  // cap is checked — a 12.5 MiB index (measured +32.9 MiB RSS for one request)
+  // would be fully delivered and only then rejected. Cancel as soon as the cap
+  // is crossed, so the memory cost is one chunk over it.
   const reader = response.body.getReader()
   const decoder = new TextDecoder()
   let text = ''
@@ -587,7 +586,7 @@ export function createWarmupController(deps: WarmupDeps): WarmupController {
   const maxTotalBufferedBytes = deps.budget?.maxTotalBufferedBytes ?? MAX_WARMUP_TOTAL_BUFFERED_BYTES
   /** per-dsh-port discovery result: urls (empty on failure) + fetch time. */
   const discoveryCache = new Map<number, { urls: string[]; at: number; ok: boolean }>()
-  /** In-flight discovery per dsh port (2026-09 review, MAJOR): the login page
+  /** In-flight discovery per dsh port: the login page
    *  AWAITS discovery and one unauthenticated connection can pipeline many
    *  index requests, so without single-flight N concurrent renders issued N
    *  concurrent loopback index fetches against the managed dsh (measured 100
@@ -813,13 +812,13 @@ export function createWarmupController(deps: WarmupDeps): WarmupController {
       // (the same identity the login-page mint used): the rate bucket and the
       // cookie binding must agree with dispatch's decision.
       const requestClient = clientAddress !== undefined && clientAddress !== '' ? clientAddress : (req.socket?.remoteAddress ?? '')
-      // CAPABILITY FIRST (2026-09 review, MAJOR): the bucket used to be spent
-      // before the cookie was looked at, so a caller WITHOUT any grant could
-      // drain it (5 req/s keeps it empty) and every bundle request from that
-      // client address — including a legitimately logged-in session on a NAT —
-      // got 429 from this pre-auth leg, never reaching the auth gate's verdict
-      // or its audit. design 17 §10.6: absent/stale/tampered/foreign cookie ⇒
-      // unclaimed, so the route may not answer at all.
+      // CAPABILITY FIRST: spending the bucket before looking at the cookie
+      // would let a caller WITHOUT any grant drain it (5 req/s keeps it
+      // empty), so every bundle request from that client address — including
+      // a legitimately logged-in session on a NAT — would get 429 from this
+      // pre-auth leg, never reaching the auth gate's verdict or its audit.
+      // design 17 §10.6: absent/stale/tampered/foreign cookie ⇒ unclaimed,
+      // so the route may not answer at all.
       const presented = readWarmupCookie(headerValue(req.headers, 'cookie'))
       if (presented === undefined) return { kind: 'unclaimed' }
       let granted = false

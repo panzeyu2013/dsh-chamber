@@ -1,5 +1,5 @@
 /**
- * build-sidecar.test.mjs —— W-23 sidecar 打包脚本单测（design 25 §3.2/§4.3）
+ * build-sidecar.test.mjs —— sidecar 打包脚本单测（design 25 §3.2/§4.3）
  *
  * 覆盖：
  *  ① 参数解析与布局（缺省 out、各开关、未知参数 loud）；
@@ -7,18 +7,18 @@
  *  ③ Node 归档命名/URL/成员路径 + SHASUMS256.txt 解析；
  *  ③b 摘要固定（PINNED_NODE_SHA256）：默认版本两架构全覆盖、pin/override/冲突/
  *     未固定四种判定（纯函数，不联网）；
- *  ③c Electron pin → 内置 node 的固定表（G37：无 Electron 二进制也无条件断言，
- *     漂移臂 loud）与 vendor/dsh 版本 + 平台装配断言（G39，拷贝前 fail-closed）；
+ *  ③c Electron pin → 内置 node 的固定表（无 Electron 二进制也无条件断言，
+ *     漂移臂 loud）与 vendor/dsh 版本 + 平台装配断言（拷贝前 fail-closed）；
  *  ④ SHA-256 流式计算与不匹配检测；
  *  ⑤ **A5 断言**：捆绑 Node 基名必须叫 node——正例通过、反例 loud；
  *     并实证 resolveNodeExecutable 的纯 Node 分支前提（basename(execPath) ==
  *     'node' → 直用 execPath；其他基名 → 回落，不直用）；
  *  ⑥ --dry-run 真实子进程：输入校验通过、不写盘、不联网（exit 0）；
  *  ⑦ normalizeSymlinks：树内绝对链接→相对、树外链接→实体化、悬空→loud、
- *     幂等（P2：cpSync 会把相对链接绝对化，bundle 因此过不了 codesign）；
+ *     幂等（cpSync 会把相对链接绝对化，bundle 因此过不了 codesign）；
  *  ⑧ copyTree：cpSync(verbatimSymlinks) 只搬链接，实体化全部交给 normalizeSymlinks；
- *  ⑨b --skip-* 的诚实语义：跳过 = 缺位，不继承上一轮装配；
- *  ⑨c 历史 tsc emit 目录（dist/sidecar）被清掉，不再被 electron-builder 打包。
+ *  ⑨b --skip-* 的诚实语义：跳过 = 缺位，不继承既有装配；
+ *  ⑨c tsc emit 目录（dist/sidecar）被清掉，不被 electron-builder 打包。
  * 不联网、不下载 Node、不写仓库外路径（dry-run 无副作用）。
  */
 import { test } from 'node:test'
@@ -80,14 +80,13 @@ const desktopDir = path.resolve(here, '..')
 const script = path.join(here, 'build-sidecar.mjs')
 
 /**
- * Host-derived default arch (G5): parseBuildSidecarArgs mirrors the machine
+ * Host-derived default arch: parseBuildSidecarArgs mirrors the machine
  * (x64 host → x64 archive, everything else → arm64 DEFAULT_ARCH) exactly like
- * build-sidecar.mjs:388. The tests used to hardcode arm64, so an x64 Mac read
- * as a false red.
+ * build-sidecar.mjs. Hardcoding arm64 would read an x64 Mac as a false red.
  */
 const HOST_ARCH = process.arch === 'x64' ? 'x64' : 'arm64'
 
-/** vendor/dsh 的平台前缀（G39 断言读它；实际形如 darwin-arm64）。 */
+/** vendor/dsh 的平台前缀（装配断言读它；实际形如 darwin-arm64）。 */
 const HOST_PLATFORM = `${process.platform}-${HOST_ARCH}`
 
 /** The desktop manifest — single source for the pnpm pin asserted below. */
@@ -99,7 +98,7 @@ test('① 参数解析：缺省值、开关与错误', () => {
   assert.equal(defaults.dryRun, false)
   assert.equal(defaults.skipNode, false)
   assert.equal(defaults.nodeVersion, DEFAULT_NODE_VERSION)
-  // G5: the default arch follows the HOST (x64 → x64), not a hardcoded arm64.
+  // The default arch follows the HOST (x64 → x64), not a hardcoded arm64.
   assert.equal(defaults.arch, HOST_ARCH)
   assert.equal(defaults.nodeSha256, null)
 
@@ -114,7 +113,7 @@ test('① 参数解析：缺省值、开关与错误', () => {
   assert.equal(parsed.nodeVersion, '24.9.0')
   assert.equal(parsed.nodeSha256, 'ab'.repeat(32), 'sha256 归一化为小写')
   assert.equal(parsed.arch, 'x64')
-  // Negative arm: --arch is a whitelist (D8) — an explicit bad value must fail
+  // Negative arm: --arch is a whitelist — an explicit bad value must fail
   // loudly rather than flow into the archive name and the lipo assertion.
   assert.throws(() => parseBuildSidecarArgs(['--arch', 'ia32']), /--arch 只接受 arm64\|x64/)
   assert.equal(parseBuildSidecarArgs(['--arch', 'arm64']).arch, 'arm64')
@@ -139,7 +138,7 @@ test('② 计划文本反映开关', () => {
   const base = parseBuildSidecarArgs([])
   const full = buildPlan(base).join('\n')
   assert.match(full, /esbuild 打包 sidecar-entry\.ts/)
-  // G5: the plan URL carries the host-derived arch, never a hardcoded arm64.
+  // The plan URL carries the host-derived arch, never a hardcoded arm64.
   assert.match(
     full,
     new RegExp('Node 捆绑：https://nodejs\\.org/dist/v' + DEFAULT_NODE_VERSION.replace(/\./g, '\\.')
@@ -217,7 +216,7 @@ test('③b Node 归档摘要固定在仓库：默认版本两架构全覆盖 + �
   assert.deepEqual(resolvePinnedNodeDigest('x.tar.gz', null, { 'x.tar.gz': 'b'.repeat(64) }),
     { digest: 'b'.repeat(64), source: 'pinned' })
 
-  // G18: 表 ↔ DEFAULT_NODE_VERSION 的锁步现在是构建期断言（runBuildSidecar 在
+  // 表 ↔ DEFAULT_NODE_VERSION 的锁步是构建期断言（runBuildSidecar 在
   // 动网络之前调用），不是注释——多留旧版本行、少一个 arch、摘要写错都 loud。
   assert.deepEqual(assertNodePinTable(), [...Object.keys(PINNED_NODE_SHA256)].sort())
   assert.throws(
@@ -277,8 +276,8 @@ test('④ sha256File 流式摘要 + verifySha256 真值/不匹配', async () => 
   try {
     const file = path.join(dir, 'payload.bin')
     writeFileSync(file, 'dsh-chamber')
-    // 真值 = sha256("dsh-chamber")（勿手写假摘要——2026-09 审计：旧测试的
-    // 假期望值让「任何 64 位 hex 都通过」，校验回归不可见）。
+    // 真值 = sha256("dsh-chamber")（勿手写假摘要——假期望值会让
+    // 「任何 64 位 hex 都通过」，校验回归不可见）。
     const real = '857528dee81128d5a6156b79a167c06a91b36e9c28fcf7be286210b6d7c7d6cf'
     assert.equal(await sha256File(file), real)
     assert.equal(await verifySha256(file, real), real)
@@ -340,7 +339,7 @@ test('③c dry-run 真校验输入源（显式缺失即抛 / 默认缺失 warn�
     const plan = buildPlan(parseBuildSidecarArgs(['--dry-run', '--out', out])).join('\n')
     assert.match(plan, /\[4\] Node 捆绑/)
     assert.equal(existsSync(out), false, 'dry-run 不得创建输出目录')
-    // 缺 --node-archive 源 → 抛（原实现静默"校验通过"）
+    // 缺 --node-archive 源 → 抛（不得静默"校验通过"）
     await assert.rejects(
       runDryRun(['--dry-run', '--out', out, '--node-archive', path.join(dir, 'missing.tgz')]),
       /--node-archive 不存在/,
@@ -350,7 +349,7 @@ test('③c dry-run 真校验输入源（显式缺失即抛 / 默认缺失 warn�
       runDryRun(['--dry-run', '--out', out, '--vendor-dsh', path.join(dir, 'no-vendor')]),
       /--vendor-dsh 源不存在/,
     )
-    // 默认源缺失 → 只 warn（干净 checkout 的正常形态；2026-09 二轮：严格校验
+    // 默认源缺失 → 只 warn（干净 checkout 的正常形态；严格校验
     // 会让 push CI 必红，因为 vendor/dsh 由 release 腿的 bundle:dsh 物化）。
     // 直接改 options 的默认源路径（保持 Explicit=false）来模拟干净 checkout。
     const warnings = []
@@ -377,7 +376,7 @@ test('③d vendor/dsh + pnpm 拷贝（Electron extraResources 同款过滤器）
     const vendorSrc = path.join(dir, 'vendor-src')
     mkdirSync(path.join(vendorSrc, 'node_modules', 'x'), { recursive: true })
     mkdirSync(path.join(vendorSrc, 'node_modules', '@deepseek-ai', 'dsh'), { recursive: true })
-    // G39：真实 vendor 树必须让 verifyVendorDshRuntime 过关——runtime manifest
+    // 真实 vendor 树必须让 verifyVendorDshRuntime 过关——runtime manifest
     // 记录的版本 == 包内 dsh 的 version，dsh.platform 以宿主前缀开头；否则拷贝
     // 在任何写盘之前就 fail closed（这里同时是非漂移正例）。
     writeFileSync(path.join(vendorSrc, 'package.json'), JSON.stringify({
@@ -405,7 +404,7 @@ test('③d vendor/dsh + pnpm 拷贝（Electron extraResources 同款过滤器）
     const pnpmSrc = path.join(dir, 'pnpm-src')
     mkdirSync(path.join(pnpmSrc, 'bin'), { recursive: true })
     mkdirSync(path.join(pnpmSrc, 'dist'), { recursive: true })
-    // 版本必须是仓库 pin（G18 fail-closed）——写别的版本 copyPnpm 会抛。
+    // 版本必须是仓库 pin（fail-closed）——写别的版本 copyPnpm 会抛。
     writeFileSync(path.join(pnpmSrc, 'package.json'), JSON.stringify({ name: 'pnpm', version: PNPM_PINNED_VERSION }))
     writeFileSync(path.join(pnpmSrc, 'bin', 'pnpm.cjs'), '// pnpm')
     writeFileSync(path.join(pnpmSrc, 'bin', 'pnpm.mjs'), '// pnpm mjs')
@@ -465,8 +464,8 @@ test('⑤ A5 实证：resolveNodeExecutable 纯 Node 分支以 basename 为唯�
 test('⑥ 真实装配（--skip-node）：sidecar.js / package.json / control-plane / host 包', async () => {
   const out = mkdtempSync(path.join(tmpdir(), 'dsh-sidecar-build-'))
   try {
-    // --skip-vendor: vendor/dsh 在干净 checkout 是 release-only 产物；缺源现在
-    // fail closed（G6），所以本用例显式表达「不要 vendor」。
+    // --skip-vendor: vendor/dsh 在干净 checkout 是 release-only 产物；缺源
+    // fail closed，所以本用例显式表达「不要 vendor」。
     await runBuildSidecar(parseBuildSidecarArgs(['--out', out, '--skip-node', '--skip-vendor']), {
       log: () => {},
       error: () => {},
@@ -513,7 +512,7 @@ test('⑥ --dry-run 子进程：输入校验通过、无写盘、无联网', asy
 test('⑨b --skip-* 产生缺位：不继承上一轮装配的 node / sidecar.js / vendor / pnpm / host 包', async () => {
   const out = mkdtempSync(path.join(tmpdir(), 'dsh-sidecar-skip-'))
   try {
-    // 上一轮完整装配的遗留（含改名前的旧 host 包目录）。
+    // 既有完整装配的遗留（含改名前的 host 包目录）。
     writeFileSync(path.join(out, 'node'), 'stale node')
     chmodSync(path.join(out, 'node'), 0o755)
     writeFileSync(path.join(out, 'sidecar.js'), '// stale bundle')
@@ -534,7 +533,7 @@ test('⑨b --skip-* 产生缺位：不继承上一轮装配的 node / sidecar.js
     assert.equal(existsSync(layout.pnpm), false, '--skip-vendor 必须清掉旧 pnpm')
     assert.equal(existsSync(path.join(layout.dist, 'dsh-host-client-graph')), false,
       '--skip-host-packages 不得让旧 host 包目录残留')
-    // dist 仍由 control-plane 重建（它是本次的唯一合法成员）。
+    // dist 仍由 control-plane 重建（它是唯一的合法成员）。
     assert.deepEqual(readdirSync(layout.dist), ['control-plane'])
   } finally {
     rmSync(out, { recursive: true, force: true })
@@ -583,7 +582,7 @@ test('G6 缺源 fail-closed：不跳过的源缺失是非零失败，不再 warn
   const dir = mkdtempSync(path.join(tmpdir(), 'dsh-sidecar-missing-source-'))
   try {
     const out = path.join(dir, 'out')
-    // 上一轮装配的遗留（持久装配目录的常态）：旧 vendor/dsh + pnpm 齐全。
+    // 既有装配的遗留（持久装配目录的常态）：vendor/dsh + pnpm 齐全。
     mkdirSync(path.join(out, 'vendor', 'dsh'), { recursive: true })
     writeFileSync(path.join(out, 'vendor', 'dsh', 'package.json'), '{"name":"dsh","version":"old"}')
     mkdirSync(path.join(out, 'pnpm', 'bin'), { recursive: true })
@@ -595,7 +594,7 @@ test('G6 缺源 fail-closed：不跳过的源缺失是非零失败，不再 warn
       options.pnpmDir = path.join(dir, 'no-pnpm')
       return options
     }
-    // 缺 vendor 源：在任何写盘之前抛（G6）；提示里的逃生门是 --skip-vendor。
+    // 缺 vendor 源：在任何写盘之前抛；提示里的逃生门是 --skip-vendor。
     await assert.rejects(
       runBuildSidecar(makeOptions(), { log: () => {}, warn: () => {}, error: () => {} }),
       /内置 dsh 工作区源不存在：.*--skip-vendor/,
@@ -609,7 +608,7 @@ test('G6 缺源 fail-closed：不跳过的源缺失是非零失败，不再 warn
       runBuildSidecar(pnpmMissing, { log: () => {}, warn: () => {}, error: () => {} }),
       /内嵌 pnpm 源不存在：.*--skip-vendor/,
     )
-    // 旧产物只是「停留」而不是「被本轮认领」：构建非零退出，发布腿不会产出 .app。
+    // 既有产物只是「停留」而不是「被构建认领」：构建非零退出，发布腿不会产出 .app。
     assert.equal(existsSync(path.join(out, 'vendor', 'dsh', 'package.json')), true)
     // dry-run 的既有语义不变：默认源缺失仍是 warn（干净 checkout 正常形态）。
     const dryOptions = parseBuildSidecarArgs(['--dry-run', '--out', out, '--skip-node'])
@@ -653,9 +652,9 @@ test('G18 装配捆绑 node 的版本 == DEFAULT_NODE_VERSION（装配存在时�
 })
 
 test('G37 Electron pin → node 版本是固定表（无 Electron 二进制也必须断言）', () => {
-  // 旧 G18 断言执行 Electron 二进制读 process.versions.node，缺二进制即响亮 SKIP
-  // ——而 CI 每条腿都没有 Electron dist（electron 无 postinstall），所以它在 CI
-  // 恒跳过。表把映射变成无条件断言：desktop 的精确 Electron pin 必须命中一行，
+  // 执行 Electron 二进制读 process.versions.node 的断言在没有 dist 时只能响亮
+  // SKIP——而 CI 每条腿都没有 Electron dist（electron 无 postinstall），所以它在
+  // CI 恒跳过。表把映射变成无条件断言：desktop 的精确 Electron pin 必须命中一行，
   // 且该行 node 版本必须等于 DEFAULT_NODE_VERSION；升级任一 pin 都会红。
   const electronPin = resolveElectronPin(DESKTOP_MANIFEST)
   assert.equal(electronPin, DESKTOP_MANIFEST.devDependencies.electron)
@@ -672,7 +671,7 @@ test('G37 Electron pin → node 版本是固定表（无 Electron 二进制也�
   assert.throws(() => resolveElectronPin({ devDependencies: {} }), /缺少 devDependencies\.electron/)
 
   // 二进制在场时（桌面开发机 / DSH_CHAMBER_ELECTRON=1）仍实测交叉验证表值——
-  // 表是 CI 的门，实测是表本身的证据；缺二进制不再跳过上面的断言。
+  // 表是 CI 的门，实测是表本身的证据；缺二进制不跳过上面的断言。
   const electronBinary = findElectronBinary()
   if (electronBinary === null) {
     console.log('note: Electron dist 未物化——表断言已执行（G37）；物化后本用例会再实测一次')
@@ -715,7 +714,7 @@ test('G39 vendor/dsh 版本 + 平台装配断言：漂移的 vendor 树在拷贝
     writeTree('0.2.0', 'linux-x64')
     assert.throws(() => verifyVendorDshRuntime(vendor, 'darwin'), /vendor\/dsh 平台漂移.*linux-x64/)
 
-    // 半拷贝/空目录：缺包内 dsh manifest 同样 loud（release 旧实现的 test -f 覆盖不到）。
+    // 半拷贝/空目录：缺包内 dsh manifest 同样 loud（只做 test -f 覆盖不到）。
     writeTree('0.2.0', 'darwin-arm64')
     rmSync(path.join(dshDir, 'package.json'))
     assert.throws(() => verifyVendorDshRuntime(vendor, 'darwin'), /vendor\/dsh 装配不完整/)
@@ -781,7 +780,7 @@ test('⑦ normalizeSymlinks：树内→相对、树外→实体化、悬空 loud
     assert.equal(rewritten, 3)
     // 树内 → 相对链接（保留链接语义）
     assert.equal(readlinkSync(path.join(dest, '.bin', 'inside')), '../pkg/cli.js')
-    // 树外 → 实体化（文件/目录），不再是链接
+    // 树外 → 实体化（文件/目录），不是链接
     assert.ok(!lstatSync(path.join(dest, '.bin', 'outside')).isSymbolicLink())
     assert.equal(readFileSync(path.join(dest, '.bin', 'outside'), 'utf8'), 'outside\n')
     assert.ok(!lstatSync(path.join(dest, 'dirlink')).isSymbolicLink())
@@ -811,7 +810,7 @@ test('⑧ copyTree：verbatim 只搬链接；树内相对链接保留、树外�
     symlinkSync('../pkg/cli.js', path.join(src, '.bin', 'inside'))
     symlinkSync(path.join(external, 'out.js'), path.join(src, '.bin', 'outside'))
 
-    // cpSync(verbatimSymlinks: true)：链接原样搬运，不再自行 deref/绝对化。
+    // cpSync(verbatimSymlinks: true)：链接原样搬运，不自行 deref/绝对化。
     copyTree(src, dst)
     assert.ok(lstatSync(path.join(dst, '.bin', 'inside')).isSymbolicLink())
     assert.equal(readlinkSync(path.join(dst, '.bin', 'inside')), '../pkg/cli.js')
@@ -825,7 +824,7 @@ test('⑧ copyTree：verbatim 只搬链接；树内相对链接保留、树外�
     assert.ok(!lstatSync(path.join(dst, '.bin', 'outside')).isSymbolicLink())
     assert.equal(readFileSync(path.join(dst, '.bin', 'outside'), 'utf8'), 'out\n')
 
-    // 悬空链接：copyTree 不再自带第二份检查，normalizeSymlinks loud。
+    // 悬空链接：copyTree 不自带第二份检查，normalizeSymlinks loud。
     symlinkSync(path.join(root, 'missing'), path.join(src, '.bin', 'dangling'))
     copyTree(src, path.join(root, 'dst2'))
     assert.throws(() => normalizeSymlinks(path.join(root, 'dst2')), /符号链接目标不存在/)
@@ -837,7 +836,7 @@ test('⑧ copyTree：verbatim 只搬链接；树内相对链接保留、树外�
 test('⑨ 装配目录重建：上一轮遗留的 host 包目录（T2 改名前的旧名）不留在产物里', async () => {
   const out = mkdtempSync(path.join(tmpdir(), 'dsh-sidecar-rebuild-'))
   try {
-    // 模拟"改名前的上一轮装配"：旧名 host 包目录 + 一个无关的陈旧目录。
+    // 模拟"改名前的既有装配"：旧名 host 包目录 + 一个无关的陈旧目录。
     const stale = path.join(out, 'dist', 'dsh-host-client-graph', 'dist')
     mkdirSync(stale, { recursive: true })
     writeFileSync(path.join(stale, 'index.js'), 'stale\n')

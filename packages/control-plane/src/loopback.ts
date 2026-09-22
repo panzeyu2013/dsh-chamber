@@ -1,6 +1,5 @@
 /**
- * Loopback hostname classification — the single leaf for the hostname tests
- * that used to live in api.ts and instance-proxy.ts (A2 single-sourcing):
+ * Loopback hostname classification — the single leaf for the hostname tests:
  *
  * - the CORS/Host fence exact-membership test (api.ts corsFor);
  * - the ssh/gateway transport loopback-origin gates (instance-proxy.ts

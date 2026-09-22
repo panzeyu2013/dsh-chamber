@@ -1,7 +1,6 @@
 /**
- * Armed-confirmation machine + LIVE-fact guard tests (2026-09-11 upstream-alignment
- * T2 + review-fix F2): the confirm state machine and the guards that re-validate an
- * armed request at accept time. Plain node, no DOM, no React. The machine's own
+ * Armed-confirmation machine + LIVE-fact guard tests: the confirm state machine
+ * and the guards that re-validate an armed request at accept time. Plain node, no DOM, no React. The machine's own
  * contract and the section wiring that re-reads live facts before an accept are one
  * contract chain (the guards import the machine).
  */
@@ -166,7 +165,7 @@ test('re-arming replaces the previous request without running it', () => {
 });
 
 // The probe: a request armed while the server was idle, a ~3s status poll flipping
-// the gate while the dialog stayed open, then the confirm click. The runners now
+// the gate while the dialog stayed open, then the confirm click. The runners
 // re-validate against the LIVE facts; these tests pin both the predicates and the
 // machine transition that drops them. The gates come from the shared gateway core
 // (`remoteRuntimeActionGates`), so they assert the SECTION's wiring decision, never

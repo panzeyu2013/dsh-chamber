@@ -4,7 +4,7 @@
  * full boot (test:client-web boot-rows case). The kernel adopts two entries
  * itself: `modules` (its record is pre-materialized as the module-system
  * bootstrap) and `ui-renderer` (its factory is shell-static, registered on the
- * shared module table — rc.8 baseline alignment); the manifest rows follow
+ * shared module table); the manifest rows follow
  * minus those two, then the per-instance extra client-plugin rows from the
  * host boot graph.
  */
@@ -13,8 +13,8 @@
 export const MODULES_ID = '@deepseek-ai/dsh-client-modules'
 
 /** The ui-renderer package's own graph row id (kernel-adopted, never fetched).
- *  rc.8 moved the slot-renderer install and the application mount OUT of the
- *  shell into this row; the chamber kernel adopts it (page-own covered id —
+ *  This row carries the slot-renderer install and the application mount; the
+ *  chamber kernel adopts it (page-own covered id —
  *  the host-graph merge filters it, chamber-entry never imports it) and the
  *  boot mounts through the `uiRenderer` service its apply provides. */
 export const UI_RENDERER_ID = '@deepseek-ai/dsh-client-ui-renderer'
@@ -32,7 +32,7 @@ export function composeBootRows(
   extraIds: readonly string[] = [],
 ): string[] {
   const manifest = manifestIds.filter(id => id !== MODULES_ID && id !== UI_RENDERER_ID)
-  // Dedupe WITHIN extras (2026 review W1): a duplicated extra id would be
+  // Dedupe WITHIN extras: a duplicated extra id would be
   // passed to loader.create twice. Kernel/manifest overlaps stay (union
   // model — the loader creates kernel rows first, first wins).
   const extras = extraIds.filter((id, index) => extraIds.indexOf(id) === index)

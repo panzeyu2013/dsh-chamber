@@ -1,6 +1,6 @@
 /**
- * Pure derivation/format helpers for the connections section (2026-12 audit
- * phase 3): the section component keeps orchestration and JSX only. These are
+ * Pure derivation/format helpers for the connections section: the section
+ * component keeps orchestration and JSX only. These are
  * window-free and React-free, so the plain-node test suite can lock them.
  */
 import type { SshInstanceSpec, SshPhase } from '../global.d.ts'
@@ -22,7 +22,7 @@ export function credentialReentryEdit(editing: SshInstanceSpec | 'new' | null, v
 }
 
 /** Localize a URL-parse failure — shared by validation and the defensive
- *  save-time re-check (P3-3) so both report the same loud error. */
+ *  save-time re-check so both report the same loud error. */
 export function gatewayUrlErrorText(parsed: Extract<ReturnType<typeof parseGatewayUrl>, { ok: false }>, t: (key: SettingsConnectionsKey) => string): string {
   return parsed.error === 'required'
     ? t('validationDirectUrlRequired')

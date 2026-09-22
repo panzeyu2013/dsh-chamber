@@ -294,7 +294,6 @@ test('login-phase pre-warm defaults ON; input and DSH_GATEWAY_WARMUP can turn it
     assert.equal(parseGatewayConfig({}, STATE, DSH).warmup, true)
     process.env.DSH_GATEWAY_WARMUP = 'banana'
     assert.throws(() => parseGatewayConfig({}, STATE, DSH), GatewayConfigError)
-    // An explicit input wins over the env.
     process.env.DSH_GATEWAY_WARMUP = '1'
     assert.equal(parseGatewayConfig({ warmup: false }, STATE, DSH).warmup, false)
   } finally {

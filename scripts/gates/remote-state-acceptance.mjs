@@ -1,13 +1,11 @@
 #!/usr/bin/env node
 /**
  * remote-state-acceptance —— 远程会话状态与切源体验的**统一验收执行器**
- * （plan `docs/progress/todo/remote-session-state-and-switch.md` §9 验收矩阵 /
- * §10 测试与度量 / W4「验收脚本」交付物）。
  *
  * 为什么需要它：本仓的验收面横跨 6 个包 + 网关 + 手机壳，且**两种运行环境**
  * 混在一起——CI（有 node_modules、有 vendor 树）与本工作树（无 node_modules、
  * vendor 未物化）。把「真失败」与「环境阻塞」混为一谈，就会得到「本地绿」的
- * 假结论；这正是 plan §9 与 residual-verifiability-review 反复强调的诚实性要求。
+ * 假结论。
  *
  * 本脚本因此做三件事：
  *   1. 按组跑**可跑的**测试文件（默认用 bundled node，可 --node 覆盖）；
@@ -33,10 +31,7 @@ const LOADER = 'packages/gateway/test/session-state/workspace-loader.mjs'
 
 /**
  * Default interpreter: the assembly's bundled node when it is a real file, else
- * the node running this script. It used to be the absolute path
- * '/Applications/dsh-chamber.app/Contents/Resources/sidecar/node', which turned
- * every local run into ~30 bogus failures on any machine that did not carry the
- * maintainer's app bundle (P1-2 of the 13-scripts audit).
+ * the node running this script.
  */
 function defaultNode() {
   return resolveNodeBinary(resolveSidecarDir())
@@ -58,7 +53,7 @@ const GROUPS = [
   {
     id: 'control-plane-protocol',
     cwd: 'packages/control-plane',
-    // protocol/ = 协议与 mux；proxy/sse-resume = §11 风险条（Last-Event-ID 续传）的行为锁。
+    // protocol/ = 协议与 mux；proxy/sse-resume = Last-Event-ID 续传的行为锁。
     files: [...listFiles('packages/control-plane/test/protocol'), 'test/proxy/sse-resume.test.ts'],
   },
   { id: 'gateway-session-state', cwd: 'packages/gateway', nodeArgs: ['--import', '../../' + LOADER], files: listFiles('packages/gateway/test/session-state') },
@@ -75,7 +70,7 @@ const GROUPS = [
     'packages/renderer/test/wiring/session-liveness-wiring.test.ts',
     'packages/renderer/test/lifecycle/source-readiness.test.ts',
     'packages/renderer/test/lifecycle/source-refresh-hint.test.ts',
-    // WS-C 事实接线（probe/SSE 源 + v2 未读落盘 + 派生）
+    // 事实接线（probe/SSE 源 + v2 未读落盘 + 派生）
     ...listFiles('packages/renderer/test/session-state'),
   ].filter(f => existsSync(join(ROOT, f))) },
   { id: 'desktop-edges', cwd: 'packages/desktop', files: [
@@ -115,7 +110,7 @@ function runOne(node, cwd, file, nodeArgs, env) {
   const pass = Number((out.match(/^ℹ pass (\d+)$/m) ?? [])[1] ?? '0')
   const fail = Number((out.match(/^ℹ fail (\d+)$/m) ?? [])[1] ?? '0')
   const tests = Number((out.match(/^ℹ tests (\d+)$/m) ?? [])[1] ?? '0')
-  // G4（审计假绿面 #4）：BLOCKED 子串启发式会把输出里恰好含环境标记的**真断言失败**降级成
+  // BLOCKED 子串启发式会把输出里恰好含环境标记的**真断言失败**降级成
   // blocked（不计 fail ⇒ exit 0）。真失败优先：AssertionError / ℹ fail>0 一律判 fail。
   const blockedByEnv = BLOCKED_MARKERS.some(m => out.includes(m))
   const hardFail = fail > 0 || /AssertionError/.test(out)
@@ -127,7 +122,7 @@ function runOne(node, cwd, file, nodeArgs, env) {
 }
 
 /**
- * `--self-test`：**仪表本身必须能失败**（plan §10 的纪律）。用两个合成用例跑同一条
+ * `--self-test`：**仪表本身必须能失败**。用两个合成用例跑同一条
  * runOne 判据：故意失败的必须判 fail 且非零退出，故意通过的必须判 pass——
  * 两侧都要成立，才能排除「分类器一律判红」或「一律判绿」这两种假绿。
  */
@@ -158,7 +153,7 @@ function main() {
     console.error(`未知分组 ${only}；可用：${GROUPS.map(g => g.id).join(', ')}`)
     process.exit(2)
   }
-  // G1（审计假绿面 #1）：整组文件来自 listFiles/existsSync —— 目录改名或清空会让该组变成
+  // 整组文件来自 listFiles/existsSync —— 目录改名或清空会让该组变成
   // 0 项而整体仍 exit 0。这与本脚本头注释的"不静默跳过"矛盾，故空组一律报错退出。
   const emptyGroups = groups.filter(g => g.files.length + (g.self?.length ?? 0) === 0)
   if (emptyGroups.length > 0) {

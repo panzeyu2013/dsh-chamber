@@ -1,5 +1,5 @@
 /**
- * audit-log unit tests (design 17 §13.4.4, S24): JSONL append semantics, 0600
+ * audit-log unit tests (design 17 §13.4.4): JSONL append semantics, 0600
  * owner-only mode, size-based rotation to `<file>.1`, and the whitelist
  * serializer — smuggled credentials never reach disk, invalid events write nothing.
  */
@@ -89,7 +89,7 @@ test('the serializer is a fixed whitelist: a caller-attached credential field ne
     kind: 'gateway',
     transport: 'http',
     detail: 'auth:token',
-    // Deliberately smuggled secrets: the serializer must drop every field (S24).
+    // Deliberately smuggled secrets: the serializer must drop every field.
     password: PASSWORD,
     token: TOKEN,
     cookie: COOKIE,

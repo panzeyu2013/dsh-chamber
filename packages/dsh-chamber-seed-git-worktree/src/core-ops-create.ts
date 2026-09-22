@@ -1,12 +1,12 @@
 /**
- * core-ops-create.ts — the GitWorktreeCore create/rollback family (B5 split).
+ * core-ops-create.ts — the GitWorktreeCore create/rollback family.
  *
  * Deps injection instead of class surgery: the factory receives exactly the
  * fields and cross-family callbacks this path uses (git runner, fs, clock,
  * token, operation cap, preview/create-operation tables, common-dir mutex and
  * the read/validate/topology/path callbacks), so no private member of
  * GitWorktreeCore is widened. GitWorktreeCore keeps same-named facade methods
- * and the package/error surface is unchanged.
+ * and the package/error surface stays stable.
  */
 
 import { resolve, sep } from 'node:path'

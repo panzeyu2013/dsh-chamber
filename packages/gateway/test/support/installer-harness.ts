@@ -1,7 +1,6 @@
 /**
  * Shared installer harness for the split packaging suites: installer library
  * slicing, the host-safe systemctl stubs and the bash harness runners over it.
- * Extracted verbatim from install-script.test.ts.
  */
 
 import assert from 'node:assert/strict'
@@ -29,21 +28,19 @@ export const LIB_EPILOGUE = '\nEXITED_OK=1\n'
 /**
  * Host-global safety net prepended to every harness body.
  *
- * The installer's D2 cross-mode cleanup calls `systemctl` DIRECTLY — not the
+ * The installer's cross-mode cleanup calls `systemctl` DIRECTLY — not the
  * `systemctl_for_mode` wrapper — with the FIXED unit name
  * `dsh-chamber-gateway.service` (`scripts/install-gateway.sh:2619-2623`:
  * "cross-mode overwrite install first cleans the old mode's residue"), and the
  * install/update paths reach it. A harness body that mocks only
- * `systemctl_for_mode` therefore lets the REAL systemctl through: running this
- * suite on a machine that has the real gateway service installed STOPS (and, on
- * a normal dev box, also DISABLES) that service. Observed on the project's own
- * Linux test rig — three `test:gateway` runs each stopped the host gateway
- * ~35-41 s in, triggered by the `do_install` test ("overlay install rollback…"),
- * taking their own agent session down with it (the suite runs inside the
- * gateway unit's cgroup, so its own `stop` killed the caller before `disable`).
+ * `systemctl_for_mode` therefore lets the REAL systemctl through: on a machine
+ * that has the real gateway service installed, the suite STOPS (and, on a
+ * normal dev box, also DISABLES) that service, and because the suite can run
+ * inside the gateway unit's cgroup its own `stop` can kill the caller before
+ * the `disable` lands.
  *
  * The stub is installed only where a real `systemctl` exists, so the macOS leg
- * keeps its previous "no systemd" behavior, and `systemctl_for_mode` is left to
+ * keeps its "no systemd" behavior, and `systemctl_for_mode` is left to
  * the library (tests that assert scope routing still exercise it). A test that
  * wants to observe systemctl defines its own function in the body, which
  * overrides this stub.

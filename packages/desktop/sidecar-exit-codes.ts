@@ -2,7 +2,7 @@
  * sidecar 退出码分级（design 25 §3.3(4)/B7）。
  *
  * 单独成模块：`sidecar-entry.ts` 顶层会解析 argv 并启动控制面，直接 import
- * 会执行 boot——常量必须可被测试与 Swift 侧文档安全引用（2026-09 三审 #7）。
+ * 会执行 boot——常量必须可被测试与 Swift 侧文档安全引用。
  *
  *   0  EXIT_GRACEFUL        优雅停止（SIGTERM/SIGINT/stdin EOF）
  *   1  EXIT_RUNTIME_CRASH   运行期崩溃（uncaughtException/unhandledRejection）

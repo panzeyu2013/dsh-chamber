@@ -7,7 +7,7 @@
  * Type source: packages/renderer/src/global.d.ts is the authoritative
  * full-shape declaration of window.dshChamber (interface merging requires
  * IDENTICAL property types, so a partial/subset declaration could never
- * merge with it). The update types are re-exported from that file, and the
+ * merge with it). The update types are re-exported from that file.
  */
 import type { DshChamberBridge, UpdatePhase, UpdateState, UpdateSurface } from '../../../../packages/renderer/src/global.d.ts'
 

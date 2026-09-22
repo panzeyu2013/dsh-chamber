@@ -1,11 +1,11 @@
 /**
- * chamber-lock.ts —— 双 flavor 跨进程互斥锁（design 25 §6.3；Electron 侧，W-27 后续）
+ * chamber-lock.ts —— 双 flavor 跨进程互斥锁（design 25 §6.3；Electron 侧）
  *
  * 设计契约（design 25 §6.3 B2）：同一 userData 根绝不允许 Electron 版与 Swift
  * 版并发（registry/凭据事务/runtime 树无跨进程锁）。Swift 侧用
  * `flock(LOCK_EX|LOCK_NB)`（SidecarSupervisor）；Electron 侧没有 Node 的 flock
  * API，但 **Darwin 的 open(2) 支持 O_EXLOCK**，且 `fs.open` 接受数值 flags
- * （2026-09 实测：同进程第二次 open 得 EAGAIN，close 后可重取）——因此
+ * （同进程第二次 open 得 EAGAIN，close 后可重取）——因此
  * darwin 上可零依赖实现同一把锁：
  *
  *   open(path, O_RDWR | O_CREAT | O_NOFOLLOW | O_EXLOCK | O_NONBLOCK, 0o600)
@@ -130,9 +130,8 @@ export function acquireChamberLock(options: AcquireChamberLockOptions): ChamberL
     closeSync(fd)
     return { ok: false, holderPid: null, error: `锁文件属主异常（uid=${info.uid}）：${recordPath}` }
   }
-  // 收紧既有宽松权限（O_CREAT 的 mode 只对新建生效；2026-09 审计 info 项：
-  // 与「秘密文件同纪律」措辞对齐）。
-  // 0o7777 而非 0o777：setuid/setgid/sticky 位同样要收紧（三审边界）。
+  // 收紧既有宽松权限（O_CREAT 的 mode 只对新建生效）。
+  // 0o7777 而非 0o777：setuid/setgid/sticky 位同样要收紧。
   if ((info.mode & 0o7777) !== 0o600) {
     try {
       fchmodSync(fd, 0o600)

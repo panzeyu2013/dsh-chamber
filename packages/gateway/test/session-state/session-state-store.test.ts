@@ -1,6 +1,6 @@
 /**
  * Session-state store: the per-session state machine and the R12 turn/end
- * classification contract (plan W1 / WS-B). Pure module tests: every fact is
+ * classification contract. Pure module tests: every fact is
  * fed through the store API and observed on the frozen wire projection.
  *
  * Run directly:
@@ -270,7 +270,7 @@ test('normalizeHostState maps unknown plane states to unknown', () => {
   assert.equal(normalizeHostState('weird-plane-state'), 'unknown')
 })
 
-test('host-down keeps rows but flips serviceable false (plan section 4)', t => {
+test('host-down keeps rows but flips serviceable false', t => {
   const store = storeFor(t)
   store.applyBaseline([baselineItem('s1', true, 5)], { at: 100 })
   assert.equal(store.setHost({ state: 'stopped', serviceable: false }), true)

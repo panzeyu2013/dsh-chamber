@@ -1,11 +1,11 @@
 /**
- * runtime-probe-detail.test.ts —— 探针失败诊断单源单测（W-10 家族）。
+ * runtime-probe-detail.test.ts —— 探针失败诊断单源单测。
  *
  * 覆盖：
  *  ① probeFailureDetail：只列失败项、缺 error 的兜底文案、全通过 = ''、600 字符上限；
  *  ② probeFailureMessage：前缀 + 明细；无明细（全部通过/空数组）时 no probe results；
- *  ③ metadataProbeFailureMessage：元数据恢复路径文案（main.ts 原 metadataProbeError
- *     逐字）与无明细兜底，且经 sanitizeErrorText 收敛。
+ *  ③ metadataProbeFailureMessage：元数据恢复路径的固定文案与无明细兜底，且经
+ *     sanitizeErrorText 收敛。
  * 纯逻辑（无网络、无 Electron、无子进程）。
  */
 import { test } from 'node:test'
@@ -58,7 +58,7 @@ test('③ metadataProbeFailureMessage：内建探针文案与无明细兜底', (
   )
   const long = metadataProbeFailureMessage([{ name: 'p', ok: false, error: 'e'.repeat(2_000) }])
   // 明细本身被 probeFailureDetail 截到 600；前缀 + 截断明细 = 有界的最终文案
-  // （sanitizeErrorText 不负责截断，main.ts 原实现同样依赖 600 上限）。
+  // （sanitizeErrorText 不负责截断，600 上限来自 probeFailureDetail 的截断）。
   assert.ok(long.length <= 620, 'sanitize 后仍必须收敛（不把 2000 字符原样透出）')
   assert.ok(long.includes('内建 dsh 运行时探针失败：p: '))
 })

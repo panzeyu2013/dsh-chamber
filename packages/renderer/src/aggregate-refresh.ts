@@ -7,7 +7,7 @@ import type { InstanceAggregate, InstanceSnapshot } from '@dsh-chamber/dsh-chamb
  * not-ready -> ready edge: the producer de-duplicates identical snapshots, so
  * it may have nothing new to publish after a reconnect (a previously-pushed
  * mounted source keeps its pushed view through the outage —
- * shouldRetainPushedAggregate — and only NEVER-pushed sources were replaced
+ * shouldRetainPushedAggregate — and only NEVER-pushed sources are replaced
  * with `not-connected`). One pull per connection generation restores the
  * aggregate without reintroducing a timer.
  */
@@ -29,9 +29,8 @@ export function isFallbackDerivedView(current: InstanceAggregate | undefined): b
  * Whether a not-ready source's current aggregate may be RETAINED through a
  * transport outage instead of being replaced by `not-connected`.
  *
- * 2026-09 bugfix (sidebar: reconnect resurfaces archived conversations, click
- * dead-ends into the new-session view): the disconnect wipe used to replace
- * EVERY ok aggregate with `not-connected`, so the not-ready -> ready edge
+ * A disconnect must retain an ok aggregate's last PUSHED view: replacing
+ * EVERY ok aggregate with `not-connected` would make the not-ready -> ready edge
  * committed the FULL unary fallback view — which carries NO archive set and
  * cwd-derived synthetic groups. When the mounted ctx store then stayed
  * silent (nothing changed + producer signature dedupe suppresses an identical
@@ -58,13 +57,13 @@ export function shouldRetainPushedAggregate(
 /**
  * Whether a MOUNTED source whose aggregate is STUCK on the degraded fallback
  * view (synthetic rows present) should get a lightweight ctx connection
- * reconnect, bounded by the same backoff as the S2 stale-channel arm. The
+ * reconnect, bounded by the same backoff as the stale-channel arm. The
  * reconnect replays the workspace follow baseline; the store withdrawal
  * clears the producer's content signature, so the identical recovered
  * baseline is re-published and replaces the fallback view (with its archive
- * set) — the heal for aggregates that degraded before this retention fix (or
- * through any residual full-commit path). Recording discipline（2026 评审校
- * 正，与 S2 臂一致 = M4）：仅在 reconnectInstanceConnection() 实际调用成功
+ * set) — the heal for aggregates stuck on the degraded view (through any
+ * residual full-commit path). Recording discipline（与重连臂一致）：仅在
+ * reconnectInstanceConnection() 实际调用成功
  * （返回 true）时记录 lastReconnectAt——no-op 重连（无连接持有者，如已回收
  * 来源）不消耗退避窗，每可见 tick 的重试是廉价 no-op。
  */
@@ -81,7 +80,7 @@ export function shouldRebaselineFallbackView(opts: {
 }
 
 /**
- * Watchdog reconnect threshold per source transport (S2 arm; 2026-09 extension).
+ * Watchdog reconnect threshold per source transport.
  *
  * The staleness watchdog cannot distinguish a FROZEN push channel from a
  * healthy-but-quiet one (mounted producers only push on content changes), so
@@ -110,7 +109,7 @@ export const AGGREGATE_RECONNECT_HTTP_STALE_MS = 120_000
 export const AGGREGATE_RECONNECT_SSH_STALE_MS = 300_000
 
 /**
- * The S2 reconnect threshold for one source's transport, or null when this
+ * The reconnect threshold for one source's transport, or null when this
  * arm must not touch it (local / unknown). Callers pass the authoritative
  * per-instance transport from the roster projection.
  * @param transport - `'http' | 'ssh' | 'local' | …` (untrusted shape).
@@ -126,7 +125,7 @@ export function reconnectStalenessMsForTransport(transport: unknown): number | n
  * Commit one unary aggregate pull over the current per-source aggregate.
  *
  * The unary fallback cannot express workspace identity or the archive set
- * (0.1.2 wire: `workspace.list` was deleted upstream — the archive set exists
+ * (the archive set exists
  * only on the workspace follow baseline, so `fetchInstanceSnapshot` returns
  * an EMPTY archive set plus cwd-derived synthetic groups). A source whose
  * mounted producer already pushed must therefore keep its pushed
@@ -134,11 +133,10 @@ export function reconnectStalenessMsForTransport(transport: unknown): number | n
  * (running bits, new sessions), exactly the documented "sessions-only
  * fallback never replaces a mounted source's groups/archive/state" contract
  * (derive.ts projectInstanceSnapshot doc). Without this, the staleness
- * watchdog's 30s re-pull of a healthy-but-idle mounted source replaced the
- * aggregate with the degraded fallback: every archived session resurfaced
- * together with synthetic workspace groups (beta 0.2.0 regression —
- * "archived-resurfacing", the exact regression the 2026-09 withdrawal rule
- * was meant to prevent). Never-pushed / unmounted sources keep the full
+ * watchdog's 30s re-pull of a healthy-but-idle mounted source would replace the
+ * aggregate with the degraded fallback, resurfacing
+ * every archived session together with synthetic workspace groups
+ * ("archived-resurfacing"). Never-pushed / unmounted sources keep the full
  * fallback commit (pre-baseline window and unmounted sources are the
  * documented KNOWN DEGRADATION scope).
  *
@@ -153,7 +151,7 @@ export function reconnectStalenessMsForTransport(transport: unknown): number | n
  * (fresh instance — everything renders ungrouped) and is never treated as
  * synthetic.
  *
- * Reachability of the full-commit degraded view (2026-09 revision): the
+ * Reachability of the full-commit degraded view: the
  * not-ready → ready-edge full commit only fires when the current aggregate
  * was NOT retained through the outage (see shouldRetainPushedAggregate — a
  * previously-pushed mounted source keeps its pushed view, so the ready-edge
@@ -179,9 +177,8 @@ export function commitAggregatePull(
     // manager's tri-state input ("[] = genuinely nothing archived"), and the
     // unary fallback carries no archive wire source — dropping the flag here
     // would flip an authoritative source into the degraded manager branch on
-    // the first mutation pull (2026 dev-QA finding: after archiving a
-    // session the requestRefresh pull landed before the producer push and
-    // the archive manager showed the degraded tri-state until a reload).
+    // the first mutation pull (a requestRefresh pull that lands before the
+    // producer push would otherwise show the degraded tri-state until a reload).
     return {
       state: 'ok',
       workspaces: current.workspaces,
@@ -191,10 +188,10 @@ export function commitAggregatePull(
       error: null,
     }
   }
-  // 2026-09 §12: the unary fallback carries NO archive wire
-  // source, so a degraded commit used to publish an EMPTY archive set — every
-  // archived row then rendered as an ordinary row until the next authoritative
-  // push (design 24 §12 F3(b) family). When the App has already seen an
+  // The unary fallback carries NO archive wire
+  // source, so a degraded commit would publish an EMPTY archive set — every
+  // archived row then renders as an ordinary row until the next authoritative
+  // push (design 24 §12). When the App has already seen an
   // AUTHORITATIVE archive set for this source (remembered across the degraded
   // window), publish that remembered set with `archiveSetKnown` still FALSE:
   // the sidebar filters archived rows correctly, while the archive manager
@@ -214,7 +211,7 @@ export function commitAggregatePull(
  * A mounted source that already pushed keeps its last aggregate through pull
  * failures — the unary probe says nothing about the push channel, and
  * replacing authoritative pushed state with an error row would blank/hide it
- * (2026-09 beta regression fix; the same keep-last-view rule as the
+ * (the same keep-last-view rule as the
  * withdrawal window). Returns `null` to signal "keep the current aggregate"
  * (the caller still runs the 503 health refresh and retry bookkeeping).
  * Never-pushed / unmounted sources keep the error state (first-boot error
@@ -226,7 +223,7 @@ export function commitAggregateFailure(mounted: boolean, errorText: string): Ins
 }
 
 /**
- * 保留视图的「无法验证」界限（2026-12 残留修复，design 05 §2.3）。
+ * 保留视图的「无法验证」界限（design 05 §2.3）。
  *
  * 已推送过的来源在每次 unary 拉取失败时**保留最后视图**（commitAggregateFailure
  * → null）：这避免了归档回流与整段空白，但也意味着「事实读持续失败」时视图会被
@@ -238,7 +235,7 @@ export function commitAggregateFailure(mounted: boolean, errorText: string): Ins
  *
  * 为什么清位而不是只加标记：环是**断言**（「该会话正在跑」）。无法验证时保留断言就是
  * 在陈述一个没有证据的事实；而清位 + 可见提示是「不知道」的诚实表达，恢复路径（下一份
- * 权威读）无条件且幂等。已知残余（STATUS 登记）：若宿主其实仍在跑、只是读路径坏掉，
+ * 权威读）无条件且幂等。已知残余：若宿主其实仍在跑、只是读路径坏掉，
  * 用户会暂时看到「无运行环」——由同一条横幅的「重新连接」出口收口。
  * @param factsAt - 最后一次成功验证事实的时刻；undefined = 从未验证（无断言可丢）。
  * @param now - 当前时刻。
@@ -265,7 +262,7 @@ export function shouldDropUnverifiedRunningFacts(opts: {
  * the set" signal. The baseline is the committed aggregate when it is
  * archive-set-authoritative (`state==='ok' && archiveSetKnown===true`),
  * otherwise the caller's `remembered` set — the last authoritative set the
- * App observed for this source (2026-09 §12 F3: a shrink that completed while
+ * App observed for this source (a shrink that completed while
  * the committed aggregate was degraded is otherwise invisible forever). []
  * when neither side is authoritative and for any non-authoritative `next`
  * (unknown provenance must never trigger — the unary fallback's empty set is a
@@ -283,7 +280,7 @@ export function archiveSetShrink(
   remembered?: readonly string[],
 ): string[] {
   if (next.archiveSetKnown !== true) return []
-  // 2026-09 §12: when the committed aggregate lost archive-set
+  // When the committed aggregate lost archive-set
   // provenance (degraded unary view / not-connected / never pushed), the App
   // falls back to the last AUTHORITATIVE set it observed for this source —
   // otherwise a purge that completed while the producer's first projection was
@@ -332,7 +329,7 @@ export function shouldRequestSessionListRefresh(
  *   machine is self-terminating. Push-only evaluation is COMPLETE: mounted
  *   pull commits preserve the current archived set (commitAggregatePull
  *   merge) and full-fallback commits are provenance-gated (archiveSetShrink),
- *   so a pull can never first observe a shrink. Since 2026-09 §12 F3 the
+ *   so a pull can never first observe a shrink. The
  *   shrink baseline may come from the caller's remembered authoritative set
  *   (see archiveSetShrink), which closes the degraded-view gap.
  */
@@ -414,7 +411,7 @@ export function isSnapshotStale(
 }
 
 /**
- * Reconnect predicate for the staleness watchdog (S2 sidebar stability, 对齐
+ * Reconnect predicate for the staleness watchdog (对齐
  * ssh 断链自动恢复): a MOUNTED source whose push channel went silent — stale
  * per {@link isSnapshotStale} — gets a lightweight connection reconnect so
  * the ctx's own healthy reconnect chain re-establishes the workspace follow
@@ -427,9 +424,9 @@ export function isSnapshotStale(
  * action, never a replacement.
  *
  * `mounted` is CALLER-DEFINED — the App passes "the ctx producer pushed at
- * least one snapshot this generation" (worked-then-went-silent, the S2 target
- * class); a channel dead from its first boot never pushes and is covered by
- * the unary fallback instead (KNOWN DEGRADATION scope, M3 review note). Tests
+ * least one snapshot this generation" (worked-then-went-silent); a channel
+ * dead from its first boot never pushes and is covered by
+ * the unary fallback instead (KNOWN DEGRADATION scope). Tests
  * exercise the predicate with explicit `mounted` values.
  */
 export function shouldReconnectStaleMounted(opts: {

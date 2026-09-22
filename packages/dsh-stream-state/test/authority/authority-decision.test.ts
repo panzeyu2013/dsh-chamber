@@ -1,9 +1,8 @@
 /**
- * B4: the sidebar receipt chain's DECISION, moved out of its async orchestration.
+ * The sidebar receipt chain's DECISION, separated from its async orchestration.
  *
- * These cases pin the four verdict branches and the write-back outcome, because they
- * are what the chain's five review rounds argued about - and until now they could
- * only be exercised through the whole async chain.
+ * These cases pin the four verdict branches and the write-back outcome directly,
+ * without the whole async chain.
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'

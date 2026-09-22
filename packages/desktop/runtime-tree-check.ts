@@ -1,10 +1,10 @@
 /**
- * 已安装 dsh 运行树的 upstream client-plugin 闭包抽样（S4 P1，2026-12 Windows 复核）。
+ * 已安装 dsh 运行树的 upstream client-plugin 闭包抽样。
  *
  * 症状：安装树里丢一个上游 client-plugin 包（>260 长路径、Defender 中断的 NSIS
  * 安装、手工删改），应用照常启动，只是复合首屏少一行——sidebarRight 的唯一
  * provider 是 `@deepseek-ai/dsh-client-ui-sidebar-right`，缺它时前端只记一条
- * 降级事实、永久 pending，而构建/打包/启动三处旧门禁全绿。
+ * 降级事实、永久 pending，而构建/打包/启动三处门禁全绿。
  *
  * 本模块是 afterPack 打包断言的**安装期镜像**：
  * `packages/desktop/scripts/after-pack-adhoc-sign.mjs` 的

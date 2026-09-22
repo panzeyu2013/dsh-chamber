@@ -2,13 +2,12 @@
 //  ShellLog.swift
 //  DSHChamber
 //
-//  A2 收口（2026-12 双 flavor 差异复核）：macos/Sources 全树此前 0 处 os_log/
-//  FileHandle——双击态白屏只能靠系统 DiagnosticReports 与 supervisor 闭包里的
-//  stdout（LaunchServices 启动时无处可看）。本文件提供**最小可用**的壳自身
-//  落盘日志：启动、sidecar spawn/退出、导航失败、更新相位、退出链关键点都写一份
+//  本文件提供**最小可用**的壳自身落盘日志：双击态白屏只能靠系统
+//  DiagnosticReports 与 supervisor 闭包里的 stdout（LaunchServices 启动时无处
+//  可看）；启动、sidecar spawn/退出、导航失败、更新相位、退出链关键点都写一份
 //  到磁盘，排障时可考古。
 //
-//  路径与 Electron 侧的关系（**已核实，不含假主张**）：
+//  路径与 Electron 侧的关系：
 //    - 双 flavor 共享同一个 userData 根（PackagedLayout.userDataDir；design 25
 //      §6.1 同根不变量，chamber-lock.test.ts 锁步）；
 //    - Electron 侧自身唯一的日志目录是控制面管理的
@@ -19,7 +18,7 @@
 //      原生壳没有那条管道（它自己就是 sidecar 的父进程），不能把壳日志塞进
 //      按端口寻址的 host-logs 里冒充宿主日志。
 //    - 因此壳自身日志用同根下的独立目录：<userData>/logs/shell.log。
-//      Electron 无对应文件（A1 已登记该不对称），这是新增的原生面，不冲突。
+//      Electron 无对应文件（该不对称已登记），这是新增的原生面，不冲突。
 //
 //  纪律：大小上限 + 单份轮转（shell.log → shell.log.1），
 //  失败静默降级为 stdout（日志写不进去绝不能成为新的致命面）；0600/0700；
@@ -33,17 +32,17 @@ public final class ShellLog {
     /// 进程级共享实例（AppDelegate 启动时 configure；未 configure 时只打印）。
     public static let shared = ShellLog()
 
-    /// sidecar stderr 透传行的独立落盘实例（2026-12 取证修复）。
+    /// sidecar stderr 透传行的独立落盘实例。
     ///
-    /// 此前 `[sidecar] <line>` 只透传到 app 的 stderr——打包态从 Finder/Dock
-    /// 启动时 stdout/stderr 不落盘（实测 `log show --predicate
-    /// 'process == "dsh-chamber"'` 无输出），于是控制面最有价值的归因行
+    /// `[sidecar] <line>` 只透传到 app 的 stderr 不够：打包态从 Finder/Dock
+    /// 启动时 stdout/stderr 不落盘（`log show --predicate
+    /// 'process == "dsh-chamber"'` 无输出），控制面最有价值的归因行
     /// （`WebSocket stream <id> closed (<cause>, Nms)`、`heartbeat lost after N
-    /// unanswered ping(s)`）在原生 flavor 等于丢失，事故只能靠猜。
+    /// unanswered ping(s)`）会丢失，事故只能靠猜。
     ///
     /// 用独立文件而不并入 shell.log：sidecar 日志的量级与轮转需求与壳
-    /// 自身日志不同，混写会让 256 KiB 轮转把壳日志顶掉（同一 2026-12 修复的
-    /// Electron 侧对偶 = 控制面自己的 `<stateDir>/logs/control-plane.log`）。
+    /// 自身日志不同，混写会让 256 KiB 轮转把壳日志顶掉（Electron 侧对偶 =
+    /// 控制面自己的 `<stateDir>/logs/control-plane.log`）。
     public static let sidecar = ShellLog()
 
     /// 相对 userData 根的目录名与文件名（纯函数 fileURL 单测钉住）。
@@ -55,14 +54,14 @@ public final class ShellLog {
     public static let rotatedFileName = "shell.log.1"
     /// 单文件字节上限（256 KiB；一轮排障足够，且不会无限增长）。
     public static let defaultMaxBytes = 256 * 1024
-    /// configure 前缓冲上限（W4b，2026-12 三轮独立复核）。
+    /// configure 前缓冲上限。
     ///
-    /// 启动早期的 shellLog（applicationWillFinishLaunching 的 W3 席位日志、didFinish
+    /// 启动早期的 shellLog（applicationWillFinishLaunching 的阶段日志、didFinish
     /// 顶部若干行）发生在 ShellLog.configure 之前；Finder/Dock 双击启动时 stdout
-    /// 无处可看，这些行此前**永久丢失**。现改为有界缓冲，configure/打开成功后按原
-    /// 顺序补写；超出上限的行丢弃（仍已打印到 stdout）并补一条截断标记。
+    /// 无处可看。有界缓冲在 configure/打开成功后按原顺序补写；超出上限的行丢弃
+    /// （仍已打印到 stdout）并补一条截断标记。
     public static let maxPendingLines = 64
-    /// 截断标记行的稳定片段（W4b 单测直测；完整行还带已丢弃行数）。
+    /// 截断标记行的稳定片段（单测直测；完整行还带已丢弃行数）。
     static let pendingOverflowMarkerFragment = "configure 前日志缓冲超上限"
 
     private let lock = NSLock()
@@ -151,7 +150,7 @@ public final class ShellLog {
         writtenBytes = 0
         lock.unlock()
         openCurrentFile()
-        // W4b：configure 前的有界缓冲按原顺序补写（打开失败则留在缓冲里等下次）。
+        // configure 前的有界缓冲按原顺序补写（打开失败则留在缓冲里等下次）。
         lock.lock()
         flushPendingLocked()
         lock.unlock()
@@ -244,7 +243,7 @@ public final class ShellLog {
             return
         }
         // 目录本身不得是符号链接（与控制面 log-file.ts 的目录检查同纪律）：
-        // createDirectory 会接受已存在的链接，随后写入就落到壳外目录（2026-12 独立复核）。
+        // createDirectory 会接受已存在的链接，随后写入就落到壳外目录。
         if (try? FileManager.default.destinationOfSymbolicLink(atPath: directory.path)) != nil {
             return
         }
@@ -255,14 +254,14 @@ public final class ShellLog {
         }
         // 打开前先轮转已超限的旧文件（不能一边追加一边超限）。rotateLocked() 成功时
         // 自己会重开新文件；**失败时它已降级**（句柄关掉）——此时必须直接返回，否则会
-        // 继续打开那个超限文件，把"已降级"的 sink 又接上（2026-12 二轮独立复核）。
+        // 继续打开那个超限文件，把"已降级"的 sink 又接上。
         if let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
            let size = attributes[.size] as? NSNumber, size.intValue >= maxBytes {
             rotateLocked()
             return
         }
-        // 目录权限在每次打开时收紧（创建参数只对新建生效；T-25 的 0700 声明要
-        // 对已存在的松目录也成立——2026-12 三轮独立复核的实测差异）。best-effort。
+        // 目录权限在每次打开时收紧（创建参数只对新建生效；0700 声明对已存在的
+        // 松目录也成立）。best-effort。
         try? FileManager.default.setAttributes(
             [.posixPermissions: 0o700], ofItemAtPath: directory.path)
         guard let opened = openLeafLocked(url) else {
@@ -277,14 +276,14 @@ public final class ShellLog {
 
     /// 以 POSIX 语义打开日志叶子：**只接受常规文件**，且用 `O_NONBLOCK` 打开。
     ///
-    /// 2026-12 三轮独立复核（BLOCKING）：FileHandle(forWritingTo:) 会跟随链接、
-    /// 也会在 FIFO 上永久阻塞——一个 <userData>/logs/shell.log FIFO 就能把
-    /// applicationDidFinishLaunching 钉死在主线程（与 TS sink 早已修掉的同族缺陷；
-    /// 本文件头注释的"日志写不进去绝不能成为新的致命面"被这一条直接推翻）。
+    /// FileHandle(forWritingTo:) 会跟随链接、也会在 FIFO 上永久阻塞——一个
+    /// <userData>/logs/shell.log FIFO 就能把 applicationDidFinishLaunching 钉死在
+    /// 主线程（与 TS sink 的同族缺陷；本实现必须挡住它，否则文件头注释的"日志写不
+    /// 进去绝不能成为新的致命面"被直接推翻）。
     /// lstat → open(O_NOFOLLOW|O_NONBLOCK) → fstat 三段判据：FIFO/socket/设备/目录/
     /// 链接一律拒绝，lstat 与 open 之间被换掉也由 fstat 兜住。
     private func openLeafLocked(_ url: URL) -> FileHandle? {
-        // 判据并集单源 = PrivateFS（2026-12 单源化）：lstat（FIFO/socket/设备/目录/
+        // 判据并集单源 = PrivateFS：lstat（FIFO/socket/设备/目录/
         // 链接一律拒绝，且在 open 之前判掉——open 一个无读者的 FIFO 会永久阻塞）→
         // open(O_NOFOLLOW|O_NONBLOCK) → fstat（常规文件 + 单硬链接 + inode 稳定性）。
         // 失败一律 nil → 调用方降级只写 stderr（日志绝不成为新的致命面）。
@@ -301,7 +300,7 @@ public final class ShellLog {
     /// 重开空文件（先搬现文件再动备份：任何一步失败都不丢历史）。
     /// 调用方必须已持有 lock。轮转名按实例文件名派生（`<file>.1`）——main 与
     /// sidecar 两个实例共用本实现，写死主文件名会把 sidecar 轮转成
-    /// `shell.log.1`（2026-12 加 sidecar 实例时必须改的点）。
+    /// `shell.log.1`（加 sidecar 实例时必须同步改的点）。
     private func rotateLocked() {
         guard let url = fileURLStorage else { return }
         try? handle?.close()
@@ -309,7 +308,7 @@ public final class ShellLog {
         let directory = url.deletingLastPathComponent()
         let rotated = directory.appendingPathComponent(url.lastPathComponent + ".1")
         // 先把现文件搬到暂存名，**再**动备份：顺序反了会在 move 失败时把唯一的历史
-        // （.1）删掉且现文件还在原地 ⇒ 备份凭空消失（2026-12 三轮独立复核 N3）。
+        // （.1）删掉且现文件还在原地 ⇒ 备份凭空消失。
         // 任一步失败 = 降级（句柄已关），内容最坏留在 .rotating，绝不静默丢弃。
         let staging = directory.appendingPathComponent(url.lastPathComponent + ".rotating")
         try? FileManager.default.removeItem(at: staging)

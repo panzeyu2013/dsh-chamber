@@ -1,6 +1,6 @@
 /**
  * The shared settled-boot gap -> copy-shape projection. It carries the part the
- * sidebar and the connections section used to duplicate: which kind selects
+ * sidebar and the connections section would otherwise duplicate: which kind selects
  * which sentence, and which structured params survive.
  *
  * Run directly: node packages/dsh-chamber-client-ui-sidebar/test/shared/boot-gap-shape.test.ts

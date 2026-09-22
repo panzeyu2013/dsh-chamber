@@ -1,6 +1,6 @@
 // @ts-nocheck -- deliberate, see the note at the bottom of this header.
 /**
- * A1 differential harness - the gate the whole refactor rests on.
+ * Differential harness - the gate the whole refactor rests on.
  *
  * WHY THE TYPE LAYER IS OFF HERE: this file imports two plain `.mjs` scripts (the
  * equivalence CLI and, in the sibling metrics test, the metrics tool). They run as

@@ -1,6 +1,6 @@
 /**
- * Boot-time early-open arm (design 05 §2.2 revision 2026-12; 2026-12 field
- * report problem 1). Runs inside ONE instance ctx, driven by the sidebar
+ * Boot-time early-open arm (design 05 §2.2). Runs inside ONE instance ctx,
+ * driven by the sidebar
  * plugin's effect.
  *
  * Why it exists: a cold-booted shell runs the official workspace navigation
@@ -24,11 +24,11 @@
  *   asked for and never opens a request the App already finished. An ABSENT
  *   slot is "not yet", not "never": the first attempt runs at plugin apply,
  *   before the user can click, so the arm keeps its cadence and retires at the
- *   deadline only (design 05 §2.2.1 gate 3; 2026-09-11 review F1) — see
+ *   deadline only (design 05 §2.2.1 gate 3) — see
  *   `attempt()`.
  * - A missing/throwing list face and a throwing probe retire the arm silently:
  *   the same ctx's runtime-facts producer already warns loudly for that defect,
- *   and the probe is best-effort by contract (2026-09-11 review F2).
+ *   and the probe is best-effort by contract.
  *
  * The win condition is honest, not guaranteed: the policy needs BOTH baselines
  * (workspace follow + session list) while the arm only needs the session list,
@@ -96,7 +96,7 @@ export function startEarlyOpenArm(deps: EarlyOpenArmDeps): () => void {
       try {
         addressable = deps.isAddressable(intent)
       } catch {
-        // 2026-09-11 review F2: the probe is best-effort by contract, and this
+        // The probe is best-effort by contract, and this
         // callback is a timer body — an escaped throw would kill the cadence
         // silently (no further tick, no warning). Retire instead.
         return finish()
@@ -114,12 +114,12 @@ export function startEarlyOpenArm(deps: EarlyOpenArmDeps): () => void {
         return finish()
       }
     }
-    // An ABSENT intent is "not yet", never "never" (2026-09-11 review F1). The
+    // An ABSENT intent is "not yet", never "never". The
     // first attempt runs synchronously at plugin apply — BEFORE the user can
     // click — and a background prewarm/harvest boot is the normal case there, so
-    // retiring on the first absent read killed the arm for a boot that was
-    // already in flight when the user clicked: the official navigation policy
-    // then created the blank session on the host, the exact cost this arm
+    // retiring on the first absent read would kill the arm for a boot already
+    // in flight when the user clicked: the official navigation policy would
+    // then create the blank session on the host, the exact cost this arm
     // exists to avoid. Design 05 §2.2.1 gate 3 sanctions exactly TWO
     // retirements — a successful open (above, or a refused one, whose outcome
     // the App owns) and this 8s deadline — so an absent slot keeps the 50ms

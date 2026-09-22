@@ -1,20 +1,19 @@
 /**
- * B5: the shell's explicit load state machine.
+ * The shell's explicit load state machine.
  *
- * WHY THIS EXISTS. The native shell's load bookkeeping was three independent
- * booleans scattered across two Swift files, and each one had a defect that only
- * shows on a real machine:
+ * WHY THIS EXISTS. Three independent booleans scattered across two Swift files
+ * each carry a defect that only shows on a real machine:
  *
- *   1. `didStartLoading` latched with NO reset point - once set, a later
- *      generation could never re-enter the loading state (the latch survived the
+ *   1. a `didStartLoading` latch with NO reset point - once set, a later
+ *      generation can never re-enter the loading state (the latch survives the
  *      sidecar restart that invalidated it);
- *   2. `webViewContentAlive` could report TRUE while the page was a failure face
- *      or a blank shell (it answered "did a load ever commit", not "is there
+ *   2. `webViewContentAlive` reporting TRUE while the page is a failure face
+ *      or a blank shell (it answers "did a load ever commit", not "is there
  *      content");
- *   3. a probe ERROR was recorded as if the probe had succeeded (an unreachable
- *      sidecar could therefore look healthy).
+ *   3. a probe ERROR recorded as if the probe had succeeded (an unreachable
+ *      sidecar looks healthy).
  *
- * The fix is one state machine with an explicit `generation`: every event carries
+ * One state machine with an explicit `generation` replaces that: every event carries
  * the generation it belongs to, and an event from a superseded generation is
  * DROPPED rather than applied. That single rule dissolves (1) - a new generation
  * starts at `cold` again - while (2) and (3) become state predicates: content is
@@ -65,7 +64,7 @@ export type LoadEvent =
   /** The page reports it is alive AND has content. Only believed in `loaded`. */
   | { readonly kind: 'contentAlive'; readonly generation: number; readonly at: number }
   | { readonly kind: 'probeSucceeded'; readonly generation: number; readonly at: number }
-  /** A probe FAILED: a strike, never a success (defect 3). */
+  /** A probe FAILED: a strike, never a success. */
   | { readonly kind: 'probeFailed'; readonly generation: number; readonly at: number }
   | { readonly kind: 'recoveryScheduled'; readonly generation: number; readonly at: number }
   | { readonly kind: 'recoveryFailed'; readonly generation: number; readonly at: number }
@@ -101,7 +100,7 @@ export function reduceLoadState(
   env: LoadEnv,
 ): { readonly state: LoadState; readonly effects: readonly LoadEffect[] } {
   // The generation fence, in one place: everything except a NEW generation is
-  // dropped when it belongs to a superseded one. Defect 1 (the permanent latch)
+  // dropped when it belongs to a superseded one. A permanent latch
   // cannot exist under this rule.
   if (event.kind !== 'generationStarted' && event.generation !== state.generation) {
     return { state, effects: [] }
@@ -125,14 +124,14 @@ export function reduceLoadState(
 
     case 'loadStarted':
       // Arming is per-generation, so a load that begins again after a failure is
-      // believed again (the old latch would have refused it).
+      // believed again (a latch would refuse it).
       return {
         state: { ...state, phase: 'loading', loadingSinceMs: event.at },
         effects: [],
       }
 
     case 'contentAlive':
-      // Defect 2: content is only believable in `loaded`, and this event is what
+      // Content is only believable in `loaded`, and this event is what
       // puts it there - a page that claims content while probing/retrying is not
       // believed.
       return {
@@ -150,7 +149,7 @@ export function reduceLoadState(
       return { state: { ...state, phase: 'loaded', probeStrikes: 0 }, effects: [] }
 
     case 'probeFailed': {
-      // Defect 3: a failed probe is a STRIKE. It never marks the shell loaded.
+      // A failed probe is a STRIKE. It never marks the shell loaded.
       const probeStrikes = state.probeStrikes + 1
       if (probeStrikes >= env.probeStrikeLimit) {
         return {

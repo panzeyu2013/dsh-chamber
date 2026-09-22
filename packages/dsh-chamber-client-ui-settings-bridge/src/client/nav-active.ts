@@ -3,20 +3,18 @@
  *
  * The nav rail has TWO groups: the SELECTED server's sections (that source's
  * OWN boot-ctx `settings.section` ledger — official families plus the source's
- * own plugin contributions, 2026-12 完整桥接修订) and the fixed chamber-GLOBAL
+ * own plugin contributions) and the fixed chamber-GLOBAL
  * entries below the divider (connections / general — the update status lives
  * inside the General section, design 11). A server-section id that left the
  * ledger falls back to the first row.
  *
- * 2026-09 修订（用户拍板）：曾经的第三个固定入口 `__plugins`（该来源的设置
- * 组装诊断）**不再占用 nav 槽位**——它的 subject 是「当前选中的来源」而不是
- * chamber 全局，却又不是该来源账本里的贡献，放进任何一组都会破坏该组的语义。
- * **2026-12 完整桥接修订**：设置面不再二次装载插件，该诊断块连同它的生产端
- * （`toAssemblyReport`）整体退役——历史记录见 git 与 CHANGELOG，design 15 §1。
+ * `__plugins`（该来源的设置组装诊断）**不占用 nav 槽位**——它的 subject
+ * 是「当前选中的来源」而不是 chamber 全局，却又不是该来源账本里的贡献，
+ * 放进任何一组都会破坏该组的语义（design 15 §1）。
  *
- * 2026-12 修订（用户拍板）：网关编排分区从桌面设置页整体移除——审批/提问
- * 由侧边栏既有事实通道呈现，网关自有投影（会话/调度/worktree）归网关
- * 自有运维面 `/chamber/` 管理，桌面设置不重放。
+ * 网关编排分区不属于桌面设置页：审批/提问由侧边栏既有事实通道呈现，网关
+ * 自有投影（会话/调度/worktree）归网关自有运维面 `/chamber/` 管理，桌面
+ * 设置不重放。
  */
 
 /** The fixed connections nav id (design 05 §5): chamber-global connection management. */

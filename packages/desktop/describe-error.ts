@@ -1,18 +1,14 @@
 /**
  * Single error-stringification boundary for the desktop main process.
  *
- * Why one module: the four previous helpers (connection-save errorMessage,
- * deep-link describeUnknownError, transport-manager describeTransportError,
- * sidecar-stub describeError) were near-copies whose hostile-value and
- * empty-message behavior had already drifted. Every catch/report site can now
- * use one function, so a diagnostic cannot be lost to a thrown proxy/getter or
- * a re-thrown second exception (the same discipline the structured IPC result
- * channel depends on).
+ * Why one module: every catch/report site uses one function, so a diagnostic
+ * cannot be lost to a thrown proxy/getter or a re-thrown second exception (the
+ * same discipline the structured IPC result channel depends on).
  *
  * Cause preservation: an Error's `cause` chain is appended as
  * `<message>: <cause>` (bounded to MAX_CAUSE_DEPTH links, cycle-safe), so a
- * wrapped failure no longer loses why it happened. No desktop error currently
- * carries a cause, so existing messages are unchanged.
+ * wrapped failure keeps why it happened. No desktop error carries a cause, so
+ * messages are unchanged.
  */
 const MAX_CAUSE_DEPTH = 4
 

@@ -7,10 +7,11 @@
  * active-source gate. The chamber's own chrome copy resolves through that
  * attribute (see `locales.ts`), so a prewarmed/background shell's write — and
  * in particular the browser-derived PROVISIONAL every shell writes before its
- * host settings answer — flipped the frame chrome between languages for the
- * whole boot train, and whichever shell wrote last owned the page.
+ * host settings answer — would otherwise flip the frame chrome between
+ * languages for the whole boot train and let whichever shell wrote last own the
+ * page.
  *
- * This module replaces last-writer-wins with ONE owner:
+ * This module gives the page ONE owner:
  *
  *  - the page language is the language of the source ON SCREEN (`activeView`;
  *    the local instance by default — App.tsx publishes it);
@@ -158,7 +159,7 @@ export class PageLanguageOwner {
   report(sourceId: string, fact: EntryLanguageFact | undefined, serial?: number): void {
     // 无身份的报送不得把世代钉死：写入 Infinity 会让此后该来源所有真实挂载
     // （有限世代）的报送与拆除被永久丢弃——一个 serial 缺省的 clear 之后，真挂载
-    // 再报也不生效（2026-12 三轮独立复核 D-R2 的 API 陷阱）。语义 = 总是生效、
+    // 再报也不生效。语义 = 总是生效、
     // 且不动已记的世代（有身份的报送仍按世代排序）。
     if (serial === undefined) {
       if (fact === undefined) {

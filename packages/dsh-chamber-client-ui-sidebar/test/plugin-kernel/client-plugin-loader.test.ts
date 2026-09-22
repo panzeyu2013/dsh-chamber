@@ -1,7 +1,6 @@
 /**
- * client-plugin-loader.ts tests (2026-12): the page-level union-table bookkeeping driven by the shell boot (its
- * only remaining consumer since the settings panel's per-source child context was retired in the 2026-12 完整桥接
- * 修订). The failure modes under test are the ones that would otherwise duplicate a plugin registration on one
+ * client-plugin-loader.ts tests: the page-level union-table bookkeeping driven by the shell boot.
+ * The failure modes under test are the ones that would otherwise duplicate a plugin registration on one
  * cordis context, strand a plugin for the page lifetime, or hide a version conflict.
  */
 import { test } from 'node:test';

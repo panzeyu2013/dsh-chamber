@@ -1,5 +1,5 @@
 /**
- * 凭据清除动作的共享契约（M9 单源化，ARCH-IMPL-027）。
+ * 凭据清除动作的共享契约。
  *
  * 锁三件事：①bridge / 编辑目标缺失是 no-op；②失败只置 formError、不动状态；
  * ③成功只触碰**本维度**的 draftKey 与 projectionKey（三维互不串扰的矩阵）。

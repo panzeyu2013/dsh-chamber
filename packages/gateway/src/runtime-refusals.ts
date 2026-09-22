@@ -1,11 +1,10 @@
 /**
- * Runtime refusal / recovery-gate single sources (audit N2, 2026-09 P3): the
+ * Runtime refusal / recovery-gate single sources: the
  * `/chamber/runtime` surface is two defense layers — the route pre-gates in
  * runtime-routes.ts (answering 409/403 synchronously from the projected
  * /status) and the manager's own refusals in runtime-manager.ts (assertMutationIdle
  * and the per-action guards, authoritative for DIRECT manager calls). Both
- * layers answer the same operation × state matrix cells and used to carry two
- * byte-identical copies of the same refusal text/code. This module is the
+ * layers answer the same operation × state matrix cells; this module is the
  * single home for:
  *
  *  - every refusal TEXT that is shared by two or more sites across the two
@@ -15,11 +14,11 @@
  *
  * Both layers keep executing (defense in depth is the point — the route gate
  * still runs BEFORE the manager call); only the refusal construction and the
- * classification formulas come from here. Wire behavior at every cell is
- * unchanged: builders reproduce the pre-refactor text byte for byte, codes and
- * the {error, code} serialization order are unchanged, and every decision
- * formula that differs between the layers (see "Preserved intentional
- * differences") is deliberately NOT unified.
+ * classification formulas come from here. Wire behavior at every cell must stay
+ * fixed: builders reproduce the exact text bytes, codes and the {error, code}
+ * serialization order must not change, and every decision formula that differs
+ * between the layers (see "Preserved intentional differences") is deliberately
+ * NOT unified.
  *
  * Preserved intentional differences (each documented at its site too):
  *  - platform read-only texts: the route answers `runtime mutations are
@@ -43,11 +42,11 @@
  *    RECOVERABLE_METADATA_BLOCKS. Both consume the shared name sets below, but
  *    the two formulas remain distinct — do not collapse them into one.
  *
- * R2/R3/R4 gate semantics (2026 audit; see STATUS.md) are NOT owned here: the
- * block-branch-allowed early return (block outranks pending), the pending
- * branch applying only when blockedReason === null, and the recover-metadata
- * admission set all live in the route gate / manager projections and are
- * preserved by the consumers of this module.
+ * The gate semantics — the block-branch-allowed early return (block outranks
+ * pending), the pending branch applying only when blockedReason === null, and
+ * the recover-metadata admission set — are NOT owned here: they live in the
+ * route gate / manager projections and are preserved by the consumers of this
+ * module.
  */
 import { codedError } from './http-utils.ts'
 import { FATAL_STARTUP_BLOCK_REASONS } from '@dsh-chamber/dsh-runtime'
@@ -61,16 +60,15 @@ export type RuntimeRefusalCode =
   | 'env_override_active'
 
 /** A refusal as it appears on the wire and in the manager's return/throw
- *  surfaces. Field order matters: route bodies have always serialized
- *  `{error, code}` — builders keep that order so the JSON bytes are unchanged. */
+ *  surfaces. Field order matters: route bodies serialize `{error, code}` —
+ *  builders keep that order so the JSON bytes do not change. */
 export type RuntimeRefusal<C extends RuntimeRefusalCode = RuntimeRefusalCode> = {
   error: string
   code: C
 }
 
-/** The manager's throw shape: an Error carrying the wire `.code`, built
- *  exactly like the historical inline `Object.assign(new Error(text), {code})`
- *  (codedError, http-utils N1). */
+/** The manager's throw shape: an Error carrying the wire `.code`, built like
+ *  `Object.assign(new Error(text), {code})` (codedError). */
 export function refusalError(refusal: RuntimeRefusal): Error & { code: RuntimeRefusalCode } {
   return codedError(refusal.code, refusal.error) as Error & { code: RuntimeRefusalCode }
 }
@@ -91,7 +89,7 @@ export function pendingOnlyRefusal(version: string): RuntimeRefusal<'runtime_pen
   }
 }
 
-/** The env-pinned operation refused. Each wording is historic and preserved. */
+/** The env-pinned operation refused. Each wording is preserved exactly. */
 export type EnvPinnedOperation = 'version mutations' | 'metadata recovery' | 'registry mutation'
 
 /**
@@ -104,9 +102,9 @@ export type EnvPinnedOperation = 'version mutations' | 'metadata recovery' | 're
  *  - 'registry mutation': manager setRegistry.
  */
 export function envPinnedRefusal(op: EnvPinnedOperation): RuntimeRefusal<'env_override_active'> {
-  // Historic tails differ in verb number ('version mutations ARE disabled'
-  // vs the singular 'metadata recovery IS disabled' / 'registry mutation IS
-  // disabled') — each variant reproduces its exact pre-refactor bytes.
+  // The tails differ in verb number ('version mutations ARE disabled' vs the
+  // singular 'metadata recovery IS disabled' / 'registry mutation IS
+  // disabled') — each variant reproduces its exact bytes.
   const error = op === 'version mutations'
     ? 'runtime is pinned by DSH_GATEWAY_DSH_PATH (env always wins); version mutations are disabled'
     : op === 'metadata recovery'
@@ -198,8 +196,8 @@ export function recoveryRetryRequiredRefusal(reason: string): RuntimeRefusal<'ru
  * (swapAttempted / lastOutcome 'snapshot-failed'), the in-memory
  * startupBlockReason values, and the projected status phase all use these
  * exact strings. Retry-apply is the ONLY recovery surface when one of these
- * is armed (2026 audit R2/R3/R4; restore-builtin is not offered inside an
- * interrupted apply/snapshot). Consumers: the route gate phase/reason
+ * is armed (restore-builtin is not offered inside an interrupted
+ * apply/snapshot). Consumers: the route gate phase/reason
  * classification and the manager's pending-suppression + status projection.
  */
 export const RETRY_APPLY_REASONS: ReadonlySet<string> = new Set(['snapshot-failed', 'swap-attempted'])
@@ -215,8 +213,8 @@ export const RETRY_RESTORE_REASONS: ReadonlySet<string> = new Set(['restore-half
  *  FATAL_STARTUP_BLOCK_REASONS, the same set index.ts and the desktop main
  *  block on — plus the two sentinels the manager sets after a failed builtin
  *  recovery probe/start). Everything else (restore-half/incomplete,
- *  swap-attempted…) must resume through its own retry first. Formerly declared
- *  in runtime-manager.ts; kept importable from both runtime layers. */
+ *  swap-attempted…) must resume through its own retry first. Kept importable
+ *  from both runtime layers. */
 export const RECOVERABLE_METADATA_BLOCKS: ReadonlySet<string> = new Set([
   ...FATAL_STARTUP_BLOCK_REASONS,
   'metadata-probe-failed',
@@ -224,8 +222,8 @@ export const RECOVERABLE_METADATA_BLOCKS: ReadonlySet<string> = new Set([
 ])
 
 /**
- * 2026 audit R3/H2 "block outranks pending": a FATAL metadata block or an
- * interrupted apply/restore reason outranks a lingering durable pending value
+ * "Block outranks pending": a FATAL metadata block or an interrupted
+ * apply/restore reason outranks a lingering durable pending value
  * (the recovery surface must not be locked behind the pending terminal gate).
  * Consumers: manager status() blockOutranksPending. NOTE the durable-pending
  * carve-outs in ordinaryPendingVersion() deliberately cover only

@@ -2,10 +2,10 @@
 //  ExternalOpenBudget.swift
 //  DSHChamber
 //
-//  外链打开预算（2026-09 二轮评审 A-P2）：镜像 shell-core.ts 的
+//  外链打开预算：镜像 shell-core.ts 的
 //  `openExternally` 预算器——10s 窗口内至多 8 次，超限后 30s 冷却。
-//  背景：`createWebViewWith` 新增「_blank 外链先交系统打开」后，页面可以用
-//  `window.open` 连续刷外部 URL（Electron 侧一直有此预算，Swift 侧此前没有）。
+//  背景：`createWebViewWith` 把「_blank 外链先交系统打开」，页面可以用
+//  `window.open` 连续刷外部 URL。
 //
 //  纯值逻辑（注入 now），单测直测。
 //
@@ -21,7 +21,7 @@ public struct ExternalOpenBudget {
     /// 超限后的冷却时长（shell-core：30_000ms）。
     public let cooldown: TimeInterval
 
-    /// 窗口计数（2026-12 单源化：判定在 RollingWindowLimiter，冷却/清空语义留在本类型）。
+    /// 窗口计数（判定在 RollingWindowLimiter，冷却/清空语义留在本类型）。
     private var windowed: RollingWindowLimiter
     private var blockedUntil: Double = 0
 
@@ -38,7 +38,7 @@ public struct ExternalOpenBudget {
     }
 
     /// 判定一次打开请求；`allow` 时计入本次。
-    /// 判定顺序与迁移前逐条一致：冷却未过 → blocked；窗口超限 → 进入冷却并
+    /// 判定顺序：冷却未过 → blocked；窗口超限 → 进入冷却并
     /// 清空窗口计数；否则放行并记账。
     public mutating func decide(now: Double) -> Decision {
         if now < blockedUntil {

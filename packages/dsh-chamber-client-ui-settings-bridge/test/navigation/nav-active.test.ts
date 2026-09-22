@@ -2,10 +2,10 @@
  * nav-active.ts pure-logic tests (design 15 v1 flat form) — node:test, no DOM.
  * Covers the fixed chamber-global nav ids (connections / general — the update status
  * lives inside General) staying valid regardless of the selected server's ledger.
- * 2026-09 修订：第三个固定入口 `__plugins` 已退役（现由连接页在服务器卡片内呈现），
- * 本文件显式钉死「退役的 id 不再是固定项」——否则它会作为普通 ledger id 走回落分支。
+ * `__plugins` 不是固定入口（插件管理由连接页在服务器卡片内呈现），本文件显式
+ * 钉死「它不是固定项」——否则它会作为普通 ledger id 走回落分支。
  *
- * MUST run through the test-only vendor loader (2026-09-11 upstream-alignment A2):
+ * MUST run through the test-only vendor loader:
  * `section-rows.ts` VALUE-imports upstream's `resolveSlotLabel` from
  * `@deepseek-ai/dsh-client-ui-slots`, whose vendored package.json points at an
  * unbuilt `lib/`: `node --import ./test/support/vendor-register.mjs <file>`
@@ -63,8 +63,7 @@ test('nav rows carry id/order/label only — no provenance tag (upstream form)',
   // A ledger entry's `registrant` stamp is DIAGNOSTICS-ONLY upstream (the
   // official shell renders `navIcon(row.id)` + the label and nothing else), so
   // the projection drops it: a plugin-provided section must look exactly like an
-  // official one, in this panel as in the instance's own frontend. The old
-  // chamber-side「插件」provenance tag is retired (2026-09-11).
+  // official one, in this panel as in the instance's own frontend.
   const entries = [
     { options: { id: 'models', order: 20, label: '模型' }, registrant: '@deepseek-ai/dsh-client-ui-settings-models' },
     { options: { id: 'acme', order: 40, label: 'Acme' }, registrant: '@acme/dsh-plugin-acme' },
@@ -79,7 +78,7 @@ test('sectionRows resolves thunked labels through upstream resolveSlotLabel (A2)
   // Official registrants declare `label: () => t('nav')` and re-register with a
   // fresh thunk on locale change; the projection must read the thunk at row
   // time — upstream's exported resolveSlotLabel does exactly that, and it is
-  // what this module now imports instead of a local copy.
+  // what this module imports.
   const entries = [
     { options: { id: 'models', order: 20, label: () => '模型' } },
     { options: { id: 'acme', order: 40 } },

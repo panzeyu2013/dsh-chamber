@@ -1,14 +1,14 @@
 /**
- * apply-now P1 run-phase fixture (design 18 addendum · Apply Now).
+ * apply-now run-phase fixture (design 18 addendum · Apply Now).
  *
- * The canonical bridge between the pure-Node `FakeHostAdapter` (design 18 §9.1
- * M5 deliverable, test/support/fake-adapter.ts) and the real DI seams `StartupDeps` /
+ * The canonical bridge between the pure-Node `FakeHostAdapter` (design 18 §9.1,
+ * test/support/fake-adapter.ts) and the real DI seams `StartupDeps` /
  * `ApplyDeps` that the desktop main process and the gateway server adapt the
  * shared core through. It models host orchestration semantics:
  *
  *   - `applyNow()` stops the host before the activation transaction, so the
  *     observed order is stop → snapshot → switchPointer → spawnAndProbe →
- *     verdict — the apply-now runtime entry the two hosts already own;
+ *     verdict — the apply-now runtime entry the two hosts own;
  *   - only durable state (current pointer / override / activation journal)
  *     survives a simulated crash: a `crashAfter` side effect captures
  *     `currentState()` at the exact crash point and a re-entry fixture is
@@ -149,7 +149,7 @@ export class RunPhaseFixture {
    * Host orchestration: stop the running dsh first, then run the startup
    * phase (apply-now semantics — the transaction itself only stops during
    * rollback). Observed order: stop → snapshot → switchPointer → probe.
-   * `signal` (apply-now S1) is forwarded into the startup entry.
+   * `signal` (apply-now) is forwarded into the startup entry.
    */
   async applyNow(signal?: AbortSignal): Promise<StartupResult> {
     this.events.push({ kind: 'stop' })

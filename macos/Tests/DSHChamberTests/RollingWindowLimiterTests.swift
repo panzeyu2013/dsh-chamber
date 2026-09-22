@@ -2,9 +2,9 @@
 //  RollingWindowLimiterTests.swift
 //  DSHChamberTests
 //
-//  2026-12 单源化：滚动窗口限流器的判定语义锁（三处调用点
+//  滚动窗口限流器的判定语义锁（三处调用点
 //  ExternalOpenBudget / SidecarRestartPolicy / RendererRecoveryPolicy 共同依赖）。
-//  这里钉住的是**迁移前逐条实现**的行为，故任何一处语义漂移都会先在本文件变红。
+//  这里钉住的是各实现的既有行为，故任何一处语义漂移都会先在本文件变红。
 //
 import XCTest
 @testable import DSHChamber
@@ -16,7 +16,7 @@ final class RollingWindowLimiterTests: XCTestCase {
         XCTAssertEqual(limiter.record(now: 0), .allow(count: 1))
         XCTAssertEqual(limiter.record(now: 1), .allow(count: 2))
         XCTAssertEqual(limiter.record(now: 2), .allow(count: 3))
-        // 第 4 次拒绝且不记账（拒绝不占配额——原三处实现的共同语义）
+        // 第 4 次拒绝且不记账（拒绝不占配额——三处实现的共同语义）
         XCTAssertEqual(limiter.record(now: 3), .deny(count: 3))
         XCTAssertEqual(limiter.events, [0, 1, 2])
         // 窗口内仍拒绝（limit 未被拒绝放大）
@@ -36,7 +36,7 @@ final class RollingWindowLimiterTests: XCTestCase {
     }
 
     /// 边界：淘汰判据是 `now - t < window`（严格小于）——差值恰为 window 时淘汰，
-    /// 差值为 window - ε 时保留。原三处实现同式。
+    /// 差值为 window - ε 时保留。三处实现同式。
     func testWindowBoundaryIsStrictlyLessThan() {
         var limiter = RollingWindowLimiter(window: 10, limit: 1, events: [0])
         XCTAssertEqual(limiter.record(now: 10), .allow(count: 1),
@@ -80,7 +80,7 @@ final class RollingWindowLimiterTests: XCTestCase {
         XCTAssertEqual(events, [2, 61])
     }
 
-    /// 防御性边界：limit ≤ 0 恒拒绝（迁移前三处不会传入，保持一致以便策略层
+    /// 防御性边界：limit ≤ 0 恒拒绝（三处调用点不会传入，保持一致以便策略层
     /// 参数校验缺失时仍 fail-closed）。
     func testNonPositiveLimitAlwaysDenies() {
         var limiter = RollingWindowLimiter(window: 10, limit: 0)

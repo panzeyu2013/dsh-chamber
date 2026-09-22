@@ -2,14 +2,13 @@
 //  NotificationDeliveryRegistry.swift
 //  DSHChamber
 //
-//  S8（2026-12 审计）：原生通知退役登记表。Swift flavor 此前把
-//  retireNotifications 当 no-op（无 sourceId→identifier 映射），侧车退役来源时
-//  OS 通知中心里的存量横幅永远清不掉。本类型保存「已投递通知」的
+//  原生通知退役登记表。本类型保存「已投递通知」的
 //  sourceId → identifier 映射（identifier 由 SwiftEdgeHostLegs 按
 //  chamber-edge-<纪年>.<壳内序号>.<notificationId> 命名），退役通知到达时由宿主腿
-//  UNUserNotificationCenter.removeDeliveredNotifications(withIdentifiers:) 清除。
+//  UNUserNotificationCenter.removeDeliveredNotifications(withIdentifiers:) 清除；没有
+//  该映射时，侧车退役来源后 OS 通知中心里的存量横幅清不掉。
 //
-//  语义对齐 node-edges/electron-edges（2026-12 第二轮验证收口）：identifier 由
+//  语义对齐 node-edges/electron-edges：identifier 由
 //  node-edges 的 nextNotificationId 生成，而该计数器**每个 sidecar 进程都从 1
 //  重置**——supervisor 在同一 app 进程内重启 sidecar 时 identifier 会重用。因此
 //  退役记忆只承载「retire 时仍在途」的投递（按 sourceId+identifier 成对记忆，
@@ -19,7 +18,7 @@
 //  语义对齐 node-edges/electron-edges：
 //  - sourceId 缺省/null = unknown-source：仍投递，但无法归属退役集 → 不登记
 //    （node-edges 的 clickRoutes 同样只登记有 token 的通知）；
-//  - 登记表必须有界（S14）：长期运行的壳会持续投递通知，登记表按插入序
+//  - 登记表必须有界：长期运行的壳会持续投递通知，登记表按插入序
 //    淘汰最旧（与 electron-edges 活跃通知上限同向；退役已淘汰条目为
 //    best-effort，OS 侧横幅不再有登记可清）。
 //
@@ -71,7 +70,7 @@ public final class NotificationDeliveryRegistry {
 
     /// 调度前登记（**先于** UNUserNotificationCenter.add）：退役与投递竞争时
     /// 退役端能看到 identifier 并返回它，投递完成回调再由 finishDelivery 决定
-    /// 是否立即移除（2026-12 验证轮：只在 add 完成回调里登记会漏掉这个窗口，
+    /// 是否立即移除（只在 add 完成回调里登记会漏掉这个窗口，
     /// 被退役来源的横幅会留在通知中心）。sourceId 为空/缺省（unknown-source）
     /// → 不登记（无法归属退役集）；identifier 已登记 → 幂等。
     @discardableResult
@@ -148,7 +147,7 @@ public final class NotificationDeliveryRegistry {
     }
 
     /// 退役：整源（sourceIds）+ 逐条（notificationIds = sidecar 的
-    /// notificationId，P-07）合并，返回需要从通知中心移除的 identifier
+    /// notificationId）合并，返回需要从通知中心移除的 identifier
     /// （FIFO 序，去重）。未登记来源/未投递 id 静默跳过（幂等）。
     ///
     /// notificationId → 本壳 identifier 的映射：identifier 末段恒为 sidecar
@@ -200,7 +199,7 @@ public final class NotificationDeliveryRegistry {
         if !removed.isEmpty {
             // 按 (sourceId, identifier) 成对删除：identifier 会跨 sidecar 重启
             // 重用，只按 identifier 删会误删别的来源仍在册的插入序槽位，令 16 条
-            // 上限名存实亡（2026-12 第三轮验证）。
+            // 上限名存实亡。
             insertionOrder.removeAll { removedPairs.contains(Self.deliveryKey(sourceId: $0.sourceId, identifier: $0.identifier)) }
             if retiredIdentifiers.count > Self.maxRetiredIdentifiers {
                 retiredIdentifiers.removeFirst(retiredIdentifiers.count - Self.maxRetiredIdentifiers)

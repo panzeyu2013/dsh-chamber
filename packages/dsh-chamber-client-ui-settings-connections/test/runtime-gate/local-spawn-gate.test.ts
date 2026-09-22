@@ -1,6 +1,6 @@
 /**
- * Local-card runtime spawn gate (design 18 §3.6 「applying 相位门控」/ :245-247,
- * 2026-12 audit P0-4). Plain node:test, no dsh, no React.
+ * Local-card runtime spawn gate (design 18 §3.6 「applying 相位门控」/ :245-247).
+ * Plain node:test, no dsh, no React.
  *
  * The defect this file locks: the local card has TWO entries that spawn the
  * local instance — 「启动」 and 「清理并接管」 (POST
@@ -72,8 +72,8 @@ test('localSpawnGate: an absent/blank/whitespace reason falls back to the locali
 test('localSpawnGate: every residual gate reason still NAMES itself (disabled never without a cause)', () => {
   // runtimeBlocksLocalStart also blocks on canRetryRestore and a half /
   // incomplete data restore. Those states carry no phase and no main-process
-  // reason string, and the pre-fix inline ladder rendered NO reason row for
-  // them: the entry was disabled with no visible cause. The projection is now
+  // reason string, so an inline ladder must render a reason row for them:
+  // otherwise the entry is disabled with no visible cause. The projection is
   // total — every blocked verdict renders exactly one row.
   for (const residual of [
     { phase: 'idle' as const },

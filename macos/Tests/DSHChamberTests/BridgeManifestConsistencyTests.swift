@@ -1,14 +1,13 @@
 //
-//  BridgeManifestConsistencyTests.swift — W-18 Swift 白名单一致性测试
-//  （design 25 §4.4.3；docs/progress/todo/macos-swift-v1.md W-18 行）。
+//  BridgeManifestConsistencyTests.swift — Swift 白名单一致性测试
+//  （design 25 §4.4.3；docs/progress/todo/macos-swift-v1.md）。
 //
 //  职责边界：JS 侧一致性（重生成 JSON/Swift == 提交物、通道数守恒、无死键）
 //  由 packages/desktop/bridge-manifest.test.ts 保证；本测试钉 Swift 生成物
 //  （编译接线后的白名单真值）——防提交的 BridgeManifest.swift 被手工改坏/
 //  漂移后 swift test 仍静默全绿：
 //    1. 通道数守恒：invoke 60 / push 8；
-//    2. 方向无交集：invoke ∩ push = ∅（allChannels 并集推导仅测试引用，已随
-//       2026-12 审计删除）；
+//    2. 方向无交集：invoke ∩ push = ∅；
 //    3. invoke 方向抽样：dsh-chamber:info / desktop_ssh_instances_get /
 //       desktop_ssh_connect 属 invoke 面（main 侧 handle 注册事实）；
 //    4. push 精确 golden 8：逐条转录自提交物 packages/desktop/bridge-manifest.json
@@ -16,7 +15,7 @@
 //       （bridge-manifest.test.ts 同款「同步是故意为之」纪律）。
 //
 //  生成物落位：macos/Sources/DSHChamber/Generated/BridgeManifest.swift
-//  （W-18 迁入 DSHChamber target 内随编译接线；scripts/emit-bridge-manifest.mjs
+//  （DSHChamber target 内随编译接线；scripts/emit-bridge-manifest.mjs
 //  产出，生成器头注释含重新生成命令与迁移说明）。
 import XCTest
 @testable import DSHChamber

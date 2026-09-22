@@ -1,10 +1,9 @@
 /**
  * @dsh-chamber/dsh-chamber-seed-archive-cleanup test manifest - authoritative file list for this package test script.
  * Grouped by subject area (mirrors test/<domain>/). Every listed file runs as its
- * own node child with inherited stdio; the first failure ends the run - the same
- * semantics as the inline node invocation this replaces. A listed file that does
- * not exist is a failure, never a silent skip. Shared fixtures live under
- * test/support/ and are never entries.
+ * own node child with inherited stdio; the first failure ends the run. A listed
+ * file that does not exist is a failure, never a silent skip. Shared fixtures
+ * live under test/support/ and are never entries.
  * Entries: a path, or { file, nodeArgs } when a loader (--import ...) is needed.
  */
 // Runner semantics (missing listed file, zero-test guard, first-failure stop,

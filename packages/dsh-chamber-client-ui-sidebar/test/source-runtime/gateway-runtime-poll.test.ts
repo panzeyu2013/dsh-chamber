@@ -1,6 +1,6 @@
 /**
- * Gateway restart readiness polling tests (design 18 §9.3: restart is 202 + status polling) — moved with
- * pollGatewayReady into the sidebar shared face (design 21 §5.2; the English inline strings travel with the module).
+ * Gateway restart readiness polling tests (design 18 §9.3: restart is 202 + status polling) — pollGatewayReady
+ * lives in the sidebar shared face (design 21 §5.2; the English inline strings travel with the module).
  * Pure node:test with inline fake fetch — no DOM.
  */
 import { test } from 'node:test'
@@ -28,7 +28,7 @@ test('pollGatewayReady resolves on ready, times out honestly, and honours abort'
   controller.abort()
   await assert.rejects(pollGatewayReady('gateway-x', controller.signal, { fetchImpl: readyFetch, ...fast }), /cancelled/)
 
-  // R7: a failed restart must be distinguishable from a slow one — the poll surfaces terminal failure states
+  // A failed restart must be distinguishable from a slow one — the poll surfaces terminal failure states
   // with the gateway's operationError.
   const failedFetch = stubFetch(200, { connectionState: 'restart-exhausted', operationError: 'spawn denied' })
   await assert.rejects(pollGatewayReady('gateway-x', undefined, { fetchImpl: failedFetch, ...fast }), /restart failed: spawn denied/)
@@ -67,7 +67,7 @@ test('pollGatewayReady: a post-202 entry rejection (restart:failed + ready conne
 })
 
 test('pollGatewayReady: terminal connection states OUTRANK a stale/misreported restart:ok', async () => {
-  // Round-3 ordering regression: the terminal-state check must run BEFORE the restart:'ok' resolve — resolve ≠ success
+  // The terminal-state check must run BEFORE the restart:'ok' resolve — resolve ≠ success
   // (restartLocal also resolves from restart-exhausted/error/stopped). A future reordering would fail here.
   for (const terminal of ['restart-exhausted', 'error', 'stopped'] as const) {
     const fetchImpl = stubFetch(200, { connectionState: terminal, operationError: 'landed ' + terminal, restart: 'ok' })

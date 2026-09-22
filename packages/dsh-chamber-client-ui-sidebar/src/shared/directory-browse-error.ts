@@ -2,12 +2,12 @@
  * Local copy of the vendor `dsh-client-ui-workspace` `DirectoryBrowseError`
  * (ui-workspace/src/client/navigation.ts).
  *
- * WHY a local copy (migration D5 fallback, docs/tmp-dsh-v012-migration-plan.md
- * M4): the original deep-source import pulled vendor ui-workspace sources into
- * chamber typecheck programs, and those sources do not compile under chamber
- * tsconfigs (parameter properties violate `erasableSyntaxOnly`, subpath
- * imports like `@deepseek-ai/dsh-session/types` do not resolve without vendor
- * path tables). The class is tiny and stable; the vendor file also carries a
+ * WHY a local copy: importing the
+ * vendor ui-workspace sources directly pulls them into chamber typecheck
+ * programs, and those sources do not compile under chamber tsconfigs
+ * (parameter properties violate `erasableSyntaxOnly`, subpath imports like
+ * `@deepseek-ai/dsh-session/types` do not resolve without vendor path tables).
+ * The class is tiny and stable; the vendor file also carries a
  * `constructor(readonly rpcError)` parameter property, which is written here
  * as an explicit field assignment to stay erasable-syntax-only clean.
  */

@@ -1,8 +1,8 @@
 /**
- * rename-retry unit tests (design 21 M2a / C5 mitigation): the transient-error
+ * rename-retry unit tests (design 21): the transient-error
  * classification and the bounded win32 retry schedule are policy-pure and are
  * exercised here on every platform via the injected platform/fn/sleep seams.
- * The win32 policy cases are one failure-script table (2026-12 trim).
+ * The win32 policy cases are one failure-script table.
  *
  * Run directly: node packages/dsh-runtime/test/windows/rename-retry.test.ts
  */

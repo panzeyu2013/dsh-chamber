@@ -10,8 +10,8 @@
  * no dsh runtime objects are consumed. SSH authentication defaults to the
  * system ssh-agent and default keys; an optional per-host password (design
  * 05 §8) is forwarded to the main process, which holds it in memory and
- * mirrors it to an owner-readable file (plaintext-file fallback, user
- * decision 2026-08) so auto-connect works after restart — the form itself
+ * mirrors it to an owner-readable file (plaintext-file fallback) so
+ * auto-connect works after restart — the form itself
  * never logs it, and the field is never prefilled (the stored value never
  * returns to the renderer). Gateway credentials follow the same write-only
  * renderer contract — the shared token (design 17 §7.2) and the login
@@ -65,7 +65,7 @@ import { CLEAR_GATEWAY_PASSWORD, CLEAR_GATEWAY_TOKEN, CLEAR_SSH_PASSWORD, clearC
 import { runManagedRestart } from './restart-action.ts'
 // The desktop-gate mirrors (and their byte-parity test) are the ONE copy of
 // these patterns/limits: the form validates with them instead of re-spelling
-// weaker inline regexes (2026-12 audit P1-4).
+// weaker inline regexes.
 import {
   INSTANCE_ID_PATTERN,
   MAX_INSTANCE_LABEL_CHARS,
@@ -130,7 +130,7 @@ export type ConnectionsSectionProps =
     /** Per-instance diagnostics keyed by source id ('local' | '<kind>-<id>'); optional outside the chamber shell. */
     pluginDiagnostics?: Readonly<Record<string, PluginDiagnostic | undefined>>
     /** Per-instance settled-boot gaps keyed EXACTLY like `pluginDiagnostics`
-     *  (2026-12, design 05 §4 「降级呈现」). A separate fact from the plugin
+     *  (design 05 §4 「降级呈现」). A separate fact from the plugin
      *  diagnostic: the graph channel may answer `ok` while the page's own
      *  surfaces never registered, so a card renders the gap INSTEAD of an `ok`
      *  status line (see PluginDiagnosticLine). Absent outside the chamber shell. */
@@ -188,8 +188,8 @@ function ssh(): DesktopSshSurface | null {
  */
 export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
   const { t, pluginDiagnostics, bootGaps, onRecheckDiagnostic } = props
-  // 每来源「设置组装诊断」块已于 2026-12 完整桥接修订退役（设置面不再二次装载
-  // 插件，没有"装不上"可报）——本组件只消费上图三个 prop。仍然真实的诊断留在
+  // 本组件只消费上图三个 prop：设置面不再二次装载插件，没有"装不上"可报，
+  // 每来源「设置组装诊断」块不在此渲染。仍然真实的诊断留在
   // 该来源卡片上的「客户端插件状态」（pluginDiagnostics，boot/extra-row 通道）。
   // Per-instance input ids (useId): the dialog renders inside N-ctx panels in
   // the SAME document — static ids would alias across panels. One id per
@@ -219,7 +219,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
   const [connection, setConnection] = useState<ConnectionSummary | null>(null)
   const [localBusy, setLocalBusy] = useState(false)
   const [localError, setLocalError] = useState<string | null>(null)
-  // 写者静默诊断（2026-09-10）：本地实例为何起不来 + 显式接管动作。
+  // 写者静默诊断：本地实例为何起不来 + 显式接管动作。
   const [writerDiagnosis, setWriterDiagnosis] = useState<LocalWriterDiagnosisWire | null>(null)
   const [reclaiming, setReclaiming] = useState(false)
   const [reclaimError, setReclaimError] = useState<string | null>(null)
@@ -361,7 +361,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
   }, [loadLocal, spawnGate.blocked])
 
   /**
-   * 清理并接管（POST /api/connections/local/reclaim，2026-09-10）：清除本状态
+   * 清理并接管（POST /api/connections/local/reclaim）：清除本状态
    * 目录自己的陈旧/孤儿托管写者记录，然后启动本地实例。仍在运行的其它应用实例
    * 不会被影响（控制面拒绝）。失败时把控制面给出的阻塞原因原样呈现。
    */
@@ -522,8 +522,8 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
     try {
       // 传输 + 202 门 + page-owned 就绪轮询只有一份实现（restart-action.ts，
       // 与 PluginDialog 共用）：409 走同一族本地化文案，超时/失败按 outcome
-      // 落到本卡的结果行。POST 不再自带 controller —— 它控制不了任何东西
-      // （page-owned completion 拥有轮询 signal），死 signal 与失实注释已删。
+      // 落到本卡的结果行。POST 不自带 controller —— 它控制不了任何东西
+      // （page-owned completion 拥有轮询 signal）。
       const outcome = await runManagedRestart(`gateway-${spec.id}`, t)
       if (outcome.kind === 'reloaded') {
         note({ tone: 'ok', text: t('restartManagedDshOk') })
@@ -558,7 +558,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
    *  条目**（applyRuntimeProbe(…, null)），旧值一律作废——保留陈旧 'stopped'
    *  会让「启动实例」常驻而每次点击注定 409。fail-open 语义不变：缺条目 ≠ 停机，
    *  探针缺失绝不隐藏健康来源（重启门只在确有终态答案时才禁用），只是「启动
-   *  实例」不再凭空出现（它要求确证的可启动态）。200 且值未变时不重写条目
+   *  实例」不凭空出现（它要求确证的可启动态）。200 且值未变时不重写条目
    *  （避免无谓渲染）。
    */
   const probeGatewayRuntime = useCallback(async (specId: string): Promise<void> => {
@@ -613,7 +613,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
         note({ tone: 'error', text: runtimeRefusalText(body, response.status, START_REFUSAL_KEYS, t) })
         return
       }
-      // Same page-owned completion as the restart leg (review F6): a started
+      // Same page-owned completion as the restart leg: a started
       // managed dsh boots a new plugin set, so the window reloads once it serves.
       let pollFailure: unknown = null
       const outcome = await armWindowReloadWhenServed(
@@ -1125,7 +1125,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
 
   // 卸载即中止在飞的「启动实例」POST（它自带 controller）。重启腿没有
   // controller：就绪轮询的 signal 属于 page-owned completion，关闭面板不取消
-  // 它（review F6）——旧注释声称「中止全部在飞的重启/启动轮询」是失实的。
+  // 它。
   useEffect(() => {
     return () => {
       for (const controller of Object.values(startAbortRefs.current)) controller.abort()
@@ -1137,8 +1137,8 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
   // 事件可依赖）；transport 断开（phase 非 ready/degraded）的卡不探 ——
   // 启动动作本身以 connected 门控，未知/断连时绝不渲染。
   // The probe re-arms on the CONNECTED gateway id SET, never on the whole
-  // `statuses` map (2026-12 audit): every per-source status push rewrote that
-  // map, so the old dependency rebuilt this interval and fired an immediate
+  // `statuses` map: every per-source status push rewrites that map, so a
+  // whole-map dependency would rebuild this interval and fire an immediate
   // probe at EVERY gateway card on every push (O(cards × pushes)). The id set
   // is the only input that changes WHICH cards are probed; the filter below
   // mirrors the card's stale-projection kind guard.
@@ -1170,18 +1170,18 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
   const dsh = health?.dsh
   const healthy = dsh?.status === 'ready' || dsh?.status === 'degraded'
   const starting = dsh?.status === 'starting' || dsh?.status === 'restarting'
-  // 写者静默通知（2026-09-10）：诊断非静默时在本地卡片上点名阻塞写者并给出
+  // 写者静默通知：诊断非静默时在本地卡片上点名阻塞写者并给出
   // 「清理并接管」；纯判定在 writer-diagnosis.ts（有单测）。
   const notice = writerNotice(writerDiagnosis)
   /** 确认 Modal 的目标卡是否正处「本卡重启」忙碌态（他卡在飞不影响本 Modal）。 */
   const restartConfirmBusy = restartConfirmFor !== null && restartingIds[restartConfirmFor.id] === true
 
-  // dsh 运行时版本（design 18 §3.6 B）：优先读同一个 runtime state；旧壳
-  // 尚未提供完整状态时才回退 M0 的 info 投影，null/空串时不编造 chip。
+  // dsh 运行时版本（design 18 §3.6 B）：优先读同一个 runtime state；其完整
+  // 状态缺失时回退 info 投影，null/空串时不编造 chip。
   const dshVersion = runtimeState?.active
     ?? (typeof window !== 'undefined' ? (window.dshChamber?.dshVersion ?? null) : null)
 
-  /** 虚线添加入口（2026-11）：有卡片时作为网格的最后一个单元格，与卡片
+  /** 虚线添加入口：有卡片时作为网格的最后一个单元格，与卡片
    *  同宽；空名单时独立通栏显示。 */
   const creatorButton = (
     <button type="button" className={css.creatorButton} onClick={openAdd}>
@@ -1194,7 +1194,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
     <div className={css.section}>
       <h2 className={css.title}>{t('nav')}</h2>
       <p className={css.intro}>{t('sectionIntro')}</p>
-      {/* S22 fallback visibility (design 17 §13.4.1): when the OS keychain is
+      {/* Plaintext-fallback visibility (design 17 §13.4.1): when the OS keychain is
           unavailable the main process mirrors gateway credentials as the
           documented 0600 plaintext fallback — the fallback path must be
           visible on the settings page. The main process merges the
@@ -1203,7 +1203,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
       {instances.some(spec => spec.secretStorage === 'plaintext')
         ? <p className={css.hint} role="status">{t('secretStoragePlaintextHint')}</p>
         : null}
-      {/* S-29 residual (design 25 §6.4 cross-flavor credentials): the
+      {/* Cross-flavor credential residual (design 25 §6.4): the
           secretStorageUnreadable projection is per-row (true only for rows
           whose mirror bytes another flavor wrote with safeStorage), so this
           dedicated hint renders exactly when at least one row carries it. It
@@ -1218,7 +1218,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
       <section className={css.group}>
         <h3 className={css.groupHead}>{t('localTitle')}</h3>
         <div className={css.localCard}>
-          {/* 2026-11 横向化: 名称+状态+meta 在左，操作在右。 */}
+          {/* 横向布局: 名称+状态+meta 在左，操作在右。 */}
           <div className={css.localHeadRow}>
             <div className={css.localHeadText}>
               <div className={css.localHead}>
@@ -1418,7 +1418,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                 return (
                   <li key={spec.id} className={css.card}>
                     <div className={css.cardHead}>
-                      {/* 2026-12 两行化：身份行（名称 + 类型）与徽标行（状态 +
+                      {/* 两行布局：身份行（名称 + 类型）与徽标行（状态 +
                           安全姿态）分开——单行 flex-wrap 在 268px 网格底线处
                           换行不可预测，名称会被挤压成省略号。 */}
                       <div className={css.cardHeadIdentity}>
@@ -1439,9 +1439,9 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                             stored — the passwordSet projection is the
                             authoritative SshInstanceSpec member (design 17
                             §9.1, desktop gateway-secrets task).
-                            2026-12 配色修订：姿态徽标统一为「描边 + 彩色文字」
+                            配色：姿态徽标统一为「描边 + 彩色文字」
                             家族（.badgeWarn / .badgeSuccess），与状态徽标的
-                            填充区分——同类姿态同族同色，不再按主观严重度分层；
+                            填充区分——同类姿态同族同色，不按主观严重度分层；
                             顺序按维度：传输层（HTTP 明文）→ 认证层（无认证）
                             → 信任层（SPKI 已固定）。 */}
                         {spec.insecureHttp
@@ -1509,8 +1509,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                           variant="outline"
                           size="sm"
                           className={css.restartTip}
-                          // D8（plan 24）：删除 data-tip（restartManagedDshTip
-                          // 用法移除）；aria-label 保留——busy/未连接/未运行时
+                          // 此按钮不带 data-tip；aria-label 保留——busy/未连接/未运行时
                           // 携带禁用原因，常态回退可见标签（restartManagedDsh）。
                           aria-label={restartingIds[spec.id] === true
                             ? t('restartManagedDshBusy')
@@ -1532,8 +1531,8 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                             variant="outline"
                             size="sm"
                             className={css.restartTip}
-                            // aria 配对（P3）：同款规则——tip 存在（禁用原因）即
-                            // 为 aria-label，否则回退可见标签（busy/常态）。
+                            // aria 配对：同款规则——tip 存在（禁用原因）即为
+                            // aria-label，否则回退可见标签（busy/常态）。
                             data-tip={!connected ? t('restartNotConnected') : undefined}
                             aria-label={!connected ? t('restartNotConnected') : startBusy ? t('startManagedDshBusy') : t('startManagedDsh')}
                             disabled={specBusy || !connected || startBusy || restartingIds[spec.id] === true}
@@ -1550,7 +1549,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                         size="sm"
                         className={css.restartTip}
                         disabled={specBusy || !serviceConfigured}
-                        // aria 配对（P3）：同款规则——tip 存在（未配置原因 /
+                        // aria 配对：同款规则——tip 存在（未配置原因 /
                         // gateway 的 systemd 重启说明）即为 aria-label，否则回退
                         // 可见标签（dsh 实例的「重启实例」）。
                         data-tip={!serviceConfigured ? t('serviceUnconfigured') : spec.kind === 'gateway' ? t('restartServiceTip') : undefined}
@@ -1817,7 +1816,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
             </Button>
             {/* Footer close clears the stale-guard ref exactly like onClose —
                 a late gatewayHostLogs response must never repaint a closed
-                modal (review symmetry fix). */}
+                modal. */}
             <Button variant="outline" onClick={() => { gatewayLogsTargetRef.current = null; setGatewayLogsFor(null) }}>
               {t('close')}
             </Button>

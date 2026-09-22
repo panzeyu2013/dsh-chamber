@@ -1,26 +1,25 @@
 /**
- * Gateway armed-request guards (2026-09-11 review-fix F2).
+ * Gateway armed-request guards.
  *
  * Every destructive gateway action in the runtime section arms the ONE in-app
  * confirmation dialog, and the request it arms carries the guard predicate that
- * allowed the arm. Those predicates used to be render-scope booleans captured at
- * ARM time, while the dialog can stay open across this section's ~3s status
- * poll — so the accept could fire an action the CURRENT facts refuse. The probe:
- * arm `restore-builtin` at `phase=idle`, the poll flips the gate
- * (`restoreBuiltinDisabled=true`, `phase=installing`), the accept still ran
- * `restore-builtin@phase=installing`. Two of the actions additionally carry a
- * target captured at arm time (`cleanup-version` a version,
- * `restore-pre-rollback` a stash name, `apply-now` the pending version), so a
- * stale accept was not even always an honest 409.
+ * allowed the arm. The predicate must be evaluated against the CURRENT facts:
+ * the dialog can stay open across this section's ~3s status poll, so a
+ * render-scope boolean captured at ARM time would let the accept fire an action
+ * the live facts refuse (e.g. `restore-builtin` armed at `phase=idle` while the
+ * poll flips the gate to `restoreBuiltinDisabled=true`, `phase=installing`).
+ * Two of the actions additionally carry a target captured at arm time
+ * (`cleanup-version` a version, `restore-pre-rollback` a stash name, `apply-now`
+ * the pending version), so a stale accept is not even always an honest 409.
  *
- * The fix: one predicate per action, evaluated against a LIVE fact snapshot —
- * the arm-time early return and the accept-time `stillValid` hook call the SAME
+ * One predicate per action, evaluated against a LIVE fact snapshot — the
+ * arm-time early return and the accept-time `stillValid` hook call the SAME
  * function, so they can never drift apart. Every gate here is the section's
  * existing pure projection (`remoteRuntimeActionGates`, the shared gateway core)
  * recomputed over the snapshot, never a second copy of the server's matrix.
  *
- * This module is pure and plain-node testable (no DOM, no React): the probe
- * above is replayed in test/runtime/confirm-machine-guards.test.ts.
+ * This module is pure and plain-node testable (no DOM, no React); the scenarios
+ * above are replayed in test/runtime/confirm-machine-guards.test.ts.
  */
 import {
   remoteRuntimeActionGates,

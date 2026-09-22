@@ -13,12 +13,12 @@
  *                              capability cookie — design 17 §10.6)
  *   /auth/login              → auth login (public; route exists only while a
  *                              password is configured — design 17 §6)
- *   /auth/change-password    → auth.changePassword (Phase 2, runtime credentials)
- *   /auth/change-token       → auth.changeToken (Phase 2)
- *   /auth/credentials        → auth.credentialProjection (Phase 2, non-secret)
+ *   /auth/change-password    → auth.changePassword (runtime credentials)
+ *   /auth/change-token       → auth.changeToken
+ *   /auth/credentials        → auth.credentialProjection (non-secret)
  *   /api/connections, /api/host/*, /api/i/* → fall through (management)
  *   /chamber/runtime/*       → runtime controller (design 18 §9.3; NOT ready-gated)
- *   /chamber/*               → chamber surface (design 17 §10, 2026-12 strip)
+ *   /chamber/*               → chamber surface (design 17 §10)
  *   / (mobile UA, opt-in)    → 302 to mobileEntryPath (design 17 §18 shunting)
  *   /plugins/*, /, /api/*(rest) → gateway-proxy → dsh
  *
@@ -62,7 +62,7 @@ function isPublicRequest(method: string | undefined, pathname: string): boolean 
   // HEAD is the no-body twin of GET; a monitoring HEAD /health must not be
   // forced through the auth gate while GET /health is public.
   if (pathname === '/health') return method === 'GET' || method === 'HEAD'
-  // Login-phase pre-warm (design 17 §10.6, 2026-12 revision) has NO blanket
+  // Login-phase pre-warm (design 17 §10.6) has NO blanket
   // public exemption here: the bundle shapes it may serve are real
   // /plugins/** paths, so they are claimed by the route BEFORE this gate only
   // when the request carries a valid capability cookie. Everything else under
@@ -89,7 +89,7 @@ function auditPathCategory(pathname: string): string {
   return 'root'
 }
 
-/** M3-5: debounce window (ms) for repeated IDENTICAL auth-boundary rejections.
+/** Debounce window (ms) for repeated IDENTICAL auth-boundary rejections.
  * Every `appendAuditEvent` is an append + fsync of the audit file, so a
  * credential-less burst of one surface's sub-resources (manifest/icon family,
  * all `path:root`) would pin the single-threaded event loop on synchronous disk
@@ -107,7 +107,7 @@ export const AUTH_REJECTION_DEBOUNCE_MS = 1000
  * debounce interval. */
 export const MAX_AUTH_REJECTION_WINDOWS = 256
 
-/** Test seam for the auth-rejection debounce (M3-5). The window state belongs
+/** Test seam for the auth-rejection debounce. The window state belongs
  * to ONE `createGatewayDispatch` instance — never a module-global singleton —
  * so independent dispatches (and tests) cannot pollute each other. */
 export interface AuthRejectionDebounce {
@@ -145,9 +145,8 @@ function shouldRedirectToLogin(req: ApiRequest, pathname: string, auth: AuthProv
 
 /**
  * CSP for the PROXIED dsh frontend — a gateway-only relaxation. (It has no
- * design-17 anchor: the former "§11 S14" citation pointed at a section that
- * was stripped with the 2026-12 orchestration removal, and the design's S14
- * label now denotes the session-content non-persistence invariant.) The
+ * design-17 anchor; the design's S14
+ * label denotes the session-content non-persistence invariant.) The
  * control-plane shell — shared by both shapes — answers every request with a
  * per-response nonce CSP with `unsafe-inline` closed. This proxy path cannot
  * inherit it: the proxied document is dsh's OWN render output, whose inline
@@ -159,11 +158,11 @@ function shouldRedirectToLogin(req: ApiRequest, pathname: string, auth: AuthProv
  * the auth gate. The anonymous desktop shape never sees this header: it serves
  * the chamber composite through the control-plane nonce CSP.
  *
- * M2-4a: `base-uri` is relaxed from `'none'` to `'self'` because upstream's
+ * `base-uri` is relaxed from `'none'` to `'self'` because upstream's
  * `@deepseek-ai/dsh-host-frontend-static` injects `<base href="/">` into EVERY
  * document it renders from index.html (`renderIndex`), and `base-uri 'none'`
- * makes the browser refuse that element. The allowance is deliberately wider
- * than one bug fix, because the element's necessity is version-dependent: in
+ * makes the browser refuse that element. The allowance deliberately covers
+ * version-dependent behavior: in
  * the pinned tree `serveStatic` renders that index only for the dist root and
  * the index path itself (every other path is a file read, so a miss is a 404),
  * where relative asset URLs already resolve correctly — but a dsh that answers
@@ -172,7 +171,7 @@ function shouldRedirectToLogin(req: ApiRequest, pathname: string, auth: AuthProv
  * root instead of the deep path. `'self'` keeps the element effective and
  * grants nothing script-src has not already granted. Every OTHER directive
  * stays identical to the shell's — including `frame-src blob:`, which the shell
- * added for the document-preview plugin's blob iframes (S-35): the gateway
+ * added for the document-preview plugin's blob iframes: the gateway
  * proxies the same frontend, so a directive the shell needs would break the
  * preview behind the gateway too.
  */
@@ -257,15 +256,14 @@ function rejectWs(socket: { end(data: string): unknown }, status: number, messag
 /** Uniform response headers for every login-page HTML response (design 21 §6.2):
  * the rendered page itself comes from login-page.ts; CSP is set separately.
  *
- * `referrer-policy` must NOT be `no-referrer` here (live finding 2026-09,
- * reproduced on Chrome 151): the fetch spec "append a request Origin header"
- * algorithm (2019; implemented by Chromium and WebKit r259036/2020 — Safari —
- * and still current) serializes the Origin of a non-CORS form submission as
- * `null` when the document's referrer policy is no-referrer. The gateway's
- * own request policy fails opaque origins closed (S3 family), so the login
- * POST would be answered 403 origin_forbidden — the login page would be
- * unusable in every compliant browser since no-referrer was added, while
- * curl (no Origin) sailed through. `same-origin` keeps
+ * `referrer-policy` must NOT be `no-referrer` here: the fetch spec "append a
+ * request Origin header" algorithm (2019; implemented by Chromium and WebKit
+ * r259036/2020 — Safari — and still current) serializes the Origin of a
+ * non-CORS form submission as `null` when the document's referrer policy is
+ * no-referrer. The gateway's own request policy fails opaque origins closed
+ * (S3 family), so the login POST would be answered 403 origin_forbidden and
+ * the login page would be unusable in every compliant browser, while curl
+ * (no Origin) still passes. `same-origin` keeps
  * the original privacy intent — this page has no cross-site outbound
  * requests (CSP default-src 'none'), so nothing ever leaks a referer to a
  * third party — while letting the browser send its true Origin. */
@@ -345,12 +343,12 @@ export function createGatewayDispatch(
   mobileUaRedirect = false,
   /** Origin-form redirect target (validated at config time). */
   mobileEntryPath = DEFAULT_MOBILE_ENTRY_PATH,
-  /** M3-5 auth-rejection debounce seam; defaults are production behavior. */
+  /** Auth-rejection debounce seam; defaults are production behavior. */
   rejectionDebounce: AuthRejectionDebounce = {},
   /** Login-phase pre-warm (design 17 §10.6; default ON from config.warmup):
    * discovery + token + proxy deps. null = the feature is not composed at all
    * (no discovery, no grant mint, no route claim), so every /plugins target
-   * keeps its pre-existing verdict — the uniform 401 or the session. */
+   * keeps its usual verdict — the uniform 401 or the session. */
   warmupDeps: WarmupDeps | null = null,
 ): GatewayDispatch {
   const warmup = warmupDeps === null ? null : createWarmupController(warmupDeps)
@@ -428,14 +426,14 @@ export function createGatewayDispatch(
     while (activeCredentialMutations.size > 0) {
       await Promise.allSettled([...activeCredentialMutations])
     }
-    // M3-5: the debounce counts live in memory — publish every open window
+    // The debounce counts live in memory — publish every open window
     // before ownership is released, or a mid-window stop loses them.
     flushRejectionWindows()
   }
   /** Publish every still-open auth-rejection window. `quiesce()` already drains
    * at the admission fence; the gateway calls this AGAIN once the HTTP listener
    * is closed, because a rejection arriving between the fence and the close
-   * opens a window the first drain could not see (2026-12 review). Idempotent:
+   * opens a window the first drain could not see. Idempotent:
    * closing a window removes it. */
   function flushAuditWindows(): void {
     flushRejectionWindows()
@@ -509,7 +507,7 @@ export function createGatewayDispatch(
    * string (the serializer whitelist enforces the field set; this function
    * keeps the VALUES clean).
    *
-   * M3-5 debounce: each append is one synchronous fsync, so refusals identical
+   * Debounce: each append is one synchronous fsync, so refusals identical
    * in (client, code, path category) coalesce inside
    * `AUTH_REJECTION_DEBOUNCE_MS`. The window's FIRST refusal is appended
    * immediately — an incident is never delayed to the window end; the rest are
@@ -599,7 +597,7 @@ export function createGatewayDispatch(
       res.end()
       return true
     }
-    // 0.5 Login-phase pre-warm (design 17 §10.6, 2026-12 revision): the ONE
+    // 0.5 Login-phase pre-warm (design 17 §10.6): the ONE
     // pre-auth proxy leg, consulted BEFORE the auth gate so a valid capability
     // grant can stream a real bundle URL without a session. The route claims a
     // GET/HEAD request only when ALL of these hold: the kill switch is on, the
@@ -646,7 +644,7 @@ export function createGatewayDispatch(
         // The scrypt work gate saturates under abuse: an overloaded verify
         // must answer 503 auth_busy — the same code the login path uses —
         // never fall through as a generic 500 internal (design §5.3).
-        // Regression locked by auth.test.ts.
+        // Locked by auth.test.ts.
         const code = (error as Error & { code?: string }).code
         if (code === 'auth_busy') {
           jsonResponse(res, 503, { error: 'authentication service is busy', code: 'auth_busy' })
@@ -757,7 +755,7 @@ export function createGatewayDispatch(
           const retryAfterMs = (error as Error & { retryAfterMs?: number }).retryAfterMs
           // `no_password` is the race-only fallback: the facade threw it
           // between the kind check above and the login call (a concurrent
-          // credential removal). The route no longer exists — 404.
+          // credential removal). The route does not exist — 404.
           if (code === 'no_password') {
             jsonResponse(res, 404, { error: 'not_found', code: 'not_found' })
           }
@@ -815,7 +813,7 @@ export function createGatewayDispatch(
       res.end(req.method === 'HEAD' ? undefined : renderLoginPage({ lang, secure: decision.secure, error: expired ? 'expired' : null, desktop: loginDesktop, warmupUrls: warmupLinks.urls }))
       return true
     }
-    // 2.5 Runtime credential management (Phase 2, design 17 §7): the two
+    // 2.5 Runtime credential management (design 17 §7): the two
     // change endpoints + the non-secret projection. All sit behind the auth
     // gate (never public) and never fall through to the dsh proxy. Bodies are
     // read with the same 16 KiB bound + 413-destroy discipline as login, then
@@ -943,8 +941,8 @@ export function createGatewayDispatch(
     // answers a constant 503 'no transport is available for this instance'.
     // The two reachable paths are NOT document-equivalent for browsers: the
     // "/" proxy applies GATEWAY_PROXY_CSP + the S0 trust declaration, while
-    // /api/i/local/* keeps the shell's nonce CSP without injection (known
-    // divergence, deliberately unchanged).
+    // /api/i/local/* keeps the shell's nonce CSP without injection (deliberate
+    // known divergence).
     if (pathname === '/health') return false
     if (pathname.startsWith('/api/connections') || pathname.startsWith('/api/host/') || pathname.startsWith('/api/i/')) {
       if (rejectStaleHttp(res, authenticatedPrincipal)) return true
@@ -952,7 +950,7 @@ export function createGatewayDispatch(
       // context is available. This invokes the authoritative API surface
       // directly and removes the promise-resolution gap between a `false`
       // middleware verdict and SSE/local-proxy registration. Narrow unit
-      // fakes may omit ctx.api and retain the historical fallthrough behavior.
+      // fakes may omit ctx.api and keep the fallthrough behavior.
       const api = (ctx as Partial<PlaneMiddlewareContext>).api
       if (api === undefined) return false
       await api.handle(req, res)
@@ -976,16 +974,14 @@ export function createGatewayDispatch(
       await getRuntime().handle(req, res, pathname)
       return true
     }
-    // 4. Chamber surface (design 17 §10, 2026-12 strip + design 21 A1):
+    // 4. Chamber surface (design 17 §10 + design 21 A1):
     // /chamber/* is the gateway's own operations surface — channels
     // projection + browser dashboard assets + the desktop-synced plugin seed
     // cache + the managed-profile plugin read/write routes (installed/
     // install/remove/materialize/tasks, design 21 §6.2; the write routes
     // answer 202 before their executor children run — quiesce/dispose
-    // accounting lives in index.ts) + /chamber/runtime. Feature settings,
-    // approvals, schedule and worktree records were removed with the
-    // orchestration strip; the surface is NOT ready-gated (no readiness
-    // coupling — dsh-down windows stay pollable).
+    // accounting lives in index.ts) + /chamber/runtime. The surface is NOT
+    // ready-gated (no readiness coupling — dsh-down windows stay pollable).
     if (pathname.startsWith('/chamber/')) {
       if (rejectStaleHttp(res, authenticatedPrincipal)) return true
       await getFeatures().handle(req, res, pathname)
@@ -1053,8 +1049,7 @@ export function createGatewayDispatch(
     }
     // 1. Auth gate (WS auth == HTTP auth, S2). A saturated scrypt work gate
     // must answer 503 auth_busy here too — never a generic 500 internal —
-    // mirroring the HTTP verify path (regression locked in
-    // dispatch-composition.test.ts).
+    // mirroring the HTTP verify path (locked in dispatch-composition.test.ts).
     let principal: AuthPrincipal | null
     try {
       principal = await auth.verify(authRequest(req, decision))
@@ -1081,8 +1076,7 @@ export function createGatewayDispatch(
     // proxy close listener then aborts the upstream leg as well.
     trackSocket(socket)
     // 2. The dsh Remote-stream mux path → origin fence + gateway-proxy. The
-    // old events.mux/events.host downlinks were removed upstream (W3); the
-    // 0.1.2 wire carries Typert Remote streams (session/control, session/follow,
+    // wire carries Typert Remote streams (session/control, session/follow,
     // workspace/follow, $events) over /api/remote.mux.
     if (pathname === '/api/remote.mux') {
       if (!principalIsCurrent(principal)) {

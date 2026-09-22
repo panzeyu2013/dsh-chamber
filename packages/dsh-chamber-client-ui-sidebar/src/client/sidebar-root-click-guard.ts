@@ -1,7 +1,6 @@
 /**
- * The document-wide pending-click guard (extracted verbatim from
- * SidebarRoot, 2026-12 split): a click outside the pending renamable row
- * drops the module-global double-click pending.
+ * The document-wide pending-click guard: a click outside the pending renamable
+ * row drops the module-global double-click pending.
  */
 
 import { useEffect } from 'react'
@@ -32,10 +31,9 @@ export function useSidebarClickGuard(): void {
   // consumes/replaces the pending itself, so only outside clicks reach here.
   // suppressClickRef (drag-end trailing click) is honored on the way in;
   // row-internal buttons (fold toggle / new-session / the row kebab menus —
-  // 2026-09-11 upstream-alignment T2a: the session kebab now carries archive,
-  // there is no dedicated archive button left) AND
+  // the session kebab carries archive, there is no dedicated archive button) AND
   // the source-header action buttons (sort / add-workspace / search /
-  // archive-cleanup manager — design 24 revision) clear the pending in their own
+  // archive-cleanup manager — design 24) clear the pending in their own
   // handlers (stopPropagation + clearPendingClick) —
   // React's stopPropagation also stops the native event, so the document
   // listener never sees those clicks and a surviving pending would make a

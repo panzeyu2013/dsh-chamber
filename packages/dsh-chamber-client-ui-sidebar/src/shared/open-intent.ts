@@ -1,8 +1,8 @@
 /**
  * Open-session intent — the page-wide slot recording "the user asked to open
- * session X on source S" (design 05 §2.2 revision 2026-12; 2026-12 field report
- * problem 1: switching to a session of a REMOTE server flashed a brand-new
- * "新会话" first, then switched to the requested one).
+ * session X on source S" (design 05 §2.2 revision). Switching to a session of
+ * a REMOTE server must not flash a brand-new "新会话" first, then switch to the
+ * requested one.
  *
  * WHY this state must be page-wide instead of App-local React state. The App
  * owns the request (`App.openSession` is the single funnel for the sidebar
@@ -16,9 +16,9 @@
  *    never enter the navigation list (design 05 §2.2's `(!blank || current)`
  *    rule);
  * 2. the incoming view's reveal gate ({@link shouldHoldViewVeil}) — the boot
- *    veil used to lift at boot settle, i.e. BEFORE the queued open was
+ *    veil must not lift at boot settle, i.e. BEFORE the queued open is
  *    dispatched (the dispatch needs the session-controller child fiber and
- *    commonly retries once at 400ms), so the user saw the target shell's
+ *    commonly retries once at 400ms), or the user sees the target shell's
  *    self-selected blank session for that whole window;
  * 3. the boot-ctx early-open arm (the sidebar plugin's own effect, design 05
  *    §2.2) — it runs inside the target instance's ctx and reads the LIVE intent
@@ -173,13 +173,12 @@ export function projectableCurrent(
 }
 
 /**
- * Reveal gate for the incoming view (design 05 §2.2 revision; 2026-09-11
- * review S1).
+ * Reveal gate for the incoming view (design 05 §2.2 revision).
  *
  * The shell must not be revealed until it shows what the user asked for. The
  * boot window itself is already covered by the existing boot veil
  * (`InstanceView`: `(!settled || (holdVeil === true && !surfaceRelease)) &&
- * !failureOverlayVisible` — `surfaceRelease` is the P3 DOM-phase signal,
+ * !failureOverlayVisible` — `surfaceRelease` is the DOM-phase signal,
  * design 05 §2.2.1); this rule extends the hold past a
  * clean settle for exactly as long as the view would show NOTHING legitimate
  * while an open is in flight.

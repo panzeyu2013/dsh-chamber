@@ -3,16 +3,15 @@
  * package test script.
  * Grouped by subject area (mirrors test/<domain>/). Every listed file runs as
  * its own node child with piped stdio (written through, so the transcript
- * stays intact); the first failure ends the run — the same semantics as the
- * inline && chain this replaces. A listed file that does not exist is a
+ * stays intact); the first failure ends the run — the same semantics as an
+ * inline && chain. A listed file that does not exist is a
  * failure, never a silent skip.
  * Entries: a path, or { file, nodeArgs } when a loader (--import ...) is needed.
  *
- * Zero-test guard (S5 / review/windows FIX C, ported from
- * packages/desktop/scripts/test.mjs:207-223): each child's node:test summary
+ * Zero-test guard: each child's node:test summary
  * is parsed; a listed file that exits 0 without a summary line or with
- * `tests 0` fails the run, so a manifest entry that was silently skipped can
- * no longer be green. A file whose registered tests are all platform-skipped
+ * `tests 0` fails the run, so a manifest entry that is silently skipped can
+ * never be green. A file whose registered tests are all platform-skipped
  * still prints a summary (tests > 0) and stays green — the listed set and its
  * selection semantics are unchanged.
  *
@@ -56,7 +55,7 @@ const GROUPS = {
     'test/store/snapshot-store.test.ts',
     'test/store/known-good-monitor.test.ts',
     'test/store/runtime-metadata-recovery.test.ts',
-    // The shared metadata-health projection both Node hosts publish (M14).
+    // The shared metadata-health projection both Node hosts publish.
     'test/store/metadata-health-projection.test.ts',
     'test/store/version-safety.test.ts',
     'test/store/sanitize-error.test.ts',
@@ -84,12 +83,12 @@ const GROUPS = {
     'test/install/allow-builds.test.ts',
     'test/install/dist-sync.test.ts',
   ],
-  // windows: Windows 进程树探针、瞬时重命名重试与只读清理（design 21 M2a）
+  // windows: Windows 进程树探针、瞬时重命名重试与只读清理（design 21）
   windows: [
     'test/windows/windows-process.test.ts',
     'test/windows/rename-retry.test.ts',
     'test/windows/win32-readonly-rm.integration.test.ts',
-    // Zero-test guard of this manifest (S5 / review/windows FIX C), pinned on
+    // Zero-test guard of this manifest, pinned on
     // every leg and on the Windows one.
     'test/windows/test-runner-guard.test.mjs',
   ],
@@ -98,7 +97,7 @@ const GROUPS = {
 const WIN32_FILES = [
   'test/windows/windows-process.test.ts',
   'test/windows/rename-retry.test.ts',
-  // Zero-test guard of this manifest (S5 / review/windows FIX C); it is
+  // Zero-test guard of this manifest; it is
   // platform-neutral and fast, so the Windows leg pins it too.
   'test/windows/test-runner-guard.test.mjs',
   'test/updater/coalesced-refresh.test.ts',

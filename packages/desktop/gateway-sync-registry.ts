@@ -1,7 +1,7 @@
 /**
- * Manual gateway chamber-plugin sync re-entry registry (design 21 §6.5,
- * Phase 3b): the desktop syncs the chamber host packages into the gateway
- * seed cache automatically after every gateway ready registration. A later,
+ * Manual gateway chamber-plugin sync re-entry registry (design 21 §6.5): the
+ * desktop syncs the chamber host packages into the gateway seed cache
+ * automatically after every gateway ready registration. A later,
  * manual `gateway_plugin_sync(id)` re-runs that same sync, so this module
  * retains the LAST ready-registration sync parameters per gateway instance
  * id — the registered transport origin, the registration auth headers and

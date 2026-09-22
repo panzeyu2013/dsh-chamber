@@ -1,5 +1,5 @@
 /**
- * shell-ipc-settings — domain IPC registrations split out of shell-core.ts
+ * shell-ipc-settings — domain IPC registrations
  */
 import type { ShellIpcCtx } from './shell-core.ts'
 import type { NotificationSettingsLike } from './notifications.ts'
@@ -26,10 +26,9 @@ export function registerSettingsHandlers(ctx: ShellIpcCtx): void {
       ...DEFAULT_CHAMBER_SETTINGS.notifications,
       ...(settingsIO.current().notifications ?? {}),
     };
-    // 搬迁差异注记：搬迁前的 host-probe boolean 适配区分「探测异常（拒发）」与
-    // 「未聚焦」；接缝下 isFocused 由实现侧保证异常安全恒 boolean（单窗守卫内
-    // isVisible/isFocused 探测不可达异常），两态同值——有意收敛，注释于
-    // electron-edges isFocused。
+    // 接缝下 isFocused 由实现侧保证异常安全恒 boolean（单窗守卫内
+    // isVisible/isFocused 探测不可达异常）：探测异常与未聚焦两态同值——有意收敛，
+    // 注释于 electron-edges isFocused。
     const anyWindowFocused = deps.edges.isFocused();
     const decision = decideNotification({
       request,
@@ -51,7 +50,7 @@ export function registerSettingsHandlers(ctx: ShellIpcCtx): void {
     // A disabled/kind/focus decision is terminal before consulting the host.
     // Unsupported-platform logging should describe an actual show attempt, not
     // every deliberately suppressed renderer edge（notificationSupported 探测失败
-    // 与不支持同值——实现侧异常安全；与搬迁前区分「探测失败」消息的有意收敛）。
+    // 与不支持同值——实现侧异常安全）。
     if (!deps.edges.notificationSupported()) {
       console.warn('[dsh-chamber] 通知裁决跳过：平台不支持原生通知');
       return { shown: false, error: 'native notifications are not supported on this platform' };
@@ -125,7 +124,7 @@ export function registerSettingsHandlers(ctx: ShellIpcCtx): void {
       if (verdict === 'unavailable') return { error: 'native confirmation unavailable' };
       if (verdict !== 'confirmed') return { error: 'cancelled', code: 'cancelled' };
     }
-    // applySettingsPatch 现为 async（S-E：叶 Promise 兼容——Electron 同步叶被
+    // applySettingsPatch 为 async（叶 Promise 兼容——Electron 同步叶被
     // await 吸收零变；Swift 叶 await B 桥应答）。失败 loud {error} 返回。
     const applied = await applySettingsPatch(validated.patch);
     if (!applied.ok) return applied;
@@ -139,10 +138,9 @@ export function registerSettingsHandlers(ctx: ShellIpcCtx): void {
     return chamberSettingsStatus();
   });
 
-  // —— B 组（S2 批；W-10 S2 施工图第 1 项）——
   // 桌面通知（design 19 §3.3）：渲染端检测会话边沿并组装 payload → notify
   // （invoke，返回是否实际显示）→ 主进程白名单/去重/裁决 + 原生通知。
-  // 载荷形状 = 原 main.ts 的 trustedIpc(({ payload }) => …)——invoke 实参对象
+  // 载荷形状 = trustedIpc(({ payload }) => …)——invoke 实参对象
   // 解构在处理器内完成（registrar 处理器只收单参 unknown）。
   deps.ipc.handle(IPC_CHANNELS.NOTIFY, (payload: unknown) =>
     maybeShowNativeNotification((payload as { payload?: unknown }).payload));

@@ -2,8 +2,8 @@
 //  IngestReconcileSeamTests.swift
 //  DSHChamberTests
 //
-//  W4（2026-12 三轮独立复核）：把「ingest 之后必然对账露底色」做成可直测接缝。
-//  F1 背景：露底色对账不能挂在 ingest 的「有变化」分支上——第二次启动时 store 内已
+//  「ingest 之后必然对账露底色」的可直测接缝。
+//  露底色对账不能挂在 ingest 的「有变化」分支上——第二次启动时 store 内已
 //  有同值事实，ingest 返回 false；若对账只在变化分支内发生，浅色页面会整场会话停在
 //  骨架深色。本文件直测
 //  MainWindowController.ingestPageFacts(_:into:reconcile:) 的调用次序：
@@ -21,7 +21,7 @@ final class IngestReconcileSeamTests: XCTestCase {
         return (defaults, name)
     }
 
-    /// W4 回归锚点：无变化的 ingest 也必须对账一次（F1 早退点）。
+    /// 无变化的 ingest 也必须对账一次（早退点）。
     /// 「仅变化时对账」→ 第二次调用观察到 0 次回调 → 本测试红。
     func testReconcileRunsAfterEveryIngestEvenWhenStoreUnchanged() {
         let (defaults, name) = makeDefaults(#function)
@@ -36,7 +36,7 @@ final class IngestReconcileSeamTests: XCTestCase {
         XCTAssertEqual(reconciled.count, 1)
         XCTAssertEqual(reconciled[0], false)
 
-        // 同值再上报：Store 无变化（旧实现正是在此早退、跳过对账）。
+        // 同值再上报：Store 无变化（若在此早退就会跳过对账）。
         let secondChanged = MainWindowController.ingestPageFacts(
             ["lang": "en", "dark": false, "revision": 1],
             into: store) { reconciled.append($0) }

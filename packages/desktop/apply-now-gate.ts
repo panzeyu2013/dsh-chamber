@@ -3,22 +3,19 @@
  * RUNTIME_APPLY_NOW IPC handler (main.ts, design 18 addendum §4.1).
  *
  * Extracted from the handler so the full gate matrix is unit-testable with
- * plain node:test (review R2/R5: the handler previously had zero behavioral
- * tests, and the post-confirm re-check was asymmetric with the pre-confirm
- * gate — the second gate omitted the override.pending fallback and neither
- * preflighted the target tree). The gate is deliberately side-effect free:
+ * plain node:test. The gate is deliberately side-effect free:
  * the caller re-reads authoritative state and builds the input; `ok` means
  * the caller may show the native confirm dialog and run the activation
  * transaction (runRuntimeStartup).
  *
- * Semantics (identical to the pre-existing handler, plus the tree preflight):
+ * Semantics:
  *   - operationBusy || fenceBusy                 → 'busy'
  *   - source === 'env'                           → 'env'
  *   - !managementSupported || phase !== 'pending'→ 'not-allowed'
  *   - runtimeBlocked                             → 'blocked'
  *   - connectionState ∉ {ready, degraded}        → 'not-ready'
  *     (the caller projects a null control plane as a non-member value)
- *   - pending ?? journalTarget ?? overridePending is null → 'no-pending' (F5)
+ *   - pending ?? journalTarget ?? overridePending is null → 'no-pending'
  *   - snapshotFailed                             → 'snapshot-failed'
  *   - !treeValid                                 → 'invalid-tree'
  *   - otherwise                                  → ok with the resolved target
@@ -39,8 +36,8 @@ export type ApplyNowGateInput = {
   /** Version management is read-only on unsupported platforms. */
   managementSupported: boolean
   /** Persisted override exists (projection; carried for caller parity, not
-   *  consulted by the gate — the durable target sources below are what F5
-   *  actually requires). */
+   *  consulted by the gate — the durable target sources below are what the
+   *  target resolution requires). */
   hasOverride: boolean
   /** state.pending — the durable pending version from the override record. */
   pending: string | null

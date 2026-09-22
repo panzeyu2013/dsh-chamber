@@ -1,5 +1,5 @@
 /**
- * I10 归因账本锁（plan §8-R16 / §10 补三条，R23）：每次应用内会话创建（含 blank）
+ * I10 归因账本锁：每次应用内会话创建（含 blank）
  * 必须带触发路径标签，账本按来源与标签聚合，且**无标签外来源**（unknown = 0）是验收
  * 判据的第二半。纯函数 + 源文本锁，node 直跑。
  *
@@ -19,8 +19,8 @@ import type { SessionCreationOrigin } from '../../src/shared/session-create-ledg
 const read = (rel: string): string => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8')
 const MUTATIONS = read('../../src/shared/session-mutations.ts')
 const BRIDGE = read('../../src/shared/aggregate-store.ts')
-// 2026-12 split: the sidebar create call site moves with its hook; the
-// contract reads the shell plus the modules that now own the locked text.
+// The sidebar create call site moves with its hook; the
+// contract reads the shell plus the modules that own the locked text.
 const SIDEBAR = read('../../src/client/SidebarRoot.tsx') + read('../../src/client/sidebar-root-sessions.ts')
 const GIT = read('../../../dsh-chamber-client-ui-git/src/shared/coordinator.ts')
 
@@ -82,7 +82,7 @@ test('every create call site declares an origin, and the bridge records with the
   assert.match(BRIDGE, /sessionCreationLedger\.record\(\{/)
   assert.match(BRIDGE, /publishSessionCreationInstrument\(\)/)
   // 契约类型与默认值。
-  // 标签是加法字段：未表态的调用方不发该键（旧事实形状逐字节不变）。
+  // 标签是加法字段：未表态的调用方不发该键。
   assert.equal((MUTATIONS.match(/options\.origin === undefined \? \{\} : \{ origin: options\.origin \}/g) ?? []).length, 2)
   assert.doesNotMatch(MUTATIONS, /origin: options\.origin \?\? 'unknown'/)
   assert.deepEqual([...SESSION_CREATION_ORIGINS], ['boot-handoff', 'boot-fallback', 'prewarm', 'user', 'unknown'])

@@ -10,7 +10,7 @@
  * packages/dsh-chamber-client-ui-sidebar/src/vendor-modules.d.ts). The
  * fork's own code stays fully checked; the loose faces are the dsh seam.
  *
- * Baseline: `dsh-v0.1.5-rc.2` — the vendor columns face is the
+ * The vendor columns face is the
  * rightbar/root-scope model, and the vendor service face is
  * `LayoutController(panels, hasMainPanel)` with `selectPanel`/`beginNavigation`.
  *
@@ -31,7 +31,7 @@ declare module '@deepseek-ai/cordis' {
   /**
    * Loose minimal shape (the fork consumes ctx through the cordis Context
    * face; index.ts augments it with ctx.layout). The structured members
-   * mirror the face the deleted runtime ClientContext provided so the
+   * mirror the runtime ClientContext face so the
    * vendor-copied client index typechecks verbatim; anything else falls
    * through the index signature.
    */
@@ -62,7 +62,7 @@ declare module '@deepseek-ai/dsh-client-store' {
    * Store contract + engine faces (mirrors `@deepseek-ai/dsh-client-store`
    * src/contract.ts + src/index.ts — the engine-extended handle/instance
    * subtypes the fork's stores.ts / store-core.ts consume). Names and
-   * signatures are preserved from the deleted runtime face.
+   * signatures follow that runtime face.
    */
   /** Store action declaration table (mirrors the store contract's ActionsDecl). */
   export type ActionsDecl<T> = Record<string, (draft: T, ...params: any[]) => void>

@@ -3,12 +3,11 @@
  * run-swift-tests.mjs —— the single macOS/Swift test entry (G1/G2/G23).
  *
  * Why this exists:
- * - G1: the Swift suite used to be reachable only from ci.yml, so a darwin
- *   `pnpm run check:tests` ran zero XCTest cases.
+ * - G1: a darwin `pnpm run check:tests` must run the XCTest suite (the suite
+ *   is otherwise reachable only from ci.yml).
  * - G23: `swift test` defaults to debug, while the shipped native binary is a
- *   release build — the released configuration was compiled but never executed.
- *   This runner pins `-c release` so the tests exercise the configuration that
- *   ships (release-only branches such as MainWindowController's #if DEBUG).
+ *   release build. This runner pins `-c release` so the tests exercise the
+ *   configuration that ships (release-only branches such as MainWindowController's #if DEBUG).
  * - G2: eight real sidecar integration cases may `XCTSkip` and CI stays green.
  *   A skipped XCTest case is a failure here: the runner parses the XCTest
  *   summary and requires executed > 0, failures == 0 AND skipped == 0.
@@ -175,5 +174,5 @@ function main() {
 
 const isEntry = process.argv[1] !== undefined
   && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))
-// process.exit 会丢掉管道尾部（runner 自己的摘要行）；用 exitCode 让事件循环自然退出（R5 复核发现）。
+// process.exit 会丢掉管道尾部（runner 自己的摘要行）；用 exitCode 让事件循环自然退出。
 if (isEntry) process.exitCode = main()

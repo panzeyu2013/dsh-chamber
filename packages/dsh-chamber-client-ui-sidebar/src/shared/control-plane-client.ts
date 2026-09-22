@@ -1,11 +1,10 @@
 /**
- * Shared control-plane REST client (design 04 §3 / 05 §3.1, B2 convergence):
+ * Shared control-plane REST client (design 04 §3 / 05 §3.1):
  * the browser half of the management REST surface — /health,
  * /api/connections (local), /api/host/logs — consumed by BOTH the renderer
  * App layer (packages/renderer/src/api.ts) and the connections settings
  * plugin (packages/dsh-chamber-client-ui-settings-connections control-plane.ts).
- * The two former copies had drifted (health port nullability, request
- * options, credentials); the wire contract here mirrors
+ * The wire contract here mirrors
  * packages/control-plane/src/api.ts (04 §3 verbatim) and is the single
  * frontend source.
  *
@@ -33,7 +32,7 @@ export interface ApiError extends Error {
   retryAfter?: number
 }
 
-/** 控制面 loopback 默认端口（B1-fe 前端单源；桌面 dev 可用 `DSH_CHAMBER_CP_PORT` 覆盖）。 */
+/** 控制面 loopback 默认端口（前端单源；桌面 dev 可用 `DSH_CHAMBER_CP_PORT` 覆盖）。 */
 export const DEFAULT_CONTROL_PLANE_URL = 'http://127.0.0.1:17500'
 
 /**
@@ -109,7 +108,7 @@ export interface HealthResponse {
 }
 
 /**
- * 写者静默诊断的 wire 形状（2026-09-10，02 §3.4 / 04 §3.2）。
+ * 写者静默诊断的 wire 形状（02 §3.4 / 04 §3.2）。
  * `GET /api/connections/local/writers` 的响应：本地实例为何起不来。`sticky`
  * 表示闩锁是被「写入期终止失败」关死的（扫描无法再证明），只能重启应用恢复。
  */

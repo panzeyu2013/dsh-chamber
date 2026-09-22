@@ -1,7 +1,6 @@
 /**
  * /chamber/runtime activation probes and host-domain derivation: probe-set shape
- * gates, the chamber host registry and syncedHostDomainProbeNames. Split from
- * runtime-routes.test.ts.
+ * gates, the chamber host registry and syncedHostDomainProbeNames.
  */
 
 import { test } from 'node:test'
@@ -69,10 +68,10 @@ test('applyNow runs the version-switch activation transaction in stop → transa
       'candidate ready remains quarantined through the complete probe verdict')
     assert.equal(order.filter(entry => entry === 'start').length, 2,
       'one start spawns the candidate inside the transaction (internal spawn), one resumes the verdict winner')
-    // P0 regression: the verdict-winner resume must happen AFTER the activation
-    // window closes. Inside the window index.ts's canStartLocal gate refuses
-    // every non-internal spawn (activationInProgress() && !internalSpawnActive()
-    // → connection_busy) — the old apply-now therefore threw on every recovery.
+    // The verdict-winner resume must happen AFTER the activation window closes.
+    // Inside the window index.ts's canStartLocal gate refuses every non-internal
+    // spawn (activationInProgress() && !internalSpawnActive() → connection_busy),
+    // so an early resume would fail.
     assert.ok(order.indexOf('quarantine:off') < order.lastIndexOf('start'),
       'the verdict-winner resume happens only after the activation window closes (restoreBuiltin parity)')
     assert.ok(readdirSync(join(stateDir, 'dsh-runtime', 'snapshots')).some(name => name.startsWith(`${TEST_BUILTIN_VERSION}-`)),
@@ -188,10 +187,10 @@ test('2026-12 shape gate: a synced seed cache flips the activation to the FULL p
     // as a connecting desktop would (PUT /chamber/plugins →
     // chamber-plugins cache). The probe shape gate — the per-package
     // derivation syncedHostDomainProbeNames over the actually-present
-    // packages — must now derive the full 7-name set
+    // packages — must derive the full 7-name set
     // (REQUIRED_ACTIVATION_PROBES); this is the flow that makes a fresh
     // gateway pick the chamber host layer up after the first desktop sync.
-    // Partial syncs derive the exact expected set instead (design 24 §7 C, M2)
+    // Partial syncs derive the exact expected set instead (design 24 §7 C)
     // — covered directly by the syncedHostDomainProbeNames matrix tests below.
     const plugins = createChamberPlugins(stateDir, silentLogger)
     for (const name of HOST_PACKAGE_NAMES) {
@@ -261,11 +260,11 @@ test('2026-12 shape gate: a synced seed cache flips the activation to the FULL p
 })
 
 // ---------------------------------------------------------------------------
-// M2 derivation matrix: syncedHostDomainProbeNames (design 24 §7 C) — the
-// per-package derivation that replaced the binary hasSyncedHostSeed gate.
+// Derivation matrix: syncedHostDomainProbeNames (design 24 §7 C) — the
+// per-package derivation.
 // ---------------------------------------------------------------------------
 
-// Derived from the control-plane registry (review G2-3): a hand-maintained
+// Derived from the control-plane registry: a hand-maintained
 // three-name copy would silently shrink this matrix when a 4th registry row
 // lands, so the package names and probe domains come from CHAMBER_HOST_PACKAGES
 // itself. The length pin below keeps the derivation honest.

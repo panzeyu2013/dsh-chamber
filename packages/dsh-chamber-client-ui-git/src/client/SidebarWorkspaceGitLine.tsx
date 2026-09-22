@@ -49,10 +49,9 @@ export interface WorkspaceGitContext {
 }
 
 /** One unregistered worktree row awaiting removal authorization. The row's
- *  destructive action used to run a native `window.confirm`, which cannot ride
- *  the alias tokens (the same reason `ArchiveManagerDialog.tsx:41-42` records
- *  for this app) — it is now an in-app `RiskConfirmation`
- *  (2026-09-11 upstream-alignment, T2c). */
+ *  destructive action runs through the in-app `RiskConfirmation` (a native
+ *  `window.confirm` cannot ride the alias tokens — the same reason
+ *  `ArchiveManagerDialog.tsx:41-42` records for this app). */
 interface UnregisteredRemoveTarget {
   repoId: string
   worktreeId: string
@@ -100,7 +99,7 @@ function busyLabel(kind: GitBusyKind, t: SidebarWorkspaceGitInjected['t']): stri
  *  `runningRemoveLegacyTitle` on an old host — the reason is not a hard block,
  *  so the row keeps the control enabled and the host re-checks). A `'running'`
  *  argument would therefore fall through to `undefined`; there is no dead copy
- *  key left for it (2026-12 lens-C re-verification). */
+ *  key left for it. */
 function blockLabel(
   reason: ReturnType<typeof removeBlockReason>,
   status: GitWorktreeInfo['status'],
@@ -128,9 +127,9 @@ export function SidebarWorkspaceGitLine({
   const context = useWorkspaceGitContext()
   const [createOpen, setCreateOpen] = useState(false)
   const [removeTarget, setRemoveTarget] = useState<RemoveViewTarget | null>(null)
-  // The unregistered row's removal authorization (2026-09-11 upstream-alignment,
-  // T2c): the acknowledgement is per pending target and is reset on every
-  // close, so a second removal can never inherit a previous consent.
+  // The unregistered row's removal authorization: the acknowledgement is per
+  // pending target and is reset on every close, so a second removal can never
+  // inherit a previous consent.
   const [unregisteredRemove, setUnregisteredRemove] = useState<UnregisteredRemoveTarget | null>(null)
   const [unregisteredAcknowledged, setUnregisteredAcknowledged] = useState(false)
 
@@ -159,8 +158,8 @@ export function SidebarWorkspaceGitLine({
   if (context.workspaceId === '' && context.repoKey !== undefined) {
     if (source.sourceError !== undefined) return null
     const repo = source.snapshot?.repos.find(candidate => candidate.repoId === context.repoKey)
-    // The MAIN checkout is never unregistered (user report 2026-08: a main
-    // folder was mistaken for an external worktree).
+    // The MAIN checkout is never unregistered (a main folder must not be
+    // mistaken for an external worktree).
     const unregistered = repo?.worktrees
       .filter(worktree => worktree.workspaceId === null && !worktree.isMain) ?? []
     if (repo === undefined || unregistered.length === 0) return null
@@ -170,13 +169,13 @@ export function SidebarWorkspaceGitLine({
         <span className={css.unregisteredHeading}>{t('unregisteredTitle')}</span>
         {unregistered.map((worktree) => {
           // Mirrors removeBlockReason: main checkout / dirty / locked /
-          // unhealthy all reject at the host — keep the button honest
-          // (review P2-5). Deliberate asymmetry (review 2026-08 P2-2):
-          // the REGISTERED occupant offers the discard-changes dialog for
+          // unhealthy all reject at the host — keep the button honest.
+          // Deliberate asymmetry: the REGISTERED occupant offers the
+          // discard-changes dialog for
           // dirty worktrees, but this unregistered row has no discard
           // authorization to collect (the removal runs without
           // `discardChanges`), so dirty stays hard-blocked.
-          // A MISSING path is the deliberate exception (2026-09 live report):
+          // A MISSING path is the deliberate exception:
           // its directory is already gone, so removal is a leftover-record
           // cleanup with NOTHING to discard or protect — the host clears the
           // surviving git admin record (`git worktree remove` succeeds on the
@@ -203,9 +202,8 @@ export function SidebarWorkspaceGitLine({
               </span>
               {worktree.status !== 'ready' && (
                 // Upstream `Tag` (11px/17px capsule, 8 tones) instead of a
-                // hand-rolled capsule whose neutral fill equalled the row's
-                // own hover fill and vanished under the pointer
-                // (2026-09-11 upstream-alignment, T14).
+                // hand-rolled capsule whose neutral fill would equal the row's
+                // own hover fill and vanish under the pointer.
                 <Tag tone="warning" className={css.unregisteredStatus}>
                   {worktree.status === 'not-a-repo' ? t('notARepo') : t(worktree.status)}
                 </Tag>
@@ -216,7 +214,7 @@ export function SidebarWorkspaceGitLine({
                 className={css.unregisteredAction}
                 disabled={busy || source.recovery !== undefined
                   // A vanished/missing path cannot host a session — the
-                  // adopt would fail at the host anyway (cross-review P3-4).
+                  // adopt would fail at the host anyway.
                   || worktree.status !== 'ready'}
                 title={worktree.status === 'ready' ? t('unregisteredAdoptTitle') : t('unhealthyTarget')}
                 aria-label={t('unregisteredAdopt')}
@@ -230,15 +228,14 @@ export function SidebarWorkspaceGitLine({
                 disabled={busy || source.recovery !== undefined || blockedReason !== undefined}
                 title={blockedReason === undefined
                   // A missing row's removal IS the cleanup the blocked copy
-                  // used to point at the terminal for (2026-09): the host now
-                  // clears the leftover record itself.
+                  // would otherwise point at the terminal for: the host clears
+                  // the leftover record itself.
                   ? (missing ? t('unregisteredMissingRemoveTitle') : t('remove'))
                   : (blockLabel(blockedReason, status, t) ?? t('remove'))}
                 aria-label={t('remove')}
                 onClick={() => {
                   // The authorization is collected by the in-app
-                  // RiskConfirmation below, never by a native prompt
-                  // (2026-09-11 upstream-alignment, T2c).
+                  // RiskConfirmation below, never by a native prompt.
                   setUnregisteredAcknowledged(false)
                   setUnregisteredRemove({
                     repoId: repo.repoId,
@@ -259,7 +256,7 @@ export function SidebarWorkspaceGitLine({
         {/* The unregistered removal is destructive and irreversible, so it runs
             only behind the official risk acknowledgement: the primary action
             stays unavailable until the user checks the box (upstream
-            `RiskConfirmation`, 2026-09-11 upstream-alignment, T2c). */}
+            `RiskConfirmation`). */}
         <RiskConfirmation
           open={unregisteredRemove !== null}
           title={t('removeTitle')}
@@ -353,10 +350,9 @@ export function SidebarWorkspaceGitLine({
   const blocked = removeBlockReason(primary, currentSessionId, currentSessionIsBlank(context.sourceId, currentSessionId), runtimeKnown)
   /** The running title must not claim archivedness on an OLD host (no
    *  archived-aware field): there the `running` reason is the conservative
-   *  `runningSessionIds` fallback, and neutral copy is the honest one
-   *  (review G1-2). Derived through the SAME pure helper the dialog uses
-   *  (`removeRunningNotes` → kind 'legacy') so the two can never drift
-   *  (2026-12 cohesion nit). */
+   *  `runningSessionIds` fallback, and neutral copy is the honest one.
+   *  Derived through the SAME pure helper the dialog uses
+   *  (`removeRunningNotes` → kind 'legacy') so the two can never drift. */
   const runningNotes = removeRunningNotes({
     runningSessionIds: primary.runningSessionIds,
     ...(primary.blockingRunningSessionIds === undefined
@@ -385,8 +381,7 @@ export function SidebarWorkspaceGitLine({
             // literal class: a global class name would be a second styling
             // vocabulary next to the hashed module classes, and the chamber's
             // own rule is that styling hooks are attributes
-            // (packages/dsh-chamber-client-ui-mobile/src/client/styles.ts:10-20;
-            // 2026-09-11 upstream-alignment, T3).
+            // (packages/dsh-chamber-client-ui-mobile/src/client/styles.ts:10-20).
             data-git-action=""
             disabled={createDisabled}
             aria-label={t('createBranchWorktree')}
@@ -403,8 +398,8 @@ export function SidebarWorkspaceGitLine({
             data-git-action=""
             // A dirty worktree is NOT disabled: the remove dialog collects an
             // explicit discard-changes checkbox instead (design 08 §5.3
-            // amendment 2026-08). A worktree with RUNNING sessions is not
-            // disabled either (2026-09 user decision): there is NO wire flag
+            // amendment). A worktree with RUNNING sessions is not
+            // disabled either: there is NO wire flag
             // to opt out of the host's RUNNING guard — the host re-checks and
             // refuses with `running-agent` (the dialog maps that refusal to
             // localized copy), and the row stays clickable so the dialog can

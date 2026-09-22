@@ -1,25 +1,23 @@
 /**
- * Electron HostEdges flavor (design 25 §4.1; W-10 S0 assembly / S2 batch).
+ * Electron HostEdges flavor (design 25 §4.1).
  *
  * The Electron main process hands its host back-references to
  * createElectronEdges and receives the HostEdges seam object (interface in
  * shell-core.ts) that core business code calls for every Electron side
  * effect. A later Swift-native flavor (node-edges.ts) implements the same
  * seam over the B bridge. This is a face-B file by design: it imports
- * electron (runtime imports since S2 — Notification / powerMonitor / app)
+ * electron (runtime imports — Notification / powerMonitor / app)
  * and therefore sits on the electron-free-gate whitelist.
  *
- * Implemented member sets per batch (the returned object's Pick type = the
- * exact implemented set, so core/main.ts cannot touch a not-yet-implemented
- * member at compile time):
- *   - S0: rendererPush — the single-main-window send leaf. The four
+ * Implemented member set (the returned object's Pick type = the exact
+ * implemented set, so core/main.ts cannot touch a not-yet-implemented member
+ * at compile time):
+ *   - rendererPush — the single-main-window send leaf. The four
  *     committed state pushes (SSH_STATUS_CHANGED / SSH_INSTANCES_CHANGED /
- *     UPDATE_STATE_CHANGED / RUNTIME_STATE_CHANGED) leave through it; at S0
- *     their call sites all sat in main.ts — W-10 S9 moved the
- *     UPDATE_STATE_CHANGED caller (updater.subscribe push) into shell-core's
- *     installIpcHandlers I 组段, the others remain assembly-side (S1/S2 send
- *     sources already call the leaf from core).
- *   - S2 (notify/badge/ready + renderer delivery batch): the NOTIFY host leg
+ *     UPDATE_STATE_CHANGED / RUNTIME_STATE_CHANGED) leave through it; the
+ *     UPDATE_STATE_CHANGED caller (updater.subscribe push) lives in
+ *     shell-core's installIpcHandlers, the others remain assembly-side.
+ *   - notify/badge/ready + renderer delivery: the NOTIFY host leg
  *     (showNativeNotification with the private B4 notification-object
  *     registry/eviction, notificationSupported, retireNotificationsForSources
  *     for the registry-retire path), the BADGE_COUNT host leg (setBadge apply
@@ -28,24 +26,21 @@
  *     webViewLoading / webViewContentAlive / isFocused) and the resume/show
  *     event subscriptions (onSystemResume / onMainWindowShown) whose core
  *     callbacks register in installIpcHandlers. The window 'show' glue and
- *     the click activation leg live behind the host back-refs added below.
- *   - S6 (ssh plugin batch): the dialog legs — showMessage (dialog
- *     .showMessageBox wrapper, main.ts confirmPluginAction's box shape) and
- *     pickPluginSource (the module-level main.ts picker moved VERBATIM —
- *     folder|.tgz dual mode with the darwin one-dialog semantics; the
- *     host mainWindow back-ref is the parent, so Electron attaches the box/
- *     panel to the current window as a sheet on macOS). classifyPluginPick
- *     stays in core (plugin-tarball.ts).
- *   - S9 (open-in + update batch): the open/open-in host leaves —
- *     openExternal (shell.openExternal; URL whitelist/normalization/budget/
- *     cooldown stay in core — B11), openPath / showItemInFolder (E11 —
- *     shell.openPath's resolved error string and the win32/linux rejection
- *     paths fold into a loud throw, core's invokeOpenPath adapter keeps the
- *     original error text) and showError (dialog.showErrorBox wrapper — the
- *     deep-link OS launch drain moved into core with this batch is its first
- *     core consumer).
+ *     the click activation leg live behind the host back-refs defined below.
+ *   - ssh plugin dialog legs — showMessage (dialog.showMessageBox wrapper,
+ *     main.ts confirmPluginAction's box shape) and pickPluginSource (folder|.tgz
+ *     dual mode with the darwin one-dialog semantics; the host mainWindow
+ *     back-ref is the parent, so Electron attaches the box/panel to the
+ *     current window as a sheet on macOS). classifyPluginPick stays in core
+ *     (plugin-tarball.ts).
+ *   - open-in + update host leaves — openExternal (shell.openExternal; URL
+ *     whitelist/normalization/budget/cooldown stay in core — B11), openPath /
+ *     showItemInFolder (E11 — shell.openPath's resolved error string and the
+ *     win32/linux rejection paths fold into a loud throw, core's invokeOpenPath
+ *     adapter keeps the original error text) and showError (dialog.showErrorBox
+ *     wrapper; its first core consumer is the deep-link OS launch drain in core).
  *
- * Retained HostEdges members with no core Pick consumer (P-03/D1e rulings):
+ * Retained HostEdges members with no core Pick consumer:
  * keep-awake (setKeepAwake), tray (trayAvailable), the click focus leg
  * (focusMainWindow), open-in (launchApp) and system/identity (setLoginItem /
  * isPackaged) are still declared on the shell-core contract, but core's
@@ -53,7 +48,7 @@
  * implement them — the Electron-side actions live directly in main.ts
  * (setKeepAwakeActive / applyLaunchAtLogin / Tray / showMainWindow), while
  * node-edges.ts implements the members for the Swift host. notifyClicked and
- * resolveResource were DELETED from the shared contract (zero consumers; the
+ * resolveResource are not part of the shared contract (zero consumers; the
  * Swift-side semantics differed) — see the shell-core.ts HostEdges head note.
  */
 import { Notification, app, dialog, powerMonitor, shell } from 'electron';
@@ -67,22 +62,21 @@ import {
   showNativeNotificationHonestly,
 } from './notifications.ts';
 
-/** Back-references the Electron main process hands to the edge object. The
- *  S0 leaf needed only the single main-window identity; the S2 batch adds the
- *  click activation leg and the window-'show' subscription face (both are
- *  main-window state owned by the assembly side). */
+/** Back-references the Electron main process hands to the edge object: the
+ *  single main-window identity, the click activation leg and the window-'show'
+ *  subscription face (both are main-window state owned by the assembly side). */
 export interface ElectronEdgesHost {
   /** 当前主窗口（可能为 null：托盘/无窗常驻态）。 */
   mainWindow: () => BrowserWindow | null;
-  /** W-10 S2：通知 click 激活腿 = main.ts showMainWindow 语义——restore/show/
+  /** 通知 click 激活腿 = main.ts showMainWindow 语义——restore/show/
    *  focus，无窗则按控制面 origin 重建；成功返回 true。 */
   showMainWindow(): boolean;
-  /** W-10 S2：主窗口 'show' 事件订阅面（createMainWindow glue 对每窗挂接、
+  /** 主窗口 'show' 事件订阅面（createMainWindow glue 对每窗挂接、
    *  mainWindow===win 身份守卫在装配侧），返回退订函数。 */
   onMainWindowShown(cb: () => void): () => void;
 }
 
-/** S2 装配批的 Electron 边沿对象（实现成员集合 = S0+S2 实际引用最小集；类型由
+/** Electron 边沿对象（实现成员集合 = 实际引用最小集；类型由
  *  shell-core.ts 的 HostEdges 契约经 Pick 收窄，core/main.ts 因此无法触碰尚未
  *  实现的成员）。 */
 export function createElectronEdges(host: ElectronEdgesHost): Pick<
@@ -140,9 +134,9 @@ export function createElectronEdges(host: ElectronEdgesHost): Pick<
   return {
     /** 单窗身份 send 叶：主窗存在且未销毁则 webContents.send 并返回 true，
      *  否则返回 false（叶本身不 throw）。committed-push 包装
-     *  （attemptCommittedRegistryPush）在调用侧把 false 折算为 push 失败，
-     *  与搬迁前 throw 语义等价（transport-manager.ts）。
-     *  G14：交付门 = 共享 rendererPushDelivered（mainWindowAlive &&
+     *  （attemptCommittedRegistryPush）在调用侧把 false 折算为 push 失败
+     *  （transport-manager.ts）。
+     *  交付门 = 共享 rendererPushDelivered（mainWindowAlive &&
      *  webViewContentAlive，后者含 isCrashed）——crashed 渲染器上的 send
      *  绝不冒充已投递（否则 core 的 hold/rollback/ready 位复位在 Swift 侧
      *  同语义下会与 Electron 分叉）。 */
@@ -160,18 +154,18 @@ export function createElectronEdges(host: ElectronEdgesHost): Pick<
       return true;
     },
 
-    /** NOTIFY 宿主腿（W-10 S2）：构造 + 有界登记/淘汰 + click/close 监听 +
+    /** NOTIFY 宿主腿：构造 + 有界登记/淘汰 + click/close 监听 +
      *  honest-show 结算全在本实现内（B4）。click 腿顺序 = 先
      *  activate/restore/focus 主窗口（无窗则重建，host.showMainWindow），成功
-     *  才回调 core 的 clickRoute.onActivated（owns+入队在 core）——与搬迁前
-     *  「先代际 owns 校验后 focus」的差异（focus 后才发现来源退役时只跳过入队）
-     *  为 S2 接缝形状的有意修订。返回句柄：shown = 结算结果（NOTIFY IPC 返回
+     *  才回调 core 的 clickRoute.onActivated（owns+入队在 core）——focus 先于
+     *  代际 owns 校验：来源已退役时窗口仍被激活，只跳过打开意图入队。
+     *  返回句柄：shown = 结算结果（NOTIFY IPC 返回
      *  值与 claim 释放依赖）；dispose = click 回执注销（注销后该通知的后续
      *  click 只恢复窗口）。本实现不 throw：构造/登记/监听失败一律结算为
      *  shown:false 且登记清理内部完成。 */
     showNativeNotification(spec, clickRoute) {
       // 平台分支（macOS 系统提示音 Glass，OpenChamber 同款）属实现侧；
-      // 其余平台交给系统默认。spec.silent 缺省 false 与搬迁前一致。
+      // 其余平台交给系统默认。spec.silent 缺省 false。
       const created = new Notification({
         title: spec.title,
         body: spec.body,
@@ -180,9 +174,8 @@ export function createElectronEdges(host: ElectronEdgesHost): Pick<
       });
       let route = clickRoute;
       // 有界登记持有存活引用防 GC 吞 click。满员不拒发：macOS 横幅进入通知
-      // 中心后不触发 close，拒发会让未清除的存量横幅永久卡死通知流（2026-09
-      // 实测 16 条后测试/事件通知全部失败且 OS 无记录）——登记按插入序淘汰最旧
-      // 一条，由调用方 close 退役后新通知照常显示。
+      // 中心后不触发 close，拒发会让未清除的存量横幅永久卡死通知流——登记按
+      // 插入序淘汰最旧一条，由调用方 close 退役后新通知照常显示。
       const evicted = activeNotifications.add(created, route?.token ?? null);
       if (evicted !== null) {
         console.warn(`[dsh-chamber] 活跃原生通知已达上限 ${MAX_ACTIVE_NATIVE_NOTIFICATIONS} 条，淘汰最旧一条以继续显示`);
@@ -190,7 +183,7 @@ export function createElectronEdges(host: ElectronEdgesHost): Pick<
       }
       created.on('click', () => {
         try {
-          // click 腿（W-10 S2）：宿主内先激活/恢复/聚焦主窗口（无窗则重建），
+          // click 腿：宿主内先激活/恢复/聚焦主窗口（无窗则重建），
           // 成功才回调 core 的 onActivated 打开意图入队闭包。
           if (!host.showMainWindow()) return;
           route?.onActivated();
@@ -203,7 +196,7 @@ export function createElectronEdges(host: ElectronEdgesHost): Pick<
       created.on('close', () => {
         activeNotifications.delete(created);
       });
-      // S-44（2026-12 审计）：Electron 主进程没有 macOS 通知授权查询/申请
+      // Electron 主进程没有 macOS 通知授权查询/申请
       // API（证据与残余见 notifications.ts describeNativeNotificationFailure
       // 头注）。唯一可得的诚实面在这里接线：OS 拒绝投递（failed 事件）或限时
       // 无回执（timeout）时，错误文本显式说明「可能未授权 / 可能被系统抑制」
@@ -229,7 +222,7 @@ export function createElectronEdges(host: ElectronEdgesHost): Pick<
     },
 
     /** Notification.isSupported 平台探测（异常安全；探测失败与不支持同值，
-     *  core 侧统一按「平台不支持」loud——与搬迁前区分探测失败消息的有意收敛）。 */
+     *  core 侧统一按「平台不支持」loud）。 */
     notificationSupported(): boolean {
       try {
         return Notification.isSupported() === true;
@@ -238,7 +231,7 @@ export function createElectronEdges(host: ElectronEdgesHost): Pick<
       }
     },
 
-    /** BADGE_COUNT 宿主腿（W-10 S2，E5）：apply 叶——异常安全，绝不 throw；
+    /** BADGE_COUNT 宿主腿（E5）：apply 叶——异常安全，绝不 throw；
      *  平台门与裁决留 core（badge.ts badgePlatformGate）。 */
     setBadge(count: number) {
       try {
@@ -257,8 +250,7 @@ export function createElectronEdges(host: ElectronEdgesHost): Pick<
 
     /** 单窗口焦点复查（通知裁决的权威事实，design 19 §3.3）：窗口必须存在、
      *  可见且聚焦——隐藏到托盘/后台的窗口不算聚焦。异常安全（不可聚焦即
-     *  false；与搬迁前 host-probe boolean 适配失败即拒发的差异见
-     *  showNativeNotification 注释的有意收敛）。 */
+     *  false）。 */
     isFocused(): boolean {
       const win = host.mainWindow();
       if (win === null || win.isDestroyed()) return false;
@@ -283,8 +275,7 @@ export function createElectronEdges(host: ElectronEdgesHost): Pick<
     },
 
     /** 渲染器可用性门（B3）：webContents 是否仍在加载。无主窗/已销毁视同
-     *  「加载中」（投递门恒不通过，与搬迁前 destroyed ? true : isLoading()
-     *  同向）。 */
+     *  「加载中」（投递门恒不通过）。 */
     webViewLoading(): boolean {
       const win = host.mainWindow();
       if (win === null || win.isDestroyed()) return true;
@@ -302,7 +293,7 @@ export function createElectronEdges(host: ElectronEdgesHost): Pick<
       return webContentsAlive(win);
     },
 
-    /** 主窗口存在性门（W-10 S2）：win!=null 且未销毁（隐藏到托盘仍为 true）。 */
+    /** 主窗口存在性门：win!=null 且未销毁（隐藏到托盘仍为 true）。 */
     mainWindowAlive(): boolean {
       const win = host.mainWindow();
       if (win === null) return false;
@@ -313,7 +304,7 @@ export function createElectronEdges(host: ElectronEdgesHost): Pick<
       }
     },
 
-    /** 来源退役驱逐（W-10 S2，B4 registry 私有）：注册表退役路径把 sourceId
+    /** 来源退役驱逐（B4 registry 私有）：注册表退役路径把 sourceId
      *  已退役的活跃原生通知关闭并注销（click 回执随对象消亡），返回驱逐数。 */
     retireNotificationsForSources(retiredSourceIds: ReadonlySet<string>): number {
       let retired = 0;
@@ -326,7 +317,7 @@ export function createElectronEdges(host: ElectronEdgesHost): Pick<
       return retired;
     },
 
-    // —— 打开/拉起（W-10 S9 open-in + update 批；B11/E10/E11）——
+    // —— 打开/拉起（B11/E10/E11）——
     /** shell.openExternal 叶（B11/E10）：reject（OS 打开失败）原样透传——core
      *  调用点（openVscodeUrl / openReleasePage / 外链预算器）各自折算 loud 结果，
      *  本叶不做白名单/规范化/预算/冷却（留 core）。 */
@@ -336,32 +327,29 @@ export function createElectronEdges(host: ElectronEdgesHost): Pick<
 
     /** shell.openPath 叶（E11）：失败模式语义照搬——resolve 的错误串（非空 =
      *  OS 打开失败）与 win32/linux 的 reject 路径统一 loud（throw），core 侧
-     *  invokeOpenPath 适配把原始错误文本原样归一（成功 '' → null；与搬迁前
-     *  main.ts openInCtx 直包 shell.openPath 的语义一致）。 */
+     *  invokeOpenPath 适配把原始错误文本原样归一（成功 '' → null）。 */
     async openPath(p: string): Promise<void> {
       const error = await shell.openPath(p);
       if (error !== '') throw new Error(error);
     },
 
-    /** shell.showItemInFolder 叶（E11：Finder 揭示）。异常由调用侧兜底（与搬迁
-     *  前 openInCtx 直调同语义——runOpenInLaunch 的 loud {error} 投影）。 */
+    /** shell.showItemInFolder 叶（E11：Finder 揭示）。异常由调用侧兜底
+     *  （runOpenInLaunch 的 loud {error} 投影）。 */
     showItemInFolder(p: string): void {
       shell.showItemInFolder(p);
     },
 
-    /** dialog.showErrorBox 包装（W-10 S9——deep-link OS 启动消费循环随迁 core
-     *  后的 loud 错误框腿；其调用点外层 catch 兜底本叶异常，同搬迁前）。 */
+    /** dialog.showErrorBox 包装（core 的 deep-link OS 启动消费循环的 loud
+     *  错误框腿；其调用点外层 catch 兜底本叶异常）。 */
     showError(title: string, detail: string): void {
       dialog.showErrorBox(title, detail);
     },
 
-    /** 确认对话框叶（W-10 S6）：dialog.showMessageBox 包装——父窗 = 当前主窗
-     *  （host.mainWindow()，macOS 挂为窗 sheet），返回按钮序号 response（复刻
-     *  main.ts confirmPluginAction 的按钮序/编号约定由调用侧负责）。无存活主窗
-     *  抛错（'native confirmation unavailable'）——调用侧预检
-     *  edges.mainWindowAlive() 兜底（与搬迁前 confirmPluginAction 的
-     *  win==null||destroyed 预检同语义；窗口在预检与调用间销毁的竞态与搬迁前
-     *  showMessageBox(win) 抛出同形，由调用侧 catch 折算 loud error）。 */
+    /** 确认对话框叶：dialog.showMessageBox 包装——父窗 = 当前主窗
+     *  （host.mainWindow()，macOS 挂为窗 sheet），返回按钮序号 response（按钮
+     *  序/编号约定由调用侧负责）。无存活主窗抛错（'native confirmation
+     *  unavailable'）——调用侧预检 edges.mainWindowAlive() 兜底；窗口在预检与
+     *  调用间销毁的竞态抛出，由调用侧 catch 折算 loud error）。 */
     async showMessage(opts: HostMessageOptions): Promise<number> {
       const win = host.mainWindow();
       if (win === null || win.isDestroyed()) throw new Error('native confirmation unavailable');
@@ -369,11 +357,11 @@ export function createElectronEdges(host: ElectronEdgesHost): Pick<
       return response;
     },
 
-    /** 插件源一体化 picker 叶（W-10 S6）：main.ts pickPluginSource 函数体逐字
-     *  迁入（folder|.tgz 双模式：darwin NSOpenPanel 一体 openFile+openDirectory、
-     *  扩展过滤只约束文件选择；非 mac 仅目录）；父窗 = 当前主窗。调用侧预检
-     *  mainWindowAlive；预检与调用间窗口销毁的竞态抛出（与搬迁前同形），绝不
-     *  折算为取消。分类（classifyPluginPick）留 core（plugin-tarball.ts）。 */
+    /** 插件源一体化 picker 叶（folder|.tgz 双模式：darwin NSOpenPanel 一体
+     *  openFile+openDirectory、扩展过滤只约束文件选择；非 mac 仅目录）；
+     *  父窗 = 当前主窗。调用侧预检 mainWindowAlive；预检与调用间窗口销毁的
+     *  竞态抛出，绝不折算为取消。分类（classifyPluginPick）留 core
+     *  （plugin-tarball.ts）。 */
     async pickPluginSource(): Promise<{ status: 'cancelled' } | { status: 'picked'; path: string }> {
       const win = host.mainWindow();
       if (win === null || win.isDestroyed()) throw new Error('no main window');

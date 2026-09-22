@@ -1,5 +1,5 @@
 /**
- * Disclosure-attribute writer tests (2026-09-11 review-fix F3): plain node, no DOM —
+ * Disclosure-attribute writer tests: plain node, no DOM —
  * the helper takes any `setAttribute`/`removeAttribute` target, so a fake node
  * records exactly what the switch's control element receives. `aria-expanded` on a
  * role-less wrapper (`generic`) is not supported, so it must be written onto the

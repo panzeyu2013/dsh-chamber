@@ -1,12 +1,12 @@
 /**
- * Writer-quiescence notice model for the local connection card (2026-09-10,
- * design 02 §3.4 / 04 §3.2).
+ * Writer-quiescence notice model for the local connection card (design 02
+ * §3.4 / 04 §3.2).
  *
  * The control plane answers 409 connection_busy when a managed-host record it
- * cannot clear keeps the local instance from starting; before this revision
- * the page showed the bare reason ("…writer quiescence is not proven…") whose
- * only advice was to restart the app, and a record that merely BECAME stale
- * (its orphan exited) blocked every start for the whole session.
+ * cannot clear keeps the local instance from starting; the bare reason
+ * ("…writer quiescence is not proven…") advises only an app restart, and a
+ * record that merely BECOMES stale (its orphan exited) blocks every start for
+ * the whole session.
  *
  * This module owns the DISPLAY decision as a pure function so the React card
  * stays a thin renderer: whether the notice appears at all, which blockers are

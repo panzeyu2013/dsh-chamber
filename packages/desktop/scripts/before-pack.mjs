@@ -6,8 +6,8 @@
  *
  * Why: electron-builder's dependency pack follows pnpm workspace links on
  * macOS (symlinks) but misses them on Windows (junctions) — the packaged
- * app.asar lacked node_modules/@dsh-chamber/dsh-runtime/dist/index.js and the
- * afterPack asar assertion failed the Windows release leg (2026-09 beta.2).
+ * app.asar would lack node_modules/@dsh-chamber/dsh-runtime/dist/index.js and the
+ * afterPack asar assertion would fail the Windows release leg.
  * Replacing the link with a real directory makes the pack deterministic on
  * every platform without depending on link semantics.
  *
@@ -22,8 +22,7 @@
  * runtime loses its type surface and the NEXT build/typecheck fails with
  * `TS7016 … implicitly has an 'any' type`; neither `pnpm install
  * --frozen-lockfile` nor a rerun repairs it, because pnpm already sees the path
- * as satisfied (observed in the 2026-09 acceptance round: a pack that timed out
- * mid-artifact left exactly that state behind).
+ * as satisfied.
  */
 import { cpSync, existsSync, lstatSync, mkdirSync, readlinkSync, rmSync, symlinkSync } from 'node:fs'
 import { dirname, join, relative, resolve } from 'node:path'
@@ -63,7 +62,7 @@ export function materializeRuntimeCore({
   const before = lstatOrNull(targetDir)
   const linkTarget = before?.isSymbolicLink() ? readlinkSync(targetDir) : null
   // Always rebuild from scratch: a refreshed tree must not keep files the
-  // current build no longer produces (the pack ships whatever is here).
+  // current build does not produce (the pack ships whatever is here).
   rmSync(targetDir, { recursive: true, force: true })
   mkdirSync(targetDir, { recursive: true })
   cpSync(join(sourceDir, 'package.json'), join(targetDir, 'package.json'))

@@ -213,8 +213,7 @@ test('an intent buys at most one boot per source and at most the session cap', (
   assert.deepEqual(intentPrewarmSpent(twice, 'b', 30_000_000).usedSources, ['a', 'b'])
 })
 
-// 接线行为（原 prewarm-intent-wiring.test.ts 的行为面）：意图必须真的到达 App 层
-// 订阅者，且取消订阅后不再投递。
+// 接线行为：意图必须真的到达 App 层订阅者，且取消订阅后不再投递。
 test('the intent reaches App-layer bridge subscribers and unsubscribes cleanly', async () => {
   const { chamberBridge } = await import('../../src/shared/aggregate-store.ts')
   const seen: string[] = []
@@ -227,8 +226,7 @@ test('the intent reaches App-layer bridge subscribers and unsubscribes cleanly',
   assert.deepEqual(seen, ['ssh-a', 'local'], '取消订阅后不再投递')
 })
 
-// 门面接线锁（原 session-rows/prewarm-intent-wiring.test.ts 的源码面，2026-12 复核
-// 恢复）：来源头部是本版唯一的意图触点；点击/键盘/拖动消费本次 hover 周期，
+// 门面接线锁：来源头部是唯一的意图触点；点击/键盘/拖动消费本次 hover 周期，
 // onIntent 只把来源 id 交给 chamberBridge，卸载时 dispose 并清 ref。
 test('round-3 restore: the source header is the one and only intent touchpoint', () => {
   const read = (rel: string): string => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8')

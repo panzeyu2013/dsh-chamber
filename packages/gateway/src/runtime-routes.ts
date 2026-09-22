@@ -23,12 +23,12 @@ import { codedError, jsonResponse, readBoundedBody } from './http-utils.ts'
  * `undefined` (no body — the route's required-field checks answer 400); any
  * other parse failure is a 400. The oversized body is answered 413 by the
  * caller (fail() → codeToStatus) which destroys the socket only AFTER the
- * response is written (response-first review fix; see the handle() catch). */
+ * response is written (see the handle() catch). */
 async function readJsonBody(req: ApiRequest): Promise<unknown> {
   const outcome = await readBoundedBody(req, 64 * 1024)
   if (outcome.kind === 'oversize') throw codedError('body_too_large', 'request body too large')
   // The kernel settles aborted/closed connections too (dispatch-parity); the
-  // stream error is forwarded unchanged like the historical reader did.
+  // stream error is forwarded unchanged.
   if (outcome.kind === 'aborted' || outcome.kind === 'closed') {
     throw codedError('request_aborted', 'request body aborted')
   }
@@ -110,14 +110,14 @@ export function createRuntimeRoutes(manager: () => GatewayRuntimeManager, logger
         }
         const status = await m.status()
         if (rejectRecoveryGate(res, status, 'select')) return true
-        // Honest acceptance (R7 review): synchronous refusals are answered
+        // Honest acceptance: synchronous refusals are answered
         // synchronously, not swallowed behind a fake 202. A managed profile
         // write is a lifecycle writer (design 21 §6.3 decision 6/17): the
         // install window is refused here so select's 202 never precedes the
         // manager fence throw.
         if (m.profileWriteInFlight?.()) {
           // Same code/message as the manager's assertMutationIdle lease branch
-          // (audit N2: profileWriteBusyRefusal).
+          // (profileWriteBusyRefusal).
           return jsonResponse(res, 409, profileWriteBusyRefusal('runtime mutations'))
         }
         if (m.mutationInProgress()) {
@@ -147,9 +147,8 @@ export function createRuntimeRoutes(manager: () => GatewayRuntimeManager, logger
         // The manager's synchronous preflight runs INSIDE this try so any
         // throw (platform/env/busy/no_selection/invalid_target/noop_target)
         // lands in the outer catch → fail() writes the 409/403 BEFORE a 202
-        // can ever go out (F3 review fix: a preflight throw must project into
-        // the response, never be swallowed into a fake 202 whose status never
-        // settles). The status-based no_selection precheck is gone: the
+        // can ever go out (a preflight throw must project into the response,
+        // never be swallowed into a fake 202 whose status never settles). The
         // preflight filters invalidated selections/trees itself.
         const status = await m.status()
         if (rejectRecoveryGate(res, status, 'apply-now')) return true
@@ -167,7 +166,7 @@ export function createRuntimeRoutes(manager: () => GatewayRuntimeManager, logger
           // in-session; recovery is restore-builtin / retry-apply / retry-restore.
           // restart-exhausted is NOT a dedicated refusal (D2) — this gate covers it.
           // Same code/message as the manager's applyNowPreflight direct-call
-          // parity (audit N2: applyNowNotRunningRefusal).
+          // parity (applyNowNotRunningRefusal).
           return jsonResponse(res, 409, applyNowNotRunningRefusal(status.connectionState))
         }
         if (m.applyNowInFlight()) {
@@ -187,7 +186,7 @@ export function createRuntimeRoutes(manager: () => GatewayRuntimeManager, logger
         return jsonResponse(res, 200, await m.rollback(body.version))
       }
       if (suffix === '/cleanup-version' && req.method === 'POST') {
-        // Desktop-parity cleanup (2026-12): ledger-gated deletion of one
+        // Desktop-parity cleanup: ledger-gated deletion of one
         // explicitly installed version tree + store prune. Synchronous 200
         // like /apply; refusals (pending/recovery/env/win32/busy/protected)
         // answer their mapped status synchronously through the manager throw.
@@ -203,7 +202,7 @@ export function createRuntimeRoutes(manager: () => GatewayRuntimeManager, logger
         return jsonResponse(res, 200, await m.cleanupVersion(body.version))
       }
       if (suffix === '/restore-pre-rollback' && req.method === 'POST') {
-        // Desktop-parity pre-rollback data restore (2026-12): stash-name
+        // Desktop-parity pre-rollback data restore: stash-name
         // whitelist + re-listing live in the manager; env stays allowed.
         const body = (await readJsonBody(req)) as { stashName?: unknown } | undefined
         if (body === undefined || typeof body.stashName !== 'string' || body.stashName === '') {
@@ -217,7 +216,7 @@ export function createRuntimeRoutes(manager: () => GatewayRuntimeManager, logger
         return jsonResponse(res, 200, await m.restorePreRollback(body.stashName))
       }
       if (suffix === '/recover-metadata' && req.method === 'POST') {
-        // Metadata FATAL rescue (2026-12 desktop parity): archives corrupt
+        // Metadata FATAL rescue (desktop parity): archives corrupt
         // selection metadata with a full DSH_HOME copy and runs the builtin
         // anchor through the probe gate. Synchronous refusals come from the
         // manager (platform/env/busy/wrong-recovery-phase/no-corruption).
@@ -244,7 +243,7 @@ export function createRuntimeRoutes(manager: () => GatewayRuntimeManager, logger
         return jsonResponse(res, 200, await m.retryRestore())
       }
       if (suffix === '/restore-builtin' && req.method === 'POST') {
-        // Route-level gate (desktop parity, A-U4 + R2): restore-builtin is
+        // Route-level gate (desktop parity): restore-builtin is
         // the escape for a PENDING selection or a HEALTHY selection with an
         // override only. Inside an interrupted apply (swap-attempted /
         // snapshot-failed) or data restore (restore-blocked) the shared core
@@ -272,10 +271,10 @@ export function createRuntimeRoutes(manager: () => GatewayRuntimeManager, logger
           return jsonResponse(res, 409, { error: 'runtime mutation in progress; restart refused', code: 'runtime_busy' })
         }
         if (status.connectionState !== 'ready' && status.connectionState !== 'degraded') {
-          // Round-4 wording updated for decision 12: restartLocal rejects every
-          // non-ready state — the r1 recovery surface is POST
-          // /chamber/runtime/start (stopped/error/restart-exhausted), while
-          // interrupted apply/restore windows keep their retry/restore routes.
+          // restartLocal rejects every non-ready state — the r1 recovery
+          // surface for stopped/error/restart-exhausted is POST
+          // /chamber/runtime/start, while interrupted apply/restore windows
+          // keep their retry/restore routes.
           return jsonResponse(res, 409, { error: `managed dsh is not running (${status.connectionState}); start the managed dsh (start applies to stopped/error/restart-exhausted) or retry the interrupted apply/restore`, code: 'runtime_busy' })
         }
         if (m.profileWriteInFlight?.()) {
@@ -296,10 +295,10 @@ export function createRuntimeRoutes(manager: () => GatewayRuntimeManager, logger
         // /restart: the guarded startLocal runs in the background and progress
         // is polled via /status (start running/ok/failed + operationError).
         // Every synchronous refusal is answered synchronously before any 202:
-        // the recovery gate (M1, 2026-12) refuses every startupBlockedReason —
+        // the recovery gate refuses every startupBlockedReason —
         // phase-less FATAL metadata blocks (journal-corrupt / current-corrupt /
         // override-corrupt / journal-mismatch) included — and recovery phases
-        // only expose their matching retry — restore-builtin applies to pending/healthy selections only (2026 audit R2), and a start never
+        // only expose their matching retry — restore-builtin applies to pending/healthy selections only, and a start never
         // bypasses the recovery gate), installing/applying windows refuse
         // busy, a held profile-write lease defers, a second start refuses, and
         // a running/starting dsh is not a start target.
@@ -313,13 +312,13 @@ export function createRuntimeRoutes(manager: () => GatewayRuntimeManager, logger
         }
         if (m.startInFlight?.()) {
           // Same code/message as the manager start() head single-flight check
-          // (audit N2: startAlreadyInFlightRefusal).
+          // (startAlreadyInFlightRefusal).
           return jsonResponse(res, 409, startAlreadyInFlightRefusal())
         }
         if (status.connectionState !== 'stopped' && status.connectionState !== 'error'
           && status.connectionState !== 'restart-exhausted') {
-          // Same code/message as the manager start() connection gate (audit
-          // N2: startNotApplicableRefusal).
+          // Same code/message as the manager start() connection gate
+          // (startNotApplicableRefusal).
           return jsonResponse(res, 409, startNotApplicableRefusal(status.connectionState))
         }
         void m.start().catch(error => logger.error(`runtime start failed: ${sanitizeRouteError(error instanceof Error ? error.message : String(error))}`))
@@ -346,7 +345,7 @@ export function createRuntimeRoutes(manager: () => GatewayRuntimeManager, logger
       if ((error as Error & { code?: string }).code === 'body_too_large') {
         // The 413 was written above; the oversized body may still be
         // streaming — destroy the socket instead of draining it, exactly like
-        // dispatch's readBody path (review fix: response first, then destroy).
+        // dispatch's readBody path (response first, then destroy).
         try { req.destroy?.() } catch { /* socket already gone */ }
       }
       return true

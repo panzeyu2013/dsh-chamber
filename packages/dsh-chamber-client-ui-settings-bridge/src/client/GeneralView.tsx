@@ -1,8 +1,8 @@
 /**
  * Chamber-global「客户端」section (design 14 D7 / design 15 v1 flat form) — the
  * settings shell's `__general` fixed entry content, titled by the same
- * `clientNav` key as its nav cell (2026-09-11 upstream-alignment T8: the
- * official section is the one named 通用设置/General). Organized in OpenChamber-
+ * `clientNav` key as its nav cell (the official section is the one named
+ * 通用设置/General). Organized in OpenChamber-
  * style control groups (group headings + flat rows), styled with the settings
  * panel's design language (`--dsw-alias-*` tokens).
  *
@@ -12,11 +12,11 @@
  * 运行 group is the three-column variant (.generalGridTriple — its three
  * short toggle cards stay on one row), the
  * two radio pairs (关闭窗口时 / 通知时机) render as slider-style segmented
- * controls (SegmentedControl: dsh business-blue thumb + inverted selected text,
- * 2026-09 user decision — see SegmentedControl.tsx), the notification master
+ * controls (SegmentedControl: dsh business-blue thumb + inverted selected text —
+ * see SegmentedControl.tsx), the notification master
  * toggle as the shared `Switch`
- * primitive (36x20 track + round thumb, role=switch, required accessible name —
- * 2026-09-11 upstream-alignment T9), and the three notification-event toggles
+ * primitive (36x20 track + round thumb, role=switch, required accessible name),
+ * and the three notification-event toggles
  * share one line of borderless rows (.generalEventRow). The notifications
  * SUB-SETTINGS (通知时机 / 事件开关 / 测试通知) stay COLLAPSED while the master
  * switch is off — they unfold in a single bordered card (.generalNotifyCard)
@@ -29,14 +29,14 @@
  * Groups (all chamber-GLOBAL, owned by the main process chamber-settings.json,
  * never any instance's dsh home — 01 §2 P2):
  * - 启动与关闭: 关闭窗口行为 (windowCloseBehavior: hide-to-tray / quit);
- *   登录自启 (launchAtLogin, darwin/win32/linux — design 21 M4 win32 解锁);
+ *   登录自启 (launchAtLogin, darwin/win32/linux — design 21 M4);
  * - 运行: 保持唤醒 (keepAwake, default off); 退出确认 (quitConfirmation,
- *   2026-08: confirm only while the LOCAL instance runs — remote tunnels
+ *   confirm only while the LOCAL instance runs — remote tunnels
  *   never prompt; update-downloaded exempt); VS Code 新窗口 (vscodeOpenInNewWindow,
  *   design 16 §3.3, default on — 会话目录在 VS Code 新窗口打开，避免
  *   VS Code 默认策略复用并替换最近活动窗口);
- * - 会话待办区 (sidebar todo area, 2026-12): 主开关 + 三类事件开关（会话完成时 /
- *   代理提问时 / 审批请求时，与通知组共用同一组文案，2026-09 措辞统一），
+ * - 会话待办区 (sidebar todo area): 主开关 + 三类事件开关（会话完成时 /
+ *   代理提问时 / 审批请求时，与通知组共用同一组文案），
  *   默认全开——被动呈现（仅在有内容时出现，零占用）;
  * - 通知 (design 19, merged into General — no new nav entry): 主开关 + 未读
  *   徽标开关（design 19 §3.7，独立于主开关；平台能力门 design 23 M3——
@@ -46,9 +46,8 @@
  * - 更新 (design 11, merged into General): current version +「检查更新」+
  *   low-key status (UpdateSection).
  *
- * （design 18 §3.6：dsh 运行时块已自本视图迁出——per-server「dsh 运行时」
- *  settings.section，现由 index.ts 的 registerRuntimeSection 注册在该实例
- *  自己的 boot ctx 台账上。）
+ * （design 18 §3.6：dsh 运行时块是 per-server「dsh 运行时」settings.section，
+ *  由 index.ts 的 registerRuntimeSection 注册在该实例自己的 boot ctx 台账上。）
  *
  * Every mutation goes through the main-process settings IPC (settings-store),
  * which overlays the patch OPTIMISTICALLY — the control reflects the click in
@@ -77,12 +76,11 @@ type GeneralTranslate = (key: SettingsBridgeKey, params?: Record<string, unknown
 
 /**
  * The platform-capability projection, with the unread-badge fact read as an
- * OPTIONAL field: the desktop main process now always sets
- * `badgeSupported` (false on win32, design 19 §3.7 / design 23 M3), while an
- * older main process — or the shared renderer contract before it carries the
- * field — omits it. Absent therefore means "assume supported", which is
- * exactly the pre-capability rendering (backward compatible); only an
- * explicit false disables the control.
+ * OPTIONAL field: the desktop main process sets `badgeSupported` (false on
+ * win32, design 19 §3.7 / design 23 M3), while an older main process — or a
+ * renderer contract without the field — omits it. Absent therefore means
+ * "assume supported" (backward compatible); only an explicit false disables
+ * the control.
  */
 type SupportedGates = ChamberSettingsStatus['supported'] & { badgeSupported?: boolean }
 
@@ -147,11 +145,10 @@ function ToggleEvent({
 }
 
 /**
- * Disclosure switch row control (2026-09-11 upstream-alignment T9; the
- * disclosure placement corrected by the 2026-09-11 review, F3): the shared
- * `Switch` primitive — the official 36×20 track/thumb/transition/focus
- * vocabulary this row used to hand-roll — plus the disclosure relationship the
- * row carries, because this switch unfolds the sub-settings card below it.
+ * Disclosure switch row control: the shared `Switch` primitive — the
+ * official 36×20 track/thumb/transition/focus vocabulary — plus the
+ * disclosure relationship the row carries, because this switch unfolds the
+ * sub-settings card below it.
  *
  * WHERE the pair lives: the wrapper stays a pure layout box, and
  * `aria-expanded` / `aria-controls` are written onto the primitive's OWN control
@@ -291,9 +288,9 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
   // 平台事实来自桥（design 25）：仅 macOS 需要「系统设置 → 通知」恢复入口。
   const isDarwin = isMacPlatform()
 
-  // The dsh runtime block moved to the per-server「dsh 运行时」settings.section
-  // (design 18 §3.6, 2026-09 修订). The full group set rendered below (启动与
-  // 关闭 / 运行 / 会话待办区 2026-12 / 通知 design 19 / 更新 design 11) is
+  // The dsh runtime block is the per-server「dsh 运行时」settings.section
+  // (design 18 §3.6). The full group set rendered below (启动与
+  // 关闭 / 运行 / 会话待办区 / 通知 design 19 / 更新 design 11) is
   // enumerated in this file's top doc block — keep that in sync, not here.
 
   return (
@@ -306,7 +303,7 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
         <div className={css.generalGrid}>
           {/* 关闭窗口时: 滑块式分段单选（SegmentedControl），一行两个选项；
               无托盘时禁用「隐藏到托盘」并改提示文案。hint 随选中值切换（选中
-              「退出应用」时不再描述后台运行）。 */}
+              「退出应用」时给退出语义的提示，不描述后台运行）。 */}
           <div className={css.generalCard}>
             <div className={css.generalCardText}>
               <span className={css.generalFieldLabel} id={closeBehaviorLabel}>{t('generalCloseBehavior')}</span>
@@ -357,7 +354,7 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
             onChange={(next) => save({ keepAwake: next })}
           />
 
-          {/* 退出确认（2026-08 修订）：可设置开关；仅本地实例运行中时确认，
+          {/* 退出确认：可设置开关；仅本地实例运行中时确认，
               远程连接不影响关闭；更新已下载时豁免。未水合时按默认值 true
               渲染（`!== false`），与「绝不假 off」的占位纪律一致。 */}
           <ToggleCard
@@ -368,7 +365,7 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
             onChange={(next) => save({ quitConfirmation: next })}
           />
 
-          {/* VS Code 会话目录打开策略（design 16 §3.3 / 20 §4.3，2026-12）：
+          {/* VS Code 会话目录打开策略（design 16 §3.3 / 20 §4.3）：
               chamber 设置 vscodeOpenInNewWindow 默认 ON——会话头按钮与 OS 深链
               （dsh-chamber://open-vscode）共用同一管线：从会话头部打开目录时在
               VS Code 新窗口打开（URL 追加 ?windowId=_blank，VS Code 运行中也
@@ -431,20 +428,19 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
         )}
       </div>
 
-      {/* 通知 (design 19, merged into General — no new nav entry): 主开关 +
-          启用后才展开的子设置（通知时机 hidden-only / always + 事件开关
-          complete / ask / request +「发送测试通知」）。主开关关闭时子设置
-          收起（不全部展开）——配置项仍在，启用后按原始布局展开显示。
-          2026-12 边框修订：主开关是无边框披露行（.generalSwitchRow），
-          子设置整体收入唯一一张卡片（.generalNotifyCard），内部行不再
-          自带边框——通知组从五层边框降到一层。 */}
+      {/* 通知 (design 19 — no new nav entry): 主开关 + 启用后才展开的子设置
+          （通知时机 hidden-only / always + 事件开关 complete / ask / request +
+          「发送测试通知」）。主开关关闭时子设置收起（不全部展开）——配置项仍在，
+          启用后按原始布局展开显示。
+          主开关是无边框披露行（.generalSwitchRow），子设置整体是唯一一张卡片
+          （.generalNotifyCard），内部行不自带边框——通知组只有一层边框。 */}
       <div className={css.generalGroup}>
         <h3 className={css.generalGroupTitle}>{t('generalGroupNotifications')}</h3>
 
         {/* 主开关: 官方 Switch 原语（role=switch / aria-checked / 必需的可访问
             名称），整行即 label（整行可点）；未水合骨架态整行变淡。
             aria-expanded/aria-controls 由 DisclosureSwitch 写到原语自己的
-            role=switch 按钮上（2026-09-11 review F3：无 role 的包装 span 上
+            role=switch 按钮上（无 role 的包装 span 上
             这两个属性对辅助技术是无效的），指向展开的子设置卡。 */}
         <label className={clsx(css.generalSwitchRow, !hydrated && css.generalDisabled)}>
           <div className={css.generalCardText}>

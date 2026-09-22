@@ -1,15 +1,13 @@
 /**
- * Wait-for-serving gate for a source's client plugin graph (2026-09-10,
- * design 09 §3.2).
+ * Wait-for-serving gate for a source's client plugin graph
+ * (design 09 §3.2).
  *
  * A cold-started instance answers `clientGraph/graph` with
  * `503 instance_unavailable` (the reverse proxy refuses to forward while the
  * managed dsh is not serving yet). The shell's boot fetch waits for the source
  * instead of losing the profile's whole client-plugin set (renderer
  * host-graph `waitForServing`); the settings bridge reads the SAME graph for
- * its contributions and used to publish `unavailable` on the first cold
- * answer, which told the user the graph was unreachable when the instance was
- * merely still starting.
+ * its contributions.
  *
  * The wait is bounded, and it never waits for a source that is terminally
  * down (`error`/`stopped`/`restart-exhausted`) or absent: those must fail fast
@@ -62,8 +60,8 @@ export async function waitForSourceServing(
   const sleep = options.sleep ?? sleepMs
   const deadline = Date.now() + timeoutMs
   // Budget lives in classify (not the kernel's deadline) because this gate
-  // probes ONCE past a zero deadline before giving up — exactly the retired
-  // loop's order: read, decide connected/terminal, then test the deadline.
+  // probes ONCE past a zero deadline before giving up — the order is: read,
+  // decide connected/terminal, then test the deadline.
   const verdict = await pollUntil<boolean | undefined, boolean>({
     intervalMs: pollMs,
     sleep,
@@ -84,7 +82,7 @@ export async function waitForSourceServing(
 
 /**
  * Whether a client-graph read failure is the cold-start window rather than a
- * real failure (2026-09-10, design 09 §3.2): the reverse proxy answers
+ * real failure (design 09 §3.2): the reverse proxy answers
  * `instance_unavailable` / `dsh_not_ready` while the managed dsh is still
  * coming up, and ONLY that class is worth waiting for. Anything else — a
  * missing method, an auth gate, a version conflict — must surface unchanged.

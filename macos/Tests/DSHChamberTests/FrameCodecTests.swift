@@ -1,14 +1,13 @@
 //
-//  FrameCodecTests.swift — W-05 B 桥 NDJSON 帧编解码（design 25 §4.4.2）
+//  FrameCodecTests.swift — B 桥 NDJSON 帧编解码（design 25 §4.4.2）
 //  纯逻辑单测：编解码往返、容错分类、超长帧、载荷形态。
 //
 import XCTest
 @testable import DSHChamber
 
 final class FrameCodecTests: XCTestCase {
-    /// 测试侧行解码：生产侧 `decodeLine(_:)` 只有测试使用，2026-12
-    /// 审计删除；生产入站解析是 BridgeClient.handleIncomingLine（Data 直入，
-    /// BridgeClientLineReadTests 覆盖）。本 helper 逐字保留原实现的语义
+    /// 测试侧行解码：生产入站解析是 BridgeClient.handleIncomingLine（Data 直入，
+    /// BridgeClientLineReadTests 覆盖）。本 helper 逐字保留既有实现的语义
     /// （超长短路 → UTF-8 解析 → classify），使下列分类/容忍断言原样成立。
     private func decodeLine(_ line: String) -> BridgeFrame? {
         guard !FrameCodec.isLineTooLong(line),
@@ -34,8 +33,7 @@ final class FrameCodecTests: XCTestCase {
         XCTAssertEqual(obj["instanceId"], .string("local"))
     }
 
-    /// response/event 的编码分支已随 2026-12 审计删除（生产只发 request）；
-    /// 解码面保留：sidecar 的 ok/error 响应帧必须仍可分类（id 族优先）。
+    /// 生产只发 request；解码面覆盖 sidecar 的 ok/error 响应帧分类（id 族优先）。
     func testDecodeResponseOkAndError() {
         XCTAssertEqual(decodeLine(#"{"id":1,"ok":true,"result":[1,true]}"#),
                        .response(id: 1, ok: true, result: .array([.number(1), .bool(true)]),
@@ -78,7 +76,7 @@ final class FrameCodecTests: XCTestCase {
         }
     }
 
-    /// Phase 1 C3：单次解析分类器的严格性（与旧 JSONDecoder Envelope 解码逐条
+    /// 单次解析分类器的严格性（与 JSONDecoder Envelope 解码逐条
     /// 等价）——已知键类型不符毒化整行，null 与缺省同义，整数域接受集一致。
     func testClassifyStrictTypePoisoningAndNullFolding() {
         // 类型不符 → 整行 nil（否则非法行会变成合法 response 窃取 pending）
@@ -111,10 +109,10 @@ final class FrameCodecTests: XCTestCase {
         XCTAssertNil(decodeLine(#"{"notify":"ready","payload":null}"#))
     }
 
-    /// 独立差分审查（A）发现的极值边界：JSONSerialization 丢失原始 token 后与旧
-    /// JSONDecoder 的接受集差异——全部 fail-closed 或影响面为零，钉住回归。
+    /// 极值边界：JSONSerialization 丢失原始 token 后与 JSONDecoder 的接受集差异——
+    /// 全部 fail-closed 或影响面为零，钉住回归。
     func testClassifyExtremeNumberBoundaries() {
-        // 浮点存储恰好 -2^63（只可能来自越界 token 的 Double 舍入）→ 拒绝（旧实现亦拒）
+        // 浮点存储恰好 -2^63（只可能来自越界 token 的 Double 舍入）→ 拒绝
         XCTAssertNil(FrameCodec.classify(jsonObject: ["id": -9_223_372_036_854_775_809.0, "ok": true]))
         // 合法的整数存储 Int64.min 不受影响
         XCTAssertEqual(FrameCodec.classify(jsonObject: ["id": NSNumber(value: Int64.min), "ok": true]),
@@ -128,8 +126,8 @@ final class FrameCodecTests: XCTestCase {
                        .response(id: 10_000_000_000_000_000, ok: true, result: nil, error: nil))
     }
 
-    /// 差分审查（A）确认的另两处 token 级差异（JSONSerialization 已丢原始 token，
-    /// 无法事后还原；均为无实际影响的边界）：下溢指数折叠为 0（旧整帧 nil，方向
+    /// 另两处 token 级差异（JSONSerialization 已丢原始 token，
+    /// 无法事后还原；均为无实际影响的边界）：下溢指数折叠为 0（方向
     /// 变宽松）、整数写法 -0 变 .number(0)（AnyCodable == 相等、页面文本都是 "0"）。
     func testClassifyNumberTokenEdgeCases() {
         guard case .event(event: "e", payload: .array(let underflow))? =

@@ -155,9 +155,9 @@ test('gateway start: metadata corruption keeps the gateway alive with dsh stoppe
       logger: silentLogger,
       deps: compositionDeps(compositionPlane(state, order)),
     })
-    // 2026-12 (desktop blocked-but-alive parity): a FATAL metadata block no
-    // longer kills the whole gateway — the gateway stays up with the managed
-    // dsh stopped so POST /chamber/runtime/recover-metadata stays reachable.
+    // Desktop blocked-but-alive parity: a FATAL metadata block must not kill
+    // the whole gateway — it stays up with the managed dsh stopped so POST
+    // /chamber/runtime/recover-metadata stays reachable.
     await gateway.start()
     assert.equal(gateway.connectionState, 'stopped', 'managed dsh left stopped')
     assert.ok(!order.includes('local:start'), 'no dsh spawn on a FATAL block')
@@ -644,7 +644,7 @@ test('the S1 override warns only for anonymous-external, never loopback-only or 
   const warnings: string[] = []
   const capturing = { log() {}, warn: (...parts: unknown[]) => warnings.push(parts.join(' ')), error() {} }
   const build = (mutate: (c: ReturnType<typeof config>) => void) => {
-    // Phase 1: each build owns a fresh stateDir — createGatewayStore holds an
+    // Each build owns a fresh stateDir — createGatewayStore holds an
     // exclusive .gateway.lock for the process lifetime, so reusing one dir
     // across builds would fail the live-owner lock.
     const stateDir = mkdtempSync(join(tmpdir(), 'gateway-lifecycle-warn-'))
@@ -787,9 +787,9 @@ test('stop() retains the stateDir lock when runtime writer disposal is unsafe', 
 test('stop() drains the audit windows the fence-time drain could not see (wiring lock)', async () => {
   // The behavioural half lives in audit.test.ts: flushAuditWindows() publishes a
   // window opened after the quiesce fence and is idempotent. That test calls the
-  // method itself, so it cannot see the WIRING — a 2026-12 mutation battery
-  // deleted the production call and every test stayed green, which is the exact
-  // false-green shape this file exists to prevent. Pin the call site and its
+  // method itself, so it cannot see the WIRING — deleting the production call
+  // would leave every test green, the exact false-green shape this file exists
+  // to prevent. Pin the call site and its
   // order instead: the drain must follow the plane stop (the listener is closed by
   // then, so no NEW request can open a window — a handler already inside
   // `await auth.verify()` still can, which is what the drain comment in index.ts

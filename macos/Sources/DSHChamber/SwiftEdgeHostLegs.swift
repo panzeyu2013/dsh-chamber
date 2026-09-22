@@ -2,8 +2,8 @@
 //  SwiftEdgeHostLegs.swift
 //  DSHChamber
 //
-//  W-19/20 切片（design 25 §4.4.2/§5 E4/E5/E8/E10/E12）：sidecar 出站
-//  edge（node-edges.ts 经 B 桥发出）的 Swift 宿主腿骨架。与 BridgeClient
+//  Swift 宿主腿骨架（design 25 §4.4.2/§5 E4/E5/E8/E10/E12）：sidecar 出站
+//  edge（node-edges.ts 经 B 桥发出）的宿主腿实现。与 BridgeClient
 //  v1 默认应答表（defaultEdgeResponse）的关系：宿主接线（AppDelegate/
 //  MainWindowController）把本 legs 实例赋给 BridgeClient.edgeHostLegs 后，
 //  默认表让位于 legs（legs 报 unimplemented/ui-unavailable 时回落默认表，
@@ -15,14 +15,14 @@
 //    showMessage（异步 NSAlert 消费）/ showNativeNotification
 //    （UNUserNotificationCenter + click 回灌 __host.notifyClicked）/
 //    openExternal / openPath / showItemInFolder / setBadge（dockTile）/
-//    setKeepAwake / setLoginItem（E14：SMAppService.mainApp，S-D 补齐——
+//    setKeepAwake / setLoginItem（E14：SMAppService.mainApp——
 //    swift run 无 bundle 时 guard 诚实报 no-bundle）/ showError /
-//    launchApp（E12：appId 最小映射 finder/vscode + 缺省 loud，S-D 补齐）。
+//    launchApp（E12：appId 最小映射 finder/vscode + 缺省 loud）。
 //  - 退役：edge 面 "retireNotifications" 不在本类（node-edges 以 notify 发送
-//    退役，不经 edge）——notify 消费路由在 MainWindowController：S8 起按
+//    退役，不经 edge）——notify 消费路由在 MainWindowController：按
 //    sourceId→identifier 登记表调 UNUserNotificationCenter
 //    .removeDeliveredNotifications(withIdentifiers:) 清除已展示横幅。
-//  GUI 分支实机验收属硬门禁（M3 集成点见各腿注释 TODO；setLoginItem 的
+//  GUI 分支实机验收属硬门禁（集成点见各腿注释 TODO；setLoginItem 的
 //  register/unregister 真机调用、launchApp 的 Finder/vscode 真实拉起均须
 //  实机/签名环境）。
 //
@@ -48,9 +48,8 @@ enum EdgePayload {
 
     static func int(_ value: AnyCodable?) -> Int? {
         guard case .number(let n)? = value else { return nil }
-        // Int(n) 对 NaN/±inf/越界值直接 trap（2026-09 二轮评审 P3：实测
-        // `-1e400` 经 JSON 桥接后 exit 133）；判定本体 =
-        // StrictJSONNumber.int（有限 + 整值 + Int 域内，2026-12 单源化）。
+        // Int(n) 对 NaN/±inf/越界值直接 trap（实测 `-1e400` 经 JSON 桥接后
+        // exit 133）；判定本体 = StrictJSONNumber.int（有限 + 整值 + Int 域内）。
         return StrictJSONNumber.int(n)
     }
 
@@ -60,7 +59,7 @@ enum EdgePayload {
     }
 }
 
-/// 通知授权状态（P-06）：UNUserNotificationCenter.getNotificationSettings 的
+/// 通知授权状态：UNUserNotificationCenter.getNotificationSettings 的
 /// 最小投影——UNNotificationSettings 无公开构造器，测试经本枚举注入假体。
 public enum EdgeNotificationAuthorization: Equatable {
     case notDetermined
@@ -73,7 +72,7 @@ public enum EdgeNotificationAuthorization: Equatable {
     case unknown
 }
 
-/// 原生通知中心的最小可注入面（P-06 单测 seam）。生产实现 =
+/// 原生通知中心的最小可注入面（单测 seam）。生产实现 =
 /// SystemUserNotificationCenter（UNUserNotificationCenter.current()，只在
 /// bundle 形态/canShowUI 为真时构造与调用——dev 无 bundle 调 current() 会崩）。
 public protocol EdgeNotificationCenter {
@@ -119,7 +118,7 @@ public final class SystemUserNotificationCenter: EdgeNotificationCenter {
     }
 }
 
-/// 原生通知调度解码（S8）：node-edges/electron-edges 出站形状
+/// 原生通知调度解码：node-edges/electron-edges 出站形状
 /// {notificationId: Int, sourceId?: String, spec: {title?, body?, message?,
 /// silent?: bool, sound?: string}}。sourceId 缺省/null/非字符串 =
 /// unknown-source——仍投递，不登记退役（无法归属退役集）；identifier 恒
@@ -140,7 +139,7 @@ struct NotificationDispatch: Equatable {
     /// OS 标识：`chamber-edge-<纪年>.<壳内单调序号>.<sidecar notificationId>`。
     /// - 纪年区分不同壳进程；序号在壳进程内单调，**sidecar 重启不会重置它**，
     ///   因此重启前后的横幅在通知中心绝不同名（否则退役旧来源会误删新来源的
-    ///   同名活横幅——2026-12 第三/四轮验证）；
+    ///   同名活横幅）；
     /// - **末段恒为 sidecar 的 notificationId**：click 回灌按 `.` 末段解析
     ///   （AppDelegate.userNotificationCenter didReceive）；分隔符用 `.` 而非
     ///   `-`，否则负值（缺省容错 -1）会被拆成两段而解析成正数。
@@ -154,7 +153,7 @@ struct NotificationDispatch: Equatable {
         (name?.isEmpty == false) ? name! : "Glass"
     }
 
-    /// 具名音效（2026-12 双端逐函数核对 V4/V7）：UNUserNotificationCenter 以系统
+    /// 具名音效：UNUserNotificationCenter 以系统
     /// 音效名等价表达 Electron 的具名音效；名字无法解析时系统回落默认声。
     static func notificationSound(named name: String?) -> UNNotificationSound {
         UNNotificationSound(named: UNNotificationSoundName(notificationSoundName(name)))
@@ -188,12 +187,12 @@ public final class SwiftEdgeHostLegs {
         public var isAppBundled: () -> Bool
         /// 测试注入：UI 腿执行体覆盖（method → outcome）。生产恒 nil；
         /// 注入慢/假 body 让单测可验证交互腿的异步应答、10 分钟上限与超时
-        /// 弃权——真实 NSAlert/NSOpenPanel 模态无法在单测里驱动（S1/S17）。
+        /// 弃权——真实 NSAlert/NSOpenPanel 模态无法在单测里驱动。
         public var uiLegBodyOverride: ((String, AnyCodable?) -> (result: AnyCodable?, error: String?))?
-        /// 通知中心 seam（P-06）：生产 = 系统中心；测试注入假体（系统中心
+        /// 通知中心 seam：生产 = 系统中心；测试注入假体（系统中心
         /// 在 headless 测试里不可驱动，且 dev 无 bundle 调 current() 会崩）。
         public var notificationCenter: () -> EdgeNotificationCenter
-        /// add 的有界等待（P-06；默认 5s，测试可缩短）。
+        /// add 的有界等待（默认 5s，测试可缩短）。
         public var notificationAddTimeout: TimeInterval
         public init(canShowUI: @escaping () -> Bool = { false },
                     isAppBundled: @escaping () -> Bool = {
@@ -216,10 +215,10 @@ public final class SwiftEdgeHostLegs {
     /// 主窗提供者（POC 接线点：MainWindowController 注册后置非 nil）。
     public var mainWindowProvider: (() -> NSWindow?)?
 
-    /// 已投递通知登记表（S8）：scheduleNotification 成功后登记，notify 路由
+    /// 已投递通知登记表：scheduleNotification 成功后登记，notify 路由
     /// retireNotifications 消费（removeDeliveredNotifications）。
     public let notificationRegistry = NotificationDeliveryRegistry()
-    /// 授权请求是否已发起（S3·V1：首次通知时请求一次）。按 legs 实例记忆
+    /// 授权请求是否已发起（首次通知时请求一次）。按 legs 实例记忆
     /// （生产恰一个实例 = 进程内幂等；测试每例新实例，互不串味），经锁串行。
     private let authorizationLock = NSLock()
     private var notificationAuthorizationRequested = false
@@ -237,10 +236,10 @@ public final class SwiftEdgeHostLegs {
     /// keep-awake activity token（ProcessInfo 防休眠；nil = 未激活）。
     private var keepAwakeActivity: NSObjectProtocol?
 
-    /// 2026-12 双端逐函数核对 D3/F6：只防【系统】休眠，不阻止显示器关闭 ——
-    /// Electron 用 powerSaveBlocker prevent-app-suspension（main.ts），
-    /// design 14 D5 亦写明「仅防应用挂起，不阻止显示器关闭」。原实现带
-    /// .idleDisplaySleepDisabled（屏幕永不熄灭），与 Electron 可感不一致。
+    /// 只防【系统】休眠，不阻止显示器关闭——Electron 用 powerSaveBlocker
+    /// prevent-app-suspension（main.ts），design 14 D5 亦写明「仅防应用挂起，
+    /// 不阻止显示器关闭」。.idleDisplaySleepDisabled（屏幕永不熄灭）与
+    /// Electron 可感不一致，故不采用。
     private func updateKeepAwake(enabled: Bool) {
         if enabled, keepAwakeActivity == nil {
             keepAwakeActivity = ProcessInfo.processInfo.beginActivity(
@@ -259,19 +258,19 @@ public final class SwiftEdgeHostLegs {
         }
     }
 
-    /// 退出清理（2026-12 双端逐函数核对 D13）：显式收回 keep-awake。窗口可能
+    /// 退出清理：显式收回 keep-awake。窗口可能
     /// 已关闭，故不经 A 桥的 no-window 守卫路径（respond 会被挡掉）。
     public func clearKeepAwake() {
         updateKeepAwake(enabled: false)
     }
 
-    /// 退出清理（同 D13）：清空 Dock 角标（Electron will-quit 同序）。
+    /// 退出清理：清空 Dock 角标（Electron will-quit 同序）。
     public func clearBadge() {
         let run: () -> Void = { NSApp.dockTile.badgeLabel = nil }
         // 本方法是**对外直接 API**（不经 performUI body）：调用点（Sparkle
-        // willInstallUpdate 清理链、退出清理）都在主线程，但保留原线程 hop
-        // 兜底——2026-12 审计只删 performUI/performInteractiveUI 内不可达的
-        // `main.sync` 分支，不改这里。
+        // willInstallUpdate 清理链、退出清理）都在主线程，但保留线程 hop
+        // 兜底（performUI/performInteractiveUI 内的 `main.sync` 分支不可达，
+        // 不走这里）。
         if Thread.isMainThread {
             run()
         } else {
@@ -283,24 +282,24 @@ public final class SwiftEdgeHostLegs {
         self.config = config
     }
 
-    /// 未实现（M3 集成点留待）与 UI 不可用文案前缀（BridgeClient 回落依据）。
+    /// 未实现（集成点留待）与 UI 不可用文案前缀（BridgeClient 回落依据）。
     public static let unimplementedPrefix = "swift-edge-unimplemented:"
     public static let uiUnavailablePrefix = "swift-edge-ui-unavailable:"
 
     /// 非交互 UI 腿的有界等待：主线程可能正被 BridgeClient.stop() 的收尾轮询
     /// 占用，退出优先；超时 loud 失败（core 可重试），body 幂等。
     static let uiLegTimeout: TimeInterval = 1.0
-    /// 通知 add 的有界等待（P-06，5s；与 Electron
+    /// 通知 add 的有界等待（5s；与 Electron
     /// NATIVE_NOTIFICATION_OUTCOME_TIMEOUT_MS 同值）。超时回
     /// {shown:false,error:"..."}，core 据此释放 5s 去重 claim。
     public static let notificationAddTimeout: TimeInterval = 5.0
     /// 交互腿（showMessage/pickPluginSource）上限：用户在模态上思考/浏览可能远超
     /// 1s。node 侧现在是 SWIFT_INTERACTIVE_LEG_TIMEOUT_MS(600_000) + 60_000 缓冲
-    /// （S2·F4：两侧同值时 node 恒先超时，用户 10 分钟后的答案被丢）——Swift 侧超时
+    /// （两侧同值时 node 恒先超时，用户 10 分钟后的答案被丢）——Swift 侧超时
     /// 点必须 ≤ node 侧且二者有明确缓冲。跨语言锁步见 CrossLanguageLockstepTests。
     static let interactiveLegTimeout: TimeInterval = 600
 
-    /// 异步宿主腿入口（W-21 前置）：非 nil 时 BridgeClient 默认应答器改经
+    /// 异步宿主腿入口：非 nil 时 BridgeClient 默认应答器改经
     /// 它应答（reply 可延迟调用，恰一次契约由 sendEdgeReply 守卫）；本入口
     /// 内部先走同步 respond——命中实现腿（非 unimplemented/ui-unavailable）
     /// 立即 reply；未实现/UI 不可用则回落 v1 默认表（由 BridgeClient 判定
@@ -315,7 +314,7 @@ public final class SwiftEdgeHostLegs {
         case "showNativeNotification":
             scheduleNotification(payload: payload, completion: completion)
         case "showMessage", "pickPluginSource":
-            // S1：交互腿经异步入口应答——模态在主线程执行、完成才 reply，
+            // 交互腿经异步入口应答——模态在主线程执行、完成才 reply，
             // 既不占住管道读取线程，也不在 1s 处丢弃模态结果。
             performInteractiveUI(method: method, payload: payload, completion: completion)
         default:
@@ -326,7 +325,7 @@ public final class SwiftEdgeHostLegs {
 
     /// 异步腿面（canShowUI 为真时由本类真实接管，BridgeClient 默认应答器据此
     /// 走 respondAsync）：showNativeNotification 调度 + showMessage/
-    /// pickPluginSource 两个交互模态（S1：10 分钟上限，完成才 reply）。
+    /// pickPluginSource 两个交互模态（10 分钟上限，完成才 reply）。
     public func canHandleAsync(method: String) -> Bool {
         switch method {
         case "showNativeNotification", "showMessage", "pickPluginSource":
@@ -336,8 +335,8 @@ public final class SwiftEdgeHostLegs {
         }
     }
 
-    /// 真实通知调度（W-21 切片；design 25 §5 E4；S8 补 sourceId/silent；
-    /// P-06 诚实回执）：canShowUI 为假 → ui-unavailable 诚实降级；先查授权
+    /// 真实通知调度（design 25 §5 E4）：canShowUI 为假 → ui-unavailable
+    /// 诚实降级；先查授权
     /// 状态（denied → {shown:false,error}；notDetermined → 先申请一次）；
     /// add 有有界等待（notificationAddTimeout，缺省 5s），超时/add 错误一律
     /// 回可解析的 {shown:false,error:"..."}——**只有 add 完成回调成功才回
@@ -360,7 +359,7 @@ public final class SwiftEdgeHostLegs {
         let content = UNMutableNotificationContent()
         content.title = dispatch.title
         content.body = dispatch.body
-        // 声音映射（2026-12 双端逐函数核对 V4/V7）：silent → 无声音；否则与
+        // 声音映射：silent → 无声音；否则与
         // Electron darwin 一致地用具名音效（electron-edges.ts:161
         // sound: spec.sound ?? 'Glass'）——UNUserNotificationCenter 以系统音效名
         // 等价表达，缺省名 Glass，名字无法解析时系统回落默认声。
@@ -369,7 +368,7 @@ public final class SwiftEdgeHostLegs {
             : NotificationDispatch.notificationSound(named: dispatch.sound)
         // 调度前登记（**先于** add）：退役与投递之间没有原子点，先登记让退役端
         // 一定能看到该 identifier；完成回调再由 finishDelivery 判定是否需要在
-        // 横幅落地后立即清除（2026-12 验证轮：只在完成回调登记会漏掉这个窗口）。
+        // 横幅落地后立即清除（只在完成回调登记会漏掉这个窗口）。
         let identifier = dispatch.identifier(sequence: notificationRegistry.nextIdentifierSequence())
         let tracked = notificationRegistry.beginDelivery(sourceId: dispatch.sourceId,
                                                          identifier: identifier)
@@ -378,7 +377,7 @@ public final class SwiftEdgeHostLegs {
             content: content,
             trigger: nil  // 立即投递（前台展示由 AppDelegate delegate 接管）
         )
-        // P-06 seam：生产 = UNUserNotificationCenter.current()；测试注入假体。
+        // seam：生产 = UNUserNotificationCenter.current()；测试注入假体。
         let center = self.config.notificationCenter()
         let replyGate = NotificationReplyGate()
         /// 授权/调度失败的统一收敛：撤下登记（没有可退役的横幅）并回
@@ -392,7 +391,7 @@ public final class SwiftEdgeHostLegs {
             completion(.object(["shown": .bool(false), "error": .string(message)]), nil)
         }
         let deliver: () -> Void = { [registry = notificationRegistry] in
-            // 有界等待（P-06）：超时先回失败；add 晚到的成功横幅由完成回调
+            // 有界等待：超时先回失败；add 晚到的成功横幅由完成回调
             // 立即清除，绝不给用户留一条「已报失败」的通知。
             DispatchQueue.global().asyncAfter(deadline: .now() + self.config.notificationAddTimeout) {
                 guard replyGate.claim() else { return }
@@ -429,9 +428,9 @@ public final class SwiftEdgeHostLegs {
                 completion(.object(["shown": .bool(true)]), nil)
             }
         }
-        // 授权状态先查（P-06）：denied 直接失败（不请求、不 add）；notDetermined
-        // 先申请一次（S3·V1 时机不变：首次真正要投递时才请求，不是启动即弹系统
-        // 框；申请在途时仍尝试 add，未授权会以错误回调收敛）；已授权/临时授权
+        // 授权状态先查：denied 直接失败（不请求、不 add）；notDetermined 先申请
+        // 一次（首次真正要投递时才请求，不是启动即弹系统框；申请在途时仍尝试
+        // add，未授权会以错误回调收敛）；已授权/临时授权
         // 直接投递；unknown 按已获准前进（add 结果才是权威裁决）。
         center.authorizationStatus { status in
             switch status {
@@ -469,7 +468,7 @@ public final class SwiftEdgeHostLegs {
         let dict = EdgePayload.dictionary(payload)
         switch method {
         case "updateNativeCapability":
-            // 原生更新器能力上报（S-01 / 裁决 D-1 选 B；S-38 诚实化）：sidecar 用它
+            // 原生更新器能力上报：sidecar 用它
             // 决定页面更新区是否还显示「原生壳不支持自动安装」。available=false 时
             // 携带**真实原因**（未装配 / 坏 feed / 坏 EdDSA 公钥 / startUpdater 失败），
             // sidecar 记录该原因；页面 check 因此拿 ok:false 落 error，绝不假 available。
@@ -480,7 +479,7 @@ public final class SwiftEdgeHostLegs {
             ]), nil)
         case "updateNativeAction":
             // 页面更新按钮：kind=check 走检查；download/install 把 Sparkle 标准更新
-            // 窗口带到前台（下载+安装在该窗口内完成，P-15/S-39 的 kind 分派）。回执
+            // 窗口带到前台（下载+安装在该窗口内完成）。回执
             // 诚实：不可用/忙/未知 kind 都是显式 error，绝不假 ok:true 让页面停住。
             // 形状先于状态：未知 kind 是坏请求，先诚实拒绝（与更新器是否装配无关）。
             var kind = "check"
@@ -505,7 +504,7 @@ public final class SwiftEdgeHostLegs {
                 guard let window = self.mainWindowProvider?() else {
                     return (nil, Self.uiUnavailablePrefix + method + ":no-window")
                 }
-                // S-32：focusMainWindow 也是恢复入口（最小化窗口先 deminiaturize）。
+                // focusMainWindow 也是恢复入口（最小化窗口先 deminiaturize）。
                 MainWindowController.restoreWindow(window)
                 NSApp.activate(ignoringOtherApps: true)
                 return (nil, nil)
@@ -520,18 +519,17 @@ public final class SwiftEdgeHostLegs {
         case "setBadge":
             // E5 dock 角标叶：payload {count: number}；UI 上下文守卫（headless
             // 绝不触碰 NSApp 状态）。badgePlatformGate 裁决在 core（sidecar），
-            // 本腿只执行 dockTile 写。notify 消费（S-D：sidecar setBadge
-            // notify → MainWindowController 路由）复用本腿——守卫语义与 edge
-            // 面一致（canShowUI/主窗），失败在消费侧 loud。
-            // 精度对照（S-D Electron 核实）：electron-edges setBadge =
-            // try app.setBadgeCount → catch 折算 {applied:false, reason}——
-            // core applyBadgePresentation 把失败压成一次 loud 日志，**不向
-            // renderer 回执**（renderer 保持自己的计数投影）。Swift flavor
-            // node-edges.setBadge 因同步契约无法跨进程往返而乐观
-            // {applied:true}（fire-and-forget notify）——dock 写失败只能在
-            // 本侧 loud（notify 消费打印 / edge 面 ok:false 上抛）。差异 =
-            // 通知瞬间的失败窗口（尽力面，注释登记）+ 失败日志落点；对
-            // renderer 的可见性两边一致（均无失败回执）→ parity 成立。
+            // 本腿只执行 dockTile 写。notify 消费（sidecar setBadge notify →
+            // MainWindowController 路由）复用本腿——守卫语义与 edge 面一致
+            // （canShowUI/主窗），失败在消费侧 loud。
+            // 精度对照：electron-edges setBadge = try app.setBadgeCount → catch
+            // 折算 {applied:false, reason}——core applyBadgePresentation 把失败
+            // 压成一次 loud 日志，**不向 renderer 回执**（renderer 保持自己的
+            // 计数投影）。Swift flavor node-edges.setBadge 因同步契约无法跨进程
+            // 往返而乐观 {applied:true}（fire-and-forget notify）——dock 写失败
+            // 只能在本侧 loud（notify 消费打印 / edge 面 ok:false 上抛）。差异 =
+            // 通知瞬间的失败窗口（尽力面）+ 失败日志落点；对 renderer 的可见性
+            // 两边一致（均无失败回执）→ parity 成立。
             return performUI(method: method) {
                 guard self.mainWindowProvider?() != nil else {
                     return (nil, Self.uiUnavailablePrefix + method + ":no-window")
@@ -566,7 +564,7 @@ public final class SwiftEdgeHostLegs {
             }
         case "pickPluginSource":
             // E8/A10 一体化 picker（folder|.tgz；design 21 §10 ⑧，electron-edges
-            // 语义：darwin openFile+openDirectory 一体）。交互模态（S1）——同步
+            // 语义：darwin openFile+openDirectory 一体）。交互模态——同步
             // 面按 node 侧 10 分钟上限等待、超时弃权；默认应答器经
             // canHandleAsync 走 respondAsync（模态完成才 reply，不占管道线程）。
             return performUI(method: method, timeout: Self.interactiveLegTimeout) {
@@ -586,9 +584,9 @@ public final class SwiftEdgeHostLegs {
                     alert.alertStyle = .critical
                     alert.messageText = title
                     alert.informativeText = detail
-                    // S2·V2 / S3·V6（2026-12 双端逐函数核对）：有可见窗口时用
-                    // sheet 呈现，不再在主线程 runModal 冻住整个 UI（Electron 的
-                    // dialog.showErrorBox 不阻塞渲染器）；无窗口才退回 runModal。
+                    // 有可见窗口时用 sheet 呈现，不在主线程 runModal 冻住整个
+                    // UI（Electron 的 dialog.showErrorBox 不阻塞渲染器）；无窗口
+                    // 才退回 runModal。
                     if let window = self.mainWindowProvider?(), window.isVisible {
                         alert.beginSheetModal(for: window, completionHandler: nil)
                     } else {
@@ -596,19 +594,18 @@ public final class SwiftEdgeHostLegs {
                     }
                 }
                 // 本 body 只经 performUI 在主线程排队执行（见其注记：main.sync 会在
-                // 主线程被退出收尾占用时挂死），原先的兜底分支不可达——2026-12
-                // 审计删除，保留主线程不变量断言。
+                // 主线程被退出收尾占用时挂死），无需兜底分支，保留主线程不变量断言。
                 assert(Thread.isMainThread, "UI 腿 body 必须在主线程执行")
                 run()
                 return (nil, nil)
             }
-        // E12 open-in 原生拉起叶（launchApp）已于 2026-12 移除（S-05 复裁决）：
-        // Electron 侧从未实现该叶（`electron-edges.ts:59`「launchApp moves with its
-        // first consumer」），core 也零调用点；Swift 侧的实现自建 `vscode://` URL、
-        // 自持 appId 白名单，等于在无人可达的路径上留一份与 core 注册表重复的决策。
-        // 未知方法走默认分支 → `swift-edge-unimplemented:launchApp`，两端对称、诚实。
+        // E12 open-in 原生拉起叶（launchApp）不实现：Electron 侧未实现该叶
+        // （`electron-edges.ts:59`「launchApp moves with its first consumer」），
+        // core 零调用点；自建 `vscode://` URL 与 appId 白名单等于在无人可达的
+        // 路径上留一份与 core 注册表重复的决策。未知方法走默认分支 →
+        // `swift-edge-unimplemented:launchApp`，两端对称、诚实。
         case "setLoginItem":
-            // E14 登录自启叶（S-D 补齐）：payload {enabled: bool}。Electron
+            // E14 登录自启叶：payload {enabled: bool}。Electron
             // 语义 = app.setLoginItemSettings({openAtLogin: enabled})（main.ts
             // applyLaunchAtLogin darwin 分支；失败 loud {error} 绝不静默假
             // 成功——设置面语义 design 14 D6）。Swift = SMAppService.mainApp
@@ -641,7 +638,7 @@ public final class SwiftEdgeHostLegs {
                 }
             }
         case "showMessage":
-            // dialog.showMessageBox 对应腿（S1 交互模态）：payload
+            // dialog.showMessageBox 对应腿（交互模态）：payload
             // HostMessageOptions 形状 {type,title,message,detail,buttons[],
             // defaultId,cancelId,noLink?}；应答 = 按钮序（0 基，electron-edges
             // 同契约）。同步面按 10 分钟上限等待、超时弃权；默认应答器经
@@ -691,7 +688,7 @@ public final class SwiftEdgeHostLegs {
 
     /// 同步 UI 腿入口（有界等待；body 主线程执行）。默认超时 = 非交互腿
     /// 1s；交互腿调用方传 interactiveLegTimeout。超时 → 置弃权位：已排定
-    /// 未执行的 body 不再执行（S1：不得「已失败但 body 稍后照常弹模态」）。
+    /// 未执行的 body 不再执行（不得「已失败但 body 稍后照常弹模态」）。
     func performUI(method: String,
                    timeout: TimeInterval = SwiftEdgeHostLegs.uiLegTimeout,
                    body: @escaping () -> (result: AnyCodable?, error: String?))
@@ -699,18 +696,17 @@ public final class SwiftEdgeHostLegs {
         guard self.config.canShowUI() else {
             return (nil, Self.uiUnavailablePrefix + method)
         }
-        // 主线程 hop（2026-09 模块评审 major）：本腿由 BridgeClient 的**管道
-        // 读取线程**调用，而 body 里全是 AppKit（makeKeyAndOrderFront /
-        // NSApp.activate / dockTile）。AppKit 只允许主线程访问——统一在此收敛，
-        // 腿实现不必各自记得 hop。
+        // 主线程 hop：本腿由 BridgeClient 的**管道读取线程**调用，而 body 里全是
+        // AppKit（makeKeyAndOrderFront / NSApp.activate / dockTile）。AppKit 只
+        // 允许主线程访问——统一在此收敛，腿实现不必各自记得 hop。
         if Thread.isMainThread {
             return body()
         }
-        // 有界等待（2026-09 二轮评审 P2 + S1）：主线程可能正被
-        // BridgeClient.stop() 的收尾轮询占用，`main.sync` 会一直等到它结束
-        // 才应答，sidecar 的优雅退出因此退化为 SIGKILL。改为 async + 有界超时：
-        // 主线程空闲时照常应答，忙时 loud 失败（core 侧报 leg 失败，可重试）；
-        // 交互腿用 10 分钟上限（node 侧同值），非交互腿保持 1s。
+        // 有界等待：主线程可能正被 BridgeClient.stop() 的收尾轮询占用，
+        // `main.sync` 会一直等到它结束才应答，sidecar 的优雅退出因此退化为
+        // SIGKILL。故用 async + 有界超时：主线程空闲时照常应答，忙时 loud 失败
+        // （core 侧报 leg 失败，可重试）；交互腿用 10 分钟上限（node 侧同值），
+        // 非交互腿保持 1s。
         var outcome: (result: AnyCodable?, error: String?) = (nil, nil)
         let gate = InteractiveCallGate()
         let semaphore = DispatchSemaphore(value: 0)
@@ -726,7 +722,7 @@ public final class SwiftEdgeHostLegs {
         return outcome
     }
 
-    /// 交互腿异步应答（S1）：body 只在主线程执行、模态完成才 reply；上限
+    /// 交互腿异步应答：body 只在主线程执行、模态完成才 reply；上限
     /// interactiveLegTimeout（10 min，与 node 侧 INTERACTIVE_EDGE_TIMEOUT_MS
     /// 对齐）。超时 → 弃权位：仍排队的 body 不再执行（绝无双重执行）；
     /// completion 恰一次由 gate 守卫，edge 应答写回的恰一次由
@@ -769,9 +765,9 @@ public final class SwiftEdgeHostLegs {
         alert.messageText = title
         let message = EdgePayload.string(dict["message"]) ?? ""
         let detail = EdgePayload.string(dict["detail"]) ?? ""
-        // 2026-12 双端逐函数核对 U1：调用点把 title 与 message 传同一文案
-        // （shell-core.ts 的两处确认框都如此），而 NSAlert 没有独立窗口标题，
-        // 照搬会把正文显示两遍。相等时只保留一份。
+        // 调用点把 title 与 message 传同一文案（shell-core.ts 的两处确认框都
+        // 如此），而 NSAlert 没有独立窗口标题，照搬会把正文显示两遍。相等时只
+        // 保留一份。
         let body = message == title ? [detail] : [message, detail]
         alert.informativeText = body.filter { !$0.isEmpty }.joined(separator: "\n")
         var buttons: [String] = []
@@ -782,7 +778,7 @@ public final class SwiftEdgeHostLegs {
         }
         // 缺省按钮本地化：common.ok（调用方未给 buttons 时的 fallback）。
         if buttons.isEmpty { buttons = [NativeText.string(.commonOk)] }
-        // defaultId / cancelId（2026-12 双端逐函数核对 F5/Q4）：Electron
+        // defaultId / cancelId：Electron
         // dialog.showMessageBox 用 defaultId 指定 Enter 命中的按钮、cancelId 指定
         // Esc 命中的按钮；NSAlert 用 keyEquivalent 表达同一语义。两者相同或越界
         // 时不额外设置（避免一键双义；NSAlert 缺省即首个按钮回车）。
@@ -799,8 +795,8 @@ public final class SwiftEdgeHostLegs {
         var modalResponse: NSApplication.ModalResponse = .alertFirstButtonReturn
         let run: () -> Void = { modalResponse = alert.runModal() }
         // 本 body 只经 performUI/performInteractiveUI 在主线程排队执行（见其注记：
-        // main.sync 会在主线程被退出收尾占用时挂死），原先的 `Thread.isMainThread`
-        // + `main.sync` 兜底分支不可达——2026-12 审计删除，保留主线程不变量断言。
+        // main.sync 会在主线程被退出收尾占用时挂死），无需兜底分支，保留主线程
+        // 不变量断言。
         assert(Thread.isMainThread, "UI 腿 body 必须在主线程执行")
         run()
         // NSAlert 按钮返回码：1000=第一个…；索引 = raw-1000（越界夹 0）。
@@ -820,10 +816,9 @@ public final class SwiftEdgeHostLegs {
             let panel = NSOpenPanel()
             // 文案与归属对齐 Electron（electron-edges.ts pickPluginSource：
             // title 'Import a dsh plugin — source folder or .tgz archive'、
-            // buttonLabel 'Import'、扩展过滤器只约束文件、目录仍可选）——
-            // 2026-12 双端逐函数核对 S4·U2 / S2·V3。
+            // buttonLabel 'Import'、扩展过滤器只约束文件、目录仍可选）。
             // 本地化：panel.pluginSourceTitle（title 与 message 同一句）、
-            // panel.pluginSourcePrompt（按钮名）；原硬编码英文改由键表承载。
+            // panel.pluginSourcePrompt（按钮名）；英文原文由键表承载。
             panel.title = NativeText.string(.panelPluginSourceTitle)
             panel.prompt = NativeText.string(.panelPluginSourcePrompt)
             panel.message = NativeText.string(.panelPluginSourceTitle)
@@ -837,9 +832,6 @@ public final class SwiftEdgeHostLegs {
                 cancelled = true
             }
         }
-        // 本 body 只经 performUI/performInteractiveUI 在主线程排队执行（见其注记：
-        // main.sync 会在主线程被退出收尾占用时挂死），原先的 `Thread.isMainThread`
-        // + `main.sync` 兜底分支不可达——2026-12 审计删除，保留主线程不变量断言。
         assert(Thread.isMainThread, "UI 腿 body 必须在主线程执行")
         run()
         if cancelled {
@@ -851,7 +843,7 @@ public final class SwiftEdgeHostLegs {
         return (nil, Self.uiUnavailablePrefix + "pickPluginSource:no-selection")
     }
 
-    // MARK: - open-in 本地拉起：无壳侧实现（S-05 复裁决，2026-12）
+    // MARK: - open-in 本地拉起：无壳侧实现
 
     // `launchApp` 的 vscode://file URL 构造与 appId 白名单随该叶一并移除：open-in 的
     // 决策（注册表、设置、可用性、URL 规则）只在 core（`open-in.ts` / `deep-link.ts`），
@@ -875,7 +867,7 @@ public final class SwiftEdgeHostLegs {
 /// 交互 UI 腿的恰一次应答/弃权门（线程安全）：
 ///  - body 完成 → finishIfActive 恰好一次交付结果（超时已抢占则不再交付）；
 ///  - 超时 → beginTimeout 抢占并置弃权位，已排定未执行的 body 见位即退出
-///    ——超时后绝不补执行（S1 无双重执行）。
+///    ——超时后绝不补执行（无双重执行）。
 private final class InteractiveCallGate {
     private let lock = NSLock()
     private var finished = false
@@ -911,7 +903,7 @@ private final class InteractiveCallGate {
     }
 }
 
-/// P-06：通知 edge 回执的恰一次门——add 完成回调与有界超时竞争首个到达者，
+/// 通知 edge 回执的恰一次门——add 完成回调与有界超时竞争首个到达者，
 /// 后到者取得 false（超时后晚到的成功横由调用方清除，绝不补发 shown:true）。
 private final class NotificationReplyGate {
     private let lock = NSLock()

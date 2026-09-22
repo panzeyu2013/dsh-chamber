@@ -136,8 +136,8 @@ test('loadViewPrefs falls back to defaults when a top-level section is the wrong
 
 test('default fallbacks are fresh objects — an in-place mutation of one load cannot pollute later loads', () => {
   // A shared module-level DEFAULTS would leak one caller's in-place mutation
-  // into every later default load and every post-reset cache (2026-08 audit
-  // guard): mutating a returned default must NOT show up in the next load.
+  // into every later default load and every post-reset cache:
+  // mutating a returned default must NOT show up in the next load.
   const storage = new MemoryStorage()
   const first = loadViewPrefs(storage) // missing key → defaults
   first.folded['polluted/w'] = true
@@ -202,7 +202,7 @@ test('a throwing localStorage accessor degrades to defaults / no-op when no stor
   }
 })
 
-// ---- Shared live store (design 06 §3, 2026-08: cross-ctx live sync) ----
+// ---- Shared live store (design 06 §3: cross-ctx live sync) ----
 // Node has no localStorage, so the store runs on its in-memory cache — which
 // is exactly the shared-singleton behavior every ctx's sidebar relies on.
 
@@ -313,9 +313,9 @@ test('shared view-prefs store: safe prune — only sources SEEN then vanished ar
 })
 
 test('loadViewPrefs never restores a persisted seenSources from storage', () => {
-  // Storage carries a previous session's roster + remote prefs (the exact
-  // payload that made the startup window wipe remote prefs before the
-  // 2026-08 fix). Loading must zero seenSources while keeping the prefs.
+  // Storage carries a previous session's roster + remote prefs — restoring
+  // seenSources would let the startup window wipe remote prefs. Loading must
+  // zero seenSources while keeping the prefs.
   const storage = new MemoryStorage()
   storage.setItem(VIEW_PREFS_KEY, JSON.stringify({
     v: 1,
@@ -324,7 +324,7 @@ test('loadViewPrefs never restores a persisted seenSources from storage', () => 
     seenSources: ['local', 'ssh-x'],
   }))
   const loaded = loadViewPrefs(storage)
-  assert.deepEqual(loaded.seenSources, [])      // never restored — the fix's guard
+  assert.deepEqual(loaded.seenSources, [])      // never restored — seenSources is session-only
   assert.equal(loaded.folded['ssh-x/w'], true)  // the prefs themselves survive
   assert.deepEqual(loaded.ungroupedOrder['ssh-x'], ['s1'])
 })
@@ -415,7 +415,7 @@ test('orderBy persists through save/load and the shared store keeps it on unrela
   assert.deepEqual(getViewPrefs().orderBy, {})
 })
 
-// ---- clearSourceBookkeeping (setOrderBy entering-updated clear, 2026-08 C档) ----
+// ---- clearSourceBookkeeping (setOrderBy entering-updated clear) ----
 
 test('clearSourceBookkeeping removes only the target source keys, keeps the rest, no-op on undefined', () => {
   assert.equal(clearSourceBookkeeping(undefined, 'local'), undefined)
@@ -433,7 +433,7 @@ test('clearSourceBookkeeping removes only the target source keys, keeps the rest
   assert.deepEqual(clearSourceBookkeeping({ 'local/w1': { s1: 1 } }, 'local'), {})
 })
 
-// ---- sidebarWidth preference (chamber ui-layout fork, 2026-09; v stays 1 — no re-seed on old data) ----
+// ---- sidebarWidth preference (chamber ui-layout fork; v stays 1 — no re-seed on old data) ----
 
 test('sidebarWidth round-trips through save/load', () => {
   const storage = new MemoryStorage()
@@ -489,7 +489,7 @@ test('the sidebarWidth clamp stays in sync with the vendor contract (columns.ts 
   // SIDEBAR_MAX = 420 and clampWidth = round-then-clamp; the vendor source
   // cannot be imported here (outside tsconfig rootDir, no built lib/), so this
   // test pins BOTH sides — literals mirror the vendor constants and the
-  // formula below IS clampWidth spelled out — so drift fails loudly (2026-09).
+  // formula below IS clampWidth spelled out — so drift fails loudly.
   const VENDOR_SIDEBAR_MIN = 264
   const VENDOR_SIDEBAR_MAX = 420
   const vendorClampWidth = (px: number): number =>
@@ -520,7 +520,7 @@ test('sidebarWidth survives the write-time prune rebuild and unrelated writes', 
   assert.equal(getViewPrefs().sidebarWidth, 340)
 })
 
-// ---- sourceFolded / serverOrder (2026-09, 06 §2.4; v stays 1) ----
+// ---- sourceFolded / serverOrder (06 §2.4; v stays 1) ----
 
 test('sourceFolded round-trips and sanitizes booleans leniently, absent stays absent', () => {
   const storage = new MemoryStorage()
@@ -589,7 +589,7 @@ test('sourceFolded/serverOrder prune with the source: seen-then-vanished only, n
   assert.deepEqual(pruned.serverOrder, ['local', 'ghost'])
 })
 
-// ---- perf T4（2026-09，M4）：置顶写回防抖 ----
+// ---- 置顶写回防抖 ----
 
 test('scheduleUpdatedOrderWrite debounces a tick burst into ONE trailing write (latest intent per account)', () => {
   __resetViewPrefsForTests()

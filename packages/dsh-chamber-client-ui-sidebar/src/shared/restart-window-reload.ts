@@ -1,5 +1,5 @@
 /**
- * Window reload completing a user-initiated dsh restart (2026-12).
+ * Window reload completing a user-initiated dsh restart.
  *
  * SHARED FACE (sidebar `shared`, design 21 §5.2 precedent): the completion is
  * consumed by two client plugins that must not value-import each other — the
@@ -24,7 +24,7 @@
  * proceeds whether or not the button that started it is still on screen, so the
  * reload is armed on the PAGE (one entry per key) instead of living in the
  * caller's promise chain. Unmounting the settings panel mid-restart therefore
- * cannot cancel the completion (2026-12 review F6 — the panel's own abort
+ * cannot cancel the completion (the panel's own abort
  * controller stays authoritative only for the POST it issued).
  *
  * POLICY:
@@ -51,7 +51,7 @@ assertSingletonModule('restart-window-reload')
  *  document / boot graph, and refusing to reload it would report a stalled
  *  restart for a restart that actually worked.
  *
- *  KNOWN TRADE-OFF (2026-12 review F7): this wire shape is re-declared here
+ *  KNOWN TRADE-OFF: this wire shape is re-declared here
  *  rather than imported from the sidebar shared REST client, because this module
  *  is imported by plain-node tests and the shared face is a barrel that pulls the
  *  page-global stores in with it. The shape is two fields and stays pinned to

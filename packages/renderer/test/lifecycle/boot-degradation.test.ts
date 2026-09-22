@@ -1,13 +1,9 @@
 /**
- * Degraded-boot facts and their self-heal planner (design 05  「降级呈现」;
- * ).
- * MERGED FILE () — two specs that pin the SAME
- * degraded-boot chain, so a retryability change can no longer update one half
- * without the other:
- *  - test/boot-gap.test.ts: every kind's copy key + retry verdict, the fact
+ * Degraded-boot facts and their self-heal planner (design 05 「降级呈现」):
+ *  - every kind's copy key + retry verdict, the fact
  *    IDENTITY (kind + payload), the notice projection, and the frame's
  *    auto-retry promise;
- *  - test/degraded-retry.test.ts: planDegradedRetries — exactly one re-mount
+ *  - planDegradedRetries — exactly one re-mount
  *    per ready epoch, never for a non-ready/retired source, and never for a
  *    kind whose cause a cold re-mount cannot touch (it reads the table above).
  */
@@ -28,7 +24,7 @@ import {
 } from '../../src/boot-gap.ts'
 import { en, zh } from '../../src/locales.ts'
 
-// --- merged from test/boot-gap.test.ts ---
+// --- boot-gap facts ---
 
 const KINDS: readonly ShellDegradedKind[] = [
   'graph-unavailable',

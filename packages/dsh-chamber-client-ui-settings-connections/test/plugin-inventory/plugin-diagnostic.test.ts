@@ -72,7 +72,7 @@ test('bannerProjection: neither message nor pluginId → the bare state name, de
   })
 })
 
-// ── settled-boot gap (2026-12, design 05 §4 「降级呈现」) ────────────────────
+// ── settled-boot gap (design 05 §4 「降级呈现」) ────────────────────
 
 test('bootGapText: each kind maps to its own key and carries its structured facts', () => {
   const kt = (key: string, params?: Record<string, string | number>): string =>
@@ -91,7 +91,7 @@ test('bootGapText: each kind maps to its own key and carries its structured fact
   assert.equal(new Set(texts).size, kinds.length, 'kinds must never share one sentence')
   // Positive per-kind pins: a collapse onto the GENERIC key would still satisfy
   // the two checks above (every candidate matches /^bootGap[A-Z]/ and the set
-  // stays size 3 — 2026-12 falsification round), so pin the exact key.
+  // stays size 3), so pin the exact key.
   assert.equal(bootGapText({ kind: 'graph-unavailable' }, kt), 'bootGapGraphUnavailable')
   assert.equal(bootGapText({ kind: 'local-graph-not-injected' }, kt), 'bootGapLocalGraphNotInjected')
   assert.equal(
@@ -139,7 +139,7 @@ test('the card suppresses an `ok` graph status when a gap is present', () => {
   assert.match(text, /\{showDiagnostic && diagnostic !== undefined && \(/, 'the diagnostic line is gated on showDiagnostic')
   assert.match(text, /\{bootGap !== undefined && \(/, 'the gap line has its own gate')
   // The CARD must consume the pure mapping too (the dialog lock below is not
-  // enough: the card could drop the sentence and stay green — falsification round).
+  // enough: the card could drop the sentence and stay green).
   assert.match(text, /bootGapText\(bootGap, t\)/, 'the card must render the mapped sentence')
   // Both lines are `role="status"`: neither is an emergency and neither may steal focus.
   // Comments are stripped first: the module header NAMES the attribute, and a lock
@@ -159,10 +159,10 @@ test('the plugin dialog renders the gap too, and its banner already ignores `ok`
 })
 
 test('the service id is named ONCE per surface (no sentence + span duplication)', () => {
-  // 2026-12 review: rendering the three seats side by side showed the services
-  // printed twice on the connections card — `bootGapText` already embeds
-  // `{services}` and the component ALSO appended a span with the same ids. The
-  // failed-id list is the complementary half (the sentence carries the count).
+  // `bootGapText` already embeds `{services}`, so a component must not ALSO
+  // append a span with the same ids — that would print the services twice on
+  // the connections card. The failed-id list is the complementary half (the
+  // sentence carries the count).
   for (const rel of ['../../src/client/plugin-diagnostic.tsx', '../../src/client/PluginDialog.tsx']) {
     const text = readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8').replace(/\s+/g, ' ')
     assert.doesNotMatch(text, /bootGap\.services \?\? \[\]\)\.join/, `${rel} must not render the services again`)

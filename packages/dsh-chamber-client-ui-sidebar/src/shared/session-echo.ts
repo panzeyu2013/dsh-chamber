@@ -1,6 +1,6 @@
 /**
  * Session creation echo — the local half of「侧栏新建的会话立刻可见」
- * (design 05 §2.2 revision 2026-12; the session-side sibling of
+ * (design 05 §2.2; the session-side sibling of
  * shared/workspace-echo.ts).
  *
  * WHY an echo exists at all. The sidebar's "+" and the session row menu's fork
@@ -17,7 +17,7 @@
  *   request — or any store notification — REPLACES that source's aggregate
  *   from a store without it, erasing the row again) or the source's shell is
  *   not mounted at all and NOBODY ever hears the broadcast. The unmounted case
- *   is the field-report steady state: a post-harvest source keeps its REAL
+ *   is the steady state: a post-harvest source keeps its REAL
  *   pushed workspace rows (with the "+" affordance enabled) while its ctx is
  *   gone;
  * - the 30s unary fallback — a fresh `session.list`, but its merge against a
@@ -28,8 +28,7 @@
  *   (sessionVisible).
  *
  * The immediate `requestRefresh` the sidebar fires after a successful create
- * therefore cannot surface the row for either producer: the field report is
- * 「新建的会话不出现，切到那个服务器（挂载 → follow 基线）才刷新出来」.
+ * therefore cannot surface the row for either producer.
  *
  * The echo closes that window with a fact the user's own action already
  * produced: a successful create returns the HOST session id. The row is
@@ -289,7 +288,7 @@ export function withSessionEcho(
 /**
  * One locally-ARCHIVED session awaiting an authoritative archive set — the
  * local half of「归档即隐藏」for a source whose shell is not mounted
- * (design 05 §2.2.1, 2026-12 revision). See {@link recordPendingArchive} for
+ * (design 05 §2.2.1). See {@link recordPendingArchive} for
  * why the archive verb needs an echo of its own.
  */
 export interface PendingArchive {
@@ -324,9 +323,8 @@ export const PENDING_ARCHIVE_TTL_MS = 600_000
  * merge keeps the last PUSHED `archivedSessionIds` (frozen), and the unary
  * fallback carries no archive wire source at all (documented KNOWN
  * DEGRADATION). The archived row therefore stays in the list — clickable, and
- * opening it dead-ends because the official runtime clears an archived current
- * (the same "archived resurfacing" family the 2026-09 fixes closed for the
- * mounted path). The tombstone hides exactly the ids THIS page archived, until
+ * opening it dead-ends because the official runtime clears an archived current.
+ * The tombstone hides exactly the ids THIS page archived, until
  * an AUTHORITATIVE set covers them; archives made by another client still need
  * a mount (registered residue), and the archive manager surfaces keep reading
  * the authoritative set (the tombstone is a navigation-visibility fact only).

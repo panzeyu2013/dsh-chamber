@@ -1,10 +1,10 @@
 //
-//  SidecarSupervisorTests.swift — W-15（design 25 §3.3(1)(4)/§6.3）
+//  SidecarSupervisorTests.swift（design 25 §3.3(1)(4)/§6.3）
 //
 //  覆盖：目录锁（flock 独占 / 记录 / no-follow / 规整文件 / 释放重取）、
 //  重启退避策略（500ms + 60s 滚动窗口 ≤3）、Supervisor 生命周期
 //  （启动 / 崩溃重启 / 退出码分级 0|3 / 重启耗尽 fatal / stop 后迟到调度作废 /
-//  spawn 失败 fatal）。状态机分支用假进程注入 + 可手工触发的调度闭包；G11 另有
+//  spawn 失败 fatal）。状态机分支用假进程注入 + 可手工触发的调度闭包；另有
 //  一例用**真实 BridgeClient**（/bin/sh 子进程、无桩进程）钉住
 //  onTerminated → Supervisor 的生产接线。无 GUI。
 import XCTest
@@ -44,7 +44,7 @@ private struct FakeError: Error, LocalizedError {
     var errorDescription: String? { "fake spawn failure" }
 }
 
-/// G11：跨线程记录 Supervisor 排定闭包（真实 BridgeClient 的终止回调在
+/// 跨线程记录 Supervisor 排定闭包（真实 BridgeClient 的终止回调在
 /// Foundation 队列，闭包追加与断言线程读取必须互斥）。
 private final class ScheduledRecorder {
     private let lock = NSLock()
@@ -232,7 +232,7 @@ final class SidecarSupervisorTests: XCTestCase {
         XCTAssertFalse(supervisor.directoryLock.isHeld)
     }
 
-    /// 第三轮验证 F4a：code 6（生命周期过渡）是**可重试**过渡态——用户态 start 抛错但
+    /// code 6（生命周期过渡）是**可重试**过渡态——用户态 start 抛错但
     /// **绝不** markFatal（否则退出期「重启调度 vs stop()」竞态会弹致命告警）。
     func testLifecycleBusyStartIsRetryableNotFatal() {
         let dir = makeTempDir()
@@ -249,8 +249,8 @@ final class SidecarSupervisorTests: XCTestCase {
         supervisor.stop()
     }
 
-    /// 第三轮验证 RISK：code 6 重试耗尽必须升格 fatal——绝不静默停在 .restarting
-    /// （此前既不 fatal 也不再排程，自动恢复名存实亡）。
+    /// code 6 重试耗尽必须升格 fatal——绝不静默停在 .restarting
+    /// （既不 fatal 也不再排程会让自动恢复名存实亡）。
     func testLifecycleBusyRestartExhaustionBecomesFatal() throws {
         let dir = makeTempDir()
         let sidecar = FakeSidecar()
@@ -304,9 +304,9 @@ final class SidecarSupervisorTests: XCTestCase {
         supervisor.stop()
     }
 
-    /// S2·F11（2026-12 双端逐函数核对）：非崩溃退出（0/3/70）不得消耗崩溃退避
-    /// 配额——原来的 decide 在退出码分级之前无条件调用，几次正常退出就把「60s 内
-    /// 3 次」用光，用户随后第一次真实崩溃立刻 giveUp（自动恢复名存实亡）。
+    /// 非崩溃退出（0/3/70）不得消耗崩溃退避
+    /// 配额——decide 若在退出码分级之前无条件调用，几次正常退出就把「60s 内
+    /// 3 次」用光，第一次真实崩溃会立刻 giveUp（自动恢复名存实亡）。
     func testNonCrashExitsDoNotConsumeCrashBackoffQuota() throws {
         let dir = makeTempDir()
         let sidecar = FakeSidecar()
@@ -343,7 +343,7 @@ final class SidecarSupervisorTests: XCTestCase {
         supervisor.stop()
     }
 
-    /// #7：退出码 70（启动失败）→ fatal 不重启，与运行期崩溃（1）分级。
+    /// 退出码 70（启动失败）→ fatal 不重启，与运行期崩溃（1）分级。
     func testStartupFailureExitSeventyIsFatalWithoutRestart() throws {
         let dir = makeTempDir()
         let sidecar = FakeSidecar()
@@ -396,7 +396,7 @@ final class SidecarSupervisorTests: XCTestCase {
         XCTAssertEqual(supervisor.state, .stopped)
     }
 
-    /// #5：进程在 launch 提交前退出 → 必须 fatal（启动失败），绝不发布 .running，
+    /// 进程在 launch 提交前退出 → 必须 fatal（启动失败），绝不发布 .running，
     /// 也绝不按崩溃退避重启。
     func testTerminationDuringLaunchIsStartupFailureNotRunning() throws {
         let dir = makeTempDir()
@@ -416,7 +416,7 @@ final class SidecarSupervisorTests: XCTestCase {
         supervisor.stop()
     }
 
-    /// #5：stop() 与在途 launch 交错 → 进程必须被回收、状态保持 .stopped，
+    /// stop() 与在途 launch 交错 → 进程必须被回收、状态保持 .stopped，
     /// 目录锁不得在进程仍存活时被释放后又被重新发布为 running。
     func testStopDuringLaunchReclaimsProcessAndKeepsStopped() throws {
         let dir = makeTempDir()
@@ -435,7 +435,7 @@ final class SidecarSupervisorTests: XCTestCase {
         XCTAssertTrue(scheduled().isEmpty)
     }
 
-    // MARK: - G11：真实 onTerminated → Supervisor 接线（无桩进程）
+    // MARK: - 真实 onTerminated → Supervisor 接线（无桩进程）
 
     /// 有界轮询（真实进程终止回调不保证在断言线程的时序）。
     private func pollUntil(timeout: TimeInterval, _ condition: () -> Bool) -> Bool {
@@ -447,8 +447,8 @@ final class SidecarSupervisorTests: XCTestCase {
         return condition()
     }
 
-    /// G11（2026-12 审计）：onTerminated → SidecarSupervisor 的生产接线此前
-    /// 只被假进程用例覆盖（FakeSidecar 自己调 onTerminated，接线断了也全绿）。
+    /// onTerminated → SidecarSupervisor 的生产接线不能只靠假进程用例
+    /// （FakeSidecar 自己调 onTerminated，接线断了也全绿）。
     /// 本用例路径上**无桩进程**：makeSidecar 返回真实 BridgeClient（/bin/sh
     /// 0.3s 后 exit 1），自然终止必须经 BridgeClient.handleTermination →
     /// onTerminated → Supervisor.handleTermination → 崩溃退避排定；手工触发

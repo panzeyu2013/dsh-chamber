@@ -131,7 +131,7 @@ export interface RuntimeState {
   /** Category-only evidence projection; never a filesystem basename/path. */
   metadataComponents?: RuntimeMetadataComponent[]
   canRecoverMetadata?: boolean
-  /** Live install progress (design 18 M4 bar): download bytes + stage
+  /** Live install progress (design 18 progress bar): download bytes + stage
    * milestones while an install runs; null when idle. */
   progress?: RuntimeInstallProgress | null
 }
@@ -236,7 +236,7 @@ export function runtimeAllowedActions(state: RuntimeState | null): readonly Runt
     // can be archived. A retryable 'half' restore is therefore the sole
     // visible action when present. A permanent 'incomplete' restore (the
     // journaled snapshot is missing or untrustworthy — no retry can ever
-    // succeed) keeps the retry button but no longer hides the terminal
+    // succeed) keeps the retry button and does not hide the terminal
     // recover-metadata escape.
     const permanentIncomplete = state.restoreOutcome === 'incomplete'
     if (canRetryRestore && !permanentIncomplete) return ['retry-restore']
@@ -277,15 +277,15 @@ export function runtimeAllowedActions(state: RuntimeState | null): readonly Runt
     return actions
   }
   // Unknown phases fail closed to the empty set instead of throwing through
-  // the app ErrorBoundary (a TypeError here used to kill the whole shell).
+  // the app ErrorBoundary (a TypeError here would kill the whole shell).
   const actions = [...(BASE_ACTIONS[state.phase] ?? [])]
   // reset-builtin 只在确实存在 override 时有意义（main 对 hasOverride !== true
   // 一律拒绝，UI 不得显示 main 会 no-op 的动作）。pending/applying/snapshot-failed
   // 是持久化事务的逃生口（正常必有 pending override），但显式 hasOverride:false
   // （override 被外部删除）时同样不得显示必然 no-op 的按钮；其余相位无 override
   // 时移除该按钮——包括 error/failed/rollback/applied，而不只是 idle/available。
-  // apply-now 与 reset-builtin 同构：它同样依赖持久化 pending 事务，main 侧 F5
-  // 门（apply-now-gate 的 no-pending）在无 durable pending 时一律拒绝；显式
+  // apply-now 与 reset-builtin 同构：它同样依赖持久化 pending 事务，main 侧的 apply-now-gate
+  // no-pending 门在无 durable pending 时一律拒绝；显式
   // hasOverride:false 时 UI 必须同样隐藏，否则出现 UI 显示而 main 拒绝的
   // UI⊄main 方向违例（与 reset-builtin 的 hasOverride 过滤对称）。
   if (state.hasOverride === false
@@ -304,7 +304,7 @@ export function runtimeAllowedActions(state: RuntimeState | null): readonly Runt
   if (canRetryRestore) {
     actions.unshift('retry-restore')
   }
-  // Apply-now connectionState mirror (P2-A, UI⊄main fix): the main-side gate
+  // Apply-now connectionState mirror (UI⊄main): the main-side gate
   // (apply-now-gate.ts) refuses every connectionState outside ready/degraded —
   // a local dsh that is stopped/crashed would make main silently no-op while
   // the durable pending remains. Only apply-now is gated: reset-builtin is the
@@ -432,11 +432,11 @@ export function projectRuntimeSnapshot(state: RuntimeState | null): RuntimeSnaps
   return { kind: 'unknown', count: null, latestAt: null, detail: null }
 }
 
-/** Unified status-indicator vocabulary (2026-12 runtime-settings unification):
+/** Unified status-indicator vocabulary:
  *  a coloured pill beside the current-version row in BOTH the local and the
  *  gateway settings branches. The badge names the machine state only — it
- *  never claims "up to date" / "new version available" (registry-verdict copy
- *  was removed because it could contradict the visible version list). */
+ *  never claims "up to date" / "new version available" (a registry verdict
+ *  could contradict the visible version list). */
 export type RuntimeBadgeLabel =
   | 'ok'
   | 'checking'
@@ -547,7 +547,7 @@ export { compareSemver }
  * Preserve a still-valid explicit user choice. Before the user chooses, the
  * picker preselects the ACTIVE version — the dropdown always reflects what is
  * actually running, and the action button arms only after the user changes the
- * selection (2026-10 user decision, refined: the default state has no override,
+ * selection (the default state has no override,
  * so the active version IS the bundled one — "default follows the built-in").
  * When no active version exists yet, the bundled (built-in) version is the
  * safe default over the registry recommendation. The registry recommendation
@@ -622,7 +622,7 @@ export class RuntimeStateStore {
 
   readonly subscribe = (listener: Listener): (() => void) => {
     this.listeners.add(listener)
-    // A later subscriber also re-arms a retry chain that previously expired.
+    // A later subscriber also re-arms an expired retry chain.
     if (this.unsubscribeBridge === null && this.retryTimer === null) this.tryAttach(0)
     return () => {
       this.listeners.delete(listener)

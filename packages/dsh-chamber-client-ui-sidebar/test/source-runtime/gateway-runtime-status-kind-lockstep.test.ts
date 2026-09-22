@@ -12,7 +12,7 @@
  *
  * A one-sided rename makes the remote status parse fail closed (the consumer
  * rejects the row), which surfaces as a silently missing feature rather than a
- * loud error — so the literal is pinned here instead of trusted to review.
+ * loud error — so the literal is pinned here.
  *
  * Run directly: node packages/dsh-chamber-client-ui-sidebar/test/source-runtime/gateway-runtime-status-kind-lockstep.test.ts
  */

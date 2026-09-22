@@ -4,7 +4,7 @@
  * click is a no-op while a check/download already owns the flow, or once the
  *「已下载，退出时安装」state is final for this version.
  *
- * S-21: the phases the gate sees are flavor-neutral. In the native flavor the
+ * The phases the gate sees are flavor-neutral. In the native flavor the
  * shell pushes Sparkle's checking/installing phases through the same
  * update-state projection, so this gate disables a second check while the shell
  * owns discovery — the page adds no discovery of its own.
@@ -13,14 +13,14 @@ import type { UpdatePhase } from '../ambient/update-bridge.d.ts'
 
 /** Whether the「检查更新」button must be disabled for the given phase. */
 export function updateCheckDisabled(phase: UpdatePhase | undefined): boolean {
-  // 'installing' (native/Sparkle install in flight, S-19) owns the flow exactly
+  // 'installing' (native/Sparkle install in flight) owns the flow exactly
   // like downloading/downloaded: a check must not clobber the install phase.
   return phase === 'checking' || phase === 'downloading' || phase === 'downloaded'
     || phase === 'installing'
 }
 
 /**
- * Whether the「重启并安装」button (2026-12 user decision — restart into the
+ * Whether the「重启并安装」button (restart into the
  * downloaded update, quitAndInstall) may be offered: only a COMPLETED
  * download on a shape where automatic installation is possible AND the
  * restart semantics can hold. Mirrors the controller-side gates of
@@ -28,7 +28,7 @@ export function updateCheckDisabled(phase: UpdatePhase | undefined): boolean {
  * installBlockedReason null + NOT linux) — the main process enforces the
  * same conditions, not just this UI gate.
  *
- * Linux is excluded regardless of shape (2026-12 review H1): electron-
+ * Linux is excluded regardless of shape: electron-
  * updater's AppImageUpdater swaps the running file and spawns the new
  * instance BEFORE the old process quits, and the fresh instance collides
  * with the still-alive old one under Electron's single-instance lock — the

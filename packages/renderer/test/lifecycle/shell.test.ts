@@ -1,6 +1,5 @@
 /**
- * shell.ts boot-failure tests (05 §4 failure-presentation revision + 2026-08
- * first-boot race fix).
+ * shell.ts boot-failure tests (05 §4 failure presentation).
  *
  * The renderer has no install-tree copy of the dsh workspace packages, so
  * `@deepseek-ai/dsh-client-web` is mapped by `scripts/test-shell-loader.mjs`
@@ -14,7 +13,7 @@
  * chamber sees a failure and disposes the failed entry so a retry re-boots
  * cleanly), the clean settle, and the legacy run()-rejection path.
  *
- * P0 split: shared harness = test/support/shell-harness.ts. Siblings:
+ * Shared harness = test/support/shell-harness.ts. Siblings:
  *   - shell-tail-wait-teardown.test.ts (tail-wait cap, teardown barriers)
  *   - session-open-poll.test.ts (openInstanceSession polling/deadline)
  */
@@ -48,7 +47,7 @@ test('bootInstanceShell: a resolved-but-failed run (bootError set) settles as a 
 })
 
 test('bootInstanceShell: the failure report names the plugin ids that did not activate (T15)', async (t) => {
-  // 2026-09-11 upstream-alignment (T15): upstream's boot page lists one item per
+  // upstream's boot page lists one item per
   // failed plugin id (boot-page.ts `Failed to load plugins`) and its post-settle
   // sweep names the same entries. The chamber overlay replaced that in-shell
   // page, so the shell reads the SAME live loader (ctx.loader.entries(), the
@@ -129,7 +128,7 @@ test('bootInstanceShell: a clean run settles booted with no error and keeps the 
       // 代际事实（producer 注册表的栅栏输入）。
       chamberBootGeneration: 1,
     })
-    // 降级上报缝（2026-09-10）：条目里的必需服务探针经它把「挂载已知不完整」
+    // 降级上报缝：条目里的必需服务探针经它把「挂载已知不完整」
     // 交给 App（App 据此在该来源 ready 后自动重挂），必须随每个 boot 一起提供。
     assert.equal(typeof chamberReportBootDegraded, 'function')
     // 页级机器目录（design 20 §5）：一次读取、注入每个条目（ssh 来源也一样），
@@ -179,19 +178,19 @@ test('bootInstanceShell: the serving gate is threaded into the host-graph fetch 
 })
 
 test('bootInstanceShell: a graph-less boot keeps its cause over a late lower-priority probe verdict', async (t) => {
-  // 2026-09-10（sidebarRight 彻底修复）：取图在启动窗口内拿不到时，boot 仍成功但
+  // 取图在启动窗口内拿不到时，boot 仍成功但
   // 必须带上「已知不完整」这个事实（App 据此在来源 ready 后自动重挂）；条目里
   // 5s 必需服务探针的判词晚于 settle：经 onState 补发给**视图**，并经
-  // options.onRepublish 投给 **App 镜像**（2026-12 BLOCKER 修复——只发前者时
-  // 横幅/侧栏投射/自愈全都收不到，见下方 republished 断言）。2026-12 priority
-  // （FIX 6 follow-up）：单槽按 bootGapPriority 比较，settle 的病因压过 5s 探针
+  // options.onRepublish 投给 **App 镜像**——只发前者时
+  // 横幅/侧栏投射/自愈全都收不到，见下方 republished 断言。
+  // 单槽按 bootGapPriority 比较，settle 的病因压过 5s 探针
   // 的后果；本用例同时钉住「病因撤销后后果才被记录」与两个 sink 的补发。
   shellTestScope(t, { graph: 'unavailable', timers: false, silentConsole: false })
   __testResetConfiguredContexts()
   const states: Array<{ booted: boolean; degraded: { kind: string } | null }> = []
-  // 2026-12 BLOCKER fix: the post-settle verdict must reach the APP-owned sink as
+  // The post-settle verdict must reach the APP-owned sink as
   // well, because the `onState` argument above is the view's local setter in
-  // production — publishing only through it left the banner, the sidebar/
+  // production — publishing only through it would leave the banner, the sidebar/
   // connections projection and the self-heal blind to 2 of the 3 kinds.
   const republished: Array<{ booted: boolean; degraded: { kind: string } | null }> = []
   try {
@@ -273,10 +272,9 @@ test('bootInstanceShell: a graph-less boot keeps its cause over a late lower-pri
       injectedBy: ['@deepseek-ai/dsh-client-ui-chat'],
     })
     assert.equal(states.length, published, 'an identical fact must not republish')
-    // The load-bearing half of the signature change (2026-12 falsification
-    // round): the SAME kind with a RICHER payload must republish. A kind-only
-    // comparison — the behaviour this change replaced — silently dropped it,
-    // which is exactly how the probe's re-armed pass lost its extra service.
+    // The load-bearing half of the signature: the SAME kind with a RICHER
+    // payload must republish. A kind-only comparison silently drops it —
+    // the probe's re-armed pass would lose its extra service.
     ctx.chamberReportBootDegraded?.({
       kind: 'required-services-missing',
       message: 'the probe re-armed and named one more service',
@@ -309,16 +307,16 @@ test('bootInstanceShell: a graph-less boot keeps its cause over a late lower-pri
 
 test('bootInstanceShell: pre-settle reports are LAST-wins under priority and a retraction clears the settled fact (FIX 1/FIX 3)', async (t) => {
   // A slow boot (cold SSH bundle/extra-row loads) can outlive the probe's 5s
-  // timer, so reports arriving BEFORE the settle wait in a per-serial stash. That
-  // stash used to keep the FIRST report while the live path keeps the LAST — a
-  // 0ms deferred-cluster verdict could shadow the probe's later, richer verdict.
-  // 2026-12 priority: the replayed LAST report must ALSO pass
+  // timer, so reports arriving BEFORE the settle wait in a per-serial stash. The
+  // stash keeps the LAST report, like the live path — a first-wins stash would
+  // let a 0ms deferred-cluster verdict shadow the probe's later, richer verdict.
+  // The replayed LAST report must ALSO pass
   // shouldReplaceBootGap against the settled graph-unavailable fact, so this
   // test stashes a lower-priority consequence first and a HIGHER-priority cause
   // second (local-graph-not-injected rank 3 > graph-unavailable rank 2): only
   // last-wins + the priority gate together produce that replay. The same seam
-  // now also carries the probe's RETRACTION when the missing set empties
-  // (FIX 1): the shell must remove the fact it holds, and only when the
+  // also carries the probe's RETRACTION when the missing set empties:
+  // the shell must remove the fact it holds, and only when the
   // retraction names exactly that fact.
   shellTestScope(t, { graph: 'unavailable', timers: false, silentConsole: false })
   __testResetConfiguredContexts()
@@ -450,7 +448,7 @@ test('createChamberContextSetup: immutable entry facts cannot cross when boots a
   const a = capture()
   const b = capture()
 
-  // Model the original failure window: B starts after the queue timeout, then
+  // Model the failure window: B starts after the queue timeout, then
   // A resumes late. Each closure must still install only its own facts.
   configureB(b.ctx)
   configureA(a.ctx)
@@ -479,7 +477,7 @@ test('createChamberContextSetup: immutable entry facts cannot cross when boots a
   assert.equal(a.facts.chamberMachineCatalog, b.facts.chamberMachineCatalog,
     'two entries share one page-level machine reader')
   // …and the fact set stays exactly these five: the strict whole-object check
-  // this replaced must not silently admit a new per-entry fact.
+  // must not silently admit a new per-entry fact.
   assert.deepEqual(Object.keys(a.facts).sort(), [
     'chamberBasePath', 'chamberInstanceId', 'chamberMachineCatalog',
     'chamberSourceFingerprint', 'chamberTransport',
@@ -524,7 +522,7 @@ test('bootInstanceShell: rejects an invalid source before any host-graph request
 test('bootInstanceShell: a throwing run settles as a failure (legacy rejection path) and disposes the entry', async (t) => {
   shellTestScope(t, { graph: 'unavailable', timers: false, silentConsole: false })
   __testSetRunError(new Error('loader exploded'))
-  // 2026-09-11 review-fix (finding 4g): this last-resort arm names the failed
+  // This last-resort arm names the failed
   // loader entries too — the same live-loader read the bootError arm performs,
   // taken before teardown and filtered by the same extra-row tolerance set. The
   // ctx is disposed further down in this same arm, so a sweep that ran after
@@ -567,13 +565,13 @@ test('bootInstanceShell: installs the module system BEFORE any host-graph fetch 
   const state = await bootInstanceShell('ssh-test-order-5', '/api/i/ssh-test-order-5', {} as HTMLElement, () => {})
   assert.equal(state.booted, true)
   // The fixture's ensureWebModuleSystem records 'ensure' synchronously at
-  // bootInstanceShell entry; the C3 gate's chamber prefetch fires right
+  // bootInstanceShell entry; the chamber prefetch fires right
   // after (its event is pushed synchronously); the fetch is
   // collectExtraRows's first step.
-  // collectExtraRows now retries the pre-ready 503 on a bounded budget, so
+  // collectExtraRows retries the pre-ready 503 on a bounded budget, so
   // the event log carries repeated 'fetch' entries — the invariant under
   // test is the ORDER (module system installed before the FIRST fetch, and
-  // the chamber prefetch between the two — C3 gate, 2026-09).
+  // the chamber prefetch between the two).
   const events = __testEventLog()
   assert.deepEqual(events.slice(0, 3), ['ensure', 'prefetch:@dsh-chamber/app', 'fetch'])
 })

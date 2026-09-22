@@ -9,7 +9,7 @@ import type {
 import { errorMessage, isRecord } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
 import { normalizeGitSnapshot } from './snapshot.ts'
 
-// 60s, not 30s (2026-08 bug report): the proxy's upstream idle timeout is
+// 60s: the proxy's upstream idle timeout is
 // 45s (UPSTREAM_TIMEOUT_MS in the control plane) and the host's git mutation
 // budget is 30s — the browser must never abort while the host is still
 // legitimately working, or a committed mutation is misread as ambiguous.
@@ -49,7 +49,7 @@ export function isAmbiguousGitRpcFailure(error: unknown): boolean {
 /**
  * Preflight/deterministic rejections that can NEVER have committed a mutation:
  * surfacing them as an ambiguous recovery would replay the same failure
- * forever and lock the whole source (review P2-1). They become a plain
+ * forever and lock the whole source. They become a plain
  * actionError instead — the user fixes the cause and retries.
  *
  * LOCKSTEP POINT (host classification): `RETRYABLE_CODES` in
@@ -82,7 +82,7 @@ export const DETERMINISTIC_GIT_REJECTION_CODES: ReadonlySet<string> = new Set([
 
 /**
  * Host-RETRYABLE codes this client deliberately classifies as deterministic
- * anyway (review P2-1): both come from the host's filesystem probe
+ * anyway: both come from the host's filesystem probe
  * (`existingPath`), so replaying the same operation re-runs the same failing
  * probe. Treating them as ambiguous replaces the actionable refusal with a
  * recovery entry that replays forever and wedges the source. The host keeps
@@ -124,7 +124,7 @@ export interface RemoveWorktreeInput {
   /** Explicit user authorization to DISCARD the worktree's uncommitted state:
    *  the host then removes a dirty worktree with `git worktree remove
    *  --force` (branch/commits/HEAD untouched). Never set without a confirmed
-   *  dialog checkbox (design 08 §5.3 amendment 2026-08). */
+   *  dialog checkbox (design 08 §5.3 amendment). */
   discardChanges?: boolean
 }
 
@@ -313,7 +313,7 @@ export function decodeRemoveValue(
       ? true
       : invalidValue(method, 'branchPreserved must be true'),
   }
-  // Decode invariant (P2-1): `next` and `workspaceId` must agree — a
+  // Decode invariant: `next` and `workspaceId` must agree — a
   // 'delete-workspace' without an id would call deleteWorkspace(undefined).
   if ((result.next === 'delete-workspace') !== (result.workspaceId !== undefined)) {
     return invalidValue(method, 'next does not agree with workspaceId')
@@ -348,7 +348,7 @@ async function callGitRemote(sourceId: string, method: string, input?: unknown):
       input === undefined ? {} : { input },
       undefined,
       // The 60s budget must stay ABOVE the proxy's 45s upstream idle window
-      // and the host's 30s mutation budget (2026-08 bug report), and the
+      // and the host's 30s mutation budget, and the
       // domain-missing opt-in keeps the design 24 §5 404 discrimination.
       { timeoutMs: RPC_TIMEOUT_MS, notFoundAsDomainMissing: true },
     )
@@ -371,13 +371,13 @@ async function callGitRemote(sourceId: string, method: string, input?: unknown):
     // carrier-owner nuance: a 404 whose body carries the control plane's own
     // `instance_not_found` code is classified by the carrier as an
     // instance-layer transport fact (design 24 §5), NOT as domain missing —
-    // adopting that classification is the point of this convergence.
+    // adopting that classification is deliberate.
     throw new GitWorktreeRpcError('http-error', carrierFailureMessage(error))
   }
   if (transport.ok !== true) {
     // RPC-layer refusal (the Remote threw or the gateway rejected the payload):
-    // the pre-carrier client called this `rpc-failed`; the classification
-    // (ambiguous → the recovery keeps its operation id) is unchanged.
+    // the code is `rpc-failed`, and the classification (ambiguous → the
+    // recovery keeps its operation id) applies.
     throw new GitWorktreeRpcError('rpc-failed', transport.error.message, transport.error.details)
   }
   // The host catches every known GitWorktreeError and returns a domain result

@@ -21,8 +21,8 @@
  *    re-enumerate and converge (no uncollectable orphans);
  *  - running subtrees are skipped whole (fail-closed), never partially cut;
  *  - merely LOADED (idle) subtrees are skipped by default and deletable only
- *    under an explicit `force` purge (2026-09 revision, design 24 §3);
- *  - PROTECTED subtrees (2026-09 contract amendment) are skipped whole,
+ *    under an explicit `force` purge (design 24 §3);
+ *  - PROTECTED subtrees are skipped whole,
  *    ahead of every liveness classification and ahead of `force`: the
  *    calling client names the ids it may be displaying, and the host never
  *    cuts the tree that contains one — not even a descendant-only match;
@@ -31,13 +31,12 @@
  *    block unrelated complete entities);
  *  - idempotent per session: an id no longer in the set, or content already
  *    gone, is a no-op ("missing"), so repeated purges converge to empty;
- *  - RESIDENT-RETAINED membership (2026-13 revision, design 24 §4 step 9): a
+ *  - RESIDENT-RETAINED membership (design 24 §4 step 9): a
  *    completed tree whose session is still attached to this process keeps its
  *    archived membership — the content is gone, but the host's live-preferred
  *    corpus keeps serving the row, and the archived set is the only thing
- *    hiding it. Clearing it there is what made a just-deleted session
- *    re-surface in the workspace as an ordinary row (2026-13 user report,
- *    "删除了之后反而会重新被加载回 workspace"). Retained ids are reported in
+ *    hiding it. Clearing it there would make a just-deleted session
+ *    re-surface in the workspace as an ordinary row. Retained ids are reported in
  *    `residentRetainedRoots`; once the instance restarts the row is gone and
  *    the content-free members are converged by the orphan sweep below — the
  *    NON-live leftovers (a covered descendant that was never attached) can
@@ -52,25 +51,24 @@
  *    TRIPLE-gated before it is committed: (1) a credibility guard on the
  *    snapshot/confirmation corpora, (2) a fresh double-confirmation read, and
  *    (3) the decisive per-candidate authoritative existence probe
- *    (`hasStoredContent` — 2026-12 blocker fix; see SWEEP below).
+ *    (`hasStoredContent` — see SWEEP below).
  */
 
 /** Hard upper bound on ARCHIVED-SET MEMBERS accounted by one purge
  *  (defensive capacity): the cap bounds the archived-set members counted for
  *  one purge — content descendants of those members are not separately
- *  counted against the cap (review F5). */
+ *  counted against the cap. */
 export const MAX_PURGE_SESSIONS = 65_536
 /** Upper bound on per-item error records returned by one purge. */
 export const MAX_PURGE_ERROR_RECORDS = 1_000
 /**
  * Upper bound on per-candidate authoritative content-existence probes
- * (`hasStoredContent`) performed by ONE registry-global orphan sweep
- * (2026-12 blocker fix). Each probe is a full official persistence read
+ * (`hasStoredContent`) performed by ONE registry-global orphan sweep.
+ * Each probe is a full official persistence read
  * (`sessionPersistence.stat` — the jsonl backend parses the session log),
  * so the sweep carries its own budget, tighter than the archived-set capacity
- * that bounds how many members a run may CONSIDER. The live instance observed
- * by the 2026-12 review had 739 record-less candidates — comfortably inside
- * one run. When the budget truncates a sweep, the un-probed remainder stays
+ * that bounds how many members a run may CONSIDER. When the budget truncates
+ * a sweep, the un-probed remainder stays
  * archived, converges on a later run (the sweep is idempotent), and the run
  * records ONE run-level `archive-set` note naming the truncation.
  */
@@ -95,8 +93,7 @@ export interface ArchivedSessionState {
  * code `host-binding-pending` rather than guess a storage layout.
  */
 /**
- * Live-session facts at one instant, split by WHY a session is live (2026-09
- * revision, user motion: "已归档的对话应该终止，所以可以直接 cancel 再删"):
+ * Live-session facts at one instant, split by WHY a session is live:
  *  - `running`: the agent is executing a turn — content deletion is NEVER
  *    allowed (the live writer recreates a header-less artifact through
  *    `open(path,"a")`, see design 24 §3), even under `force`;
@@ -122,8 +119,8 @@ interface LiveSessionFacts {
  * archived set is the ONLY thing that hides it. Deleting the content of a
  * resident session therefore must NOT clear its membership, or the row
  * resurfaces in the workspace as an ordinary session the user just deleted
- * (2026-13 user report; the row's apparent "restored content" is the
- * in-memory session being read live-first).
+ * (the row's apparent "restored content" is the in-memory session being read
+ * live-first).
  */
 export interface SessionContentDeletion {
   /** 'deleted' = this call removed content; 'missing' = nothing was there. */
@@ -147,8 +144,8 @@ export interface ArchiveCleanupHost {
    *  loaded set). */
   listLiveSessionFacts(): Promise<LiveSessionFacts>
   /**
-   * DECISIVE per-candidate authoritative existence check (2026-12 blocker
-   * fix). Returns true when the OFFICIAL persistence can still materialize a
+   * DECISIVE per-candidate authoritative existence check. Returns true when
+   * the OFFICIAL persistence can still materialize a
    * record for `sessionId` right now — i.e. the session HAS content — and
    * false ONLY on the official "no materialized durable log" answer.
    *
@@ -178,15 +175,15 @@ export interface ArchiveCleanupHost {
    * Implementations refuse a RUNNING session at deletion time with code
    * `running` unconditionally; a merely LOADED (idle) session is refused with
    * code `loaded` unless `force` is true — the caller's mid-window live gate:
-   * there is no per-member core pre-check (review F2), so a member that flips
+   * there is no per-member core pre-check, so a member that flips
    * live AFTER the per-tree recheck is caught here and, as the first in-tree
-   * failure, aborts the remaining members of that tree (review F1, see purge).
-   * `protectedIds` (2026-09 amendment) is the run's protected set: the binding
+   * failure, aborts the remaining members of that tree (see purge).
+   * `protectedIds` is the run's protected set: the binding
    * MUST refuse any member it contains with code `protected` — an invariant
    * guard for the core's whole-tree skip (unreachable unless the core's plan
    * is wrong, and fail-closed when it is).
    * @returns the deletion outcome AND the session's residency at that exact
-   *   instant (design 24 §4 step 9, 2026-13 resident-retention revision).
+   *   instant (design 24 §4 step 9).
    *   `outcome` is 'deleted' when content was removed, 'missing' when nothing
    *   was there (idempotent no-op — the caller still completes accounting);
    *   `resident` is true when the session is still attached to THIS process
@@ -202,7 +199,7 @@ export interface ArchiveCleanupHost {
   ): Promise<SessionContentDeletion>
   /** Remove ids from the archived set in ONE official persistence write
    *  (purge collects every completed root/orphan and commits at the end —
-   *  design 24 perf: N per-tree atomic writes → 1). */
+   *  design 24 perf: one atomic write instead of N per tree). */
   removeArchivedSessionIds(ids: readonly string[]): Promise<void>
 }
 
@@ -251,8 +248,8 @@ export interface PurgeResult {
    *  was already gone is retained (see `residentRetainedRoots`) but was not
    *  "force-deleted" by this run. */
   readonly forcedLoaded: number
-  /** Tree roots whose archived membership this run KEPT (design 24 §4 step 9,
-   *  2026-13 resident-retention revision) because their session is still
+  /** Tree roots whose archived membership this run KEPT (design 24 §4 step 9)
+   *  because their session is still
    *  resident in this host process: the content was deleted (or was already
    *  gone), but the live-preferred corpus keeps serving the row, and the
    *  archived set is the only thing hiding it. Retaining the membership is what
@@ -302,7 +299,7 @@ export type ArchiveCleanupDomainResult<T> =
  *    nothing was mutated;
  *  - `invalid-request`: a purge subset filter was malformed (non-string/
  *    empty ids) or oversized (> MAX_PURGE_SESSIONS entries) — nothing was
- *    mutated (2026-09 revision: purge gained an optional subset filter).
+ *    mutated.
  *  Per-item failures are NOT thrown: they land in `PurgeResult.errors`
  *  (item codes: `missing`, `running`, `loaded`, `protected`, `storage`). Run-level failures
  *  that must not abort completed deletions (the batched set write, the changed
@@ -404,9 +401,9 @@ function subtreeOrder(
 ): string[] {
   const order: string[] = []
   const visited = new Set<string>()
-  // Iterative post-order (merge-round Nit N2): recursion depth equalled the
-  // subagent chain depth; an explicit stack keeps arbitrarily deep lineage
-  // chains safe. Produces the exact children-first order of the recursive
+  // Iterative post-order: recursion depth would equal the subagent chain
+  // depth; an explicit stack keeps arbitrarily deep lineage chains safe.
+  // Produces the exact children-first order of the recursive
   // post-order (each node's subtree completes before the node itself), with
   // the same cycle guard (a cycle edge back to a visited ancestor is
   // skipped — the node was already queued by its first path).
@@ -431,8 +428,8 @@ function subtreeOrder(
 }
 
 /**
- * The "live/attached" id set the orphan predicate excludes: running ∪ loaded
- * (2026-09 merge). Either state means the session has a real writer or an
+ * The "live/attached" id set the orphan predicate excludes: running ∪ loaded.
+ * Either state means the session has a real writer or an
  * attached agent, so its archived-set membership must never be swept even if
  * the durable corpus momentarily fails to list a record for it. Accepts both
  * the raw `LiveSessionFacts` arrays (fresh host reads) and the Set-shaped
@@ -470,7 +467,7 @@ export function liveSessionIdsOf(
  * session's content is real). By definition an orphan is never live, so the
  * guard is a no-op in practice.
  *
- * This predicate only produces CANDIDATES (2026-12 blocker fix): a successful
+ * This predicate only produces CANDIDATES: a successful
  * enumeration is not proof that an absent id has no content (both bulk reads
  * can narrow silently), so `purge` additionally requires the credibility
  * guards and the decisive per-candidate `hasStoredContent` probe before any
@@ -527,7 +524,7 @@ export class ArchiveCleanupCore {
     /** Raw number of session records the snapshot enumeration returned (before
      *  de-duplication). The registry-global orphan sweep's credibility guard
      *  keys on it: a corpus reporting ZERO records while N members are
-     *  archived is not credible (2026-12 blocker fix). */
+     *  archived is not credible. */
     snapshotRecordCount: number
   }> {
     let archivedIds: readonly string[]
@@ -576,7 +573,7 @@ export class ArchiveCleanupCore {
    *  (`orphanArchivedMembers`) covers them — and every other record-less
    *  member — in one pass.
    *
-   *  PROTECTION (2026-09 contract amendment): the protected set — the ids the
+   *  PROTECTION: the protected set — the ids the
    *  calling client can be viewing right now (its own `list.current`) — is
    *  checked against the FULL subtree closure, so a protected SUBAGENT
    *  descendant protects its whole archived ancestor tree. The check runs
@@ -606,7 +603,7 @@ export class ArchiveCleanupCore {
         // its set membership is cleared by the registry-global orphan sweep.
         continue
       }
-      // Classification order (2026-09 protection amendment): closure FIRST,
+      // Classification order: closure FIRST,
       // then protection, then liveness. A tree that contains a client-displayed
       // id is reported as protected even when it is also running or loaded —
       // the client's actionable fact is "this tree holds the session you are
@@ -625,7 +622,7 @@ export class ArchiveCleanupCore {
       }
       if (liveness === 'loaded' && !force) {
         // Loaded-only skip: deletable through an explicit force purge after
-        // the caller terminated the run (2026-09 revision).
+        // the caller terminated the run.
         skippedLoaded += 1
         continue
       }
@@ -636,7 +633,7 @@ export class ArchiveCleanupCore {
   }
 
   /**
-   * DECISIVE sweep gate (2026-12 blocker fix): keep only the candidates the
+   * DECISIVE sweep gate: keep only the candidates the
    * OFFICIAL persistence proves it cannot materialize. The bulk snapshot and
    * the confirmation read are both best-effort enumerations that can narrow
    * silently (see `ArchiveCleanupHost.hasStoredContent`); this per-candidate
@@ -655,8 +652,8 @@ export class ArchiveCleanupCore {
    *    stays archived and ONE run-level `archive-set` note is recorded.
    *
    * The probe is invoked AS A METHOD on the host object (implementations are
-   * routinely instance-state classes — the detached-`locate` real-machine
-   * regression of 2026-09).
+   * routinely instance-state classes — a detached method call would lose
+   * `this`).
    */
   private async selectContentFreeCandidates(
     candidateIds: readonly string[],
@@ -722,7 +719,7 @@ export class ArchiveCleanupCore {
    * Delete the content of every archived session (children-first, archived
    * member removed last — ONE batched set removal at the end).
    *
-   * Optional `sessionIds` subset filter (2026-09 revision, design 24 wire
+   * Optional `sessionIds` subset filter (design 24 wire
    * amendment): when provided, ONLY the listed archived-set members are
    * candidate roots (each with its own deletable subtree). The filter can
    * never extend the deletion set — candidates are ALWAYS the intersection
@@ -732,7 +729,7 @@ export class ArchiveCleanupCore {
    * (unchanged semantics); a provided EMPTY array = delete NO content (the
    * registry-global orphan sweep below still runs — see SWEEP).
    *
-   * BUCKET SEMANTICS NOTE (review round 2026-09): counts are per TREE ROOT,
+   * BUCKET SEMANTICS NOTE: counts are per TREE ROOT,
    * not per row origin — when the archived set itself contains a
    * subagent-origin row and it is selected WITHOUT any deletable ancestor
    * (reachable over the wire), it is its own tree root and counts in
@@ -744,13 +741,13 @@ export class ArchiveCleanupCore {
    * SWEEP (design 24 §4 step 5): independently of the filter, every run
    * clears archived-set members that are ORPHANS across the ENTIRE archived
    * set — ids with no session record in the run's authoritative snapshot
-   * (`orphanArchivedMembers`). Historical no-directory members accumulated by
-   * older versions / failed set writes are otherwise unreachable (the manager
+   * (`orphanArchivedMembers`). No-directory members accumulated by failed
+   * set writes are otherwise unreachable (the manager
    * lists rows ∩ set) and would accumulate forever. ZERO new
    * content-deletion semantics: the sweep only removes membership of
    * record-less ids, never deletes content, and never touches an id that has
-   * a record (running or not). FAIL-CLOSED, TRIPLE-GATED (2026-12 blocker
-   * fix — "absent from the snapshot" is NOT proof of absent content, because
+   * a record (running or not). FAIL-CLOSED, TRIPLE-GATED
+   * ("absent from the snapshot" is NOT proof of absent content, because
    * both bulk enumerations can narrow silently):
    *  G1 credibility — an EMPTY snapshot corpus while members are archived, or
    *  a confirmation corpus collapsing to empty, SKIPS the sweep with a
@@ -777,7 +774,7 @@ export class ArchiveCleanupCore {
    * Performance contract (design 24 perf review): the authoritative snapshot
    * (archived set + session states + lineage) is read ONCE; per deletable
    * tree only the cheap in-memory live set is re-read and checked at the
-   * TREE level (the real running guard — no per-member pre-check, review F2:
+   * TREE level (the real running guard — no per-member pre-check:
    * a mid-tree live flip surfaces through the binding's delete-time
    * `running` refusal). Per-member deletion uses the snapshot's cwd so the
    * binding never re-enumerates the corpus. Completed roots (and any
@@ -787,21 +784,21 @@ export class ArchiveCleanupCore {
    * single-id persistence reads (only for members that survived G1+G2).
    * Per-session failures land in `errors` (truncated at
    * MAX_PURGE_ERROR_RECORDS with `truncated`). The FIRST in-tree failure
-   * aborts the REMAINING members of that tree (review F1): ancestors and the
+   * aborts the REMAINING members of that tree: ancestors and the
    * root stay untouched and archived so a rerun re-enumerates and converges,
    * while members deleted before the failure stay deleted (prefix deletions
    * are not rolled back). Per-session isolation across INDEPENDENT trees is
    * unchanged: the run continues with the next tree.
    *
-   * `force` (2026-09 revision, user motion "已归档的对话应该终止"): when true,
+   * `force`: when true,
    * a subtree whose strongest liveness is merely `loaded` (idle agent /
    * attached session) is deleted too — the caller MUST have terminated the
    * run first (client-orchestrated `session/cancel` before purge). A RUNNING
    * member is still refused unconditionally (a live writer recreates a
    * header-less artifact through `open(path,"a")`, design 24 §3). Default
-   * (absent) = the historical fail-closed behavior, byte-for-byte.
+   * (absent) = the fail-closed behavior.
    *
-   * RESIDENT RETENTION (2026-13 revision, design 24 §4 step 9): deleting the
+   * RESIDENT RETENTION (design 24 §4 step 9): deleting the
    * CONTENT of a session that is still attached to this process must not
    * un-hide it. A completed tree whose liveness is `loaded`, or whose ROOT
    * reported residency at its own deletion instant (a session attached after
@@ -812,8 +809,8 @@ export class ArchiveCleanupCore {
    * session list is live-preferred (`sessionQuery.listSessions()` merges the
    * durable scan with `ctx.sessions.list()`), so the row keeps being served
    * after the files are gone; the archived set is what hides it on every
-   * surface. Clearing the membership there re-surfaced the just-deleted
-   * session in the workspace as an ordinary row (2026-13 user report). The
+   * surface. Clearing the membership there would re-surface the just-deleted
+   * session in the workspace as an ordinary row. The
    * guarantee is one-directional and fail-closed: retention only ever keeps a
    * row hidden, never exposes one. Idempotent: a later run over content that
    * is already gone reports 'missing' but retains again while the session
@@ -826,8 +823,7 @@ export class ArchiveCleanupCore {
    * archived set, so a retained member stays archived exactly like a
    * protected one.
    *
-   * `protectSessionIds` (2026-09 contract amendment, replaces the retired
-   * client-side pre-flight refusal): the ids the CALLING client may be
+   * `protectSessionIds`: the ids the CALLING client may be
    * displaying right now. A candidate tree whose closure (root + subagent
    * descendants) contains any protected id is skipped WHOLE — regardless of
    * liveness and regardless of `force` — counted in `skippedProtected`, and
@@ -843,8 +839,8 @@ export class ArchiveCleanupCore {
     force = false,
     protectSessionIds?: readonly string[],
   ): Promise<PurgeResult> {
-    // Filter validation runs BEFORE the authoritative read (review round
-    // 2026-09): shape/length checks depend on nothing from the corpus, so a
+    // Filter validation runs BEFORE the authoritative read: shape/length
+    // checks depend on nothing from the corpus, so a
     // malformed/oversized request must not pay a full registry + corpus scan
     // just to be refused. A provided EMPTY array is a deliberate
     // delete-nothing CONTENT subset (never the full-set interpretation); the
@@ -872,7 +868,7 @@ export class ArchiveCleanupCore {
       // client list — idempotent skip, never an error).
       candidates = archivedIds.filter(id => selected.has(id))
     }
-    // Snapshot membership of the archived set (merge-round Nit N1): lets the
+    // Snapshot membership of the archived set: lets the
     // end-of-run batched removal also clear archived descendants covered by a
     // completed tree IN THE SAME RUN instead of lagging to a later orphan
     // pass. Only ids that were members at snapshot time are ever cleared.
@@ -915,7 +911,7 @@ export class ArchiveCleanupCore {
     // membership would re-surface it as an ordinary session.
     const residentRetainedRoots: string[] = []
     for (const tree of plan.trees) {
-      // TREE-LEVEL protection re-check (2026-09 amendment, belt-and-braces
+      // TREE-LEVEL protection re-check (belt-and-braces
       // over resolvePlan): a tree whose closure contains a protected id must
       // not START deleting — a plan bug must never be able to cut a partially
       // protected tree, because prefix deletions are not rolled back and the
@@ -934,7 +930,7 @@ export class ArchiveCleanupCore {
       // Cheap in-memory live refresh only (design 24 perf): the durable
       // snapshot stays fixed for the run — single-flight rules out in-process
       // concurrency and deletion is idempotent. The refresh feeds the
-      // TREE-level running recheck ONLY (no per-member pre-check, review F2):
+      // TREE-level running recheck ONLY (no per-member pre-check):
       // a member that flips live after this recheck is refused by the
       // binding's delete-time live guard, which then aborts this tree as the
       // first in-tree failure (semantics below).
@@ -952,15 +948,13 @@ export class ArchiveCleanupCore {
         continue
       }
       if (liveness === 'loaded' && !force) {
-        // Loaded-only skip: deletable through an explicit force purge after
-        // the caller terminated the run (2026-09 revision).
         plan.skippedLoaded += 1
         continue
       }
-      // Member-window note (merge-round Minor-4 + review follow-up F1/F2):
+      // Member-window note:
       // the whole-subtree skip guarantee holds up to each member's deletion
       // instant, and the binding's delete-time live guard is the ONLY
-      // mid-window gate (the dead per-member O(1) pre-check was removed —
+      // mid-window gate (a per-member O(1) pre-check would be dead code —
       // the tree-level recheck above already proved the subtree non-running
       // against the same fresh set, so it could never fire; a genuine
       // mid-tree live flip now surfaces as the binding's
@@ -970,7 +964,7 @@ export class ArchiveCleanupCore {
       // processing the REMAINING members of this
       // tree: ancestors and the root stay untouched and archived, so a later
       // purge re-enumerates the intact remainder and converges (design 24
-      // §4 step-4/Minor-4). Members already deleted BEFORE the failure stay
+      // §4 step 4). Members already deleted BEFORE the failure stay
       // deleted — prefix deletions are not rolled back (they were
       // legitimately deletable at their deletion instant). Never delete
       // ancestors past a failed member: the root's session record lives
@@ -984,12 +978,12 @@ export class ArchiveCleanupCore {
       let treeAborted = false
       // The root's content outcome feeds the force accounting below.
       let rootDeleted = false
-      // Residency is collected for EVERY member, not just the root (2026-13
-      // review, self-review round): a DESCENDANT attached after the tree-level
+      // Residency is collected for EVERY member, not just the root: a
+      // DESCENDANT attached after the tree-level
       // recheck reports `resident` at its own deletion instant too, and
-      // ignoring that report completed the tree and cleared the membership of a
-      // subagent the process still serves — the same re-surfacing symptom one
-      // level down. The root is deleted LAST, so its report covers the widest
+      // ignoring that report would complete the tree and clear the membership
+      // of a subagent the process still serves — the same re-surfacing symptom
+      // one level down. The root is deleted LAST, so its report covers the widest
       // window, but any member's report retains the tree.
       let memberResident = false
       for (const sessionId of tree.order) {
@@ -1015,7 +1009,7 @@ export class ArchiveCleanupCore {
         }
       }
       if (treeAborted) {
-        // Crash/partial-failure consistency (design 24 §4 step 4 + F1): the
+        // Crash/partial-failure consistency (design 24 §4 step 4): the
         // root id stays archived until the WHOLE subtree is provably gone;
         // the abort guarantees nothing past the failed member was touched,
         // so a rerun re-enumerates the remainder and converges.
@@ -1026,9 +1020,9 @@ export class ArchiveCleanupCore {
       // keep its archived membership: the content is gone, but the host's
       // live-preferred session corpus keeps serving the row, and the archived
       // set is the only thing that hides it (all surfaces filter archived
-      // rows). Clearing the membership here is exactly what made a deleted
-      // session reappear in the workspace as an ordinary session (2026-13 user
-      // report). Two independent signals, either one suffices:
+      // rows). Clearing the membership here would make a deleted session
+      // reappear in the workspace as an ordinary session.
+      // Two independent signals, either one suffices:
       //  - the tree-level liveness recheck above found a loaded member (the
       //    force path — the common case); or
       //  - ANY member (root or descendant) reported residency at its OWN
@@ -1047,7 +1041,7 @@ export class ArchiveCleanupCore {
       const retained = liveness === 'loaded' || memberResident
       if (retained) {
         residentRetainedRoots.push(tree.rootSessionId)
-        // Force accounting (2026-09 revision, tightened 2026-13): count only a
+        // Force accounting: count only a
         // root whose content THIS run actually removed — a resident root whose
         // content was already gone is retained but was not force-deleted.
         if (rootDeleted) forcedLoaded += 1
@@ -1055,7 +1049,7 @@ export class ArchiveCleanupCore {
       }
       completedRoots.push(tree.rootSessionId)
       for (const member of tree.order) {
-        // Merge-round Nit N1: an archived descendant covered by this
+        // An archived descendant covered by this
         // completed tree (a subagent-origin id that is itself in the
         // archived set) is cleared in the SAME run — no marker lag to a
         // later orphan pass.
@@ -1065,9 +1059,9 @@ export class ArchiveCleanupCore {
       }
     }
     // ---- Registry-global orphan sweep (design 24 §4 step 5) --------
-    // A sweep candidate has no record in the SNAPSHOT — which is exactly the
-    // inference that caused the 2026-12 blocker, because both bulk
-    // enumerations can narrow silently. Three gates stand between a candidate
+    // A sweep candidate has no record in the SNAPSHOT — not proof of absence,
+    // because both bulk enumerations can narrow silently.
+    // Three gates stand between a candidate
     // and its membership removal, and ALL must pass:
     //  G1 CREDIBILITY (this block): a snapshot corpus reporting ZERO records
     //     while members are archived is not credible, and a confirmation
@@ -1078,7 +1072,7 @@ export class ArchiveCleanupCore {
     //     re-checked against a FRESH archived set + record corpus + live set
     //     taken after the content deletions. If the fresh read fails, the
     //     sweep is SKIPPED (run-level `archive-set` note, never guessed).
-    //  G3 AUTHORITATIVE EXISTENCE PROBE (decisive, 2026-12 blocker fix): each
+    //  G3 AUTHORITATIVE EXISTENCE PROBE (decisive): each
     //     surviving candidate is asked of the OFFICIAL single-id persistence
     //     read (`hasStoredContent`); it is swept ONLY when that read proves it
     //     cannot materialize the id. This is what makes "missing from both
@@ -1088,11 +1082,11 @@ export class ArchiveCleanupCore {
     let sweptOrphanMembers: string[] = []
     if (sweepCandidates.length > 0) {
       if (snapshotRecordCount === 0) {
-        // G1a: an empty corpus is not evidence of absence. The live instance
-        // has 739 archived members — a corpus that reports zero records while
+        // G1a: an empty corpus is not evidence of absence. A corpus that
+        // reports zero records while
         // the archived set is non-empty is a broken/narrowed enumeration, and
         // acting on it would clear the membership of every content-bearing
-        // member at once (the reviewer's one-row purge repro).
+        // member at once.
         recordError('', 'archive-set', `archiveCleanup: orphan sweep skipped — the snapshot session corpus is empty while ${archivedIds.length} archived member(s) exist; an empty corpus is not credible evidence of absent content`)
       } else {
         try {
@@ -1135,7 +1129,7 @@ export class ArchiveCleanupCore {
     // membership — the only thing hiding the row — must stay.
     // Swept orphan set members (no session record) carry no content —
     // removing their membership is the whole operation and is safe at any
-    // point; they are double-confirmed above. DEDUPE (review round 2026-09):
+    // point; they are double-confirmed above. DEDUPE:
     // when an archived subagent-origin row precedes its ancestor in
     // archived-set order both may be tree roots, and the same id can land in
     // completedRoots AND later in coveredArchivedMembers under the ancestor's
@@ -1147,9 +1141,9 @@ export class ArchiveCleanupCore {
       // the list. Skipping it leaves the id archived, so a later run still sees
       // it (convergent, never a silent un-archive).
       .filter(id => !protectedIds.has(id))
-    // Membership sets for the two tail loops: the historical Array.includes
-    // scans were O(n²) at the documented MAX_PURGE_SESSIONS capacity
-    // (~4.3e9 comparisons per loop — 2026-13 P1).
+    // Membership sets for the two tail loops: Array.includes scans would be
+    // O(n²) at the documented MAX_PURGE_SESSIONS capacity
+    // (~4.3e9 comparisons per loop).
     const clearIdSet = new Set(clearIds)
     // ---- LAST LIVE RE-CHECK, immediately before the batched write ----------
     // The retention decision for a tree was taken at ITS deletion instant, but
@@ -1157,8 +1151,8 @@ export class ArchiveCleanupCore {
     // MAX_SWEEP_CONTENT_PROBES content probes), i.e. potentially minutes later
     // with the client's budget. A session that attaches inside that window is
     // served by the live-preferred corpus the moment its membership is cleared
-    // — the very symptom this revision exists to kill, one window later
-    // (2026-13 review). So the write is filtered by a FRESH read:
+    // — the re-surfacing symptom one window later.
+    // So the write is filtered by a FRESH read:
     //  - an id the read reports live is NOT cleared (its membership is the only
     //    thing hiding a row that is being served again). A completed ROOT among
     //    them becomes a resident-retained root — its content really was removed
@@ -1201,8 +1195,8 @@ export class ArchiveCleanupCore {
       } catch (error) {
         if (!(error instanceof ArchiveCleanupError)) throw error
         // Every listed id stays archived; the next purge re-runs them
-        // (content already gone → orphan convergence). Run-level note
-        // (review F4): this archive-set record SHARES the item cap — a full
+        // (content already gone → orphan convergence). Run-level note:
+        // this archive-set record SHARES the item cap — a full
         // MAX_PURGE_ERROR_RECORDS-length list keeps `truncated: true`, which
         // is the honest surface: the set members stay archived, so a rerun
         // still converges despite the truncation flag.

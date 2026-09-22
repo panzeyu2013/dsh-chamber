@@ -1,6 +1,6 @@
 /**
- * Main-process ssh plugin undo journal (design 21 §6.4/§6.8 r2 + plan Phase 5
- * ssh 统一增量). Pure Node — no Electron import — so the whole module is
+ * Main-process ssh plugin undo journal (design 21 §6.4/§6.8 r2).
+ * Pure Node — no Electron import — so the whole module is
  * unit-testable standalone; the desktop main passes `app.getPath('userData')`
  * as the directory and a console-like logger.
  *
@@ -51,7 +51,7 @@ import { describeError } from './describe-error.ts'
 import { renameSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 // The owner-private file primitives are single-sourced in control-plane
-// (private-file.ts, P2-2a) and reached through the desktop dual-path facade
+// (private-file.ts) and reached through the desktop dual-path facade
 // (packaged → compiled dist/control-plane, dev/tests → workspace source) —
 // the same mechanism the credential mirrors use.
 import { atomicWritePrivateFileNoFollow, ensurePrivateDirectoryNoFollow, readPrivateFileNoFollow } from './control-plane-module.ts'
@@ -83,7 +83,7 @@ export interface SshJournalOp {
    * operationalFingerprint: kind/transport/host/user/ports/serviceName/
    * remoteDshHome). Undo must never replay an op onto a DIFFERENT target
    * that happens to reuse the same instance id after a connection edit
-   * (design 21 §6.4 review P1): ops are undoable only when this fingerprint
+   * (design 21 §6.4): ops are undoable only when this fingerprint
    * equals the CURRENT target's. null = recorded without a binding (legacy/
    * unbound callers) — such ops are never undoable (the target cannot be
    * proven). */
@@ -227,9 +227,8 @@ function sanitizeOps(parsed: unknown): SshJournalOp[] | null {
 
 export function createSshPluginJournal(dir: string, logger: SshJournalLogger): SshPluginJournal {
   const file = sshPluginJournalFile(dir)
-  // One-time crash-residue sweep (2a follow-up): the pre-2a persistOps'
-  // FIXED `${file}.tmp` residue (see removeLegacyTmpResidue), swept at store
-  // creation.
+  // One-time crash-residue sweep: the legacy FIXED `${file}.tmp` residue
+  // (see removeLegacyTmpResidue), swept at store creation.
   removeLegacyTmpResidue(file)
 
   function loadOps(): SshJournalOp[] {

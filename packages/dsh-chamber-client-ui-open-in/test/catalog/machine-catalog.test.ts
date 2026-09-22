@@ -1,5 +1,5 @@
 /**
- * Machine catalog unit tests (design 20 §5, 2026-09-12 revision): the page-level
+ * Machine catalog unit tests (design 20 §5): the page-level
  * reader of "which apps are installed on this machine, and what do their icons
  * look like". Covered: one probe per page, one icon fetch per id, the serialized
  * batch queue (a refresh must not drop an id it discovers), refresh coalescing,

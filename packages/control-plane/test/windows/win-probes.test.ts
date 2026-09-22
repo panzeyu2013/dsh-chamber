@@ -1,5 +1,5 @@
 /**
- * Windows probe unit tests (design 02 §5.1 parity work, M1): the pure
+ * Windows probe unit tests (design 02 §5.1 parity work): the pure
  * parsers/builders/classifiers of win-probes.ts are exercised on EVERY
  * platform; the exec helpers are win32-gated and their off-platform refusal
  * is asserted here too. Real Windows exec behavior (taskkill/netstat/CIM
@@ -9,11 +9,10 @@
  *
  * Run directly: node packages/control-plane/test/windows/win-probes.test.ts
  *
- * S1 windows-fix coverage: case-insensitive netstat states and the
+ * Windows-fix coverage: case-insensitive netstat states and the
  * Get-NetTCPConnection JSON listen parser (primary port probe).
- * S5 windows-fix coverage: the CIM-table liveness verdict that replaces the
- * win32 process.kill(pid, 0) OpenProcess probe on the kill-confirmation paths
- * (review/windows/fixes/s5-win32-liveness.md).
+ * Windows-fix coverage: the CIM-table liveness verdict that replaces the
+ * win32 process.kill(pid, 0) OpenProcess probe on the kill-confirmation paths.
  * The CIM/ConvertTo-Json parse rows, CreationDate identity rows, taskkill
  * classifiers, table command bytes and the off-platform exec refusal are pinned
  * by the cross-package gate protocol/win-probes-parity.test.ts (fixed expected

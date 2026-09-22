@@ -33,7 +33,7 @@ test('restartAndInstall refuses when automatic installation is blocked even in t
 })
 test('restartAndInstall refuses on linux even on an installable AppImage shape (H1 single-instance race)', () => {
   // AppImage quitAndInstall spawns the new instance BEFORE this process quits,
-  // so it collides with the old one under the single-instance lock (H1);
+  // so it collides with the old one under the single-instance lock;
   // Linux keeps the quit-install leg but the restart action is refused.
   const { fake, controller } = makeController({
     deps: { platform: 'linux', app: { isPackaged: true }, linuxAppImage: { path: '/opt/dsh-chamber.AppImage' } },
@@ -129,7 +129,7 @@ test('native autoUpdater before-quit-for-update is bridged to the host (close-or
 })
 
 test('the native quit event RE-ANCHORS the stall watchdog: it must not fire mid-exit, but must still fire', async () => {
-  // Both properties matter (B4): the Click-anchored deadline must not land in
+  // Both properties matter: the Click-anchored deadline must not land in
   // the native quit leg (a stall push there cancels the only thing finishing
   // the quit), yet the watchdog stays the ONLY release for `restartInFlight`.
   const fake = new FakeAutoUpdater()
@@ -209,10 +209,10 @@ test('restartAndInstall failure (sync throw) keeps the downloaded row and releas
   fake.quitAndInstallError = new Error('Cannot read /opt/dsh-chamber/resources/app.asar')
   assert.deepEqual(controller.restartAndInstall(), { ok: false, error: 'Cannot read [path]' })
   assert.equal(fake.quitAndInstallCalls, 0, 'a throw means nothing was armed')
-  // The phase deliberately stays `downloaded` (P3-1): the settings row keeps
+  // The phase deliberately stays `downloaded`: the settings row keeps
   // the「重启并安装」button for an in-place RESTART retry — regressing to 'error'
   // would mislabel a download failure. The sanitized failure rides the
-  // one-shot restartFailureText carry (F2/F3), never the generic `error`.
+  // one-shot restartFailureText carry, never the generic `error`.
   assert.equal(controller.state().phase, 'downloaded')
   assert.equal(controller.state().error, null, 'no error state is pushed on a restart-only failure')
   assert.equal(controller.state().restartFailureText, 'Cannot read [path]')
@@ -231,7 +231,7 @@ test('an error event after an armed ok:true is a RESTART failure: phase stays do
   // Async failure AFTER the arm (mac staging fetch errors later; install()
   // returning false → dispatchError) never reaches the synchronous call: the
   // 'error' listener must release the flag AND keep the phase `downloaded`
-  // (F2) — an 'error' phase misreads as a download failure, so the failure
+  // — an 'error' phase misreads as a download failure, so the failure
   // rides restartFailureText with an enabled retry button instead.
   fake.emit('error', new Error('Cannot read /tmp/x/update.zip'))
   const state = controller.state()
@@ -248,9 +248,9 @@ test('restartAndInstall: quitAndInstall returning false without an event is a no
   const { fake, controller } = makeController()
   fake.emit('update-downloaded', { version: '0.2.0' })
   // The real 6.8.9 non-dispatching refusal (install() false while its
-  // quitAndInstallCalled latch stands, A2) is stopped by the win32
+  // quitAndInstallCalled latch stands) is stopped by the win32
   // restartStalled gate BEFORE this call, so a silent falsy return here is
-  // fake-seam-only — yet it must still not mislabel an armed restart (F3).
+  // fake-seam-only — yet it must still not mislabel an armed restart.
   fake.quitAndInstallResult = false
   const result = controller.restartAndInstall()
   assert.equal(result.ok, false)
@@ -302,8 +302,8 @@ test('restartAndInstall: quitAndInstall dispatching error mid-call (real 6.8.9 s
 })
 test('restart stall watchdog: an armed restart that neither quits nor errors releases the single-flight after the grace (F4)', async () => {
   // darwin leg: the stall releases the flight and a retry RE-ARMS (a mac
-  // re-entry only re-registers the native staging listener — A2 keeps mac
-  // retry semantics). The injected signature probe clears the install-block
+  // re-entry only re-registers the native staging listener). The injected
+  // signature probe clears the install-block
   // gate because the real one reads process.execPath and never passes here.
   const { fake, controller } = makeController({
     deps: { platform: 'darwin', app: { isPackaged: true }, probeMacSignature: async () => true, restartWatchdogMs: 30 },
@@ -364,8 +364,8 @@ test('restart stall watchdog does not interfere with the normal armed-ok path wh
 })
 test('a non-restart error (nothing armed, not at phase downloaded) still reaches phase error with latestVersion kept — only restart-channeled errors keep the downloaded phase', async () => {
   // During a DOWNLOAD the flight is not armed and the phase is not
-  // `downloaded`: the classic phase-error behavior is untouched (F2/A1 —
-  // only restart-channeled errors keep the downloaded phase).
+  // `downloaded`: the classic phase-error behavior is untouched —
+  // only restart-channeled errors keep the downloaded phase.
   const { fake, controller } = makeController()
   fake.emit('update-available', { version: '0.2.0' })
   fake.emit('error', new Error('Cannot read C:\\Users\\foo\\AppData\\Local\\dsh-chamber-updater'))
@@ -387,7 +387,7 @@ test('a non-restart error (nothing armed, not at phase downloaded) still reaches
   assert.equal(controller.state().phase, 'checking')
 })
 test('an error event at phase downloaded with NOTHING armed is still a restart failure (A1: late staging re-emission never regresses the phase)', () => {
-  // A1: nothing else can error at phase `downloaded` (runCheck()/download()
+  // Nothing else can error at phase `downloaded` (runCheck()/download()
   // gate on earlier phases), so an error there is quit/staging-related by
   // construction, including after the flight was released (MacUpdater's
   // native-error bridge re-emits indefinitely). It rides the restart channel —
@@ -442,8 +442,8 @@ test('an error during downloading keeps the historic phase-error path (A1: only 
 })
 test('win32 retry after a NORMAL sync failure (no stall) is not blocked by the stall latch (A2)', async () => {
   // Only a WATCHDOG stall sets restartStalled; a plain sync failure releases
-  // the flight WITHOUT it, so the win32 in-place retry still arms — the A2
-  // refusal covers stalled quits only (the real latch would refuse re-entry).
+  // the flight WITHOUT it, so the win32 in-place retry still arms — the
+  // stall refusal covers stalled quits only (the real latch would refuse re-entry).
   const { fake, controller } = makeController()
   fake.emit('update-downloaded', { version: '0.2.0' })
   fake.quitAndInstallError = new Error('Cannot read C:\\Users\\foo\\AppData\\Local\\dsh-chamber-updater\\pending')

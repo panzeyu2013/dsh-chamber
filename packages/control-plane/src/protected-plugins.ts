@@ -1,6 +1,6 @@
 /**
  * protected-plugins.ts — 受保护集合 P 的派生、写面判定与读面行投影（design 21 §6.11，
- * 决策 19 的 2026-12 修订口径）。
+ * 决策 19）。
  *
  * 单一来源：本模块是「哪些名字不能装卸 / 官方 scope 的安装是否同代 / 每个已安装行是什么角色」
  * 的唯一实现。desktop 经 control-plane-module.ts 双路径 facade 消费，gateway 经
@@ -29,7 +29,7 @@ import { MAX_PLUGIN_SPEC_CHARS } from './plugin-spec.ts'
 
 /**
  * 运行时线闭包的**核心锚**：F 少了任何一个都说明取错了来源（源码线/裁剪过的树/外来锁文件）。
- * 与 C11 门禁同源——门禁直接 import 本模块，不再自己抄一份（2026-12 review）。
+ * 与 C11 门禁同源——门禁直接 import 本模块，不再自己抄一份。
  */
 export const RUNTIME_FAMILY_CORE: readonly string[] = [
   '@deepseek-ai/dsh',
@@ -91,8 +91,7 @@ export function runtimeFamilyFindings(names: readonly string[]): string[] {
 export const OFFICIAL_SCOPE = '@deepseek-ai/'
 
 /** chamber scope（播种物与 chamber 自建包的域）。**不参与任何判定**：受保护集合按事实
- *  派生（B₀ ∪ S ∪ F），「chamber 自建包一律拒绝」那套前缀规则已随 design 21 §6.11 退役
- *  ——保留它只为表述包的归属，别拿它当门（2026-09-13 复核）。 */
+ *  派生（B₀ ∪ S ∪ F）；保留该常量只为表述包的归属，别拿它当门。 */
 export const CHAMBER_SCOPE = '@dsh-chamber/'
 
 /**
@@ -120,8 +119,8 @@ export type ProtectedSource = 'installation' | 'chamber' | 'family'
 /** 一行已安装事实（design 21 §6.11.5 的 wire 形状）。 */
 export interface PluginRow {
   name: string
-  /** 声明的依赖值（各后端按自己的掩码纪律处理）。投影行恒来自依赖表（2026-09 行集
-   *  修订），因此除非掩码器显式返回 null，它不会是 null。 */
+  /** 声明的依赖值（各后端按自己的掩码纪律处理）。投影行恒来自依赖表，
+   *  因此除非掩码器显式返回 null，它不会是 null。 */
   spec: string | null
   /** 已装版本（能从 node_modules 清单读到才有；否则 null）。 */
   version: string | null
@@ -176,13 +175,13 @@ export function deriveProtectedSet(facts: ProtectedFacts): ProtectedDerivation {
       if (!names.has(name)) names.set(name, 'family')
     }
   }
-  // The set must never be EMPTY (2026-09-13 round-2 review F3). `familyComplete`
+  // The set must never be EMPTY. `familyComplete`
   // only says whether F contributed; it does not say whether P is non-empty, so an
   // all-empty input (installationBundles: [], seedNames: [], familyNames: null)
-  // used to answer `ok:true` with zero names — and then `decidePluginMutation`
-  // allowed a remove of a composition member such as `@deepseek-ai/dsh-base`.
+  // must not answer `ok:true` with zero names — `decidePluginMutation` would then
+  // allow a remove of a composition member such as `@deepseek-ai/dsh-base`.
   // The three production call sites cannot reach this today (B₀ defaults to the
-  // non-empty snapshot, S comes from the non-empty registry), but a future caller
+  // non-empty snapshot, S comes from the non-empty registry), but a caller
   // that reads the installation bundles from a profile can — and the failure mode
   // is silent loss of protection, which is exactly what this module promises
   // never to degrade into. Fail closed instead.
@@ -226,7 +225,7 @@ export interface ParsedVersion {
 export function parseExactVersion(value: string | null | undefined): ParsedVersion | null {
   if (typeof value !== 'string') return null
   // NO trim: ` 1.2.3 ` is not an exact version literal, and `suggestExactSpec` must never
-  // hand back a suggestion the spec whitelist would reject (2026-12 review).
+  // hand back a suggestion the spec whitelist would reject.
   const match = EXACT_VERSION_RE.exec(value)
   if (match === null) return null
   return { major: match[1], minor: match[2], patch: match[3], prerelease: match[4] ?? null }
@@ -262,7 +261,7 @@ export function suggestExactSpec(name: string, runtimeVersion: string | null | u
 
 export type PluginMutationOp = 'install' | 'remove'
 
-/** 拒绝码（gateway 400 code；`reserved` 随本次修订退役，客户端仍须接受旧码）。 */
+/** 拒绝码（gateway 400 code；客户端仍须接受旧 `reserved` 码）。 */
 export type PluginRefusalCode =
   /** 名字本身不是合法 registry 名（**输入**错误，与"事实缺失"区分；后端在更早的
    *  形状校验里通常已拦下，这里是判定入口自己的守卫）。 */
@@ -374,7 +373,7 @@ export function decidePluginMutation(input: DecidePluginMutationInput): PluginMu
   if ((familySource === 'none' || familySource === 'unavailable')
     && input.op === 'install' && officialScope(name)) {
     // 码按设计表（ssh → `protected`，降级 → `protected-set-unavailable`），但**文案必须说真话**：
-    // 这不是"被组合保护"，而是"本后端无法约束官方 scope 的安装"（2026-12 review）。
+    // 这不是"被组合保护"，而是"本后端无法约束官方 scope 的安装"。
     return familySource === 'none'
       ? {
         kind: 'refuse',
@@ -567,9 +566,9 @@ export function resolveRuntimeFamily(
       // 可信性判据（与 C11 同源）：核心锚缺失或含禁名 ⇒ 这个闭包**不是**运行时线的 F
       // （源码线/裁剪树/外来锁文件），拒绝它并继续找；全被拒则 ok:false（保守降级）。
       const findings = runtimeFamilyFindings(names)
-      // 第二条判据（2026-12）：名字解析得出来、版本一个都解析不出来 ⇒ 两个解析器对**同一批
+      // 第二条判据：名字解析得出来、版本一个都解析不出来 ⇒ 两个解析器对**同一批
       // 键**互相矛盾（同一个键既给出名字也给出版本）。放行它就意味着 F 里每个名字都缺版本
-      // 事实、静默退回世代比较——正是改域 vendored 包被误判的那条老路。宁可拒绝该来源、
+      // 事实、静默退回世代比较——vendored 包会被误判。宁可拒绝该来源、
       // 让树兜底（树直接读各包清单），也不接受一份自相矛盾的事实。
       const parserDisagreement = names.length > 0 && versions.size === 0
       if (findings.length > 0) {
@@ -632,8 +631,8 @@ export const PLUGIN_MATERIALIZED_VALUE_MASK = 'file:<hidden>'
  * `file:`/`link:`/路径类依赖值 = materialize 行（与各后端既有 value grammar 同义）。
  *
  * **必须与 semver 范围区分**：`~1.2.0`（波浪号范围）、`^1.0.0`、`>=1 <2`、`1.x`、`latest`
- * 都是 registry 值而不是路径——早先"任何 `~` 开头都算路径"会把 `~1.2.0` 误判为 materialize
- * 行（2026-12 review 由掩码扩面暴露）。只有 `~/`、`./`、`../`、`/abs`、`C:\`、`\\unc` 这类
+ * 都是 registry 值而不是路径——「任何 `~` 开头都算路径」会把 `~1.2.0` 误判为 materialize
+ * 行。只有 `~/`、`./`、`../`、`/abs`、`C:\`、`\\unc` 这类
  * **路径形态**才算。
  */
 export function isMaterializedValue(value: string): boolean {
@@ -671,17 +670,17 @@ export interface DerivePluginRowsInput {
 }
 
 /**
- * 把 profile 的**依赖表**投影成「已安装」行（design 21 §6.11.5，2026-09 用户修订）。
+ * 把 profile 的**依赖表**投影成「已安装」行（design 21 §6.11.5）。
  *
  * **行集 = `dependencies` 一行一条，仅此**：`bundles` / B₀ / S 只做 `role`/`owner` 分类器与
- * 「这个名字是否受保护」的输入，**不再凭空造行**。
+ * 「这个名字是否受保护」的输入，**不作行源**。
  *
- * 为什么（2026-09 用户口径，取代原并集口径）：并集会让「安装自带」的东西出现在「已安装」
+ * 为什么：并集会让「安装自带」的东西出现在「已安装」
  * 里——官方组合（B₀）是运行时基线、chamber 播种物（S）在**「chamber 受管组件」表**里已有
  * 自己的行（探针状态 + 版本 + 手动重推），二者都不是「我们装进去的插件」。上游
  * `reconcilePlugins`（`apps/cli/src/plugin.ts`）也只把**依赖表**里的包按 `dsh.bundle.patch`
  * 并入 `dsh.profile.bundles`，并明说模板自带组合不是依赖、永不被触碰：所以依赖表就是「装
- * 进去的东西」的权威事实。裸依赖表还带出过自相矛盾的行：组合成员在
+ * 进去的东西」的权威事实。裸依赖表还会带出自相矛盾的行：组合成员在
  * `profiles/web/node_modules` 里根本不存在（官方族被 hoist 到 `profiles/node_modules`），
  * 于是版本列只能显示 `—`。保护判定不受影响：`rows[].protected`
  * 仍由后端算，**若某个受保护名确实出现在依赖表里**（例如远端实例自己声明的官方依赖），它
@@ -813,7 +812,7 @@ export function verifyProfileFamilyConsistency(input: {
   /**
    * 族名字里**一次臂都没跑成**的（既无版本事实、实例世代也未知）。按名字收集而不是
    * 只记一个总布尔：否则"部分名字比对过、剩下的从未被比较"会聚合成一个无声的通过
-   * （2026-12 review：跳过永远不等于通过）。
+   * （跳过永远不等于通过）。
    */
   const unverified: string[] = []
   for (const name of entries) {
@@ -845,11 +844,11 @@ export function verifyProfileFamilyConsistency(input: {
   }
   if (findings.length > 0) return { ok: false, findings }
   // 有族成员没能比对 ⇒ 如实报 skipped（响亮），绝不谎报"通过"。
-  // （2026-12 review：R2 在同一状态下是拒装，复验不能反而放行。）
+  // （R2 在同一状态下是拒装，复验不能反而放行。）
   // 只有 runtimeVersion 未知才会进这里（代臂压根跑不成），所以 `unverified ⊆ family entries`
-  // 蕴含 `familyEntries ≥ 1` —— 不存在"0===0 空真"把空族树误报成跳过那条老路。
-  // 注意**不能**把"调用方给了版本事实表、但这个名字不在表里"也改成 skipped（2026-12 复核曾
-  // 建议，实测被否）：那会让"没有版本事实的跨代副本"从**响亮失败**退化成**跳过放行**，
+  // 蕴含 `familyEntries ≥ 1` —— 不存在"0===0 空真"把空族树误报成跳过的路径。
+  // 注意**不能**把"调用方给了版本事实表、但这个名字不在表里"也改成 skipped：
+  // 那会让"没有版本事实的跨代副本"从**响亮失败**退化成**跳过放行**，
   // 方向正是设计禁止的"静默放行拆组合"。缺事实时退回世代比较仍是设计口径（§6.11.4），
   // 代价是改域 vendored 包在极窄的"树来源 + 清单读不出"场景下会响亮误报——保守方向可接受。
   if (unverified.length > 0) {
@@ -868,11 +867,11 @@ const MAX_PROFILE_CLOSURE_MANIFESTS = 4096
  * 用户显式安装层的**依赖闭包**（design 21 §6.11.4）：沿
  * `node_modules/<name>/package.json` 的 `dependencies` ∪ `optionalDependencies` 递归。
  *
- * **只从官方 scope 的直接依赖起步**（2026-12 review 收紧）：闭包豁免的唯一用途是解释
+ * **只从官方 scope 的直接依赖起步**：闭包豁免的唯一用途是解释
  * 「官方 scope 但运行时线不提供」的名字（循环只遍历 `node_modules/@deepseek-ai/*`），而
  * 这类名字的合法来源就是**用户显式安装的官方层**（bundle / opt-in 层）。若从**任意**直接
  * 依赖起步，一个普通第三方包只要在自己的 `dependencies` 里写一个官方 scope 名字，就能把
- * 它带进 profile 且**静默**通过复验——实测源线官方包 284 个、运行时线 F 244 个，差集 42
+ * 它带进 profile 且**静默**通过复验——源线官方包 284 个、运行时线 F 244 个，差集 42
  * 里有 33 个连 opt-in 段的借口都没有（`dsh-tool-terminal`、`dsh-lsp`、`dsh-subagent-codex`
  * …）。第三方层夹带官方名属**未解释**，应当照旧报 `outside-family`。
  *
@@ -894,7 +893,7 @@ function profileLayerClosure(profileDir: string, direct: ReadonlySet<string>): S
     const name = queue.pop() as string
     if (seen.has(name)) continue
     seen.add(name)
-    // Only OFFICIAL nodes expand the walk (2026-12 review, deep-chain finding):
+    // Only OFFICIAL nodes expand the walk:
     // the real closures carry third-party packages (zod, react), and letting one
     // of them declare an official-scope dependency would explain an arbitrary
     // official name — a third-party layer one hop further out would silently

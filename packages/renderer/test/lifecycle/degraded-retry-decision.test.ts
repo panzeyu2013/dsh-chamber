@@ -1,12 +1,10 @@
 /**
- * B2-a: the self-heal DECISION lives in the container now.
+ * The self-heal DECISION lives in the container.
  *
- * These cases are the planner's truth table (boot-degradation.test.ts's
- * planDegradedRetries suite) re-expressed against the container. They exist so the
- * planner is no longer the only thing pinning this behavior: when B7 deletes it, the
- * rules must still be covered here. The App drives the container with exactly the
- * event sequence below (phaseChanged per source, then bootSettled for each degraded
- * shell), so this IS the production path, not a parallel one.
+ * These cases pin the planner's truth table (boot-degradation.test.ts's
+ * planDegradedRetries suite) through the container. The App drives the container with
+ * exactly the event sequence below (phaseChanged per source, then bootSettled for each
+ * degraded shell), so this IS the production path, not a parallel one.
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -75,7 +73,7 @@ test('a healthy mount never produces a retry (and the plan is stable)', () => {
 })
 
 test('the mark of a retired source is dropped, not carried', () => {
-  // The planner pruned marks for sources the roster no longer lists; the container
+  // The planner prunes marks for sources the roster no longer lists; the container
   // does the same through an explicit forget, which is what the registry sweep
   // dispatches. (It matters because a carried mark would forbid the re-registered
   // source its automatic attempt.)

@@ -2,7 +2,7 @@
  * Session-state routes: snapshot descriptor, method discipline, read/read-all
  * upserts and the SSE stream (snapshot first frame, monotonic ids,
  * Last-Event-ID resume or snapshot fallback, backpressure-bounded queue,
- * stream cap, close handling) - plan W1 / WS-B; blueprint section 6.
+ * stream cap, close handling).
  *
  * Run directly:
  *   node --import ./test/session-state/workspace-loader.mjs test/session-state/session-state-routes.test.ts
@@ -15,7 +15,7 @@ import { baselineItem, delay, sessionSurfaceFor, type SessionSurfaceHarness } fr
 
 type SurfaceHarness = SessionSurfaceHarness
 
-/** Session-state surface harness (shared factory; 2026-12 audit F40). */
+/** Session-state surface harness (shared factory). */
 function surfaceFor(t: { after(fn: () => void): void }, options: { enabled?: boolean; maxStreams?: number } = {}): SurfaceHarness {
   return sessionSurfaceFor(t, options)
 }
@@ -170,8 +170,7 @@ test('POST read is idempotent, monotonic and reports unknown sessions as unstore
 })
 
 test('read tolerates unknown body fields and query params (newer client, older server)', async t => {
-  // Moved from the deleted session-state-version-matrix.test.ts (2026-12 trim):
-  // additive tolerance is what keeps a newer client usable against this server.
+  // Additive tolerance is what keeps a newer client usable against this server.
   const harness = surfaceFor(t)
   harness.store.applyBaseline([baselineItem('s1', false, 5)], { at: 100 })
   activeSurface = harness.surface
@@ -195,13 +194,13 @@ test('POST read-all stores the source floor and requires the client through', as
   const repeat = await json('POST', '/chamber/session-state/read-all', { clientId: 'phone', through: 50 })
   assert.equal(repeat.json().changed, false)
   const missing = await json('POST', '/chamber/session-state/read-all', { clientId: 'phone' })
-  assert.equal(missing.status, 400, 'the server never computes now (plan section 4/R13)')
+  assert.equal(missing.status, 400, 'the server never computes now (R13)')
 })
-test('a client clock ahead of the host cannot buy a future read mark (plan §10 skew)', async t => {
+test('a client clock ahead of the host cannot buy a future read mark (clock skew)', async t => {
   // The host clock in this harness is 1_000. A desktop whose own clock runs an
   // hour ahead would send readThrough = now + 3_600_000; without the host-domain
   // clamp that mark would suppress every completion landing in that hour —
-  // i.e. lose true unread, which the §10 fault-injection row forbids.
+  // i.e. lose true unread, which the clock-skew fault-injection row forbids.
   const harness = surfaceFor(t)
   harness.store.applyBaseline([baselineItem('s1', false, 900)], { at: 100 })
   activeSurface = harness.surface

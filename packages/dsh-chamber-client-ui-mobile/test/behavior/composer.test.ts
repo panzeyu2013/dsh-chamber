@@ -1,5 +1,5 @@
 /**
- * Composer behavior pure-logic tests (P1.5 + 2026 review + mobile rounds):
+ * Composer behavior pure-logic tests:
  * the keyboard heuristic, the self-heal constant, the layer-1
  * navigation-gesture predicate, the layer-5 composer-visibility guard
  * (quantized offset / hysteresis arm+hold decision / scroll-end / bounded
@@ -163,7 +163,7 @@ test('phone tier query is shared with the stylesheet and distinct from the touch
 })
 
 test('isEditableComposer: only the real editor is intercepted (no-workspace picker stays live)', () => {
-  // 2026-09-13 review-fix: the no-workspace state binds editor=null, so the
+  // The no-workspace state binds editor=null, so the
   // resident div renders contenteditable="false" while still carrying
   // [data-composer-input], tabIndex=0 and the official onKeyDown that opens
   // the workspace picker. Intercepting Enter there swallowed that activation.
@@ -259,10 +259,10 @@ test('the observer channels keep their load-bearing options', () => {
   assert.equal(SELF_HEAL_MUTATION_OPTIONS.subtree, true)
 })
 test('editability recovery only trusts the composer\'s OWN attribute flip (source lock)', () => {
-  // 2026-09 measured/review fix: the observer watches the whole document
-  // subtree, so a nested Lexical decorator flipping its own contenteditable
-  // used to satisfy isEditabilityFlipToEditable and blur+refocus the composer
-  // MID-TYPING. The predicate itself stays pure; the caller must narrow the
+  // The observer watches the whole document subtree, so a nested Lexical
+  // decorator flipping its own contenteditable would otherwise satisfy
+  // isEditabilityFlipToEditable and blur+refocus the composer MID-TYPING. The
+  // predicate itself stays pure; the caller must narrow the
   // batch to records whose target IS the composer input.
   const source = readFileSync(fileURLToPath(new URL('../../src/client/composer.ts', import.meta.url)), 'utf8')
   assert.match(
@@ -272,9 +272,9 @@ test('editability recovery only trusts the composer\'s OWN attribute flip (sourc
   )
 })
 test('the guard keeps its full trigger set wired (source lock)', () => {
-  // 2026-09 review: the visualViewport/window listeners, the visibilitychange
-  // handler and the [data-phase] observer had NO coverage at all — deleting any
-  // one of them left every package test green, while design 17 §18.4.4 makes
+  // The visualViewport/window listeners, the visibilitychange handler and the
+  // [data-phase] observer each need pinned coverage: deleting any one of them
+  // would leave every package test green, while design 17 §18.4.4 makes
   // "触发面完整" an invariant. Pin the registrations (and the attribute filter)
   // so a dropped trigger is a red test, not a silent field regression.
   const source = readFileSync(fileURLToPath(new URL('../../src/client/composer.ts', import.meta.url)), 'utf8')
@@ -302,7 +302,7 @@ test('the guard keeps ONE actuator, never pads the scrollport (source lock)', ()
   // seat, including after a renderer remount reorders the seat list.
   assert.match(source, /spacer\.nextElementSibling !== seat/)
   // Bounded verification: the correction loop is capped AND refuses to run on
-  // a carrier that moved with our own write (2026-09 review), so an engine
+  // a carrier that moved with our own write, so an engine
   // that ignores the sticky inset — or feeds the lift back into the measured
   // edge — is reported instead of chased.
   assert.match(source, /while \(!carrierPushed && steps < KBD_MAX_VERIFY_STEPS\)/)

@@ -3,8 +3,7 @@
  * The production plugin supplies createWebConnectionRpc as the generic RPC
  * factory; this test pins that its explicit per-entry config reaches the
  * constructor (and that a page-owned transport's fetch/stream hooks ride
- * along). Rebased for upstream v0.1.2: the HTTP/WS API-carrier half no longer
- * exists — the assembly owns the generic RPC carrier only.
+ * along). The assembly owns the generic RPC carrier only.
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'

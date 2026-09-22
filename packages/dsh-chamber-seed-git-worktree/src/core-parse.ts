@@ -27,7 +27,7 @@ export function parseBranchLine(line: string): { upstream: string | null; ahead:
     if (behindMatch !== null) behind = Number(behindMatch[1])
   }
   // Git rejects ref names containing '..', so '...' cannot appear inside a
-  // branch name — the separator is unambiguous (review P3-2; do not "fix").
+  // branch name — the separator is unambiguous (do not "fix").
   const sep = namePart.indexOf('...')
   return {
     upstream: sep >= 0 ? (namePart.slice(sep + 3) || null) : null,

@@ -33,7 +33,7 @@ async function main() {
   // runs reuse it instead of downloading/extracting ~300MB each. The zip
   // download is cached by @electron/get, so re-materializing never
   // re-downloads. DSH_CHAMBER_ELECTRON_DIST may point at any existing dist
-  // (e.g. a pre-shared-flow local node_modules dist) to skip the cache.
+  // (e.g. a local node_modules dist) to skip the cache.
   let electronDist;
   try {
     electronDist = await ensureSharedElectronDist();
@@ -102,7 +102,7 @@ async function main() {
         process.kill(-child.pid, 'SIGTERM');
         // 升级兜底：launcher 是被监督进程（Electron）的监督者，退出必须确定性
         // 回收它——SIGTERM 1s 后仍活着则 SIGKILL 整个进程组，绝不留下无头
-        // Electron（此前 SIGTERM 被 Chromium 消费/忽略时，2s 硬顶 process.exit
+        // Electron（SIGTERM 可能被 Chromium 消费/忽略，2s 硬顶 process.exit
         // 会让 detached 的 Electron 残留在后台）。
         const escalate = setTimeout(() => {
           if (child.exitCode === null && child.signalCode === null) {

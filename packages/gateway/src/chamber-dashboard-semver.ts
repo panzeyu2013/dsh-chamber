@@ -1,5 +1,5 @@
 /**
- * Browser-side SemVer comparator for the /chamber dashboard (2026-12 audit F8):
+ * Browser-side SemVer comparator for the /chamber dashboard:
  * ONE local source of the precedence rules, interpolated verbatim into the
  * dashboard script by routes.ts. It deliberately does NOT import the shared
  * dsh-runtime comparator — the dashboard script is a classic inline script, so

@@ -2,13 +2,11 @@
 //  DownloadDestination.swift
 //  DSHChamber
 //
-//  下载落盘目标（2026-12 双 flavor 对齐；A1 差异表 S-26）。
+//  下载落盘目标（双 flavor 对齐）。
 //
 //  Electron 侧全仓无 will-download/setSavePath ⇒ 走 Chromium 默认下载例程：
 //  静默写入 app.getPath('downloads')（= ~/Downloads），无保存面板、无下载 UI、
-//  无用户同意，重名按 " (1)" / " (2)" 去重。Swift 侧此前弹 NSSavePanel（可取消，
-//  注释还把它谎称为「Electron 默认下载例程的保存对话框对偶」——Electron 没有
-//  这个对话框）。本文件实现与 Electron 等价的静默路径。
+//  无用户同意，重名按 " (1)" / " (2)" 去重。本文件实现与 Electron 等价的静默路径。
 //
 //  WebKit 契约（SDK WKDownloadDelegate.h decideDestinationUsing… 注释逐字）：
 //  「If the destination file URL is non-null, it must be a file that does not

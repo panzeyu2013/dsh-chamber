@@ -1,13 +1,13 @@
 /*
- * Localizable.strings —— dsh-chamber 原生壳英文文案（S2：本地化资源）
+ * Localizable.strings —— dsh-chamber 原生壳英文文案（本地化资源）
  *
  * 键 = NativeTextKey.rawValue（macos/Sources/DSHChamber/NativeText.swift），逐字一致；键表以 NativeTextKey 为准（当前 121 键）。
  * 英文值按既有英文面措辞与 zh-Hans 逐条对译（同义、同结构）：正文来源
  * main.ts 的对话框/报错与 electron-edges 的 pickPluginSource。
  * 占位符 %@ / %d 与 zh-Hans 逐键一一对应（种类/顺序一致）；参数由调用方按
- * NativeText.format 传入，故两份文件的格式必须同步。原本由 Swift 字面量插值的
- * 动态部分（app 名、控制面地址、退出原因、次数/秒数、sidecar 失败原因）改为
- * %@/%d——zh-Hans 侧格式化后的输出与旧字面量逐字一致。
+ * NativeText.format 传入，故两份文件的格式必须同步。动态部分（app 名、控制面
+ * 地址、退出原因、次数/秒数、sidecar 失败原因）一律走 %@/%d，zh-Hans 侧格式化
+ * 后的输出逐字一致。
  *
  * 装配：SwiftPM .process("Resources/en.lproj") 产出资源包；build-swift-app.mjs
  * 把 <lang>.lproj 装配到 <App>.app/Contents/Resources/ 下（Bundle.main 与系统
@@ -75,7 +75,7 @@
 "quit.confirmButton" = "Quit";
 "quit.cancelButton" = "Cancel";
 
-/* ===== 退出决策不可得（S-17） ===== */
+/* ===== 退出决策不可得 ===== */
 "quit.unavailableTitle" = "The dsh sidecar is not responding to the quit request";
 "quit.unavailableDetail" = "The dsh sidecar did not answer the quit decision within %d seconds, so this quit was cancelled. You can keep waiting for the sidecar to recover, or force quit (forcing a quit still runs the existing cleanup).";
 "quit.waitButton" = "Keep Waiting";
@@ -165,8 +165,8 @@
 "common.listSeparator" = ", ";
 
 /* ===== composer native open panel / bridge fallback / frame errors
-   (2026-12 audit closure: these were hardcoded, so they mismatched whenever the
-   page language differs from the system language) ===== */
+   (the page language can differ from the system language, so these must not be
+   hardcoded) ===== */
 "panel.openFileTitle" = "Choose a file";
 "panel.openFileOrDirectoryTitle" = "Choose a file or folder";
 "panel.openFilePrompt" = "Open";

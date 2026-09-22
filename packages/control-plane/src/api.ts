@@ -20,7 +20,7 @@
  * - DELETE /api/connections/local → {stopped:true} (graceful stop, the row
  *   stays); 409 connection_busy while restarting
  * - GET /api/connections/local/writers → {quiescent, writers[], errors[]} —
- *   the writer-quiescence diagnosis (2026-09-10, 02 §3.4): which managed-host
+ *   the writer-quiescence diagnosis (02 §3.4): which managed-host
  *   records keep the local instance from starting, why, and whether the
  *   explicit takeover could clear them. Read-only.
  * - POST /api/connections/local/reclaim → 清理并接管: clear this state
@@ -33,12 +33,12 @@
  *   here, directly reachable without any session.
  *
  * v1 has no authentication surface: every /api/* route and /health are
- * anonymous (no cookie/bearer gate, no passkey/audit routes — the v2-era
- * auth family is gone). The CORS decision is the only cross-origin control.
+ * anonymous (no cookie/bearer gate, no passkey/audit routes). The CORS
+ * decision is the only cross-origin control.
  *
- * Deleted with the thin-shell architecture (05 §3.2): sessions/projects/
- * session/interactions/events(SSE)/config/external/project-sessions routes —
- * session business belongs to the dsh frontend runtime, consumed through the
+ * No session-business routes (05 §3.2): sessions/projects/session/
+ * interactions/events(SSE)/config/external/project-sessions — session
+ * business belongs to the dsh frontend runtime, consumed through the
  * instance proxy.
  *
  * Browser-origin fence (same-origin + explicit allowlist — the only
@@ -59,7 +59,7 @@ import type { Logger } from './types.ts'
 
 /** Body read cap for POST payloads (10 MiB; the instance proxy has its own 300MiB cap). */
 const MAX_BODY_BYTES = 10 * 1024 * 1024
-/** Management body per-chunk idle timeout (2026 review). */
+/** Management body per-chunk idle timeout. */
 const BODY_IDLE_TIMEOUT_MS = 10_000
 const MAX_HEALTH_EVENT_STREAMS = 32
 /** Per-client frames retained while its SSE socket is backpressured. */
@@ -292,9 +292,9 @@ export function createApi(deps: ApiDeps) {
       message = 'Internal server error'
       if (code === undefined) code = 'internal'
     }
-    // A structured detail (2026-09-10: the writer-quiescence blockers on a 409)
+    // A structured detail (the writer-quiescence blockers on a 409)
     // rides along with the code; every error without one keeps the exact
-    // two-field shape it had.
+    // two-field shape.
     const detail = typeof errorBody === 'object' && errorBody !== null && errorBody.detail !== undefined
       ? { detail: errorBody.detail }
       : {}
@@ -308,7 +308,7 @@ export function createApi(deps: ApiDeps) {
     let oversize = false
     let idleTimer: NodeJS.Timeout | undefined
     let idleExpired = false
-    // Per-chunk idle timeout (2026 review): a slow body must not hold a
+    // Per-chunk idle timeout: a slow body must not hold a
     // connection slot for the whole 35s requestTimeout — management bodies
     // are small JSON, 10s of silence means the client is gone.
     const armIdle = (): void => {
@@ -497,7 +497,7 @@ export function createApi(deps: ApiDeps) {
               const err = error as ApiError
               if (err.code === 'connection_busy') {
                 // The structured blockers travel with the 409 so the UI can
-                // name the writer and offer the takeover (2026-09-10).
+                // name the writer and offer the takeover.
                 return jsonError(res, 409, {
                   code: err.code,
                   message: err.message,

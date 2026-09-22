@@ -1,10 +1,10 @@
 /**
- * sidecar-stdio.test.ts —— W-13：B 桥 stdio 冒烟（假 Swift 驱动真 sidecar）
+ * sidecar-stdio.test.ts —— B 桥 stdio 冒烟（假 Swift 驱动真 sidecar）
  *
- * design 25 §4.4.2/D2/D8；companion W-11/12/13。用 node:test 直接 spawn
+ * design 25 §4.4.2。用 node:test 直接 spawn
  * packages/desktop/sidecar-entry.ts（真实 shell-core 60/60 注册体 + 无头 ctx +
  * node-edges），以 NDJSON 协议驱动：
- *  1. ready 帧（最小化 {port, shellVersion}，D8）；
+ *  1. ready 帧（最小化 {port, shellVersion}）；
  *  2. info 真实载荷（controlPlaneUrl/platform/flavor 面）；
  *  3. settings-set → notify rendererPush{channel:'dsh-chamber:settings-changed'}
  *     —— 8 push 事件面的代表采样（真实处理器 → node-edges → 协议 notify）；
@@ -12,8 +12,7 @@
  *  5. 未知通道 loud；
  *  6. SIGTERM 优雅退出（exit 0）。
  * 环境：node 路径 env NODE_BIN → 缺省 process.execPath（测试进程自身即 node，
- * 保证 CI 恒可真跑；2026-09 审计发现旧缺省指向 /Applications 的 Electron 二进制
- * → 干净 runner 上整组静默通过 = 假绿）。ELECTRON_RUN_AS_NODE=1 对纯 node 无害。
+ * 保证 CI 恒可真跑）。ELECTRON_RUN_AS_NODE=1 对纯 node 无害。
  */
 import { test, before, after } from 'node:test'
 import assert from 'node:assert/strict'
@@ -33,10 +32,8 @@ import { MAX_INBOUND_FRAME_BYTES } from './node-edges.ts'
 
 const dir = path.dirname(fileURLToPath(import.meta.url))
 const sidecarPath = path.join(dir, 'sidecar-entry.ts')
-// D1b 门禁（2026-12 审计）：显式 NODE_BIN（非空）是调用方的配置承诺——不可用
-// 必须硬失败；只有隐式缺省（process.execPath）不可用才是环境缺失，允许一行
-// loud skip。原实现 existsSync 后整组静默 return：NODE_BIN=/nonexistent/node
-// 得到 11 pass / 0 fail / exit 0 的假绿。
+// 显式 NODE_BIN（非空）是调用方的配置承诺——不可用必须硬失败；只有隐式缺省
+// （process.execPath）不可用才是环境缺失，允许一行 loud skip。
 const explicitNodeBin = typeof process.env.NODE_BIN === 'string' && process.env.NODE_BIN.length > 0
 const nodePath = explicitNodeBin ? (process.env.NODE_BIN as string) : process.execPath
 /** 可用 node = 存在的常规文件（目录/缺失都不可用）。 */
@@ -63,11 +60,11 @@ interface Driver {
   /** 等待 sidecar 向宿主发出的 edge 请求（{edge, payload, edgeId}）——用于断言
    *  入站汇确实到达 core 并驱动宿主腿，而非只停在传输层。 */
   waitEdge(method: string, timeoutMs?: number): Promise<Record<string, unknown>>
-  /** P-01 测试注入：向 sidecar stdin 写一行原始字节（不经 NDJSON 组帧），用于
+  /** 测试注入：向 sidecar stdin 写一行原始字节（不经 NDJSON 组帧），用于
    *  超长行护栏用例。 */
   writeRaw(line: string): void
-  /** W-13 ② 采样（P-04 起 sidecar 在 dev 也能解析内建 workspace，启动事务会并行
-   *  推 runtime 状态）：在**已缓冲**的 rendererPush 里按 channel 取，绝不与其它
+  /** 采样（dev sidecar 也能解析出内建 workspace，启动事务会并行推 runtime
+   *  状态）：在**已缓冲**的 rendererPush 里按 channel 取，绝不与其它
    *  合法 push 的到达次序竞态，也不会在重新挂 waitNotify 的空窗里丢目标 push。 */
   waitRendererPushChannel(channel: string, timeoutMs?: number): Promise<Record<string, unknown>>
   close(): Promise<number | null>
@@ -78,7 +75,7 @@ function startDriver(): Promise<Driver> {
     const userDataDir = mkdtempSync(path.join(tmpdir(), 'dsh-sidecar-test-'))
     // DSH_SIDECAR_TEST_NO_UPDATE_CHECK（与 DSH_SIDECAR_TEST_STALL_SHUTDOWN_MS
     // 同纪律）：跳过 15s 首检/6h 周期定时器——本套用例不需要真实出网，也避免
-    // 首检改写 update-state 投影（W-22 断 idle）的确定性。
+    // 首检改写 update-state 投影的确定性。
     const env = { ...process.env, ELECTRON_RUN_AS_NODE: '1', DSH_SIDECAR_TEST_NO_UPDATE_CHECK: '1' }
     const child: ChildProcessWithoutNullStreams = spawn(nodePath, [sidecarPath, '--user-data-dir', userDataDir, '--port', '17910'], {
       env,
@@ -237,13 +234,13 @@ function startDriver(): Promise<Driver> {
 
 let driver: Driver
 
-/** W-15 目录锁复验用：带预置锁记录 spawn 一个 sidecar（不共享 driver 的 userData）。 */
+/** 目录锁复验用：带预置锁记录 spawn 一个 sidecar（不共享 driver 的 userData）。 */
 function spawnWithLockRecord(lockPid: number, port: string): {
   ready: Promise<void>
   exit: Promise<number | null>
   stderr: () => string
   kill: (signal: NodeJS.Signals) => void
-  /** S2·F11：stdin EOF 正常退出路径（sidecar-entry rl 'close' → EXIT_GRACEFUL）。 */
+  /** stdin EOF 正常退出路径（sidecar-entry rl 'close' → EXIT_GRACEFUL）。 */
   closeStdin: () => void
 } {
   const userDataDir = mkdtempSync(path.join(tmpdir(), 'dsh-sidecar-lock-'))
@@ -293,13 +290,13 @@ function spawnWithLockRecord(lockPid: number, port: string): {
   }
 }
 
-/** D1c 测试用 harness：可注入 env、可等 stderr 行（确定性进入退出在途窗口）、
+/** 测试用 harness：可注入 env、可等 stderr 行（确定性进入退出在途窗口）、
  *  观察原始响应帧（含 code 字段）的独立 sidecar。 */
 function spawnInjectable(extraEnv: Record<string, string>, port: string): {
   ready: Promise<void>
   invoke(method: string, payload: unknown, timeoutMs?: number): Promise<{ ok: boolean; result?: unknown; error?: string; code?: string }>
   waitStderr(pattern: RegExp, timeoutMs?: number): Promise<void>
-  /** P-01 测试注入：向 stdin 写一行原始字节（不经 NDJSON 组帧）。 */
+  /** 测试注入：向 stdin 写一行原始字节（不经 NDJSON 组帧）。 */
   writeRaw(line: string): void
   exit: Promise<number | null>
   stderr: () => string
@@ -399,7 +396,7 @@ function spawnInjectable(extraEnv: Record<string, string>, port: string): {
 
 before(async () => {
   // 显式 NODE_BIN 不可用 = 硬失败：before 抛错 → 整组用例失败（exit 非 0），
-  // 绝不能像原实现那样静默 skip 出假绿。
+  // 绝不静默 skip 出假绿。
   if (nodeGate === 'hard-fail') throw new Error(NODE_GATE_HARD_FAIL)
   if (nodeGate === 'skip') return
   driver = await startDriver()
@@ -427,15 +424,14 @@ test('W-13 ① info 真实载荷', async () => {
   assert.equal(r.ok, true)
   const result = r.result as Record<string, unknown>
   assert.equal(typeof result.controlPlaneUrl, 'string')
-  // 平台断言必须跟随运行平台（2026-09 模块评审 major #2：硬写 darwin 会让
-  // ubuntu 腿的 test:desktop 直接红）。
+  // 平台断言必须跟随运行平台（硬写 darwin 会让 ubuntu 腿的 test:desktop 直接红）。
   assert.equal(result.platform, process.platform)
   assert.equal(typeof result.version, 'string')
 })
 
 test('W-13 ② settings-set → rendererPush 推送采样', async () => {
   if (!nodeAvailable) return
-  // P-04 起 dev sidecar 也会解析出内建 dsh workspace，启动事务与 settings-set
+  // dev sidecar 也会解析出内建 dsh workspace，启动事务与 settings-set
   // 并行推 runtime 状态——按 channel 从缓冲里取 settings-changed，断言本用例
   // 驱动的这次推送，而非「注册后第一个 push 恰好是它」的时序假设。
   const notifyP = driver.waitRendererPushChannel('dsh-chamber:settings-changed', 5000)
@@ -450,7 +446,7 @@ test('W-13 ② settings-set → rendererPush 推送采样', async () => {
 test('W-13 ③ 代表通道逐条具体形状（三审 #12：不再「ok 或任意 error」弱断言）', async () => {
   if (!nodeAvailable) return
   // 无头 ctx 下这些通道有确定形状：绝不允许「任何非空 error 都算过」——
-  // 那会让整组通道报错也通过（一审 tests-gates 登记的弱断言）。
+  // 那会让整组通道报错也通过。
   const settings = await driver.invoke('dsh-chamber:settings-get', null, 4000)
   assert.ok(settings.ok, `settings-get 应成功：${JSON.stringify(settings)}`)
   const settingsResult = settings.result as { settings?: unknown; supported?: unknown }
@@ -499,7 +495,7 @@ test('W-13 ⑥ 保留入站：__host.deepLink / __host.rendererLifecycle 分派�
   // design 25 §4.5/§5 E19：Swift application(_:open:) → core enqueueDeepLink；
   // 渲染器三事件映射 → core onRendererLifecycle。传输层应答 ok 即证明
   // sidecar-entry 的汇接线就位（语义在 core，其单测在 node-edges.test.ts）。
-  // 三审 #11：不只断传输层 ok——深链必须真的进 core 的消费循环并驱动宿主腿。
+  // 不只断传输层 ok——深链必须真的进 core 的消费循环并驱动宿主腿。
   // 用一个**不在注册表里的 ssh 实例 id**：core 解析成功 → 入队 → drain →
   // runVscodeLaunch 返回 `instance not found` → core 走 showError 宿主腿。
   // 观测到该 edge 请求即证明「传输 → core 解析/入队/消费 → 宿主腿」全链到位
@@ -572,7 +568,7 @@ test('W-13 ⑦ 保留入站：__host.quitFacts 返回 core 决策（E1/E9/E20）
 
 test('W-22 更新控制器：真实态 + blocked-available 契约', async () => {
   if (!nodeAvailable) return
-  // Swift flavor 用 update-headless.ts 的真实控制器（W-22）：初始 idle +
+  // Swift flavor 用 update-headless.ts 的真实控制器：初始 idle +
   // installBlockedReason = 原生壳 reason（不是 loud stub）；download/restart
   // 在核心层显式拒绝（不依赖 UI 隐藏）。
   const state = await driver.invoke('dsh-chamber:update-state', null)
@@ -646,8 +642,8 @@ test('W-13 ⑤ SIGTERM 优雅退出 exit 0', async () => {
 })
 
 test('S2·F8 stdout 纪律：重定向模块是 sidecar-entry 第一条 import，且先于依赖求值生效', () => {
-  // 结构性锁步：第一条 import 必须是只做重定向的模块（原实现把重定向写在
-  // import 之后——先于它求值的依赖模块会把日志写进协议流 stdout）。
+  // 结构性锁步：第一条 import 必须是只做重定向的模块（写在 import 之后时，
+  // 先于它求值的依赖模块会把日志写进协议流 stdout）。
   const entry = readFileSync(sidecarPath, 'utf8')
   const firstImport = entry.split('\n').find((line) => /^import\b/.test(line))
   assert.match(firstImport ?? '', /from '\.\/sidecar-console-redirect\.ts'/)
@@ -732,13 +728,13 @@ test('D1c 退出在途：入站帧以 app_quitting 拒绝 + 清理硬顶（早�
   assert.equal(code, EXIT_GRACEFUL, '硬顶强退沿用信号/EOF 路径的文档化退出码（Supervisor 不得误判崩溃）')
   assert.match(harness.stderr(), /退出清理超时/, '硬顶强退必须 loud（stderr 超时日志）')
   assert.ok(elapsed >= 4000, `硬顶应在 ~4.5s（QUIT_CLEANUP_TIMEOUT_MS 留 500ms 余量）触发，实际 ${elapsed}ms`)
-  // 硬顶必须早于宿主 5s SIGKILL grace：上界取 5000 而不是 stallMs（2026-12
-  // 验证轮：原上界 8000 允许 [5000,8000) 的宽限，正是会被宿主先杀死的区间）。
+  // 硬顶必须早于宿主 5s SIGKILL grace：上界取 5000 而不是 stallMs（更大的上界
+  // 会落入宿主先杀死的区间）。
   assert.ok(elapsed < 5000, `硬顶必须早于宿主 5s grace（实际 ${elapsed}ms）`)
   assert.ok(elapsed < stallMs, `不得等清理完成（${stallMs}ms），实际 ${elapsed}ms`)
 })
 
-// 三审 #7：退出码分级常量必须互异且与 Supervisor 分级一致（70=启动失败、
+// 退出码分级常量必须互异且与 Supervisor 分级一致（70=启动失败、
 // 3=锁冲突、1=运行期崩溃、0=优雅停止）。常量是 sidecar-entry 的导出单源。
 test('退出码分级常量（0/3/70/1）', () => {
   const codes = [EXIT_GRACEFUL, EXIT_LOCK_CONFLICT, EXIT_STARTUP_FAILURE, EXIT_RUNTIME_CRASH]
@@ -747,7 +743,7 @@ test('退出码分级常量（0/3/70/1）', () => {
 })
 
 // ---------------------------------------------------------------------------
-// S2·F13 退出清理并行（本次批次）
+// 退出清理并行
 // ---------------------------------------------------------------------------
 test('S2·F13 settleShutdownLegs：两条腿同时启动（并行非串行）、单腿失败只 loud 不阻断', async () => {
   const { settleShutdownLegs } = await import('./sidecar-ctx.ts')
@@ -793,8 +789,7 @@ test('S2·F13 接线锁步：dispose 与 cp.stop 在同一 settleShutdownLegs �
   const entry = readFileSync(sidecarPath, 'utf8')
   const start = entry.indexOf('await settleShutdownLegs(')
   assert.ok(start >= 0, 'shutdown 清理必须经 settleShutdownLegs 编排（并行 allSettled 语义）')
-  // 切片到调用结束（'])'）：固定 500 字符窗口会随代码增长静默失效——本批次实测该块已
-  // 长于 500 字符（第八轮排查：断言仍命中纯属位置巧合，属「假绿通道」类问题）。
+  // 切片到调用结束（'])'）：固定 500 字符窗口会随代码增长静默失效。
   const callEnd = entry.indexOf('])', start)
   assert.ok(callEnd > start, 'settleShutdownLegs 调用必须以 ]) 结束（否则切片无意义）')
   const block = entry.slice(start, callEnd + 2)
@@ -805,7 +800,7 @@ test('S2·F13 接线锁步：dispose 与 cp.stop 在同一 settleShutdownLegs �
 })
 
 // ---------------------------------------------------------------------------
-// S2·F4 交互腿超时锁步（本次批次）
+// 交互腿超时锁步
 // ---------------------------------------------------------------------------
 test('S2·F4 交互腿超时锁步：node 侧 = Swift 600s + 60s 缓冲（node 后超时）', () => {
   const entry = readFileSync(sidecarPath, 'utf8')
@@ -817,21 +812,20 @@ test('S2·F4 交互腿超时锁步：node 侧 = Swift 600s + 60s 缓冲（node �
   assert.equal(swiftMs, 600_000, 'Swift 侧保持 600s（SwiftEdgeHostLegs.interactiveLegTimeout）')
   assert.equal(swiftMs + bufferMs, 660_000, 'node 侧 660s = Swift 600s + 60s（裁决 D4 选项 B）')
   assert.ok(swiftMs + bufferMs > swiftMs, 'node 侧必须严格大于 Swift 侧（node 起点更早，同值必然先超时丢答案）')
-  // 本批只放宽交互腿上限：非交互预算与交互腿集合都不变。
+  // 只有交互腿上限放宽；非交互预算与交互腿集合都不变。
   assert.match(entry, /const EDGE_TIMEOUT_MS = 30_000/)
   assert.match(entry, /const INTERACTIVE_EDGE_METHODS = new Set\(\['showMessage', 'pickPluginSource'\]\)/)
 })
 
 // ---------------------------------------------------------------------------
-// S2·F11 非崩溃退出（本次批次：Node 侧契约半面）
+// 非崩溃退出（Node 侧契约半面）
 // ---------------------------------------------------------------------------
 test('S2·F11 正常退出码面：stdin EOF 与 SIGTERM 同为 EXIT_GRACEFUL=0（不得表现为崩溃 1）', async () => {
   if (!nodeAvailable) return
   // Node 侧唯一能保证的契约半面：信号/EOF 正常退出恒以 0 面世，绝不以运行期
   // 崩溃码 1 出现——Swift Supervisor 的 60s 退避配额只应累计「非零/崩溃」退出。
   // 另一半（SidecarSupervisor 不把 exit 0/3/70 计入 attempts）在 macos/ 源内
-  // （SidecarSupervisor.swift:400-402 decide 先于退出码分级），不在本批写入范围；
-  // 证据与建议补丁见交付说明。
+  // （SidecarSupervisor.swift:400-402 decide 先于退出码分级）。
   const harness = spawnWithLockRecord(process.pid, '17926')
   await harness.ready
   harness.closeStdin()
@@ -840,7 +834,7 @@ test('S2·F11 正常退出码面：stdin EOF 与 SIGTERM 同为 EXIT_GRACEFUL=0�
 })
 
 // ---------------------------------------------------------------------------
-// P-01 入站帧长度上限（本次批次）
+// 入站帧长度上限
 // ---------------------------------------------------------------------------
 test('P-01 入站帧 >4MiB 被 loud 拒绝且不解析；会话继续服务（镜像 Swift 接收侧）', async () => {
   if (!nodeAvailable) return
@@ -869,9 +863,9 @@ test('P-01 入站帧 >4MiB 被 loud 拒绝且不解析；会话继续服务（�
 })
 
 test('P-01 跨语言锁步：TS 入站帧上限 = Swift BridgeLimits.maxMessageBytes（4 MiB，按 UTF-8 字节）', () => {
-  // 2026-12 Swift 单源化：4 MiB 预算单一定义在 BridgeLimits.swift，FrameCodec
-  // 的 maxFrameBytes 与 TrustGuard 的 maxMessageBytes 都是同一值的别名（注释互指
-  // 改为编译期同值）；跨语言锁步因此读单一源文件，并钉住帧上限仍是该别名。
+  // 4 MiB 预算单一定义在 BridgeLimits.swift，FrameCodec 的 maxFrameBytes 与
+  // TrustGuard 的 maxMessageBytes 都是同一值的别名（编译期同值）；跨语言锁步
+  // 因此读单一源文件，并钉住帧上限仍是该别名。
   const swiftPath = path.join(dir, '..', '..', 'macos', 'Sources', 'DSHChamber', 'BridgeLimits.swift')
   const swift = readFileSync(swiftPath, 'utf8')
   const match = /public static let maxMessageBytes = ([0-9_]+) \* ([0-9_]+) \* ([0-9_]+)/.exec(swift)
@@ -890,9 +884,8 @@ test('P-01 跨语言锁步：TS 入站帧上限 = Swift BridgeLimits.maxMessageB
 })
 
 test('P-03 桌面 TS 入口必须能被 Node 类型擦除真实解析（node --check 对 ESM .ts 是空操作）', async () => {
-  // 2026-12 第七轮验证 BUG：`node --check foo.ts` 对 ESM .ts **静默 no-op**（unclosed 括号
-  // 也返回 0），曾让 sidecar-entry.ts 带着多余 `}` 交付（sidecar 永远起不来而全套 Swift
-  // 用例照绿）。这里用 stripTypeScriptTypes 做真解析，并对「多一个 }」做反证自检。
+  // `node --check foo.ts` 对 ESM .ts **静默 no-op**（unclosed 括号也返回 0），
+  // 因此这里用 stripTypeScriptTypes 做真解析，并对「多一个 }」做反证自检。
   const { stripTypeScriptTypes } = await import('node:module')
   for (const file of ['sidecar-entry.ts', 'sidecar-console-redirect.ts', 'node-edges.ts']) {
     const source = readFileSync(path.join(dir, file), 'utf8')
@@ -918,7 +911,7 @@ test('P-02 跨语言锁步：出站帧上限与入站同源常量（writeProtoco
     '入站别名必须与协议常量同源（不得各自写字面量）',
   )
   const entry = readFileSync(sidecarPath, 'utf8')
-  // 收紧到 writeProtocolLine 函数体（第三轮审查：整文件正则会命中文件任意位置）。
+  // 只扫 writeProtocolLine 函数体（整文件正则会命中文件任意位置）。
   const start = entry.indexOf('function writeProtocolLine(')
   assert.ok(start !== -1, 'sidecar-entry 必须保留 writeProtocolLine')
   const end = entry.indexOf('\n}\n', start)
@@ -932,7 +925,7 @@ test('P-02 跨语言锁步：出站帧上限与入站同源常量（writeProtoco
   )
   assert.match(body, /Buffer\.byteLength\(line, 'utf8'\)/, '中间带必须按精确 UTF-8 字节判定')
   assert.match(body, /sidecar-frame-too-large/, '有 id 的超限帧必须回合法错误帧（调用方 promise reject）')
-  // 第五轮验证后补齐：有界写（非阻塞 + 双上限）与 edge 可判定失败，此前只有行为探针、无套内锚点。
+  // 有界写（非阻塞 + 双上限）与 edge 可判定失败的套内锚点。
   assert.match(
     entry,
     /const MAX_PENDING_STDOUT_BYTES = 8 \* 1024 \* 1024/,
@@ -946,8 +939,8 @@ test('P-02 跨语言锁步：出站帧上限与入站同源常量（writeProtoco
   assert.match(body, /process\.stdout\.writableLength/, '有界判定必须读队内未写出字节数')
   assert.match(body, /sidecar-frame-backpressure/, '缓冲超限必须回可判定失败帧（有 id）')
   assert.match(body, /sidecar-frame-not-serializable/, '不可序列化帧必须回可判定失败帧（有 id）')
-  // 反空洞（第八轮排查）：只匹配 return false 字面量会被别处两条 return false 满足，
-  // 拒发分支改成 return true 也能过。这里要求「拒发区域之后必须紧跟 return false」+
+  // 反空洞：只匹配 return false 字面量会被别处两条 return false 满足（拒发分支
+  // 返回 true 也能过）。这里要求「拒发区域之后必须紧跟 return false」+
   // 「返回面结构正确（≥2 个 false、≥1 个 true）」。
   const rejectAt = body.indexOf('sidecar-frame-backpressure')
   assert.ok(rejectAt >= 0, '背压拒发分支必须存在')
@@ -956,7 +949,7 @@ test('P-02 跨语言锁步：出站帧上限与入站同源常量（writeProtoco
     /return false/,
     '背压拒发分支必须真实返回 false（谎报成功不得通过）',
   )
-  // TS 7：无捕获组的全局 match() 会把元素类型推成 never（.includes('return true')
+  // 无捕获组的全局 match() 会把元素类型推成 never（.includes('return true')
   // 因此报 TS2345）。显式标注回 string[]，语义不变。
   const returns: string[] = body.match(/\breturn (?:true|false)\b/g) ?? []
   assert.ok(

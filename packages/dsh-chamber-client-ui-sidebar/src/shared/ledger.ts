@@ -4,8 +4,7 @@
  * grace maps. A ledger is `Readonly<Record<sourceId, readonly T[]>>`.
  *
  * IDENTITY DISCIPLINE (why this module exists and what it must never break):
- * every helper is reference-preserving exactly where the per-ledger
- * implementations it replaces were — an unchanged row set keeps the SAME
+ * every helper is reference-preserving — an unchanged row set keeps the SAME
  * ledger object AND the same row array (the App's publish signature and
  * React's identity checks depend on it), a source whose rows become empty
  * loses its key (a ledger key must never linger as an empty array), and no

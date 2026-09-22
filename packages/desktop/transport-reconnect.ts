@@ -1,9 +1,9 @@
 /**
  * OS-resume immediate re-probe (design 14 D4), shared by the Electron main
- * process and the Swift sidecar assembly (2026-12 stage-2 item 6: the two
- * near-copy closures now bind only their own facts to one implementation).
+ * process and the Swift sidecar assembly (each caller binds only its own
+ * facts to one implementation).
  *
- * Judgement (05 §7.6 discipline, unchanged): touch ONLY transient failures —
+ * Judgement (05 §7.6 discipline): touch ONLY transient failures —
  * phase error/degraded AND not terminal (requiresUserAction === true means a
  * deterministic auth/verifyUp failure that must never auto-retry); NEVER idle
  * (manual disconnect semantics); connect() is idempotent for connecting/ready.

@@ -1,13 +1,11 @@
 #!/usr/bin/env node
 /**
  * Post-build guard: the built desktop PAGE bundle must actually carry the SVG
- * resource scoper code (W8 / R15③).
+ * resource scoper code.
  *
  * Why a separate, post-build step: `pnpm run build:renderer` runs AFTER the
  * package test suites in ci.yml, so no test-suite guard can see
- * `packages/desktop/dist/web/assets/*.js`. The install-order source-text lock
- * (packages/renderer/test/svg-resource/svg-resource-scope-wiring.test.ts) was
- * retired in the 2026-12 test trim, so this guard is now the only automated
+ * `packages/desktop/dist/web/assets/*.js`. This guard is the only automated
  * check that the BUILD did not drop or tree-shake the scoper out of the page.
  *
  * Usage: node packages/dsh-chamber-client-ui-mobile/scripts/assert-scoper-artifact.mjs [assetsDir]

@@ -1,12 +1,12 @@
 /**
- * 有界集合内核（2026-12 阶段 2 单源化）：把「容量 + 同键替换裁决 + FIFO 淘汰回调」
+ * 有界集合内核：把「容量 + 同键替换裁决 + FIFO 淘汰回调」
  * 从各账本里抽出，容量策略与淘汰诊断只有一处答案。
  *
  * 适用族（已采纳）：容量封顶、超限丢最旧键/条的键值账本与环账本——
  *   - unread-store 的 ack 待发表（Map + 同键水位替换 + FIFO 淘汰）；
  *   - notification-ledger 的决定环（数组尾部入队 + 头部淘汰）。
  *
- * 刻意不合并的族（语义不是容器问题，见阶段 2 工作记录）：session-liveness 的三级
+ * 刻意不合并的族（语义不是容器问题）：session-liveness 的三级
  * 阶梯滚动窗、baseline-harvest 的 attempts/backoff 状态机、pending-open 的 deadline
  * 队列（状态机型）；prewarm-ledger 的每来源计数表（无淘汰、无上界问题）。
  */

@@ -14,12 +14,12 @@ export interface RuntimeServerProjection {
   transport: 'local' | 'ssh' | 'http'
   /** Raw desktop registry id. Required for remote rows in the v2 producer. */
   rawId?: string
-  /** Live dsh 实例版本 (0.1.2 起由运行时管理面提供;host.describe 已删); absent means honestly unknown. */
+  /** Live dsh 实例版本（由运行时管理面提供）; absent means honestly unknown. */
   dshVersion?: string
 }
 
 /**
- * Runtime section mounting matrix (design 18 §3.6; 2026-09 修订：dsh 直连不挂载):
+ * Runtime section mounting matrix (design 18 §3.6):
  * a section exists exactly when a chamber dsh-runtime management surface is
  * reachable:
  * - local/local: complete local management (desktop main-process projection);
@@ -55,7 +55,7 @@ export function runtimeSectionIntentionallyAbsent(server: RuntimeServerProjectio
 
 /**
  * Identity of every fact captured by the per-server runtime plugin props.
- * `dshVersion` is deliberately NOT part of it (2026-12 audit): the registered
+ * `dshVersion` is deliberately NOT part of it: the registered
  * section receives {t, instanceSource, chamberInstanceId} only, so a version
  * change would dispose/re-register the section, clear its state and restart its
  * poll for a fact it never reads.

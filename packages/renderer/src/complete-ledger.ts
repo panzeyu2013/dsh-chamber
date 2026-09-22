@@ -1,5 +1,5 @@
 /**
- * complete 通知记忆的单一账本内核（2026-12 阶段 2 单源化）。
+ * complete 通知记忆的单一账本内核。
  *
  * 两个入口各有**不同规则**，因此共用同一容器与键空间，而不是共用一套判定：
  *   - facts 入口（watcher 水位轨）：每 (source, session, kind) 的已通知水位，单调只升，
@@ -7,8 +7,8 @@
  *     nextNotifiedWatermark），调用点裁决，本模块只存；
  *   - 壳边沿入口（武装轨）：每 (source, session) 的「已发 complete 直到重新 running」
  *     武装位——规则本体在 notification-edges.ts 的 dedupeCompleteEdges。
- * 归口收益：两轨的键空间、读取、写入与整体清除（forget / prune）只有一处；App 只
- * 持有一个引用，per-source 剪枝不再漏表。本模块不重写任何一轨的裁定规则。
+ * 两轨的键空间、读取、写入与整体清除（forget / prune）只有一处；App 只
+ * 持有一个引用，per-source 剪枝不会漏表。本模块不重写任何一轨的裁定规则。
  */
 import type { UnreadKind } from './unread-store.ts'
 
@@ -29,7 +29,7 @@ export interface CompleteLedger {
   setArmed(sourceId: string, sessions: ReadonlySet<string>): void
   /** 来源退役：两轨同拍删除（同 id 重加 = 新来源代，不得继承上一代判定）。 */
   forget(sourceId: string): void
-  /** 通道撤回只清**易失**的武装轨（R2：durable 水位轨不随撤回删除）。 */
+  /** 通道撤回只清**易失**的武装轨（durable 水位轨不随撤回删除）。 */
   forgetArmed(sourceId: string): void
   /** 按现存来源集合剪枝；返回是否有变化（调用方据此决定是否重建引用）。 */
   prune(liveIds: ReadonlySet<string>): boolean

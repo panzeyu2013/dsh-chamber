@@ -1,9 +1,9 @@
 /**
- * renderer 通用错误文案助手（`src/status.ts`）的边界契约（2026-12 审查补强）。
+ * renderer 通用错误文案助手（`src/status.ts`）的边界契约。
  *
  * `errorMessage` 在 **catch 块里**接收桥/网络拒绝值（`api.host.health()`、聚合快照拉取），
  * 因此错误格式化本身是一道异常边界：敌意 getter / toString 抛出的值不得让 catch 处理器
- * 再抛一次。非敌意输入的行为**逐字不变**（含 `undefined` → 'undefined' 这一既有语义）。
+ * 再抛一次。非敌意输入的行为**逐字保持**（含 `undefined` → 'undefined' 这一语义）。
  *
  * Run directly: node packages/renderer/test/frame-chrome/status-error-text.test.ts
  */

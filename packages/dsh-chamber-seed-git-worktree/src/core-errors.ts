@@ -58,8 +58,8 @@ export const RETRYABLE_CODES = new Set([
 ])
 
 /** Actionable message for the typed submodule refusal (pre-mutation gate and
- *  the reclassification upgrade). NOTE (2026-09 review, empirically verified
- *  on git 2.50.1): plain `git submodule deinit` does NOT clear git's guard —
+ *  the reclassification upgrade). NOTE (empirically verified): plain
+ *  `git submodule deinit` does NOT clear git's guard —
  *  git keeps the submodule gitdirs under the worktree admin git dir
  *  (`<wt gitdir>/modules`) and keeps refusing until they are gone. The
  *  reliable in-UI path is the discard authorization (--force), which

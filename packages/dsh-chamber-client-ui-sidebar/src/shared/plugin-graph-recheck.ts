@@ -12,10 +12,10 @@
  * `graph-unreachable`, by contrast, can heal WITHOUT a boot: a gateway's
  * managed dsh restarts with the desktop-synced chamber host packages moments
  * after the shell boot that recorded the 404, the ssh target's host package
- * seed lands, or the transport simply was not ready. Before this module the
- * stale banner survived until the next instance boot (the only other writer
- * of plugin diagnostics) — i.e. an app restart — while the inventory view
- * next to it already showed the live healed Loader state.
+ * seed lands, or the transport simply was not ready. Without a recheck the
+ * stale banner would survive until the next instance boot (the only other
+ * writer of plugin diagnostics) — i.e. an app restart — while the inventory
+ * view next to it already shows the live healed Loader state.
  *
  * Write discipline (loop-freedom + recency): the recheck reports ONLY when
  * the verdict STATE differs from the recorded diagnostic — a message-only
@@ -31,10 +31,10 @@
  * Wire mirror: the fetch/classification below mirrors the renderer's
  * boot-time fetch (`packages/renderer/src/host-graph.ts` fetchHostGraph —
  * same envelope, same status classification, same message literals), so a
- * recheck verdict is word-for-word what the next boot would report. Since
- * P4-2 the shared transport byte (URL join + client-request envelope +
- * POST + body collection, 30s bounded-unary budget) rides the shared kernel
- * postUnary (wire-common.ts) — the envelope is the SAME wire shape the
+ * recheck verdict is word-for-word what the next boot would report. The
+ * shared transport byte (URL join + client-request envelope + POST + body
+ * collection, 30s bounded-unary budget) rides the shared kernel postUnary
+ * (wire-common.ts) — the envelope is the SAME wire shape the
  * renderer imports it through (the renderer cannot import the shared Node
  * envelope module of packages/control-plane, which stays the authoritative
  * contract source); every status/envelope/message classification below stays
@@ -135,16 +135,15 @@ export async function recheckPluginGraphDiagnostic(
         : 'reported-graph-unreachable'
   }
 
-  // Shared transport byte (P4-2): URL join + client-request envelope + POST +
+  // Shared transport byte: URL join + client-request envelope + POST +
   // body collection with the 30s bounded-unary budget, postUnary in
   // wire-common.ts. The fetch/origin seams below are this module's test deps;
   // transport rejections propagate raw and are classified right here — the
   // boot fetch's status/message mirror contract.
-  // N6/P4-1 disclosure: the pre-kernel implementation called crypto.randomUUID()
-  // bare (a no-randomUUID environment threw → graph-unreachable report); the
-  // kernel default mintRpcId() instead falls back to an 'rpc-' id and the
-  // request proceeds. Unreachable in product (loopback secure context) — the
-  // main UUIDv4 path is identical.
+  // The kernel default mintRpcId() falls back to an 'rpc-' id in a
+  // no-randomUUID environment, where a bare crypto.randomUUID() would throw
+  // (→ graph-unreachable report), and the request proceeds. Unreachable in
+  // product (loopback secure context) — the main UUIDv4 path is identical.
   let outcome: UnaryPostOutcome
   try {
     outcome = await postUnary(`/api/i/${sourceId}`, 'clientGraph/graph', {}, {

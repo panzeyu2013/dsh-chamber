@@ -61,7 +61,7 @@ test('registry 值锁：分类桶形状 + 符号锚字符串（防"同计数下�
   ])
   // 值锁：api-gateway 桶按合并后的 registry 重算（载波重试纯函数 / 页面事实 / 静默看门狗策略 /
   // 生命周期取证事实 / journal 补丁 / 仓内测试清单）；形状变化必须同批改本哈希。
-  // 2026-09-21：connection dropped += src/client/fixture.ts（浏览器夹具下线，与 registry 同批）。
+  // connection 的 dropped 含 src/client/fixture.ts（浏览器夹具不镜像）。
   assert.equal(
     createHash('sha256').update(JSON.stringify(shape)).digest('hex').slice(0, 16),
     'feb294ff74c6f9e2',
@@ -118,7 +118,7 @@ test('校验器抓退化：未知判据 / 分区缺口 / accepted 缺理由 / up
   const duplicate = clone(); duplicate.entries[1].id = duplicate.entries[0].id
   assert.ok(validateRegistry(duplicate).some((item) => item.includes('重复')))
 
-  // review 补充：这些退化曾经能"改了也不红"——每一条都必须被 schema 抓住。
+  // 这些退化每一条都必须被 schema 抓住（否则改了也不红）。
   const noSymbols = clone(); noSymbols.entries[0].symbols = []
   assert.ok(validateRegistry(noSymbols).some((item) => item.includes('symbols 为空')))
 
@@ -164,7 +164,7 @@ test('生成块：声明与渲染面一一对应、往返、缺标记/未声明�
   const missing = 'head\n' + marker(INDEX_BLOCK, 'stale') + '\n'
   assert.ok(checkBlocks(missing, fixture).some((item) => item.includes('恰好一对')))
 
-  // review F1：删声明 / 未声明标记不得让保鲜静默关闭。
+  // 删声明 / 未声明标记不得让保鲜静默关闭。
   const emptied = { ...fixture, generatedBlocks: [] }
   assert.ok(checkBlocks(doc, emptied).some((item) => item.includes('渲染面存在未声明的块')))
   const bogus = doc + marker('touchpoints.bogus', 'x') + '\n'

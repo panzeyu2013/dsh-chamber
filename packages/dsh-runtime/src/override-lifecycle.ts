@@ -1,13 +1,13 @@
 /**
  * dsh 运行时 override 生命周期（design 18 §3.5）——纯逻辑、无 electron、无文件 IO
- * （M3：失效规则 / 回落保护 / swap-attempted / pending 重放）。
+ * （失效规则 / 回落保护 / swap-attempted / pending 重放）。
  *
  * 权威规则（design 18 §3.5）：
  *   - 失效规则（覆盖 override 与 pending）：启动时 shellVersion ≠ 当前壳版本 →
  *     override 与 pending **一并失效**。失效 = **标记失效**（保留记录、版本树与
- *     快照）而非删除——F4「自动恢复上一 override 树」依赖记录存活；「恢复内建」
+ *     快照）而非删除——「自动恢复上一 override 树」依赖记录存活；「恢复内建」
  *     才是显式删除（上层做）。
- *   - 回落保护（F4）：回落内建树后跑数据可读性探测；探测失败 → 自动恢复上一
+ *   - 回落保护：回落内建树后跑数据可读性探测；探测失败 → 自动恢复上一
  *     override 树（受保护类，仍在）+ 响亮提示。本模块只提供失效判定/标记原语，
  *     恢复编排在上层。
  *   - swap-attempted：换树（指针写）失败后置位 → 不重试（避免每启重复警告）；
@@ -37,7 +37,7 @@ export function shouldInvalidate(record: OverrideRecord, currentShellVersion: st
  * 标记失效：保留记录（chosenVersion / resolvedVersion / pending 原样、
  * shellVersion 原样），仅复位 swapAttempted=false。返回新对象，绝不修改入参。
  *
- * 这不是删除——「恢复内建」才是显式删除（上层做）。记录存活是 F4「自动恢复
+ * 这不是删除——「恢复内建」才是显式删除（上层做）。记录存活是「自动恢复
  * 上一 override 树」的前提（原选择/实际解析/未决切换全部保留，供恢复与 UI
  * 回显「原选择 vY 保留，可重新选用」）。swapAttempted 复位是因为失效开启
  * 了一个新的壳生命周期：旧的「换树已尝试」标记不得抑制新生命周期里的重试。

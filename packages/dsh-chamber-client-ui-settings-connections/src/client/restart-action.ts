@@ -1,10 +1,10 @@
 /**
- * The ONE gateway managed-dsh restart action (design 21 §5.1, 2026-12 audit
- * P1-2): POST /chamber/runtime/restart → 202 → PAGE-owned readiness poll →
- * reload. The connection card and the plugin dialog held two near-verbatim
- * copies that had already drifted on the refusal copy (the card localized the
- * 409 through runtimeRefusalText; the dialog rendered the server's English),
- * so both now call this function and map its outcome onto their own note/UI.
+ * The ONE gateway managed-dsh restart action (design 21 §5.1):
+ * POST /chamber/runtime/restart → 202 → PAGE-owned readiness poll →
+ * reload. The connection card and the plugin dialog BOTH call this function
+ * and map its outcome onto their own note/UI, so their refusal copy stays one
+ * source (the card localizes the 409 through runtimeRefusalText; the dialog
+ * renders the server's English).
  *
  * Not in managed-restart.ts: that module is deliberately pure and import-free
  * (its classifiers are plain-node tested). This action owns the transport and
@@ -63,7 +63,7 @@ export async function runManagedRestart(
     try { body = await response.json() } catch { body = null }
     return { kind: 'refused', text: runtimeRefusalText(body, response.status, MANAGED_RESTART_REFUSAL_KEYS, t) }
   }
-  // Readiness + reload are PAGE-owned (review F6): closing the card/dialog
+  // Readiness + reload are PAGE-owned: closing the card/dialog
   // mid-restart cannot cancel the completion.
   let pollFailure: unknown = null
   const outcome = await armWindowReloadWhenServed(sourceId, async signal => {

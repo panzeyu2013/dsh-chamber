@@ -1,8 +1,8 @@
 /**
- * Design 18 addendum · Apply Now — P1 shared-core run-phase tests (design 8.1
- * checklist, shared-core level). The desktop/gateway hosts already own the
- * apply-now orchestration; the shared core only gained an optional AbortSignal
- * on the probe seams (decision S1). These tests pin the runtime-entry
+ * Design 18 addendum · Apply Now — shared-core run-phase tests (design 8.1
+ * checklist, shared-core level). The desktop/gateway hosts own the
+ * apply-now orchestration; the shared core carries the optional AbortSignal
+ * on the probe seams. These tests pin the runtime-entry
  * semantics the hosts rely on, all driven through the canonical
  * FakeHostAdapter fixture (test/support/fake-adapter.ts + test/support/run-phase-fixture.ts):
  *
@@ -14,9 +14,9 @@
  *      second probe) and the 24h + ≥1 boot known-good gate;
  *   4. the store single-flight matrix lives in dsh-runtime-store.test.ts;
  *   5. restart-exhausted two-layer semantics — the journal phase is the only
- *      F7 latch (no double rollback) and apply-now snapshot failure is a
+ *      latch (no double rollback) and apply-now snapshot failure is a
  *      terminal snapshot-failed state with a retry-apply exit.
- *   6. the S1 host-abort seam — signal forwarding, pre-aborted cancellation
+ *   6. the host-abort seam — signal forwarding, pre-aborted cancellation
  *      with zero side effects, and abort not poisoning rollback verification.
  *   7. startup-entry abort — runStartupPhase/runDelayedRollback forward the
  *      optional transaction-level signal; a pre-aborted entry cancels with
@@ -312,7 +312,7 @@ test('known-good promotion still requires 24h + at least one boot on the adapter
 })
 
 // ---------------------------------------------------------------------------
-// 5. Restart-exhausted two-layer semantics (F7) + snapshot-failed terminal
+// 5. Restart-exhausted two-layer semantics + snapshot-failed terminal
 // ---------------------------------------------------------------------------
 
 test('beginDelayedRollback accepts only an applied-monitoring journal — the F7 latch', () => {
@@ -335,7 +335,7 @@ test('F7 rollback runs exactly once; a second runDelayedRollback cannot re-rollb
   assert.equal(first.status, 'rolled-back')
   assert.equal(fixture.restoreCalls, 1)
   assert.equal(fixture.currentState().journal.kind, 'missing')
-  // The journal is the only latch: once F7 has run, the durable journal is no
+  // The journal is the only latch: once the delayed rollback has run, the durable journal is no
   // longer applied-monitoring, so a duplicate event cannot roll back again.
   await assert.rejects(
     runDelayedRollback(fixture.makeStartupDeps(), monitoringJournal()),
@@ -391,7 +391,7 @@ test('apply-now snapshot failure is a terminal snapshot-failed state with a retr
 })
 
 // ---------------------------------------------------------------------------
-// 6. S1 host-abort seam — signal forwarding + transaction-level cancellation
+// 6. Host-abort seam — signal forwarding + transaction-level cancellation
 // ---------------------------------------------------------------------------
 
 test('the ApplyOptions.signal is forwarded verbatim to every candidate probe (S1 seam)', async () => {
@@ -505,7 +505,7 @@ test('runDelayedRollback forwards the signal: a pre-aborted signal cancels after
     monitoringJournal(),
     controller.signal,
   )
-  // The F7 latch is durable before the abort cancels the rollback: the journal
+  // The rollback latch is durable before the abort cancels the rollback: the journal
   // advanced to rollback-needed, but no stop/switch/restore/probe ran.
   assert.equal(outcome.status, 'failed')
   assert.ok(outcome.error !== null && outcome.error.includes('中止'))
@@ -524,7 +524,7 @@ test('runDelayedRollback forwards the signal: a pre-aborted signal cancels after
 })
 
 test('probe-in-flight abort cancels at the rollback entry; a fresh re-entry resumes idempotently', async () => {
-  // Regression (scan P2-2): the continueRollback entry abort check is
+  // The continueRollback entry abort check is
   // load-bearing. Without it the first run would skip the abort, complete the
   // rollback and return 'rolled-back' instead of the defined abort failure —
   // this test turns red when that check is deleted.

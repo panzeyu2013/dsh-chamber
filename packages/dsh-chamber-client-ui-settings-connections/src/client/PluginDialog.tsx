@@ -31,8 +31,7 @@
  *            restartService / seedHostGraph / sshPluginUndo — the sync diff
  *            tab behavior (rows, filters, apply orchestration, chamber
  *            seed/restart actions, installed list with per-row remove and
- *            the「撤销最近变更」toolbar entry) keeps its behavior verbatim
- *            (2026-12 UI 修订仅重排列表 markup/控件，状态机与语义未动);
+ *            the「撤销最近变更」toolbar entry) keeps its behavior verbatim;
  *   gateway→ pluginInventory read (Loader badges) + gatewayChamberSeedCache
  *            / gatewayInstalled / gatewayTasks (read-only undo derive — task
  *            rows are NEVER rendered, design D4-A) / gatewayPluginApply /
@@ -49,11 +48,11 @@
  *            surface, no add surface.
  *
  * The「变更记录」zone is deleted (the backend journal/backups are kept, the
- * UI no longer renders task rows — D4-A). The gateway undo entry is
+ * UI does not render task rows — D4-A). The gateway undo entry is
  * recovery-shaped: only while runtimeDown (the card passes stopped/error/
  * restart-exhausted) AND undoForLatest(taskRows) has an action. The ssh
  * undo button stays in the installed tab (behavior unchanged — plan 24
- * scope: this round makes GATEWAY recovery-shaped only).
+ * scope: GATEWAY is recovery-shaped only).
  */
 
 import { Fragment, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
@@ -150,7 +149,7 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
   t: (key: SettingsConnectionsKey) => string
   target: PluginDialogTarget
   diagnostic?: PluginDiagnostic | undefined
-  /** The instance's settled-boot gap (2026-12, design 05 §4), from the bridge
+  /** The instance's settled-boot gap (design 05 §4), from the bridge
    *  projection. A DIFFERENT fact from `diagnostic` — see PluginDiagnosticLine. */
   bootGap?: ServerBootGap | undefined
   onRecheckDiagnostic?: () => void
@@ -171,7 +170,7 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
    *  /api/i/gateway-<id> prefix themselves). */
   const gatewayId = target.kind === 'gateway' ? target.sourceId.slice('gateway-'.length) : null
 
-  // ---- ssh 对账视图（UX 重构 P1）：legacy 整盘 diff 默认折叠，展开时应用。----
+  // ---- ssh 对账视图：legacy 整盘 diff 默认折叠，展开时应用。----
   const [diffOpen, setDiffOpen] = useState(false)
 
   // ---- ssh sync three-view state ----
@@ -231,7 +230,7 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
   const [localSnapshot, setLocalSnapshot] = useState<PluginInventorySnapshot | null>(null)
   const [reloadNonce, setReloadNonce] = useState(0)
   /** 最近一次 Loader 快照镜像：reload 期间保留旧帧渲染、仅首载显示 loading，
-   *  避免每次操作后的「loading→footer 闪没 + 瞬时谎报未注入」（UX 评审 S1）。 */
+   *  避免每次操作后的「loading→footer 闪没 + 瞬时谎报未注入」。 */
   const snapshotRef = useRef<PluginInventorySnapshot | null>(null)
   /** reload 进行中：刷新按钮 in-flight 禁用（防重复并发 + 隐式 busy 提示）。 */
   const [reloading, setReloading] = useState(false)
@@ -275,8 +274,7 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
   const [draftError, setDraftError] = useState<string | null>(null)
   const [installing, setInstalling] = useState(false)
   /** 本地导入（文件夹/.tgz）专用 busy（与 installing 并存）：导入中时安装按钮
-   *  不显示「安装中…」，避免语义错位（2026-12 UX 修订；2026-09 archive-pick
-   *  后同一 busy 覆盖 .tgz 导入）。 */
+   *  不显示「安装中…」，避免语义错位（同一 busy 也覆盖 .tgz 导入）。 */
   const [folderBusy, setFolderBusy] = useState(false)
   const [addResult, setAddResult] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
@@ -364,9 +362,8 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
       // Commit the desktop projection the moment it is read. The chamber table
       // reads it as the 本地 column AND as the fallback row source when the
       // remote read fails, so a later failure must not discard it: on an ssh
-      // exec failure or an unparseable remote profile the table used to render
-      // with ZERO rows (the zone is phase-independent) even though the desktop
-      // side was already known (2026-12 review).
+      // exec failure or an unparseable remote profile the table must still
+      // render the known desktop rows (the zone is phase-independent).
       setLocalManifest(localRes.manifest)
       const remoteRes = await pluginList(sshSpec.id)
       if ('error' in remoteRes) {
@@ -445,7 +442,7 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
    * (design 18 §3.6 item 8). Every restart-to-apply path below ends here: the
    * host restarts and refreshes its plugin mounts, but the window only picks the
    * new client half up on a fresh boot. Page-owned on purpose — the completion
-   * survives this dialog closing (review F6), and the page-level key dedupes
+   * survives this dialog closing, and the page-level key dedupes
    * multiple paths arming for the same source.
    * @param kind - the dialog's backend shape.
    * @param rawId - the raw registry instance id.
@@ -615,7 +612,7 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
     if (sourceId === null) return
     let cancelled = false
     // 首载（无旧帧）才显示 loading；reload 保留旧快照渲染，避免操作后
-    // footer 闪没 + chamber 远端 badge 瞬时谎报「未注入」（UX 评审 S1）。
+    // footer 闪没 + chamber 远端 badge 瞬时谎报「未注入」。
     const hadData = snapshotRef.current !== null
     if (!hadData) {
       setViewPhase('loading')
@@ -753,9 +750,8 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
     setRestartNote(null)
     try {
       // Same single action layer as the connection card (restart-action.ts):
-      // POST + 202 gate + page-owned readiness poll. The dialog used to render
-      // the server's English refusal verbatim while the card localized the same
-      // 409 through runtimeRefusalText — both now share the one localized copy.
+      // POST + 202 gate + page-owned readiness poll, with the 409 localized
+      // through runtimeRefusalText so both surfaces share one copy.
       const outcome = await runManagedRestart(sourceId, t)
       if (outcome.kind === 'reloaded') {
         setRestartNote({ tone: 'ok', text: t('restartManagedDshOk') })
@@ -1028,8 +1024,8 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
     setResultError(null)
     /** Anything actually executed (materialize picks landed or the registry
      *  batch ran — per-row failures included): the remote profile may have
-     *  changed, so the zone must reload once doApply settles (staleness fix;
-     *  refusals/cancellations set nothing and leave the manifests as-is). */
+     *  changed, so the zone must reload once doApply settles
+     *  (refusals/cancellations set nothing and leave the manifests as-is). */
     let executed = false
     try {
       // Materialize rows: pack-and-transfer via the desktop IPC — per-row
@@ -1073,9 +1069,9 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
       setRestart(true)
       setPhase('done')
       // doApply 自动重载：executed 后立即走与手动 刷新 相同的 loadSync，让已
-      // 安装/移除行在下方已安装列表即时可见（原只有收起对账时才重载——diff
-      // 停留 done 期间列表陈旧）。phase 随即离开 'done'，收起时的 done 重载
-      // 不再触发——不会双重运行；loadSync(true) 保留用户对剩余行的勾选。
+      // 安装/移除行在下方已安装列表即时可见（否则 diff 停留 done 期间列表陈旧）。
+      // phase 随即离开 'done'，收起时的 done 重载因此不会二次运行；
+      // loadSync(true) 保留用户对剩余行的勾选。
       if (executed) void loadSync(true)
     }
   }, [isSsh, sshSpec, diff, checked, restart, seedBusy, restartBusy, remoteRemoveBusy, undoBusy, loadSync, t])
@@ -1102,9 +1098,8 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
     if (applyingRef.current) return
     if (confirmRemove || confirmApply || localRemoveTarget !== null || remoteRemoveTarget !== null) return
     if (removeTarget !== null || removeBusy) return
-    // 2026-12 review P2-2 落实：非模态 busy 一并门控——安装/导入/撤销/
-    // seed/重启在跑时关框会让主进程操作继续而结果无处呈现（restarting
-    // 受管重启有 unmount abort 属例外，不在此列）。
+    // 非模态 busy 一并门控：安装/导入/撤销/seed/重启在跑时关框会让主进程操作
+    // 继续而结果无处呈现（restarting 受管重启有 unmount abort 属例外，不在此列）。
     if (installing || folderBusy || undoBusy || seedBusy || restartBusy || syncing) return
     onClose()
   }, [onClose, confirmRemove, confirmApply, localRemoveTarget, remoteRemoveTarget, removeTarget, removeBusy,
@@ -1138,8 +1133,8 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
   /** The desktop's own chamber projection. The dedicated
    *  `localChamberPackages` read is gated on a gateway/http `sourceId`, so it
    *  never runs for ssh; that arm reads the same projection from the local
-   *  manifest `loadSync` already fetched (2026-12 review: the ssh 本地 column
-   *  used to sit on 未知 forever, and a failed probe left the table empty). */
+   *  manifest `loadSync` already fetched (the ssh 本地 column must not sit on
+   *  未知, and a failed probe must not leave the table empty). */
   const desktopChamberPackages = isSsh && localManifest !== null && localManifest.chamber.ok === true
     ? localManifest.chamber.packages
     : localChamberPackages
@@ -1373,8 +1368,8 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
               onKeyDown={event => { if (event.key === 'Enter' && !installing && !folderBusy) void installSpec(draft) }}
             />
             {/* installing busy 用短文案 pluginsAddInstalling（安装中…），避免
-                busyTasks 全宽文案使按钮宽度跳动 ~80-100px（2026-12 UI 修订；
-                busyTasks 仍供 footer/应用态使用）。 */}
+                busyTasks 全宽文案使按钮宽度跳动 ~80-100px
+                （busyTasks 仍供 footer/应用态使用）。 */}
             <Button
               variant="primary"
               size="sm"
@@ -1462,10 +1457,10 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
         )
       }
       if (localList === null) return null
-      // design 21 §6.11.5（2026-09 行集修订）：已安装 = 本 profile 的依赖表，后端投影
-      // 只做 role/protected 标注——安装自带组合（B₀）与 chamber 播种物（S）不再造行
+      // design 21 §6.11.5：已安装 = 本 profile 的依赖表，后端投影
+      // 只做 role/protected 标注——安装自带组合（B₀）与 chamber 播种物（S）不造行
       // （chamber 组件在「chamber 受管组件」表里，官方组合是运行时基线）。受保护名若
-      // 确实出现在依赖表里仍只读可见；旧 producer 无 rows 时回退到 dependencies 的旧
+      // 确实出现在依赖表里仍只读可见；旧 producer 无 rows 时回退到 dependencies 的
       // 过滤（§6.11.7）。
       const installedRows = projectInstalledRows(localList.dependencies, pluginRowsOf(localList)).rows
       return (
@@ -1537,9 +1532,9 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
   const gatewayZone = isGateway
     ? ((): ReactNode => {
       const opsBlocked = removeBusy || restarting || syncing || installing || folderBusy
-      // design 21 §6.11.5（2026-09 行集修订）：行集 = 服务端投影的**依赖行**
-      // （受保护判定的权威在服务端，渲染端只消费；B₀/S 不再造行）。旧 gateway 无
-      // rows ⇒ 回退到 dependencies 的旧过滤并置 legacy 标记（§6.11.7），只给出服务端
+      // design 21 §6.11.5：行集 = 服务端投影的**依赖行**
+      // （受保护判定的权威在服务端，渲染端只消费；B₀/S 不造行）。旧 gateway 无
+      // rows ⇒ 回退到 dependencies 的过滤并置 legacy 标记（§6.11.7），只给出服务端
       // 仍会接受的动作。
       const projected: { rows: InstalledRowView[]; legacy: boolean } = installed !== null && installed.ok === true
         ? projectInstalledRows(installed.dependencies, pluginRowsOf(installed))
@@ -1709,7 +1704,7 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
     })()
     : null
 
-  // ---- ssh views (sync-modal semantics preserved; 2026-12 UI 修订重排行结构) ----
+  // ---- ssh views (sync-modal semantics preserved) ----
   function renderSyncView(): ReactNode {
     if (phase === 'loading') {
       return <p className={css.dim}>{t('pluginsLoading')}</p>
@@ -1911,10 +1906,10 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
   function renderRemoteList(): ReactNode {
     if (phase === 'loading' || phase === 'error') return renderSyncView()
     if (remoteManifest === null) return <p className={css.dim}>{t('pluginsLoading')}</p>
-    // design 21 §6.11.5（2026-09 行集修订）：远端行集同样来自 desktop main 的投影，
-    // 但只覆盖远端 profile 自己的依赖（B₀/S 不再造行）。ssh 的 F 无远端来源 ⇒ 集合退到
+    // design 21 §6.11.5：远端行集同样来自 desktop main 的投影，
+    // 但只覆盖远端 profile 自己的依赖（B₀/S 不造行）。ssh 的 F 无远端来源 ⇒ 集合退到
     // B₀ ∪ S，官方 scope 的**装面**由写面保守拒绝（§6.11.3），不是读面把行标 protected。
-    // 旧 producer 无 rows 时回退到 dependencies 的旧过滤。
+    // 旧 producer 无 rows 时回退到 dependencies 的过滤。
     const rows = projectInstalledRows(remoteManifest.dependencies, pluginRowsOf(remoteManifest)).rows
     const opBusy = remoteRemoveBusy || undoBusy
     const opsBlocked = opBusy || applying || seedBusy || restartBusy || installing || folderBusy
@@ -1976,7 +1971,7 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
     )
   }
 
-  /** ssh 统一主视图（UX 重构 P1 / design 21 §6.6 登记偏离）：已安装列表 + 添加
+  /** ssh 统一主视图（design 21 §6.6 登记偏离）：已安装列表 + 添加
    *  区，与 gateway/local 骨架同构；legacy 整盘 diff 折叠为「对账」次级入口
    *  （rows/filter/apply/undo 语义逐字保留，仅默认收起）。 */
   const sshZone = isSsh
@@ -2118,7 +2113,7 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
             : null}
 
         <div className={css.pluginManageSections}>
-          {/* 恢复面置顶：实例停机时打开对话框的主目标是恢复（UX 评审 S2）。 */}
+          {/* 恢复面置顶：实例停机时打开对话框的主目标是恢复。 */}
           {recoveryZone}
 
           {chamberZone}

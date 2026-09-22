@@ -10,14 +10,13 @@
  *   内容（而非过渡中的中间 DOM）；
  * - `prefers-reduced-motion` 或不支持时降级为即时切换。
  *
- * 并发语义（perf T2，2026-09 修订——旧版"在途即按调用序顺延成链"）：每次
- * 在途调用都登记一节完整快照+动画，N 连点串行 N 节，被取代意图仍整段空转
- * （延迟 ≈ N×250ms）。现收敛为**键控单槽合并**：
+ * 并发语义（**键控单槽合并**）：若在途调用按调用序顺延成链，每次在途调用都登记
+ * 一节完整快照+动画，N 连点串行 N 节，被取代意图仍整段空转（延迟 ≈ N×250ms）。
  * - 每个意图键（视图切换 / settle）最多保留一个"最新意图"；在途期间同键
  *   新意图直接替换旧意图——被取代意图不执行、不进快照、不产生过渡节
  *   （尚未起节的在途前被丢弃；已随在途节出队的旧意图在回调认领时被最新
  *   意图融合取代，见下）；
- * - 过渡结束（`finished` resolve/reject 均继续，语义同旧版）后按键 FIFO
+ * - 过渡结束（`finished` resolve/reject 均继续）后按键 FIFO
  *   补发下一键；同键突发连点实际过渡 ≤ 2 节（在途 1 节 + 补发 1 节）；
  * - **回调时认领**：补发过渡的更新回调执行瞬间才读取本键最新意图——回调
  *   前又到达的同键意图融合进本节（不额外起节），回调后到达的进入下一轮；
@@ -33,7 +32,7 @@ import { flushSync } from 'react-dom'
 type Update = () => void
 
 /**
- * 该过渡节的绘制意图（2026-12 P2 过渡作用域）：
+ * 该过渡节的绘制意图：
  * - `crossfade`：默认 UA 交叉淡入（温壳互切仍由旧快照遮盖 reveal 重排）；
  * - `cut`：命名组硬切——切向一个尚未 settle、必定显示遮罩的视图时使用，
  *   杜绝旧视图快照（含它的输入栏）与新遮罩 crossfade 混色。
@@ -44,9 +43,9 @@ type Update = () => void
 export type PaintIntent = 'crossfade' | 'cut'
 
 /**
- * 认领时求值的绘制意图（2026-12 review 修订）：'cut' 的正确判据是"目标**落地后**
+ * 认领时求值的绘制意图：'cut' 的正确判据是"目标**落地后**
  * 是否显示遮罩"这一 DOM 事实，而不是起节时对目标状态的猜测（目标可以已 settle 却
- * 仍被 P1/P3 的持有门罩着）。resolver 在 flushSync 提交之后、回程调用前求值。
+ * 仍被持有门罩着）。resolver 在 flushSync 提交之后、回程调用前求值。
  */
 export type PaintResolver = () => PaintIntent
 
@@ -87,7 +86,7 @@ function writePaintIntent(paint: PaintIntent): void {
 }
 
 /**
- * 静默吞掉一条 promise 链的拒绝（2026-12 二轮 review 防御面）：句柄缺字段、字段非
+ * 静默吞掉一条 promise 链的拒绝：句柄缺字段、字段非
  * thenable 都当"没有这条链"，绝不因此抛出而把过渡槽钉死。
  */
 function settleQuietly(candidate: unknown): void {
@@ -131,7 +130,7 @@ function provisionalPaint(paint: PaintIntent | PaintResolver): PaintIntent {
  *
  * 认领结果可能不是起节时的那一个（起节 → 浏览器回调之间还隔着 ≤1 帧，期间同键的新
  * 意图会替换掉它）：因此这里在 flushSync 之后按**实际执行**的意图重写绘制标记，
- * 否则"末意图胜出"在 paint 维度不成立（review 发现的双向错配）。
+ * 否则"末意图胜出"在 paint 维度不成立。
  */
 function claimAndApply(key: string, fallback: PendingIntent, writePaint = true): void {
   const latest = pending.get(key)
@@ -150,19 +149,19 @@ function drainNext(): void {
   const [key, intent] = entry
   pending.delete(key)
   if (directMode()) {
-    // 直通模式：无过渡节，认领最新意图并即时执行（空闲时与旧降级路径的
-    // 同步 apply 完全一致；在途过渡结束后落到这里时同样即时、且经 claim
-    // 取到最新意图——绝不产生「直通落地后被在途节的旧 fallback 覆盖」）。
+    // 直通模式：无过渡节，认领最新意图并即时执行（在途过渡结束后落到
+    // 这里时同样即时、且经 claim 取到最新意图——绝不产生「直通落地后被
+    // 在途节的旧 fallback 覆盖」）。
     claimAndApply(key, intent, false)
     return
   }
   activeKey = key
   const doc = document
-  // P2：意图标记必须在 startViewTransition **之前**写好——伪元素树在过渡节
+  // 意图标记必须在 startViewTransition **之前**写好——伪元素树在过渡节
   // 建立时就要带上动画作用域；认领到与临时值不同的意图时在回调内覆盖（见
   // claimAndApply）。静态意图在此就是最终值，resolver 则先取保守的 'cut'。
   writePaintIntent(provisionalPaint(intent.paint))
-  // 过渡槽的**唯一**收尾出口（2026-12 二轮 review 加固）：任何"句柄不规约 / 没有结算链"
+  // 过渡槽的**唯一**收尾出口：任何"句柄不规约 / 没有结算链"
   // 的路径都必须走它，否则 activeKey 会被永久钉死——之后所有 runViewTransition 静默
   // no-op（setActiveView/setShell 永不执行），比"硬切"严重得多。
   const finish = (): void => {
@@ -193,13 +192,12 @@ function drainNext(): void {
     return
   }
   const record = handle as { finished?: unknown; updateCallbackDone?: unknown; ready?: unknown }
-  // 三条链都必须挂 catch（2026-12 review 订正）：**跳过**过渡时 finished 仍然
+  // 三条链都必须挂 catch：**跳过**过渡时 finished 仍然
   // fulfill（端态照样到达、清槽照常执行）；**开始不了**（同名 view-transition-name、
   // 回调抛错）时 reject 的是 ready —— 回调内 flushSync 抛错正是本模块显式预期的
   // 路径，不挂 catch 会留下一条 unhandled rejection。
-  // NOTE（2026-09 perf review n2）：回调内 claimAndApply 若因渲染抛错（flushSync
-  // 抛），已 pop 的意图丢失且 updateCallbackDone 拒绝被吞——与旧链式实现同
-  // 性质、非回归；队列继续，不遗留钉死状态。
+  // NOTE：回调内 claimAndApply 若因渲染抛错（flushSync 抛），已 pop 的意图
+  // 丢失且 updateCallbackDone 拒绝被吞；队列继续，不遗留钉死状态。
   settleQuietly(record.updateCallbackDone)
   settleQuietly(record.ready)
   const finished = record.finished
@@ -221,7 +219,7 @@ function drainNext(): void {
  *
  * @param update - 同步提交新状态的更新函数（经 flushSync 认领最新意图后执行）。
  * @param key - 意图键（'view' / 'settle' 跨键隔离）。
- * @param paint - 绘制意图（P2）：`'cut'` 用于"落地面是遮罩的切换"，让命名组硬切、
+ * @param paint - 绘制意图：`'cut'` 用于"落地面是遮罩的切换"，让命名组硬切、
  *   旧视图快照不与新遮罩混色；缺省 `'crossfade'` 保持 UA 默认交叉淡入。也可以传
  *   {@link PaintResolver}：判据需要"目标落地后的 DOM 事实"（遮罩是否真的在目标视图里）
  *   时用它——起节前先写保守的 'cut'，认领后按求值结果覆盖。

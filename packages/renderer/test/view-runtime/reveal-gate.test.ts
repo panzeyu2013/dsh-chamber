@@ -8,9 +8,9 @@ import {
   type RevealFacts,
 } from '../../src/reveal-gate.ts'
 
-// W3 揭示门（见 src/reveal-gate.ts 头注）：选择（activeView）与绘制（paintedView）分离后，
+// 揭示门（见 src/reveal-gate.ts 头注）：选择（activeView）与绘制（paintedView）分离后，
 // 本纯函数回答"这一拍该收敛 painted 还是继续持有旧视图"。规则顺序即优先级，用例逐条钉住；
-// 时钟必须单调（墙钟回拨不得提前揭示——这是"一次性定时器不再重臂"的既有教训）。
+// 时钟必须单调（墙钟回拨不得提前揭示）。
 
 const LOCAL = 'local'
 const NOW = 500_000

@@ -30,7 +30,7 @@ export interface ApplyDeps {
   validateTarget: (version: string, isBuiltin: boolean) => { ok: true } | { ok: false; error: string }
   switchPointer: (version: string | null) => void
   /**
-   * Probe the candidate tree. `signal` (apply-now S1) lets a host abort an
+   * Probe the candidate tree. `signal` (apply-now) lets a host abort an
    * in-flight activation probe; it is optional so existing two-argument
    * implementers keep compiling unchanged. Host abort is transaction-level
    * cancellation: candidate probes keep the passthrough signal (abort takes
@@ -39,12 +39,12 @@ export interface ApplyDeps {
    */
   probe: (version: string, isBuiltin: boolean, signal?: AbortSignal) => Promise<ProbeResult[]>
   /**
-   * 2026-12 shape-awareness: resolves the exact probe-name set the verdict
+   * Resolves the exact probe-name set the verdict
    * expects. Defaults to REQUIRED_ACTIVATION_PROBES when omitted; the gateway
    * shape (no synced chamber host seed) resolves
    * PROBE_NAMES_WITHOUT_HOST_DOMAINS.
    *
-   * It is a FUNCTION on purpose (2026-12 P0 fix): a host may refresh the domain
+   * It is a FUNCTION on purpose: a host may refresh the domain
    * table inside `probe` itself — desktop's probe closure runs
    * `cp.startLocal()`, whose spawn thunk is the only writer of
    * `seededProbeDomains`. A value captured while the transaction object is
@@ -108,7 +108,7 @@ export interface ApplyOptions {
   manualRollback?: boolean
   retryDelayMs?: number
   /**
-   * apply-now (S1) host abort: transaction-level cancellation. A pre-aborted
+   * apply-now host abort: transaction-level cancellation. A pre-aborted
    * signal at a transaction entry returns the abort outcome with zero side
    * effects; rollback verification probes null an already-aborted signal.
    */
@@ -171,8 +171,8 @@ async function probeWithExpectedNames(
  * from the timing window with every probe healthy — then this is empty and the
  * message stays as it was. The point is that a REAL probe failure is never
  * reported without naming the probe: these verdict strings ride the runtime
- * projection verbatim, and "probe failed" with no name was the same
- * invisible-failure family the 2026-09 acceptance round fixed one layer up.
+ * projection verbatim, and "probe failed" with no name is an
+ * invisible failure.
  * @param probes - the probe set the verdict was computed from.
  * @returns the failing probe names, in probe order.
  */
@@ -186,7 +186,7 @@ function namedProbes(names: readonly string[]): string {
 }
 
 /**
- * Host abort (apply-now S1) = transaction-level cancellation. A pre-aborted
+ * Host abort (apply-now) = transaction-level cancellation. A pre-aborted
  * signal arriving at a transaction entry cancels the attempt: no new
  * candidate probe and no rollback verification is started, the durable
  * journal is left untouched so the next startup resumes idempotently (same
@@ -236,7 +236,7 @@ function advance(
 }
 
 /**
- * F7 seam: persist rollback intent before stop/pointer/restore. Main must call
+ * Restart-exhausted rollback seam: persist rollback intent before stop/pointer/restore. Main must call
  * this first on restart-exhausted, then pass the returned journal back through
  * applyPendingVersion; a crash at any later instruction resumes rollback.
  */
@@ -581,7 +581,7 @@ async function continueRollback(opts: ApplyOptions, initial: ActivationJournal):
 }
 
 async function runApplyTransaction(opts: ApplyOptions): Promise<ApplyOutcome> {
-  // Host abort (apply-now S1): check before prepareJournal so an aborted
+  // Host abort (apply-now): check before prepareJournal so an aborted
   // entry never even snapshots — zero side effects, the durable journal stays
   // untouched, and the next startup resumes the pending activation.
   if (opts.signal?.aborted) return abortedOutcome()

@@ -20,7 +20,7 @@
  * subscription is a PERMANENT ipcRenderer listener for the page's lifetime
  * (assumes one module instance per page).
  *
- * OPTIMISTIC SAVE (闪烁修复, 2026-12): applySettingsPatch overlays its patch
+ * OPTIMISTIC SAVE (闪烁修复): applySettingsPatch overlays its patch
  * on the snapshot IMMEDIATELY (the control reflects the click in the same
  * frame — no disabled/dimmed flash while the IPC round-trip is in flight),
  * then settles on the authoritative result: the NEWEST save's success

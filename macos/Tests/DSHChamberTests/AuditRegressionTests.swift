@@ -2,20 +2,20 @@
 //  AuditRegressionTests.swift
 //  DSHChamberTests
 //
-//  2026-12 全量审计（正确性线）抓到的真实缺陷的回归测试：
+//  真实缺陷的回归测试：
 //   1) revision 溢出：页面可 postMessage `1e300`（NSNumber.intValue = Int.max），
 //      `旧值 + 1` 在 Swift 里是陷阱（SIGTRAP），且旧值会被持久化 → 一次污染此后每次
 //      事实变化都崩；
-//   2) AppleLanguages 回收边界（F2）：系统设置「每个 app 的语言」写同一个 app 域键，
-//      旧实现会把恰好是 ["en"]/["zh-Hans"] 的**用户值**当自己的陈旧覆盖覆盖或删除。
-//      修后所有权 = "我们写入的确切值"的记录：无记录不碰、记录+同值才回收、
+//   2) AppleLanguages 回收边界：系统设置「每个 app 的语言」写同一个 app 域键，
+//      恰好是 ["en"]/["zh-Hans"] 的**用户值**可能被当作壳的陈旧覆盖而覆盖或删除。
+//      所有权 = "我们写入的确切值"的记录：无记录不碰、记录+同值才回收、
 //      用户改值不覆盖、旧布尔标记只清理；空记录视同无记录、非字符串数组形状
-//      保守视为"外来值存在"（第二轮 review 补钉）；
-//   3) 露底色稳态（F1）：第二次启动时 store 内已有同值事实，ingest 返回 false，
-//      旧实现只把露底色对账挂在 ingest 的变化分支上 → 浅色页面整场会话停在骨架深色；
-//      修后建窗即按 last-known 收敛，且每次 ingest 后幂等对账；
-//   4) 消息门 / 系统语言决策的纯函数回归（F5）。
-//  这里钉住修后的不变量。
+//      保守视为"外来值存在"；
+//   3) 露底色稳态：第二次启动时 store 内已有同值事实，ingest 返回 false，
+//      露底色对账若只挂在 ingest 的变化分支上 → 浅色页面整场会话停在骨架深色；
+//      建窗即按 last-known 收敛，且每次 ingest 后幂等对账；
+//   4) 消息门 / 系统语言决策的纯函数回归。
+//  这里钉住这些不变量。
 //
 import XCTest
 @testable import DSHChamber
@@ -64,7 +64,7 @@ final class AuditRegressionTests: XCTestCase {
 
     func testPersistedUpperBoundIsClampedOnLoad() {
         let (defaults, _) = scratchDefaults()
-        // 模拟"旧版本已经写进过被污染的上界值"
+        // 模拟"持久化里已经写进过被污染的上界值"
         defaults.set(["language": "en", "pageIsDark": false, "revision": Int.max],
                      forKey: ShellPageFactsStore.defaultsKey)
         let store = ShellPageFactsStore(defaults: defaults)
@@ -98,7 +98,7 @@ final class AuditRegressionTests: XCTestCase {
         XCTAssertEqual(store.current?.pageIsDark, true)
     }
 
-    // MARK: - 2) AppleLanguages 所有权（F2：记录我们写过的确切值）
+    // MARK: - 2) AppleLanguages 所有权（记录我们写过的确切值）
 
     /// 无记录 ⇒ 无论值长什么样都不删（旧布尔标记也不构成所有权证据）。
     func testNoRecordNeverDeletesUserValue() {
@@ -145,7 +145,7 @@ final class AuditRegressionTests: XCTestCase {
         let (defaults, name) = scratchDefaults()
         XCTAssertTrue(AppDelegate.applyLanguage(.en, systemLanguages: ["zh-Hans-CN"],
                                                 defaults: defaults, appDomainName: name))
-        // 用户随后在系统设置里改成别的语言（值不再是我们写的）
+        // 用户在系统设置里改成别的语言（值 != 记录）
         defaults.set(["ja"], forKey: "AppleLanguages")
         XCTAssertFalse(AppDelegate.applyLanguage(.en, systemLanguages: ["zh-Hans-CN"],
                                                  defaults: defaults, appDomainName: name),
@@ -155,7 +155,7 @@ final class AuditRegressionTests: XCTestCase {
                      "写路径失配也必须作废记录：否则用户值日后改回记录值时所有权会复活")
     }
 
-    /// 用户改值后（值 != 记录）回收路径绝不删值；失配记录作废（不再宣称所有权）。
+    /// 用户改值后（值 != 记录）回收路径绝不删值；失配记录作废（不宣称所有权）。
     func testUserChangedValueIsNotDeletedOnRecycle() {
         let (defaults, name) = scratchDefaults()
         XCTAssertTrue(AppDelegate.applyLanguage(.en, systemLanguages: ["zh-Hans-CN"],
@@ -168,7 +168,7 @@ final class AuditRegressionTests: XCTestCase {
                      "失配记录必须作废（否则会继续宣称一个已不属于我们的值）")
     }
 
-    /// 旧版本的布尔标记：只清理，绝不当作所有权依据（保守不删值）。
+    /// 遗留布尔标记：只清理，绝不当作所有权依据（保守不删值）。
     func testLegacyBooleanMarkerIsIgnoredAndCleaned() {
         let (defaults, name) = scratchDefaults()
         defaults.set(true, forKey: AppDelegate.legacyAppleLanguagesOwnedKey)
@@ -182,7 +182,7 @@ final class AuditRegressionTests: XCTestCase {
         XCTAssertNil(appDomain(defaults, name)[AppDelegate.appleLanguagesWrittenKey])
     }
 
-    // MARK: - 2b) app 域 AppleLanguages 形状（Y4，第二轮 review 补钉）
+    // MARK: - 2b) app 域 AppleLanguages 形状
 
     /// 覆写 persistentDomain 的测试替身：CFPreferences 对 `AppleLanguages` 的
     /// 非字符串数组值会在 `defaults.set` 时静默丢弃（域里仍是旧值/无值），所以
@@ -217,7 +217,7 @@ final class AuditRegressionTests: XCTestCase {
         return (defaults, name)
     }
 
-    /// Y4 前置（第三轮 review 补钉）：`DomainShapeDefaults` 覆写 persistentDomain
+    /// `DomainShapeDefaults` 覆写 persistentDomain
     /// 属非支持用法——整组用例都建立在"注入确实可见"之上；若覆写未生效（读回空域），
     /// 「不 set / 不 remove / 原值保持」会在错误前提上假绿。注入后立刻读回比对，
     /// 并用探针键证明 set/removeObject 的记录面同样落在替身上（写面断言可信）。
@@ -241,7 +241,7 @@ final class AuditRegressionTests: XCTestCase {
                       file: file, line: line)
     }
 
-    /// Y4①：app 域 `AppleLanguages` 是非字符串数组（标量/字典）时，读取面返回
+    /// app 域 `AppleLanguages` 是非字符串数组（标量/字典）时，读取面返回
     /// 「外来值存在」的保守哨兵 []，写路径必须拒绝覆盖：不 set、不 remove、
     /// 原值保持（否则用户/系统写的 per-app 语言会被悄悄改掉）。
     func testNonStringArrayAppLanguageValueIsNeverOverwritten() {
@@ -265,7 +265,7 @@ final class AuditRegressionTests: XCTestCase {
         }
     }
 
-    /// Y4②：记录键被外部写坏成空数组时必须**视同无记录**。最危险的组合是 app 值
+    /// 记录键被外部写坏成空数组时必须**视同无记录**。最危险的组合是 app 值
     /// 也是非字符串数组：`appDomainAppleLanguages` 的哨兵恰为 []，若把空记录当成
     /// 「已记录 = []」，回收路径会因 [] == [] 误判所有权并删掉外来值，写路径也会
     /// 把用户值当成自己的旧覆盖改写。两条路径都钉：不得 remove、不得 set、原值保持。
@@ -309,9 +309,9 @@ final class AuditRegressionTests: XCTestCase {
         }
     }
 
-    // MARK: - 3) 露底色稳态（F1：第二次启动 ingest 不变也要收敛）
+    // MARK: - 3) 露底色稳态（第二次启动 ingest 不变也要收敛）
 
-    /// 第二次启动：store 内已有同值 last-known，ingest 返回 false（旧实现的早退
+    /// 第二次启动：store 内已有同值 last-known，ingest 返回 false（早退
     /// 点）；建窗时的决策必须仍给浅色底，而不是停在骨架 #0f1115。
     func testSameLastKnownFactsStartupConvergesThemedBackground() throws {
         let (defaults, _) = scratchDefaults()
@@ -354,10 +354,9 @@ final class AuditRegressionTests: XCTestCase {
             pageIsDark: nil, appliedPageIsDark: false))
     }
 
-    /// F1·W4 调用点（第三轮 review）：Sources 已把「Store 合并 + 无条件露底色对账」
-    /// 抽成可直测接缝 `MainWindowController.ingestPageFacts(payload:into:reconcile:)`，
-    /// 无窗口环境也能钉住 F1 的次序——把 reconcile 挪回 changed 分支或挪到 return
-    /// 之后，第二条（无变化）ingest 就观察到 0 次回调 → 本用例红。
+    /// 可直测接缝 `MainWindowController.ingestPageFacts(payload:into:reconcile:)` 让
+    /// 「Store 合并 + 无条件露底色对账」在无窗口环境下也可钉次序——把 reconcile 挪回
+    /// changed 分支或挪到 return 之后，第二条（无变化）ingest 就观察到 0 次回调 → 本用例红。
     func testIngestSeamReconcilesEvenWhenStoreUnchanged() {
         let (defaults, _) = scratchDefaults()
         let store = ShellPageFactsStore(defaults: defaults)
@@ -367,7 +366,7 @@ final class AuditRegressionTests: XCTestCase {
             ["lang": "en", "dark": false, "revision": 1], into: store) { reconciled.append($0) })
         XCTAssertEqual(reconciled, [false])
 
-        // 同值再上报：Store 无变化（F1 旧实现的早退点）——对账仍必须发生一次。
+        // 同值再上报：Store 无变化（早退点）——对账仍必须发生一次。
         XCTAssertFalse(MainWindowController.ingestPageFacts(
             ["lang": "en", "dark": false, "revision": 1], into: store) { reconciled.append($0) })
         XCTAssertEqual(reconciled, [false, false], "任何一次 ingest 之后都必须对账（F1）")
@@ -378,9 +377,9 @@ final class AuditRegressionTests: XCTestCase {
         XCTAssertEqual(reconciled.last ?? nil, true, "对账必须读到 ingest 后的新事实")
     }
 
-    // MARK: - 4) 页面事实消息门（F5：纯函数真值表）
+    // MARK: - 4) 页面事实消息门（纯函数真值表）
 
-    /// Z1 真值表（观察器路径）：放行 = 同源根路径 / 带 query / /api/i/*（pushState
+    /// 真值表（观察器路径）：放行 = 同源根路径 / 带 query / /api/i/*（pushState
     /// 场景）/ hash；拒绝 = 名称错、非主 frame、about:blank、data:/file:/blob:、空 url、
     /// 空 expectedOrigin、不同端口、不同 host、子域、https、userinfo。
     func testPageFactsMessageGateTruthTable() {
@@ -391,7 +390,7 @@ final class AuditRegressionTests: XCTestCase {
         // 全部匹配 → 放行
         XCTAssertTrue(ShellPageFactsMessageHandler.accepts(
             messageName: name, isMainFrame: true, url: shellURL, expectedOrigin: origin))
-        // 同源带 query → 放行（本通道不再要求壳文档的「无 query」）
+        // 同源带 query → 放行（本通道不要求壳文档的「无 query」）
         XCTAssertTrue(ShellPageFactsMessageHandler.accepts(
             messageName: name, isMainFrame: true,
             url: "http://127.0.0.1:17520/?x=1", expectedOrigin: origin))
@@ -442,7 +441,7 @@ final class AuditRegressionTests: XCTestCase {
         XCTAssertFalse(ShellPageFactsMessageHandler.accepts(
             messageName: name, isMainFrame: true,
             url: "blob:http://127.0.0.1:17520/0f1e", expectedOrigin: origin))
-        // expectedOrigin 为 nil（闭包不可用）→ 拒。Z3 纠错：expectedOrigin = cpOrigin
+        // expectedOrigin 为 nil（闭包不可用）→ 拒。expectedOrigin = cpOrigin
         // 在 MainWindowController 初始化时即赋值，**与 sidecar ready 无关**——事实通道
         // 独立于 A 桥就绪门正是本通道的设计要点。
         XCTAssertFalse(ShellPageFactsMessageHandler.accepts(
@@ -455,7 +454,7 @@ final class AuditRegressionTests: XCTestCase {
             messageName: name, isMainFrame: true, url: nil, expectedOrigin: origin))
     }
 
-    // MARK: - 5) 系统语言决策（F5：纯函数四例）
+    // MARK: - 5) 系统语言决策（纯函数四例）
 
     func testSystemLanguageDecisionCases() {
         let localePreferred = ["en-US"]
@@ -477,7 +476,7 @@ final class AuditRegressionTests: XCTestCase {
             localePreferred)
     }
 
-    // MARK: - 6) 候选 bundle 缓存（最优性修复的回归）
+    // MARK: - 6) 候选 bundle 缓存
 
     func testCopyStillResolvesWithClearedOverride() {
         NativeText.setLanguageOverride(nil)

@@ -1,6 +1,5 @@
 /* Styles for the per-workspace Git occupant and its create/remove dialogs
-   (design 08 §11). The standalone panel was removed (its features are a
-   future long-term plan); only the workspace-centric line survives. */
+   (design 08 §11). */
 
 /* OpenChamber-style entry: the create button reveals on the line's hover. */
 
@@ -8,10 +7,9 @@
   flex: none;
   display: inline-flex;
   align-items: center;
-  /* 2px = the v0.2.4 value, restored 2026-09-14 with the sidebar sheet's
-     hit-area rollback: `33238ffe` widened this to 4px only so two adjacent 24px
-     hit rims would stay distinct. The gap is structurally inert anyway (this
-     span holds at most one action), so the value is fidelity, not layout. */
+  /* 2px: the sidebar sheet's own gap value. The gap is structurally inert
+     anyway (this span holds at most one action), so the value is not
+     load-bearing. */
   gap: 2px;
   min-width: 0;
   max-width: 45%;
@@ -39,12 +37,11 @@
   align-items: center;
   gap: 6px;
   min-width: 0;
-  /* Derived-workspace row geometry (2026-09 batch 1, G1): 26px row, 8px
-     corners. The 2px rhythm is owned by .unregisteredSection's flex gap, not by
-     a row margin — flex margins do not collapse, and a 2px margin on top of the
-     2px gap doubled the spacing the nav rows use (G1 follow-up). design 08:289
-     declares these rows match the derived workspace row, while the code drew a
-     6px-cornered improvisation. */
+  /* Derived-workspace row geometry (design 08:289 — these rows match the
+     derived workspace row): 26px row, 8px corners. The 2px rhythm is owned by
+     .unregisteredSection's flex gap, not by a row margin — flex margins do not
+     collapse, and a 2px margin on top of the 2px gap would double the spacing
+     the nav rows use. */
   box-sizing: border-box;
   height: 26px;
   margin: 0;
@@ -78,11 +75,9 @@
 
 /* Placement of the row's status capsule only. The capsule itself is the
    official `Tag` primitive (11px/17px, tonal palette), which documents that a
-   render site may still position a tag with its own class. The hand-rolled
-   capsule this replaced (10px/14px, padding 0 5px,
-   `--dsw-alias-interactive-bg-hover` fill) vanished under the pointer: its
-   neutral fill equalled the row's own hover fill
-   (2026-09-11 upstream-alignment, T14). */
+   render site may still position a tag with its own class. A hand-rolled
+   capsule must not replace it: a neutral fill equal to the row's own hover fill
+   would vanish under the pointer. */
 .unregisteredStatus {
   flex: none;
 }
@@ -91,27 +86,23 @@
   flex: none;
 }
 
-/* 2026-09-14 (user directive 「按照 v0.2.4 恢复」): the 2026-09 hit-area pass
-   (`33238ffe`) is rolled back here too — the two invisible 24x24 rims AND the 4px
-   `.headerGit` gap it introduced (see the gap's own rule above). Mechanism and
-   scope: sidebar-chamber.module.css's `.actionIcon` block is the canonical note.
-   Short version for this sheet: `.headerGitAction` sits inside a 26px workspace
-   header that carries a RowHoverCard; the rim left ~1px of plain header around
-   the button, so a pointer leaving the header FROM the button got the native
-   pointerleave chain with no pointerout, React synthesized no onPointerLeave,
-   and the header's card stranded. What is restored is that the HIT BOX IS THE
-   VISUAL BOX again, as in v0.2.4. The 20px box itself (and r5) is NOT part of
-   this rollback: it is the 2026-09 batch-1 G1 icon-button language that replaced
-   v0.2.4's 22px r6 on purpose. WCAG 2.2 2.5.8 target size is a registered
-   deviation again (design 08 §3.4, design 24 §13 item 17). */
+/* HIT BOX IS THE VISUAL BOX: `.headerGitAction` sits inside a 26px workspace
+   header that carries a RowHoverCard; an invisible rim would leave ~1px of plain
+   header around the button, so a pointer leaving the header FROM the button gets
+   the native pointerleave chain with no pointerout, React synthesizes no
+   onPointerLeave, and the header's card strands. Mechanism and scope:
+   sidebar-chamber.module.css's `.actionIcon` block is the canonical note. The
+   20px box (and r5) is NOT part of that rule: it is the icon-button language
+   every other in-row action uses. WCAG 2.2 2.5.8 target size is a registered
+   deviation (design 08 §3.4, design 24 §13 item 17). */
 
 .unregisteredAction {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   flex: none;
-  /* Sidebar icon-button language (2026-09 batch 1, G1): the 20px box / 5px
-     corner every other in-row action uses. */
+  /* Sidebar icon-button language: the 20px box / 5px corner every other in-row
+     action uses. */
   width: 20px;
   height: 20px;
   padding: 0;
@@ -137,7 +128,7 @@
   cursor: not-allowed;
 }
 
-/* Retry affordance inside the session-facts error row (review P2-4). */
+/* Retry affordance inside the session-facts error row. */
 .factsRetry {
   margin-left: 8px;
   padding: 1px 8px;
@@ -154,14 +145,14 @@
   background: var(--dsw-alias-interactive-bg-hover);
 }
 
-/* Directory-collision precheck note under the directory field (A3). */
+/* Directory-collision precheck note under the directory field. */
 .directoryConflict {
   margin: 0;
   color: var(--dsw-alias-state-warn-primary);
   font-size: 11px;
 }
 
-/* Direct-session title list in the remove dialog (A7). */
+/* Direct-session title list in the remove dialog. */
 .sessionTitles {
   display: flex;
   flex-direction: column;
@@ -191,22 +182,18 @@
    row's own "+"/kebab cluster when the whole workspace row is hovered (the
    sidebar css reveals the `[data-git-action]` hook on .workspaceHeader:hover /
    :has(:focus-visible) / kebab-open). Keyboard focus on the occupant also
-   reveals. The reveal is pointer-safe (2026-09): it never keys on plain
+   reveals. The reveal is pointer-safe: it never keys on plain
    :focus-within, which Chromium's mousedown-focus would keep matched after
    a pointer click — a folded row would then keep its occupant action
    visible at rest next to the session count. */
-/* The reveal hook is a `data-*` attribute, never a literal class
-   (2026-09-11 upstream-alignment, T3: the chamber's own rule, mobile
-   styles.ts:10-20 — attribute selectors are not hashed by CSS modules, so the
-   sidebar can match the same hook from its own module, which a global class
-   name only pretended to do). */
+/* The reveal hook is a `data-*` attribute, never a literal class (the
+   chamber's own rule, mobile styles.ts:10-20 — attribute selectors are not
+   hashed by CSS modules, so the sidebar can match the same hook from its own
+   module, which a global class name cannot do). */
 /* The resting state is HIDDEN — display:none lives on the button's own
    module class (specificity 0,1,0) so it can never be beaten by a later
    same-specificity rule; every reveal rule (0,3,0)+ overrides it. Also out
-   of the Tab order / a11y tree, like the sidebar's own rowActions.
-   (2026-08 fix: hiding via the hook class lost to
-   .headerGitAction's inline-flex on equal specificity — actions showed at
-   rest.) */
+   of the Tab order / a11y tree, like the sidebar's own rowActions. */
 .headerGitAction {
   flex: none;
   display: none;
@@ -266,11 +253,9 @@
 
 /* Text inputs reuse the dsh Input atom as-is: 32px height, `border-l4`,
    bg-layer-1, 14px/22px, focus = brand-primary, and the atom's own 8px
-   corner. (The 2026-09 batch 1 G3 pass removed the old `border-radius: 12px`
-   lift AND corrected this comment, which had claimed `border-l2` — the atom
-   is l4. The select beside these fields takes the same tokens now, so the
+   corner. The select beside these fields takes the same tokens, so the
    stacked fields read as one control family; the dialog's own 12px language
-   stays with its tabs/cards, not with text fields.) The atom stretches to the
+   stays with its tabs/cards, not with text fields. The atom stretches to the
    label's full width as a flex item of the column. */
 .fieldInput {
   border-radius: 8px;
@@ -306,8 +291,8 @@
 }
 
 .removeFacts code {
-  /* The worktree path must stay readable (review: it inherited a
-     near-invisible translucent ink). */
+  /* The worktree path must stay readable: never a near-invisible translucent
+     ink. */
   color: var(--dsw-alias-label-primary);
 }
 
@@ -327,7 +312,7 @@
   line-height: 1.45;
 }
 
-/* Dirty-worktree removal authorization (design 08 §6 amendment 2026-08):
+/* Dirty-worktree removal authorization (design 08 §6 amendment):
    the discard checkbox must visually stand out against the ordinary
    archive/branch toggles. */
 .dirtyWarning {
@@ -404,12 +389,11 @@
 }
 
 /* Sliding thumb: the active segment's pill glides between the two halves
-   (user decision 2026-08 — slider-style switch). The fill is the dsh business
-   blue (--dsw-alias-state-business-primary, the same accent the sidebar uses
-   for its selected/drop indicators), so the chosen mode reads unambiguously.
-   Geometry: no gap between the two `flex:1` halves, so the thumb width
-   (calc(50% - 2px) against the padding box) is exactly one half — the 1px
-   overflow of the earlier gapped layout is gone. */
+   (slider-style switch). The fill is the dsh business blue
+   (--dsw-alias-state-business-primary, the same accent the sidebar uses for its
+   selected/drop indicators), so the chosen mode reads unambiguously. Geometry:
+   no gap between the two `flex:1` halves, so the thumb width (calc(50% - 2px)
+   against the padding box) is exactly one half. */
 .tabThumb {
   position: absolute;
   top: 2px;
@@ -462,7 +446,7 @@
 /* Custom select anchor (repo Menu primitive — same design language). Mirrors
    the dsh Input atom so the dropdown reads as a text field (32px, r8,
    border-l4, bg-layer-1, 14px/22px, focus = brand-primary) — the token name is
-   the atom's own (2026-09 batch 1, G3; it was written l2 here before). */
+   the atom's own. */
 .fieldSelect {
   display: flex;
   align-items: center;
@@ -472,9 +456,8 @@
   height: 32px;
   box-sizing: border-box;
   padding: 0 8px;
-  /* Official Input atom (2026-09 batch 1, G3): l4 hairline + 8px corner. The
-     inputs above it in the same dialog are the official atom; this select was
-     the odd one out (the module note above also cited the wrong token). */
+  /* Official Input atom: l4 hairline + 8px corner. The inputs above it in the
+     same dialog are the official atom. */
   border: 0.5px solid var(--dsw-alias-border-l4);
   border-radius: 8px;
   background: var(--dsw-alias-bg-layer-1);

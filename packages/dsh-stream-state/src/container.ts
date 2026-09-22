@@ -1,19 +1,17 @@
 /**
- * Per-source container (B2): ONE state object per source instead of six refs.
+ * Per-source container: ONE state object per source instead of six refs.
  *
- * WHY A CONTAINER AND NOT JUST THE REDUCER. The App's ledgers were keyed by view id,
+ * WHY A CONTAINER AND NOT JUST THE REDUCER. The App's ledgers key by view id,
  * but the thing whose lifetime they describe is a source INCARNATION - the pair
  * (sourceId, fingerprint). A container keyed by that pair is what lets a registry
  * re-registration be a fence (the old incarnation's counters cannot leak into the
  * new one) while a reclaim/re-mount cycle stays the SAME incarnation (the once-per-
  * ready-epoch rules keep their meaning).
  *
- * The projections below are how a migration stays incremental: every existing ref
+ * The projections below are PURE VIEWS of the container for the existing refs
  * (hiddenSince / degradedRetried / autoPrewarmed / prewarmSuppressed / abandoned /
- * harvest) is a PURE VIEW of the container, so a caller can switch one ledger at a
- * time and the rest keep reading the projection. Once all callers read from here,
- * the refs are deleted (B2's last step) - and until then the projection is what
- * guarantees the two readings agree.
+ * harvest): a caller can read one ledger from the container while the rest keep
+ * the refs, and the projection guarantees the two readings agree.
  *
  * PURITY: no imports beyond the sibling reducer; no clock, no DOM.
  */
@@ -83,7 +81,7 @@ export function retainSources(
 }
 
 // ---------------------------------------------------------------------------
-// Projections: each one replaces exactly one of the App's refs.
+// Projections: each one mirrors exactly one of the App's refs.
 // ---------------------------------------------------------------------------
 
 /** App's hiddenSinceRef: view id -> hidden-window start (only hidden views appear). */
@@ -199,7 +197,7 @@ export function createHarvestView(options: {
   readonly read: () => Readonly<Record<string, HarvestState>>
   readonly onWrite: (id: string, record: HarvestState) => void
   readonly onDelete: (id: string) => void
-  /** What a caller sees for a source with no record yet (the legacy initial value). */
+  /** What a caller sees for a source with no record yet (the initial value). */
   readonly initial: () => HarvestState
 }): Record<string, HarvestState> {
   const record: Record<string, HarvestState> = {}

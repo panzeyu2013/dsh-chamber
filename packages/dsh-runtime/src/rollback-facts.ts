@@ -11,7 +11,7 @@ import { rollbackTarget } from './activation-gate.ts'
 
 /** Phases in which a rollback continuation is already durably decided
  *  (`rollback-needed` → `restoring` → `restore-complete`, or the
- *  `fallback-builtin` escape). Single membership source shared by the F7
+ *  `fallback-builtin` escape). Single membership source shared by the
  *  restart-exhausted planner, startup's invalidation gate, apply-phase's
  *  resume gate and metadata-recovery's semantic-mismatch detection. */
 export const ROLLBACK_CONTINUATION_PHASES: ReadonlySet<ActivationJournalPhase> = new Set([
@@ -24,7 +24,7 @@ export const ROLLBACK_CONTINUATION_PHASES: ReadonlySet<ActivationJournalPhase> =
 /**
  * Rollback target derived from the journal's immutable pre-swap fields — the
  * single derivation shared by `beginDelayedRollback`, apply-phase's
- * probe-failure rollback path, and the restart-exhausted F7 planner (which
+ * probe-failure rollback path, and the restart-exhausted planner (which
  * keeps its own builtin guard and failed-version exclusion on top).
  */
 export function delayedRollbackTarget(journal: ActivationJournal): string | null {

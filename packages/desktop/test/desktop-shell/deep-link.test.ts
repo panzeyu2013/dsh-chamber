@@ -310,8 +310,8 @@ test('an identity edit while VS Code launch awaits prevents post-success rendere
 test('packaged protocol registration never persists a cold-start URL as a fixed relaunch arg', () => {
   assert.deepEqual(decideDeepLinkProtocolRegistration({ isPackaged: true, platform: 'linux' }), { action: 'register' })
   assert.deepEqual(decideDeepLinkProtocolRegistration({ isPackaged: true, platform: 'darwin' }), { action: 'register' })
-  // design 21 M4: the win32 v1 gate is lifted — packaged Windows registers the
-  // no-args form too (NSIS `protocols` entries share the target; idempotent).
+  // design 21: packaged Windows registers the no-args form too
+  // (NSIS `protocols` entries share the target; idempotent).
   assert.deepEqual(decideDeepLinkProtocolRegistration({ isPackaged: true, platform: 'win32' }), { action: 'register' })
   assert.deepEqual(decideDeepLinkProtocolRegistration({ isPackaged: false, platform: 'linux' }), { action: 'skip' })
   assert.deepEqual(decideDeepLinkProtocolRegistration({ isPackaged: false, platform: 'win32' }), { action: 'skip' })
@@ -800,7 +800,7 @@ test('ensureLinuxProtocolDesktopFile default fs branch writes a real 0644 file a
   }
 })
 /**
- * N4 回归（2026-09 Windows/Electron 审计）：scanDeepLinkUrls 位于 shell-core.ts，
+ * scanDeepLinkUrls 位于 shell-core.ts，
  * 其 import 闭包经 sanitize-error → `@dsh-chamber/dsh-runtime`（以及 control-plane
  * facade）这类 workspace 裸包名；没有 node_modules 时解析不到。argv 深链扫描是纯
  * 函数且正是本套件的契约，因此用 resolve 钩子把这两个裸包名映射回仓内源码

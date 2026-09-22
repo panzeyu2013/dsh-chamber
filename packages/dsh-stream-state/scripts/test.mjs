@@ -14,7 +14,7 @@
  *
  * Why no dependencies: the reducers are clockless and effect-free. Everything
  * that waits (deadlines, retries, single-flight) belongs to the executor
- * (dsh-stream-state/async-op, node B6 of the refactor plan); anything that needs
+ * (dsh-stream-state/async-op); anything that needs
  * a real socket, DOM or React belongs to the consumer. If a change makes a file
  * here import a runtime module, that change is a design error, not a build error.
  */
@@ -32,8 +32,7 @@ export const GROUPS = {
   ],
   // invariants: implementation-independent properties every reducer must hold
   // for ANY event sequence (full-function totality, action idempotence, rebuild
-  // window bound, no-exitless-spinner bound) - these are the acceptance gates
-  // Phase B nodes are checked against.
+  // window bound, no-exitless-spinner bound).
   invariants: [
     'test/invariants/reducer-invariants.test.ts',
   ],
@@ -42,7 +41,7 @@ export const GROUPS = {
   equivalence: [
     'test/equivalence/action-normalizer.test.ts',
   ],
-  // refactor: the A1 differential harness (vector replay + DIVERGENCE ledger
+  // refactor: the differential harness (vector replay + DIVERGENCE ledger
   // cross-check) and its legacy reference adapter.
   refactor: [
     'test/refactor/differential-harness.test.ts',
@@ -52,36 +51,36 @@ export const GROUPS = {
   tables: [
     'test/tables/tables-parity.test.ts',
   ],
-  // source: the per-source lifecycle reducer (B2 core) that replaces the App's six
-  // ledgers + three loose fields with one incarnation-keyed object.
+  // source: the per-source lifecycle reducer that consolidates the App's six
+  // ledgers + three loose fields into one incarnation-keyed object.
   source: [
     'test/source/source-lifecycle.test.ts',
-    // B2: the per-source container (incarnation keying + the ref projections the
-    // App migrates onto, one ledger at a time).
+    // the per-source container (incarnation keying + the ref projections the
+    // App reads, one ledger at a time).
     'test/source/source-container.test.ts',
-    // B4: the sidebar receipt chain's decision (verdict branches + write-back outcome).
+    // the sidebar receipt chain's decision (verdict branches + write-back outcome).
     'test/authority/authority-decision.test.ts',
-    // B5: the shell's load state machine (the three real-machine defects + generation fence).
+    // the shell's load state machine (generation fence).
     'test/load-state/load-state.test.ts',
-    // B2: the prewarm ledgers' events (Set-shaped ledgers need methods, not views).
+    // the prewarm ledgers' events (Set-shaped ledgers need methods, not views).
     'test/source/source-prewarm-ledger.test.ts',
   ],
-  // presentation: the single veil/reveal decision (B3 core) that replaces four
+  // presentation: the single veil/reveal decision that replaces four
   // independent timers and computes the total bound in one place.
   presentation: [
     'test/presentation/presentation-arbiter.test.ts',
   ],
-  // ladder: the unified recovery-ladder engine (B4 core) that all four ladders
+  // ladder: the unified recovery-ladder engine that all four ladders
   // (liveness / reconcile / stream-health / mobile stall) become instances of.
   ladder: [
     'test/ladder/ladder-engine.test.ts',
   ],
   // async-op: deadline / retry pacing / bounded wait / single-flight with an
-  // injected scheduler (B6 core) - the five hand-written waiting shapes, once.
+  // injected scheduler - the five hand-written waiting shapes, once.
   asyncOp: [
     'test/async-op/async-op.test.ts',
   ],
-  // metrics: the B7 measurement tool's own guard - a baseline that can measure
+  // metrics: the measurement tool's own guard - a baseline that can measure
   // nothing would make every "the numbers went down" claim meaningless.
   metrics: [
     'test/metrics/metrics-tool.test.ts',

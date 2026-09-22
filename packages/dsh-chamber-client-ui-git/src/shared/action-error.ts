@@ -95,7 +95,7 @@ export function gitActionErrorCode(error: unknown): string | undefined {
 }
 
 /** Stable text for a failure with no localized copy (hostile values safe).
- *  The shared projection with this package's historical fallback. */
+ *  The shared projection with this package's fallback. */
 function rawMessage(error: unknown): string {
   return describeThrown(error, 'unknown Git error')
 }

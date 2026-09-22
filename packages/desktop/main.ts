@@ -4,15 +4,15 @@
  * The single window loads the control plane origin directly
  * (loadURL http://127.0.0.1:<cp.port>/) — one frame, one origin; the
  * control plane serves the built dsh frontend (webDistDir = <pkg>/dist/web in
- * dev and packaged alike — P2-4 renderer/dist isolation — design 05 §7.1) and proxies every instance over
- * /api/i/<id>/*. There are no injected connection adapters anymore: remote
+ * dev and packaged alike — renderer/dist isolation — design 05 §7.1) and proxies every instance over
+ * /api/i/<id>/*. There are no injected connection adapters: remote
  * instances reach the control plane through registerInstanceTransport /
  * unregisterInstanceTransport (design 03 §2.2), driven by the transport
  * manager's ready phase — the transport URL stays in the main process and
  * never enters a renderer payload (design 05 §8).
  *
- * W-10（design 25 §4.1 seam）收口后的职责清单（2026：60 handler 已全部迁入
- * shell-core.ts 的 installIpcHandlers——本文件零 handler 注册点、零
+ * 职责清单（design 25 §4.1 seam；60 handler 在 shell-core.ts 的
+ * installIpcHandlers——本文件零 handler 注册点、零
  * webContents.send 调用；唯一的 ipcMain.handle 拼写 = 下方 whenReady 装配侧
  * registrar 包装 `ipcMain.handle(channel, trustedIpc(handler))`，即 trustedIpc
  * 围栏注入点；send 面全走 electron-edges.ts HostEdges rendererPush 叶）：
@@ -29,7 +29,7 @@
  * - 启动事务宿主：refreshRuntimeEvidence + runRuntimeStartup 启动尾部、首检/
  *   周期计时器（经 core 导出入口 runRuntimeCheckCycle）、restart-exhausted
  *   自动回退、known-good 晋升计时器、元数据恢复事务（executeMetadataRecovery）与
- *   其 K 组注册体共享闭包（authoritativeMetadataRecoveryStatus /
+ *   其共享闭包（authoritativeMetadataRecoveryStatus /
  *   runUserMetadataRecovery / readApplyNowGateInput / selectedJournalIntent）。
  * - Transport manager（transport-manager.ts + the `ssh` and direct `gateway`
  *   providers）：persisted instance registry（<userData>/ssh-instances.json）、
@@ -37,7 +37,7 @@
  *   sidecar（publishRegistryTransition——SSH_INSTANCES_CHANGED/SSH_STATUS_CHANGED
  *   committed push 文本与插件 seed/journal 撤销仍在此）。
  *
- * Responsibilities (pre-W-10 wording preserved for history):
+ * Responsibilities:
  * - Single-frame BrowserWindow (contextIsolation, no nodeIntegration).
  * - Control plane lifecycle: spawn on ready, stop() on will-quit.
  * - Transport registration: ready transport → registerInstanceTransport
@@ -157,18 +157,12 @@ const pkgDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(pkgDir, '..', '..');
 const { version } = JSON.parse(readFileSync(path.join(pkgDir, 'package.json'), 'utf8'));
 
-// —— W-10 S6：插件源一体化 picker（PluginSourcePick + pickPluginSource——
-// folder|.tgz 双模式、darwin 一体语义）已迁 electron-edges.ts 的 HostEdges
-// pickPluginSource 宿主腿（原函数体逐字随迁；宿主 back-ref host.mainWindow()
-// = 原 mainWindow 实参）。core 侧 ssh 插件材料化 pick 注册体经 edges 调用；
-// 本文件余下的 gateway/local 调用点同改 edges.pickPluginSource()。——
-
 function resolveBuiltinDshWorkspace(): string | null {
   if (app.isPackaged) {
     const bundled = path.join(process.resourcesPath, 'vendor', 'dsh');
     return existsSync(bundled) ? bundled : null;
   }
-  // P-04：dev 候选顺序由 shell-core 单源提供（<repoRoot>/ref-dsh →
+  // dev 候选顺序由 shell-core 单源提供（<repoRoot>/ref-dsh →
   // <pkgDir>/vendor/dsh）——Electron-free sidecar 的 dev 回退必须与这里逐字
   // 同序（resolveSidecarBuiltinDshWorkspace），两侧共用同一 helper。
   return resolveDevBuiltinDshWorkspace(pkgDir);
@@ -214,7 +208,7 @@ let tray: Tray | null = null;
 // 重建（macOS activate 路径）——没有它，窗口一旦关闭应用就永久无窗。
 let mainWindowUrl: string | null = null;
 
-// W-10 S2：主窗口 'show' 事件订阅面（HostEdges.onMainWindowShown 的装配侧注册
+// 主窗口 'show' 事件订阅面（HostEdges.onMainWindowShown 的装配侧注册
 // 点——createMainWindow glue 对每窗挂接，mainWindow===win 身份守卫在 glue；core
 // 的 held-resume 补发经 createElectronEdges 的 onMainWindowShown 订阅）。
 const mainWindowShownSubscribers = new Set<() => void>();
@@ -233,30 +227,17 @@ let quitConfirmed = false;
 let confirmingQuit = false;
 let quitCleanupInProgress = false;
 
-// —— W-10 S9（open-in + update 批）：原模块级 VS Code 深链 OS 启动队列
-// （pendingIntents = BoundedVscodeIntentQueue(64)）、draining 位、drain 消费循环
-// 装配（drainPendingIntents）、enqueueDeepLink 与 captureVscodeSource 全部迁入
-// shell-core.ts（「OS 深链启动队列 + 外链打开预算器」S9 段 + installIpcHandlers
-// ② I 组段装配——W-10 S2 决策「本队列与 enqueueDeepLink 留 main 至 S9」在此闭
-// 合）。OS 三入口 glue（macOS open-url / Win+Linux second-instance argv / 冷启动
-// argv 扫描）改经 core 导出 enqueueDeepLink；startup 尾部首次消费改经导出入口
-// drainDeepLinkLaunches。captureVscodeSource 随迁参数化（registry 查找经 ctx
-// transportManager——main 侧无剩余使用点）。——
-
 // Update controller ref (created in whenReady): the quit-confirmation exemption
 // (design 14 D2) reads its state at will-quit time.
 let updateController: { state(): { phase: string; installBlockedReason: string | null } } | null = null;
-// 「重启并安装」在途标志（2026-12 review：macOS 实机缺陷）。electron-updater 的
+// 「重启并安装」在途标志。electron-updater 的
 // quitAndInstall 在 macOS 上「先关闭全部窗口、再退出」（Electron 43.4.0 typings
-// AutoUpdater#before-quit-for-update 明文：before-quit 不会在窗口关闭前发出；本机
-// 对 43.4.0/darwin 的探针亦证实 autoUpdater 的 before-quit-for-update 与窗口
-// close 都发生在 quitAndInstall() 调用内部、远早于 before-quit——「before-quit 晚于
-// 关窗」是 typings 的明文，而关窗当下被 hide 吞掉时退出序列根本走不到它，所以修复前
-// 那个「before-quit 从未到达」的观测不能当作原生腿的行为证据，见 armNativeUpdaterQuit），
-// 而 main.ts 的
-// 关窗到托盘（design 14 D1，默认 hide-to-tray）只在 quitRequested（由 before-quit
-// 置位）后才放行关窗——更新退出腿的关窗因此被 hide 吞掉：窗口消失、进程（连同本地
-// dsh 与隧道）永久留存、更新永不安装（用户实测症状）。
+// AutoUpdater#before-quit-for-update 明文：before-quit 不会在窗口关闭前发出；
+// autoUpdater 的 before-quit-for-update 与窗口 close 都发生在 quitAndInstall()
+// 调用内部、远早于 before-quit），
+// 而关窗到托盘（design 14 D1，默认 hide-to-tray）只在 quitRequested（由 before-quit
+// 置位）后才放行关窗——更新退出腿的关窗若被 hide 吞掉，窗口消失、进程（连同本地
+// dsh 与隧道）永久留存、更新永不安装。
 // 该标志由控制器的 onQuitAndInstallArmed 回调在**调用 quitAndInstall 之前**置位
 // （关窗发生在调用内部，返回后再置位就晚了）；原生退出每次到达都会重新武装
 // （armNativeUpdaterQuit），失败/停滞时由 updater 状态订阅撤回。
@@ -293,13 +274,10 @@ function disarmUpdaterQuit(reason: string): void {
 }
 
 /** 原生更新器正在关窗退出（Electron autoUpdater `before-quit-for-update`，
- *  在 quitAndInstall 内部、关窗之前发出——43.4.0/darwin 实测）。两件事：
+ *  在 quitAndInstall 内部、关窗之前发出——Electron 43.4.0/darwin）。两件事：
  *  1) 武装关窗豁免：这一次关窗属于安装退出腿，绝不能被 hide 吞掉（也覆盖
  *     「首次武装已被停滞 watchdog 撤回、原生退出迟到」的窗口）；
- *  2) 兜底自退：macOS 原生腿只关窗、不保证走到 app.quit()（修复前实测「关窗后
- *     before-quit 从未到达」——注意该观测是在**旧**行为下取的：关窗当时被 hide
- *     吞掉，窗口从未真正关闭，退出序列自然走不到 before-quit；修复后是否仍不到达
- *     需要在签名包上重测一次，见 design 11 §9 的实机门禁），进程会以「无窗口仍在
+ *  2) 兜底自退：macOS 原生腿只关窗、不保证走到 app.quit()，进程会以「无窗口仍在
  *     运行」滞留。这里在宽限期后仍未退出就由主进程 app.quit() 走正常
  *     before-quit/will-quit 清理路径。兜底本身在两种情形下都安全：before-quit 会到
  *     时 `quitRequested` 已置位、兜底直接 stand down（见 shouldUpdaterQuitTakeOver）。
@@ -356,10 +334,8 @@ function maybeCreateTray(cp: PlaneHandle) {
     console.log('[dsh-chamber] 跳过托盘：开发模式（app.isPackaged=false）');
     return;
   }
-  // 打包闭包 P2（STATUS）：候选路径收敛到真实打包资源 resources/icon.png
-  // （extraResources 将 resources/icon.png 拷入 resources/ 根）；原先的
-  // resourcesPath/icons/tray.png 与 resourcesPath/tray.png 永不随包（两条
-  // 永不命中路径）。未来引入专用托盘图标资产时改这里。
+  // 候选路径 = 真实打包资源 resources/icon.png（extraResources 将
+  // resources/icon.png 拷入 resources/ 根）。未来引入专用托盘图标资产时改这里。
   const candidates = [
     path.join(process.resourcesPath, 'icon.png'),
   ];
@@ -398,7 +374,7 @@ function maybeCreateTray(cp: PlaneHandle) {
  * 版身份冲突（镜像托盘先例）。打包 Linux/macOS/Windows 都使用无 relaunch
  * args 形态——argv[1] 可能正是本次冷启动 URL，绝不能将它固化到后续协议启动；
  * macOS 打包版另由 electron-builder `protocols` 键自动生成 CFBundleURLTypes，
- * Windows NSIS 安装器可能同样写 HKCU\Software\Classes（M0.5 实证项），此处
+ * Windows NSIS 安装器可能同样写 HKCU\Software\Classes，此处
  * setAsDefaultProtocolClient 统一兜底（同目标幂等）。失败 loud，绝不打断启动。
  */
 function registerDeepLinkProtocol(): void {
@@ -461,11 +437,6 @@ function showMainWindow(): boolean {
   return false;
 }
 
-// —— W-10 S2：isAnyWindowFocused（→ edges.isFocused，electron-edges）、
-// pushHeldSystemResume + held lastResume（→ shell-core 投递状态机，SYSTEM_RESUME
-// 经 edges.rendererPush 推送）与 maybeShowNativeNotification（NOTIFY 主链路 →
-// installIpcHandlers；宿主腿 = electron-edges showNativeNotification /
-// notificationSupported）随 B 组批迁出，定义见 shell-core.ts 同段——
 /** keep-awake（design 14 D5）：powerSaveBlocker prevent-app-suspension。 */
 function setKeepAwakeActive(enabled: boolean): void {
   const current = keepAwakeBlockerId;
@@ -492,7 +463,7 @@ const WINDOWS_APP_USER_MODEL_ID = 'com.dshchamber.desktop';
 /**
  * 登录自启（design 14 D6）：macOS setLoginItemSettings；Linux XDG autostart
  * （手写最小 .desktop）；Windows setLoginItemSettings（HKCU Run 键,design 21
- * M4 解锁）。卸载残留由 NSIS 卸载段清理（scripts/nsis-uninstall-cleanup.nsh）。
+ * M4）。卸载残留由 NSIS 卸载段清理（scripts/nsis-uninstall-cleanup.nsh）。
  * 失败 loud 返回 {error}，绝不静默假成功。
  */
 function applyLaunchAtLogin(enabled: boolean): { ok: true } | { ok: false; error: string } {
@@ -509,7 +480,7 @@ function applyLaunchAtLogin(enabled: boolean): { ok: true } | { ok: false; error
       } else {
         app.setLoginItemSettings({ openAtLogin: enabled });
       }
-      // P-20（2026-12 审计）：写完必须回读——OS 可能静默拒绝，macOS 还可能
+      // 写完必须回读——OS 可能静默拒绝，macOS 还可能
       // 把条目停在 requires-approval（系统设置里等用户批准，此时根本不会
       // 自启）。Swift 腿的 SMAppService status 预检 + apply-failed 是这里的
       // 对偶；绝不无回读地回 {ok:true}。
@@ -538,13 +509,13 @@ function applyLaunchAtLogin(enabled: boolean): { ok: true } | { ok: false; error
     } else {
       rmSync(desktopFile, { force: true });
       // Env-change hygiene: if the autostart entry was written under the
-      // OTHER XDG_CONFIG_HOME resolution (or by the pre-design-21 fixed
+      // OTHER XDG_CONFIG_HOME resolution (or at the fixed
       // ~/.config path), remove it there too — disabling must never leave a
       // live entry behind with a silent ok:true.
       const legacyFile = path.join(os.homedir(), '.config', 'autostart', 'dsh-chamber.desktop');
       if (legacyFile !== desktopFile) rmSync(legacyFile, { force: true });
     }
-    // P-20（同一条纪律，文件面）：写入/删除后回读目标态，绝不无验证地回
+    // 同一条纪律（文件面）：写入/删除后回读目标态，绝不无验证地回
     // {ok:true}（getLoginItemSettings 在 Linux 不存在，登录自启就是这个文件）。
     if (existsSync(desktopFile) !== enabled) {
       return {
@@ -564,7 +535,7 @@ function applyLaunchAtLogin(enabled: boolean): { ok: true } | { ok: false; error
  * 白屏）。正常退出（clean-exit，如用户关窗）不重载。
  */
 function installRendererRecovery(win: BrowserWindow): void {
-  // G21：预算/门判定全部走 shell-core 的共享纯函数（main-decision-gates
+  // 预算/门判定全部走 shell-core 的共享纯函数（main-decision-gates
   // 行为单测；Swift RendererRecoveryPolicy/HangWatchdog 同参数），本文件只留
   // 计时器与窗口销毁守卫。
   const reloadBudget: RendererReloadBudgetState = { windowStart: 0, count: 0 };
@@ -605,7 +576,7 @@ function installRendererRecovery(win: BrowserWindow): void {
     // ready() can run while late subresources still keep isLoading() true.
     // The first drain then correctly holds; finish is the deterministic replay
     // edge. Guard window identity so an old window cannot drain/reset a newer
-    // main window's queues (W-10 S2: drains + ready bits live in shell-core —
+    // main window's queues (drains + ready bits live in shell-core —
     // this glue only forwards the lifecycle event of the current main window).
     if (mainWindow === win) {
       onRendererLifecycle('did-finish-load');
@@ -618,7 +589,7 @@ function installRendererRecovery(win: BrowserWindow): void {
     if (!shouldReloadAfterCrash(details.reason, quitRequested)) return;
     // 通知就绪标志立即失效（design 19 §3.3）：崩溃到 500ms 后 reload 之间没有
     // 导航事件（did-start-loading 不会触发），不重置则向死 frame 推送丢事件。
-    // （W-10 S2：ready 位复位 + in-flight 重排在 shell-core onRendererLifecycle。）
+    // （ready 位复位 + in-flight 重排在 shell-core onRendererLifecycle。）
     if (mainWindow === win) {
       onRendererLifecycle('crashed');
     }
@@ -650,12 +621,6 @@ function installRendererRecovery(win: BrowserWindow): void {
   });
 }
 
-// —— W-10 S9（open-in + update 批）：外链打开统一入口（openExternally——URL
-// 规范化 + 10s/8 次预算 + 30s 冷却）与预算常量/状态整体迁入 shell-core.ts
-// （「OS 深链启动队列 + 外链打开预算器」S9 段——宿主叶 = 装配期快照的
-// edges.openExternal；本文件窗口 glue 经 core 导出 openExternally 调用，文本
-// 语义与搬迁前一致：setWindowOpenHandler / handleUntrustedNavigation 共用）——
-
 /**
  * 非可信导航统一处理（will-navigate / will-redirect 共用，与
  * setWindowOpenHandler 同款 scheme + 同源白名单）：非 shell 文档的导航一律
@@ -682,16 +647,16 @@ function createMainWindow(rendererOrigin: string, fatalOnLoadFailure: boolean): 
   // bare origin, the rebuild path reuses mainWindowUrl (which already ends
   // with '/') — appending unconditionally would produce a `//`-leading path
   // that `new URL('//', base)` rejects and crashes the control plane's
-  // request handler (2026-08 fix).
+  // request handler.
   const url = `${rendererOrigin.replace(/\/+$/, '')}/`;
   mainWindowUrl = url;
-  // 打包闭包 P2（STATUS）：沙箱 preload 只接受 build:preload 的编译产物
-  // dist/preload.cjs（纯 CJS，无 TS 类型擦除）。源码 preload.cts 不再是静默
+  // 沙箱 preload 只接受 build:preload 的编译产物
+  // dist/preload.cjs（纯 CJS，无 TS 类型擦除）。源码 preload.cts 不能作静默
   // 回退——Electron 在沙箱/CJS 语义下加载 .cts 会 SyntaxError，缺失即 loud
   // 失败（宁可启动失败也不带病开窗）。
   const preloadPath = path.join(pkgDir, 'dist', 'preload.cjs');
   if (!existsSync(preloadPath)) {
-    // 打包闭包 P2:缺失 = 安装/构建回归。必须 loud——dev 终端可见抛错即可,
+    // 缺失 = 安装/构建回归。必须 loud——dev 终端可见抛错即可,
     // 但打包态(stderr 不可见)直接 throw 会让用户只见闪退;统一走启动失败
     // 对话框 + 退出(与 loadURL 失败同 UX,见 fatalOnLoadFailure 路径)。
     const message = `preload 构建产物缺失：${preloadPath}（先运行 build:preload）`;
@@ -704,7 +669,7 @@ function createMainWindow(rendererOrigin: string, fatalOnLoadFailure: boolean): 
     height: 800,
     // 首帧前的窗口底色：与 dsh 前端深色主题一致，消除白屏闪烁。
     backgroundColor: '#0f1115',
-    // 固定窗口标题：官方 dsh 前端（rc.8 起标题投影在 ui-renderer 行内）
+    // 固定窗口标题：官方 dsh 前端（标题投影在 ui-renderer 行内）
     // 会把当前会话名投影到 document.title——若不拦截 page-title-updated，
     // 原生标题栏会随选中会话变化。单 frame 壳的品牌标识恒定，会话名在应用内可见。
     title: 'dsh-chamber-electron',
@@ -715,14 +680,13 @@ function createMainWindow(rendererOrigin: string, fatalOnLoadFailure: boolean): 
       // Keep Electron's renderer sandbox explicit: this window only needs the
       // narrow contextBridge surface from preload, never Electron/Node powers.
       sandbox: true,
-      // 2026-12 修订（design 14 §D1，实测换判）：**不再**关闭 backgroundThrottling。
-      // 关闭它会让 Electron 永久抑制隐藏态（backgroundThrottling=false 时
-      // electron_api_web_contents.cc 置 disable_hidden_=true），实测后果：窗口
+      // backgroundThrottling 保持默认（design 14 §D1）：关闭它会让 Electron 永久
+      // 抑制隐藏态（backgroundThrottling=false 时
+      // electron_api_web_contents.cc 置 disable_hidden_=true）——窗口
       // 隐藏后 rAF 仍 120/s、document.visibilityState 恒 'visible'、
-      // visibilitychange 0 次——retention.ts 的 shouldRunBackgroundPhase 因此
-      // 在 Electron 上从不生效，隐藏期 renderer CPU 最高 28.1%（上游常驻动画
-      // 19.0% + 发布 19.4%，叠加 28.1%）。
-      // 恢复默认节流后同一测量台（Electron 43.4.0 / Chromium 150 / M5 Pro
+      // visibilitychange 0 次，retention.ts 的 shouldRunBackgroundPhase 因此
+      // 在 Electron 上从不生效，隐藏期 renderer CPU 最高 28.1%。
+      // 默认节流下同一测量台（Electron 43.4.0 / Chromium 150 / M5 Pro
       // 120 Hz）：隐藏期 rAF 0、动画停、visibilitychange 恢复，renderer CPU
       // 0.0–0.1%；SSE 是网络流不受影响（隐藏 9s 收 9/9 条、maxGap 1005ms、
       // 0 错误），唤醒即时重连由 powerMonitor resume 的 IPC 推送驱动（不依赖
@@ -765,8 +729,8 @@ function createMainWindow(rendererOrigin: string, fatalOnLoadFailure: boolean): 
   // → sshBridgeReady effect），而 did-finish-load 可能被 >500ms 的慢子资源拖迟
   // 到 ready() invoke 之后——若在 finish 时重置会把已置位的标志 clobber 成永久
   // false。start-loading 必先于页面脚本执行（invoke 恒在其后），顺序保证成立。
-  // （W-10 S2：ready 位复位/requeue/drain 在 shell-core onRendererLifecycle——
-  // 本 glue 只转发当前主窗的生命周期事件，语义逐字保留。）
+  // （ready 位复位/requeue/drain 在 shell-core onRendererLifecycle——
+  // 本 glue 只转发当前主窗的生命周期事件。）
   win.webContents.on('did-start-loading', () => {
     if (mainWindow === win) {
       onRendererLifecycle('did-start-loading');
@@ -786,11 +750,11 @@ function createMainWindow(rendererOrigin: string, fatalOnLoadFailure: boolean): 
   // quitAndInstall 的退出链（见 armUpdaterQuit 的注释与该函数的契约）。
   win.on('close', (event) => {
     const recoveryAvailable = process.platform === 'darwin' || tray !== null;
-    // S-08（2026-12 审计）：close 决策统一走纯函数（chamber-settings
-    // decideMainWindowClose）。hide 分支照旧；任何会走到退出的 close
+    // close 决策统一走纯函数（chamber-settings
+    // decideMainWindowClose）。hide 分支保持 hide；任何会走到退出的 close
     // （close-behavior='quit'、无恢复面的关窗）一律 **defer**：先
-    // preventDefault，把窗口留到退出决策拍板之后再销毁。此前窗口先被销毁
-    // （window-all-closed → app.quit()），取消退出后只能重建 = 整页重载、
+    // preventDefault，把窗口留到退出决策拍板之后再销毁——窗口先被销毁
+    // （window-all-closed → app.quit()）时，取消退出只能重建 = 整页重载、
     // 页面态丢失；Swift 全部退出腿都由 NSApp.terminate 承担，窗口不销毁，
     // 取消只 restoreMainWindow()（原地恢复）。
     const closeAction = decideMainWindowClose({
@@ -813,7 +777,7 @@ function createMainWindow(rendererOrigin: string, fatalOnLoadFailure: boolean): 
     }
   });
   // 无窗口常驻（托盘态）期间的唤醒事件由 core held（lastResume），窗口恢复可见
-  // 时一次性补发（design 14 D4；W-10 S2——补发逻辑在 shell-core
+  // 时一次性补发（design 14 D4——补发逻辑在 shell-core
   // handleMainWindowShown，本 glue 经 mainWindowShownSubscribers 通知订阅面；
   // 身份守卫：'show' 只可能是当前主窗，防御性保留 mainWindow===win 检查）。
   win.on('show', () => {
@@ -869,7 +833,7 @@ if (!gotTheLock) {
   // 终止信号（终端 Ctrl+C / Activity Monitor「退出」/ 进程管理器 SIGTERM）：
   // 转 app.quit() 优雅路径——will-quit 会先回收传输层/控制面/本地 dsh 实例，
   // 而不是让 Electron 直接终止，把 detached 的 dsh 子进程留成孤儿。
-  // **2026-08 实机验证**：macOS Electron 43 主进程的 `process.on('SIGTERM')`
+  // macOS Electron 43 主进程的 `process.on('SIGTERM')`
   // **不触发**——Chromium 消费信号并走自身的默认优雅退出（同样触发
   // before-quit → will-quit，资源回收完整）；本 handler 在 macOS 上是死代码，
   // 保留作为 linux/win 等 process.on 生效平台的兜底。信号场景（macOS）因此走
@@ -895,22 +859,22 @@ if (!gotTheLock) {
   app.on('window-all-closed', () => {
     // macOS 默认常驻（Dock 恢复入口，activate 重建窗口）——但设置 = quit 的
     // 关窗路径（design 14 D1）用户意图是退出：此时 darwin 也必须走
-    // app.quit()，经 before-quit 的 D2 确认。S-08（2026-12 审计）后该关窗
+    // app.quit()，经 before-quit 的 D2 确认。该关窗
     // 路径的窗口在确认前不会被销毁（close 被 defer），取消时窗口原地存活，
     // 绝无「取消后重建 = 页面重载」；本条仍覆盖其它真正关完窗的退出腿
     // （hide-to-tray 关窗销毁等）。非 darwin 恒退出。
     if (process.platform !== 'darwin' || chamberSettings.windowCloseBehavior === 'quit') app.quit();
   });
 
-  // 退出确认（design 14 D2，2026-08 修订）在 **before-quit**（窗口关闭前）拦截：
+  // 退出确认（design 14 D2）在 **before-quit**（窗口关闭前）拦截：
   // 显式退出（Cmd+Q / 托盘退出 / Dock 退出 / 设置=quit 的关窗）仅在「退出确认
-  // 开关开启 且 本地 dsh 实例运行中」时先确认（远程隧道不影响关闭，用户拍板）；
+  // 开关开启 且 本地 dsh 实例运行中」时先确认（远程隧道不影响关闭）；
   // 更新已下载待装（设计 11 autoInstallOnAppQuit，用户已确认过「更新」）时豁免。
   // 关键时序：close-to-tray 的 close 处理器靠 quitRequested 区分「退出在途」
   // vs「普通关窗」——而 will-quit 要等所有窗口关闭后才触发，在 will-quit 内置
   // 位为时已晚（close 先 hide+preventDefault 会把退出吞掉）。before-quit 先
   // 置位/拦截：确认后重触发才放行；取消时窗口从未关闭（拦截在先），不丢窗口。
-  // S-08（2026-12 审计）把「从未关闭」扩展到 X 关窗路径：close 处理器对
+  // X 关窗路径同样「从未关闭」：close 处理器对
   // 会退出的关窗先 preventDefault（decideMainWindowClose）、再 app.quit()，
   // 因此 before-quit 的确认/取消在两种入口下都面对存活的窗口。
   // async handler：preventDefault 在第一个 await 前同步执行（Electron 不等待
@@ -919,7 +883,7 @@ if (!gotTheLock) {
     if (quitConfirmed) return; // 已确认/豁免：放行（重入）
     const cp = controlPlane;
     if (cp === null) {
-      // 控制面未就绪：无可保护内容，放行。必须同时置位确认位——S-08 的
+      // 控制面未就绪：无可保护内容，放行。必须同时置位确认位——
       // defer 分支在关窗处理器里重入 app.quit()，若这条放行路径不置位，
       // 退出序列的关窗会再次命中 defer 分支，形成 app.quit() ↔ close 的
       // 自递归（窗口永远关不掉）。
@@ -935,8 +899,8 @@ if (!gotTheLock) {
     const updateDownloadReady = updateState !== undefined
       && updateState.phase === 'downloaded'
       && updateState.installBlockedReason === null;
-    // 2026-08 修订：远程隧道不影响关闭（用户拍板）——风险只看本地实例；退出
-    // 确认开关（quitConfirmation）关闭时永不确认。2026-08 二次修订：状态机
+    // 远程隧道不影响关闭——风险只看本地实例；退出
+    // 确认开关（quitConfirmation）关闭时永不确认。状态机
     // 显示 running 还不够——必须实际有存活进程（restart backoff / 死亡未探活
     // 期间状态机可能误报 running）。
     const localRunning = LOCAL_RUNNING_STATES.has(cp.connectionState) && cp.localProcessAlive;
@@ -947,8 +911,8 @@ if (!gotTheLock) {
     });
     if (!risk.needsConfirm) {
       // 无风险或更新安装豁免：置位后直接 return 放行本次退出（未 preventDefault，
-      // 退出继续走 will-quit）——不在此处再调 app.quit() 重入（2026-08 review：
-      // 重入虽被 quitConfirmed 早退兜住，但属不必要的退出重入）。
+      // 退出继续走 will-quit）——不在此处再调 app.quit() 重入（重入虽被
+      // quitConfirmed 早退兜住，但属不必要的退出重入）。
       quitRequested = true;
       quitConfirmed = true;
       return;
@@ -976,21 +940,21 @@ if (!gotTheLock) {
           app.quit();
           return;
         }
-        // 取消：quitRequested 保持 false。S-08（2026-12 审计）后关窗路径
-        // 不再先销毁窗口——close 在决策前被 defer（decideMainWindowClose），
+        // 取消：quitRequested 保持 false。关窗路径
+        // 不先销毁窗口——close 在决策前被 defer（decideMainWindowClose），
         // 所以这里**原地恢复**（show/restore/focus）仍然存活的窗口即可，绝不
         // 重建、绝不重载页面：页面态保留，与 Swift 取消分支
         // restoreMainWindow() 对偶。showMainWindow 内部仍保留「窗口意外不在
         // 则按 mainWindowUrl 重建」的防御兜底。SIGTERM 已置位 quitRequested
-        // 的退出在途则**不**恢复——取消对已确认的退出无效力（2026-08 review）。
+        // 的退出在途则**不**恢复——取消对已确认的退出无效力。
         if (!quitRequested) showMainWindow();
       });
     } catch (error) {
       // showMessageBox 同步/异步失败都必须复位 confirmingQuit，否则后续所有
-      // before-quit 都被单飞闸拦死、应用再也退不出（2026-08 review）。
+      // before-quit 都被单飞闸拦死、应用再也退不出。
       confirmingQuit = false;
       console.error('[dsh-chamber] 退出确认对话框失败，取消退出：', error);
-      // 与取消同义（S-08）：这次退出作废，原地恢复存活的窗口；showMainWindow
+      // 与取消同义：这次退出作废，原地恢复存活的窗口；showMainWindow
       // 自带无窗重建兜底。
       if (!quitRequested) showMainWindow();
     }
@@ -1003,14 +967,11 @@ if (!gotTheLock) {
     quitRequested = true;
     setKeepAwakeActive(false);
     // 兜底清除未读徽标（退出在途不留 Dock 残留；曾有意图才触碰，避免无谓日志）。
-    // W-10 S2：意图 holder（pendingBadgeCount）随 BADGE_COUNT 迁 core——
     // clearBadgeIntentForQuit 内部做「曾有意图」守卫与意图清空，原生清除叶在此
-    // 注入（typeof 守卫照旧，语义与搬迁前一致）。
-    // W-10 收口注记（S11）：badge 清 0 / tray destroy / keep-awake 停止等清理动作
-    // 保持本文件——它们依附 app 生命周期（will-quit 事件、app.setBadgeCount、
-    // Tray 对象销毁），是宿主生命周期职责而非 IPC/业务注册面；施工图的
-    // edges 化（HostEdges setBadge 等）只覆盖渲染器驱动的注册面，此处保持现
-    // 状更简且无需改动（决策注记，无行为变化）。
+    // 注入（typeof 守卫）。
+    // badge 清 0 / tray destroy / keep-awake 停止等清理动作依附 app 生命周期
+    // （will-quit 事件、app.setBadgeCount、Tray 对象销毁），是宿主生命周期职责
+    // 而非 IPC/业务注册面。
     clearBadgeIntentForQuit(() => {
       if (typeof app.setBadgeCount === 'function') app.setBadgeCount(0);
     });
@@ -1028,7 +989,7 @@ if (!gotTheLock) {
     event.preventDefault();
     quitCleanupInProgress = true;
     runtimeState.startBlocked = true;
-    // G15：abort 文案单源（shell-core RUNTIME_ABORT_REASON）——与 sidecar-ctx
+    // abort 文案单源（shell-core RUNTIME_ABORT_REASON）——与 sidecar-ctx
     // dispose 的同一事务 abort 引用同一常量，不允许两侧各拼一份。
     runtimeState.operationAbort?.abort(new Error(RUNTIME_ABORT_REASON));
     // 传输层（SSH 隧道/在途 exec）与控制面（本地 dsh + HTTP 门面）的回收互不
@@ -1041,7 +1002,7 @@ if (!gotTheLock) {
     const cleanupTimer = setTimeout(() => {
       // 超时强制退出走 app.exit()：quit 事件不会触发，electron-updater 的
       // autoInstallOnAppQuit（退出腿）不执行——退出腿下「已下载」更新会被
-      // 跳过。注意（2026-12 review L1）：「重启并安装」腿（restartAndInstall
+      // 跳过。注意：「重启并安装」腿（restartAndInstall
       // 已点击）不受此影响——NSIS 安装器在 quit 前已 detached 先行、
       // AppImage 点击时已原位替换，即使 app.exit(1) 安装也照常完成；
       // mac 原生腿未实机确证（见 design 11 §9 断言清单）。
@@ -1069,7 +1030,7 @@ if (!gotTheLock) {
       clearTimeout(cleanupTimer);
       quitCleanupInProgress = false;
       willQuitCleanupComplete = true;
-      // Will-quit cleanup completion marker (2026-12 review M1): the mac
+      // Will-quit cleanup completion marker: the mac
       //「重启并安装」real-machine gate asserts this line appears BEFORE the
       // new version launches — it proves the native Squirrel termination
       // actually ran through the Electron will-quit cleanup (transports +
@@ -1089,11 +1050,10 @@ if (!gotTheLock) {
     // 冷启动深链 argv（design 16 §4.2）：macOS argv 含 -psn_ 噪声，防御式扫描
     // （非深链 argv 零副作用、绝不 throw 打断启动）；与 open-url 双触发由去重兜底。
     for (const url of scanDeepLinkUrls(process.argv)) enqueueDeepLink(url);
-    // W-10 S0（design 25 §4.1 seam）：HostEdges 的 Electron 实现。S2 批起宿主
-    // 背参扩展：showMainWindow = 通知 click 激活腿（本函数模块级语义——
+    // HostEdges 的 Electron 实现（design 25 §4.1 seam）：
+    // showMainWindow = 通知 click 激活腿（本函数模块级语义——
     // restore/show/focus、无窗则重建）；onMainWindowShown = 主窗口 'show' 事件
-    // 订阅面（createMainWindow glue 每窗挂接）。S2 已实现的成员见 electron-edges
-    // 头注释；通知/徽标宿主腿、渲染器投递窗口事实与 resume/show 订阅随本批迁入。
+    // 订阅面（createMainWindow glue 每窗挂接）。
     const edges = createElectronEdges({
       mainWindow: () => mainWindow,
       showMainWindow: () => showMainWindow(),
@@ -1116,8 +1076,8 @@ if (!gotTheLock) {
     if (chamberLock.unsupported) {
       console.warn('[dsh-chamber] 目录锁：当前平台无 O_EXLOCK（Swift flavor 仅 macOS）——跨 flavor 互斥不适用');
     }
-    // Release ONLY after the async cleanup finishes (2026-09 audit: releasing
-    // in a will-quit listener opened a window where another flavor could take
+    // Release ONLY after the async cleanup finishes (releasing
+    // in a will-quit listener would open a window where another flavor could take
     // the lock while transports/control-plane were still writing <userData>).
     // `quit` fires after the cleanup chain settled; the OS also releases on
     // process exit.
@@ -1246,7 +1206,7 @@ if (!gotTheLock) {
         canExposeLocal: () => !runtimeState.startBlocked,
         // The built dsh frontend (renderer vite output) served by the control
         // plane (design 05 §7.3): <pkg>/dist/web in dev and packaged (asar)
-        // alike (P2-4 isolation: renderer owns dist/web only; preload.cjs /
+        // alike (renderer/dist isolation: renderer owns dist/web only; preload.cjs /
         // control-plane / host packages live beside it in dist/).
         webDistDir: path.join(pkgDir, 'dist', 'web'),
         // Host-graph package source (design 09 §3.5): the control plane seeds
@@ -1292,14 +1252,11 @@ if (!gotTheLock) {
       },
       isQuitting: () => quitRequested,
     });
-    // W-10 S8：本地插件执行叶（runtime writer fence 租约 + runtimeState.startBlocked
+    // 本地插件执行叶（runtime writer fence 租约 + runtimeState.startBlocked
     // 启动门 + resolveActiveRuntime(runtimeBaseDir, builtinDshWorkspace) workspace
-    // 解析——fence/启动门是装配侧运行时事务状态）。本体留本文件、经
-    // ctx.runLocalPluginMutation 注入 core：H 组本地插件注册体（LOCAL_PLUGIN_ADD/
-    // ADD_FILE/REMOVE，shell-core installIpcHandlers ② H 组段）的 mutate 编排经
-    // 它走同一执行路径，语义与搬迁前不分叉；mutate 内的实际子进程执行
-    // （runLocalDshPlugin——add 子进程 env 装配/白名单，W-14 关联 C-F12 纪律）
-    // 在 plugin-sync 纯模块，core 直接 import。
+    // 解析——fence/启动门是装配侧运行时事务状态）。mutate 内的实际子进程执行
+    // （runLocalDshPlugin——add 子进程 env 装配/白名单纪律）
+    // 在 plugin-sync 纯模块。
     const runLocalPluginMutation = async <T>(
       owner: string,
       mutate: (dshWorkspace: string) => Promise<T>,
@@ -1317,11 +1274,7 @@ if (!gotTheLock) {
         lease.release();
       }
     };
-    // —— W-10 S8：原 confirmPluginAction 双参闭包（mainWindow, copy）随 H 组
-    // LOCAL_PLUGIN_ADD/REMOVE 注册体迁出删除——注册体改经 shell-core 内 S6 edges
-    // 版 confirmPluginAction 助手（宿主腿 = HostEdges.showMessage，electron-edges
-    // S6 实现；按钮序/取消默认/无窗文案逐字一致），本闭包无剩余使用点。
-    // ssh plugin undo journal (design 21 §6.4, plan Phase 5 ssh 统一增量): the
+    // ssh plugin undo journal (design 21 §6.4): the
     // desktop main-process-persisted journal of every executed remote plugin
     // change (applyPlugins records each row with its pre-change remote spec).
     // File <userData>/ssh-plugin-journal.json — 0600, atomic, no-follow reads
@@ -1338,13 +1291,11 @@ if (!gotTheLock) {
     chamberSettings = settingsLoad.settings;
     setKeepAwakeActive(chamberSettings.keepAwake);
     // 登录自启 reconcile 覆盖全部三平台（design 21 M4:win32 已解锁）。
-    // S-41（2026-12 审计）：损坏文件绝不触碰系统登录项——默认值只回落给
-    // 内存/UI 使用；此前 replay launchAtLogin=false 会静默注销用户登录项，
-    // 且与 Swift 分叉（StartupSettings.readLaunchAtLogin 损坏返回 nil、
-    // AppDelegate 不动作）。后续修复：损坏文件被保留为 *.corrupt 后的下一次
+    // 损坏文件绝不触碰系统登录项——默认值只回落给
+    // 内存/UI 使用：损坏文件被保留为 *.corrupt 后，下一次
     // 启动（live 文件缺失 + 副本存在）由 readSettingsFile 判为 corrupt 状态，
     // 仍然 skip——绝不因状态衰减成 missing 而重放默认 false。真正无副本的
-    // 缺失文件仍 replay 默认 false（注销历史残留）。
+    // 缺失文件仍 replay 默认 false。
     {
       const loginItemDecision = launchAtLoginReconcileDecision(settingsLoad.state, chamberSettings.launchAtLogin);
       if (loginItemDecision.action === 'skip') {
@@ -1357,15 +1308,10 @@ if (!gotTheLock) {
       }
     }
 
-    // —— W-10 S2：NOTIFY / NOTIFICATIONS_READY / NOTIFICATION_OPEN_ACK /
-    // BADGE_COUNT / DEEP_LINK_READY / DEEP_LINK_ACK 六个注册体与其状态机随
-    // B 组批迁出（shell-core installIpcHandlers ② 段，trustedIpc 围栏由下方
-    // 装配的注入 registrar 统一包装）——
-
     // OS 唤醒即时重探（design 14 D4，传输层腿）：主进程对 error/degraded 实例
-    // 立即重探（绝不触碰 idle）。held lastResume 补发 + SYSTEM_RESUME 推送已迁
+    // 立即重探（绝不触碰 idle）。held lastResume 补发 + SYSTEM_RESUME 推送在
     // shell-core（electron-edges 的 onSystemResume 订阅 = 装配于 installIpcHandlers
-    // ① 段；另挂一条独立监听专做重探——双监听语义与搬迁前单 handler 等价）。
+    // ① 段；此处另挂一条独立监听专做重探）。
     powerMonitor.on('resume', () => {
       reconnectStaleTransports(transportManager, () => quitRequested, (message, error) => console.warn(message, error), '[dsh-chamber]');
     });
@@ -1379,7 +1325,7 @@ if (!gotTheLock) {
     // the main process; outputs to the renderer are non-secret status
     // projections (never a transport URL or credential material). The only
     // credential-bearing direction is save_connection's transient write-only input.
-    // SSH password store (design 05 §8, user decision 2026-08 — plaintext
+    // SSH password store (design 05 §8 — plaintext
     // file fallback): passwords mirror to <userData>/ssh-passwords.json
     // (0600, atomic write) and load back at startup so password-only hosts
     // auto-connect after a restart. Values never enter the registry/logs or
@@ -1398,7 +1344,7 @@ if (!gotTheLock) {
     // mirror to <userData>/gateway-secrets.json (schemaVersion 3, 0600,
     // atomic write) — encrypted via Electron safeStorage (macOS Keychain /
     // Windows DPAPI / Linux libsecret) when available, else the documented
-    // 0600 plaintext fallback (user decision 2026-08). Never in the registry,
+    // 0600 plaintext fallback. Never in the registry,
     // never logged, and never returned to/prefilled in the renderer. Non-empty
     // legacy files without a binding have
     // no credential-domain binding and are therefore
@@ -1452,7 +1398,7 @@ if (!gotTheLock) {
       ]);
       for (const aclError of aclErrors) console.error(`[dsh-chamber] windows ACL tightening failed: ${aclError}`);
     }
-    // 安装树上游 client-plugin 闭包抽样（S4 P1，2026-12 Windows 复核；全平台）：
+    // 安装树上游 client-plugin 闭包抽样（全平台）：
     // afterPack 只证构建树，NSIS 长路径 / Defender 中断 / 部分安装丢掉一个上游
     // 包时，前端只静默少一行（sidebarRight 的唯一 provider 就在抽样里）。这里对
     // 已安装运行树做同一抽样，缺件大声报出且绝不阻断启动（与上面 ACL 收紧同一
@@ -1515,8 +1461,8 @@ if (!gotTheLock) {
       // save_connection rebuilds the registry (never silently faked as empty).
       console.error('[dsh-chamber] 加载 SSH 实例失败：', loadError);
       const file = instancesFilePath(app.getPath('userData'));
-      // The rename itself is single-sourced in store-file-hygiene.preserveFileAside
-      // (2026-12 stage-2 item 5); only the wording stays flavor-specific.
+      // The rename itself is single-sourced in store-file-hygiene.preserveFileAside;
+      // only the wording stays flavor-specific.
       const aside = preserveFileAside(file, '.corrupt');
       if (aside.ok) console.warn(`[dsh-chamber] 已保留损坏的实例文件为 ${aside.path}`);
       else console.error('[dsh-chamber] 保留损坏实例文件失败：', aside.error);
@@ -1537,11 +1483,6 @@ if (!gotTheLock) {
       instance.serviceName,
       instance.remoteDshHome,
     ]);
-    // —— W-10 S2：来源证明/代际实例（NotificationSourceProofs /
-    // NotificationSourceIncarnations）与其投影/同步闭包已迁 shell-core（导出
-    // projectNotificationSourceInstances / syncNotificationSourceRegistry /
-    // captureNotificationSource / ownsNotificationSource /
-    // matchesNotificationSource）——
     // Native notifications can be requested only for sources in the loaded
     // authoritative registry. This also establishes the initial incarnation
     // before the notify IPC handler can run.
@@ -1551,7 +1492,7 @@ if (!gotTheLock) {
     // a pre-expiry re-login ~60s before the session's expiry instant and
     // re-register the transport with the fresh cookie — without this a
     // healthy transport rides its registration-time Cookie past expiry and
-    // the proxy answers 401 until a reconnect (the S2 gap fixed here). The
+    // the proxy answers 401 until a reconnect. The
     // controller is armed/disarmed by the ready-phase status transitions
     // below; the residual window (a refresh that fails after the old cookie
     // died) is honestly warned and recovers through the disconnect→reconnect
@@ -1597,7 +1538,7 @@ if (!gotTheLock) {
           headers === undefined ? undefined : sanitizedRegistrationHeaders(headers),
         ));
       },
-      // Bounded dead-cookie recovery (design 17 §9.3, P2-1): a re-login that
+      // Bounded dead-cookie recovery (design 17 §9.3): a re-login that
       // failed AFTER the old cookie died would otherwise leave a healthy
       // transport riding it, so the proxy answers 401 indefinitely.
       // transport-manager has no single "reconnect" entry, so this uses its
@@ -1678,11 +1619,9 @@ if (!gotTheLock) {
       : path.join(repoRoot, 'packages', 'dsh-chamber-seed-archive-cleanup');
     // Per-package SOURCE DIRS are desktop-specific (packaged vs repo paths);
     // the insert id/name come from the control-plane registry, so a registry
-    // addition/rename can never drift from the seed list (2026-09 user
-    // decision: no hand-maintained parallel package list). This ONE map feeds
+    // addition/rename can never drift from the seed list. This ONE map feeds
     // both consumers — the remote ssh seed list below and the gateway sync
-    // upload (`localChamberHostPackageSources`), which used to carry a second,
-    // independently maintained copy of the same three paths.
+    // upload (`localChamberHostPackageSources`).
     const chamberHostSourceDirs: Record<string, string> = {
       [CLIENT_GRAPH_PACKAGE_NAME]: moduleASourceDir,
       [GIT_WORKTREE_PACKAGE_NAME]: gitWorktreeHostSourceDir,
@@ -1713,7 +1652,7 @@ if (!gotTheLock) {
     // it as a seedable package made the manual 注入 action fail with a
     // "构建产物缺失" error naming the one package that must never be seeded, and
     // appended a false gap to the REMOTE instance's log on every ready
-    // transition (design 20 §6, 2026-12 review). The writer re-applies the same
+    // transition (design 20 §6). The writer re-applies the same
     // rule internally (portableChamberHostPackageSeeds).
     const portableHostSeeds = portableChamberHostPackageSeeds(chamberHostPackageSeeds);
     type RemoteTarget = {
@@ -1798,7 +1737,7 @@ if (!gotTheLock) {
         }
       })();
     };
-    // 2026-12 Phase 3: desktop-synced chamber host packages. The local copies
+    // Desktop-synced chamber host packages: the local copies
     // (dev source tree / packaged dist) are the same sources the local
     // control-plane seed uses; the sync uploads them into the gateway seed
     // cache after every gateway ready registration.
@@ -1808,11 +1747,11 @@ if (!gotTheLock) {
       // local-shape-only rule has exactly one implementation and a future
       // portability dimension cannot leak a row into the gateway seed cache by
       // forgetting this site. The per-package source dirs still come from the
-      // single map declared with the seed list above (2026-09 P2 round).
+      // single map declared with the seed list above.
       return portableHostSeeds.flatMap(seed => {
         const dir = chamberHostSourceDirs[seed.packageName];
         if (dir === undefined) {
-          // NEVER silent (a registry entry with no desktop source dir used to
+          // NEVER silent (a registry entry with no desktop source dir must not
           // disappear here without a trace). This is the ssh seed list's
           // graceful skip inverted: there, an empty sourceDir is a deliberate
           // "not shipped here" that seedRemoteChamberHostPackages skips; here
@@ -1837,7 +1776,7 @@ if (!gotTheLock) {
     // Resolves the awaited sync outcome for the caller (the manual
     // gateway_plugin_sync IPC, design 21 §6.5) or null when the instance is
     // missing / no longer a gateway. The ready-registration call site keeps
-    // the original fire-and-forget behavior via `void`.
+    // the fire-and-forget behavior via `void`.
     const syncGatewayChamberPluginsFor = async (
       id: string,
       url: string,
@@ -2032,12 +1971,12 @@ if (!gotTheLock) {
                 },
               );
               registeredAuthFingerprints.set(connectionId, authHeadersFingerprint(headers));
-              // 2026-12 Phase 3: desktop-synced chamber host packages — after
+              // Desktop-synced chamber host packages — after
               // every gateway ready registration, best-effort sync the local
               // host packages into the gateway seed cache (idempotent: only
               // version mismatches re-upload, and the upload asks the gateway
               // for a controlled dsh restart so the running profile picks
-              // them up). The gateway no longer ships its own copies, so the
+              // them up). The gateway does not ship its own copies, so the
               // managed dsh keeps its chamber host layer version-locked to
               // this desktop. Mobile access is NOT covered here: the mobile
               // plugin ships inside the gateway distribution instead (its
@@ -2169,14 +2108,9 @@ if (!gotTheLock) {
      * source-lifecycle authority. Metadata/secret persistence is owned by the
      * transaction; this sidecar rotates renderer/native-notification proofs,
      * revokes exact plugin-seed owners, and publishes the committed roster.
-     * W-10 S2：证明投影/代际同步/队列退役清理在 shell-core
+     * 证明投影/代际同步/队列退役清理在 shell-core
      * （projectNotificationSourceInstances / syncNotificationSourceRegistry），
-     * 活跃原生通知的退役驱逐经 edges.retireNotificationsForSources（B4 登记在
-     * electron-edges 私有）。
-     * W-10 S3：本 sidecar 留 main 装配侧（C 组注册体已迁 shell-core
-     * installIpcHandlers ②，save/delete 经 ctx.publishRegistryTransition
-     * 调用本函数）；projectInstanceSecrets 定义随投影链迁入 shell-core
-     * （core→main 单向 import，S2 同款），本函数不再持有局部定义。
+     * 活跃原生通知的退役驱逐经 edges.retireNotificationsForSources。
      */
     const publishRegistryTransition = (
       before: readonly TransportInstanceSpec[],
@@ -2206,16 +2140,16 @@ if (!gotTheLock) {
           hostPackageSeeding.revoke(previous.id);
           // The plugin undo journal is bound to the OPERATIONAL target: an
           // id-stable edit that changed host/user/service/home invalidates
-          // every op recorded on the previous target (design 21 §6.4 review
-          // P1) — drop them here AND at undo time (latestOkForTarget).
+          // every op recorded on the previous target (design 21 §6.4) —
+          // drop them here AND at undo time (latestOkForTarget).
           sshPluginJournal.clear(previous.id);
           if (current?.kind === 'dsh' && current.transport === 'ssh') reseedIds.push(previous.id);
         }
       }
 
-      // W-10 S2：代际同步 + 两条队列的退役丢弃 = shell-core
+      // 代际同步 + 两条队列的退役丢弃 = shell-core
       // syncNotificationSourceRegistry（返回退役 id）；活跃原生通知驱逐 =
-      // edges.retireNotificationsForSources（原 activeNotifications 迭代）。
+      // edges.retireNotificationsForSources。
       const retiredNotificationSources = new Set(syncNotificationSourceRegistry(projected));
       if (retiredNotificationSources.size > 0) {
         edges.retireNotificationsForSources(retiredNotificationSources);
@@ -2244,110 +2178,14 @@ if (!gotTheLock) {
       }
       return projectedSaved;
     };
-    // —— W-10 S3：registry+凭据 C 组 6 注册体（SSH_INSTANCES_GET /
-    // SSH_SAVE_CONNECTION / SSH_DELETE_CONNECTION /
-    // SSH_SET_PASSWORD / GATEWAY_SET_TOKEN / GATEWAY_SET_PASSWORD）自 main.ts
-    // 迁入 shell-core installIpcHandlers ② C 组段（注册体/纯辅助/投影链逐字
-    // 随迁；装配依赖经 ctx：transportManager/audit/gatewaySessions/
-    // publishRegistryTransition）。本 sidecar 与其宿主生命周期对象
-    // （readySeedEdges/hostPackageSeeding/sshPluginJournal/… 与
-    // SSH_INSTANCES_CHANGED push 文本）留本文件——renderer-trust 锚定。
 
-    // —— W-10 S4：ssh 连接状态 D 组 7 注册体（SSH_CONFIG_LIST / SSH_CONNECT /
-    // SSH_DISCONNECT / SSH_STATUS / SSH_REVERIFY / SSH_LOGS / SSH_LOGS_CLEAR）
-    // 自 main.ts 迁入 shell-core installIpcHandlers ② D 组段（注册体逐字随迁，
-    // 按 C 组之后原序追加；CONFIG_LIST 的非秘密投影纪律注释随迁）。装配依赖
-    // 经 ctx：transportManager（Pick 扩 reverify/logs/clearLogs，见
-    // ShellAssemblyCtx）；ssh-config 发现经纯模块 ssh-config.ts import（main
-    // 侧 import 随迁移除）。exec/systemd（SSH_START/STOP/IS_ACTIVE/
-    // RESTART_SERVICE）4 注册体已随 W-10 S5 迁出（见下 E 组标记），插件管理
-    // 等其余 handler 留本文件。
+    // systemctl argv 固定参数数组 `systemctl <action> -- <serviceName>` 与
+    // 服务名白名单（SERVICE_NAME_PATTERN，design 02 §3.9——拒绝发生在任何 spawn
+    // 前）及 generation 复验纪律（exec 结果/serviceActive 提交前 execIsCurrent
+    // 复验，防旧代污染）在 transport-manager/ssh-provider 纯模块内部。
+    // execTransport（= sm.exec 的 ExecFn 收窄别名）为下方插件管理面 scopedExec
+    // 所用。
 
-    // —— W-10 S5：exec/systemd E 组 4 注册体（SSH_START_SERVICE /
-    // SSH_STOP_SERVICE / SSH_IS_ACTIVE / SSH_RESTART_SERVICE）自 main.ts 迁入
-    // shell-core installIpcHandlers ② E 组段（D 组之后按原序；注册体逐字随迁，
-    // 「Provider exec channel」投影纪律注释随迁）。装配依赖经 ctx：
-    // transportManager（Pick 扩 exec，见 ShellAssemblyCtx——装配注入完整现实
-    // 例，无新字段）。systemctl argv 固定参数数组 `systemctl <action> -- <
-    // serviceName>` 与服务名白名单（SERVICE_NAME_PATTERN，design 02 §3.9——
-    // 拒绝发生在任何 spawn 前）及 generation 复验纪律（exec 结果/serviceActive
-    // 提交前 execIsCurrent 复验，防旧代污染）在 transport-manager/ssh-provider
-    // 纯模块内部，不随迁。restart 注册体原经本文件 execTransport（= sm.exec 的
-    // ExecFn 收窄别名）调同一执行面——该别名仍为下方插件管理面 scopedExec 所
-    // 用，留本文件。
-
-    // —— W-10 S6：ssh plugin F 组 6 注册体（SSH_PLUGIN_LIST / SSH_PLUGIN_APPLY
-    // / SSH_PLUGIN_UNDO / SSH_SEED_HOST_GRAPH / SSH_PLUGIN_MATERIALIZE_ADD /
-    // SSH_PLUGIN_MATERIALIZE_ADD_PICK）自本文件迁入 shell-core installIpcHandlers
-    // ② F 组段（E 组之后按原序；注册体逐字随迁，trustedIpc 围栏由装配侧注入
-    // registrar 包装）。编排纯模块（plugin-sync / ssh-apply-rows /
-    // plugin-tarball）在 core 直接 import；共享现实例/闭包束经 ctx 注入
-    // （localDshHome / sshPluginJournal / hostPackageSeeding /
-    // chamberHostPackageSeeds / sshPluginTargets——自动 seed/ready 撤销路径与
-    // F 组共用同一实例/闭包族，本文件侧定义留用）。确认对话框（原
-    // confirmPluginAction 形状）与插件源 picker（原模块级 pickPluginSource——
-    // 已自本文件删除）宿主函数体迁 electron-edges.ts（HostEdges.showMessage /
-    // pickPluginSource）；本文件余下 gateway/local 调用点已改经 edges。
-    // transportManager Pick 扩 appendLog。插件管理（GATEWAY_PLUGIN_* 3 注册体
-    // 已随 W-10 S7 G 组迁出——见下方 S7 总标记；LOCAL_PLUGIN_* / NPM_SEARCH
-    // 5 注册体已随 W-10 S8 H 组迁出——见下方 S8 总标记）注册体至此全部迁出
-    // 本文件。
-
-    // —— W-10 S7：gateway 插件 G 组 3 注册体（GATEWAY_PLUGIN_SYNC /
-    // GATEWAY_PLUGIN_APPLY / GATEWAY_PLUGIN_MATERIALIZE）自本文件迁入 shell-core
-    // installIpcHandlers ② G 组段（F 组之后按原序；注册体逐字随迁，trustedIpc
-    // 围栏由装配侧注入 registrar 包装）。编排纯模块（gateway-provider /
-    // gateway-sync-registry / gateway-ipc-shared / plugin-tarball）在 core 直接
-    // import（本文件 import 面已按迁出收窄：getGatewaySyncRegistration /
-    // buildPluginTarball / validateApplyPayload / buildApplyConfirmMessage /
-    // gatewayChamberApplyBatch / gatewayChamberMaterialize 随迁删除）。确认
-    // 对话框经 core 内 S6 edges 版 confirmPluginAction 助手（宿主腿 =
-    // HostEdges.showMessage；本文件原 confirmPluginAction 闭包已随 W-10 S8 H 组
-    // 迁出删除——LOCAL_PLUGIN_ADD/REMOVE 迁出后无剩余使用点，见 S8 总标记）、
-    // 无存活主窗预检经 edges.mainWindowAlive、
-    // 插件源 pick 经 edges.pickPluginSource。手动 sync 的上传执行闭包
-    // syncGatewayChamberPluginsFor 经 ctx 注入 core（ready 自动 sync（本文件
-    // sm.onStatusChanged ready 边缘）与手动 re-entry 共用同一执行路径与注册
-    // 参数，语义不分叉——本文件侧定义留用）。
-
-    // —— W-10 S8：本地插件 + npm 搜索 H 组 5 注册体（LOCAL_PLUGIN_LIST /
-    // NPM_SEARCH / LOCAL_PLUGIN_ADD_FILE / LOCAL_PLUGIN_ADD / LOCAL_PLUGIN_REMOVE）
-    // 自本文件迁入 shell-core installIpcHandlers ② H 组段（G 组之后按原序；注册体
-    // 逐字随迁，trustedIpc 围栏由装配侧注入 registrar 包装）——五注册体原文本整体
-    // 移走，本处原位留标记。编排纯模块（plugin-sync：localPluginList /
-    // runLocalDshPlugin / describeLocalPluginAddConfirmation /
-    // describeLocalPluginRemoveConfirmation；plugin-tarball classifyPluginPick；
-    // @dsh-chamber/dsh-runtime isAllowedRegistryUrl——npm 搜索 registry URL
-    // 白名单）在 core 直接 import（本文件 import 面已按迁出收窄：以上符号 +
-    // NPM_SEARCH_MAX_BODY_BYTES 随迁删除）。插件管理面的 loud 形状纪律与 npm
-    // 搜索的 best-effort 语义注释（main-process fetch、renderer 留 127.0.0.1、
-    // redirect manual、bounded read）随注册体迁入 core。确认对话框经 core 内 S6
-    // edges 版 confirmPluginAction 助手（宿主腿 = HostEdges.showMessage；按钮序/
-    // 取消默认/无窗文案逐字一致——本文件 confirmPluginAction 闭包已删除，见上方
-    // 定义处标记）、ADD_FILE 的无存活主窗预检经 edges.mainWindowAlive、插件源
-    // pick（ADD_FILE）经 edges.pickPluginSource。本地安装的宿主子进程编排
-    // （runLocalPluginMutation：runtime writer fence 租约 + runtimeState.startBlocked
-    // 启动门 + resolveActiveRuntime workspace 解析）本文件侧定义留用、经 ctx
-    // 注入 core（fence/启动门归装配侧；add 子进程 env 装配/白名单纪律在
-    // plugin-sync runLocalDshPlugin 纯模块内，W-14 关联 C-F12 登记不变）。
-    // 宿主生命周期对象（自动 seed / journal / 撤销路径 / reapStaleLocalPluginWriters
-    // / disposePluginSyncChildren 等）仍留本文件装配侧。插件管理 IPC 注册体至此
-    // 全部迁出本文件。
-
-    // —— W-10 S9（open-in + update 批）迁出标记：wiredCtx / openInCtx（open-in
-    // 共享宿主依赖束）、OPEN_IN_APPS / OPEN_IN 注册体、updater 状态 push 订阅、
-    // UPDATE_STATE / UPDATE_CHECK / UPDATE_DOWNLOAD / UPDATE_RESTART /
-    // OPEN_RELEASE 5 注册体与深链 OS 启动消费循环装配（drainPendingIntents 闭
-    // 包）全部迁入 shell-core installIpcHandlers ② I 组段（H 组之后按原序；注册
-    // 体逐字随迁，trustedIpc 围栏由装配侧注入 registrar 包装）。open-in 面经
-    // ctx 既有面（hostFacts.platform / settingsIO.current() / transportManager
-    // （sm）/ edges 打开叶）装配——本文件无新增装配字段；update 面经
-    // ctx.updateController 注入（见下方构造与 shellCtx 字段）。wiredCtx 原
-    // lookupInstance 依赖的 transportManager、vscodeOpenInNewWindow 依赖的
-    // chamberSettings holder 与打开叶依赖在 core 侧分别经 ctx/edges 同一现实
-    // 例/同一读面（settingsIO.current()），语义不分叉。updater.start() 调用移至
-    // installIpcHandlers 装配之后（订阅随注册体迁 core——保持「先订阅后 start」
-    // 原序，见下方装配点）。——
     // Update controller (design 11): silent check on a startup delay + 6h
     // interval; autoDownload=false — checking never downloads, the download
     // starts ONLY when the user clicks「更新」in the settings update section
@@ -2359,7 +2197,7 @@ if (!gotTheLock) {
     // user-triggered restart (dsh-chamber:update-restart →
     // updater.restartAndInstall → electron-updater quitAndInstall: quit +
     // install + relaunch through the normal before-quit/will-quit cleanup
-    // path; 2026-12 user decision, controllable flow). The state projection
+    // path; controllable flow). The state projection
     // is non-secret only (versions / channel / release URL / short error
     // text) and every failure is silent (main-process log), never blocking
     // startup — the settings section renders the honest state.
@@ -2370,9 +2208,9 @@ if (!gotTheLock) {
         warn: (...args) => console.warn('[updater]', ...args),
         error: (...args) => console.error('[updater]', ...args),
       },
-      // 更新退出腿的关窗豁免（2026-12 macOS 实机缺陷修复）：控制器恰好在调用
+      // 更新退出腿的关窗豁免：控制器恰好在调用
       // electron-updater quitAndInstall **之前**同步回调这里——macOS 上该调用
-      // 先关闭全部窗口、再退出（Electron 43.4.0 typings/探针，见
+      // 先关闭全部窗口、再退出（Electron 43.4.0 typings，见
       // shouldHideToTray），关窗一旦被 hide 吞掉，安装+重启链就地中断。回调只在
       // 真正武装的路径上触发（拒绝路径不回调），失败/停滞由状态订阅撤回。
       onQuitAndInstallArmed: armUpdaterQuit,
@@ -2504,24 +2342,15 @@ if (!gotTheLock) {
       callback(isChamberPermissionGranted(permission)));
     session.defaultSession.setPermissionCheckHandler((_wc, permission) => isChamberPermissionGranted(permission));
 
-    // W-10 S1+S2（design 25 §4.1 seam）：shell IPC 注册点迁入 shell-core 的
-    // installIpcHandlers——S1 迁 INFO / SETTINGS_GET / SETTINGS_SET 注册体与其
-    // 随迁 settings 辅助（chamberSettingsStatus / applySettingsPatch /
-    // pushSettingsChanged）；S2 追加 B 组 6 注册体（NOTIFY / NOTIFICATIONS_READY
-    // / NOTIFICATION_OPEN_ACK / BADGE_COUNT / DEEP_LINK_READY / DEEP_LINK_ACK）
-    // 与其渲染器投递状态机（队列/ready 位/drain/来源代际/held resume/badge
-    // holder）。W-10 S3–S11：C–K 组注册体（registry/ssh/插件/runtime 等全部
-    // 60 handler）同点装配——本文件只做装配与注入（各组字段与迁出注记见
-    // 上方 shellCtx 装配注释与文件头职责清单）：
-    //  - ipc：trustedIpc 围栏在此包一层（core 零 electron，语义与搬迁前
+    // shell IPC 注册点 = shell-core 的 installIpcHandlers（design 25 §4.1 seam）
+    // ——本文件只做装配与注入：
+    //  - ipc：trustedIpc 围栏在此包一层（core 零 electron，语义与
     //    `ipcMain.handle(ch, trustedIpc(handler))` 完全一致）；
-    //  - edges：createElectronEdges 返回值（S0 rendererPush + S2 渲染器投递/
-    //    通知/徽标批成员 + S6 showMessage/pickPluginSource 对话框腿；host 背参
+    //  - edges：createElectronEdges 返回值（rendererPush + 渲染器投递/
+    //    通知/徽标批成员 + showMessage/pickPluginSource 对话框腿；host 背参
     //    含 click 激活腿与 'show' 订阅面）；
-    //  - ctx：宿主事实 + settings 内存 holder / 副作用叶活引用 + S2 quit 门
-    //    （holder 仍在本文件——其余 20+ 处直读点随各自批迁入，届时 holder
-    //    一并搬家）。
-    // 调用点纪律（施工图 S1/S2）：whenReady 内、createMainWindow 之前——窗口
+    //  - ctx：宿主事实 + settings 内存 holder / 副作用叶活引用 + quit 门。
+    // 调用点纪律：whenReady 内、createMainWindow 之前——窗口
     // 加载前注册完毕（renderer 最早 invoke 也晚于全部启动代码），并完成投递
     // 状态机的 edges/quit 快照（shell-core 单装配不变式）。
     const shellCtx: ShellAssemblyCtx = {
@@ -2543,36 +2372,9 @@ if (!gotTheLock) {
       },
       setKeepAwake: enabled => setKeepAwakeActive(enabled),
       setLoginItem: enabled => applyLaunchAtLogin(enabled),
-      // W-10 S2：quit 在途门（通知/深链入队与通知投递循环的 ignore 语义——
-      // 原 main.ts 模块级 quitRequested 经它注入 core）。
+      // quit 在途门（通知/深链入队与通知投递循环的 ignore 语义——
+      // quitRequested 经它注入 core）。
       isQuitting: () => quitRequested,
-      // W-10 S3（registry+凭据批）：C 组 7 注册体迁入 installIpcHandlers 的装配
-      // 依赖。transportManager = 本作用域 sm 常量（transport-manager 纯模块现实
-      // 例，registry 读写 + 状态/生命周期投影）；audit = 绑定 auditLogPath 的
-      // S24 审计叶；gatewaySessions = 模块级会话管理器装配期取值（null 仅
-      // will-quit 清理可达——处理器不可达，见 ShellAssemblyCtx 字段注释）；
-      // publishRegistryTransition = registry 变更生命周期 sidecar（宿主对象
-      // readySeedEdges/hostPackageSeeding/sshPluginJournal/… 与
-      // SSH_INSTANCES_CHANGED push 文本留本文件，经 ctx 供 core 调用）。
-      // W-10 S4（ssh 连接状态批）：D 组 7 注册体同经 transportManager——core 侧
-      // Pick 扩 reverify/logs/clearLogs（本装配注入完整现实例，无新增字段）。
-      // W-10 S5（exec/systemd 批）：E 组 4 注册体（SSH_START/STOP/IS_ACTIVE/
-      // RESTART_SERVICE）同经 transportManager——core 侧 Pick 扩 exec（本装配
-      // 注入完整现实例，无新增字段）。
-      // W-10 S6（ssh plugin 批）：F 组 6 注册体（SSH_PLUGIN_LIST/APPLY/UNDO /
-      // SSH_SEED_HOST_GRAPH / SSH_PLUGIN_MATERIALIZE_ADD(_PICK)）迁入
-      // installIpcHandlers ② F 组段的装配依赖——core 侧 Pick 扩 appendLog；
-      // 共享现实例/闭包束经 ctx 注入：localDshHome（本作用域装配期解析值——
-      // core 不碰 Electron paths）、sshPluginJournal（本作用域现实例——main
-      // 的 publishRegistryTransition 撤销清理与 core undo/apply 共用同一 journal
-      // 写者）、hostPackageSeeding / chamberHostPackageSeeds（自动 seed 路径与
-      // core 手动 seed 共用同一注册表/数组）、sshPluginTargets（findRemoteTarget
-      // / ownsRemoteTarget / scoped* / liveProbeFor 闭包——自动 seed 与 ready
-      // 边缘同族，core 经 ctx 调用、文本以原名逐字保留）。确认对话框与插件源
-      // picker 宿主腿（confirmPluginAction 形状 / pickPluginSource 函数体）已迁
-      // electron-edges.ts（HostEdges.showMessage / pickPluginSource）——W-10 S8
-      // 起本地插件注册体（H 组）同经 core 内 confirmPluginAction 助手与 edges
-      // 宿主腿，本文件 confirmPluginAction 闭包已删除（无使用点，见定义处标记）。
       transportManager: sm,
       audit,
       gatewaySessions,
@@ -2589,44 +2391,9 @@ if (!gotTheLock) {
         scopedProbeForTarget,
         liveProbeFor,
       },
-      // W-10 S7（gateway 插件批）：G 组 3 注册体（GATEWAY_PLUGIN_SYNC/APPLY/
-      // MATERIALIZE）迁入 installIpcHandlers ② G 组段的装配依赖——syncGateway
-      // ChamberPluginsFor（本作用域定义的上传执行闭包，ready 自动 sync 与手动
-      // gateway_plugin_sync 共用同一执行路径：注册 transport 来源/授权头/SPKI
-      // pin + 本地 chamber host 包源（app.isPackaged/pkgDir/repoRoot 解析在
-      // 闭包内））；core 侧确认对话框复用 S6 edges 助手、窗口预检与 pick 经
-      // edges——本装配不再新增宿主叶。
       syncGatewayChamberPluginsFor,
-      // W-10 S8（本地插件批）：H 组 3 个本地插件注册体（LOCAL_PLUGIN_ADD/
-      // ADD_FILE/REMOVE）的本地执行叶——runLocalPluginMutation（本作用域定义，
-      // 见定义处注释：runtime writer fence 租约 + runtimeState.startBlocked 启动门 +
-      // resolveActiveRuntime workspace 解析归装配侧），core 经 ctx 调用同一执行
-      // 路径，与搬迁前不分叉。
       runLocalPluginMutation,
-      // W-10 S9（open-in + update 批）：I 组 update 注册体的装配依赖——updater
-      // 现实例（上方构造的 createUpdateController 包装：electron-updater 生命
-      // 周期/autoInstallOnAppQuit/quitAndInstall 的 quit 腿归本实例）；core 的
-      // UPDATE_STATE/CHECK/DOWNLOAD/RESTART 注册体与状态 push 订阅共用同一实
-      // 例（文本以原名 updater 逐字保留）。start() 由本文件在 installIpcHandlers
-      // 装配后调用（订阅已随 I 组注册——保持「先订阅后 start」原序）。模块级
-      // updateController ref（will-quit 读退出豁免状态）仍在本文件。
       updateController: updater,
-      // W-10 S10（runtime A 批）：J 组 6 注册体（RUNTIME_STATE / RUNTIME_RESTART /
-      // RUNTIME_CHECK / RUNTIME_INSTALL / RUNTIME_CLEANUP_VERSION /
-      // RUNTIME_CLEAR_FAILURE）迁入 installIpcHandlers ② J 组段的装配依赖：
-      //  - runtimeController = 本作用域 runtimeInstance 现实例（K 组注册体与
-      //    启动/证据路径共用——状态权威单一，语义不分叉）；
-      //  - runtimeOperationBusy = 模块级 runtimeState.operation 事务槽在飞读门（单写
-      //    者仍为本文件的启动事务/回滚/K 组注册体；core 只读）；
-      //  - runtimeWriterFence = 本作用域 fence 现实例（core J 组注册体与启动事
-      //    务/其余路径经同一 fence 串行化——owner 名逐字保留）；
-      //  - runtimeActionAllowed = 本作用域门闭包（K 组注册体同用——单一实现）；
-      //  - runtimeBaseDir = 本作用域 userData 解析值（core 不碰 Electron paths）；
-      //  - refreshRuntimeEvidence / runStorePruneIfNeeded = 本作用域宿主叶（K 组
-      //    与启动路径同用同一实现）；
-      //  - restartLocalDsh = PlaneHandle 宿主腿（controlPlane null 门 +
-      //    restartLocal() + resolve 后实时 connectionState——resolve ≠ success
-      //    白名单判据留 core 注册体）。
       runtimeController: runtimeInstance,
       runtimeOperationBusy: () => runtimeState.operation !== null,
       runtimeWriterFence,
@@ -2639,23 +2406,6 @@ if (!gotTheLock) {
         await controlPlane.restartLocal();
         return controlPlane.connectionState;
       },
-      // W-10 S11（runtime B + 收口批）：K 组 6 注册体（RUNTIME_RECOVER_METADATA /
-      // RUNTIME_RESET_BUILTIN / RUNTIME_RETRY_APPLY / RUNTIME_APPLY_NOW /
-      // RUNTIME_RETRY_RESTORE / RUNTIME_RESTORE_PRE_ROLLBACK）迁入 installIpcHandlers
-      // ② K 组段的装配依赖——运行时启动事务宿主与共享闭包族（本作用域定义，与
-      // 启动/证据路径同一实现/同一事务槽，语义不分叉），经 ctx 注入 core：
-      //  - runRuntimeStartup = 启动事务宿主本体（事务槽/abort/启动门管理在装配侧）；
-      //  - publishBlockedStartup / setRuntimeGate = 阻塞发布与启动门写宿主叶；
-      //  - runUserMetadataRecovery / authoritativeMetadataRecoveryStatus = 元数据恢复
-      //    事务宿主与资格投影（executeMetadataRecovery 腿在此）；
-      //  - readApplyNowGateInput = APPLY_NOW 门输入构造叶（上方定义——controlPlane/
-      //    env/事务槽宿主读留在叶内，evaluateApplyNowGate 纯门在 core 直 import）；
-      //  - selectedJournalIntent = 上方共享闭包（readActivationFacts 同用）；
-      //  - stopLocalDsh = cp.stopLocal 宿主叶（PlaneHandle 不进入 core）；
-      //  - runtimeOperationSlot = 模块级 runtimeState.operation 事务槽的登记/清槽/在飞值
-      //    面（begin/end/inFlight——槽本体单写者仍为本文件：启动事务/自动回滚与
-      //    K 组注册体经同一槽串行化；quit 路径 abort 与 will-quit 读同一槽）；
-      //  - bundledRuntimeVersion = 本作用域 bundledVersion 装配期值快照。
       runRuntimeStartup,
       publishBlockedStartup,
       setRuntimeGate,
@@ -2670,11 +2420,11 @@ if (!gotTheLock) {
         inFlight: () => runtimeState.operation,
       },
       bundledRuntimeVersion: bundledVersion,
-      // 2026-12 合并（main 的插件受保护集合判定，design 21 §6.11）：core 的
+      // 插件受保护集合判定（design 21 §6.11）：core 的
       // localProtectionFacts 需要内建工作区路径（resolveActiveRuntime 第二参）、
       // 运行时线锚锁文件路径叶与更新退出腿回撤叶——三者都是宿主事实/生命周期，
       // 归装配侧（core 不碰 Electron paths；回撤叶与上方 armUpdaterQuit/
-      // disarmUpdaterQuit 同一实现——I 组状态订阅在武装期间收到失败/相位离开
+      // disarmUpdaterQuit 同一实现——updater 状态订阅在武装期间收到失败/相位离开
       // downloaded 时调用，叶自身幂等）。
       builtinDshWorkspacePath: builtinDshWorkspace,
       pinnedRuntimeLockfilePath: () => resolvePinnedRuntimeLockfile(),
@@ -2702,11 +2452,6 @@ if (!gotTheLock) {
       edges,
       ctx: shellCtx,
     });
-    // W-10 S9：updater 状态 push 订阅随 I 组注册体迁入 core（installIpcHandlers
-    // 内 updater.subscribe）——start() 保持原调用点相对次序（原「订阅 → start」
-    // 都在本位置之前完成；订阅现于上方装配点注册，此处 start 仍晚于订阅——先
-    // 订阅后 start 原序不变；start() 只排定 15s 首检与 6h 周期计时，与搬迁前
-    // 同语义）。
     updater.start();
 
     // 启动期创建主窗口：加载失败 = 大声失败 + 退出（createMainWindow 内）；
@@ -2718,17 +2463,14 @@ if (!gotTheLock) {
       runtimeInstance.setLifecycle({ phase: 'failed', error: describeError(error) });
     });
 
-    // 深链统一 drain（design 16 §4.2）——W-10 S9：OS 深链启动队列（pendingIntents）
-    // 与消费循环（drain 闭包）迁入 shell-core installIpcHandlers ② I 组段装配
-    // （S2 遗留项闭合：成功 intent 经 core 导出 enqueueRendererDeepLinkIntent +
-    // ownsNotificationSource 接入 renderer hold/replay 队列；失败 loud =
-    // core 内 edges.showError 对话框 + 日志；quit 在途的新深链在 core 导出
-    // enqueueDeepLink 内被 ignore）。此处只保留 startup 完成后的首次显式 drain
-    // （冷启动 argv 入队先于装配——经导出入口 drainDeepLinkLaunches 消费；随后
-    // OS 入口（open-url / second-instance）入队即触发消费）。
+    // 深链统一 drain（design 16 §4.2）：OS 深链启动队列（pendingIntents）与消费
+    // 循环（drain 闭包）在 shell-core installIpcHandlers（成功 intent 经 core 导出
+    // enqueueRendererDeepLinkIntent + ownsNotificationSource 接入 renderer
+    // hold/replay 队列；失败 loud = core 内 edges.showError 对话框 + 日志；quit
+    // 在途的新深链在 core 导出 enqueueDeepLink 内被 ignore）。此处只保留 startup
+    // 完成后的首次显式 drain（冷启动 argv 入队先于装配——经导出入口
+    // drainDeepLinkLaunches 消费；随后 OS 入口（open-url / second-instance）入队
+    // 即触发消费）。
     drainDeepLinkLaunches();
-    // —— W-10 S2：通知打开 drain（drainPendingNotificationOpens 赋值与末次调用）
-    // 已迁 shell-core 投递状态机（send 叶 = edges.rendererPush；NOTIFICATION_OPEN
-    // 推送源随迁）——
   });
 }

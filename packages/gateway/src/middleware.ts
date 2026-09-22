@@ -5,9 +5,8 @@
  *
  *   - viewport: dsh's index.html already carries `<meta name="viewport">`
  *     (the design's own note), so injection is an idempotent no-op.
- *   - CSP (gateway-only proxy relaxation, no design-17 anchor — the old S14
- *     label now means the session-content non-persistence invariant): handled
- *     in dispatch.ts as the scoped GATEWAY_PROXY_CSP `script-src` relax — the
+ *   - CSP (gateway-only proxy relaxation, no design-17 anchor): handled in
+ *     dispatch.ts as the scoped GATEWAY_PROXY_CSP `script-src` relax — the
  *     proxy cannot backfill the per-response nonce into dsh's streamed HTML,
  *     so it MUST NOT send the nonce CSP (relax instead).
  *   - PWA link / theme-color / sw-register / shellNav: P4 (the design marks
@@ -250,6 +249,3 @@ export function createGatewayRequestPolicy(config: GatewayConfig): GatewayReques
   }
 }
 
-// (The former GATEWAY_VIEWPORT_META export was removed with the dead entry
-// re-export block: dsh emits its own viewport meta, so nothing consumed it —
-// 2026-12 audit F11.)

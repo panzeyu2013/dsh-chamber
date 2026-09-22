@@ -2,7 +2,7 @@
 //  FileOpenPanel.swift
 //  DSHChamber
 //
-//  S-25（2026-12 双端逐函数核对）：composer 回形针（input type=file）在
+//  composer 回形针（input type=file）在
 //  macOS WKWebView 下若不实现 webView(_:runOpenPanelWith:...) 会被视同用户
 //  取消（WKUIDelegate.h:291-295）。本文件把「WKOpenPanelParameters 投影 →
 //  NSOpenPanel → 选中 URL 数组」拆成可注入的呈现 seam：单测注入假呈现器即可
@@ -41,7 +41,7 @@ protocol FileOpenPanelPresenting {
 final class SystemFileOpenPanelPresenter: FileOpenPanelPresenting {
     func present(_ request: FileOpenPanelRequest, completion: @escaping ([URL]) -> Void) {
         let panel = NSOpenPanel()
-        // 审计收口（2026-12）：面板标题/按钮此前留空 → 走 AppKit 默认，只随系统语言。
+        // 面板标题/按钮必须显式键化：留空会走 AppKit 默认，只随系统语言。
         // 显式键化后与页面语言一致；面板内建按钮（打开/取消）仍由 AppKit 按进程本地化。
         panel.title = NativeText.string(request.allowsDirectories
             ? .panelOpenFileOrDirectoryTitle : .panelOpenFileTitle)

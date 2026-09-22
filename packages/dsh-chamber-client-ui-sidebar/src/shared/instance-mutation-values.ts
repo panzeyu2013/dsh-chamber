@@ -9,16 +9,16 @@ export interface DecodedWorkspaceCreate {
 /**
  * Correlate workspace.create before a lifecycle saga consumes ownership facts.
  *
- * NOTE (2026): the returned `path` is the host's CANONICAL path — the
- * workspace registry canonicalizes every path through `fs.realpath`
- * (`dsh-workspace` paths.ts), while the browser-side directory picker hands
- * string-joined paths that may traverse symlinks (e.g. a picked directory
- * under a symlinked parent). The OFFICIAL client never compares the returned
- * path, and an exact-equality check here made every symlinked pick fail with
- * a false `invalid-response` although the host DID create the workspace —
- * and the retry stayed hard-blocked (the reused existing workspace keeps
- * returning its canonical path). Structural validation only: the returned
- * row must carry a non-empty workspace id and path plus the created boolean.
+ * The returned `path` is the host's CANONICAL path — the workspace registry
+ * canonicalizes every path through `fs.realpath` (`dsh-workspace` paths.ts),
+ * while the browser-side directory picker hands string-joined paths that may
+ * traverse symlinks (e.g. a picked directory under a symlinked parent). The
+ * OFFICIAL client never compares the returned path, and an exact-equality
+ * check would make every symlinked pick fail with a false `invalid-response`
+ * although the host DID create the workspace — and the retry would stay
+ * hard-blocked (the reused existing workspace keeps returning its canonical
+ * path). Structural validation only: the returned row must carry a non-empty
+ * workspace id and path plus the created boolean.
  */
 export function decodeWorkspaceCreateValue(value: any): DecodedWorkspaceCreate {
   const workspaceId = value?.workspace?.workspaceId

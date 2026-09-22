@@ -1,24 +1,16 @@
 /**
- * Archive-manager purge orchestration (design 24 §5; 2026-09 protection
- * amendment).
+ * Archive-manager purge orchestration (design 24 §5).
  *
- * EXTRACTED from `ArchiveManagerDialog.tsx` so the whole flow is a PURE
- * function of authoritative facts — node-testable without a React render — and
- * so the dialog and the tests can never drift apart.
+ * A PURE function of authoritative facts — node-testable without a React
+ * render — so the dialog and the tests can never drift apart.
  *
- * WHAT CHANGED (2026-09 protection amendment). The previous round gated the
- * destructive surface on a client-side proof: "I must know which session is
- * being viewed, and I must be able to resolve its subagent lineage, or I
- * refuse to delete anything". That gate was wrong in two ways:
- *  - it turned an UNKNOWN (no session open, masked list gap, a source whose
- *    shell is not mounted) into a total capability loss, even though the
- *    sessions the user wants gone — archived while still running, e.g. waiting
- *    on a question or an approval — are exactly the ones that need the force
- *    path; and
- *  - it made the CLIENT responsible for a safety invariant the HOST can prove
- *    over its full corpus.
+ * Gating the destructive surface on a client-side proof of the viewed session
+ * and its subagent lineage is wrong: an UNKNOWN (no session open, masked list
+ * gap, a source whose shell is not mounted) must not become a total capability
+ * loss, and the CLIENT must not own a safety invariant the HOST can prove over
+ * its full corpus.
  *
- * The run is now ONE shape, in every state:
+ * The run is ONE shape, in every state:
  *  1. STOP (advisory): cancel the selected trees' running turns — closure
  *     members included, minus the session being viewed (see
  *     `stopSessionsForPurge`'s CANCEL SCOPE). A failed lineage read skips the
@@ -38,14 +30,14 @@
  * moment the current session is ARCHIVED, `ui-workspace.clearArchivedCurrent`).
  * A sticky memory would therefore keep protecting the very session the user
  * just archived and could never be deleted until the app restarted — the same
- * dead end this amendment removes, only narrower. We protect the live fact and
+ * dead end, only narrower. We protect the live fact and
  * register the mask window as a residual (design 24 §13) instead.
  *
  * Protection is only ever an EXTRA exclusion: when it is absent the run still
  * proceeds unprotected (and the UI says so), which is the honest degradation —
  * never a dead button.
  *
- * LOCALE-FREE (2026-09 i18n closure): this module returns dictionary KEYS +
+ * LOCALE-FREE: this module returns dictionary KEYS +
  * params (`PurgeNoteLine`) and never renders copy — the dialog applies `t()`.
  * The only dictionary coupling is the TYPE-ONLY `SidebarKey` import (erased at
  * runtime; `client/locales.ts` has no imports, so no cycle).
@@ -111,7 +103,7 @@ export interface ArchivePurgeFlowResult {
  * may still be loaded, or waiting on a question/approval that archiving made
  * unanswerable) plus `protectSessionIds` (the viewed session, when known).
  * A protected tree is skipped whole by the host and reported in
- * `skippedProtected` — the client never refuses a root itself anymore.
+ * `skippedProtected` — the client never refuses a root itself.
  */
 export async function runArchivePurge(
   client: PurgeClient,
@@ -124,7 +116,7 @@ export async function runArchivePurge(
   const roots = [...new Set(selection)]
   const protect = viewedSessionId === undefined ? [] : [viewedSessionId]
 
-  // ADVISORY-NEVER-FATAL, in the flow too (2026-09 review): the pass documents
+  // ADVISORY-NEVER-FATAL, in the flow too: the pass documents
   // that it never throws (a failed read is its own `unavailable` outcome), so a
   // throw here is a contract violation — the ONE thing a violation must not do
   // is block the deletion the user explicitly asked for. It is logged and the
@@ -149,7 +141,7 @@ export async function runArchivePurge(
 
 /**
  * Did this run actually REMOVE anything? The dialog clears the user's selection
- * only then (2026-09 review): a run that deleted nothing — a protected tree, a
+ * only then: a run that deleted nothing — a protected tree, a
  * running tree, an unreadable-read skip — leaves every row in place, and wiping
  * the selection would force the user to re-select before the documented retry
  * ("switch away and retry"). A genuinely converged row set is dropped by the
@@ -189,19 +181,18 @@ export function archivePurgeNote(run: ArchivePurgeFlowResult): PurgeNote {
     })
   }
   if (result.residentRetainedRoots !== undefined && result.residentRetainedRoots.length > 0) {
-    // RESIDENT RETENTION (design 24 §4 step 9, 2026-13): the host deleted this
+    // RESIDENT RETENTION (design 24 §4 step 9): the host deleted this
     // content but KEPT the archived membership, because the session still lives
     // in the instance process (its row would otherwise come straight back into
-    // the workspace through the live-preferred session list). Say exactly that
-    // instead of the old "force-deleted" wording, which implied the session was
-    // gone from the list too.
+    // the workspace through the live-preferred session list). Say exactly that:
+    // the content is deleted, the membership is not.
     lines.push({
       key: 'archive.purge.note.residentRetained',
       params: { count: result.residentRetainedRoots.length },
     })
   } else if (result.forcedLoaded > 0) {
     // Version skew (new client, host without the resident-retention report):
-    // the historical wording is the honest best available — the content WAS
+    // the fallback wording is the honest best available — the content WAS
     // force-deleted; that host simply does not tell us which roots stayed
     // archived.
     lines.push({ key: 'archive.purge.note.forcedLoaded', params: { count: result.forcedLoaded } })
@@ -227,9 +218,8 @@ export function archivePurgeNote(run: ArchivePurgeFlowResult): PurgeNote {
     }
   }
   // `truncated` IS the caps-reached signal (the host sets it from its own
-  // MAX_PURGE_ERROR_RECORDS); the old `errors.length >= 1000` re-encoded that
-  // host constant here with no lockstep gate, so a host-side change would have
-  // silently dropped the note (2026-09 audit).
+  // MAX_PURGE_ERROR_RECORDS): re-encoding that host constant here would break
+  // lockstep with a host-side change and silently drop the note.
   if (result.truncated === true) {
     lines.push({ key: 'archive.purge.note.truncated' })
   }
@@ -242,7 +232,7 @@ export function archivePurgeNote(run: ArchivePurgeFlowResult): PurgeNote {
   }
   if (lines.length === 0) {
     // Another shell may have purged between the list and this run — an empty
-    // outcome must never be silent (v1 E-n2 parity).
+    // outcome must never be silent.
     lines.push({ key: 'archive.manager.empty' })
   }
   return { kind: 'info', lines }

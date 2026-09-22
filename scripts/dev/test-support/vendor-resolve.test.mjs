@@ -2,7 +2,7 @@
  * The shared test-only vendor resolve-hook factory
  * (scripts/dev/test-support/vendor-resolve.mjs).
  *
- * The three package loaders it replaced each exercised the hook only indirectly
+ * The three package loaders each exercise the hook only indirectly
  * (through a suite that also needs the mapped target to exist); this pins the
  * hook contract itself — short-circuit on a mapped specifier, honest fallthrough
  * otherwise, targets resolved against the LOADER file rather than the cwd.

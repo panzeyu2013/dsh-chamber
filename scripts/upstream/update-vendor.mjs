@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * update-vendor.mjs — 原子升级 dsh 源码 pin（submodule 化后的唯一升级入口）。
+ * update-vendor.mjs — 原子升级 dsh 源码 pin（唯一的升级入口）。
  *
  * 用法：node scripts/upstream/update-vendor.mjs <tag>   # tag 形如 dsh-vX.Y.Z-<stage>.N（如 dsh-v0.1.5-alpha.2）
  *

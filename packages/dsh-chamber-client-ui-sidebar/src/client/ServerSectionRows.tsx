@@ -1,9 +1,8 @@
 /**
  * One workspace group’s session-row list of the chamber sidebar ServerSection
  * subtree: the ghost-gated rows, their HoverCards, inline rename swap and the
- * per-row action-error slots. Moved verbatim out of ServerSection.tsx; the
- * section passes the windowed session list and its resolved per-workspace
- * values in.
+ * per-row action-error slots. The section passes the windowed session list and
+ * its resolved per-workspace values in.
  */
 import { Fragment } from 'react'
 import clsx from 'clsx'
@@ -104,11 +103,11 @@ export function ServerSectionSessionRows({ server, workspace, sessions, currentI
                                 // listener). The row renders
                                 // data-session-id so the outside-click
                                 // containment check works across shells.
-                                // 2026-09-11 upstream-alignment T5: one row-title
+                                // One row-title
                                 // resolution shared by the row label and the row
                                 // actions' accessible names (the blank label stays
                                 // rendered-only — a blank row carries no actions).
-                                // I3: the OFFICIAL display label (never empty),
+                                // The OFFICIAL display label (never empty),
                                 // so "unknown title" can never render 「未命名会话」.
                                 const sessionTitleText = session.displayTitle
                                 const sessionRow = (
@@ -216,7 +215,7 @@ export function ServerSectionSessionRows({ server, workspace, sessions, currentI
                                     }}
                                   >
                                     <span className={cc.sessionTitle}>{session.blank === true ? t('session.new') : sessionTitleText}</span>
-                                    {/* 2026-09-11 upstream-alignment T7: the
+                                    {/* The
                                         active-Schedule marker sits exactly where
                                         upstream puts it — between the row title
                                         and the trailing cells (vendor
@@ -243,10 +242,9 @@ export function ServerSectionSessionRows({ server, workspace, sessions, currentI
                                       }}
                                     >
                                       <Menu
-                                        // 2026-09 menu-density decision (P2-A, A-1):
-                                        // same as the workspace menu above —
+                                        // Same as the workspace menu above —
                                         // `closeOnPointerLeave` kept (Rows.tsx:487),
-                                        // `compact` restored from v0.2.4.
+                                        // `compact`.
                                         compact
                                         portal
                                         closeOnPointerLeave
@@ -265,9 +263,8 @@ export function ServerSectionSessionRows({ server, workspace, sessions, currentI
                                           } else if (id === 'fork') {
                                             onForkSession(server, session)
                                           } else if (id === 'archive') {
-                                            // 2026-09-11 review-fix finding 5d:
-                                            // no title argument — the verb runs
-                                            // immediately (T2a) and nothing reads it.
+                                            // No title argument — the verb runs
+                                            // immediately and nothing reads it.
                                             onArchiveSession(server, session.id)
                                           }
                                         }}
@@ -283,7 +280,7 @@ export function ServerSectionSessionRows({ server, workspace, sessions, currentI
                                             icon: <IconBranchOutline16 size={14} />,
                                           },
                                           {
-                                            // 2026-09-11 upstream-alignment T2a: the
+                                            // The
                                             // archive verb lives HERE, in the row
                                             // menu — upstream keeps no second hover
                                             // button because archiving only hides the
@@ -307,7 +304,7 @@ export function ServerSectionSessionRows({ server, workspace, sessions, currentI
                                           <button
                                             type="button"
                                             className={cc.actionIcon}
-                                            // 2026-09-11 upstream-alignment T5: the row
+                                            // The row
                                             // title is the accessible name (upstream
                                             // `actions.session.aria`, vendor
                                             // ui-workspace Rows.tsx:492).
@@ -338,9 +335,9 @@ export function ServerSectionSessionRows({ server, workspace, sessions, currentI
                                         as the search-result rows). */}
                                     <span
                                       className={clsx(cc.sessionStateSlot, sessionStatePending(server, session) !== undefined && cc.sessionStateSlotPending)}
-                                      // I1/I13：状态与出处（验收 DOM 判据；不参与渲染）。
+                                      // 状态与出处（验收 DOM 判据；不参与渲染）。
                                       data-chamber-session-state={sessionStateMarker(server, session).state}
-                                      // I5：这一行事实的观察时刻（host 域 ms；缺席 = 无观察者事实）。
+                                      // 这一行事实的观察时刻（host 域 ms；缺席 = 无观察者事实）。
                                       data-chamber-fact-at={server.runtime?.sessions[session.id]?.factAt}
                                       data-chamber-state-source={sessionStateMarker(server, session).source}
                                       title={sessionStateLabel(server, session)}

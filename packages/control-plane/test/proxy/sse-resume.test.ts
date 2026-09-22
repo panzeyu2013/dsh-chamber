@@ -1,11 +1,10 @@
 /**
- * SSE resume passthrough — the proxy case §11 left open (W1).
+ * SSE resume passthrough — a proxy case outside the injected-header policy.
  *
- * docs/progress/todo/remote-session-state-and-switch.md §11 records the risk:
- * the control plane only ever constrained the headers it INJECTS
+ * The risk: the control plane only ever constrained the headers it INJECTS
  * (`registerTransport`'s Authorization/Cookie), never the client headers it
  * must FORWARD — so a swallowed `Last-Event-ID` would silently turn every
- * reconnect into a full snapshot refetch (the R21 downgrade path): no crash,
+ * reconnect into a full snapshot refetch: no crash,
  * no red test, just permanently worse facts. These are behavior-level pins
  * through `createInstanceProxy` and the fake upstream leg
  * (test/support/proxy-fakes.ts paradigm, no new deps): the header must reach
@@ -24,7 +23,7 @@ import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import { fakeRequest, fakeResponse, proxyFor } from '../support/proxy-fakes.ts'
 
-/** The chamber session-state SSE path (todo §11 wire contract). It is a
+/** The chamber session-state SSE path (wire contract). It is a
  *  gateway-kind capability, so the fixture registers a gateway transport —
  *  the same instance-proxy path the real attached gateway mirror uses. */
 const GATEWAY_TRANSPORT = 'gateway:sse'

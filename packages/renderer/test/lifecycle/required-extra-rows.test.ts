@@ -1,6 +1,6 @@
 /**
- * Required extra-row service probe decisions (alpha.2) + the deferred-cluster
- * failure diagnostic (review F2).
+ * Required extra-row service probe decisions + the deferred-cluster
+ * failure diagnostic.
  *
  * The probe itself lives in chamber-entry.ts (which no node test can import —
  * its imports resolve to source), so the decision and the message are pure
@@ -32,7 +32,7 @@ const readSource = (rel: string): string =>
 const sourceExists = (rel: string): boolean =>
   existsSync(new URL(rel, import.meta.url))
 
-// ── A1 (2026-09-11 upstream-alignment): the probe roster is DERIVED from the
+// ── The probe roster is DERIVED from the
 // ── inject faces of the plugins the composite registered — upstream's own fact
 // ── (`Object.keys(entry.fiber.inject)`, vendor packages/client/web/src/
 // ── boot.ts:138-158), lifted from the per-fiber sweep to the composite's
@@ -102,7 +102,7 @@ test('requiredServiceProbeMessage names each service, its injectors, the deadlin
 })
 
 test('missingServiceFact carries the verdict as structured facts, not as a sentence', () => {
-  // 2026-12 (design 05 §4): the frame renders its own copy and may NAME the
+  // The frame renders its own copy and may NAME the
   // missing service — recovering that by parsing the diagnostic line would be
   // brittle by construction, so the producer hands the fields over.
   const fact = missingServiceFact([
@@ -118,10 +118,9 @@ test('missingServiceFact carries the verdict as structured facts, not as a sente
   assert.deepEqual(missingServiceFact([]), { services: [], injectedBy: [] })
 })
 
-// ── Finding 3 (2026-09-11 review-fix): the roster's SOURCE audit ────────────
+// ── The roster's SOURCE audit ────────────
 //
-// The derived roster is only as true as the declarations behind it, and until
-// this round nothing read them: the spec locked ui-chat's face alone, while the
+// The derived roster is only as true as the declarations behind it, while the
 // runtime witness (chamber-entry.ts `register`) CANNOT see the class this test
 // exists for — cordis resolves the fiber's inject map from the very same
 // expression the derivation reads (`Inject.resolve(plugin.inject)`), so a
@@ -139,7 +138,7 @@ test('missingServiceFact carries the verdict as structured facts, not as a sente
 //  - the derived union is a superset of the services the probe must cover,
 //    `sidebarRight` among them — the miss the probe exists for (ui-chat's face,
 //    whose only provider is the non-covered `ui-sidebar-right` row);
-//  - the deferred-only members (finding 1) are exactly the audited 11, so the
+//  - the deferred-only members are exactly the audited 11, so the
 //    roster extension is load-bearing and never quietly grows a new gap class.
 //
 // Maintenance at an upstream pin: re-audit the two tables below against the new
@@ -180,9 +179,9 @@ function faceFromSource(id: string, file: string): unknown {
 
 /**
  * The audited inject face of every FIRST-SCREEN namespace `chamber-entry.ts`
- * registers, in registration order (id → members). This is the audit finding 3
- * asks for; the derived union below is computed from the SOURCES and compared
- * against it, never copied from it.
+ * registers, in registration order (id → members). The derived union below is
+ * computed from the SOURCES and compared against this table, never copied from
+ * it.
  */
 const AUDITED_FIRST_SCREEN_FACES: ReadonlyArray<readonly [id: string, members: readonly string[]]> = [
   ['@deepseek-ai/dsh-client-connection', []],
@@ -229,11 +228,11 @@ const AUDITED_REQUIRED_SERVICES: readonly string[] = [
 ]
 
 /**
- * The deferred inject members that NO first-screen face declares (finding 1).
+ * The deferred inject members that NO first-screen face declares.
  * Each one's provider is a first-screen COMPOSITE plugin (the generated-remote
  * mounts behind api-remotes, ui-settings for `settingsSchema`) — which is why
  * the deferred split stays safe, and exactly the assumption the roster
- * extension stopped taking on faith.
+ * extension audits.
  */
 const AUDITED_DEFERRED_ONLY_SERVICES: readonly string[] = [
   'remote.goals', 'remote.skills', 'remote.messageFeedback', 'remote.sessionFeedback',
@@ -345,7 +344,7 @@ test('the deferred cluster carries exactly the audited deferred-only inject memb
         `${entry.service} is injected by ${id}, which is not a deferred row — the deferred-only audit is stale`)
     }
   }
-  // Spot-check the reviewer's own example: `remote.goals` comes from ui-goal.
+  // Spot-check `remote.goals`: it comes from ui-goal.
   assert.deepEqual(missing.find(entry => entry.service === 'remote.goals')?.injectedBy,
     ['@deepseek-ai/dsh-client-ui-goal'])
 })
@@ -363,7 +362,7 @@ test('a roster that grows after the probe started is probed (finding 1: the live
   ])
 })
 
-// ── Review F2: the deferred cluster's failures are reported BY ID through the
+// ── The deferred cluster's failures are reported BY ID through the
 // ── same named-diagnostic shape the required-service probe uses.
 
 test('chamberEntryDiagnosticMessage is the one line shape both diagnostics share', () => {
@@ -372,8 +371,8 @@ test('chamberEntryDiagnosticMessage is the one line shape both diagnostics share
     '[chamber-entry] (instance local) something happened',
   )
   assert.equal(chamberEntryDiagnosticMessage('something happened'), '[chamber-entry] something happened')
-  // The probe message is built THROUGH it (a refactor of the existing line, not
-  // a rewrite): same prefix, same instance clause position.
+  // The probe message is built THROUGH it: same prefix, same instance clause
+  // position.
   const missing = [{ service: 'sidebarRight', injectedBy: ['@deepseek-ai/dsh-client-ui-chat'] }]
   assert.ok(requiredServiceProbeMessage(missing, 'local').startsWith('[chamber-entry] (instance local) '))
   assert.ok(requiredServiceProbeMessage(missing).startsWith('[chamber-entry] composite service(s)'))
@@ -425,7 +424,7 @@ test('chamber-entry wires the deferred roster, the per-row isolation and the nam
   assert.match(entry, /DEFERRED_EXTRA_ROW_IDS/, 'the entry must reconcile its roster with the shared list')
   assert.match(entry, /assertDeferredRosterLockstep\(\)/, 'a roster drift must fail the entry loud (apply-time assert)')
   // Per-row isolation: one failed chunk must neither cancel the rest of the
-  // cluster (a failed settings-bridge used to drop every settings section) nor
+  // cluster (a failed settings-bridge would drop every settings section) nor
   // hide WHICH id failed.
   assert.match(entry, /DEFERRED_ROWS\.map\(async \(\[id, load\]\) => \{/,
     'the cluster must be a data-driven id+chunk roster, loaded per row')
@@ -436,9 +435,9 @@ test('chamber-entry wires the deferred roster, the per-row isolation and the nam
   // Reporting: the shared builder + the shell seam (never console-only), and
   // still no boot gate (the registration is fire-and-forget).
   assert.match(entry, /deferredRegistrationFailureMessage\(/, 'the failed id set must be reported by name')
-  // 2026-12 (design 05 §4): the deferred cluster reports its OWN kind with the
-  // failed ids attached. Sharing the probe's kind made the two facts
-  // indistinguishable to the frame's copy table (and dropped the second one as a
+  // The deferred cluster reports its OWN kind with the
+  // failed ids attached. Sharing the probe's kind would make the two facts
+  // indistinguishable to the frame's copy table (and drop the second one as a
   // same-kind repeat).
   assert.match(
     entry,
@@ -447,7 +446,7 @@ test('chamber-entry wires the deferred roster, the per-row isolation and the nam
   )
   assert.match(entry, /void registerDeferred\(ctx, degradedSeam, registered, probeRearm\)\.catch/,
     'a deferred failure must still never block the boot')
-  // 2026-09-11 review-fix (finding 1): the deferred rows extend the LIVE probe
+  // The deferred rows extend the LIVE probe
   // roster with their own exported inject face, and one probe pass is re-armed
   // once the cluster registered — without both, a deferred family whose
   // composite-provided service never activated pends with no diagnostic. The
@@ -483,7 +482,7 @@ test('deferred rows mount with their row id as the fiber name', () => {
     'a bare mount loses the row identity in every fiber-name diagnostic')
 })
 
-// ── A1 wiring: every first-screen mount goes through the roster-recording
+// ── Every first-screen mount goes through the roster-recording
 // ── helper, so registration and probed set can never drift apart.
 
 test('chamber-entry derives the probed roster from the registered namespaces (no hand-written service list)', () => {
@@ -520,14 +519,14 @@ test('chamber-entry derives the probed roster from the registered namespaces (no
     assert.ok(arg.startsWith('decorateMount(') || arg.startsWith('{'),
       `a bare ctx.plugin(${arg}…) bypasses the derived roster — mount it through register()`)
   }
-  // The probe consumes exactly that roster, and the old hardcoded list is gone.
+  // The probe consumes exactly that roster (no hardcoded service list).
   assert.match(entry, /missingInjectedServices\(registered, isProvided\)/,
     'the probe must test the derived inject union, never a local list')
   assert.match(entry, /assertRequiredExtraRowServices\(ctx, degradedSeam, registered, probeRearm\)/,
     'the derived roster must reach the probe (with the re-arm hand-off, finding 1)')
   assert.doesNotMatch(entry, /REQUIRED_EXTRA_ROW_SERVICES/, 'the hand-written roster constant is retired')
   assert.doesNotMatch(entry, /requiredServiceProbeMessage\(isProvided/, 'the probe must pass the missing set, not a predicate')
-  // 2026-12 (design 05 §4): the probe's verdict travels STRUCTURED — the kind
+  // The probe's verdict travels STRUCTURED — the kind
   // plus the service/injector facts — through the shell seam, so the frame's
   // copy can name the missing service instead of parsing the diagnostic line.
   assert.match(
@@ -545,15 +544,15 @@ test('chamber-entry derives the probed roster from the registered namespaces (no
 
 test('chamber-entry wires the probe lifecycle: per-member grace, monotonic clock, bounded re-check and retraction', () => {
   const entry = normalize(stripComments(readSource('../../src/chamber-entry.ts')))
-  // FIX 4: the deadline is anchored per roster member, not per boot.
+  // The deadline is anchored per roster member, not per boot.
   assert.match(entry, /new RequiredServiceProbeWindows\(\)/, 'the probe needs the per-member window bookkeeping')
   assert.match(entry, /windows\.note\(roster, now\)/, 'every probed member records its own arrival')
   assert.match(entry, /windows\.withinGrace\(roster, now\)/, 'the verdict waits for every member window')
-  // FIX 2: one monotonic clock for arrivals and deadlines (a wall-clock jump
-  // used to satisfy the deadline on the first pass).
+  // One monotonic clock for arrivals and deadlines (a wall-clock jump must not
+  // satisfy the deadline on the first pass).
   assert.match(entry, /const now = monotonicNowMs\(\)/, 'the probe deadline must use the monotonic clock')
   assert.doesNotMatch(entry, /const started = Date\.now\(\)/, 'the wall-clock boot anchor is retired')
-  // FIX 1: the verdict is not final — bounded re-check plus a retraction through
+  // The verdict is not final — bounded re-check plus a retraction through
   // the same seam when the missing set empties.
   assert.match(entry, /windows\.recheckUntilMs\(\)/, 'the post-verdict re-check must be time-bounded')
   assert.match(

@@ -2,7 +2,7 @@
 //  PageFactsReconcileGuardTests.swift
 //  DSHChamberTests
 //
-//  X1（2026-12 二轮独立复核）+ Z1/Z2（二轮收口）回归：页面事实载波的文档面门
+//  页面事实载波的文档面门
 //  只接受「主 frame + 同源」（scheme/host/port 与 expectedOrigin 完全相同），
 //  **不**限定 pathname=/ 与 query——页面采用 history.pushState/replaceState 后
 //  （url 变为 /api/i/1 等）事实通道不得静默断掉。失败说明页
@@ -11,10 +11,10 @@
 //  {lang:"", dark:false} 会在暗系统上把 pageIsDark 污染成 false（空 lang 不构成
 //  语言事实，但 dark 变化仍生效），强制 .aqua 露浅底并把污染值落盘成 last-known。
 //
-//  W4a（2026-12 三轮独立复核，真实 WKWebView 实测）：同源 blob:/about:srcdoc 子 frame
+//  真实 WKWebView 实测：同源 blob:/about:srcdoc 子 frame
 //  调 parent.document.write 可改写主 frame 文档；改写后 frameInfo.request.url 仍是
 //  过期的旧主 frame URL，而 message.webView.url / location.href / document.URL 已变成
-//  blob:。事实通道的 URL 来源因此改为与 A 桥一致：webView.url 优先、frameInfo 仅兜底。
+//  blob:。事实通道的 URL 来源与 A 桥一致：webView.url 优先、frameInfo 仅兜底。
 //
 import XCTest
 @testable import DSHChamber
@@ -33,7 +33,7 @@ final class PageFactsReconcileGuardTests: XCTestCase {
         return try String(contentsOf: url, encoding: .utf8)
     }
 
-    /// 真值表（X1 对账路径 acceptsReconcile）：放行 = 同源根路径、authority-only、
+    /// 真值表（对账路径 acceptsReconcile）：放行 = 同源根路径、authority-only、
     /// 带 query、hash、/api/i/1（pushState 场景）、host 大小写/默认端口/IPv6 等价；
     /// 拒绝 = about:blank、data:/file:/blob:、空 url、空 expectedOrigin、不同端口、
     /// 不同 host、子域、https、userinfo。
@@ -44,7 +44,7 @@ final class PageFactsReconcileGuardTests: XCTestCase {
         // URLComponents 对 authority-only URL 给空 path，与根路径等价。
         XCTAssertTrue(MainWindowController.acceptsReconcile(
             url: "http://127.0.0.1:17520", expectedOrigin: origin))
-        // 同源带 query：本通道不再要求壳文档的「无 query」。
+        // 同源带 query：本通道不要求壳文档的「无 query」。
         XCTAssertTrue(MainWindowController.acceptsReconcile(
             url: "http://127.0.0.1:17520/?x=1", expectedOrigin: origin))
         XCTAssertTrue(MainWindowController.acceptsReconcile(
@@ -113,7 +113,7 @@ final class PageFactsReconcileGuardTests: XCTestCase {
 
     /// 「为什么门必须在 ingest 前拦截」的 Store 契约锁步：失败页快照即使到达
     /// Store 也有真实副作用——空 lang 保留语言事实，dark:false 却会改写主题
-    /// 事实并触发落盘（正是 X1 的暗系统污染路径）。
+    /// 事实并触发落盘（暗系统污染路径）。
     func testFailurePageSnapshotWouldPolluteDarkFactIfIngested() {
         let suiteName = "PageFactsReconcileGuardTests"
         let suite = UserDefaults(suiteName: suiteName)!
@@ -128,7 +128,7 @@ final class PageFactsReconcileGuardTests: XCTestCase {
         XCTAssertEqual(store.current?.pageIsDark, false)
     }
 
-    /// Z1 锁步：失败页 url（loadHTMLString(baseURL: nil) → about:blank）在两条路径
+    /// 失败页 url（loadHTMLString(baseURL: nil) → about:blank）在两条路径
     /// 上都被门拒绝，因此对账回调/消息回调都在 ingest 之前返回——失败页事实绝不
     /// 会触及 Store（与上面的真实副作用测试成对：一条证「进了会污染」，一条证
     /// 「根本进不去」）。
@@ -140,7 +140,7 @@ final class PageFactsReconcileGuardTests: XCTestCase {
             url: "about:blank", expectedOrigin: origin))
     }
 
-    /// W4a（2026-12 三轮独立复核，真实 WKWebView 实测）：同源 blob:/about:srcdoc 子 frame
+    /// 真实 WKWebView 实测：同源 blob:/about:srcdoc 子 frame
     /// 调 parent.document.write 改写主 frame 文档后，script message 的
     /// frameInfo.request.url 仍是**过期的旧主 frame URL**，而 webView.url / location.href /
     /// document.URL 已变成 blob:。门必须以 webView.url 为准——两者值不同时，陈旧 frameInfo
@@ -180,9 +180,9 @@ final class PageFactsReconcileGuardTests: XCTestCase {
             expectedOrigin: origin))
     }
 
-    /// W4a 迁移的 pushState 回归锁步：URL 来源换成 webView.url 后，同源非根路径
-    /// （/api/i/1?x=1#f）仍放行——旧壳文档门（要求 pathname=/ 且无 query）在此
-    /// 静默断链的正是这条。
+    /// pushState 锁步：URL 来源取 webView.url 时，同源非根路径
+    /// （/api/i/1?x=1#f）仍放行——壳文档门（要求 pathname=/ 且无 query）在此
+    /// 会静默断链。
     func testPushStateSameOriginNonRootURLStillAcceptedFromWebViewURL() {
         XCTAssertTrue(ShellPageFactsMessageHandler.accepts(
             messageName: ShellPageFactsScript.messageName, isMainFrame: true,
@@ -195,7 +195,7 @@ final class PageFactsReconcileGuardTests: XCTestCase {
     }
 
     /// W4a 接线锁步（纯函数用例证明判定，本条证明生产 handler 真的把 webView.url
-    /// 作为主来源传入）：旧顺序（frameInfo.request.url 优先）必须已被移除。
+    /// 作为主来源传入）：frameInfo.request.url 不得作为主来源。
     func testHandlerProductionPathWiresWebViewURLFirst() throws {
         let controllerSource = try source("Sources/DSHChamber/MainWindowController.swift")
         XCTAssertTrue(controllerSource.contains(
@@ -209,10 +209,9 @@ final class PageFactsReconcileGuardTests: XCTestCase {
             "旧顺序（frameInfo 优先）必须已被移除")
     }
 
-    /// Z2：lang 的纯防御上限——阈值是**字面量 256**，超界字符串一律忽略、保留
+    /// lang 的纯防御上限——阈值是**字面量 256**，超界字符串一律忽略、保留
     /// 旧值、不构成事实；合法长标签（BCP-47 全形态）与边界值语义不变。
-    /// 第三轮 review 修正：旧用例的边界从常量自身导出（maxLangLength ± 1），把常量
-    /// 改成 8 仍绿——阈值与"合法标签不被误伤"现在都用字面量钉住。
+    /// 阈值与"合法标签不被误伤"都用字面量钉住，边界不从常量自身导出。
     func testStoreIgnoresOverlongLang() {
         // 阈值钉死：任何合法标签（如 zh-Hant-TW，10 字符）都远在界内。
         // 若确有理由调整阈值，必须同时改本字面量并在此说明——有意变更会被强制同步。
@@ -254,7 +253,7 @@ final class PageFactsReconcileGuardTests: XCTestCase {
         XCTAssertEqual(store.current?.language, .en)
         XCTAssertEqual(store.current?.revision, 3)
 
-        // 安全审查实测可抵达的 5 MiB lang 同样忽略（不构成事实、不崩）。
+        // 实测可抵达的 5 MiB lang 同样忽略（不构成事实、不崩）。
         let huge = String(repeating: "a", count: 5 * 1024 * 1024)
         XCTAssertFalse(store.ingest(["lang": huge, "dark": true, "revision": 5]))
         XCTAssertEqual(store.current?.language, .en)

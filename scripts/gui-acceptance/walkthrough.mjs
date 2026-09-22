@@ -19,9 +19,9 @@
  * judged by the EFFECT they must produce — never by the clicked element's own
  * attribute: W-4 picks the sidebar header's icon-sized button and requires the
  * frame's `[data-sidebar-collapsed]` to flip (the rail toggle carries no
- * `aria-expanded`, so the previous "first aria-expanded in the left half"
- * selector silently took the source-section fold and passed while the sidebar
- * never moved; that false green is what the structural pick + effect assertion replace).
+ * `aria-expanded`, so a "first aria-expanded in the left half" selector would
+ * silently take the source-section fold and pass while the sidebar never
+ * moved; the structural pick + effect assertion prevent that false green).
  * W-4a drives that source-section fold, which writes the PERSISTED
  * `sourceFolded` preference (design 06 §3.1), so it runs only on a throwaway
  * instance (`--dev`); `--attach` records INFO for it.
@@ -223,8 +223,8 @@ const SOURCE_FOLD_FACTS = `(() => {
  * leg then fails on the effect it never produced).
  *
  * Remembering the clicked element is what keeps the RESTORE click on the same
- * node: re-running a selector after the state changed is how the old leg's
- * "restore" step clicked the rail's settings seat and opened the settings dialog.
+ * node: re-running a selector after the state changed could click a different
+ * control (e.g. the rail's settings seat) and open the settings dialog.
  * @param index - descriptor index from the facts dump (a hint only).
  * @param expected - descriptor `{ ariaLabel, left, top }` of the chosen control.
  * @returns `{ clicked, drifted, identity }`.
@@ -276,7 +276,7 @@ export const CLICK_STASHED_BUTTON = `(() => {
 })()`
 
 /**
- * 遮罩层叠探针（2026-12 P0–P3，design 05 §4）：遮罩 `.instance-loading` 可见的那些帧里，
+ * 遮罩层叠探针（P0–P3，design 05 §4）：遮罩 `.instance-loading` 可见的那些帧里，
  * 对已登记锚点（composer 座 / 输入区 / 会话流中心与底缘）各做一次 `elementFromPoint`，
  * 按命中面归属归并计数：`veil`（遮罩获胜）/ `tenant`（租客画在其上 ⇒ FAIL）/
  * `portal`（文档级 body portal，已登记残余 ⇒ 只记）/ `none`（无命中 ⇒ 不判）。
@@ -291,7 +291,7 @@ export const VEIL_LAYERING_PROBE_INSTALL = `(() => {
   const VEIL = '.instance-loading'
   // 只认**活动视图**的遮罩与锚点：后台预热/收割的视图（.instance-pending，
   // 只 visibility:hidden）遮罩仍在 DOM 里，全文档口径会把它的遮罩帧与活动视图的
-  // 命中面配在一起，对健康构建判出假 FAIL（2026-12 review 复现）。
+  // 命中面配在一起，对健康构建判出假 FAIL。
   const SCOPE = '.instance-view:not(.instance-hidden):not(.instance-pending)'
   const ANCHORS = ['[data-composer-seat]', '[data-composer-input]', '[data-conversation-scroll]']
   const state = { frames: 0, veilFrames: 0, heldFrames: 0, bootFrames: 0, samples: {}, error: null, done: false, startedAt: Date.now() }
@@ -318,7 +318,7 @@ export const VEIL_LAYERING_PROBE_INSTALL = `(() => {
       if (style.visibility === 'hidden' || style.display === 'none') return
     }
     state.veilFrames += 1
-    // PASS 的强弱取决于这一帧属于哪一段（2026-12 二轮 review）：已 settle 的持有态里
+    // PASS 的强弱取决于这一帧属于哪一段：已 settle 的持有态里
     // 租客被 .instance-veil-held 隐藏（visibility:hidden 移出命中测试），PASS 只证明
     // "遮罩盖住了锚点"，不单独断言 P0（isolation）或 P1（持有期隐藏）任一条；只有
     // !settled 的 boot 段里租客仍参与命中测试，才有完整的判别力。分开计数并写进 evidence。
@@ -366,7 +366,7 @@ export const VEIL_LAYERING_PROBE_READ = `(() => {
   const state = window.__veilLayering
   if (state === undefined) return { installed: false, frames: 0, veilFrames: 0, samples: [], error: null, done: false }
   const samples = Object.keys(state.samples).map(key => state.samples[key])
-  // done 不再强制为 true（2026-12 二轮 review）：它表示"探针自己跑完了 20s/1200 帧窗口"，
+  // done 不强制为 true：它表示"探针自己跑完了 20s/1200 帧窗口"，
   // false = 本次是提前读回。tick 在被读回后的下一帧自行退出。
   delete window.__veilLayering
   return {
@@ -383,7 +383,7 @@ export const VEIL_LAYERING_PROBE_READ = `(() => {
  * `data-chamber-hovercard`, and the wrapper `<span>` that holds the hover target
  * carries `data-chamber-hovercard-anchor`. They are the ONLY card anchor: a card
  * is rendered nowhere else, so counting/selecting by them is identity, not
- * geometry (the previous `position:fixed && width 244 && z-index 100` count
+ * geometry (a `position:fixed && width 244 && z-index 100` count
  * could be satisfied by a Tooltip bubble or a leftover card).
  */
 const HOVER_CARD_MARKER = 'data-chamber-hovercard'
@@ -405,10 +405,10 @@ const HOVER_ANCHOR_MARKER = 'data-chamber-hovercard-anchor'
  *
  *    THEREFORE the discriminating leave offsets are `(0, commitLatency]` AFTER
  *    the dwell, where commitLatency is THIS RUN's measured latency — and they are
- *    measured, not assumed. A fixed band (the historical `[10, 60]ms`) is only a
+ *    measured, not assumed. A fixed band (`[10, 60]ms`) is only a
  *    LOWER BOUND: on a fast/idle thread the whole band can land after the commit,
- *    the vendored grace arms normally, and the leg would go green on broken code
- *    (adversarial review, finding H5/#3). The measurement pass below probes the
+ *    the vendored grace arms normally, and the leg would go green on broken code.
+ *    The measurement pass below probes the
  *    window and `raceBandForWindow` derives the offsets from it; when the window
  *    cannot be measured, or is too small to probe, the verdict reports "could not
  *    discriminate" (INFO) instead of claiming a pass — and `--require-hover`
@@ -448,14 +448,13 @@ const HOVER_DISMISS_SETTLE_MS = 250
  * are cardable, so the ungrouped workspace bucket header — which carries
  * `data-chamber-row` and `role="treeitem"` (ServerSection.tsx:1436-1437) but is
  * rendered WITHOUT RowHoverCard on purpose (:1743-1746, deliberately card-less)
- * — can never be picked. The old comment here claimed that bucket was excluded;
- * it was not, and the old `[data-chamber-row][role="treeitem"]` selector would
- * record a false `ok:false` on an instance whose first fitting row is it.
+ * — can never be picked. A `[data-chamber-row][role="treeitem"]` selector would
+ * record a false `ok:false` on an instance whose first fitting row is that bucket.
  *
  * `wrappedRows` is a DIAGNOSTIC ONLY (it never drives the pointer): a cardable
  * row's parent is RowHoverCard's anchor `<span>` (RowHoverCard.tsx:248-268, marker at :252), so
- * span-parented rows distinguish "this build stamps no anchor marker" (the
- * pre-fix bundle — a contract failure) from "this instance really has no
+ * span-parented rows distinguish "this build stamps no anchor marker" (a
+ * contract failure) from "this instance really has no
  * cardable row" (INFO). The row's own title is the first non-empty text node in
  * document order: both row kinds put their title first (`cc.workspaceTitle`
  * ServerSection.tsx:1566, `cc.sessionTitle` :1949), the same value the card
@@ -562,7 +561,7 @@ export async function runWalkthrough({
   // document's SSE stream, which would otherwise be reported as a page failure.
   session.beginObservationWindow()
   await session.waitFor(ROOT_MOUNTED, 'shell mounted')
-  // P0–P3 acceptance（2026-12）：壳一挂上就装遮罩层叠探针——此刻本地实例壳通常还在
+  // P0–P3 acceptance：壳一挂上就装遮罩层叠探针——此刻本地实例壳通常还在
   // boot，正是冷启动遮罩那一窗（晚装/温壳则本次判 INFO，不伪绿）。读回后交给纯判据。
   const veilProbeInstall = await session.evaluate(VEIL_LAYERING_PROBE_INSTALL)
   await sleep(4_000)
@@ -620,9 +619,9 @@ export async function runWalkthrough({
 
   // W-4: sidebar rail collapse/expand — located STRUCTURALLY (the pure
   // `pickRailToggle`) and judged by the frame's own `[data-sidebar-collapsed]`
-  // contract. See the file header: the old "first aria-expanded in the left
-  // half" pick took the source-section fold and passed while the sidebar never
-  // moved.
+  // contract. See the file header: a "first aria-expanded in the left
+  // half" pick would take the source-section fold and pass while the sidebar
+  // never moved.
   const W4_TITLE = '侧栏 rail 折叠/展开（[data-sidebar-collapsed] 效果锚定）'
   const railPrefsBefore = await session.evaluate(VIEW_PREFS)
   const railBefore = await session.evaluate(DOM_FACTS)
@@ -667,8 +666,8 @@ export async function runWalkthrough({
   }
   rec.add('W-4', W4_TITLE, railVerdict.ok, railVerdict.evidence)
 
-  // W-4a: source-section fold (design 06 §2.4) — the control the old W-4
-  // selector hit by accident, kept as its own leg with §2.4's own criterion
+  // W-4a: source-section fold (design 06 §2.4) — the control the W-4 rail pick
+  // must not hit by accident, kept as its own leg with §2.4's own criterion
   // (the collapsed LIST must be visible in the geometry, not just the
   // attribute). It writes the persisted `sourceFolded` preference, so it runs
   // only on a throwaway instance — the same rule as the first-run wizard.
@@ -743,8 +742,8 @@ export async function runWalkthrough({
   // Leg 2 (W-4b-race): the strand race, run on THIS run's measured window.
   // A strand needs the leave between the dwell callback and React's commit, so
   // the only discriminating offsets are (0, commitLatency] after the dwell; the
-  // historical fixed band is only a lower bound on that window and can miss
-  // entirely on a fast thread (adversarial review finding H5/#3). So: measure the
+  // fixed band is only a lower bound on that window and can miss
+  // entirely on a fast thread. So: measure the
   // window, derive the offsets from it, and let the verdict say whether the run
   // could discriminate at all. Leg 1 already proved this very point raises a
   // card, so a clean run means the leave cancelled/settled it — not that the row

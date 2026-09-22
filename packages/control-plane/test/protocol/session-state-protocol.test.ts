@@ -1,7 +1,5 @@
 /**
- * session-state-protocol.ts unit tests (plan of record
- * docs/progress/todo/remote-session-state-and-switch.md §4/§5-3/§5-12;
- * protocol-compat-blueprint.md §2/§3.2 files 1-2): descriptor parsing, the
+ * session-state-protocol.ts unit tests: descriptor parsing, the
  * capability matrix (404 / 503-disabled / unversioned / 5xx+timeout /
  * forward-skew / ok), the frozen feature tuple + coverage net, read-mark
  * monotonic max merge and source-wide effective max, and the turn/end
@@ -82,7 +80,7 @@ test('feature ids are unique dotted-lowercase ids and cover the base set', () =>
 })
 
 /**
- * Coverage net (protocol-compat-blueprint §2.2 R10): every advertised feature
+ * Coverage net (R10): every advertised feature
  * is referenced here. Growing SESSION_STATE_FEATURES without touching this
  * list fails the test on purpose — a capability may never be advertised
  * without a conscious place in the contract tests.
@@ -126,7 +124,7 @@ test('classifier: 503 session_state_disabled is disabled (not legacy, not unavai
   }
   const plain503 = classifySessionStateProbe({ kind: 'response', status: 503, body: {} })
   assert.equal(plain503.kind, 'unavailable')
-  // The second kill-switch shape (gateway-session-state-blueprint §6.4/§11-④):
+  // The second kill-switch shape:
   // 200 + mode:'off' is still "disabled", never forward-skew / ok.
   const modeOff = probeOk({ protocol: 1, features: [], mode: 'off', cursor: 0 })
   assert.equal(modeOff.kind, 'disabled')
@@ -311,7 +309,7 @@ test('classifyTurnEnd: an absent fact is neutral', () => {
   assert.equal(classifyTurnEnd(undefined), 'neutral')
 })
 
-test('clampReadThrough keeps read marks in the host domain (plan §10 clock skew)', () => {
+test('clampReadThrough keeps read marks in the host domain (clock skew)', () => {
   const hostNow = 1_700_000_000_000
   // A legitimate mark at or below the host clock is untouched.
   assert.equal(clampReadThrough(hostNow - 60_000, hostNow), hostNow - 60_000)

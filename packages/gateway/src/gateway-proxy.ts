@@ -15,7 +15,7 @@
  * instance' here. The two paths are not document-equivalent for browsers:
  * this proxy carries GATEWAY_PROXY_CSP (unsafe-inline) plus the S0 trust
  * declaration, while /api/i/local/* keeps the control-plane shell's nonce CSP
- * and no trust injection (known divergence, deliberately unchanged).
+ * and no trust injection (deliberate known divergence).
  */
 
 import type { Duplex } from 'node:stream'
@@ -50,7 +50,7 @@ import { injectTrustDeclaration } from './html-inject.ts'
  * Content types a content-addressed asset of one extension may carry. The path
  * alone is not proof of the payload: an SPA fallback answers an asset URL with
  * the rendered `text/html` index, and an immutable stamp on that answer would
- * cache HTML under a script URL for a year (the M3-3 review's poisoning case).
+ * cache HTML under a script URL for a year.
  * Each entry accepts the types a static host realistically sends for that
  * extension — including `application/octet-stream` for fonts — and nothing else.
  */
@@ -90,7 +90,7 @@ export interface GatewayProxyDeps {
   getLocalDshPort(): number | null
   /** The managed local dsh state ('ready' when serviceable). */
   getLocalState(): string
-  /** Activation-aware exposure gate (design 18 addendum D3/F4, 必做): false
+  /** Activation-aware exposure gate (design 18 addendum D3/F4): false
    * while an activation transaction is in flight, so an unverdict-candidate
    * never serves online users. The gate covers the startup path and
    * restore-builtin the same way it covers apply-now. Defaults to open for
@@ -168,22 +168,22 @@ export function createGatewayProxy(deps: GatewayProxyDeps): GatewayProxy {
       const result = injectTrustDeclaration(html)
       return result.injected ? result.html : null
     },
-    // Hashed static-asset caching (M3-3): the official frontend is served by
+    // Hashed static-asset caching: the official frontend is served by
     // @deepseek-ai/dsh-host-frontend-static, which writes ONLY content-type —
-    // no Cache-Control/ETag/Last-Modified — so the 1.24 MiB Vite shell was
-    // re-downloaded on every visit even though every asset name carries a
-    // Vite content hash. Re-add the immutable contract for exactly those names
-    // (the shared predicate is anchored on an EXACT 8-char hash so
+    // no Cache-Control/ETag/Last-Modified — so without this stamp the 1.24 MiB
+    // Vite shell is re-downloaded on every visit even though every asset name
+    // carries a Vite content hash. Add the immutable contract for exactly those
+    // names (the shared predicate is anchored on an EXACT 8-char hash so
     // favicon.svg / manifest.webmanifest / index.html can never match), and
     // only for a plain 200: a 206/304 or any range response keeps the upstream
     // framing.
-    // Three guards keep the stamp from outliving its evidence (2026-12 review):
+    // Three guards keep the stamp from outliving its evidence:
     // the upstream's own cache metadata wins (a `no-store`/ETag policy is the
     // owner's statement, not ours); the response must actually BE an asset of
     // that extension (a dsh whose frontend-static SPA-fell-back a miss to the
-    // rendered index — 0.1.0-rc.5 did exactly that — answers an asset URL with
-    // `text/html` 200, and caching that immutably poisons the URL for a year,
-    // across rollbacks); and a range response never gets it at all. The seam
+    // rendered index answers an asset URL with `text/html` 200, and caching
+    // that immutably poisons the URL for a year, across rollbacks); and a range
+    // response never gets it at all. The seam
     // itself re-applies the response whitelist after this callback, so framing
     // is untouchable from here.
     onUpstreamResponseHeaders: (pathname, status, headers) => {
@@ -257,9 +257,9 @@ export function createGatewayProxy(deps: GatewayProxyDeps): GatewayProxy {
         activeHttpRequests = Math.max(0, activeHttpRequests - 1)
       }
       try {
-        // 0.1.2 browser-auth cookie (review-round4 P1): the gateway's own
-        // local-dsh proxy must pass the spawn-minted cookie exactly like the
-        // desktop instance proxy, or every /api forward 401s on the new wire.
+        // Browser-auth cookie: the gateway's own local-dsh proxy must pass the
+        // spawn-minted cookie exactly like the desktop instance proxy, or every
+        // /api forward 401s.
         const authCookie = authCookieFor(fullTarget.origin)
         const extraHeaders = authCookie === undefined ? undefined : { cookie: authCookie }
         await forwardHttp(req, res, fullTarget, releaseRequest, logger, counters, forwardDeps, extraHeaders)
@@ -285,8 +285,8 @@ export function createGatewayProxy(deps: GatewayProxyDeps): GatewayProxy {
         rejectUpgrade(socket, 400, 'invalid_request', 'absolute request targets are not allowed', logger)
         return
       }
-      // Only the 0.1.2 Remote stream mux path upgrades (the events.mux /
-      // events.host downlinks were deleted upstream, dsh-v0.1.2-alpha.1).
+      // Only the Remote stream mux path upgrades (dsh's wire exposes no
+      // events.mux / events.host downlinks).
       const pathname = new URL(req.url ?? '/', 'http://localhost').pathname
       if (!WS_STREAM_PATHS.has(pathname)) {
         rejectUpgrade(socket, 404, 'instance_not_found', 'unknown WebSocket path', logger)

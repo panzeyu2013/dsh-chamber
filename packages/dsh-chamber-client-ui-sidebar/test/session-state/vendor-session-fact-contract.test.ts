@@ -1,8 +1,7 @@
 /**
  * 上游会话事实语义的**源码 lockstep 锁**（design 14 §D4；checklist §4 登记项）。
  *
- * 运行位活性守卫与 tier-3 写回押在以下上游事实上，而此前只有仓内接线/语义测试、**没有
- * 读 vendor 源**的 lockstep（上游改语义时静默 fail-open）。本文件直接读 pin 住的 vendor 源
+ * 运行位活性守卫与 tier-3 写回押在以下上游事实上。本文件直接读 pin 住的 vendor 源
  * （`vendor/harness-packages/@deepseek-ai/*`，由 ensure-harness-vendor 建链、指向 submodule）
  * 逐条钉住：
  *  1. `api-session/status` 是 `dsh-api-remotes` 白名单里的 **emit 型**转发事件；
@@ -17,7 +16,7 @@
  *
  * 语义一变即红：维护者应按 design 14 §D4 重推守卫/写回，而不是把断言改绿。
  *
- * **缺 vendor 树的口径**（2026-12 四轮独立复核修正）：默认**响亮失败**，与仓内其它 vendor 门
+ * **缺 vendor 树的口径**：默认**响亮失败**，与仓内其它 vendor 门
  * 一致（C6 缺 submodule 树即失败、open-in 的 vendor 契约测试 ENOENT 即失败）——「本地绿」
  * 绝不能靠静默跳过换来。只有确为无 submodule 的本地 worktree 才显式设
  * `DSH_CHAMBER_VENDOR_ABSENT=skip`；CI 不设该变量，这六条语义因此在 CI 上必然执行。

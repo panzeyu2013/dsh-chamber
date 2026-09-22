@@ -1,5 +1,5 @@
 /**
- * settings-shell.ts tests (2026-12): the reserved `sidebar.settings` seat contract. The failure mode under test
+ * settings-shell.ts tests: the reserved `sidebar.settings` seat contract. The failure mode under test
  * is a third-party plugin registering BELOW the reserved shadow range and silently replacing the whole chamber
  * settings surface (server dropdown + every per-source plugin section).
  */

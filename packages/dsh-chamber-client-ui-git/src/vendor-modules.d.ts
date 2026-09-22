@@ -71,7 +71,7 @@ declare module '@deepseek-ai/dsh-client-ui-primitives' {
   }
   export function Modal(props: ModalProps): ReactNode
   /** Read-only capsule badge (upstream `Tag.tsx`), used for the unregistered
-   *  worktree's status capsule (2026-09-11 upstream-alignment, T14). */
+   *  worktree's status capsule. */
   export type TagTone = 'outline' | 'solid' | 'neutral' | 'quiet' | 'success' | 'info' | 'warning' | 'danger'
   export function Tag(props: { tone?: TagTone; className?: string | undefined; children?: ReactNode }): ReactNode
   /** Controlled risk acknowledgement dialog (upstream `RiskConfirmation.tsx`):

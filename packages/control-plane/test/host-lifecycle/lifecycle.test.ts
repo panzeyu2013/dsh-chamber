@@ -13,7 +13,6 @@ const stateDir = (): string => mkdtempSync(join(tmpdir(), 'dsh-plane-lifecycle-'
 
 test('loopback-only 是硬不变量：非 loopback host 无边界评估器即拒绝', () => {
   // AGENTS.md「控制面只监听 loopback」+ design 17：匿名管理 API/反代绝不裸奔。
-  // 2026-09 模块评审 D#1：实现处有此守卫但无测试。
   const dir = stateDir()
   try {
     assert.throws(

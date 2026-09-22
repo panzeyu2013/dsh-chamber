@@ -149,7 +149,7 @@ function installLocaleOwnership(ctx: Context): void {
     return { locale: active, settled: status !== undefined && status !== 'loading' }
   }
   const report = (): void => { reportPageLanguageEntry(instanceId, fact(), generation) }
-  // 形状对但会抛的 face/scope 也必须 fail-open（2026-12 三轮独立复核 D-R1）：
+  // 形状对但会抛的 face/scope 也必须 fail-open：
   // 一次 getSnapshot 抛错会经 ctx.effect 逃出 vendor fiber，把 locale 插件整条
   // 装起来失败（= 降级启动），与"无归属、语言不被采纳"的 fail-open 声明相反。
   // 守卫包在**订阅与 effect 用的那层**：抛错时按"无事实"上报（撤回/不采纳）。

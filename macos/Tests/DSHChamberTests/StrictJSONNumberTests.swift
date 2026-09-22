@@ -2,10 +2,10 @@
 //  StrictJSONNumberTests.swift
 //  DSHChamberTests
 //
-//  2026-12 单源化：严格 JSON 数值/布尔的判定矩阵锁（五处调用点
+//  严格 JSON 数值/布尔的判定矩阵锁（五处调用点
 //  FrameCodec.intValue / BridgeClient.exactInt64 / MessageHandler.exactInt /
 //  EdgePayload.int / StartupSettings.isBoolean 共同依赖）。
-//  矩阵逐条对齐迁移前的各实现，任何一处域语义漂移都先在本文件变红。
+//  矩阵逐条对齐各实现的既有语义，任何一处域语义漂移都先在本文件变红。
 //
 import XCTest
 @testable import DSHChamber
@@ -33,8 +33,8 @@ final class StrictJSONNumberTests: XCTestCase {
                        Int64.min)
         XCTAssertEqual(StrictJSONNumber.int64(NSNumber(value: Int.max), domain: .int64Exact),
                        Int64.max)
-        // 无符号域外存储绝不回绕（迁前 MessageHandler 的 int64Value 会回绕；
-        // 该输入不可能来自 WebKit 桥接，统一为 fail-closed）
+        // 无符号域外存储绝不回绕（该输入不可能来自 WebKit 桥接，
+        // 统一为 fail-closed）
         XCTAssertNil(StrictJSONNumber.int64(NSNumber(value: UInt64.max), domain: .int64Exact))
         XCTAssertNil(StrictJSONNumber.int64(NSNumber(value: UInt64.max), domain: .jsExact))
         // Bool 不是整数

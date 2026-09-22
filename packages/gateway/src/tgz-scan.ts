@@ -1,6 +1,6 @@
 /**
  * Bounded tgz metadata inspection for the materialize upload route (design
- * 21 §6.2 — `PUT /chamber/plugins/materialize`; plan Phase 4.4): parse the
+ * 21 §6.2 — `PUT /chamber/plugins/materialize`): parse the
  * gzip stream and the ustar 512-byte header blocks INCREMENTALLY with
  * `zlib.createGunzip`, so a hostile archive can never force a full
  * decompression into memory. The upload body is already buffered by the
@@ -23,7 +23,7 @@
  * 'corrupt'; the route answers 400 with a distinct code per error so the
  * client can tell a broken upload from an archive that exceeded the caps.
  *
- * Identity projection (2026-12 review, design 21 §6.2/§6.11): the route judges
+ * Identity projection (design 21 §6.2/§6.11): the route judges
  * the CLIENT-ASSERTED `x-plugin-name`/`x-plugin-version` headers, so the archive's
  * own `package/package.json` is captured (bounded, ≤ 64 KiB) here and the route
  * requires it to AGREE with the headers. Without this, a caller could upload an
@@ -31,7 +31,7 @@
  * innocent third-party name — pnpm installs the ARCHIVE's name, and that name
  * then lands in the profile as a DIRECT dependency (exempt from the post-install
  * verifier), i.e. the exact shadow the protected set exists to prevent.
- * 2026-12 audit fix: the capture CLOSES at the end of the candidate's own data
+ * The capture closes at the end of the candidate's own data
  * area (a real archive carries entries after `package/package.json`, and their
  * data must not be appended to the JSON), the oversize flag is per candidate
  * (never sticky) and the capture is bounded by TGZ_MANIFEST_MAX_BYTES — the

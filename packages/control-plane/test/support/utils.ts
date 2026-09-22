@@ -4,23 +4,11 @@
  * Bare helper module — NOT a test: `scripts/test.mjs` enumerates the suite
  * files explicitly, so this file is never executed as a test.
  *
- * Extracted 2026-09 (dedupe audit N7). Provenance per helper:
- * - `fakeWire`            — byte-identical in manager-api.test.ts / static-serving.test.ts
- * - `mockIdentityProbe`   — byte-identical in protocol.test.ts / restart-local.test.ts
- * - `fetchJson`           — byte-identical in manager-api.test.ts / smoke.test.ts
- * - `jsonResponse`        — identical in m1-dsh-client.test.ts / protocol.test.ts
- *                          (the two local copies differed only in the `any`
- *                          vs `unknown` parameter annotation; `unknown` is
- *                          the shared superset)
- * - `pongFrame`           — byte-identical in proxy/liveness-timeout.test.ts / proxy/ws-frames.test.ts
- * - `waitFor`             — same 3-argument shape in protocol.test.ts (50 ms
- *                          poll) / restart-local.test.ts (25 ms poll); the
- *                          shared copy defaults to 25 ms and takes an
+ * Notes per helper:
+ * - `jsonResponse`        — the parameter annotation is `unknown`, the shared superset
+ * - `waitFor`             — defaults to a 25 ms poll and takes an
  *                          explicit `pollMs`
- * - `tempDir`             — five near-identical copies (host-logs / storage /
- *                          host-graph-seed register `t.after` cleanup,
- *                          local-connection / spawn-dsh do not); the shared
- *                          copy registers cleanup iff a context is passed
+ * - `tempDir`             — registers cleanup iff a context is passed
  */
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -37,7 +25,7 @@ export const quietLogger = { log: () => {}, warn: () => {}, error: () => {} }
 /**
  * The "no such path" sentinel shared by the suites that must not touch a real
  * state dir. It must not exist, and it must not sit in the shared `/tmp`: a
- * real spawned host writes its logs under `stateDir` (2026-09 cleanup).
+ * real spawned host writes its logs under `stateDir`.
  */
 export const ABSENT_ROOT = mkdtempSync(join(tmpdir(), 'dsh-cp-absent-'))
 export const ABSENT_PATH = join(ABSENT_ROOT, 'none')

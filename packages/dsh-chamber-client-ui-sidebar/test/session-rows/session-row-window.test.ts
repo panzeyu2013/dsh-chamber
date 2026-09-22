@@ -4,7 +4,7 @@ import {
   sessionRowDisclosure, sessionRowWindow, SESSION_ROWS_VISIBLE_FIRST,
 } from '../../src/shared/session-row-window.ts'
 
-// 会话行渲染窗口（2026 性能整改 B2，见 src/shared/session-row-window.ts）：
+// 会话行渲染窗口（见 src/shared/session-row-window.ts）：
 // 渲染层截断 + "还有 N 个会话"展开条；数据面保持全量（组件接线不在此测）。
 
 const LIMIT = SESSION_ROWS_VISIBLE_FIRST
@@ -61,7 +61,7 @@ test('幂等与纯函数（同输入同输出、不共享状态）', () => {
   assert.deepEqual(a, b)
 })
 
-// 2026-09-11 upstream-alignment T11: 展开条自己的窗口与「是否已展开」无关——
+// 展开条自己的窗口与「是否已展开」无关——
 // 展开后 sessionRowWindow 返回 hiddenCount 0，而 sessionRowDisclosure 仍给出
 // 未展开窗口的隐藏数，展开条因此能留在原地并提供「收起」。
 test('展开条窗口与展开态无关：展开态下仍报出隐藏数（可收起）', () => {

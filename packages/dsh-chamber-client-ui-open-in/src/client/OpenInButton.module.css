@@ -1,5 +1,4 @@
-/* Open-in header utility control (design 16 §6 + open-in extension, placement
-   fix 2026-08; **style parity revision 2026-09-12**).
+/* Open-in header utility control (design 16 §6 + open-in extension).
 
    Registered into the official conversation header utilities slot
    (`conversation.session.header.utilities`, the same right-aligned row as the
@@ -12,16 +11,13 @@
    against the pinned vendor: `session-log-export/HeaderAction.module.css`
    `.moreButton{width:28px;height:28px;border:none;border-radius:28px}` and
    `ui-conversation/ConversationRoot.module.css`
-   `.titleRow{min-height:30px}`. The earlier chamber-invented 32px / r18 /
-   `border-l2` pill stood 4px taller than both its row and its neighbour and
-   read as a different control family; it is gone, not restated.
+   `.titleRow{min-height:30px}`.
 
-   Chamber-only affordances that remain (all of them extensions upstream never
-   had, none of them a style of its own): the failure tooltip, the per-source
-   remembered choice, the re-probe/arrow-key opening and the N-ctx dismissal.
+   Chamber-only affordances (all of them extensions upstream never had, none of
+   them a style of its own): the failure tooltip, the per-source remembered
+   choice, the re-probe/arrow-key opening and the N-ctx dismissal.
    The control's FORM is upstream's too — one split button for any non-empty app
-   set (upstream has no single-entry variant; the 2026-09-12 thorough-unification
-   pass deleted chamber's plain one-app button). No declaration here invents a
+   set (upstream has no single-entry variant). No declaration here invents a
    token, a size or a colour the pinned vendor surface does not already use.
 
    Deliberate differences from the upstream text, all verified against it:
@@ -29,8 +25,8 @@
    declarations), `background: none` where upstream writes `background: 0 0`
    (same longhand reset), and the engine-alignment form-control reset on
    `.button, .chevron` below (`appearance`/`-webkit-appearance: none` plus
-   `font: inherit`, 2026-12: Chromium and WebKit otherwise keep different
-   native button dress; the explicit font longhands after the shorthand still
+   `font: inherit`: Chromium and WebKit otherwise keep different native button
+   dress; the explicit font longhands after the shorthand still
    win). Every other declaration of `.split`/`.main`/`.chevron`/`.icon`
    matches upstream verbatim. */
 
@@ -57,7 +53,7 @@
   align-items: center;
   gap: 5px;
   color: var(--dsw-alias-label-primary);
-  /* Engine alignment (2026-12): kill the UA form-control dress WebKit would
+  /* Engine alignment: kill the UA form-control dress WebKit would
      otherwise keep, then re-state the upstream type below so the `font`
      shorthand's inherited values never win. */
   appearance: none;

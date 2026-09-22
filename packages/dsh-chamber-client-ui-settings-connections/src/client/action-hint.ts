@@ -8,7 +8,7 @@
  * TransportStatusProjection). The card must never tell the user to fix SSH
  * credentials when the SSH tunnel itself was fine and the remote dsh
  * instance is the problem (e.g. a breaking change / version mismatch on the
- * remote — 2026-08 UI misdirection fix).
+ * remote).
  *
  * Selection order (per spec.kind / spec.transport):
  * - kind 'gateway'      → gatewayAuthActionHint (gateway URL/credentials are

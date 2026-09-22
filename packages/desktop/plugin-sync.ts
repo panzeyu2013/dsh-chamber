@@ -1,5 +1,5 @@
 /**
- * Remote plugin sync orchestration (design 13 M2+M3, desktop main process).
+ * Remote plugin sync orchestration (design 13, desktop main process).
  *
  * Pure orchestration + dependency injection: every function takes its
  * side-effecting deps as parameters (`exec`, `status`, `localDshHome`, …) so
@@ -12,7 +12,7 @@
  * only ssh-specific classification (ENOENT_PATTERN) is imported from
  * `ssh-provider.ts`.
  *
- * Contract A (consumed; produced by the parallel transport agent):
+ * Contract A (consumed):
  *   - `restart`                    = exec(id, 'restart')
  *   - `dsh plugin add/remove`      = exec(id, 'run', { op:'exec', command:'dsh',
  *                                     argv:['plugin','--profile','web','add',spec] })
@@ -46,7 +46,7 @@ import { homedir, tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { readStringArray } from '@dsh-chamber/control-plane'
 // The cordis loader insert render/parse/conflict logic is single-sourced in
-// control-plane (cordis-inserts.ts, A2 cross-package protocol single-
+// control-plane (cordis-inserts.ts, cross-package protocol single-
 // sourcing) — consumed through control-plane-module.ts (the desktop
 // dual-path facade: packaged → compiled dist/control-plane, dev → workspace
 // source). The insert wire format can never drift from the local overlay
@@ -71,7 +71,7 @@ import {
   readInstalledVersion,
 } from './control-plane-module.ts'
 import type { FamilyVersions, PluginMutationDecision, PluginRow, ProtectedSet } from './control-plane-module.ts'
-// Owner-private file primitives (control-plane private-file.ts, P2-2a) —
+// Owner-private file primitives (control-plane private-file.ts) —
 // consumed through the same dual-path facade for the local-plugin-writer
 // ledger (owner-only 0600 atomic replace, owner-only parent).
 import { atomicWritePrivateFileNoFollow, ensurePrivateDirectoryNoFollow, readPrivateFileNoFollow } from './control-plane-module.ts'
@@ -84,7 +84,7 @@ import {
   HOST_GRAPH_PATCH_FILENAME, HOST_OPEN_IN_INSERT, HOST_PACKAGE_SEED_FILES,
   type ChamberHostPackageDescriptor, type HostPackageInsert, type HostPackageSeedFile,
 } from './control-plane-module.ts'
-// ssh unified increments (design 21 §6.4, plan Phase 5): the protected-set
+// ssh unified increments (design 21 §6.4): the protected-set
 // row assembly helpers (parseSpecName / buildSshApplyRows / describePluginRefusals
 // — ssh-apply-rows.ts). Pure module, imports no
 // Electron and nothing from plugin-sync (no cycle).
@@ -104,7 +104,7 @@ import { ENOENT_PATTERN } from './ssh-provider.ts'
 // Contract A types (design 13 §4.1) are SHARED from transport-provider.ts —
 // the provider's single source of truth (transport-provider has no runtime
 // imports, so this pulls no transport-manager/electron surface). The copied
-// union used to drift ('base64'/'mkdir' went missing from the copy).
+// union can drift ('base64'/'mkdir' can go missing from the copy).
 import type { TransportExecAction, TransportRunPayload } from './transport-provider.ts'
 // pnpm launcher resolution (design 21 §6.3 / design 23 D2): win32 must run the
 // pnpm.cjs script through node/Electron — Node >=18.20.2/20.12.2 refuses to
@@ -132,7 +132,7 @@ export const CHAMBER_SEED_NAMES: readonly string[] = CHAMBER_HOST_PACKAGES.map(d
  * 写面/读面共用的判定事实（design 21 §6.11.1）。
  * - `familySource: 'runtime'`（默认，local/gateway）：`familyNames` 应是已解析的 F；
  *   缺席 ⇒ **降级态**（`familySource:'unavailable'`）：P 退到 B₀ ∪ S 且官方 scope 的
- *   install 一律被拒（比 R2 的同代校验更强），第三方与 remove 面照常——只收紧不放松。
+ *   install 一律被拒，第三方与 remove 面照常——只收紧不放松。
  * - `familySource: 'none'`（ssh）：远端**没有**族事实源，同上保守形态（码为 `protected`）。
  */
 export interface PluginProtectionFacts {
@@ -156,7 +156,7 @@ export function sshProtectionFacts(): PluginProtectionFacts {
  * 锚锁文件描述的是**随包发布的那条运行时线**；用户选装的运行时（design 18 §3.6）与
  * `DSH_CHAMBER_DSH_PATH` 指向的树都可能是**另一条线**。把内建锚交给另一条线，装后复验
  * 就会拿那份 profile 里的副本去比它从未有过的版本——一致的树被响亮误判成跨代副本
- * （2026-12 复核实测：活动运行时 `0.1.5-rc.3` 的合法 profile 在内建 pin=`rc.2` 下判
+ * （活动运行时 `0.1.5-rc.3` 的合法 profile 在内建 pin=`rc.2` 下判
  * `generation-mismatch`；同一棵树按 gateway 形态（不带 pin）判 ok）。
  *
  * 判据用**版本相等**而不是"来源是 bundled"：dev/env 形态的活动树与内建同版时，锚仍是
@@ -540,25 +540,11 @@ export function classifyDependencyValue(spec: string): SpecClass {
 // Manifest types (contract B)
 
 /**
- * Chamber-injected host-graph state (design 09 方案 A, module A+B; surfaced so
- * the injection is never a silent modification — the plugin management UI
- * shows it verbatim):
- * - `installed` — module A's package files are present in the profile
- *   (local: `<home>/profiles/web/node_modules/@dsh-chamber/dsh-chamber-seed-client-graph`,
- *   seeded per-spawn by the control plane; remote: the install-level flat
- *   fallback `<home>/profiles/node_modules/…`, seeded by
- *   seedRemoteChamberHostPackages).
- * - `patched` — the boot layer carries the client-graph insert (local: the
- *   `--patch` overlay file; remote: the profile's cordis.patch.yml).
- * Both must hold for the row to actually resolve at boot — one without the
- * other is a half-injected state the UI renders distinctly, never "done".
- */
-/**
  * One chamber host package's per-target state — the plugin-management page's
  * chamber-table row. The EXPECTED package set comes from the control-plane
  * registry (`CHAMBER_HOST_PACKAGES`: name + loader insert id + liveness probe
  * method), so a new host package appears in the page with no UI change and no
- * hand-maintained row list (2026-09 user decision).
+ * hand-maintained row list.
  */
 export interface ChamberHostPackageState {
   /** Loader insert id (control-plane seed registry). */
@@ -600,9 +586,9 @@ export interface ChamberHostPackageState {
 /**
  * Probe outcome: `ok:false` = the instance's injection state could not be
  *  read (remote ssh exec failure / unparseable patch) — loud, never a silent
- *  "not injected". The projection is PER REGISTRY PACKAGE (the fixed
- *  hostGraph/gitWorktree pair is gone): every row's loader row lives in the
- *  SAME cordis.patch.yml, so `patched` is checked per package (one insert
+ *  "not injected". The projection is PER REGISTRY PACKAGE:
+ *  every row's loader row lives in the SAME cordis.patch.yml, so `patched`
+ *  is checked per package (one insert
  *  present does NOT prove another's — a machine seeded before a newer host
  *  package existed carries only the older rows); `live` answers the same
  *  "已生效 vs 重启后生效" question per package (an older row can be live from
@@ -614,7 +600,7 @@ export type ChamberInjectionState =
 export interface RemotePluginManifest {
   dependencies: Record<string, string>
   bundles: string[]
-  /** Read-face row projection (design 21 §6.11.5, 2026-09 revision): one row per
+  /** Read-face row projection (design 21 §6.11.5): one row per
    *  `dependencies` entry, each with its role + backend-computed `protected`
    *  flag. The composition (B₀) and the chamber seed registry (S) classify rows
    *  but never create them — this list is the profile's own plugin set, not the
@@ -742,9 +728,9 @@ export function classifyLocalDependency(pkg: unknown): LocalPluginKind {
  * node_modules read (path traversal defense). Throws on an unreadable/
  * malformed profile manifest.
  *
- * `rows` (design 21 §6.11.5, 2026-09 revision) is the profile's DEPENDENCY
+ * `rows` (design 21 §6.11.5) is the profile's DEPENDENCY
  * table projected with the backend-computed role/protected flags. B₀ and the
- * seed registry S only CLASSIFY rows here — they no longer create rows:
+ * seed registry S only CLASSIFY rows here — they never create rows:
  * 「已安装」 lists what this profile declares as plugins, the chamber host
  * packages are shown by the chamber component table (`chamber` below), and
  * the official composition is the runtime baseline, not a plugin row.
@@ -805,8 +791,8 @@ export function localPluginList(localDshHome: string, facts?: PluginProtectionFa
     protectedSet,
     seedNames: CHAMBER_SEED_NAMES,
     // The rows derivation asks once per dependency; memoize for this call so a
-    // 200-dependency profile does not pay 200 disk reads for one list (2026-12
-    // review optimality note). A mutation between two list calls re-reads.
+    // 200-dependency profile does not pay 200 disk reads for one list.
+    // A mutation between two list calls re-reads.
     installedVersion: (() => {
       const cache = new Map<string, string | null>()
       return (name: string) => {
@@ -851,8 +837,8 @@ export function localPluginList(localDshHome: string, facts?: PluginProtectionFa
         // meaningful, so the flag is reported as the registry declares it and
         // the view lists the row here while omitting it on every remote target
         // (design 20 §6). Absent = an ordinary row: the field is only written
-        // when it is true, so a normal row's shape stays byte-identical to the
-        // pre-open-in projection (the desktop tests pin these objects whole).
+        // when it is true, so a normal row carries no `localOnly` key (the
+        // desktop tests pin these objects whole).
         ...(descriptor.localOnly === true ? { localOnly: true as const } : {}),
       })),
     },
@@ -892,7 +878,7 @@ export function redactLocalPluginManifest(manifest: LocalPluginManifest): LocalP
 /**
  * Row specs follow the manifest's own masking rule (design 21 §6.2/§6.11.5): a
  * masking backend must not leak a machine-local path through the `rows` channel
- * that its `dependencies` projection masks (2026-12 review). Idempotent — a
+ * that its `dependencies` projection masks. Idempotent — a
  * value already masked keeps its mask.
  */
 function maskRowSpecs(rows: readonly PluginRow[], masked: Record<string, string>): PluginRow[] {
@@ -913,7 +899,7 @@ export function isRemoteFileValue(spec: string): boolean {
 
 /**
  * Project a REMOTE manifest for the renderer (design 21 §6.2/§6.4 readManifest
- * 投影统一掩码, decision 18): dependency VALUES that are `file:` specs would
+ * 投影统一掩码): dependency VALUES that are `file:` specs would
  * name remote-machine paths and must never leave the main process in a
  * renderer-bound IPC response. Each is replaced with MATERIALIZED_VALUE_MASK
  * (file:-prefixed only — exactly the gateway `/chamber/plugins/installed`
@@ -964,8 +950,7 @@ export function describeLocalPluginRemoveConfirmation(name: string): { message: 
 }
 
 /** Confirmation-dialog copy builder (pure, tested): manual chamber host
- *  seed (persistent remote modification — packages + boot-layer merge;
- *  2026 review). */
+ *  seed (persistent remote modification — packages + boot-layer merge). */
 export function describeSeedConfirmation(info: { targetLabel: string | null; targetId: string }): { message: string; detail: string } {
   const target = info.targetLabel ?? info.targetId
   return {
@@ -976,7 +961,7 @@ export function describeSeedConfirmation(info: { targetLabel: string | null; tar
 
 /** Confirmation-dialog copy builder (pure, tested): remote plugin apply
  *  (registry add/remove on a remote instance — a persistent execution
- *  surface, same class as the local install; 2026 final review). */
+ *  surface, same class as the local install). */
 export function describePluginApplyConfirmation(info: {
   targetLabel: string | null
   targetId: string
@@ -1032,7 +1017,7 @@ function localOverlayCarriesInsert(localDshHome: string, insert: HostPackageInse
  * row: the control plane reuses an exact row already present here instead of
  * repeating it in the `--patch` overlay (loader identities are global across
  * both layers — a duplicate id/name pair fails the boot), so an overlay-only
- * check reported a mounted row as 未注入 (T20). Unreadable/absent → false,
+ * check would report a mounted row as 未注入. Unreadable/absent → false,
  * never a guessed "patched".
  */
 function localProfilePatchCarriesInsert(localDshHome: string, insert: HostPackageInsert): boolean {
@@ -1118,7 +1103,7 @@ export async function remotePluginList(
   opts?: { liveProbe?: ChamberLiveProbe },
 ): Promise<RemotePluginListResult> {
   const path = remoteManifestPath(spec.remoteDshHome)
-  // Quiet (2026-08 review fix): on an uninitialized remote profile the
+  // Quiet handling: on an uninitialized remote profile the
   // manifest cat ENOENTs — an EXPECTED probe failure that must not write an
   // ERROR "run command failed" line into the instance log panel, exactly the
   // pollution the quiet flag exists to prevent (same rule as the chamber
@@ -1159,7 +1144,7 @@ export async function remotePluginList(
         bundles: parsed.bundles,
         protectedSet: protectedSetFromFacts(sshProtectionFacts()),
         seedNames: CHAMBER_SEED_NAMES,
-        // NOTE (2026-12 review): `protected` means exactly "name ∈ P" — the ssh INSTALL
+        // NOTE: `protected` means exactly "name ∈ P" — the ssh INSTALL
         // conservatism is a target capability, not a read-face protection fact. Marking
         // official-scope rows protected here would hide a REMOVE the write face allows
         // (removal is judged by B₀ ∪ S only) and would print a false "protected by the
@@ -1312,10 +1297,10 @@ export interface ApplyActions {
 }
 
 /**
- * Durable per-instance ssh apply journal sink (design 21 §6.4, plan Phase 5
+ * Durable per-instance ssh apply journal sink (design 21 §6.4,
  * ssh 统一增量 — produced by ssh-plugin-journal.ts createSshPluginJournal).
  * STRUCTURAL on purpose: plugin-sync never imports the journal module, and an
- * apply without a journal keeps its exact historical exec/read behavior. The
+ * apply without a journal performs no extra read and no journaling. The
  * implementor never throws (journaling is best-effort; a persistence failure
  * must never break an apply).
  */
@@ -1334,10 +1319,10 @@ export interface SshApplyJournalSink {
  *  quiet `cat` + parse of the profile manifest (no chamber probes — the
  *  journal only needs the dependency rows).
  *
- *  FAIL-CLOSED (2026-12 P0-2): an unreadable snapshot is returned as the
+ *  FAIL-CLOSED: an unreadable snapshot is returned as the
  *  failure arm so the caller refuses the WHOLE batch. Recording rows with
- *  `specBefore: null` after a failed read made a later undo treat an in-place
- *  upgrade as a fresh install and DELETE the plugin — the journal's undo
+ *  `specBefore: null` after a failed read would make a later undo treat an
+ *  in-place upgrade as a fresh install and DELETE the plugin — the journal's undo
  *  semantics cannot represent "unknown", so the batch must not execute at all.
  *  An absent profile (ENOENT) is the one benign empty snapshot; an unparseable
  *  read is a failure too, never an empty dependency map. */
@@ -1438,13 +1423,12 @@ export async function applyPlugins(
     /** Undo journal sink (design 21 §6.4): when present, a pre-change
      *  manifest snapshot is read BEFORE the first remote change and every
      *  executed row is recorded with its pre-change spec (`specBefore`).
-     *  Absent → the apply keeps its historical exec sequence (no extra read,
-     *  no journaling). */
+     *  Absent → no extra read and no journaling. */
     journal?: SshApplyJournalSink
     /** Operational target fingerprint (main.ts operationalFingerprint) of
      *  the instance the rows execute on; recorded on every journal entry so
      *  an undo can never replay a change onto a different host that reuses
-     *  the same connection id after an edit (design 21 §6.4 review P1). */
+     *  the same connection id after an edit (design 21 §6.4). */
     targetFingerprint?: string | null
     /** Protected-set facts (design 21 §6.11): ssh form by default (B₀ ∪ S, no
      *  family source). The main process passes the facts it resolved so the
@@ -1474,7 +1458,7 @@ export async function applyPlugins(
       return { ok: false, error: `invalid remove name: ${JSON.stringify(name)}` }
     }
   }
-  // Protected-set judgement (design 21 §6.11, decision 19 2026-12 revision —
+  // Protected-set judgement (design 21 §6.11 —
   // ssh form: B₀ ∪ S, no family source). Refuse the WHOLE batch, loudly,
   // naming each refused row and its code, BEFORE any remote change (never a
   // partial apply around a refused row). buildSshApplyRows is the shared
@@ -1501,7 +1485,7 @@ export async function applyPlugins(
     // spec the touched name had before the op (add: null when the name was
     // absent; remove: the previous spec string — the undo journal's undoable
     // fact). An absent profile (ENOENT) is an empty snapshot.
-    // FAIL-CLOSED (2026-12 P0-2): a snapshot that cannot be read (real ssh
+    // FAIL-CLOSED: a snapshot that cannot be read (real ssh
     // failure, or an unparseable manifest) refuses the WHOLE batch before any
     // remote change. The journal cannot represent "unknown": a row recorded
     // with specBefore null after a failed read would be undone as "the name
@@ -1603,7 +1587,7 @@ export async function applyPlugins(
   }
 }
 
-// 4. seedRemoteChamberHostPackages (design 13 §3, M2)
+// 4. seedRemoteChamberHostPackages (design 13 §3)
 
 export interface ChamberHostPackageSeed {
   insertId: string
@@ -1633,10 +1617,10 @@ export interface ChamberHostPackageSeedState {
  * rows here before its own validation/preflight/write, and every desktop-side
  * path that inspects "what should be on that other machine" must read THIS
  * list rather than the full registry projection: a `localOnly` row carries an
- * empty `sourceDir` by design, so counting it as a missing artifact failed the
- * manual 注入 action with "…的 dist/index.js 缺失", appended a false
+ * empty `sourceDir` by design, so counting it as a missing artifact would fail
+ * the manual 注入 action with "…的 dist/index.js 缺失", append a false
  * "构建产物缺失" gap to the REMOTE instance's log on every ready transition,
- * and warned on every gateway sync (2026-12 review).
+ * and warn on every gateway sync.
  * @param seeds - the registry projection, in registry order.
  * @returns the seeds whose package may live on another host, input order.
  */
@@ -1652,8 +1636,8 @@ export function portableChamberHostPackageSeeds(
  * defensive noise — an unmapped registry row carries an empty `sourceDir`, and
  * `existsSync(join('', 'dist', 'index.js'))` resolves against the process CWD,
  * so a shell whose working directory happens to contain `dist/index.js` would
- * stage the CWD's OWN bytes as that package's seed and report success
- * (2026-12 review). An empty dir means "not shipped here", never "the artifact
+ * stage the CWD's OWN bytes as that package's seed and report success.
+ * An empty dir means "not shipped here", never "the artifact
  * is somewhere else".
  * @param seeds - portable seeds (or any registry projection), input order.
  * @returns the shipped seeds, input order.
@@ -1698,11 +1682,10 @@ export type CordisPatchUpdate =
  * cordis.patch.yml (design 13 §3): dedup when already present; deterministic
  * rewrite for the `initProfile` template (comments + `[]`); append for a user
  * block-sequence list (never overwriting user rows); fail-loud for a non-list.
- * The inserts are REQUIRED (there is no single-package default any more: the
- * registry is the source of the rows, and a silent client-graph fallback would
- * seed a row the caller never asked for). Pre-rename chamber rows (same loader
- * id, `@dsh-chamber/dsh-host-*` name) are folded to the canonical name first
- * (foldLegacyHostInserts, branch plan §3.4).
+ * The inserts are REQUIRED (the registry is the source of the rows, and a
+ * silent client-graph fallback would seed a row the caller never asked for).
+ * Pre-rename chamber rows (same loader id, `@dsh-chamber/dsh-host-*` name) are
+ * folded to the canonical name first (foldLegacyHostInserts).
  *
  * The insert render/parse/conflict classification is single-sourced in
  * control-plane (cordis-inserts.ts, consumed through control-plane-module.ts);
@@ -1725,14 +1708,14 @@ function cordisConflictMessage(conflict: InsertConflictKind, insert: ChamberHost
 }
 
 /**
- * Pre-rename chamber host package names keyed by loader id. The 2026-09
- * Batch 1 naming unification renamed `@dsh-chamber/dsh-host-<loader-id>` →
+ * Pre-rename chamber host package names keyed by loader id. The naming
+ * unification maps `@dsh-chamber/dsh-host-<loader-id>` →
  * `@dsh-chamber/dsh-chamber-seed-<loader-id>` WITHOUT changing the loader ids,
  * so a remote profile seeded by an older desktop still carries the old name
  * bound to the same id. Without this fold the shared insertConflict
  * classification would reject every later seed as 'id-bound' forever — the
- * documented one-time transitional exception (branch plan §3.4). The names are
- * frozen history and must never be reused.
+ * documented one-time transitional exception. The names are
+ * frozen and must never be reused.
  */
 const LEGACY_HOST_PACKAGE_NAMES: Readonly<Record<string, string>> = {
   [CLIENT_GRAPH_INSERT_ID]: '@dsh-chamber/dsh-host-client-graph',
@@ -1741,7 +1724,7 @@ const LEGACY_HOST_PACKAGE_NAMES: Readonly<Record<string, string>> = {
 }
 
 /**
- * One-time fold of pre-rename chamber rows (branch plan §3.4): a row whose
+ * One-time fold of pre-rename chamber rows: a row whose
  * loader id is a desired insert's id but whose name is that id's legacy
  * chamber name is rewritten IN PLACE to the canonical name. Only the exact
  * rendered row bytes the chamber seed writer itself produces are folded — a
@@ -1972,7 +1955,7 @@ export async function seedRemoteChamberHostPackages(
   return { ok: true, wrote, patched, packages: states }
 }
 
-// 5. materializeAndAdd (design 13 §3, M2 — optional fallback)
+// 5. materializeAndAdd (design 13 §3 — optional fallback)
 
 export type MaterializeResult = { ok: true; spec: string; remotePath: string } | { ok: false; error: string }
 
@@ -2095,11 +2078,11 @@ function readLocalPluginWriterRecord(localDshHome: string): LocalPluginWriterRec
     // facade): the ledger is not a secret, but it lives under the same
     // owner-only directory discipline and gates DSH_HOME mutation, so a
     // planted symlink or hard-linked leaf is unsafe evidence — 'corrupt',
-    // and the reaper fails closed — never silently followed (2a follow-up;
-    // the ledger write side already uses the same primitive, 0600).
+    // and the reaper fails closed — never silently followed (the ledger
+    // write side uses the same primitive, 0600).
     // tightenMode converges a legacy loose leaf to 0600 on first read.
     // A missing ledger (no writer ever ran) surfaces as the native ENOENT →
-    // null, exactly like the former existsSync probe.
+    // null.
     text = readPrivateFileNoFollow(ledger, { tightenMode: 0o600 }).value
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
@@ -2203,8 +2186,7 @@ export async function reapStaleLocalPluginWriters(
 
 let pluginSyncDisposePromise: Promise<void> | null = null
 
-/** App-quit barrier for every local pack/plugin child and its Unix group.
- * The historical and runtime-controller names share one single-flight owner. */
+/** App-quit barrier for every local pack/plugin child and its Unix group. */
 export function disposePluginSyncChildren(): Promise<void> {
   pluginSyncDisposePromise ??= localPluginChildSupervisor.dispose()
   return pluginSyncDisposePromise
@@ -2296,9 +2278,9 @@ async function packDirectory(localDir: string): Promise<{ bytes: Buffer } | null
   const outDir = mkdtempSync(join(tmpdir(), 'dsh-materialize-'))
   try {
     // win32: never spawn `pnpm.cmd`. Node >=18.20.2/20.12.2 refuses to spawn
-    // .cmd/.bat without a shell (CVE-2024-27980 hardening) — exactly why the
-    // pre-fix path failed. Run the pnpm.cjs entry through the current
-    // node/Electron binary instead (the same [execPath, pnpm.cjs] shape main.ts
+    // .cmd/.bat without a shell (CVE-2024-27980 hardening). Run the pnpm.cjs
+    // entry through the current node/Electron binary instead (the same
+    // [execPath, pnpm.cjs] shape main.ts
     // injects into the runtime installer); POSIX keeps the bare `pnpm` name.
     // No script entry → null: the caller reports the existing honest「pnpm pack
     // failed」rather than falling back to a .cmd shim.
@@ -2463,7 +2445,7 @@ export async function materializeArchiveAndAdd(
   return installRemoteTarball(exec, spec, archive.name, archive.bytes)
 }
 
-// 6. Local pnpm resolution + local `dsh plugin` exec (design 13 §5, M4)
+// 6. Local pnpm resolution + local `dsh plugin` exec (design 13 §5)
 
 function pathDelimiter(): string {
   return process.platform === 'win32' ? ';' : ':'
@@ -2474,12 +2456,11 @@ function pathDelimiter(): string {
  * `pnpm pack` under a desktop-launched packaged app, whose PATH is minimal —
  * `/usr/bin:/bin:/usr/sbin:/sbin` — and lacks pnpm). Scans PATH first, then
  * well-known install roots: nvm versions / volta / homebrew / the Linux
- * official-installer roots on POSIX (unchanged), and on win32 the official
+ * official-installer roots on POSIX, and on win32 the official
  * installer roots (`%LOCALAPPDATA%\pnpm` standalone, `%APPDATA%\npm` global
  * prefix, the node install dir) plus the app's own bundled pnpm bin dir
  * (design 21 §6.3 / design 23 D2). The win32 probe also accepts the bundled
- * script form `pnpm.cjs`; the POSIX candidate list is byte-for-byte the
- * previous one. Returns null when no pnpm is found — the caller then fails
+ * script form `pnpm.cjs`. Returns null when no pnpm is found — the caller then fails
  * with an honest "pnpm not found".
  */
 export function resolvePnpmBinDir(): string | null {
@@ -2523,17 +2504,6 @@ export interface LocalPluginExecResult {
 }
 
 /**
- * Run `dsh plugin --profile web <add|remove> <spec>` against the LOCAL dsh home
- * (design 13 §5). Resolves the dsh CLI entry the same way the control plane
- * does (02 §3.1: installed `node_modules/@deepseek-ai/dsh/lib/bin.js`, else the
- * `apps/cli/src/bin.ts` source via tsx), spawns it under the right node
- * executable (Electron main → `process.execPath` + ELECTRON_RUN_AS_NODE=1 +
- * `--expose-internals`), pins `DSH_HOME` to the local home, and prepends a
- * resolved pnpm bin dir to PATH (the `dsh plugin` CLI internally forwards to
- * pnpm, which a Finder-launched app cannot find otherwise). Specs are
- * whitelist-checked before spawn (defense in depth).
- */
-/**
  * Local-only `file:` spec accepted for the MAIN-PROCESS folder-picker path
  * (design 13 §5). The selected path rides an argv array, never a shell, so
  * ordinary Unicode/punctuation is safe and must work. Accept POSIX absolute,
@@ -2550,6 +2520,17 @@ export function isAllowedLocalFileSpec(spec: string): boolean {
     || /^\\\\[^\\]+\\[^\\]+/.test(selectedPath)
 }
 
+/**
+ * Run `dsh plugin --profile web <add|remove> <spec>` against the LOCAL dsh home
+ * (design 13 §5). Resolves the dsh CLI entry the same way the control plane
+ * does (02 §3.1: installed `node_modules/@deepseek-ai/dsh/lib/bin.js`, else the
+ * `apps/cli/src/bin.ts` source via tsx), spawns it under the right node
+ * executable (Electron main → `process.execPath` + ELECTRON_RUN_AS_NODE=1 +
+ * `--expose-internals`), pins `DSH_HOME` to the local home, and prepends a
+ * resolved pnpm bin dir to PATH (the `dsh plugin` CLI internally forwards to
+ * pnpm, which a Finder-launched app cannot find otherwise). Specs are
+ * whitelist-checked before spawn (defense in depth).
+ */
 export async function runLocalDshPlugin(
   dshWorkspace: string,
   localDshHome: string,

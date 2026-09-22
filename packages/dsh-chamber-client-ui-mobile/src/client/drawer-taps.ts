@@ -7,7 +7,7 @@
  * element shifts between touchstart and touchend), and Safari cancels or
  * redirects the synthesized click — a second tap then "works" because the
  * hover layout is already applied. Empirical on-device record (community
- * mobile-dsh projects, 2026-08; mechanism surveyed in design 17 §18.4):
+ * mobile-dsh projects; mechanism surveyed in design 17 §18.4):
  * the synthesized click can be missing entirely, timing-independent.
  *
  * The row's activation lives in React's delegated onClick, so the heal does

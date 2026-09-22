@@ -5,7 +5,7 @@
  * and rebuild THIS session's event stream through the concrete per-session
  * `resync()`.
  *
- * `resync()` has two entry points since 2026-09-21: the user's own click (always
+ * `resync()` has two entry points: the user's own click (always
  * available while the stall holds) and the ladder's automatic arm, which may only
  * fire on POSITIVE evidence that no open is in flight (see
  * {@link sessionOpenInFlight}) — an in-flight open is a slow Host being waited on
@@ -28,8 +28,8 @@
  * so neither is a lever here. Both are pinned by tests, so a future upstream
  * change to that guard fails loudly instead of silently disabling the heal.
  *
- * THE PRECONDITION (2026-12 review, R2 major). The detour is only safe while the
- * target is STILL the current, listed session, so every heal checks that first:
+ * THE PRECONDITION. The detour is only safe while the target is STILL the
+ * current, listed session, so every heal checks that first:
  *
  *  - an address-only subagent session (current, but absent from `ids`) would
  *    lose eligibility the moment the stage moves, and `pruneScopes()` would then
@@ -50,7 +50,7 @@
  * schedules the re-render as a microtask, so the commit sees only the final
  * binding (no visible detour). No `await` may ever be inserted between them.
  *
- * THE PER-SESSION RESYNC (2026-12). The pinned controller's concrete `Session`
+ * THE PER-SESSION RESYNC. The pinned controller's concrete `Session`
  * object exposes an `async resync()` that disposes the current event stream and
  * re-opens it — the exact lever a parked `'loading'` open needs, and the one
  * the stage move cannot supply for it. It is NOT on the `ISession` contract, so
@@ -140,8 +140,7 @@ export function pickHealNeighbor(
  * LISTED (the seat's re-open validates it), and another listed session must exist
  * to carry the detour. Without this gate an address-only target looks like it has
  * a neighbour (the list contains other sessions) even though the executed move
- * refuses it — which spent the whole heal ledger on guaranteed-refused attempts
- * (2026-09 review).
+ * refuses it — spending the whole heal ledger on guaranteed-refused attempts.
  *
  * @param sessions - the instance's session face (loose slice), if any.
  * @param targetId - the session whose stage the detour would move.
@@ -232,7 +231,7 @@ function readCurrentSession(
 /**
  * The concrete Session face of the CURRENT session, or undefined (guarded).
  * The property RESYNC READ can throw on a hostile proxy, so the capability check
- * lives inside the guard too (2026-09 review NIT: it used to escape).
+ * lives inside the guard too.
  */
 function readSessionResyncFace(
   sessions: SessionsLoose | undefined,
@@ -273,9 +272,9 @@ export function sessionOpenInFlight(sessions: SessionsLoose | undefined, session
   try {
     if (!Object.hasOwn(session, 'openPromise')) return undefined
     const pending = session.openPromise
-    // ONLY an exactly-null own member is positive evidence of "nothing pending"
-    // (2026-09-21 review): an empty/undefined value is UNKNOWN and must fail closed,
-    // because the pinned vendor marks the empty slot with `null` — anything else
+    // ONLY an exactly-null own member is positive evidence of "nothing pending":
+    // an empty/undefined value is UNKNOWN and must fail closed, because the
+    // pinned vendor marks the empty slot with `null` — anything else
     // (a renamed slot, a lazily initialized getter) cannot be read as "parked".
     if (pending === null) return false
     if (typeof pending === 'object' || typeof pending === 'function') return true
@@ -357,7 +356,7 @@ export function previousPresented(presented: readonly string[], targetId: string
  * `[data-chat-flow]` is the official ChatView column (vendor ui-chat); without it
  * no chat surface is on screen and every clock must stay at zero.
  *
- * KNOWN APPROXIMATION (2026-12 review): existence in the document is not the
+ * KNOWN APPROXIMATION: existence in the document is not the
  * same as "visible to the user" (a CSS-hidden or covered column still counts),
  * and in a multi-instance shell the query is document-wide. Both only ever make
  * `presented` MORE permissive, and `presented` gates an action that the ladder

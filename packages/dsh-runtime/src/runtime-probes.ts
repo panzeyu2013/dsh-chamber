@@ -2,39 +2,32 @@
  * Design 18 activation probes. This module owns the real, read-only probe
  * list while keeping the control-plane wire injectable for hermetic tests.
  *
- * Wire baseline: the pinned upstream dsh tree (0.1.5-rc.2). All unary
- * endpoints moved from dot to slash (`session.list` → `session/list`,
- * `settings.describe` → `settings/describe`) and typert remotes require
- * `payload.args`; `host.describe` was deleted (its host-capability role is
- * served by the fixed-size identity probe `session/canOpenWorkspacePath` —
+ * Wire shape: the pinned upstream dsh tree. Unary endpoints use the slash form
+ * (`session/list`, `settings/describe`) and typert remotes require
+ * `payload.args`; the host-capability role is served by the fixed-size identity
+ * probe `session/canOpenWorkspacePath` —
  * the zero-arg boolean Remote of the upstream SessionController's `session`
  * namespace, which never reads session data, never activates an Agent and
  * performs no IO, so the probe response is a constant-size boolean no matter
- * how many sessions exist) and `workspace.list` became the `workspace/follow`
- * stream (unary incompatible, so the workspace-shape probe was removed).
- * Runtime trees that predate the identity method (dsh < 0.1.2-rc.1) answer
- * HTTP 404; the probe layer then falls back to the legacy `session/list`
- * probe (the exact call today's probe layer made), keeping old-tree
- * activation/rollback behavior identical. `data.sessions` was removed with
- * the session-data coupling: the identity probe deliberately never reads the
- * session list, so a session-readability row no longer exists. A legacy
+ * how many sessions exist. The identity probe deliberately never reads the
+ * session list, so no session-readability row exists. Runtime trees that
+ * predate the identity method answer HTTP 404; the probe layer then falls back
+ * to the legacy `session/list`
+ * probe, keeping old-tree
+ * activation/rollback behavior identical. A legacy
  * fallback fires the optional `warn` sink when the caller wired one (the
  * desktop control-plane's own identity probes warn on the same condition via
  * their logger — see control-plane dsh-client probeHostIdentity).
  *
  * commands/execute wire argument (the probe payload below carries it): the
  * third argument of the upstream projection `execute(agent, line,
- * submittedAttachments, signal)` — `images` up to 0.1.2, and
- * **`submittedAttachments` on every line since 0.1.3-alpha.1**, pinned line
- * included (per-tag check of `interaction/commands/src/index.ts`; the
- * tool-cordis `@Remote` catalog prints the same name). `attachments` was never
- * an upstream wire name — the 0.1.3 upgrade wrote that key here by mistake and
- * the local fixture mirrored it, so every fresh install failed this probe and
- * quarantined its local instance from 0.1.3-alpha.1 until the 2026-09
- * real-machine acceptance round found it. A drifted name is not a silent miss:
+ * submittedAttachments, signal)`; **`submittedAttachments` is the wire name on
+ * every line in the pinned tree** (per-tag check of
+ * `interaction/commands/src/index.ts`; the
+ * tool-cordis `@Remote` catalog prints the same name). A drifted name is not a silent miss:
  * the typert gateway rejects unknown arg fields with
  * `gateway/arguments-invalid`, which fails this probe loud, and the fixture in
- * test/activation/runtime-probes.test.ts now enforces the same exact key set while a
+ * test/activation/runtime-probes.test.ts enforces the same exact key set while a
  * vendor-lockstep test pins the name to the upstream signature.
  */
 import { constants, type Stats } from 'node:fs'
@@ -94,7 +87,7 @@ export interface RuntimeProbeOptions {
    *  must stay visible, never silent; a failing fallback is already loud). */
   warn?: RuntimeProbeWarn
   /**
-   * Design 24 §7 C (M2 derivation): the EXACT chamber host domains this
+   * Design 24 §7 C: the EXACT chamber host domains this
    * spawn actually carries, derived from the seeded host entries
    * (desktop: every seeded domain; gateway: syncedHostDomainProbeNames).
    * An empty list runs no chamber-domain probe (the reduced set), a partial
@@ -116,9 +109,9 @@ export interface RuntimeProbeOptions {
 }
 
 /**
- * The fixed-size host-identity wire method and the generation that introduced
- * it. Mirrored from control-plane's `rpc-envelope.ts` (A2 cross-package
- * single-sourcing): this package deliberately has no dependency on the control
+ * The fixed-size host-identity wire method. Mirrored from control-plane's
+ * `rpc-envelope.ts` (cross-package single-sourcing): this package deliberately
+ * has no dependency on the control
  * plane, so the two constants are kept textually identical and the gate
  * `verify-upstream-touchpoints` C10 flags any live version literal outside the
  * registered anchors.
@@ -212,11 +205,11 @@ function safeFsCode(error: unknown): string {
  *
  * A host whose constants lack O_NOFOLLOW (win32) would otherwise open the bare
  * O_RDONLY meaning and silently follow a symlinked leaf. The async reader uses
- * the landed fallback strategy inline (private-fs.ts resolveNoFollowFlags /
+ * the fallback strategy inline (private-fs.ts resolveNoFollowFlags /
  * openPrivateNoFollowSync semantics): the leaf is lstat-ed immediately before
  * the open, a symlink is refused, and after the open the path must still name
  * the exact (dev, ino) the descriptor returned. POSIX keeps the historical
- * O_RDONLY|O_NOFOLLOW flags and performs no extra syscall.
+ * O_RDONLY|O_NOFOLLOW and performs no extra syscall.
  *
  * @param constantsLike - deterministic fallback-path seam; production callers
  *   omit it (RuntimeProbeOptions.settingsNoFollowConstants is the test entry).
@@ -404,7 +397,7 @@ export async function runRuntimeActivationProbes(opts: RuntimeProbeOptions): Pro
     }
   }
 
-  // Design 24 §7 C (M2 derivation): the chamber domains actually expected are
+  // Design 24 §7 C: the chamber domains actually expected are
   // `hostDomainNames`, derived by the caller from the spawned host entries
   // (desktop: all seeded domains; gateway: synced/partial cache). An empty
   // list is the reduced shape; omitting the option keeps all domains.
@@ -413,11 +406,11 @@ export async function runRuntimeActivationProbes(opts: RuntimeProbeOptions): Pro
   const [sessions, graph, settings, git, archiveCleanup, openInApp] = await Promise.all([
     // The fixed-size host-identity probe: session/canOpenWorkspacePath is a
     // zero-arg boolean Remote of the upstream SessionController (`session`
-    // namespace, dsh ≥ 0.1.2-rc.1). Value true AND value false are both
+    // namespace). Value true AND value false are both
     // healthy — only method presence / protocol correctness / controller
     // assembly is under test. A runtime tree that predates the identity
-    // method answers HTTP 404 and is served by the legacy session/list probe
-    // (the same call this layer made before), which keeps old-tree
+    // method answers HTTP 404 and is served by the legacy session/list probe,
+    // which keeps old-tree
     // activation/rollback behavior identical; the fallback fires the warn
     // sink so upstream method drift never goes silent.
     (async (): Promise<ProbeResult> => {
@@ -431,15 +424,14 @@ export async function runRuntimeActivationProbes(opts: RuntimeProbeOptions): Pro
         if (identityMethodNotFound(error)) {
           try {
             const legacy = await call(LEGACY_HOST_PROBE_METHOD, { args: { _request: {} } })
-            // IDENTITY-LEG DIVERGENCE (stage2 ruling, 2026): the cp twin
+            // IDENTITY-LEG DIVERGENCE: the cp twin
             // (dsh-client.ts probeHostIdentity) only requires an object; this
             // core leg demands Array.isArray(items) — align only via a probe-
             // seam shape injection (dsh-runtime cannot import cp); do not
             // relax this check without a ruling.
-            // Restore the pre-migration session/list row's shape check (the
-            // old activation row failed a value without the {items} session
-            // list as 'malformed session list'): an ok:true legacy envelope
-            // carrying no list is a damaged host, not a healthy old tree —
+            // An ok:true legacy envelope
+            // carrying no {items} session list is a damaged host, not a healthy
+            // old tree —
             // "old-tree activation identical" includes this check.
             const legacyValue = legacy.result?.value
             if (typeof legacyValue !== 'object' || legacyValue === null
@@ -475,7 +467,7 @@ export async function runRuntimeActivationProbes(opts: RuntimeProbeOptions): Pro
       ? probe('clientGraph/graph', 'clientGraph/graph', { args: {} }, graphValue)
       : Promise.resolve(null),
     (async () => {
-      // B1: per-call response cap aligned with SETTINGS_FILE_MAX_BYTES — a
+      // Per-call response cap aligned with SETTINGS_FILE_MAX_BYTES — a
       // legitimately large settings response (a 16 MiB settings.yaml renders
       // an equally large describe payload) must never be misread as a
       // misbehaving host by the default 1 MiB unary cap.
@@ -485,7 +477,7 @@ export async function runRuntimeActivationProbes(opts: RuntimeProbeOptions): Pro
     })(),
     // Empty input is rejected by domain validation before any git process or
     // repository scan. Require that exact business miss; a success value would
-    // no longer prove the request stayed on the side-effect-free path.
+    // not prove the request stayed on the side-effect-free path.
     wantsDomain('gitWorktree/previewCreate')
       ? probe(
         'gitWorktree/previewCreate',
@@ -494,7 +486,7 @@ export async function runRuntimeActivationProbes(opts: RuntimeProbeOptions): Pro
         expectedGitValidationMiss,
       )
       : Promise.resolve(null),
-    // archiveCleanup/probe (design 24, M1 execution leg): zero-arg, no
+    // archiveCleanup/probe (design 24): zero-arg, no
     // side effects. Presence = a well-formed domain carrier answer; a
     // well-formed business failure means the domain IS mounted but abnormal
     // (binding-pending / registry-unreadable / busy) → fail-closed. A
@@ -520,8 +512,7 @@ export async function runRuntimeActivationProbes(opts: RuntimeProbeOptions): Pro
     // (platform only — no detection, no spawn). Presence = a well-formed domain
     // carrier; a well-formed business failure means the domain is mounted but
     // abnormal → fail-closed; no legacy fallback (chamber host domains never
-    // downgrade). This leg closes the design 20 §6.2(3) wiring gap: the name was
-    // listed in HOST_DOMAIN_PROBE_NAMES but had no executor.
+    // downgrade).
     wantsDomain('openInApp/probe')
       ? (async (): Promise<ProbeResult> => {
         const name = 'openInApp/probe'
@@ -546,12 +537,11 @@ export async function runRuntimeActivationProbes(opts: RuntimeProbeOptions): Pro
     // resume it before CommandRuntime sees even a syntax-miss line. A fixed
     // nonexistent identity must fail at the read-only persistence lookup with
     // session/not-found, before Agent publication or command/run appends.
-    // dsh-v0.1.3-alpha.1 projection execute(agentId, line, submittedAttachments,
-    // signal): the Agent parameter is a typert lookup wired as `agentId`
+    // The projection execute(agentId, line, submittedAttachments, signal): the
+    // Agent parameter is a typert lookup wired as `agentId`
     // (session-controller resolveAgent) whose cold miss still surfaces
     // session/not-found. The third argument is named `submittedAttachments` on
-    // the pinned line — and has been on every line since 0.1.3-alpha.1
-    // (`images` up to 0.1.2); the typert gateway rejects any other field name
+    // the pinned line; the typert gateway rejects any other field name
     // with `gateway/arguments-invalid` BEFORE the controller runs, so a stale
     // name here degrades into a failed activation probe, not a silent miss.
     await call('commands/execute', {
@@ -607,7 +597,7 @@ export async function runRuntimeActivationProbes(opts: RuntimeProbeOptions): Pro
   // The expected set is derived from the ACTUALLY expected chamber domains
   // (empty list = the reduced set; partial lists = base + listed domains),
   // so a caller's probeExpectedNames must match activationProbeNamesForDomains
-  // of the same list (partial 2-of-3 syncs no longer trip an exact-set miss).
+  // of the same list (partial 2-of-3 syncs do not trip an exact-set miss).
   const expected = activationProbeNamesForDomains(hostDomainNames)
   return expected.map(name => byName.get(name) ?? ({ name, ok: false, error: 'probe not wired' }))
 }

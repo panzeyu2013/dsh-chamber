@@ -199,7 +199,7 @@ test('static: /assets/* immutable cache policy; index.html no-cache; manifest.js
     assert.equal(html.headers['cache-control'], 'no-cache')
     assert.match(html.headers['content-security-policy'] ?? '', /default-src 'self'/)
     assert.match(html.headers['content-security-policy'] ?? '', /frame-ancestors 'none'/)
-    // S-35 CSP 半面：文档预览把 HTML/PDF/图片注入 blob: iframe，没有显式
+    // CSP 半面：文档预览把 HTML/PDF/图片注入 blob: iframe，没有显式
     // frame-src 时 default-src 'self' 会一并拒掉（两 flavor 同因）。范围收窄：
     // 只放行 blob:，非 blob 子 frame 继续被 default-src 兜住。
     assert.match(html.headers['content-security-policy'] ?? '', /frame-src blob:/)
@@ -209,23 +209,23 @@ test('static: /assets/* immutable cache policy; index.html no-cache; manifest.js
     // `__jsExpr` config evaluation); every inline script still needs the nonce.
     assert.match(html.headers['content-security-policy'] ?? '', /script-src[^;]*'unsafe-eval'/)
     assert.match(html.headers['content-security-policy'] ?? '', /script-src[^;]*'nonce-[A-Za-z0-9+/=]+'/)
-    // S-50（macOS 原生壳视口越界策略）的运行时前提：壳注入的 <style> 无 nonce，
+    // macOS 原生壳视口越界策略的运行时前提：壳注入的 <style> 无 nonce，
     // style-src 必须保留 'unsafe-inline'，否则整页弹性回弹静默复现
     // （design 25 §5.2；src/index.ts 同处有注释指向本条）。
     // 三条一起钉：只钉 unsafe-inline 的存在会漏掉另两种同样静默失效的改法
     // （同指令加 nonce/hash → CSP3 忽略 unsafe-inline；新增 style-src-elem → 覆盖 style-src）。
-    // 指令级解析，而不是子串正则（2026-12 独立复核）：重复指令
+    // 指令级解析，而不是子串正则：重复指令
     // （"style-src 'none'; … style-src 'self' 'unsafe-inline'" —— CSP3 首次生效）或
     // "style-src 'none'; style-src-attr 'unsafe-inline'" 都能让注入的 <style> 被挡，
     // 而四条子串断言全绿。
     // 逗号分隔的每个 policy 都**同时生效**（CSP3 合取），同一 policy 内重复指令首次生效：
     // 因此要收集**所有**生效的 style-src，任何一个缺 unsafe-inline 就算失败
-    // （2026-12 二轮独立复核：只解析第一条 policy 会被 "…, style-src 'none'" 绕过）。
+    // （只解析第一条 policy 会被 "…, style-src 'none'" 绕过）。
     // 每个 policy 的**生效样式源**按 CSP3 回退链取：
     // style-src-elem（管 <style>/<link rel=stylesheet>）→ style-src → default-src；
     // 同一 policy 内重复指令首次生效；没有任何相关指令 = 不限制（undefined）。
-    // style-src-attr 只管 style 属性，不参与 <style> 的判定（旧版本把它当覆盖是错的）。
-    // 2026-12 三轮独立复核补的两类静默绕过：① 只收 style-src 会漏掉
+    // style-src-attr 只管 style 属性，不参与 <style> 的判定。
+    // 两类静默绕过：① 只收 style-src 会漏掉
     // ", default-src 'none'"（没有 style-src 时 default-src 才是生效源，实测 WebKit
     // 整页样式被挡）；② nonce/hash 检查必须大小写不敏感（引擎把 'NONCE-abc' 当真
     // nonce，反向静态正则漏判）。
@@ -281,7 +281,7 @@ test('static: /assets/* immutable cache policy; index.html no-cache; manifest.js
     assert.equal(html.headers['cross-origin-opener-policy'], 'same-origin')
     // same-origin (not no-referrer): no-referrer makes modern browsers send
     // Origin: null on same-origin form POSTs, which the origin fences reject
-    // fail-closed (live finding 2026-09, see CONTROL_PLANE_SECURITY_HEADERS).
+    // fail-closed (see CONTROL_PLANE_SECURITY_HEADERS).
     assert.equal(html.headers['referrer-policy'], 'same-origin')
     assert.equal(html.headers['x-content-type-options'], 'nosniff')
     assert.equal(html.headers['x-frame-options'], 'DENY')
@@ -379,9 +379,9 @@ test('static: /health is untouched by the static service', async () => {
 })
 
 test('static: a `//`-leading request line answers 400 and never crashes the server', async () => {
-  // Regression (2026-08): the window rebuild path once produced
-  // `http://127.0.0.1:<port>//`; `new URL('//', base)` throws, and the
-  // uncaught exception took the whole control plane down. The request
+  // The window rebuild path can produce
+  // `http://127.0.0.1:<port>//`; `new URL('//', base)` throws, and an
+  // uncaught exception would take the whole control plane down. The request
   // handler must reject the malformed line explicitly and keep serving.
   const holder = await makeStaticPlane()
   try {

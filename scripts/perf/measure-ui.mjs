@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * measure-ui —— UI 稳态基线尺子（2026 性能整改验收用，收敛版探针）。
+ * measure-ui —— UI 稳态基线尺子（收敛版探针）。
  *
  * 与 boot/switch/eval-measure 的分工：那些测"事件窗"（启动/切换/归因）；
  * 本脚本测**稳态基数与空闲/输入响应**，输出一份固定 schema 的基线 JSON，
@@ -15,8 +15,8 @@
  *
  * 输出字段（schema: measure-ui/v1）：
  *   dom.totalNodes / dom.views.{mounted,hidden} / dom.perInstanceNodes[]
- *   mountedShells                     —— 挂载壳数（分档预算的比较单位，plan §10）
- *   prewarm                           —— 预热 attempt/hit/cancelled（分来源）+ hitRate（I8；
+ *   mountedShells                     —— 挂载壳数（分档预算的比较单位）
+ *   prewarm                           —— 预热 attempt/hit/cancelled（分来源）+ hitRate（
  *                                         best-effort：未发布全局即缺字段并记 errors[]）
  *   watcher                           —— 事实源/观察者统计（best-effort：页面全局未发布时
  *                                        缺字段并记入 errors[]，绝不臆造数字）
@@ -114,7 +114,7 @@ const domSnapshot = await ev(`(() => {
 if (domSnapshot === undefined) errors.push('domSnapshot evaluate failed')
 else {
   summary.dom = domSnapshot
-  // plan §10 口径：单列挂载壳数（分档预算按「每壳」而不是全页节点数比较）。
+  // 口径：单列挂载壳数（分档预算按「每壳」而不是全页节点数比较）。
   summary.mountedShells = domSnapshot.views.mounted
 }
 
@@ -129,7 +129,7 @@ if (watcherStats === null || watcherStats === undefined) {
   summary.watcher = watcherStats
 }
 
-// ---- 1c. 预热命中率（I8：分来源 + 命中率，plan §7-W3 判据 ≥80%）----
+// ---- 1c. 预热命中率（分来源 + 命中率，判据 ≥80%）----
 const prewarmStats = await ev(`(() => {
   const p = window.__dshChamberPrewarm
   return p ? { totals: p.totals(), hitRate: p.hitRate(), counters: p.counters() } : null
@@ -174,9 +174,9 @@ for (let i = 0; i < clicks; i++) {
     const r = target.getBoundingClientRect()
     const x = r.x + Math.min(20, r.width / 2)
     const y = r.y + r.height / 2
-    // 记录解析到的目标（2026 评审：合成点击可能命中真实动作——new session/
+    // 记录解析到的目标（合成点击可能命中真实动作——new session/
     // 设置等——逐击记录 aria-label/文本前 40 字符/标签名，A/B 对照时可在
-    // JSON 里核对每击实际点了什么；README 已加前置警告）。
+    // JSON 里核对每击实际点了什么；见 README 前置警告）。
     const desc = target.getAttribute('aria-label')
       || (target.textContent || '').trim().replace(/\\s+/g, ' ').slice(0, 40)
       || target.tagName

@@ -1,5 +1,5 @@
 /**
- * Route-level A1 write-surface tests (design 21 §6.2; plan Phase 4.4):
+ * Route-level write-surface tests (design 21 §6.2):
  * PUT /chamber/plugins/install, PUT /chamber/plugins/materialize (streamed
  * reader + tgz scan + staging + submit), POST /chamber/plugins/remove,
  * GET /chamber/plugins/tasks — 202/400/409/411/413/405 mapping, deferred
@@ -25,7 +25,7 @@ import { makeChamberSurfaceHarness, surfaceSilentLogger, surfaceStubChannels } f
 import { buildTgz, buildPluginTgz, type TarEntrySpec } from '../support/tgz-fixtures.ts'
 import { writeManifestFixture, scratchDir, makeSpawnHarness, waitFor } from '../support/plugins-tasks-fixtures.ts'
 
-// Shared harness (2026-12 audit F40).
+// Shared harness.
 const silent = surfaceSilentLogger
 const channels = surfaceStubChannels
 
@@ -75,8 +75,8 @@ async function rawUpload(
   extraHeaders: Record<string, string> = {},
 ): Promise<{ res: FakeResponse; req: FakeRequest }> {
   // Default identity = buildPluginTgz()'s own manifest: the route BINDS the
-  // headers to the archive's package/package.json (2026-12 review), so a helper
-  // that declared a different name would now (correctly) be refused.
+  // headers to the archive's package/package.json, so a helper that declared a
+  // different name would (correctly) be refused.
   const req = new FakeRequest('PUT', '/chamber/plugins/materialize', {
     'content-length': String(bytes.length),
     'x-plugin-name': 'fixture-plugin',
@@ -302,7 +302,7 @@ test('materialize: header validation (name pattern/version) → 400 before stagi
   const versionedName = await rawUpload(host, bytes, { 'x-plugin-name': 'pkg@1.0.0' })
   assert.equal(versionedName.res.status, 400)
 
-  // A protected name is NO LONGER refused here (design 21 §6.11.5): the route
+  // A protected name is NOT refused here (design 21 §6.11.5): the route
   // validates shape only and the authoritative protected-set + generation
   // judgement runs in the submit path, which owns the runtime facts. The
   // recording tasks below accept anything, so this upload proves the route

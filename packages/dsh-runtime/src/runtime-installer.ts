@@ -88,7 +88,7 @@ export interface SmokeContext {
   onSpawn: (pid: number) => void
 }
 
-/** Live install progress (design 18 M4 renderer progress bar): byte progress
+/** Live install progress (design 18 renderer progress bar): byte progress
  * during 'download' (total = content-length when the registry declares it),
  * stage-only milestones afterwards. The terminal 'done' clears the bar. */
 export type RuntimeInstallProgress =
@@ -111,7 +111,7 @@ export interface InstallerDeps {
   /** Smoke: assert the installed CLI reports exactly `version`. */
   smoke: (workDir: string, version: string, context: SmokeContext) => Promise<void>
   /** Filesystem seams keep the publish transaction fault-injectable. The
-   *  default routes through renameWithWindowsRetry (design 21 M2a) and callers
+   *  default routes through renameWithWindowsRetry (design 21) and callers
    *  await every rename, so an injected async seam is honoured too. */
   rename: (source: string, destination: string) => void | Promise<void>
   makeReadOnly: (root: string) => void
@@ -129,7 +129,7 @@ export interface InstallOptions {
   signal?: AbortSignal
   /** One wall-clock budget across download, both install attempts, prune and smoke. */
   timeoutMs?: number
-  /** Live progress callback (design 18 M4): the controller forwards it to
+  /** Live progress callback (design 18): the controller forwards it to
    * the renderer projection, throttled. */
   onProgress?: (progress: RuntimeInstallProgress) => void
   deps?: Partial<InstallerDeps>
@@ -301,7 +301,7 @@ function failedScenePath(runtimeDir: string, version: string): string {
  * node_modules/tarballs/PIDs are intentionally excluded, bounding both disk
  * use and accidental capability leakage. Failure recording is best effort and
  * never masks the installation error. The publish rename goes through the
- * caller's rename seam (production: renameWithWindowsRetry, design 21 M2a) so
+ * caller's rename seam (production: renameWithWindowsRetry, design 21) so
  * a Windows third-party handle cannot silently drop the scene.
  * @param renameFn - InstallerDeps.rename (source, destination) => void|Promise.
  */
@@ -557,7 +557,7 @@ export class RuntimeInstallerSupervisor {
 
   async run(args: string[], opts: RunOptions): Promise<RunResult> {
     if (this.disposing) {
-      // Classified as a writer-safety failure (review fix): a disposal that
+      // Classified as a writer-safety failure: a disposal that
       // could not prove quiescence must refuse new work with the stable code,
       // so owners can distinguish 'closed because a writer is unproven' from
       // a benign shutdown.
@@ -705,9 +705,8 @@ export class RuntimeInstallerSupervisor {
    * (same-process host restart, e.g. gateway stop → start). Only a fully
    * settled disposal may reset: while any writer is still tracked, the
    * shutting-down latch must stay so an unproven writer never gets
-   * concurrent work (review fix — the module latch reset alone left
-   * `defaultSupervisor.disposing` true forever, rejecting every later
-   * install/prune in the same process). */
+   * concurrent work; the reset must clear the supervisor's own latch, or
+   * every later install/prune in the same process is rejected. */
   reset(): void {
     if (this.active.size > 0) throw writerUnsafeError('runtime installer cannot reset while writers are still tracked')
     this.disposing = false
@@ -768,7 +767,7 @@ export function disposeRuntimeInstaller(deps: RuntimeInstallerDisposalDeps = {})
     // (gateway stop → start). A disposal that PROVED writer quiescence
     // reopens the supervisor for later installs/prunes; a FAILED disposal
     // throws above and keeps the shutting-down latch, so an unproven writer
-    // never gets concurrent work (review fix).
+    // never gets concurrent work.
     deps.beforeReset?.()
     defaultSupervisor.reset()
     runtimeInstallerPoisoned = false
@@ -863,7 +862,7 @@ export async function downloadVerifiedRegistryTarball(
         verifier.update(chunk.subarray(offset, offset + bytesWritten))
         offset += bytesWritten
         received += bytesWritten
-        // Byte progress for the design-18 M4 bar; the controller throttles.
+        // Byte progress for the design-18 bar; the controller throttles.
         opts.onProgress?.(received, total)
       }
     }
@@ -935,8 +934,8 @@ export interface PruneRuntimeStoreOptions {
   deps?: Partial<Pick<InstallerDeps, 'node' | 'run'>>
 }
 
-/** Bounded cache reclamation after a successful store prune (settings polish
- * D2-A): only the CONTENT of the two private cache dirs is removed — the dirs
+/** Bounded cache reclamation after a successful store prune (settings polish):
+ * only the CONTENT of the two private cache dirs is removed — the dirs
  * themselves stay (installers re-create state inside them on the next run).
  * Every entry is lstat'd (never followed) before deletion, so a symlink is
  * removed as the link itself and can never drag an external target in; the

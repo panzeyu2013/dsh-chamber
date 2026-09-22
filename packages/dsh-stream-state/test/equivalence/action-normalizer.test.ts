@@ -1,5 +1,5 @@
 /**
- * Action equivalence normalizer (refactor plan section 4.1 / review finding A-1).
+ * Action equivalence normalizer.
  *
  * The differential oracle compares an old wiring against a new one; diagnostic
  * wording is expected to differ. These tests pin what the oracle must IGNORE

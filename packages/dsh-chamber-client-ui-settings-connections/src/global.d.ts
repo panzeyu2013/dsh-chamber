@@ -11,15 +11,13 @@ import type { DshChamberBridge } from '../../renderer/src/global.d.ts'
 /**
  * The whole IPC/type face is RE-EXPORTED from the renderer's authoritative
  * global.d.ts — the single source of truth (settings-bridge pattern). A
- * structural mirror here would drift silently (2026 review T1); the
+ * structural mirror here would drift silently; the
  * ipc-surface-mirror test guards the renderer side against the preload.
  * `TransportKind` is the v2 target union (`dsh | gateway`) and
  * `TransportMethod` is the orthogonal mechanism union (`ssh | http`). The gateway
- * legacy clear-only login-password setter (`set_gateway_password`) and the read-time
+ * clear-only login-password setter (`set_gateway_password`) and the read-time
  * `passwordSet` projection live on the authoritative renderer surface too
- * (desktop gateway-secrets task, design 17 §7.1/§9.1) — the former
- * plugin-local seams (GatewayPasswordSurface / PasswordSetProjection) were
- * retired when they landed there. The `sshPasswordSet`/`tokenSet`/
+ * (desktop gateway-secrets task, design 17 §7.1/§9.1). The `sshPasswordSet`/`tokenSet`/
  * `passwordSet`/`secretStorage` projections are merged by the main process
  * on `instances_get`, `save_connection`, and
  * `delete_connection` results
@@ -27,9 +25,8 @@ import type { DshChamberBridge } from '../../renderer/src/global.d.ts'
  * every registry-returning path.
  */
 export type {
-  // Registry-driven chamber projection (design 13 §6, 2026-09 round): the
-  // per-package state list (the two former fixed-row types are gone) —
-  // re-export the authoritative renderer types, never a local mirror.
+  // Registry-driven chamber projection (design 13 §6): the per-package state
+  // list — re-export the authoritative renderer types, never a local mirror.
   ChamberHostPackageState,
   ChamberInjectionState,
   ConnectionCredentialMutations,
@@ -76,7 +73,7 @@ declare global {
   /**
    * The page bridge as consumed by the connections plugin — declared with the
    * FULL authoritative DshChamberBridge (imported from renderer, identical to
-   * the renderer's own declaration, never a subset — 2026 round-2 review M1).
+   * the renderer's own declaration, never a subset).
    */
   interface Window {
     dshChamber?: DshChamberBridge

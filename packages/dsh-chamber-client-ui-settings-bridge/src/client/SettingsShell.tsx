@@ -8,7 +8,7 @@
  * colored green/red) over the SELECTED server's OWN settings sections. The
  * options column renders that server's own ledger through this panel — the
  * source's own boot ctx, its own registrations, its own renderer-bound seats
- * (settings-source-face.ts, design 05 §5 2026-12 完整桥接修订). The
+ * (settings-source-face.ts, design 05 §5). The
  * chamber-global connections surface is a FIXED nav entry below a divider —
  * it never follows the selected server and renders the official
  * ConnectionsSection as a full options-column view when active.
@@ -18,14 +18,13 @@
  * content). Every section's config fact still lives on the selected
  * instance's host machine.
  *
- * 2026-09-11 upstream-alignment batch (T3/T7/T8): the shell also coordinates
- * its OWN ctx's `settings.onboarding` stage (./onboarding.ts, upstream
- * SettingsRoot parity), the trigger row keeps upstream's 42px geometry and
- * returns focus to the trigger on close, and the content header no longer
- * repeats a title the section body already renders. The 2026-09-11 review (F1)
- * split the stage's two axes: the active-view fact gates MOUNTING only, while
- * the completed set resets on the sessions fact alone — see the stage comment
- * below for the remount residual this leaves open.
+ * The shell also coordinates its OWN ctx's `settings.onboarding` stage
+ * (./onboarding.ts, upstream SettingsRoot parity), the trigger row keeps
+ * upstream's 42px geometry and returns focus to the trigger on close, and the
+ * content header repeats no title the section body already renders. The stage's
+ * two axes are split: the active-view fact gates MOUNTING only, while the
+ * completed set resets on the sessions fact alone — see the stage comment below
+ * for the remount residual this leaves open.
  */
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import type { FocusEvent as ReactFocusEvent, KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react'
@@ -250,7 +249,7 @@ function ServerDropdown({
       >
         <span className={clsx(css.dot, selected?.connected === true ? css.dotOk : css.dotErr)} />
         <span className={css.dropdownValue}>{selected?.label ?? t('noServers')}</span>
-        {/* 统一下拉箭头（2026-12）：与运行时 select / 连接表单下拉同一图标
+        {/* 统一下拉箭头：与运行时 select / 连接表单下拉同一图标
             词汇（IconChevronDownOutline14）；右缘 inset 由 trigger 的
             padding 决定（10px），与文字左缘对称。 */}
         <span className={css.dropdownArrow} aria-hidden="true">
@@ -347,10 +346,10 @@ function SettingsPanel({
       // A modal OTHER than this panel owns Escape while it is open (nested
       // official Modal overlays incl. the connections plugin dialogs, or
       // another layer's overlay): closing the whole panel underneath it would
-      // swallow the modal's own close intent (2026 dev-QA observation). The
+      // swallow the modal's own close intent. The
       // panel itself IS aria-modal, so the panel NODE must be excluded by
-      // identity — a blanket `[aria-modal="true"]` query self-matched and made
-      // Escape a no-op (2026-09-11 fix; see ./escape-owner.ts).
+      // identity — a blanket `[aria-modal="true"]` query self-matches and makes
+      // Escape a no-op; see ./escape-owner.ts.
       if (nestedModalOwnsEscape(document.querySelectorAll('[aria-modal="true"]'), panelRef.current)) return
       onClose()
     }
@@ -385,7 +384,7 @@ function SettingsPanel({
   // Active resolution (nav-active.ts): chamber-global fixed ids win; a
   // server-section id that left the ledger falls back to the first row.
   const active = resolveActiveSection(activeId, rows)
-  // Header context (2026-11, revised 2026-09-11 upstream-alignment T7): the
+  // Header context: the
   // selected server name sits under the header ONLY for server-owned content
   // (the chamber-global connections/client pages are server-independent —
   // implying a server there would mislead). The active section's TITLE is NOT
@@ -405,7 +404,7 @@ function SettingsPanel({
     return map
   }, [servers])
 
-  // Per-source settled-boot gaps (2026-12, design 05 §4 「降级呈现」): keyed like
+  // Per-source settled-boot gaps (design 05 §4 「降级呈现」): keyed like
   // the diagnostics above and handed to the same card. The graph channel can
   // answer `ok` while a surface never registered, so the card needs this SEPARATE
   // fact to avoid claiming everything is fine next to a missing conversation body.
@@ -513,8 +512,8 @@ function SettingsPanel({
         </nav>
         <div className={css.content}>
           <div className={css.header}>
-            {/* Server sub-line (chamber N-source addition; T7 keeps it while
-                dropping the duplicated page title). */}
+            {/* Server sub-line (chamber N-source addition; the duplicated page
+                title is dropped). */}
             {headerSub !== '' && <span className={css.headerSub}>{headerSub}</span>}
             <div className={css.actions}>
               {/* The official open-document action ("打开配置文件") is a
@@ -566,24 +565,23 @@ function SettingsPanel({
               <p className={css.placeholder}>{t('noServers')}</p>
             ) : !selected.connected ? (
               /* role="alert"：该分支是"插入即带内容"的整块替换，polite 的
-                 status 不会被播报（2026-12 复查 MINOR）。 */
+                 status 不会被播报。 */
               <div className={css.unavailableView} role="alert">
                 <p className={css.placeholder}>
                   {selected.id === LOCAL_INSTANCE_ID
                     ? t('localNotReady')
                     : selected.managedRuntimeDown === true
-                      // 2026-12（问题 B）：隧道正常、托管 dsh 停机——"不可达"
-                      // 的说法不准确，改说清是哪一层停了。
+                      // 隧道正常、托管 dsh 停机——「不可达」的说法不准确，
+                      // 必须说清是哪一层停了。
                       ? t('managedDshDown')
                       : selected.kind === 'gateway'
                         && (selected.phase === 'starting' || selected.phase === 'restarting')
-                        // 瞬态同理：不是"不可达"，只是还没起来（2026-12 复查 MINOR）。
+                        // 瞬态同理：不是「不可达」，只是还没起来。
                         ? t('managedDshStarting')
                         : t('targetUnavailable')}
                 </p>
-                {/* 2026-09 (P2-B, B-5b): design 15 §D1 requires the official
-                    Button for every action pill in this panel; this was the last
-                    self-drawn one (`variant="outline"`, size sm). */}
+                {/* design 15 §D1 requires the official Button for every action
+                    pill in this panel (`variant="outline"`, size sm). */}
                 <Button
                   variant="outline"
                   size="sm"
@@ -598,8 +596,8 @@ function SettingsPanel({
                  server so a server switch remounts the wrapper and replays
                  the fade-in. */
               rows.length === 0 ? (
-                /* 2026-09-11 upstream-alignment「small invented bits」: upstream
-                   renders an EMPTY options column here (its single-ctx shell can
+                /* upstream renders an EMPTY options column here (its single-ctx
+                   shell can
                    never show the panel without sections). The chamber keeps the
                    honest placeholder deliberately — an unpublished section
                    ledger is a REACHABLE N-source state (a source whose settings
@@ -658,7 +656,7 @@ function SettingsPanel({
 /**
  * Render the settings trigger and the panel.
  *
- * Complete-bridge contract (design 05 §5, 2026-12 修订): the panel renders the
+ * Complete-bridge contract (design 05 §5): the panel renders the
  * SELECTED source's OWN boot-ctx `settings.section` ledger with that source's
  * OWN renderer-bound seats. Two things make that possible and both live here:
  *
@@ -690,8 +688,8 @@ export function SettingsShell(props: SettingsShellProps) {
 
   useEffect(() => subscribeServers(() => setServers(getServers())), [])
 
-  // 2026-09-11 upstream-alignment T7: closing the dialog returns focus to the
-  // trigger it was opened from (upstream SettingsRoot's wasOpen effect). The
+  // Closing the dialog returns focus to the trigger it was opened from
+  // (upstream SettingsRoot's wasOpen effect). The
   // restore runs AFTER the close commit, when the dialog can no longer own
   // focus.
   const triggerButton = useRef<HTMLButtonElement | null>(null)
@@ -772,7 +770,7 @@ export function SettingsShell(props: SettingsShellProps) {
     setActiveId(undefined)
   }, [])
 
-  // ---- settings.onboarding stage (2026-09-11 upstream-alignment T3) ----
+  // ---- settings.onboarding stage ----
   // Upstream's SettingsRoot mounts the first not-yet-completed ordered
   // `settings.onboarding` entry while the CURRENT SESSION is blank or absent,
   // and paints no chrome of its own. Chamber parity is read from exactly the
@@ -789,14 +787,13 @@ export function SettingsShell(props: SettingsShellProps) {
   // additionally gated on the chamber's active-view fact — the chamber mounts
   // several instance shells at once, and the step's dialog is document-global, so
   // a hidden shell must never pop another instance's first-run stage. That gate
-  // does NOT touch the completed set (2026-09-11 review-fix F1). The per-source
+  // does NOT touch the completed set. The per-source
   // panel rendering above is untouched.
   const ownFace = getSettingsSourceFace(chamberInstanceId)
   const ownSlots = ownFace?.slots
   const onboardingSteps = useOnboardingSteps(ownSlots)
-  // Both coordinates are read by their OWN unconditional hook call (2026-09-11
-  // review-fix F1): the composite used to be written as
-  // `useOnboardingActive(...) && useActiveView(...)`, which short-circuits the
+  // Both coordinates are read by their OWN unconditional hook call: a composite
+  // `useOnboardingActive(...) && useActiveView(...)` would short-circuit the
   // SECOND hook call whenever the sessions fact is false — a hook sequence that
   // changes on a routine fact flip (the seat leaving `loading`, the session
   // stopping being blank) and the one shape React refuses outright.
@@ -814,10 +811,10 @@ export function SettingsShell(props: SettingsShellProps) {
   const onboardingStep = onboardingStageState.step
   // A new blank-session run starts the stage over — the SESSIONS fact alone
   // (upstream SettingsRoot.tsx's reset effect), never the composite: a view
-  // switch is not a new run, and resetting on the composite re-mounted an
-  // acknowledged or explicitly deferred step over a still-blank session
-  // (2026-09-11 review-fix F1; the probe is replayed in test/bridge/onboarding.test.ts).
-  // RESIDUAL (registered deviation, 2026-09-11 review-fix F1): this set is
+  // switch is not a new run, and resetting on the composite would re-mount an
+  // acknowledged or explicitly deferred step over a still-blank session (the
+  // probe is replayed in test/bridge/onboarding.test.ts).
+  // RESIDUAL (registered deviation): this set is
   // component-local, so a REMOUNT of this shell — the App reclaims the instance
   // and mounts it again — starts an empty set and re-mounts the step upstream
   // would still consider acknowledged, even though the run never ended. Closing

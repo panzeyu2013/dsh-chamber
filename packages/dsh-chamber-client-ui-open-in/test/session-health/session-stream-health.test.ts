@@ -1,15 +1,15 @@
 /**
  * SESSION STREAM-HEALTH LADDER LOCKS (design 14 §D4).
  *
- * The reproduced defect (four mux socket kills 25ms apart ⇒ `openState='error'`
- * ⇒ a frozen transcript) is recovered by exactly three effects, all pinned here:
- * the automatic stage move for an `'error'` session, the notice-plus-reload arm
- * for a parked `'loading'` open, and — added 2026-12 — the USER-triggered
- * per-session `resync` the loading-stall arm ARMS (the concrete
+ * The defect (carrier losses latching `openState='error'` ⇒ a frozen transcript)
+ * is recovered by exactly three effects, all pinned here: the automatic stage
+ * move for an `'error'` session, the notice-plus-reload arm for a parked
+ * `'loading'` open, and the USER-triggered per-session `resync` the
+ * loading-stall arm ARMS (the concrete
  * `Session.resync()` the pinned controller ships off-contract, reached through
  * the guarded structural slice). Assertions live at the decision boundary (pure
  * module) and the effect boundary (a fake sessions face), including the edges
- * the 2026-12 review found unpinned: the settle window, a backwards wall clock,
+ * that must stay pinned: the settle window, a backwards wall clock,
  * the rolling-window edge, the cross-phase hold, both first-notice timestamps
  * and the hidden stretch that must NOT hand back a fresh storm budget.
  */
@@ -101,7 +101,7 @@ test('stream-health: the settle window is never sampled as "failed" and never re
   // Inside the settle window: no notice, no second heal.
   assert.equal(actions[2], 0)
   assert.equal(actions[3], 0)
-  // C2 (2026-09): the judged failure latches the reload notice, and it stays up
+  // The judged failure latches the reload notice, and it stays up
   // while the cooldown-paced retry runs — no "recovering…" over a dead repair.
   assert.deepEqual(notices, [null, null, null, null, 'heal-failed', 'heal-failed'])
   // The window closes into the hold, and the cooldown (not the settle) paces
@@ -131,7 +131,7 @@ test('stream-health: the cooldown paces the retries and the rolling budget ends 
     { at: t8, observation: observe('error') },
   ])
   assert.deepEqual(actions, [0, t1, 0, t3, 0, t5, 0, 0, t8])
-  // C2: from the first judged failure onward the notice is latched for the whole
+  // From the first judged failure onward the notice is latched for the whole
   // storm (indices 2-8); only the two pre-judgment ticks stay null.
   assert.deepEqual(notices, [null, null, 'heal-failed', 'heal-failed', 'heal-failed', 'heal-failed', 'heal-failed', 'heal-failed', 'heal-failed'])
   // One stamp per executed heal, each pruned once it leaves the rolling window.
@@ -146,7 +146,7 @@ test('stream-health: a hidden stretch keeps the event ledger and only stops the 
   assert.equal(hidden.state.phase, 'idle')
   assert.equal(hidden.state.since, 0)
   // The storm bound survives: a tray-hide round trip must not hand out a fresh
-  // cooldown and budget (2026-12 review).
+  // cooldown and budget.
   assert.equal(hidden.state.healStamps.length, 1)
   assert.equal(hidden.state.lastHealAt, healed)
   // Immediately visible again: still cooling, so no second heal.
@@ -220,8 +220,8 @@ test('stream-health: an error state the stage move must refuse arms the user res
   const armed = planAt(hold.state, observe('error', { neighborAvailable: false, resyncAvailable: true }), T0 + G)
   assert.equal(armed.action, 'resync')
   // The chip renders controls only alongside a notice, so an armed rebuild MUST
-  // carry one (2026-09 review BLOCKER: action='resync' + notice=null rendered
-  // neither the rebuild button nor the pre-existing reload fallback).
+  // carry one (action='resync' + notice=null would render neither the rebuild
+  // button nor the reload fallback).
   assert.equal(armed.notice, 'heal-failed')
   // Fail-closed without the concrete face: the same hold only reports the reload
   // notice once it has outlived a repair attempt, and never invents an action.
@@ -238,7 +238,7 @@ test('stream-health: an error state the stage move must refuse arms the user res
 })
 
 test('stream-health: the AUTOMATIC rebuild is suppressed while the ledger is cooling or spent, while the manual control stays offered', () => {
-  // The ledger gates the automatic arm only (2026-09-21): a session must never
+  // The ledger gates the automatic arm only: a session must never
   // lose its manual exit, and a human click is not the storm the ledger bounds.
   const cooling: SessionStreamHealthState = { phase: 'loading-hold', since: T0 - L, lastHealAt: T0, healStamps: [T0] }
   const parked = { resyncAvailable: true, openInFlight: false } as const
@@ -329,7 +329,7 @@ test('stream-health: both arms report their reload notice at the exact tick the 
   assert.deepEqual(notices, [null, null, 'heal-failed'])
 
   // First judged failure: sampled every second, the notice appears exactly at
-  // grace + settle (C2) — it used to wait out the whole rolling budget (~296 s).
+  // grace + settle (waiting the whole rolling budget out would take ~296 s).
   let state = createSessionStreamHealthState()
   let firstNotice: number | undefined
   let lastNotice: number | undefined
@@ -358,7 +358,7 @@ test('stream-health: a judged-failed heal latches the reload notice while the re
     { at: retry, observation: observe('error') },
     { at: retry + S, observation: observe('error') },
   ])
-  // The notice appears the moment the first repair is judged failed (C2)…
+  // The notice appears the moment the first repair is judged failed…
   assert.deepEqual(notices, [null, null, 'heal-failed', 'heal-failed', 'heal-failed', 'heal-failed'])
   // …and the automatic retry lane never stops: the cooldown, not the notice,
   // paces the second attempt.
@@ -431,9 +431,9 @@ test('stream-health: the latch hangs off the settle clock, not off the healing p
 })
 
 test('stream-health: the latch survives the retry heal\'s own settle window', () => {
-  // 2026-09 verification (m6/m10): if the loading state or `markSessionStreamHeal`
-  // dropped the latch, the button goes out for the retry's whole 20s judging window
-  // — the very regression C2 removed. One tick after the retry must still carry it.
+  // If the loading state or `markSessionStreamHeal` dropped the latch, the button
+  // would go out for the retry's whole 20s judging window. One tick after the
+  // retry must still carry it.
   const healed = T0 + G
   const judged = healed + S
   const retry = healed + C
@@ -452,8 +452,8 @@ test('stream-health: the latch survives the retry heal\'s own settle window', ()
 })
 
 test('stream-health: a recovery marker survives a loading dwell (no false latch)', () => {
-  // 2026-09 verification (m3): the loading state must carry `recoveredSinceHeal`,
-  // otherwise the next error latches off the PREVIOUS episode's settle clock.
+  // The loading state must carry `recoveredSinceHeal`, otherwise the next error
+  // latches off the PREVIOUS episode's settle clock.
   const healed = T0 + G
   const { notices } = drive([
     { at: T0, observation: observe('error') },
@@ -467,7 +467,7 @@ test('stream-health: a recovery marker survives a loading dwell (no false latch)
 })
 
 test('stream-health: a recovery marker survives a hidden tick (no false latch)', () => {
-  // 2026-09 verification (m4): same shape through `presented === false`.
+  // Same shape through `presented === false`.
   const healed = T0 + G
   const { notices } = drive([
     { at: T0, observation: observe('error') },
@@ -539,7 +539,7 @@ test('stream-health: the stage move visits a neighbour first, and only for a cur
   calls.length = 0
   assert.equal(healSessionStream(sessions, 'b', 'b'), true)
   assert.deepEqual(calls, ['a', 'b'])
-  // PRECONDITION (2026-12 review): the detour is only reversible while the
+  // PRECONDITION: the detour is only reversible while the
   // target is the CURRENT, LISTED session. Everything else refuses — an
   // address-only child would lose its scope to pruneScopes(), and a masked gap
   // would strand the user on the neighbour.
@@ -576,8 +576,8 @@ test('stream-health: the stage move is only offered when its target is current, 
   const currentListed: SessionsLoose = { list: { getSnapshot: () => ({ ids: ['a', 'b'], current: 'b' }) }, open: () => {} }
   assert.equal(hasHealRoute(currentListed, 'b'), true)
   // An address-only subagent selection: current but absent from ids. The move must
-  // refuse it, so it must not look like it has a route (2026-09 review: the ledger
-  // was being spent on guaranteed refusals).
+  // refuse it, so it must not look like it has a route (otherwise the ledger is
+  // spent on guaranteed refusals).
   const addressOnly: SessionsLoose = { list: { getSnapshot: () => ({ ids: ['a'], current: 'child' }) }, open: () => {} }
   assert.equal(hasHealRoute(addressOnly, 'child'), false)
   // Not current, no other listed session, or a throwing snapshot: no route.
@@ -615,7 +615,7 @@ test('stream-health: the resync probe reaches the concrete face behind guards an
   assert.equal(calls, 1, 'a non-current session must not be rebuilt')
   // Address-only subagent selections are CURRENT but absent from ids; the stage
   // move must refuse them, yet the concrete per-session resync is exactly their
-  // lever (2026-09 review MAJOR), so listedness must NOT gate this read.
+  // lever, so listedness must NOT gate this read.
   const addressOnlyCurrent: SessionsConcreteLoose = {
     list: { getSnapshot: () => ({ ids: ['a'], current: 'child' }) },
     open: () => {},
@@ -754,9 +754,9 @@ test('stream-health: open liveness is tri-state, and only "nothing pending" is t
     resolve: () => ({ session: new Proxy({}, { get: () => { throw new Error('hostile openPromise getter') } }) as never }),
   }
   assert.doesNotThrow(() => { assert.equal(sessionOpenInFlight(hostile, 'a'), undefined) })
-  // 2026-09-21 review: ONLY an exactly-null own member is positive evidence. An
-  // empty slot is UNKNOWN and must fail closed, or a renamed slot would let the
-  // automatic arm rebuild an in-flight open.
+  // ONLY an exactly-null own member is positive evidence: an empty slot is
+  // UNKNOWN and must fail closed, or a renamed slot would let the automatic arm
+  // rebuild an in-flight open.
   const undefinedMember: SessionsConcreteLoose = { ...concrete, resolve: () => ({ session: { openPromise: undefined } }) }
   assert.equal(sessionOpenInFlight(undefinedMember, 'a'), undefined)
 })
@@ -771,10 +771,9 @@ test('stream-health: surface presentation is the official chat column on a visib
 })
 
 test('stream-health: every notice key exists in both dictionaries', () => {
-  // Restored from the deleted stream-health wiring lock (invariant 5): the four
-  // notices the ladder can return and the four fixed chip labels must have copy
-  // in both dictionaries. The mapping itself is pinned above; this pins that the
-  // mapped key RESOLVES, so a helper rename can never ship a raw key.
+  // The four notices the ladder can return and the four fixed chip labels must
+  // have copy in both dictionaries. The mapping itself is pinned above; this pins
+  // that the mapped key RESOLVES, so a helper rename can never ship a raw key.
   for (const key of [
     'streamHealth.label', 'streamHealth.healing', 'streamHealth.loadingStall', 'streamHealth.loadingFailed',
     'streamHealth.healFailed', 'streamHealth.reload', 'streamHealth.resync', 'streamHealth.carrierChurn',

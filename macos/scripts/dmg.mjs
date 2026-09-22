@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
- * dmg.mjs —— 样式化 DMG 的**单一实现**（2026-09 P7 补强）。
+ * dmg.mjs —— 样式化 DMG 的**单一实现**。
  *
- * 背景与目标：DMG 卷此前只有 `.app + /Applications 快捷方式`（能拖但没有引导）。
+ * 背景与目标：DMG 卷只有 `.app + /Applications 快捷方式`（能拖但没有引导）。
  * Electron 侧由 electron-builder/dmg-builder 给出「背景箭头 + 图标定位」的明确
  * 拖拽提示，原生腿没有 —— 本模块把同一体验显式做出来，并且**只做一份**：
  *   - 本地/装配腿：macos/scripts/build-swift-app.mjs 直接 import 本模块；
@@ -13,14 +13,14 @@
  *   - 背景图按**内容区左下角**锚定、按点尺寸绘制（不缩放）；窗口标题栏会吃掉
  *     约 28px 顶部。资产是与 electron-builder 同款的**双 rep TIFF**
  *     （540×380@72dpi + 1080×760@144dpi）：Retina 上由系统挑 2x rep，
- *     1x PNG 那种清晰度不足的问题由此消除（2026-09 用户实测反馈）。
+ *     1x PNG 那种清晰度不足的问题由此消除（用户实测反馈）。
  *   - 图标坐标采用 electron-builder 的默认 contents（app 130,220 / Applications
  *     410,220），与背景箭头保持同一视觉关系。
  *   - 图标定位/背景图/窗口尺寸都写在卷内 `.DS_Store`，只能由 Finder 写出：
  *     因此流程是「UDRW 可写镜像 → 挂载 → osascript 驱动 Finder → 等 .DS_Store
  *     落盘 → detach → convert UDZO」。UDZO 转换保留 .DS_Store 与 .background。
- *   - 失败一律 loud（抛错）：产出没有拖拽提示的 DMG 正是本模块要修的缺陷，
- *     静默降级等于把缺陷重新发出去。
+ *   - 失败一律 loud（抛错）：产出没有拖拽提示的 DMG 不可接受——
+ *     静默降级等于把这种 DMG 发出去。
  *
  * 与 electron-builder 的取舍（design 25 §8.5「Rejected alternatives」）：
  * dmg-builder 用的是**下载+校验**的独立 dmgbuild 工具（不驱动 Finder）。本模块
@@ -271,7 +271,7 @@ export function createStyledDmg(options) {
     rmSync(tempRoot, { recursive: true, force: true })
   }
   if (options.verify === false) {
-    // 跳过也必须可观测：发布腿禁用这条校验等于把门禁静默拿掉（2026-09 审查）。
+    // 跳过也必须可观测：发布腿禁用这条校验等于把门禁静默拿掉。
     io.log('[dmg] 警告：--skip-verify 跳过产物级布局校验（仅供调试；发布腿不得使用）')
   } else {
     verifyDmgLayout(outPath, appName, { io })
@@ -315,7 +315,7 @@ export function dsStoreBlobs(buffer) {
  *  UID 返回 `{ uid }` 占位。纯函数、无子进程、无依赖。
  *
  *  为什么不走 plutil：`plutil -convert json` 对 Finder 写的 .icvp 直接报
- *  "Invalid object in plist for JSON format"（2026-09 本机实测；别名字段无法
+ *  "Invalid object in plist for JSON format"（本机实测；别名字段无法
  *  JSON 化），而 `plutil -extract` 要逐键调用。这里读 32 字节 trailer + 偏移
  *  表，一百行左右，测试里还能用真实 bplist 直测。 */
 export function parseBinaryPlist(buffer) {
@@ -330,7 +330,7 @@ export function parseBinaryPlist(buffer) {
   const trailer = buffer.length - 32
   const offsetIntSize = buffer.readUInt8(trailer + 6)
   const objectRefSize = buffer.readUInt8(trailer + 7)
-  // 畸形输入护栏：42 字节的伪造 trailer 曾能让解析吃到 ~3GB RSS（2026-09 审查）。
+  // 畸形输入护栏：42 字节的伪造 trailer 会让解析吃到 ~3GB RSS。
   if (![1, 2, 4, 8].includes(offsetIntSize) || ![1, 2, 4, 8].includes(objectRefSize)) {
     throw new Error('非法 bplist 偏移宽度：' + offsetIntSize + '/' + objectRefSize)
   }
@@ -364,7 +364,7 @@ export function parseBinaryPlist(buffer) {
     }
     if (type === 0x1) {
       const size = 2 ** info
-      // 与 plutil/CFBinaryPlist 同语义（2026-09 实测 `plutil -convert binary1` → `-extract raw`）：
+      // 与 plutil/CFBinaryPlist 同语义（实测 `plutil -convert binary1` → `-extract raw`）：
       // 1/2/4/16 字节按**无符号**读（Apple 对非负值用最小宽度：128 → 1 字节 0x80、255 → 0xFF、
       // 65535 → 2 字节；真实 .icvp 的 viewOptionsVersion 是可达的 16 字节整数），
       // 只有 8 字节按二补码有符号（-5 → 0x13 + fffffffffffffffb，读回 -5）。
@@ -424,7 +424,7 @@ function utf16be(text) {
 /**
  * `.DS_Store` 里每个图标一条记录，形态为
  * `[u16 名长][UTF-16BE 名]["Ilocblob"][u32 坐标长][16 字节坐标]`——**名字与记录头相邻**。
- * 2026-09 审查实测：Iloc 的载荷只有 16 字节坐标、不含名字（名字末尾紧接 `Ilocblob`），
+ * 实测：Iloc 的载荷只有 16 字节坐标、不含名字（名字末尾紧接 `Ilocblob`），
  * 所以条目名必须在记录头一侧查，不能去载荷里搜。
  */
 export function dsStoreIlocEntries(buffer) {
@@ -458,7 +458,7 @@ export function dsStoreHasIlocEntry(buffer, name) {
  *   - window：窗口记录（WindowBounds）
  *   - ilocEntries：登记了坐标的条目名（来自 Iloc 记录头）
  * 「设了但没写进 .DS_Store」「别名没指向卷内背景图」这类缺陷只有在这里才抓得到——
- * 只断言文件存在正是 2026-09 补强前漏掉的那类（DMG 没有拖拽提示却全绿）。
+ * 只断言文件存在会漏掉这类（DMG 没有拖拽提示却全绿）。
  */
 export function dmgLayoutFacts(buffer, options = {}) {
   const parsePlist = options.parsePlist ?? parseBinaryPlist
@@ -480,7 +480,7 @@ export function dmgLayoutFacts(buffer, options = {}) {
 
 /**
  * 内容级判据（纯函数，接收 dmgLayoutFacts 的返回值）：verifyDmgLayout 与单测共用同一
- * 份判据——负例直接构造 facts 即可，不必造一整个 DMG（2026-09 审查补强）。通过时返回
+ * 份判据——负例直接构造 facts 即可，不必造一整个 DMG。通过时返回
  * 已校验的事实（供日志用）。
  */
 export function assertDmgLayoutFacts(facts, appName) {
@@ -501,7 +501,7 @@ export function assertDmgLayoutFacts(facts, appName) {
     throw new Error('背景别名没有指向卷内 ' + DMG_BACKGROUND_DIR_NAME + '/' + DMG_BACKGROUND_FILE_NAME
       + '——Finder 解析不到')
   }
-  // 别名必须属于本卷：只查相对路径会放过「指向另一卷同路径」的别名（2026-09 审查）。
+  // 别名必须属于本卷：只查相对路径会放过「指向另一卷同路径」的别名。
   // 卷名 = appName（createStyledDmg 以 appName 作卷名）；非 ASCII 卷名在别名字节里编码不同，跳过。
   if (/^[\x20-\x7e]+$/.test(appName) && !aliasText.includes(appName)) {
     throw new Error('背景别名不属于本卷（卷名 ' + appName + ' 不在别名字节里）——Finder 解析不到')
@@ -511,7 +511,7 @@ export function assertDmgLayoutFacts(facts, appName) {
   }
   const bounds = facts.window?.WindowBounds
   // 只比尺寸：窗口原点由 Finder 按屏幕重排（本机实测 y=482、x 保留），不是我们的输入；
-  // 窄屏/异形屏下夹取 x 会让精确前缀断言误红（2026-09 审查）。
+  // 窄屏/异形屏下夹取 x 会让精确前缀断言误红。
   const expectedSuffix = ', {' + DMG_WINDOW.width + ', ' + DMG_WINDOW.height + '}}'
   if (typeof bounds !== 'string' || !bounds.startsWith('{{') || !bounds.endsWith(expectedSuffix)) {
     throw new Error('窗口尺寸未落盘：期望 <原点>' + expectedSuffix + '，实际 ' + JSON.stringify(bounds))

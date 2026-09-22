@@ -49,17 +49,15 @@
   transition: opacity 150ms var(--ds-ease-in-out);
 }
 
-/* 2026-12「看不到但能点」的空白图标修复：宽/rail 的入场动画整组退役。
-   2026-09-20 更正：退役后同一症状仍复现；字标/座席空白的当前根因与修复见
-   design 05 §4.2（文档级重复 SVG 资源 id × 隐藏壳丢绘），本文件只负责动画面。
-   它们都以 `opacity: 0` 为首帧（`wide-in` / `rail-in` / `rail-fade-in`），而 CSS
-   动画只在所属子树被渲染时推进：被隐藏的实例壳（`.instance-hidden` →
+/* 字标/座席空白的当前根因与修复见 design 05 §4.2（文档级重复 SVG 资源
+   id × 隐藏壳丢绘），本文件只负责动画面：必要内容不参与任何入场动画。
+   入场动画都以 `opacity: 0` 为首帧（`wide-in` / `rail-in` / `rail-fade-in`），
+   而 CSS 动画只在所属子树被渲染时推进：被隐藏的实例壳（`.instance-hidden` →
    `content-visibility: hidden`）或窗口被遮挡时，字标（`.wide`）与设置座席
-   （`.railIn .footArea`）会停在首帧——不可见、仍可命中、除重挂载外不自愈
-   （2026-12 定位与 WKWebView 实测见 STATUS 与 design 06/14）。
-   必要内容不再参与入场动画：折叠的位移与裁剪仍由 AppFrame 轨道过渡承担，
+   （`.railIn .footArea`）会停在首帧——不可见、仍可命中、除重挂载外不自愈。
+   折叠的位移与裁剪由 AppFrame 轨道过渡承担，
    而 `.fading` 保留——它是**类驱动**且被 settle 定时器界定，不是时间线动画。
-   `.wide` / `.railIn` 仍作为布局/接线钩子由组件挂载，不再声明任何动画。 */
+   `.wide` / `.railIn` 仅作为布局/接线钩子由组件挂载。 */
 
 /* Logo row (figma pad (4,8,4,8)): expanded keeps the panel toggle at the
    right edge; the rail gives every control the same base left anchor before
@@ -229,9 +227,8 @@
    (`sidebar.footer.action`, kind 'list' — contract/slots.ts:88), so several
    occupants share ONE row: that row holds the sheet's 4px icon-cluster rhythm
    (chamber addition to the copied block; the seat ships empty, so the row has no
-   occupant to space today and the gap stays invisible — the shipped layout is
-   unchanged; the value is the sheet's icon-cluster rhythm, not the 2026-09 G1-4
-   hit-rim floor, which the 2026-09-14 v0.2.4 rollback removed). */
+   occupant to space today and the gap stays invisible; the value is the sheet's
+   icon-cluster rhythm, not a hit-rim floor). */
 .footArea {
   flex: none;
   display: flex;
@@ -269,7 +266,7 @@
   }
 }
 
-/* ---- alpha.2 extension holes (brand + global panel list) ---- */
+/* ---- extension holes (brand + global panel list) ---- */
 
 /* Brand identity group: the mark hole plus the optional name occupant. The
    chamber wordmark stays the mark fallback, so the row looks unchanged when
@@ -335,8 +332,7 @@
 
 /* The compound selector is load-bearing: `.panelRow:hover` (0,2,0) would
    otherwise beat a bare `.panelActive` (0,1,0) and flip an ACTIVE row's
-   background to the hover token while the pointer is over it (2026-09 二轮
-   CSS diff vs the official ui-sidebar stylesheet). */
+   background to the hover token while the pointer is over it. */
 .panelRow.panelActive {
   background: var(--dsw-alias-interactive-bg-active);
   color: var(--dsw-alias-label-primary);

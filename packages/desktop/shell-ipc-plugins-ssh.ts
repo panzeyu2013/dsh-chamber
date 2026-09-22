@@ -1,5 +1,5 @@
 /**
- * shell-ipc-plugins-ssh — domain IPC registrations split out of shell-core.ts
+ * shell-ipc-plugins-ssh — domain IPC registrations
  */
 import type { ShellIpcCtx } from './shell-core.ts'
 import type { ExactOwnershipToken } from './plugin-sync.ts'
@@ -81,8 +81,8 @@ export function registerSshPluginHandlers(ctx: ShellIpcCtx): void {
       ),
     );
   });
-  // Undo the latest ok ssh plugin change (design 21 §6.4, plan Phase 5 ssh
-  // 统一增量): the undo journal (applyPlugins records every executed row
+  // Undo the latest ok ssh plugin change (design 21 §6.4): the undo journal
+  // (applyPlugins records every executed row
   // with its pre-change remote spec) answers 「撤销最近变更」. v1 undo =
   // the inverse row through the SAME ssh apply flow — undoing an ok add
   // removes that name; undoing an ok remove re-adds the previous REGISTRY
@@ -98,7 +98,7 @@ export function registerSshPluginHandlers(ctx: ShellIpcCtx): void {
     }
     const target = findRemoteTarget(id);
     if (target === null) return { ok: false as const, error: 'ssh instance not found' };
-    // Target binding (design 21 §6.4 review P1): only ops recorded on the
+    // Target binding (design 21 §6.4): only ops recorded on the
     // CURRENT operational target are undoable — a connection edit under
     // the same id (new host/user/service/home) must never replay a change
     // onto the wrong machine. Ops recorded before target binding existed
@@ -147,7 +147,7 @@ export function registerSshPluginHandlers(ctx: ShellIpcCtx): void {
         if (result.result.applied === 0 && result.result.failed.length > 0) {
           return { ok: false as const, error: `undo failed: ${result.result.failed[0].error}` };
         }
-        // Honest undo outcome (P2-2): a change that EXECUTED but did not
+        // Honest undo outcome: a change that EXECUTED but did not
         // fully take effect must never project as a clean success. The
         // undone arm carries the outcome fields ({restarted, ready,
         // readyNote}) whenever the undo is not clean — a failed restart,
@@ -178,8 +178,7 @@ export function registerSshPluginHandlers(ctx: ShellIpcCtx): void {
     );
   });
 
-  // Host-graph seed + remote materialize (design 13 M4): the M2 orchestration
-  // functions that were implemented but not yet wired. Seed installs the
+  // Host-graph seed + remote materialize (design 13 M4): Seed installs the
   // chamber host packages (module A host-graph + git-worktree +
   // archive-cleanup) onto the remote (09 遗留 1; the manual resend covers
   // BOTH chamber host packages — a remote connected before the git package
@@ -189,7 +188,7 @@ export function registerSshPluginHandlers(ctx: ShellIpcCtx): void {
   // (picker in the Electron main via edges.pickPluginSource, pick-only), the
   // sync view through materialize_add (dir resolved from the authoritative
   // local manifest, validated here as absolute + directory). LOCAL_PLUGIN_*
-  // 本地腿（runLocalDshPlugin 执行面）仍留 main.ts。
+  // 本地腿（runLocalDshPlugin 执行面）留在 main.ts。
   deps.ipc.handle(IPC_CHANNELS.SSH_SEED_HOST_GRAPH, async (payload: unknown) => {
     const { id } = payload as { id: string };
     const target = findRemoteTarget(id);
@@ -200,7 +199,7 @@ export function registerSshPluginHandlers(ctx: ShellIpcCtx): void {
     // packages (host-graph + git-worktree): a remote connected before the
     // git package existed only picks it up through this path or the next
     // ready transition.
-    // Portability first (design 20 §6, 2026-12 review): a `localOnly` row (empty
+    // Portability first (design 20 §6): a `localOnly` row (empty
     // sourceDir by design) must never count as a missing artifact on this
     // OTHER-host path; the shipped-artifact gate also refuses an empty dir, so it
     // can never resolve the process CWD's own dist/index.js.
@@ -277,8 +276,8 @@ export function registerSshPluginHandlers(ctx: ShellIpcCtx): void {
     }
     const archiveName = source.name;
     // The archive's declared version (read by classifyPluginPick) is the
-    // judgement's version input; dropping it left the parameter dead and
-    // the materialize generation check unable to see it (2026-12 review).
+    // judgement's version input; dropping it would leave the parameter dead and
+    // the materialize generation check unable to see it.
     const archiveVersion = source.version;
     const archiveBytes = source.bytes;
     return runWithFinalOwnership(
@@ -291,22 +290,18 @@ export function registerSshPluginHandlers(ctx: ShellIpcCtx): void {
     );
   });
 
-  // —— G 组（S7 批；W-10 S7 施工图第 1 项）——
   // gateway 插件 3 注册体（GATEWAY_PLUGIN_SYNC / GATEWAY_PLUGIN_APPLY /
-  // GATEWAY_PLUGIN_MATERIALIZE——按原 main.ts 顺序紧接 F 组追加；注册体自
-  // main.ts 逐字迁入，全零 Electron，trustedIpc 围栏由装配侧注入 registrar
-  // 包装）。编排纯模块直接 import（gateway-provider / gateway-sync-registry /
-  // gateway-ipc-shared / plugin-tarball——main.ts 同款 import 面）；注册参数
+  // GATEWAY_PLUGIN_MATERIALIZE；全零 Electron，trustedIpc 围栏由装配侧注入
+  // registrar 包装）。编排纯模块直接 import（gateway-provider /
+  // gateway-sync-registry / gateway-ipc-shared / plugin-tarball）；注册参数
   // 读取（getGatewaySyncRegistration 纯模块——main 装配侧的 ready 注册/离开
   // ready/实例撤销路径（sm.onStatusChanged / publishRegistryTransition）经
   // setGatewaySyncRegistration 写同一注册表，读写同表不分叉）与 ready 位复验
   // 在注册体侧。手动 sync 的上传执行闭包经 ctx.syncGatewayChamberPluginsFor
   // （main 装配侧定义——ready 自动 sync 与手动 re-entry 共用同一执行路径与
-  // 注册参数，语义不分叉）。确认对话框 = 上方 S6 edges 版 confirmPluginAction
+  // 注册参数，语义不分叉）。确认对话框 = edges 版 confirmPluginAction
   // 助手（单参 copy；无存活主窗 → 'native confirmation unavailable'；response
-  // ===1（'继续'）→ ok；否则 cancelled；异常 → loud——语义与 main 闭包逐字一
-  // 致；main 侧原 confirmPluginAction 闭包已随 W-10 S8 H 组删除（LOCAL_PLUGIN_ADD/
-  // REMOVE 迁出后无使用点）——本组与 H 组注册体同经本助手）；无存活主窗预检 =
+  // ===1（'继续'）→ ok；否则 cancelled；异常 → loud）；无存活主窗预检 =
   // edges.mainWindowAlive、插件源 pick = edges.pickPluginSource（宿主腿均在
-  // electron-edges.ts S6 实现）。
+  // electron-edges.ts 实现）。
 }

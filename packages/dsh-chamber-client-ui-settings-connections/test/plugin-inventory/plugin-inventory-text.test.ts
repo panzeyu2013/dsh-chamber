@@ -31,8 +31,8 @@ import {
 } from '../../src/client/plugin-inventory-text.ts'
 
 test('entryLiveness: the ONE Loader-liveness decision every projection reads', () => {
-  // 2026-12 audit: chamberRemoteKey and thirdPartyLiveState used to re-derive
-  // this switch; both now read this function, so its truth table is the lock.
+  // chamberRemoteKey and thirdPartyLiveState both read this function, so its
+  // truth table is the lock.
   assert.equal(entryLiveness(undefined), 'absent')
   assert.equal(entryLiveness({ enabled: false, fiberPhase: 'active' }), 'disabled')
   assert.equal(entryLiveness({ enabled: true, fiberPhase: 'active' }), 'active')
@@ -82,10 +82,10 @@ test('thirdPartyEntries: the chamber host packages and the mobile entry are excl
       // report forms, never third-party.
       { entryId: 'p8', moduleName: ARCHIVE_CLEANUP_PACKAGE, enabled: true, fiberPhase: 'active' },
       { entryId: 'p9', moduleName: `cordis:include ${ARCHIVE_CLEANUP_PACKAGE}`, enabled: true, fiberPhase: 'active' },
-      // The local-shape-only open-in row is no longer LISTED on a non-local
-      // target (applicableChamberPackages), so this zone must exclude it by
-      // CLASSIFICATION alone: an instance that somehow carries it (legacy seed
-      // / manual install) is never reclassified as a third-party plugin.
+      // The local-shape-only open-in row is not LISTED on a non-local target
+      // (applicableChamberPackages), so this zone must exclude it by
+      // CLASSIFICATION alone: an instance that somehow carries it (a legacy seed
+      // or manual install) is never reclassified as a third-party plugin.
       { entryId: 'p10', moduleName: OPEN_IN_PACKAGE, enabled: true, fiberPhase: 'active' },
     ],
   }
@@ -97,7 +97,7 @@ test('thirdPartyEntries: the caller expected list excludes a registry package th
   // A FUTURE registry package the literals do not know: the literal name
   // classification cannot know it, so it would leak into the http zone's
   // third-party list. The registry-derived expected list of the view is what
-  // keeps that zone honest (review G2-5).
+  // keeps that zone honest.
   const snapshot: PluginInventorySnapshot = {
     entries: [
       { entryId: 'p1', moduleName: '@dsh-chamber/dsh-host-future-domain', enabled: true, fiberPhase: 'active' },
@@ -158,7 +158,7 @@ test('remoteChamberBadge: the raw cordis patch-insert report of a chamber row st
 
 test('installedRowLiveState: protected composition/seed rows never claim a Loader state', () => {
   // 受保护行（安装自带基线）从不是 Loader 客户端入口：对它们要 Loader 状态会在每次打开
-  // 对话框时给出假告警（2026-12 review）。判据不变：受保护/组合/播种 ⇒ 不索要状态（§6.11.5）。
+  // 对话框时给出假告警。判据不变：受保护/组合/播种 ⇒ 不索要状态（§6.11.5）。
   const snapshot = { entries: [
     { moduleName: 'third-party-live', enabled: true, fiberPhase: 'active' },
   ] } as unknown as PluginInventorySnapshot
@@ -203,9 +203,9 @@ test('thirdPartyLiveState: only an enabled + active Loader entry claims live, ne
 })
 
 test('thirdPartyLiveState: a bundle-layer row is neutral without a name match and live only from its own entry', () => {
-  // 真实报告形态（2026-12 review）：`…-agent-team-profile` 是 bundle 层，实例的挂载行
+  // 真实形态：`…-agent-team-profile` 是 bundle 层，实例的挂载行
   // 来自它 cordis.patch.yml 的 insert 列表（…-agent-team / …-tool-agent-team），bundle 包名
-  // 从不成为 Loader 行。旧实现按「无同名行 + bundle 层」给出「重启后生效」，对每个 bundle
+  // 从不成为 Loader 行。按「无同名行 + bundle 层」给出「重启后生效」对每个 bundle
   // 层永久为真——实例已重启并实际生效也不消失。
   const bundleRow = '@deepseek-ai/dsh-experimental-agent-team-profile'
   const composedWithoutBundleName: PluginInventorySnapshot = {
@@ -215,7 +215,7 @@ test('thirdPartyLiveState: a bundle-layer row is neutral without a name match an
     ],
   }
   // 已生效的实例：insert 行活着，但没有任何归属事实能把这些行算到该 bundle 名下 →
-  // 状态格中性，绝不显示 restart（本回归的判据）。
+  // 状态格中性，绝不显示 restart（本用例的判据）。
   assert.equal(thirdPartyLiveState(composedWithoutBundleName, bundleRow), null)
   // 刚安装、实例尚未重启：视图同样只看到「无同名行」。两个方向都没有可用的宿主事实，
   // 因此两边都不承诺 —— 取舍见 plugin-inventory-text.ts 的 JSDoc。
@@ -242,7 +242,7 @@ test('thirdPartyLiveState: a null snapshot (instance not running / read failed) 
   assert.equal(thirdPartyLiveState(null, 'plain-lib-dep'), null)
 })
 
-/* ---- sshChamberGates (design 13 §6 / design 20 §6, 2026-12 review): the two
+/* ---- sshChamberGates (design 13 §6 / design 20 §6): the two
  * ssh target-level gates read the APPLICABLE probe rows only, so a localOnly
  * row can never decide them. ---- */
 
@@ -303,7 +303,7 @@ test('sshChamberGates: the synthesized localOnly row cannot pin 「注入」 tru
     'the localOnly row speaks for nothing; the three probed rows decide')
 })
 
-/* ---- applicableChamberPackages (design 20 §6, 2026-12 user decision): a
+/* ---- applicableChamberPackages (design 20 §6): a
  * `localOnly` registry row is listed for the LOCAL target only. ---- */
 
 test('applicableChamberPackages: the local target keeps every registry row (including a localOnly one)', () => {

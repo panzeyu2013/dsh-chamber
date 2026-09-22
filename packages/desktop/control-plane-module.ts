@@ -1,14 +1,14 @@
 /**
- * The desktop main-process facade over the control-plane package (A2
- * cross-package protocol single-sourcing).
+ * The desktop main-process facade over the control-plane package (cross-package
+ * protocol single-sourcing).
  *
  * The desktop's packaged build cannot import workspace packages from
  * node_modules (Node's type erasure does not cover node_modules; the TS
  * sources ship raw in the asar), so build-control-plane.mjs compiles the
  * control-plane sources into <pkg>/dist/control-plane/ and the packaged app
  * loads THAT — while dev (and the pure-node tests) run the workspace source
- * through the pnpm symlink. This module lifts the dual-path resolution (the
- * former main.ts controlPlaneModule block) into one shared module:
+ * through the pnpm symlink. This module lifts the dual-path resolution into one
+ * shared module:
  *
  *   - main.ts consumes createControlPlane;
  *   - ssh-provider.ts consumes the RPC envelope primitives
@@ -54,7 +54,7 @@ export function isPackagedElectronRuntime(runtime: {
 }
 
 /**
- * Assembled-sidecar marker (design 25 §3.2/§4.3, W-23): the Swift Supervisor
+ * Assembled-sidecar marker (design 25 §3.2/§4.3): the Swift Supervisor
  * spawns `<sidecar>/sidecar.js` with `DSH_CHAMBER_SIDECAR_COMPILED=1`, where the
  * workspace bare specifier is unresolvable (no node_modules tree) and the
  * compiled artifact sits at `<sidecar>/dist/control-plane/index.js` — exactly
@@ -79,16 +79,15 @@ if (isPackaged && !existsSync(CONTROL_PLANE_ENTRY)) {
 
 /**
  * The resolved control-plane module: the compiled artifact when packaged,
- * the workspace source otherwise. Top-level await mirrors the former
- * main.ts block — every importer (main.ts wiring assembly, ssh-provider,
- * plugin-sync) is blocked on the resolution before its own body runs, so the
- * re-exports below are safe to use at runtime.
+ * the workspace source otherwise. Top-level await: every importer (main.ts
+ * wiring assembly, ssh-provider, plugin-sync) is blocked on the resolution
+ * before its own body runs, so the re-exports below are safe to use at
+ * runtime.
  */
 const controlPlaneModule: typeof import('@dsh-chamber/control-plane') = await (isPackaged
   ? import(controlPlaneEntrySpecifier)
   : import('@dsh-chamber/control-plane'))
 
-/** The control-plane factory (former main.ts `const { createControlPlane }`). */
 export const createControlPlane = controlPlaneModule.createControlPlane
 export const call = controlPlaneModule.call
 
@@ -125,24 +124,23 @@ export const HOST_GRAPH_INSERT = controlPlaneModule.HOST_GRAPH_INSERT
 export const HOST_GIT_WORKTREE_INSERT = controlPlaneModule.HOST_GIT_WORKTREE_INSERT
 export const HOST_ARCHIVE_CLEANUP_INSERT = controlPlaneModule.HOST_ARCHIVE_CLEANUP_INSERT
 export const HOST_OPEN_IN_INSERT = controlPlaneModule.HOST_OPEN_IN_INSERT
-// The canonical host-seed namespace + its fail-loud assertion (Batch 1 naming
-// unification, 2026-09) — consumed by plugin-sync's remote cordis.patch.yml
-// merge, which must also recognize the pre-rename names to fold them once.
+// The canonical host-seed namespace + its fail-loud assertion — consumed by
+// plugin-sync's remote cordis.patch.yml merge, which must also recognize the
+// pre-rename names to fold them once.
 export const HOST_SEED_PACKAGE_PREFIX = controlPlaneModule.HOST_SEED_PACKAGE_PREFIX
 export const assertHostSeedInsertNaming = controlPlaneModule.assertHostSeedInsertNaming
 // The authoritative chamber host-package registry (name + insert id + liveness
 // probe): the desktop derives every chamber row/probe from it — never a
-// hand-maintained parallel list (2026-09 user decision).
+// hand-maintained parallel list.
 export const CHAMBER_HOST_PACKAGES = controlPlaneModule.CHAMBER_HOST_PACKAGES
 // The seeded file set + the local `--patch` overlay filename (host-graph-seed.ts
 // single source, forwarded by the control-plane index) — consumed by
 // plugin-sync.ts (remote seed writer / install probes / overlay resolution)
-// and gateway-provider.ts (the gateway upload payload keys), both of which
-// used to re-type ['package.json','dist/index.js'] and the overlay filename.
+// and gateway-provider.ts (the gateway upload payload keys).
 export const HOST_PACKAGE_SEED_FILES = controlPlaneModule.HOST_PACKAGE_SEED_FILES
 export const HOST_GRAPH_PATCH_FILENAME = controlPlaneModule.HOST_GRAPH_PATCH_FILENAME
 
-// Plugin spec/name whitelist family (the reserved-name deny predicate is retired;
+// Plugin spec/name whitelist family (no reserved-name deny predicate here;
 // `protected-plugins.ts` owns the judgement, design 21 §6.11)
 // (plugin-spec.ts, design 21 §6.2/§6.7 — the shared source for the desktop
 // main (ssh-provider re-export / plugin-sync) and the gateway executor) —
@@ -181,17 +179,17 @@ export const verifyProfileFamilyConsistency = controlPlaneModule.verifyProfileFa
 export const describeFamilyFindings = controlPlaneModule.describeFamilyFindings
 export const suggestExactSpec = controlPlaneModule.suggestExactSpec
 
-// Owner-private file primitives (private-file.ts, P2-2a) — consumed by the
+// Owner-private file primitives (private-file.ts) — consumed by the
 // desktop main's credential mirrors (ssh-provider / gateway-provider /
 // owner-only-secret-file), the chamber-settings store, the ssh plugin undo
 // journal (ssh-plugin-journal) and the local-plugin-writer ledger
-// (plugin-sync). Single-sourcing the 0600 atomic-replace / no-follow read
-// mechanism here retires the per-module handwritten copies.
+// (plugin-sync). This module single-sources the 0600 atomic-replace /
+// no-follow read mechanism.
 export const ensurePrivateDirectoryNoFollow = controlPlaneModule.ensurePrivateDirectoryNoFollow
 export const atomicWritePrivateFileNoFollow = controlPlaneModule.atomicWritePrivateFileNoFollow
 export const readPrivateFileNoFollow = controlPlaneModule.readPrivateFileNoFollow
 
-// Owner-only audit-trail core (audit-trail.ts, P2-2c) — the shared
+// Owner-only audit-trail core (audit-trail.ts) — the shared
 // serializer + hardened append/rotate implementation behind BOTH the
 // desktop audit log (audit-log.ts) and the gateway server audit
 // (gateway/src/audit.ts imports the control plane directly).
@@ -202,8 +200,8 @@ export const AUDIT_TRAIL_MAX_BYTES = controlPlaneModule.AUDIT_TRAIL_MAX_BYTES
 // Gateway wire-protocol credential/session facts + SPKI pin helpers — the
 // cross-shape single source (control-plane gateway-session-protocol.ts /
 // spki-pin.ts, design 17 §7.1/§9.3/§13.4.2/S23): the gateway server imports
-// the same module, so the desktop client and the server can no longer drift
-// on cookie name / TTL / bearer & password bounds / cookie caps. Consumed by
+// the same module, so the desktop client and the server cannot drift on
+// cookie name / TTL / bearer & password bounds / cookie caps. Consumed by
 // gateway-session.ts (login cache + expiry) and gateway-provider.ts (SPKI
 // probe gate + form validation mirrors).
 export const GATEWAY_PASSWORD_MAX_CHARS = controlPlaneModule.GATEWAY_PASSWORD_MAX_CHARS
@@ -219,9 +217,8 @@ export const SPKI_PIN_MISMATCH_CODE = controlPlaneModule.SPKI_PIN_MISMATCH_CODE
 export const spkiPinOfPeerCertificate = controlPlaneModule.spkiPinOfPeerCertificate
 export const attachSpkiPinVerifier = controlPlaneModule.attachSpkiPinVerifier
 
-// Session-state wire contract (control-plane session-state-protocol.ts, plan
-// of record docs/progress/todo/remote-session-state-and-switch.md §4;
-// protocol-compat-blueprint §8.1) — ONE source for the protocol version,
+// Session-state wire contract (control-plane session-state-protocol.ts) — ONE
+// source for the protocol version,
 // feature ids, descriptor classification, read-mark merge and turn/end
 // classification shared with the gateway watcher. The desktop session-facts
 // probe consumes it through this facade because the packaged desktop cannot

@@ -6,7 +6,7 @@
  * （current / known-good / pending / .failed）与不受保护；listVersionTrees
  * 排除非版本树条目。
  *
- * P0 split: shared fixtures = test/support/store-fixtures.ts. Siblings:
+ * Shared fixtures = test/support/store-fixtures.ts. Siblings:
  *   - dsh-runtime-store.test.ts (protection / journal / failure store)
  *   - disk-accounting.test.ts (runtimeDiskSummaryAsync accounting)
  */

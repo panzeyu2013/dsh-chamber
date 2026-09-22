@@ -2,7 +2,7 @@
 //  ThemedBackgroundTests.swift
 //  DSHChamberTests
 //
-//  W4a：原生"露底"色的两段语义——首帧跟页面骨架常量（页面骨架与主题无关，
+//  原生"露底"色的两段语义——首帧跟页面骨架常量（页面骨架与主题无关，
 //  见 packages/renderer/index.html），页面事实到达后按主题换色。
 //
 import XCTest
@@ -33,7 +33,7 @@ final class ThemedBackgroundTests: XCTestCase {
         XCTAssertEqual(skeleton.2, 21.0 / 255.0, accuracy: 0.001)
     }
 
-    /// 浅色主题 → 白（dsh 浅色内容底），不再露出深色骨架。
+    /// 浅色主题 → 白（dsh 浅色内容底），不露深色骨架。
     func testLightThemeUsesLightBackground() {
         let light = srgb(MainWindowController.themedBackgroundColor(pageIsDark: false))
         XCTAssertEqual(light.0, 1.0, accuracy: 0.001)

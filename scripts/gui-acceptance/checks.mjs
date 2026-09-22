@@ -253,8 +253,8 @@ function noteTail(note) {
  * the pointer away must clear it.
  *
  * `cardable` is decided by the `<span data-chamber-hovercard-anchor>` marker, so
- * a build that does not stamp the marker (the pre-fix vendored atom) has to be
- * told apart from an instance that genuinely has no cardable row: `anchorCount`
+ * a build that does not stamp the marker has to be told apart from an
+ * instance that genuinely has no cardable row: `anchorCount`
  * and `wrappedRows` do that. A cardable row is wrapped by RowHoverCard's anchor
  * span (RowHoverCard.tsx), so cardable-looking rows WITHOUT the marker mean the
  * marker contract is missing in the running bundle — a FAIL, never INFO.
@@ -296,9 +296,9 @@ export function hoverCardVerdict({
 
 /**
  * Leave offsets (ms after the dwell) sampled when no usable commit window was
- * measured. These are the historical fixed band: they only discriminate when the
- * dwell→commit latency happens to be at least as large, which is why the
- * walkthrough now measures the window first and treats this as a fallback.
+ * measured. This fixed band only discriminates when the dwell→commit latency
+ * happens to be at least as large, so the walkthrough measures the window first
+ * and treats this as a fallback.
  */
 export const HOVER_RACE_FALLBACK_OFFSETS = [10, 20, 35, 50, 60]
 
@@ -322,7 +322,7 @@ export const HOVER_RACE_WINDOW_CAP_MS = 200
  * The leave offsets a race trial should sample, derived from THIS run's measured
  * dwell→commit latency.
  *
- * WHY DERIVED, NOT FIXED (adversarial review, finding H5/#3): a strand needs the
+ * WHY DERIVED, NOT FIXED: a strand needs the
  * pointerleave to land AFTER the dwell callback ran and BEFORE React committed
  * the open — the vendored handler is `clearTimer(); if (open) armClose()`, so a
  * leave outside that window arms its grace normally and NO card strands even on
@@ -352,7 +352,7 @@ export function raceBandForWindow(commitLatencyMs) {
  * must never leave a card on screen. ONE stranded card is a FAIL, because a card
  * nobody can dismiss is the reported defect.
  *
- * HONESTY (finding H5/#3): the leg only proves something when the leave offsets
+ * HONESTY: the leg only proves something when the leave offsets
  * it sampled were actually inside this run's measured window. A run whose window
  * could not be measured, or is too small to probe, did NOT discriminate — it is
  * reported as INFO ("本次运行不具区分力"), never as a pass, so a green run is not
@@ -497,7 +497,7 @@ export function pickRailToggle(buttons, { viewportWidth = null } = {}) {
   const sorted = [...candidates].sort((a, b) => (a.top - b.top) || (a.index - b.index))
   const tied = sorted.filter(entry => entry.top === sorted[0].top)
   // Two plausible header-band controls mean the structure moved: fail closed
-  // instead of silently taking the first one (the defect this policy replaces).
+  // instead of silently taking the first one.
   if (tied.length > 1) return { ok: false, reason: 'ambiguous', picked: tied[0], candidates: sorted }
   return { ok: true, picked: sorted[0], candidates: sorted }
 }
@@ -506,9 +506,8 @@ export function pickRailToggle(buttons, { viewportWidth = null } = {}) {
  * Adapter between the merged facts expression and the rail verdicts: `DOM_FACTS`
  * names the sidebar population `sidebarSources`/`sidebarRows`, the verdicts read a
  * small stable snapshot (`sections`/`rows`). Keeping the mapping in one place is
- * what makes the merge safe — the first merged run reported
- * `[data-chamber-section] undefined → undefined → undefined` because the two
- * names had drifted apart.
+ * what makes the merge safe: a drift between the two name sets reports
+ * `[data-chamber-section] undefined → undefined → undefined`.
  * @param facts - a `DOM_FACTS` snapshot (or null).
  * @returns `{ railCollapsed, sections, rows, settingsOpen }`, or null.
  */
@@ -663,13 +662,13 @@ export function railToggleVerdict({ pick, identity = null, drift = false, before
 }
 
 /**
- * W-4a's verdict: source-section fold (design 06 §2.4 — the control the old
- * W-4 selector hit by accident, kept as its own leg with §2.4's own criterion).
+ * W-4a's verdict: source-section fold (design 06 §2.4 — its own leg with
+ * §2.4's own criterion).
  *
  * §2.4 requires the click to collapse the source's ENTIRE workspace list, so the
  * disclosure attribute alone is not enough: the section's rendered height must
  * SHRINK and come back on expand. A flip with no visible change is a FAIL — the
- * same "flipped something, proved nothing" shape the rail leg was fixed for.
+ * same "flipped something, proved nothing" shape the rail leg must avoid.
  * @param args.executed - whether the leg ran at all (it writes the persisted
  *   `sourceFolded` preference, so `--attach` records INFO instead).
  * @param args.reason - why it did not run (INFO evidence).
@@ -750,12 +749,12 @@ export function applyRequireHover(verdict, requireHover) {
 }
 
 /**
- * 遮罩层叠判定（2026-12 P0–P3，design 05 §4）。
+ * 遮罩层叠判定（design 05 §4）。
  *
  * 断言：`.instance-loading` 可见期间，租客壳（`.instance-shell` / `[data-instance]`
- * 子树）的任何元素都不得画在它之上——这正是"白屏里出现输入栏"缺陷的核心不变量，
- * 此前只有源码锁（`packages/renderer/test/wiring/veil-layering-invariants.test.ts`），
- * 没有运行时命中判定。
+ * 子树）的任何元素都不得画在它之上——这正是"白屏里出现输入栏"缺陷的核心不变量。
+ * 源码锁在 `packages/renderer/test/wiring/veil-layering-invariants.test.ts`，
+ * 运行时命中判定由本函数承担。
  *
  * 采样由页面侧探针完成（`walkthrough.mjs` 的 `VEIL_LAYERING_PROBE_INSTALL` /
  * `VEIL_LAYERING_PROBE_READ`）：遮罩可见的那些帧里，对 composer 座 / 输入区 /
@@ -768,7 +767,7 @@ export function applyRequireHover(verdict, requireHover) {
  * @returns `{ ok, evidence }`；`ok === null` 是 INFO（本次未执行/无法判定），不是通过。
  */
 export function veilLayeringVerdict({ veilFrames = 0, samples = [], error = null, heldFrames = 0, bootFrames = 0 } = {}) {
-  // 探针异常一律 fail-closed 成 INFO（2026-12 二轮 review）：否则前半窗采到的 veil 采样
+  // 探针异常一律 fail-closed 成 INFO：否则前半窗采到的 veil 采样
   // 会让一条已经坏掉的探针给出 PASS 标题，而"探针坏了"只躺在 evidence 里。
   if (error !== null && error !== undefined && String(error) !== '') {
     return { ok: null, evidence: `探针异常（${String(error)}）：本次层叠判定未执行——"探针坏了"不得读成通过` }

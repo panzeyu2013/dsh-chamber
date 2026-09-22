@@ -2,7 +2,7 @@
 //  ShellPageFacts.swift
 //  DSHChamber
 //
-//  页面 document 事实载波（S1；本地化/主题跟随的事实源）。
+//  页面 document 事实载波（本地化/主题跟随的事实源）。
 //
 //  事实定义（冻结）：
 //   - 语言 = documentElement.lang（zh 族 → zh，其它非空 → en，空 = 无事实）；
@@ -163,7 +163,7 @@ public enum ShellPageFactsScript {
         """
     }
 
-    /// didFinish 对账表达式（S1 追加；与 source() 完全相同的 dark 判定）。
+    /// didFinish 对账表达式（与 source() 完全相同的 dark 判定）。
     /// evaluateJavaScript 直接返回值，页面侧不产生副作用，revision 由 Store
     /// 补（对账路径无需版本号）。
     public static func snapshotSource() -> String {
@@ -195,7 +195,7 @@ public final class ShellPageFactsStore {
     /// revision 只用于排序/日志，不需要真实计数语义，故取一个远大于任何真实运行的界。
     public static let maxRevision = 1_000_000
 
-    /// lang 纯防御上限（Z2，2026-12 二轮独立复核）：页面 postMessage 的 lang 实测可
+    /// lang 纯防御上限：页面 postMessage 的 lang 实测可
     /// 抵达 5 MiB（不崩，但没有理由处理/落盘如此长的字符串）。超过本界的字符串**一律
     /// 忽略**（保留旧值、不构成事实）。现有取值域 zh/en 及其 BCP-47 子标签（如
     /// zh-Hant-TW）都远短于本界，故语义零变化；单位是 Swift Character，只作长度闸，
@@ -222,12 +222,12 @@ public final class ShellPageFactsStore {
     /// 合并语义：
     ///   - lang 为空（脚本的 documentElement.lang || ''）= 不构成事实，保留旧值
     ///     （旧值也没有 → 本次不构成事实，等下一次上报）；lang 超过 maxLangLength
-    ///     （纯防御闸，Z2）同样按「不构成事实」处理；
+    ///     （纯防御闸）同样按「不构成事实」处理；
     ///   - dark 缺失 = 保留旧值；
     ///   - 与旧值完全相等 → false（幂等，不重复打扰 sink / 不重复落盘）；
     ///   - revision 取 max(夹紧后的上报值, 旧值 + 1)：页面重载后脚本计数重置也不会
     ///     回退，对账路径（无 revision）同样得到严格递增值。
-    ///     **夹紧是必需的安全边界**（2026-12 审计）：上报值来自页面 postMessage，
+    ///     **夹紧是必需的安全边界**：上报值来自页面 postMessage，
     ///     可被构造为 `1e300`（NSNumber.intValue = Int.max）；旧值若为 Int.max，
     ///     `old + 1` 在 Swift 里是**陷阱**（SIGTRAP 崩溃），且旧值会被持久化 →
     ///     一次污染即此后每次事实变化都崩。故取值被夹到 [0, maxRevision]，
@@ -237,7 +237,7 @@ public final class ShellPageFactsStore {
         var language = current?.language
         var pageIsDark = current?.pageIsDark
 
-        // lang：先过纯防御长度闸（Z2）——超长一律忽略、保留旧值。长度检查先于
+        // lang：先过纯防御长度闸——超长一律忽略、保留旧值。长度检查先于
         // trimming，5 MiB 级输入不做无谓的副本分配；再按既有契约「非空白才构成事实」。
         if let rawLang = payload["lang"] as? String,
            rawLang.count <= Self.maxLangLength,
@@ -287,7 +287,7 @@ public final class ShellPageFactsStore {
         let isDark = (record["pageIsDark"] as? Bool)
             ?? (record["pageIsDark"] as? NSNumber)?.boolValue
             ?? false
-        // 落盘值同样夹紧：旧版本可能已经写进过一个被污染的上界值，
+        // 落盘值同样夹紧：落盘记录可能含被污染的上界值，
         // 载入时不夹紧会让下一次 ingest 直接踩溢出陷阱。
         let revision = min(max((record["revision"] as? NSNumber)?.intValue ?? 0, 0),
                            maxRevision)

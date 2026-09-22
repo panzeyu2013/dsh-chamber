@@ -437,7 +437,7 @@ test('plugin: a SAME-FIBER reload re-mounts the exporter (Fiber.update re-runs t
   assert.equal(host.sinks().length, 1)
   // A same-fiber reload disposes the effect and then re-runs the plugin body with
   // the SAME ctx (loader entry.ts on a config-only diff). Marking ownership
-  // OUTSIDE the effect used to suppress the re-mount, silently killing the bridge.
+  // OUTSIDE the effect would suppress the re-mount and silently kill the bridge.
   fiber.dispose()
   assert.equal(host.sinks().length, 0)
   withStderrCapture(() => plugin(fiber.ctx))
@@ -460,7 +460,7 @@ test('plugin: the bridge shares the exporter registry without ever killing anoth
   ours.dispose()
   assert.deepEqual(host.sinks(), [otherSink], 'unloading the bridge must not take the other exporter with it')
   // And the reverse: the other fiber unloading must not kill the bridge (the
-  // upstream disposer would delete the newest entry, which used to be ours).
+  // upstream disposer deletes the newest entry — ours here).
   const restarted = host.fiber()
   withStderrCapture(() => plugin(restarted.ctx))
   assert.equal(host.sinks().length, 2)
@@ -572,7 +572,7 @@ test('plugin: a broken host context never throws out of the mount', async t => {
  * from the PINNED vendor source. This half cannot skip: `@deepseek-ai/cordis`
  * is deliberately not a dependency of this package (the managed host resolves
  * it from its own profile), so an import-based check self-skips in every CI
- * tree and would leave the API bet unenforced (2026-12 review). Reading the
+ * tree and would leave the API bet unenforced. Reading the
  * vendored signature is the same discipline the activation-probe lockstep uses
  * (`packages/dsh-runtime/test/activation/runtime-probes.test.ts`).
  */

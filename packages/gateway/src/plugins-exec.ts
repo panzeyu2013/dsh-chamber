@@ -1,6 +1,6 @@
 /**
  * Serial-queue executor for gateway third-party plugin mutations (design 21
- * §6.2/§6.3, A1 write surface; plan Phase 4.3 core).
+ * §6.2/§6.3).
  *
  * Enqueue contract: one op per profile mutation, durably journaled (write
  * order ① in plugins-journal.ts) before it is queued; a single worker drains
@@ -21,7 +21,7 @@
  *   (2) statusProbe re-check — 'starting'/'restarting' refuses the mutation
  *       (skips the spawn; recorded failed with 'instance is
  *       starting/restarting');
- *   (3) env discipline (design 21 §6.3 upgraded rules): argv is the managed
+ *   (3) env discipline (design 21 §6.3): argv is the managed
  *       dsh CLI `plugin --profile web add|remove …`; the child env keeps
  *       ONLY what pnpm/network needs — PATH + the proxy family (the same
  *       canonical whitelist the dsh-runtime installer uses,
@@ -90,8 +90,8 @@ import type { FamilyVersions, PluginRefusalCode } from '@dsh-chamber/control-pla
 export const PLUGIN_QUEUE_CAP = 8
 /** Single-op timeout default (design 21 §6.9: 10 minutes). */
 export const MUTATION_TIMEOUT_DEFAULT_MS = 10 * 60 * 1000
-/** Execution-window wait bound (design 21 decision 6/7, F7/activation
- * windows): a dequeued op whose canRun() gate is closed polls for the window
+/** Execution-window wait bound (design 21 decision 6/7): a dequeued op
+ * whose canRun() gate is closed polls for the window
  * to open for up to this long before it is marked blocked ('runtime busy;
  * retry later') — a queued op must never be dropped just because a runtime
  * mutation happened to be in flight at its dequeue instant. */
@@ -154,7 +154,7 @@ export type JournalSurface = Pick<PluginsJournal, 'appendPending' | 'recordPreIm
 
 /** Terminal callback invoked once per op after its journal terminal state
  * was recorded (including ops blocked by dispose()). Receives the recorded
- * op and the terminal status — the A1 orchestrator releases its per-op
+ * op and the terminal status — the orchestrator releases its per-op
  * profile-write lease here (the executor has no other terminal seam). */
 export type OnOpTerminal = (op: JournalOp, terminalStatus: 'ok' | 'failed' | 'blocked') => void
 
@@ -375,7 +375,7 @@ export type EnqueueResult = { ok: true; opId: string } | EnqueueRejection
 interface QueueItem extends JournalPending {
   opId: string
   /** Per-op terminal callback (enqueue-time, BEFORE the worker can process
-   * the item — the A1 orchestrator passes its lease release here so a
+   * the item — the orchestrator passes its lease release here so a
    * terminal that fires synchronously inside enqueue can never be missed). */
   terminal?: OnOpTerminal
 }
@@ -403,7 +403,7 @@ export interface PluginExecDeps {
   canRunPollMs?: number
   /** Shared terminal fallback: fires once per op (when enqueue was called
    * without a per-op hook) AFTER its journal terminal state was recorded
-   * (ok/failed/blocked, including dispose-time blocks). The A1 orchestrator
+   * (ok/failed/blocked, including dispose-time blocks). The orchestrator
    * passes its lease release PER OP via enqueue() — registration before the
    * worker can process the item is race-free; this fallback serves
    * standalone/test callers. */
@@ -629,10 +629,9 @@ export function createPluginsExec(deps: PluginExecDeps): PluginExec {
    * child without HOME; pnpm falls back to the passwd home). A pinned HOME
    * silently moves pnpm's default store elsewhere, and pnpm 11 then refuses
    * every mutation against the provisioned profile ("pnpm now wants to use
-   * the store at …") — real-machine E2E (design 21 §9/§7) caught this on
-   * the first third-party install. Caches/config stay private via the XDG +
-   * userconfig pins; the store itself remains the operator-home store the
-   * profile was linked against. */
+   * the store at …"). Caches/config stay private via the XDG + userconfig
+   * pins; the store itself remains the operator-home store the profile was
+   * linked against. */
   function ensurePrivateRunEnv(): void {
     const thirdParty = thirdPartyRoot(stateDir)
     ensurePrivateDirectoryNoFollow(thirdParty, 0o700)
@@ -766,7 +765,7 @@ export function createPluginsExec(deps: PluginExecDeps): PluginExec {
       // PATH carries the gateway's own pnpm shim (design 18 §9.2 D1): the
       // managed `dsh plugin` CLI forwards to a literal `pnpm` on PATH, and a
       // host provisioned with npm alone has none — the op would answer 127
-      // even though the gateway ships the pinned pnpm (2026-09 audit).
+      // even though the gateway ships the pinned pnpm.
       env = withPnpmOnPath(
         scrubInstallEnv(process.env, {
           DSH_HOME: join(stateDir, MANAGED_DSH_HOME_DIR),
@@ -816,13 +815,13 @@ export function createPluginsExec(deps: PluginExecDeps): PluginExec {
       complete(item, { status: 'failed', error: ERROR_RESTARTED_DURING_MUTATION })
       return
     }
-    // (6) Post-install family verification (design 21 §6.11.4): R2 judged the
+    // (6) Post-install family verification (design 21 §6.11.4): R2 judges the
     // direct spec only, but the resolved closure can hoist a runtime-family
     // copy into the managed profile (an out-of-release name or another
     // generation) — exactly the composition split no name-level rule can see.
     // A violation fails the op LOUDLY; the preImage stays retained and the
     // op's error carries the finding (design 21 §6.3 verification/rollback
-    // discipline — v1 runbook; the r2 automatic rollback column is unchanged).
+    // discipline).
     if (kind !== 'remove') {
       const family = readRuntimeFacts() === null ? null : activeFamilyFacts()
       const familyNames = family?.names ?? null
@@ -832,7 +831,7 @@ export function createPluginsExec(deps: PluginExecDeps): PluginExec {
       // official copy as outside-family — the tight direction. Only an
       // unavailable fact source (null) skips, and that skip is logged.
       // Read the version ONCE (a runtime switch between the verdict and the
-      // message must not produce a mismatched report — 2026-12 review).
+      // message must not produce a mismatched report).
       const execRuntimeVersion = readRuntimeFacts()?.version ?? null
       if (familyNames !== null) {
         // A verifier crash (unreadable tree, racing removal) is an honest

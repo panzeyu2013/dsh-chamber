@@ -118,7 +118,7 @@ test('G32/G33: the darwin tests mode carries the executed-assembly gates ci.yml 
     }
   }
 })
-// A5 (2026-12 stage-3): the root tsc program is part of the typecheck mode, so
+// A5: the root tsc program is part of the typecheck mode, so
 // a local check:typecheck cannot stay green while root tsc regresses. It must be
 // the FIRST step (ci.yml runs it before the per-package client faces).
 test('A5: the root typecheck program is the first step of the typecheck mode', () => {
@@ -497,7 +497,7 @@ test('the REAL compiled Electron artifacts execute when present (loud skip other
     + 'pnpm --filter @dsh-chamber/desktop run build:preload）')
 })
 
-// G35/P1-1: the real-repository parity assertion (MODES.static ↔ ci.yml's
+// G35: the real-repository parity assertion (MODES.static ↔ ci.yml's
 // unclassified gate steps, with the drift negative controls) lives in
 // verify-workflow-action-pins.test.mjs; this file keeps only the member the
 // parity check cannot see (a step dropped on BOTH sides stays parity-clean).
@@ -508,11 +508,10 @@ test('G35: the fault-injection matrix runs on the push path too, not only from c
   assert.ok(ciCommands.some(command => command.includes('remote-state-injection-matrix')))
 })
 
-// ---- untracked build artifacts: ensure-artifacts + the run-checks pre-step
-// (2026-12 untrack-artifacts). The seed/runtime/mobile artifacts left Git, so
-// every check mode must either self-bootstrap or fail loudly; a mode that
-// silently skipped a gate because an artifact was absent is the regression
-// these tests pin.
+// ---- untracked build artifacts: ensure-artifacts + the run-checks pre-step.
+// The seed/runtime/mobile artifacts are untracked, so every check mode must
+// either self-bootstrap or fail loudly; a mode that silently skips a gate
+// because an artifact is absent must fail these tests.
 test('ensure-artifacts: an empty fixture root reports every manifest entry and names the build command', () => {
   const empty = mkdtempSync(join(tmpdir(), 'dsh-ensure-artifacts-'))
   try {

@@ -9,20 +9,20 @@ import {
  * §6 的机器侧；design 21 §6.11「受保护集合与代耦合」的保鲜门）。
  *
  * 为什么单独成模块：`verify-upstream-touchpoints.mjs` 是顶层过程式程序、不可被
- * 测试 import（同 verify-upstream-touchpoints-args.mjs 的拆法先例）。这里只放
+ * 测试 import（与 verify-upstream-touchpoints-args.mjs 同一拆法）。这里只放
  * **纯函数**（无 fs、无 process）：调用方读文件/读目录，把文本与名字数组传进来，
  * 拿回 `{violations, notes}`，再由调用方决定 fail/warn。于是每条判据都能用合成
  * 夹具做**负例**测试（改坏派生来源/契约/播种/镜像 → 必须变红）。
  *
  * 判据的**单一来源**：C11 的核心锚/禁名判据与锁文件解析器都直接 import 运行时模块
  * `packages/control-plane/src/protected-plugins.ts`（node 24 直接跑 TS，零依赖），
- * 所以"门禁判据"与"运行时判据"不可能再漂移（2026-12 review F6）。
+ * 所以"门禁判据"与"运行时判据"不可能再漂移。
  *
  * 四门的语义（design 21 §6.11）：
  * - C11 运行时线族集合：受保护集合的 F 分量只有一个权威来源——**已提交**的
  *   `packages/desktop/vendor/dsh/pnpm-lock.yaml` 闭包；实例树枚举只作等价性
  *   交叉校验。opt-in 层（`@deepseek-ai/dsh-experimental-*`）与 dev/test 包
- *   **绝不**属于 F，否则 G1（能装官方 opt-in 层）当场失效。
+ *   **绝不**属于 F，否则能装官方 opt-in 层的能力当场失效。
  * - C12 profile 契约锚：上游仍以 `dsh.profile.bundles` 承载层列表、以
  *   `dsh.bundle.patch` 声明层、web 模板默认组合不变、profile workspace 仍是
  *   hoisted + 不自动装 peer。任一漂移 ⇒ 停升级、改派生（B₀ 快照）。
@@ -30,13 +30,13 @@ import {
  *   `CHAMBER_HOST_PACKAGES` 注册表三面一一对应（漏登记即 S 分量失真）。
  * - C14 manifest 三方镜像：`plugin-sync.ts`（producer）↔ `preload.cts` ↔
  *   `renderer/src/global.d.ts` 的字段集必须一致（ipc-surface-mirror 只覆盖
- *   后两者，producer 侧原本裸奔）。
+ *   后两者；本门补上 producer 侧）。
  */
 
 /**
- * 核心锚与禁名形态**不再在本文件声明**：运行时（`protected-plugins.ts` 的
+ * 核心锚与禁名形态**不在本文件声明**：运行时（`protected-plugins.ts` 的
  * `runtimeFamilyFindings`）与 C11 必须用同一份判据，否则"门禁绿而运行时另有一套"
- * 就没有意义（2026-12 review F6）。这里只做再导出，保持一致与向后兼容。
+ * 就没有意义。这里只做再导出，保持一致与向后兼容。
  */
 export const FAMILY_CORE = RUNTIME_FAMILY_CORE
 
@@ -126,7 +126,7 @@ export function familyFindings({ names, treeNames, sourceTreeNames = null }) {
 /**
  * 上游 profile 契约的锚点集合。每条 = 一个概念 + 命中任一候选即算通过。
  * 空白归一（连续空白 → 单空格）后再匹配，因此只对**词法**漂移敏感，不对缩进/换行敏感。
- * 全部锚点在 pin 住的上游源码上实测命中（2026-12）：
+ * 全部锚点在 pin 住的上游源码上实测命中：
  * `packages/boot/app-boot/src/profile.ts`、`apps/cli/src/plugin.ts`。
  */
 export const PROFILE_CONTRACT_ANCHORS = [
@@ -153,7 +153,7 @@ function normalizeWhitespace(text) {
  * @param {{ profileSource: string | null, pluginSource: string | null }} input
  *   两个上游源码文本；null = 该文件读不到。**全部**读不到 = 子模块未物化
  *   （调用方给出 note，不当违规——C1/C3/C5 已经会对缺失子模块响亮失败）；
- *   **部分**读不到 = 改名/搬移，是违规（2026-09-13 round-2 review F1：`plugin.ts`
+ *   **部分**读不到 = 改名/搬移，是违规（`plugin.ts`
  *   搬走而 `profile.ts` 仍可读时，10 条锚点里的 4 条会被静默丢掉且连 note 都没有）。
  * @returns {{ violations: string[], notes: string[] }}
  */
@@ -322,7 +322,7 @@ export function stripComments(source) {
 /**
  * 提取 `interface <name> { … }` 的顶层**成员文本**（`name?: type`，保持出现顺序）。
  * 与 {@link interfaceFields} 同一套分段逻辑，但保留类型文本——C14 的行类型镜像要比较
- * role/owner 的**字面量并集**，只有字段名是不够的（2026-12 review）。
+ * role/owner 的**字面量并集**，只有字段名是不够的。
  *
  * @param {string} source - TS/TSX 源码文本。
  * @param {string} interfaceName - 接口名。
@@ -410,8 +410,8 @@ export const MANIFEST_MIRRORS = [
 /**
  * C14 的**嵌套行类型**对照表：`rows` 元素的三处声明（producer 在 control-plane
  * 的 `PluginRow`，wire 两处是 `PluginRowProjection`，渲染端自持 `PluginRowShape`）。
- * 宿主接口的字段名一致并不能保证行内的字段集一致（2026-12 review：删掉
- * `owner?` 或收窄 role 字面量并集，原先 0 违规）。
+ * 宿主接口的字段名一致并不能保证行内的字段集一致（删掉
+ * `owner?` 或收窄 role 字面量并集时，仅按字段名比较会 0 违规）。
  */
 export const ROW_MIRRORS = [
   { fact: 'PluginRow', producer: 'PluginRow', preload: 'PluginRowProjection', renderer: 'PluginRowProjection' },
@@ -427,8 +427,7 @@ function literalUnionOf(signature) {
  * Literal union of a field signature, resolving a NAMED type alias declared in
  * the same source (`role: PluginRowRole` + `export type PluginRowRole = 'a' | …`).
  * The producer side declares `role` exactly that way, so a plain literal scan
- * would drop it and compare only the two wire faces (2026-09-13 round-2 review
- * F2). An unresolvable named type returns null and the caller treats it as drift
+ * would drop it and compare only the two wire faces. An unresolvable named type returns null and the caller treats it as drift
  * — never as "this side does not count".
  *
  * The alias body ends at a blank line or at the next top-level declaration (the
@@ -466,7 +465,7 @@ export function rowMirrorFindings({ producerSource, preloadSource, rendererSourc
     }
     // Field NAME only: `owner?: …` and `owner: …` are the same field. Stripping
     // the optional marker matters — the producer declares `owner?:`, so keeping
-    // the `?` made the whole owner arm dead code (2026-09-13 round-2 review F2).
+    // the `?` would make the whole owner arm dead code.
     const nameOf = (field) => field.split(':')[0].trim().replace(/\?$/, '')
     const producerNames = producer.map(nameOf)
     const preloadNames = preload.map(nameOf)
@@ -485,10 +484,10 @@ export function rowMirrorFindings({ producerSource, preloadSource, rendererSourc
     }
     // 字面量并集字段（role / owner）：三处的并集对齐，删值/加值都必须红。
     // The producer declares `role: PluginRowRole` (a NAMED alias) while the wire
-    // faces inline the literals, so a plain literal scan dropped the producer side
-    // and compared only preload ↔ renderer — the alias is resolved here, and a
+    // faces inline the literals, so a plain literal scan would drop the producer side
+    // and compare only preload ↔ renderer — the alias is resolved here, and a
     // side that declares the field with a union we cannot read is a violation
-    // instead of being silently excluded (round-2 review F2).
+    // instead of being silently excluded.
     for (const fieldName of ['role', 'owner']) {
       const sides = [
         ['producer', producer.find(field => nameOf(field) === fieldName), producerSource],
@@ -524,7 +523,7 @@ export function rowMirrorFindings({ producerSource, preloadSource, rendererSourc
 
 /**
  * C14 判据：producer ↔ preload ↔ renderer 的字段集必须逐字一致
- * （test/ipc/ipc-surface-mirror.test.ts 只覆盖 preload ↔ renderer 两道门，producer 侧裸奔）。
+ * （test/ipc/ipc-surface-mirror.test.ts 只覆盖 preload ↔ renderer 两道门；本门把 producer 侧也纳入）。
  * 宿主接口之后还要过 {@link rowMirrorFindings}（`rows` 的**元素**类型）。
  *
  * @param {{ producerSource: string, preloadSource: string, rendererSource: string }} input

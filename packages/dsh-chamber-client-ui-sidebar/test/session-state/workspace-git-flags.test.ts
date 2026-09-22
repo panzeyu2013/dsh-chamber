@@ -1,7 +1,7 @@
 /**
  * workspace-git-flags.ts unit tests (plain node:test, no dsh, no DOM): the neutral flags store —
- * set/clear/retain semantics and the monotonic version counter that drives re-render (review P1),
- * plus the orphan-preserving refresh contract (review 2026-08: a deleted worktree keeps identity).
+ * set/clear/retain semantics and the monotonic version counter that drives re-render,
+ * plus the orphan-preserving refresh contract (a deleted worktree keeps identity).
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'

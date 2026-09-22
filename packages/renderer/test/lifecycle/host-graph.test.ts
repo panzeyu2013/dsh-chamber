@@ -13,10 +13,8 @@ import { CHAMBER_COVERED_FACTORY_IDS, CHAMBER_COVERED_IDS } from '../../src/cham
 import { DEFERRED_EXTRA_ROW_IDS } from '../../src/required-extra-rows.ts'
 import { normalize, stripComments } from '../../../../scripts/dev/test-support/source-text.ts'
 
-// 0.1.2 wire shape: extra-bundle URLs are `/plugins/??<id>&rev=…` combos
-// (review-round9c P2-1) — the old `/plugins/<id>/client.js?rev=` shape 404s
-// on the new wire, so the fixture and the main-path assertions must pin the
-// combo form.
+// Extra-bundle URLs are `/plugins/??<id>&rev=…` combos, so the fixture and the
+// main-path assertions must pin the combo form.
 const row = (id: string, over: Partial<HostGraphRow> = {}): HostGraphRow => ({
   id,
   url: `/plugins/??${id}&rev=abc123`,
@@ -71,12 +69,12 @@ test('fetchHostGraph: success resolves the entries, carrying optional fields', a
 })
 
 test('fetchHostGraph: carries the row `external` requests (BootModuleRow parity)', async (t) => {
-  // Review F1 (P2): the wire field used to be dropped at parse, so an extra
-  // row's exact non-inject module requests never reached the merge — and the
-  // one case the chamber merge cannot satisfy (a request onto a covered id
-  // whose family the composite registers only AFTER the boot settles, i.e. the
-  // deferred cluster) was therefore invisible. The field is preserved now and
-  // the deferred-dependency diagnostic below matches against it.
+  // The wire `external` field must be preserved at parse: an extra row's exact
+  // non-inject module requests must reach the merge, since the one case the
+  // chamber merge cannot satisfy (a request onto a covered id whose family the
+  // composite registers only AFTER the boot settles, i.e. the deferred
+  // cluster) is otherwise invisible. The deferred-dependency diagnostic below
+  // matches against it.
   stubFetch(t, 200, envelope([
     row('@scope/pkg-ext', { external: ['@deepseek-ai/dsh-client-ui-tool/client', '@deepseek-ai/dsh-client-ui-dockkit'] }),
     row('@scope/pkg-no-ext'),
@@ -90,7 +88,7 @@ test('fetchHostGraph: carries the row `external` requests (BootModuleRow parity)
 })
 
 test('fetchHostGraph: a malformed optional field throws (A4: upstream optionalStringArray)', async (t) => {
-  // 2026-09-11 upstream-alignment (A4): the optional string-array fields are
+  // The optional string-array fields are
   // validated by upstream's own helper (manifest.ts `optionalStringArray`), the
   // one its `parseBootManifest` uses for this same wire. A present-but-malformed
   // field therefore fails the fetch LOUD (the boot then degrades to no profile
@@ -295,7 +293,7 @@ test('toExtraRows: injects the per-instance base path into root-relative urls an
 })
 
 test('toExtraRows: passes `external` through to the kernel row (never dropped, never invented)', () => {
-  // Review F1 (P2): the kernel row type (BootModuleRow) carries `external` as a
+  // The kernel row type (BootModuleRow) carries `external` as a
   // required array; the merge mirrors it exactly — the parsed requests when the
   // wire had them, [] when it did not.
   const out = toExtraRows([
@@ -473,10 +471,10 @@ test('collectExtraRows: a local 404 is a chamber-side gap; a remote 404 keeps th
 })
 
 test('collectExtraRows: an exhausted 503 budget names itself, publishes the diagnostic and returns []', async (t) => {
-  // 2026-09-10 (sidebarRight 彻底修复): this used to degrade in TOTAL silence —
-  // the operator saw nothing, the connections page still said 正常, and the App
-  // had no fact to self-heal from. A source that only needs longer is now
-  // recoverable; a source that never serves is at least visible.
+  // Degrading in TOTAL silence leaves the operator seeing nothing, the
+  // connections page still saying 正常, and the App with no fact to self-heal
+  // from. A source that only needs longer is recoverable; a source that never
+  // serves is at least visible.
   const stub = stubFetch(t, 503, { code: 'instance_unavailable', error: 'instance not ready' })
   const consoleCapture = captureConsoleError(t)
   const noSleep = async () => {}
@@ -502,7 +500,7 @@ test('collectExtraRows: an exhausted 503 budget names itself, publishes the diag
 
 test('collectExtraRows: a slow source is waited for, then served on a fresh budget (2026-09-10)', async (t) => {
   // Cold local start / restart-straddled attach: the 503 budget alone is far
-  // shorter than the spawn, which used to cost the boot its whole profile
+  // shorter than the spawn, so the boot would lose its whole profile
   // client-plugin set (ui-chat pends on sidebarRight → no conversation view).
   let calls = 0
   stubFetchImpl(t, (() => {
@@ -543,12 +541,12 @@ test('collectExtraRows: a gate that never sees the source serve ends degraded (n
 
 test('collectExtraRows: a REMOTE 404 endpoint (no graph injected) stays a documented non-degrade', async (t) => {
   // The gateway/mobile shape legitimately runs without the graph — that is not
-  // a degrade, and the App must NOT be asked to re-boot for it. 2026-12 (boot
-  // 死区收敛 W3) narrowed this boundary to the 404 shape ONLY: every other
-  // channel failure now reports the degrade fact, because that mount ships a
-  // plugin-less shell whose only explanation was a diagnostic rendered by the
-  // packages this very boot failed to load (see the new test below).
-  // FIX 6 (2026-12): the exemption is REMOTE-only — the chamber-managed local
+  // a degrade, and the App must NOT be asked to re-boot for it. This boundary is
+  // the 404 shape ONLY: every other channel failure reports the degrade fact,
+  // because that mount ships a plugin-less shell whose only explanation would be
+  // a diagnostic rendered by the packages this very boot failed to load (see the
+  // sibling test below).
+  // The exemption is REMOTE-only — the chamber-managed local
   // instance's 404 is its own local-graph-not-injected fact, owned by the
   // sibling test below through the same onGraphUnavailable seam.
   stubFetch(t, 404, { code: 'not_found', error: 'unknown method' })
@@ -588,9 +586,9 @@ test('collectExtraRows: a local 404 surfaces the local-graph-not-injected gap th
 })
 
 test('collectExtraRows: a 502/504 channel failure reports the App-facing degrade fact (2026-12 W3)', async (t) => {
-  // 隧道活着而远端 dsh 端口死了：本轮挂载缺掉整套 profile 客户端插件，而旧契约
-  // 只发一条"由没被加载的包渲染"的诊断——用户侧零解释。这里钉住新契约：
-  // 通道失败（非 404）必须上浮 onGraphUnavailable，让 App 的 boot-gap 横幅说得出话。
+  // 隧道活着而远端 dsh 端口死了：本轮挂载缺掉整套 profile 客户端插件，只发一条
+  // "由没被加载的包渲染"的诊断会让用户侧零解释。通道失败（非 404）必须上浮
+  // onGraphUnavailable，让 App 的 boot-gap 横幅说得出话。
   stubFetch(t, 502, { code: 'upstream_failed', error: 'upstream request failed' })
   captureConsoleError(t)
   const unavailable: string[] = []
@@ -941,9 +939,9 @@ test('Git worktree client is a first-screen covered factory (static composite lo
   assert.ok(CHAMBER_COVERED_FACTORY_IDS.includes(id))
 })
 
-// ── C3 gate (2026-09 性能审计): `awaitBeforeLoad` must settle before the
+// ── `awaitBeforeLoad` must settle before the
 // first extra-bundle load pass when rows exist, and be skipped entirely when
-// dedupe leaves nothing to load (an absent gate keeps the pre-C3 ordering).
+// dedupe leaves nothing to load (an absent gate starts the load pass immediately).
 test('collectExtraRows: awaitBeforeLoad settles before the first bundle load pass (rows>0)', async (t) => {
   stubFetch(t, 200, envelope([row('@scope/c3-gate-a')]))
   const order: string[] = []

@@ -1,8 +1,8 @@
 /**
  * actionHintKey / isUserActionPhase unit tests — the repair-direction hint
- * selection for terminal connection failures (2026-08 UI misdirection fix:
- * an instance-level probe failure must never render the SSH auth-failure
- * hint, because the tunnel itself is fine).
+ * selection for terminal connection failures: an instance-level probe failure
+ * must never render the SSH auth-failure hint, because the tunnel itself is
+ * fine.
  */
 
 import { test } from 'node:test'
@@ -45,9 +45,9 @@ test('no hint without requiresUserAction or on a non-terminal phase', () => {
 })
 
 test('dsh over SSH: an endpoint-class failure shows the instance hint, never the SSH auth hint', () => {
-  // The exact regression: a deterministic probe failure (e.g. HTTP 404 from
-  // a dsh instance with breaking changes) used to render the SSH
-  // auth-failure hint although the tunnel was fine.
+  // The case this guards: a deterministic probe failure (e.g. HTTP 404 from a
+  // dsh instance with breaking changes) must not render the SSH auth-failure
+  // hint when the tunnel is fine.
   const s = status({ userActionKind: 'endpoint' })
   assert.equal(actionHintKey(spec(), s, 'error'), 'endpointActionHint')
   assert.equal(actionHintKey(spec(), s, 'degraded'), 'endpointActionHint')

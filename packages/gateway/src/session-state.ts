@@ -1,11 +1,8 @@
 /**
- * Gateway-side session-state watcher (plan of record
- * docs/progress/todo/remote-session-state-and-switch.md section 3.2/4, W1
- * server face; executable blueprint
- * docs/progress/todo/notes/gateway-session-state-blueprint.md sections 3-9).
+ * Gateway-side session-state watcher.
  *
- * The gateway is a READ-ONLY mirror of dsh session facts (plan rulings 1/19;
- * the design 17 section 10 carve-out): it watches the local managed dsh through
+ * The gateway is a READ-ONLY mirror of dsh session facts (the design 17
+ * section 10 carve-out): it watches the local managed dsh through
  * the control-plane mux client (packages/control-plane/src/session-mux.ts),
  * keeps a per-session state machine with a monotonic cursor, persists one
  * snapshot at <stateDir>/session-state/state.json, and serves the four routes
@@ -20,13 +17,13 @@
  * All four sit inside the existing /chamber/* auth gate (dispatch.ts). The
  * watcher never writes to dsh, never answers a waterfall on its own (the mux
  * holds the frame until ANOTHER downstream mux client is attached AND the 1.5s
- * grace elapsed - plan section 4 observer discipline / blueprint section 5.4),
- * and never stores title/cwd/message/approval payloads (privacy whitelist 7).
+ * grace elapsed - observer discipline), and never stores
+ * title/cwd/message/approval payloads (privacy whitelist).
  *
- * Track B (W0, static+measured): the host summary updatedAt only advances on
+ * Track B (static+measured): the host summary updatedAt only advances on
  * user-authored messages, so a completion is the api-session/status
- * true->false edge plus ONE session/follow read of the tail turn/end.reason
- * (plan section 3.1). completedAt is armed only when that reason classifies as
+ * true->false edge plus ONE session/follow read of the tail turn/end.reason.
+ * completedAt is armed only when that reason classifies as
  * completed; aborted+user is a user stop; blocked/error/max-tokens/interrupted
  * are neutral (classifyTurnEnd in the protocol module). An unreadable tail is
  * the documented conservative fallback: the edge still arms completedAt (never
@@ -44,7 +41,7 @@
  * initial, corrupt is never a fake-empty, 0600 leaves under a 0700 directory).
  * There is NO JSONL: the SSE resume window is the in-memory cursor ring, and a
  * restart deliberately invalidates it (a Last-Event-ID that cannot be satisfied
- * makes the client refetch the snapshot - plan section 4). The ring is bounded
+ * makes the client refetch the snapshot). The ring is bounded
  * and the snapshot is written on a 1s debounce, on shutdown and on flush; an
  * abrupt process kill can lose at most the last debounce window.
  */
@@ -102,7 +99,7 @@ import {
 } from '@dsh-chamber/control-plane'
 import { readBoundedBody } from './http-utils.ts'
 
-// Gateway-owned limits (blueprint section 4.3). Protocol constants are
+// Gateway-owned limits. Protocol constants are
 // imported, never re-declared: session-state-protocol.ts is the single source.
 
 /** State root under the gateway stateDir. */
@@ -117,7 +114,7 @@ export const MAX_SESSIONS = 2_000
 export const MAX_READ_CLIENTS = 64
 /** Cap of per-session marks retained for one client. */
 export const MAX_MARKS_PER_CLIENT = 5_000
-/** Read-mark client TTL (plan section 4: old marks are cleaned by the server). */
+/** Read-mark client TTL (old marks are cleaned by the server). */
 export const READ_MARK_TTL_MS = 90 * 24 * 60 * 60 * 1000
 /** In-memory SSE resume window (deltas, not bytes). */
 export const SSE_RING_MAX = 1_024
@@ -131,7 +128,7 @@ export const SSE_KEEPALIVE_MS = 20_000
 export const PERSIST_DEBOUNCE_MS = 1_000
 /** Event-silence window handed to the mux (R21); the mux resubscribes. */
 export const DEFAULT_EVENT_SILENCE_MS = 45_000
-/** Periodic full baseline in sse mode (correctness component, plan section 4). */
+/** Periodic full baseline in sse mode (correctness component). */
 export const DEFAULT_RECONCILE_MS = 60_000
 /** Baseline cadence while the live event stream is unavailable (poll mode). */
 export const DEFAULT_POLL_MS = 15_000
@@ -148,7 +145,7 @@ const EVENT_ONLY_FEATURES: ReadonlySet<SessionStateFeature> = new Set<SessionSta
   'session-state.pending-graph',
 ])
 
-/** Features advertised for one runtime mode (protocol-compat blueprint 2). */
+/** Features advertised for one runtime mode. */
 export function featuresForMode(mode: SessionStateMode): readonly SessionStateFeature[] {
   if (mode === 'off') return []
   if (mode === 'sse') return SESSION_STATE_FEATURES
@@ -342,9 +339,7 @@ function createStoredRow(sessionId: string, at: number): StoredRow {
  */
 export function createSessionStateStore(deps: SessionStateStoreDeps): SessionStateStore {
   const now = deps.now ?? (() => Date.now())
-  // Observer epoch id; a fresh one per process (gap reconstruction input). The
-  // former injectable deps.epoch seam had zero suppliers anywhere (2026-12
-  // audit F43).
+  // Observer epoch id; a fresh one per process (gap reconstruction input).
   const epoch = randomUUID()
   const sessionStateDir = join(deps.stateDir, SESSION_STATE_DIR_NAME)
   const filePath = join(sessionStateDir, SESSION_STATE_FILE_NAME)
@@ -533,7 +528,7 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
     integrity = 'corrupt'
     recoveryDetail = error instanceof Error ? error.message : String(error)
     // Corrupt is never a fake-empty AND never an overwrite: keep serving a cold
-    // in-memory state, refuse persistence, and stay loud (blueprint 4.3/5.2).
+    // in-memory state, refuse persistence, and stay loud.
     warn('session-state snapshot is corrupt and will NOT be overwritten (' + recoveryDetail
       + '); starting cold - unread may be lost, never fabricated')
     doc = emptyDocument(now())
@@ -1386,7 +1381,7 @@ export function parseReadRequestBody(value: unknown): ReadRequest | null {
 }
 
 /** Parse one read-all body: through is REQUIRED (the server must never compute
- *  "now" - plan section 4/R13; session-state-protocol.ts ReadAllRequest). */
+ *  "now"; session-state-protocol.ts ReadAllRequest). */
 export function parseReadAllRequestBody(value: unknown): ReadAllRequest | null {
   if (!isPlainRecord(value)) return null
   const clientId = value.clientId
@@ -1420,7 +1415,7 @@ export function createChamberSessionState(deps: ChamberSessionStateDeps): Chambe
     const base = deps.store.snapshotFor(clientId, mode(), deps.observer.hostInfo())
     const observer = deps.observer.status()
     const storeStatus = deps.store.status()
-    // 仪表 I6/I16（plan §10）：把只读自诊断放进描述符的加法字段——客户端与验收仪器
+    // 仪表 I6/I16：把只读自诊断放进描述符的加法字段——客户端与验收仪器
     // 因此能"看见"丢帧、重连、follow 失败与分类构成，而不是从沉默里推断。
     return {
       ...base,
@@ -1559,7 +1554,7 @@ export function createChamberSessionState(deps: ChamberSessionStateDeps): Chambe
       }
       // In this branch replay !== null, so lastEventId is non-null (the replay
       // call is skipped when the header is absent); the explicit guard keeps the
-      // narrowing local to this line (baseline type repair, 2026-12 audit).
+      // narrowing local to this line.
       if (deliveredCursor < 0 && lastEventId !== null) deliveredCursor = lastEventId
     } else {
       const body = snapshot(client.clientId)
@@ -1614,9 +1609,8 @@ export function createChamberSessionState(deps: ChamberSessionStateDeps): Chambe
 
   async function handle(req: ApiRequest, res: ApiResponse, pathname: string): Promise<boolean> {
     if (!enabled) {
-      // New desktop distinguishes 404 (old gateway) from 503
-      // session_state_disabled (protocol-compat blueprint 5.2;
-      // classifySessionStateProbe reads exactly this body).
+      // The desktop distinguishes 404 (gateway without this surface) from 503
+      // session_state_disabled (classifySessionStateProbe reads exactly this body).
       return json(res, 503, { error: 'session_state_disabled', code: 'session_state_disabled' })
     }
     if (pathname === SESSION_STATE_PATH) {
@@ -1689,7 +1683,7 @@ export interface SessionStateServiceDeps {
   getLocalDshPort(): number | null
   /** Plane connectionState string (runtime-manager / control-plane). */
   getConnectionState(): string
-  /** The D3/F4 exposure gate (never observe a quarantined candidate tree). */
+  /** The exposure gate (never observe a quarantined candidate tree). */
   canExposeLocal(): boolean
   /** gateway-proxy.getDiagnostics().activeStreams > 0 (the delegate gate). */
   otherMuxClientsConnected(): boolean

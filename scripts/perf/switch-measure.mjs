@@ -20,7 +20,7 @@ const rapidFlag = process.argv.indexOf('--rapid')
 const rapidN = rapidFlag >= 0 ? Number(process.argv[rapidFlag + 1]) : 0
 const outFlag = process.argv.indexOf('--out')
 const outPath = outFlag >= 0 ? process.argv[outFlag + 1] : 'scripts/perf/data/switch-baseline.json'
-/** I9（plan §10）：来源/工作区目标必须可参数化——写死标签是「点不中反而更快」的来源。 */
+/** I9：来源/工作区目标必须可参数化——写死标签是「点不中反而更快」的来源。 */
 const argOf = (name, fallback) => {
   const i = process.argv.indexOf(name)
   return i >= 0 ? process.argv[i + 1] : fallback
@@ -28,8 +28,8 @@ const argOf = (name, fallback) => {
 const TARGET_A = { source: argOf('--source-a', '本地实例'), workspace: argOf('--workspace-a', 'Desktop') }
 const TARGET_B = { source: argOf('--source-b', 'test'), workspace: argOf('--workspace-b', 'test') }
 const requireFlag = process.argv.includes('--require-switch')
-// nit2 (2026-09 review)：与 boot-measure 同病——非有限正整数（含首参误为 --out
-// 得 NaN）时静默跑 0 次并写出空文件，改为显式报错退出；rapid 模式不消费 cycles，
+// 非有限正整数（含首参误为 --out 得 NaN）必须显式报错退出，不得静默跑 0 次
+// 并写出空文件；rapid 模式不消费 cycles，
 // 只校验所用模式的那个参数
 const USAGE = '用法：node scripts/perf/switch-measure.mjs [cycles=3] [--rapid N] [--out scripts/perf/data/switch-baseline.json] [--source-a <id|标签> --workspace-a <标签> --source-b <id|标签> --workspace-b <标签>] [--require-switch]'
 if (rapidFlag >= 0) {
@@ -52,7 +52,7 @@ const ev = async (expression) => (await cdp.send('Runtime.evaluate', { expressio
 
 /**
  * 点击来源 `sourceRef`（**id 或标签**）下标题为 `wsLabel` 的工作区行。
- * I9：定位锚点是 `[data-chamber-section]`（来源）与行内文本，**不再全页扫 treeitem 文本**
+ * 定位锚点是 `[data-chamber-section]`（来源）与行内文本，**不扫全页 treeitem 文本**
  * ——全页文本匹配是「点错来源也返回 OK」的根源。返回结构化结果：
  *   { ok, reason, instanceId }；reason ∈ OK | NOROW | HIDDEN | NOSECTION。
  */
@@ -120,8 +120,8 @@ const MARKER = `(() => {
   const head = body.slice(0, 260)
   const lt = window.__dshPerf ? window.__dshPerf.longtasks : []
   const lastLtEnd = lt.length ? lt[lt.length - 1].start + lt[lt.length - 1].dur : 0
-  // I9：把**当前绘制中的实例**记进样本——"安静"不等于"目标已上屏"，
-  // paintSeen 就是这两者的机器区分（见 §4-R7 的三要素判据）。
+  // 把**当前绘制中的实例**记进样本——"安静"不等于"目标已上屏"，
+  // paintSeen 就是这两者的机器区分。
   const view = document.querySelector('.instance-view:not(.instance-hidden)')
   const instance = view ? view.getAttribute('data-instance') : null
   return { done: false, skeleton, head, instance, quietMs: Math.round(performance.now() - lastLtEnd), at: Math.round(performance.now()) }
@@ -139,7 +139,7 @@ async function switchAndMeasure(label, target, expectedInstance) {
   const skelEnd = skelIdx >= 0 ? trail.findIndex((s, i) => i > skelIdx && !s.skeleton) : -1
   const s = summarize(after, label)
   s.clicked = clicked
-  // 口径（2026-09 review minor2，见 README「指标口径」）：click → 首个「安静」
+  // 口径（见 README「指标口径」）：click → 首个「安静」
   // 轮询间隔 = settle **下界**，非内容稳定证明——轮询只断言 !skeleton &&
   // quietMs>700，不校验目标视图/内容确已切换
   s.clickToSettledMs = res.elapsedMs
@@ -159,7 +159,7 @@ async function switchAndMeasure(label, target, expectedInstance) {
 }
 
 const results = []
-// G3（审计假绿面 #3）：相位异常原本全吞、results=[] 也 exit 0 ⇒ 一次"跑了个寂寞"被当成基线。
+// G3：相位异常不得全吞、results=[] 不得 exit 0 ⇒ 一次"跑了个寂寞"不能被当成基线。
 let phaseFailures = 0
 console.log('prep:', await closeSettingsIfOpen())
 // 打开两个源的工作区行到可见态（树展开）
@@ -188,7 +188,7 @@ if (rapidN > 0) {
   const after = await readPerf(cdp, cdp.send)
   const s = summarize(after, `rapid-x${rapidN}`)
   s.clicksMs = Date.now() - t0
-  // 口径（2026-09 review minor2，同 clickToSettledMs）：末次 click → 首个「安静」
+  // 口径（见 README「指标口径」，同 clickToSettledMs）：末次 click → 首个「安静」
   // 轮询间隔 = settle **下界**；I9 追加 paintSeen：安静且目标实例在屏，才算切换发生。
   s.lastClickToQuietMs = res.elapsedMs
   const rapidTrail = Array.isArray(res.trail) ? res.trail : []
@@ -207,8 +207,8 @@ if (rapidN > 0) {
   }
 }
 
-// nit4 (2026-09 review)：输出补 env 键（与 boot/eval/disk-walk 的 env 键同构）；
-// nit1：--out 目标目录未必已存在，写前先建（仿 disk-walk-baseline.mjs）
+// 输出带 env 键（与 boot/eval/disk-walk 的 env 键同构）；
+// --out 目标目录未必已存在，写前先建（仿 disk-walk-baseline.mjs）
 if (results.length === 0) {
   console.error('switch-measure FAIL：没有任何一次测量落盘（相位全部异常）——不写空基线、不 exit 0。')
   cdp.close()

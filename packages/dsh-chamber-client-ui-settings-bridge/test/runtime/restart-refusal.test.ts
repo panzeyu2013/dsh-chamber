@@ -1,14 +1,11 @@
 /**
- * The bridge's refusal projection (design 21 §5.1/§5.2) — the bridge-local half
- * of what used to be a cross-package lockstep test.
+ * The bridge's refusal projection (design 21 §5.1/§5.2).
  *
  * The classifier and the verbatim-error projection are single-sourced in the
  * sidebar shared face (src/shared/runtime-refusal.ts); what stays bridge-local
  * is the dictionary mapping and its wording, so this file asserts exactly that:
  * the delegation, the localized sentence with {code}, and the bridge
- * dictionaries' placeholders. No cross-package import (the old lockstep test
- * imported both plugins' sources and was the settings-bridge <-> settings
- * package cycle's only cause).
+ * dictionaries' placeholders. No cross-package import.
  *
  * Run directly: node packages/dsh-chamber-client-ui-settings-bridge/test/runtime/restart-refusal.test.ts
  */
@@ -48,7 +45,7 @@ test('a 409 renders the localized sentence with {code}, never the server body as
         assert.notEqual(text, serverError, 'a 409 body is never projected verbatim')
       }
     }
-    // zh carries no English server phrasing at all (the half the old lockstep test pinned).
+    // zh carries no English server phrasing at all.
     assert.doesNotMatch(bridgeRestartRefusalText(body, status, key => zh[key]), /is not running|already in flight|managed dsh/u, JSON.stringify(body))
   }
 })

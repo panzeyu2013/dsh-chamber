@@ -1,5 +1,5 @@
 /**
- * 会话事实对账链（运行位活性守卫的 L1 执行半；）。
+ * 会话事实对账链（运行位活性守卫的 L1 执行半）。
  * ## 为什么需要它
  * 官方 session 的 running 位只由 mux 上 emit 型转发事件 `api-session/status`
  * 递送（无重传），而官方唯一的收敛路径 `handleConnected() → refreshList()`
@@ -24,10 +24,10 @@
  * - 可测：`schedule/cancel/now` 可注入（仓内 skill/producer 纪律：生产端文件
  *   导入 React/CSS 无法被 node 测试导入，状态机因此抽到 shared/）。
  */
-//  this module was import-free (a pure state machine). It now reads its five ladder
-// thresholds from the shared table instead of owning them; that is the whole reason it
-// has this first import. The dependency is a pure, import-clean package (no node
-// builtins, no React), so the node tests above keep importing this file directly.
+//  This module reads its five ladder thresholds from the shared table instead of
+// owning them; that is the whole reason it has this first import. The dependency is a
+// pure, import-clean package (no node builtins, no React), so the node tests above
+// keep importing this file directly.
 import {
   LADDER_TABLES,
   decideAfterAuthorityProbe,
@@ -48,24 +48,23 @@ export interface SessionFactReconcileDeps {
    * reject）——因此「promise 解决」**不等于**「拿到权威结论」。本 seam 返回
    * false/undefined 时，本次尝试记失败（守卫据此升级 L2/L3）。生产端接独立的
    * unary 权威探针 + 权威 running 位对表（见 sidebar client/index.ts）。
-   * **三值**（）：`converged`（权威确认，含「宿主确实还在跑」）/
+   * **三值**：`converged`（权威确认，含「宿主确实还在跑」）/
    * `stale`（权威**正面证伪**：官方位说 running 而权威说没在跑）/ `unknown`
    * （辅助探针自己失败——它是**另一条载体**（HTTP 代理），不能证明被守卫的 WS
    * 事实通道坏）。`unknown` 不升级也不抹掉等待（守卫保留「等回执」计时，超期后
    * 仍会按「长期拿不到权威结论」升级），从而既不制造假 reconnect 风暴，也不把
    * 持续拿不到权威结论误判成健康。
-   * **沉默不作证，但也绝不是覆盖**（）：官方 `refreshList()` 的**主流**
+   * **沉默不作证，但也绝不是覆盖**：官方 `refreshList()` 的**主流**
    * 失败形态是**照常 resolve** 成 `ok:false`（vendor：只把 `listState` 置 `'error'`），而
    * `ISessions.refresh()` 又把结果抹平成 `Promise<void>` ⇒ reconciliation 侧**观察不到**
    * 「这次 refresh 其实没应用」。因此「权威读没有覆盖某个 running 行」一律按**无结论**
    *（`unknown`）处理，与 refresh 相位的成败无关：真正成功的 refresh 会用
    * `mergeOrderedBaseline` 把缺席 id 从 store 清掉，留下的「未覆盖 running 行」本身就说明
-   * 官方对账没落地。旧实现只在 refresh 失败/超时时这么判，于是最主流的形态仍会回执
-   * ok:true 并永久关掉升级阶梯（）。
+   * 官方对账没落地。
    */
   readonly verify?: () => Promise<SessionFactVerdict>
   /**
-   * **写回 seam**（）：当 `verify` 判 `stale`
+   * **写回 seam**：当 `verify` 判 `stale`
    * （独立权威读**正面证伪**官方 `running` 位）时，把权威结论写进官方 store 自己的
    * 公开写路径（`ClientSessions.handleSessionStatus(id, false)`），并**自校验**
    * （store 快照里被证伪的会话已不再是 running）。返回 true = 已写入且校验通过 ——
@@ -80,7 +79,7 @@ export interface SessionFactReconcileDeps {
    * （refresh/重连）都可以覆盖它——host 永远赢，无 TTL、无 latch。
    * 「官方 session.list 单飞悬挂」下 refresh 永不结算：本链的 refresh 相位超时/被拒不
    * 直接结算，而是照常进入权威相位（见 attempt()），所以该形态下写回仍可达；悬挂的
-   * **store 级** loading 本身仍只能由重载收口（STATUS ③）。
+   * **store 级** loading 本身仍只能由重载收口。
    */
   readonly correct?: () => Promise<boolean> | boolean
   /** 时钟。 */
@@ -107,8 +106,8 @@ export interface SessionFactReconcileDeps {
    * **verify 相位**的上限（默认 65s）。必须覆盖**两次串行**权威 unary 探针（N=2 确认），
    * 每次上限 = `INSTANCE_UNARY_TIMEOUT_MS`（30s，shared/instance-api.ts 导出）⇒ ≥ 60s，
    * 本值留 5s 余量。两个相位共用一个计时器时，慢宿主上「refresh 花了十几秒 + 探针还没
-   * 回来」会被预算误判成「拿不到权威结论」⇒ 假 L2 与假横幅（
-   * 把预算改到 N=2 口径）。进入 verify 相位时重新起算。
+   * 回来」会被预算误判成「拿不到权威结论」⇒ 假 L2 与假横幅。进入
+   * verify 相位时重新起算。
    */
   readonly verifyTimeoutMs?: number
 }
@@ -140,11 +139,11 @@ export interface SessionFactReconcileSnapshot {
   readonly corrected?: boolean
 }
 
-//  this module no longer OWNS its five ladder thresholds. Every use site below reads
+// the module does not OWN its five ladder thresholds. Every use site below reads
 // them from the shared table (@dsh-chamber/dsh-stream-state, LADDER_TABLES.factReconcile),
-// so the retired names are gone rather than left as aliases - an alias would keep the
-// scatter metric alive and re-introduce a second place to look. The values are unchanged.
-// 写回相位的上限（）的**理由**保留如下（值在表的 correctivePhaseTimeoutMs）：
+// and no alias is left behind - an alias would keep the scatter metric alive and
+// re-introduce a second place to look.
+// 写回相位的上限的**理由**保留如下（值在表的 correctivePhaseTimeoutMs）：
 // 探针返回后只剩 store 写 + 自校验（毫秒级），给一个短上限既防「correct 悬挂把单飞链挂死」，
 // 又把「结算后写回」窗口从 65s 压到 5s。
 
@@ -154,8 +153,7 @@ export interface SessionFactReconcileSnapshot {
  * 守卫的 `refreshOutcomeTimeoutMs`（190s），否则慢宿主会被误判成「拿不到权威结论」
  * ⇒ 假 L2/假横幅；`verifyTimeoutMs` 还必须覆盖**两次串行**独立 unary 探针（N=2 确认），
  * 每次上限 = `INSTANCE_UNARY_TIMEOUT_MS`（30s，shared/instance-api.ts 导出）⇒ ≥ 60s，
- * 本值 65s 留 5s 余量（
- * session.list 超过 ~17.5s」的形态永远判 unknown ⇒ 写回不可达）。渲染端接线测试
+ * 本值 65s 留 5s 余量。渲染端接线测试
  * `packages/renderer/test/wiring/session-liveness-wiring.test.ts` 直接消费本对象做
  * 推导，两侧禁止各写一份数字。
  */
@@ -167,7 +165,7 @@ export const SESSION_FACT_RECONCILE_DEFAULTS = {
 } as const
 
 /**
- * 默认定时器**成对**提供（）：生产装配不传
+ * 默认定时器**成对**提供：生产装配不传
  * schedule/cancel，若只给 schedule 而不给配对的 cancel，attempt 超时定时器永远
  * 取消不掉——它在结算之后照常开火，把一次**成功**的结算改写成 ok:false（并可能
  * 再排一轮重试），于是守卫在完全健康的通道上收到假失败回执 ⇒ 假 L2/假横幅。
@@ -192,8 +190,8 @@ export interface AuthoritativeSessionFactRow {
 
 /**
  * 是否还有「可对账」的 running 行（tier-1.5 本地判定的输入）：只有**非子代理**
- * 行才算。返回 false 时本轮没有对账对象，**不必发任何 host 读**（修复成功后的
- * 常见路径因此只需官方 refresh 的 1 次 host 读）。
+ * 行才算。返回 false 时本轮没有对账对象，**不必发任何 host 读**（该常见路径
+ * 因此只需官方 refresh 的 1 次 host 读）。
  * @param official - 官方 store 的 byId 视图。
  * @returns 是否存在需要权威对账的 running 行。
  */
@@ -213,7 +211,7 @@ export function hasReconcilableRunning(
  * - `unknown`：权威读数对该 running 行**沉默**（未覆盖）⇒ 本轮拿不到正面覆盖，不许按
  *   健康结算。**无条件**成立：官方 refresh 的失败可以 resolve 成 `ok:false`（观察不到），
  *   所以不能靠 refresh 的成败来 gate 这一步；否则「官方对账没落地 + 权威缺席行」会被
- *   回执成 ok:true、升级阶梯被永久关掉（）；
+ *   回执成 ok:true、升级阶梯被永久关掉；
  * - `converged`：无正面证伪，且每个 running 行都被本次读数**覆盖**。
  * @param opts - 第一次独立权威读的结果。
  * @returns 直接结论，或「需要第二读」。
@@ -390,7 +388,7 @@ export class SessionFactReconciler {
       pending = this.deps.refresh()
     } catch (error) {
       // 调用点同步抛错：与 rejection 同一条路（先进权威相位——另一条载体不依赖
-      // refresh），不再直接结算永久失败（）。
+      // refresh），不直接结算永久失败。
       pending = Promise.reject(error)
     }
     if (pending === undefined) {
@@ -403,7 +401,7 @@ export class SessionFactReconciler {
       this.finish(false, 'stale')
       return
     }
-    // 两个相位各有独立硬上限（）：refresh 与 verify 走**不同载体**
+    // 两个相位各有独立硬上限：refresh 与 verify 走**不同载体**
     // （官方单飞 refresh vs 独立 unary 探针），共用一个计时器会让「refresh 花了十几秒
     // + 慢宿主探针还没回来」被误判成「拿不到权威结论」⇒ 假 L2/假横幅。verify 相位
     // 的预算必须 ≥ 探针自身的 30s AbortSignal 上限。
@@ -423,8 +421,8 @@ export class SessionFactReconciler {
       return true
     }
     /**
-     * 相位计时器（**两相位语义不同**，）：refresh 相位的
-     * 超时/失败**不再直接结算**——权威相位（独立 unary 探针 + tier-3 写回）走的是另
+     * 相位计时器（**两相位语义不同**）：refresh 相位的
+     * 超时/失败**不直接结算**——权威相位（独立 unary 探针 + tier-3 写回）走的是另
      * 一条载体，**不依赖 refresh**；只有它也给不出结论时才按相位语义结算。verify 相位
      * 超时 = 探针没回来 ⇒ `unknown`（不升级、不清等待），与探针抛错同一条语义。
      */
@@ -444,11 +442,11 @@ export class SessionFactReconciler {
      * 权威相位（独立 unary 探针 + 可能的 tier-3 写回）。**三个入口**：refresh 结算、
      * refresh 被拒、refresh 相位超时——后两者正是「官方 `session.list` 单飞悬挂 / 拉取
      * 失败」形态：官方对账没有结论，但另一条载体仍能给出权威 running 位，写回因此仍可
-     * 把事实纠正（）。
+     * 把事实纠正。
      * `authorityStarted` 保证单相位只跑一次：晚到的 refresh 结算不得再开。
      * @param refreshFailure - 从失败入口进入时携带的 refresh 错误（观测用）：权威相位若
      *   仍收敛，说明官方 refresh 已坏而事实由另一条载体裁决——必须留一行有界告警，
-     *   否则「静默降级」会掩盖一个持续损坏的官方通道（）。
+     *   否则「静默降级」会掩盖一个持续损坏的官方通道。
      */
     let authorityStarted = false
     const runAuthorityPhase = async (refreshFailure?: unknown): Promise<void> => {
@@ -471,13 +469,12 @@ export class SessionFactReconciler {
         verdict = 'unknown'
       }
       // 探针已返回：剩下的只有 store 写 + 自校验（毫秒级），给一个**短**上限，
-      // 免得「探针返回后 correct 悬挂」把单飞链挂死（原缺陷类）；同时也把
-      // 「结算后再写回」的窗口从 65s 压到 5s（）。
+      // 免得「探针返回后 correct 悬挂」把单飞链挂死；同时也把「结算后再写回」的
+      // 窗口限定为 5s。
       cancelTimer(phaseTimer)
       armPhase(LADDER_TABLES.factReconcile.correctivePhaseTimeoutMs, 'verify')
       // dispose 之后，或**相位计时器已经把本 attempt 结算掉之后**，不得再有副作用：
-      // 写回会改官方 store，而被遗弃的 verify 仍可能晚到返回 stale（
-      // 用注入时钟复现：verify 相位 65s 超时结算 unknown 后，写回仍被调用）。
+      // 写回会改官方 store，而被遗弃的 verify 仍可能晚到返回 stale。
       if (this.disposed || attemptSettled) return
       const refreshNote = refreshFailure === undefined
         ? ''
@@ -485,7 +482,7 @@ export class SessionFactReconciler {
           + (refreshFailure instanceof Error ? refreshFailure.message : String(refreshFailure)) + ')'
       /**
        * 观测（有界，每 attempt 至多一次）：refresh 坏了、但权威相位仍给出收敛结论时，
-       * 必须留一行告警——否则「官方通道持续损坏」会变成静默降级（）。
+       * 必须留一行告警——否则「官方通道持续损坏」会变成静默降级。
        * 不收敛的路径不在这里 warn：refresh 失败已并入 settle 的错误文本。
        */
       const warnIfRefreshWasBroken = (): void => {
@@ -494,9 +491,9 @@ export class SessionFactReconciler {
           + ` the verdict instead:${refreshNote}`)
       }
       /**
-       * 下面四条内联分支现在是**包内纯判定**（`decideAfterAuthorityProbe` /
+       * 下面四条分支是**包内纯判定**（`decideAfterAuthorityProbe` /
        * `decideAfterWriteBack`）。这里只保留编排：定时器、seam、结算栅栏与告警时机。
-       * 判定进包后，它可以被单独用例覆盖，而不再只能靠整条异步链间接验证。
+       * 纯判定可以被单独用例覆盖，不必只靠整条异步链间接验证。
        */
       const settleFromStep = (step: AuthorityStep): void => {
         if (step.step !== 'settle') return
@@ -538,7 +535,7 @@ export class SessionFactReconciler {
       () => { void runAuthorityPhase() },
       (error: unknown) => { void runAuthorityPhase(error) },
     )
-    // refresh 相位超时：不再直接判失败（见 runAuthorityPhase 文档），先进权威相位。
+    // refresh 相位超时：不直接判失败（见 runAuthorityPhase 文档），先进权威相位。
     phaseTimer = schedule(() => {
       if (this.disposed || attemptSettled) return
       void runAuthorityPhase(new Error(`official session-list refresh phase timed out after ${String(this.attemptTimeoutMs)}ms`))
@@ -549,8 +546,7 @@ export class SessionFactReconciler {
   /**
    * 单调推进的结算时刻（同毫秒内的两次结算不得被守卫的水位比较吞掉）。
    * 水位用**独立的已发布水位**字段：`request()` 会把 `settledAt` 置回 undefined
-   * （在途），若拿它当单调基准，重新请求后的结算又会回到 `now()`、与上一轮同毫秒
-   * （）。
+   * （在途），若拿它当单调基准，重新请求后的结算又会回到 `now()`、与上一轮同毫秒。
    */
   private nextSettledAt(): number {
     const previous = this.lastSettledAt ?? 0
@@ -565,7 +561,7 @@ export class SessionFactReconciler {
   ): void {
     if (this.disposed) return
     if (!ok && error !== undefined) {
-      // 中性前缀：这是**对账链**的失败，可能来自 refresh、探针或写回（）。
+      // 中性前缀：这是**对账链**的失败，可能来自 refresh、探针或写回。
       this.deps.warn(`session-fact reconcile did not settle (attempt ${String(this.attempts)}/${String(this.maxAttempts)}): `
         + (error instanceof Error ? error.message : String(error)))
     }

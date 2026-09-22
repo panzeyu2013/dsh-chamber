@@ -1,14 +1,14 @@
 #!/usr/bin/env node
 /**
  * gen-boot-manifest.mjs — writes the `__DSH_BOOT__` wire (dist/web/manifest.json,
- * the renderer-owned vite output; P2-4: vite outDir = ../desktop/dist/web
+ * the renderer-owned vite output; vite outDir = ../desktop/dist/web
  * and the control plane serves webDistDir = <pkg>/dist/web — design 05 §2/§3.3).
  *
  * The boot graph carries ONE plugin row: the chamber composite bundle
  * (`chamber` input → dist/assets/chamber-<hash>.js), which self-registers as
  * `@dsh-chamber/app` through `window.__ModuleLoader__.load` (factory form).
  * The wire shape matches dsh-client-modules' parseBootManifest contract
- * (dsh-v0.1.2-alpha.1, packages/client/modules/src/client/manifest.ts):
+ * (packages/client/modules/src/client/manifest.ts):
  *
  *   {
  *     rev,
@@ -16,7 +16,7 @@
  *     batches: [{ phase: 'bootstrap'|'application', url, rev, entries: [id, …] }],
  *   }
  *
- * The rc.8+ parser HARD-requires `batches` (missing → boot failure): every
+ * The parser HARD-requires `batches` (missing → boot failure): every
  * entry must belong to exactly one batch (else "belongs to no initial-load
  * batch"), each batch url/rev must be strings with a non-empty entry list,
  * and duplicate entry ids are rejected. This manifest therefore carries one
@@ -84,7 +84,7 @@ const bundleRev = shortHash(readFileSync(bundlePath))
  * The manifest-row url AND the modulepreload href are ONE address, built here
  * in a single place: root-relative `/${bundleFile}` (NO `?rev=` query).
  *
- * > chamber patch (2026-08, deferred-family regression fix): the query was
+ * > chamber patch: the query is
  * > dropped on purpose. The vite chunk graph references the chamber entry
  * > bundle BARE (`./chamber-<hash>.js` — shared utilities are hoisted into
  * > the entry chunk and the deferred ui-* chunks import them from it). A
@@ -111,7 +111,7 @@ const entries = [{
   rev: bundleRev,
   immediately: true,
   // The composite provides every service the dsh shell needs (chamber-entry
-  // inject: []) — an empty inject list is the honest graph edge, and the new
+  // inject: []) — an empty inject list is the honest graph edge, and the
   // parser normalizes an absent field the same way.
   inject: [],
 }]
@@ -147,12 +147,11 @@ console.log(`  rev=${graph.rev} entry=${CHAMBER_ID} url=${entries[0].url}`)
 const cssAssets = (chamberRow.css ?? []).filter((css) => typeof css === 'string')
 let html = readFileSync(INDEX_HTML, 'utf8')
 
-// Preload the chamber bundle (LCP perf pass): a <link rel="modulepreload"> in
+// Preload the chamber bundle: a <link rel="modulepreload"> in
 // <head> starts the chamber-bundle fetch during HTML parse, overlapping the
 // multi-megabyte renderer main-graph eval that precedes the boot chain. Raw
 // sizes drift per build — live totals: dist/web/perf-sizes.json
-// (check-chunk-budgets.mjs)；存档代表点与口径见
-// scripts/perf/README.md 与 STATUS.md C3 条目. The href
+// (check-chunk-budgets.mjs). The href
 // carries the SAME absolute address as the manifest row url (`bundleUrl` above —
 // the two are built from one value and must stay identical): URL resolution of
 // both against the document origin then yields the same resource, so the
@@ -162,8 +161,8 @@ let html = readFileSync(INDEX_HTML, 'utf8')
 // Electron HTTP cache.
 const preload = `<link rel="modulepreload" crossorigin href="${bundleUrl}" />`
 // In-place rewrite, never accumulate: drop any stale chamber preload line
-// (older builds emitted a relative `./` href, or a `?rev=`-carrying href in
-// either the relative or the absolute form — all diverged from the vite chunk
+// (a relative `./` href, or a `?rev=`-carrying href in
+// either the relative or the absolute form — all diverge from the vite chunk
 // graph's bare reference) so the head holds at most one preload — the
 // canonical absolute bare href below. The dedupe guard keeps repeated runs a
 // silent no-op.
@@ -184,8 +183,8 @@ for (const css of cssAssets) {
   const href = `./${css}`
   const link = `<link rel="stylesheet" href="${href}" />`
   // Same one-link rule as the preload: drop any existing chamber CSS line
-  // (older builds inserted it at the wrong indent) and insert the canonical
-  // form at the consistent head indent — log only when something changed.
+  // and insert the canonical form at the consistent head indent — log only
+  // when something changed.
   const next = html
     .split('\n')
     .filter((line) => !line.includes(`href="${href}"`))

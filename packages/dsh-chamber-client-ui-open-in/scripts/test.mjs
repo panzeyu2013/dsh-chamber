@@ -28,17 +28,17 @@ const GROUPS = {
   // launch-flow: the shared app probe, the per-source view model + gates, and the launch adapter/choice memory
   'launch-flow': [
     'test/launch-flow/coordinator.test.ts',
-    // Merged view model + gates (test/open-in-view-model.test.ts + test/open-in-gates.test.ts):
-    // open-in-gates.ts consumes buildOpenInViewModel, one decision chain.
+    // Merged view model + gates: open-in-gates.ts consumes buildOpenInViewModel,
+    // one decision chain.
     'test/launch-flow/open-in-view-model.test.ts',
     'test/launch-flow/source-adapter.test.ts',
     'test/launch-flow/choice-store.test.ts',
   ],
-  // ui-lock: the OpenInButton menu/owner guard + the T5 console ban over every
-  // src/client/*.ts(x). The historical batch2 menu-density visual lock was never
-  // merged; its decision is asserted in place (compact 26px/12px) by this same file.
+  // ui-lock: the OpenInButton menu/owner guard + the console ban over every
+  // src/client/*.ts(x). The menu-density decision (compact 26px/12px) is asserted
+  // in place by this same file.
   'ui-lock': [
-    // 错误文本单源锁：域内名 == sidebar describeThrown + 按钮不得回到朴素格式化。
+    // 错误文本单源锁：域内名 == sidebar describeThrown + 按钮不得使用朴素格式化。
     'test/ui-lock/hostile-error-text.test.ts',
     'test/ui-lock/instance-view-guard.test.ts',
   ],

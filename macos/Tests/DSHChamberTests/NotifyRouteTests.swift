@@ -121,7 +121,7 @@ final class NotifyRouteTests: XCTestCase {
         }
     }
 
-    // MARK: - retireNotifications（S8：登记表 → 已投递 identifier 清除）
+    // MARK: - retireNotifications（登记表 → 已投递 identifier 清除）
 
     func testRetireNotificationsDecodesSourceIds() {
         XCTAssertEqual(MainWindowController.decodeNotify(
@@ -136,7 +136,7 @@ final class NotifyRouteTests: XCTestCase {
             "空 sourceIds 合法（退役空集 = no-op）")
     }
 
-    /// P-07：新 sidecar 形状 {sourceIds, notificationIds}；逐条 id 在 sourceIds
+    /// sidecar 形状 {sourceIds, notificationIds}；逐条 id 在 sourceIds
     /// 为空时也要能解码（node-edges 的 >16 淘汰路径）。
     func testRetireNotificationsDecodesNotificationIds() {
         XCTAssertEqual(MainWindowController.decodeNotify(
@@ -205,7 +205,7 @@ final class NotifyRouteTests: XCTestCase {
         }
     }
 
-    // MARK: - NotificationDeliveryRegistry（S8：有界 sourceId→identifier 登记表）
+    // MARK: - NotificationDeliveryRegistry（有界 sourceId→identifier 登记表）
 
     func testRegistryRetiresOnlyRequestedSources() {
         let registry = NotificationDeliveryRegistry()
@@ -224,7 +224,7 @@ final class NotifyRouteTests: XCTestCase {
         XCTAssertEqual(registry.sourceCount, 0)
     }
 
-    /// S8：sourceId 缺省/null（unknown-source）仍投递但不登记——无法归属退役集。
+    /// sourceId 缺省/null（unknown-source）仍投递但不登记——无法归属退役集。
     func testRegistryIgnoresUnknownSourceAndDuplicateIdentifier() {
         let registry = NotificationDeliveryRegistry()
         XCTAssertFalse(registry.beginDelivery(sourceId: nil, identifier: "chamber-edge-1"))
@@ -235,7 +235,7 @@ final class NotifyRouteTests: XCTestCase {
         XCTAssertEqual(registry.retire(sourceIds: ["local"]), ["chamber-edge-3"])
     }
 
-    /// 2026-12 验证轮：退役与投递之间没有原子点——调度前登记 + 投递完成回执
+    /// 退役与投递之间没有原子点——调度前登记 + 投递完成回执
     /// 必须覆盖「add 完成前就被退役」的窗口，否则该来源的横幅永远留在通知中心。
     func testRegistryCoversRetireRacingInFlightDelivery() {
         let registry = NotificationDeliveryRegistry()
@@ -260,8 +260,7 @@ final class NotifyRouteTests: XCTestCase {
                        "退役记忆必须按 FIFO 有界淘汰")
         // 已完成投递不进入退役记忆：identifier 跨 sidecar 重启会重用
         // （node-edges 的 nextNotificationId 每进程重置为 1），若把已完成的
-        // 退役也记住，重用 identifier 的新横幅会在落地后被立即误删
-        // （2026-12 第二轮验证缺陷）。
+        // 退役也记住，否则重用 identifier 的新横幅会在落地后被立即误删。
         let reused = NotificationDeliveryRegistry()
         XCTAssertTrue(reused.beginDelivery(sourceId: "local", identifier: "chamber-edge-1"))
         XCTAssertFalse(reused.finishDelivery(sourceId: "local", identifier: "chamber-edge-1", delivered: true))
@@ -271,7 +270,7 @@ final class NotifyRouteTests: XCTestCase {
                        "重用 identifier 的新投递不得因上一次（已完成的）退役而被立即清除")
     }
 
-    /// S14：登记表有界（满员按插入序淘汰最旧）。
+    /// 登记表有界（满员按插入序淘汰最旧）。
     func testRegistryIsBounded() {
         let registry = NotificationDeliveryRegistry()
         let capacity = NotificationDeliveryRegistry.maxTrackedDeliveries
@@ -285,7 +284,7 @@ final class NotifyRouteTests: XCTestCase {
     }
 
 
-    /// 2026-12 第三轮验证：插入序必须按 (sourceId, identifier) 成对删除。只按
+    /// 插入序必须按 (sourceId, identifier) 成对删除。只按
     /// identifier 删时，跨来源重用 identifier（sidecar 重启后计数重置）会误删
     /// 别来源仍在册的槽位——16 条上限名存实亡。
     func testRegistryRetireEvictsOnlyItsOwnInsertionSlots() {
@@ -299,7 +298,7 @@ final class NotifyRouteTests: XCTestCase {
         XCTAssertEqual(registry.trackedCount, 0)
     }
 
-    // MARK: - P-07：逐条 notificationId 退役（sourceIds 为空同样生效）
+    // MARK: - 逐条 notificationId 退役（sourceIds 为空同样生效）
 
     /// sidecar 的 notificationId 映射到本壳 identifier 末段：即使 sourceIds 为
     /// 空（node-edges >16 淘汰只下发 notificationIds），也必须按 identifier
@@ -340,10 +339,10 @@ final class NotifyRouteTests: XCTestCase {
                        "退役记忆只消费一次（幂等收口）")
     }
 
-    /// 2026-12 第三/四轮验证：投递标识 = chamber-edge-<纪年>-<壳内单调序号>-
+    /// 投递标识 = chamber-edge-<纪年>-<壳内单调序号>-
     /// <sidecar notificationId>。序号不随 sidecar 重启重置，因此重启前后的横幅
     /// 在通知中心绝不同名；**末段恒为 sidecar 的 notificationId**，click 回灌按
-    /// 末段解析（第四轮验证的回归：按首段解析会把纪年当 id）。
+    /// 末段解析（按首段解析会把纪年当 id）。
     func testNotificationDispatchIdentifierIsEpochAndSequenceScoped() {
         let dispatch = NotificationDispatch.decode(.object([
             "notificationId": .number(1), "spec": .object([:]),
@@ -361,14 +360,14 @@ final class NotifyRouteTests: XCTestCase {
         XCTAssertEqual(dispatch.identifier(sequence: 1), first)
     }
 
-    /// 2026-12 双端逐函数核对 V4/V7：音效名缺省/空串回落 Electron darwin 的 Glass。
+    /// 音效名缺省/空串回落 Electron darwin 的 Glass。
     func testNotificationSoundNameFallsBackToElectronGlass() {
         XCTAssertEqual(NotificationDispatch.notificationSoundName(nil), "Glass")
         XCTAssertEqual(NotificationDispatch.notificationSoundName(""), "Glass")
         XCTAssertEqual(NotificationDispatch.notificationSoundName("Ping"), "Ping")
     }
 
-    /// 2026-12 双端逐函数核对 V4/V7：spec.sound 进 dispatch（缺省 nil = Glass）。
+    /// spec.sound 进 dispatch（缺省 nil = Glass）。
     func testNotificationDispatchDecodesSoundName() {
         let withSound = NotificationDispatch.decode(.object([
             "notificationId": .number(11),
@@ -382,7 +381,7 @@ final class NotifyRouteTests: XCTestCase {
         XCTAssertNil(withoutSound?.sound)
     }
 
-    // MARK: - NotificationDispatch（S8：载荷解析 + sourceId/silent）
+    // MARK: - NotificationDispatch（载荷解析 + sourceId/silent）
 
     func testNotificationDispatchDecodesSourceIdAndSilent() {
         XCTAssertEqual(NotificationDispatch.decode(.object([

@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>dsh-chamber</title>
-    <!-- 启动骨架屏关键 CSS（首帧观感优化，2026-08）：首帧在 HTML 解析时即可
+    <!-- 启动骨架屏关键 CSS（首帧观感优化）：首帧在 HTML 解析时即可
          绘制，不依赖全量 chamber CSS 与首屏 JS 的加载/求值（体积会随上游 dsh
          版本漂移，勿在此写死数字；实测分账见 scripts/perf/README.md + dist/web/perf-sizes.json）。
          骨架用独立的 dsh-boot-* 命名空间：chamber CSS 无同名规则，全量样式加载后
@@ -80,7 +80,7 @@
         <div class="dsh-boot-inner">
           <div class="dsh-boot-spinner" aria-hidden="true"></div>
           <div class="dsh-boot-brand">dsh-chamber</div>
-          <!-- T16（2026-09-11 upstream-alignment）：静态骨架的文案是「服务端 markup
+          <!-- 静态骨架的文案是「服务端 markup
                的默认语言」那一份（本文件声明 lang="zh-CN"，与 locales.ts 的兜底
                语言同源）——它不是框架代码，读不到 typed 字典；main.tsx 在 React
                mount 前用字典的 'boot.starting' 覆盖它，因此英文文档立即拿到英文。

@@ -1,9 +1,8 @@
 /**
- * Presentation arbiter (B3 core) - behavior contract.
+ * Presentation arbiter - behavior contract.
  *
- * Each test pins one rule that used to live in a different file's timer. The last
- * test is the one the refactor plan calls G4: there is NO input combination in which
- * the veil has no deadline.
+ * Each test pins one rule. The last test pins the total-bound invariant: there is
+ * NO input combination in which the veil has no deadline.
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -15,7 +14,7 @@ import {
 } from '../../src/presentation.ts'
 import type { PresentationFacts, PresentationThresholds } from '../../src/presentation.ts'
 
-// Production thresholds, mirrored from the modules B3 replaces (session-surface.ts,
+// Production thresholds, mirrored from their owning modules (session-surface.ts,
 // source-readiness.ts). The wiring reads them from their owners; the reducer takes
 // them as data so this file can exercise the boundaries.
 const TH: PresentationThresholds = {
@@ -94,8 +93,8 @@ test('hero and settling are bounded by the outer hold, not the absent fallback',
 })
 
 test('an unreadable phase no longer holds for the hero bound (the P4 fix)', () => {
-  // Before B3, readSessionSurfacePhase folded an unknown attribute into 'hero', so a
-  // version-skewed anchor parked the user on the veil for the full 70s outer bound.
+  // readSessionSurfacePhase must not fold an unknown attribute into 'hero': a
+  // version-skewed anchor would then park the user on the veil for the full 70s outer bound.
   const at1999 = decidePresentation(facts({
     settled: true,
     holdForOpenIntent: true,
@@ -168,9 +167,9 @@ test('a clock rollback never releases the veil', () => {
 })
 
 test('the phase to bound mapping is total and lives here (one copy)', () => {
-  // Ported from the renderer's session-surface test when the renderer stopped owning
-  // this mapping (B3 step 3): each phase has a bound, and only absent/unknown take the
-  // short fallback. A phase this build cannot name shares the absent bound ON PURPOSE.
+  // The phase-to-bound mapping is owned here (one copy): each phase has a bound, and
+  // only absent/unknown take the short fallback. A phase this build cannot name
+  // shares the absent bound ON PURPOSE.
   assert.equal(surfaceBoundMs('absent', TH), TH.surfaceAbsentFallbackMs)
   assert.equal(surfaceBoundMs('unknown', TH), TH.surfaceAbsentFallbackMs)
   assert.equal(surfaceBoundMs('hero', TH), TH.surfaceMaxHoldMs)
@@ -179,8 +178,8 @@ test('the phase to bound mapping is total and lives here (one copy)', () => {
 })
 
 test('the absent boundary is INCLUSIVE, and hero/settling never use the 2s window', () => {
-  // Ported from the retired shouldReleaseVeilForSurface truth table: the degraded
-  // absent shape must not hang the veil past its bound, while hero/settling must NOT
+  // The degraded absent shape must not hang the veil past its bound, while
+  // hero/settling must NOT
   // release at 2s (their window is the outer hold, not the absent fallback).
   const start = 5_000
   const at = (phase: 'absent' | 'hero' | 'settling', nowMs: number) => decidePresentation(facts({

@@ -1,9 +1,6 @@
 /**
  * Installer script contract: sourced-library flows, service/layout/update paths
  * and the harness-composition guard.
- *
- * P0 split siblings: install-anchor.test.ts (dsh-anchor sync/rollback) and
- * test/support/installer-harness.ts (shared harness).
  */
 
 import { test } from 'node:test'
@@ -183,10 +180,11 @@ test('current-user units inject the login environment systemd omits without User
   // systemd sets $HOME/$LOGNAME/$SHELL only for units carrying User=,
   // DynamicUser= or PAMName= (systemd.exec: SetLoginEnvironment= defaults to
   // true for exactly those, false otherwise). The "current user" service shape
-  // carries none of them, so the unit used to start with an EMPTY HOME — in the
-  // gateway process and in every child it spawns (managed dsh -> code runtime
-  // -> bash tool -> gh / npm / git credential.helper): gh reported "not logged
-  // in", npm could not find its cache, git credential helpers read no token.
+  // carries none of them, so the unit would otherwise start with an EMPTY HOME
+  // — in the gateway process and in every child it spawns (managed dsh -> code
+  // runtime -> bash tool -> gh / npm / git credential.helper): gh would report
+  // "not logged in", npm would not find its cache, and git credential helpers
+  // would read no token.
   const runUser = spawnSync('id', ['-un'], { encoding: 'utf8' }).stdout.trim()
   const output = runLibrary(`${UNIT_PREAMBLE}
 SERVICE_USER=""
@@ -269,9 +267,9 @@ validate_service_user
 })
 
 test('validate_service_user and ownership tolerate an unset SERVICE_USER (install path)', () => {
-  // Regression: the install flow (do_install step 0) calls validate_service_user
+  // The install flow (do_install step 0) calls validate_service_user
   // BEFORE gateway.conf is loaded, so SERVICE_USER is never assigned there.
-  // Under `set -u` a bare $SERVICE_USER was an unbound-variable death.
+  // Under `set -u` a bare $SERVICE_USER would be an unbound-variable death.
   const output = runLibrary(`
 unset SERVICE_USER
 validate_service_user
@@ -282,12 +280,12 @@ printf 'ok\\n'
 })
 
 test('download_verify RETURN trap must not re-fire with tmp unset in the caller', () => {
-  // Regression: on some bash versions (3.2 and several 4.x/5.x) a RETURN trap
-  // set inside a function is not cleared when that function returns — it
-  // migrates up the call stack and fires again at each enclosing function's
-  // return. download_verify's `trap 'rm -rf "$tmp"' RETURN` therefore fired a
-  // second time at do_install's return, after $tmp (a download_verify local)
-  // was already destroyed: under `set -u` the install died with
+  // On some bash versions (3.2 and several 4.x/5.x) a RETURN trap set inside a
+  // function is not cleared when that function returns — it migrates up the
+  // call stack and fires again at each enclosing function's return.
+  // download_verify's `trap 'rm -rf "$tmp"' RETURN` therefore fires a second
+  // time at do_install's return, after $tmp (a download_verify local) has
+  // already been destroyed: under `set -u` such a stale firing would die with
   // 'line <do_install def>: tmp: unbound variable' right after the completion
   // messages. The trap body must self-disarm and guard `${tmp:-}` so a stale
   // firing is a no-op instead of a crash.
@@ -316,10 +314,10 @@ printf 'done\\n'
 })
 
 test('suggest_port splits its locals so $base is bound before $p reads it', () => {
-  // Regression: `local base="$1" p="$base"` expands $base before the local
-  // assignment takes effect — under `set -u` the wizard crashed with
-  // 'base: unbound variable' on ANY occupied default port (same bug class as
-  // the SERVICE_USER unbound). Both locals must be separate statements.
+  // `local base="$1" p="$base"` expands $base before the local assignment
+  // takes effect — under `set -u` the wizard would crash with 'base: unbound
+  // variable' on ANY occupied default port (same bug class as the SERVICE_USER
+  // unbound). Both locals must be separate statements.
   const output = runLibrary(`
 p=$(suggest_port "$DEFAULT_GATEWAY_PORT")
 printf 'suggested=%s\\n' "$p"
@@ -379,14 +377,14 @@ SERVICE_MODE=foreground
 UI_PASSWORD="$PAYLOAD"
 API_TOKEN="$TOKEN"
 write_config
-# write_env 现在拒绝含换行的值（EnvironmentFile 单行条目纪律，与
-# systemd_quote_arg 一致）。本用例模拟"换行豁免时期写入的遗留 env 文件"，
+# write_env 拒绝含换行的值（EnvironmentFile 单行条目纪律，与
+# systemd_quote_arg 一致）。本用例模拟"含换行的遗留 env 文件"，
 # 故按 systemd_env_assignment 的转义规则（先反斜杠后引号）直接构造文件，
 # 继续验证数据式解析器对遗留多行值的处理与不可执行性。
 printf 'DSH_GATEWAY_PASSWORD="%s"\n' "$ESCAPED_PAYLOAD" > "$ENV_FILE"
 printf 'DSH_GATEWAY_TOKEN="%s"\n' "$TOKEN" >> "$ENV_FILE"
 printf 'DSH_GATEWAY_DSH_PATH="/tmp/env anchor"\n' >> "$ENV_FILE"
-# Model a pre-migration install whose foreground-only values exist solely in
+# Model a legacy install whose foreground-only values exist solely in
 # EnvironmentFile. load_conf must decode those assignments as data.
 # (No "sed -i": its suffix-argument spelling differs between BSD and GNU sed —
 # "-i ''" breaks under GNU, where the empty string becomes the script and the
@@ -773,7 +771,7 @@ test('private layout dirs converge to 0700 even when created under a loose umask
 })
 
 test('library EXIT-trap contract: clean ends fail closed without the EXITED_OK marker', () => {
-  // 9297eac registers `trap on_exit_cleanup EXIT` at library top level:
+  // The library registers `trap on_exit_cleanup EXIT` at top level:
   // rc=0 ends only count as success with EXITED_OK=1 (the real main sets it
   // before its final exit); expansion-class crashes reach the trap with $?
   // masked to 0, so the marker is the discriminator. This pins the raw
@@ -810,10 +808,11 @@ test('real installer exit wiring: --help exits 0, missing option values die in p
 })
 
 test('overlay install rollback restores the old pointer/conf and restarts the old deployment', () => {
-  // Regression (S1/S4): restore_overlay_install parsed the old conf with a
-  // quoted-value regex while write_config emits %q bare tokens — old_mode/
-  // old_ver were always empty (no restart) — and the pointer snapshot was
-  // taken AFTER switch_local_current (rollback restored the NEW tree).
+  // Rollback contract (S1/S4): restore_overlay_install must parse the old conf
+  // the way write_config emits it (%q bare tokens) — a quoted-value regex
+  // leaves old_mode/old_ver empty (no restart) — and the pointer snapshot must
+  // be taken BEFORE switch_local_current (taken after, rollback restores the
+  // NEW tree).
   const base = mkdtempSync(join(tmpdir(), 'gateway-installer-overlay-rollback-'))
   try {
     const gatewayDir = join(base, 'gateway')
@@ -875,7 +874,7 @@ test('installer has no unbraced $VAR immediately followed by a multibyte char (b
 })
 
 test('the host-safe stub really intercepts a bare systemctl from a harness body', { skip: process.platform !== 'linux' ? 'linux-only (the stub is inert without a real systemctl)' : false }, () => {
-  // 2026-12 复查 MINOR：上面那条只钉"组合方式"；这条钉**桩本身有效**——在真实
+  // 上面那条只钉"组合方式"；这条钉**桩本身有效**——在真实
   // systemctl 存在的机器上，harness 里的裸 `systemctl stop <unit>` 必须被截获并
   // 打印 systemctl-stubbed: 标记（macOS 上桩按设计不生效，故跳过）。
   const result = runLibraryResult(`systemctl stop dsh-chamber-gateway.service`)
@@ -884,22 +883,21 @@ test('the host-safe stub really intercepts a bare systemctl from a harness body'
 })
 
 test('every harness is composed through harnessSource (host-global stubs cannot be bypassed)', () => {
-  // The D2 cross-mode cleanup calls BARE `systemctl` with the fixed unit name
+  // The cross-mode cleanup calls BARE `systemctl` with the fixed unit name
   // `dsh-chamber-gateway.service` (scripts/install-gateway.sh:2619-2623), so a
   // harness body that reaches an install/update flow without the injected stub
-  // stops and disables the REAL service of the machine running the suite (that
-  // is how this suite killed the project's own gateway rig three times on
-  // 2026-09-08). `harnessSource()` is the only thing keeping that out, so pin
-  // the invariant mechanically: every raw harness must be an explicit,
-  // systemctl-free allowlist entry.
+  // stops and disables the REAL service of the machine running the suite.
+  // `harnessSource()` is the only thing keeping that out, so pin the invariant
+  // mechanically: every raw harness must be an explicit, systemctl-free
+  // allowlist entry.
   //
-  // 2026-12 split (P0 test reorg): the installer suite is now the family
-  // install-script.test.ts + install-anchor.test.ts +
-  // test/support/installer-harness.ts. The scan covers every family member and
-  // aggregates their write sites, so a harness write moved into a sibling
-  // cannot escape the guard. Ownership is pinned the same way: a NON-family
-  // file under test/packaging that mentions the installer fails the walk
-  // below, and admitting a new file means extending the family list here.
+  // The installer suite is the family install-script.test.ts +
+  // install-anchor.test.ts + test/support/installer-harness.ts. The scan covers
+  // every family member and aggregates their write sites, so a harness write
+  // moved into a sibling cannot escape the guard. Ownership is pinned the same
+  // way: a NON-family file under test/packaging that mentions the installer
+  // fails the walk below, and admitting a new file means extending the family
+  // list here.
   const testDir = fileURLToPath(new URL('.', import.meta.url))
   const family = [
     fileURLToPath(import.meta.url),
@@ -925,7 +923,7 @@ test('every harness is composed through harnessSource (host-global stubs cannot 
     && body.endsWith('${tail}`')
     && /printf 'body-ran/.test(body)
     && !/[;&|]|systemctl|\$\(/.test(body)
-  // Shape-robust scan (2026-12 review MINOR): an exact-literal regex misses a
+  // Shape-robust scan: an exact-literal regex misses a
   // body containing a comma, different write options, a differently named path
   // variable, or a bare `writeFileSync(harness, body)`. Walk EVERY
   // `writeFileSync(` call, take its balanced argument list, and judge the

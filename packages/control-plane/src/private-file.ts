@@ -51,8 +51,8 @@ export interface PrivateDirectoryOptions {
    * created directories converge to `mode` on POSIX. Windows exposes only a
    * limited read-only attribute through chmod/stat, so directory modes there
    * are left to inherited OS ACLs after identity/no-follow verification.
-   * `require` is legacy (fail-closed exact mode): since the 2026-09 gateway
-   * auto-tighten decision no production caller uses it. */
+   * `require` is legacy (fail-closed exact mode): no production caller uses
+   * it. */
   existingMode?: 'tighten' | 'require' | 'preserve'
 }
 

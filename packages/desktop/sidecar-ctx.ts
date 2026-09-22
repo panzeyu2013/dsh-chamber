@@ -1,95 +1,89 @@
 /**
- * sidecar-ctx.ts —— Swift flavor sidecar 无头 ctx 装配（S-C-1 第一片 + S-C-2
- * 剩余占位真化；design 25 §3.1/§4.1；原 sidecar-entry.ts 的 buildHeadlessCtx
- * 拆分落位）
- *
- * S-C-1（第一片）把 C/D/E 组注册体（registry+凭据 / ssh 连接状态 / exec+systemd，
- * shell-core installIpcHandlers ② C/D/E 组段）的 ctx 依赖从 loud stub 换成与
- * main.ts 装配**同源同参**的真实实现。每段注记 main.ts 装配行号来源（当前
- * swift 分支 HEAD 8e6c2d9 的 main.ts 行区）：
+ * sidecar-ctx.ts —— Swift flavor sidecar 无头 ctx 装配（design 25 §3.1/§4.1）。
+ * C/D/E 组注册体（registry+凭据 / ssh 连接状态 / exec+systemd，shell-core
+ * installIpcHandlers ② C/D/E 组段）的 ctx 依赖 = 与 main.ts 装配**同源同参**的
+ * 真实实现：
  *  1. providers 真实（模块级单例 sshProvider/gatewayProvider——shell-core C 组
  *     normalizeConnectionInput 直 import 同一实例；configureSshPasswordStore /
  *     configureGatewaySecretStore / configureGatewaySessionProvider 各凭据存储
- *     注入 <userData> 等价位路径 + 现实例解析器——main 1344-1426 行区）。
+ *     注入 <userData> 等价位路径 + 现实例解析器）。
  *     spawnFn 无需注入：ssh-provider/gateway-provider 的 spawn/askpass 均为纯
  *     Node 叶（askpass 0700 sh 助手 mkdtemp 于 os.tmpdir、child_process spawn），
  *     transport-manager 缺省 spawnFn = node:child_process spawn（main 装配同样
- *     未传 spawnFn，main 1437-1451）——无 Electron askpass 专用叶需要适配。
+ *     未传 spawnFn）——无 Electron askpass 专用叶需要适配。
  *  2. transportManager 真实：createTransportManager 全参（provider/providers/
  *     instancesFile=userData/ssh-instances.json（instancesFilePath 模板）/
- *     logger→stderr [transport-manager] 前缀）——main 1437-1451。
- *  3. loadInstances 启动（corrupt→loud + 保留 .corrupt，语义同 main 1452-1466）；
+ *     logger→stderr [transport-manager] 前缀）。
+ *  3. loadInstances 启动（corrupt→loud + 保留 .corrupt，语义同 main）；
  *  4. audit 真实：appendAuditEvent({file})（与 main 同参；JSONL append + 5 MiB
- *     轮换 + 白名单序列化——S24）；
- *  5. publishRegistryTransition 真实叶（main 2094-2159 纯逻辑部分：投影计算 /
+ *     轮换 + 白名单序列化）；
+ *  5. publishRegistryTransition 真实叶（与 main 纯逻辑部分同源：投影计算 /
  *     来源代际同步 / setGatewaySyncRegistration 注销 / sshPluginJournal 撤销 /
  *     SSH_INSTANCES_CHANGED committed push——push 经注入 edges.rendererPush +
  *     attemptCommittedRegistryPush（core delivery，transport-manager 导出）；
- *     main 侧宿主对象的纯模块工厂部分按 S6 字段注入真实实例（createSshPluginJournal
- *     (userData) / ExactOwnershipRegistry / ReadyPhaseEdges——main 1297/1618/1619）；
- *  6. confirmRegistryOriginSwitch 真实：edges.showMessage 宿主腿——main
- *     3752-3766 闭包文案/按钮序（['取消','切换版本源']，defaultId/cancelId 0）/
+ *     纯模块工厂按字段注入真实实例（createSshPluginJournal(userData) /
+ *     ExactOwnershipRegistry / ReadyPhaseEdges）；
+ *  6. confirmRegistryOriginSwitch 真实：edges.showMessage 宿主腿——与 main
+ *     闭包文案/按钮序（['取消','切换版本源']，defaultId/cancelId 0）/
  *     应答映射逐字一致；无存活主窗 = edges.mainWindowAlive() 预检 + 竞态
  *     showMessage 抛错折算 → 'unavailable'。
  *
- * S-C-2（本片，S-C-1 尾部遗留清单真化）：
+ * 其余组注册体依赖：
  *   F 组（ssh 插件 6 注册体依赖）：chamberHostPackageSeeds（seed 数组——
  *     sourceDir 取 sidecar 可用位：--host-*-dir 显式参数优先（打包 Resources
  *     布局由 Swift 侧传参），缺省 = main dev 布局的 repoRoot/packages/<pkg>
  *     同构查找（自 sidecar 模块目录向上检索）；运行时 existsSync 过滤与缺省
- *     loud 语义随 main）；sshPluginTargets 目标闭包束（main 1656-1683 逐字搬：
- *     findRemoteTarget/ownsRemoteTarget/scopedExecForTarget/scopedStatusForTarget/
+ *     loud 语义随 main）；sshPluginTargets 目标闭包束
+ *     （findRemoteTarget/ownsRemoteTarget/scopedExecForTarget/scopedStatusForTarget/
  *     scopedProbeForTarget + transportManager 投影面 execTransport/statusTransport
- *     （main 1577-1578）+ liveProbeFor/gitWorktreeLiveProbeFor（main 1584-1614，
- *     probeClientGraphLive/probeGitWorktreeLive 纯叶同参））；startAutomaticHostSeed
- *     （main 1687-1734 逐字搬）；自动 seed ready 边缘与 SSH_STATUS_CHANGED/
- *     audit/代理注册在 sm.onStatusChanged 订阅（main 1857-2040 镜像——plane
+ *     + liveProbeFor/gitWorktreeLiveProbeFor（probeClientGraphLive/
+ *     probeGitWorktreeLive 纯叶同参））；startAutomaticHostSeed；自动 seed ready
+ *     边缘与 SSH_STATUS_CHANGED/audit/代理注册在 sm.onStatusChanged 订阅（plane
  *     腿经下方 planeRef 注入，无 plane = 同 main cp===null 的跳过语义）；
- *     publishRegistryTransition 的 reseed 调度行补回（main 2125/2140-2142——
+ *     publishRegistryTransition 的 reseed 调度（
  *     `if (sm.status(id)?.phase === 'ready') startAutomaticHostSeed(id)`，随
  *     readySeedEdges.observe 边缘装配后同一实例生效）。
- *   G 组（gateway 插件 3）：syncGatewayChamberPluginsFor 真实叶（main
- *     1759-1794 逐字搬——本地 chamber host 包源（app.isPackaged 分支 →
+ *   G 组（gateway 插件 3）：syncGatewayChamberPluginsFor 真实叶（本地
+ *     chamber host 包源（app.isPackaged 分支 →
  *     sidecar --host-*-dir/缺省同源解析）经 syncGatewayChamberPlugins 上传到
- *     REGISTERED transport origin；凭据/会话现真）+ gateway 会话 refresh
- *     （main 1502-1564 createGatewaySessionRefresh 装配——ready 注册 arm/
+ *     REGISTERED transport origin；凭据/会话真实）+ gateway 会话 refresh
+ *     （createGatewaySessionRefresh 装配——ready 注册 arm/
  *     离开 ready disarm 与 onVerified 指纹重注册随上方订阅接线；register 腿
- *     经 planeRef → plane.registerInstanceTransport，同 main 1525-1542）。
- *   H 组（local+npm）：runLocalPluginMutation 真实叶（main 1270-1286 逐字搬：
+ *     经 planeRef → plane.registerInstanceTransport）。
+ *   H 组（local+npm）：runLocalPluginMutation 真实叶（
  *     runtime writer fence 租约 + runtimeState.startBlocked 启动门 +
  *     resolveActiveRuntime(runtimeBaseDir, builtinDshWorkspace) workspace
- *     解析——随本片 runtime 门族真化后可用）。
- *   J/K 组（runtime 全部）：DshRuntimeController 真实构造（main 2321-2382 的
+ *     解析）。
+ *   J/K 组（runtime 全部）：DshRuntimeController 真实构造（
  *     ControllerOptions/DI 逐字镜像——baseDir=runtimeBaseDir（<userData> 语义
  *     同 main app.getPath('userData')）、pnpmEntry 按 sidecar 可用位解析
- *     （dev <moduleDir>/node_modules/pnpm/bin/pnpm.cjs = main 2295 分支；
- *     打包 <moduleDir>/../pnpm/bin/pnpm.cjs = Resources/pnpm 同构，main 2294
- *     分支）、node 可执行 = 本进程 execPath（Electron-as-node 自身：
- *     main 2301-2304 runtimeNodeExecutor 分支逐字保留——Electron-as-node 时
+ *     （dev <moduleDir>/node_modules/pnpm/bin/pnpm.cjs；
+ *     打包 <moduleDir>/../pnpm/bin/pnpm.cjs = Resources/pnpm 同构）、
+ *     node 可执行 = 本进程 execPath（Electron-as-node 自身：
+ *     runtimeNodeExecutor 分支——Electron-as-node 时
  *     ELECTRON_RUN_AS_NODE=1 + --expose-internals，纯 node 时裸 execPath））；
  *     ctx 门族真实（runtimeOperationBusy/runtimeWriterFence/runtimeActionAllowed/
  *     readApplyNowGateInput/selectedJournalIntent/setRuntimeGate/
  *     publishBlockedStartup/authoritativeMetadataRecoveryStatus/
  *     runUserMetadataRecovery/refreshRuntimeEvidence/runStorePruneIfNeeded/
  *     restartLocalDsh/stopLocalDsh/runRuntimeStartup/bundledRuntimeVersion——
- *     以 main 装配各闭包原文镜像（main 2540-3462/3488-3560 行区），宿主叶中
+ *     以 main 装配各闭包原文镜像，宿主叶中
  *     plane 依赖经 planeRef（sidecar-entry bindPlane 注入自身 controlPlane，
  *     connectionState/localDshPort/localProcessAlive/localWritersQuiescent/
  *     refreshLocalExposure/startLocal/stopLocal/restartLocal 同 main cp 面）；
- *     runtimeState.operation 事务槽（模块级 let，begin/end/inFlight 同 main 3746-3750）
+ *     runtimeState.operation 事务槽（模块级 let，begin/end/inFlight 同 main）
  *     + RUNTIME_STATE_CHANGED push（runtimeInstance.onChanged →
- *     edges.rendererPush，main 2384-2388 同形——窗口门 = edges.mainWindowAlive）。
- *     启动尾部 = runStartupTail()（sidecar-entry 在 bindPlane 后调用——main
- *     3785-3789 refreshRuntimeEvidence().then(runRuntimeStartup) 同形）。
- *   updateController（I 组）：保持 loud——见下方注记（不可 headless 的真实原因）。
- *   runtimeFacts.dshVersion 真化：resolveActiveRuntime(runtimeBaseDir,
- *     builtinDshWorkspace).version（main 3612-3614 同参，INFO 每次 invoke 即时
+ *     edges.rendererPush——窗口门 = edges.mainWindowAlive）。
+ *     启动尾部 = runStartupTail()（sidecar-entry 在 bindPlane 后调用——
+ *     refreshRuntimeEvidence().then(runRuntimeStartup) 同形）。
+ *   runtimeFacts.dshVersion：resolveActiveRuntime(runtimeBaseDir,
+ *     builtinDshWorkspace).version（与 main 同参，INFO 每次 invoke 即时
  *     解析——runtime 切换/重启后返回新版本，绝不装配期定格）。
- *   A 组设置副作用叶（S-D 衔接增补 + S-E async 化）：ctx.setKeepAwake/
- *     setLoginItem 由 loud stub 改为真实转发——经注入 edges 的公开 sendEdge
- *     （node-edges 转发 → B 桥 edge：Swift 侧 legs 已真化（keep-awake
+ *   A 组设置副作用叶：ctx.setKeepAwake/
+ *     setLoginItem 真实转发——经注入 edges 的公开 sendEdge
+ *     （node-edges 转发 → B 桥 edge：Swift 侧 legs（keep-awake
  *     ProcessInfo activity / setLoginItem SMAppService，no-bundle 诚实错误））。
- *     **await 桥应答**（S-E，parity 边界 #2 收口）：Swift 宿主 leg 应答天然
+ *     **await 桥应答**：Swift 宿主 leg 应答天然
  *     异步——叶 await 应答：ok → resolve/{ok:true}；leg 失败（no-bundle/
  *     unavailable/apply-failed 等诚实错误 = sendEdge reject，transport
  *     ok:false 折算）→ setKeepAwake throw / setLoginItem {ok:false,error}
@@ -98,13 +92,13 @@
  *     绝不持久化 + renderer 收 {error}，与 Electron 同步失败（throw /
  *     {ok:false}）同一条路径（Electron 同步失败 = rejected promise；Swift
  *     异步失败 = rejected promise）。HostEdges 同步 setKeepAwake/setLoginItem
- *     （node-edges fire-and-forget）不再被 ctx 叶使用（避免双写/乐观假成功），
- *     保留供后续 HostEdges 面。settings 只加载不应用注记随之更新为「宿主腿经
- *     settings-set 转发；启动 reconcile 归 Swift 宿主（M3/W-22）」。
+ *     （node-edges fire-and-forget）保留供后续 HostEdges 面，ctx 叶不使用
+ *     （避免双写/乐观假成功）。settings 只加载不应用：宿主腿经
+ *     settings-set 转发；启动 reconcile 归 Swift 宿主。
  *
  * Electron-free 不变式：本文件零 electron import（electron-free-gate 面 A 对
  * packages/desktop 顶层源码自动覆盖）；secret 存储路径一律 <userData> 等价位。
- * sidecar 无 Electron safeStorage：gateway 凭据镜像按 design 17 §12/S22 走诚实
+ * sidecar 无 Electron safeStorage：gateway 凭据镜像按 design 17 §12 走诚实
  * loud 的 0600 plaintext 回退（main 无 keychain 分支同语义），绝不静默。
  */
 import { createHash } from 'node:crypto';
@@ -141,7 +135,7 @@ import { RUNTIME_ABORT_REASON } from './shell-core.ts';
 import { createRuntimeStartupHost } from './runtime-startup-host.ts';
 import type { RuntimeStartupHostState } from './runtime-startup-host.ts';
 
-// 打包布局锚点（P-13）与 host 包源目录解析（P-05）——具名纯/近纯函数，Swift 布局
+// 打包布局锚点与 host 包源目录解析——具名纯/近纯函数，Swift 布局
 // 锁步测试（macos/.../PackagedLayoutTests.swift）读本段源文本与主锚点；调用方只在
 // buildHeadlessCtx 内。路径事实的单源：
 //   - host 包构建产物：<sidecarDir>/dist/<pkg>（Swift AppDelegate 的
@@ -170,9 +164,9 @@ export function devPnpmEntry(moduleDir: string): string {
   return path.join(moduleDir, 'node_modules', 'pnpm', 'bin', 'pnpm.cjs')
 }
 
-/** 检索根：自 startDir 向上第一个含 `pnpm-workspace.yaml` 的目录（P-05——
+/** 检索根：自 startDir 向上第一个含 `pnpm-workspace.yaml` 的目录——
  *  host 包源目录探测必须限定在 workspace 根，祖先链上任意同名
- *  `packages/<pkg>/package.json` 不再可能成为 seed 源）。找不到 → null。 */
+ *  `packages/<pkg>/package.json` 不得成为 seed 源。找不到 → null。 */
 export function findWorkspaceRoot(startDir: string, maxDepth = 8): string | null {
   let candidate = startDir
   for (let depth = 0; depth < maxDepth; depth += 1) {
@@ -184,7 +178,7 @@ export function findWorkspaceRoot(startDir: string, maxDepth = 8): string | null
   return null
 }
 
-/** host 包源目录解析（P-05/P-13）：显式 CLI 目录 > workspace 根
+/** host 包源目录解析：显式 CLI 目录 > workspace 根
  *  `packages/<dir>`（且 package.json 存在）> 打包布局 `<moduleDir>/dist/<dir>`。
  *  返回值不保证存在——seed 侧按存在性 loud 过滤（与 main.ts 同向）。 */
 export function resolveHostPackageSourceDir(
@@ -215,25 +209,24 @@ export function resolvePnpmEntry(moduleDir: string): string {
 
 /** publish/confirm 等真实叶所需的宿主边沿子集（node-edges 实现——sidecar-entry
  *  把同一 edges 实例传给 buildHeadlessCtx 与 installIpcHandlers：单装配不变式，
- *  push/确认对话框宿主腿与 core 投递状态机同对象、同事实缓存）。S-C-2 S-D 增补
- *  的 setKeepAwake/setLoginItem 同步转发腿已于 S-E 移除——A 组设置副作用叶改经
+ *  push/确认对话框宿主腿与 core 投递状态机同对象、同事实缓存）。A 组设置副作用叶经
  *  sendEdge（node-edges 公开转发 → B 桥 edge 'setKeepAwake'/'setLoginItem'，
- *  Swift 侧 legs 真化）await 应答（见下方 sendEdge 注释与 real 字段两叶）。 */
+ *  Swift 侧 legs）await 应答（见下方 sendEdge 注释与 real 字段两叶）。 */
 export interface HeadlessCtxEdges {
   rendererPush(channel: string, payload: unknown): boolean
   mainWindowAlive(): boolean
   retireNotificationsForSources(retiredSourceIds: ReadonlySet<string>): number
   showMessage(opts: HostMessageOptions): Promise<number>
-  /** B 桥异步 edge 请求面（S-E：node-edges 公开 sendEdge 转发——sidecar-entry
+  /** B 桥异步 edge 请求面（node-edges 公开 sendEdge 转发——sidecar-entry
    *  用同一实例注入；edgeId 关联在实现侧）：resolve = 宿主应答 ok
    *  （frame.ok:true 的 result），reject = transport ok:false / leg 错误
    *  （sidecar-entry 应答分派折算；Error.message = Swift legs 错误串）。A 组
-   *  设置副作用叶 await 本面应答——leg 失败不再 fire-and-forget，失败回滚
+   *  设置副作用叶 await 本面应答——leg 失败不得 fire-and-forget，失败回滚
    *  语义与 Electron 同步叶一致（见 real 字段两叶）。 */
   sendEdge(method: string, payload: unknown): Promise<unknown>
 }
 
-/** Swift flavor 宿主输入（sidecar-entry 装配接线注入；S-C-2 新增）。 */
+/** Swift flavor 宿主输入（sidecar-entry 装配接线注入）。 */
 export interface HeadlessCtxInputs {
   /** 内建 dsh workspace（sidecar-entry --dsh-path；打包 = Resources/vendor/dsh，
    *  dev = repo ref-dsh 等位）——resolveActiveRuntime 的 builtin 分支 + 启动
@@ -253,30 +246,30 @@ export interface HeadlessCtxInputs {
     archive: string | null
     openIn: string | null
   }
-  /** 原生更新器桥（S-01 / 裁决 D-1 选 B；sidecar-entry 按 --native-updater 构造）。
+  /** 原生更新器桥（sidecar-entry 按 --native-updater 构造）。
    *  缺省 = 无原生安装腿：更新控制器保持 blocked-available，且只有此时 check 才走
-   *  GitHub releases 发现（S-21：声明了原生腿就交壳的 Sparkle appcast，绝不双源）。 */
+   *  GitHub releases 发现（声明了原生腿就交壳的 Sparkle appcast，绝不双源）。 */
   nativeUpdater?: NativeUpdaterBridge | null
 }
 
 /** 本地 dsh spawn 门（sidecar-entry 的 createControlPlane 装配原样接线——
- *  main 1203-1220 的 getDshWorkspacePath/canStartLocal/canExposeLocal 三闭包的
+ *  main 的 getDshWorkspacePath/canStartLocal/canExposeLocal 三闭包的
  *  sidecar 宿主版：事务槽/启动门/workspace 解析状态全在装配侧（本文件），cp
  *  装配经本面取用，语义与 main 逐字同向）。 */
 export interface HeadlessLocalSpawnGates {
   /** 权威 dsh workspace（启动事务特权 workspace 优先，否则活动运行时解析）：
-   *  失败 throw（main 1203-1208 同文案）。 */
+   *  失败 throw（与 main 同文案）。 */
   getDshWorkspacePath(): string
-  /** 公共启动门（main 1209-1216：writers 非 quiescent / runtimeState.startBlocked 且
+  /** 公共启动门（writers 非 quiescent / runtimeState.startBlocked 且
    *  非事务内启动 → 拒绝）。 */
   canStartLocal(): { ok: true } | { ok: false; reason: string }
-  /** 暴露门（main 1217-1220：门未开 = HTTP/WS/ready 投影隔离）。 */
+  /** 暴露门（门未开 = HTTP/WS/ready 投影隔离）。 */
   canExposeLocal(): boolean
 }
 
 /** buildHeadlessCtx 的装配结果：ctx（installIpcHandlers 消费）+ 优雅回收腿 +
- *  S-C-2 plane 晚绑定面（sidecar-entry 在 createControlPlane 后调用）与启动
- *  尾部（main 3785-3789 同形）。 */
+ *  plane 晚绑定面（sidecar-entry 在 createControlPlane 后调用）与启动
+ *  尾部（与 main 同形）。 */
 export interface HeadlessCtxAssembly {
   ctx: ShellAssemblyCtx
   /** 本地 dsh spawn 门（见 HeadlessLocalSpawnGates）。 */
@@ -284,13 +277,13 @@ export interface HeadlessCtxAssembly {
   /** 绑定控制面实例（plane 句柄注入：代理注册/会话 refresh/restart 宿主腿/
    *  connectionState 投影/refreshLocalExposure/onLocalStateChange 订阅）。 */
   bindPlane(plane: PlaneHandle): void
-  /** 启动尾部（main 3785-3789 同形：refreshRuntimeEvidence().then(runRuntimeStartup)
+  /** 启动尾部（与 main 同形：refreshRuntimeEvidence().then(runRuntimeStartup)
    *  + catch 折叠）——bindPlane 之后调用恰一次。 */
   runStartupTail(): Promise<void>
   /** 优雅回收腿（sidecar SIGTERM/SIGINT 路径调用——transportManager.disposeAsync()
    *  + disposePluginSyncChildren + disposeRuntimeInstaller + runtime 事务 abort
    *  + sessionRefresh.dispose + gatewaySessions.dispose()，与 main.ts will-quit
-   *  清理同源（main 1027-1063）；cp.stop 由 sidecar-entry 自行编排）。 */
+   *  清理同源；cp.stop 由 sidecar-entry 自行编排）。 */
   dispose(): Promise<void>
   /** 关窗/退出事实投影输入（E1/E9/E20，design 25 §5 同款判据）：chamber
    *  settings 的 windowCloseBehavior/quitConfirmation + 本地实例在跑判据
@@ -305,8 +298,8 @@ export interface HeadlessCtxAssembly {
     localRunning: boolean
     updateDownloadReady: boolean
   }
-  /** OS 唤醒 → 重探陈旧 transport（design 14 D4 ②；S3·D2）：判据与 Electron
-   *  main.ts:679-697 reconnectStaleTransports 逐字对齐——只碰 phase error/
+  /** OS 唤醒 → 重探陈旧 transport（design 14 D4 ②）：判据与 Electron
+   *  main reconnectStaleTransports 逐字对齐——只碰 phase error/
    *  degraded 且非终态（requiresUserAction !== true）的实例，绝不碰 idle；
    *  quit 在途早退。sidecar-entry 在 __host.systemResume 入站帧上调用（core
    *  回灌之外的装配侧第二条监听，Electron powerMonitor 双监听对偶）。 */
@@ -314,10 +307,10 @@ export interface HeadlessCtxAssembly {
 }
 
 /**
- * S2·F13 退出清理并行编排：把 dispose 与 cp.stop 两条腿**同时启动**、一起等待
+ * 退出清理并行编排：把 dispose 与 cp.stop 两条腿**同时启动**、一起等待
  * （allSettled 语义——任一腿失败只 loud，不阻断另一条腿、不改变调用方/退出码
- * 语义）。与 Electron main will-quit 的单个 Promise.allSettled（main.ts
- * 1149-1155）同形：原 Swift 侧 `await dispose` → `await cp.stop` 串行会把
+ * 语义）。与 Electron main will-quit 的单个 Promise.allSettled 同形：串行的
+ * `await dispose` → `await cp.stop` 会把
  * 退出耗时变成两者之和，cp.stop（本地 dsh/ssh 子进程回收腿）可能还没开始就撞
  * 4.5s 内部硬顶（QUIT_CLEANUP_DEADLINE_MS），留下孤儿进程。
  *
@@ -344,13 +337,12 @@ export async function settleShutdownLegs(
 }
 
 /**
- * 装配 Swift flavor 无头 ctx。签名相对 W-13 原型（buildHeadlessCtx(userDataDir)）
- * 增加 edges 参数（S-C-1：publish push / 通知退役驱逐 / mainWindowAlive 预检 /
- * 确认对话框 showMessage 腿）与 inputs 参数（S-C-2：内建 dsh workspace + host
- * 包源目录）；sidecar-ctx 不 import node-edges/不持 plane——edges 实例由
- * sidecar-entry 构造后注入、plane 经 bindPlane 晚绑定，本文件保持纯装配面。
- * async（S-C-2）：启动前导 reaps 本地插件写进程账目（main 1112 reapStaleLocalPluginWriters
- * ——语义：stale writer 证明先于任何本地 spawn/写路径）。
+ * 装配 Swift flavor 无头 ctx。签名含 edges 参数（publish push / 通知退役驱逐 /
+ * mainWindowAlive 预检 / 确认对话框 showMessage 腿）与 inputs 参数（内建 dsh
+ * workspace + host 包源目录）；sidecar-ctx 不 import node-edges/不持 plane——
+ * edges 实例由 sidecar-entry 构造后注入、plane 经 bindPlane 晚绑定，本文件
+ * 保持纯装配面。async：启动前导 reaps 本地插件写进程账目
+ * （reapStaleLocalPluginWriters——语义：stale writer 证明先于任何本地 spawn/写路径）。
  */
 export async function buildHeadlessCtx(
   userDataDir: string,
@@ -362,16 +354,16 @@ export async function buildHeadlessCtx(
   const settingsPath = chamberSettingsFilePath(userDataDir)
   const auditLogPath = auditLogFilePath(userDataDir)
 
-  // —— S-C-2 前导：runtime 启动事务的装配期宿主状态（main 1100-1191 行区
-  // 同源——runtimeBaseDir=<userData>、localDshHome=<userData>/state/dsh-home、
-  // bundled 版本/元数据健康快照 + shell 更新回落 F4 re-arm；先于任何本地
+  // —— 前导：runtime 启动事务的装配期宿主状态（与 main 同源——
+  // runtimeBaseDir=<userData>、localDshHome=<userData>/state/dsh-home、
+  // bundled 版本/元数据健康快照 + shell 更新回落 re-arm；先于任何本地
   // spawn/写路径）。——
   const runtimeBaseDir = userDataDir
   const localDshHome = localDshHomeDir(runtimeBaseDir)
   const shellVersion = ((): string => {
     // shell 版本事实：与 shell-core/main 同源（sibling package.json）——
     // override/activation journal 的 shellVersion 判别必须与 core 读到的
-    // 版本一致（shell-core.ts 447 行同法）。
+    // 版本一致（shell-core.ts 同法）。
     try {
       const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')) as { version?: string }
       return pkg.version ?? 'unknown'
@@ -384,7 +376,7 @@ export async function buildHeadlessCtx(
    *  check 仍可用，只是版本比较恒判「不可比较」→ loud error，绝不静默）。 */
   const chamberVersion = inputs.chamberVersion ?? 'unknown'
   const runtimeWriterFence = new RuntimeOperationFence()
-  // 模块级事务槽与宿主门状态（main 380-388 同义；本文件每装配一份宿主状态，
+  // 模块级事务槽与宿主门状态（与 main 同义；本文件每装配一份宿主状态，
   // 单进程单装配——main 模块级 let 的闭包等价）。
   const runtimeState: RuntimeStartupHostState = {
     startBlocked: true,
@@ -398,7 +390,7 @@ export async function buildHeadlessCtx(
   const planeRef: { current: PlaneHandle | null } = { current: null }
   const envOverrideActive = Boolean(process.env.DSH_CHAMBER_DSH_PATH)
   // Windows runtime mutations stay read-only（design 21 M2a/M2b；Swift flavor 为
-  // macOS 装配——与 main 1109-1110 同表达式保留，防御一致）。
+  // macOS 装配——与 main 同表达式，防御一致）。
   const runtimeManagementSupported = process.platform !== 'win32'
     || process.env.DSH_CHAMBER_WINDOWS_RUNTIME_MUTATIONS === '1'
   const bundledVersion = readDshVersion(builtinDshWorkspace)
@@ -414,14 +406,14 @@ export async function buildHeadlessCtx(
   } catch (error) {
     runtimeBootstrapFailure = `无法检查 dsh 运行时选择元数据：${sanitizeErrorText(describeError(error))}`
   }
-  // A shell-version fallback is itself a runtime/data switch（main 1125-1131 注释
-  // 同源——持久化内建激活意图先于 override invalidation，崩溃不得无快照回内建）。
+  // A shell-version fallback is itself a runtime/data switch（与 main 同源——
+  // 持久化内建激活意图先于 override invalidation，崩溃不得无快照回内建）。
   const startupOverrideState = startupMetadataHealth?.override ?? { kind: 'corrupt' as const }
   const startupPointerState = startupMetadataHealth?.current ?? { kind: 'corrupt' as const }
   const bootstrapMetadataCorrupt = startupOverrideState.kind === 'corrupt'
     || startupPointerState.kind === 'corrupt'
   if (runtimeBootstrapFailure !== null) {
-    // Writer ownership outranks runtime-selection mutation（同 main 1133-1135）。
+    // Writer ownership outranks runtime-selection mutation（同 main）。
   } else if (startupMetadataHealth?.status === 'recovery-in-progress') {
     runtimeBootstrapFailure = 'dsh 运行时元数据恢复事务未完成；已隔离本地实例并将在启动事务中续作'
   } else if (startupMetadataHealth?.status === 'selection-corrupt') {
@@ -436,9 +428,9 @@ export async function buildHeadlessCtx(
     runtimeManagementSupported
     && !envOverrideActive
     && startupOverrideState.kind === 'valid'
-    // A newly observed shell-version mismatch starts F4（main 1146-1169 逐字）：
+    // A newly observed shell-version mismatch starts the fallback transaction：
     // durable invalidation 已落定的不重复造事务；EXCEPTION = 指针悬在旧树且
-    // journal 丢失的 stranded 首事务——re-arm F4 完成被搁置的快照+探针回落。
+    // journal 丢失的 stranded 首事务——re-arm 完成被搁置的快照+探针回落。
     && (
       (startupOverrideState.record.invalidatedAt == null
         && startupOverrideState.record.shellVersion !== shellVersion)
@@ -469,9 +461,9 @@ export async function buildHeadlessCtx(
     }
   }
 
-  // —— 装配序与 main.ts whenReady 同向（行号 = 当前 swift 分支 main.ts）——
-  // ssh plugin undo journal 现实例（main 1297-1300：createSshPluginJournal
-  // (<userData>, {log,warn})——文件 <userData>/ssh-plugin-journal.json；本片
+  // —— 装配序与 main.ts whenReady 同向 ——
+  // ssh plugin undo journal 现实例（createSshPluginJournal
+  // (<userData>, {log,warn})——文件 <userData>/ssh-plugin-journal.json；
   // publish 叶的删除/操作目标变更撤销清理与后续 F 组 undo/apply 共用同一实例）。
   const sshPluginJournal = createSshPluginJournal(runtimeBaseDir, {
     log: (...args) => console.log('[sidecar-journal]', ...args),
@@ -480,8 +472,8 @@ export async function buildHeadlessCtx(
 
   // chamber settings（design 14 D7）：启动加载 + 损坏 loud——readSettingsFile
   // 自身保留 *.corrupt 并返回 notice，绝不静默假默认。notice 与 Electron
-  // main.ts:1430-1432 同路径 console.error（S2·F14：原实现丢弃 notice，用户
-  // 设置被静默重置为默认而 stderr 无任何解释）；读取异常同样 loud 回退
+  // main 同路径 console.error（notice 绝不丢弃——否则设置被静默重置为默认而
+  // stderr 无任何解释）；读取异常同样 loud 回退
   // （readSettingsFile 按契约恒返回 notice 而非抛错，这里只做防御，绝不静默）。
   let settings: ChamberSettings = DEFAULT_CHAMBER_SETTINGS
   try {
@@ -491,38 +483,38 @@ export async function buildHeadlessCtx(
   } catch (error) {
     console.error('[sidecar] chamber settings 读取异常（回退默认值）：' + sanitizeErrorText(describeError(error)))
   }
-  // main 1306-1313 的 keep-awake / 登录自启启动 reconcile 为 Electron 宿主腿
+  // keep-awake / 登录自启启动 reconcile 在 Electron 为宿主腿
   // （setKeepAwakeActive/applyLaunchAtLogin，同步应用加载值）。Swift flavor：
-  // 宿主腿经 ctx.setKeepAwake/setLoginItem 真实转发（见下方 real 字段——S-E
-  // 起为 async 叶，await B 桥应答）；启动期 reconcile 归 Swift 宿主（M3/W-22——
-  // Swift 起壳时按自身设置面应用），settings 加载本身不 side-effect（与既有
+  // 宿主腿经 ctx.setKeepAwake/setLoginItem 真实转发（见下方 real 字段——
+  // async 叶，await B 桥应答）；启动期 reconcile 归 Swift 宿主
+  // （Swift 起壳时按自身设置面应用），settings 加载本身不 side-effect（与既有
   // sidecar 行为一致）。
 
-  // askpass 崩溃残留回收（main 1344-1345：cleanupStaleAskpassHelpers——启动期
+  // askpass 崩溃残留回收（cleanupStaleAskpassHelpers——启动期
   // 清理 crash 遗留的密码载体助手；纯 Node 叶，同模块同参）。
   const askpassNotice = cleanupStaleAskpassHelpers()
   if (askpassNotice !== null) console.error(`[sidecar] ${askpassNotice}`)
 
-  // registry 现实例先占位：凭据存储配置期只持有惰性解析器（main 1346-1347 的
+  // registry 现实例先占位：凭据存储配置期只持有惰性解析器（与 main 的
   // resolveCredentialSpec 闭包形态——transportManager 赋值后按引用共享）。
   let transportManager: TransportManager | null = null
   const resolveCredentialSpec = (id: string): TransportInstanceSpec | null =>
     transportManager?.listInstances().find(instance => instance.id === id) ?? null
 
   // SSH password store（design 05 §8 plaintext fallback, 0600/原子写/损坏 loud
-  // 保留）：<userData>/ssh-passwords.json（sshPasswordsFilePath 模板——main
-  // 1348-1352 同参）。凭据值绝不进 registry/日志/渲染器；写入纪律（write-only、
-  // 绝不回读）在 ssh-provider 纯模块与 shell-core C 组注册体内，随迁保留。
+  // 保留）：<userData>/ssh-passwords.json（sshPasswordsFilePath 模板——与 main
+  // 同参）。凭据值绝不进 registry/日志/渲染器；写入纪律（write-only、
+  // 绝不回读）在 ssh-provider 纯模块与 shell-core C 组注册体内。
   const passwordNotice = configureSshPasswordStore(sshPasswordsFilePath(runtimeBaseDir), resolveCredentialSpec)
   if (passwordNotice !== null) console.error(`[sidecar] ssh password store: ${passwordNotice}`)
 
   // Gateway credentials store（design 17 §12 schema v3, 0600, 原子写）：main
-  // 1362-1394 经 Electron safeStorage 适配器（crypto adapter）加密镜像；sidecar
+  // 经 Electron safeStorage 适配器（crypto adapter）加密镜像；sidecar
   // 为 Electron-free flavor——无 safeStorage，等同 main 无 keychain 分支的诚实
-  // loud 语义：非 win32 = S22 0600 plaintext 回退（用户决策 2026-08，绝不静默——
+  // loud 语义：非 win32 = 0600 plaintext 回退（绝不静默——
   // loud 注册 + renderer 可见 secretStorage:'plaintext' 投影，projectInstanceSecrets
   // 经 gatewaySecretStorageMode 读真实存储模式）；win32（不可达于 Swift flavor，
-  // 防御分支同 main 1374-1379）= memory-only（file null）拒绝明文。
+  // 防御分支同 main）= memory-only（file null）拒绝明文。
   const windowsRefusePlaintext = process.platform === 'win32'
   if (windowsRefusePlaintext) {
     console.error('[sidecar] Windows safeStorage (DPAPI) 不可用 — 拒绝明文镜像回退 (design 21 C16)；gateway 凭据仅本次会话内存驻留，每次连接需重录')
@@ -531,15 +523,15 @@ export async function buildHeadlessCtx(
   }
   const gatewaySecretNotice = configureGatewaySecretStore(
     windowsRefusePlaintext ? null : gatewaySecretsFilePath(runtimeBaseDir),
-    undefined, // 无 Electron safeStorage 适配器 —— S22 plaintext 回退（上方 loud）
+    undefined, // 无 Electron safeStorage 适配器 —— plaintext 回退（上方 loud）
     resolveCredentialSpec,
   )
   if (gatewaySecretNotice !== null) console.error(`[sidecar] gateway secrets store: ${gatewaySecretNotice}`)
 
   // Gateway password-session manager（design 17 §7.1/§9.3——纯主进程内存；C 组
   // 注册体的 invalidation 直接面）：createGatewaySessionManager 纯 Node headless
-  // 构造可行（gateway-session.ts 零 electron），与 main 1418 同源构造 + main
-  // 1419-1426 的 configureGatewaySessionProvider 六钩子全量接线（密码会话流
+  // 构造可行（gateway-session.ts 零 electron），与 main 同源构造 + main
+  // 的 configureGatewaySessionProvider 六钩子全量接线（密码会话流
   // ensure/cached/proof/invalidate 同源——ssh 隧道与 http 直连双形态共用）。
   const gatewaySessions = createGatewaySessionManager()
   configureGatewaySessionProvider({
@@ -551,13 +543,13 @@ export async function buildHeadlessCtx(
     invalidate: origin => gatewaySessions.invalidate(origin),
   })
 
-  // S24 非秘密审计叶（design 17 §13.4.4, JSONL append + 5 MiB 轮换, 0600——
+  // 非秘密审计叶（design 17 §13.4.4, JSONL append + 5 MiB 轮换, 0600——
   // audit-log.ts 模块；main 同参：appendAuditEvent({file})。序列化白名单/凭据值
   // 绝不入日志纪律在 serializeAuditEvent（control-plane 审计单源）——本叶只做
   // 文件绑定）。
   const audit = (event: AuditEvent): void => appendAuditEvent({ file: auditLogPath }, event)
 
-  // Transport manager（design 03 §2.2/05 §7-§8）：与 main 1437-1451 同源同参。
+  // Transport manager（design 03 §2.2/05 §7-§8）：与 main 同源同参。
   // provider 缺省 = sshProvider（legacy kind-keyed 条目解析）；providers 按
   // TRANSPORT 注册 {ssh, http}（design 17 §2.2）；instancesFile =
   // <userData>/ssh-instances.json；logger → stderr（sidecar-entry 已把 console
@@ -580,22 +572,22 @@ export async function buildHeadlessCtx(
     // Corrupt instance file: loud failure — PRESERVE the file (rename to
     // *.corrupt, reversible) before starting empty; the next authoritative
     // save_connection rebuilds the registry (never silently faked as empty).
-    // 语义与 main 1452-1466 逐字同向。
+    // 语义与 main 逐字同向。
     console.error('[sidecar] 加载 SSH 实例失败：', loadError)
     const file = instancesFilePath(runtimeBaseDir)
     const aside = preserveFileAside(file, '.corrupt')
     if (aside.ok) console.warn(`[sidecar] 已保留损坏的实例文件为 ${aside.path}`)
     else console.error('[sidecar] 保留损坏实例文件失败：', aside.error)
   }
-  // 初始来源代际同步（main 1491——installIpcHandlers 之前建立首代证明，
+  // 初始来源代际同步（installIpcHandlers 之前建立首代证明，
   // 装配序与 main 相同：先 sync 后 handler 注册）。
   syncNotificationSourceRegistry(projectNotificationSourceInstances(sm.listInstances()))
 
-  // Transport-manager 执行/状态投影面（main 1577-1578 同源——plugin-sync 在
+  // Transport-manager 执行/状态投影面（与 main 同源——plugin-sync 在
   // 本地重新声明 exec/status 契约，经结构等价收窄别名桥接）。
   const execTransport = sm.exec as unknown as ExecFn
   const statusTransport: StatusFn = (id) => sm.status(id)
-  // 插件管理面实例级恒等指纹（main 1470-1482 逐字——registry 变更生命周期与
+  // 插件管理面实例级恒等指纹（与 main 逐字同源——registry 变更生命周期与
   // F 组目标闭包共用）。
   const transportIdentityFingerprint = (instance: TransportInstanceSpec): string => JSON.stringify([
     instance.kind,
@@ -610,15 +602,15 @@ export async function buildHeadlessCtx(
     instance.serviceName,
     instance.remoteDshHome,
   ])
-  // S24 audit transition dedupe（main 1565-1569 同源——PHASE TRANSITIONS only）。
+  // Audit transition dedupe（与 main 同源——PHASE TRANSITIONS only）。
   const lastAuditedPhase = new Map<string, string>()
   const auditRegistered = new Set<string>()
 
-  // —— S-C-2 G 组：live-proxy 会话自愈（design 17 §9.3，main 1492-1564 行区
-  // 装配镜像）。纯 Node 控制器（gateway-session-refresh.ts 零 electron——时钟/
+  // —— G 组：live-proxy 会话自愈（design 17 §9.3）。
+  // 纯 Node 控制器（gateway-session-refresh.ts 零 electron——时钟/
   // 计时器注入为纯 Node 缺省）；ready 注册 arm / 离开 ready disarm 随下方
-  // sm.onStatusChanged 订阅接线（与 main 1976/1998 同点）。register 腿 =
-  // planeRef → plane.registerInstanceTransport（main 1525-1542 同参——隧道
+  // sm.onStatusChanged 订阅接线（与 main 同点）。register 腿 =
+  // planeRef → plane.registerInstanceTransport（与 main 同参——隧道
   // Host authority 覆盖 + registeredAuthFingerprints 锁步，见下方共享面）。——
   const registeredAuthFingerprints = new Map<string, string>()
   const authHeadersFingerprint = (headers: Record<string, string> | undefined): string => {
@@ -635,7 +627,7 @@ export async function buildHeadlessCtx(
     tokenFor: id => getGatewayToken(id),
     readyUrlFor: id => sm.readyUrl(id),
     tlsPinFor: id => sm.listInstances().find(instance => instance.id === id)?.spkiPin ?? null,
-    // Tunnel Host override（main 1508-1518 同源注释：ssh 隧道 gateway 目标以远端
+    // Tunnel Host override（与 main 同源注释：ssh 隧道 gateway 目标以远端
     // LOOPBACK 权威重注册——Host 头/稳定 connection-target scope/网络 origin 与
     // verifyUp-minted session key 同构；authority 只路由、非所有权）。
     authorityFor: id => {
@@ -658,14 +650,14 @@ export async function buildHeadlessCtx(
         ...(tls === undefined ? {} : tls),
         ...(authority === undefined ? {} : { authority }),
       })
-      // Keep the registered-auth fingerprint in lockstep（main 1533-1541 同源：
+      // Keep the registered-auth fingerprint in lockstep（与 main 同源：
       // refresh 重注册 REPLACES 代理 headers——onVerified 指纹门须看到已轮换
       // cookie 为 "already registered"，否则下次 ready 探针无条件再注册）。
       registeredAuthFingerprints.set(`gateway:${id}`, authHeadersFingerprint(
         headers === undefined ? undefined : sanitizedRegistrationHeaders(headers),
       ))
     },
-    // Bounded dead-cookie recovery（main 1543-1562 同源注释 + 实现：disconnect
+    // Bounded dead-cookie recovery（与 main 同源注释 + 实现：disconnect
     // （idle → 控制面注销 + 本 refresh disarm）→ connect（verifyUp 用存储密码
     // 重认证——单次 re-login → terminal path）；每次 refresh fire 至多一次、
     // 仅 transport 仍 ready 且同 origin 时；disconnect/connect 抛错绝不击穿
@@ -681,12 +673,12 @@ export async function buildHeadlessCtx(
     warn: message => console.warn(`[sidecar] ${message}`),
   })
 
-  // —— S-C-2 F 组：chamber host 包源目录（main 1624-1635 分支的 sidecar 位——
+  // —— F 组：chamber host 包源目录（main 对应分支的 sidecar 位——
   // 显式参数（打包 Resources 布局由 Swift 传 --host-*-dir）优先；缺省 = 具名
-  // resolveHostPackageSourceDir：workspace 根检索（P-05，限定含
-  // pnpm-workspace.yaml 的根）→ 打包锚点 <moduleDir>/dist/<pkg>（P-13，与
+  // resolveHostPackageSourceDir：workspace 根检索（限定含
+  // pnpm-workspace.yaml 的根）→ 打包锚点 <moduleDir>/dist/<pkg>（与
   // Swift AppDelegate / build-sidecar.sidecarLayout 同拼写）。目录本身不在此刻
-  // 校验——seed 侧按 main 1699/1705 的 existsSync(dist/index.js) 运行时过滤 +
+  // 校验——seed 侧按 main 对应的 existsSync(dist/index.js) 运行时过滤 +
   // loud。——
   const moduleDir = path.dirname(fileURLToPath(import.meta.url))
   const hostPackageSourceDir = (packageDir: string, explicit: string | null): string =>
@@ -695,16 +687,16 @@ export async function buildHeadlessCtx(
   // 本 flavor 的源目录解析：显式 CLI 目录（--host-*-dir）优先，缺省 = dev 布局
   // 向上检索（打包布局由 Swift 传显式目录）。**键 = 注册表包名**，单一来源 =
   // control-plane 的 CHAMBER_HOST_PACKAGES（与 main.ts 的 chamberHostSourceDirs
-  // 同构）——2026-12 审查：原先这里手抄三行，注册表新增一行会被静默漏掉。
+  // 同构）。
   // 包名 → 仓库目录名（去 scope）的单源纯函数（有单测）；映射表仍只登记需要
   // 显式 CLI 目录的三个包——注册表新增非 localOnly 行若漏登记，下面的构造会
-  // loud 警告，绝不静默少 seed 一个域（2026-12 验证轮收口）。
+  // loud 警告，绝不静默少 seed 一个域。
   const hostPackageSourceDirs: Record<string, string> = {
     [CLIENT_GRAPH_PACKAGE_NAME]: hostPackageSourceDir(packageDirName(CLIENT_GRAPH_PACKAGE_NAME), hostDirs.graph),
     [GIT_WORKTREE_PACKAGE_NAME]: hostPackageSourceDir(packageDirName(GIT_WORKTREE_PACKAGE_NAME), hostDirs.git),
     [ARCHIVE_CLEANUP_PACKAGE_NAME]: hostPackageSourceDir(packageDirName(ARCHIVE_CLEANUP_PACKAGE_NAME), hostDirs.archive),
   }
-  // Host 包种子数组：注册表驱动（main 1636-1655 同形——insertId/packageName/
+  // Host 包种子数组：注册表驱动（与 main 同形——insertId/packageName/
   // sourceDir/label 全部来自 descriptor）。localOnly 行（open-in）保留在数组里但
   // sourceDir 恒为空——「哪一行可以去别的机器」只由
   // portableChamberHostPackageSeeds（下方 portableHostSeeds）判，它绝不会把该行
@@ -733,21 +725,21 @@ export async function buildHeadlessCtx(
 
   // 可移植（非 localOnly）seed 列表：本数组按构造已排除 open-in localOnly 行，
   // 但「哪一行可以去别的机器」的**规则**仍取自单一实现（design 20 §6；main.ts
-  // 的 portableHostSeeds 同源）——Swift flavor 不再自带一份过滤判定，规则分叉
-  // 在结构上不可能（2026-12 合并审计 advisory 收口）。
+  // 的 portableHostSeeds 同源）——Swift flavor 不自带过滤判定，规则分叉
+  // 在结构上不可能。
   const portableHostSeeds = portableChamberHostPackageSeeds(chamberHostPackageSeeds)
 
-  // Exact-incarnation single-flight for ready/manual host-package seeds（main
-  // 1615-1619 同源——changed same-id target 立即 supersede；stale finally/log/
+  // Exact-incarnation single-flight for ready/manual host-package seeds（与 main
+  // 同源——changed same-id target 立即 supersede；stale finally/log/
   // result 路径绝不清理/写入其替换者）。
   const hostPackageSeeding = new ExactOwnershipRegistry()
   const readySeedEdges = new ReadyPhaseEdges()
   // Remote install-level fallback path shared by both chamber host packages
-  // （main 1684-1686 同源）。
+  // （与 main 同源）。
   const remoteHostPackageDir = (spec: RemoteSpec, packageName: string): string =>
     `${remoteHome(spec.remoteDshHome)}/profiles/node_modules/${packageName}`
 
-  // —— S-C-2 F 组：ssh 插件管理目标闭包束（main 1656-1683 逐字搬）。目标 =
+  // —— F 组：ssh 插件管理目标闭包束（与 main 逐字同源）。目标 =
   // spec + operational fingerprint + 来源代际 token（F 组 owns 复验与 C 组来源
   // 证明同一代际面）。——
   type RemoteTarget = {
@@ -783,8 +775,7 @@ export async function buildHeadlessCtx(
   }
   // Live-effect probe for the chamber host packages（design 09 module A / 08 §11 /
   // 24 §7，与 main.ts 同源契约）：单个通用隧道 RPC 探针，由控制面注册表自带的
-  // probe 描述子（method + args）驱动——不再有每包分支（合并前 host-graph /
-  // git-worktree 各一个专用探针，main 已泛化）。无 ready 隧道 → null = "未探测"。
+  // probe 描述子（method + args）驱动——每包无专用分支。无 ready 隧道 → null = "未探测"。
   const liveProbeFor = (id: string): ((descriptor: ChamberHostPackageDescriptor) => Promise<boolean | null>) => async (descriptor) => {
     const url = sm.readyUrl(id)
     if (url === null) return null
@@ -798,7 +789,7 @@ export async function buildHeadlessCtx(
       return null
     }
   }
-  // 自动 chamber host seed（main 1687-1734 逐字搬：单飞注册表 begin/owns/finish +
+  // 自动 chamber host seed（与 main 逐字同源：单飞注册表 begin/owns/finish +
   // 构建产物 existsSync 过滤（缺失 loud 入实例环形日志）+ seedRemoteChamberHostPackages
   // 幂等注入）。自动路径与手动 seed 注册体共用同一 seed 数组/注册表/目标闭包。
   const startAutomaticHostSeed = (id: string): void => {
@@ -852,8 +843,8 @@ export async function buildHeadlessCtx(
     })()
   }
 
-  // —— S-C-2 G 组：本地 chamber host 包源 + 手动 gateway 同步执行闭包（main
-  // 1735-1794 逐字搬——2026-12 Phase 3 desktop-synced chamber host packages；
+  // —— G 组：本地 chamber host 包源 + 手动 gateway 同步执行闭包（与 main
+  // 逐字同源——本地 desktop-synced chamber host packages；
   // app.isPackaged 分支 = sidecar 源目录解析（上方 hostPackageSourceDir 同值）；
   // ready 注册自动 sync 与手动 gateway_plugin_sync re-entry 共用同一执行路径）。
   const localChamberHostPackageSources = (): Array<{ name: string; packageJsonPath: string; distIndexPath: string }> => {
@@ -897,8 +888,8 @@ export async function buildHeadlessCtx(
       }
     }
     return syncGatewayChamberPlugins({
-      // Sync through the REGISTERED transport origin (the ready URL)（main
-      // 1780-1786 同源注释：ssh 隧道 = 用户验证过的 loopback 端点，绝非远端
+      // Sync through the REGISTERED transport origin (the ready URL)（与 main
+      // 同源注释：ssh 隧道 = 用户验证过的 loopback 端点，绝非远端
       // host:port；tunnel authority 覆盖呈现远端 gateway）。
       origin: url,
       authority: instance.transport === 'ssh' ? gatewayTunnelAuthority(instance.remotePort) : undefined,
@@ -909,7 +900,7 @@ export async function buildHeadlessCtx(
     })
   }
 
-  // —— S-C-2 F/G 组：ready 注册期 auth 事实派生（main 1795-1834 逐字搬——S23
+  // —— F/G 组：ready 注册期 auth 事实派生（与 main 逐字同源——
   // SPKI pin 随注册；token/password 存在性投影；会话 cookie 仅缓存读，值绝不
   // 出主进程）。——
   const currentGatewayAuth = (id: string, url: string, registered: TransportInstanceSpec | undefined): {
@@ -939,16 +930,16 @@ export async function buildHeadlessCtx(
     }
   }
 
-  // —— S-C-2 F/G 组：sm.onStatusChanged 订阅（main 1857-2040 镜像）——S24 audit
+  // —— F/G 组：sm.onStatusChanged 订阅（与 main 同构）——audit
   // transition 记录（非秘密 phase 转换，注册边沿一次）+ ready → 代理注册/凭据
   // 注入 + gateway 自动 sync + session refresh arm + 自动 chamber host seed
   // ready 边缘（readySeedEdges.observe）+ SSH_STATUS_CHANGED committed push。
   // Electron 差异注记：main 以 mainWindow 身份判据 + registryWindow !== null
   // 门；Swift flavor 无 window——同值判据 = edges.mainWindowAlive()（node-edges
   // 事实缓存）；plane 腿以 planeRef.current（bindPlane 前 = main cp===null 的
-  // 跳过语义——同 main 1889-2014 的 if (cp !== null) 门）。——
+  // 跳过语义——同 main 的 if (cp !== null) 门）。——
   sm.onStatusChanged((id, status) => {
-    // S24 audit（main 1857-1875 同源）：仅 phase TRANSITIONS；requiresUserAction
+    // Audit transition（与 main 同源）：仅 phase TRANSITIONS；requiresUserAction
     // 终态分类同源。绝不落凭据/cookie/会话体。
     const prevPhase = lastAuditedPhase.get(id)
     if (prevPhase !== status.phase) {
@@ -964,15 +955,15 @@ export async function buildHeadlessCtx(
           : status.phase,
       })
     }
-    // Non-secret auth-mode marker（main 1876-1884 同源——存在性投影）。
+    // Non-secret auth-mode marker（与 main 同源——存在性投影）。
     const auditAuth = status.kind === 'gateway'
       ? getGatewayToken(id) !== null && getGatewayPassword(id) !== null ? 'token+password'
         : getGatewayToken(id) !== null ? 'token'
           : getGatewayPassword(id) !== null ? 'password' : 'none'
       : 'none'
     const auditDetail = `auth:${auditAuth}${status.insecureHttp ? ',http_plaintext' : ''}`
-    // Ready transport → per-instance reverse proxy（design 05 §7.1：main
-    // 1885-2014 镜像——ready 注册/离开 ready 注销；transport URL 只在主进程）。
+    // Ready transport → per-instance reverse proxy（design 05 §7.1：
+    // ready 注册/离开 ready 注销；transport URL 只在主进程）。
     const cp = planeRef.current
     if (cp !== null) {
       if (status.phase === 'ready') {
@@ -983,7 +974,7 @@ export async function buildHeadlessCtx(
             const facts = currentGatewayAuth(id, url, registered)
             const auth = facts.auth
             if (!auth.ok) {
-              // Fail closed on the verify→ready→register TOCTOU（main 1908-1934
+              // Fail closed on the verify→ready→register TOCTOU（与 main
               // 同源：密码 gateway 绝不因 cookie 在间隙被逐/失效而无头注册；
               // 有 token 时纯决策助手允许有意的 OR-principal bearer 回退）。
               cp.unregisterInstanceTransport(`${status.kind}:${id}`)
@@ -1017,7 +1008,7 @@ export async function buildHeadlessCtx(
               },
             )
             registeredAuthFingerprints.set(connectionId, authHeadersFingerprint(headers))
-            // 2026-12 Phase 3（main 1948-1964 同源）：每次 gateway ready 注册后
+            // 每次 gateway ready 注册后
             // best-effort 把本地 chamber host 包 sync 进 gateway seed cache
             // （幂等：仅版本失配重传 + 上传请求 gateway 受控重启）。手动 sync
             // re-entry 参数（design 21 §6.5）经 setGatewaySyncRegistration 落
@@ -1030,11 +1021,11 @@ export async function buildHeadlessCtx(
             })
             registeredAuthFingerprints.set(`${status.kind}:${id}`, authHeadersFingerprint(undefined))
           }
-          // Live-proxy session self-healing（main 1971-1976 同源）：ready 注册即
+          // Live-proxy session self-healing（与 main 同源）：ready 注册即
           // arm 预到期 refresh（无密码目标 no-op、重连后新隧道 origin 下幂等
           // re-arm）；dsh 目标无 auth 面 → 不 refresh。
           if (status.kind === 'gateway') sessionRefresh.arm(id)
-          // S24: one registration edge per instance（main 1977-1990 同源）。
+          // One registration edge per instance（与 main 同源）。
           if (!auditRegistered.has(id)) {
             auditRegistered.add(id)
             audit({
@@ -1050,10 +1041,10 @@ export async function buildHeadlessCtx(
       } else {
         cp.unregisterInstanceTransport(`${status.kind}:${id}`)
         registeredAuthFingerprints.delete(`${status.kind}:${id}`)
-        // Leaving ready cancels the pre-expiry refresh（main 1995-1998 同源）。
+        // Leaving ready cancels the pre-expiry refresh（与 main 同源）。
         sessionRefresh.disarm(id)
         // Manual gateway_plugin_sync re-entry dies with the ready registration
-        // （design 21 §6.5，main 1999-2002 同源）。
+        // （design 21 §6.5，与 main 同源）。
         setGatewaySyncRegistration(id, null)
         if (auditRegistered.delete(id)) {
           audit({
@@ -1067,14 +1058,14 @@ export async function buildHeadlessCtx(
         }
       }
     }
-    // Remote chamber host-package seed ready 边缘（main 2015-2027 同源：kind dsh
+    // Remote chamber host-package seed ready 边缘（与 main 同源：kind dsh
     // + transport ssh 才 seed（seed 走 ssh exec 通道——http-direct/gateway 排除）；
     // 幂等 + 结果入环形日志 + 失败随下次 ready 重试；readySeedEdges.observe =
     // ready 边沿恰好一次门）。
     if (status.kind === 'dsh' && status.transport === 'ssh' && readySeedEdges.observe(id, status.phase)) {
       startAutomaticHostSeed(id)
     }
-    // Committed status push（main 2028-2039 镜像——窗口门 = edges.mainWindowAlive；
+    // Committed status push（与 main 同构——窗口门 = edges.mainWindowAlive；
     // push 前竞态复查同一叶；false → loud 等待下次查询兜底）。
     if (edges.mainWindowAlive()) {
       const pushed = attemptCommittedRegistryPush(() => {
@@ -1090,7 +1081,7 @@ export async function buildHeadlessCtx(
       }
     }
   })
-  // Ready-state re-verification → proxy re-registration（main 2042-2078 镜像——
+  // Ready-state re-verification → proxy re-registration（与 main 同构——
   // 心跳/用户探针可在 verifyUp 内轮换密码会话（401 → 一次存储密码 re-login），
   // 代理仍骑旧（死）cookie——仅当当前 auth headers 与已注册指纹不同才重注册
   // （注册会撤销在途流量——健康未变注册绝不重注册）；仅非秘密 sha256 指纹存
@@ -1103,7 +1094,7 @@ export async function buildHeadlessCtx(
     const registered = sm.listInstances().find(instance => instance.id === id)
     if (url === null || registered === undefined || registered.kind !== 'gateway') return
     const facts = currentGatewayAuth(id, url, registered)
-    // Fail closed like the ready registration（main 2058-2062 同源注释）。
+    // Fail closed like the ready registration（与 main 同源注释）。
     if (!facts.auth.ok) return
     const connectionId = `gateway:${id}`
     const headers = sanitizedRegistrationHeaders(facts.auth.headers)
@@ -1122,13 +1113,12 @@ export async function buildHeadlessCtx(
     sm.appendLog(id, 'info', 'gateway session re-established — proxy registration refreshed with the new session')
   })
 
-  // —— publishRegistryTransition 真实叶（main 2094-2159 纯逻辑部分的同源装配；
-  // S-C-2 补回 reseed 调度行 main 2114/2125/2140-2142）——
+  // —— publishRegistryTransition 真实叶（与 main 纯逻辑部分同源装配）——
   // registry 变更生命周期权威 sidecar（source-lifecycle）：投影计算/来源代际
-  // 同步/journal 撤销/committed push。main 侧宿主对象中凡纯模块工厂者按 S6 字段
-  // 注入真实实例：sshPluginJournal（上方 createSshPluginJournal）、
+  // 同步/journal 撤销/committed push。纯模块工厂注入真实实例：
+  // sshPluginJournal（上方 createSshPluginJournal）、
   // hostPackageSeeding（ExactOwnershipRegistry）、readySeedEdges（ReadyPhaseEdges
-  // ——S-C-2 起自动 seed ready 边缘（sm.onStatusChanged 订阅）已装配，observe/
+  // ——自动 seed ready 边缘（sm.onStatusChanged 订阅）在此装配，observe/
   // forget 同实例对自动与撤销路径同效）。
   /**
    * Finish every committed registry transition through the source-lifecycle
@@ -1166,10 +1156,10 @@ export async function buildHeadlessCtx(
         hostPackageSeeding.revoke(previous.id)
         // The plugin undo journal is bound to the OPERATIONAL target: an
         // id-stable edit that changed host/user/service/home invalidates
-        // every op recorded on the previous target (design 21 §6.4 review
-        // P1) — drop them here AND at undo time (latestOkForTarget).
+        // every op recorded on the previous target (design 21 §6.4)
+        // — drop them here AND at undo time (latestOkForTarget).
         sshPluginJournal.clear(previous.id)
-        // main 2125：service/home 编辑后仍是 dsh+ssh 目标的同 id 替换 →
+        // service/home 编辑后仍是 dsh+ssh 目标的同 id 替换 →
         // 若已完成即显式 reseed（普通重连由 ready 边缘拾取）。
         if (current?.kind === 'dsh' && current.transport === 'ssh') reseedIds.push(previous.id)
       }
@@ -1185,13 +1175,13 @@ export async function buildHeadlessCtx(
 
     // A service/home edit may complete while the transport is already
     // ready. Seed the replacement owner explicitly; ordinary reconnects
-    // are picked up by the ready edge above.（main 2137-2142 逐字——仅 ready
+    // are picked up by the ready edge above.（与 main 逐字同源——仅 ready
     // 实例可达：startAutomaticHostSeed 经 findRemoteTarget 解析 + 单飞注册表。）
     for (const id of reseedIds) {
       if (sm.status(id)?.phase === 'ready') startAutomaticHostSeed(id)
     }
 
-    // Committed lifecycle push（{removedIds, retiredIds} 文本与 main 2144-2157
+    // Committed lifecycle push（{removedIds, retiredIds} 文本与 main
     // 逐字一致；renderer-trust 锚定）。Electron main 以 registryWindow !== null
     // 为门 + push 前窗口身份复查；Swift flavor 无 window 对象——同值判据 =
     // edges.mainWindowAlive()（node-edges 事实缓存，hostFacts 推送刷新），
@@ -1213,25 +1203,25 @@ export async function buildHeadlessCtx(
     return projectedSaved
   }
 
-  // S-C-2 J/K 组：dsh runtime 管理宿主（design 18；main 2291-3560 行区的
-  // 装配镜像——控制器现实例/证据刷新/启动门/启动事务/元数据恢复/apply-now
+  // J/K 组：dsh runtime 管理宿主（design 18；与 main
+  // 同构——控制器现实例/证据刷新/启动门/启动事务/元数据恢复/apply-now
   // 门输入/事务槽/计时器；plane 依赖一律经 planeRef，runStartupTail 在
   // sidecar-entry bindPlane 后调用）。
 
-  // pnpm 入口解析（main 2293-2295 的 packaged/dev 两分支 → sidecar 位）：
-  //  - 装配（W-23 三审新增）：<moduleDir>/pnpm/bin/pnpm.cjs（build-sidecar
+  // pnpm 入口解析（main 的 packaged/dev 两分支 → sidecar 位）：
+  //  - 装配：<moduleDir>/pnpm/bin/pnpm.cjs（build-sidecar
   //    把内嵌 pnpm 拷进 sidecar 装配目录，与 node/vendor-dsh 同层）；
   //  - 旧装配位：<moduleDir>/../pnpm/bin/pnpm.cjs（sidecar 装配于
-  //    Resources/sidecar/ 时的 Electron 同构位 Resources/pnpm——main 2294）；
+  //    Resources/sidecar/ 时的 Electron 同构位 Resources/pnpm）；
   //  - dev：<moduleDir>/node_modules/pnpm/bin/pnpm.cjs（pnpm 11.21.0 pinned
-  //    dep——main 2295 dev 分支同值）。
-  //  P-13：三条候选拼写全部收进打包布局具名函数（packagedPnpmEntry /
+  //    dep，与 main dev 分支同值）。
+  //  三条候选拼写全部收进打包布局具名函数（packagedPnpmEntry /
   //  legacyPackagedPnpmEntry / devPnpmEntry），Swift 布局锁步测试锚定源文本。
   const pnpmEntry = resolvePnpmEntry(moduleDir)
   let storePruneOperation: Promise<void> | null = null
   // The shared core's default node executor is plain node (design 18 §9.1);
   // the desktop injects its Electron-as-node branch for EVERY pnpm child —
-  // installs AND store-prune（main 2297-2304 逐字：sidecar 自身可能跑在
+  // installs AND store-prune（与 main 逐字同源：sidecar 自身可能跑在
   // Electron-as-node（测试/打包腿）或 Swift 捆绑纯 node 下——两分支同表达式
   // 自动选择，Electron-as-node 分支与 main 完全同参）。
   const runtimeNodeExecutor = (): { file: string; args: string[]; env: Record<string, string> } =>
@@ -1255,7 +1245,7 @@ export async function buildHeadlessCtx(
     return operation
   }
 
-  // —— DshRuntimeController 现实例（main 2321-2382 的 ControllerOptions + DI
+  // —— DshRuntimeController 现实例（main 的 ControllerOptions + DI
   // 全参镜像；K 组注册体与启动/证据路径共用——状态权威单一）。——
   const runtimeHost = createRuntimeStartupHost({
     logTag: 'sidecar',
@@ -1305,7 +1295,7 @@ export async function buildHeadlessCtx(
     selectedJournalIntent,
   } = runtimeHost
 
-  // H 组本地插件执行叶（main 1270-1286 逐字搬——runtime writer fence 租约 +
+  // H 组本地插件执行叶（与 main 逐字同源——runtime writer fence 租约 +
   // runtimeState.startBlocked 启动门 + resolveActiveRuntime(runtimeBaseDir,
   // builtinDshWorkspace) workspace 解析——fence/启动门是装配侧运行时事务状态；
   // workspace 只在 fence 租约内解析，绝不跨运行时 swap 保留）。
@@ -1347,17 +1337,17 @@ export async function buildHeadlessCtx(
       },
     },
     isQuitting: () => quittingRequested,
-    // S-C-2：runtimeFacts.dshVersion 真化（main 3612-3614 同参——resolveActiveRuntime
+    // runtimeFacts.dshVersion（与 main 同参——resolveActiveRuntime
     // 即时解析：env > valid override/current > builtin；运行时重启/切换后返回
     // 新版本，绝不装配期定格；builtin workspace = inputs.builtinDshWorkspace）。
     runtimeFacts: {
       dshVersion: () => resolveActiveRuntime(runtimeBaseDir, builtinDshWorkspace).version,
     },
-    // S-C-2 S-D 增补 + S-E async 化（A 组设置副作用叶真实化——main 3622-3623
-    // 的 shellCtx setKeepAwake: enabled => setKeepAwakeActive(enabled) /
+    // A 组设置副作用叶——main 的 shellCtx
+    // setKeepAwake: enabled => setKeepAwakeActive(enabled) /
     // setLoginItem: enabled => applyLaunchAtLogin(enabled) 的 Swift flavor
-    // 同形）：两叶 async，await 注入 edges.sendEdge 的 B 桥应答（见文件头
-    // S-C-2/S-E 增补段）。失败语义与 main 同步叶逐字一致——Electron
+    // 同形：两叶 async，await 注入 edges.sendEdge 的 B 桥应答（见文件头）。
+    // 失败语义与 main 同步叶逐字一致——Electron
     // setKeepAwakeActive 同步失败 throw（applySettingsPatch catch 回滚）与
     // Swift leg 失败 reject 同一条路径；Electron applyLaunchAtLogin 失败
     // {ok:false,error} 与 Swift leg 失败 {ok:false,error} 同形（leg 诚实错误
@@ -1406,18 +1396,18 @@ export async function buildHeadlessCtx(
         return { ok: false, error: detail }
       }
     },
-    // S-C-1 真实化字段（C/D/E 组注册体装配依赖）：
+    // C/D/E 组注册体装配依赖字段：
     audit,
     transportManager: sm,
     gatewaySessions,
     publishRegistryTransition,
     confirmRegistryOriginSwitch: async (currentOrigin: string, nextOrigin: string) => {
       // registryOrigin 切换确认（SETTINGS_SET——design 18 trust boundary 变更需
-      // 原生用户确认）。文案/按钮/默认序与 main.ts 3752-3766 闭包逐字一致；
+      // 原生用户确认）。文案/按钮/默认序与 main.ts 闭包逐字一致；
       // 宿主腿 = edges.showMessage（node-edges → Swift NSAlert，按钮序号应答）。
       // 无存活主窗预检 = edges.mainWindowAlive()（与 main 的 win===null||destroyed
       // 同值）；预检与调用间窗口销毁的竞态 = showMessage 叶抛错 → loud + 折算
-      // 'unavailable'（与 electron-edges S6 的 'native confirmation unavailable'
+      // 'unavailable'（与 electron-edges 的 'native confirmation unavailable'
       // 语义同形——绝不误报 cancelled）。
       if (!edges.mainWindowAlive()) return 'unavailable' as const
       let response = 0
@@ -1438,13 +1428,13 @@ export async function buildHeadlessCtx(
       }
       return response === 1 ? ('confirmed' as const) : ('cancelled' as const)
     },
-    // S-C-1 部分注资（S6 字段——publish 叶撤销清理依赖；F 组落地共用实例）：
+    // publish 叶撤销清理依赖字段（F 组共用实例）：
     sshPluginJournal,
     hostPackageSeeding,
-    // —— S-C-2 真化字段（F/G/H/J/K 组注册体装配依赖；runtimeBaseDir /
-    // localDshHome 已在顶部 real 字段（S-C-1 值 = 本作用域同值常量）——
+    // —— F/G/H/J/K 组注册体装配依赖字段（runtimeBaseDir /
+    // localDshHome 已在顶部 real 字段（本作用域同值常量）——
     // chamberHostPackageSeeds / sshPluginTargets / syncGatewayChamberPluginsFor
-    // / runLocalPluginMutation 与 runtime 控制器族为本片新增。——
+    // / runLocalPluginMutation 与 runtime 控制器族在此提供。——
     chamberHostPackageSeeds,
     sshPluginTargets: {
       findRemoteTarget,
@@ -1463,7 +1453,7 @@ export async function buildHeadlessCtx(
     refreshRuntimeEvidence,
     runStorePruneIfNeeded,
     restartLocalDsh: async () => {
-      // PlaneHandle 宿主腿（main 3716-3720 同形——controlPlane null 门 +
+      // PlaneHandle 宿主腿（与 main 同形——controlPlane null 门 +
       // restartLocal() + resolve 后实时 connectionState 读；resolve ≠ success
       // 的白名单判据留 core 注册体）。
       const livePlane = planeRef.current
@@ -1479,7 +1469,7 @@ export async function buildHeadlessCtx(
     readApplyNowGateInput,
     selectedJournalIntent,
     stopLocalDsh: async () => {
-      // cp.stopLocal 宿主叶（main 3745 同形——PlaneHandle 不进入 core）。
+      // cp.stopLocal 宿主叶（与 main 同形——PlaneHandle 不进入 core）。
       const livePlane = planeRef.current
       if (livePlane === null) throw new Error('control plane not initialized')
       await livePlane.stopLocal()
@@ -1490,7 +1480,7 @@ export async function buildHeadlessCtx(
       inFlight: () => runtimeState.operation,
     },
     bundledRuntimeVersion: bundledVersion,
-    // 2026-12 合并（main 的插件受保护集合判定，design 21 §6.11）：core 的
+    // main 的插件受保护集合判定（design 21 §6.11）：core 的
     // localProtectionFacts 需要内建工作区路径（resolveActiveRuntime 第二参）与
     // 运行时线锚锁文件路径叶。Swift 装配的内建树 = inputs.builtinDshWorkspace
     // （<sidecar>/vendor/dsh）；锚锁文件即该树自己的 pnpm-lock.yaml。更新退出腿
@@ -1512,8 +1502,8 @@ export async function buildHeadlessCtx(
     // 这里是显式惰性 no-op——**不能省略**：本文件末尾的 ctx Proxy 把「缺失成员」变成
     // 调用即抛的 methodStub，而 core 的 I 组状态订阅在每个非 downloaded 相位都调它
     // （shell-core 的 disarmUpdaterQuit?.(...)，首个 'checking' 相位也算），省略会让
-    // 首次「检查更新」在订阅回调里抛错、headless 控制器 checking 卡死（2026-12 审查
-    // blocker）。update-headless 的 setState 亦已加固为「listener 抛错不反噬控制器」。
+    // 首次「检查更新」在订阅回调里抛错、headless 控制器 checking 卡死。
+    // update-headless 的 setState 对 listener 抛错不反噬控制器。
     disarmUpdaterQuit: () => {},
   }
   /** 递归 stub：可调用（调用即抛）+ 任意成员访问返回同款 stub（供
@@ -1537,9 +1527,9 @@ export async function buildHeadlessCtx(
         },
       },
     ) as ((..._args: never[]) => never)
-  // - updateController（I 组；W-22 真化——design 25 §7「v1 blocked-available
+  // - updateController（I 组；design 25 §7「v1 blocked-available
   //   诚实形态」）：Swift flavor 用 update-headless.ts 的纯 Node 控制器。
-  //   发现单源（S-21）：inputs.nativeUpdater 在场（壳声明 --native-updater
+  //   发现单源：inputs.nativeUpdater 在场（壳声明 --native-updater
   //   sparkle）时，check 经冻结边 updateNativeAction kind=check 交壳内 Sparkle
   //   （appcast 单源），相位经 __host.nativeUpdatePhase 回来，sidecar 绝不再跑
   //   GitHub releases 查询、也不排静默检查定时器；未声明原生腿时（dev /
@@ -1560,11 +1550,10 @@ export async function buildHeadlessCtx(
       error: (...args: unknown[]) => console.error('[updater-headless]', ...args),
     },
   })
-  // - setKeepAwake / setLoginItem（A 组 SETTINGS_SET 副作用叶）已于 S-C-2 真化、
-  //   S-E async 化（见上方 real 字段——async 叶经注入 edges.sendEdge（node-edges
-  //   公开转发）await B 桥应答；不再走 node-edges 的 HostEdges 同步叶）。
-  // - ctx 无其他残留 stub：A 组两叶真化后，注册体可达字段全部真实（I 组
-  //   updateController 于 W-22 真化，见上方注记）。
+  // - setKeepAwake / setLoginItem（A 组 SETTINGS_SET 副作用叶；见上方 real 字段
+  //   ——async 叶经注入 edges.sendEdge（node-edges 公开转发）await B 桥应答）。
+  // - ctx 无其他残留 stub：注册体可达字段全部真实（I 组
+  //   updateController 见上方注记）。
   const ctx = new Proxy(real as object, {
     get(target: Record<string, unknown>, key: string | symbol) {
       if (typeof key === 'symbol') return undefined
@@ -1573,10 +1562,10 @@ export async function buildHeadlessCtx(
     },
   }) as unknown as ShellAssemblyCtx
 
-  // —— 装配面返回（S-C-2）：本地 spawn 门 + plane 晚绑定 + 启动尾部 + 优雅
+  // —— 装配面返回：本地 spawn 门 + plane 晚绑定 + 启动尾部 + 优雅
   // 回收腿。——
 
-  // 本地 dsh spawn 门（main 1203-1220 三闭包逐字——事务特权 workspace 优先、
+  // 本地 dsh spawn 门（与 main 三闭包逐字同源——事务特权 workspace 优先、
   // writers quiescent 门 + runtimeState.startBlocked && !runtimeState.internalStart 公共门、
   // canExposeLocal = !runtimeState.startBlocked）。sidecar-entry 的 createControlPlane
   // 装配原样接线；闭包在 startLocal/暴露求值时经 planeRef 实时读 plane 自身
@@ -1608,7 +1597,7 @@ export async function buildHeadlessCtx(
     boundPlane = true
     planeRef.current = plane
     console.log(`[sidecar] control plane bound (connectionState=${plane.connectionState})`)
-    // cp.onLocalStateChange 订阅（main 3332-3340 同源：degraded/restarting/error/
+    // cp.onLocalStateChange 订阅（与 main 同源：degraded/restarting/error/
     // restart-exhausted → 关 known-good 候选健康窗口；restart-exhausted → 自动
     // 回退事务）。
     plane.onLocalStateChange((snapshot) => {
@@ -1622,7 +1611,7 @@ export async function buildHeadlessCtx(
     })
   }
 
-  // 启动尾部（main 3785-3789 同形：refreshRuntimeEvidence().then(runRuntimeStartup)
+  // 启动尾部（与 main 同形：refreshRuntimeEvidence().then(runRuntimeStartup)
   // ——catch 折叠为 loud + 启动门关闭 + failed 投影，绝不静默）。
   const runStartupTail = async (): Promise<void> => {
     if (!boundPlane) {
@@ -1631,8 +1620,8 @@ export async function buildHeadlessCtx(
     }
     // 无内建 dsh 树（--dsh-path 缺省）时，启动事务的终态恒为「无法确认内建
     // 版本 → blocked」，其发布无紧急性：延迟一个静默窗再跑，使 ready 后的
-    // 首屏/门禁采样窗口内不存在 RUNTIME_STATE_CHANGED push 竞态（W-13 ②
-    // 的 rendererPush 采样以「注册后第一个 push」为判据）；有内建树（真实
+    // 首屏/门禁采样窗口内不存在 RUNTIME_STATE_CHANGED push 竞态
+    // （rendererPush 采样以「注册后第一个 push」为判据）；有内建树（真实
     // product 路径）不延迟——本地实例起动与 Electron 同序不引入额外时延。
     if (builtinDshWorkspace === null) {
       await new Promise<void>((resolve) => {
@@ -1650,13 +1639,13 @@ export async function buildHeadlessCtx(
   }
 
   // 优雅回收腿：传输层（SSH 隧道/在途 exec）+ 插件子进程 + runtime 安装器 +
-  // gateway 会话内存 + session refresh 计时器（main will-quit 同源：1027-1063
+  // gateway 会话内存 + session refresh 计时器（与 main will-quit 同源：
   // ——quitting 门先置位（K 组事务/写路径看到即让路）→ abort 在飞运行时事务 →
   // 并行回收 → session refresh/gateway 会话清理）。
   const dispose = async (): Promise<void> => {
     quittingRequested = true
     runtimeState.startBlocked = true
-    // G15：abort 文案单源（shell-core RUNTIME_ABORT_REASON）——与 main.ts will-quit 同串。
+    // abort 文案单源（shell-core RUNTIME_ABORT_REASON）——与 main.ts will-quit 同串。
     runtimeState.operationAbort?.abort(new Error(RUNTIME_ABORT_REASON))
     try {
       await Promise.allSettled([
@@ -1666,7 +1655,7 @@ export async function buildHeadlessCtx(
         runtimeState.operation?.catch((err) => console.error('[sidecar] 运行时事务关闭失败：', err)),
       ])
     } finally {
-      // 计时器先停：refresh 触发绝不可竞态已 dispose 的 manager（main 1058-1063）。
+      // 计时器先停：refresh 触发绝不可竞态已 dispose 的 manager（与 main 同源）。
       sessionRefresh.dispose()
       gatewaySessions.dispose()
     }
@@ -1684,10 +1673,10 @@ export async function buildHeadlessCtx(
     const localRunning = plane !== null
       && LOCAL_RUNNING_STATES.has(plane.connectionState)
       && plane.localProcessAlive
-    // updateDownloadReady（S-19 parity）：原生 Sparkle 阶段经
+    // updateDownloadReady：原生 Sparkle 阶段经
     // __host.nativeUpdatePhase 进同一个更新投影后，downloaded/installing 就是
-    // Electron before-quit 的「更新已下载豁免」等价态（main.ts:1042
-    // updateState.phase === 'downloaded'）——退出确认不得拦下即将安装的重启。
+    // Electron before-quit 的「更新已下载豁免」等价态
+    // （updateState.phase === 'downloaded'）——退出确认不得拦下即将安装的重启。
     // 无原生安装腿时相位永不到 downloaded，恒 false（原语义不变）。
     const updatePhase = (real.updateController as HeadlessUpdateController).state().phase
     return {
@@ -1705,7 +1694,7 @@ export async function buildHeadlessCtx(
     runStartupTail,
     dispose,
     quitFacts,
-    // S3·D2：闭包绑定本装配的传输管理器单例 + 退出在途门（main 的模块级
+    // 闭包绑定本装配的传输管理器单例 + 退出在途门（main 的模块级
     // transportManager / quitRequested 对偶；判据见模块级叶注释）。
     reconnectStaleTransports: () => reconnectStaleTransports(
       transportManager,

@@ -2,7 +2,7 @@
  * Per-instance open-in host gateway (design 20 §6, fork & supersede).
  *
  * WHAT THIS IS — the chamber fork of upstream's open-in host half
- * (`@deepseek-ai/dsh-host-open-in-app`, pin fb2c4b9e = dsh-v0.1.5-rc.2),
+ * (`@deepseek-ai/dsh-host-open-in-app`),
  * running INSIDE each managed local dsh instance as a seeded host package. It
  * answers the local application catalog, the applications' real bundle icons
  * and the launch of one directory in one installed application, so the chamber
@@ -31,8 +31,8 @@
  * `src/index.ts` (three `webServer` routes + a required three-knob config
  * schema + the SSH dormancy gate). The catalog/icon/launch logic itself is
  * upstream's, kept byte-identical in `./catalog.ts`, `./resolver.ts` and
- * `./icons.ts`; `./core.ts` is where the two removed responsibilities used to
- * live. The fork is registered in the upstream-touchpoint gate
+ * `./icons.ts`; `./core.ts` carries the two transport/trust responsibilities
+ * this fork does not implement. The fork is registered in the upstream-touchpoint gate
  * (`scripts/upstream/verify-upstream-touchpoints.mjs` → `FORKS`) so any upstream
  * drift on those files fails CI instead of silently rotting here.
  */

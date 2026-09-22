@@ -47,7 +47,7 @@ export interface SshInstanceSpec {
    * https). Non-secret; never part of the transport-identity predicate — an http↔https
    * switch keeps the target's credentials (design 17 §9.1). */
   insecureHttp: boolean
-  /** Optional S23 certificate pin (64 hex SHA-256 of SPKI DER). Only present
+  /** Optional certificate pin (64 hex SHA-256 of SPKI DER). Only present
    * for gateway + HTTP transport + HTTPS endpoints. Non-secret registry
    * metadata; safe to round-trip through the renderer. */
   spkiPin?: string
@@ -73,7 +73,7 @@ export interface SshInstanceSpec {
    */
   passwordSet?: boolean
   /**
-   * Read-time NON-SECRET storage-mode projection (design 17 §13.4.1 / S22):
+   * Read-time NON-SECRET storage-mode projection (design 17 §13.4.1):
    * how the main process's credential mirror is stored — 'safeStorage' =
    * OS-keychain-encrypted blobs (Electron safeStorage), 'plaintext' = the
    * documented 0600 plaintext fallback (OS keychain unavailable). Global per
@@ -83,7 +83,7 @@ export interface SshInstanceSpec {
    */
   secretStorage?: 'safeStorage' | 'plaintext'
   /**
-   * Read-time NON-SECRET S-29 projection: the credentials mirror is a
+   * Read-time NON-SECRET projection: the credentials mirror is a
    * safeStorage-encrypted file written by the Electron flavor that this
    * Electron-free shell (Swift sidecar without a keychain crypto adapter)
    * cannot decrypt. The file is preserved unchanged and its entries fail
@@ -111,7 +111,7 @@ export interface SshInstanceInput {
   remoteDshHome?: string | null
   /** transport='http' only: true = plaintext http (default false = https). */
   insecureHttp?: boolean
-  /** Optional S23 certificate pin. Main rejects malformed pins and pins on
+  /** Optional certificate pin. Main rejects malformed pins and pins on
    * HTTP plaintext, non-gateway targets, or non-HTTP transports. */
   spkiPin?: string
 }
@@ -135,7 +135,6 @@ export type SaveConnectionResult =
 export interface SshStatusProjection {
   /** Target kind ('dsh' | 'gateway'; mirrors desktop TARGET_KINDS). */
   kind: TransportKind
-  /** Transport method (design 17 §2.2): 'ssh' tunnel | 'http' direct endpoint. */
   transport: TransportMethod
   /** transport='http': true = plaintext http origin (design 17 §13.1 诚实状态). */
   insecureHttp: boolean
@@ -156,7 +155,7 @@ export interface SshStatusProjection {
    * answer rejected the connection (not a compatible dsh — wrong version /
    * breaking change / non-dsh service on the port — or an instance-level
    * auth rejection such as gateway 401/403). The SSH tunnel itself is fine
-   * and the UI must never show an SSH auth hint for it (2026-08 fix).
+   * and the UI must never show an SSH auth hint for it.
    */
   userActionKind: 'auth' | 'endpoint' | null
   /**
@@ -204,8 +203,7 @@ export type SshExecIpcResult = SshStatusProjection | { error: string }
  *  plugin-sync.ts). The EXPECTED set is the control-plane registry, so a new
  *  host package appears in the plugin-management page without a UI change.
  *  The field set is pinned to the desktop projection by
- *  `packages/desktop/test/ipc/cross-package-contract.test.ts` (2026-09-11: the
- *  `localOnly` field below was added there after a silent miss). */
+ *  `packages/desktop/test/ipc/cross-package-contract.test.ts`. */
 export interface ChamberHostPackageState {
   insertId: string
   name: string
@@ -235,7 +233,7 @@ export type ChamberInjectionState =
  *  means the remote profile is not yet initialized (first `dsh plugin add`
  *  creates it); error is the loud reason when cat/parse failed. */
 /**
- * One read-face plugin row (design 21 §6.11.5, 2026-09 row-set revision): one row
+ * One read-face plugin row (design 21 §6.11.5): one row
  * per profile dependency, carrying the backend-computed role and `protected`
  * flag (the renderer never re-derives protection). The installation baseline
  * (B₀) and the chamber seed registry (S) only classify rows; they are not
@@ -268,7 +266,6 @@ export interface RemotePluginManifest {
 export interface LocalPluginManifest {
   dependencies: Record<string, string>
   bundles: string[]
-  /** Read-face row projection (design 21 §6.11.5). */
   rows: PluginRowProjection[]
   clientLines: string[]
   /** Deps whose own manifest declares a `dsh.bundle` (verifyApplied bundles half-assertion). */
@@ -345,7 +342,6 @@ export interface DesktopSshSurface {
   set_password(id: string, password: null): Promise<{ ok: true } | { error: string }>
   /** Explicit clear only; non-empty writes use save_connection. */
   set_gateway_token(id: string, token: null): Promise<{ ok: true } | { error: string }>
-  /** Explicit clear only; non-empty writes use save_connection. */
   set_gateway_password(id: string, password: null): Promise<{ ok: true } | { error: string }>
   /** Re-run the chamber-plugin seed-cache sync on a gateway instance's
    *  registered transport (design 21 §6.5); id-only, never a URL/credential. */
@@ -477,7 +473,7 @@ export type GatewayPluginApplyIpcResult =
   | { ok: false; error: string; partial?: GatewayPluginApplyPartial }
 
 /** Gateway materialize executed outcome (settle/restart parity with the
- *  apply batch — 2026 fix): executed = the executor op terminally succeeded
+ *  apply batch): executed = the executor op terminally succeeded
  *  (the profile changed); restarted = the controlled managed-dsh restart
  *  was accepted AND settled, so the plugin is mounted on the running
  *  instance. ok:false may still carry the outcome when the profile change
@@ -500,7 +496,7 @@ export type GatewayPluginMaterializeIpcResult =
   | { ok: true; outcome: GatewayPluginMaterializeOutcome }
   | { ok: false; error: string; outcome?: GatewayPluginMaterializeOutcome }
 
-/** Undo outcome of the ssh plugin journal (design 21 §6.4, plan Phase 5):
+/** Undo outcome of the ssh plugin journal (design 21 §6.4):
  *  the main process confirms the undo (cancelled = the user dismissed the
  *  dialog), re-executes the inverse op through the same ssh plugin_apply
  *  flow (restart-to-apply), and journals the undo op so further undos chain.
@@ -538,7 +534,7 @@ export interface UpdateState {
   releaseUrl: string | null
   installBlockedReason: string | null
   error: string | null
-  /** ONE-SHOT carry (2026-12 review round F2/F3): a RESTART (「重启并安装」)
+  /** ONE-SHOT carry: a RESTART (「重启并安装」)
    *  failure surfaced while the phase stayed `downloaded`. Absent (undefined)
    *  = no restart failure. Clearing rule: every subsequent push resets it
    *  unless that push itself carries the field. */
@@ -547,7 +543,7 @@ export interface UpdateState {
 
 /** window.dshChamber.update — query / subscribe / user-initiated check /
  *  user-confirmed download / user-triggered restart into the downloaded
- *  update (the settings「重启并安装」action, 2026-12 user decision). */
+ *  update (the settings「重启并安装」action). */
 export interface UpdateSurface {
   state(): Promise<UpdateState>
   /** User-initiated check (the「检查更新」button) — never downloads. */
@@ -734,7 +730,6 @@ export interface DeepLinkSurface {
   onIntent(callback: (intent: DeepLinkIntent) => void): () => void
   /** Signal after onIntent is installed; the main process drains only then. */
   ready(): Promise<boolean>
-  /** Commit only after App has routed or deliberately discarded this exact attempt. */
   ack(deliveryId: number, attempt: number): Promise<boolean>
 }
 

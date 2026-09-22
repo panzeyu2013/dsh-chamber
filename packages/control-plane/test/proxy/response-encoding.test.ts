@@ -98,7 +98,7 @@ test('convergeLocation: undefined passthrough, root mount strips origin, prefixe
 })
 
 // ---------------------------------------------------------------------------
-// M3-2' (revising the 2026 audit M3b verdict): only the requests that MUST stay
+// Only the requests that MUST stay
 // identity keep accept-encoding stripped — HTML document navigations (their
 // upstream reply must stay unencoded for the S0 trust injection: proxy-forward
 // htmlInjectable → gateway html-inject.ts) and text/event-stream requests
@@ -267,7 +267,7 @@ test("accept-encoding policy: SSE keeps identity as transport insurance, not as 
 })
 
 test('isHashedStaticAssetPath: content-addressed Vite output only (never favicon/manifest/index.html)', () => {
-  // Measured 2026-12 upstream names.
+  // Upstream names.
   assert.equal(isHashedStaticAssetPath('/assets/index-BKQ_L1z6.js'), true)
   assert.equal(isHashedStaticAssetPath('/assets/cpp-DIPi6g--.js'), true)
   assert.equal(isHashedStaticAssetPath('/assets/KaTeX_AMS-Regular-BQhdFMY1.woff2'), true)
@@ -275,7 +275,7 @@ test('isHashedStaticAssetPath: content-addressed Vite output only (never favicon
   assert.equal(isHashedStaticAssetPath('/assets/logo-AbCdEf12.svg'), true)
   assert.equal(isHashedStaticAssetPath('/assets/font-AbCdEf12.woff'), true)
   assert.equal(isHashedStaticAssetPath('/assets/a-12345678.js'), true)
-  // The unhashed root files the M3-3 gate must never cache as immutable.
+  // The unhashed root files the gate must never cache as immutable.
   assert.equal(isHashedStaticAssetPath('/favicon.svg'), false)
   assert.equal(isHashedStaticAssetPath('/manifest.webmanifest'), false)
   assert.equal(isHashedStaticAssetPath('/index.html'), false)
@@ -289,7 +289,7 @@ test('isHashedStaticAssetPath: content-addressed Vite output only (never favicon
   assert.equal(isHashedStaticAssetPath('/other/index-BKQ_L1z6.js'), false)
   // Nested asset directories are REAL at the pin (assets/fonts/*.woff2|ttf,
   // assets/langs/*.js), so exactly one level is accepted — without it the rule
-  // could only ever reach the four top-level files (2026-12 review).
+  // could only ever reach the four top-level files.
   assert.equal(isHashedStaticAssetPath('/assets/fonts/KaTeX_AMS-Regular-BQhdFMY1.woff2'), true)
   assert.equal(isHashedStaticAssetPath('/assets/sub/index-BKQ_L1z6.js'), true, 'one nested level is the real shape')
   assert.equal(isHashedStaticAssetPath('/assets/a/b/index-BKQ_L1z6.js'), false, 'two levels is not a Vite layout')
@@ -304,7 +304,7 @@ test('isHashedStaticAssetPath: content-addressed Vite output only (never favicon
   assert.equal(isHashedStaticAssetPath('/assets/../assets/ok-12345678.js'), false)
 })
 
-// Direct forwardHttp calls: the M3-3 seam lives on ProxyForwardDeps, which the
+// Direct forwardHttp calls: the response-header seam lives on ProxyForwardDeps, which the
 // gateway composes itself (gateway-proxy.ts forwardDeps) — the instance proxy
 // owner never sets it, so these tests drive the shared core directly.
 

@@ -6,14 +6,12 @@
  * abort semantics. The separately invoked authenticated gateway proxies the
  * same unary wire (runtime-manager.ts consumes call()).
  *
- * The retired control-plane interaction/session-runtime domain is DELETED
- * here rather than parked as @deprecated dead code (2026-09-11 review;
- * CONTRIBUTING.md §范围纪律 — a removed domain never flows back):
+ * The interaction/session-runtime domain stays outside this client
+ * (CONTRIBUTING.md §范围纪律 — a removed domain never flows back):
  * `respond()` (POST /api/respond, client-response envelope) and
- * `openEventStream()` (the old events.mux/events.host downlink consumer) went
- * with their types and stream-limit seam. dsh-v0.1.2-alpha.1 had already
- * deleted both wires upstream, no production caller remained, and the
- * answerable surface is the `$events/result` Remote over /api/remote.mux.
+ * `openEventStream()` (the events.mux/events.host downlink consumer) have no
+ * counterpart here; the answerable surface is the `$events/result` Remote
+ * over /api/remote.mux.
  *
  * Invariants:
  * - rpcId is minted by the initiator (this client) on every unary call and
@@ -32,18 +30,16 @@
  * - every unary response body is read under a per-call byte cap
  *   (UnaryOptions.maxResponseBytes; default MAX_UNARY_RESPONSE_BYTES) so a
  *   damaged/growing host can never grow this process's memory without bound.
- * - probe semantics are decoupled from session-data growth (2026 final
- *   probe-contract plan): the unified identity probe speaks the fixed-size
+ * - probe semantics are decoupled from session-data growth: the unified
+ *   identity probe speaks the fixed-size
  *   `session/canOpenWorkspacePath` boolean (HOST_PROBE_MAX_RESPONSE_BYTES)
  *   and only falls back to the session-data-bearing legacy `session/list`
  *   probe (1 MiB default cap) on an HTTP 404 — a runtime tree that predates
- *   the identity method. The old generation-scoped session/list capability
- *   snapshot cache (describeCapabilities) is gone: no production consumer
- *   needed the snapshot, and the periodic health probe now verifies the
- *   fixed-size identity contract instead of re-reading the session list.
+ *   the identity method. The periodic health probe verifies the fixed-size
+ *   identity contract rather than re-reading the session list.
  */
 
-// The wire envelope is single-sourced in rpc-envelope.ts (A2 cross-package
+// The wire envelope is single-sourced in rpc-envelope.ts (cross-package
 // protocol single-sourcing): envelope construction and server-response
 // validation are shared with the desktop probes (ssh-provider.ts) — only the
 // fetch-carrier orchestration (pending table / settle-once / signal
@@ -534,7 +530,7 @@ export async function probeHostIdentity(
     return true
   } catch (error) {
     if (isHostIdentityNotFound(error)) {
-      // Legacy trees keep answering session/list exactly as before; a 404 on
+      // Legacy trees answer session/list; a 404 on
       // BOTH methods (or any non-404 failure of the fallback) fails loud.
       try {
         const { result } = await call(
@@ -543,11 +539,10 @@ export async function probeHostIdentity(
           buildLegacyHostProbePayload(),
           { signal, generationSignal, timeoutMs },
         )
-        // Legacy-answer shape check: the pre-degrade session/list probe
-        // (describeCapabilities) validated the value slot — ok:true with a
-        // non-object value was a protocol_violation, never a healthy host.
-        // "Bit-identical legacy semantics" includes that check: a damaged
-        // legacy host must fail loud, not pass the health probe.
+        // Legacy-answer shape check: the session/list probe validates the
+        // value slot — ok:true with a non-object value is a
+        // protocol_violation, never a healthy host. A damaged legacy host
+        // must fail loud, not pass the health probe.
         if (typeof result.value !== 'object' || result.value === null) {
           throw new RpcTransportError(
             `dsh ${LEGACY_HOST_PROBE_METHOD}: malformed value slot`,

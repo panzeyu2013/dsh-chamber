@@ -1,11 +1,11 @@
 /**
- * Managed-dsh state projection for gateway sources (design 17 §2, problem B).
+ * Managed-dsh state projection for gateway sources (design 17 §2).
  *
  * A gateway source's desktop `ready` only proves the GATEWAY PROCESS is alive:
  * the readiness probe reads `/chamber/runtime/status` (the endpoint exists
  * precisely because the managed dsh is a separate process). The sidebar
- * consumes the tunnel phase, so a stopped/crashed managed dsh used to leave the
- * source fully interactive — its `+`/new-session entry clickable, its rows
+ * consumes the tunnel phase, so a stopped/crashed managed dsh otherwise leaves
+ * the source fully interactive — its `+`/new-session entry clickable, its rows
  * frozen on the last pushed aggregate — with no degraded projection. This
  * module reads the connectionState the status route already carries and
  * classifies it; the App folds the result into the source's `phase` (the
@@ -26,8 +26,8 @@ export const MANAGED_RUNTIME_TRANSIENT_STATES = ['starting', 'restarting'] as co
 
 /**
  * Whether a managed-dsh state can never serve a boot right now: terminal-down
- * OR transiently starting/restarting (2026-12 review MINOR — harvesting a
- * starting gateway burns one of only two attempts against 503s).
+ * OR transiently starting/restarting (harvesting a starting gateway burns one
+ * of only two attempts against 503s).
  * @param state - Probed managed runtime state (null = probe missing/failed).
  * @returns True when a background mount must not be attempted.
  */

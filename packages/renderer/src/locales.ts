@@ -1,5 +1,5 @@
 /**
- * App-frame copy (T16, 2026-09-11 upstream-alignment).
+ * App-frame copy.
  *
  * Upstream's rule for the client stack (`packages/client/AGENTS.md`, "Styling
  * and localization"): EVERY product-visible string — text, accessibility names,
@@ -8,8 +8,8 @@
  * seat or an already-localized prop. The chamber's own client plugins comply
  * (each owns `src/locales.ts`, registered through `ctx.locale.register`). The
  * FRAME around those shells (App.tsx, InstanceView.tsx, the static skeleton)
- * does not: it hosts N ctxs and owns NO `t` seat, so its chrome copy was inline
- * Chinese literals.
+ * does not: it hosts N ctxs and owns NO `t` seat, so its chrome copy needs a
+ * ctx-free dictionary instead of inline Chinese literals.
  *
  * This module is that dictionary: the same shape the client plugins use (`zh`
  * is the key-set source of truth, `en` is checked complete against it), consumed
@@ -26,9 +26,9 @@
  * service writes it (`syncDocumentLanguage`, vendor
  * packages/client/locale/src/client/index.ts:149) — but in the chamber's N-ctx
  * document EVERY mounted shell's service writes it, at activation and on every
- * dictionary registration, so "the booted shell's locale" used to mean "the
- * shell that wrote last" including a prewarmed one's browser-derived
- * provisional. That last-writer-wins defect is closed by the page-language
+ * dictionary registration, so "the booted shell's locale" is not "the
+ * shell that wrote last" (which could be a prewarmed one's browser-derived
+ * provisional). The page-language
  * owner: `page-language.ts` sanctions only the ON-SCREEN source's SETTLED
  * language and restores every other write (design 06 §4.6「页面语言归属」), so
  * the document language the readers below observe IS the on-screen instance's
@@ -40,7 +40,7 @@
  * observed, never `navigator.language`: the user's choice inside dsh is
  * authoritative, and an English document must produce English chrome.
  *
- * 2026-09-11 review-fix (finding 4e): "an English document" only exists AFTER a
+ * "An English document" only exists AFTER a
  * shell booted — on a COLD load the served markup declares `lang="zh-CN"`
  * (index.html:2) and no locale service has run yet, so every frame reader
  * resolves zh and the first copy the user sees is always the served one (which
@@ -68,7 +68,7 @@ export const zh = {
   'boot.loading': '正在加载 {label}…',
   /** Shell-level veil hint under the title. */
   'boot.loadingHint': '首次打开需加载完整界面',
-  /** Deferred-boot veil title (W2): the source is manually disconnected, so the
+  /** Deferred-boot veil title: the source is manually disconnected, so the
    *  boot is held back until the user explicitly connects it. `{label}` = source name. */
   'boot.deferred': '未连接 {label}',
   /** Deferred-boot veil hint: what the user should do next. */
@@ -95,7 +95,7 @@ export const zh = {
   /** Gap body: the source never served its client plugin graph inside the boot
    *  window, so this mount loaded none of its frontend plugins. */
   'bootGap.body.graphUnavailable': '该来源在启动窗口内没有提供客户端插件图，本次挂载没有加载它的前端插件；依赖这些插件的界面（例如会话正文）不会出现。',
-  /** Gap body (2026-12 FIX 6): the LOCAL instance's graph endpoint answered
+  /** Gap body: the LOCAL instance's graph endpoint answered
    *  404/method-missing. The app-managed local host always injects its graph, so
    *  the cause is chamber-side (installation/seed integrity) — the copy must NOT
    *  send the user to a runtime upgrade (read-only on Windows). */
@@ -114,13 +114,13 @@ export const zh = {
   /** Gap next-step line while the self-heal will still re-mount this mount. */
   'bootGap.action.autoRetry': '该来源就绪后会自动重挂一次；若重挂后仍然如此，需要在该来源上处理。',
   /** Gap next-step line otherwise (REMOTE sources; the local branch is
-   *  `bootGap.action.manualLocal` — FIX 6c). Deliberately says 常见原因 — the app
+   *  `bootGap.action.manualLocal`). Deliberately says 常见原因 — the app
    *  cannot prove the cause — and deliberately asserts no COMPLETED re-mount:
    *  this line is also what renders in the one frame between arming the
    *  self-heal and the re-mount resetting the state, where "已重挂过" would not
    *  be true yet. */
   'bootGap.action.manual': '若仍然如此，需要在该来源上处理。常见原因：该来源的 dsh 运行时与本次页面所需的前端插件不匹配（版本较旧或缺少插件）——在该来源上升级或对齐 dsh 运行时。',
-  /** Gap next-step line for the LOCAL instance (2026-12 FIX 6c): runtime
+  /** Gap next-step line for the LOCAL instance: runtime
    *  management there is a read-only projection on Windows, so the honest
    *  actions are restarting the local dsh, re-mounting the source and reporting
    *  diagnostics — never a runtime upgrade. */

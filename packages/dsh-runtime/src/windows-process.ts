@@ -1,17 +1,12 @@
 /**
  * Windows process-tree probes for the dsh-runtime installer supervisor
- * (design 21 M2a; design 18 §9.1 — shared pure-Node core, so this module is
+ * (design 21; design 18 §9.1 — shared pure-Node core, so this module is
  * self-contained and must not import from control-plane or desktop).
  *
- * Sibling-parity note (audit 2026): packages/control-plane/src/win-probes.ts
+ * Sibling-parity note: packages/control-plane/src/win-probes.ts
  * is the control-plane twin of this module (same CIM/taskkill semantics —
  * dsh-runtime stays self-contained and must not import control-plane). Keep
  * behavior identical across both; the Windows CI leg runs both test sets.
- *
- * S5 parity port (2026): WinProcessRow carries CommandLine/CreationDate and
- * killWindowsTreeWithResidual re-proves every scanned residual pid against a
- * fresh CIM table before taskkill — the control-plane twin's S1 rule
- * (review/windows/fixes/s5-win32-liveness.md).
  *
  * Parity target: on Unix the supervisor signals the detached install group
  * (TERM→KILL) and treats "group alive" as "writer alive". Windows has no
@@ -30,15 +25,15 @@
 
 import { spawnSync } from 'node:child_process'
 
-// 30s (2026-09 real-runner finding; sibling parity with win-probes.ts
+// 30s (sibling parity with win-probes.ts
 // WINDOWS_PROBE_TIMEOUT_MS — the parity test compares both pairs): PowerShell
-// 5.1 first-run + Defender scan on fresh windows runners exceeded 10s; the
+// 5.1 first-run + Defender scan on fresh windows runners exceeds 10s; the
 // table cache bounds the cost.
 export const PROBE_TIMEOUT_MS = 30_000
 export const TABLE_CACHE_TTL_MS = 500
 
 /** One normalized Win32_Process row: pid, stale parent chain and the stable
- *  identity fields (S5) a fresh probe must match before a residual pid is
+ *  identity fields a fresh probe must match before a residual pid is
  *  terminated. */
 export interface WinProcessRow {
   pid: number
@@ -246,7 +241,7 @@ export function killWindowsTree(pid: number): boolean {
   const { status, stdout, stderr } = execWindowsTool('taskkill.exe', taskkillTreeArgs(pid))
   let outcome = classifyTaskkill(status, `${stdout}\n${stderr}`)
   if (outcome === 'error') {
-    // Audit (2026, med): localized taskkill output may miss the English
+    // Localized taskkill output may miss the English
     // not-found message; verify liveness directly before declaring failure.
     if (!windowsPidExists(pid)) outcome = 'gone'
     else throw new Error(`taskkill tree ${pid} failed`)
@@ -256,7 +251,7 @@ export function killWindowsTree(pid: number): boolean {
 }
 
 /** kill(0)-style liveness; EPERM counts as alive; only ESRCH is absence.
- *  Residual (S5, documented, sibling parity with win-probes.ts): this
+ *  Residual (documented, sibling parity with win-probes.ts): this
  *  OpenProcess probe can read a terminated-but-held process object as alive;
  *  it is only used to classify a non-zero taskkill result, and the callers
  *  that prove quiescence after a kill consult the CIM table. */

@@ -1,9 +1,9 @@
 /**
- * Gateway runtime action guards (2026-12 audit F2 split): the mutation fences
- * (pending / ordinary-pending / in-flight writer / profile-write lease) that
- * every transaction body consults, moved out of runtime-manager.ts. All mutable
- * manager state is injected as getters, so each refusal still observes the live
- * writer/lifecycle state at call time (F3 parity semantics unchanged).
+ * Gateway runtime action guards: the mutation fences (pending /
+ * ordinary-pending / in-flight writer / profile-write lease) that every
+ * transaction body consults. All mutable manager state is injected as
+ * getters, so each refusal still observes the live writer/lifecycle state at
+ * call time.
  */
 import { readOverrideState, shouldInvalidate } from '@dsh-chamber/dsh-runtime'
 import {
@@ -63,8 +63,8 @@ export function createRuntimeActionGuards(deps: RuntimeActionGuardDeps): Runtime
     if (state.kind !== 'valid') return null
     // These are explicit recovery phases with their own Design 18 actions,
     // not the normal installed/pending terminal state. The recovery-name
-    // classification is the route layer's canonical set (audit N2:
-    // RETRY_APPLY_REASONS / RETRY_RESTORE_REASONS from runtime-refusals.ts).
+    // classification is the route layer's canonical set
+    // (RETRY_APPLY_REASONS / RETRY_RESTORE_REASONS from runtime-refusals.ts).
     // NOTE: only the interrupted-apply/restore reasons carve the pending out
     // here — a FATAL metadata block does NOT (that suppression lives in
     // status()'s startupBlockReasonOutranksPending, a deliberately wider
@@ -81,7 +81,7 @@ export function createRuntimeActionGuards(deps: RuntimeActionGuardDeps): Runtime
     const pending = ordinaryPendingVersion()
     if (pending !== null) {
       // Same code/message as the route recovery gate and profileWriteRefusal
-      // (audit N2: pendingOnlyRefusal).
+      // (pendingOnlyRefusal).
       throw refusalError(pendingOnlyRefusal(pending))
     }
   }
@@ -108,7 +108,7 @@ export function createRuntimeActionGuards(deps: RuntimeActionGuardDeps): Runtime
   }
 
   function assertMutationIdle(): void {
-    // Shared in-flight writer matrix (2026-12 audit F3). Its last row is the
+    // Shared in-flight writer matrix. Its last row is the
     // design 21 §6.3 profile-write fence: a plugin add/remove pnpm child must
     // never interleave a runtime transaction (every runtime writer is a
     // DSH_HOME/profile writer too).
@@ -126,7 +126,7 @@ export function createRuntimeActionGuards(deps: RuntimeActionGuardDeps): Runtime
    */
   function profileWriteRefusal(): { code: ProfileWriteRefusalCode; error: string } | null {
     const startupBlockReason = deps.getStartupBlockReason()
-    // Shared in-flight writer matrix (runtime-gate.ts), historical order. The
+    // Shared in-flight writer matrix (runtime-gate.ts). The
     // F7 rollback latch is armed SYNCHRONOUSLY before its async body drains/
     // waits, so its row covers the whole rollback window (including the
     // lease-drain wait): no new lease can start mid-rollback. This surface is
@@ -137,8 +137,8 @@ export function createRuntimeActionGuards(deps: RuntimeActionGuardDeps): Runtime
     // Recovery states expose only their matching retry (recover-metadata for
     // FATAL); restore-builtin applies to pending/healthy selections only — a
     // plugin write is not on that surface and must not slip past it. Same
-    // code/message as start()/applyNowPreflight/restoreBuiltin (audit N2:
-    // recoveryRetryRequiredRefusal).
+    // code/message as start()/applyNowPreflight/restoreBuiltin
+    // (recoveryRetryRequiredRefusal).
     if (startupBlockReason !== null) {
       return recoveryRetryRequiredRefusal(startupBlockReason)
     }
@@ -153,7 +153,7 @@ export function createRuntimeActionGuards(deps: RuntimeActionGuardDeps): Runtime
     }
     if (pending !== null) {
       // Same code/message as assertNoPending/assertNoOrdinaryPending and the
-      // route pending gate (audit N2: pendingOnlyRefusal).
+      // route pending gate (pendingOnlyRefusal).
       return pendingOnlyRefusal(pending)
     }
     const connectionState = deps.getConnectionState()

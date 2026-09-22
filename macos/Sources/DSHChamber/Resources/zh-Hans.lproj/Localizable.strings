@@ -1,8 +1,8 @@
 /*
- * Localizable.strings —— dsh-chamber 原生壳简体中文文案（S2：本地化资源）
+ * Localizable.strings —— dsh-chamber 原生壳简体中文文案（本地化资源）
  *
  * 键 = NativeTextKey.rawValue（macos/Sources/DSHChamber/NativeText.swift），逐字一致；键表以 NativeTextKey 为准（当前 121 键）。
- * zh-Hans 值逐条对照既有 Swift 源码字面量（不新造文案）：
+ * zh-Hans 值逐条对照 Swift 源码字面量（不新造文案）：
  *   - AppDelegate.makeMainMenu / presentQuitConfirmation / presentQuitUnavailableAlert /
  *     presentFatalAlert / installStatusItem（菜单、退出框、致命标题、托盘）
  *   - QuitCoordinator（confirmDetail / UnavailableAlert）
@@ -15,8 +15,8 @@
  *
  * 占位符：%@ = 字符串参数，%d = 整数参数（String(format:) 语义）；与 en.lproj 逐键一一对应，
  * 两份文件的占位符种类/顺序必须保持一致。参数由调用方按 NativeText.format 传入：
- * 原本由 Swift 字面量插值的动态部分（app 名、控制面地址、退出原因、次数/秒数、
- * sidecar 失败原因）改为 %@/%d，格式化后的输出与既有字面量逐字一致。
+ * 动态部分（app 名、控制面地址、退出原因、次数/秒数、sidecar 失败原因）经
+ * %@/%d 由调用方传入，格式化后的输出与 Swift 字面量逐字一致。
  *
  * 装配：SwiftPM .process("Resources/zh-Hans.lproj") 产出资源包；
  * build-swift-app.mjs 把 <lang>.lproj 装配到 <App>.app/Contents/Resources/ 下
@@ -84,7 +84,7 @@
 "quit.confirmButton" = "退出";
 "quit.cancelButton" = "取消";
 
-/* ===== 退出决策不可得（S-17） ===== */
+/* ===== 退出决策不可得 ===== */
 "quit.unavailableTitle" = "dsh sidecar 未响应退出请求";
 "quit.unavailableDetail" = "dsh sidecar 未在 %d 秒内应答退出决策，本次退出已取消。可以继续等待 sidecar 恢复，或强制退出（强制退出仍会执行既有清理）。";
 "quit.waitButton" = "继续等待";
@@ -173,8 +173,8 @@
 "common.ok" = "好";
 "common.listSeparator" = "、";
 
-/* ===== composer 原生打开面板 / 桥兜底 / 帧错误（2026-12 审计收口：这三处
-   此前硬编码英文或中文，会在页面语言与系统语言不同时错配） ===== */
+/* ===== composer 原生打开面板 / 桥兜底 / 帧错误（这三处文案若硬编码英文或
+   中文，会在页面语言与系统语言不同时错配） ===== */
 "panel.openFileTitle" = "选择文件";
 "panel.openFileOrDirectoryTitle" = "选择文件或文件夹";
 "panel.openFilePrompt" = "打开";

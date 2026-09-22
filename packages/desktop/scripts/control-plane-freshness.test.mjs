@@ -1,18 +1,14 @@
 /**
- * Packaged control-plane freshness (design 21 §6.11; the 2026-12 drift).
+ * Packaged control-plane freshness (design 21 §6.11).
  *
  * `dist/control-plane/**` is what the PACKAGED app loads (`main.ts` →
- * `control-plane-module.ts` dual path), and until now nothing read it: the
- * desktop suite exercises `packages/control-plane/src` through the workspace
- * path, so a stale compile is invisible to every test yet silently ships the
- * previous judgement. That is not hypothetical — an older round of the
- * protected-set verifier survived in `packages/gateway/dist` exactly this way,
- * and the 2026-12 post-install verification fix had to be rebuilt by hand
- * before it could take effect in the running app.
+ * `control-plane-module.ts` dual path), while the desktop suite exercises
+ * `packages/control-plane/src` through the workspace path, so a stale compile
+ * is invisible to every test yet silently ships the previous judgement.
  *
- * The markers below are the operator-facing copy of those 2026-12 fixes, which
+ * The markers below are the operator-facing copy, which
  * the compile preserves verbatim; rewording the copy means moving the marker
- * with it (the same lockstep discipline the C14 row mirror uses).
+ * with it (the same lockstep discipline the corresponding row mirror uses).
  */
 
 import { test } from 'node:test'
@@ -45,10 +41,9 @@ test('packaged dist/control-plane carries the CURRENT protected-set verifier', (
   // A MISSING dist (clean checkout) is built on demand — that is not staleness.
   // An EXISTING dist without the current markers IS staleness and must fail
   // loudly: silently rebuilding it would let an operator (or a packaging run)
-  // believe the artifact was checked when the guard actually healed it. The
-  // gateway guard shipped once in that weaker rebuld-and-pass form and a stub
-  // build proved it could not catch the drift it was written for (2026-12
-  // review), so both guards now fail on staleness.
+  // believe the artifact was checked when the guard actually healed it. A
+  // guard that heals the artifact cannot catch the drift it exists for, so
+  // both guards fail on staleness.
   if (!existsSync(distFile)) {
     execFileSync(process.execPath, ['scripts/build-control-plane.mjs'], { cwd: packageDir, stdio: 'ignore' })
   }

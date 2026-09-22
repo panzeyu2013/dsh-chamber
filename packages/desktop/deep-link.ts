@@ -87,7 +87,7 @@ export function appendVscodeNewWindowParam(url: string): string {
 }
 
 /** Convert an arbitrary thrown value into a stable, non-empty diagnostic.
- * Single-sourced in describe-error.ts (2026-12 stage-2 merge); this alias is
+ * Single-sourced in describe-error.ts; this alias is
  * kept because notifications.ts / open-in.ts import it from here. */
 export const describeUnknownError = describeError
 
@@ -286,11 +286,10 @@ export class BoundedAckDeliveryQueue<T extends object> {
  * Linux launch must not persist argv[1]: on a cold protocol start argv[1] can
  * itself be the URL. Electron's executable+script args form is only for the
  * `process.defaultApp` development shape, which this app deliberately skips.
- * Windows (design 21 M4): the win32 v1 gate is lifted — packaged builds call
- * Electron's no-args setAsDefaultProtocolClient form; the NSIS installer may
- * additionally write HKCU\Software\Classes entries (electron-builder
- * `protocols`, M0.5 实证项) — same target, idempotent. Dev builds never
- * register on any platform. */
+ * Windows (design 21 M4): packaged builds call Electron's no-args
+ * setAsDefaultProtocolClient form; the NSIS installer may additionally write
+ * HKCU\Software\Classes entries (electron-builder `protocols`) — same target,
+ * idempotent. Dev builds never register on any platform. */
 export function decideDeepLinkProtocolRegistration(input: {
   isPackaged: boolean
   platform: string
@@ -584,7 +583,7 @@ export function parseOpenVscodeIntent(raw: string): { ok: true; intent: VscodeLa
   if (url.hostname !== 'open-vscode') {
     return { ok: false, error: `unsupported deep-link host: ${url.hostname}` }
   }
-  // Strictness (security-review P2-2): userinfo and port are meaningless in
+  // Strictness: userinfo and port are meaningless in
   // our scheme — reject them like isAllowedReleaseUrl rejects credentialed
   // URLs instead of silently discarding the fields.
   if (url.username !== '' || url.password !== '') {
@@ -599,7 +598,7 @@ export function parseOpenVscodeIntent(raw: string): { ok: true; intent: VscodeLa
   }
   // 'local' is the reserved local-instance id (excluded from INSTANCE_ID_PATTERN
   // because the ssh registry never holds it) — the deep link may target the
-  // local instance too (opens vscode://file/, user decision 2026-08).
+  // local instance too (opens vscode://file/).
   if (instance !== 'local' && !INSTANCE_ID_PATTERN.test(instance)) {
     return { ok: false, error: 'invalid instance id' }
   }
@@ -669,9 +668,9 @@ export function buildVscodeRemoteUrl(
 }
 
 /**
- * Build the `vscode://file/<path>` target for the LOCAL instance (user decision
- * 2026-08: the button/deep link also work for the local source — its workspace
- * paths live on this machine, so VS Code opens them as local folders). Same
+ * Build the `vscode://file/<path>` target for the LOCAL instance (the button
+ * and deep link also work for the local source — its workspace paths live on
+ * this machine, so VS Code opens them as local folders). Same
  * path discipline as the remote URL: absolute, control-char-free, ≤ 4096,
  * segment-wise encoded; the scheme is hardcoded `vscode:`.
  */
@@ -691,7 +690,7 @@ export function buildVscodeFileUrl(remotePath: string, newWindow = false): { ok:
 /** Default executable-FILE check: access(X_OK) + isFile(). On POSIX a
  *  directory passes X_OK (execute/search bit), so the file check is what
  *  keeps a PATH entry named `code` that is actually a directory from being
- *  misdetected as VS Code (security-review P1-2). */
+ *  misdetected as VS Code). */
 function defaultAccessX(target: string): boolean {
   try {
     accessSync(target, fsConstants.X_OK)
@@ -793,8 +792,8 @@ export function detectVscodeAvailability(
  * openVscodeUrl. Every failure is loud; there is no silent success path.
  */
 async function runVscodeLaunchUnchecked(req: VscodeLaunchRequest, ctx: VscodeLaunchContext): Promise<{ ok: true } | { ok: false; error: string }> {
-  // Symmetric validation for the renderer-button IPC path (security-review
-  // P2-3): the OS deep link already pattern-checks instance at parse time;
+  // Symmetric validation for the renderer-button IPC path: the OS deep link
+  // already pattern-checks instance at parse time;
   // the IPC carries an equally untrusted string and must not skip the gate.
   // 'local' is the reserved local-instance id (not in the ssh registry).
   if (typeof req.instanceId !== 'string' || (req.instanceId !== 'local' && !INSTANCE_ID_PATTERN.test(req.instanceId))) {
@@ -805,7 +804,7 @@ async function runVscodeLaunchUnchecked(req: VscodeLaunchRequest, ctx: VscodeLau
   // availability probe; absent → bare URL, VS Code's own default reuse
   // policy decides (a running instance replaces the last active window).
   const newWindow = ctx.vscodeOpenInNewWindow?.() === true
-  // Local instance branch (user decision 2026-08): the workspace path lives on
+  // Local instance branch: the workspace path lives on
   // this machine — open it as a local folder (vscode://file/), no registry
   // lookup, no sshPort/authority. Availability is still re-checked.
   if (req.instanceId === 'local') {

@@ -1,6 +1,6 @@
 // chamber-bridge.stub.js — GENERATED, do not edit.
 //
-// E8 shim 存根（W-18 后半 A / design 25 §4.4.3）：manifest 通道常量单源桥
+// shim 存根（design 25 §4.4.3）：manifest 通道常量单源桥
 // （68 通道 = 60 invoke + 8 push）。
 // 与手写 bridge-shim.js（POC 运行时面）并存——全量 shim 生成以此为准。
 // 重新生成（工作目录 packages/desktop）：node scripts/emit-bridge-manifest.mjs

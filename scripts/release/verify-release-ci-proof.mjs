@@ -1,21 +1,18 @@
 /**
  * Release CI proof: the commit being released must have PASSED CI on `main`.
  *
- * Why this exists (2026-09 CI-trigger revision): ci.yml used to trigger on tag
- * pushes too. The linux chain stepped aside for tags (release.yml's validation
- * is its mechanical superset) but the Windows leg deliberately kept running,
- * because release.yml has no win32-semantics leg. On this repository's flow the
- * tag always points at a commit that was pushed to `main` first, so that tag run
- * only repeated work on the identical SHA — while leaving a hole: tagging a
- * commit that never went through `main` skipped the linux chain entirely, so
- * "a release cannot ship an untested commit" rested on procedure, not on an
- * assertion.
+ * Why this exists: the tag always points at a commit that was pushed to `main`
+ * first, so a tag run only repeats work on the identical SHA. "A release cannot
+ * ship an untested commit" must rest on an assertion, not on procedure: without
+ * this gate, tagging a commit that never went through `main` would skip the
+ * linux chain entirely (release.yml's validation is its mechanical superset;
+ * the Windows leg has no release.yml equivalent).
  *
- * This gate replaces the re-run with the proof, and closes the hole: the release
+ * This gate asserts the proof directly: the release
  * commit must carry a COMPLETED, SUCCESSFUL `ci.yml` push run on `main` whose
  * `test`, `test-macos` and `test-windows` jobs all succeeded AND whose
- * load-bearing steps actually ran (REQUIRED_JOB_STEPS — G25: job names alone
- * stayed green after `swift test` or a leg step was deleted, and a classifier-
+ * load-bearing steps actually ran (REQUIRED_JOB_STEPS — job names alone can
+ * stay green after `swift test` or a leg step is deleted, and a classifier-
  * skipped step can never prove a release). A run still in
  * progress is
  * waited for (a release may be tagged seconds after the push); a failed run, a
@@ -47,10 +44,10 @@ import { fileURLToPath } from 'node:url'
 export const REQUIRED_JOBS = ['test', 'test-windows', 'test-macos']
 
 /**
- * The load-bearing steps of each required job. Job-level success alone was the
- * whole proof, so deleting `swift test` (or a linux-chain/win32 step) from
- * ci.yml still produced a green job the release accepted — and a prose-only push
- * whose heavy steps the classifier SKIPPED also looked like a pass. Each listed
+ * The load-bearing steps of each required job. Job-level success alone is not a
+ * proof: deleting `swift test` (or a linux-chain/win32 step) from ci.yml still
+ * produces a green job the release would accept — and a prose-only push
+ * whose heavy steps the classifier SKIPS also looks like a pass. Each listed
  * step must exist and have concluded `success`; the names are the GitHub jobs
  * API step names, and release-workflow-policy.test.mjs pins them against ci.yml
  * itself, so a rename is a deliberate two-file edit rather than silent drift.
@@ -69,19 +66,18 @@ export const REQUIRED_JOB_STEPS = {
     'dsh-runtime test:win32 manifest',
     'control-plane test:win32 manifest (real CIM/netstat/taskkill integration)',
     'desktop test:win32 manifest (real icacls)',
-    // 2026-12: the renderer/sidebar manifests carry the boot-gap + extra-row
-    // decisions (the surface the real-machine sidebarRight gap lived on); the
+    // The renderer/sidebar manifests carry the boot-gap + extra-row
+    // decisions (the surface the real-machine sidebarRight gap appears on); the
     // proof must require them for the same reason it requires the three older
     // manifests — a deleted step cannot stay green.
     'renderer test:win32 manifest (boot-gap + extra-row decisions)',
     'sidebar test:win32 manifest (source boot-gap copy)',
-    // 2026-12 P2: the macOS rehearsal was pinned at :100 while the Windows one
-    // (ci.yml:369-378, added by the same rehearsal round) was not — deleting or
-    // classifier-skipping it left the release proof green even though the NSIS
-    // pack (the only packaging path release.yml had never rehearsed on a push)
-    // then ran for the first time inside release.yml. Same rule as the mac leg:
-    // a green job whose win rehearsal was deleted cannot prove the win32
-    // packaging path was ever exercised.
+    // The Windows packaging rehearsal must be pinned just like the macOS one:
+    // deleting or classifier-skipping it would leave the release proof green
+    // even though the NSIS pack is the only packaging path release.yml does not
+    // rehearse on a push. Same rule as the mac leg: a green job whose win
+    // rehearsal was deleted cannot prove the win32 packaging path was ever
+    // exercised.
     'Windows packaging rehearsal (no publish, no credentials)',
   ],
   'test-macos': [
@@ -91,24 +87,23 @@ export const REQUIRED_JOB_STEPS = {
     'Bridge manifest + shim surface + payload shape lockstep',
     'Packaging + darwin lock suites (test:macos)',
     'Compiled sidecar smoke (shipped sidecar.js executes)',
-    // G32: G4's second executed-artifact gate (the compiled control-plane boots
-    // electron-free + the compiled preload exposes the frozen surface) used to
-    // live only in ci.yml — deleting or skipping the step left the release proof
-    // green, so a release could ship an Electron assembly no push-path gate had
-    // ever executed.
+    // The second executed-artifact gate (the compiled control-plane boots
+    // electron-free + the compiled preload exposes the frozen surface) lives
+    // only in ci.yml — deleting or skipping the step would leave the release
+    // proof green, so a release could ship an Electron assembly no push-path
+    // gate had ever executed.
     'Electron compiled artifacts smoke (control-plane boot + preload surface)',
-    // G33: the native assembly acceptance (the sidecar the packaged Swift shell
+    // The native assembly acceptance (the sidecar the packaged Swift shell
     // spawns boots, answers the B bridge and serves the control-plane HTTP
     // surface) must actually RUN on the proof run — a silent SKIP is exactly the
     // manual-only coverage this pins. The WKWebView UI itself stays a
     // real-machine item (no CDP).
     'Native assembly acceptance (spawned sidecar boots + serves)',
     'Packaging dry runs (sidecar + .app)',
-    // A2 高危: the Electron mac pack was rehearsed NOWHERE on the push path —
-    // release.yml built it for the first time after the draft existed and with
-    // the Apple credentials loaded, and both real failures of the 0.3.2-beta
-    // series landed exactly there. The rehearsal step now runs the same
-    // build:desktop + electron-builder --mac chain (ad-hoc, --publish=never,
+    // The Electron mac pack is rehearsed nowhere else on the push path: without
+    // this step, release.yml would build it for the first time after the draft
+    // exists and with the Apple credentials loaded. The rehearsal step runs the
+    // same build:desktop + electron-builder --mac chain (ad-hoc, --publish=never,
     // no notarization, no upload) on an ordinary main push, so the proof must
     // require it: a green job whose mac rehearsal was deleted (or classifier-
     // skipped) cannot prove the mac packaging path was ever exercised.
@@ -154,7 +149,7 @@ export function judgeRun(run, jobs, requiredJobs = REQUIRED_JOBS, requiredSteps 
     if (job.conclusion !== 'success') {
       return { state: 'failed', reason: `run ${url} job ${name} concluded ${job.conclusion}` }
     }
-    // G25: a job is only a proof if its load-bearing steps are actually present
+    // A job is only a proof if its load-bearing steps are actually present
     // and green. No step data at all fails closed (the jobs API returns the
     // steps for every completed job, so this only fires on an unusable entry).
     const expected = requiredSteps[name] ?? []
@@ -278,9 +273,9 @@ async function main() {
   }
 }
 
-// 入口判定（2026-12 对抗复核）：`file://${argv[1]}` 在 Windows 上恒不等于 import.meta.url
-// （盘符/三斜线差异）→ main() 永不执行而**静默 exit 0**（fail-open）；pathToFileURL 修了 Windows，
-// 但符号链接调用仍会 no-op。与三个新 CLI 一致：realpath 双侧比较。
+// 入口判定：`file://${argv[1]}` 在 Windows 上恒不等于 import.meta.url
+// （盘符/三斜线差异）→ main() 永不执行而**静默 exit 0**（fail-open）；pathToFileURL 覆盖 Windows，
+// 但符号链接调用仍会 no-op。realpath 双侧比较。
 const isDirectInvocation = (() => {
   const invoked = argv[1]
   if (invoked === undefined) return false

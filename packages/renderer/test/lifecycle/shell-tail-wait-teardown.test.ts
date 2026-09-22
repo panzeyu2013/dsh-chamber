@@ -1,6 +1,5 @@
 /**
- * Same-id tail-wait cap and teardown-barrier tests, split out of
- * shell.test.ts (2026-12 复查 BLOCKER/MINOR + generation ownership).
+ * Same-id tail-wait cap and teardown-barrier tests.
  * Shared harness: test/support/shell-harness.ts.
  */
 import { test } from 'node:test'
@@ -15,7 +14,7 @@ import {
 } from '../support/shell-harness.ts'
 
 test('bootInstanceShell: a never-settling same-id predecessor stops pinning the id at the wait cap', async (t) => {
-  // 2026-12 复查 BLOCKER：严格同 id 尾必须保留（它是 generation 记录的持有者），
+  // 严格同 id 尾必须保留（它是 generation 记录的持有者），
   // 但"等待上一代"必须有绝对上限——否则一个 entry.run() 永不 settle 的 boot 会让
   // 该源此后每次重挂都卡住。上限 = 两个 boot 预算，低于 App 的放弃上限。
   const instanceId = 'ssh-test-tail-cap-9'
@@ -45,7 +44,7 @@ test('bootInstanceShell: a never-settling same-id predecessor stops pinning the 
 
     // 迟到后继：同 id 尾已在上一代 settle 后释放，它必须立刻入队。
     // 绝对截止（共享，而非每个后继各等一个上限）由纯函数 tailWaitRemainingMs 单测
-    // 钉住——时间敏感的一体化断言在这里观察不到（2026-12 复查 MINOR）。
+    // 钉住——时间敏感的一体化断言在这里观察不到。
     const lateGate = __testQueueRunGate('late')
     const lateBoot = bootInstanceShell(instanceId, `/api/i/${instanceId}`, {} as HTMLElement, () => {})
     await lateGate.started
@@ -71,7 +70,7 @@ test('bootInstanceShell: a never-settling same-id predecessor stops pinning the 
 })
 
 test('tailWaitRemainingMs: all successors share one absolute deadline', () => {
-  // 2026-12 复查 MINOR：时间敏感的一体化断言观察不到"共享截止"，这里用纯函数钉住
+  // 时间敏感的一体化断言观察不到"共享截止"，这里用纯函数钉住
   // 语义——已过期的截止必须立刻放行（0），未给截止才退回一个完整上限。
   assert.equal(tailWaitRemainingMs(undefined, 1_000), INSTANCE_TAIL_WAIT_CAP_MS)
   assert.equal(tailWaitRemainingMs(1_000 + INSTANCE_TAIL_WAIT_CAP_MS, 1_000), INSTANCE_TAIL_WAIT_CAP_MS)

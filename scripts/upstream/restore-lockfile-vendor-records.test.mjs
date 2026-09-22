@@ -1,7 +1,6 @@
 /**
  * restore-lockfile-vendor-records.mjs unit tests (plain node:test, no repo mutation): the pnpm-11 pruning
- * repair must补回 dropped records but MUST NOT resurrect a member upstream removed from its workspace — the
- * 0.1.5 landlock removal made frozen installs fail with "锁文件有、链接缺" (the script replayed HEAD blindly).
+ * repair must补回 dropped records but MUST NOT resurrect a member upstream removed from its workspace.
  * Runs the script as a child process through its documented test overrides:
  *   RESTORE_LOCKFILE_PATH / RESTORE_LOCKFILE_HEAD / RESTORE_VENDOR_LINK_DIR
  */

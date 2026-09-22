@@ -5,8 +5,7 @@
  * WHY: the patch registry is applied through a vite `transform` hook keyed on
  * the module id. Vite resolves vendor sources through `realpathSync`, so the
  * id is the submodule path — an id-form mistake makes every patch a silent
- * no-op while the build still succeeds (this happened during development and
- * was only caught by grepping the bundle by hand). C9 checks the anchors
+ * no-op while the build still succeeds. C9 checks the anchors
  * against the pinned source; this script checks the OUTPUT.
  *
  * Runs as the last step of `build:renderer`, after `gen-boot-manifest.mjs` has

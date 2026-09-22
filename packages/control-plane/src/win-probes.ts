@@ -1,6 +1,6 @@
 /**
  * Windows process/port probes and tree termination for the control-plane
- * lifecycle (design 02 §5.1「Windows 路径退化」→ v1 parity work).
+ * lifecycle (design 02 §5.1「Windows 路径退化」).
  *
  * POSIX lacks none of these primitives (ps/lsof/ss/proc + process groups),
  * so nothing here runs on non-Windows hosts: every exec helper is win32-gated
@@ -25,14 +25,12 @@
  *       process table and killed individually — parity with the Unix
  *       "leader dead but residual process group alive ⇒ keep evidence" rule.
  *
- * Sibling-parity note (audit 2026): packages/dsh-runtime/src/windows-process.ts
+ * Sibling-parity note: packages/dsh-runtime/src/windows-process.ts
  * is the shared-core twin of this module (same CIM/taskkill semantics,
  * self-contained because dsh-runtime must not import control-plane). Keep
  * behavior identical across both; the Windows CI leg runs both test sets.
- * The S1 residual re-proof (fresh CIM table, CreationDate/CommandLine) and the
- * S5 CIM liveness verdict are carried by both modules: S5 ported the re-proof
- * back to the installer twin's killWindowsTreeWithResidual (2026), so the two
- * are aligned again (review/windows/fixes/s5-win32-liveness.md).
+ * The residual re-proof (fresh CIM table, CreationDate/CommandLine) and the
+ * CIM liveness verdict are carried by both modules, so the two stay aligned.
  *
  * The PowerShell command is bounded, read-only, and spawns no user code
  * (-NoProfile -NonInteractive); the full process table is fetched once and
@@ -42,7 +40,7 @@
 import { spawnSync } from 'node:child_process'
 
 /** Every probe/termination exec is bounded; a hung host tool cannot hang the
- *  reaper or a spawn attempt. 30s (2026-09 first real-runner finding): fresh
+ *  reaper or a spawn attempt. 30s: fresh
  *  windows-2022 runners pay Windows PowerShell 5.1 first-run + Defender
  *  real-time scan latency that exceeded 10s (spawnSync ETIMEDOUT in the
  *  win32 lifecycle integration); the 500ms table cache means the slow path
@@ -174,7 +172,7 @@ export interface TcpListenRow {
  * parser accepts both IPv4 (127.0.0.1:port) and bracketed IPv6 ([::1]:port)
  * local forms; note that `-p tcp` typically lists IPv4 rows only on real
  * Windows output (IPv6 appears under tcpv6) — the tolerant shape is
- * deliberate (audit note, real-machine verification pending). Protocol and
+ * deliberate (real-machine verification pending). Protocol and
  * state matching are case-insensitive (`tcp`/`LISTENING`/`listening`), but
  * an unrecognized (e.g. localized) state is skipped, never guessed as a
  * listener.
@@ -355,7 +353,7 @@ export function cimRowStillIdentifies(original: CimProcessRow, current: CimProce
 }
 
 /**
- * Pure CIM-liveness classifier (S5 fix; unit-tested on every platform).
+ * Pure CIM-liveness classifier (unit-tested on every platform).
  * `original` is the row scanned earlier, or null when only pid presence is
  * asked. True = a row exists that still carries the scanned identity (or any
  * row when no identity was supplied); false = the table is readable and the
@@ -411,7 +409,7 @@ export function classifyCimLivenessFromTableReads(
 }
 
 /**
- * CIM-table liveness proof for one pid (S5 fix, additive; win32-only).
+ * CIM-table liveness proof for one pid (win32-only).
  * process.kill(pid, 0) is an OpenProcess probe: it still succeeds for a
  * terminated process object kept alive by an unreleased handle, so a
  * successful taskkill can read as "not quiesced" and keep the writer latch
@@ -547,8 +545,8 @@ export function treeKillWindows(pid: number): boolean {
   let result = runTaskkill(pid)
   if (result === 'signalled') return true
   if (result === 'error') {
-    // Audit (2026, med): taskkill renders its not-found message in the OS
-    // language, so the English regex cannot prove 'gone' on localized
+    // taskkill renders its not-found message in the OS language, so the
+    // English regex cannot prove 'gone' on localized
     // Windows. Verify liveness directly: a dead pid is 'gone'; a live (or
     // unverifiable) pid keeps the loud failure (fail closed).
     if (!windowsPidExists(pid)) result = 'gone'
@@ -596,7 +594,7 @@ function runTaskkill(pid: number): 'signalled' | 'gone' | 'error' {
 }
 
 /** kill(0)-style liveness; EPERM counts as alive; only ESRCH is absence.
- *  Residual (S5, documented): process.kill(pid, 0) is an OpenProcess probe and
+ *  Residual (documented): process.kill(pid, 0) is an OpenProcess probe and
  *  can read a terminated process object as alive while a handle is unreleased.
  *  This synchronous call site only classifies a non-zero taskkill result
  *  ('gone' vs the loud 'error'); the awaitable kill-confirmation paths use

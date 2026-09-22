@@ -85,7 +85,7 @@ test('search-state: a disconnected source drops its state on projection publish'
 
 /**
  * Deadline-poll a condition instead of sleeping a fixed margin against the 250ms debounce: a
- * stalled event loop (loaded CI) must not flake the assertions (2026-08 audit fix).
+ * stalled event loop (loaded CI) must not flake the assertions.
  */
 async function waitFor(predicate: () => boolean, timeoutMs = 2000): Promise<void> {
   const start = Date.now()

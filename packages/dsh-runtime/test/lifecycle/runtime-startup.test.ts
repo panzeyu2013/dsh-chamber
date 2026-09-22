@@ -6,11 +6,10 @@
  * metadata reads, env-override probes, recording wrappers) are applied as
  * post-hoc overrides on `fixture.makeStartupDeps()`.
  *
- * Redundant twins with apply-now.test.ts were merged there (snapshot-failure
- * retry gate, prepared replay); this file keeps the startup-specific surface:
+ * This file keeps the startup-specific surface:
  * cleanup/eviction ordering, interrupted-restore blocking, swap-attempted /
  * old-shell / env-override deferrals, corrupt-metadata routes, applied-
- * monitoring commit paths, F4/F7 rollback evidence and intent preservation.
+ * monitoring commit paths, rollback evidence and intent preservation.
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -112,8 +111,8 @@ test('pending activation uses real source/known-good facts and clears pending at
 test('P0: cold-start pending derives the expected set after the spawn refreshes the seed table', async () => {
   // Desktop cold-start model: `seededProbeDomains` starts empty and is written
   // only by the spawn thunk inside `spawnAndProbe`. The expectation must be a
-  // lazy read taken after that run; an eagerly captured value (old getter
-  // semantics) froze the empty table and rolled back a healthy activation.
+  // lazy read taken after that run; an eagerly captured value would freeze the
+  // empty table and roll back a healthy activation.
   const fixture = new RunPhaseFixture({ override: record('0.2.0'), pointer: '0.1.0' })
   const deps = fixture.makeStartupDeps()
   const partialSeed = ['clientGraph/graph', 'archiveCleanup/probe'] as const

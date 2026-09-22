@@ -1,13 +1,13 @@
 /**
- * bridge-shim.js — W-04 A-bridge shim for the macOS Swift shell POC
- * (W-04; design 25 §4.4.1). Swift's BridgeShimInjector
+ * bridge-shim.js — A-bridge shim for the macOS Swift shell
+ * (design 25 §4.4.1). Swift's BridgeShimInjector
  * injects this file as a WKUserScript (.page world, documentStart) from
  * macos/Sources/DSHChamber/Resources/.
  *
  * It mirrors the window.dshChamber surface of packages/desktop/preload.cts
  * (design 05 §7.4): 4 info scalars (controlPlaneUrl/dshVersion/version/
  * platform) + 9 namespaces (desktopSsh/update/settings/systemResume/openIn/
- * deepLink/runtime/notifications/badge). S-B（全表面实现）：每个方法的通道、
+ * deepLink/runtime/notifications/badge)（全表面实现）：每个方法的通道、
  * payload 形状与返回映射逐字对齐 preload.cts（59 个 invoke-backed 方法 →
  * 60 manifest invoke 通道（含 info）+ 8 个 on* 订阅 → 8 manifest push
  * 通道），文件内零 poc-unimplemented 兜底。语义校验（payload schema、来源
@@ -59,7 +59,7 @@
  *     notification-open-ack {deliveryId,attempt}；onOpen → notification-open
  *   badge（1 invoke）→ badge-count {count}
  *
- * 宿主侧差异注记（shim 层照常 invoke，错误如实上抛；行为对齐待 S-D/验收批）：
+ * 宿主侧差异注记（shim 层照常 invoke，错误如实上抛）：
  *   - update.download / update.restartAndInstall：sidecar 的 updateController
  *     在两个 flavor 之间按装配切换（sidecar-ctx.ts:2734-2752）。壳声明
  *     --native-updater sparkle（配好 feed + 公钥的装配）时，sidecar 把
@@ -69,16 +69,15 @@
  *     （原生壳不支持自动安装），绝不假成功。
  *   - pick 类（gateway_plugin_materialize / plugin_materialize_add_pick /
  *     local_plugin_add_file）：picker 的弹出/取消语义在宿主侧（Electron dialog /
- *     Swift 侧 node-edges pickPluginSource → NSOpenPanel E8 腿已实现）——
+ *     Swift 侧 node-edges pickPluginSource → NSOpenPanel 腿）——
  *     shim 直接 invoke，pick 决策不属本文件。
  *   - desktop_ssh_* 载荷用官方 {id} schema（sidecar-entry/shell-core 同款）。
- *     W-05 切片桩 sidecar-stub.ts 只读 {instanceId}，且自 2026-12 起仅作
- *     BridgeClient 集成测试 fixture——它不再是任何宿主路径的缺省回退（见下），
- *     故 shim 不为其改形。
+ *     sidecar-stub.ts 只读 {instanceId}，仅作 BridgeClient 集成测试 fixture
+ *     （不是任何宿主路径的缺省回退，见下），故 shim 不为其改形。
  *
- * POC 期注意：Swift 的 dev 缺省侧车是 packages/desktop/sidecar-entry.ts
- * （60/60 语义、A 桥 ready 帧齐全）；sidecar-stub.ts 只注册 W-05 8 通道、
- * 其余回 {error:'poc-unimplemented'}，2026-12 审计 S12 起已删除其缺省回退
+ * 注意：Swift 的 dev 缺省侧车是 packages/desktop/sidecar-entry.ts
+ * （60/60 语义、A 桥 ready 帧齐全）；sidecar-stub.ts 只注册 8 通道、
+ * 其余回 {error:'poc-unimplemented'}，不在缺省回退里
  * ——只有显式 DSH_CHAMBER_SIDECAR 指向它时才会被加载（届时须自行发 ready 帧）。
  *
  * A-bridge envelope (web → Swift, through the WKScriptMessageHandler named
@@ -97,20 +96,20 @@
  * only — the exact preload.cts semantics (INFO_MAX_ATTEMPTS=10 /
  * INFO_RETRY_MS=50, preload.cts:885-903). The public surface is exposed on
  * success with real scalars, and after total failure with the four scalars
- * still null (T-12, mirroring the preload.cts failure branch :923-940); it
+ * still null (mirroring the preload.cts failure branch :923-940); it
  * is not defined before either point. Pushes only arrive after the matching
- * invoke, so there is no subscribe-before-info ordering hazard in the POC.
+ * invoke, so there is no subscribe-before-info ordering hazard.
  *
  * Trust note: page-world injection means page code can observe these globals
  * and forge resolve/emit frames. The Swift-side fences (main frame / origin /
  * manifest whitelist, design 25 §4.4.1, MessageHandler.swift) are the real
- * enforcement boundary — POC code registers them alongside this shim.
+ * enforcement boundary — the shell registers them alongside this shim.
  */
 
 (function () {
   'use strict'
 
-  // Duplicate-injection guard (P-19): an explicit marker, checked by
+  // Duplicate-injection guard: an explicit marker, checked by
   // BridgeShimInjector.install on the Swift side too. The public surface does
   // not exist until info hydration settles ('dshChamber' defineWindowGlobal
   // runs only from exposePublicSurface), so relying on the non-configurable
@@ -133,11 +132,10 @@
   var INFO_RETRY_MS = 50
   var INFO_MAX_ATTEMPTS = 10
 
-  /** Swift 拒绝码 → 与 Electron 渲染端逐字一致的文案与 error.code
-   *  （2026-12 双端逐函数核对 S1·V1）：renderer-trust.ts 抛
-   *  Error('forbidden IPC sender') 且带 code='ipc_sender_forbidden'，
-   *  Error('app is quitting') 且 code='app_quitting'；shim 此前直接把码当文案
-   *  （页面上出现 "Error(ipc_sender_forbidden)"）。未知码原样透传。 */
+  /** Swift 拒绝码 → 与 Electron 渲染端逐字一致的文案与 error.code：
+   *  renderer-trust.ts 抛 Error('forbidden IPC sender') 且带
+   *  code='ipc_sender_forbidden'，Error('app is quitting') 且
+   *  code='app_quitting'；已知码一律映射成对应文案，未知码原样透传。 */
   var ERROR_TEXT_BY_CODE = {
     ipc_sender_forbidden: 'forbidden IPC sender',
     app_quitting: 'app is quitting',
@@ -244,7 +242,7 @@
     })
   }
 
-  /** 原生通道令牌（S-06，2026-12 复裁决）：壳在注入前把占位符替换成每次窗口随机
+  /** 原生通道令牌：壳在注入前把占位符替换成每次窗口随机
    *  的 32 位十六进制串。内部管路不在公开面上，页面脚本无从得知令牌值——伪造
    *  「原生回执」或「原生事件」必须先猜中令牌，猜不中即抛，绝不静默生效。 */
   var NATIVE_CHANNEL_TOKEN = '__DSH_CHAMBER_NATIVE_TOKEN__'
@@ -287,9 +285,9 @@
       try {
         snapshot[i](value)
       } catch (err) {
-        // 监听器抛错的可见性（2026-12 双端逐函数核对 S1·F10）：Electron 的
+        // 监听器抛错的可见性：Electron 的
         // ipcRenderer.on 是 EventEmitter，抛错会作为未捕获异常面世（devtools/
-        // 全局 error 处理器可见）；shim 此前只写 console.error。这里保持
+        // 全局 error 处理器可见）；这里保持
         // 「一个监听器抛错不吞掉其余监听器、不让异常穿回 Swift 的
         // evaluateJavaScript」，但把错误重新抛回页面全局——两者取齐：错误可见，
         // 派发不被截断。
@@ -421,12 +419,11 @@
 
   // ---- the 9 namespaces + 4 scalars --------------------------------------
   // Every method below invokes its real manifest channel with the exact
-  // preload.cts payload shape; no poc-unimplemented stub remains (S-B).
+  // preload.cts payload shape; no poc-unimplemented stub remains.
 
   /** desktopSsh — 全 31 invoke 方法接真实通道；载荷键逐字 preload（id 寻址
-   *  通道一律 {id}）。W-05 切片桩 sidecar-stub.ts
-   *  读 {instanceId}（自 2026-12 起仅作集成测试 fixture，见文件头注记），
-   *  此处不迁就。 */
+   *  通道一律 {id}）。sidecar-stub.ts 读 {instanceId}（仅作集成测试 fixture，
+   *  见文件头注记），此处不迁就。 */
   var desktopSsh = {
     instances_get: function () { return invoke('desktop_ssh_instances_get', null) },
     delete_connection: function (id) { return invoke('desktop_ssh_delete_connection', { id: id }) },
@@ -461,7 +458,7 @@
     npm_search: function (query) { return invoke('desktop_npm_search', { query: query }) },
     seed_host_graph: function (id) { return invoke('desktop_ssh_seed_host_graph', { id: id }) },
     plugin_materialize_add: function (id, name) { return invoke('desktop_ssh_plugin_materialize_add', { id: id, name: name }) },
-    // pick 语义宿主侧（NSOpenPanel E8 腿已实现）；shim 只 invoke。
+    // pick 语义宿主侧（NSOpenPanel 腿）；shim 只 invoke。
     plugin_materialize_add_pick: function (id) { return invoke('desktop_ssh_plugin_materialize_add_pick', { id: id }) },
     local_plugin_add: function (spec) { return invoke('desktop_local_plugin_add', { spec: spec }) },
     // pick 语义宿主侧（同上）。
@@ -488,8 +485,7 @@
 
   /** update — 5 invoke + onChanged。download/restartAndInstall 的宿主腿按
    *  装配切换（Sparkle 转发 / blocked-available），见文件头注记；onChanged 是
-   *  preload 唯一订阅拼写（W-04 时代的 onStateChanged 别名已移除——超集不在
-   *  preload 面内）。 */
+   *  preload 唯一订阅拼写（不提供 onStateChanged 别名——超集不在 preload 面内）。 */
   var update = {
     state: function () { return invoke('dsh-chamber:update-state', null) },
     check: function () { return invoke('dsh-chamber:update-check', null) },
@@ -522,9 +518,8 @@
   }
 
   /** deepLink — ready/ack 接真实通道（sidecar 60/60）。ack 载荷按 preload
-   *  现契约 {deliveryId, attempt}（core pendingRendererIntents.acknowledge
-   *  同款；W-04 时代的单 id 形态已被 deliveryId+attempt 取代）。onIntent
-   *  校验镜像 preload（malformed → loud drop）。 */
+   *  契约 {deliveryId, attempt}（core pendingRendererIntents.acknowledge
+   *  同款）。onIntent 校验镜像 preload（malformed → loud drop）。 */
   var deepLink = {
     onIntent: function (callback) {
       return subscribe(PUSH_EVENTS.DEEP_LINK_INTENT, makeDeepLinkIntentListener(callback))
@@ -619,14 +614,13 @@
 
   /** preload.cts requestAppInfo mirror: retry only on rejection, 50 ms apart.
    *  Total tries = 1 + INFO_MAX_ATTEMPTS (the first invoke plus up to
-   *  INFO_MAX_ATTEMPTS retries) — byte-for-byte the preload chain (2026-12
-   *  双端逐函数核对 S1·F2：此前只做 INFO_MAX_ATTEMPTS 次，比 preload 少一次).
+   *  INFO_MAX_ATTEMPTS retries) — byte-for-byte the preload chain.
    *  Total failure keeps the scalars null — this promise never rejects,
    *  because defining the shim never depends on info. */
   function fetchInfo(attemptsLeft) {
     return invoke(INFO_CHANNEL, null).then(function (info) {
       applyInfo(info)
-      // 与 preload 同序（T-12）：info 成功 → 用真实标量暴露公开面；成功前
+      // 与 preload 同序：info 成功 → 用真实标量暴露公开面；成功前
       // 不暴露（页面按自己的重试链等，避免拿到半成品）。1+10 次全败由下方
       // 失败分支用 null 标量暴露（preload.cts 的失败分支同款），两端一致。
       exposePublicSurface()
@@ -638,7 +632,7 @@
         })
       }
       console.warn('[dsh-chamber] dsh-chamber:info failed after ' + INFO_MAX_ATTEMPTS + ' attempts; exposing the bridge with null scalars')
-      // T-12（2026-12 审计）：与 preload.cts 的失败分支一致——1+10 次全败仍暴露
+      // 与 preload.cts 的失败分支一致——1+10 次全败仍暴露
       // 公开面，四个标量保持 null（preload.cts:923-940 同款），而不是让
       // window.dshChamber 不存在。两端降级因此一致：桥在、标量 null，页面可走
       // 同一段代码路径。
@@ -668,7 +662,7 @@
   })
 
   /** 公开面 dshChamber 的暴露门（只暴露一次；preload 语义）。
-   *  暴露时机 = info 成功（真实标量）或 1+10 次全败（null 标量，T-12 与
+   *  暴露时机 = info 成功（真实标量）或 1+10 次全败（null 标量，与
    *  preload.cts 失败分支一致）；documentStart 到那一刻之前不暴露，避免在
    *  就绪门拒绝期给页面一个「存在但值全是 null」的假面。 */
   var surfaceExposed = false

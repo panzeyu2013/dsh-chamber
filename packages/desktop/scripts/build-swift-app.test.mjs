@@ -1,5 +1,5 @@
 /**
- * build-swift-app.test.mjs —— W-24 .app 打包脚本单测（design 25 §3.2/§8.4）
+ * build-swift-app.test.mjs —— .app 打包脚本单测（design 25 §3.2/§8.4）
  *
  * 位置说明：脚本本体在 `macos/scripts/`（design/todo 指定的落位），但 `macos/`
  * 不是 pnpm 包——测试随 desktop 的 packaging-script 测试族放，并由
@@ -15,8 +15,7 @@
  *  ⑤ 真实组装（--skip-build --skip-sidecar --no-sign --no-zip --no-dmg）：
  *     可执行位、资源包（只含 bridge-shim.js）、Info.plist 版本/图标/ATS、图标；
  *  ⑤b/⑤c 本地化 fail-closed：缺 .lproj（纯函数）+ 内容级（0 字节/截断/缺 .lproj
- *     的真实装配腿负例，plutil 解析）。2026-12 审查：旧装配对 0 字节 .strings 仍
- *     EXIT=0 报完成；
+ *     的真实装配腿负例，plutil 解析；0 字节 .strings 不得 EXIT=0 报完成）；
  *  ⑥ sidecar 装配拷贝 + A5 基名反例 loud + 缺 node / node 无执行位 loud；
  *  ⑦ ad-hoc 签名 + codesign 校验通过（真实 codesign，无网络）；
  *  ⑧ codesignArgs argv 顺序（ad-hoc/hardened 分支互斥、identity 紧跟 --sign）；
@@ -28,11 +27,11 @@
  *  ⑬ DMG 卷内容（/Applications 快捷方式）与卷名来自 --app-name（纯 + 真实 hdiutil）；
  *  ⑬a/⑬b/⑬c 资源包两形态归一、.DS_Store blob 提取、bplist 读取器（含符号整数）；
  *  ⑬d/⑬e/⑬f/⑬g 内容判据负例、Iloc 记录作用域、facts 分类、装配 shim 失败分支。
- *  ⑰ CFBundleVersion 映射（S-23）：beta.N → X.Y.Z.N、final → X.Y.Z.final 标记，
+ *  ⑰ CFBundleVersion 映射：beta.N → X.Y.Z.N、final → X.Y.Z.final 标记，
  *     同 base 的 beta.N < beta.N+1 < final 且 beta 与 final 不同；
- *  ⑱ --dry-run 计划断言（G30）：feed/公钥成对、https、.xml、精确产物名；不写盘；
- *  ⑲ sidecar 符号链接归一化日志不含 undefined（D12：copyTree 无返回值）；
- *  ⑳ G38 缺图标 fail closed（装配与 dry-run 两处）；㉑ G40 dist/web 过滤
+ *  ⑱ --dry-run 计划断言：feed/公钥成对、https、.xml、精确产物名；不写盘；
+ *  ⑲ sidecar 符号链接归一化日志不含 undefined（copyTree 无返回值）；
+ *  ⑳ 缺图标 fail closed（装配与 dry-run 两处）；㉑ dist/web 过滤
  *     （*.map / .vite 不进 .app，规则与 Electron build.files 对齐）。
  */
 import {
@@ -101,7 +100,7 @@ import {
   shouldCopyWebDistEntry,
   sparkleFeedChannel,
 } from '../../../macos/scripts/build-swift-app.mjs'
-// S-22：滚动 tag 是 release-artifacts.mjs 的单源——这里按同一常量断言 dry-run
+// 滚动 tag 是 release-artifacts.mjs 的单源——这里按同一常量断言 dry-run
 // 计划的通道 URL 形状（build-swift-app.mjs 也从它导入）。
 import { NATIVE_BETA_ROLLING_TAG } from '../../../scripts/release/release-artifacts.mjs'
 
@@ -188,7 +187,7 @@ test('① 参数解析：缺省与覆盖', () => {
   assert.deepEqual(parsed.swiftArgs, ['--disable-sandbox', '-Xswiftc', '-O'])
   assert.throws(() => parseBuildSwiftAppArgs(['--bogus']), /未知参数/)
 
-  // 发布腿命名（W-26）：.app 目录名与产物基名可分离（-native 防碰撞）。
+  // 发布腿命名：.app 目录名与产物基名可分离（-native 防碰撞）。
   const named = parseBuildSwiftAppArgs([
     '--app-name', 'dsh-chamber',
     '--artifact-basename', 'dsh-chamber-0.2.2-macos-arm64',
@@ -247,7 +246,7 @@ test('②b CFBundleVersion：beta.N 与 final 同 base 不同且有序（S-23）
     }
     return 0
   }
-  // 排序语义用中性版本号做输入：写死"上一发布版本"会让 §3 的旧版本号残留扫描在
+  // 排序语义用中性版本号做输入：写死具体发布版本会让 §3 的版本号扫描在
   // 每次 bump 后误报（checklist §3 的扫描面就是这一处）。
   assert.ok(cmp('1.2.3-beta.1', '1.2.3-beta.2') < 0, 'beta.N 必须能看到 beta.N+1')
   assert.ok(cmp('0.3.2-beta.9', '0.3.2-beta.10') < 0, 'beta 序号按数值比较而不是字典序')
@@ -295,9 +294,9 @@ test('④ --dry-run 子进程：就绪校验、计划打印、不写盘、半配
     assert.match(stdout, /dry-run：计划校验通过/)
     assert.match(stdout, /sparkle-feed=https:\/\/github\.com\/o\/r\/releases\/latest\/download\/appcast-swift\.xml/)
     assert.match(stdout, /sparkle-channel=stable（releases\/latest）/, 'S-22：dry-run 计划必须标注通道')
-    // 默认产物名与 APP_NAME 同源（统一名称后 = dsh-chamber）。
+    // 默认产物名与 APP_NAME 同源（= dsh-chamber）。
     assert.match(stdout, new RegExp(`zip=.*${APP_NAME}\\.zip`), 'dry-run 必须打印解析后的精确产物名')
-    // S2：dry-run 必须打印本地化的将写入路径（Bundle.main 解析层的确切落点）。
+    // dry-run 必须打印本地化的将写入路径（Bundle.main 解析层的确切落点）。
     assert.match(stdout,
       /i18n=en\.lproj → .*Contents\/Resources\/en\.lproj\/Localizable\.strings/,
       'dry-run 必须打印 en.lproj 的装配目标路径')
@@ -307,7 +306,7 @@ test('④ --dry-run 子进程：就绪校验、计划打印、不写盘、半配
     assert.match(stdout, new RegExp(`dmg=.*${APP_NAME}\\.dmg`))
     assert.ok(!stdout.includes('abc='), '公钥值不得回显')
     assert.ok(!existsSync(path.join(out, `${APP_NAME}.app`)), 'dry-run 不写盘')
-    // 半配置 feed → 非零退出：CI 的 packaging dry run 真的校验计划，不再空跑。
+    // 半配置 feed → 非零退出：CI 的 packaging dry run 真的校验计划，绝不空跑。
     const bad = spawnSync(process.execPath, [script, '--dry-run', '--out', out,
       '--sparkle-feed', 'https://example.com/appcast-swift.xml', '--skip-build'], {
       cwd: macosDir,
@@ -336,13 +335,13 @@ test('④b dryRunPlanReport：feed/公钥成对、https、.xml、精确产物名
   assert.match(text, /sparkle-feed=https:\/\/github\.com\/o\/r\/releases\/latest\/download\/appcast-swift\.xml/)
   assert.match(text, /sparkle-channel=stable（releases\/latest）/, '稳定通道必须按 releases/latest 标注')
   assert.doesNotMatch(text, /abc=/, '公钥值不得回显')
-  // S2：计划文本显式给出两个 .lproj 的装配落点（app-name 派生，不是硬编码）。
+  // 计划文本显式给出两个 .lproj 的装配落点（app-name 派生，不是硬编码）。
   assert.match(text,
     /i18n=en\.lproj → \/tmp\/dsh-plan\/dsh-chamber\.app\/Contents\/Resources\/en\.lproj\/Localizable\.strings/)
   assert.match(text,
     /i18n=zh-Hans\.lproj → \/tmp\/dsh-plan\/dsh-chamber\.app\/Contents\/Resources\/zh-Hans\.lproj\/Localizable\.strings/)
 
-  // S-22：beta feed 必须落在滚动 tag 上（beta.N 才能发现 beta.N+1）——dry-run
+  // beta feed 必须落在滚动 tag 上（beta.N 才能发现 beta.N+1）——dry-run
   // 计划把通道与滚动 tag 一并标注；版本固定 tag 直接 loud。
   const rollingFeed = `https://github.com/o/r/releases/download/${NATIVE_BETA_ROLLING_TAG}/appcast-swift-beta.xml`
   const beta = dryRunPlanReport(parseBuildSwiftAppArgs([
@@ -433,7 +432,7 @@ test('④b Mach-O 识别 + 嵌套原生文件枚举（公证前置）', () => {
     const fat = path.join(dir, 'nested', 'deep.node')
     mkdirSync(path.dirname(fat), { recursive: true })
     writeFileSync(fat, Buffer.from([0xca, 0xfe, 0xba, 0xbe, 0, 0, 0, 0]))
-    // 2026-12 P9：FAT_MAGIC_64 两个字节序都必须是 Mach-O（漏判会让 64 位胖二进制
+    // FAT_MAGIC_64 两个字节序都必须是 Mach-O（漏判会让 64 位胖二进制
     // 逃避嵌套签名，公证才失败）。
     const fat64 = path.join(dir, 'fat64.node')
     writeFileSync(fat64, Buffer.from([0xca, 0xfe, 0xba, 0xbf, 0, 0, 0, 0]))
@@ -468,38 +467,38 @@ test('⑤ 真实组装：可执行位 / 资源包 / Info.plist 版本 / 图标',
     assert.ok(existsSync(layout.resourceBundle), 'SwiftPM 资源包应在 Contents/Resources')
     assert.ok(existsSync(path.join(layout.resourceBundle, 'bridge-shim.js')),
       '资源包内应含 A 桥 shim（SwiftPM 资源包为扁平目录）')
-    // P8：chamber-bridge.stub.js 是 JS 锁步生成物，无运行期消费者——留在源码树
+    // chamber-bridge.stub.js 是 JS 锁步生成物，无运行期消费者——留在源码树
     // 供 JS 测试断言，但不得进 bundle。
     assert.ok(!existsSync(path.join(layout.resourceBundle, 'chamber-bridge.stub.js')),
       '无运行期消费者的 stub 不得打进 SwiftPM 资源包')
-    // S2：本地化必须落在 Contents/Resources 根（Bundle.main 与系统框架的
+    // 本地化必须落在 Contents/Resources 根（Bundle.main 与系统框架的
     // 本地化解析层）——资源包内的 .lproj 只服务 Bundle.module，不构成原生面事实。
     for (const locale of LOCALIZATIONS) {
       const file = localizationFile(layout.resourcesDir, locale)
       assert.ok(existsSync(file), `装配后缺 ${locale}.lproj/Localizable.strings：${file}`)
     }
     const plist = readFileSync(layout.infoPlist, 'utf8')
-    // S2：声明面（CFBundleLocalizations）必须与资源集逐字一致——声明了却没资源
+    // 声明面（CFBundleLocalizations）必须与资源集逐字一致——声明了却没资源
     // 会让 Bundle 静默回退 DevelopmentRegion（zh 系统见到英文）。
     assert.deepEqual(plistLocalizations(plist), LOCALIZATIONS,
       'Info.plist 的 CFBundleLocalizations 必须与 LOCALIZATIONS 同源')
     const desktopPkg = JSON.parse(readFileSync(path.join(desktopDir, 'package.json'), 'utf8'))
     assert.ok(plist.includes(`<string>${desktopPkg.version}</string>`), 'Info.plist 版本 = chamber 版本')
-    // S-23：CFBundleVersion 走 bundleVersionFor 映射，beta 与 final 不再同版本。
+    // CFBundleVersion 走 bundleVersionFor 映射，beta 与 final 不同版本。
     assert.ok(plist.includes(`<string>${bundleVersionFor(desktopPkg.version)}</string>`),
       'CFBundleVersion 必须是 S-23 映射（Sparkle 比较键）')
     assert.notEqual(bundleVersionFor(desktopPkg.version), desktopPkg.version.split('-')[0],
       '不得再退化成去掉 beta 后缀的数字段')
     assert.ok(existsSync(layout.icon), 'icon.icns 应平移')
-    // P6：图标引用与 ATS 本地回环放行都必须真的写进产物 plist。
+    // 图标引用与 ATS 本地回环放行都必须真的写进产物 plist。
     assert.match(plist, /<key>CFBundleIconFile<\/key>\s*<string>icon\.icns<\/string>/,
       'Info.plist 必须引用平移到 Resources/icon.icns 的图标')
     assert.ok(plist.includes('<key>NSAppTransportSecurity</key>'), 'ATS 字典必须存在')
     assert.match(plist, /<key>NSAllowsLocalNetworking<\/key>\s*<true\/>/,
       'http://localhost 控制面需要 ATS local networking 放行')
-    // S-45（2026-12 实机修正）：放行的关键是**正确键名**
-    // NSExceptionAllowsInsecureHTTPLoads（旧 NSTemporary... 实测不生效）；
-    // localhost 是打包态导航 origin 的例外域，旧键名不得再出现在产物 plist 里。
+    // 放行的关键是**正确键名** NSExceptionAllowsInsecureHTTPLoads
+    // （NSTemporary... 实测不生效）；localhost 是打包态导航 origin 的例外域，
+    // 该键名不得出现在产物 plist 里。
     assert.match(plist,
       /<key>localhost<\/key>\s*<dict>\s*<key>NSIncludesSubdomains<\/key>\s*<false\/>\s*<key>NSExceptionAllowsInsecureHTTPLoads<\/key>\s*<true\/>/,
       'S-45：localhost 例外必须用 NSExceptionAllowsInsecureHTTPLoads 放行本机 HTTP')
@@ -570,7 +569,7 @@ test('⑤c 本地化内容 fail-closed：0 字节 / 缺 .lproj 的真实装配�
         assert.ok(error.message.includes(localizationFile(dst, 'en')), error.message)
         return true
       }, '落点被截断（与源不逐字节相等）必须 loud 带路径')
-      // 源也是 0 字节：逐字节相等也过不了 plutil（审查实测的坏文件形态）。
+      // 源也是 0 字节：逐字节相等也过不了 plutil。
       writeFileSync(localizationFile(src, 'en'), '')
       assert.throws(() => assertLocalizationsContent(src, dst), (error) => {
         assert.match(error.message, /fail-closed/)
@@ -584,7 +583,7 @@ test('⑤c 本地化内容 fail-closed：0 字节 / 缺 .lproj 的真实装配�
     }
 
     // 真实装配腿（0 字节）：源里 en.lproj/Localizable.strings 被清空 → 复制后的
-    // 内容断言 fail。旧实现只做 existsSync，这种输入照样 EXIT=0 报「完成」。
+    // 内容断言 fail（只做 existsSync 会让这种输入 EXIT=0 报「完成」）。
     writeFakeSwiftBuild(zeroConfig, { en: '', 'zh-Hans': '"common.ok" = "OK";\n' })
     const zeroLayout = appLayout(out)
     await assert.rejects(
@@ -735,7 +734,7 @@ test('⑦ entitlements 文件是合法 plist 且含最小集', () => {
 })
 
 test('⑩ sidecar 含逃出 bundle 的绝对符号链接 → 归一化后真实 codesign 校验通过', async (t) => {
-  // P2 回归锁（2026-09 GUI 验收）：cpSync 会把相对链接绝对化，bundle 内出现
+  // cpSync 会把相对链接绝对化，bundle 内出现
   // 指向构建机源树的链接时 `codesign --verify --strict` 报
   // `invalid destination for symbolic link in bundle`。本用例用**真实 codesign**
   // 覆盖 sidecar 载荷（⑥/⑦ 的 --skip-sidecar 路径看不到这一层）。
@@ -764,12 +763,12 @@ test('⑩ sidecar 含逃出 bundle 的绝对符号链接 → 归一化后真实 
     ]), { log: (line) => logs.push(line), error: () => {} })
     const layout = appLayout(out)
 
-    // ⑲ D12：copyTree 无返回值，归一化日志必须由 normalizeSymlinks 的计数驱动，
-    // 不得再打印「实体化 undefined 处」。
+    // ⑲ copyTree 无返回值，归一化日志必须由 normalizeSymlinks 的计数驱动，
+    // 不得打印「实体化 undefined 处」。
     assert.ok(!logs.some((line) => line.includes('undefined')), `归一化日志不得含 undefined：${logs.join('\n')}`)
     assert.ok(logs.some((line) => /符号链接归一化 \d+ 处/.test(line)), '真实链接被处理时必须打印实际计数')
 
-    // ① 不再有逃出 bundle 的链接
+    // ① 不得有逃出 bundle 的链接
     const bundBin = path.join(layout.sidecarDir, 'vendor', 'dsh', 'node_modules', '.bin')
     assert.ok(!lstatSync(path.join(bundBin, 'outside')).isSymbolicLink(), '树外链接必须实体化')
     assert.equal(readFileSync(path.join(bundBin, 'outside'), 'utf8'), 'outside\n')
@@ -846,7 +845,7 @@ test('⑬ DMG 卷内容：.app + /Applications 快捷方式 + Finder 拖拽布�
     const link = path.join(stage, 'Applications')
     assert.ok(lstatSync(link).isSymbolicLink(), 'DMG 卷必须带 /Applications 快捷方式（P7）')
     assert.equal(readlinkSync(link), '/Applications')
-    // 2026-09 补强：背景图随卷走（卷内名固定 background.tiff = electron-builder 同款
+    // 背景图随卷走（卷内名固定 background.tiff = electron-builder 同款
     // 双 rep TIFF），否则 Finder 布局落空。
     assert.ok(existsSync(path.join(stage, '.background', 'background.tiff')),
       'DMG 卷必须带 .background/background.tiff 背景图')
@@ -939,8 +938,8 @@ test('⑬c parseBinaryPlist 读真实 bplist：字符串/整数/实数/布尔/da
     assert.deepEqual([...Buffer.from(parsed.blob)], [0, 1, 2, 3], 'data 必须原样给到字节')
     assert.equal(parsed.nested.inner, 'x')
     assert.throws(() => parseBinaryPlist(Buffer.from('not a plist')), /bplist00/)
-    // 有符号整数：bplist 整数是二补码（plutil 同语义）。2026-09 审查发现原实现用无符号读，
-    // -5 会变成 18446744073709552000；当前 .icvp 无负数，属潜在缺陷。
+    // 有符号整数：bplist 整数是二补码（plutil 同语义）。按无符号读会让 -5
+    // 变成 18446744073709552000；当前 .icvp 无负数，属潜在缺陷。
     const signedXml = [
       '<?xml version="1.0" encoding="UTF-8"?>',
       '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">',
@@ -966,7 +965,7 @@ test('⑬c parseBinaryPlist 读真实 bplist：字符串/整数/实数/布尔/da
         (() => { const b = Buffer.alloc(8); b.writeBigUInt64BE(BigInt(offsetTableOffset)); return b })(),
       ])
     }
-    // 语义与 plutil 对齐（2026-09 实测 `plutil -convert binary1` → `-extract raw`）：
+    // 语义与 plutil 对齐（`plutil -convert binary1` → `-extract raw`）：
     // 1/2/4/16 字节无符号、只有 8 字节有符号；Apple 对非负值用最小宽度（128 → 1 字节 0x80）。
     assert.equal(parseBinaryPlist(minimalInt(0x10, [0xfb])), 251, '1 字节按无符号（0xfb = 251，不是 -5）')
     assert.equal(parseBinaryPlist(minimalInt(0x10, [0x80])), 128, 'iconSize 形态：1 字节 0x80 = 128')
@@ -976,7 +975,7 @@ test('⑬c parseBinaryPlist 读真实 bplist：字符串/整数/实数/布尔/da
       '真实 Finder .icvp 的 16 字节整数（viewOptionsVersion）必须读出且不得抛')
     assert.deepEqual(parseBinaryPlist(minimalInt(0x80, [0x05])), { uid: 5 }, 'UID（1 字节）')
     assert.deepEqual(parseBinaryPlist(minimalInt(0x81, [0x01, 0x00])), { uid: 256 }, 'UID（2 字节）')
-    // date / UTF-16（含非 BMP）覆盖（A 审查 N2）。
+    // date / UTF-16（含非 BMP）覆盖。
     const richXml = [
       '<?xml version="1.0" encoding="UTF-8"?>',
       '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">',
@@ -990,7 +989,7 @@ test('⑬c parseBinaryPlist 读真实 bplist：字符串/整数/实数/布尔/da
     const rich = parseBinaryPlist(readFileSync(richBinPath))
     assert.equal(rich.emoji, '😀', 'UTF-16BE 字符串（代理对）必须正确解码')
     assert.ok(rich.when instanceof Date && rich.when.toISOString().startsWith('2026-09-20'), 'date 必须解析成 Date')
-    // 畸形 trailer 护栏（审查 F2：42 字节伪造文件曾让解析吃到 ~3GB RSS）。
+    // 畸形 trailer 护栏（42 字节伪造文件曾让解析吃到 ~3GB RSS）。
     const malformed = Buffer.concat([
       Buffer.from('bplist00', 'latin1'), Buffer.alloc(24),
       Buffer.alloc(6), Buffer.from([0, 1]),
@@ -1038,7 +1037,7 @@ test('⑬e Iloc 断言只认「名字紧邻 Iloc 记录头」的登记（名字�
   assert.equal(dsStoreHasIlocEntry(withIloc, 'dsh-chamber.app'), true)
   assert.equal(dsStoreHasIlocEntry(withIloc, 'Applications'), true)
   assert.deepEqual(dsStoreIlocEntries(withIloc), ['dsh-chamber.app', 'Applications'], '按记录头解出条目名')
-  // 名字出现在别处（没有 Ilocblob 相邻）不算登记——旧实现的全文件子串搜索会假阳性。
+  // 名字出现在别处（没有 Ilocblob 相邻）不算登记——全文件子串搜索会假阳性。
   const namesOnly = Buffer.concat([
     Buffer.from('Iloc', 'latin1'), utf16be('dsh-chamber.app'), utf16be('Applications'),
   ])
@@ -1157,7 +1156,7 @@ test('⑭ 缺 renderer dist/web 又要产出归档 → fail-closed；--skip-web-
     )
     // 合法 dist（含 index.html）→ 装配成功且文件被拷入（--no-zip --no-dmg 也要求
     // web 界面：release 正式腿就是这个形状）。
-    // S3 审计（2026-12）：装配门现在还会断言**已拷入字节**携带 scoper 标记，因此夹具
+    // 装配门还会断言**已拷入字节**携带 scoper 标记，因此夹具
     // 必须是一个真实的页面产物形状，而不是只有一个 index.html。
     const goodDist = path.join(out, 'good-web-dist')
     mkdirSync(path.join(goodDist, 'assets'), { recursive: true })
@@ -1277,7 +1276,7 @@ test('⑳ G38 缺图标 fail closed：装配与 dry-run 计划都不接受无图
   const out = tempOut()
   try {
     // electron-builder 在缺 mac.icon 时抛 InvalidConfigurationError；Swift 装配
-    // 此前只警告并继续，能签名打包出无图标 .app——必须同样致命。
+    // 必须同样致命，否则能签名打包出无图标 .app。
     const missing = path.join(out, 'no-such-icon.icns')
     await assert.rejects(
       runBuildSwiftApp(parseBuildSwiftAppArgs([
@@ -1320,7 +1319,7 @@ test('㉑ G40 dist/web 过滤：*.map 与 .vite/ 不进 .app（与 Electron buil
     mkdirSync(path.join(dist, '.vite'), { recursive: true })
     writeFileSync(path.join(dist, 'index.html'), '<!doctype html>')
     writeFileSync(path.join(dist, 'perf-sizes.json'), '{}')
-    // S3 审计：装配门要求真实页面 chunk 携带 scoper 标记（本用例测的是过滤规则，
+    // 装配门要求真实页面 chunk 携带 scoper 标记（本用例测的是过滤规则，
     // 因此夹具必须是「合法页面产物」形状，否则会被那道门先拦下）。
     writeFileSync(
       path.join(dist, 'assets', 'app.js'),
@@ -1348,7 +1347,7 @@ test('㉑ G40 dist/web 过滤：*.map 与 .vite/ 不进 .app（与 Electron buil
 })
 
 // 打包套件每次运行都会为 mkdtemp 出的 .app 新增 LaunchServices 注册，而 lsregister 不会
-// 随目录删除自动回收（R3/R5 复核实测：一次运行就留下多条指向已删除路径的记录）。套件结束
+// 随目录删除自动回收（一次运行就留下多条指向已删除路径的记录）。套件结束
 // 前定向注销本套件前缀的临时注册；`/Volumes/*` 卷路径记录无法用 -u 撤销（README 已登记）。
 after(() => {
   const lsregister = '/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister'

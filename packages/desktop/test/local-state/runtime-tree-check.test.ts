@@ -1,5 +1,5 @@
 /**
- * runtime-tree-check 单测（S4 P1，2026-12 Windows 复核）：安装树的上游
+ * runtime-tree-check 单测：安装树的上游
  * client-plugin 闭包抽样必须 fail-closed，且纯函数可在任何平台的 sidecar
  * node 上直接跑（临时目录 fixture，不碰 Electron/真实安装树）。
  *

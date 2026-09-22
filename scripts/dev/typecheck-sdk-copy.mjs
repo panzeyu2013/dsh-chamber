@@ -1,8 +1,6 @@
 /**
  * Shared engine for the two chamber-owned SDK-copy typecheck gates
- * (`typecheck-connection`, `typecheck-api-gateway`; 2026-12 single-sourcing pass:
- * the two scripts were 96.2% identical, differing only in the owned package,
- * the project list and their log label).
+ * (`typecheck-connection`, `typecheck-api-gateway`).
  *
  * Why the gate is shaped this way: the pinned dsh workspace is source-only, so
  * resolving a copied package's real imports necessarily pulls vendor source into

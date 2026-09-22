@@ -2,10 +2,10 @@
 //  DSHChamberWebKitSupport.m
 //  DSHChamberWebKitSupport
 //
-//  S-48 / design 25 §5.1：见头文件。刷新率部分只做三件事：按 key 找到该 WebKit 构建的
+//  design 25 §5.1：见头文件。刷新率部分只做三件事：按 key 找到该 WebKit 构建的
 //  _WKFeature、置 NO、读回。全部 SPI 调用都有 respondsToSelector/@try 兜底——未来 OS
 //  拿掉任一 SPI 时退化为「保持 WebKit 默认 + 日志」，绝不让壳崩溃。
-//  W1/W2（2026-12 三轮独立复核）：本文件另承载 T-4 透明露底的异常安全 KVC BOOL 写入
+//  本文件另承载透明露底的异常安全 KVC BOOL 写入
 //  （WKWebView 私有键 drawsBackground，不在公开头文件里；Swift 侧无法 catch ObjC 异常，
 //  直设会 abort）——@try/@catch 吞掉 NSUnknownKeyException，返回结果而非崩溃。
 //
@@ -83,7 +83,7 @@ DSHChamberRefreshRatePreference DSHChamberPreferDisplayRefreshRate(WKPreferences
 
     // read-back 必须**先证可用**再改：只有 setter 而 read-back 缺失/抛错时"改完再报
     // Unknown"会让调用方记「SPI 不可用(保持 WebKit 默认)」，而偏好其实已经被关掉
-    // ——日志与事实相反。安全方向 = 不动（不动即 WebKit 默认），2026-12 独立复核。
+    // ——日志与事实相反。安全方向 = 不动（不动即 WebKit 默认）。
     if (DSHChamberRefreshRatePreferenceState(preferences) == DSHChamberRefreshRatePreferenceUnknown)
         return DSHChamberRefreshRatePreferenceUnknown;
 
@@ -92,16 +92,16 @@ DSHChamberRefreshRatePreference DSHChamberPreferDisplayRefreshRate(WKPreferences
     } @catch (__unused NSException *exception) {
         return DSHChamberRefreshRatePreferenceUnknown;
     }
-    // 残余（2026-12 二轮独立复核记录）：若 setter 在**已经改掉偏好之后**才抛错、或改动
+    // 残余：若 setter 在**已经改掉偏好之后**才抛错、或改动
     // 成功而这次回读抛错，本函数仍返回 Unknown，调用方会记「SPI 不可用(保持 WebKit 默认)」
-    // ——日志与事实不符。2026-12 三轮独立复核用 swizzling 构造出了这个窗口
+    // ——日志与事实不符。可用 swizzling 构造出这个窗口
     // （改完偏好再让 setter 抛：调用方记"SPI 不可用"而偏好已被改掉），因此本残余
     // **不是不可构造**，只是没有测试覆盖（测试需要在进程内换掉 objc 方法实现）。真正的证据
-    // 仍是 DSH_CHAMBER_SHELL_DEBUG 的 [shell-fps] A/B（S-48 实机三工况）。
+    // 仍是 DSH_CHAMBER_SHELL_DEBUG 的 [shell-fps] A/B。
     return DSHChamberRefreshRatePreferenceState(preferences);
 }
 
-#pragma mark - T-4 透明露底：异常安全 KVC BOOL 写入（W1/W2，2026-12 三轮独立复核）
+#pragma mark - 透明露底：异常安全 KVC BOOL 写入
 
 /// 回读：nil 对象 / 键不存在（valueForKey: 抛异常）/ 值不是 NSNumber → NO。
 /// 只有 @try 之外确定拿到 NSNumber 才写 outValue。

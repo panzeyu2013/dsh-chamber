@@ -7,7 +7,7 @@ import {
   type SwitchFrameSample,
 } from '../../src/switch-frame-verdict.ts'
 
-// W3 无白帧判据（见 src/switch-frame-verdict.ts 头注）：三形态 + 温壳进度面。
+// 无白帧判据（见 src/switch-frame-verdict.ts 头注）：三形态 + 温壳进度面。
 // 判据只判采集到的事实：未演练/探针坏/零帧一律 INFO（ok === null），严格档才升 FAIL。
 // 本文件是 CI 里的主判据面（采集腿 = scripts/perf/switch-frame-probe.mjs，需 GUI）。
 
@@ -88,7 +88,7 @@ test('半透明遮罩不参与颜色判定（alpha < 0.5 = 底下是什么色不
   assert.deepEqual(verdict.counts.themeMismatchedFrames, 0)
 })
 
-test('温壳（切换前已 settle）上出现进度面 ⇒ FAIL（蓝图 §7.3-3）', () => {
+test('温壳（切换前已 settle）上出现进度面 ⇒ FAIL', () => {
   const verdict = switchFrameVerdict({
     switchExercised: true,
     samples: [

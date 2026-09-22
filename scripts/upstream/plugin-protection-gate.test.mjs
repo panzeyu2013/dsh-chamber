@@ -137,8 +137,8 @@ test('C12 未物化子模块：只 note，不违规（缺失子模块由 C1/C3/C
 })
 
 test('C12 部分缺失：树已部分物化，缺的那个文件必须算违规（2026-09-13 round-2 review F1）', () => {
-  // The dangerous shape: `apps/cli/src/plugin.ts` renamed/moved while `profile.ts` still reads fine — before
-  // this rule the plugin anchors vanished silently (no violation, not even a note) and the `dsh.bundle.patch` looked locked.
+  // The dangerous shape: `apps/cli/src/plugin.ts` renamed/moved while `profile.ts` still reads fine —
+  // the plugin anchors would vanish silently (no violation, not even a note) while the `dsh.bundle.patch` looks locked.
   const { violations, notes } = profileContractFindings({ profileSource: PROFILE_OK, pluginSource: null })
   assert.ok(violations.some((v) => v.includes('plugin')), violations.join('; '))
   assert.ok(!notes.some((note) => note.includes('未物化')),
@@ -277,7 +277,7 @@ test('真实仓库：C13 播种注册表三面一致', () => {
 test('C14 行类型负例：删 owner? / 收窄 role 字面量并集 / 行字段漂移 都必须红', () => {
   // 合成三方行类型：producer（命名角色类型）与 wire 两处（字面量并集）——“宿主字段名一致但行内漂移”。
   // The producer declares `role` through a NAMED alias, so that alias must be resolvable in the fixture
-  // too — the criterion reads it (round-2 review F2).
+  // too — the criterion reads it.
   const producer = [
     "export type PluginRowRole = 'composition' | 'seed' | 'layer' | 'third-party' | 'materialized' | 'unknown'",
     'export interface PluginRow {',
@@ -295,13 +295,13 @@ test('C14 行类型负例：删 owner? / 收窄 role 字面量并集 / 行字段
     '  owner?: \'installation\' | \'chamber\' | \'user\'',
     '}',
   ].join('\n')
-  // Both wire faces declare the same interface name, so the renderer fixture is a genuine copy of the preload text — not a self-replacing no-op; the mutations edit this copy, making the renderer arm real (F8).
+  // Both wire faces declare the same interface name, so the renderer fixture is a genuine copy of the preload text — not a self-replacing no-op; the mutations edit this copy, making the renderer arm real.
   const renderer = `${preload}`
   // 只取行类型相关的违规（合成夹具没有宿主 manifest 接口，那几条与本次断言无关）。
   const rowViolations = (input) => manifestMirrorFindings(input).violations.filter(v => v.includes('PluginRow'))
   const base = { producerSource: producer, preloadSource: preload, rendererSource: renderer, rowProducerSource: producer }
   assert.deepEqual(rowViolations(base), [], rowViolations(base).join('; '))
-  // (a) wire 侧丢掉 `owner?`（宿主字段名不变 ⇒ 旧判据 0 违规）
+  // (a) wire 侧丢掉 `owner?`（宿主字段名不变 ⇒ 仅按字段名比较会 0 违规）
   const lostOwner = rowViolations({ ...base, preloadSource: preload.replace("  owner?: 'installation' | 'chamber' | 'user'\n", '') })
   assert.ok(lostOwner.some((v) => v.includes('owner')), lostOwner.join('; '))
   // (b) role 字面量并集被收窄
@@ -311,15 +311,15 @@ test('C14 行类型负例：删 owner? / 收窄 role 字面量并集 / 行字段
   const droppedField = rowViolations({ ...base, rendererSource: renderer.replace('  spec: string | null\n', '') })
   assert.ok(droppedField.some((v) => v.includes('行字段漂移')), droppedField.join('; '))
 
-  // (d) OWNER 单侧收窄：`owner?` 的 `?` 曾让整条 owner 臂成为死代码（nameOf 保留 `?` ⇒ 查不到 producer 字段 ⇒ continue）。
+  // (d) OWNER 单侧收窄：`owner?` 的 `?` 不得并入字段名，否则整条 owner 臂成为死代码（nameOf 保留 `?` ⇒ 查不到 producer 字段 ⇒ continue）。
   const narrowedOwner = rowViolations({
     ...base,
     preloadSource: preload.replace("owner?: 'installation' | 'chamber' | 'user'", "owner?: 'installation' | 'chamber'"),
   })
   assert.ok(narrowedOwner.some((v) => v.includes('owner')), narrowedOwner.join('; '))
 
-  // (e)(f) PRODUCER 侧（命名别名）增/删一个字面量：producer 的并集曾因“解析不出字面量”被排除，只剩
-  // preload ↔ renderer 比较；`rowProducerSource` 是 ROW mirror 读的那份，夹具显式同时改两个键。
+  // (e)(f) PRODUCER 侧（命名别名）增/删一个字面量：producer 的并集不得因“解析不出字面量”被排除而
+  // 只剩 preload ↔ renderer 比较；`rowProducerSource` 是 ROW mirror 读的那份，夹具显式同时改两个键。
   const withProducer = (mutated) => ({ ...base, producerSource: mutated, rowProducerSource: mutated })
   const aliasGrew = rowViolations(withProducer(
     producer.replace("'materialized' | 'unknown'", "'materialized' | 'unknown' | 'extra'"),

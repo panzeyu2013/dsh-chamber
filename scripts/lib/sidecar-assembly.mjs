@@ -1,12 +1,10 @@
 /**
- * Sidecar assembly resolution — ONE implementation for the three call sites
- * that used to resolve `packages/desktop/release/sidecar` and its bundled
- * `node` independently (P1-4 of the 13-scripts audit):
+ * Sidecar assembly resolution — ONE implementation for the three call sites:
  *   - scripts/gates/compiled-sidecar-smoke.mjs
  *   - scripts/gui-acceptance/native.mjs
- *   - scripts/gates/remote-state-acceptance.mjs (used to hardcode an .app path)
+ *   - scripts/gates/remote-state-acceptance.mjs
  *
- * Semantics are the STRICTER of the old copies: the bundled `node` counts only
+ * Semantics: the bundled `node` counts only
  * when it is a regular file (not a directory/symlink-to-nowhere), and the env
  * override accepts an absolute path or one relative to the caller's cwd.
  */

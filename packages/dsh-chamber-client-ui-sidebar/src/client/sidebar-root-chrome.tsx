@@ -1,5 +1,5 @@
 /**
- * Sidebar shell chrome (extracted verbatim from SidebarRoot, 2026-12 split):
+ * Sidebar shell chrome:
  * the global-panel row, the region error boundary and the source-dot accent
  * helper — presentational pieces that own no shell state.
  */
@@ -27,7 +27,7 @@ export type PanelsHook = <Selected>(selector: (panels: readonly SidebarPanelMeta
 /**
  * Remote sources carry the derived accent; the local source keeps the default
  * dot. Soft palette: 34% saturation at 61% lightness, matching the workspace
- * icon accents. The source-header identity DOT is gone (user feedback); this
+ * icon accents. There is no source-header identity DOT; this
  * color survives on the rail dots, the active-source left inset and the
  * source fold-toggle glyph only. ONE palette definition: shared/derive.ts
  * sourceAccentColor (the session-todo source dot consumes the same helper).

@@ -1,14 +1,14 @@
 /**
- * Extra-row facts the chamber composite entry must reason about (alpha.2 +
- * 2026-12 review fix): which services the composite's own plugins require — the
+ * Extra-row facts the chamber composite entry must reason about: which services
+ * the composite's own plugins require — the
  * first-screen families from the start, the deferred families as their chunks
- * mount (2026-09-11 review-fix, finding 1) — and which covered ids the composite
+ * mount — and which covered ids the composite
  * registers only AFTER the boot settled. Both facts are needed by code that
  * cannot import chamber-entry.ts (its imports resolve to source, so neither the
  * node tests nor host-graph.ts may pull it in) — the entry reconciles its own
  * roster against {@link DEFERRED_EXTRA_ROW_IDS} at apply time instead.
  *
- * ## 1. The required-service probe roster (A1, 2026-09-11 upstream-alignment)
+ * ## 1. The required-service probe roster
  *
  * Upstream derives this fact PER FIBER once the boot settled: `assertEntriesActive`
  * (vendor `packages/client/web/src/boot.ts:138-158`) walks
@@ -21,8 +21,8 @@
  * The PROBE still has to exist here: the composite mounts its first-screen
  * plugins with a direct `ctx.plugin()` call, so their fibers are children of
  * the entry fiber, NOT loader entries — upstream's sweep cannot see them, and a
- * pending child is invisible to a boot that reports success. What no longer
- * exists is an INVENTED roster: `chamber-entry.ts` derives the probed service
+ * pending child is invisible to a boot that reports success. An INVENTED roster
+ * does not exist: `chamber-entry.ts` derives the probed service
  * set from the `inject` face of the very namespaces it registered (the same
  * declaration upstream reads off the fiber), and this module owns the pure
  * union / missing-set / message rules:
@@ -33,15 +33,15 @@
  *  - {@link injectedServices} is the union in registration order — the probed
  *    roster itself, and the order authority {@link missingInjectedServices}
  *    walks (one definition of "the roster", used by production, not a test-only
- *    helper: 2026-09-11 review-fix, finding 4a);
+ *    helper);
  *  - {@link missingInjectedServices} probes that union through
  *    `ctx.get(name) === undefined` and keeps, per missing service, WHICH
  *    registered plugins inject it;
  *  - {@link requiredServiceProbeMessage} names both.
  *
- * 2026-09-11 review-fix (finding 1): the roster is no longer first-screen-only.
- * The deferred cluster used to be excluded on the strength of the split
- * invariant alone, which left 11 members probed by NOTHING — `remote.goals`,
+ * The roster is not first-screen-only.
+ * Excluding the deferred cluster on the strength of the split
+ * invariant alone would leave 11 members probed by NOTHING — `remote.goals`,
  * `remote.skills`, `remote.messageFeedback`, `remote.sessionFeedback`,
  * `remote.agentPresets`, `remote.credentials`, `remote.llm`,
  * `remote.pluginInventory`, `remote.fileReferences`,
@@ -50,17 +50,17 @@
  * FIRST-SCREEN COMPOSITE plugin (the api-gateway/api-remotes generated-remote
  * mounts, and ui-settings for `settingsSchema`), which is why the deferred split
  * stays safe — but "the provider is first-screen" is exactly the assumption a
- * probe exists to check, so `chamber-entry.ts` now feeds every deferred row's
+ * probe exists to check, so `chamber-entry.ts` feeds every deferred row's
  * face into the same roster as it mounts and re-arms one probe pass. The
  * per-id faces this derivation is fed from are CI-pinned against the sources
  * (`required-extra-rows.test.ts`): a namespace that stops exporting its
  * declaration is a visible test failure, never a silently smaller roster.
  *
- * What that derivation yields in the pinned tree (2026-09-11 audit over every
+ * What that derivation yields in the pinned tree (audit over every
  * root `inject` of every composite first-screen namespace) is ONE service whose
  * only provider is a non-covered host-graph row — plus the kernel-adopted
  * renderer's `slots`, which the shell always materializes. The deferred members
- * the roster also carries (finding 1) do not widen that risk set: every one of
+ * the roster also carries do not widen that risk set: every one of
  * them is provided by a COMPOSITE first-screen plugin, so no non-covered row can
  * be their only provider:
  *
@@ -71,16 +71,8 @@
  *    the `ui-chat` fiber stays PENDING, its whole `apply` is skipped, and the
  *    conversation view stays unregistered while the boot still reports success.
  *
- * History (keep the reasoning): the roster used to be the hand-written list
- * `['sidebarRight']`, and this module carried manual notes for the two entries
- * that ever left it — `fileUpload` (listed in round 2, then COMPOSITE-COVERED in
- * round 3, so the composite provides it) and `resources` (listed on a false
- * premise: `ui-sidebar-right` INJECTS `resources`, and its provider is the
- * separate non-covered `client-resources` row — no composite first-screen
- * namespace injects it, so it never entered the derived union either). Both
- * facts now fall out of the derivation instead of out of a maintained list.
  *
- * ## 2. The deferred-covered roster (review F1/F2, 2026-12)
+ * ## 2. The deferred-covered roster
  *
  * {@link DEFERRED_EXTRA_ROW_IDS} lists the ids `chamber-entry.ts`
  * registerDeferred registers. They are a third kind of row: COVERED (their
@@ -154,8 +146,8 @@ export function registeredInjectMembers(id: string, inject: unknown): string[] {
  * The union of the registered plugins' inject members, in registration order
  * (first occurrence wins), ignoring the plugins that inject nothing. This IS
  * the probed roster: it is derived, never maintained — and it is the roster's
- * ORDER authority, consumed by {@link missingInjectedServices} (2026-09-11
- * review-fix, finding 4a: the union is production code, not a test-only seam).
+ * ORDER authority, consumed by {@link missingInjectedServices} (the union is
+ * production code, not a test-only seam).
  * @param plugins - the composite's registered plugins, in registration order.
  * @returns the service names to probe, deduped.
  */
@@ -171,7 +163,7 @@ export function injectedServices(plugins: readonly RegisteredPluginInject[]): st
 
 /**
  * Which of the registered plugins' injected services are still unprovided,
- * each with the registered plugins that inject it (A1: upstream's
+ * each with the registered plugins that inject it (upstream's
  * `Object.keys(entry.fiber.inject).filter(service => ctx.get(service) ===
  * undefined)`, lifted from the per-fiber sweep to the composite's own roster).
  *
@@ -203,7 +195,7 @@ export function missingInjectedServices(
 }
 
 /**
- * Probe deadline — PER ROSTER MEMBER, not per boot (2026-12 FIX 4): the window
+ * Probe deadline — PER ROSTER MEMBER, not per boot: the window
  * starts when the probe first sees a service in the roster, so a member the
  * deferred cluster's re-arm adds at t=30s gets the same 5 s as a first-screen
  * member instead of being judged instantly against the boot's t=0 start. The
@@ -216,10 +208,10 @@ export const REQUIRED_SERVICE_PROBE_DEADLINE_MS = 5000
 export const REQUIRED_SERVICE_PROBE_INTERVAL_MS = 250
 
 /**
- * How long the probe keeps re-checking AFTER every member's deadline elapsed
- * (2026-12 FIX 1): a provider that materializes too late for the verdict used to
- * leave a permanent false banner, because the probe stopped at the verdict and
- * the shell had no revocation path. The probe now polls for up to this long past
+ * How long the probe keeps re-checking AFTER every member's deadline elapsed:
+ * a provider that materializes too late for the verdict must not
+ * leave a permanent false banner, because the probe stops at the verdict and
+ * the shell has no other revocation path. The probe polls for up to this long past
  * the NEWEST member's deadline and reports a retraction once the missing set
  * empties; the bound keeps a torn-down/abandoned mount from holding a live timer
  * forever. 30 s is one health-window: long enough for a slow async provider
@@ -228,12 +220,12 @@ export const REQUIRED_SERVICE_PROBE_INTERVAL_MS = 250
 export const REQUIRED_SERVICE_PROBE_RECHECK_WINDOW_MS = 30_000
 
 /**
- * The probe's clock (2026-12 FIX 2): `performance.now()` when the host has one,
+ * The probe's clock: `performance.now()` when the host has one,
  * `Date.now()` otherwise. A wall-clock jump (a Windows sleep/resume plus a
  * w32time correction moves `Date.now()` forward by more than the whole deadline
- * in one step) used to satisfy the deadline on the first pass and judge a
+ * in one step) could otherwise satisfy the deadline on the first pass and judge a
  * service that was ~250 ms from materializing; a monotonic clock cannot jump.
- * The fallback keeps every non-browser host (plain-node tests) on the old
+ * The fallback keeps every non-browser host (plain-node tests) on the `Date.now()`
  * semantics.
  * @param source - injectable `performance`-like source (test seam).
  * @returns milliseconds from an arbitrary but non-jumping origin.
@@ -246,12 +238,12 @@ export function monotonicNowMs(source?: { now?(): number }): number {
 
 /**
  * Per-member grace + revocation bookkeeping of the required-service probe
- * (2026-12 FIX 1/FIX 4). The probe owns one instance per boot; the two pure
+ * The probe owns one instance per boot; the two pure
  * questions it answers are:
  *
  *  - is any roster member still inside its OWN window ({@link withinGrace})? A
- *    verdict may only be produced once every member had its full window — the
- *    re-armed members used to be judged with ZERO grace against the boot's start;
+ *    verdict may only be produced once every member had its full window — a
+ *    re-armed member must not be judged with ZERO grace against the boot's start;
  *  - until when may the probe keep polling after a verdict
  *    ({@link recheckUntilMs})? The bound is the newest member's deadline plus
  *    {@link REQUIRED_SERVICE_PROBE_RECHECK_WINDOW_MS}, so the revocation path
@@ -320,7 +312,7 @@ export const DEFERRED_EXTRA_ROW_IDS: readonly string[] = [
   '@deepseek-ai/dsh-client-ui-attachment',
   '@deepseek-ai/dsh-client-ui-brand-official',
   '@deepseek-ai/dsh-client-ui-reference',
-  // C4 settings cluster (ui-settings itself stays first-screen).
+  // settings cluster (ui-settings itself stays first-screen).
   '@deepseek-ai/dsh-client-ui-settings-general',
   '@deepseek-ai/dsh-client-ui-settings-models',
   '@deepseek-ai/dsh-client-ui-settings-plugins',
@@ -343,7 +335,7 @@ export function chamberEntryDiagnosticMessage(detail: string, instanceId?: strin
 }
 
 /**
- * The STRUCTURED face of one probe verdict (2026-12, design 05 §4): the missing
+ * The STRUCTURED face of one probe verdict (design 05 §4): the missing
  * service names and the registered plugins that inject them.
  *
  * The producer stops flattening its fact into a sentence here. The user-facing
@@ -370,26 +362,12 @@ export function missingServiceFact(
 }
 
 /**
- * Build the operator-facing diagnostic for a still-missing set.
- *
- * A1 (2026-09-11 upstream-alignment): the line names every missing service WITH
- * the registered plugins that inject it, so the responsible surface is readable
- * straight from the line (upstream's sweep prints the same pairing per pending
- * fiber). It stays what it always was: a post-settle DIAGNOSTIC, never a boot
- * gate — the boot has already settled successfully, and a gateway/mobile shape
- * legitimately omits host-graph rows.
- * @param missing - the missing services with their registered injectors.
- * @param instanceId - the per-entry instance id, when known.
- * @returns one line naming each service, its injectors, the instance and the
- *   consequence.
- */
-/**
  * The known NON-COVERED host-graph rows that PROVIDE a probed service, keyed by
- * the cordis service name (2026-12 FIX 7). The roster only knows the INJECTORS —
+ * the cordis service name. The roster only knows the INJECTORS —
  * the composite plugins that stay pending on a service — while the actionable
- * half of the fact is usually the missing PROVIDER row, which is exactly what
- * the single banner slot could not name before (the real-machine report showed
- * "缺少 sidebarRight" with the waiter named and never the provider).
+ * half of the fact is usually the missing PROVIDER row, which the single banner
+ * slot must be able to name (a bare "缺少 sidebarRight" names the waiter and
+ * never the provider).
  *
  * The ids are the host-graph row ids (upstream package names) and are pinned by
  * the roster tests against the vendored declarations. A service with no known
@@ -404,6 +382,20 @@ export const KNOWN_SERVICE_PROVIDERS: Readonly<Record<string, string>> = {
   resources: '@deepseek-ai/dsh-client-resources',
 }
 
+/**
+ * Build the operator-facing diagnostic for a still-missing set.
+ *
+ * The line names every missing service WITH
+ * the registered plugins that inject it, so the responsible surface is readable
+ * straight from the line (upstream's sweep prints the same pairing per pending
+ * fiber). It is a post-settle DIAGNOSTIC, never a boot
+ * gate — the boot has already settled successfully, and a gateway/mobile shape
+ * legitimately omits host-graph rows.
+ * @param missing - the missing services with their registered injectors.
+ * @param instanceId - the per-entry instance id, when known.
+ * @returns one line naming each service, its injectors, the instance and the
+ *   consequence.
+ */
 export function requiredServiceProbeMessage(
   missing: readonly MissingRequiredService[],
   instanceId?: string,
@@ -428,7 +420,7 @@ export function requiredServiceProbeMessage(
 
 /**
  * Build the operator-facing diagnostic for a deferred chunk/registration
- * failure set (review F2). The boot is NOT blocked by these failures (the
+ * failure set. The boot is NOT blocked by these failures (the
  * settled UI simply misses those families); the point of the line is to NAME
  * every id whose slots/services are missing this boot, because a host-graph row
  * injecting into one of those slots never activates and is otherwise a silent

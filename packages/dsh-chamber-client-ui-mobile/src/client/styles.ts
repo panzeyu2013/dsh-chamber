@@ -1,22 +1,20 @@
 /**
  * Mobile adaptation stylesheet (design 17 §18.4.3/§18.4.5): a single global
  * sheet injected at apply() as `<style data-plugin="…">`. Anchors are the
- * OFFICIAL stable attributes confirmed against the dsh 0.1.5-alpha.2 DOM
- * (CDP empirical audit, re-anchored when the vendored pin moved — that audit
- * generation is alpha.2; at the current pin 0.1.5-rc.2 those emitting files are
- * unchanged (re-checked across rc.1 → rc.2), so the anchors still hold: the centre
- * column is the keyed `main` slot, the right column is `rightbar`, and the
- * frame carries `data-sidebar-collapsed` / `data-rightbar-collapsed`) plus
+ * OFFICIAL stable attributes confirmed against the dsh DOM (CDP empirical
+ * audit: the centre column is the keyed `main` slot, the right column is
+ * `rightbar`, and the frame carries `data-sidebar-collapsed` /
+ * `data-rightbar-collapsed`) plus
  * the plugin's own `data-mobile-*` stamps — no hashed class names except the
  * documented local-name exception below.
  *
  * CROSS-PACKAGE STYLING HOOKS: anchors are attributes, never classes — a
  * class emitted by another package is hashed per bundle and cannot be targeted
  * from here. That rule is why the sidebar's git-action hook is the
- * `data-git-action` attribute (2026-09-11 upstream-alignment) rather than the
- * global class it used to be; this header is the package that states it.
+ * `data-git-action` attribute rather than a global class; this header is the
+ * package that states it.
  *
- * THE ONE CLASS-NAME EXCEPTION, AND BOTH NAMING SHAPES (2026-09-13 review A2):
+ * THE ONE CLASS-NAME EXCEPTION, AND BOTH NAMING SHAPES:
  * three ship-time anchors (the composer bar row, the settings Models row) target
  * a compiled local name, so the arms must cover BOTH shapes the same upstream
  * sources can be built with:
@@ -27,18 +25,17 @@
  *     0.1.5-rc.2) carries 251 unique names of this shape and ZERO of the other,
  *     and the chamber's own composite build (`packages/desktop/dist/web/
  *     assets/chamber-*.css`) is the same shape (904 unique);
- *   - hash-first `[hash]_[local]` (e.g. `JObwrW_row`) — the shape an earlier
- *     audit saw on the rc.1 bundles, kept as a suffix arm so a future build
- *     that flips back does not silently lose these rules.
+ *   - hash-first `[hash]_[local]` (e.g. `JObwrW_row`) — kept as a suffix arm
+ *     so a future build that emits this shape does not silently lose these
+ *     rules.
  * The dual arm is therefore `:is([class$="_<local>"], [class*="_<local> "],
  * [class*="_<local>_"])`: suffix (single- and multi-class hash-first) plus
- * infix (every local-first form). An earlier revision asserted the infix form
- * "matched nothing" and dropped it — with the pinned bundles that left these
- * rules matching nothing at all, i.e. exactly the silent desktop-geometry
- * regression the audit set out to fix. The watchdog's own token query
+ * infix (every local-first form). The infix form must stay: with the pinned
+ * bundles, dropping it leaves these rules matching nothing at all — a silent
+ * desktop-geometry regression. The watchdog's own token query
  * (`official-hover-card.ts`) has always used the infix form for this reason.
  *
- * WHERE THE NAMES COME FROM (2026-09-13 round-2 review F4 — the arm shape is
+ * WHERE THE NAMES COME FROM (the arm shape is
  * evidenced by the two builds above, NOT by the examples): the composer row is
  * `_row_74m2c_240` (`flex-wrap:wrap; container-type:inline-size`) in the
  * chamber's composite build; the pinned official bundle has no composer row at
@@ -77,10 +74,10 @@
  *    options), the Models provider row degraded, editable fields ≥16px
  *    (iOS focus zoom), safe-area guarantees. Dialogs other than the settings
  *    sheet are NOT touched: every remaining official `aria-modal` producer
- *    already fits the viewport itself (2026-09-11 upstream-alignment T6 —
- *    see the phone-tier note at the popup rule).
+ *    already fits the viewport itself (see the phone-tier note at the
+ *    popup rule).
  *  - `(pointer: coarse) and (hover: none)` — the width-independent CHROME
- *    tier (cross-check round): sticky-hover tooltip bubbles are a
+ *    tier: sticky-hover tooltip bubbles are a
  *    coarse-pointer artifact wherever the viewport is wide, so this one
  *    cosmetic rule is gated by pointer/hover alone (an iPad in landscape is
  *    1024px+ and still taps; attaching a mouse flips hover to `hover` and
@@ -89,12 +86,12 @@
  * byte-for-byte untouched (the official layout must not be affected), and the
  * drawer toggle has an explicit `display: none` default outside the touch tier.
  *
- * Empirical anchor notes (dsh 0.1.5-alpha.2, CDP audit):
+ * Empirical anchor notes (CDP audit):
  *  - `data-sidebar-collapsed` on the frame: present "true" when collapsed,
  *    REMOVED when expanded — `:not([data-sidebar-collapsed])` is the open
  *    drawer condition.
- *  - `data-rightbar-collapsed` is the alpha.2 rename of the details column
- *    flag, and it means "the column has NO retained track" —
+ *  - `data-rightbar-collapsed` is the details column flag, and it means
+ *    "the column has NO retained track" —
  *    `cols.rightbar === 0`, AppFrame.tsx — NOT "the panel is hidden": the
  *    occupant only asks for a track at >= 768px (`track = shown &&
  *    !autoFullscreen`, SidebarRight.tsx), so a shown panel on the phone tier
@@ -105,9 +102,8 @@
  *    `:not([data-rightbar-collapsed])` for the pushed track and
  *    `[data-rightbar-fullscreen]` (set by `openRightbar`, cleared by
  *    `closeRightbar`) for the auto-fullscreen phone case. Keying the yield on
- *    the track flag alone silently left phones un-yielded (2026-09-13
- *    review-fix, round 3).
- *  - STACKING SCOPE (2026-09 二轮, 2026-09-13 review-fix): this plugin's
+ *    the track flag alone silently leaves phones un-yielded.
+ *  - STACKING SCOPE: this plugin's
  *    fixed layers (drawer 75, backdrop 74, toggle 76) are mounted inside the
  *    official `shell.overlay` layer, which is `position: absolute;
  *    z-index: 20` — a stacking context of its own. The tiers therefore order
@@ -157,7 +153,7 @@ export const MOBILE_CSS = `
    feedback, workspace rows, chat copy/branch) whose aria-label names the same
    action (3 of them phrase it slightly differently — workspace search ×2,
    trajectory load-earlier — same semantics; verified against the pinned
-   install at the 2026-09 re-anchor, see the module header). Four
+   install (see the module header). Four
    informational bubbles are deliberately
    NOT hidden because their trigger has no accessible duplicate: the chat
    stats line (ui-chat:3853, ellipsized non-focusable div), the agent-preset
@@ -180,14 +176,13 @@ export const MOBILE_CSS = `
      ConnectionsSection.module.css, whose ::after carries content:
      attr(data-tip)) AND the official ones — upstream's agent-preset client row
      sets the data-tip attribute on its icon buttons and consumes it the same
-     way (content:attr(data-tip) in its bundled CSS; re-audited 2026-12, the
-     earlier "the official bundle carries ZERO data-tip" note was wrong because
-     it only grepped the SHELL bundle, not the dynamic client rows). Same
+     way (content:attr(data-tip) in its bundled CSS; a grep of only the SHELL
+     bundle misses it — the dynamic client rows carry it too). Same
      coarse-pointer artifact as the official Tooltip above: the bubble is
      opacity-gated on :hover / :focus-visible, so a tap leaves the synthesized
      hover behind and the bubble stays over the row it describes. On the
      chamber pages every data-tip site pairs the attribute with aria-label
-     (verified across the 13 sites at the 2026-09 review; that package's Button
+     (verified across the 13 sites; that package's Button
      prop surface documents the pairing), so no chamber accessible name is
      lost; the official sites are upstream's own pairing and are suppressed for
      the same reason as the tooltip rule above. Hiding only the pseudo-element
@@ -224,8 +219,8 @@ export const MOBILE_CSS = `
      769-1023px the panel drew at its normal width (313-460px, about two fifths
      of the content column and 41-45% of the viewport) straight over the
      transcript: no track, no fullscreen
-     covered with no way to make room (2026-09-13 review-fix, the STATUS
-     geometry residue). Give the whole touch tier the presentation upstream
+     covered with no way to make room. Give the whole touch tier the
+     presentation upstream
      reserves for phones: the official panel fills the frame.
      NOT gated on the frame's shown flag: the close report lands in the same
      commit as the slide-out (SidebarRight reports shown:false immediately when
@@ -239,8 +234,8 @@ export const MOBILE_CSS = `
      ANCHOR: the panel is NOT the column's direct child — it sits under the
      rightbar slot's [data-slot="rightbar"] outlet wrapper, and every outlet
      wrapper is display:contents (ui-renderer scoped-slots ANCHOR_STYLE),
-     so a positional rule on the wrapper is a silent no-op (the first cut of
-     this very fix landed there). Target the panel's own upstream state
+     so a positional rule on the wrapper is a silent no-op. Target the
+     panel's own upstream state
      attribute instead, scoped to the column. z-40 is upstream's own
      fullscreen layer ('[data-sidebar-right-panel=fullscreen]'), kept so the
      official stacking order is unchanged. */
@@ -335,11 +330,11 @@ export const MOBILE_CSS = `
      [data-side] (no role), the conversation width strips carry
      [data-width-handle]; the ui-primitives Tooltip bubble also carries
      [data-side] for placement and must NOT be hidden (role="tooltip"
-     exclusion). Attribute anchors replace the legacy [class$="_handle"]
-     local-name rule here: the attribute seams are stable by contract, while a
+     exclusion). Attribute anchors, not a [class$="_handle"]
+     local-name rule: the attribute seams are stable by contract, while a
      local-name suffix match would also catch unrelated handles.
-     FUTURE-FRAGILE ANCHOR NOTE (2026-12 audit): the [data-side] exclusion
-     was verified safe across the whole tree at audit time — no other
+     FUTURE-FRAGILE ANCHOR NOTE: the [data-side] exclusion
+     is verified safe across the whole tree — no other
      [data-side] carriers beyond the AppFrame handles / width strips /
      role="tooltip" bubbles; re-grep [data-side] when the vendored base
      moves before trusting this rule. */
@@ -351,10 +346,10 @@ export const MOBILE_CSS = `
      touch equivalent (a split ratio cannot be dragged on this tier). The
      SPLIT BUTTON is not: upstream renders it as a plain 'button' whose
      'onClick' splits the pane and which disables ITSELF when the pane cannot
-     split, so hiding it removed a usable affordance on a false premise —
-     the "the right surface is fullscreen here" half was untrue at 769-1023px
-     as well (2026-09-13 review-fix; the tier now presents that surface
-     fullscreen, see the right-panel rule above). */
+     split, so hiding it would remove a usable affordance on a false premise —
+     the "the right surface is fullscreen here" half is untrue at 769-1023px
+     as well (the tier presents that surface fullscreen, see the right-panel
+     rule above). */
   [data-mobile-frame] [data-dockkit-divider] {
     display: none !important;
   }
@@ -368,8 +363,8 @@ export const MOBILE_CSS = `
      follows the official icon buttons: transparent base, hover/active
      fills from the alias tokens, focus ring in the business-primary color,
      and the glyph in the official rail ink — the control IS the official
-     panel toggle glyph at the touch size (2026-09-11 upstream-alignment
-     T17a; the plugin draws no control of its own). */
+     panel toggle glyph at the touch size (the plugin draws no control of
+     its own). */
   .dsh-mobile-nav-toggle {
     position: fixed;
     top: max(10px, env(safe-area-inset-top, 0px));
@@ -381,7 +376,7 @@ export const MOBILE_CSS = `
     height: 44px;
     padding: 0;
     border: none;
-    /* Official rail-toggle silhouette (2026-09 batch 1, H2): the dsh sidebar's
+    /* Official rail-toggle silhouette: the dsh sidebar's
        own icon button is a circle (28/36px), so the phone's only way back to
        navigation keeps that shape at the 44px touch size instead of becoming a
        12px-cornered square. The corner-shape keyword is paired with the full
@@ -434,7 +429,7 @@ export const MOBILE_CSS = `
      the backdrop stand down, and an open drawer goes 'visibility: hidden' —
      the same mechanism the closed drawer uses, which also drops it out of the
      tab order (WCAG 2.4.3) instead of leaving nav rows and the settings seat
-     focusable behind the panel (2026-09-13 review-fix).
+     focusable behind the panel.
      TWO ARMS, because "the panel is shown" is NOT one attribute:
        - :not([data-rightbar-collapsed]) is upstream's TRACK flag
          (cols.rightbar === 0, AppFrame.tsx) and the seat only asks for a
@@ -486,8 +481,8 @@ export const MOBILE_CSS = `
 
   /* Crumbs/lineage chain: KEEP the official single-line contract and pan the
      strip instead of wrapping it. Upstream .crumbs is white-space:nowrap +
-     overflow:hidden + min-width:0; the previous wrap rule (2026-09 review-fix)
-     overrode the inherited nowrap to normal, which is a REGRESSION for the
+     overflow:hidden + min-width:0; a wrap rule would override the inherited
+     nowrap to normal, which is a REGRESSION for the
      lineage chip: its count text is a bare span with NO class of its own (the
      upstream SubagentHeaderLineage class dictionary omits the count key it
      references), so the ONLY thing keeping "31 个子代理" on one line was the
@@ -540,10 +535,10 @@ export const MOBILE_CSS = `
      28-36px (desktop-mouse sizes) — unusable on touch. Icon-only buttons
      also get a width floor; text buttons (composer bar) keep their natural
      width. Menu/popup items and settings entries get the same floor.
-     The SEAT list is explicit and grows with upstream: the 2026-09-13
-     review-fix added the header's utilities + corner seats and the right
-     panel's dockkit strip, which the earlier three-seat list left at their
-     desktop sizes (28px) while the panel became a primary mobile surface.
+     The SEAT list is explicit and grows with upstream: the header's
+     utilities + corner seats and the right panel's dockkit strip are
+     included, because a three-seat list leaves them at their desktop
+     sizes (28px) while the panel is a primary mobile surface.
      The strip's CHIP-CLOSE control is excluded on purpose: upstream floats it
      at 20px inside the chip (absolute, top-right, pointer-events gated by
      hover/active), so the floor would inflate it into a 44px box over the
@@ -582,9 +577,9 @@ export const MOBILE_CSS = `
      under content-box (ui-dockkit/components/measure.ts chipMinimum) — forcing
      border-box there would silently lower that measured minimum from 100px to
      80px and make the pane-split "halves fit" rule more permissive than
-     upstream intends. Scoped to this new seat: the pre-existing
-     header-actions arm is left exactly as shipped, so the header row keeps the
-     geometry it was verified with (its floor therefore lands on the CONTENT
+     upstream intends. Scoped to the dockkit seat: the
+     header-actions arm is left as shipped, so the header row keeps its verified
+     geometry (its floor therefore lands on the CONTENT
      box: padded icon buttons render ~56px, and the header row grows with
      them — a device-judged tradeoff, see STATUS). */
   [data-sidebar-right-panel] [data-dockkit-strip] {
@@ -663,8 +658,8 @@ export const MOBILE_CSS = `
      focus and the page STAYS zoomed. The composer, settings fields and dialog
      fields already carry the floor; the drawer's session search (13px,
      ui-workspace:1187) and inline rename (14px, :531) were the gap — a
-     focus-zoom there used to leave the composer behind the keyboard for the
-     rest of the session (cross-check P1). */
+     focus-zoom there would leave the composer behind the keyboard for the
+     rest of the session. */
   [data-mobile-role="sidebar"] input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
   [data-mobile-role="sidebar"] textarea {
     font-size: max(16px, var(--dsh-content-font-size, 16px)) !important;
@@ -673,7 +668,7 @@ export const MOBILE_CSS = `
 
 /* ---- phone tier (design 17 §18.4.2/§18.4.3) ---- */
 @media (max-width: 768px) and (pointer: coarse) {
-  /* Session header: one bounded row (2026-09-14 review-fix). The touch tier
+  /* Session header: one bounded row. The touch tier
      restored the official nowrap contract on the crumb strip; this tier
      decides WHAT gives up width. Upstream ConversationSessionHeader shape:
        header
@@ -766,8 +761,7 @@ export const MOBILE_CSS = `
      button (upstream scoped-slots.tsx gives every slot an addressable wrapper),
      while the row's trailing cluster also holds ContextMeter — same "trigger"
      local name, but flex:none and width:28px. A class-name arm therefore capped
-     the 28px ring's max-width and overrode its flex:none, which the 2026-09
-     audit never intended (2026-09-13 round-2 review F5). The seat anchor is the
+     the 28px ring's max-width and overrode its flex:none. The seat anchor is the
      narrow one; test/behavior/composer-guard.test.ts pins both it and the absence of any
      "trigger" class arm. */
   [data-slot="conversation.input.model"] button {
@@ -859,7 +853,7 @@ export const MOBILE_CSS = `
   }
   /* Header row (actions + Close), anchored on the documented seams
      [data-slot="settings.action"] + [data-slot="settings.close"] instead of
-     a positional div:first-child (2026-09-11 upstream-alignment T17c). Both
+     a positional div:first-child. Both
      outlet wrappers are unconditional on their call sites, and the ROW is
      the only element carrying both: the official shape is content > header >
      (actions > action-outlet, close-button > close-outlet), so the actions
@@ -891,21 +885,18 @@ export const MOBILE_CSS = `
        4-column line) → TWO equal columns: the four children auto-place
        2×2 (inputs on the first row, the two icon actions under them).
      The card grids are NOT overridden: upstream owns both of them, and they
-     are TWO grids under this very section with two DIFFERENT upstream rules
-     (2026-09-11 review-fix F3 — the deleted arm's blast radius had been
-     recorded for one grid only):
+     are TWO grids under this very section with two DIFFERENT upstream rules:
      - PluginInventorySettingsTab.module.css collapses its .cards itself at
-       max-width: 680px, so the chamber's former arm only contradicted
-       upstream there in the 681-768px window;
+       max-width: 680px, so a chamber override would contradict upstream in
+       the 681-768px window;
      - ui-agent-preset AgentPresetSection.module.css declares NO breakpoint at
        all — its .cards is repeat(auto-fill, minmax(268px, 1fr)) inside a
        .section capped at 720px, so upstream renders TWO columns from about
        580px of viewport width (two 268px cards plus the 12px gap need 548px
        inside the options box = viewport minus 2x(16px + safe-area)). For that
-       grid the deleted arm changed the layout across its WHOLE two-column
-       range, about 580-768px of the phone tier, not just 681-768px.
-     The arm was deleted for both grids (2026-09-11 upstream-alignment T17b) —
-     upstream's geometry is the only geometry for each of them. */
+       grid a chamber override would change the layout across its WHOLE
+       two-column range, about 580-768px of the phone tier, not just 681-768px.
+     Upstream's geometry is the only geometry for each of them. */
   [data-slot="settings.section"] :is([class$="_modelRow"], [class*="_modelRow "], [class*="_modelRow_"]) {
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   }
@@ -919,8 +910,8 @@ export const MOBILE_CSS = `
     font-size: max(16px, var(--dsh-content-font-size, 16px)) !important;
   }
   /* No dialog-width rule of this plugin's own, deliberately: dialogs other
-     than the settings sheet are NOT capped (2026-09-11 upstream-alignment
-     T6). The tree has exactly three role="dialog" aria-modal="true"
+     than the settings sheet are NOT capped. The tree has exactly three
+     role="dialog" aria-modal="true"
      producers, and each owns its viewport fit: the settings panel above
      (this sheet), the ui-primitives Modal (Modal.module.css pins its Root to
      inset 0 with a 24px padding and caps the Dialog at min(380px, 100%)),
@@ -954,7 +945,7 @@ export const MOBILE_CSS = `
   }
 }
 
-/* ---- narrow phone tier: 480px and below (2026-09-14 review-fix) ----
+/* ---- narrow phone tier: 480px and below ----
    The session header's width budget at 390px is ~78px of title after the
    floating toggle gutter, the two 44px icon seats, the mode chip and the
    lineage chip. Below 480px the mode chip's LABEL is the cheapest thing to
@@ -966,10 +957,10 @@ export const MOBILE_CSS = `
   /* The headerActions seat's ONLY text-bearing direct child is upstream's
      agent-preset cell, and it is a bare span (AgentPresetLabel) — the schedule
      and job cells are div wrappers whose triggers are nested, so a
-     "> button > span" selector matches nothing at all. 2026-09-14 second-pass
-     review: the rule that used to sit here was dead code written against the
-     HERO seat's button[aria-haspopup=menu], which upstream registers into
-     conversation.hero.agentPreset — not into the header. Upstream already
+     "> button > span" selector matches nothing at all, and the
+     HERO seat's button[aria-haspopup=menu] is upstream's own registration into
+     conversation.hero.agentPreset — not into the header — so no rule is
+     needed against it. Upstream already
      bounds that label itself (max-width 180px + nowrap + overflow hidden), so
      this tier only takes width BACK from it: the icon stays, the text clips,
      and the crumb strip keeps usable room on a narrow row instead of losing it

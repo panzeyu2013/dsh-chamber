@@ -1,5 +1,5 @@
 /**
- * tsconfig vendor-dep mapping lockstep (2026-09-11 CI fix).
+ * tsconfig vendor-dep mapping lockstep.
  *
  * WHY THIS EXISTS: this package's tsconfig resolves `@deepseek-ai/*` to the
  * VENDOR SOURCES (`../../vendor/harness-packages/@deepseek-ai/<pkg>/src/index.ts`)
@@ -15,8 +15,7 @@
  * lockfile installs. A pin bump that moves `undici` must move the mapping with
  * it. Without this lock the drift surfaces as four TS2307s inside vendor code
  * (`dsh-http-proxy/src/install.ts:10/144/194/209`) — on CI only, because a
- * long-lived local install carries accidental hoists that hide it: exactly the
- * 2026-09-11 red `typecheck:host-open-in`.
+ * long-lived local install carries accidental hoists that hide it.
  */
 
 import { test } from 'node:test'

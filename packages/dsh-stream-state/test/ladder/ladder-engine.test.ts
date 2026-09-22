@@ -1,8 +1,8 @@
 /**
- * Unified ladder engine (B4 core) - behavior contract.
+ * Unified ladder engine - behavior contract.
  *
- * These are the properties the four ladders each implement separately today. The
- * point of the engine is that they become properties of ONE file: a later edit to
+ * These are the properties the four ladders each implement separately. The
+ * point of the engine is that they live in ONE file: a later edit to
  * any ladder must keep these tests green, and the ladders' own values stay inputs.
  */
 import { test } from 'node:test'

@@ -66,7 +66,7 @@
          （第 4 段 = final 标记，恒大于同 base 的 beta）；beta 版
          X.Y.Z-beta.N → X.Y.Z.N（第 4 段 = beta 序号，随 N 单调递增）。
          这样 beta.N 能看到 beta.N+1 与 final，final 也不会被同 base 的
-         beta 盖住（旧实现去掉 -beta.N 让两者相等）。CFBundleShortVersionString
+         beta 盖住（去掉 -beta.N 两者会相等）。CFBundleShortVersionString
          保留完整发布版本字符串（含 -beta.N）用于展示。 -->
     <key>CFBundleVersion</key>
     <string>__BUNDLE_VERSION__</string>

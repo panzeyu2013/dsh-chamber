@@ -1,5 +1,5 @@
 /**
- * bridge-shim-surface.test.ts —— S-B 静态面比对：bridge-shim.js（macOS
+ * bridge-shim-surface.test.ts —— 静态面比对：bridge-shim.js（macOS
  * Swift POC A-bridge shim）与 preload.cts 暴露面逐字一致 + 通道引用 ∈
  * bridge-manifest.json invoke/push 集。
  *
@@ -262,9 +262,9 @@ test('④ invoke/push 通道集：preload == shim == manifest（60 invoke / 8 pu
 })
 
 test('⑥ update 面 payload 形状锁步：openReleasePage {url} / 四个动作无载荷（G22 的更新面切片）', () => {
-  // G22（payload 形状缺口）在更新面的收口：preload 与 shim 的「动作是否携带
-  // payload、键叫什么」逐条锁死。更广的 payload 形状（notifications/deepLink/
-  // runtime 请求对象）仍靠 Swift 侧监听器校验 + 集成测试，未在本次收口范围。
+  // 更新面的 payload 形状锁步：preload 与 shim 的「动作是否携带 payload、
+  // 键叫什么」逐条锁死。更广的 payload 形状（notifications/deepLink/
+  // runtime 请求对象）仍靠 Swift 侧监听器校验 + 集成测试。
   const preloadMembers = memberSpans(preloadApiBlock('updateApi'))
   const shimMembers = memberSpans(shimNamespaceBlock('update'))
   const NO_PAYLOAD_ACTIONS: Array<[member: string, channel: string]> = [

@@ -1,16 +1,16 @@
 /**
- * 控制面自身的滚动日志文件（2026-12；Swift 原生版「ui-chat 卡死」取证缺口修复）。
+ * 控制面自身的滚动日志文件。
  *
  * ## 为什么需要它
  *
  * 控制面最有价值的取证行是 WS splice 的
  * `WebSocket stream <id> closed (<cause>, <ms>ms)`（proxy-forward.ts）与
  * `heartbeat lost after N unanswered ping(s)`——它们区分「实例判死 / 浏览器腿
- * 消失 / 代理自身心跳拆链」。但控制面此前只把日志交给注入的 logger（默认
- * console）：打包态从 Finder/Dock 启动时 stdout/stderr 不落盘（实测
+ * 消失 / 代理自身心跳拆链」。控制面只把日志交给注入的 logger（默认
+ * console）时，打包态从 Finder/Dock 启动时 stdout/stderr 不落盘（
  * `log show --predicate 'process == "dsh-chamber"'`（Swift 壳）与
  * `process == "dsh-chamber-electron"`（Electron 主进程）都取不到）——两类 flavor
- * 的这条证据都等于丢失，事故只能靠猜。
+ * 的这条证据都会丢失，事故只能靠猜。
  *
  * ## 位置与纪律
  *
@@ -62,8 +62,8 @@ const CONTROL_LOG_NONBLOCK_FLAG = typeof constants.O_NONBLOCK === 'number' ? con
  * win32 回退（无 O_NOFOLLOW）：open 标志退化为 O_WRONLY|O_APPEND|O_CREAT，内核不会
  * 拒绝符号链接叶子。open 后把 path 重新 lstat 并与句柄自身 fstat 的 (dev, ino) 复验，
  * 链接或换文件一律抛错（调用方的降级包装把它变成拒绝落盘）——与 private-fs.ts
- * openPrivateNoFollowSync 的保证相同。POSIX 分支不调用（O_NOFOLLOW 已由内核拒绝），
- * syscall 序列不变；导出以便平台回退单测直接驱动（该模块没有 constants 注入 seam）。
+ * openPrivateNoFollowSync 的保证相同。POSIX 分支不调用（O_NOFOLLOW 已由内核拒绝）；
+ * 导出以便平台回退单测直接驱动（该模块没有 constants 注入 seam）。
  */
 export function verifyOpenedLeafIdentity(path: string, handle: number): void {
   const atPath = lstatSync(path)
@@ -103,8 +103,8 @@ export function formatControlLogLine(args: readonly unknown[]): string {
   for (const arg of args) {
     try {
       if (typeof arg === 'string') { parts.push(arg); continue }
-      // `instanceof` 会触发 [[GetPrototypeOf]]：可撤销 Proxy 在这一步就抛（2026-12 二轮
-      // 独立复核实测 "Cannot perform 'getPrototypeOf' on a proxy that has been revoked"），
+      // `instanceof` 会触发 [[GetPrototypeOf]]：可撤销 Proxy 在这一步就抛
+      // "Cannot perform 'getPrototypeOf' on a proxy that has been revoked"，
       // 所以连类型判别也要在 try 里——日志序列化绝不允许把异常抛回调用方的 logger。
       if (arg instanceof Error) {
         parts.push(arg.stack ?? `${arg.name}: ${arg.message}`)
@@ -135,7 +135,7 @@ export function createControlLogSink(options: {
 }): ControlLogSink {
   const maxBytes = Math.max(1, options.maxBytes ?? DEFAULT_CONTROL_LOG_MAX_BYTES)
   // 份数下限 2：`files: 1` 若走轮转环会实际留下 `.log` + `.1` 两份（与文档的
-  // 「保留 files 份」不符），故直接夹到 2（2026-12 独立复核发现）。
+  // 「保留 files 份」不符），故直接夹到 2。
   const files = Math.max(MIN_CONTROL_LOG_FILES, options.files ?? DEFAULT_CONTROL_LOG_FILES)
   const warn = options.warn ?? ((message: string) => { console.warn(message) })
   const directory = join(options.stateDir, CONTROL_LOG_DIR)
@@ -170,7 +170,7 @@ export function createControlLogSink(options: {
    * 与同 stateDir 的 host-logs.ts（design 02 §3.8）和原生壳 ShellLog
    * （0600/0700）同一纪律。文件级 O_NOFOLLOW 只保护最后一段，若 logs/ 是指向
    * 别处的符号链接，mkdirSync(recursive) 会接受它，随后把日志写进攻击者选定的
-   * 目录（对照 host-logs.ts 同族检查）。2026-12 复核修正：reopen()/start() 是生产
+   * 目录（对照 host-logs.ts 同族检查）。reopen()/start() 是生产
    * 必走路径，只在构造期查会让降级后的 sink 在 reopen 时被重新激活。
    * @returns true = 目录可用；false = 已降级，调用方不得继续开句柄。
    */
@@ -191,7 +191,7 @@ export function createControlLogSink(options: {
    * 打开常驻句柄：**0600 + 不跟随符号链接**（O_NOFOLLOW），与 host-logs.ts 的
    * `open(..., O_WRONLY|O_APPEND|O_NOFOLLOW|O_CREAT|O_EXCL, 0o600)` 同族。
    *
-   * 常驻而不每行 open/close（2026-12 二轮复核）：宿主的 stdout/stderr 每一行都会
+   * 常驻而不每行 open/close：宿主的 stdout/stderr 每一行都会
    * 经控制面 logger（spawn-dsh 同时写 host-logs 与这里），逐行 4 次同步系统调用
    * 是真实开销；句柄在 write 失败/降级/close 时关闭，字节水位在内存里维护。
    */
@@ -228,8 +228,8 @@ export function createControlLogSink(options: {
   }
   /**
    * 句柄身份巡检（每 {@link IDENTITY_CHECK_EVERY} 行一次 stat）：常驻句柄在外删/替换
-   * 当前文件时会继续写进已 unlink 的 inode——最多丢掉整个上限的日志且不自知
-   * （2026-12 独立复核）。发现 dev/ino 变化或文件消失即丢弃旧句柄并按新文件重开。
+   * 当前文件时会继续写进已 unlink 的 inode——最多丢掉整个上限的日志且不自知。
+   * 发现 dev/ino 变化或文件消失即丢弃旧句柄并按新文件重开。
    * @returns true = 句柄可继续写；false = 已降级（调用方必须放弃这一行）。
    */
   const refreshHandleIdentity = (): boolean => {
@@ -293,7 +293,7 @@ export function createControlLogSink(options: {
     },
     reopen: () => {
       // 先关旧句柄：句柄已开时 openHandle() 会直接返回且不重新 stat，于是清零后的
-      // 内存水位与磁盘上的真实大小脱节（边界可涨到 2x maxBytes；三轮复核实测）。
+      // 内存水位与磁盘上的真实大小脱节（边界可涨到 2x maxBytes）。
       closeHandle()
       active = true
       warned = false
@@ -318,7 +318,7 @@ export function withControlLogFile(
   // 降级告警走**注入的** logger（而不是硬编码 console.warn）：调用方有诊断面时告警
   // 应当落在那里。注意：Electron 两个生产调用点目前仍注入 console（桌面打包态 stdout
   // 不落盘），所以这条只保证"不绕过调用方"，**不假装**解决了打包态告警的持久化
-  // （Swift flavor 侧由 stderr → sidecar.log 兜住；2026-12 二轮独立复核）。落盘失败后
+  // （Swift flavor 侧由 stderr → sidecar.log 兜住）。落盘失败后
   // sink 已 inactive，这条转发不会递归写回文件。
   const sink = createControlLogSink({
     stateDir,

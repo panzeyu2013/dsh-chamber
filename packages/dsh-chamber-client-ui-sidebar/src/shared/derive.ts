@@ -39,7 +39,7 @@ assertSingletonModule('derive')
 export const UNGROUPED_WORKSPACE_ID = '__ungrouped__'
 
 /**
- * Active-Schedule fact of one session (2026-09-11 upstream-alignment T7).
+ * Active-Schedule fact of one session.
  *
  * Mirrors the official derivation verbatim — upstream reads the session's
  * registered `schedule` projection and asks whether anything is active:
@@ -530,10 +530,10 @@ export function reconcileCompletedFacts(params: {
 }
 
 /**
- * Turn-end classification of one completion edge (plan §3.1 B-track, W0
- * §2.3/H3b): the watcher arms `completedAt` for `kind === 'completed'`, and ALSO
+ * Turn-end classification of one completion edge (B-track): the
+ * watcher arms `completedAt` for `kind === 'completed'`, and ALSO
  * for an UNREADABLE tail (the degraded marker, `lastTurnEnd: null` +
- * `degraded` in the observer status — R12's "回退现状"). `aborted` +
+ * `degraded` in the observer status). `aborted` +
  * `cause === 'user'` is a user stop and every other kind
  * (blocked/error/max-tokens/interrupted) is neutral, i.e. a KNOWN kind other
  * than `completed` suppresses the arm. Kept as the wire vocabulary so a future
@@ -549,7 +549,7 @@ export interface TurnEndFact {
 }
 
 /**
- * THE unread predicate (plan §3.2/§5-3, B edge track):
+ * THE unread predicate (B edge track):
  *
  *   unread ⟺ max(updatedAt, completedAt) > readThrough
  *
@@ -560,16 +560,16 @@ export interface TurnEndFact {
  *   is ABSENT**: the absent case is the watcher's degraded marker for an
  *   unreadable tail (`packages/gateway/src/session-state.ts` `settleCompletion`:
  *   `disposition === 'completed' || unreadable`), where the edge has already
- *   armed. Fail-closed here would silently LOSE that real completion — the very
- *   defect this plan fixes. A KNOWN non-completion (`aborted` incl. cause
+ *   armed. Fail-closed here would silently LOSE that real completion. A KNOWN
+ *   non-completion (`aborted` incl. cause
  *   `user`, `blocked`, `error`, `max-tokens`, `interrupted`) suppresses the arm;
- *   the residual manual-stop ambiguity is closed the pre-change way (the
- *   initiating client marks its own stop read — R12);
+ *   the residual manual-stop ambiguity is closed by the
+ *   initiating client marking its own stop read;
  * - `readThrough` is the host-domain read watermark; absent/0 means "nothing
  *   read yet". Comparisons are strictly `>` (the same watermark never re-arms)
  *   and use ONLY the integer inputs — no client wall clock and no ledger state
- *   (the function signature carries neither; plan §5-13 and the R2 anti-cheat
- *   rule "deriveUnread 不得读取任何账本状态").
+ *   (the function signature carries neither; rule
+ *   "deriveUnread 不得读取任何账本状态").
  */
 export function deriveUnread(
   completedAt: number | undefined,
@@ -705,7 +705,7 @@ export function projectInstanceSnapshot(
       blank?: boolean
       updatedAt?: number
       /**
-       * The row's projection bag (2026-09-11 upstream-alignment T7): the
+       * The row's projection bag: the
        * mounted store's `SessionSummary.projectionValues`. Read for the
        * active-Schedule fact only — the same field upstream's tree reads
        * (vendor ui-workspace tree.ts:161-163).
@@ -727,8 +727,8 @@ export function projectInstanceSnapshot(
   // store projects only `phase` (the arrival lifecycle): its baseline
   // refreshes together with the workspace baseline on reconnect, so the
   // workspace `state` check is the single completeness authority there. The
-  // arrival check is `state === 'idle'` + both phases `ready` only (the
-  // upstream `baselinesReady` field no longer exists).
+  // arrival check is `state === 'idle'` + both phases `ready` only (upstream
+  // has no `baselinesReady` field).
   if (workspaces.state !== 'idle'
     || workspaces.phase !== 'ready' || sessions.phase !== 'ready') return undefined
   const byId = sessions.byId ?? {}
@@ -792,7 +792,7 @@ export function projectInstanceSnapshot(
         ...(typeof row.updatedAt === 'number' ? { updatedAt: row.updatedAt } : {}),
         running: row.running === true,
         blank: row.blank === true,
-        // 2026-09-11 upstream-alignment T7: sparse — the fact rides the row only
+        // Sparse — the fact rides the row only
         // when the session actually owns an active schedule, so every other
         // row's snapshot bytes (and the producer's signature gate) are
         // untouched (see instanceSnapshotSignature).
@@ -820,8 +820,8 @@ export function projectInstanceSnapshot(
 }
 
 /**
- * Narrow RENDER-FIELD overlay of one session row (facts-injection projection,
- * plan §3.3-1): the headless-observer / SessionFactsSource contribution that
+ * Narrow RENDER-FIELD overlay of one session row (facts-injection projection):
+ * the headless-observer / SessionFactsSource contribution that
  * must reach the sidebar even when the source's shell is not mounted. ONLY
  * rendered fields ride it — the judgment inputs (`updatedAt`/`completedAt`)
  * deliberately never enter the projection (the 反-churn discipline the shape
@@ -844,20 +844,19 @@ export type RuntimeFactsOverlay = Readonly<Record<string, RuntimeFactsOverlayRow
  * running→idle edge state machine is authoritative for background sources;
  * the vendor's completed stays as a fallback), preserving the current
  * session and every other live row (running / pending / runningSubagents).
- * PURE — extracted so the App's deriveServers merge is unit-testable.
+ * PURE — so the App's deriveServers merge is unit-testable.
  * Returns undefined when there is nothing to attach (no report and no armed
  * dots); the caller attaches runtime only for CONNECTED sources, so a
  * not-connected source never carries facts.
  *
- * 2026-12 facts wiring (plan §3.3-1) adds two OPTIONAL inputs; a two-argument
- * call stays byte-identical to the pre-change implementation (compatibility
- * lock, test/session-rows/derive.test.ts):
+ * Two OPTIONAL inputs; a two-argument call stays byte-identical
+ * (compatibility lock, test/session-rows/derive.test.ts):
  * - `overlay`: render fields supplied by a facts source when the shell channel
  *   is absent. Per-field priority — pending: channel wins, overlay fills an
  *   absent kind; runningSubagents: channel ?? overlay; completed stays the
  *   App-armed union above; `current` and the running bit never come from the
  *   overlay (the ring keeps reading the polled wire, runningRingVisible).
- * - `stale`: R14 — the aggregate's read-only facts for a DISCONNECTED source
+ * - `stale`: the aggregate's read-only facts for a DISCONNECTED source
  *   (rows may still render; consumers label, never present them as live). It is
  *   a report-level flag and is no-op when false; it requires attachable content
  *   (an armed dot, an overlay row, or a report) — stale alone still returns
@@ -949,12 +948,12 @@ export function instanceSnapshotSignature(
       // label.
       d: row.displayTitle,
       b: row.blank,
-      // 2026-09-11 upstream-alignment T7: the schedule fact MUST ride the
+      // The schedule fact MUST ride the
       // signature — otherwise a session gaining/losing its active schedule
       // republishes identical bytes and the producer's dedupe gate suppresses
       // the row update (the marker would freeze at its first-seen value).
-      // `undefined` serializes away, so schedule-less rows keep exactly the
-      // bytes they had before this field existed.
+      // `undefined` serializes away, so schedule-less rows keep their bytes
+      // unchanged.
       h: row.hasActiveSchedule,
       o: row.origin,
       t: row.title,
@@ -1005,7 +1004,7 @@ export function runningRingVisible(_channelRunning: boolean | undefined, polledR
  * re-publish/re-render the sidebar (its rendered content — ring, dots,
  * pending badges, current highlight — is unchanged).
  *
- * `listComplete` (plan §6 / R13) joins the same identity-only branch: it is a
+ * `listComplete` joins the same identity-only branch: it is a
  * JUDGMENT input (the App prunes absent sessions only on an authoritative
  * complete list), never a rendered sidebar fact — but it must move the App's
  * identity signature or a "facts unchanged, list became authoritative" report
@@ -1024,7 +1023,7 @@ export function runtimeReportSignature(
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
     .map(([id, facts]) =>
       `${id}:${includeRunning && facts.running === true ? 'r' : ''}${facts.completed === true ? 'c' : ''}${facts.pending ?? ''}:${facts.runningSubagents ?? 0}`)
-  // 2026-12 修复（运行位活性守卫）：L1 对账回执也是事实内容的一部分，必须进
+  // L1 对账回执也是事实内容的一部分，必须进
   // 签名——App 的运行时事实提交按本签名去重，回执若不入签名，一次「事实没变、
   // 只有回执结算」的上报会被整个丢弃，守卫永远看不到结论（随后误判为「对账
   // 通道无回执」并升级 reconnect/L3，属假升级风暴）。
@@ -1036,7 +1035,7 @@ export function runtimeReportSignature(
   const receipt = !includeRunning || reconcile === undefined
     ? ''
     : `#f:${reconcile.settledAt === undefined ? 'p' : String(reconcile.settledAt)}:${reconcile.ok ? '1' : '0'}:${String(reconcile.attempts)}`
-  // listComplete（主计划 §6 / R13）：官方 session list 的 arrival phase（pending
+  // listComplete：官方 session list 的 arrival phase（pending
   // → ready 后不回退）是「缺席即删除」的权威门。它是**判定输入**（App 的派生
   // 未读据此剪枝），不是侧边栏渲染事实，所以与回执同一纪律：只签在
   // includeRunning（App 的身份校验路径），投影签名不得因它单独翻转而重发布。
@@ -1063,8 +1062,7 @@ export function runtimeReportSignature(
  * that omits vs materializes an empty field cannot churn the gate. The
  * producer's sentence is not part of the projection at all.
  *
- * Exported for the settings bridge, which had a byte-identical private copy
- * until the 2026-12 single-sourcing pass (its roster signature is the other
+ * Exported for the settings bridge (its roster signature is the other
  * consumer of this identity).
  */
 export function gapSignature(gap: ServerBootGap | undefined): string | null {
@@ -1089,15 +1087,14 @@ export function gapSignature(gap: ServerBootGap | undefined): string | null {
  * renders or uses as a lifecycle boundary — and nothing else:
  * - sourceFingerprint is not visible UI, but a same-id replacement must
  *   publish so source-owned child contexts can be retired synchronously.
- * - `updatedAt` IS part of the session row since the updated-mode alignment
- *   (updated = manual order + activity promotion, design 06 §3.1): a
+ * - `updatedAt` IS part of the session row (updated = manual order + activity
+ *   promotion, design 06 §3.1): a
  *   session's last-activity tick re-publishes the projection and the
- *   sidebar's per-account derivation promotes the session — a pure recency
- *   re-sort is NOT materialized into the row order anymore, so the old
- *   exclusion rationale no longer holds.
+ *   sidebar's per-account derivation promotes the session — the row order is
+ *   NOT a pure recency re-sort.
  * - the runtime portion is restricted to sessions visible in the projection
  *   (hidden sessions' facts never re-render the list).
- * - 2026-09-11 review-fix finding 1: the per-session active-Schedule fact
+ * - The per-session active-Schedule fact
  *   (hasActiveSchedule) is a rendered fact that can flip ALONE — the sidebar
  *   row renders the marker, and a schedule/change log record moves no other
  *   field in this signature — so the row below carries it.
@@ -1169,7 +1166,7 @@ export function serversProjectionSignature(servers: readonly ChamberServerAggreg
         // a blank non-current row is INVISIBLE in navigation — so a candidate
         // appearing/disappearing alone would otherwise republish a byte-identical
         // projection, both publish gates would drop it, and "+" would mint the
-        // very empty session this field exists to prevent (2026-09 review).
+        // very empty session this field exists to prevent.
         reusableBlankSessionId: w.reusableBlankSessionId ?? null,
         sessions: w.sessions.map(x => ({
           id: x.id,
@@ -1178,13 +1175,13 @@ export function serversProjectionSignature(servers: readonly ChamberServerAggreg
           // `displayTitle` for the label / hover / aria / copy text), so it must
           // move this signature exactly like `hasActiveSchedule` below: a healed
           // predecessor row can flip id → directory name with no durable-title
-          // change, and that label flip must republish (2026-09 review).
+          // change, and that label flip must republish.
           displayTitle: x.displayTitle,
           running: x.running === true,
           blank: x.blank === true,
           // Render-relevant: updated-mode ordering derives from it.
           updatedAt: x.updatedAt ?? null,
-          // 2026-09-11 review-fix finding 1: the active-Schedule marker is a
+          // The active-Schedule marker is a
           // RENDERED fact (SessionSection renders it right after the row title),
           // so it must move this signature — otherwise a schedule/change that
           // flips nothing else (a schedule log record does not touch the row's
@@ -1199,7 +1196,7 @@ export function serversProjectionSignature(servers: readonly ChamberServerAggreg
       // Archive-manager metadata rides the publish gate too: a purge while
       // the manager dialog is open must re-publish (the dialog list derives
       // from these rows) or it would go stale. Change detection only needs
-      // identity + recency per row (review round 2026-09): an archived row's
+      // identity + recency per row: an archived row's
       // title/cwd/workspace cannot change through any UI surface (archived
       // rows are invisible to rename; no UI can re-home or move an archived
       // row between workspaces — only host-side archive/purge/content
@@ -1373,7 +1370,7 @@ function sortIdsByRecency<T extends { id: string; updatedAt?: number }>(
 /**
  * One session order account's next updated-mode derivation — the official
  * ui-workspace `nextSessionOrderAccount` port (design 06 §3.1: updated =
- * manual order + activity promotion, no longer a pure recency re-sort). The
+ * manual order + activity promotion, not a pure recency re-sort). The
  * account keeps a stored order (`updatedOrder[accountKey]`) plus
  * last-observed timestamps (`sessionUpdatedAtByAccount[accountKey]`), both
  * written back together:
@@ -1588,9 +1585,8 @@ export function increasedForkTitle(title: string): string {
 }
 
 /** Archived-session metadata row carried to archive-manager surfaces
- *  (design 24 revision 2026-09: the manager lists WHAT is archived; 2026
- *  revision: rows carry their workspace attribution for the grouped
- *  collapsible listing). */
+ *  (design 24 revision: the manager lists WHAT is archived; rows carry their
+ *  workspace attribution for the grouped collapsible listing). */
 export interface ArchivedSessionMetaRow {
   sessionId: string
   /** Title projection when the session has one (untitled sessions omit it). */
@@ -1599,7 +1595,7 @@ export interface ArchivedSessionMetaRow {
   cwd?: string
   /** Epoch ms of last activity; absent on the wire when unknown. */
   updatedAt?: number
-  /** Workspace attribution (2026 revision): the host workspace whose
+  /** Workspace attribution: the host workspace whose
    *  registry membership contains this session — or, failing that, whose
    *  path equals the session's canonical cwd. Absent = the session is not
    *  accounted by any live workspace (deleted-workspace orphans etc.); the
@@ -1608,8 +1604,8 @@ export interface ArchivedSessionMetaRow {
 }
 
 /**
- * Archived-session metadata for the archive manager (design 24 revision
- * 2026-09). The archived SET is the authoritative membership gate: a session
+ * Archived-session metadata for the archive manager (design 24 revision).
+ * The archived SET is the authoritative membership gate: a session
  * row only classifies as archived when its id is in
  * snapshot.archivedSessionIds. Subagent-origin rows never enter
  * InstanceSnapshot.sessions (the projection drops them), so the manager
@@ -1618,11 +1614,11 @@ export interface ArchivedSessionMetaRow {
  * recency (updatedAt desc; stable for ties). The unary-fallback snapshot has
  * NO unary archive-set wire source (documented KNOWN DEGRADATION), so it
  * carries an empty set — EXCEPT when the App substitutes its remembered
- * authoritative set on a degraded commit (design 24 §12 F3(b)): rows are then
+ * authoritative set on a degraded commit (design 24 §12): rows are then
  * filtered exactly as in a pushed view while `archiveSetKnown` stays false.
  * `archiveSetKnown` remains the manager's provenance gate.
  *
- * Workspace attribution (2026 revision): each row carries the workspace that
+ * Workspace attribution: each row carries the workspace that
  * accounts for it — authoritative membership first (snapshot workspace
  * sessionIds, the registry header index: archiving keeps the session in its
  * workspace, only content purge self-heals the accounting), then a canonical
@@ -1630,11 +1626,11 @@ export interface ArchivedSessionMetaRow {
  * otherwise no workspace (manager ungrouped bucket).
  */
 export function deriveArchivedSessions(snapshot: InstanceSnapshot): ArchivedSessionMetaRow[] {
-  // Fast paths (2026 performance review): the derive runs on the render path
+  // Fast paths: the derive runs on the render path
   // for every connected source on every input change, so empty results must
   // cost nothing — no Set build, no session scan, no sort, no attribution
-  // index (M1 disposition: the aggregate-identity cache stays a deferred
-  // renderer-side option; these guards remove the common-case cost).
+  // index (the aggregate-identity cache stays a deferred renderer-side
+  // option; these guards remove the common-case cost).
   if (snapshot.archivedSessionIds.length === 0) return []
   const archived = new Set(snapshot.archivedSessionIds)
   // Both snapshot producers keep session ids unique (commitAggregatePull
@@ -1673,8 +1669,8 @@ export function deriveArchivedSessions(snapshot: InstanceSnapshot): ArchivedSess
   })
 }
 
-/** One workspace group of the manager's collapsible listing (2026
- *  revision): the header facts plus its archived rows. */
+/** One workspace group of the manager's collapsible listing: the header facts
+ *  plus its archived rows. */
 export interface ArchivedSessionGroup {
   /** The workspace's registry id, or UNGROUPED_WORKSPACE_ID for rows with no
    *  attribution. */
@@ -1689,7 +1685,7 @@ export interface ArchivedSessionGroup {
 
 /**
  * Split archived rows into ordered workspace groups for the manager's
- * collapsible listing (2026 revision). Ordering: groups by their NEWEST
+ * collapsible listing. Ordering: groups by their NEWEST
  * member (updatedAt desc; stable for ties) — the dialog's delete-oriented
  * scan wants recent activity on top, mirroring the flat list's recency sort;
  * rows within a group by recency desc. The UNGROUPED bucket (rows without
@@ -1741,9 +1737,9 @@ export function groupArchivedRows(rows: readonly ArchivedSessionMetaRow[]): Arch
  * upstream `uiWorkspace.connectWorkspace` returns the FIRST session that is
  * blank, belongs to this workspace, lives in the workspace's own directory and
  * is not archived (vendor ui-workspace/src/client/navigation.ts:119-126), and
- * only creates one when no such row exists (:128). The chamber's "+" bypassed
- * that resolution and always issued session/create, which is one of the two
- * production paths that mint invisible empty sessions (I2).
+ * only creates one when no such row exists (:128). The chamber's "+" resolves
+ * the same way instead of issuing an unconditional session/create, which is one
+ * of the two production paths that mint invisible empty sessions (I2).
  *
  * Readings are taken from the RAW snapshot, never from the visibility-filtered
  * derived rows: a blank row is visible in navigation only while it is the
@@ -1832,7 +1828,7 @@ export function deriveServerWorkspaces(
         // Sparse flag: only blank (provisional new-session) rows carry it, so
         // the sidebar can render the localized New Session label instead.
         ...(session.blank ? { blank: true } : {}),
-        // 2026-09-11 upstream-alignment T7: the active-Schedule fact rides into
+        // The active-Schedule fact rides into
         // the row the sidebar renders (sparse, upstream name — see
         // hasActiveScheduleOf).
         ...(session.hasActiveSchedule === true ? { hasActiveSchedule: true } : {}),

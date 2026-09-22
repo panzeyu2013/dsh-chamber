@@ -1,6 +1,5 @@
 /**
- * view-transition.ts 键控单槽并发语义单元测试（perf T2 修订，2026-09 review
- * M1 补钉）。无浏览器、无真实时序——document.startViewTransition 与
+ * view-transition.ts 键控单槽并发语义单元测试。无浏览器、无真实时序——document.startViewTransition 与
  * matchMedia 均为可控 fake（模块惰性读取，测试各自安装/恢复），过渡节由
  * 测试手动触发（update 回调 / finish / reject），全部断言确定性。
  *
@@ -23,7 +22,7 @@ function installFake(options: {
   support?: boolean
   reduced?: boolean
   throwOnStart?: boolean
-  /** 非规约返回值回归（二轮 review）：句柄缺失时过渡槽不得被钉死。 */
+  /** 非规约返回值：句柄缺失时过渡槽不得被钉死。 */
   returnHandle?: 'undefined' | 'empty' | 'no-finished'
 } = {}) {
   const cfg = { reduced: options.reduced ?? false }
@@ -36,9 +35,9 @@ function installFake(options: {
   }> = []
   const originalDocument = globalThis.document
   const originalMatchMedia = globalThis.matchMedia
-  // P2 的绘制意图写在 documentElement 的 data-vt-intent 上（CSS 据此作用域化命名组
+  // 绘制意图写在 documentElement 的 data-vt-intent 上（CSS 据此作用域化命名组
   // 动画），所以 fake 必须带 documentElement——否则 writePaintIntent 走静默分支，
-  // 整个 paint 特性对这套断言不可见（2026-12 review 指出的覆盖缺口）。
+  // 整个 paint 特性对这套断言不可见。
   const attributes = new Map<string, string>()
   const doc: {
     startViewTransition?: (update: () => void) => unknown

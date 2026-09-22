@@ -4,13 +4,12 @@
  * WHY THIS MODULE EXISTS (single source): the chamber page executes a source's
  * `dsh.client` bundles in the per-instance shell boot
  * (`packages/renderer/src/host-graph.ts`, which preloads every non-covered
- * graph row before the boot kernel materializes entries) — the settings panel
- * used to be the second consumer through its per-source child context, which
- * the 2026-12 完整桥接修订 deleted (the panel renders the source's own boot-ctx
- * ledger and loads nothing). That path still needs the
- * SAME page-level bookkeeping: one script execution per combo URL, one factory
- * claim per plugin id (first-load-wins), timeout tombstones that keep observing
- * a script that outlived its request budget, and honest rev-conflict facts.
+ * graph row before the boot kernel materializes entries); the settings panel
+ * renders the source's own boot-ctx ledger and loads nothing. That path needs
+ * the SAME page-level bookkeeping: one script execution per combo URL, one
+ * factory claim per plugin id (first-load-wins), timeout tombstones that keep
+ * observing a script that outlived its request budget, and honest rev-conflict
+ * facts.
  * Duplicating that logic would drift; this module owns it and the boot path
  * delegates here.
  *
@@ -41,9 +40,7 @@ export interface ClientPluginRow {
   rev: string
   /**
    * Package-level dependency edges (the graph row's `inject`), carried through
-   * verbatim. The settings panel's OPTIONAL dependency-closure expansion (its
-   * only documented consumer) was retired with the 2026-12 完整桥接修订, so the
-   * boot kernel treats this as pass-through data today.
+   * verbatim. The boot kernel treats this as pass-through data.
    */
   inject?: readonly string[]
 }
@@ -125,11 +122,11 @@ export type ClientRowOutcome<T extends ClientPluginRow = ClientPluginRow> =
 /** Per-call seams (the owner of a shared combo binds its own transport). */
 export interface ClientRowLoadDeps {
   loadBundle(url: string): Promise<void>
-  /** Optional diagnostic sink (boot passes the page-level store; the settings panel its own). */
+  /** Optional diagnostic sink (boot passes the page-level store). */
   reportDiagnostic?(sourceId: string, diagnostic: PluginGraphDiagnostic): void
 }
 
-/** Failure policy: the boot fails loud, the settings panel degrades per plugin. */
+/** Failure policy for a calling context. */
 export interface ClientRowLoadOptions {
   /** Ordinary (non-timeout) failures: `defer` collects them; `throw` rejects (boot recovery pass). */
   ordinary: 'defer' | 'throw'
@@ -143,7 +140,7 @@ function messageOf(error: unknown): string {
 
 /**
  * Load the given rows' bundles into the page module table, returning one
- * verdict per row. Semantics preserved verbatim from the boot path:
+ * verdict per row. Semantics:
  *
  * - the id's FIRST loader owns the execution; a later consumer of the same id
  *   at the same rev awaits that same execution (never a second script);

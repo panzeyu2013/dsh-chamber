@@ -51,17 +51,17 @@ function sameIdentity(left: FileIdentity, right: FileIdentity): boolean {
 }
 
 /** Read the restore authority without following either its leaf or runtime dir.
- *  Delegates to the shared private-fs bounded no-follow reader (dedupe audit
- *  N5, 2026-09); `tightenMode: false` keeps the read free of chmod side
+ *  Delegates to the shared private-fs bounded no-follow reader; `tightenMode: false`
+ *  keeps the read free of chmod side
  *  effects — the marker is always written 0600 by the shared atomic writer.
  *
- *  Shared-reader notes (2026-09 review): the reader is STRICTER than the
- *  replaced inline implementation in two adversarial corners (a symlinked
- *  baseDir and a parent stripped of owner-read are now 'unsafe' instead of
- *  readable — the write path already refused both) and adds a bigint
+ *  The shared reader is STRICTER than an inline implementation in two adversarial
+ *  corners (a symlinked
+ *  baseDir and a parent stripped of owner-read read 'unsafe' instead of
+ *  readable — the write path refuses both) and adds a bigint
  *  ns-precision double snapshot plus single-link checks on both ends. One
  *  narrow benign window: a hard link added between the post-read snapshot and
- *  the final leaf lstat now reads 'valid' where the old code said 'unsafe' —
+ *  the final leaf lstat reads 'valid' —
  *  the content is already double-snapshotted stable and any later marker
  *  write is still refused by the atomic writer's single-link check, so the
  *  transaction stays fail-closed. Platform note: on win32 (no O_NOFOLLOW)
@@ -157,9 +157,8 @@ async function ensureRuntimeSubdir(baseDir: string, dir: string): Promise<void> 
 }
 
 /** Durable marker write via the shared private-fs atomic writer: O_NOFOLLOW
- *  tmp + file fsync + rename + parent-directory fsync + identity re-verifies
- *  (the former local copy had none of the fsync/identity steps — dedupe audit
- *  N5, 2026-09). The marker is authoritative recovery metadata; durability
+ *  tmp + file fsync + rename + parent-directory fsync + identity re-verifies.
+ *  The marker is authoritative recovery metadata; durability
  *  here is a correctness property, not an optimization. */
 async function atomicWriteMarker(baseDir: string, filePath: string, marker: RestoreMarker): Promise<void> {
   atomicWriteRuntimeFileNoFollow(baseDir, filePath, `${JSON.stringify(marker, null, 2)}\n`)
@@ -228,9 +227,9 @@ function tightenOwnedDirectory(path: string): boolean {
   if (before.isSymbolicLink() || !before.isDirectory()) return false
   let fd: number | null = null
   try {
-    // kind 'read' keeps the historical POSIX flags exactly (O_RDONLY|O_NOFOLLOW
-    // — this site never passed O_DIRECTORY); the win32 fallback re-proves
-    // identity around the open instead of following a link (audit S1/D4).
+    // kind 'read' uses the POSIX flags (O_RDONLY|O_NOFOLLOW
+    // — this site never passes O_DIRECTORY); the win32 fallback re-proves
+    // identity around the open instead of following a link.
     const openedDirectory = openPrivateNoFollowSync(path, 'read')
     fd = openedDirectory.fd
     const opened = openedDirectory.stats
@@ -752,7 +751,6 @@ export async function restorePreRollback(
   if (authority.kind === 'unsafe') return 'incomplete'
   if (authority.kind === 'missing') {
     await ensurePrivateDir(dirname(restoreMarker))
-    // A marker appearing during directory creation is authoritative too.
     authority = readRestoreMarkerAuthority(baseDir)
     if (authority.kind === 'unsafe') return 'incomplete'
   }
@@ -1062,7 +1060,7 @@ export interface RuntimeSnapshotPruneResult {
  * writer serialization — the routine itself is one shared implementation so
  * one owner can never silently stop bounding snapshot growth.
  *
- * Fail-closed ordering (identical to the former desktop-only routine): an
+ * Fail-closed ordering: an
  * authoritative restore marker blocks ALL cleanup (its evidence may name the
  * only recovery snapshot); corrupt retention metadata preserves every
  * snapshot instead of guessing.

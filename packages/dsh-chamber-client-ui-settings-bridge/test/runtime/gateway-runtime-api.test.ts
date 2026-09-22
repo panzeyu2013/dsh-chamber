@@ -4,9 +4,9 @@
  * (the settings-bridge half of the design 21 §5.2 split, carrying
  * SettingsBridgeKey dictionary keys). Pure node:test — no DOM.
  *
- * The moved pure core kept its cases where the core now lives: parsers /
- * fetchers / action gates / error classification / the settle poll are
- * covered by the sidebar shared test (gateway-runtime.test.ts,
+ * The pure core's cases live where the core lives: parsers / fetchers /
+ * action gates / error classification / the settle poll are covered by the
+ * sidebar shared test (gateway-runtime.test.ts,
  * `@dsh-chamber/dsh-chamber-client-ui-sidebar/shared`), and the restart poll by the
  * sidebar shared poll test (gateway-runtime-poll.test.ts).
  */
@@ -116,8 +116,8 @@ test('remoteRuntimeStatusView maps the remote status to the four render kinds wi
   assert.deepEqual(remoteRuntimeStatusView(status({ phase: 'applying', operationError: 'stale failure' })), {
     kind: 'busy', titleKey: 'dshRuntimeStatusApplyingNow', params: { version: '—' }, detail: null,
   })
-  // P2-C: a durable recovery phase outranks operationError (an F3 apply-now
-  // failure leaves BOTH startupBlockedReason and operationError set — the
+  // A durable recovery phase outranks operationError (a failure can leave
+  // BOTH startupBlockedReason and operationError set — the
   // phase names the resume route, so the blocked copy wins, never 'failed').
   assert.deepEqual(remoteRuntimeStatusView(status({
     phase: 'swap-attempted', startupBlockedReason: 'swap-attempted', operationError: 'swap-attempted',

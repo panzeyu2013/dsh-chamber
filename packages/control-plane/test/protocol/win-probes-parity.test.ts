@@ -1,6 +1,5 @@
 /**
- * Cross-package parity/lockstep gate for the Windows process-probe twins
- * (audit 14 section 2 group 2, finding A2).
+ * Cross-package parity/lockstep gate for the Windows process-probe twins.
  *
  * packages/control-plane/src/win-probes.ts states in its header that
  * packages/dsh-runtime/src/windows-process.ts is its "twin ... Keep behavior

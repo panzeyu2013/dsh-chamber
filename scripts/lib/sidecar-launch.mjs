@@ -1,12 +1,12 @@
 /**
- * Shared sidecar launch plumbing (2026-12 single-sourcing pass, M13).
+ * Shared sidecar launch plumbing.
  *
- * The compiled-sidecar smoke gate and the GUI-acceptance native leg each
- * carried the same free-loopback-port picker (12 byte-identical lines) and the
- * same launch contract: the required argv shape and the three environment
- * markers the shipped sidecar.js demands (compiled assembly marker, node-
- * as-electron flag, update-check opt-out). The picker and the contract live
- * here; each leg keeps its own process spawning and timeouts.
+ * The compiled-sidecar smoke gate and the GUI-acceptance native leg share the
+ * free-loopback-port picker and the launch contract: the required argv shape
+ * and the three environment markers the shipped sidecar.js demands (compiled
+ * assembly marker, node-as-electron flag, update-check opt-out). The picker
+ * and the contract live here; each leg keeps its own process spawning and
+ * timeouts.
  */
 import { createServer } from 'node:net'
 

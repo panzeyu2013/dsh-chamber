@@ -1,8 +1,8 @@
 /**
- * open-in 错误文本的单源锁（2026-12，ARCH-IMPL-029）。
+ * open-in 错误文本的单源锁。
  *
  * 三件事：①域内名 `describeOpenInError` 必须**就是** sidebar 的 `describeThrown`
- * （同一函数对象，而非又一份同形实现）；②`capabilities.ts` 不得再出现本地实现；
+ * （同一函数对象，而非又一份同形实现）；②`capabilities.ts` 不得持有本地实现；
  * ③按钮的失败路径必须走这个敌意值安全原语，不得回到 `… ? error.message : String(error)`
  * （那会在 `.catch` 内再抛，正是该原语存在的理由）。
  *

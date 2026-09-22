@@ -1,10 +1,10 @@
 /**
  * open-intent.ts unit tests (plain node:test): the page-wide "the user asked to open
- * session X on source S" slot (design 05 §2.2 revision 2026-12; switching to a remote
- * session flashed a new "新会话" before the requested one). Covers arm/replace/release
+ * session X on source S" slot (design 05 §2.2 revision; switching to a remote
+ * session must not flash a new "新会话" before the requested one). Covers arm/replace/release
  * (the session-id guard keeps a NEWER click alive), retirement, subscriber fan-out with
  * per-listener isolation, and the two pure gates (current projection + veil hold). The
- * veil rule is pinned on all four inputs (2026-09-11 review S1): `blankCurrent` keeps a
+ * veil rule is pinned on all four inputs: `blankCurrent` keeps a
  * warm shell from being covered by an opaque loading veil.
  */
 

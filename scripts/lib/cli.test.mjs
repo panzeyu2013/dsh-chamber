@@ -1,8 +1,8 @@
 /**
  * The shared scripts-toolbox CLI entry epilogue (scripts/lib/cli.mjs).
  *
- * The two packaging entries (build-sidecar / build-swift-app) carried the same
- * epilogue; its behavior is the contract this file pins — usage block on --help
+ * The packaging entries (build-sidecar / build-swift-app) share this epilogue;
+ * its behavior is the contract this file pins — usage block on --help
  * (exit 0), the tool runs otherwise, and any throw becomes
  * `[<label>] 失败：<message>` + exit 1.
  *

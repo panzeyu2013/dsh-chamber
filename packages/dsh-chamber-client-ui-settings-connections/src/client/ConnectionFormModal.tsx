@@ -1,8 +1,7 @@
 /**
- * The add/edit connection form modal (moved verbatim out of
- * ConnectionsSection.tsx in the 2026-12 phase-3 modularization). DOM anchors,
- * dictionary keys, event order and CSS classes are unchanged; every value the
- * body closes over is an explicit prop.
+ * The add/edit connection form modal. DOM anchors, dictionary keys, event
+ * order and CSS classes stay as declared; every value the body closes over is
+ * an explicit prop.
  */
 import type { Dispatch, ReactNode, SetStateAction } from 'react'
 import type { SshConfigHost, SshInstanceSpec } from '../global.d.ts'
@@ -46,7 +45,6 @@ export interface ConnectionFormModalProps {
   sshPasswordFieldId: string
 }
 
-/** Render the connection form modal. */
 export function ConnectionFormModal({
   t, editing, draft, setDraft, fieldErrors, setFieldErrors, formError, setFormError,
   saving, closeForm, saveDraft, clearPassword, clearGatewayToken, clearGatewayPassword,
@@ -87,7 +85,7 @@ export function ConnectionFormModal({
                 : null}
               <label className={css.field}>
                 <span className={css.fieldLabel}>{t('kindLabel')}</span>
-                {/* 统一下拉箭头（2026-12）：与设置壳/运行时段同一图标词汇。 */}
+                {/* 统一下拉箭头：与设置壳/运行时段同一图标词汇。 */}
                 <span className={css.selectWrap}>
                   <select
                     className={clsx(css.input, css.selectArrow)}
@@ -216,7 +214,7 @@ export function ConnectionFormModal({
                         onChange={event => { setDraft(changeDraftEndpointUrl(draft, event.target.value)) }}
                       />
                       {fieldErrors.gatewayUrl === undefined ? null : <span className={css.error} role="alert">{fieldErrors.gatewayUrl}</span>}
-                      {/* 非拦截安全姿态提示 (design 17 §13.1 S21)：http 明文是
+                      {/* 非拦截安全姿态提示 (design 17 §13.1)：http 明文是
                           显式用户决策，如实注明、绝不前置拦截。 */}
                       {/^http:\/\//i.test(draft.gatewayUrl.trim())
                         ? <span className={css.warnHint}>{t('gatewayUrlHttpHint')}</span>
@@ -287,8 +285,8 @@ export function ConnectionFormModal({
                     {/* SSH transport authentication is independent of target
                         authentication. gateway+ssh therefore renders this
                         field AND the GatewayAuthFields below.
-                        2026-12 复审（HTML 规范）：清除按钮与输入框同处
-                        label 会污染输入框可访问名称——外层改 div。 */}
+                        HTML 规范：清除按钮与输入框同处 label 会污染输入框
+                        可访问名称——故外层用 div。 */}
                     <div className={clsx(css.field, css.spanAll)}>
                       <span className={css.fieldLabelRow}>
                         <label className={css.fieldLabel} htmlFor={sshPasswordFieldId}>{t('fieldPassword')}</label>

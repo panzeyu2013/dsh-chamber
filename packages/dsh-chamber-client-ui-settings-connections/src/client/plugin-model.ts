@@ -1,14 +1,14 @@
 /**
- * The unified plugin-management MODEL layer (design 21 §6.6, refactor step ①
- * — pure model first, UI wiring later; design 21 §3 single-model matrix).
+ * The unified plugin-management MODEL layer (design 21 §6.6; design 21 §3
+ * single-model matrix).
  *
  * This module is the pure, UI-free and backend-free core of the unified model
- * view that PluginDialog now renders (§6.6 direction): intent ordering
+ * view PluginDialog renders (§6.6 direction): intent ordering
  * (remove before add), batch failure policy (the SINGLE definition shared by
  * the ssh and gateway flows), apply-result normalization for both backends,
  * the gateway task projection → row model, the v1 undo derive (撤销最近变更,
  * §6.4/§6.8 r2) and the protected-row projection + the diff/apply boundary
- * (§6.11.5, 2026-12 修订).
+ * (§6.11.5).
  *
  * Discipline notes:
  * - PURE + LOCALE-FREE: imports nothing, touches no window/ambient surface,
@@ -22,13 +22,12 @@
  *   twin below, named *Shape, with the authority cited in the comment (the
  *   ipc-surface-mirror test in packages/desktop pins the preload ↔ renderer
  *   sides; these twins pin the renderer → model read).
- * - NO PROTECTION MIRROR (2026-12, design 21 §6.11.5): the protected set
+ * - NO PROTECTION MIRROR (design 21 §6.11.5): the protected set
  *   `P = B₀ ∪ S ∪ F` is derived and projected by the BACKEND — the side that
  *   can compute P (local/gateway = desktop main / gateway server; ssh =
  *   desktop main) — and the renderer only renders `rows[].protected` /
- *   `rows[].role`. The former isDeniedPluginName hand mirror of the Node-side
- *   predicate and its textual lockstep test are DELETED (isDeniedPluginName /
- *   filterDeniedRows no longer exist); the sole survivor is
+ *   `rows[].role`. This module holds NO isDeniedPluginName / filterDeniedRows
+ *   hand mirror of the Node-side predicate; the sole survivor is
  *   `legacyProtectedName`, documented as the fallback policy for an UN-UPGRADED
  *   gateway (§6.11.7), never a mirror of a Node-side function.
  */
@@ -36,12 +35,12 @@
 /* ---------------------------------------------------------------------------
  * 1. Legacy protection fallback (design 21 §6.11.7 — version skew only)
  * 旧就地在场的 gateway 不返回 `rows`（§6.11.5 的加性字段），渲染端此时没有
- * 后端投影可消费，只能按旧口径兜底：官方域（@deepseek-ai/*）与本仓 chamber 域
- * （@dsh-chamber/*）都从可操作行里滤掉——旧服务端的写面按旧规则拒绝它们，所以
+ * 后端投影可消费，只能兜底：官方域（@deepseek-ai/*）与本仓 chamber 域
+ * （@dsh-chamber/*）都从可操作行里滤掉——未升级服务端的写面拒绝它们，所以
  * 绝不能给出一个必然被拒的按钮/勾选。这是**对未升级服务端的回退策略**，不是
  * 任何 Node 侧函数的镜像；受保护集合 P 的判定权威在后端
- * `control-plane/src/protected-plugins.ts`，渲染端只消费投影。gateway 全量
- * 升级后本回退路径即可删除（§6.11.8 已登记的偏差）。
+ * `control-plane/src/protected-plugins.ts`，渲染端只消费投影（本回退路径的移除
+ * 已登记为 §6.11.8 的偏差）。
  */
 export function legacyProtectedName(name: string): boolean {
   return name.startsWith('@deepseek-ai/') || name.startsWith('@dsh-chamber/')
@@ -295,8 +294,8 @@ export function partialCounts(outcome: ApplyOutcome): { done: number; total: num
 }
 
 /** The n/m prefix for a partial outcome ('Completed 2 of 5: '), empty when
- *  nothing was partially done. Shared by the manage and add surfaces, which
- *  spelled the interpolation twice (2026-12 audit P2-9). */
+ *  nothing was partially done. Shared by the manage and add surfaces instead
+ *  of spelling the interpolation twice. */
 export function partialTextOf(
   counts: { done: number; total: number } | null,
   t: (key: 'partialNofM' | 'partialSep') => string,
@@ -509,14 +508,14 @@ export function undoForLatest(rows: readonly TaskRow[]): UndoLatest {
 
 /* ---------------------------------------------------------------------------
  * 7. Protected rows: read-side projection + the diff/apply boundary
- *    (design 21 §6.11.5; 2026-09 行集修订)
+ *    (design 21 §6.11.5)
  * 后端三端各投影 `rows: PluginRow[]`（加性字段；`dependencies` 语义不变），
  * 渲染端只消费。本节提供三件事：
- * - projectInstalledRows：已安装列表的行投影。**行集 = profile 的依赖表**
- *   （2026-09 用户口径）：安装自带组合（B₀）与 chamber 播种物（S）不再造行——
+ * - projectInstalledRows：已安装列表的行投影。**行集 = profile 的依赖表**：
+ *   安装自带组合（B₀）与 chamber 播种物（S）不造行——
  *   chamber 组件有自己的表（探针状态 + 版本 + 手动重推），官方组合是运行时基线。
  *   受保护名若确实出现在依赖表里，仍只读可见（无移除按钮 + 角色徽标）。rows 缺失
- *   （旧 gateway，§6.11.7）时回退到 dependencies 旧过滤并置 legacy 标记。
+ *   （旧 gateway，§6.11.7）时回退到 dependencies 过滤并置 legacy 标记。
  * - actionableDependencies：computePluginDiff 的输入收窄（**硬要求**）。若把
  *   受保护行并进 diff 输入，`missing` 行默认勾选 ⇒ 一次普通第三方对账会把
  *   `@deepseek-ai/dsh-base@…` 当 add 提交，后端整批拒绝（gateway 亦然）。
@@ -536,8 +535,8 @@ export type PluginRowRoleShape = 'composition' | 'seed' | 'layer' | 'third-party
  *  环境类型归 global.d.ts，纯模块读自己的孪生）。 */
 export interface PluginRowShape {
   name: string
-  /** 声明的依赖值（后端按各自掩码纪律处理）。投影行恒来自依赖表（2026-09 行集
-   *  修订），因此除非掩码器显式返回 null，它不会是 null。 */
+  /** 声明的依赖值（后端按各自掩码纪律处理）。投影行恒来自依赖表，因此除非
+   *  掩码器显式返回 null，它不会是 null。 */
   spec: string | null
   /** 能从已装清单读到的版本；读不到为 null（绝不作为判据）。 */
   version: string | null
@@ -564,8 +563,8 @@ export function pluginRowsOf(manifest: PluginRowsCarrierShape | null | undefined
  *  对账面——`layer`（用户自己加的层）同样是用户内容，必须可同步；被排除的是组合/
  *  播种/线族/受保护行（`protected` 已由后端算好）。
  *
- *  注意角色**不**参与判据：早先按 `role ∈ {third-party, materialized}` 收窄会把用户
- *  后加的层从对账视图里静默抹掉（功能回归）。官方 scope 在 **ssh** 面上的不可装是
+ *  注意角色**不**参与判据：按 `role ∈ {third-party, materialized}` 收窄会把用户
+ *  后加的层从对账视图里静默抹掉。官方 scope 在 **ssh** 面上的不可装是
  *  **传输能力**问题，由 `sshSyncableDependencies` 单独处理，不混进保护判据。 */
 export function isActionableRow(row: PluginRowShape): boolean {
   return row.protected === false
@@ -596,8 +595,8 @@ export const OFFICIAL_SCOPE_PREFIX = '@deepseek-ai/'
 
 /**
  * 已安装行的移除动作判据：写面只按 `name ∈ P` 拒绝 remove（§6.11.3 R1，remove 永不
- * 判版本），所以非受保护行都能移除——与 `isActionableRow` **同一条判据**（2026-12
- * review 后二者合一：早先按角色收窄 diff 是功能回归，见 isActionableRow 注释）。
+ * 判版本），所以非受保护行都能移除——与 `isActionableRow` **同一条判据**（按角色
+ * 收窄 diff 会把用户内容静默抹掉，见 isActionableRow 注释）。
  * 保留名字是为了让调用点的语义自解释（移除按钮 vs 对账输入）。
  */
 export const isRemovableRow = isActionableRow
@@ -607,8 +606,8 @@ export const isRemovableRow = isActionableRow
  *  （绝不凭行新增依赖项）；rows 缺失（旧 gateway）时按 legacyProtectedName 回退。
  *  依赖表的值逐字保留（与既有显示/提交值同源）。
  *
- *  **隐含前提**：rows 覆盖 dependencies（三端都由同一张依赖表派生，2026-09 行集修订
- *  后二者键集恒等；control-plane 单测有锁步断言）。缺行 = 静默跳过——失败方向是
+ *  **隐含前提**：rows 覆盖 dependencies（三端都由同一张依赖表派生，二者键集恒等；
+ *  control-plane 单测有锁步断言）。缺行 = 静默跳过——失败方向是
  *  「少动作」（安全但不响亮），所以 producer 若哪天收窄成子集，必须在这里改成响亮拒绝。 */
 export function actionableDependencies(
   dependencies: Record<string, string>,
@@ -635,8 +634,8 @@ export function actionableDependencies(
  *  （projectInstalledRows 的返回值），行本身不携带该标记。 */
 export interface InstalledRowView {
   name: string
-  /** 依赖值（掩码后）；后端行没有依赖项且自身 spec 为 null 时为 null（2026-09 行集
-   *  修订后后端不再产出这种行，保留为防御：渲染端落到版本格）。 */
+  /** 依赖值（掩码后）；后端行没有依赖项且自身 spec 为 null 时为 null（后端不产出
+   *  这种行，保留为防御：渲染端落到版本格）。 */
   spec: string | null
   version: string | null
   role: PluginRowRoleShape
@@ -647,13 +646,13 @@ export interface InstalledRowView {
 
 /**
  * Project one zone's installed rows from a backend manifest: the backend's
- * `rows` (one row per declared dependency — design 21 §6.11.5, 2026-09 row-set
- * revision) rendered in backend order. `rows: []` is AUTHORITATIVE (an empty
+ * `rows` (one row per declared dependency — design 21 §6.11.5) rendered in
+ * backend order. `rows: []` is AUTHORITATIVE (an empty
  * result renders the empty state, never the legacy dependency fallback): the
  * field is additive, so only its ABSENCE means "this backend is too old to
  * project rows" — an empty array is a real answer, and re-deriving from
  * `dependencies` would resurrect the protection mirror the renderer must not
- * own (2026-12 review note). With no `rows` (old gateway, §6.11.7) the legacy
+ * own. With no `rows` (old gateway, §6.11.7) the legacy
  * dependency filter is the only fallback, reported via the `legacy` flag.
  */
 export function projectInstalledRows(

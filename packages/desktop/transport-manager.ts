@@ -33,7 +33,7 @@
  *   The projected userActionKind discriminates the terminal class ('auth' =
  *   transport/credential-level vs 'endpoint' = instance-level probe failure),
  *   so the UI never tells the user to fix SSH credentials when the tunnel
- *   itself was fine and the remote dsh instance is the problem (2026-08 fix).
+ *   itself was fine and the remote dsh instance is the problem.
  * - Provider exec channel (ssh: remote systemd, ssh-provider.ts) — loud,
  *   never auto-retried, never writes the tunnel's terminal classification.
  * - Per-instance ring-buffer logs (~200 lines), non-secret status
@@ -64,12 +64,12 @@ import { readFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { canonicalizeTransportInstanceInput, MAX_TRANSPORT_INSTANCES, signalChild } from './transport-provider.ts'
 import { liveTransportIdentityChanged, sshCredentialEndpointChanged } from './credential-identity.ts'
-// Failure text is single-sourced in describe-error.ts (2026-12 stage-2 merge);
-// the historical export name stays for the state-machine call sites.
+// Failure text is single-sourced in describe-error.ts;
+// the export name stays for the state-machine call sites.
 import { describeError } from './describe-error.ts'
 // The owner-only atomic replace (random O_EXCL tmp + 0600 + fsync + rename +
 // parent-directory fsync) is the same primitive every other userData store
-// uses - the registry no longer hand-writes a fixed-name .tmp path.
+// uses - the registry does not hand-write a fixed-name .tmp path.
 import { atomicWritePrivateFileNoFollow, ensurePrivateDirectoryNoFollow } from './control-plane-module.ts'
 import { CHILD_LINE_MAX_CHARS, createBoundedLineProcessor } from './bounded-lines.ts'
 import { findFreeEphemeralPort } from './free-port.ts'
@@ -206,7 +206,7 @@ export interface TransportManagerDeps {
   provider: TransportProvider
   /** Optional per-spec overrides (design 17 §2.2/§7): the registry is
    * resolved BY TRANSPORT first (`{ ssh, http }` — one provider per
-   * mechanism; validateSpec enforces the shipped kind×transport matrix — dsh×http disabled 2026-09), then by the legacy kind key
+   * mechanism; validateSpec enforces the shipped kind×transport matrix — dsh×http disabled), then by the legacy kind key
    * (`{ gateway }`, v1 style), then the default `provider`. A key present
    * here wins for every spec whose transport/kind matches it. */
   providers?: Partial<Record<TransportKind, TransportProvider>>
@@ -408,7 +408,7 @@ interface InstanceState {
    * transport/credential-level, 'endpoint' = instance-level terminal probe
    * failure — the transport reached the destination and the answer
    * rejected the connection); null otherwise. Projected for the UI so an
-   * endpoint failure never masquerades as an SSH auth failure (2026-08 fix). */
+   * endpoint failure never masquerades as an SSH auth failure. */
   userActionKind: 'auth' | 'endpoint' | null
   serviceActive: boolean | null
   logSummary: string
@@ -423,7 +423,7 @@ interface InstanceState {
    * started BEFORE the disconnect (whose callbacks may still fire late) are
    * recognized as stale and never write into the instance's state — a
    * removed-and-reused id, a kind switch, or a field-edit restart must not
-   * be polluted by the old instance's in-flight exec (review 2026-08).
+   * be polluted by the old instance's in-flight exec).
    */
   execEpoch: number
   /** In-flight provider exec children of THIS instance, SIGTERMed by
@@ -448,8 +448,8 @@ interface CodedError extends Error {
 
 /** Exception-safe formatter for provider hooks, injected deps and event data.
  * Catch blocks are part of the state machine and must themselves never throw.
- * Single-sourced in describe-error.ts (2026-12 stage-2 merge); this alias
- * preserves the historical export name. */
+ * Single-sourced in describe-error.ts; this alias
+ * preserves the export name. */
 export const describeTransportError = describeError
 
 function sleep(ms: number) {
@@ -457,19 +457,13 @@ function sleep(ms: number) {
 }
 
 /**
- * Atomic write mirroring the control-plane json-store protocol in plain
- * node:fs: write .tmp → fsync → rename (the shared .tmp path never has two
- * concurrent writers because the runtime serializes all writes through
- * saveInstances).
- */
-/**
- * Persist the registry through the control-plane private-file primitive
- * (2026-12 stage-2 single-sourcing): random O_EXCL temp + explicit 0600 +
+ * Persist the registry through the control-plane private-file primitive:
+ * random O_EXCL temp + explicit 0600 +
  * fsync + rename + parent-directory fsync, refusing a planted symlink /
  * multi-link leaf fail-closed. The runtime serializes all writes through
- * saveInstances, and the non-secret registry is now written owner-only like
+ * saveInstances, and the non-secret registry is written owner-only like
  * every other userData store instead of a fixed-name world-readable temp.
- * The rollback path (a failed save rewrites the previous roster) is unchanged.
+ * The rollback path rewrites the previous roster on a failed save.
  */
 function writeFileAtomic(filePath: string, text: string): void {
   ensurePrivateDirectoryNoFollow(dirname(filePath), 0o700)
@@ -560,7 +554,7 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
   const execChildren = new Set<SpawnedProcess>()
   /** Teardown gate: after dispose starts, no path may create a new child. */
   let disposed = false
-  /** Exec-child SIGTERM → SIGKILL escalations (2026 audit M2): exec children
+  /** Exec-child SIGTERM → SIGKILL escalations: exec children
    *  get the same grace escalation as tunnel children, and disposeAsync waits
    *  for both — a SIGTERM-ignoring ssh exec must not survive app quit. */
   const execKillEscalations = new Map<SpawnedProcess, ReturnType<typeof setTimeout>>()
@@ -944,7 +938,7 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
       // eats that tick via single-flight without re-arming, so a successful
       // user probe must restore the chain (otherwise the heartbeat silently
       // dies until the next leave-ready/re-ready cycle — the exact failure
-      // this change prevents).
+      // this invariant prevents).
       if (state.readyProbeTimer === null) armReadyVerify(id, state)
       // A successful probe is the only moment a password session may have
       // rotated inside verifyUp (401 → stored-password re-login) — surface it
@@ -1066,15 +1060,15 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
       } catch (allocateError) {
         // disconnect()/failTerminal/restart may have landed while the port was
         // being allocated: never arm recovery for a machine that moved on —
-        // a manual disconnect must cancel the slow re-probe (2026 final
-        // review, same guard as the success path below).
+        // a manual disconnect must cancel the slow re-probe (same guard
+        // as the success path below).
         if (!isCurrentState(id, state) || state.phase !== 'connecting' || epoch !== state.tunnelEpoch) return
         const detail = describeTransportError(allocateError)
         transition(id, 'error', `failed to allocate a local port: ${detail}`, state)
         appendLogInternal(state, 'error', `port allocation failed: ${detail}`)
         // A transient allocation failure (ephemeral-port exhaustion) must not
         // leave the instance stuck in error forever: arm the slow periodic
-        // re-probe, same pattern as the max-retry recovery (2026 audit M10).
+        // re-probe, same pattern as the max-retry recovery.
         state.reconnectTimer = setTimeout(() => {
           state.reconnectTimer = null
           if (!isCurrentState(id, state)) return
@@ -1298,7 +1292,7 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
               // the reconnect path. The failure is INSTANCE-level, not
               // transport-level: the tunnel/endpoint transport worked and
               // reached the destination — the UI must show an endpoint
-              // hint, never an SSH auth failure (2026-08 fix).
+              // hint, never an SSH auth failure.
               if (verification.terminal === true) return failTerminal(id, state, reason, true, 'endpoint')
               return scheduleReconnect(id, state, reason)
             }
@@ -1340,7 +1334,7 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
     // late callback of an exec started before the disconnect recognizes it
     // is stale and drops its write (a removed-and-reused id, a kind switch,
     // or a field-edit restart must never be polluted by the old instance's
-    // in-flight exec — review 2026-08). Label-only edits do not disconnect;
+    // in-flight exec). Label-only edits do not disconnect;
     // the identity comparison
     // below is the authoritative fence even between children in a multi-step
     // exec, when the per-child set may momentarily be empty.
@@ -1421,19 +1415,6 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
     }
   }
 
-  /**
-   * v2 registry migration (design 17 §2.2/§9.1): the v1 `kind` conflated the
-   * transport with the target type ('ssh' | 'gateway'). Entries are rewritten
-   * BEFORE provider validation so providers only ever see the v2 form:
-   * - kind:'ssh'     → { kind:'dsh', transport:'ssh' }
-   * - kind:'gateway' → { kind:'gateway', transport:'http' }
-   * - kind missing   → { kind:'dsh', transport:'ssh' } (the v1 default)
-   * - transport missing → inferred from kind (dsh→ssh, gateway→http);
-   *   an unknown kind (test fixtures, future targets) keeps its kind and no
-   *   transport — resolveProvider falls back to the kind-keyed provider.
-   * The source id `ssh-<id>` legacy mapping stays a control-plane concern
-   * (design 17 §2.1); the desktop registry carries the v2 kind.
-   */
   /** Load the persisted instance set; a missing file is an empty set. */
   function loadInstances(): TransportInstanceSpec[] {
     let parsed: unknown
@@ -1534,8 +1515,6 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
         error.code = 'ssh_instances_invalid'
         throw error
       }
-      // v2 migration first (design 17 §2.2): legacy kinds normalize before
-      // provider selection so the provider is resolved by the v2 transport.
       const migrated = canonicalizeTransportInstanceInput(entry)
       const providerFor = resolveProvider(migrated as { kind?: unknown; transport?: unknown })
       const normalized = providerFor.validateSpec(migrated)
@@ -1561,7 +1540,7 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
       // with the mechanism. (insecureHttp is NOT part of the credential-target
       // comparison — the secret survives the switch, design 17 §9.1 — but the
       // LIVE transport still restarts to re-register the new origin.) The same
-      // applies to the SPKI pin (S23): a pin edit while live must restart so
+      // applies to the SPKI pin: a pin edit while live must restart so
       // verifyUp + the proxy registration pick up the new pin (the pin is not
       // a credential — the binding fingerprints stay untouched, so the token/
       // password survive the edit).
@@ -1593,7 +1572,7 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
         // starts clean — an in-flight exec of the removed instance must
         // never write into the NEW instance's state (its callbacks are
         // already stale via the execEpoch bump; this is the authoritative
-        // cleanup, review 2026-08).
+        // cleanup).
         states.delete(id)
         // Request final cleanup of every provider-owned generation on
         // REMOVAL (not a plain disconnect). SSH keeps each tunnel/exec
@@ -1808,7 +1787,7 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
     for (const child of execChildren) {
       signalChild(child, 'SIGTERM')
       // Exec children get the same SIGTERM → SIGKILL escalation as tunnel
-      // children (2026 audit M2): disposeAsync waits for these to drain, so a
+      // children: disposeAsync waits for these to drain, so a
       // SIGTERM-ignoring ssh exec cannot be orphaned at app quit.
       armExecKillEscalation(child)
     }

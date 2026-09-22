@@ -35,7 +35,7 @@
  * window spuriously enter rename. This applies to every row-internal button
  * (fold / new-session / kebabs / archive) AND the source-header action
  * buttons (sort / add-workspace / search / archive-cleanup manager —
- * design 24 §6, revision 2026-09).
+ * design 24 §6).
  */
 import { assertSingletonModule } from './singleton.ts'
 

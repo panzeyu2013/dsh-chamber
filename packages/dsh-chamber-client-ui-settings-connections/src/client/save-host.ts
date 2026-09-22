@@ -33,7 +33,7 @@ export function gatewayPasswordValidationError(password: string): 'length' | nul
  * true when an EDIT changes the transport TARGET — kind or any
  * host/user/port field — while the id stays the same. Label-only edits are
  * not target changes; `insecureHttp` is deliberately excluded (design 17
- * §9.1, D3: an http↔https switch on the same target keeps the credential).
+ * §9.1: an http↔https switch on the same target keeps the credential).
  *
  * The renderer cannot import the desktop module (Electron main process), so
  * the check is duplicated here, with input normalization mirroring the main

@@ -55,7 +55,7 @@ export interface ChamberServerWorkspace {
     updatedAt?: number
     blank?: boolean
     /**
-     * 2026-09-11 upstream-alignment T7: the session owns at least one active
+     * The session owns at least one active
      * schedule — projected from the session's `schedule` projection
      * (`derive.ts hasActiveScheduleOf`, upstream ui-workspace tree.ts:161-163)
      * so the row can render the official active-Schedule marker. Sparse: absent
@@ -74,7 +74,7 @@ export interface ChamberServerWorkspace {
   reusableBlankSessionId?: string
 }
 
-/** 会话事实档位（R19 能力一览；判定与展示分离，见 ChamberServerAggregate.sessionFacts）。 */
+/** 会话事实档位（能力一览；判定与展示分离，见 ChamberServerAggregate.sessionFacts）。 */
 export type SourceSessionFactsMode = 'full' | 'degraded' | 'legacy' | 'disabled'
 
 export interface ChamberServerAggregate {
@@ -99,12 +99,12 @@ export interface ChamberServerAggregate {
    * fact, never re-derived from `phase`: `phase` merges the managed state with
    * the transport phase and both vocabularies contain `error`, so classifying
    * the merged string would misdiagnose an SSH/tunnel failure as a stopped
-   * managed dsh (2026-12 review BLOCKER). Absent = not a gateway, transport
+   * managed dsh. Absent = not a gateway, transport
    * down, probe missing, or a healthy/transient managed state (fail open).
    */
   managedRuntimeDown?: boolean
   /**
-   * R19 能力一览（plan W4「能力一览」）：本来源的**会话事实档位**，由桌面侧事实源
+   * 能力一览：本来源的**会话事实档位**，由桌面侧事实源
    * 探测/观测得出，只读展示，绝不参与判定（判定只用事实本身）。
    * - `full`：镜像可用且版本兼容，完成/未读是观测事实；
    * - `degraded`：镜像可用但受限（尾巴不可读 / 事件静默 / 轮询模式 / 特性缺失）；
@@ -124,9 +124,9 @@ export interface ChamberServerAggregate {
   /** Runtime facts from the source's own ctx (design 06 §4); attached, never polled. */
   runtime?: InstanceRuntimeReport
   /**
-   * Archived-session metadata rows of this source (design 24 revision
-   * 2026-09 — the archive manager lists what is archived; 2026 revision:
-   * rows additionally carry their workspace attribution for the manager's
+   * Archived-session metadata rows of this source (design 24 revision —
+   * the archive manager lists what is archived; rows additionally carry their
+   * workspace attribution for the manager's
    * grouped listing — see ArchivedSessionMetaRow). Present when the
    * per-instance aggregate snapshot has landed. `archiveSetKnown` says
    * whether an EMPTY rows list is a true "nothing archived" fact:
@@ -137,15 +137,13 @@ export interface ChamberServerAggregate {
    * - known (false): the unary-fallback view — its archive set is unknown
    *   (documented KNOWN DEGRADATION) — [] must NEVER be read as "no archived
    *   sessions"; the archive manager shows an honest degraded branch with no
-   *   destructive action (no list to select; whole-set purge was retired
-   *   with the standalone delete-all — 2026 user decision).
+   *   destructive action (no list to select; no standalone delete-all).
    */
   archivedSessions?: ArchivedSessionMetaRow[]
   archiveSetKnown?: boolean
   /**
-   * dsh version fact. The old in-ctx host-producer channel was removed
-   * (upstream deleted the connection handshake's host.describe), so the
-   * LOCAL instance's version flows straight from the desktop bridge
+   * dsh version fact. The LOCAL instance's version flows straight from the
+   * desktop bridge
    * (`window.dshChamber.dshVersion` → App hostFacts); remote instances stay
    * unknown until the control-plane `dsh --version` facts are projected
    * through the chamber bridge.
@@ -154,7 +152,7 @@ export interface ChamberServerAggregate {
   /** Renderer-local client-plugin boot health for this source. */
   pluginDiagnostic?: PluginGraphDiagnostic
   /**
-   * Settled-boot GAP of this source's mounted shell (2026-12, design 05 §4
+   * Settled-boot GAP of this source's mounted shell (design 05 §4
    * 「降级呈现」/ design 09 §3.2): the shell settled successfully while a whole
    * surface is missing.
    *
@@ -181,7 +179,7 @@ export type ServerBootGapKind =
    * The LOCAL instance's client-graph endpoint answered 404 / method-missing.
    * The chamber-managed local host always injects its graph (the seed row), so
    * this is a chamber-side installation/seed fact — the gateway/mobile shapes,
-   * whose missing endpoint is legitimate, keep producing NO fact (2026-12 FIX 6).
+   * whose missing endpoint is legitimate, keep producing NO fact.
    */
   | 'local-graph-not-injected'
   | 'required-services-missing'
@@ -236,7 +234,7 @@ export interface OpenSessionOutcome extends OpenSessionRequest {
 
 /**
  * One successful in-app workspace creation for a source whose shell may not be
- * mounted (design 05 §2.2 revision 2026-12). The unary `workspace.create`
+ * mounted (design 05 §2.2 revision). The unary `workspace.create`
  * result is the ONLY trustworthy "this workspace now exists on that host" fact
  * available without a shell: the App layer echoes the row into the projection
  * immediately (shared/workspace-echo.ts) while the authoritative
@@ -246,15 +244,14 @@ export interface OpenSessionOutcome extends OpenSessionRequest {
  *
  * Every in-app producer goes through shared/workspace-mutations.ts (the single
  * funnel: the sidebar's own dialogs AND the Git worktree plugin's create/adopt
- * sagas). Publishing per call site is the failure mode this funnel removes —
- * the Git path was the second entry point of the 2026-12 field report.
+ * sagas). Publishing per call site is the failure mode this funnel removes.
  */
 export interface WorkspaceCreatedFact {
   sourceId: string
   workspaceId: string
   path: string
   /**
-   * Optional placement anchor (2026-12 revision, second entry point): the host
+   * Optional placement anchor: the host
    * workspace id this creation sits immediately AFTER in the projection — the
    * Git plugin registers a new worktree right below its main checkout
    * (workspace.insertBefore) while the projection would otherwise append the
@@ -264,7 +261,7 @@ export interface WorkspaceCreatedFact {
    */
   afterWorkspaceId?: string
   /**
-   * Optional label this creation INTENDS for the row (2026-12 review): the Git
+   * Optional label this creation INTENDS for the row: the Git
    * plugin's adopt path renames the workspace to the branch right after the
    * saga, and without the hint the echoed row would be born with the path
    * basename and flip a few RPCs later. Absent = the ledger's path-basename
@@ -274,7 +271,7 @@ export interface WorkspaceCreatedFact {
 }
 
 /**
- * One successful sidebar-issued workspace deletion (2026-09-11 review S3) —
+ * One successful sidebar-issued workspace deletion —
  * the WITHDRAW half of the workspace echo. The sidebar owns `workspace.delete`
  * for the same sources it can create on, and without this fact the echo has no
  * way to be retired: for a source whose shell is not mounted there is no
@@ -291,10 +288,10 @@ export interface WorkspaceRemovedFact {
 }
 
 /**
- * One successful sidebar-issued workspace rename (2026-09-11 review S3) — the
+ * One successful sidebar-issued workspace rename — the
  * PATCH half of the workspace echo. An echo row's title is `basenameOf(path)`,
- * so a rename against a not-yet-mounted source looked like a no-op (the row
- * kept the path basename until the mount push landed). The sidebar owns
+ * so a rename against a not-yet-mounted source would look like a no-op (the row
+ * keeps the path basename until the mount push lands). The sidebar owns
  * `workspace.rename`, so it publishes the new title here.
  */
 export interface WorkspaceRenamedFact {
@@ -304,7 +301,7 @@ export interface WorkspaceRenamedFact {
 }
 
 /**
- * One successful in-app session creation (design 05 §2.2 revision 2026-12) —
+ * One successful in-app session creation (design 05 §2.2 revision) —
  * the session-side sibling of {@link WorkspaceCreatedFact}, published by the
  * single funnel `shared/session-mutations.ts` for the sidebar's "+", the
  * session row menu's fork, and the Git plugin's own session creations.
@@ -343,7 +340,7 @@ export interface SessionCreatedFact {
    * echo), false for a fork child, which inherits content.
    */
   blank: boolean
-  /** I10 归因（plan §8-R16/§10）：触发路径标签。缺席 = unknown（仪表覆盖缺口）。 */
+  /** I10 归因：触发路径标签。缺席 = unknown（仪表覆盖缺口）。 */
   origin?: SessionCreationOrigin
 }
 
@@ -402,8 +399,8 @@ export interface InstanceRuntimeReport {
    */
   sessionFactReconcile?: SessionFactReconcileSnapshot
   /**
-   * Whether `sessions` came from a COMPLETE session-list baseline (plan §6,
-   * R13): the mounted producer projects the official list store's arrival
+   * Whether `sessions` came from a COMPLETE session-list baseline:
+   * the mounted producer projects the official list store's arrival
    * phase (`phase === 'ready'`, vendor
    * dsh-api-session-controller/lib/types/client/sessions/manager.js:41,387 —
    * pending until the first successful list, never rolled back by a later
@@ -416,7 +413,7 @@ export interface InstanceRuntimeReport {
    */
   listComplete?: boolean
   /**
-   * R14: these facts are retained READ-ONLY facts of a source that is
+   * These facts are retained READ-ONLY facts of a source that is
    * disconnected right now (the App attaches them past its `connected` gate
    * and marks them stale). Consumers may render them but must label them as
    * stale / offline instead of presenting them as live; a report without the
@@ -427,10 +424,10 @@ export interface InstanceRuntimeReport {
 
 type Listener = () => void
 type OpenListener = (request: OpenSessionRequest) => void
-/** W4「全部已读」请求（插件→App）：读水位是 App 的权威，插件不持有读标记。 */
+/** 「全部已读」请求（插件→App）：读水位是 App 的权威，插件不持有读标记。 */
 type MarkAllReadListener = (request: { sourceId: string }) => void
 /**
- * R8 意图预热（插件→App，blueprint §4.2）：「指针在该来源头部停留过」这一
+ * 意图预热（插件→App）：「指针在该来源头部停留过」这一
  * 优先级提示。它不是打开/挂载请求：App 侧只把它折算成"既有后台预热队列里
  * 该来源优先"，是否真的 boot 仍由 App 的 eligible/抑制/收割纪律决定。
  */
@@ -543,7 +540,7 @@ const runtimeProducerTokens: Record<string, number> = {}
  *  Registration is order-gated by this (see registerInstanceRuntimeProducer):
  *  a hung earlier boot that resumes AFTER its successor registered must not
  *  steal the producer token — its teardown clear() would then silence the
- *  healthy successor for good (2026-12 review BLOCKER). */
+ *  healthy successor for good. */
 const runtimeProducerGenerations: Record<string, number> = {}
 const snapshotProducerGenerations: Record<string, number> = {}
 const runtimeProducerFingerprints: Record<string, string> = {}
@@ -568,14 +565,14 @@ export const chamberBridge = {
   /**
    * App-layer write: replace the projection and notify subscribers.
    *
-   * 2026 性能核查（登记）：调用面已有多重收口，本层无需再做微任务单槽合并
+   * 调用面已有多重收口，本层无需再做微任务单槽合并
    * ——App 发布前有 serversProjectionSignature 签名闸（等值不 publish），
    * 订阅侧（SidebarRoot）在 setState 前再比一次签名，refreshAggregate 等
    * 写路径 identity-preserving（同内容不换对象）。React 19 批处理已把同一
    * macrotask 内的多次 publish 合并为一次渲染，异步合并反而会引入
    * getServers() 读到中间态的竞态窗口。本入口只保留引用相等防御：publish
    * 语义是"换快照 + 通知"，同引用重发无任何增量（快照本身不可变）。
-   * 不变式（2026 评审补注）：同引用重发布被静默丢弃——不可变快照下同引用
+   * 不变式：同引用重发布被静默丢弃——不可变快照下同引用
    * ≡ 无内容变化；若未来引入原地突变 + 同引用重发布（今日被不可变性禁止），
    * 此守卫会吞掉它——任何此类改动必须先改写本注释，而非绕过守卫。
    */
@@ -608,8 +605,8 @@ export const chamberBridge = {
   },
 
   /**
-   * W4：请 App 把一个**来源**整体标记为已读（单向：插件→App）。读标记与落盘都在
-   * App 手里（WS-C 的读水位纪律），因此插件只发意图，不自己写读数。
+   * 请 App 把一个**来源**整体标记为已读（单向：插件→App）。读标记与落盘都在
+   * App 手里，因此插件只发意图，不自己写读数。
    */
   requestMarkAllRead(sourceId: string): void {
     markAllReadChannel.emit({ sourceId })
@@ -621,10 +618,10 @@ export const chamberBridge = {
   },
 
   /**
-   * R8：来源头部 hover dwell（shared/prewarm-intent.ts 的 120ms 机器）留驻后，
+   * 来源头部 hover dwell（shared/prewarm-intent.ts 的 120ms 机器）留驻后，
    * 侧栏发出的单向优先级提示。它绝不挂载/打开任何东西——App 侧只把它折算成
    * "既有预热队列里该来源优先"，是否 boot 由 App 的 eligible/抑制/收割纪律
-   * 与每会话计费共同决定（blueprint §4.2/§4.4）。
+   * 与每会话计费共同决定。
    */
   requestIntentPrewarm(sourceId: string): void {
     intentPrewarmChannel.emit({ sourceId })
@@ -654,9 +651,9 @@ export const chamberBridge = {
    * unary list, which is authoritative per call).
    */
   requestSessionListRefresh(sourceId: string): void {
-    // 逐监听器隔离（与 setActiveSource 同纪律）：这条广播现在同时驱动归档收敛链与
+    // 逐监听器隔离（与 setActiveSource 同纪律）：这条广播同时驱动归档收敛链与
     // 运行位活性守卫的 L1——一个抛错的监听器若中断整轮广播，守卫会拿不到对账请求并
-    // 把它误判成「对账通道无回执」而升级 L2（2026-12 三轮复核的结构性建议）。
+    // 把它误判成「对账通道无回执」而升级 L2。
     sessionListRefreshChannel.emit(sourceId)
   },
 
@@ -772,7 +769,7 @@ export const chamberBridge = {
    * (`undefined` when the panel closed). The App layer answers by MOUNTING
    * that source's shell if it is not mounted yet and by holding it out of the
    * retention harvest while it stays the target — the panel renders that
-   * source's OWN boot-ctx ledger (design 05 §5, 2026-12 完整桥接修订), so the
+   * source's OWN boot-ctx ledger (design 05 §5), so the
    * mounted shell IS the surface. Activation is deliberately not implied: the
    * active view keeps following the user, not the dropdown.
    */

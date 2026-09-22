@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * check-chunk-budgets.mjs — chunk 尺寸预算护栏（C6，2026-09 性能审计落点）。
+ * check-chunk-budgets.mjs — chunk 尺寸预算护栏。
  *
  * 在 `vite build` + `gen-boot-manifest.mjs` 之后运行（依赖 .vite/manifest.json
  * 与已注入 chamber 预载/CSS 链接的 dist/index.html）。度量三个与首屏关键路径
@@ -14,14 +14,13 @@
  *    warn（无硬门：体积随上游 dsh 版本合法漂移，硬门会误伤升级）。
  *  - headCssRaw：dist/index.html 中全部 render-blocking 样式表合计——warn。
  *
- * 校准基线（2026-09-11 review-fix 轮次的最终 dist，raw bytes，见
+ * 校准基线（raw bytes，见
  * dist/web/perf-sizes.json）：mainGraph 1,228,157（gzip 339,212，对
  * `mainGraphRaw.warn = 1,350,000` 余量 ≈9.0%）；chamberEntry 1,989,208
  * （gzip 552,563，对 warn 门 2,000,000 仅剩 10,792 B ≈ 0.5%——再加一个首屏
  * 家族就会触 warn，需先评估拆分）；headCss 244,059（4 张，对 warn 300,000）。
- * 该基线含 2026-12 完整桥接、v1 侧栏承载解耦、合并分支（打开意图/工作区回声）
- * 与 2026-09-11 上游对齐轮的净增量。阈值不是历史账本：结构改动落地后按新实测值
- * 回填阈值并更新本注释，防止它变成下一份过期注释（本轮即为此而更新）。
+ * 阈值不是历史账本：结构改动落地后按新实测值
+ * 回填阈值并更新本注释，防止它变成下一份过期注释。
  *
  * 输出：每次运行打印三项实测 + 阈值；硬门超限或资产缺失/未解析 exit 1
  * （build 失败）；并把本次构建快照 perf-sizes.json 写入 dist/web（vite
@@ -38,7 +37,7 @@ const VITE_MANIFEST = fileURLToPath(new URL('../../desktop/dist/web/.vite/manife
 const INDEX_HTML = fileURLToPath(new URL('../../desktop/dist/web/index.html', import.meta.url))
 const SIZES_OUT = fileURLToPath(new URL('../../desktop/dist/web/perf-sizes.json', import.meta.url))
 
-/** 阈值（raw bytes）。校准基线见文件头注释（2026-09 C3/C4 后回填）。 */
+/** 阈值（raw bytes）。校准基线见文件头注释。 */
 const THRESHOLDS = {
   mainGraphRaw: { warn: 1_350_000, fail: 1_550_000 },
   chamberEntryRaw: { warn: 2_000_000 },

@@ -1,5 +1,5 @@
 /**
- * node:test for the chamber base-path patch
+ * node:test for the chamber base path
  * (packages/dsh-client-connection/src/api-path.ts) — the ONLY chamber
  * source with no static gate, so this suite is its runtime check:
  * `resolveInstanceBasePath` decides the per-instance proxy prefix from the

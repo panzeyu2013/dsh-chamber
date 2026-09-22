@@ -3,13 +3,12 @@ import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
-// W3 采集仪器（Leg A/B）的最小可 CI 验证：探针与 PNG 取样器都是仓库级脚本
+// 采集仪器（Leg A/B）的最小可 CI 验证：探针与 PNG 取样器都是仓库级脚本
 // （scripts/perf/switch-frame-probe.mjs、scripts/lib/png-ink.mjs），无头环境跑不了 CDP，
 // 但"解码器正确"与"注入表达式语法正确 + CLI 失败响亮"可以在 node 里证明。判据本体
 // （switchFrameVerdict）在 switch-frame-verdict.test.ts。
 //
-// 为什么注册在 renderer 包：scripts/ 的测试清单（scripts/gates/run-script-tests.mjs）不在
-// 本工作流的写权限内；renderer 是持有全部白帧判据的包，先在这里进 CI，后续可整体搬迁。
+// 为什么注册在 renderer 包：renderer 是持有全部白帧判据的包。
 
 const PNG_INK = fileURLToPath(new URL('../../../../scripts/lib/png-ink.mjs', import.meta.url))
 const PROBE = fileURLToPath(new URL('../../../../scripts/perf/switch-frame-probe.mjs', import.meta.url))

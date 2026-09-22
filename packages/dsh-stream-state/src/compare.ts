@@ -1,5 +1,5 @@
 /**
- * Differential trace comparator (refactor plan section 4.1).
+ * Differential trace comparator.
  *
  * The oracle compares an old wiring's action trace with the new reducer's effect
  * trace. Both sides are projected through the action normalizer first, so wording

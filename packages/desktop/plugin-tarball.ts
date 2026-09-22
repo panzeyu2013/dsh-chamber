@@ -1,6 +1,6 @@
 /**
  * Desktop plugin-source tarball builder + bounded tgz manifest reader +
- * picked-source classifier (design 21 §6.5 archive-pick, plan Phase 4.6 —
+ * picked-source classifier (design 21 §6.5 archive-pick —
  * `gateway_plugin_materialize`; folder pick → tarball upload, or a ready
  * `.tgz` plugin archive uploads verbatim).
  *
@@ -57,9 +57,9 @@ export const TARBALL_MAX_ENTRIES = 4096
  *  (which is real inflate output). The scan's declared `totalBytes` formula
  *  is the same per-entry arithmetic but stops at the end marker, so a
  *  builder archive within this budget passes BOTH the route's declared cap
- *  and its inflated guard. The raw-byte (unpadded) accounting this bound
- *  replaces could approve a folder whose real padded archive the route then
- *  refused (the ~254–256 MiB acceptance window). */
+ *  and its inflated guard. Raw-byte (unpadded) accounting could approve a
+ *  folder whose real padded archive the route then refuses (the ~254–256 MiB
+ *  acceptance window). */
 export const TARBALL_MAX_UNPACKED_BYTES = 256 * 1024 * 1024
 /** Classic end-of-archive marker: two all-zero 512-byte blocks. They are real
  *  inflated bytes on the gateway, so the builder reserves them inside the
@@ -115,11 +115,11 @@ export interface PluginTarballBuildResult {
 
 // ustar header writer
 
-/** Width of the ustar `name` field (bytes 0-99). The bound is BYTES: the
- *  retired `archivePath.length > 100` check measured UTF-16 code units, so a
- *  CJK path of 58 units / 138 bytes passed the check and was then silently
- *  truncated mid-character by `header.write` — an archive that no longer
- *  matched the `entries`/manifest the builder reported. */
+/** Width of the ustar `name` field (bytes 0-99). The bound is BYTES:
+ *  `archivePath.length` measures UTF-16 code units, so a CJK path of 58 units
+ *  / 138 bytes would pass such a check and then be silently truncated
+ *  mid-character by `header.write` — an archive that no longer matches the
+ *  `entries`/manifest the builder reports. */
 const USTAR_NAME_FIELD_BYTES = 100
 
 /** Write an octal field: `length-1` octal digits + NUL (ustar convention). */
@@ -205,9 +205,8 @@ function readFolderPackageJson(dirPath: string): { ok: true; text: string } | { 
  * this path the local dsh CLI is the authority for version semantics (design 13
  * §5), and the ssh materialize path reads the same field permissively. The
  * strict grammar belongs to the upload routes (buildPluginTarball), where the
- * gateway binds the version to the archive identity. Applying it here refused
- * folders the CLI accepts (`1.0`, `v1.0.0`, no version) — a regression fixed by
- * the 2026-12 review.
+ * gateway binds the version to the archive identity. Applying that grammar
+ * here would refuse folders the CLI accepts (`1.0`, `v1.0.0`, no version).
  */
 export function folderPluginIdentity(
   dirPath: string,
@@ -287,9 +286,9 @@ function tarError(code: PluginTarballErrorCode, message: string): Error & { code
 }
 
 /** Refuse an archive entry path that does not fit the 100-byte ustar name
- *  field. The field is a BYTE field: `String.length` counts UTF-16 code units
- *  and let multibyte paths through to `header.write`, which truncated them at
- *  byte 100 — archive bytes that no longer matched `entries`. */
+ *  field. The field is a BYTE field: `String.length` counts UTF-16 code units,
+ *  so multibyte paths would pass through to `header.write`, which truncates
+ *  them at byte 100 — archive bytes that no longer match `entries`. */
 function assertUstarNameFits(archivePath: string): void {
   if (Buffer.byteLength(archivePath, 'utf8') > USTAR_NAME_FIELD_BYTES) {
     throw tarError('path_too_long', `archive entry path exceeds the ${USTAR_NAME_FIELD_BYTES}-byte ustar name field: ${archivePath}`)
@@ -496,8 +495,8 @@ export interface TgzPackageManifest {
   version: string
 }
 
-/** Loud result of the bounded manifest read (2026-12 audit, design 21
- *  §6.2/§6.5). `identity_mismatch` carries BOTH names so a caller can surface
+/** Loud result of the bounded manifest read (design 21 §6.2/§6.5).
+ *  `identity_mismatch` carries BOTH names so a caller can surface
  *  exactly which identity was claimed where. */
 export type TgzManifestInspection =
   | { ok: true; manifest: TgzPackageManifest }
@@ -509,8 +508,8 @@ export type TgzManifestInspection =
  * Bounded: gunzip is capped at TARBALL_MAX_UNPACKED_BYTES and the manifest
  * entry text at PLUGIN_MANIFEST_MAX_BYTES.
  *
- * Identity rules (2026-12 audit — pnpm installs the archive's
- * `package/package.json`, so THAT is the identity every downstream judgement
+ * Identity rules (pnpm installs the archive's `package/package.json`, so
+ * THAT is the identity every downstream judgement
  * must see):
  * - the LAST entry at an installed-path candidate wins (tar extraction
  *   overwrite semantics: pnpm installs the last one);
@@ -641,7 +640,7 @@ export type PluginPickClassification =
  * an honest error, never a guessed name/version. The name/version projected
  * are the INSTALLED-path identity (`package/package.json`, what pnpm
  * installs); an archive whose root `package.json` declares a different
- * identity is refused with both names (`identity_mismatch`, 2026-12 audit).
+ * identity is refused with both names (`identity_mismatch`).
  * Errors are loud and carry the picked file's basename only (main never
  * echoes the full local path of a refused pick back into the renderer).
  */

@@ -1,9 +1,6 @@
 /**
  * Parity between the local static gate set (`run-checks.mjs` MODES.static) and
- * the file-only gates ci.yml runs OUTSIDE its change classifier (P1-1 of the
- * 13-scripts audit: the two had silently drifted — the local static mode ran
- * `remote-state-injection-matrix.mjs` while ci.yml ran
- * `remote-state-acceptance.mjs`, so neither side could see the other's gate).
+ * the file-only gates ci.yml runs OUTSIDE its change classifier.
  *
  * Pure text parsing so the contract is unit-testable: the ci.yml `test` job is
  * sliced out, each step's classifier `if:` is inspected, and only the

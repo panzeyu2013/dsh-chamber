@@ -2,7 +2,7 @@
 //  RendererHangWatchdogTests.swift
 //  DSHChamberTests
 //
-//  S-02（2026-12 复裁决）/ S-34（2026-12 双端逐函数核对）：渲染器卡死自愈的
+//  渲染器卡死自愈的
 //  纯判据——首载门（didFinish 前只记录不探测）、空闲够久才 ping、连续 3 次超时
 //  才重载、任何键鼠输入都清零。
 //
@@ -19,7 +19,7 @@ final class RendererHangWatchdogTests: XCTestCase {
         return watchdog
     }
 
-    // MARK: - S-34 首载门
+    // MARK: - 首载门
 
     /// 首次成功加载前：即使空闲远超阈值也只记录，不 ping、不重载、不累计 strike。
     func testNoProbeOrReloadBeforeFirstLoadFinishes() {

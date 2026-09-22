@@ -1,5 +1,5 @@
 /**
- * Windows process-tree probe unit tests (design 21 M2a): the exec helpers are
+ * Windows process-tree probe unit tests (design 21): the exec helpers are
  * win32-gated and their off-platform refusal is asserted here.
  * Real Windows tooling behavior is covered by the control-plane win32-only
  * integration test (win32-lifecycle.integration.test.ts).
@@ -12,8 +12,7 @@
  * the authoritative side and feeds BOTH twins the superset fixtures plus
  * absolute expected rows (TREE 75-85, TASKKILL_CASES 87-96, IDENTITY_CASES
  * 98-139; asserted at 151-204) on every leg
- * (control-plane/scripts/test.mjs:67,151). The runtime mirror's duplicate
- * cases were removed in the 2026-12 test trim.
+ * (control-plane/scripts/test.mjs:67,151).
  */
 
 import { test } from 'node:test'

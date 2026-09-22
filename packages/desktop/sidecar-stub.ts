@@ -1,8 +1,6 @@
 /**
- * sidecar-stub.ts — W-05 vertical slice: POC B-bridge service end
- * (W-05; design 25 §4.4.2). P1 (M2) replaces this file
- * with sidecar-entry.ts (real processors + HostEdges); until then it stubs
- * exactly the three slice topologies so the full chain can be proven:
+ * sidecar-stub.ts — POC B-bridge service end (design 25 §4.4.2);
+ * it stubs exactly the three slice topologies so the full chain can be proven:
  *
  *   1. request/response — dsh-chamber:info, settings get/set, the SSH
  *      instances roster and connect/disconnect/status;
@@ -38,9 +36,7 @@
  *
  * POC honesty: every fabricated projection carries `poc: true` (comment on
  * connectHandler); POC payloads use {instanceId} on the desktop_ssh_* methods
- * — the POC A-bridge shim sends the same field, and the P1 reconciliation
- * with the official {id} schemas of the real main-process handlers is owned
- * by sidecar-entry.ts. Result field names for info
+ * — the POC A-bridge shim sends the same field. Result field names for info
  * (controlPlaneUrl/dshVersion/version/platform) match preload/main so the
  * renderer needs no POC-only branches.
  */
@@ -139,7 +135,7 @@ function instancesPathFromArgv(argv: string[]): string | null {
 const INSTANCES_PATH: string | null = instancesPathFromArgv(process.argv)
 
 /** Last connect/disconnect outcome per instance — the memory behind
- *  desktop_ssh_status until M2's real transport-manager projections. */
+ *  desktop_ssh_status. */
 const phases = new Map<string, 'connected' | 'idle'>()
 
 function rememberPhase(instanceId: string, phase: 'connected' | 'idle'): void {
@@ -147,8 +143,8 @@ function rememberPhase(instanceId: string, phase: 'connected' | 'idle'): void {
 }
 
 /** desktop_ssh_* POC payloads carry {instanceId} (the POC A-bridge shim sends
- *  the same field on the web side). The official main-process handlers use
- *  {id} schemas; that reconciliation belongs to P1's sidecar-entry.ts. */
+ *  the same field on the web side); the official main-process handlers use
+ *  {id} schemas. */
 function instanceIdFromPayload(payload: Json | null): string | null {
   if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) return null
   const instanceId = (payload as { [k: string]: Json }).instanceId
@@ -174,8 +170,7 @@ function instancesGetHandler(): Json {
   // Honest-error contract (design 25 §4.4.2): missing/unreadable/corrupt registry
   // answers {error:'poc-no-registry'} on the wire — never a silent empty
   // success (AGENTS proxy-honesty invariant; the renderer must tell "no
-  // instances" apart from "read failed"). Valid arrays pass through untouched
-  // (registry transactions belong to M2's real processors).
+  // instances" apart from "read failed"). Valid arrays pass through untouched.
   const instancesPath = INSTANCES_PATH
   if (instancesPath === null) throw new HandlerError('poc-no-registry')
   const rawText = readInstancesFile(instancesPath)
@@ -219,8 +214,7 @@ async function connectHandler(payload: Json | null): Promise<Json> {
   await sleep(300)
   rememberPhase(instanceId, 'connected')
   // POC semantics are stubbed and loud-marked: the status event is fabricated
-  // here (poc:true). After M2 the real transport-manager becomes the event
-  // source (design 25 §4.4.2) and this push disappears.
+  // here (poc:true; design 25 §4.4.2).
   pushEvent('desktop_ssh_status_changed', { id: instanceId, status: 'connected', poc: true })
   return { ok: true }
 }
@@ -250,8 +244,7 @@ function settingsGetHandler(): Json {
 }
 
 function settingsSetHandler(payload: Json | null): Json {
-  // POC stub: the patch is accepted but never persisted (M2 wires the real
-  // chamber-settings.json store through the shared processors).
+  // POC stub: the patch is accepted but never persisted.
   if (payload !== null) {
     console.error('[sidecar-stub] dsh-chamber:settings-set (POC stub) — patch accepted, not persisted: ' + JSON.stringify(payload).slice(0, 200))
   }

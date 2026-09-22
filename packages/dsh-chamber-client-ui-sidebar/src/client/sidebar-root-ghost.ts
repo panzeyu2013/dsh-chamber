@@ -1,7 +1,6 @@
 /**
- * The blank-row GHOST layout guard (extracted verbatim from SidebarRoot,
- * 2026-12 split): arm the projection ghost with the same local grace clock
- * and stop rendering it once the deadline passes.
+ * The blank-row GHOST layout guard: arm the projection ghost with the same
+ * local grace clock and stop rendering it once the deadline passes.
  */
 
 import { useEffect, useRef, useState } from 'react'

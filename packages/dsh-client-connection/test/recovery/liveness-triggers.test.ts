@@ -203,7 +203,7 @@ test('liveness: DEFAULT_MIN_RESTART_INTERVAL_MS equals the vendored recovery bac
   assert.equal(Number(match[1]!.replaceAll('_', '')), DEFAULT_MIN_RESTART_INTERVAL_MS)
 })
 
-// ── offline gate (Batch 2: the native recovery control owns offline) ──────
+// ── offline gate (the native recovery control owns offline) ────────────────
 
 test('liveness: an offline browser ignores every trigger', () => {
   let clock = 0

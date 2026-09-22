@@ -8,14 +8,14 @@
  * specifier to `test/support/vendor-store-double.mjs`, a contract-faithful double
  * (getSnapshot/subscribe/set with sync, change-only notification).
  *
- * WHY NOT THE VENDOR SOURCE (2026-09-12 CI fix, run 34667681904): the real
- * module imports bare `zustand`/`immer`, so importing it in a test made the
- * suite depend on the vendored workspace member's install shape — it passed on a
- * machine that happened to have vendor `node_modules` and failed in CI with
- * `ERR_MODULE_NOT_FOUND: Cannot find package 'zustand'` (both through the raw
- * submodule path and through the member path). Production wiring is still
+ * WHY NOT THE VENDOR SOURCE: the real
+ * module imports bare `zustand`/`immer`, so importing it in a test makes the
+ * suite depend on the vendored workspace member's install shape — it resolves
+ * only on a machine that happens to have vendor `node_modules` and otherwise
+ * fails with `ERR_MODULE_NOT_FOUND: Cannot find package 'zustand'` (both through
+ * the raw submodule path and the member path). Production wiring is still
  * proven elsewhere, not by this test: a source lock (test/upstream-alignment
- * test, A5) pins the import and the `set()` write path, and
+ * test) pins the import and the `set()` write path, and
  * `pnpm run build:renderer` resolves the same specifier to vendor source through
  * vite's deepseekSource alias — a broken import fails the build.
  *

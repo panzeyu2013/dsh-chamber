@@ -2,14 +2,14 @@
 //  PrivateFS.swift
 //  DSHChamber
 //
-//  no-follow 私有文件纪律的唯一实现（2026-12 单源化）。
+//  no-follow 私有文件纪律的唯一实现。
 //
-//  背景：三处各自实现了「私有叶文件」的打开/校验——StartupSettings.readValidatedData
+//  背景：三处调用方共用「私有叶文件」的打开/校验——StartupSettings.readValidatedData
 //  （chamber-settings.json，只读 + inode 稳定性 + 尺寸/精确读）、ShellLog.openLeafLocked
 //  （shell.log/sidecar.log，O_NONBLOCK 防 FIFO 阻塞 + 单链接）、
 //  SidecarDirectoryLock.acquire（.dsh-chamber.lock，O_CREAT + 属主校验 + 0600 + flock）。
-//  三处的判据互有出入（例如只有 settings 校验 inode 稳定性、只有日志检查 FIFO），
-//  改一处不会同步另外两处。本文件是**判据并集**的唯一实现：
+//  各调用方的判据互有出入（例如只有 settings 校验 inode 稳定性、只有日志检查 FIFO），
+//  本文件是**判据并集**的唯一实现：
 //    1. lstat（存在时）：必须是常规文件（符号链接 / FIFO / socket / 设备 / 目录拒绝）
 //       且 st_nlink == 1（多硬链接叶拒绝）；
 //    2. open(O_NOFOLLOW)：把「lstat 之后、打开之前叶被换成符号链接」关掉（ELOOP）；
@@ -88,7 +88,7 @@ public enum PrivateFS {
         }
     }
 
-    /// 该错误对应的 errno 码（映射为旧实现的诊断数字；无 I/O 语义时给 0/ELOOP/ENOENT）。
+    /// 该错误对应的 errno 码（无 I/O 语义时给 0/ELOOP/ENOENT）。
     /// 命名避开全局 `errno`——同名静态方法会在本类型内部遮蔽 C 全局量。
     public static func errnoCode(for error: LeafError) -> Int32 {
         switch error {
@@ -123,7 +123,7 @@ public enum PrivateFS {
             return code == ENOENT ? .failure(.missing) : .failure(.ioFailure(stage: .lstat, code: code))
         }
         // O_CREAT 路径下 lstat 的其它错误（ENOENT 竞态、EACCES 等）不在这里失败：
-        // open 会给出权威 errno（与迁移前 ShellLog/SidecarDirectoryLock 的行为一致）。
+        // open 会给出权威 errno。
         let descriptor = open(path, flags | O_NOFOLLOW, creationMode)
         guard descriptor >= 0 else {
             let code = errno

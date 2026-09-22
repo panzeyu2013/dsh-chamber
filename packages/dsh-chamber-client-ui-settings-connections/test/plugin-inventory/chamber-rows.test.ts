@@ -40,7 +40,7 @@ const LOCAL_MANIFEST = [
   pkg(ARCHIVE_CLEANUP_PACKAGE, HALF),
 ]
 /** A DIFFERENT read of the same registry: nothing installed, version 9.9.9.
- *  Used to prove which target reads which source. */
+ *  Proves which target reads which source. */
 const POISON = [pkg(HOST_GRAPH_PACKAGE, { installed: false, patched: false, version: '9.9.9', live: null })]
 
 function byName(rows: readonly ChamberRowDescriptor[], name: string): ChamberRowDescriptor {
@@ -54,7 +54,7 @@ function byName(rows: readonly ChamberRowDescriptor[], name: string): ChamberRow
 test('local: expected + local column + version all come from the instance own profile manifest', () => {
   const rows = deriveChamberRows({ target: 'local', expected: LOCAL_MANIFEST,
     // The desktop-side projection is a DIFFERENT read: it must be ignored for
-    // the local target (the regression this file pins).
+    // the local target (the invariant this file pins).
     localManifestChamber: POISON, remoteChamber: null, inventory: null, seedCache: null, localSideFailed: false })
   assert.deepEqual(rows.map(row => row.name), [HOST_GRAPH_PACKAGE, GIT_WORKTREE_PACKAGE, ARCHIVE_CLEANUP_PACKAGE])
   assert.deepEqual(byName(rows, HOST_GRAPH_PACKAGE).localBadge, { labelKey: 'chamberBadgeInjected', tone: 'ok' })
@@ -170,8 +170,8 @@ test('gateway: cache match / drift / per-row absent / whole-cache absent are fou
 })
 
 test('gateway: an unknown LOCAL version beside a cached row is absent-local, never a mismatch claim', () => {
-  // Moved from the deleted chamber-seed-drift.test.ts (2026-12 trim): the
-  // unreadable-manifest state and the pure comparison's representation rules.
+  // The unreadable-manifest state and the pure comparison's representation
+  // rules.
   const rows = gatewayRows({
     localManifestChamber: [
       pkg(HOST_GRAPH_PACKAGE, { ...INJECTED, version: null }),
@@ -284,9 +284,9 @@ test('gateway: an unavailable inventory renders ONE unknown-state client row, ne
 })
 
 test('gateway: a readable inventory with NO chamber client entry renders ONE muted 未注入 row', () => {
-  // The old hardcoded row showed 未注入 in exactly this state (review G2-6):
-  // rendering NOTHING at all would let a dropped/disabled client package look
-  // like "no such row exists". Still never a hardcoded package name.
+  // This state renders 未注入 as one muted row: rendering NOTHING at all
+  // would let a dropped/disabled client package look like "no such row
+  // exists". Still never a hardcoded package name.
   const rows = gatewayRows({ inventory: { entries: [] } })
   const clientRows = rows.filter(row => row.nameLabelKey !== null)
   assert.equal(clientRows.length, 1, 'one absent-state client row, never zero')
@@ -327,7 +327,7 @@ test('every target: an empty expected list yields no REGISTRY rows', () => {
   }
 })
 
-/* ---- localOnly registry rows (design 20 §6; 2026-12 user decision): listed on
+/* ---- localOnly registry rows (design 20 §6): listed on
  * the LOCAL target only, OMITTED everywhere else — a per-target table must not
  * list a row that no action on that target could ever produce. ---- */
 

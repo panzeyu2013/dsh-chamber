@@ -2,7 +2,7 @@
  * Session-state wiring: the /chamber/session-state* prefix is claimed by the
  * existing /chamber/* chamber surface (inside the auth gate) with exact-prefix
  * matching only, and the config kill switch resolves with the warmup-style
- * env discipline (plan W1 / WS-B; blueprint section 6, plan section 11).
+ * env discipline.
  *
  * Run directly:
  *   node --import ./test/session-state/workspace-loader.mjs test/session-state/session-state-surface.test.ts

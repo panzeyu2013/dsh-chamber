@@ -5,7 +5,6 @@
  * 后再失败才回退）/ windowMs 硬上限 / duplicate 名 fail closed；rollbackTarget
  * 全信任组合（previous known-good / 非 known-good 但有 known-good / 都无 →
  * null / previous === known-good）；shouldAutoRollback 四态。
- * 近似用例合并为表驱动（断言逐条保留）——2026-12 测试精简。
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

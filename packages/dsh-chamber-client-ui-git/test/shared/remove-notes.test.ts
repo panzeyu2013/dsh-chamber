@@ -1,8 +1,7 @@
 /**
- * Remove-dialog note/count derivation (review G1-2/3/4/6). Pure node:test, no
- * React: the derivation used to live inline in RemoveWorktreeDialog.tsx and
- * was untested — the old-host case wrongly claimed archivedness and the count
- * was length subtraction.
+ * Remove-dialog note/count derivation. Pure node:test, no React: the
+ * derivation is pinned here without a DOM, so the old-host case cannot claim
+ * archivedness and the count can never be length subtraction.
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -70,7 +69,7 @@ test('the archived note names archived OR subagent-under-archived sessions in bo
   // A running SUBAGENT under an archived root is not itself archived, and a
   // FORK descendant is NOT inert at all (fork edges terminate the lineage) —
   // the copy must carry the SUBAGENT qualifier, never a bare "under an
-  // archived session" (design 08 §5.2; 2026-12 lens-D nit).
+  // archived session" (design 08 §5.2).
   assert.match(zh.runningRemoveArchivedNote, /已归档、或位于已归档会话的子代理之下/)
   assert.match(en.runningRemoveArchivedNote, /ARCHIVED, or under a SUBAGENT of an archived session/)
   // The old-host copy must not claim archivedness at all.
@@ -85,7 +84,7 @@ test('the archived note names archived OR subagent-under-archived sessions in bo
 
 test('the workspace row picks the neutral running title when the host has no archived-aware field', () => {
   const row = readFileSync(new URL('../../src/client/SidebarWorkspaceGitLine.tsx', import.meta.url), 'utf8')
-  // Cohesion (2026-12 nit): the row reuses the dialog's derivation instead of
+  // Cohesion: the row reuses the dialog's derivation instead of
   // re-checking `blockingRunningSessionIds === undefined` inline, so the two
   // can never drift apart.
   assert.match(row, /removeRunningNotes\(\{/, 'the row must reuse the pure derivation')
@@ -95,13 +94,13 @@ test('the workspace row picks the neutral running title when the host has no arc
 })
 
 test('the remove dialog derives its notes from the helper and never does inline length arithmetic', () => {
-  // Source pin (the regression lived in the component's inline logic, so a
-  // pure-helper test alone cannot catch it being re-added).
+  // Source pin: a pure-helper test alone cannot catch inline length arithmetic
+  // being re-added to the component.
   const dialog = readFileSync(new URL('../../src/client/RemoveWorktreeDialog.tsx', import.meta.url), 'utf8')
   assert.match(dialog, /removeRunningNotes\(\{/, 'the dialog must use the pure derivation')
   assert.match(dialog, /runningNotes\.inertCount/, 'the inert count comes from the set difference')
   assert.doesNotMatch(dialog, /runningSessionIds\.length\s*-/, 'no length subtraction for the archived count')
-  // The code→copy resolver moved behind shared/action-error.ts: the dialog
+  // The code→copy resolver lives behind shared/action-error.ts: the dialog
   // must still localize every user-reachable refusal (test/shared/action-error.test.ts).
   assert.match(dialog, /gitActionErrorText\(error, t\)/, 'refusals must map to localized copy')
   assert.match(dialog, /runtimeUnknownBlock/, 'the runtime-absent pre-hint must gate the confirm')

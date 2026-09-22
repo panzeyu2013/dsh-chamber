@@ -1,10 +1,10 @@
 /**
- * runtime-startup-host.ts —— 运行时启动事务宿主（P0-6 结构抽取）。
+ * runtime-startup-host.ts —— 运行时启动事务宿主。
  *
  * 本模块是 Electron main 与 Swift sidecar 装配共用的运行时生命周期宿主：
  * DshRuntimeController 构造、证据刷新（coalescer）、快照维护、元数据恢复事务、
  * runRuntimeStartup 启动事务、restart-exhausted 回滚、known-good 晋升与
- * APPLY_NOW 门输入。代码自 main.ts 的 whenReady 区域逐字迁出（语义零改），
+ * APPLY_NOW 门输入。
  * flavor 差异全部经 RuntimeStartupHostDeps 注入：plane 访问器（含晚绑定
  * connectionState/localProcessAlive/seededProbeDomains 惰性读）、模块级事务槽
  * （state）、路径/版本/启动事实、日志 tag 与宿主叶（rendererPush、
@@ -147,9 +147,9 @@ export function createRuntimeStartupHost(host: RuntimeStartupHostDeps) {
           deleteOverride: (b) => deleteOverride(b),
           clearCurrentPointer: (b) => clearCurrentPointer(b),
           recordExplicitInstall: (b, runtimeVersion) => recordExplicitInstall(b, runtimeVersion),
-          // perf T3（2026-09）：闸口走异步单遍遍历——等待同一段墙钟时间但
+          // 闸口走异步单遍遍历——等待同一段墙钟时间但
           // 主进程保持响应（大 store 下同步遍历会冻结整个应用）。
-          // review N1（2026-09）：此 DI 回调由 controller install() 直接
+          // 此 DI 回调由 controller install() 直接
           // await（安装闸口，见 dsh-runtime-controller.ts），绕过下方
           // refreshDiskUsage coalescer——与证据刷新并发时可能出现两遍全树
           // 遍历（罕见窗口、多一遍墙钟时间，无正确性影响；"绝不重复并发"
@@ -196,7 +196,7 @@ export function createRuntimeStartupHost(host: RuntimeStartupHostDeps) {
       }
       const effectivePhase = phase ?? runtimeInstance.getState().phase;
       // The component set and needsRecovery are the shared projection
-      // (dsh-runtime/src/metadata-health-projection.ts, M14); the marker rescue
+      // (dsh-runtime/src/metadata-health-projection.ts); the marker rescue
       // stays here because it inspects THIS host's base directory.
       const metadataFacts = projectMetadataHealthFacts(health, {
         markerRescueAvailable: health.status === 'recovery-marker-corrupt'
@@ -226,19 +226,19 @@ export function createRuntimeStartupHost(host: RuntimeStartupHostDeps) {
         canRecoverMetadata,
       };
     };
-    // perf T3（2026-09，D8）：磁盘统计"节流/单飞/终态一次"——版本事务的
+    // 磁盘统计"节流/单飞/终态一次"——版本事务的
     // 15 个 refresh 调用点与 UI/事件驱动的刷新突发共享遍历：单飞合并并发
     // 请求，运行期间到达者补跑一遍（终态一次）。"全树统计绝不重复并发"
     // 不变量仅对经本 coalescer 的 refresh 调用点成立——安装闸口经 controller
     // DI 直接 await runtimeDiskSummaryAsync、绕过本 coalescer（见上方
-    // deps.store.runtimeDiskSummary 映射旁注，review N1）。runtimeDiskSummaryAsync
+    // deps.store.runtimeDiskSummary 映射旁注）。runtimeDiskSummaryAsync
     // 本身按批让渡事件循环，主进程全程不被冻结。
     const refreshDiskUsage = createCoalescedRefresher(() => runtimeDiskSummaryAsync(runtimeBaseDir));
-    // 最近一次完成的全树磁盘投影（含错误投影）。D7 进度跳过复用其值——
+    // 最近一次完成的全树磁盘投影（含错误投影）。进度跳过复用其值——
     // 终态/content 相位永远现场重走，绝不因复用而把陈旧终态交给 UI。
     let lastDiskEvidence: { usage: Awaited<ReturnType<typeof runtimeDiskSummaryAsync>> | null; error: string | null } | null = null;
-    // D7 进度跳过的 skip 集与判定在 ./disk-evidence-gate.ts（纯模块 + 单测，
-    // 2026-09 perf review M1；判定经 shouldSkipDiskRefresh 注入下方调用）。
+    // 进度跳过的 skip 集与判定在 ./disk-evidence-gate.ts（纯模块 + 单测；
+    // 判定经 shouldSkipDiskRefresh 注入下方调用）。
     const refreshRuntimeEvidence = async (patch: Parameters<typeof runtimeInstance.setLifecycle>[0] = {}) => {
       const effectivePhase = patch.phase ?? runtimeInstance.getState().phase;
       const effectiveCanRetryRestore = patch.canRetryRestore
@@ -273,7 +273,7 @@ export function createRuntimeStartupHost(host: RuntimeStartupHostDeps) {
       const skipDisk = shouldSkipDiskRefresh(effectivePhase);
       if (skipDisk && lastDiskEvidence !== null) {
         // 进度相位：复用最近一次完整投影（无新遍历）——复用的是最近一次
-        // **成功或失败**投影（review N4）：error 投影（如磁盘统计失败）在
+        // **成功或失败**投影：error 投影（如磁盘统计失败）在
         // 长下载事务中会持续展示，直到终态 patch 现场重走才自愈（取舍：
         // 进度相位优先低延迟展示，而非阻塞在重试统计上）；快照/版本清单等
         // 轻量面照常现场刷新。diskLimitExceeded 等派生字段随复用值同步给出。
@@ -332,10 +332,9 @@ export function createRuntimeStartupHost(host: RuntimeStartupHostDeps) {
     const probesPassed = (probes: Awaited<ReturnType<typeof runRuntimeActivationProbes>>) =>
       probes.length > 0 && probes.every(probe => probe.ok);
 
-    // 探针失败诊断（`probeFailureDetail` 的 600 字符清单 + 前缀文案）自 W-10 起
-    // 抽到 electron-free 的 runtime-probe-detail.ts，与 Swift 装配（sidecar-ctx）
-    // 共用同一实现——原先该诊断只存在于本闭包，Swift 侧只 throw 常量串，同一失败
-    // 在两种 flavor 上的可诊断性不同（2026-09 验收轮的唯一可见证据链）。
+    // 探针失败诊断（`probeFailureDetail` 的 600 字符清单 + 前缀文案）位于
+    // electron-free 的 runtime-probe-detail.ts，与 Swift 装配（sidecar-ctx）
+    // 共用同一实现。
     const startAndProbeWorkspace = async (workspace: string, signal?: AbortSignal) => {
       if (isQuitting()) throw new Error(RUNTIME_ABORT_REASON);
       signal?.throwIfAborted();
@@ -354,7 +353,7 @@ export function createRuntimeStartupHost(host: RuntimeStartupHostDeps) {
           dshHome: localDshHome,
           call,
           signal,
-          // 模块评审 D#2：期望集按**实际 seed 的宿主域**派生（host 包缺失时
+          // 期望集按**实际 seed 的宿主域**派生（host 包缺失时
           // 不按「全 3 域」裁决，否则 exact-set 必失败并回滚激活）。
           hostDomainNames: plane.seededProbeDomains(),
         });
@@ -396,7 +395,7 @@ export function createRuntimeStartupHost(host: RuntimeStartupHostDeps) {
     };
 
     const readActivationFacts = () => {
-      // ACTIVATION-FACTS DIVERGENCE (stage2 ruling, 2026): the gateway twin
+      // ACTIVATION-FACTS DIVERGENCE: the gateway twin
       // (runtime-manager.ts activationFacts) excludes the current POINTER
       // from latestKnownGood and short-circuits win32 (knownGoodVersion
       // null); this side excludes journalIntent.targetVersion ??
@@ -440,13 +439,12 @@ export function createRuntimeStartupHost(host: RuntimeStartupHostDeps) {
       return {
         // 激活裁决的期望集必须与探针结果集**同源同快照**（design 18 §3.4；
         // gateway runtime-manager.ts:989 同款）。shared core 在探针 run 返回后
-        // 调用本函数（ApplyDeps.probeExpectedNames 惰性求值，2026-12 P0 修复）
+        // 调用本函数（ApplyDeps.probeExpectedNames 惰性求值）
         // → 此时本事务的 seed 已完成（plane.startLocal() 内），与
         // startAndProbeRuntime 传入的 hostDomainNames 完全一致。缺此字段时
         // gate 默认「全 7 探针」，部分/空 seed 必 exact-set 失配并回滚
-        // （2026-09 二轮评审 P1）；若在构造 deps 时就把域表取成值（旧 getter
-        // 语义），冷启动带 pending 的事务会在 spawn 前冻结空域表 → 同样失配
-        // 并回滚健康候选。
+        // 若在构造 deps 时就把域表取成值，冷启动带 pending 的事务会在 spawn 前
+        // 冻结空域表 → 同样失配并回滚健康候选。
         probeExpectedNames: () => activationProbeNamesForDomains(plane.seededProbeDomains()),
         cleanupStaleInstalls: () => cleanupStaleInstalls(runtimeBaseDir),
         evict: () => evictVersions(runtimeBaseDir),
@@ -479,7 +477,7 @@ export function createRuntimeStartupHost(host: RuntimeStartupHostDeps) {
           else writeCurrentPointer(runtimeBaseDir, runtimeVersion);
         },
         // The transaction-level signal flows through spawnAndProbe from
-        // runStartupPhase/runDelayedRollback (apply-now S1). Never fall back
+        // runStartupPhase/runDelayedRollback. Never fall back
         // to a module-level aborted signal here: that would re-inject an
         // aborted signal into rollback verification probes, forging a
         // "candidate + fallback + builtin all failed" terminal state when the
@@ -899,8 +897,7 @@ export function createRuntimeStartupHost(host: RuntimeStartupHostDeps) {
         // Pending replay projection before the startup transaction: use the
         // shared core effectivePending so a pending whose override is
         // invalidated OR written by an older shell shellVersion never resolves a
-        // target here (matches the core startup replay decision — previously
-        // only invalidatedAt was consulted here).
+        // target here (matches the core startup replay decision).
         const pendingBefore = overrideBefore.kind === 'valid'
           ? effectivePending(overrideBefore.record, shellVersion)
           : null;
@@ -1121,12 +1118,6 @@ export function createRuntimeStartupHost(host: RuntimeStartupHostDeps) {
       return operation;
     };
 
-    // —— W-10 S11（runtime B 收口批）：main 侧同名 confirmRuntimeMutation 闭包
-    // 已随 K 组 6 注册体迁出删除——注册体统一使用 shell-core installIpcHandlers
-    // 内 J 组段的 S10 版 confirmRuntimeMutation（edges.showMessage 宿主腿 + 
-    // edges.mainWindowAlive 无窗预检；按钮序 ['取消', confirmLabel] / defaultId 0 /
-    // cancelId 0 / noLink 与文案逐字一致，无窗 → false = 'native confirmation
-    // unavailable' 不确认语义同向），S10 遗留过渡双份消除。
     const authoritativeMetadataRecoveryStatus = (): RecoverableMetadataStatus | null => {
       const state = runtimeInstance.getState();
       // 'incomplete' is a permanent restore outcome (the journaled snapshot is
@@ -1201,15 +1192,13 @@ export function createRuntimeStartupHost(host: RuntimeStartupHostDeps) {
       return operation;
     };
 
-    // —— W-10 S10（runtime A 批）：RUNTIME_STATE / RUNTIME_RESTART 注册体迁出 ——
-    // 注册体已随 J 组迁入 shell-core installIpcHandlers ② J 组段（RUNTIME_STATE /
+    // 六注册体在 shell-core installIpcHandlers ② J 组段（RUNTIME_STATE /
     // RUNTIME_RESTART / RUNTIME_CHECK / RUNTIME_INSTALL / RUNTIME_CLEANUP_VERSION /
-    // RUNTIME_CLEAR_FAILURE 六注册体按原序整体迁出，见下方 RUNTIME_CHECK 处标记）。
-    // 迁法（决策注记，与 shell-core J 组段注释逐条对应）：确认对话框 → core 内
-    // S6 版 confirmRuntimeMutation 助手（edges.showMessage 宿主腿——按钮序/取消
-    // 默认/文案逐字一致；无窗 → 'native confirmation unavailable' 不确认语义；
-    // main 侧同名闭包原为 K 组注册体（RECOVER_METADATA 等）保留，已随 W-10 S11
-    // K 组批迁完即删——见下方 S11 注记与删除处标记）；DshRuntimeController 控制器
+    // RUNTIME_CLEAR_FAILURE）。
+    // 确认对话框 → core 内
+    // confirmRuntimeMutation 助手（edges.showMessage 宿主腿——按钮序/取消
+    // 默认/文案逐字一致；无窗 → 'native confirmation unavailable' 不确认语义）；
+    // DshRuntimeController 控制器
     // 现实例经 ctx.runtimeController 注入
     // （本作用域 runtimeInstance——实例态留本文件，core 只做类型面）；
     // hostState.operation 槽在飞读门 / writerFence / runtimeActionAllowed /
@@ -1217,7 +1206,6 @@ export function createRuntimeStartupHost(host: RuntimeStartupHostDeps) {
     // 同一现实例/闭包（K 组与启动路径共用，语义不分叉）；restartLocal 类宿主叶 =
     // ctx.restartLocalDsh（PlaneHandle 在 main，controlPlane null 门 + restartLocal()
     // + resolve 后实时 connectionState 读封装在 shellCtx 装配叶内）。
-    // —— W-10 S10 迁出（1/2）：RUNTIME_STATE + RUNTIME_RESTART ——
     const runtimeActionAllowed = (action: Parameters<typeof allowedActions>[0] extends never ? never : ReturnType<typeof allowedActions>[number]) => {
       const state = runtimeInstance.getState();
       if (state.managementSupported === false && action !== 'retry-restore') return false;
@@ -1248,18 +1236,13 @@ export function createRuntimeStartupHost(host: RuntimeStartupHostDeps) {
         canRecoverMetadata: state.canRecoverMetadata,
       }).includes(action);
     };
-    // —— W-10 S10 迁出（2/2）：runRuntimeCheck + RUNTIME_CHECK / RUNTIME_INSTALL /
-    // RUNTIME_CLEANUP_VERSION / RUNTIME_CLEAR_FAILURE（runRuntimeCheck 随迁 core，
-    // 本文件周期计时器改经导出入口 runRuntimeCheckCycle 调用同一实现——见下方
-    // maybeCheckRuntime 计时器处标记）——
-    // —— W-10 S11（runtime B + 收口批）：K 组 6 注册体迁出 ——
     // RUNTIME_RECOVER_METADATA / RUNTIME_RESET_BUILTIN / RUNTIME_RETRY_APPLY /
-    // RUNTIME_APPLY_NOW / RUNTIME_RETRY_RESTORE / RUNTIME_RESTORE_PRE_ROLLBACK 已随
-    // K 组整体迁入 shell-core installIpcHandlers ② K 组段（按原序紧接 J 组；注册体
-    // 逐字迁入，trustedIpc 围栏由装配侧注入 registrar 包装）。迁法（决策注记，与
-    // shell-core K 组段注释逐条对应）：确认对话框 → core 内 J 组段 S10 版
-    // confirmRuntimeMutation 助手（本文件同名闭包已随本批删除——S10 遗留过渡双份
-    // 消除，见原定义处标记）；运行时启动事务宿主与共享闭包族按施工图留本文件、
+    // RUNTIME_APPLY_NOW / RUNTIME_RETRY_RESTORE / RUNTIME_RESTORE_PRE_ROLLBACK 在
+    // shell-core installIpcHandlers ② K 组段（紧接 J 组；注册体
+    // trustedIpc 围栏由装配侧注入 registrar 包装）。
+    // 确认对话框 → core 内 J 组段
+    // confirmRuntimeMutation 助手；
+    // 运行时启动事务宿主与共享闭包族留本文件、
     // 经 ctx 注入 core（runRuntimeStartup / publishBlockedStartup / setRuntimeGate /
     // authoritativeMetadataRecoveryStatus / runUserMetadataRecovery /
     // readApplyNowGateInput / selectedJournalIntent / stopLocalDsh（cp.stopLocal 叶）/
@@ -1268,23 +1251,23 @@ export function createRuntimeStartupHost(host: RuntimeStartupHostDeps) {
     // 实现/同一事务槽，语义不分叉）；dsh-runtime 纯逻辑（queueActivationIntent /
     // writeActivationIntent / restoreMarkerAuthorityStatus / readActivationJournalState /
     // writeOverride / listPreRollbackStashes / restorePreRollback）与 apply-now-gate.ts
-    // 的 evaluateApplyNowGate 随迁（core 直接 import，本文件 import 随迁除——仅剩
+    // 的 evaluateApplyNowGate 由 core 直接 import（本文件仅剩
     // ApplyNowGateInput 类型 import 供下方 readApplyNowGateInput 输入构造叶使用）。
-    // **W-10 收口**：60 handler 全部迁完——本文件的 ipcMain.handle(IPC_CHANNELS…
-    // 注册点与 webContents.send 调用清零（唯一残留拼写 = 下方装配侧 registrar
+    // 本文件没有 ipcMain.handle(IPC_CHANNELS…
+    // 注册点，也没有 webContents.send 调用（Electron 注册面唯一收口 = 下方装配侧 registrar
     // 包装 `ipcMain.handle(channel, trustedIpc(handler))`——trustedIpc 围栏注入
-    // 点，installIpcHandlers 每 channel 恰经它注册一次，Electron 注册面唯一收口；
+    // 点，installIpcHandlers 每 channel 恰经它注册一次；
     // 见文件头职责清单）。
     // Apply-now (design 18 addendum §4.1): run the existing activation
     // transaction in the CURRENT session instead of waiting for the next
-    // launch. Entry pattern mirrors RUNTIME_RETRY_APPLY (F1): no outer
+    // launch. Entry pattern mirrors RUNTIME_RETRY_APPLY: no outer
     // writer-fence lease is held across the transaction — runRuntimeStartup
     // acquires 'runtime:startup' itself, and an outer lease would deadlock
     // with it. The transaction window is the existing applying projection;
     // publishApplyOutcome settles the terminal state.
     // The gate is the pure evaluateApplyNowGate (apply-now-gate.ts), evaluated
     // BEFORE and AFTER the native confirm dialog from the SAME input builder
-    // (TOCTOU parity, review R5). Both gates resolve the target identically —
+    // (TOCTOU parity). Both gates resolve the target identically —
     // pending ?? journalTarget ?? overridePending — and preflight the target
     // tree, so the second gate can never accept something the first would
     // reject, and a corrupt tree never starts a doomed stop/respawn cycle.
@@ -1319,8 +1302,8 @@ export function createRuntimeStartupHost(host: RuntimeStartupHostDeps) {
     };
     // Startup refresh plus a real periodic cycle. Both share the same core
     // gate, so apply/restore suspends checks and the next cycle resumes them.
-    // W-10 S10: maybeCheckRuntime/runRuntimeCheck 实现随 RUNTIME_CHECK 注册体迁入
-    // shell-core installIpcHandlers ② J 组段——计时器仍为本文件宿主调度（首检 15s
+    // maybeCheckRuntime/runRuntimeCheck 实现位于 shell-core installIpcHandlers ②
+    // J 组段——计时器仍为本文件宿主调度（首检 15s
     // + 周期 6h，unref 语义不变），每次 tick 经 core 导出入口 runRuntimeCheckCycle
     // 走与 IPC 注册体同一实现与门（quit/事务在飞/动作不允许时 no-op——装配槽在
     // installIpcHandlers J 组段尾部赋值，先于任何 tick）。

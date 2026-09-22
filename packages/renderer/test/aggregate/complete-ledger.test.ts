@@ -1,6 +1,6 @@
 /**
- * complete 通知账本内核契约（2026-12 阶段 2 单源化）：武装轨的「直到重新 running」
- * 规则、水位轨的单调与 kind 隔离、撤回只清武装轨（R2）、forget/prune 的两轨收敛。
+ * complete 通知账本内核契约：武装轨的「直到重新 running」
+ * 规则、水位轨的单调与 kind 隔离、撤回只清武装轨、forget/prune 的两轨收敛。
  * 两轨的裁定规则本体仍在 watermark.ts / notification-edges.ts，这里钉的是账本容器。
  */
 import { test } from 'node:test'

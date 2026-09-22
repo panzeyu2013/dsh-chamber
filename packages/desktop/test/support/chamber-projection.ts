@@ -15,10 +15,9 @@ export function chamberPackageOf(chamber: ChamberInjectionState, name: string): 
   return found
 }
 
-/** The dynamic registry projection (one row per CHAMBER_HOST_PACKAGES entry) —
- *  the removed fixed `hostGraph`/`gitWorktree` pair must not come back, so
- *  redaction fixtures build the real shape instead of casting a stale literal
- *  under `as never`. */
+/** The dynamic registry projection (one row per CHAMBER_HOST_PACKAGES entry);
+ *  redaction fixtures build the real shape instead of casting a fixed
+ *  `hostGraph`/`gitWorktree` literal under `as never`. */
 export function chamberProjection(
   overrides: Record<string, Partial<ChamberHostPackageState>> = {},
 ): ChamberInjectionState {

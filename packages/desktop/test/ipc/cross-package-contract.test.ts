@@ -1,4 +1,4 @@
-/** Cross-package contract lockstep (A2 protocol single-sourcing, the ipc-surface-mirror golden
+/** Cross-package contract lockstep (protocol single-sourcing, the ipc-surface-mirror golden
  *  spirit): the desktop never re-derives the shared wire formats — ssh-provider.ts and
  *  plugin-sync.ts consume control-plane's rpc-envelope.ts / cordis-inserts.ts through
  *  control-plane-module.ts (packaged → compiled dist/control-plane, dev/tests → workspace source).
@@ -159,11 +159,12 @@ test('the dsh-runtime activation set and the control-plane identity method stay 
 })
 
 // ---------------------------------------------------------------------------
-// Seeded host-package FILE SET: one source, four consumers (P2). The set used to be hand-copied
+// Seeded host-package FILE SET: one source, four consumers. Hand-copying the set
 // in four places (control-plane's private tuple, the desktop remote seed/probe pair, the gateway
-// upload body, the gateway cache), so a third seed file on one side made the desktop PUT two keys,
-// the gateway answer 200/changed:true and the remote boot miss the file silently. These assertions
-// pin all four sides to the control-plane export item by item AND prove each side really consumes it.
+// upload body, the gateway cache) would let a third seed file on one side make the desktop PUT two
+// keys, the gateway answer 200/changed:true and the remote boot miss the file silently. These
+// assertions pin all four sides to the control-plane export item by item AND prove each side really
+// consumes it.
 // ---------------------------------------------------------------------------
 
 /** Golden seed file set — regenerate ONLY for a deliberate control-plane change every consumer follows. */
@@ -290,8 +291,8 @@ function interfaceFields(body: string): string[] {
 test('the chamber host-package state field set is identical across its three declarations (design 20 §6)', () => {
   // The SAME wire object is declared three times on purpose (three runtimes, no shared import
   // path): plugin-sync.ts projects it, renderer/global.d.ts types it for the preload bridge, the
-  // settings plugin mirrors it structurally. 2026-09-11: `localOnly` landed in two of the three
-  // and the renderer's wire type silently missed it — this is the FIELD gate the name-set gate could not be.
+  // settings plugin mirrors it structurally. A field added to two of the three would leave the
+  // renderer's wire type silently missing it — this is the FIELD gate the name-set gate could not be.
   const repoRoot = join(import.meta.dirname, '..', '..', '..', '..')
   const desktopFields = interfaceFields(interfaceBody(
     readFileSync(join(import.meta.dirname, '..', '..', 'plugin-sync.ts'), 'utf8'), 'ChamberHostPackageState'))

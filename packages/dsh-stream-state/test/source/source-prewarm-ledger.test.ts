@@ -1,12 +1,10 @@
 /**
- * B2: the prewarm-ledger events (Set-shaped ledgers).
+ * The prewarm-ledger events (Set-shaped ledgers).
  *
  * The App keeps two Set ledgers - autoPrewarmedRef (origin: this source was
  * prewarmed, not chosen) and prewarmSuppressedRef (retention must not prewarm it
- * again). They cannot be migrated with the assignment-translating view the record
- * ledgers used, because a Set is mutated through METHODS (add/delete), which no
- * property setter can intercept. These events are the mechanism those call sites
- * will dispatch instead, so each one is pinned here BEFORE any call site moves.
+ * again). A Set is mutated through METHODS (add/delete), which no property setter
+ * can intercept; these events are the mechanism those call sites dispatch.
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -167,7 +165,7 @@ test('an abandoned view is excluded from the reclaim projection after clearing',
 test('the harvest view reads whole records and accepts finished ones', () => {
   // The App reads a record, runs baseline-harvest's pure function, and writes the
   // RESULT back - so the container must accept a whole record (not re-derive it) and
-  // an absent source must read as the legacy initial value.
+  // an absent source must read as the initial value.
   let state: Record<string, SourceLifecycleState> = {}
   const view = createHarvestView({
     read: () => projectHarvest(state),

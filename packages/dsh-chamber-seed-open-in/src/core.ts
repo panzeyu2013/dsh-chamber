@@ -3,8 +3,8 @@
  * (design 20 §6; own file, upstream has no counterpart).
  *
  * This is upstream's `apply()` body (`@deepseek-ai/dsh-host-open-in-app`,
- * pin fb2c4b9e = dsh-v0.1.5-rc.2, `src/index.ts:138-183,241-310`) with the
- * two transport/trust responsibilities removed and nothing else changed:
+ * `src/index.ts:138-183,241-310`), without the two transport/trust
+ * responsibilities:
  *
  *   - **no SSH dormancy gate**: upstream resolves an EMPTY catalog whenever the
  *     launcher's environment carries `SSH_CONNECTION`/`SSH_TTY`
@@ -242,7 +242,6 @@ export class OpenInAppCore {
     return this.resolutions ??= resolveOpenInAppApps(this.probeTimeoutMs, this.internals())
   }
 
-  /** Per-app icon promise cache (null = resolved as unavailable). */
   private iconOf(app: OpenInAppApp, resolved: OpenInAppResolvedLaunch): Promise<OpenInAppIcon | null> {
     let cached = this.icons.get(app.id)
     if (cached === undefined) {

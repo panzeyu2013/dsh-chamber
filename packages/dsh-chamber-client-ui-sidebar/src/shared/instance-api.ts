@@ -1,6 +1,6 @@
 /**
- * Per-instance unary wire client (design 03 §3.1). The dsh v0.1.2-alpha.1
- * connection client no longer ships an API client class (upstream deleted
+ * Per-instance unary wire client (design 03 §3.1). The dsh connection
+ * client ships no API client class (upstream deleted
  * `AbstractApiClient`/`IApiClient` together with the host-apiproxy package),
  * so the chamber per-instance unary client is self-hosted here: a plain
  * same-origin fetch that posts the new generic-RPC envelope
@@ -12,25 +12,23 @@
  * (`vendor/harness-checkout/packages/client/connection/src/client/rpc.ts:34`;
  * this repo's base-path-patched copy of the same implementation is
  * `packages/dsh-client-connection/src/client/rpc.ts:61`).
- * 2026-09-11 review-fix: both citations are spelled so they resolve from this
- * repo. The retired form gave the upstream monorepo's own layout bare, which
- * exists only inside the pinned vendor checkout and resolved to nothing here.
+ * Both citations are spelled so they resolve from this repo.
  *
  * Lives in this package's shared/ so the chamber App layer (renderer main
  * entry) and the sidebar plugin consume one copy (vite shared chunk, design
  * 05 §3); the renderer consumes it through `@dsh-chamber/dsh-chamber-client-ui-sidebar/shared`.
  *
- * Types are intentionally local rows mirroring the v0.1.2-alpha.1
+ * Types are intentionally local rows mirroring the
  * api-session-controller / api-workspace-controller `@Remote` faces
  * (types.ts). Consumers resolve this shared face from the real source (root
- * tsconfig paths / the sidebar package exports), not the retired renderer
- * vendor-modules.d.ts ambient overlay (P4-4, 2026-09).
+ * tsconfig paths / the sidebar package exports), not the renderer
+ * vendor-modules.d.ts ambient overlay.
  */
 import { DirectoryBrowseError } from './directory-browse-error.ts'
-// 2026-09-11 upstream-alignment T7: one derivation for the active-Schedule fact
+// One derivation for the active-Schedule fact
 // (shared by this module's unary row build and derive.ts's mounted-store
 // projection). derive.ts type-imports this module only, so no runtime cycle.
-// I3: the display-title ladder and its basename helper live in derive.ts for
+// The display-title ladder and its basename helper live in derive.ts for
 // the same reason (one resolver, no cycle); `basenameOf` is re-exported below
 // so existing importers (workspace-echo.ts) keep their import site.
 import { basenameOf, hasActiveScheduleOf, sessionDisplayTitle } from './derive.ts'
@@ -79,11 +77,11 @@ export interface SessionRow {
    * from `title`, which stays the durable title projection: rename/fork copy
    * and the archive manager must not treat a directory-name fallback as a
    * durable name. Absent on pre-revision producers; the derive layer then
-   * re-applies the ladder (I3: a label never renders 「未命名」 for "unknown").
+   * re-applies the ladder (a label never renders 「未命名」 for "unknown").
    */
   displayTitle?: string
   /**
-   * 2026-09-11 upstream-alignment T7: the session owns at least one ACTIVE
+   * The session owns at least one ACTIVE
    * schedule (upstream `SessionNode.hasActiveSchedule`, derived from
    * `projectionValues.schedule` — vendor ui-workspace tree.ts:161-163). SPARSE:
    * present only when true, so the snapshot signature stays byte-identical for
@@ -127,11 +125,11 @@ export function emptyAggregate(state: InstanceAggregateState, error: string | nu
 }
 
 /**
- * New generic-RPC unary result (v0.1.2-alpha.1 `ConnectionRpcResult`): the
+ * New generic-RPC unary result (`ConnectionRpcResult`): the
  * `server-response` result slot decoded flat — `{ok:true, value}` for success,
  * `{ok:false, error:{code,message,details}}` for a business failure. Transport
  * failures (offline, HTTP non-2xx, not-ready 503, abort, timeout) THROW instead
- * of resolving — the same split the old apiproxy client had.
+ * of resolving.
  */
 export type UnaryResult<T = unknown> =
   | { readonly ok: true; readonly value: T }
@@ -172,7 +170,7 @@ export class InstanceDomainMissingError extends Error {
 }
 
 /**
- * Default timeout for bounded unary calls (mirrors the retired apiproxy 30s default).
+ * Default timeout for bounded unary calls.
  * **Exported** so the cross-module budget derivation has exactly one home: the renderer
  * wiring test (`packages/renderer/test/wiring/session-liveness-wiring.test.ts`) imports
  * this bound to check that the reconciler verify budget covers the N=2 authority probes
@@ -201,23 +199,23 @@ export interface CallOptions {
   notFoundAsDomainMissing?: boolean
 }
 
-/** Browser origin with the same Node fallback the retired connection client used. */
+/** Browser origin with a non-browser fallback. */
 function resolveOrigin(): string {
   const location = (globalThis as { location?: { origin?: string } }).location
   return location?.origin !== undefined && location.origin !== 'null' ? location.origin : 'http://dsh.internal'
 }
 
-/** 404-body read cap (review follow-up F10): the domain-missing
+/** 404-body read cap: the domain-missing
  *  discrimination only needs the tiny `instance_not_found` code JSON. */
 const NOT_FOUND_BODY_CAP_BYTES = 4 * 1024
 
 /**
- * Bounded 404-body probe for the design 24 §5 discrimination (review
- * follow-up F10): read at most NOT_FOUND_BODY_CAP_BYTES and parse it as JSON.
+ * Bounded 404-body probe for the design 24 §5 discrimination: read at most
+ * NOT_FOUND_BODY_CAP_BYTES and parse it as JSON.
  * Oversized or unparseable bodies resolve null — the caller keeps the
  * current conservative outcome (domain-missing throw) instead of trusting a
- * body it never needed in full. (The pre-existing 503 and 2xx envelope reads
- * stay unbounded — out of scope for this fix.)
+ * body it never needed in full. (The 503 and 2xx envelope reads stay
+ * unbounded.)
  */
 async function readNotFoundBody(response: Response): Promise<{ code?: string } | null> {
   try {
@@ -257,8 +255,8 @@ async function readNotFoundBody(response: Response): Promise<{ code?: string } |
  * HTTP carrier with the per-instance proxy prefix injected before every api
  * path. One unary `call(endpoint, payload, signal)` posts the new wire
  * envelope to `/api/i/<id>/api/<endpoint>`; the namespaced accessors below
- * mirror the retired IApiClient property shape so the wrapper functions keep
- * their `client.<namespace>.<method>` call sites.
+ * expose the `client.<namespace>.<method>` call sites the wrapper functions
+ * use.
  */
 class InstanceApiClient {
   private readonly basePath: string
@@ -303,7 +301,7 @@ class InstanceApiClient {
     // plane's own unknown-instance answer is a chamber host domain the
     // runtime tree does not mount (missing/old host package) — a distinct
     // error class so the UI can project the honest recovery message. The
-    // body is read BOUNDED (review follow-up F10): the discrimination only
+    // body is read BOUNDED: the discrimination only
     // needs the tiny `instance_not_found` code JSON, so an oversized or
     // unparseable body resolves null and keeps this conservative outcome
     // (domain-missing throw).
@@ -369,7 +367,7 @@ class InstanceApiClient {
   }
 
   /**
-   * session-controller unary Remotes (v0.1.2-alpha.1 `@Remote` names). Every
+   * session-controller unary Remotes (`@Remote` names). Every
    * call wraps the request object in the wire `{args:{...}}` envelope — the
    * host gateway rejects any other payload shape. The args keys must be the
    * @Remote METHOD PARAMETER names — session-controller's `list(_request)`
@@ -396,8 +394,8 @@ class InstanceApiClient {
   }
 
   /**
-   * workspace-controller unary Remotes. NOTE: `workspace/list` was deleted
-   * upstream — the new workspace face is the `workspace/follow` stream.
+   * workspace-controller unary Remotes. NOTE: `workspace/list` does not exist
+   * upstream — the workspace face is the `workspace/follow` stream.
    */
   readonly workspace = {
     create: (payload: unknown, signal?: AbortSignal): Promise<UnaryResult<any>> =>
@@ -425,11 +423,11 @@ class InstanceApiClient {
   /**
    * archiveCleanup unary Remotes (design 24 chamber host domain). purge takes
    * the explicit
-   * `sessionIds` deletion subset and the client's `protectSessionIds`
-   * (2026-09 protection amendment): the ids a client may be DISPLAYING, which
+   * `sessionIds` deletion subset and the client's `protectSessionIds` —
+   * the ids a client may be DISPLAYING, which
    * the host must never cut — a matching subtree is skipped whole and reported
    * in `skippedProtected`. Protection is authoritative over `force`. The
-   * OPTIONAL `force` flag (2026-09 revision, design 24 §3) additionally
+   * OPTIONAL `force` flag (design 24 §3) additionally
    * deletes subtrees that are merely LOADED in the host process; a RUNNING
    * member is still refused. All three carry the domain-missing 404 opt-in;
    * purge rides the long call budget (the host keeps running past a client
@@ -592,8 +590,8 @@ function titleOf(summary: any): string | undefined {
 
 /**
  * session/list unary pull (the bounded fallback for unmounted sources).
- * v0.1.2-alpha.1 deleted the unary `workspace.list` upstream (the new
- * workspace face is the `workspace/follow` stream, which a unary HTTP client
+ * The unary `workspace.list` does not exist upstream (the workspace face is
+ * the `workspace/follow` stream, which a unary HTTP client
  * cannot open), so the fallback derives workspace groups from each session's
  * `cwd` fact instead: one synthetic workspace row per canonical cwd, titled
  * by basename — the same cwd-derived grouping semantics the official
@@ -607,8 +605,7 @@ function titleOf(summary: any): string | undefined {
  * false`) and archived sessions resurface in the list. Consumers must never
  * read the empty set as "nothing archived": the archive manager shows an
  * honest degraded branch with NO destructive action (no list to select;
- * whole-set purge was retired with the standalone delete-all — 2026 user
- * decision, design 24 §6) on snapshots
+ * there is no whole-set purge path — design 24 §6) on snapshots
  * that are not archive-set-authoritative. Acceptable only while the fallback
  * serves genuinely unmounted sources or the pre-baseline window; the mounted
  * path (which carries the archive set) must never be replaced by this
@@ -636,7 +633,7 @@ export async function fetchInstanceSnapshot(client: InstanceApiClient): Promise<
     const title = titleOf(summary)
     if (title !== undefined) row.title = title
     if (typeof summary.cwd === 'string' && summary.cwd !== '') row.cwd = summary.cwd
-    // Official display label (I3). The unary wire has no `displayTitle`, so the
+    // Official display label. The unary wire has no `displayTitle`, so the
     // ladder is applied here, where the cwd is in hand: title → directory name
     // → session id. A row whose title the host could not read (a predecessor
     // cache record) therefore renders its project directory name instead of
@@ -647,7 +644,7 @@ export async function fetchInstanceSnapshot(client: InstanceApiClient): Promise<
       sessionId: row.sessionId,
     })
     if (typeof summary.parentSessionId === 'string') row.parentSessionId = summary.parentSessionId
-    // 2026-09-11 upstream-alignment T7: the unary wire row publishes the
+    // The unary wire row publishes the
     // registered projections (`projections.values`, the very block `titleOf`
     // above reads) — the schedule fact rides it, so an unmounted source's
     // fallback view reports the marker exactly like the mounted store path
@@ -691,7 +688,7 @@ export async function fetchInstanceSnapshot(client: InstanceApiClient): Promise<
   return { workspaces, sessions, archivedSessionIds: [], archiveSetKnown: false }
 }
 
-// `basenameOf` MOVED to shared/derive.ts (the display-title resolver needs it,
+// `basenameOf` lives in shared/derive.ts (the display-title resolver needs it,
 // and a value import in this direction would be a runtime cycle). It is
 // re-exported at the top of this module, so the workspace-echo row builder and
 // every existing importer keep their import site.
@@ -862,12 +859,12 @@ export interface ArchiveCleanupPurgeResult {
   readonly clearedOrphanMembers?: number
   /** Roots whose CONTENT this run deleted but whose archived membership the
    *  host KEPT, because the session is still resident in the instance process
-   *  (design 24 §4 step 9, 2026-13 resident-retention revision). The host's
+   *  (design 24 §4 step 9). The host's
    *  session list is live-preferred, so such a row keeps being served; the
    *  archived set is the only thing hiding it, and clearing the membership
-   *  there is exactly what made a just-deleted session reappear in the
-   *  workspace as an ordinary row. These rows stay hidden until that
-   *  instance's dsh restarts (then the row is gone and a later purge's orphan
+   *  there would make a just-deleted session reappear in the workspace as an
+   *  ordinary row. These rows stay hidden until that instance's dsh restarts
+   *  (then the row is gone and a later purge's orphan
    *  sweep converges the content-free member); the manager labels them so the
    *  user can tell "deleted, waiting for the instance restart" from "not
    *  deleted". Absent on older hosts / when zero. */
@@ -886,7 +883,7 @@ function countField(value: unknown, key: string): number {
  * turned into a fabricated id (this list only drives row LABELS; the counts
  * above stay the authoritative outcome), duplicates collapse (the list's
  * consumers are a count and a label SET), and an empty list is reported as
- * absent so callers keep the historical shape.
+ * absent.
  * @param value - the decoded domain value object.
  * @param key - the result field name.
  * @returns the non-empty, de-duplicated id list, or undefined when
@@ -960,14 +957,14 @@ function decodeDomainResult<T>(result: UnaryResult<any>): { ok: true; value: T }
 }
 
 /**
- * archiveCleanup/purge wrapper (design 24 §5, 2026-09 protection amendment):
+ * archiveCleanup/purge wrapper (design 24 §5):
  * long-budget destructive run over an EXPLICIT archived-session selection.
- * `sessionIds` is required — the manager has no whole-set path, so the legacy
- * zero-arg shape has no caller and is not reachable from this client.
+ * `sessionIds` is required — the manager has no whole-set path, so this client
+ * exposes no zero-arg shape.
  * `protectSessionIds` carries the ids this client may be DISPLAYING: the host
  * skips any tree whose closure contains one (reported in `skippedProtected`),
- * which is what makes deletion safe without the retired "I must be able to
- * prove my current session" pre-flight refusal. `force` is ALWAYS sent: the
+ * which is what makes deletion safe without a "I must be able to prove my
+ * current session" pre-flight refusal. `force` is ALWAYS sent: the
  * force path IS the feature — an archived session may still be loaded (or
  * awaiting a question/permission) and must stay deletable after the caller's
  * cancel pass. A RUNNING member is refused by the host either way.
@@ -1025,14 +1022,14 @@ export async function purgeArchivedSessions(
  * needs: the running bits AND the SUBAGENT-origin parent edges of the same
  * rows.
  *
- * WHY lineage (2026-09 P1 closure round, design 24 §5): the host skips an
+ * WHY lineage (design 24 §5): the host skips an
  * archived TREE whose any member is running, and subagent-origin rows are
  * never listed by the archive manager — a running descendant is therefore
  * invisible in the UI and, with roots-only cancels, permanently undeletable.
  * `parents` is child → parent; a row without a non-empty `parentSessionId`
  * contributes NO edge, so a caller can never invent a parent chain.
  *
- * SUBAGENT EDGES ONLY (2026-09 fail-open fix): the official row carries
+ * SUBAGENT EDGES ONLY: the official row carries
  * `origin: 'subagent'` for DELEGATION children and NOTHING for forks —
  * upstream `session/fork` records `parentSessionId` with no origin. The purge
  * tree (design 24) follows subagent-origin descendants only, so a fork child
@@ -1104,7 +1101,7 @@ export async function fetchSessionRunningLineage(client: InstanceApiClient): Pro
  * over the SAME read: every link has a row, and the chain ends at a row that
  * is not subagent-origin (a top-level session or a fork edge).
  *
- * WHY (2026-09 fail-closed round, design 24 §5): a PARTIALLY incomplete
+ * WHY (design 24 §5): a PARTIALLY incomplete
  * list — the vendor skips cwd-less cold records, and a subagent inherits its
  * parent's cwd only when the parent has one — silently drops an intermediate
  * ancestor's edge. The client would then mis-scope the CANCEL pass while the
@@ -1162,8 +1159,8 @@ export interface StopSessionsResult {
 /**
  * parent → children index over the lineage's SUBAGENT-origin edges. Built once
  * per pass (`stopSessionsForPurge`) and shared by every closure walk of that
- * pass: the previous implementation re-scanned the parent map per dequeued id
- * (O(V·E) per root), which an 800-root selection noticed.
+ * pass: rescanning the parent map per dequeued id is O(V·E) per root, which an
+ * 800-root selection notices.
  */
 export function sessionChildrenIndex(
   lineage: SessionRunningLineage | null,
@@ -1266,7 +1263,7 @@ async function mapBounded<T, R>(
  * content, while a RUNNING member is still refused host-side (so this pass is
  * a best-effort accelerator, never the safety boundary).
  *
- * CLOSURE (2026-09 P1 round): the host skips an archived tree whose ANY member
+ * CLOSURE: the host skips an archived tree whose ANY member
  * runs, and a running subagent descendant has no row in the manager — so the
  * pass cancels the running members of the closure of the requested roots
  * (roots + all transitive SUBAGENT-origin descendants from the same
@@ -1274,12 +1271,12 @@ async function mapBounded<T, R>(
  * Without lineage facts (rows without a subagent-origin edge) the closure
  * degrades to the roots exactly as before — a parent is never guessed.
  *
- * ADVISORY (2026-09 fix): a failed initial read must NOT abort the delete
+ * ADVISORY: a failed initial read must NOT abort the delete
  * (the purge is the operation the user asked for; the stop pass only improves
  * its outcome). The pass then reports `unavailable: true` and the caller
  * continues with the force purge plus an honest note.
  *
- * CANCEL SCOPE (2026-09 protection amendment): every closure member is asked
+ * CANCEL SCOPE: every closure member is asked
  * to cancel — not only the ids the list reports as running. An agent in a
  * MAINTENANCE phase (compaction/schedule) reports `idle` to every observer
  * (vendor agent loop: only `running`/`maintenance` phases differ, and
@@ -1291,7 +1288,7 @@ async function mapBounded<T, R>(
  * swallowed) — a member with no list row is cold and its `session/not-found`
  * is the documented no-op.
  *
- * EXCLUSION (2026-09 fix): `exclude` ids (the live current session) are never
+ * EXCLUSION: `exclude` ids (the live current session) are never
  * cancelled, and a requested root whose closure contains one is returned in
  * `refusedRoots` (advisory bookkeeping — the HOST is authoritative for the
  * protection via `protectSessionIds`): cancelling a tree the host will skip
@@ -1329,7 +1326,7 @@ export async function stopSessionsForPurge(
      *  root's closure keeps that root OUT OF THE CANCEL PASS (design 24 §5;
      *  see `refusedRoots` — the purge itself still covers it). */
     readonly exclude?: readonly string[]
-    /** Fail-closed CANCEL gate (2026-09 amendment): when true and an excluded
+    /** Fail-closed CANCEL gate: when true and an excluded
      *  id is present, the pass cancels NOTHING unless every excluded id's
      *  upward subagent chain resolves completely over the same read. A partial
      *  lineage cannot prove which selected roots contain the viewed session,
@@ -1444,8 +1441,8 @@ export async function stopSessionsForPurge(
 }
 
 /**
- * ARCHIVE-TIME TERMINATION (2026-09 protection amendment, user motion
- * 「已归档的对话应该终止」): stop one just-archived session together with its
+ * ARCHIVE-TIME TERMINATION (the 「已归档的对话应该终止」 semantics): stop one
+ * just-archived session together with its
  * whole subagent-origin subtree. Archiving clears the current selection when
  * the archived session was the one on screen (vendor ui-workspace
  * `clearArchivedCurrent`), which leaves a turn that is waiting on a question or

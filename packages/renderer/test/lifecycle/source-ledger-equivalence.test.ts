@@ -1,13 +1,13 @@
 /**
- * B2 characterization: the shared source reducer must reproduce the App's
- * hidden-window ledger exactly before the ledger is migrated onto it.
+ * The shared source reducer's hidden-window ledger: it must reproduce the App's
+ * ledger exactly.
  *
  * The ledger (App.tsx's hiddenSinceRef) has four write sites and one read, and its
  * semantics are NOT obvious from the reducer's field names: 'painted' must clear
  * the window, 'mounted' must start it empty, keys must die with the mount, and a
  * view that is merely off screen must keep its original start time (so a
  * one-frame disappearance cannot reset the hold). This test pins each one against
- * the legacy behaviour, so the migration is an equivalence, not a rewrite.
+ * the App's ledger.
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -85,9 +85,9 @@ test('retryForgotten drops the self-heal mark and nothing else', () => {
 })
 
 test('windowReset closes the window WITHOUT touching the suppression', () => {
-  // The migration path: the App's paint write-point emits windowReset, because the
-  // legacy ledger clears hiddenSinceRef on paint but keeps prewarmSuppressedRef
-  // until an explicit user action / registry removal.
+  // The App's paint write-point emits windowReset: hiddenSinceRef is cleared on
+  // paint while prewarmSuppressedRef is kept until an explicit user action /
+  // registry removal.
   const state = dispatch(initialSourceLifecycle({ sourceId: 'v1', fingerprint: 'fp1' }), [
     { kind: 'mounted', at: 0 },
     { kind: 'bootSettled', outcome: 'booted' },
@@ -107,12 +107,10 @@ test('windowReset closes the window WITHOUT touching the suppression', () => {
 })
 
 test('DIVERGENCE (measured): painted also clears the retention suppression', () => {
-  // The legacy ledger splits these: hiddenSinceRef is cleared by `painted`, while
+  // The App's ledger splits these: hiddenSinceRef is cleared by `painted`, while
   // prewarmSuppressedRef is cleared ONLY by a user action / registry removal
-  // (App.tsx's click path). The reducer couples them. Migrating hiddenSince today
-  // would therefore also un-suppress a reclaimed view the moment it is painted -
-  // a behavior change with no test covering it. Recorded here so the migration
-  // either splits the event or the coupling is registered as BEHAVIOR_CHANGES.
+  // (App.tsx's click path). The reducer couples them: `painted` also un-suppresses
+  // a reclaimed view the moment it is painted.
   const reclaimedThenPainted = dispatch(initialSourceLifecycle({ sourceId: 'v1', fingerprint: 'fp1' }), [
     { kind: 'mounted', at: 0 },
     { kind: 'bootSettled', outcome: 'booted' },

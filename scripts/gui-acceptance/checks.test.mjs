@@ -27,7 +27,7 @@ import {
 import {
   CLICK_STASHED_BUTTON, VEIL_LAYERING_PROBE_INSTALL, VEIL_LAYERING_PROBE_READ, clickButtonAt,
 } from './walkthrough.mjs'
-// Native flavor mode helpers (G20): the native walkthrough drives the sidecar assembly the packaged Swift shell spawns (WKWebView has no CDP).
+// Native flavor mode helpers: the native walkthrough drives the sidecar assembly the packaged Swift shell spawns (WKWebView has no CDP).
 import {
   nativePreflight,
   nativeSidecarArgs,
@@ -370,8 +370,7 @@ test('marker contract: RowHoverCard.tsx stamps exactly the attribute names the w
   const source = readFileSync(new URL('../../packages/dsh-chamber-client-ui-sidebar/src/client/RowHoverCard.tsx', import.meta.url), 'utf8')
   // Counting and row selection are ONLY as good as these exact names: the portaled card `<div>`
   // stamps `data-chamber-hovercard` and the hover-target wrapper `<span>` stamps
-  // `data-chamber-hovercard-anchor` (the pair the shell pins; the 2026-12 ruling removed the
-  // former source-text wiring lock).
+  // `data-chamber-hovercard-anchor` (the pair the shell pins).
   assert.ok(source.includes('data-chamber-hovercard=""'), 'the card must stamp data-chamber-hovercard')
   assert.ok(source.includes('data-chamber-hovercard-anchor=""'), 'the anchor must stamp data-chamber-hovercard-anchor')
   const markers = [...new Set([...source.matchAll(/data-chamber-hovercard[\w-]*/g)].map(match => match[0]))]
@@ -467,9 +466,9 @@ test('walkthrough selection: card-less bucket excluded, pre-fix bundle detected,
   }).ok, false, "another row's card is not this row's card")
 })
 /** W-4 / W-4a regression fixtures (the descriptors a real --dev instance produced): the rail toggle
- *  carries NO aria-expanded (only a label that flips), so the old "first button[aria-expanded] in the
- *  left half" selector took the SOURCE-SECTION fold switch and the leg passed without the sidebar
- *  moving — hence the structural pick below. */
+ *  carries NO aria-expanded (only a label that flips), so a "first button[aria-expanded] in the
+ *  left half" selector would take the SOURCE-SECTION fold switch and the leg would pass without the
+ *  sidebar moving — hence the structural pick below. */
 const RAIL_EXPANDED_BUTTONS = [
   { index: 0, ariaLabel: '新建会话', left: 12, top: 18, width: 120, height: 28, inDialog: false },
   { index: 1, ariaLabel: '收起侧边栏', left: 240, top: 22, width: 28, height: 28, inDialog: false },
@@ -489,7 +488,7 @@ test('rail toggle locator: structural pick, never the source fold or another dis
   assert.equal(expanded.ok, true)
   assert.equal(expanded.picked.index, 1, 'the sidebar header icon button is the rail toggle')
   assert.equal(expanded.picked.ariaLabel, '收起侧边栏')
-  // The exact defect: these two candidates carry aria-expanded and were picked first before the structural pick.
+  // The exact defect: these two candidates carry aria-expanded and a naive pick takes them first.
   assert.notEqual(expanded.picked.index, 3, 'the source-section fold is not the rail toggle')
   assert.notEqual(expanded.picked.index, 9, 'the composer disclosure is not the rail toggle')
   // The rail's new-session button (36×36 at top≈66, measured) must stay OUT of the candidate set:
@@ -556,7 +555,7 @@ test('rail toggle verdict: a click that does not move [data-sidebar-collapsed] i
   })
   assert.equal(good.ok, true)
   assert.match(good.evidence, /\[data-sidebar-collapsed\] false → true → false/)
-  // The old selector's victim: clicking the source fold toggles its own aria-expanded but leaves the frame attribute untouched.
+  // A source-fold click toggles its own aria-expanded but leaves the frame attribute untouched.
   const misTarget = railToggleVerdict({
     pick,
     identity: RAIL_EXPANDED_BUTTONS[2],
@@ -881,7 +880,7 @@ test('view prefs fingerprint: only the persisted fields decide "did this leg wri
   assert.equal(viewPrefsFingerprint({ present: false }), 'absent')
   assert.equal(viewPrefsDelta(null, base), null, 'no snapshot taken ⇒ no claim made')
 })
-// Native flavor mode (native.mjs; G20)
+// Native flavor mode (native.mjs)
 
 test('native sidecar preflight: a missing or partial assembly is a named loud skip, a complete one passes', () => {
   const missing = nativePreflight({ sidecarDir: '/nonexistent/native-sidecar' })
@@ -1068,7 +1067,7 @@ function probeNodes({ hit, veilIn = 'active' }) {
     document: {
       querySelector: selector => {
         if (selector === '.instance-view:not(.instance-hidden):not(.instance-pending)') return activeView
-        // 旧的全文档口径（回归探测）：隐藏视图的遮罩照样命中。
+        // 全文档口径的回归探测：隐藏视图的遮罩照样命中。
         if (selector === '.instance-loading') return veil
         if (anchors[selector] !== undefined) return anchors[selector]
         return null
@@ -1083,7 +1082,7 @@ function runVeilProbe(hit, options = {}) {
   const win = { innerWidth: 1000, innerHeight: 800 }
   let queued = 0
   const raf = callback => { if (queued >= 12) return 0; queued += 1; callback(); return queued }
-  // getComputedStyle 作为形参注入（2026-12 二轮 review）：Node 里它不存在，不注入的话
+  // getComputedStyle 作为形参注入：Node 里它不存在，不注入的话
   // 探针的"computed hidden 不算可见遮罩"分支永远零覆盖。
   const install = new Function('window', 'document', 'requestAnimationFrame', 'Date', 'getComputedStyle', 'return (' + VEIL_LAYERING_PROBE_INSTALL + ')')
   const read = new Function('window', 'document', 'return (' + VEIL_LAYERING_PROBE_READ + ')')
@@ -1112,9 +1111,9 @@ test('veil probe: real expressions classify veil / tenant / portal hits', () => 
 })
 
 /**
- * 2026-12 review MAJOR 的回归锁：后台预热/收割视图（.instance-pending，只
+ * 回归锁：后台预热/收割视图（.instance-pending，只
  * visibility:hidden）的遮罩仍在 DOM 里；若探针按全文档口径取遮罩、却把活动视图的
- * 锚点配上去，健康构建会被判成"租客画在遮罩之上"的假 FAIL。修正后只认活动视图
+ * 锚点配上去，健康构建会被判成"租客画在遮罩之上"的假 FAIL。探针只认活动视图
  * 作用域：隐藏视图的遮罩不构成"遮罩可见帧" ⇒ 本腿记 INFO 而不是红。
  */
 test('veil probe: a background view\'s veil is not paired with the active view', () => {
@@ -1139,9 +1138,9 @@ test('veil probe: a computed-hidden veil is not a visible veil frame', () => {
 })
 
 /**
- * I15（plan §10）：严格旗标的**归属必须可机器校验**——真正会切换的两个腿各带自己的
+ * 严格旗标的**归属必须可机器校验**——真正会切换的两个腿各带自己的
  * `--require-switch`，而走查（walkthrough）没有切换腿，因此**不得**给它加同名旗标：
- * 一个「看门却不管事」的旗标正是 I15 要消灭的假绿来源（看着严格，实际什么都没门住）。
+ * 一个「看门却不管事」的旗标正是这条纪律要消灭的假绿来源（看着严格，实际什么都没门住）。
  */
 test('I15: the switch legs own --require-switch and the walkthrough declares none', () => {
   const root = fileURLToPath(new URL('../..', import.meta.url))

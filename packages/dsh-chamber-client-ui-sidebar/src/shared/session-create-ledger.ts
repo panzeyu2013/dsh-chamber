@@ -1,7 +1,7 @@
 /**
- * Session-creation attribution ledger（仪表 I10，plan §8-R16/§10 补三条，R23）。
+ * Session-creation attribution ledger。
  *
- * WHY：R16 的判据是「多源启动/切换**新增 blank = 0**」，但在没有归因之前这条判据
+ * WHY：判据是「多源启动/切换**新增 blank = 0**」，但在没有归因之前这条判据
  * **不可测**——分不清一个 blank 是冷 boot 的交接、预热兜底，还是用户自己点了"+"。
  * 本模块把每次应用内会话创建（含 blank）按**触发路径标签**记账，供验收脚本按标签
  * 聚合；判据第二半是「**无标签外来源**」，即 origin === 'unknown' 必须为 0。
@@ -11,7 +11,7 @@
  */
 import { assertSingletonModule } from './singleton.ts'
 
-/** 触发路径标签（plan §10-I10：boot 队列 / 预热 / 用户；unknown 仅作仪表覆盖率的失败信号）。 */
+/** 触发路径标签（boot 队列 / 预热 / 用户；unknown 仅作仪表覆盖率的失败信号）。 */
 export type SessionCreationOrigin = 'user' | 'boot-handoff' | 'boot-fallback' | 'prewarm' | 'unknown'
 
 export const SESSION_CREATION_ORIGINS: readonly SessionCreationOrigin[] = Object.freeze([
@@ -79,13 +79,13 @@ export function createSessionCreationLedger(options: { limit?: number } = {}) {
     entries(): readonly SessionCreationLedgerEntry[] {
       return [...entries]
     },
-    /** 仪表覆盖率：未经标签的创建数（I10 判据第二半必须为 0）。 */
+    /** 仪表覆盖率：未经标签的创建数（判据第二半必须为 0）。 */
     unlabeled(): number {
       let count = 0
       for (const counters of perSource.values()) count += counters.byOrigin.unknown
       return count
     },
-    /** 按标签聚合的 blank 计数（R16 判据的输入）。 */
+    /** 按标签聚合的 blank 计数（新增 blank = 0 判据的输入）。 */
     blankByOrigin(): Record<SessionCreationOrigin, number> {
       const total = emptyCounters().blankByOrigin
       for (const counters of perSource.values()) {

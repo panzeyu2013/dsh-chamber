@@ -1,18 +1,18 @@
 /**
- * Chamber sidebar per-source section (design 05 §2; chamber rounds 06/08/24):
+ * Chamber sidebar per-source section (design 05 §2):
  * ONE server's subtree of the multi-source session list — the source header
  * (connection dot/spinner + hover status, server fold, sort menu, git alert,
  * add-workspace, per-source search capsule with results, design-24
  * archive-cleanup manager), the workspace groups and the session rows with their
- * in-source drag ordering and ghost rows. Extracted from the SidebarRoot
- * shell; cross-cutting state/actions are consumed through useSidebarSection()
+ * in-source drag ordering and ghost rows.
+ * Cross-cutting state/actions are consumed through useSidebarSection()
  * (sidebar-context.ts — the shell owns every store/effect/commit below and
  * provides ONE context value per render). This file owns the per-section
  * structure: the search-state mirror (shared controller), the capsule DOM
  * refs, the outside-click collapse effect, the workspace/session composition
  * and the sort-menu anchor-cleanup. The header, search surface, session rows
- * and the pure helpers were split into the sibling ServerSection* /
- * server-section-* modules (moved verbatim).
+ * and the pure helpers live in the sibling ServerSection* /
+ * server-section-* modules.
  */
 import { Fragment, useEffect, useRef, useState } from 'react'
 import clsx from 'clsx'
@@ -99,7 +99,7 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
   const searchButton = useRef<HTMLButtonElement | null>(null)
 
   /**
-   * R8 意图预热（blueprint §4.1）：**本来源头部** hover 的 120ms dwell 机器。
+   * 意图预热：**本来源头部** hover 的 120ms dwell 机器。
    * 一台机器一个来源；首次指针进入才创建（非 hover 路径零成本）。`onIntent`
    * 只经 chamberBridge 发一条单向请求——队列/预算/抑制纪律全在 App 消费端，
    * 这一侧只回答"指针真的在这里停留了吗"（shared/prewarm-intent.ts 头注）。
@@ -120,7 +120,7 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
     prewarmIntentRef.current = null
   }, [])
 
-  // chamber (2026 性能整改 B2)：会话行渲染窗口的"已展开"标记——每工作区一
+  // chamber：会话行渲染窗口的"已展开"标记——每工作区一
   // 个本地浏览态布尔（不持久化、不跨 ctx 同步；窗口只在渲染层，见
   // shared/session-row-window.ts）。
   const [sessionRowsExpanded, setSessionRowsExpanded] = useState<Record<string, boolean>>({})
@@ -157,23 +157,22 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
               const query = sanitizeSearchQuery(search?.query ?? '')
               // 搜索胶囊的挂载条件含 `server.connected`：托管 dsh 停机时胶囊会被
               // 卸载，焦点随之掉到 body（键盘用户迷路）。这里把焦点交还给折叠
-              // 按钮——该头部唯一恒在的键盘入口（2026-12 复查 MINOR）。
+              // 按钮——该头部唯一恒在的键盘入口。
               const searchCapsuleMounted = server.connected
                 && viewPrefs.sourceFolded?.[server.id] !== true
                 && search?.expanded === true
               // 展开后聚焦输入框：挂载前 ref 为空，只能等这一轮提交后再聚焦
-              // （2026-12 复查 MINOR）。
               if (searchCapsuleMounted && focusSearchOnMount.current) {
                 focusSearchOnMount.current = false
                 queueMicrotask(() => searchInput.current?.focus())
               }
               useEffect(() => {
                 // 仅当焦点确实落在胶囊里才回交给折叠按钮：任何断连都不该把用户
-                // 从别处（会话行等）抢回头部（2026-12 复查 MINOR）。判定必须发生
+                // 从别处（会话行等）抢回头部。判定必须发生
                 // 在卸载之后，此时 activeElement 已回落到 body——所以用卸载前
                 // 记录的"胶囊是否持有焦点"。
                 // 断连会让搜索状态在同一批里被清掉（search-state 只保留已连接来源），
-                // 所以判定条件必须是"连接事实"而不是 expanded（2026-12 复查 MINOR）；
+                // 所以判定条件必须是"连接事实"而不是 expanded；
                 // 折叠路径 connected 仍为 true，不会误抢焦点。
                 if (prevSearchCapsuleMounted.current && !searchCapsuleMounted
                   && capsuleHeldFocus.current && server.connected !== true) {
@@ -391,7 +390,7 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                 <>
                 {/* chamber (06 §1.2): the search capsule row beneath the header.
                     Escape clears and collapses; the clear button does the same. */}
-                {/* 断连/托管停机的源不渲染搜索胶囊（2026-12 复查 MINOR）：结果
+                {/* 断连/托管停机的源不渲染搜索胶囊：结果
                     与状态分支本就被 connected 门挡住，留一个活输入框是键盘死路。 */}
                 {server.connected && search?.expanded === true && (
                   <ServerSectionSearchCapsule
@@ -423,13 +422,13 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                       session child that never surfaced while the runtime was
                       wedged) — the row slot cannot render them, so they
                       surface above the list, outside the tree (same
-                      discipline as the git alert above). Known bound (F1
-                      review, 非回归): a failure whose session IS in the
+                      discipline as the git alert above). Known bound:
+                      a failure whose session IS in the
                       projection but whose only render anchor vanished — a
                       worktree group hidden behind a folded git MAIN workspace,
                       or an active search that no longer matches the session —
-                      stays invisible for the 10s window (pre-F1 the inline
-                      slot was suppressed identically). */}
+                      stays invisible for the 10s window (the inline
+                      slot is suppressed identically). */}
                   {serverOpenFailures.filter(failure => !visibleIds.has(failure.sessionId)).map(failure => (
                     <div key={failure.sessionId} className={cc.rowError} role="alert">{failure.message}</div>
                   ))}
@@ -438,7 +437,7 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                     // The browse list is one tree (official .list role="tree");
                     // an active query replaces it with the search-results tree
                     // (own role below), and the fetch-error branch renders no
-                    // tree at all. 2026-09-11 upstream-alignment T7: the browse
+                    // tree at all. The browse
                     // tree carries an accessible name like its search-results
                     // sibling — upstream names this tree with `section.sessions`
                     // (vendor ui-workspace WorkspaceBrowser.tsx:457-458).
@@ -543,7 +542,7 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                             (count, session) => count + (isGhostSession(session) ? 0 : 1),
                             0,
                           )
-                          // chamber (2026 性能整改 B2)：会话行渲染窗口——行
+                          // chamber：会话行渲染窗口——行
                           // DOM 不随会话数无界膨胀。组头徽标（上方
                           // visibleSessionCount）与一切数据面操作仍用全量
                           // sessions；这里只决定渲染行数与展开条文案。当前
@@ -562,14 +561,14 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                           const visibleSessions = sessionWindow.hiddenCount === 0
                             ? sessions
                             : sessions.slice(0, sessionWindow.renderCount)
-                          // 展开条文案按「可见（非 ghost）会话」计（2026 评审
-                          // 修复）：sessions 含短暂 blank-ghost 占位（≤
+                          // 展开条文案按「可见（非 ghost）会话」计：
+                          // sessions 含短暂 blank-ghost 占位（≤
                           // BLANK_GHOST_GRACE_MS，渲染期跳过），直接复用窗口
                           // hiddenCount 会让「还有 N 个会话」在幽灵期内与组头
                           // 徽标（visibleSessionCount 已去 ghost）漂移 ±幽灵数。
                           // 窗口切片仍保留 ghost 行（占位防回流，见上），仅
                           // 对外文案减去窗口内的 ghost 数。
-                          // 2026-09-11 upstream-alignment T11: the disclosure's
+                          // The disclosure's
                           // OWN window ignores the expansion flag (upstream's
                           // collapsedSessionRows is expansion-independent,
                           // vendor ui-workspace WorkspaceBrowser.tsx:46-57), so
@@ -752,7 +751,7 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                                     {workspace.ungrouped ? t('list.ungrouped') : workspace.title}
                                   </span>
                                   {getWorkspaceGitFlag(server.id, workspace.id)?.orphaned === true && (
-                                    // Plan A: the workspace's path no longer exists
+                                    // The workspace's path no longer exists
                                     // (externally deleted worktree left a ghost).
                                     // The badge doubles as the cleanup entry — an
                                     // orphaned WORKTREE keeps its worktree row
@@ -801,7 +800,7 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                                       <button
                                         type="button"
                                         className={cc.actionIcon}
-                                        // 2026-09-11 upstream-alignment T5: the row
+                                        // The row
                                         // name rides the accessible name (upstream
                                         // `actions.newSession.aria`, vendor
                                         // ui-workspace Rows.tsx:179) — a bare
@@ -818,12 +817,10 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                                       </button>
                                       {!isWorktree && (
                                       <Menu
-                                        // 2026-09 menu-density decision (P2-A, A-2):
-                                        // `closeOnPointerLeave` stays (upstream
-                                        // behaviour, vendor ui-workspace
-                                        // Rows.tsx:174), but the variant returns to
-                                        // the v0.2.4 `compact` — T12 removed it and
-                                        // the rows grew from 26px/12px to the
+                                        // `closeOnPointerLeave` is upstream
+                                        // behaviour (vendor ui-workspace
+                                        // Rows.tsx:174); `compact` keeps the rows
+                                        // at the 26px/12px density instead of the
                                         // official default 40px/14px.
                                         compact
                                         portal
@@ -853,7 +850,7 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                                           {
                                             id: 'delete',
                                             // Upstream's workspace menu entry copy
-                                            // (T7 wording: `delete.workspace`,
+                                            // (`delete.workspace`,
                                             // vendor ui-workspace Rows.tsx:131).
                                             label: t('delete.workspace'),
                                             danger: true,
@@ -986,7 +983,7 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                                 <button
                                   type="button"
                                   className={cc.sessionRowsMore}
-                                  // 2026-09-11 upstream-alignment T11: a real
+                                  // A real
                                   // two-way disclosure (upstream
                                   // WorkspaceBrowser.tsx:598-609) — the control
                                   // reports its state and collapses again.

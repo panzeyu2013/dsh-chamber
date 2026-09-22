@@ -2,10 +2,10 @@
 //  NativeText.swift
 //  DSHChamber
 //
-//  native-shell 本地化席位（S1；macOS 原生壳用户可见文案的键表与取值面）。
+//  native-shell 本地化席位（macOS 原生壳用户可见文案的键表与取值面）。
 //
 //  设计要点（与方案一致）：
-//   - 键名 = NativeTextKey.rawValue（点分命名空间），S2 按同一张表写
+//   - 键名 = NativeTextKey.rawValue（点分命名空间），按同一张表写
 //     Resources/<lang>.lproj/Localizable.strings（zh-Hans / en），键名逐字一致；
 //   - 取值顺序：Bundle.main（.app 的 Contents/Resources）→ SwiftPM 资源包
 //     （dev swift run / swift test 的 DSHChamber_DSHChamber.bundle，native 扁平
@@ -14,7 +14,7 @@
 //   - 页面语言与系统语言不一致时由 ShellLanguagePolicy 给出 AppleLanguages
 //     覆盖值，本文件只负责按当前 bundle 偏好语言取值。
 //
-//  Key → 使用点（S1 负责文件）：
+//  Key → 使用点：
 //   sidecar.lockBusy / sidecar.checkConfig / sidecar.startupExit /
 //   sidecar.portInUseSuffix / sidecar.portInUseNoAddress /
 //   sidecar.detailSuffix / sidecar.hintSuffix / sidecar.genericSuffix
@@ -31,15 +31,14 @@
 //     → BridgeClient（生命周期过渡、进程状态、未决请求作废与写帧/违约兜底）
 //   frame.tooLarge / frame.responseMissingError → FrameCodec
 //     （FrameCodecError.errorDescription：%d 分别为字节上限/实际字节与帧 id）
-//   bridge.errorFallback →（2026-12 单源化后已无代码引用：错误文案走
-//     AnyCodable 字面量出口，恒可序列化，原三级兜底删除）——键表冻结，
-//     保留待下一次键表评审再决定删表
+//   bridge.errorFallback →（当前无代码引用：错误文案走 AnyCodable 字面量
+//     出口，恒可序列化）——键表冻结，保留待下一次键表评审再决定删表
 //   resources.explicitNodeMissing / resources.packagedNodeMissing /
 //   resources.pathNodeMissing → ChamberResources.PathResolutionError（node 解析 fatal）
 //   updater.feedMustBeHTTPS / updater.publicKeyInvalid → AppUpdater
 //     （装配期配置形状非法；native-updater-misconfigured: 前缀由调用方拼）
 //   quit.confirmDetail / quit.reasonsSeparator / quit.unavailable* /
-//   quit.waitButton / quit.forceButton → QuitCoordinator（确认正文、S-17 不可得框）
+//   quit.waitButton / quit.forceButton → QuitCoordinator（确认正文、不可得框）
 //   renderer.crashTitle / renderer.crashDetail → MainWindowController（恢复放弃弹窗）
 //   failure.title / failure.heading / failure.cpLabel / failure.sidecarLabel /
 //   failure.retryExhausted / failure.shimMissing / failure.probe*
@@ -53,7 +52,7 @@
 //     清单）与 MainWindowController（failure.shimMissing 的 searched 目录清单）
 //     各自 join 时取用（SwiftEdgeHostLegs 只取 common.ok，不用本键）
 //   menu.* / tray.* / fatal.* / quit.confirmTitle / quit.confirmButton /
-//   quit.cancelButton → AppDelegate（非 S1 文件；同一张键表共用）
+//   quit.cancelButton → AppDelegate（同一张键表共用）
 //
 import Foundation
 
@@ -200,14 +199,14 @@ public enum NativeText {
         return key.rawValue
     }
 
-    /// 运行期语言覆盖（W3）：页面事实驱动，nil = 跟随进程/bundle 解析。
+    /// 运行期语言覆盖：页面事实驱动，nil = 跟随进程/bundle 解析。
     ///
-    /// 为什么需要它（2026-12 复核修正）：CFBundle 的 preferredLocalizations 在
+    /// 为什么需要它：CFBundle 的 preferredLocalizations 在
     /// **进程启动期**解析并缓存，只改本 app 域的 `AppleLanguages`（进程级杠杆）不会让
     /// 运行期取串换语言。要让壳自建文案（菜单/托盘/对话框/失败页）随页面语言**即时**
     /// 跟随，必须显式加载目标语言的 `.lproj` 并优先从它取值；进程级面（系统框架、
     /// WebKit 右键菜单、Sparkle 标准窗）仍只能下次启动生效。
-    /// 线程纪律（F3，2026-12 审计修正）：该静态状态由 `languageOverrideLock`
+    /// 线程纪律：该静态状态由 `languageOverrideLock`
     /// 保护——写入在主线程（菜单构造与 AppDelegate 的事实回调），但读取可能发生在
     /// BridgeClient 的 readabilityHandler/terminationHandler 线程：
     /// `NativeText.string/format` 会经 SidecarSupervisor 的 markFatal 等 fatal
@@ -241,7 +240,7 @@ public enum NativeText {
     }
 
     /// 目标语言的 `.lproj`（打包态 Contents/Resources 与 dev/test 的 SwiftPM
-    /// 资源包两种形态都查）。目录名不再本地硬编码：唯一入口 =
+    /// 资源包两种形态都查）。目录名不硬编码：唯一入口 =
     /// ShellPageLanguage.localizationIdentifier（与 Info.plist 的
     /// CFBundleLocalizations 同源，zh → zh-Hans）。
     private static func localizationBundle(for language: ShellPageLanguage) -> Bundle? {
@@ -313,7 +312,7 @@ public enum NativeText {
     /// 是 .app 根，Bundle.module 的候选面覆盖不到 Contents/Resources；且其
     /// 找不到资源时会 fatalError）——与 ChamberResources 同一纪律。
     /// 候选 bundle 列表（进程内固定：Bundle.main / 镜像 bundle / 资源包路径都在
-    /// 启动期就位）——**只解析一次**。审计实测（swiftc -O，10k 次 string(.menuFile)）：
+    /// 启动期就位）——**只解析一次**。实测（swiftc -O，10k 次 string(.menuFile)）：
     /// 每次重算 ≈70.9µs（其中 `exists + Bundle(url:)` 占 84%），缓存后 ≈0.5µs；
     /// 43 个菜单项取串从 ≈2.6ms 降到 ≈0.02ms。不缓存的唯一好处是"运行期凭空出现
     /// 资源包也能被发现"，而签名 .app 与构建产物都不存在这种路径。
@@ -344,7 +343,7 @@ public enum NativeText {
             // 放在 `*.xctest` 的**同级**目录（`.build/<triple>/release/DSHChamber_DSHChamber.bundle`），
             // 而 swiftbuild 后端（Swift 6.4+）把它嵌进 `*.xctest/Contents/Resources`。
             // 只加 bundleURL 自身会让 native 形态在 `swift test` 下整个解析不到资源
-            // （2026-09-21 CI 实测：37 个断言真实文案的用例回落键名）。
+            // （断言真实文案的用例回落键名）。
             addBase(bundle.bundleURL.deletingLastPathComponent())
         }
         for base in ChamberResources.searchBases() { addBase(base) }

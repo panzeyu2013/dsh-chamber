@@ -1,9 +1,9 @@
 /**
- * Frame coalescer contract (chamber 2026-09 renderer-crash round).
+ * Frame coalescer contract.
  *
- * The per-frame "sample after a mutation" shape is the JS entry the WebContent
- * process died in (Apple symbolication: rAF callback → OSR → JSC code-block
- * replacement trap). The coalescer must keep the caller's semantics — the LAST
+ * The per-frame "sample after a mutation" shape risks the JSC code-block
+ * replacement trap in the WebContent process (rAF callback → OSR). The coalescer
+ * must keep the caller's semantics — the LAST
  * state is always observed, the first change lands on the next frame — while
  * collapsing a mutation storm into a bounded sample rate. Schedulers are
  * injected, so the contract runs in plain node with no DOM.

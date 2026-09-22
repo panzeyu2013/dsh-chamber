@@ -22,18 +22,18 @@ export interface ServerProjectionRow extends ServerSelectorRow {
     message?: string
     pluginId?: string
   }
-  /** Renderer-published settled-boot gap (2026-12, design 05 §4 「降级呈现」):
+  /** Renderer-published settled-boot gap (design 05 §4 「降级呈现」):
    *  the connections card renders it, so it is MATERIAL to the roster signature.
    *  The type is the REAL one from the sidebar's shared contract (this package
    *  already imports that contract for the roster rows): a local re-declaration
    *  would be a third, lossy copy that only a new KIND could not slip past
-   *  (2026-12 review F1). */
+   *  */
   bootGap?: ServerBootGap
 }
 
 // gapSignature is the sidebar shared implementation (derive.ts), imported above:
 // the bridge roster signature and the sidebar projection signature must be the
-// same identity, so the byte-identical copy that lived here is gone.
+// same identity, so both use the one implementation.
 
 /** Rendered settings-roster signature; excludes timestamp-only refreshes. */
 export function serverProjectionSignature(rows: readonly ServerProjectionRow[]): string {

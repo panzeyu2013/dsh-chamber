@@ -1,6 +1,6 @@
 /**
- * Silence-watchdog policy for one logical journal stream — chamber fork patch
- * (design 14 §D4, 2026-09 ui-chat freeze investigation).
+ * Silence-watchdog policy for one logical journal stream
+ * (design 14 §D4).
  *
  * `RemoteJournalStream` publishes a window and then waits for the next item with
  * no deadline of any kind. A subscription that goes silently dead while the

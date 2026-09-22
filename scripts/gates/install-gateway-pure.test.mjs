@@ -1,8 +1,8 @@
 /**
- * install-gateway.sh 内嵌纯函数的负例锁（B8，2026-12 stage-A）。
+ * install-gateway.sh 内嵌纯函数的负例锁。
  *
  * 为什么从脚本正文抽取程序文本：install-gateway.sh 以单文件分发（curl 下来即跑），
- * 不允许 side-car 文件，所以纯校验/比较逻辑（B8 第一批：参数校验、版本比较、
+ * 不允许 side-car 文件，所以纯校验/比较逻辑（参数校验、版本比较、
  * 两个纯路径/unit 映射）唯一实现就是脚本里的那段 node 程序。
  * 本测试读取 scripts/install-gateway.sh，抽出该文本，在 node:vm 里执行并用真实
  * 调用路径（node -e）各验一次——测的就是发出去的那份代码，改判定必须同批改这里。

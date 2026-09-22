@@ -26,8 +26,8 @@ await build({
   outfile: join(outDir, 'index.js'),
   // Absolute working dir = this package: esbuild renders the source comments
   // in the bundle relative to it, so the committed artifact is byte-identical
-  // regardless of the caller's CWD (the same fix as the host/mobile builds;
-  // the C8 gate rebuilds from the repo root and byte-compares).
+  // regardless of the caller's CWD (the C8 gate rebuilds from the repo root
+  // and byte-compares).
   absWorkingDir: packageDir,
   bundle: true,
   platform: 'node',

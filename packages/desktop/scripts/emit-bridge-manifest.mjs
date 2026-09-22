@@ -1,16 +1,16 @@
 #!/usr/bin/env node
 /**
- * emit-bridge-manifest.mjs — W-17 通道 manifest 生成管线（design 25 §4.4.3；
- * docs/progress/todo/macos-swift-v1.md W-17 行）。
+ * emit-bridge-manifest.mjs — 通道 manifest 生成管线（design 25 §4.4.3；
+ * docs/progress/todo/macos-swift-v1.md 的对应行）。
  *
  * 输入（两份，缺一不可）：
  *   ① 名单源 packages/desktop/ipc-events.ts 的 `IPC_CHANNELS` 常量表：
  *      值 = 通道名、键 = 常量名（当前 68 键）。表即全量通道集合。
  *   ② 方向维度（实测集合法，不靠常量名启发）：main 侧注册事实 ——
  *      packages/desktop 的 MAIN_SIDE_FILES（main.ts / shell-core.ts /
- *      electron-edges.ts + 2026-12 拆分出的 shell-ipc-*.ts 与
- *      runtime-startup-host.ts；与 ipc-surface-mirror.test.ts 的 B12/E8
- *      扫描面一致）中 `IPC_CHANNELS.X` 的注册调用：
+ *      electron-edges.ts + shell-ipc-*.ts 与 runtime-startup-host.ts；
+ *      与 ipc-surface-mirror.test.ts 的扫描面一致）中 `IPC_CHANNELS.X`
+ *      的注册调用：
  *        `(?:ipcMain|deps\.ipc).handle(IPC_CHANNELS.X`  →  invoke（60）
  *        `(?:webContents\.send|rendererPush)(IPC_CHANNELS.X` →  push（8）
  *      注释先剥离再扫描（与镜像测试的逐字扫描器同语义——shell-core.ts 注释
@@ -25,13 +25,12 @@
  *        "counts": {invoke,push,total} }，两数组均按 IPC_CHANNELS 定义序。
  *   B. macos/Sources/DSHChamber/Generated/BridgeManifest.swift（生成物、
  *      提交）——`enum BridgeManifest` 两份 Set<String>（invokeChannels /
- *      pushChannels；allChannels 并集推导只被测试引用，2026-12 审计删除）。
- *      W-18 落位迁移：文件位于 DSHChamber target 目录内（Sources/
+ *      pushChannels；allChannels 并集推导只被测试引用，不产出）。
+ *      文件位于 DSHChamber target 目录内（Sources/
  *      DSHChamber/Generated/——SwiftPM 递归收 Sources/<target>/ 子目录，
  *      随 swift build 编译接线，Swift 白名单 XCTest 方可 @testable import
- *      引用）；旧 macos/Sources/Generated/BridgeManifest.swift 已删除、生成器
- *      不再产出该位置（docs 侧旧路径引用属文档同步范围，随 W-18 记录处理）。
- *   C. macos/Sources/DSHChamber/Resources/chamber-bridge.stub.js（E8）——
+ *      引用）；生成器不产出 macos/Sources/Generated/BridgeManifest.swift。
+ *   C. macos/Sources/DSHChamber/Resources/chamber-bridge.stub.js——
  *      renderShimStub(manifest) 的提交产出（CLI 第三位置参数，无参时写默认
  *      位），与 JSON/Swift 两件同源同批；生成物 == 提交物由 bridge-shim.test.ts
  *      逐字节守住（另含通道映射与 vm 执行负例）。
@@ -40,7 +39,7 @@
  * 空间」，但本管线当前只落**方向**一个维度——manifest 供 Swift 侧通道白名单
  * 与 shim 常量单源使用，命名空间归属的单源在 preload.cts 的 *Api 工厂/方法面
  * （bridge-shim-surface.test.ts 已逐命名空间锁 preload ↔ shim 一致），manifest
- * 不重复承载；该设计句须由 docs owner 修订（或另立批次把命名空间端到端落进
+ * 不重复承载；该设计句须由 docs owner 修订（或把命名空间端到端落进
  * json/Swift/shim 三产物），本文件绝不产出伪造的 namespace 字段。
  *
  * 用法（工作目录 packages/desktop）：
@@ -68,14 +67,14 @@ const desktopDir = join(dirname(fileURLToPath(import.meta.url)), '..')
 const repoRoot = join(desktopDir, '..', '..')
 
 /** main 侧注册文件集（handle/send 调用所在；与 ipc-surface-mirror.test.ts 的
- *  MAIN_SIDE_FILES 同集 —— 若 W-10 收口后注册点再迁移文件，两处须同步）。 */
+ *  MAIN_SIDE_FILES 同集 —— 注册点再迁移文件时，两处须同步）。 */
 export const MAIN_SIDE_FILES = [
   'main.ts',
   'shell-core.ts',
   'electron-edges.ts',
-  // 2026-12 stage-3：shell-core 的 installIpcHandlers 注册体按域拆入
-  // shell-ipc-*.ts；P0-6 抽取把 runtime state push 移入 runtime-startup-host.ts。
-  // 制品（bridge-manifest.json / BridgeManifest.swift）不变，只是扫描面同步。
+  // shell-core 的 installIpcHandlers 注册体按域分布在 shell-ipc-*.ts，
+  // runtime state push 在 runtime-startup-host.ts。制品（bridge-manifest.json /
+  // BridgeManifest.swift）不变，只是扫描面同步。
   'shell-ipc-settings.ts',
   'shell-ipc-connections.ts',
   'shell-ipc-plugins-ssh.ts',
@@ -88,12 +87,12 @@ export const MAIN_SIDE_FILES = [
 ]
 
 /** 提交物/生成物默认路径（CLI 无参时写入）。
- *  Swift 生成物落位 DSHChamber target 目录内（Sources/DSHChamber/
- *  Generated/，W-18 迁移）——SwiftPM 递归收 Sources 子目录，随编译接线；
- *  旧 macos/Sources/Generated/ 位置已废弃删除（生成器不再产出）。 */
+ *  Swift 生成物落位 DSHChamber target 目录内（Sources/DSHChamber/Generated/）
+ *  ——SwiftPM 递归收 Sources 子目录，随编译接线；生成器不产出
+ *  macos/Sources/Generated/。 */
 export const COMMITTED_MANIFEST = join(desktopDir, 'bridge-manifest.json')
 export const COMMITTED_SWIFT = join(repoRoot, 'macos', 'Sources', 'DSHChamber', 'Generated', 'BridgeManifest.swift')
-/** E8 shim 存根提交物（W-18 后半 A）：manifest 驱动的通道常量单源桥，
+/** shim 存根提交物：manifest 驱动的通道常量单源桥，
  *  与手写 bridge-shim.js（POC 运行时面）并存——全量 shim 演进以此为准。 */
 export const COMMITTED_SHIM_STUB = join(
   repoRoot,
@@ -105,8 +104,8 @@ export const COMMITTED_SHIM_STUB = join(
 )
 
 /** IPC_CHANNELS 常量表整块（保守正则，见头部注释）：块内不允许出现 `}`，
- *  注释行由逐行解析跳过。当前 ipc-events.ts 块内确无 `}`（先 grep 实测再
- *  写）；未来若注释引入 `}` 会块截断 → 解析失败 loud，不会带病产出。 */
+ *  注释行由逐行解析跳过。当前 ipc-events.ts 块内确无 `}`；
+ *  未来若注释引入 `}` 会块截断 → 解析失败 loud，不会带病产出。 */
 const IPC_CHANNELS_BLOCK = /(?:const\s+)?IPC_CHANNELS\s*=\s*\{([^}]*)\}/
 /** 逐条键值行：`  KEY: 'channel',`（键名同镜像测试的 [A-Z][A-Z0-9_]* 形）。 */
 const ENTRY_LINE = /^([A-Z][A-Z0-9_]*):\s*'([^']+)',?$/
@@ -328,17 +327,17 @@ function swiftStringLiteral(channel) {
 }
 
 /** Swift 生成物文本：`enum BridgeManifest` 两份 Set<String>（invokeChannels /
- *  pushChannels）。allChannels 并集推导生产零引用，已删除（2026-12 审计）。 */
+ *  pushChannels）。allChannels 并集推导生产零引用，不产出。 */
 export function renderSwiftManifest(manifest) {
   const { counts } = manifest
   const lines = [
     '// BridgeManifest.swift — GENERATED, do not edit.',
     '//',
-    `// 通道 manifest（W-17 / design 25 §4.4.3）：Swift 侧 IPC 白名单单源`,
+    `// 通道 manifest（design 25 §4.4.3）：Swift 侧 IPC 白名单单源`,
     `// （${counts.total} 通道 = ${counts.invoke} invoke + ${counts.push} push）。`,
     '// 重新生成（工作目录 packages/desktop）：node scripts/emit-bridge-manifest.mjs',
     '// 落位：macos/Sources/DSHChamber/Generated/ —— target 内随编译接线',
-    '// （W-18 自旧 Sources/Generated/ 迁入；bridge-manifest.test.ts 守重生成 == 提交物）。',
+    '// （bridge-manifest.test.ts 守重生成 == 提交物）。',
     '// 生成器 scripts/emit-bridge-manifest.mjs —— 输入 ipc-events.ts 的',
     '// IPC_CHANNELS 常量表 + main 侧（main.ts ∪ shell-core.ts ∪ electron-edges.ts）',
     '// handle/send 注册事实；与提交物 packages/desktop/bridge-manifest.json 同源。',
@@ -376,7 +375,7 @@ export function renderSwiftManifest(manifest) {
 const jsStringLiteral = (value) =>
   JSON.stringify(value)
 
-/** E8 shim 存根文本（W-18 后半 A）：manifest 驱动的通道常量单源桥。与手写
+/** shim 存根文本：manifest 驱动的通道常量单源桥。与手写
  *  bridge-shim.js（POC 运行时方法面）并存；全量 shim 演进以本存根为准。 */
 export function renderShimStub(manifest) {
   const { counts } = manifest
@@ -387,7 +386,7 @@ export function renderShimStub(manifest) {
   const lines = [
     '// chamber-bridge.stub.js — GENERATED, do not edit.',
     '//',
-    `// E8 shim 存根（W-18 后半 A / design 25 §4.4.3）：manifest 通道常量单源桥`,
+    `// shim 存根（design 25 §4.4.3）：manifest 通道常量单源桥`,
     `// （${counts.total} 通道 = ${counts.invoke} invoke + ${counts.push} push）。`,
     '// 与手写 bridge-shim.js（POC 运行时面）并存——全量 shim 生成以此为准。',
     '// 重新生成（工作目录 packages/desktop）：node scripts/emit-bridge-manifest.mjs',
@@ -476,7 +475,7 @@ function main(argv) {
   }
 }
 
-// Import guard：被测试/W-18 import 纯函数时不得触发 CLI（仓库既有惯例，
+// Import guard：被测试 import 纯函数时不得触发 CLI（仓库既有惯例，
 // 同 build-host-graph-package.mjs）。
 const isMain = process.argv[1] !== undefined
   && import.meta.url === pathToFileURL(resolve(process.argv[1])).href

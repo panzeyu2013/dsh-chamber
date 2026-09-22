@@ -1,12 +1,12 @@
 /**
  * The cordis loader `insert` row format — single source of truth for the
- * `- insert:` overlay entries (A2 cross-package protocol single-sourcing).
+ * `- insert:` overlay entries (cross-package protocol single-sourcing).
  *
  * The dsh app-boot `--patch` overlay and a bundle's cordis.patch.yml share
  * one format: a top-level YAML array of loader patch entries
  * (`- insert:\n    - id: <id>\n      name: '<pkg>'\n`, @deepseek-ai/
- * dsh-app-boot loadOverlayPatches). Two implementations previously re-derived
- * this shape and its parsing/conflict logic:
+ * dsh-app-boot loadOverlayPatches). The shape and its parsing/conflict logic
+ * are consumed by:
  *   - control-plane host-graph-seed.ts (renderPatchOverlay + profileLoaderRows
  *     family — the local `--patch` overlay seed);
  *   - desktop plugin-sync.ts (renderCordisInserts + cordisLoaderRows family —

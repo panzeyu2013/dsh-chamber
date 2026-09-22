@@ -21,7 +21,7 @@ import {
 const badgeModuleSource = stripComments(readFileSync(new URL('../../badge.ts', import.meta.url), 'utf8'));
 const shellCoreSource = stripComments(
   readFileSync(new URL('../../shell-core.ts', import.meta.url), 'utf8')
-  // 2026-12 stage-3 域拆分：BADGE_COUNT 注册体迁入 shell-ipc-settings.ts。
+  // BADGE_COUNT 注册体位于 shell-ipc-settings.ts。
   + readFileSync(new URL('../../shell-ipc-settings.ts', import.meta.url), 'utf8'),
 );
 
@@ -79,7 +79,7 @@ test('badgePlatformGate: win32 is gated off in v1 with a reason (overlay icon fo
   assert.ok(win.reason.length > 0);
 });
 test('badgePlatformGate: the win32 design-23 reason survives a missing API (platform judged before API availability)', () => {
-  // win32 上 setBadgeCount 恒为 undefined：平台判定必须先于 API 判定（B2）。
+  // win32 上 setBadgeCount 恒为 undefined：平台判定必须先于 API 判定。
   const win = badgePlatformGate('win32', false);
   assert.equal(win.supported, false);
   assert.match(win.reason, /Windows taskbar overlay/);
@@ -91,7 +91,7 @@ test('badgePlatformGate: a missing API is unsupported on every platform', () => 
   assert.equal(badgePlatformGate('freebsd', true).supported, false);
 });
 
-// ---- 合并投影输入：单一权威 + 重载清 0（主计划 §3.3-7 / §5-14，裁决 14） ----
+// ---- 合并投影输入：单一权威 + 重载清 0（裁决 14） ----
 
 /** BADGE_COUNT 注册体文本（到下一个 handler 注册点截止；注释已剥离）。 */
 function badgeCountHandlerSource(): string {
@@ -129,6 +129,6 @@ test('badge intake keeps the renderer retry/reload-zero semantics (design 19 §3
   // 主进程不做值去重：renderer 的有界 retry 会重推同值（IPC 拒绝后重试），
   // 「值相同即跳过」会把 retry 变成空转（app.setBadgeCount 本身幂等）。
   assert.doesNotMatch(handler, /validated\.count === pendingBadgeCount/);
-  // 平台门 + 设置裁决仍在：重载 0 也走同一条呈现链（badgeEnabled 关时本就 0）。
+  // 平台门 + 设置裁决：重载 0 也走同一条呈现链（badgeEnabled 关时本就 0）。
   assert.match(handler, /applyBadgePresentation\(count\)/);
 });

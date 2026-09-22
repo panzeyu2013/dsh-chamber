@@ -1,6 +1,5 @@
 /* dsh token 表（design 06 §4.x）：五份 ui-theme 样式表是 --dsw-* 的唯一来源。
-   2026-09 Batch 2 起由本入口 CSS 引入（此前挂在 dsh-client-web fork 的
-   base.css 上；该文件已恢复上游字节一致）。顺序固定：base → design-platform
+   顺序固定：base → design-platform
    → scrollbar（读 design-platform 的 token）→ gradient-shadow-text → shiki。
    本文件随首屏 entry 一起进 <head>，且排在 chamber 插件 CSS 之前，因此 token
    在任何插件样式落地前就已就绪。 */
@@ -16,17 +15,13 @@
      `body[data-ds-dark-theme]` 才切深色，而该属性由活动实例的 ui-layout
      theme presenter 投影（chamber 侧见
      packages/dsh-chamber-client-ui-layout/src/client/document-theme.ts）。因此
-     兜底必须与「无属性」的浅色调色板一致——曾写死 dark 时，任一视图在投影
+     兜底必须与「无属性」的浅色调色板一致——否则任一视图在投影
      缺席的窗口里就是"浅色界面 + 深色原生控件"（checkbox 深浅错位）。活动
      实例投影落地后由 `html` 内联 color-scheme 覆盖本值。 */
   /* chamber 外壳 chrome 自有色板（深色，独立于 dsh 的 --dsw-* token 表；本页
      是 N-ctx 连接管理壳，不随 dsh 主题切换）。只保留实际被消费的条目——
-     2026-09 死代码清扫删除了从未被 var() 引用的 --panel / --green / --yellow
-     / --gray；新增颜色前先确认消费点，verify:styles 的 S6 会拦下无人使用的声明。
-     2026-09-11 upstream-alignment（T15）：--panel-2 / --accent-dim 随自造
-     `.btn` 一并删除——失败屏按钮改用官方 Button 原子（token 化），没有别的
-     消费点。
-     2026-09 阶段 2 裁决（替代原 B-6 计划）：`index.html` 的首屏骨架**继续用这份
+     新增颜色前先确认消费点，verify:styles 的 S6 会拦下无人使用的声明。
+     `index.html` 的首屏骨架**继续用这份
      深色外壳色板**，不跟随 `prefers-color-scheme`。原因：dsh 的主题是**按实例**
      投影的（活动实例的 ui-layout presenter 在模块图加载后才写
      `body[data-ds-dark-theme]`），骨架期不可知；用 OS 主题猜会在"浅色 OS + 深色
@@ -41,8 +36,7 @@
   --red: #f85149;
   /* 代码字体的**本仓兜底**：上游主题表声明 `--ds-font-family-code`，但框架自有
      规则（下面的 .boot-gap-facts / .fatal-entry）在上游表缺席的路径里也必须能渲染，
-     所以回退值单点声明在这里，而不是两条规则各背一串九项字体链（2026-12 复查：
-     那个 token 名在本仓零声明，S1 的正则只扫 --dsw-/--dsh-，于是没人发现）。
+     所以回退值单点声明在这里，而不是两条规则各背一串九项字体链。
      刻意不直接声明 `--ds-font-family-code`：那是上游的名字，覆盖它会波及整个
      dsh 界面的代码字体；这里只提供 `var(--ds-font-family-code, var(--chamber-…))`
      的第二顺位。 */
@@ -64,7 +58,7 @@ body,
 body {
   background: var(--bg);
   color: var(--text);
-  /* 2026-09 (P2-B, B-7): the dsh font stack wins once the theme module has
+  /* The dsh font stack wins once the theme module has
      injected its tokens (this page paints before/while the shell chrome loads),
      so the literal stack is the var() FALLBACK — written inside the var(),
      exactly like the shell's other token reads (`var(--dsw-alias-bg-base,
@@ -109,8 +103,7 @@ body {
      注意这条**不**保证 veil 盖住壳内元素——veil 与壳在这个上下文里同级
      比价，壳内任何 z-index>1 的定位元素都会画在 veil（z-index:1）之上；
      "veil 必盖壳"的结构性边界必须画在租客根上（见下面 .instance-shell 的
-     isolation）。2026-12 复核订正：旧注释把"公共父级隔离"当成了"压平壳内 z"，
-     与官方 composer 的 z-index:7 事实矛盾（实测穿透）。 */
+     isolation）。 */
   isolation: isolate;
 }
 
@@ -132,10 +125,10 @@ body {
   content-visibility: hidden;
 }
 
-/* 2026-12（「看不到但能点」的空白图标防御）：无人渲染的壳里不得创建任何动画/
+/* 「看不到但能点」的空白图标防御：无人渲染的壳里不得创建任何动画/
    过渡。CSS 时间线只在子树被渲染时推进，在隐藏壳里创建的入场动画会被钉在首帧
-   （`opacity: 0`）——元素仍可命中，重挂载前不自愈。侧栏与设置壳已把入场动画
-   整组退役（各自的样式表有说明），这条门是防回归：将来任何一处重新引入入场动画
+   （`opacity: 0`）——元素仍可命中，重挂载前不自愈。侧栏与设置壳没有入场动画
+   （各自的样式表有说明），这条门是防回归：将来任何一处重新引入入场动画
    都不会在隐藏壳里被创建。 */
 .instance-hidden .instance-shell *,
 .instance-pending .instance-shell *,
@@ -154,7 +147,7 @@ body {
   pointer-events: none;
 }
 
-/* 遮罩在**已 settle** 的壳上仍然可见时的租客隐藏（2026-12 P1 兜底不变量；判定是
+/* 遮罩在**已 settle** 的壳上仍然可见时的租客隐藏（兜底不变量；判定是
    InstanceView 的 `shellHeld = settled && veilVisible`——遮罩是这段时间唯一的可见面，
    租客整体不可见；注意 `settled && holdVeil` 但已 surfaceRelease 时不成立，那时遮罩
    不在 DOM，租客必须可见）。
@@ -165,11 +158,11 @@ body {
   visibility: hidden;
 }
 
-/* 租客层叠边界（2026-12 P0）：把整个 dsh shell 子树关进它自己的 stacking
-   context。此后壳内任何 z-index（官方 composer 座位的 7、宽度手柄的 8、
+/* 租客层叠边界：把整个 dsh shell 子树关进它自己的 stacking
+   context。于是壳内任何 z-index（官方 composer 座位的 7、宽度手柄的 8、
    shell.overlay 的 20、以及未来任何更高值）都被压平到这一层之内，兄弟遮罩
    .instance-loading（z-index:1）按结构获胜——"遮罩必盖壳"由此成为不变量，
-   不再依赖对上游 z 值的假设。
+   不依赖对上游 z 值的假设。
    只取 isolation（纯绘制属性）：不建 fixed 包含块、不裁 ink overflow、不改
    布局与测量（contain:paint 会三者都改，故不采用）。隐藏视图本就有
    content-visibility:hidden 自带的边界，这里补齐的是**活动视图**那一半。 */
@@ -183,15 +176,15 @@ body {
 
 /* ---------- 骨架屏（加载中间态，design 05 §4） ----------
    盖在 shell 之上（shell 内部 dsh 启动页被骨架完全覆盖，无需 opacity 隐藏
-   技巧）。性能整改 T1（2026-09，D1=A）：不再模仿 dsh 布局几何（rail +
+   技巧）。骨架不模仿 dsh 布局几何（rail +
    侧栏占位块）——真实侧栏宽度由 layout store 持久化、用户可拖到任意值，
-   骨架固定 280px 的假几何必然与曾拖宽的实例失配：settle 揭幕在
-   reduced-motion / 降级路径产生主区左缘位移（可入 CLS 数值分）。现收敛为
+   骨架固定的 280px 假几何必然与拖宽过的实例失配：settle 揭幕在
+   reduced-motion / 降级路径产生主区左缘位移（可入 CLS 数值分）。收敛为
    全屏同底色 veil + 居中 spinner/文案：零几何主张、零失配可能；旧视图 →
    veil → 真实内容可能的两段 View Transition（后台已 settle 的视图切入时仅
    一段）保持同底色平滑过渡。 */
 
-/* 过渡作用域（2026-12 P2）：只有**活动**视图带 view-transition-name，旧/新
+/* 过渡作用域：只有**活动**视图带 view-transition-name，旧/新
    快照才能配成同一组（名字在文档内必须唯一）；非活动视图显式 none。命名把视图
    从 root 快照里"挖出"，于是可以按意图控制这一组：`data-vt-intent='cut'`
    （切向一个尚未 settle、必定显示遮罩的视图）立即换帧——旧视图快照（含它的
@@ -236,8 +229,8 @@ html[data-vt-intent='cut']::view-transition-new(active-instance) {
   display: flex;
   flex-direction: column;
   align-items: center;
-  /* 可操作遮罩（2026-12 W1）在来源很多时会换行增高：短窗口下必须能滚动，
-     否则重试/切换按钮会被推出视口且无处可滚（复核 F9）。safe center 让
+  /* 可操作遮罩在来源很多时会换行增高：短窗口下必须能滚动，
+     否则重试/切换按钮会被推出视口且无处可滚。safe center 让
      溢出时从顶部对齐而不是两头裁切，不支持该关键字的引擎退回普通 center。 */
   justify-content: center;
   justify-content: safe center;
@@ -266,9 +259,9 @@ html[data-vt-intent='cut']::view-transition-new(active-instance) {
   color: var(--dsw-alias-label-tertiary, var(--muted));
 }
 
-/* ---------- 可操作遮罩（2026-12 boot 死区收敛 W1/W2/W4） ----------
+/* ---------- 可操作遮罩 ----------
    多来源导航（侧栏）在壳内部、App 失败覆盖层只在已 settle 的失败时出现，
-   所以未 settle 的 boot 曾经是一段没有任何导航的死区。超过反馈窗后遮罩
+   所以未 settle 的 boot 是一段没有任何导航的死区。超过反馈窗后遮罩
    升级为可操作态：继续等待是默认，但「重试 / 连接 / 切换来源」必须可达。
    样式与 .fatal-servers 同族（同一按钮原子与同一行内排版；两者是各自文件段里的
    独立规则，只有颜色/文本 token 共享），方向与间距跟随
@@ -301,9 +294,9 @@ html[data-vt-intent='cut']::view-transition-new(active-instance) {
   to { transform: rotate(360deg); }
 }
 
-/* 注：实例失败态不再有 .instance-fatal——失败呈现（报告 + 重试 + 服务器
+/* 注：实例失败态没有 .instance-fatal——失败呈现（报告 + 重试 + 服务器
    切换）由 App 在活动视图上统一渲染为 .fatal-overlay 覆盖层（05 §4 失败
-   呈现修订），InstanceView 只负责骨架屏与 shell 生命周期。 */
+   呈现），InstanceView 只负责骨架屏与 shell 生命周期。 */
 
 /* ---------- 动效偏好 ---------- */
 
@@ -314,20 +307,18 @@ html[data-vt-intent='cut']::view-transition-new(active-instance) {
 }
 
 /* ---------- 按钮 ----------
-   2026-09-11 upstream-alignment（T15）：chamber 自造的 `.btn` 色板与规则全部
-   删除——框架级失败屏的重试/切换按钮改用官方 Button 原子
-  （ui-primitives/src/Button.tsx，token 化的 --dsw-alias-button-* 家族）。随
-   之删除的 --panel-2 / --accent-dim 只被 .btn 消费（S6 无死声明）。 */
+   框架级失败屏的重试/切换按钮使用官方 Button 原子
+  （ui-primitives/src/Button.tsx，token 化的 --dsw-alias-button-* 家族）。 */
 
 /* ---------- 通用 ---------- */
 
-/* 2026-09-11 review-fix（finding 2）：`.muted` 是失败/控制面覆盖层里唯一的
+/* `.muted` 是失败/控制面覆盖层里唯一的
    「次级标签」色，唯一消费点是失败屏的服务器切换行（App.tsx 的
-   `<span className="muted small">`）。它曾直接读 chamber 自有暗色板
-   （--muted:#8b94a7），而覆盖层的底色早已改为文档主题 token
+   `<span className="muted small">`）。它不能直接读 chamber 自有暗色板
+   （--muted:#8b94a7）：覆盖层的底色是文档主题 token
    （.fatal/.fatal-overlay 的 --dsw-alias-bg-base）——默认（未被任何已 boot
    的 shell 投影 data-ds-dark-theme 时，含首启/无壳场景）该 token 是**白底**，
-   于是这行落在白底上只有约 3.0:1（旧暗底上是 6.6:1）。改用设计系统的次级标签
+   于是这行落在白底上只有约 3.0:1。改用设计系统的次级标签
    别名，与 .fatal-entry 同一写法；token 表未落地时仍回退 chamber 暗色，
    与失败屏其余规则一致。 */
 .muted {
@@ -348,17 +339,17 @@ html[data-vt-intent='cut']::view-transition-new(active-instance) {
   justify-content: center;
   gap: 10px;
   padding: 16px;
-  /* 2026-09-11 upstream-alignment（T15）：失败面改用设计系统——官方 Button
+  /* 失败面使用设计系统——官方 Button
      原子 + --dsw-alias-* 别名（upstream 自己的框架无关启动/失败页也是
      `background: var(--dsw-alias-bg-base, …)`）。因此这一层必须跟随文档主题
-     取底色，否则浅色主题下 token 化的按钮标签会落在 chamber 暗色底上
-     （旧自造 .btn 用自有色板，正是为了在暗底上可读）。token 表未落地时回退
+     取底色，否则浅色主题下 token 化的按钮标签会落在 chamber 暗色底上。
+     token 表未落地时回退
      chamber 暗色，与 .instance-view / .instance-loading 同一写法。
-     2026-09-11 review-fix（finding 2）：这条规则的后果要一起读——默认（无任何
+     这条规则的后果要一起读——默认（无任何
      已 boot 的 shell 投影 data-ds-dark-theme：首启、控制面不可达、boot 失败）
      该 token 是白底（design-platform.css:157，深色覆盖只在
      body[data-ds-dark-theme] 下，design-platform.css:250）。因此失败/控制面
-     覆盖层里**不允许**残留 chamber 自有暗色板的颜色：本文件的 .muted 已改
+     覆盖层里**不允许**残留 chamber 自有暗色板的颜色：本文件的 .muted 走
      token（见上），其余颜色全部走 --dsw-alias-*；.fatal-title/.fatal-message/
      .fatal-entries-title/.fatal-entry 与 Button 原子本就走 token，安全。 */
   background: var(--dsw-alias-bg-base, var(--bg));
@@ -370,7 +361,7 @@ html[data-vt-intent='cut']::view-transition-new(active-instance) {
   color: var(--dsw-alias-label-primary, var(--text));
 }
 
-/* ---------- 降级提示（2026-12, 05 §4 「降级呈现」） ----------
+/* ---------- 降级提示（05 §4 「降级呈现」） ----------
    boot 成功但已知缺口（会话正文这类整面缺席）时的现场说明。与失败覆盖层的
    分工：失败覆盖层是 error 态、独占屏幕；这里是**非阻断**的顶部横幅——层
    pointer-events:none、只有卡片自己接收命中测试，侧栏/会话头/composer/切换
@@ -456,7 +447,7 @@ html[data-vt-intent='cut']::view-transition-new(active-instance) {
   overflow-wrap: anywhere;
 }
 
-/* 失败插件清单（T15 2026-09-11 upstream-alignment）：upstream 的失败报告逐项
+/* 失败插件清单：upstream 的失败报告逐项
    列出未激活的插件 id（boot-page.ts `Failed to load plugins` + 每 id 一行；
    boot-page.module.css 里标题用正文字体、条目用等宽字体 + 次级标签色）。
    chamber 覆盖层由 shell 的同一份 loader sweep 取到同一事实
@@ -469,7 +460,7 @@ html[data-vt-intent='cut']::view-transition-new(active-instance) {
   gap: 2px;
   margin-top: 6px;
   max-width: 640px;
-  /* 2026-09-11 review-fix（finding 4c）：清单必须自己滚动。.fatal 是居中的
+  /* 清单必须自己滚动。.fatal 是居中的
      flex column，.app 是 overflow:hidden，覆盖层本身也没有 overflow——清单
      一长（上游 sweep 可能给出多个未激活 id）就整块溢出视口，两端被居中裁掉：
      标题与重试按钮一起不可见且没有滚动条。给清单一个上界 + 自身滚动，列表变长
@@ -494,11 +485,11 @@ html[data-vt-intent='cut']::view-transition-new(active-instance) {
   overflow-wrap: anywhere;
 }
 
-/* 实例失败覆盖层的服务器切换行（05 §4 失败呈现修订）：boot 失败时侧边栏
+/* 实例失败覆盖层的服务器切换行（05 §4 失败呈现）：boot 失败时侧边栏
    （在 shell 内）不可用，这里提供 chamber 级逃生通道——切换不依赖任何
    shell 已挂载。行内是「标签 + 每台服务器一个按钮」的**独立子组**：组内 8px
    均匀；它与上方重试按钮的间距是外层 .fatal 的 10px + 这行 4px 顶距 = 14px
-   ——分组间隔，不是同一簇内的不均（2026-09-13 间距审计）。 */
+   ——分组间隔，不是同一簇内的不均。 */
 .fatal-servers {
   display: flex;
   flex-wrap: wrap;
@@ -508,27 +499,19 @@ html[data-vt-intent='cut']::view-transition-new(active-instance) {
   margin-top: 4px;
 }
 
-/* 2026-09-11 review-fix（finding 2 附带 / 死代码清扫）：`.pane-empty` 与
-   `.pane-empty-title` 在此删除——全仓 grep 已无消费者（该规则在 d4d9ed1 时
-   就已经没有消费者，早于 T15 重写失败屏），并顺手移除了失败/空态面上最后一处
-   chamber 自有暗色板颜色（--muted / --text 在 token 底上同样有 finding 2 的
-   对比度隐患）。verify:styles 的 S6 会拦回无人使用的声明。 */
-
-/* ---------- 会话行渲染挂起（2026-08 perf pass，已回退） ----------
-   曾在 [data-chat-flow-key]（vendor ChatView 的 .flowItem 行）上使用
-   content-visibility:auto + contain-intrinsic-size:auto 320px 缓解长会话
-   INP。实证回退（真实 Electron 43.4.0 复现）：从未渲染或内容变更后的
-   视口外行按 320px 兜底估算几何，破坏 vendor ChatView 所有读真实布局的
-   几何消费者——轮次导航 rail 跳转落点偏差数千 px、scrollHeight 低估
+/* ---------- 会话行渲染挂起 ----------
+   content-visibility:auto + contain-intrinsic-size:auto 320px 不得用在
+   [data-chat-flow-key]（vendor ChatView 的 .flowItem 行）上：从未渲染或
+   内容变更后的视口外行按 320px 兜底估算几何，会破坏 vendor ChatView 所有读
+   真实布局的几何消费者——轮次导航 rail 跳转落点偏差数千 px、scrollHeight 低估
    ~31%（长会话底部跟随/回到底部/位置恢复/active mark 连带失效），且 auto
-   记忆尺寸在流式内容变化或会话切换后被丢弃，估算无法自愈。恢复正确性
-   优先：整条规则删除（纯 CSS，零 DOM 影响）。若未来仍需缓解 INP，只能把
-   content-visibility 收窄到行内自包含的重子树（工具结果卡片、代码块，配
-   contain-intrinsic-size: auto <兜底>），且必须回归验证 rail 跳转与底部
-   跟随；行本身（被测量几何的列表项）永远不能挂估算规则。上游引入行
+   记忆尺寸在流式内容变化或会话切换后被丢弃，估算无法自愈。若未来仍需缓解
+   INP，只能把 content-visibility 收窄到行内自包含的重子树（工具结果卡片、
+   代码块，配 contain-intrinsic-size: auto <兜底>），且必须回归验证 rail 跳转
+   与底部跟随；行本身（被测量几何的列表项）永远不能挂估算规则。上游引入行
    虚拟化才是根治方向。 */
 
-/* ---------- 会话活性停滞提示（2026-12；运行位守卫 L3） ----------
+/* ---------- 会话活性停滞提示（运行位守卫） ----------
    与上面的降级提示（.boot-gap-layer）同族：顶部非阻断横幅，层
    pointer-events:none、只有卡片自己接收命中测试，侧栏/会话头/composer/
    切换来源全部照常。z-index 950 高于 .boot-gap-layer(900)、低于

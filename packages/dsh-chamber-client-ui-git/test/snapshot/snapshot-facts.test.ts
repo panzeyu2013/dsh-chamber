@@ -85,7 +85,7 @@ test('topology helpers select and find by opaque identity, never display paths',
 test('source-branch choices keep the main checkout branch selectable and never empty for a real repo', () => {
   // The host list is authoritative and passed through UNFILTERED: `main` is a
   // valid base (the host resolves it via localBranchHead) and filtering it out
-  // made a single-branch repository show an empty picker (2026-12 report).
+  // would make a single-branch repository show an empty picker.
   assert.deepEqual(sourceBranchChoices(['main'], []), ['main'])
   assert.deepEqual(sourceBranchChoices(['main', 'mobile'], ['main']), ['main', 'mobile'])
   // A deleted remembered branch is dropped by the caller's membership check,
@@ -98,9 +98,9 @@ test('source-branch choices keep the main checkout branch selectable and never e
 })
 
 test('the create dialog never filters the main checkout branch out of the source picker', () => {
-  // Source-level pin (the regression lived at the call site, so a pure-helper
-  // test alone cannot catch it being re-added). Positive pin: the picker must
-  // consume the unfiltered helper result directly.
+  // Source-level pin: a pure-helper test alone cannot catch filtering being
+  // re-added at the call site. Positive pin: the picker must consume the
+  // unfiltered helper result directly.
   const dialog = readFileSync(new URL('../../src/client/CreateWorktreeDialog.tsx', import.meta.url), 'utf8')
   assert.match(dialog, /options=\{existingBranchChoices\}/,
     'the source-branch picker must offer the helper result unfiltered (main checkout branch included)')
@@ -111,7 +111,7 @@ test('the create dialog never filters the main checkout branch out of the source
 test('safe-remove guard covers main/registration/live/current/fs safety and allows detached clean rows', () => {  assert.equal(removeBlockReason(worktree({ isMain: true })), 'main')
   assert.equal(removeBlockReason(worktree({ workspaceId: null })), 'unregistered')
   assert.equal(removeBlockReason(worktree({ runningSessionIds: ['s'] })), 'running')
-  // ARCHIVED-AWARE (host 2026-09): the blocking field names the running
+  // ARCHIVED-AWARE: the blocking field names the running
   // sessions that actually gate removal. An archived running session is inert
   // (present in runningSessionIds, absent from the blocking list) and does not
   // block; the OLD-HOST fallback (field absent) stays conservative.
@@ -133,14 +133,14 @@ test('safe-remove guard covers main/registration/live/current/fs safety and allo
   assert.equal(removeBlockReason(worktree({ dirty: true })), 'dirty')
   assert.equal(removeBlockReason(worktree({ dirty: null })), 'status-unknown')
   assert.equal(removeBlockReason(worktree({ branch: null })), undefined)
-  // Fail-closed (2026-09): the runtime channel is absent — the current
+  // Fail-closed: the runtime channel is absent — the current
   // session is UNKNOWN, so a worktree accounting sessions must block removal.
   assert.equal(removeBlockReason(worktree({ sessionIds: ['s'] }), undefined, false, false), 'runtime-unknown')
   assert.equal(removeBlockReason(worktree({ sessionIds: [] }), undefined, false, false), undefined)
   // A known blank current still does not block (blankness is only lenient
   // when the channel is present).
   assert.equal(removeBlockReason(worktree({ sessionIds: ['s'] }), 's', true, false), 'runtime-unknown')
-  // PRECEDENCE (review G1-1): current/runtime-unknown are evaluated BEFORE
+  // PRECEDENCE: current/runtime-unknown are evaluated BEFORE
   // running. The running reason is NOT a hard client block (the row keeps the
   // delete control enabled for it and the host re-checks), so letting it win
   // would bypass both fail-closed refusals whenever a STALE or archived-only

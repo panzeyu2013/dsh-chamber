@@ -47,12 +47,11 @@ export function findWorktree(
  * (`git show-ref --heads`) when it has any, otherwise the selected
  * repository's own worktree branches, deduplicated in row order.
  *
- * The main checkout's branch is deliberately INCLUDED. The host accepts it as
- * `startRef` (`localBranchHead` resolves it to that branch's HEAD commit), and
- * the picker previously filtered it out because it is the implicit default —
- * which made it unreachable once any other branch had ever been chosen, and
- * left a single-branch repository with an empty picker (2026-12 user report:
- * "cannot use main / the main checkout as the base").
+ * The main checkout's branch is deliberately INCLUDED: the host accepts it as
+ * `startRef` (`localBranchHead` resolves it to that branch's HEAD commit), so
+ * filtering it out as the implicit default would make it unreachable once any
+ * other branch had been chosen and would leave a single-branch repository with
+ * an empty picker.
  * @param repoBranches - Host branch list for the selected repository.
  * @param worktreeBranches - The same repository's worktree branches (fallback; `null` = detached).
  * @returns The picker options, never filtered against the main checkout branch.
@@ -106,7 +105,7 @@ export type RemoveBlockReason =
 
 /**
  * Safe-remove guard: both fresh running facts and the aggregate current id
- * block removal. `runtimeKnown` is the fail-closed half (2026-09 scan): the
+ * block removal. `runtimeKnown` is the fail-closed half: the
  * per-source `runtime` channel (which carries `current`) withdraws while its
  * shell reconnects/reloads — treating the resulting `undefined` current as
  * "not current" would silently open the removal of a worktree holding the
@@ -115,14 +114,14 @@ export type RemoveBlockReason =
  * until the channel returns.
  *
  * The RUNNING reason reads the host's ARCHIVED-AWARE fact (design 08 §5.2
- * amendment, 2026-09 user decision): `blockingRunningSessionIds` names only
+ * amendment): `blockingRunningSessionIds` names only
  * the running sessions that actually gate removal — archived sessions (and
  * sessions under an archived ancestor) are INERT and do not block. The field
  * is ABSENT on an older host, and the fallback to `runningSessionIds` keeps
  * that case conservative (any running session blocks). A removal never touches
  * a session either way.
  *
- * PRECEDENCE (2026-12 review G1-1): `current` and `runtime-unknown` are
+ * PRECEDENCE: `current` and `runtime-unknown` are
  * evaluated BEFORE `running`. The RUNNING reason is NOT a hard client block —
  * the row deliberately keeps the delete control enabled for it (the dialog
  * explains the running facts and the host re-checks with its `running-agent`
@@ -142,8 +141,7 @@ export function removeBlockReason(
   if (worktree.isMain) return 'main'
   if (worktree.workspaceId === null) return 'unregistered'
   // A BLANK (never-submitted) current session carries no content worth
-  // protecting, so it must not block removal (2026-08 user report: clicking
-  // "new session" on a worktree and removing it before typing).
+  // protecting, so it must not block removal.
   if (currentSessionId !== undefined && !currentSessionBlank && worktree.sessionIds.includes(currentSessionId)) return 'current'
   // Fail-closed: the runtime channel is absent (withdrawn/not-yet-ready), so
   // we cannot rule the current session out of this worktree. Blank-current
@@ -185,7 +183,7 @@ export function canTargetSession(worktree: GitWorktreeInfo): boolean {
  * unrelated session). Subagent-origin rows are NOT part of this closure by
  * construction; do NOT add an `origin === 'subagent'` filter here — it would
  * collapse the closure to the roots and silently drop the forks the option
- * must archive (2026-12 review correction; the subagent-only purge/stop
+ * must archive (the subagent-only purge/stop
  * closure lives in the sidebar's `sessionPurgeClosure`, which reads the raw
  * `session/list` rows instead).
  */

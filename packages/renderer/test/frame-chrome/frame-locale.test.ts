@@ -1,5 +1,5 @@
 /**
- * App-frame copy + failure chrome (T15/T16, 2026-09-11 upstream-alignment).
+ * App-frame copy + failure chrome.
  *
  * The frame (App.tsx / InstanceView.tsx / the static skeleton) cannot be
  * imported by a node test — it renders the whole shell — so this spec pins it
@@ -12,8 +12,7 @@
  *  - the typed dictionary is complete and identical in shape across locales;
  *  - the locale is chosen from the DOCUMENT language (the official locale
  *    service's own projection), never from the OS locale;
- *  - every audited frame string is routed through the dictionary (the retired
- *    zh literals are gone from the frame sources);
+ *  - every audited frame string is routed through the dictionary;
  *  - the failure chrome rides the design system: official Button atom, no
  *    invented `.btn`, --dsw-* aliases with the documented fallbacks;
  *  - the failed-plugin list the official report shows is rendered;
@@ -32,7 +31,7 @@ import { normalize, stripComments } from '../../../../scripts/dev/test-support/s
 const read = (rel: string): string => readFileSync(new URL(rel, import.meta.url), 'utf8')
 const readCode = (rel: string): string => normalize(stripComments(read(rel)))
 
-// ── The dictionary (T16) ───────────────────────────────────────────────────
+// ── The dictionary ───────────────────────────────────────────────────
 
 test('the frame dictionaries are complete, parallel and non-empty', () => {
   const zhKeys = Object.keys(zh).sort()
@@ -46,7 +45,7 @@ test('the frame dictionaries are complete, parallel and non-empty', () => {
   for (const key of [
     'action.retry', 'action.switchServer', 'action.connect',
     'boot.loading', 'boot.loadingHint', 'boot.starting',
-    // 2026-12 boot 死区收敛 W1/W2/W4（可操作遮罩）：新增键必须双字典齐备，
+    // 可操作遮罩的这些键必须双字典齐备，
     // 且由下面的接线锁钉住消费点（只存在于字典里 = 死键）。
     'boot.deferred', 'boot.deferredHint', 'boot.elapsed', 'boot.stuckHint',
     'boot.sourceFailedHint', 'boot.retryQueued', 'boot.reloadHint',
@@ -61,7 +60,7 @@ test('the frame dictionaries are complete, parallel and non-empty', () => {
 })
 
 test('both dictionaries carry the same placeholder set for every key', () => {
-  // 2026-12 复核 MINOR-2：形状/非空检查不覆盖占位符漂移——zh 写 {second} 而 en 写
+  // 形状/非空检查不覆盖占位符漂移——zh 写 {second} 而 en 写
   // {seconds}（或漏一个占位符）会静默渲染出字面花括号，且只有真机才看得见。
   const tokens = (text: string): string[] => [...text.matchAll(/\{(\w+)\}/g)].map(m => m[1] as string).sort()
   for (const key of Object.keys(zh) as FrameKey[]) {
@@ -105,13 +104,13 @@ test('the document readers are safe without a DOM (plain-node import) and never 
   unsubscribe()
 })
 
-// ── T15/T16 wiring locks (App.tsx / InstanceView.tsx / main.tsx / CSS) ─────
+// ── Wiring locks (App.tsx / InstanceView.tsx / main.tsx / CSS) ─────
 
 test('every audited frame string is dictionary-owned (no inline literals remain)', () => {
   const frameSources = {
     'App.tsx': readCode('../../src/App.tsx'),
     'InstanceView.tsx': readCode('../../src/components/InstanceView.tsx'),
-    // 阶段 3：视图调度/桥订阅簇平移到 hook 后，这些文件同样是 frame 文案的持有者；
+    // 视图调度/桥订阅簇的 hook 同样是 frame 文案的持有者；
     // 既纳入 inline 字面量审计（更强），也纳入下方调用点 presence 的并集。
     'use-view-scheduler.ts': readCode('../../src/app-hooks/use-view-scheduler.ts'),
     'use-bridge-subscriptions.ts': readCode('../../src/app-hooks/use-bridge-subscriptions.ts'),
@@ -120,11 +119,10 @@ test('every audited frame string is dictionary-owned (no inline literals remain)
     '界面发生错误', '实例启动失败', '无法连接控制面', '切换到其他服务器', '正在加载',
     '首次打开需加载完整界面', '未命名会话', '会话已完成', '代理正在等待你的回答',
     '代理请求你的批准', '实例启动超时',
-    // 2026-09-11 review-fix (finding 4b): the open-session failure texts and the
-    // aggregate-error fallback the previous audit missed — the frame ASSEMBLES
-    // them and they cross into the sidebar (ServerSection's source alert,
-    // ArchiveManagerDialog, the open-session rejection shown by the sidebar), so
-    // they are frame-owned copy, not plugin copy.
+    // The open-session failure texts and the aggregate-error fallback are
+    // frame-owned copy, not plugin copy — the frame ASSEMBLES them and they
+    // cross into the sidebar (ServerSection's source alert,
+    // ArchiveManagerDialog, the open-session rejection shown by the sidebar).
     '未知错误', '打开会话失败', '已不在注册表', '旧通知未打开', '已被移除并以新代重建',
   ]
   for (const [file, source] of Object.entries(frameSources)) {
@@ -141,7 +139,7 @@ test('every audited frame string is dictionary-owned (no inline literals remain)
     "frameText(readDocumentLocale(), 'fatal.harvestTimeout'",
     "frameText(copyLocale, 'session.untitled')", "frameText(copyLocale, 'notification.sessionComplete')",
     "frameText(copyLocale, 'notification.awaitingAnswer')", "frameText(copyLocale, 'notification.awaitingApproval')",
-    // 2026-09-11 review-fix (finding 4b): the derive has a render locale in
+    // The derive has a render locale in
     // scope (its parameter) and uses it; the three thrown open-session texts are
     // assembled outside any render, so they read the document language at throw
     // time through the module's out-of-render reader.
@@ -154,7 +152,7 @@ test('every audited frame string is dictionary-owned (no inline literals remain)
   }
   assert.ok(frameSources['InstanceView.tsx'].includes("frameText(locale, 'boot.loading', { label })"))
   assert.ok(frameSources['InstanceView.tsx'].includes("frameText(locale, 'boot.loadingHint')"))
-  // 2026-12 boot 死区收敛：可操作遮罩的每一句都在字典里（键集审计见上）。
+  // 可操作遮罩的每一句都在字典里（键集审计见上）。
   for (const call of [
     "frameText(locale, 'boot.deferred', { label })",
     "frameText(locale, 'boot.deferredHint')",
@@ -205,24 +203,24 @@ test('the failure chrome rides the design system (T15: official Button, --dsw-* 
   assert.ok(css.includes('background: var(--dsw-alias-bg-base, var(--bg))'))
   assert.ok(css.includes('color: var(--dsw-alias-state-error-primary, var(--red))'))
   assert.ok(css.includes('color: var(--dsw-alias-label-primary, var(--text))'))
-  // 2026-09-11 review-fix (finding 2): the design-platform default for
+  // The design-platform default for
   // --dsw-alias-bg-base is WHITE (design-platform.css:157; the dark values only
   // apply under body[data-ds-dark-theme], which a BOOTED shell projects), so the
   // first-run / no-shell failure chrome is light — every colour on it must be a
-  // token, never the chamber dark palette. `.muted` (the switch-server line) was
-  // the leftover: #8b94a7 on white ≈ 3.0:1.
+  // token, never the chamber dark palette. `.muted` (the switch-server line):
+  // #8b94a7 on white ≈ 3.0:1.
   assert.ok(css.includes('.muted {') && css.includes('color: var(--dsw-alias-label-secondary, var(--muted))'),
     'every colour of the failure chrome must follow the document theme (finding 2)')
   assert.ok(!/\.muted\s*\{\s*color:\s*var\(--muted\)/.test(css),
     'the chamber dark palette must not colour text on the theme-following overlay')
-  // 2026-09-11 review-fix (finding 4c): a long failed-plugin list must scroll
+  // A long failed-plugin list must scroll
   // instead of pushing the title/Retry out of a centred, non-scrolling overlay
   // (.app is overflow:hidden).
   assert.ok(/\.fatal-entries \{[^}]*max-height:[^;]*;[^}]*overflow: auto;/.test(css),
     'the failed-entry list needs max-height + overflow:auto (finding 4c)')
-  // 2026-09-11 review-fix (finding 2 附带): the last dead rules of this file —
-  // zero consumers repo-wide — are gone (S6 would flag unused declarations; a
-  // dead rule in a rewritten file is residue).
+  // The last dead rules of this file —
+  // zero consumers repo-wide — must stay gone (an unused declaration is
+  // flagged; a dead rule is residue).
   assert.ok(!css.includes('pane-empty'), '.pane-empty / .pane-empty-title have no consumer and must stay deleted')
 })
 
@@ -232,7 +230,7 @@ test('the two a11y nits are fixed (decorative spinner, alert overlays)', () => {
     'the veil spinner is decoration and must stay out of the a11y tree')
   const app = readCode('../../src/App.tsx')
   // Both fatal overlays announce themselves: the boot-failure one and the
-  // control-plane one (previously only the former).
+  // control-plane one.
   const alerts = app.match(/fatal-overlay[^`]*?role="alert"/g) ?? []
   assert.equal(alerts.length, 2, 'both fatal overlays must carry role="alert"')
 })

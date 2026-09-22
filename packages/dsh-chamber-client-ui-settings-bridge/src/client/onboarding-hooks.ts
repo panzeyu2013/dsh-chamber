@@ -1,6 +1,6 @@
 /**
- * React wiring for the `settings.onboarding` coordinator (2026-09-11
- * upstream-alignment T3). The facts and projections live in ./onboarding.ts;
+ * React wiring for the `settings.onboarding` coordinator. The facts and
+ * projections live in ./onboarding.ts;
  * this module owns the two subscriptions the shell needs, and it is the only
  * half that reaches the renderer's hook factory (so the pure half stays
  * loadable by plain node tests).

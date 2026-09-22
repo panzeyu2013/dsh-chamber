@@ -23,7 +23,7 @@ export function isTrustedRendererUrl(url: string, controlPlaneOrigin: string): b
     const actual = new URL(url)
     const expected = new URL(controlPlaneOrigin)
     return (expected.protocol === 'http:' || expected.protocol === 'https:')
-      // T-13: a URL carrying userinfo (`http://u:p@127.0.0.1:port/`) has the
+      // a URL carrying userinfo (`http://u:p@127.0.0.1:port/`) has the
       // same WHATWG origin but is a different trust class — Swift's TrustGuard
       // rejects any actual/expected userinfo and this side must not be the
       // laxer flavor. The credential-bearing URL is never the chamber shell
@@ -64,7 +64,7 @@ export function isExternalLinkUrl(url: string, controlPlaneOrigin?: string): boo
 }
 
 /**
- * G21: the Electron renderer permission posture, extracted so the matrix is a
+ * The Electron renderer permission posture, extracted so the matrix is a
  * behavioural unit instead of a source-text anchor (the Swift leg pins its
  * equivalent with WebPermissionPolicyTests). Electron default-grants
  * same-origin permission requests, and the control plane also serves proxied
@@ -105,16 +105,16 @@ export function isTrustedIpcSender(
 /**
  * The fence-wrapped invoke handler type: `trustedIpc(handler)` returns the
  * listener passed to ipcMain.handle. The handler receives only the invoke
- * args (never the event) — mirrors the pre-split main.ts contract.
+ * args (never the event).
  */
 export type TrustedIpc = (handler: (...args: any[]) => any) => (event: IpcSenderLike, ...args: any[]) => any
 
 /**
- * Build the trustedIpc fence (previously inlined in main.ts): every
+ * Build the trustedIpc fence: every
  * ipcMain.handle registration goes through it, so the sender check and the
  * quit gate are enforced once for the whole IPC surface.
  *
- * Semantics (unchanged from main.ts):
+ * Semantics:
  * - sender 校验失败 → throw { code: 'ipc_sender_forbidden' }（不可信 sender /
  *   窗口已销毁 / 非 chamber 文档）。
  * - quit 在途 → throw { code: 'app_quitting' }（传输层/控制面 teardown 已开始，

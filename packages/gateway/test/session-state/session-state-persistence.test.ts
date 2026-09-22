@@ -1,8 +1,7 @@
 /**
  * Session-state persistence: createJsonStore semantics (main -> .bak ->
  * initial, corrupt is never empty, 0600 leaves under 0700), cursor durability,
- * gap candidates across a restart, limit accounting and the privacy whitelist
- * (plan W1 / WS-B, blueprint sections 4.3/5.2/7).
+ * gap candidates across a restart, limit accounting and the privacy whitelist.
  *
  * Run directly:
  *   node --import ./test/session-state/workspace-loader.mjs test/session-state/session-state-persistence.test.ts

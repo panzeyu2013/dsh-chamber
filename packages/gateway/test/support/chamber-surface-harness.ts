@@ -1,11 +1,11 @@
 /**
- * Shared chamber-surface test harness (2026-12 audit F40): the logger literal,
- * the empty channel-registry stub, the createChamberSurface deps assembly and
- * the fake request/response runner were byte-identical copies in
- * chamber-installed / chamber-plugins-mutations / feature-lifecycle.
+ * Shared chamber-surface test harness: the logger literal, the empty
+ * channel-registry stub, the createChamberSurface deps assembly and the fake
+ * request/response runner used by chamber-installed /
+ * chamber-plugins-mutations / feature-lifecycle.
  *
  * The factory keeps every injection point (stateDir, tasks, logger, channels)
- * so the three suites express only their differences; assertions are untouched.
+ * so the three suites express only their differences.
  */
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -16,7 +16,7 @@ import { createChamberInstalled } from '../../src/plugins-installed.ts'
 import { createChamberSurface, type ChamberSurfaceDeps } from '../../src/routes.ts'
 import { FakeRequest, FakeResponse, stubPluginTasks } from './utils.ts'
 
-/** The silent logger every chamber-surface suite used to define locally. */
+/** The silent logger for every chamber-surface suite. */
 export const surfaceSilentLogger: Logger = { log() {}, warn() {}, error() {} }
 
 /** The MVP channel registry: no providers, list() always empty. */

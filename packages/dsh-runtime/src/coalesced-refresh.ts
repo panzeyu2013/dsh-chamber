@@ -1,9 +1,9 @@
 /**
- * perf T3（2026-09，D8 组合方案）：跨 owner 共享的"节流/单飞/终态一次"
+ * 跨 owner 共享的"节流/单飞/终态一次"
  * 刷新原语。
  *
  * 背景：runtimeDiskSummaryAsync 单遍遍历在 10⁵–10⁶ 项 store 上仍需数百毫秒
- * 到数十秒（只是不再冻结进程）。desktop 版本事务的多个 refresh 调用点与
+ * 到数十秒（只是不冻结进程）。desktop 版本事务的多个 refresh 调用点与
  * gateway 的 diskProjection 冷缓存路径都会在短时间内连续请求全树统计——若
  * 每个请求各自跑一整遍，事务/冷缓存期会被 N×单遍时长拖慢。本原语把并发
  * 请求收敛为：
@@ -28,7 +28,7 @@
  * 新链）——其收益在不冻结（见 runtimeDiskSummaryAsync）之外的场景是合并
  * 并发突发；纯串行消费方不应期待节流收益。TTL/轮询类读方可用单次请求选项
  * `{ rerunOnJoin: false }` 静默 join（不置位补跑），避免"轮询在长遍历期间
- * 持续到达 → 链内补跑到 cap"的长尾（gateway diskProjection 用法，review A4）。
+ * 持续到达 → 链内补跑到 cap"的长尾（gateway diskProjection 用法）。
  *
  * 错误语义：compute 抛错 → 链上所有请求一并收到该错误；链清空后下一次请求
  * 自然重试（不做隐式退避——调用方各自有错误投影/缓存失效语义）。
@@ -40,8 +40,8 @@
 export interface CoalescedRefresherOptions {
   /** 同一 promise 链内总遍数上限（默认 3 = 首遍 + 至多 2 次补跑）。钳制到
    *  ≥1 的正整数：0/负数/NaN 一律按 1（链永远至少跑首遍）——与
-   *  runtimeDiskSummaryAsync 的 yieldEvery 钳制同纪律（2026-09 perf review
-   *  N2：未钳制时 0/负数会让 do-while 仍至少跑 1 遍，与「总遍数 ≤ maxReruns」
+   *  runtimeDiskSummaryAsync 的 yieldEvery 钳制同纪律（未钳制时 0/负数会让
+   *  do-while 仍至少跑 1 遍，与「总遍数 ≤ maxReruns」
    *  措辞不符）。 */
   maxReruns?: number
 }
@@ -52,7 +52,7 @@ export interface CoalescedRefreshRequestOptions {
    *  在途一遍的结果、不触发补跑——给 TTL/轮询类读方用（结果陈旧度 ≤ 在途
    *  一遍；注意该界**不等价于 TTL 缓存语义**——长遍历（单遍数十秒量级）
    *  期间 TTL 过期轮询可拿到比 TTL 允许窗更旧的在途结果，展示面接受，
-   *  gateway diskProjection A4 定案）；需要新鲜结果的写前闸口保持 true。 */
+   *  gateway diskProjection）；需要新鲜结果的写前闸口保持 true。 */
   rerunOnJoin?: boolean
 }
 

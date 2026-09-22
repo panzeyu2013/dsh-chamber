@@ -2,8 +2,8 @@
 //  WebKitSupportKVCTests.swift
 //  DSHChamberTests
 //
-//  W1/W2/W3（2026-12 三轮独立复核）：DSHChamberWebKitSupport 的异常安全 KVC BOOL
-//  包装 + MainWindowController 的诊断行文案。T-4 透明露底走的是 WKWebView 私有键
+//  DSHChamberWebKitSupport 的异常安全 KVC BOOL
+//  包装 + MainWindowController 的诊断行文案。透明露底走的是 WKWebView 私有键
 //  drawsBackground（KVC，不在公开头文件里）；缺该存取器的 OS 上直设会抛
 //  NSUnknownKeyException，而 Swift 无法 catch ObjC 异常 ⇒ 进程 abort（实测
 //  exit_code=134）。故单测覆盖两条路径：键存在（设置成功 + 回读一致）与键不存在
@@ -38,7 +38,7 @@ final class WebKitSupportKVCTests: XCTestCase {
         XCTAssertEqual(DSHChamberBoolKVCOutcome.readBackMismatch.rawValue, 2)
     }
 
-    /// W3-①：键存在时设置成功并可读回（false 与 true 都真实落到对象上）。
+    /// 键存在时设置成功并可读回（false 与 true 都真实落到对象上）。
     func testExistingBoolKeyIsSetAndReadBack() {
         let fixture = DrawsBackgroundFixture()
         XCTAssertTrue(fixture.drawsBackground, "夹具初值")
@@ -50,7 +50,7 @@ final class WebKitSupportKVCTests: XCTestCase {
         XCTAssertTrue(fixture.drawsBackground)
     }
 
-    /// W3-②：键不存在时返回 Unavailable 且**不崩**——若包装不吞异常，
+    /// 键不存在时返回 Unavailable 且**不崩**——若包装不吞异常，
     /// 这里会以 NSUnknownKeyException 直接终止测试进程（exit_code=134 的同一路径）。
     func testMissingKeyReturnsUnavailableWithoutCrashing() {
         let plain = NSObject()
@@ -73,7 +73,7 @@ final class WebKitSupportKVCTests: XCTestCase {
         XCTAssertTrue(fixture.drawsBackground, "回读仍是原值")
     }
 
-    /// W2：三种结果的诊断行非空、同前缀且互不相同（成功/失败都可诊断）。
+    /// 三种结果的诊断行非空、同前缀且互不相同（成功/失败都可诊断）。
     func testDrawsBackgroundLogLineCoversEveryOutcome() {
         let lines = [DSHChamberBoolKVCOutcome.applied, .unavailable, .readBackMismatch]
             .map(MainWindowController.drawsBackgroundLogLine)
@@ -83,7 +83,7 @@ final class WebKitSupportKVCTests: XCTestCase {
         XCTAssertEqual(Set(lines).count, lines.count, "三种结果必须可区分")
     }
 
-    /// 真实类金丝雀（T-4 的本机锁步，与 RefreshRatePolicyTests 的 S-48 canary 同范式）：
+    /// 真实类金丝雀（本机锁步，与 RefreshRatePolicyTests 的 canary 同范式）：
     /// 两条分支都是硬断言、不 skip——键在就必须设得动；键不在就必须诚实降级且不崩。
     func testDrawsBackgroundCanaryOnRealWKWebView() {
         let webView = WKWebView(frame: .zero, configuration: WKWebViewConfiguration())

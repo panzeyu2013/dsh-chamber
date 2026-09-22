@@ -1,11 +1,10 @@
 /**
  * Pure note/count derivation for the remove-worktree dialog (design 08 §5.2
- * amendment, 2026-09 archived-aware running facts; 2026-12 review G1).
+ * amendment).
  *
- * The dialog's running-session notes were inline `filter`/length arithmetic in
- * the component and therefore untested. This module owns the derivation so the
- * plain-node suite pins it (test/shared/remove-notes.test.ts) and the component only
- * maps descriptors to localized copy.
+ * The dialog's running-session notes are derived here so the plain-node suite
+ * pins them (test/shared/remove-notes.test.ts); the component only maps
+ * descriptors to localized copy.
  *
  * The two host facts are DIFFERENT things and must never be conflated:
  *   - `runningSessionIds` is the display fact (every running session under the

@@ -1,8 +1,8 @@
 /**
- * The chamber polling kernel (single-source for the four poll loops that used
- * to carry their own deadline/sleep/backoff plumbing): the gateway restart/
- * start readiness poll, the remote dsh-runtime settle poll, the source serving
- * gate and the purge-time running-bit settle wait.
+ * The chamber polling kernel (the single source for the package's four poll
+ * loops): the gateway restart/start readiness poll, the remote dsh-runtime
+ * settle poll, the source serving gate and the purge-time running-bit settle
+ * wait.
  *
  * The kernel owns ONLY the loop shape — budget check, probe, verdict, wait —
  * and the one default sleep. Every caller keeps its own:

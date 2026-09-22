@@ -2,12 +2,9 @@
  * Repository script-test manifest and runner — the single entry for every
  * `*.test.mjs` under `scripts/`.
  *
- * WHY: the suites used to be wired as three hand-written command lists in the
- * root manifest and the domain boundaries were wrong — the upstream-tooling
- * script also carried the five gate tests and one release test, so neither its
- * name nor its ownership was true. The groups below mirror the scripts/
- * directory taxonomy (`scripts/README.md` §目录): a test's home states what it
- * locks, and the root manifest exposes one script per group.
+ * WHY: the groups below mirror the scripts/ directory taxonomy
+ * (`scripts/README.md` §目录): a test's home states what it locks, and the root
+ * manifest exposes one script per group.
  *
  * The manifest is authoritative in BOTH directions: a `*.test.mjs` under
  * `scripts/` that no group lists fails the run, a listed file that disappeared
@@ -93,8 +90,8 @@ export const GROUPS = {
 
 /**
  * Tests whose stem names the artifact they lock instead of a module beside them
- * (no single module can be named). Each entry needs the reason a reviewer
- * accepted, and the runner fails when an entry is no longer listed.
+ * (no single module can be named). Each entry needs the reason the exception
+ * is accepted, and the runner fails when an entry is no longer listed.
  */
 export const SUBJECT_TESTS = [
   {
@@ -115,11 +112,11 @@ export const SUBJECT_TESTS = [
   },
 ]
 
-// ONE walk for every gate that scans the repository (scripts/lib/walk.mjs;
-// P2-17 of the 13-scripts audit). This caller keeps its own narrow ignore set
+// ONE walk for every gate that scans the repository (scripts/lib/walk.mjs).
+// This caller keeps its own narrow ignore set
 // because scripts/ contains REAL directories named like build output:
 // scripts/release/ (tests) and scripts/lib/ (shared modules + their tests) —
-// the repo-wide union would silently drop both, and did once (2026-12).
+// the repo-wide union would silently drop both.
 const SCRIPT_TEST_IGNORED_DIRECTORIES = ['node_modules', 'dist', '.git']
 
 /**

@@ -2,8 +2,7 @@
  * `pnpm run test:control-plane` (root) → `pnpm --filter @dsh-chamber/control-plane
  * run test` — the control-plane unit-test set (release-checklist §3 names this
  * script as the authoritative list). Each file runs as its own `node <file>.ts`
- * child with inherited stdio (the same semantics as the former inline CI chain:
- * a failure in one file stops the run non-zero).
+ * child with inherited stdio (a failure in one file stops the run non-zero).
  *
  * Every listed file is required: silently skipping a deleted/renamed test
  * would make the aggregate command pass with less coverage than the checklist
@@ -12,21 +11,19 @@
  * the root `smoke` script runs that exact path directly (root package.json),
  * so it stays at the test/ top level.
  *
- * Zero-test guard (S5 / review/windows FIX C, ported from
- * packages/desktop/scripts/test.mjs:207-223): each child's node:test summary
+ * Zero-test guard: each child's node:test summary
  * is parsed; a listed file that exits 0 without a summary line or with
- * `tests 0` fails the run, so a manifest entry that was silently skipped can
- * no longer be green. A file whose registered tests are all platform-skipped
- * still prints a summary (tests > 0) and stays green — the listed set and its
- * selection semantics are unchanged.
+ * `tests 0` fails the run, so a manifest entry that is silently skipped
+ * cannot be green. A file whose registered tests are all platform-skipped
+ * still prints a summary (tests > 0) and stays green.
  *
- * Platform split (2026-09, structural — no file lists in workflow YAML): the
+ * Platform split (structural — no file lists in workflow YAML): the
  * POSIX-semantics suites (private-fs O_NOFOLLOW/0700 etc., fail-closed on
  * win32 by design) run on the POSIX legs via `test`. The Windows CI leg runs
  * `pnpm --filter @dsh-chamber/control-plane run test:win32` (= this script
  * with `--win32`), which runs WIN32_FILES below — win32-real or
- * platform-neutral units only. Extend WIN32_FILES as Windows semantics land
- * (M2b), never by hand-copying lists into ci.yml.
+ * platform-neutral units only. Extend WIN32_FILES as Windows semantics land,
+ * never by hand-copying lists into ci.yml.
  */
 
 // Runner semantics (missing listed file, zero-test guard, first-failure stop,
@@ -42,7 +39,7 @@ const GROUPS = {
   // api: 管理 REST API（连接/生命周期/实例状态）、写者静默 latch 与持久化存储
   'api': [
     'test/api/manager-api.test.ts',
-    // Writer-quiescence latch recovery (2026-09-10): the in-session re-proof, the
+    // Writer-quiescence latch recovery: the in-session re-proof, the
     // structured 409 detail and the explicit 清理并接管 action.
     'test/api/writer-latch.test.ts',
     'test/api/storage.test.ts',
@@ -60,7 +57,7 @@ const GROUPS = {
     // 平台无关，所以 Windows 腿同样跑（见 WIN32_FILES）。
     'test/protocol/session-state-protocol.test.ts',
     'test/protocol/session-mux.test.ts',
-    // 跨包 parity/lockstep（审计 14 · A1/A2）：control-plane 与 dsh-runtime 的
+    // 跨包 parity/lockstep：control-plane 与 dsh-runtime 的
     // 孪生实现以相对路径 import 对拍，绝对期望值 + 意图分叉登记表 + 导出面清单
     // 三重锁定；任一侧改名/删面/静默漂移都会让这两条变红。
     // private-fs 门含 POSIX 权限/符号链接语义，只在 POSIX 腿跑（与同一孪生实现
@@ -69,7 +66,7 @@ const GROUPS = {
     'test/protocol/private-fs-parity.test.ts',
     'test/protocol/win-probes-parity.test.ts',
     // Node-side shared primitives with the desktop main process and the gateway
-    // (2026-12 single-sourcing pass; record-read / error-text leaves).
+    // (single-sourcing; record-read / error-text leaves).
     'test/protocol/record-read.test.ts',
     'test/protocol/error-text.test.ts',
   ],
@@ -91,7 +88,7 @@ const GROUPS = {
     // byte-identity of the `--patch` overlay.
     'test/host-logs/host-log-bridge.test.ts',
   ],
-  // proxy: 实例反向代理（HTTP/WS/SSE）、WS 帧、S0 注入预算与静态前端服务
+  // proxy: 实例反向代理（HTTP/WS/SSE）、WS 帧、注入预算与静态前端服务
   'proxy': [
     'test/proxy/instance-proxy.test.ts',
     'test/proxy/response-encoding.test.ts',
@@ -101,11 +98,11 @@ const GROUPS = {
     'test/proxy/gateway-transport.test.ts',
     'test/proxy/ws-frames.test.ts',
     'test/proxy/static-serving.test.ts',
-    // S0 injection-budget pin: MAX_HTML_INJECTION_BYTES is the single source
+    // Injection-budget pin: MAX_HTML_INJECTION_BYTES is the single source
     // (the gateway html-inject.ts consumes it via @dsh-chamber/control-plane —
-    // no twin constant since the B-6e dedupe); the test pins the budget value.
+    // no twin constant); the test pins the budget value.
     'test/proxy/html-inject-lockstep.test.ts',
-    // SSE 断线续传（remote-session-state-and-switch.md §11 风险条 / W1）：
+    // SSE 断线续传：
     // Last-Event-ID 经实例代理的透传、SSE 帧序与客户端断开的释放，
     // 行为级锁定——若代理吃掉该头，续传会静默降级为整量重取。
     'test/proxy/sse-resume.test.ts',
@@ -115,8 +112,7 @@ const GROUPS = {
     'test/plugins/host-graph-seed.test.ts',
     'test/plugins/cordis-inserts.test.ts',
     // 受保护集合 / 代耦合 / 装后复验的完整判定面（design 21 §6.11，决策 19）。
-    // 本文件此前只靠手动 `node <path>` 运行，所以 §6.11 的全部 pin 与
-    // familyNamesFromLockfileClosure（C11 同源解析器）从未进入 CI —— 而它正是
+    // §6.11 的全部 pin 与 familyNamesFromLockfileClosure（C11 同源解析器）是
     // 「官方 opt-in 层可装可卸」这条契约唯一的单测锚点。
     'test/plugins/protected-plugins.test.ts',
   ],
@@ -124,10 +120,10 @@ const GROUPS = {
   'windows': [
     // Windows probe parsers/classifiers run on every leg; the win32-only
     // lifecycle integration test self-skips on POSIX and runs on the Windows
-    // CI leg (design 02 §5.1 parity work, M1).
+    // CI leg (design 02 §5.1 parity work).
     'test/windows/win-probes.test.ts',
     'test/windows/win32-lifecycle.integration.test.ts',
-    // Zero-test guard of this manifest (S5 / review/windows FIX C), pinned on
+    // Zero-test guard of this manifest, pinned on
     // every leg and on the Windows one.
     'test/windows/test-runner-guard.test.mjs',
   ],
@@ -138,7 +134,7 @@ const WIN32_FILES = [
   // runs the real CIM/netstat/taskkill gates on windows-2022.
   'test/windows/win-probes.test.ts',
   'test/windows/win32-lifecycle.integration.test.ts',
-  // Zero-test guard of this manifest (S5 / review/windows FIX C); it is
+  // Zero-test guard of this manifest; it is
   // platform-neutral and fast, so the Windows leg pins it too.
   'test/windows/test-runner-guard.test.mjs',
   // The §6.11 judgement face is platform-neutral (join/mkdtemp/tmpdir only) and

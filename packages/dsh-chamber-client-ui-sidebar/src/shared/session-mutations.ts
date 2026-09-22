@@ -1,5 +1,5 @@
 /**
- * 会话变更的**唯一事实出口**（design 05 §2.2，2026-12 修订）——工作区出口
+ * 会话变更的**唯一事实出口**（design 05 §2.2）——工作区出口
  * （shared/workspace-mutations.ts）的会话侧同构件。
  *
  * WHY 收口而不是每个调用点各发一次：会话回声（shared/session-echo.ts）是
@@ -7,7 +7,7 @@
  * 异步通道能进挂载壳的官方 summaries（宿主 `api-session/added` 广播），竞态窗
  * 内随后的挂载推送会用这份还不含它的 store 替换整份聚合；而未挂载来源（收割后的
  * 稳态，工作区行仍是真实推送行、"+" 仍可点）根本收不到该广播，unary 兜底又保不住
- * 已推送来源的工作区成员位——两条分支都刷不出这一行（真机反馈：新建的会话不出现，
+ * 已推送来源的工作区成员位——两条分支都刷不出这一行（新建的会话不出现，
  * 要切到那个服务器才刷新出来）。事实必须由**任何**应用内创建者发布：侧栏的
  * "+"、会话行菜单的 fork，以及 Git worktree 插件的会话创建（create/adopt/
  * recovery）——工作区回声的第二入口教训（漏发一个调用点，行就必须点开那个
@@ -39,7 +39,7 @@ export interface SessionCreationOptions {
    */
   title?: string
   /**
-   * I10 归因（plan §8-R16/§10）：这次创建的**触发路径**。每个调用点都必须表态
+   * 归因：这次创建的**触发路径**。每个调用点都必须表态
    * （默认 'unknown' 是仪表覆盖缺口的信号，不是可接受的常态——验收断言
    * "无标签外来源"）。
    */
@@ -58,7 +58,7 @@ export async function createSessionForSource(
     sessionId,
     workspaceId,
     blank: true,
-    // I10：标签是加法字段——未表态的调用方**不发**该键（事实形状逐字节不变，旧
+    // 标签是加法字段——未表态的调用方**不发**该键（事实形状逐字节不变，旧
     // 订阅者不受影响），桥在记账时把它计为 'unknown'（仪表覆盖缺口的信号）。
     ...(options.origin === undefined ? {} : { origin: options.origin }),
     ...(options.title === undefined ? {} : { title: options.title }),

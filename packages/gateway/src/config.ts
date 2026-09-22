@@ -77,11 +77,11 @@ export interface GatewayConfig {
    * discovery, no links, no cookie, no route (those paths keep their normal
    * 401/session verdict). */
   warmup?: boolean
-  /** Read-only session-state watcher (plan W1 / WS-B; default ON). false turns
+  /** Read-only session-state watcher (default ON). false turns
    * the whole observer off: every /chamber/session-state* route answers 503
    * session_state_disabled, no mux socket to the local dsh is opened, and the
    * desktop classifies the source as "gateway present, status face disabled"
-   * (never as an old gateway — plan §11 可整体关闭). Kill switch:
+   * (never as an old gateway). Kill switch:
    * DSH_GATEWAY_SESSION_STATE=0. */
   sessionState?: boolean
 }
@@ -266,7 +266,7 @@ export function parseGatewayConfig(input: GatewayConfigInput, stateDir: string, 
   // point of the login page's prefetch; the kill switch exists for operators
   // who do not want the pre-auth route at all).
   const warmup = input.warmup ?? envBoolean('DSH_GATEWAY_WARMUP') ?? true
-  // Plan W1 / WS-B: the read-only session-state watcher is ON by default (its
+  // The read-only session-state watcher is ON by default (its
   // routes are additive and the observer is read-only); DSH_GATEWAY_SESSION_STATE=0
   // disables the whole face for operators who do not want the mux connection.
   const sessionState = input.sessionState ?? envBoolean('DSH_GATEWAY_SESSION_STATE') ?? true

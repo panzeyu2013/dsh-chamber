@@ -1,5 +1,5 @@
 /**
- * 视图调度簇（）：预热资格 / 收割保温 /
+ * 视图调度簇：预热资格 / 收割保温 /
  * 保留候选回收 / 后台相位与 view-boot 放弃判定。全部判定与账本仍是既有纯模块
  * （baseline-harvest / retention / prewarm-ledger / source-readiness）；本 hook
  * 只做装配，依赖面显式类型化（无 any），并返回两个最新闭包 ref 给 App 的
@@ -100,33 +100,32 @@ export function useViewScheduler(deps: ViewSchedulerDeps): ViewScheduler {
     for (const id of autoPrewarmedRef.current) {
       if (!liveRemoteIds.has(id)) autoPrewarmedRef.current.delete(id)
     }
-    // 保留槽位占用门（2026 评审 Major-1 修复）：保留槽（RETAINED_HIDDEN_VIEWS
+    // 保留槽位占用门：保留槽（RETAINED_HIDDEN_VIEWS
     // = 1）被「非自动预热」的隐藏非 local 壳占用（用户切走的温壳；含正在
     // 打开、尚未 settle 的用户壳——保守视为占用）时，不再启动投机预热。
     // 否则预热壳 settle 的 hiddenSince 恒晚于用户壳的切走时间，超限回收按
     // hiddenSince 排序会把用户的温壳先回收、从未请求的预热壳占据槽位，且
     // 被回收源进入预热抑制（reclaimView）——双倍保冷，违背 retention.ts
     // 头注「最近访问的 1 个」契约（触发形态：睡眠唤醒/实例增删等 idle 边
-    // 缘 + 3+ 源；登记见 design 05  注记与 STATUS 性能第二阶段条）。
+    // 缘 + 3+ 源）。
     // 用户主动点开时 selectView 同步摘除 autoPrewarmed 标记，此门随之为
     // 该壳让位；同窗候选内的回收偏好（预热壳先走）见 decideReclaimCandidates
     // 的 prewarmOriginIds 排序。
     const retentionSlotOccupied = mountedViews.some(id =>
       id !== LOCAL_INSTANCE_ID
       && id !== activeView
-      // W2：**从未 settle** 的被推迟视图不持有任何壳资源，不算占用后台槽
+      // **从未 settle** 的被推迟视图不持有任何壳资源，不算占用后台槽
       // （与下方"boot 失败的壳不计占用"同源：算占用会让 warmRemaining 恒 0）。
       // 已 settle 后来源才被手动断开的壳仍是一个真壳：照常占槽、照常进 retention
-      // 候选（）。
+      // 候选。
       && !(deferredBootRef.current.has(id) && !isSettledShellState(shellStates[id]))
       && !autoPrewarmedRef.current.has(id)
       // 已失败的用户壳（error !== null）不算占用：它既不会被回收（隐藏 1 壳
-      // 时 excess=0）也不是预热壳，若算占用则 remaining 恒 0、收割链整场停摆
-      // （）。
+      // 时 excess=0）也不是预热壳，若算占用则 remaining 恒 0、收割链整场停摆。
       && shellStates[id]?.error == null)
     // 只统计"仍挂载且未失败"的预热壳：一个 boot 失败的预热壳会一直挂在
     // autoPrewarmedRef 里且不会被回收（无收割意图、excess=0），若计进占用则
-    // warmRemaining 恒 0（）。
+    // warmRemaining 恒 0。
     const liveAutoPrewarmed = mountedViews.filter(id =>
       autoPrewarmedRef.current.has(id) && shellStates[id]?.error == null).length
     const warmRemaining = retentionSlotOccupied
@@ -135,45 +134,43 @@ export function useViewScheduler(deps: ViewSchedulerDeps): ViewScheduler {
     const readyUnmountedIds = remoteInstances
       // `phase === 'ready'` 之外再过一道 instanceConnected：remoteStatus 以 raw id
       // 为键，kind 切换（ssh↔http）后可能残留旧 READY 投影，status.kind 不匹配时
-      // instanceConnected 会拒绝——否则会给其实未就绪的源白烧一次尝试
-      // （）。
+      // instanceConnected 会拒绝——否则会给其实未就绪的源白烧一次尝试。
       .filter(instance => remoteStatus[instance.id]?.phase === 'ready'
         && instanceConnected(instance.kind, health, remoteStatus, instance.id))
       // 托管 dsh 终态停机的 gateway 源不预热/不收割：壳 boot 必然失败（网关
-      // 侧 503），只会白烧尝试次数并占用唯一后台槽（问题 B 的投影事实在此
+      // 侧 503），只会白烧尝试次数并占用唯一后台槽（该投影事实在此
       // 直接作为门控输入；用户启动托管 dsh 后本门随 15s 探针自动放开）。
       .filter(instance => !(instance.kind === 'gateway'
         && managedRuntimeUnusable(managedRuntime[sourceIdForInstance(instance)])))
       .map(sourceIdForInstance)
       .filter(id => !mountedViews.includes(id))
-    // 收割优先（design 05  / baseline-harvest.ts）：还没拿到权威基线的源
+    // 收割优先（design 05 / baseline-harvest.ts）：还没拿到权威基线的源
     // 排在最前，且**不受**"回收后禁预热"抑制——收割正是这类源（从未推送、
     // 或曾降级后被回收）的治本臂；抑制只为防止 drainPrewarm 立刻重 boot 已
     // 回收的温壳，不能反过来把降级源永久钉在兜底视图里。
     const harvestIds = readyUnmountedIds
       .filter(id => harvestPending(harvestStateRef.current[id]))
     harvestCandidatesRef.current = new Set(harvestIds)
-    // 保留策略：被回收过的源不再自动预热——否则回收(拆壳)会立即被
+    // 保留策略：被回收过的源不自动预热——否则回收(拆壳)会立即被
     // drainPrewarm 重新 boot(白回收循环)。抑制持续到用户主动点开
     // （selectView 清除）或来源从注册表删除（retireSources 清除）。
     // 另外排除"尝试耗尽且从未拿到基线"的源（harvestParked）：它若退回普通
     // 预热会白拿第三次 boot，并以 autoPrewarmed 身份长期占用唯一后台槽
     // （隐藏 1 壳时 retention 不会回收它）——此后本会话再没有任何源能预热
-    // 或收割（）。
+    // 或收割。
     const warmIds = readyUnmountedIds
       .filter(id => !prewarmSuppressedRef.current.has(id))
       .filter(id => !harvestParked(harvestStateRef.current[id]))
       .filter(id => !harvestIds.includes(id))
     // 收割候选在场时**独占**后台槽（prewarmCandidates）：若让温壳顶上来，它会
     // 变成 autoPrewarmed，而隐藏 1 壳时 retention 不会回收它 ⇒ remaining 恒 0、
-    // 本会话剩余来源永远拿不到基线（一个失败源阻塞全部——违反正确性不变量；
-    // ）。退避期空转槽位是有界代价，收割全部结束/停用后
+    // 本会话剩余来源永远拿不到基线（一个失败源阻塞全部——违反正确性不变量）。
+    // 退避期空转槽位是有界代价，收割全部结束/停用后
     // 温壳预热照常恢复。
     // **收割有自己的预算线**：用户保留的隐藏温壳会让 warmRemaining 恒 0
     // （retention 只保 1 个隐藏壳），但收割壳是瞬时的（推送即回收 / 仅最后
     // 一个保留 / 有截止与放弃上限），不能被用户温壳永久挡死——否则用户点开过
-    // 任何来源之后，后变 ready 的来源永远停在兜底视图（
-    // 的第二形态）。
+    // 任何来源之后，后变 ready 的来源永远停在兜底视图。
     const slotBudget = harvestIds.length > 0 ? MAX_PREWARMED_REMOTE_VIEWS : warmRemaining
     return new Set(prewarmCandidates(harvestIds, warmIds, slotBudget))
   }, [remoteInstances, remoteStatus, mountedViews, activeView, managedRuntime, shellStates])
@@ -182,7 +179,7 @@ export function useViewScheduler(deps: ViewSchedulerDeps): ViewScheduler {
   const drainPrewarm = useCallback(() => {
     if (prewarmInflightRef.current !== null) return
     if (!localSettledRef.current) return
-    // 2026 性能整改：仅前台推进预热——窗口隐藏期不为"用户没看"的源继续
+    // 仅前台推进预热——窗口隐藏期不为"用户没看"的源继续
     // boot 全量 UI（恢复可见由 visibilitychange 补偿一轮 drain）。
     if (!shouldRunBackgroundPhase(document.visibilityState)) return
     const now = Date.now()
@@ -192,8 +189,8 @@ export function useViewScheduler(deps: ViewSchedulerDeps): ViewScheduler {
     // 其次温壳；退避中的收割候选被跳过而不是挡住它后面的温壳。
     const next = pickPrewarmTarget(prewarmQueueRef.current, prewarmEligibleRef.current, pendingOf, dueOf)
     if (next === undefined) return
-    // R8：这次选取来自 hover 意图（队列重排）⇒ 记一次意图 boot。重排本身不
-    // 计费；计费发生在"真的启动"这一刻（blueprint ），且只影响后续意图的
+    // 这次选取来自 hover 意图（队列重排）⇒ 记一次意图 boot。重排本身不
+    // 计费；计费发生在"真的启动"这一刻，且只影响后续意图的
     // 准入，绝不回滚/干扰这次既有语义的挂载。
     if (intentPriorityRef.current.delete(next)) {
       intentBudgetRef.current = intentPrewarmSpent(intentBudgetRef.current, next, now)
@@ -209,7 +206,7 @@ export function useViewScheduler(deps: ViewSchedulerDeps): ViewScheduler {
     prewarmInflightRef.current = next
     prewarmInflightAtRef.current = now
     autoPrewarmedRef.current.add(next)
-    // I8：一次后台挂载真的开始。
+    // 一次后台挂载真的开始。
     recordPrewarm('attempt', next)
     setMountedViews(prev => (prev.includes(next) ? prev : [...prev, next]))
   }, [])
@@ -223,7 +220,7 @@ export function useViewScheduler(deps: ViewSchedulerDeps): ViewScheduler {
     }
     // 保留策略：settle 完成才起 60s 回收窗——隐藏视图（预热完成/切走后
     // settle）从此刻计"可回收时长"，boot 耗时不被白付；**屏上视图保持无键**
-    // （W3：判据是 paintedView，不是 activeView——持有窗内"已选中但还没画上屏"
+    // （判据是 paintedView，不是 activeView——持有窗内"已选中但还没画上屏"
     // 的视图仍是隐藏的，给它起表不会误拆，但屏上那个壳绝不能开始隐藏计时）。
     if (instanceId === paintedViewRef.current) delete hiddenSinceRef.current[instanceId]
     else hiddenSinceRef.current[instanceId] = Date.now()
@@ -237,7 +234,7 @@ export function useViewScheduler(deps: ViewSchedulerDeps): ViewScheduler {
     // 注：settle/boot-failed 的 perf 标记由 shell.ts 在 settle 返回点统一打点
     // （本回调只消费状态，避免同名双标记污染 trace）。
     // 重新进入 booting/idle（「重试」复位）即重新计时：否则在放弃后很久才重试的
-    // 视图会立刻被同一轮清扫再判超时（）。
+    // 视图会立刻被同一轮清扫再判超时。
     if (!state.booted && state.error === null) viewBootStartedAtRef.current[instanceId] = Date.now()
     setShellStates(prev => (prev[instanceId] === state ? prev : { ...prev, [instanceId]: state }))
     // 收割挂载 boot 失败：本次尝试失败（尝试计数与退避已随 attempt 武装），
@@ -249,7 +246,7 @@ export function useViewScheduler(deps: ViewSchedulerDeps): ViewScheduler {
     }
   }, [])
 
-  // ---- N-ctx 保留策略（2026 性能整改，纯函数与语义见 src/retention.ts）----
+  // ---- N-ctx 保留策略（纯函数与语义见 src/retention.ts）----
   // 已 settle（booted 或 error）视图集合：booting/未上报 = 未 settle，不回收
   // （避免取消在途 boot 白付成本）。
   const settledViewIds = useMemo(() => {
@@ -263,7 +260,7 @@ export function useViewScheduler(deps: ViewSchedulerDeps): ViewScheduler {
   /** 把"永不 settle 的挂载"标记为失败：让既有失败覆盖层与重试出现（该壳若是
    * 活动/待开视图则不可回收，见 reclaimHiddenViews 的绝对放弃臂）。 */
   const markAbandonedShellFailed = useCallback((id: string) => {
-    // 重新计时（）：否则用户点「重试」后，挂载时刻仍是原值，
+    // 重新计时：否则用户点「重试」后，挂载时刻仍是原值，
     // 同一轮清扫会立刻再次判超时——覆盖层原地复活、新 boot 永远看不到，切走还会
     // 把在途重试的壳按保留策略回收掉。
     viewBootStartedAtRef.current[id] = Date.now()
@@ -293,20 +290,20 @@ export function useViewScheduler(deps: ViewSchedulerDeps): ViewScheduler {
    * 数据面降级按既有语义自然发生：ctx 卸载触发快照 producer clear，App 的
    * onInstanceSnapshot withdrawal 分支对已推送源保留 mounted marker（最后权威
    * 分组/归档集留在侧栏），30s unary watchdog 以 mounted 合并持续刷新其会话行
-   * 与 running 位（05 ）。已知取舍：壳内运行中任务的完成蓝点/通知边沿随
+   * 与 running 位（05）。已知取舍：壳内运行中任务的完成蓝点/通知边沿随
    * runtime-facts 通道撤回而暂停，直至该源重开（冷 boot 首报重新播种）——
-   * 60s 安全窗 + RETAINED_HIDDEN_VIEWS=1 限制损失面，登记于 STATUS.md。
+   * 60s 安全窗 + RETAINED_HIDDEN_VIEWS=1 限制损失面。
    */
   const reclaimView = useCallback((id: string, reason: 'retention' | 'harvest' = 'retention') => {
     if (id === LOCAL_INSTANCE_ID || !mountedViews.includes(id)) return
-    // W3：**屏上的壳永不被回收**——持有窗内 painted 仍是旧视图而 active 已是目标，
-    // 只查 active/pending 会把用户正在看的那一屏拆掉（蓝图 -1；这是本函数
+    // **屏上的壳永不被回收**——持有窗内 painted 仍是旧视图而 active 已是目标，
+    // 只查 active/pending 会把用户正在看的那一屏拆掉（这是本函数
     // 唯一的拆除入口，守卫放这里覆盖推迟/放弃/retention/收割所有调用臂）。
     if (id === activeViewRef.current || id === paintedViewRef.current || id === pendingViewRef.current) return
-    // 设置面板正在编辑的来源：拆壳 = 面板当前面消失（design 05  的面板 hold）。
+    // 设置面板正在编辑的来源：拆壳 = 面板当前面消失（design 05 的面板 hold）。
     // 守卫放在**唯一拆除入口**上而不是逐个调用点：推迟臂与 retention 循环各有同名
     // 守卫，但 135s 放弃臂、收割失败/放弃与遮罩放弃落地臂都能到达本函数——任何一条
-    // 漏守卫都会把面板钉死在"正在启动该实例的前端"（）。
+    // 漏守卫都会把面板钉死在"正在启动该实例的前端"。
     // 面板关闭时 SettingsShell 显式 setSettingsTarget(undefined)，hold 不超期；
     // 来源退役的卸载走注册表删除臂（不经本函数），不存在"退役壳拆不掉"。
     // 守卫放在函数最前 = 命中即**纯 no-op**（连收割槽释放都不做）：不会造成
@@ -314,7 +311,7 @@ export function useViewScheduler(deps: ViewSchedulerDeps): ViewScheduler {
     // 后台 boot）；而"推迟 + 未结算"这种**不计入占用**的形状另有收口：135s 放弃臂
     // 独立清 `prewarmInflightRef`（abandon 循环不读面板守卫），面板关闭后下一个 tick
     // 由放弃/收割/推迟任一臂照常恢复。
-    // 解释所有形状，对 deferred+未结算不成立（结论不变，理由曾错）。
+    // 解释所有形状，对 deferred+未结算不成立。
     if (id === settingsTargetRef.current) return
     // 收割回收时后台槽就是它自己：boot 已产出首个推送（或已失败），先释放槽位
     // 再回收，否则 prewarmInflight 守卫会把自己挡回去（保留回收语义不变）。
@@ -337,7 +334,7 @@ export function useViewScheduler(deps: ViewSchedulerDeps): ViewScheduler {
       prewarmEligibleRef.current = next
     }
     disposeInstanceShell(id)
-    // 诊断收敛（2026 评审 Minor-2 修复）：boot-graph 诊断通道没有 ctx 卸载
+    // 诊断收敛：boot-graph 诊断通道没有 ctx 卸载
     // 撤回——注册表删除路径之外的唯一清除点是显式 undefined 上报与退役。
     // 回收是新的生命周期类别（ctx 拆除而来源仍注册），不清除会让被拆 ctx
     // 的旧非 ok 诊断（bundle-load-failed / restart-required）挂在源上直到
@@ -353,7 +350,7 @@ export function useViewScheduler(deps: ViewSchedulerDeps): ViewScheduler {
     setRetryTokens(prev => withoutRemovedSourceKeys(prev, new Set([id])))
   }, [mountedViews])
 
-  // 遮罩「切换来源」的落地臂（W1）：切换落地（activeView 变化）后回收被放弃的
+  // 遮罩「切换来源」的落地臂：切换落地（activeView 变化）后回收被放弃的
   // 视图。reclaimView 自己的活动/待开守卫**不被绕过**——标记留到真正拆掉为止；
   // 拆除与 reclaimView 同一条路：dispose + 同 commit 卸载 + 抑制自动预热。
   useEffect(() => {
@@ -399,7 +396,7 @@ export function useViewScheduler(deps: ViewSchedulerDeps): ViewScheduler {
         reclaimView(id, 'harvest')
       }
     }
-    // 绝对放弃臂（）：上面的截止臂只扫 harvestIntentRef，而
+    // 绝对放弃臂：上面的截止臂只扫 harvestIntentRef，而
     // "用户点开正在收割的壳"会撤销意图、普通温壳预热从不写意图、selectView/深链
     // 挂载的壳更与预热无关——boot 挂死时后台槽/该视图就永久卡住。这里按**每个挂载
     // 视图的挂载时刻**独立兜底：只判仍未 settle 的挂载（已 settle 的走上方的截止
@@ -438,7 +435,7 @@ export function useViewScheduler(deps: ViewSchedulerDeps): ViewScheduler {
       })) continue
       reclaimView(id, 'retention')
     }
-    // W2（F1 复核）：**从未 settle** 的被推迟视图既不占隐藏壳数、也不由 retention
+    // **从未 settle** 的被推迟视图既不占隐藏壳数、也不由 retention
     // 回收——它没有壳可拆（推迟回收臂按隐藏宽限负责它）。不排除会让一次"设置面板选了
     // 离线来源"把 excess 抬到 ≥1，从而把用户真正的温壳挤掉（与 prewarmInflightId 的
     // 同类排除同源）。已 settle 的推迟壳是**真壳**：它照常计数、照常进候选窗。
@@ -450,8 +447,8 @@ export function useViewScheduler(deps: ViewSchedulerDeps): ViewScheduler {
       : mountedViews.filter(id => !unsettledDeferredIds.has(id))
     const candidates = decideReclaimCandidates({
       mountedViews: retentionMountedViews,
-      // W3：保留判定按 **painted**（"谁在屏上"）——持有窗内 active 已是目标，传它会把
-      // 屏上的旧视图算成隐藏壳、并让 hiddenNonLocalCount 少算一个（蓝图 -2）。
+      // 保留判定按 **painted**（"谁在屏上"）——持有窗内 active 已是目标，传它会把
+      // 屏上的旧视图算成隐藏壳、并让 hiddenNonLocalCount 少算一个。
       activeViewId: paintedViewRef.current,
       hiddenSince: hiddenSinceRef.current,
       settled: settledViewIds,
@@ -464,7 +461,7 @@ export function useViewScheduler(deps: ViewSchedulerDeps): ViewScheduler {
       prewarmOriginIds: new Set(autoPrewarmedRef.current),
       now: Date.now(),
     })
-    // 设置面板正在编辑的来源不可回收（design 05 ，）：
+    // 设置面板正在编辑的来源不可回收（design 05）：
     // 面板渲染的是该来源自己 boot ctx 的台账，拆掉壳 = 正在编辑的设置面消失。
     // 过滤而非改判定：面板关闭后该源重新成为普通保留候选。
     for (const id of candidates) {

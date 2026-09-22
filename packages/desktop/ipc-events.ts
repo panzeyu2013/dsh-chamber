@@ -61,12 +61,12 @@ export const IPC_CHANNELS = {
   /** Manual chamber-plugin seed-cache sync onto a gateway instance (design 21 §6.5). */
   GATEWAY_PLUGIN_SYNC: 'desktop_gateway_plugin_sync',
   /** Batch registry install/remove + restart-to-apply onto a gateway
-   *  instance (design 21 §6.5, plan Phase 4.6): main-process confirmation
+   *  instance (design 21 §6.5): main-process confirmation
    *  (showMessageBox), serial per-op submissions over the registered
    *  transport, bounded executor-settle + restart readiness polls. */
   GATEWAY_PLUGIN_APPLY: 'desktop_gateway_plugin_apply',
-  /** Folder pick → tarball upload onto a gateway instance (design 21 §6.5,
-   *  plan Phase 4.6): PICK-ONLY (main opens the folder dialog, no
+  /** Folder pick → tarball upload onto a gateway instance (design 21 §6.5):
+   *  PICK-ONLY (main opens the folder dialog, no
    *  renderer-supplied path). */
   GATEWAY_PLUGIN_MATERIALIZE: 'desktop_gateway_plugin_materialize',
   SSH_CONFIG_LIST: 'desktop_ssh_config_list',
@@ -116,5 +116,5 @@ export const IPC_CHANNELS = {
 } as const
 
 /** OS wake-from-sleep push channel (design 14 D4). Kept as a named export for
- *  the historical importers (main.ts / tests). */
+ *  its importers (main.ts / tests). */
 export const SYSTEM_RESUME_EVENT = IPC_CHANNELS.SYSTEM_RESUME

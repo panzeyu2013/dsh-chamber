@@ -1,11 +1,10 @@
 /**
- * plugin-tarball unit tests (design 21 §6.5, plan Phase 4.6): the desktop
+ * plugin-tarball unit tests (design 21 §6.5): the desktop
  * plugin-source tarball builder + bounded tgz manifest reader — npm-pack
  * archive layout, honest skips, cap errors with machine codes, the manifest
  * projection, and the TEXTUAL LOCKSTEP tests pinning every cap + the version
  * grammar to the gateway route's own literals.
- * Sibling parts: plugin-sync.test.ts (which also carries the folded-in
- * remote-read suite).
+ * Sibling parts: plugin-sync.test.ts.
  */
 
 import { test } from 'node:test'
@@ -257,7 +256,7 @@ test('a real desktop-built archive with an entry AFTER package/package.json stil
   write(fixture, 'package.json', JSON.stringify({ name: 'e2e-capture-pkg', version: '1.2.3' }))
   write(fixture, 'a.js', 'x')
   // Sorted after package.json, so the archive's LAST file entry is zzz.txt —
-  // the exact shape the gateway scan used to reject as tgz_invalid.
+  // the shape the gateway scan must not reject as tgz_invalid.
   write(fixture, 'zzz.txt', 'y')
   const result = await buildPluginTarball(fixture)
   assert.ok(
@@ -318,7 +317,7 @@ test('buildPluginTarball manifest validation: name/version whitelists + JSON hon
     assert.equal(result.manifest.ok, entry.manifestName !== null)
     if (entry.manifestName !== null && result.manifest.ok) assert.equal(result.manifest.name, entry.manifestName)
     if (!result.manifest.ok) assert.match(result.manifest.error, entry.errorMatch)
-    // pluginNameFromFolder is the NAME-ONLY read (plan §6.5): it applies the
+    // pluginNameFromFolder is the NAME-ONLY read: it applies the
     // registry name whitelist and nothing else (no version, no domain rule).
     assert.equal(pluginNameFromFolder(fixture), entry.nameOnly)
   }
@@ -397,7 +396,7 @@ test('classifyPluginPick: an archive beyond TARBALL_MAX_ARCHIVE_BYTES is refused
 })
 
 // ---------------------------------------------------------------------------
-// Archive identity binding (2026-12 audit): pnpm installs the manifest at
+// Archive identity binding: pnpm installs the manifest at
 // `package/package.json`, so THAT identity is the one the protected-set
 // judgement must see — never an archive-order-first decoy.
 // ---------------------------------------------------------------------------
@@ -409,9 +408,9 @@ test('classifyPluginPick: a stray root package.json can never mask the installed
   write(fixture, 'index.js', 'x')
   const built = await buildPluginTarball(fixture)
   assert.equal(built.manifest.ok, true)
-  // Decoy FIRST in archive order: the retired reader returned the first
-  // parseable candidate, i.e. this innocent third-party name — and the ssh /
-  // local write faces judged the protected-set on THAT name.
+  // Decoy FIRST in archive order: a first-parseable-candidate reader would
+  // return this innocent third-party name, and the ssh / local write faces
+  // would judge the protected-set on THAT name.
   const decoy = prependRootManifestDecoy(built.buffer, { name: 'innocent-third-party', version: '1.0.0' })
   writeFileSync(archivePath, decoy)
   const pick = classifyPluginPick(archivePath)

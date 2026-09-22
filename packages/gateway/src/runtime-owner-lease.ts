@@ -1,7 +1,7 @@
 /**
- * Gateway runtime owner lease (2026-12 audit F2 split): the single-process
- * single-stateDir guard, moved verbatim out of runtime-manager.ts. One gateway
- * per stateDir: O_EXCL create closes the read-check-write TOCTOU, a stale owner
+ * Gateway runtime owner lease: the single-process single-stateDir guard. One
+ * gateway per stateDir: O_EXCL create closes the read-check-write TOCTOU, a
+ * stale owner
  * with a proven-dead pid is taken over by rename-claim, and any takeover that
  * cannot prove the exact moved bytes and the fresh token fails loud.
  */
@@ -150,7 +150,7 @@ export function assertSingleOwner(baseDir: string, beforeStaleRename?: () => voi
     if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
       throw new Error('another gateway process is starting concurrently against this stateDir; refusing to start')
     }
-    // Fail loud (review fix): a takeover that cannot rewrite the owner record
+    // Fail loud: a takeover that cannot rewrite the owner record
     // must NOT continue without any owner record — that would silently disable
     // the single-process guard for this stateDir (a concurrent second gateway
     // could then run against the same stateRoot).
@@ -177,8 +177,6 @@ export function releaseSingleOwner(baseDir: string, lease: RuntimeOwnerLease): v
     throw new Error('gateway runtime owner token no longer matches; refusing to release another owner')
   }
   removeRuntimeFileNoFollow(baseDir, lease.file, { expectedIdentity: current.identity })
-  // The in-memory lease is released only after the on-disk record was removed
-  // (the callers used to delete the key themselves right after this call; the
-  // fold keeps the same ordering and failure semantics — moved code, 2026-12).
+  // The in-memory lease is released only after the on-disk record was removed.
   processRuntimeOwnerLeases.delete(lease.leaseKey)
 }

@@ -1,10 +1,9 @@
 #!/usr/bin/env node
 /**
- * ensure-artifacts.mjs — 构建期产物自举（2026-12「产物移出 git」改造）。
+ * ensure-artifacts.mjs — 构建期产物自举。
  *
- * 这些产物以前 tracked 进仓，靠「提交物 + freshness 门」保鲜；现在改为构建期
- * 生成、不入 git，因此 clean checkout 必须能自举。清单就是 C8（scripts/upstream/
- * verify-upstream-touchpoints.mjs）覆盖的同一组产物：
+ * 这些产物不入 git，在构建期生成，因此 clean checkout 必须能自举。清单就是 C8
+ * （scripts/upstream/verify-upstream-touchpoints.mjs）覆盖的同一组产物：
  *   - packages/dsh-runtime/dist/index.js
  *   - packages/dsh-chamber-seed-{client-graph,git-worktree,archive-cleanup,open-in}/dist/index.js
  *   - packages/dsh-chamber-client-ui-mobile/{dist/index.js,lib/index.js,lib/client.js,lib/client.js.map}

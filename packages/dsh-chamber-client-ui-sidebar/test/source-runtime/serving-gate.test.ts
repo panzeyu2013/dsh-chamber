@@ -1,5 +1,5 @@
 /**
- * Wait-for-serving gate (2026-09-10, design 09 §3.2): the bounded ladder that separates "the instance is still
+ * Wait-for-serving gate (design 09 §3.2): the bounded ladder that separates "the instance is still
  * starting" from "the instance will never serve" — the whole point of the gate is that the second case fails FAST.
  */
 import { test } from 'node:test'

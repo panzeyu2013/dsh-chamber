@@ -4,7 +4,7 @@
  * workspace 包源树就绪（构建期源码复用：vite 与 gen-typert-remotes 均按源码
  * 解析，见设计 05 §6 与 vite.config.mjs）。
  *
- * 单一事实来源（2026-09 submodule 化）：`vendor/harness-checkout` 是固定
+ * 单一事实来源：`vendor/harness-checkout` 是固定
  * commit 的 git submodule（gitlink 即 pin），本脚本只认这一个源——不读
  * DSH_CHAMBER_HARNESS_ROOT / DSH_CHAMBER_HARNESS_COMMIT、不复用兄弟检出、
  * 不从 codeload 下载。pin 的声明性副本是根目录 harness.commit，脚本强制
@@ -47,7 +47,7 @@ const LOCKFILE = join(REPO_ROOT, 'pnpm-lock.yaml')
 
 /** chamber 拷贝包（可改的 dsh 源码，解析到 packages/ 下的副本，见 AGENTS.md）。 */
 // dsh-api-gateway：chamber 副本（packages/dsh-api-gateway），上游 api-gateway 的
-// client 半 + per-entry base-path 补丁（WP3/M3，决策 D1 方案 A）——推流 WebSocket
+// client 半 + per-entry base-path 补丁——推流 WebSocket
 // 必须落到 `<basePath>/api/remote.mux`，vendor 原包无法打该补丁。
 const EXCLUDED = new Set(['dsh-client-connection', 'dsh-client-web', 'dsh-api-gateway'])
 
@@ -85,7 +85,7 @@ function submoduleHead() {
 
 /**
  * 校验 submodule 单一事实来源：目录存在、HEAD 可解析、且 == 声明性 pin。
- * 任何模式共用；不匹配即硬失败（不再有"警告后继续"的静默回退）。
+ * 任何模式共用；不匹配即硬失败（不存在"警告后继续"的静默回退）。
  */
 function verifyPin() {
   const pin = readPin()
@@ -122,8 +122,8 @@ function gitLinkCommit() {
 
 /**
  * 遍历 submodule 的 workspace 包：解析上游自己的 pnpm-workspace.yaml
- * `packages:` globs（权威来源——旧手工链接只走了 packages/** + vendor/**，
- * 漏掉了 native/landlock-run、apps/* 等根，导致 @deepseek-ai/node-addon-landlock-run、
+ * `packages:` globs（权威来源——手工链接只走 packages/** + vendor/** 会
+ * 漏掉 native/landlock-run、apps/* 等根，使 @deepseek-ai/node-addon-landlock-run、
  * @deepseek-ai/dsh-web-frontend 缺失，非 frozen 安装无法解析），收集
  * package.json name 为 @deepseek-ai/* 的目录。website/examples/python
  * （部署/演示根，chamber 构建不引用）按前缀排除。

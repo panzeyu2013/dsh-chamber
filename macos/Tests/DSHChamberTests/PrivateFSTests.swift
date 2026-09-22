@@ -2,12 +2,12 @@
 //  PrivateFSTests.swift
 //  DSHChamberTests
 //
-//  2026-12 单源化：no-follow 私有叶判据并集的锁（三处调用点
+//  no-follow 私有叶判据并集的锁（三处调用点
 //  StartupSettings / ShellLog / SidecarDirectoryLock 共同依赖）。
 //  覆盖：常规文件读取、缺失、符号链接、多硬链接、FIFO、目录、尺寸上限、
 //  O_CREAT 创建与缺失语义、errno 映射。
 //  （inode 替换窗口需要竞态注入，不做确定性断言；该判据由既有
-//  ShellStartupTests 的稳定性用例与代码评审覆盖。）
+//  ShellStartupTests 的稳定性用例覆盖。）
 //
 import XCTest
 @testable import DSHChamber

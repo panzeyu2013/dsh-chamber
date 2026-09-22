@@ -1,8 +1,8 @@
 /**
- * Sidebar projection wiring (extracted verbatim from SidebarRoot, 2026-12
- * split): the chamberBridge subscription with its rendered-signature dedupe,
- * the shared view-prefs mirror, the per-source order state and the two
- * override reconciliation effects. Nothing here is presentational.
+ * Sidebar projection wiring: the chamberBridge subscription with its
+ * rendered-signature dedupe, the shared view-prefs mirror, the per-source
+ * order state and the two override reconciliation effects. Nothing here is
+ * presentational.
  */
 
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
@@ -16,7 +16,7 @@ import { getWorkspaceGitFlagsVersion, subscribeWorkspaceGitFlags } from '../shar
 
 export function useSidebarProjection() {
   // chamber: the multi-source projection (05 §3) — the App layer publishes
-  // it on its poll cycle (now signature-gated, see App.tsx); this shell just
+  // it on its poll cycle (signature-gated, see App.tsx); this shell just
   // subscribes and re-renders. Defense in depth: the subscription re-checks
   // the render-relevant signature before setState, so even an ungated
   // publisher can never make this list re-render on unchanged content

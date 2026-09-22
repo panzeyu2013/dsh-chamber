@@ -357,9 +357,8 @@ test('the JS tier gate is byte-identical to the stylesheet coarse-pointer tier',
 
 test('the committed client artifact ships both mitigations (source/artifact lockstep)', () => {
   // `exports["./client"]` points at lib/client.js and the gateway seeds that
-  // file byte for byte, so a source-only change ships nothing (the batch 1
-  // miss this package already paid for once). This lock pins the SHIPPED
-  // bytes: run the package build after touching src/client/**.
+  // file byte for byte, so a source-only change ships nothing. This lock pins
+  // the SHIPPED bytes: run the package build after touching src/client/**.
   const artifact = readFileSync(new URL('../../lib/client.js', import.meta.url), 'utf8')
   assert.ok(
     artifact.includes('dsh-chamber.dsh-client-ui-mobile.stranded-hover-card'),
@@ -394,7 +393,7 @@ test('the data-tip bubble suppression lives inside the coarse/no-hover block', (
 })
 
 test('the data-tip attribute this rule depends on is still EMITTED by the chamber page that owns it', () => {
-  // Cross-package lockstep (2026-12 review): `[data-tip]::after` is a silent
+  // Cross-package lockstep: `[data-tip]::after` is a silent
   // no-op if the emitting package renames the attribute, and the anchor gate
   // cannot see a JSX attribute in a sibling package's source. The mobile plugin
   // owns no data-tip site itself — the connections settings sheet does — so the

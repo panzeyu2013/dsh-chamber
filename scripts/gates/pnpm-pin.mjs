@@ -1,7 +1,5 @@
 /**
- * Pinned pnpm version: ONE declared source, every mirror cross-checked
- * (P2-14 of the 13-scripts audit — the version was hand-copied into 13 places
- * with no gate tying them together).
+ * Pinned pnpm version: ONE declared source, every mirror cross-checked.
  *
  * Declared source: root `package.json` `packageManager: "pnpm@<x.y.z>"`.
  * Mirrors (read-only: this module never edits anything):

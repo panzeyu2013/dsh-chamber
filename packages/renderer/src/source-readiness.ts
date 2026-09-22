@@ -1,27 +1,27 @@
 /**
- * 来源就绪判定与遮罩动作决策（2026-12，boot 死区收敛 W1/W2/W4）。
+ * 来源就绪判定与遮罩动作决策。
  *
- * 背景（真机问题）：远程来源未就绪时点开会话，活动视图会停在全窗遮罩上——
+ * 背景：远程来源未就绪时点开会话，活动视图会停在全窗遮罩上——
  * 遮罩盖住整个窗口、多来源导航（侧栏）在壳内部，而 App 级失败覆盖层只在
  * 「已 settle 的失败」时出现。于是一个未 settle 的 boot 会形成一段**没有
  * 任何导航**的死区，最长由收割绝对放弃臂兜底（135s）。本模块把这段死区里
  * 需要的决策抽成纯逻辑（可被 node 单测直测，App/InstanceView 只做接线；
- * 另含 W2 推迟挂载的回收裁决与 W3 通道失败的上浮边界）：
+ * 另含推迟挂载的回收裁决与通道失败的上浮边界）：
  *
  *  1. `shouldDeferBootForSource`：手动断开（idle）的来源不启动 boot——不
  *     白烧一次注定 503 的 boot，也不把用户丢进加载态；遮罩直接呈现「未连接」
  *     +「连接」（显式用户意图，与设置页 Connect 同语义）。
- *  2. `decideServingGate`：来源相位感知的就绪门。既有实现只等 `ready`，
- *     `error`（快速重试耗尽）也要烧满 60s 的 serving 预算；这里让 `error`
+ *  2. `decideServingGate`：来源相位感知的就绪门——只等 `ready` 会让
+ *     `error`（快速重试耗尽）也烧满 60s 的 serving 预算；这里让 `error`
  *     在一个短宽限后立即判「不可服务」，把 60s 白等收敛到秒级；而
  *     `connecting`/`degraded`（恢复中）继续在预算内等。
  *  3. `veilState` / `veilShowsActions` / `shouldAnnounceRetryQueue`：遮罩何时从
  *     纯转圈升级为可操作态，以及重试在途时是否必须如实播报排队。
  *  4. `isDeferredReclaimDue`：被推迟（来源未连接）挂载的回收裁决——只接管
  *     从未 settle 的挂载，且绝不碰设置面板正在编辑的来源。
- *  5. `graphGapKindFor`：W3 的上浮边界——非本地来源的
+ *  5. `graphGapKindFor`：上浮边界——非本地来源的
  *     `not-injected` 豁免，本地实例的 `not-injected` 收敛为 `local-graph-not-injected`
- *     （FIX 6：chamber 侧安装/seed 事实，仍可自愈）。
+ *     （chamber 侧安装/seed 事实，仍可自愈）。
  *
  * 纪律：本模块是叶子（零运行时 import——下面的 kind 类型是 `import type`，被类型
  * 擦除），被 App.tsx 与 InstanceView.tsx 同时引用时不会形成环；文案一律走
@@ -92,7 +92,7 @@ export interface ServingGateDecision {
 }
 
 /**
- * 就绪门的相位输入（纯函数，2026-12 二轮独立复核）。
+ * 就绪门的相位输入（纯函数）。
  *
  * - **原始 transport 投影缺席**（`rawProjectionPresent === false`）= 事实未到 ⇒
  *   `undefined`：门在预算内继续等，绝不把"投影还没到"读成手动断开；
@@ -112,9 +112,8 @@ export function servingGatePhase(derivedPhase: string, rawProjectionPresent: boo
  *
  * **`undefined`（投影尚未到达）走 `wait`，不是 `unavailable`**：调用方必须以
  * **原始 transport 投影**的相位喂入，不能用 `deriveServers` 的 `?? 'idle'` 折叠值
- * ——"事实未到"不等于"用户手动断开"，后者才是立即不可服务（2026-12 独立复核修正：
- * 折叠值让缺投影的来源被秒判无图，把一次投影延迟变成无图挂载 + 只剩一次 ready
- * 世代自愈）。
+ * ——"事实未到"不等于"用户手动断开"，后者才是立即不可服务（折叠值会让缺投影的
+ * 来源被秒判无图，把一次投影延迟变成无图挂载 + 只剩一次 ready 世代自愈）。
  */
 export function decideServingGate(facts: ServingGateFacts): ServingGateDecision {
   const { phase, nowMs, terminalSinceMs } = facts
@@ -130,19 +129,19 @@ export function decideServingGate(facts: ServingGateFacts): ServingGateDecision 
   return { action: 'wait', terminalSinceMs: null }
 }
 
-/** 图通道失败在 App 侧应上浮的降级事实种类（FIX 6 的返回面，只产出这两种）。 */
+/** 图通道失败在 App 侧应上浮的降级事实种类（只产出这两种）。 */
 export type GraphGapKind = Extract<ShellDegradedKind, 'graph-unavailable' | 'local-graph-not-injected'>
 
 /**
- * 图通道失败 → App 侧降级事实的**唯一裁决**（W3，2026-12；FIX 6 增补本地形态）。
+ * 图通道失败 → App 侧降级事实的**唯一裁决**。
  *
- * 上浮面必须让用户停在 boot 表面时也能读到解释并拿到自愈：旧契约只把通道失败
- * 写进连接页的 pluginDiagnostic 一行（侧栏已不渲染它），用户既看不到解释也拿不到
- * 自愈（2026-12 复核更正了"零解释"的口径）。
+ * 上浮面必须让用户停在 boot 表面时也能读到解释并拿到自愈：只把通道失败
+ * 写进连接页的 pluginDiagnostic 一行（侧栏已不渲染它）会让用户既看不到解释也拿不到
+ * 自愈。
  *
  * 唯一豁免是**非本地**来源的 `not-injected`（HTTP 404，或通道答 method 缺失）——
  * gateway/mobile 形态合法地没有图端点，那不是降级，App 也不该为它重挂。
- * **本地实例不在此列**（FIX 6）：chamber 托管的本地宿主总会注入客户端图
+ * **本地实例不在此列**：chamber 托管的本地宿主总会注入客户端图
  * （seed 行），404/method 缺失只可能是 chamber 自己的安装/seed 破损，属于可由
  * 重挂/重启本地 dsh 处理的事实，因此走独立的 `local-graph-not-injected`——其文案
  * 指向 chamber 侧原因，绝不建议"升级该来源的 dsh 运行时"（win32 上运行时管理是
@@ -187,7 +186,7 @@ export function veilShowsActions(state: VeilState): boolean {
 }
 
 /**
- * W2 推迟挂载的回收裁决（2026-12 复核 MAJOR 后的收口）。
+ * 推迟挂载的回收裁决。
  *
  * 只有"从未 settle"的推迟挂载由推迟回收臂接管：它不持有壳，也永远不会自己进入
  * retention 候选窗（候选要求 settled）。两道守卫缺一不可：
@@ -218,7 +217,7 @@ export function isDeferredReclaimDue(input: {
  * 按钮没反应，或在放弃臂重新计时后又被判一次超时。
  *
  * 判据是**前一次尝试还没有 settle**（`queuedBehindPredecessor`），不是"第几次
- * 尝试"（2026-12 复核 F3）：boot 以失败 settle 后同 id 尾已经释放
+ * 尝试"：boot 以失败 settle 后同 id 尾已经释放
  * （shell.ts 的 settle 路径先 await teardown），此时点重试根本不用排队——
  * 按次数播报会在最常见的"失败后重试"里撒谎。
  */

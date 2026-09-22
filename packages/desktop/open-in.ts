@@ -1,15 +1,14 @@
 /**
  * open-in registry — the generic "open this source's path in an app" launch
- * surface (desktop main process). This is the M0+M1 generalization of the
+ * surface (desktop main process). This is the generalization of the
  * VS Code deep-link module (design 16): vscode is ONE provider of a registry
  * whose apps are looked up by id.
  *
- * Batch 3 Phase 2 (2026-09), revised by design 20 §2.2 (fork & supersede,
- * 2026-09-11): the provider set is deliberately vscode-only. The local file
+ * The provider set is deliberately vscode-only (design 20 §2.2). The local file
  * manager (and every other local application) is served by the INSTANCE's own
  * chamber host domain — `@dsh-chamber/dsh-chamber-seed-open-in` (the fork of
  * upstream's open-in host half), reached by the client plugin over that
- * instance's generic RPC — so the main process no longer carries
+ * instance's generic RPC — so the main process carries no
  * finder/stat/openPath/reveal IPC surfaces, and it never calls the official
  * host half either: the local launch trust boundary lives in the instance
  * process, and the main process keeps only what the instance cannot do —
@@ -34,7 +33,7 @@
  * - runOpenInLaunch: the single execution pipeline shared by any IPC entry
  *   point — appId whitelist → instanceId validation (mirror of
  *   runVscodeLaunch's symmetric gate) → path validation (validateLocalPath
- *   for instanceId 'local' — Windows drive/UNC paths included, design 21 M4;
+ *   for instanceId 'local' — Windows drive/UNC paths included, design 21;
  *   validateRemotePath hoisted for every remote dsh session, POSIX-only) →
  *   remoteCapable gate → availability re-check
  *   via the injected ctx (defense in depth; vscode's runVscodeLaunch has its
@@ -109,9 +108,9 @@ export interface OpenInApp {
 }
 
 /**
- * The vscode provider: wraps runVscodeLaunch with zero behavior change — the
- * existing pipeline (registry lookup → authority construction → availability
- * re-check → openVscodeUrl, design 16 §3.4) runs untouched. The injected
+ * The vscode provider: wraps runVscodeLaunch — the pipeline (registry lookup →
+ * authority construction → availability re-check → openVscodeUrl, design 16
+ * §3.4) runs untouched. The injected
  * OpenInLaunchContext is a structural superset of VscodeLaunchContext, so the
  * context passes straight through.
  */
@@ -127,8 +126,8 @@ const vscodeApp = Object.freeze<OpenInApp>({
 })
 
 /**
- * The fixed-order registry. Batch 3 Phase 2, revised by design 20 §2.2:
- * vscode only — the local file manager and every other local application come
+ * The fixed-order registry (design 20 §2.2): vscode only — the local file
+ * manager and every other local application come
  * from the instance's own chamber host domain
  * (`@dsh-chamber/dsh-chamber-seed-open-in`), which the client plugin reaches
  * over that instance's generic RPC (the instance performs those launches; the
@@ -178,7 +177,7 @@ export function listOpenInApps(
  * The single open-in execution pipeline (any IPC entry point shares it):
  * 1. appId whitelist lookup — unknown (incl. non-string) → loud error;
  * 2. instanceId validation — mirror of runVscodeLaunch's symmetric gate
- *    ('local' reserved + INSTANCE_ID_PATTERN, security-review P2-3);
+ *    ('local' reserved + INSTANCE_ID_PATTERN);
  * 3. path validation — validateRemotePath hoisted INTO the pipeline (not just
  *    per-provider), so a future provider can never hand an unvalidated string
  *    to its host wrapper; the validated path is what the provider receives
@@ -205,7 +204,7 @@ export async function runOpenInLaunch(
   if (typeof req.instanceId !== 'string' || (req.instanceId !== 'local' && !INSTANCE_ID_PATTERN.test(req.instanceId))) {
     return { ok: false, error: 'invalid instance id' }
   }
-  // design 21 M4: local workspaces may be Windows drive/UNC paths; remote dsh
+  // design 21: local workspaces may be Windows drive/UNC paths; remote dsh
   // session paths are always POSIX.
   const validatedPath = req.instanceId === 'local'
     ? validateLocalPath(req.path)

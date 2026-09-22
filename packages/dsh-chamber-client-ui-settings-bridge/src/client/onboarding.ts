@@ -1,5 +1,5 @@
 /**
- * `settings.onboarding` coordinator facts (2026-09-11 upstream-alignment T3).
+ * `settings.onboarding` coordinator facts.
  *
  * Upstream's settings shell mounts exactly ONE ordered `settings.onboarding`
  * step while the current session is blank or absent
@@ -124,11 +124,11 @@ export interface OnboardingStage {
  *
  * The RESET is the sessions fact ALONE — upstream's own effect
  * (`if (onboardingActive) return; setCompletedOnboarding(new Set())`), where
- * `onboardingActive` IS the sessions selector. 2026-09-11 review-fix F1: folding
- * the active-view gate into the reset let a plain VIEW SWITCH wipe every
- * acknowledgement, so the step the user had just completed (or explicitly
- * deferred — both shipped steps call `complete()` while the session stays blank)
- * re-mounted the moment the view came back.
+ * `onboardingActive` IS the sessions selector. The reset must NOT fold in the
+ * active-view gate: a plain VIEW SWITCH would then wipe every acknowledgement,
+ * so the step the user had just completed (or explicitly deferred — both shipped
+ * steps call `complete()` while the session stays blank) would re-mount the
+ * moment the view came back.
  *
  * Residual, deliberately outside this projection: the completed set itself is
  * component-local, so a shell REMOUNT (the App reclaims and re-mounts the

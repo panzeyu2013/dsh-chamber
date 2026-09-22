@@ -6,14 +6,13 @@
  * clip、IconAgentPresetOutline16 的 mask 等），而 url(#id) 是**文档级**解析；N-ctx
  * 在同一个文档里挂载多个实例壳，同一 id 因此被逐壳重复定义。
  *
- * 真机对照（macOS WKWebView，0.3.2-beta.4，同一页面只改一个变量）：文档内出现第二份
- * 带同名 id 的壳子树后，**新建**图标首次绘制若解析到未布局子树（instance-hidden /
- * instance-pending）里的 clipper/mask，WebKit 会整块失绘并把结果缓存住（重建元素才
- * 自愈，属性回写/揭示都不行）；把该子树里的 id 改名后同一场景不再失绘。因此本模块
- * 的修复 = **让每个 <svg> 自足**：把它「自己定义 + 自己引用」的资源 id 改名为文档
- * 唯一 token，引用一起改；若它引用的定义在**别的** svg 里（混合 sprite），把那份定义
- * **复制**进本 svg（消费侧自足化，连同它内部再引用的定义做传递闭包），外部引用因此
- * 永不悬空。
+ * macOS WKWebView 的行为：文档内出现第二份带同名 id 的壳子树后，**新建**图标首次
+ * 绘制若解析到未布局子树（instance-hidden / instance-pending）里的 clipper/mask，
+ * WebKit 会整块失绘并把结果缓存住（重建元素才自愈，属性回写/揭示都不行）；改名同一
+ * 子树里的 id 即可避免这一失绘。因此本模块**让每个 <svg> 自足**：把它「自己定义 +
+ * 自己引用」的资源 id 改名为文档唯一 token，引用一起改；若它引用的定义在**别的** svg
+ * 里（混合 sprite），把那份定义**复制**进本 svg（消费侧自足化，连同它内部再引用的
+ * 定义做传递闭包），外部引用因此永不悬空。
  *
  * 边界（刻意保守，宁可少改）：
  * - 只改名「本 <svg> 内定义（id=）且本 <svg> 内被引用（url(#…) 或 href="#…"）」的 id；
@@ -56,7 +55,7 @@ const HREF_ATTRIBUTES = ['href', 'xlink:href'] as const
 
 /**
  * 只有这些元素把 href="#…" 当**资源**引用：<a href="#dom-id"> 是文档链接，不是资源面，
- * 既不改写也不复制（否则会把任意 DOM 拷进 svg，2026-09 复查发现的过宽面）。
+ * 既不改写也不复制（否则会把任意 DOM 拷进 svg）。
  */
 const HREF_RESOURCE_ELEMENTS = [
   'use', 'textpath', 'mpath', 'feimage', 'image', 'pattern',
@@ -108,7 +107,7 @@ const SVG_SCOPE_SEQUENCE_ATTRIBUTE = 'data-chamber-svg-scope-seq'
 /**
  * 本模块已经改名过的 <svg>。用 WeakSet 而不是「带标记即跳过」：
  * cloneNode(true) 会把标记属性和 token 一起复制，克隆件因此「看起来已处理」——
- * 若直接跳过，它就和原件同名，重复 id 又回来了（2026-09 复查发现的缺口）。
+ * 若直接跳过，它就和原件同名，重复 id 又回来了。
  */
 let scopedSvgs = new WeakSet<Element>()
 
@@ -327,7 +326,7 @@ function lookupDocumentId(svg: Element, id: string): Element | null {
 /**
  * 消费侧自足化：本 svg 引用了**别的 svg** 里的定义时，把那份定义（连同它自己再引用的
  * 外部定义，传递闭包、深度受预算保护）复制进本 svg 并改用副本 id。副本内部 id 与引用
- * 成对改名 ⇒ 副本自身也是自足的（2026-09 二轮复查关闭的残余）。
+ * 成对改名 ⇒ 副本自身也是自足的。
  * 定义者那边保持原样，别处的引用同样不悬空。
  * @returns 原 id → 副本 id（供引用重写）。
  */
@@ -521,9 +520,9 @@ export interface SvgResourceScopeDeps {
    * 批处理调度；默认微任务（queueMicrotask）。
    *
    * 必须是「首次绘制之前」的钩子：新图标的第一次绘制若解析到坏 clipper，失绘结果会
-   * 被缓存，之后再改名也救不回来（真机实测：属性回写与揭示都不自愈），所以改名
+   * 被缓存，之后再改名也救不回来（属性回写与揭示都不自愈），所以改名
    * 机会只有插入后的同一个微任务检查点。因此**刻意不用 requestAnimationFrame**——
-   * 它在被遮挡/后台的 WebView 里会被节流甚至不触发（宿主 WKWebView 探针里实测不触发），
+   * 它在被遮挡/后台的 WebView 里会被节流甚至不触发，
    * 那会让图标先绘制、再改名，等于没修。
    */
   readonly schedule?: (run: () => void) => void
@@ -551,7 +550,7 @@ function isElementNode(node: Node): node is Element {
 
 /**
  * 把一棵子树里的 a11y/表单 id 引用记进**文档级**保留集：引用方与定义方常在不同的 svg 里，
- * 只在本地保留会让定义方改名后断链（2026-09 二轮复查）。
+ * 只在本地保留会让定义方改名后断链。
  */
 function rememberReferenceIds(node: Element): void {
   const stack: Element[] = [node]
@@ -586,7 +585,7 @@ function rememberDocumentStyleIds(root: ParentNode): void {
     try {
       walkCssRules(sheets[index]?.cssRules ?? null)
     } catch {
-      // 跨源样式表拒绝读取：尽力而为，读不到就不保留（残余边界已登记）。
+      // 跨源样式表拒绝读取：尽力而为，读不到就不保留。
     }
   }
 }
@@ -642,13 +641,13 @@ export function installSvgResourceScope(deps: SvgResourceScopeDeps = {}): () => 
     const nodes = [...pending]
     pending.clear()
     // 样式与 a11y 引用面**先**读：同一批里新插入的 <style>/aria 引用必须在改名之前进保留集，
-    // 否则图标先按旧名改名、紧接着读到的新引用当场失效（2026-09 二轮复查的顺序倒置）。
+    // 否则图标先按旧名改名、紧接着读到的新引用当场失效。
     for (const node of nodes) rememberReferenceIds(node)
     if (nodes.some(node => containsStyleSheet(node))) rememberDocumentStyleIds(root)
     for (const node of nodes) watchStyleSheetLinks(node)
     const svgs: Element[] = []
     for (const node of nodes) collectSvgElements(node, svgs)
-    // 一遍过：工作量由「这次插入的子树」决定（实测整页 200+ 个 <svg> 仍是一次微任务内
+    // 一遍过：工作量由「这次插入的子树」决定（整页 200+ 个 <svg> 仍是一次微任务内
     // 完成）。刻意不分片——分片只能让位给同一检查点里的其它微任务，不会把余量让到
     // 下一帧（首次绘制在检查点之后），却把「全部改名完成」拆成不确定状态。
     const touched = new Set<Element>()

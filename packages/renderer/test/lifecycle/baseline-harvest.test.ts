@@ -72,7 +72,7 @@ test('the deadline only fires for an unsatisfied attempt that is still mounted',
 test('a source that spent its budget without a baseline is parked, never warm-prewarmed', () => {
   // Satisfied sources may fall back to ordinary warm prewarm; an exhausted
   // unsatisfied one must not (a third boot + permanent occupation of the
-  // single background slot: ).
+  // single background slot).
   assert.equal(harvestParked(undefined), false)
   assert.equal(harvestParked({ attempts: 0, mountedAt: 0, retryAt: 0, satisfied: false }), false)
   assert.equal(harvestParked({ attempts: HARVEST_MAX_ATTEMPTS, mountedAt: NOW, retryAt: 0, satisfied: false }), true)
@@ -83,8 +83,8 @@ test('eligibility reserves the single slot for baseline recovery while any harve
   // A warm shell mounted while a harvest is pending would become autoPrewarmed,
   // and with exactly one hidden shell retention never reclaims it, so
   // `remaining` would be 0 for the rest of the session and every remaining
-  // source would stay degraded — one failed source blocking all the others
-  // (). So: harvest ids only, and ALL of them, so a due
+  // source would stay degraded — one failed source blocking all the others.
+  // So: harvest ids only, and ALL of them, so a due
   // candidate behind a not-due head is reachable.
   assert.deepEqual(prewarmCandidates(['a'], ['b'], 1), ['a'])
   assert.deepEqual(prewarmCandidates(['a', 'b', 'c'], ['d'], 1), ['a', 'b', 'c'])
@@ -114,7 +114,7 @@ test('an attempt that never settles is abandoned at an absolute cap and parked',
   // A hung loader/fetch leaves the shell booting forever, so the settled-gated
   // deadline can never fire and the single background slot stays wedged. The
   // absolute cap reclaims it AND parks the source so it is not retried into the
-  // same wedge ().
+  // same wedge.
   const record = { attempts: 1, mountedAt: NOW, retryAt: NOW + HARVEST_RETRY_BACKOFF_MS, satisfied: false }
   assert.ok(HARVEST_ABANDON_MS > HARVEST_DEADLINE_MS, 'the abandon cap must exceed the deadline')
   assert.equal(harvestAbandoned(record, NOW + HARVEST_ABANDON_MS - 1), false)
@@ -129,7 +129,7 @@ test('an attempt that never settles is abandoned at an absolute cap and parked',
 test('the last harvested shell is kept warm and yields as soon as another candidate appears', () => {
   // Keeping the last harvested shell saves a boot and keeps its runtime facts
   // live; it must yield the slot the moment another source still needs a
-  // baseline, or a later-ready source could never be harvested (review M3/N3).
+  // baseline, or a later-ready source could never be harvested.
   const pending = (id: string): boolean => id.startsWith('pending')
   assert.equal(shouldReclaimHarvestedShell(new Set(['self']), 'self', pending), false,
     'no other candidate → keep the shell as the warm shell')
@@ -140,10 +140,10 @@ test('the last harvested shell is kept warm and yields as soon as another candid
   assert.equal(shouldReclaimHarvestedShell(new Set(), 'self', pending), false)
 })
 
-// ---- 源码级接线钉子（）----
+// ---- 源码级接线钉子 ----
 const appSource = readFileSync(new URL('../../src/App.tsx', import.meta.url), 'utf8')
-// 阶段 3：收割/预热调度簇已抽为 use-view-scheduler —— 该簇的接线锁钉在 hook 落点；
-// 投影侧（deriveServers/InstanceView/shell.ts）锁继续读原文件（下方分开断言）。
+// 收割/预热调度簇在 use-view-scheduler —— 该簇的接线锁钉在 hook 落点；
+// 投影侧（deriveServers/InstanceView/shell.ts）锁读原文件（下方分开断言）。
 const schedulerSource = readFileSync(
   new URL('../../src/app-hooks/use-view-scheduler.ts', import.meta.url),
   'utf8',
@@ -154,7 +154,7 @@ test('the App arms an absolute cap for the in-flight background mount', () => {
   // 意图——挂死 boot 会永久占住后台槽。该臂必须按挂载时刻独立兜底，并释放同 id
   // boot 尾（否则该源此后每次重挂都卡在 previousInstanceBoot 上）。
   // 放弃臂必须按**每个挂载视图的挂载时刻**判定（只盯 prewarmInflight 会漏掉
-  // 用户点开/深链挂载的挂死壳；），且标记失败时要重新计时，
+  // 用户点开/深链挂载的挂死壳），且标记失败时要重新计时，
   // 否则「重试」后同一轮清扫会立刻再次判超时。
   // 该 ref 声明留在 App（跨簇共享，作为 deps 传入调度 hook）；放弃臂在 hook 内。
   assert.match(appSource, /const viewBootStartedAtRef = useRef<Record<string, number>>\(\{\}\)/,
@@ -164,7 +164,7 @@ test('the App arms an absolute cap for the in-flight background mount', () => {
   assert.match(schedulerSource, /if \(settledViewIds\.has\(id\)\) continue/,
     'only a never-settling mount may be abandoned (a slow healthy boot is judged by the deadline)')
   // 放弃**不能**释放同 id boot 尾：尾是 generation 记录的持有者，提前释放会让
-  // 迟到的挂死 boot 与后继代同号并注册覆盖（）。正确做法是
+  // 迟到的挂死 boot 与后继代同号并注册覆盖。正确做法是
   // shell.ts 对"等待上一代"设绝对上限 + producer 注册表的代际栅栏。
   assert.doesNotMatch(appSource, /abandonInstanceBootTail/,
     'the App must not release the boot tail (it owns the generation records)')
@@ -188,17 +188,17 @@ test('the App arms an absolute cap for the in-flight background mount', () => {
     /if \(!state\.booted && state\.error === null\) viewBootStartedAtRef\.current\[instanceId\] = Date\.now\(\)/,
     're-entering booting must re-arm the window')
   // 回收一并作废，否则同一 ready 世代内新挂载永远不会再自动重挂（只剩手动重试）。
-  // 这条规则现在由容器承接——degradedRetriedRef 是容器视图，因此这次清位会
+  // 这条规则由容器承接——degradedRetriedRef 是容器视图，因此这次清位会
   // 派发容器的 retryForgotten；纯规则与行为覆盖在
-  // test/lifecycle/degraded-retry-decision.test.ts（按容器重写的真值表）。
+  // test/lifecycle/degraded-retry-decision.test.ts（容器的真值表）。
   // 这里仍钉 App 侧接线：必须真的清掉**这一个 id**，而不是整体替换。
   assert.match(schedulerSource, /degradedRetriedRef\.current\[id\] = false/,
     'reclaiming the view must forget the epoch mark so a fresh mount can auto-retry again')
 })
 
 test('the managed-runtime probe keeps its foreground cadence and single-flight seam', () => {
-  // 探针是问题 B 的整个数据源：删掉轮询/可见性门控会让托管停机重新变成不可见，
-  // 而其余门全绿（）。
+  // 探针是托管停机可见性的整个数据源：删掉轮询/可见性门控会让托管停机重新变成不可见，
+  // 而其余门全绿。
   assert.match(appSource, /setInterval\(\(\) => \{ void probe\(\) \}, MANAGED_RUNTIME_POLL_MS\)/,
     'the probe must run on the documented foreground cadence')
   assert.match(appSource, /probeManagedRuntimeRef\.current = probe/,
@@ -225,7 +225,7 @@ test('the App excludes managed-down gateways from harvest/prewarm', () => {
 
 test('a retried boot gets a fresh container and drops stale settles', () => {
   // 挂死壳的 AppWebEntry 仍持有旧容器：复用同一个 div 会让第二次尝试把新的
-  // boot 页/React root 追加进已有 root 的容器（）。
+  // boot 页/React root 追加进已有 root 的容器。
   const view = readFileSync(new URL('../../src/components/InstanceView.tsx', import.meta.url), 'utf8')
   assert.match(view, /<div key=\{retryToken \?\? 0\} ref=\{containerRef\} className="instance-shell" \/>/,
     'each retry must mount into a fresh container element')

@@ -2,17 +2,11 @@
 /**
  * release-preflight.mjs — 发布前机械门禁。
  *
- * 背景：0e3e8d9（v0.2.0-beta.2）在 push 前只跑了「局部验证」（构建/smoke/
- * test:release-workflow/i18n），完整单测在上一 merge 提交跑过后未在 release
- * 提交重跑；且 main 合入的 eb99f24 带进了一个**不存在的** actions/setup-node
- * SHA（1d0a4696…），任何本地检查都没有覆盖 action SHA，CI 的 validation job
- * 在 "Set up job" 阶段直接死掉；release.yml 的 validation job 又在 Desktop
- * unit tests 抓到 preload.cts 的 L3 lockstep 漂移。本脚本把这些机械检查
- * 一次性本地化，任何一项失败即阻断发布。
+ * 本脚本把发布前的机械检查一次性本地化，任何一项失败即阻断发布。
  *
  * 用法：
  *   node scripts/release/release-preflight.mjs <version> [--fork-version <v>]
- *       默认 fork 副本基线 0.1.5-rc.2（见下方 FORK_VERSION）。--fork-version 可覆盖。
+ *       默认 fork 副本基线见下方 FORK_VERSION。--fork-version 可覆盖。
  *   node scripts/release/release-preflight.mjs --actions-only   # CI 模式：只验
  *       证 .github/workflows/*.yml 的 action SHA（网络解析），其余跳过。
  *   node scripts/release/release-preflight.mjs <version> --versions-only
@@ -137,11 +131,11 @@ function checkVersionUniformity() {
 }
 
 /**
- * (a2) 双线一致性硬门禁（review-round3 P1-1）：源码线（harness pin / fork 副本
+ * (a2) 双线一致性硬门禁：源码线（harness pin / fork 副本
  * 基线 = FORK_VERSION）与运行时线（打包进桌面的 @deepseek-ai/dsh，从
  * packages/desktop/vendor/dsh/pnpm-lock.yaml 读取）必须同代。升级上游源码
- * 后若 npm 尚未发布对应 @deepseek-ai/dsh，运行时线滞后 —— 迁移后的探针/wire
- * 全部是 0.1.2 斜杠面，旧 host 不提供斜杠方法：本地实例 spawn 探针必败、
+ * 后若 npm 尚未发布对应 @deepseek-ai/dsh，运行时线滞后 —— 源码线的探针/wire
+ * 是斜杠面，旧 host 不提供斜杠方法：本地实例 spawn 探针必败、
  * 远端连接判「非 dsh」、gateway features 全灭。本检查把该互斥窗口变成发布
  * 硬失败：先发布 @deepseek-ai/dsh@<FORK_VERSION>，再 `bundle:dsh -- --force
  * --refresh-lockfile` 与 release.yml env / install-gateway.sh 同步后，门禁放行。
@@ -202,7 +196,7 @@ function checkI18n() {
 
 /** (d) action SHA：.github/workflows/*.yml 每个 uses: 必须 pin 到完整 40 位
  *  SHA；随后对唯一 SHA 发 api.github.com HEAD（200 = 存在；422/404 = 幻影
- *  SHA）。失败历史：release.yml 曾带 1d0a4696…（不存在）→ CI 死在 Set up job。 */
+ *  SHA）。 */
 export function parseActionPins(workflowText) {
   const pins = []
   // `uses:` 在 YAML 步骤里两种形态都存在：`- uses: owner/repo@sha` 与
@@ -422,8 +416,7 @@ function checkReleaseWorkflow() {
   ok(c, 'release workflow policy holds')
 }
 
-/** (i) NOTICE：完整单测必须在**精确 release 提交**上重跑——上一轮在 eb7c22a
- *  跑绿不等于 0e3e8d9 绿（preload.cts 合并解析丢声明 → L3 lockstep 在 CI 才爆）。 */
+/** (i) NOTICE：完整单测必须在**精确 release 提交**上重跑——在上一轮提交跑绿不等于本提交绿。 */
 function printFullBatteryNotice() {
   const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: REPO_ROOT, encoding: 'utf8' }).trim()
   console.log(`

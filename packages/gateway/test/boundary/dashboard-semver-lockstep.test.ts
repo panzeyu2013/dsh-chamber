@@ -1,5 +1,5 @@
 /**
- * F8 lockstep (2026-12 audit): the dashboard's inline SemVer comparator is
+ * Lockstep: the dashboard's inline SemVer comparator is
  * shipped as source text (chamber-dashboard-semver.ts) and must agree with the
  * shared dsh-runtime version-safety comparator on every VALID semver pair. The
  * invalid-input policies differ BY DESIGN and are pinned here too: the

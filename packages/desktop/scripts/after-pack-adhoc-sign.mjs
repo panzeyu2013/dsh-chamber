@@ -38,11 +38,11 @@ export const MAC_DISABLE_LIBRARY_VALIDATION = 'com.apple.security.cs.disable-lib
 export const MAC_ENTITLEMENTS_PATH = fileURLToPath(new URL('../resources/entitlements.mac.plist', import.meta.url));
 
 /** The desktop manifest this packaging run ships (single source for the pnpm
- *  pin; build-sidecar.mjs reads the same field — G18). */
+ *  pin; build-sidecar.mjs reads the same field). */
 export const DESKTOP_MANIFEST = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 
 /**
- * The pnpm version the packaged extraResources must carry (G18). Read from the
+ * The pnpm version the packaged extraResources must carry. Read from the
  * desktop manifest so the Electron-side assertion, the Swift sidecar assembly's
  * `copyPnpm` fail-closed check and the manifest cannot drift apart silently.
  */
@@ -93,10 +93,10 @@ export const PACKAGED_RUNTIME_MODULES = Object.freeze([
 ]);
 
 /**
- * 上游 client-plugin 闭包抽样（S4 P1，2026-12 Windows 复核）。sidebarRight 行的
+ * 上游 client-plugin 闭包抽样。sidebarRight 行的
  * 唯一 provider 是 `@deepseek-ai/dsh-client-ui-sidebar-right`，chat / resources
  * 是该行首屏的注入面；`extraResources` 的 `node_modules/**` 是无界 glob，
- * 部分安装（长路径 / Defender 中断 / pnpm 提前退出）丢包时旧断言全绿、前端
+ * 部分安装（长路径 / Defender 中断 / pnpm 提前退出）丢包时既有断言全绿、前端
  * 静默降级成永久 pending——这里按包 manifest 抽样 fail-closed。启动期对安装树
  * 的同款抽样见 runtime-tree-check.ts（RUNTIME_CLIENT_CLOSURE_SAMPLE；两表由
  * packages/desktop/test/local-state/runtime-tree-check.test.ts 锁步）。
@@ -123,7 +123,7 @@ export function verifyPackagedRuntimeSupport(resourcesDir) {
     throw new Error(`incomplete packaged pnpm runtime: expected ${pnpmEntry}, ${pnpmModuleEntry} and ${pnpmDist}`);
   }
   const pnpmManifest = JSON.parse(readFileSync(pnpmManifestPath, 'utf8'));
-  // G18: the expectation is the desktop manifest's own pin (the same field the
+  // The expectation is the desktop manifest's own pin (the same field the
   // Swift sidecar assembly reads), never a second hardcoded literal.
   if (PACKAGED_PNPM_VERSION === null) {
     throw new Error('desktop package.json has no dependencies.pnpm — the packaged pnpm pin has no source');
@@ -141,7 +141,7 @@ export function verifyPackagedRuntimeSupport(resourcesDir) {
   // The shared runtime core ships INSIDE app.asar as a production dependency
   // (node_modules/@dsh-chamber/dsh-runtime/dist/index.js); a missing or stale
   // dist there would surface as a startup module-not-found, not a build
-  // failure. Assert the packed asar explicitly (review fix). Fixture/CI
+  // failure. Assert the packed asar explicitly. Fixture/CI
   // contexts build no asar — a real electron-builder run always does, so the
   // skip is never silent in production packaging.
   const asarPath = path.join(resourcesDir, 'app.asar');
@@ -150,9 +150,8 @@ export function verifyPackagedRuntimeSupport(resourcesDir) {
     const files = asar.listPackage(asarPath);
     const runtimeCoreDist = 'node_modules/@dsh-chamber/dsh-runtime/dist/index.js';
     // listPackage yields entries with a leading '/' (asar-absolute form) on
-    // POSIX hosts but backslash separators on Windows hosts (2026-09 beta.2:
-    // the file was packed all along — the exact-string comparison missed the
-    // Windows path shape). Normalize before comparing.
+    // POSIX hosts but backslash separators on Windows hosts, so an exact-string
+    // comparison misses the Windows path shape. Normalize before comparing.
     const packed = files.some((entry) => {
       const normalized = entry.replace(/\\/g, '/');
       return normalized === runtimeCoreDist || normalized === `/${runtimeCoreDist}`;
@@ -169,7 +168,7 @@ export function verifyPackagedRuntimeSupport(resourcesDir) {
 }
 
 /**
- * The Electron payload the staged app must carry (G27). `dist/web` is the only
+ * The Electron payload the staged app must carry. `dist/web` is the only
  * static-frontend source main.ts serves (missing → the control plane 404s the
  * shell into a white window, main.ts:1354), `dist/preload.cjs` is loaded
  * fail-closed at window creation (missing → showErrorBox + exit(1),
@@ -281,7 +280,7 @@ export function packagedLocaleStems(localesDir) {
  * / `wanted.startsWith(language + '_')`），并额外把配置里的 BCP-47 连字符写法归一化
  * 为下划线再比一次（`zh-CN` 与 `zh_CN` 指同一语言，Electron 的目录名是后者）。
  *
- * 注意这不是"把 bug 放行"：A1 的失败形态是目录被 electron-builder **物理删除**——
+ * 注意这不是"把 bug 放行"：此处的失败形态是目录被 electron-builder **物理删除**——
  * 本函数只决定一个真实存在的 .lproj 能否满足配置项，物理缺失由调用方断言。
  */
 export function localeStemMatches(stem, wanted) {
@@ -293,8 +292,8 @@ export function localeStemMatches(stem, wanted) {
 }
 
 /**
- * 2026-12 A1 回归门禁：用户包必须真的带出 `build.electronLanguages` 声明的每个
- * 语言资源。app-builder-lib 的 matcher 是"精确/前缀"匹配，过去配置写 `zh-CN`
+ * 打包门禁：用户包必须真的带出 `build.electronLanguages` 声明的每个
+ * 语言资源。app-builder-lib 的 matcher 是"精确/前缀"匹配，配置写 `zh-CN`
  * 而 Electron 目录名是 `zh_CN` ⇒ `zh_CN.lproj/locale.pak`（569KB）被静默删除，
  * 中文系统上 Chromium 级文案回退英文，且没有任何门禁看得见（这份断言只能跑在
  * 真实 .app 上——dist 没有 .lproj）。
@@ -390,7 +389,7 @@ export default async function afterPackAdhocSign(context) {
   verifyPackagedElectronPayload(resourcesDir);
   if (context.electronPlatformName !== 'darwin') return;
   const appPath = path.join(context.appOutDir, `${appName}.app`);
-  // A1/F3 门禁：electronLanguages 静默删资源只在真实 .app 上可见（dist 没有
+  // electronLanguages 静默删资源只在真实 .app 上可见（dist 没有
   // .lproj），所以在打包阶段断言"用户包内确实带出每个声明的 locale 资源"。
   verifyPackagedMacLocales(appPath);
   const infoPlist = path.join(appPath, 'Contents', 'Info.plist');

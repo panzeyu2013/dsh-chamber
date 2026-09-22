@@ -2,7 +2,7 @@
 //  ZoomPersistence.swift
 //  DSHChamber
 //
-//  A3-3 收口（2026-12 引擎差异复核）：Chromium 按 origin 持久化页面缩放
+//  Chromium 按 origin 持久化页面缩放
 //  （Electron 的 Preferences 里实测有 partition.per_host_zoom_levels），
 //  而 WKWebView.pageZoom 只活在实例里、每次启动回 100%。本文件用 UserDefaults
 //  按 origin 存取 pageZoom，在装配时恢复（读侧见 MainWindowController.setupWindow，

@@ -1,9 +1,9 @@
 /**
- * The plugin spec/name whitelist family (the former reserved-name DENY predicate
- * lived here too; it is retired — the protected set in `protected-plugins.ts` is
- * the single write-face judge, design 21 §6.11) — the
+ * The plugin spec/name whitelist family (the reserved-name DENY predicate
+ * lives in `protected-plugins.ts`, the single write-face judge,
+ * design 21 §6.11) — the
  * SINGLE source shared by every plugin-management backend (design 21 §6.2 /
- * §6.7, A2 cross-package single-sourcing; plan Phase 4.3):
+ * §6.7, cross-package single-sourcing):
  *
  * - the desktop main process consumes them through
  *   desktop/control-plane-module.ts (the dual-path facade: packaged →
@@ -17,9 +17,9 @@
  *   (packages/gateway/test/plugins/plugin-spec-lockstep.test.ts) pins that mirror to
  *   this file's PLUGIN_SPEC_PATTERN literal.
  *
- * Moved verbatim from desktop ssh-provider.ts (design 13 §7.2 origin) so the
- * desktop and gateway backends can never drift; ssh-provider.ts now re-exports
- * this module through the desktop facade.
+ * Shared with the desktop and gateway backends so they can never drift
+ * (design 13 §7.2 origin); ssh-provider.ts re-exports this module through the
+ * desktop facade.
  */
 
 /** Package-spec length cap (design 13 §7.2): bounds add/remove inputs before

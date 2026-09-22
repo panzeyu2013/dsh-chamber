@@ -4,9 +4,7 @@
  *
  * `verify-workflow-action-pins.mjs` and `release-workflow-policy.test.mjs` read
  * the workflow files as TEXT, so they stay green on a file that GitHub refuses
- * to parse. That is not hypothetical: the 2026-12 single-entry collapse renamed
- * a step to `- name: Package unit tests (single entry: runtime / …)`, whose
- * plain scalar contains `: ` — invalid YAML — while every local gate passed.
+ * to parse.
  *
  * The rule enforced here is the YAML constraint itself: a plain (unquoted,
  * non-block) mapping value must not contain `: ` and must not end with `:`.

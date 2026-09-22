@@ -2,7 +2,7 @@
 //  BridgeShimInjectorTests.swift
 //  DSHChamberTests
 //
-//  S-06（2026-12 复裁决）：A 桥内部管路（resolve/emit/rehydrate）不在公开面上，
+//  A 桥内部管路（resolve/emit/rehydrate）不在公开面上，
 //  但页面脚本能直接调用它们——注入随机令牌后，伪造原生回执/事件必须先猜中令牌。
 //  本文件钉住令牌的生成、注入与 shim 侧校验面。
 //
@@ -30,7 +30,7 @@ final class BridgeShimInjectorTests: XCTestCase {
         XCTAssertFalse(injected.contains(BridgeShimInjector.nativeTokenPlaceholder))
     }
 
-    // MARK: - P-19：重复注入必须幂等（显式标记，不靠 defineProperty TypeError）
+    // MARK: - 重复注入必须幂等（显式标记，不靠 defineProperty TypeError）
 
     /// 同一 configuration 二次 install 必须 no-op：只注册一份 user script，
     /// 且带显式标记前缀（shim 侧同一标记保证页面级重放惰性）。
@@ -74,7 +74,7 @@ final class BridgeShimInjectorTests: XCTestCase {
         // 三个内部入口各调用一次校验（resolve / emit / rehydrate）。
         let guardCount = shim.components(separatedBy: "requireNativeToken(token)").count - 1
         XCTAssertGreaterThanOrEqual(guardCount, 3, "每个内部入口都要校验（实际 \(guardCount)）")
-        // P-19：页面级重复注入也必须惰性——显式标记位，而不是等非可配置
+        // 页面级重复注入也必须惰性——显式标记位，而不是等非可配置
         // defineProperty 在第二份副本执行时抛 TypeError（公开面 info 水化成功
         // 前不存在，"dshChamber in window" 守卫覆盖不到那个窗口）。
         XCTAssertTrue(shim.contains("__dshChamberShimInstalled"),

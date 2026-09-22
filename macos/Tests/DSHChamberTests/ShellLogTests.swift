@@ -5,8 +5,8 @@
 //  A2：原生壳落盘日志的写入面——路径规则、真的落盘（不是只打印）、时间戳、
 //  0600、大小上限轮转、失败静默降级，以及「启动/sidecar/导航失败/更新相位/退出链
 //  都接了 shellLog」的源码锁步。
-//  W4b（2026-12 三轮独立复核）：configure 前的启动早期行（W3 席位日志等）有界缓冲、
-//  configure 后按原顺序补写（Finder 双击态 stdout 不可见，此前永久丢失）。
+//  configure 前的启动早期行（席位日志等）有界缓冲、
+//  configure 后按原顺序补写（Finder 双击态 stdout 不可见，否则永久丢失）。
 //
 import XCTest
 @testable import DSHChamber
@@ -44,7 +44,7 @@ final class ShellLogTests: XCTestCase {
         XCTAssertEqual(ShellLog.rotatedFileName, "shell.log.1")
     }
 
-    /// 2026-12 取证修复：sidecar stderr 独立落盘实例（<userData>/logs/sidecar.log）。
+    /// sidecar stderr 独立落盘实例（<userData>/logs/sidecar.log）。
     func testSidecarFileURLRuleAndInstance() throws {
         XCTAssertEqual(ShellLog.sidecarFileURL(userDataDir: "/u/data").path,
                        "/u/data/logs/sidecar.log")
@@ -160,10 +160,10 @@ final class ShellLogTests: XCTestCase {
         XCTAssertNil(log.filePath)
     }
 
-    // MARK: - configure 前的有界缓冲（W4b：启动早期行不再丢）
+    // MARK: - configure 前的有界缓冲（启动早期行不丢）
 
-    /// W4b（2026-12 三轮独立复核）：configure 之前的 note/append（applicationWillFinish
-    /// Launching 的 W3 席位日志、didFinish 顶部若干行）在 Finder 双击态没有 stdout 可看，
+    /// configure 之前的 note/append（applicationWillFinish
+    /// Launching 的席位日志、didFinish 顶部若干行）在 Finder 双击态没有 stdout 可看，
     /// 必须被有界缓冲并在 configure 成功后按原顺序补写；console 行为不变（note 仍立即
     /// print），故断言全部落在文件面上。
     func testNotesBeforeConfigureAreBufferedAndFlushedInOrder() throws {
@@ -187,7 +187,7 @@ final class ShellLogTests: XCTestCase {
                       "补写行保持既有时间戳格式（取入队时刻）：\(text)")
     }
 
-    /// W4b：缓冲有上限（64 条）——超出的行丢弃（它们仍已 print 到 stdout），
+    /// 缓冲有上限（64 条）——超出的行丢弃（它们仍已 print 到 stdout），
     /// 补写时在保留行之后落一条带丢弃行数的截断标记（既有日志格式不变）。
     func testPendingBufferOverflowDropsBeyondLimitAndWritesTruncationMarker() throws {
         let url = ShellLog.fileURL(userDataDir: tempDir.path)
@@ -217,7 +217,7 @@ final class ShellLogTests: XCTestCase {
         XCTAssertLessThan(last.lowerBound, marker.lowerBound)
     }
 
-    /// 2026-12 独立复核：叶子是符号链接时必须拒绝打开（FileHandle 会跟随链接把日志
+    /// 叶子是符号链接时必须拒绝打开（FileHandle 会跟随链接把日志
     /// 写进目标文件；控制面 sink 用 O_NOFOLLOW 挡这一类，原生侧用同判据）。
     func testSymlinkedLeafIsRefusedInsteadOfWritingThroughTheLink() throws {
         let outside = tempDir.appendingPathComponent("outside.log")
@@ -249,7 +249,7 @@ final class ShellLogTests: XCTestCase {
             "绝不透过目录链接写出去")
     }
 
-    /// 2026-12 三轮独立复核（BLOCKING）：叶子是 FIFO 时 FileHandle(forWritingTo:) 会在
+    /// 叶子是 FIFO 时 FileHandle(forWritingTo:) 会在
     /// 主线程**永久阻塞**（applicationDidFinishLaunching 挂死，无需竞态）。POSIX 开叶
     /// 判据只接受常规文件 + O_NONBLOCK：判到即退回只写 stderr。
     func testFifoLeafIsRefusedInsteadOfBlockingTheMainThread() throws {
@@ -269,7 +269,7 @@ final class ShellLogTests: XCTestCase {
         log.append("must-not-block")
     }
 
-    /// 2026-12 三轮独立复核：T-25 声明目录 0700，而创建参数只对新建目录生效——已存在
+    /// 声明目录 0700，而创建参数只对新建目录生效——已存在
     /// 的松目录必须在每次打开时收紧，否则声明与实际不符。
     func testExistingLooseDirectoryIsTightenedTo0700() throws {
         let directory = tempDir.appendingPathComponent(ShellLog.directoryName)
@@ -283,7 +283,7 @@ final class ShellLogTests: XCTestCase {
                        "已存在的松目录必须被收紧到 0700")
     }
 
-    /// 2026-12 独立复核：轮转失败不得把水位归零（那会让文件在阻塞期间涨到 ~2× 上限，
+    /// 轮转失败不得把水位归零（那会让文件在阻塞期间涨到 ~2× 上限，
     /// 且每次写入都重试轮转）——与 TS sink 同纪律，降级为只写 stderr。
     func testRotationFailureDegradesInsteadOfGrowingToTwiceTheLimit() throws {
         XCTAssertEqual(ShellLog.defaultMaxBytes, 256 * 1024, "文档记录的 256 KiB 上限被钉住")
@@ -306,7 +306,7 @@ final class ShellLogTests: XCTestCase {
         XCTAssertLessThan(size, 512, "降级后的文件不得涨到 ~2× 上限")
     }
 
-    /// 2026-12 二轮独立复核：打开时的轮转失败必须降级，**绝不**继续打开那个超限文件
+    /// 打开时的轮转失败必须降级，**绝不**继续打开那个超限文件
     /// （否则"已降级"的 sink 又被接上，append 路径之外还有一条写入口）。
     func testOpenTimeRotationFailureDegradesInsteadOfOpeningTheOversizedFile() throws {
         let directory = tempDir.appendingPathComponent(ShellLog.directoryName)

@@ -80,7 +80,7 @@ export interface RemoteJournalStreamOptions<Page, Entry, Cursor, Notification = 
   /** Observe a retryable carrier loss before reconnection. */
   readonly carrierFailed?: (error: RemoteStreamCarrierError) => void
   /**
-   * chamber patch (design 14 §D4, 2026-09): silence-watchdog timing. Omitted by
+   * chamber patch (design 14 §D4): silence-watchdog timing. Omitted by
    * every existing consumer, which takes {@link DEFAULT_STREAM_STALL_TIMING}.
    */
   readonly stall?: Partial<StreamStallTiming>
@@ -111,7 +111,7 @@ export abstract class RemoteJournalStream<
   private done: Promise<void> | undefined
   private closing: Promise<void> | undefined
   private pendingNext: Promise<IteratorResult<JournalStreamItem<Page, Entry, Cursor, Notification>>> | undefined
-  // chamber patch (design 14 §D4, 2026-09): silence watchdog state. `lastProgressAt`
+  // chamber patch (design 14 §D4): silence watchdog state. `lastProgressAt`
   // advances on every published item, so a stream that keeps producing never
   // reaches the probe window at all.
   private readonly stallTiming: StreamStallTiming
@@ -234,7 +234,7 @@ export abstract class RemoteJournalStream<
   }
 
   /**
-   * chamber patch (2026-09 review): bound one user-initiated page read. `prepend`
+   * chamber patch: bound one user-initiated page read. `prepend`
    * reads on the stream's LIFETIME signal, so a generation restart cannot abort
    * it — a hung page request would leave "load older" stuck forever with no
    * error edge. The deadline turns that into an ordinary rejected read (the
@@ -267,7 +267,7 @@ export abstract class RemoteJournalStream<
   }
 
   /**
-   * chamber patch (design 14 §D4, 2026-09): publish one change and mark live
+   * chamber patch (design 14 §D4): publish one change and mark live
    * progress for the silence watchdog (opening windows, appends, prepends and
    * cursorless notifications all count — a streaming assistant keeps them coming).
    */
@@ -278,7 +278,7 @@ export abstract class RemoteJournalStream<
   }
 
   /**
-   * chamber patch (design 14 §D4, 2026-09): arm the silence watchdog once the
+   * chamber patch (design 14 §D4): arm the silence watchdog once the
    * opening window is published. A stream that goes silently dead while the Host
    * keeps producing would otherwise freeze the transcript with no error edge for
    * any chamber arm to react to.
@@ -329,8 +329,8 @@ export abstract class RemoteJournalStream<
     } catch {
       // Diagnostic read only: a probe failure must never escape into the journal —
       // but it is NOT evidence of an advance, so it widens the cadence below like
-      // a clean "no advance" answer (2026-09 review: a broken probe path otherwise
-      // kept a sibling follow in flight every 45 s forever).
+      // a clean "no advance" answer (a broken probe path otherwise keeps a
+      // sibling follow in flight every 45 s forever).
     } finally {
       this.probing = false
     }
@@ -357,7 +357,7 @@ export abstract class RemoteJournalStream<
       // A sibling follow yields RemoteJournalFrame directly — the RemoteStreamItem
       // wrapper only exists inside RemoteStream (that is why consume() reads
       // item.value.type). Reading a double-wrapped frame here throws on every probe
-      // and silently kills the whole restart arm (2026-09 review BLOCKER).
+      // and silently kills the whole restart arm.
       if (next.done || next.value.type !== 'opened') return false
       const applied = this.lastCursor
       if (applied === undefined) return false
@@ -365,7 +365,7 @@ export abstract class RemoteJournalStream<
     } finally {
       clearTimeout(timer)
       deadline.abort(new Error('journal stall probe finished'))
-      // Bounded teardown (2026-09 review): a follow whose return() ignores the
+      // Bounded teardown: a follow whose return() ignores the
       // aborted signal must not leave probing=true forever — that would silently
       // disable this stream's silent-journal arm. The abort above already made the
       // mux send its cancel frame, so the host-side follow is released regardless.

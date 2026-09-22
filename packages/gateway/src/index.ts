@@ -47,7 +47,7 @@ import { createPluginWriteCheckpoint } from './spawn-checkpoint.ts'
 /** Startup-block reasons that fail gateway boot loudly (design 18 §9.3).
  * Metadata corruption is a hard boot failure — DSH_HOME stays protected and
  * the operator must intervene. swap-attempted and restore-half/incomplete are
- * NOT fatal (review fix): they keep the gateway up with the managed dsh
+ * NOT fatal: they keep the gateway up with the managed dsh
  * stopped and are resumable via POST /chamber/runtime/retry-apply |
  * retry-restore, mirroring the desktop's blocked-but-alive app semantics.
  * The four FATAL reasons are the shared core set (dsh-runtime
@@ -137,11 +137,11 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
   }
   let createdPlane!: PlaneHandle
   let chamberSurface!: ChamberSurface
-  // Read-only session-state watcher (plan W1 / WS-B). Built in the construction
+  // Read-only session-state watcher. Built in the construction
   // transaction below; its getters dereference createdPlane/proxy lazily (the
   // same pattern as the chamber surface and the proxy above).
   let sessionState!: SessionStateService
-  // Design 21 §6.3 A1 mutation orchestrator (plan Phase 4.4): journal +
+  // Design 21 §6.3 A1 mutation orchestrator: journal +
   // serial executor + deferred intents behind the runtime-manager
   // profile-write lease. Built in the construction transaction below; its
   // executor is lazy (spawns only under a granted lease), its dispose runs
@@ -170,10 +170,8 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
   let store!: GatewayStore
   let auth!: AuthProvider
   try {
-    // The gateway store (design 17 §10) owns tokens/jwt-secret (the
-    // orchestration docs were removed with the 2026-12 strip); auth needs it
-    // for the token hash + session secret
-    // (S5/S13).
+    // The gateway store (design 17 §10) owns tokens/jwt-secret; auth needs it
+    // for the token hash + session secret (S5/S13).
     store = createGatewayStore(options.config.plane.stateDir, logger)
     // The seeding logger is the gateway logger: without it the loud
     // config-ignored warnings for authoritative runtime credentials stay
@@ -181,11 +179,10 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
     auth = createAuth(options.config.auth, store, logger)
     // Loud, unmissable warning for the explicit S1 override (design 17 §5.1
     // deviation): anonymous external exposure is operator-opted-in. The
-    // verdict is decided by the EFFECTIVE kind AFTER seeding (Phase 1/2): a
+    // verdict is decided by the EFFECTIVE kind AFTER seeding: a
     // persisted runtime credential (source 'runtime') makes the deployment
     // authenticated even though config.auth.kind is 'none' — no warning then,
-    // only an informational line. The old pre-store check could not see that
-    // state.
+    // only an informational line.
     if (options.config.allowAnonymousExternal === true
       && (options.config.plane.host !== '127.0.0.1'
         || options.config.publicOrigin !== undefined
@@ -203,7 +200,7 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
     }
     const requestPolicy = createGatewayRequestPolicy(options.config)
     const channels = createChannelRegistry()
-    // Desktop-synced host-package seed cache (2026-12 Phase 3): the two
+    // Desktop-synced host-package seed cache: the two
     // chamber host packages come from a connecting desktop's upload; the
     // mobile client-plugin slot stays packaged in the gateway distribution.
     const plugins = createChamberPlugins(options.config.plane.stateDir, logger)
@@ -222,7 +219,7 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
         return { path: workspace.path, version: workspace.version }
       },
     )
-    // Design 21 §6.3 A1 mutation orchestrator (plan Phase 4.2-4.5 wiring):
+    // Design 21 §6.3 A1 mutation orchestrator:
     // journal + serial executor + deferred install intents behind the
     // runtime-manager profile-write lease. Status probes dereference the
     // plane lazily (the surface is built before the plane below); boot
@@ -259,14 +256,14 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
       },
     })
     pluginTasks.reconcileJournal()
-    // Staged-archive orphan sweep (2026-09 audit follow-up): terminal
+    // Staged-archive orphan sweep: terminal
     // materialize ops RETAIN their staged archive (the manifest keeps its
     // file: spec), so re-materialize/remove cycles would otherwise leave
     // unreferenced archives behind — reclaim them here, at the one moment
     // the executor is provably idle (right after journal reconciliation,
     // before any route can stage).
     pluginTasks.sweepOrphanedStagedArchives()
-    // The read-only session-state watcher (plan W1 / WS-B; design 17 §10
+    // The read-only session-state watcher (design 17 §10
     // carve-out). Lazy getters, exactly like the proxy/chamber surface: the
     // watcher starts only on the ready/degraded host edge (syncFeatures) and
     // eats the same D3/F4 exposure gate (never a quarantined candidate tree).
@@ -281,7 +278,7 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
       canExposeLocal: () => !stopping && !runtimeExposureQuarantined(),
       otherMuxClientsConnected: () => (proxy?.getDiagnostics().activeStreams ?? 0) > 0,
     })
-    // The chamber surface (2026-12 strip): channels projection + browser
+    // The chamber surface: channels projection + browser
     // dashboard assets + plugin-sync cache + the managed-profile installed
     // projection (design 21 A0) + the A1 write routes (install/materialize/
     // remove/tasks, design 21 §6.2) + the read-only /chamber/session-state*
@@ -320,7 +317,7 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
       // validated/materialized by parseGatewayConfig).
       options.config.mobileUaRedirect === true,
       options.config.mobileEntryPath ?? DEFAULT_MOBILE_ENTRY_PATH,
-      // M3-5 debounce seam: production defaults (undefined = the module
+      // Debounce seam: production defaults (undefined = the module
       // constant + unref'd timer).
       undefined,
       // Login-phase pre-warm (design 17 §10.6): ON by default
@@ -334,7 +331,7 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
         getLocalState: () => createdPlane.connectionState,
         canExposeLocal: () => !stopping && !runtimeExposureQuarantined(),
         getSecret: () => store.getJwtSecret(),
-        // The spawn-minted browser-auth cookie (review-round3c P0) opens the
+        // The spawn-minted browser-auth cookie opens the
         // loopback static surface: upstream's Connection authorizes EVERY
         // index response, while non-index assets stay public. This is an
         // internal host credential, not a user credential: it is attached to
@@ -344,10 +341,10 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
         logger,
       },
     )
-    // Chamber seed registry (2026-12): the THREE syncable host packages are DESKTOP-
+    // Chamber seed registry: the THREE syncable host packages are DESKTOP-
     // SYNCED — the control-plane seeds them into the managed dsh profile from
     // the chamber-plugins cache, which a connecting desktop populates through
-    // PUT /chamber/plugins (Phase 3). Until the first sync the cache is
+    // PUT /chamber/plugins. Until the first sync the cache is
     // empty, the seed skips every entry, and the activation probe runs
     // without the chamber host domains — the expected set is derived per
     // spawn from the actually synced packages (syncedHostDomainProbeNames /
@@ -375,8 +372,8 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
         // (CHAMBER_HOST_PACKAGES): insert row, package name, probe domain and
         // the per-package sync-cache source dir all follow from one row, so a
         // host package added to the registry is seeded here without editing
-        // this file (2026-09 user decision: never a hand-maintained parallel
-        // list). A new registry row still has to land in
+        // this file (never a hand-maintained parallel list). A new registry row
+        // still has to land in
         // HOST_PACKAGE_PROBE_DOMAINS/HOST_DOMAIN_PROBE_NAMES (plugins.ts and
         // dsh-runtime pin that loud).
         ...CHAMBER_HOST_PACKAGES.map(descriptor => ({
@@ -418,9 +415,7 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
       canExposeLocal: () => !stopping && !runtimeExposureQuarantined(),
       // Design 21 §6.3 (decisions 6/17): the A1 managed profile-write lease
       // (runtime-manager profileWriteInFlight/beginProfileWrite) makes
-      // beforeSpawnCheckpoint PRODUCTION — it was documented as a test-only
-      // scheduling seam (local-connection.ts) until the gateway plugin
-      // executor joined the runtime-manager single-writer fence. Every spawn
+      // beforeSpawnCheckpoint PRODUCTION. Every spawn
       // (manual start and the health auto-restart, both pre-seed paths)
       // refuses while the lease is held, closing the DSH_HOME TOCTOU between
       // the executor's `dsh plugin` pnpm child and the spawn's seed thunk.
@@ -451,17 +446,15 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
     throw error
   }
   function syncFeatures(status: string): void {
-    // Readiness coupling is real here (2026-09-11 review, replacing the
-    // retired 2026-12 "the chamber surface is read-only and has no readiness
-    // coupling" claim): that surface carries the design 21 §6.2 A1
-    // third-party plugin MANAGEMENT writes (install/materialize/remove,
+    // Readiness coupling is real here: that surface carries the design 21 §6.2
+    // A1 third-party plugin MANAGEMENT writes (install/materialize/remove,
     // executed through the managed dsh's own CLI — plugins-exec.ts) and the
     // /chamber/runtime controller, so this subscription has two duties —
     // first forward the authoritative state to the runtime manager (design
     // 18 §9.3), then drain the deferred plugin intents below (design 21
     // decisions 7/8: the ready/degraded edge IS the execution window).
     runtimeManager?.observeLocalState?.(status)
-    // Design 21 §6.3 deferred-intent drain (plan Phase 4.4): install/
+    // Design 21 §6.3 deferred-intent drain: install/
     // materialize intents persisted while the runtime was busy, the manager
     // was not built yet, or the profile did not exist are re-submitted on
     // the next ready/degraded edge — the execution window is open and the
@@ -474,7 +467,7 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
         logger.warn(`gateway plugin deferred-intent drain failed: ${String(error)}`)
       })
     }
-    // Session-state watcher edge (plan W1 / WS-B): observe only while the
+    // Session-state watcher edge: observe only while the
     // managed host is exposed and ready/degraded; every other edge pauses the
     // observer (the routes keep serving the last snapshot with
     // host.serviceable=false). start/stop are idempotent.
@@ -499,7 +492,7 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
         // Design 17 §4.1: a failed start (or a stop) releases the stateDir
         // exclusive lock; a retry must re-take it (fail-closed with a loud
         // 'gateway_locked' error if another process grabbed the directory in
-        // between — M3 fix round).
+        // between).
         store.reacquire()
         dispatch.resume()
         await createdPlane.start()
@@ -516,20 +509,20 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
         // (pending) snapshot → pointer switch → spawn candidate → probe gate.
         const startup = await runtimeManager.startupTransaction()
         assertStartEpoch(epoch)
-        // Desktop-mirror blocked startups (design 18 §3.6/§9.3 review fix):
+        // Desktop-mirror blocked startups (design 18 §3.6/§9.3):
         // FATAL metadata corruption (journal/current/override corrupt,
         // journal-mismatch), a mid-transaction pointer switch (swap-attempted)
         // or an interrupted snapshot restore (restore-half / restore-
         // incomplete) must NOT be exposed — keep the gateway up with the
         // managed dsh stopped so the runtime controller (mounted and not
         // ready-gated) can serve the recovery surface. FATAL is resumable via
-        // POST /chamber/runtime/recover-metadata (2026-12 desktop parity);
+        // POST /chamber/runtime/recover-metadata (desktop parity);
         // swap/restore blocks resume via retry-apply | retry-restore.
         if (startup.blockedReason !== null && (FATAL_RUNTIME_BLOCKS.has(startup.blockedReason)
           || startup.blockedReason === 'swap-attempted'
           || startup.blockedReason === 'restore-half'
           || startup.blockedReason === 'restore-incomplete'
-          // A-U2 desktop parity: an env-override runtime that failed the
+          // Desktop parity: an env-override runtime that failed the
           // activation probe gate must NOT be exposed — keep the gateway up
           // with the managed dsh stopped. Env is externally pinned, so there
           // is no recovery route: fix the DSH_GATEWAY_DSH_PATH target and
@@ -551,13 +544,13 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
           started = true
           return
         }
-        // H1 review fix (desktop parity): a durable metadata-recovery
+        // Desktop parity: a durable metadata-recovery
         // transaction mid-flight (record not finalized) or a corrupt recovery
         // marker must NEVER serve DSH_HOME through the builtin anchor without
         // the probe gate — the startup transaction sees archived metadata as
         // clean and would otherwise bypass it. Keep the gateway up with the
         // managed dsh stopped and resume via recover-metadata. (Duck-typed:
-        // composition tests inject fake managers without the new seam.)
+        // composition tests inject fake managers without that seam.)
         const recoveryPreflight = (runtimeManager as { metadataRecoveryPending?: () => boolean }).metadataRecoveryPending
         if (startup.blockedReason === null
           && typeof recoveryPreflight === 'function'
@@ -572,7 +565,7 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
         // The transaction's candidate spawn emits transient ready transitions;
         // the feature-consumer subscription attaches only AFTER the verdict,
         // so consumers never start against a candidate that is about to be
-        // rolled back (R7 review). The explicit sync below covers the first
+        // rolled back. The explicit sync below covers the first
         // authoritative transition, and startLocal() re-publishes exposure
         // once the transaction's quarantine window has closed.
         unsubscribeLocalState = createdPlane.onLocalStateChange(snapshot => syncFeatures(snapshot.status))
@@ -582,7 +575,7 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
         assertStartEpoch(epoch)
         syncFeatures(createdPlane.connectionState)
         createdPlane.refreshLocalExposure()
-        // L1 review fix (desktop parity): eviction on the startup path writes
+        // Desktop parity: eviction on the startup path writes
         // the durable store-prune marker — consume it at the boot boundary
         // (never inside the shared transaction, which tests exercise heavily).
         const pruneBoot = (runtimeManager as { pruneStoreIfNeeded?: () => Promise<void> }).pruneStoreIfNeeded
@@ -593,7 +586,7 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
         // Fence credential writers and break authenticated requests that are
         // still waiting for body bytes. Mutations beyond that boundary remain
         // tracked until their complete route tail has settled. Since design
-        // 21 §6.2 (plan Phase 4.4) the /chamber plugin write routes answer
+        // 21 §6.2 the /chamber plugin write routes answer
         // 202 BEFORE their mutation runs — the A1 executor children are
         // killed by pluginTasks.dispose() below, AFTER the manager disposal
         // (a disposing manager refuses new profile-write leases, so no op
@@ -626,7 +619,7 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
         }
         await createdPlane.stop().catch(stopError => logger.warn(`gateway startup rollback failed: ${String(stopError)}`))
         // Release the stateDir exclusive lock on the rollback path so a retry
-        // (or another process) can take over the directory (Phase 1 close).
+        // (or another process) can take over the directory.
         // If runtime disposal could not prove every writer quiescent, retain
         // the outer state lock and owner record: allowing another gateway to
         // enter would turn a cleanup failure into concurrent state mutation.
@@ -667,7 +660,7 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
     const managerAtStop = runtimeManager
     unsubscribeLocalState?.()
     unsubscribeLocalState = null
-    // Session-state watcher teardown (plan W1 stop ordering: end SSE → stop
+    // Session-state watcher teardown (stop ordering: end SSE → stop
     // mux → flush the snapshot). It starts here, synchronously before the
     // proxy/dsh teardown, and is awaited below BEFORE store.close().
     const sessionStateShutdown = sessionState.shutdown()
@@ -779,8 +772,6 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
 }
 
 // The bundle's public surface, asserted by test/packaging/build-smoke.test.ts:
-// the control plane consumes createGateway (defined here) plus these two. Every
-// other re-export of this entry had zero consumers in the repository and was
-// removed (2026-12 audit F11).
+// the control plane consumes createGateway (defined here) plus these two.
 export { createChamberSurface } from './routes.ts'
 export { createGatewayStore } from './store.ts'

@@ -1,6 +1,6 @@
 /**
- * Shared fixtures for the packages/dsh-runtime/test/store/ store-suite split
- * (P0): temp base, version-tree builder, activation-journal record. Test-only.
+ * Shared fixtures for the packages/dsh-runtime/test/store/ store-suite split:
+ * temp base, version-tree builder, activation-journal record. Test-only.
  */
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';

@@ -1,5 +1,5 @@
 /**
- * Vendor source patch registry (design 09 §3.6, 2026-09 round-3 D3).
+ * Vendor source patch registry (design 09 §3.6).
  *
  * WHY THIS EXISTS: the chamber shell serves ONE page from the control-plane
  * origin and multiplexes every instance under a per-instance base path
@@ -25,7 +25,7 @@
  * (see `chamberFileApiBase`) with upstream behaviour as the fallback, so an
  * official-layout deployment stays correct.
  *
- * SECOND ADMITTED CLASS (2026-12, measured shell CPU — correctness patches keep
+ * SECOND ADMITTED CLASS (measured shell CPU — correctness patches keep
  * priority): an upstream constant or CSS animation whose per-frame cost is
  * MEASURED on the target hardware and which a chamber package cannot express
  * (hashed CSS-module class names are unselectable from outside; the publication

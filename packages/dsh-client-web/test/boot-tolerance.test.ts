@@ -1,11 +1,11 @@
 /**
  * node:test for the chamber version-tolerance decision rules
- * (`packages/dsh-client-web/src/boot-tolerance.ts`) — the load-bearing policy
- * behind the 2026-08 rc.8 regression fix (design 09 §3.3). React-free by design,
+ * (`packages/dsh-client-web/src/boot-tolerance.ts`) — the load-bearing
+ * version-tolerance policy (design 09 §3.3). React-free by design,
  * so this suite runs under plain node (`pnpm run test:client-web`).
  *
- * The assertions pin the EXACT pre-extraction behavior, including the
- * failure-report strings assertEntriesActive throws with: a refactor that
+ * The assertions pin the EXACT failure-report strings assertEntriesActive
+ * throws with: a refactor that
  * changes the rules (e.g. making manifest rows tolerable) fails here first.
  */
 import { test } from 'node:test'
@@ -46,8 +46,8 @@ test('sweep: a pending manifest row lists the missing services (plural/unknown f
   assert.equal(multi.kind, 'fatal')
   assert.equal(multi.reason, 'row: pending (waiting for services: a, b)')
   assert.equal(pending(['a']).reason, 'row: pending (waiting for service: a)')
-  // Empty missing list → the "unknown" fallback keeps the plural form (the
-  // pre-extraction behavior, preserved verbatim).
+  // Empty missing list → the "unknown" fallback keeps the plural form
+  // (preserved verbatim).
   assert.equal(pending([]).reason, 'row: pending (waiting for services: unknown)')
 })
 

@@ -1,16 +1,15 @@
 /**
  * Renderer REST client — narrowed to the design 05 §7.2 surface:
- * health, connections (local). Auth/audit routes were removed
- * with the control-plane auth removal (v1 consolidation); everything else
- * (sessions/projects/interactions/SSE/config/… passthrough, and the host
- * logs REST surface — the settings-connections plugin owns its own
- * control-plane client) was deleted with the thin-shell chat UI.
+ * health, connections (local). Everything else (sessions/projects/
+ * interactions/SSE/config/… passthrough, and the host logs REST surface)
+ * is outside this surface; the settings-connections plugin owns its own
+ * control-plane client.
  *
  * The transport + wire-contract shapes are the SINGLE shared copy in the
  * chamber sidebar package (shared/control-plane-client.ts, design 04 §3 /
- * 05 §3.1 — B2 convergence): the App layer here and the connections
- * plugin's control-plane client both consume it, so the two former copies
- * can never drift again. This module keeps the App-facing `api` object and
+ * 05 §3.1): the App layer here and the connections
+ * plugin's control-plane client both consume it, so the two consumers
+ * cannot drift apart. This module keeps the App-facing `api` object and
  * re-exports the shared types/functions unchanged (App.tsx's import surface
  * stays as-is).
  */

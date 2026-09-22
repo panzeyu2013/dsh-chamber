@@ -1,9 +1,9 @@
 /**
  * host-package-dirs.test.ts —— chamber host 包目录名映射纯函数单测。
  *
- * 覆盖 2026-12 验证轮的两条要求：
+ * 覆盖两条要求：
  *  ① scoped 包名必须去 scope（dev 向上检索按 packages/<目录名> 拼路径，把
- *     '@scope/name' 当目录名会让检索永远落空——该缺陷在集成期被自查抓到）；
+ *     '@scope/name' 当目录名会让检索永远落空）；
  *  ② 无 scope 包名原样返回、空串/异常输入不得抛（调用方在装配路径上）。
  */
 import { test } from 'node:test'
@@ -28,7 +28,7 @@ test('② 无 scope / 边界输入原样返回', () => {
   assert.equal(packageDirName(''), '')
 })
 
-/** P-05/P-13：布局锚点具名函数（sidecar-ctx 导出；Swift 布局锁步测试读源文本）。 */
+/** 布局锚点具名函数（sidecar-ctx 导出；Swift 布局锁步测试读源文本）。 */
 test('③ P-13 打包布局锚点 = Swift PackagedLayout / build-sidecar.sidecarLayout 拼写', async () => {
   const {
     packagedHostPackageDir,
@@ -49,7 +49,7 @@ test('④ P-05 检索根限定含 pnpm-workspace.yaml 的目录；祖先链同�
   const fixture = mkdtempSync(path.join(tmpdir(), 'dsh-host-dirs-'))
   try {
     // 祖先链上有 packages/pkg-a/package.json，但**没有** pnpm-workspace.yaml
-    // → 不得采信（P-05 的原始风险：祖先链同名包被当成源）。
+    // → 不得采信（祖先链同名包被当成源的风险）。
     const nested = path.join(fixture, 'outer', 'inner')
     mkdirSync(path.join(fixture, 'outer', 'packages', 'pkg-a'), { recursive: true })
     mkdirSync(nested, { recursive: true })
@@ -86,7 +86,7 @@ test('④ P-05 检索根限定含 pnpm-workspace.yaml 的目录；祖先链同�
 })
 
 
-/** P-04：Electron-free sidecar 的 dev 内建工作区回退（与 main.ts 同候选顺序）。 */
+/** Electron-free sidecar 的 dev 内建工作区回退（与 main.ts 同候选顺序）。 */
 test('⑥ P-04 sidecar dev fallback: explicit > ref-dsh > vendor; packaged never probes the repo', async () => {
   const {
     devBuiltinDshWorkspaceCandidates,
@@ -128,7 +128,7 @@ test('⑥ P-04 sidecar dev fallback: explicit > ref-dsh > vendor; packaged never
   }
 })
 
-/** P-05 加固：只认最近的 pnpm-workspace.yaml 根，不再向更高祖先探测。 */
+/** 只认最近的 pnpm-workspace.yaml 根，不向更高祖先探测。 */
 test('⑦ P-05 最近 workspace 根优先：更上层的同名 packages/<pkg> 绝不被采信', async () => {
   const { findWorkspaceRoot, resolveHostPackageSourceDir, packagedHostPackageDir } = await import('./sidecar-ctx.ts')
   const fixture = mkdtempSync(path.join(tmpdir(), 'dsh-workspace-nearest-'))

@@ -1,7 +1,7 @@
 /**
- * 安装阻塞原因（installBlockedReason）的纯分类模块 —— 2026-09 模块评审 E#1。
+ * 安装阻塞原因（installBlockedReason）的纯分类模块。
  *
- * 从 UpdateSection.tsx 抽出：`.tsx` 无法被 node:test 直接 import（JSX 扩展名），
+ * `.tsx` 无法被 node:test 直接 import（JSX 扩展名），
  * 而这条判定需要插件内单测 + 跨包字面量锁步。分类规则只有两条已知原因，
  * 其余一律 unknown（**绝不**凭空断言「未配置签名」）。
  */

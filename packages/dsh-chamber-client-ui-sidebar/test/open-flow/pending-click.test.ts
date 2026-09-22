@@ -1,6 +1,6 @@
 /**
  * pending-click.ts unit tests (plain node:test): the shared double-click-rename pending
- * slot (design 05 deviation P2-11, 2026-08 — immediate-open + double-click rename,
+ * slot (design 05 deviation P2-11 — immediate-open + double-click rename,
  * OpenChamber model). Covers click accounting: first click records + returns false (open),
  * second same-session click in-window consumes + returns true (rename), window
  * boundaries, cross-session replacement, clear, and data-session-id containment.

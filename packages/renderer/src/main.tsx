@@ -6,13 +6,13 @@ import { installPageLanguageOwner } from './page-language.ts'
 import { installSvgResourceScope } from './svg-resource-scope.ts'
 import './styles.css'
 
-// T16 (2026-09-11 upstream-alignment): the static first-frame skeleton in
+// The static first-frame skeleton in
 // index.html carries the served markup's OWN default-language copy (the file
 // declares <html lang="zh-CN">, the same served-markup default the frame's
 // locale fallback pins), and this is where the frame's typed dictionary takes
 // over — before React mounts, so the skeleton never keeps copy the document
 // language disagrees with.
-// 2026-09-11 review-fix (finding 4e): on a COLD load the two cannot actually
+// On a COLD load the two cannot actually
 // disagree yet — `<html lang>` is still the served markup's zh-CN (index.html:2)
 // and no shell has booted to rewrite it, so this rewrite is a no-op on that path
 // (the hint already carries the zh copy). It earns its keep the moment the
@@ -28,7 +28,7 @@ if (bootHint !== null) bootHint.textContent = frameText(readDocumentLocale(), 'b
 // instance shell writes it unconditionally (the vendor locale service, at
 // activation and on each dictionary registration, with no teardown). N shells
 // share this one document, so the last writer — including a prewarmed shell's
-// browser-derived provisional — used to own the frame chrome's language. The
+// browser-derived provisional — would otherwise own the frame chrome's language. The
 // page-language owner takes that attribute over BEFORE any shell boots: the
 // served markup's own language is the cold-start value, and from here on only
 // the on-screen source's SETTLED language may change it (page-language.ts).
@@ -42,10 +42,10 @@ installPageLanguageOwner()
 // dropped at paint time and stays blank until the element is rebuilt; renaming the
 // duplicated ids was measured to immunise it. The scoper makes every <svg>
 // self-contained BEFORE any shell boots.
-// 锚定赋值的形式是**故意的**（W8/R15③ 修正，2026-12 审计 S3）：esbuild 不改点号属性名，
+// 锚定赋值的形式是**故意的**：esbuild 不改点号属性名，
 // 于是产物里留下 globalThis.__chamberSvgScopeInstalled=<压缩后标识符>() —— 守卫因此能在
 // **压缩产物**上证明「入口真的调用了安装」；而裸调用 installSvgResourceScope() 在压缩后
-// 被改名为短标识符，会让产物守卫对任何真实构建恒红（此前就是这样）。
+// 被改名为短标识符，会让产物守卫对任何真实构建恒红。
 // 负控仍然成立：把右侧换成非调用（如 = null）标记即消失。
 ;(globalThis as unknown as { __chamberSvgScopeInstalled?: unknown }).__chamberSvgScopeInstalled =
   installSvgResourceScope()

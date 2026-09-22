@@ -1,7 +1,6 @@
 /**
- * Per-source recovery-timing policy unit tests (Batch 2 follow-up, 2026-09):
- * remote transports get the widened readiness deadline, everything else keeps
- * the upstream defaults.
+ * Per-source recovery-timing policy unit tests: remote transports get the
+ * widened readiness deadline, everything else keeps the upstream defaults.
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'

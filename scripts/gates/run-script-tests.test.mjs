@@ -95,8 +95,8 @@ test('the shipped manifest is self-consistent: unique entries, real reasons, no 
 })
 
 // The walk must not apply the repo-wide ignore union: 'release' is build output
-// elsewhere but a REAL source directory under scripts/ (dropping it once made
-// every scripts/release test look unlisted — 2026-12 stage-2 regression).
+// elsewhere but a REAL source directory under scripts/ — applying the union
+// would drop every scripts/release test from the manifest.
 test('collectScriptTests sees the scripts/release corpus', () => {
   const tests = collectScriptTests()
   assert.ok(tests.some(path => path.startsWith('scripts/release/')), tests.join(', '))

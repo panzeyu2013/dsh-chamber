@@ -31,7 +31,7 @@ interface Recorded {
  * TRANSPORT result the injected call really answers in production — the
  * page-level instance client's `callUnary` (`{ok:true, value: domainAnswer}`).
  * Without that outer level every case below would test a shape production never
- * produces, which is exactly how the empty-catalog regression stayed green.
+ * produces.
  */
 function transportOf(answers: Readonly<Record<string, unknown>>): {
   readonly call: OpenInAppRpcCall
@@ -90,9 +90,9 @@ test('load is fail-closed for a drifted, failing, refusing or unreachable host',
 
 test('load reads BOTH envelope levels: a transport failure or a one-level answer is empty', async () => {
   // Raw transport answers (not wrapped by `transportOf`): a REFUSED transport
-  // result, a transport result with no `ok` flag, one with no `value`, and —
-  // the regression shape — the host domain carrier handed over as if it were
-  // the transport result, i.e. one unwrap too few.
+  // result, a transport result with no `ok` flag, one with no `value`, and the
+  // host domain carrier handed over as if it were the transport result, i.e. one
+  // unwrap too few.
   const cases: readonly unknown[] = [
     { ok: false, error: { code: 'internal', message: '实例返回未知错误' } },
     { value: { ok: true, value: { apps: ['finder'] } } },

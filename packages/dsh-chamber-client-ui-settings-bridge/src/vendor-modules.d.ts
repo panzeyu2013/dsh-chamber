@@ -4,17 +4,12 @@
  * read-only source without built lib/ types, so their faces are declared here
  * with the exact surface this package consumes; the standalone
  * `typecheck:settings-bridge` script keeps this package's own code checked.
- * Keep in sync with what the src/client modules actually import.
+ * Keep in sync with what the src/client modules actually import: declare a
+ * face only alongside a real import of that specifier (an unused block is
+ * inert).
  *
- * 2026-12 audit: the faces this package never imports were removed (the
- * dissolved-runtime store / api-controller mirrors, the ui-renderer client
- * shim and the settings-family entry shims) — none of them was imported by
- * src/ or test/, so each was inert. Add a block back only alongside a real
- * import of that specifier.
- *
- * The renderer's `src/client/bindings.tsx` (2026-09-11 upstream-alignment A3:
- * the bridge uses the OFFICIAL `observableHook` instead of re-implementing it)
- * is the one exception: a DEEP `./src/*` specifier resolves to the real vendor
+ * The renderer's `src/client/bindings.tsx` (the bridge uses the OFFICIAL
+ * `observableHook` instead of re-implementing it) is the one exception: a DEEP `./src/*` specifier resolves to the real vendor
  * source, and that module reads host/binding faces this file's loose ui-slots
  * mirror deliberately does not carry — so it is declared in
  * src/ambient/renderer-bindings.d.ts and mapped through this package's tsconfig
@@ -135,9 +130,9 @@ declare module '@deepseek-ai/dsh-client-ui-primitives' {
   }
   export function Button(props: ButtonProps): ReactNode
   /**
-   * Two-state toggle, 36×20 (2026-09-11 upstream-alignment T9): track/thumb/
-   * transition/focus are the official vocabulary the chamber's hand-rolled
-   * switch copied; `label` is required, so the control cannot ship unnamed.
+   * Two-state toggle, 36×20: track/thumb/
+   * transition/focus are the official vocabulary; `label` is required, so the
+   * control cannot ship unnamed.
    */
   export function Switch(props: {
     checked: boolean
@@ -148,9 +143,9 @@ declare module '@deepseek-ai/dsh-client-ui-primitives' {
     className?: string
   }): ReactNode
   /**
-   * Centered, body-portaled dialog over a blurred mask (2026-09-11
-   * upstream-alignment T2: the ONE confirmation surface the dsh runtime section
-   * uses). `closeLabel` is required — the atoms own no fallback copy.
+   * Centered, body-portaled dialog over a blurred mask (the ONE confirmation
+   * surface the dsh runtime section uses). `closeLabel` is required — the atoms
+   * own no fallback copy.
    */
   export function Modal(props: {
     open: boolean
@@ -198,7 +193,7 @@ declare module '@deepseek-ai/dsh-client-ui-primitives' {
     dense?: boolean
     compact?: boolean
   }): ReactNode
-  /** RiskConfirmation: `closeLabel` became REQUIRED in dsh-v0.1.2-alpha.1 (forwards to Modal). */
+  /** RiskConfirmation: `closeLabel` is REQUIRED (forwards to Modal). */
   export function RiskConfirmation(props: {
     open: boolean
     title: string

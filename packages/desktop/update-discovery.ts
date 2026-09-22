@@ -3,10 +3,7 @@
  * （electron-free：updater.ts（Electron/electron-updater 面）与
  * update-headless.ts（Swift sidecar 面）共用）。
  *
- * 审计项 2：这一发现 + 选择逻辑此前在两个消费面各写一遍
- * （updater.ts 的 resolveGithubBetaFeed/betaReleaseDownloadBase 与
- * update-headless.ts 的 RELEASES_URL/selectLatestReleaseVersion），边界与语义
- * 必须锁步而不是靠两份实现碰巧一致：
+ * 边界与语义必须锁步，不能依赖实现碰巧一致：
  * - 有界列表查询唯一实现：URL 由仓库常量推导、per_page=100、Accept 头、
  *   AbortController 超时、非 2xx 响亮错误；
  * - 候选选择唯一实现：draft/prerelease 与通道精确匹配、canonical tag 形状、
@@ -45,7 +42,7 @@ export const STABLE_TAG_PATTERN = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/
 export const BETA_TAG_PATTERN = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-beta\.(0|[1-9]\d*)$/
 
 /** feed 条目是否带**可解析版本**（stable 或 beta 形状，不看通道/draft）——
- *  调用点用它区分「本通道暂无发布物」与「feed 形状异常」（三审 #14 的响亮
+ *  调用点用它区分「本通道暂无发布物」与「feed 形状异常」（响亮
  *  error 判据）。 */
 export function isParseableReleaseTag(tag: unknown): boolean {
   if (typeof tag !== 'string' || tag.length > MAX_TAG_LENGTH) return false

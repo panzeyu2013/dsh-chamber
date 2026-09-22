@@ -163,10 +163,9 @@ test('ensure returns cached when marker and executable match', () =>
   }))
 
 test('the dev renderer artifact path is locked to vite outDir and main.ts webDistDir', () => {
-  // 2026-09 efficiency review: the launcher's lazy-build check pointed at
-  // `dist/index.html` long after the composite renderer moved its output to
-  // `dist/web`, so every `pnpm run dev*` paid a full build:renderer (~9 s
-  // warm). These three sources must stay in step.
+  // The launcher's lazy-build check and the renderer's output dir must agree
+  // (dist/web): a mismatch makes every `pnpm run dev*` pay a full
+  // build:renderer (~9 s warm). These three sources must stay in step.
   const repoRoot = path.resolve(import.meta.dirname, '..', '..', '..')
   const viteConfig = readFileSync(path.join(repoRoot, 'packages/renderer/vite.config.mjs'), 'utf8')
   const outDir = /outDir:\s*'([^']+)'/.exec(viteConfig)?.[1]

@@ -580,7 +580,7 @@ test('missing-dir leftover records stay associated, never block other work and c
   assert.equal(vanishedRow.status, 'missing')
   assert.equal(vanishedRow.workspaceId, 'ws-feature')
 
-  // A VANISHED (orphaned) workspace registration no longer blocks another removal.
+  // A VANISHED (orphaned) workspace registration must not block another removal.
   const orphan = setup({ linked: true })
   orphan.workspaces.push({ workspaceId: 'orphan-1', path: '/repos/orphaned-path', sessionIds: [] })
   const orphanTarget = await targetOf(orphan.core)
@@ -653,7 +653,7 @@ test('missing leftover removal keeps locked/ghost/identity guards, matches detac
   await assert.rejects(race.core.remove({ operationId: 'op-stale-race', expected: raceTarget.expected, path: STALE }), refuses('worktree-invalid'))
   assert.equal(mutationCalls(race.repo, 'remove').length, 0)
 
-  // The 2026-09 live record was DETACHED: the null branch identity must match.
+  // A DETACHED live record: the null branch identity must match.
   const detached = setup({ linked: true })
   detached.repo.existing.add(STALE)
   detached.repo.worktrees.push({ path: STALE, branch: null, head: FEATURE_HEAD })

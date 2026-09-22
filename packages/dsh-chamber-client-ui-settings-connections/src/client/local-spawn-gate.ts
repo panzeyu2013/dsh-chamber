@@ -1,6 +1,6 @@
 /**
- * Local-card runtime spawn gate (design 18 §3.6 「applying 相位门控」, 2026-12
- * audit P0-4). Pure, node-testable.
+ * Local-card runtime spawn gate (design 18 §3.6 「applying 相位门控」). Pure,
+ * node-testable.
  *
  * WHY this module exists: the local connection card has TWO entries that spawn
  * the local instance —
@@ -13,16 +13,16 @@
  *
  * design 18:245-247 requires the gate to cover «「启动」按钮与任何实例 spawn
  * 入口» — EVERY spawn entry — because an instance spawned inside the
- * snapshot→switch→probe window races the 「未决切换前绝不 spawn」 rule. Before
- * this module only the start button carried the verdict, so 「清理并接管」
- * could still spawn during the applying window.
+ * snapshot→switch→probe window races the 「未决切换前绝不 spawn」 rule; the
+ * start button alone would leave 「清理并接管」 able to spawn during the
+ * applying window.
  *
  * The AUTHORITATIVE gate itself stays where it is
  * (`renderer/src/runtime-management.ts` `runtimeBlocksLocalStart`: fail closed
  * while the bridge hydrates and for every phase with an unsafe DSH_HOME). This
  * module reads that verdict as an INPUT and owns only the projection the card
  * renders — one verdict for both entries plus the one visible reason row — so
- * the two entries cannot drift apart again.
+ * the two entries cannot drift apart.
  */
 import type { SettingsConnectionsKey } from '../locales.ts'
 
@@ -54,12 +54,12 @@ export interface LocalSpawnGate {
 /**
  * Project the runtime gate for the local card.
  *
- * Copy precedence (the pre-2026-12 inline ladder, now total): hydration →
- * applying → every remaining gate reason. The last branch is the point of this
- * projection: `runtimeBlocksLocalStart` also blocks on `canRetryRestore` and
- * a half/incomplete restore, and those states previously disabled the start
- * button WITHOUT rendering any reason row — a gated entry with no visible
- * cause. Every blocked verdict therefore names itself.
+ * Copy precedence: hydration → applying → every remaining gate reason. The
+ * last branch is the point of this projection: `runtimeBlocksLocalStart` also
+ * blocks on `canRetryRestore` and a half/incomplete restore, which would
+ * otherwise disable the start button WITHOUT rendering any reason row — a
+ * gated entry with no visible cause. Every blocked verdict therefore names
+ * itself.
  *
  * @param facts - the card's runtime facts.
  * @returns the verdict: `blocked` plus at most one reason row.

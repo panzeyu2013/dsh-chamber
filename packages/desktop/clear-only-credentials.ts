@@ -1,5 +1,5 @@
 /**
- * clear-only 凭据 IPC 的共享准入前奏（2026-12 单源化，ARCH-IMPL-025）。
+ * clear-only 凭据 IPC 的共享准入前奏。
  *
  * 三个 legacy 凭据 setter（desktop_ssh_set_password / desktop_gateway_set_token /
  * desktop_gateway_set_password）的**准入**逐字相同：payload 取值 → 注册表存在性 →
@@ -29,9 +29,9 @@ export type ClearOnlyAdmission<S> =
 
 /**
  * 判定一次 clear-only 调用：只有 `null` / `''` 是清除，其余非空写入一律拒绝。
- * 校验顺序与旧实现一致（先 id/存在性/取值类型，再 clear-only 文案）。
+ * 校验顺序（先 id/存在性/取值类型，再 clear-only 文案）。
  * @param descriptor - 该方法自己的字段 / 文案 / 注册表读取。
- * @param payload - IPC payload（解构语义与旧实现一致）。
+ * @param payload - IPC payload。
  * @returns 放行（含 id 与注册表 spec）或 `{ error }`。
  */
 export function admitClearOnly<S extends { id: string }>(

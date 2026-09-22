@@ -46,9 +46,9 @@ export interface PluginRow {
 }
 
 /** The full diff: the combined, ordered row set. Every row carries its own
- *  `kind` (§5.3), so a per-kind view is a filter over `rows` — the pre-filtered
- *  arrays this interface used to expose were write-only for every production
- *  reader and cost one extra full scan + allocation per kind (2026-12 audit). */
+ *  `kind` (§5.3), so a per-kind view is a filter over `rows`; pre-filtered
+ *  arrays would be write-only and cost one extra full scan + allocation per
+ *  kind. */
 export interface PluginDiff {
   rows: PluginRow[]
 }
@@ -71,7 +71,7 @@ const PINNED = /^[~^]?v?\d/
 function isPathSpec(spec: string): boolean {
   // Scheme checks are case-insensitive to match the main process
   // (plugin-sync isMaterializeSpec, /i) — a `FILE:`/`LINK:` value must
-  // classify as materialize on BOTH sides (2026 final review).
+  // classify as materialize on BOTH sides.
   return /^file:/i.test(spec)
     || /^link:/i.test(spec)
     || /^\.{1,2}\//.test(spec)
@@ -95,7 +95,7 @@ type SpecClass =
 
 /** True when the version VALUE contains a semver x-wildcard (`x`, `1.x`,
  *  `1.2.x`, with an optional `^`/`~` prefix) — mirror of the main-process
- *  gate (desktop plugin-sync `hasXWildcard`, 2026 audit R4): an x-wildcard
+ *  gate (desktop plugin-sync `hasXWildcard`): an x-wildcard
  *  is a RANGE, and the authoritative apply path rejects the whole batch as
  *  unsyncable. The UI classifier must refuse it up front so a row is never
  *  offered as actionable while the main process would wholesale-reject it. */

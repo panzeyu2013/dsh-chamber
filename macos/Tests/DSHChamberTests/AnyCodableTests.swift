@@ -1,7 +1,7 @@
 //
-//  AnyCodableTests.swift — W-05 AnyCodable（B 桥载荷载体，design 25 §4.4.2）
+//  AnyCodableTests.swift — AnyCodable（B 桥载荷载体，design 25 §4.4.2）
 //  纯逻辑单测：JSON 往返互逆、jsonLiteralText 语义、fromJSONObject 判别。
-//  旧的 `jsonObject` 生产面已删除（2026-12 审计），测试侧保留 legacyJSONObject
+//  测试侧保留 legacyJSONObject
 //  基线以维持"单遍写出 == 老 JSONSerialization 口径"的等价断言。
 //
 import XCTest
@@ -12,9 +12,9 @@ final class AnyCodableTests: XCTestCase {
         try JSONDecoder().decode(T.self, from: Data(json.utf8))
     }
 
-    /// 测试侧 legacy 基线：逐字复刻已删除的 `AnyCodable.jsonObject`
+    /// 测试侧 legacy 基线：`AnyCodable.jsonObject` 的逐字复刻
     /// （JSONSerialization 可写投影：整值 Double → NSNumber(int64)，非整值 →
-    /// NSNumber(double)，容器递归）。生产面 2026-12 审计删除；这里只为单遍写出器
+    /// NSNumber(double)，容器递归）。这里只为单遍写出器
     /// 的"解析后语义等价"断言保留一个老口径参照物。
     private func legacyJSONObject(_ value: AnyCodable) -> Any {
         switch value {
@@ -79,7 +79,7 @@ final class AnyCodableTests: XCTestCase {
         XCTAssertEqual((obj as? NSNumber)?.int64Value, 7)
     }
 
-    /// 二轮评审 P3：JSON 桥接的非有限数值必须被拒绝（否则下游 Int(n) trap）。
+    /// JSON 桥接的非有限数值必须被拒绝（否则下游 Int(n) trap）。
     func testFromJSONObjectRejectsNonFiniteNumbers() {
         XCTAssertNil(AnyCodable.fromJSONObject(NSNumber(value: Double.infinity)))
         XCTAssertNil(AnyCodable.fromJSONObject(NSNumber(value: -Double.infinity)))
@@ -90,9 +90,9 @@ final class AnyCodableTests: XCTestCase {
         XCTAssertNil(AnyCodable.fromJSONObject([NSNumber(value: Double.nan)]))
     }
 
-    /// Phase 1 C2 / 2026-12 审计：深度门单源 = AnyCodable.maxJSONDepth（A 桥
-    /// fence 与 B 桥解码共用），原与 MessageHandler.maxJSONDepth 的锁步断言随该
-    /// 常量的删除一并移除；边界断言保留。
+    /// 深度门单源 = AnyCodable.maxJSONDepth（A 桥
+    /// fence 与 B 桥解码共用）。
+    /// 边界断言保留。
     func testDepthLimitBoundary() {
         var allowed: Any = "leaf"
         for _ in 0..<AnyCodable.maxJSONDepth { allowed = [allowed] }
@@ -102,8 +102,8 @@ final class AnyCodableTests: XCTestCase {
         XCTAssertNil(AnyCodable.fromJSONObject(tooDeep), "超过上限一层即拒绝（fail closed）")
     }
 
-    /// Phase 2 C7（修正版）：页面字面量走单遍写出器——-0.0 折叠为 "0"（与旧
-    /// legacy 基线路径逐字一致）；B 桥出帧（request）的 JSONEncoder 往返保持改动前行为。
+    /// 页面字面量走单遍写出器——-0.0 折叠为 "0"（与旧
+    /// legacy 基线路径逐字一致）；B 桥出帧（request）的 JSONEncoder 往返保持既有行为。
     func testJsonLiteralTextSemantics() throws {
         XCTAssertEqual(AnyCodable.null.jsonLiteralText, "null")
         XCTAssertEqual(AnyCodable.bool(true).jsonLiteralText, "true")
@@ -122,15 +122,15 @@ final class AnyCodableTests: XCTestCase {
                        "[1,true,null]")
         XCTAssertEqual(AnyCodable.object(["k": .array([.number(1)])]).jsonLiteralText,
                        "{\"k\":[1]}")
-        // 空容器与嵌套 -0（独立审查 C 建议的边界）
+        // 空容器与嵌套 -0 的边界
         XCTAssertEqual(AnyCodable.array([]).jsonLiteralText, "[]")
         XCTAssertEqual(AnyCodable.object([:]).jsonLiteralText, "{}")
         XCTAssertEqual(AnyCodable.array([.object(["z": .number(-0.0)])]).jsonLiteralText, "[{\"z\":0}]")
-        // B 桥出帧（FrameCodec.encode → JSONEncoder）保持改动前行为
+        // B 桥出帧（FrameCodec.encode → JSONEncoder）输出 -0
         XCTAssertEqual(String(data: try JSONEncoder().encode(AnyCodable.number(-0.0)), encoding: .utf8), "-0")
     }
 
-    /// Phase 2 C7：单遍写出与 legacy 基线（原 jsonObject + JSONSerialization）解析后语义等价。
+    /// 单遍写出与 legacy 基线（jsonObject + JSONSerialization）解析后语义等价。
     func testJsonLiteralTextMatchesLegacySerialization() throws {
         let values: [AnyCodable] = [
             .null, .bool(false), .number(0), .number(-0.0), .number(0.1), .number(1e18), .number(1e21),
@@ -149,7 +149,7 @@ final class AnyCodableTests: XCTestCase {
         }
     }
 
-    /// Phase 3（2026-09-18）：尺寸门的安全上界——`jsonUpperBoundByteCount` 必须
+    /// 尺寸门的安全上界——`jsonUpperBoundByteCount` 必须
     /// 恒 ≥ 实际序列化字节数（单遍写出与 JSONSerialization 两条口径）。
     /// 该不等式是 MessageHandler ⑤「上界 ≤ 上限 ⇒ 必过」短路的唯一前提。
     func testJsonUpperBoundCoversActualSerialization() throws {

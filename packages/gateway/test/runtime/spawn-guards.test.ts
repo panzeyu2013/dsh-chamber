@@ -1,13 +1,10 @@
 /**
- * Managed-dsh spawn guards (merged): the two pre-spawn gates on the managed dsh
- * child, carried over verbatim from their source files.
+ * Managed-dsh spawn guards: the two pre-spawn gates on the managed dsh child.
  * - spawn-checkpoint.ts: the beforeSpawnCheckpoint closure the gateway hands to
  *   createControlPlane (design 21 section 6.3, decisions 6/17) - a spawn defers
  *   while a plugin-mutation profile lease is held.
  * - control-plane spawn-dsh.ts: the managed dsh child environment sanitizer -
  *   no gateway credential/config variable may reach the child.
- *
- * Merged from test/spawn-checkpoint.test.ts and test/spawn-env.test.ts.
  */
 
 import { test } from 'node:test'
@@ -15,8 +12,6 @@ import assert from 'node:assert/strict'
 import { createPluginWriteCheckpoint } from '../../src/spawn-checkpoint.ts'
 import type { GatewayRuntimeManager } from '../../src/runtime-manager.ts'
 import { sanitizeManagedDshEnv } from '../../../control-plane/src/spawn-dsh.ts'
-
-// --- merged from test/spawn-checkpoint.test.ts ---
 
 /**
  * Design 21 §6.3 (decisions 6/17) — beforeSpawnCheckpoint wiring tests. The
@@ -44,9 +39,6 @@ test('plugin-write spawn checkpoint: rejects while the profile lease is held, re
   runtimeManagerRef.current = idle
   await checkpoint()
 })
-
-// --- merged from test/spawn-env.test.ts ---
-
 
 test('managed dsh child environment strips every gateway credential/config variable', () => {
   const source = {

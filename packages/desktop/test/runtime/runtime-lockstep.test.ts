@@ -1,11 +1,11 @@
 /**
- * Renderer ↔ main runtime action-matrix LOCKSTEP tests (P2).
+ * Renderer ↔ main runtime action-matrix LOCKSTEP tests.
  *
  * Both matrices are hand-maintained in two packages; the security/UX invariant
  * is that the UI must never SHOW an action the main process will REJECT. Every
  * phase × capability combination asserts renderer ⊆ main for the non-blocked,
  * management-supported path (`allowedActions` in @dsh-chamber/dsh-runtime is
- * authoritative; the desktop runtime-state-machine.ts shim is gone, N8).
+ * authoritative).
  * The reverse direction (main accepts what the UI hides) is masked by the
  * publishing invariant "canRecoverMetadata=true ⟹ runtimeBlocked=true",
  * asserted below so a change strands users loudly, not silently.
@@ -123,7 +123,7 @@ test('the recover-metadata masking invariant is explicit (canRecoverMetadata ⟹
   }
 })
 test('renderer blocked branch matches the main blocked gate', () => {
-  // Main's blocked gate (main.ts runtimeActionAllowed): retry-restore needs
+  // Main's blocked gate (runtime-startup-host.ts runtimeActionAllowed): retry-restore needs
   // canRetryRestore + rollback/failed; recover-metadata needs
   // (canRetryRestore !== true || restoreOutcome === 'incomplete') +
   // canRecoverMetadata + corrupt-health + idle/failed; retry-apply needs
@@ -245,9 +245,9 @@ test('renderer compareSemver stays lockstep with the shared compareRuntimeVersio
 })
 
 // ===========================================================================
-// main.ts `runtimeActionAllowed` — the three DESKTOP-ONLY guards in front of
-// the shared core (P3). Every matrix above models only the shared core, while
-// main.ts evaluates three further guards BEFORE it (main.ts:5220-5249):
+// runtime-startup-host.ts `runtimeActionAllowed` — the three DESKTOP-ONLY
+// guards in front of the shared core. Every matrix above models only the
+// shared core, while the host evaluates three further guards BEFORE it:
 //   1. `managementSupported === false && action !== 'retry-restore'` → reject:
 //      a read-only platform keeps exactly ONE escape (finish a crash-interrupted
 //      restore) — the desktop's one relaxation over a core that has no notion of
@@ -258,11 +258,11 @@ test('renderer compareSemver stays lockstep with the shared compareRuntimeVersio
 //   3. `runtimeWriterFence.busy && !applyingReset` → reject everything except
 //      the applying-reset escape (reset-builtin while applying, non-env, with an
 //      override).
-// main.ts pulls Electron, so the gate is TRANSCRIBED below and held to the real
-// source by the structural pins at the bottom. The writer fence is NOT
+// The gate is TRANSCRIBED below and held to the real source by the structural
+// pins at the bottom. The writer fence is NOT
 // transcribed: `RuntimeOperationFence` is the real shared class, driven for real
 // (only `busy` is read by main). `restart-dsh` does NOT ride this gate — its own
-// IPC handler (main.ts:5161-5179) deliberately accepts read-only platforms and
+// IPC handler (shell-ipc-runtime.ts) deliberately accepts read-only platforms and
 // env sources (see the restart-gate assertions).
 // ===========================================================================
 
@@ -274,7 +274,7 @@ const RUNTIME_ACTIONS: readonly RuntimeAction[] = [
 ]
 
 /**
- * Transcription of main.ts's `runtimeActionAllowed` (main.ts:5220-5249): the
+ * Transcription of `runtimeActionAllowed` (runtime-startup-host.ts): the
  * three desktop-only guards, the blocked matrix, then shared `allowedActions`.
  */
 function desktopActionAllowed(
@@ -313,7 +313,7 @@ function desktopActionAllowed(
   }).includes(action)
 }
 
-/** Transcription of the RUNTIME_RESTART handler's own gate (main.ts:5171-5175):
+/** Transcription of the RUNTIME_RESTART handler's own gate (shell-ipc-runtime.ts):
  *  the gate `restart-dsh` really rides — never asks managementSupported/source. */
 function desktopRestartAllowed(
   state: RuntimeState,
@@ -332,7 +332,7 @@ function desktopRestartAllowed(
 function desktopAcceptedActions(state: RuntimeState, options: { writerFenceBusy?: boolean } = {}): RuntimeAction[] {
   return RUNTIME_ACTIONS.filter(action => action !== 'restart-dsh' && desktopActionAllowed(action, state, options))
 }
-test('the unsupported-platform guard admits exactly the retry-restore escape, and only it (main.ts:5222)', () => {
+test('the unsupported-platform guard admits exactly the retry-restore escape, and only it', () => {
   for (const phase of PHASES) {
     for (const caps of [{}, { canRetryRestore: true }] as Array<Partial<RuntimeState>>) {
       const state = rendererState(phase, { ...caps, source: 'user', managementSupported: false })
@@ -373,7 +373,7 @@ test('the unsupported-platform guard admits exactly the retry-restore escape, an
   }
 })
 
-test('the env guard refuses recover-metadata in exactly the blocked cells main would otherwise open (main.ts:5223)', () => {
+test('the env guard refuses recover-metadata in exactly the blocked cells main would otherwise open', () => {
   const blocked = (overrides: Partial<RuntimeState> = {}): RuntimeState => rendererState('idle', {
     runtimeBlocked: true,
     runtimeBlockedReason: 'journal corrupt',
@@ -401,7 +401,7 @@ test('the env guard refuses recover-metadata in exactly the blocked cells main w
   assert.deepEqual(runtimeAllowedActions(envIncomplete), ['retry-restore'],
     'the renderer matches the env guard on the same state')
 })
-test('the writer fence refuses every runtime action except the applying-reset escape (main.ts:5224-5228)', () => {
+test('the writer fence refuses every runtime action except the applying-reset escape', () => {
   // The REAL shared fence (main.ts holds one RuntimeOperationFence instance).
   const fence = new RuntimeOperationFence()
   const lease = fence.tryAcquire('runtime:check')
@@ -434,7 +434,7 @@ test('the writer fence refuses every runtime action except the applying-reset es
   }
 })
 
-// ---- structural pins: the transcription above must keep matching main.ts ----
+// ---- structural pins: the transcription above must keep matching the main-side source files ----
 
 /** The body of the `const <name> = (…) => { … }` arrow function. */
 function arrowFunctionBody(source: string, name: string): string {
@@ -443,15 +443,12 @@ function arrowFunctionBody(source: string, name: string): string {
   return balancedBlock(source, source.indexOf('{', start))
 }
 
-// The desktop main-process surface spans two files (W-10 moved the trusted-IPC
-// registrations into shell-core.ts; the desktop-only `runtimeActionAllowed`
-// guards stayed in main.ts). Read both like ipc-surface-mirror.test.ts's
+// The desktop main-process surface spans several files (the trusted-IPC
+// registrations live in shell-core.ts; the desktop-only `runtimeActionAllowed`
+// guards in runtime-startup-host.ts). Read them like ipc-surface-mirror.test.ts's
 // MAIN_SIDE_FILES, or a relocated handler reports as "gone".
 const MAIN_SIDE_FILES = [
-  'main.ts', 'shell-core.ts', 'shell-ipc-runtime.ts',
-  // 2026-12 P0-6 运行时启动事务宿主抽取：runtimeActionAllowed 现定义于
-  // runtime-startup-host.ts（第三写者结构改动；读取面同步，断言不变）。
-  'runtime-startup-host.ts',
+  'main.ts', 'shell-core.ts', 'shell-ipc-runtime.ts', 'runtime-startup-host.ts',
 ]
 const desktopMain = MAIN_SIDE_FILES
   .map(file => readFileSync(join(import.meta.dirname, '..', '..', '..', '..', 'packages', 'desktop', file), 'utf8'))

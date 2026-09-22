@@ -15,10 +15,8 @@
  * an id produced by a form the extraction does not know would make its label row
  * look "stray" and fail the last test loudly, instead of being silently missed.
  *
- * It replaces the retired mirror check that compared the chamber dictionary
- * against the vendor client's `OpenInAppAction.tsx` (design 20 §8): upstream's
- * copy is now kept honest by the fork gate (`FORKS` C1), and this gate keeps OUR
- * two halves honest with each other.
+ * The fork gate (`FORKS` C1) keeps upstream's copy honest (design 20 §8); this
+ * gate keeps OUR two halves honest with each other.
  */
 
 import { test } from 'node:test'

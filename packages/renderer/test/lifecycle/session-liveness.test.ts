@@ -1,10 +1,10 @@
 /**
  * 运行位活性守卫的决策契约（renderer/src/session-liveness.ts）。
  *
- * 2026-12 独立复核后重写：除了原有的门槛/限频/升级依据，另外锁住复核抓出的
- * 四类缺陷——① 配额只按整个 running 时段总量封顶会让长任务后段失明；
- * ② 上一时段的失败回执污染新时段（无依据升级）；③ 重连后的健康回执把 L3
- * 永久 latch 关；④ L2 未拿到真实返回值就消耗预算。
+ * 门槛/限频/升级依据之外，另外锁住四条规则——① 配额按滚动窗口封顶，
+ * 长任务后段仍然会被探测；② 上一时段的失败回执不得污染新时段；
+ * ③ 重连后的健康回执撤下 L3 后不得永久 latch；④ L2 未拿到真实返回值
+ * 就不消耗预算。
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -119,14 +119,14 @@ test('失败回执 ⇒ 派发一次 L2；预算在真实执行（mark）之后�
   h.mark(1_450)
   assert.equal(h.state.records.local?.reconnectCount, 1)
   // 重连**之后**的新失败证据（settledAt 1_600 > lastReconnectAt 1_450）：重连前的
-  // sticky 失败不算数（否则重连后一个宽限期就亮 30s 假横幅——三轮复核的 flash 复现）。
+  // sticky 失败不算数（否则重连后一个宽限期就亮 30s 假横幅）。
   const post = { requestedAt: 1_500, settledAt: 1_600, ok: false, attempts: 2 }
   // 1_700 这一 tick 才观测到「预算已用尽」⇒ ladderAnchorAt=1_700，宽限 200ms 后亮。
   assert.deepEqual(h.at(1_700, { a: { running: true } }, post).stalled, [], '宽限内不亮')
   const notice = h.at(1_900, { a: { running: true } }, post)
   assert.ok(notice.actions.some(action => action.kind === 'notice'), '重连后的新失败证据 + 宽限 ⇒ 亮')
   assert.deepEqual(notice.stalled, ['local'])
-  // 重连前的 sticky 失败不再算证据：即使把 lastOutcomeOk 留在 false，也不凭它上膛。
+  // 重连前的 sticky 失败不算证据：即使把 lastOutcomeOk 留在 false，也不凭它上膛。
   assert.deepEqual(h.state.records.local?.lastOutcomeOk, false)
 })
 
@@ -143,7 +143,7 @@ test('L2 杠杆长期 no-op 时 L3 仍有第二条出口（否则用户永远看
   assert.deepEqual(dispatched.actions, [{ kind: 'reconnect', sourceId: 'local' }], '退避后再次派遣')
   h.markNoop()
   // 连续 no-op 达到门槛 + 未收敛证据 ⇒ 梯子到顶的那一 tick 起算宽限，之后必须上膛
-  // （此前这条路径完全不亮；且反复 no-op 派遣不得把锚点一直向前推）。
+  // （反复 no-op 派遣不得把锚点一直向前推）。
   assert.deepEqual(h.at(2_300, { a: { running: true } }, failed).stalled, [], '锚点起算 tick')
   assert.deepEqual(h.at(2_500, { a: { running: true } }, failed).stalled, ['local'])
   assert.deepEqual(h.at(2_900, { a: { running: true } }, failed).stalled, ['local'], '后续 no-op 派遣不得把横幅推没')
@@ -173,12 +173,12 @@ test('unknown 回执既不健康也不升级；升级只能发生在 unknown 之
   assert.deepEqual(h.at(1_050, { a: { running: true } }, unknown).actions, [])
   assert.deepEqual(h.at(1_050, { a: { running: true } }, unknown).stalled, [])
   // 原期限（1_000 + 400）到点也绝不升级：被吸收的 unknown 之后**还没发过 L1** ⇒ 期限不
-  // 生效（否则快 unknown 必然制造假 L2，2026-12 二轮独立复核的时间线仿真）。
+  // 生效（否则快 unknown 必然制造假 L2）。
   assert.deepEqual(h.at(1_450, { a: { running: true } }, unknown).actions, [], '未发下一次 L1 前绝不升级')
   // coalesce 到点 → L1 #2；自此期限从这次 L1 起算。
   assert.deepEqual(h.at(1_500, { a: { running: true } }, unknown).actions,
     [{ kind: 'refresh', sourceId: 'local' }])
-  // 第二次 unknown 不再吸收（但这次 L1 的期限仍然生效）：持续无结论会被收口，有界。
+  // 第二次 unknown 不被吸收（但这次 L1 的期限仍然生效）：持续无结论会被收口，有界。
   const unknown2: Reconcile = { requestedAt: 1_500, settledAt: 1_510, ok: false, attempts: 1, verdict: 'unknown' }
   h.at(1_510, { a: { running: true } }, unknown2)
   assert.deepEqual(h.at(1_900, { a: { running: true } }, unknown2).actions, [], '期限未到')
@@ -188,8 +188,8 @@ test('unknown 回执既不健康也不升级；升级只能发生在 unknown 之
 
 test('快 unknown（L1 后立刻结算）不吞掉唯一预算：下一次 L1 的健康结论先到就不重连', () => {
   // 生产关系（coalesce 200s > 期限 190s）+ 快探针失败（502/代理重启会在一个 tick 内
-  // 结算 unknown）。旧的"从 unknown 时刻顺延"仍让期限抢在下一次 L1 之前到点 ⇒ 假 L2
-  // （2026-12 二轮独立复核实测：L1#1@120s → L2@330s → L1#2@360s）。
+  // 结算 unknown）。从 unknown 时刻顺延会让期限抢在下一次 L1 之前到点 ⇒ 假 L2
+  // （时间线：L1#1@120s → L2@330s → L1#2@360s）。
   const h = harness({ refreshAfterMs: 1_000, refreshCoalesceMs: 200, refreshOutcomeTimeoutMs: 150 })
   h.at(0, { a: { running: true } })
   h.at(1_000) // L1 #1
@@ -206,9 +206,9 @@ test('快 unknown（L1 后立刻结算）不吞掉唯一预算：下一次 L1 �
 })
 
 test('重连之后的 unknown 不得复活重连前的失败证据（假 L3 的整类形态）', () => {
-  // 2026-12 三轮独立复核：unknown 会被计入「已消费回执」水位，而 lastOutcomeOk=false
+  // unknown 会被计入「已消费回执」水位，而 lastOutcomeOk=false
   // 是刻意跨重连保留的；拿 outcomeSeenAt 当失败证据的时钟 ⇒ 重连前那次失败 + 重连后
-  // 一次**没有结论**的探针 = 看起来"重连之后仍然失败" ⇒ 假横幅（复现时间线：
+  // 一次**没有结论**的探针 = 看起来"重连之后仍然失败" ⇒ 假横幅（时间线：
   // L1@1000 → stale@1005 → L2@1005 → L1@1100 → unknown@1200 → 假 notice@1310）。
   const h = harness({ refreshAfterMs: 1_000, refreshCoalesceMs: 500, refreshOutcomeTimeoutMs: 400 })
   h.at(0, { a: { running: true } })
@@ -224,7 +224,7 @@ test('重连之后的 unknown 不得复活重连前的失败证据（假 L3 的�
   assert.deepEqual(h.at(1_310, { a: { running: true } }, unknown).actions, [],
     'unknown 没有给出任何结论：绝不能把重连前的失败证据续到重连之后')
   assert.deepEqual(h.at(1_310, { a: { running: true } }, unknown).stalled, [])
-  // 阳性对照：真正的**重连之后**失败结论仍必须提示（修完不能把 L3 一起关掉）。
+  // 阳性对照：真正的**重连之后**失败结论仍必须提示（L3 不能被一并关掉）。
   const staleAfter: Reconcile = { requestedAt: 1_100, settledAt: 1_320, ok: false, attempts: 1, verdict: 'stale' }
   assert.deepEqual(h.at(1_320, { a: { running: true } }, staleAfter).actions,
     [{ kind: 'notice', sourceId: 'local' }], '有结论的失败仍要提示')
@@ -244,9 +244,9 @@ test('与吸收同一 tick 发出的 L1 仍算"之前"：期限再多等一个 c
 })
 
 test('官方 refresh 持续坏（回执全为 unknown）不静默：期限到点升唯一一次 L2，梯子到顶后亮 L3', () => {
-  // 2026-12 五轮复核新增的覆盖规则会把「refresh 失败 + 权威对我们的运行行沉默」结算成
-  // `unknown`（而不是曾经的假健康 `converged`）。本测试钉住它的**下游后果**：unknown 流
-  // 必须仍被等回执期限收口——否则「官方对账永久坏」会变成一条无声链路（不升级、不提示）。
+  // 「refresh 失败 + 权威对我们的运行行沉默」被结算成 `unknown`。本测试钉住它的
+  // **下游后果**：unknown 流必须仍被等回执期限收口——否则「官方对账永久坏」会变成
+  // 一条无声链路（不升级、不提示）。
   // 配额放宽到不干扰时间线：本测试锁的是「无结论也必须收口」，不是配额节拍。
   const h = harness({
     refreshAfterMs: 1_000,
@@ -284,8 +284,8 @@ test('官方 refresh 持续坏（回执全为 unknown）不静默：期限到点
 })
 
 test('另一条臂持续挡住派遣时 L3 仍有出口（blockedReconnects 计入梯子）', () => {
-  // 三轮复核的 MEDIUM 缺口：App 的 S2 臂每 60s 静默重连一次 ⇒ reconnectBlocked 恒真、
-  // no-op 账不增长、真实预算也不消耗 ⇒ 旧实现永远不亮横幅（模拟 20 分钟零 L2/L3）。
+  // App 的重连臂每 60s 静默重连一次 ⇒ reconnectBlocked 恒真、
+  // no-op 账不增长、真实预算也不消耗 ⇒ 永远不亮横幅（模拟 20 分钟零 L2/L3）。
   const h = harness({ refreshOutcomeTimeoutMs: 400, refreshCoalesceMs: 200_000, noticeAfterMs: 200, maxNoopReconnects: 2 })
   h.at(0, { a: { running: true } })
   h.at(1_000) // L1
@@ -303,8 +303,8 @@ test('共享账本挡住 L2 时不派遣：预算与等待计时都不被消耗�
   h.at(0, { a: { running: true } })
   h.at(1_000)
   // 期限到点本应 L2，但 App 账本说"同 tick 另一条臂刚重连/退避窗内" ⇒ 守卫不派遣。
-  // 旧行为是派遣后才被 App 丢弃：守卫已经记账（lastReconnectDispatchAt 置位、等待
-  // 计时清零），这条臂于是静默整个退避窗且 L1 一并停摆（2026-12 独立复核）。
+  // 若派遣后才被 App 丢弃，守卫已经记账（lastReconnectDispatchAt 置位、等待
+  // 计时清零），这条臂就会静默整个退避窗且 L1 一并停摆。
   assert.deepEqual(h.at(1_500, { a: { running: true } }, undefined, undefined, true).actions, [],
     '账本挡住时绝不派遣，也不消耗预算')
   // 没记账 ⇒ 账本一放开，下一个到点的 tick 立刻派遣。
@@ -424,13 +424,13 @@ test('每 tick 返回新状态但内容稳定（引用复用刻意不做：漏�
   const h = harness()
   const first = h.at(0)
   const second = h.at(1, { a: { running: true } })
-  // 引用身份不再是契约（消费点是 App 的 ref，不触发 React）；契约是内容不漂移。
+  // 引用身份不是契约（消费点是 App 的 ref，不触发 React）；契约是内容不漂移。
   assert.deepEqual(second.state.records, first.state.records)
   assert.deepEqual(second.actions, [])
 })
 
 test('默认节拍：coalesce == 窗口/配额（把爆发式探测铺成均匀节拍）', () => {
-  // 60s 版本会在 120/180/240s 用完窗口配额 → 之后 8 分钟零探测（二轮复核）；
+  // 60s 版本会在 120/180/240s 用完窗口配额 → 之后 8 分钟零探测；
   // 相等时平均成本不变而最坏未探测时长 = coalesce。
   assert.equal(
     SESSION_LIVENESS_DEFAULTS.refreshCoalesceMs,
@@ -442,7 +442,7 @@ test('生产节拍：首次对账在事实年龄 60s（陈旧位不再等 120s/2
   // 事实年龄从**首次观测到 running** 的 tick 起算（不是绝对时刻）：t=0 首见、
   // 60s 门槛到点即发 L1；tick 仍是生产 30s（AGGREGATE_FALLBACK_POLL_MS）。
   // 每个 running 时段的探测总量仍由 coalesce/配额封顶，因此更短的首探不增加稳态
-  // 成本，只把「丢帧 → 纠正」的可见窗口从 ~200s 级压到 60s 级（2026-12 彻底修复）。
+  // 成本，「丢帧 → 纠正」的可见窗口为 60s 级。
   let state = createSessionLivenessState()
   const at = (now: number) => {
     const plan = planSessionLiveness(state, {

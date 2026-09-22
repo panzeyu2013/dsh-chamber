@@ -1,8 +1,5 @@
 /**
- * session-mux.ts unit tests (plan of record
- * docs/progress/todo/remote-session-state-and-switch.md §4/W1; blueprints
- * gateway-session-state-blueprint.md §3.2/§5.1/§5.4/§8-3 and
- * remote-state-w0-protocol.md §3): mux framing, the per-connection full
+ * session-mux.ts unit tests: mux framing, the per-connection full
  * baseline reconciliation, emit routing, the waterfall delegate-hold hard rule
  * (never answer unless another downstream mux client is attached AND the 1.5s
  * grace elapsed), reconnect backoff, the one-shot session/follow completion

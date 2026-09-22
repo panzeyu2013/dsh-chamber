@@ -76,7 +76,7 @@ test('apply-now mirrors the main gates: visible only in pending, hidden for env/
 })
 
 test('apply-now mirrors the main connectionState gate: hidden outside ready/degraded, reset-builtin escape kept', () => {
-  // P2-A UI⊄main fix: the main-side apply-now gate (apply-now-gate.ts) rejects
+  // The main-side apply-now gate (apply-now-gate.ts) rejects
   // every connectionState outside ready/degraded — a stopped/crashed local dsh
   // would silently no-op. The pending apply-now button must therefore be hidden
   // while the durable-transaction escape hatch (reset-builtin) stays visible.
@@ -110,8 +110,8 @@ test('runtime projection identity tracks transport and raw host id; a live versi
   assert.notEqual(runtimeServerProjectionKey(base), runtimeServerProjectionKey({ ...base, sourceFingerprint: 'proof:east:b' }))
   assert.notEqual(runtimeServerProjectionKey(base), runtimeServerProjectionKey({ ...base, transport: 'http' }))
   assert.notEqual(runtimeServerProjectionKey(base), runtimeServerProjectionKey({ ...base, rawId: 'west' }))
-  // 2026-12 phase-3: the registered section receives {t, instanceSource,
-  // chamberInstanceId} only — a dshVersion change must NOT dispose/re-register
+  // The registered section receives {t, instanceSource, chamberInstanceId}
+  // only — a dshVersion change must NOT dispose/re-register
   // the section (state cleared, poll restarted) for a fact it never reads.
   assert.equal(runtimeServerProjectionKey(base), runtimeServerProjectionKey({ ...base, dshVersion: '1.2.3' }))
 })
@@ -127,8 +127,8 @@ test('restart-dsh gate (design 18 §3.6 项 8): allowed in non-busy phases, bloc
   assert.equal(runtimeRestartAllowed(runtimeState('pending')), false)
   assert.equal(runtimeRestartAllowed(runtimeState('idle', { runtimeBlocked: true })), false)
   assert.equal(runtimeRestartAllowed(null), false)
-  // 2026-12: env source & read-only platforms keep restart (design 18 §3.6 项 8,
-  // gateway parity); blocked states still refuse it.
+  // Env source & read-only platforms keep restart (design 18 §3.6 项 8, gateway
+  // parity); blocked states still refuse it.
   assert.equal(runtimeRestartAllowed(runtimeState('idle', { source: 'env' })), true)
   assert.equal(runtimeRestartAllowed(runtimeState('idle', { managementSupported: false })), true)
   assert.equal(runtimeRestartAllowed(runtimeState('idle', { source: 'env', runtimeBlocked: true })), false)
@@ -273,7 +273,7 @@ test('version selection preselects the active version, then bundled, and preserv
     { version: '0.9.0', latest: false, cached: true, belowBaseline: true },
   ]
   // Active wins over the registry recommendation: the dropdown reflects what is
-  // running, never an older dist-tags.latest (2026-10 user decision).
+  // running, never an older dist-tags.latest.
   assert.equal(preferredRuntimeVersion(null, versions, '1.2.0', '1.0.0'), '1.0.0')
   assert.equal(preferredRuntimeVersion(null, versions, '1.2.0', '1.0.0', '0.9.0'), '1.0.0')
   // No active version yet: the bundled version is the safe default over latest.

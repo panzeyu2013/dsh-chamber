@@ -1,9 +1,8 @@
 /**
  * The per-source search surface of the chamber sidebar ServerSection subtree:
  * the capsule input row and the search-results tree (with the projection-label /
- * running-bit / active-schedule lookups it reads). Moved verbatim out of
- * ServerSection.tsx; the section owns the shared search controller mirror and
- * passes the resolved values in.
+ * running-bit / active-schedule lookups it reads). The section owns the shared
+ * search controller mirror and passes the resolved values in.
  */
 import { Fragment } from 'react'
 import type { RefObject } from 'react'
@@ -35,7 +34,7 @@ export function ServerSectionSearchCapsule({ server, search, searchRoot, searchI
                     ref={searchRoot}
                     className={cc.searchCapsule}
                     // 焦点归属必须**事件驱动**记录：effect 只在依赖变化时跑，采样
-                    // 到的 activeElement 早已回落（2026-12 复查 MINOR）。
+                    // 到的 activeElement 早已回落。
                     onFocusCapture={() => { capsuleHeldFocus.current = true }}
                     onBlurCapture={() => { capsuleHeldFocus.current = false }}
                   >
@@ -48,7 +47,7 @@ export function ServerSectionSearchCapsule({ server, search, searchRoot, searchI
                       value={search?.query ?? ''}
                       // 不用 autoFocus：胶囊会因断连/恢复而卸载重挂，autoFocus
                       // 会在恢复时抢走用户当前焦点；用户主动展开的那条路径已由
-                      // 搜索按钮显式 focus()（2026-12 复查 MINOR）。
+                      // 搜索按钮显式 focus()。
                       onChange={(event) => setSearchQuery(server.id, event.target.value)}
                       onKeyDown={(event) => {
                         if (event.key !== 'Escape') return
@@ -84,7 +83,7 @@ export function ServerSectionSearchResults({ server, merged, currentRemote, curr
   const { sessionStateLabel, sessionStatePending, sessionStateDot } = useServerSectionSessionState()
               // Search-result labels resolve from the source aggregate (title
               // may lag the latest snapshot by one poll — accepted, 06 §1.2).
-              // The official display label (I3), not the durable title: a hit
+              // The official display label, not the durable title: a hit
               // whose title the host could not read renders the directory name.
               const searchRowLabel = (sessionId: string): { title: string; workspaceLabel: string | undefined } => {
                 for (const workspace of server.workspaces) {
@@ -112,7 +111,7 @@ export function ServerSectionSearchResults({ server, merged, currentRemote, curr
                 }
                 return false
               }
-              // 2026-09-11 upstream-alignment T7: the same projection lookup for
+              // The same projection lookup for
               // the active-Schedule fact — upstream's search row renders the
               // marker too (vendor ui-workspace Rows.tsx:351). Not found ⇒
               // false (defensive: a hit outside the visible projection is not a
@@ -164,12 +163,11 @@ export function ServerSectionSearchResults({ server, merged, currentRemote, curr
                                       {stateDot}
                                     </span>
                                     <span className={cc.searchResultTitle}>{resolved.title}</span>
-                                    {/* 2026-09-11 upstream-alignment T7: upstream's
+                                    {/* Upstream's
                                         search row carries the marker right after
                                         the title, inside the heading (vendor
                                         ui-workspace Rows.tsx:351), fed by
-                                        tree.ts:161-163. 2026-09-11 review-fix
-                                        finding 5b: this row applies NO blank gate
+                                        tree.ts:161-163. This row applies NO blank gate
                                         of its own — the projection helper
                                         (`projectedHasActiveSchedule`) is the only
                                         gate, and it is false for a session the

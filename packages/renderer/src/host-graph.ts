@@ -28,12 +28,12 @@
  * (vendor dsh-client-modules src/client/manifest.ts `WebBootEntry` /
  * `WebBootGraph` are the authoritative shapes; the two pure WIRE HELPERS of
  * that module — `optionalStringArray` / `stripClientSuffix` — are imported by
- * real-source relative path, A4 2026-09-11 upstream-alignment). The
+ * real-source relative path). The
  * plugin-graph diagnostic
- * types are the chamber shared face (sidebar shared/aggregate-store.ts, A4
- * single source) — imported below and re-exported, never re-declared.
+ * types are the chamber shared face (sidebar shared/aggregate-store.ts,
+ * the single source) — imported below and re-exported, never re-declared.
  *
- * P4-2 (N6): the shared transport byte of fetchHostGraph — URL join +
+ * The shared transport byte of fetchHostGraph — URL join +
  * client-request envelope + POST + body collection, bounded unary 30s — rides
  * the shared kernel postUnary (sidebar shared/wire-common.ts), imported HERE
  * by real-source relative path rather than the
@@ -41,17 +41,16 @@
  * install-tree copy of the sidebar package, and its plain-node tests
  * (host-graph.test.ts, no module loader) must resolve the real module without
  * a bundler. Specifier imports from other renderer files resolve to the same
- * real source through the root tsconfig paths added in P4-4 (the former
- * vendor-modules.d.ts ambient overlay was deleted in the same step — no
- * ambient table is involved any more). Every status/envelope classification
+ * real source through the root tsconfig paths (no
+ * ambient table is involved). Every status/envelope classification
  * below stays local — the envelope contract source remains
  * packages/control-plane/src/rpc-envelope.ts (the browser cannot import that
- * Node module; the client-request half is now built by the shared kernel).
+ * Node module; the client-request half is built by the shared kernel).
  */
 
 import { CHAMBER_COVERED_IDS } from './chamber-covered.ts'
 import { graphGapKindFor, type GraphGapKind } from './source-readiness.ts'
-// A4 (2026-09-11 upstream-alignment): the boot-graph wire validators are
+// The boot-graph wire validators are
 // UPSTREAM's own — never a hand-rolled copy. manifest.ts is the browser-safe
 // contract face of the pinned dsh-client-modules (zero runtime imports), the
 // very module whose `parseBootManifest` consumes this same wire shape, and it
@@ -61,7 +60,7 @@ import { graphGapKindFor, type GraphGapKind } from './source-readiness.ts'
 // must resolve the real module without a bundler. Keep the local parse LOOSER
 // than upstream's — see the fetchHostGraph comment.
 import { optionalStringArray, stripClientSuffix } from '../../../vendor/harness-packages/@deepseek-ai/dsh-client-modules/src/client/manifest.ts'
-// The deferred-covered roster (review F1): the covered ids whose module-table
+// The deferred-covered roster: the covered ids whose module-table
 // factory exists only AFTER the boot settled — the single authority host-graph
 // shares with the composite entry (chamber-entry.ts asserts its own roster
 // against it at apply time).
@@ -70,7 +69,7 @@ import type { PluginGraphDiagnostic, PluginGraphDiagnosticState } from '@dsh-cha
 import {
   classifyGraphChannelFailure, postUnary, type UnaryPostOutcome,
 } from '../../dsh-chamber-client-ui-sidebar/src/shared/wire-common.ts'
-// Page-level client-plugin load kernel (2026-12 settings-surface extension):
+// Page-level client-plugin load kernel:
 // the boot path and the settings bridge share ONE implementation of combo/id
 // bookkeeping, timeout tombstones and rev-conflict facts. Imported by real
 // relative source path for the same reason wire-common is (the renderer has no
@@ -87,8 +86,8 @@ import {
 export type { PluginGraphDiagnostic, PluginGraphDiagnosticState }
 
 /** One composed client entry row of the host boot graph (mirror of WebBootEntry).
- *  rc.8+ (dsh-v0.1.2-alpha.1) adds `external?: string[]` to WebBootEntry and
- *  moves bundle urls to the combo endpoint form (`/plugins/??<id>/client.js&rev=…`).
+ *  The wire's WebBootEntry carries `external?: string[]` and its
+ *  bundle urls use the combo endpoint form (`/plugins/??<id>/client.js&rev=…`).
  *  The url form is the single-id combo (each row's own script); the graph's
  *  multi-id combo BATCHES are ignored by the chamber merge (host-graph fetch
  *  reads `entries` only, see the fetch comment). */
@@ -102,10 +101,10 @@ export interface HostGraphRow {
   rev: string
   /** Package-name dependency edges, informational. */
   inject?: string[]
-  /** Exact non-inject module requests of this row (WebBootEntry.external,
-   *  dsh-v0.1.5): the specifiers the bundle requires from the module table
-   *  beyond its `inject` edges. Preserved since the 2026-12 review fix (F1) —
-   *  the field used to be dropped at parse, which erased the ONE unsatisfiable
+  /** Exact non-inject module requests of this row (WebBootEntry.external):
+   *  the specifiers the bundle requires from the module table
+   *  beyond its `inject` edges. The parse preserves the field: dropping it
+   *  would erase the ONE unsatisfiable
    *  edge a third-party row can carry here: a request onto a covered id whose
    *  family the composite registers only AFTER the boot settled
    *  (`required-extra-rows.ts` DEFERRED_EXTRA_ROW_IDS → the named diagnostic in
@@ -116,7 +115,7 @@ export interface HostGraphRow {
 }
 
 /** One extra module row handed to the boot kernel (mirror of the vendor
- *  BootModuleRow, dsh-v0.1.5): `initialUrl` is the initial-load combo endpoint
+ *  BootModuleRow): `initialUrl` is the initial-load combo endpoint
  *  (the chamber preloads each entry's own combo, so it equals `url`), `inject`
  *  stays empty (the composite covers the whole official shell, so an extra has
  *  no inject edge to arrive first) and `external` carries the row's non-inject
@@ -147,11 +146,11 @@ interface HostGraphEnvelope {
 
 // The client-request / server-response envelope shape is AUTHORITATIVE in
 // the control-plane Node package (packages/control-plane/src/rpc-envelope.ts,
-// A2 cross-package protocol single-sourcing) — this renderer (browser-side)
+// cross-package protocol single-sourcing) — this renderer (browser-side)
 // cannot import a Node package (the desktop main-process probes consume the
 // shared module directly through packages/desktop/control-plane-module.ts),
 // so the client-request half is built by the shared browser kernel
-// (wire-common.ts postUnary, P4-2) and the server-response classification
+// (wire-common.ts postUnary) and the server-response classification
 // below stays local; any change to the shared contract must land in
 // rpc-envelope.ts first and be mirrored there.
 
@@ -182,7 +181,7 @@ class HostGraphChannelError extends Error {
  * throw (bad data must never be silently merged — a wrong graph is a boot
  * hazard, not a candidate for guesswork).
  *
- * A4 (2026-09-11 upstream-alignment) — how this parse relates to upstream's:
+ * How this parse relates to upstream's:
  * the field validation rides upstream's own helpers (`optionalStringArray`,
  * `stripClientSuffix`; manifest.ts, imported above), but the PARSE ITSELF stays
  * local and is deliberately LOOSER than upstream's `parseBootManifest`
@@ -196,12 +195,12 @@ class HostGraphChannelError extends Error {
  * boot's plugin set. Everything the local parse DOES check is upstream's check.
  */
 export async function fetchHostGraph(basePath: string): Promise<HostGraphRow[] | null> {
-  // Shared transport byte (P4-2): URL join + client-request envelope + POST +
+  // Shared transport byte: URL join + client-request envelope + POST +
   // body collection with the bounded-unary 30s budget, postUnary in
-  // wire-common.ts; the pre-migration bare crypto.randomUUID() rpcId is kept
+  // wire-common.ts; the bare crypto.randomUUID() rpcId is kept
   // explicit so its evaluation stays inside this try (a no-randomUUID
-  // environment folds the throw into the local wire error below, exactly as
-  // the hand-built fetch did). Transport rejections propagate raw.
+  // environment folds the throw into the local wire error below). Transport
+  // rejections propagate raw.
   let outcome: UnaryPostOutcome
   try {
     outcome = await postUnary(basePath, 'clientGraph/graph', {}, {
@@ -245,9 +244,9 @@ export async function fetchHostGraph(basePath: string): Promise<HostGraphRow[] |
     if (typeof row.id !== 'string' || typeof row.url !== 'string' || typeof row.rev !== 'string') {
       throw new Error(`宿主启动图：entry ${where} 必须携带 string id/url/rev`)
     }
-    // A4 (2026-09-11 upstream-alignment): the optional fields are validated by
+    // The optional fields are validated by
     // UPSTREAM's helper (manifest.ts `optionalStringArray`, which upstream's own
-    // `parseBootManifest` uses for this exact wire). Present-but-malformed now
+    // `parseBootManifest` uses for this exact wire). Present-but-malformed
     // THROWS instead of being dropped silently: a wrong graph is a boot hazard,
     // not a candidate for guesswork (this module's contract), and a dropped
     // `external` would hide the one require edge the deferred-dependency
@@ -264,8 +263,8 @@ export async function fetchHostGraph(basePath: string): Promise<HostGraphRow[] |
       rev: row.rev,
       // Optional wire fields, carried through when well-formed (same rule for
       // all three; a malformed one throws above). `inject`/`immediately` are
-      // informational for the merge; `external` is LOAD-BEARING (2026-12 review
-      // F1): it is the field the deferred-dependency diagnostic below reads.
+      // informational for the merge; `external` is LOAD-BEARING:
+      // it is the field the deferred-dependency diagnostic below reads.
       ...(inject === undefined ? {} : { inject: [...inject] }),
       ...(external === undefined ? {} : { external: [...external] }),
       ...(typeof row.immediately === 'boolean' ? { immediately: row.immediately } : {}),
@@ -282,7 +281,7 @@ export async function fetchHostGraph(basePath: string): Promise<HostGraphRow[] |
  * combo syntax (`??<id>/client.js,<id2>/client.js&rev=…`) travels inside the
  * url unchanged — the first `?` begins the query string, which the host's
  * /plugins combo handler decodes; the instance proxy is a transparent
- * path+query passthrough (P2-13 runtime verification item).
+ * path+query passthrough.
  * Non-root-relative urls (protocol-relative '//', absolute http(s)/blob/data:,
  * or relative) are dropped: a poisoned host graph must never steer the
  * module-script loader to an external origin.
@@ -311,7 +310,7 @@ export function toExtraRows(rows: readonly HostGraphRow[], basePath: string): Ex
       // The composite covers the whole official shell; kept extras are
       // standalone rows with no package inject edges to arrive first.
       inject: [],
-      // The wire's own non-inject requests travel UNCHANGED (review F1): the
+      // The wire's own non-inject requests travel UNCHANGED: the
       // kernel row type requires the field, and this merge is what decides
       // which of those requests this page can never satisfy (see
       // findDeferredExternalDependencies + the diagnostic in collectExtraRows).
@@ -322,8 +321,8 @@ export function toExtraRows(rows: readonly HostGraphRow[], basePath: string): Ex
 }
 
 /**
- * The `external` requests of the kept rows that this page can NEVER satisfy
- * (2026-12 review F1, P2): a request naming a composite-COVERED id whose family
+ * The `external` requests of the kept rows that this page can NEVER satisfy:
+ * a request naming a composite-COVERED id whose family
  * registers after the boot settled (`DEFERRED_EXTRA_ROW_IDS`).
  *
  * Why it is unsatisfiable rather than merely late: the covered row is filtered
@@ -340,9 +339,8 @@ export function toExtraRows(rows: readonly HostGraphRow[], basePath: string): Ex
  * Requests are matched in their canonical (suffix-stripped) form, exactly as
  * the kernel does: a `@scope/pkg/client` request and a bare `@scope/pkg`
  * request are the same module-table key. The normalization is UPSTREAM's own
- * `stripClientSuffix` (manifest.ts:156-158, A4 2026-09-11 upstream-alignment —
- * this used to inline the same `endsWith('/client')` slice here). Requests onto
- * kept peer extras (preloaded by the same call)
+ * `stripClientSuffix` (manifest.ts:156-158). Requests onto kept peer
+ * extras (preloaded by the same call)
  * or onto registered first-screen factories are NOT reported — this page does
  * satisfy them.
  * @param rows - the kept rows (the merge's output, dedupe + url rewrite done).
@@ -374,7 +372,7 @@ export function findDeferredExternalDependencies(
  * factory registration (the `__ModuleLoader__.load` sink throws on a repeat —
  * system.ts), so one script URL must never execute twice on a page.
  *
- * dsh-v0.1.2-alpha.1: bundle urls are combo endpoints (`/plugins/??…&rev=…`).
+ * Bundle urls are combo endpoints (`/plugins/??…&rev=…`).
  * A combo script registers EVERY id its query names, so multiple graph rows
  * can share one url — the preload is therefore keyed by URL (each combo
  * loads once, registering all its rows' factories), and a second table
@@ -417,8 +415,8 @@ export function findDeferredExternalDependencies(
  * restart and reports instance-version-conflict instead (honest copy over
  * the misleading "restart the app to switch").
  *
- * 2026-12: the combo/id tables, the timeout tombstone and the per-row load
- * verdicts MOVED to the sidebar shared face (`client-plugin-loader.ts`) so the
+ * The combo/id tables, the timeout tombstone and the per-row load
+ * verdicts live in the sidebar shared face (`client-plugin-loader.ts`) so the
  * settings bridge mounts a source's plugins through the exact same
  * bookkeeping. This module keeps the BOOT policy: fail loud, one bounded
  * recovery pass, and the per-boot diagnostic projection.
@@ -437,38 +435,38 @@ export interface CollectExtraRowsDeps {
   loadModuleBundle(url: string): Promise<void>
   reportDiagnostic?(sourceId: string, diagnostic: PluginGraphDiagnostic): void
   /**
-   * Instance-serving gate for the 503 path (2026-09-10, sidebarRight 彻底修复):
+   * Instance-serving gate for the 503 path:
    * `503 instance_unavailable` means "the instance is not serving YET", not
    * "the graph is broken" — but the boot window is short, and a cold local
-   * start or a restart-straddled attach routinely outlives it, which used to
-   * cost the boot its whole client-plugin set (and silently: see
+   * start or a restart-straddled attach routinely outlives it, which otherwise
+   * costs the boot its whole client-plugin set (and silently: see
    * {@link onGraphUnavailable}). The App supplies this gate from its own
    * per-source phase projection; it resolves true once the source is serving
    * again, false when the source left / the gate's own deadline passed.
-   * Omitted (pure-node tests, mobile shape) → the legacy fixed budget only.
+   * Omitted (pure-node tests, mobile shape) → the fixed budget only.
    */
   waitForServing?(instanceId: string): Promise<boolean>
   /**
    * This boot settled WITHOUT the host graph — the 503 budget + serving wait
    * were both exhausted (the source is expected to serve later), or the channel
    * answered a hard failure. The shell records the fact and the App re-boots
-   * the instance once the source turns ready (2026-09-10). `kind` is the
+   * the instance once the source turns ready. `kind` is the
    * decision of {@link graphGapKindFor}: `graph-unavailable` for every channel
    * failure, `local-graph-not-injected` for the LOCAL instance's 404 /
-   * method-missing (a chamber-side installation/seed fact — 2026-12 FIX 6).
+   * method-missing (a chamber-side installation/seed fact).
    * Never called for a NON-LOCAL instance that does not inject the graph at all
    * (gateway/mobile shapes): that is legitimate, not degraded.
    */
   onGraphUnavailable?(message: string, kind: GraphGapKind): void
   /**
-   * C3 (2026-09 性能审计): awaited once the graph rows are known, BEFORE the
+   * Awaited once the graph rows are known, BEFORE the
    * first extra-bundle load pass. The chamber composite entry evaluates
    * inside this window and its covered-factory registration answers the
-   * `@deepseek-ai/dsh-client-ui-primitives` require edges the seed no longer
-   * serves (dsh-client-web seed.ts/platform.ts deviation). The graph fetch
+   * `@deepseek-ai/dsh-client-ui-primitives` require edges the seed does not
+   * serve (dsh-client-web seed.ts/platform.ts deviation). The graph fetch
    * itself stays concurrent with the chamber evaluation — the gate is only at
    * the load step, so a slow/503-retrying instance probe overlaps the chamber
-   * entry's main-thread eval. Optional: absent callers keep today's ordering.
+   * entry's main-thread eval. Optional: absent callers keep the current ordering.
    */
   awaitBeforeLoad?(): Promise<void>
   /**
@@ -478,14 +476,13 @@ export interface CollectExtraRowsDeps {
    * later). Only the fast 503-null path retries — a hung fetch (30s timeout)
    * or other channel failure still fails fast, so the budget is bounded by the
    * delay sum (~4.5s), never by per-attempt timeouts. Budget exhaustion means
-   * no extra plugins for this boot; since the 2026-12 W3 change that outcome is
-   * no longer silent — a non-404 channel failure reports a named
+   * no extra plugins for this boot; that outcome is
+   * not silent — a non-404 channel failure reports a named
    * `graph-unreachable` diagnostic and upfloats the App-facing degrade fact
    * (see `graphGapKindFor`), and the boot-gap banner explains it.
-   * The
-   * 10-attempt default was widened from 6 (2026-08 review): the observed
-   * local spawn→ready window is ~3s (control-plane host logs), which the
-   * former 2.5s delay sum did not cover for a shell boot starting at spawn
+   * The 10-attempt default covers the observed
+   * local spawn→ready window of ~3s (control-plane host logs), which a
+   * 2.5s delay sum would not cover for a shell boot starting at spawn
    * time — the extra attempts are pure sleep on the fast 503 path, so a
    * genuinely failing channel (non-503) is unaffected.
    */
@@ -499,70 +496,6 @@ export interface CollectExtraRowsDeps {
   }
 }
 
-/**
- * Fetch the instance's host boot graph, drop the rows the chamber page already
- * covers (design 09 §3.2/§3.3), and preload the remaining bundles BEFORE the
- * AppWebEntry is constructed: a bundle registers its factory through the shared
- * module table at script execution, and boot-time entry creation materializes
- * entries through the table's factories branch — so the factory must exist
- * before loader.create runs, not after.
- *
- * Degrades to [] when the graph CHANNEL fails (fetch throws — network /
- * non-2xx / malformed graph): the boot proceeds without extra plugins. Since
- * 2026-12 that channel failure ALSO reports the App-facing degrade fact
- * (`onGraphUnavailable`) unless the channel answered 404 — the legitimate
- * "no graph endpoint" shapes (NON-LOCAL gateway/mobile) must never be labeled a
- * degrade; the LOCAL instance's 404 is the exception (chamber-side
- * installation/seed fact with its own kind — 2026-12 FIX 6) — while a 502/504
- * mount would otherwise ship a plugin-less shell with no user-visible
- * explanation at all (see the branch comment). That is
- * NOT a complete shell any more (2026-09 二轮, alpha.2 sources): the composite's
- * own first-screen families inject services that a non-covered official row
- * provides (the derived probe roster — `required-extra-rows.ts`, the single
- * authority since the A1 2026-09-11 upstream-alignment; the motivating member
- * is `sidebarRight`, injected by ui-chat and provided by ui-sidebar-right). On
- * a degrade such a fiber stays
- * PENDING, so the conversation view disappears while boot still reports
- * success; the `assertRequiredExtraRowServices` probe in chamber-entry.ts turns
- * that into a loud, named diagnostic (design 09 §3.2). A 503
- * `instance_unavailable` is the expected pre-ready state: the fetch is
- * retried on a bounded budget (the instance's graph appears moments after the
- * proxy stops answering 503 — see CollectExtraRowsDeps.retry) and only then gives
- * up on this boot's extra rows: no longer a silent degrade since the 2026-12 W3
- * change routes the non-404 channel failure to a named `graph-unreachable`
- * diagnostic plus the App-facing degrade fact (`graphGapKindFor`),
- * so a shell that boots inside the spawn window still gets its profile plugins
- * instead of losing them for the rest of the boot.
- *
- * A kept row whose `external` requests a deferred-covered id (2026-12 review
- * F1) is reported as a NAMED diagnostic instead of the silent `ok`: the merge
- * preserves the field (see ExtraModuleRow.external) and
- * {@link findDeferredExternalDependencies} names the affected rows and their
- * unsatisfiable dependencies, so the operator sees the one require edge this
- * page can never answer — otherwise it surfaces only as boot.ts's tolerated
- * `console.error` when the row's create-time require misses the module table.
- * Still not a boot gate: the boot settles, the other rows keep working, and the
- * verdict is projected onto the per-source plugin diagnostic.
- *
- * A bundle that fails to LOAD is NOT a degrade: it throws, the instance's
- * boot fails loud and shows the error — a broken extra plugin must never
- * silently disappear (design 09 §4 fail-loud). Ordinary load failures get ONE
- * bounded recovery cycle first (2026-09, restart-straddle fix): upstream
- * bundle revs are opaque PER-PROCESS nonces (`<random>-<ordinal>`,
- * dsh-client-modules `allocateInitialRevision`), so every dsh instance
- * restart invalidates every bundle URL of the previous process generation —
- * a boot whose graph fetch and bundle loads straddle a restart (runtime
- * switches / restart-dsh / plugin-sync restarts are normal chamber
- * lifecycle) 404s every not-yet-loaded row. The recovery pass re-fetches the
- * host graph on the same bounded retry budget and reloads every failed row at
- * its fresh URL — a restart-stale rev re-resolves at the new one, a transient
- * transport blip gets one more attempt at the same one; only rows that STILL
- * fail (a genuine plugin problem — the unchanged-rev retry failed too — or
- * another restart during recovery) fail the boot loud. A DOM
- * script TIMEOUT is not part of the recovery cycle: its tagged tombstone
- * keeps observing the original element's eventual outcome (a late load is
- * success; a late error allows a later retry), exactly as before.
- */
 /**
  * How many times one boot may wait for the source to start serving before it
  * gives up on the graph. ONE is the honest bound: the wait is already as long
@@ -580,6 +513,70 @@ const MAX_SERVING_WAITS = 1
  */
 const SERVING_HEAL_BUDGET_MS = 70_000
 
+/**
+ * Fetch the instance's host boot graph, drop the rows the chamber page already
+ * covers (design 09 §3.2/§3.3), and preload the remaining bundles BEFORE the
+ * AppWebEntry is constructed: a bundle registers its factory through the shared
+ * module table at script execution, and boot-time entry creation materializes
+ * entries through the table's factories branch — so the factory must exist
+ * before loader.create runs, not after.
+ *
+ * Degrades to [] when the graph CHANNEL fails (fetch throws — network /
+ * non-2xx / malformed graph): the boot proceeds without extra plugins. That
+ * channel failure ALSO reports the App-facing degrade fact
+ * (`onGraphUnavailable`) unless the channel answered 404 — the legitimate
+ * "no graph endpoint" shapes (NON-LOCAL gateway/mobile) must never be labeled a
+ * degrade; the LOCAL instance's 404 is the exception (chamber-side
+ * installation/seed fact with its own kind) — while a 502/504
+ * mount would otherwise ship a plugin-less shell with no user-visible
+ * explanation at all (see the branch comment). That is
+ * NOT a complete shell: the composite's
+ * own first-screen families inject services that a non-covered official row
+ * provides (the derived probe roster — `required-extra-rows.ts`, the single
+ * authority; the motivating member
+ * is `sidebarRight`, injected by ui-chat and provided by ui-sidebar-right). On
+ * a degrade such a fiber stays
+ * PENDING, so the conversation view disappears while boot still reports
+ * success; the `assertRequiredExtraRowServices` probe in chamber-entry.ts turns
+ * that into a loud, named diagnostic (design 09 §3.2). A 503
+ * `instance_unavailable` is the expected pre-ready state: the fetch is
+ * retried on a bounded budget (the instance's graph appears moments after the
+ * proxy stops answering 503 — see CollectExtraRowsDeps.retry) and only then gives
+ * up on this boot's extra rows: not a silent degrade — the non-404 channel
+ * failure routes to a named `graph-unreachable`
+ * diagnostic plus the App-facing degrade fact (`graphGapKindFor`),
+ * so a shell that boots inside the spawn window still gets its profile plugins
+ * instead of losing them for the rest of the boot.
+ *
+ * A kept row whose `external` requests a deferred-covered id
+ * is reported as a NAMED diagnostic instead of the silent `ok`: the merge
+ * preserves the field (see ExtraModuleRow.external) and
+ * {@link findDeferredExternalDependencies} names the affected rows and their
+ * unsatisfiable dependencies, so the operator sees the one require edge this
+ * page can never answer — otherwise it surfaces only as boot.ts's tolerated
+ * `console.error` when the row's create-time require misses the module table.
+ * Still not a boot gate: the boot settles, the other rows keep working, and the
+ * verdict is projected onto the per-source plugin diagnostic.
+ *
+ * A bundle that fails to LOAD is NOT a degrade: it throws, the instance's
+ * boot fails loud and shows the error — a broken extra plugin must never
+ * silently disappear (design 09 §4 fail-loud). Ordinary load failures get ONE
+ * bounded recovery cycle first: upstream
+ * bundle revs are opaque PER-PROCESS nonces (`<random>-<ordinal>`,
+ * dsh-client-modules `allocateInitialRevision`), so every dsh instance
+ * restart invalidates every bundle URL of the previous process generation —
+ * a boot whose graph fetch and bundle loads straddle a restart (runtime
+ * switches / restart-dsh / plugin-sync restarts are normal chamber
+ * lifecycle) 404s every not-yet-loaded row. The recovery pass re-fetches the
+ * host graph on the same bounded retry budget and reloads every failed row at
+ * its fresh URL — a restart-stale rev re-resolves at the new one, a transient
+ * transport blip gets one more attempt at the same one; only rows that STILL
+ * fail (a genuine plugin problem — the unchanged-rev retry failed too — or
+ * another restart during recovery) fail the boot loud. A DOM
+ * script TIMEOUT is not part of the recovery cycle: its tagged tombstone
+ * keeps observing the original element's eventual outcome (a late load is
+ * success; a late error allows a later retry).
+ */
 export async function collectExtraRows(
   instanceId: string,
   basePath: string,
@@ -606,7 +603,7 @@ export async function collectExtraRows(
           const entries = await fetchHostGraph(basePath)
           if (entries !== null) return { rows: entries, error: null, starting: false }
         } catch (error) {
-          // Non-503 channel failures are NOT transient — fail fast as before
+          // Non-503 channel failures are NOT transient — fail fast
           // (a hung fetch already consumed its own 30s timeout; retrying would
           // only stack them).
           lastError = error
@@ -630,10 +627,10 @@ export async function collectExtraRows(
   }
   const firstFetch = await fetchWithRetry()
   if (firstFetch.rows === null && firstFetch.error === null && firstFetch.starting) {
-    // 2026-09-10 (sidebarRight 彻底修复): this used to degrade in TOTAL
+    // This must not degrade in TOTAL
     // silence. The boot keeps succeeding (a gateway/mobile shape may legitimately
     // run without the graph, so a hard gate would be wrong), but a source that
-    // is merely slow now (a) names itself in the log, (b) publishes the
+    // is merely slow (a) names itself in the log, (b) publishes the
     // `graph-unreachable` diagnostic the connections page renders, and (c) tells
     // the shell, which hands the fact to the App so the instance is re-booted
     // once the source turns ready — instead of losing its client plugins (and,
@@ -654,16 +651,16 @@ export async function collectExtraRows(
       ? firstFetch.error.diagnosticState
       : 'graph-unreachable'
     reportDiagnostic(instanceId, state, { message: detail }, deps.reportDiagnostic)
-    // 2026-12（boot 死区收敛 W3）：**通道失败（502/504/网络错误）也算一次可解释
-    // 的降级**，不能只留一条诊断。旧契约把这里当作"documented silent skip"，
-    // 理由是 gateway/mobile 形态合法地没有图端点——但那是 404（`not-injected`）
+    // **通道失败（502/504/网络错误）也算一次可解释
+    // 的降级**，不能只留一条诊断。把它当作 "documented silent skip" 的
+    // 理由（gateway/mobile 形态合法地没有图端点）只适用于 404（`not-injected`）
     // 这一种，不是通道失败：隧道活着而远端 dsh 没起来时，本轮挂载会缺掉整套
-    // profile 客户端插件（典型是 ui-chat 的 sidebarRight 永久 pending）。旧契约
-    // 只把事实写进连接页的 pluginDiagnostic 一行（侧栏已不渲染该诊断）：事实并非
-    // 没有出口，但用户停在 boot 表面时看不到解释、也拿不到自愈（2026-12 复核更正
-    // 了口径）。上浮成 ShellState.degraded 后，App 的非阻断 boot-gap 横幅才说得
+    // profile 客户端插件（典型是 ui-chat 的 sidebarRight 永久 pending）。
+    // 只把事实写进连接页的 pluginDiagnostic 一行（侧栏不渲染该诊断）时，
+    // 用户停在 boot 表面看不到解释、也拿不到自愈。
+    // 上浮成 ShellState.degraded 后，App 的非阻断 boot-gap 横幅才说得
     // 出口，且 graph-unavailable 的 retryable 裁决给出每个 ready 世代一次的冷重挂。
-    // 边界（FIX 6 修订）：**非本地**来源的 `not-injected`（404 或通道答 method 缺失）
+    // 边界：**非本地**来源的 `not-injected`（404 或通道答 method 缺失）
     // 仍然是"没注入图"的合法形态，绝不上浮；本地实例的同一形态相反——chamber 托管
     // 宿主总会注入客户端图（seed 行），404/method 缺失只可能是 chamber 自己的
     // 安装/seed 破损，因此走 local-graph-not-injected 并进入同一自愈面
@@ -679,12 +676,12 @@ export async function collectExtraRows(
     return []
   }
   // fetchWithRetry 的失败出口（starting / error）已在上方 return；此处 rows 必非 null。
-  // 判别式在类型层无法关联，故显式断言——运行时不变式由三条出口穷尽（无新增可达分支）。
+  // 判别式在类型层无法关联，故显式断言——运行时不变式由三条出口穷尽。
   const firstRows = firstFetch.rows as HostGraphRow[]
   const rows = toExtraRows(dedupeCoveredRows(firstRows, CHAMBER_COVERED_IDS), basePath)
-  // C3: the chamber entry must have evaluated before any extra bundle executes
+  // The chamber entry must have evaluated before any extra bundle executes
   // (its covered factory answers the ui-primitives platform-word require edges
-  // the seed no longer serves — see the deps comment). The gate promise was
+  // the seed does not serve — see the deps comment). The gate promise was
   // already fired by the shell in parallel with this graph fetch.
   if (deps.awaitBeforeLoad !== undefined && rows.length > 0) {
     await deps.awaitBeforeLoad()
@@ -706,7 +703,7 @@ export async function collectExtraRows(
    *  recorded (the loaded factory is reused; the diagnostic is projected at the
    *  end of the boot), an ordinary first-pass failure defers to the recovery
    *  pass below. A DOM-script timeout and a non-deferred failure reject inside
-   *  the kernel exactly as the boot has always required (fail loud). */
+   *  the kernel (fail loud). */
   const applyOutcome = (outcome: ClientRowOutcome<ExtraModuleRow>): void => {
     if (outcome.state === 'rev-conflict') {
       if (outcome.conflict === 'version') versionConflict ??= outcome.row
@@ -721,13 +718,13 @@ export async function collectExtraRows(
   })) {
     applyOutcome(outcome)
   }
-  // The C3 gate (`deps.awaitBeforeLoad`) is NOT re-awaited here: it settled
+  // The gate (`deps.awaitBeforeLoad`) is NOT re-awaited here: it settled
   // before the first load pass above, and the recovery reloads only re-execute
   // bundle scripts (registering factories); the synchronous require edges they
   // carry run later, during run()'s loader.create materialization — by then
   // the chamber entry has evaluated (or its failure is loud via the known
   // create-side race, chamber-entry.ts header). Do not add a second gate here.
-  // Bounded recovery cycle (2026-09 restart-straddle fix, module docstring):
+  // Bounded recovery cycle (module docstring):
   // upstream bundle revs are opaque per-process nonces, so an instance
   // restart between the graph fetch and the bundle loads makes every
   // not-yet-loaded row 404 on a stale rev. Re-fetch the host graph on the
@@ -771,7 +768,7 @@ export async function collectExtraRows(
       }
     }
     // The recovered rows were loaded at their FRESH urls/revs — surface those
-    // in the returned extra rows (the pass-1 urls died with the old process
+    // in the returned extra rows (the pass-1 urls carry the stale process
     // generation and must never reach the boot kernel as loadable sources).
     if (recoveredRows.length > 0) {
       const recoveredById = new Map(recoveredRows.map(fresh => [fresh.id, fresh] as const))
@@ -793,7 +790,7 @@ export async function collectExtraRows(
   // Deferred-dependency verdict of the rows this boot ACTUALLY hands to the
   // kernel (post-recovery, so a restarted instance's fresh rows are judged too).
   // Computed once, here, because the projection below reports one diagnostic per
-  // boot (2026-12 review F1).
+  // boot.
   const deferredExternalMisses = findDeferredExternalDependencies(rows)
   if (versionConflict !== undefined) {
     // Cross-instance plugin version drift (design 09 §3.5): a different
@@ -816,7 +813,7 @@ export async function collectExtraRows(
       message: `页面已加载 ${restartConflict.id} 的另一版本，重启应用后才能切换`,
     }, deps.reportDiagnostic)
   } else if (deferredExternalMisses.length > 0) {
-    // 2026-12 review F1 (P2): a kept row requests a covered id whose family the
+    // A kept row requests a covered id whose family the
     // composite registers only after the boot settled, so the synchronous
     // require during create can never be answered (see
     // findDeferredExternalDependencies). This is a BOOT fact — only a different

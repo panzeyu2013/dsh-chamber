@@ -5,13 +5,13 @@
  * vendor column geometry via the vendor source; real 150ms delay via node:test
  * mock timers), live cross-shell adoption with its guards (closed shells are
  * never re-opened, the initiating shell's echo terminates), reopen-restore
- * semantics, the P3-nit no-op guard, and the alpha.2 root-panel actions
+ * semantics, the no-op guard, and the root-panel actions
  * (`selectPanel`/`retainMainPanels`) plus the right-panel geometry actions.
  * `createLayoutStore` is exercised with an injected environment (fake store
  * engine + fake view-prefs store) — the production wiring (stores.ts) is a
  * thin default-environment shim over the same factory, and the explicit
- * `trackLayoutInstance` registration replaces the pre-alpha.2 `handle.create`
- * patch (the vendor baseline now overrides `create` on the shared handle).
+ * `trackLayoutInstance` registration tracks instances through the shared
+ * handle (the vendor baseline overrides `create` on it).
  */
 
 import { test, mock } from 'node:test'
@@ -384,7 +384,7 @@ test('openRightbar on a narrow frame clears the narrow re-expand override', () =
   assert.equal(instance.getSnapshot().layoutInfo.rightbarFullscreen, true)
 })
 
-// ---- P3 nit: no-op guard on the persistence write ----
+// ---- no-op guard on the persistence write ----
 
 test('a drag onto the already-persisted width skips persist/notify entirely', withTimers(async () => {
   const { env, viewPrefs } = makeEnv({ sidebarWidth: 300 })
@@ -443,7 +443,7 @@ test('one throwing instance does not starve the adoption fan-out', withTimers(as
     const handle = createLayoutStore(env)
     // Registration order IS the fan-out order. Healthy instances sit on BOTH
     // sides of the throwing one, so a `break`-on-error implementation is
-    // caught whichever direction the loop walks (2026-09 round-3 W4-11).
+    // caught whichever direction the loop walks.
     const writer = handle.create()
     const before = handle.create()
     const broken = handle.create()

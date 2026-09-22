@@ -1,8 +1,7 @@
 /**
- * 运行位活性守卫的**跨模块接线锁**（design 14 §D4；2026-12 彻底修复）。
+ * 运行位活性守卫的**跨模块接线锁**（design 14 §D4）。
  *
- * design 14 声称这些跨模块不变量「由接线测试锁住」，但 `packages/renderer/test/wiring/`
- * 长期为空（STATUS ⑦ 登记的缺口）。本文件把它们落地，共五条——两侧默认值都直接 import
+ * design 14 的跨模块不变量由接线测试锁住；本文件覆盖其中五条——两侧默认值都直接 import
  * 生产模块，不复制数字：
  *  1. 对账链最坏回执时延 < 守卫的「等回执」期限（否则慢宿主 ⇒ 假 L2/假横幅）；
  *  2. verify 相位预算 ≥ **两次**独立 unary 探针自身的上限（N=2 确认要串行读两次）；
@@ -59,9 +58,9 @@ test('保留视图有界化的接线：判定 -> 只清 running 位 -> 进「无
 test('来源退役清理与 dismiss 剪枝都有锁（same-id 复挂不得继承旧忽略/旧水位）', () => {
   const app = stripComments(readFileSync(
     fileURLToPath(new URL('../../src/App.tsx', import.meta.url)), 'utf8'))
-  // 2026-12 阶段 3：剪枝收口到 source-registry.ts 内核（live 外删除 +
-  // identity-preserving），锁随之改为内核调用面；内核语义由
-  // test/lifecycle/source-registry.test.ts 行为断言承担。
+  // 剪枝走 source-registry.ts 内核（live 外删除 + identity-preserving）；
+  // 本锁断言内核调用面，内核语义由 test/lifecycle/source-registry.test.ts
+  // 行为断言承担。
   assert.match(app, /const factsAtNext = pruneSourceRecord\(factsAtRef\.current, live\)/,
     '来源退役时必须清事实水位（否则复挂后 90s 界限按旧水位判定）')
   assert.match(
@@ -81,7 +80,7 @@ test('来源退役清理与 dismiss 剪枝都有锁（same-id 复挂不得继承
 test('保留视图的两条恢复路径都「记水位 + 撤标记」（单边删除会把横幅焊死）', () => {
   const app = stripComments(readFileSync(
     fileURLToPath(new URL('../../src/App.tsx', import.meta.url)), 'utf8'))
-  // 阶段 3：挂载快照 push 路径随桥订阅簇移到 hook；unary 成功路径仍在 App。
+  // 挂载快照 push 路径由桥订阅簇的 hook 承担；unary 成功路径仍在 App。
   const bridge = stripComments(readFileSync(
     fileURLToPath(new URL('../../src/app-hooks/use-bridge-subscriptions.ts', import.meta.url)), 'utf8'))
   assert.match(

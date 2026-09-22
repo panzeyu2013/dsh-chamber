@@ -131,12 +131,11 @@ test('probeDshSignature: a non-404 identity failure never re-answers the legacy 
   })
 })
 test('verifyDshEndpoint: a 401 answer is the 0.1.2 browser-auth gate — terminal with the honest reason', async () => {
-  // review-round3c P0: a 0.1.2 web-profile host answers 401 without the
-  // signed cookie; the launch token is unrecoverable over the tunnel, so the
-  // probe must fail loud with the auth-required reason (never "not a dsh").
-  // The identity probe (session/canOpenWorkspacePath) AND the signature probe
-  // both hit the 401 gate; a bare 401 from a NON-dsh server keeps the neutral
-  // message (round4 P2).
+  // A 0.1.2 web-profile host answers 401 without the signed cookie; the
+  // launch token is unrecoverable over the tunnel, so the probe must fail loud
+  // with the auth-required reason (never "not a dsh"). The identity probe
+  // (session/canOpenWorkspacePath) AND the signature probe both hit the 401
+  // gate; a bare 401 from a NON-dsh server keeps the neutral message.
   const server = createServer((_req, res) => { res.writeHead(401); res.end('unauthorized') })
   await withLoopbackServer(server, async port => {
     const result = await verifyDshEndpoint({ host: '127.0.0.1', port })
@@ -292,7 +291,7 @@ test('ssh provider verifyUp: a dsh target NEVER carries an auth header, even whe
       let rpcId: string | null = null
       try { rpcId = (JSON.parse(body) as { rpcId?: unknown }).rpcId as string | null } catch { /* ignore */ }
       // A real dsh host answers the identity method (session/canOpenWorkspacePath)
-      // with a BOOLEAN value — ok:true alone is no longer a positive identity.
+      // with a BOOLEAN value — ok:true alone is not a positive identity.
       res.writeHead(200, { 'content-type': 'application/json' })
       res.end(JSON.stringify({ type: 'server-response', rpcId, result: { ok: true, value: true } }))
     })
@@ -344,8 +343,8 @@ test('verifyGatewayEndpointViaTunnel keeps 5xx transient and carries its statusC
 })
 
 // ---------------------------------------------------------------------------
-// verifyUp password-session flow over the SSH TUNNEL (design 17 §9.2/§9.3,
-// S1 gap): a gateway-over-ssh target with a stored password and NO token
+// verifyUp password-session flow over the SSH TUNNEL (design 17 §9.2/§9.3):
+// a gateway-over-ssh target with a stored password and NO token
 // uses the SAME session-hook pattern as the direct-endpoint gateway provider
 // — ensure a login session keyed to the TUNNEL origin, probe WITH its
 // Cookie, and on a rejected 401 invalidate + re-login exactly once before the

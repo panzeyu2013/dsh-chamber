@@ -2,7 +2,7 @@
 //  RefreshRatePolicy.swift
 //  DSHChamber
 //
-//  S-48（2026-12 实机裁决，design 25 §5.1）：ProMotion / 120Hz 刷新率策略。两个事实源：
+//  ProMotion / 120Hz 刷新率策略（design 25 §5.1）。两个事实源：
 //    - WebKit 偏好 PreferPageRenderingUpdatesNear60FPSEnabled（默认 true）：页面
 //      渲染更新「靠近 60fps」而不是显示器刷新率（准确说只在 nominal > 60 时起作用，
 //      61–119Hz 屏因整数商为 1 本就不受限）。本壳在用该 configuration 构造
@@ -39,8 +39,8 @@ extension RefreshRatePreference {
         case .displayRate: self = .displayRate
         case .nearSixty: self = .nearSixty
         // C 侧将来新增 case 时靠**编译期**暴露：显式 case 之外还缺 case 会得到
-        // "switch must be exhaustive … add missing case"（2026-12 临时加第 4 个 case 实测为
-        // warning；Swift 6 / warnings-as-errors 下为 error）。运行期不额外报警，未知值静默
+        // "switch must be exhaustive … add missing case"（加第 4 个 case 实测为 warning；
+        // Swift 6 / warnings-as-errors 下为 error）。运行期不额外报警，未知值静默
         // 映射 .unknown，日志按「SPI 不可用」如实记录。
         @unknown default: self = .unknown
         }

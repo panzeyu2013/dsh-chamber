@@ -1,5 +1,5 @@
 /**
- * The machine's application catalog (design 20 §5, 2026-09-12 revision) — the
+ * The machine's application catalog (design 20 §5) — the
  * ONE page-level reader of "which apps are installed here, and what do their
  * icons look like".
  *
@@ -7,14 +7,12 @@
  * the two: one page is served by one host, so its client reads `apps` and
  * `icon/<id>` from `location.origin` and every source-shaped question (which
  * directory, which host) is answered by that same host. The chamber page
- * attaches N instances, which broke that identity — the catalog was read as
- * "the local SOURCE's pool", so a remote-ssh entry (whose own instance cannot
- * serve it: the host domain is `localOnly`, and upstream's resolver returns an
- * empty catalog under SSH anyway) had no icon source and fell back to a bundled
- * raster snapshot of one app.
+ * attaches N instances, so that identity does not hold: a remote-ssh entry has
+ * no icon source of its own to read (the host domain is `localOnly`, and
+ * upstream's resolver returns an empty catalog under SSH anyway).
  *
- * The fix restores upstream's own invariant for the machine half: the catalog
- * is read ONCE per page from the LOCAL instance's `openInApp/*` host domain
+ * The machine half therefore keeps upstream's own invariant: the catalog is
+ * read ONCE per page from the LOCAL instance's `openInApp/*` host domain
  * (the same domain, wire and trust fence the local source's entry uses) and
  * injected into every entry's Context. Each entry then only decides which of
  * those apps it can launch — the local channel on the machine itself, the

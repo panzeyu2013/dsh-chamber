@@ -1,10 +1,10 @@
 /**
- * update-headless.ts —— Swift flavor（headless sidecar）更新控制器（W-22；
- * design 25 §7「v1 blocked-available 诚实形态」）
+ * update-headless.ts —— Swift flavor（headless sidecar）更新控制器
+ * （design 25 §7「v1 blocked-available 诚实形态」）
  *
  * 形态契约（与 Electron 版 createUpdateController 的差异是**有意且可见**的）：
  * - 消费面零改动：`UpdateController` 接口与 `UpdateState` 字段集不变
- *   （S-19 起相位联合新增 'installing'——Electron 不产生，Swift 原生安装中
+ *   （相位联合含 'installing'——Electron 不产生，Swift 原生安装中
  *   产生），settings-bridge 的 UpdateSection/update-store/update-gate 不感知
  *   flavor；
  * - **真实 check**：用户点「检查更新」→ 有界 GitHub releases 列表 API（≤100、
@@ -16,10 +16,10 @@
  * - `installBlockedReason` 缺省为 `NATIVE_SHELL_INSTALL_BLOCKED_REASON`
  *   （未声明原生安装腿时 UI 的 blocked 行 + releaseLink 诚实呈现）；壳声明
  *   `--native-updater sparkle` 且能力探测可用、或任何 `__host.nativeUpdatePhase`
- *   入站后清空（**绝不把已配置的 Sparkle 降级为 unavailable**）；S-38：能力探测
+ *   入站后清空（**绝不把已配置的 Sparkle 降级为 unavailable**）；能力探测
  *   不可用时记录壳给出的**真实原因**（坏 feed / 坏 Ed25519 公钥 / 启动失败），
  *   check 拿壳的 ok:false 落 error 相位——页面绝不停在 checking；
- * - **发现单源（S-21）**：壳声明原生腿（nativeUpdater 注入）时，「检查更新」
+ * - **发现单源**：壳声明原生腿（nativeUpdater 注入）时，「检查更新」
  *   绝不跑 GitHub releases 查询，而是经冻结边 `updateNativeAction kind=check`
  *   交给壳内的 Sparkle（它只认 appcast）；发现的相位由壳经
  *   `__host.nativeUpdatePhase` 推送，本控制器只做投影。未声明原生腿
@@ -29,7 +29,7 @@
  * - 原生腿在场时不排静默定时器（15s 首检 + 6h 周期）：Sparkle 的
  *   `checkForUpdates` 会打开用户发起的标准更新窗口，定时调用等于启动后无故
  *   弹窗——后台发现归 Sparkle 自己的调度器（模板 `SUEnableAutomaticChecks`）；
- * - 原生阶段映射（S-19/S-21 冻结接口）：`applyNativePhase` 把壳报告的
+ * - 原生阶段映射（冻结接口）：`applyNativePhase` 把壳报告的
  *   idle/checking/up-to-date/available/downloading/downloaded/installing/failed
  *   折进同一 UpdateState；downloading/downloaded/installing 与 Electron 的
  *   下载/安装腿同形呈现，failed → error；
@@ -38,7 +38,7 @@
  *   （downloading/downloaded/installing 在飞 → 拒绝，绝不启动第二次下载/安装）；
  * - `quitFacts.updateDownloadReady` 由本控制器相位推导（downloaded/installing
  *   = before-quit「已下载豁免」等价态，见 sidecar-ctx.quitFacts）；
- * - `start()` 与 Electron updater.ts:1184-1198 **同节奏**（S5·F3/S6·F2 parity）：
+ * - `start()` 与 Electron updater.ts:1184-1198 **同节奏**：
  *   15s 后一次静默首检、之后每 6h 周期静默检查（两枚定时器 unref，
  *   绝不阻止进程退出；`stop()` 显式停表——sidecar 退出路径调用；start() 幂等，
  *   重复调用不叠加定时器）。每轮失败在 runCheck 内折叠为 error 态 + warn，
@@ -69,7 +69,7 @@ import {
 export const NATIVE_SHELL_INSTALL_BLOCKED_REASON = '原生壳不支持自动安装'
 /**
  * feed 条目是否带**可解析版本**（stable 或 beta 形状，不看通道/draft）——
- * 用来区分「本通道暂无发布物」与「feed 形状异常」（三审 #14）。形状判定来自
+ * 用来区分「本通道暂无发布物」与「feed 形状异常」。形状判定来自
  * 共享的 update-discovery.ts（与 updater.ts 的 beta 发现同一套 tag 形状）。
  */
 function hasParseableVersion(candidate: unknown): boolean {
@@ -113,20 +113,20 @@ export function resolveHeadlessChannel(
     : 'stable'
 }
 
-/** 原生壳更新器桥（2026-12 裁决 D-1 选 B / 台账 S-01）。
+/** 原生壳更新器桥。
  *
  *  Swift flavor 的安装腿由壳内的 Sparkle 承担（appcast + EdDSA + 标准更新窗口）。
  *  壳在 sidecar 启动参数里声明支持（--native-updater sparkle），sidecar 据此把
- *  「下载 / 重启并安装」转发给壳，而不是恒回 blocked；未声明时保持原有
+ *  「下载 / 重启并安装」转发给壳，而不是恒回 blocked；未声明时保持
  *  blocked-available 行为（dev / dry-run / 未配置密钥的装配）。
  *
- *  check 也归壳（S-21 发现单源）：冻结边 `updateNativeAction kind=check` →
+ *  check 也归壳（发现单源）：冻结边 `updateNativeAction kind=check` →
  *  Sparkle 的 `checkForUpdates`（appcast + EdDSA），相位经
  *  `__host.nativeUpdatePhase` 回来；download/install 走 Sparkle 的标准更新窗口
  *  ——下载与安装在该窗口内是一段连续流程，与 Electron 的三步在用户可见效果上
  *  等价（检查 → 下载 → 重启并安装），实现方式不同。 */
 export interface NativeUpdaterBridge {
-  /** 壳侧原生更新器能力（S-38 诚实化）：available=false 时 error 是**真实原因**
+  /** 壳侧原生更新器能力：available=false 时 error 是**真实原因**
    *  （未装配 / 坏 feed / 坏 Ed25519 公钥 / startUpdater 失败），控制器记录它并
    *  保持 blocked-available；随后的 check 拿壳的 ok:false 落 error 相位。 */
   available(): Promise<{ available: boolean; error?: string | null }>
@@ -154,7 +154,7 @@ export interface HeadlessUpdateControllerDeps {
  *  版无此成员——那边定时器随 Electron 进程退出消亡，无显式停表入口。 */
 export interface HeadlessUpdateController extends UpdateController {
   stop(): void
-  /** 原生（Sparkle）阶段入站投影（S-19/S-21 冻结接口）——见实现注释。 */
+  /** 原生（Sparkle）阶段入站投影（冻结接口）——见实现注释。 */
   applyNativePhase(input: NativeUpdatePhaseInput): void
 }
 
@@ -194,8 +194,8 @@ export function createHeadlessUpdateController(deps: HeadlessUpdateControllerDep
     state = { ...state, ...patch }
     for (const listener of listeners) {
       // 推送腿（宿主 subscribe 回调）抛错绝不能反噬控制器：既不能让 checking 卡死，
-      // 也不能把 IPC 变成 reject（2026-12 审查：sidecar ctx 的缺失成员 stub 曾在
-      // 该路径抛出，UPDATE_CHECK 因此永久失效）。失败响亮记日志，控制流继续。
+      // 也不能把 IPC 变成 reject（sidecar ctx 的缺失成员 stub 在该路径抛出，
+      // UPDATE_CHECK 会永久失效）。失败响亮记日志，控制流继续。
       try {
         listener(state)
       } catch (error) {
@@ -213,7 +213,7 @@ export function createHeadlessUpdateController(deps: HeadlessUpdateControllerDep
     checking = true
     try {
       setState({ phase: 'checking', error: null })
-      // S-21 发现单源：原生腿已声明 → 发现交壳的 Sparkle（appcast），恰发一次
+      // 发现单源：原生腿已声明 → 发现交壳的 Sparkle（appcast），恰发一次
       // 冻结边 updateNativeAction kind=check；终态由壳的
       // __host.nativeUpdatePhase 推送决定（本函数只把 checking 先呈现给页面）。
       // 绝不出网跑 GitHub releases 查询：两源会给出相反结论。
@@ -246,7 +246,7 @@ export function createHeadlessUpdateController(deps: HeadlessUpdateControllerDep
       }
       const latest = selectLatestReleaseVersion(releases, channel)
       if (latest === null) {
-        // 三审 #14：区分「本通道暂无发布物」与「feed 形状异常」——
+        // 区分「本通道暂无发布物」与「feed 形状异常」——
         //   * feed 里存在**可解析版本**的条目（如全是 beta / 全是 draft）：
         //     本通道确实还没有可升级的发布物 → up-to-date（诚实）；
         //   * feed 非空但**一个可解析版本都没有**（tag 形状全坏）→ 响亮 error，
@@ -279,7 +279,7 @@ export function createHeadlessUpdateController(deps: HeadlessUpdateControllerDep
   }
 
   /**
-   * 原生更新阶段入站投影（S-19/S-21 冻结接口）：Swift 壳报告 Sparkle 状态，
+   * 原生更新阶段入站投影（冻结接口）：Swift 壳报告 Sparkle 状态，
    * 本控制器把它映射进**同一个** UpdateState 投影（消费面零改动：
    * settings-bridge 的 UpdateSection/update-store/update-gate 不感知 flavor，
    * push 仍走 shell-core 的 updater.subscribe → rendererPush）。
@@ -376,7 +376,7 @@ export function createHeadlessUpdateController(deps: HeadlessUpdateControllerDep
       return () => listeners.delete(listener)
     },
     start() {
-      // 原生更新器能力探测（S-01 / D-1 选 B）：壳声明了 --native-updater 才探测；
+      // 原生更新器能力探测：壳声明了 --native-updater 才探测；
       // 可用就摘掉 installBlockedReason（页面更新区从「原生壳不支持自动安装」变成
       // 可执行的「更新」按钮），不可用/探测失败保持原样并 loud。
       void (async () => {
@@ -389,7 +389,7 @@ export function createHeadlessUpdateController(deps: HeadlessUpdateControllerDep
             setState({ installBlockedReason: null })
             deps.logger.log('[updater-headless] 原生更新器（Sparkle）可用：安装腿交给壳，installBlockedReason 已清空')
           } else {
-            // S-38：壳给出的不可用原因必须被记录（坏密钥/坏 feed/启动失败），不能
+            // 壳给出的不可用原因必须被记录（坏密钥/坏 feed/启动失败），不能
             // 只剩一个没有理由的 false；check 被壳拒绝时页面拿到同一原因的 error 相位。
             deps.logger.warn('[updater-headless] 壳声明了原生更新器但当前不可用（保持 blocked-available）：'
               + (reason ?? '壳未提供原因（缺 feed/公钥）'))
@@ -399,7 +399,7 @@ export function createHeadlessUpdateController(deps: HeadlessUpdateControllerDep
           deps.logger.warn('[updater-headless] 原生更新器能力探测失败（保持 blocked-available）：' + message)
         }
       })()
-      // S-21：原生腿在场 → 发现/静默节奏完全归壳（Sparkle 的 appcast 单源）。
+      // 原生腿在场 → 发现/静默节奏完全归壳（Sparkle 的 appcast 单源）。
       // 这里绝不排 GitHub 定时器：既避免双源，也避免定时调用 Sparkle 的
       // checkForUpdates（那是用户发起窗口，会无故弹窗）；后台发现归 Sparkle
       // 自己的调度器（模板 SUEnableAutomaticChecks）。
@@ -407,7 +407,7 @@ export function createHeadlessUpdateController(deps: HeadlessUpdateControllerDep
         deps.logger.log('[updater-headless] 原生更新器已声明：sidecar 不排静默检查（发现单源 = 壳内 Sparkle appcast）')
         return
       }
-      // 与 Electron updater.ts:1184-1197 同节奏（S5·F3/S6·F2）：15s 静默首检 +
+      // 与 Electron updater.ts:1184-1197 同节奏：15s 静默首检 +
       // 每 6h 周期检查。幂等：重复调用不叠加定时器。unref 保证定时器绝不阻止
       // 进程退出（sidecar 退出路径另有显式 stop()）。
       if (initialTimer !== null || intervalTimer !== null) return
@@ -430,7 +430,7 @@ export function createHeadlessUpdateController(deps: HeadlessUpdateControllerDep
     async checkNow() {
       // 与 Electron 同契约：返回值恒 {ok:true}，渲染器以 update-state 推送
       // 判定实际结果（checking/available/up-to-date/error）。原生腿在场时
-      // runCheck 走冻结边 kind=check（S-21），返回值同样不携带真实结果——
+      // runCheck 走冻结边 kind=check，返回值同样不携带真实结果——
       // 页面只认壳推送的相位。
       await runCheck()
       return { ok: true }

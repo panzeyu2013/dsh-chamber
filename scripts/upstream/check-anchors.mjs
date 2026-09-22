@@ -7,10 +7,10 @@
  *   ① registry 里的符号锚（`path#symbol` / `path#=literal:<唯一子串>`）默认必须可解析；
  *      锚点 path 先按 entry.ours 解析（与 classify 的键同一坐标系），再退回仓库根；
  *   ①′ docs 正文里手写的稳定锚（`path#symbol` / `path#=literal:<唯一子串>`）同样必须可
- *      解析——此前只有 registry 条目的锚被校验，docs 里拼错的锚零校验（2026-09 复核发现）；
+ *      解析——docs 里拼错的锚同样要红；
  *      生成块内的锚由 registry 侧覆盖，跳过不重复判定（见 collectDocAnchors）；
  *   ② 遗留 `文件:行` 锚点总数只许降不许升（`anchors-budget.json` 棘轮）——
- *      新锚点必须写符号锚，旧锚点按批次迁移后调低预算；
+ *      新锚点必须写符号锚，遗留锚迁移后调低预算；
  *   ③ `--report` 给出符号锚漂移与遗留锚分布（含测试面三分类），供人工判读。
  *
  * 模式：
@@ -35,7 +35,7 @@ const BUDGET_PATH = join(HERE, 'anchors-budget.json')
 /** 遗留锚扫描面：docs 树下的 .md（D15 的口径）。 */
 export const LEGACY_SCAN_ROOT = join(ROOT, 'docs')
 export const LEGACY_ANCHOR_PATTERN = /[A-Za-z0-9_/.@-]+\.(?:ts|tsx|mts|cts|mjs|js|swift|css|json|ya?ml|md):\d+/gu
-/** 测试面（P3 的三分类对象；只报告，不进预算）：macos/Tests + scripts + packages 下 test/ 与 *.test.*。 */
+/** 测试面（三分类对象；只报告，不进预算）：macos/Tests + scripts + packages 下 test/ 与 *.test.*。 */
 export function collectTestSurfaceFiles(root = ROOT) {
   const files = [
     ...collectFiles(join(root, 'macos', 'Tests'), '.swift'),
@@ -72,8 +72,8 @@ export function collectFiles(root, suffix) {
     for (const name of readdirSync(dir)) {
       if (IGNORED_DIRECTORIES.has(name)) continue
       const full = join(dir, name)
-      // 悬空软链（GUI 验收留下的 Chrome `SingletonCookie` 等）会让 statSync 抛 ENOENT、
-      // 软链环抛 ELOOP，两者都会把整道门打挂（2026-09 实测）；这类条目既不是锚点目标也
+      // 悬空软链（如 Chrome `SingletonCookie`）会让 statSync 抛 ENOENT、
+      // 软链环抛 ELOOP，两者都会把整道门打挂；这类条目既不是锚点目标也
       // 不该递归，跳过即可。其余软链保持原样跟随（不改变既有解析面）。
       if (lstatSync(full).isSymbolicLink() && !existsSync(full)) continue
       let info
@@ -138,7 +138,7 @@ export function collectDeclarations(text, extension) {
 /**
  * 具名声明的**声明行**（1-based；0 = 无单行声明，例如多行 `export { … }` 块）。
  * 逐行跑 collectDeclarations，而不是 `line.includes(symbol)`——后者会把
- * 「注释里先提到该符号」的行当成锚点行（review 实测：--fix 曾写回注释行）。
+ * 「注释里先提到该符号」的行当成锚点行（--fix 会写回注释行）。
  */
 export function declarationLine(text, extension, symbol) {
   const lines = text.split('\n')
@@ -335,8 +335,8 @@ export function checkRegistrySymbols(registry, root = ROOT) {
  * registry 校验覆盖（坐标系不同），此处跳过。
  */
 export function collectDocAnchors(root = ROOT) {
-  // 符号段允许 `.`：`src/a.ts#Type.method` 必须整段采集——此前只吃到 `#Type`，
-  // 恰好存在导出 `Type` 时 `method` 零校验（2026-09 复核漏报）。点号形态的处置见
+  // 符号段允许 `.`：`src/a.ts#Type.method` 必须整段采集——只吃到 `#Type` 时，
+  // 恰好存在导出 `Type` 会让 `method` 零校验。点号形态的处置见
   // checkDocAnchors（显式报不支持，不做静默截断）。
   const pattern = /[A-Za-z0-9_/.@-]+\.(?:ts|tsx|mts|cts|mjs|js|swift|css|json|ya?ml)(?:#=literal:[^`\n]+|#[A-Za-z_$][A-Za-z0-9_$.]*)/gu
   const found = []
@@ -348,7 +348,7 @@ export function collectDocAnchors(root = ROOT) {
       if (ranges.some(([start, stop]) => index >= start && index < stop)) continue
       // 只接受行内「分隔符之后」的锚：URL（`https://…/src/a.ts#L42`）里每个可能的起始
       // 位置都被 `:`/`/`/`.` 之类字符顶着，字符类会把 scheme 剥掉后采集成
-      // `//github.com/…` 并报「锚点文件不存在」的假红（2026-09 复核实测）。
+      // `//github.com/…` 并报「锚点文件不存在」的假红。
       if (index > 0 && /[\w/:.@-]/.test(text[index - 1])) continue
       const anchor = match[0].trim()
       found.push({ file, anchor, parsed: parseAnchor(anchor) })

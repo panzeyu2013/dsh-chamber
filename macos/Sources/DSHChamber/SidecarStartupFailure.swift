@@ -2,11 +2,8 @@
 //  SidecarStartupFailure.swift
 //  DSHChamber
 //
-//  T-3（2026-12 实测残留）：sidecar 启动失败的**诚实报错**——退出码 + stderr
-//  摘要 + 端口被占用时的可执行提示。此前 supervisor 对 exit=70 只给一句
-//  「请检查控制面/装配配置后重试」，真实原因（Node 的
-//  「listen EADDRINUSE: address already in use 127.0.0.1:<port>」）只躺在
-//  BridgeClient 透传的 stderr 里，失败页又只拿到 WebKit 的 ATS 文案。
+//  sidecar 启动失败的**诚实报错**——退出码 + stderr
+//  摘要 + 端口被占用时的可执行提示。
 //
 //  本文件是纯值 + 纯函数（单测直测，无进程/GUI）：可见文案单源在 message，
 //  失败页、fatal 提示框与落盘日志共用同一份。
@@ -49,10 +46,10 @@ public struct SidecarStartupFailure: Equatable {
     /// 本地化：sidecar.startupExit 是**模板**（zh「sidecar 启动失败（exit=%d）」/
     /// en「Sidecar failed to start (exit=%d)」），观测到终止码时按 %d 填参；
     /// 未观测到终止码（spawn 前失败）时把 %d 换成 "?"（保留模板骨架）。
-    /// 重试/修复：这里绝不再追加 ASCII "(exit=N)"——模板与后缀双写会让用户
+    /// 这里绝不追加 ASCII "(exit=N)"——模板与后缀双写会让用户
     /// 看到「（exit=70） (exit=70)」。
     /// 三段后缀（detailSuffix / hintSuffix / genericSuffix）同样走键表：zh 侧拼出的
-    /// 字符串与旧字面量逐字一致，en 侧不再出现中文标点。
+    /// 字符串逐字一致，en 侧不出现中文标点。
     public var message: String {
         var text: String
         if let exitCode {

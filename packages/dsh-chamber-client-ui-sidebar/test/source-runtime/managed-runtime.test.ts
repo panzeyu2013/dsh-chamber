@@ -7,7 +7,7 @@ import {
 } from '../../src/shared/managed-runtime.ts'
 import { GATEWAY_RUNTIME_STATUS_KIND } from '../../src/shared/gateway-runtime.ts'
 
-// 问题 B（design 17 §2）：gateway 来源的托管 dsh 状态投影。desktop 的 ready 只证明 gateway 进程活着，
+// design 17 §2：gateway 来源的托管 dsh 状态投影。desktop 的 ready 只证明 gateway 进程活着，
 // 停机窗口必须能被侧栏看见/禁用，而探针缺失时绝不能把健康来源隐藏（fail open）。
 
 const response = (status: number, body: unknown): Response => ({ status, json: async () => body }) as unknown as Response
@@ -75,7 +75,7 @@ test('an invalid instance id never reaches the network', async () => {
   assert.equal(called, 0, 'the canonical runtime path validates the gateway-<id> shape first')
 })
 
-// 源码级接线钉子（2026-12 复查 MINOR）：托管停机的**判定事实**必须独立于合并后的 `phase`（两套词表都含
+// 源码级接线钉子：托管停机的**判定事实**必须独立于合并后的 `phase`（两套词表都含
 // `error`，反推会把隧道失败误诊为托管停机——BLOCKER），且两个消费面都必须只读该事实。
 const sidebarRoot = new URL('../../', import.meta.url)
 const serverSection = [
@@ -87,8 +87,8 @@ const serverSection = [
   'server-section-model.ts',
   'server-section-session-state.tsx',
 ].map(name => readFileSync(new URL('src/client/' + name, sidebarRoot), 'utf8')).join('\n')
-// The App-layer projection lives in App.tsx plus its extracted hooks
-// (2026-09 App decomposition); the lock reads the union so a move between them
+// The App-layer projection lives in App.tsx plus its extracted hooks; the
+// lock reads the union so a move between them
 // keeps the invariant without pinning a file name.
 const appSource = [
   '../renderer/src/App.tsx',
@@ -119,7 +119,7 @@ test('the App publishes the fact only while the transport is usable', () => {
 })
 
 test('the baseline-pending note is gated on the aggregate facts, not on the phase', () => {
-  // 降级列表的诚实标注（2026-12 复查 MAJOR）：门条件必须是 connected && aggregateReady && archiveSetKnown !== true
+  // 降级列表的诚实标注：门条件必须是 connected && aggregateReady && archiveSetKnown !== true
   // （unary 兜底视图的三态），否则要么不显示、要么把真实列表也标注成降级。
   sLock(/server\.connected && server\.aggregateReady === true && server\.archiveSetKnown !== true/,
     'the degraded-list note must key off the aggregate tri-state')
@@ -128,7 +128,7 @@ test('the baseline-pending note is gated on the aggregate facts, not on the phas
 
 test('the sidebar renders ONE persistent live region per source', () => {
   // 插入即带内容的 role="status" 不会被 AT 播报；说明行也必须互斥（同一时刻至多一条）——单一常驻区域 +
-  // 换文本才是正确形态。2026-12：降级说明（boot 缺口）是这条 note 的一个分支 + 修饰类，不是第二个 live region。
+  // 换文本才是正确形态。降级说明（boot 缺口）是这条 note 的一个分支 + 修饰类，不是第二个 live region。
   sLock(/const sourceNote = server\.managedRuntimeDown === true/, 'the note text must be derived once')
   assert.match(
     serverSection,
@@ -141,14 +141,14 @@ test('the sidebar renders ONE persistent live region per source', () => {
   assert.equal((noteCode.match(/aria-live=/g) ?? []).length, 1, 'exactly ONE live region per source — a second one would double-announce')
   // …and the SAME region must actually RENDER the derived text. Counting `aria-live=` alone missed a second region
   // written as `role="status"` AND an emptied note (`{sourceNote}` → `{''}`), both green before this
-  // lock (2026-12 falsification round): one render site, and it renders the cascade's result.
+  // lock: one render site, and it renders the cascade's result.
   assert.equal((noteCode.match(/\{sourceNote\}/g) ?? []).length, 1, 'the note text must be rendered exactly once, in the one live region')
   assert.match(
     noteCode,
     /role="status"\s*aria-live=\{noteIsBootGap && server\.id === chamberInstanceId \? 'off' : 'polite'\}\s*>\s*\{sourceNote\}\s*</,
     'the live region must render {sourceNote} (an emptied note announces nothing, forever)',
   )
-  // 2026-12：活动来源（本壳自己的行）的缺口事实同时由框架横幅播报，区域降为 off 以免同一件事说两遍；
+  // 活动来源（本壳自己的行）的缺口事实同时由框架横幅播报，区域降为 off 以免同一件事说两遍；
   // 非活动行没有横幅，必须保持 polite。
   sLock(/aria-live=\{noteIsBootGap && server\.id === chamberInstanceId \? 'off' : 'polite'\}/,
     'the self row must not double-announce a gap the frame banner already announces')
@@ -168,7 +168,7 @@ test('the header stops being an activation affordance only for managed-down sour
 })
 
 test('managedRuntimeUnusable covers terminal and transient states only', () => {
-  // 收割/预热门控用这个谓词：漏掉瞬态会拿 503 白烧一次尝试（只有 2 次），把 null/'' 当不可用则会隐藏健康来源（2026-12 复查 MINOR）。
+  // 收割/预热门控用这个谓词：漏掉瞬态会拿 503 白烧一次尝试（只有 2 次），把 null/'' 当不可用则会隐藏健康来源。
   for (const state of MANAGED_RUNTIME_DOWN_STATES) assert.equal(managedRuntimeUnusable(state), true, state)
   for (const state of MANAGED_RUNTIME_TRANSIENT_STATES) assert.equal(managedRuntimeUnusable(state), true, state)
   for (const state of ['ready', 'degraded', 'unknown', '', null, undefined]) {
@@ -181,7 +181,7 @@ test('managedRuntimeUnusable covers terminal and transient states only', () => {
 
 test('the source note id is per-shell and its empty state stays a live region', () => {
   // 同一来源在每个已挂载壳的侧栏里各有一份 DOM：id 必须按壳限定，否则 aria-describedby 可能解析到另一份
-  // （隐藏壳）的同名节点（2026-12 复查 MINOR）。
+  // （隐藏壳）的同名节点。
   sLock(/chamber-source-note-\$\{chamberInstanceId \?\? 'unknown'\}-\$\{server\.id\}/,
     'the note id must be qualified by the shell instance id')
   const css = readFileSync(new URL('src/client/sidebar-chamber.module.css', sidebarRoot), 'utf8')
@@ -193,17 +193,16 @@ test('the source note id is per-shell and its empty state stays a live region', 
 
 test('the transient managed state gets its own honest note and the dot keeps its phase', () => {
   // 瞬态（starting/restarting）会把 connected 折叠为 false ⇒ 会话子树隐藏；没有说明行就是"整组凭空消失"
-  // （2026-12 复查 MINOR）。
   sLock(/const managedTransient = server\.kind === 'gateway'\s*\n\s*&& \(server\.phase === 'starting' \|\| server\.phase === 'restarting'\)/,
     'the transient note must be kind-scoped (local /health shares the vocabulary)')
   sLock(/const managedUnusable = server\.managedRuntimeDown === true/,
     'the transient state must also stop promising an activation that 503s')
   sLock(/t\('source\.managedStarting', \{ state: t\(sourceStatusLabelKey\(server\)\) \}\)/,
     'the transient note must use the dictionary key and carry the state word')
-  // 2026-12：两个门必须分开——`noteCarriesPhase` 只能由**胜出并且把 {state} 写进句子**的说明行置真：
-  // managedDown，或（managedTransient 且降级说明没有抢走该分支）——原先的 `sourceNote !== ''` 会让
+  // 两个门必须分开——`noteCarriesPhase` 只能由**胜出并且把 {state} 写进句子**的说明行置真：
+  // managedDown，或（managedTransient 且降级说明没有抢走该分支）——`sourceNote !== ''` 会让
   // baselinePending 在 a11y 树里丢掉状态词；只写 managedTransient 也不行——gateway 瞬态 + 缺口时胜出的是
-  // **不含 phase 的缺口句**（2026-12 review MAJOR）。
+  // **不含 phase 的缺口句**。
   sLock(/const noteCarriesPhase = server\.managedRuntimeDown === true \|\| \(managedTransient && !noteIsBootGap\)/,
     'only a note that both WINS and embeds the state word may take the dot\'s aria-label')
   sLock(/role=\{sourceNote === '' \? 'status' : undefined\}/,

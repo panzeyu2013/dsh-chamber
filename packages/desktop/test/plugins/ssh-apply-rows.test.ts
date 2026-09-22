@@ -1,6 +1,6 @@
 /**
  * ssh-apply-rows.ts tests — the ssh unified-increment pure surface (design
- * 21 §6.4, plan Phase 5): registry-name parsing, reserved-name whole-batch
+ * 21 §6.4): registry-name parsing, reserved-name whole-batch
  * refusal, and the v1 undo decision / confirmation copy.
  */
 
@@ -95,7 +95,7 @@ test('buildSshApplyRows: tolerated unknown payload shapes (main preflight safety
     { kind: 'add', spec: 'ok-pkg@1.0.0', name: 'ok-pkg' }, { kind: 'remove', spec: '@dsh-chamber/denied', name: '@dsh-chamber/denied' },
   ])
   // `@dsh-chamber/denied` is NOT a seed ⇒ not protected ⇒ no refusal (the
-  // domain-prefix rule is retired; S is the fact).
+  // protected seed set is the fact).
   assert.deepEqual(nonStrings.refusals, [])
 })
 test('buildSshApplyRows: refused names are unique even when repeated across rows', () => {

@@ -2,7 +2,7 @@
 //  StartupLoadRetryTests.swift
 //  DSHChamberTests
 //
-//  T-2（2026-12 实测残留）：首载竞态的纯逻辑锁步——sidecar ready 前不导航；
+//  首载竞态的纯逻辑锁步——sidecar ready 前不导航；
 //  失败后按退避重试至成功，说明页只在真正耗尽/不可重试（或 sidecar fatal）时
 //  出现；并通过源码锁步钉住接线点（首载门 / 可取消重试 / fatal 停重试）。
 //
@@ -76,7 +76,7 @@ final class StartupLoadRetryTests: XCTestCase {
                        "非 NSURLErrorDomain 不重试")
     }
 
-    // MARK: - S-45：首载 HTTP 就绪探测（探测先行）
+    // MARK: - 首载 HTTP 就绪探测（探测先行）
 
     func testProbePrecedesFirstNavigation() {
         typealias Plan = MainWindowController.StartupLoadPlan
@@ -117,7 +117,7 @@ final class StartupLoadRetryTests: XCTestCase {
 
     func testHealthProbeFailureDetailKeepsDiagnosableReason() {
         // 文案断言必须钉语言：CI runner 是 en 系统，而期望串是 zh 模板——不钉会让同一
-        // 提交在 zh 开发机上绿、在 en runner 上红（2026-09-21 CI 实测；与
+        // 提交在 zh 开发机上绿、在 en runner 上红（CI 实测；与
         // QuitCoordinatorTests 的 setUp/tearDown 同法）。
         XCTAssertTrue(NativeText.setLanguageOverride(.zh), "zh-Hans 资源必须可解析")
         defer { NativeText.setLanguageOverride(nil) }

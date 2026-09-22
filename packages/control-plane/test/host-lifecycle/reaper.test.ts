@@ -320,7 +320,7 @@ test('reaper: a claim record is only removed once its owner is dead; a live owne
   assert.equal(recordExists(dir, 'claim-9000.json'), false, 'claim with a dead owner is removed')
 })
 
-// ── takeover mode (2026-09-10, design 02 §3.4) ─────────────────────────────
+// ── takeover mode (design 02 §3.4) ────────────────────────────────────────
 // The explicit 清理并接管 action clears THIS state directory's own stale or
 // orphaned writers that the fail-closed default keeps forever. The rules that
 // must never bend: no unverified process is signalled, and a writer whose

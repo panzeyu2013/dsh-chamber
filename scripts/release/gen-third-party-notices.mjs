@@ -55,7 +55,7 @@ const rows = [...found.entries()]
   .sort(([a], [b]) => a.localeCompare(b))
   .map(([name, { version, license }]) => `| \`${name}\` | ${version} | ${license} |`)
 
-// macOS 原生壳的第三方依赖与打包资产（SwiftPM 不在 npm 树里；2026-12 裁决「D-1 选 B」批准）。
+// macOS 原生壳的第三方依赖与打包资产（SwiftPM 不在 npm 树里）。
 // 版本与 macos/Package.swift 的钉值同步——改钉值时这里同改（许可证取自包自身 LICENSE）。
 const nativeRows = [
   '| `Sparkle` | 2.10.0 | MIT |',

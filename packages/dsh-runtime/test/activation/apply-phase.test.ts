@@ -7,7 +7,7 @@
  * layer), and per-test probe scripts inject the candidate/rollback-verification
  * outcomes explicitly.
  *
- * Covered here: validateTarget rejection, the P0 lazy expected-set seam (full
+ * Covered here: validateTarget rejection, the lazy expected-set seam (full
  * and partial seed plus the stale-expectation negative control), probe-failure
  * rollback ordering, failed-stop preservation, builtin-fallback probe naming,
  * rollback target selection, restore-incomplete, prepared-replay idempotence,
@@ -89,13 +89,13 @@ const FULL_SEED_DOMAINS = ['clientGraph/graph', 'gitWorktree/previewCreate', 'ar
 const PARTIAL_SEED_DOMAINS = ['clientGraph/graph', 'archiveCleanup/probe'] as const
 
 /**
- * P0 (2026-12): the verdict's expected name set must be resolved AFTER the
+ * The verdict's expected name set must be resolved AFTER the
  * probe attempt, because the probe is the landing site of the candidate spawn
  * and the desktop host publishes its seeded chamber domains from inside that
- * spawn (cp.seededProbeDomains is written by the spawn thunk only). A value
- * captured while the ApplyDeps object was built froze the cold-start empty
- * table, so the freshly seeded run (the full 8-name set) never passed the exact-set check
- * and a healthy activation rolled back. These tests drive the real ordering:
+ * spawn (cp.seededProbeDomains is written by the spawn thunk only). Capturing
+ * the value while the ApplyDeps object is built freezes the cold-start empty
+ * table, so the freshly seeded run (the full 8-name set) never passes the exact-set check
+ * and a healthy activation rolls back. These tests drive the real ordering:
  * `probeExpectedNames` is a lazy reader of the host's domain table.
  */
 test('P0: rollback verification probes also resolve the expectation after each run', async () => {
@@ -128,9 +128,9 @@ test('P0: rollback verification probes also resolve the expectation after each r
 })
 
 test('P0 control: the stale pre-spawn (empty-table) expectation rolls the same healthy run back', async () => {
-  // Reproduces the pre-fix capture: the cold-start table ([]) was frozen into
-  // the verdict while the spawned candidate answered the full seeded set.
-  // This is the defect the lazy seam removes — keep it as the negative control.
+  // The cold-start table ([]) frozen into the verdict while the spawned candidate
+  // answers the full seeded set: the defect the lazy seam removes, kept as the
+  // negative control.
   const fixture = new RunPhaseFixture({ pointer: '0.1.1-rc.2' })
   const deps = fixture.makeApplyDeps()
   deps.probe = async () => activationProbeNamesForDomains(FULL_SEED_DOMAINS).map(name => ({ name, ok: true }))
@@ -180,8 +180,8 @@ test('rollback target probe failure falls to builtin once and ends loud', async 
   assert.equal(outcome.status, 'failed')
   assert.deepEqual(switchVersions(fixture), ['0.3.0', '0.2.0', null])
   assert.match(outcome.error ?? '', /内建运行时探针均失败/)
-  // 2026-09 review: the verdict names the failing probe — "probe failed" with no
-  // name is the invisible-failure family the desktop projection fix closed.
+  // The verdict names the failing probe: "probe failed" with no name is an
+  // invisible failure.
   assert.match(outcome.error ?? '', /内建：session\/canOpenWorkspacePath/)
   assert.equal(outcome.retainPending, true)
   assert.equal(outcome.retryAction, 'apply')

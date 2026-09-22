@@ -22,11 +22,10 @@ const shared = {
   logLevel: 'info',
   // Pure-ESM output has no ambient `require`. Bundled CJS deps that do a
   // static `require('events')` (ws's websocket.js — the session-index /
-  // approval streams' transport) used to hit esbuild's __require fallback:
-  // "Dynamic require of 'events' is not supported", which wedged the
-  // derived session index in an endless reconnect loop (live finding on
-  // Linux + macOS). The banner installs a module-scoped require shim so
-  // __require resolves node builtins normally.
+  // approval streams' transport) would otherwise hit esbuild's __require
+  // fallback ("Dynamic require of 'events' is not supported") and wedge the
+  // derived session index in an endless reconnect loop. The banner installs a
+  // module-scoped require shim so __require resolves node builtins normally.
   banner: {
     js: `import { createRequire } from 'node:module';\nconst require = createRequire(import.meta.url);`,
   },
@@ -34,7 +33,7 @@ const shared = {
 
 // Bundle the control-plane and its runtime dependencies into both outputs.
 // Installed Node deliberately refuses type-stripping inside node_modules, so
-// shipping workspace .ts sources (the former package shape) was not runnable.
+// shipping workspace .ts sources is not runnable.
 await build({ ...shared, entryPoints: [join(packageDir, 'src', 'index.ts')], outfile: indexOut })
 await build({ ...shared, entryPoints: [join(packageDir, 'src', 'cli.ts')], outfile: cliOut })
 
@@ -43,20 +42,20 @@ if (!existsSync(indexOut) || !existsSync(cliOut)) {
 }
 chmodSync(cliOut, 0o755)
 
-// Ship the packaged chamber seed entries inside the gateway package
-// (2026-12): the host packages (dsh-chamber-seed-client-graph /
-// git-worktree / archive-cleanup) are now DESKTOP-SYNCED
-// (PUT /chamber/plugins → chamber-plugins cache) and no
-// longer ship here; only packaged entries ride this directory. Today that is
-// the mobile client-plugin slot (dsh-chamber-client-ui-mobile, kind 'client',
-// design 17 §18): mobile access is bound to the gateway and has no desktop in
+// Ship the packaged chamber seed entries inside the gateway package.
+// The host packages (dsh-chamber-seed-client-graph / git-worktree /
+// archive-cleanup) are DESKTOP-SYNCED (PUT /chamber/plugins →
+// chamber-plugins cache) and do not ship here; only packaged entries ride
+// this directory. The packaged entry is the mobile client-plugin slot
+// (dsh-chamber-client-ui-mobile, kind 'client', design 17 §18): mobile
+// access is bound to the gateway and has no desktop in
 // the chain, so its seed MUST ship inside this package. Every entry carries
 // package.json + dist/index.js; a client plugin additionally declares
 // extraFiles — the browser half the host ClientModuleRegistry serves at
 // /plugins/<pkg>/client.js (lib/client.js + devtools source map), plus
 // lib/index.js: the package `main`/exports["."] target, which the cordis
-// loader resolves when it imports the overlay row by package name (P0:
-// omitting it makes the managed dsh boot fail with ERR_MODULE_NOT_FOUND).
+// loader resolves when it imports the overlay row by package name (omitting
+// it makes the managed dsh boot fail with ERR_MODULE_NOT_FOUND).
 const hostPackagesOut = join(packageDir, 'host-packages')
 rmSync(hostPackagesOut, { recursive: true, force: true })
 const HOST_PACKAGES = [

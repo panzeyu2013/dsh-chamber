@@ -5,8 +5,8 @@
  * can cover the parsers, error classification, the action gates and the
  * settle poll.
  *
- * Design 21 §5.2 split: this file is the pure core moved OUT of the
- * settings-bridge gateway-runtime-api.ts into the sidebar package's shared
+ * Design 21 §5.2 split: this file is the pure core of the runtime surface,
+ * on the sidebar package's shared
  * face. It is consumed by the settings-bridge (and later the connections
  * plugin) through `@dsh-chamber/dsh-chamber-client-ui-sidebar/shared`; the
  * render/view mapping (`remoteRuntimeStatusView` + `RemoteRuntimeStatusView`)
@@ -153,8 +153,8 @@ export interface RemoteRuntimeStatus {
   diskLimitBytes: number | null
   diskLimitExceeded: boolean | null
   progress: RemoteRuntimeProgress | null
-  /** Desktop-shaped metadata health projection (2026-12 recover-metadata
-   *  parity). Absent on pre-recovery servers — UI rows stay hidden. */
+  /** Desktop-shaped metadata health projection. Absent on pre-recovery
+   *  servers — UI rows stay hidden. */
   metadataHealth?: 'unknown' | 'healthy' | 'selection-corrupt' | 'recovery-in-progress' | 'recovery-finalized' | 'recovery-marker-corrupt' | null
   metadataComponents?: string[]
   canRecoverMetadata?: boolean
@@ -171,7 +171,7 @@ export interface RemoteVersionEntry {
 export interface RemoteVersions {
   registryOrigin: string
   versions: RemoteVersionEntry[]
-  /** Cleanup candidates (2026-12 desktop parity): ledger entries the server
+  /** Cleanup candidates (desktop parity): ledger entries the server
    *  would actually delete. Absent on older servers → empty (UI row hidden). */
   removableVersions: string[]
   error?: string
@@ -359,7 +359,7 @@ export function parseRemoteRuntimeStatus(value: unknown): RemoteRuntimeStatus {
     diskLimitBytes: nullableNumber(row, 'diskLimitBytes', 'runtime status'),
     diskLimitExceeded: nullableBoolean(row, 'diskLimitExceeded', 'runtime status'),
     progress: parseProgress(row.progress),
-    // Metadata health (2026-12): absent/unknown values are advisory — they
+    // Metadata health: absent/unknown values are advisory — they
     // only control the rescue rows, so an unrecognised future status fails
     // closed to absent rather than to a mutable idle.
     metadataHealth: enumOr(row, 'metadataHealth', METADATA_HEALTHS, null, 'runtime status'),
@@ -392,7 +392,7 @@ export function parseRemoteVersions(value: unknown): RemoteVersions {
     }
   })
   const error = nullableString(row, 'error', 'runtime versions')
-  // Cleanup candidates (2026-12): a pre-cleanup server projects no field →
+  // Cleanup candidates: a pre-cleanup server projects no field →
   // empty list (UI row hidden); a malformed present field fails closed.
   const removable = row.removableVersions
   if (removable === undefined || removable === null) {
@@ -608,7 +608,7 @@ export interface RemoteRuntimeActionGates {
   restoreBuiltinDisabled: boolean
   retryApplyDisabled: boolean
   retryRestoreDisabled: boolean
-  /** Recover-metadata (2026 audit R4): the ONLY action a FATAL metadata
+  /** Recover-metadata: the ONLY action a FATAL metadata
    *  block leaves open on the server (journal/current/override corrupt,
    *  incl. mid-run drift where status reports canRecoverMetadata with a
    *  free-text blocked reason). Enabled exactly when the status advertises
@@ -624,18 +624,18 @@ export interface RemoteRuntimeActionGates {
 }
 
 /** Pure UI mirror of the gateway's authoritative mutation fences (server
- *  parity, 2026 audit R2/R3/R4). A plain pending permits only restore-builtin
+ *  parity). A plain pending permits only restore-builtin
  *  and apply-now. A durable recovery phase permits only its exact retry —
  *  restore-builtin applies to pending/healthy selections only (an armed reset
  *  is re-blocked by the shared core against durable recovery markers), and
  *  the matching retry stays ENABLED in its phase: on the real wire the phase
  *  and startupBlockedReason co-project from the same in-memory block
  *  (swap-attempted → reason 'swap-attempted', …), so the reason must not
- *  re-disable the retry the phase advertises (R4 F1). Any PHASE-LESS
+ *  re-disable the retry the phase advertises. Any PHASE-LESS
  *  projected startup block (FATAL metadata, env-probe-failed, resolution
  *  failure) locks every ordinary mutation and the restore escape; the only
  *  action it leaves open is recover-metadata when canRecoverMetadata is
- *  reported (R4 F2), and a lingering pending NEVER relabels a blocked
+ *  reported, and a lingering pending NEVER relabels a blocked
  *  startup. Installing/applying/restart-in-flight permit no runtime action. */
 export function remoteRuntimeActionGates(
   status: RemoteRuntimeStatus | null,
@@ -667,19 +667,19 @@ export function remoteRuntimeActionGates(
   const versionBaseBlocked = taskBusy || !status.mutationsAllowed || status.source === 'env' || startupBlocked
   // Busy/env/read-only only — deliberately WITHOUT startupBlocked: recovery
   // phases co-project their reason on the wire, and the phase (not the
-  // reason) is the authoritative selector for the matching retry (R4 F1).
+  // reason) is the authoritative selector for the matching retry.
   const recoveryBaseBlocked = taskBusy || !status.mutationsAllowed || status.source === 'env'
   const applyRecovery = status.phase === 'swap-attempted' || status.phase === 'snapshot-failed'
   const restoreRecovery = status.phase === 'restore-blocked'
   const recovery = applyRecovery || restoreRecovery
   // Recovery phase wins over a lingering pending value, matching the route's
   // explicit-recovery precedence (design 18 §9.3); a startup block likewise
-  // outranks pending (2026 audit R3 — the gate itself honors
+  // outranks pending (the gate itself honors
   // blockOutranksPending, never relabeling a blocked startup as pending).
   const pending = !recovery && !startupBlocked && (status.phase === 'pending' || status.pending !== null)
   return {
     mutationDisabled: versionBaseBlocked || pending || recovery,
-    // Server parity (R2/R3): restore-builtin stays enabled ONLY for a plain
+    // Server parity: restore-builtin stays enabled ONLY for a plain
     // pending or a healthy selection — recovery phases and every projected
     // startup block disable it (the server refuses those with
     // runtime_recovery_required; a plain pending keeps it as its sole escape).

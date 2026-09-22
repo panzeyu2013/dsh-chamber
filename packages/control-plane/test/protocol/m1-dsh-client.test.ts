@@ -1,6 +1,5 @@
 /**
- * M1 acceptance self-tests for the protocol-layer additions that survive the
- * v4 refactor:
+ * Protocol-layer self-tests:
  *   - probeHostIdentity: the unified host-identity probe — the fixed-size
  *     session/canOpenWorkspacePath boolean handshake, its legacy session/list
  *     fallback on an HTTP 404 (with the mandatory warn), the boolean-value
@@ -140,7 +139,7 @@ async function withFetchHandler(handler: FetchHandler, fn: (recorder: FetchRecor
 // ---------------------------------------------------------------------------
 
 test('unary injects the 0.1.2 browser-auth cookie for a bootstrapped instance', async () => {
-  // review-round3c P0: after the spawn-time token exchange, every direct
+  // After the spawn-time token exchange, every direct
   // probe/unary call for the instance carries the minted cookie.
   const host = uniqueHost()
   clearAuthCookie(host)
@@ -360,7 +359,7 @@ test('probeHostIdentity enforces the 64 KiB identity-response cap', async () => 
 })
 
 test('probeHostIdentity classifies 401 and timeout as loud failures (no fallback)', async () => {
-  // The 0.1.2 browser-auth gate answers 401 on every /api route: fail loud,
+  // The browser-auth gate answers 401 on every /api route: fail loud,
   // never downgrade to the legacy probe (the caller's 401 handling owns it).
   const host = uniqueHost()
   await withFetchHandler(async () => new Response('unauthorized', { status: 401 }), async recorder => {

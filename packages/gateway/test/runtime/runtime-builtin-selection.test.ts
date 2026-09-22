@@ -1,7 +1,7 @@
 /**
  * /chamber/runtime builtin/anchor selection and post-update invalidation:
  * restore-pre-rollback, pnpm entry resolution, the builtin snapshot and staged
- * re-selection. Split from runtime-routes.test.ts.
+ * re-selection.
  */
 
 import { test } from 'node:test'
@@ -190,11 +190,10 @@ test('a post-update re-selection consumes the invalidation stamp instead of stra
   const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-reactivate-'))
   try {
     makeValidTree(stateDir, '1.0.0')
-    // The exact durable precondition observed on the dsh-test gateway after its
-    // 0.2.4 shell update: the retained choice still carries the ACTIVE
+    // The durable precondition: the retained choice still carries the ACTIVE
     // invalidation stamp (with shellVersion already refreshed to the current
-    // shell, which is what made the pair self-contradictory), plus the F4
-    // history fields the UI echoes.
+    // shell, which makes the pair self-contradictory), plus the F4 history
+    // fields the UI echoes.
     writeOverride(stateDir, {
       shellVersion: gatewayPackageVersion,
       chosenVersion: '0.5.0',
@@ -216,8 +215,8 @@ test('a post-update re-selection consumes the invalidation stamp instead of stra
     const routes = createRuntimeRoutes(() => manager, silentLogger)
 
     // apply() on an invalidated record must refuse honestly instead of arming a
-    // pending the core permanently ignores (pre-fix: 200 + dead pending, then
-    // the stranded intent journal tripped the selection-corrupt detector).
+    // pending the core permanently ignores (200 + dead pending would strand the
+    // intent journal and trip the selection-corrupt detector).
     const refused = await runRoute(routes, 'POST', '/chamber/runtime/apply')
     assert.equal(refused.status, 409, 'an invalidated selection must not be armed')
     assert.equal((refused.json as { code: string }).code, 'no_selection')
@@ -276,11 +275,10 @@ test('an instance already stranded in post-update selection-corrupt metadata hea
     const manager = runtimeManager(stateDir, plane, { probeCandidate: derivedProbe(stateDir) })
     const routes = createRuntimeRoutes(() => manager, silentLogger)
 
-    // Faithful reproduction of the reported symptom: semantic-mismatch
-    // selection-corrupt, and the component classifier contributes NO id — which
-    // is what the settings UI renders as「未知组件」. If the classifier ever
-    // learns to name journal-mismatch, update this expectation (it would be an
-    // improvement, not a regression).
+    // The semantic-mismatch state: selection-corrupt, and the component
+    // classifier contributes NO id — which the settings UI renders as
+    // 「未知组件」. If the classifier ever learns to name journal-mismatch,
+    // update this expectation (an improvement, not a regression).
     const broken = await manager.status()
     assert.equal(broken.metadataHealth, 'selection-corrupt', 'the stranded state is reported corrupt')
     assert.deepEqual(broken.metadataComponents, [], 'the reported 未知组件 symptom: no component id is classified')

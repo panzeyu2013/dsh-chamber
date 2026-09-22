@@ -1,12 +1,12 @@
 /**
- * Per-instance settings-source face (design 05 §5, 2026-12 完整桥接修订).
+ * Per-instance settings-source face (design 05 §5).
  *
- * WHY: the settings panel used to serve the SELECTED source by re-assembling a
+ * WHY: the panel serves the SELECTED source's own surface, never a re-assembled
  * reduced copy of that source's frontend in a detached cordis context
- * (`new Context()` + a fixed base set + the source's graph rows). Every
- * degradation the panel reported — plugins whose settings never activated, a
- * root standard source nobody seated, a `remote` without an event stream, the
- * 13 Remote namespaces it could not reach — followed from that copy existing.
+ * (`new Context()` + a fixed base set + the source's graph rows): such a copy
+ * inherits every degradation — plugins whose settings never activated, a root
+ * standard source nobody seated, a `remote` without an event stream, the 13
+ * Remote namespaces it cannot reach.
  *
  * The complete bridge is the source's OWN surface: the settings panel renders
  * the `settings.section` ledger of the source's own boot ctx (the ctx whose

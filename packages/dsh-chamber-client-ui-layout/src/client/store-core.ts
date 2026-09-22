@@ -12,12 +12,12 @@
  * re-exports `createLayoutStore`, keeping the registration face
  * (`client/index.ts` → `store: createLayoutStore`) unchanged.
  *
- * Baseline: upstream `dsh-v0.1.5-rc.2` `ui-layout/src/client/stores.ts` —
+ * Baseline: upstream `ui-layout/src/client/stores.ts` —
  * nested `LayoutState` (`panelInfo` + `layoutInfo`), eight actions including
  * `selectPanel`/`retainMainPanels`, and the eager root instance the frame's
  * `AppFrame` reads (`PropsStore<ReturnType<typeof createLayoutStore>>`).
  *
- * Behavior notes (identical to the pre-injection fork):
+ * Behavior notes:
  * - the sidebar preference is seeded from — and every drag written back to —
  *   the shared view-prefs store, so all N-ctx boots share one width and it
  *   survives restarts; `toggleSidebar` re-expands to that shared width;
@@ -144,8 +144,7 @@ interface LayoutStoreRuntime {
  * vendor frame's own rule (`narrow = viewportWidth < SIDEBAR_AUTO_COLLAPSE`,
  * then `narrow ? !narrowExpanded : sidebar === 0`). Exported so the layoutFacts
  * face can project it as `getCollapsed()` (the mobile plugin consumes THAT
- * method — it never imports this function), and so the rule stays unit-tested
- * after the mobile plugin's local copy was retired.
+ * method — it never imports this function), and so the rule stays unit-tested.
  * @param snapshot - the layout store snapshot.
  * @param autoCollapse - the sidebar auto-collapse breakpoint (vendor columns.ts).
  * @returns true when the sidebar renders as the collapsed rail.
@@ -176,8 +175,8 @@ function runtimeFor(env: LayoutStoreEnvironment): LayoutStoreRuntime {
  *
  * The vendor baseline mints the root instance eagerly inside `apply` and
  * shares it with the registration (`store: { ...handle, create: () => instance }`),
- * so the fork's assembly calls this explicitly — the pre-alpha.2 `handle.create`
- * patch no longer runs (upstream overrides `create` on the shared handle).
+ * so the fork's assembly calls this explicitly (upstream overrides `create` on the
+ * shared handle).
  * @param env - the environment whose runtime owns the instance.
  * @param instance - the live store instance to track.
  */
@@ -206,7 +205,7 @@ export function trackLayoutInstance(env: LayoutStoreEnvironment, instance: Layou
           // Adoption deliberately bypasses `setSidebar`: it must not re-run
           // the persistence write (the width is already persisted) and it
           // leaves `rightbarInstant` alone (no geometry gesture happened).
-          // The width is re-clamped on the way IN as well (2026-09 audit): a
+          // The width is re-clamped on the way IN as well: a
           // preference written by an older build or hand-edited localStorage
           // must not put the store outside the vendor drag range, or the
           // stored value and every rendering consumer would disagree.
@@ -271,7 +270,7 @@ export function createLayoutStore(env: LayoutStoreEnvironment): EngineStoreHandl
    * so drags in different shells share one timer and the last drag wins —
    * exactly as the shared prefs store itself resolves.
    *
-   * P3-nit no-op guard (2026-09): a drag landing on the ALREADY-persisted
+   * No-op guard: a drag landing on the ALREADY-persisted
    * width skips the whole persist/notify path — no redundant
    * updateViewPrefs cycle (e.g. the initiating shell's own echo after
    * adoption, or a drag that returns to the stored width). A still-pending

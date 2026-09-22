@@ -1,12 +1,10 @@
 /**
  * Behavioural coverage for the journal silence watchdog and its sibling probe
- * (chamber fork, design 14 §D4, 2026-09).
+ * (design 14 §D4).
  *
  * WHY THIS FILE EXISTS. The gateway fork's other suites are pure-policy truth
- * tables plus source-text locks, and those locks happily pinned a real runtime
- * bug: the probe read a double-wrapped frame (`next.value.value`), which threw
- * on every probe and silently killed the entire restart arm while every lock
- * stayed green (2026-09 independent review, BLOCKER). This suite imports the
+ * tables plus source-text locks, and a lock can stay green while the arm itself
+ * is broken. This suite imports the
  * REAL `RemoteJournalStream` and drives it with a fake logical stream and a fake
  * sibling follow, so the arm's actual behaviour — advance ⇒ replace the
  * generation, no advance ⇒ leave the subscription alone, dispose ⇒ stop — is

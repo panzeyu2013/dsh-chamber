@@ -6,7 +6,7 @@
  * 全部非 serve 命令消费控制面 REST（05 §7.2；端点形状见
  * docs/design/04-control-plane-api-data.md §3）：
  * - serve: 内嵌 @dsh-chamber/control-plane（createControlPlane），SIGINT/SIGTERM 优雅退出。
- * - 认证/审计：v1 收敛整体移除——无 auth/audit 子命令，控制面无登录面。
+ * - 认证/审计：无 auth/audit 子命令，控制面无登录面。
  * - 输出：人读表格；--json 时 JSON.stringify 原样输出。
  */
 

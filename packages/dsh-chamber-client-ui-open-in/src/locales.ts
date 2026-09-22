@@ -1,12 +1,12 @@
 /**
  * Copy owned by the chamber open-in plugin (design 16 + design 20).
  *
- * The dictionaries started as the official `open-in-app` client's copy and
- * product-label table; since the fork & supersede ruling (design 20 §2.2) THIS
- * file is the owner rather than a mirror — the official client never loads, and
- * the `app.*` labels must cover exactly the catalog ids our host domain can
- * answer (`packages/dsh-chamber-seed-open-in/src/catalog.ts`), which
- * `test/catalog/open-in-labels.test.ts` pins. Product names still track upstream's
+ * The dictionaries are the official `open-in-app` client's copy and
+ * product-label table, owned here rather than mirrored (fork & supersede,
+ * design 20 §2.2): the official client never loads, and the `app.*` labels must
+ * cover exactly the catalog ids our host domain can answer
+ * (`packages/dsh-chamber-seed-open-in/src/catalog.ts`), which
+ * `test/catalog/open-in-labels.test.ts` pins. Product names track upstream's
  * spelling where an id is shared, so a user sees the same application names the
  * official surface would show.
  */
@@ -81,22 +81,14 @@ export const zh = {
 }
 
 export const en: Record<OpenInKey, string> = {
-  /** Neutral entry label (slot registrant diagnostics — not user-facing). */
   titleOpen: 'Open current workspace in an app',
-  /** Session stream-health chip (diagnostics label — not user-facing). */
   'streamHealth.label': 'Conversation stream status',
-  /** Automatic stage-move re-open is in flight. */
   'streamHealth.healing': 'Recovering the conversation…',
-  /** The official open state has been `loading` past its stall threshold. */
   'streamHealth.loadingStall': 'Conversation load stalled',
-  /** The `loading` dwell outlived every recovery attempt: content could not be loaded yet. */
   'streamHealth.loadingFailed': 'Session content not loaded',
-  /** No automatic repair is running (out of levers, or no stage route): the chip offers the manual ones. */
   'streamHealth.healFailed': 'Conversation stream not recovered',
   'streamHealth.carrierChurn': 'Conversation stream reconnecting…',
-  /** The user's own recovery action. */
   'streamHealth.reload': 'Reload',
-  /** The user's own per-session stream rebuild (not the page reload). */
   'streamHealth.resync': 'Rebuild stream',
   titleVscode: 'Open current workspace in VS Code',
   titleFinder: 'Open current workspace in Finder',
@@ -150,7 +142,7 @@ export const en: Record<OpenInKey, string> = {
 export type OpenInKey = keyof typeof zh
 
 /**
- * Label key per catalog id — the table is OURS now (design 20 §5): our host
+ * Label key per catalog id — the table is OURS (design 20 §5): our host
  * domain's catalog (`packages/dsh-chamber-seed-open-in/src/catalog.ts`) is the
  * authority on which ids can appear, and `test/catalog/open-in-labels.test.ts` fails
  * when an id has no zh+en label. Ids outside this table still render through

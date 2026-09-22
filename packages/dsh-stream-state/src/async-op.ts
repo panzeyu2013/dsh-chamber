@@ -1,21 +1,21 @@
 /**
- * Async operation primitives (B6 core): deadline, retry pacing, bounded wait and
+ * Async operation primitives: deadline, retry pacing, bounded wait and
  * single-flight, with the scheduler INJECTED.
  *
  * WHY. The same five waiting shapes are hand-written at least seven times
  * (remote-stream.ts's retry lane, stream-client.ts's opening deadline/handshake,
  * journal-stream.ts's read deadline, pending-open-queue.ts, waitForServing,
  * host-graph.ts's own 10x500ms loop, baseline-harvest's deadlines) - each with its
- * own timer bookkeeping. The 2026-09 review's most expensive class of bug lived
- * exactly there: a timer that was never armed, a wait whose cancellation path forgot
- * to clear, an abort that resolved instead of rejecting.
+ * own timer bookkeeping. The most expensive class of bug lives exactly there: a
+ * timer that is never armed, a wait whose cancellation path forgets to clear, an
+ * abort that resolves instead of rejecting.
  *
  * PURITY CONTRACT. This module imports NOTHING - not even `node:` builtins - so it
  * can be consumed by browser code. Everything ambient arrives on {@link Scheduler}:
  * real callers pass `setTimeout`/`clearTimeout`, tests pass a deterministic fake.
  * A module that reaches for a global clock is a gate failure, not a style nit.
  *
- * SEMANTICS WORTH KEEPING (taken verbatim from the code being retired):
+ * SEMANTICS:
  *  - a deadline settles the operation ONCE; the loser of the race is not cancelled
  *    behind the caller's back - the callback decides what the timeout MEANS
  *    (remote-stream's retry lane deliberately fails its inbox rather than aborting
@@ -81,11 +81,6 @@ export async function withDeadline<T>(
   }
 }
 
-// B7 deletion (2026-12): the retry-pacing lane (`RetryPolicy` / `retryDelayMs` /
-// `RETRY_LADDER_MS`) had NO importer outside this package - the only consumer was its
-// own test pinning the retired ladder. W1 kept its own pacing in remote-retry-policy.ts,
-// so the capability was never adopted; per the default-shrink rule it is gone rather
-// than kept as speculative API.
 export interface BoundedWaitOptions {
   /** How often to re-inspect the condition. */
   readonly pollMs: number
@@ -113,8 +108,8 @@ export type WaitOutcome = 'done' | 'expired' | 'aborted'
  * Wait for an external condition, bounded, cancellable and never leaking a timer.
  * 
  * The condition is checked BEFORE the first timer is armed: a condition that is
- * already true must not pay one poll interval (the retired code armed its timer
- * first and relied on `finish` clearing it, which is easy to get wrong).
+ * already true must not pay one poll interval — arming the timer first and relying
+ * on `finish` to clear it is easy to get wrong.
  */
 export function waitForCondition(options: BoundedWaitOptions, signal?: AbortSignal): Promise<WaitOutcome> {
   return new Promise<WaitOutcome>((resolve) => {
@@ -150,6 +145,3 @@ export function waitForCondition(options: BoundedWaitOptions, signal?: AbortSign
   })
 }
 
-// B7 deletion (2026-12): `SingleFlight` / `createSingleFlight` had no importer; the
-// App's open-dispatch and the reconcile chain both kept their own guards, so this was
-// never adopted either. Removed under the same default-shrink rule.

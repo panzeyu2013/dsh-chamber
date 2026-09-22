@@ -2,7 +2,7 @@
 //  SwiftEdgeHostLegsTests.swift
 //  DSHChamberTests
 //
-//  W-19/20：SwiftEdgeHostLegs 纯逻辑单测（无 GUI 分支——GUI 腿属 M3 集成
+//  SwiftEdgeHostLegs 纯逻辑单测（无 GUI 分支——GUI 腿属集成
 //  + 实机硬门禁，见 SwiftEdgeHostLegs.swift 各腿 TODO 注释）。
 //
 import XCTest
@@ -99,7 +99,7 @@ final class SwiftEdgeHostLegsTests: XCTestCase {
         )
     }
 
-    // MARK: - S-D：setLoginItem 守卫（E14；SMAppService 真机调用属签名实机门禁）
+    // MARK: - setLoginItem 守卫（SMAppService 真机调用属签名实机门禁）
 
     func testSetLoginItemDegradesWhenUnbundled() {
         // canShowUI=true + isAppBundled=false（swift run dev 态等价）：无 bundle
@@ -140,11 +140,10 @@ final class SwiftEdgeHostLegsTests: XCTestCase {
         }
     }
 
-    // MARK: - S-05 复裁决（2026-12）：launchApp 叶已移除，与 Electron 对称
+    // MARK: - launchApp 叶（与 Electron 对称）
 
     /// Electron 侧从未实现 launchApp（`electron-edges.ts:59`「moves with its first
-    /// consumer」），core 也零调用点；Swift 侧那份自决实现（自建 vscode:// URL +
-    /// 自持 appId 白名单）随之移除。未知方法一律诚实回落 unimplemented，两端能力面
+    /// consumer」），core 也零调用点；Swift 侧同样不实现。未知方法一律诚实回落 unimplemented，两端能力面
     /// 因此一致（本地 open 由实例内 host 包负责，壳只执行 openExternal）。
     func testLaunchAppIsUnimplementedLikeElectron() {
         let legs = SwiftEdgeHostLegs(config: .init(canShowUI: { true }))
@@ -154,7 +153,7 @@ final class SwiftEdgeHostLegsTests: XCTestCase {
         XCTAssertNil(outcome.result)
         XCTAssertEqual(outcome.error, "swift-edge-unimplemented:launchApp")
     }
-    // MARK: - S1：交互腿异步应答（10 分钟上限、超时弃权、非交互短界保持）
+    // MARK: - 交互腿异步应答（10 分钟上限、超时弃权、非交互短界保持）
 
     /// 跨线程单值盒（回执在后台/主线程写，断言线程读）。
     private final class SyncBox<T> {
@@ -183,7 +182,7 @@ final class SwiftEdgeHostLegsTests: XCTestCase {
 
     /// 交互腿（showMessage）不得在旧 1s 上限处失败：慢 body（1.5s）的结果必须
     /// 在模态完成时交付。调用形态 = 后台线程（BridgeClient 管道读取线程的真实
-    /// 形态）→ body 派主线程；旧实现会在 1s 处回 main-thread-busy 并丢弃结果。
+    /// 形态）→ body 派主线程；不得在 1s 处回 main-thread-busy 并丢弃结果。
     func testInteractiveLegNotFailedAtOneSecondAndDeliversResult() {
         let legs = SwiftEdgeHostLegs(config: .init(
             canShowUI: { true },
@@ -210,7 +209,7 @@ final class SwiftEdgeHostLegsTests: XCTestCase {
                                    "结果在慢 body（1.5s）完成时才交付：证明未被 1s 上限截断")
     }
 
-    /// S1：超时后仍在主队列排队的 body 绝不补执行（无双重执行），回执恰一次。
+    /// 超时后仍在主队列排队的 body 绝不补执行（无双重执行），回执恰一次。
     func testInteractiveTimeoutNeverExecutesQueuedBodyLater() {
         let box = SyncBox<(AnyCodable?, String?)>()
         var bodyRan = false
@@ -239,7 +238,7 @@ final class SwiftEdgeHostLegsTests: XCTestCase {
                        "超时回执恰一次（body 弃权不覆盖）")
     }
 
-    /// 非交互腿保留 1s 短界（S1 明确不把非交互腿一并拉长）。
+    /// 非交互腿保留 1s 短界（不与交互腿一并拉长）。
     func testNonInteractiveLegKeepsShortBound() {
         let legs = SwiftEdgeHostLegs(config: .init(canShowUI: { true }))
         let box = SyncBox<(AnyCodable?, String?)>()
@@ -262,7 +261,7 @@ final class SwiftEdgeHostLegsTests: XCTestCase {
         XCTAssertFalse(bodyRan, "超时后 body 也不得补执行（同一弃权位）")
     }
 
-    /// 二轮评审 P3：EdgePayload.int 对非有限/越界值返回 nil，绝不 trap。
+    /// EdgePayload.int 对非有限/越界值返回 nil，绝不 trap。
     func testEdgePayloadIntDoesNotTrap() {
         XCTAssertEqual(EdgePayload.int(.number(3)), 3)
         XCTAssertEqual(EdgePayload.int(.number(-2)), -2)
@@ -274,7 +273,7 @@ final class SwiftEdgeHostLegsTests: XCTestCase {
         XCTAssertNil(EdgePayload.int(AnyCodable?.none))
     }
 
-    // MARK: - P-06：通知腿的诚实回执（授权先查 + 有界 add + {shown:false,error}）
+    // MARK: - 通知腿的诚实回执（授权先查 + 有界 add + {shown:false,error}）
 
     /// 测试假体：授权状态/请求/投递全部可控，add 可挂起（验证超时）或立即完成。
     private final class FakeNotificationCenter: EdgeNotificationCenter {

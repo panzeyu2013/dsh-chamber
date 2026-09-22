@@ -9,8 +9,8 @@
  * modules, and the patch-lock suites read source text, so the fork patch stays
  * covered even where the vendor install is absent. The behaviour suites import the
  * REAL fork modules against fakes (vendor leaves stubbed by
- * test/support/vendor-stub-loader.mjs) because a source lock pinned a runtime
- * blocker in the 2026-09 review; that file is the reason they run with
+ * test/support/vendor-stub-loader.mjs) because a source lock cannot catch a runtime
+ * blocker; that file is the reason they run with
  * --experimental-transform-types (the mirrored upstream file keeps upstream's
  * constructor parameter properties, which strip-only mode rejects).
  */
@@ -24,7 +24,7 @@ const PACKAGE_ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)))
 
 const GROUPS = {
   // behavior: the REAL fork modules driven by fakes (vendor leaves stubbed) — the
-  // arm a source lock cannot see (2026-09 review: a lock pinned a runtime blocker).
+  // arm a source lock cannot see.
   behavior: [
     {
       file: 'test/behavior/journal-stall-probe.test.ts',

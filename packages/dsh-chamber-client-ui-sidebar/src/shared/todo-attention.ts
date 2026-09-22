@@ -15,12 +15,12 @@
  *
  * - An entry exists only while its session row is IN the projection. A
  *   disconnected source carries no LIVE runtime facts (unknown ≠ attention);
- *   R14 opens exactly one door: facts the App explicitly marked `stale: true`
+ *   exactly one door is open: facts the App explicitly marked `stale: true`
  *   ride a disconnected source too, and are rendered (labelled `stale`) while
  *   the rows survive. With `offlineUnread` enabled, a disconnected stale
  *   source whose ROWS ARE GONE still surfaces its completed-unread facts as an
  *   "offline unread" group (sessionId fallback label) — the row-absent half of
- *   R14, opt-in so no consumer is forced onto a new surface.
+ *   the stale-facts branch, opt-in so no consumer is forced onto a new surface.
  * - The session being read right now (the active view's current session) is
  *   excluded by the caller-provided viewing ids — the same single-selection
  *   rule as the current-session highlight (SidebarRoot chamberInstanceId).
@@ -53,7 +53,7 @@ export interface TodoAttentionEntry {
   /** Last-activity epoch ms (row fact; absent when the wire gave none). */
   updatedAt?: number
   /**
-   * R14: the entry comes from facts of a source that is disconnected right now
+   * The entry comes from facts of a source that is disconnected right now
    * (the aggregate `runtime.stale` fact) — or, for the offline-unread group,
    * from facts whose rows are gone. Consumers must label it (I13/I2
    * `data-chamber-stale`); absent = live fact, today's semantics.
@@ -78,7 +78,7 @@ export interface TodoAttentionFilters {
  * @param opts.viewingSessionId - that source's runtime current session (only
  *   consulted when the entry's source is the viewing source).
  * @param opts.filters - per-kind gates from the settings block.
- * @param opts.offlineUnread - R14 row-absent branch (opt-in): also emit the
+ * @param opts.offlineUnread - row-absent branch (opt-in): also emit the
  *   completed-unread facts of a DISCONNECTED stale source whose rows are gone,
  *   as an offline-unread group. Absent = today's row-bound semantics exactly.
  */
@@ -96,8 +96,8 @@ export function deriveTodoAttention(
   for (const server of servers) {
     const runtime = server.runtime
     // 断连来源无实时状态（App 只在 connected 或「有只读事实」时附加 runtime）
-    // ——未知 ≠ 待办，不臆造条目（重连后随真实状态重现）。R14 放开的是**显式
-    // 标 stale 的只读事实**：未标 stale 的断连 runtime 保持旧行为（App 是标记
+    // ——未知 ≠ 待办，不臆造条目（重连后随真实状态重现）。这里放开的是**显式
+    // 标 stale 的只读事实**：未标 stale 的断连 runtime 不产生条目（App 是标记
     // 的唯一写者；这里再查一次是防御纵深）。
     const offline = server.connected !== true
     if (offline && runtime?.stale !== true) continue
@@ -159,8 +159,8 @@ export function deriveTodoAttention(
         completed.push(entry)
       }
     }
-    // R14 行缺席分支（显式选项）：断连 + stale + 行不在投影里的 completed 事实
-    // ——待办区是唯一还能承载它的面（遍历行的旧实现无基底）。只出未读（completed
+    // 行缺席分支（显式选项）：断连 + stale + 行不在投影里的 completed 事实
+    // ——待办区是唯一还能承载它的面（遍历行没有基底）。只出未读（completed
     // 且子代理压制同规则），标签用 sessionId 兜底（derive.ts sessionDisplayTitle），
     // 分组键是 entry.stale；不新增桥接面 / 不改 kind 联合。
     if (!offline || opts.offlineUnread !== true) continue

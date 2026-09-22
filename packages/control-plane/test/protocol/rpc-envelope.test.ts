@@ -1,5 +1,5 @@
 /**
- * rpc-envelope.ts unit tests (A2 cross-package protocol single-sourcing):
+ * rpc-envelope.ts unit tests (cross-package protocol single-sourcing):
  *   - buildClientRequest: the exact client-request wire shape (key order
  *     included — JSON.stringify order is the wire order);
  *   - parseServerResponse: the three-way classification the consumers rely

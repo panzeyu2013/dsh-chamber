@@ -1,6 +1,5 @@
 /**
- * DOM + fetch harness for the gateway dashboard's own classic script
- * (2026-09-11 upstream-alignment T2).
+ * DOM + fetch harness for the gateway dashboard's own classic script.
  *
  * The served `/chamber/app.js` is deliberately dependency-free, and this
  * package has neither a DOM nor a DOM library as a test dependency. So the
@@ -18,10 +17,10 @@
  * cannot affect what these tests observe, and a live 15s timer would hold the
  * test process open behind a request the harness deliberately leaves pending.
  *
- * 2026-09-11 review-fix F1: `pressKey('Tab')` now performs the browser's own
- * Tab move (the next tabbable element of the served markup, in document
- * order) unless the script called `preventDefault()` — without it a "the trap
- * held" assertion proved nothing, because focus never moved either way. The
+ * `pressKey('Tab')` performs the browser's own Tab move (the next tabbable
+ * element of the served markup, in document order) unless the script called
+ * `preventDefault()` — the move is what makes a "the trap held" assertion
+ * meaningful, because focus moves either way. The
  * tab order is derived from the markup's element nesting, so a hidden or
  * `inert` ANCESTOR removes its whole subtree from the order, and a control the
  * script disabled mid-test leaves the order exactly like the browser drops it.

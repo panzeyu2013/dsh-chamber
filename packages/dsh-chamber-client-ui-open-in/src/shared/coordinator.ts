@@ -62,19 +62,17 @@ export function getOpenInApps(): OpenInApp[] | null {
 }
 
 /** Single-flight app-list probe shared across N-ctx; resolves the shared list.
- *  A MISSING bridge is NOT memoized (frontend-review P1-1, final-review
- *  correction): the preload exposes the bridge only after an async
- *  `dsh-chamber:info` round-trip, so a probe that ran before hydration must be
- *  retryable. The bridge check therefore runs BEFORE the promise is cached —
- *  an absent bridge returns a fresh resolved null and leaves `appsPromise`
- *  untouched, so later callers re-probe (an earlier version nulled the promise
- *  INSIDE the cached IIFE, which the outer assignment overwrote — a silent
- *  no-op). A real IPC rejection gets three delayed attempts inside the same
- *  page-wide flight; this recovers a transient first-call sender/handler race
- *  even while the fail-closed button is hidden and has no manual refresh
- *  affordance. Success or final exhaustion is memoized; an explicit lifecycle
- *  signal (window focus/menu opening) calls refreshApps() to release it. This
- *  recovers without turning N mounted buttons into an implicit retry loop. */
+ *  A MISSING bridge is NOT memoized: the preload exposes the bridge only after
+ *  an async `dsh-chamber:info` round-trip, so a probe that ran before hydration
+ *  must be retryable. The bridge check therefore runs BEFORE the promise is
+ *  cached — an absent bridge returns a fresh resolved null and leaves
+ *  `appsPromise` untouched, so later callers re-probe. A real IPC rejection gets
+ *  three delayed attempts inside the same page-wide flight; this recovers a
+ *  transient first-call sender/handler race even while the fail-closed button is
+ *  hidden and has no manual refresh affordance. Success or final exhaustion is
+ *  memoized; an explicit lifecycle signal (window focus/menu opening) calls
+ *  refreshApps() to release it. This recovers without turning N mounted buttons
+ *  into an implicit retry loop. */
 export function getApps(options: OpenInAppProbeOptions = {}): Promise<OpenInApp[] | null> {
   if (appsPromise !== null) return appsPromise
   const bridge = (window as unknown as OpenInBridgeSurface).dshChamber?.openIn

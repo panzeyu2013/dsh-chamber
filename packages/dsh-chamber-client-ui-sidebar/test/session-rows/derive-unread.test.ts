@@ -1,9 +1,9 @@
 /**
- * deriveUnread — THE unread predicate of the B edge track (plan §3.2/§5-3,
- * W0 notes §2.3/H3b): `unread ⟺ max(updatedAt, completedAt) > readThrough`,
+ * deriveUnread — THE unread predicate of the B edge track:
+ * `unread ⟺ max(updatedAt, completedAt) > readThrough`,
  * where `completedAt` counts when the last turn-end classification is
- * `completed` OR ABSENT (the watcher's degraded marker for an unreadable tail,
- * R12: an edge that already armed `completedAt` must never be dropped here).
+ * `completed` OR ABSENT (the watcher's degraded marker for an unreadable tail:
+ * an edge that already armed `completedAt` must never be dropped here).
  * node:test, pure (no ledger state, no clock).
  *
  * Pinned here: the strict `>` boundary, the completed-or-degraded gate (every
@@ -40,7 +40,7 @@ test('completedAt counts for a completed classification and for the degraded (ab
   ]
   for (const [label, turnEnd] of classifications) {
     // Only completed — or the degraded absence — may arm from completedAt; a
-    // KNOWN non-completion suppresses (R12).
+    // KNOWN non-completion suppresses.
     const arms = label === 'completed' || label.startsWith('missing') || label.startsWith('null')
     assert.equal(deriveUnread(2_000, turnEnd, 1_000, undefined), arms, label)
   }
@@ -85,9 +85,9 @@ test('absent readThrough = nothing read yet; absent/zero watermarks = no unread'
 })
 
 test('the predicate is host-domain only: no ledger input and no wall clock in the signature', () => {
-  // R2 anti-cheat: deriveUnread must not read any ledger state
+  // deriveUnread must not read any ledger state
   // (completedBySource). The arity lock keeps a future "let me pass the ledger
-  // in" refactor visible in review.
+  // in" refactor visible.
   assert.equal(deriveUnread.length, 4)
   // The comparison is entirely driven by the injected host-domain integers: a
   // desktop wall clock far ahead of the host watermark changes nothing because

@@ -1,7 +1,7 @@
 /**
- * App-layer session-open outcomes rendered as per-row errors (extracted
- * verbatim from SidebarRoot, 2026-12 split): bounded visibility and the early
- * clear path (see shared/open-outcome.ts for the key/delete semantics).
+ * App-layer session-open outcomes rendered as per-row errors: bounded
+ * visibility and the early clear path (see shared/open-outcome.ts for the
+ * key/delete semantics).
  */
 
 import { useCallback, useEffect, useRef, type Dispatch, type SetStateAction } from 'react'
@@ -40,8 +40,8 @@ export function useSidebarOpenOutcomes({ setRowErrors }: {
   // rows, so once the target shell's tree is mounted (the open outcome can
   // only settle after the shell that serves it mounted — the dispatch budget
   // runs against its holder) the shell the user is looking at shows the
-  // failure on the very row that was clicked — the old one-way channel left
-  // every failure as a console line while the user stared at the switched
+  // failure on the very row that was clicked; a console-only report would
+  // leave every failure invisible while the user stares at the switched
   // view with nothing selected. Failures appear for OPEN_FAILURE_VISIBLE_MS;
   // success (or a fresh click, cleared in openSession) removes the error
   // early. Outcomes settling before the target tree mounts are lost by

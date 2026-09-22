@@ -1,20 +1,19 @@
 /**
  * React-free decision rules behind the chamber version-tolerance seams
- * (design 09 §3.3, 2026-08): the boot kernel's extra-row degrade (boot.ts
- * assertEntriesActive / runPluginBoot). The rc.8 shell no longer installs the
- * slot renderer (the composite-covered ui-renderer row does), so the former
- * renderer-install adoption rule was removed with its only consumer.
+ * (design 09 §3.3): the boot kernel's extra-row degrade (boot.ts
+ * assertEntriesActive / runPluginBoot). The shell does not install the slot
+ * renderer (the composite-covered ui-renderer row does), so there is no
+ * renderer-install adoption rule to apply.
  *
  * Why a separate module: boot.ts cannot load under plain
- * node (DOM), but the tolerance POLICY is the load-bearing contract of
- * the rc.8 regression fix — so the rules live here, fully self-contained
+ * node (DOM), but the tolerance POLICY is the load-bearing contract — so the
+ * rules live here, fully self-contained
  * (zero runtime imports), and are unit-tested under plain node by
  * `packages/dsh-client-web/test/boot-tolerance.test.ts` (node:test, run via
  * `pnpm run test:client-web`).
  *
- * The rules mirror the pre-extraction behavior EXACTLY (including the
- * failure-report strings); extraction is a testability refactor, not a
- * behavior change.
+ * The rules are the exact behavior contract (including the
+ * failure-report strings); the split into this module is for testability only.
  */
 
 /**

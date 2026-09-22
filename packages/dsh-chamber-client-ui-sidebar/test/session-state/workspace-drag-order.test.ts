@@ -52,8 +52,8 @@ function expectNoop(verdict: WorkspaceDropVerdict): void {
 
 test('foreign drop into the family interior is blocked', () => {
   const e = env(['M', 'W1', 'W2', 'F'])
-  // The reported bug: a foreign workspace inserted after the main (between it and its first
-  // worktree) or between two worktrees.
+  // A foreign workspace inserted after the main (between it and its first
+  // worktree) or between two worktrees must be blocked.
   expectBlocked(resolveWorkspaceDrop(e, 'F', { id: 'M', half: 'after' }))
   expectBlocked(resolveWorkspaceDrop(e, 'F', { id: 'W1', half: 'before' }))
   expectBlocked(resolveWorkspaceDrop(e, 'F', { id: 'W1', half: 'after' }))

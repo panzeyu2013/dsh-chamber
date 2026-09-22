@@ -3,7 +3,7 @@
  * OFFICIAL dsh web shell to touch/narrow viewports. Zero code copied from
  * community plugins — the mechanisms (attribute stamping, enter-to-newline,
  * editability recovery, layout-source-driven drawer) are re-implemented
- * against the empirical 0.1.5-alpha.2 DOM on the chamber base (centre column
+ * against the empirical dsh DOM on the chamber base (centre column
  * = keyed `main` slot, right column = `rightbar`; see markup.ts ROLE_SLOT_KEYS):
  *  - panel state comes from the two-tier layout source (layout-facts.ts):
  *    the chamber layout fork's `layoutFacts` service when present, the
@@ -17,13 +17,10 @@
  *  - the mobile tier activates on `(max-width:1023px) and (pointer:coarse)`
  *    (项 5) — the CSS is fully media-query scoped, desktop untouched.
  *
- *  Anchor-version note: the anchors were re-audited against the vendored
- *  0.1.5-alpha.2 source at the 2026-09 re-anchor (the centre column moved to
- *  the keyed `main` slot and the right column to `rightbar`, which is what
- *  ROLE_SLOT_KEYS encodes) and re-checked at 0.1.5-rc.1 and 0.1.5-rc.2, whose
- *  client deltas leave those emitters unchanged. The dsh version actually injected into a gateway
- *  instance is decided by the dsh-runtime on the serving desktop/gateway —
- *  anchors must be re-audited when the vendored pin moves.
+ *  Anchor note: ROLE_SLOT_KEYS encodes the keyed `main` centre column and
+ *  the `rightbar` right column. The dsh version actually injected into a
+ *  gateway instance is decided by the dsh-runtime on the serving
+ *  desktop/gateway — anchors must be re-audited when the vendored pin moves.
  */
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
@@ -95,7 +92,7 @@ export function apply(ctx: ClientContext): void {
 
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'dsh-chamber: mobile dictionaries')
 
-  // ---- read watermark (plan W5): reading a session on the phone teaches the
+  // ---- read watermark: reading a session on the phone teaches the
   // gateway mirror the host-domain watermark, so the desktop's completed-unread
   // dot clears for the same session. Fail-closed: absent service / missing row /
   // rejected fetch are all silent no-ops (read-watermark.ts). ----
@@ -136,7 +133,7 @@ export function apply(ctx: ClientContext): void {
       disposers.push(() => style.remove())
     }
 
-    // theme-color follows the official theme (F4): read the alias surface
+    // theme-color follows the official theme: read the alias surface
     // token, re-synced when the official theme presenter flips the body
     // attribute. The mobile surface has no theme of its own — it must
     // mirror the shell's light/dark state for the browser chrome.
@@ -161,13 +158,13 @@ export function apply(ctx: ClientContext): void {
 
   // ---- markup: stamp the frame and its columns (N-ctx: every instance
   // root, idempotent, survives frame remounts). The observer skips deep
-  // content mutations (P2-4): only childList changes that can affect the
+  // content mutations: only childList changes that can affect the
   // stamp set (root slot / frame / column shell / session-gated slot outlet
   // mounting inside a resident column shell — see isStructuralTarget in
   // markup.ts) trigger a re-stamp; chat streaming and typing commit
   // thousands of deep childList batches that never match. The batch
   // decision is a pure function (shouldRestamp), unit-tested without a DOM.
-  // alpha.2 anchor audit (2026-09): the official AppFrame renders the right
+  // Anchor note: the official AppFrame renders the right
   // column SHELL and its [data-slot="rightbar"] outlet wrapper from first
   // paint (`[data-rightbar-col]`; the renderer emits the wrapper
   // unconditionally) — only the docking surface inside is registration-gated.
@@ -360,7 +357,7 @@ export function apply(ctx: ClientContext): void {
   // TOUCH tier (the same tier the mobile surface lives on) and, like the
   // watchdog above, is installed/uninstalled dynamically as the tier flips —
   // nothing is created at apply time. It shows a notice whose primary action is
-  // a user-initiated reload, and (2026-09-21) may itself call the pinned
+  // a user-initiated reload, and may itself call the pinned
   // per-session resync on positive evidence that no open is in flight; see
   // session-stall.ts for the shape, the threshold and every guard.
   ctx.effect(() => {

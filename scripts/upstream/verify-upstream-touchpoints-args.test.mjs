@@ -46,7 +46,7 @@ test('--no-artifact-rebuild is accepted in either position and never duplicated'
 test('--tags requires exactly two tag values', () => {
   // 夹具用中性 tag：写死历史 dsh pin 会让 §5 的旧 pin 残留扫描每次发布都报一条。
   assert.deepEqual(parseVerifyArgs(['--tags', 'v9.9.9-rc.7', 'v9.9.9-rc.8']).tags, ['v9.9.9-rc.7', 'v9.9.9-rc.8'])
-  // A missing/flag-looking value used to fall through to a silent full run.
+  // A missing/flag-looking value must not fall through to a silent full run.
   assert.match(parseVerifyArgs(['--tags', 'v1']).errors.join('\n'), /--tags 需要恰好两个 tag 值/)
   assert.match(parseVerifyArgs(['--tags']).errors.join('\n'), /--tags 需要恰好两个 tag 值（得到 无）/)
   assert.match(parseVerifyArgs(['--tags', '--no-artifact-rebuild']).errors.join('\n'), /--tags 需要恰好两个 tag 值/)
@@ -55,7 +55,7 @@ test('--tags requires exactly two tag values', () => {
 })
 
 test('every unrecognized argument is an error — a typo can never be ignored', () => {
-  // The near-miss that motivated the guard: one missing letter in the only flag that suppresses the rebuild.
+  // One missing letter in the only flag that suppresses the rebuild must be a usage error, never a silent full run.
   assert.deepEqual(parseVerifyArgs(['--no-artifact-rebuid']).errors, [
     '未知参数 --no-artifact-rebuid（已知：--no-artifact-rebuild, --tags, --help, -h）',
   ])
@@ -269,8 +269,8 @@ test('C15 (OPEN side): the dwell callback opens without re-checking the pointer'
   assert.deepEqual(callbackStatements(timers[0].callback), ['setOpen(true)'])
 })
 test('C15 (OPEN side): the callback is classified by SHAPE, so no naming scheme can slip through', () => {
-  // Round-2 review F2: a word blacklist only catches the names it lists — `isPointerOnAnchor` /
-  // `anchorContainsPointer` / `pointerState.on` passed while the race was gone, so classify by shape.
+  // A word blacklist only catches the names it lists — `isPointerOnAnchor` /
+  // `anchorContainsPointer` / `pointerState.on` would pass while the race is gone, so classify by shape.
   for (const guard of [
     'if (!insideRef.current) return',
     'if (!pointerInside) return',
@@ -297,7 +297,7 @@ test('C15 (OPEN side): the callback is classified by SHAPE, so no naming scheme 
   }
 })
 test('C15 (OPEN side): an unmount guard is reported as drift with a NEUTRAL diagnosis', () => {
-  // Round-2 review F1: `if (!mountedRef.current) return` is the commonest React
+  // `if (!mountedRef.current) return` is the commonest React
   // unmount guard, not a pointer check — the gate must still refuse to auto-pass it,
   // but the diagnosis may NOT assert "upstream fixed the race", because acting on
   // that claim would retire a port that is still needed.
@@ -474,7 +474,7 @@ test('C15: the gate actually consults the verdict on the pinned tree (wiring sca
   assert.match(source, /else for \(const failure of verdict\.failures\) fail\(failure\)/)
 })
 
-// C15 adversarial-review regressions: each mutant below fixes the race (or moves the timing) while leaving decoy text behind; the hardened module must fail all of them.
+// C15 adversarial regressions: each mutant below fixes the race (or moves the timing) while leaving decoy text behind; the hardened module must fail all of them.
 
 test('C15 mutant (a): a decoy string cannot stand in for the missing guard', () => {
   // The race is FIXED (unconditional arm) but a log/telemetry string still spells the old shape; string literals are neutralized first.

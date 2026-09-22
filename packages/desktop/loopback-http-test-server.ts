@@ -2,11 +2,10 @@
  * Bare loopback test-server helpers shared by the desktop provider suites
  * (test/transport/ssh-provider-endpoint-auth.test.ts binds servers it creates inline with closures;
  * test/gateway/gateway-provider.test.ts keeps its own http/https start helpers around the
- * same two steps). They encode ONLY the previously inlined listen/close
- * boilerplate (dedupe audit N7): bind an already-created node:http(s) server
- * to 127.0.0.1 on an ephemeral port and read the port AFTER the listen
- * callback fired (never before), and await the server.close callback (a
- * `finally` must always wait for the real close before a test ends).
+ * same two steps). They encode ONLY the listen/close boilerplate: bind an
+ * already-created node:http(s) server to 127.0.0.1 on an ephemeral port and
+ * read the port AFTER the listen callback fired (never before), and await
+ * the server.close callback (a `finally` must always wait for the real close before a test ends).
  *
  * Bare helper file, not a test: the desktop test script enumerates suites
  * explicitly. Packaging note: package.json `files` excludes this helper

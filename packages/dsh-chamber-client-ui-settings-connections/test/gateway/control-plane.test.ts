@@ -99,7 +99,7 @@ test('cp.gatewayHostLogs: a gateway refusal surfaces loud as an ApiError with st
   }
 })
 
-/* ---- Gateway A0 read side (design 21 §6.2, plan Phase 3): the seed-cache
+/* ---- Gateway A0 read side (design 21 §6.2): the seed-cache
  * projection and the readManifest (installed) wrapper over the per-instance
  * proxy, plus the gateway_plugin_sync IPC wrapper (design 21 §6.5). ---- */
 
@@ -186,7 +186,7 @@ test('gatewayInstalled: any other refusal (503 …) rethrows the ApiError, never
   }
 })
 
-/* ---- design 21 §6.2 读/写面共享栅栏 (2026-12 接线) ----------------------------
+/* ---- design 21 §6.2 读/写面共享栅栏 ----------------------------------------
  * The gateway withholds `GET /chamber/plugins/installed` with 409 `runtime_busy`
  * while a plugin mutation holds the managed-profile write lease. The tests below pin
  * both halves: a transient fence still yields the real projection with NO error path,
@@ -378,7 +378,7 @@ test('gatewayPluginSync: forwards the RAW registry id and passes the ok/error un
   })
 })
 
-// ── writer-quiescence surface (2026-09-10, design 02 §3.4 / 04 §3.2) ───────
+// ── writer-quiescence surface (design 02 §3.4 / 04 §3.2) ───────
 
 const writerBody = {
   quiescent: false, errors: ['a probe failed', 42],

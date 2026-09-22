@@ -1,5 +1,5 @@
 /**
- * Sidebar scroll anchor sync (N-ctx, 2026-08): each N-ctx shell renders its
+ * Sidebar scroll anchor sync (N-ctx): each N-ctx shell renders its
  * OWN full copy of the chamber multi-source sidebar, and each shell's
  * `.chamberList` scroll container keeps its own independent `scrollTop` — a
  * plain view switch (App.selectView → setActiveView + CSS visibility) swaps
@@ -71,11 +71,11 @@ const ROW_ATTRIBUTE = 'data-chamber-row'
 /** Timer fallback cadence when rAF is unavailable or the document is hidden. */
 const RETRY_MS = 80
 /**
- * Frame-tight (rAF) retry budget for a restore chain — 2026-09 renderer-crash
- * round. The chain must still park a cold-booted shell within a frame of its
- * container mounting (the skeleton→content reveal cannot beat it), but the
- * previous "rAF for the whole 8s deadline" shape kept one DOM walk per frame
- * running for the entire boot window — exactly when the chamber mounts every
+ * Frame-tight (rAF) retry budget for a restore chain. The chain must park a
+ * cold-booted shell within a frame of its
+ * container mounting (the skeleton→content reveal cannot beat it), but a chain
+ * that keeps one DOM walk per frame
+ * running for the entire boot window runs exactly when the chamber mounts every
  * source's shell and JSC is compiling at its busiest. After this budget the
  * chain drops to the {@link RETRY_MS} timer cadence (12x fewer attempts per
  * second), which measures the same settled content the REFINE phase wants.
@@ -99,10 +99,9 @@ function findScrollContainer(instanceId: string): HTMLElement | null {
 
 function findRow(container: HTMLElement, id: string): HTMLElement | null {
   // Row ids contain `/` and other non-selector-safe chars, so the attribute
-  // value must be escaped. A single lookup replaces the previous full scan
-  // (2026-09 renderer-crash round: that scan ran on every 80ms retry of a
-  // cold-boot chain, and the per-frame retry below is the hot shape JSC was
-  // OSR-compiling when the WebContent process died). `CSS.escape` is optional
+  // value must be escaped. A single lookup avoids a full scan on
+  // every 80ms retry of a cold-boot chain — a per-frame scan is the hot shape
+  // JSC compiles while the boot window is at its busiest. `CSS.escape` is optional
   // because the module also runs in minimal DOM harnesses — the scan stays as
   // the fallback and keeps identical semantics (first match, dataset compare).
   if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') {
@@ -132,7 +131,7 @@ export function captureSidebarScrollAnchor(instanceId: string): SidebarScrollAnc
   // First row (document order) whose bottom reaches the visible top — the
   // topmost visible row (fully scrolled-past rows have bottom < visibleTop).
   for (const row of container.querySelectorAll<HTMLElement>(ROW_SELECTOR)) {
-    // chamber (third-wave review, W1#1/R2-1#1/R2-5#5): skip GHOST rows
+    // chamber: skip GHOST rows
     // (data-chamber-ghost — the departed blank "New Session" slot kept as a
     // visibility:hidden layout placeholder during the 450ms grace). They
     // carry data-chamber-row and full layout geometry, but only the ARMING
@@ -152,7 +151,7 @@ export function captureSidebarScrollAnchor(instanceId: string): SidebarScrollAnc
 }
 
 /**
- * Monotonic generation counter (chamber third-wave, W1#2): rapid A→B→A→B
+ * Monotonic generation counter: rapid A→B→A→B
  * view switches can otherwise run several bounded 8s retry chains
  * concurrently against the same container. Each `restoreSidebarScroll` call
  * bumps the generation and captures it; every attempt of a superseded chain
@@ -224,8 +223,7 @@ export function restoreSidebarScroll(instanceId: string, anchor: SidebarScrollAn
   // active-source-only blank "New Session" row drops out), and the incoming
   // sidebar re-renders that change in its own root; rects read before that
   // re-render lands would compute a target one row off and stick (the chain
-  // applies once and stops). The old pre-flicker-fix code also refined at
-  // this cadence, so the sub-row correction timing is unchanged.
+  // applies once and stops).
   const timerRetry = (): void => {
     window.setTimeout(attempt, RETRY_MS)
   }

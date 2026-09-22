@@ -1,6 +1,6 @@
 /**
- * Unit tests for the pnpm single-source contract (P2-14) and the static-gate
- * parity contract (P1-1). Both are the "one declared source + mirrors" shape:
+ * Unit tests for the pnpm single-source contract and the static-gate
+ * parity contract. Both are the "one declared source + mirrors" shape:
  * a silent divergence is the failure mode, so every case below pins a drift as
  * a finding (and the real repository as finding-free).
  */

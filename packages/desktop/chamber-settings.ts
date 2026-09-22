@@ -57,10 +57,10 @@ export interface ChamberSettings {
   launchAtLogin: boolean
   /** prevent-app-suspension (design 14 D5); default off. */
   keepAwake: boolean
-  /** Quit confirmation (design 14 D2, 2026-08 修订): confirm before quitting
+  /** Quit confirmation (design 14 D2): confirm before quitting
    *  while the LOCAL dsh instance is running; remote tunnels never prompt. */
   quitConfirmation: boolean
-  /** VS Code open-in window policy (design 16 §3.3 / 20 §4.3, 2026-12):
+  /** VS Code open-in window policy (design 16 §3.3 / 20 §4.3):
    *  true (default) → session folders open in a NEW VS Code window — the
    *  vscode:// URL gains `?windowId=_blank`, which VS Code's main process
    *  honors before its own reuse decision (a folder already open in some
@@ -135,7 +135,7 @@ const SETTINGS_KEYS: ReadonlyArray<keyof ChamberSettings> = [
 /** Normalize a registry origin (design 18 M4): a valid https:// URL with no
  *  userinfo, reduced to scheme://host (no path/query/hash, no trailing slash).
  *  Returns null for anything else — the registry origin is a trust anchor, so
- *  invalid input is never silently accepted. P-12: the accept/reject decision
+ *  invalid input is never silently accepted. The accept/reject decision
  *  is the strict isAllowedRegistryOrigin predicate (shape-for-shape with the
  *  Swift leg); WHATWG parsing only canonicalizes the accepted value. */
 function normalizeRegistryOrigin(raw: unknown): string | null {
@@ -154,11 +154,11 @@ function normalizeRegistryOrigin(raw: unknown): string | null {
   return url.origin;
 }
 
-/** P-12: settings-file size bound, mirroring Swift StartupSettings (1 << 20).
+/** Settings-file size bound, mirroring Swift StartupSettings (1 << 20).
  *  An oversized document is corruption, never a truncated read. */
 export const MAX_SETTINGS_FILE_BYTES = 1 << 20;
 
-/** P-12: encoding discipline mirroring Swift StartupSettings.hasRejectedEncoding.
+/** Encoding discipline mirroring Swift StartupSettings.hasRejectedEncoding.
  *  JSON.parse only accepts UTF-8 text: a UTF-8 BOM (U+FEFF) or a raw NUL byte
  *  (which is what a UTF-16/UTF-32 document decodes to under a UTF-8 read) is
  *  corruption. JSON.parse would reject most of these too, but the verdict must
@@ -203,7 +203,7 @@ function decodeJsonEscapes(raw: string): string {
   return out;
 }
 
-/** P-12: duplicate JSON keys at ANY nesting level are corruption. JSON.parse
+/** Duplicate JSON keys at ANY nesting level are corruption. JSON.parse
  *  keeps the LAST occurrence while Swift JSONSerialization keeps the FIRST —
  *  the same byte stream would otherwise yield opposite settings, so both
  *  flavors must refuse it (mirrors Swift hasDuplicateJSONKeys, including the
@@ -268,7 +268,7 @@ function normalizeDotSegments(pathValue: string): string {
   return segments.join('/');
 }
 
-/** P-12: non-ASCII host scalars UTS46/bidi/private-use rules (mirror of Swift
+/** Non-ASCII host scalars UTS46/bidi/private-use rules (mirror of Swift
  *  StartupSettings.isForbiddenNonAsciiHostScalar): all non-ASCII digits, RTL
  *  script blocks, private-use areas and the few UTS46-forbidden letters are
  *  rejected fail-closed. */
@@ -284,7 +284,7 @@ function isForbiddenNonAsciiHostScalar(value: number): boolean {
   return /\p{N}/u.test(String.fromCodePoint(value));
 }
 
-/** P-12: strict registry-origin shape check, shape-for-shape with Swift
+/** Strict registry-origin shape check, shape-for-shape with Swift
  *  StartupSettings.isAllowedRegistryOrigin. WHATWG URL parsing alone is laxer
  *  in exactly the ways the Swift leg judges corrupt (IPv6 literals, IDN
  *  normalization hiding forbidden scalars, empty/leading-'+'/out-of-range
@@ -409,7 +409,7 @@ export function normalizeSettings(input: unknown): ChamberSettings {
 
 /** Whether the persisted file's key set is well-formed (unknown keys are a
  *  forward-compat concern, not corruption — tolerate them). The nested
- *  `notifications` sub-block is part of the file's SHAPE (review 2026-08):
+ *  `notifications` sub-block is part of the file's SHAPE:
  *  a scalar/array/wrongly-typed sub-block is corruption, never a silent
  *  fall-back to defaults — the same corrupt-preserve discipline as
  *  registryOrigin (a wrongly-shaped trust-relevant value must not be
@@ -454,12 +454,12 @@ function isValidSettingsFile(input: unknown): input is Record<string, unknown> {
   return true;
 }
 
-/** S-41: the read outcome the callers need in order to decide whether a
+/** The read outcome the callers need in order to decide whether a
  *  side effect (the login item) may be touched. Swift's
  *  `StartupSettings.readValidatedData` returns the same three-way verdict.
  *
- *  S-41 follow-up (2026-12 adversarial verification): `corrupt` also covers the
- *  launches AFTER the preservation. `preserveCorrupt` renames the unreadable
+ *  `corrupt` also covers the launches AFTER the preservation.
+ *  `preserveCorrupt` renames the unreadable
  *  file to `*.corrupt`, so the next launch sees a MISSING live path plus its
  *  durable corrupt evidence — reading that as `missing` would replay the
  *  default `launchAtLogin:false` and silently unregister the login item one
@@ -472,7 +472,7 @@ export type SettingsFileState = 'missing' | 'ok' | 'corrupt';
  * as `*.corrupt` (reversible, never silently faked as defaults) and return
  * defaults with a loud `notice` for the caller to log.
  *
- * `state` (S-41) tells the caller WHICH of those happened: a corrupt file may
+ * `state` tells the caller WHICH of those happened: a corrupt file may
  * surface default VALUES for the UI, but it must never be treated as a user
  * instruction to change an OS-level side effect (the login item). A missing
  * live file whose `*.corrupt` sibling exists is the launch AFTER a
@@ -482,8 +482,8 @@ export type SettingsFileState = 'missing' | 'ok' | 'corrupt';
 export function readSettingsFile(
   filePath: string,
 ): { settings: ChamberSettings; notice: string | null; state: SettingsFileState } {
-  // One-time crash-residue sweep (2a follow-up): the pre-2a write path's
-  // FIXED `${filePath}.tmp` residue (see removeLegacyTmpResidue), swept at
+  // One-time crash-residue sweep: the legacy write path's FIXED
+  // `${filePath}.tmp` residue (see removeLegacyTmpResidue), swept at
   // the startup load.
   removeLegacyTmpResidue(filePath);
   let raw: string;
@@ -500,7 +500,7 @@ export function readSettingsFile(
     raw = readPrivateFileNoFollow(filePath, { tightenMode: 0o600, maxBytes: MAX_SETTINGS_FILE_BYTES }).value;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      // S-41 follow-up: the live file is gone, but a preserved `*.corrupt`
+      // The live file is gone, but a preserved `*.corrupt`
       // sibling proves the settings were unreadable (this reader renamed the
       // file on the previous launch). Keep the state indeterminate instead of
       // decaying to `missing` — whose default would replay as a silent OS
@@ -519,7 +519,7 @@ export function readSettingsFile(
     return { settings: { ...DEFAULT_CHAMBER_SETTINGS }, notice, state: 'corrupt' };
   }
   try {
-    // P-12（双 flavor 严格度对齐）：Swift StartupSettings 判损坏的形态在共享
+    // 双 flavor 严格度对齐：Swift StartupSettings 判损坏的形态在共享
     // 读取器上同样成立——编码（BOM/裸 NUL）、任意层级的重复 JSON 键（JSON.parse
     // 取最后一个而 JSONSerialization 取第一个：同一字节流会得到相反结论）与
     // 大小上限（readPrivateFileNoFollow 的 maxBytes 拒绝而非截断）。registryOrigin
@@ -547,7 +547,7 @@ export function writeSettingsFile(filePath: string, settings: ChamberSettings): 
   atomicWritePrivateFileNoFollow(filePath, `${JSON.stringify(settings, null, 2)}\n`, { mode: 0o600 });
 }
 
-/** S-41 follow-up: does the preserved `*.corrupt` evidence sibling exist?
+/** Does the preserved `*.corrupt` evidence sibling exist?
  *  Any directory entry counts (even a symlink) — lstatSync never follows it,
  *  matching the no-follow discipline of the read path. */
 function corruptSiblingExists(filePath: string): boolean {
@@ -560,8 +560,8 @@ function corruptSiblingExists(filePath: string): boolean {
 }
 
 function preserveCorrupt(filePath: string): void {
-  // The rename itself is single-sourced in store-file-hygiene.preserveFileAside
-  // (2026-12 stage-2); only the failure wording stays store-specific.
+  // The rename itself is single-sourced in store-file-hygiene.preserveFileAside;
+  // only the failure wording stays store-specific.
   const result = preserveFileAside(filePath, '.corrupt');
   if (!result.ok) console.error(`[chamber-settings] 保留损坏设置文件失败：`, result.error);
 }
@@ -593,30 +593,28 @@ export function computeSupported(
   };
 }
 
-/** S-08: the three outcomes a main-window `close` request can resolve to
+/** The three outcomes a main-window `close` request can resolve to
  *  before the quit gate runs. `defer-quit` keeps the window alive while the
  *  quit decision is pending — the window is ONLY destroyed after the decision
  *  confirmed the exit. */
 export type MainWindowCloseAction = 'hide' | 'defer-quit' | 'close';
 
 /**
- * S-08 (2026-12 macOS audit): route a main-window close request.
+ * Route a main-window close request.
  *
- * The defect: with close-behavior='quit', Electron used to let the window be
- * destroyed first (`window-all-closed` → `app.quit()`) and only THEN ask for
- * the quit decision in `before-quit`. Cancelling the dialog therefore had no
- * window left to restore and rebuilt it via `loadURL` — a full page reload,
- * i.e. lost renderer state. The Swift flavor never destroys the window there:
- * it turns the close into `NSApp.terminate`, and cancelling just
- * `restoreMainWindow()`s the still-living window (AppDelegate.swift:580-617,
- * 642-646).
+ * A close that would end in a quit is `defer-quit` — the caller preventDefaults
+ * it and asks `app.quit()` with the window alive. Destroying the window first
+ * (`window-all-closed` → `app.quit()`) and only THEN asking for the quit
+ * decision in `before-quit` would leave no window to restore when the dialog is
+ * cancelled, and the rebuild via `loadURL` is a full page reload, i.e. lost
+ * renderer state. The Swift flavor keeps the window alive there: it turns the
+ * close into `NSApp.terminate`, and cancelling just `restoreMainWindow()`s the
+ * still-living window (AppDelegate.swift:580-617, 642-646).
  *
- * The fix is this decision: a close that would end in a quit is `defer-quit`
- * (the caller preventDefaults it and asks `app.quit()` with the window
- * alive); only an already-confirmed quit or the updater's own window teardown
- * may actually `close`. The hide-to-tray branch is unchanged
- * (`shouldHideToTray`). No JSON source of truth is involved: the flags are the
- * live quit state machine.
+ * Only an already-confirmed quit or the updater's own window teardown may
+ * actually `close`. The hide-to-tray branch is handled by `shouldHideToTray`.
+ * No JSON source of truth is involved: the flags are the live quit state
+ * machine.
  *
  * @param behavior - chamber setting: 'hide-to-tray' | 'quit'.
  * @param recoveryAvailable - tray on win/linux; the macOS Dock always recovers.
@@ -641,16 +639,16 @@ export function decideMainWindowClose(input: {
 }
 
 /**
- * S-41: does the startup login-item reconcile touch the OS login item?
+ * Does the startup login-item reconcile touch the OS login item?
  *
  * Swift's `StartupSettings.readLaunchAtLogin` returns nil for a corrupt file
  * and AppDelegate then does NOT apply anything (AppDelegate.swift:402-420);
  * a missing file or a valid file without the key replays `false` — the same
- * as Electron's default settings. Electron used to fall back to defaults for
- * a corrupt file and replay `launchAtLogin:false` anyway, which silently
- * UNREGISTERS the user's login item; both flavors must now treat a corrupt
- * file as "settings unreadable → do not touch the login item". The loud
- * corrupt-file handling (*.corrupt preservation + notice) is unchanged.
+ * as Electron's default settings. Both flavors must treat a corrupt file as
+ * "settings unreadable → do not touch the login item": replaying
+ * `launchAtLogin:false` for a corrupt file would silently UNREGISTER the
+ * user's login item. The loud corrupt-file handling (*.corrupt preservation +
+ * notice) is unchanged.
  */
 export function launchAtLoginReconcileDecision(
   state: SettingsFileState,
@@ -660,7 +658,7 @@ export function launchAtLoginReconcileDecision(
   return { action: 'apply', enabled: launchAtLogin };
 }
 
-/** P-20: the subset of Electron's LoginItemSettings the read-back validates
+/** The subset of Electron's LoginItemSettings the read-back validates
  *  (structural so the decision is testable without electron). */
 export interface LoginItemSettingsReadBack {
   openAtLogin?: unknown
@@ -669,12 +667,12 @@ export interface LoginItemSettingsReadBack {
 }
 
 /**
- * P-20: judge the state the OS reports AFTER `setLoginItemSettings`.
+ * Judge the state the OS reports AFTER `setLoginItemSettings`.
  *
- * The defect: Electron returned `{ok:true}` unconditionally, so an OS that
- * silently refused (or parked the item behind a user approval) still looked
- * applied — while Swift's SMAppService leg pre-checks its status and fails
- * loudly. This predicate is that honest read-back:
+ * An unconditional `{ok:true}` would let an OS that silently refused (or
+ * parked the item behind a user approval) look applied — Swift's SMAppService
+ * leg pre-checks its status and fails loudly instead. This predicate is that
+ * honest read-back:
  *  - a missing/non-boolean `openAtLogin` is a failed read, never a pass;
  *  - a state that does not match the request is a failure with both values;
  *  - on macOS, an item macOS still holds at 'requires-approval' (System
@@ -713,15 +711,14 @@ export function verifyLaunchAtLoginReadBack(
  * macOS), and no real quit is in flight. Never hide a window the user could
  * not get back to.
  *
- * `updateRestartArmed` (2026-12): the「重启并安装」leg has armed
+ * `updateRestartArmed`: the「重启并安装」leg has armed
  * electron-updater's `quitAndInstall()` and the updater itself is closing the
  * windows on its way out. That close MUST reach the window manager: on macOS
  * Electron's `quitAndInstall()` closes every window FIRST and only quits after
  * all of them are closed (`before-quit` therefore runs AFTER this close — the
- * Electron 43.4.0 typings say so verbatim, and a real-machine probe on
- * 43.4.0/darwin confirmed the `autoUpdater` `before-quit-for-update` event and
- * the window `close` both arrive inside the `quitAndInstall()` call, before it
- * returns and long before `before-quit`). A close swallowed here (hidden
+ * `autoUpdater` `before-quit-for-update` event and the window `close` both
+ * arrive inside the `quitAndInstall()` call, before it returns and long before
+ * `before-quit`). A close swallowed here (hidden
  * instead of closed) therefore aborts the whole install/relaunch chain: the
  * page disappears, the process — with its local dsh child and SSH tunnels —
  * stays alive forever, and the update never installs. While an update restart
@@ -738,10 +735,10 @@ export function shouldHideToTray(
 
 /**
  * Whether the host must take the update quit over once the native leg's grace
- * expired (2026-12 fix, `armNativeUpdaterQuit`).
+ * expired (`armNativeUpdaterQuit`).
  *
- * macOS's native `quitAndInstall()` closes every window and then, on the
- * observed build, stops without reaching `app.quit()` — the process would sit
+ * macOS's native `quitAndInstall()` closes every window and then stops
+ * without reaching `app.quit()` — the process would sit
  * there windowless with the update staged. The host therefore arms a bounded
  * fallback when the native `before-quit-for-update` arrives; this predicate is
  * its decision, kept pure so the three guards are testable instead of asserted
@@ -770,9 +767,9 @@ export function shouldUpdaterQuitTakeOver(
 }
 
 /**
- * Quit-risk projection (design 14 D2, 2026-08 修订): confirm before quitting
- * only while the LOCAL dsh instance is running (remote tunnels never prompt —
- * user decision) — EXCEPT when the user turned the confirmation off, or a
+ * Quit-risk projection (design 14 D2): confirm before quitting
+ * only while the LOCAL dsh instance is running (remote tunnels never prompt)
+ * — EXCEPT when the user turned the confirmation off, or a
  * downloaded update is ready to install on quit (design 11
  * autoInstallOnAppQuit: the user already confirmed「更新」and was told「退出时
  * 安装」— never block it with a second dialog).

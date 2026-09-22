@@ -44,7 +44,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /** Stable text for an IPC rejection — the hostile-value projection is the sidebar's
- *  shared `describeThrown` (single source, 2026-12 M2/ARCH-IMPL-029): error formatting
+ *  shared `describeThrown` (single source): error formatting
  *  is itself an exception boundary, so hostile getters/proxies/toString values must
  *  never turn a catch handler into a new unhandled rejection. The open-in domain keeps
  *  its own call-site name; the implementation lives in exactly one place. */
@@ -152,7 +152,7 @@ export function buildOpenInLaunchRequest(
 
 /**
  * Source-aware capability filter kept pure for deterministic client tests.
- * Since Batch 3 Phase 0 this delegates to the per-source view-model
+ * This delegates to the per-source view-model
  * (`open-in-view-model.ts`): this helper folds the main-process pool only (the
  * instance-hosted local pool is supplied by the adapter, not here), so the
  * main pool decides — the returned apps are the input objects in view-model

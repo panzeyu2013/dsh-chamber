@@ -1,10 +1,10 @@
 /**
  * binding-parts.ts — the decorator-free, this-free layer of the archiveCleanup
- * host binding (B5 split): the structural views of the official ctx services,
+ * host binding: the structural views of the official ctx services,
  * the header/filename shape checks, the fail-closed liveness reader and the
  * registry-surface guard. binding.ts keeps the factory (content deletion +
  * archived-set writes) and the single-flight gate, and re-exports the public
- * names so the package/test import surface is unchanged.
+ * names so the package/test import surface stays stable.
  */
 
 import { ArchiveCleanupError, type ArchivedSessionState } from './core.ts'
@@ -43,7 +43,7 @@ export interface RegistryLike {
   setState?(state: RegistryDomainState): Promise<unknown>
   /** Official per-instance mutation chain (private in the pinned tree but
    *  runtime-guarded; running inside it serializes against every registry
-   *  write and its pendingMutation recovery — review Major-3). */
+   *  write and its pendingMutation recovery). */
   enqueueOperation?<T>(operation: () => Promise<T>): Promise<T>
 }
 
@@ -55,8 +55,8 @@ export interface HostCtxServices {
   readonly sessionPersistence?: {
     list?(signal?: unknown): Promise<readonly SessionHeaderLike[]>
     locate?(header: SessionHeaderLike): { kind?: string; path?: string } | undefined
-    /** Official single-session observation (`SessionPersistence.stat(id)`,
-     *  dsh >= 0.1.3-alpha.1): resolves the session across every project
+    /** Official single-session observation (`SessionPersistence.stat(id)`):
+     *  resolves the session across every project
      *  directory and every immutable format generation, and answers
      *  `undefined` when it does not exist — the sweep's DECISIVE
      *  content-existence probe. Optional in this structural view so a
@@ -66,7 +66,7 @@ export interface HostCtxServices {
   }
 }
 
-/** One official session header runtime shape check (review follow-up F3):
+/** One official session header runtime shape check:
  *  every binding cascade keys on these fields through STRUCTURAL types — a
  *  vendor rename/retype (cwd/parentSession/origin) must fail the read LOUDLY
  *  with `registry-unreadable` (naming the session and field), never silently
@@ -105,7 +105,7 @@ export const LEASE_FILENAME = 'session.lock'
  * non-canonical). Without the upper bound the whitelist would call
  * `session.v99999999999999999999.jsonl` removable while the vendor calls it
  * non-canonical — the opposite of the fail-closed direction the surrounding
- * refusal relies on (2026-09 二轮 W1 N13).
+ * refusal relies on.
  */
 export function isCanonicalVersion(version: string | undefined): boolean {
   return version === undefined || Number.isSafeInteger(Number(version))
@@ -142,8 +142,6 @@ export function isGenerationTempFilename(name: string): boolean {
  * `randomBytes(8).toString('hex')`), so an interrupted migration leaves one
  * behind. It holds this session's own content (the migrated log), so the purge
  * removes it with the rest; anything else still refuses the whole operation.
- * 2026-09 二轮 (W2 F5): without this recognition a crashed migration made the
- * session permanently unpurgeable (fail-closed refusal).
  */
 export function isMigrationTempFilename(name: string): boolean {
   return /^session\.migration\.[0-9a-f]{16}\.jsonl(?:\.zstd)?\.tmp$/.test(name)
@@ -152,7 +150,7 @@ export function isMigrationTempFilename(name: string): boolean {
 /* Binding implementation (design 24 §10: branch b, verified).     */
 
 export function headerToState(header: SessionHeaderLike): ArchivedSessionState {
-  // F3: standalone-entry shape guard — a drifted header must throw here too
+  // Standalone-entry shape guard — a drifted header must throw here too
   // (listHeaders validates the raw intake; this keeps headerToState itself a
   // loud boundary for any direct consumer).
   assertHeaderShape(header)
@@ -167,8 +165,8 @@ export function headerToState(header: SessionHeaderLike): ArchivedSessionState {
 }
 
 /**
- * Zero-IO structural surface check (impl-review Minor-6 + merge-round
- * Minor-3): the activation probe uses this so a mounted-but-corrupt/missing
+ * Zero-IO structural surface check: the activation probe uses this so a
+ * mounted-but-corrupt/missing
  * registry OR enumeration/storage surface fails the activation loudly
  * instead of passing presence while the first preview/purge later
  * registry-unreadables/storages. Mirrors requireRegistry's checks; throws
@@ -190,7 +188,7 @@ export function assertHostSurface(ctx: HostCtxServices): void {
   requireRegistrySurface(ctx.workspaceRegistry)
   // The liveness faces are load-bearing for the deletion guard: a
   // mounted-but-methodless agents/sessions surface makes every later live read
-  // refuse (or, before the 2026-13 review, silently read as idle), so the
+  // refuse (or silently read as idle), so the
   // activation probe must fail HERE rather than at the first purge.
   if (typeof ctx.agents?.list !== 'function' || typeof ctx.sessions?.list !== 'function') {
     throw new ArchiveCleanupError(
@@ -198,8 +196,8 @@ export function assertHostSurface(ctx: HostCtxServices): void {
       'archiveCleanup: the agents/sessions liveness surface is not mounted with list()',
     )
   }
-  // Merge-round Minor-3: surface health of the enumeration + storage legs
-  // too — a host whose registry is intact but whose session enumeration or
+  // Surface health of the enumeration + storage legs too — a host whose
+  // registry is intact but whose session enumeration or
   // locate surface is missing must not pass the probe. Zero-IO structural
   // checks only (no list call).
   const query = ctx.sessionQuery
@@ -217,13 +215,13 @@ export function assertHostSurface(ctx: HostCtxServices): void {
   }
 }
 
-/** Live-session facts (agents ∪ live store), split by WHY a session is live
- *  (2026-09 revision): `running` = the agent is executing a turn (never
+/** Live-session facts (agents ∪ live store), split by WHY a session is live:
+ *  `running` = the agent is executing a turn (never
  *  deletable); `loaded` = attached but idle (deletable only under `force`).
  *  A drifted agent status fails the read loudly instead of silently
  *  reclassifying a running agent as idle.
  *
- *  FAIL-CLOSED DRIFT POLICY (2026-13 review, extended to the live-store leg):
+ *  FAIL-CLOSED DRIFT POLICY (extended to the live-store leg):
  *  the same argument applies to `sessions.list()` — it is the LIVE LEG of the
  *  official session corpus (`SessionCorpus.listSessions` merges it with the
  *  durable scan), so an entry this read silently DROPS would (a) stop counting
@@ -235,11 +233,10 @@ export function assertHostSurface(ctx: HostCtxServices): void {
 export function liveSessionFacts(ctx: HostCtxServices): { running: Set<string>; loaded: Set<string> } {
   const running = new Set<string>()
   const loaded = new Set<string>()
-  // Surface presence is part of the fail-closed policy (2026-13 review): the
-  // old `?.list?.() ?? []` degraded a mounted-but-methodless face to "nobody is
-  // live", silently removing BOTH the running/loaded guard and the residency
-  // report — fail-open on the destructive path. A missing face refuses exactly
-  // like a drifted entry shape.
+  // Surface presence is part of the fail-closed policy: degrading a
+  // mounted-but-methodless face to "nobody is live" would silently remove BOTH
+  // the running/loaded guard and the residency report — fail-open on the
+  // destructive path. A missing face refuses exactly like a drifted entry shape.
   const listAgents = ctx.agents?.list
   if (typeof listAgents !== 'function') {
     throw new ArchiveCleanupError(

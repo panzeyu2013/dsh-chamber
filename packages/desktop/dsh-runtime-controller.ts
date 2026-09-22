@@ -1,6 +1,6 @@
 /**
  * dsh runtime controller (design 18 §3.5/§3.6/§5) — main-process orchestration
- * over the M2 data plane: check (registry metadata → version list), install
+ * over the data plane: check (registry metadata → version list), install
  * (version-exists gate + no-op gate + single-flight → runtime installer →
  * override.pending). Reset is intentionally not executed here: main owns the
  * snapshot/journal/stop/probe transaction and this controller must never
@@ -103,8 +103,8 @@ export interface RuntimeState {
   runtimeBlockedReason?: string | null
   swapAttempted?: boolean
   failure?: RuntimeFailure | null
-  /** Durable F4 notice; remains visible even if the old user tree was
-   * automatically reactivated after the bundled compatibility probe failed. */
+  /** Durable notice; remains visible even when a bundled compatibility-probe
+   *  failure automatically reactivates the old user tree. */
   invalidationNotice?: RuntimeInvalidationNotice | null
   /** On-demand disk accounting; category fields keep per-path sums (a hard
    * link may be charged to both categories) while totalBytes is the real
@@ -125,7 +125,7 @@ export interface RuntimeState {
   metadataComponents?: RuntimeMetadataComponent[]
   /** Explicit privileged capability. Renderer input can never set this bit. */
   canRecoverMetadata?: boolean
-  /** Live install progress (design 18 M4 bar): download bytes + stage
+  /** Live install progress (design 18): download bytes + stage
    * milestones while an install runs; null when idle. */
   progress?: RuntimeInstallProgress | null
 }
@@ -174,9 +174,8 @@ export interface ControllerDeps {
     recordFailure?: (baseDir: string, failure: RuntimeFailure) => void
     recordExplicitInstall?: (baseDir: string, version: string) => void
     /** Full logical accounting used to fail closed before a fresh download.
-     *  perf T3（2026-09）：异步单遍遍历（runtimeDiskSummaryAsync）——大
-     *  store 下同步全树遍历会冻结主进程，安装闸口等同一段墙钟时间但进程
-     *  保持响应。 */
+     *  异步单遍遍历（runtimeDiskSummaryAsync）——大 store 下同步全树遍历会
+     *  冻结主进程，安装闸口等同一段墙钟时间但进程保持响应。 */
     runtimeDiskSummary?: (baseDir: string) => Promise<RuntimeDiskSummary>
     /** Persist the activation intent before override.pending is published. */
     writeActivationIntent: (baseDir: string, input: ActivationIntentInput) => void
@@ -313,7 +312,7 @@ export class DshRuntimeController {
     }
   }
 
-  /** Throttled progress projection (design 18 M4 bar): per-chunk download
+  /** Throttled progress projection (design 18): per-chunk download
    * bytes would otherwise flood the renderer push. Stage transitions and
    * the terminal 'done' always emit; byte ticks emit at most every 150ms. */
   private lastProgressEmit = 0
@@ -347,7 +346,7 @@ export class DshRuntimeController {
         ? 'user'
         : 'bundled'
     const cachedVersions = this.cachedVersions()
-    // F11 offline cached rollback: no registry metadata → list the local trees.
+    // Offline cached rollback: no registry metadata → list the local trees.
     const versions = this.lastMeta === null
       ? buildCachedVersionList(cachedVersions, active)
       : buildVersionList(this.lastMeta, {
@@ -469,7 +468,7 @@ export class DshRuntimeController {
     const active = this.activeVersion()
     // No-op guard: choosing the already-active version is a no-op (§3.6).
     if (isNoopSelection(version, active)) return this.getState()
-    // F11 offline cached rollback: a locally-cached tree skips the registry
+    // Offline cached rollback: a locally-cached tree skips the registry
     // existence gate (and the fresh install) — switching to it is a pointer
     // swap at next startup, already installed.
     this.refreshMetadataOrigin()

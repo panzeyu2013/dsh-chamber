@@ -44,26 +44,26 @@ test('the askpass helper answers host-key prompts with yes and password prompts 
     assert.equal(password.stdout, "s3cr't\n", 'password prompt answers the stored password (line-terminated)')
     const passphrase = spawnSync(path, ["Enter passphrase for key '/Users/x/.ssh/id_ed25519':"], { encoding: 'utf8' })
     assert.equal(passphrase.stdout, "s3cr't\n", 'key passphrase prompts reuse the stored password')
-    // 2026-11 review: "Password for <user>:" (no colon right after "password")
+    // "Password for <user>:" (no colon right after "password")
     // is a REAL password prompt and must receive the password.
     const passwordFor = spawnSync(path, ['Password for user@h.example.com:'], { encoding: 'utf8' })
     assert.equal(passwordFor.stdout, "s3cr't\n", 'Password for <user>: prompts answer the stored password')
-    // Fail-closed (2026-11): a prompt that is NOT provably a host-key or
+    // Fail-closed: a prompt that is NOT provably a host-key or
     // password prompt (OTP/verification code, password change) gets NO
     // answer — the stored password must never leave the helper for it.
     const otp = spawnSync(path, ['Verification code:'], { encoding: 'utf8' })
     assert.equal(otp.status, 0)
     assert.equal(otp.stdout, '', 'fail-closed: a non-credential prompt receives no answer')
     assert.ok(!otp.stdout.includes("s3cr't"), 'fail-closed: the password never reaches an OTP prompt')
-    // 2026-11 review hardening: OTP wording that ALSO contains "assword:"
+    // OTP wording that ALSO contains "assword:"
     // must still fail closed (explicit exclusion branch, not the password one).
     const otpWording = spawnSync(path, ['One-time password:'], { encoding: 'utf8' })
     assert.equal(otpWording.stdout, '', 'fail-closed: "One-time password:" receives no answer')
     const change = spawnSync(path, ['Enter new password:'], { encoding: 'utf8' })
     assert.equal(change.stdout, '', 'fail-closed: a password-change prompt receives no answer')
-    // 2026-11 round-2: the prompt is normalized to lowercase before matching,
-    // so ANY casing variant behaves identically (the pre-normalization
-    // version leaked the password for "One-time Password:").
+    // The prompt is normalized to lowercase before matching, so ANY casing
+    // variant behaves identically (an unnormalized match would leak the
+    // password for "One-time Password:").
     const mixedCase = spawnSync(path, ['One-time Password:'], { encoding: 'utf8' })
     assert.equal(mixedCase.stdout, '', 'fail-closed: "One-time Password:" (mixed case) receives no answer')
     const upperCase = spawnSync(path, ['ONE-TIME PASSWORD:'], { encoding: 'utf8' })
@@ -209,8 +209,8 @@ test('dispose/purge never delete a helper before its child lease releases', () =
   }
 })
 test('more than five concurrent askpass generations stay alive and clean up by child lifecycle', () => {
-  // Regression: the old fixed cap deleted the tunnel helper once enough
-  // concurrent systemd/run children created newer generations.
+  // A fixed cap would delete the tunnel helper once enough concurrent
+  // systemd/run children create newer generations.
   const owner = spec('t-env-4')
   setSshPassword(owner, 'pw')
   const leases: NonNullable<ReturnType<typeof acquireSshAuthLease>>[] = []

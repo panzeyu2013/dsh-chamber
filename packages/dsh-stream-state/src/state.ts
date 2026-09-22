@@ -1,5 +1,5 @@
 /**
- * The public value surface of the lifecycle reducers (refactor plan section 2).
+ * The public value surface of the lifecycle reducers.
  *
  * Everything here is a plain data type. There are deliberately NO functions in
  * this file: the reducers are the only authority, and consumers (the carrier
@@ -8,13 +8,12 @@
  */
 
 /** Physical carrier phase. `silent` is "WebSocket OPEN but nothing arrives" -
- * the state that neither `open` nor `closed` can express and that the whole
- * 2026-09 investigation revolved around. */
+ * the state that neither `open` nor `closed` can express. */
 export type CarrierPhase = 'connecting' | 'open' | 'silent' | 'replacing' | 'closed'
 
 /** Why a physical carrier rebuild was requested. At most ONE reason may be
  * stored at a time, which is what makes the "single owner" claim checkable:
- * three call sites used to be able to replace the same socket in one window. */
+ * only one call site may replace the same socket in one window. */
 export type RebuildReason =
   | 'socketNoFrame'      // opening deadline expired with zero frames on this socket
   | 'openingStall'       // same request unanswered twice (cooldown-guarded)
@@ -58,8 +57,8 @@ export interface CarrierEvent {
   /** Which logical stream this event is about. For the per-stream events it is
    * the stream being framed/closed; for a `rebuildRequested` it is the stream
    * that is asking, which is what lets a DENIED rebuild still produce an exit
-   * (the effect is a reopen of THIS stream - exactly what the legacy retry lane
-   * did by failing the inbox, and what keeps the chain from parking in silence).
+   * (the effect is a reopen of THIS stream, which keeps the chain from
+   * parking in silence).
    *
    * Declared `| undefined` (not merely optional) because call sites legitimately
    * forward an optional value under `exactOptionalPropertyTypes`; the reducer treats
@@ -67,15 +66,15 @@ export interface CarrierEvent {
   readonly streamId?: string | undefined
   /** For a `rebuildRequested` whose cause is an opening stall: how many
    * consecutive opening deadlines this episode has missed. The reducer enforces
-   * the threshold itself, so a call site cannot escalate on the first miss the
-   * way the legacy else-branch could. An explicit undefined is NOT proof of a
+   * the threshold itself, so a call site cannot escalate on the first miss.
+   * An explicit undefined is NOT proof of a
    * streak (see `isStallProven`). */
   readonly streak?: number | undefined
   /** Which logical-stream EPISODE owns this request. An episode is the lifetime of
    * one logical stream (open -> ... -> consumer gone). The opening budget's
    * widening belongs to it, so when the episode closes, everything it left in
-   * flight must stop blocking its successors - the legacy endpoint-digest key had
-   * no owner and outlived the stream (DIVERGENCE D-4). */
+   * flight must stop blocking its successors - an endpoint-digest key with
+   * no owner would outlive the stream (DIVERGENCE D-4). */
   readonly episodeId?: string
 }
 
@@ -102,8 +101,8 @@ export interface CarrierEnv {
   /** Minimum spacing between two allowed rebuilds. */
   readonly minRebuildSpacingMs: number
   /** In-flight rebuild grace. Mirrors the executor's reconnect latency; this
-   * divergence used to happen in production because a second call site could
-   * replace the socket while the first connect was in flight. */
+   * second call site cannot replace the socket while the first connect is in
+   * flight. */
   readonly inFlightGraceMs: number
   /** Consecutive opening-deadline misses required before an `openingStall`
    * rebuild is allowed (table: OPENING_STALL_STREAK). */

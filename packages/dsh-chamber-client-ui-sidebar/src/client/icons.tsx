@@ -1,5 +1,5 @@
 /**
- * chamber sidebar-local icon components (2026-10, user feedback): the shared
+ * chamber sidebar-local icon components: the shared
  * primitives icon set has no server/host glyph, so the source-level fold
  * toggle gets a self-drawn desktop-monitor outline here instead of the
  * workspace folder glyph (folder = workspace, monitor = server — the two
@@ -21,10 +21,10 @@ interface IconProps {
  * screen bezel ring (evenodd hole), neck and base. Drawn to match the
  * folder/branch 16px glyphs' footprint (bezel spans x 1–15 = 14/16 of the
  * viewBox, same as the folder path, so the two read the same size in the
- * shared 16px slot; sizing fix 2026-10 user feedback). The viewBox is
+ * shared 16px slot). The viewBox is
  * shifted 2px up (-2) so the screen's visual center lands on the glyph
  * center (the stand is optically light — without the shift the monitor
- * reads high next to the folder; centering fix 2026-10 user feedback).
+ * reads high next to the folder).
  */
 export const IconMonitorOutline16 = ({ size = 16, className }: IconProps) => (
   <svg width={size} height={size} className={className} viewBox="0 -2 16 16" fill="none">

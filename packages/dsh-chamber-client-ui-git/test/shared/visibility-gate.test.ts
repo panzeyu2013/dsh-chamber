@@ -1,5 +1,5 @@
 /**
- * Hidden-tab polling gate + visibility seam (P1, 2026-11) unit tests — pure
+ * Hidden-tab polling gate + visibility seam unit tests — pure
  * Node, no document, no sidebar bridge: the gate and the injectable face
  * live in the dependency-free visibility-gate.ts module on purpose (the
  * coordinator only passes the seam through; its start()/stop() wiring is

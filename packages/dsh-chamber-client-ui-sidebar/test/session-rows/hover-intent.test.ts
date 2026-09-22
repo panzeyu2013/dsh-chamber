@@ -1,11 +1,10 @@
 /**
  * hover-intent.ts unit tests (plain node:test, no dsh, no DOM, mock timers): the row hover-card
- * state machine that replaced the vendored HoverCard's timer/state pair. The defect it kills is a
- * commit race — the vendor arms its grace close against the last COMMITTED `open`, so a
- * pointerleave handled while React's commit of the dwell timer was still pending armed nothing and
- * stranded the card. The scratch probe that measured it is NOT cited as evidence; the committed
- * evidence is the cases below and the W-4b-race real-pointer leg (the source-text wiring lock was
- * removed by the 2026-12 ruling).
+ * state machine: the vendored HoverCard's timer/state pair has a
+ * commit race — it arms its grace close against the last COMMITTED `open`, so a
+ * pointerleave handled while React's commit of the dwell timer is still pending arms nothing and
+ * strands the card. The committed
+ * evidence is the cases below and the W-4b-race real-pointer leg.
  *
  * Pinned here: the dwell boundary, the fire-time pointer-inside check that cancels an open whose
  * commit is still in flight, the UNCONDITIONAL grace close, re-entry inside the grace,
@@ -172,7 +171,7 @@ test('dispose drops pending timers (StrictMode effect cleanups re-run setup)', (
 })
 
 test('custom timings are honored (the machine takes both timings as options)', () => {
-// Scope note (2026-09-13 review C7a): `openDelayMs` is an option of the
+// Scope note: `openDelayMs` is an option of the
 // machine and a documented prop of `RowHoverCard`, but NO production caller
 // passes it — both `<RowHoverCard>` sites use the official 500ms dwell. This
 // case proves the seam works; it does not claim a per-row dwell exists.
@@ -277,7 +276,7 @@ test('dismissVisibleRowCard closes whichever card holds the page slot (the hidde
   mock.timers.tick(HOVER_OPEN_DELAY_MS)
   assert.equal(h.card, true)
   // Called with NO handle: the card is portaled to document.body, so hiding
-  // the view that owns it delivers it no pointer event at all (DEFECT 3).
+  // the view that owns it delivers it no pointer event at all.
   dismissVisibleRowCard()
   assert.equal(h.card, false)
   // Same close funnel as a leave/press: exactly one transition, published.

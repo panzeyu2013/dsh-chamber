@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * verify-native-appcast.mjs —— 本版本 appcast 发布物门禁（2026-12 A2 中危，fail-closed）。
+ * verify-native-appcast.mjs —— 本版本 appcast 发布物门禁（fail-closed）。
  *
  * 为什么单独一个脚本：appcast "生成成功" 不等于客户端能看到这次更新。EdDSA 私钥
  * 已配置时，正式发布必须保证签名发布的 appcast 里真的有**本版本**的条目：
@@ -8,12 +8,12 @@
  *     写成 base 版本号或旧映射 = 永远不提示更新）；
  *   - `sparkle:shortVersionString` 必须是发布版本；
  *   - 同一条 item 的 enclosure 必须指向本版本的 zip。
- * 缺任一条即 FAIL。过去这类偏差只能靠人工核对 appcast，发布照常成功
- * （A2："发布成功但客户端永远看不到更新"）。
+ * 缺任一条即 FAIL：这类偏差若只靠人工核对 appcast，发布照常成功
+ * 而客户端永远看不到更新。
  *
- * 2026-09 增量更新（design 25 §7）追加三条可选形状门禁（缺省不改变既有语义）：
+ * design 25 §7 增量更新的三条可选形状门禁（缺省不改变既有语义）：
  *   - `--single-item`：stable feed 必须恰好 1 个 item（历史 zip 只当 delta 基线，不进 feed）；
- *   - `--expect-final-item`：feed 必须含 final 条目（S-23：beta 渠道滚动 feed 携带最新正式版）；
+ *   - `--expect-final-item`：feed 必须含 final 条目（beta 渠道滚动 feed 携带最新正式版）；
  *   - `--expect-delta-from <上一版本>`：本版本 item 必须带该旧版本 `sparkle:version` 的 delta——
  *     收件目录里放了旧归档却没产出 delta = 增量链静默退化，必须 FAIL。参数收的是 chamber 版本号
  *     （X.Y.Z 或 X.Y.Z-beta.N），经 bundleVersionFor 折成 sparkle:version，单一来源与本 .app 的
@@ -46,7 +46,7 @@ export const APPCAST_USAGE = '用法：verify-native-appcast.mjs <version> <appc
 /**
  * 用 Ed25519 公钥验证一份文件的 Sparkle `sparkle:edSignature`（签名覆盖文件字节；
  * 公钥是 32 字节原始 key 的 base64，需包成 SPKI DER 交给 node:crypto）。
- * 2026-09 二轮复核（真实 Sparkle 复现）：只断言「签名存在」不够——密钥轮换后条目会带上
+ * 只断言「签名存在」不够——密钥轮换后条目会带上
  * 一个**任何公钥都验不过**的签名，generate_appcast 既不警告也不写放弃标记。
  * @returns true/false；公钥/签名长度不合法时抛错（配置错误必须响，不许静默放行）。
  */

@@ -1,11 +1,11 @@
 /**
- * Archive-manager purge orchestration (design 24 §5, 2026-09 protection amendment):
+ * Archive-manager purge orchestration (design 24 §5):
  * the run NEVER refuses — it always stops the selection's running turns (advisory) and
  * force-purges the same roots with the session this client may be displaying in the
- * host's protected set. Regression it exists for: the retired pre-flight gate turned an
- * unknown viewed session (nothing open, masked list gap, reclaimed shell) into total
- * capability loss — the archived-but-running sessions the force path exists for stayed
- * undeletable.
+ * host's protected set. An unknown viewed session (nothing open, masked list gap,
+ * reclaimed shell) must not become total
+ * capability loss — the archived-but-running sessions the force path exists for must stay
+ * deletable.
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -107,9 +107,9 @@ test('runArchivePurge: protection skips are whatever the HOST reports (the clien
   assert.equal(run.purge.skippedProtected, 1)
 })
 
-// archivePurgeNote: dictionary keys only; no refusal copy exists anymore.
+// archivePurgeNote: dictionary keys only; no refusal copy exists.
 //
-// Flow × REAL stop pass (the seam the 2026-09 dead end lived on): the pure flow must
+// Flow × REAL stop pass: the pure flow must
 // delegate the cancel scope to `stopSessionsForPurge` and ALWAYS reach the purge,
 // whatever the lineage looks like.
 
@@ -208,9 +208,9 @@ test('archivePurgeNote: a protection-only run is never silent (the actionable fa
 })
 
 test('archivePurgeNote: a resident-retained run says the content is gone but the session still lives in the instance (design 24 §4 step 9)', () => {
-  // 2026-13: the host kept these roots archived because the instance process still serves
+  // The host keeps these roots archived because the instance process still serves
   // them; the note must say the content is gone while the session stays listed (labeled)
-  // until restart — NOT the old "force-deleted" wording, which read as if it left the list.
+  // until restart — not a "force-deleted" wording, which would read as if it left the list.
   const run = {
     roots: ['a', 'b'],
     stop: stopResult(),

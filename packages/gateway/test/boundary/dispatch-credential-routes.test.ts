@@ -1,7 +1,7 @@
 /**
  * Boundary credential routes: rotation/quiescence, change-password and
  * change-token, the credential projection and their auth/audit/body-limit
- * gates. Split from dispatch-composition.test.ts.
+ * gates.
  */
 
 import { EventEmitter } from 'node:events'
@@ -363,7 +363,7 @@ test('/chamber/plugins requires auth end-to-end (S20): 401 unauthenticated, clai
 })
 
 // ---------------------------------------------------------------------------
-// Phase 2: runtime credential management routes (/auth/change-password,
+// Runtime credential management routes (/auth/change-password,
 // /auth/change-token, /auth/credentials) — all behind the auth gate.
 // ---------------------------------------------------------------------------
 
@@ -678,7 +678,7 @@ test('unauthenticated HTML-accept requests to /auth/* answer 401 JSON, not a log
   try {
     const { dispatch } = setup(auth)
     // /auth/* is a JSON API surface: an unauthenticated browser navigation
-    // must not be silently redirected to the login page (fix round).
+    // must not be silently redirected to the login page.
     const res = await runHttp(dispatch, gatewayRequest('GET', '/auth/credentials', { accept: 'text/html' }))
     assert.equal(res.status, 401)
     assert.equal(JSON.parse(res.body).code, 'unauthorized')

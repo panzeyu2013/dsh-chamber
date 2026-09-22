@@ -50,10 +50,9 @@ test('remoteDshHome rejects traversal/empty segments and accepts safe home roots
 })
 
 test('the connections form validates with the mirrored gates and limits, never an inline copy', () => {
-  // 2026-12 audit P1-4: the component used to re-spell weaker inline regexes
-  // (the remoteDshHome one accepted /srv/../tmp, /srv//dsh and /srv/dsh/) while
-  // this module was imported by the parity test only. This lock keeps the form
-  // wired to the AUTHORITY the parity test above pins to desktop.
+  // The component must not re-spell weaker inline regexes (e.g. a remoteDshHome
+  // one that accepted /srv/../tmp, /srv//dsh and /srv/dsh/). This lock keeps the
+  // form wired to the AUTHORITY the parity test above pins to desktop.
   const source = readFileSync(new URL('../../src/client/ConnectionsSection.tsx', import.meta.url), 'utf8')
   assert.match(source, /INSTANCE_ID_PATTERN\.test\(id\)/u, 'id')
   assert.match(source, /SSH_HOST_PATTERN\.test\(host\)/u, 'host')
@@ -215,7 +214,7 @@ test('edit backfill covers all four target/transport combinations with write-onl
 })
 
 test('kind and transport changes preserve what the new combination supports and move defaulted ports', () => {
-  // dsh×http cannot exist (2026-09 disable): a kind switch INTO dsh must move
+  // dsh×http cannot exist: a kind switch INTO dsh must move
   // an http draft onto ssh — the only dsh transport.
   const httpGateway = draft({
     kind: 'gateway', transport: 'http', remotePort: '443', gatewayUrl: 'https://gw.example.com',

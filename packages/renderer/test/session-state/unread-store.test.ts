@@ -1,5 +1,5 @@
 /**
- * 未读 v2 落盘存储契约（主计划 §3.3-2/§6、蓝图 §4）：键常量、宽松清洗、
+ * 未读 v2 落盘存储契约：键常量、宽松清洗、
  * v1 防御性导入（先写后删）、单调 max 合并、读水位推进、有界化 LRU、
  * client-install id、ack 请求、隐私键白名单。
  */
@@ -190,7 +190,7 @@ test('privacy whitelist: the serialized payload carries ids and watermarks only'
   }
 })
 
-// ── R22：有界待发 ack 队列（失败重放） ──────────────────────────────────────
+// ── 有界待发 ack 队列（失败重放） ──────────────────────────────────────────
 
 /** 冲一个宏任务，让 outbox 的 fire-and-forget 上行结算。 */
 function tick(): Promise<void> {

@@ -1,11 +1,10 @@
 /**
  * Shared CLI helpers for the scripts toolbox: the `sleep` / `readJson` /
- * flag-value one-liners that had 7 / 2 / several copies (P2-20 of the
- * 13-scripts audit).
+ * flag-value one-liners.
  *
  * `flagValue` is the STRICT form (a missing value throws so the caller can turn
  * it into a usage error, exit 2 — scripts/README.md §分类规则 2);
- * `flagValueOr` keeps the historical "fallback" shape where a flag is optional.
+ * `flagValueOr` keeps the "fallback" shape where a flag is optional.
  */
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -41,7 +40,7 @@ export function flagValueOr(args, name, fallback) {
 
 /**
  * Is this module the process entry point? The repo's import-guard idiom, shared
- * so a scripts-toolbox CLI never grows its own URL comparison (2026-12).
+ * so a scripts-toolbox CLI never grows its own URL comparison.
  * @param importMetaUrl - the module's `import.meta.url`.
  * @param argv1 - the candidate entry path (defaults to `process.argv[1]`).
  * @returns true when this module is the entry point.
@@ -53,8 +52,7 @@ export function isCliEntry(importMetaUrl, argv1 = process.argv[1]) {
 /**
  * Run one scripts-toolbox CLI entry point: parse the argv, print the usage block
  * on --help (exit 0), run the tool, and project any failure as
- * `[<label>] 失败：<message>` + exit 1. The two packaging entries carried this
- * epilogue verbatim (2026-12 M13 single-sourcing pass).
+ * `[<label>] 失败：<message>` + exit 1.
  *
  * The log/error/exit/argv seams exist so the epilogue itself is unit-testable.
  * @param args.label - the failure-message label (e.g. 'build-sidecar').

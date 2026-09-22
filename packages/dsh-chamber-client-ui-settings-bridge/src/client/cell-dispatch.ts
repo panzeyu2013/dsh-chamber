@@ -1,7 +1,7 @@
 /**
  * Cell dispatch of a bridged slot ledger (keyed + list), mirroring the official
  * outlet's dispatch branches (dsh-client-ui-renderer/src/client/scoped-slots.tsx
- * `renderOutletContent`, 2026-09-11 upstream-alignment T4).
+ * `renderOutletContent`).
  *
  * The distinction this module owns is the one the official outlet makes between
  * the RAW ledger (`SlotsService.entries`: every live registration, losers and

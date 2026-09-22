@@ -1,15 +1,15 @@
 /**
  * Managed-dsh application-log bridge — opt-in forensic switch (control-plane half).
  *
- * THE GAP this module closes (verified against the pinned harness/dsh runtime,
- * 2026-09): the dsh application logs through the Cordis built-in logger
+ * THE GAP this module closes: the dsh application logs through the Cordis
+ * built-in logger
  * (`ctx.logger.*`, 300+ call sites across the runtime), but the pinned runtime
  * registers NO exporter for it — `@deepseek-ai/cordis`'s LoggerService ships
  * only an in-memory ring buffer, and the upstream console exporter
  * (`@deepseek-ai/cordis-plugin-logger-console`) is an upstream devDependency
  * that is NOT installed in the chamber-managed runtime (chamber adds no
  * dependencies). So `ctx.logger` output never reaches stdout/stderr, and
- * `<stateDir>/host-logs/<port>.log` only ever held readiness announcements —
+ * `<stateDir>/host-logs/<port>.log` holds only readiness announcements —
  * exactly the "session opened and then nothing" blind spot.
  *
  * THE BRIDGE: a tiny generated Cordis plugin (no imports — it uses the
@@ -30,7 +30,7 @@
  * itself `this.ctx.effect(...)`, and its disposer deletes
  * `exporters.delete(this._snExporter)` — the CURRENT counter, not its own id
  * (pinned logger.ts:232-237). Two consequences, both verified against the pinned
- * source (2026-12 third review): unloading ANY exporter's fiber removes whichever
+ * source: unloading ANY exporter's fiber removes whichever
  * exporter registered last, and unloading THIS plugin would remove an unrelated
  * exporter while possibly leaving ours installed. The generated module therefore
  * registers straight into the public `exporters` Map under a Symbol key (counter
@@ -41,8 +41,8 @@
  * in CI.
  *
  * THE SWITCH: `DSH_CHAMBER_HOST_LOG_LEVEL` (HOST_LOG_BRIDGE_ENV). Unset/empty/
- * off/0/false/no ⇒ NO bridge row, NO generated file: the overlay is
- * byte-identical to the pre-bridge behavior. A level name (error|info|warn|
+ * off/0/false/no ⇒ NO bridge row, NO generated file: the overlay stays
+ * byte-identical to the bridge-disabled shape. A level name (error|info|warn|
  * debug — the Cordis verbosity thresholds, see HOST_LOG_BRIDGE_LEVELS) or an
  * enable token (on/true/1/yes, or any unrecognized value) mounts the bridge at
  * a CONSERVATIVE default level (`warn`, i.e. everything except debug) so a typo
@@ -345,7 +345,7 @@ export function ensureHostLogBridgeSource(stateDir: string, setting: HostLogBrid
 
 /**
  * Plan the bridge seed entry for one spawn: null while the switch is off (the
- * overlay then stays byte-identical to the pre-bridge behavior), otherwise the
+ * overlay then stays byte-identical to the bridge-disabled overlay), otherwise the
  * canonical seed entry whose source has just been (re)materialized.
  *
  * The environment is passed in explicitly — production passes `process.env`

@@ -1,5 +1,5 @@
 /**
- * Gateway auth CLI tests (design 17 §7 / Phase 3): the offline `gateway auth`
+ * Gateway auth CLI tests (design 17 §7): the offline `gateway auth`
  * operations (status / reset-password / clear) — v2 runtime envelope writes,
  * rotate-first, live-gateway rejection via the stateDir exclusive lock, usage
  * validation, legacy v1 projections, and the non-secret status output.

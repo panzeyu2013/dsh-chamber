@@ -9,22 +9,19 @@ name: Release
 # UPDATE FEED: stable builds use the package's GitHub publish configuration
 # and upload latest.yml / latest-mac.yml / latest-linux.yml; canonical beta.N
 # builds select the explicit electron-builder.beta.yml configuration and
-# upload beta.yml / beta-mac.yml / beta-linux.yml (linux leg added 2026-12,
-# design 21).
+# upload beta.yml / beta-mac.yml / beta-linux.yml (design 21).
 # The two channels are generated, verified, and consumed independently — beta
 # never overwrites the stable feed. A beta is also a GitHub prerelease. NO
-# .blockmap sidecars ship
-# (2026-08 decision): Windows has differentialPackage=false (no exe.blockmap)
+# .blockmap sidecars ship: Windows has differentialPackage=false (no exe.blockmap)
 # and the mac zip's hardcoded .zip.blockmap is deleted from the draft release
 # before finalize — the feeds never reference blockmaps, so updates fall back
 # to full downloads. macOS v1 ships arm64 ONLY:
-# macos-13, the last public Intel x64 runner, was retired by GitHub — its
-# matrix leg stuck queued forever in every v0.1.0 run (Intel Macs are
-# unsupported in v1, see STATUS.md); macos-14 is deprecated (2026-07) and
-# unsupported by 2026-11, so the mac leg runs on macos-latest (= macOS 26,
-# arm64 — the 2026-08 v0.1.2 release decision). Windows builds on windows-2022
-# (windows-latest's VS 18 toolchain is not detected correctly by the node-gyp
-# stack — same finding as OpenChamber). Formal macOS releases require signing
+# macos-13, the last public Intel x64 runner, is retired; macos-14 is
+# deprecated and unsupported, so the mac leg runs on macos-latest (= macOS 26,
+# arm64; Intel Macs are unsupported in v1, see STATUS.md). Windows builds on
+# windows-2022 (windows-latest's VS 18 toolchain is not detected correctly by
+# the node-gyp stack — same finding as OpenChamber). Formal macOS releases
+# require signing
 # and notarization credentials (CSC_LINK/CSC_KEY_PASSWORD + APPLE_ID/
 # APPLE_APP_SPECIFIC_PASSWORD/APPLE_TEAM_ID); the verify step then fails closed
 # unless the .app carries a Developer ID signature and a valid stapled
@@ -80,7 +77,7 @@ jobs:
       # softprops/action-gh-release exposes the created release id — finalize
       # uses it (not a tag lookup) to enumerate/delete assets, because the
       # tags/{tag} endpoint does not reliably resolve a DRAFT release and a
-      # bare `gh api` failure used to be swallowed (2026-08 postmortem).
+      # bare `gh api` failure must not be swallowed.
       release_id: ${{ steps.create_release.outputs.id }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -197,9 +194,7 @@ jobs:
             exit 1
           fi
       - name: Refuse published release and replace stale drafts for this tag
-        # 2026-08 postmortem (body_path not applied — softprops log:
-        # "Using release <old> for tag v0.1.2 instead of duplicate draft <new>
-        # / Removing duplicate draft"): deleting a GIT TAG does NOT delete the
+        # Deleting a GIT TAG does NOT delete the
         # GitHub RELEASE — the release record survives DETACHED (the
         # tags/{tag} endpoint then 404s even though the release still exists,
         # and re-pushing the tag makes softprops FIND the old release and
@@ -265,7 +260,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # Release-path validation gate (2026 review): the tag push runs ci.yml and
+  # Release-path validation gate: the tag push runs ci.yml and
   # release.yml in PARALLEL, so the release must validate itself — finalize
   # must never publish an untested commit. Mirrors ci.yml's test job core.
   validation:
@@ -283,8 +278,7 @@ jobs:
           # harness.commit); the gitlink pins an exact commit, so the submodule is
           # materialized at that commit regardless of depth.
           submodules: true
-      # Release CI proof (2026-09 CI-trigger revision): tag pushes no longer
-      # re-run ci.yml — the release must PROVE its commit already passed the full
+      # Release CI proof: the release must PROVE its commit already passed the full
       # chain on main, including the windows and macOS legs release.yml has no
       # equivalent of.
       # It needs only this checked-out script (no node_modules), so it stays
@@ -318,11 +312,11 @@ jobs:
       #      host/mobile/dsh-runtime bundles and byte-compare, hard failure, then
       #      restore). C8 is the gate most
       #      easily defeated by "edited src, forgot to rebuild the artifact", so
-      #      a release must never be the first place it runs (2026-12 review P2).
+      #      a release must never be the first place it runs.
       - name: Upstream touchpoint registry (C1/C3/C4/C5/C6/C7/C9/C10 + C11–C15)
         run: node scripts/upstream/verify-upstream-touchpoints.mjs --no-artifact-rebuild
       - run: pnpm install --frozen-lockfile
-      # 2026-12 产物移出 git：C8 默认模式先快照再就地重建-比对，clean checkout
+      # 构建期产物不入 git：C8 默认模式先快照再就地重建-比对，clean checkout
       # 必须在它之前自举这 9 个构建期产物（缺席会被判成 stale）。
       - name: Bootstrap untracked build-time artifacts (C8 input)
         run: pnpm run ensure:artifacts
@@ -369,8 +363,7 @@ jobs:
       - name: Ladder-table parity (B4 lockstep over the four recovery ladders)
         run: pnpm run verify:ladder-table-parity
       # Upstream design-token conformance (S1–S7) — same gate as ci.yml's push
-      # path; needs the bootstrapped vendor tree above (2026-12 review P2: the
-      # release validation job silently omitted it).
+      # path; needs the bootstrapped vendor tree above.
       - name: Upstream design-token conformance (S1–S7)
         run: pnpm run verify:styles
       # Every scripts/ suite through one entry (scripts/gates/run-script-tests.mjs;
@@ -390,21 +383,21 @@ jobs:
         run: node scripts/release/release-preflight.mjs --actions-only
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      # Same single entries the push path runs (2026-12): the package test set and
+      # Same single entries the push path runs: the package test set and
       # the client typecheck set are named once in scripts/gates/run-checks.mjs, so
       # `pnpm run test:scripts:release` proves validation and ci.yml cannot drift
       # from each other by comparing these two commands.
       - name: Package unit tests (single entry)
         run: node scripts/gates/run-checks.mjs tests
-      # 计划的统一验收矩阵（docs/progress/todo/remote-session-state-and-switch.md §9/§13.1）：
+      # 计划的统一验收矩阵：
       # ci.yml 的同一门，release validation 必须跑 push 路径跑的每个门
       # （release-workflow-policy 门机械对齐 ci.yml 的门集合）。blocked 不判绿也不判红，
       # 只有真失败 exit 1，所以这里不会因环境缺件而误红。
-      - name: Remote-state acceptance matrix (plan §9)
+      - name: Remote-state acceptance matrix
         run: node scripts/gates/remote-state-acceptance.mjs --node "$(command -v node)" --out .tmp/acceptance/remote-state.json
-      # 故障注入矩阵（plan §10）：与本地 check:static 同一条命令 —— P1-1 的单源化要求
+      # 故障注入矩阵：与本地 check:static 同一条命令 —— 单源化要求
       # 静态集合两侧一致；file-only，故不挂 classifier（release 侧本就没有 classifier）。
-      - name: Remote-state fault-injection matrix (plan section 10)
+      - name: Remote-state fault-injection matrix
         run: node scripts/gates/remote-state-injection-matrix.mjs
       - name: Client plugin type checks (single entry)
         run: node scripts/gates/run-checks.mjs typecheck
@@ -416,9 +409,9 @@ jobs:
         run: |
           pnpm run build:renderer
           pnpm run build:host-packages
-      # Desktop packaging sub-steps — ci.yml's "Desktop build sub-steps" gate
-      # (2026-12 review P2: a release must not be the first place a broken
-      # control-plane/preload/host-package build surfaces).
+      # Desktop packaging sub-steps — ci.yml's "Desktop build sub-steps" gate:
+      # a release must not be the first place a broken
+      # control-plane/preload/host-package build surfaces.
       - name: Desktop build sub-steps
         run: |
           pnpm --filter @dsh-chamber/desktop run build:control-plane
@@ -433,8 +426,8 @@ jobs:
 
   build-gateway:
     # Gateway is distributed in this release only as a GitHub Release tarball
-    # plus SHA256. Runs in PARALLEL with the desktop build legs (2026-09
-    # decision): it packs from the same tag-bound SHA (S16) and downloads no
+    # plus SHA256. Runs in PARALLEL with the desktop build legs:
+    # it packs from the same tag-bound SHA and downloads no
     # desktop artifact, so nothing serializes on the platform legs. Public
     # atomicity is enforced by finalize-release, which needs every build leg
     # (gateway + macos + windows + linux) before flipping the draft public —
@@ -450,7 +443,7 @@ jobs:
         with:
           # Artifacts must be built from the exact SHA the create-release job
           # bound the tag to; a default-branch advance between jobs must not
-          # pack/publish an unvalidated commit under a validated tag (S16).
+          # pack/publish an unvalidated commit under a validated tag.
           ref: ${{ github.sha }}
           # Pinned harness source tree is a git submodule (gitlink ==
           # harness.commit); shallow keeps the multi-hundred-package monorepo fast.
@@ -530,9 +523,8 @@ jobs:
     # Public arm64 runner label only (OpenChamber 踩坑：非公开标签
     # macos-26 / macos-15-intel 会找不到 runner 而失败)。v1 ships arm64 only:
     # macos-13, the last public x64 runner, is retired; macos-14 is deprecated
-    # (2026-07) and fully unsupported by 2026-11, so the mac leg builds on
-    # macos-latest (= macOS 26, arm64; 2026-08 v0.1.2 按 macOS 26 发布的
-    # 决定)。bundle:dsh bakes the host platform's dsh runtime, so x64 cannot
+    # and unsupported, so the mac leg builds on macos-latest (= macOS 26,
+    # arm64)。bundle:dsh bakes the host platform's dsh runtime, so x64 cannot
     # be cross-built on an arm64 runner without Rosetta toolchain work
     # (deferred, see STATUS.md).
     runs-on: macos-latest
@@ -540,7 +532,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           # Build from the exact SHA the create-release job bound the tag to
-          # (S16): a branch advance between jobs must not ship an unvalidated
+          # a branch advance between jobs must not ship an unvalidated
           # commit under a validated tag.
           ref: ${{ github.sha }}
           # Pinned harness source tree is a git submodule (gitlink ==
@@ -586,16 +578,14 @@ jobs:
             if [[ -z "$APPLE_APP_SPECIFIC_PASSWORD" ]]; then unset APPLE_APP_SPECIFIC_PASSWORD; fi
             if [[ -z "$APPLE_TEAM_ID" ]]; then unset APPLE_TEAM_ID; fi
 
-            # --- Developer ID signing keychain bootstrap (2026-09-05 fix) ---
+            # --- Developer ID signing keychain bootstrap ---
             # electron-builder 26.15.3's CSC_LINK path (macCodeSign.js
             # createKeychain/importCerts) creates its temp keychain with a
             # RANDOM password yet calls `security set-key-partition-list
             # -k <p12 password>` against it — a password mismatch by
-            # construction that older macOS tolerated on an already-unlocked
-            # keychain. The macOS 26.6 hosted image (Darwin 25.6, rolled
-            # 2026-09-05) now validates -k against the real keychain password
-            # and fails the whole mac leg with "SecKeychainUnlock: passphrase
-            # incorrect" (v0.2.2 formal run). Fix: provision the keychain
+            # construction. macOS validates -k against the real keychain
+            # password and fails the whole mac leg with "SecKeychainUnlock:
+            # passphrase incorrect". Provision the keychain
             # HERE with one consistent password, then run electron-builder
             # WITHOUT CSC_LINK so it skips its temp-keychain path and signs
             # with the pre-provisioned keychain via CSC_KEYCHAIN (macPackager:
@@ -675,7 +665,7 @@ jobs:
         # (zip + channel yml) must also exist when not dry-running.
         run: |
           set -euo pipefail
-          # G36：按 release-artifacts 的精确产物名验证（不再 find|head / glob ——
+          # 按 release-artifacts 的精确产物名验证（不用 find|head / glob ——
           # 复用工作目录时旧归档可以满足验证而新产物已坏）。
           BASE="packages/desktop/release/dsh-chamber-electron-${VERSION}-arm64"
           APP_DIR="packages/desktop/release/mac-arm64/dsh-chamber-electron.app"
@@ -704,7 +694,7 @@ jobs:
           VERSION: ${{ needs.create-release.outputs.version }}
 
       - name: Notarize + staple the Electron dmg (release only)
-        # S-31：electron-builder 的 mac.notarize=true 只覆盖 appPath（.app），
+        # electron-builder 的 mac.notarize=true 只覆盖 appPath（.app），
         # dmg-builder 不会提交/装订 dmg 本体——离线或默认 Gatekeeper 打开挂载卷
         # 仍可能报未公证。这里复用同一组 Apple 凭据对 dmg 本体提交 notarytool、
         # staple 装订并用 stapler/spctl 校验。构建步的 electron-builder publish
@@ -728,7 +718,7 @@ jobs:
             --wait
           xcrun stapler staple "$DMG"
           xcrun stapler validate "$DMG"
-          # 复核（真实发布暴露）：`spctl --type open --context primary-signature` 要求 **dmg 自身**
+          # `spctl --type open --context primary-signature` 要求 **dmg 自身**
           # 有 Developer ID 签名，而 electron-builder 只签 .app（dmg 只有装订票据），因此会以
           # "source=no usable signature" 判死。有签名则强制校验（fail-closed），无签名则 loud 降级：
           # 票据已由上面的 stapler validate 证明，用户打开挂载卷时 Gatekeeper 评估的是卷内
@@ -742,9 +732,9 @@ jobs:
           echo "dmg notarized + stapled + re-uploaded: $DMG"
 
       - name: Verify mac zip contents — extract and re-verify the uploaded app (G28)
-        # G28：上传物只验 staging .app 不够（旧实现对 zip 只有 test -n）——解出
+        # 上传物只验 staging .app 不够——解出
         # zip 内的 .app 再跑 codesign/架构；正式腿加 Developer ID/票据/Gatekeeper
-        # 复核，与 Swift 腿的 P4(b) 同一纪律。dry run 也解包验结构（ad-hoc 可过）。
+        # 复核，与 Swift 腿同一纪律。dry run 也解包验结构（ad-hoc 可过）。
         run: |
           set -euo pipefail
           BASE="packages/desktop/release/dsh-chamber-electron-${VERSION}-arm64"
@@ -783,7 +773,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           # Build from the exact SHA the create-release job bound the tag to
-          # (S16): a branch advance between jobs must not ship an unvalidated
+          # a branch advance between jobs must not ship an unvalidated
           # commit under a validated tag.
           ref: ${{ github.sha }}
           # Pinned harness source tree is a git submodule (gitlink ==
@@ -822,7 +812,7 @@ jobs:
         # and that the win32 dsh runtime made it into the unpacked app. When
         # not dry-running, also assert the UPDATE FEED (design 11 §6): the
         # channel yml electron-updater consumes. NO .blockmap is expected
-        # (2026-08: differentialPackage=false — the feed never references a
+        # (differentialPackage=false — the feed never references a
         # blockmap, updates fall back to full downloads).
         shell: bash
         run: |
@@ -860,7 +850,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           # Build from the exact SHA the create-release job bound the tag to
-          # (S16): a branch advance between jobs must not ship an unvalidated
+          # a branch advance between jobs must not ship an unvalidated
           # commit under a validated tag.
           ref: ${{ github.sha }}
           # Pinned harness source tree is a git submodule (gitlink ==
@@ -923,25 +913,25 @@ jobs:
         env:
           VERSION: ${{ needs.create-release.outputs.version }}
 
-  # Swift 原生壳产物腿（design 25 §8.4 / W-26）：与 Electron mac 腿同 tag 并行，产物名分族防碰撞
+  # Swift 原生壳产物腿（design 25 §8.4）：与 Electron mac 腿同 tag 并行，产物名分族防碰撞
   # （native = dsh-chamber-<ver>-macos-arm64.*，Electron = dsh-chamber-electron-<ver>-arm64-mac.*，
-  # 由 release-artifacts.mjs 单源定义；旧 -native- 前缀是历史命名）。dry-run 走 ad-hoc 且不发布（与 build-macos 同纪律：
+  # 由 release-artifacts.mjs 单源定义）。dry-run 走 ad-hoc 且不发布（与 build-macos 同纪律：
   # 剥离一切签名/公证/上传凭据）；正式腿 fail-closed——CSC_LINK 已在
   # create-release 前置门校验，本腿导入同一 p12 并解析 Developer ID 身份，
   # 缺失即失败（finalize 的 needs 因此挡住发布）。Apple 凭据类外部阻断登记在
-  # STATUS（A6）。
+  # STATUS。
   build-swift:
     needs: [create-release, validation]
     permissions:
       contents: write
     runs-on: macos-latest
-    # S-22：beta appcast 的滚动 release tag（单一定义，构建步与 appcast 步共用）。
+    # beta appcast 的滚动 release tag（单一定义，构建步与 appcast 步共用）。
     # **不以 v 开头**——release.yml 的 tag 触发是 `v*`，滚动 tag 绝不能触发一次
     # 发布运行；tag/release 缺失时由 appcast 步幂等创建（并标 prerelease，绝不
     # 影响 releases/latest 的稳定通道）。
     env:
       SPARKLE_BETA_ROLLING_TAG: appcast-swift-beta
-      # 2026-09 增量更新：为 delta 追加 staging 的本通道历史归档数（1..5，默认 2）。
+      # 为 delta 追加 staging 的本通道历史归档数（1..5，默认 2）。
       # 每个旧版本 = 一次 ~83MB 归档下载 + 一次差分计算；没有旧归档时本次发布没有
       # delta（feed 退回整包），不会失败（verify 只在 staged 过旧归档却无 delta 时红）。
       SPARKLE_DELTA_SOURCES: '2'
@@ -1015,35 +1005,35 @@ jobs:
           pnpm run ensure:artifacts
           pnpm run build:host-packages
           pnpm run build:renderer
-          # W8/R15③（2026-12 审计 S3）：release 腿此前**完全没有** scoper 标记门，
-          # 于是「构建把 scoper 摇掉」的产物可以一路装配进正式 .app。源产物先断一次。
+          # scoper 标记门：没有它「构建把 scoper 摇掉」的产物可以一路装配进正式 .app
+          # （源产物先断一次）。
           node packages/dsh-chamber-client-ui-mobile/scripts/assert-scoper-artifact.mjs
           pnpm --filter @dsh-chamber/desktop run build:control-plane
           # 内置 dsh 工作区必须先物化（.gitignore 只提交 vendor/dsh/pnpm-lock.yaml，
           # package.json + node_modules 由 bundle-dsh.mjs 生成；否则 build-sidecar
-          # 只 warn、下面 verify 的 test -f 直接失败——2026-09 模块评审 major）。
+          # 只 warn、下面 verify 的 test -f 直接失败）。
           pnpm --filter @dsh-chamber/desktop run bundle:dsh
-          # W-23：真实 Node 捆绑（官方 tar.gz + SHA-256 校验；命名必须是 node）。
+          # 真实 Node 捆绑（官方 tar.gz + SHA-256 校验；命名必须是 node）。
           pnpm run build:sidecar
           if [[ -n "${KEYCHAIN_FILE:-}" ]]; then
             security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_FILE"
           fi
           # 正式腿先只组装+签名 .app（--no-zip --no-dmg）：归档必须在公证与
           # stapler 装订**之后**生成，否则上传的 zip/dmg 内 .app 没有票据
-          # （2026-09 审计 major：原顺序先打包后公证，离线 Gatekeeper 必失败）。
+          # （先打包后公证会让离线 Gatekeeper 失败）。
           ARTIFACT_ARGS=()
           if [[ "$DRY_RUN" != "true" ]]; then
             ARTIFACT_ARGS=(--no-zip --no-dmg)
           fi
-          # 原生壳的应用内更新（S-01 / 裁决 D-1 选 B）：公钥存在才把 feed 与公钥注入
+          # 原生壳的应用内更新：公钥存在才把 feed 与公钥注入
           # Info.plist（壳据此点亮「检查更新…」并向 sidecar 声明安装腿）；缺失 = 该
           # 构建的自动更新保持关闭（照常出包，只是没有安装腿）。
-          # S-22：feed 随通道选择。稳定版用 releases/latest（只解析非 prerelease）；
+          # feed 随通道选择。稳定版用 releases/latest（只解析非 prerelease）；
           # beta 是 GitHub prerelease，/releases/latest 恒指不到它，因此 beta 指向
           # **滚动 tag** ${SPARKLE_BETA_ROLLING_TAG} 上的同名 asset（appcast 步每次
           # beta 覆盖它）——版本固定 URL（releases/download/v<ver>/…）会让 beta.N
           # 永远发现不了 beta.N+1。稳定 URL 保持不变。
-          # S-36：appcast 与它 enclosure 引用的 zip 都落在同一个滚动 release 上
+          # appcast 与它 enclosure 引用的 zip 都落在同一个滚动 release 上
           # （appcast 步用 --download-url-prefix 钉住该 release，verify 后先传 zip
           # 再传 appcast），beta 客户端的下载因此不会 404。
           SPARKLE_FEED_STABLE="https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/appcast-swift.xml"
@@ -1100,7 +1090,7 @@ jobs:
           xcrun stapler validate "$APP"
           rm -f "$SUBMIT_ZIP" "${BASE}.zip" "${BASE}.dmg"
           ditto -c -k --sequesterRsrc --keepParent "$APP" "${BASE}.zip"
-          # P7：DMG 卷 = .app + /Applications 快捷方式（Finder 拖拽安装惯例）
+          # DMG 卷 = .app + /Applications 快捷方式（Finder 拖拽安装惯例）
           # **+ Finder 拖拽布局**（背景箭头 + 图标定位，与 Electron/electron-builder
           # 的卷观感对齐），且 DMG 本体也要公证+装订——只装订 .app 时离线
           # Gatekeeper 对挂载卷仍报未公证。
@@ -1119,31 +1109,31 @@ jobs:
           xcrun stapler validate "$APP"
 
       - name: Generate + sign the Sparkle appcast (release only)
-        # S-01 / 裁决 D-1 选 B + S-22 + G16：原生壳的更新源是随 release 上传的
+        # 原生壳的更新源是随 release 上传的
         # appcast（稳定通道 appcast-swift.xml；beta 通道 appcast-swift-beta.xml），
         # 由 Sparkle 的 generate_appcast 用 EdDSA 私钥签名（与 Developer ID 无关的
         # 第三把钥匙，客户端据此校验更新包来源）。私钥缺失 → loud 跳过（照常发布，
         # 只是原生壳看不到这次更新），绝不发布未签名 appcast。
-        # 2026-09 增量更新：**stable 与 beta 完全分开**——feed 名、收件目录、历史归档
+        # **stable 与 beta 完全分开**——feed 名、收件目录、历史归档
         # staging、上传面各自独立。generate_appcast 按归档内嵌 SUFeedURL 的文件名分组，
         # 两个通道的归档同目录 + -o 会直接失败 multiple appcasts found（Sparkle 2.10.0
-        # generate_appcast/Appcast.swift:45-62，本机复现）；而增量 delta 恰恰要求把本通道
+        # generate_appcast/Appcast.swift:45-62）；而增量 delta 恰恰要求把本通道
         # 的历史归档放进同一个收件目录。于是每个通道 stage 前若干历史 zip → generate_appcast
         # 产出 <sparkle:deltas> 并签名 → 本步只上传 appcast，归档在下一步按「归档 → feed」
-        # 顺序发布（S-36：每个被引用的 enclosure 都必须可下载）。
-        # S-23（2026-09 改法）：beta feed 的 final 条目改为从**已发布 stable feed** 复制
-        # （scripts/release/merge-native-feed.mjs），不再把 stable zip 放进 beta 收件目录；
+        # 顺序发布（每个被引用的 enclosure 都必须可下载）。
+        # beta feed 的 final 条目从**已发布 stable feed** 复制
+        # （scripts/release/merge-native-feed.mjs），不把 stable zip 放进 beta 收件目录；
         # 取不到 stable feed 时保留上次滚动 feed 的 final 条目——beta 客户端始终能看到对应
-        # 正式版（用户裁决：beta 遇到对应正式版允许升级到正式版）。
+        # 正式版（beta 遇到对应正式版允许升级到正式版）。
         # stable 通道不传前缀——appcast-swift.xml 与 enclosure 形状逐字节不变（只多出
         # <sparkle:deltas> 块）；本步绝不改写滚动 beta feed。
-        # ORDER（G16）：必须在 notarize + staple 之后——签的是**最终分发 zip**
-        # （上一步在装订后才生成 ${BASE}.zip）；旧顺序（appcast 在公证前）在正式
+        # 必须在 notarize + staple 之后——签的是**最终分发 zip**
+        # （上一步在装订后才生成 ${BASE}.zip）；否则正式
         # 腿会因 test -f 直接红，或签下未装订的残留 zip。
         if: ${{ github.event.inputs.dry_run != 'true' }}
         env:
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
-          # 2026-12 A2：公钥决定壳内更新面是否打开（build-swift 注入 Info.plist）。
+          # 公钥决定壳内更新面是否打开（build-swift 注入 Info.plist）。
           # 私钥缺失但公钥在 = 自相矛盾的更新链，本步必须 FAIL（见下）。
           SPARKLE_PUBLIC_ED_KEY: ${{ secrets.SPARKLE_PUBLIC_ED_KEY }}
           VERSION: ${{ needs.create-release.outputs.version }}
@@ -1151,7 +1141,7 @@ jobs:
         run: |
           set -euo pipefail
           BASE="macos/release/dsh-chamber-${VERSION}-macos-arm64"
-          # S-22 + 2026-09：每通道独立的 feed/收件目录/上传面（见步骤头注释）。
+          # 每通道独立的 feed/收件目录/上传面（见步骤头注释）。
           if [[ "$VERSION" == *-* ]]; then
             CHANNEL="beta"
             APPCAST="appcast-swift-beta.xml"
@@ -1165,10 +1155,10 @@ jobs:
             ROLLING_TAG=""
             STAGE_DIR="/tmp/appcast-in-stable"
             # stable feed 只保留当前条目：历史 zip 只作为 delta 基线，不进 feed，
-            # 否则条目会引用 releases/latest/download/<旧 zip> 这类死链（S-36）。
+            # 否则条目会引用 releases/latest/download/<旧 zip> 这类死链。
             # 注意 --maximum-versions 按 **branch point**（最低系统/硬件需求）计：若将来抬高
             # LSMinimumSystemVersion，历史 zip 会成为另一个 branch、feed 出现第二个条目 →
-            # --single-item 会红。2026-09 起 staging 会按 baseline_can_use_delta 跳过与当前
+            # --single-item 会红。staging 会按 baseline_can_use_delta 跳过与当前
             # app 不同 branch 的历史包（loud notice），所以单条目契约在抬高最低系统版本后
             # 仍然成立；真要跨 branch 发布时必须先裁决 feed 形状，而不是让死链静默上线。
             MAX_VERSIONS=1
@@ -1180,7 +1170,7 @@ jobs:
             echo "::error::SPARKLE_DELTA_SOURCES must be 1..5 (got ${DELTA_SOURCES})"
             exit 1
           fi
-          # 2026-12 A2 密钥门禁，两支都必须显式：
+          # 密钥门禁，两支都必须显式：
           #   - 两把钥匙都缺 = 该仓库没有 Sparkle 更新链，保持 loud 降级（照常出包，
           #     只是原生壳看不到这次更新）；
           #   - 公钥在而私钥缺 = 壳会去轮询一个没人签的 feed（"发布成功但客户端永远
@@ -1193,7 +1183,7 @@ jobs:
             echo "::warning::SPARKLE_PRIVATE_KEY absent — ${APPCAST} not generated; the native shell will not see this release through Sparkle"
             exit 0
           fi
-          # 镜像门禁（2026-09 增量更新复核补）：私钥在而公钥缺 ⇒ 构建不会注入 SUPublicEDKey/SUFeedURL，
+          # 镜像门禁：私钥在而公钥缺 ⇒ 构建不会注入 SUPublicEDKey/SUFeedURL，
           # 这类 app 永远检查不到更新，却仍带着一个签名 appcast；下一次发布又会把它的 zip 当作 delta
           # 基线（generate_appcast 对无公钥的旧包产不出 delta ⇒ 下一版会硬 FAIL）。两个方向都必须显式。
           if [[ -z "${SPARKLE_PUBLIC_ED_KEY:-}" ]]; then
@@ -1211,7 +1201,7 @@ jobs:
           rm -rf "$STAGE_DIR" /tmp/appcast-out /tmp/stable-feed /tmp/rolling-feed
           mkdir -p "$STAGE_DIR" /tmp/appcast-out
           cp "$ZIP" "$STAGE_DIR/"
-          # 2026-09 增量更新：stage **本通道**的历史归档（旧包只作 delta 基线；逐条精确
+          # stage **本通道**的历史归档（旧包只作 delta 基线；逐条精确
           # 文件名，绝不用宽 glob）。staging 失败只降级为「本次无 delta」并 loud 警告——
           # 不 fail release（delta 缺失不产生死链）；staged ≥1 却没产出 delta 由 verify 门禁
           # FAIL，但 Sparkle 自己按体积规则（delta > 7/8 整包）主动放弃的那些走 loud 降级
@@ -1274,7 +1264,7 @@ jobs:
                 echo "::notice::stable $TAG has no native zip — skipped for delta staging"
                 continue
               fi
-              # 没有 appcast 的旧发布 = 当时未配置 Sparkle 公钥：其 app 可能没有 SUPublicEDKey
+              # 没有 appcast 的旧发布 = 未配置 Sparkle 公钥：其 app 可能没有 SUPublicEDKey
               # （generate_appcast 产不出 delta → verify 会硬 FAIL）或没有内嵌 stable SUFeedURL
               # （会被分到别的 feed → multiple appcasts found 直接红）。这类归档绝不作基线。
               if [[ "$HAS_APPCAST" != "true" ]]; then
@@ -1365,7 +1355,7 @@ jobs:
           umask 077
           printf '%s' "$SPARKLE_PRIVATE_KEY" > /tmp/ed-key.txt
           trap 'rm -f /tmp/ed-key.txt' EXIT
-          # S-36：enclosure 必须真实可下载。generate_appcast 缺省把 enclosure 解析为
+          # enclosure 必须真实可下载。generate_appcast 缺省把 enclosure 解析为
           # 「zip 文件名相对该 zip 内嵌 SUFeedURL」（ArchiveItem.archiveURL），beta zip
           # 内嵌的 feed 是滚动 tag ⇒ enclosure 落在滚动 release 上。这里再用
           # --download-url-prefix 显式钉住滚动 tag 下载目录（尾部斜杠是 URL(relativeTo:)
@@ -1376,7 +1366,7 @@ jobs:
             PREFIX_ARGS=(--download-url-prefix "https://github.com/${GITHUB_REPOSITORY}/releases/download/${ROLLING_TAG}/")
           fi
           # Sparkle 的 -o 是**输出文件路径**（help: "Path to filename for the generated appcast"），
-          # 传目录会以 "Is a directory" 失败——真实发布第一次跑这条链时正是这样挂的。
+          # 传目录会以 "Is a directory" 失败。
           # delta 由 generate_appcast 写进收件目录（*.delta），由下一步的上传循环一并发布。
           # --maximum-versions：stable=1（feed 只留当前条目）/ beta=3（保留最近 beta 条目）；
           # --maximum-deltas=本次 staging 的旧包数（下限 1/上限 5 已在上面校验）。
@@ -1401,7 +1391,7 @@ jobs:
             echo "::warning::xmllint 不可用——跳过生成 feed 的良构校验"
           fi
           # 签名问题必须 FAIL：公钥与私钥不匹配时 generate_appcast **只打警告**，并把条目发成没有
-          # sparkle:edSignature 的形状——「发布成功但任何客户端都验不过」，正是 A2/G42 要挡的形态。
+          # sparkle:edSignature 的形状——「发布成功但任何客户端都验不过」，必须挡住。
           if grep -qE 'does not match key EdDSA|ignored, because it could not be signed' /tmp/generate-appcast.log; then
             echo "::error::generate_appcast 报告 EdDSA 签名问题（公钥不匹配 / delta 签不上）——本 feed 的条目没有有效签名，客户端永远验不过；拒绝发布"
             grep -E 'does not match key EdDSA|ignored, because it could not be signed' /tmp/generate-appcast.log
@@ -1444,8 +1434,8 @@ jobs:
           if [[ "$DECLINED_DELTAS" -gt 0 ]]; then
             echo "::warning::Sparkle 主动放弃 $DECLINED_DELTAS 个基线（delta > 7/8 整包，Appcast.swift:360）——这些基线走整包下载"
           fi
-          # 2026-12 A2 发布物门禁（本版本条目 + 本版本 zip enclosure；stable 额外要求单条目）
-          # + 2026-09 增量门禁（staged 过的旧归档必须尽量产出 delta，绝不静默退回全量）：
+          # 发布物门禁（本版本条目 + 本版本 zip enclosure；stable 额外要求单条目）
+          # + 增量门禁（staged 过的旧归档必须尽量产出 delta，绝不静默退回全量）：
           # 无放弃标记时按「最新基线精确 + 条数 ≥ staged」断言；Sparkle 主动放弃时按剩余条数断言。
           EXPECTED_DELTAS=$MATCHED_DELTAS
           VERIFY_ARGS=()
@@ -1460,10 +1450,10 @@ jobs:
             fi
           fi
           # 逐条真验签（Ed25519 over 归档字节）：只断言「签名存在」挡不住密钥轮换后
-          # 「任何公钥都验不过」的签名（真实 Sparkle 2.10.0 复现）。
+          # 「任何公钥都验不过」的签名。
           node scripts/release/verify-native-appcast.mjs "$VERSION" "/tmp/appcast-out/${APPCAST}" \
             --signatures-dir "$STAGE_DIR" --public-key "$SPARKLE_PUBLIC_ED_KEY" ${VERIFY_ARGS[@]+"${VERIFY_ARGS[@]}"}
-          # S-23（2026-09 改法）：beta feed 的 final 条目从**已发布 stable feed** 复制（缺 stable
+          # beta feed 的 final 条目从**已发布 stable feed** 复制（缺 stable
           # feed 时保留上次滚动 feed 的 final 条目）；stable zip 绝不进 beta 收件目录——两通道
           # 的收件目录/feed/上传面完全分开（generate_appcast 的 feed 分组约束）。
           if [[ "$CHANNEL" == "beta" ]]; then
@@ -1500,9 +1490,9 @@ jobs:
             MERGE_ARGS=(--beta "/tmp/appcast-out/${APPCAST}" -o "/tmp/appcast-out/${APPCAST}.merged")
             if [[ -n "$STABLE_FEED" ]]; then
               MERGE_ARGS+=(--stable "$STABLE_FEED")
-              # final 条目改挂**版本固定**前缀（v<stable-tag> 的资产不可变），不再依赖
+              # final 条目挂在**版本固定**前缀（v<stable-tag> 的资产不可变）上，不依赖
               # releases/latest：否则后续一个没有 keyed appcast 的正式版会把 latest 移走，
-              # 被保留的 final 条目就成 404（S-36）。
+              # 被保留的 final 条目就成 404。
               MERGE_ARGS+=(--download-url-prefix "https://github.com/${GITHUB_REPOSITORY}/releases/download/${STABLE_TAG}/")
             fi
             [[ -n "$PREVIOUS_FEED" ]] && MERGE_ARGS+=(--previous "$PREVIOUS_FEED")
@@ -1525,7 +1515,7 @@ jobs:
               echo "::warning::xmllint 不可用——跳过合并 feed 的良构校验"
             fi
             mv "/tmp/appcast-out/${APPCAST}.merged" "/tmp/appcast-out/${APPCAST}"
-            # S-23 的可见性在「尚无带原生包的正式版」时只能 loud 降级（deviations G42 已登记）：
+            # final 条目的可见性在「尚无带原生包的正式版」时只能 loud 降级：
             # 只有合并结果真的带 final 条目才要求它——绝不因此阻塞 beta 通道。
             FINAL_ARGS=()
             if [[ "$MERGE_OUTPUT" == *"finalItem=0"* ]]; then
@@ -1538,10 +1528,10 @@ jobs:
               ${FINAL_ARGS[@]+"${FINAL_ARGS[@]}"} ${VERIFY_ARGS[@]+"${VERIFY_ARGS[@]}"}
           fi
           # draft 上的 appcast 交给下一步（Upload native artifacts）在**归档之后**上传：
-          # S-36 的「归档先于 feed」在 draft 面同样成立——任何时刻读 draft 都能解析到真实资产，
-          # 不再依赖「draft 对客户端不可见」这一间接论证。这里只落盘供下一步使用。
+          # 「归档先于 feed」在 draft 面同样成立——任何时刻读 draft 都能解析到真实资产，
+          # 不依赖「draft 对客户端不可见」这一间接论证。这里只落盘供下一步使用。
           cp "/tmp/appcast-out/${APPCAST}" "macos/release/${APPCAST}"
-          # S-22/S-36：beta 的**滚动发布**不在本步执行——rolling release 是公开面
+          # beta 的**滚动发布**不在本步执行——rolling release 是公开面
           # （beta 客户端 SUFeedURL 指向它），发布挪到 verify 步之后（下一步
           # "Upload native artifacts"），未经 codesign/stapler/架构校验的归档绝不
           # 暴露给 beta 客户端；v${VERSION} 的本次上传落在 draft 上（finalize 前
@@ -1557,10 +1547,9 @@ jobs:
           DRY_RUN="${{ github.event.inputs.dry_run == 'true' && 'true' || 'false' }}"
           test -d "$APP"
           codesign --verify --deep --strict --verbose=2 "$APP"
-          # 装配面结构断言：sidecar 的 node 基名（A5）、sidecar 入口 + 装配
+          # 装配面结构断言：sidecar 的 node 基名、sidecar 入口 + 装配
           # package.json、control-plane 相对入口、四个 host 包、打包 shim、
-          # renderer dist（2026-12 P2：原清单漏了后三类，.app 少任何一个都能
-          # 上传成功）。
+          # renderer dist（装配面少任何一个，.app 都能上传成功）。
           test -x "$APP/Contents/Resources/sidecar/node"
           test "$(basename "$APP/Contents/Resources/sidecar/node")" = "node"
           test -f "$APP/Contents/Resources/sidecar/sidecar.js"
@@ -1572,29 +1561,29 @@ jobs:
           done
           test -f "$APP/Contents/Resources/DSHChamber_DSHChamber.bundle/bridge-shim.js"
           test -f "$APP/Contents/Resources/dist/web/index.html"
-          # W8/R15③（2026-12 审计 S3）：只断 index.html 会把「空壳 .app」放行——切源白屏
+          # 只断 index.html 会把「空壳 .app」放行——切源白屏
           # 的修复必须出现在**真正装进 .app 的字节**里（与装配脚本内部的同一道门呼应）。
           node packages/dsh-chamber-client-ui-mobile/scripts/assert-scoper-artifact.mjs \
             "$APP/Contents/Resources/dist/web/assets"
-          # 三审 #1/#2：打包态本地实例依赖内置 dsh 工作区与内嵌 pnpm。
+          # 打包态本地实例依赖内置 dsh 工作区与内嵌 pnpm。
           test -f "$APP/Contents/Resources/sidecar/vendor/dsh/package.json"
           test -f "$APP/Contents/Resources/sidecar/vendor/dsh/node_modules/.modules.yaml"
           test -f "$APP/Contents/Resources/sidecar/pnpm/bin/pnpm.cjs"
-          # P4：架构断言——build-sidecar 缺省 darwin-arm64 而 swift build 跟随
+          # 架构断言——build-sidecar 缺省 darwin-arm64 而 swift build 跟随
           # 宿主；两者不一致的 .app 能签名打包、运行时才崩。
           APP_ARCHS="$(lipo -archs "$APP/Contents/MacOS/dsh-chamber")"
           NODE_ARCHS="$(lipo -archs "$APP/Contents/Resources/sidecar/node")"
           echo "archs: app=$APP_ARCHS node=$NODE_ARCHS"
           [[ " $APP_ARCHS " == *" arm64 "* ]] || { echo "::error::native .app 不是 arm64：$APP_ARCHS"; exit 1; }
           [[ " $NODE_ARCHS " == *" arm64 "* ]] || { echo "::error::捆绑 node 不是 arm64：$NODE_ARCHS"; exit 1; }
-          # P4(c)：release-artifacts 清单是真实消费者——要上传的 native 文件名
+          # release-artifacts 清单是真实消费者——要上传的 native 文件名
           # 必须逐字等于清单（碰撞断言因此观察到真实版本号）。
           node scripts/release/release-artifacts.mjs "$VERSION" --check-dir macos/release
-          # G29：只断言精确产物名（BASE = artifactBasename）——输出目录可能并存
+          # 只断言精确产物名（BASE = artifactBasename）——输出目录可能并存
           # 旧版本归档，glob 断言会被它们满足，上传也会把它们一起带走。
           test -f "${BASE}.dmg"
           test -f "${BASE}.zip"
-          # P4(b)：验证**上传的 blob 本身**，而不是归档前的 .app——解出 zip 内的
+          # 验证**上传的 blob 本身**，而不是归档前的 .app——解出 zip 内的
           # .app 再跑 codesign/架构/stapler/spctl；打包顺序倒退或 zip 损坏都在
           # 这里红，而不是等用户下载后才发现。
           EXTRACT="$RUNNER_TEMP/dsh-chamber-zip-verify"
@@ -1626,7 +1615,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ needs.create-release.outputs.version }}
-          # S-23：本步不签名（merge/verify 只搬运与断言条目）；SPARKLE_PRIVATE_KEY 在这里只是
+          # 本步不签名（merge/verify 只搬运与断言条目）；SPARKLE_PRIVATE_KEY 在这里只是
           # **状态判据**：配置了却没有 stable appcast = FAIL，没配 = loud 跳过刷新。
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
           # 刷新后的滚动 feed 要逐条验签（本版本条目的 zip/delta 就在 /tmp/appcast-in-stable）。
@@ -1634,21 +1623,21 @@ jobs:
         run: |
           set -euo pipefail
           BASE="macos/release/dsh-chamber-${VERSION}-macos-arm64"
-          # G29：精确路径，绝不 glob（旧版本归档可能残留并与 *.dmg/*.zip 匹配）。
+          # 精确路径，绝不 glob（旧版本归档可能残留并与 *.dmg/*.zip 匹配）。
           gh release upload "v${VERSION}" \
             "${BASE}.dmg" "${BASE}.zip" --clobber
-          # S-22/S-36：beta 通道在 verify 之后才滚动发布（rolling release 是公开
+          # beta 通道在 verify 之后才滚动发布（rolling release 是公开
           # 面）。顺序固定「归档 → appcast」：appcast 的每个 enclosure
           # （--download-url-prefix 钉在滚动 tag）必须先有可下载的 zip，beta 客户端
           # 才可能解析到一个指向缺失 asset 的 enclosure。stable 通道绝不被改写
-          # （appcast-swift.xml / releases/latest 形状不变），但 S-23 会在同一分支
+          # （appcast-swift.xml / releases/latest 形状不变），但同一分支仍会
           # **刷新滚动 beta appcast**（final 对 beta 客户端可见）。私钥缺失时 appcast
           # 步 loud 跳过、这里也 loud 跳过——照常发布，只是原生腿看不到这次更新。
           if [[ "$VERSION" == *-* ]]; then
             BETA_APPCAST="macos/release/appcast-swift-beta.xml"
             STAGED_ZIP="/tmp/appcast-in-beta/$(basename "${BASE}.zip")"
             if [[ ! -f "$BETA_APPCAST" ]]; then
-              # 2026-12 A2 密钥门禁：私钥在而 appcast 缺失 = appcast 步出事却没拦住
+              # 密钥门禁：私钥在而 appcast 缺失 = appcast 步出事却没拦住
               # （不该到达这里）——FAIL；两把钥匙都缺才是"没有更新链"的 loud 降级。
               if [[ -n "${SPARKLE_PRIVATE_KEY:-}" ]]; then
                 echo "::error::SPARKLE_PRIVATE_KEY 已配置但 $BETA_APPCAST 缺失（appcast 步未产出）——拒绝静默跳过滚动发布"
@@ -1702,15 +1691,15 @@ jobs:
           else
             # stable：delta 必须先随 draft 上传——finalize 后 stable feed 的 delta enclosure
             # 解析为 releases/latest/download/<delta>，而合并进滚动 beta feed 的 final 条目
-            # 也引用同一批 delta（S-36 顺序：归档先于 feed）。
+            # 也引用同一批 delta（顺序：归档先于 feed）。
             for ARCHIVE in /tmp/appcast-in-stable/*.delta; do
               [[ -f "$ARCHIVE" ]] || continue
               gh release upload "v${VERSION}" "$ARCHIVE" --clobber
             done
-            # S-23：final 发布也要刷新滚动 beta appcast——beta 客户端因此能看到 final
-            # （用户裁决：beta 遇到对应正式版允许升级到正式版；正式版不存在时按 beta 更新）。
-            # 2026-09 改法：stable 与 beta 的收件目录/feed 分开，刷新改为「已发布滚动 feed 的
-            # beta 条目 + 本次新生成的 stable final 条目」合并（不再重跑 generate_appcast：
+            # final 发布也要刷新滚动 beta appcast——beta 客户端因此能看到 final
+            # （beta 遇到对应正式版允许升级到正式版；正式版不存在时按 beta 更新）。
+            # stable 与 beta 的收件目录/feed 分开，刷新取「已发布滚动 feed 的
+            # beta 条目 + 本次新生成的 stable final 条目」合并（不重跑 generate_appcast：
             # 两通道归档同目录 + -o 会 multiple appcasts found）。只在滚动 release 已存在且
             # 本次 appcast 真的生成时刷新（绝不从 stable 腿创建或激活 beta 通道）。
             ROLLING_TAG="${SPARKLE_BETA_ROLLING_TAG}"
@@ -1753,7 +1742,7 @@ jobs:
                 else
                   echo "::warning::xmllint 不可用——跳过刷新 feed 的良构校验"
                 fi
-                # 2026-12 A2 + S-23：刷新后的滚动 appcast 必须宣传本版本（final 条目）且保留
+                # 刷新后的滚动 appcast 必须宣传本版本（final 条目）且保留
                 # beta 条目——只 test -f 证明不了 final 真的在。
                 node scripts/release/verify-native-appcast.mjs "$VERSION" /tmp/appcast-stable-refresh-out/appcast-swift-beta.xml \
                   --signatures-dir /tmp/appcast-in-stable --public-key "$SPARKLE_PUBLIC_ED_KEY" --expect-final-item
@@ -1767,7 +1756,7 @@ jobs:
               fi
             fi
           fi
-          # S-36 顺序（draft 面）：到此为止 zip/delta 都已随 draft 上传，最后才放 appcast——
+          # 顺序（draft 面）：到此为止 zip/delta 都已随 draft 上传，最后才放 appcast——
           # 任何时刻（含 finalize 前）读 draft 的 appcast 都能解析到真实存在的资产。
           APPCAST="appcast-swift.xml"
           [[ "$VERSION" == *-* ]] && APPCAST="appcast-swift-beta.xml"
@@ -1781,19 +1770,18 @@ jobs:
       contents: write
     steps:
       - name: Drop mac zip.blockmap assets from the draft release
-        # 2026-08 (v0.1.2 postmortem): electron-builder hardcodes the mac zip
+        # electron-builder hardcodes the mac zip
         # target's isWriteUpdateInfo=true (MacPackager.createTargets), so the
         # mac leg always uploads a .zip.blockmap sidecar. The feeds never
         # reference it (latest-mac.yml carries only zip sha512/size/url), so
         # it is deleted from the DRAFT before finalize — releases ship without
         # any .blockmap (Windows has differentialPackage=false already). The
         # blockmap is harmless-but-extra; deleting keeps the artifact list
-        # minimal and matches the v0.1.1 release shape.
+        # minimal.
         #
         # Resolved by RELEASE ID from create-release (not tags/{tag} — that
         # endpoint does not reliably resolve a draft). FAILS LOUD on any gh
-        # api error (the first version swallowed failures with `|| true`,
-        # leaving the blockmap in the published release).
+        # api error.
         if: ${{ github.event.inputs.dry_run != 'true' }}
         shell: bash
         run: |

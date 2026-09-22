@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /**
- * T6 H3 实验探针（2026-09，D3）：主 bundle 求值长任务归因。
+ * 实验探针：主 bundle 求值长任务归因。
  *
- * 每 run：**新建** CDP 连接（导航竞态下同一条 ws 跨 reload 偶发挂起——
- * 2026-09 实测）→ 注入早期观察者 → Page.reload 冷启 → settle 后读取：
+ * 每 run：**新建** CDP 连接（导航竞态下同一条 ws 跨 reload 偶发挂起）→
+ * 注入早期观察者 → Page.reload 冷启 → settle 后读取：
  *   - 每条 ≥50ms 长任务的 attribution（containerSrc/Name）与 duration；
  *   - 引导期全部 JS 资源加载（URL + transferSize）——fetch 完成序即大体
  *     等于 module 求值序。
@@ -21,8 +21,8 @@ import { sleep } from '../lib/cli.mjs'
 const runs = Number(process.argv[2] ?? 3)
 const outFlag = process.argv.indexOf('--out')
 const outPath = outFlag >= 0 ? process.argv[outFlag + 1] : 'scripts/perf/data/eval-baseline.json'
-// nit2 (2026-09 review)：与 boot-measure 同病——runs 非有限正整数（含首参误为
-// --out 得 NaN）时静默跑 0 次并写出空文件，改为显式报错退出
+// runs 非有限正整数（含首参误为
+// --out 得 NaN）会静默跑 0 次并写出空文件，因此显式报错退出
 if (!Number.isInteger(runs) || runs < 1) {
   console.error('用法：node scripts/perf/eval-measure.mjs [runs=3] [--out scripts/perf/data/eval-baseline.json]')
   console.error(`runs 须为 ≥1 的整数，收到：${JSON.stringify(process.argv[2] ?? '(缺省)')}`)
@@ -57,7 +57,7 @@ for (let i = 0; i < runs; i++) {
   cdp.close()
   await sleep(1000)
 }
-// nit1 (2026-09 review)：--out 目标目录未必已存在，写前先建（仿 disk-walk-baseline.mjs）
+// --out 目标目录未必已存在，写前先建（仿 disk-walk-baseline.mjs）
 mkdirSync(dirname(outPath), { recursive: true })
 writeFileSync(outPath, JSON.stringify({ at: new Date().toISOString(), env: { node: process.version }, results }, null, 2))
 console.log(`written: ${outPath}`)

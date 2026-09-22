@@ -1,12 +1,13 @@
 /**
- * Writer-quiescence latch recovery (2026-09-10, design 02 §3.4 / 04 §3.2).
+ * Writer-quiescence latch recovery (design 02 §3.4 / 04 §3.2).
  *
  * The startup scan opens the latch only when nothing is kept and no probe
- * failed. Before this revision a record that merely BECAME stale afterwards —
- * the orphaned managed host exited, or the ps identity probe was unavailable
- * at startup — kept the latch closed for the whole plane lifecycle: every
- * POST /api/connections answered 409 connection_busy, the in-app 启动/停止
- * buttons did nothing, and the documented recovery was "restart the app".
+ * failed. A record that merely BECOMES stale afterwards — the orphaned
+ * managed host exited, or the ps identity probe was unavailable at startup —
+ * must not keep the latch closed for the whole plane lifecycle: that state
+ * answers every POST /api/connections with 409 connection_busy, leaves the
+ * in-app 启动/停止 buttons doing nothing, and the documented recovery is
+ * "restart the app".
  *
  * Covered here: the re-proof a refused start performs (the recovery that needs
  * no user action), the structured 409 detail, the read-only diagnosis, and the

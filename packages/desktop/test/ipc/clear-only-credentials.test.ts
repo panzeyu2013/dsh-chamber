@@ -1,5 +1,5 @@
 /**
- * clear-only 凭据 IPC 的准入契约（2026-12 单源化，ARCH-IMPL-025）。
+ * clear-only 凭据 IPC 的准入契约。
  *
  * 三个 legacy 凭据 setter（desktop_ssh_set_password / desktop_gateway_set_token /
  * desktop_gateway_set_password）共用同一段准入前奏：id 白名单 + 注册表存在性 +

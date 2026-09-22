@@ -1,5 +1,5 @@
 /**
- * CI change classifier (2026-09).
+ * CI change classifier.
  *
  * The push path runs an expensive chain (install → type checks → every unit
  * suite → builds → gateway pack). A change that touches nothing but prose

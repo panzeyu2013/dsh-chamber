@@ -10,8 +10,7 @@
  * fixed port; findFreePort is only consulted when it is unset). Tunnel
  * transports have no port preference and use the OS-assigned ephemeral arm
  * (findFreeEphemeralPort) for their loopback local ports — the same
- * bind-and-release probe kernel, `listen(0)` semantics (formerly a separate
- * allocateLocalPort in transport-manager.ts).
+ * bind-and-release probe kernel, `listen(0)` semantics.
  */
 
 import { createServer, type AddressInfo } from 'node:net'

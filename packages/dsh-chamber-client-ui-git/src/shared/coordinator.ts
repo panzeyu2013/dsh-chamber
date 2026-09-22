@@ -19,7 +19,7 @@ import { GitActionLedger } from './action-ledger.ts'
 import { SerializedRefreshes } from './refresh-flight.ts'
 import { GitWorktreeRpcError, gitWorktreeApi, isAmbiguousGitRpcFailure, isDeterministicGitRejection } from './git-api.ts'
 import { canTargetSession, findWorktree, removeBlockReason } from './git-facts.ts'
-// Hidden-tab polling gate + injectable visibility face (P1, 2026-11) — the
+// Hidden-tab polling gate + injectable visibility face — the
 // module is dependency-free so the node suite covers it (see
 // test/shared/visibility-gate.test.ts).
 import { isPollEligible, visibilityEvents } from './visibility-gate.ts'
@@ -100,7 +100,7 @@ function publishWorkspaceGitFlags(
   // Refresh per snapshot WITHOUT a leading full clear: the worktree flags are
   // re-set, the orphan markers MERGE onto the previous identity (an
   // externally-deleted worktree leaves its workspace orphaned but still a
-  // worktree — branch glyph + "已消失" badge, review 2026-08), then the
+  // worktree — branch glyph + "已消失" badge), then the
   // truly-stale flags are pruned by the keep set.
   const keep = new Set<string>()
   const layouts: Array<{ repoKey: string; mainWorkspaceId: string | null; unregistered: UnregisteredWorktreeInfo[] }> = []
@@ -110,7 +110,7 @@ function publishWorkspaceGitFlags(
     for (const worktree of repo.worktrees) {
       if (worktree.workspaceId === null) {
         // The MAIN checkout is never an unregistered worktree — it may
-        // simply have no dsh workspace of its own (user report 2026-08).
+        // simply have no dsh workspace of its own.
         if (worktree.isMain) continue
         unregistered.push({
           name: pathBasename(worktree.path) || worktree.path,
@@ -139,7 +139,7 @@ function publishWorkspaceGitFlags(
   // snapshot's discovery failures. MERGE onto the PREVIOUS flag (which
   // survived — no leading clear): the orphan keeps its worktree identity
   // (branch glyph / no kebab / git title) + the "已消失" badge.
-  // NOTE (2026-08): the host reports a missing path as 'path-unavailable'
+  // NOTE: the host reports a missing path as 'path-unavailable'
   // (a GitWorktreeError code); 'workspace-path-failed' is only the fallback
   // for NON-GitWorktreeError failures. Both must mark the workspace orphaned.
   for (const error of snapshot.errors) {
@@ -156,7 +156,7 @@ function publishWorkspaceGitFlags(
       keep.add(error.workspaceId)
     }
   }
-  // Repo-level failure inheritance (cross-review P2-2): when a repository's
+  // Repo-level failure inheritance: when a repository's
   // worktree listing fails/absents this round, its worktree workspaces would
   // be pruned by the keep set (branch glyphs / delete buttons flicker away).
   // Inherit the PREVIOUS snapshot's associations for repos missing now — the
@@ -172,7 +172,7 @@ function publishWorkspaceGitFlags(
   }
   retainSourceWorkspaceFlags(sourceId, keep)
   setSourceRepoLayouts(sourceId, layouts)
-  // 2026-10 review (design 06 §2.4): the snapshot (even an empty one) is
+  // design 06 §2.4: the snapshot (even an empty one) is
   // the source's identity resolution — the sidebar gates the workspace
   // accent on this so a git workspace never first renders an independent
   // hue that later flips to its family hue (one-time startup flash).
@@ -273,8 +273,7 @@ async function beginRefresh(sourceId: string): Promise<GitSourceState> {
     const staleEmpty = snapshot.sourceError !== undefined && snapshot.repos.length === 0 && previous !== undefined
     // A deadline-stale snapshot must not clear the flags of the still-valid
     // previous snapshot (drag boundaries / badges would vanish for up to 30s
-    // while the state keeps the old snapshot) — publish the EFFECTIVE one
-    // (review P2-4).
+    // while the state keeps the old snapshot) — publish the EFFECTIVE one.
     publishWorkspaceGitFlags(sourceId, staleEmpty ? previous : snapshot, previous)
     return patchSource(sourceId, {
       connected: true,
@@ -345,7 +344,7 @@ function finishMutation(sourceId: string): void {
  * 乐观 worktree 形态 + 未注册块收敛，**必须在回声事实发布之前**跑
  * （`beforePublish`，见 workspace-mutations.ts）：事实一到，App 立刻重派生投影，
  * 此刻该行必须已经是 worktree 形态（分支图标 / 无 kebab / 删除动作），同一路径
- * 也不能还挂着一条"未注册工作树"行。两个 store 的写入都早于那次派生，因此不再
+ * 也不能还挂着一条"未注册工作树"行。两个 store 的写入都早于那次派生，因此不
  * 依赖"两个 React 更新落在同一批次"这种调度层假设。
  */
 function decorateWorktreeWorkspace(
@@ -367,14 +366,14 @@ function decorateWorktreeWorkspace(
     : layout))
 }
 
-/** Best-effort post-adopt placement/identity (review 2026-08):
+/** Best-effort post-adopt placement/identity:
  *  - `workspace.insertBefore` moves the new workspace right after its main
  *    checkout (the registry PREPENDS by default, leaving the worktree
  *    stranded at the list head — "not associated with the original
  *    workspace");
  *  - the title derives from the branch (the directory basename can equal
  *    the main checkout's name).
- *  Flag + repo layout are NOT here any more: they ride the create funnel's
+ *  Flag + repo layout are NOT here: they ride the create funnel's
  *  `beforePublish` (see decorateWorktreeWorkspace), so the adopted row's first
  *  projected frame is already the real worktree row and the unregistered row is
  *  gone in the same derive pass.
@@ -452,7 +451,7 @@ async function performCreateSaga(
     const result = await runCreateSaga({
       hostCreate: input => gitWorktreeApi.create(sourceId, input, preview),
       hostRollback: (input, expected) => gitWorktreeApi.rollbackCreate(sourceId, input, expected),
-      // 2026-12（design 05 §2.2.1 第二入口）：workspace.create 必须走唯一出口，
+      // design 05 §2.2.1 第二入口：workspace.create 必须走唯一出口，
       // 否则这个 0 会话的工作区行在未挂载来源上没有任何读通道，只能等用户点开
       // 那个服务器。位置锚点 = 本次创建的主 checkout（宿主上新 worktree 就摆在
       // 它后面）；worktree flag 走 beforePublish——**事实发布之前**写好，因为 App
@@ -576,7 +575,7 @@ export async function createSessionHere(sourceId: string, path: string): Promise
         sessionCreate: (workspaceId, id) => createSessionForSource(sourceId, workspaceId, { sessionId: id, origin: 'user' }),
       }, path, sessionId)
       setRecovery(sourceId, undefined)
-      // Position + identity (review 2026-08): the wire PREPENDS new
+      // Position + identity: the wire PREPENDS new
       // workspaces (registry order head) — the adopted worktree must sit
       // right AFTER its main checkout, and its title should be the branch
       // (the directory basename can equal the main's name). Both are
@@ -619,7 +618,7 @@ async function performRemoveSaga(
         expected: request.expected,
         // UNREGISTERED removal: the input itself must carry the path (the
         // host fingerprints the whole input — a path-less replay mismatch
-        // would permanently wedge recovery, review P1-2).
+        // would permanently wedge recovery).
         ...(request.workspaceId === undefined ? { path: request.path } : {}),
         ...(request.deleteBranch === undefined ? {} : { deleteBranch: request.deleteBranch }),
         ...discardChanges,
@@ -651,7 +650,7 @@ async function performRemoveSaga(
       // resolves a pending git-remove recovery replaying THIS same removal
       // as "not removed": clear the recovery instead of preserving an
       // endless same-reason retry with no dismiss (design 08 §6.2 bounded
-      // exception, 2026-09 submodule report). Every genuinely ambiguous
+      // exception). Every genuinely ambiguous
       // failure and every saga-minted recovery keep their semantics.
       setRecovery(sourceId, isProvenPreMutationRefusal(error)
         ? undefined
@@ -673,7 +672,7 @@ export function currentSessionIsBlank(sourceId: string, sessionId: string | unde
     workspace.sessions.some(session => session.id === sessionId && session.blank === true))
 }
 
-/** Marker for the in-dialog dirty dead-end (review 2026-08 P2-1): the dialog
+/** Marker for the in-dialog dirty dead-end: the dialog
  *  shows the discard checkbox from its (possibly stale) row dirty fact; if
  *  the FRESH preflight snapshot discovers dirty after the dialog opened
  *  clean, the dialog must force-show the checkbox instead of leaving the
@@ -707,20 +706,20 @@ export async function removeWorktree(
     if (found === undefined) throw new GitActionError('worktree-not-found', 'The worktree no longer exists')
     const server = chamberBridge.getServers().find(candidate => candidate.id === sourceId)
     const current = server?.runtime?.current
-    // NO IMPLICIT SESSION TOUCHING (2026-09 user decision, design 08 §5.2
-    // amendment): a worktree removal never stops, cancels, or deletes a
+    // NO IMPLICIT SESSION TOUCHING (design 08 §5.2 amendment): a worktree
+    // removal never stops, cancels, or deletes a
     // session, and never archives one UNLESS the user opted in — the
     // 「归档工作区中会话」 checkbox is explicit, default-OFF, and drives the
     // pre-remove archive pass below (runPreRemoveArchive).
     // What blocks is decided by the HOST's archived-aware running fact
     // (`blockingRunningSessionIds`): a running session that is archived — or
-    // whose ancestor is — is INERT and no longer blocks. `removeBlockReason`
+    // whose ancestor is — is INERT and does not block. `removeBlockReason`
     // reads that field and falls back to `runningSessionIds` on an older host
     // (conservative). The `current` hard block and the `runtime-unknown`
     // fail-closed block are NOT running guards and stay in force (removing the
     // cwd of the session being viewed would break its subsequent tool calls).
-    // removeBlockReason evaluates BOTH before the running reason (review
-    // G1-1), so a stale or archived-only running fact cannot bypass them —
+    // removeBlockReason evaluates BOTH before the running reason, so a stale
+    // or archived-only running fact cannot bypass them —
     // this fresh preflight is the last client-side gate before the host's own
     // `running-agent` re-check.
     const blockOf = (worktree: GitWorktreeInfo): ReturnType<typeof removeBlockReason> => removeBlockReason(
@@ -740,7 +739,7 @@ export async function removeWorktree(
     // Dirty is NOT an automatic throw here: the dialog collects an explicit
     // user checkbox (discardChanges) authorizing the host to force-remove —
     // the worktree's uncommitted files are discarded, the branch is kept
-    // (design 08 §5.3 amendment 2026-08). The typed marker lets the dialog
+    // (design 08 §5.3 amendment). The typed marker lets the dialog
     // force-show the checkbox even when its row fact was stale-clean.
     if (blocked === 'dirty' && options.discardChanges !== true) {
       throw new WorktreeDirtyError()
@@ -791,7 +790,7 @@ export async function removeWorktree(
  *  removal via the host's path-based variant, no workspace.delete, no
  *  archive step (there are no sessions). NOTE: the unregistered row's delete
  *  button stays hard-disabled for dirty worktrees (no discard checkbox in
- *  its window.confirm flow — review 2026-08 P2-2); the host-side
+ *  its window.confirm flow); the host-side
  *  `discardChanges` path exists but is not wired from this UI yet. */
 export async function removeUnregisteredWorktree(
   sourceId: string,
@@ -799,7 +798,7 @@ export async function removeUnregisteredWorktree(
   options: { deleteBranch?: string } = {},
 ): Promise<void> {
   const operationId = nextId('remove')
-  // Fresh refresh first (P2-3): the row identity may be up to 30s stale —
+  // Fresh refresh first: the row identity may be up to 30s stale —
   // an expected-mismatch on a stale snapshot would needlessly fail.
   const refreshFailure = await refreshSource(sourceId, true).catch((error: unknown) => error)
   if (refreshFailure !== undefined) {
@@ -830,7 +829,7 @@ export async function removeUnregisteredWorktree(
     } catch (error) {
       // Ambiguous failures must become a durable git-remove recovery (the
       // host may have committed the removal) — never a one-shot actionError
-      // that would force a fresh operationId next time (review P1-3).
+      // that would force a fresh operationId next time.
       if (error instanceof GitSagaError) {
         setRecovery(sourceId, recoveryForFailure(error, undefined))
         if (error.refreshNeeded) finishMutation(sourceId)
@@ -879,7 +878,7 @@ export async function retryRecovery(sourceId: string): Promise<void> {
         }, recovery)
         requestOpenSession(sourceId, result.sessionId)
       } else if (recovery.kind === 'session-create') {
-        // I10 归因：恢复路径仍属用户发起的 worktree saga（不是 boot 交接）。
+        // 恢复路径仍属用户发起的 worktree saga（不是 boot 交接）。
         await createSessionForSource(sourceId, recovery.workspaceId, { sessionId: recovery.sessionId, origin: 'user' })
         requestOpenSession(sourceId, recovery.sessionId)
       } else {

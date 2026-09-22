@@ -1,7 +1,7 @@
 /**
- * I3/I4 仪器锁（plan §10；`notes/residual-verifiability-review.md` §5-I3/I4）：
+ * 仪器锁：
  * 徽标计数必须可回读、通知的**每一个决定**（含"没有桥"这次）必须可查，且账本记的是
- * **主进程回执**而不是"我们调用了通知"——R6/R3 的负断言只有配上同一次运行内的正对照
+ * **主进程回执**而不是"我们调用了通知"——负断言只有配上同一次运行内的正对照
  * 才有意义，而正对照要求看见主进程的诚实结果。
  *
  * Run directly: node test/session-state/notification-ledger.test.ts
@@ -18,8 +18,8 @@ import {
 
 const APP = readFileSync(fileURLToPath(new URL('../../src/App.tsx', import.meta.url)), 'utf8')
 const APP_LINES = APP.split('\n')
-// 阶段 3：徽标推送 effect 簇已抽为命名 hook；锁钉在其最终落点（意图不变，只是位置
-// 从 App.tsx 移到 hook——App 内不可渲染测试，hook 的行为由窗口桥面在真机验证）。
+// 徽标推送 effect 簇是命名 hook；锁钉在该 hook（App 内不可渲染测试，
+// hook 的行为由窗口桥面在真机验证）。
 const BADGE_HOOK = readFileSync(
   fileURLToPath(new URL('../../src/app-hooks/use-badge-count.ts', import.meta.url)),
   'utf8',
@@ -70,7 +70,7 @@ test('every notification decision is recorded — including the no-bridge case',
 test('the ledger records the MAIN-PROCESS result, and notify is still called exactly once', () => {
   // 账本读的是回执（shown/error），不是"调用了"。
   assert.doesNotMatch(APP, /notificationLedger\.record\(\{\s*\.\.\.ledgerBase,\s*decision: 'sent' \}\)/)
-  // 单组装点锁（与 WS-C 的 L6/L7 同一条）：去掉注释行后 bridge.notify( 只出现一次。
+  // 单组装点锁：去掉注释行后 bridge.notify( 只出现一次。
   // 注释行两种形态都要剔除：行注释 `//` 与块注释体 `*`（文档注释里也会提到这个调用）。
   const calls = APP_LINES.filter(line => {
     const trimmed = line.trimStart()

@@ -1,6 +1,6 @@
 /**
  * dsh-runtime-store.ts 保护判定、激活 journal、失败记录与快照保留测试
- * （design 18 §3.2/§3.5），原名 dsh-runtime-store.test.ts 的主体段（P0 拆分保留）。
+ * （design 18 §3.2/§3.5）。
  * Shared fixtures: test/support/store-fixtures.ts. Siblings:
  *   - metadata-authority.test.ts (pointer/override/isProtected/listVersionTrees)
  *   - disk-accounting.test.ts (runtimeDiskSummaryAsync accounting)
@@ -431,10 +431,10 @@ test('stale-install cleanup only removes a proven empty pre-spawn work dir', () 
 });
 
 test('stale-install cleanup reclaims a pre-spawn work dir whose state marker is preparing', () => {
-  // P1 regression: the installer writes package.json/pnpm-workspace.yaml
+  // The installer writes package.json/pnpm-workspace.yaml
   // BEFORE any child exists (the download window is the longest phase), so a
-  // hard crash there used to leave a non-empty work dir with no PID evidence
-  // and block startup forever with no UI escape. The 'preparing' marker
+  // hard crash there leaves a non-empty work dir with no PID evidence
+  // that would otherwise block startup with no UI escape. The 'preparing' marker
   // proves no child ever existed and makes the residue reclaimable.
   const base = freshBase();
   const work = path.join(base, 'dsh-runtime', '.work-prepare-crash');

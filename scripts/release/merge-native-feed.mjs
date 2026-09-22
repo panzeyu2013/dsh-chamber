@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 /**
- * merge-native-feed.mjs —— 滚动 beta feed 的跨通道条目合并（S-23；2026-09 增量更新）。
+ * merge-native-feed.mjs —— 滚动 beta feed 的跨通道条目合并。
  *
  * 背景（为什么需要它）：Sparkle 的 generate_appcast 按每个归档**内嵌 SUFeedURL 的文件名**
  * 分组，同一收件目录里同时放 stable 与 beta 归档、又传 `-o`（单输出文件）时直接失败
  * `multiple appcasts found`（Sparkle 2.10.0 generate_appcast/Appcast.swift:45-62；本仓
- * 2026-09 本地实测复现）。所以要为 delta 增加历史归档 staging，stable 与 beta 的收件目录
- * 必须**完全分开**；而 S-23 又要求 beta 客户端的滚动 feed 上能看到最新正式版（用户裁决：
- * beta 版本遇到对应正式版允许升级到正式版，只有正式版不存在时才按 beta 通道更新）。
+ * 本地实测复现）。所以要为 delta 增加历史归档 staging，stable 与 beta 的收件目录
+ * 必须**完全分开**；同时 beta 客户端的滚动 feed 上必须能看到最新正式版
+ * （beta 版本遇到对应正式版允许升级到正式版，只有正式版不存在时才按 beta 通道更新）。
  *
  * 做法：beta feed 由 beta 收件目录单独生成（beta 条目 + beta→beta delta），本脚本只把
  * **已发布 stable feed 里的最新 final 条目**复制进 beta feed。条目是 generate_appcast
@@ -181,7 +181,7 @@ export function mergeRollingBetaFeed({
     }
   }
   // 搬进滚动 feed 的 final 条目必须自带签名 enclosure：否则 beta 客户端会拒绝它，
-  // S-23 的「能看到正式版」就只剩一个不可安装的条目（stable 腿自己也会断言签名，这里是纵深防御）。
+  // 「能看到正式版」就只剩一个不可安装的条目（stable 腿自己也会断言签名，这里是纵深防御）。
   if (finalItem !== null
     && !appcastMainEnclosureTags(finalItem).some((tag) => /\bsparkle:edSignature="[^"]+"/.test(tag))) {
     throw new Error('候选 final 条目没有任何带 sparkle:edSignature 的 enclosure——拒绝把它搬进滚动 beta feed')

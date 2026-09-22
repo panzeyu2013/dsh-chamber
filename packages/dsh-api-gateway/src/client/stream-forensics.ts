@@ -1,13 +1,11 @@
 /**
- * Page-level stream-lifecycle forensics (chamber fork, design 14 §D4, 2026-09).
+ * Page-level stream-lifecycle forensics (chamber fork, design 14 §D4).
  *
- * WHY THIS EXISTS. The 2026-09 ui-chat freeze investigation could count the
+ * WHY THIS EXISTS. No durable surface can say WHO closed the
  * control plane's splices ("WebSocket stream local closed (browser close, ~19s)"
- * every ~20 s) but could NOT see, from any durable surface, WHO closed them or
- * WHY a generation ended: the renderer console is not persisted, the Swift shell
- * exposes no DevTools, and the mux client kept its own reasons in a closure. The
- * fix for the freeze makes that churn survivable; this fact makes the next
- * investigation answerable — one bounded page event per lifecycle transition
+ * every ~20 s) or WHY a generation ended: the renderer console is not persisted
+ * and the Swift shell exposes no DevTools. This fact makes that churn answerable —
+ * one bounded page event per lifecycle transition
  * (socket lost/reconnect/replaced-while-silent/dispose, opening-item timeout,
  * generation ready/lost).
  *

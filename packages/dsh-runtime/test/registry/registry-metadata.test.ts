@@ -117,8 +117,8 @@ test('fetchRegistryMetadata: version order and latest fallback use exact semver 
         '0.2.0-alpha': entry(origin, '0.2.0-alpha'),
         '0.2.0-alpha.1': entry(origin, '0.2.0-alpha.1'),
         '0.2.0-beta': entry(origin, '0.2.0-beta'),
-        // Numeric identifiers beyond Number.MAX_SAFE_INTEGER: the former
-        // local comparator treated these as equal (Number precision loss).
+        // Numeric identifiers beyond Number.MAX_SAFE_INTEGER: the local
+        // comparator must not treat these as equal (Number precision loss).
         '0.2.0-rc.9007199254740992': entry(origin, '0.2.0-rc.9007199254740992'),
         '0.2.0-rc.9007199254740993': entry(origin, '0.2.0-rc.9007199254740993'),
         '0.2.0-rc.2': entry(origin, '0.2.0-rc.2'),

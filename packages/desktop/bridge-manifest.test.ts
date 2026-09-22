@@ -1,6 +1,6 @@
 /**
- * bridge-manifest.test.ts — W-17 通道 manifest 生成管线测试（design 25
- * §4.4.3；docs/progress/todo/macos-swift-v1.md W-17 行；§0.1-E8/B12 companion）。
+ * bridge-manifest.test.ts — 通道 manifest 生成管线测试（design 25
+ * §4.4.3；docs/progress/todo/macos-swift-v1.md；§0.1-E8/B12 companion）。
  *
  * 被测管线：scripts/emit-bridge-manifest.mjs（输入 ipc-events.ts 的
  * IPC_CHANNELS 常量表 + main 侧三文件 handle/send 注册事实 → 产出
@@ -10,13 +10,13 @@
  * （computeManifest/renderJsonManifest/renderSwiftManifest），但本测试文件
  * 属根 typecheck 程序（tsconfig include packages/desktop/*.ts，strict +
  * moduleResolution nodenext）：无声明文件的 .mjs import 会报 TS7016，而
- * W-17 的四文件预算内不能再放一个 .d.mts —— 因此本测试 spawn 直跑生成器
+ * 四文件预算内不能再放一个 .d.mts —— 因此本测试 spawn 直跑生成器
  * CLI 到临时目录（位置参数覆盖输出路径），再与提交物逐字节比对。这同时
  * 覆盖了 CLI 的 argv/退出码路径；语义与 import 形态等价（CLI 与导入路径
  * 共用同一 computeManifest 纯函数）。spawn 亦是 desktop 测试既有惯例
  * （sidecar-stdio.test.ts 同族）。
  *
- * 断言面（W-17 退出标准：生成物 == 提交物绿 + 通道数守恒）：
+ * 断言面（生成物 == 提交物绿 + 通道数守恒）：
  *   ① 重生成 JSON == 提交物 packages/desktop/bridge-manifest.json（文本级）；
  *   ② 重生成 Swift == 提交物 macos/Sources/DSHChamber/Generated/BridgeManifest.swift；
  *   ③ 通道数守恒：counts {invoke:60, push:8, total:68} 与两列表长度自洽；
@@ -29,12 +29,11 @@
  *   ⑥ 提交物双件语义一致：Swift 三 Set 的字面量集合与 JSON 通道集逐条对应
  *      （防两提交物手工改坏其一 —— 文本级相等之外的交叉检查）。
  *
- * E8 chamber-bridge.stub.js 存根已由本管线的第三产物 renderShimStub 产出并
+ * chamber-bridge.stub.js 存根由本管线的第三产物 renderShimStub 产出并
  * 提交；其逐字节锁步、通道映射与 vm 执行断言在 bridge-shim.test.ts。本文件只
  * 守 JSON/Swift 两提交物，桥面一致性不重复断言。维度：manifest 当前只承载
  * 方向（invoke/push）；design 25 §4.4.3 提到的「归属命名空间」不在产物内——
- * 命名空间方法面由 bridge-shim-surface.test.ts 锁 preload ↔ shim，设计句由
- * docs owner 修订（生成器头注释同注）。
+ * 命名空间方法面由 bridge-shim-surface.test.ts 锁 preload ↔ shim。
  *
  * 通道增删纪律：改动 IPC_CHANNELS/注册文件必须同 PR 提交新 manifest 两件，
  * 并把本文件 ③④⑤ 中钉死的数字/清单随事实同步（与 ipc-surface-mirror.test.ts
@@ -129,9 +128,8 @@ test('② 重生成 Swift 与提交物 BridgeManifest.swift 逐字节一致', ()
 
 test('③ 通道数守恒：counts {invoke:60, push:8, total:68} 与两列表长度自洽', () => {
   const { manifest } = regenerated()
-  // 当前仓库事实（68 = 60 + 8，与 ipc-surface-mirror.test.ts 的 B8 集合断言
-  // 同一批事实；2026-12 删除 legacy instances_set 通道 -1 invoke）；通道增删时
-  // 须与两提交物同步更新。
+  // 当前仓库事实（68 = 60 + 8，与 ipc-surface-mirror.test.ts 的集合断言
+  // 同一批事实）；通道增删时须与两提交物同步更新。
   assert.deepEqual(manifest.counts, { invoke: 60, push: 8, total: 68 })
   assert.equal(manifest.invoke.length, manifest.counts.invoke)
   assert.equal(manifest.push.length, manifest.counts.push)
@@ -206,7 +204,6 @@ test('⑥ 提交物双件语义一致：Swift 字面量集合与 JSON 通道集�
   // ① ② 已保证「重生成 == 提交物」，两者同源出自一次生成；本测试在文本
   // 相等之外做交叉检查——即便双件被手工改坏成「互相一致但偏离生成器」，
   // ① ② 仍会红，此处再钉死 Swift 两个 Set 与 JSON 集合的字面量对应。
-  // （allChannels 并集推导生产零引用，2026-12 审计随生成器一并删除。）
   const { swiftText, manifest } = regenerated()
   assert.match(swiftText, /static let invokeChannels: Set<String> = \[/)
   assert.match(swiftText, /static let pushChannels: Set<String> = \[/)

@@ -1,14 +1,14 @@
 /**
- * Open-in header utility entry (design 16 §6 + open-in extension + Batch 3
- * Phase 2 unification): the SINGLE header entry that opens the current
+ * Open-in header utility entry (design 16 §6 + open-in extension): the SINGLE
+ * header entry that opens the current
  * session's workspace in an installed app, over the per-source view-model.
  *
  * Registered into the OFFICIAL conversation header utilities slot
  * (`conversation.session.header.utilities`, the same right-aligned row as the
- * vendor "Session log" action), so the control lays out INLINE beside it — the
- * original `shell.overlay` top-right anchor was measured to overlap that row
- * (details column closed ⇒ the center column reaches the frame edge), so the
- * frame-level position is gone entirely.
+ * vendor "Session log" action), so the control lays out INLINE beside it: a
+ * `shell.overlay` top-right anchor would overlap that row (details column
+ * closed ⇒ the center column reaches the frame edge), so the frame-level
+ * position is not an option.
  *
  * Presentation matrix (see `shared/open-in-view-model.ts`, the single decision
  * surface):
@@ -23,14 +23,12 @@
  * (remembered/default selection) plus the chevron menu, upstream's own single
  * form for any non-empty set; zero renders null.
  * The menu is the official `Menu` primitive (chamber `compact` rows — the
- * 2026-09 menu-density decision, design 06 §7 — fill selection, real
- * app icons, focus transfer and arrow navigation through `autoFocus`), and both
- * halves of the split control carry the design-system `Tooltip` (the chevron's
- * native `title` tooltip was retired in the 2026-12 engine-alignment round:
- * WebKit and Chromium draw that bubble differently); only the
+ * menu-density decision, design 06 §7 — fill selection, real app icons, focus
+ * transfer and arrow navigation through `autoFocus`), and both halves of the
+ * split control carry the design-system `Tooltip` (a native `title` bubble is
+ * not used: WebKit and Chromium draw it differently); only the
  * `.instance-view`-scoped dismissal stays local (`instance-view-guard.ts`)
- * because this shell stacks one instance view per source (2026-09-11
- * upstream-alignment, T13/T5).
+ * because this shell stacks one instance view per source.
  *
  * Superset of the official `open-in-app` client (design 20 §7): the catalog and
  * its real icons (`local-catalog.ts`), the product-label table and button copy
@@ -39,8 +37,8 @@
  * error), plus what upstream never had — remote sources through the desktop
  * main-process provider, source-scoped memory and the remote deeplink carrier.
  *
- * PRESENTATION is the official control's, not a chamber variant (2026-09-12
- * style parity): the 28px / r14 / `border-l4` split box, a 15px mark in the
+ * PRESENTATION is the official control's, not a chamber variant: the 28px /
+ * r14 / `border-l4` split box, a 15px mark in the
  * main button, the design-system `IconChevronDownOutline14` at 11px behind the
  * chevron's own `border-left` hairline, an 18px mark in the menu rows and
  * upstream's own rounded-square fallback glyph for an app whose icon the host
@@ -229,8 +227,8 @@ export function OpenInButton({
   const [open, setOpen] = useState(false)
   /** Why the last launch failed, presented IN THE APP (the design-system
    *  tooltip, beside the red ring) instead of a console line plus a native
-   *  `title` bubble (2026-09-11 upstream-alignment, T5). Cleared with the
-   *  error dress it belongs to, so no stale reason can outlive it. */
+   *  `title` bubble. Cleared with the error dress it belongs to, so no stale
+   *  reason can outlive it. */
   const [failureReason, setFailureReason] = useState<string | null>(null)
   const inFlight = useRef(false)
   const busyTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
@@ -246,7 +244,7 @@ export function OpenInButton({
     clearTimeout(errorTimer.current)
   }, [])
 
-  // The one piece of the retired bespoke menu that is genuinely N-ctx: this
+  // The one piece of the menu that is genuinely N-ctx: this
   // shell keeps one `.instance-view` per attached source and hides inactive
   // ones, so an open menu must close when the view that owns it goes inactive
   // (see instance-view-guard.ts). Focus transfer, arrow/Home/End navigation,
@@ -263,7 +261,7 @@ export function OpenInButton({
   if (entries.length === 0) return null
 
   // Gate 2: THIS header's session must live in a workspace with a concrete
-  // path. Both remote and local sources show (user decision 2026-08); the
+  // path. Both remote and local sources show; the
   // launch channel decides ssh-remote vs local/instance semantics.
   const path = workspacePathForSession(workspaces, sessionId)
   if (path === undefined || path === '') return null
@@ -321,7 +319,7 @@ export function OpenInButton({
   // ≥1 usable entry → the official split button: main icon button
   // (remembered/default selection) + chevron menu. Upstream has no
   // single-entry form — it renders this same control for one app as for ten —
-  // so neither does this entry (2026-09-12 thorough unification). The rows
+  // so neither does this entry. The rows
   // carry the same real app marks the button does, at the primitive's icon
   // size (upstream `MenuItem.icon`).
   const items: MenuItem[] = entries.map(entry => ({
@@ -333,11 +331,10 @@ export function OpenInButton({
     <Menu
       open={open}
       autoFocus
-      // 2026-09 menu-density decision (P2-A, A-5): the upstream-alignment round
-      // had this on `dense` (34px items); every chamber popup menu now runs at
-      // the chamber scale (`compact`, 26px/12px). Everything else the alignment
-      // won stays: `autoFocus` focus transfer, arrow-key navigation,
-      // `selection="fill"`, item icons and the portal.
+      // Every chamber popup menu runs at the chamber scale (`compact`,
+      // 26px/12px), not `dense` (34px items). `autoFocus` focus transfer,
+      // arrow-key navigation, `selection="fill"`, item icons and the portal all
+      // stay.
       compact
       selection="fill"
       align="end"
@@ -366,7 +363,7 @@ export function OpenInButton({
               onClick={() => {
                 // The anchor REGION is the Menu's own root, so a press on the
                 // main button is not an outside dismissal: close the list here,
-                // as the previous menu did, so no list lingers over a launch.
+                // so no list lingers over a launch.
                 setOpen(false)
                 openApp(activeEntry)
               }}
@@ -375,10 +372,10 @@ export function OpenInButton({
               {appMark(iconUrl(activeEntry.id), BUTTON_MARK_SIZE)}
             </button>
           </Tooltip>
-          {/* Same design-system bubble as the main button: the chevron may
-              carry no native `title` (2026-12 engine alignment — WebKit and
-              Chromium draw native tooltips differently, so the split control
-              shows one bubble source for both halves). */}
+          {/* Same design-system bubble as the main button: the chevron carries
+              no native `title` (WebKit and Chromium draw native tooltips
+              differently, so the split control shows one bubble source for both
+              halves). */}
           <Tooltip label={t('menuToggle')} side="bottom">
             <button
               type="button"
@@ -389,8 +386,7 @@ export function OpenInButton({
               onClick={() => {
                 const next = !open
                 setOpen(next)
-                // The catalog is re-probed on every open (the bespoke menu's
-                // `onOpening` behaviour, now owned by the trigger).
+                // The catalog is re-probed on every open.
                 if (next) void refresh()
               }}
               onKeyDown={(event) => {

@@ -1,6 +1,6 @@
 /**
- * release-artifacts.test.mjs —— 双端同 tag 产物清单断言（W-27）：两族产物名不碰撞、feed
- * 归属唯一（Electron 腿 yml feed vs Swift 腿 Sparkle appcast，S-22 双通道）、命名规则可预测
+ * release-artifacts.test.mjs —— 双端同 tag 产物清单断言：两族产物名不碰撞、feed
+ * 归属唯一（Electron 腿 yml feed vs Swift 腿 Sparkle appcast 双通道）、命名规则可预测
  * （stable/beta 通道），并与 release.yml 的 --artifact-basename 命名参数一致。
  */
 import { test } from 'node:test'
@@ -60,7 +60,7 @@ test('feed 归属唯一：Electron 产出 yml，Swift 产出 appcast（S-22 双�
   assert.equal(nativeMacFeed('0.3.0-beta.2'), 'appcast-swift-beta.xml',
     'beta 是 GitHub prerelease，/releases/latest 解析不到，必须有自己的 appcast')
 
-  // S-22 双通道 URL（稳定 = releases/latest；beta = 滚动 tag 的 asset）。
+  // 双通道 URL（稳定 = releases/latest；beta = 滚动 tag 的 asset）。
   assert.equal(NATIVE_BETA_ROLLING_TAG, 'appcast-swift-beta')
   assert.ok(!NATIVE_BETA_ROLLING_TAG.startsWith('v'),
     '滚动 tag 不得以 v 开头——release.yml 的 tag 触发是 v*，否则创建滚动 release 会触发一次发布')
@@ -76,7 +76,7 @@ test('feed 归属唯一：Electron 产出 yml，Swift 产出 appcast（S-22 双�
   assert.equal(nativeMacFeedPath('0.3.0-beta.2'),
     'releases/download/appcast-swift-beta/appcast-swift-beta.xml')
   // releaseManifest 的同一组字段由本文件 CLI 用例（--check-dir/JSON 清单）与
-  // release-workflow-policy.test.mjs 的 feed 名钉住；此处不再重复 in-process 断言。
+  // release-workflow-policy.test.mjs 的 feed 名钉住；此处不重复 in-process 断言。
 })
 
 test('release.yml 的 Swift 命名参数与本清单一致（其余 workflow 行由 release-workflow-policy 权威钉住）', () => {
@@ -160,7 +160,7 @@ test('--check-dir：清单成为真实消费者的断言，缺一即红（W-26 �
   }
 })
 
-// ------------------------------------------------- 2026-12 A2 appcast 本版本门禁
+// ------------------------------------------------- appcast 本版本门禁
 // generate_appcast 的**真实输出形状**（0.3.2-beta.1 线上 appcast 逐字段）：item +
 // <sparkle:version>（CFBundleVersion）+ <sparkle:shortVersionString> + <enclosure url=... edSignature=...>。
 function appcastItem({ version, bundleVersion, zip, prefix = 'https://github.com/o/r/releases/latest/download' }) {
@@ -238,7 +238,7 @@ test('appcast 本版本断言 fail-closed 的每种形态（A2）', () => {
   }
 })
 
-// ------------------------------------------------- 2026-09 增量更新门禁（delta + feed 形状）
+// ------------------------------------------------- 增量更新门禁（delta + feed 形状）
 // generate_appcast 为每个旧归档产出 <sparkle:deltas> 条目（deltaFrom = 旧 sparkle:version）。
 // 发布侧把「staged 过旧归档」与「产出 delta」绑成 fail-closed：没有 delta = 增量链静默退化。
 function appcastItemWithDelta({ version, bundleVersion, zip, deltaFrom, prefix = 'https://github.com/o/r/releases/latest/download' }) {
@@ -285,7 +285,7 @@ test('2026-09 增量门禁：deltaFrom 必须存在，单条目/final 形状 fai
   assert.throws(() => assertAppcastAdvertises(two, { version, sparkleVersion: bundle, singleItem: true }),
     /stable feed 必须恰好保留 1 个 <item>/)
 
-  // S-23：beta 渠道的滚动 feed 必须带 final 条目（beta 客户端据此升级到正式版）。
+  // beta 渠道的滚动 feed 必须带 final 条目（beta 客户端据此升级到正式版）。
   const betaVersion = '0.3.3-beta.1'
   const betaZip = nativeMacArtifacts(betaVersion)[1]
   const betaOnly = appcastXml(appcastItem({ version: betaVersion, bundleVersion: bundleVersionFor(betaVersion), zip: betaZip }))

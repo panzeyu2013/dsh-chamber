@@ -95,8 +95,8 @@ test('SSRF: a backslash authority request target is rejected for HTTP and WebSoc
 })
 
 test('HTTP forward carries the 0.1.2 browser-auth cookie for the managed dsh', async () => {
-  // review-round4 P1 / round5 coverage: the gateway's own proxy must inject
-  // the spawn-minted cookie — a real upstream records what it received.
+  // The gateway's own proxy must inject the spawn-minted cookie — a real
+  // upstream records what it received.
   const seen: string[] = []
   const server = createServer((req, res) => {
     seen.push(String(req.headers.cookie ?? ''))
@@ -125,11 +125,11 @@ test('HTTP forward carries the 0.1.2 browser-auth cookie for the managed dsh', a
 })
 
 test('hashed-asset caching: the immutable stamp is bounded by response type and the upstream metadata', async () => {
-  // M3-3 review: the stamp used to key on status + path alone. A dsh whose
-  // frontend-static SPA-fell-back a miss to the rendered index answers an
+  // The stamp must be bounded by response type and upstream metadata: a dsh
+  // whose frontend-static SPA-fell-back a miss to the rendered index answers an
   // asset URL with `text/html` 200, and caching that immutably poisons the URL
-  // for a year (across rollbacks); an upstream `no-store` was overwritten the
-  // same way. The seam now stamps only a real asset representation.
+  // for a year (across rollbacks); an upstream `no-store` must never be
+  // overwritten. Only a real asset representation is stamped.
   const stamp = async (path: string, headers: Record<string, string>, status = 200): Promise<string | undefined> => {
     const { upstreamRes, proxy } = htmlUpstreamFixture({ 'content-type': 'text/javascript', ...headers })
     upstreamRes.statusCode = status
@@ -154,7 +154,7 @@ test('hashed-asset caching: the immutable stamp is bounded by response type and 
   // upstream (which decodes) resolves a different file: never pinned.
   assert.equal(await stamp('/assets/..%2f..%2fsec-12345678.js', {}), undefined)
   // Only a 200 is a complete representation: a 206 (or a 304/500) must never be
-  // stamped (2026-12 review: these two guards had no test at all).
+  // stamped.
   assert.equal(await stamp('/assets/index-BKQ_L1z6.js', {}, 206), undefined, 'a partial response is never immutable')
   assert.equal(await stamp('/assets/index-BKQ_L1z6.js', {}, 304), undefined)
   assert.equal(await stamp('/assets/index-BKQ_L1z6.js', {}, 500), undefined)
@@ -172,8 +172,7 @@ test('hashed-asset caching: the immutable stamp is bounded by response type and 
   assert.equal(await stamp('/assets/fonts/KaTeX_Math-Italic-DA0__PXp.ttf', { 'content-type': 'font/ttf' }), 'public, max-age=31536000, immutable')
   // The pinned frontend-static MIME table has NO font entries, so a real font
   // response carries `application/octet-stream` — that arm is the one in
-  // production, and dropping it would silently stop stamping all 59 font files
-  // (2026-12 third review).
+  // production, and dropping it would silently stop stamping all 59 font files.
   assert.equal(await stamp('/assets/fonts/KaTeX_AMS-Regular-BQhdFMY1.woff2', { 'content-type': 'application/octet-stream' }), 'public, max-age=31536000, immutable')
   assert.equal(await stamp('/assets/fonts/KaTeX_Math-Italic-DA0__PXp.ttf', { 'content-type': 'application/octet-stream' }), 'public, max-age=31536000, immutable')
 })
@@ -438,9 +437,9 @@ test('S0: an html body over the 64KiB injection budget is flushed and streamed u
 })
 
 test('S0 injector edges: case-insensitive </head>, idempotency and the exact 64KiB cap', () => {
-  // Moved from html-inject.test.ts (2026-12 trim): the proxy-level S0 tests
-  // above already pin the insertion point, the missing-</head> passthrough and
-  // the over-budget stream; these are the injector's remaining fail-soft edges.
+  // The proxy-level S0 tests above pin the insertion point, the
+  // missing-</head> passthrough and the over-budget stream; these are the
+  // injector's remaining fail-soft edges.
   const upper = '<html><head><title>t</title></HEAD><body>ok</body></html>'
   const injected = injectTrustDeclaration(upper)
   assert.equal(injected.injected, true)

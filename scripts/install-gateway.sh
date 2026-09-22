@@ -14,7 +14,7 @@
 # → gh / npm / git credential.helper）从空 HOME 起步：gh 报"未登录"、npm 找不到
 # 缓存、git 凭据助手取不到 token。值取自 passwd，不读安装者环境里的 $HOME。
 #
-# dsh 定位（design 18 §9，2026-09 受控锚决策）：dsh 内建/回退锚安装在
+# dsh 定位（design 18 §9）：dsh 内建/回退锚安装在
 # gateway 自己的受控目录 ${BASE_DIR}/gateway/dsh-anchor（workspace 形态，
 # 经 --dsh-path / DSH_GATEWAY_DSH_PATH 提供给 gateway），不使用 npm 全局
 # 安装——dsh 运行时由 gateway 拥有，锚与版本树都在受控位置。
@@ -45,12 +45,12 @@
 #         --service-user USER 以专用系统用户运行 gateway（unit 加 User=，
 #           运行数据目录 dsh-anchor/data/run 移交该用户；仅 root + systemd）
 #
-# dsh 版本一致性（2026-09 决策修订）：gateway 发行与其配套 dsh 基线（内建
+# dsh 版本一致性：gateway 发行与其配套 dsh 基线（内建
 # 锚版本）同代发布——install-gateway.sh 的 DSH_CHAMBER_DSH_VERSION、
 # release.yml env 与 packages/gateway/package.json 的 dshAnchorVersion 三者
 # 由 release-preflight 硬断言同步。gateway update 默认把 dsh 锚原子升级到
 # 目标 gateway 资产携带的 dshAnchorVersion（旧资产无该字段时回退本脚本
-# 常量）；升级后首次启动的 F4 壳失效回落即落到新基线，托管 dsh 与 gateway
+# 常量）；升级后首次启动的壳失效回落即落到新基线，托管 dsh 与 gateway
 # 保持一致。--no-dsh-upgrade 可拒绝（锚保持旧版本）。
 #
 # 交互向导（小白主线 8 步，每步有说明与校验循环，q 退出 / ESC/back 返回上一步）：
@@ -75,7 +75,7 @@ umask 077
 DSH_CHAMBER_DSH_VERSION="${DSH_CHAMBER_DSH_VERSION:-0.1.5-rc.2}"
 GITHUB_REPO="${DSH_CHAMBER_GITHUB_REPO:-panzeyu2013/dsh-chamber}"
 BASE_DIR="${DSH_CHAMBER_BASE_DIR:-${HOME:?HOME 环境变量未设置（可用 DSH_CHAMBER_BASE_DIR 指定安装位置）}/.dsh-chamber}"
-# 从自复制位置反推 BASE_DIR（C 区 #9）：install_self 把本脚本复制到
+# 从自复制位置反推 BASE_DIR：install_self 把本脚本复制到
 # <BASE_DIR>/bin/install-gateway.sh，自定义 DSH_CHAMBER_BASE_DIR 安装后
 # 管理命令无需每次手传 env 也能定位安装（仅当 conf 确实存在于推导位置）。
 if [[ -z "${DSH_CHAMBER_BASE_DIR:-}" && -f "$0" && ! -L "$0" ]] \
@@ -127,7 +127,7 @@ DSH_VER=""
 ENV_ANCHOR=0        # 锚来自用户显式 DSH_GATEWAY_DSH_PATH（env 恒最高，仅此时才写回 env）
 npm_mirror=""
 MIRROR_CHOICE=""        # 镜像选择(选项值 cn/official/system),back 导航幂等用
-# 向导阶段跳过标记：对应值由 CLI flag 提供时置 1（该阶段问题不再询问）。
+# 向导阶段跳过标记：对应值由 CLI flag 提供时置 1（该阶段问题直接跳过）。
 FLAG_VERSION=0      # --version / --channel / --tgz
 FLAG_ACCESS=0       # --bind / --origin / --trusted-proxy
 FLAG_CRED=0         # --ui-password / --api-token / --no-auth
@@ -137,7 +137,7 @@ FLAG_INSTALL=0      # --local
 AUTO_GEN_PASSWORD=0
 AUTO_GEN_TOKEN=0
 
-# M8:颜色仅 TTY 输出(管道/重定向零 ANSI 污染 CI 日志)
+# 颜色仅 TTY 输出(管道/重定向零 ANSI 污染 CI 日志)
 log()  { if [[ -t 1 ]]; then printf '\033[1;34m[gateway]\033[0m %s\n' "$*"; else printf '[gateway] %s\n' "$*"; fi; }
 warn() { if [[ -t 1 ]]; then printf '\033[1;33m[gateway]\033[0m %s\n' "$*"; else printf '[gateway] %s\n' "$*"; fi; }
 die()  { spinner_stop; if [[ -t 2 ]]; then printf '\033[1;31m[gateway]\033[0m %s\n' "$*" >&2; else printf '[gateway] %s\n' "$*" >&2; fi; exit 1; }
@@ -179,7 +179,7 @@ wiz_help() {
 }
 
 # ---------------------------------------------------------------------------
-# 展示美化（2026-09）：spinner + 分隔线。spinner 仅交互 TTY 生效，非交互/管道
+# 展示美化：spinner + 分隔线。spinner 仅交互 TTY 生效，非交互/管道
 # 不产生任何额外输出（不污染 CI 日志）；die() 与 EXIT trap 双保险回收后台
 # spinner 进程，避免残留进程与残缺状态行。
 # ---------------------------------------------------------------------------
@@ -202,14 +202,14 @@ spinner_stop() {
   if [[ -n "${SPIN_PID:-}" ]]; then
     kill "$SPIN_PID" 2>/dev/null || true
     # wait 对被 SIGTERM 的 spinner 返回 143:set -e 下会静默中断脚本(die 的
-    # 错误红字都被吞),必须 || true(DIFF #1)
+    # 错误红字都被吞),必须 || true
     wait "$SPIN_PID" 2>/dev/null || true
     printf '\b \b\n'
     SPIN_PID=""
   fi
 }
-LOCK_DIR=""      # install/update 互斥锁目录（F9）
-LOCK_OWNED=0     # 本进程是否持有锁(仅属主才在 EXIT trap 清理,F1)
+LOCK_DIR=""      # install/update 互斥锁目录
+LOCK_OWNED=0     # 本进程是否持有锁(仅属主才在 EXIT trap 清理)
 on_exit_cleanup() {
   # bash 3.2 实测:注册 EXIT trap 后,展开类致命错误(缺值 ${2:?}、set -u
   # 未绑定变量)进入 trap 时 $? 已被抹成 0——把崩溃伪装成 exit 0(CI/set -e
@@ -230,7 +230,7 @@ on_exit_cleanup() {
 }
 trap on_exit_cleanup EXIT
 
-# F9：install/update 互斥（并发双跑会交错切指针）；持有到函数结束由 EXIT trap 释放。
+# install/update 互斥（并发双跑会交错切指针）；持有到函数结束由 EXIT trap 释放。
 acquire_lock() {
   LOCK_DIR="${BASE_DIR}/.install.lock"
   if ! mkdir "$LOCK_DIR" 2>/dev/null; then
@@ -245,7 +245,7 @@ acquire_lock() {
       fi
     fi
     if [[ "$reclaimed" != "1" ]]; then
-      # 未持有锁:清空 LOCK_DIR 并清属主标记,EXIT trap 绝不删持有方的锁(F1)
+      # 未持有锁:清空 LOCK_DIR 并清属主标记,EXIT trap 绝不删持有方的锁
       LOCK_OWNED=0
       LOCK_DIR=""
       die "另一个 install/update/restart/uninstall 正在运行（${BASE_DIR}/.install.lock）；请等待其结束后重试（若确无进程在跑且锁内 pid 无效，可删除该目录）"
@@ -255,7 +255,7 @@ acquire_lock() {
   printf '%s\n' "$$" > "$LOCK_DIR/pid" 2>/dev/null || true
   # 崩溃残留卫生(锁在手即无并发写入者):离线 stage/退避树/版本 stage/dsh 锚
   # stage/锚退避/mv_T aside 目录(.stage.*/.anchor.*/.mv-t.* 为各版本切换临时
-  # 产物,B-L11/D-L5)
+  # 产物)
   rm -rf "$VERSIONS_DIR"/.offline.* "$VERSIONS_DIR"/.local.prev.* \
          "$VERSIONS_DIR"/.*.stage.* \
          "$VERSIONS_DIR"/*.mv-t.* \
@@ -286,7 +286,7 @@ acquire_lock() {
   rm -rf "$VERSIONS_DIR"/.anchor-stage.* 2>/dev/null || true
 }
 prune_version_trees() {
-  # F9：release 版本树只增不减——保留最近 N 个（current 指向的树在其中；
+  # release 版本树只增不减——保留最近 N 个（current 指向的树在其中；
   # 'local' 与隐藏临时目录不裁剪）。回滚/降级到被裁旧版本时 update 会重新下载。
   [[ -d "$VERSIONS_DIR" ]] || return 0
   local keep=4 keep_list="" t bn=""
@@ -296,7 +296,7 @@ prune_version_trees() {
     bn=$(basename "$t")
     [[ "$bn" == "local" || "$bn" == .* ]] && continue
     # current 指针指向的树永不清(即使它不在最新 4 棵里)。
-    # 注意 glob 带尾斜杠、readlink 不带,须剥掉再比(DIFF #4)
+    # 注意 glob 带尾斜杠、readlink 不带,须剥掉再比
     [[ "$(readlink "$GATEWAY_DIR/current" 2>/dev/null || true)" == "${t%/}" ]] && continue
     if ! grep -qF "${t%/}" <<< "$keep_list" 2>/dev/null; then
       log "清理旧 gateway 版本树：$t"
@@ -305,8 +305,8 @@ prune_version_trees() {
   done
 }
 
-# --- 纯校验/比较逻辑的单一实现（B8，2026-12）--------------------------------
-# 这些判定是纯字符串/数值逻辑，此前散在 bash 里无法单测。程序文本是唯一实现：
+# --- 纯校验/比较逻辑的单一实现--------------------------------
+# 这些判定是纯字符串/数值逻辑，程序文本是唯一实现：
 # install-gateway.sh 以单文件分发（curl 下来即跑），不允许 side-car 文件，因此
 # 逻辑内嵌于此；scripts/gates/install-gateway-pure.test.mjs 直接从本文件抽取
 # 这段文本在 node:vm 里执行——测的就是发出去的那份代码。改判定必须同批改测试。
@@ -429,8 +429,8 @@ valid_ip_list() {
   install_gateway_pure valid-ip-list "${1-}" || return 1
 }
 
-# 离线包路径校验器（ask_text 第五参：失败红字原地重问，不再弹回通道菜单）。
-# 支持 ~/ 展开（字面 ~ 在 [[ -f ]] 里不展开是此前"文件不存在"误报的根因之一）；
+# 离线包路径校验器（ask_text 第五参：失败红字原地重问，不弹回通道菜单）。
+# 支持 ~/ 展开（字面 ~ 在 [[ -f ]] 里不展开会误报"文件不存在"）；
 # 要求非空、.tgz 结尾、存在且为普通文件。调用方在通过后再存展开值。
 valid_tgz_path() {
   local p="$1"
@@ -457,7 +457,7 @@ valid_tgz_path() {
 
 # ---------------------------------------------------------------------------
 # wiz_read_line —— 交互式单行输入（仅 TTY；非 TTY/无 stty 退化为普通行读）。
-# 修复（2026-09 PTY 实测）：普通 `read -r` 是 canonical 行读，裸 ESC 键要等
+# 普通 `read -r` 是 canonical 行读，裸 ESC 键要等
 # 回车才送达——帮助文案承诺的"ESC 返回上一步"实际失效。本函数用 bash
 # `read -n1` 逐字节读取（bash 自行管理 termios，不要额外 stty -icanon——
 # 实测会令回车变成空字节；Enter 在 bash 3.2 下恒为"读取成功但值为空"，
@@ -483,11 +483,11 @@ wiz_read_line() {
   if (( hidden == 1 )); then
     stty -echo 2>/dev/null || { IFS= read -r REPLY || return 2; return 0; }
     # 保存 -echo 之后的完整 termios：ESC 探测恢复用这份，避免"恢复回显→再
-    # 关回显"两步窗口内密码字符泄漏（DIFF #12）
+    # 关回显"两步窗口内密码字符泄漏
     saved_hidden=$(stty -g 2>/dev/null) || saved_hidden="$saved"
   fi
   # raw 窗口(ESC 探测的 -icanon)期间被 Ctrl-C/TERM 打断先恢复 termios:
-  # 可见模式同样需要(否则终端残留非 canonical 态,L1)
+  # 可见模式同样需要(否则终端残留非 canonical 态)
   if (( hidden == 1 )); then
     trap 'stty "${saved_hidden:-$saved}" 2>/dev/null; printf "\033[1;31m已中断\033[0m\n" >&2; exit 130' INT TERM HUP QUIT
   else
@@ -538,7 +538,7 @@ wiz_read_line() {
       # 仅显示瑕疵，下一字符会覆盖）
       if [[ -n "$REPLY" ]]; then
         printf -v b '%d' "'${REPLY: -1}" 2>/dev/null || b=0
-        # H2:bash 3.2 的 printf %d 对 ≥0x80 字节返回带符号值(0xE4→-28),
+        # bash 3.2 的 printf %d 对 ≥0x80 字节返回带符号值(0xE4→-28),
         # 不归一化则 (( b >= 128 )) 恒假,UTF-8 序列删除成为死代码
         (( b < 0 )) && b=$((b + 256))
         drop=1
@@ -767,7 +767,7 @@ ask_secret2() {
       printf '\033[1;31m✗ 长度需在 %s-%s 字符之间（当前 %s 字符）\033[0m\n' "$min" "$max" "${#first}"
       continue
     fi
-    # M10:Token 类要求可见 ASCII(与 flag 侧校验一致)
+    # Token 类要求可见 ASCII(与 flag 侧校验一致)
     if [[ "${ascii_only:-0}" == "1" ]] \
       && [[ -n "$(printf '%s' "$first" | LC_ALL=C tr -d '[:print:]' 2>/dev/null)" ]]; then
       printf '\033[1;31m✗ 必须是可见 ASCII 字符（无空格/中文/控制字符）\033[0m\n'
@@ -821,7 +821,7 @@ confirm() {
   wiz_read_line
   rc=$?
   if (( rc == 1 )); then return 1; fi    # 裸 ESC = 取消（不执行）
-  if (( rc == 2 )); then return 1; fi    # EOF/Ctrl-D = 取消（H2：不落默认值）
+  if (( rc == 2 )); then return 1; fi    # EOF/Ctrl-D = 取消（不落默认值）
   input=$(trim_str "$REPLY")
   case "${input:-$def}" in
     y|Y|yes|YES) return 0 ;;
@@ -851,7 +851,7 @@ port_free() {
 suggest_port() {
   # 两个 local 必须分开：同语句 `local base="$1" p="$base"` 里 `$base` 在
   # 赋值生效前展开——set -u 下直接 unbound variable 崩溃（或静默取到外层
-  # 陈旧值）。与 SERVICE_USER 事故同类的 set -u 隐患。
+  # 陈旧值）。
   local base="$1"
   local p="$base"
   while ! port_free 127.0.0.1 "$p"; do
@@ -874,7 +874,7 @@ validate_gateway_version() {
     || die "gateway 版本必须是 canonical SemVer：$version"
 }
 
-# 语义化版本比较（F3 降级防护）：a < b 返回 0。主/次/补丁数值比较；
+# 语义化版本比较（降级防护）：a < b 返回 0。主/次/补丁数值比较；
 # prerelease 整体小于正式版；同为 prerelease 时按标识符字典序（够用且诚实）。
 # 纯数字串比较(任意长度,避免 64 位回绕):剥前导零后比长度,同长比字典序
 numstr_lt() {
@@ -903,7 +903,7 @@ tree_fingerprint() {
         done | $aggcmd | awk '{print $1}' ) 2>/dev/null
 }
 
-# F12:离线包可选强校验——同目录存在 <包>.sha256 时强制校验;缺失仅警告
+# 离线包可选强校验——同目录存在 <包>.sha256 时强制校验;缺失仅警告
 verify_offline_tgz() {
   local tgz="$1"
   [[ -f "$tgz" ]] || return 1
@@ -928,10 +928,9 @@ verify_offline_tgz() {
 
 # 拉取 GitHub Releases 全部可用版本（最新在前，最多 100 个）写入 RELEASE_LIST：
 #   每行 <版本>|<预发布:0/1>|<有gateway资产:0/1>|<发布日期>，仅收录 canonical SemVer。
-# 用 node 解析（preflight 已保证 node ≥22；脚本 read_systemd_env_value 已有同款先例），
-# 对 GitHub 的美化（多行缩进）与压缩 JSON 都健壮——旧 sed 按 '},{' 切分对美化 JSON
-# 完全不生效（release 之间实际是 '},  {' 带缩进），曾导致 beta 通道实际取到"文档里
-# 第一个 tag"即最新任意 release，而不是真正的预发布。成功且非空返回 0；网络失败或
+# 用 node 解析（preflight 已保证 node ≥22），
+# 对 GitHub 的美化（多行缩进）与压缩 JSON 都健壮（release 之间是 '},  {' 带缩进
+# 格式）。成功且非空返回 0；网络失败或
 # 无合法版本返回 1（调用方决定报错或回退手动输入）。
 fetch_available_versions() {
   local json rc=0
@@ -1051,8 +1050,6 @@ resolve_version() {
   fi
   if [[ "$CHANNEL" == "beta" ]]; then
     # 最新预发布：从完整版本列表中取第一个 prerelease（优先带 gateway 资产）。
-    # 旧实现按 '},{' 切分 JSON 对 GitHub 美化输出无效，实际取到"文档里第一个 tag"
-    # 即最新任意 release；一旦最新发布是稳定版就会静默装错版本。
     fetch_available_versions || die "无法访问 GitHub Releases API（可设 HTTPS_PROXY 代理）"
     VERSION=$(printf '%s\n' "$RELEASE_LIST" | awk -F'|' '$2==1 && $3==1 {print $1; exit}' || true)
     if [[ -z "$VERSION" ]]; then
@@ -1064,7 +1061,7 @@ resolve_version() {
     local json
     json=$(github_api "https://api.github.com/repos/${GITHUB_REPO}/releases/latest") \
       || die "无法访问 GitHub Releases API（可设 HTTPS_PROXY 代理）"
-    # 单 sed 剥可选 v 前缀:无 v tag 不再产出 JSON 垃圾串(B-L1/A-M2)
+    # 单 sed 剥可选 v 前缀:无 v tag 时不产出 JSON 垃圾串
     VERSION=$(printf '%s' "$json" | sed -nE 's/.*"tag_name": *"v?([^"]*)".*/\1/p' | head -1 || true)
     [[ -n "$VERSION" ]] || die "未找到最新 release"
   fi
@@ -1084,9 +1081,8 @@ download_verify() {
   # RETURN trap 在部分 bash（3.2 及若干 4.x/5.x）上不会随函数返回被清除：
   # 首次在 download_verify 返回时触发（tmp 仍有效）后，还会随调用栈上移，
   # 在外层函数（如 do_install）返回时再次触发——此时 $tmp 已随局部作用域
-  # 销毁，set -u 下直接 'tmp: unbound variable' 崩溃（实机复现：安装完成页
-  # 全部输出之后报 line 1733: tmp: unbound variable，安装已完成但脚本以
-  # 错误退出）。处理：触发时先自解除（trap - RETURN），并仅在 tmp 仍有效
+  # 销毁，set -u 下直接 'tmp: unbound variable' 崩溃。处理：触发时先自解除
+  # （trap - RETURN），并仅在 tmp 仍有效
   # 时才清理——陈旧触发变成无害空操作，任何 bash 版本行为一致。
   trap 'trap - RETURN; if [[ -n "${tmp:-}" ]]; then rm -rf "$tmp"; fi' RETURN
   # release 的 .sha256 条目名与资产同名 dsh-chamber-gateway-<ver>.tgz：
@@ -1098,7 +1094,7 @@ download_verify() {
     rm -rf "$tmp"
     die "下载失败：$(asset_url)（v${VERSION} 可能没有 gateway 资产——gateway 从 0.2.0-beta 起随 release 发布；稳定通道可用 --channel beta 或 --version 精确指定）"
   fi
-  spinner_stop    # 收掉上一段"下载 gateway"的 spinner(DIFF #6)
+  spinner_stop    # 收掉上一段"下载 gateway"的 spinner
   if interactive; then spinner_start "正在下载校验和 "; else log "下载校验和 …"; fi
   if ! curl -fL --connect-timeout 10 -m 30 -o "$tmp/$sha_file" "$(asset_sha_url)"; then
     rm -rf "$tmp"
@@ -1156,7 +1152,7 @@ detect_dsh() {
     ENV_ANCHOR=1
     return 0
   fi
-  # 受控锚复用（2026-09 实机决策）：gateway 自己的 dsh-anchor 目录存在且
+  # 受控锚复用：gateway 自己的 dsh-anchor 目录存在且
   # 有效即复用；不探测/复用 npm 全局安装——dsh 运行时由 gateway 拥有，
   # 锚与版本树都应在受控位置（<GATEWAY_DIR>/dsh-anchor 与
   # <stateDir>/dsh-runtime/）。检测先于 SKIP_DSH：--skip-dsh 语义是
@@ -1188,7 +1184,7 @@ verify_dsh() {
 install_dsh() {
   have npm || die "缺少 npm：安装 dsh 内建锚需要 npm（离线 gateway 包不包含 dsh）"
   local target_version="$1"
-  # 受控锚（design 18 §9.3 / 2026-09 实机决策）：dsh 内建锚安装在 gateway
+  # 受控锚（design 18 §9.3）：dsh 内建锚安装在 gateway
   # 自己的受控目录（workspace 形态 <anchor>/node_modules/@deepseek-ai/dsh），
   # 不使用 npm 全局安装——全局树不属于 gateway 部署、卸载/升级不可控，且
   # 与「运行时状态由 gateway 拥有」的边界冲突。版本切换的运行期安装仍由
@@ -1210,7 +1206,7 @@ install_dsh() {
 }
 
 # ---------------------------------------------------------------------------
-# dsh 内建锚同步（update --dsh-upgrade 默认；2026-09 gateway↔dsh 一致性决策）
+# dsh 内建锚同步（update --dsh-upgrade 默认）
 #
 # gateway 发行与其配套 dsh 基线（内建锚版本）同代发布：packages/gateway/
 # package.json 的 dshAnchorVersion 字段随 tarball 携带（release-preflight 硬
@@ -1328,7 +1324,7 @@ mv_T() {
     return 0
   fi
   # 叶目标（普通文件/符号链接）：单次 rename 原子替换——mv 对既有文件/符号
-  # 链接目标走 rename(2)，绝不先 rm 后 mv（C 区 #2：崩溃不再留下目标缺失窗口）
+  # 链接目标走 rename(2)，绝不先 rm 后 mv（崩溃时不留下目标缺失窗口）
   mv -f "$src" "$dst"
 }
 
@@ -1360,7 +1356,7 @@ validate_base_dir() {
   case "$BASE_DIR" in
     *%*|*'*'*|*'?'*|*'['*|*']'*) die "BASE_DIR 不能包含 % * ? [ ]（systemd specifier/glob 字符）：$BASE_DIR" ;;
   esac
-  # F8：空白/引号会破坏 systemd EnvironmentFile 词法（无引号解析），前置拒绝
+  # 空白/引号会破坏 systemd EnvironmentFile 词法（无引号解析），前置拒绝
   if [[ "$BASE_DIR" == *" "* || "$BASE_DIR" == *$'\t'* || "$BASE_DIR" == *'"'* || "$BASE_DIR" == *"'"* ]]; then
     die "BASE_DIR 不能包含空白或引号（systemd EnvironmentFile 限制）：$BASE_DIR"
   fi
@@ -1380,7 +1376,7 @@ validate_base_dir() {
 # GATEWAY_DIR、VERSIONS_DIR、dsh-anchor、LOCAL_BIN_DIR、run。全局 umask 077
 # 已保证新建目录天然 0700，此处 chmod 是对「目录先于本函数以松散 umask
 # 存在」的第二道保险（也覆盖 update/restart 等不重走向导的流程），并消除
-# npm install --prefix / mkdir -p 早期把 BASE_DIR/GATEWAY_DIR 建成 0755 的窗口期。
+# npm install --prefix / mkdir -p 把 BASE_DIR/GATEWAY_DIR 建成 0755 的窗口期。
 ensure_private_layout() {
   validate_base_dir
   local dir
@@ -1414,7 +1410,7 @@ validate_service_user() {
 apply_service_user_ownership() {
   [[ -n "${SERVICE_USER:-}" ]] || return 0
   log "移交运行权限给 $SERVICE_USER …"
-  # F1/F2 + C-DIFF #3：conf/env 保持 root:0600（root 管理的 -O 校验前提；
+  # conf/env 保持 root:0600（root 管理的 -O 校验前提；
   # systemd 以 root 读 EnvironmentFile，服务用户无需读凭据）。服务用户需要
   # 整条路径可 traverse + 版本树/启动器可读可执行 + data/run 可写。
   # 失败返回 1 由调用方处理（install die；update 纳入 failure_reason/
@@ -1549,7 +1545,7 @@ systemd_env_assignment() {
   # reader 虽把 `\$` 解回 `$`，但原样 `$` 读回仍是 `$`；而 ≤v246 双引号内只
   # 解 `\"`，转义 `\$` 反而让含 `$` 的凭据带上反斜杠（静默认证失败）。不转义
   # 在所有版本 round-trip 一致。（含 `\` 的凭据在 ≤v246 仍会带反斜杠——仅
-  # 影响 2021 年前的发行版，v247+ 正确。）
+  # 影响 ≤v246 的发行版，v247+ 正确。）
   printf '%s="%s"\n' "$name" "$value"
 }
 
@@ -1597,7 +1593,7 @@ stage_local_version() {
     rm -rf "$stage"
     return 1
   fi
-  # F12：拒绝指向包外/绝对路径的符号链接成员（防"链接成员 + 后续成员穿透写入"）
+  # 拒绝指向包外/绝对路径的符号链接成员（防"链接成员 + 后续成员穿透写入"）
   if tar -tvzf "$tgz" 2>/dev/null | sed -nE 's/^.* -> //p' | grep -qE '^/|(^|/)\.\.(/|$)'; then
     warn "离线包包含越界符号链接成员，拒绝解包：$tgz"
     rm -rf "$stage"
@@ -1614,7 +1610,7 @@ stage_local_version() {
   fi
   # local 路径「解包即用」从不安装 gateway 依赖（与 global 的 npm install -g
   # 不同），运行期 pnpm 只能来自包内 dist/pnpm 副本（scripts/build.mjs 构建时
-  # 打入，design 18 §9.2 D1）。缺失时启动即报 Cannot find module 'pnpm'，
+  # 打入，design 18 §9.2）。缺失时启动即报 Cannot find module 'pnpm'，
   # 在解包阶段就显式拒绝，而不是等 `gateway current` 启动才炸。
   if [[ ! -f "$stage/dist/pnpm/bin/pnpm.cjs" ]]; then
     warn "gateway 资产缺少内嵌 pnpm（dist/pnpm/bin/pnpm.cjs），local 安装无法运行，拒绝发布"
@@ -1691,7 +1687,7 @@ unit_wanted_by() {
 # 目录属主 uid（跟随符号链接）。必须**先试 GNU stat 的 -c**：GNU/Linux 的
 # `stat -f` 是"文件系统状态"模式，若先试 BSD 语法 `stat -f '%u'`，GNU stat
 # 会把 %u 当文件操作数报错（stderr 被 2>/dev/null 吞掉），同时把目录所在文件
-# 系统的完整列表打进 stdout，使捕获值变成多行垃圾——曾导致 /etc/systemd/system
+# 系统的完整列表打进 stdout，使捕获值变成多行垃圾，随后 /etc/systemd/system
 # 的 owner 被误判为不可信、systemd 单元写入失败。BSD stat 不认 -c，会立即报错
 # 退出（无 stdout 污染），自然落入 -f 分支。
 dir_owner_uid() {
@@ -1774,7 +1770,7 @@ ${SERVICE_USER:+User=${SERVICE_USER}}
 ${login_env}
 # systemd 的 EnvironmentFile= 指令**不支持引号**（与 ExecStart= 不同）：带引号的
 # 路径会被按字面（含引号字符）查找，文件加载静默失败、服务以空环境启动——
-# 曾导致配置全不生效（gateway 以纯默认 127.0.0.1:3000/auth=none 启动）。
+# 结果是配置全不生效（gateway 以纯默认 127.0.0.1:3000/auth=none 启动）。
 EnvironmentFile=$ENV_FILE
 ExecStart=$(systemd_exec_start "$exec_path")
 Restart=on-failure
@@ -1907,7 +1903,7 @@ stop_foreground() {
   record=$(foreground_record_file)
   [[ -f "$record" ]] || return 0
   IFS=' ' read -r pid expected extra < "$record" || true
-  # 格式损坏（无法可靠识别进程）：拒绝自动处理，避免误杀（C 区 #3）
+  # 格式损坏（无法可靠识别进程）：拒绝自动处理，避免误杀
   if [[ ! "$pid" =~ ^[0-9]+$ || -z "$expected" || -n "${extra:-}" ]]; then
     warn "foreground pid 记录格式损坏，拒绝自动处理：${record}（请人工检查后删除）"
     return 1
@@ -1919,7 +1915,7 @@ stop_foreground() {
     return 0
   fi
   # 存活但身份不符 = 记录进程已死且 pid 被无关进程复用（starttime 不匹配可证明）：
-  # 终止会误伤,清除记录放行（C 区 #3:不再永久卡死）
+  # 终止会误伤,清除记录放行（否则永久卡死）
   now_id=$(process_start_identity "$pid" 2>/dev/null || true)
   if [[ -z "$now_id" || "$now_id" != "$expected" ]]; then
     warn "foreground pid 记录身份与进程 $pid 不符（记录过期或 pid 被复用），已清除记录"
@@ -1982,7 +1978,7 @@ start_foreground() {
     kill "$pid" 2>/dev/null || true
     return 1
   fi
-  # pid 记录原子发布（mktemp+mv_T）：崩溃不留半截记录（C 区 #5）
+  # pid 记录原子发布（mktemp+mv_T）：崩溃不留半截记录
   local pid_tmp=""
   pid_tmp=$(mktemp "${BASE_DIR}/run/gateway.pid.tmp.XXXXXX") || { kill "$pid" 2>/dev/null || true; return 1; }
   printf '%s %s\n' "$pid" "$identity" > "$pid_tmp"
@@ -2242,7 +2238,6 @@ stage3_credentials() {
       if (( rc == 2 )); then
         API_TOKEN=$(gen_token)
         AUTO_GEN_TOKEN=1
-        # 不在生成时显示——后续阶段会清屏;统一在完成页一次性显示
       fi
       ;;
   esac
@@ -2272,7 +2267,7 @@ stage4_ports() {
   fi
   local def_gw="$DEFAULT_GATEWAY_PORT" def_dsh="$DEFAULT_DSH_PORT"
   local conf_gw="" conf_dsh="" conf_ports=0
-  # 重装时沿用既有配置端口(不因旧实例占端口而擅自改端口;D2 会先停旧实例)
+  # 重装时沿用既有配置端口(不因旧实例占端口而擅自改端口;覆盖安装会先停旧实例)
   if [[ -f "$CONF_FILE" ]]; then
     conf_gw=$(sed -nE "s/^GATEWAY_PORT='?([0-9]+)'?\$/\1/p" "$CONF_FILE" | head -1)
     conf_dsh=$(sed -nE "s/^DSH_PORT='?([0-9]+)'?\$/\1/p" "$CONF_FILE" | head -1)
@@ -2322,7 +2317,7 @@ stage4_ports() {
 stage5_service() {
   stage_header 5 8 "服务方式"
   if [[ "$SERVICE_MODE" != "auto" ]]; then
-    # 值已定(flag 或向导先前选择,back 重入保留)——不再重问,文案不冒充 flag
+    # 值已定(flag 或向导先前选择,back 重入保留)——不重问,文案不冒充 flag
     log "服务形态保持：${SERVICE_MODE}（如需修改请重新运行 install）"
     return 0
   fi
@@ -2419,7 +2414,7 @@ global：npm 全局安装，适合已有 npm 全局管理习惯的用户。" \
 
 stage8_preview() {
   if ! interactive; then
-    # 管道输入同样可取消（与 uninstall 的 confirm() 语义一致，A8）；
+    # 管道输入同样可取消（与 uninstall 的 confirm() 语义一致）；
     # -y 由 confirm() 的 NONINTERACTIVE 分支放行。
     if ! confirm "确认执行？" "y"; then die "已取消——未做任何修改，可随时重新运行"; fi
     return 0
@@ -2444,7 +2439,7 @@ stage8_preview() {
       access_desc="反向代理 → $PUBLIC_ORIGIN"
     fi
   elif [[ -n "$TRUSTED_PROXY" ]]; then
-    # D3:仅有 trusted-proxy(无 origin)= 反代直连内网形态,不是"仅本机"
+    # 仅有 trusted-proxy(无 origin)= 反代直连内网形态,不是"仅本机"
     access_desc="反代直连（trusted proxy: ${TRUSTED_PROXY}，origin 未设）"
   elif [[ "$BIND_HOST" == "0.0.0.0" ]]; then
     access_desc="直接暴露（0.0.0.0）"
@@ -2490,7 +2485,7 @@ stage8_preview() {
   case "$(lower "$REPLY")" in
     ""|y|yes) : ;;
     q) die "已退出（q）——未做任何修改，可随时重新运行" ;;
-    back) return 1 ;;    # 字面 back 与 ESC 同义(欢迎页承诺,M9)
+    back) return 1 ;;    # 字面 back 与 ESC 同义(欢迎页承诺)
     *) die "已取消——未做任何修改，可随时重新运行" ;;
   esac
 }
@@ -2537,7 +2532,7 @@ wizard() {
   done
 }
 do_install() {
-  # 先建布局再取锁:全新安装 BASE_DIR 尚不存在,锁目录 mkdir 会失败(DIFF #2)
+  # 先建布局再取锁:全新安装 BASE_DIR 尚不存在,锁目录 mkdir 会失败
   ensure_private_layout
   acquire_lock
   # 非 purge 卸载会保留 GATEWAY_DIR（state 数据），重新安装应当允许原地
@@ -2576,14 +2571,14 @@ do_install() {
     tgz_src="$GATEWAY_DIR/dsh-chamber-gateway-${VERSION}.tgz"
   fi
 
-  # 2.5) 覆盖安装快照：在 3) 的任何树/npm 变更之前读取（S3/S4：失败回滚必须
+  # 2.5) 覆盖安装快照：在 3) 的任何树/npm 变更之前读取（失败回滚必须
   # 还原真正的旧指针/旧身份/旧配置——指针切换后再读只会拿到新树）。
   local previous_identity="" old_conf_txt="" old_env_txt="" old_cur="" old_mode="" old_ver="" had_old=0
   previous_identity=$(launch_identity || true)
   if [[ -f "$CONF_FILE" ]]; then
     had_old=1
     old_conf_txt=$(cat "$CONF_FILE" 2>/dev/null || true)
-    # conf 由 %q 写出（简单值不带引号）；兼容历史带引号格式（S1）。
+    # conf 由 %q 写出（简单值不带引号）；兼容历史带引号格式。
     old_mode=$(printf '%s' "$old_conf_txt" | sed -nE "s/^SERVICE_MODE='?([A-Za-z_][A-Za-z0-9_]*)'?\$/\1/p" | head -1)
     old_ver=$(printf '%s' "$old_conf_txt" | sed -nE "s/^VERSION='?([^#[:space:]']+)'?\$/\1/p" | head -1)
   fi
@@ -2594,7 +2589,7 @@ do_install() {
   if [[ "$INSTALL_METHOD" == "global" ]]; then
     have npm || die "npm 不可用（npm 全局安装需要 npm）"
     log "npm 全局安装 gateway v${VERSION} …"
-    # S3:全局 npm 原地变更前先保全精确的旧版回滚资产(镜像 cmd_update 事务语义)。
+    # 全局 npm 原地变更前先保全精确的旧版回滚资产(镜像 cmd_update 事务语义)。
     # local 标记(离线包)无在线资产可重取,无法构造可靠回滚 → 拒绝无回滚覆盖。
     if [[ "$had_old" == "1" && -n "$old_ver" ]]; then
       [[ "$old_ver" != "local" ]] || die "既有安装为 local（离线包）形态，npm 全局覆盖无法构造可靠回滚；请改用 local 安装或先 uninstall"
@@ -2607,7 +2602,7 @@ do_install() {
       VERSION="$saved_ver"
     fi
     npm install -g --no-audit --no-fund "$tgz_src"
-    rm -f "$LOCAL_BIN_DIR/gateway" 2>/dev/null || true    # 清遗留 local 启动器,防 PATH 遮蔽(D-M2)
+    rm -f "$LOCAL_BIN_DIR/gateway" 2>/dev/null || true    # 清遗留 local 启动器,防 PATH 遮蔽
     have gateway || die "npm 全局安装后 gateway 不在 PATH"
   else
     log "本地安装到 $GATEWAY_DIR/versions/${VERSION} …"
@@ -2632,7 +2627,7 @@ do_install() {
         fi
         l_ver=$(gateway_tree_version "$l_stage" || true)
         [[ -n "$l_ver" ]] || { rm -rf "$l_stage"; die "离线包不是有效 gateway 资产（缺 package.json/dist/cli.js）：$tgz_src"; }
-        # 与 stage_local_version/cmd_update 同款:拒绝缺内嵌 pnpm 的资产(F3)
+        # 与 stage_local_version/cmd_update 同款:拒绝缺内嵌 pnpm 的资产
         [[ -f "$l_stage/dist/pnpm/bin/pnpm.cjs" ]] || { rm -rf "$l_stage"; die "离线包缺少内嵌 pnpm（dist/pnpm/bin/pnpm.cjs），local 安装无法运行：$tgz_src"; }
         l_oldfp=$(tree_fingerprint "$VERSIONS_DIR/local" || true)
         l_newfp=$(tree_fingerprint "$l_stage" || true)
@@ -2652,7 +2647,7 @@ do_install() {
             rm -rf "$l_stage" 2>/dev/null || true
             die "local 树替换失败（旧树已还原）"
           fi
-          do_prev="$l_prev"    # 服务健康确认前保留退避旧树(F3),失败时尽力还原
+          do_prev="$l_prev"    # 服务健康确认前保留退避旧树,失败时尽力还原
         fi
       else
         local existing_version
@@ -2675,7 +2670,7 @@ EOF
     chmod +x "$LOCAL_BIN_DIR/gateway"
   fi
 
-  # 4) D2:跨形态覆盖安装先收拾旧形态残留(旧 systemd unit/旧前台进程;快照已于 2.5 读取)
+  # 4) 跨形态覆盖安装先收拾旧形态残留(旧 systemd unit/旧前台进程;快照已于 2.5 读取)
   if have systemctl; then
     systemctl stop dsh-chamber-gateway.service 2>/dev/null || true
     systemctl disable dsh-chamber-gateway.service 2>/dev/null || true
@@ -2683,7 +2678,7 @@ EOF
   if [[ -f "$(foreground_record_file)" ]]; then
     stop_foreground || die "已有 foreground pid 身份不可验证，拒绝终止可能无关的进程（覆盖已中止：旧配置未写入、进程未停；local 树/指针或 global npm 变更未回滚，请人工核对 ${VERSIONS_DIR}/current 与 ${BASE_DIR}/run/gateway.pid 后重试）"
   fi
-  # 5) 回滚助手:还原退避树+旧 conf/env/指针,尽力重启旧部署(D-M1)
+  # 5) 回滚助手:还原退避树+旧 conf/env/指针,尽力重启旧部署
   local restore_prev=0
   restore_prev_tree() {
     [[ "${restore_prev}" == "1" && -n "${do_prev:-}" && -e "$do_prev" ]] || return 0
@@ -2704,7 +2699,7 @@ EOF
     if [[ "$INSTALL_METHOD" == "local" && -n "$old_cur" ]]; then
       switch_local_current "$old_cur" >/dev/null 2>&1 || true
     elif [[ "$INSTALL_METHOD" == "global" && -n "${old_ver:-}" && "$old_ver" != "local" ]]; then
-      # S3:回滚 npm 全局树到步骤 3 保全的旧版资产(镜像 cmd_update 回滚)。
+      # 回滚 npm 全局树到步骤 3 保全的旧版资产(镜像 cmd_update 回滚)。
       npm install -g --no-audit --no-fund "$GATEWAY_DIR/dsh-chamber-gateway-${old_ver}.tgz" >/dev/null 2>&1 \
         || warn "旧版全局资产（v${old_ver}）恢复失败，请手工执行：npm install -g --no-audit --no-fund ${GATEWAY_DIR}/dsh-chamber-gateway-${old_ver}.tgz"
     fi
@@ -2753,7 +2748,7 @@ EOF
   # 成功:清理退避旧树
   rm -rf "${do_prev:-}" 2>/dev/null || true
   do_prev=""; restore_prev=0
-  # F9：安装成功后清理缓存 tgz（两形态；local 另裁剪版本树）
+  # 安装成功后清理缓存 tgz（两形态；local 另裁剪版本树）
   rm -f "$GATEWAY_DIR"/dsh-chamber-gateway-*.tgz 2>/dev/null || true
   if [[ "$INSTALL_METHOD" == "local" ]]; then
     prune_version_trees
@@ -2789,7 +2784,7 @@ setup_path() {
     elif printf '%s\n' "$line" >> "$rc" 2>/dev/null; then
       log "已追加到 ${rc}；重新登录终端（或 source ${rc}）后可直接使用 gateway"
     else
-      # D5:rc 只读等失败只警告,不中断已成功的安装
+      # rc 只读等失败只警告,不中断已成功的安装
       warn "无法写入 ${rc}（只读或无权限？）：未追加 PATH；可直接使用全路径 $LOCAL_BIN_DIR/gateway"
     fi
   else
@@ -2825,7 +2820,7 @@ completion() {
     url="http://<服务器IP>:$GATEWAY_PORT"
     url_hint="（用服务器实际 IP 替换）"
   elif [[ -n "$TRUSTED_PROXY" ]]; then
-    # D3:仅有 trusted-proxy(无 origin):经反代访问,origin 未设
+    # 仅有 trusted-proxy(无 origin):经反代访问,origin 未设
     url="http://127.0.0.1:$GATEWAY_PORT"
     url_hint="（经反向代理访问；origin 未设时请在反代侧配置公网地址）"
   fi
@@ -2966,12 +2961,12 @@ load_conf() {
     die "安装配置不是普通文件，拒绝加载：$CONF_FILE"
   fi
   if [[ ! -O "$CONF_FILE" && "$EUID" != "0" ]]; then
-    # F1:root 管理 --service-user 安装时 conf 属主为 root,root 加载必须放行;
+    # root 管理 --service-user 安装时 conf 属主为 root,root 加载必须放行;
     # 非 root 且非属主仍拒绝(防篡改)。
     die "安装配置不属于当前用户，拒绝加载（可能被篡改）：$CONF_FILE"
   fi
   if ! bash -n "$CONF_FILE" 2>/dev/null; then
-    # M3:语法损坏的 conf 在 source 时会裸报 bash 错;预检给出可操作出口
+    # 语法损坏的 conf 在 source 时会裸报 bash 错;预检给出可操作出口
     die "安装配置语法损坏，无法安全加载：${CONF_FILE}（卸载可用 uninstall --purge 强制清理后重装）"
   fi
   local has_env_anchor=0 has_password=0 has_token=0 has_registry=0
@@ -3029,7 +3024,7 @@ load_conf() {
 cmd_status() {
   load_conf
   printf 'gateway %s @ %s:%s（dsh :%s）\n' "$VERSION" "$BIND_HOST" "$GATEWAY_PORT" "$DSH_PORT"
-  # F13：local 形态展示指针树版本；与配置分叉时如实警示（配置行不冒充运行态）
+  # local 形态展示指针树版本；与配置分叉时如实警示（配置行不冒充运行态）
   if [[ "$INSTALL_METHOD" == "local" && -L "$GATEWAY_DIR/current" ]]; then
     local cur_tree cur_ver
     cur_tree=$(readlink "$GATEWAY_DIR/current")
@@ -3051,7 +3046,7 @@ cmd_status() {
     fi
   else
     if ! have systemctl; then
-      # M5:宿主无 systemd 时给出解释而非裸 command-not-found
+      # 宿主无 systemd 时给出解释而非裸 command-not-found
       printf '状态: 配置为 %s 服务形态，但当前系统没有 systemctl（环境与配置不匹配）\n' "$SERVICE_MODE"
       printf '提示: 无 systemd 的主机安装 gateway 会使用前台形态；本机曾用 systemd 安装请重装或改配置\n'
     elif [[ "$SERVICE_MODE" == "user" ]]; then
@@ -3094,7 +3089,7 @@ cmd_logs() {
 cmd_restart() {
   load_conf
   acquire_lock
-  # F7：local 形态先证明 launcher 与指针树可用——避免重启杀掉健康旧服务后
+  # local 形态先证明 launcher 与指针树可用——避免重启杀掉健康旧服务后
   # ExecStart 目标缺失；并断言指针树版本与配置一致（restart 兼作"切树确认"工具）
   if [[ "$INSTALL_METHOD" == "local" ]]; then
     [[ -L "$GATEWAY_DIR/current" ]] || die "gateway/current 不是符号链接：$GATEWAY_DIR/current"
@@ -3136,7 +3131,7 @@ cmd_update() {
   local old_version="$VERSION"
   local offline_replace=0
   if [[ -n "$OFFLINE_TGZ" ]]; then
-    # F5：离线更新只支持 local 安装（VERSION=local）的本地替换：
+    # 离线更新只支持 local 安装（VERSION=local）的本地替换：
     # install --tgz 之后可用 update --tgz <同形态包> 更新。
     [[ "$INSTALL_METHOD" == "local" && "$old_version" == "local" ]] \
       || die "离线 --tgz 仅支持 local 安装（VERSION=local）的更新；其它形态请走在线通道或先 uninstall"
@@ -3150,7 +3145,7 @@ cmd_update() {
   local old_identity
   old_identity=$(launch_identity || true)
   if [[ "$SERVICE_MODE" == "foreground" && -f "$(foreground_record_file)" && -z "$old_identity" ]]; then
-    # F2:记录进程已死(崩溃/重启残留)→ 放行,后续 stop_foreground 会清记录;
+    # 记录进程已死(崩溃/重启残留)→ 放行,后续 stop_foreground 会清记录;
     # 仅"存活但身份不可验证"才拒绝(防 pid 复用误杀)。
     local _rpid="" _rexp="" _rextra=""
     IFS=' ' read -r _rpid _rexp _rextra < "$(foreground_record_file)" || true
@@ -3167,7 +3162,7 @@ cmd_update() {
     die "运行中的 systemd gateway 缺少可验证启动身份，拒绝以通用 /health 猜测升级成功"
   fi
 
-  # ---- 旧版本身份校验前置（F6："已是最新"短路前先证明指针/树与配置一致）----
+  # ---- 旧版本身份校验前置（"已是最新"短路前先证明指针/树与配置一致）----
   local old_local_target="" new_local_target="" old_tree_version="" staged_fresh=0 offline_prev=""
   local identity_healed=0 conf_behind=0
   if [[ "$INSTALL_METHOD" == "local" ]]; then
@@ -3178,13 +3173,13 @@ cmd_update() {
     [[ -n "$old_tree_version" ]] \
       || die "gateway/current 指向的版本树无法验证身份（缺 package.json/dist/cli.js 或清单非法）：${old_local_target}（可先 install 覆盖或修复指针后重试）"
     if [[ "$old_version" != "local" && "$old_tree_version" != "$old_version" ]]; then
-      # F6 自愈：current 版本树是部署事实（服务重启即从该树启动），conf 的
+      # 自愈：current 版本树是部署事实（服务重启即从该树启动），conf 的
       # VERSION 只是管理元数据。若上次升级事务在「conf 提交点（成功收尾最后
       # 一步）之后、收尾完成/trap 解除之前」失败或被中断，指针/树会被回滚
       # 还原、conf 却已写入新版本——该残局会让后续 update/restart 永久卡死
-      # （旧报错"旧版本身份与配置不匹配"）且只能手工改 conf。这里把配置对齐
+      # （报"旧版本身份与配置不匹配"）且只能手工改 conf。这里把配置对齐
       # 到实际版本树再继续：plain update 即按常规事务重放目标升级（既有目标
-      # 树按 F4 复用），显式 --version 走常规升级/降级确认，任何方向都不再死锁。
+      # 树按已验证的不可变树复用），显式 --version 走常规升级/降级确认，任何方向都不死锁。
       validate_gateway_version "$old_tree_version"    # 防篡改树把任意字符串写进 conf
       if version_lt "$old_version" "$old_tree_version"; then conf_behind=1; fi
       warn "版本树与配置不一致：配置 VERSION=${old_version}，current 树为 v${old_tree_version}——按部署事实把配置对齐到 v${old_tree_version} 后继续（若确需配置所记版本，可 --version ${old_version} 显式指定）"
@@ -3198,7 +3193,7 @@ cmd_update() {
       fi
     fi
   fi
-  # F6 自愈曾把 VERSION 临时改为树版本以写 conf；恢复目标版本供后续
+  # 自愈把 VERSION 临时改为树版本以写 conf；此处恢复目标版本供后续
   # download_verify（按 $VERSION 拼资产名）/staging/提交使用（old_version 已
   # 更新为树版本，回滚基线不受影响）。
   VERSION="$target_version"
@@ -3233,7 +3228,7 @@ cmd_update() {
     fi
     return 0
   fi
-  # F3：目标低于当前(如 beta 装过、stable 通道取到更旧)必须显式确认——不静默降级
+  # 目标低于当前(如 beta 装过、stable 通道取到更旧)必须显式确认——不静默降级
   if [[ "$offline_replace" == "0" && "$old_version" != "local" && "$target_version" != "$old_version" ]] \
     && version_lt "$target_version" "$old_version"; then
     if interactive; then
@@ -3254,7 +3249,7 @@ cmd_update() {
   elif interactive; then
     if ! confirm "$confirm_label" "y"; then die "已取消——未做任何修改"; fi
   else
-    # H2:管道输入可取消(与 install stage8/uninstall 一致)
+    # 管道输入可取消(与 install stage8/uninstall 一致)
     warn "stdin 不是终端：升级确认读取管道输入（输入 n 取消；完全自动请加 -y）"
     if ! confirm "$confirm_label" "y"; then die "已取消——未做任何修改"; fi
   fi
@@ -3282,14 +3277,14 @@ cmd_update() {
     # Re-fetch and verify the exact rollback release before mutating the
     # global npm tree. A stale/tampered cached tgz is not transaction proof.
     VERSION="$old_version"
-    write_config >/dev/null 2>&1 || rollback_ok=0    # D-L1:回滚同步还原已提交的 conf
+    write_config >/dev/null 2>&1 || rollback_ok=0    # 回滚同步还原已提交的 conf
     download_verify "$GATEWAY_DIR"
     VERSION="$target_version"
   else
     download_verify "$GATEWAY_DIR"
     new_local_target="$VERSIONS_DIR/$target_version"
     if [[ -e "$new_local_target" || -L "$new_local_target" ]]; then
-      # F4/A9：与 do_install 一致的"验证后复用不可变树"——更新到曾安装版本不再必死
+      # 与 do_install 一致的"验证后复用不可变树"——更新到已安装过的版本同样可复用
       local existing_tree_version
       existing_tree_version=$(gateway_tree_version "$new_local_target" || true)
       [[ -n "$existing_tree_version" && "$existing_tree_version" == "$target_version" ]] \
@@ -3309,7 +3304,7 @@ cmd_update() {
       rm -rf "$offline_stage"
       die "离线包包含越界路径成员，拒绝解包：$OFFLINE_TGZ"
     fi
-    # 与 stage_local_version 同款：拒绝越界符号链接成员（F12）
+    # 与 stage_local_version 同款：拒绝越界符号链接成员
     if tar -tvzf "$OFFLINE_TGZ" 2>/dev/null | sed -nE 's/^.* -> //p' | grep -qE '^/|(^|/)\.\.(/|$)'; then
       rm -rf "$offline_stage"
       die "离线包包含越界符号链接成员，拒绝解包：$OFFLINE_TGZ"
@@ -3324,7 +3319,7 @@ cmd_update() {
     offline_new_version=$(gateway_tree_version "$offline_stage" || true)
     [[ -n "$offline_new_version" ]] || { rm -rf "$offline_stage"; die "离线包不是有效 gateway 资产（缺 package.json/dist/cli.js）"; }
     if [[ "$offline_new_version" == "$old_tree_version" ]]; then
-      # 同版本不再拒绝（重打包修复/测试循环常态）：内容一致→幂等完成；
+      # 同版本不拒绝（重打包修复/测试循环常态）：内容一致→幂等完成；
       # 内容不同→允许替换。
       local old_fp="" new_fp=""
       old_fp=$(tree_fingerprint "$new_local_target" || true)
@@ -3416,13 +3411,13 @@ cmd_update() {
       mv_T "$anchor_prev" "$anchor_dir" >/dev/null 2>&1 || true
     fi
   }
-  # F11：指针切换 ↔ 配置提交窗口的信号防护：中断先复原指针再退出
+  # 指针切换 ↔ 配置提交窗口的信号防护：中断先复原指针再退出
   if [[ "$INSTALL_METHOD" == "local" ]]; then
     if [[ "$offline_replace" == "1" ]]; then
       # 离线替换指针未动（同路径）：中断时把退避旧树 mv 回，不留 .local.prev
       trap 'restore_anchor_on_interrupt; if [[ -n "$offline_prev" && -e "$offline_prev" ]]; then mv_T "$offline_prev" "$new_local_target" >/dev/null 2>&1 || true; fi; die "升级被中断，gateway 版本树与 dsh 锚已尽力复原"' INT TERM
     else
-      # F6：中断可能落在 conf 提交点（成功分支写 VERSION=target）之后、trap
+      # 中断可能落在 conf 提交点（成功分支写 VERSION=target）之后、trap
       # 解除之前——指针复原后 conf 仍记新版本，会把后续 update/restart 永久
       # 卡在身份校验。trap 内把配置一并写回旧版本（内容未变时幂等重写；
       # 失败仅告警，不覆盖主复原动作）。
@@ -3520,13 +3515,13 @@ cmd_update() {
     VERSION="$old_version"
     # conf 提交点在成功收尾（重启+健康检查通过之后）、trap 解除之前——若失败
     # 落在提交之后，指针/树已还原但 conf 仍记新版本，不写回会让后续
-    # update/restart 永久卡在 F6 身份校验。回滚必须把配置一并还原
+    # update/restart 永久卡在身份校验。回滚必须把配置一并还原
     # （内容未变时幂等重写）。
     write_config >/dev/null 2>&1 || rollback_ok=0
     if [[ "$SERVICE_MODE" == "foreground" ]]; then
       start_foreground "$rollback_expected_version" "$rollback_previous" || rollback_ok=0
     else
-      # F13：unit 内容与版本无关，回滚无需重写 unit（避免"unit 目录不可写"
+      # unit 内容与版本无关，回滚无需重写 unit（避免"unit 目录不可写"
       # 把可干净 restart 的回滚误报成失败）
       apply_service_user_ownership || rollback_ok=0
       restart_service || rollback_ok=0
@@ -3541,7 +3536,7 @@ cmd_update() {
     die "升级失败且回滚未完全成功，请人工介入：$failure_reason"
   fi
 
-  # 成功后清理（F9）：退避旧树/旧锚删除；缓存 tgz 两形态都清（回滚资产可网络重取）
+  # 成功后清理：退避旧树/旧锚删除；缓存 tgz 两形态都清（回滚资产可网络重取）
   if [[ "$offline_replace" == "1" && -n "$offline_prev" && -e "$offline_prev" ]]; then
     rm -rf "$offline_prev"
   fi
@@ -3561,7 +3556,7 @@ cmd_update() {
 
 cmd_uninstall() {
   local conf_bypassed=0
-  # M3:--purge 时损坏 conf 不挡卸载——跳过加载,以保守默认进入强制清理
+  # --purge 时损坏 conf 不挡卸载——跳过加载,以保守默认进入强制清理
   if [[ "${PURGE:-0}" == "1" && -f "$CONF_FILE" ]] && ! bash -n "$CONF_FILE" 2>/dev/null; then
     warn "安装配置已损坏：跳过加载，进入 --purge 强制清理模式"
     VERSION="local"; INSTALL_METHOD="local"; SERVICE_MODE="foreground"
@@ -3571,7 +3566,7 @@ cmd_uninstall() {
   if [[ "$conf_bypassed" == "0" ]]; then
     load_conf
   fi
-  acquire_lock    # F4:purge 会 rm -rf GATEWAY_DIR,必须与 update/install 互斥
+  acquire_lock    # purge 会 rm -rf GATEWAY_DIR,必须与 update/install 互斥
   if [[ "$NONINTERACTIVE" == "1" ]]; then
     :  # -y 显式放行（脚本化卸载）
   elif ! confirm "确认卸载 gateway（保留 state，--purge 才删 dsh-runtime/ 与 dsh-home/）？" "n"; then
@@ -3581,7 +3576,7 @@ cmd_uninstall() {
     # 损坏 conf 无法得知服务形态:systemd 两形态尽力停(忽略失败,后续删文件)
     systemctl disable --now dsh-chamber-gateway 2>/dev/null || true
     systemctl --user disable --now dsh-chamber-gateway 2>/dev/null || true
-    # S5:形态未知时两处 unit 文件一并删除(--purge 强清;disable 只停不删,
+    # 形态未知时两处 unit 文件一并删除(--purge 强清;disable 只停不删,
     # 旁路下没有后续 rm 分支会执行,陈旧 unit 会令同路径重装/update 误判)。
     rm -f /etc/systemd/system/dsh-chamber-gateway.service 2>/dev/null || true
     rm -f "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/dsh-chamber-gateway.service" 2>/dev/null || true
@@ -3591,7 +3586,7 @@ cmd_uninstall() {
       stop_foreground || die "foreground pid 身份不可验证；为避免终止无关进程，卸载已中止"
     fi
   elif [[ "$SERVICE_MODE" == "user" ]]; then
-    # 停服失败且服务仍在运行 → 中止卸载（C 区 #8：不对运行中服务删数据）
+    # 停服失败且服务仍在运行 → 中止卸载（不对运行中服务删数据）
     if ! systemctl --user disable --now dsh-chamber-gateway 2>/dev/null \
       && systemctl --user is-active --quiet dsh-chamber-gateway 2>/dev/null; then
       die "user 服务停止失败（systemctl --user disable --now）：为避免删除运行中服务的数据，卸载已中止"
@@ -3610,7 +3605,7 @@ cmd_uninstall() {
   # 凭据文件一律删除（活凭据不随卸载保留）；state 数据是否保留由 PURGE 决定。
   rm -f "$CONF_FILE" "$ENV_FILE"
   # 非 purge 卸载仍清掉指向已删程序文件的启动器、自复制脚本与运行期痕迹
-  # （state 保留；A18：install_self 复制的管理脚本一并移除）。
+  # （state 保留；install_self 复制的管理脚本一并移除）。
   rm -f "${BASE_DIR}/bin/gateway" "${BASE_DIR}/bin/install-gateway.sh" 2>/dev/null || true
   rm -f "${BASE_DIR}/run/gateway.pid" "${BASE_DIR}"/run/gateway*.log 2>/dev/null || true
   # 事后验证：systemd 形态下服务应已停止（失败要响亮，不能假装卸载成功）
@@ -3625,13 +3620,13 @@ cmd_uninstall() {
   fi
   if [[ "${PURGE:-0}" == "1" ]]; then
     rm -rf "$GATEWAY_DIR"
-    # A18：--purge 顺带移除安装器写入的 PATH 追加行（仅精确匹配我们写入的行）
+    # --purge 顺带移除安装器写入的 PATH 追加行（仅精确匹配我们写入的行）
     local rc_file path_line="" rc_mode=""
     path_line="export PATH=\"${LOCAL_BIN_DIR}:\$PATH\""
     for rc_file in "$HOME/.bashrc" "$HOME/.zshrc"; do
       [[ -f "$rc_file" ]] || continue
       if grep -qF "$path_line" "$rc_file" 2>/dev/null; then
-        # 保留原文件 mode（全局 umask 077 下 tmp 会变 0600,DIFF #11）
+        # 保留原文件 mode（全局 umask 077 下 tmp 会变 0600）
         rc_mode=$(stat -f '%Lp' "$rc_file" 2>/dev/null || stat -c '%a' "$rc_file" 2>/dev/null || true)
         if grep -vF "$path_line" "$rc_file" > "$rc_file.tmp.$$" 2>/dev/null && mv_T "$rc_file.tmp.$$" "$rc_file"; then
           [[ -n "$rc_mode" ]] && chmod "$rc_mode" "$rc_file" 2>/dev/null || true
@@ -3668,11 +3663,11 @@ usage() {
 }
 
 SUBCOMMAND="install"
-FLAG_PIN=0    # --version/--tgz 显式 pin(与 --channel 区分,DIFF #5)
+FLAG_PIN=0    # --version/--tgz 显式 pin(与 --channel 区分)
 while [[ $# -gt 0 ]]; do
   case "$1" in
     install|update|restart|status|logs|uninstall) SUBCOMMAND="$1"; shift ;;
-    help|-h|--help) SUBCOMMAND="help"; shift; break ;;    # M1：--help 短路,后续参数不再解析
+    help|-h|--help) SUBCOMMAND="help"; shift; break ;;    # --help 短路,后续参数不解析
     -y|--yes) NONINTERACTIVE=1; shift ;;
     --version) [[ $# -ge 2 ]] || die "--version 需要值（查询已装 gateway 版本请用 status）"; VERSION="$2"; FLAG_VERSION=1; FLAG_PIN=1; shift 2 ;;
     --channel) [[ $# -ge 2 ]] || die "--channel 需要值"; CHANNEL="$2"; FLAG_VERSION=1
@@ -3728,7 +3723,7 @@ if [[ "$FLAG_CRED" == "1" && "$NO_AUTH" == "0" && -z "$UI_PASSWORD" && -z "$API_
 fi
 
 # 子命令 × 选项矩阵：仅 install 的形态/向导选项在其它子命令下无意义——
-# 警告而非静默忽略（F10）。
+# 警告而非静默忽略。
 case "$SUBCOMMAND" in
   install|help|-h|--help)
     [[ "$DSH_UPGRADE_FLAG" != "1" ]] \
@@ -3773,7 +3768,7 @@ preflight() {
   # 文案声称 ≥22 就必须真的查版本：node 18/20 会在源码树 dsh 路径的
   # `node --import tsx/esm` 或 gateway 本体处中途失败，报错要前置且诚实。
   # 运行时下限与工具链（CI/开发统一 24）分离：产物为 esbuild node22 语法
-  # 目标，node 22（maintenance LTS，至 2027-04）仍在官方支持期内。
+  # 目标，node 22（maintenance LTS）仍在官方支持期内。
   local node_ver node_major
   node_ver=$(node --version 2>/dev/null || true)
   node_major=$(printf '%s' "$node_ver" | sed 's/^v\([0-9][0-9]*\).*/\1/' || true)
@@ -3782,12 +3777,12 @@ preflight() {
   if [[ -z "$OFFLINE_TGZ" ]]; then
     have curl || die "缺少 curl:下载安装包需要 curl(离线包模式可用 --tgz 跳过)"
   else
-    # 离线包路径快速失败（此前只在 do_install 的 dsh 锚安装之后才检查）
+    # 离线包路径快速失败（不等到 do_install 的 dsh 锚安装之后才检查）
     [[ -f "$OFFLINE_TGZ" ]] || die "本地包不存在：${OFFLINE_TGZ}（--tgz）"
     verify_offline_tgz "$OFFLINE_TGZ"
   fi
   # --skip-dsh 需要显式内建锚（design 18 §9.3）：进入向导前就拒绝，
-  # 避免向导走到第 6 步才 die 丢全部答案（A6）。
+  # 避免向导走到第 6 步才 die 丢全部答案。
   if [[ "$SKIP_DSH" == "1" && -z "${DSH_GATEWAY_DSH_PATH:-}" && -z "$DSH_WS" ]]; then
     die "--skip-dsh 需要显式内建锚：请提供 --dsh-path <workspace> 或设 DSH_GATEWAY_DSH_PATH，或去掉 --skip-dsh 让脚本自动安装。"
   fi

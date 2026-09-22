@@ -1,6 +1,6 @@
 /**
  * Installer dsh-anchor sync: flags, manifest/tgz baseline reads, staged
- * upgrades, rollback and lock/conf recovery. Split from install-script.test.ts.
+ * upgrades, rollback and lock/conf recovery.
  */
 
 import { test } from 'node:test'
@@ -222,11 +222,11 @@ test('update rollback restores the old dsh anchor when the new service fails the
 })
 
 test('stage_dsh_anchor_upgrade survives UTF-8 locales (bash 3.2 multibyte variable-name parsing)', () => {
-  // Regression: the progress log ended with "…镜像 $registry）…" — under bash
-  // 3.2 + any UTF-8 LC_CTYPE the parameter-name scanner eats the first byte
-  // of the multibyte ） into the name, so set -u crashed with
-  // "registry…: unbound variable" on EVERY anchor-syncing update (default ON)
-  // → full rollback. CI (bash 5) never saw it; this spawns its own harness
+  // A progress log ending with "…镜像 $registry）…" must survive UTF-8 locales:
+  // under bash 3.2 + any UTF-8 LC_CTYPE the parameter-name scanner eats the
+  // first byte of the multibyte ） into the name, so set -u would crash with
+  // "registry…: unbound variable" on every anchor-syncing update (default ON)
+  // → full rollback. CI (bash 5) never sees that; this spawns its own harness
   // under LC_ALL=C.UTF-8 so macOS-bash-3.2 semantics are exercised.
   const output = runLibrary(`
 BASE_DIR="$(mktemp -d)"

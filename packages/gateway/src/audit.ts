@@ -9,8 +9,8 @@
  * identity checks, 0600 with loose legacy modes tightened at open, fsync +
  * directory fsync on creation) is the control-plane shared audit-trail
  * single source — the desktop audit log (packages/desktop/audit-log.ts)
- * runs the SAME core, so the two surfaces can no longer drift (dedupe audit
- * E-4/N11, 2026-09). This file keeps only the gateway-facing shape:
+ * runs the SAME core, so the two surfaces cannot drift. This file keeps
+ * only the gateway-facing shape:
  * serialize-then-append with LOUD-but-non-fatal errors (a broken audit trail
  * must not take the auth surface down — the log is a record, not a gate).
  */
@@ -24,9 +24,7 @@ import {
 
 /** Rotation cap of the active audit file (5 MiB; the trail is bounded at
  * 2 × cap including `<file>.1`). Module-local: the shared core constant
- * (AUDIT_TRAIL_MAX_BYTES) is the wire-contract single source, and the gateway
- * entry's alias exports (AUDIT_LOG_MAX_BYTES / AuditEvent) had no production
- * consumer (2026-12 audit F23). */
+ * (AUDIT_TRAIL_MAX_BYTES) is the wire-contract single source. */
 const AUDIT_LOG_MAX_BYTES = AUDIT_TRAIL_MAX_BYTES
 
 /** Append one non-secret audit event (JSONL). Never throws into the caller;

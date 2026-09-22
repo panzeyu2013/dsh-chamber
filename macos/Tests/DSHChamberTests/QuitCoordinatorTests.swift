@@ -1,9 +1,9 @@
 //
-//  QuitCoordinatorTests.swift — E1/E9/E20 纯逻辑片（design 25 §5）
+//  QuitCoordinatorTests.swift — 纯逻辑片（design 25 §5）
 //
 //  覆盖：`__host.quitFacts` 决策解码（形状严格 / 非法 → nil 保守路径）、
 //  关窗动作映射、确认文案（main.ts before-quit 逐字）、退出单飞/确认门
-//  （QuitGate 状态迁移）、退出确认框的 Enter/Esc 按键语义（S-43：真实
+//  （QuitGate 状态迁移）、退出确认框的 Enter/Esc 按键语义（真实
 //  runModal + 合成按键，无需人工交互，5s 兜底防挂死）。其余 AppKit 执行面
 //  （orderOut / terminate 链）属实机门禁，不在单测范围。
 import XCTest
@@ -12,7 +12,7 @@ import XCTest
 final class QuitCoordinatorTests: XCTestCase {
 
     /// 本类钉的是**中文整句**（与 Electron main.ts 的硬编码中文逐字锁步：
-    /// `退出将停止${reasons.join('与')}。确定退出？`；S-17 提示框的按钮/正文同理），
+    /// `退出将停止${reasons.join('与')}。确定退出？`；提示框的按钮/正文同理），
     /// 故显式固定语言：NativeText 默认走进程 bundle 解析（= 机器语言），不固定的话
     /// 英文语言机器（如 CI 的 macOS runner）上这些断言会红。
     override func setUp() {
@@ -88,7 +88,7 @@ final class QuitCoordinatorTests: XCTestCase {
         XCTAssertEqual(QuitCoordinator.confirmDetail(reasons: []), "退出将停止。确定退出？")
     }
 
-    // MARK: - S-17：决策不可得（超时/无应答）
+    // MARK: - 决策不可得（超时/无应答）
 
     /// 超时/无应答且 sidecar 仍在运行 → 绝不静默取消：必须走提示分支；
     /// sidecar 已停（无本地保护内容）→ 放行（main.ts cp===null 同向）。
@@ -130,8 +130,8 @@ final class QuitCoordinatorTests: XCTestCase {
         XCTAssertFalse(gate.beginConfirm(), "已确认后不再弹确认")
     }
 
-    /// 已确认 = 终态：新 gate 才是新退出会话的起点（S14 删除了无生产调用者的
-    /// QuitGate.reset；测试以新实例表达「下次会话」，不再驱动 reset）。
+    /// 已确认 = 终态：新 gate 才是新退出会话的起点（QuitGate 无 reset，
+    /// 测试以新实例表达「下次会话」）。
     func testFreshGateStartsUnconfirmedAndAcceptsBothRegimes() {
         let gate = QuitGate()
         XCTAssertFalse(gate.isConfirmed)
@@ -150,7 +150,7 @@ final class QuitCoordinatorTests: XCTestCase {
         gate.endDecision()
     }
 
-    // MARK: - S-43：退出确认框的按键语义（Enter/Esc 都命中安全项「取消」）
+    // MARK: - 退出确认框的按键语义（Enter/Esc 都命中安全项「取消」）
 
     /// 与 presentQuitConfirmation 同构：[退出] + [取消(\r)]（defaultId=1）。
     private static func twoButtonQuitAlert() -> NSAlert {
@@ -212,7 +212,7 @@ final class QuitCoordinatorTests: XCTestCase {
                        "Enter 必须命中「取消」（Electron defaultId=1）")
     }
 
-    // MARK: - D1：关窗决策缓存（2026-09 评审）
+    // MARK: - 关窗决策缓存
 
     /// close 语境的投影：关窗该隐藏。
     private static func closeDecision() -> QuitFacts {
@@ -240,7 +240,7 @@ final class QuitCoordinatorTests: XCTestCase {
         XCTAssertEqual(cache.current(), Self.closeDecision())
     }
 
-    /// D1 的原始复现序列：一次被取消的退出不得污染 close 决策。
+    /// 一次被取消的退出不得污染 close 决策。
     func testCancelledQuitCannotPoisonTheCloseCache() {
         var cache = QuitFactsCache()
         let token = cache.token
@@ -292,24 +292,24 @@ final class QuitCoordinatorTests: XCTestCase {
     }
 
     /// 只留代码行（丢整行注释），源锁才不会被「注释里也抄一遍」的形态骗过
-    /// （2026-09 复核：`// self?.quitFactsCache.invalidate()` 会让朴素计数仍为 2）。
+    /// （注释版 `// self?.quitFactsCache.invalidate()` 会让朴素计数仍为 2）。
     private static func codeOnly(_ source: String) -> String {
         source.split(separator: "\n", omittingEmptySubsequences: false)
             .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
             .joined(separator: "\n")
     }
 
-    /// D1 的调用点锁（2026-09 评审反例）：把 AppDelegate 的 closeContext 改成恒真时，
-    /// 上面五个 struct 用例全绿而 D1 复活——故把调用点本身钉住。锁比对的是**完整调用
+    /// 调用点锁：把 AppDelegate 的 closeContext 改成恒真时，
+    /// 上面五个 struct 用例全绿——故把调用点本身钉住。锁比对的是**完整调用
     /// 表达式**，并用 codeOnly() 过滤注释行：`|| true` 与「注释版 invalidate」两个
-    /// 逃逸都已由 2026-09 复核实测钉掉。
+    /// 逃逸都被钉掉。
     func testQuitFactsStoreCallSiteKeepsTheCloseContextGate() throws {
         let source = Self.codeOnly(try Self.macOSSource("Sources/DSHChamber/AppDelegate.swift"))
         XCTAssertTrue(source.contains("closeContext: !quitRequested)"),
                       "写入缓存必须以请求语境作为 closeContext（退出语境不得入缓存）")
         XCTAssertFalse(source.contains("closeContext: !quitRequested ||"),
                        "不得用逻辑或短路这道门（评审反例）")
-        // 2026-09 复核：只数次数会被「把两处失效搬进同一函数」骗过——同时钉住语境。
+        // 只数次数会被「把两处失效搬进同一函数」骗过——同时钉住语境。
         let invalidateSites = source.components(separatedBy: "quitFactsCache.invalidate()")
         XCTAssertEqual(invalidateSites.count - 1, 2,
                        "失效点必须恰好两处（设置变更 + sidecar ready），且都在代码行里")

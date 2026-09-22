@@ -16,7 +16,7 @@ import type { SpawnedProcess, TransportExecDeps } from '../../transport-provider
 import { CHILD_LINE_MAX_CHARS } from '../../bounded-lines.ts'
 import { runDeps, spec, specWithHome } from '../support/ssh-provider-run-deps.ts'
 
-// --- design 13 §7.2 exec whitelist tests (M1) ---
+// --- design 13 §7.2 exec whitelist tests ---
 test('buildRemoteExecArgv accepts a whitelisted dsh plugin add/remove', () => {
   assert.deepEqual(
     buildRemoteExecArgv(spec('w1'), { op: 'exec', command: 'dsh', argv: ['plugin', '--profile', 'web', 'add', '@scope/name@^1.2.3'] }),
@@ -248,8 +248,8 @@ function makeRemoteHost(home = '/home/u') {
       return
     }
     if (remoteArgv[0] === 'cat' || (remoteArgv[0] === 'LC_ALL=C' && remoteArgv[1] === 'cat')) {
-      // The provider now runs every remote cat under `LC_ALL=C` (English
-      // messages regardless of the remote locale); the bare form is kept for
+      // The provider runs every remote cat under `LC_ALL=C` (English
+      // messages regardless of the remote locale); the bare form covers
       // the write-file read-back fake and legacy shapes.
       const path = remoteArgv[0] === 'cat' ? remoteArgv[1] as string : remoteArgv[2] as string
       const bytes = tamper.get(path) ?? files.get(path)
@@ -279,8 +279,8 @@ function makeRemoteHost(home = '/home/u') {
 test('write-file: streams base64 over ssh stdin and verifies the read-back in the BYTE domain', async () => {
   const remote = makeRemoteHost()
   // Binary content with invalid UTF-8 sequences: the lossy `toString('utf8')`
-  // view must NOT be what the hash is computed over (the pre-fix code hashed
-  // the string, so this content always failed with U+FFFD corruption).
+  // view must NOT be what the hash is computed over (hashing the string would
+  // corrupt this content with U+FFFD).
   const content = Buffer.from([0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0xfe, 0x81, 0x82, 0x00, 0x01])
   const sha256 = createHash('sha256').update(content).digest('hex')
   const result = await sshProvider.exec!(spec('wf1'), 'run', runDeps(remote.spawnFn), {
@@ -465,7 +465,7 @@ test('run: a QUIET ENOENT probe under a `.ssh`-named home stays ENOENT-classifie
   }
 })
 test('run: a zh_CN-locale ENOENT ("没有那个文件或目录") is classified as absent — a quiet probe, never a loud failure', async () => {
-  // Real-world case (2026-08 user report): coreutils on a zh_CN-locale host
+  // Real-world case: coreutils on a zh_CN-locale host
   // prints `没有那个文件或目录` for a missing file. classifyStderr must flag
   // it ENOENT (classified on the RAW line) so the plugin-sync caller reads
   // "file absent" (未注入) instead of a loud ssh failure — while the quiet

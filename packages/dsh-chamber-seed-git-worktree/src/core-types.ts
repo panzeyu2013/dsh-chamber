@@ -18,7 +18,7 @@ export interface AgentFact {
   /** The recorded parent session (`session.header.parentSession`). Loaded for
    *  EVERY agent (any status), because the archived-aware running guard walks
    *  the chain from a running descendant up to an archived ancestor (design 08
-   *  §6 amendment, 2026-09). The edge MEANS one of two things and only
+   *  §6 amendment). The edge MEANS one of two things and only
    *  `origin` tells them apart — see below. */
   readonly parentSessionId?: string
   /** Coarse durable child origin (`session.header.origin`). `'subagent'` marks
@@ -190,7 +190,7 @@ export interface RemoveInput {
    *  `git worktree remove --force` instead of being rejected. The branch,
    *  commits and HEAD are never touched — only the working tree files are
    *  discarded. Locked/running/identity guards are unchanged. (design 08 §5.3
-   *  amendment, 2026-08 user decision) */
+   *  amendment) */
   readonly discardChanges?: boolean
 }
 
@@ -300,7 +300,7 @@ export type GitWorktreeDomainResult<T> =
   | { readonly ok: false; readonly error: GitWorktreeDomainError }
 
 /** Stable action error code; Typert transports the Error message to clients.
- *  INVARIANT (2026-09): an explicit `retryable: false` is a host-proven
+ *  INVARIANT: an explicit `retryable: false` is a host-proven
  *  PRE-MUTATION refusal — the mutation provably did not commit (the
  *  worktree-submodules gate and the commitBoundRemove reclassification are
  *  the only emitters, both after proving the target still exists). Never

@@ -5,8 +5,7 @@
  * are bound by dsh's styling rules — the pinned upstream tree's
  * `docs/web-styling.md`. Upstream enforces those rules with specs that scan
  * `packages/` OF THE UPSTREAM REPO (ui-theme's elevation / corner-shape /
- * scrollbar specs). chamber's packages sit outside that scan, which is how a
- * batch of violations shipped unnoticed (2026-09 style review). This gate
+ * scrollbar specs). chamber's packages sit outside that scan. This gate
  * applies the same rules across EVERY chamber package and every file kind that
  * can carry CSS (`.css`, `.ts`, `.tsx`, `.html` — the gateway login page and
  * the mobile plugin both carry stylesheets as strings, which a CSS-only scan
@@ -138,9 +137,8 @@ function fail(message) {
  * ignored tree to its root). The scan面 is "everything the repository owns",
  * and a filesystem walk cannot know that: `packages/desktop/.dev-user-data/`
  * is ignored local state that holds OTHER checkouts (`dsh-home/worktrees/…`),
- * so walking into it audited a stranger's tree and failed the gate on files
- * this repository does not contain (2026-09-10, merge of `compare` — the gate
- * passed in CI only because a fresh runner has no dev state).
+ * so walking into it would audit a stranger's tree and fail the gate on files
+ * this repository does not contain.
  */
 function ignoredDirs() {
   const roots = new Set()

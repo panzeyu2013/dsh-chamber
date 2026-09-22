@@ -24,10 +24,9 @@ declare module '@deepseek-ai/cordis' {
     effect(fn: () => (() => void) | void, label?: string): void
     /**
      * chamber v1: per-instance sessions runtime face (loose mirror of ISessions
-     * from @deepseek-ai/dsh-api-session-controller/client — the dsh-v0.1.2-alpha.1
-     * home of ctx.sessions; the old dsh-client-runtime face is gone). The
-     * `list.byId` / `open` surface shell.ts's dispatchOpen relies on is
-     * preserved by the new ISessions contract.
+     * from @deepseek-ai/dsh-api-session-controller/client — the home of
+     * ctx.sessions). The `list.byId` / `open` surface shell.ts's dispatchOpen
+     * relies on is part of the ISessions contract.
      */
     sessions: {
       open(id: string): void
@@ -36,7 +35,7 @@ declare module '@deepseek-ai/cordis' {
     /**
      * Cordis Loader (mounted by dsh-client-web boot.ts runPluginBoot: `await
      * ctx.plugin(Loader)`). Only the boot-failure sweep reads it (shell.ts
-     * collectFailedEntries, T15 2026-09-11 upstream-alignment — the same
+     * collectFailedEntries — the same
      * `ctx.loader.entries()` sweep upstream's assertEntriesActive reads), so
      * the mirror stays minimal: entry name + root fiber state.
      */
@@ -61,13 +60,13 @@ declare module '@deepseek-ai/dsh-client-web' {
   /**
    * chamber patch (design 05 §6 / design 09): mirror of boot.ts AppWebEntryOptions —
    * per-instance extra host-graph client-plugin rows (bundles pre-loaded by
-   * the chamber shell; ids only merged into the boot rows here). dsh-v0.1.2-alpha.1
+   * the chamber shell; ids only merged into the boot rows here).
    * BootModuleRow alignment: the required `initialUrl` (the preloaded combo
    * url — the chamber merge preloads each entry's own combo, so it equals the
    * row url), `inject` (empty — the composite covers the whole official shell,
    * extras have no inject edges to arrive) and `external` (the module
    * specifiers the row's factory will require at create time; the real kernel
-   * type requires it, so the mirror must not omit it — 2026-09 audit).
+   * type requires it, so the mirror must not omit it).
    */
   export interface AppWebEntryOptions extends BootSeams {
     extraRows?: {
@@ -82,13 +81,13 @@ declare module '@deepseek-ai/dsh-client-web' {
     configureContext?: (ctx: Context) => void
   }
   /**
-   * chamber patch (2026-08 first-boot race fix, 05 §4): install-or-reuse the
+   * chamber patch (design 05 §4): install-or-reuse the
    * page-level module system (window.__DSH_MODULES__ + the __ModuleLoader__
    * registration sink). shell.ts calls this BEFORE preloading any host-graph
    * bundle so the extra bundles' scripts always evaluate against an installed
    * sink; idempotent, run() adopts the same instance.
    *
-   * C3 (2026-09 性能审计): the return face mirrors the slice shell.ts now
+   * C3: the return face mirrors the slice shell.ts
    * consumes — `manifest` (the parsed boot graph rows) and `prefetch(id)` (the
    * kernel's immediately-tier preload path, module-cache deduped). Single
    * source of truth for the shape: packages/dsh-client-web/src/boot.ts
@@ -102,7 +101,7 @@ declare module '@deepseek-ai/dsh-client-web' {
     manifest: { plugins: ReadonlyArray<{ id: string; immediately?: boolean }> }
     prefetch(id: string): Promise<void>
     /**
-     * Materialize a loaded row's module namespace (2026-12: the shared
+     * Materialize a loaded row's module namespace (the shared
      * client-plugin-loader publishes this table so the settings bridge mounts a
      * source's own plugins through the SAME union table the boot used).
      */
@@ -112,7 +111,7 @@ declare module '@deepseek-ai/dsh-client-web' {
    * Fiber-state mirror (packages/dsh-client-web/src/loader-status.ts, itself a
    * value mirror of cordis's const enum): the failed-boot sweep compares a
    * loader entry's root fiber against ACTIVE, exactly as upstream's
-   * assertEntriesActive does (T15 2026-09-11 upstream-alignment — shell.ts
+   * assertEntriesActive does (shell.ts
    * collectFailedEntries). The real package exports this value; the ambient
    * mirror only narrows it to the member the renderer reads.
    */
@@ -131,39 +130,38 @@ declare module '@deepseek-ai/dsh-client-web' {
     dispose(): Promise<void>
     /** chamber patch: settled runtime context (boot.ts accessor; session opens ride ctx.sessions; undefined after dispose). */
     runtimeCtx: Context | undefined
-    /** chamber patch (2026-08, 05 §4 失败呈现修订): boot failure report — run() resolves on boot-chain failures by design (the dsh loading page renders the in-shell report), but the chamber shell must see it to present its own per-instance fallback; undefined while loading or after a clean settle. */
+    /** chamber patch (design 05 §4 失败呈现修订): boot failure report — run() resolves on boot-chain failures by design (the dsh loading page renders the in-shell report), but the chamber shell must see it to present its own per-instance fallback; undefined while loading or after a clean settle. */
     bootError: string | undefined
   }
 }
 
 declare module '@deepseek-ai/dsh-client-connection/client'
-// dsh-v0.1.2-alpha.1 provider group (dsh-client-runtime deleted): the store is
+// provider group: the store is
 // a plain module (the platform store word — imported BARE, no /client
 // subpath; registered as a module-table covered factory by chamber-entry, not
 // a cordis plugin), the api controllers (ctx.sessions / ctx.workspaces) and
 // the ui-session / ui-chat / ui-approval conversation families are first-screen
 // plugins (chamber-entry.ts import list + COVERED_FACTORIES).
 declare module '@deepseek-ai/dsh-client-store'
-// C3 (2026-09 性能审计): the ui-primitives platform word imported BARE by
+// C3: the ui-primitives platform word imported BARE by
 // chamber-entry.ts (covered factory, never ctx.plugin — see the seed.ts /
 // platform.ts deviation notes in dsh-client-web). The frame's own use of this
-// package (the official Button atom, T15) goes through the deep `src/` specifier
+// package (the official Button atom) goes through the deep `src/` specifier
 // declared below instead, so the barrel's markdown/highlight families stay out of
 // the main graph.
 declare module '@deepseek-ai/dsh-client-ui-primitives'
 
 /**
  * The official Button atom, imported by the FRAME (App.tsx) by DEEP SOURCE PATH
- * (T15 2026-09-11 upstream-alignment: the failure/retry chrome is the design
- * system's — U ui-primitives/src/Button.tsx + its --dsw-alias-button-* tokens —
+ * (the failure/retry chrome is the design
+ * system's — ui-primitives/src/Button.tsx + its --dsw-alias-button-* tokens —
  * not chamber's invented `.btn`). The deep form is the repo's established way to
  * reach one internal module instead of a barrel: the ui-layout fork, the sidebar
  * and the settings bridge all declare `@deepseek-ai/<pkg>/src/...` specifiers in
  * their own ambient tables (e.g. ui-layout/src/vendor-modules.d.ts:138), and
  * vite.config.mjs `dsh-chamber-deepseek-source` resolves the form to source.
- * MEASURED reason (this build): the barrel import moves ~87 KB of primitives
- * markdown/CodeBlock code into the main graph (raw 1,226,775 → 1,313,736,
- * against the C6 warn gate 1,350,000) for one component. The mirror is
+ * MEASURED reason: the barrel import moves ~87 KB of primitives
+ * markdown/CodeBlock code into the main graph for one component. The mirror is
  * deliberately minimal, like every other declaration in this file.
  */
 declare module '@deepseek-ai/dsh-client-ui-primitives/src/Button.tsx' {
@@ -179,7 +177,7 @@ declare module '@deepseek-ai/dsh-client-ui-primitives/src/Button.tsx' {
   } & ButtonHTMLAttributes<HTMLButtonElement>): ReactNode
 }
 
-// alpha.2: the docking-kit platform word the composite answers with a
+// The docking-kit platform word the composite answers with a
 // covered factory (pure library — no cordis plugin, no ./client export).
 declare module '@deepseek-ai/dsh-client-ui-dockkit'
 declare module '@deepseek-ai/dsh-api-session-controller/client'
@@ -191,21 +189,21 @@ declare module '@deepseek-ai/dsh-api-gateway/client'
 declare module '@deepseek-ai/dsh-api-remotes/client'
 
 declare module '@deepseek-ai/dsh-client-ui-agent-preset/client'
-// 2026-09 三轮: covered so the registered vendor patch can carry the per-entry
+// Covered so the registered vendor patch can carry the per-entry
 // base path on the upload URL (the host half stays an instance host row).
 declare module '@deepseek-ai/dsh-client-file-upload/client'
-// 2026-09 四轮: covered (deferred) so the registered vendor patch can carry the
+// Covered (deferred) so the registered vendor patch can carry the
 // per-entry base path on the export URL; the host half keeps the route/command.
 declare module '@deepseek-ai/dsh-session-log-export/client'
 declare module '@deepseek-ai/dsh-client-ui-approval/client'
-// rc.8 deferred-family client entries (design 09 §4; chamber-entry.ts
+// Deferred-family client entries (design 09 §4; chamber-entry.ts
 // registerDeferred dynamic imports): attachment (composer + message-image
 // slot fills), brand-official (official brand occupants — gated on the
 // 'official' build profile, a no-op in the chamber build), reference (the
 // unified `@` input-trigger source).
 declare module '@deepseek-ai/dsh-client-ui-attachment/client'
 declare module '@deepseek-ai/dsh-client-ui-brand-official/client'
-// dsh-v0.1.2-alpha.1 first-screen conversation families (decision D6): ui-chat
+// First-screen conversation families (decision D6): ui-chat
 // owns the conversation.view + chat-node rendering, ui-session the sessions
 // root source + scope adapter (chamber-entry.ts static imports).
 declare module '@deepseek-ai/dsh-client-ui-chat/client'
@@ -221,7 +219,7 @@ declare module '@deepseek-ai/dsh-client-ui-message-feedback/client'
 declare module '@deepseek-ai/dsh-client-ui-model-selection/client'
 declare module '@deepseek-ai/dsh-client-ui-permission-presets/client'
 declare module '@deepseek-ai/dsh-client-ui-plan/client'
-// rc.8 page-own (design 09 §4): ui-renderer is adopted by the shell kernel
+// page-own (design 09 §4): ui-renderer is adopted by the shell kernel
 // (the boot mounts through its ctx.uiRenderer) — chamber-entry never imports
 // it; declared for the ambient surface only.
 declare module '@deepseek-ai/dsh-client-ui-reference/client'
@@ -243,8 +241,8 @@ declare module '@deepseek-ai/dsh-client-ui-workflow-run/client'
 declare module '@deepseek-ai/dsh-client-ui-workspace/client'
 
 /**
- * The chamber self-built sidebar plugin (packages/dsh-chamber-client-ui-sidebar, 05
- * §2): registers the layout 'sidebar' slot shell whose region renders the
+ * The chamber self-built sidebar plugin (packages/dsh-chamber-client-ui-sidebar,
+ * design 05 §2): registers the layout 'sidebar' slot shell whose region renders the
  * multi-source session list. The renderer only plugs it into the per-instance
  * boot graph; loose face.
  */
@@ -278,9 +276,9 @@ declare module '@dsh-chamber/dsh-chamber-client-ui-layout/client' {
 
 /**
  * The chamber self-built connections settings plugin
- * (packages/dsh-chamber-client-ui-settings-connections, 05 §5): registers only
- * its locale namespace ('dsh-chamber.settings.connections'); the host-ctx
- * 'settings.section' registration was removed (2026-12, audit D-5) because the
+ * (packages/dsh-chamber-client-ui-settings-connections, design 05 §5): registers
+ * only its locale namespace ('dsh-chamber.settings.connections'); the host-ctx
+ * 'settings.section' registration is deliberately absent: the
  * section is a FIXED chamber-global nav page ('__connections') rendered by the
  * settings shell, not a per-source ledger row. The renderer only plugs it into
  * the per-instance boot graph; loose face.

@@ -27,7 +27,7 @@
  * - The push wins over a stale query snapshot (a push arriving between the
  *   state() invoke and its resolution is never overwritten by the older
  *   query result).
- * - S-21 discovery single-source: this page never runs its own update
+ * - Discovery single-source: this page never runs its own update
  *   discovery. In the native (Swift/Sparkle) flavor the shell advertises the
  *   Sparkle leg and the「检查更新」invoke lands on the frozen
  *   updateNativeAction kind=check edge inside the shell — the store just
@@ -45,7 +45,7 @@ let downloadInFlight = false
 
 /** Module-wide check in-flight guard (N-ctx shells share one check).
  *
- * S-21: in the native flavor the inspect invoke is the frozen
+ * In the native flavor the inspect invoke is the frozen
  * updateNativeAction kind=check edge — the shell must see exactly ONE per
  * click across every shell instance. The guard covers the invoke round trip
  * only; the phase push is the visible authority for the outcome. */
@@ -53,7 +53,7 @@ let checkInFlight = false
 
 /** Module-wide restart in-flight guard (N-ctx shells share one restart).
  *
- * Two-layer single-flight contract (2026-12 review): this module gate covers
+ * Two-layer single-flight contract: this module gate covers
  * the IPC round-trip only — it is deliberately NOT reset when the main
  * process ACCEPTED the restart, because acceptance means quitAndInstall was
  * armed and the app is on its way out (cleanup takes seconds); a re-click in
@@ -70,7 +70,7 @@ const hydration = createBridgeHydration<UpdateState, UpdateSurface>({
   onChanged: (api, listener) => api.onChanged(listener),
   query: (api) => api.state(),
   onPush: (state) => {
-    // Restart recovery rule (2026-12 review round F2/F5): the module
+    // Restart recovery rule: the module
     // restart single-flight mirrors main and is deliberately NOT reset on an
     // armed ok:true — but a push proving the restart FAILED must release it,
     // or every later click would be silently refused ('restart already in
@@ -90,9 +90,9 @@ const hydration = createBridgeHydration<UpdateState, UpdateSurface>({
     // authoritative snapshot as-is (the release rule above is push-only —
     // only a PUSH can prove a restart failed).
   },
-  // 保持设计值 false（2026-12 审查后回退）：这里不靠慢探针兜底——Swift shim 已与
+  // 保持设计值 false：这里不靠慢探针兜底——Swift shim 已与
   // preload 同序（只有 info 成功才暴露 dshChamber），因此「surface 存在但 query 恒
-  // reject」的形态不再出现；surface 缺失时走的是与本 store 无关的外层重试链。
+  // reject」的形态不会出现；surface 缺失时走的是与本 store 无关的外层重试链。
   // 慢探针本身的收敛性另有加固（bridge-hydration：成功才重置背退 + 无订阅者即停），
   // 供 settings-store 等仍然启用它的消费面使用。
   slowReProbe: false,
@@ -111,7 +111,7 @@ export function subscribeUpdateState(listener: () => void): () => void {
 
 /** The「检查更新」button action: a user-initiated check (autoDownload stays
  *  off, a check never downloads). A check never triggers the page's own
- *  discovery — the flavor routes it inside the shell (S-21): native →
+ *  discovery — the flavor routes it inside the shell: native →
  *  updateNativeAction kind=check → Sparkle appcast; Electron → electron-updater
  *  feed. The result is rendered from the pushed phases, not this return value. */
 export async function requestUpdateCheck(): Promise<{ ok: true } | { ok: false; error: string }> {
@@ -144,7 +144,7 @@ export async function requestUpdateDownload(): Promise<{ ok: true } | { ok: fals
 }
 
 /**
- * The「重启并安装」button action (2026-12 user decision): once the download
+ * The「重启并安装」button action: once the download
  * completed, restart the app into the update (main-process quitAndInstall —
  * quit + install + relaunch through the normal quit path; transports and the
  * local dsh instance are disposed during that quit). {ok:true} means the

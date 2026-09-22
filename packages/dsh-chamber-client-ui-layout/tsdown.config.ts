@@ -1,5 +1,5 @@
 /**
- * 官方客户端包模板的构建配置（2026-12 复查登记，勿"修"成看似能直跑的样子）。
+ * 官方客户端包模板的构建配置（勿"修"成看似能直跑的样子）。
  *
  * 与 sidebar 的同名配置一字同源：`clientBundle` 是**上游树内**的共享配置
  * （`packages/client/tsdown.client.ts`，见 `packages/dsh-client-web/src/platform.ts:22`），

@@ -1,29 +1,26 @@
 /**
  * Document-level SVG resource-id scoping (design 05 §4.2「文档级 SVG 资源 id 归属」).
  *
- * The defect this spec pins: upstream icon components hard-code their Figma
+ * The risk this spec pins: upstream icon components hard-code their Figma
  * resource ids (`clip0_1450_63327`, `dsh-wordmark-*-clip`, the agent-preset mask),
  * and `url(#id)` resolves DOCUMENT-wide. N-ctx mounts N instance shells into ONE
- * document, so every shell defines those ids again. Measured on the real shell
- * (macOS WKWebView, 0.3.2-beta.4, one variable per run): once a second shell
- * subtree carrying the same ids exists, a NEWLY created icon whose clipper/mask
+ * document, so every shell defines those ids again. Once a second shell subtree
+ * carrying the same ids exists, a NEWLY created icon whose clipper/mask
  * resolves into a not-laid-out subtree (.instance-hidden / .instance-pending)
  * is dropped at paint time and stays blank until the element is rebuilt
  * (re-setting the attribute or revealing the shell does NOT heal it); renaming
- * the ids in the duplicated subtree made the very same scenario paint again.
+ * the ids in the duplicated subtree makes the same scenario paint again.
  * So the rule is: every <svg> must resolve its own resource ids inside itself.
  *
  * `svg-resource-scope.ts` is framework-free and takes its document surface by
  * injection, so the rule is driven here through a tiny element double (the repo
- * runs node:test without a DOM). The entry wiring (the source-text lock file was
- * retired in the second trim round) is guarded at the artifact level by
+ * runs node:test without a DOM). The entry wiring is guarded at the artifact level by
  * packages/desktop/scripts/build-swift-app.test.mjs (assembled chunk marker,
  * fail-closed) and packages/dsh-chamber-client-ui-mobile/scripts/artifact-scope-marker.test.mjs.
  *
- * LIMITS, stated honestly: this spec proves the rename plan, the boundary rules
- * and the installer pipeline; it does not rasterize, so the engine behaviour
- * above is evidenced by the on-device probe recorded in the design section and
- * the STATUS acceptance item, not executed here.
+ * LIMITS: this spec proves the rename plan, the boundary rules and the
+ * installer pipeline; it does not rasterize, so the engine behaviour above
+ * is not executed here.
  */
 import { beforeEach, test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -59,7 +56,7 @@ class FakeElement {
     for (const [name, value] of Object.entries(attrs)) this.attrs.set(name, value)
   }
 
-  /** Number of textContent writes (F6: an unchanged <style> string must not be written back). */
+  /** Number of textContent writes (an unchanged <style> string must not be written back). */
   textWrites = 0
   private text = ''
   private textWasSet = false
@@ -1243,9 +1240,8 @@ test('dispose() removes the link load listeners and a reinstall watches its own 
   assert.equal(linkA.listenerCount('load'), 0)
 })
 
-// ── The module face (restored: the wiring lock was retired, this module lock
-// has no behavior replacement — an aria attribute entering the rename face is
-// invisible to the url(#…) cases, and "no runtime import" is a static property).
+// ── The module face: an aria attribute entering the rename face is invisible
+// to the url(#…) cases, and "no runtime import" is a static property.
 
 test('the scoper source stays framework-free and the rename face stays resource-only', () => {
   const source = normalize(stripComments(readFileSync(
@@ -1265,9 +1261,9 @@ test('the scoper source stays framework-free and the rename face stays resource-
     !/RESOURCE_REFERENCE_ATTRIBUTES = \[[^\]]*aria/.test(source),
     'no aria attribute may enter the rename face',
   )
-  // Anti-vacuity (restored with the lock): these phrases only ever appear in this
-  // module's COMMENTS. If the shared stripComments helper regresses, they come
-  // back and the assertions above could be satisfied by comment text.
+  // Anti-vacuity: these phrases only ever appear in this module's COMMENTS. If
+  // the shared stripComments helper regresses, they come back and the assertions
+  // above could be satisfied by comment text.
   assert.ok(!source.includes('宁可少改'), 'comment text survived stripping: the source lock would be vacuous')
   assert.ok(!source.includes('克隆件'), 'comment text survived stripping: the clone comment must be stripped too')
 })

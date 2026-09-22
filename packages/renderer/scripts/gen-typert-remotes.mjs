@@ -15,7 +15,7 @@
  *  - the external repo's own tsconfigs resolve their ambient types through
  *    the external repo's node_modules, which does not exist here; we analyze
  *    with a chamber-owned host aggregate (hostConfig) that pins lib
- *    ES2024+DOM+ESNext.Disposable (the disposable lib covers the 0.1.3-line
+ *    ES2024+DOM+ESNext.Disposable (the disposable lib covers the
  *    `Disposable`/`AsyncDisposable` heritage in file-upload/session-query/
  *    session(-persistence); absent from TS6 es2024 defaults) and maps every
  *    @deepseek-ai/* import onto the vendor source
@@ -49,11 +49,10 @@ const BUNDLE = join(CACHE, 'typescript/lib/typert-generator.cjs')
 const HOST_CONFIG = join(CACHE, 'host-tsconfig.json')
 
 /**
-/**
- * dsh-api-remotes/client is the authoritative runtime assembly. Derive its
- * value-imported contributions instead of duplicating an rc-specific list:
- * rc.8 added file/session reference Remotes, and a stale five-item copy made
- * Vite fail only after the generator had reported success.
+ * dsh-api-remotes/client is the authoritative runtime assembly. Its
+ * value-imported contributions are derived here instead of duplicated as a
+ * fixed list, so a pin that adds or removes a Remote cannot leave a stale copy
+ * behind.
  */
 const REMOTE_ASSEMBLY_ENTRY = join(VENDOR, 'dsh-api-remotes/src/client/index.ts')
 const REMOTE_PACKAGES = remotePackagesFromAssembly(readFileSync(REMOTE_ASSEMBLY_ENTRY, 'utf8'))
@@ -164,12 +163,6 @@ function isWithinVendor(file) {
   return file.startsWith(VENDOR)
 }
 
-/**
- * The host-face registration scope: the external repo's own host aggregate
- * references (tsconfig.host.json) — the authoritative package set the typert
- * host face is composed from. The client tree and client-half extensions are
- * deliberately absent there, so interface-merged metadata cannot collide.
- */
 /** Minimal JSONC comment strip (tsconfigs carry line and block comments). */
 function stripJsonComments(text) {
   let out = ''
@@ -199,6 +192,12 @@ function stripJsonComments(text) {
   return out
 }
 
+/**
+ * The host-face registration scope: the external repo's own host aggregate
+ * references (tsconfig.host.json) — the authoritative package set the typert
+ * host face is composed from. The client tree and client-half extensions are
+ * deliberately absent there, so interface-merged metadata cannot collide.
+ */
 function hostFacePackageDirs() {
   const aggregate = join(HARNESS_ROOT, 'tsconfig.host.json')
   const parsed = JSON.parse(stripJsonComments(readFileSync(aggregate, 'utf8')))

@@ -1,7 +1,7 @@
 /**
  * Login-page pre-warm rendering tests (design 17 §10.6): the optional
  * <link rel="prefetch" as="script"> block inside <head>, the byte-identical
- * no-warm-up output (hashes captured from the pre-warm template), and the
+ * no-warm-up output (hashes pinned below), and the
  * connect-src 'self' CSP increment.
  *
  * Plain node:test + node:assert, no new deps; imports ONLY src/login-page.ts
@@ -14,9 +14,8 @@ import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import { LOGIN_PAGE_CSP, renderLoginPage } from '../../src/login-page.ts'
 
-/** sha256 of the renders BEFORE the warm-up feature landed (captured from the
- * pre-change template). Any non-warm-up byte drift turns these red — that is
- * the "without data the output equals the previous template" lock. */
+/** sha256 of the no-warm-up renders. Any non-warm-up byte drift turns these
+ * red — that is the "without data the output equals the template" lock. */
 const PRE_WARMUP_SHA256 = {
   enPristine: 'b969f4efd53780ec095c406ad01ad67b25094e9d4f8d824d4ee6dfa324be89a5',
   zhPristine: '4f854d80676b46f3f69764001d7a094695761909678acc813027417820ba494b',

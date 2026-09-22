@@ -43,7 +43,7 @@ export interface BridgeHydrationConfig<TState, TSurface> {
    *  authoritative snapshot and before the notify: settings recomputes its
    *  optimistic overlay, update runs the restart single-flight release rule.
    *  Must stay side-effect-free w.r.t. the snapshot ordering contract (the
-   *  skeleton assigned `current` first, exactly like the twin files did). */
+   *  skeleton assigns `current` first). */
   onPush: (state: TState) => void
   /** Store body of a QUERY result landing while no push has arrived yet
    *  (current === null — the push-wins rule): settings recomputes its
@@ -97,7 +97,7 @@ export function createBridgeHydration<TState, TSurface>(
    *  capped at 2s so a late bridge or a one-shot query failure can never
    *  strand the section permanently disabled. */
   let retryDelayMs = 100
-  /** 连续「surface 已在但 attach 失败」次数（2026-12 审查）：一次性失败要快速
+  /** 连续「surface 已在但 attach 失败」次数：一次性失败要快速
    *  自愈（首次失败仍按 100ms 重试），但持续失败必须收敛——否则每次 fire 都重置背退
    *  会退化成 ~10Hz 的 invoke 风暴（Swift ready 前的 ipc_not_ready 即此形态）。 */
   let attachFailureStreak = 0
@@ -146,9 +146,8 @@ export function createBridgeHydration<TState, TSurface>(
   }
 
   /** Schedule one slow re-probe fire (the backoff doubles per schedule and
-   *  resets once a fire finds the bridge — the twin bytes of settings-store
-   *  retryLater). One at a time: the timer slot is shared with the fast
-   *  chain. */
+   *  resets once a fire finds the bridge). One at a time: the timer slot is
+   *  shared with the fast chain. */
   function scheduleSlowProbe(): void {
     if (retryTimer !== null) return
     retryTimer = setTimeout(() => {
@@ -161,7 +160,7 @@ export function createBridgeHydration<TState, TSurface>(
         return
       }
       // 找到 surface 时通常立刻恢复 100ms 快节奏（一次性失败的自愈语义），但连续
-      // 失败 ≥2 次就不再重置背退：延迟按 100→200→…→2s 收敛，风暴被压在 0.5Hz。
+      // 失败 ≥2 次就停止重置背退：延迟按 100→200→…→2s 收敛，风暴被压在 0.5Hz。
       if (attachFailureStreak < 2) retryDelayMs = 100
       attachBridge(api)
     }, retryDelayMs)

@@ -1,25 +1,21 @@
 /**
- * Chamber-surface tests (design 17 §10, 2026-12 strip): the gateway's own
- * `/chamber/*` operations surface — channels projection + plugin-sync seed
- * cache + browser dashboard assets (Credentials + dsh runtime management
- * only). The orchestration
- * routes (git worktrees, approvals/notifications, schedule, session index,
- * feature settings) were removed with the feature host; dsh native or
- * design 08 covers them.
+ * Chamber-surface tests (design 17 §10): the gateway's own `/chamber/*`
+ * operations surface — channels projection + plugin-sync seed cache + browser
+ * dashboard assets (Credentials + dsh runtime management only).
  *
- * 2026-09-11 upstream-alignment T2: the dashboard's two credential-removal
- * gates run in the page's own confirmation dialog (no native confirm). The
+ * The dashboard's two credential-removal gates run in the page's own
+ * confirmation dialog (no native confirm). The
  * served markup/script contract is asserted here AND the served script is
  * executed against the DOM/fetch harness in dashboard-harness.ts, so the
  * cancel/confirm semantics are covered behaviourally rather than by text.
  *
- * 2026-09-11 review-fix: F1 locks the modal's reachability for the WHOLE armed
- * lifetime — including the pending window, where both controls are disabled
- * and the trap used to switch itself off — through the harness's emulated Tab
- * move (`pressKey` performs the browser's own focus move unless the page
- * prevented it). F2 keeps the busy flag off the live region's ancestor. F4b
- * asserts the recorded request path SET per scenario, because the responder's
- * throw for an unexpected path is swallowed by the page's own catch.
+ * The suite locks the modal's reachability for the WHOLE armed lifetime —
+ * including the pending window, where both controls are disabled — through the
+ * harness's emulated Tab move (`pressKey` performs the browser's own focus
+ * move unless the page prevented it). The busy flag stays off the live
+ * region's ancestor. Request paths are asserted as a SET per scenario, because
+ * the responder's throw for an unexpected path is swallowed by the page's own
+ * catch.
  *
  * Run directly: node packages/gateway/test/chamber-surface/feature-lifecycle.test.ts
  */
@@ -39,8 +35,8 @@ import { seedCacheProjection } from '../support/chamber-surface-fixtures.ts'
 import { FakeResponse, stubPluginTasks } from '../support/utils.ts'
 import { handleChamberSurface, makeChamberSurfaceHarness, surfaceSilentLogger, surfaceStubChannels } from '../support/chamber-surface-harness.ts'
 
-// Shared harness (2026-12 audit F40): one logger, channel stub, surface
-// factory and transport runner for the chamber-surface suites.
+// Shared harness: one logger, channel stub, surface factory and transport
+// runner for the chamber-surface suites.
 const logger = surfaceSilentLogger
 const channels = surfaceStubChannels
 
@@ -93,7 +89,7 @@ test('dashboard HTML carries only Credentials + runtime panels and a closed CSP'
   assert.ok(html.trimEnd().endsWith('</html>'), 'the app page is a complete document')
   assert.match(html, /id="credentials-title"/)
   assert.match(html, /id="runtime-title"/)
-  // 2026-12 strip: no orchestration panels remain.
+  // No orchestration panels.
   assert.doesNotMatch(html, /settings-title|save-settings|setting-git|setting-notifications|setting-schedule/)
   assert.doesNotMatch(html, /approvals-title|sessions-title|schedule-title|worktrees-title/)
   const head = await handle(host, 'HEAD', '/chamber/')
@@ -109,8 +105,8 @@ test('dashboard script parses and carries only credentials + runtime logic', asy
   const source = script.chunks.join('')
   assert.doesNotThrow(() => new Function(source), 'the served classic script must parse')
   assert.ok(source.startsWith('(function () {'), 'the script stays one IIFE')
-  // 2026-12 audit F2 (moved from boundary/chamber-assets.test.ts): the served
-  // bytes keep the interpolated comparators and stay safely inlinable.
+  // The served bytes keep the interpolated comparators and stay safely
+  // inlinable.
   assert.match(source, /semverNumericCompare/, 'the interpolated comparator landed')
   assert.match(source, /semverCompare/, 'the interpolated comparator landed')
   assert.equal(source.includes('${'), false, 'no un-interpolated template slot survives')
@@ -127,9 +123,8 @@ test('dashboard script parses and carries only credentials + runtime logic', asy
   assert.match(source, /row\.phase === 'pending'/)
   assert.match(source, /Applying… restarting/,
     'the activation window renders the honest applying/restarting status copy')
-  // 2026-12 strip: orchestration logic is gone (no settings/approvals/
-  // sessions/schedule/worktrees loaders, no feature flags, no revision
-  // display, no SSE).
+  // No orchestration logic: no settings/approvals/sessions/schedule/worktrees
+  // loaders, no feature flags, no revision display, no SSE.
   assert.doesNotMatch(source, /loadSettings|saveSettings|applySettings/)
   assert.doesNotMatch(source, /loadApprovals|loadSessions|loadSchedule|loadWorktrees/)
   assert.doesNotMatch(source, /chamber\/approvals|chamber\/schedule|chamber\/sessions|chamber\/git\/worktrees|chamber\/settings/)
@@ -138,13 +133,13 @@ test('dashboard script parses and carries only credentials + runtime logic', asy
 })
 
 // ---------------------------------------------------------------------------
-// In-page confirmation dialog (2026-09-11 upstream-alignment T2)
+// In-page confirmation dialog
 // ---------------------------------------------------------------------------
 
 /** Comment-stripped source, using the repo's canonical stripper (esbuild — the
  * same tool verify-upstream-touchpoints C10 strips comments with), so a "no
- * native confirm" scan reads CODE only: a comment naming the removed API can
- * neither trip the scan nor hide a real call. esbuild REPRINTS what it strips
+ * native confirm" scan reads CODE only: a comment naming that API can neither
+ * trip the scan nor hide a real call. esbuild REPRINTS what it strips
  * (quote style changes), so this output is used for absence/token scans only —
  * copy and call-shape assertions read the served text. */
 function stripped(source: string, loader: 'js' | 'ts'): string {
@@ -191,8 +186,8 @@ const BASELINE_PATHS = ['/auth/credentials', '/chamber/runtime/status', '/chambe
 /** The elements Tab may hold while the confirmation dialog is open. */
 const DIALOG_FOCUS_IDS = new Set(['confirm-dialog', 'confirm-cancel', 'confirm-accept'])
 
-/** The page-behind controls the review found keyboard-reachable during the
- *  pending window: the header link, Refresh, and the credential/runtime
+/** The page-behind controls that must stay unreachable during the pending
+ *  window: the header link, Refresh, and the credential/runtime
  *  controls — #cred-change-password among them, a POST gate with no
  *  confirmation of its own. */
 const BACKGROUND_FOCUS_IDS = new Set([
@@ -206,7 +201,7 @@ const BACKGROUND_FOCUS_IDS = new Set([
 /** The requests a scenario may issue, and nothing else: the responder throws
  *  for an unexpected path, but the page's own catch turns that into a status
  *  line — so the RECORDED set is what has to be asserted, not the responder's
- *  reaction to it (2026-09-11 review-fix F4b). */
+ *  reaction to it. */
 function assertOnlyPaths(page: DashboardHarness, allowed: readonly string[]): void {
   for (const path of new Set(page.requests.map(request => request.path))) {
     assert.ok(allowed.includes(path), 'the page issued an unexpected request: ' + path)
@@ -217,7 +212,7 @@ function assertOnlyPaths(page: DashboardHarness, allowed: readonly string[]): vo
  * credentials of `configured`, and fill the current-password proof field.
  * Removal requests are held so the pending window stays observable — unless
  * `answerRemoval` takes them over, which is how the failure path below runs
- * the page's own error handling (2026-09-11 review-fix F4b). */
+ * the page's own error handling. */
 async function dashboardWithCredentials(
   t: { after(fn: () => void): void },
   configured: { password: boolean; token: boolean } = { password: true, token: true },
@@ -287,10 +282,9 @@ test('the served dashboard gates credential removal on an in-page dialog and car
   assert.match(html, /<p id="confirm-pending" class="status" role="status" aria-live="polite"><\/p>/)
   assert.match(html, /<button id="confirm-cancel" type="button">Cancel<\/button>/)
   assert.match(html, /<button id="confirm-accept" class="danger" type="button"><\/button>/)
-  // 2026-09-11 review-fix F1/F2: the two background landmarks carry ids (the
-  // script makes them inert), the dialog container is the pending focus target,
-  // and the busy flag has its own row so it never sits on an ancestor of the
-  // live region.
+  // The two background landmarks carry ids (the script makes them inert), the
+  // dialog container is the pending focus target, and the busy flag has its own
+  // row so it never sits on an ancestor of the live region.
   assert.match(html, /<header id="page-header">/)
   assert.match(html, /<main id="page-main">/)
   assert.match(html, /<div id="confirm-actions" class="actions">/)
@@ -321,8 +315,8 @@ test('remove password: cancel performs nothing, confirm issues exactly one reque
   const path = REMOVAL_PATHS.password
   const invoke = 'cred-remove-password'
 
-  // Arming shows the gate's copy in the page's own dialog (the native gate's
-  // one sentence split into the dialog's title + description).
+  // Arming shows the gate's copy in the page's own dialog (one sentence split
+  // into the dialog's title + description).
   page.click(invoke)
   assert.equal(page.byId('confirm-title').textContent, 'Remove the gateway password?')
   assert.equal(page.byId('confirm-description').textContent, 'The password login is invalidated immediately.')
@@ -369,8 +363,8 @@ test('remove password: cancel performs nothing, confirm issues exactly one reque
     'the pending state is announced on the dialog role="status" line')
   assert.equal(page.byId('credentials-status').textContent, 'Removing password…',
     'the page status line keeps reporting the same busy copy')
-  // 2026-09-11 review-fix F2: the busy flag rides the actions row. On the
-  // dialog element it would sit on an ANCESTOR of #confirm-pending, and AT may
+  // The busy flag rides the actions row. On the dialog element it would sit on
+  // an ANCESTOR of #confirm-pending, and AT may
   // ignore changes inside a busy subtree — swallowing the pending announcement
   // this same task just wrote.
   assert.equal(page.byId('confirm-actions').getAttribute('aria-busy'), 'true')
@@ -453,10 +447,10 @@ test('the credential-removal guards still refuse before the dialog opens (2026-0
 })
 
 test('a failed removal reports the mapped failure copy and closes the dialog (2026-09-11 review-fix F4b)', async t => {
-  // The harness's spy answers 200 for every request it does not hold, so the
-  // page's failure path had never run. `answerRemoval` supplies the error the
-  // page's own request() builds for a non-ok response — an Error carrying the
-  // wire code — and the page's catch has to map it to operator copy.
+  // The harness's spy answers 200 for every request it does not hold, so
+  // `answerRemoval` supplies the error the page's own request() builds for a
+  // non-ok response — an Error carrying the wire code — and the page's catch
+  // has to map it to operator copy.
   const { page, configured } = await dashboardWithCredentials(t, { password: true, token: true }, () => {
     throw Object.assign(new Error('Request failed (HTTP 401)'), { code: 'invalid_credentials' })
   })
@@ -481,7 +475,7 @@ test('a failed removal reports the mapped failure copy and closes the dialog (20
 })
 
 // ---------------------------------------------------------------------------
-// The modal's reachability, pending window included (2026-09-11 review-fix F1)
+// The modal's reachability, pending window included
 // ---------------------------------------------------------------------------
 test('the dialog keeps the page behind out of reach for its whole armed lifetime (2026-09-11 review-fix F1)', async t => {
   const { page } = await dashboardWithCredentials(t)
@@ -490,7 +484,7 @@ test('the dialog keeps the page behind out of reach for its whole armed lifetime
 
   // Positive control for every assertion below: the harness's Tab really does
   // walk the document's tab order, and the first two stops ARE the escape
-  // routes the review named — the header link and Refresh. Without this, "Tab
+  // routes — the header link and Refresh. Without this, "Tab
   // never reached the page behind" would hold for a harness that moved no
   // focus at all.
   assert.equal(page.activeElementId(), null, 'nothing is focused after boot')
@@ -519,9 +513,9 @@ test('the dialog keeps the page behind out of reach for its whole armed lifetime
   assert.equal(page.activeElementId(), 'confirm-accept')
 
   // Accepted: the action is on the wire and unanswered, both controls are
-  // disabled, and the browser hands focus to <body> — the window in which the
-  // trap used to switch itself off and Tab walked the page behind, exactly
-  // while a scrypt verify or a store write had the operator waiting.
+  // disabled, and the browser hands focus to <body> — the window in which an
+  // untrapped Tab would walk the page behind, exactly while a scrypt verify or
+  // a store write has the operator waiting.
   page.click('confirm-accept')
   await page.settle()
   assert.equal(page.requestsTo(path).length, 1, 'the accepted action is on the wire and unanswered')
@@ -579,9 +573,9 @@ test('the dialog keeps the page behind out of reach for its whole armed lifetime
 
 test('mobile entry asset keeps serving', async t => {
   const host = surface(t)
-  // The PWA trio (manifest.webmanifest / sw-register.js / sw.js) was removed
-  // with the unreferenced P4 asset routes (2026-12 audit F12); the mobile
-  // light surface is the one asset the mobile-UA shunting actually serves.
+  // The PWA trio (manifest.webmanifest / sw-register.js / sw.js) is not served
+  // — it has no consumer — and the mobile light surface is the one asset the
+  // mobile-UA shunting serves.
   for (const [path, type] of [
     ['/chamber/mobile.html', /^text\/html/],
   ] as const) {
@@ -589,8 +583,8 @@ test('mobile entry asset keeps serving', async t => {
     assert.equal(response.status, 200, path)
     assert.match(response.headers['content-type'] ?? '', type, path)
   }
-  // 2026-12 audit F2 (moved from boundary/chamber-assets.test.ts): the served
-  // mobile surface keeps its doctype, viewport meta and desktop escape hatch.
+  // The served mobile surface keeps its doctype, viewport meta and desktop
+  // escape hatch.
   const mobileHtml = (await handle(host, 'GET', '/chamber/mobile.html')).chunks.join('')
   assert.match(mobileHtml, /^<!doctype html>/, 'the mobile surface keeps its doctype')
   assert.match(mobileHtml, /name="viewport"/, 'the mobile surface keeps its viewport meta')
@@ -601,7 +595,7 @@ test('mobile entry asset keeps serving', async t => {
 
 test('unknown chamber paths are claimed with a stable 404', async t => {
   const host = surface(t)
-  // 2026-12 strip: the removed orchestration routes must not resurrect.
+  // The orchestration routes stay unclaimed.
   for (const path of [
     '/chamber/approvals', '/chamber/notifications', '/chamber/schedule',
     '/chamber/sessions', '/chamber/settings', '/chamber/git/worktrees',
@@ -644,9 +638,8 @@ test('chamber plugins sync caches desktop-provided host packages (2026-12 Phase 
   assert.equal(badName.status, 400)
   assert.equal(badName.json().code, 'invalid_input')
   // …and the echoed REASON must still name the refused package: the scoped name
-  // is path-shaped, so it is redacted into `[path]` unless the route keeps it
-  // (2026-09 audit — the desktop saw `"@dsh-chamber[path]` and could not tell
-  // which package the old gateway refused).
+  // is path-shaped, so it is redacted into `[path]` unless the route keeps it —
+  // the desktop must be able to tell which package was refused.
   assert.match(String(badName.json().error), /"@dsh-chamber\/dsh-client-ui-mobile"/)
   assert.doesNotMatch(String(badName.json().error), /\[path\]/)
   const mismatched = await upload({ name: '@dsh-chamber/dsh-chamber-seed-client-graph', files: { 'package.json': JSON.stringify({ name: 'other', version: '1.0.0' }), 'dist/index.js': artifact } })

@@ -68,7 +68,7 @@ test('parseInstanceId: dsh-<id> and gateway-<id> map to their kinds; ssh-<id> is
 })
 
 test('tcpKeepAliveMsForUpstream: non-loopback upstreams get the direct-http TCP keepalive cadence', () => {
-  // S2: a non-loopback upstream is the desktop's direct-http(s) shape (the
+  // A non-loopback upstream is the desktop's direct-http(s) shape (the
   // id kind cannot see the transport dimension, the resolved target can) —
   // no ssh keepalive covers its upstream WS leg, so the proxy arms OS-level
   // TCP keepalive. gateway-kind AND dsh-kind direct targets both qualify.
@@ -105,9 +105,9 @@ test('isLoopbackUpstreamBaseUrl: loopback spellings and malformed targets', () =
 // ---------------------------------------------------------------------------
 
 test('0.1.2 combo URLs keep their trailing slash through parseInstancePath', async () => {
-  // review-round7b P1-1: extra-bundle URLs are `/plugins/??<id>/client.js&rev=…`
+  // Extra-bundle URLs are `/plugins/??<id>/client.js&rev=…`
   // — the upstream serveBundle keys by the EXACT pathname+search, so a lost
-  // trailing slash 404s every extra preload (boot failure on the new wire).
+  // trailing slash 404s every extra preload (boot failure on that wire).
   const parsed = parseInstancePath('/api/i/local/plugins/??abc/client.js&rev=1')
   assert.ok(parsed !== null)
   assert.equal(parsed.rest, '/plugins/')
@@ -118,7 +118,7 @@ test('0.1.2 combo URLs keep their trailing slash through parseInstancePath', asy
 })
 
 test('local mapping forwards the 0.1.2 browser-auth cookie when bootstrapped', async () => {
-  // review-round3c P0: the renderer's unary + mux calls reach the instance
+  // The renderer's unary + mux calls reach the instance
   // through the proxy, which injects the spawn-minted cookie. The upstream
   // gate keys the cookie NAME to the request authority, so the injected name
   // must be the name derived from the Host the proxy forwards — the same
@@ -314,8 +314,8 @@ test('gateway WS upgrade: the sanctioned Cookie rides the handshake too', async 
 })
 
 test('local WS upgrade carries the 0.1.2 browser-auth cookie when bootstrapped', async () => {
-  // review-round4 P1/P2: the mux upgrade to the LOCAL instance must ride the
-  // spawn-minted cookie — the 0.1.2 stream gate 401s without it.
+  // The mux upgrade to the LOCAL instance must ride the
+  // spawn-minted cookie — the stream gate 401s without it.
   const upstream = fakeHttpRequest(url => url.pathname.startsWith('/api/remote.mux')
     ? { upgrade: { status: 101, headers: { upgrade: 'websocket', connection: 'Upgrade' } } }
     : undefined)

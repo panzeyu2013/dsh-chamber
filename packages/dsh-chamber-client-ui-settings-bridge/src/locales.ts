@@ -12,20 +12,20 @@ export const zh = {
   serverOffline: '离线',
   manageConnections: '前往连接管理',
   connectionsNav: '连接',
-  // 2026-09-11 upstream-alignment T8：官方分节 general.nav 也叫「通用设置」，
-  // 本页是 chamber 全局的桌面客户端设置（关闭行为 / 自启 / 保持唤醒 / 退出确认 /
-  // 更新），因此改名「客户端」——nav 单元与页面自身标题共用这一个键
-  // （GeneralView 的 h2），不会出现「导航叫一个名字、页面叫另一个名字」。
+  // 官方分节 general.nav 也叫「通用设置」，本页是 chamber 全局的桌面客户端设置
+  // （关闭行为 / 自启 / 保持唤醒 / 退出确认 / 更新），故取名「客户端」——nav 单元
+  // 与页面自身标题（GeneralView 的 h2）共用这一个键，不会出现「导航叫一个名字、
+  // 页面叫另一个名字」。
   clientNav: '客户端',
   noServers: '暂无可管理的实例。请在「连接」中启动本地实例或注册远程主机。',
   loadingServers: '正在加载实例…',
   targetUnavailable: '该实例当前不可达，其配置存储在该实例的宿主机器上，建立连接后可编辑。',
-  // 2026-12（问题 B 诚实投影）：隧道正常但托管 dsh 停机时，"不可达"的说法
-  // 不准确——必须说清是哪一层停了、去哪里恢复。
+  // 隧道正常但托管 dsh 停机时，「不可达」的说法不准确——必须说清是哪一层
+  // 停了、去哪里恢复。
   managedDshDown: '网关可达，但该实例的托管 dsh 未运行。请在「连接」中启动该实例后重试。',
   managedDshStarting: '该实例的托管 dsh 正在启动，就绪后本面板自动恢复。',
   localNotReady: '本地实例尚未就绪，可在「连接」中启动。',
-  // 2026-12 完整桥接：面板渲染选中来源自己的设置面，因此该来源的前端必须挂载；
+  // 面板渲染选中来源自己的设置面，因此该来源的前端必须挂载；
   // 已连接但还未挂载完成时给出"正在启动该来源"的诚实中间态。
   sourceStarting: '正在启动该实例的前端，就绪后本面板自动显示它自己的设置分节。',
   sectionsEmpty: '该实例没有可显示的内容（可能正在启动，稍后自动出现）。',
@@ -84,19 +84,19 @@ export const zh = {
   // 原生壳（macOS Swift flavor）blocked-available 行：原因不是签名，而是壳本身
   // 没有自动安装腿（design 25 §7 / update-headless.ts 的 blocked reason）。
   updateAvailableBlockedNativeShell: '新版本 {version} 可用，原生壳不支持自动安装，请前往下载页手动安装',
-  // 未知阻塞原因（诚实透传，不套用「未配置签名」文案；2026-09 模块评审 E#1）。
+  // 未知阻塞原因（诚实透传，不套用「未配置签名」文案）。
   updateAvailableBlockedUnknown: '新版本 {version} 可用，自动安装不可用（{reason}），请手动安装',
   updateAction: '更新',
   updateDownloading: '正在下载更新… {percent}%',
-  // 原生（Sparkle）阶段没有百分比：不定量下载文案（S-19）。
+  // 原生（Sparkle）阶段没有百分比：不定量下载文案。
   updateDownloadingIndeterminate: '正在下载更新…',
   updateDownloaded: '已下载，退出时安装',
   updateRestartAction: '重启并安装',
-  // 重启失败行（F2：phase 保持 downloaded，仅经 restartFailureText 携带失败）。
+  // 重启失败行（phase 保持 downloaded，仅经 restartFailureText 携带失败）。
   updateRestartFailed: '重启并安装失败：{error}',
-  // 重启在途行（F9：已点击重启并安装、退出窗口尚未完成时的诚实进展文案）。
+  // 重启在途行（已点击重启并安装、退出窗口尚未完成时的诚实进展文案）。
   updateRestarting: '正在重启并安装…',
-  // 原生安装中行（S-19：Sparkle 正在替换 bundle；Electron 不产生该相位）。
+  // 原生安装中行（Sparkle 正在替换 bundle；Electron 不产生该相位）。
   updateInstalling: '正在安装更新…',
   updateDownloadBlocked: '已下载（{reason}），请手动安装',
   updateInstallBlockedMacSigning: '已下载（未配置自动安装签名），请手动安装',
@@ -117,11 +117,11 @@ export const zh = {
   dshRuntimeActionSwitch: '切换到',
   dshRuntimeInstalling: '正在安装…',
   dshRuntimeResetBuiltin: '恢复内建',
-  // 方案 2（2026-12 用户决策）：下拉选中与随应用内建同版本的行且尚未装成
-  // 受管树时，主按钮引导「恢复内建」（回到随应用副本，零下载）。
+  // 下拉选中与随应用内建同版本的行且尚未装成受管树时，主按钮引导
+  // 「恢复内建」（回到随应用副本，零下载）。
   dshRuntimeBuiltinGuideHint: '随应用已内建 v{version}：「恢复内建」将清除用户选择并回到随应用副本，无需下载；版本树与快照保留。',
   dshRuntimeInstallBuiltinTree: '仍下载 v{version} 并安装为受管版本',
-  // gateway 镜像（方案 2，与 local 分支全面统一）：服务器内建锚口径。
+  // gateway 镜像（与 local 分支全面统一）：服务器内建锚口径。
   dshRuntimeAnchorGuideHint: '服务器已内建（部署锚）v{version}：「恢复内建」将清除选择并回到内建锚，无需下载；版本树与快照保留。',
   dshRuntimeStatusDownloading: '下载 dsh {version}…',
   dshRuntimeStatusInstalling: '安装 dsh {version}…',
@@ -163,14 +163,14 @@ export const zh = {
   dshRuntimeSnapshotFailed: '快照失败：{error}',
   dshRuntimeSnapshotRestoreHalf: '运行时树已回退，但数据恢复失败；.old 现场已保留。',
   dshRuntimeSnapshotRestoreIncomplete: '数据恢复尚未完成；现场与恢复标记已保留。',
-  // D 小项③（D1-A 口径）：磁盘行文案改「运行时占用」——total 为真实字节
-  // 口径（inode 去重 + 未分类残留桶）；unclassifiedBytes>0 时追加残留片段。
+  // 磁盘行为「运行时占用」——total 为真实字节口径（inode 去重 + 未分类残留桶）；
+  // unclassifiedBytes>0 时追加残留片段。
   dshRuntimeDiskSummary: '运行时占用 {total}：{trees} 个版本树 {treeBytes}，pnpm store {storeBytes}，安装缓存/现场 {cacheBytes}，快照 {snapshotBytes}，恢复/失败现场 {recoveryBytes}',
   dshRuntimeDiskUnclassified: '，未分类残留 {unclassifiedBytes}',
   dshRuntimeDiskError: '无法统计运行时磁盘占用：{error}',
   dshRuntimeDiskQuotaWarning: '已达到 {limit} 逻辑占用软上限；新版本下载已暂停，请先清理不再使用的版本。缓存切换与恢复仍可用。',
-  // 统一状态徽标（2026-12：local/gateway 共用一套词汇；只表机器状态，不下
-  // 「最新/可用」结论）。
+  // 统一状态徽标（local/gateway 共用一套词汇；只表机器状态，不下「最新/可用」
+  // 结论）。
   dshRuntimeBadgeOk: '运行时正常',
   dshRuntimeBadgeChecking: '检查中',
   dshRuntimeBadgeDownloading: '下载中',
@@ -186,28 +186,26 @@ export const zh = {
   dshRuntimeBadgeFailed: '操作失败',
   dshRuntimeBadgeError: '错误',
   dshRuntimeBadgeMetadata: '元数据异常',
-  // 常驻「清理已安装版本」入口（2026-12 统一）。
+  // 常驻「清理已安装版本」入口。
   dshRuntimeCleanupCandidatesLabel: '可清理的已安装版本',
   dshRuntimeCleanupConfirmTitle: '清理 dsh 运行时 {version}？',
   dshRuntimeCleanupConfirmBody: '仅删除该不可变版本树并回收 pnpm store；当前、待应用、回退、known-good 与失败现场保护版本不会被删除。',
-  // 恢复回滚前数据（2026-12 gateway 对齐；2026-09-11 upstream-alignment T2：
-  // 两种形态一律走本段唯一的应用内确认对话框，文案键不变）。
+  // 恢复回滚前数据（两种形态一律走本段唯一的应用内确认对话框，文案键不变）。
   dshRuntimeRestorePreRollbackConfirmTitle: '恢复回滚前数据？',
   dshRuntimeRestorePreRollbackConfirmBody: '将停止 dsh，把当前 DSH_HOME 保留为 dsh-home.old，再用最近一次手动回滚前保存的数据覆盖恢复。',
-  // 元数据救援（2026-12 gateway 对齐；2026-09-11 T2：同一个应用内对话框）。
+  // 元数据救援（同一个应用内对话框）。
   dshRuntimeRecoverMetadataConfirmTitle: '保留数据并恢复内建 dsh？',
   dshRuntimeRecoverMetadataConfirmBody: '将停止实例，先另存一份完整 DSH_HOME 副本并把损坏的运行时元数据按原始字节归档，再用内建 dsh 执行完整只读探针；只有探针全部通过才会恢复访问。',
-  // 恢复行动行确认（2026-12 review；2026-09-11 T2：原先 gateway 用原生
-  // 原生浏览器确认框补齐确认深度，现统一为本段唯一的应用内对话框——原生 chrome
-  // 套不上面板的 --dsw-alias-* 词汇，gateway 形态也根本没有原生对话框）。
+  // 恢复行动行确认（本段唯一的应用内对话框——原生 chrome 套不上面板的
+  // --dsw-alias-* 词汇，gateway 形态也根本没有原生对话框）。
   dshRuntimeRestoreBuiltinConfirmTitle: '恢复内建 dsh 运行时？',
   dshRuntimeRestoreBuiltinConfirmBody: '将停止实例并清除用户运行时指针；版本树与快照仍保留。',
   dshRuntimeRetryApplyConfirmTitle: '重试应用 dsh 运行时？',
   dshRuntimeRetryApplyConfirmBody: '将停止实例并从持久化事务安全续作。',
   dshRuntimeRetryRestoreConfirmTitle: '重试恢复 dsh 数据？',
   dshRuntimeRetryRestoreConfirmBody: '将停止实例并从已记录的快照事务继续恢复。',
-  // 应用内确认对话框的两条诚实回执（2026-09-11 review F2/F4b）：确认点击时动作
-  // 的前提已经不成立（对话框开着时状态轮询推进了），或动作超过整体时限被中止。
+  // 应用内确认对话框的两条诚实回执：确认点击时动作的前提已经不成立（对话框
+  // 开着时状态轮询推进了），或动作超过整体时限被中止。
   dshRuntimeConfirmStale: '该动作的前提已改变（状态在确认期间更新了），本次操作未执行。请查看当前状态后重试。',
   dshRuntimeActionTimeout: '操作超时：服务端在限定时间内没有返回结果，已中止本次请求。请查看当前状态后重试。',
   // gateway 托管的内建锚口径（design 18 §3.6 A1：副行「部署锚 vX」）。
@@ -282,10 +280,10 @@ export const en: Record<keyof typeof zh, string> = {
   serverOffline: 'Offline',
   manageConnections: 'Manage connections',
   connectionsNav: 'Connections',
-  // 2026-09-11 upstream-alignment T8: the official `general.nav` section is also
-  // named "General" in English, so this chamber-global desktop-client page
-  // (close behavior / launch at login / keep awake / quit confirmation / update)
-  // is renamed "Desktop". One key serves both the nav cell and the page's own h2.
+  // The official `general.nav` section is also named "General" in English, so
+  // this chamber-global desktop-client page (close behavior / launch at login /
+  // keep awake / quit confirmation / update) is named "Desktop". One key serves
+  // both the nav cell and the page's own h2.
   clientNav: 'Desktop',
   noServers: 'Nothing to manage yet. Start the local instance or register a remote host in Connections.',
   loadingServers: 'Loading instances…',
@@ -355,15 +353,15 @@ export const en: Record<keyof typeof zh, string> = {
   updateAvailableBlockedUnknown: 'New version {version} available — auto-install unavailable ({reason}); install manually',
   updateAction: 'Update',
   updateDownloading: 'Downloading update… {percent}%',
-  // Native (Sparkle) phases carry no percentage: indeterminate download copy (S-19).
+  // Native (Sparkle) phases carry no percentage: indeterminate download copy.
   updateDownloadingIndeterminate: 'Downloading update…',
   updateDownloaded: 'Downloaded — will install on quit',
   updateRestartAction: 'Restart & Install',
-  // Restart-failure line (F2: phase stays downloaded; the failure rides restartFailureText).
+  // Restart-failure line (phase stays downloaded; the failure rides restartFailureText).
   updateRestartFailed: 'Restart & install failed: {error}',
-  // Restart in-progress line (F9: honest progress copy while the quit window runs).
+  // Restart in-progress line (honest progress copy while the quit window runs).
   updateRestarting: 'Restarting to install…',
-  // Native installing row (S-19: Sparkle is replacing the bundle; Electron never emits it).
+  // Native installing row (Sparkle is replacing the bundle; Electron never emits it).
   updateInstalling: 'Installing update…',
   updateDownloadBlocked: 'Downloaded ({reason}) — install manually',
   updateInstallBlockedMacSigning: 'Downloaded (missing auto-install signature) — install manually',
@@ -384,14 +382,13 @@ export const en: Record<keyof typeof zh, string> = {
   dshRuntimeActionSwitch: 'Switch to',
   dshRuntimeInstalling: 'Installing…',
   dshRuntimeResetBuiltin: 'Restore bundled',
-  // Option 2 (2026-12 user decision): when the dropdown selects the row whose
-  // version equals the app-bundled one and no managed tree exists yet, the
-  // primary button guides to "Restore bundled" (back to the bundled copy, no
-  // download).
+  // When the dropdown selects the row whose version equals the app-bundled one
+  // and no managed tree exists yet, the primary button guides to "Restore
+  // bundled" (back to the bundled copy, no download).
   dshRuntimeBuiltinGuideHint: 'The app already bundles v{version}: "Restore bundled" clears your selection and returns to the bundled copy without downloading; version trees and snapshots are kept.',
   dshRuntimeInstallBuiltinTree: 'Download v{version} and install it as a managed tree anyway',
-  // Gateway mirror (option 2, fully unified with the local branch): the
-  // server built-in anchor wording.
+  // Gateway mirror (fully unified with the local branch): the server built-in
+  // anchor wording.
   dshRuntimeAnchorGuideHint: 'The server already has v{version} as its built-in anchor: "Restore bundled" clears the selection and returns to the anchor without downloading; version trees and snapshots are kept.',
   dshRuntimeStatusDownloading: 'Downloading dsh {version}…',
   dshRuntimeStatusInstalling: 'Installing dsh {version}…',
@@ -433,15 +430,15 @@ export const en: Record<keyof typeof zh, string> = {
   dshRuntimeSnapshotFailed: 'Snapshot failed: {error}',
   dshRuntimeSnapshotRestoreHalf: 'The runtime tree rolled back, but data restore failed; the .old recovery state is retained.',
   dshRuntimeSnapshotRestoreIncomplete: 'Data restore is incomplete; the recovery state and marker are retained.',
-  // D 小项③ (D1-A accounting): the disk row copy now leads with "Runtime
-  // usage" — total is the real-byte figure (inode dedup + unclassified
-  // residue bucket); the residue fragment is appended only when > 0.
+  // The disk row reads "Runtime usage" — total is the real-byte figure (inode
+  // dedup + unclassified residue bucket); the residue fragment is appended only
+  // when > 0.
   dshRuntimeDiskSummary: 'Runtime usage {total}: {trees} version tree(s) {treeBytes}, pnpm store {storeBytes}, install cache/work {cacheBytes}, snapshots {snapshotBytes}, recovery/failure state {recoveryBytes}',
   dshRuntimeDiskUnclassified: ', unclassified residue {unclassifiedBytes}',
   dshRuntimeDiskError: 'Unable to measure runtime disk usage: {error}',
   dshRuntimeDiskQuotaWarning: 'The {limit} logical-usage soft limit has been reached. New downloads are paused; clean up an unused version first. Cached switching and recovery remain available.',
-  // Unified status badge (2026-12: one vocabulary shared by local/gateway;
-  // names the machine state only, never an "up to date" verdict).
+  // Unified status badge (one vocabulary shared by local/gateway; names the
+  // machine state only, never an "up to date" verdict).
   dshRuntimeBadgeOk: 'Runtime healthy',
   dshRuntimeBadgeChecking: 'Checking',
   dshRuntimeBadgeDownloading: 'Downloading',
@@ -457,33 +454,30 @@ export const en: Record<keyof typeof zh, string> = {
   dshRuntimeBadgeFailed: 'Operation failed',
   dshRuntimeBadgeError: 'Error',
   dshRuntimeBadgeMetadata: 'Metadata invalid',
-  // Always-visible "clean up installed versions" entry (2026-12 unification).
+  // Always-visible "clean up installed versions" entry.
   dshRuntimeCleanupCandidatesLabel: 'Cleanable installed versions',
   dshRuntimeCleanupConfirmTitle: 'Clean up dsh runtime {version}?',
   dshRuntimeCleanupConfirmBody: 'Deletes only that immutable version tree and reclaims the pnpm store. Current, pending, rollback, known-good and failure-evidence protected versions are never deleted.',
-  // Pre-rollback data restore (2026-12 gateway parity; 2026-09-11
-  // upstream-alignment T2: both shapes use this section's single in-app
+  // Pre-rollback data restore (both shapes use this section's single in-app
   // confirmation dialog, keys unchanged).
   dshRuntimeRestorePreRollbackConfirmTitle: 'Restore pre-rollback data?',
   dshRuntimeRestorePreRollbackConfirmBody: 'dsh will stop, the current DSH_HOME is preserved as dsh-home.old, and the data saved before the latest manual rollback is restored over it.',
-  // Metadata rescue (2026-12 gateway parity; 2026-09-11 T2: the same in-app dialog).
+  // Metadata rescue (the same in-app dialog).
   dshRuntimeRecoverMetadataConfirmTitle: 'Preserve data and restore bundled dsh?',
   dshRuntimeRecoverMetadataConfirmBody: 'dsh will stop. A full DSH_HOME copy is preserved first and the corrupt runtime metadata is archived byte-for-byte; then the bundled dsh runs the complete read-only probe set. Access returns only after every probe passes.',
-  // Recovery-row confirms (2026-12 review; 2026-09-11 T2: the gateway shape used
-  // to mirror the desktop confirmation depth with a native browser confirm. Now
-  // every shape confirms through this section's single in-app dialog — native
-  // chrome cannot ride the panel's `--dsw-alias-*` vocabulary, and the gateway
-  // shape has no native dialog at all.)
+  // Recovery-row confirms (this section's single in-app dialog — native chrome
+  // cannot ride the panel's `--dsw-alias-*` vocabulary, and the gateway shape
+  // has no native dialog at all).
   dshRuntimeRestoreBuiltinConfirmTitle: 'Restore bundled dsh runtime?',
   dshRuntimeRestoreBuiltinConfirmBody: 'dsh will stop and the user runtime pointer is cleared; version trees and snapshots are retained.',
   dshRuntimeRetryApplyConfirmTitle: 'Retry applying the dsh runtime?',
   dshRuntimeRetryApplyConfirmBody: 'dsh will stop and resume from the durable transaction.',
   dshRuntimeRetryRestoreConfirmTitle: 'Retry restoring dsh data?',
   dshRuntimeRetryRestoreConfirmBody: 'dsh will stop and resume the recorded snapshot-restore transaction.',
-  // The in-app confirmation dialog's two honest receipts (2026-09-11 review
-  // F2/F4b): the action's precondition no longer holds at the confirm click (the
-  // status poll moved on while the dialog was open), or the action exceeded its
-  // overall ceiling and was aborted.
+  // The in-app confirmation dialog's two honest receipts: the action's
+  // precondition no longer holds at the confirm click (the status poll moved on
+  // while the dialog was open), or the action exceeded its overall ceiling and
+  // was aborted.
   dshRuntimeConfirmStale: 'This action’s precondition changed while you were confirming (the status moved on), so nothing was executed. Check the current state and retry.',
   dshRuntimeActionTimeout: 'The operation timed out: the server did not answer within the limit, so the request was aborted. Check the current state and retry.',
   // Gateway-hosted builtin anchor wording (design 18 §3.6 A1: 副行「部署锚」).

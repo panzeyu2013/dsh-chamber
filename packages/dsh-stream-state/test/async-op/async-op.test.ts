@@ -1,5 +1,5 @@
 /**
- * AsyncOp primitives (B6 core) - behavior contract with a deterministic scheduler.
+ * AsyncOp primitives - behavior contract with a deterministic scheduler.
  *
  * The point of the injected scheduler is here: every timing boundary is asserted
  * without a real clock, so the tests pin the SEMANTICS (one settle, no leaked
@@ -34,7 +34,7 @@ function manualScheduler() {
     get armed() {
       return pending.size
     },
-    /** The same clock the timers are scheduled against, for `now` (P1). */
+    /** The same clock the timers are scheduled against, for `now`. */
     get nowMs() {
       return now
     },

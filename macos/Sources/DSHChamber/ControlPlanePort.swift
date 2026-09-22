@@ -2,11 +2,7 @@
 //  ControlPlanePort.swift
 //  DSHChamber
 //
-//  S11（2026-12 审计）：dev 控制面端口此前恒钉死（DSH_CHAMBER_SHELL_PORT ?? 17520），无视
-//  Electron 侧的 DSH_CHAMBER_CP_PORT 与空闲端口退避（main.ts:1312-1319 /
-//  free-port.ts）——并行 worktree 共享 17520 时 EADDRINUSE 直接 fatal exit 70。
-//
-//  解析优先级（packaged 行为不变）：
+//  解析优先级：
 //    DSH_CHAMBER_SHELL_PORT > DSH_CHAMBER_CP_PORT > dev：17520 起 bind 探测首个空闲端口；
 //    packaged：17500（不探测）。
 //  只有真实 sidecar 形状（sidecar.js / sidecar-entry.ts）才探测并注入
@@ -34,14 +30,14 @@ public enum ControlPlanePort {
         case packagedDefault
         case devProbe
         case devDefault
-        /// 2026-12 S-03 对齐：dev 退避区间全占用 → 系统临时端口（bind 0 取实际端口）。
+        /// dev 退避区间全占用 → 系统临时端口（bind 0 取实际端口）。
         case devEphemeral
     }
 
     public struct Resolution: Equatable {
         public var port: Int
         public var source: Source
-        /// 降级说明（loud 打印用）。S-03 复裁决：非法显式端口 / 退避耗尽一律
+        /// 降级说明（loud 打印用）。非法显式端口 / 退避耗尽一律
         /// **降级不致命**，对齐 Electron `resolveControlPlanePort()`
         /// （`shell-core.ts:425-442`：忽略非法值 + 退避耗尽回退系统临时端口 0）。
         public var notices: [String] = []
@@ -77,7 +73,7 @@ public enum ControlPlanePort {
             return Resolution(port: free, source: .devProbe, notices: notices)
         }
         // 退避区间全占用 → 系统临时端口（bind 0）；连它都拿不到才退回固定缺省。
-        // 任何分支都不致命退出（S-03）。
+        // 任何分支都不致命退出。
         let ephemeral = probeEphemeralPort ?? { probeBind(0) }
         if let port = ephemeral() {
             notices.append("dev 端口 \(devDefault)…\(devDefault + devProbeAttempts - 1) 均被占用，回退系统临时端口 \(port)")
@@ -97,7 +93,7 @@ public enum ControlPlanePort {
         return port
     }
 
-    /// 真实 sidecar 脚本形状（AppDelegate 注入 --port 的前置）：W-23 装配产物
+    /// 真实 sidecar 脚本形状（AppDelegate 注入 --port 的前置）：装配产物
     /// sidecar.js 或 dev sidecar-entry.ts。
     public static func isRealSidecarScript(_ path: String) -> Bool {
         let basename = (path as NSString).lastPathComponent
@@ -116,7 +112,7 @@ public enum ControlPlanePort {
         return nil
     }
 
-    /// 系统临时端口（bind 0 → getsockname 取实际端口 → 立即释放）：S-03 与
+    /// 系统临时端口（bind 0 → getsockname 取实际端口 → 立即释放）：与
     /// Electron 的 `findFreePort` 失败回退（`port 0`，shell-core.ts:437-441）同语义。
     /// 与区间探测同一 bind-and-release 内核（free-port.ts probePort）。
     public static func probeEphemeralPort() -> Int? {

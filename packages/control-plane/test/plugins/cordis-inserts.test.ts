@@ -1,5 +1,5 @@
 /**
- * cordis-inserts.ts unit tests (A2 cross-package protocol single-sourcing):
+ * cordis-inserts.ts unit tests (cross-package protocol single-sourcing):
  *   - renderCordisInserts: the canonical `- insert:` bytes (byte-exact), the
  *     validation point (empty / invalid rows / duplicates throw);
  *   - parseLoaderRows / hasExactInsert / fieldCount: the comment-aware

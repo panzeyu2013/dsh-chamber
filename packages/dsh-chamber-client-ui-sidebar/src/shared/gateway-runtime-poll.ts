@@ -1,6 +1,6 @@
 /**
  * Gateway runtime-action readiness polling (design 18 §9.3: restart is 202 +
- * status polling; design 21 §6.3 decision 12 gave the start primitive the same
+ * status polling; design 21 §6.3 decision 12 gives the start primitive the same
  * 202 contract). Pure module (no JSX) with injectable fetch/sleep so the node
  * test harness can cover success, timeout and abort paths.
  *
@@ -45,7 +45,7 @@ export async function pollGatewayReady(chamberInstanceId: string, signal?: Abort
   const sleepAbortable = (ms: number): Promise<void> => {
     if (signal === undefined || deps.sleepMs !== undefined) return sleep(ms)
     // The default sleep is also abort-sensitive: an unmount mid-pause must
-    // not linger for the full interval (V2 review M5).
+    // not linger for the full interval.
     return new Promise((resolve, reject) => {
       const timer = setTimeout(resolve, ms)
       signal.addEventListener('abort', () => {
@@ -99,18 +99,17 @@ export async function pollGatewayReady(chamberInstanceId: string, signal?: Abort
         return { kind: 'fail', error: failure(detail) }
       }
       const { connectionState, operationError, outcome } = round
-      // Review fix: a runtime action rejected AFTER the 202 (e.g. a
-      // canStartLocal gate that closed between the route pre-checks and the
-      // transaction) sets <action>:'failed' + operationError while
-      // connectionState is still 'ready' — that must surface as a failure,
-      // never as success.
+      // A runtime action rejected AFTER the 202 (e.g. a canStartLocal gate
+      // that closed between the route pre-checks and the transaction) sets
+      // <action>:'failed' + operationError while connectionState is still
+      // 'ready' — that must surface as a failure, never as success.
       if (outcome === 'failed') return { kind: 'fail', error: failure(operationError) }
       // Terminal connection states outrank a (stale/misreported) 'ok':
       // the action also resolves from restart-exhausted/error/stopped
       // (resolve ≠ success, design 18 §9.3) — defense-in-depth for older
       // gateways without the outcome field. 'stopped' is included for a
       // RESTART only: both the desktop IPC handler and the gateway manager
-      // treat it as a restart failure (round-3 tightening; a legit restart
+      // treat it as a restart failure (a legit restart
       // never passes through 'stopped' — control-plane resolves it only when
       // stop() won the epoch race). A START begins from exactly that state
       // (decision 12), so a stopped answer while start:'running'/absent is
@@ -124,7 +123,7 @@ export async function pollGatewayReady(chamberInstanceId: string, signal?: Abort
       // Backward-compatible fallback for gateways without the outcome
       // field (version skew): keep the connectionState contract.
       // 'degraded' counts as success too — the process is alive and the
-      // next probe returns to ready (round-4 note).
+      // next probe returns to ready.
       if ((connectionState === 'ready' || connectionState === 'degraded') && outcome !== 'running') {
         return { kind: 'done', value: true }
       }

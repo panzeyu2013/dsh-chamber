@@ -1,6 +1,5 @@
 /**
- * Launch-time baseline harvest (design 05 §2.3; STATUS "首屏整源降级直到被
- * 点击" registration).
+ * Launch-time baseline harvest (design 05 §2.3).
  *
  * A ready source that has never been mounted has no ctx, so its only data path
  * is the unary fallback: cwd-derived SYNTHETIC workspace rows, an EMPTY archive
@@ -11,7 +10,7 @@
  * → ctx boot → follow baseline). The harvest closes that window by mounting
  * such a source ONCE in the background prewarm slot, keeping it only until its
  * first authoritative push lands, then reclaiming it — after which the source
- * holds the already-shipped "reclaimed source" state (authoritative groups +
+ * holds the "reclaimed source" state (authoritative groups +
  * archive set, sessions refreshed by the 30s unary merge).
  *
  * Bookkeeping is renderer-local and never persisted. Attempts are bounded so a

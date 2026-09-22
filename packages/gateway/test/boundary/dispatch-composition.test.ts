@@ -1,6 +1,6 @@
 /** No-listen composition tests for gateway boundary → auth → route dispatch.
  *
- * P0 split siblings: dispatch-credential-routes.test.ts and
+ * Split siblings: dispatch-credential-routes.test.ts and
  * boundary-login-page.test.ts; shared helpers live in
  * test/support/dispatch-harness.ts.
  */
@@ -123,8 +123,8 @@ test('a host-rejected browser GET renders the 421 page with the offending Host',
 })
 
 test('echoed boundary values are HTML-escaped and over-long values are capped', () => {
-  // Moved from auth/login-page.test.ts (2026-12 trim): hostile or unbounded
-  // request values can only ever reach the rendered page as text.
+  // Hostile or unbounded request values can only ever reach the rendered page
+  // as text.
   const hostile = 'http://evil.example/<img src=x onerror=alert(1)>&"\u0027'
   const escaped = renderBoundaryErrorPage({
     lang: 'en', status: 403, code: 'origin_forbidden', reasonKind: 'origin_invalid', origin: hostile,
@@ -143,8 +143,8 @@ test('echoed boundary values are HTML-escaped and over-long values are capped', 
 })
 
 test('every boundary reason kind renders its explanation (en) and the zh copy renders', () => {
-  // Moved from the deleted auth/login-page.test.ts (2026-12 trim): the page
-  // copy for every reason kind, plus the zh rendering and the fix hints.
+  // The page copy for every reason kind, plus the zh rendering and the fix
+  // hints.
   const cases = [
     ['malformed_headers', 400, 'bad_request', 'malformed or duplicated'],
     ['host_rejected', 421, 'misdirected_request', 'did not carry a Host header'],
@@ -223,10 +223,10 @@ test('WS auth-boundary rejections are audited as auth_rejected (401/421/400) wit
 })
 
 test('a saturated scrypt work gate on verify answers 503 auth_busy, never 500', async () => {
-  // The login path maps auth_busy → 503; the verify path used to let the
-  // rejection fall through to the shell as a generic 500 internal, so an
-  // attacker flooding bogus Bearer tokens saw 500s while legitimate clients
-  // were squeezed out (design §5.3).
+  // The verify path must map auth_busy → 503 like the login path — letting
+  // the rejection fall through to the shell as a generic 500 internal would
+  // show an attacker flooding bogus Bearer tokens 500s while legitimate
+  // clients are squeezed out (design §5.3).
   const auth: AuthProvider = {
     kind: 'token',
     async verify() {

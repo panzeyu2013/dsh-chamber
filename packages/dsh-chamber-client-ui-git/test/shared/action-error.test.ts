@@ -1,5 +1,5 @@
 /**
- * Git action-error i18n boundary (audit 10, P1-4): the logic layer mints
+ * Git action-error i18n boundary: the logic layer mints
  * structured codes, the presentation layer resolves them to locales copy, and
  * the en dictionary can never fall back to Chinese. Source locks keep the raw
  * messages English so the unmapped fallback stays honest.

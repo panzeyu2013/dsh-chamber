@@ -1,8 +1,7 @@
 /**
  * The shared gateway-runtime status fixture (design 18 §9.3): one idle/ready
  * snapshot the status-view, confirm-guard and action-gate suites override per
- * case (2026-12 single-sourcing pass: the sidebar suite carried the same
- * fixture inline as `status()` and the settings-bridge suite as `remoteStatus`).
+ * case.
  */
 import type { RemoteRuntimeStatus } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
 

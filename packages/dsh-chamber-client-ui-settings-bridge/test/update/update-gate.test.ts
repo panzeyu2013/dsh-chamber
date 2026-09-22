@@ -3,8 +3,8 @@
  *「检查更新」button disable gates, mirrored from the main-process runCheck()
  * phase gates (a re-check must never clobber an in-flight check/download or a
  * completed download), plus the「重启并安装」availability gate, mirrored from
- * updater.restartAndInstall() (2026-12 user decision: restart into the
- * downloaded update — completed download on an installable shape only).
+ * updater.restartAndInstall() (restart into the downloaded update — completed
+ * download on an installable shape only).
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -17,7 +17,7 @@ import path from 'node:path';
 test('updateCheckDisabled: an explicit check is disabled while a check/download owns the flow', () => {
   assert.equal(updateCheckDisabled('checking'), true);
   assert.equal(updateCheckDisabled('downloading'), true);
-  // S-19：原生（Sparkle）安装中也拥有流程——重查绝不把 installing 打回 checking。
+  // 原生（Sparkle）安装中也拥有流程——重查绝不把 installing 打回 checking。
   assert.equal(updateCheckDisabled('installing'), true);
 });
 
@@ -55,7 +55,7 @@ test('updateRestartAvailable: every non-downloaded phase is not restartable', ()
   assert.equal(updateRestartAvailable('available', null, 'darwin'), false);
   assert.equal(updateRestartAvailable('downloading', null, 'darwin'), false);
   assert.equal(updateRestartAvailable('error', null, 'darwin'), false);
-  // S-19：原生安装中（phase installing）绝不提供第二次「重启并安装」入口。
+  // 原生安装中（phase installing）绝不提供第二次「重启并安装」入口。
   assert.equal(updateRestartAvailable('installing', null, 'darwin'), false);
 });
 

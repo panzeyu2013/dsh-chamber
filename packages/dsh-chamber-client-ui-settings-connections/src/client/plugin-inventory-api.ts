@@ -1,7 +1,7 @@
 /**
  * Per-instance plugin-inventory read face for the connections section: the
- * unary Typert Remote wire of dsh-v0.1.2-alpha.1 — the exact
- * `pluginInventory/list` endpoint the official 插件列表 settings tab consumes —
+ * unary Typert Remote wire — the exact `pluginInventory/list` endpoint the
+ * official 插件列表 settings tab consumes —
  * POSTed to `{origin}/api/i/<sourceId>/api/pluginInventory/list` through the
  * control-plane per-instance proxy (design 05 §5 / 03 §3).
  *
@@ -13,7 +13,7 @@
  * existing generic proxy (AGENTS.md: host-native capabilities stay the host's
  * job; the control plane only attaches).
  *
- * P4-2 (N6): the transport byte (URL join + client-request envelope + POST +
+ * The transport byte (URL join + client-request envelope + POST +
  * body collection, bounded unary 30s) rides the shared kernel postUnary
  * (`@dsh-chamber/dsh-chamber-client-ui-sidebar/shared`, wire-common.ts) — the SAME
  * source copy the renderer bundles; the envelope/server-response
@@ -21,10 +21,9 @@
  * stays local, while the wrapWireError fold + 503 instance_unavailable
  * classifier come from the shared wire-error module of the same face (a
  * policy-free constructor + predicate — the shared kernel itself still
- * performs no classification, and A/B/F keep their own actions/copies per
- * the wire-common audit; 2026-09-11 review-fix: the audit's carrier C was
- * deleted with the 2026-12 complete-bridge revision and has no successor, so
- * the fold is D's copy only — see sidebar shared/wire-common.ts's carrier list).
+ * performs no classification, and A/B/F keep their own actions/copies;
+ * the fold is D's copy only — see sidebar
+ * shared/wire-common.ts's carrier list).
  * Self-contained on purpose (the package's loose-ambient typecheck pattern):
  * the wire types below are structural mirrors of the vendored
  * `@deepseek-ai/dsh-host-plugin-inventory` types; no dsh package import.
@@ -191,14 +190,14 @@ function parseRemoteResult(value: unknown): { ok: true; value: PluginInventorySn
  * @param sourceId - the proxy source id (`dsh-<id>` / `gateway-<id>`).
  */
 export async function loadPluginInventory(sourceId: string): Promise<PluginInventorySnapshot> {
-  // Shared transport byte (P4-2, postUnary in wire-common.ts): bounded unary
+  // Shared transport byte (postUnary in wire-common.ts): bounded unary
   // on the official 30s budget — the control-plane proxy forwards without an
   // upstream timeout, so a silently hung host would otherwise leave the view
-  // loading forever — fail loud instead. The pre-migration bare
-  // crypto.randomUUID() rpcId stays explicit so its evaluation remains inside
-  // this try (a no-randomUUID environment folds the throw into the shared
-  // wrapWireError below, exactly as before). Transport rejections propagate
-  // raw and are folded via the shared wire-error module (the C≡D copy).
+  // loading forever — fail loud instead. The bare crypto.randomUUID() rpcId
+  // stays explicit so its evaluation remains inside this try (a no-randomUUID
+  // environment folds the throw into the shared wrapWireError below).
+  // Transport rejections propagate raw and are folded via the shared
+  // wire-error module.
   let outcome: UnaryPostOutcome
   try {
     outcome = await postUnary(`/api/i/${sourceId}`, 'pluginInventory/list', {}, {
@@ -208,7 +207,7 @@ export async function loadPluginInventory(sourceId: string): Promise<PluginInven
     throw wrapWireError(error)
   }
   // 503 instance_unavailable (not-ready instance — proxy honesty, design 03
-  // §3.3): the shared C≡D classifier throws the byte-identical error.
+  // §3.3): the shared classifier throws the byte-identical error.
   throwIfInstanceUnavailable(outcome)
   if (!outcome.ok) {
     throw wrapWireError(new Error(`HTTP ${outcome.status}`))

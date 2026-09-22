@@ -158,8 +158,8 @@ test('logs/ 符号链接在 reopen 之后仍必须拒绝落盘（start() 无条�
   const warnings: string[] = []
   const sink = createControlLogSink({ stateDir, warn: message => { warnings.push(message) } })
   assert.equal(sink.isActive(), false, '构造期即降级')
-  // 生产路径：createControlPlane → start() 无条件 reopen()（2026-12 独立复核发现：
-  // 只查构造期会让降级在 reopen 时被撤销，O_NOFOLLOW 只保护最后一段）。
+  // 生产路径：createControlPlane → start() 无条件 reopen()：
+  // 只查构造期会让降级在 reopen 时被撤销，O_NOFOLLOW 只保护最后一段。
   sink.reopen()
   assert.equal(sink.isActive(), false, 'reopen 不得把符号链接目录重新激活')
   sink.write({ ts: 't', level: 'log', line: 'must-not-land-outside' })
@@ -187,8 +187,7 @@ test('轮转失败必须降级并告警一次，绝不让文件无界增长', ()
   const dir = join(stateDir, CONTROL_LOG_DIR)
   sink.write({ ts: 't', level: 'log', line: 'a'.repeat(20) })
   // 预置不安全归档槽（目录）⇒ 环的槽位校验拒绝整个轮转，与进程 uid 无关。
-  // 原实现用 chmod 0500 制造 EPERM，但 uid 0 下 rename 仍会成功（2026-12 实测），
-  // 该注入在 root 环境/容器里恒不成立，等于这条用例在那里无法失败。
+  // chmod/EPERM 注入在 root 环境/容器里恒不成立，等于这条用例在那里无法失败。
   mkdirSync(join(dir, CONTROL_LOG_FILE + '.1'))
   sink.write({ ts: 't', level: 'log', line: 'b'.repeat(20) })
   assert.equal(sink.isActive(), false, '轮转失败即降级为不落盘')
@@ -278,8 +277,7 @@ test('行序列化：换行折叠、Error 取 stack、超长截断', () => {
 
 test('默认保留规格被钉住（文档记录的 2 MiB × 3 份 = 6 MiB 不得静默漂移）', () => {
   // 设计 02 §3.8 / 设计 25 §3.1 / T-25 都以这些数字作跨 flavor 对照（Electron 2 MiB×3
-  // vs 原生 256 KiB×2）；常量此前只被 src 内部引用，改小会让文档与实现脱钩而零告警
-  // （2026-12 独立复核）。
+  // vs 原生 256 KiB×2）；这些常量必须与文档保持一致，改小会让文档与实现脱钩而零告警。
   assert.equal(DEFAULT_CONTROL_LOG_MAX_BYTES, 2 * 1024 * 1024)
   assert.equal(DEFAULT_CONTROL_LOG_FILES, 3)
   assert.equal(MIN_CONTROL_LOG_FILES, 2)
@@ -339,7 +337,7 @@ test('叶子被换成 FIFO：打开不得阻塞事件循环（O_NONBLOCK），�
   mkdirSync(join(stateDir, CONTROL_LOG_DIR), { recursive: true })
   execFileSync('mkfifo', [path])
   const sink = createControlLogSink({ stateDir, warn: () => undefined })
-  // 无读者的 FIFO：O_WRONLY 同步 open 会永久阻塞（旧实现），O_NONBLOCK 下立即 ENXIO。
+  // 无读者的 FIFO：O_WRONLY 同步 open 会永久阻塞，O_NONBLOCK 下立即 ENXIO。
   sink.write({ ts: 't', level: 'log', line: 'must-not-block' })
   assert.equal(sink.isActive(), false, 'FIFO 叶子必须降级而不是阻塞')
 })
@@ -361,9 +359,9 @@ test('序列化永不抛回调用方（toJSON 与 toString 同时抛的宿主对
 })
 
 test('withControlLogFile 的降级告警走**注入的** logger，而不是硬编码 console.warn', () => {
-  // 2026-12 三轮独立复核（M7）：这条被宣称的修复此前没有任何测试——删掉
-  // `warn: options.warn ?? (m => base.warn(m))` 全套仍然绿。这里从**包装器**入口
-  // 触发一次真实降级（stateDir 指向一个普通文件），断言告警落在调用方的 logger 上。
+  // 这条告警路径必须有测试：删掉 `warn: options.warn ?? (m => base.warn(m))`
+  // 全套仍然绿。这里从**包装器**入口触发一次真实降级（stateDir 指向一个普通文件），
+  // 断言告警落在调用方的 logger 上。
   const stateDir = tempDir()
   const blocker = join(stateDir, 'not-a-dir')
   writeFileSync(blocker, 'x')
@@ -381,10 +379,9 @@ test('withControlLogFile 的降级告警走**注入的** logger，而不是硬�
 })
 
 test('identity 巡检跨过门槛即发现外部替换并按新 inode 重开（回到可观测契约）', () => {
-  // 2026-12 三轮独立复核 M10：把 open 时的 fstatSync(handle) 换回 statSync(path)，
-  // 19 个用例全绿——因为真正的分歧只在"open 与记身份之间路径被换"的竞态里，而没有
-  // seam 就构造不出那一刻。这里至少锁住可观测契约（外部替换 → 巡检重绑），并把
-  // 该竞态的构造缺口如实记为已接受残余（见本条复核记录）。
+  // 把 open 时的 fstatSync(handle) 换回 statSync(path)，全部用例仍会绿——真正的分歧只在
+  // "open 与记身份之间路径被换"的竞态里，而没有 seam 就构造不出那一刻。这里至少锁住
+  // 可观测契约（外部替换 → 巡检重绑）；该竞态的构造缺口如实记为已接受残余。
   const stateDir = tempDir()
   const sink = createControlLogSink({ stateDir, warn: () => undefined })
   const file = join(stateDir, CONTROL_LOG_DIR, CONTROL_LOG_FILE)

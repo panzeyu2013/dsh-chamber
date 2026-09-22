@@ -228,8 +228,8 @@ test('insecureHttp selects plain http end-to-end; a https origin builds an https
 })
 
 // ---------------------------------------------------------------------------
-// P1-2: the login request is SPKI-pinned exactly like the identity probe
-// (S23) — an https origin with a configured `spkiPin` requests with
+// The login request is SPKI-pinned exactly like the identity probe —
+// an https origin with a configured `spkiPin` requests with
 // rejectUnauthorized:false + agent:false and the socket verifier, a
 // mismatched peer is classified 'other' (terminal in the verifyUp
 // three-state, never the forever-transient 'network' that made an
@@ -339,10 +339,9 @@ test('buildGatewaySessionOrigin is the single origin construction point (optiona
 })
 
 // ---------------------------------------------------------------------------
-// part 1b — refresh orchestration auth boundaries (merged from
-// gateway-session-refresh.test.ts, round-2 trim: same production session
-// module; the scheduler's happy path is exercised by the real-manager cycle
-// that used to live there, its auth/fact-binding negative cases are kept).
+// part 1b — refresh orchestration auth boundaries. Same production session
+// module as the real-manager cycle (which covers the scheduler's happy path);
+// this section pins the auth/fact-binding negative cases.
 // ---------------------------------------------------------------------------
 
 /** A fake session manager slice + a captured schedule/cancel, so the refresh

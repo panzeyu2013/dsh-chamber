@@ -1,20 +1,19 @@
 /**
- * chamber archive manager dialog (design 24 §6, revision 2026-09; delete-all
- * retirement 2026 — see the VIEW MODES note below).
+ * chamber archive manager dialog (design 24 §6 — see the VIEW MODES note
+ * below).
  *
- * Replaces the v1 server-row preview → native confirm → purge-everything
- * flow: the dialog LISTS what is archived (title + project label per row,
- * sourced from ChamberServerAggregate.archivedSessions — metadata of the
+ * The dialog LISTS what is archived (title + project label per row, sourced
+ * from ChamberServerAggregate.archivedSessions — metadata of the
  * source's own snapshot, no session read of its own) and offers
  *
  *   - per-row delete (one archived session's tree),
  *   - multi-select delete (checkbox rows + select all) — the ONLY whole-set
- *     path: no standalone delete-all button (2026 user decision). Deleting
+ *     path: no standalone delete-all button. Deleting
  *     "everything" means explicitly ticking select-all first (and then
  *     confirming the counted 删除选中), so a purge can never cover rows the
  *     dialog could not list.
  *
- * Rows are GROUPED BY WORKSPACE (2026 grouping revision): each row carries
+ * Rows are GROUPED BY WORKSPACE: each row carries
  * its workspace attribution from the App-side derive (authoritative registry
  * membership, cwd==path fallback, else the ungrouped bucket — see
  * derive.ts), and this dialog renders one collapsible group section per
@@ -25,7 +24,7 @@
  * chrome (folder/chevron fold button + workspace accent, same classes/tokens
  * from this package's css module) plus a tri-state group checkbox
  * (indeterminate = part of the group selected). Session rows nest one tree
- * level UNDER their group header (2026 indent revision): the rows of each
+ * level UNDER their group header: the rows of each
  * group render inside a dedicated nesting container (.archiveManagerGroupRows
  * — ancestor padding, so every row class stays level-agnostic), the row
  * title column lands exactly under the workspace title, the checkbox rail
@@ -36,8 +35,8 @@
  * filter (the host intersects the filter with the authoritative archived
  * set, so the dialog can never delete a non-archived session). Every
  * destructive action is confirm-gated by an IN-DIALOG two-stage confirm
- * (2026 refactor, THIS module's scope; the nav's workspace-delete flow carries
- * its own in-app confirm Modal — 2026-09-11 upstream-alignment T2b): no native
+ * (THIS module's scope; the nav's workspace-delete flow carries its own
+ * in-app confirm Modal): no native
  * OS confirm dialog anywhere in this package (an OS-styled dialog cannot ride
  * the alias tokens and reads as an alien chrome layer over this app), and no
  * second Modal layer
@@ -56,8 +55,8 @@
  * per-run status lines (role=status/alert) show completion / skips /
  * partial failures / domain-missing / busy / timeouts.
  *
- * VIEW MODES (review round 2026-09 — archive-set provenance tri-state;
- * 2026 delete-all retirement — deletion surfaces ONLY from the listed view):
+ * VIEW MODES (archive-set provenance tri-state; deletion surfaces ONLY from
+ * the listed view):
  *   - list     rows landed AND the snapshot's archive set is authoritative
  *              (ChamberServerAggregate.archiveSetKnown === true): normal
  *              listing; an empty list is a true "nothing archived" fact.
@@ -66,8 +65,8 @@
  *              sessions the client cannot classify (documented KNOWN
  *              DEGRADATION — archived rows even resurface in the nav list).
  *              The dialog never claims "nothing archived" and shows no list,
- *              so it offers NO destructive action here — whole-set purge
- *              (`purge(undefined)`) was retired with delete-all, and no
+ *              so it offers NO destructive action here — no whole-set purge
+ *              path exists there, and no
  *              listed row exists to select. When the source's mounted
  *              baseline lands, the bridge publish re-derives the dialog and
  *              the list (self-healing — no reopen needed).
@@ -87,7 +86,7 @@
  * after a successful purge the App-side refresh drops the deleted rows from
  * the aggregate and this dialog's selection is pruned to surviving rows.
  *
- * RESIDENT-RETAINED ROWS (design 24 §4 step 9, 2026-13): a session the
+ * RESIDENT-RETAINED ROWS (design 24 §4 step 9): a session the
  * instance process still holds keeps its archived membership after its
  * content is deleted, so its row legitimately STAYS in this list (and stays
  * hidden in the workspace) until that instance restarts. The dialog labels
@@ -95,7 +94,7 @@
  * — not persisted, not a control) so "still listed" reads as "deleted,
  * waiting for the restart" instead of "the delete failed".
  *
- * CHROME (2026 style pass): the dialog is the OFFICIAL primitives Modal
+ * CHROME: the dialog is the OFFICIAL primitives Modal
  * (mask + r24 card + header close — the same shell RemoveWorktreeDialog /
  * PluginDialog render), so mask/Escape/close-button behaviour and the
  * card/radius/colour tokens match every other dialog in the app. Footer
@@ -107,10 +106,8 @@
  * workspaceAccentStyle helper — so a group stays visually bound to its
  * workspace row in the session list.
  *
- * COPY (2026-09-11 upstream-alignment, finding 11): every product-visible
- * string in this dialog rides this package's typed locale dictionaries
- * (upstream packages/client/AGENTS.md), including the two that used to be
- * inline zh literals (the busy-refusal line and the in-flight 正在删除… status).
+ * COPY: every product-visible string in this dialog rides this package's
+ * typed locale dictionaries (upstream packages/client/AGENTS.md).
  * Only wire error text still passes through untranslated, by policy.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -148,7 +145,7 @@ export interface ArchiveManagerDialogProps {
 /** Per-run outcome note kinds (zh-hardcoded copy, §5 discipline). */
 type NoteKind = 'info' | 'error'
 
-/** Identity-preserving subset prune (2026 review cleanup): returns `prev`
+/** Identity-preserving subset prune: returns `prev`
  *  unchanged when nothing dropped, so callers never re-render on no-ops. */
 function pruneSet<T>(prev: ReadonlySet<T>, keep: ReadonlySet<T>): ReadonlySet<T> {
   let changed = false
@@ -169,7 +166,7 @@ function projectLabelOf(cwd: string | undefined): string {
 
 export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialogProps) {
   const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set())
-  // Collapsed workspace groups (2026 grouping revision): dialog-local view
+  // Collapsed workspace groups: dialog-local view
   // state only — never persisted, never mirrored to the nav's folded prefs.
   // Collapse hides rows, it never changes selection/counts (a select-all over
   // the list covers collapsed groups too).
@@ -177,7 +174,7 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
   const [busy, setBusy] = useState(false)
   const [note, setNote] = useState<{ kind: NoteKind; text: string } | null>(null)
   // Rows this dialog has deleted the CONTENT of while the session stayed
-  // resident in the instance process (design 24 §4 step 9, 2026-13): the host
+  // resident in the instance process (design 24 §4 step 9): the host
   // keeps their archived membership, so they stay listed here (and stay hidden
   // in the workspace) until that instance restarts. Purely informational — the
   // label says "deleted, waiting for the restart" instead of leaving the user
@@ -212,7 +209,7 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
     return ids
   }, [rows])
 
-  // Grouped listing (2026 grouping revision): pure derive-side grouping
+  // Grouped listing: pure derive-side grouping
   // (groupArchivedRows — order/attribution live in derive.ts, node-tested).
   const groups = useMemo(() => (rows === undefined ? [] : groupArchivedRows(rows)), [rows])
   const groupById = useMemo(() => {
@@ -222,8 +219,8 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
   }, [groups])
 
   // Prune the selection to surviving rows whenever the (refreshed) list
-  // lands — a purge removes rows through the bridge publish. Accepted race
-  // (review round 2026-09): between a refresh publish and this passive prune
+  // lands — a purge removes rows through the bridge publish. Accepted race:
+  // between a refresh publish and this passive prune
   // a fast delete-selected can confirm over ids about to vanish — safe
   // direction only (the host intersects the filter with the authoritative
   // set, so fewer than confirmed get deleted, never more; the outcome note
@@ -248,7 +245,7 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
     setCollapsed(prev => pruneSet(prev, groupKeySet))
   }, [groupKeySet])
 
-  // Focus-loss guard (2026 a11y review): a purge publish can unmount the row
+  // Focus-loss guard: a purge publish can unmount the row
   // that held focus (per-row delete → refresh → the row disappears), and the
   // two-stage confirm's accept path unmounts the confirm bar that held focus;
   // the browser drops focus to <body> in both cases. While the dialog stays
@@ -263,13 +260,13 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
     panelRef.current?.focus()
   }, [rows, busy])
 
-  // ---- In-dialog two-stage confirm (2026 refactor; module doc) ----
+  // ---- In-dialog two-stage confirm (module doc) ----
   // The confirm is a MODE of this dialog, never a second layer: rows freeze
   // (inputLocked) and a risk bar shows the counted copy with 取消/确认删除.
   // `title` non-null = a single-row message subject (per-row trash); null =
   // the counted selected-set message (footer 删除选中). The id list is
   // frozen at arming — later selection changes cannot alter what the counted
-  // copy promised. INVARIANT (2026 review): title !== null ⇔ ids.length === 1
+  // copy promised. INVARIANT: title !== null ⇔ ids.length === 1
   // — the two arming sites (deleteSingle/deleteSelected) construct it so; a
   // future third caller must keep the subject/count pair in sync.
   const [confirming, setConfirming] = useState<{ ids: readonly string[]; title: string | null } | null>(null)
@@ -387,11 +384,10 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
 
   /** Purge exactly the listed session ids (host intersects the filter with
    *  the authoritative archived set — never a non-archived target). No
-   *  whole-set `undefined` path reaches this call: with delete-all retired,
-   *  a purge always stems from an explicit per-row / select-all selection.
+   *  whole-set `undefined` path reaches this call: a purge always stems from
+   *  an explicit per-row / select-all selection.
    *
-   *  2026-09 revision ("已归档的对话应该终止") + 2026-09 protection
-   *  amendment: the run STOPS the selected sessions' running turns through the
+   *  The run STOPS the selected sessions' running turns through the
    *  official `session/cancel` wire (closure-wide, maintenance phases
    *  included), then purges with `force: true` so the host also deletes merely
    *  LOADED (idle, attached) content — an archived session may be waiting on a
@@ -406,7 +402,7 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
    *  tests pin. */
   const runPurge = (sessionIds: readonly string[]): void => {
     if (busy) return
-    // PROTECTION, NOT PERMISSION (2026-09 protection amendment): the run is
+    // PROTECTION, NOT PERMISSION: the run is
     // never refused for an unknown current session. The LIVE current session
     // is handed to the host as `protectSessionIds`, so its whole tree is
     // skipped; when the client cannot name one the run still proceeds (the
@@ -420,7 +416,7 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
     void (async () => {
       try {
         const run = await runArchivePurge(client, sessionIds, liveViewedSessionId())
-        // UNCONDITIONAL refresh (v1 F9 parity): even if this dialog already
+        // UNCONDITIONAL refresh: even if this dialog already
         // unmounted, the host purge may have completed and chamberBridge's
         // App-side consumers are global/generation-fenced.
         chamberBridge.requestRefresh(server.id)
@@ -450,7 +446,7 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
         if (outcome.kind === 'info' && purgeRemovedContent(run)) {
           // The refreshed aggregate (requestRefresh above) prunes the rows;
           // the selection effect drops ids that no longer exist. Only a run
-          // that REMOVED something clears the selection (2026-09 review): a
+          // that REMOVED something clears the selection: a
           // protected/skipped-only run leaves every row in place, and the
           // documented retry must stay one click away.
           setSelected(new Set())
@@ -465,9 +461,8 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
         chamberBridge.requestSessionListRefresh(server.id)
         if (!mountedRef.current) return
         const message = error instanceof Error ? error.message : String(error)
-        // 2026-09-11 upstream-alignment（finding 11）：`busy:` 分支的说明文案进
-        // 字典（上游 client/AGENTS.md：产品可见文案一律在类型化字典里）；线
-        // 协议原文（非 busy 的 message）按政策原样透出，不翻译。
+        // `busy:` 分支的说明文案进字典（上游 client/AGENTS.md：产品可见文案一律
+        // 在类型化字典里）；线协议原文（非 busy 的 message）按政策原样透出，不翻译。
         const friendly = message.startsWith('busy:')
           ? t('archive.manager.busyOther')
           : message
@@ -514,7 +509,7 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
     return title
   }
 
-  /** Accessible name of one row's checkbox (2026-13 a11y review): the resolved
+  /** Accessible name of one row's checkbox: the resolved
    *  title, plus the resident-retention state when this dialog deleted that
    *  row's content. The tag span alone is only announced in browse mode, so a
    *  screen-reader user focusing the checkbox would otherwise hear a plain row
@@ -529,8 +524,8 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
     ? 'archive.manager.deleteSelected.one'
     : 'archive.manager.deleteSelected.other'
 
-  // View-mode derivation (module doc VIEW MODES). With delete-all retired
-  // (2026 user decision) the destructive surface is EXACTLY the listed view:
+  // View-mode derivation (module doc VIEW MODES). The destructive surface is
+  // EXACTLY the listed view:
   // rows only render when the archive set is authoritative and non-empty, so
   // a selection (and therefore a purge) can only ever cover listed rows.
   // Degraded and pending/pull-error views carry no destructive action — an
@@ -541,7 +536,7 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
   const listVisible = landed && !degraded && rows.length > 0
 
   /**
-   * The PROTECTION id, resolved at REQUEST time (2026-09 review). `server` is a
+   * The PROTECTION id, resolved at REQUEST time. `server` is a
    * render snapshot from the last publish, and the vendor's `current` can move
    * between that publish and the click; asking the bridge for the live
    * projection keeps the protected id as fresh as the wire allows (the same
@@ -558,7 +553,7 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
   // input freezes (inputLocked = busy OR armed) so the counted copy can never
   // go stale — the selection/checkboxes cannot move under the armed promise.
   const inputLocked = busy || confirming !== null
-  // NO PRE-CLICK GATE (2026-09 protection amendment): the delete controls are
+  // NO PRE-CLICK GATE: the delete controls are
   // enabled whenever the list is actionable and no run is in flight. An unknown
   // current session is a PROTECTION degradation, never a capability loss — the
   // host skips RUNNING trees and protects whatever id the client can name; the
@@ -584,7 +579,6 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
             {busy && (
               <>
                 <IconLoadingOutline16 className={cc.statusSpinner} size={13} />
-                {/* 2026-09-11 upstream-alignment（finding 11）：内联 zh 文案进字典。 */}
                 {t('archive.manager.deleting')}
               </>
             )}
@@ -606,8 +600,8 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
         {confirming !== null && (
           <div ref={confirmBarRef} className={cc.archiveManagerConfirmBar}>
             <IconWarningOutline16 size={16} className={cc.archiveManagerConfirmIcon} />
-            {/* role="alert" lives on the TEXT span, not the bar container
-                (2026 a11y review): the bar's first button takes focus in the
+            {/* role="alert" lives on the TEXT span, not the bar container:
+                the bar's first button takes focus in the
                 same commit — an alert on the container races the focus move
                 and a screen reader may hear only 取消 or only the risk copy.
                 Text-only alert content announces the risk message itself;
@@ -654,10 +648,10 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
                 aria-label={t('archive.manager.selectAllAria')}
                 disabled={inputLocked}
                 // Partial selection renders the master checkbox as
-                // indeterminate (group-header tri-state parity, 2026 review);
+                // indeterminate (group-header tri-state parity);
                 // it still selects everything on the next toggle. Explicit
-                // aria-checked="mixed" while partial (2026 a11y review —
-                // group-header parity: HTML-AAM does not guarantee that
+                // aria-checked="mixed" while partial (group-header parity:
+                // HTML-AAM does not guarantee that
                 // native indeterminate maps to aria-checked="mixed").
                 {...(selected.size > 0 && selected.size < rows.length ? { 'aria-checked': 'mixed' as const } : {})}
                 ref={(element) => {

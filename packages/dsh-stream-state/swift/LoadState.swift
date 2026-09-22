@@ -1,11 +1,11 @@
 //
 //  LoadState.swift
-//  B5 (Swift mirror) - the shell's explicit load state machine.
+//  Swift mirror - the shell's explicit load state machine.
 //
-//  WHY THIS FILE EXISTS. The native shell's load bookkeeping was three independent
-//  booleans whose defects only show on a real machine: a `didStartLoading` latch with
-//  no reset point, a `webViewContentAlive` that stayed true through a failure face,
-//  and a probe error recorded as success. The TS package owns the machine
+//  WHY THIS FILE EXISTS. Three independent booleans cannot express the load state
+//  safely: a `didStartLoading` latch with no reset point, a `webViewContentAlive`
+//  that stays true through a failure face, and a probe error recorded as success.
+//  The TS package owns the machine
 //  (`packages/dsh-stream-state/src/load-state.ts`); this file is the SWIFT mirror the
 //  shell actually runs, so the phase names, the generation fence and the thresholds
 //  have one definition on both sides.
@@ -129,7 +129,7 @@ public enum LoadEvent: Equatable {
 
 public enum LoadStateMachine {
   /// The generation fence lives here, in one place: every event except a NEW
-  /// generation is dropped when it belongs to a superseded one, so the old
+  /// generation is dropped when it belongs to a superseded one, so a
   /// `didStartLoading` latch cannot exist.
   public static func reduce(
     _ state: LoadState, _ event: LoadEvent, _ env: LoadEnv

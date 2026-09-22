@@ -1,6 +1,6 @@
 /**
- * Production read-path lockstep for the page-level machine catalog
- * (2026-09-13): the catalog must answer installed apps and their real icons
+ * Production read-path lockstep for the page-level machine catalog:
+ * the catalog must answer installed apps and their real icons
  * when it is wired EXACTLY as `packages/renderer/src/shell.ts` wires it — the
  * REAL page-level instance client (`getInstanceClient('local').callUnary`,
  * with its URL, envelope and rpcId handling) against a stubbed fetch that
@@ -10,10 +10,9 @@
  * TRANSPORT result (`{ok:true,value}`) and, inside `value`, the host domain's
  * own `domainResult` carrier (`packages/dsh-chamber-seed-open-in/src/core.ts`).
  * A client that reads only one level still satisfies every stub-fed unit test
- * (whose doubles answered the domain carrier directly) while answering an EMPTY
- * catalog in production — the running app showed no Finder and no application
- * icons for exactly that reason, with no error anywhere. `local-catalog.ts`
- * now reads both levels and its unit tests stub the real two-level shape; this
+ * (whose doubles answer the domain carrier directly) while answering an EMPTY
+ * catalog in production. `local-catalog.ts` reads both levels and its unit
+ * tests stub the real two-level shape; this
  * file goes one step further and drives the REAL instance client, so the seam
  * itself cannot drift again.
  *

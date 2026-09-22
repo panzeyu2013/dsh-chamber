@@ -1,5 +1,5 @@
 /**
- * 行刷新提示的四拒 + 1s floor 契约（主计划 §3.3-4 / R9/R20）。
+ * 行刷新提示的四拒 + 1s floor 契约。
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'

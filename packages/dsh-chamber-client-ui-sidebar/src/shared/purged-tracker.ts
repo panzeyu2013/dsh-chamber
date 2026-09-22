@@ -1,8 +1,7 @@
 /**
  * Per-source purged-row suppression tracker (design 24 §12) — the STATEFUL
- * half of the producer's F1, extracted from `client/index.ts` so it is
- * node-testable (the producer file imports React/CSS and cannot be imported
- * by a node test, which is how two rounds of wiring defects escaped review).
+ * half of the producer's suppression, kept node-testable (the producer file
+ * imports React/CSS and cannot be imported by a node test).
  *
  * It owns exactly three facts per source ctx:
  *   - the last AUTHORITATIVE archive set observed (`archivedSeen`),

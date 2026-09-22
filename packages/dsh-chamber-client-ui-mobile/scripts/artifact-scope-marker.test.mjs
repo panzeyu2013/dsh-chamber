@@ -1,11 +1,10 @@
 /**
- * Committed mobile client bundle × SVG resource scoper marker (design 05 §4.2;
- * W8 / R15③; the artifact-freshness family of STATUS:61).
+ * Committed mobile client bundle × SVG resource scoper marker (design 05 §4.2).
  *
  * `lib/client.js` is a COMMITTED artifact (the gateway seed copies it verbatim:
  * packages/gateway/scripts/build.mjs:62-77), and the gateway-hosted official
  * shell only receives the document-level SVG resource-id scoper when THIS file
- * carries it. Until now nothing asserted that: the desktop page has the renderer
+ * carries it: the desktop page has the renderer
  * suite + the manual probe (scripts/dev/svg-resource-probe.mjs), while a mobile
  * source edit without a rebuild would ship the old bundle silently.
  *
@@ -23,9 +22,8 @@
  *   - packages/desktop/dist/web/assets/chamber-*.js (the desktop page bundle) is
  *     a build output of `pnpm run build:renderer`, not an artifact of
  *     this package; its scoper module face is asserted by
- *     packages/renderer/test/svg-resource/svg-resource-scope.test.ts (the
- *     install-order source lock was retired in the 2026-12 trim) and its built
- *     form by the manual probe (`--expect-artifact`).
+ *     packages/renderer/test/svg-resource/svg-resource-scope.test.ts and its
+ *     built form by the manual probe (`--expect-artifact`).
  *   - packages/gateway/host-packages/dsh-chamber-client-ui-mobile/lib/client.js
  *     is generated per gateway build as a byte copy of the guarded file
  *     (packages/gateway/scripts/build.mjs:74-77), and its presence is already

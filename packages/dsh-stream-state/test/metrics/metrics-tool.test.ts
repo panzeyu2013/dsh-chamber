@@ -1,14 +1,14 @@
 // @ts-nocheck -- deliberate, see the note below.
 /**
- * B7 metrics tool - the guard against a self-deceiving baseline.
+ * Metrics tool - the guard against a self-deceiving baseline.
  *
  * WHY THE TYPE LAYER IS OFF HERE: this file imports a plain `.mjs` script (the
  * metrics tool), which is not part of any TS program (the repo's tsconfigs do not
  * enable allowJs for scripts). The tool's runtime contract is what these tests
  * check; the type layer cannot see it.
  *
- * The refactor's acceptance criteria are structural, so the measurement tool is part
- * of the deliverable: if it can silently measure nothing, 'the numbers went down'
+ * The measurement tool is part of the deliverable: if it can silently measure
+ * nothing, 'the numbers went down'
  * means nothing. These tests pin the tool's scope and its output shape, not the
  * values (values are the snapshot's job, and they legitimately move).
  */
@@ -48,7 +48,7 @@ test('the snapshot diff is directional: growth reads as positive', () => {
   const after = { ...before, moduleLinesTotal: 80, thresholdCount: 7 }
   const report = diffMetrics(before, after)
   // -20 must appear as a negative delta, +2 as positive: a sign error here would
-  // invert every B7 conclusion.
+  // invert every conclusion.
   assert.match(report, /100 ->\s+80\s+-20/u)
   assert.match(report, /5 ->\s+7\s+\+2/u)
 })

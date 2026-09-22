@@ -6,11 +6,11 @@
  * (「切换源即切换信任边界」, design §3.6): a custom registry origin only
  * becomes reachable after it passes this same validation.
  *
- * Same validation structure as main.ts `isAllowedReleaseUrl` (new URL +
- * origin whitelist + userinfo rejection + decode-then-re-normalize), newly
- * written for the registry domain because the GitHub-hardcoded instance is
+ * The validation structure mirrors main.ts `isAllowedReleaseUrl` (new URL +
+ * origin whitelist + userinfo rejection + decode-then-re-normalize); the
+ * registry domain needs its own instance because the GitHub-hardcoded one is
  * not reusable (design 18 §6). `desktop_npm_search` is folded onto this same
- * gate in the M2 wiring; this module itself is pure logic with no IPC.
+ * gate; this module itself is pure logic with no IPC.
  */
 export const ALLOWED_REGISTRY_ORIGINS: readonly string[] = [
   'https://registry.npmjs.org',

@@ -1,5 +1,5 @@
 /**
- * plugins-exec tests (design 21 §6.3 executor core; plan Phase 4.3): env
+ * plugins-exec tests (design 21 §6.3 executor core): env
  * discipline, bounded runDshPluginMutation outcomes (exit/timeout/spawn
  * error), and the serial worker (order, cap, dup fast-fail, blocked/probe
  * gates, preImage backups, dispose). Plain node:test; fake spawn injection —
@@ -99,9 +99,8 @@ function makeExecHarness(
   // A failed assertion must fail FAST. FakeChild only emits 'close' when the
   // test closes it (`kill()` emits only with closeOnKill), so a test that throws
   // before closing its child leaves the worker — and the whole `node --test`
-  // process — waiting forever (observed 2026-09 while adding the pnpm-shim
-  // assertion: the suite hung instead of reporting a failure). Close every fake
-  // child first (a second close is a no-op), then dispose the executor.
+  // process — waiting forever. Close every fake child first (a second close
+  // is a no-op), then dispose the executor.
   t.after(() => {
     for (const call of harness.calls) call.child.close(0)
     void exec.dispose()
@@ -159,8 +158,7 @@ test('scrubInstallEnv is a WHITELIST: only PATH/proxies survive; every ambient v
   assert.equal(result.https_proxy, 'http://proxy:3128')
   assert.equal(result.NO_PROXY, '*.local')
   assert.equal(result.no_proxy, '127.0.0.1')
-  // A whitelist keeps ONLY the proxy family: KEEP_ME is ambient and must
-  // fall (unlike the pre-fix denylist, which passed it through).
+  // A whitelist keeps ONLY the proxy family: KEEP_ME is ambient and must fall.
   for (const key of ['DSH_GATEWAY_TOKEN', 'dsh_gateway_inner', 'npm_config_registry', 'NPM_TOKEN',
     'Npm_Config_Registry', 'NODE_AUTH_TOKEN', 'GITHUB_TOKEN', 'SSH_AUTH_SOCK', 'AWS_SECRET_ACCESS_KEY',
     'KEEP_ME']) {
@@ -407,8 +405,8 @@ test('env discipline reaches the spawn: pins applied, DSH_GATEWAY_*/npm_* stripp
 
   // The child PATH starts with the gateway's own pnpm shim: `dsh plugin`
   // forwards to a literal `pnpm` on PATH, and a host provisioned with npm
-  // alone must still be able to seed/mutate the managed profile (2026-09
-  // audit, P1). Without this the op answers 127 "pnpm not found on PATH".
+  // alone must still be able to seed/mutate the managed profile. Without
+  // this the op answers 127 "pnpm not found on PATH".
   assert.ok(captured.PATH?.startsWith(shimDir), `child PATH must start with the pnpm shim (${String(captured.PATH)})`)
   assert.ok(existsSync(join(shimDir, process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm')), 'the shim executable exists')
   assert.match(readFileSync(join(shimDir, process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm'), 'utf8'), /pnpm\.cjs/)
@@ -780,7 +778,7 @@ test('dispose stops acceptance, kills the in-flight child, blocks queued ops and
 })
 
 // ---------------------------------------------------------------------------
-// onTerminal hook + per-op cliLaunch (plan Phase 4.4 wiring seams)
+// onTerminal hook + per-op cliLaunch
 // ---------------------------------------------------------------------------
 
 test('onTerminal fires once per op with the recorded op and status, after the journal terminal', async t => {
@@ -868,9 +866,8 @@ test('cliLaunch per-op resolution reaches the spawn (second op sees a switched w
 })
 
 // ---------------------------------------------------------------------------
-// Fix regressions (design 21 review P1/P2): lease-release on journal
-// terminal failure, URL/secret redaction by the default sanitizer, and
-// crash-orphan childPid journaling.
+// Lease-release on journal terminal failure, URL/secret redaction by the
+// default sanitizer, and crash-orphan childPid journaling.
 // ---------------------------------------------------------------------------
 
 test('default sanitize redacts URL credentials + named secrets and byte-bounds the error', async () => {

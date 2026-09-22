@@ -39,7 +39,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 // The loader `insert` row render/parse/conflict logic is single-sourced in
-// cordis-inserts.ts (A2 cross-package protocol single-sourcing) — shared with
+// cordis-inserts.ts (cross-package protocol single-sourcing) — shared with
 // the desktop remote seed (plugin-sync.ts); only the fail-loud message
 // wording stays here.
 import { hasExactInsert, insertConflict, renderCordisInserts } from './cordis-inserts.ts'
@@ -107,7 +107,7 @@ export const HOST_OPEN_IN_INSERT: HostPackageInsert = {
  * gateway's syncable/probe map, the desktop's local+remote injection probes
  * and the connections plugin-management page all derive from this list.
  * Adding a chamber host package means adding ONE row here; a hand-maintained
- * parallel row table anywhere else is a defect (2026-09 user decision: a
+ * parallel row table anywhere else is a defect (a
  * seeded host package MUST show up in the plugin-management page, and the
  * page must not hardcode the package set).
  */
@@ -145,7 +145,7 @@ export const CHAMBER_HOST_PACKAGES: readonly ChamberHostPackageDescriptor[] = [
 ]
 
 /**
- * Fail-fast registry pin (review G2-2, cohesion E-#2): every registry row must
+ * Fail-fast registry pin: every registry row must
  * own a DISTINCT probe method, insert id and package name.
  *
  * The gateway's set-equality drift pin against dsh-runtime's
@@ -188,7 +188,7 @@ export function assertChamberHostRegistry(
 assertChamberHostRegistry()
 
 /**
- * Seed registry (2026-12 interface): one seedable chamber package/plugin
+ * Seed registry: one seedable chamber package/plugin
  * entry. The loader overlay row itself is identical for every entry (cordis
  * `insert` id/name — see cordis-inserts.ts); `kind`/`source` are metadata
  * that drive the seed file set and the future source resolution only.
@@ -210,7 +210,7 @@ export type SeedEntryKind = 'host' | 'client'
 /** Where a seed entry's bytes come from. 'packaged' = the owner's own dist
  *  (desktop app resources / gateway host-packages). 'desktop-synced' = a
  *  cache directory under the state root populated by a connecting desktop
- *  (the gateway pass-through seam; no owner resolves it yet — Phase 3). */
+ *  (the gateway pass-through seam; no owner resolves it yet). */
 export type SeedSource = 'packaged' | 'desktop-synced'
 
 export interface SeedEntry {
@@ -230,7 +230,7 @@ export interface SeedEntry {
   seedFiles?: readonly string[]
   /** Activation-probe domains this entry backs (kind 'host' only). Consumed
    *  by control-plane (`PlaneHandle.seededProbeDomains`, derived per spawn
-   *  from the ACTUALLY SEEDED host entries — 2026-09) and by the gateway
+   *  from the ACTUALLY SEEDED host entries) and by the gateway
    *  (`syncedHostDomainProbeNames`)
    *  (packages/gateway/src/plugins.ts) over its per-package domain map
    *  `HOST_PACKAGE_PROBE_DOMAINS` (cache presence per package), and
@@ -248,12 +248,10 @@ export interface SeedEntry {
 }
 
 /**
- * The canonical chamber host-seed package namespace (Batch 1 naming
- * unification, 2026-09): every kind 'host' seed entry is named
- * `@dsh-chamber/dsh-chamber-seed-<loader-id>`, matching its directory and its
- * loader id. The pre-rename names (`@dsh-chamber/dsh-host-*`) are gone — a
- * host entry outside this scheme would re-introduce the naming split the
- * unification retired (and a name whose suffix is not the loader id makes the
+ * The canonical chamber host-seed package namespace: every kind 'host' seed
+ * entry is named `@dsh-chamber/dsh-chamber-seed-<loader-id>`, matching its
+ * directory and its loader id. A host entry outside this scheme would split
+ * the naming (and a name whose suffix is not the loader id makes the
  * seeded profile directory, the overlay row and the activation-probe domain
  * disagree).
  */
@@ -337,11 +335,10 @@ export function missingHostPackageInserts(
  * local profile seed, the desktop's remote seed writer + install probes
  * (plugin-sync.ts), the desktop's gateway upload payload
  * (gateway-provider.ts) and the gateway's sync cache + packaged mobile seed
- * (gateway plugins.ts / index.ts). Before this export each side hand-copied
- * the pair, so a third seed file would have been written locally while the
- * desktop→gateway PUT carried two keys and the gateway still answered
- * 200/changed:true (the remote boot then missed a file with nobody reporting
- * it).
+ * (gateway plugins.ts / index.ts). Were each side to hand-copy the pair, a
+ * third seed file would be written locally while the desktop→gateway PUT
+ * carries two keys and the gateway still answers 200/changed:true (the
+ * remote boot then misses a file with nobody reporting it).
  *
  * ORDER IS PART OF THE CONTRACT: the manifest first (the member every reader
  * parses for name/version), the built entry second — the gateway cache writes

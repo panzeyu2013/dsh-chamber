@@ -505,8 +505,8 @@ function maybeReleaseHostLogLane(lane: AsyncHostLogLane): void {
 /** Appending JSONL handle for one managed host (the write side attached by
  * spawn-dsh.ts and local-connection.ts). Handles for the same backing path
  * share one bounded asynchronous lane: writes and compaction are serialized,
- * so fixing event-loop blocking does not revive the old WriteStream/rename
- * race. The high-water policy drops the newest entry; the control-plane logger
+ * so a buffered write can never race a rename.
+ * The high-water policy drops the newest entry; the control-plane logger
  * already carried it, and diagnostics must never backpressure the host pipe. */
 export function createHostLogWriter(stateDir: string, port: number): HostLogWriter {
   let ownedLane: AsyncHostLogLane | null = null
@@ -710,7 +710,7 @@ export async function readLogTail(path: string, { limit, offset }: { limit: numb
     if (lines.length > needed) lines = lines.slice(lines.length - needed)
     // offset: drop the newest `offset` lines — offset >= available skips
     // EVERYTHING (never "return all lines", which would violate the limit
-    // and the skip semantics; 2026 round-3 review).
+    // and the skip semantics).
     if (offset > 0) lines = lines.length > offset ? lines.slice(0, lines.length - offset) : []
     const after = assertSafeLeaf(path, await fd.stat())
     await inspectExpectedLeaf(path, opened.identity)

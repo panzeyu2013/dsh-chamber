@@ -14,10 +14,10 @@ import {
 const flush = (): Promise<void> => new Promise(resolve => setImmediate(resolve))
 
 /**
- * Deterministic timer seam (2026-09-12 CI fix): the chain's retry cadence and
- * per-attempt watchdog are real timers by default, so asserting "exactly one refresh
- * so far" after a `setImmediate` flush raced the 1 ms retry (2 !== 1 on a loaded CI
- * runner). Every test drives time through the injected `schedule`/`cancel` seams.
+ * Deterministic timer seam: the chain's retry cadence and per-attempt watchdog are real
+ * timers by default, so asserting "exactly one refresh so far" after a `setImmediate`
+ * flush races the 1 ms retry (2 !== 1 on a loaded CI runner). Every test drives time
+ * through the injected `schedule`/`cancel` seams.
  */
 function makeClock() {
   let nextId = 1
@@ -166,7 +166,7 @@ test('tracker: converge() drives the chain; dispose() stops it', async () => {
 test('tracker: the chain sees the live suppression set through lingering()', async () => {
   // The official summaries still list g -> the chain retries; once the test stops
   // listing it, the chain converges. The retry rides the injected clock, so
-  // "exactly one call so far" is a fact, not a race (2026-09-12 CI fix).
+  // "exactly one call so far" is a fact, not a race.
   let listed = new Set(['g'])
   const t = tracker({ listedSummaryIds: () => listed, maxAttempts: 3, retryMs: 1 })
   t.handle.observeArchive(['g'])
@@ -182,9 +182,9 @@ test('tracker: the chain sees the live suppression set through lingering()', asy
 })
 
 test('tracker: the suppression SURVIVES chain exhaustion (no release valve)', async () => {
-  // The core of the D1 correction: after the bounded chain gives up, the id must still
-  // be suppressed and its row still filtered — a resolved-but-untouched refresh proves
-  // nothing (failed pulls and joined stale single-flight callers both resolve).
+  // After the bounded chain gives up, the id must still be suppressed and its row still
+  // filtered — a resolved-but-untouched refresh proves nothing (failed pulls and joined
+  // stale single-flight callers both resolve).
   const t = tracker({ maxAttempts: 2, retryMs: 1, listedSummaryIds: () => new Set(['g', 'live']) })
   t.handle.observeArchive(['g'])
   t.handle.observeArchive([])
@@ -236,11 +236,10 @@ test('tracker: suppressed() returns a copy the caller cannot mutate', () => {
 })
 
 // =====================================================================
-// Convergence-chain fences (consolidated from purged-convergence.test.ts):
-// the fail-closed race/watchdog regressions from the 2026-09 scans. The
-// tracker's own chain tests above cover the public path; these drive
-// createPurgedConvergence directly because the fences are invisible through
-// the tracker (late settles, per-probe watchdogs, in-flight suppression).
+// Convergence-chain fences: the tracker's own chain tests above cover the
+// public path; these drive createPurgedConvergence directly because the fences
+// are invisible through the tracker (late settles, per-probe watchdogs,
+// in-flight suppression).
 // =====================================================================
 
 /** Deterministic per-handle clock: timers run only when the test drains the OLDEST one. */
@@ -380,7 +379,6 @@ test('chain fence: converge() after dispose is inert', () => {
   assert.equal(calls, 0)
 })
 
-// 原 purged-convergence.test.ts 的纯函数与调度边界（2026-12 复核恢复）。
 test('round-3 restore: convergence step bounds and probe release order', () => {
   assert.deepEqual(nextConvergenceStep({ attempt: 1, maxAttempts: 3, lingering: [] }), { action: 'converged' })
   assert.deepEqual(nextConvergenceStep({ attempt: 1, maxAttempts: 3, lingering: ['g'] }), { action: 'retry' })

@@ -95,7 +95,7 @@ test('②b 既有宽松权限的锁文件被收紧为 0600（fchmod 分支）', 
     assert.equal(lstatSync(recordPath).mode & 0o777, 0o600, '既有宽松权限必须被收紧')
     result.handle.release()
 
-    // setuid/sticky 位同样必须被清掉（0o1600 → 0600；三审边界）。
+    // setuid/sticky 位同样必须被清掉（0o1600 → 0600）。
     rmSync(recordPath, { force: true })
     // macOS 在「创建时」会剥掉普通文件的 sticky 位（实测 writeFileSync 的
     // mode 不生效），必须创建后 chmod 才能造出 0o1600 场景。
@@ -174,14 +174,14 @@ test('⑥ 记录读取容错（损坏/缺字段 → null，不 throw）', () => 
 })
 
 /**
- * ⑦ 双 flavor 同根 lockstep（2026-09 GUI 验收 P1 修正）：Swift 的
+ * ⑦ 双 flavor 同根 lockstep：Swift 的
  * `PackagedLayout.userDataDir` 必须与 Electron `app.getPath('userData')` 的
  * 推导**逐字一致**，否则两个 flavor 锁的是两个不同文件，互斥静默失效
  * （design 25 §6.3 的不变量）。
  *
  * Electron 的推导：userData = appData + `app.getName()`，而 `app.getName()` 取
  * package.json 的**顶层** `productName`，其次 `name`（`build.productName` 是
- * electron-builder 的产物命名，不参与推导——本仓正是踩了这个坑）。
+ * electron-builder 的产物命名，不参与推导）。
  * 同源声明见 scripts/electron-dev.mjs 的 dev 隔离注释。
  */
 test('⑦ 双 flavor 同根 lockstep：Swift 常量 == Electron identity 推导', () => {

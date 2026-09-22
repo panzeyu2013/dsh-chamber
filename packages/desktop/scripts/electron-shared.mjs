@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 /**
- * Shared Electron dist bootstrap (multi-worktree parallel dev, 2026-09).
+ * Shared Electron dist bootstrap (multi-worktree parallel dev).
  *
- * Problem: every git worktree used for parallel desktop development used to
- * materialize its own ~300MB Electron binary into its own pnpm virtual-store
- * electron package dir (node_modules/.pnpm/…/electron/dist) on the first dev
- * run (electron@43.x ships no postinstall, so nothing downloads at install
- * time; the dev launcher self-healed per worktree). With N worktrees that is
+ * Problem: every git worktree used for parallel desktop development would
+ * otherwise materialize its own ~300MB Electron binary into its own pnpm
+ * virtual-store electron package dir (node_modules/.pnpm/…/electron/dist) on
+ * the first dev run (electron@43.x ships no postinstall, so nothing downloads
+ * at install time). With N worktrees that is
  * N downloads/extractions of byte-identical content — electron is pinned
  * exactly (e.g. 43.4.0), so the artifact is identical across worktrees and
  * branches.
@@ -31,13 +31,12 @@
  *   - packages/desktop/scripts/electron-dev.mjs (dev launcher, auto-ensure);
  *   - scripts/dev/ensure-electron.mjs (root postinstall, gated by
  *     DSH_CHAMBER_ELECTRON=1).
- * The old per-worktree node_modules/electron/dist (pre-shared flow) is no
- * longer created by either, but is still reused automatically when present
- * (status 'legacy') — offline machines that already materialized a local dist
- * keep working without any download. `require('electron')` under plain node
- * no longer self-heals; the dev launcher never calls it anymore (it spawns
- * the resolved executable directly). DSH_CHAMBER_ELECTRON_DIST remains the
- * explicit escape hatch for any existing dist dir.
+ * A per-worktree node_modules/electron/dist (status 'legacy') is still
+ * reused automatically when present — offline machines that already
+ * materialized a local dist keep working without any download.
+ * `require('electron')` under plain node does not self-heal; the dev launcher
+ * spawns the resolved executable directly. DSH_CHAMBER_ELECTRON_DIST remains
+ * the explicit escape hatch for any existing dist dir.
  *
  * Env:
  *   DSH_CHAMBER_ELECTRON_DIST         — absolute path to an existing full
@@ -80,11 +79,10 @@ export const DIST_META_FILE = '.electron-dist.json'
  * `<desktop>/dist/web/index.html`. That path is the contract of THREE places —
  * `packages/renderer/vite.config.mjs` (`build.outDir: '../desktop/dist/web'`),
  * `main.ts` (`webDistDir: <pkg>/dist/web`, the dir the control plane serves and
- * injects the boot manifest into), and this constant. It used to be read as
- * `dist/index.html` here, which after the composite-renderer move (2026-09-03)
- * no longer exists — so EVERY `pnpm run dev*` start paid a full
- * `build:renderer` (measured ~9 s warm, worse cold) before Electron even
- * launched. `electron-shared.test.mjs` locks the three in step.
+ * injects the boot manifest into), and this constant. A mismatch here makes
+ * EVERY `pnpm run dev*` start pay a full `build:renderer` (measured ~9 s
+ * warm, worse cold) before Electron even launches.
+ * `electron-shared.test.mjs` locks the three in step.
  */
 export const RENDERER_DIST_RELATIVE = ['dist', 'web', 'index.html']
 /** Stale tmp-sibling cleanup threshold (crashed materializations leave ~300MB
@@ -230,8 +228,8 @@ export async function ensureSharedElectronDist(env = process.env) {
     return { distDir, status: 'cached' }
   }
 
-  // Legacy local dist from the pre-shared flow (the electron package dir's own
-  // dist/, version file matching): reuse it as-is — offline machines that
+  // Legacy local dist (the electron package dir's own dist/, version file
+  // matching): reuse it as-is — offline machines that
   // already materialized once keep working without any download. It is not
   // copied into the shared cache; the next shared materialization supersedes
   // it. (Old flow also wrote path.txt; the launcher spawns the resolved

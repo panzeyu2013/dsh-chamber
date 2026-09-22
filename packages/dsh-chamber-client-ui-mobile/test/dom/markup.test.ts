@@ -97,7 +97,7 @@ test('stampFrame records the roles it actually found', () => {
 })
 
 test('stampFrame refuses to adapt a frame without the conversation column', () => {
-  // The 0px-track brake (2026-09-14): the grid lock plus a fixed drawer are
+  // The 0px-track brake: the grid lock plus a fixed drawer are
   // only sound while the conversation column is pinned by its own role
   // attribute. A vendor rename of the centre key must leave the page in the
   // official narrow layout, not in a clipped 0px transcript.
@@ -115,7 +115,7 @@ test('stampFrame refuses to adapt a frame without the conversation column', () =
 })
 
 // ---------------------------------------------------------------------------
-// Re-stamp predicate (alpha.2 anchor audit): a slot outlet mounting inside a
+// Re-stamp predicate (design 17 §18): a slot outlet mounting inside a
 // resident column shell must count as structural, while deep content stays
 // filtered out of the streaming hot path.
 // ---------------------------------------------------------------------------

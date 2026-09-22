@@ -2,8 +2,8 @@
  * @dsh-chamber/dsh-chamber-client-ui-settings-bridge test manifest - authoritative
  * file list for this package test script.
  * Grouped by subject area (mirrors test/<domain>/). Every listed file runs as its
- * own node child with inherited stdio; the first failure ends the run - the same
- * semantics as the inline && chain this replaces. A listed file that does not
+ * own node child with inherited stdio; the first failure ends the run. A listed
+ * file that does not
  * exist is a failure, never a silent skip.
  * Entries: a path, or { file, nodeArgs } when a loader (--import ...) is needed.
  */
@@ -28,7 +28,7 @@ const GROUPS = {
   settings: [
     'test/settings/settings-store.test.ts',
     'test/settings/settings-groups.test.ts',
-    // 测试通知失败原因映射（design 19 §3.3/§4 契约升级）
+    // 测试通知失败原因映射（design 19 §3.3/§4）
     'test/settings/notify-test-result.test.ts',
   ],
   // update: 设计 11 更新按钮门与模块级 restart 单飞 store
@@ -52,9 +52,6 @@ const GROUPS = {
     { file: 'test/navigation/nav-active.test.ts', nodeArgs: ['--import', './test/support/vendor-register.mjs'] },
     'test/navigation/server-selector.test.ts',
   ],
-  // The former 'package-locks' group was an empty placeholder (the 2026-12
-  // runner migration proved it: the shared engine refuses a zero-file group).
-  // The package has no test/*.test.ts at the top level, so no file was dropped.
 }
 
 runTestManifest({

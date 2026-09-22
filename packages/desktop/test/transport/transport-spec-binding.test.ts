@@ -1,13 +1,9 @@
 /**
- * Transport instance spec semantics — merged suite (2026-12 test
- * reorganization). Pins the contract chain (design 17 §9.1 credential
- * ownership): which spec fields make two connections "the same target" and
- * therefore keep or invalidate a stored credential.
- *
- * Sources: the former transport-target.test.ts (canonicalizeTransportInstanceInput)
- * and credential-binding.test.ts (the gateway/ssh credential binding keys).
- * The desktop-target comparison helper itself is gone: the credential-ownership
- * decision is carried by the binding fingerprints asserted below.
+ * Transport instance spec semantics. Pins the contract chain (design 17 §9.1
+ * credential ownership): which spec fields make two connections "the same
+ * target" and therefore keep or invalidate a stored credential. The
+ * credential-ownership decision is carried by the binding fingerprints
+ * asserted below.
  */
 
 import { test } from 'node:test'
@@ -39,7 +35,7 @@ test('canonical input normalization keeps the typed optional-transport IPC contr
   }, 'future kinds stay unclaimed until a provider defines their default transport')
 })
 
-// --- merged from test/transport/credential-binding.test.ts ---
+// --- gateway/ssh credential binding keys ---
 function credentialSpec(overrides: Partial<TransportInstanceSpec> = {}): TransportInstanceSpec {
   return {
     id: 'prod', label: 'Prod', kind: 'gateway', transport: 'ssh', host: 'gw.example.com',

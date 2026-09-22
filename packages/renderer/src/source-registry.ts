@@ -1,9 +1,9 @@
 /**
- * 每来源（per-source）注册表收敛的单一内核（2026-12 阶段 3：App 手工剪枝收敛）。
+ * 每来源（per-source）注册表收敛的单一内核。
  *
- * WHY：App 的 roster 剪枝 effect、retireSources 与 push 提交点此前各自手写
- * 「遍历键 → 不在 live 集合就删」循环数十遍；任何新增 per-source 表都可能漏删
- * （same-id 重加继承上一代判定，注释里登记过真实事故）。归口后只有三种形态：
+ * WHY：App 的 roster 剪枝 effect、retireSources 与 push 提交点都必须按 live 集合
+ * 删除每来源表项；任何新增 per-source 表都可能漏删（same-id 重加会继承上一代判定）。
+ * 本模块只提供三种形态：
  *   - pruneSourceRecord：对象表，identity-preserving（无变化返回 null）；
  *   - pruneSourceSet：Set，同样 identity-preserving；
  *   - pruneSourceList：数组（保序）。

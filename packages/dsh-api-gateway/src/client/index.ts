@@ -3,7 +3,7 @@
  * install traced `remote.<namespace>` services; no JavaScript Proxy
  * participates in method lookup, invocation, or type exposure.
  *
- * ## chamber fork (WP3/M3): chamber copy of the upstream
+ * ## chamber fork: chamber copy of the upstream
  * `packages/api/gateway` client half with the per-entry base-path patch. The
  * Remote stream WebSocket route must land under the control-plane per-instance
  * proxy prefix (`/api/i/<id>`), so `apply(ctx)` reads the entry Context's
@@ -174,7 +174,7 @@ class ClientRemoteService extends Service implements ClientRemote {
       // Same seam the sidebar/layout forks read (published by the shell per boot).
       instanceId: (ctx as { readonly chamberInstanceId?: string }).chamberInstanceId,
     })
-    // chamber patch (design 14 §D4, 2026-09): bounded lifecycle forensics. The
+    // chamber patch (design 14 §D4): bounded lifecycle forensics. The
     // local-source mux was observed closing and reopening every ~20 s while no
     // durable surface recorded why; these facts (page events) name the transition
     // and the caller, so the next investigation does not depend on renderer
@@ -200,7 +200,7 @@ class ClientRemoteService extends Service implements ClientRemote {
     if (connection.rpc.open === undefined) this.streams.start()
     let disposed = false
     let loop: ReturnType<ConnectionHandle['start']> | undefined
-    // chamber patch (Batch 2 follow-up): the page-global
+    // chamber patch: the page-global
     // `__DSH_CONNECTION_RECOVERY__` bootstrap is absent under the chamber shell
     // (the page is served by the control plane), so remote sources would run
     // the loopback-tuned 15 s readiness deadline. Pass the per-source override

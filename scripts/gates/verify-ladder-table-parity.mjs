@@ -1,19 +1,19 @@
 /**
- * Ladder-table parity gate (B4 precondition).
+ * Ladder-table parity gate.
  *
- * B4's acceptance is "four ladders -> one reducer + ONE TABLE". This gate is the
+ * The target is "four ladders -> one reducer + ONE TABLE". This gate is the
  * first half, staged exactly like the Swift parity gate: the values are recorded in
  * `packages/dsh-stream-state/tables.json`, and every module that still OWNS a copy
- * (until B4 retires it) is checked against that table here. Until the modules import
+ * (until the table is imported) is checked against that table here. Until the modules import
  * the table, this gate is what makes drift impossible - the same "lockstep while
- * both exist" pattern B5 used for the Swift mirror.
+ * both exist" pattern as the Swift mirror.
  *
  * WHY A GATE AND NOT A UNIT TEST: the modules live in four different packages, and the
  * dependency direction is "modules import the package", so a package test cannot read
  * them. This script reads their source declarations (the values are literal constants)
  * and compares.
  *
- * A module that no longer declares a constant is NOT a failure: that is B4's
+ * A module that no longer declares a constant is NOT a failure: that is the
  * retirement working. A constant that EXISTS with a different value IS a failure.
  *
  * Usage: node scripts/gates/verify-ladder-table-parity.mjs
@@ -125,7 +125,7 @@ for (const entry of LOCKSTEP) {
     continue
   }
   if (actual.state === 'retired') {
-    // The module stopped owning it: B4's retirement. Informational, never a failure.
+    // The module stopped owning it: retirement. Informational, never a failure.
     retired += 1
     continue
   }

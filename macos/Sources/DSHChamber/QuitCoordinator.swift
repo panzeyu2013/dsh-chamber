@@ -2,7 +2,7 @@
 //  QuitCoordinator.swift
 //  DSHChamber
 //
-//  E1/E9/E20 纯逻辑片（design 25 §5 三行 + §3.3(4) 退出链；wire =
+//  纯逻辑片（design 25 §5 三行 + §3.3(4) 退出链；wire =
 //  `__host.quitFacts`）。职责边界：
 //   - 决策**单源在 core**（chamber-settings 的 shouldHideToTray / computeQuitRisk
 //     由 sidecar 依据 chamber settings + LOCAL_RUNNING_STATES × localProcessAlive
@@ -52,20 +52,19 @@ public struct QuitFacts: Equatable {
     }
 }
 
-/// 关窗决策缓存（D1 修复，2026-09 评审）。
+/// 关窗决策缓存。
 ///
-/// 缺陷：`requestQuitFacts` 曾把**任何**成功应答都写进缓存，而退出链以
-/// `quitRequested=true` 请求，其投影里 `hideOnClose` 按定义恒 false
-/// （`chamber-settings.ts` 的 `shouldHideToTray` 直接取该参数）。于是一次被取消的
-/// 退出（确认框「取消」/ S-17「继续等待」）之后，缓存里躺着的是退出语境的决定，
-/// 下一次红点/Cmd+W 关窗命中缓存即走 `NSApp.terminate`，日志还会打印与设置矛盾
-/// 的 close-behavior='quit'。
+/// 缺陷面：退出链以 `quitRequested=true` 请求，其投影里 `hideOnClose` 按定义恒
+/// false（`chamber-settings.ts` 的 `shouldHideToTray` 直接取该参数）；若把
+/// **任何**成功应答都写进缓存，一次被取消的退出（确认框「取消」/「继续等待」）
+/// 之后，缓存里躺着的是退出语境的决定，下一次红点/Cmd+W 关窗命中缓存即走
+/// `NSApp.terminate`，日志还会打印与设置矛盾的 close-behavior='quit'。
 ///
 /// 两条不变量：
 ///  1. **只有 close 语境（`quitRequested=false`）的应答可入缓存**——缓存值的语义
 ///     就是「关窗该做什么」；
 ///  2. **应答必须仍属当前世代**——设置变更 / sidecar 重启时世代自增并清空，
-///     失效之前在途的应答落地即被丢弃，旧设置不得回填（S3·V9 的即时决策不受
+///     失效之前在途的应答落地即被丢弃，旧设置不得回填（即时决策不受
 ///     影响：close 语境的刷新照旧写缓存）。
 ///
 /// 主线程所有：请求发起、应答落地、设置变更失效都在主线程（见 AppDelegate 的
@@ -101,8 +100,8 @@ public struct QuitFactsCache {
 
 /// 关窗/退出动作映射与文案（纯函数，单测直测）。
 public enum QuitCoordinator {
-    /// `__host.quitFacts` 决策请求超时（秒）：**单一定义**（2026-12 单源化）——
-    /// AppDelegate 的等待预算与 prompt 里的 %d 秒数共用本值，不再各写 2.0/2。
+    /// `__host.quitFacts` 决策请求超时（秒）：**单一定义**——
+    /// AppDelegate 的等待预算与 prompt 里的 %d 秒数共用本值，不各写 2.0/2。
     public static let factsTimeout: TimeInterval = 2.0
 
     /// 关窗动作：隐藏（Dock 常驻恢复入口）或转入完整退出链。
@@ -124,7 +123,7 @@ public enum QuitCoordinator {
     }
 
     /// 退出决策不可得（`__host.quitFacts` 超时/调用失败/解码失败）时的动作
-    /// （S-17：sidecar 挂死绝不静默取消 Cmd+Q）。
+    /// （sidecar 挂死绝不静默取消 Cmd+Q）。
     public enum UnavailableAction: Equatable {
         /// sidecar 仍在运行：可能有本地保护内容 → 提示用户后取消本轮退出。
         case alertThenCancel
@@ -133,12 +132,12 @@ public enum QuitCoordinator {
     }
 
     /// 决策不可得的动作映射（纯函数：超时 → 提示；sidecar 已停 → 放行）。
-    /// `sidecarLive` = supervisor 正在运行/重启中，与原保守分支判据逐字一致。
+    /// `sidecarLive` = supervisor 正在运行/重启中，判据与保守分支逐字一致。
     public static func unavailableAction(sidecarLive: Bool) -> UnavailableAction {
         sidecarLive ? .alertThenCancel : .proceed
     }
 
-    /// S-17 提示框文案与按钮：sidecar 未在预算内应答退出决策。
+    /// 提示框文案与按钮：sidecar 未在预算内应答退出决策。
     /// 默认（Enter）落在安全项「继续等待」；「强制退出」走既有清理链。
     public enum UnavailableAlert {
         // 计算属性（而非 static let）：bundle 偏好语言可能在启动期被
@@ -146,7 +145,7 @@ public enum QuitCoordinator {
         public static var messageText: String { NativeText.string(.quitUnavailableTitle) }
 
         /// quit.unavailableDetail：整句含一个 %d = 超时秒数（en/zh 两份 .strings 同形）。
-        /// 秒数 = QuitCoordinator.factsTimeout（单一定义；不再与 AppDelegate 双写）。
+        /// 秒数 = QuitCoordinator.factsTimeout（单一定义；不与 AppDelegate 双写）。
         public static var informativeText: String {
             NativeText.format(.quitUnavailableDetail, Int32(QuitCoordinator.factsTimeout))
         }

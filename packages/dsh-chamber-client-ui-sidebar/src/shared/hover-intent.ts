@@ -10,23 +10,18 @@
  *     large React root per instance (a streaming conversation plus the sidebar's
  *     poll and per-second `now` ticks, with the N-ctx shells sharing one
  *     scheduler), so React can commit that open tens of milliseconds after the
- *     dwell timer fired. A pointerleave handled inside that window read
- *     `open === false`, armed no close, and the card then mounted with the
+ *     dwell timer fired. A pointerleave handled inside that window reads
+ *     `open === false`, arms no close, and the card then mounts with the
  *     pointer already gone: no later pointer event targets that wrapper, so the
- *     card stayed on screen until the row was hovered and left again.
+ *     card stays on screen until the row is hovered and left again.
  *
- *     Characterized during the 2026-09 review with a throwaway CDP probe over
- *     the real sidebar (dispatch pointerover on a row, pointerout some tens of
- *     milliseconds after the dwell, then count portaled 244px cards): the
- *     vendored atom stranded a card on a small fraction of trials under load,
- *     always for a leave inside the dwell-to-paint window, while this module's
- *     machine stranded none. That probe was scratch work — its script and its
- *     rate never shipped, so they are deliberately NOT cited as repo evidence.
- *     The committed regression coverage is: the machine cases in
- *     `test/session-rows/hover-intent.test.ts` (a leave inside the window must still close)
- *     and the real-pointer acceptance leg `W-4b-race` (`scripts/gui-acceptance/walkthrough.mjs`,
- *     judged by `hoverRaceVerdict` in `checks.mjs`). The former source-text wiring
- *     lock was removed by the 2026-12 ruling.
+ *     The vendored atom can strand a card on a small fraction of trials under
+ *     load, always for a leave inside the dwell-to-paint window, while this
+ *     module's machine strands none. The committed regression coverage is: the
+ *     machine cases in `test/session-rows/hover-intent.test.ts` (a leave inside
+ *     the window must still close) and the real-pointer acceptance leg
+ *     `W-4b-race` (`scripts/gui-acceptance/walkthrough.mjs`, judged by
+ *     `hoverRaceVerdict` in `checks.mjs`).
  *
  *  2. CLOSE. A state machine that keeps its own flag while React commits a
  *     separate one can diverge the other way: a press (`press`) or an owner
@@ -93,9 +88,7 @@ function dismissVisibleCard(): void {
  * (`packages/renderer/src/styles.css`, `.instance-hidden` / `.instance-pending`)
  * neither hides the card nor delivers it the pointer event that would dismiss
  * it. A card open while the pointer rests on it therefore survived a view
- * switch, painted over the incoming view until the next pointer move (observed
- * during the 2026-09 review with a real-Chrome harness; the lock for it is
- * `packages/renderer/test/wiring/hover-card-view-hide-wiring.test.ts`).
+ * switch, painted over the incoming view until the next pointer move.
  * The renderer's view-hide path calls this explicitly, in the same frame the
  * class lands.
  *

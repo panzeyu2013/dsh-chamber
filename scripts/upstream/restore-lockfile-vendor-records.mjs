@@ -14,8 +14,8 @@
  * 提交版 lockfile（git HEAD:pnpm-lock.yaml）保留着完整的 vendor importer
  * 记录，是这些记录的唯一权威来源。本脚本在任意 lockfile 重生成之后执行：
  *   - 把 HEAD 里缺失的 vendor importer 记录补回当前 lockfile（只增不减）；
- *   - **但跳过当前链接树中已不存在的成员**（2026-09 修复）：上游可以把一个
- *     workspace 成员整个移除（实测 0.1.5 移除 `native/landlock-run` 的 4 个包），
+ *   - **但跳过当前链接树中已不存在的成员**：上游可以把一个
+ *     workspace 成员整个移除（如 `native/landlock-run` 的 4 个包），
  *     此时 HEAD 仍带着它的 importer 记录，无条件补回会让 `pnpm install
  *     --frozen-lockfile` 的 preinstall 断言报「锁文件有、链接缺」。判定依据 =
  *     当前 `vendor/harness-packages/@deepseek-ai/<name>` 链接是否存在（断链视为
@@ -175,7 +175,7 @@ function merge(currentText, headText) {
       if (!key.startsWith(VENDOR_IMPORTER_PREFIX) || keys.has(key)) continue
       const member = key.slice(VENDOR_IMPORTER_PREFIX.length)
       if (!vendorMemberExists(member)) {
-        // 上游已把该 workspace 成员整个移除：HEAD 的记录是历史残留，补回会让
+        // 上游已把该 workspace 成员整个移除：HEAD 的记录不再有对应链接，补回会让
         // frozen 验证的链接/记录一致性断言失败。
         skippedRemovedMembers.push(member)
         keys.add(key)

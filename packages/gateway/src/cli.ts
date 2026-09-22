@@ -388,7 +388,7 @@ async function main(): Promise<number | null> {
   process.on('SIGTERM', () => void shutdown('SIGTERM', 0))
   try {
     await gateway.start()
-    // Honest boot line (review fix): a blocked runtime startup (swap-attempted
+    // Honest boot line: a blocked runtime startup (swap-attempted
     // / restore-half / restore-incomplete) keeps the gateway up with the
     // managed dsh STOPPED — never print 'local dsh is ready' in that state.
     if (gateway.connectionState === 'ready' || gateway.connectionState === 'degraded') {

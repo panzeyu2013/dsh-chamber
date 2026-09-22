@@ -1,14 +1,13 @@
 /**
- * 会话面绘制信号（）——用"壳自己画出了什么"替换"App 侧事实猜就绪"。
+ * 会话面绘制信号——以"壳自己画出了什么"为准，而非"App 侧事实猜就绪"。
  * ## 背景
  * 打开意图揭示门（`sidebar/src/shared/open-intent.ts` 的 `shouldHoldViewVeil`）在 boot
  * settle 后继续持有遮罩，直到**请求的会话**在屏上。但它的输入是两个异步镜像事实——
  * `runtimeFacts[viewId].current`（推送）与 `aggregates` 的 session `blank` 行（未知按
  * blank 处理）——两者迟到或抖动时，遮罩会挂在已经渲染好的壳上，最长烧满 open 预算
- * （单次 8s、排队 68s），并且同一动作时快时慢（用户观察到的"白屏 / 直接显示载入中"交替）。
- * 本模块把这段判定换成**壳自己暴露的 DOM 事实**：官方会话根 `div[data-phase]`（已由
- * `scripts/upstream/mobile-anchors.mjs` 登记的上游锚点）。相位语义已对安装态上游产物逐条
- * 核对（）：
+ * （单次 8s、排队 68s），并且同一动作时快时慢。
+ * 本模块以**壳自己暴露的 DOM 事实**为准：官方会话根 `div[data-phase]`（
+ * `scripts/upstream/mobile-anchors.mjs` 登记的上游锚点）。相位语义：
  *  - `hero`：会话根未选中任何会话，或选中的是"空白新会话"（`shellPhase === 'blank'` 且
  *    `openState === 'open'` 或 `summaryBlank === true`）——**无正当内容**，遮罩保持
  *    （这正是揭示门存在的理由：不闪空白"新会话"）；
@@ -19,18 +18,18 @@
  *    `conversationPhase`/`settling`/`hero` 邻近行）——**它是"非 hero 非 settling"的兜底值**，
  *    不是一个"真实会话面已在屏"的断言：`shellPhase === 'blank'` 且 `openState ∈ {cold, error,
  *    undefined}` 而 `summaryBlank !== true` 的组合、以及会话快照缺失都会落到这里
- *    （ review MINOR-3；移动插件 `session-stall.ts` 同样写作 "active (everything else)"）。
+ *    （移动插件 `session-stall.ts` 同样写作 "active (everything else)"）。
  *    语义上它**释放遮罩**，因此这个方向是 fail-open：只保证"不是 hero/settling"，不保证
- *    "有正当内容"，也不保证"是请求的那个会话"（详见 design 05  的取舍与残余）；
+ *    "有正当内容"，也不保证"是请求的那个会话"（详见 design 05 的取舍与残余）；
  *  - 取不到会话根：`absent`（boot 早期，或 ui-chat 未注册的降级形态）。
  * `data-phase` 在同一容器里不止一个发射点（会话根 + composer contenteditable，后者值域是
  * inert/plain/claimed/…），所以读取**不靠"第一个 `[data-phase]`"**，而是从恒在的
  * {@link SESSION_SCROLL_ANCHOR} 反查最近的 `[data-phase]` 祖先（与移动插件
  * `session-stall.ts` 同款）；取不到向上关系时按 `absent` 处理（有界出口）。
- * ## 释放规则（）
+ * ## 释放规则
  * 遮罩的兜底窗必须从"已 settle 且揭示门首次持有"的那一刻起算，**绝不能**锚在 shell 的
  * settle 时刻——温壳上 settle 早已是几分钟前，用它会让持有窗在第一帧就过期，揭示门在温壳
- * 上整体退化为无操作（review 发现并复现的 MAJOR）。
+ * 上整体退化为无操作。
  *  - `active` ⇒ 立即释放；
  *  - `absent` ⇒ 以 {@link SURFACE_ABSENT_FALLBACK_MS} 为界（观察不到会话根：降级形态）；
  *  - `hero` / `settling` ⇒ 保持遮罩，只留 {@link SURFACE_MAX_HOLD_MS} 外层保险
@@ -39,8 +38,8 @@
  *  - 时钟未建立 ⇒ 永不释放（新一次持有的第一帧，相位可能还是上一代的残留）。
  * 释放是**电平**而不是闩锁：观察器在持有窗内始终运行，相位若回到 `hero`/`settling`（例如
  * 官方初始导航先把持久化的真实会话显示出来、随后 workspace-follow 又复用/新建 blank 会话），
- * 遮罩仍会回来——否则一次瞬时 `active` 会让空白"新会话"在整个 open 窗内裸露（review 的
- * 第二个 MAJOR）。窗口本身把来回抖动限制在 open 生命周期内。
+ * 遮罩仍会回来——否则一次瞬时 `active` 会让空白"新会话"在整个 open 窗内裸露。
+ * 窗口本身把来回抖动限制在 open 生命周期内。
  * 本模块是叶子（零运行时 import），可被 node 直测；DOM 访问只发生在
  * {@link readSessionSurfacePhase} 的入参接口上（观察器接线在 InstanceView）。
  */
@@ -73,14 +72,14 @@ export const SURFACE_MAX_HOLD_MS = 70_000
 
 /**
  * 相位采样（MutationObserver → 相位落 state）的最小间隔，
- * 采样原本是"每次 DOM 变更排一帧"，在 boot 窗口（各来源壳 + 插件同时装载）等于每帧
+ * 每次 DOM 变更排一帧的采样在 boot 窗口（各来源壳 + 插件同时装载）等于每帧
  * 一次 React 状态更新；Apple 符号化的崩溃栈正是"rAF 回调内一个热函数 OSR 进入时
  * JSC 代码块替换 trap"。合并到 100ms 并把尾部采样保证住，语义不变（最终相位一定会被
  * 观察到，遮罩判定不依赖中间帧），每帧工作量下降约 6 倍。
  */
 export const SURFACE_SAMPLE_MIN_INTERVAL_MS = 100
 
-// 相位 → 上界映射（原 surfaceHoldBoundMs）已随  迁到共享 arbiter：
+// 相位 → 上界映射由共享 arbiter 提供：
 // @dsh-chamber/dsh-stream-state 的 surfaceBoundMs(phase, thresholds) 是唯一一份，
 // 组件只消费 decidePresentation 帧里的 reevaluateInMs。本模块保留相位读取与两个常量
 // （它们是 arbiter 阈值表的输入，仍是本模块的导出契约）。

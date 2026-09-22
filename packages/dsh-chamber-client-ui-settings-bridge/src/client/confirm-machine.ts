@@ -1,6 +1,5 @@
 /**
- * Armed-confirmation state machine (2026-09-11 upstream-alignment T2;
- * accept-time re-validation added by the 2026-09-11 review, F2).
+ * Armed-confirmation state machine.
  *
  * One destructive action at a time: a request is ARMED (a dialog opens), then
  * either CANCELled (nothing runs — the request is dropped before its runner is
@@ -9,10 +8,10 @@
  *
  * An accept re-validates the armed request first: a request may carry a
  * `stillValid` hook that reads the CURRENT facts, and a request that fails it is
- * dropped WITHOUT running (the caller reports the drop). Before that hook
- * existed, an action armed while the world happened to be idle could still reach
- * the wire after the world moved on — the dialog outlives the render it was
- * armed in, and this section's status is polled.
+ * dropped WITHOUT running (the caller reports the drop). An action armed while
+ * the world happened to be idle could otherwise still reach the wire after the
+ * world moved on — the dialog outlives the render it was armed in, and this
+ * section's status is polled.
  *
  * The machine is pure so the invariant that matters — no action reaches the wire
  * without an accept, and an accept launches exactly one runner — is pinned by
@@ -27,7 +26,7 @@ export interface ConfirmRunner {
   run: () => Promise<void>
   /**
    * Re-validation hook consulted by `acceptConfirm` immediately before the
-   * runner would be launched (2026-09-11 review-fix F2). It MUST read the live
+   * runner would be launched. It MUST read the live
    * facts of its action, never the render-scope values its request was armed
    * with — the armed request outlives the render that created it, so a closed
    * guard at arm time says nothing about the world at accept time. `false` drops

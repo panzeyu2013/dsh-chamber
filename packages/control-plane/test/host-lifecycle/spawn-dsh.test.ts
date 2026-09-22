@@ -1,5 +1,5 @@
 /**
- * Spawn cleanup tests (2026 audit H3): killFailedSpawn must SIGKILL the whole
+ * Spawn cleanup tests: killFailedSpawn must SIGKILL the whole
  * process group, WAIT for the exit, and only then remove the pid record
  * (design 02 §3.3: 注销只在确认进程已退出后) — and every failed spawnAttempt
  * path must converge on it so no untracked detached process can leak.
@@ -86,8 +86,8 @@ test('resolveSpawnCwd: the installed (replaceable) layout gets the stable manage
   const workspace = join('app', 'vendor', 'dsh')
   const dshHome = join('state', 'dsh-home')
   // The installed runtime tree is replaced in place by an app update, so the
-  // host must never be created with it as cwd (2026-09-17 incident: the shared
-  // worker process.cwd() then fails every tool call with uv_cwd ENOENT).
+  // host must never be created with it as cwd (the shared worker
+  // process.cwd() then fails every tool call with uv_cwd ENOENT).
   assert.equal(resolveSpawnCwd({ layout: 'installed', dshWorkspacePath: workspace, dshHome }), dshHome)
   // The source checkout is not install-replaceable and its `tsx/esm` loader is
   // resolved through the workspace's own node_modules.
@@ -327,7 +327,7 @@ test('spawnDsh: a pid-record write failure still cleans the spawned child up (no
   // failure path is under test (fast, no 90s listen window). NOTE: a
   // pid-marker inside the fake entry would RACE the cleanup SIGKILL (the
   // child is killed before node runs the script), so the leak check scans
-  // the process table for the entry path instead (2026 review).
+  // the process table for the entry path instead.
   writeFakeDshEntry(dshWorkspacePath, 'setInterval(() => {}, 1000)\n')
   const entryPath = join(dshWorkspacePath, 'dsh')
   // managed-dsh as a FILE → private-directory validation throws → the
@@ -394,7 +394,7 @@ test('spawnDsh: the installed layout runs the host with the stable managed home 
   // Packaged shape: the installed entry lives under <bundle>/vendor/dsh, the
   // directory an in-place app update replaces. The child must be created with
   // the managed dsh home as cwd so worker_threads' shared process.cwd() keeps
-  // resolving (2026-09-17 uv_cwd ENOENT incident).
+  // resolving (uv_cwd ENOENT otherwise).
   const stateDir = tempDir()
   const dshWorkspacePath = join(stateDir, 'vendor', 'dsh')
   const dshHome = join(stateDir, 'home')
@@ -438,10 +438,10 @@ test('spawnDsh: the installed layout runs the host with the stable managed home 
 })
 
 test('spawnDsh: the 0.1.2 browser-auth bootstrap mints the cookie and the host-identity probe passes with it', async () => {
-  // review-round3c P0: the web profile prints `dsh web: <url>?token=<t>` at
+  // The web profile prints `dsh web: <url>?token=<t>` at
   // readiness; the spawn performs the token exchange and injects the cookie
   // into the host-identity probe — session/canOpenWorkspacePath (the fake
-  // host 401s the whole /api surface without it, 0.1.2 browser-auth gate).
+  // host 401s the whole /api surface without it, the browser-auth gate).
   const stateDir = tempDir()
   const dshWorkspacePath = join(stateDir, 'ws')
   writeFakeDshEntry(dshWorkspacePath, [
@@ -488,7 +488,7 @@ test('spawnDsh: the 0.1.2 browser-auth bootstrap mints the cookie and the host-i
 })
 
 test('spawnDsh: a gated host with no launch token fails loud with the browser-auth error', async () => {
-  // review-round5a P2-2 / P3: the host 401s (0.1.2 gate) but never prints the
+  // The host 401s (browser-auth gate) but never prints the
   // `dsh web:` token line — the bootstrap cannot mint a cookie, and the probe
   // must fail loud with the explicit browser-auth reason (never the generic
   // 90s-window error).
@@ -514,12 +514,12 @@ test('spawnDsh: a gated host with no launch token fails loud with the browser-au
 })
 
 test('spawnDsh: a 401 that arrives before the launch-token line re-arms the bounded wait instead of failing the attempt', async () => {
-  // 0.1.2 wire ordering (harness client/connection + bundle/web-app): the /api
+  // Wire ordering (harness client/connection + bundle/web-app): the /api
   // routes answer 401 as soon as the listener is up, while the
   // `dsh web: <url>?token=…` line is printed only after the loader settles.
   // The first bounded window therefore expires with no token at all; the
   // attempt must re-arm ONE fresh window inside the 90s listen budget instead
-  // of throwing on the first 401 (review P2). The fake host answers the FIRST
+  // of throwing on the first 401. The fake host answers the FIRST
   // identity probe 401 after a delay that is well past the injected window,
   // and prints the token line only after that 401 is answered — the exact
   // ordering the re-arm exists for.
@@ -574,7 +574,7 @@ test('spawnDsh: a 401 that arrives before the launch-token line re-arms the boun
 })
 
 test('spawnDsh: a readiness line split across chunks is still fully redacted and usable', async () => {
-  // review-round7a P2-4: the token URL line may arrive in several stdio
+  // The token URL line may arrive in several stdio
   // chunks — the scanner must wait for the complete line and the forward
   // must redact across the split (no truncated-token mint, no partial leak).
   const logged: string[] = []
@@ -621,7 +621,7 @@ test('spawnDsh: a readiness line split across chunks is still fully redacted and
 })
 
 test('spawnDsh: the launch token never reaches the control-plane log or host-log', async () => {
-  // review-round6b P2-2: the readiness line (with token AND the LAN variant)
+  // The readiness line (with token AND the LAN variant)
   // must be redacted in every log surface.
   const logged: string[] = []
   const stateDir = tempDir()
@@ -668,7 +668,7 @@ test('spawnDsh: the launch token never reaches the control-plane log or host-log
 })
 
 test('spawnDsh: a token line with a failed exchange fails loud with the browser-auth error', async () => {
-  // review-round6a P2-4: the URL line arrives but the exchange is refused —
+  // The URL line arrives but the exchange is refused —
   // the bootstrap failure must surface in the probe's explicit error.
   const stateDir = tempDir()
   const dshWorkspacePath = join(stateDir, 'ws')
@@ -697,12 +697,11 @@ test('spawnDsh: a token line with a failed exchange fails loud with the browser-
 })
 
 test('spawnDsh: an old runtime tree (only session/list, no launch token) spawns via the legacy fallback without a cookie', async () => {
-  // review-round5a + 404-split: rc.2-era hosts print the URL line without a
-  // token AND predate the session/canOpenWorkspacePath identity method (dsh <
-  // 0.1.2-rc.1): the identity probe answers HTTP 404, probeHostIdentity falls
-  // back to the legacy session/list probe, and the spawn proceeds unchanged
-  // without a cookie — old-tree readiness behavior is preserved. The fake
-  // host answers ONLY session/list, proving the 404-split readiness path.
+  // Old hosts print the URL line without a
+  // token AND predate the session/canOpenWorkspacePath identity method: the
+  // identity probe answers HTTP 404, probeHostIdentity falls back to the
+  // legacy session/list probe, and the spawn proceeds without a cookie. The
+  // fake host answers ONLY session/list, proving the 404-split readiness path.
   const stateDir = tempDir()
   const dshWorkspacePath = join(stateDir, 'ws')
   writeFakeDshEntry(dshWorkspacePath, [

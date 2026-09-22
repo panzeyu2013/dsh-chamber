@@ -1,5 +1,5 @@
 //
-//  TrustGuardTests.swift — W-04 A 桥传输层护栏（design 25 §4.4.1）
+//  TrustGuardTests.swift — A 桥传输层护栏（design 25 §4.4.1）
 //  纯逻辑单测：origin 精确匹配（fail-closed）、方法白名单、帧尺寸上限。
 //
 import XCTest
@@ -37,7 +37,7 @@ final class TrustGuardTests: XCTestCase {
         _ = TrustGuard.isTrustedOrigin("http://[::1]:17520/", expectedOrigin: origin)
     }
 
-    /// 2026-09 验收审计 major 收口：A 桥只信任固定壳文档（origin + pathname=="/"
+    /// A 桥只信任固定壳文档（origin + pathname=="/"
     /// + 无 query），与 Electron isTrustedRendererUrl 逐条对齐——同源非根文档
     /// （如 /api/i/<id>/* 代理回传的远端 HTML）不得继承 shim/IPC 面。
     func testTrustedDocumentIsShellDocumentOnly() {
@@ -62,7 +62,7 @@ final class TrustGuardTests: XCTestCase {
     }
 
     /// origin(of:) 的 origin 串构造（归一化与 cpOrigin 共用）：IPv6 必须补回
-    /// 方括号（2026-09 二审：`[::1]` 曾生成 `http://::1:17520` 不可解析）。
+    /// 方括号（否则 `[::1]` 会生成 `http://::1:17520` 不可解析）。
     func testOriginStringConstruction() {
         XCTAssertEqual(MainWindowController.origin(of: URL(string: "http://127.0.0.1:17520/")!),
                        "http://127.0.0.1:17520")
@@ -129,7 +129,7 @@ final class TrustGuardTests: XCTestCase {
         // 多字节字符按字节计
         XCTAssertTrue(TrustGuard.envelopeSizeOK(String(repeating: "中", count: TrustGuard.maxMessageBytes / 3)))
         XCTAssertFalse(TrustGuard.envelopeSizeOK(String(repeating: "中", count: TrustGuard.maxMessageBytes)))
-        // Phase 1 C1：Data 形态（调用点是 JSONSerialization 产出的合法 UTF-8，
+        // Data 形态（调用点是 JSONSerialization 产出的合法 UTF-8，
         // data.count 与 String 版 utf8.count 逐字节等价）。
         XCTAssertTrue(TrustGuard.envelopeSizeOK(Data(repeating: 0x61, count: 16)))
         XCTAssertTrue(TrustGuard.envelopeSizeOK(Data(repeating: 0x61, count: TrustGuard.maxMessageBytes)))

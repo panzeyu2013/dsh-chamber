@@ -8,34 +8,33 @@
  * `test/tables/tables-parity.test.ts` fails if the two disagree, and the Swift
  * mirror gate reads the JSON. One source (these literals), two consumers.
  *
- * Discipline (refactor plan section 3): changing a value here is a
+ * Discipline: changing a value here is a
  * BEHAVIOR_CHANGES entry (see DIVERGENCE.md), never a free parameter.
  */
 
 /** Rolling window of the physical-carrier rebuild throttle.
- * Provenance: designed here, and made structural by node B1 - today's three
- * replacement entries have no shared bound (see the stream-carrier audit). */
+ * The three replacement entries share this bound (see the stream-carrier audit). */
 export const REBUILD_WINDOW_MS = 60_000
 export const MAX_REBUILDS_PER_WINDOW = 1
 /** Minimum distance between two allowed rebuilds. */
 export const MIN_REBUILD_SPACING_MS = 1_000
-/** In-flight rebuild grace: the old `replaceSocket` could cancel its own
- * successor's connect attempt because nothing tracked this. */
+/** In-flight rebuild grace: without it `replaceSocket` could cancel its own
+ * successor's connect attempt because nothing tracks this. */
 export const IN_FLIGHT_GRACE_MS = 1_000
 
 /** Opening-item deadline per logical-stream episode, and its widening ladder.
- * Provenance: REMOTE_STREAM_OPENING_TIMEOUT_MS / `remoteStreamOpeningTimeoutMs`
+ * Mirrors REMOTE_STREAM_OPENING_TIMEOUT_MS / `remoteStreamOpeningTimeoutMs`
  * (packages/dsh-api-gateway/src/client/remote-retry-policy.ts). Ladder index =
  * consecutive timeouts for ONE episode; the episode, not the endpoint digest,
  * owns the widening (DIVERGENCE D-4). */
 export const OPENING_TIMEOUT_LADDER_MS: readonly number[] = [30_000, 60_000, 120_000, 240_000, 300_000]
 
 /** A logical stream must have lived at least this long before its teardown may
- * judge the socket silent (provenance: REMOTE_STREAM_SILENT_TEARDOWN_MIN_MS). */
+ * judge the socket silent (mirrors REMOTE_STREAM_SILENT_TEARDOWN_MIN_MS). */
 export const SILENT_TEARDOWN_MIN_MS = 15_000
 
 /** Consecutive unanswered opening deadlines for ONE episode before the carrier is
- * rebuilt while frames ARE arriving (provenance:
+ * rebuilt while frames ARE arriving (mirrors
  * REMOTE_STREAM_OPENING_ESCALATION_STREAK = 2). A frame-answering socket is left
  * alone on the first timeout because a slow-but-working Host must keep its
  * in-flight answer; only a second consecutive miss proves the request - not the
@@ -60,17 +59,17 @@ export function openingBudgetMs(streak: number): number {
 }
 
 /**
- * B4: the FOUR recovery ladders' thresholds, recorded here as the single table.
+ * The FOUR recovery ladders' thresholds, recorded here as the single table.
  *
- * These values are still OWNED by their modules today (the mobile stall machine, the
- * sidebar fact-reconcile receipt chain, liveness and the health chip); B4 retires
- * those copies one node at a time. Until then
+ * These values are still OWNED by their modules (the mobile stall machine, the
+ * sidebar fact-reconcile receipt chain, liveness and the health chip); the table
+ * adopts them one ladder at a time. Until then
  * `scripts/gates/verify-ladder-table-parity.mjs` locks every surviving declaration to
  * the numbers below, so the table and the modules cannot drift apart while both
- * exist - the same lockstep B5 used for the Swift mirror. A module that no longer
- * declares its constant is B4's retirement working, not a failure.
+ * exist - the same lockstep as the Swift mirror. A module that stops
+ * declaring its constant is that adoption working, not a failure.
  *
- * Provenance: measured from each module's own declarations (2026-12), not chosen
+ * The numbers are measured from each module's own declarations, not chosen
  * here. Changing a value is a BEHAVIOR_CHANGES entry, never a free parameter.
  */
 export const LADDER_TABLES = {

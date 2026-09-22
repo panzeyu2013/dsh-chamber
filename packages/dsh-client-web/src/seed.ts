@@ -6,16 +6,16 @@
  * of truth with the tsdown client externals); values stay shell-static
  * imports so every bundle sees the same instance.
  *
- * ## chamber patch (dsh rc.8 baseline alignment + C3 性能审计, 2026-09)
+ * ## Chamber seed table
  *
  * A word here must NEVER be a package the host boot graph can emit as a plugin
  * row — seed resolves before factories in the module system, so a seed word
  * that is also a row materializes the static namespace as a loader entry and
  * the boot fails ("invalid plugin"). See platform.ts for the full invariant.
  *
- * C3 (2026-09 性能审计, 偏差登记): `@deepseek-ai/dsh-client-ui-primitives` is
- * deliberately NOT seeded (platform.ts) — its wholesale namespace import pulled
- * the whole primitives package into the main-graph eval that precedes the App
+ * `@deepseek-ai/dsh-client-ui-primitives` is
+ * deliberately NOT seeded (platform.ts) — its wholesale namespace import would
+ * pull the whole primitives package into the main-graph eval that precedes the App
  * mount. The word is answered by the composite's covered factory instead
  * (chamber-entry.ts COVERED_FACTORIES); the shell gates every extra-bundle load
  * behind the chamber entry evaluation (shell.ts "C3 gate"). Residual edge: if
@@ -24,8 +24,8 @@
  * fails loud and degrades (retry self-heals), never silent. Do not restore the
  * word here without removing the factory path too.
  *
- * alpha.2: upstream added `@deepseek-ai/dsh-client-ui-dockkit` to its platform
- * table; the chamber seed deliberately does NOT (the composite's covered
+ * Upstream's platform table includes `@deepseek-ai/dsh-client-ui-dockkit`;
+ * the chamber seed deliberately does NOT (the composite's covered
  * factory answers it — same chunk-budget reasoning as ui-primitives above).
  */
 import * as React from 'react'

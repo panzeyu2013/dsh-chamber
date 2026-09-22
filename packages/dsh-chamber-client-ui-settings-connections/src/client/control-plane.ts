@@ -5,9 +5,9 @@
  * /api/i/gateway-<id>/api/host/logs, same control-plane host-logs shape).
  *
  * The REST transport + wire shapes are the SINGLE shared copy in the chamber
- * sidebar package (shared/control-plane-client.ts — B2 convergence): both
- * this plugin and the renderer App layer consume it, so the two former
- * copies can never drift again. This module keeps the plugin-side `cp`
+ * sidebar package (shared/control-plane-client.ts): both
+ * this plugin and the renderer App layer consume it, so the two cannot
+ * drift. This module keeps the plugin-side `cp`
  * method surface and the plugin-management IPC wrappers (design 13
  * §4.1/§3/§5), which stay local. Every value is non-secret: tunnel URLs
  * and SSH material never cross this module.
@@ -66,7 +66,7 @@ export const cp = {
   },
 
   /**
-   * GET /api/connections/local/writers → 写者静默诊断（2026-09-10，02 §3.4）。
+   * GET /api/connections/local/writers → 写者静默诊断（02 §3.4）。
    * 没有该路由的形态（501/404）返回 null：页面不渲染该块。
    */
   localWriters: async (): Promise<LocalWriterDiagnosisWire | null> => {
@@ -182,7 +182,7 @@ export type GatewayInstalledProjection =
     profileExists: true
   }
   | { ok: false; code: 'profile_absent' | 'profile_corrupt' }
-  /** The §6.2 读/写面共享栅栏 (2026-12 接线): a plugin mutation held the
+  /** The §6.2 读/写面共享栅栏: a plugin mutation held the
    *  managed-profile write lease, so the gateway withheld the projection with
    *  409 `runtime_busy` rather than publishing a torn one. NOT a read failure
    *  and NOT a profile state: the caller renders the dedicated busy copy
@@ -244,7 +244,7 @@ export function localPluginRemove(name: string): Promise<SshLocalPluginExecIpcRe
 }
 
 /** Undo the latest ok ssh plugin change of a remote instance (design 21
- *  §6.4, plan Phase 5 ssh 统一增量): the MAIN process consults its ssh
+ *  §6.4 ssh 统一增量): the MAIN process consults its ssh
  *  journal, confirms with the user (cancelled = dismissed), and re-executes
  *  the inverse row through the same ssh plugin_apply flow (restart-to-apply,
  *  journaled). The renderer never supplies a spec — the id-only intent keeps
@@ -345,8 +345,8 @@ export async function gatewayInstalled(
   }
 }
 
-/** GET /chamber/plugins/tasks (design 21 §6.2 task projection, plan Phase
- *  5.③): journal ops (newest first, retention-capped) + durable deferred
+/** GET /chamber/plugins/tasks (design 21 §6.2 task projection):
+ *  journal ops (newest first, retention-capped) + durable deferred
  *  intents + the executor busy flag — the read side of the 202 contract.
  *  The wire type is the model layer's structural twin
  *  (plugin-model.ts GatewayTasksShape — single twin shared by the REST

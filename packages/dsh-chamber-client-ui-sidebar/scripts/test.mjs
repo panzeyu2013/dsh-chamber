@@ -4,16 +4,15 @@
  * own node child with piped stdio (stdout/stderr are written through so the
  * transcript stays intact, and the zero-test guard below can read the node:test
  * summary); the first failure ends the run - the same semantics as the inline
- * && chain this replaces. A listed file that does not exist is a failure,
+ * && chain. A listed file that does not exist is a failure,
  * never a silent skip.
  * Entries: a path, or { file, nodeArgs } when a loader (--import ...) is needed.
  *
  * 平台腿（与 packages/desktop/scripts/test.mjs 同款）：`test` 跑 GROUPS，
  * `test:win32`（`--win32`）只跑 WIN32_FILES——sidebar 对 settled-boot gap 的
- * 文案/词表契约（sidebarRight 等行缺失时的降级呈现）。Windows CI 腿此前完全
- * 没跑过它。
+ * 文案/词表契约（sidebarRight 等行缺失时的降级呈现）。
  *
- * 零测试守卫（D2b，2026-12）：列出的文件退出 0 但没有 node:test 汇总行、tests 0
+ * 零测试守卫：列出的文件退出 0 但没有 node:test 汇总行、tests 0
  * 或全部 skip（pass 0 / fail 0）时判失败——静默空清单不得变绿。
  */
 
@@ -33,20 +32,20 @@ export const GROUPS = {
   ],
   // session-rows: session/workspace projection, row windowing, row hover and the shell's row wiring
   'session-rows': [
-    // 三处拖拽闭包共用的 over-目标推进（纯叶子，2026-12 单源化）。
+    // 三处拖拽闭包共用的 over-目标推进（纯叶子）。
     'test/session-rows/drag-over-state.test.ts',
     'test/session-rows/derive.test.ts',
-    // The shared unread predicate of the B edge track (plan §3.3-1/§3.2); the
-    // facts-merge / ordering / label / search-archive contracts were consolidated
-    // into derive.test.ts (round 2).
+    // The shared unread predicate of the B edge track; the
+    // facts-merge / ordering / label / search-archive contracts live in
+    // derive.test.ts.
     'test/session-rows/derive-unread.test.ts',
-    // I1/I2/I13 仪表：行/待办条的机器可读状态标记（纯分类器 + 属性锁）。
+    // 行/待办条的机器可读状态标记（纯分类器 + 属性锁）。
     'test/session-rows/session-row-state.test.ts',
     'test/session-rows/session-row-window.test.ts',
     'test/session-rows/todo-attention.test.ts',
     'test/session-rows/hover-intent.test.ts',
     // Source-header prewarm intent: the 120ms dwell machine (distinct from the
-    // row hover-card machine above), plan R8 / switch blueprint §4.
+    // row hover-card machine above).
     'test/session-rows/prewarm-intent.test.ts',
   ],
   // session-state: the shared chamber store and the per-source view/search/todo state
@@ -54,9 +53,9 @@ export const GROUPS = {
     'test/session-state/aggregate-store.test.ts',
     // 运行位对账链（官方 refresh + 权威判定 seam + 有界重试/单次尝试超时）。
     'test/session-state/session-fact-reconcile.test.ts',
-    // R19 能力一览：来源行的会话事实档位展示读数（源文本锁）。
+    // 能力一览：来源行的会话事实档位展示读数（源文本锁）。
     'test/session-state/facts-capability-note.test.ts',
-    // I10：会话创建归因账本（含 blank 的按标签聚合与「无标签外来源」判据）。
+    // 会话创建归因账本（含 blank 的按标签聚合与「无标签外来源」判据）。
     'test/session-state/session-create-ledger.test.ts',
     // 上游会话事实语义的源码 lockstep（vendor 树未物化时默认失败，显式 opt-out 才跳过）。
     'test/session-state/vendor-session-fact-contract.test.ts',
@@ -72,8 +71,8 @@ export const GROUPS = {
   // open-flow: the page-wide open intent, its boot-time arm and the open outcome/click seams
   'open-flow': [
     'test/open-flow/open-intent.test.ts',
-    // Merged behaviour + wiring lock of the boot-time early-open arm (test/early-open.test.ts
-    // + test/early-open-wiring.test.ts); plain modules and source text only, no loader needed.
+    // Behaviour + wiring lock of the boot-time early-open arm; plain modules
+    // and source text only, no loader needed.
     'test/open-flow/early-open.test.ts',
     'test/open-flow/open-outcome.test.ts',
     'test/open-flow/pending-click.test.ts',

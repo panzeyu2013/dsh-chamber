@@ -1,6 +1,6 @@
 /**
  * Pure row/deny/undo logic for the ssh plugin apply surface (design 21 §6.4
- * ssh 统一增量, plan Phase 5) — no Electron, no fs:
+ * ssh 统一增量) — no Electron, no fs:
  *
  * - parseSpecName / buildSshApplyRows — name extraction + the RESERVED-name
  *   whole-batch refusal shared by the main-process ssh apply IPC preflight
@@ -91,7 +91,7 @@ export interface SshApplyRefusal {
   kind: 'add' | 'remove'
   /** ALWAYS a refusal: `buildSshApplyRows` drops `defer` (profile absent means
    *  "let the CLI create it", design 21 §6.11.3 R0), so the type says so and the
-   *  copy can never mislabel a defer as a refusal code (2026-12 review). */
+   *  copy can never mislabel a defer as a refusal code. */
   decision: Extract<PluginMutationDecision, { kind: 'refuse' }>
 }
 
@@ -204,7 +204,7 @@ function isXWildcardVersionValue(value: string): boolean {
 }
 
 /**
- * The v1 undo decision over one journal op (design 21 §6.4 + plan Phase 5):
+ * The v1 undo decision over one journal op (design 21 §6.4):
  * undoing a change RESTORES the pre-change row state:
  *   - undoing an ok 'add' whose name was ABSENT before (specBefore null —
  *     a fresh install) = remove that name again;

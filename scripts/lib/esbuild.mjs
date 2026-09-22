@@ -1,11 +1,11 @@
 /**
  * esbuild resolution through the renderer's vite tree — ONE copy of the lookup
- * that used to be pasted in every chamber build script and in the upstream gate
- * (P1-7 of the 13-scripts audit). esbuild is vite's transitive dependency, so it
+ * for every chamber build script and the upstream gate. esbuild is vite's
+ * transitive dependency, so it
  * is resolved via `packages/renderer` rather than declared anywhere.
  *
  * The four `dsh-chamber-seed-*` build.mjs keep their own copy on purpose: seed
- * build scripts are a parallel task's scope.
+ * build scripts are a separate scope.
  */
 import { createRequire } from 'node:module'
 import { dirname, join, resolve } from 'node:path'

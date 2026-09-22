@@ -1,9 +1,9 @@
 /**
  * Gateway seed-cache for desktop-synced chamber host packages (design 17
- * §9.3, 2026-12 Phase 3): the chamber host packages
+ * §9.3): the chamber host packages
  * (dsh-chamber-seed-client-graph, dsh-chamber-seed-git-worktree,
- * dsh-chamber-seed-archive-cleanup — the latter added 2026-12, design 24 —
- * plus dsh-chamber-seed-open-in, design 20 §6) are no longer shipped inside
+ * dsh-chamber-seed-archive-cleanup, design 24,
+ * plus dsh-chamber-seed-open-in, design 20 §6) are not shipped inside
  * the gateway package — a connecting desktop uploads its own copies through
  * the authenticated `PUT /chamber/plugins` surface, and the gateway caches
  * them under `<stateDir>/chamber-plugins/<name>/` for the control-plane seed
@@ -15,7 +15,7 @@
  * chamber host domains until the first desktop sync — the expected probe set
  * is derived from the ACTUAL cache contents (syncedHostDomainProbeNames →
  * activationProbeNamesForDomains; an empty cache yields the reduced base
- * set, not the binary hostDomains flag of the older runtime seam); the
+ * set, not a binary hostDomains flag); the
  * syncing desktop then restarts dsh so the seeded profile picks the
  * packages up. The open-in row is `localOnly` in the registry: it stays in
  * the derived syncable map (the load-time pin compares that map with
@@ -49,15 +49,15 @@ export const SYNCED_PLUGIN_DIR = 'chamber-plugins'
 
 /** The syncable chamber host packages — DERIVED from the control-plane's
  *  authoritative registry (name + insert id + probe), so a new host package
- *  is covered here without editing this file (2026-09 user decision: never a
+ *  is covered here without editing this file (never a
  *  hand-maintained parallel list). */
 export const SYNCABLE_HOST_PACKAGES = CHAMBER_HOST_PACKAGES.map(descriptor => descriptor.insert)
 
-// Fail-fast naming pin (Batch 1 naming unification, 2026-09): the syncable
+// Fail-fast naming pin: the syncable
 // list is a host-seed registry of its own (it gates PUT /chamber/plugins, the
 // cache slug and the probe derivation), so a non-canonical host package name
 // aborts the gateway at load instead of accepting a desktop sync into a
-// pre-rename slug. Same drift class as the probe-domain pin below.
+// non-canonical slug. Same drift class as the probe-domain pin below.
 assertHostSeedInsertNaming(SYNCABLE_HOST_PACKAGES)
 
 /** The activation-probe domain each syncable host package backs (design 24
@@ -93,9 +93,6 @@ export const SYNCED_VERSION_MAX_CHARS = 128
  * The upload/cache file set — DERIVED from the control-plane seed tuple
  * (`HOST_PACKAGE_SEED_FILES`, host-graph-seed.ts), never a hand-written pair:
  * the syncing desktop's PUT payload and this cache therefore speak one set.
- * The pre-fix shape (this interface + the desktop's literal pair) accepted two
- * keys, cached two files and still answered 200/changed:true, so a third seed
- * file landed nowhere while the managed dsh kept booting without it.
  */
 export const SYNCED_PLUGIN_FILES: readonly HostPackageSeedFile[] = HOST_PACKAGE_SEED_FILES
 
@@ -186,8 +183,7 @@ export function createChamberPlugins(stateDir: string, logger: Logger): ChamberP
       if (slug === null) throw invalidInput(unsyncableMessage(name), [name])
       // Presence + size validation over the SHARED seed file set: every
       // declared file must ride the upload. A missing member is refused here
-      // instead of being dropped while the route still answered
-      // 200/changed:true (the drift this replaces).
+      // instead of being dropped while the route answers 200/changed:true.
       const declared: Array<{ relative: HostPackageSeedFile; text: string }> = []
       for (const relative of SYNCED_PLUGIN_FILES) {
         const text = files[relative]
@@ -251,8 +247,8 @@ export function createChamberPlugins(stateDir: string, logger: Logger): ChamberP
 }
 
 /** Chamber host domains whose synced package is actually present in the seed
- *  cache (design 24 §7 C, M2 derivation): replaces the binary all-or-none
- *  gate for partial syncs (old desktop ↔ new gateway, interrupted syncs).
+ *  cache (design 24 §7 C): per-package presence for partial syncs (old
+ *  desktop ↔ new gateway, interrupted syncs).
  *  An empty list = a plain dsh (reduced probe set); the full list = all
  *  chamber domains. Fail-loud drift check: a syncable host package with no
  *  domain in HOST_PACKAGE_PROBE_DOMAINS throws instead of being silently

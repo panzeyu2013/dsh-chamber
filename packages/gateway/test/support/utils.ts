@@ -138,8 +138,8 @@ export function gatewayRequest(
   return new FakeRequest(method, url, { host: 'gateway.example:3000', ...headers })
 }
 
-/** No-op orchestrator stub for surfaces that do not exercise the A1 write
- * routes (design 21 §6.2; plan Phase 4.4): submit/tasks exist so the
+/** No-op orchestrator stub for surfaces that do not exercise the write routes
+ * (design 21 §6.2): submit/tasks exist so the
  * structural ChamberSurfaceDeps check passes; every submit is refused with
  * queue_busy unless overridden. Reuse — do not re-declare locally. */
 export function stubPluginTasks(

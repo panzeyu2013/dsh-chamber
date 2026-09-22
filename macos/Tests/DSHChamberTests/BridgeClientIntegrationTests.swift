@@ -1,25 +1,25 @@
 //
-//  BridgeClientIntegrationTests.swift — B 桥进程集成测试（W-05 push 拓扑
-//  补覆盖）——**POC 桩 fixture 专用**（G17 拆分）。
+//  BridgeClientIntegrationTests.swift — B 桥进程集成测试（push 拓扑覆盖）
+//  ——**POC 桩 fixture 专用**。
 //
-//  G17（2026-12 审计）：本文件的 5 例打的是 W-05 桩
-//  packages/desktop/sidecar-stub.ts，而装配路径（AppDelegate.sidecarRelativePath）
-//  自 S12 起只拉 packages/desktop/sidecar-entry.ts；桩自 2026-12 起仅是测试
-//  fixture（显式 DSH_CHAMBER_SHELL_SIDECAR 才会被壳加载）。类名因此改为
+//  本文件的 5 例打的是桩
+//  packages/desktop/sidecar-stub.ts，装配路径（AppDelegate.sidecarRelativePath）
+//  只拉 packages/desktop/sidecar-entry.ts；桩仅是测试
+//  fixture（显式 DSH_CHAMBER_SHELL_SIDECAR 才会被壳加载）。类名
 //  BridgeClientStubIntegrationTests 明确桩身份；真入口的进程级覆盖见本文件
 //  末尾的 BridgeClientRealEntryIntegrationTests 与 BridgeClientEdgeIntegrationTests
 //  （60 通道 + edge/notify 全量）。
 //
 //  覆盖对象：BridgeClient.swift 的进程/帧/配对面在 **POC 桩 fixture** 下的行为
-//  （design 25 §4.4.2 B 桥 Swift ↔ sidecar 进程客户端；W-05 垂直切片）。
+//  （design 25 §4.4.2 B 桥 Swift ↔ sidecar 进程客户端）。
 //  与纯逻辑单测（FrameCodec/AnyCodable/TrustGuard）互补：那些只测 NDJSON 编解码
-//  与护栏的纯函数面，本类把 W-05 桩以子进程拉起，端到端验证：
+//  与护栏的纯函数面，本类把桩以子进程拉起，端到端验证：
 //    1. 请求/响应往返（dsh-chamber:info、desktop_ssh_instances_get）；
 //    2. ok=false 业务拒绝 → NSError（domain "BridgeClient"、code 1）携带
 //       sidecar error 文案（poc-unimplemented）；
 //    3. push 拓扑（design 25 §4.4.2「事件推送经 B 桥到 Swift」）：connect 时
-//       desktop_ssh_status_changed **先于** invoke 响应到达——台账里被标成
-//       「需 GUI」的正是这条顺序语义，这里用顺序记录器直接断言；
+//       desktop_ssh_status_changed **先于** invoke 响应到达——这条顺序语义
+//       由顺序记录器直接断言；
 //    4. disconnect 事件 + sidecar 记忆语义（status → phase:idle）+ 干净 stop；
 //    5. --instances 指向不存在路径 → 空数组（错误只进 stderr，不回错误帧）。
 //
@@ -34,7 +34,7 @@
 //      （swift test 的 cwd 是 macos/ 包根，上溯 1 层即仓库根）→ 找不到
 //      XCTSkip。
 //    - BridgeClient 构造 environment 参数会在 start() 时与当前进程环境合并
-//      （BridgeClient.childEnvironment，见 BridgeClient.swift「子进程环境（T-11）」
+//      （BridgeClient.childEnvironment，见 BridgeClient.swift「子进程环境」
 //      一节），因此这里只传增量键。
 //
 //  超时纪律：每个用例的全部等待都有显式上限（invoke 竞速 10s / 事件
@@ -64,13 +64,13 @@ final class BridgeClientStubIntegrationTests: XCTestCase {
         let environment: [String: String]
     }
 
-    /// Node/sidecar 路径解析，任何一环缺失 → XCTSkip（跳过而非失败）。
+    /// Node/sidecar 路径解析，任何一环缺失 → XCTSkip（跳过而非失败）——本文件解析 POC 桩 packages/desktop/sidecar-stub.ts。
     private func makeLauncher() throws -> Launcher {
         let env = ProcessInfo.processInfo.environment
 
         let nodePath: String
-        // 校验存在性：`DSH_CHAMBER_SHELL_NODE_BIN=node`（字面名而非路径）曾被当成路径直接
-        // spawn，导致 11 例失败而非跳过（2026-09 模块评审 F 注记）。
+        // 校验存在性：`DSH_CHAMBER_SHELL_NODE_BIN=node`（字面名而非路径）不得直接
+        // spawn——否则 11 例失败而非跳过。
         if let configured = env["DSH_CHAMBER_SHELL_NODE_BIN"],
            !configured.isEmpty,
            FileManager.default.isExecutableFile(atPath: configured) {
@@ -92,10 +92,10 @@ final class BridgeClientStubIntegrationTests: XCTestCase {
                           + "向上 ≤6 层未找到 \(Self.sidecarRelativePath)；请设置 DSH_CHAMBER_SHELL_SIDECAR")
         }
 
-        // Electron 二进制当 Node 用（AppDelegate.swift:45-52 同规）：basename
+        // Electron 二进制当 Node 用（本文件 = POC 桩用例；AppDelegate.swift:45-52 同规）：basename
         // 含 "dsh-chamber" 时必须注入 ELECTRON_RUN_AS_NODE=1，否则启动的是
         // GUI 应用而非 Node。只传增量：BridgeClient.start() 会把本字典合并到
-        // 当前进程环境之上（BridgeClient.childEnvironment，T-11）。
+        // 当前进程环境之上（BridgeClient.childEnvironment）。
         var childEnvironment: [String: String] = [:]
         let nodeBasename = (nodePath as NSString).lastPathComponent
         if nodeBasename.contains("dsh-chamber") {
@@ -266,8 +266,8 @@ final class BridgeClientStubIntegrationTests: XCTestCase {
     /// 先等 300ms、再推 desktop_ssh_status_changed（payload {id,status:"connected",
     /// poc:true}）、**之后**才回响应。onEvent 在管道读取线程按帧行序回调，
     /// 事件帧处理完才轮到响应帧 resume 续体——因此测试线程在 await 返回后
-    /// 补记 "response" 时，事件必然已先记录。这正是 W-05 台账标成「push 拓扑
-    /// 需 GUI」的顺序语义，这里无 GUI 直测。
+    /// 补记 "response" 时，事件必然已先记录。这就是 push 拓扑的顺序语义，
+    /// 这里无 GUI 直测。
     func testConnectEmitsStatusEventThenResponds() async throws {
         let bridge = try makeBridge()
         defer { bridge.stop() }
@@ -359,7 +359,7 @@ final class BridgeClientStubIntegrationTests: XCTestCase {
         XCTAssertEqual(statusFields["poc"], .bool(true), "POC 桩结果应 loud 标记 poc:true")
 
         // 干净停止：stop() 同步阻塞到收尸完成；stop 后 isRunning == false。
-        // 进程存在性不再外部断言：BridgeClient 未暴露进程句柄，stop() 内部
+        // 进程存在性不作外部断言：BridgeClient 未暴露进程句柄，stop() 内部
         // waitUntilExit 已保证无僵尸/存活进程（注释声明，不强求）。
         bridge.stop()
         XCTAssertFalse(bridge.isRunning, "stop() 后进程应已退出")
@@ -368,7 +368,7 @@ final class BridgeClientStubIntegrationTests: XCTestCase {
     }
 
     /// 5) --instances 指向不存在路径 → desktop_ssh_instances_get 回诚实错误帧
-    /// （静态审查 #1 修正：缺 registry 不得伪装空成功——AGENTS proxy-honesty
+    /// （缺 registry 不得伪装空成功——AGENTS proxy-honesty
     /// 不变式；wire 答 {error:'poc-no-registry'}，stderr 同 loud）。
     func testInstancesGetMissingFileAnswersLoudError() async throws {
         let missingInstancesPath = NSTemporaryDirectory()
@@ -396,9 +396,9 @@ final class BridgeClientStubIntegrationTests: XCTestCase {
     }
 }
 
-// MARK: - 真入口（sidecar-entry.ts）进程级覆盖（G17）
+// MARK: - 真入口（sidecar-entry.ts）进程级覆盖
 
-/// G17 的真侧覆盖：与装配路径同一个入口
+/// 真入口覆盖：与装配路径同一个入口
 /// （packages/desktop/sidecar-entry.ts，AppDelegate.sidecarRelativePath 同值）
 /// ——覆盖 invoke 往返、未知通道 loud 拒绝、ready 帧端口、SIGTERM 干净退出。
 /// 环境纪律与 BridgeClientEdgeIntegrationTests 相同（缺 Node 或入口 → XCTSkip，
@@ -416,7 +416,6 @@ final class BridgeClientRealEntryIntegrationTests: XCTestCase {
         let environment: [String: String]
     }
 
-    /// Node/sidecar 路径解析，任何一环缺失 → XCTSkip（跳过而非失败）。
     private func makeLauncher() throws -> Launcher {
         let env = ProcessInfo.processInfo.environment
         let nodePath: String

@@ -1,5 +1,5 @@
 /**
- * Watcher self-diagnostics（仪表 I6/I16，plan §10）：描述符上的加法诊断字段必须
+ * Watcher self-diagnostics（仪表 I6/I16）：描述符上的加法诊断字段必须
  * 真实反映「丢帧/重连/follow 失败/分类构成」，让客户端与验收仪器**看见**而不是
  * 从沉默里推断；同时它必须是纯加法——不认识它的客户端读到的东西一字不变。
  *
@@ -18,7 +18,7 @@ import { baselineItem, sessionSurfaceFor } from './harness.ts'
 
 let activeSurface: ReturnType<typeof createChamberSessionState>
 
-/** Session-state surface harness (shared factory; 2026-12 audit F40). */
+/** Session-state surface harness (shared factory). */
 function surfaceFor(t: { after(fn: () => void): void }, observerOverrides: Partial<SessionStateObserverStatus> = {}) {
   return sessionSurfaceFor(t, { observerOverrides })
 }

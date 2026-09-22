@@ -1,6 +1,6 @@
 /**
- * The sidebar's copy for one source's settled-boot gap (2026-12, design 05 §4
- * 「降级呈现」second batch).
+ * The sidebar's copy for one source's settled-boot gap (design 05 §4
+ * 「降级呈现」).
  *
  * Kept OUT of `ServerSection.tsx` on purpose: the render file is JSX and cannot
  * be imported by the package's plain-node tests, so the decision (which
@@ -38,10 +38,9 @@ export function sourceBootGapNote(server: ChamberServerAggregate, t: Translate):
   const gap = server.bootGap
   if (gap === undefined) return ''
   // Payload extraction is the shared projection (shared/boot-gap-shape.ts): the
-  // exhaustiveness that used to live in this switch now lives there (a future
-  // ServerBootGapKind is a compile error at the shared function), and this switch
-  // maps the shape onto THIS package's keys.
-  // 2026-12 FIX 6: the LOCAL instance's 404/method-missing is a chamber-side
+  // exhaustiveness lives there (a future ServerBootGapKind is a compile error at
+  // the shared function), and this switch maps the shape onto THIS package's keys.
+  // The LOCAL instance's 404/method-missing is a chamber-side
   // installation/seed fact, so it gets its own sentence (no "upgrade that
   // source's runtime" advice — the copy boundary keeps that in the frame).
   const shape = bootGapShape(gap)

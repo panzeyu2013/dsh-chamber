@@ -2,10 +2,10 @@
 //  DownloadDestinationTests.swift
 //  DSHChamberTests
 //
-//  S-26（2026-12 对齐 Electron 默认下载）：静默落盘路径的纯决策面 + 源码锁步。
+//  静默落盘路径的纯决策面 + 源码锁步（对齐 Electron 默认下载）。
 //  Electron 全仓无 will-download/setSavePath ⇒ Chromium 默认静默写
-//  app.getPath('downloads')，重名按 " (1)" 去重、绝不弹保存面板；Swift 侧此前
-//  弹 NSSavePanel（可取消）。本文件把「静默 + 不覆盖 + 不弹面板」钉在代码上。
+//  app.getPath('downloads')，重名按 " (1)" 去重、绝不弹保存面板。本文件把
+//  「静默 + 不覆盖 + 不弹面板」钉在代码上。
 //
 import XCTest
 @testable import DSHChamber
@@ -122,7 +122,7 @@ final class DownloadDestinationTests: XCTestCase {
         XCTAssertTrue(directory?.path.hasPrefix("/") ?? false)
     }
 
-    // MARK: - 源码锁步：不再有保存面板，走静默落盘
+    // MARK: - 源码锁步：无保存面板，走静默落盘
 
     func testMainWindowControllerUsesSilentDownloadPathOnly() throws {
         let source = try source("Sources/DSHChamber/MainWindowController.swift")

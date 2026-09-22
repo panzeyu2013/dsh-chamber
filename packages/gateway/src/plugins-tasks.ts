@@ -1,14 +1,14 @@
 /**
- * A1 write-surface orchestrator (design 21 §6.2/§6.3; plan Phase 4.2-4.5
- * wiring): fuses the serial-queue executor (plugins-exec.ts, Phase 4.3), the
- * durable journal (plugins-journal.ts, Phase 4.2) and the installed-profile
- * projection (plugins-installed.ts, Phase 3a) behind the runtime-manager
- * single-writer lease (beginProfileWrite, Phase 4.1).
+ * A1 write-surface orchestrator (design 21 §6.2/§6.3): fuses the serial-queue
+ * executor (plugins-exec.ts), the
+ * durable journal (plugins-journal.ts) and the installed-profile
+ * projection (plugins-installed.ts) behind the runtime-manager
+ * single-writer lease (beginProfileWrite).
  *
  * Submit contract (install/remove/materialize):
  *   ① validate FIRST (whitelist family from the shared control-plane
- *      module + the shared protected-set/generation judgement (§6.11; the
- *      old reserved-name deny is retired) + per-kind spec family + — for
+ *      module + the shared protected-set/generation judgement (§6.11) +
+ *      per-kind spec family + — for
  *      remove — membership in the CURRENT installed projection), then
  *   ② acquire the managed profile-write lease via the runtime manager; a
  *      refused lease maps to the existing /chamber/runtime 409 family, and
@@ -100,12 +100,12 @@ export const DRAIN_DEADLINE_MS = 10 * 60 * 1000
  * forever. Everything else (queue/lease/runtime windows, missing manifest) is
  * retryable and stays deferred.
  *
- * `protected-set-unavailable` is deliberately NOT here (2026-09-13 round-2
- * review F4): it means the gateway could not derive the set yet — a runtime
+ * `protected-set-unavailable` is deliberately NOT here: it means the gateway
+ * could not derive the set yet — a runtime
  * lockfile that is momentarily unavailable, a workspace that does not resolve —
  * and both the HTTP mapping (`routes.ts`: 503, "the caller may retry once the
  * instance is up") and design 21 §6.11.3 call it a retryable gateway state.
- * Treating it as permanent deleted a queued install for good.
+ * Treating it as permanent would delete a queued install for good.
  */
 const PERMANENT_DRAIN_REFUSALS: ReadonlySet<PluginTaskRefusalCode> = new Set([
   'protected', 'needs-version', 'needs-exact-version', 'generation-mismatch',
@@ -121,9 +121,10 @@ export interface DeferredIntent {
   kind: 'install' | 'materialize'
   name: string
   spec?: string
-  /** Declared version (see JournalOp.version): dropping it here made a deferred
-   *  official-scope materialize un-drainable — R2 answered `needs-version` on
-   *  every ready edge and the intent stayed forever, silently (2026-12 review). */
+  /** Declared version (see JournalOp.version): without it a deferred
+   *  official-scope materialize is un-drainable — the submit gate answers
+   *  `needs-version` on every ready edge and the intent stays forever,
+   *  silently. */
   version?: string
   initiator?: string
 }
@@ -209,7 +210,7 @@ export interface ChamberPluginTasks {
    * failed (preImage retained). Called once by the wiring layer at
    * construction. A corrupt journal is NOT an empty one: the "no pending
    * operations carried over" judgement is suppressed and the unknown pending
-   * set is reported loudly (2026-12 audit A3-9). */
+   * set is reported loudly. */
   reconcileJournal(): void
   /** Boot-time staged-archive orphan sweep — called once by the wiring
    * layer right AFTER reconcileJournal, when the executor is idle and no
@@ -222,8 +223,7 @@ export interface ChamberPluginTasks {
    * references + in-flight work; referenced files are never touched.
    * Deletion is licensed ONLY by successfully read reference sources: an
    * unreadable manifest (oversized/symlinked/permissions) or a corrupt
-   * journal leaves references unknown and skips the sweep entirely
-   * (2026-12 audit A3-8/A3-9). */
+   * journal leaves references unknown and skips the sweep entirely. */
   sweepOrphanedStagedArchives(): void
   /** Validate → lease → enqueue (or defer), per the module header. Throws
    * ONLY on deferred-store persistence failure (the route maps that to 500
@@ -285,9 +285,9 @@ function validateSubmission(input: PluginTaskSubmitInput, deps: ChamberPluginTas
     // resolver throws): there are no family facts to be had. Judge with the
     // DEGRADED ladder (B₀ ∪ S + official-scope installs refused) instead of
     // skipping the judgement — a protected name must not sit in the deferred
-    // store until some later edge silently drops it (2026-12 review).
+    // store until some later edge silently drops it.
     // `manager.resolveWorkspace()` throws on corrupt override/pointer metadata
-    // (design 18), and that throw used to escape submit() as a 500.
+    // (design 18), and that throw must not escape submit() as a 500.
     let facts: { path: string; version: string | null } | null = null
     if (manager !== null) {
       try {
@@ -424,8 +424,8 @@ export function createChamberPluginTasks(deps: ChamberPluginTasksDeps): ChamberP
 
   /** Corruption observed on the deferred store by THIS instance (sticky): the
    * staged specs of the lost intents are unknown, so the boot sweep must not
-   * treat them as "nothing references those archives" (2026-12 audit A3-8
-   * class — the same read-source discipline as the profile manifest). */
+   * treat them as "nothing references those archives"
+   * (the same read-source discipline as the profile manifest). */
   let deferredStoreCorrupt = false
   /** Unresolved `deferred.json.corrupt-*` evidence from earlier runs. */
   let deferredPriorEvidence: string[] | null = null
@@ -543,7 +543,7 @@ export function createChamberPluginTasks(deps: ChamberPluginTasksDeps): ChamberP
     return true
   }
 
-  /** Projection masking (design 21 §6.2/decision 18, P2 review): gateway-
+  /** Projection masking (design 21 §6.2/decision 18): gateway-
    * local `file:` spec values (the materialize staging path) must never
    * leave this module toward the renderer — the readManifest discipline
    * applies to the tasks/deferred projections too. The mask keeps the
@@ -580,7 +580,7 @@ export function createChamberPluginTasks(deps: ChamberPluginTasksDeps): ChamberP
   }
 
   /** Kill one crash-orphaned mutation child recorded on a pending journal op
-   * (design 21 §6.3 P2 review): a gateway crash mid-mutation leaves the
+   * (design 21 §6.3): a gateway crash mid-mutation leaves the
    * detached `dsh plugin`/pnpm process group writing DSH_HOME. The group
    * (negative pid — the child is its leader) is killed first, then the pid
    * itself. Best effort; the reconcile never fails over a kill. */
@@ -757,7 +757,7 @@ export function createChamberPluginTasks(deps: ChamberPluginTasksDeps): ChamberP
       // one, but its pending-operation set — and with it every recorded
       // childPid — is UNKNOWN. Never claim "no pending operations carried
       // over" for it: say so loudly, and skip every judgement that would
-      // rest on "nothing is pending" (2026-12 audit A3-9).
+      // rest on "nothing is pending".
       const integrity = journal.integrity()
       const corrupt = integrity.state === 'corrupt'
       if (corrupt) {
@@ -774,7 +774,7 @@ export function createChamberPluginTasks(deps: ChamberPluginTasksDeps): ChamberP
       } else if (!corrupt) {
         log('plugins-tasks: journal reconciled; no pending operations carried over')
       }
-      // Crash-orphan reaping (design 21 §6.3 P2 review): a pending op that
+      // Crash-orphan reaping (design 21 §6.3): a pending op that
       // recorded a spawned child pid means the previous gateway process died
       // mid-mutation — its detached `dsh plugin`/pnpm child may still be
       // writing DSH_HOME. Kill it before any new mutation can start. Only
@@ -794,8 +794,8 @@ export function createChamberPluginTasks(deps: ChamberPluginTasksDeps): ChamberP
       //     edge — their archives must survive);
       //  3. live (non-terminal) journal ops' staged specs.
       // A reference set is trustworthy only when every source was READ
-      // successfully — "could not read it" is never "nothing references it"
-      // (2026-12 audit A3-8/A3-9). Delete nothing when a source is unknown.
+      // successfully — "could not read it" is never "nothing references it".
+      // Delete nothing when a source is unknown.
       const integrity = journal.integrity()
       if (integrity.state === 'corrupt') {
         warn(
@@ -922,7 +922,7 @@ export function createChamberPluginTasks(deps: ChamberPluginTasksDeps): ChamberP
       // file: spec values are masked in the outward projection (gateway-local
       // paths never reach the renderer — design 21 decision 18/§6.2) and
       // childPid (a LIVE HOST PROCESS id of a pending mutation) never leaves
-      // this module either (round-2 scan: projection hygiene).
+      // this module either.
       const tasks = journal.recent().map(op => {
         const projected = { ...op }
         delete projected.childPid
@@ -1043,7 +1043,7 @@ export function createChamberPluginTasks(deps: ChamberPluginTasksDeps): ChamberP
                 // A judgement that can never change (protected / needs-version /
                 // generation-mismatch / …) must not be retried forever in
                 // silence: drop the intent AND record the refusal as a failed op
-                // so the tasks projection tells the operator why (2026-12 review).
+                // so the tasks projection tells the operator why.
                 dropDeferredIntent(intent.id)
                 warn(`plugins-tasks: deferred ${intent.kind} ${intent.name} was refused (${result.code}): ${result.error}`)
                 recordRefusedIntent(intent, result)

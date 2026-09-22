@@ -35,7 +35,7 @@ export const FIBER_STATE: {
   UNLOADING: 5
 }
 
-/** C3 gate face (mirror of vendor-modules.d.ts ensureWebModuleSystem return slice). */
+/** Module-system gate face (mirror of vendor-modules.d.ts ensureWebModuleSystem return slice). */
 export function ensureWebModuleSystem(): {
   manifest: { plugins: Array<{ id: string; immediately?: boolean }> }
   prefetch(id: string): Promise<void>
@@ -44,7 +44,7 @@ export function ensureWebModuleSystem(): {
 export function __testSetBootError(value: string | undefined): void
 export function __testSetRunError(value: unknown | undefined): void
 export function __testSetModuleSystemError(value: unknown | undefined): void
-/** Make the C3 chamber prefetch reject (the shell gate swallows it). */
+/** Make the chamber prefetch reject (the shell gate swallows it). */
 export function __testSetChamberPrefetchError(value: unknown | undefined): void
 /** Gate the next chamber prefetch; release() lets the "eval" settle. */
 export function __testQueueChamberPrefetchGate(): { started: Promise<void>; release(): void }
@@ -61,7 +61,7 @@ export function __testSetSessionsAvailable(value: boolean): void
 export function __testSetSessionsReadError(value: unknown | undefined): void
 export function __testSetSessionsSnapshotError(value: unknown | undefined): void
 export function __testSetSessionsOpenError(value: unknown | undefined): void
-/** The failed boot's loader entries (T15 sweep face). */
+/** The failed boot's loader entries (sweep face). */
 export function __testSetLoaderEntries(
   value: ReadonlyArray<{ options: { name: string }; fiber?: { state: number } }> | undefined,
 ): void

@@ -1,6 +1,6 @@
 /**
- * update-store.ts module-level restart recovery-rule tests (design 11,
- * 2026-12 review round-2 coverage gap (a)) — node:test, no DOM.
+ * update-store.ts module-level restart recovery-rule tests (design 11) —
+ * node:test, no DOM.
  *
  * The module restart single-flight (mirroring the main process) is deliberately NOT
  * reset when main ACCEPTED a restart ({ok:true} — quitAndInstall armed). It MUST
@@ -11,7 +11,7 @@
  * DOM; tests install a fake window.dshChamber.update BEFORE importing a fresh module
  * instance (query-cache-busted) and drive the rule through the onChanged push.
  *
- * S-21 coverage: the「检查更新」invoke is module single-flight (one bridge edge per
+ * Coverage: the「检查更新」invoke is module single-flight (one bridge edge per
  * click across N-ctx shells), the page runs no discovery, and the snapshot mirrors
  * the shell-pushed phases (checking → available/up-to-date/error).
  */

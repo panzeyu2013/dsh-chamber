@@ -65,7 +65,7 @@ await build({
     // The loader module table evaluates the factory in a bare browser
     // scope — `module`/`exports` must be introduced explicitly (the
     // official tsdown client template does the same; without this,
-    // `module is not defined` kills the bundle at materialization, P1-B).
+    // `module is not defined` kills the bundle at materialization).
     js: `window.__ModuleLoader__.load({ id: ${JSON.stringify(ID)}, factory: (require) => {
 var module = { exports: {} }; var exports = module.exports;`,
   },

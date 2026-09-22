@@ -5,12 +5,12 @@
  * Why this exists: the managed `dsh plugin` CLI is a thin pnpm forwarder —
  * upstream spawns a literal `pnpm` from PATH and answers 127
  * ("pnpm not found on PATH") when the server has none
- * (`apps/cli/src/plugin.ts`, verified against the pinned dsh-v0.1.5-rc.2). The
+ * (`apps/cli/src/plugin.ts`). The
  * gateway ships the pinned pnpm as a bare `dist/pnpm/bin/pnpm.cjs` script (used
  * by the runtime installer through {@link resolvePnpmEntry}), which is not an
  * executable named `pnpm` and therefore invisible to a PATH lookup. A gateway
  * deployed on a host provisioned with npm alone could not seed or mutate the
- * managed profile at all (2026-09 audit, P1).
+ * managed profile at all.
  *
  * The shim is generated, not shipped: two tiny wrappers that exec the bundled
  * pnpm through the current node binary. The directory is derived from the

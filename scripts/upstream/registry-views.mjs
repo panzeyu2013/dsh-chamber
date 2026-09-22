@@ -8,7 +8,7 @@
  *   …（生成内容，禁止手改）…
  *   <!-- GENERATED:registry:touchpoints.fork-mirror.<name>:end -->
  *
- * 块 id 必须已在 `registry.generatedBlocks` 声明（P0 为空，P1 起为 5 个）：
+ * 块 id 必须已在 `registry.generatedBlocks` 声明：
  * 门只校验"已声明的块存在且逐字节一致"，未声明的块一律报错 —— 删掉标记不能把门关掉。
  *
  * 用法：

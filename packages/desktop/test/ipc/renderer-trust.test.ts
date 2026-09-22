@@ -163,10 +163,10 @@ test('fatal main-process boundary claims ownership before every hostile host cal
 })
 
 test('committed settings, registry and held-resume pushes use the non-throwing send boundary', () => {
-  // W-10 S1/S2/S9: pushSettingsChanged, the held-resume push and the updater state push moved into
-  // shell-core.installIpcHandlers (their send leaves now go through HostEdges rendererPush with the
-  // non-throwing attemptCommittedRegistryPush wrapper); the assertions read shell-core.ts and keep
-  // their intent unchanged. The remaining push anchors (instances / status) still live in main.ts.
+  // pushSettingsChanged, the held-resume push and the updater state push live in
+  // shell-core.installIpcHandlers (their send leaves go through HostEdges rendererPush with the
+  // non-throwing attemptCommittedRegistryPush wrapper); the assertions read shell-core.ts. The
+  // remaining push anchors (instances / status) still live in main.ts.
   const core = readFileSync(new URL('../../shell-core.ts', import.meta.url), 'utf8')
     + readFileSync(new URL('../../shell-ipc-update.ts', import.meta.url), 'utf8')
   const main = readFileSync(new URL('../../main.ts', import.meta.url), 'utf8')
@@ -178,9 +178,9 @@ test('committed settings, registry and held-resume pushes use the non-throwing s
 })
 
 test('renderer ACK deliveries project and preload-validates the captured lifecycle proof', () => {
-  // W-10 S2: DEEP_LINK_INTENT / NOTIFICATION_OPEN 的 send 源（drain 内投影构造）
-  // 随渲染器投递队列迁入 shell-core——fingerprint 投影断言的读取源指向
-  // shell-core.ts（意图保留：payload 只带非秘密投影字段）。
+  // DEEP_LINK_INTENT / NOTIFICATION_OPEN 的 send 源（drain 内投影构造）位于
+  // shell-core——fingerprint 投影断言的读取源指向 shell-core.ts（payload 只带
+  // 非秘密投影字段）。
   const core = readFileSync(new URL('../../shell-core.ts', import.meta.url), 'utf8')
   const preload = readFileSync(new URL('../../preload.cts', import.meta.url), 'utf8')
   assert.match(core, /IPC_CHANNELS\.DEEP_LINK_INTENT[\s\S]*?sourceFingerprint: intent\.sourceFingerprint/)

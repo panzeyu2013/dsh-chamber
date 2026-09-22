@@ -55,7 +55,7 @@ function fakeSession() {
   return session
 }
 /** Capture what the driver writes to the console by swapping `console.*` — NOT `process.stdout.write`,
- *  which under `node --test` carries the runner's own per-test report (2026-12 review). */
+ *  which under `node --test` carries the runner's own per-test report. */
 async function captureConsole(run) {
   const original = { log: console.log, warn: console.warn, error: console.error }
   const lines = []
@@ -159,7 +159,7 @@ test('--ws-frames off collects nothing and writes no frame file', async t => {
 test('the fail-soft no-target path still writes a report and still scrubs', async t => {
   // The URL the user typed is what this report persists, so it must carry a credential in a position
   // the regexes CANNOT see: a path segment. A `?token=` one is masked even without the secrets list,
-  // which made dropping the `secrets:` argument invisible (2026-12 mutation M31).
+  // which would make dropping the `secrets:` argument invisible.
   const { outDir, stdout, result } = await runCase(t, {
     target: null,
     url: 'https://gw.example/path/SECRET_ENV_TOKEN',
@@ -180,7 +180,7 @@ test('--require-run turns an unmounted page into FAIL (M-1 and the geometry legs
   session.evaluate = async expression => (expression.includes('#root')
     ? false
     : { url: 'http://127.0.0.1:9/', title: 'fake', innerWidth: 390, innerHeight: 844, clientWidth: 390, clientHeight: 844,
-        // Unmeasurable overflow (`overflowVerdict` returns ok:null): only the --require-run gate turns M-3 into a FAIL (2026-12 mutation M34).
+        // Unmeasurable overflow (`overflowVerdict` returns ok:null): only the --require-run gate turns M-3 into a FAIL.
         scrollWidth: null, scrollHeight: null, visualViewport: { width: 390, height: 844, scale: 1 }, dpr: 3,
         screenWidth: 390, maxTouchPoints: 5, ontouchstart: true, pointerCoarse: true, pointerFine: false,
         hoverNone: true, anyPointerCoarse: true, touchTier: true, phoneTier: true, rootSlots: 0, mobileFrames: 0,

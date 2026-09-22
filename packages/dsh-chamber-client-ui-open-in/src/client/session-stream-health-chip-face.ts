@@ -1,12 +1,11 @@
 /**
- * The stream-health chip's VISIBLE surface as pure decisions (design 14 §D4,
- * 2026-09-21 review).
+ * The stream-health chip's VISIBLE surface as pure decisions (design 14 §D4).
  *
  * WHY THIS IS A MODULE. The chip is the user's only recovery surface, but this
  * package has no React/DOM test environment (no jsdom, and the repo forbids
  * adding one for this): a behaviour mutation inside the component — a flipped
  * action branch, a notice that renders no button, a ticker that stops re-planning
- * — used to be invisible to every test. These three pure functions are the whole
+ * — would be invisible to every test. These three pure functions are the whole
  * visible surface, so they can be pinned behaviourally, and the component is a
  * thin projection of them.
  */

@@ -6,7 +6,7 @@ import react from '@vitejs/plugin-react'
 import { applyVendorPatches } from './scripts/vendor-patches.mjs'
 
 /**
- * dsh-chamber renderer build (design 05 §2/§3.6, v4).
+ * dsh-chamber renderer build (design 05 §2/§3.6).
  *
  * The frontend is the dsh official web frontend, source-reused and self-built:
  * the shell entry (`index.html` → `src/main.tsx`) hosts the chamber chrome
@@ -39,19 +39,6 @@ function rejectStandaloneServe() {
 }
 
 /**
- * @deepseek-ai/* workspace resolution to SOURCE (mirrors apps/web's alias
- * list, extended to every package the chamber bundle imports). The vendor
- * tree (`vendor/harness-packages/@deepseek-ai`) is a read-only directory of
- * symlinks into the external dsh checkout; the chamber-copied packages
- * (connection, web, api-gateway — the only dsh source we may modify) resolve
- * to our copies. Subpaths map onto the source tree by convention
- * (`<pkg>/client` → `src/client/index.ts`, …). Every other @deepseek-ai/*
- * package — including the dsh-v0.1.2-alpha.1 provider group
- * (dsh-client-store, api-session-controller, api-workspace-controller,
- * ui-session, ui-chat, ui-approval) — resolves through the generic vendor
- * fallback below.
- */
-/**
  * Bare (non-workspace) npm specifiers imported from vendor source: node
  * resolution walks up from the vendor directory (the external dsh checkout,
  * which carries no node_modules), so every such import is resolved from the
@@ -78,6 +65,19 @@ function npmFallback() {
   }
 }
 
+/**
+ * @deepseek-ai/* workspace resolution to SOURCE (mirrors apps/web's alias
+ * list, extended to every package the chamber bundle imports). The vendor
+ * tree (`vendor/harness-packages/@deepseek-ai`) is a read-only directory of
+ * symlinks into the external dsh checkout; the chamber-copied packages
+ * (connection, web, api-gateway — the only dsh source we may modify) resolve
+ * to our copies. Subpaths map onto the source tree by convention
+ * (`<pkg>/client` → `src/client/index.ts`, …). Every other @deepseek-ai/*
+ * package — including the provider group
+ * (dsh-client-store, api-session-controller, api-workspace-controller,
+ * ui-session, ui-chat, ui-approval) — resolves through the generic vendor
+ * fallback below.
+ */
 function deepseekSource() {
   return {
     name: 'dsh-chamber-deepseek-source',
@@ -101,7 +101,7 @@ function deepseekSource() {
       const pick = (...cands) => cands.find((c) => c !== undefined && existsSync(c))
       const real = (p) => realpathSync(p)
       if (name === 'dsh-client-connection' || name === 'dsh-client-web' || name === 'dsh-api-gateway') {
-        // The chamber-copied packages (connection, web, and the dsh-v0.1.2-alpha.1
+        // The chamber-copied packages (connection, web, and the
         // api-gateway fork with the per-entry base-path patch) resolve to OUR
         // copies, shadowing the vendor package of the same name. Same source
         // layout for all three: `index.ts` at the package root, `client/` for
@@ -220,7 +220,7 @@ export default defineConfig({
         },
       },
     },
-    // P2-4 (STATUS): renderer output is isolated under dist/web so a
+    // Renderer output is isolated under dist/web so a
     // standalone `build:renderer` can never wipe sibling desktop artifacts
     // (preload.cjs / control-plane / host packages) that share dist/.
     outDir: '../desktop/dist/web',
@@ -261,12 +261,11 @@ export default defineConfig({
       // 05 §5) resolves to source the same way.
       { find: /^@dsh-chamber\/dsh-chamber-client-ui-settings-connections$/, replacement: src('../dsh-chamber-client-ui-settings-connections/src/index.ts') },
       { find: /^@dsh-chamber\/dsh-chamber-client-ui-settings-connections\/client$/, replacement: src('../dsh-chamber-client-ui-settings-connections/src/client/index.ts') },
-      // The chamber self-built settings SHELL plugin (design discussion
-      // 2026-08) resolves to source the same way.
+      // The chamber self-built settings SHELL plugin resolves to source the same way.
       { find: /^@dsh-chamber\/dsh-chamber-client-ui-settings-bridge$/, replacement: src('../dsh-chamber-client-ui-settings-bridge/src/index.ts') },
       { find: /^@dsh-chamber\/dsh-chamber-client-ui-settings-bridge\/client$/, replacement: src('../dsh-chamber-client-ui-settings-bridge/src/client/index.ts') },
       // The settings shell embeds the connections section component directly
-      // (stable `./section` exports subpath — A6; explicit alias so the
+      // (stable `./section` exports subpath; explicit alias so the
       // resolution does not ride the generic npm fallback).
       { find: /^@dsh-chamber\/dsh-chamber-client-ui-settings-connections\/section$/, replacement: src('../dsh-chamber-client-ui-settings-connections/src/client/ConnectionsSection.tsx') },
       // CSS `@import` of workspace stylesheets bypasses the resolveId plugin
@@ -281,7 +280,7 @@ export default defineConfig({
     'process.versions.node': '"0.0.0"',
     'process.execArgv': '[]',
     'process.env.CORDIS_SHARED': 'undefined',
-    // rc.8 (design 09 §4): ui-brand-official gates its official brand fills on
+    // design 09 §4: ui-brand-official gates its official brand fills on
     // `DSH_CLIENT_BUILD_PROFILE === 'official'` ("other builds load the plugin
     // but register no occupants" — the package contract). The chamber
     // self-build is not the official profile: define it away so the gate

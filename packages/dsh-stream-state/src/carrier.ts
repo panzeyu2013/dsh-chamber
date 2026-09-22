@@ -1,5 +1,5 @@
 /**
- * The carrier lifecycle reducer (refactor plan Phase A2 / node B1).
+ * The carrier lifecycle reducer.
  *
  * WHY THIS EXISTS. In the current wiring three different levers can replace the
  * same physical socket (open-frame silent-socket escalation, opening-stall
@@ -15,11 +15,8 @@
  * imports anything: the executor owns sockets, the Swift mirror owns its own
  * copy of these tables.
  *
- * Behavior-change ledger (refactor plan section 3, BEHAVIOR_CHANGES):
- *   BC-1 (node B1) - an allowed event during an in-flight rebuild used to
- *   silently re-drive a second `replaceSocket`. Here it produces a `throttled`
- *   effect and NO second rebuild. Deliberate; the old behavior is the defect
- *   recorded in the stream-carrier audit (replaceSocket dropping the candidate).
+ * An allowed rebuild request during an in-flight rebuild produces a `throttled`
+ * effect and NO second rebuild.
  */
 import type {
   CarrierEnv,
@@ -45,7 +42,7 @@ export function decideRebuild(state: CarrierState, env: CarrierEnv, at: number):
   // A clock we cannot reason about NEVER authorizes a replacement. Every comparison
   // below is a ratio against `at`, and NaN makes all of them false - so without this
   // guard an unusable timestamp would SLIP THROUGH the throttle and rebuild on every
-  // call (the retired predicate failed safe here; this preserves it).
+  // call.
   if (!Number.isFinite(at)) return false
   if (state.phase === 'closed') return false
   if (state.pendingRebuild !== null && at - latestRebuildAt(state) < env.inFlightGraceMs) return false
@@ -122,20 +119,17 @@ export function reduceCarrier(state: CarrierState, event: CarrierEvent, env: Car
     case 'rebuildRequested': {
       const reason: RebuildReason = event.reason ?? 'laneReconnect'
       // A frame-answering socket is protected by the streak THRESHOLD, not by the
-      // throttle: the legacy else-branch escalated on a single miss as soon as the
-      // time-based cooldown allowed it (DIVERGENCE D-5). A first-miss stall is
-      // therefore not a rebuild request at all - it stays an episode-level reopen.
+      // throttle: a first-miss stall is not a rebuild request at all - it stays an
+      // episode-level reopen.
       // INVARIANT (no exitless spinner): whatever the verdict, a rebuild request
       // must produce a path forward for the calling episode. Denied requests reopen
-      // their logical stream - exactly what the legacy retry lane did by failing the
-      // inbox - so "not escalating" is never "doing nothing".
+      // their logical stream, so "not escalating" is never "doing nothing".
       const reopen = (why: string): RecoveryEffect[] =>
         event.streamId === undefined
           ? []
           : [{ e: 'reopenLogicalStream', streamId: event.streamId, reason: why }]
       // An unusable streak must not clear the threshold either: NaN is neither below
-      // nor above it, so a bare `<` would let it through (the retired predicate
-      // rejected non-finite counts; this preserves that).
+      // nor above it, so a bare `<` would let it through.
       if (reason === 'openingStall' && !isStallProven(event.streak, env.openingStallStreak)) {
         return {
           state,
@@ -170,8 +164,7 @@ export function reduceCarrier(state: CarrierState, event: CarrierEvent, env: Car
     case 'episodeClosed': {
       // The episode's lifetime ends here. Any in-flight claim it left on the
       // carrier is released, so a retired stream can never block its successor
-      // from rebuilding (the legacy endpoint-digest key had no owner: DIVERGENCE
-      // D-4). A rebuild that is already connected is unaffected - only the
+      // from rebuilding. A rebuild that is already connected is unaffected - only the
       // in-flight marker is episode-scoped.
       const id = event.episodeId
       if (id === undefined) return { state, effects: [] }

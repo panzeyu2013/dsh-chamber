@@ -1,7 +1,7 @@
 /**
- * Shared harness for the split /chamber/runtime route suites: fake plane,
+ * Shared harness for the /chamber/runtime route suites: fake plane,
  * stateDir config, route runner, settle pollers, the derived probe set and a
- * valid runtime tree fixture. Extracted verbatim from runtime-routes.test.ts.
+ * valid runtime tree fixture.
  */
 
 import assert from 'node:assert/strict'
@@ -115,13 +115,12 @@ export async function waitForMutationSettle(manager: { mutationInProgress(): boo
   assert.equal(manager.mutationInProgress(), false, 'runtime mutation did not settle before the test deadline')
 }
 
-/** 2026-12 Phase 3 shape gate (design 24 §7 C, M2): the manager derives the
- * expected probe set per spawn from the seed cache's ACTUALLY PRESENT
- * chamber host packages (syncedHostDomainProbeNames — the per-package
- * derivation that replaced the binary hasSyncedHostSeed gate). The fake
- * host answers exactly the derived set the real dsh would serve: test
- * stateDirs start with no cache (reduced base set); the full-flip fixture
- * seeds every registry package (full 7-name closed set). */
+/** Probe shape (design 24 §7 C): the manager derives the expected probe set
+ * per spawn from the seed cache's ACTUALLY PRESENT chamber host packages
+ * (syncedHostDomainProbeNames — the per-package derivation). The fake host
+ * answers exactly the derived set the real dsh would serve: test stateDirs
+ * start with no cache (reduced base set); the full-flip fixture seeds every
+ * registry package (full 7-name closed set). */
 export function probeResultsFor(stateDir: string): readonly string[] {
   return activationProbeNamesForDomains(syncedHostDomainProbeNames(stateDir))
 }

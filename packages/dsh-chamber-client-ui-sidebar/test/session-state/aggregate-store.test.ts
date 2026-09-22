@@ -28,7 +28,7 @@ test('requestSessionListRefresh 逐监听器隔离：一个抛错不得中断守
     unsubscribeBad()
     unsubscribeGood()
   }
-  // 若广播在第一个抛错监听器处中断，守卫的 L1 请求就永远送不到 producer ⇒ 拿不到回执 ⇒ 假 L2/假横幅（2026-12 三轮复核）。
+  // 若广播在第一个抛错监听器处中断，守卫的 L1 请求就永远送不到 producer ⇒ 拿不到回执 ⇒ 假 L2/假横幅。
   assert.deepEqual(seen, ['isolation-source'])
 })
 
@@ -158,7 +158,7 @@ test('session-list refresh requests broadcast to every subscriber with the sourc
 })
 
 test('workspace-created facts fan out with their host identity and unsubscribing stops delivery', () => {
-  // 2026-12 field report problem 2: the sidebar owns the create flow, so this one-way fact is the
+  // The sidebar owns the create flow, so this one-way fact is the
   // ONLY "that workspace now exists on that host" signal without a mounted shell (the unary
   // fallback cannot express an empty workspace at all).
   const seen: string[] = []
@@ -174,9 +174,9 @@ test('workspace-created facts fan out with their host identity and unsubscribing
 })
 
 test('workspace-created facts carry the optional placement anchor and title hint through unchanged', () => {
-  // 2026-12 第二入口：Git worktree create 的位置锚点（新行紧跟其主 checkout）与 adopt 的标题
-  // 提示（分支名）。事实通道只做透传——App 层据此插行/取标题；缺省保持"追加到尾部 +
-  // 路径 basename"的旧行为。
+  // Git worktree create 的位置锚点（新行紧跟其主 checkout）与 adopt 的标题
+  // 提示（分支名）。事实通道只做透传——App 层据此插行/取标题；缺省为"追加到尾部 +
+  // 路径 basename"。
   const anchors: (string | undefined)[] = []
   const titles: (string | undefined)[] = []
   const off = chamberBridge.onWorkspaceCreated(fact => { anchors.push(fact.afterWorkspaceId); titles.push(fact.title) })
@@ -188,7 +188,7 @@ test('workspace-created facts carry the optional placement anchor and title hint
 })
 
 test('workspace-removal and workspace-rename facts fan out and unsubscribe exactly like the create fact', () => {
-  // 2026-09-11 review S3: the withdraw/patch halves of the workspace echo — the only way an echo
+  // The withdraw/patch halves of the workspace echo — the only way an echo
   // row can be retired or re-titled while its source stays unmounted.
   const removed: string[] = []
   const renamed: string[] = []
@@ -224,8 +224,8 @@ test('the active-view fact publishes on change only, and undefined is a real val
 })
 
 test('producer registration is boot-generation fenced (a late older boot cannot steal the token)', () => {
-  // 2026-12 复查 BLOCKER：一个挂死后恢复的老 boot 若在健康后继注册之后再注册，旧实现会让它夺走
-  // token，其 teardown clear() 随即清空后继的通道。
+  // 一个挂死后恢复的老 boot 若在健康后继注册之后再注册，不得让它夺走
+  // token —— 其 teardown clear() 会随即清空后继的通道。
   const sourceId = 'ssh-producer-fence'
   const fingerprint = 'f'.repeat(64)
   const { seen, dispose } = fencedStore(sourceId)
@@ -248,7 +248,7 @@ test('producer registration is boot-generation fenced (a late older boot cannot 
 
 test('the generation fence is order-independent for equal generations and re-arms after a clear', () => {
   // 同级重注册必须胜出（重试同代/非 chamber 挂载）；被清理过的来源必须可以再次注册（否则
-  // 一次 clear 会永久封死该源；2026-12 复查 NIT）。
+  // 一次 clear 会永久封死该源）。
   const sourceId = 'ssh-producer-fence-2'
   const { seen, dispose } = fencedStore(sourceId)
   try {

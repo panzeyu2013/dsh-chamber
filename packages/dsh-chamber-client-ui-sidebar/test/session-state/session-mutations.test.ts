@@ -1,12 +1,12 @@
 /**
  * session-mutations.ts 行为测试（design 05 §2.2 唯一事实出口，会话侧）。
  *
- * 出口的运行时契约（原先配对的 renderer source-text 接线锁已按 2026-12 裁决退役）：事实在 wire
+ * 出口的运行时契约：事实在 wire
  * **成功之后**才发布，携带宿主返回的 session id（权威）与 workspaceId /
  * blank 事实；fork 携带 parentSessionId 与 blank:false（子会话继承内容），标题提示缺省时字段
  * 不出现（稀疏）；归档发布撤下事实；wire 失败（业务失败或抛错）**不发布任何事实**，也不吞掉失败。
  *
- * 打桩方式（沿用原 workspace-mutations.test.ts 的做法）：getInstanceClient 按 instanceId 缓存同一个
+ * 打桩方式：getInstanceClient 按 instanceId 缓存同一个
  * InstanceApiClient，直接替换该缓存对象的 session/workspace 面。
  */
 import { test } from 'node:test'
@@ -107,8 +107,8 @@ test('a failed wire publishes NOTHING (the echo must never outrun the host)', as
   } finally { facts.off(); releaseInstanceClient(sourceId) }
 })
 
-// ---- workspace create funnel (consolidated from workspace-mutations.test.ts;
-//      same stubbing style, so the two funnels share one harness file) ----
+// ---- workspace create funnel (same stubbing style, so the two funnels
+//      share one harness file) ----
 
 test('createWorkspaceForSource publishes the HOST identity (id + canonical path) with the requested anchor', async () => {
   const sourceId = 'funnel-workspace-identity'

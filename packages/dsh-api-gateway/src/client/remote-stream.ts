@@ -1,6 +1,6 @@
 /**
  * Reconnecting lifecycle for one single-consumer Remote stream.
- * chamber fork patch (design 14 §D4): carrier failures inside a LIVE connection
+ * (design 14 §D4): carrier failures inside a LIVE connection
  * generation are paced and reopened with a bounded backoff instead of escaping
  * as a terminal stream error. Upstream threw the carrier error on the second
  * rapid failure (`waitForRemoteStreamRetry`); the gateway wrapped it as
@@ -21,8 +21,8 @@ import {
 import { RemoteStreamCarrierError } from './stream-client.ts'
 import { withDeadline } from '@dsh-chamber/dsh-stream-state'
 
-/** The real clock, injected: the package itself imports nothing. Only the bound's
- *  SCHEDULING moves to the primitive; the bound's VALUE stays the local constant. */
+/** The real clock, injected: the package itself imports nothing. The bound's
+ *  SCHEDULING lives in the primitive; its VALUE stays the local constant. */
 const RETRY_SCHEDULER = {
   setTimeout: (run: () => void, ms: number): unknown => setTimeout(run, ms),
   clearTimeout: (handle: unknown): void => { clearTimeout(handle as ReturnType<typeof setTimeout>) },
@@ -158,8 +158,8 @@ export class RemoteStream<Item> implements AsyncIterable<RemoteStreamItem<Item>>
           attempt++
           try {
             const retryOutcome = await waitForRemoteStreamRetry(this.connection, attempt, signal)
-            // chamber (): the retry lane's wait for a
-            // live generation is now bounded; when the bound fires, the reopen
+            // The retry lane's wait for a
+            // live generation is bounded; when the bound fires, the reopen
             // below is the recovery attempt and the state is published on the
             // SAME seam a carrier loss uses, so the page fact (and the health
             // arm reading it) sees "waiting with no progress" instead of an
@@ -203,7 +203,7 @@ type RemoteStreamRetryOutcome = 'generation' | 'expired'
  * Pace the next reopen after a carrier failure.
  * - LIVE generation (the connection lane is up): wait the bounded episode
  *   backoff and reopen. A second failure is still a transport hiccup — it must
- *   NOT escape as a terminal stream outcome (the chamber fork patch).
+ *   NOT escape as a terminal stream outcome.
  * - NO generation: wait for the connection to publish one, **bounded** by
  *   {@link REMOTE_STREAM_NO_GENERATION_WAIT_MAX_MS}. Upstream waited without a
  *   timer, so a parked lane parked every logical stream on this page forever
@@ -229,11 +229,11 @@ async function waitForRemoteStreamRetry(
     if (delayMs > 0) await delayRemoteStreamRetry(delayMs, signal)
     return 'generation'
   }
-  //  (W1): this is a PUSH wait, not a poll - the generation announcement arrives
+  //  this is a PUSH wait, not a poll - the generation announcement arrives
   // through `subscribe`, so the condition must never be re-inspected on a timer
   // (waitForCondition would delay detection by up to one poll interval). The shared
   // primitive therefore wraps the SUBSCRIPTION as the operation and races it against
-  // the same single bound as before; abort keeps rejecting, expiry keeps resolving
+  // the same single bound; abort keeps rejecting, expiry keeps resolving
   // 'expired', and dispose still runs on every path.
   let dispose: (() => void) | undefined
   let onAbort: (() => void) | undefined

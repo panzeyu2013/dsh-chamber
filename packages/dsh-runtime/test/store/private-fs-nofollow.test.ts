@@ -1,11 +1,11 @@
 /**
- * Platform no-follow strategy unit tests (S1 / D3+D4). POSIX must keep the
- * historical O_NOFOLLOW/O_DIRECTORY flags byte-for-byte; a host whose constants
+ * Platform no-follow strategy unit tests. POSIX must keep the
+ * O_NOFOLLOW/O_DIRECTORY flags byte-for-byte; a host whose constants
  * lack O_NOFOLLOW (win32) must resolve portable flags instead of throwing,
  * while the shared open helper still refuses a symlinked final component
  * through lstat identity checks immediately before and after the open. Both
  * branches run on every host through the injectable constants seam.
- * The two fallback symlink refusals share one fixture table (2026-12 trim).
+ * The two fallback symlink refusals share one fixture table.
  *
  * Run directly: node packages/dsh-runtime/test/store/private-fs-nofollow.test.ts
  */

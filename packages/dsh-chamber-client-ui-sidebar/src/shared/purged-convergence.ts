@@ -4,7 +4,7 @@
  * give-up behaviour is node-testable without a plugin host (the producer
  * itself imports React/CSS and cannot be imported by a node test).
  *
- * WHY A CHAIN AND NOT A SINGLE refresh() CALL (2026-09 修正轮 review findings):
+ * WHY A CHAIN AND NOT A SINGLE refresh() CALL:
  *   - the OFFICIAL refresh is single-flight (`SessionManager.refreshList`
  *     returns the in-flight promise), so a request that collides with a
  *     pre-purge pull resolves with the STALE response and schedules no
@@ -16,11 +16,10 @@
  *     official single-flight then hands the same hung promise to every later
  *     caller), so each attempt is raced with a watchdog.
  *
- * TERMINATION = AUTHORITATIVE PROBE, NOT "resolved" (2026-09 review rounds):
+ * TERMINATION = AUTHORITATIVE PROBE, NOT "resolved":
  * `refreshList` resolving does NOT prove the summaries are authoritative — it
  * also resolves on a failed pull and for a joined stale single-flight caller —
- * so a resolve can never release a suppression (an early revision did, and the
- * closure review proved it re-opened the ghost-row bug). When the bounded
+ * so a resolve can never release a suppression. When the bounded
  * refresh attempts leave ids listed, the chain therefore consults an
  * INDEPENDENT authoritative row source (`probe`: the chamber's own unary
  * `session.list`, a fresh per-call disk rescan that has neither the official
@@ -80,7 +79,7 @@ export interface PurgedConvergenceDeps {
    * One official session-list refresh. MUST be invoked as a method on the
    * service object (`service.refresh()`): `ClientSessions.refresh` is a
    * prototype method reading `this.manager`, so a detached call throws
-   * TypeError (2026-09 review BLOCKER — the §12 seam never actually ran).
+   * TypeError.
    * Returns undefined when the official client exposes no refresh face.
    */
   refresh: () => Promise<unknown> | undefined
@@ -112,7 +111,7 @@ export interface PurgedConvergenceChain {
   /**
    * Start (or join) the chain. A request arriving while the chain is running
    * is coalesced into it — the attempt budget is per purge, not per request
-   * (2026-09 review MINOR: a bridge request must not restart the bound).
+   * (a bridge request must not restart the bound).
    */
   converge(): void
   /** Cancel any pending timer; a settled attempt issues nothing further. */
@@ -140,9 +139,9 @@ export function createPurgedConvergence(deps: PurgedConvergenceDeps): PurgedConv
   let timer: unknown
   let watchdog: unknown
   // Terminal probes own PER-PROBE watchdog handles (a set, not one shared
-  // slot): reusing a single slot let a probe that outlived its own watchdog
-  // clear a LATER attempt's — or a LATER PROBE's — watchdog, wedging the chain
-  // active forever (2026-09 scan MAJOR-1 + final-verify finding 3).
+  // slot): a single shared slot would let a probe that outlived its own
+  // watchdog clear a LATER attempt's — or a LATER PROBE's — watchdog, wedging
+  // the chain active forever.
   const probeWatchdogs = new Set<unknown>()
 
   const clearTimer = (): void => {
@@ -182,8 +181,8 @@ export function createPurgedConvergence(deps: PurgedConvergenceDeps): PurgedConv
       : `the official refresh produced no authoritative answer after ${attempt} attempt(s)`
     // Snapshot the suppression set BEFORE the probe: an id tombstoned while
     // the probe is in flight must NOT be judged against a probe answer that
-    // predates it (2026-09 scan MINOR-3 — a stale probe could release a
-    // genuinely purged id and re-emit its row).
+    // predates it (a stale probe could release a genuinely purged id and
+    // re-emit its row).
     const lingering = deps.lingering()
     if (lingering.length === 0) {
       finish()
@@ -249,8 +248,7 @@ export function createPurgedConvergence(deps: PurgedConvergenceDeps): PurgedConv
 
   /**
    * Settle one attempt. `settledAttempt` fences late settlements: an attempt
-   * that already timed out must not be judged as — or terminate — a later one
-   * (2026-09 closure-review D2).
+   * that already timed out must not be judged as — or terminate — a later one.
    */
   const settle = (settledAttempt: number, outcome: ConvergenceOutcome): void => {
     if (disposed || !running || settledAttempt !== attempt) return

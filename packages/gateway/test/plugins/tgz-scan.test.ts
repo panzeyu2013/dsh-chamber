@@ -1,5 +1,5 @@
 /**
- * tgz-scan tests (design 21 §6.2 materialize upload caps; plan Phase 4.4):
+ * tgz-scan tests (design 21 §6.2 materialize upload caps):
  * the bounded incremental gunzip + ustar header scan — entry/name/size
  * accounting, PAX counting, the two cap refusals (≤ 4096 entries, ≤ 256 MiB
  * unpacked incl. padding), end-marker early exit and the corrupt family
@@ -47,9 +47,9 @@ test('scan: projects the npm-pack manifest identity (bounded) or says why it can
 })
 
 test('scan: the manifest capture closes at the end of its entry data area', async () => {
-  // The audit's end-to-end shape: a real desktop-built archive carries files
-  // ordered AFTER `package/package.json` (here `package/zzz.bin`) — the
-  // capture must not swallow their data into the manifest JSON.
+  // A real desktop-built archive carries files ordered AFTER
+  // `package/package.json` (here `package/zzz.bin`) — the capture must not
+  // swallow their data into the manifest JSON.
   const manifest = JSON.stringify({ name: 'capture-close-pkg', version: '2.3.4' })
   const tgz = buildTgz([
     { name: 'package/package.json', data: manifest },

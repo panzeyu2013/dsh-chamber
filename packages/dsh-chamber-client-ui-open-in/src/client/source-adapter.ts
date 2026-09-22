@@ -8,16 +8,16 @@
  *    machine half describes the MACHINE, so every source sees it; which of
  *    those apps a source may use is decided by the view-model (a remote-ssh
  *    source keeps only what the main provider declares `remoteCapable`, which
- *    is why its VS Code mark is now the machine's real icon);
+ *    is why its VS Code mark is the machine's real icon);
  *  - **per-entry channel routing**: local entries call the host domain over the
  *    machine catalog's transport (the page-level instance client for `local` —
  *    same wire, cookie and trust fence as the local source's own entry); main
  *    entries ride the trusted preload IPC with the exact-boot source proof;
  *  - the persisted app choice.
  *
- * Icons are NOT cached here any more (2026-09-12): the machine catalog owns the
- * page-level boot cache for ids and icons, because they are machine facts — a
- * per-source copy would re-fetch the same pixels once per attached source.
+ * Icons are NOT cached here: the machine catalog owns the page-level boot cache
+ * for ids and icons, because they are machine facts — a per-source copy would
+ * re-fetch the same pixels once per attached source.
  *
  * The React entry only consumes the resulting view-model plus this face, so the
  * routing rules are unit-testable without React, the DOM or a real instance.

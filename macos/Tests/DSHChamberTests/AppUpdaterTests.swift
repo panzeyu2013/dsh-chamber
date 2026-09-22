@@ -2,7 +2,7 @@
 //  AppUpdaterTests.swift
 //  DSHChamberTests
 //
-//  S-01 / 2026-12 裁决「D-1 选 B」：原生壳的应用内更新器（Sparkle 2）装配判据、
+//  原生壳的应用内更新器（Sparkle 2）装配判据、
 //  App 菜单面与两条 edge 腿。GUI/网络腿（真实 appcast、Sparkle 窗口、安装）属实机
 //  验收，单测只钉判据与诚实降级。
 //
@@ -11,7 +11,7 @@ import XCTest
 
 final class AppUpdaterTests: XCTestCase {
     /// 增量更新观测面：shell.log 必须记录 Sparkle 实际选择的产物（`*.delta` vs 整包 zip），
-    /// 实机验收据此判断「相邻版本走增量、跳版本回退整包」。
+    /// 据此可判断「相邻版本走增量、跳版本回退整包」。
     func testDownloadArtifactNameDistinguishesDeltaFromFullArchive() {
         XCTAssertEqual(
             AppUpdater.downloadArtifactName(URL(string: "https://github.com/o/r/releases/download/x/dsh-chamber1.0.0.999999999-0.9.0.999999999.delta")),
@@ -25,7 +25,7 @@ final class AppUpdaterTests: XCTestCase {
         XCTAssertEqual(AppUpdater.downloadArtifactName(nil), "unknown", "缺 URL 时既不崩也不伪造文件名")
     }
 
-    /// emission 本身也要钉住：helper 留着但 shellLog 调用被删，实机验收的证据行会静默消失。
+    /// emission 本身也要钉住：否则 helper 还在，证据行却会静默消失。
     func testDownloadLogLineIsTheObservableEvidence() {
         XCTAssertEqual(
             AppUpdater.downloadLogLine(
@@ -62,7 +62,7 @@ final class AppUpdaterTests: XCTestCase {
         XCTAssertEqual(config?.publicKey, "abc=")
         XCTAssertEqual(config?.automaticChecks, true)
         XCTAssertEqual(config?.checkInterval, 21600)
-        // 解析缺省仍是 false（键缺失时的防御缺省）；正式装配模板显式声明 true（D9）。
+        // 解析缺省仍是 false（键缺失时的防御缺省）；正式装配模板显式声明 true。
         let bare = AppUpdater.configuration(from: [
             "SUFeedURL": "https://example.com/appcast-swift.xml",
             "SUPublicEDKey": "abc=",
@@ -102,7 +102,7 @@ final class AppUpdaterTests: XCTestCase {
         if case .object(let dict)? = capability.result, case .bool(let available)? = dict["available"] {
             XCTAssertFalse(available,
                            "未装配 → sidecar 必须看到 available=false（保持 blocked-available）")
-            // S-38：能力面必须携带诚实原因，sidecar 据此记录真实失败而不是只看到一个 false。
+            // 能力面必须携带诚实原因，sidecar 据此记录真实失败而不是只看到一个 false。
             XCTAssertEqual(dict["error"], .string("native-updater-unavailable"))
         } else {
             XCTFail("updateNativeCapability 必须回 {available: bool}（实际 \(String(describing: capability.result))）")
@@ -115,14 +115,14 @@ final class AppUpdaterTests: XCTestCase {
             XCTAssertEqual(action.error, "native-updater-unavailable",
                            "无更新器时 kind=\(kind) 必须拿显式错误，不得假成功")
         }
-        // S-39：未知 kind 也必须诚实拒绝（绝不落回 check）。
+        // 未知 kind 也必须诚实拒绝（绝不落回 check）。
         let unknown = legs.respond(method: "updateNativeAction",
                                    payload: .object(["kind": .string("restart")]))
         XCTAssertNil(unknown.result)
         XCTAssertEqual(unknown.error, "native-updater-unknown-kind:restart")
     }
 
-    // MARK: - S-38 配置形状 / 能力诚实化
+    // MARK: - 配置形状 / 能力诚实化
 
     /// 坏 feed / 坏 EdDSA 公钥在装配期就被折成诚实不可用（不留到验签才炸、也不
     /// 让页面停在 checking）。
@@ -149,7 +149,7 @@ final class AppUpdaterTests: XCTestCase {
             for: config("https://example.com/appcast-swift.xml", "!!! not base64 !!!")))
     }
 
-    /// S-37：强制启动后台检查的纯决策（自动检查开启 + 真的 startUpdater 才补一次）。
+    /// 强制启动后台检查的纯决策（自动检查开启 + 真的 startUpdater 才补一次）。
     func testForcedLaunchBackgroundCheckDecision() {
         let key = Data(repeating: 0, count: 32).base64EncodedString()
         let automatic = AppUpdater.Configuration(feedURL: "https://x/appcast-swift.xml",
@@ -163,7 +163,7 @@ final class AppUpdaterTests: XCTestCase {
         XCTAssertFalse(AppUpdater.shouldForceLaunchBackgroundCheck(configuration: automatic, startUpdater: false))
     }
 
-    // MARK: - S-39 kind 分派 / 菜单实时 enable / S-01 钩子退役
+    // MARK: - kind 分派 / 菜单实时 enable
 
     /// kind 分派与诚实拒绝：未装配时三种 kind 都拒绝并携带真实原因。
     func testNativeActionKindsAndRefusalsAreHonest() {
@@ -182,7 +182,7 @@ final class AppUpdaterTests: XCTestCase {
         XCTAssertEqual(capability.error, "native-updater-unavailable")
     }
 
-    /// S-39：菜单 enable 由 NSMenuItemValidation 实时校验（AppDelegate 的构造期
+    /// 菜单 enable 由 NSMenuItemValidation 实时校验（AppDelegate 的构造期
     /// isEnabled 只是初值）；未装配 → 禁用，非本类 action 不干预。
     func testMenuValidationTracksLiveAvailability() {
         let shared: NSObject = AppUpdater.shared
@@ -201,9 +201,9 @@ final class AppUpdaterTests: XCTestCase {
                       "非本类 action 不干预")
     }
 
-    /// S-01（2026-12 复核）：willInstallUpdateOnQuit 零调用（只在
+    /// willInstallUpdateOnQuit 零调用（只在
     /// automaticallyDownloadsUpdates 的 automatic-update driver 里被调用）而 Electron
-    /// 是 autoDownload=false + autoInstallOnAppQuit=true ⇒ 钩子删除，不再留潜伏声明；
+    /// 是 autoDownload=false + autoInstallOnAppQuit=true ⇒ 钩子不接线；
     /// 退出时安装由 Sparkle 标准 resumable 路径承担（见 AppUpdater 头注释）。
     func testQuitInstallHookIsNotWired() {
         XCTAssertFalse(AppUpdater.shared.responds(to: NSSelectorFromString(
@@ -211,7 +211,7 @@ final class AppUpdaterTests: XCTestCase {
             "潜伏钩子已删除——重新接线必须是有意识的决定（并同步 Electron 的自动下载语义）")
     }
 
-    // MARK: - S-19/S-20：原生阶段投影（fake-delegate 假事件覆盖）
+    // MARK: - 原生阶段投影（fake-delegate 假事件覆盖）
 
     func testProjectorMapsDelegateEventsToPagePhases() {
         var projector = NativeUpdatePhaseProjector()
@@ -292,7 +292,7 @@ final class AppUpdaterTests: XCTestCase {
         XCTAssertEqual(received[2].version, "3.1.4")
     }
 
-    // MARK: - D9 / S-21 parity：自动检查 = 真 + scheduled 展示归页面
+    // MARK: - 自动检查 = 真 + scheduled 展示归页面
 
     /// 自动检查是模板常量：build-swift-app 的 renderInfoPlist 只替换
     /// __VERSION__/__BUNDLE_VERSION__/__SPARKLE_*，不写本键，所以直接钉住装配

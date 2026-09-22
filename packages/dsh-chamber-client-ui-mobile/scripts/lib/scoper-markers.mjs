@@ -1,19 +1,18 @@
 /**
  * SVG resource scoper artifact markers — single source for the mobile committed
  * bundle guard (`artifact-scope-marker.test.mjs`) and the post-build page guard
- * (`assert-scoper-artifact.mjs`). W8 / R15③; the artifact-freshness family of
- * STATUS:61.
+ * (`assert-scoper-artifact.mjs`).
  *
- * The three facts the fix is made of:
+ * The three facts the markers are made of:
  *   1. the attribute the installer stamps on every processed <svg>;
  *   2. the document-unique token prefix family;
  *   3. the entry's **anchored install CALL** (a definition without the call proves nothing).
  *
- * 第三个标记为什么是「属性名 + 必须是调用」而不是裸调用文本（2026-12 审计 S3 修正）：
+ * 第三个标记为什么是「属性名 + 必须是调用」而不是裸调用文本：
  *   - 裸调用名 `installSvgResourceScope()` 在 esbuild **压缩**后会被改成短标识符（实测安装态为
- *     `Aw()`），于是页面产物守卫对任何真实构建**恒红**（旧标记集就是这样坏的）；
- *   - 入口改写成语义等价的锚定赋值 `globalThis.__chamberSvgScopeInstalled = installSvgResourceScope()`
- *     后，点号属性名不被压缩改写，因此**压缩与未压缩产物都能 grep 到**；
+ *     `Aw()`），于是页面产物守卫对任何真实构建**恒红**；
+ *   - 入口使用语义等价的锚定赋值 `globalThis.__chamberSvgScopeInstalled = installSvgResourceScope()`：
+ *     点号属性名不被压缩改写，因此**压缩与未压缩产物都能 grep 到**；
  *   - 但单一子串无法同时覆盖两种空格形态（压缩后 `=` 无空格、未压缩有空格），所以第三个事实用
  *     **模式**判定：属性名出现，且右侧确实是一次调用（把右侧换成 `null` 即失配 ⇒ 负控仍成立）。
  */

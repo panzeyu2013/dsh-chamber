@@ -1,7 +1,6 @@
 /**
  * /chamber/runtime apply-now preflight and route matrix: terminal pending gates,
- * synchronous 409 refusals and the applyNowInFlight mutation fence. Split from
- * runtime-routes.test.ts.
+ * synchronous 409 refusals and the applyNowInFlight mutation fence.
  */
 
 import { test } from 'node:test'
@@ -108,8 +107,8 @@ test('apply-now route matrix: 202 with pending, 409 recovery/busy/env/read-only/
     applyNowInFlight: () => applyNowBusy,
     // The real manager's preflight contract: target = ordinary pending, else
     // a valid (non-invalidated) chosenVersion; both empty → no_selection.
-    // The route relies on THIS for the no_selection gate now — a status-based
-    // precheck can no longer mis-let an invalidated selection through (R3/R5).
+    // The route relies on THIS for the no_selection gate: a status-based
+    // precheck would mis-let an invalidated selection through (R3/R5).
     applyNowPreflight: () => {
       preflightCalls += 1
       if (pending === null && selectedVersion === null) {
@@ -128,7 +127,7 @@ test('apply-now route matrix: 202 with pending, 409 recovery/busy/env/read-only/
   assert.equal(applyNowCalls, 1)
 
   // Recovery phases refuse apply-now (only their exact retry; restore-builtin
-  // applies to pending/healthy selections only — 2026 audit R2).
+  // applies to pending/healthy selections only).
   for (const recoveryPhase of ['snapshot-failed', 'swap-attempted', 'restore-blocked']) {
     phase = recoveryPhase
     const recovery = await runRoute(routes, 'POST', '/chamber/runtime/apply-now')
@@ -193,8 +192,7 @@ test('apply-now preflight refuses an invalidated (stale-shell) selection synchro
     makeValidTree(stateDir, '2.0.0')
     // A gateway upgrade invalidates the override (shellVersion mismatch) but
     // RETAINS chosenVersion: status.selectedVersion is still set while
-    // status.pending is null (effectivePending filters the invalidation). The
-    // old status-based no_selection gate let this through to a fake 202.
+    // status.pending is null (effectivePending filters the invalidation).
     writeOverrideRow(stateDir, { shellVersion: '0.0.1', chosenVersion: '2.0.0', pending: null })
     const plane = fakePlane()
     plane._state.connectionState = 'ready'
@@ -222,8 +220,7 @@ test('apply-now preflight refuses an invalidated (stale-shell) selection synchro
 test('apply-now preflight refuses a pending target with no valid version tree synchronously — 409 invalid_target, no 202', async () => {
   const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-applynow-notree-'))
   try {
-    // pending points at a version whose tree is gone (e.g. evicted). The old
-    // flow 202'd first and only then failed inside the async job — the
+    // pending points at a version whose tree is gone (e.g. evicted). The
     // preflight must refuse before any 202 can go out.
     writeVersionSwitchIntent(stateDir, '3.0.0')
     writeOverrideRow(stateDir, { chosenVersion: '3.0.0', pending: '3.0.0' })
@@ -290,8 +287,8 @@ test('applyNowInFlight fences every other runtime mutation at the manager level 
       assert.equal(leased.code, 'runtime_busy')
       assert.match(leased.error, /apply-now transaction is in flight|runtime activation in progress/)
     }
-    // applyNowInFlight feeds assertMutationIdle directly — the fence no longer
-    // depends on activationDepth's timing coincidence (review R3/R5).
+    // applyNowInFlight feeds assertMutationIdle directly — the fence does not
+    // depend on activationDepth's timing coincidence (R3/R5).
     for (const refuse of [
       () => manager.select('1.0.0'),
       () => manager.apply(),
@@ -320,8 +317,7 @@ test('applyNow F2 arm mirrors the apply() manualRollback formula: a staged downg
     writeCurrentPointer(stateDir, '2.0.0')
     // Active v2, staged selection of v1 (a downgrade), no pending yet — the
     // preflight arms the pending switch journal-first and must record the
-    // downgrade as a manual rollback, exactly like apply() :1084 (review fix:
-    // it used to be hardcoded false).
+    // downgrade as a manual rollback, exactly like apply().
     writeOverrideRow(stateDir, { chosenVersion: '1.0.0', pending: null, lastOutcome: 'applied' })
     let releaseStop!: () => void
     const stopGate = new Promise<void>(resolve => { releaseStop = resolve })

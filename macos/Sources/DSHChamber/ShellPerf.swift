@@ -2,7 +2,7 @@
 //  ShellPerf.swift
 //  DSHChamber
 //
-//  Phase 0（《最终设计方案 v2》）：壳内启动/调用耗时的最小观测入口。
+//  壳内启动/调用耗时的最小观测入口。
 //  只做三件事：记住进程内最早的 Swift 时间点（main.swift 顶层调用
 //  markProcessStart）、把任意时刻折算为相对 t0 的毫秒、生成统一格式的
 //  boot 行。纯函数 + 一次性写入的静态值，无 I/O；调用点（main.swift /

@@ -1,12 +1,12 @@
 /**
- * Global panel projection tests (alpha.2 `sidebar.panellist`): the ledger is the authority, the projection
+ * Global panel projection tests (`sidebar.panellist`): the ledger is the authority, the projection
  * is serializable metadata sorted by order (registration order as the tiebreak) and it notifies only on real change.
  *
- * MUST run through the test-only vendor loader (2026-09-11 upstream-alignment A5; 2026-09-12 CI fix):
+ * MUST run through the test-only vendor loader:
  * `src/client/panel-source.ts` VALUE-imports the dsh store engine (`@deepseek-ai/dsh-client-store` →
  * createSnapshotStore, the wiring upstream's ui-sidebar uses), which a plain node run cannot import (unbuilt lib/,
  * vendor-installed zustand/immer). The test loader maps the specifier to `test/support/vendor-store-double.mjs`, a
- * contract-faithful double; production wiring is pinned by a source lock (A5) and resolved by `pnpm run build:renderer`.
+ * contract-faithful double; production wiring is pinned by a source lock and resolved by `pnpm run build:renderer`.
  *
  *   node --import ./test/support/vendor-register.mjs test/plugin-kernel/panel-source.test.ts
  */
@@ -71,8 +71,8 @@ test('subscribers fire only when the projection actually changes', () => {
   assert.deepEqual(source.source.getSnapshot(), [])
 })
 
-// 2026-09-11 upstream-alignment A5（2026-09-12 CI 修正措辞）：测试经 test/support/vendor-store-double.mjs 断言
-// createSnapshotStore 契约（`set`/`update` 齐备、`set` 走 plain array、仅真实变化才通知），生产侧接线由源码锁（A5）与 `build:renderer` 的真实解析共同保证。
+// 测试经 test/support/vendor-store-double.mjs 断言
+// createSnapshotStore 契约（`set`/`update` 齐备、`set` 走 plain array、仅真实变化才通知），生产侧接线由源码锁与 `build:renderer` 的真实解析共同保证。
 test('the observable face follows the store engine contract (createSnapshotStore)', () => {
   const panelSource = createPanelSource()
   const { sync } = panelSource

@@ -22,7 +22,7 @@ import {
 } from '../support/proxy-fakes.ts'
 
 // ---------------------------------------------------------------------------
-// Real-Node integration regression (2026-08): IncomingMessage 'close' fires
+// Real-Node integration pin: IncomingMessage 'close' fires
 // as soon as the request body is consumed — immediately for a bodyless
 // GET/HEAD — NOT on client disconnect. The proxy's disconnect detection must
 // therefore hang off the RESPONSE leg (res 'close' + writableEnded) and the
@@ -163,10 +163,10 @@ test('real Node streams: WS upgrade handshake is not aborted by req close', asyn
 })
 
 test('WS stream teardown logs the ending leg and lifetime (stability forensics)', async () => {
-  // Mobile stability round (2026-12): the instance-side mux heartbeat can end
-  // a socket with no gateway trace, so a churn investigation could not tell
-  // an instance termination from a client reconnect. One bounded line per
-  // stream now names the leg that ended the splice and its lifetime; the
+  // The instance-side mux heartbeat can end
+  // a socket with no gateway trace, leaving an instance termination
+  // indistinguishable from a client reconnect. One bounded line per
+  // stream names the leg that ended the splice and its lifetime; the
   // cause strings are the greppable contract.
   const lines: string[] = []
   const logger = {
@@ -237,7 +237,7 @@ test('WS stream teardown logs the ending leg and lifetime (stability forensics)'
 // With a pinned gateway transport the proxy's outbound https connection is
 // gated on the pin: a matching peer forwards normally, a mismatching peer is
 // an explicit 502 upstream_failed (proxy honesty — never a silent pass), and
-// an unpinned transport keeps the legacy behavior.
+// an unpinned transport forwards without the pin gate.
 // ---------------------------------------------------------------------------
 
 const CERT_A = `-----BEGIN CERTIFICATE-----

@@ -2,11 +2,11 @@
 //  BridgeClientLineReadTests.swift
 //  DSHChamberTests
 //
-//  G9（2026-12 审计）：BridgeClient 的 stdout 读路径此前零 XCTest 覆盖——
+//  BridgeClient 的 stdout 读路径测试覆盖：
 //    - LineReader：部分帧跨 append 重组（含跨块的多字节 UTF-8 序列）、一次
 //      append 多帧、\r\n 兼容与跨块 CRLF、EOF 无换行残尾恰一次、原始字节输出
-//      （R2 起 UTF-8 判定在消费侧：stdout 交 JSONSerialization，stderr 计数丢弃）、
-//      无换行超限清缓冲重同步 + 残尾吞除（B-BUG-1）与恢复；
+//      （UTF-8 判定在消费侧：stdout 交 JSONSerialization，stderr 计数丢弃）、
+//      无换行超限清缓冲重同步 + 残尾吞除与恢复；
 //    - handleIncomingLine（internal 测试接缝，见 BridgeClient.swift）：超长帧
 //      作废全部未决请求（code 4，绝不永久悬挂）、非法 JSON / 非协议帧 / 未知
 //      id 响应 / sidecar→Swift request 违约帧一律丢弃且不偷走未决请求、随后
@@ -41,7 +41,7 @@ final class BridgeClientLineReadTests: XCTestCase {
         return bridge
     }
 
-    /// 行字节 → 文本（断言便捷；R2 起 LineReader 输出原始字节）。
+    /// 行字节 → 文本（断言便捷；LineReader 输出原始字节）。
     private func texts(_ outcome: LineReader.Outcome) -> [String] {
         outcome.lines.map { String(decoding: $0, as: UTF8.self) }
     }
@@ -53,7 +53,7 @@ final class BridgeClientLineReadTests: XCTestCase {
         let payload = "{\"k\":\"你\"}\n"
         let bytes = Array(payload.utf8)
         // 切点落在「你」的首字节之后：跨 append 的多字节序列必须原样重组
-        // （LineReader 先攒字节、整行到手才切出；R2 起不做 UTF-8 解码）。
+        // （LineReader 先攒字节、整行到手才切出；不做 UTF-8 解码）。
         let first = reader.append(Data(bytes[0..<7]))
         XCTAssertEqual(texts(first), [], "半个帧不得产出任何行")
 
@@ -82,7 +82,7 @@ final class BridgeClientLineReadTests: XCTestCase {
 
     func testInvalidUTF8LineIsEmittedAsBytesAndDroppedByConsumer() async throws {
         var reader = LineReader()
-        // R2：LineReader 不做 UTF-8 判定，原样交字节；stdout 侧的合法性由
+        // LineReader 不做 UTF-8 判定，原样交字节；stdout 侧的合法性由
         // JSONSerialization 承担，stderr 侧由 processStderrOutcome 计数丢弃。
         let outcome = reader.append(Data([0x41, 0xFF, 0x0A]))
         XCTAssertEqual(outcome.lines.map { Array($0) }, [[0x41, 0xFF]])
@@ -110,7 +110,7 @@ final class BridgeClientLineReadTests: XCTestCase {
         let overflow = reader.append(Data(repeating: 0x61, count: 20))
         XCTAssertEqual(texts(overflow), [])
         XCTAssertEqual(overflow.overflowResets, 1)
-        // 重同步后必须继续吞到下一个换行（B-BUG-1）：被丢弃超长行的残尾不得作为
+        // 重同步后必须继续吞到下一个换行：被丢弃超长行的残尾不得作为
         // 独立行上抛（否则残片可能被当成合法帧派发）。
         let tailOfOverlong = reader.append(Data("tail-of-overlong\n".utf8))
         XCTAssertEqual(texts(tailOfOverlong), [], "被丢弃行的残尾必须吞掉，不得上抛")
@@ -118,7 +118,7 @@ final class BridgeClientLineReadTests: XCTestCase {
         XCTAssertEqual(texts(reader.append(Data("ok\n".utf8))), ["ok"],
                        "越过该换行后必须恢复切行")
 
-        // Phase 2 C5：游标化后溢出判定仍对「未消费窗口」成立——已切出的行不参与，
+        // 游标化后溢出判定仍对「未消费窗口」成立——已切出的行不参与，
         // 残尾超限只计一次；finish() 只输出游标之后的残尾。
         var cursorReader = LineReader(maxBufferedBytes: 8)
         let cursorFirst = cursorReader.append(Data("a\nb\n".utf8))
@@ -143,13 +143,13 @@ final class BridgeClientLineReadTests: XCTestCase {
         XCTAssertEqual(longOutcome.overflowResets, 0,
                        "有换行的超长行由 handleIncomingLine 的超长护栏处理，不在 LineReader 层丢")
 
-        // 未消费窗口恰好等于上限：不溢出；多一字节才溢出（独立审查 C 的边界项）
+        // 未消费窗口恰好等于上限：不溢出；多一字节才溢出
         var boundaryReader = LineReader(maxBufferedBytes: 8)
         XCTAssertEqual(boundaryReader.append(Data(repeating: 0x61, count: 8)).overflowResets, 0)
         XCTAssertEqual(boundaryReader.append(Data(repeating: 0x62, count: 1)).overflowResets, 1)
     }
 
-    /// R1（第二轮修复）：进程退出时仍在管道缓冲里的最后一帧必须被抽干送达
+    /// 进程退出时仍在管道缓冲里的最后一帧必须被抽干送达
     /// （stdout 收尾抽干，与 stderr 对称；没有它这里会随机丢最后一帧）。
     func testFinalFrameAtExitIsDrainedAndDelivered() throws {
         let script = "printf '{\"notify\":\"ready\",\"payload\":{\"port\":17520,\"shellVersion\":\"1.0\"}}\\n'; exit 0"
@@ -164,9 +164,9 @@ final class BridgeClientLineReadTests: XCTestCase {
         XCTAssertEqual(ready?.1, "1.0")
     }
 
-    /// B-BUG-1（独立审查实测）：真实管道按 16KiB 分块时，>缓冲上限的单行会先触发
-    /// 溢出重同步——旧行为把残尾当独立行上抛（可被 forged 成合法帧），且超长护栏
-    /// 永不命中 → 对应 invoke 悬挂到 stop()。现在：溢出即作废全部未决请求，残尾吞掉。
+    /// 真实管道按 16KiB 分块时，>缓冲上限的单行会先触发
+    /// 溢出重同步——把残尾当独立行上抛会可被 forged 成合法帧，且超长护栏
+    /// 永不命中 → 对应 invoke 悬挂到 stop()。溢出即作废全部未决请求，残尾吞掉。
     func testOverflowFailsPendingAndSwallowsForgedSuffix() async throws {
         let bridge = try makeSilentBridge()
         defer { bridge.stop() }
@@ -191,7 +191,7 @@ final class BridgeClientLineReadTests: XCTestCase {
         XCTAssertEqual(reader.append(Data("real\n".utf8)).lines.count, 1, "越过换行后恢复")
     }
 
-    /// R2/审查者 B 的索引契约：lines 是内部缓冲的共享切片，startIndex 通常非 0、
+    /// 索引契约：lines 是内部缓冲的共享切片，startIndex 通常非 0、
     /// 空行是空切片——消费方必须按 startIndex 访问并立即消费。
     func testOutcomeLineSlicesKeepNonZeroStartIndex() {
         var reader = LineReader()
@@ -204,7 +204,7 @@ final class BridgeClientLineReadTests: XCTestCase {
     }
 
     /// CRLF 跨 append 边界（CR 为 chunk 末字节、LF 为下一 chunk 首字节）——
-    /// 行尾 \r 必须剥掉且不得把 CR/LF 拆成两行（审查者 B 缺失用例 6）。
+    /// 行尾 \r 必须剥掉且不得把 CR/LF 拆成两行。
     func testCRLFSplitAcrossAppendBoundary() {
         var reader = LineReader()
         XCTAssertEqual(texts(reader.append(Data("one\r".utf8))), [], "CR 单独到达时不得成行")
@@ -212,9 +212,9 @@ final class BridgeClientLineReadTests: XCTestCase {
         XCTAssertEqual(texts(reader.finish()), ["two"])
     }
 
-    // MARK: - 会话生命周期与收尾接缝（R1 回归网）
+    // MARK: - 会话生命周期与收尾接缝
 
-    /// 审查者 C 缺口 1：start→stop→start 的整轮重启——句柄身份守卫、reader/EOF
+    /// start→stop→start 的整轮重启——句柄身份守卫、reader/EOF
     /// 复位、会话状态发布先于 run() 全都在这一路径上；第二个会话的帧必须送达，
     /// 旧会话的帧不得重放。
     func testRestartAfterStopDeliversNewSessionFramesOnly() throws {
@@ -250,7 +250,7 @@ final class BridgeClientLineReadTests: XCTestCase {
         bridge.stop()
     }
 
-    /// 审查者 C 缺口 2：finishStdoutReading 直测——抽干逐帧送达、幂等、
+    /// finishStdoutReading 直测——抽干逐帧送达、幂等、
     /// 错代际不改状态（旧收尾不得作用于新会话）。
     func testFinishStdoutReadingDrainsFramesAndGuardsGeneration() throws {
         let bridge = try makeSilentBridge()
@@ -260,7 +260,7 @@ final class BridgeClientLineReadTests: XCTestCase {
         let generation = bridge.readerGenerationSnapshot()
 
         // 先把错代际（旧收尾）放在前面：守卫失效时它会消费管道并 finish 本会话 reader，
-        // 后续正确代际就无帧可派发 —— 这样断言才具区分力（第三轮审查 B5）。
+        // 后续正确代际就无帧可派发 —— 这样断言才具区分力。
         let stalePipe = Pipe()
         stalePipe.fileHandleForWriting.write(Data(#"{"event":"stale"}"#.utf8) + Data([0x0A]))
         bridge.finishStdoutReading(stalePipe, generation: generation + 1)
@@ -282,7 +282,7 @@ final class BridgeClientLineReadTests: XCTestCase {
         XCTAssertEqual(events, ["a", "b"], "幂等/错代际收尾不得改动任何状态")
     }
 
-    /// 验证者 2 RISK-1/RISK-2 回归：代际与读状态原子发布；错代际的收尾不得清掉
+    /// 代际与读状态原子发布；错代际的收尾不得清掉
     /// 当前会话句柄（否则新会话 stdout 永久失聪）。
     func testReaderStateInvalidationIsGenerationGuarded() throws {
         let bridge = try makeSilentBridge()
@@ -299,7 +299,7 @@ final class BridgeClientLineReadTests: XCTestCase {
         XCTAssertFalse(after.hasStdoutHandle || after.hasStderrHandle, "本会话收尾必须作废句柄")
     }
 
-    /// 验证者 1 的 TOCTOU 回归：终局作废的代际判定与排空必须同一次加锁——
+    /// TOCTOU 回归：终局作废的代际判定与排空必须同一次加锁——
     /// 旧代际的收尾绝不能误杀新会话刚登记的 invoke。
     func testGenerationGatedFailAllPendingDoesNotKillNewSession() async throws {
         let bridge = try makeSilentBridge()
@@ -325,7 +325,7 @@ final class BridgeClientLineReadTests: XCTestCase {
         }
     }
 
-    /// 最终验证者 RISK-1：终局结算按代际分桶——旧会话代际的排空只结算该代际
+    /// 终局结算按代际分桶——旧会话代际的排空只结算该代际
     /// 登记的请求（旧会话不悬挂），新会话的 pending 必须原样存活。
     func testSettlementIsBucketedByRegistrationGeneration() async throws {
         let bridge = try makeSilentBridge()
@@ -343,7 +343,7 @@ final class BridgeClientLineReadTests: XCTestCase {
         // 全局代际门版本（修复前）会整字典跳过或整字典清空，两种都在此失败。
         XCTAssertFalse(bridge.failAllPendingForTesting(reason: "旧会话收尾", generation: generation))
         guard bridge.pendingRequestCount == 1 else {
-            // 修复失效时旧实现会把两个桶都留着——此处直接返回，绝不让 await 悬挂测试
+            // 守卫失效时两个桶都会被留着——此处直接返回，绝不让 await 悬挂测试
             XCTFail("旧代际结算只应清旧桶，新会话请求必须存活（实际 \(bridge.pendingRequestCount)）")
             return
         }
@@ -360,7 +360,7 @@ final class BridgeClientLineReadTests: XCTestCase {
         } catch {}
     }
 
-    /// 最终验证者 RISK-2：切行在锁内、派发在锁外——派发点必须复验会话代际，
+    /// 切行在锁内、派发在锁外——派发点必须复验会话代际，
     /// 旧会话的帧绝不进入新会话。
     func testStaleGenerationDispatchIsDropped() throws {
         let bridge = try makeSilentBridge()
@@ -389,7 +389,7 @@ final class BridgeClientLineReadTests: XCTestCase {
                        "上限命中必须停止抽干，未读字节留在管道（绝不静默吞掉）")
     }
 
-    /// 生命周期过渡互斥（重构后：lifecycleLock 取代标志+轮询）：过渡进行中 start()
+    /// 生命周期过渡互斥（lifecycleLock 而非标志+轮询）：过渡进行中 start()
     /// 在锁上有界等待、超时抛 code 6；过渡结束后同一实例可正常启动（锁无泄漏）。
     /// 真实路径的锁获取由 stop()/handleTermination 的 `defer` 保证，另有重启用例覆盖。
     func testStartDuringLifecycleTransitionTimesOutWithCode6() throws {
@@ -434,7 +434,7 @@ final class BridgeClientLineReadTests: XCTestCase {
         }
     }
 
-    /// 第三轮验证 F1 回归：生产派发路径必须串行——多线程并发投递时回调绝不并发进入
+    /// 生产派发路径必须串行——多线程并发投递时回调绝不并发进入
     /// （去掉 dispatchLock 时该用例会观察到 maxActive > 1）。
     func testConcurrentDispatchIsSerialized() throws {
         let bridge = try makeSilentBridge()
@@ -462,7 +462,7 @@ final class BridgeClientLineReadTests: XCTestCase {
         XCTAssertEqual(maxActive.maxActive, 1, "派发必须串行（回调绝不并发进入）")
     }
 
-    /// 第三轮验证 F5 回归：旧代际的 edge 应答不得写进新会话 stdin（应答代际取自帧过门处）。
+    /// 旧代际的 edge 应答不得写进新会话 stdin（应答代际取自帧过门处）。
     func testStaleEdgeReplyIsNotWrittenToNewSession() throws {
         let outPath = NSTemporaryDirectory() + "dsh-edge-\(UUID().uuidString).txt"
         defer { try? FileManager.default.removeItem(atPath: outPath) }
@@ -494,9 +494,9 @@ final class BridgeClientLineReadTests: XCTestCase {
     }
 
 
-    /// 重构核心语义回归（验证者 1 指出此前零覆盖）：自然退出收尾执行 onTerminated
+    /// 自然退出收尾执行 onTerminated
     /// 期间，start() 必须等到回调结束（lifecycleLock）；去掉该锁时 start 会在回调仍
-    /// 在执行时就返回（验证者反事实探针 loadbearing 证实）。
+    /// 在执行时就返回。
     func testStartWaitsForTerminalCallbackCompletion() throws {
         let bridge = BridgeClient(nodePath: "/bin/sh",
                                   arguments: ["-c", "sleep 0.2; exit 7"], environment: [:])
@@ -533,10 +533,10 @@ final class BridgeClientLineReadTests: XCTestCase {
         XCTAssertFalse(bridge.isRunning)
     }
 
-    /// 第五轮验证者 1 的死锁反例回归（**必须在回调内同步 stop()**——异步版抓不到该环，
-    /// 其反事实构建证实异步版全绿而同步版确定性挂死）：帧回调持 dispatchLock 期间，
-    /// 自然退出收尾先取 dispatchLock 再等 lifecycleLock；回调若同步 stop() 会在旧锁序
-    /// （收尾先取 lifecycleLock）下与收尾成环。全局锁序修正后必须及时返回。
+    /// 死锁反例回归（**必须在回调内同步 stop()**——异步版抓不到该环）：
+    /// 帧回调持 dispatchLock 期间，
+    /// 自然退出收尾先取 dispatchLock 再等 lifecycleLock；回调若同步 stop() 会在收尾
+    /// 先取 lifecycleLock 的锁序下与收尾成环。按全局锁序必须及时返回。
     /// 死锁表现为回调线程卡住 → 这里用超时信号量判决（绝不让测试进程整体挂死）。
     func testFrameCallbackStopDuringNaturalTerminationDoesNotDeadlock() throws {
         let bridge = BridgeClient(nodePath: "/bin/sh",
@@ -557,9 +557,9 @@ final class BridgeClientLineReadTests: XCTestCase {
         XCTAssertFalse(bridge.isRunning)
     }
 
-    /// 第五轮验证者 1 的递归锁硬依赖回归：收尾抽干在生产路径上就是「同线程在
+    /// 递归锁硬依赖回归：收尾抽干在生产路径上就是「同线程在
     /// dispatchLock 内再次进入派发」（handleTermination → finishStdoutReading →
-    /// dispatchStdout）。换回 NSLock 时该形状会自锁（其反事实探针已证实），故本用例
+    /// dispatchStdout）。非递归锁下该形状会自锁，故本用例
     /// 结构性地钉住「派发锁必须递归」。
     func testDispatchLockSupportsTerminalDrainReentry() throws {
         let bridge = try makeSilentBridge()
@@ -584,9 +584,9 @@ final class BridgeClientLineReadTests: XCTestCase {
         XCTAssertEqual(events, ["outer", "inner"])
     }
 
-    /// 第六轮残留清理：诊断日志必须有界且**绝不阻塞调用方**——宿主 stderr 停止排水
+    /// 诊断日志必须有界且**绝不阻塞调用方**——宿主 stderr 停止排水
     /// （管道满且无人读）时，持 lifecycleLock/dispatchLock 的路径（stop()、终局收尾）
-    /// 不得被日志 I/O 拖住。旧实现是锁内同步 FileHandle.write，4k 行必然卡死。
+    /// 不得被日志 I/O 拖住（锁内同步 FileHandle.write 在 4k 行必然卡死）。
     func testLogSinkNeverBlocksCallerOnStalledStderr() async throws {
         let bridge = try makeSilentBridge()
         defer { bridge.stop() }
@@ -599,8 +599,8 @@ final class BridgeClientLineReadTests: XCTestCase {
         }
         XCTAssertEqual(burstDone.wait(timeout: .now() + 5), .success,
                        "日志入队不得被阻塞的 stderr 写拖住")
-        // 让 stop() 的结算路径**真的写日志**（否则 drained 为空、log 不被调用，计时断言不承重——
-        // 第七轮验证 NIT）。子进程不响应，故该请求会一直驻留 pending。
+        // 让 stop() 的结算路径**真的写日志**（否则 drained 为空、log 不被调用，计时断言不承重）。
+        // 子进程不响应，故该请求会一直驻留 pending。
         let pendingTask = Task { try? await bridge.invoke(method: "probe") }
         let registered = Date().addingTimeInterval(2)
         while bridge.pendingRequestCount == 0, Date() < registered { Thread.sleep(forTimeInterval: 0.01) }
@@ -642,7 +642,7 @@ final class BridgeClientLineReadTests: XCTestCase {
         try? pipe.fileHandleForWriting.close()
     }
 
-    /// 第三轮验证 BUG：代际门必须**逐行**复核——单批可含数千小帧，stop()/重启可在
+    /// 代际门必须**逐行**复核——单批可含数千小帧，stop()/重启可在
     /// 批次派发中途推进代际，剩余行不得再进回调。用首帧回调里推进代际来构造中间点。
     func testBatchGenerationIsRecheckedPerLine() throws {
         let bridge = try makeSilentBridge()
@@ -662,8 +662,8 @@ final class BridgeClientLineReadTests: XCTestCase {
         XCTAssertEqual(events, ["a"], "批次中途代际推进后，剩余行必须被逐行复核丢弃")
     }
 
-    /// 第三轮审查 afterstop：stop() 立刻推进会话代际——返回后本会话的在途帧必须被
-    /// 派发代际门丢弃（此前 stop 不推进代际，2s 内还会继续进回调）。
+    /// stop() 立刻推进会话代际——返回后本会话的在途帧必须被
+    /// 派发代际门丢弃（否则 2s 内还会继续进回调）。
     func testNoFramesAfterStop() throws {
         let bridge = try makeSilentBridge()
         var events: [String] = []
@@ -696,7 +696,7 @@ final class BridgeClientLineReadTests: XCTestCase {
         } catch {}
     }
 
-    /// 审查者 C 缺口 3：FIONREAD 常量钉（写错会让抽干静默变 no-op、残帧全丢）。
+    /// FIONREAD 常量钉（写错会让抽干静默变 no-op、残帧全丢）。
     func testBytesAvailableProbeSeesPipeBytes() throws {
         let probe = BridgeClient(nodePath: "/bin/sh", arguments: [], environment: [:])   // 不需要 start
         let pipe = Pipe()
@@ -709,7 +709,7 @@ final class BridgeClientLineReadTests: XCTestCase {
                        "抽干后必须为 0（否则抽干循环会阻塞或空转）")
     }
 
-    /// 审查者 C 缺口 5：stderr 非 UTF-8 行计数丢弃、不入环形摘要；合法行照常中继。
+    /// stderr 非 UTF-8 行计数丢弃、不入环形摘要；合法行照常中继。
     func testStderrInvalidUTF8IsCountedAndNotRelayed() throws {
         let script = "printf 'ok-1\\n' >&2; printf '\\377\\376bad\\n' >&2; printf 'ok-2\\n' >&2; exec sleep 1"
         let bridge = BridgeClient(nodePath: "/bin/sh", arguments: ["-c", script], environment: [:])
@@ -722,7 +722,7 @@ final class BridgeClientLineReadTests: XCTestCase {
         XCTAssertEqual(lines.count, 2, "只应有两条合法行")
     }
 
-    /// 审查者 C 缺口 6：≥2 MiB 单行帧走**真实读路径**（分块 + 增量扫描 + 尺寸/溢出
+    /// ≥2 MiB 单行帧走**真实读路径**（分块 + 增量扫描 + 尺寸/溢出
     /// 边界）必须完整送达。
     func testLargeSingleLineFrameArrivesThroughRealReadPath() throws {
         let blobBytes = 2 * 1024 * 1024
@@ -781,7 +781,7 @@ final class BridgeClientLineReadTests: XCTestCase {
         }
     }
 
-    /// Phase 1 C3：出站帧（notify / edge / ready）仍能被同一条唯一解析路径分类并
+    /// 出站帧（notify / edge / ready）仍能被同一条唯一解析路径分类并
     /// 分发；id 族优先于 outbound。real-sidecar 集成用例在本环境不可运行（工作区
     /// 未安装 node workspace 依赖），本用例覆盖它们依赖的同一条分类路径。
     func testOutboundFramesDispatchThroughSingleParse() throws {
@@ -815,7 +815,7 @@ final class BridgeClientLineReadTests: XCTestCase {
         bridge.handleIncomingLine(#"{"id":999,"ok":true,"edge":"x","edgeId":9}"#)
         XCTAssertEqual(edges, ["desktop_ssh_connect"], "id+ok 帧必须优先于 outbound 分类")
 
-        // 出站分类的严格性（独立审查 C 的 RISK，Phase 1 C3 补口）：已知键存在但
+        // 出站分类的严格性：已知键存在但
         // 类型不符 → 整行丢弃，绝不落到另一族；edgeId 必须为精确整数。
         bridge.handleIncomingLine(#"{"edge":5,"notify":"ready","payload":{"port":9999,"shellVersion":"x"}}"#)
         XCTAssertEqual(ready?.0, 17520, "非字符串 edge 不得落到 notify/ready 分类")
@@ -827,7 +827,7 @@ final class BridgeClientLineReadTests: XCTestCase {
         XCTAssertEqual(BridgeClient.inboundParseCountSnapshot(), 7, "七行各一次解析（含被丢弃的违约帧）")
     }
 
-    /// Phase 2 C6：stderr 环形摘要的可观察契约（>40 行丢最旧、单行 400 字符截断、
+    /// stderr 环形摘要的可观察契约（>40 行丢最旧、单行 400 字符截断、
     /// 独立 readerLock 下不丢最后一行）。
     func testStderrTailRingAndSummary() throws {
         let script = "for i in $(seq 1 45); do echo \"line-$i\" >&2; done; "
@@ -845,7 +845,7 @@ final class BridgeClientLineReadTests: XCTestCase {
         XCTAssertFalse(lines.contains { $0 == "line-1" }, "最旧行应被淘汰（46 行入环、保留 40）")
     }
 
-    /// Phase 0/C3：入站行每行只解析一次（唯一解析点计数探针）。
+    /// 入站行每行只解析一次（唯一解析点计数探针）。
     func testInboundParseCountIsOnePerLine() throws {
         let bridge = try makeSilentBridge()
         defer { bridge.stop() }

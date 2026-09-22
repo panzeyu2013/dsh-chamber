@@ -1,5 +1,5 @@
 /**
- * I1/I2/I13 仪表锁（plan §10；`notes/residual-verifiability-review.md` §5）：
+ * I1/I2/I13 仪表锁：
  * 行状态与待办条目的**机器可读标记**必须与用户看到的状态同源，且出处（wire /
  * channel / derived / stale）必须显式——验收判据据此区分「刚发生的事实」与
  * 「断连后残留的旧事实」。
@@ -67,7 +67,7 @@ test('the row marker reads the same inputs as the dot (facts + resolved ring bit
 })
 
 /**
- * W4「全部已读」：入口必须在来源菜单里可达，且**只发意图**——读水位与落盘归 App，
+ * 「全部已读」：入口必须在来源菜单里可达，且**只发意图**——读水位与落盘归 App，
  * 插件不自己写读数（同一份权威，两个载体不重复实现）。
  */
 test('W4: the source menu offers 全部已读 and asks the App instead of writing read marks', () => {

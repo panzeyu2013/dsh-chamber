@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 /**
- * T3 合成基线：同步磁盘统计遍历的耗时曲线（场景⑥主进程阻塞估算锚点）。
+ * 合成基线：同步磁盘统计遍历的耗时曲线（场景⑥主进程阻塞估算锚点）。
  *
  * 测量对象：dsh-runtime-store.ts 现有同步实现（runtimeDiskSummary /
  * measurePathBytes / measureDedupedBytes 全树 lstat+readdir 递归）。
  * 在合成目录树上跑（.pnpm-store 形态：深层嵌套 + 大量小文件 + 符号链接），
- * 按条目数描点（中位数/最大，≥5 次）。改动后同脚本复测即得前后对照
- * （runtimeDiskSummaryAsync 落地后以 --async 变体切换测量目标）。
+ * 按条目数描点（中位数/最大，≥5 次）。同脚本复测即得前后对照
+ * （--async 变体切换到 runtimeDiskSummaryAsync 测量目标）。
  *
  * 用法：node scripts/perf/disk-walk-baseline.mjs [--async] [--out scripts/perf/data/disk-walk-baseline.json]
  * 不加新依赖：node 24 类型擦除直跑 TS。

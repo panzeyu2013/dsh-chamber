@@ -1,10 +1,9 @@
 /**
- * Zero-test guard for the dsh-runtime test manifest (scripts/test.mjs),
- * ported from packages/desktop/scripts/test.mjs in S5 (review/windows FIX C);
- * the Windows CI leg is where a listed file that silently stopped running
- * tests used to stay green.
+ * Zero-test guard for the dsh-runtime test manifest (scripts/test.mjs):
+ * a listed file that silently stopped running
+ * tests must fail the leg.
  *
- * After the 2026-12 M1 migration the manifest only owns its tables; the
+ * The manifest only owns its tables; the
  * verdict comes from the shared engine (scripts/lib/test-manifest.mjs) and this
  * manifest selects the REGISTERED-level guard: a fully platform-skipped listed
  * file (e.g. a win32-only integration test on a POSIX leg) legitimately has a
@@ -17,7 +16,7 @@
  *  ② the registered-level verdict tolerates an all-skipped file but refuses
  *     no-summary / tests 0;
  *  ③ source lock: the manifest really asks for that guard and the platform leg,
- *     keeps the CLI inside an import guard, and no longer spawns children
+ *     keeps the CLI inside an import guard, and does not spawn children
  *     itself.
  *
  * Run directly: node --experimental-strip-types --test packages/dsh-runtime/test/windows/test-runner-guard.test.mjs

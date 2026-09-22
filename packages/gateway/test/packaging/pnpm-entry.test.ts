@@ -1,12 +1,11 @@
 /**
  * pnpm-entry: the gateway's PATH shim for the managed `dsh plugin` CLI.
  *
- * Regression (2026-09 audit, P1): upstream `dsh plugin` spawns a literal
- * `pnpm` from PATH and answers 127 when the host has none — the gateway ships
- * the pinned pnpm as a bare `pnpm.cjs`, which a PATH lookup cannot see, so a
- * server provisioned with npm alone could not seed or mutate the managed
- * profile. These cases pin the shim's shape, its idempotence and the PATH
- * prepend contract.
+ * Upstream `dsh plugin` spawns a literal `pnpm` from PATH and answers 127
+ * when the host has none — the gateway ships the pinned pnpm as a bare
+ * `pnpm.cjs`, which a PATH lookup cannot see, so a server provisioned with
+ * npm alone cannot seed or mutate the managed profile. These cases pin the
+ * shim's shape, its idempotence and the PATH prepend contract.
  */
 import assert from 'node:assert/strict'
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'

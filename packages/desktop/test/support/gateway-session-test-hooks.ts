@@ -1,11 +1,9 @@
 /**
  * Shared test fixtures for the gateway-session surface of the two provider
  * suites (test/transport/ssh-provider-endpoint-auth.test.ts — gateway reached through the ssh tunnel —
- * and test/gateway/gateway-provider.test.ts — direct http). The former byte-identical
- * local twins (completeTestGatewaySessionHooks / completeTestSessionHooks +
- * GATEWAY_RUNTIME_STATUS) were unified here — dedupe audit N7. Bare helper
+ * and test/gateway/gateway-provider.test.ts — direct http). Bare helper
  * file, not a test: the desktop test script enumerates suites explicitly.
- * Packaging: lives under test/support/ (2026-12 cleanup), so the root
+ * Packaging: lives under test/support/, so the root
  * `*.ts` collection glob never picks it up — no build.files negate needed.
  */
 import { GATEWAY_RUNTIME_IDENTITY } from '../../gateway-provider.ts'

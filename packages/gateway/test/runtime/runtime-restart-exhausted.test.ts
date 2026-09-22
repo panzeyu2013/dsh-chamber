@@ -1,7 +1,6 @@
 /**
  * /chamber/runtime restart-exhausted (F7) and the known-good window: 24h
  * promotion, quarantine edges, the rollback latch and lease-gated deferral.
- * Split from runtime-routes.test.ts.
  */
 
 import { test } from 'node:test'

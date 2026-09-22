@@ -1,31 +1,28 @@
 /**
- * electron-free-gate.test.ts — core 对 electron 零 import 门禁（W-14）
+ * electron-free-gate.test.ts — core 对 electron 零 import 门禁
  *
  * design 25 §4.1 判定标准 + §8.2：Electron 依赖面收敛为白名单
  * 文件（main.ts / preload.cts / updater.ts / electron-edges.ts），其余
  * packages/desktop 顶层源码（业务模块与 shell-core 家族）一律不得
- * import/require electron——拆分后 shell-core/node-edges/sidecar-entry 落位时
+ * import/require electron——shell-core/node-edges/sidecar-entry 这类顶层源码
  * 自动被本门禁覆盖。
  *
  * 面 A（禁止）：白名单外文件无 electron import（逐行去注释后检测）。
  * 面 B（正例防腐化）：白名单文件确实含 electron（防白名单滥用）。
  * 面 C（core 纪律扩展）：shell-core.ts 不出现 ipcMain / webContents.send
- *   （IPC 注册只能经 installIpcHandlers 的注入 registrar——W-10 S1 起
- *   installIpcHandlers 落位 shell-core，channel 注册面在 core 侧但 Electron
+ *   （IPC 注册只能经 installIpcHandlers 的注入 registrar——它在 shell-core，
+ *   channel 注册面在 core 侧但 Electron
  *   的 ipcMain 拼写与 send 拼写仍禁：围栏由 main 在注入点包装、send 叶走
- *   HostEdges rendererPush）。**IPC_CHANNELS 自 S1 起放行**：ipc-events.ts 是
+ *   HostEdges rendererPush）。**IPC_CHANNELS 放行**：ipc-events.ts 是
  *   纯常量模块（无 electron），installIpcHandlers 合法引用其常量（channel 名
  *   与 preload 的锁步由 ipc-surface-mirror.test.ts 保证）。
  * 面 D（传递闭包）：core 家族的相对 import 传递闭包零**加载期** electron
- *   依赖（2026-09 模块评审 medium #2；面 A 只看顶层直接 import）。
+ *   依赖（面 A 只看顶层直接 import）。
  *
- * 注：electron-edges.ts 已于 W-10 S0 落位并加入白名单（Electron HostEdges
+ * 注：electron-edges.ts 是白名单文件（Electron HostEdges
  * 实现，含 from 'electron' import——面 B 正例）。
  *
- * 2026-12 fail-closed 重写（D2a 复审 Major）：旧版在缺文件时静默跳过
- * （visited.add 先于存在性检查、闭包队列预置 coreFamily 使 visited.size
- * 断言恒真、白名单/core 家族缺失即 continue），相对 import 只取 basename
- * （丢子目录）、漏 side-effect-only import 与 require()。现门禁：
+ * fail-closed 门禁：
  *   - 期望文件（白名单 ∪ core 家族）缺失 = 失败，绝不跳过；
  *   - 相对说明符按**完整路径**解析（含 .js→.ts 的 nodenext 映射与目录
  *     index），四种形态（from / import '…' / import('…') / require('…')）
@@ -45,12 +42,8 @@ import { fileURLToPath } from 'node:url'
 
 const dir = path.dirname(fileURLToPath(import.meta.url))
 
-// 2026-12 第三轮验证：原先的两条正则没有词边界，`prerequire('electron')` /
-// `myimport('electron')` / `fromage('electron')` 都会被误判为依赖。它们的能力
-// 已被下方带边界与引号面（含模板串/子路径）的扫描函数完整覆盖，故删除。
 /** 闭包遍历的相对说明符四形态：from '…' / import '…' / import('…') /
- *  require('…')（2026-12 修复：旧正则只认 from/import(，漏 side-effect-only
- *  import 与 require）。 */
+ *  require('…')。 */
 const RELATIVE_SPECIFIER = /(?:\bfrom\b\s*|\bimport\s*\(?\s*|\brequire\s*\(\s*)['"](\.[^'"]+)['"]/g
 
 /** 三种引号（含模板串；模板串用码点构造，避免本文件出现嵌套引号）。 */
@@ -59,13 +52,13 @@ const SPECIFIER_QUOTES: readonly string[] = ["'", '"', String.fromCharCode(96)]
 /** 调用位窗口：说明符前 24 字符内必须出现 from/import/require，否则
  *  'electron' 只是壳 flavor 标识（shell-core.ts:1458、chamber-lock.ts:147 的
  *  `'electron' | 'swift'`）或普通函数实参（pickFlavor('electron')）——都不
- *  是模块依赖。2026-12 第二轮验证：曾把 '(' 也算调用位，导致实参误报。 */
+ *  是模块依赖。 */
 const SPECIFIER_CALLERS = ['from', 'import', 'require']
 
 function hasSpecifierCaller(code: string, quoteIndex: number): boolean {
-  // 窗口放宽到 64（2026-12 第四轮验证：require( + 30 空格 + 'electron' 曾漏检），
+  // 窗口为 64 字符（require( + 30 空格 + 'electron' 也必须命中），
   // 但**不得跨行/跨语句**——否则上一行的 import 会把本行的 flavor 字面量误判成
-  // 依赖（第四轮验证的误报正是跨行窗口造成的）；同时把「成员访问」排除在调用位
+  // 依赖；同时把「成员访问」排除在调用位
   // 外（Buffer.from('electron') / loader.import(...) 不是模块依赖）。
   const newline = String.fromCharCode(10)
   const lineStart = Math.max(
@@ -83,7 +76,7 @@ function hasSpecifierCaller(code: string, quoteIndex: number): boolean {
       const after = code[absolute + caller.length] ?? ''
       const wordChar = /[A-Za-z0-9_$]/
       // 成员访问一般不是模块依赖（Buffer.from / loader.import），但
-      // module.require('electron') 是真实的 CJS 加载（2026-12 第五轮验证的漏检）。
+      // module.require('electron') 是真实的 CJS 加载。
       const memberAccess = previous === '.' && caller !== 'require'
       if (!memberAccess && !wordChar.test(previous) && !wordChar.test(after)) return true
       index = before.indexOf(caller, index + 1)
@@ -92,9 +85,8 @@ function hasSpecifierCaller(code: string, quoteIndex: number): boolean {
   return false
 }
 
-/** 说明符扫描扩展（2026-12 验证轮）：模板串与子路径说明符（'electron/main'）。
- *  旧正则只认单双引号 + 裸 'electron'，两者都能绕；这里补上，同时用调用位窗口
- *  排除「'electron' 作为壳 flavor 字面量」的合法用法。 */
+/** 说明符扫描：模板串与子路径说明符（'electron/main'）都算依赖，
+ *  同时用调用位窗口排除「'electron' 作为壳 flavor 字面量」的合法用法。 */
 function mentionsElectronSpecifier(code: string): boolean {
   for (const quote of SPECIFIER_QUOTES) {
     const needle = quote + 'electron'
@@ -108,7 +100,7 @@ function mentionsElectronSpecifier(code: string): boolean {
   return false
 }
 
-/** 面 D 扩展：加载期 electron 依赖（2026-12 第三轮验证收口）。逐行启发式会漏掉
+/** 面 D：加载期 electron 依赖。逐行启发式会漏掉
  *  `export { app } from 'electron/main'` 与多行 import/export-from（续行带缩进被
  *  当成懒加载）。这里维护跨行**深度**：只有顶格且深度为 0 的行算加载期语句；
  *  `import`/`export` 开头的语句把头部（含花括号组）累积到深度归零再判定，
@@ -171,7 +163,7 @@ function hasStaticElectronImport(code: string): boolean {
   return hasStaticElectronSpecifier(code)
 }
 const WHITELIST = ['main.ts', 'preload.cts', 'updater.ts', 'electron-edges.ts']
-// 已知扫描边界（2026-12 第五轮验证，均为**构造性**且当前树不触发；面 A 覆盖顶层
+// 已知扫描边界（均为**构造性**且当前树不触发；面 A 覆盖顶层
 // 文件，下列边界仅影响未来新增的子目录闭包文件）：
 //   - 跨行断开的调用（`const e =` + 换行 + `require('electron')`）不累积；
 //   - 调用位与引号间隔 >56 字符（窗口 64）；
@@ -181,12 +173,12 @@ const CORE_FAMILY = ['shell-core.ts', 'node-edges.ts', 'sidecar-entry.ts']
 
 /** 允许跳出包根的相对 import 说明符前缀（显式登记 + 理由；当前为空——core
  *  家族的包外依赖一律走 bare specifier/workspace 包名，相对路径跳出包根须
- *  评审登记后才可放行）。 */
+ *  显式登记后才可放行）。 */
 const OUTSIDE_ALLOWLIST: readonly string[] = []
 
-/** 剥离注释后的代码文本。2026-12 验证轮：旧实现不认字符串/模板串，一个含
+/** 剥离注释后的代码文本。一个含
  *  `/*` 的字面量（如 'http://host/*'）会打开块注释状态并吞掉其后的所有
- *  代码——真实的 electron import 因此可以躲过面 A/D。这里按字符状态机区分
+ *  代码——真实的 electron import 因此可以躲过面 A/D。故这里按字符状态机区分
  *  代码/字符串/模板/注释四态（换行保留，行号与逐行判定仍可用）。 */
 function stripComments(source: string): string {
   let out = ''
@@ -231,7 +223,7 @@ function stripComments(source: string): string {
 }
 
 /** 把字符串/模板串**内容**替换为空格（保留定界符与换行）：用于括号计数——
- *  2026-12 第五轮验证：形如 const re = '(' 的字面量会让深度计数器失真，从而
+ *  形如 const re = '(' 的字面量会让深度计数器失真，从而
  *  让面 D 之后的所有行都被当成"非顶格"而漏检。 */
 function blankStringContents(source: string): string {
   const quoteChars = ["'", '"', String.fromCharCode(96)]
@@ -432,9 +424,9 @@ test('W-14 面 B：白名单文件确实依赖 electron（防腐化）', () => {
 })
 
 test('W-14 面 C：core 家族无 ipcMain / webContents.send 字样（IPC_CHANNELS 放行）', () => {
-  // 演进（W-10 S1）：shell-core 的 installIpcHandlers 合法引用 IPC_CHANNELS
-  // 常量（ipc-events.ts 为纯常量模块、无 electron——core 可 import），故
-  // IPC_CHANNELS 自禁列表移除；注册只能经注入 registrar（deps.ipc.handle），
+  // shell-core 的 installIpcHandlers 合法引用 IPC_CHANNELS
+  // 常量（ipc-events.ts 为纯常量模块、无 electron——core 可 import）；
+  // 注册只能经注入 registrar（deps.ipc.handle），
   // ipcMain / webContents.send 拼写仍禁——Electron 注册与 send 面必须留在
   // main.ts / electron-edges.ts 装配侧（'ipcMain' 已覆盖 'ipcMain.handle'）。
   assert.deepEqual(gate.faceCOffenders, [], 'core 家族不得出现 ipcMain / webContents.send')
@@ -449,8 +441,7 @@ test('W-14 面 D：core 家族的相对 import 传递闭包零 electron（2026-0
 })
 
 // ---------------------------------------------------------------------------
-// 自测（D2a）：注入临时 fixture，证明门禁对缺陷形态会红、对干净形态会绿。
-// 旧版门禁在缺文件时静默跳过且闭包断言恒真——这些 fixture 正是其漏检形态。
+// 自测：注入临时 fixture，证明门禁对缺陷形态会红、对干净形态会绿。
 // ---------------------------------------------------------------------------
 
 interface FixtureSpec {
@@ -531,11 +522,11 @@ test('自测 ③：子目录传递依赖 / side-effect import 链 / require 链�
   withFixture(
     {
       ...GREEN_FIXTURE,
-      // 只经 sub/helper.ts -> sub/deep.ts 到达；旧版 basename 解析会丢子目录。
+      // 只经 sub/helper.ts -> sub/deep.ts 到达。
       'sub/deep.ts': "export const deep = 1\nconst electron = require('electron')\n",
-      // 只经 side-effect-only import 到达（旧正则漏）。
+      // 只经 side-effect-only import 到达。
       'sub/side-effect-leaf.ts': "import 'electron'\n",
-      // 只经顶层 require 到达（旧正则漏）。
+      // 只经顶层 require 到达。
       'sub/require-leaf.ts': "const electron = require('electron')\nexport const required = electron\n",
     },
     (root) => {
@@ -565,18 +556,18 @@ test('自测 ⑤：字符串/注释扫描与说明符形态（2026-12 验证轮�
   withFixture(
     {
       ...GREEN_FIXTURE,
-      // ① 面 A：字符串里的 /* 曾打开块注释状态并吞掉后续代码——真实的 electron
-      //    import 因此躲过旧 stripComments。现在必须被抓。注意用不带 // 的
-      //    'a/*b'（2026-12 第二轮验证：带 http:// 的样本会先命中 // 行注释分支，
+      // ① 面 A：字符串里的 /* 不得打开块注释状态吞掉后续代码——真实的 electron
+      //    import 必须被抓。注意用不带 // 的
+      //    'a/*b'（带 http:// 的样本会先命中 // 行注释分支，
       //    使该用例对「块注释状态机」的变异仍为绿，等于空断言）。两个样本都放。
       'chamber-lock.ts': "export const url = 'a/*b'\nimport { app } from 'electron'\nexport const lock = url + String(app)\n",
       'update-headless.ts': "export const base = 'http://127.0.0.1/*'\nimport { app } from 'electron'\nexport const probe = base + String(app)\n",
       // ② 合法用法：'electron' 作为壳 flavor 字面量（无调用位）与普通函数实参
-      //    （pickFlavor('electron')，2026-12 第二轮验证的 '(' 误报样本）都不得误报。
+      //    （pickFlavor('electron')）都不得误报。
       'shell-core.ts': "import './node-edges.ts'\nimport './sub/helper.ts'\nexport type Flavor = 'electron' | 'swift'\nexport const fallback: Flavor = 'electron'\nconst pick = pickFlavor('electron')\nexport const chosen = pick\n",
-      // ③ 面 D：闭包内模板串 require（旧正则只认单双引号）。
+      // ③ 面 D：闭包内模板串 require。
       'sub/deep.ts': 'const electron = require(' + String.fromCharCode(96) + 'electron' + String.fromCharCode(96) + ')\nexport const deep = electron\n',
-      // ④ 面 D：子路径形态（旧正则只认裸 electron）。
+      // ④ 面 D：子路径形态。
       'sub/require-leaf.ts': "import { app } from 'electron/main'\nexport const required = app\n",
       // ⑤ 面 B：白名单文件用模板串 require 也必须被认作「确实依赖 electron」。
       'updater.ts': 'export const init = () => require(' + String.fromCharCode(96) + 'electron' + String.fromCharCode(96) + ')\n',
@@ -601,8 +592,8 @@ test('自测 ⑥：多行 import/export-from 与关键字边界（2026-12 第三
   withFixture(
     {
       ...GREEN_FIXTURE,
-      // 面 D：只经闭包到达的子目录文件。旧逐行启发式漏掉 export-from 与多行 import
-      // （续行带缩进被当成懒加载）；深度感知扫描必须抓住。
+      // 面 D：只经闭包到达的子目录文件。逐行启发式会把续行缩进当成懒加载而漏掉
+      // export-from 与多行 import；深度感知扫描必须抓住。
       'sub/deep.ts': "export { app } from 'electron/main'\nexport const deep = 1\n",
       'sub/require-leaf.ts': "import {\n  app\n} from 'electron/main'\nexport const required = app\n",
       // 面 A 误报控制：关键字前后必须是边界（prerequire/myimport/fromage 不是调用位）。
@@ -631,7 +622,7 @@ test('自测 ⑦：调用位窗口、成员访问与函数体懒加载（2026-12
       'update-headless.ts': "export const mod = require(" + ' '.repeat(30) + "'electron/main')\n",
       // 函数/类体是懒加载：顶格 export function 体内的 require 不算加载期依赖。
       'side-effect-layer.ts': "export function init() { return require('electron') }\n",
-      // 字符串里的括号曾让深度计数器失真（之后的行全被当成非顶格）→ 漏检。
+      // 字符串里的括号会让深度计数器失真（之后的行全被当成非顶格）→ 漏检。
       'sub/deep.ts': "const re = '('\nconst electron = require('electron')\nexport const deep = electron\n",
       // module.require(...) 是真实的 CJS 加载（成员访问豁免不得把它挡掉）。
       'sub/require-leaf.ts': "const electron = module.require('electron')\nexport const required = electron\n",

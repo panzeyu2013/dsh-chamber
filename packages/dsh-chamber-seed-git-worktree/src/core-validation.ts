@@ -265,8 +265,8 @@ export function assertSafeGitArgv(args: readonly string[]): void {
     && /^[0-9a-fA-F]{40,64}$/u.test(rest[5]!)) return
   if (verb === 'worktree' && rest.length === 3 && rest[0] === 'remove' && rest[1] === '--'
     && isAbsolute(rest[2]!)) return
-  // Explicit discard of uncommitted state (design 08 §5.3 amendment, 2026-08
-  // user decision): `worktree remove --force` is authorized only by the
+  // Explicit discard of uncommitted state (design 08 §5.3 amendment):
+  // `worktree remove --force` is authorized only by the
   // `discardChanges` input flag — the fixed grammar here is the last line of
   // defense (the git runner itself never passes --force otherwise).
   if (verb === 'worktree' && rest.length === 4 && rest[0] === 'remove' && rest[1] === '--force'

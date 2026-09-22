@@ -1,6 +1,6 @@
 /**
  * Durable third-party plugin-mutation journal + pre-mutation profile backups
- * (design 21 §6.2/§6.3, A1 write surface; plan Phase 4.2).
+ * (design 21 §6.2/§6.3).
  *
  * Write order for every profile mutation (design 21 §6.3):
  *   ① appendPending — durable intent record (ts/kind/name/spec/initiator);
@@ -35,7 +35,7 @@
  * journal.json.corrupt-<ts> (evidence retained, warn logged) and a fresh
  * journal starts.
  *
- * Corruption ≠ emptiness (2026-12 audit A3-9): a present file that cannot be
+ * Corruption ≠ emptiness: a present file that cannot be
  * read/parsed must never be answered as "no ops recorded". `integrity()`
  * distinguishes the two; a corrupt read makes the pending-op set UNKNOWN, so
  * (a) reconcileJournal refuses the "no pending operations carried over"
@@ -103,7 +103,7 @@ export interface JournalOp {
   /** Declared package version (materialize carries it in the x-plugin-version
    *  header rather than in the `file:` spec) — the submission-time generation
    *  judgement needs it, and a deferred intent that lost it can never drain
-   *  (design 21 §6.11.3 R2 / 2026-12 review). */
+   *  (design 21 §6.11.3 R2). */
   version?: string
   /** Reference to the pre-mutation backup dir: backups/<op-id>/ when the
    * executor successfully placed one, null otherwise. */
@@ -240,7 +240,7 @@ export function createPluginsJournal(stateDir: string, logger: JournalLogger): P
 
   /** No backup cleanup may run while the journal's record set is unknown:
    * a dir that "looks unreferenced" may be the only rollback material of an
-   * op whose record was lost (2026-12 audit A3-9). */
+   * op whose record was lost. */
   function cleanupBlocked(): boolean {
     return corruption !== null || corruptEvidence().length > 0
   }

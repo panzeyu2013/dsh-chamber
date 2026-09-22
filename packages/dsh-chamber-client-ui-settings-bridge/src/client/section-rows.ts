@@ -2,8 +2,8 @@
  * Settings nav projection over a live `settings.section` ledger (design 15 v1
  * flat form).
  *
- * The ledger is the SELECTED SOURCE's own boot-ctx registry (design 05 §5,
- * 2026-12 完整桥接修订): official families register there through the chamber
+ * The ledger is the SELECTED SOURCE's own boot-ctx registry (design 05 §5):
+ * official families register there through the chamber
  * composite, third-party plugins through their own bundles, and the chamber's
  * per-instance「dsh 运行时」section through the settings-bridge plugin running
  * in that same ctx. This module only projects those registrations into nav
@@ -13,13 +13,12 @@
  * shell renders (`ui-settings-general` SettingsRoot: `navIcon(row.id)` + the
  * label). Upstream carries the registrant stamp for DIAGNOSTICS only and never
  * renders it, so neither do we: a plugin-provided section looks exactly like an
- * official one here, as it does in the instance's own frontend (2026-09-11
- * decision — the old chamber-side「插件」provenance tag is gone).
+ * official one here, as it does in the instance's own frontend.
  *
- * 2026-09-11 upstream-alignment A2: the label fallback is upstream's EXPORTED
- * `resolveSlotLabel` (ui-slots/src/index.ts), the same projection upstream's own
- * ledger→row code uses (ui-settings-general/src/client/index.ts) — not a local
- * copy of it. This module only projects; it mounts nothing and owns no lifecycle.
+ * The label fallback is upstream's EXPORTED `resolveSlotLabel`
+ * (ui-slots/src/index.ts), the same projection upstream's own ledger→row code
+ * uses (ui-settings-general/src/client/index.ts). This module only projects; it
+ * mounts nothing and owns no lifecycle.
  */
 import { resolveSlotLabel } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SectionNavRow } from './nav-active.ts'

@@ -1,7 +1,7 @@
 /**
- * settings-store tests: hydration self-heal (P2 regression — a one-shot
- * bridge get() failure or a late bridge must never strand the store
- * unhydrated forever) + optimistic-save overlay (闪烁修复: a pending save is
+ * settings-store tests: hydration self-heal (a one-shot bridge get()
+ * failure or a late bridge must never strand the store unhydrated forever)
+ * + optimistic-save overlay (闪烁修复: a pending save is
  * visible immediately, a failed save rolls back, and an older save settling
  * late never flashes over a newer overlay).
  */

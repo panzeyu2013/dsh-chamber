@@ -5,8 +5,7 @@
  * branch name until edited (with a reset action), the source branch shown as
  * an informative line ("New branch will be created from {source}"), the dsh
  * host's preview as the security step; creating NEVER opens a session (the
- * empty worktree workspace appears immediately, OpenChamber-aligned — the
- * session checkbox was removed per user decision).
+ * empty worktree workspace appears immediately, OpenChamber-aligned).
  */
 import { useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { Button, IconChevronRightOutline14, Input, Menu, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
@@ -105,9 +104,8 @@ function slugifyBranchName(branch: string): string {
   return slugged === '' ? 'worktree' : slugged
 }
 
-/** Custom dropdown built on the repo's own Menu primitive (the native
- *  select was replaced per user decision — same design language as the
- *  sidebar's menus). */
+/** Custom dropdown built on the repo's own Menu primitive (same design
+ *  language as the sidebar's menus). */
 function MenuSelect({ value, placeholder, options, disabled, onChange, ariaLabel }: {
   value: string
   placeholder: string
@@ -119,10 +117,10 @@ function MenuSelect({ value, placeholder, options, disabled, onChange, ariaLabel
   const [open, setOpen] = useState(false)
   return (
     <Menu
-      // 2026-09 menu-density decision (P2-A): every chamber popup menu runs at
-      // the chamber scale, so this select-like dropdown takes the primitive's
-      // `compact` form (26px items / 12px labels) instead of the official
-      // default 40px — the dialog's own fields are chamber-scale too.
+      // Every chamber popup menu runs at the chamber scale, so this select-like
+      // dropdown takes the primitive's `compact` form (26px items / 12px
+      // labels) instead of the official default 40px — the dialog's own fields
+      // are chamber-scale too.
       compact
       portal
       align="end"
@@ -162,7 +160,7 @@ export function CreateWorktreeDialog({
   const [directoryDraft, setDirectoryDraft] = useState('')
   const [directoryTouched, setDirectoryTouched] = useState(false)
   const [startRef, setStartRef] = useState('')
-  // ARIA tabs pattern ids (unique per dialog mount; P2-3).
+  // ARIA tabs pattern ids (unique per dialog mount).
   const tabsId = useId()
   const panelId = `${tabsId}-panel`
   const [formError, setFormError] = useState<string | null>(null)
@@ -191,7 +189,7 @@ export function CreateWorktreeDialog({
     setFormError(null)
   }, [open, source?.snapshot])
 
-  // P2-5: a changed source workspace means a different repository — the
+  // A changed source workspace means a different repository — the
   // remembered/selected source branch from the previous repo must not leak
   // (the restore effect refills from the new repo's saved value).
   useEffect(() => {
@@ -227,7 +225,7 @@ export function CreateWorktreeDialog({
   }, [source?.snapshot, sourceWorkspaceId])
   const sourceBranch = sourceRepo?.worktrees.find(worktree => worktree.isMain)?.branch
     ?? sourceRepo?.worktrees[0]?.branch
-  // A4: remember the last chosen source branch per repository (OpenChamber
+  // Remember the last chosen source branch per repository (OpenChamber
   // localStorage parity), restored when the dialog opens.
   const sourceBranchStorageKey = sourceRepo === undefined ? null : `dsh-chamber.git.source-branch.${sourceRepo.repoId}`
 
@@ -284,7 +282,7 @@ export function CreateWorktreeDialog({
     }
   }
 
-  // Single-step submit (user decision, 2026-08): no preview screen. The
+  // Single-step submit: no preview screen. The
   // host preview (validation + idempotent token) runs invisibly immediately
   // before the create; any error surfaces on the button.
   const runCreate = async (): Promise<void> => {
@@ -298,8 +296,7 @@ export function CreateWorktreeDialog({
     // directory lives under the selected repo's worktree root, so only
     // same-repo DIRECTORY basenames collide — branch names do not occupy a
     // directory slot, and mixing them in silently renames a valid directory;
-    // review P3-13 / 2026-08 review: keep this set identical to the
-    // `directoryConflict` precheck below).
+    // keep this set identical to the `directoryConflict` precheck below).
     const sameRepoTaken = new Set<string>()
     if (sourceRepo !== undefined) {
       for (const worktree of sourceRepo.worktrees) {
@@ -316,8 +313,7 @@ export function CreateWorktreeDialog({
         ...(mode === 'new' && startRef !== '' ? { startRef } : {}),
       })
       // createSession: false — creating a worktree NEVER commits a session
-      // (the empty worktree workspace appears immediately; the "创建后立即新建
-      // 会话" option was removed per user decision).
+      // (the empty worktree workspace appears immediately).
       await createFromPreview(sourceId, preview, { createSession: false, sourceWorkspaceId })
       onClose()
     } catch (error) {
@@ -330,13 +326,13 @@ export function CreateWorktreeDialog({
   const branchReady = branchName.trim() !== ''
   const directoryReady = directoryDraft.trim() !== ''
   const formReady = sourceWorkspaceId !== '' && branchReady && directoryReady
-  // A3: same-repo directory-collision precheck — the new worktree would land
+  // Same-repo directory-collision precheck — the new worktree would land
   // at <root>/<repo>/<dir>, unique within the repo's worktree root.
   const directoryConflict = sourceRepo !== undefined && directoryDraft.trim() !== ''
     && sourceRepo.worktrees
       .filter(worktree => !worktree.isMain)
       .some(worktree => lastPathSegment(worktree.path) === directoryDraft.trim())
-  // A3: blur normalization on the branch name (new mode).
+  // Blur normalization on the branch name (new mode).
   const normalizeOnBlur = (): void => {
     const normalized = normalizeBranchName(branchName)
     if (normalized !== branchName) {
@@ -362,7 +358,7 @@ export function CreateWorktreeDialog({
       <div className={css.fields}>
         <div className={css.tabs} role="tablist" aria-label={t('branchMode')}>
           {/* Sliding thumb: the active segment's pill glides between the two
-              halves (user decision 2026-08 — slider-style switch). */}
+              halves (slider-style switch). */}
           <span className={css.tabThumb} data-right={mode === 'existing' ? true : undefined} aria-hidden="true" />
           <button
             type="button"
@@ -439,7 +435,7 @@ export function CreateWorktreeDialog({
               />
             </label>
             {directoryConflict && (
-              // Outside the <label> — a label only accepts phrasing content (P3-6).
+              // Outside the <label> — a label only accepts phrasing content.
               <p className={css.directoryConflict} role="alert">{t('directoryConflictHint')}</p>
             )}
             <label>
@@ -447,9 +443,9 @@ export function CreateWorktreeDialog({
               <MenuSelect
                 value={startRef}
                 placeholder={sourceBranch ?? t('sourceBranchDefault')}
-                // The main checkout's branch stays SELECTABLE (2026-12): the
-                // host resolves it to that branch's HEAD, and filtering it out
-                // (it is the implicit default when startRef is empty) left a
+                // The main checkout's branch stays SELECTABLE: the host resolves
+                // it to that branch's HEAD, and filtering it out (it is the
+                // implicit default when startRef is empty) would leave a
                 // remembered pick permanently shadowing main and single-branch
                 // repositories with an empty picker.
                 options={existingBranchChoices}

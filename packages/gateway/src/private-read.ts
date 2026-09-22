@@ -1,5 +1,5 @@
 /**
- * Shared private-file read wrappers (2026-12 audit F9): every gateway state
+ * Shared private-file read wrappers: every gateway state
  * leaf is read through the control-plane no-follow/inode discipline, and an
  * absent file (ENOENT) is the only outcome callers may treat as "not there" —
  * every other failure is rethrown loud, never flattened into a default.

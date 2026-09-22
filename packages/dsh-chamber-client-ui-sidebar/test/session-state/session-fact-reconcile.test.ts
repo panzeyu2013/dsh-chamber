@@ -3,7 +3,7 @@
  * 锁以下契约：
  *  1. **权威判定**：官方 `refreshList()` 对拉取失败照常 resolve —— 「promise 解决」
  *     不算成功，只有 `verify`  seam 确认拿到权威结论才结算 ok:true（这是守卫允许
- *     升级 L2/L3 的唯一依据，）；
+ *     升级 L2/L3 的唯一依据）；
  *  2. 单飞（在途重复请求只推进 requestedAt）、有界重试、结算回执；
  *  3. 单次尝试的硬超时（悬挂的 refresh/verify 不得永久卡死单飞链）；
  *  4. seam 缺失的永久失败语义（WARN 一次、不重试）；
@@ -12,8 +12,8 @@
  *     证伪）/ `hasReconcilableRunning`（tier-1.5）/ `uncoveredRunningIds` +
 
  *     `decideAfterFirstAuthorityRead`（**未覆盖的 running 行 = 无结论**，与 refresh 相位的
- *     成败无关——官方 refresh 的失败会 resolve，观察不到；五轮复核 HIGH）；
- *  7. **写回 seam**（）：只在 verify 判 stale 时
+ *     成败无关——官方 refresh 的失败会 resolve，观察不到）；
+ *  7. **写回 seam**：只在 verify 判 stale 时
  *     调用；成功（自校验通过）⇒ 结算 ok:true + corrected:true（守卫不据此升级），
  *     失败/抛错/缺失 ⇒ 仍按 stale（允许升级）；converged/unknown 绝不写入。
  */
@@ -153,7 +153,7 @@ test('失败后按注入的调度重试，第二次（refresh+verify 都过）�
       calls += 1
       return calls === 1 ? Promise.reject(new Error('boom')) : Promise.resolve(undefined)
     },
-    // refresh 被拒也进权威相位（）：用权威「证伪且无法写回」制造一次
+    // refresh 被拒也进权威相位：用权威「证伪且无法写回」制造一次
     // 可重试失败，第二次权威确认才收敛。
     verify: async (): Promise<SessionFactVerdict> => (calls === 1 ? 'stale' : 'converged'),
   })
@@ -349,7 +349,7 @@ test('decideAfterFirstAuthorityRead：正面证伪走 N=2；「权威沉默」�
     'needs-second-probe',
     '有证伪时优先走 N=2',
   )
-  // ）：官方 refresh 的**主流**失败形态是 resolve 成 ok:false，
+  // 官方 refresh 的**主流**失败形态是 resolve 成 ok:false，
   // 「refresh 是否失败」在 reconciliation 侧不可观察 ⇒ 未覆盖必须**无条件**判无结论，
   // 否则「官方对账没落地 + 权威缺席行」会被回执成 ok:true、升级阶梯被永久关掉。
   assert.equal(
@@ -463,8 +463,7 @@ test('dispose：取消已排期的重试与在途超时，且晚到的结算不�
 
 test('nextSettledAt：冻结时钟下连续两次结算仍单调推进（水位比较不得吞掉后一次）', async () => {
   // 守卫只认「结算时刻严格大于上次消费水位」的回执；同一毫秒的第二次结算若不 +1，
-  // 就会被当成旧回执丢弃（守卫永远看不到结论）。此前的用例只执行到这条路径，
-  // 没有断言单调性（）。
+  // 就会被当成旧回执丢弃（守卫永远看不到结论）。
   const h = harness({ refresh: () => Promise.resolve(undefined), verify: alwaysTrue })
   h.reconciler.request()
   await tick()
@@ -499,7 +498,7 @@ test('权威判定：官方位卡住而权威说已结束 ⇒ 正面证伪（允
 
 
 test('生产形状 deps（不注入 schedule/cancel）：成功结算不得被 attempt 超时定时器改写（二轮复核 critical 回归）', async () => {
-  // 生产装配只传 refresh/verify/now/warn/onSettled。此前默认 schedule=setTimeout
+  // 生产装配只传 refresh/verify/now/warn/onSettled。该装配下默认 schedule=setTimeout
   // 而 cancel 恒为 undefined ⇒ 超时定时器永不取消，在成功结算后开火把它改写成
   // ok:false（并再排一轮重试）：健康的通道上必然出现假失败回执 ⇒ 假 L2 + 假横幅。
   let refreshCalls = 0
@@ -578,7 +577,7 @@ test('dispose 之后排期的重试不再执行', async () => {
   assert.equal(calls, 1)
 })
 
-// ---- tier-3 写回（）----
+// ---- tier-3 写回 ----
 
 test('写回 seam：权威正面证伪而契约内纠正不了 ⇒ 写回成功按 converged 结算（corrected 标记）', async () => {
   let written = 0
@@ -673,8 +672,8 @@ test('正面证伪集：只有权威显式 false 且非子代理的官方 runnin
   )
 })
 
-// 生产接线锁（原 session-fact-reconcile-wiring.test.ts 的唯一 fail-closed 部分）：写回
-// 只允许把 running 压成 false，且相位结算后的晚到结果不得再改官方 store。
+// 生产接线锁：写回只允许把 running 压成 false，且相位结算后的晚到结果不得再改
+// 官方 store。
 test('生产接线：producer 接上 correct，写回只写 false，相位栅栏在结算与写回之前', () => {
   const plugin = stripComments(readFileSync(
     fileURLToPath(new URL('../../src/client/index.ts', import.meta.url)), 'utf8'))
@@ -686,17 +685,16 @@ test('生产接线：producer 接上 correct，写回只写 false，相位栅栏
   const reconcile = stripComments(readFileSync(
     fileURLToPath(new URL('../../src/shared/session-fact-reconcile.ts', import.meta.url)), 'utf8'))
   const fenceAt = reconcile.indexOf('if (this.disposed || attemptSettled) return')
-  //  the verdict branches moved into the package (decideAfterAuthorityProbe), so the
-  // decision no longer has an inline `if (verdict === 'converged')` to anchor on. The
-  // INVARIANT is unchanged - the fence must still precede the settle/write-back decision -
-  // so the anchor is now the call that makes that decision.
+  //  The verdict decision lives in the package (decideAfterAuthorityProbe), so there is
+  // no inline `if (verdict === 'converged')` to anchor on. The INVARIANT: the fence must
+  // precede the settle/write-back decision — so the anchor is the call that makes that
+  // decision.
   const decisionAt = reconcile.indexOf('decideAfterAuthorityProbe(verdict,')
   assert.ok(fenceAt >= 0 && decisionAt > fenceAt,
     'attemptSettled/disposed 栅栏必须排在收敛结算与写回之前，否则晚到的 verify 会改官方 store')
 })
 
-// 生产接线锁（原 session-fact-reconcile-wiring.test.ts，）：行为已由
-// 纯函数单测覆盖，这里补回「生产真的调了它」的源码栅栏。
+// 生产接线锁：行为已由纯函数单测覆盖，这里另加「生产真的调了它」的源码栅栏。
 test('round-3 restore: tier-1.5 gate, N=2 intersection and the write-back self-check are wired', () => {
   const plugin = stripComments(readFileSync(
     fileURLToPath(new URL('../../src/client/index.ts', import.meta.url)), 'utf8'))

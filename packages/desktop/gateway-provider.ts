@@ -1,7 +1,7 @@
 /**
  * The `http` transport provider (design 17 §2.2/§9.2): a DIRECT ENDPOINT
  * provider — no local tunnel child process. v2 semantics: it serves the
- * `http` TRANSPORT for the GATEWAY target (`dsh`×`http` is DISABLED 2026-09 —
+ * `http` TRANSPORT for the GATEWAY target (`dsh`×`http` is DISABLED —
  * direct-attaching a dsh web profile over http is hard-blocked on the 0.1.2
  * line: its host answers 401 without the spawn-time browser-auth launch
  * token, which is unrecoverable remotely; ssh is the only dsh transport.
@@ -31,7 +31,7 @@
  * write-only renderer inputs and never return in a projection or enter the
  * registry/logs; the mirror file is 0600 +
  * atomic write; a corrupt file fails loudly (preserved as `.corrupt`), never
- * silently treated as empty. S22 availability flip (P1-1): a value written as
+ * silently treated as empty. S22 availability flip: a value written as
  * an ENCRYPTED blob while crypto was available is CORRUPT when a later
  * startup loads it without working crypto (or when the blob fails to decrypt)
  * — a blob is never silently adopted as the plaintext credential, even when
@@ -45,7 +45,7 @@ import { dirname, join } from 'node:path'
 import { INSTANCE_ID_PATTERN, MAX_INSTANCE_LABEL_CHARS } from './transport-provider.ts'
 import { gatewayCredentialBinding, isCredentialBinding } from './credential-binding.ts'
 // Shared corrupt/unbound preserve + legacy-`.tmp` sweep mechanics for the
-// owner-only store files (single source, formerly duplicated in the
+// owner-only store files (single source, used by the
 // providers/ssh-plugin-journal/chamber-settings).
 import { isPlainRecord, preserveInvalidCredentialFile, preserveUnboundCredentialFile, removeLegacyTmpResidue } from './store-file-hygiene.ts'
 import type { UnboundCredentialFileWording } from './store-file-hygiene.ts'
@@ -101,9 +101,7 @@ const GATEWAY_CREDENTIAL_HEADER_PATTERN = GATEWAY_TOKEN_VISIBLE_ASCII_PATTERN
 // SPKI certificate pinning (design 17 §13.4.2 / S23): shared single source in
 // control-plane spki-pin.ts — re-exported through the dual-path facade. The
 // identity probe AND the control-plane proxy forwarding gate import the SAME
-// helpers (the former "identical copies in two packages, kept in sync by
-// comment" arrangement was removed when the facade made the control plane
-// importable from the packaged desktop). Mechanism note: checkServerIdentity
+// helpers. Mechanism note: checkServerIdentity
 // cannot enforce a pin against an internal CA (see spki-pin.ts), so the pin
 // check runs on the TLS socket 'secureConnect' event with
 // rejectUnauthorized:false + agent:false — a wrong-key peer sees zero HTTP
@@ -188,7 +186,7 @@ export function gatewayHttpFailureIsTerminal(statusCode: number): boolean {
  * durable blob. `decrypt` must THROW when given a non-blob: a file explicitly
  * tagged `safeStorage` loaded with an available adapter that cannot decrypt it
  * is unreadable/corrupt (preserved as `.corrupt`) and is never retried as raw
- * plaintext. With the adapter UNAVAILABLE the same file is the S-29
+ * plaintext. With the adapter UNAVAILABLE the same file is the
  * cross-flavor case instead: it is what the Electron flavor writes, so it is
  * preserved in place (never renamed) and reported precisely — see
  * configureGatewaySecretStore. A file explicitly tagged `plaintext` bypasses
@@ -200,7 +198,7 @@ export interface SecretCryptoAdapter {
 }
 
 /** Default adapter: encryption unavailable → the mirror stays plaintext
- * (design 05 §8 / 17 §12 — 既有用户决策延续). */
+ * (design 05 §8 / 17 §12). */
 const plaintextSecretCrypto: SecretCryptoAdapter = {
   isAvailable: () => false,
   encrypt: plain => plain,
@@ -241,7 +239,7 @@ type GatewaySecretFileStorage = 'safeStorage' | 'plaintext'
  * plaintext fact until its atomic safeStorage rewrite succeeds. */
 let durableSecretStorage: GatewaySecretFileStorage = 'plaintext'
 
-/** S-29：当前镜像文件是 Electron flavor 以 safeStorage 写出的密文，而本进程
+/** 当前镜像文件是 Electron flavor 以 safeStorage 写出的密文，而本进程
  *  （Electron-free sidecar）没有壳 Keychain 适配器 ⇒ 无法解密。此时文件**不是
  *  损坏**（Electron flavor 仍可读它），不得走 preserveInvalidCredentialFile 的
  *  .corrupt 改名路径；条目 fail closed（store 保持空），投影随之显示
@@ -253,7 +251,7 @@ export const CROSS_FLAVOR_SAFESTORAGE_NOTICE =
   + 'or re-enter them here; the next save writes the documented 0600 plaintext fallback)'
 let crossFlavorSafeStorageUnreadable = false
 
-/** S-29 renderer projection input (non-secret boolean): the loaded mirror is a
+/** renderer projection input (non-secret boolean): the loaded mirror is a
  *  cross-flavor safeStorage file this process cannot decrypt. Merged into
  *  instances_get rows beside `secretStorage` (shell-core.projectInstanceSecrets). */
 export function gatewaySecretStorageCrossFlavorUnreadable(): boolean {
@@ -340,8 +338,8 @@ export function configureGatewaySecretStore(
   tokenBindings.clear()
   passwordBindings.clear()
   if (file === null) return null
-  // One-time crash-residue sweep (2a follow-up): the pre-2a persist's FIXED
-  // `${file}.tmp` residue (see removeLegacyTmpResidue), swept once at
+  // One-time crash-residue sweep: the fixed `${file}.tmp` residue left by the
+  // legacy persist (see removeLegacyTmpResidue), swept once at
   // configure — this covers BOTH store entry points: the secret store proper
   // and configureGatewayTokenStore, which delegates here.
   removeLegacyTmpResidue(file)
@@ -379,7 +377,7 @@ export function configureGatewaySecretStore(
     return preserveInvalidCredentialFile(file, 'gateway secrets file')
   }
   const effectiveStorage: GatewaySecretFileStorage = storage === 'safeStorage' ? 'safeStorage' : 'plaintext'
-  // S-29（跨 flavor 凭据不可读）：文件带 safeStorage 判别符，本进程没有壳
+  // 跨 flavor 凭据不可读：文件带 safeStorage 判别符，本进程没有壳
   // Keychain 适配器 ⇒ 密文无法解密。**不是损坏**——绝不 rename 成 .corrupt
   // （那会让 Electron flavor 也失去这些凭据）：原文件原地保留、条目 fail
   // closed（store 保持空）、精确可操作 loud 文案 + secretStorageUnreadable
@@ -526,7 +524,7 @@ function migrateLegacyTokenFile(file: string): string | null {
  * credential dimensions for a target-domain generation. */
 /** 一个 gateway 凭据维度自己的写入面（design 17 §2.3：token 与 password 是相互独立的
  *  nullable 凭据）。刻意**没有**布尔开关、没有 kind 分派——每个维度显式给出自己的校验、
- *  自己的表操作与自己的文案，独立性因此留在类型面上（N8 的硬要求）。 */
+ *  自己的表操作与自己的文案，独立性因此留在类型面上。 */
 interface GatewayCredentialDimension {
   /** 仅用于错误文案（`refusing <label> for ...` / `refusing to persist a gateway <label> ...`）。 */
   label: 'token' | 'password'
@@ -755,7 +753,7 @@ function persistGatewaySecrets(
 // the stored password before reporting the terminal password-refused state
 // (design 17 §7.3 密码被拒 / §9.3 重登一次后仍失败才 terminal). Default = no
 // hooks: the password-session flow is INERT and a password-configured target
-// probes without auth (the old behavior) until the shell wires the complete
+// probes without auth until the shell wires the complete
 // all-or-none manager surface in; partial hooks are rejected at configuration.
 
 /** The session hooks surface mirrors GatewaySessionManager. An empty object
@@ -826,7 +824,7 @@ export function gatewaySecretStorageMode(): 'safeStorage' | 'plaintext' {
 // gateway transport is serviceable when its authenticated, gateway-owned
 // runtime controller answers — independently of the managed dsh lifecycle.
 // This distinction keeps /chamber/runtime reachable for recovery while dsh is
-// blocked/down. (dsh×http was disabled 2026-09 — a plain dsh target's only
+// blocked/down. (dsh×http is disabled — a plain dsh target's only
 // transport is ssh, whose provider owns the dsh host-identity handshake:
 // session/canOpenWorkspacePath with its legacy session/list fallback.)
 
@@ -887,8 +885,8 @@ export interface GatewayIdentityProbeOptions {
 
 /** The single gateway runtime-identity probe core shared by the direct-http
  * gateway provider (verifyGatewayEndpoint wrapper) and the ssh tunnel branch
- * (ssh-provider verifyGatewayEndpointViaTunnel wrapper) — dedupe audit N7,
- * 2026-09. Both transports probe the SAME /chamber/runtime/status identity
+ * (ssh-provider verifyGatewayEndpointViaTunnel wrapper). Both transports probe
+ * the SAME /chamber/runtime/status identity
  * contract; this core keeps the two classification paths byte-identical so a
  * fix on one side can never drift from the other. */
 export function verifyGatewayRuntimeIdentity(
@@ -1059,7 +1057,7 @@ function isValidGatewayInstance(instance: unknown): instance is TransportInstanc
     && typeof record.remotePort === 'number' && Number.isInteger(record.remotePort)
     && record.remotePort >= 1 && record.remotePort <= 65535
     && (record.insecureHttp === undefined || record.insecureHttp === null || typeof record.insecureHttp === 'boolean')
-    // S23 (P2-2): an SPKI pin must be a 64-hex sha256, the target must be
+    // S23: an SPKI pin must be a 64-hex sha256, the target must be
     // https — http 模式无 TLS 层，pin 无意义且不得声称任何 TLS 保护（13.4.2/S23）
     // — AND the kind must be 'gateway': a non-gateway kind over https would
     // HALF-execute (the identity probe pins, the reverse proxy refuses pins
@@ -1075,7 +1073,7 @@ function isValidGatewayInstance(instance: unknown): instance is TransportInstanc
  * (design 17 §9.3: the cookie is cached per origin and injected only into
  * that origin's transport). Scheme from `insecureHttp`, port explicit
  * (URL.origin elides default ports, so the key matches the registration
- * baseUrl). Mirrors verifyGatewayEndpoint's probe URL. P1-2: the spec's SPKI
+ * baseUrl). Mirrors verifyGatewayEndpoint's probe URL. The spec's SPKI
  * pin (S23) rides the origin so the password LOGIN is pinned exactly like
  * the identity probe — an internal-CA gateway login can then succeed
  * instead of dying as an untrusted-chain network failure (永不 ready). */
@@ -1204,7 +1202,7 @@ export async function verifyGatewayPasswordSession(
 
 /** The http transport provider: validate → direct-endpoint (no child) →
  * http(s) probe. Serves the GATEWAY target only — the dsh×http combination
- * is disabled (2026-09 user decision): direct-attaching a dsh web profile
+ * is disabled: direct-attaching a dsh web profile
  * over http is hard-blocked on the 0.1.2 line (its host answers 401 without
  * the spawn-time browser-auth launch token, which is unrecoverable remotely;
  * see the connection-form schema comment for the re-enable point). ssh is
@@ -1217,7 +1215,7 @@ export const gatewayProvider: TransportProvider = {
   validateSpec(input: unknown): TransportInstanceSpec | null {
     if (!isValidGatewayInstance(input)) return null
     const record = input as unknown as Record<string, unknown>
-    // dsh×http disabled (2026-09): refuse at the registry mutation point so
+    // dsh×http disabled: refuse at the registry mutation point so
     // the combination can never be created behind the UI (load drops legacy
     // rows the same way; re-enable together with the form schema when
     // upstream exposes token retrieval).
@@ -1266,7 +1264,7 @@ export const gatewayProvider: TransportProvider = {
   /** Identity verification: the gateway target must answer the authenticated
    * gateway-owned runtime status identity, which remains available while its
    * managed dsh is blocked/down (a dsh target never reaches this provider —
-   * dsh×http disabled 2026-09; its ssh transport owns the dsh host-identity
+   * dsh×http disabled; its ssh transport owns the dsh host-identity
    * handshake: session/canOpenWorkspacePath with its legacy session/list
    * fallback).
    * A missing
@@ -1290,7 +1288,7 @@ export const gatewayProvider: TransportProvider = {
     // shared verifyGatewayPasswordSession
     // flow — the ssh provider's tunnel branch uses the same implementation,
     // design 17 §9.2/§9.3). Without hooks the probe stays credential-free
-    // (the old no-auth behavior — the flow is inert until main.ts wires the
+    // (the flow is inert until main.ts wires the
     // gateway-session manager in).
     if (password !== null && sessionHooks.ensureSession !== undefined) {
       return verifyGatewayPasswordSession(gatewaySessionOriginFor(spec), password, cookie =>
@@ -1308,8 +1306,8 @@ export const gatewayProvider: TransportProvider = {
   },
 }
 
-// Desktop-synced chamber host packages (design 17 §9.3, 2026-12 Phase 3):
-// the gateway no longer ships the synced chamber host packages; a connecting
+// Desktop-synced chamber host packages (design 17 §9.3):
+// the gateway does not ship the synced chamber host packages; a connecting
 // desktop uploads its own copies through the authenticated
 // `PUT /chamber/plugins` surface. The sync is best-effort and idempotent —
 // the client skips packages whose version already matches the gateway's
@@ -1335,9 +1333,7 @@ export interface LocalChamberHostPackage {
  * above. Keyed by the SHARED seed file set (control-plane
  * `HOST_PACKAGE_SEED_FILES`, consumed through control-plane-module.ts), so a
  * seed file added there — or removed — is a compile error here instead of a
- * PUT payload that silently omits it (the pre-fix literal pair: the gateway
- * answered 200/changed:true for a two-key upload, and the remote boot missed
- * the new file with nobody reporting it).
+ * PUT payload that silently omits it.
  */
 const SYNC_UPLOAD_BYTES: Record<HostPackageSeedFile, (pkg: LocalChamberHostPackage) => string> = {
   'package.json': pkg => pkg.packageJson,
@@ -1370,7 +1366,7 @@ export interface GatewayPluginSyncResult {
   /** True when the sync was skipped (no local packages to sync). */
   skipped: boolean
   /**
-   * Honesty marker (design 21 review P2-B1): true when the sync did NOT
+   * Honesty marker (design 21): true when the sync did NOT
    * complete — a GET/PUT non-200 or a network failure. The renderer-facing
    * manual-sync IPC maps this to {ok:false} so a failure can never project
    * as "already up to date" (the both-false tuple stays reserved for the
@@ -1569,8 +1565,8 @@ export async function syncGatewayChamberPlugins(options: {
   }
 }
 
-// Gateway plugin batch apply + folder materialize (design 21 §6.5, plan
-// Phase 4.6): the /chamber/plugins write surface is 202-async — every
+// Gateway plugin batch apply + folder materialize (design 21 §6.5):
+// the /chamber/plugins write surface is 202-async — every
 // install/remove submission is accepted onto the gateway's serial executor
 // queue (opId) or persisted as a deferred intent (intentId; executed at the
 // next ready edge). The batch provider therefore:
@@ -1631,7 +1627,7 @@ export type GatewayChamberApplyBatchResult =
 
 /** Per-request timeout of the apply/materialize HTTP calls. */
 export const GATEWAY_APPLY_REQUEST_TIMEOUT_MS = 15_000
-/** Executor-settle poll budget: 1s × 120 (the plan's bounded poll). */
+/** Executor-settle poll budget: 1s × 120. */
 export const GATEWAY_APPLY_OP_SETTLE_TIMEOUT_MS = 120_000
 /** Restart readiness poll budget: 1s × 120. */
 export const GATEWAY_APPLY_RESTART_POLL_TIMEOUT_MS = 120_000
@@ -1768,7 +1764,7 @@ export async function gatewayChamberApplyBatch(params: {
       if (restart.status !== 202 && restart.status !== 200) {
         // Honest: the batch executed but the restart was refused — never a
         // silent success. The caller surfaces the partial outcome; the user
-        // can restart from the instance later (r0).
+        // can restart from the instance later.
         return partialFailure(refusalText('restart of the managed dsh', restart.status, restart.payload))
       }
       const polled = await pollRestartSettled({
@@ -2016,28 +2012,23 @@ function gatewayRawBodyPut(
  *  here against the shared whitelists + the route's version grammar). The
  *  archive size is re-checked against TARBALL_MAX_ARCHIVE_BYTES before any
  *  byte is sent. Non-202 answers map their {error, code} body honestly.
- *  After a 202 the desktop does NOT stop at acceptance (the 2026 review
- *  gap that made .tgz installs invisible until a manual refresh + manual
- *  restart): it waits for the accepted op to terminally settle on the
+ *  After a 202 the desktop does NOT stop at acceptance: it waits for the
+ *  accepted op to terminally settle on the
  *  gateway (GET /chamber/plugins/tasks), then asks for the controlled
  *  restart and polls the runtime status — exactly the apply-batch parity
  *  (settle → restart → status poll). A deferred answer (intent persisted)
  *  returns immediately: the gateway drains + restarts at the next ready
  *  edge. */
 export async function gatewayChamberMaterialize(params: {
-  /** Instance id (caller-validated). */
   id: string
-  /** Registered transport origin (the ready URL; tunnel loopback for ssh). */
   url: string
   /** Registration auth headers — main-process only, may be empty. */
   headers: Record<string, string>
-  /** Registered SPKI pin; null = unpinned. */
   spkiPin: string | null
   /** The gzip plugin archive (buildPluginTarball output). */
   tarball: Buffer
   name: string
   version: string
-  /** Tunnel Host-header override (the REMOTE gateway authority). */
   authority?: string
   /** Per-request timeout for the upload and the settle/status JSON calls. */
   requestTimeoutMs?: number
@@ -2124,7 +2115,7 @@ export async function gatewayChamberMaterialize(params: {
     if (restart.status !== 202 && restart.status !== 200) {
       // Honest partial: the plugin IS installed but the managed dsh did not
       // restart — it mounts at the next natural spawn; the user can restart
-      // from the instance (r0) or retry here.
+      // from the instance or retry here.
       const record = restart.payload as { error?: unknown; code?: unknown } | null
       const bodyError = record !== null && typeof record.error === 'string' && record.error !== '' ? record.error : '(no error body)'
       const code = record !== null && typeof record.code === 'string' && record.code !== '' ? record.code : null

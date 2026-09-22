@@ -1,5 +1,5 @@
 /**
- * Stream-lifecycle forensics contract (chamber fork, design 14 §D4, 2026-09).
+ * Stream-lifecycle forensics contract (chamber fork, design 14 §D4).
  *
  * The facts exist so the next churn investigation can name the transition and
  * the caller without renderer DevTools. This pins the contract: bounded,

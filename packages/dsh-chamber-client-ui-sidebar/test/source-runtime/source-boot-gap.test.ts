@@ -1,5 +1,5 @@
 /**
- * The sidebar's settled-boot gap copy (2026-12, design 05 §4 「降级呈现」second batch). Pinned because every link is
+ * The sidebar's settled-boot gap copy (design 05 §4 「降级呈现」). Pinned because every link is
  * a silent no-op or a silent LIE when it goes missing: a kind that maps to another kind's sentence, a structured
  * payload that renders as "缺少  ", or a dictionary key that exists in only one language. The fact itself is
  * structured by contract (`ServerBootGap`), so this file also pins the vocabulary the sidebar understands.
@@ -91,7 +91,7 @@ test('ServerSection renders the gap through the SHARED source-note live region',
   assert.equal(section.match(/sourceBootGapNote\(/g)?.length, 1, 'the gap note is computed once')
   // …and it feeds the SAME note cascade every other source note uses, in the documented priority order (managed-down
   // > gap > managed transient). A second live region would break the one-live-region-per-source rule the note's own
-  // comment pins (2026-12 review NIT), so the gap must be a BRANCH.
+  // comment pins, so the gap must be a BRANCH.
   assert.match(
     section,
     /const bootGapNote = sourceBootGapNote\(server, t\) .*?const noteIsBootGap = server\.managedRuntimeDown !== true && bootGapNote !== '' const sourceNote = server\.managedRuntimeDown === true \? t\('source\.managedDown'.*?: noteIsBootGap \? bootGapNote : managedTransient/,

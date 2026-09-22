@@ -11,7 +11,7 @@
  * kit, and never needs a page-level channel to learn what the user is looking
  * at. Its id and order collide with nothing (vendor rows sit at -10 / 10 / 20).
  *
- * WHY THE LADDER STATE LIVES HERE (2026-12 review): the session-scoped subtree is
+ * WHY THE LADDER STATE LIVES HERE: the session-scoped subtree is
  * keyed by the session binding, so switching sessions UNMOUNTS the chip. A
  * component ref would therefore hand the same session a fresh grace, cooldown
  * and rolling budget after every visit — the storm bound would be decorative.
@@ -21,7 +21,7 @@
  * WHY THE FACE IS A SINGLETON: the chip's effects depend on the injected
  * members; a fresh closure per render would re-run them for nothing.
  *
- * EXECUTION DISCIPLINE (2026-12, extended 2026-09-21): `step` executes the two
+ * EXECUTION DISCIPLINE: `step` executes the two
  * automatic arms — the stage-move heal, and the per-session rebuild ONLY when the
  * plan could prove no open is in flight (`sessionOpenInFlight === false`) — and
  * accounts each against the session's ledger. The plan's `'resync'` action merely
@@ -62,7 +62,7 @@ const SLOT_ID = 'chamber-stream-health'
 const LADDER_MEMORY = 64
 
 /**
- * Manual-rebuild double-click window (2026-09-21 review). The click is not
+ * Manual-rebuild double-click window. The click is not
  * ledger-gated, so the ONLY thing pacing it is this guard: the pinned
  * `Session.resync()` awaits `events.dispose()` before bumping the generation, so
  * two clicks in one second could start two opens.
@@ -82,7 +82,7 @@ const CARRIER_CHURN_EVENT = 'dsh-chamber:stream-carrier-failed'
 /**
  * Resolve the instance's session face LAZILY, one call at a time.
  *
- * Two facts drive this shape (2026-12 review):
+ * Two facts drive this shape:
  *  - this plugin deliberately does not inject `sessions` (its inject roster is
  *    pinned by the boot-graph tests, and the chip must work even before — or
  *    without — a session controller), so the service can be absent;
@@ -124,8 +124,8 @@ export function registerSessionStreamHealthSeat(ctx: ClientContext, t: Translate
   let carrierChurn: { at: number; count: number } | undefined
   /**
    * Render-side subscribers (the chip). The fact stays in this closure — a new
-   * observation is announced, not passed as a value (C1 wiring fix, 2026-09):
-   * while the session keeps `openState === 'open'` the chip's ticker is off, so
+   * observation is announced, not passed as a value: while the session keeps
+   * `openState === 'open'` the chip's ticker is off, so
    * an event nobody announces would never be planned into the churn notice.
    */
   const churnListeners = new Set<() => void>()
@@ -154,7 +154,7 @@ export function registerSessionStreamHealthSeat(ctx: ClientContext, t: Translate
   /** Per-session ladder state, keyed the way the budget is defined. */
   const ladders = new Map<string, SessionStreamHealthState>()
   /**
-   * Last manual rebuild per session (2026-09-21 review). The manual click is
+   * Last manual rebuild per session. The manual click is
    * deliberately NOT ledger-gated, so this is the only thing that paces it: the
    * pinned `resync()` awaits `dispose()` before bumping the generation, so two
    * clicks inside one window could start two opens.
@@ -193,12 +193,12 @@ export function registerSessionStreamHealthSeat(ctx: ClientContext, t: Translate
         {
           openState,
           presented: surfacePresented,
-          // 2026-09 review: the stage move needs a CURRENT, LISTED target, so a
+          // The stage move needs a CURRENT, LISTED target, so a
           // neighbour in the list is not enough — an address-only target would be
           // refused after spending the ledger. hasHealRoute() gates all three.
           neighborAvailable: hasHealRoute(sessions, sessionId),
           resyncAvailable: hasSessionStreamResync(sessions, sessionId),
-          // The automatic rebuild's evidence (2026-09-21): tri-state, and only the
+          // The automatic rebuild's evidence: tri-state, and only the
           // explicit `false` (no open pending) unlocks it.
           openInFlight: sessionOpenInFlight(sessions, sessionId),
           ...(carrierChurn === undefined ? {} : { carrierChurn }),
@@ -215,7 +215,7 @@ export function registerSessionStreamHealthSeat(ctx: ClientContext, t: Translate
         healSessionStream(sessions, sessionId, previousOf(sessionId))
         state = markSessionStreamHeal(state, now)
       } else if (plan.action === 'auto-resync') {
-        // The ONE automatic rebuild (2026-09-21): the plan asked for it only after
+        // The ONE automatic rebuild: the plan asked for it only after
         // the concrete face reported that NO open is in flight, so it interrupts no
         // request. Accounted whether or not the method performed anything, exactly
         // like the heal, so the cooldown and the rolling budget bound it.
@@ -233,7 +233,7 @@ export function registerSessionStreamHealthSeat(ctx: ClientContext, t: Translate
     t,
     note,
     step,
-    // Carrier-churn wake-up for the renderer (C1): the chip bumps its tick so
+    // Carrier-churn wake-up for the renderer: the chip bumps its tick so
     // the ladder re-plans and the "reconnecting…" notice can appear and expire.
     subscribe: (listener) => {
       churnListeners.add(listener)
@@ -241,16 +241,16 @@ export function registerSessionStreamHealthSeat(ctx: ClientContext, t: Translate
     },
     // The user's own action — never taken automatically (design 14 discipline).
     reload: () => { window.location.reload() },
-    // The user's own per-session stream rebuild (2026-12): the concrete
+    // The user's own per-session stream rebuild: the concrete
     // `Session.resync()` reached through the probe's guarded capability slice.
-    // NOT ledger-gated on purpose (2026-09-21): the ledger bounds the AUTOMATIC
+    // NOT ledger-gated on purpose: the ledger bounds the AUTOMATIC
     // arm, while the user's manual exit must remain available even after that
     // budget is spent — a human click is its own bound. The attempt is still
     // stamped so it paces the automatic arm.
     resync: (sessionId) => {
       try {
         const now = Date.now()
-        // Double-click guard (2026-09-21 review): a manual click is NOT ledger-gated,
+        // Double-click guard: a manual click is NOT ledger-gated,
         // so two clicks in the same second would call the concrete `resync()` twice
         // — two generations and a possible second stream. One call per window.
         const previousManual = lastManualResyncAt.get(sessionId)

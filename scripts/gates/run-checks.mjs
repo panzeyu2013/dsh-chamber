@@ -10,8 +10,8 @@
  * validation to run them).
  *
  * A step is normally a package script name (`pnpm run <step>`). Two executed-
- * assembly gates (G4's compiled-sidecar smoke and the compiled Electron
- * artifacts smoke, G32/G33) have no root package.json alias on purpose — one is
+ * assembly gates (the compiled-sidecar smoke and the compiled Electron
+ * artifacts smoke) have no root package.json alias on purpose — one is
  * a script under scripts/gates/ — so a step may also be written as an explicit
  * command line: `node <script> [args]` or `pnpm <args>`. Both forms are
  * spawned directly by this runner; nothing is interpreted by a shell.
@@ -21,7 +21,7 @@
  *   node scripts/gates/run-checks.mjs <mode> --list     # print the plan, run nothing
  *   node scripts/gates/run-checks.mjs <mode> --continue # keep going after a failure
  *
- * Artifact pre-step (2026-12 untrack-artifacts): the artifacts that left Git
+ * Artifact pre-step: the untracked build artifacts
  * (dsh-runtime / the four seed packages / the mobile dist+lib) are ensured
  * before a mode runs. tests/typecheck/full build the missing ones
  * (`pnpm run build:artifacts`); static is read-only and fails loudly with that
@@ -43,7 +43,7 @@ const PACKAGE_TESTS = [
   'test:runtime',
   'test:control-plane',
   'test:api-gateway',
-  // Pure lifecycle reducers (refactor plan Phase A): no deps, no artifacts, so a
+  // Pure lifecycle reducers: no deps, no artifacts, so a
   // structural break in the shared model fails first and names itself.
   'test:stream-state',
   'test:desktop',
@@ -66,9 +66,9 @@ const PACKAGE_TESTS = [
 
 /**
  * Compiler faces checked on every push. `typecheck` is the ROOT program
- * (tsconfig.json: control-plane / cli / renderer / desktop / gateway sources)
- * and used to be CI-only: local `check:typecheck` could be green while the root
- * program regressed (A5, 2026-12 stage-3 review). It runs first, matching ci.yml.
+ * (tsconfig.json: control-plane / cli / renderer / desktop / gateway sources).
+ * It runs first, matching ci.yml: local `check:typecheck` could otherwise be green while the root
+ * program regressed.
  */
 const CLIENT_TYPECHECKS = [
   'typecheck',
@@ -87,7 +87,7 @@ const CLIENT_TYPECHECKS = [
 
 /**
  * macOS/Swift-only leg: `test:swift` is the XCTest suite (run-swift-tests.mjs
- * pins `-c release` and fails on any XCTSkip — G2/G23), `test:macos` runs the
+ * pins `-c release` and fails on any XCTSkip), `test:macos` runs the
  * darwin O_EXLOCK lock assertions and the two packaging-script suites
  * (plutil/codesign/ditto/hdiutil + the SwiftPM .build output). Both are
  * appended only on darwin — never on the ubuntu test job / release validation.
@@ -96,7 +96,7 @@ const CLIENT_TYPECHECKS = [
  * dist/control-plane). `test:swift` runs first so its release build satisfies
  * the packaging suite's `.build/release` precondition.
  *
- * G32/G33: the same leg also carries the executed-assembly gates ci.yml's
+ * The same leg also carries the executed-assembly gates ci.yml's
  * test-macos job runs — the compiled sidecar smoke (the shipped sidecar.js
  * boots, DSH_CHAMBER_SIDECAR_COMPILED=1 so a missing assembly is a hard
  * failure), the native acceptance (the sidecar the packaged Swift shell spawns
@@ -129,23 +129,22 @@ const STATIC_CHECKS = [
   'verify:md-links',
   'verify:registry',
   'verify:anchors',
-  // C1–C15 触点门：advisory 模式（只读，不重建产物）。做成普通门是 2026-12 对抗复核的
-  // 结论——否则本地 static/full 可以在 C1/C3 失败（例如把 pure 文件挪进 patched）时全绿，
-  // 与 AGENTS "本地 pass = CI 同证据" 的口径矛盾。CI 两处已直接调用同一命令。
+  // C1–C15 触点门：advisory 模式（只读，不重建产物）。必须是普通门——
+  // 否则本地 static/full 可以在 C1/C3 失败（例如把 pure 文件挪进 patched）时全绿，
+  // 与 AGENTS "本地 pass = CI 同证据" 的口径矛盾。CI 两处直接调用同一命令。
   'node scripts/upstream/verify-upstream-touchpoints.mjs --no-artifact-rebuild',
-  // 远端完成未读/切源计划的故障注入矩阵（plan §10）：快、离线、自带 --self-test 负控。
-  // 2026-12 审计 M9：它与 remote-state-acceptance.mjs 此前完全是人工-only。
+  // 远端完成未读/切源的故障注入矩阵：快、离线、自带 --self-test 负控。
   'node scripts/gates/remote-state-injection-matrix.mjs',
-  // A1 差分回放：把旧路轨迹与新 reducer 的 effects 对着 vectors.json 比一遍。
+  // 差分回放：把旧路轨迹与新 reducer 的 effects 对着 vectors.json 比一遍。
   // 纯 node、无依赖、离线，故属 static；drift≠0 即红（差异必须在 DIVERGENCE.md 登记）。
   'node scripts/refactor/equivalence.mjs',
-  // Stream-state 的 Swift 镜像锁步（B5 前置）：编译 Foundation-only 的
+  // Stream-state 的 Swift 镜像锁步：编译 Foundation-only 的
   // packages/dsh-stream-state/swift/CarrierDecision.swift 并对着共享 tables.json 断言。
   // 只读、离线、临时目录内编译（不写工作树），故属 static 模式；
   // 负控：node scripts/... --simulate-skip 会明确打印 SKIP。
   'node scripts/gates/verify-stream-state-swift-parity.mjs',
-  // B4 前置：四条恢复阶梯的阈值锁步——值记在共享 tables.json，仍各自持有常量的模块
-  // 由本门逐个比对（漂移即红；模块删掉常量正是 B4 的退役，不算失败）。
+  // 四条恢复阶梯的阈值锁步——值记在共享 tables.json，仍各自持有常量的模块
+  // 由本门逐个比对（漂移即红；模块删掉常量正是退役，不算失败）。
   // 只读、离线、无依赖，故属 static 模式。
   'node scripts/gates/verify-ladder-table-parity.mjs',
   'test:scripts',
@@ -157,7 +156,7 @@ const STATIC_CHECKS = [
  * pre-step builds what is missing before any step runs. `static` is the
  * read-only gate set — it must NEVER write the working tree, so a missing
  * artifact is a loud failure that names `pnpm run build:artifacts` instead of a
- * silent skip or a hidden rebuild (2026-12 untrack-artifacts ruling).
+ * silent skip or a hidden rebuild.
  */
 export const ARTIFACT_MODES = new Set(['static', 'typecheck', 'tests', 'full'])
 
@@ -281,7 +280,7 @@ function main() {
   console.log(`\nrun-checks ${mode}: ${ran} step(s) passed`)
 }
 
-/** 入口判定：realpath 双侧比较（符号链接绝对路径调用时不静默 no-op；2026-12 对抗复核）。 */
+/** 入口判定：realpath 双侧比较（符号链接绝对路径调用时不静默 no-op）。 */
 const isEntry = (() => {
   const invoked = process.argv[1]
   if (invoked === undefined) return false

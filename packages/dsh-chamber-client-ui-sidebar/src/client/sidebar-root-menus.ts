@@ -1,7 +1,6 @@
 /**
- * Per-row/source menu state and the inline-rename machine (extracted verbatim
- * from SidebarRoot, 2026-12 split): the kebab-menu registry, the dedicated
- * sort-menu id, the armed rename target and its commit.
+ * Per-row/source menu state and the inline-rename machine: the kebab-menu
+ * registry, the dedicated sort-menu id, the armed rename target and its commit.
  */
 
 import { useEffect, useState, useSyncExternalStore } from 'react'
@@ -82,11 +81,10 @@ export function useSidebarMenus({ servers, runAction }: {
     runAction(`${target.sourceId}/${target.kind}/${target.id}/rename`, async () => {
       const client = getInstanceClient(target.sourceId)
       if (target.kind === 'session') await renameSession(client, target.id, target.value)
-      // chamber (2026-09-11 review S3 / 2026-12 收口, design 05 §2.2.1): the
-      // PATCH half of the workspace echo — an echo row's title is
-      // `basenameOf(path)`, so on a source whose shell is not mounted the rename
-      // used to look like a no-op until the mount push arrived. Published by the
-      // single funnel together with the wire call.
+      // chamber (design 05 §2.2.1): the PATCH half of the workspace echo — an
+      // echo row's title is `basenameOf(path)`, so on a source whose shell is
+      // not mounted the rename looks like a no-op until the mount push arrives.
+      // Published by the single funnel together with the wire call.
       else await renameWorkspaceForSource(target.sourceId, target.id, target.value)
       chamberBridge.requestRefresh(target.sourceId)
     })

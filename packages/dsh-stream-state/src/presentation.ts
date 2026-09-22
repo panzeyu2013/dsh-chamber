@@ -1,5 +1,5 @@
 /**
- * Presentation arbiter (B3) - ONE decision for what the user sees.
+ * Presentation arbiter - ONE decision for what the user sees.
  *
  * WHY. Four independent timers decide visibility today, in four files:
  *   - the App reveal gate holds the OLD view up to 1s (reveal-gate.ts:36);
@@ -14,14 +14,14 @@
  * 155s invariant holds for every phase.
  *
  * PURITY: zero imports, no clock reads, no DOM. All facts and all thresholds
- * arrive as inputs (B3's wiring supplies them from the existing modules), so this
+ * arrive as inputs (the wiring supplies them from the existing modules), so this
  * file is the single place the composition is defined.
  */
 
 /** What the shell itself reports about the requested session (session-surface.ts).
- * `unknown` is NEW as a distinct state: the old reader folded an unreadable
- * `data-phase` into `hero`, i.e. a version-skewed anchor held the veil for the
- * full outer bound while looking exactly like 'no content yet'. */
+ * `unknown` is a distinct state: an unreadable `data-phase` must not fold into
+ * `hero`, because a version-skewed anchor would then hold the veil for the full
+ * outer bound while looking exactly like 'no content yet'. */
 export type SessionSurfacePhase = 'absent' | 'hero' | 'settling' | 'active' | 'unknown'
 
 export interface PresentationFacts {
@@ -170,9 +170,9 @@ export function decidePresentation(
 
 /**
  * Upper bound of the veil for one attempt, in ms, from the threshold table alone.
- * This is the single answer to 'how long can the user be parked' - the number G4 in
- * the refactor plan asserts (<= 155s including the boot budget and the abandonment
- * sweep, which live in the caller's tables and are passed in).
+ * This is the single answer to 'how long can the user be parked' - the invariant is
+ * <= 155s including the boot budget and the abandonment sweep, which live in the
+ * caller's tables and are passed in.
  */
 export function veilUpperBoundMs(thresholds: PresentationThresholds, extra: {
   readonly bootTimeoutMs: number

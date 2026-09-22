@@ -1,7 +1,7 @@
 /**
  * /chamber/runtime start primitive, the profile-write lease and shell
  * invalidation (F4) recovery: start state matrix, lease fencing and stranded /
- * fresh invalidation healing. Split from runtime-routes.test.ts.
+ * fresh invalidation healing.
  */
 
 import { test } from 'node:test'
@@ -36,7 +36,7 @@ import {
 } from '../support/runtime-routes-harness.ts'
 
 // ---------------------------------------------------------------------------
-// Design 21 decision 12 + §6.3 (Phase 4.1/4.5): start primitive and the
+// Design 21 decision 12 + §6.3: start primitive and the
 // managed profile-write lease (lifecycle writer barrier)
 // ---------------------------------------------------------------------------
 
@@ -143,7 +143,7 @@ test('start route: busy phases, phase-less recovery blocks, pending and profile-
   assert.equal(starts, 0)
   // Recovery gate is not bypassable: recovery phases only expose their
   // matching retry (decision 12; restore-builtin applies to pending/healthy
-  // selections only — 2026 audit R2).
+  // selections only).
   phase = 'swap-attempted'
   const swap = await runRoute(routes, 'POST', '/chamber/runtime/start')
   assert.equal(swap.status, 409)
@@ -299,18 +299,17 @@ test('beginProfileWrite refuses while a restart, install or start is in flight a
       config: config(installDir),
       plane,
       logger: silentLogger,
-      // perf T3（2026-09）：磁盘闸口改异步（runtimeDiskSummaryAsync）后
-      // fetchMetadata 不再于 select() 的同步前缀内启动——测试等待其实际
-      // 启动再断言 lease 拒绝（installInFlight 仍同步置位，语义不变）。
+      // 磁盘闸口改异步（runtimeDiskSummaryAsync）后 fetchMetadata 不在
+      // select() 的同步前缀内启动——测试等待其实际启动再断言 lease 拒绝
+      // （installInFlight 仍同步置位，语义不变）。
       fetchMetadata: async () => new Promise((_, reject) => {
         rejectFetch = reject
         resolveFetchStarted()
       }),
     })
     const install = manager.select('2.0.0')
-    // 2026-09 review（A5）：race 兜底——若未来 select() 在达 fetchMetadata
-    // 前 reject/return（回归），测试立即失败而非因 fetchStarted 永不 resolve
-    // 而永挂。
+    // race 兜底——若 select() 在到达 fetchMetadata 前 reject/return（回归），
+    // 测试立即失败而非因 fetchStarted 永不 resolve 而永挂。
     await Promise.race([
       fetchStarted,
       install.then(
@@ -569,9 +568,9 @@ test('a stranded F4 invalidation (pointer + invalidatedAt, journal lost) self-he
   // Durable state after an interrupted gateway-update F4 whose intent journal
   // was lost (e.g. the installer rolled back to an older shell that consumed
   // the journal): current pointer still names the old tree, override carries
-  // invalidatedAt, no journal, no pending. Before the fix this booted "clean"
-  // through startupTransaction and then crashed at the first startLocal with
-  // 'gateway runtime current pointer has no matching active override' — a
+  // invalidatedAt, no journal, no pending. Without the re-arm this state boots
+  // "clean" through startupTransaction and then crashes at the first startLocal
+  // with 'gateway runtime current pointer has no matching active override' — a
   // crash loop with no HTTP recovery surface.
   const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-stranded-f4-'))
   try {
@@ -627,13 +626,13 @@ test('a settled F4 invalidation (pointer cleared) is NOT re-armed on later boots
 })
 
 test('a FRESH shell-version mismatch over an APPLIED override with a settled applied-monitoring journal arms F4 (upgrade no longer crashes resolveWorkspace)', async () => {
-  // The .172 regression fingerprint: the user upgraded the managed dsh under
-  // gateway 0.2.1 (override shellVersion 0.2.1, activation journal settled in
-  // applied-monitoring, pointer on the chosen tree). Booting gateway 0.2.2
-  // must arm the F4 shell-invalidation transaction (desktop parity) instead
-  // of crashing at the first resolveWorkspace with 'current pointer has no
-  // matching active override' — which previously forced the installer's
-  // health check into an automatic rollback.
+  // The fresh-shell-mismatch fingerprint: an upgrade left the override
+  // shellVersion on the previous shell with the activation journal settled in
+  // applied-monitoring and the pointer on the chosen tree. The new shell must
+  // arm the F4 shell-invalidation transaction (desktop parity) instead of
+  // crashing at the first resolveWorkspace with 'current pointer has no
+  // matching active override' — which would force the installer's health check
+  // into an automatic rollback.
   const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-fresh-f4-'))
   try {
     makeValidTree(stateDir, '1.0.0')
@@ -751,7 +750,7 @@ test('a FRESH shell mismatch with a LIVE old-shell transaction journal (prepared
     // Builtin (0.9.0) is still the active source — the old shell died BEFORE
     // the pointer switch, so no current pointer exists yet.
     writeOverride(stateDir, {
-      shellVersion: '0.2.0-beta.8', // the pre-update gateway shell
+      shellVersion: '0.2.0-beta.8',
       chosenVersion: '1.0.0',
       resolvedVersion: '1.0.0',
       pending: '1.0.0',
@@ -829,7 +828,7 @@ test('a stranded F4 invalidation carrying stale failure markers still self-heals
   // is not a blocked-but-alive reason in index.ts, the gateway would
   // crash-loop at startLocal. Re-arming must clear the stale markers
   // (fresh-transaction-supersedes parity with apply()/applyNowPreflight),
-  // while preserving the historical fields.
+  // while preserving the lastInvalidated* history fields.
   const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-stranded-markers-'))
   try {
     makeValidTree(stateDir, '1.0.0')
@@ -858,7 +857,7 @@ test('a stranded F4 invalidation carrying stale failure markers still self-heals
 
 test('an interrupted F4 apply that failed at snapshot (intent journal + stale markers) resumes and heals on the next boot', async () => {
   // The F4 arm wrote the shell-invalidation intent and invalidated the
-  // record, but the builtin-switch apply kept failing at the
+  // record, but the builtin-switch apply keeps failing at the
   // pre-swap snapshot — leaving an intent-phase journal PLUS stale
   // lastOutcome/swapAttempted markers. runStartupPhase blocks on the markers
   // before resuming, and index.ts spawns through 'snapshot-failed' — with an

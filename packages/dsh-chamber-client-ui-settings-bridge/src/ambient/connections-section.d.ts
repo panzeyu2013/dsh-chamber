@@ -3,18 +3,17 @@
  * (packages/dsh-client-ui-settings-connections): the bridge section embeds
  * it as the page-bottom connection management surface (create/delete
  * connections). Resolved via tsconfig paths for the stable
- * `@dsh-chamber/dsh-chamber-client-ui-settings-connections/section` subpath (A6 —
- * never a deep `./src/*` import) — the connections package's own sources are
+ * `@dsh-chamber/dsh-chamber-client-ui-settings-connections/section` subpath (never
+ * a deep `./src/*` import) — the connections package's own sources are
  * never compiled here; at runtime vite resolves the specifier through the
  * explicit renderer alias to the real TSX.
  *
  * MIRROR WARNING: this face mirrors the REAL component's consumption
  * surface (ConnectionsSection.tsx destructures `t` + `pluginDiagnostics` +
  * `onRecheckDiagnostic`; the local card reads the renderer-published plugin
- * diagnostics — 2026 review T4). If the real component's props change, this
+ * diagnostics). If the real component's props change, this
  * declaration and the <ConnectionsSection> call site in SettingsShell.tsx MUST
- * be updated together — that pairing is pinned by
- * (the former source-text mirror gate was removed by the 2026-12 ruling).
+ * be updated together.
  * Structural note: the real component keeps
  * pluginDiagnostics/bootGaps/onRecheckDiagnostic/assembly* in its extra-props
  * block (not the injected business face); the mirror lumps them into
@@ -34,7 +33,7 @@ export interface ConnectionsSectionInjected {
   /** Renderer-published per-instance plugin diagnostics (local card). */
   pluginDiagnostics?: Readonly<Record<string, { state: string; message?: string } | undefined>>
   /** Renderer-published per-instance settled-boot gaps, keyed like the
-   *  diagnostics above (2026-12, design 05 §4 「降级呈现」). */
+   *  diagnostics above (design 05 §4 「降级呈现」). */
   bootGaps?: Readonly<Record<string, {
     kind: string
     services?: readonly string[]

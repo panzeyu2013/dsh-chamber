@@ -1,11 +1,7 @@
 name: CI
 
 on:
-  # Branch pushes and PRs only (2026-09 CI-trigger revision): tag pushes used to
-  # run this chain as well. The linux leg stepped aside for tags (release.yml's
-  # validation is its mechanical superset) while the windows leg re-ran the
-  # identical SHA, and tagging a commit that never went through `main` skipped the
-  # linux chain entirely. A release now PROVES its commit passed here instead:
+  # Branch pushes and PRs only: a release PROVES its commit passed here.
   # release.yml's validation runs scripts/release/verify-release-ci-proof.mjs, which
   # requires a completed, successful ci.yml push run on main whose linux, Windows
   # and macOS legs all passed.
@@ -28,10 +24,10 @@ jobs:
   # Validation chain only — no desktop packaging (fast). Packaging is built and
   # published exclusively by release.yml (tag v* / workflow_dispatch), where the
   # bundler runs with the DSH_CHAMBER_DSH_VERSION matching the committed runtime
-  # lockfile. Keeping packaging out of the push path keeps ordinary pushes fast
-  # (2026-08 decision): the v0.1.4 CI packaging jobs carried a stale hardcoded
-  # DSH_CHAMBER_DSH_VERSION and failed every run with ERR_PNPM_OUTDATED_LOCKFILE
-  # — if packaging jobs ever return to CI, their version env must be synced too.
+  # lockfile. Keeping packaging out of the push path keeps ordinary pushes fast:
+  # if packaging jobs ever return to CI, their DSH_CHAMBER_DSH_VERSION env must
+  # be synced with the committed runtime lockfile or they fail every run with
+  # ERR_PNPM_OUTDATED_LOCKFILE.
   test:
     # Branch pushes and PRs only — no tag trigger exists (see `on:` above).
     # release.yml's validation mirrors this chain (the alignment contract is
@@ -65,9 +61,8 @@ jobs:
       - name: Verify workflow action pins
         run: node scripts/gates/verify-workflow-action-pins.mjs
       # The pin check above reads the workflows as TEXT, so it stays green on a
-      # file GitHub refuses to parse (2026-12: an inserted `single entry: …`
-      # step name was invalid YAML and every local gate passed). This closes
-      # that gap without adding a YAML dependency.
+      # file GitHub refuses to parse; this closes that gap without adding a YAML
+      # dependency.
       - name: Verify workflow YAML scalars
         run: node scripts/gates/verify-workflow-yaml-scalars.mjs
       - uses: pnpm/action-setup@fe02b34f77f8bc703788d5817da081398fad5dd2 # v4.1.0
@@ -97,7 +92,7 @@ jobs:
         run: node scripts/upstream/verify-upstream-touchpoints.mjs --no-artifact-rebuild
       - run: pnpm install --frozen-lockfile
         if: steps.classify.outputs.code == 'true'
-      # 2026-12 产物移出 git：C8 默认模式先快照再就地重建-比对，clean checkout
+      # 构建期产物不入 git：C8 默认模式先快照再就地重建-比对，clean checkout
       # 必须在它之前自举这 9 个构建期产物（缺席会被判成 stale）。
       - name: Bootstrap untracked build-time artifacts (C8 input)
         if: steps.classify.outputs.code == 'true'
@@ -136,7 +131,7 @@ jobs:
         run: pnpm run verify:test-wiring
       - name: Markdown link gate
         run: pnpm run verify:md-links
-      # Upstream registry single source (2026-12): schema/canonical/reference checks,
+      # Upstream registry single source: schema/canonical/reference checks,
       # the coverage net (checklist headings ↔ entries, chamberNamedForks,
       # ensure-harness-vendor EXCLUDED) and generated-view freshness; the anchor probe
       # keeps registry symbol anchors resolvable and the legacy 文件:行 budget ratcheted
@@ -146,13 +141,12 @@ jobs:
         run: pnpm run verify:registry
       - name: Upstream anchor probe (symbol anchors + legacy budget)
         run: pnpm run verify:anchors
-      # Stream-state refactor gates (session-chain B1–B7). File-only, so NOT behind
+      # Stream-state gates. File-only, so NOT behind
       # the classifier: the differential replay must keep showing zero behavioral
       # drift against the recorded vectors, and the Swift carrier-decision mirror
       # must stay in lockstep with the TS table (the cross-language half of the
-      # single source of truth). Both are named in run-checks.mjs static, and P1-1
-      # requires this file to list them too — a gate that only exists locally is
-      # not a gate.
+      # single source of truth). Both are named in run-checks.mjs static, and this
+      # file must list them too — a gate that only exists locally is not a gate.
       - name: Stream-state differential replay (recorded vectors, drift = failure)
         run: pnpm run verify:stream-state-equivalence
       - name: Stream-state Swift parity (cross-language lockstep)
@@ -182,7 +176,7 @@ jobs:
       # docs/checklists/gui-acceptance-checklist.md).
       - name: Script unit tests — single entry (gates / upstream / release / gui-acceptance)
         run: pnpm run test:scripts
-      # One entry for the package test set (2026-12): the same mode is what
+      # One entry for the package test set: the same mode is what
       # `pnpm run check:tests` runs locally, so the push path and a developer's
       # terminal cannot drift. Adding or renaming a package suite means editing
       # scripts/gates/run-checks.mjs once; `pnpm run test:scripts:release` keeps
@@ -190,16 +184,16 @@ jobs:
       - name: Package unit tests — single entry (runtime / control-plane / desktop / gateway / renderer-shell / client+host plugins)
         if: steps.classify.outputs.code == 'true'
         run: node scripts/gates/run-checks.mjs tests
-      # 计划的统一验收矩阵（docs/progress/todo/remote-session-state-and-switch.md §9/§13.1）：
-      # 2026-12 审计 M9 指出它此前只是人工脚本。它按 --node 指定的解释器逐文件跑，
+      # 计划的统一验收矩阵：
+      # 它按 --node 指定的解释器逐文件跑，
       # 因此 CI 用自带 node；vendor 与 node_modules 在此都已就位，blocked 项应全部转绿。
-      - name: Remote-state acceptance matrix (plan §9)
+      - name: Remote-state acceptance matrix
         if: steps.classify.outputs.code == 'true'
         run: node scripts/gates/remote-state-acceptance.mjs --node "$(command -v node)" --out .tmp/acceptance/remote-state.json
-      # 故障注入矩阵（plan §10）：与本地 check:static 同一条命令 —— P1-1 的单源化要求
+      # 故障注入矩阵：与本地 check:static 同一条命令 —— 单源化要求
       # 静态集合两侧一致（check:static ↔ 这条 push 路径）；它是 file-only 的，故不挂
       # classifier。release 验证必须同步（release-workflow-policy 从 ci.yml 派生断言）。
-      - name: Remote-state fault-injection matrix (plan section 10)
+      - name: Remote-state fault-injection matrix
         run: node scripts/gates/remote-state-injection-matrix.mjs
       # Client plugin compiler faces, same single entry as `pnpm run check:typecheck`.
       - name: Client plugin type checks — single entry (sidebar / git / layout / connections / settings-bridge / client-web / connection / api-gateway / open-in / mobile)
@@ -209,20 +203,20 @@ jobs:
       # dsh runtime — normal here, since only
       # packages/desktop/vendor/dsh/pnpm-lock.yaml is committed and
       # node_modules is never committed; the gate requires a real dsh CLI
-      # entry (2026-08 fix). The release path currently has NO smoke either:
+      # entry. The release path currently has NO smoke either:
       # release.yml's build jobs only package and structurally verify the
       # bundle (vendor/dsh presence + platform) — a smoke pass against the
       # freshly bundled runtime is not wired up anywhere.
       #
-      # 2026-12 review P2 — the SKIP is a documented contract of the smoke
+      # The SKIP is a documented contract of the smoke
       # entry (packages/control-plane/test/smoke.test.ts: "dsh unavailable …
       # exits 0"), so it must NOT be turned into a red gate here; that would
       # make every ordinary push red and the release path could not run it at
       # all. Instead the step accepts exactly TWO outcomes and refuses every
       # other one: an explicit `SMOKE PASS`, or an explicit `SKIP: …` whose
       # reason is echoed as a workflow notice (visible in the run summary
-      # instead of a green step that proves nothing). A silent exit 0 — the
-      # failure mode that made this step unreadable — now fails the job.
+      # instead of a green step that proves nothing). A silent exit 0 fails
+      # the job.
       # `set -euo pipefail` is explicit (not inherited from the runner's shell
       # wrapper) so a real smoke failure can neither be swallowed by `tee` nor
       # fall through to a later command.
@@ -242,7 +236,7 @@ jobs:
       - name: Renderer build
         if: steps.classify.outputs.code == 'true'
         run: pnpm run build:renderer
-      # W8 / R15③: the renderer page bundle is a build output that appears AFTER
+      # The renderer page bundle is a build output that appears AFTER
       # the package test suites, so no test-suite guard can see it. Assert the SVG
       # resource scoper code survived the build here, where the artifact exists.
       - name: Renderer page bundle carries the SVG scope code
@@ -250,10 +244,9 @@ jobs:
         run: node packages/dsh-chamber-client-ui-mobile/scripts/assert-scoper-artifact.mjs
       # Host-package esbuild bundles (dsh-chamber-seed-client-graph /
       # dsh-chamber-seed-git-worktree / dsh-chamber-seed-archive-cleanup /
-      # dsh-chamber-seed-open-in — dist/index.js) only used to build in
-      # release — their esbuild entry/external mapping is an independent
-      # failure mode, so the push path validates them too (2026 round-3
-      # review).
+      # dsh-chamber-seed-open-in — dist/index.js): their esbuild entry/external
+      # mapping is an independent failure mode, so the push path validates them
+      # too.
       - name: Host package builds
         if: steps.classify.outputs.code == 'true'
         run: pnpm run build:host-packages
@@ -268,7 +261,7 @@ jobs:
           pnpm --filter @dsh-chamber/desktop run build:preload
           pnpm --filter @dsh-chamber/desktop run build:host-graph-package
       # Third-party notices must track the installed dependency set; a
-      # stale committed file fails the push (2026 review).
+      # stale committed file fails the push.
       - name: Third-party notices current
         if: steps.classify.outputs.code == 'true'
         run: node scripts/release/gen-third-party-notices.mjs && git diff --exit-code -- THIRD_PARTY_NOTICES.md docs/THIRD_PARTY_NOTICES.en-US.md
@@ -281,7 +274,7 @@ jobs:
           npm install --ignore-scripts --prefix /tmp/dsh-gateway-install /tmp/dsh-gateway-pack/*.tgz
           /tmp/dsh-gateway-install/node_modules/.bin/gateway --help
 
-  # Windows contract leg (Windows 首版推进, M0): mirrors the linux test job
+  # Windows contract leg: mirrors the linux test job
   # for the platform-sensitive suites. This is where the win32-only lifecycle
   # integration tests run and where the remaining `skip: platform === 'win32'`
   # points are tracked (docs/progress/todo/windows-v1.md holds the ledger and the recording rules).
@@ -376,20 +369,18 @@ jobs:
         run: pnpm run verify:styles
       # Windows leg consumes each package's platform manifest — `test:win32`
       # scripts in package.json are the single source of truth (structural
-      # rule, 2026-09): no test file lists live in this YAML. Pre-M2b the
+      # rule): no test file lists live in this YAML. The
       # dsh-runtime store semantics are POSIX-only by design (private-fs fails
       # closed without O_NOFOLLOW), so the full POSIX suites run on the POSIX
       # legs; each package's test:win32 lists its win32-real / platform-
-      # neutral gates and is extended as Windows semantics land (M2b) — in
-      # the package, next to the tests, never here.
+      # neutral gates — in the package, next to the tests, never here.
       # The five manifests are also reachable as one root fan-out
-      # (`pnpm run test:win32`, root package.json — 2026-12 review P2: without
+      # (`pnpm run test:win32`, root package.json: without
       # it the Windows list could not be reproduced from a local checkout at
       # all). This leg keeps the five named steps so a failure names the
       # owning package. The renderer/sidebar manifests are the boot-gap
       # mechanism's platform-neutral decision face (host-graph merge → required
-      # row probe → degraded presentation / sidebar copy): before them the
-      # sidebarRight miss was only ever exercised on the POSIX legs.
+      # row probe → degraded presentation / sidebar copy).
       - name: dsh-runtime test:win32 manifest
         if: steps.classify.outputs.code == 'true'
         run: pnpm --filter @dsh-chamber/dsh-runtime run test:win32
@@ -405,12 +396,10 @@ jobs:
       - name: sidebar test:win32 manifest (source boot-gap copy)
         if: steps.classify.outputs.code == 'true'
         run: pnpm --filter @dsh-chamber/dsh-chamber-client-ui-sidebar run test:win32
-      # Credential-free packaging rehearsal (2026-12). Until now the first place a
-      # Windows packaging regression could surface was inside release.yml — the
-      # workflow that already holds the release credentials. This leg builds the
+      # Credential-free packaging rehearsal. This leg builds the
       # desktop payload and runs electron-builder with `--publish=never`, so a
       # broken `files`/`extraResources`/beforePack/afterPack path fails on an
-      # ordinary master push instead. Two deliberate limits: it never runs on pull
+      # ordinary master push. Two deliberate limits: it never runs on pull
       # requests (minutes of NSIS toolchain work per PR is not worth the signal),
       # and it uploads nothing — the point is that packaging succeeds, not that an
       # artifact is kept.
@@ -419,13 +408,13 @@ jobs:
         run: |
           pnpm run build:desktop
           # exec, not `run dist:win -- --publish=never`: pnpm forwards its own `--`
-          # separator to the script, so electron-builder received
-          # `--win --x64 "--" "--publish=never"`, treated the flag as a positional
-          # argument, fell back to CI implicit publishing and died on the missing
-          # GH_TOKEN. This mirrors the release workflow's own invocation.
+          # separator to the script, so electron-builder would receive
+          # `--win --x64 "--" "--publish=never"`, treat the flag as a positional
+          # argument and fall back to CI implicit publishing (dying on the missing
+          # GH_TOKEN). This mirrors the release workflow's own invocation.
           pnpm --filter @dsh-chamber/desktop exec electron-builder --win --x64 --publish=never
 
-  # macOS Swift shell leg (design 25, W-26): the SwiftPM package, the JS↔Swift
+  # macOS Swift shell leg (design 25): the SwiftPM package, the JS↔Swift
   # bridge manifest lockstep and the packaging inputs are macOS-only surfaces —
   # without this job a Swift/bridge/manifest regression lands unnoticed until a
   # release. Deliberately NOT a packaging job: the .app/sidecar assembly and
@@ -487,9 +476,8 @@ jobs:
         run: pnpm run ensure:artifacts
       # DSH_CHAMBER_SHELL_NODE_BIN turns the 8 Swift↔sidecar integration tests from
       # XCTSkip into real runs (they spawn `node packages/desktop/sidecar-entry.ts`);
-      # locally verified 8/8 green with a plain node binary (2026-09 三审 #3).
-      # This raw step stays the release proof's pinned anchor (G25,
-      # REQUIRED_JOB_STEPS in release-workflow-policy.test.mjs); the gated
+      # This raw step stays the release proof's pinned anchor
+      # (REQUIRED_JOB_STEPS in release-workflow-policy.test.mjs); the gated
       # release run below is the one that enforces the shipped configuration.
       - name: Swift build (release)
         if: steps.classify.outputs.code == 'true'
@@ -498,9 +486,9 @@ jobs:
           export DSH_CHAMBER_SHELL_NODE_BIN="$(command -v node)"
           swift build -c release
       # The gate the local/tests mode uses (run-checks `test:swift`): pins
-      # `swift test -c release` (G23 — the shipped native binary is a release
+      # `swift test -c release` (the shipped native binary is a release
       # build, so the release configuration must be the one executed, not
-      # merely compiled) and fails on ANY XCTSkip (G2 — the 8 sidecar
+      # merely compiled) and fails on ANY XCTSkip (the 8 sidecar
       # integration cases must run, never skip to green). The runner defaults
       # DSH_CHAMBER_SHELL_NODE_BIN to its own node, so the integration cases really spawn
       # `packages/desktop/sidecar-entry.ts`. Invoked directly (not through
@@ -511,7 +499,7 @@ jobs:
       # JS↔Swift bridge lockstep: the committed bridge-manifest.json /
       # BridgeManifest.swift must equal a regeneration, the shim surface must
       # match preload, and the payload SHAPE at every method call site must
-      # match too (the manifest locks channels; the payload gate closes G22's
+      # match too (the manifest locks channels; the payload gate closes the
       # wire-shape gap). Re-running the cheap ones here keeps the macOS leg
       # self-contained when only Swift changes are pushed.
       - name: Bridge manifest + shim surface + payload shape lockstep
@@ -534,7 +522,7 @@ jobs:
         run: |
           pnpm --filter @dsh-chamber/desktop run build:control-plane
           pnpm --filter @dsh-chamber/desktop run test:macos
-      # Executed-assembly gate (G4): build the sidecar from the same sources
+      # Executed-assembly gate: build the sidecar from the same sources
       # Swift ships (no network — --skip-node/--skip-vendor; the host packages
       # are not needed to boot and answer dsh-chamber:info) and run the REAL
       # sidecar.js with DSH_CHAMBER_SIDECAR_COMPILED=1. A bundle that cannot
@@ -546,10 +534,9 @@ jobs:
         run: |
           pnpm run build:sidecar --skip-node --skip-vendor --skip-host-packages
           DSH_CHAMBER_SIDECAR_COMPILED=1 node scripts/gates/compiled-sidecar-smoke.mjs
-      # G33 machine gate: the native GUI acceptance used to be manual-only
-      # (pnpm run acceptance:gui --flavor native), so nothing in CI pinned that
-      # the native assembly the packaged Swift shell spawns actually launches
-      # and serves. This step drives the sidecar built by the step above (the
+      # Native GUI acceptance gate: the native assembly the packaged Swift shell
+      # spawns must actually launch and serve. This step drives the sidecar built
+      # by the step above (the
       # NDJSON B bridge ready/info/settings frames, /health, the hostile-Origin
       # fence, the shell index when the assembly carries dist/web, and a clean
       # SIGTERM exit) and passes --require-assembly so a missing/skipped build
@@ -559,7 +546,7 @@ jobs:
       - name: Native assembly acceptance (spawned sidecar boots + serves)
         if: steps.classify.outputs.code == 'true'
         run: node scripts/gui-acceptance/run.mjs --flavor native --require-assembly
-      # Electron compiled-artifact smoke (G4 residual): the compiled
+      # Electron compiled-artifact smoke: the compiled
       # dist/control-plane entry is spawned electron-free, must bind and answer
       # /health, then exit 0 on SIGTERM; dist/preload.cjs is executed inside
       # node:vm with a stubbed electron and must expose the frozen
@@ -579,16 +566,14 @@ jobs:
         run: |
           pnpm run build:sidecar --dry-run
           pnpm run build:swift-app --dry-run --skip-build
-      # Electron mac packaging rehearsal (2026-12 A2 高危). The electron-builder
-      # mac leg used to run for the first time inside release.yml — after the
-      # draft release existed and with the Apple credentials loaded — so a broken
-      # files/extraResources/beforePack/afterPack path failed the release run
-      # itself (both real failures of the 0.3.2-beta series landed there). This
-      # step runs the exact release chain on an ordinary main push instead:
+      # Electron mac packaging rehearsal. This step runs the exact release chain
+      # on an ordinary main push, so a broken
+      # files/extraResources/beforePack/afterPack path fails here instead of
+      # inside release.yml with the Apple credentials loaded:
       # build:desktop + electron-builder --mac --arm64 --publish=never, ad-hoc
       # signing only, no notarization credentials, no upload. afterPack is the
-      # same fail-closed product verifier the release leg executes (G27 Electron
-      # payload + the packaged locale assertion), so a packaging regression now
+      # same fail-closed product verifier the release leg executes (Electron
+      # payload + the packaged locale assertion), so a packaging regression
       # fails the push path that the release proof watches
       # (verify-release-ci-proof.mjs REQUIRED_JOB_STEPS pins THIS step name).
       # Same deliberate limits as the Windows rehearsal above: never on pull
@@ -608,5 +593,5 @@ jobs:
           # The pack above exercised afterPack on the real .app; now assert the
           # staged product itself: the gate's packaged-app arm re-checks the
           # locales electron-builder's electronLanguages matcher can silently
-          # delete (A1 zh_CN.lproj/locale.pak regression).
+          # delete.
           node scripts/gates/verify-electron-artifacts.mjs

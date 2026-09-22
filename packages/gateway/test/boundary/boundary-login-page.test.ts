@@ -1,7 +1,6 @@
 /**
  * Boundary login page and proxied-frontend CSP: HTML/JSON negotiation, expired
- * hints, rate-limit/auth_busy pages and the login response header set. Split
- * from dispatch-composition.test.ts.
+ * hints, rate-limit/auth_busy pages and the login response header set.
  */
 
 import { test } from 'node:test'
@@ -15,7 +14,7 @@ import { detectLoginLang, renderLoginPage, wantsHtmlLoginResponse } from '../../
 import { FakeRequest, FakeResponse, gatewayRequest } from '../support/utils.ts'
 import { TOKEN, setup, realAuth, runHttp, silentLogger } from '../support/dispatch-harness.ts'
 
-// ── Proxied dsh frontend CSP (M2-4a) ──
+// ── Proxied dsh frontend CSP ──
 
 test('the proxied frontend CSP keeps base-uri on self so the upstream <base href="/"> survives', async () => {
   const { auth, cleanup } = realAuth({ config: { kind: 'token', token: TOKEN } })
@@ -30,9 +29,9 @@ test('the proxied frontend CSP keeps base-uri on self so the upstream <base href
     // refuse that element. Whether that costs a white screen is version-
     // dependent (in the pinned tree serveStatic renders the index only for the
     // dist root and the index path, where relative asset URLs already resolve),
-    // so the allowance is recorded as "the element must stay effective", not as
-    // "a deep link was once broken". Regression locked here (GATEWAY_PROXY_CSP
-    // in packages/gateway/src/dispatch.ts).
+    // so the allowance is recorded as "the element must stay effective".
+    // Regression locked here (GATEWAY_PROXY_CSP in
+    // packages/gateway/src/dispatch.ts).
     assert.match(csp, /base-uri 'self'/)
     assert.doesNotMatch(csp, /base-uri 'none'/)
     assert.equal(
@@ -40,7 +39,7 @@ test('the proxied frontend CSP keeps base-uri on self so the upstream <base href
       "default-src 'self'; base-uri 'self'; object-src 'none'; frame-src blob:; frame-ancestors 'none'; form-action 'none'; script-src 'self' 'unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:",
     )
 
-    // Cross-package lockstep (2026-12 review): the design claims "every other
+    // Cross-package lockstep: the design claims "every other
     // directive is word-for-word the shell's nonce CSP". The literal above
     // cannot see that — it only restates the gateway constant. Compare against
     // the SHELL CSP the control plane actually emits (read from its source, the
@@ -75,8 +74,8 @@ test('the proxied frontend CSP keeps base-uri on self so the upstream <base href
  * request Origin header" algorithm (2019; Chromium + WebKit r259036/2020),
  * a no-referrer document makes same-origin form POSTs carry `Origin: null`,
  * which the gateway's own origin fence rejects fail-closed (403
- * origin_forbidden — live finding 2026-09, reproduced on Chrome 151; curl
- * without an Origin was never affected, which is why only browsers hit it). */
+ * origin_forbidden; curl without an Origin is unaffected, which is why only
+ * browsers hit it). */
 function assertLoginHtmlResponse(res: FakeResponse, status: number): void {
   assert.equal(res.status, status)
   assert.match(String(res.headers['content-type']), /^text\/html/)
@@ -145,9 +144,9 @@ test('browser form login failure renders an HTML 401 without echoing the passwor
 })
 
 test('S5: no error state ever echoes a value attribute (both languages, both secure values)', () => {
-  // Moved from auth/login-page.test.ts (2026-12 trim): the rendering matrix is
-  // the security half of that suite — a submitted secret must never be
-  // reflected back into a value attribute, in any language or transport state.
+  // The rendering matrix is the security half of the login-page tests: a
+  // submitted secret must never be reflected back into a value attribute, in
+  // any language or transport state.
   for (const lang of ['en', 'zh'] as const) {
     for (const secure of [true, false] as const) {
       for (const error of ['invalid', 'rate_limited', 'busy', 'expired'] as const) {
@@ -159,8 +158,8 @@ test('S5: no error state ever echoes a value attribute (both languages, both sec
 })
 
 test('zh error states keep the localized copy and the aria marking', () => {
-  // Moved from the deleted auth/login-page.test.ts (2026-12 trim): the sha256
-  // pins cover the pristine pages; these are the error-state renderings.
+  // The sha256 pins cover the pristine pages; these are the error-state
+  // renderings.
   const invalid = renderLoginPage({ lang: 'zh', secure: true, error: 'invalid' })
   assert.ok(invalid.includes('密码不正确。'))
   assert.match(invalid, /<input[^>]*aria-invalid="true"/)
@@ -454,10 +453,9 @@ test('uppercase Accept still negotiates HTML for browser forms', async () => {
 })
 
 test('a warm-up grant claims a bundle shape pre-auth and its 405 refusal is audited', async () => {
-  // Merged from the deleted boundary/warmup-dispatch.test.ts (2026-12 trim):
-  // the only dispatch-level wiring assertions that had no equal behavior test
-  // — the login→href→route join, the pre-auth claim ordering, and the 405
-  // audit line. The route's own unit behavior lives in warmup.test.ts.
+  // Dispatch-level wiring assertions — the login→href→route join, the pre-auth
+  // claim ordering, and the 405 audit line. The route's own unit behavior
+  // lives in warmup.test.ts.
   const secret = 'warmup-merged-secret'
   const now = 1_700_000_000
   const bundle = '/plugins/??dsh-chamber-mcp/client.js&rev=deadbeef'

@@ -34,7 +34,7 @@ export interface SshInstanceSpec extends RegistrySshInstanceSpec {
   tokenSet?: boolean
   passwordSet?: boolean
   secretStorage?: 'safeStorage' | 'plaintext'
-  /** S-29 cross-flavor projection (see renderer global.d.ts). */
+  /** Cross-flavor projection (see renderer global.d.ts). */
   secretStorageUnreadable?: boolean
 }
 
@@ -189,7 +189,7 @@ export type ChamberInjectionState =
   | { ok: true; packages: ChamberHostPackageState[] }
   | { ok: false; error: string }
 /**
- * One read-face plugin row (design 21 §6.11.5, 2026-09 row-set revision): one
+ * One read-face plugin row (design 21 §6.11.5): one
  * row per profile dependency, carrying the backend-computed role and
  * `protected` flag (the renderer never re-derives protection). The
  * installation baseline (B₀) and the chamber seed registry (S) only classify
@@ -225,7 +225,6 @@ export type SshRemotePluginListResult =
 export interface SshLocalPluginManifest {
   dependencies: Record<string, string>
   bundles: string[]
-  /** Read-face row projection (design 21 §6.11.5). */
   rows: PluginRowProjection[]
   clientLines: string[]
   /** Deps whose own manifest declares a `dsh.bundle` (verifyApplied bundles half-assertion). */
@@ -254,7 +253,7 @@ export type SshPluginApplyIpcResult =
   | { ok: true; result: SshPluginApplyResult }
   | { ok: false; error: string }
 
-/** Undo outcome of the ssh plugin journal (design 21 §6.4, plan Phase 5):
+/** Undo outcome of the ssh plugin journal (design 21 §6.4):
  *  the main process confirms the undo (cancelled = the user dismissed the
  *  dialog), re-executes the inverse op through the same ssh plugin_apply
  *  flow (restart-to-apply), and journals the undo op so further undos chain.
@@ -347,7 +346,7 @@ export type GatewayPluginApplyIpcResult =
   | { ok: false; error: string; partial?: GatewayPluginApplyPartial }
 
 /** Gateway materialize executed outcome (settle/restart parity with the
- *  apply batch — 2026 fix): executed = the executor op terminally succeeded
+ *  apply batch): executed = the executor op terminally succeeded
  *  (the profile changed); restarted = the controlled managed-dsh restart
  *  was accepted AND settled, so the plugin is mounted on the running
  *  instance. ok:false may still carry the outcome when the profile change
@@ -380,7 +379,7 @@ export type GatewayPluginMaterializeIpcResult =
  * checking itself never downloads (autoDownload=false); restartAndInstall()
  * is the user-triggered「重启并安装」action once the download completed —
  * the main process runs electron-updater quitAndInstall (quit + install +
- * relaunch through the normal quit path; 2026-12 user decision).
+ * relaunch through the normal quit path).
  */
 export interface UpdateSurface {
   state(): Promise<UpdateState>
@@ -539,7 +538,7 @@ export interface NotificationRequest {
   body: string
   /** 正在屏幕上查看的会话（渲染端 document.hasFocus 判定，主进程再查一次作为权威）。 */
   requireHidden: boolean
-  /** 内容水位（host 域毫秒，主计划 §3.3-3/§5-16）：complete =
+  /** 内容水位（host 域毫秒）：complete =
    *  `completedAt ?? updatedAt`；ask/request = `updatedAt`。两个通知入口对同一次
    *  事件必须传同一个值（主进程 5s 去重键含水位：同水位合并、不同水位是新事件）。
    *  缺省 = 旧调用方，主进程按四元组行为处理。 */
@@ -552,7 +551,6 @@ export interface NotificationOpenRequest {
   /** Exact non-secret lifecycle proof captured by the native banner. */
   sourceFingerprint: string
   sessionId: string
-  /** Stable across replay; attempt changes for each renderer generation. */
   deliveryId: number
   attempt: number
 }
@@ -615,8 +613,8 @@ export interface RuntimeSurface {
   retryRestore(): Promise<RuntimeState>
   recoverMetadata(): Promise<RuntimeState>
   cleanupVersion(version: string): Promise<RuntimeState>
-  /** Clear the retained failure record for one version (settings polish
-   *  D3-A, local-only entry): main re-reads the failure record set and never
+  /** Clear the retained failure record for one version (local-only entry):
+   *  main re-reads the failure record set and never
    *  trusts a renderer-provided version; version trees stay untouched. */
   clearFailure(version: string): Promise<RuntimeState>
   /** Write-only data-restore action: the main process validates the stash name

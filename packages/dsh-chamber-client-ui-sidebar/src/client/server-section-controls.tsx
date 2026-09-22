@@ -1,9 +1,7 @@
 /**
  * Small shared JSX leaves of the chamber sidebar ServerSection subtree: the
  * non-interactive active-Schedule marker and the inline rename form shared by
- * the workspace header and the session rows. Moved verbatim out of
- * ServerSection.tsx (the rename closure became a component with the same
- * markup).
+ * the workspace header and the session rows.
  */
 import clsx from 'clsx'
 import { IconAlarmClockOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
@@ -12,7 +10,7 @@ import { useSidebarSection } from './sidebar-context.ts'
 import cc from './sidebar-chamber.module.css'
 
 /**
- * Non-interactive active-Schedule marker (2026-09-11 upstream-alignment T7).
+ * Non-interactive active-Schedule marker.
  *
  * Mirrors the official `ActiveScheduleIndicator` verbatim (vendor ui-workspace
  * Rows.tsx:284-296): a `role="img"` span carrying the localized
@@ -37,8 +35,8 @@ export function SessionScheduleIndicator({ label }: { label: string }) {
   // The rename edit UI, rendered in place at the renamed entity:
   // 'sessionRow' swaps a session row's slot (row replaced by the form,
   // indented at the session level); 'workspaceHeader' embeds the form
-  // INSIDE the workspace header row where the title/orphan-badge/count/git
-  // occupant/hover actions used to sit (行内编辑 — no extra list row
+  // INSIDE the workspace header row in place of the title/orphan-badge/count/git
+  // occupant/hover actions (行内编辑 — no extra list row
   // appears; the header keeps its fold toggle/gutter). Enter commits;
   // Escape cancels from anywhere inside the form; 取消 always cancels.
 export function ServerSectionRenameForm({ placeholder, mode }: { placeholder: string; mode: 'sessionRow' | 'workspaceHeader' }) {

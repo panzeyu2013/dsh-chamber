@@ -1,7 +1,7 @@
 /**
- * node-edges.test.ts —— Swift flavor HostEdges 入站面单测（W-11 后续批）
+ * node-edges.test.ts —— Swift flavor HostEdges 入站面单测
  *
- * 覆盖 design 25 §4.5（深链入队）/§5 E19（渲染器生命周期三事件映射）新增的
+ * 覆盖 design 25 §4.5（深链入队）/§5 E19（渲染器生命周期三事件映射）
  * 两条保留入站 method 的分派契约，以及既有 hostFacts 事实缓存回归：
  *  ① 保留 method 名与 core 侧拼写逐字一致（sidecar-entry 与 Swift 共用同一表）；
  *  ② __host.deepLink 命中注入汇（url 原样透传）——core enqueueDeepLink 的
@@ -12,13 +12,13 @@
  *  ⑥ hostFacts 仍刷新同步门缓存（回归）；
  *  ⑦ 未知 __host.* → loud；
  *  ⑩ 通知 click 路由生命周期（shown 后仍可激活 / 显示失败即注销 / 来源退役即注销 /
- *     未知 id 静默 ok）——2026-12 审查回归；
+ *     未知 id 静默 ok）；
  *  ⑪ showNativeNotification edge 载荷 {notificationId, spec, sourceId}（D1a 线
  *     协议：sourceId 与 retireNotifications 用的是同一个标识）；
- *  ⑫ S2·F7：retireNotificationsForSources 返回真实驱逐数（不再是恒 0）；
- *  ⑬ S2·F7/V1：setBadge 走 edge 回执面（失败 loud、主线程忙有界重试，同步返回
+ *  ⑫ retireNotificationsForSources 返回真实驱逐数；
+ *  ⑬ setBadge 走 edge 回执面（失败 loud、主线程忙有界重试，同步返回
  *     乐观 applied 的契约限制注记）；
- *  ⑭ S2·V1：非交互腿有界队列（合流最新载荷 / 确定性失败不空转 / 放弃时明确 loud）；
+ *  ⑭ 非交互腿有界队列（合流最新载荷 / 确定性失败不空转 / 放弃时明确 loud）；
  *  ⑮ 退出在途拒绝形状与 Electron renderer-trust 的 app_quitting 围栏逐字同形（D1c）。
  * 纯逻辑（无子进程、无 sidecar spawn）。
  */
@@ -125,7 +125,7 @@ test('⑤ __host.rendererLifecycle 未注入汇 → loud 拒绝', () => {
 
 test('⑥ __host.hostFacts 仍刷新同步门缓存（回归）+ 交付信号诚实', () => {
   const edges = makeEdges()
-  // 保守默认（2026-09 模块评审 low #4）：未收到 hostFacts 前，存活类事实按
+  // 保守默认：未收到 hostFacts 前，存活类事实按
   // 「未知 = 不可交付」——rendererPush 必须诚实返回 false（core 据此 hold）。
   assert.equal(edges.webViewContentAlive(), false)
   assert.equal(edges.isFocused(), false)
@@ -309,7 +309,7 @@ test('⑫ S2·F7 retireNotificationsForSources 返回真实驱逐数（不再是
     event: 'retireNotifications',
     payload: {
       sourceIds: ['src-retire-1', 'src-retire-2'],
-      // P-07：本次退役实际驱逐的本地 notificationId（1、2）一并下发，Swift 侧
+      // 本次退役实际驱逐的本地 notificationId（1、2）一并下发，Swift 侧
       // 按 identifier 精确清横幅（sourceIds 供旧消费端/整源退役路径）。
       notificationIds: [1, 2],
     },
@@ -331,7 +331,7 @@ test('⑬ S2·F7/V1 setBadge 走 edge 回执面：乐观返回不变、失败 lo
     let busyRemaining = 2
     const edges = createNodeEdges({
       nonInteractiveRetryDelayMs: 5,
-      // P-06：setBadge 在已确证无主窗时同步回 applied:false；正常路径需要
+      // setBadge 在已确证无主窗时同步回 applied:false；正常路径需要
       // hostFacts 声明主窗存活（sidecar-entry 装配种子同值）。
       hostFacts: { mainWindowAlive: true },
       sendEdge: async (method, payload) => {
@@ -423,15 +423,16 @@ test('⑭ S2·V1 非交互队列：合流只应用最新载荷；确定性失败
 })
 
 
-// --- P-03 / G14 (2026-12 dual-flavor parity batch) ---
+// --- dual-flavor parity ---
 
 test('P-03: the dead notifyClicked/resolveResource members are gone from the contract and both flavors', () => {
-  // The two members had no consumer and DIVERGENT Swift semantics (the Swift
+  // The outbound notifyClicked/resolveResource members have no consumer and
+  // DIVERGENT Swift semantics (the Swift
   // host ignores an outbound notifyClicked notify loudly; resolveResource always
-  // fails without a cache). The ruling was to delete the dead contract instead of
-  // keeping an unsyncable face; until this lock, deleting only one side would
-  // silently resurrect a member. The inbound __host.notifyClicked click-feedback
-  // method is NOT the removed outbound member and must survive.
+  // fails without a cache), so the contract drops them rather than keeping an
+  // unsyncable face; deleting only one side would silently resurrect a member.
+  // The inbound __host.notifyClicked click-feedback
+  // method is NOT the outbound member and must survive.
   const edges = makeEdges() as unknown as Record<string, unknown>
   assert.equal('notifyClicked' in edges, false, 'outbound notifyClicked member must be gone')
   assert.equal('resolveResource' in edges, false, 'resolveResource member must be gone')
@@ -452,10 +453,11 @@ test('P-03: the dead notifyClicked/resolveResource members are gone from the con
 })
 
 test('G14: the delivered gate is one shared predicate in both flavor implementations', () => {
-  // node-edges used mainWindowAlive && webViewContentAlive while electron-edges
-  // returned true whenever the window object existed — a crashed renderer was
-  // "delivered" on Electron but not on Swift, so core hold/rollback/ready-reset
-  // could silently diverge. Both now fold through rendererPushDelivered; the
+  // Both flavors must fold the delivered gate through the shared
+  // rendererPushDelivered predicate: a flavor that checks only whether the
+  // window object exists marks a crashed renderer "delivered" while the other
+  // does not, so core hold/rollback/ready-reset
+  // could silently diverge. The
   // Electron webViewContentAlive fact carries the isCrashed predicate.
   assert.equal(rendererPushDelivered(true, true), true)
   assert.equal(rendererPushDelivered(false, true), false, 'no window -> not delivered')

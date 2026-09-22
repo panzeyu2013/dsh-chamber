@@ -1,6 +1,6 @@
 /**
- * Settled-boot gap facts and their presentation policy (
- * 「降级呈现」/ design 09 ).
+ * Settled-boot gap facts and their presentation policy
+ * 「降级呈现」/ design 09.
  * A shell can settle SUCCESSFULLY while a whole surface is missing. Three
  * producers know such a gap, and all three reach the App through the shell's
  * post-settle seam (`chamberReportBootDegraded`):
@@ -11,15 +11,14 @@
  *    404 / method-missing. The chamber-managed local host always injects its
  *    graph (the seed row), so this is a chamber-side installation/seed fact —
  *    unlike a gateway/mobile shape, whose missing endpoint is legitimate and
- *    keeps producing no fact at all ();
+ *    keeps producing no fact at all;
  *  - `required-services-missing`: the graph arrived but a service the
  *    composite's first screen injects never materialized (the classic one is
  *    `ui-chat` pending on `sidebarRight`, which leaves the conversation view
  *    unregistered while the boot still reports success);
  *  - `deferred-registration-failed`: a deferred plugin family's chunk never
  *    loaded or registered, so the slots/services it declares stay absent.
- * Until
- * `console` and the once-per-ready-epoch self-heal only, and the OTHER visible
+ * The gap reached `console` and the once-per-ready-epoch self-heal only, and the OTHER visible
  * channel (the connections page's `pluginDiagnostic`) legitimately reported
  * `ok` in the motivating case — the graph channel itself answered fine, it was
  * the service that never materialized. The user therefore saw a session title
@@ -119,14 +118,14 @@ export function isRetryableBootGap(kind: ShellDegradedKind): boolean {
 }
 
 /**
- * Relative CAUSE strength of one kind (). The probe's
+ * Relative CAUSE strength of one kind. The probe's
  * `required-services-missing` is the CONSEQUENCE of a missing provider; the
  * three other kinds name a CAUSE the user can act on (the local graph endpoint
  * was never injected, the channel never answered, a deferred family never
  * registered). When both are known, the single banner slot must show the cause —
- * otherwise the actionable fact is replaced ~5s later by its own symptom, which
- * is exactly what the real-machine report showed ("缺少 sidebarRight" with no
- * hint that the local instance had no graph channel at all).
+ * otherwise the actionable fact is replaced ~5s later by its own symptom — a
+ * bare "缺少 sidebarRight" with no
+ * hint that the local instance had no graph channel at all.
  * Distinct by construction (the shell compares with `>`/`>=`, never equality),
  * and exhaustive over the union so a new kind must declare its rank here.
  */
@@ -159,9 +158,9 @@ export function shouldReplaceBootGap(current: ShellDegradedFact | null, incoming
 
 /**
  * Identity of one fact: same kind AND same payload = the same fact. `shell.ts`
- * uses this instead of a kind-only comparison — two producers used to share one
- * kind, and the probe's re-armed pass can name a LARGER missing set, so kind-only
- * dedup silently dropped the richer verdict.
+ * uses this instead of a kind-only comparison — the probe's re-armed pass can
+ * name a LARGER missing set, so kind-only
+ * dedup would silently drop the richer verdict.
  * Field-GENERIC on purpose: every payload field takes part, so a field added to
  * the fact later can neither freeze a subscription nor be mistaken for an equal
  * fact. Fields are order-normalized; ARRAY order is preserved because the roster
@@ -197,7 +196,7 @@ export function bootGapSignature(fact: ShellDegradedFact): string {
 }
 
 /**
- * A producer's RETRACTION of a previously reported gap ():
+ * A producer's RETRACTION of a previously reported gap:
  * the condition the fact named no longer holds — the motivating producer is the
  * required-service probe, whose missing set can become empty when a provider
  * finally materializes after the 5s verdict. The shell must REMOVE the fact
@@ -253,7 +252,7 @@ export interface BootGapNoticeContext {
    * instance). The manual next-step copy branches on this STRUCTURED fact, never
    * on the diagnostic sentence: on Windows the local runtime is a READ-ONLY
    * projection, so the local copy must not send the user to "upgrade the dsh
-   * runtime" ().
+   * runtime".
    */
   instanceId?: string
 }
@@ -274,7 +273,7 @@ export interface BootGapNotice {
    * The self-heal WILL re-mount this mount, so the copy may promise it. True
    * only while the source is `ready` and the epoch has not retried yet —
    * the self-heal container never fires for a source that is not ready, so
-   * promising an automatic re-mount there would be a lie ().
+   * promising an automatic re-mount there would be a lie.
    */
   autoRetryArmed: boolean
 }

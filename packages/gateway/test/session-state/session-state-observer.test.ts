@@ -1,10 +1,10 @@
 /**
  * Session-state observer: the store is driven end-to-end through the REAL
  * control-plane mux (createSessionMux) with injected socket/unary seams, so
- * these tests lock the plan's hard edges: one follow read per true->false edge,
+ * these tests lock the contract's hard edges: one follow read per true->false edge,
  * the turn/end classification outcomes, gap reconstruction, waterfall holding
  * and the 0-downstream rule, event-silence resubscription (R21) and host-down
- * semantics (plan W1 / WS-B; blueprint sections 5.1-5.4, 9-R1/R21).
+ * semantics.
  *
  * Run directly:
  *   node --import ./test/session-state/workspace-loader.mjs test/session-state/session-state-observer.test.ts
@@ -167,7 +167,7 @@ test('each true->false edge opens exactly one session/follow and a completed tai
   await settle()
   const row = harness.store.snapshotFor(null, 'sse', harness.observer.hostInfo()).sessions[0]
   // 观察者用**结算时刻**的时钟打戳，而 harness.clock 是持续走的真实时钟：精确相等
-  // 只在"恰好同一毫秒"时成立（负载下的偶发红，2026-12 修）。断言落在本次交互的
+  // 只在"恰好同一毫秒"时成立。断言落在本次交互的
   // 时间窗内：既排除 0/陈旧戳，也不依赖同毫秒。
   assert.ok((row.completedAt ?? 0) >= 1_000 && (row.completedAt ?? 0) <= harness.clock,
     `completedAt 必须在本次运行的时间窗内（得到 ${row.completedAt}，窗上限 ${harness.clock}）`)
@@ -218,7 +218,7 @@ test('an unreadable follow falls back to arming with the degraded marker', async
   socket.emitEnd('follow-1')
   await settle()
   const row = harness.store.snapshotFor(null, 'sse', harness.observer.hostInfo()).sessions[0]
-  // 同 169 行的竞态修正：真实完成不得丢，但戳记是结算时刻而非 harness.clock 的读数。
+  // 真实完成不得丢，但戳记是结算时刻而非 harness.clock 的读数。
   assert.ok((row.completedAt ?? 0) >= 1_000 && (row.completedAt ?? 0) <= harness.clock,
     `a real completion must not be lost（得到 ${row.completedAt}）`)
   assert.equal(row.lastTurnEnd, null, 'but it is never fabricated as a completed reason')
@@ -248,7 +248,7 @@ test('a baseline-found stop after a restart is re-classified (gap reconstruction
 })
 
 // ---------------------------------------------------------------------------
-// Waterfall observer discipline (blueprint section 5.4)
+// Waterfall observer discipline
 // ---------------------------------------------------------------------------
 
 test('a waterfall is held while no downstream mux client exists (never settled)', async t => {
@@ -298,12 +298,11 @@ test('the grace window is honoured: no delegation before waterfallGraceMs', asyn
   await settle()
   assert.equal(harness.calls.calls.some(entry => entry.method === '$events/result'), false)
   // The mux grace timer is a real timer (120 ms here). A fixed 200 ms sleep
-  // races it under load (observed flake, 2026-12): poll for the delegation
-  // instead. The assertions are unchanged — none before the window, exactly one
-  // after it.
-  // 5 s, not 1 s: the mux grace timer is real and the suite runs its files
-  // concurrently, so a loaded machine can push the first tick past a tighter
-  // deadline (observed flake). A genuinely stuck observer still fails here.
+  // races it under load: poll for the delegation instead. The assertions hold:
+  // none before the window, exactly one after it.
+  // The deadline is 5 s: the mux grace timer is real and the suite runs its
+  // files concurrently, so a loaded machine can push the first tick past a
+  // tighter deadline. A genuinely stuck observer still fails here.
   const deadline = Date.now() + 5_000
   let resultCalls: typeof harness.calls.calls = []
   do {

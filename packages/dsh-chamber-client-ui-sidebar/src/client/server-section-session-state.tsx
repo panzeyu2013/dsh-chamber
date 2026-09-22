@@ -1,8 +1,7 @@
 /**
  * Per-row state readers (label / pending / marker / dot) of the chamber sidebar
- * ServerSection subtree, moved verbatim out of ServerSection.tsx. Consumers call
- * the hook so the two-argument reader shapes pinned by the dashboard source
- * locks stay unchanged.
+ * ServerSection subtree. Consumers call the hook so the two-argument reader
+ * shapes pinned by the dashboard source locks stay unchanged.
  */
 import type { ReactNode } from 'react'
 import { IconChecklistOutline14, IconQuestionOutline14, IconWarningOutline16, StateDot } from '@deepseek-ai/dsh-client-ui-primitives'
@@ -18,9 +17,8 @@ export function useServerSectionSessionState() {
   // a server-identity marker (the source header dot owns identity). Normal
   // sessions show nothing; running sessions show the official StateDot
   // ongoing RING; completed-but-unread sessions show the chamber brand-blue
-  // 6px dot (`.stateCompleted`) — 2026-09 user decision, restoring the pre-T10
-  // mark so completion never shares the connection dot's green (see the
-  // completed branch below).
+  // 6px dot (`.stateCompleted`) so completion never shares the connection
+  // dot's green (see the completed branch below).
   // Pending interactions (approval / plan-review / question) render a
   // distinguishable 14px icon badge INSTEAD of the running ring — a session
   // waiting for the user must be recognizable at a glance. The caller wraps
@@ -56,7 +54,7 @@ export function useServerSectionSessionState() {
   /** Pending-interaction kind of the row, or undefined when not pending. */
   const sessionStatePending = (server: ChamberServerAggregate, session: { id: string }): 'approval' | 'plan-review' | 'question' | undefined =>
     server.runtime?.sessions[session.id]?.pending
-  /** 仪表 I1/I13（plan §10）：行状态读数的机器可读标记——与圆点同一优先级输入。 */
+  /** 仪表 I1/I13：行状态读数的机器可读标记——与圆点同一优先级输入。 */
   const sessionStateMarker = (server: ChamberServerAggregate, session: { id: string; running?: boolean }) => {
     const facts = server.runtime?.sessions[session.id]
     return sessionRowState({
@@ -89,9 +87,8 @@ export function useServerSectionSessionState() {
       return <StateDot state="ongoing" size={10} />
     }
     if (facts?.completed === true) {
-      // 2026-09 用户裁决：完成未读回到 chamber 品牌蓝点（.stateCompleted，6px）——
-      // 撤销 2026-09-11 upstream-alignment T10 换成的官方 StateDot `done`。
-      // 理由：`done` 的取色 `--dsw-alias-state-success-primary` 与来源头连接状态
+      // 完成未读用 chamber 品牌蓝点（.stateCompleted，6px），而非官方 StateDot `done`：
+      // 后者的取色 `--dsw-alias-state-success-primary` 与来源头连接状态
       // 绿点（`.statusOk` 同一 token）完全相同，"会话完成未读"与"服务器已连接"
       // 在同一侧栏里同色。蓝点与运行中的官方 ongoing 环同属品牌蓝
       // （`--dsw-static-deepseek-450`），但静态实心点 vs 8 格动画环形状/动效不同。

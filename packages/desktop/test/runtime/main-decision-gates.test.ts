@@ -1,10 +1,7 @@
 /**
- * Main-process decision gates extracted from main.ts — merged suite.
- *
- * Sources: apply-now-gate.test.ts (the RUNTIME_APPLY_NOW gate matrix) and
- * disk-evidence-gate.test.ts (the D7 disk-evidence skip set). Both are pure
- * decision functions lifted out of the electron entry (main.ts) so their
- * matrices carry real unit assertions.
+ * Main-process decision gates lifted out of the electron entry (main.ts) so
+ * their matrices carry real unit assertions: the RUNTIME_APPLY_NOW gate matrix
+ * and the D7 disk-evidence skip set.
  */
 
 import { test } from 'node:test'
@@ -26,8 +23,7 @@ import type { RuntimePhase } from '@dsh-chamber/dsh-runtime'
 import { balancedBlock } from './source-blocks.ts'
 
 test('sidecar 唤醒入站保留可考古的一行（sidecar.log 取证面）', () => {
-  // e479c275 声称「这些面都被源锁钉住不再退回 print-only」，但 TS 侧这一行此前没有任何锁：
-  // 删掉它 Swift 侧「已发送」仍绿，而 sidecar.log 里的入站证据消失（2026-09 复核）。
+  // 没有这把源锁时，删掉这一行 Swift 侧「已发送」仍绿，而 sidecar.log 里的入站证据消失。
   const source = stripComments(readFileSync(new URL('../../sidecar-entry.ts', import.meta.url), 'utf8'))
   assert.match(source, /console\.info\('\[sidecar\] __host\.systemResume 入站/,
     'systemResume 入站必须写一行：否则真机上分不清「壳没发」与「页面没消费」')
@@ -35,9 +31,9 @@ test('sidecar 唤醒入站保留可考古的一行（sidecar.log 取证面）', 
 
 test('渲染器重新就绪时补发 held resume（F2：Swift 形态没有窗口 show 事件）', () => {
   const source = stripComments(readFileSync(new URL('../../shell-core.ts', import.meta.url), 'utf8'))
-  // 2026-12 审计 S4：Swift 的 mainWindowShown 只在 NSApplication.didBecomeActive 发；
+  // Swift 的 mainWindowShown 只在 NSApplication.didBecomeActive 发；
   // 唤醒时若渲染器不可投递（crashed/reloading），lastResume 会被 hold 到下一次应用激活
-  // ——即时重连退化成等 15–45s 看门狗。修复 = 把「渲染器重新就绪」也当作补发边沿。
+  // ——即时重连退化成等 15–45s 看门狗。因此「渲染器重新就绪」也必须当作补发边沿。
   assert.match(
     source,
     /if \(event === 'did-finish-load'\) \{[\s\S]{0,700}?handleMainWindowShown\(\);[\s\S]{0,240}?drainPendingRendererDeepLinkIntents\(\);/,
@@ -45,7 +41,7 @@ test('渲染器重新就绪时补发 held resume（F2：Swift 形态没有窗口
   )
 })
 
-// --- merged from test/runtime/apply-now-gate.test.ts ---
+// --- RUNTIME_APPLY_NOW gate matrix ---
 function gateInput(overrides: Partial<ApplyNowGateInput> = {}): ApplyNowGateInput {
   return {
     phase: 'pending',
@@ -173,7 +169,7 @@ test('apply-now gate: target resolution prefers pending over journalTarget over 
 })
 
 
-// --- G21: Electron renderer-recovery policy (behavioural, not a source anchor) ---
+// --- Electron renderer-recovery policy (behavioural, not a source anchor) ---
 test('G21 renderer recovery: at most 3 reloads inside a 60s window, then exhausted', () => {
   const budget = { windowStart: 0, count: 0 }
   // windowStart 0: the first three attempts inside 60s are allowed.
@@ -204,7 +200,7 @@ test('G21 renderer recovery: crash and hang gates', () => {
     assert.equal(shouldReloadAfterCrash(reason, false), true, `${reason} must reload`)
     assert.equal(shouldReloadAfterCrash(reason, true), false, `${reason} while quitting must not reload`)
   }
-  // S-34 gate: before the first did-finish-load an unresponsive renderer is only
+  // Before the first did-finish-load an unresponsive renderer is only
   // logged (boot is legitimately busy); afterwards the 15s hang timer applies.
   assert.equal(shouldScheduleHangReload(false), false)
   assert.equal(shouldScheduleHangReload(true), true)
@@ -223,7 +219,7 @@ test('G21 renderer recovery: main.ts routes every decision through the shared po
   assert.match(main, /RENDERER_RECOVERY_MAX_RELOADS/)
   assert.doesNotMatch(main, /if \(now - reloadWindowStart > 60_000\)/, 'the inline budget must stay extracted')
 })
-// --- merged from test/runtime/disk-evidence-gate.test.ts ---
+// --- D7 disk-evidence skip set ---
 /** Full legal runtime phase set (typed — a typo/rename fails the typecheck). */
 const ALL_RUNTIME_PHASES: readonly RuntimePhase[] = [
   'idle', 'checking', 'available', 'downloading', 'installing', 'pending',
@@ -261,7 +257,7 @@ test('D7: the skip set stays exactly the three progress phases', () => {
   )
 })
 
-// --- S-08 / S-41 / P-20: main.ts wiring of the tested decisions ---
+// --- main.ts wiring of the tested decisions ---
 // main.ts loads electron and cannot be imported; these assertions pin the WIRING
 // to the pure decisions whose matrices live in chamber-settings.test.ts. The
 // source is comment-stripped so a commented-out line can never satisfy a contract.
@@ -312,7 +308,7 @@ test('S-08 main.ts: cancelling the quit restores the living window, never rebuil
     /mainWindow === null \|\| mainWindow\.isDestroyed\(\)\) \{\s*showMainWindow\(\)/,
     'the destroyed-window rebuild guard must be gone: the window stays alive until the decision resolves',
   )
-  // The cp===null allow path must confirm the quit: the S-08 defer branch
+  // The cp===null allow path must confirm the quit: the defer branch
   // re-enters app.quit() from the close event, so a false quitConfirmed would
   // loop app.quit() ↔ close forever.
   assert.match(handler, /if \(cp === null\) \{[\s\S]*?quitConfirmed = true;/,

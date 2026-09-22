@@ -1,11 +1,10 @@
 /**
- * N-CTX OWNER GUARD for the open-in menu (2026-09-11 upstream-alignment, T13).
+ * N-CTX OWNER GUARD for the open-in menu.
  *
  * The menu itself is the official `Menu` primitive (`@deepseek-ai/dsh-client-ui-primitives`),
  * which already owns focus transfer (`autoFocus`), roving arrow/Home/End
  * navigation, Escape-to-anchor, outside-pointer dismissal, placement, row
- * density, fill selection and item icons — the bespoke 458-line menu this module
- * used to serve implemented those semantics by hand.
+ * density, fill selection and item icons.
  *
  * What the primitive cannot know is THIS shell's shape: one page holds one
  * `.instance-view` per attached source, inactive views are hidden through

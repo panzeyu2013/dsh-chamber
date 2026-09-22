@@ -1,5 +1,5 @@
 /**
- * gateway 凭据的两维交叉矩阵（design 17 §2.3；N8 前置，ARCH-IMPL-026）。
+ * gateway 凭据的两维交叉矩阵（design 17 §2.3）。
  *
  * design 17 §2.3 的原文约束：token 与 password 是**相互独立的 nullable 凭据**——
  * token 清除永不触碰实例 password（反之亦然）。本文件在**任何重构之前**把这条
@@ -85,7 +85,7 @@ test('矩阵 3（§2.3 核心）：清除 token 绝不触碰 password', () => {
 test('矩阵 4：清除「不存在的维度」是磁盘 no-op —— 另一维度与文件内容都不变', () => {
   withStore(file => {
     setGatewayPassword(ID, PASSWORD)
-    // 哨兵法：把文件内容改成 store 内存里不存在的文本。若这次 clear 真的触发了
+    // 哨兵法：把文件内容改成 store 内存里不存在的文本。若 clear 真的触发了
     // 落盘，文件会被内存表重写、哨兵消失——比「内容相等」更能锁住「不重写」本身。
     const sentinel = `${readFileSync(file, 'utf8')}\n/* sentinel-${Date.now()} */\n`
     writeFileSync(file, sentinel)

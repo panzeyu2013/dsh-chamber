@@ -1,5 +1,5 @@
 /**
- * Login-phase pre-warm tests (design 17 §10.6, 2026-12 revision): the
+ * Login-phase pre-warm tests (design 17 §10.6): the
  * capability-cookie mint/verify pair, the two REAL bundle shapes, the pre-auth
  * route (405/429/503/502/upstream), the bounded aggregate budget, discovery
  * extraction + the spawn-minted browser-auth cookie + the split in-process
@@ -238,10 +238,10 @@ test('allowlist accepts the two real bundle shapes and rejects traversal/authori
     '/plugins/pkg/client.js.map',     // only the .js/.css client bundles
     '/plugins/pkg/nested/client.js',  // exactly one package segment
     '/plugins/pkg/client.js?rev=1',   // single-row bundles carry no query
-    '/plugins/pkg?/client.js',        // '?' smuggled INTO the single-row shape (2026-09 review:
-    '/plugins/pkg?x=y/client.js',     // the raw target's `[^/]+` swallowed it, so any visitor with
-    '/plugins/?/client.js',           // an auto-issued login cookie could probe arbitrary one-segment
-                                      // /plugins paths and read the upstream 404 instead of our 401)
+    '/plugins/pkg?/client.js',        // '?' smuggled INTO the single-row shape: the raw target's
+    '/plugins/pkg?x=y/client.js',     // `[^/]+` must not swallow it, or any visitor with an
+    '/plugins/?/client.js',           // auto-issued login cookie could probe arbitrary one-segment
+                                      // /plugins paths and read the upstream 404 instead of our 401
     '/plugins/pkg/client.js/x',       // trailing segment
     '/plugins/@scope/pkg/client.js',  // scoped single-row (two segments) is outside the prescribed shape;
                                       // such modules travel through the /plugins/?? combo instead
@@ -625,11 +625,11 @@ test('discovery is cached per dsh port (60 s success / 10 s failure), mints the 
 })
 
 test('a request with no capability never spends the rate bucket (2026-09 review, MAJOR)', async () => {
-  // The bucket used to be consumed BEFORE the cookie was read, so a caller
+  // The bucket must not be consumed BEFORE the cookie is read: a caller
   // holding no grant could drain it (5 req/s keeps it empty) and every bundle
   // request from that client address — including a legitimately logged-in
-  // session behind the same NAT — got 429 from this PRE-AUTH leg, with the auth
-  // gate never consulted and its audit never written. design 17 §10.6: an
+  // session behind the same NAT — would get 429 from this PRE-AUTH leg, with
+  // the auth gate never consulted and its audit never written. design 17 §10.6: an
   // absent/stale/tampered/foreign cookie ⇒ unclaimed, so this route may not
   // answer at all.
   const server = createServer((_req, res) => {
@@ -656,8 +656,8 @@ test('a request with no capability never spends the rate bucket (2026-09 review,
 
 test('concurrent login-page renders share ONE discovery fetch (2026-09 review, MAJOR)', async () => {
   // The login page AWAITS discovery and one unauthenticated connection can
-  // pipeline many index requests, so without single-flight N renders issued N
-  // concurrent loopback index fetches against the managed dsh (measured 100 on
+  // pipeline many index requests, so without single-flight N renders would
+  // issue N concurrent loopback index fetches against the managed dsh (measured 100 on
   // a single socket).
   let fetches = 0
   let release: (() => void) | undefined

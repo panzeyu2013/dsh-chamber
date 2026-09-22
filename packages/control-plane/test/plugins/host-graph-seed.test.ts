@@ -588,7 +588,7 @@ test('seededProbeDomains 按实际 seed 派生（全/部分/空三态；2026-09 
     hostGitWorktreePackageSourceDir: join(dir, 'no-git'),
     hostArchiveCleanupPackageSourceDir: join(dir, 'no-archive'),
     // open-in 是 localOnly 行，其源码包在仓库里真实存在：不显式指向缺失目录的话
-    // 缺省目录会被播种，本用例就不再是"部分 seed"（2026-09 四包化后的 P1 复核）。
+    // 缺省目录会被播种，本用例就不再是"部分 seed"。
     hostOpenInPackageSourceDir: join(dir, 'no-open-in'),
   })
   try {
@@ -696,8 +696,8 @@ test('createControlPlane.startLocal() seeds ALL FOUR host packages behind one me
     assert.ok(overlay.includes(`- id: archive-cleanup`), 'third insert row present')
     assert.ok(overlay.includes(`name: '${HOST_ARCHIVE_CLEANUP_PACKAGE_NAME}'`), 'third package named')
     // probeDomains is documented pure metadata (never serialized into the
-    // overlay) — the activation-contract lockstep (architecture-review M3:
-    // catches archiveCleanup/preview↔probe drift) is asserted at the seed
+    // overlay) — the activation-contract lockstep (catches
+    // archiveCleanup/preview↔probe drift) is asserted at the seed
     // SOURCE. Since the seed rows DERIVE from the registry
     // (CHAMBER_HOST_PACKAGES), the probe endpoint lives in the registry row
     // and the call site must carry no parallel literal at all.
@@ -767,7 +767,7 @@ test('createControlPlane.startLocal() keeps the v4 baseline when dist/index.js i
 })
 
 test('createControlPlane.startLocal() merges extra seed entries (client plugin) into the overlay and seeds them', async t => {
-  // 2026-12 seed registry: an extra kind 'client' entry rides the same
+  // Seed registry: an extra kind 'client' entry rides the same
   // artifact gate, profile seed and overlay as the host packages — the
   // gateway mobile slot's mechanism (the loader row is id/name only; kind is
   // metadata).
@@ -802,7 +802,7 @@ test('createControlPlane.startLocal() merges extra seed entries (client plugin) 
 })
 
 test('createControlPlane.startLocal() skips an absent extra seed entry (stub) with a warn and no overlay row', async t => {
-  // 2026-12 seed registry: the gateway mobile slot ships on the mobile branch;
+  // Seed registry: the gateway mobile slot ships on the mobile branch;
   // until then an absent packaged source is a warned stub skip — the rest of
   // the seed (host packages) proceeds untouched, never a failure.
   const dir = tempDir(t)
@@ -905,7 +905,7 @@ test('ensureSeedPackage rejects malformed seedFiles entries fail-loud', t => {
 })
 
 test('createControlPlane.startLocal() lets an extra seed entry shadow the base host package (no duplicate rows)', async t => {
-  // 2026-12 regression: the gateway re-declares the synced host packages as
+  // The gateway re-declares the synced host packages as
   // desktop-synced extra entries. When the synced cache exists, the extra
   // entry must REPLACE the legacy base entry — never produce two overlay
   // rows with the same loader identity (renderCordisInserts would throw
@@ -944,7 +944,7 @@ test('createControlPlane.startLocal() lets an extra seed entry shadow the base h
 })
 
 // ---------------------------------------------------------------------------
-// Batch 1 naming unification (2026-09): the fail-loud host-seed namespace pin
+// The fail-loud host-seed namespace pin
 // ---------------------------------------------------------------------------
 
 test('assertHostSeedInsertNaming pins the canonical dsh-chamber-seed-<loader-id> namespace', () => {

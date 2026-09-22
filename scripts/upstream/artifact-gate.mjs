@@ -1,10 +1,9 @@
 /**
  * Pure helpers for the C8 build-time-artifact gate (design 09 §3.6 / C8).
  *
- * Extracted so the gate's decision logic is unit-testable: the gate script
+ * The gate's decision logic is unit-testable: the gate script
  * itself is a top-level program (not importable), and its skip/fail semantics
- * are exactly where a silent pass can hide (2026-09 round-3 adversarial
- * review W4-01/W4-06/W4-07/W4-21).
+ * are exactly where a silent pass can hide.
  */
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -86,9 +85,8 @@ export function compareOutputs(outputs, root, snapshots, toRelative) {
 /**
  * Decide the gate outcome from its observations. A skipped build is a HARD
  * failure: the gate cannot prove freshness without running the build, and a
- * silent pass here is exactly the hole the 2026-09 review found (CI ran the
- * gate before `pnpm install`, so every group skipped and the gate still
- * reported success).
+ * silent pass (e.g. when the gate runs before `pnpm install` and every group
+ * skips) must never report success.
  * @param {{ stale: string[], skipped: string[] }} observations
  * @returns {{ ok: boolean, message?: string }}
  */

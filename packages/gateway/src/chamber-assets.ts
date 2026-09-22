@@ -1,9 +1,8 @@
 /**
- * Gateway browser-app assets (2026-12 audit F2 split): the embedded control
- * panel HTML, its script and the mobile light surface, moved verbatim out of
- * routes.ts. The only interpolation is the dashboard semver helper source
- * (chamber-dashboard-semver.ts), whose template-safety is pinned by the
- * dashboard-semver lockstep test.
+ * Gateway browser-app assets: the embedded control panel HTML, its script
+ * and the mobile light surface. The only interpolation is the dashboard semver
+ * helper source (chamber-dashboard-semver.ts), whose template-safety is pinned
+ * by the dashboard-semver lockstep test.
  */
 import { DASHBOARD_SEMVER_JS } from './chamber-dashboard-semver.ts'
 
@@ -23,7 +22,7 @@ export const CHAMBER_APP_HTML = `<!doctype html>
     select,.text-input{min-height:2rem;padding:.35rem .55rem;border:1px solid #484f58;border-radius:.4rem;background:#0d1117;color:#e6edf3;font:inherit}.runtime-controls{display:grid;grid-template-columns:minmax(12rem,1fr) auto;gap:.55rem}.runtime-controls .actions{grid-column:1/-1}.runtime-registry{display:grid;grid-template-columns:minmax(12rem,1fr) auto;gap:.55rem}.runtime-facts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.55rem}.runtime-facts .item{padding:.6rem}
     .list{display:flex;flex-direction:column;gap:.6rem}.item{display:flex;flex-direction:column;gap:.35rem;padding:.75rem;border-radius:.55rem;background:#0d1117;overflow-wrap:anywhere}.item-head{display:flex;justify-content:space-between;gap:.75rem;align-items:baseline}.item-head strong{min-width:0}.meta,code{color:#8b949e;font-size:.75rem;overflow-wrap:anywhere;white-space:pre-wrap}.body{font-size:.86rem;white-space:pre-wrap;overflow-wrap:anywhere}.status{min-height:1.2rem;font-size:.8rem}.status.error,.error{color:#ff7b72}.empty{padding:.5rem 0;color:#8b949e;font-size:.85rem}
     .token-reveal{display:flex;flex-direction:column;gap:.5rem}.token-reveal[hidden]{display:none}.token-reveal textarea{width:100%;min-height:6rem;resize:vertical;font-family:ui-monospace,SFMono-Regular,monospace;font-size:.78rem}
-    /* 2026-09-11 upstream-alignment T2: the confirmation dialog reuses this page's panel/actions/status vocabulary (.panel + .actions + .danger); only the modal shell is new. */
+    /* The confirmation dialog reuses this page's panel/actions/status vocabulary (.panel + .actions + .danger); only the modal shell is new. */
     .dialog-backdrop{position:fixed;inset:0;z-index:3;display:flex;align-items:center;justify-content:center;padding:1rem;background:rgba(1,4,9,.72)}.dialog-backdrop[hidden]{display:none}.dialog{width:min(30rem,100%);max-height:calc(100vh - 2rem);overflow:auto}.dialog .actions{justify-content:flex-end}
     @media(max-width:760px){header{align-items:flex-start}main{grid-template-columns:1fr}.wide{grid-column:auto}.header-actions{justify-content:flex-end}.runtime-controls,.runtime-registry,.runtime-facts{grid-template-columns:1fr}}
   </style>
@@ -94,15 +93,14 @@ export const CHAMBER_APP_HTML = `<!doctype html>
       <p id="runtime-action-status" class="status" role="status"></p>
     </section>
   </main>
-  <!-- 2026-09-11 upstream-alignment T2: this page's own confirmation dialog.
-       The two credential removals below used to gate on the browser's native
-       confirmation popup, whose OS chrome cannot ride this page's vocabulary,
-       reads as an alien layer over it, and is not localizable — the same
-       reason the chamber's other admin surfaces were converted. The title and
-       description are deliberately empty here: app.js fills them through
-       textContent, so no interpolated copy is ever parsed as HTML.
-       2026-09-11 review-fix F1/F2: the two background landmarks carry ids so
-       the script can make them inert for the dialog's whole armed lifetime
+  <!-- This page's own confirmation dialog. The two credential removals below
+       do not gate on the browser's native confirmation popup, whose OS chrome
+       cannot ride this page's vocabulary, reads as an alien layer over it, and
+       is not localizable — the same reason the chamber's other admin surfaces
+       use in-app dialogs. The title and description are deliberately empty
+       here: app.js fills them through textContent, so no interpolated copy is
+       ever parsed as HTML. The two background landmarks carry ids so the
+       script can make them inert for the dialog's whole armed lifetime
        (aria-modal="true" is a promise the page has to keep, not a claim); the
        dialog container carries tabindex="-1" as the focus target while an
        accepted action runs and both controls are disabled; and the busy flag
@@ -242,7 +240,7 @@ export const CHAMBER_APP_JS = `(function () {
   function runtimeVersion() { return byId('runtime-version').value || null; }
 
   // SemVer 2.0 precedence for the version dropdown. ONE local source of the
-  // rules (chamber-dashboard-semver.ts; 2026-12 audit F8), interpolated here
+  // rules (chamber-dashboard-semver.ts), interpolated here
   // verbatim: build metadata is ignored, unparseable strings compare equal and
   // keep their stable sort position at the tail — the same policy as the
   // settings-bridge selector. A lockstep test pins the shared dsh-runtime
@@ -256,8 +254,8 @@ ${DASHBOARD_SEMVER_JS}
     var pendingBlocked = row !== null && row.phase === 'pending';
     // Recovery phases and any projected startup block (FATAL / swap / restore /
     // env-probe-failed / resolution failure) disable every mutation surface —
-    // the server's recovery gate refuses them (2026 audit R2/R3); declared
-    // before baseMutationBlocked so select/apply/rollback/registry/restore and
+    // the server's recovery gate refuses them; declared before
+    // baseMutationBlocked so select/apply/rollback/registry/restore and
     // the recovery escape buttons all share the same truth.
     var recoveryPhase = row !== null && (row.phase === 'swap-attempted' || row.phase === 'snapshot-failed' || row.phase === 'restore-blocked');
     var startupBlocked = row !== null && row.startupBlockedReason !== null && row.startupBlockedReason !== '';
@@ -273,7 +271,7 @@ ${DASHBOARD_SEMVER_JS}
     // serviceable dsh (the route's connection gate), and no recovery phase
     // (those refuse apply-now with runtime_recovery_required). The manager's
     // sync preflight rejects the remaining no-op cases with 409 noop_target.
-    // P2 review fix: the enablement must mirror the SERVER's persisted target
+    // The enablement must mirror the SERVER's persisted target
     // (row.selectedVersion = override.chosenVersion), NOT the dropdown's local
     // value — a merely highlighted dropdown row has no persisted selection, so
     // preflight would answer 409 noop_target/no_selection for it.
@@ -302,7 +300,7 @@ ${DASHBOARD_SEMVER_JS}
     // Matching retries stay ENABLED in their recovery phases: on the real
     // wire phase and startupBlockedReason co-project from the same in-memory
     // block, so the reason must not re-disable the retry the phase advertises
-    // (2026 audit R4 F1 — busy/env/read-only only, never mutationBlocked).
+    // (busy/env/read-only only, never mutationBlocked).
     byId('runtime-retry-apply').disabled = busy || row.mutationsAllowed !== true || row.source === 'env' || (row.phase !== 'swap-attempted' && row.phase !== 'snapshot-failed');
     byId('runtime-retry-restore').disabled = busy || row.mutationsAllowed !== true || row.source === 'env' || row.phase !== 'restore-blocked';
     byId('runtime-restart').disabled = busy || pendingBlocked || recoveryPhase || startupBlocked || (row.connectionState !== 'ready' && row.connectionState !== 'degraded');
@@ -313,8 +311,8 @@ ${DASHBOARD_SEMVER_JS}
     // phases), a pending armed switch, installing/applying windows and any
     // non-startable connection state all refuse — the UI disables up front
     // instead of surfacing the 409. Restart stays the ready/degraded surface;
-    // start is its stopped-runtime counterpart, so the server copy that told
-    // the operator to "start the managed dsh" is now reachable from this page.
+    // start is its stopped-runtime counterpart, so the server copy that tells
+    // the operator to "start the managed dsh" is reachable from this page.
     var startableConnection = row !== null && (row.connectionState === 'stopped' || row.connectionState === 'error' || row.connectionState === 'restart-exhausted');
     byId('runtime-start').disabled = busy || pendingBlocked || recoveryPhase || startupBlocked || !startableConnection;
     byId('runtime-registry').disabled = mutationBlocked;
@@ -518,14 +516,14 @@ ${DASHBOARD_SEMVER_JS}
     } catch (error) { status('credentials', credentialErrorText(error), true); }
   }
   // -------------------------------------------------------------------------
-  // In-page confirmation dialog (2026-09-11 upstream-alignment T2).
+  // In-page confirmation dialog.
   //
-  // Both credential removals used to gate on the browser's native
-  // confirmation popup: OS-styled chrome that cannot ride this page's own
-  // visual vocabulary (panel/actions/status/danger), reads as an alien layer
-  // over it, and cannot be localized — the same reason the chamber's other
-  // admin surfaces were converted (the settings bridge's confirmations are now
-  // one in-app dialog built from the official design-system primitive). This
+  // The credential removals use this page's own dialog rather than the
+  // browser's native confirmation popup: OS-styled chrome that cannot ride
+  // this page's own visual vocabulary (panel/actions/status/danger), reads as
+  // an alien layer over it, and cannot be localized — the same reason the
+  // chamber's other admin surfaces use in-app dialogs (the settings bridge's
+  // confirmations use one built from the official design-system primitive). This
   // page is deliberately dependency-free, so the dialog is the page's own
   // #confirm-* markup driven by plain DOM calls; all operator-visible copy is
   // written through textContent, never parsed as HTML.
@@ -541,17 +539,17 @@ ${DASHBOARD_SEMVER_JS}
   // success/failure reporting, so this page's existing status lines stay the
   // single report.
   //
-  // 2026-09-11 review-fix F1: the background is inert for the WHOLE armed
-  // lifetime, and the Tab trap covers the pending window too. Before this, the
-  // trap switched itself off the moment a confirm was accepted: with both
-  // controls disabled the browser drops focus to <body>, and Tab walked the
-  // page behind — the header link, #refresh, #cred-change-password (a real
-  // POST gate with no confirmation of its own) and every runtime control —
-  // exactly while a scrypt verify or a store write had the operator waiting.
-  // inert is the enforcement a browser honours; the trap stays as the
-  // portable equivalent, so an engine without inert (or a Tab that starts on
-  // the dialog container) still cannot leave the dialog.
-  // 2026-09-11 review-fix F2: the busy flag rides the actions row, NOT this
+  // The background is inert for the WHOLE armed lifetime, and the Tab trap
+  // covers the pending window too: with both controls disabled the browser
+  // drops focus to <body>, so a trap that switched itself off at accept time
+  // would let Tab walk the page behind — the header link, #refresh,
+  // #cred-change-password (a real POST gate with no confirmation of its own)
+  // and every runtime control — exactly while a scrypt verify or a store write
+  // has the operator waiting.
+  // inert is the enforcement a browser honours; the trap stays as the portable
+  // equivalent, so an engine without inert (or a Tab that starts on the dialog
+  // container) still cannot leave the dialog.
+  // The busy flag rides the actions row, NOT this
   // dialog element: #confirm-pending is a descendant of the dialog, and
   // assistive technology may ignore changes inside a busy subtree, which would
   // swallow the very announcement the flag accompanies.
@@ -594,7 +592,7 @@ ${DASHBOARD_SEMVER_JS}
     var parts = confirmElements();
     parts.backdrop.hidden = true;
     // The background comes back BEFORE the focus hand-off: an inert invoking
-    // control cannot take focus (2026-09-11 review-fix F1).
+    // control cannot take focus.
     setBackgroundInert(false);
     parts.actions.removeAttribute('aria-busy');
     parts.title.textContent = '';
@@ -620,8 +618,8 @@ ${DASHBOARD_SEMVER_JS}
     if (armed === null || armed.pending) return;
     armed.pending = true;
     var parts = confirmElements();
-    // 2026-09-11 review-fix F2: the busy flag goes on the ACTIONS ROW, not on
-    // the dialog: the pending line below is a descendant of the dialog, and a
+    // The busy flag goes on the ACTIONS ROW, not on the dialog: the pending
+    // line below is a descendant of the dialog, and a
     // busy subtree is exactly what assistive technology may refuse to
     // announce.
     parts.actions.setAttribute('aria-busy', 'true');
@@ -647,7 +645,7 @@ ${DASHBOARD_SEMVER_JS}
       return;
     }
     if (event.key !== 'Tab') return;
-    // The trap covers the WHOLE armed lifetime (2026-09-11 review-fix F1).
+    // The trap covers the WHOLE armed lifetime.
     // While an accepted action runs, both controls are disabled and there is
     // nothing inside the dialog to cycle: focus — which the disabled control
     // handed to <body> — goes to the dialog container (tabindex="-1") and
@@ -666,8 +664,8 @@ ${DASHBOARD_SEMVER_JS}
     order[(order.indexOf(document.activeElement) + step + order.length) % order.length].focus();
   }
 
-  // Arm the page's ONE in-app confirmation (2026-09-11 upstream-alignment T2):
-  // nothing runs before the operator confirms, and the copy the dialog shows is
+  // Arm the page's ONE in-app confirmation: nothing runs before the operator
+  // confirms, and the copy the dialog shows is
   // the gate's own (title = the question, description = the consequence).
   function armConfirmDialog(request) {
     if (confirmArmed !== null) return;
@@ -693,7 +691,7 @@ ${DASHBOARD_SEMVER_JS}
     parts.backdrop.hidden = false;
     // aria-modal="true" is a promise: from this moment until close, the page
     // behind the dialog is out of the tab order, out of the accessibility
-    // tree and out of pointer reach (2026-09-11 review-fix F1).
+    // tree and out of pointer reach.
     setBackgroundInert(true);
     document.addEventListener('keydown', confirmKeydown, true);
     // Focus moves INTO the dialog, onto the least destructive control: the
@@ -775,8 +773,6 @@ ${DASHBOARD_SEMVER_JS}
         status('credentials', 'Removing token…', false);
         try {
           await request(AUTH_PATHS.changeToken, { method: 'POST', body: { remove: true, currentPassword: current } });
-          // A config-managed credential is re-seeded on the next restart — say
-          // so instead of implying a permanent removal (design 17 §7.4 seeding).
           var wasConfigManaged = credentialSnapshot.token !== null && credentialSnapshot.token.source === 'config';
           byId('cred-current-password').value = '';
           await loadCredentials();
@@ -826,7 +822,7 @@ ${DASHBOARD_SEMVER_JS}
   byId('cred-rotate-token').addEventListener('click', function () { void rotateToken(); });
   byId('cred-remove-token').addEventListener('click', function () { void removeToken(); });
   byId('cred-copy-token').addEventListener('click', copyToken);
-  // The confirmation dialog's own controls (2026-09-11 upstream-alignment T2):
+  // The confirmation dialog's own controls:
   // Cancel dismisses (a cancel performs NOTHING), Confirm launches the armed
   // runner exactly once, and a click on the mask outside the dialog dismisses
   // the same way — the affordance the chamber's other in-app dialogs have

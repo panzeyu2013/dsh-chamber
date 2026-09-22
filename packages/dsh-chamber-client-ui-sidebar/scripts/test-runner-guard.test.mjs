@@ -2,7 +2,7 @@
  * test-runner-guard.test.mjs —— sidebar 测试清单（scripts/test.mjs）的零测试
  * 守卫 + 清单锁步测试。
  *
- * 2026-12（M1）后清单本身只保留数据表，runner 语义（解析、零测试判定、平台腿、
+ * 清单本身只保留数据表，runner 语义（解析、零测试判定、平台腿、
  * 首败即停）全部来自共享引擎 scripts/lib/test-manifest.mjs；本文件因此：
  *   ① 钉住本包选用的判定档（executed：pass+fail > 0，全 skip 视为零覆盖）；
  *   ② 清单锁步：盘上每个 *.test.ts / *.test.mjs 都出现在 GROUPS ∪ WIN32_FILES

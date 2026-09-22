@@ -1,7 +1,6 @@
 /**
  * Shared no-listen harness for the split boundary dispatch suites: dispatch
  * composition, temp-store auth and the HTTP runner over FakeRequest/FakeResponse.
- * Extracted verbatim from dispatch-composition.test.ts.
  */
 
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'

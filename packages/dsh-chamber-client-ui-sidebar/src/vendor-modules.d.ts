@@ -30,7 +30,7 @@ declare module '@deepseek-ai/dsh-client-store' {
   }
   export type SnapshotSelectorHook<T> = <S>(sel: (s: T) => S, eq?: (a: S, b: S) => boolean) => S
   /**
-   * Writable snapshot store (2026-09-11 upstream-alignment A5): the engine's
+   * Writable snapshot store: the engine's
    * bare data face — `getSnapshot`/`subscribe` plus `set` (wholesale replace)
    * and `update` (immer draft). The sidebar's panel projection rides
    * `createSnapshotStore` + `set`, exactly like upstream's ui-sidebar
@@ -95,7 +95,7 @@ declare module '@deepseek-ai/dsh-api-workspace-controller/client' {
     phase: 'pending' | 'ready'
     error: unknown
   }
-  /** Structured workspace-create failure (P2-18 check; unused by the sidebar, declared for the seam). */
+  /** Structured workspace-create failure (unused by the sidebar, declared for the seam). */
   export class WorkspaceCreateError extends Error {
     readonly rpcError: unknown
   }
@@ -220,11 +220,11 @@ declare module '@deepseek-ai/dsh-client-ui-primitives' {
   export const IconBranchOutline16: (props: any) => ReactElement | null
   /** Per-source session sort toggle (06 §7): IconPersonalizationOutline16 glyph. */
   export const IconPersonalizationOutline16: (props: any) => ReactElement | null
-  /** Add-workspace affordance (2026-09-11 upstream-alignment T7): the official
+  /** Add-workspace affordance: the official
    *  project-add glyph (vendor icons/index.tsx `IconProjectAddOutline16`) — a
    *  workspace is a project, not a generic `+`. */
   export const IconProjectAddOutline16: (props: any) => ReactElement | null
-  /** Active-Schedule marker glyph (2026-09-11 upstream-alignment T7): the same
+  /** Active-Schedule marker glyph: the same
    *  alarm clock upstream's ActiveScheduleIndicator wraps (vendor
    *  ui-workspace Rows.tsx:284-296). */
   export const IconAlarmClockOutline16: (props: any) => ReactElement | null
@@ -234,7 +234,7 @@ declare module '@deepseek-ai/dsh-client-ui-primitives' {
    * Host clipboard write shared by the Web UI copy controls: prefers the async
    * Clipboard API and falls back to `execCommand('copy')`; resolves true only
    * when the host accepted the write. Used by the chamber-owned RowHoverCard
-   * (06 §7), which replaced the vendored HoverCard's activation-copy path.
+   * (06 §7).
    */
   export const writeClipboard: (text: string) => Promise<boolean>
   /** Official dsh state dot: done/warning/ongoing/error (loose face). */
@@ -251,7 +251,7 @@ declare module '@deepseek-ai/dsh-client-ui-primitives' {
   /** Row action dropdown (portal mode for the overflow-clipping sidebar). */
   export const Menu: (props: any) => ReactElement | null
   /**
-   * Official modal shell (archive manager chrome, 2026 style pass): centered
+   * Official modal shell (archive manager chrome): centered
    * body-portaled card over a blurred mask; Esc / mask / close button all
    * invoke onClose; `open`/`title`/`closeLabel` (+ optional `description`,
    * `footer`, `className`, `contentClassName`, `headless`). Loose face (the

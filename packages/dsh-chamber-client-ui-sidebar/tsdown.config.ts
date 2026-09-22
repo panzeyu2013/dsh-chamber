@@ -9,7 +9,7 @@
  *
  * 本仓不构建也不消费本包的 `lib/`：树内消费全部走 **source**
  * （`exports["./client"]` / `["./shared"]` → `src/**`；renderer 经 vite 别名、测试经
- * `scripts/dev/test-shell-loader.mjs`），C8 产物清单与 CI 都不含它。
+ * `scripts/dev/test-shell-loader.mjs`），产物清单与 CI 都不含它。
  *
  * 要让这条发布路径真正可用，须先在设计层定"谁构建、在哪构建"（上游共享配置 +
  * tsdown 依赖 + 锁文件），不能在 chamber 树里凭空补一个配置——那会是一个本仓无法

@@ -1,6 +1,6 @@
 /**
  * Browser-auth cookie bootstrap unit tests (browser-auth-cookie.ts) —
- * review-round3c P0: the 0.1.2 launch-token exchange + in-memory cookie
+ * the 0.1.2 launch-token exchange + in-memory cookie
  * registry the control plane uses to pass the upstream BrowserAuth gate.
  */
 import { test } from 'node:test'

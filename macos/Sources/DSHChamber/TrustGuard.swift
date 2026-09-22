@@ -1,7 +1,6 @@
 // TrustGuard.swift — A 桥传输层信任护栏（纯函数工具，全 static，可测性优先）
 //
-// W-04（A 桥雏形，design 25 §4.4.1）/ design 25
-// §4.4.1（A 桥 web↔Swift：Swift 端 WKScriptMessageHandler 的传输层护栏）与
+// A 桥 web↔Swift（design 25 §4.4.1）：Swift 端 WKScriptMessageHandler 的传输层护栏与
 // §0.1-B3（渲染器可用性门：就绪前期望 origin 未开放 → 一律拒绝、渲染端有界
 // 重试语义保留——本工具不感知就绪态，就绪门由 MessageHandler 的
 // expectedOrigin() 闭包体现）。
@@ -29,15 +28,15 @@ import Foundation
 enum TrustGuard {
 
     /// 信封尺寸上限：4 MiB（design 25 §4.4.1 ③「信封结构/尺寸上限（≤4 MiB）」）。
-    /// 单一定义 = `BridgeLimits.maxMessageBytes`（2026-12 单源化：与
-    /// FrameCodec.maxFrameBytes 同一预算，不再各写字面量）。
+    /// 单一定义 = `BridgeLimits.maxMessageBytes`（与
+    /// FrameCodec.maxFrameBytes 同一预算）。
     static let maxMessageBytes = BridgeLimits.maxMessageBytes
 
     /// origin 判定：把 urlString 解析为 URLComponents，与期望 origin 按
     /// `scheme://host:port` 精确比较（path/query/fragment 不参与——POC 按
     /// design 25 §4.4.1 第 2 条「origin === 当前控制面 origin」字面执行；
     /// 对拍：Electron 侧 isTrustedRendererUrl 还限定 pathname == "/" 且无
-    /// query（renderer-trust.ts），若 M2/M3 控制面 origin 下出现可注入文档
+    /// query（renderer-trust.ts），若控制面 origin 下出现可注入文档
     /// 面（如 /api/i/* 远端 HTML 直开主 frame）需在此补同款判定）。
     ///
     /// 规则：
@@ -58,12 +57,12 @@ enum TrustGuard {
               let expectedHost = expected.host?.lowercased() else {
             return false
         }
-        // 两侧都不得带 userinfo（原先只查 actual——expectedOrigin 若含 userinfo
-        // 会被接受，与「同源以无凭据 URL 为前提」矛盾；2026-09 三审边界收口）。
+        // 两侧都不得带 userinfo：expectedOrigin 若含 userinfo
+        // 会被接受，与「同源以无凭据 URL 为前提」矛盾。
         guard actual.user == nil, expected.user == nil else { return false }
         // 默认端口折叠：与 WHATWG URL 的 origin 等价语义对齐
         // （`http://h:80` ≡ `http://h`、`https://h:443` ≡ `https://h`；
-        // 2026-09 三审：原实现按字面 port 比较，会误拒同源默认端口写法）。
+        // 按字面 port 比较会误拒同源默认端口写法）。
         return actualScheme == expectedScheme
             && actualHost == expectedHost
             && effectivePort(scheme: actualScheme, port: actual.port)
@@ -80,7 +79,7 @@ enum TrustGuard {
         }
     }
 
-    /// 文档面判定（2026-09 验收审计 major 收口）：A 桥只信任**固定壳文档**——
+    /// 文档面判定：A 桥只信任**固定壳文档**——
     /// 与 Electron `isTrustedRendererUrl`（renderer-trust.ts:20-30）逐条对齐：
     /// 期望 origin 必须 http(s)、origin 相等、`pathname == "/"`、无 query。
     /// 原因：控制面同一 origin 下还透传远端实例响应（`/api/i/<id>/*`），
@@ -122,7 +121,7 @@ enum TrustGuard {
     }
 
     /// 方法白名单判定：精确匹配（通道名均为小写下划线命名空间，大小写不
-    /// 规范化；manifest 化后通道名以 ipc-events.ts IPC_CHANNELS 为权威，
+    /// 规范化；通道名以 ipc-events.ts IPC_CHANNELS 为权威，
     /// design 25 §4.4.3）。
     static func isAllowedMethod(_ method: String, whitelist: Set<String>) -> Bool {
         whitelist.contains(method)
@@ -135,7 +134,7 @@ enum TrustGuard {
         body.utf8.count <= maxMessageBytes
     }
 
-    /// 信封尺寸判定（Data 形态，Phase 1 C1）：入参是
+    /// 信封尺寸判定（Data 形态）：入参是
     /// `JSONSerialization.data(withJSONObject:)` 的产出——合法 UTF-8，故
     /// `data.count` 与 String 版的 `body.utf8.count` **逐字节等价**，省掉
     /// 调用点一次 4MiB 级 `String(decoding:)` 分配。

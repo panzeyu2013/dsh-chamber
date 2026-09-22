@@ -1,6 +1,6 @@
 /**
  * Minimal RFC 6455 frame helpers for the instance-proxy WebSocket heartbeat
- * (design 14 extension — sleep/wake stuck-deep-diving fix).
+ * (design 14 extension — sleep/wake stuck-deep-diving).
  *
  * The proxy needs only two things: an encoder for the ping frames it injects
  * downstream (unmasked — the proxy is the ws server to the browser; the

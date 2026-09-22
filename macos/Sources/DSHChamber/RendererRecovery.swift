@@ -2,7 +2,7 @@
 //  RendererRecovery.swift
 //  DSHChamber
 //
-//  W-21/E19 纯逻辑片（design 25 §5 E19、§4.5；对照 main.ts
+//  纯逻辑片（design 25 §5 E19、§4.5；对照 main.ts
 //  installRendererRecovery:605-700）：renderer 崩溃的有界自动重载策略与
 //  sidecar 就绪前的深链缓冲。
 //
@@ -26,7 +26,7 @@ public enum HostInboundMethod {
     public static let notifyClicked = "__host.notifyClicked"
     public static let systemResume = "__host.systemResume"
     public static let mainWindowShown = "__host.mainWindowShown"
-    /// S-19/S-20 冻结线：Swift 壳把 Sparkle 更新阶段
+    /// 冻结线：Swift 壳把 Sparkle 更新阶段
     /// {phase, version, error} 报给 sidecar（sidecar 映射进页面的 update-state
     /// 投影）。payload 值域见 NativeUpdatePhase。
     public static let nativeUpdatePhase = "__host.nativeUpdatePhase"
@@ -54,13 +54,13 @@ public struct RendererRecoveryPolicy: Equatable {
 
     /// 依据历史重载时间戳（秒）与当前时刻决策；命中 reload 时把本次计入
     /// `attempts`（窗口外旧记录自动淘汰）。
-    /// 窗口淘汰 / 上限判定 / 记账 = `RollingWindowLimiter` 单源（2026-12 单源化）；
+    /// 窗口淘汰 / 上限判定 / 记账 = `RollingWindowLimiter` 单源；
     /// inout 数组契约保持不变（本策略是值类型，状态由调用方持有）。
     ///
-    /// B5 复核（2026-12）：曾试拆「判定 / 记账」，但**两个调用点都在判定之前守卫**
+    /// 不拆分「判定 / 记账」：**两个调用点都在判定之前守卫**
     /// （`MainWindowController.scheduleRecoveryReload` 的 `recoveryReloadWorkItem == nil`、
-    /// `SidecarSupervisor` 的崩溃分支守卫 —— 后者 2026-12 已把配额消耗移进崩溃路径），
-    /// 不存在「判定后拒绝排程」的路径，故拆分是**无消费点的能力**，已回退。
+    /// `SidecarSupervisor` 的崩溃分支守卫，配额消耗发生在崩溃路径内），
+    /// 不存在「判定后拒绝排程」的路径，拆分只会得到**无消费点的能力**。
     public func decide(now: Double, attempts: inout [Double]) -> Decision {
         switch RollingWindowLimiter.decide(window: window, limit: maxReloads,
                                            now: now, events: &attempts) {
@@ -72,17 +72,15 @@ public struct RendererRecoveryPolicy: Equatable {
     }
 }
 
-/// renderer 崩溃归因（2026-09 崩溃归因轮）。
+/// renderer 崩溃归因。
 ///
-/// 证据（本机 `~/Library/Logs/DiagnosticReports` 的 WebContent 报告 + shell.log）：
-/// 当前构建的两次崩溃都落在「页面加载完成后 20–34 秒」的 boot 窗口，Apple 符号化栈
-/// 是 JSC 代码块替换/JIT tier-up（入口 `JSRequestAnimationFrameCallback::invoke`）；
-/// 更早构建的 8 份报告是同一段代码块替换机制（入口是嵌套 async generator 驱动链）。
-/// 问题是**静默**：10 次崩溃里只有 2 次留下过 shell 侧痕迹，其余都表现为"应用自己
-/// 回到载入历史"。把"距上次加载完成多少秒 + 本次加载窗口内第几次崩溃"写进日志，
-/// 下一次发生即可直接判定，不必再靠事后推理。
+/// 崩溃落在「页面加载完成后 20–34 秒」的 boot 窗口，Apple 符号化栈是 JSC 代码块
+/// 替换/JIT tier-up（入口 `JSRequestAnimationFrameCallback::invoke`）。
+/// 问题是**静默**：崩溃不一定留下 shell 侧痕迹，大多表现为"应用自己回到载入历史"。
+/// 把"距上次加载完成多少秒 + 本次加载窗口内第几次崩溃"写进日志，下一次发生即可
+/// 直接判定，不必再靠事后推理。
 public enum RendererCrashAttribution {
-    /// boot 窗口上界（秒）。证据里的崩溃落在 21–34s；取 60s 覆盖同族形态
+    /// boot 窗口上界（秒）。崩溃落在 21–34s 观测范围内；取 60s 覆盖同族形态
     /// （多来源挂载 + 插件 boot 全在同一窗口内完成）。
     public static let bootWindowSeconds: Double = 60
 
@@ -163,11 +161,10 @@ public final class DeepLinkRelay {
         buffer.enqueue(url)
     }
 
-    /// sidecar 重启（W-15 Supervisor 换进程）→ 只复位就绪位，**保留**缓冲：
-    /// 新进程尚未收到 ready 帧，复位后到达的深链必须重新缓冲（2026-09 三审
-    /// #9）；同时重启前已缓冲、尚未补发的 URL 不再被清空丢弃，下一个 ready
-    /// 帧按 FIFO 一并补发（2026-12 双端逐函数核对 F2：原实现 drainAll 复位即
-    /// 丢，droppedCount 也不计，用户点开的深链静默消失）。
+    /// sidecar 重启（Supervisor 换进程）→ 只复位就绪位，**保留**缓冲：
+    /// 新进程尚未收到 ready 帧，复位后到达的深链必须重新缓冲；重启前已缓冲、
+    /// 尚未补发的 URL 不被清空丢弃，下一个 ready 帧按 FIFO 一并补发（复位时
+    /// 清空会让用户点开的深链静默消失，droppedCount 也不计）。
     public func reset() {
         isReady = false
     }

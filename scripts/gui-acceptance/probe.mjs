@@ -127,8 +127,8 @@ export async function runLiveAcceptance({
 
   const writers = await get(planeOrigin, '/api/connections/local/writers')
   if (writers.status === 404) {
-    // The route landed 2026-09-10; a packaged build older than that legitimately
-    // answers 404 — record the fact instead of failing the older build.
+    // A packaged build without this route legitimately
+    // answers 404 — record the fact instead of failing that build.
     rec.add('CP-4', '写者静默诊断路由（该构建无此路由）', null, `status=404 body=${writers.body.slice(0, 120)}`)
   } else {
     rec.add('CP-4', '写者静默诊断：无未证实写者', writers.status === 200 && isWriterQuiescent(writers.body),

@@ -1,8 +1,8 @@
 /**
- * shell-ipc-connections — domain IPC registrations split out of shell-core.ts
- * (2026-12 stage-3 shell-core domain split). PURE MOVE: handler bodies, registration
- * order and error semantics are unchanged; the shared state/helpers arrive through
- * ShellIpcCtx, the assembly-side deps through ctx.deps.ctx.
+ * shell-ipc-connections — domain IPC registrations.
+ * The handler bodies, registration order and error semantics live here; the shared
+ * state/helpers arrive through ShellIpcCtx, the assembly-side deps through
+ * ctx.deps.ctx.
  */
 import type { ShellIpcCtx } from './shell-core.ts'
 import type { ConnectionCredentialMutations } from './connection-save.ts'
@@ -24,17 +24,16 @@ import { gatewaySessionScopeForConnection } from './gateway-session.ts'
 export function registerConnectionHandlers(ctx: ShellIpcCtx): void {
   const { deps, projectInstances } = ctx
   const { transportManager: sm, gatewaySessions, publishRegistryTransition, audit } = ctx.deps.ctx
-  // —— C 组（S3 批；W-10 S3 施工图第 1 项）——
-  // registry + 凭据 7 注册体（按原 main.ts 顺序紧接 B 组追加；注册体与下述纯
-  // 辅助自 main.ts 逐字迁入，全零 Electron）。trustedIpc 围栏由装配侧在
+  // —— C 组 ——
+  // registry + 凭据 7 注册体（全零 Electron）。trustedIpc 围栏由装配侧在
   // registrar 注入点包装；事务（connection-save）/ canonicalize
   // （transport-provider）/ 凭据写入口（ssh/gateway-provider）与 session origin
   // 纯函数（gateway-session*）为 electron-free 纯模块直接 import。凭据
   // write-only 语义与「绝不回读」纪律保持：读侧只判存在性（!== null），值绝不
   // 进入载荷/日志。装配依赖经 ctx：sm = transportManager 句柄（registry 读写
-  // + 状态/生命周期投影）、audit（S24 审计叶）、gatewaySessions（会话
+  // + 状态/生命周期投影）、audit（非秘密审计叶）、gatewaySessions（会话
   // invalidation 宿主面）、publishRegistryTransition（registry 变更生命周期
-  // sidecar——宿主对象与 SSH_INSTANCES_CHANGED push 文本留 main，本组注册体
+  // sidecar——宿主对象与 SSH_INSTANCES_CHANGED push 文本在 main，本组注册体
   // 经 ctx 调用）。
   /** The gateway-session origin for a registered instance (design 17 §9.3
    * per-origin session key): scheme from `insecureHttp`, explicit port —
@@ -281,7 +280,7 @@ export function registerConnectionHandlers(ctx: ShellIpcCtx): void {
     try {
       // Rebuild only a live SSH transport so it stops using the cleared
       // transport credential. Gateway/http transports are unaffected.
-      // S24 audit records only the credential kind, never its value.
+      // Audit records only the credential kind, never its value.
       const hadPassword = getSshPassword(id) !== null;
       commitTransportCredentialUpdate(sm, id, status => status.transport === 'ssh', () => {
         setSshPassword(id, null, null);
@@ -312,7 +311,7 @@ export function registerConnectionHandlers(ctx: ShellIpcCtx): void {
       // clearing the token. disconnect() synchronously emits the old
       // gateway idle projection, so the control plane unregisters
       // gateway:<id> before a replacement transport can register.
-      // S24 audit names the credential kind, never its value.
+      // Audit names the credential kind, never its value.
       const hadToken = getGatewayToken(id) !== null;
       commitTransportCredentialUpdate(sm, id, status => status.kind === 'gateway', () => {
         setGatewayToken(id, null, null);
@@ -361,7 +360,7 @@ export function registerConnectionHandlers(ctx: ShellIpcCtx): void {
       }
       // Same disconnect-before-clear discipline as the token handler: a
       // live gateway target is rebuilt without the removed credential.
-      // S24 audit never records the password value.
+      // Audit never records the password value.
       const hadPassword = getGatewayPassword(id) !== null;
       commitTransportCredentialUpdate(sm, id, status => status.kind === 'gateway', () => {
         setGatewayPassword(id, null, null);
@@ -382,16 +381,15 @@ export function registerConnectionHandlers(ctx: ShellIpcCtx): void {
     }
   });
 
-  // —— D 组（S4 批；W-10 S4 施工图第 1 项）——
-  // ssh 连接状态 7 注册体（按原 main.ts 顺序紧接 C 组追加；注册体自 main.ts
-  // 逐字迁入，全零 Electron）。trustedIpc 围栏由装配侧在 registrar 注入点
-  // 包装。CONFIG_LIST：~/.ssh/config 非秘密投影（alias/hostName/user/port——
+  // —— D 组 ——
+  // ssh 连接状态 7 注册体（全零 Electron）。trustedIpc 围栏由装配侧在 registrar
+  // 注入点包装。CONFIG_LIST：~/.ssh/config 非秘密投影（alias/hostName/user/port——
   // keys/proxies/credentials 绝不离开主进程），经纯模块 ssh-config.ts 的
-  // discoverSshConfigHosts 直接 import（原注释随迁）；CONNECT / DISCONNECT /
+  // discoverSshConfigHosts 直接 import；CONNECT / DISCONNECT /
   // STATUS / REVERIFY / LOGS / LOGS_CLEAR 全走 ctx 注入的 transportManager
   // 句柄（sm；Pick 面扩 reverify/logs/clearLogs，见 ShellAssemblyCtx）。
   // status/logs 的非秘密投影纪律保持（localPort/phase 等元数据可读；URL/密钥
-  // 绝不进投影/载荷/日志——main.ts 原注释语义随迁保留）。
+  // 绝不进投影/载荷/日志）。
   // ~/.ssh/config discovery (design 05 §5): non-secret host projections only
   // (alias/hostName/user/port) — keys/proxies/credentials never leave the
   // main process.
@@ -430,20 +428,18 @@ export function registerConnectionHandlers(ctx: ShellIpcCtx): void {
     return sm.clearLogs(id);
   });
 
-  // —— E 组（S5 批；W-10 S5 施工图第 1 项）——
+  // —— E 组 ——
   // exec/systemd 4 注册体（SSH_START_SERVICE / SSH_STOP_SERVICE / SSH_IS_ACTIVE
-  // / SSH_RESTART_SERVICE——按原 main.ts 顺序紧接 D 组追加；注册体自 main.ts
-  // 逐字迁入，全零 Electron）。装配依赖经 ctx：transportManager（sm）的 exec
-  // 面（Pick 扩 exec——装配侧注入完整现实例）。restart 注册体在 main.ts 原经
-  // plugin-sync 的 ExecFn 别名 execTransport（= sm.exec 的 as unknown 收窄，
-  // 为适配 plugin-sync 自身的执行契约）调同一执行面，迁入后直用 sm.exec：
-  // 运行时同一函数、行为零改（决策注记）。systemctl argv 固定参数数组
+  // / SSH_RESTART_SERVICE，全零 Electron）。装配依赖经 ctx：transportManager（sm）的 exec
+  // 面（Pick 扩 exec——装配侧注入完整现实例）。restart 注册体直用 sm.exec
+  // （plugin-sync 的 ExecFn 别名 execTransport 即 sm.exec 的 as unknown 收窄，
+  // 为适配 plugin-sync 自身的执行契约）。systemctl argv 固定参数数组
   // `systemctl <action> -- <serviceName>` 与服务名白名单（`^[a-zA-Z0-9]
   // [a-zA-Z0-9_.-]*$`、首字符字母数字；design 02 §3.9）是 ssh-provider
   // provider exec 的纯逻辑（白名单拒绝发生在任何 spawn 前），generation 复验
   // 纪律（exec 结果/status/serviceActive 提交前经 execIsCurrent 复验，防旧代
   // 污染）在 transport-manager exec 实现内（execEpoch/execIdentityChanged）
-  // ——均在纯模块内部、不随迁；注册体只做结果投影（下方原注释随迁）：
+  // ——均在纯模块内部；注册体只做结果投影：
   // Provider exec channel (design 05 §7.4, ssh: remote systemd): the fresh
   // status projection on success (serviceActive included), {error} on
   // failure — loud, never a silent empty success, never an unhandled
@@ -460,10 +456,10 @@ export function registerConnectionHandlers(ctx: ShellIpcCtx): void {
     const { id } = payload as { id: string };
     return sm.exec(id, 'is-active').then(result => (result.ok ? result.status : { error: result.error })).catch(err => ({ error: `exec failed: ${describeUnknownError(err)}` }));
   });
-  // SSH_RESTART_SERVICE（design 13 M2+M3 contract B 的 ssh 服务重启腿）：
+  // SSH_RESTART_SERVICE（design 13 的 ssh 服务重启腿）：
   // 语义同 provider exec channel——成功时投影最新 status（服务重启的即时
   // 状态；transport exec 的 ok 分支恒带 status，此处 ?? 兜底为 plugin-sync
-  // ExecResult 契约保留的防御分支，运行时不可达分支行为与搬迁前一致）；
+  // ExecResult 契约保留的防御分支，运行时不可达）；
   // 失败 loud {error}。
   deps.ipc.handle(IPC_CHANNELS.SSH_RESTART_SERVICE, (payload: unknown) => {
     const { id } = payload as { id: string };

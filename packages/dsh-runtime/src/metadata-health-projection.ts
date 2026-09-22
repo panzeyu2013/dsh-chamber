@@ -1,12 +1,11 @@
 /**
- * Metadata-health projection — the derived facts both Node hosts publish
- * (2026-12 single-sourcing pass).
+ * Metadata-health projection — the derived facts both Node hosts publish.
  *
- * The gateway's status projection and the desktop startup host each turned a
+ * The gateway's status projection and the desktop startup host both turn a
  * detectRuntimeMetadataHealth() fact into the same two things: the set of
  * named components the wire vocabulary carries, and whether a recovery escape
- * is needed. The five predicates and the needsRecovery rule were identical;
- * only the element TYPE differed (`Set<string>` in the gateway, a desktop
+ * is needed. The five predicates and the needsRecovery rule are identical;
+ * only the element TYPE differs (`Set<string>` in the gateway, a desktop
  * `Set<RuntimeMetadataComponent>`), and the corrupt-marker rescue stays a seam
  * each host computes because it touches its own base directory.
  *

@@ -2,15 +2,13 @@
 //  MessageHandlerTests.swift
 //  DSHChamberTests
 //
-//  模块评审 major 收口 + S17：ChamberMessageHandler 是 A 桥四护栏的**唯一执行
+//  ChamberMessageHandler 是 A 桥四护栏的**唯一执行
 //  点**。`didReceive` 需要 WKScriptMessage（WebKit 无公开构造器，frameInfo 不可
 //  伪造），因此判定收敛为纯函数 `fence(_:)`，本文件直接驱动该接缝：
 //    - fence：接受 + origin 拒绝 + 白名单拒绝 + 信封/尺寸拒绝 + app_quitting
-//      （S7）+ 非本通道/子 frame 丢弃；
+//      + 非本通道/子 frame 丢弃；
 //    - exactInt：id 整值域（布尔/NaN/±Inf/越界/浮点全部拒绝）
 //    - jsStringLiteral：引号/反斜杠/控制字符/Unicode 转义
-//  2026-12 审计删除的仅测试函数（anyCodablePayload / isJSONSerializableValue /
-//  maxJSONDepth）不再有对应用例；其接受集由 fence + AnyCodableTests 覆盖。
 //    - 拒绝码常量：与 design 25 §4.4.1 / renderer-trust 同族字面量
 //
 import XCTest
@@ -24,11 +22,11 @@ final class MessageHandlerTests: XCTestCase {
         XCTAssertEqual(ChamberMessageHandler.codeMethodNotAllowed, "method_not_allowed")
         XCTAssertEqual(ChamberMessageHandler.codeFrameTooLarge, "frame_too_large")
         XCTAssertEqual(ChamberMessageHandler.codeMalformedEnvelope, "malformed_envelope")
-        // S7：与 renderer-trust.ts createTrustedIpc 的 error.code 逐字一致。
+        // 与 renderer-trust.ts createTrustedIpc 的 error.code 逐字一致。
         XCTAssertEqual(ChamberMessageHandler.codeAppQuitting, "app_quitting")
     }
 
-    // MARK: - S17：入站围栏流水线（didReceive 的纯逻辑接缝）
+    // MARK: - 入站围栏流水线（didReceive 的纯逻辑接缝）
 
     private let whitelist: Set<String> = ["dsh-chamber:info", "dsh-chamber:settings-get"]
 
@@ -89,7 +87,7 @@ final class MessageHandlerTests: XCTestCase {
     }
 
     func testFenceRejectsAfterQuittingStarts() {
-        // S7：镜像 renderer-trust.ts createTrustedIpc——origin 通过后、信封/
+        // 镜像 renderer-trust.ts createTrustedIpc——origin 通过后、信封/
         // 白名单之前回 app_quitting，late invoke 不得再注入传输/运行时工作。
         XCTAssertEqual(
             ChamberMessageHandler.fence(fenceInput(body: envelope(), quitting: true)),
@@ -117,10 +115,9 @@ final class MessageHandlerTests: XCTestCase {
             .reject(id: 1, code: ChamberMessageHandler.codeMalformedEnvelope))
     }
 
-    /// Phase 1 C2：走完整 fence 的深嵌套 payload。注意 envelope 根占深度 0，
+    /// 走完整 fence 的深嵌套 payload。注意 envelope 根占深度 0，
     /// payload 从 1 起，故经 fence 的 payload 深度上限是 maxJSONDepth - 1
-    /// （fail-closed 偏严无害）；深度门单源 = AnyCodable.maxJSONDepth
-    /// （MessageHandler.maxJSONDepth 随仅测试函数于 2026-12 审计删除）。
+    /// （fail-closed 偏严无害）；深度门单源 = AnyCodable.maxJSONDepth。
     func testFenceRejectsDeeplyNestedPayload() {
         var rejected: Any = "leaf"
         for _ in 0..<AnyCodable.maxJSONDepth { rejected = [rejected] }
@@ -143,7 +140,7 @@ final class MessageHandlerTests: XCTestCase {
             .reject(id: 1, code: ChamberMessageHandler.codeFrameTooLarge))
     }
 
-    /// Phase 3（2026-09-18）：尺寸门的**安全上界短路**不得改变接受集——对若干
+    /// 尺寸门的**安全上界短路**不得改变接受集——对若干
     /// 边界载荷，fence 的 accept/reject 必须与「精确 JSONSerialization 计量」
     /// 逐条一致（覆盖短路接受、短路回退、转义密集与多字节字符四类）。
     func testFenceSizeDecisionMatchesExactSerialization() {

@@ -1,17 +1,14 @@
 /**
- * Discard-authorization gate decisions of the remove dialog (2026-09-11
- * review-fix, F1/F2).
+ * Discard-authorization gate decisions of the remove dialog.
  *
  * The gate itself is a React component, but the two decisions it turns on are
- * pure and were previously inline in `RemoveWorktreeDialog.tsx` — where the
- * F1 regression lived: the gate's `open` was derived from
- * `nextDiscardGate`, which flips back to `null` the moment the acknowledgement
- * box is ticked, so the gate dismissed itself and its confirm could never run
- * (the removal needed a second `Remove` click). The cases below pin both halves
- * of the contract — which acknowledgement a click still has to collect, and
- * whether the single `discardChanges` wire flag (the host's `--force`) may be
- * sent (the state-wiring lock that used to pin the same flow was retired by the
- * 2026-12 ruling; the cases here are the remaining contract).
+ * pure: `nextDiscardGate` answers which acknowledgement a click still has to
+ * collect, and `discardAuthorized` answers whether the single `discardChanges`
+ * wire flag (the host's `--force`) may be sent. Deriving the gate's `open` from
+ * `nextDiscardGate` is invalid — it flips back to `null` the moment the
+ * acknowledgement box is ticked, so the gate would dismiss itself and its confirm
+ * could never run (forcing a second `Remove` click). The cases below pin both
+ * halves of the contract.
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -29,7 +26,7 @@ const CLEAN: DiscardGateFacts = {
 test('nextDiscardGate: a clean target needs no acknowledgement at all', () => {
   assert.equal(nextDiscardGate(CLEAN), null, 'the click removes directly')
   // A stale-clean row fact that the fresh preflight reported dirty is the same
-  // "dirty" authorization (review 2026-08 P2-1).
+  // "dirty" authorization.
   assert.equal(nextDiscardGate({ ...CLEAN, needsDiscardConfirmation: true }), 'dirty')
   // The deterministic submodule refusal arms its own authorization.
   assert.equal(nextDiscardGate({ ...CLEAN, submoduleBlock: true }), 'submodule')
@@ -40,7 +37,7 @@ test('nextDiscardGate: the answer goes null on tick — which is why the gate ho
   assert.equal(nextDiscardGate(dirty), 'dirty')
   // The tick that enables the gate's confirm also clears this answer: a gate
   // whose `open` were derived from it would unmount under the user's cursor and
-  // leave `onConfirm` unreachable (2026-09-11 review-fix, F1).
+  // leave `onConfirm` unreachable.
   assert.equal(
     nextDiscardGate({ ...dirty, discardChanges: true }),
     null,

@@ -1,9 +1,9 @@
 /**
- * lockfile-facts-memo unit tests (2026-12 stage-2 item 7): the local
+ * lockfile-facts-memo unit tests: the local
  * plugin-protection facts must be parsed once per input identity and MUST
  * reload when the underlying lockfile changes (mtime OR size) — a stale
  * family fact would judge a plugin install against a runtime line the machine
- * no longer runs.
+ * does not run.
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'

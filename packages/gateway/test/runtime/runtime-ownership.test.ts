@@ -1,7 +1,7 @@
 /**
  * /chamber/runtime ownership and the single-owner guard: unsafe owner leaves,
  * live/dead-pid records, stale-owner takeover, duplicate managers and dispose
- * release. Split from runtime-routes.test.ts.
+ * release.
  */
 
 import { test } from 'node:test'

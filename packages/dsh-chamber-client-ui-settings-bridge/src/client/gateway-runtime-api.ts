@@ -80,7 +80,7 @@ export function remoteRuntimeStatusView(status: RemoteRuntimeStatus): RemoteRunt
         : { kind: 'busy', titleKey: 'dshRuntimeStatusApplyingNow', params: { version: status.pending ?? '—' }, detail: null }
   }
   // Blocked startup (design 18 §9.3: the runtime surface stays pollable while
-  // the managed dsh is down) OUTRANKS operationError (P2-C): an F3 failure
+  // the managed dsh is down) OUTRANKS operationError: a durable recovery failure
   // leaves both startupBlockedReason and operationError set — the phase names
   // the resume route, so the blocked copy wins and the raw reason
   // (swap-attempted / restore-half / restore-incomplete / snapshot-failed /
@@ -128,7 +128,7 @@ export function projectRemoteRuntimeBadge(status: RemoteRuntimeStatus | null): R
     case 'restore-blocked': return { label: 'restore-blocked', tone: 'danger' }
     case 'idle': break
   }
-  // Corrupt metadata (recover-metadata parity, 2026-12) names its own danger
+  // Corrupt metadata (recover-metadata parity) names its own danger
   // badge and outranks the generic startup-blocked label.
   if (status.metadataHealth === 'selection-corrupt'
     || status.metadataHealth === 'recovery-in-progress'

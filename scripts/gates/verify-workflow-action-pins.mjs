@@ -1,11 +1,9 @@
 /**
  * Offline workflow-pin consistency guard.
  *
- * The release validation job mirrors ci.yml. A one-character typo in its
- * setup-node SHA made every tag release fail before validation could start.
- * Keep the shared bootstrap actions on one immutable 40-hex commit across
- * CI and every release job; an intentional upgrade must update all uses in
- * the same change.
+ * The release validation job mirrors ci.yml. Keep the shared bootstrap actions
+ * on one immutable 40-hex commit across CI and every release job; an
+ * intentional upgrade must update all uses in the same change.
  */
 
 import assert from 'node:assert/strict'
@@ -43,7 +41,7 @@ for (const source of sources) {
     actionPins.set(action, pins)
   }
 }
-// 三审：上面的 usesPattern 要求存在 `@`，因此 `uses: actions/checkout`（完全
+// 上面的 usesPattern 要求存在 `@`，因此 `uses: actions/checkout`（完全
 // 不写 ref）会**整条漏检**。这里对每条 uses 行做独立判定：外部 action 必须
 // 是 `<owner>/<repo>@<40-hex>`；本地 ./ 与 docker:// 除外。
 for (const source of sources) {
@@ -68,8 +66,8 @@ for (const action of sharedActions) {
   const escaped = action.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   const pattern = new RegExp(`uses:\\s*${escaped}@`, 'g')
   // basename, not the full path: Windows runners use backslash separators and
-  // a '/ci.yml'-style suffix check silently matches nothing there (the
-  // test-windows leg caught this — the guard must be path-separator agnostic).
+  // a '/ci.yml'-style suffix check silently matches nothing there — the guard
+  // must be path-separator agnostic.
   for (const source of sources.filter(source => /^(ci|release)\.yml$/.test(basename(source.path)))) {
     const matches = [...source.text.matchAll(pattern)]
     assert.ok(matches.length > 0, `${action} must be pinned in ${source.path}`)
@@ -95,7 +93,7 @@ assert.match(
   'dry-run must skip GitHub Release creation/update entirely',
 )
 
-// Pinned pnpm version (P2-14): root package.json#packageManager is the ONE
+// Pinned pnpm version: root package.json#packageManager is the ONE
 // declared source; every pnpm/action-setup step and every package/script mirror
 // must agree with it. Read-only — the dependency fields themselves are not
 // touched by this gate.

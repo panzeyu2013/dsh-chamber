@@ -50,8 +50,8 @@ export interface BadgeSuppressionFacts {
  * 一个会话计入当且仅当 `completedBySource[source][session] === true`（chamber
  * 边沿账本）**或** `runtimeFacts[source].sessions[session].completed === true`
  * （vendor 自武装）。这与侧栏行尾蓝点/待办区的权威完全一致（`derive.ts` 的
- * `mergeRuntimeFacts` 就是这两者的并集），因此不会再出现「点/待办有、徽标无」
- * 的诚实分叉（plan §3.3-7 裁决 14）。
+ * `mergeRuntimeFacts` 就是这两者的并集），因此不会出现「点/待办有、徽标无」
+ * 的诚实分叉。
  *
  * 仍排除当前事实行 `runningSubagents > 0` 的会话（06 §4.5 与窗口内运行环压制、
  * complete 通知抑制同规——子代理干活中的会话不是完成）。0 = 无未读（主进程清

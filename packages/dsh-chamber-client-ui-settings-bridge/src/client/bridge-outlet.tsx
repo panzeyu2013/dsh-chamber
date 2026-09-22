@@ -4,7 +4,7 @@
  * root-scope LIST and KEYED slots the settings surface declares
  * (settings.section / settings.general.item / settings.plugins.tab list;
  * settings.plugin.item keyed). The ledger is the SELECTED source's own boot-ctx
- * registry (2026-12 完整桥接修订), whose renderer is anchored on `renderRoot`
+ * registry, whose renderer is anchored on `renderRoot`
  * for its own root tree — so the bridge renders entries itself, with the
  * source's own renderer-bound seats: same kit synthesis (t seat /
  * useStore+actions / renderSlot binding / standard hooks), same inject face
@@ -19,13 +19,13 @@
  * contained at the host seam and can never abdicate the chamber-owned shell.
  */
 import { Component, useMemo, useSyncExternalStore, type FC, type ReactNode } from 'react'
-// 2026-09-11 upstream-alignment A3: the official observableHook, not a second
-// copy of it. bindings.tsx also creates three React contexts at module load
-// (host / root binding / scope binding) — the import is an edge inside the one
-// renderer build graph the bridge already shares. 2026-09-11 review-fix F4d: the
-// bridge imports ONLY this module (the sibling `bind` module it deep-imports is
-// the VENDOR module's own edge — `bindings.tsx` imports `./bind.ts` — and this
-// package has no ambient declaration for it, because nothing here imports it).
+// The official observableHook, not a second copy of it. bindings.tsx also
+// creates three React contexts at module load (host / root binding / scope
+// binding) — the import is an edge inside the one renderer build graph the
+// bridge already shares. The bridge imports ONLY this module (the sibling
+// `bind` module it deep-imports is the VENDOR module's own edge —
+// `bindings.tsx` imports `./bind.ts` — and this package has no ambient
+// declaration for it, because nothing here imports it).
 import { observableHook } from '@deepseek-ai/dsh-client-ui-renderer/src/client/bindings.tsx'
 import type {
   HostObservable, LocaleFace, RenderOpts, StoredEntry, StoreInstanceLike, Translate,
@@ -38,7 +38,7 @@ import type { SettingsSourceSlots } from './settings-source-face.ts'
  * public read API of an `@deepseek-ai/dsh-client-ui-renderer` SlotRegistry
  * (entries / entriesOfSlot / getVersion / subscribe / spec / onEntryError), so
  * the outlet can render ANY source's registry — the selected instance's own
- * boot-ctx ledger since the 2026-12 complete-bridge revision.
+ * boot-ctx ledger.
  */
 export type BridgeLedger = SettingsSourceSlots
 
@@ -327,12 +327,11 @@ const ANCHOR_STYLE = { display: 'contents' } as const
  * memoized per (slots, slotKey) — no resubscribe churn on unrelated
  * re-renders (official per-face cache pattern).
  *
- * Since the 2026-12 complete-bridge revision the ledger is the SELECTED
- * SOURCE's own boot-ctx registry and `standard` carries that source's own
- * renderer-bound seats, so an entry renders with the props it would have in
- * that instance's own frontend.
+ * The ledger is the SELECTED SOURCE's own boot-ctx registry and `standard`
+ * carries that source's own renderer-bound seats, so an entry renders with
+ * the props it would have in that instance's own frontend.
  *
- * 2026-09-11 upstream-alignment T4 — the official anchor contract: every slot
+ * The official anchor contract: every slot
  * render site exposes a stable `[data-slot="<key>"]` wrapper, because that is
  * the addressable seam the official stylesheets target
  * (`ui-settings-general/src/client/GeneralSection.module.css`:

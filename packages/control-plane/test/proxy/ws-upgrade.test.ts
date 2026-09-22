@@ -46,9 +46,8 @@ test('upgrade: only the remote.mux stream path forwards; other WS paths answer 4
   assert.equal(upstream.calls.length, 2)
   assert.equal(upstream.calls[1].url.pathname, '/api/remote.mux')
 
-  // The deleted upstream downlinks (events.mux / events.host, dsh
-  // 0.1.2-alpha.1) are now "other" paths: the proxy gate answers 404 instead
-  // of forwarding a doomed upgrade.
+  // Paths outside WS_STREAM_PATHS are "other" paths: the proxy gate answers
+  // 404 instead of forwarding a doomed upgrade.
   const other = fakeSocket()
   await proxy.handleUpgrade(fakeRequest('/api/i/local/api/events.mux', 'GET'), other, Buffer.alloc(0))
   assert.match(other.written, /404/)
@@ -57,11 +56,11 @@ test('upgrade: only the remote.mux stream path forwards; other WS paths answer 4
 })
 
 // ---------------------------------------------------------------------------
-// S2: upstream-leg TCP keepalive (direct-http liveness)
+// upstream-leg TCP keepalive (direct-http liveness)
 // ---------------------------------------------------------------------------
 
 /** An upgrade factory exposing every spliced upstream socket with its
- * TCP-keepalive configuration (S2: net.Socket.setKeepAlive recording). */
+ * TCP-keepalive configuration (net.Socket.setKeepAlive recording). */
 function keepAliveUpgradeFactory() {
   const upstreamSockets: any[] = []
   const fn: any = () => {
@@ -103,7 +102,7 @@ test('S2: a gateway-<id> WS upgrade arms TCP keepalive on the upstream leg befor
 })
 
 test('S2: a dsh-<id> direct-http (non-loopback) WS upgrade also arms TCP keepalive', async () => {
-  // M1 review fix: the discriminator is the RESOLVED upstream host, not the
+  // The discriminator is the RESOLVED upstream host, not the
   // source-id kind — a dsh-kind target with the http transport (registered at
   // a non-loopback base URL) has the same no-ssh-keepalive freeze class as a
   // gateway-kind direct target and must arm keepalive too.
@@ -167,8 +166,8 @@ test('upgrade: a non-101 upstream reply rejects explicitly (no unhandled stream)
 
 test('upgrade: an upstream connect failure rejects 502 upstream_failed (matches the HTTP path)', async () => {
   // Design 04 §4.2: upstream connect refusal → 502 upstream_failed — the WS
-  // leg used to answer 503 instance_unavailable (reserved for "no tunnel /
-  // not ready"), which misled operators into debugging the wrong layer.
+  // leg must not answer 503 instance_unavailable (reserved for "no tunnel /
+  // not ready"), which would mislead operators into debugging the wrong layer.
   const upstream = fakeHttpRequest(() => ({ error: new Error('ECONNREFUSED 127.0.0.1:17510') }))
   const proxy = proxyFor(upstream.fn, { getLocalDshPort: () => 17510 })
   const socket = fakeSocket()

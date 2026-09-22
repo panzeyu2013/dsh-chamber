@@ -3,8 +3,7 @@
  * 无 electron。覆盖：SingleFlight 单飞互斥（二次 tryBegin false / end 后可再入 /
  * inFlight 态）、isNoopSelection 三态、buildVersionList（active 置顶去重 / latest
  * 标记 / 降序 / cached 标记 / belowBaseline 与基线空不标 / byVersion 缺失跳过）、
- * versionExists（integrity 可空的放宽语义）。近似用例合并为表驱动（断言逐条保留）
- * ——2026-12 测试精简。
+ * versionExists（integrity 可空的放宽语义）。
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -91,8 +90,8 @@ test('buildVersionList: active 版本置顶且去重（只出现一次）', () =
 });
 
 test('buildVersionList: 列表 = active 置顶 + 纯 semver 降序；latest 只留标记、不钉位（决策 11）', () => {
-  // npm dist-tags.latest 可能是低于内建基线的旧版本（2026-10 用户场景：latest=rc.2
-  // < 内建 alpha.2）：不得把 latest 钉到第二位，否则无标签解释的乱序。
+  // npm dist-tags.latest 可能是低于内建基线的旧版本：不得把 latest 钉到第二位，
+  // 否则无标签解释的乱序。
   const meta = makeMeta(['0.9.0', '1.0.0', '1.1.0', '2.0.0-rc.1', '2.0.0'], '1.0.0');
   const entries = buildVersionList(meta, { active: '2.0.0-rc.1', cachedVersions: [], compatibilityBaseline: null });
   assert.deepEqual(

@@ -1,10 +1,10 @@
 /**
- * CDP 采集公共库 —— `scripts/gui-acceptance/cdp.mjs` 的薄封装（P1-3：
- * 仓库里曾有两套 CDP 客户端；本文件只保留 perf 侧的历史 API 形状与采集助手，
- * 协议载波、超时与 pending 清理全部复用 gui-acceptance 的实现）。
+ * CDP 采集公共库 —— `scripts/gui-acceptance/cdp.mjs` 的薄封装：
+ * 本文件只保留 perf 侧的 API 形状与采集助手，
+ * 协议载波、超时与 pending 清理全部复用 gui-acceptance 的实现。
  *
- * 行为差异（有意收紧）：`send` 现在带 30s 超时（gui-acceptance 的语义），
- * 不再依赖各调用点自己 Promise.race；`findPageTarget` 保持历史 fail-fast
+ * 行为差异（有意收紧）：`send` 带 30s 超时（gui-acceptance 的语义），
+ * 不依赖各调用点自己 Promise.race；`findPageTarget` 是 fail-fast 的
  * （一次 /json/list，不在 90s 窗口里等待）。
  *
  * 用法见 boot-measure.mjs / switch-measure.mjs 头注。
@@ -16,7 +16,7 @@ export async function findPageTarget(port = 9333) {
   const list = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()
   const pages = list.filter(t => t.type === 'page')
   if (!pages.length) throw new Error(`no page target on :${port}: ${JSON.stringify(list.map(t => t.type))}`)
-  // nit3 (2026-09 review)：取首个 page target 无校验——DevTools/多窗口打开时首
+  // 取首个 page target 无校验——DevTools/多窗口打开时首
   // target 未必是脚本要驱动的被测视图。各 measure 只传 CDP 端口、不传目标 URL，
   // lib 无法判定“正确”target：最小处置 = 候选 >1 时警告并列出 url/title（实测
   // dev 实例单窗口时列表首项即被测页），仍按首匹配取用。
@@ -28,9 +28,9 @@ export async function findPageTarget(port = 9333) {
 }
 
 /**
- * One CDP session with the historical perf shape:
+ * One CDP session with the perf shape:
  * `{ ready, send, on, close }` where `send` resolves the raw protocol result
- * (`{ result: { value } }` / `{ exceptionDetails }`) exactly as before.
+ * (`{ result: { value } }` / `{ exceptionDetails }`).
  */
 export function connect(targetWsUrl) {
   const ready = CdpSession.connect(targetWsUrl)
@@ -66,7 +66,7 @@ export const OBSERVER_SOURCE = `(() => {
     new PerformanceObserver(l => { for (const e of l.getEntries()) window.__dshPerf.paints.push({ name: e.name, start: e.startTime }) }).observe({ type: 'paint', buffered: true })
   } catch {}
   try {
-    // H3 实验（2026-09）：长任务归因 + 引导期 JS 资源加载清单（fetch 完成时
+    // 长任务归因 + 引导期 JS 资源加载清单（fetch 完成时
     // 刻与 transferSize）——区分「主 bundle 求值」任务与首帧后任务的脚本面。
     new PerformanceObserver(l => { for (const e of l.getEntries()) window.__dshPerf.resources = (window.__dshPerf.resources || []).concat({ name: e.name, dur: e.duration, size: e.transferSize }) }).observe({ type: 'resource', buffered: true })
   } catch {}
@@ -84,7 +84,7 @@ export async function installEarlyObservers(cdp, send) {
 
 /** 轮询页面状态快照（骨架/列表/就绪标记），fn 返回 {done, state}。
  *  单次 evaluate 带 4s 超时守卫：CDP ws 在导航竞态下偶发"请求永不返回"，
- *  轮询绝不能被单次挂起的 send 钉死（2026-09 T6 探针实测发现）。 */
+ *  轮询绝不能被单次挂起的 send 钉死。 */
 export async function pollState(cdp, send, fn, { intervalMs = 120, timeoutMs = 90000, label = 'poll' } = {}) {
   const t0 = Date.now()
   const trail = []

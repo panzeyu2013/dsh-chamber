@@ -1,5 +1,5 @@
 /**
- * protected-plugins.ts 单测（design 21 §6.11 / 决策 19 的 2026-12 修订）：
+ * protected-plugins.ts 单测（design 21 §6.11 / 决策 19）：
  * 受保护集合派生、op 分相的写面判定（含 **remove 永不判版本** 这条回归）、版本语法与
  * 代比较（预发布字符串全等）、读面行投影的并集语义（组合/种子行必须在行集里）、
  * 运行时线族解析（锁文件优先 / 树兜底 / 都没有则 fail-closed）。
@@ -84,11 +84,11 @@ test('deriveProtectedSet: 空 F / 非字符串 / 空名一律派生失败（fail
 })
 
 test('deriveProtectedSet: 派生出的 P 绝不可是空集（2026-09-13 round-2 review F3）', () => {
-  // An all-empty fact set used to answer `ok:true` with ZERO names, and
-  // `decidePluginMutation` then ALLOWED removing a composition member — while
+  // An all-empty fact set must not answer `ok:true` with ZERO names, or
+  // `decidePluginMutation` would ALLOW removing a composition member — while
   // this module promises protection never silently degrades to nothing. Hence a
   // fail-closed guard. No production path can reach it today (B₀ defaults to the
-  // non-empty snapshot, S comes from the non-empty registry); a future caller
+  // non-empty snapshot, S comes from the non-empty registry); a caller
   // reading the installation bundles from a profile can.
   const derived = deriveProtectedSet({ installationBundles: [], seedNames: [], familyNames: null })
   assert.equal(derived.ok, false, 'an empty protected set must never be ok:true')
@@ -478,7 +478,7 @@ test('derivePluginRows: owner 是全枚举（installation / chamber / user），
     '@deepseek-ai/dsh-base': '0.1.5-rc.2',
   }
   const rows = derivePluginRows({
-    // 组合/播种名同样要在依赖表里才成行（2026-09 行集修订）——分类器对它们照常生效。
+    // 组合/播种名同样要在依赖表里才成行——分类器对它们照常生效。
     dependencies,
     bundles: ['layer-pkg'],
     protectedSet: okSet(),
@@ -492,7 +492,7 @@ test('derivePluginRows: owner 是全枚举（installation / chamber / user），
   assert.equal(rows.find(row => row.name === 'third-party-pkg')?.role, 'third-party')
   assert.equal(rows.find(row => row.name === 'layer-pkg')?.role, 'layer')
   assert.equal(rows.every(row => row.owner !== undefined), true, 'no row may lack an owner')
-  // 锁步（S5）：行键集恒等于依赖键集。渲染端的 `actionableDependencies` 依赖
+  // 锁步：行键集恒等于依赖键集。渲染端的 `actionableDependencies` 依赖
   // "rows 覆盖 dependencies" 这一隐含前提（缺行即静默跳过 ⇒ 少动作）；producer
   // 若哪天收窄成子集，这条会先红。
   assert.deepEqual(rows.map(row => row.name).sort(), Object.keys(dependencies).sort())
@@ -672,9 +672,9 @@ test('verifyProfileFamilyConsistency: 无版本事实时回退世代比较（闭
       dependencies: { '@deepseek-ai/dsh-experimental-agent-team': '0.1.5-rc.2' },
     })
     putProfilePackage(profileDir, '@deepseek-ai/dsh-experimental-agent-team', { version: '0.1.5-rc.2' })
-    // A family member WITHOUT a version fact falls back to the generation arm
-    // (the pre-2026-12 behaviour), so the vendored package is still flagged —
-    // the fix is the fact, not a blanket exemption.
+    // A family member WITHOUT a version fact falls back to the generation arm,
+    // so the vendored package is still flagged — the fact is what matters, not
+    // a blanket exemption.
     putProfilePackage(profileDir, '@deepseek-ai/cosmokit', { version: '1.8.3' })
     const verdict = verifyProfileFamilyConsistency({
       profileDir,
@@ -721,7 +721,7 @@ test('verifyProfileFamilyConsistency: 部分族名字一次臂都没跑成时如
       skipped: 'no runtime-provided version fact exists and the instance runtime version is unknown for @deepseek-ai/cosmokit; the generation arm of the verification could not run for them',
     }, 'a name that entered no arm must never be folded into a silent pass')
 
-    // No name ran any arm at all ⇒ the historic aggregate wording is preserved.
+    // No name ran any arm at all ⇒ the aggregate wording is preserved.
     const none = verifyProfileFamilyConsistency(facts)
     assert.deepEqual(none, {
       ok: true,
@@ -739,7 +739,7 @@ test('verifyProfileFamilyConsistency: 树里没有任何 F 名字 ⇒ 不是跳�
     // The gateway's empty-family fact is legitimate: the runtime provides no
     // official-scope packages, and the only top-level entry is the user's own
     // direct layer. There is nothing to compare ⇒ a clean pass, NOT a skip
-    // (the 0 === 0 trap the earlier per-name refactor introduced).
+    // (the 0 === 0 trap).
     writeFileSync(join(profileDir, 'package.json'), JSON.stringify({
       dependencies: { '@deepseek-ai/dsh-experimental-agent-team': '0.1.5-rc.2' },
     }))
@@ -918,8 +918,8 @@ test('resolveRuntimeFamily: 锚锁文件优先于活动树（dev 形态的活动
     assert.deepEqual(withPin.ok ? withPin.names : [],
       ['@deepseek-ai/dsh', '@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'],
       'the committed runtime-line closure wins — the opt-in name must NOT enter F')
-    // The opt-in layer stays installable under the pinned facts (the whole point
-    // of the redesign), while it would have been hard-protected by the tree.
+    // The opt-in layer stays installable under the pinned facts, while the
+    // active tree's closure would hard-protect it.
     assert.equal(decide({ name: '@deepseek-ai/dsh-experimental-agent-team-profile', version: '0.1.5-rc.2',
       derivation: { ok: true, set: okSet({ familyNames: withPin.ok ? withPin.names : [] }) } }).kind, 'allow')
 

@@ -1,5 +1,5 @@
 /**
- * Pure verdict for the C15 hover-port gate (design 06 §7; 2026-09-13).
+ * Pure verdict for the C15 hover-port gate (design 06 §7).
  *
  * WHY THIS EXISTS: the chamber sidebar draws its row hover cards with its own
  * `RowHoverCard` + `shared/hover-intent.ts` instead of the pinned
@@ -20,7 +20,7 @@
  *      test). One bare or differently-guarded occurrence means the premise may
  *      be gone and a human must adjudicate — it is NOT auto-passed;
  *   2. the racy OPEN shape is still there: the dwell timer that opens the card
- *      re-checks NOTHING about the pointer (2026-09-13 review finding A1). The
+ *      re-checks NOTHING about the pointer. The
  *      race has two ends, and the minimal upstream fix on the OPEN end —
  *      `if (!insideRef.current) return` inside the dwell callback — would leave
  *      `onPointerLeave` byte-identical, so a close-side-only gate would keep
@@ -35,7 +35,7 @@
  *      race — from either end — the maintainer is forced to decide: retire the
  *      port or re-register the deviation, instead of discovering it by accident.
  *
- * DECOY DISCIPLINE (2026-09-13 adversarial review): the shape match and the
+ * DECOY DISCIPLINE: the shape match and the
  * numeric parse both run on ONE `stripComments()` projection per file that keeps
  * code only — comments removed AND string, template and regex literals
  * neutralized — and the shape match is scoped to the `HoverCard` component body,
@@ -169,9 +169,8 @@ function skipTemplateExpression(source, start) {
 /**
  * Keep only CODE: line/block comments are removed and every string, template or
  * regex literal is replaced by an empty placeholder, so no literal content can
- * ever satisfy the shape match or be read as a constant assignment. (The name is
- * from this module's first revision; the literal neutralization is what makes
- * the checks decoy-proof.) The regex heuristic (`/` where a value may start)
+ * ever satisfy the shape match or be read as a constant assignment. (The literal
+ * neutralization is what makes the checks decoy-proof.) The regex heuristic (`/` where a value may start)
  * keeps text verbatim when no closing `/` follows before the line ends, so a
  * misdetected JSX closing tag cannot swallow the rest of its line.
  * @param {string} source - TS/TSX source text.
@@ -521,11 +520,11 @@ function governedByCommittedOpen(body, at) {
  * card, and a plain write to a member slot (a callback clearing its OWN expired
  * timer ref). Anything else is drift.
  *
- * Whitelist by SHAPE, never a blacklist of presence-looking words (2026-09-13
- * round-2 review F1/F2). A word blacklist is wrong in both directions:
+ * Whitelist by SHAPE, never a blacklist of presence-looking words.
+ * A word blacklist is wrong in both directions:
  *   · it misfires — `if (!mountedRef.current) return` is the commonest React
- *     unmount guard and has nothing to do with the pointer, yet the old rule
- *     reported it as "upstream may have fixed the race";
+ *     unmount guard and has nothing to do with the pointer, yet a word blacklist
+ *     reports it as "upstream may have fixed the race";
  *   · it leaks — `isPointerOnAnchor`, `anchorContainsPointer`, `pointerState.on`
  *     name the very check this gate hunts for and match no word on any list.
  * Classifying shape and reporting NEUTRALLY is the only version that is neither

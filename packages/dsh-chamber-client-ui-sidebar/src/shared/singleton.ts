@@ -1,12 +1,12 @@
 /**
- * Shared-singleton guard (2026-08, cross-cutting hardening).
+ * Shared-singleton guard.
  *
  * chamberBridge, the view-prefs store and the search controller all rely on
  * the vite shared chunk deduplicating their module into ONE page-wide
  * instance. If bundling ever drifts (alias/resolution divergence, chunking
  * changes, a per-boot bundle split), the modules silently duplicate and every
- * cross-ctx feature degrades back to the per-shell divergence this round
- * fixed — with no diagnostic. This guard registers each singleton module in a
+ * cross-ctx feature degrades to per-shell divergence — with no diagnostic.
+ * This guard registers each singleton module in a
  * Symbol.for-keyed GLOBAL registry (Symbol.for is shared across module
  * instances in the same realm, so even a duplicated module copy hits the same
  * registry) and reports a second instantiation as a DIAGNOSTIC (console.error).

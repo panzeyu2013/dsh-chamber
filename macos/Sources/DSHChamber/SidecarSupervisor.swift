@@ -2,7 +2,7 @@
 //  SidecarSupervisor.swift
 //  DSHChamber
 //
-//  W-15（design 25 §3.3(1)(4)/§6.3；todo companion W-15）。职责三件：
+//  design 25 §3.3(1)(4)/§6.3。职责三件：
 //   1. 目录锁：Swift 壳在 spawn 之前对 <userData>/.dsh-chamber.lock 取
 //      flock(LOCK_EX|LOCK_NB) 独占（design 25 §6.3 B2——sidecar-entry 只读
 //      锁记录复验父 pid，**不二次 flock**），并把记录写成 JSON {pid, startedAt,
@@ -16,7 +16,7 @@
 //   3. 退出码分级：0 = 非我方停止的自然退出（sidecar 自行优雅退出，例如
 //      stdin EOF）→ 不重启、loud 记录；其余非零 = 崩溃 → 退避重启。
 //
-//  可测性（W-15 验收「XCTest（假进程起停/backoff）」）：进程经
+//  可测性（XCTest：假进程起停/backoff）：进程经
 //  SupervisedSidecar 协议注入（真实实现 = BridgeClient），退避经
 //  schedule 注入（测试用立即执行或手工触发），策略是纯值逻辑
 //  （SidecarRestartPolicy，独立单测）。
@@ -93,7 +93,7 @@ public final class SidecarDirectoryLock {
         }
 
         // 叶纪律（lstat/open(O_NOFOLLOW)/fstat + 单硬链接 + inode 稳定性）单源 =
-        // PrivateFS（2026-12 单源化）；失败即 fail-closed（design 25 §6.3 与秘密文件
+        // PrivateFS；失败即 fail-closed（design 25 §6.3 与秘密文件
         // 同纪律：0600、no-follow、原子创建），文案仍走既有 NativeText 键。
         let opened: Int32
         let leaf: PrivateFS.Leaf
@@ -152,7 +152,7 @@ public final class SidecarDirectoryLock {
     }
 
     /// 私有叶打开失败 → 既有本地化文案：形状类（非常规/多硬链接）用 notRegularFile；
-    /// 符号链接保留迁移前的 openFailed(ELOOP)；其余（inode 被替换等）用 ioFailure 明细。
+    /// 符号链接走 openFailed(ELOOP)；其余（inode 被替换等）用 ioFailure 明细。
     private static func lockOpenFailureText(_ error: PrivateFS.LeafError, path: String) -> String {
         switch error {
         case .notRegularFile, .multipleHardLinks:
@@ -223,7 +223,7 @@ public struct SidecarRestartPolicy: Equatable {
 
     /// 依据历史重启时间戳（秒）与当前时刻决策；命中 restart 时把本次计入
     /// `attempts`（调用方传入 inout 数组，窗口外的旧记录自动淘汰）。
-    /// 窗口淘汰 / 上限判定 / 记账 = `RollingWindowLimiter` 单源（2026-12 单源化）。
+    /// 窗口淘汰 / 上限判定 / 记账 = `RollingWindowLimiter` 单源。
     public func decide(now: Double, attempts: inout [Double]) -> Decision {
         switch RollingWindowLimiter.decide(window: window, limit: maxRestarts,
                                            now: now, events: &attempts) {
@@ -241,7 +241,7 @@ public struct SidecarRestartPolicy: Equatable {
 /// 方法名与 BridgeClient 现有 API 同名，BridgeClient 以空扩展即符合。
 public protocol SupervisedSidecar: AnyObject {
     var isRunning: Bool { get }
-    /// 最近 sidecar stderr 摘要（T-3：启动失败报告带真实原因；无捕获面 = 空串）。
+    /// 最近 sidecar stderr 摘要（启动失败报告带真实原因；无捕获面 = 空串）。
     var recentStderrSummary: String { get }
     /// 自然终止回调（terminationStatus）；stop() 主动停止不触发。
     var onTerminated: ((Int32) -> Void)? { get set }
@@ -305,7 +305,7 @@ public final class SidecarSupervisor {
     private var attempts: [Double] = []
     /// 重启代际：stop()/每次新排定递增，迟到的调度闭包据此作废。
     private var generation: Int = 0
-    /// 启动代际（2026-09 三审 #5）：每次 launch 递增；任何终止与 stop() 也递增
+    /// 启动代际：每次 launch 递增；任何终止与 stop() 也递增
     /// ——在途 launch 据此判断「我的进程是否已经被终止/被 stop 取代」，绝不把
     /// 已死进程发布为 .running，也绝不覆盖同一次死亡得出的 .fatal 决策。
     private var launchGeneration: Int = 0
@@ -384,8 +384,8 @@ public final class SidecarSupervisor {
             created.onTerminated = nil
             // 生命周期过渡态（BridgeClient.errorCodeLifecycleBusy = 6）：上一会话仍在
             // 终止收尾（≤ terminalTransitionTimeout）。这是可重试状态，**绝不 markFatal**
-            // ——退出期「重启调度 vs supervisor.stop()」竞态若弹致命告警是误报（第三轮
-            // 审查 R6）。错误照常上抛：用户态 start() 由调用方按启动失败处理，重启路径
+            // ——退出期「重启调度 vs supervisor.stop()」竞态若弹致命告警是误报。
+            // 错误照常上抛：用户态 start() 由调用方按启动失败处理，重启路径
             // 在 performScheduledRestart 内做有界重试。
             if (error as NSError).code == BridgeClient.errorCodeLifecycleBusy {
                 deps.log("[supervisor] sidecar 启动被生命周期过渡推迟：\(error.localizedDescription)")
@@ -399,7 +399,7 @@ public final class SidecarSupervisor {
         }
 
         stateLock.lock()
-        // 提交门（#5）：只有「未被 stop、代际未变、且尚无已提交 sidecar」时才
+        // 提交门：只有「未被 stop、代际未变、且尚无已提交 sidecar」时才
         // 发布 .running。否则进程在 start 期间已终止（handleTermination 递增
         // 了 launchGeneration 并可能已 fatal），或 stop() 已到达——此时必须
         // 回收进程并保留既有状态，绝不覆盖。
@@ -428,14 +428,14 @@ public final class SidecarSupervisor {
 
     private func handleTermination(sidecar instance: SupervisedSidecar?, status: Int32) {
         stateLock.lock()
-        // 任何终止都作废在途 launch（#5）。
+        // 任何终止都作废在途 launch。
         launchGeneration += 1
         if stopping {
             stateLock.unlock()
             return
         }
         // 只有「已提交的当前进程」才算运行时退出；启动期退出（尚未提交）不
-        // 走重启退避——那是启动失败（#7 分级）。
+        // 走重启退避——那是启动失败（见下方退出码分级）。
         let committed = instance != nil && sidecar === instance
         if committed {
             sidecar = nil
@@ -448,13 +448,13 @@ public final class SidecarSupervisor {
             + (committed ? "" : "（启动期退出，未提交）"))
 
         if !committed {
-            // T-3：退出码 + stderr 摘要如实透出（EADDRINUSE host:port 等），
+            // 退出码 + stderr 摘要如实透出（EADDRINUSE host:port 等），
             // 绝不只给一句「启动失败」。
             let failure = SidecarStartupFailure.make(
                 exitCode: status, stderr: instance?.recentStderrSummary ?? "")
             // 本地化：supervisor.startupExit（占位符契约：%d = 退出码、
             // %@ = failure.message（含 stderr 摘要）；尾部「启动期退出不自动
-            // 重启」也在模板内，S2 的 .strings 必须保留两个占位符）。
+            // 重启」也在模板内，.strings 必须保留两个占位符）。
             markFatal(NativeText.format(.supervisorStartupExit, Int(status), failure.message))
             return
         }
@@ -468,10 +468,9 @@ public final class SidecarSupervisor {
             return
         }
         // 70 = sidecar 启动失败（控制面启动 / 装配期，sidecar-entry
-        // EXIT_STARTUP_FAILURE）——按启动失败 fatal，不做崩溃退避重启
-        // （2026-09 三审 #7：原先与运行期崩溃同为 exit 1）。
+        // EXIT_STARTUP_FAILURE）——按启动失败 fatal，不做崩溃退避重启。
         if status == 70 {
-            // T-3：退出码 + stderr 摘要（含 EADDRINUSE host:port）如实透出；
+            // 退出码 + stderr 摘要（含 EADDRINUSE host:port）如实透出；
             // 端口占用时给「先退出另一个实例」的可执行提示（SidecarStartupFailure）。
             let failure = SidecarStartupFailure.make(
                 exitCode: status, stderr: instance?.recentStderrSummary ?? "")
@@ -486,11 +485,11 @@ public final class SidecarSupervisor {
             return
         }
 
-        // 退避配额只在**崩溃**分支消耗（S2·F11，2026-12 双端逐函数核对）：
-        // 原先在退出码分级之前无条件 decide，exit 0/3/70 也会写入 attempts 窗口，
+        // 退避配额只在**崩溃**分支消耗：
+        // 若在退出码分级之前无条件 decide，exit 0/3/70 也会写入 attempts 窗口，
         // 「60s 内 3 次」配额会被正常退出（含我们自己 SIGTERM 后 sidecar 正常退出、
         // 锁冲突、启动失败）提前耗尽——用户随后第一次真实崩溃就直接 giveUp，
-        // 自动恢复名存实亡。现在只在 status ∉ {0,3,70} 的崩溃路径记账。
+        // 自动恢复名存实亡。因此只在 status ∉ {0,3,70} 的崩溃路径记账。
         stateLock.lock()
         let decision = policy.decide(now: now, attempts: &attempts)
         stateLock.unlock()
@@ -535,8 +534,7 @@ public final class SidecarSupervisor {
                     return
                 }
                 // 重试耗尽：过渡态持续不消（>~6s）说明终局收尾卡死——升格 fatal，
-                // 绝不静默停在 .restarting（第三轮验证 RISK：此前既不 fatal 也不续排，
-                // 日志还假称 launch 已 markFatal）。
+                // 绝不静默停在 .restarting。
                 // 本地化：supervisor.lifecycleDeferred（占位符契约：%d =
                 // busyRetries 已消耗的重试次数）。
                 markFatal(NativeText.format(.supervisorLifecycleDeferred, busyRetries))

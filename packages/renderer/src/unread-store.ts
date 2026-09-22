@@ -1,27 +1,26 @@
 /**
- * 未读 v2 落盘存储（主计划 §3.3-2、§4 数据模型、§6 「落盘是新建」；
- * 蓝图 notes/desktop-facts-wiring-blueprint.md §4）。
+ * 未读 v2 落盘存储。
  *
- * 仓内今天没有任何未读持久化（App.tsx 重载即复位）；v2 是**首次落盘**：
+ * v2 落盘载荷：
  *   - 键：dsh-chamber.unread.v2 = { v:2, read, edge, notified }（见 UnreadV2Payload）；
  *   - read/sourceId/sessionId → host 域读水位（只升不降，max 合并）；
  *   - edge/sourceId/sessionId → true（边沿轨回退账本；重启后立即可渲染未读，不等网络）；
  *   - notified/sourceId/sessionId/kind → 已通知水位（第二入口去重）。
- * 载荷**不得出现 title/cwd/消息内容**（主计划 §4 隐私条）——键白名单锁在
+ * 载荷**不得出现 title/cwd/消息内容**（隐私条）——键白名单锁在
  * test/session-state/unread-store.test.ts 里钉住。
  *
  * 存储访问器 lazy + never-throw（照 view-prefs.ts 的形状）：私有模式/配额
  * 失败只降级为内存态，绝不影响本地未读。
  *
- * 单例纪律（blueprint §4.3 K4）：N 个 ctx 共享一个 localStorage，逐调用点
+ * 单例纪律：N 个 ctx 共享一个 localStorage，逐调用点
  * setItem 会 last-writer-wins 丢标记；App 侧只经本模块的 merge/prune/save
  * 三个可组合步骤写盘（App 持有内存权威，v2 是缓存）。
  *
  * v1（dsh-chamber.unread.v1）在 HEAD **没有任何写入者**，因此 v1→v2 导入是
  * **防御性代码**（仍按「先写后删」顺序实现 + 单测，避免未来中间版本回退时
- * 丢账本），不是迁移承诺（主计划 §6 明文）。
+ * 丢账本），不是迁移承诺。
  *
- * R22：`POST /read` / `/read-all` 不再 fire-and-forget 丢账——失败（网络错误 /
+ * `POST /read` / `/read-all` 的 ack 失败（网络错误 /
  * 5xx）进**有界内存待发表**（UNREAD_PENDING_MAX），facts 源每收到一帧服务端
  * 数据（probe 快照 / SSE sync·增量·心跳）就重放一次；幂等依据（服务端逐条
  * max 合并）写在 createUnreadAckOutbox 头注里。本机内存/落盘仍是权威，
@@ -278,7 +277,7 @@ export function saveUnread(storage: UnreadStorageLike | undefined, payload: Unre
 // ── 单调合并 / 推进 ─────────────────────────────────────────────────────────
 
 /**
- * 逐会话 max 合并（R22 只升不降）。remote 缺席/坏值不改变本地；
+ * 逐会话 max 合并（只升不降）。remote 缺席/坏值不改变本地；
  * 比较只用 host 域整数水位，客户端墙钟永不参与。
  */
 export function mergeReadMarks(
@@ -466,7 +465,7 @@ export interface UnreadAckOutbox {
 }
 
 /**
- * 有界待发 ack 队列（R22：客户端待发请求的失败重放）。
+ * 有界待发 ack 队列（客户端待发请求的失败重放）。
  *
  * **重放为什么幂等安全**（可核对的服务端依据，全部在仓内）：
  *   - `POST /read` → `mergeReadMark(existing, incoming) = max(existing, incoming)`
@@ -490,7 +489,7 @@ export function createUnreadAckOutbox(options: UnreadAckOutboxOptions): UnreadAc
     ? UNREAD_PENDING_MAX
     : Math.max(0, requested)
   /**
-   * 有界内核（阶段 2 单源化）：Map 迭代序 = 入队序；同键覆盖走 delete+set ⇒ 该键
+   * 有界内核：Map 迭代序 = 入队序；同键覆盖走 delete+set ⇒ 该键
    * 移到队尾（最近更新），FIFO 淘汰优先丢最久没更新的键；淘汰经 onEvict 报诊断。
    */
   const entries = createBoundedMap<UnreadAckRequest>({

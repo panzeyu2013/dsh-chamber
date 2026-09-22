@@ -31,8 +31,8 @@
  *   inactive — a failed exec must never masquerade as a stopped service.
  * - Endpoint identity verification (verifyUp): a `dsh` target must answer the
  *   unified host-identity handshake — the fixed-size `session/canOpenWorkspacePath`
- *   boolean Remote (slash-path wire, upstream dsh ≥ 0.1.2-rc.1; host.describe is
- *   deleted and the old session/list answer grows with session data, so the
+ *   boolean Remote (slash-path wire; host.describe does not
+ *   exist and the old session/list answer grows with session data, so the
  *   identity probe never re-reads the session list); a `gateway` target must
  *   answer its authenticated, gateway-owned `/chamber/runtime/status`
  *   identity, which deliberately stays available while managed dsh is
@@ -45,9 +45,9 @@
  *   placed on the command line (default ssh key/agent auth); stderr lines
  *   with key/passphrase material are redacted before they enter the ring
  *   buffer; logs carry hostnames/ports only.
- * - Optional password auth (design 05 §8, user request 2026-08): a password
+ * - Optional password auth (design 05 §8): a password
  *   entered in the connections form is held in MAIN-PROCESS memory and —
- *   user decision 2026-08: plaintext-file fallback — mirrored to
+ *   plaintext-file fallback — mirrored to
  *   `<userData>/ssh-passwords.json` (0600, atomic write, loaded at startup),
  *   bound to the exact host/user/sshPort authentication peer so a registry
  *   edit or cross-file crash window cannot redirect it to another endpoint.
@@ -69,7 +69,7 @@ import { chmodSync, closeSync, constants as fsConstants, fchmodSync, fsyncSync, 
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 // The dsh RPC wire envelope is single-sourced in control-plane
-// (rpc-envelope.ts, A2 cross-package protocol single-sourcing) — consumed
+// (rpc-envelope.ts, cross-package protocol single-sourcing) — consumed
 // through control-plane-module.ts (the desktop dual-path facade: packaged →
 // compiled dist/control-plane, dev → workspace source). The envelope shape
 // AND the unified host-identity probe contract (method names, payloads,
@@ -159,14 +159,14 @@ export const MAX_SERVICE_NAME_CHARS = 255
 export const MAX_REMOTE_DSH_HOME_CHARS = 1024
 export const MAX_SSH_PASSWORD_CHARS = 4096
 /**
- * Package-spec whitelist family (design 13 §7.2; the reserved-name deny
- * predicate is retired — the protected set in `protected-plugins.ts` is the
- * judgement, design 21 §6.11) — SINGLE-SOURCED in control-plane `plugin-spec.ts` (design 21
+ * Package-spec whitelist family (design 13 §7.2; the protected set in
+ * `protected-plugins.ts` is the reserved-name judgement, design 21 §6.11) —
+ * SINGLE-SOURCED in control-plane `plugin-spec.ts` (design 21
  * §6.2/§6.7: the gateway executor and the desktop share one source; the
  * renderer's ADD_SPEC stays a hand mirror pinned by the lockstep test in
  * gateway/test/plugins/plugin-spec-lockstep.test.ts). Consumed through
  * control-plane-module.ts — the desktop dual-path facade (packaged →
- * compiled dist/control-plane, dev → workspace source), the same A2 rule as
+ * compiled dist/control-plane, dev → workspace source), the same single-sourcing rule as
  * the rpc-envelope/cordis-inserts primitives above — and re-exported here so
  * this provider's consumers and tests keep one unchanged import surface.
  */
@@ -207,8 +207,8 @@ export const AUTH_FAILURE_PATTERNS: RegExp[] = [
  *
  * The remote coreutils message is LOCALIZED: on a zh_CN-locale host `cat`
  * prints `没有那个文件或目录` instead of `No such file or directory`.
- * The PRIMARY fix is locale-independent — every remote `cat` (buildRemoteExecArgv
- * and the write-file read-back) now runs under `LC_ALL=C`, so the message is
+ * Every remote `cat` (buildRemoteExecArgv
+ * and the write-file read-back) runs under `LC_ALL=C`, so the message is
  * ALWAYS English regardless of the remote locale. This pattern stays as
  * defense-in-depth for paths that bypass the prefix or a remote that ignores
  * it: the glibc zh_CN ENOENT text (its truncated `没有那个文件` prefix
@@ -270,10 +270,10 @@ export const VERIFY_UP_SIGNATURE_TIMEOUT_MS = 2_000
  * Secondary dsh-signature probe: re-answer the unified host-identity
  * handshake and classify by the answer. The primary arm POSTs
  * /api/session/canOpenWorkspacePath (the fixed-size zero-arg boolean Remote
- * of the upstream session namespace, dsh ≥ 0.1.2-rc.1 — the same identity
- * wire as verifyDshEndpoint; upstream deleted host.describe and the
- * events.mux/events.host arms, so a positive identity answer is the only
- * remaining positive dsh wire evidence that never grows with session data).
+ * of the upstream session namespace — the same identity
+ * wire as verifyDshEndpoint; host.describe and the events.mux/events.host
+ * arms are not on the wire, so a positive identity answer is the only
+ * positive dsh wire evidence that never grows with session data).
  * A positive signature requires a matching server-response envelope with
  * result.ok === true AND a boolean value (value false is equally positive —
  * only method presence / protocol / controller assembly are under test). A
@@ -296,7 +296,7 @@ export function probeDshSignature(
   const identityRpcId = mintRpcId()
   return postClientRequest({
     url: identityUrl,
-    // The identity unary is a zero-arg Typert Remote on the 0.1.2 wire: the
+    // The identity unary is a zero-arg Typert Remote: the
     // payload is the empty `{args}` form, the same probe payload the
     // control-plane readiness uses (probeHostIdentity).
     envelope: buildClientRequest(identityRpcId, HOST_IDENTITY_METHOD, buildHostIdentityProbePayload()),
@@ -315,8 +315,8 @@ export function probeDshSignature(
       // the legacy arm against a host that ANSWERED the identity method.
       return 'none'
     }
-    // HTTP 404 on the identity method = a runtime tree that predates it
-    // (dsh < 0.1.2-rc.1): re-answer the legacy session/list probe — its
+    // HTTP 404 on the identity method = a runtime tree that predates it:
+    // re-answer the legacy session/list probe — its
     // positive answer is the old-version dsh signature.
     if (outcome.status !== 404) return 'none'
     const legacyUrl = `http://${endpoint.host}:${endpoint.port}/api/${LEGACY_HOST_PROBE_METHOD}`
@@ -341,8 +341,8 @@ export function probeDshSignature(
  * boolean value (both true and false are healthy — the probe verifies the
  * identity method exists, the protocol is correct and the SessionController
  * is assembled, never the platform answer itself). The method is the
- * fixed-size identity Remote of the upstream session namespace (dsh ≥
- * 0.1.2-rc.1; host.describe is deleted there), so the identity response never
+ * fixed-size identity Remote of the upstream session namespace (host.describe
+ * does not exist there), so the identity response never
  * grows with session data (capped at HOST_PROBE_MAX_RESPONSE_BYTES) — the
  * same wire handshake the control plane's local readiness probe uses
  * (02 §3.2: TCP 通但身份探针失败 = 端口被无关服务占用). The envelope is
@@ -359,8 +359,7 @@ export function probeDshSignature(
  * handshake — to decide between "the destination IS dsh but answered the
  * identity probe inconsistently — tell the user to check or upgrade"
  * (positive signature, incl. old-version dsh trees that only answer
- * session/list) and the generic "not a dsh instance". The legacy 426/SSE
- * events.mux signature arms are gone from the wire.
+ * session/list) and the generic "not a dsh instance".
  *
  * Retry classification: a destination that ANSWERED the probe (any HTTP
  * answer, wrong-shaped body) carries `terminal: true` — retrying cannot
@@ -384,9 +383,6 @@ export async function verifyDshEndpoint(
   const rpcId = mintRpcId()
   const outcome = await postClientRequest({
     url,
-    // The identity unary is a zero-arg Typert Remote on the 0.1.2 wire: the
-    // payload is the empty `{args}` form, the same probe payload the
-    // control-plane readiness uses (probeHostIdentity).
     envelope: buildClientRequest(rpcId, HOST_IDENTITY_METHOD, buildHostIdentityProbePayload()),
     timeoutMs,
     maxBodyBytes,
@@ -402,12 +398,12 @@ export async function verifyDshEndpoint(
   // 5xx, …): classify with the dsh-signature probe before choosing the
   // message.
   if (outcome.status !== 200) {
-    // 0.1.2 browser-auth gate (review-round3c P0): the web-profile host
+    // Browser-auth gate: the web-profile host
     // answers 401 without the signed cookie; the launch token is
     // process-memory random and printed only on the REMOTE console, so it is
     // unrecoverable over the tunnel — fail loud with the honest reason
     // instead of misclassifying the instance as "not a dsh". The signature
-    // probe is gated the same way, so it cannot discriminate (round5): the
+    // probe is gated the same way, so it cannot discriminate: the
     // message hedges the non-dsh 401 case.
     if (outcome.status === 401) {
       return { ok: false, detail: 'the destination answered HTTP 401 — a 0.1.2 browser-auth-gated dsh (its launch token is unrecoverable over SSH; remote attach is blocked until upstream exposes a token retrieval mechanism) or a non-dsh server', terminal: true }
@@ -471,8 +467,8 @@ export function verifyGatewayEndpointViaTunnel(
   cookie: string | null = null,
   authority: string | undefined = undefined,
 ): Promise<TransportVerifyResult & { statusCode?: number }> {
-  // The shared gateway runtime-identity probe core (gateway-provider.ts,
-  // dedupe audit N7 2026-09): http + the tunnel Host-header override, with
+  // The shared gateway runtime-identity probe core (gateway-provider.ts):
+  // http + the tunnel Host-header override, with
   // the legacy ssh shape that carries `statusCode` on 403/non-200 answers.
   return verifyGatewayRuntimeIdentity({
     host: endpoint.host,
@@ -669,7 +665,7 @@ function isValidInstance(instance: unknown): instance is TransportInstanceSpec {
     && (record.kind === undefined || record.kind === null || record.kind === 'dsh' || record.kind === 'gateway')
     && (record.transport === undefined || record.transport === null || record.transport === 'ssh')
     && (record.insecureHttp === undefined || record.insecureHttp === null || record.insecureHttp === false)
-    // S23 pins apply only to direct gateway HTTPS. Silently dropping a pin
+    // Pins apply only to direct gateway HTTPS. Silently dropping a pin
     // from an SSH spec would claim protection the tunnel provider never uses.
     && (record.spkiPin === undefined || record.spkiPin === null)
 }
@@ -681,8 +677,8 @@ function isValidInstance(instance: unknown): instance is TransportInstanceSpec {
  */
 
 /**
- * Per-instance SSH passwords (design 05 §8, user decision 2026-08 —
- * plaintext-file fallback): entered in the connections form, forwarded over
+ * Per-instance SSH passwords (design 05 §8, plaintext-file fallback):
+ * entered in the connections form, forwarded over
  * IPC, held in main-process memory AND mirrored to a plaintext file at
  * `<userData>/ssh-passwords.json` (0600, atomic write) so auto-connect works
  * after a restart. Never written to the registry (ssh-instances.json stays
@@ -710,9 +706,9 @@ interface AskpassGeneration {
 /**
  * id → every helper generation still referenced by an actual ssh child.
  * Each spawn gets a fresh helper so a password change cannot affect an
- * already-built environment. Unlike the historical fixed retired-generation
- * cap, cleanup is driven solely by child lifecycle: no amount of concurrent
- * tunnel/systemd/run work can delete a path another child still references.
+ * already-built environment. Cleanup is driven solely by child lifecycle:
+ * no amount of concurrent tunnel/systemd/run work can delete a path another
+ * child still references.
  */
 const askpassHelpers = new Map<string, Set<AskpassGeneration>>()
 
@@ -762,8 +758,8 @@ export function configureSshPasswordStore(
   passwords.clear()
   passwordBindings.clear()
   if (file === null) return null
-  // One-time crash-residue sweep (2a follow-up): the pre-2a persist's FIXED
-  // `${file}.tmp` residue (see removeLegacyTmpResidue), swept once at configure.
+  // One-time crash-residue sweep: the legacy FIXED `${file}.tmp` residue
+  // (see removeLegacyTmpResidue), swept once at configure.
   removeLegacyTmpResidue(file)
   let text: string
   try {
@@ -792,10 +788,10 @@ export function configureSshPasswordStore(
     persistSshPasswords(new Map(), new Map())
     return null
   }
-  // The main lifecycle branch previously shipped schema v2 with endpoint
-  // ownership embedded beside each password. That shape is already safely
-  // bound, so convert it in-place to the fingerprint representation instead
-  // of disabling credentials or guessing from the current registry.
+  // A schema-v2 shape with endpoint ownership embedded beside each password
+  // is already safely bound, so convert it in-place to the fingerprint
+  // representation instead of disabling credentials or guessing from the
+  // current registry.
   if (parsed.schemaVersion === 2 && parsed.bindings === undefined
     && entries.every(([id, value]) => isLegacyOwnedPasswordEntry(id, value))) {
     const migratedPasswords = new Map<string, string>()
@@ -873,7 +869,7 @@ export function setSshPassword(
   for (const [entryId, binding] of nextBindings) passwordBindings.set(entryId, binding)
   if (password === null || password === '') {
     // Cleanup begins only after the durable clear commits. A live ssh child
-    // still owns its leased path until exit/error; new spawns can no longer
+    // still owns its leased path until exit/error; new spawns cannot
     // acquire a password-backed helper.
     purgeSshAuth(id)
   }
@@ -887,7 +883,7 @@ export function getSshPassword(idOrSpec: string | TransportInstanceSpec): string
   const password = passwords.get(id)
   if (password === undefined) return null
   const binding = passwordBindings.get(id)
-  // Memory-only tests retain the historical id-keyed behavior. Every durable
+  // Memory-only tests use id-keyed behavior. Every durable
   // production value has a binding and is invisible until the current
   // registry spec matches it exactly.
   if (binding === undefined) return passwordFile === null ? password : null
@@ -946,17 +942,17 @@ export function buildAskpassScript(password: string): string {
     // text, so all branches are case-insensitive for any casing variant
     // ("Password:", "PASSWORD:", "One-time Password:", "ONE-TIME PASSWORD:"
     // …). Non-ASCII text passes through unchanged (patterns are ASCII).
-    // 2026-11 round-2 review: a per-word bracket-expression approach only
-    // covered the first character and leaked the password for
-    // "One-time Password:" — normalization fixes the whole matrix.
+    // Normalization covers the whole casing matrix; a per-word
+    // bracket-expression approach only covers the first character and would
+    // leak the password for "One-time Password:".
     'case "$(printf "%s" "$1" | tr "A-Z" "a-z")" in',
     '  *"yes/no"*|*"fingerprint"*|*"authenticity"*|*"continue connecting"*)',
     '    echo yes',
     '    ;;',
     // Explicit non-credential exclusions BEFORE the password branch: prompts
     // whose wording also contains "password:" (OTP/verification-code,
-    // password change) must never receive the stored password (fail-closed,
-    // 2026-11 reviews — "One-time Password:" would otherwise match below).
+    // password change) must never receive the stored password (fail-closed:
+    // "One-time Password:" would otherwise match below).
     // The otp match is boundary-scoped (colon or space) so a host/user name
     // like "otp-host" cannot shadow a real password prompt.
     '  *"one-time password"*|*"otp:"*|*"otp "*|*"verification code"*|*"new password"*|*"change your password"*)',
@@ -1009,9 +1005,9 @@ export function chmodAskpassDirOwnerOnly(dir: string): void {
   }
 }
 
-/** Create one unguessable process-private leaf. We never reuse the historical
- * global `<tmpdir>/dsh-chamber-ssh`, so another OS user cannot pre-claim the
- * directory in which password-bearing executables are published. */
+/** Create one unguessable process-private leaf. The global
+ * `<tmpdir>/dsh-chamber-ssh` is never reused, so another OS user cannot
+ * pre-claim the directory in which password-bearing executables are published. */
 function privateAskpassDir(): string {
   if (processAskpassDir !== null) {
     chmodAskpassDirOwnerOnly(processAskpassDir)
@@ -1302,8 +1298,7 @@ export const sshProvider: TransportProvider = {
    *   gateway-provider.ts): ensure a login session keyed to the TUNNEL
    *   endpoint origin, probe WITH its Cookie, and on a rejected 401
    *   invalidate + re-login exactly once before the terminal password-
-   *   refused state (§9.3 — the gateway-over-ssh + password-only form shape,
-   *   S1 gap fixed here).
+   *   refused state (§9.3 — the gateway-over-ssh + password-only form shape).
    */
   verifyUp(spec: TransportInstanceSpec, endpoint: TransportProbeEndpoint) {
     if (spec.kind === 'gateway') {
@@ -1311,7 +1306,7 @@ export const sshProvider: TransportProvider = {
       // through the tunnel presents the remote LOOPBACK destination authority
       // — never spec.host, which may only be an SSH alias. The
       // gateway's request policy (authority port == listen port) rejects the
-      // tunnel's local port otherwise (verified on the 172 实机: 421).
+      // tunnel's local port otherwise.
       const authority = gatewayTunnelAuthority(spec.remotePort)
       const token = getGatewayToken(spec.id)
       const password = getGatewayPassword(spec.id)

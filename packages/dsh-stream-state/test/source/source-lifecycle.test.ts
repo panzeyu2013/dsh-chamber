@@ -1,8 +1,8 @@
 /**
- * Source lifecycle reducer (B2 core) - behavior contract.
+ * Source lifecycle reducer - behavior contract.
  *
- * The old six-ledger layout could not express these rules as data. Each test here
- * pins one rule that used to be spread across a call site comment in App.tsx or
+ * Each test here
+ * pins one rule that would otherwise live as a call site comment in App.tsx or
  * use-view-scheduler.ts, so a future edit has to argue with a failing test instead
  * of with a comment nobody reads.
  */

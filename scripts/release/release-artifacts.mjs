@@ -1,28 +1,27 @@
 #!/usr/bin/env node
 /**
- * release-artifacts.mjs —— 双端同 tag 产物清单（W-27；design 25 §8.4/§六）
+ * release-artifacts.mjs —— 双端同 tag 产物清单（design 25 §8.4/§六）
  *
- * 单 tag 下两个 macOS 产物族并存（D2 共存决策）：
+ * 单 tag 下两个 macOS 产物族并存：
  *   Electron 腿（build-macos，既有）：dsh-chamber-electron-<v>-arm64.dmg /
  *     dsh-chamber-electron-<v>-arm64-mac.zip + 更新 feed（latest-mac.yml | beta-mac.yml）
- *   Swift 腿（build-swift，W-26）：dsh-chamber-<v>-macos-arm64.dmg /
- *     .zip + Sparkle appcast（S-01 / 裁决 D-1 选 B；S-22 双通道：稳定版
+ *   Swift 腿（build-swift）：dsh-chamber-<v>-macos-arm64.dmg /
+ *     .zip + Sparkle appcast（双通道：稳定版
  *     appcast-swift.xml，beta 版 appcast-swift-beta.xml——beta 是 GitHub
  *     prerelease，releases/latest 解析不到它，因此 beta appcast 每次发布都覆盖
  *     到**滚动 tag/release**（NATIVE_BETA_ROLLING_TAG）上的同名 asset，beta.N
- *     客户端据此能看到 beta.N+1；S-36：appcast 引用的每个 zip 也上传到该滚动
+ *     客户端据此能看到 beta.N+1；appcast 引用的每个 zip 也上传到该滚动
  *     release（enclosure 逐条可下载），且 beta appcast 同时收最新 final 条目
- *     （S-22/S-23：beta 客户端能看到 final，与 Electron 的 latest.yml 回退对齐）。
+ *     （beta 客户端能看到 final，与 Electron 的 latest.yml 回退对齐）。
  *
  * 本模块把"产物名不得碰撞 / feed 归属唯一"从散文变成可执行断言（演练清单 +
- * 策略测试共用）：Electron 的名字必含 `-electron`，Swift 原生腿用裸名 `dsh-chamber-`
- * （2026-12 命名归属反转：旧约定是 Electron 裸名 / Swift 带 `-native` 后缀）；
+ * 策略测试共用）：Electron 的名字必含 `-electron`，Swift 原生腿用裸名 `dsh-chamber-`；
  * 只有 Electron 腿产出 `*.yml` feed，Swift 腿的更新源是 `*.xml` appcast。
  *
  * CLI：`node scripts/release/release-artifacts.mjs <version> [--check-dir <dir>]`。
  * `--check-dir` 进一步断言清单里的 native 产物确实存在于发布腿输出目录——
- * W-26 的真实消费者（release.yml 的 verify 步在上传前调用它，见脚本内注释）。
- * 2026-12 A2 的 appcast 本版本门禁（sparkle:version = CFBundleVersion、enclosure
+ * release.yml 的 verify 步在上传前调用它（见脚本内注释）。
+ * appcast 本版本门禁（sparkle:version = CFBundleVersion、enclosure
  * = 本版本 zip，缺一即 FAIL）在 scripts/release/verify-native-appcast.mjs——它静态
  * import build-swift-app 的映射；本模块只导出纯断言 assertAppcastAdvertises。
  */
@@ -43,7 +42,7 @@ export function electronMacFeed(version) {
   return version.includes('-') ? `beta-mac.yml` : `latest-mac.yml`
 }
 
-/** Swift 原生壳产物（W-26 build-swift：裸名 dsh-chamber-…；更新源 = Sparkle appcast）。 */
+/** Swift 原生壳产物（build-swift：裸名 dsh-chamber-…；更新源 = Sparkle appcast）。 */
 export function nativeMacArtifacts(version) {
   return [
     `dsh-chamber-${version}-macos-arm64.dmg`,
@@ -51,13 +50,13 @@ export function nativeMacArtifacts(version) {
   ]
 }
 
-/** Swift 原生壳的 Sparkle appcast（S-22：稳定/beta 通道各自一个 feed 资产）。 */
+/** Swift 原生壳的 Sparkle appcast（稳定/beta 通道各自一个 feed 资产）。 */
 export function nativeMacFeed(version) {
   return version.includes('-') ? 'appcast-swift-beta.xml' : 'appcast-swift.xml'
 }
 
 /**
- * 滚动 beta appcast 的 release tag（S-22 单源；release.yml 的 build-swift job env
+ * 滚动 beta appcast 的 release tag（单源；release.yml 的 build-swift job env
  * 与本常量逐字一致，由 release-workflow-policy.test.mjs 锁步）。
  *
  * 为什么需要滚动 tag：beta 是 GitHub prerelease，`releases/latest/download/…` 恒
@@ -85,14 +84,14 @@ export function nativeMacFeedUrl(version, repository) {
 }
 
 /**
- * beta appcast 的 enclosure 下载前缀（S-36 单源；纯函数，测试直测）。
+ * beta appcast 的 enclosure 下载前缀（单源；纯函数，测试直测）。
  *
  * Sparkle 的 generate_appcast 缺省把 enclosure 解析为「zip 文件名相对该 zip 内嵌
  * SUFeedURL」（ArchiveItem.archiveURL：URL(string:filename, relativeTo:feedURL)），
  * 而 beta zip 内嵌的 SUFeedURL 是滚动 tag 的 appcast URL ⇒ enclosure 落在
  * releases/download/<rolling-tag>/<zip>。zip 必须真的上传到那个 release，或者
  * 用 --download-url-prefix 显式钉住同一前缀——本函数就是后者，且发布腿把
- * appcast 引用的**每个** zip 一并上传到滚动 release（S-36：enclosure 可下载）。
+ * appcast 引用的**每个** zip 一并上传到滚动 release（enclosure 可下载）。
  *
  * **尾部斜杠不可省**：URL(string:relativeTo:) 会把 prefix 的最后一段当作文件名
  * 替换掉，少一个斜杠就得到 releases/download/<zip> 而不是
@@ -113,14 +112,14 @@ export function nativeAppcastDownloadPrefix(version, repository) {
 
 /**
  * stable native zip 的命名族锚点（`dsh-chamber-<version>-macos-arm64.zip`）。
- * 2026-09 起发布腿不再直接把它交给 `gh release download`（改为按 release 资产逐条精确
+ * 发布腿不直接把它交给 `gh release download`（而是按 release 资产逐条精确
  * 文件名取件），它是**族锚点**：release.yml 的 staging glob 必须是它的数字起始特化，由
  * release-workflow-policy.test.mjs 按「同头同尾」钉住，避免两处命名各自漂移。
  */
 export const NATIVE_STABLE_ZIP_PATTERN = 'dsh-chamber-*-macos-arm64.zip'
 
 /**
- * 复刻 Sparkle 的 enclosure 绝对 URL 解析（S-36 锁步；纯函数，测试直测）：
+ * 复刻 Sparkle 的 enclosure 绝对 URL 解析（纯函数，测试直测）：
  * 有 downloadPrefix 时用它，否则用 feedUrl 去掉末段后的目录。
  * @param archiveName zip 文件名（asset 名）
  * @param feedUrl zip 内嵌 SUFeedURL（beta = 滚动 tag appcast；stable = releases/latest）
@@ -233,7 +232,7 @@ export function appcastItemIsPrerelease(item) {
 }
 
 /**
- * 发布物门禁（A2 中危，fail-closed）：appcast 必须真实宣传**本版本**。
+ * 发布物门禁（fail-closed）：appcast 必须真实宣传**本版本**。
  *
  * "generate_appcast 产出了文件"不等于客户端能看到这次更新：它可能只为别的归档
  * 生成条目，或本版本的 sparkle:version 与 Info.plist 的 CFBundleVersion 不一致
@@ -245,13 +244,13 @@ export function appcastItemIsPrerelease(item) {
  *   3. enclosure 至少有一条 URL 指向本版本的 zip 文件名。
  * 任一缺失即抛错——调用方（release.yml 的 appcast 步与滚动 beta 刷新）必须 FAIL。
  *
- * 2026-09 增量更新（design 25 §7）追加四条可选形状门禁（缺省不改变既有语义）：
+ * design 25 §7 增量更新的四条可选形状门禁（缺省不改变既有语义）：
  *   - `singleItem`：stable feed 必须恰好 1 个 item（历史 zip 只当 delta 基线，不进 feed）；
  *   - `expectDeltaFrom`：本版本 item 必须带该 `sparkle:deltaFrom` 的 delta（收件目录放了旧归档
  *     却没产出 delta = 增量链静默退化，必须 FAIL）；
  *   - `expectDeltaCount`：本版本 item 的 delta 数必须 ≥ n（staged 了 K 个基线就要有 K 个 delta；
  *     只精确断言最新基线会让更旧的基线静默失去增量覆盖）；
- *   - `requireFinalItem`：feed 里必须有 final 条目（S-23：beta 渠道滚动 feed 携带最新正式版）。
+ *   - `requireFinalItem`：feed 里必须有 final 条目（beta 渠道滚动 feed 携带最新正式版）。
  * @param xml - appcast 文件内容。
  * @param input - `{ version, sparkleVersion, archiveName?, singleItem?, expectDeltaFrom?, expectDeltaCount?, requireFinalItem? }`。
  * @returns 命中条目的事实（版本/比较字段/enclosure/item 数/delta 列表）。
@@ -306,7 +305,7 @@ export function assertAppcastAdvertises(xml, {
       + `、enclosure 指向 ${archiveName}`
     throw new Error(`appcast 不含本版本的条目/enclosure（需要 ${expected}；appcast 条目：${found}）`)
   }
-  // 2026-09 复核补（两个独立评审各自复现）：SPARKLE_PUBLIC_ED_KEY 与私钥不匹配时
+  // SPARKLE_PUBLIC_ED_KEY 与私钥不匹配时
   // generate_appcast 只打 "Warning: ... does not match key EdDSA" 并把条目发成**没有
   // sparkle:edSignature** 的形状——发布"成功"，但任何客户端都验不过（老 keyed 客户端连整包都拒绝）。
   // 因此签名存在性必须是门禁的一部分，不能只看版本/enclosure/条目数。
@@ -365,7 +364,7 @@ export function releaseManifest(version) {
   return {
     version,
     electron: { artifacts: electron, feed: electronMacFeed(version) },
-    // 原生壳的更新源是 Sparkle appcast（S-01 / 裁决 D-1 选 B；S-22 双通道）：
+    // 原生壳的更新源是 Sparkle appcast（双通道）：
     // release 腿在 EdDSA 私钥存在时生成 nativeMacFeed(version) 并随 release 上传。
     // 它不是与产物同名的文件，故不进 artifacts（--check-dir 也不强制它存在——
     // 私钥缺失时该构建只是没有安装腿，仍照常出包）。
@@ -406,7 +405,7 @@ function main() {
   }
   const manifest = releaseManifest(version)
   console.log(JSON.stringify(manifest, null, 2))
-  // W-26 消费者：发布腿在 build:swift-app 之后用它断言**实际要上传的** native
+  // 发布腿在 build:swift-app 之后用它断言**实际要上传的** native
   // 文件名与清单逐字一致（Electron 腿的产物由 build-macos 生成，不在本检查面）。
   if (checkDir !== null) {
     const missing = missingArtifacts(manifest.native.artifacts, checkDir)

@@ -1,9 +1,8 @@
 #!/usr/bin/env node
 /**
- * remote-state-injection-matrix —— 故障注入覆盖矩阵校验器（plan §10「故障注入」
- * 与「故障注入补三条」的**可执行台账**）。
+ * remote-state-injection-matrix —— 故障注入覆盖矩阵校验器（**可执行台账**）。
  *
- * 为什么需要它：§10 列的每一条注入（watcher 被杀、host 停机、读取失败、时钟偏斜、
+ * 为什么需要它：每一条注入（watcher 被杀、host 停机、读取失败、时钟偏斜、
  * 游标过期、事件静默、/read 写失败与乱序、blank 归因…）都要求「每项都断言不产生
  * 假未读 / 不丢真未读」。但测试文件会改名、用例会被删、断言会被改绿——一份写在
  * 文档里的台账会悄悄失真。本脚本把每条注入映射到**具体的文件 + 用例标题**，逐条
@@ -32,7 +31,7 @@ const INJECTIONS = [
   { id: 'host-down', fault: 'host 停机（不伪造完成）', expect: 'covered', checks: [
     { file: `${GW}/session-state-observer.test.ts`, title: 'suspend: host-down reports serviceable false and stop() closes the watcher' },
     { file: `${GW}/session-state-routes.test.ts`, title: 'host-down still answers' },
-    { file: `${GW}/session-state-store.test.ts`, title: 'host-down keeps rows but flips serviceable false (plan section 4)' },
+    { file: `${GW}/session-state-store.test.ts`, title: 'host-down keeps rows but flips serviceable false' },
   ] },
   { id: 'unreadable-tail', fault: '读取失败（尾巴不可读）→ 降级武装而非丢完成', expect: 'covered', checks: [
     { file: `${GW}/session-state-observer.test.ts`, title: 'an unreadable follow falls back to arming with the degraded marker' },
@@ -40,7 +39,7 @@ const INJECTIONS = [
     { file: `${SB}/session-rows/derive-unread.test.ts`, title: 'a degraded arm still respects the read watermark (no permanent unread)' },
   ] },
   { id: 'clock-skew', fault: '时钟偏斜 ≥1h（不丢真未读）', expect: 'covered', checks: [
-    { file: `${GW}/session-state-routes.test.ts`, title: 'a client clock ahead of the host cannot buy a future read mark (plan §10 skew)' },
+    { file: `${GW}/session-state-routes.test.ts`, title: 'a client clock ahead of the host cannot buy a future read mark (clock skew)' },
   ] },
   { id: 'cursor-expired', fault: '游标过期 / 伪造（强制全量重取）', expect: 'covered', checks: [
     { file: `${GW}/session-state-store.test.ts`, title: 'replayFrom distinguishes satisfiable, current, future and e' },
@@ -96,16 +95,16 @@ const INJECTIONS = [
     { file: `${SB}/session-state/session-create-ledger.test.ts`, title: 'unlabeled creations are visible (the instrument coverage half of the criterion)' },
     { file: `${SB}/session-state/session-create-ledger.test.ts`, title: 'every create call site declares an origin' },
   ] },
-  // W6：SSH/dsh 远端的无壳观察者（实例自己的远程协议；观察者不结算瀑布）。
+  // SSH/dsh 远端的无壳观察者（实例自己的远程协议；观察者不结算瀑布）。
   { id: 'ssh-headless-observer', fault: '无壳仍能观察完成（SSH/dsh 远端，W6）', expect: 'covered', checks: [
     { file: `${RN}/session-state/source-mux-facts.test.ts`, title: 'the observer opens only $events and never answers a waterfall' },
     { file: `${RN}/session-state/source-mux-facts.test.ts`, title: 'one true->false edge opens exactly one follow and completed arms the row' },
     { file: `${RN}/session-state/source-mux-facts.test.ts`, title: 'a user stop and a neutral ending never arm; an unreadable tail degrades and arms' },
   ] },
   { id: 'facts-source-wiring', fault: '桌面事实源接线（probe/stream/overlay/落盘）', expect: 'covered', checks: [
-    // The App source-text wiring locks were retired in the second trim round
-    // (round-2 rule: a wiring lock dies once the invariant has behaviour tests);
-    // the three behaviour witnesses below carry the injection.
+    // No App source-text wiring lock is needed here: a wiring lock dies once the
+    // invariant has behaviour tests, and the three behaviour witnesses below
+    // carry the injection.
     { file: `${RN}/session-state/unread-store.test.ts`, title: '' },
     { file: `${RN}/session-state/session-facts-source.test.ts`, title: '' },
     { file: `${RN}/session-state/unread-derivation.test.ts`, title: '' },
@@ -115,7 +114,7 @@ const INJECTIONS = [
 /**
  * Live-code projection: comments removed and skip/todo declarations renamed, so
  * a title that only survives in a comment or in a skipped declaration no longer
- * counts as evidence (P2-13: the old matcher was a plain substring search).
+ * counts as evidence.
  */
 function liveProjection(text) {
   return String(text)
@@ -142,7 +141,7 @@ function main() {
   if (wantJson) {
     console.log(JSON.stringify({ schema: 'remote-state-injection-matrix/v1', capturedAt: new Date().toISOString(), rows, lost: lost.map(r => r.id), open: open.map(r => r.id) }, null, 2))
   } else {
-    console.log('故障注入覆盖矩阵（plan §10）')
+    console.log('故障注入覆盖矩阵')
     for (const r of rows) {
       const tag = r.expect === 'open' ? 'OPEN   ' : r.live ? 'COVERED' : 'LOST   '
       console.log(`  ${tag} ${r.id.padEnd(26)} ${r.fault}`)

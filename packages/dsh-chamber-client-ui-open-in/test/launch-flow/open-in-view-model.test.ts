@@ -1,5 +1,5 @@
 /**
- * Per-source open-in view-model unit tests (Batch 3 Phase 0, design 20 §2):
+ * Per-source open-in view-model unit tests (design 20 §2):
  * the presentation matrix over the instance-hosted (local) catalog and main
  * (desktop IPC) pools, the channel-priority dedup, the explicit suppression
  * reasons and the default selection. Plain node:test — the module is pure over
@@ -134,7 +134,7 @@ test('view-model / the local default falls back to the first entry without VS Co
 
 /**
  * OpenInButton render-gate unit tests (plain node:test, no React/DOM): the
- * pure decision surface extracted into src/client/open-in-gates.ts — gate 1
+ * pure decision surface in src/client/open-in-gates.ts — gate 1
  * (per-source usable apps across target kind × transport), gate 2
  * (workspace-path lookup) and the launch instance-id prefix strip. The
  * component itself (React + CSS + a raster mark) is not importable under node;

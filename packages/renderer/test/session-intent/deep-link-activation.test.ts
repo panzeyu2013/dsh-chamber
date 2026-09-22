@@ -326,7 +326,7 @@ test('authoritative roster installs its change listener before the initial refre
 })
 
 test('App wires bounded listener-before-ready retry for deep-link and notifications', () => {
-  // 阶段 3：深链订阅 effect 随桥订阅簇移到 hook。接线锁对本测试的两个落点
+  // 深链订阅 effect 与桥订阅簇同在 hook。接线锁对本测试的两个落点
   // （App.tsx + use-bridge-subscriptions.ts）取并集判 presence（不放松任何一条），
   // 顺序型切片各自取实际持有该 effect 的文件。
   const app = readFileSync(new URL('../../src/App.tsx', import.meta.url), 'utf8')

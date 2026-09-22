@@ -80,7 +80,7 @@ export const zh = {
   restartManagedDshOk: '已重启并恢复就绪',
   restartManagedDshAccepted: '重启已接受，实例仍在恢复中…',
   // 409 拒绝的本地化投影（managed-restart.ts 的 classifyRuntimeRefusal）：核心
-  // 路由的英文 body.error 不再逐字上屏，只保留 code 以维持可诊断性。
+  // 路由的英文 body.error 不逐字上屏，只保留 code 以维持可诊断性。
   restartRefusedNotRunning: '重启被拒绝：托管 dsh 未在运行（409 {code}）——请改用「启动实例」',
   restartRefusedBusy: '重启被拒绝：运行时正忙或正在恢复（409 {code}），请稍后重试',
   restartNotConnected: '连接后可用',
@@ -93,8 +93,8 @@ export const zh = {
   deleteTitle: '删除该连接？',
   deleteDescription: '连接将从注册表移除，当前传输随之断开，且本机保存的密码或令牌会被清除；远端内容不受影响。',
   // 「删除」词族专用连接删除域；插件管理域统一为 移除（动作层）/卸载（技术
-  // 后果或复合恢复语境层）——2026-12 UX 修订约定，勿回潮（插件域请用
-  // pluginsRemoveRow/pluginsConfirmRemove/pluginsRemoving）。
+  // 后果或复合恢复语境层）——插件域请用
+  // pluginsRemoveRow/pluginsConfirmRemove/pluginsRemoving。
   deleteConfirm: '删除',
   deleting: '删除中…',
   deleteNotEffective: '删除未生效：主进程拒绝了该变更（连接状态变化或状态目录不可写？）',
@@ -192,7 +192,7 @@ export const zh = {
   pluginDiagnosticBundleFailed: 'bundle 加载失败',
   pluginDiagnosticRestartRequired: '需要重启',
   pluginDiagnosticInstanceVersionConflict: '实例间插件版本不同',
-  // 2026-12（05 §4「降级呈现」第二批）：boot 成功但已知缺口（结构化事实来自
+  // 05 §4「降级呈现」：boot 成功但已知缺口（结构化事实来自
   // chamberBridge 投影的 bootGap）。与上面的「客户端插件状态」是两条不同的事实
   // ——图通道 ok 不代表服务都在，所以缺口在场时不渲染 ok 那一行。
   bootGapLabel: '前端能力受限',
@@ -201,7 +201,7 @@ export const zh = {
   bootGapLocalGraphNotInjected: '本地实例没有注入客户端插件图（接口 404 或缺少该方法）——这是应用侧安装/seed 产物不完整，本次挂载没有加载它的前端插件',
   bootGapRequiredServicesMissing: '没有提供本页所需的前端服务（{services}）；等待它们的界面不会注册',
   bootGapDeferredRegistrationFailed: '{n} 个前端插件家族没有注册成功（它们的界面与插槽本次缺失）',
-  // 2026-12 FIX 6c：本地实例的运行时管理在 win32 上是只读投影，所以本地分支
+  // 本地实例的运行时管理在 win32 上是只读投影，所以本地分支
   // 只给可执行动作（重启本地 dsh / 重新挂载 / 提交诊断）；"升级/对齐运行时"
   // 只出现在远程来源分支。本组件拿不到来源种类（连接卡片与插件对话框共用），
   // 因此这里把两个分支都写清楚，用户按自己的来源种类对号入座。
@@ -273,7 +273,7 @@ export const zh = {
   pluginsAddSpecPlaceholder: '如 pkg 或 pkg@^1.2.3',
   pluginsAddSpecInvalid: '请输入合法的包名或 name@version（仅 registry 名 + 安全版本）。',
   pluginsAddInstall: '安装',
-  // 安装中短文案（2026-12 UI 修订）：busyTasks 是「正在执行变更…」全宽文案，
+  // 安装中短文案：busyTasks 是「正在执行变更…」全宽文案，
   // 作安装按钮 busy 文案会导致按钮宽度跳动 ~80-100px；安装中专用短文案把
   // 跳动压到 ~13-23px（busyTasks 保留给 footer/应用态）。
   pluginsAddInstalling: '安装中…',
@@ -281,12 +281,12 @@ export const zh = {
   pluginsAddSearchPlaceholder: '搜索 npm registry…',
   pluginsAddFolder: '从本地导入',
   // 本地导入 busy 短文案（与 pluginsAddInstalling 同族）：导入中按钮显示
-  // 「导入中…」，避免「安装」按钮误显「安装中…」（2026-12 UX 修订）。
-  // 2026-09 archive-pick：导入源 = 插件源码文件夹或现成 .tgz 插件包（macOS
+  // 「导入中…」，避免「安装」按钮误显「安装中…」。
+  // 导入源 = 插件源码文件夹或现成 .tgz 插件包（macOS
   // 选择器可两者任选；按钮语义随之从「文件夹」放宽为「本地」）。
   pluginsImporting: '导入中…',
   pluginsRemoveRow: '移除',
-  // 行级移除确认键（2026-12 UI 修订）：与共享键 deleteConfirm（「删除」，
+  // 行级移除确认键：与共享键 deleteConfirm（「删除」，
   // 连接删除沿用）区分——移除流程按钮与标题/描述动词一致，busy 用
   // pluginsRemoving 而非 deleting。
   pluginsConfirmRemove: '移除',
@@ -334,7 +334,7 @@ export const zh = {
   deferredOfflineNote: '将缓存并在实例就绪后自动安装；可能在你断开后执行',
   profileAbsentBanner: '实例尚未初始化，将缓存安装意图，实例就绪后自动安装',
   profileCorruptBanner: '托管实例的插件清单损坏（profile_corrupt）。请在网关侧恢复或重试',
-  // design 21 §6.2 读/写面共享栅栏（2026-12 接线）：读面 409 是「实例正在变更
+  // design 21 §6.2 读/写面共享栅栏：读面 409 是「实例正在变更
   // 插件」的可重试忙态——单独成键，既不与 profile_absent/profile_corrupt 同纹，
   // 也不与「网关不可达/500」的读取失败同纹；{code} = 服务端拒绝码（无码回落 409）。
   gatewayReadFencedBusy: '实例正在变更插件（409 {code}），插件清单暂不可读——请稍后点「刷新」重试',
@@ -460,7 +460,7 @@ export const en: Record<SettingsConnectionsKey, string> = {
   restartManagedDshOk: 'Restarted and ready',
   restartManagedDshAccepted: 'Restart accepted; the instance is still recovering…',
   // Localized projection of the runtime routes' 409 refusals (managed-restart.ts
-  // classifyRuntimeRefusal): the core's English body.error is no longer shown
+  // classifyRuntimeRefusal): the core's English body.error is not shown
   // verbatim — the code stays visible so a report is still diagnosable.
   restartRefusedNotRunning: 'Restart refused: the managed dsh is not running (409 {code}) \u2014 use "Start instance" instead',
   restartRefusedBusy: 'Restart refused: the runtime is busy or recovering (409 {code}); retry shortly',
@@ -475,7 +475,7 @@ export const en: Record<SettingsConnectionsKey, string> = {
   deleteDescription: 'The connection is removed from the registry, its transport disconnects, and its locally stored password or token is cleared; remote content is not touched.',
   // The "Delete" word family is reserved for connection deletion; the plugin
   // domain uses Remove (action layer) / Uninstall (consequence or composite
-  // recovery layer) — 2026-12 UX revision convention (see pluginsRemoveRow /
+  // recovery layer; see pluginsRemoveRow /
   // pluginsConfirmRemove / pluginsRemoving).
   deleteConfirm: 'Delete',
   deleting: 'Deleting…',
@@ -649,7 +649,7 @@ export const en: Record<SettingsConnectionsKey, string> = {
   pluginsAddSpecPlaceholder: 'e.g. pkg or pkg@^1.2.3',
   pluginsAddSpecInvalid: 'Enter a valid package name or name@version (registry name + safe version only).',
   pluginsAddInstall: 'Install',
-  // Short busy copy (2026-12 UI revision): busyTasks ("A change is running…")
+  // Short busy copy: busyTasks ("A change is running…")
   // makes the install button jump ~80-100px wide while busy; this short key
   // caps the jump at ~13-23px (busyTasks stays for footer/apply states).
   pluginsAddInstalling: 'Installing…',
@@ -657,13 +657,12 @@ export const en: Record<SettingsConnectionsKey, string> = {
   pluginsAddSearchPlaceholder: 'Search npm registry…',
   pluginsAddFolder: 'Import from local',
   // Local-import busy copy (same family as pluginsAddInstalling): the import
-  // button shows "Importing…" while busy (2026-12 UX revision). 2026-09
-  // archive-pick: the import source is a plugin source folder OR a ready
-  // .tgz plugin archive (macOS picker offers both; the label broadened from
-  // "folder" to "local" accordingly).
+  // button shows "Importing…" while busy. The import source is a plugin source
+  // folder OR a ready .tgz plugin archive (macOS picker offers both; the label
+  // says "local" to cover both).
   pluginsImporting: 'Importing…',
   pluginsRemoveRow: 'Remove',
-  // Row-remove confirm keys (2026-12 UI revision): distinct from the shared
+  // Row-remove confirm keys: distinct from the shared
   // deleteConfirm ("Delete", kept for connection deletion) so the remove flow
   // keeps one verb across button/title/description; busy uses pluginsRemoving.
   pluginsConfirmRemove: 'Remove',
@@ -715,7 +714,7 @@ export const en: Record<SettingsConnectionsKey, string> = {
   deferredOfflineNote: 'Will be cached and installed once the instance is ready \u2014 may run after you disconnect.',
   profileAbsentBanner: 'The instance is not initialized yet; the install intent will be cached and applied when it becomes ready.',
   profileCorruptBanner: 'The managed profile is corrupted (profile_corrupt). Restore or retry on the gateway.',
-  // design 21 §6.2 read/write fence (2026-12 wiring): a 409 on a read is the
+  // design 21 §6.2 read/write fence: a 409 on a read is the
   // retryable "the instance is changing plugins" busy state — its own key, so
   // it never renders as profile_absent/profile_corrupt nor as the
   // gateway-unreachable/500 read failure; {code} = the server's refusal code.
@@ -751,7 +750,7 @@ export const en: Record<SettingsConnectionsKey, string> = {
   startManagedDshFailed: 'Start failed: {error}',
   startManagedDshRefused: 'Start refused: the current state is not startable or the runtime is busy (409 {code}); refresh and retry',
   restartNeededHint: 'Applied; restart the instance to activate',
-  // UX rework (registered in design 21 §6.6; the todo entry was removed after landing): reconcile entry / pre-warning / banner guidance / service hint.
+  // design 21 §6.6: reconcile entry / pre-warning / banner guidance / service hint.
   pluginsDiffSummary: 'There are {n} differences vs the local plugin set \u2014 expand reconcile',
   pluginsDiffCollapse: 'Collapse reconcile',
   pluginsRestartUnconfiguredHint: 'No systemd service is configured on this instance: changes will be applied without an automatic restart \u2014 restart the remote manually for them to take effect.',

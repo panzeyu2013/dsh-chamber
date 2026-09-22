@@ -22,12 +22,11 @@ export interface TransportFormSchema {
   defaultRemotePort: Readonly<Record<TransportKind, number>>
 }
 
-/** Shipped transport schemas. The dsh×http combination is DISABLED
- *  (2026-09 user decision): direct-attaching a dsh web profile over http is
- *  hard-blocked on the 0.1.2 line — its host answers 401 without the
- *  spawn-time browser-auth launch token, which is unrecoverable remotely
- *  (STATUS「远端/直连 0.1.2 dsh 附加被硬阻断」; re-enable when upstream
- *  exposes token retrieval). ssh remains the only dsh transport; gateway
+/** Shipped transport schemas. The dsh×http combination is DISABLED:
+ *  direct-attaching a dsh web profile over http is hard-blocked — its host
+ *  answers 401 without the spawn-time browser-auth launch token, which is
+ *  unrecoverable remotely (re-enable when upstream exposes token retrieval).
+ *  ssh remains the only dsh transport; gateway
  *  keeps both transports. The main-process http provider refuses the
  *  combination at validateSpec (same flip point). Target semantics such as
  *  gateway authentication remain a separate decision below. */
@@ -58,8 +57,7 @@ export const TRANSPORT_FORM_OPTIONS: readonly TransportFormSchema[] = [
  * and inserts `--` before the unit, so renderer validation is UX rather than
  * the security boundary. The literal lives with the other desktop-gate mirrors
  * (host-validation.ts, byte-parity-locked by connection-form-contract.test.ts)
- * and is re-exported here so the form and the mirror cannot drift apart
- * (2026-12 audit: duplicate-literal merge). */
+ * and is re-exported here so the form and the mirror cannot drift apart. */
 export { SERVICE_NAME_PATTERN } from './host-validation.ts'
 
 export function transportFormSchema(method: TransportMethod): TransportFormSchema {
@@ -112,7 +110,7 @@ export interface HostDraft {
   gatewayUrl: string
   gatewayToken: string
   gatewayPassword: string
-  /** Optional, non-secret S23 64-hex SPKI digest. */
+  /** Optional, non-secret 64-hex SPKI digest. */
   spkiPin: string
   host: string
   user: string
@@ -141,7 +139,7 @@ export const EMPTY_DRAFT: HostDraft = {
   password: '',
 }
 
-/** S23 eligibility is deliberately narrow: only a gateway target reached by
+/** Pin eligibility is deliberately narrow: only a gateway target reached by
  * the direct HTTP provider with an explicitly valid HTTPS origin. */
 export function spkiPinEligible(draft: Pick<HostDraft, 'kind' | 'transport' | 'gatewayUrl'>): boolean {
   if (draft.kind !== 'gateway' || draft.transport !== 'http') return false
@@ -156,7 +154,7 @@ export function spkiPinValidationError(pin: string): 'format' | null {
 }
 
 /** Normalize a registry row into a form draft. Secret fields always start
- * empty, while a valid S23 pin is prefilled so a label-only edit cannot
+ * empty, while a valid pin is prefilled so a label-only edit cannot
  * silently remove certificate verification. HTTP backfill is transport-
  * based, not kind-based, which is required for dsh+http. */
 export function draftFromSpec(spec: SshInstanceSpec): HostDraft {
@@ -220,7 +218,7 @@ export function draftToInput(draft: HostDraft): SshInstanceInput {
 }
 
 /** Target changes preserve the independently selected transport WHEN the new
- *  target supports it. The dsh×http combination is disabled (2026-09), so a
+ *  target supports it. The dsh×http combination is disabled, so a
  *  kind switch INTO dsh moves an http draft onto ssh (the only dsh transport)
  *  with the ssh port default. Transient credentials are cleared so switching
  *  away and back cannot accidentally submit a value typed for another target. */

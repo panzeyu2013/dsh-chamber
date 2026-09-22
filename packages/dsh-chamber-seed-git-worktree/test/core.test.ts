@@ -550,9 +550,8 @@ test('previewCreate startRef pins the chosen source branch; a moved source fails
 })
 
 test('a non-zero show-ref --hash exit (the git 128 missing-ref quirk) reads as branch absent', async () => {
-  // Moved from the deleted snapshot-classification-branches.test.ts (2026-12
-  // trim): Git versions disagree on the missing-ref exit code (1 vs 128); the
-  // 2026-08 fix in src/core.ts localBranchHead treats ANY non-zero exit as
+  // Git versions disagree on the missing-ref exit code (1 vs 128);
+  // `src/core.ts` localBranchHead treats ANY non-zero exit as
   // "branch absent" — a regression to a hard failure would break new-branch
   // preview/create on those versions.
   const { repo, workspaces } = setup({ linked: true })

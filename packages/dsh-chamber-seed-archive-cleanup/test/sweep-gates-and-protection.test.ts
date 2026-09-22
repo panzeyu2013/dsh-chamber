@@ -18,16 +18,15 @@ import {
 } from './support/archive-host.ts'
 
 /* ------------------------------------------------------------------ */
-/* Orphan-sweep blocker fix (2026-12 adversarial second scan): the      */
-/* sweep's G1 credibility guards + G3 decisive existence probe.         */
+/* Orphan-sweep protection: the sweep's G1 credibility guards + G3      */
+/* decisive existence probe.                                            */
 /* ------------------------------------------------------------------ */
 
 test('purge BLOCKER: a content-bearing member missing from BOTH bulk reads is never swept (G3 authoritative probe)', async () => {
-  // The reviewer's repro, minus the empty-corpus guard: a NON-empty corpus
-  // that silently omits two content-bearing archived members (jsonl skips
-  // unparseable artifacts / the query corpus narrows live-only). Before the
-  // fix, `purge(['keep-1'])` answered deleted=0, clearedOrphanMembers=2 and
-  // erased both memberships while keep-2's artifact stayed on disk.
+  // A NON-empty corpus that silently omits two content-bearing archived
+  // members (jsonl skips unparseable artifacts / the query corpus narrows
+  // live-only): the purge must keep both memberships while keep-2's artifact
+  // stays on disk.
   const host = new FakeHost()
   host.states.set('other', state('other')) // credible corpus (G1a passes)
   host.archived.add('keep-1')
@@ -49,11 +48,10 @@ test('purge BLOCKER: a content-bearing member missing from BOTH bulk reads is ne
 })
 
 test('purge subset (reviewer repro): a one-row purge deletes its own row and never clears an unrelated content-bearing archived member', async () => {
-  // The reviewer's call shape: `purge(['keep-1'])` on an archived set where
-  // keep-2 has content on disk but no record in the narrowed corpus.
-  // Pre-fix: clearedOrphanMembers=2 and keep-2's membership gone (content
-  // orphaned, the session reappears non-archived and can never be re-deleted
-  // through the manager). Post-fix: keep-2 keeps its membership.
+  // `purge(['keep-1'])` on an archived set where keep-2 has content on disk
+  // but no record in the narrowed corpus: keep-2 must keep its membership
+  // (otherwise its content is orphaned, the session reappears non-archived and
+  // can never be re-deleted through the manager).
   const host = new FakeHost()
   host.states.set('other', state('other')) // unrelated session keeps the corpus non-empty
   host.archived.add('keep-1')
@@ -71,7 +69,7 @@ test('purge subset (reviewer repro): a one-row purge deletes its own row and nev
 })
 
 test('purge sweep G1a: an empty snapshot corpus never clears archived members (reviewer repro, no probes)', async () => {
-  // The reviewer's exact shape: the corpus reports ZERO records while two
+  // The corpus reports ZERO records while two
   // members are archived (an absent sessions root / unmounted persistence
   // binding answers empty with NO error). Zero records is not evidence that
   // content is absent — the sweep must not even probe.
@@ -229,7 +227,7 @@ test('purge sweep G3: the per-run probe budget bounds one sweep, notes the trunc
 })
 
 // ---------------------------------------------------------------------------
-// protectSessionIds (2026-09 protection amendment): protection outranks every
+// protectSessionIds: protection outranks every
 // liveness classification and `force`, matches the FULL subtree closure, and
 // can only ever shrink the deletion set.
 // ---------------------------------------------------------------------------

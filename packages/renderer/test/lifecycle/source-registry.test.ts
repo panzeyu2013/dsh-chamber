@@ -1,5 +1,5 @@
 /**
- * per-source 注册表收敛内核契约（2026-12 阶段 3）：live 外删除、保序、
+ * per-source 注册表收敛内核契约：live 外删除、保序、
  * identity-preserving（无变化必须返回 null，调用方据此避免重建引用）。
  */
 import { test } from 'node:test'

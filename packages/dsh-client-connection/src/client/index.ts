@@ -2,11 +2,9 @@
  * Browser wire client. The plugin provides the shared RPC client and lets API
  * Gateway own the connection loop.
  *
- * ## chamber patch (dsh-chamber connection manager, design 05 §6; re-anchored
- * on upstream dsh-v0.1.5-alpha.2 at the 2026-09 re-anchor — that upstream file is
- * byte-identical at the current pin dsh-v0.1.5-rc.2)
+ * ## chamber patch (dsh-chamber connection manager, design 05 §6)
  *
- * Three chamber deltas plus one removal:
+ * Chamber patches:
  *  - `basePath` is read from the per-entry Context (`ctx.chamberBasePath`, the
  *    same seam the chamber api-gateway fork uses — never a page-global knob)
  *    and handed to the generic RPC carrier, so every api path lands under the
@@ -17,11 +15,11 @@
  *    long-hidden recovery.
  *  - `SYSTEM_RESUME_EVENT` is exported as the single canonical wake-event name
  *    the chamber shell dispatches.
- *  - upstream's `?fixture` page mode is removed together with its browser
- *    fixture (`src/client/fixture.ts` is registered as dropped): chamber has no
- *    producer for the flag, and the static import pulled the 4037-line dev
- *    scaffold plus its `@deepseek-ai/dsh-llm/*` value imports into the composite
- *    boot chunk.
+ *  - the `?fixture` page mode is absent together with its browser fixture
+ *    (`src/client/fixture.ts` is registered as dropped): chamber has no producer
+ *    for the flag, and the static import would pull the 4037-line dev scaffold
+ *    plus its `@deepseek-ai/dsh-llm/*` value imports into the composite boot
+ *    chunk.
  *
  * Everything else is verbatim upstream: the page-global
  * `__DSH_CONNECTION_RECOVERY__` bootstrap, the `{...recovery, ...config}`
@@ -84,7 +82,7 @@ export type {
 } from '../rpc.ts'
 export type { RpcFetch } from './rpc.ts'
 /**
- * chamber patch (Batch 2 follow-up): the per-source recovery-timing policy.
+ * chamber patch: the per-source recovery-timing policy.
  * Exported through the `/client` barrel so consumers (the chamber api-gateway
  * fork) can pass it to `start(sinks, config)`; deep subpath imports are not
  * resolvable through the chamber vite alias, which maps only the package root
@@ -105,9 +103,7 @@ export {
  * deep source alias, so it spells the literal instead — see
  * `packages/renderer/src/App.tsx` and its note). The two spellings therefore
  * drift-check rather than share a symbol: `test/lifecycle/client-apply.test.ts` and
- * `packages/desktop/test/ipc/ipc-surface-mirror.test.ts` pin the literal on both sides
- * (2026-09 audit — the earlier comment claimed a shared import that does not
- * exist).
+ * `packages/desktop/test/ipc/ipc-surface-mirror.test.ts` pin the literal on both sides.
  */
 export const SYSTEM_RESUME_EVENT = 'dsh-chamber:system-resume'
 
@@ -161,7 +157,7 @@ export interface ClientTransportHooks {
 /** Page global carrying {@link ClientTransportHooks}; absent in the served web app. */
 interface ClientTransportGlobal {
   __DSH_TRANSPORT__?: ClientTransportHooks
-  /** Host-injected recovery bootstrap (webserver index-inject, present since v0.1.5-alpha.2). */
+  /** Host-injected recovery bootstrap (webserver index-inject). */
   __DSH_CONNECTION_RECOVERY__?: unknown
 }
 
@@ -358,7 +354,7 @@ export function apply(ctx: Context): void {
       }, { ...recovery, ...config })
       const current = { token, source, controller, stopNetworkWatch: watchBrowserNetwork(controller) }
       owner = current
-      // chamber patch (design 14 D4 + sleep/wake liveness extension): reconnect
+      // chamber patch (design 14 D4 + sleep/wake liveness): reconnect
       // immediately on OS wake (system-resume), network restore (online) or the
       // window becoming visible again after a long hidden span (hide-to-tray /
       // backgrounded sleep) — instead of waiting for a close/error that a

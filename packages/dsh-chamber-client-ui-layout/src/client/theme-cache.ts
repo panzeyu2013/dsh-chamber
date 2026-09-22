@@ -1,5 +1,5 @@
 /**
- * Page-wide per-source document-theme snapshot cache (design 06 §4.6, W3 切源体验).
+ * Page-wide per-source document-theme snapshot cache (design 06 §4.6).
  *
  * Why: on a cold switch the target view has not produced a theme snapshot yet, so
  * the document keeps the PREVIOUS view palette (or dsh light default) while the

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * T0 场景①（启动：骨架 → 内容）实机采集。
+ * 场景①（启动：骨架 → 内容）实机采集。
  *
  * 流程（对每个 run）：
  *   1. 连接 CDP 页面 target（localhost:9333，dev 实例 --remote-debugging-port=9333）；
@@ -20,8 +20,8 @@ import { findPageTarget, connect, installEarlyObservers, pollState, readPerf, su
 const runs = Number(process.argv[2] ?? 3)
 const outFlag = process.argv.indexOf('--out')
 const outPath = outFlag >= 0 ? process.argv[outFlag + 1] : 'scripts/perf/data/boot-baseline.json'
-// nit2 (2026-09 review)：runs 非有限正整数时旧代码静默跑 0 次并写出空文件
-// （首参误为 --out 即得 NaN）——改为显式报错退出
+// runs 非有限正整数时静默跑 0 次并写出空文件（首参误为 --out 即得 NaN），
+// 因此显式报错退出
 if (!Number.isInteger(runs) || runs < 1) {
   console.error('用法：node scripts/perf/boot-measure.mjs [runs=3] [--out scripts/perf/data/boot-baseline.json]')
   console.error(`runs 须为 ≥1 的整数，收到：${JSON.stringify(process.argv[2] ?? '(缺省)')}`)
@@ -34,7 +34,7 @@ await cdp.ready
 await installEarlyObservers(cdp, cdp.send)
 
 // 状态快照：骨架元素存在性 + 侧栏实例就绪 + 长任务安静。
-// 快照按 run 生成并嵌入本次导航发起时刻 tReload——nit5 (2026-09 review)：
+// 快照按 run 生成并嵌入本次导航发起时刻 tReload：
 // Page.reload 后首轮 poll 可能仍命中 reload 前旧文档（其 performance.timeOrigin
 // 早于本次导航）；采样记录 timeOrigin，done 判定与归并前过滤都以
 // timeOrigin ≥ tReload - RELOAD_SKEW_MS 为界（跨进程时钟偏差裕量；旧文档/
@@ -61,7 +61,7 @@ for (let i = 0; i < runs; i++) {
   console.log(`--- run ${i + 1}/${runs} ---`)
   const perf = await readPerf(cdp, cdp.send)
   if (perf) console.log('pre-reload baseline:', JSON.stringify(summarize(perf)))
-  const tReload = Date.now() // nit5 分界锚点：本次导航发起时刻
+  const tReload = Date.now() // 分界锚点：本次导航发起时刻
   await cdp.send('Page.reload', { ignoreCache: false })
   // 轮询期间记录骨架起止时刻（快照嵌 tReload 分界：旧文档样本不置 done）
   const first = await pollState(cdp, cdp.send, makeSnapshot(tReload), { timeoutMs: 120000 })
@@ -70,9 +70,8 @@ for (let i = 0; i < runs; i++) {
   const after = await readPerf(cdp, cdp.send)
   // 从 trail 中推出骨架窗口
   const skeletonSeen = trail.findIndex(s => s.skeleton)
-  // nit8 (2026-09 review)：原条件含恒真的 skeletonSeen >= 0（findIndex 结果非
-  // 负即 -1；骨架未出现时窗口由下方 skeletonSeen >= 0 判定收口为 null）——
-  // 删除该冗余判定，行为不变
+  // 骨架未出现时窗口由下方 skeletonSeen >= 0 判定收口为 null（findIndex 结果
+  // 非负即有效下标）
   let skeletonGone = trail.findIndex(s => !s.skeleton && s.at > 0)
   if (skeletonGone < 0 && trail.length) skeletonGone = trail.length - 1
   const s = summarize(after, `boot-run-${i + 1}`)
@@ -86,7 +85,7 @@ for (let i = 0; i < runs; i++) {
   console.log(JSON.stringify(s, null, 1))
   await new Promise(res => setTimeout(res, 1500))
 }
-// nit1 (2026-09 review)：--out 目标目录未必已存在，写前先建（仿 disk-walk-baseline.mjs）
+// --out 目标目录未必已存在，写前先建（仿 disk-walk-baseline.mjs）
 mkdirSync(dirname(outPath), { recursive: true })
 writeFileSync(outPath, JSON.stringify({ at: new Date().toISOString(), env: { node: process.version }, results }, null, 2))
 console.log(`written: ${outPath}`)

@@ -1,14 +1,11 @@
 /**
  * WebSocket liveness heartbeat (RFC 6455 §5.5.2/§5.5.3) for the instance-proxy
- * event-stream splices (design 14 extension — sleep/wake stuck-deep-diving
- * fix).
+ * event-stream splices (design 14 extension — sleep/wake stuck-deep-diving).
  *
  * ## Why
  *
- * `/api/remote.mux` is the Typert Remote stream WebSocket (0.1.2). 0.1.2
- * FACT CORRECTION: unlike the 0.1.1 events.mux/events.host downlinks (which
- * were heartbeat-free read-only streams — the original motivation of this
- * heartbeat), the 0.1.2 mux HOST pings every downstream socket every
+ * `/api/remote.mux` is the Typert Remote stream WebSocket (0.1.2). The 0.1.2
+ * mux HOST pings every downstream socket every
  * `websocketHeartbeatIntervalMs` (default 2s) and terminates it after two
  * missed pongs (~6s) — so a healthy mux leg already carries regular host
  * pings and browser auto-pongs. The remaining gap this proxy heartbeat
@@ -65,10 +62,11 @@ export interface WsHeartbeatOptions {
   /** Ping cadence. */
   intervalMs: number
   /**
-   * Consecutive ping cycles without a browser pong before onDead fires
-   * (defaults per the ws README heartbeat example: 1 — a single unanswered
-   * ping cycle means the leg is dead; the pong round-trip is loopback so a
-   * full cycle without one cannot be scheduler noise).
+   * Missed browser pong cycles before onDead fires (the same bound as
+   * WS_PING_MISSES_BEFORE_TEARDOWN; the default follows the ws README
+   * heartbeat example: 1 — a single unanswered ping cycle means the leg is
+   * dead; the pong round-trip is loopback so a full cycle without one cannot
+   * be scheduler noise).
    */
   missesBeforeTeardown: number
   /** Fired once when the leg is judged dead (caller tears the splice down). */

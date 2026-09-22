@@ -2,10 +2,9 @@
    选中填充 = dsh 业务蓝 `--dsw-alias-state-business-primary`
    （`--dsw-static-deepseek-500` / `-400`，浅色 #4176e6、深色 #679efe），与页内
    复选框 accent、开关"开"轨道同色。
-   2026-09 用户裁决：撤销 2026-09 阶段 2 B-4 的「统一为官方中性 brand-primary」——
-   官方 token 表里 `--dsw-alias-brand-primary` 是中性色（浅色
+   不采用官方中性 `--dsw-alias-brand-primary`（浅色
    `--dsw-static-neutral-bluish-1000` 近黑、深色 `--dsw-static-neutral-bluish-50`
-   近白），浅色主题下选中态整片发黑而不是 dsh 蓝（同一裁决见 SettingsShell.module.css
+   近白），浅色主题下选中态会整片发黑（同一约束见 SettingsShell.module.css
    的开关覆盖与 design 15 §D1②）。几何保持 chamber 档（26px / 12px）。
    滑块位置/宽度由组件 layout 测量（flex 列按内容自适应，不等宽），CSS
    只负责轨道/胶囊/文字与过渡。 */
@@ -28,7 +27,7 @@
   top: 2px;
   bottom: 2px;
   border-radius: 8px;
-  /* 2026-09 用户裁决：业务蓝（撤销 P2-B B-4 的中性 brand-primary，理由见文件头）；
+  /* 业务蓝（不采用官方中性 brand-primary，理由见文件头）；
      几何仍是 chamber 档（26px / 12px）。 */
   background: var(--dsw-alias-state-business-primary);
   transition: left 120ms ease, width 120ms ease;

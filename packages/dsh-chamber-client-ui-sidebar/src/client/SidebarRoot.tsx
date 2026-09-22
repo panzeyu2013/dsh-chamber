@@ -8,7 +8,7 @@
  * the pointer-followed scrollbar discipline, and the foot
  * (sidebar.footer.action + sidebar.settings).
  *
- * The region (was the `sidebar.workspaces` registrant's browser) now renders
+ * The region renders
  * every source's sessions in ONE equal list, grouped by source only: source
  * header (label + connection-status dot/spinner — green ready, red
  * error/stopped, gray idle/unknown, spinner while connecting/starting/
@@ -28,11 +28,9 @@
  * (normal = empty; running = the official dsh ongoing blue RING; pending
  * interactions = a distinguishable 14px icon badge — question `?`,
  * plan-review checklist, approval warning triangle; completed-but-unread = the
- * official StateDot `done` DOT — 2026-09-11 upstream-alignment T10, the
- * bespoke brand-blue 6px dot is gone — the slot is not a
+ * chamber brand-blue 6px dot — the slot is not a
  * server-identity marker; identity rides the source header accent (fold
- * glyph + active inset) and the rail dots — the old header identity DOT was
- * removed (user feedback)). Hover swaps
+ * glyph + active inset) and the rail dots). Hover swaps
  * are TRUE replacements: the actions take no layout space at rest
  * (display:none), so the state icon really sits at the end; hovering swaps
  * the state slot for the row actions (source header: status ↔
@@ -42,7 +40,7 @@
  * workspace header carries a `+`
  * (new session) and a three-dot kebab menu (rename/delete); a session row
  * carries a three-dot kebab menu whose entries are rename / fork / archive —
- * 2026-09-11 upstream-alignment T2a: the archive verb lives in the row menu
+ * the archive verb lives in the row menu
  * (a second hover button is upstream's explicit anti-pattern, and archiving
  * needs no confirm because it only hides the row);
  * the add-workspace button lives in the source header (source-level creation,
@@ -66,7 +64,7 @@
  * detailed logSummary)); with every source disconnected the list appends
  * the empty hint under the groups. The rail
  * renders one named, operable button per source (the source color dot + the
- * active accent ring are unchanged; 2026-09-11 upstream-alignment T7).
+ * active accent ring keep their tokens).
  * Workspace groups fold/unfold via a header
  * chevron toggle; fold state + ungrouped order live in ONE shared live store
  * (view prefs, 06 §3: getViewPrefs/subscribeViewPrefs/
@@ -75,7 +73,7 @@
  * any source's sidebar propagates to all sources immediately, no per-ctx
  * stale copy, no write-back resurrecting another ctx's newer state).
  *
- * Chamber third round (06): per-source session search (wide only, 06 §1) —
+ * Per-source session search (wide only, 06 §1) —
  * the source header carries a search icon (hidden for disconnected sources
  * and for sources whose snapshot pull failed, unless the capsule is open so
  * it can be collapsed); expanding renders a capsule input row beneath the
@@ -89,7 +87,7 @@
  * order override that self-heals on the next pull (dropped per key only when
  * the pull confirms the commit, the key's workspace vanished, or the wire
  * commit failed; a stale poll never resets it), while the ungrouped order
- * persists through view prefs. The current-session highlight is now
+ * persists through view prefs. The current-session highlight is
  * channel-based (06 §4): each ctx's plugin reports its own
  * runtime facts through a tokenized chamberBridge runtime producer, the App layer
  * merges them into server.runtime, and this shell highlights the matching
@@ -111,7 +109,7 @@
  * scrollbar indirection away while it is elsewhere, so a list the user is not
  * pointing at carries no bar.
  *
- * Chamber fourth round (会话待办区): a PINNED attention block above
+ * 会话待办区: a PINNED attention block above
  * the scroll region (wide only) — the pure projection derivation
  * (shared/todo-attention.ts) over the SAME merged runtime facts the rows
  * render: completed-but-unread sessions and sessions waiting for an
@@ -168,7 +166,7 @@ export function SidebarRoot({
   t,
   renderSlot,
 }: SidebarRootComponentProps) {
-  // alpha.2 global panel axis: the shell renders one row per registration
+  // Global panel axis: the shell renders one row per registration
   // (empty by default). The selector hook keeps a row's re-render scoped to
   // its own selection state.
   const panels = (usePanels as PanelsHook)(snapshot => snapshot)
@@ -183,9 +181,8 @@ export function SidebarRoot({
     opts: { hookContext: { sourceId: string; workspaceId: string; repoKey?: string } },
   ) => ReactNode
 
-  // The shell cross-cutting state is owned by per-subject hooks (2026-12
-  // split). Each hook is called unconditionally in the order of the block it
-  // was extracted from, so the effect ordering is unchanged.
+  // The shell cross-cutting state is owned by per-subject hooks. Each hook is
+  // called unconditionally in a fixed order, so the effect ordering is stable.
   const { wide, column, lastWideWidth, everWide, pointerInside, setPointerInside, cancelLinger, armLinger } =
     useSidebarCollapse(collapsed, width)
   const {
@@ -304,7 +301,7 @@ export function SidebarRoot({
             aria-label={t('session.new.label')}
             onClick={() => { startSession() }}
           >
-            {/* alpha.2 brand holes: the shell keeps the chamber wordmark as
+            {/* Brand holes: the shell keeps the chamber wordmark as
                 the mark fallback and renders nothing for an unregistered
                 name occupant. */}
             <span className={css.brandIdentity} aria-hidden="true">
@@ -353,7 +350,7 @@ export function SidebarRoot({
         </button>
       </Tooltip>
 
-      {/* alpha.2 global panel axis: rows appear only when some plugin
+      {/* Global panel axis: rows appear only when some plugin
           registers into `sidebar.panellist` (upstream ships none). */}
       {panels.length > 0 && (
         <nav className={css.panelList} aria-label={t('panels.label')}>
@@ -409,22 +406,18 @@ export function SidebarRoot({
           </div>
           </>
         ) : (
-          /* 2026-09-11 upstream-alignment T7: the rail renders one NAMED,
+          /* The rail renders one NAMED,
              operable button per source (upstream rail controls are buttons with
-             an accessible name, vendor ui-sidebar SidebarRoot.tsx:63-68) — the
-             inert title-only span is gone. The status display is unchanged: the
-             coloured source dot and the active-source accent ring still paint on
-             the inner span; the span→button swap changed no geometry — the dot
-             PITCH stays the 20px the rail always had: the buttonization's own
-             `margin: -4px 0` takes the 16px button box back down to the old 8px
-             dot element, and only the 2026-09 rim pass's gap widening (12 →
-             16px) was rolled back on 2026-09-14; the geometry contract is 06 §7's
-             (the visual-lock suite that pinned it was retired in 2026-12).
+             an accessible name, vendor ui-sidebar SidebarRoot.tsx:63-68). The
+             coloured source dot and the active-source accent ring paint on
+             the inner span; the dot PITCH is the 20px the rail establishes: the
+             button's own `margin: -4px 0` takes the 16px button box down to the
+             8px dot element; the geometry contract is 06 §7's.
              Operability mirrors the wide source header: activating a remote,
              usable source asks the App layer to switch the N-ctx view, the
              current source is marked aria-current, and a managed-down source
              stays non-activatable (its reason rides the accessible name — the
-             header's own refusal, 2026-12 review MAJOR-2). */
+             header's own refusal). */
           <div className={cc.railDots}>
             {orderedServers.map((server) => {
               const active = server.id === chamberInstanceId

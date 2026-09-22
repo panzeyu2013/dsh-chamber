@@ -1,11 +1,10 @@
 /**
- * 三种凭据「清除」动作的共享实现（M9 单源化，ARCH-IMPL-027）。
+ * 三种凭据「清除」动作的共享实现。
  *
- * 三个回调（SSH 密码 / 网关 token / 网关登录密码）此前是逐字同形的 useCallback：
- * bridge 判空 → clear-only 调用（取值恒为 null，凭据永不进 renderer）→ 失败只置
- * formError，成功则清空该维度的草稿字段、把实例行与编辑目标的「已设置」投影翻回
- * false。差异只有三项，故用**描述符**表达（method / draftKey / projectionKey），
- * 不引入布尔开关。
+ * 三个回调（SSH 密码 / 网关 token / 网关登录密码）只差三项，故用**描述符**表达
+ * （method / draftKey / projectionKey），不引入布尔开关：bridge 判空 → clear-only
+ * 调用（取值恒为 null，凭据永不进 renderer）→ 失败只置 formError，成功则清空该
+ * 维度的草稿字段、把实例行与编辑目标的「已设置」投影翻回 false。
  */
 import type { DesktopSshSurface, SshInstanceSpec } from '../global.d.ts'
 import type { HostDraft } from './connection-form.ts'

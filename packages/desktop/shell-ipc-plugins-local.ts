@@ -1,5 +1,5 @@
 /**
- * shell-ipc-plugins-local — domain IPC registrations split out of shell-core.ts
+ * shell-ipc-plugins-local — domain IPC registrations
  */
 import type { ShellIpcCtx } from './shell-core.ts'
 import { IPC_CHANNELS } from './ipc-events.ts'
@@ -13,7 +13,7 @@ import { sanitizeErrorText } from './sanitize-error.ts'
 export function registerLocalPluginHandlers(ctx: ShellIpcCtx): void {
   const { deps, localProtectionFacts, verifyLocalProfileFamily, confirmPluginAction, NPM_SEARCH_MAX_BODY_BYTES } = ctx
   const { localDshHome, runLocalPluginMutation } = ctx.deps.ctx
-  // Local manifest read (design 13 M4 local leg): the authoritative local dsh
+  // Local manifest read (design 13 local leg): the authoritative local dsh
   // home manifest (<localDshHome>/… package.json 依赖投影 + bundle 激活层) —
   // localPluginList is a pure plugin-sync read of the same home the mutation
   // leaf writes; loud {error} on any unreadable/corrupt manifest, never a
@@ -25,12 +25,11 @@ export function registerLocalPluginHandlers(ctx: ShellIpcCtx): void {
       return { ok: false, error: describeUnknownError(error) };
     }
   });
-  // npm search (design 13 M2+M3 contract B): BEST-EFFORT npm registry search —
+  // npm search (design 13 contract B): BEST-EFFORT npm registry search —
   // a main-process fetch (the renderer stays on 127.0.0.1), bounded in time and
   // body size, refusing any non-whitelisted URL/redirect loudly. Always a loud
   // {ok:false} on refusal/transport/parse failure — never a silent empty
-  // success, never an unhandled rejection. Semantics comments carried verbatim
-  // from main.ts with the registration body.
+  // success, never an unhandled rejection.
   deps.ipc.handle(IPC_CHANNELS.NPM_SEARCH, async (payload: unknown) => {
     const { query } = payload as { query: unknown };
     if (typeof query !== 'string' || query.trim() === '') return { ok: false, error: 'empty search query' };
@@ -41,7 +40,7 @@ export function registerLocalPluginHandlers(ctx: ShellIpcCtx): void {
     timer.unref?.();
     try {
       const searchUrl = new URL(`https://registry.npmjs.org/-/v1/search?text=${encodeURIComponent(text)}&size=20`);
-      // §6 R3-5 P2-6: the search endpoint shares the registry URL whitelist
+      // The search endpoint shares the registry URL whitelist
       // (origin + `/-/v1/search` path shape), never a raw hardcoded fetch.
       if (!isAllowedRegistryUrl(searchUrl.toString())) {
         return { ok: false, error: 'search URL is not whitelisted' };
@@ -95,7 +94,7 @@ export function registerLocalPluginHandlers(ctx: ShellIpcCtx): void {
   deps.ipc.handle(IPC_CHANNELS.LOCAL_PLUGIN_ADD_FILE, async () => {
     if (!deps.edges.mainWindowAlive()) return { ok: false, error: 'no main window' };
     // Local same-machine install (design 13 §5.8 pick-only, design 21
-    // §10 defect ① fix + archive-pick): the path was chosen through the
+    // §10 archive-pick): the path was chosen through the
     // MAIN-process picker — a plugin SOURCE FOLDER or a ready .tgz plugin
     // archive — so the `file:` spec is main-chosen; pass allowFileSpec so
     // runLocalDshPlugin admits it through isAllowedLocalFileSpec (absolute
@@ -130,11 +129,11 @@ export function registerLocalPluginHandlers(ctx: ShellIpcCtx): void {
       return { ok: false, error: describePluginDecision(pickedGuard) };
     }
     return runLocalPluginMutation('plugin:add-file', async (dshWorkspace) => {
-      // design 21 §10 缺陷① fix (plan 24 小项④): the main-process picker
+      // design 21 §10: the main-process picker
       // IS the sanctioned file: source — pass the capability flag so
       // the picked absolute path passes runLocalDshPlugin's gate (without it
-      // every file: pick was refused as an invalid add spec).
-      // Facts are re-resolved INSIDE the mutation (2026-12 review): the guard
+      // every file: pick is refused as an invalid add spec).
+      // Facts are re-resolved INSIDE the mutation: the guard
       // above ran before the picker/fence lease, and a runtime switch in that
       // window would make the inner guard and the post-install verification
       // describe the PREVIOUS runtime.
@@ -169,10 +168,6 @@ export function registerLocalPluginHandlers(ctx: ShellIpcCtx): void {
     // User confirmation (design 09 §4 v1 mitigation): installing a registry
     // package into the LOCAL profile creates a persistent execution surface
     // on the next local boot — never a silent script action.
-    // W-10 S8: 经上方 S6 edges 版 confirmPluginAction 助手（原 main.ts 调用为
-    // confirmPluginAction(mainWindow, …) 双参闭包——宿主腿相同（showMessage +
-    // 当前主窗为父窗 sheet）、按钮序/取消默认一致，行为零改；main 侧闭包已随
-    // 本批删除——无剩余使用点）。
     const confirm = await confirmPluginAction(describeLocalPluginAddConfirmation(specArg));
     if ('cancelled' in confirm) return { ok: true, cancelled: true };
     if (!confirm.ok) return { ok: false, error: confirm.error };
@@ -180,8 +175,8 @@ export function registerLocalPluginHandlers(ctx: ShellIpcCtx): void {
       // Re-resolve the facts INSIDE the mutation: the guard above ran before
       // the confirmation dialog and before this fence/lease, and a runtime
       // switch in that window would make both the inner guard and the
-      // post-install verification describe the PREVIOUS runtime (2026-12
-      // review). The pre-dialog guard stays as the user-facing fast refusal.
+      // post-install verification describe the PREVIOUS runtime. The pre-dialog
+      // guard stays as the user-facing fast refusal.
       const freshFacts = localProtectionFacts();
       const result = await runLocalDshPlugin(dshWorkspace, localDshHome, 'add', specArg, { protection: freshFacts });
       if (!result.ok) return { ok: false, error: result.error ?? 'local add failed' };
@@ -201,9 +196,6 @@ export function registerLocalPluginHandlers(ctx: ShellIpcCtx): void {
     if (removeGuard.kind === 'refuse') return { ok: false, error: describePluginDecision(removeGuard) };
     // User confirmation (design 09 §4 v1 mitigation): removal is destructive
     // — a page script must not be able to wipe the local profile silently.
-    // W-10 S8: 经上方 S6 edges 版 confirmPluginAction 助手（原 main.ts 调用为
-    // confirmPluginAction(mainWindow, …) 双参闭包——宿主腿相同、按钮序/取消默认
-    // 一致，行为零改）。
     const confirm = await confirmPluginAction(describeLocalPluginRemoveConfirmation(name));
     if ('cancelled' in confirm) return { ok: true, cancelled: true };
     if (!confirm.ok) return { ok: false, error: confirm.error };

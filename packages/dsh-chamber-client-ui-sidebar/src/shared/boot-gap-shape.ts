@@ -1,9 +1,9 @@
 /**
- * Settled-boot gap -> copy-shape projection (2026-12 single-sourcing pass).
+ * Settled-boot gap -> copy-shape projection.
  *
  * Two client packages render a sentence for the same structured fact from their
  * own dictionaries: the sidebar (src/client/source-boot-gap.ts, `source.bootGap.*`)
- * and the connections section (plugin-diagnostic.ts, `bootGap*`). Both carried
+ * and the connections section (plugin-diagnostic.ts, `bootGap*`). Both share
  * the same payload extraction — which kind selects which key, and which
  * structured params survive — so the extraction lives here and each package
  * keeps only its key mapping (the namespace/wording split is deliberate,

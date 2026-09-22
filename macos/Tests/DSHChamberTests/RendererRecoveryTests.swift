@@ -1,5 +1,5 @@
 //
-//  RendererRecoveryTests.swift — E19 / E13 纯逻辑片（design 25 §5 E19、§4.5）
+//  RendererRecoveryTests.swift — 纯逻辑片（design 25 §5、§4.5）
 //
 //  覆盖：renderer 崩溃有界重载策略（500ms + 60s 滚动窗口 ≤3，超限 giveUp）
 //  与深链缓冲/转发状态机（未就绪缓冲、就绪后 FIFO 补发、就绪后直通、
@@ -39,7 +39,7 @@ final class RendererRecoveryTests: XCTestCase {
         XCTAssertEqual(attempt, 1)
     }
 
-    // MARK: - RendererCrashAttribution（2026-09 崩溃归因轮）
+    // MARK: - RendererCrashAttribution（崩溃归因）
 
     func testCrashAttributionNamesTheBootWindow() {
         let text = RendererCrashAttribution.describe(secondsSinceLoad: 21.4, ordinal: 1)
@@ -174,10 +174,10 @@ final class HostInboundMethodTests: XCTestCase {
             "sidecar-entry 应用 core 纯函数合成退出决策（事实来自 headless.quitFacts()）")
     }
 
-    /// #9：sidecar 重启 → relay 复位为「未就绪」，其间到达的深链重新缓冲，
-    /// 新 sidecar ready 后按序补发（原先 isReady 不重置 → 直通并丢弃）。
+    /// sidecar 重启 → relay 复位为「未就绪」，其间到达的深链重新缓冲，
+    /// 新 sidecar ready 后按序补发（isReady 不重置会直通并丢弃）。
 
-    /// E19 偏离 #1 收口：giveUp 不是永久位——窗口滑出后必须重新允许重载
+    /// giveUp 不是永久位——窗口滑出后必须重新允许重载
     /// （Electron 用「窗口起点 + 60s 重置计数」；本策略用 60s 滚动窗口等价）。
     func testGiveUpIsPerWindowNotPermanent() {
         let policy = RendererRecoveryPolicy()
@@ -217,8 +217,8 @@ final class HostInboundMethodTests: XCTestCase {
         XCTAssertEqual(relay.droppedCount, 0)
     }
 
-    /// 2026-12 双端逐函数核对 F2 回归：重启窗口里「已缓冲未补发」的深链
-    /// 不得被 reset 丢弃（原实现 drainAll 直接清空且不计 droppedCount）。
+    /// 重启窗口里「已缓冲未补发」的深链
+    /// 不得被 reset 丢弃（drainAll 不得直接清空且不计 droppedCount）。
     func testDeepLinkRelayResetKeepsUnsentBufferAcrossRestart() {
         var sent: [String] = []
         let relay = DeepLinkRelay { sent.append($0) }

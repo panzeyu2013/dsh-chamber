@@ -1,7 +1,6 @@
 /**
- * Pure tone/status/label projections for the plugin dialog (2026-12 audit
- * phase 3): moved verbatim out of PluginDialog.tsx so the dialog body keeps
- * orchestration and JSX. ADD_SPEC stays in PluginDialog.tsx — the gateway
+ * Pure tone/status/label projections for the plugin dialog: the dialog body
+ * keeps orchestration and JSX. ADD_SPEC lives in PluginDialog.tsx — the gateway
  * plugin-spec lockstep test pins it there by path.
  */
 import clsx from 'clsx'

@@ -1,5 +1,5 @@
 /**
- * Gateway credential CLI operations (design 17 §7 / Phase 3): offline
+ * Gateway credential CLI operations (design 17 §7): offline
  * (`gateway auth`) management of the persisted credentials while the gateway
  * is STOPPED. Runtime changes belong to the web UI /auth/change-* endpoints;
  * these commands take the stateDir exclusive lock, so a live gateway is

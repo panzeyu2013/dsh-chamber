@@ -308,7 +308,7 @@ test('claimNotification: key space covers sourceId|sourceFingerprint|sessionId|k
 });
 
 // ---------------------------------------------------------------------------
-// 内容水位（主计划 §3.3-3 / §5-16）：claim 键的第五个分量
+// 内容水位：claim 键的第五个分量
 // ---------------------------------------------------------------------------
 
 test('claimNotification: watermark is event identity — same completion once, later completion not swallowed', () => {
@@ -457,7 +457,7 @@ test('interpretNativeNotificationReply: explicit outcomes are authoritative; unk
     error: 'native notification was not shown',
   });
   assert.deepEqual(interpretNativeNotificationReply({ shown: true, error: 'ignored' }), { shown: true });
-  // 旧线协议：leg 只以 edge 错误报告失败，ok 的 null 应答保持 shown:true。
+  // 该线协议下 leg 只以 edge 错误报告失败，ok 的 null 应答保持 shown:true。
   assert.deepEqual(interpretNativeNotificationReply(null), { shown: true });
   assert.deepEqual(interpretNativeNotificationReply(undefined), { shown: true });
   // 不认识的形状（数组/数字/无 shown 的对象）一律失败。
@@ -729,7 +729,7 @@ test('BoundedActiveNotifications: entries() yields live insertion-ordered pairs 
 });
 
 // ---------------------------------------------------------------------------
-// S-44：Electron 侧 macOS 通知授权的诚实面——主进程没有授权查询/申请 API，
+// Electron 侧 macOS 通知授权的诚实面——主进程没有授权查询/申请 API，
 // 授权状态只经 addNotificationRequest 的 completion handler 回话（非 nil
 // error → 原生 failed 事件）。唯一可得的诚实面 = 把 OS 拒绝投递/限时无回执
 // 如实表述为「可能未授权/被抑制」；预检查询/申请仍是登记在案的残余。

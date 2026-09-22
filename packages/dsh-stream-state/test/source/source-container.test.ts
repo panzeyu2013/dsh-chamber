@@ -1,11 +1,10 @@
 /**
- * Per-source container (B2 core) - behavior contract.
+ * Per-source container - behavior contract.
  *
  * The container's job is the KEYING, so these tests are about identity and fences:
  * a reclaim/re-mount is the same incarnation (rules keep their meaning), while a
  * fingerprint change is a new one (no inherited penalties). The projections are
- * tested as the exact shapes the App's refs have today, because they are the
- * migration's compatibility surface.
+ * tested as the exact shapes the App's refs have today.
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'

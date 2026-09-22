@@ -1,5 +1,5 @@
 /**
- * Design 18 §3.4 F7 planner for a delayed crash (`restart-exhausted`).
+ * Design 18 §3.4 planner for a delayed crash (`restart-exhausted`).
  *
  * This module deliberately performs no process, pointer, snapshot, or store
  * effect. It turns the durable `applied-monitoring` journal into a
@@ -103,7 +103,7 @@ function targetForDelayedRollback(journal: ActivationJournal, failedVersion: str
 }
 
 /**
- * Produce the durable F7 rollback intent. This function is pure: it neither
+ * Produce the durable rollback intent. This function is pure: it neither
  * mutates the supplied journal nor performs an injected callback.
  */
 export function planRestartExhaustedRollback(

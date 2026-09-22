@@ -1,5 +1,5 @@
 /**
- * Per-source open-in view-model (design 20 §5; Batch 3 Phase 0, 2026-09):
+ * Per-source open-in view-model (design 20 §5):
  * the single pure decision surface over the TWO app pools the unified open-in
  * entry draws from —
  *
@@ -22,7 +22,7 @@
  * | `dsh-*`/`gateway-*` + ssh       | none (source-not-local) | remote-capable only |
  * | http / malformed / inconsistent | none                 | none                 |
  *
- * Channel priority on a shared id (approved §5.1 "vscode 全家走 IPC 覆盖" + r6
+ * Channel priority on a shared id (design 20 §5.1 "vscode 全家走 IPC 覆盖" +
  * "展示并集 + IPC 兜底"): the desktop main-process provider is the OVERRIDE —
  * when it reports the id AVAILABLE, the local entry is suppressed
  * (`duplicate-app-id`) and the app launches through the trusted IPC path (so

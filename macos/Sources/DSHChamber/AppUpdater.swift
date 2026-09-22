@@ -2,14 +2,14 @@ import AppKit
 import Foundation
 import Sparkle
 
-/// 原生壳的应用内更新器（2026-12 裁决 D-1 选 B / 台账 S-01）：Sparkle 2 承担
+/// 原生壳的应用内更新器：Sparkle 2 承担
 /// 检查 → 下载 → 重启并安装整条腿。与 Electron flavor 的语义对齐，实现方式换成
 /// macOS 的通行方案（Sparkle + appcast + EdDSA 签名）。
 ///
 /// 装配形态：
 /// - Info.plist 同时有 SUFeedURL 与 SUPublicEDKey、且 feed 是 https、公钥是
 ///   base64 的 32 字节 Ed25519 公钥，**并**成功 startUpdater 才视为可用
-///   （build-swift-app 在装配期替换这两个占位符；S-38：坏配置在装配期就被折成
+///   （build-swift-app 在装配期替换这两个占位符；坏配置在装配期就被折成
 ///   诚实不可用 + 原因，页面拿到 error 而不是停在 checking）。缺任一（dev /
 ///   dry-run / 未配密钥）→ 不可用：「检查更新…」菜单项禁用，也绝不向 sidecar
 ///   谎称能自动安装。
@@ -18,7 +18,7 @@ import Sparkle
 ///   （checkForUpdatesInBackground，Sparkle 官方推荐的每启动一次补充检查），之后
 ///   由 Sparkle 的调度器按 6h 间隔（updater.ts CHECK_INTERVAL_MS 同值）继续；
 ///   ad-hoc / 未配 feed 的装配仍因缺配置而完全不可用，不存在启动即弹窗的竞争。
-///   S-37 残余（有意记录，不静默）：Sparkle 把 lastUpdateCheckDate 持久化在
+///   残余（有意记录，不静默）：Sparkle 把 lastUpdateCheckDate 持久化在
 ///   user defaults，并在「scheduled 找到更新、展示权归壳（页面投影）」期间保持
 ///   会话打开——这段会话里 Sparkle 与壳都不再发起新的后台检查，直到用户在
 ///   Sparkle 标准窗内作出选择或应用重启；下次启动的强制检查因此是唯一保证的
@@ -28,19 +28,19 @@ import Sparkle
 ///   收回本类（supportsGentleScheduledUpdateReminders=true +
 ///   standardUserDriverShouldHandleShowingScheduledUpdate 返回 false），只把
 ///   available 相位经 nativeUpdatePhase 投到设置页；用户发起的「检查更新…」
-///   （页面按钮 / App 菜单）仍走标准 Sparkle 窗口，与今天完全一致。
+///   （页面按钮 / App 菜单）仍走标准 Sparkle 窗口。
 /// - 安装前回调：Sparkle 替换 bundle 期间不能留着活着的 sidecar/本地 dsh，故
 ///   willInstallUpdate 里先跑 onWillInstall（AppDelegate 注入清理链）。
-/// - 阶段上报（S-19/S-20）：SPUUpdaterDelegate 回调经 note 投影成页面同款七值
+/// - 阶段上报：SPUUpdaterDelegate 回调经 note 投影成页面同款七值
 ///   阶段，再由 AppDelegate 经冻结线 __host.nativeUpdatePhase
 ///   {phase, version, error} 交 sidecar（sidecar 映射进 update-state 投影）。
-/// - 退出时安装（S-01，2026-12 复核）：**不实现** willInstallUpdateOnQuit——
+/// - 退出时安装：**不实现** willInstallUpdateOnQuit——
 ///   该回调只在 automaticallyDownloadsUpdates=true 的 automatic-update driver 里
 ///   被调用；Electron 侧是 autoInstallOnAppQuit=true **且 autoDownload=false**
 ///   （updater.ts:947-948），接线自动下载会引入 Electron 没有的后台自动下载。
 ///   用户可见的「已下载，退出时安装」仍由 Sparkle 标准 resumable 路径承担：
 ///   标准窗内下载完成后可选择立即安装/退出时安装，阶段经 didDownloadUpdate →
-///   downloaded 投到页面；钩子删除后不再有零调用的潜伏声明。
+///   downloaded 投到页面。
 ///
 /// 为什么是 appcast，且为什么 feed 指向我们自己的 release 资产：
 /// - **协议**：Sparkle 只理解 appcast——一份签名 XML，条目携带版本、最低系统
@@ -85,7 +85,7 @@ final class AppUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDriverDeleg
         )
     }
 
-    /// 配置的静态校验（S-38；纯函数，单测直测）：feed 必须 https（Sparkle/ATS 拒绝
+    /// 配置的静态校验（纯函数，单测直测）：feed 必须 https（Sparkle/ATS 拒绝
     /// 明文），公钥必须是 base64 的 32 字节（Ed25519 公钥长度）。Sparkle 自己的
     /// 配置检查只覆盖 feed/XPC 服务，密钥错误要等下载验签才炸——壳在装配期就把它
     /// 变成诚实不可用 + 原因，页面因此不会停在 checking。
@@ -105,7 +105,7 @@ final class AppUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDriverDeleg
         return nil
     }
 
-    /// S-37：是否在 startUpdater 之后强制一次后台检查（每启动一次）——Electron
+    /// 是否在 startUpdater 之后强制一次后台检查（每启动一次）——Electron
     /// 每次启动 15s 后静默首检，Sparkle 的持久化 lastUpdateCheckDate 会在「距上次
     /// < 6h」时跳过，因此壳补一次显式后台检查（官方推荐：仅在自动检查开启时、紧跟
     /// startUpdater 调用）。纯函数，单测直测。
@@ -113,7 +113,7 @@ final class AppUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDriverDeleg
         startUpdater && (configuration?.automaticChecks ?? false)
     }
 
-    /// 原生更新动作的 kind（P-15/S-39 冻结语义）：check = 用户发起的检查；
+    /// 原生更新动作的 kind（冻结语义）：check = 用户发起的检查；
     /// download/install = 把 Sparkle 标准更新窗口带到前台（下载/安装都在该窗口内
     /// 完成）。Sparkle 2 没有「只下载某个已发现更新」的公开 API——checkForUpdates
     /// 的公开语义恰是「显示/聚焦当前更新，或开始一次新检查」（SPUUpdater.h:99-105），
@@ -124,20 +124,20 @@ final class AppUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDriverDeleg
         case install
     }
 
-    /// 动作回执（S-38/S-39：拒绝必须携带真实原因，绝不假 ok:true）。
+    /// 动作回执（拒绝必须携带真实原因，绝不假 ok:true）。
     enum NativeUpdateActionOutcome: Equatable {
         case accepted
         case refused(reason: String)
     }
 
-    /// 不可用原因（能力面与动作拒绝共用；S-38）。已启动的更新器为 nil。
+    /// 不可用原因（能力面与动作拒绝共用）。已启动的更新器为 nil。
     var unavailableReason: String {
         if let availabilityError { return "native-updater-misconfigured:\(availabilityError)" }
         if controller == nil { return "native-updater-unavailable" }
         return "native-updater-not-started"
     }
 
-    /// 能力面（S-38）：available=false 时携带诚实原因（配置错误/未装配），sidecar
+    /// 能力面：available=false 时携带诚实原因（配置错误/未装配），sidecar
     /// 据此保持 blocked 并记录真实原因；页面 check 拿 ok:false 落 error 相位。
     var capability: (available: Bool, error: String?) {
         (isAvailable, isAvailable ? nil : unavailableReason)
@@ -154,13 +154,13 @@ final class AppUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDriverDeleg
     private var controller: SPUStandardUpdaterController?
     private var phaseProjector = NativeUpdatePhaseProjector()
 
-    /// 装配/启动失败的真实原因（S-38）：配置形状非法或 startUpdater 抛错时非 nil，
+    /// 装配/启动失败的真实原因：配置形状非法或 startUpdater 抛错时非 nil，
     /// isAvailable 随之为 false，能力面与动作拒绝都携带它。
     private(set) var availabilityError: String?
 
     /// 更新是否已装配**并真的启动**（配置齐 + 形状合法 + startUpdater 成功）。
-    /// 旧实现只看 controller != nil：startUpdater 失败（或坏 EdDSA 公钥）时仍报
-    /// available=true，页面 check 被忙门静默吞掉后停在 checking（S-38）。
+    /// 只看 controller != nil 会漏掉 startUpdater 失败（或坏 EdDSA 公钥）：那种情况下
+    /// 仍报 available=true，页面 check 被忙门静默吞掉后停在 checking。
     var isAvailable: Bool { controller != nil && availabilityError == nil }
 
     /// Sparkle 自己的可用性门（检查中/安装中为 false）——菜单项据此 enable。
@@ -177,7 +177,7 @@ final class AppUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDriverDeleg
                 + "（dev 或未配置密钥的装配）——「检查更新…」保持禁用")
             return false
         }
-        // S-38：形状校验先于启动。坏配置绝不进入「已装配」态——诚实不可用 +
+        // 形状校验先于启动。坏配置绝不进入「已装配」态——诚实不可用 +
         // 原因（能力面携带），页面 check 拿 error 而不是停在 checking。
         if let error = Self.configurationError(for: configuration) {
             availabilityError = error
@@ -194,7 +194,7 @@ final class AppUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDriverDeleg
         if startUpdater {
             // 直接调 SPUUpdater.startUpdater(error) 而不是 controller.startUpdater()：
             // 后者吞掉错误并弹 Sparkle 自己的 misconfiguration 告警（数秒后），壳
-            // 拿不到原因、页面也永远不会收到诚实失败（S-38）。这里拿到错误即降级。
+            // 拿不到原因、页面也永远不会收到诚实失败。这里拿到错误即降级。
             do {
                 // Swift 导入把 SPUUpdater.startUpdater(error:) 重命名为 start()（throws）。
                 try controller.updater.start()
@@ -210,7 +210,7 @@ final class AppUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDriverDeleg
         shellLog("[shell] Sparkle 更新已装配（feed=\(configuration.feedURL)，"
             + "自动检查=\(configuration.automaticChecks)）")
         if Self.shouldForceLaunchBackgroundCheck(configuration: configuration, startUpdater: startUpdater) {
-            // S-37：每启动一次的后台检查（不弹窗）。放在下一个 runloop 周期，让
+            // 每启动一次的后台检查（不弹窗）。放在下一个 runloop 周期，让
             // startUpdater 排定的 startUpdateCycle 先跑：它按持久化的
             // lastUpdateCheckDate 可能已经发起检查或排了 6h 定时器，这里再补一次
             // 显式后台检查（Sparkle 自带 session/driver 门，重复调用只会响亮跳过）。
@@ -222,21 +222,20 @@ final class AppUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDriverDeleg
     }
 
     /// 用户发起的检查（App 菜单「检查更新…」；页面更新按钮经 edge 走同一入口）。
-    /// 返回真实回执（S-38/S-39）——拒绝带原因；AppKit action 面只记录日志。
+    /// 返回真实回执——拒绝带原因；AppKit action 面只记录日志。
     @objc func checkForUpdates(_ sender: Any?) {
         if case .refused(let reason) = perform(.check) {
             shellLog("[shell] 检查更新被拒绝：\(reason)")
         }
     }
 
-    /// kind 分派（P-15/S-39；纯入口，单测直测拒绝路径）：
-    /// - check：冻结语义（S-19/S-20）——绝不重入 Sparkle 忙态，不启动第二条检查/
+    /// kind 分派（纯入口，单测直测拒绝路径）：
+    /// - check：冻结语义——绝不重入 Sparkle 忙态，不启动第二条检查/
     ///   下载，先投 checking 相位；
     /// - download/install：Sparkle 没有「只下载指定已发现更新」的公开 API，公开入口
     ///   checkForUpdates 的语义就是「显示/聚焦当前更新或开始新检查」——把标准更新
     ///   窗口带到前台，下载/安装由窗口内的按钮与真实回调驱动；壳**不合成**假相位。
-    /// 不可用/忙都返回 .refused(原因)，绝不回假 ok:true（旧实现恒 ok:true + 静默
-    /// no-op）。
+    /// 不可用/忙都返回 .refused(原因)，绝不回假 ok:true 或静默 no-op。
     @discardableResult
     func perform(_ kind: NativeUpdateActionKind) -> NativeUpdateActionOutcome {
         guard isAvailable, let controller else {
@@ -252,7 +251,7 @@ final class AppUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDriverDeleg
         return .accepted
     }
 
-    // MARK: - NSMenuItemValidation（S-39：菜单 enable 实时跟随 canCheckForUpdates）
+    // MARK: - NSMenuItemValidation（菜单 enable 实时跟随 canCheckForUpdates）
 
     /// AppDelegate 构造菜单时按 isAvailable 设过一次 isEnabled——那只是初值：
     /// NSMenu 的自动校验在每次打开菜单时调用本方法（target 实现 NSMenuItemValidation），
@@ -291,7 +290,7 @@ final class AppUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDriverDeleg
     static func shouldHandleShowingScheduledUpdate(immediateFocus: Bool) -> Bool { false }
 
     /// 应用展示决策（协议回调与单测共用，不碰 Sparkle 对象）：
-    /// - 用户发起（userInitiated）→ 标准 Sparkle 窗（今天的行为不变）；
+    /// - 用户发起（userInitiated）→ 标准 Sparkle 窗；
     /// - scheduled 且我们接管（handleShowingUpdate=false）→ 页面投影，绝不弹窗。
     @discardableResult
     func presentStandardUpdate(handleShowingUpdate: Bool,
@@ -332,7 +331,7 @@ final class AppUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDriverDeleg
     // MARK: - SPUUpdaterDelegate
 
     /// Sparkle **实际选择**的下载产物名：命中增量包时是 `*.delta`，回退整包时是 zip。
-    /// 单独成函数以便单测钉住观测面（STATUS 的「实机增量验收」读 shell.log 里这行）。
+    /// 单独成函数以便单测钉住观测面。
     static func downloadArtifactName(_ url: URL?) -> String {
         url?.lastPathComponent ?? "unknown"
     }
@@ -353,12 +352,12 @@ final class AppUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDriverDeleg
         note(.noUpdate)
     }
 
-    /// 下载开始 / 完成 / 失败 / 用户取消（S-19：原实现让下载阶段对页面不可见）。
+    /// 下载开始 / 完成 / 失败 / 用户取消。
     func updater(_ updater: SPUUpdater,
                  willDownloadUpdate item: SUAppcastItem,
                  with request: NSMutableURLRequest) {
-        // 2026-09 增量更新（可观测性）：这里能看到 Sparkle **实际选择**的产物——命中 delta
-        // 时 URL 是 *.delta，否则回退整包 zip。只写壳日志，不进冻结线（相位契约不变）。
+        // 可观测性：这里能看到 Sparkle **实际选择**的产物——命中 delta
+        // 时 URL 是 *.delta，否则回退整包 zip。只写壳日志，不进冻结线。
         shellLog(Self.downloadLogLine(version: item.displayVersionString, url: request.url))
         note(.downloadWillStart(version: item.displayVersionString))
     }
@@ -430,9 +429,9 @@ enum StandardUpdatePresentation: Equatable {
     }
 }
 
-// MARK: - 原生更新阶段（S-19/S-20：冻结线 __host.nativeUpdatePhase 的值域）
+// MARK: - 原生更新阶段（冻结线 __host.nativeUpdatePhase 的值域）
 
-/// 原生更新阶段（S-19；与页面 UpdateState.phase 的 UI 可见值一致，rawValue 即
+/// 原生更新阶段（与页面 UpdateState.phase 的 UI 可见值一致，rawValue 即
 /// 冻结线 payload 的 phase 字符串，含连字符的 up-to-date）。
 enum NativeUpdatePhase: String, Equatable {
     case idle

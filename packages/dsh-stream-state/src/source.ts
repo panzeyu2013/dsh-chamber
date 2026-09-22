@@ -1,5 +1,5 @@
 /**
- * Source (per-instance view) lifecycle state for B2 - the pure core.
+ * Source (per-instance view) lifecycle state - the pure core.
  *
  * WHY THIS EXISTS. The App currently keeps SIX separate per-source ledgers plus
  * three loose fields, each mutated at a different call site:
@@ -44,7 +44,7 @@ export interface SourceLifecycleState {
   readonly hiddenSince: number | null
   /** The source phase projection this object last observed ('ready' | 'idle' | ...). */
   readonly phase: string | undefined
-  /** Once-per-ready-epoch degraded self-heal mark, scoped to the MOUNT (FIX 5). */
+  /** Once-per-ready-epoch degraded self-heal mark, scoped to the MOUNT. */
   readonly degradedRetried: boolean
   /** Background boots that own the single prewarm slot. */
   readonly autoPrewarmed: boolean
@@ -60,7 +60,7 @@ export interface SourceLifecycleState {
    */
   readonly abandonedTarget?: string
   readonly harvest: HarvestState | null
-  /** Manual/auto retry counter (replaces retryTokens). */
+  /** Manual/auto retry counter. */
   readonly retryToken: number
 }
 
@@ -92,7 +92,7 @@ export type SourceEvent =
    * The view landed on screen: the hidden WINDOW closes. Deliberately narrower than
    * 'painted' - the App clears its hidden-window ledger and its prewarm-suppression
    * ledger at DIFFERENT moments (window on paint, suppression only on an explicit
-   * user action / registry removal), and a migration that used 'painted' here would
+   * user action / registry removal), and using 'painted' here would
    * silently un-suppress a reclaimed view the moment it was painted, re-opening the
    * prewarm loop retention exists to stop (measured by the renderer's
    * source-ledger-equivalence test).
@@ -189,9 +189,9 @@ export interface SourceEnv {
 /**
  * One reduction step. Total function: every (state, event) returns a state.
  *
- * The two rules that the old six-ledger layout could not express as data:
+ * The two rules this state object exists to express as data:
  *  1. RECLAIM DOES NOT FORGET THE SELF-HEAL MARK unless the incarnation changes.
- *     The mark is scoped to the mount (FIX 5's own reason: a fresh mount is a new
+ *     The mark is scoped to the mount (a fresh mount is a new
  *     boot), so a reclaim/re-open cycle legitimately earns a fresh attempt - but
  *     the COUNT must be visible, which is why `retryToken` and the mark live in
  *     the same object instead of opposite corners of the App.
@@ -209,7 +209,7 @@ export function reduceSource(
       // self-heal mark and the background-slot flag all belong to the mount that
       // just ended, so they are cleared here - the reclaim path below can therefore
       // stay honest about "who owns the mark" without a second reset site.
-      // (The trace test found this: keeping the mark across a reclaim/remount made
+      // (Keeping the mark across a reclaim/remount would make
       // the fresh mount permanently ineligible for its automatic heal.)
       return {
         state: {
@@ -307,7 +307,7 @@ export function reduceSource(
           prewarmSuppressed: true,
           hiddenSince: null,
           // The mark dies with the mount it belonged to; the next mount starts
-          // unmarked, which is what FIX 5 describes as the intended semantics.
+          // unmarked, which is the intended semantics.
           degradedRetried: false,
         },
         effects: [{ e: 'reclaim' }],

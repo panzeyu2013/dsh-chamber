@@ -1,12 +1,12 @@
 /**
  * session-echo.ts unit tests (plain node:test, no dsh, no DOM): the local echo of a
- * sidebar-issued `session.create` / `session.fork` (design 05 §2.2 revision 2026-12; the
+ * sidebar-issued `session.create` / `session.fork` (design 05 §2.2 revision; the
  * session-side sibling of the workspace echo).
  *
  * The contract: local facts are echoed, authoritative membership always wins, the row is projected
  * INTO its workspace (never the trailing ungrouped bucket), a listed row is never duplicated, and
  * every path out (accounting, archive, retirement, TTL) retires the entry. Identity preservation
- * is checked explicitly — the publish is signature-gated. The projection block is the field-report
+ * is checked explicitly — the publish is signature-gated. The projection block is the
  * regression lock (a post-create push that does not list the id renders the row only because of
  * the echo), and the final block covers the archive tombstone: an archive over a NOT-mounted
  * source has no other channel (frozen pushed archive set + archive-wire-less fallback), so the row
@@ -167,7 +167,7 @@ test('sessionEchoRow: a title hint wins over the id ladder, an absent path keeps
   assert.equal('cwd' in hinted, false)
 })
 
-// ---- projection-level integration (the 2026-12 field report) ----------------
+// ---- projection-level integration ----------------
 
 test('integration: the mounted push without the created session renders NOTHING for it — the echo is the fix', () => {
   __resetMembershipGracesForTests()
@@ -246,7 +246,7 @@ test('integration: upstream blank visibility is preserved (no override by the ec
     'a fork child carries content, so it renders like any other row (at the head, like the host attach order)')
 })
 
-// ---- local archive tombstones (design 05 §2.2.1, 2026-12) -------------------
+// ---- local archive tombstones (design 05 §2.2.1) -------------------
 
 test('archive ledger: a repeat archive refreshes the lease per id, sweep drops only expired leases', () => {
   let ledger: SessionArchiveLedger = recordPendingArchive({}, 'ssh-b', 's-1', 10)
@@ -300,7 +300,7 @@ test('withPendingArchives: extends archivedSessionIds, identity-preserving when 
 
 test('integration: an archive on a NOT-mounted source hides the row only because of the tombstone', () => {
   __resetMembershipGracesForTests()
-  // The state the field report leaves behind: a previously-pushed (harvested) source whose shell is
+  // A previously-pushed (harvested) source whose shell is
   // gone. Its aggregate keeps the last pushed membership and archive set — the mutation pull's
   // mounted merge KEEPS that frozen set while the unary fallback carries no archive wire at all —
   // so the row the user just archived is still listed as an ordinary, openable row.

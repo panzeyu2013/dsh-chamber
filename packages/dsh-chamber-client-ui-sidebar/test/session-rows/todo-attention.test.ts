@@ -200,16 +200,16 @@ test('workspace rows without session runtime facts never produce entries (fact =
   assert.deepEqual(entries.map(entry => entry.sessionId), ['withFacts'])
 })
 
-// ---- R14: stale facts of a disconnected source (option A + the offline-unread group) ----
+// ---- stale facts of a disconnected source (option A + the offline-unread group) ----
 
 test('R14 option A: a disconnected source with rows renders stale-marked facts only', () => {
   const rows = [workspace('w', [session('s1'), session('s2')])]
-  // Without the explicit stale marker the old rule holds: unknown ≠ attention.
+  // Without the explicit stale marker the rule holds: unknown ≠ attention.
   const unmarked = server('r1', rows, {
     sessions: { s1: { completed: true }, s2: { pending: 'question' } },
   }, { connected: false })
   assert.deepEqual(run([unmarked]), [], 'unmarked disconnected facts must stay invisible')
-  // Marked stale (App-side R14 decision): the facts render, every entry labelled.
+  // Marked stale (App-side decision): the facts render, every entry labelled.
   const marked = server('r1', rows, {
     stale: true,
     sessions: { s1: { completed: true }, s2: { pending: 'question' } },
@@ -242,7 +242,7 @@ test('R14 row-absent branch: the offline-unread group is opt-in and uses the ses
     ['gone', 'completed', '', 'gone', true],
   ])
   // The group is UNREAD only: a pending fact on a row-less session is not an
-  // offline-unread item (R14 criterion is about unread; the pending surface
+  // offline-unread item (the criterion is about unread; the pending surface
   // remains row-bound until its own design says otherwise).
   const pendingOnly = server('r1', [], {
     stale: true,

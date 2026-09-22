@@ -1,16 +1,14 @@
 /**
  * pnpm launcher resolution for the desktop main process (design 21 §6.3 /
- * design 23 D2 fix).
+ * design 23).
  *
- * The defect: the local folder-plugin materialize path spawned `pnpm.cmd`
- * directly on Windows, through a supervisor that passes NO `shell` option.
- * Node >=18.20.2/20.12.2 refuses to spawn `.cmd`/`.bat` without a shell
- * (CVE-2024-27980 hardening, EINVAL), so `pnpm pack` failed on every Windows
- * run. The launcher therefore never names a `.cmd`: on win32 the pnpm SCRIPT
- * entry (`pnpm.cjs` — the bundled extraResources copy, else a dev/installer
- * copy) runs through the current node/Electron binary, the same
+ * The launcher never names a `.cmd`: Node >=18.20.2/20.12.2 refuses to spawn
+ * `.cmd`/`.bat` without a `shell` option (CVE-2024-27980 hardening, EINVAL),
+ * and the direct-spawn supervisor passes none. On win32 the pnpm SCRIPT entry
+ * (`pnpm.cjs` — the bundled extraResources copy, else a dev/installer copy)
+ * therefore runs through the current node/Electron binary, the same
  * `[process.execPath, pnpm.cjs]` shape main.ts injects into the runtime
- * installer; POSIX keeps the bare `pnpm` name (PATH lookup, unchanged).
+ * installer; POSIX keeps the bare `pnpm` name (PATH lookup).
  *
  * Pure module (no fs, no electron): every existence probe stays the caller's,
  * so the command/args shape is unit-testable per platform on every CI leg.
@@ -43,7 +41,7 @@ function dirnameFor(platform: NodeJS.Platform, path: string): string {
 /**
  * Resolve the pnpm launcher for a DIRECT spawn (no shell).
  *
- * POSIX: the bare `pnpm` name, exactly as before. win32: `execPath` + the
+ * POSIX: the bare `pnpm` name. win32: `execPath` + the
  * pnpm.cjs script entry, or null when no script entry exists — the caller then
  * fails loud instead of falling back to the `pnpm.cmd` shim Node refuses.
  * `electron` adds ELECTRON_RUN_AS_NODE=1 so the Electron main binary executes

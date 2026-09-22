@@ -1,7 +1,7 @@
 /**
- * Sidebar collapse geometry and pointer-followed scrollbars (extracted
- * verbatim from SidebarRoot, 2026-12 split): the wide-content settle timer,
- * the frozen-width fade refs and the cached column-rect linger machine.
+ * Sidebar collapse geometry and pointer-followed scrollbars: the wide-content
+ * settle timer, the frozen-width fade refs and the cached column-rect linger
+ * machine.
  */
 
 import { useEffect, useRef, useState } from 'react'

@@ -1,5 +1,5 @@
 /**
- * B7 closure metrics (refactor plan section 3, node B7).
+ * B7 closure metrics.
  *
  * The refactor's acceptance criteria are structural, so they need to be MEASURED
  * from the tree rather than recalled: the lifecycle module sizes, the threshold
@@ -20,8 +20,8 @@
  * then reports.
  *
  * The snapshot is a RECORD, not a gate: it is the 'before' column of the B7 table.
- * It deliberately does not fail a build by itself - the plan's discipline is that
- * a net decrease is reviewed, not automatically enforced, because SHRINK_COMMIT_PATHS
+ * It deliberately does not fail a build by itself - a net decrease is reviewed,
+ * not automatically enforced, because SHRINK_COMMIT_PATHS
  * nodes may legitimately grow mid-node.
  */
 import { execFileSync } from 'node:child_process'
@@ -274,7 +274,7 @@ export function diffMetrics(before, after) {
   return lines.join('\n')
 }
 
-/** Lines of a file at the pre-refactor commit (HEAD). Read-only git, as the plan allows. */
+/** Lines of a file at the pre-refactor commit (HEAD). Read-only git. */
 function headLines(path) {
   const out = execFileSync('git', ['show', 'HEAD:' + path], { cwd: REPO_ROOT, encoding: 'utf8' })
   // `wc -l` counts newline-terminated lines; a trailing newline means split() yields one
@@ -323,9 +323,9 @@ function compare() {
     '  ' + String(appAfter - appBefore).padStart(5) + '  packages/renderer/src/App.tsx')
   console.log('  App.tsx lifecycle marker hits: 115 -> ' + String(after.appLifecycleMarkerHits))
   // B7: the objective names "App.tsx 与 MWC 行数", so the shell's own sizes belong in this
-  // table too - the refactor changed the shell's decision sites (LoadState/CarrierDecision
-  // mirrors, the probe-failure path, the give-up gate), and marker hits alone cannot show
-  // whether that grew the files.
+  // table too - marker hits alone cannot show whether the shell's decision sites
+  // (LoadState/CarrierDecision mirrors, the probe-failure path, the give-up gate)
+  // grew the files.
   const SWIFT_SHELL = [
     'macos/Sources/DSHChamber/MainWindowController.swift',
     'macos/Sources/DSHChamber/RendererRecovery.swift',

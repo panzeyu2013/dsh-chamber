@@ -4,7 +4,7 @@
  * on disk while the aggregate command stays green with less coverage than it
  * claims.
  *
- * Why the check is shaped this way (2026-12 pre-flight findings):
+ * Why the check is shaped this way:
  * - Scope is the owning package, plus the root manifest. A package's test file
  *   may legitimately be wired by the root manifest (`packages/control-plane/
  *   test/smoke.test.ts` is the root `smoke` script), so root references count
@@ -53,8 +53,8 @@ export const SWIFT_TEST_FILE_PATTERN = /\.swift$/u
 export const SWIFT_TEST_FUNC_PATTERN = /\bfunc\s+test[A-Za-z0-9_]*\s*\(/u
 
 /**
- * Test files intentionally kept out of every script, each with the reason a
- * reviewer accepted. Adding an entry requires the same justification a reader
+ * Test files intentionally kept out of every script, each with the reason for
+ * the exemption. Adding an entry requires the same justification a reader
  * would need to trust the gate stays meaningful.
  * @type {readonly { path: string, reason: string }[]}
  */
@@ -339,9 +339,8 @@ export function findUnwiredTests({ testFiles, evidence, allowlist = UNWIRED_ALLO
  * A manifest groups its files under a top-level `'name': [` key, and a JavaScript
  * object literal keeps the LAST value of a repeated key: a path listed under an
  * earlier duplicate never runs while `wiringEvidence` still matches its text, so
- * the gate would report it as wired. The sidebar's placeholder `'visual-lock': []`
- * silently shadowed a real source lock exactly that way (2026-12). Unique keys are
- * what make the text-match verdict trustworthy.
+ * the gate would report it as wired. Unique keys are what make the text-match
+ * verdict trustworthy.
  * @param {string} source - manifest source text.
  * @returns {string[]} keys declared more than once, in first-seen order.
  */

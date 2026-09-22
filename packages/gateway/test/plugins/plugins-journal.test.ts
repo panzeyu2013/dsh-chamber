@@ -1,6 +1,6 @@
 /**
- * plugins-journal tests (design 21 §6.3 write order + journal hygiene; plan
- * Phase 4.2). Plain node:test over tmp dirs; no toolchain.
+ * plugins-journal tests (design 21 §6.3 write order + journal hygiene).
+ * Plain node:test over tmp dirs; no toolchain.
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -60,14 +60,12 @@ test('appendPending records durable pending ops; recent is newest-first and pers
   assert.equal(recent[0]!.kind, 'materialize')
   assert.equal(recent[0]!.spec, 'file:/tmp/pkg-c.tgz')
   // The declared version must round-trip: the generation judgement (R2) reads it
-  // and the deferred drain re-submits it (2026-12 review).
+  // and the deferred drain re-submits it.
   assert.equal(recent[0]!.version, '1.2.3')
   assert.equal(recent[1]!.version, undefined)
   assert.equal(recent[2]!.initiator, 'test-desktop')
   assert.equal(recent[2]!.spec, 'pkg-a@^1.0.0')
   assert.equal(journal.recent(2).length, 2)
-  // (journal.latestFailed() was removed as a zero-consumer API, 2026-12 audit
-  // F6; the same fact is asserted through the surviving projection.)
   assert.equal(journal.recent().some(op => op.status === 'failed'), false)
 
   if (posix) {
@@ -294,8 +292,8 @@ test('a corrupt journal is distinguishable from an empty one and never lets a pr
   writeFileSync(join(preImage, 'package.json'), '{"name":"web","version":"0.0.0"}', 'utf8')
 
   // A torn write / damaged disk leaves unparsable bytes where the op records
-  // live. Before this fix the journal answered [] — indistinguishable from an
-  // empty journal — and the next pruneAndClean collected the lost preImage.
+  // live; the journal must never answer [] — indistinguishable from an
+  // empty journal — or the next pruneAndClean would collect the lost preImage.
   const filePath = journalFilePath(stateDir)
   const truncated = readFileSync(filePath, 'utf8').slice(0, 40)
   writeFileSync(filePath, truncated, 'utf8')

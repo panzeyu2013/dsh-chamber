@@ -1,5 +1,5 @@
 /**
- * SemVer 2.0 precedence —— renderer 内的单一实现（2026-12 阶段 2 单源化）。
+ * SemVer 2.0 precedence —— renderer 内的单一实现。
  *
  * 口径（与 dsh-runtime / gateway 的镜像实现按同一套语义对齐；跨包不共享代码）：
  *   - 非法输入返回 null（调用方自行决定「不可比」的呈现），绝不臆造序；
@@ -7,7 +7,7 @@
  *   - prerelease 方向按规范：有 prerelease < 无 prerelease；公共前缀后标识符多者更大；
  *     数字标识符按数值比较、数字标识符 < 非数字标识符、其余按 ASCII 字典序。
  *
- * 已知跨包分叉（登记，不在本批修）：packages/dsh-runtime/src/registry-metadata.ts 的
+ * 已知跨包分叉：packages/dsh-runtime/src/registry-metadata.ts 的
  * compareVersionsDesc 用 split(/[.-]/) 比较且未剥离 build metadata，同一版本集的
  * 「最新」结论可能与这里不同；renderer 侧以本模块为唯一口径。
  */

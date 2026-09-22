@@ -3,18 +3,16 @@
  * UI-free projection helpers for one instance's plugin-graph load outcome.
  * Split from plugin-diagnostic.tsx so the plain-node test suite (which cannot
  * execute .tsx or CSS modules) can cover the state → tone/text decision —
- * mirroring the plugin-diff.ts split (plan 24 D5-A merged the former
- * PluginSyncModal/PluginInventoryView split into PluginDialog).
+ * the same split as plugin-diff.ts (plan 24 D5-A).
  */
 
 import type { SettingsConnectionsKey } from '../locales.ts'
 // The settled-boot gap vocabulary is OWNED by the sidebar's shared bridge
 // contract (next to PluginGraphDiagnostic): this package imports the TYPE, not a
-// copy of the union (P4-4 — the specifier resolves to the real sidebar source
-// through the root tsconfig paths). The payload extraction (bootGapShape) is the
-// same shared face's implementation (2026-12 single-sourcing pass), so this file
-// now has ONE runtime dependency on that pure module — the same shape
-// managed-restart.ts already has.
+// copy of the union (the specifier resolves to the real sidebar source through
+// the root tsconfig paths). The payload extraction (bootGapShape) is the same
+// shared face's implementation, so this file has ONE runtime dependency on that
+// pure module — the same shape managed-restart.ts has.
 import { bootGapShape, type ServerBootGap } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
 
 export type { ServerBootGap }
@@ -27,7 +25,7 @@ export interface PluginDiagnostic {
 }
 
 /**
- * Localized text for a settled-boot GAP (2026-12, design 05 §4 「降级呈现」).
+ * Localized text for a settled-boot GAP (design 05 §4 「降级呈现」).
  *
  * A SEPARATE fact from {@link PluginDiagnostic}: that diagnostic describes the
  * host boot-GRAPH channel — its `ok` is legitimate when the graph was fetched
@@ -50,9 +48,9 @@ export function bootGapText(
 ): string {
   // Payload extraction is the shared projection (sidebar shared/boot-gap-shape.ts):
   // the exhaustiveness now lives there, and this switch maps the shape onto the
-  // connections dictionary. 2026-12 FIX 6: the LOCAL instance's missing graph
-  // endpoint is a chamber-side installation/seed fact; its own sentence never
-  // advises a runtime upgrade.
+  // connections dictionary. The LOCAL instance's missing graph endpoint is a
+  // chamber-side installation/seed fact; its own sentence never advises a
+  // runtime upgrade.
   const shape = bootGapShape(gap)
   switch (shape.key) {
     case 'graph-unavailable':

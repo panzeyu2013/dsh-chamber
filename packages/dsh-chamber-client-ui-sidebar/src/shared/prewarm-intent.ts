@@ -1,6 +1,6 @@
 /**
- * Source-header hover PREWARM intent (plan R8 / W3-c, notes
- * switch-experience-blueprint.md §4): a dwell machine that reports "the user
+ * Source-header hover PREWARM intent: a
+ * dwell machine that reports "the user
  * is deliberately heading for this source" so the App can re-order its
  * EXISTING single prewarm slot — it never opens a card and never takes a slot.
  *
@@ -35,7 +35,7 @@
  * prewarm-intent.test.ts).
  */
 
-/** Dwell before a hover reports prewarm intent (plan R8: 120ms). */
+/** Dwell before a hover reports prewarm intent (120ms). */
 export const INTENT_DWELL_MS = 120
 
 /**
@@ -156,19 +156,17 @@ export function createPrewarmIntent(options: PrewarmIntentOptions): PrewarmInten
 /**
  * Intent boots per page session. A hover may re-order the ONE existing
  * background slot, but every boot can create one remote blank session (the
- * official initial navigation, design 06 §5), so the signal is billed
- * (switch blueprint §4.4).
+ * official initial navigation, design 06 §5), so the signal is billed.
  */
 export const INTENT_PREWARM_MAX_PER_SESSION = 2
 
 /**
  * Minimum gap between two intent boots. Queue re-ordering is free; only a boot
- * that actually starts is billed, and two billed boots must not land together
- * (switch blueprint §4.4).
+ * that actually starts is billed, and two billed boots must not land together.
  */
 export const INTENT_PREWARM_COOLDOWN_MS = 60_000
 
-/** One intent boot per source per session (switch blueprint §4.4). */
+/** One intent boot per source per session. */
 export const INTENT_PREWARM_PER_SOURCE = 1
 
 /** Billing ledger for intent-caused boots (renderer-local, never persisted). */

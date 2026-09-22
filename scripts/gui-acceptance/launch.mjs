@@ -9,8 +9,7 @@
  *
  * PIPE DISCIPLINE: the child's stdout/stderr go to a FILE, never to pipes. The
  * launcher exits immediately, and an inherited pipe closes under the child — the
- * Electron main process then aborts with SIGABRT before the window opens (found
- * the hard way while writing this toolbox).
+ * Electron main process then aborts with SIGABRT before the window opens.
  */
 import { execFileSync, spawn } from 'node:child_process'
 import { closeSync, existsSync, mkdirSync, openSync } from 'node:fs'
@@ -142,7 +141,7 @@ export async function launchDevInstance({ outDir = '.tmp/gui-acceptance', cpPort
    * Shutdown order matters: ask the app to STOP its managed instance first (the
    * control plane's own DELETE /api/connections/local), because the instance is
    * a grandchild the process-group kill does not reach — it would survive as an
-   * orphan holding the dsh port (observed, and cleaned by hand the first time).
+   * orphan holding the dsh port.
    * The port sweep is the belt to that braces, scoped to our own vendor tree.
    */
   const stop = async () => {

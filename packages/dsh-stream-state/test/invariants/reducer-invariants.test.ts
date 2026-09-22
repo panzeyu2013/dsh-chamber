@@ -1,5 +1,5 @@
 /**
- * Implementation-independent invariants (refactor plan section 4.3).
+ * Implementation-independent invariants.
  *
  * These are the gates every Phase B node is checked against. They hold for ANY
  * event sequence, so the suite drives a deterministic sweep instead of

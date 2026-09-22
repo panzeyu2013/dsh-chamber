@@ -96,9 +96,9 @@ export interface TransportInstanceInput {
   remoteDshHome?: string | null
   /** transport='http' only: true = plaintext http origin (default false =
    * https). Non-secret, and not part of the credential-target comparison: an
-   * http↔https switch keeps the target's credentials (design 17 §9.1, D3). */
+   * http↔https switch keeps the target's credentials (design 17 §9.1). */
   insecureHttp?: boolean
-  /** transport='http' gateway targets only (S23): optional SPKI certificate
+  /** transport='http' gateway targets only: optional SPKI certificate
    * pin — hex sha256 of the peer certificate's SPKI DER, format
    * `^[0-9a-fA-F]{64}$` (validateSpec refuses anything else). https-only:
    * the pin makes the peer's public key the connection's trust anchor, so an
@@ -121,7 +121,6 @@ export interface TransportInstanceSpec {
   transport: TransportMethod
   host: string
   user: string | null
-  /** SSH daemon port; null = ssh default (22 or the host's ~/.ssh/config Port). */
   sshPort: number | null
   /** The remote dsh web profile port on 127.0.0.1 / the host (the tunnel destination). */
   remotePort: number
@@ -133,7 +132,7 @@ export interface TransportInstanceSpec {
    * https). Non-secret, normalized required. Excluded from the credential-
    * target comparison (http↔https keeps credentials, design 17 §9.1). */
   insecureHttp: boolean
-  /** transport='http' gateway targets only (S23): optional SPKI certificate
+  /** transport='http' gateway targets only: optional SPKI certificate
    * pin (hex sha256 of the peer cert's SPKI DER); absent = no pinning. See
    * TransportInstanceInput.spkiPin. Non-secret, normalized optional. */
   spkiPin?: string
@@ -166,8 +165,7 @@ export function canonicalizeTransportInstanceInput(entry: unknown): unknown {
 }
 
 /** Best-effort signal to a spawned child (shared by the transport manager's
- *  kill/escalation paths and the ssh provider's teardown; the two former
- *  byte-identical local copies were unified here — dedupe audit N7). */
+ *  kill/escalation paths and the ssh provider's teardown). */
 export function signalChild(child: SpawnedProcess | null, signal: NodeJS.Signals) {
   if (child === null) return
   try {
@@ -198,8 +196,7 @@ export interface TransportStatusProjection {
   requiresUserAction: boolean
   /**
    * Class of the terminal failure behind `requiresUserAction === true`, so
-   * the UI never conflates the two very different repair surfaces
-   * (2026-08 UI misdirection fix):
+   * the UI never conflates the two very different repair surfaces:
    * - 'auth' — transport/credential-level terminal failure (SSH auth, host
    *   key, spawn): the TRANSPORT itself is broken; the user must fix
    *   credentials/host key.
@@ -311,8 +308,8 @@ export interface StderrClassification {
 export type TransportExecAction = 'start' | 'stop' | 'restart' | 'is-active' | 'run'
 
 /** The `run`-channel remote command whitelist (design 13 §4.1). Single source
- *  of truth — plugin-sync's contract A types import this instead of copying
- *  (the copy used to drift). The union equals the EXECUTABLE set enforced by
+ *  of truth — plugin-sync's contract A types import this instead of copying.
+ *  The union equals the EXECUTABLE set enforced by
  *  buildRemoteExecArgv (ssh-provider.ts): 'base64'/'mkdir' are NOT exec
  *  commands — write-file builds them internally into its remote shell
  *  template — so they are deliberately absent here. */

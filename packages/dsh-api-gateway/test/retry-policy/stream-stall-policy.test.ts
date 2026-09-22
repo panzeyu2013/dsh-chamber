@@ -1,5 +1,5 @@
 /**
- * Silence-watchdog truth table (chamber fork patch, design 14 §D4, 2026-09).
+ * Silence-watchdog truth table (chamber fork patch, design 14 §D4).
  *
  * The contract this pins: the watchdog only ever says `'probe'` — a read-only
  * sibling follow — and never a blind restart, because legal silence (TTFT,

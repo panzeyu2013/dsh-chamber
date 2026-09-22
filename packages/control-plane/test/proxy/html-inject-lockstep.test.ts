@@ -1,10 +1,10 @@
 /**
- * S0 injection-budget pin (B-6e): MAX_HTML_INJECTION_BYTES is the single
+ * S0 injection-budget pin: MAX_HTML_INJECTION_BYTES is the single
  * source of truth for the 64 KiB HTML-trust-injection budget. The gateway's
- * html-inject.ts no longer carries a twin constant — it consumes this export
+ * html-inject.ts consumes this export
  * through its @dsh-chamber/control-plane dependency and re-exports it as
- * HTML_INJECT_MAX_BYTES for gateway tests. With the twin gone there is no
- * cross-package equality to lockstep; the test's remaining value is pinning
+ * HTML_INJECT_MAX_BYTES for gateway tests, so there is no
+ * cross-package equality to lockstep; the test pins
  * the shared budget constant itself.
  */
 

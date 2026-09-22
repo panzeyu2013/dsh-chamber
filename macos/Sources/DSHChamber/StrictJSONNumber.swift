@@ -2,14 +2,12 @@
 //  StrictJSONNumber.swift
 //  DSHChamber
 //
-//  严格 JSON 数值/布尔取值（2026-12 单源化）。
+//  严格 JSON 数值/布尔取值。
 //
 //  背景：WebKit / JSONSerialization 把 JSON 数字桥接为 NSNumber，而 NSNumber
 //  同时承载 Int64 / Int32 / Double / CFBoolean 多种存储——`as? Bool` 与
-//  `as? Int` 都会误判（实测 NSNumber(1) as? Bool == true）。原实现分散在
-//  FrameCodec.intValue / BridgeClient.exactInt64 / MessageHandler.exactInt /
-//  StartupSettings.isBoolean / FrameCodec.boolValue 五处，各自复述同一组
-//  CFTypeID + CFNumberIsFloatType + -2^63 边界；本类型是那组判定的唯一实现。
+//  `as? Int` 都会误判（实测 NSNumber(1) as? Bool == true）。
+//  本类型是这组判定的唯一实现。
 //
 //  「哪种整数域」由调用方显式选择（IntDomain）——A 桥 envelope id 用 JS 精确
 //  整数域（±2^53），B 桥帧 id / 出站 edgeId 用 Swift Int64 精确域；两者对
@@ -20,7 +18,6 @@
 
 import Foundation
 
-/// 严格 JSON 数值/布尔取值。
 public enum StrictJSONNumber {
 
     /// 浮点存储（CFNumberIsFloatType == true）的整数域。

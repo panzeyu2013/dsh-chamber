@@ -4,10 +4,7 @@
  * per-entry mount decorator (`locale-ownership.ts`) driven by a fake entry
  * context and a stand-in vendor locale plugin.
  *
- * This is the single page-language spec (the injected-host spec was retired in
- * the second trim round; its unique wiring locks moved here, its state-machine
- * cases are the end-to-end cases below and its pure-rule cases are restored
- * below): it proves that the
+ * This is the single page-language spec: it proves that the
  * decorator runs the ownership hook after the vendor body, that the hook reads
  * the faces it claims to read, and that a background entry's write is restored
  * in the same synchronous task. Here the real modules run: `withLocaleOwnership` wraps a stand-in plugin
@@ -17,9 +14,9 @@
  * `page-read-path-lockstep.test.ts` uses for `fetch`.
  *
  * The stub observer DELIVERS its records (a microtask, like the real one), so
- * the unowned cases below pin the production truth the 2026-12 reviews asked
- * for: an unowned shell's write is reverted by the page backstop before paint
- * while its language is never adopted. Every assertion BEFORE an `await` pins
+ * the unowned cases below pin the production truth: an unowned shell's write is
+ * reverted by the page backstop before paint while its language is never
+ * adopted. Every assertion BEFORE an `await` pins
  * the stronger guarantee the per-entry hook provides — a write reverted in the
  * same synchronous task, with no backstop involved.
  *
@@ -370,7 +367,7 @@ test('the stubbed document really is the page the owner reads (guard against a v
   assert.equal(documentLanguage(doc), 'zh-CN')
 })
 
-// ── Wiring locks (source text; moved from the retired page-language.test.ts) ─
+// ── Wiring locks (source text) ──────────────────────────────────────────────
 //
 // main.tsx renders, App.tsx renders, and chamber-entry.ts boots the whole
 // shell, so none of them can be imported by a plain `node test/…` run; the
@@ -454,9 +451,9 @@ test('the composite decorates the vendor locale mount with the ownership hook', 
   )
 })
 
-// ── The pure rule (restored: the injected-host spec's projection table and the
-// document-language tag contract; the owner cases above drive the same rule end
-// to end, but no shell case can reach the "no on-screen source published" arm).
+// ── The pure rule: the projection table and the document-language tag contract;
+// the owner cases above drive the same rule end to end, but no shell case can
+// reach the "no on-screen source published" arm.
 
 test('locale ids map to the language tags the vendor service writes, and the frame resolves them back', () => {
   assert.equal(documentLanguageFor('zh'), 'zh-CN')

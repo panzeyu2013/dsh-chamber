@@ -1,7 +1,7 @@
 /**
- * Gateway runtime disk projection (2026-12 audit F2 split): the 30 s TTL cache
- * plus the coalesced async tree walk, moved out of runtime-manager.ts
- * unchanged. The manager holds one instance; invalidate() is the disk half of
+ * Gateway runtime disk projection: the 30 s TTL cache
+ * plus the coalesced async tree walk.
+ * The manager holds one instance; invalidate() is the disk half of
  * its invalidateDiskCache().
  */
 import {
@@ -24,17 +24,17 @@ export function createRuntimeDiskProjection(deps: { baseDir: string; dshHome: st
     usage: RuntimeDiskSummary | null
     error: string | null
   } | null = null
-  // perf T3（2026-09，D8）：磁盘统计走异步单遍遍历（runtimeDiskSummaryAsync，
+  // 磁盘统计走异步单遍遍历（runtimeDiskSummaryAsync，
   // 按批让渡事件循环）+ 节流/单飞。TTL 缓存挡住认证的 3s UI 轮询；冷缓存
   // 与 force 路径经 createCoalescedRefresher 合并并发请求——大 store 下冷
-  // 缓存/安装闸口的多次全树统计不再串行叠加、也绝不冻结网关进程。
-  // A4（2026-09 review）：非 force 冷缓存请求在链在途时**静默 join**（共享
-  // 在途一遍、不置位补跑）——长遍历期间 3s 轮询的持续到达不再驱动补跑到
+  // 缓存/安装闸口的多次全树统计不串行叠加、也绝不冻结网关进程。
+  // 非 force 冷缓存请求在链在途时**静默 join**（共享
+  // 在途一遍、不置位补跑）——长遍历期间 3s 轮询的持续到达不会驱动补跑到
   // cap（消除 ~90s 长尾）；force（安装闸口）保持默认补跑语义，闸口新鲜度
-  // 不变。N3（2026-09 review）陈旧度口径：join 结果的陈旧度 ≤ 在途一遍，
+  // 不变。陈旧度口径：join 结果的陈旧度 ≤ 在途一遍，
   // 但**不等价于** TTL 缓存语义——长遍历（单遍 42s+ 量级）期间 TTL 已过期
   // 的轮询会拿到比 30s TTL 允许窗更旧的在途结果（可超出 TTL 窗）；展示面
-  // 接受此陈旧（A4 定案），写前闸口（force）不走 join、新鲜度不受影响。
+  // 接受此陈旧，写前闸口（force）不走 join、新鲜度不受影响。
   const refreshDiskUsage = createCoalescedRefresher(() => runtimeDiskSummaryAsync(baseDir, dshHome))
   return {
     async projection(force = false) {
@@ -43,7 +43,7 @@ export function createRuntimeDiskProjection(deps: { baseDir: string; dshHome: st
         return { usage: diskCache.usage, error: diskCache.error }
       }
       try {
-        // N3（2026-09 review）：非 force 静默 join（陈旧度口径见上方注释）；
+        // 非 force 静默 join（陈旧度口径见上方注释）；
         // force 安装闸口不传选项、保持默认补跑语义。
         const usage = await refreshDiskUsage(force ? undefined : { rerunOnJoin: false })
         diskCache = { checkedAt: now, usage, error: null }

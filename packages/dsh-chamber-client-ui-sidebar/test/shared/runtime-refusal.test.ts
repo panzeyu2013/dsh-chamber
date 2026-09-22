@@ -2,9 +2,8 @@
  * The shared gateway refusal projection (sidebar shared face) — absolute
  * verdicts, not merely self-consistency.
  *
- * The body matrix is the contract the gateway runtime routes ship; before the
- * 2026-12 single-sourcing pass it lived in the connections parity test and only
- * asserted that two copies agreed. Asserting the expected family/code per body
+ * The body matrix is the contract the gateway runtime routes ship. Asserting
+ * the expected family/code per body — rather than only that two copies agree —
  * means a synchronized regression fails here.
  *
  * Run directly: node packages/dsh-chamber-client-ui-sidebar/test/shared/runtime-refusal.test.ts

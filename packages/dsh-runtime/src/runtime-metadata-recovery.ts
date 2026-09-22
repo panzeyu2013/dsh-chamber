@@ -748,8 +748,8 @@ function writePrivateJson(
 ): void {
   assertContained(runtimeRoot, filePath, 'metadata recovery JSON')
   const parent = dirname(filePath)
-  // Keep the "parent must already exist" precondition of the former local
-  // writer; the shared writer then owns tmp naming, fsync, rename identity
+  // Keep the "parent must already exist" precondition; the shared writer then owns
+  // tmp naming, fsync, rename identity
   // re-verification and parent fsync (single private-fs implementation).
   assertExistingRealDirectory(parent, 'metadata recovery JSON parent')
   atomicWriteRuntimeFileNoFollow(dirname(runtimeRoot), filePath, `${JSON.stringify(payload, null, 2)}\n`, {

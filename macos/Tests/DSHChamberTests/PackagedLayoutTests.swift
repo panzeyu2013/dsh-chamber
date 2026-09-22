@@ -2,9 +2,9 @@
 //  PackagedLayoutTests.swift
 //  DSHChamberTests
 //
-//  三审收口 #1/#2：打包态默认路径解析（node / sidecar / userData 同根 /
+//  打包态默认路径解析（node / sidecar / userData 同根 /
 //  vendor-dsh 工作区）必须是纯函数且可单测——否则「Finder 双击 .app 可用」
-//  只能靠手工 env 复现（一审已登记为 major）。
+//  只能靠手工 env 复现。
 //
 import XCTest
 @testable import DSHChamber
@@ -26,8 +26,8 @@ final class PackagedLayoutTests: XCTestCase {
         XCTAssertFalse(PackagedLayout.isAppBundle(executablePath: ""))
     }
 
-    /// S15：读 macos/scripts/build-swift-app.mjs 的 appLayout 源文本核对，而不是
-    /// 复述路径——脚本改布局而 Swift 常量没跟上时必须红（原测试名不副实）。
+    /// 读 macos/scripts/build-swift-app.mjs 的 appLayout 源文本核对，而不是
+    /// 复述路径——脚本改布局而 Swift 常量没跟上时必须红。
     func testLayoutPathsMatchBuildScript() throws {
         let script = try String(
             contentsOf: repoRoot().appendingPathComponent("macos/scripts/build-swift-app.mjs"),
@@ -50,7 +50,7 @@ final class PackagedLayoutTests: XCTestCase {
                        "/Users/tester/Library/Application Support/@dsh-chamber/desktop")
     }
 
-    /// S4：node 解析不再有「另一个 app 的 Electron 二进制」fail-open 缺省——
+    /// node 解析不得有「另一个 app 的 Electron 二进制」fail-open 缺省——
     /// 每一层都要求可执行，否则抛精确错误（调用方 fatalStartup）。
     func testResolveNode() {
         let bundled = resources + "/sidecar/node"
@@ -92,7 +92,7 @@ final class PackagedLayoutTests: XCTestCase {
         }
     }
 
-    /// dev PATH node 解析（S4 纯函数面）。
+    /// dev PATH node 解析（纯函数面）。
     func testResolvePathNode() {
         XCTAssertEqual(PackagedLayout.resolvePathNode(
             env: ["PATH": "/a:/b"], isExecutable: { $0 == "/b/node" }), "/b/node")
@@ -113,7 +113,7 @@ final class PackagedLayoutTests: XCTestCase {
             env: [:], resourcesDir: resources, isPackaged: true, exists: exists), bundled)
         XCTAssertNil(PackagedLayout.resolveSidecar(
             env: [:], resourcesDir: resources, isPackaged: true, exists: { _ in false }))
-        // dev 态返回 nil，调用方回退向上查找 sidecar-entry.ts（S12）
+        // dev 态返回 nil，调用方回退向上查找 sidecar-entry.ts
         XCTAssertNil(PackagedLayout.resolveSidecar(
             env: [:], resourcesDir: resources, isPackaged: false, exists: exists))
     }
@@ -148,9 +148,8 @@ final class PackagedLayoutTests: XCTestCase {
             env: [:], resourcesDir: resources, isPackaged: false, exists: exists))
     }
 
-    /// P-13：`packages/desktop/sidecar-ctx.ts` 的七个具名打包布局助手是 Swift
-    /// 装配腿的真正对侧。登记表（P-13）曾声称本文件已有该锁步锚点，实际只锁了
-    /// build-swift-app.mjs 的布局形状——本用例补上缺失的一侧：解析 TS 源文本断言
+    /// `packages/desktop/sidecar-ctx.ts` 的七个具名打包布局助手是 Swift
+    /// 装配腿的真正对侧：本用例解析 TS 源文本断言
     /// 助手名与路径拼写，并核对 Swift/脚本消费点。任一侧改名或改拼写即红。
     ///
     /// 七个助手（sidecar-ctx.ts）：
@@ -220,7 +219,7 @@ final class PackagedLayoutTests: XCTestCase {
 
     /// 资源查找候选：打包态扁平资源包 → swiftbuild（Swift 6.4+ 默认后端）的
     /// `Contents/Resources` 形态 → 平铺。少一个候选，dev `swift run`（或任何未经
-    /// 装配归一化的形态）就会找不到桥 shim（2026-09 Xcode 27 实测）。
+    /// 装配归一化的形态）就会找不到桥 shim（Xcode 27 实测）。
     func testChamberResourceCandidatesCoverBothSwiftPMLayouts() {
         let candidates = ChamberResources.candidateURLs(
             in: URL(fileURLWithPath: resources), name: "bridge-shim.js")

@@ -1,9 +1,8 @@
 /**
- * Managed-profile installed-plugin read projection tests (design 21 §6.2 —
- * A0 read surface, plan Phase 3a): the pure gateway read module
- * (plugins-installed.ts) plus the GET /chamber/plugins/installed route
- * (routes.ts) — absent/corrupt/mask/profileExists/bundles submatrix plus the
- * route method discipline. Desktop IPC/UI land in later sub-steps.
+ * Managed-profile installed-plugin read projection tests (design 21 §6.2):
+ * the pure gateway read module (plugins-installed.ts) plus the GET
+ * /chamber/plugins/installed route (routes.ts) — absent/corrupt/mask/
+ * profileExists/bundles submatrix plus the route method discipline.
  *
  * Run directly: node packages/gateway/test/chamber-surface/chamber-installed.test.ts
  */
@@ -33,7 +32,7 @@ import { createChamberSurface } from '../../src/routes.ts'
 import { stubPluginTasks } from '../support/utils.ts'
 import { handleChamberSurface, makeChamberSurfaceHarness, surfaceSilentLogger } from '../support/chamber-surface-harness.ts'
 
-// Shared harness (2026-12 audit F40): only the logger default remains local.
+// Shared harness: only the logger default remains local.
 const logger = surfaceSilentLogger
 
 /** Read the module projection directly (pure-module tests). */
@@ -150,9 +149,9 @@ test('installed read: non-object manifest (array / null / primitive) → profile
 })
 
 test('installed read: a DECLARED baseline name still classifies + stays protected', t => {
-  // B₀/S no longer create rows (2026-09 row-set revision), but when a profile
-  // itself declares such a name the backend classification and the protected
-  // flag still apply — the row renders read-only in the dialog.
+  // B₀/S create no rows by themselves, but when a profile itself declares such
+  // a name the backend classification and the protected flag still apply — the
+  // row renders read-only in the dialog.
   const seed = CHAMBER_HOST_PACKAGES[0].insert.name
   const stateDir = scratch(t)
   writeManifest(stateDir, JSON.stringify({
@@ -187,14 +186,14 @@ test('installed read: oversized manifest (> 1 MiB) → profile_corrupt; exact bo
 })
 
 /** B₀ (installation-owned composition) and S (chamber seeds) are CLASSIFIERS
- *  only (design 21 §6.11.5, 2026-09 row-set revision): the projection lists one
+ *  only (design 21 §6.11.5): the projection lists one
  *  row per declared dependency, so a baseline composition member or a seed
  *  shows up only when the profile itself declares it. */
 const rowShape = (rows: readonly { name: string; role: string; protected: boolean }[]): string[] =>
   rows.map(row => `${row.name}:${row.role}:${row.protected}`)
 
 /** Split a projection into `rows` + the rest, asserting both (the manifest
- *  fields keep their exact historical meaning — `rows` is additive). */
+ *  fields keep their exact meaning — `rows` is additive). */
 function assertProjection(
   projection: { ok: true; rows: readonly { name: string; role: string; protected: boolean }[] } & Record<string, unknown>,
   expectedRest: Record<string, unknown>,
@@ -220,7 +219,7 @@ test('installed read: valid minimal manifest → masked passthrough projection',
       bundles: ['b'],
       profileExists: true,
       // `b` is listed in the live bundles but is NOT a dependency ⇒ no row: the
-      // installed list is the profile's own plugin set (2026-09 row-set revision).
+      // installed list is the profile's own plugin set.
     }, ['a:third-party:false'])
   }
 })
@@ -296,8 +295,7 @@ test('installed read: bundles keeps only string members', t => {
 })
 
 // ---------------------------------------------------------------------------
-// Mask / layout lockstep (desktop plugin-sync.ts parity — drift guards until
-// the shared whitelist module lands in Phase 4.3)
+// Mask / layout lockstep (desktop plugin-sync.ts parity — drift guards)
 // ---------------------------------------------------------------------------
 
 /** The desktop manifest/whitelist twin source (packages/desktop/plugin-sync.ts)
@@ -310,9 +308,9 @@ function desktopPluginSyncSource(): string {
 }
 
 test('MATERIALIZED_VALUE_MASK is the SHARED control-plane constant on both sides', () => {
-  // The literal was centralized into control-plane protected-plugins.ts for the
-  // protected-set work (design 21 §6.2/§6.11.5): neither side may hardcode its
-  // own copy again — the gateway's export and the desktop's export must both
+  // The literal lives in control-plane protected-plugins.ts for the
+  // protected-set (design 21 §6.2/§6.11.5): neither side may hardcode its
+  // own copy — the gateway's export and the desktop's export must both
   // resolve to PLUGIN_MATERIALIZED_VALUE_MASK.
   assert.equal(MATERIALIZED_VALUE_MASK, PLUGIN_MATERIALIZED_VALUE_MASK)
   assert.equal(PLUGIN_MATERIALIZED_VALUE_MASK, 'file:<hidden>')
@@ -382,8 +380,8 @@ test('route: non-GET methods on /chamber/plugins/installed → 405', async t => 
 })
 
 // ---------------------------------------------------------------------------
-// Route level: the shared read/write fence (design 21 §6.2 读与写面共享栅栏,
-// C-F8) — the read consults the A1 write surface's in-flight state and answers
+// Route level: the shared read/write fence (design 21 §6.2 读与写面共享栅栏)
+// — the read consults the A1 write surface's in-flight state and answers
 // the lease family's retryable 409 instead of publishing a stale/torn
 // projection.
 // ---------------------------------------------------------------------------

@@ -1,5 +1,5 @@
 /**
- * W6 无壳观察者锁（里程碑 W6；`notes/remote-state-w0-protocol.md` §3/§4）。
+ * 无壳观察者锁。
  *
  * 钉死四件事：① 开场帧精确（只开 $events）；② **永不发 $events/result**（瀑布只观察——
  * 回答会把等待中的审批替所有客户端结算掉）；③ 每条 true→false 边沿**恰好一次**
@@ -110,8 +110,8 @@ test('one true->false edge opens exactly one follow and completed arms the row',
   const last = snapshots.at(-1) as { rows: Record<string, Record<string, unknown>> }
   const row = last.rows['s1']
   assert.equal(row?.completedAt, 900)
-  // B5：本 fixture 的 tail 是 legacy 形、没有 host time ⇒ 观察者戳 + reconstructed 降级；
-  // host 时间的 observed 路径由新增的 B5 用例钉住。
+  // 本 fixture 的 tail 是 legacy 形、没有 host time ⇒ 观察者戳 + reconstructed 降级；
+  // host 时间的 observed 路径由下方 B5 用例钉住。
   assert.equal(row?.completedAtSource, 'reconstructed')
   assert.deepEqual(row?.lastTurnEnd, { kind: 'completed' })
   facts.stop()
@@ -148,7 +148,7 @@ test('a user stop and a neutral ending never arm; an unreadable tail degrades an
     assert.equal(row?.completedAt !== null && row?.completedAt !== undefined, expectArmed, label)
     if (tail !== 'FAIL' && tail !== 'EMPTY') assert.deepEqual(row?.lastTurnEnd, tail, label)
     if (tail === 'FAIL' || tail === 'EMPTY') {
-      // 两种「读不到确定性尾巴」都要计数：否则验收分不清「没完成」与「观察者读不到」。
+      // 两种「读不到确定性尾巴」都要计数：否则分不清「没完成」与「观察者读不到」。
       assert.equal(facts.status().followFailures, 1, label + '：读不出尾巴必须计数')
       assert.equal(row?.completedAtDomain, 'observer', label + '：降级戳是观察者域')
       assert.equal(row?.completedAtSource, 'reconstructed', label + '：降级戳不得冒充 observed')
@@ -176,8 +176,8 @@ test('classifyTurnEndWire mirrors the watcher rules, and stop() is idempotent', 
 })
 
 /**
- * 观察者的**失败必须可观测**（2026-12 复审残留）：否则「观察者坏了」与「这段时间没有
- * 完成」在验收上长得一模一样——正是这类假绿让 W6 的判据形同虚设。
+ * 观察者的**失败必须可观测**：否则「观察者坏了」与「这段时间没有
+ * 完成」长得一模一样——正是这类假绿让判据形同虚设。
  */
 test('baseline, follow and socket failures are counted, not swallowed', async () => {
   const sockets: FakeSocket[] = []
@@ -218,7 +218,7 @@ test('reconnect uses an exponential backoff instead of a fixed 1s hammer', async
   facts.stop()
 })
 
-/** 仪器：每个来源的状态可由验收侧读取（函数视图，不产生周期性对象）。 */
+/** 仪器：每个来源的状态可由外部读取（函数视图，不产生周期性对象）。 */
 test('the per-source instrument exposes the live status', () => {
   const host: Record<string, unknown> = {}
   publishSourceMuxInstrument('ssh-d', () => ({ ready: true, edges: 2, lastEventAt: 5, pendingReads: 0, reconnects: 0, baselines: 1, baselineFailures: 0, followFailures: 0, socketErrors: 0 }), host)
@@ -245,12 +245,10 @@ test('a value-less session/list response is an empty baseline, not a crash', asy
 })
 
 /**
- * ── 审计 B 复现锁（2026-12）──────────────────────────────────────────────────
- * 每条用例在修复前必须失败（红），修复后转绿；形状以当前冻结协议
- * (notes/remote-state-w0-protocol.md §3、control-plane/src/session-mux.ts) 为准。
+ * 形状以当前冻结协议 (control-plane/src/session-mux.ts) 为准。
  */
 
-/** B1：$events 开场不重放 status ⇒ 重订阅后的基线是跨缺口完成的唯一证据。 */
+/** $events 开场不重放 status ⇒ 重订阅后的基线是跨缺口完成的唯一证据。 */
 test('B1: a true->false baseline edge after resubscription reads the tail and arms', async () => {
   const sockets: FakeSocket[] = []
   const snapshots: unknown[] = []
@@ -285,7 +283,7 @@ test('B1: a true->false baseline edge after resubscription reads the tail and ar
   }
 })
 
-/** B2：重连/静默重基线不得用空完成字段覆盖已武装的完成。 */
+/** 重连/静默重基线不得用空完成字段覆盖已武装的完成。 */
 test('B2: a re-baseline never clobbers an armed completion', async () => {
   const sockets: FakeSocket[] = []
   const snapshots: unknown[] = []
@@ -325,7 +323,7 @@ test('B2: a re-baseline never clobbers an armed completion', async () => {
   }
 })
 
-/** B3：connect() 换代后，旧 socket 的 onclose 不得再改状态或调度重连。 */
+/** connect() 换代后，旧 socket 的 onclose 不得再改状态或调度重连。 */
 test('B3: a superseded socket cannot reschedule or mutate state', async () => {
   const sockets: FakeSocket[] = []
   const snapshots: unknown[] = []
@@ -363,7 +361,7 @@ test('B3: a superseded socket cannot reschedule or mutate state', async () => {
   }
 })
 
-/** B4：状态事件必须为未知会话建档；added/activity/removed 必须被消费。 */
+/** 状态事件必须为未知会话建档；added/activity/removed 必须被消费。 */
 test('B4: status opens an unknown row; added/activity/removed are handled', async () => {
   const sockets: FakeSocket[] = []
   const snapshots: unknown[] = []
@@ -380,7 +378,7 @@ test('B4: status opens an unknown row; added/activity/removed are handled', asyn
     sockets[0].open()
     await new Promise(resolve => setTimeout(resolve, 5))
     sockets[0].item({ type: 'ready', clientId: 'c' })
-    // 冻结 wire 形：args = [sessionId, running]（W0 §3；对象形是历史/测试形）。
+    // 冻结 wire 形：args = [sessionId, running]（对象形只用于测试）。
     sockets[0].item({ type: 'emit', event: 'api-session/status', args: ['s1', true] })
     sockets[0].item({ type: 'emit', event: 'api-session/status', args: ['s1', false] })
     await new Promise(resolve => setTimeout(resolve, 10))
@@ -410,7 +408,7 @@ test('B4: status opens an unknown row; added/activity/removed are handled', asyn
   }
 })
 
-/** B5：完成时间优先取 host turn/end.time；拿不到时观察者戳必须诚实标 reconstructed。 */
+/** 完成时间优先取 host turn/end.time；拿不到时观察者戳必须诚实标 reconstructed。 */
 test('B5: completedAt prefers the host turn/end time; a client stamp is reconstructed', async () => {
   const HOST_TIME = 1_700_000_000_000
   const run = async (tail: unknown) => {
@@ -457,7 +455,7 @@ test('B5: completedAt prefers the host turn/end time; a client stamp is reconstr
   assert.equal(withoutHost.row?.completedAtDomain, 'observer')
 })
 
-/** B7：半死隧道下 unary 必须按 deadline 失败并计数，不得永久挂起。 */
+/** 半死隧道下 unary 必须按 deadline 失败并计数，不得永久挂起。 */
 test('B7: baseline and follow rpc deadlines surface as failures instead of hanging', async () => {
   const sockets: FakeSocket[] = []
   const facts = createSourceMuxFacts({
@@ -484,7 +482,7 @@ test('B7: baseline and follow rpc deadlines surface as failures instead of hangi
   }
 })
 
-/** B10：stop() 后在途基线不得再 emit。 */
+/** stop() 后在途基线不得再 emit。 */
 test('B10: a baseline resolving after stop() must not emit', async () => {
   const snapshots: unknown[] = []
   let releaseList: (() => void) | null = null
@@ -508,7 +506,7 @@ test('B10: a baseline resolving after stop() must not emit', async () => {
   assert.equal(snapshots.length, beforeStop, 'a baseline landing after stop() must not emit')
 })
 
-/** B10：stop() 必须摘下本源仪器项（否则退役观察者看起来仍在跑）。 */
+/** stop() 必须摘下本源仪器项（否则退役观察者看起来仍在跑）。 */
 test('B10: stop() unpublishes the per-source instrument', () => {
   const facts = createSourceMuxFacts({
     sourceId: 'ssh-b10-instrument', origin: 'http://cp', onSnapshot: () => {},

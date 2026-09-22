@@ -2,12 +2,12 @@
  * Local copy of the vendor `dsh-client-ui-workspace`
  * `indexSubagentDescendants` (ui-workspace/src/client/subagent-lineage.ts).
  *
- * WHY a local copy (migration D5 fallback, docs/tmp-dsh-v012-migration-plan.md
- * M4): the original deep-source import pulled vendor ui-workspace sources into
- * chamber typecheck programs, and those sources do not compile under chamber
- * tsconfigs (see ./directory-browse-error.ts header). The function is a pure,
- * self-contained projection; the sidebar's subagent counts reuse it verbatim
- * (client/index.ts), matching the official ui-workspace tree semantics.
+ * WHY a local copy: a deep-source import would pull vendor ui-workspace
+ * sources into chamber typecheck programs, and those sources do not compile
+ * under chamber tsconfigs (see ./directory-browse-error.ts header). The
+ * function is a pure, self-contained projection; the sidebar's subagent counts
+ * reuse it verbatim (client/index.ts), matching the official ui-workspace tree
+ * semantics.
  */
 
 /** Session id (wire string; kept local to avoid vendor subpath imports). */

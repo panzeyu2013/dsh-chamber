@@ -1,8 +1,8 @@
 /**
  * Gateway login page rendering (design 17 §7.1): the self-contained pre-auth
- * browser surface for `/auth/login`, replacing the minimal LOGIN_PAGE_HTML
- * in dispatch.ts. Pure string builder — zero imports, zero DOM, no runtime
- * dependencies; the page ships inline with the gateway (design 17 §7.1).
+ * browser surface for `/auth/login`. Pure string builder — zero imports,
+ * zero DOM, no runtime dependencies; the page ships inline with the gateway
+ * (design 17 §7.1).
  *
  *   - No scripts (C1): the page CSP never allows script-src, so the output
  *     must never contain a `<script` element; all behavior is browser-native
@@ -26,19 +26,14 @@
  * no scripts, no echoed credentials (there are none), echoed request
  * values are HTML-escaped, and the copy tables stay in sync (en/zh).
  *
- * Appearance (2026-07 user request; 2026-09 restyle): the page follows the
+ * Appearance: the page follows the
  * browser display mode — a `prefers-color-scheme: light` palette override on
  * top of the dark design-token layer — plus autofill styling, focus rings,
  * reduced motion, and mobile viewport handling. Both palettes are sampled
  * from the official `@deepseek-ai/dsh-client-ui-theme` static scales/alias
- * maps (bluish neutrals + deepseek-blue brand/primary — the "dsh blue" look;
- * the earlier GitHub-dark/green palette was replaced 2026-09 per user
- * request). Self-declared so the pre-auth page depends on nothing beyond
+ * maps (bluish neutrals + deepseek-blue brand/primary — the "dsh blue" look).
+ * Self-declared so the pre-auth page depends on nothing beyond
  * this file (C5).
- *
- * NOTE: the design-21 document (docs/design/21-gateway-login-page.md) was
- * removed by user decision after implementation (2026-10). The contract is
- * recorded in CHANGELOG [Unreleased] and the invariants re-stated here.
  */
 
 export interface LoginPageOptions {
@@ -52,22 +47,22 @@ export interface LoginPageOptions {
    * shunted again. Boolean marker only — no free-form return path (no
    * open-redirect surface). */
   desktop?: boolean
-  /** Login-phase background pre-warm (design 17 §10.6, 2026-12 revision):
+  /** Login-phase background pre-warm (design 17 §10.6):
    * the REAL discovered client-bundle URLs (`/plugins/??…`), each rendered
    * as one `<link rel="prefetch" as="script">` inside <head>. No token
    * wrapper and no `?u=` parameter: the URL must stay byte-identical to the
    * one the app's own `<script src>` will request so the HTTP cache entry is
    * shared, and the capability to fetch it pre-auth travels as the short-lived
-   * `dsh_gateway_warmup` cookie set on this response. Absent or empty keeps
-   * the historical output byte-identical (locked by
+   * `dsh_gateway_warmup` cookie set on this response. Absent or empty leaves
+   * the output byte-identical (locked by
    * warmup-login-page.test.ts). Values are HTML-escaped; the page stays
    * script-free. */
   warmupUrls?: readonly string[]
 }
 
 /** Login-page CSP: two sanctioned increments over design 17 §7.1 —
- * `img-src data:` (the inline SVG favicon/brand marks) and, since the
- * login-phase pre-warm (design 17 §10.6), `connect-src 'self'`. The latter is
+ * `img-src data:` (the inline SVG favicon/brand marks) and `connect-src
+ * 'self'` for the login-phase pre-warm (design 17 §10.6). The latter is
  * required because the page's <head> carries one same-origin
  * `<link rel="prefetch" as="script" href="/plugins/??…">` per discovered
  * client bundle: `default-src 'none'` would block the fetch (prefetch falls
@@ -222,7 +217,7 @@ export interface BoundaryErrorPageOptions {
  * native widgets match. Browsers without media-query color-scheme support
  * keep the dark layer.
  *
- * Two namespaces, deliberately kept apart (2026-09 namespace review):
+ * Two namespaces, deliberately kept apart:
  *  - `--dsw-alias-*` — MIRRORS of real upstream aliases, spelled exactly as
  *    ui-theme spells them so the page reads as dsh. Only names the upstream
  *    token sheet actually declares belong here; the pre-auth page has no
@@ -480,7 +475,7 @@ export function renderLoginPage(opts: LoginPageOptions): string {
 
   const body = '  <main class="card">\n' + indentLines(parts.join('\n'), 4) + '\n  </main>'
   // Only the login GET path ever passes warm-up URLs; the boundary/token-only
-  // pages keep the default empty list and therefore the historical bytes.
+  // pages keep the default empty list and therefore the byte-identical output.
   return pageShell(opts.lang, copy.title, body, opts.warmupUrls ?? [])
 }
 

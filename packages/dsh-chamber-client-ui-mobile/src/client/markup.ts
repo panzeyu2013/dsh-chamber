@@ -22,9 +22,9 @@
  * frame, a column shell, or a slot OUTLET mounting inside a resident column
  * shell (two levels under the frame). The predicate below is the pure
  * decision; index.ts wires it to the MutationObserver. The session-header
- * chrome stamping (session-log capsule) was RETIRED at the alpha.2 replay:
- * upstream renders that control as a 28x28 icon button in the header
- * more-actions menu, so the mobile plugin no longer needs to find it by copy.
+ * chrome stamping (session-log capsule) needs no rule: upstream renders that
+ * control as a 28x28 icon button in the header more-actions menu, so the
+ * mobile plugin never needs to find it by copy.
  */
 
 export const ROOT_SLOT_SELECTOR = '[data-slot="root"]'
@@ -104,7 +104,7 @@ export function findColumn(frame: ElementLike, slot: string): ElementLike | null
  * Stamp the frame and columns (idempotent; returns the stamped frame, or null
  * when the frame is not adapted).
  *
- * ALL-OR-NOTHING (2026-09-14): the mobile tier is an adaptation of the
+ * ALL-OR-NOTHING: the mobile tier is an adaptation of the
  * CONVERSATION column, and the stylesheet's grid lock
  * (`grid-template-columns: 0 minmax(0,1fr) 0`) plus the fixed drawer are only
  * sound while that column is also pinned by its own `data-mobile-role`
@@ -137,7 +137,7 @@ export function stampFrame(root: ElementLike): ElementLike | null {
 
 /**
  * Is an added node a structural stamping target? Pure decision for the
- * childList observer (design 17 §18 alpha.2 anchor audit). The stamp set changes
+ * childList observer (design 17 §18). The stamp set changes
  * when any of these mounts:
  *   1. a root slot itself, or a node directly under a root slot (the frame);
  *   2. an already-stamped frame or column re-appearing (remount recovery);
@@ -163,8 +163,8 @@ export function isStructuralTarget(target: StructuralNodeLike | null | undefined
   // root slot / frame / column-role attributes. The bound keeps the streaming
   // filter intact: real chat content mounts under [data-conversation-scroll]
   // at >=6 hops from the frame, so a streaming batch never reaches the frame
-  // within the window. (The four-hop reach dates from the retired session-log
-  // stamping; it stays as cheap headroom for deeper resident shells.)
+  // within the window. (The four-hop reach is cheap headroom for deeper
+  // resident shells.)
   let cursor: StructuralNodeLike | null | undefined = target
   for (let hop = 0; hop <= 4; hop += 1) {
     if (cursor === null || cursor === undefined) return false

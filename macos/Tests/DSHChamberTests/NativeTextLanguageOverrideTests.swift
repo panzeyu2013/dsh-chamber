@@ -2,7 +2,7 @@
 //  NativeTextLanguageOverrideTests.swift
 //  DSHChamberTests
 //
-//  W3 运行期语言覆盖：NativeText.setLanguageOverride 让壳自建文案（菜单/对话框/
+//  运行期语言覆盖：NativeText.setLanguageOverride 让壳自建文案（菜单/对话框/
 //  失败页）随页面语言**即时**跟随——CFBundle 的 preferredLocalizations 是进程
 //  启动期缓存，只写 AppleLanguages 不会让运行期取串换语言，故需要显式 .lproj 覆盖。
 //

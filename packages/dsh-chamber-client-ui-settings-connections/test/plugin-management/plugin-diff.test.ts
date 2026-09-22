@@ -63,7 +63,7 @@ function byKind(result: ReturnType<typeof computePluginDiff>, kind: PluginRowKin
 }
 
 /** The row view of one kind: rows carry their own `kind`, so the categorized
- *  arrays the diff used to pre-compute are derived here instead. */
+ *  arrays are derived here. */
 function rowsOfKind(result: ReturnType<typeof computePluginDiff>, kind: PluginRowKind): PluginRow[] {
   return result.rows.filter(row => row.kind === kind)
 }
@@ -234,7 +234,7 @@ test('classifySpec: pinned/tag specs are registry, paths are materialize, else u
   // x-wildcards are RANGES: the main-process apply path rejects the whole
   // batch as unsyncable (desktop plugin-sync hasXWildcard) — the UI
   // classifier refuses them up front so no row is offered as actionable
-  // (2026 audit R4 parity pin).
+  // (main-process parity pin).
   for (const spec of ['x', '1.x', '1.2.x', '^1.x', '~2.x', 'v1.x']) {
     assert.deepEqual(classifySpec(spec), { type: 'unsyncable', reason: 'x-wildcard version is a range, not a locked version (use an exact version)' }, `${spec} is refused like the main process`)
   }

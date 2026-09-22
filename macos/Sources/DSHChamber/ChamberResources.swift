@@ -2,13 +2,13 @@
 //  ChamberResources.swift
 //  DSHChamber
 //
-//  W-24 修正（打包态资源定位）：SwiftPM 为 `.process(...)` 资源生成的
+//  打包态资源定位：SwiftPM 为 `.process(...)` 资源生成的
 //  `Bundle.module` 访问器只在两处查找资源包——
 //    `Bundle.main.bundleURL/<Target>_<Target>.bundle` 与构建目录；
 //  而 .app 的 `Bundle.main.bundleURL` 是 **.app 根**，把资源包放那里会被
 //  codesign 判为「bundle 根有未密封内容」（实测：
 //  `unsealed contents present in the bundle root`），签名失败。因此打包态
-//  资源包必须落 `Contents/Resources/`，并由本枚举按候选顺序查找（不再用
+//  资源包必须落 `Contents/Resources/`，并由本枚举按候选顺序查找（而非
 //  Bundle.module）：
 //    1. `Bundle.main.resourceURL` —— .app 的 Contents/Resources（打包态正解）；
 //    2. `Bundle.main.bundleURL` —— `swift run` / 扁平可执行（资源包与二进制同目录）；
@@ -71,10 +71,10 @@ public enum ChamberResources {
     }
 }
 
-/// 打包态路径解析（W-24 后续；2026-09 三审收口 #1/#2）。
+/// 打包态路径解析。
 ///
-/// 问题：`AppDelegate` 的缺省值原先全部指向 dev（Electron 二进制当 node、按
-/// CWD 向上找 dev 脚本（现为 `sidecar-entry.ts`）、userData 落
+/// 问题：dev 缺省在打包态不成立（Electron 二进制当 node、按
+/// CWD 向上找 dev 脚本 `sidecar-entry.ts`、userData 落
 /// `dsh-chamber-dev`）——Finder
 /// 双击 `.app`（CWD=/）时找不到自带 sidecar/node，跨 flavor 目录锁也各锁各的
 /// 目录。本枚举把「打包态应使用的路径」收敛为**纯函数**（可单测），由
@@ -86,7 +86,7 @@ public enum ChamberResources {
 /// userData 与 Electron 打包实根同根（design 25 §6.1 的「同根」不变量；双 flavor
 /// 目录锁据此互斥）。
 ///
-/// **实根拼写（2026-09 GUI 验收实测修正）**：Electron `app.getPath('userData')`
+/// **实根拼写**：Electron `app.getPath('userData')`
 /// = appData + `app.getName()`，而 `app.getName()` 只认 package.json 的**顶层**
 /// `productName`，其次 `name`。`packages/desktop/package.json` 的 productName 位于
 /// electron-builder 的 `build.productName`（只影响 .app/DMG 名），顶层没有 →
@@ -127,7 +127,7 @@ public enum PackagedLayout {
         executablePath.contains(".app/Contents/MacOS/")
     }
 
-    /// 路径解析失败（S3/S4）：缺 node/sidecar 一律 fatal（调用方 fatalStartup），
+    /// 路径解析失败：缺 node/sidecar 一律 fatal（调用方 fatalStartup），
     /// 绝不 spawn 裸 node 或另一个 app 的 Electron 二进制。
     public enum PathResolutionError: Error, Equatable {
         case explicitNodeMissing(path: String)
@@ -149,11 +149,11 @@ public enum PackagedLayout {
         }
     }
 
-    /// node 解析（S4）：`DSH_CHAMBER_SHELL_NODE_BIN`（显式，须可执行）→ 装配态自带
+    /// node 解析：`DSH_CHAMBER_SHELL_NODE_BIN`（显式，须可执行）→ 装配态自带
     /// `<Resources>/sidecar/node`（须可执行）→ dev 从 PATH 找 node（逐目录
-    /// 检查可执行）→ 皆无 → 抛错。旧「Electron 二进制当 Node」缺省已删除：
+    /// 检查可执行）→ 皆无 → 抛错。绝不能用「Electron 二进制当 Node」顶替：
     /// 那是另一个 app 的二进制（/Applications/dsh-chamber-electron.app/…），缺自带
-    /// node 时绝不能拿它顶替（审计 major fail-open）。`isExecutable` 注入
+    /// node 时绝不能拿它顶替。`isExecutable` 注入
     /// 以便单测。
     public static func resolveNode(
         env: [String: String],
@@ -199,7 +199,7 @@ public enum PackagedLayout {
     }
 
     /// sidecar 脚本解析：`DSH_CHAMBER_SHELL_SIDECAR` → 打包态自带 `<Resources>/sidecar/sidecar.js`
-    /// → nil（dev 由调用方向上查找 `sidecar-entry.ts`；S12 起无 poc 桩回退）。
+    /// → nil（dev 由调用方向上查找 `sidecar-entry.ts`；不做 poc 桩回退）。
     public static func resolveSidecar(
         env: [String: String],
         resourcesDir: String?,

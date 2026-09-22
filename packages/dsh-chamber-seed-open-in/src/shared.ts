@@ -3,9 +3,9 @@
  * namespace, its method names, the payload/result shapes and the domain
  * carrier every method answers with.
  *
- * ## chamber fork divergence (design 20 §6.1, fork & supersede 2026-09-11)
+ * ## chamber fork divergence (design 20 §6.1, fork & supersede)
  *
- * Upstream (`@deepseek-ai/dsh-host-open-in-app`, pin fb2c4b9e = dsh-v0.1.5-rc.2)
+ * Upstream (`@deepseek-ai/dsh-host-open-in-app`)
  * publishes three `webServer` route paths and their HTTP payloads here, and the
  * official browser half imports them over the `./shared` subpath. The chamber
  * fork replaces that transport: the catalog, icons and launches are served over

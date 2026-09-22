@@ -7,9 +7,9 @@
  * but the two list observables belong to the OFFICIAL api session/workspace
  * controller clients. A ctx that provides the services without the observables
  * (a fork, or a future upstream rev that moves the store), or one whose
- * service proxy throws for a member it does not carry, used to be read through
- * a bare cast — the effect then died on the first snapshot read, or
- * half-registered producers that could never report. A missing face is
+ * service proxy throws for a member it does not carry. A bare cast over such a
+ * ctx kills the effect on the first snapshot read or half-registers a producer
+ * that could never report. A missing face is
  * therefore WARNED and the producer registration is skipped: an inert seam
  * must never be silent (same discipline as the `refresh()` guard inside the
  * same effect).

@@ -2,7 +2,7 @@
  * todo-prefs tests (sidebar todo area settings subset) — node:test. Part 1: the value-validated
  * decode of the chamber-global sessionTodo block and the defaults mirror (the ipc-surface-mirror
  * guard keeps the authoritative types in lockstep). Part 2: the read-only hydration state machine
- * over a fake window.dshChamber.settings bridge — the round-1 P2 regression pin: a persistent get()
+ * over a fake window.dshChamber.settings bridge — a persistent get()
  * failure must never stack permanent onChanged listeners (each retry releases the previous handle).
  */
 import { test } from 'node:test'

@@ -2,9 +2,9 @@
  * The /api URL prefix — single source for both halves of the web transport.
  * The node half registers this prefix on the web server.
  *
- * ## chamber patch (dsh-chamber connection manager, design 05 §6)
+ * ## Chamber per-instance base path (design 05 §6)
  *
- * This is one of the only dsh source files modified by chamber: the browser
+ * This is one of the only dsh sources chamber owns: the browser
  * half learns a per-instance base path so every RPC path lands under the
  * control-plane's same-origin per-instance proxy prefix (`/api/i/<id>`), which
  * strips the prefix and forwards the remainder to the instance's own `/api`
@@ -13,11 +13,9 @@
  * per-entry Context) is authoritative; `window.__DSH_BASE_PATH__` remains a
  * compatibility fallback for other embedders.
  *
- * Rebased for upstream v0.1.2-alpha.1: the two WebSocket-downlink path
- * constants were deleted upstream together with the `events.mux`/`events.host`
- * downlinks; the push carrier now lives in `@deepseek-ai/dsh-api-gateway`'s
- * `/api/remote.mux` stream (vendor-owned, see the design-05 base-path
- * migration decision). Only the per-entry prefix helpers remain chamber-owned.
+ * The push carrier lives in `@deepseek-ai/dsh-api-gateway`'s
+ * `/api/remote.mux` stream (vendor-owned; see the base-path decision in
+ * design 05). Only the per-entry prefix helpers are chamber-owned.
  */
 
 /** Route prefix owning every api request (`/api` and `/api/<anything>`). */
@@ -26,7 +24,7 @@ export const API_PATH = '/api'
 declare global {
   interface Window {
     /**
-     * chamber patch compatibility fallback for legacy embedders
+     * Compatibility fallback for legacy embedders
      * (`/api/i/<id>`); undefined = stock same-origin /api.
      */
     __DSH_BASE_PATH__?: string

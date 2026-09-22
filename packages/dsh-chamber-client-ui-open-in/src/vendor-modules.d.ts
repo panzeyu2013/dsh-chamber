@@ -15,13 +15,12 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 
 /**
  * UI primitives (the pinned vendor source the renderer bundles): the open-in
- * entry renders the OFFICIAL `Menu` (chamber `compact` rows — the 2026-09
- * menu-density decision, design 06 §7 — fill selection, item icons,
- * focus transfer and arrow navigation through `autoFocus`), the design
- * system's `Tooltip` instead of the hand-rolled menu and the native `title`
- * bubble (2026-09-11 upstream-alignment, T13/T5), and — since the 2026-09-12
- * style-parity revision — the design system's own `IconChevronDownOutline14`
- * for the chevron instead of a hand-drawn glyph. The face mirrors
+ * entry renders the OFFICIAL `Menu` (chamber `compact` rows — the
+ * menu-density decision, design 06 §7 — fill selection, item icons, focus
+ * transfer and arrow navigation through `autoFocus`), the design system's
+ * `Tooltip` instead of the hand-rolled menu and the native `title` bubble, and
+ * the design system's own `IconChevronDownOutline14` for the chevron instead of
+ * a hand-drawn glyph. The face mirrors
  * `ui-primitives/src/Menu.tsx` + `Tooltip.tsx` + the icon barrel at the pin.
  */
 declare module '@deepseek-ai/dsh-client-ui-primitives' {

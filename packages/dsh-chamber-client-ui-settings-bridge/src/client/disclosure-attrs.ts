@@ -1,13 +1,12 @@
 /**
- * Disclosure attributes for a settings row whose switch unfolds a card
- * (2026-09-11 review-fix F3).
+ * Disclosure attributes for a settings row whose switch unfolds a card.
  *
  * WHY this is not a JSX prop pair on a wrapper element: `aria-expanded` is only
  * supported on role-bearing interactive elements — ARIA 1.2 lists application /
  * button / checkbox / combobox / gridcell / link / listbox / menuitem / row /
  * rowheader / tab / treeitem, with `switch` inheriting it from `checkbox` — and
- * NOT on a role-less `<span>` (role `generic`), which is where this row used to
- * carry it: assistive tech had no element to read it from. Any wrapper role that
+ * NOT on a role-less `<span>` (role `generic`) — a row that carries it there has
+ * no element for assistive tech to read it from. Any wrapper role that
  * DOES support the attribute is a widget, and a widget wrapping the switch would
  * nest two interactive controls (axe `nested-interactive`), so the pair belongs
  * on the control that actually unfolds the card — the switch's own button, which

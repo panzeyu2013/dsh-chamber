@@ -16,8 +16,7 @@
 //  构造；崩溃/卡死恢复只 reload，注入随每次导航生效）。Electron flavor 未同步，
 //  双 flavor 差异登记见 docs/progress/deviations.md S-50。
 //
-//  单一真源：规则文本、标记属性、注入源码都从这里取；测试面按 2026-12 裁决
-//  移除（Swift 锁测试与探针已删），效果判据归实机目检。
+//  单一真源：规则文本、标记属性、注入源码都从这里取；效果判据归实机目检。
 
 import WebKit
 
@@ -26,7 +25,7 @@ import WebKit
 enum ShellOverscrollPolicy {
 
     /// 根级越界规则：选择器只指向文档根，不触碰页面/上游的任何滚动容器。
-    /// !important 的作用边界（2026-12 对抗复核修正）：它压过页面的普通声明，但
+    /// !important 的作用边界：它压过页面的普通声明，但
     /// 页面若在根上再声明同属性的 !important（同特异性、文档序靠后）或在根元素
     /// 上设内联 !important，仍可翻转——当前上游没有任何根级声明（全仓扫描 0
     /// 命中），这是理论边界而非现状；author 源内也没有手段挡住页面 JS 主动改。
@@ -46,7 +45,7 @@ enum ShellOverscrollPolicy {
     /// 注入源码。本机实测 documentStart 时序：readyState=loading、documentElement
     /// 已存在、head 尚不存在。落点**始终优先 documentElement**（即使 head 已存在
     /// 也不落 head，保住"页面重写 head 也删不掉"的免疫；本机时 head 本就不存在，
-    /// 复核装置已验证两种时序下都生效）；两者都取不到时挂一次 DOMContentLoaded
+    /// 两种时序下都生效）；两者都取不到时挂一次 DOMContentLoaded
     /// 再落，是 DOM 就绪防护而非第二套行为。已有标记则不重复插入（重载/二次执行
     /// 幂等）。
     static let source: String = """

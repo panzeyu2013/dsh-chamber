@@ -16,14 +16,14 @@
  * square (the catalog answered no pixels for that id); only a launch rejects,
  * because that is the one outcome the user must see.
  *
- * TWO envelope levels, one owner each (2026-09-13 fix): the injected call is
- * the page-level instance client's `callUnary`, so its answer is the TRANSPORT
- * result `{ok:true,value}` / `{ok:false,error}`; `value` is then the host
- * domain's own carrier, because every `openInApp/*` method returns
- * `domainResult(…)` (`packages/dsh-chamber-seed-open-in/src/core.ts`). This
- * module consumes both levels — reading only the first one is what made the
- * production read answer an empty catalog while the unit stubs (which fed the
- * domain carrier directly) stayed green.
+ * TWO envelope levels, one owner each: the injected call is the page-level
+ * instance client's `callUnary`, so its answer is the TRANSPORT result
+ * `{ok:true,value}` / `{ok:false,error}`; `value` is then the host domain's own
+ * carrier, because every `openInApp/*` method returns `domainResult(…)`
+ * (`packages/dsh-chamber-seed-open-in/src/core.ts`). This module consumes both
+ * levels — reading only the first one would make the production read answer an
+ * empty catalog while the unit stubs (which feed the domain carrier directly)
+ * stay green.
  */
 import type { OpenInApp } from '../shared/capabilities.ts'
 import {

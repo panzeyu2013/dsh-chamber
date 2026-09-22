@@ -1,9 +1,6 @@
 /**
  * Minimal Typert Remote mux client (/api/remote.mux) for the read-only
- * session-state observer (plan of record
- * docs/progress/todo/remote-session-state-and-switch.md §4/W1;
- * executable blueprint gateway-session-state-blueprint.md §3.1/§3.2/§5.1/
- * §5.4/§9-R1, remote-state-w0-protocol.md §1.1/§3).
+ * session-state observer.
  *
  * Why it lives in @dsh-chamber/control-plane: `ws` is declared by this
  * package only (packages/control-plane/package.json:19) and this package is
@@ -16,23 +13,23 @@
  *     open frame; every (re)connect — no matter why — is followed by a FULL
  *     unary `session/list` baseline reconciliation, because emit-type
  *     forwarded events have no retransmission and the `$events` opening frame
- *     does not replay session state (W0 §1.9/§2; plan §4 「（重）连必须对账」).
+ *     does not replay session state (「（重）连必须对账」).
  *     Frames that arrive while the baseline request is in flight are queued
- *     and applied after it (standard snapshot+replay, blueprint §5.1).
+ *     and applied after it (standard snapshot+replay).
  *   - An OBSERVER. It never sends `$events/result` unless the injected
  *     delegate says another downstream mux client is attached AND the
  *     waterfall frame has aged past the grace window. Otherwise it holds the
  *     frame and settles nothing — answering `next` while no browser shell is
  *     attached makes the host settle the approval as "unavailable"
- *     (blueprint §5.4 hard rule; plan §4 观察者纪律; R5).
- *   - A readiness/event-silence signal (R21): `status()` exposes `ready`,
+ *     (observer-discipline hard rule).
+ *   - A readiness/event-silence signal: `status()` exposes `ready`,
  *     `clientId`, `lastEventAt`, `lastReadyAt`, `reconnects`, and an optional
  *     `silenceTimeoutMs` turns "connection alive, events stopped" into a
  *     resubscribe + full re-baseline.
  *   - Not a policy owner: it never decides the gateway's mode (sse/poll), never
  *     persists state and never becomes an authority on session facts.
  *
- * Privacy (blueprint §7): only session ids / booleans / counters leave this
+ * Privacy: only session ids / booleans / counters leave this
  * module. The waterfall `request` payload is parsed past and deliberately NOT
  * retained (no field for it exists below); `api-session/error` emits are
  * dropped without reading their text; diagnostics carry fixed strings and
@@ -73,10 +70,10 @@ export const REMOTE_EVENT_STREAM_PAYLOAD: { readonly args: Readonly<Record<strin
 export const EVENTS_STREAM_ID = 'events'
 
 /** Waterfall hold window before an attached downstream client may be answered
- *  on our behalf (plan §4: 1.5s grace). */
+ *  on our behalf (1.5s grace). */
 export const DEFAULT_WATERFALL_GRACE_MS = 1_500
 
-/** Reconnect backoff floor (blueprint §3.2 observer deps). */
+/** Reconnect backoff floor. */
 export const DEFAULT_MUX_RECONNECT_MIN_MS = 500
 /** Reconnect backoff ceiling. */
 export const DEFAULT_MUX_RECONNECT_MAX_MS = 15_000
@@ -86,17 +83,16 @@ export const DEFAULT_BASELINE_TIMEOUT_MS = 15_000
 /** One-shot follow deadline; the completion edge read must stay bounded. */
 export const DEFAULT_FOLLOW_TIMEOUT_MS = 2_000
 /** How many tail messages a completion-edge follow asks for (the turn/end
- *  record sits at the tail; W0 §3 `follow` uses 4). */
+ *  record sits at the tail; the vendor wire's `follow` uses 4). */
 export const FOLLOW_MAX_MESSAGES = 8
 /** Bound on frames queued behind an in-flight baseline before the queue is
  *  dropped and a fresh reconciliation is requested. */
 export const MAX_QUEUED_EVENTS_FRAMES = 256
 /** `session/list` response cap: a full baseline can exceed the 1 MiB unary
- *  default (W0 observed 182 projection-bearing rows), so the baseline call
- *  raises it deliberately and stays bounded. */
+ *  default, so the baseline call raises it deliberately and stays bounded. */
 export const SESSION_LIST_MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 
-/** Zero-argument `session/list` payload (W0 §3: the Remote parameter name is
+/** Zero-argument `session/list` payload (the Remote parameter name is
  *  `_request`; a wrong shape answers gateway/arguments-invalid). */
 export const SESSION_LIST_PAYLOAD: { readonly args: { readonly _request: Readonly<Record<string, never>> } } =
   Object.freeze({ args: Object.freeze({ _request: Object.freeze({}) }) })
@@ -121,7 +117,7 @@ export type MuxUnaryCall = (
 
 /** One white-listed `session/list` row. A projection whitelist, not a
  *  convenience: title/cwd/agentPreset/todos/projections must never enter the
- *  observer (blueprint §7 脱敏清单 1). */
+ *  observer (privacy whitelist). */
 export interface SessionListBaselineItem {
   sessionId: string
   running: boolean
@@ -334,8 +330,8 @@ export function parseMuxServerFrame(text: string): MuxServerFrame | null {
 
 /**
  * Parse one `$events` item value. Known fields are strict, unknown fields are
- * tolerated (upstream may add fields; blueprint §9-R7 documents the deliberate
- * departure from the vendor's exactKeys parser). The waterfall `request` is
+ * tolerated (upstream may add fields; this deliberately departs from the
+ * vendor's exactKeys parser). The waterfall `request` is
  * dropped here.
  */
 export function parseRemoteEventFrame(value: unknown): RemoteEventFrame | null {
@@ -391,7 +387,7 @@ export function parseSessionListBaselineItems(value: unknown): SessionListBaseli
   return items
 }
 
-/** One-shot `session/follow` request for a completion edge (R12: exactly one
+/** One-shot `session/follow` request for a completion edge (exactly one
  *  follow per observed true→false edge; never N resident follow streams). */
 export function buildSessionFollowPayload(sessionId: string, maxMessages = FOLLOW_MAX_MESSAGES): unknown {
   return { args: { request: { address: { kind: 'session', sessionId }, maxMessages } } }
@@ -424,7 +420,7 @@ export type MuxKickReason = 'host-ready' | 'resync' | 'tick' | 'frame-removed'
 /** Reasons a reconciliation actually ran. */
 export type MuxReconcileReason = MuxKickReason | 'connect' | 'coalesced'
 
-/** Observable mux status: the R21 signal surface ("ready/lastEventAt"). */
+/** Observable mux status: the signal surface ("ready/lastEventAt"). */
 export interface SessionMuxStatus {
   state: SessionMuxState
   /** A `$events` ready frame has been received for the current socket. */
@@ -432,7 +428,7 @@ export interface SessionMuxStatus {
   /** Generation-scoped client id from the ready frame. */
   clientId: string | null
   /** Mux-clock ms of the last `$events` downlink frame (emit/waterfall/cancel
-   *  or ready) — the event-silence input (R21). */
+   *  or ready) — the event-silence input. */
   lastEventAt: number | null
   /** Downlink frames received since start() (仪表 I6：丢帧可见，不靠沉默推断). */
   eventsReceived: number
@@ -449,7 +445,7 @@ export interface SessionMuxStatus {
   lastBaselineAt: number | null
   heldWaterfalls: number
   /** The socket opened but no ready frame arrived inside the handshake
-   *  window ⇒ the caller should degrade to poll (R18). */
+   *  window ⇒ the caller should degrade to poll. */
   eventsDegraded: boolean
   /** Fixed-string/error-code diagnostic only; never a payload. */
   lastError: string | null
@@ -465,7 +461,7 @@ export interface SessionMuxDeps {
   call?: MuxUnaryCall
   /** Whether ANOTHER downstream mux client is attached (gateway-proxy
    *  getDiagnostics().activeStreams > 0). The mux's own direct socket must
-   *  never count itself (blueprint §5.4). */
+   *  never count itself. */
   otherMuxClientsAttached(): boolean
   /** A full baseline was reconciled; `reason` names the trigger. */
   onBaseline?(items: readonly SessionListBaselineItem[], info: { at: number; reason: MuxReconcileReason }): void
@@ -485,7 +481,7 @@ export interface SessionMuxDeps {
   /** A previously held waterfall was cancelled (or was a foreign waterfall we
    *  held but never classified). */
   onCancel?(eventId: string, at: number): void
-  /** Status edge (R21 signal). */
+  /** Status edge (observable signal). */
   onStatusChange?(status: SessionMuxStatus): void
   /** Event silence exceeded silenceTimeoutMs (only when configured). */
   onSilence?(at: number): void
@@ -505,7 +501,7 @@ export interface SessionMuxDeps {
   /** Ready-frame deadline after socket open (default 5s, protocol constant). */
   handshakeTimeoutMs?: number
   /** When set, event silence beyond this many ms triggers onSilence + a full
-   *  resubscribe/re-baseline (R21). Undefined ⇒ no silence policy here. */
+   *  resubscribe/re-baseline. Undefined ⇒ no silence policy here. */
   silenceTimeoutMs?: number
 }
 
@@ -736,7 +732,7 @@ export function createSessionMux(deps: SessionMuxDeps): SessionMux {
       return
     }
     if (frame.type === 'end') {
-      // 审计 B8（2026-12）：$events 流结束当 no-op ⇒ ready 仍 true，只能等 45s 静默看门狗，
+      // $events 流结束当 no-op ⇒ ready 仍 true，只能等 45s 静默看门狗，
       // 该窗口内"开始并完成"的会话边沿永久丢且仪器不动。按 error 同款：标记降级 + 丢弃 + 重连。
       if (frame.streamId === EVENTS_STREAM_ID) {
         status.eventsDegraded = true

@@ -1,5 +1,5 @@
 /**
- * Trailing frame coalescer (chamber 2026-09 renderer-crash round).
+ * Trailing frame coalescer.
  *
  * WHY THIS EXISTS. Renderer hot paths drive "sample the DOM after a mutation,
  * but at most once per frame" loops. The per-frame shape is exactly the JS entry

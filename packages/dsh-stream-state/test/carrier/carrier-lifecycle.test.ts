@@ -1,8 +1,8 @@
 /**
- * Carrier lifecycle reducer - behavior contract (node B1 of the refactor plan).
+ * Carrier lifecycle reducer - behavior contract.
  *
- * The oracle here is the DECIDED semantics, not the current wiring: the audit
- * found that today three entries can replace one socket in a window and that
+ * The oracle here is the DECIDED semantics, not the current wiring: three
+ * entries can replace one socket in a window and
  * replaceSocket bypasses the mux's own 1s throttle. These tests pin the
  * single-owner rule so the executor that follows cannot reintroduce it.
  */
@@ -34,7 +34,7 @@ test('a second rebuild inside the window is throttled, never doubled', () => {
 test('an unusable clock never authorizes a rebuild (fail safe)', () => {
   // Every throttle comparison is a ratio against `at`, and NaN makes all of them
   // false - so without a guard a NaN clock would SLIP THROUGH and rebuild on every
-  // call. The retired fork predicate failed safe here; the reducer must too.
+  // call. The reducer must fail safe here.
   const state = initialCarrierState()
   for (const at of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
     const r = reduceCarrier(state, { kind: 'rebuildRequested', at, reason: 'openingStall', streak: 2 }, CARRIER_ENV)
@@ -185,8 +185,8 @@ test('T3 denied rebuild still gives the episode an exit (reopen, never silence)'
 
 test('T1 a closed episode releases the in-flight rebuild it owned', () => {
   // Episode A starts a rebuild, then its consumer disappears. The marker A left
-  // must not hold the carrier hostage: this is the episode-ownership rule that
-  // replaces the legacy endpoint-digest key (DIVERGENCE D-4).
+  // must not hold the carrier hostage: the in-flight marker is owned by the
+  // episode that placed it.
   const started = reduceCarrier(
     initialCarrierState(),
     { kind: 'rebuildRequested', at: 1000, reason: 'socketNoFrame', streamId: 'ep-a', episodeId: 'ep-a' },

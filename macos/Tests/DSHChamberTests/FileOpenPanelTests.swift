@@ -2,7 +2,7 @@
 //  FileOpenPanelTests.swift
 //  DSHChamberTests
 //
-//  S-25：composer 回形针（input type=file）的 runOpenPanel 接线——参数投影 +
+//  composer 回形针（input type=file）的 runOpenPanel 接线——参数投影 +
 //  呈现 seam 的回执语义（取消 = 空数组）。假呈现器不弹任何面板，也不需要
 //  WKOpenPanelParameters 实例（它没有公开构造器）。
 //

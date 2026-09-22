@@ -97,7 +97,7 @@ import type {
   WorktreeStateSource,
 } from './core-types.ts'
 
-// Public surface preserved verbatim.
+// Public surface re-exported verbatim.
 export {
   MAX_OPERATIONS,
   MAX_REPOSITORIES,
@@ -269,8 +269,8 @@ export class GitWorktreeCore {
 
     const errors: SnapshotError[] = []
     let sourceError: SnapshotResult['sourceError']
-    // Loud per-row diagnostic for a drifted agent `origin` (2026-09 robustness
-    // fix): the row is handled conservatively (not subagent-origin ⇒ it keeps
+    // Loud per-row diagnostic for a drifted agent `origin`: the row is
+    // handled conservatively (not subagent-origin ⇒ it keeps
     // blocking), but the drift must never be silent — the vendor mismatch has
     // to be visible so it can be fixed.
     for (const drift of state.originDrift) {
@@ -280,8 +280,8 @@ export class GitWorktreeCore {
         message: `session '${drift.sessionId}' has an unrecognized origin '${drift.value}'; treating it as a fork edge (its run keeps blocking)`,
       })
     }
-    // Same per-row rule for the other two agent-column drifts (2026-09
-    // robustness fix): the conservative reading blocks the removal, and the
+    // Same per-row rule for the other two agent-column drifts: the
+    // conservative reading blocks the removal, and the
     // drift itself is loud — never a whole-source failure.
     for (const drift of state.statusDrift) {
       errors.push({
@@ -511,7 +511,7 @@ export class GitWorktreeCore {
             // the canonical group. Fall back to a RAW registry-path
             // comparison so the orphan stays associated with its workspace
             // row instead of leaking into the unregistered block
-            // (cross-review P1-1: it would otherwise show twice — as an
+            // (it would otherwise show twice — as an
             // orphan workspace AND as an unregistered 'missing' row — and the
             // badge delete could not converge).
             workspace = state.workspaces.find(candidate => candidate.path === entry.path)
@@ -549,10 +549,10 @@ export class GitWorktreeCore {
                 const nul = statusOutput.indexOf('\0')
                 const headerLine = nul >= 0 ? statusOutput.slice(0, nul) : statusOutput
                 // INVARIANT: `--branch` always emits the header NUL-terminated
-                // (verified against git 2.50.1: clean = `## main\0`). A
+                // (clean = `## main\0`). A
                 // header without a trailing NUL is therefore treated as clean
                 // (a lone bare header), never dirty — fail in the safe
-                // direction (review P2-1).
+                // direction.
                 dirty = nul >= 0 && statusOutput.length > nul + 1
                 const branchFacts = parseBranchLine(headerLine)
                 upstream = branchFacts.upstream
@@ -600,7 +600,7 @@ export class GitWorktreeCore {
           for (const id of this.runningAtSnapshotPath(path, runningLocations)) {
             if (!runningSessionIds.includes(id)) runningSessionIds.push(id)
           }
-          // The BLOCKING subset (design 08 §5.2 amendment 2026-09): the running
+          // The BLOCKING subset (design 08 §5.2 amendment): the running
           // sessions that actually gate removal. An old client that reads only
           // runningSessionIds stays conservative (blocks on any running
           // session); a new client uses this field.
@@ -663,17 +663,16 @@ export class GitWorktreeCore {
   }
 
   /** Issue a short-lived, in-memory preview after a coherent repository read. */
-  /** Create-path facade (B5): the body lives in core-ops-create.ts. */
+  /** Create-path facade: the body lives in core-ops-create.ts. */
   async previewCreate(untrusted: PreviewCreateInput): Promise<PreviewCreateResult> {
     return await this.createOps.previewCreate(untrusted)
   }
 
-  /** Create-path facade (B5): the body lives in core-ops-create.ts. */
+  /** Create-path facade: the body lives in core-ops-create.ts. */
   async create(untrusted: CreateInput): Promise<CreateResult> {
     return await this.createOps.create(untrusted)
   }
 
-  /** Create-path facade (B5): the body lives in core-ops-create.ts. */
   async rollbackCreate(untrusted: RollbackCreateInput): Promise<RollbackCreateResult> {
     return await this.createOps.rollbackCreate(untrusted)
   }
@@ -920,14 +919,14 @@ export class GitWorktreeCore {
    *  keeps the admin record and the sidebar shows the row as missing). There
    *  is no filesystem content left to protect or probe — the removal clears
    *  the surviving admin record with a plain `git worktree remove` (verified
-   *  to succeed on a missing directory against git 2.50). The owning
+   *  to succeed on a missing directory). The owning
    *  repository cannot be discovered from the (absent) path, so it is
    *  located from the source's registered workspaces instead, and every
    *  surviving guard (record identity, main/locked, ghost workspace) still
    *  applies before anything is mutated. */
   /** Single main/locked/branch/head precondition shared by every removal
-   *  entry (B5 convergence): the registered, missing-record and
-   *  unregistered-locate paths used to repeat these four checks with
+   *  entry: the registered, missing-record and
+   *  unregistered-locate paths share these four checks with
    *  identical codes and messages. `isMain` is precomputed by the caller
    *  (topology row vs located record); the rollback path keeps its own
    *  wording because it refuses a different operation. */
@@ -1145,9 +1144,9 @@ export class GitWorktreeCore {
     return await this.commitBoundRemove(input.operationId, operation, refreshed, replayed)
   }
 
-  /** Commit the record-only cleanup of a directory-less worktree (2026-09:
+  /** Commit the record-only cleanup of a directory-less worktree:
    *  externally deleted worktrees leave a stale admin record in `git worktree
-   *  list`; the sidebar shows the row as missing). Every guard is re-verified
+   *  list`; the sidebar shows the row as missing. Every guard is re-verified
    *  inside the held common-dir mutex: record identity, main/locked, and the
    *  ghost-workspace raw-path check. No dirty/submodule/running probe is
    *  possible or needed — the working directory does not exist, so a plain
@@ -1161,7 +1160,7 @@ export class GitWorktreeCore {
     intent: RemoveIntent,
     replayed: boolean,
   ): Promise<RemoveResult> {
-    // Registry/ghost-workspace re-check FIRST (review follow-up F3): reading
+    // Registry/ghost-workspace re-check FIRST: reading
     // the source registry between the final topology read and the git call
     // would let the guards evaluate an older listing. Reordering narrows the
     // reappearance window to the final topology read itself (still disclosed
@@ -1221,7 +1220,7 @@ export class GitWorktreeCore {
         && target.head === intent.head
         && target.missing === true
       if (!unchangedAndStillMissing) throw error
-      // Deterministic terminal (2026-09 lock note): a lock that raced in
+      // Deterministic terminal: a lock that raced in
       // between the final guards and this git call also refuses PRE-mutation
       // — nothing was deleted, so a terminal error (dismiss + fresh removal
       // after unlock) beats an uncertain-retry wedge, exactly as in
@@ -1270,8 +1269,8 @@ export class GitWorktreeCore {
     // The final pre-mutation re-read may resolve the target row MISSING (its
     // directory vanished after the caller's last probe). A missing row has no
     // working-tree content to protect or probe — the plain `git worktree
-    // remove` below then only clears the leftover admin record (git 2.50,
-    // same record cleanup the missing-record path uses under these in-lock
+    // remove` below then only clears the leftover admin record (the same
+    // record cleanup the missing-record path uses under these in-lock
     // guards); a git status spawn on the gone cwd would instead fail with a
     // spawn error no caller can route. Never probe a missing row.
     if (finalTarget.missing !== true && await this.isDirty(finalTarget.path) && intent.discardChanges !== true) {
@@ -1280,7 +1279,7 @@ export class GitWorktreeCore {
     // Git refuses a plain `git worktree remove` on a worktree containing
     // submodule checkouts — git's own guard (builtin/worktree.c
     // validate_no_submodules) dies PRE-mutation; only `--force` bypasses it.
-    // Mirror that guard as a typed DETERMINISTIC refusal (2026-09): without
+    // Mirror that guard as a typed DETERMINISTIC refusal: without
     // an explicit discard authorization the removal can never succeed, so the
     // client must get a dismissible error — never an endless "uncertain
     // outcome" recovery replaying the same refusal forever. Submodule gitdirs
@@ -1297,7 +1296,7 @@ export class GitWorktreeCore {
     operation.attemptedRemove = true
     // `--force` is used ONLY under explicit user authorization
     // (input.discardChanges); it discards the working-tree files but never
-    // touches the branch, commits or HEAD (design 08 §5.3 amendment 2026-08;
+    // touches the branch, commits or HEAD (design 08 §5.3 amendment;
     // a submodule checkout inside the worktree is discarded the same way —
     // its files are re-cloneable from the committed gitlink).
     const removeArgs = intent.discardChanges === true
@@ -1318,7 +1317,7 @@ export class GitWorktreeCore {
       // removed nothing — replaying the same refusal can never converge, so
       // surface a DETERMINISTIC error (retryable: false) that the client may
       // dismiss instead of wedging the source in an endless "uncertain
-      // outcome" recovery (design 08 §6.2; 2026-09 submodule report). Any
+      // outcome" recovery (design 08 §6.2). Any
       // failed probe keeps the original retryable error.
       if (!(error instanceof GitWorktreeError) || error.code !== 'git-command-failed') throw error
       const reconciled = await this.topology(finalTopology.mainPath).catch(() => undefined)
@@ -1473,7 +1472,7 @@ export class GitWorktreeCore {
       const raw = rawAgents[index]
       assertRecord(raw, `agents[${index}]`)
       const sessionId = requiredString(raw.sessionId, `agents[${index}].sessionId`, 256)
-      // Status and cwd are handled PER ROW (2026-09 robustness fix, the same
+      // Status and cwd are handled PER ROW (the same
       // rule as `origin` below): upstream declares exactly
       // `'idle' | 'running'` and a normalized absolute `header.cwd`, but a
       // pinned-vendor drift on ONE row must not refuse the WHOLE source read —
@@ -1508,7 +1507,7 @@ export class GitWorktreeCore {
       const parentSessionId = raw.parentSessionId === undefined
         ? undefined
         : requiredString(raw.parentSessionId, `agents[${index}].parentSessionId`, 256)
-      // Origin is handled PER ROW (2026-09 robustness fix): upstream declares
+      // Origin is handled PER ROW: upstream declares
       // exactly `'subagent'` or absent, and ONLY `'subagent'` enables
       // inertness. Any other present value is a pinned-vendor drift — the row
       // is treated as NOT subagent-origin (its edge terminates, so the session
@@ -1588,7 +1587,7 @@ export class GitWorktreeCore {
 
   /**
    * TRUE when a running session is INERT for the running guards (design 08 §5.2
-   * amendment, 2026-09 user decision): the session itself is ARCHIVED, or a
+   * amendment): the session itself is ARCHIVED, or a
    * SUBAGENT-origin ancestor in its lineage is. An archived session is done —
    * its run must not block a worktree removal, and the removal never touches
    * it (stopping a run and purging content is the archive manager's job,
@@ -1610,7 +1609,7 @@ export class GitWorktreeCore {
    * the chain unresolvable, and an unresolvable chain is NEVER inert — the
    * session blocks exactly as before.
    *
-   * CYCLE RULE (parent decision, 2026-09): the archived test runs BEFORE the
+   * CYCLE RULE: the archived test runs BEFORE the
    * cycle guard, so a cycle that CONTAINS an archived member is inert exactly
    * like any other archived ancestor (the walk reaches that member first),
    * while a cycle with NO archived member is never inert. The order is
@@ -1796,9 +1795,9 @@ export class GitWorktreeCore {
         // registration) can neither contain the target nor be contained by
         // it — skip it instead of failing the whole removal. One failed
         // entity must not block unrelated ones (AGENTS); the unregistered
-        // removal branch already tolerates this exact case (review 2026-08:
-        // an orphan workspace was blocking EVERY registered removal on the
-        // source, and the retryable error wedged the source in recovery).
+        // removal branch already tolerates this exact case (an orphan
+        // workspace must not block every registered removal on the
+        // source, and a retryable error would wedge the source in recovery).
         continue
       }
       if (this.containsPath(target, canonical)) {
@@ -1889,8 +1888,8 @@ export class GitWorktreeCore {
       } catch (error) {
         // A listed worktree whose directory no longer exists (externally
         // deleted without `git worktree remove`) must not fail every
-        // mutation on the repository (2026-09 live report: a merge drill's
-        // leftover record blocked ALL create/remove/rollback with
+        // mutation on the repository (a leftover record would otherwise
+        // block ALL create/remove/rollback with
         // path-unavailable). Keep the RAW normalized record path and mark
         // the row missing: no filesystem probe may touch it, and it can be
         // cleaned by the missing-record removal path.
@@ -1924,8 +1923,7 @@ export class GitWorktreeCore {
    *  disagree on the missing-ref exit code (`show-ref --verify` exits 1 in
    *  some, 128 with `fatal: ... not a valid ref` in others) — ANY non-zero
    *  exit means "branch absent" for this fixed invocation; a genuinely broken
-   *  git would have failed the earlier rev-parse/worktree reads already.
-   *  (2026-08 fix: exit 128 was misreported as a hard git-command-failed.) */
+   *  git would have failed the earlier rev-parse/worktree reads already. */
   private async localBranchHead(cwd: string, branch: string): Promise<string | null> {
     const result = await this.gitCommand(cwd, ['show-ref', '--hash', '--verify', `refs/heads/${branch}`])
     if (result.exitCode !== 0) return null

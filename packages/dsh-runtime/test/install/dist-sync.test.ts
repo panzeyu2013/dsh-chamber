@@ -66,17 +66,16 @@ test('the committed dist artifact exists on disk (gitignore exception)', () => {
 })
 
 test('dist restore-marker read is the 2b delegated reader (no chmod side effects; present on both platforms)', async () => {
-  // Behavioural marker for the N5/2b snapshot-store migration (2026-09): the
+  // Behavioural marker: the
   // committed dist must read the restore authority through the shared
-  // private-fs reader WITHOUT chmod side effects. A stale pre-2b bundle still
-  // carries the inline reader that unconditionally fchmods the marker to 0600
+  // private-fs reader WITHOUT chmod side effects. A stale bundle that still
+  // carries the inline reader unconditionally fchmods the marker to 0600
   // — on POSIX this test fails on it (the 0644 mode would come back 0600), so a
-  // src↔dist split of the marker path can no longer slip past CI.
-  // win32（S1 private-fs 回退落地后的真实语义）：win32 无 O_NOFOLLOW，读写器
-  // 改走用户态身份回退（lstat 前后复验 + O_EXCL），marker 存在即读作
-  // 'present'——不再有"拒绝读取 → unsafe"的分支（旧注释的 fail-closed 预期
-  // 已随回退撤销）。诚实登记判别力：stale inline 读取器在 win32 上同样能读到
-  // 内容 → 也返回 'present'，故 win32 腿**不再区分**新旧读取器；那条判别力
+  // src↔dist split of the marker path cannot slip past CI.
+  // win32：win32 无 O_NOFOLLOW，读写器
+  // 走用户态身份回退（lstat 前后复验 + O_EXCL），marker 存在即读作
+  // 'present'。诚实登记判别力：stale inline 读取器在 win32 上同样能读到
+  // 内容 → 也返回 'present'，故 win32 腿不区分新旧读取器；那条判别力
   // 由第一个用例的 dist↔src export/value lockstep 承担。
   // mode 位不收紧的断言是 POSIX mode-bit 语义（win32 的 fstat 对可写文件合成
   // 0666，不携带创建模式），仅 POSIX 腿执行。

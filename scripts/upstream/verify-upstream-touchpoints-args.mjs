@@ -1,16 +1,16 @@
 /**
  * Argument contract for `scripts/upstream/verify-upstream-touchpoints.mjs`
- * (2026-12 review P2, pure — no I/O, no process access, so it is unit-testable
+ * (pure — no I/O, no process access, so it is unit-testable
  * on its own; the gate script itself is a top-level program and cannot be
  * imported by a test).
  *
  * WHY THIS EXISTS: the gate runs C1/C3–C15 on EVERY invocation, and its default
  * (non-`--no-artifact-rebuild`) mode rebuilds the build-time host/mobile bundles
- * IN PLACE and then restores them. Before this module, any argument the script
- * did not recognize (`--no-artifact-rebuid` — one missing letter, a `--tag`
- * typo, an editor's `--`) was silently ignored: the run reported green while
- * having performed a full write-and-restore of generated artifacts. A typo must
- * therefore be a LOUD usage error, never a silent full run.
+ * IN PLACE and then restores them. Any argument the script does not recognize
+ * (`--no-artifact-rebuid` — one missing letter, a `--tag`
+ * typo, an editor's `--`) must be a LOUD usage error, never silently ignored:
+ * the run would report green while having performed a full write-and-restore of
+ * generated artifacts.
  *
  * The accepted surface is deliberately tiny and closed: `--no-artifact-rebuild`,
  * `--tags <old> <new>`, `--help`/`-h`. Anything else — including a bare
@@ -80,8 +80,8 @@ export function parseVerifyArgs(argv) {
       }
       const values = argv.slice(index + 1, index + 3)
       if (values.length < 2 || values.some((value) => value.startsWith('-'))) {
-        // A missing value used to fall through to a plain full run: the caller
-        // asked for the tag report and silently got everything else instead.
+        // A missing value must not fall through to a plain full run: the caller
+        // asked for the tag report and would silently get everything else instead.
         errors.push(`--tags 需要恰好两个 tag 值（得到 ${values.length === 0 ? '无' : values.join(' ')}）`)
         break
       }

@@ -2,12 +2,12 @@
 //  ShellDebug.swift
 //  DSHChamber
 //
-//  S14（2026-12 审计）：POC 调试面总开关。renderer console 回传通道/注入脚本、
-//  逐 invoke 打印、/tmp/dsh-chamber-ui-snapshot.png 快照此前一律常开（渲染器每一行
-//  console 都被转发、每次 invoke 都刷 stdout、发布壳还会写 /tmp 文件）。现在
-//  统一经 DSH_CHAMBER_SHELL_DEBUG=1 打开，缺省关闭——打包/发布壳不带调试面。
+//  POC 调试面总开关：renderer console 回传通道/注入脚本、逐 invoke 打印、
+//  /tmp/dsh-chamber-ui-snapshot.png 快照（渲染器每一行 console 被转发、每次 invoke
+//  刷 stdout、写 /tmp 文件）统一经 DSH_CHAMBER_SHELL_DEBUG=1 打开，缺省关闭——
+//  打包/发布壳不带调试面。
 //
-//  T-11（2026-12 双端逐函数核对）：打包态即使环境里带 DSH_CHAMBER_SHELL_DEBUG=1 也必须关闭
+//  打包态即使环境里带 DSH_CHAMBER_SHELL_DEBUG=1 也必须关闭
 //  ——与 AppDelegate 对 DSH_CHAMBER_SHELL_* 的装配态过滤同一判定（PackagedLayout.isAppBundle），
 //  产品面不接受环境变量开启 console 回传/逐 invoke 打印//tmp 快照。
 //
@@ -32,7 +32,7 @@ enum ShellDebug {
         return environment[environmentKey] == "1"
     }
 
-    /// 生产调用点缓存（Phase 2 C4）：环境在进程启动后不可变、Bundle/打包态
+    /// 生产调用点缓存：环境在进程启动后不可变、Bundle/打包态
     /// 判定同样稳定，故首次求值后复用。`isEnabled()` 每次调用都要构造
     /// `ProcessInfo.environment` 字典并做 Bundle 路径 + 打包态判定，而
     /// MainWindowController 的逐 invoke 调用点不该付这份成本。测试继续用上面

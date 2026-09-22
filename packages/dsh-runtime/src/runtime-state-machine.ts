@@ -1,6 +1,6 @@
 /**
  * dsh 运行时版本管理状态机（design 18 §3.6 状态转移表）——纯逻辑、零依赖、
- * 无 electron、无副作用（M4 抽纯模块）。只有两个纯函数：`transition`
+ * 无 electron、无副作用。只有两个纯函数：`transition`
  * （状态 × 事件 → 状态）、`allowedActions`（终态门：该状态下可见动作）。
  * 不碰文件、不碰 IPC、不碰 UI：
  * 控制器（main 进程）注入事件、读相位；settings UI 用 `allowedActions` 渲染
@@ -26,7 +26,7 @@
  *     不会死锁；
  *   - `select-version` 不是事件、仅作为 allowedAction（选当前激活版本为无操作
  *     的 isNoopSelection 守卫是 controller 层语义，§3.6 不转移）；
- *   - `restart-dsh`（design 18 §3.6 项 8 / §9.3，抽取时新增）：受控进程重启
+ *   - `restart-dsh`（design 18 §3.6 项 8 / §9.3）：受控进程重启
  *     刷新插件挂载，非版本变更——出现在所有非忙相位（idle/available/applied/
  *     rollback/failed/error），禁用于 checking/downloading/installing/pending/
  *     applying/snapshot-failed（安装/激活窗口内不重启；快照失败存在未完成
@@ -114,7 +114,7 @@ export function transition(state: RuntimePhase, event: RuntimeEvent): RuntimePha
       if (state !== 'applying') return state;
       return 'snapshot-failed';
     case 'retry-apply':
-      // §3.6 R3-3 UX-P1-F4：快照失败后 [重试应用] 直接重入 applying（不重新
+      // §3.6：快照失败后 [重试应用] 直接重入 applying（不重新
       // check，不自动每启重试——必须用户显式触发）。
       if (state !== 'snapshot-failed') return state;
       return 'applying';
@@ -238,7 +238,7 @@ export function allowedActions(
     }
     case 'snapshot-failed':
       // 快照失败（当前树仍好，未切指针）：可 [重试应用]（直入 applying）或
-      // [恢复内建]；不再自动每启重试（§3.6 R3-3 UX-P1-F4）。
+      // [恢复内建]；不自动每启重试（§3.6）。
       return capabilities.canRetryApply === true
         ? ['retry-apply', 'reset-builtin']
         : ['reset-builtin'];

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * build-host-graph-package.mjs — 把 chamber 自带的 host 包（2026-12 起四个：
+ * build-host-graph-package.mjs — 把 chamber 自带的 host 包（四个：
  * client-graph / git-worktree / archive-cleanup（design 24）
  * / open-in（design 20 §6，仅本地形态））的可分发形态（package.json +
  * 已构建 dist/）拷贝进 desktop/dist/，供打包态本地控制面 seed 使用。脚本名保留，

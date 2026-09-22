@@ -44,15 +44,14 @@
  * Diagnostics: plain counters (requests / failures / activeStreams) — no
  * sensitive data, no URLs.
  *
- * ## proxy-forward.ts split (design 17 §8, 方案 A)
+ * ## proxy-forward.ts core (design 17 §8, 方案 A)
  *
- * This module is now the thin shell: prefix parsing (`parseInstanceId` /
+ * This module is the thin shell: prefix parsing (`parseInstanceId` /
  * `parseInstancePath`), target resolution (`resolveTarget`) and the
  * request/upgrade entry points + transport registry. The actual forwarding
  * core (header rewrite, body caps, error semantics, WS splice, heartbeat) is
  * the shared `proxy-forward.ts` module, which `gateway-proxy.ts` reuses for
- * its single-target full passthrough. Wire behavior is unchanged from the
- * pre-split instance-proxy.
+ * its single-target full passthrough.
  */
 
 import { authCookieFor } from './browser-auth-cookie.ts'
@@ -165,7 +164,7 @@ export interface InstanceProxyDeps {
   clientBodyIdleTimeoutMs?: number
   /** WebSocket heartbeat ping cadence in ms (tests inject small values). */
   wsPingIntervalMs?: number
-  /** Consecutive ping cycles without a browser pong before the splice is torn down. */
+  /** Overrides WS_PING_MISSES_BEFORE_TEARDOWN (see proxy-forward.ts). */
   wsPingMissesBeforeTeardown?: number
   maxConcurrentHttpRequests?: number
   maxConcurrentWsStreams?: number
@@ -179,7 +178,7 @@ export interface InstanceProxy {
   handleUpgrade(req: ProxyRequest, socket: ProxySocket, head: Buffer): Promise<void>
   /** `opts.transport` preserves the target/transport split from design 17:
    * dsh+http may use a direct non-loopback origin, while dsh+ssh and the
-   * legacy ssh spelling stay loopback-only. `opts.tls.spkiPin` (S23) is the
+   * legacy ssh spelling stay loopback-only. `opts.tls.spkiPin` is the
    * optional gateway+http+https certificate pin forwarded to proxy-forward. */
   registerTransport(connectionId: string, baseUrl: string, extraHeaders?: Record<string, string>, opts?: InstanceTransportRegistrationOptions): void
   unregisterTransport(connectionId: string): void
@@ -210,8 +209,8 @@ export function parseInstanceId(id: string): 'local' | 'dsh' | 'gateway' | null 
   return null
 }
 
-/** TCP keepalive cadence (ms) for the upstream leg of a direct-http target
- * (S2 sidebar-stability patch). NOTE: this is the INITIAL-IDLE threshold only
+/** TCP keepalive cadence (ms) for the upstream leg of a direct-http target.
+ * NOTE: this is the INITIAL-IDLE threshold only
  * — Node's setKeepAlive(true, ms) sets TCP_KEEPIDLE; the probe interval and
  * failure count follow OS defaults (Linux ~75s × 9, macOS ~75s × 8), so a
  * half-open leg surfaces on the order of ~10 minutes, never "30s". The fast
@@ -250,7 +249,7 @@ export function parseInstancePath(raw: string): InstancePath | null {
   if (parts.length < 3 || parts[0] !== 'api' || parts[1] !== 'i') return null
   const id = parts[2]
   if (parseInstanceId(id) === null) return null
-  // Preserve the trailing slash (review-round7b P1-1): 0.1.2 extra-bundle
+  // Preserve the trailing slash: 0.1.2 extra-bundle
   // URLs are `/plugins/??…` — the upstream serveBundle keys by the EXACT
   // `pathname+search`, and `new URL()` keeps `/plugins/` distinct from
   // `/plugins`. Without the slash every extra preload 404s and boot fails.
@@ -313,7 +312,7 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
    * is never registered — its baseUrl is derived from the managed dshPort. A
    * gateway record carries the optional bounded extra headers (Authorization
    * Bearer / Cookie dsh_gateway_session) injected at forward time, never in
-   * the registry, and the optional https SPKI certificate pin (S23) applied
+   * the registry, and the optional https SPKI certificate pin applied
    * by proxy-forward to every outbound connection to the target. */
   interface TransportRecord { baseUrl: string; headers?: Record<string, string>; tls?: { spkiPin?: string }; authority?: string }
   const transports = new Map<string, TransportRecord>()
@@ -455,7 +454,7 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
       }
       try {
         const forwardTarget = new URL(`${target.baseUrl}${parsed.rest}${parsed.search}`)
-        // 0.1.2 browser-auth cookie (review-round3c P0): the control plane's
+        // browser-auth cookie: the control plane's
         // spawn-time token exchange mints a session cookie for the local
         // instance; inject it into proxied requests. Registered transport
         // extraHeaders (gateway/ssh sessions) never coexist with a local
@@ -517,7 +516,7 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
       const releaseHandshake = pendingUpgrades.acquire(socket, connectionId ?? undefined)
       try {
         const forwardTarget = new URL(`${target.baseUrl}${parsed.rest}${parsed.search}`)
-        // 0.1.2 browser-auth cookie on the mux upgrade (review-round3c P0) —
+        // browser-auth cookie on the mux upgrade —
         // the remote.mux stream gate authenticates the same way as unary.
         const authCookie = authCookieFor(target.baseUrl)
         const extraHeaders = authCookie === undefined
@@ -526,7 +525,7 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
         await forwardUpgrade(req, socket, head, forwardTarget, releaseHandshake, logger, counters, {
           ...forwardDeps,
           id: parsed.id,
-          // S2: OS-level TCP keepalive for the upstream leg — non-loopback
+          // OS-level TCP keepalive for the upstream leg — non-loopback
           // (direct-http(s)) targets arm it; loopback legs (ssh tunnels, the
           // local instance) keep the documented no-heartbeat design (ssh
           // keepalive / loopback own their liveness, see proxy-forward.ts
@@ -591,7 +590,7 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
         // Target kind and transport are independent (design 17 §2.1/§7):
         // dsh+http is a direct origin and may be non-loopback; dsh+ssh and
         // the legacy ssh spelling remain a loopback tunnel. Missing transport
-        // intentionally keeps the historical fail-closed SSH interpretation.
+        // intentionally keeps the fail-closed SSH interpretation.
         if (!isOrigin) {
           throw new TypeError(transport === 'http'
             ? 'registerInstanceTransport: dsh baseUrl must be an origin (no credentials/path/query)'
@@ -658,7 +657,7 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
         }
         extraHeaders = Object.keys(injected).length === 0 ? undefined : injected
       }
-      // S23: an SPKI certificate pin is a gateway-only, https-only gate
+      // An SPKI certificate pin is a gateway-only, https-only gate
       // (design 17 §13.4.2) — a dsh/ssh target has no TLS trust decision to
       // pin, and http 模式无 TLS 层，pin 无意义且不得声称任何 TLS 保护. Format
       // mirrors the spec gate (64-hex sha256, case-insensitive compare at

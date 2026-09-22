@@ -2,7 +2,7 @@
 //  NavigationDecisionTests.swift
 //  DSHChamberTests
 //
-//  S-26/S-27：导航围栏的纯决策面——download（session 日志导出）优先于取消、
+//  导航围栏的纯决策面——download（session 日志导出）优先于取消、
 //  首载失败说明页的 about:blank 一次性放行、壳文档/同源非壳文档/外链三分类。
 //
 import XCTest
@@ -22,8 +22,8 @@ final class NavigationDecisionTests: XCTestCase {
                                                 isMainFrame: isMainFrame)
     }
 
-    /// S-26：shouldPerformDownload 在围栏之前判定——同源非壳文档（session 导出
-    /// /api/session.export?…）原被 cancel，现在是 .download（不装入 webview）。
+    /// shouldPerformDownload 在围栏之前判定——同源非壳文档（session 导出
+    /// /api/session.export?…）为 .download（不装入 webview）。
     func testShouldPerformDownloadBecomesDownload() {
         XCTAssertEqual(decide("http://127.0.0.1:17500/api/session.export?sessionId=x",
                               shouldPerformDownload: true), .download)
@@ -40,7 +40,7 @@ final class NavigationDecisionTests: XCTestCase {
                        .download, "blob URL 导出（如有）同样转下载")
     }
 
-    /// S-27：失败说明页 loadHTMLString(baseURL:nil) 的 about:blank 一次性放行；
+    /// 失败说明页 loadHTMLString(baseURL:nil) 的 about:blank 一次性放行；
     /// 无标志时 about: 仍被拦截。
     func testFailurePageAboutBlankAllowedOnce() {
         XCTAssertEqual(decide("about:blank", failurePagePending: true), .allow)
@@ -71,7 +71,7 @@ final class NavigationDecisionTests: XCTestCase {
             expectedOrigin: origin), .cancel(reason: "无 URL"))
     }
 
-    // MARK: - S-35：blob 子 frame（文档预览）放行，主 frame 围栏不变
+    // MARK: - blob 子 frame（文档预览）放行，主 frame 围栏不变
 
     /// shim 用户脚本仅主 frame（BridgeShimInjector.makeUserScript
     /// forMainFrameOnly=true），且消息围栏丢弃非主 frame 消息
@@ -92,7 +92,7 @@ final class NavigationDecisionTests: XCTestCase {
 
     /// 预览插件只用 blob（vendor ui-sidebar-documentpreview：iframe src=blob、
     /// asset 经 blob 子资源）；about:blank/data: 不在放行之列——子 frame 一律
-    /// 取消，主 frame 的 about:blank 仅经 S-27 一次性门。
+    /// 取消，主 frame 的 about:blank 仅经失败说明页的一次性门。
     func testNonBlobOpaqueSchemesStayCancelledInSubframes() {
         XCTAssertEqual(decide("data:text/html,hi", isMainFrame: false),
                        .cancel(reason: "非 http(s) scheme"))

@@ -1,12 +1,8 @@
 /**
  * runtime-probe-detail.ts —— 运行时激活探针失败诊断（electron-free 纯模块）。
  *
- * 为什么单源：`probeFailureDetail` 原先只存在于 main.ts 的 whenReady 闭包里，
- * Swift flavor 的 sidecar-ctx 于是各自 `throw new Error('runtime compatibility
- * probes failed')` 之类的常量串——同一个失败在两种 flavor 上可诊断性不同，而
- * 这条诊断正是 2026-09 验收轮唯一能看见的证据链（0.1.3-alpha.1 升级后的
- * `gateway/arguments-invalid` 曾对所有日志与界面不可见，见 main.ts 原注释）。
- * 本模块把「列出失败探针 + 600 字符上限 + 统一前缀/兜底文案」抽成纯函数，
+ * 为什么单源：两种 flavor 必须对同一失败给出同一份可诊断明细。本模块把
+ * 「列出失败探针 + 600 字符上限 + 统一前缀/兜底文案」抽成纯函数，
  * Electron 装配（main.ts）与 Swift 装配（sidecar-ctx.ts）共用同一实现。
  *
  * 输入只要求结构形状（name/ok/error），不耦合具体探针实现；`error` 已是
@@ -36,7 +32,7 @@ export function probeFailureMessage(prefix: string, probes: readonly ProbeFailur
   return `${prefix} — ${detail === '' ? 'no probe results' : detail}`
 }
 
-/** 元数据恢复路径的文案（main.ts 原 metadataProbeError 逐字，含 600 字符上限）。 */
+/** 元数据恢复路径的文案（metadataProbeError 文案，含 600 字符上限）。 */
 export function metadataProbeFailureMessage(probes: readonly ProbeFailureLike[]): string {
   const detail = probeFailureDetail(probes)
   return sanitizeErrorText(

@@ -12,8 +12,6 @@
  * headers before dispatch. It only reads the two private per-request
  * channels: `_cspNonce` (the __DSH_BOOT__ inline-script nonce) and
  * `_corsHeaders` (the CORS decision spread on every write).
- *
- * Response behavior is byte-identical to the pre-extraction inline service.
  */
 
 import { extname, join, resolve, sep } from 'node:path'
@@ -252,13 +250,13 @@ export function createStaticServing({ webDistDir, logger }: StaticServingOptions
       }
     }
     const headers: Record<string, string> = { 'content-type': type, ...(res._corsHeaders ?? {}) }
-    // Cache policy (LCP perf pass): hash-named build assets under /assets/
+    // Cache policy: hash-named build assets under /assets/
     // are immutable — one year, no revalidation, so a relaunch serves them
     // from the Electron HTTP cache instead of re-fetching several MB of
     // renderer assets (sizes drift per build; measured totals live in
     // dist/web/perf-sizes.json + scripts/perf/README.md). index.html
     // keeps no-cache (the __DSH_BOOT__ manifest moves every build). Other
-    // paths (e.g. /manifest.json) keep their previous no-header behavior.
+    // paths (e.g. /manifest.json) get no cache-control header.
     // The predicate is the SAME one the gateway's response-header seam uses
     // (proxy-forward.ts `isHashedStaticAssetPath`): a bare `/assets/` prefix
     // would pin a future UNhashed entry for a year, which is exactly the

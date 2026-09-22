@@ -1,22 +1,21 @@
 /**
- * B4: the sidebar's receipt chain as a DECISION, not as imperative branches.
+ * The sidebar's receipt chain as a DECISION, not as imperative branches.
  *
- * WHY THIS EXISTS. The 190s-class reconcile chain (`SessionFactReconciler`) had its
- * policy buried inside an async method: after the independent authority probe
- * returned, four cases were decided by inline `if`s, and the tier-3 write-back was
- * entangled with the settle fence. That made the policy untestable in isolation and
- * invisible to review - the exact shape this refactor removes.
+ * WHY THIS EXISTS. The 190s-class reconcile chain (`SessionFactReconciler`) keeps
+ * its orchestration in an async method, so the policy would otherwise be buried
+ * there: after the independent authority probe returns, four cases must be
+ * decided, and the tier-3 write-back must stay separate from the settle fence.
+ * Inline branches would be untestable in isolation and invisible to review.
  *
- * WHAT MOVED. The async ORCHESTRATION stays in the sidebar (timers, seams, the
- * settle fence: those are the host's job). What moves here is the DECISION:
+ * BOUNDARY. The async ORCHESTRATION stays in the sidebar (timers, seams, the
+ * settle fence: those are the host's job). The DECISION lives here:
  * "given the probe's verdict and which seams exist, what must happen next" and
- * "given the write-back's outcome, how does the round settle". Both are pure, and
- * both are what the chain's five review rounds actually argued about.
+ * "given the write-back's outcome, how does the round settle". Both are pure.
  *
  * NOT MOVED (deliberately): the two phase timers, the dispose fence, and the
  * "abandoned verify may not write" rule - those are timing/lifetime facts about the
- * host, not policy. See the plan's §73.1 for the eight semantics that must not be
- * lost if this is ever taken further.
+ * host, not policy. Eight further semantics must not be lost if this is ever
+ * taken further.
  */
 
 /** The probe's verdict (mirrors the sidebar's `SessionFactVerdict`). */
@@ -30,8 +29,7 @@ export type AuthorityStep =
   | { readonly step: 'writeBack' }
 
 /**
- * The decision after the authority probe. Verdict semantics (from the chain's own
- * documentation, 2026-12 five review rounds):
+ * The decision after the authority probe. Verdict semantics:
  *  - `converged`: the authority agrees with the official fact - settle ok.
  *  - `unknown`: the probe could not conclude - settle NOT ok, without escalating
  *    (a broken auxiliary carrier must not look like a stale fact).
@@ -83,7 +81,7 @@ export function decideAfterWriteBack(corrected: boolean): AuthorityStep {
 /**
  * Whether the round must warn because the OFFICIAL refresh was broken while the
  * independent authority still concluded. Without this line a persistently broken
- * official channel degrades silently (2026-12 four-round review).
+ * official channel degrades silently.
  */
 export function shouldWarnAboutBrokenRefresh(refreshFailed: boolean, step: AuthorityStep): boolean {
   // Only a SUCCESSFUL settle warns: a non-converging round already carries the refresh

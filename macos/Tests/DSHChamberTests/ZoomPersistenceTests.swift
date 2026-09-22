@@ -2,7 +2,7 @@
 //  ZoomPersistenceTests.swift
 //  DSHChamberTests
 //
-//  A3-3：页面缩放按 origin 持久化（Chromium 的 partition.per_host_zoom_levels
+//  页面缩放按 origin 持久化（Chromium 的 partition.per_host_zoom_levels
 //  对偶）。WKWebView.pageZoom 每次启动回 100%，本文件钉住 UserDefaults 存取、
 //  坏值收敛，以及装配恢复/菜单写回的接线（不构造真实 WKWebView）。
 //

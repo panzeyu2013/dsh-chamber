@@ -6,7 +6,7 @@
  * 为什么参数面要闭合：本门会读**仓库之外**的上游锚点树（几万个文件里的一小撮），
  * 一个拼错的 flag（`--anchor-rooot`、`--simulate-rename main` 少了 `=`）如果被
  * 静默忽略，调用者以为「改名实验证明门禁有效」，实际跑的是默认模式且全绿——
- * 这正是 verify-upstream-touchpoints.mjs 2026-12 review P2 定下的纪律：用法错误
+ * 与 verify-upstream-touchpoints.mjs 一致：用法错误
  * 响亮失败（exit 2），绝不静默跑默认模式。
  */
 
@@ -121,7 +121,7 @@ export function parseVerifyMobileAnchorsArgs(argv, env = {}) {
       : `不接受位置参数 ${argument}`)
   }
   // 自测开关与严格模式互斥：`--simulate-rename a=b` 能把产物里被改掉的名字**改回来**，
-  // 于是在严格模式下能凭空造出「上游仍在发射」的证据（2026-12 第三轮复核实测：
+  // 于是在严格模式下能凭空造出「上游仍在发射」的证据：
   // 改名后的树 + `--simulate-rename <新名>=<原名>` ⇒ 严格模式 exit 0）。严格模式必须
   // 只对真实产物下判断，因此这个组合是用法错误（exit 2）。
   if (requireAnchorRoot && renames.length > 0) {

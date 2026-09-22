@@ -1,8 +1,8 @@
 /**
- * R19 生产端锁（plan W4 能力一览；2026-12 复审发现的真残留）：
- * 侧栏早就消费 `server.sessionFacts`（四级文案级联 + `data-chamber-facts-mode`），
- * 但桌面侧从未投影 —— 属性恒为 undefined、能力说明永不出现。本用例既锁映射语义
- * （含"陈旧不得说成 full"、"无快照不得臆造 full"），也锁**跨包词汇一致**。
+ * 生产端锁（能力一览）：侧栏消费 `server.sessionFacts`（四级文案级联 +
+ * `data-chamber-facts-mode`），桌面侧必须把它投影到聚合条目上，否则属性恒为
+ * undefined、能力说明永不出现。本用例既锁映射语义（含"陈旧不得说成 full"、
+ * "无快照不得臆造 full"），也锁**跨包词汇一致**。
  *
  * Run directly: node test/session-state/session-facts-mode.test.ts
  */

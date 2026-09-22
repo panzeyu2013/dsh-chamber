@@ -11,8 +11,8 @@
  * state marker, and the full detail (plugin id + reason) lives in the
  * per-instance plugin dialog.
  *
- * Since 2026-12 the card also renders the instance's settled-boot GAP (design
- * 05 §4 「降级呈现」second batch) — a DIFFERENT fact from the diagnostic above.
+ * The card also renders the instance's settled-boot GAP (design 05 §4
+ * 「降级呈现」) — a DIFFERENT fact from the diagnostic above.
  * The graph channel may legitimately answer `ok` (the graph was fetched and
  * every row that arrived applied) while a service the page's own frontend
  * injects was never provided, which is exactly the "session titles fine,
@@ -84,10 +84,9 @@ export function PluginDiagnosticLine({ diagnostic, bootGap, t }: {
           <p className={clsx(css.pluginDiagnostic, css.pluginDiagnosticWarn)} role="status">
             <strong>{t('bootGapLabel')}：{bootGapText(bootGap, t)}</strong>
             {/* The services are ALREADY inside the sentence (`{services}`); rendering
-                them again here duplicated the id on screen (2026-12 review, caught by
-                rendering the three seats side by side). The failed-id list is the
-                complementary half — the sentence carries the COUNT, the span names
-                which rows — so only that one is appended. */}
+                them again here would duplicate the id on screen. The failed-id list
+                is the complementary half — the sentence carries the COUNT, the span
+                names which rows — so only that one is appended. */}
             {(bootGap.failedIds ?? []).length > 0 && <span>{(bootGap.failedIds ?? []).join(', ')}</span>}
           </p>
           {/* Actionable next step, mirroring the version-conflict hint's shape

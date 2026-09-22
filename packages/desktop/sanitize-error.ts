@@ -8,10 +8,9 @@ import { PROBE_TEXT_KEEP_TOKENS, sanitizeErrorText as sanitizeRuntimeErrorText }
  *
  * The activation-probe vocabulary rides along as kept tokens: those method
  * names are RPC vocabulary rather than path material, and this pass would
- * otherwise republish a probe failure as `commands[path]` — the 2026-09
- * acceptance round lost the failing method that way while diagnosing a
- * quarantined fresh install (PROBE_TEXT_KEEP_TOKENS also covers the legacy
- * fallback method, which a required-set-only list misses).
+ * otherwise republish a probe failure as `commands[path]` while losing the
+ * failing method name (PROBE_TEXT_KEEP_TOKENS also covers the legacy fallback
+ * method, which a required-set-only list misses).
  */
 export function sanitizeErrorText(message: string): string {
   const urls: string[] = []

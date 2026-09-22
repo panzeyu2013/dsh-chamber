@@ -4,7 +4,7 @@
  * password verifier) go through a 0600 atomic-file discipline (never
  * plaintext in a store doc, S5/S8/S15).
  *
- * Credential model (Phase 1 — runtime credential management):
+ * Credential model (runtime credential management):
  *
  *  - Credentials are SERVER STATE, not deployment config: config seeds them at
  *    startup, the runtime change API mutates them, and they persist across
@@ -35,9 +35,8 @@
  *    `reacquire()` re-takes the lock after a close (gateway start() retry
  *    path). All same-stateDir reopen tests must `close()` before reopening.
  *
- * 2026-12 strip: the orchestration records (worktrees/schedule/settings
- * documents and the feature host) were removed — the store now owns
- * credentials and the lock only, and is never authoritative over dsh facts.
+ * The store owns credentials and the lock only, and is never authoritative
+ * over dsh facts.
  */
 
 import { closeSync, fchmodSync, fstatSync, fsyncSync, lstatSync, openSync, realpathSync, renameSync, writeSync } from 'node:fs'
@@ -70,7 +69,7 @@ export interface CredentialRecord {
   updatedAt: number
 }
 
-/** Non-secret per-dimension credential projection (Phase 3, S5): provenance +
+/** Non-secret per-dimension credential projection (S5): provenance +
  * last-write time ONLY — the verifier/hash never leaves the file. `null`
  * means the dimension currently has no credential. */
 export interface CredentialProjection {
@@ -145,11 +144,10 @@ function readSecretFile(file: string, migrateMode = true): { value: string | nul
   }
 }
 
-/** The single credential-document parse (2026-12 audit F9): the runtime
- * readers and the read-only CLI projection previously each carried their own
- * copy of the v2-envelope + legacy-v1 rules. `corrupt-v2` and the legacy
- * outcomes let each caller keep its exact warning text while the parse itself
- * exists once. */
+/** The single credential-document parse: the runtime readers and the
+ * read-only CLI projection each carry the v2-envelope + legacy-v1 rules
+ * through this one function. `corrupt-v2` and the legacy outcomes let each
+ * caller keep its exact warning text while the parse itself exists once. */
 type CredentialParse =
   | { kind: 'record'; record: CredentialRecord }
   | { kind: 'absent' }
@@ -324,9 +322,9 @@ export function createGatewayStore(stateDir: string, logger: GatewayStoreLogger)
   const root = join(stateDir, 'gateway')
   // State root converges to 0700 on POSIX: freshly created directories are
   // created 0700; a pre-existing directory is tightened to 0700 via its pinned
-  // no-follow descriptor (user decision 2026-09: auto-tighten instead of
-  // fail-closed 'require' — installers/upgrades from older layouts must not
-  // crash-loop on a legacy 0755 root). broad-root rejection is unchanged.
+  // no-follow descriptor (auto-tighten instead of fail-closed 'require' —
+  // installers/upgrades from older layouts must not crash-loop on a legacy
+  // 0755 root). broad-root rejection is unchanged.
   // A loose pre-existing root is worth one loud warning (once per process):
   // silent permission mutation confuses operators auditing who changed modes.
   try {
@@ -340,7 +338,7 @@ export function createGatewayStore(stateDir: string, logger: GatewayStoreLogger)
   ensurePrivateDirectoryNoFollow(stateDir, 0o700)
   ensurePrivateDirectoryNoFollow(root, 0o700)
 
-  // Exclusive stateDir lock (Phase 1, fix round). O_EXCL-first acquisition;
+  // Exclusive stateDir lock. O_EXCL-first acquisition;
   // a stale (dead-pid) lock is taken over via rename-claim + moved-content
   // verification (the moved file must be the exact stale lock we read; a
   // fresh live lock is renamed back and the contender fails loudly), and a
@@ -580,9 +578,6 @@ export function createGatewayStore(stateDir: string, logger: GatewayStoreLogger)
   }
 
   acquireLock()
-
-  // 2026-12 strip: the orchestration documents (worktrees/schedule/settings)
-  // were removed with the feature host — the store now owns credentials only.
 
   const tokensFile = join(stateDir, 'tokens.json')
   const jwtSecretFile = join(stateDir, 'jwt-secret')

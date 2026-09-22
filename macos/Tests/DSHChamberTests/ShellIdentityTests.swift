@@ -2,9 +2,9 @@
 //  ShellIdentityTests.swift
 //  DSHChamberTests
 //
-//  T-1（2026-12 用户指令）：可见标识暂时标记为 dsh-chamber——窗口标题、
+//  可见标识暂时标记为 dsh-chamber——窗口标题、
 //  失败说明页文案、About（Info.plist CFBundleName）的锁步断言，防止
-//  "poc"/"DSHChamber" 再露到用户可见面；T-4 首帧白闪的底色 token 同处钉住。
+//  "poc"/"DSHChamber" 再露到用户可见面；首帧白闪的底色 token 同处钉住。
 //
 import XCTest
 @testable import DSHChamber
@@ -23,15 +23,15 @@ final class ShellIdentityTests: XCTestCase {
                           encoding: .utf8)
     }
 
-    // MARK: - 注释剥离（第三轮 review：M9 盲区）
+    // MARK: - 注释剥离
 
     /// 去掉源码里的行注释与块注释（// 与 /* */，块注释支持嵌套）与 XML 注释
     /// （<!-- -->）；字符串字面量（"…" / """…""" / `…` / '…'）里的注释符不算注释。
     /// 注释字符替换为空白（保留换行），供"只匹配未注释代码"的断言：把真声明注释掉、
-    /// 只在注释里留一份旧声明必须变红（M9；此前的直接 contains 会假绿）。
+    /// 只在注释里留一份旧声明必须变红（直接 contains 会假绿）。
     /// - Parameter nestedBlockComments: Swift 的块注释可嵌套；JS（build-swift-app.mjs）
     ///   不可——其头部注释里的 `*.dmg/*.zip` 这类文本会误开一层嵌套，导致真声明被
-    ///   整段吞掉（第三轮 review 首跑实测：MODULE_NAME 被吞而假红）。
+    ///   整段吞掉（实测：MODULE_NAME 被吞而假红）。
     private static func strippingComments(_ text: String,
                                           nestedBlockComments: Bool = true) -> String {
         let chars = Array(text)
@@ -177,7 +177,7 @@ final class ShellIdentityTests: XCTestCase {
         }.joined(separator: "\n")
     }
 
-    /// 读源码并剥注释（M9：注释里的旧声明不算声明）。JS 不嵌套块注释（Swift 可）。
+    /// 读源码并剥注释（注释里的旧声明不算声明）。JS 不嵌套块注释（Swift 可）。
     private func uncommentedSource(_ relative: String) throws -> String {
         let text = try macosSource(relative)
         return Self.strippingComments(
@@ -202,7 +202,7 @@ final class ShellIdentityTests: XCTestCase {
                        "可见产品名不得出现 poc")
     }
 
-    /// T-17 锁步（R2 复核发现原缺口）：Info.plist 的 CFBundleExecutable（活动监视器
+    /// Info.plist 的 CFBundleExecutable（活动监视器
     /// 显示的进程名）必须与打包脚本的可执行名单源一致——两处任一手写漂移都会产出
     /// 指向不存在可执行文件的 .app，而 codesign --verify 抓不到这种形状错误。
     func testBundleExecutableMatchesBuildScriptExecutableName() throws {
@@ -217,10 +217,10 @@ final class ShellIdentityTests: XCTestCase {
                       "APP_NAME 必须与可见名同源")
     }
 
-    /// 资源包名跨语言锁步（R2 复核发现原缺口）：SwiftPM 产物名 = `<Module>_<Module>.bundle`
+    /// 资源包名跨语言锁步：SwiftPM 产物名 = `<Module>_<Module>.bundle`
     /// （`Package.swift` 的 target 名），而运行期定位用的 `ChamberResources.bundleName` 是
     /// 手写常量、`release.yml` 里还有一处字面量路径——三处漂移会让运行期静默找不到 shim
-    /// 资源（只在打包态由 P-18 fail-closed 暴露）。
+    /// 资源（只在打包态由 fail-closed 暴露）。
     func testResourceBundleNameMatchesBuildScriptModuleAndWorkflow() throws {
         let script = try uncommentedSource("scripts/build-swift-app.mjs")
         let range = try XCTUnwrap(
@@ -231,19 +231,19 @@ final class ShellIdentityTests: XCTestCase {
             .dropLast()
         XCTAssertEqual(ChamberResources.bundleName, "\(module)_\(module).bundle",
                        "资源包名必须与打包脚本 MODULE_NAME 同源（SwiftPM: <Module>_<Module>.bundle）")
-        // YAML 的 # 行注释同样剥掉：注释里的旧路径不算锁步证据（M9 同类）。
+        // YAML 的 # 行注释同样剥掉：注释里的旧路径不算锁步证据。
         let release = Self.strippingHashComments(
             try macosSource("../.github/workflows/release.yml"))
         XCTAssertTrue(release.contains("/Contents/Resources/\(ChamberResources.bundleName)/bridge-shim.js"),
                       "release.yml 的资源包断言必须与 ChamberResources.bundleName 同源")
     }
 
-    /// Y1（第二轮独立 review）：本地化标识符（en / zh-Hans）在 Swift 侧只剩
+    /// 本地化标识符（en / zh-Hans）在 Swift 侧只剩
     /// ShellPageLanguage.localizationIdentifier 一个入口；作为同一集合镜像的
     /// build-swift-app.mjs LOCALIZATIONS、Package.swift 的两个 .process("…lproj")、
-    /// Info.plist.template 的 CFBundleLocalizations 不在本轮授权改动范围内，故读
+    /// Info.plist.template 的 CFBundleLocalizations 同处一套集合，故读
     /// 源码逐集合锁步：任一漂移（少一项/多一项/拼写变体）即红。解析失败在断言
-    /// 消息里写明所期望的源形态。第三轮 review（M9）：解析前先剥注释——把真声明
+    /// 消息里写明所期望的源形态。解析前先剥注释——把真声明
     /// 注释掉、只在注释里留一份旧声明同样红。
     func testLocalizationIdentifiersLockstepAcrossBuildInputs() throws {
         let expected = Set(ShellPageLanguage.allCases.map { $0.localizationIdentifier })
@@ -315,7 +315,7 @@ final class ShellIdentityTests: XCTestCase {
     }
 
     func testFailurePageCopyCarriesNativeNameAndRealReason() {
-        // 真实报文走生产构造（不再是手抄的中文整句）：期望值随语言变，
+        // 真实报文走生产构造（不是手抄的中文整句）：期望值随语言变，
         // 机器语言为 en 时失败页里嵌的也是 en 的诚实报错。
         let sidecarFailure = SidecarStartupFailure.make(
             exitCode: 70,
@@ -368,15 +368,15 @@ final class ShellIdentityTests: XCTestCase {
         XCTAssertEqual(color.blueComponent, 21.0 / 255.0, accuracy: 0.0001)
         XCTAssertEqual(color.alphaComponent, 1.0, accuracy: 0.0001)
 
-        // 只认**非注释代码**：注释里的旧字面量不算机制（第三轮 review：旧断言认的
-        // `setDrawsBackground:` 现在只剩注释，会假绿）。
+        // 只认**非注释代码**：注释里的旧字面量不算机制（否则只剩注释的
+        // `setDrawsBackground:` 会假绿）。
         let source = try uncommentedSource("Sources/DSHChamber/MainWindowController.swift")
         XCTAssertTrue(source.contains("window.backgroundColor = Self.windowBackgroundColor"),
                       "窗口底色必须设（T-4）")
         XCTAssertTrue(source.contains(
             "webView.underPageBackgroundColor = Self.windowBackgroundColor"))
-        // T-4/X2/W1：真实生效路径 = DSHChamberWebKitSupport 的异常安全包装
-        // （DSHChamberSetDrawsBackground(webView, false)），或历史 KVC 直设。
+        // 真实生效路径 = DSHChamberWebKitSupport 的异常安全包装
+        // （DSHChamberSetDrawsBackground(webView, false)），或 KVC 直设。
         XCTAssertTrue(Self.invokesDrawsBackgroundMechanism(source),
                       "非注释代码必须真的关掉 drawsBackground（包装调用点 "
                       + "DSHChamberSetDrawsBackground(…, false) 或 "
@@ -385,9 +385,9 @@ final class ShellIdentityTests: XCTestCase {
                        "X2：responds/selector 探测恒 false，不得再作为生效路径回归")
     }
 
-    /// C4（2026-09 评审）：唤醒/激活腿必须落盘。print-only 时 Dock 启动的 .app
+    /// 唤醒/激活腿必须落盘。print-only 时 Dock 启动的 .app
     /// stdout 无处可看——shell.log（ShellLog.fileName）里零条唤醒行既不能证明
-    /// 「发过」，也不能证明「没发」（只能靠反汇编），真机验收分不开「壳没发」与
+    /// 「发过」，也不能证明「没发」（只能靠反汇编），实机也分不开「壳没发」与
     /// 「页面没消费」。
     func testWakeAndActivationLegsLogDurably() throws {
         let source = try uncommentedSource("Sources/DSHChamber/MainWindowController.swift")
@@ -397,8 +397,8 @@ final class ShellIdentityTests: XCTestCase {
                       "held-resume 补发点（didBecomeActive）必须落盘")
         XCTAssertFalse(source.contains("print(\"[shell] 系统唤醒"), "唤醒腿不得退回 print-only")
         XCTAssertFalse(source.contains("print(\"[shell] 应用激活"), "激活腿不得退回 print-only")
-        // 失败分支与 hop3 同样必须落盘（2026-09 评审：catch 与壳→页面这一跳
-        // 此前是 print-only，真机分不开「没发/没推」与「页面没消费」）。
+        // 失败分支与 hop3 同样必须落盘（catch 与壳→页面这一跳
+        // 若是 print-only，实机分不开「没发/没推」与「页面没消费」）。
         XCTAssertTrue(source.contains("shellLog(\"[shell] __host.systemResume 发送失败："),
                       "唤醒发送失败（catch）必须落盘")
         XCTAssertTrue(source.contains("shellLog(\"[shell] __host.mainWindowShown 发送失败："),
@@ -408,7 +408,7 @@ final class ShellIdentityTests: XCTestCase {
         XCTAssertFalse(source.contains("print(\"[shell] notify rendererPush"), "不得退回 print-only")
         XCTAssertTrue(source.contains("shellLog(\"[shell] 页面 emit 失败"),
                       "emit 失败必须可考古（JS 抛错 = 页面没收到）")
-        // 同一缺陷类的其余推送面（2026-09 复核）也不得退回 print-only。
+        // 其余推送面同样不得是 print-only。
         XCTAssertTrue(source.contains("shellLog(\"[shell] hostFacts 推送 "),
                       "hostFacts 推送必须落盘")
         XCTAssertTrue(source.contains("shellLog(\"[shell] rendererLifecycle 上报 "),

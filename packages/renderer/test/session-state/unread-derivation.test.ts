@@ -1,9 +1,9 @@
 /**
- * 派生未读账本的**行为**契约（主计划 §3.3-2 / R2/R12/R13/R20）。
+ * 派生未读账本的**行为**契约。
  *
  * 判定函数来自 sidebar shared 的导出（与 App 接线喂进去的是同一对函数，
  * 反作弊：不得自造第二套）。覆盖：facts 水位、读水位解除、aborted+user
- * 抑制、ABSENT turn-end 武装（Lead 修）、channel-only 边沿、listComplete
+ * 抑制、ABSENT turn-end 武装、channel-only 边沿、listComplete
  * 唯一剪枝门、factsVerified=false 不 clobber、阅读抑制、水位推进。
  */
 import { test } from 'node:test'
@@ -170,8 +170,8 @@ test('ledger identity: an unchanged derivation reports changed=false', () => {
   assert.equal(second.changed, false)
 })
 /**
- * B5（第二问）：observer 域的完成事实（客户端降级戳）只用于**武装**未读，
- * 不并入 host 域读水位（plan §5-13「禁止客户端墙钟」/ W2「时钟 +1h 零假未读」）。
+ * observer 域的完成事实（客户端降级戳）只用于**武装**未读，
+ * 不并入 host 域读水位（「禁止客户端墙钟」/「时钟 +1h 零假未读」）。
  * 未标注 domain 的行（gateway 事实源）保持原判据；reconstructed 在网关侧是 host 域时间，
  * 故不能用 completedAtSource 当域判据。
  */

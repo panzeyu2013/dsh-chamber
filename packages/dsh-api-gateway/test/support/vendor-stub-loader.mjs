@@ -3,8 +3,8 @@
  *
  * The gateway fork's real modules import a handful of vendor packages whose
  * install does not exist in a bare checkout. The behavioural suites must import
- * the REAL fork modules (a source-text lock cannot catch a runtime bug — the
- * 2026-09 review blocker proved that), so only the vendor leaves are stubbed:
+ * the REAL fork modules (a source-text lock cannot catch a runtime bug), so only the
+ * vendor leaves are stubbed:
  * RemoteError (error identity only), Deque and randomUUID.
  */
 import { fileURLToPath } from 'node:url'

@@ -150,10 +150,10 @@ test('sessionTodoPatch: rides as a PARTIAL nested object (siblings never clobber
   assert.equal('onComplete' in (patch.sessionTodo as object), false, 'untouched switches do not ride the wire');
 });
 
-// --- 未读徽标平台能力门（design 19 §3.7 / design 23 M3，2026-12 windows 修复） ---
+// --- 未读徽标平台能力门（design 19 §3.7 / design 23 M3） ---
 
 /**
- * 主进程 status 投影新增 supported.badgeSupported（win32=false：任务栏
+ * 主进程 status 投影提供 supported.badgeSupported（win32=false：任务栏
  * overlay 角标 v1 未接线），GeneralView 的未读徽标开关在 false 时禁用并显示
  * 原因。GeneralView 是 React 组件（引 primitives/CSS），因此这里钉两件纯 node
  * 可测的事：zh/en 字典键镜像，以及组件的源码级能力门（仓库既有的
@@ -173,7 +173,7 @@ test('badge capability: the unsupported reason exists in both dictionaries (zh i
 });
 
 test('badge capability: GeneralView reads badgeSupported as an optional fact (old main process = supported)', () => {
-  // 局部可选交叉类型：能力字段加入前的旧主进程缺该字段时保持原渲染（开关
+  // 局部可选交叉类型：旧主进程缺该字段时保持原渲染（开关
   // 启用）——向后兼容；只有显式 false 才禁用。
   assert.match(generalViewSource, /badgeSupported\?: boolean/);
   assert.match(generalViewSource, /supported\?\.badgeSupported !== false/);

@@ -1,18 +1,18 @@
 #!/usr/bin/env node
 /**
- * verify-electron-artifacts.mjs —— executed Electron-compiled-artifact gate (G4 residual).
+ * verify-electron-artifacts.mjs —— executed Electron-compiled-artifact gate.
  *
- * G4's first half is covered by compiled-sidecar-smoke.mjs (the shipped
- * `sidecar.js` boots and answers the B bridge). The Electron compiled
- * artifacts were still only asserted to EXIST:
+ * The sidecar half is covered by compiled-sidecar-smoke.mjs (the shipped
+ * `sidecar.js` boots and answers the B bridge); the Electron compiled
+ * artifacts are otherwise only asserted to EXIST:
  *
  *   - `dist/control-plane/index.js` is a tsc-emitted ESM tree loaded by the
  *     packaged main process; a broken emit (unresolved relative import, a
- *     missing module, a non-ESM artifact) only surfaced when a user launched
+ *     missing module, a non-ESM artifact) only surfaces when a user launches
  *     the packaged app;
  *   - `dist/preload.cjs` is loaded into the sandbox preload world at window
- *     creation (main.ts:832-841 fails closed when it is absent, but nothing
- *     executed the compiled file to prove it parses and exposes the frozen
+ *     creation (main.ts:832-841 fails closed when it is absent; without this gate nothing
+ *     executes the compiled file to prove it parses and exposes the frozen
  *     `window.dshChamber` surface).
  *
  * This gate therefore:
@@ -27,7 +27,7 @@
  *       (`packages/desktop/release/mac-arm64/dsh-chamber.app`, or the app named
  *       by `DSH_CHAMBER_ELECTRON_APP`), asserts the packaged `.lproj/locale.pak`
  *       resources for every `build.electronLanguages` entry survive
- *       (2026-12 A1: app-builder-lib's matcher deleted `zh_CN.lproj` while the
+ *       (app-builder-lib's matcher can delete `zh_CN.lproj` while the
  *       config said `zh-CN`; dist/ carries no .lproj, so only a real product
  *       can be asserted — the mac packaging rehearsal calls this gate right
  *       after electron-builder, and afterPack runs the same fail-closed check).
@@ -78,8 +78,8 @@ export function resolveDesktopDist(env = process.env, cwd = process.cwd()) {
 }
 
 /**
- * Locate the packaged mac app whose locale resources must be asserted
- * (2026-12 A1/F3). `dist/` carries no `.lproj` at all, so the only place the
+ * Locate the packaged mac app whose locale resources must be asserted.
+ * `dist/` carries no `.lproj` at all, so the only place the
  * electronLanguages deletion bug is visible is a real electron-builder product:
  *
  *   - `DSH_CHAMBER_ELECTRON_APP` (absolute or cwd-relative) is authoritative and
@@ -326,7 +326,7 @@ export function assertFrozenPreloadSurface(bridge, { expectedScalars } = {}) {
  * Run the gate. Returns a verdict instead of exiting so tests can call it.
  * @param {{ desktopDist?: string, nodeBinary?: string, log?: Function, packagedMacApp?: string | null }} [options] - inputs.
  * `packagedMacApp` (undefined = discover, null = assert none) is the staged
- * electron-builder mac product whose locale resources must be intact (A1/F3).
+ * electron-builder mac product whose locale resources must be intact.
  * @returns {Promise<{ action: 'skip', reason: string } | { action: 'run', port: number, members: number, health: unknown, locales: string[] }>} verdict.
  */
 export async function runElectronArtifactSmoke({
@@ -361,7 +361,7 @@ export async function runElectronArtifactSmoke({
       throw new Error('compiled preload never invoked dsh-chamber:info — the exposure branch was not exercised')
     }
     log(`electron-artifacts: control-plane booted on port ${boot.port} and answered /health; preload exposed ${surface.namespaces} namespaces / ${surface.members} members`)
-    // A1/F3: when a real electron-builder mac product is staged, the locale
+    // When a real electron-builder mac product is staged, the locale
     // resources Electron loads its UI strings from are part of the product
     // assertion — app-builder-lib's electronLanguages matcher can delete a
     // declared language (zh-CN vs the on-disk zh_CN) with no other gate seeing

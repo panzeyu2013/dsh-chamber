@@ -2,8 +2,8 @@
 //  RefreshRatePolicyTests.swift
 //  DSHChamberTests
 //
-//  S-48：刷新率折算的纯逻辑门。期望值有两类来源，别混读：
-//    ① 实机实测（M5 Pro / 内置 120Hz 屏；design 25 §5.1 / deviations S-48）：
+//  刷新率折算的纯逻辑门。期望值有两类来源，别混读：
+//    ① 实机实测（内置 120Hz 屏；design 25 §5.1）：
 //       WebKit 默认偏好 + 插电 → rAF 60.0fps；关闭偏好 + 插电 → 120.0fps；
 //       WebKit 默认偏好 + 低电量模式 → 30.0fps。
 //    ② 上游算法/常量推导（AnimationFrameRate.{h,cpp}）：其余用例（100/144/165/240 的
@@ -114,10 +114,10 @@ final class RefreshRatePolicyTests: XCTestCase {
         XCTAssertFalse(panelMaximumLine.contains("（当前模式）"), panelMaximumLine)
     }
 
-    /// S-48 锁步门：C 头文件声明 Unknown/NearSixty/DisplayRate = 0/1/2，且必须能被
+    /// C 头文件声明 Unknown/NearSixty/DisplayRate = 0/1/2，且必须能被
     /// Swift 直译成同一语义。**改 raw 值或改序**在这里变红；**C 侧新增第 4 个 case 不在这条
-    /// 测试的覆盖内**——由编译器穷尽性诊断暴露（见 RefreshRatePreference.init(cValue:)，2026-12
-    /// 实测为 warning），所以两处注释是互补的，不要只依赖其一。
+    /// 测试的覆盖内**——由编译器穷尽性诊断暴露（见 RefreshRatePreference.init(cValue:)，实测
+    /// 为 warning），所以两处注释是互补的，不要只依赖其一。
     func testCEnumMirrorIsStableAndBridgesEveryCase() {
         XCTAssertEqual(DSHChamberRefreshRatePreference.unknown.rawValue, 0)
         XCTAssertEqual(DSHChamberRefreshRatePreference.nearSixty.rawValue, 1)
@@ -128,16 +128,16 @@ final class RefreshRatePolicyTests: XCTestCase {
     }
 
     /// 真实 SPI 路径的金丝雀。**不能用 XCTSkip**：scripts/gates/run-swift-tests.mjs 把任何
-    /// skip 判为整条 macOS 腿失败（G2：XCTSkip 计数必须为 0），退役信号会被误报成门禁违规。
+    /// skip 判为整条 macOS 腿失败（XCTSkip 计数必须为 0），降级信号会被误报成门禁违规。
     /// 因此这里两条分支都是硬断言：SPI 在就必须关得动；SPI 不在就断言"诚实降级"语义成立，
-    /// 并打印显式信号要求复核 S-48 退役判据。两条分支 skipped 都为 0。
+    /// 并打印显式信号供 SPI 退役判据核对。两条分支 skipped 都为 0。
     /// 排查提示：若在受管（MDM/配置描述文件）机器上此测试变红，先看是不是策略把该 WebKit
     /// feature 锁成开启——那时"SPI 在但关不动"并非本仓回归。
     func testApplyReportsDisplayRateWhenSPIAvailable() {
         let applied = RefreshRatePolicy.apply(to: WKPreferences())
         if applied == .unknown {
             // 区分两种原因：真 SPI 缺失（未来 OS 移除该偏好）vs SPI 仍在但 key/调用坏了
-            // ——后者是本次改动的回归，必须硬红，不能按"退役"放过。
+            // ——后者是本仓的回归，必须硬红，不能按"退役"放过。
             let spiPresent = WKPreferences.responds(to: NSSelectorFromString("_features"))
             XCTAssertFalse(spiPresent,
                            "SPI 仍在却读不到偏好：这是 feature key 或调用路径的回归，不是 OS 变更")
@@ -150,7 +150,7 @@ final class RefreshRatePolicyTests: XCTestCase {
         }
     }
 
-    // MARK: - S-48 接线锁步（仿 ShellLogTests：直接读源码断言）
+    // MARK: - 接线锁步（仿 ShellLogTests：直接读源码断言）
 
     /// 硬时序不变量：关偏好必须发生在构造 WKWebView 之前（建页后再改实测不生效）。
 

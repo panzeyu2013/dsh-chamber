@@ -1,5 +1,5 @@
 /**
- * Hidden-tab polling gate + injectable visibility face (P1, 2026-11).
+ * Hidden-tab polling gate + injectable visibility face.
  *
  * Dependency-free on purpose: the git coordinator imports this module (not
  * the other way around), so the node test suite can cover the gate and the
@@ -14,7 +14,7 @@ export function isPollEligible(visibility: DocumentVisibilityState): boolean {
   return visibility !== 'hidden'
 }
 
-/** Browser visibility face the coordinator uses (P1). */
+/** Browser visibility face the coordinator uses. */
 export interface VisibilityEvents {
   read(): DocumentVisibilityState
   /** Subscribe to visibility changes; returns the unsubscribe. */

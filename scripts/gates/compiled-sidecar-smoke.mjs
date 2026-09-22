@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 /**
- * compiled-sidecar-smoke.mjs —— executed-assembly gate (G4/G19 partial).
+ * compiled-sidecar-smoke.mjs —— executed-assembly gate.
  *
  * The sidecar assembly (`packages/desktop/release/sidecar`) is what Swift ships:
  * a bundled `node`, the esbuild-bundled `sidecar.js` and the compiled
- * `dist/control-plane`. Nothing used to execute it — the JS suites spawn the
- * TypeScript source, and the packaging suites only assert the files exist — so a
+ * `dist/control-plane`. The JS suites spawn the
+ * TypeScript source, and the packaging suites only assert the files exist, so a
  * bundle that cannot boot (broken external, missing compiled entry, unresolved
- * bare specifier) shipped unseen.
+ * bare specifier) can ship unseen.
  *
  * This gate spawns the REAL `sidecar.js` with `DSH_CHAMBER_SIDECAR_COMPILED=1`
  * (the marker that selects the assembly-relative `dist/control-plane` import),
@@ -22,7 +22,7 @@
  * A disabled run is a LOUD skip (`SKIP: ...`) — never a silent pass. CI builds
  * the assembly first (see ci.yml's test-macos job), so there the gate runs.
  *
- * Packaged-.app launch (G19) is deliberately NOT attempted here: assembling and
+ * Packaged-.app launch is deliberately NOT attempted here: assembling and
  * launching a signed/notarized .app needs release credentials and a GUI session
  * that a plain test leg does not have. The actionable partial is the sidecar
  * boot chain this gate covers; the .app window chain stays a release/real-machine

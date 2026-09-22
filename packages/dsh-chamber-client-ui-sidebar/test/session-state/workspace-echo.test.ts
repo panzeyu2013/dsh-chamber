@@ -1,7 +1,6 @@
 /**
  * workspace-echo.ts unit tests (plain node:test, no dsh, no DOM): the local echo of a
- * sidebar-issued `workspace.create` (design 05 §2.2 revision 2026-12; 2026-12 field report
- * problem 2 — "新建工作区后要手动点一下那个服务器才刷新出来").
+ * sidebar-issued `workspace.create` (design 05 §2.2 revision — "新建工作区后要手动点一下那个服务器才刷新出来").
  *
  * The contract: local facts are echoed, authoritative facts always win, a same-path synthetic
  * group is REPLACED in place (never rendered twice, keeping its members), and every path out
@@ -163,7 +162,7 @@ test('withWorkspaceEcho: a brand-new workspace appends a real wire row at the ta
 })
 
 test('withWorkspaceEcho: an anchored creation lands right after its anchor, never at the tail', () => {
-  // 2026-12 第二入口（Git worktree create）：宿主把新 worktree 摆在其主 checkout 之后，
+  // Git worktree create：宿主把新 worktree 摆在其主 checkout 之后，
   // 投影必须同序；design 08 §3.3 的连续家族不变式正是按渲染序成立的（拖拽裁决器读它）。
   const base = aggregate([realWorkspace('main', '/repo'), realWorkspace('other', '/other')])
   const ledger = recordPendingWorkspace({}, 'ssh-b', { workspaceId: 'wt', path: '/wt/feat', afterWorkspaceId: 'main' }, 1_000)
@@ -182,8 +181,8 @@ test('withWorkspaceEcho: repeated anchors keep ledger order, an unknown anchor d
 })
 
 test('withWorkspaceEcho: interleaved anchors place each block after its own row', () => {
-  // 真机可达形态：同一来源有两个仓库，交替新建 worktree；旧实现用"上次插入下标"做游标，
-  // 第三个条目因此落到第一个之前。这里钉住：每个锚点独立定位、块内保持账本序。
+  // 交错的锚点：同一来源有两个仓库，交替新建 worktree；若用"上次插入下标"做游标，
+  // 第三个条目会落到第一个之前。这里钉住：每个锚点独立定位、块内保持账本序。
   const base = aggregate([realWorkspace('main-a', '/repo-a'), realWorkspace('main-b', '/repo-b')])
   let ledger = recordPendingWorkspace({}, 'ssh-b', { workspaceId: 'e1', path: '/a/1', afterWorkspaceId: 'main-b' }, 1)
   ledger = recordPendingWorkspace(ledger, 'ssh-b', { workspaceId: 'e2', path: '/b/2', afterWorkspaceId: 'main-a' }, 2)
@@ -204,7 +203,7 @@ test('withWorkspaceEcho: a same-path synthetic group is REPLACED in place by the
   const next = withWorkspaceEcho(base, [pending('w1', '/p/a')])
   assert.deepEqual(next.workspaces.map(row => row.workspaceId), ['w1', 'w9'], 'the synthetic slot is reused (no jump)')
   assert.equal(next.workspaces[0]?.synthetic, undefined)
-  // B1 (2026-09-11 review): the replacement carries the replaced group's MEMBERSHIP. Sessions
+  // The replacement carries the replaced group's MEMBERSHIP. Sessions
   // reach a group only through `workspace.sessionIds` (derive.ts), so an echo row with
   // `sessionIds: []` dropped the directory's sessions into 未分组 for the whole TTL.
   assert.deepEqual(next.workspaces[0]?.sessionIds, ['s1'], 'the replaced synthetic row keeps its members')
@@ -257,7 +256,7 @@ test('withWorkspaceEcho: a second derive pass over its own output is identity-st
 })
 
 test('integration: an echoed workspace reaches the sidebar projection as a real, EMPTY group', () => {
-  // The fix rests on one derive property: `deriveServerWorkspaces` pushes every workspace of
+  // The echo rests on one derive property: `deriveServerWorkspaces` pushes every workspace of
   // the snapshot, including one with no sessions. If it filtered empty groups, the echo row
   // would vanish with all tests green — pinned HERE, end to end (echo → union → derive).
   const base = aggregate([syntheticGroup('/p/a', ['s1'])])
@@ -286,9 +285,9 @@ test('integration: the authoritative push retires the echo and the group survive
 })
 
 test('removePendingWorkspace: a delete retires the echo by host id, identity-preserving when nothing matches', () => {
-  // 2026-09-11 review S3 (the withdraw half): an unmounted source's baseline never lists the
+  // The withdraw half: an unmounted source's baseline never lists the
   // workspace, so `reconcilePendingWorkspaces` cannot match it — without this fact the deleted
-  // row stayed a GHOST with real-id actions enabled until the TTL.
+  // row would stay a GHOST with real-id actions enabled until the TTL.
   const ledger: WorkspaceEchoLedger = {
     'ssh-b': [pending('w1', '/p/a'), pending('w2', '/p/b')],
     'ssh-c': [pending('w9', '/p/z')],
@@ -315,7 +314,7 @@ test('removePendingWorkspace: the canonical path matches too (trailing separator
 })
 
 test('removePendingWorkspace: the removal fact retires a create → delete ghost even when the baseline omits it', () => {
-  // The exact reviewed sequence: create (echo lands), delete, then a push that does NOT list the
+  // The sequence: create (echo lands), delete, then a push that does NOT list the
   // workspace; the reconcile pass keeps the echo by design, so only the removal fact retires it.
   const created = recordPendingWorkspace({}, 'ssh-b', { workspaceId: 'w1', path: '/p/a' }, 1_000)
   const afterDelete = removePendingWorkspace(created, 'ssh-b', { workspaceId: 'w1', path: '/p/a' })
@@ -350,8 +349,8 @@ test('integration: the rename fact patches the row the user sees before the sour
 
 test('wiring: the single funnel publishes every workspace fact right after its wire call', () => {
   // Source-text contract (the package's `probe-*.test.ts` / `panel-wiring.ts` precedent): these
-  // publishes are silent no-ops when they go missing, and the reviewed invisible-row/ghost/no-op
-  // bugs return (2026-09-11 review S3). 2026-12 收口（第二入口真机反馈）：事实由
+  // publishes are silent no-ops when they go missing, and the invisible-row/ghost/no-op
+  // bugs return. 事实由
   // shared/workspace-mutations.ts 的单一出口随 wire 调用发布——逐点发布正是 Git worktree
   // create/adopt 漏发、行要等用户点开那个服务器才出现的成因。
   const funnel = readFileSync(new URL('../../src/shared/workspace-mutations.ts', import.meta.url), 'utf8')
@@ -374,9 +373,9 @@ test('wiring: the single funnel publishes every workspace fact right after its w
   assert.ok(renamedFact > renameWire, 'the rename fact is published only after the host accepted the rename')
 
   // The sidebar's three call sites go THROUGH the funnel and publish nothing themselves — one
-  // producer per fact. 2026-09-11 upstream-alignment T2b: the delete call lives in the ACCEPTED
-  // in-app confirm, so nothing deletes before the user accepts (ordering unchanged).
-  // 2026-12 split: the accepted-confirm delete handler now lives in
+  // producer per fact. The delete call lives in the ACCEPTED
+  // in-app confirm, so nothing deletes before the user accepts.
+  // The accepted-confirm delete handler lives in
   // sidebar-root-dialogs.tsx and the shared rename commit in
   // sidebar-root-menus.ts; the contract reads the shell plus those modules.
   const sidebar = [

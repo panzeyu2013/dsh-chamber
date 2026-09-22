@@ -1,8 +1,7 @@
 /**
- * The shell keyed-action runner and its row-error store (extracted verbatim
- * from SidebarRoot, 2026-12 split): one key discipline + rowErrors surface
- * shared by every row action; runActionWithOutcome additionally reports the
- * outcome to the workspace-delete confirm.
+ * The shell keyed-action runner and its row-error store: one key discipline +
+ * rowErrors surface shared by every row action; runActionWithOutcome
+ * additionally reports the outcome to the workspace-delete confirm.
  */
 
 import { useState } from 'react'
@@ -22,7 +21,7 @@ export function useSidebarActions() {
     runActionWithOutcome(key, action).then(() => {})
 
   /**
-   * runAction's outcome-reporting twin (2026-09-11 upstream-alignment T2b):
+   * runAction's outcome-reporting twin:
    * identical key discipline and rowErrors surface, but it resolves with
    * whether the action settled WITHOUT error — the workspace-delete confirm
    * needs that to know when its pending Modal may close. runAction keeps its

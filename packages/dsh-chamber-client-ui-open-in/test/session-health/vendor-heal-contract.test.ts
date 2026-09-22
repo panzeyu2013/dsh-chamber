@@ -1,5 +1,5 @@
 /**
- * VENDOR HEAL-CONTRACT LOCKSTEP (design 14 §D4, 2026-12).
+ * VENDOR HEAL-CONTRACT LOCKSTEP (design 14 §D4).
  *
  * The chamber's only recovery lever for a latched conversation stream is the
  * stage move — `sessions.open(neighbor)` then `sessions.open(target)` in one

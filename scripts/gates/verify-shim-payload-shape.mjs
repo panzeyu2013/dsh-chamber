@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * verify-shim-payload-shape.mjs —— shim ↔ preload payload-shape lockstep (G22).
+ * verify-shim-payload-shape.mjs —— shim ↔ preload payload-shape lockstep.
  *
  * The existing locks stop one level short of the wire contract:
  *   - bridge-shim-surface.test.ts locks method names, channel names and the
@@ -39,7 +39,7 @@ export const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..
 export const INTERNAL_INVOKE_CHANNELS = new Set(['dsh-chamber:info'])
 
 /**
- * The frozen surface totals (G34). The per-member comparison only proves that
+ * The frozen surface totals. The per-member comparison only proves that
  * the members it FOUND agree; a silently removed member (an emptied namespace,
  * a dropped row in one block) shrank the corpus without failing anything. These
  * counts are the pin, so adding or removing a member is a deliberate two-file
@@ -114,7 +114,7 @@ export const FACTORY_TO_NAMESPACE = {
 const PRELOAD_FACTORY = /function ([A-Za-z_$][A-Za-z0-9_$]*)\(\)\s*:\s*([A-Za-z_$][A-Za-z0-9_$]*)\s*\{/gu
 
 // ---------------------------------------------------------------------------
-// Runtime arm (G22 residual): execute the injected shim in node:vm, drive every
+// Runtime arm: execute the injected shim in node:vm, drive every
 // namespace member, and compare the emitted envelope payload key-by-key with
 // the preload.cts call sites.
 // ---------------------------------------------------------------------------
@@ -426,7 +426,7 @@ export function comparePayloadShapes({ preloadText, shimText, manifest }) {
     const shimMembers = extractMemberSpans(shimNamespaceBlock(shimText, namespace))
     const preloadNames = [...preloadMembers.keys()]
     const shimNames = [...shimMembers.keys()]
-    // G34: counted from the PRELOAD block (the Electron surface authority);
+    // Counted from the PRELOAD block (the Electron surface authority);
     // a namespace whose block lost a row changes this count even when both
     // sides lost it together, which the per-member comparison cannot see.
     namespaces += 1
@@ -581,7 +581,7 @@ export async function compareRuntimePayloads({ preloadText, shimText, token = ma
       mismatches.push(namespace + ': namespace missing from the runtime surface')
       continue
     }
-    // G34: the runtime surface's own per-namespace row count, so a member the
+    // The runtime surface's own per-namespace row count, so a member the
     // shim stopped exposing cannot hide behind the per-member comparison.
     namespaces += 1
     perNamespace[namespace] = Object.keys(members).length
@@ -649,7 +649,7 @@ export async function compareRuntimePayloads({ preloadText, shimText, token = ma
 /**
  * Drive the shim's TOTAL-FAILURE branch: reject all 1 + INFO_MAX_ATTEMPTS info
  * invokes and require the public surface to still appear with the four scalars
- * null (T-12 parity with preload.cts's failure branch).
+ * null (parity with preload.cts's failure branch).
  * @param {{ shimText: string, token?: string, attempts?: number, retryMs?: number }} input - inputs.
  * @returns {Promise<{ attempts: number, scalars: Record<string, null>, namespaces: string[], warnings: string[] }>} observed facts.
  */
@@ -691,7 +691,7 @@ export async function runShimFailureBranch({ shimText, token = makeNativeToken()
 
 /**
  * Run the shim, then inject the SAME source a second time in the same context:
- * the installed marker (P-19) must make the second copy a no-op — no extra
+ * the installed marker must make the second copy a no-op — no extra
  * envelope, the same internal entry points, the same public surface.
  * @param {{ shimText: string, token?: string }} input - inputs.
  * @returns {Promise<{ marker: boolean, extraEnvelopes: number, sameResolve: boolean, sameSurface: boolean, conflicts: string[] }>} facts.
@@ -765,7 +765,7 @@ async function main() {
     console.error('shim payload shape: no member parsed — a gate that scans nothing has not passed')
     return 1
   }
-  // G34: the per-member comparison above proves the members that were FOUND
+  // The per-member comparison above proves the members that were FOUND
   // agree; the pin proves none of them vanished from both sides together.
   try {
     assertSurfaceCounts({
@@ -778,7 +778,7 @@ async function main() {
     return 1
   }
 
-  // Runtime arm (G22 residual): execute the injected shim and drive every
+  // Runtime arm: execute the injected shim and drive every
   // namespace member; compare each emitted postMessage payload key-by-key with
   // the preload.cts call site, then pin the failure branch and the
   // re-injection no-op. Static text agreement already passed above.
@@ -798,7 +798,7 @@ async function main() {
     for (const mismatch of runtime.mismatches) console.error('  - ' + mismatch)
     return 1
   }
-  // G34: same pin against the executed surface — including the invoke/push
+  // Same pin against the executed surface — including the invoke/push
   // split, so a subscriber silently reclassified as an invoker is caught too.
   try {
     assertSurfaceCounts({

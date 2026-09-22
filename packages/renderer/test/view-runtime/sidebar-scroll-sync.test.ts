@@ -1,5 +1,5 @@
 /**
- * sidebar-scroll-sync two-phase restore tests (2026-10 flicker fix).
+ * sidebar-scroll-sync two-phase restore tests.
  *
  * The module is dependency-free and DOM-only, so the tests run under plain
  * node:test against a minimal fake DOM. The behaviour under test:
@@ -322,7 +322,7 @@ test('capture falls back to a raw scroll when no row is visible', (t) => {
 
 test('the anchored row is resolved with one attribute lookup (no per-row scan)', (t) => {
   installFakeDom(t)
-  // The anchor row is NOT first: the previous full scan walked every row.
+  // The anchor row is NOT first: a full scan would walk every row.
   const container = makeContainer([makeRow('z', 10), makeRow('a', 100), makeRow('b', 200)], true)
   views.push(makeView('x', container))
 
@@ -344,9 +344,9 @@ test('the frame-tight retry phase is bounded, then the chain keeps retrying on t
   }
 
   restoreSidebarScroll('x', anchor(), 60_000)
-  // 2026-09 renderer-crash round: a chain that cannot find its container used to
-  // schedule one rAF per frame for the whole deadline (up to 8s) — one DOM walk
-  // per frame through the boot window. The frame-tight phase is now bounded.
+  // A chain that cannot find its container must not schedule one rAF per frame
+  // for the whole deadline (up to 8s) — one DOM walk per frame through the boot
+  // window: the frame-tight phase is bounded.
   mock.timers.tick(FRAME_MS * 60)
   assert.ok(rAFCount <= 20, `frame-tight rAF budget exceeded: ${rAFCount}`)
 

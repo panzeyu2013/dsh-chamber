@@ -5,9 +5,8 @@
  *
  * Sibling part: transport-connection-recovery.test.ts (load recovery, auth
  * failure, degraded/reconnect + backoff, identity verification, ring buffer,
- * disconnect). The provider exec channel + legacy registry migration moved
- * into this file, and the provider routing/heartbeat/lease suite into the
- * sibling (2026-12 trim round 2; the former per-topic files are gone).
+ * disconnect). This file carries the provider exec channel + legacy registry
+ * migration; the sibling carries provider routing/heartbeat/lease.
  */
 
 import { test } from 'node:test'
@@ -454,9 +453,8 @@ test('editing sshPort of a live instance restarts the tunnel with the new -p', a
 })
 
 // ---------------------------------------------------------------------------
-// Provider exec channel + legacy registry migration. Merged (2026-12 trim
-// round 2) from the deleted test/transport/transport-exec-and-registry.test.ts;
-// the gateway credential/token assertions that lived there are covered by
+// Provider exec channel + legacy registry migration.
+// The gateway credential/token assertions are covered by
 // connection-save.test.ts:321-345 (live-transport replacement rollback),
 // gateway-provider.test.ts:49-208 (token store + corrupt file), :774 (5xx
 // transient) and ssh-provider-exec.test.ts:279-341 (write-file byte domain);

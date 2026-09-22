@@ -1,9 +1,9 @@
 /**
- * dsh 运行时激活门控裁决（design 18 §3.4）——纯逻辑、无 electron、无副作用
- * （M3）。探针列表本身（commands/execute 冒烟 / 固定小体积身份方法
+ * dsh 运行时激活门控裁决（design 18 §3.4）——纯逻辑、无 electron、无副作用。
+ * 探针列表本身（commands/execute 冒烟 / 固定小体积身份方法
  * `session/canOpenWorkspacePath`（零参 boolean Remote，绝不读会话数据；老
  * runtime 树（dsh < 0.1.2-rc.1）对其答 404 时由 host 侧回退 legacy
- * session/list 探测，行为与旧版一致）/ graph 通道 / settings RPC /
+ * session/list 探测）/ graph 通道 / settings RPC /
  * git-worktree 只读 / archive-cleanup 只读探测（design 24：
  * archiveCleanup/probe）/ 数据可读性探测）由 host 侧执行并汇成
  * `ProbeResult[]`；
@@ -13,7 +13,7 @@
  *                           延迟裁决」语义（§3.4 探测窗口与裁决）；
  *   2. `rollbackTarget`   —— 自动回退目标选择（§3.4 回退目标统一口径，绝不在
  *                           两棵坏树间交替）；
- *   3. `shouldAutoRollback` —— 延迟崩溃分支谓词（§3.4 F7）：restart-exhausted
+ *   3. `shouldAutoRollback` —— 延迟崩溃分支谓词（§3.4）：restart-exhausted
  *                           且激活树是 override 才触发一次自动回退。
  *
  * 边界（诚实声明，§3.4 激活门控边界）：探针是 host 侧探测；渲染侧（chamber
@@ -38,10 +38,10 @@
  * responses never grow with session count; runtimes predating the identity
  * method (dsh < 0.1.2-rc.1) are served by the probe layer's legacy
  * session/list fallback (404), keeping old-tree activation/rollback exactly
- * as before. `data.sessions` was removed with the session-data coupling (the
- * identity probe deliberately does not read session data, so a session-list
- * readability row no longer exists — session storage health is not part of
- * the activation contract). Probe names mirror the wire endpoints (slash
+ * as before. `data.sessions` is not part of the probe set: the
+ * identity probe deliberately does not read session data, so there is no
+ * session-list readability row — session storage health is not part of
+ * the activation contract. Probe names mirror the wire endpoints (slash
  * form).
  */
 export const REQUIRED_ACTIVATION_PROBES = [
@@ -56,10 +56,10 @@ export const REQUIRED_ACTIVATION_PROBES = [
 ] as const;
 
 /** The chamber host domains (clientGraph/graph + gitWorktree/previewCreate +
- *  archiveCleanup/probe + openInApp/probe). 2026-12 shape-awareness: the
- *  gateway shape only verifies them once a connecting desktop has synced its
+ *  archiveCleanup/probe + openInApp/probe). The gateway shape only
+ *  verifies them once a connecting desktop has synced its
  *  host packages into the seed cache — a fresh gateway hosts a plain dsh whose
- *  activation must pass without them. Design 24 §7 C (M2 landed): the expected
+ *  activation must pass without them. Design 24 §7 C: the expected
  *  domains are derived per spawn from the actually seeded entries
  *  (`activationProbeNamesForDomains`); the typed subtraction below keeps the
  *  reduced set in lockstep.
@@ -90,7 +90,7 @@ export const PROBE_NAMES_WITHOUT_HOST_DOMAINS: readonly Exclude<RequiredProbeNam
 
 /**
  * Expected activation set for a shape carrying EXACTLY the given chamber
- * host domains (design 24 §7 C / design 18 §3.4, M2 derivation): the closed
+ * host domains (design 24 §7 C / design 18 §3.4): the closed
  * base set plus every listed domain, in REQUIRED order. Unknown names FAIL
  * LOUD — the function throws instead of ignoring them (never fabricate a
  * probe row): silently dropping a listed domain would shrink its probe row
@@ -103,7 +103,7 @@ export const PROBE_NAMES_WITHOUT_HOST_DOMAINS: readonly Exclude<RequiredProbeNam
  * well-defined expectation instead of the binary all-or-none gate.
  */
 export function activationProbeNamesForDomains(domains: readonly string[]): readonly string[] {
-  // Fail LOUD on an unrecognized domain (implementation-review Major-2):
+  // Fail LOUD on an unrecognized domain:
   // silently ignoring a listed domain would drop its probe row from the
   // expected set AND the run legs — a dead/unmounted chamber domain could
   // then pass activation until the sidebar 404s (fail-open). The listed
@@ -210,7 +210,7 @@ export function rollbackTarget(opts: RollbackTargetOptions): string | null {
 }
 
 /**
- * 延迟崩溃分支（§3.4 F7）谓词：restart-exhausted（窗口内 M=5 次重启，设计 02
+ * 延迟崩溃分支（§3.4）谓词：restart-exhausted（窗口内 M=5 次重启，设计 02
  * §3.6；**注意与连续探活失败阈值 N=20 的宿主重启区分**——那是宿主重启，不是
  * 版本回退）且激活树是 override → 触发一次自动回退（复用本路径，作为状态机
  * 分支）。

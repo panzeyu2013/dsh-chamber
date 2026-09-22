@@ -92,7 +92,7 @@ test('remote action gates lock pending/installing in step with the server and pr
     'a direct caller cannot enable actions for an unknown future phase',
   )
   assert.deepEqual(remoteRuntimeActionGates(status({ phase: 'swap-attempted', pending: '1.1.0' })), gates({ retryApplyDisabled: false }))
-  // WIRE-REAL co-projection (2026 audit R4 F1): on the real wire the recovery
+  // WIRE-REAL co-projection: on the real wire the recovery
   // phase carries its startupBlockedReason too (same in-memory block) — the
   // matching retry must STAY ENABLED despite the reason (the phase, not the
   // reason, is the server's selector for the retry route).
@@ -107,9 +107,9 @@ test('remote action gates lock pending/installing in step with the server and pr
   )
   // A projected PHASE-LESS startup block (FATAL metadata, env-probe-failed,
   // …) outranks a lingering pending and locks every mutation + restore
-  // escape (2026 audit R3 — the server gate honors blockOutranksPending).
+  // escape (the server gate honors blockOutranksPending).
   // recover-metadata — the ONLY action the FATAL block leaves open — must
-  // stay enabled whenever the status advertises canRecoverMetadata (R4 F2).
+  // stay enabled whenever the status advertises canRecoverMetadata.
   assert.deepEqual(
     remoteRuntimeActionGates(status({ phase: 'idle', pending: '1.1.0', startupBlockedReason: 'journal-corrupt', canRecoverMetadata: true })),
     gates({ recoverMetadataDisabled: false }),
@@ -559,7 +559,7 @@ test('status parsing: documented contract, backward defaults, unknown safety enu
   assert.equal(parsed.preRollbackLatestName, '1735344000000')
   assert.equal(parsed.failure?.reason, 'probe failed')
   assert.equal(parsed.diskUsage?.totalBytes, 390)
-  // D1-A: present on new servers → parsed verbatim; omitted on older
+  // Present on new servers → parsed verbatim; omitted on older
   // servers → defaults to 0 (the legacy fixtures below).
   assert.equal(parsed.diskUsage?.unclassifiedBytes, 11)
   assert.deepEqual(parsed.progress, { stage: 'download', received: 50, total: 100 })

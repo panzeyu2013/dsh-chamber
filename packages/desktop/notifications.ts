@@ -32,14 +32,13 @@ export interface NotificationRequest {
   requireHidden: boolean
   /**
    * 内容水位（来源 host 域毫秒：远端行取该来源 host 时钟，本地行取本地 dsh host
-   * 时钟；**不得**使用 renderer 墙钟——主计划 §5-13 禁止客户端墙钟进任何比较）：
+   * 时钟；**不得**使用 renderer 墙钟——客户端墙钟不得进任何比较）：
    * 同一次事件的两个通知入口（壳通道 / gateway 事实源）必须传同一个水位函数——
    * complete = `completedAt ?? updatedAt`；ask/request = `updatedAt`。
    *
-   * 它是 5s 去重身份的第五个分量（主计划 §3.3-3 / §5-16）：同一水位 = 同一事件
+   * 它是 5s 去重身份的第五个分量：同一水位 = 同一事件
    * → 两个入口合并成一条横幅；同会话的下一次完成水位不同 → 新事件，不得被前一次
-   * 吞掉。**缺省（旧调用方）** = 键里序列化为 `null`，与升级前的四元组行为逐字
-   * 一致（L13）。
+   * 吞掉。**缺省** = 键里序列化为 `null`，即不含水位的四元组身份。
    */
   watermark?: number
 }
@@ -227,7 +226,7 @@ export interface NotificationSettingsLike {
  * 6. 否则 'show'。
  * 'test' 不受 requireHidden 影响（绕过全部门禁）。
  *
- * 信任切分（review 2026-08）：主进程的 anyWindowFocused 只回答「是否有窗口
+ * 信任切分：主进程的 anyWindowFocused 只回答「是否有窗口
  * 聚焦」，无法知道用户正在查看哪个会话——会话级焦点只有渲染端可见。因此在
  * 'always' 模式下（步骤 5 放行聚焦状态），「正在查看的会话不打扰」的豁免
  * 完全依赖渲染端上报的 requireHidden（步骤 4 的 on-screen 判定）；主进程
@@ -253,7 +252,7 @@ export function decideNotification(input: {
     // 'always' 放行聚焦状态：此处不拦截。焦点豁免（正在查看的会话不打扰）
     // 在 'always' 模式下完全依赖渲染端 requireHidden（上面的 on-screen 判定）
     // ——主进程 isAnyWindowFocused 不参与 'always' 的独立豁免（信任切分见
-    // 模块头注释，review 2026-08）。
+    // 模块头注释）。
     return { action: 'skip', reason: 'focused-hidden-only' };
   }
   return { action: 'show' };
@@ -330,13 +329,12 @@ export class NotificationClaimWindow {
     this.#prune(now)
     // The opaque source proof is part of event identity: a newly-created
     // same-id host must not inherit an old incarnation's 5s dedupe claim.
-    // The content watermark is the fifth identity component (plan §5-16): the
-    // two notification entries (shell channel / gateway facts) collapse to one
+    // The content watermark is the fifth identity component: the two
+    // notification entries (shell channel / gateway facts) collapse to one
     // banner on the same completion while a later completion of the same
     // session is a new event. `kind` stays in the key — ask and complete at the
-    // same watermark must not swallow each other. Legacy callers omit the
-    // watermark, so it serializes as `null` and reproduces the exact
-    // pre-watermark four-tuple behaviour (L13).
+    // same watermark must not swallow each other. An omitted watermark
+    // serializes as `null` — the four-tuple identity without it.
     const key = JSON.stringify([
       request.sourceId,
       request.sourceFingerprint,
@@ -430,11 +428,9 @@ export class BoundedRateLimiter {
  * 活跃原生通知的有界登记（design 19 §3.3 项 7）。上界约束的是「为保住 click
  * 监听不被 GC 回收而持有的存活引用/OS 监听器」数量，不是投递配额。macOS 横幅
  * 进入通知中心后不触发 Electron close（通常只有用户手动清除才触发）——若满员
- * 即拒发，16 条未清除的存量横幅就会永久卡死通知流（2026-09 实机复现：第 16 条
- * 横幅之后设置页「发送测试通知」与事件通知全部返回 false，OS 侧无任何请求
- * 记录）。因此满员时按插入序淘汰最旧一条并交还调用方退役（close），新通知
- * 照常登记显示：硬上界不变、通知流不被存量横幅卡死，仅最旧（价值最低）条目
- * 的 click 随之失效。
+ * 即拒发，16 条未清除的存量横幅就会永久卡死通知流。因此满员时按插入序淘汰最旧
+ * 一条并交还调用方退役（close），新通知照常登记显示：硬上界不变、通知流不被
+ * 存量横幅卡死，仅最旧（价值最低）条目的 click 随之失效。
  */
 export class BoundedActiveNotifications<T> {
   readonly #limit: number
@@ -489,7 +485,7 @@ export interface NativeNotificationLike {
   close(): void
 }
 
-/** S-44: the machine-readable half of an honest-show failure. Only `failed`
+/** The machine-readable half of an honest-show failure. Only `failed`
  *  (the OS reported a scheduling error) and `timed-out` (the OS never confirmed
  *  delivery) are evidence about the host platform; `threw`/`closed` are local
  *  construction/eviction artifacts and must never be described as an OS
@@ -555,7 +551,7 @@ export function showNativeNotificationHonestly(
 }
 
 /**
- * S-44（2026-12 审计）：macOS 通知授权在 Electron 侧没有查询/申请 API。证据：
+ * macOS 通知授权在 Electron 侧没有查询/申请 API。证据：
  * 固定的 Electron 43.4.0 typings 里 Notification 只有 isSupported/show/…、
  * systemPreferences.getMediaAccessStatus 只接受 'microphone' | 'camera' |
  * 'screen'（无 notifications），Electron 自己的 macOS 实现（cocoa_notification
@@ -564,7 +560,7 @@ export function showNativeNotificationHonestly(
  * failed 事件（拒绝/调度失败），成功 → show 事件。因此 Electron 唯一可得的
  * 诚实面就是本函数：把「OS 明确拒绝投递」与「限时内没有任何回执」表述为
  * 「可能未授权 / 可能被系统抑制」，保留 OS 原文；绝不把拒绝伪装成普通失败，
- * 也绝不冒充已授权（预检查询仍是 Electron 运行时不可达的残余，见报告）。
+ * 也绝不冒充已授权（预检查询仍是 Electron 运行时不可达的残余）。
  * 非 darwin 平台原样返回（Windows 的 failed 是投递错误，不是授权语义）。
  */
 export function describeNativeNotificationFailure(
@@ -584,14 +580,14 @@ export function describeNativeNotificationFailure(
 }
 
 /** 把 Swift 宿主腿的 showNativeNotification 应答折成 honest-show 结果
- *  （P-06，共享 node-edges/notifications 面）：
+ *  （共享 node-edges/notifications 面）：
  *  - `null` / `undefined`：旧线协议（edge ok 即视为已调度）→ shown:true；
  *  - `{shown:true}`：显式成功；
  *  - `{shown:false,error?}`：显式失败（未授权 / 调度失败）→ 回执 false，core
  *    据此释放 5s 去重 claim（shell-core maybeShowNativeNotification），
- *    不再把「edge 传输成功」当成「横幅已显示」；
+ *    不把「edge 传输成功」当成「横幅已显示」；
  *  - 其他形状（数组/数字/无 shown 的对象）：不予采信 → shown:false。
- *  Swift 侧（workstream B）须在授权检查失败/调度超时时回 {shown:false,error}。 */
+ *  Swift 侧须在授权检查失败/调度超时时回 {shown:false,error}。 */
 export function interpretNativeNotificationReply(
   reply: unknown,
 ): { shown: true } | { shown: false; error: string } {
@@ -646,11 +642,11 @@ function canonicalNotificationSourceId(sourceId: string): string | null {
 /**
  * IPC payload 白名单校验（design 19 §3.6）：sourceId/sessionId/title/body 必须
  * 为非空 string（前三个 ≤256、body ≤512），sourceId 只能是保留的 local 或
- * canonical `dsh-${registryId}` / `gateway-${registryId}`；迁移期输入
+ * canonical `dsh-${registryId}` / `gateway-${registryId}`；输入
  * `ssh-${registryId}` 被规范化为 `dsh-${registryId}`（registryId 复用
  * INSTANCE_ID_PATTERN）。kind 四选一、requireHidden 为 boolean；可选
- * watermark（内容水位，主计划 §5-16）必须是非负安全整数，缺省保持字段缺席
- * （旧调用方的兼容面——校验后的 request 与升级前逐字段一致）。未知/多余
+ * watermark（内容水位）必须是非负安全整数，缺省保持字段缺席
+ * （兼容面——校验后的 request 与缺省输入逐字段一致）。未知/多余
  * 字段忽略（校验只做白名单必要字段，不做全等断言）。
  */
 export function validateNotificationRequest(
@@ -705,10 +701,10 @@ export function validateNotificationRequest(
   if (typeof record.requireHidden !== 'boolean') {
     return { ok: false, error: 'requireHidden must be a boolean' };
   }
-  // 可选内容水位（主计划 §5-16）：必须是非负安全整数（host 域毫秒；结构化克隆
+  // 可选内容水位：必须是非负安全整数（host 域毫秒；结构化克隆
   // 可携带 NaN/Infinity/分数/字符串，一律响亮拒绝而不是强制归一——水位进的是
   // 去重身份，悄悄改值会造出一个假事件）。缺省保持字段缺席，校验后的 request
-  // 与升级前逐字段一致（旧调用方的兼容面）。
+  // 与缺省输入逐字段一致（兼容面）。
   let watermark: number | undefined;
   if (record.watermark !== undefined) {
     if (

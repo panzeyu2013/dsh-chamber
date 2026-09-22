@@ -1,7 +1,7 @@
 /**
- * One-entry memo for facts derived from immutable-ish external inputs
- * (2026-12 stage-2 item 7: the local plugin-protection family facts re-parsed
- * the up-to-512 KiB runtime lockfile on every plugin IPC read/judgement).
+ * One-entry memo for facts derived from immutable-ish external inputs: the
+ * local plugin-protection family facts would otherwise re-parse the up-to-512
+ * KiB runtime lockfile on every plugin IPC read/judgement.
  *
  * The caller builds the key; `lockfileIdentityKey` produces the part that
  * makes FILE CHANGES self-invalidating: each lockfile contributes its

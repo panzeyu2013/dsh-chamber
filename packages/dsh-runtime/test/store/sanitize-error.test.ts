@@ -1,10 +1,9 @@
 /**
- * sanitize-error.ts pure-logic tests (design 18 §6 — extraction of the
- * updater's redaction) — node:test, no electron. Covers URL survival (the
+ * sanitize-error.ts pure-logic tests (design 18 §6) — node:test, no electron.
+ * Covers URL survival (the
  * scheme + `//host` part is never swallowed), POSIX absolute-path redaction,
  * Windows drive-path redaction (scheme-like `x://` survives), and plain-text
- * passthrough. Assertions pin the verbatim-extracted behavior of the original
- * updater.ts implementation.
+ * passthrough.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -57,9 +56,8 @@ test('sanitizeErrorText: Windows drive paths redacted; scheme-like x:// survives
 });
 
 test('sanitizeErrorText: UNC shares are redacted (no drive letter, no forward slash)', () => {
-  // 2026-09 review: a UNC path matches neither the drive rule nor the POSIX
-  // rule, so it used to ride the projection verbatim — the gap widened when
-  // probe failure details started carrying host-side text.
+  // A UNC path matches neither the drive rule nor the POSIX
+  // rule, so it would otherwise ride the projection verbatim.
   assert.equal(
     sanitizeErrorText(String.raw`open \\fileserver\share\alice\secret.json failed`),
     'open [path] failed',

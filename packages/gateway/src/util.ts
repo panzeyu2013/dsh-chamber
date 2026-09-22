@@ -1,6 +1,5 @@
 /**
- * Small gateway-wide helpers single-sourced in the 2026-12 audit (F9): both
- * were previously copied verbatim per module.
+ * Small gateway-wide helpers, single-sourced rather than copied per module.
  */
 
 /** The error's message, or the stringified non-Error throw. */

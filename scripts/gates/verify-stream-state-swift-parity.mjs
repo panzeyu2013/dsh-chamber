@@ -1,11 +1,11 @@
 /**
- * Swift parity gate (B5 precondition).
+ * Swift parity gate.
  *
  * Compiles the Swift mirror (`packages/dsh-stream-state/swift/CarrierDecision.swift`)
  * with a generated assertions file and runs it against the shared
  * `packages/dsh-stream-state/tables.json`. The mirror and the TS reducer must agree
  * on the same table, or the shell and the page will disagree about when to rebuild
- * a carrier - the class of drift this refactor exists to remove.
+ * a carrier - the class of drift this gate exists to remove.
  *
  * CI VARIANTS:
  *   node scripts/gates/verify-stream-state-swift-parity.mjs            # local: real assertions
@@ -27,7 +27,7 @@ const HERE = dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = join(HERE, '..', '..')
 const PACKAGE = join(REPO_ROOT, 'packages', 'dsh-stream-state')
 const MIRROR = join(PACKAGE, 'swift', 'CarrierDecision.swift')
-/** B5: the shell's load state machine mirrors the TS reducer the same way. Both
+/** The shell's load state machine mirrors the TS reducer the same way. Both
  *  sources compile into the one assertions binary, so a drift in either fails here. */
 const LOAD_MIRROR = join(PACKAGE, 'swift', 'LoadState.swift')
 /** The phase names are the contract shared with `src/load-state.ts`: the lockstep

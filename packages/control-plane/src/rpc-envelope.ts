@@ -1,10 +1,9 @@
 /**
  * The dsh RPC wire envelope — single source of truth for the unary
- * fetch-carrier envelope shape (A2 cross-package protocol single-sourcing).
+ * fetch-carrier envelope shape (cross-package protocol single-sourcing).
  *
  * The dsh unary contract (mirror of @deepseek-ai/dsh-api-session-controller
- * src/client/contract — dsh-host-apiproxy was deleted upstream in
- * dsh-v0.1.2-alpha.1): a client-request `{type:'client-request', rpcId, method,
+ * src/client/contract): a client-request `{type:'client-request', rpcId, method,
  * payload}` is POSTed to `/api/<method>` (content-type application/json) and
  * the host answers with a server-response `{type:'server-response', rpcId,
  * result}` whose `result.ok` boolean selects the value/error branch.
@@ -21,7 +20,7 @@
  * `session/list` probe through each consumer's fallback path (the legacy
  * response grows with session data — the one bounded-1 MiB exception).
  *
- * Three implementations previously re-derived this shape:
+ * The shape is shared by three consumers:
  *   - control-plane dsh-client.ts `call()` (fetch carrier);
  *   - desktop ssh-provider.ts `verifyDshEndpoint` (node:http carrier,
  *     unary identity probe);
@@ -204,7 +203,7 @@ export interface RawUnaryOutcome {
  * carrier — verifyDshEndpoint / probeRemoteMethod; the control-plane unary
  * client uses fetch and does not route through here).
  *
- * Semantics preserved from the previous inline implementations:
+ * Semantics:
  * - TOTAL deadline, not a socket-idle timeout: an endpoint answering slowly
  *   (a byte every few seconds) must never hang the call.
  * - Non-200 answers resolve immediately with the status (body never

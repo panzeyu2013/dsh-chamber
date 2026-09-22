@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 /**
- * budget-check —— 分档预算验收执行器（plan 决定 9「度量口径改为分档预算」/
- * §9 验收矩阵性能行）。
+ * budget-check —— 分档预算验收执行器。
  *
  * 分工：measure-ui.mjs / switch-frame-probe.mjs 负责**采集**（同环境、同实例、
  * 同挂载壳数档位），本脚本负责**判据**——读入基线 A 与候选 B 两份采集 JSON，
@@ -102,7 +101,7 @@ export function evaluate({ baseline, candidate, tier = null, budgets = DEFAULTS 
     const ceiling = a.mountedShells === null ? null : a.mountedShells + budgets.shellsTolerance
     rows.push(row('mountedShells', a.mountedShells, b.mountedShells, ceiling, '与基线同档（±1）'))
   }
-  // G2（审计假绿面 #2）：全部指标 skip 时 ok 仍为 true ⇒ exit 0。判过必须至少有一条被判过的指标。
+  // G2：全部指标 skip 时 ok 不得仍为 true ⇒ exit 0；判过必须至少有一条被判过的指标。
   const judged = rows.filter(r => r.verdict !== 'skip')
   return {
     rows,

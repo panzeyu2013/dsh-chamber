@@ -110,10 +110,10 @@ test('verifyIcaclsOutput rejects inherited, Everyone/Users/SYSTEM and missing gr
 })
 
 test('verifyIcaclsOutput is a USER allowlist: any foreign principal or DENY ACE fails (2026-12 audit P1)', () => {
-  // The old check was a three-name blacklist, so an ACL whose only extra
-  // principal was another well-known group still returned {ok:true} — and the
-  // verify-first probe then skipped tightening entirely. Every non-user
-  // principal must now fail, even beside the user's own full-control grant.
+  // A three-name blacklist would let an ACL whose only extra principal is
+  // another well-known group return {ok:true}, and the verify-first probe
+  // would then skip tightening entirely. Every non-user principal must fail,
+  // even beside the user's own full-control grant.
   const foreign = [
     'C:\\state\\dir NT AUTHORITY\\Authenticated Users:(OI)(CI)(M)',
     'C:\\state\\dir NT AUTHORITY\\INTERACTIVE:(OI)(CI)(M)',
@@ -129,8 +129,8 @@ test('verifyIcaclsOutput is a USER allowlist: any foreign principal or DENY ACE 
     assert.equal(verdict.ok, false, `foreign principal must fail the allowlist: ${acl}`)
     if (!verdict.ok) assert.match(verdict.reason, /foreign principal/)
   }
-  // A DENY ACE is not a grant: the user's own (DENY) ACE used to pass because
-  // the parser only looked for the (F) token.
+  // A DENY ACE is not a grant: matching only the (F) token would pass the
+  // user's own (DENY) ACE.
   const denied = verifyIcaclsOutput('C:\\state\\dir alice:(DENY)(OI)(CI)(F)', 'alice', 'directory')
   assert.equal(denied.ok, false)
   if (!denied.ok) assert.match(denied.reason, /deny ACE/)

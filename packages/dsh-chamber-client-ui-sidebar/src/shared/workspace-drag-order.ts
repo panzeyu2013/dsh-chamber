@@ -2,9 +2,9 @@
  * Pure workspace-drag order rules (design 06 §2.2 / design 08 §3.3): ONE
  * implementation of the repo-group invariant, shared by the drop marker, the
  * onDragOver gate, the drop handler and the commit — the visual, the accepted
- * drop and the committed order can no longer drift.
+ * drop and the committed order cannot drift.
  *
- * Invariant (user decision 2026-08, completed 2026-12): a git MAIN checkout
+ * Invariant: a git MAIN checkout
  * and its derived (worktree) workspaces form a contiguous family — the main
  * first, its worktrees after it in the registry order. A drag therefore:
  *  - may never move a foreign workspace INTO a contiguous family's interior;
@@ -142,7 +142,7 @@ export function resolveWorkspaceDrop(
   // END UP at or above its own main — this holds in a legacy-broken family
   // too (the constraint above skips non-contiguous families, so without this
   // check a split worktree could be dragged above its main, deepening the
-  // violation the old render gate always refused).
+  // violation).
   const dragMainId = dragFlag?.isWorktree === true ? dragFlag.mainWorkspaceId : undefined
   if (dragMainId !== undefined && order.includes(dragMainId)) {
     const draggedAt = candidate.indexOf(draggedId)

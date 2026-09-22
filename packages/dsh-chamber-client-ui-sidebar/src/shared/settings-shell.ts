@@ -1,5 +1,5 @@
 /**
- * Chamber settings-shell seat contract (2026-12).
+ * Chamber settings-shell seat contract.
  *
  * The chamber settings shell replaces the official `SettingsRoot` in the
  * `sidebar.settings` slot by registering at a LOWER priority (the slot core
@@ -41,9 +41,9 @@ export type SettingsSeatVerdict = 'chamber' | 'pending' | 'taken-over'
  *
  * - `chamber`: the chamber shell owns the seat.
  * - `pending`: no occupant yet, or an occupant at a priority ABOVE the
- *   reserved range (the official `SettingsRoot` at 0 during the deferred
- *   settings-cluster window, or any ordinary composition) — the chamber shell
- *   simply has not registered yet or legitimately outranks it. Never reported.
+ *   reserved range (the official `SettingsRoot` at 0, or any ordinary
+ *   composition) — the chamber shell simply has not registered yet or
+ *   legitimately outranks it. Never reported.
  * - `taken-over`: an occupant registered BELOW the reserved priority range,
  *   which the slot rule renders INSTEAD of the chamber shell. The chamber
  *   settings surface is gone; the sidebar reports it (detection only — the

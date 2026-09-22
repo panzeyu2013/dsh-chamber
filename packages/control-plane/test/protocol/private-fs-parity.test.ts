@@ -1,10 +1,10 @@
 /**
  * Cross-package parity/lockstep gate for the owner-private no-follow filesystem
- * primitives (audit 14 section 2 group 1, finding A1).
+ * primitives.
  *
  * packages/control-plane/src/private-file.ts and
- * packages/dsh-runtime/src/private-fs.ts descend from one implementation and
- * are still maintained as twins: the gateway state store consumes the
+ * packages/dsh-runtime/src/private-fs.ts are maintained as twins: the gateway
+ * state store consumes the
  * dsh-runtime copy, while the control-plane JSON store and the desktop
  * credential facade consume the control-plane copy. This file runs the SAME
  * scenario matrix against both copies and asserts the observable semantics
@@ -785,14 +785,13 @@ test('the shared primitive surface and the one-sided extras are exactly as regis
     ['atomicWritePrivateFileNoFollow', 'atomicWriteRuntimeFileNoFollow'],
     ['createPrivateFileExclusiveNoFollow', 'createRuntimeFileExclusiveNoFollow'],
     ['removePrivateFileNoFollow', 'removeRuntimeFileNoFollow'],
-    // dsh-runtime adopted the directory-sync primitive in the 2026-12 parity
-    // round: both copies export it under the same name now.
+    // Both copies export the directory-sync primitive under the same name.
     ['syncPrivateDirectoryNoFollow', 'syncPrivateDirectoryNoFollow'],
   ] as const
-  // 2026-12 P1-4 same-package convergence: append/leaf/rotation primitives
-  // added on top of the parity-tested core. dsh-runtime has not adopted them
-  // yet, so they are control-plane extras — registered here so the twin cannot
-  // grow a same-named copy without this gate failing.
+  // append/leaf/rotation primitives sit on top of the parity-tested core;
+  // dsh-runtime does not carry them, so they are control-plane extras —
+  // registered here so the twin cannot grow a same-named copy without this
+  // gate failing.
   const cpOnly = [
     'assertPrivateLeafStatNoFollow',
     'inspectPrivateLeafNoFollow',
@@ -814,7 +813,7 @@ test('the shared primitive surface and the one-sided extras are exactly as regis
     'assertRuntimeRootNoFollow',
     'ensureRuntimeSubdirectoryNoFollow',
     'quarantineRuntimeFileNoFollow',
-    // 2026-12 dsh-runtime extras from the same parity round.
+    // dsh-runtime extras.
     'PrivateNoFollowOpenError',
     'classifyPrivateFileNoFollow',
     'openPrivateNoFollowReadAsync',

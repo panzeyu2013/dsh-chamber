@@ -1,5 +1,5 @@
 /**
- * I8 预热命中率仪表锁（plan §7-W3 判据「预热命中率 ≥80%」/§10）：
+ * 预热命中率仪表锁（判据「预热命中率 ≥80%」）：
  * 三个事件的定义与计数必须可查，且**没有尝试时不臆造 100%**。纯函数 + 源文本锁。
  *
  * Run directly: node test/session-state/prewarm-ledger.test.ts
@@ -11,8 +11,8 @@ import { fileURLToPath } from 'node:url'
 import { createPrewarmLedger, publishPrewarmInstrument } from '../../src/prewarm-ledger.ts'
 
 const APP = readFileSync(fileURLToPath(new URL('../../src/App.tsx', import.meta.url)), 'utf8')
-// 阶段 3：drainPrewarm 已平移到视图调度 hook —— attempt 锚点钉在最终落点；
-// hit（selectView）与 cancelled（retireSources）仍在 App，继续读 APP。
+// drainPrewarm 在视图调度 hook —— attempt 锚点钉在最终落点；
+// hit（selectView）与 cancelled（retireSources）仍在 App，读 APP。
 const SCHEDULER = readFileSync(
   fileURLToPath(new URL('../../src/app-hooks/use-view-scheduler.ts', import.meta.url)),
   'utf8',

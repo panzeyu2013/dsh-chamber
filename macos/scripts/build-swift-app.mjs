@@ -1,48 +1,48 @@
 #!/usr/bin/env node
 /**
- * build-swift-app.mjs —— Swift 原生壳 .app 打包（W-24；design 25 §3.2/§8.4）
+ * build-swift-app.mjs —— Swift 原生壳 .app 打包（design 25 §3.2/§8.4）
  *
- * 产物布局（SwiftPM 可执行 + 资源包 + W-23 装配 sidecar）：
+ * 产物布局（SwiftPM 可执行 + 资源包 + 装配 sidecar）：
  *   <out>/dsh-chamber.app/Contents/
  *     Info.plist                      ← macos/Info.plist.template（__VERSION__ 替换）
  *     MacOS/dsh-chamber               ← swift build -c release 产物（SwiftPM target DSHChamber）
  *     Resources/
  *       icon.icns                     ← packages/desktop/resources/icon.icns（缺件 fail
- *                                       closed——G38：electron-builder 同样 fatal）
+ *                                       closed——electron-builder 同样 fatal）
  *       DSHChamber_DSHChamber.bundle   ← SwiftPM 资源包（bridge-shim 等）；
  *         **必须放 Contents/Resources**（放 .app 根会被 codesign 判为未密封内容）
- *       en.lproj/zh-Hans.lproj         ← S2 本地化：从资源包平移出来的
+ *       en.lproj/zh-Hans.lproj         ← 本地化：从资源包平移出来的
  *         Localizable.strings，**必须落在 Contents/Resources 根**（Bundle.main 与
  *         系统框架的本地化解析层）；缺席即装配期 fail（assertLocalizationsPresent）
- *       sidecar/{node,sidecar.js,package.json,dist/…}   ← W-23 build-sidecar 产物
+ *       sidecar/{node,sidecar.js,package.json,dist/…}   ← build-sidecar 产物
  *       dist/web/                     ← renderer 产物（可选；sidecar 静态伺服；
  *                                       过滤 *.map 与 .vite/，与 Electron build.files
- *                                       逐条对齐——G40）
+ *                                       逐条对齐）
  *
  * 步骤：swift build（可 --skip-build）→ 组装（sidecar 必须自带可执行 node 与
  * sidecar.js，build 时断言）→ 架构一致性断言（.app 可执行 vs 捆绑 node，lipo；
- * build-sidecar 缺省 darwin-arm64 而 swift build 跟随宿主——不一致的 .app 过去能
+ * build-sidecar 缺省 darwin-arm64 而 swift build 跟随宿主——不一致的 .app 能
  * 签名打包、运行时才崩）→ Info.plist 渲染（plutil -lint）→ 嵌套签名
  * （sidecar/node，Developer ID 时带 hardened runtime + node 权限）→ 主签名
  * （--identity 缺省 ad-hoc `-`）→ zip（ditto）/ dmg（dmg.mjs：可写镜像 +
  * Finder 布局 + UDZO，卷内含 /Applications 快捷方式、背景箭头与图标定位）。
  *
- * 离线/沙箱：--skip-build 复用已有 .build 产物；--skip-sidecar 允许无 W-23
+ * 离线/沙箱：--skip-build 复用已有 .build 产物；--skip-sidecar 允许无
  * 产物时只验壳装配（此时不做 node 架构比对）；--no-sign/--no-dmg/--no-zip
  * 分步跳过。
  *
- * --dry-run（G30）：不写盘，但把**已解析的计划**（app/可执行/产物名/feed/公钥
+ * --dry-run：不写盘，但把**已解析的计划**（app/可执行/产物名/feed/公钥
  * 成对性）全部打印并做一致性断言（dryRunPlanReport）——ci.yml 的 packaging dry
- * run 声称 "validate their plans and layouts"，此前只是打印存在性便返回 0。
+ * run 声称 "validate their plans and layouts"，必须真的校验计划而非只打印存在性。
  *
- * CFBundleVersion（S-23）：Sparkle 以它（而非 CFBundleShortVersionString）做版本
+ * CFBundleVersion：Sparkle 以它（而非 CFBundleShortVersionString）做版本
  * 比较，映射见 bundleVersionFor：稳定版 X.Y.Z → X.Y.Z.999999999，beta
  * X.Y.Z-beta.N → X.Y.Z.N；同 base 的 beta.N < beta.N+1 < final。
  *
  * 产物路径是**精确路径**（artifactBasename 单源）：发布腿只上传这些精确文件，
- * 绝不 glob 输出目录（G29：复用工作目录时旧版本归档曾被 *.dmg/*.zip 一并上传）。
+ * 绝不 glob 输出目录（复用工作目录时旧版本归档会被 *.dmg/*.zip 一并上传）。
  *
- * 注意（2026-09 实测）：entitlements plist **不能带 XML 注释**——codesign 的
+ * 注意：entitlements plist **不能带 XML 注释**——codesign 的
  * AMFIUnserializeXML 解析器对注释/非 ASCII 文本直接报
  * "Failed to parse entitlements"；权限集理由写在 design 25 §4.3/§8.4 与
  * STATUS，不写在 plist 里。
@@ -68,17 +68,17 @@ import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { isCliEntry, runCliTool } from '../../scripts/lib/cli.mjs'
 // 共享装配 seam（monorepo 内相对导入，同 packages/desktop/scripts/
-// build-swift-app.test.mjs 的反向引用）：bundle 内符号链接归一化必须与 W-23
+// build-swift-app.test.mjs 的反向引用）：bundle 内符号链接归一化必须与
 // sidecar 装配同源，绝不允许两份实现漂移。
 import { copyTree, normalizeSymlinks } from '../../packages/desktop/scripts/build-sidecar.mjs'
-// S-22：beta feed 的滚动 tag 单源在 release-artifacts.mjs（release.yml 的 job env
+// beta feed 的滚动 tag 单源在 release-artifacts.mjs（release.yml 的 job env
 // 与它逐字锁步）——装配脚本据此在 dry-run 计划里断言通道 URL 形状。
 import { NATIVE_BETA_ROLLING_TAG } from '../../scripts/release/release-artifacts.mjs'
-// 2026-09 P7 补强：样式化 DMG（Finder 背景箭头 + 图标定位 + /Applications 快捷
+// 样式化 DMG（Finder 背景箭头 + 图标定位 + /Applications 快捷
 // 方式）的**单一实现**。正式发布腿（release.yml 公证步）调用同文件的 CLI——
 // 两处各写一份必然漂移，实现与背景资产都收敛在 macos/scripts/dmg.mjs。
 import { createStyledDmg } from './dmg.mjs'
-// W8/R15③ 的**装配内门**（2026-12 审计 S3）：.app 里已拷入的字节就是最终发布字节，
+// **装配内门**：.app 里已拷入的字节就是最终发布字节，
 // 因此标记载体只在**一处**定义（mobile 包的 scoper-markers.mjs，跨包相对导入同
 // build-sidecar 的 seam 先例）——绝不在装配脚本里再写一套标记。
 import { missingScoperMarkers } from '../../packages/dsh-chamber-client-ui-mobile/scripts/lib/scoper-markers.mjs'
@@ -90,7 +90,7 @@ const desktopDir = path.join(repoRoot, 'packages', 'desktop')
 
 /** 默认 .app 名与产物名（可见名；发布腿用 --app-name/--artifact-basename 显式覆盖）。 */
 export const APP_NAME = 'dsh-chamber'
-/** SwiftPM executable target / 模块名：构建产物 = .build/<config>/DSHChamber（T-17）。 */
+/** SwiftPM executable target / 模块名：构建产物 = .build/<config>/DSHChamber。 */
 export const MODULE_NAME = 'DSHChamber'
 /** bundle 内可执行名（活动监视器/进程名）——与可见产品名同源。 */
 export const EXECUTABLE_NAME = APP_NAME
@@ -98,7 +98,7 @@ export const EXECUTABLE_NAME = APP_NAME
 export const RESOURCE_BUNDLE_NAME = `${MODULE_NAME}_${MODULE_NAME}.bundle`
 
 /**
- * 本地化集合（S2）：三处必须逐字同源——这里、Package.swift 的两个
+ * 本地化集合：三处必须逐字同源——这里、Package.swift 的两个
  * .process("Resources/<locale>.lproj")、Info.plist.template 的
  * CFBundleLocalizations。目录名用 Apple 的脚本拼写（zh-Hans，不是 zh_CN/zh-CN），
  * 因为壳内 ShellLanguagePolicy.appleLanguagesOverride 覆盖的就是这两个值。
@@ -116,7 +116,7 @@ export function localizationFile(resourcesDir, locale) {
 }
 
 /**
- * 装配断言（S2）：本地化资源缺席即 fail（响亮、带每个缺失文件的精确路径）。
+ * 装配断言：本地化资源缺席即 fail（响亮、带每个缺失文件的精确路径）。
  * 缺口的后果是「zh 系统上原生面回退英文/键名」，绝不能静默通过——与 bridge-shim
  * 的 fail-closed 同纪律。origin 用于把来源（SwiftPM 资源包）写进报错。
  */
@@ -133,10 +133,10 @@ export function assertLocalizationsPresent(resourcesDir, origin = '', exists = e
 }
 
 /**
- * 装配断言（S2 内容级，fail-closed）：本地化文件复制到落点后，落点必须与源
+ * 装配断言（内容级，fail-closed）：本地化文件复制到落点后，落点必须与源
  * **逐字节相等**，且能被系统自带 plutil 解析（`plutil -lint` 非 0 = 坏文件）。
- * 只做存在性断言不够——2026-12 独立审查实测：把源里的 Localizable.strings 清成
- * 0 字节，旧装配照样 EXIT=0 报「完成」，事后 plutil 才报 Cannot parse a NULL or
+ * 只做存在性断言不够——实测：把源里的 Localizable.strings 清成
+ * 0 字节，装配会 EXIT=0 报「完成」，事后 plutil 才报 Cannot parse a NULL or
  * zero-length data。报错与 assertLocalizationsPresent 同风格：中文、带每个落点的
  * 精确路径与 fail-closed 字样。runner 可注入仅为单测；缺省系统 plutil 是 macOS
  * 自带（本脚本本就只在 macOS 跑，已用 codesign/hdiutil），不引入任何 npm 依赖。
@@ -188,12 +188,12 @@ export function appLayout(outDir, appName = APP_NAME, artifactBasename = APP_NAM
     // "unsealed contents present in the bundle root"；运行时由
     // ChamberResources 按 Bundle.main.resourceURL 定位——见该文件头注释）。
     resourceBundle: path.join(resourcesDir, RESOURCE_BUNDLE_NAME),
-    // S2：本地化必须平移到 Contents/Resources 这一层（Bundle.main 与系统框架
+    // 本地化必须平移到 Contents/Resources 这一层（Bundle.main 与系统框架
     // 的 preferredLocalizations 解析都看它；资源包内的 .lproj 只服务 Bundle.module）。
     localizationsDir: resourcesDir,
     icon: path.join(resourcesDir, 'icon.icns'),
     sidecarDir: path.join(resourcesDir, 'sidecar'),
-    // Sparkle 等内嵌框架放 Contents/Frameworks（S-01 / 裁决 D-1 选 B）；可执行靠
+    // Sparkle 等内嵌框架放 Contents/Frameworks；可执行靠
     // @executable_path/../Frameworks 的 rpath 找到它（见下方 embedSparkle）。
     frameworksDir: path.join(contentsDir, 'Frameworks'),
     webDist: path.join(resourcesDir, 'dist', 'web'),
@@ -259,7 +259,7 @@ function embedSparkle(layout, options, io) {
   // Versions/Current/Sparkle 等）改写成指向 SwiftPM 制品的绝对路径——codesign 随即
   // 报 "unsealed contents present in the root directory of an embedded framework"，
   // 且 bundle 里出现逃出自身的链接；把链接**物化**（normalizeSymlinks）又会得到
-  // "bundle format is ambiguous (could be app or framework)"（2026-12 实测）。
+  // "bundle format is ambiguous (could be app or framework)"（实测）。
   cpSync(framework, destination, { recursive: true, dereference: false, verbatimSymlinks: true })
   const escaping = findEscapingSymlinks(destination)
   if (escaping.length > 0) {
@@ -291,7 +291,7 @@ export function resourceBundleResourcesDir(bundleDir, exists = existsSync) {
 }
 
 /** 装配后的资源包必须真有桥 shim——形态再变（第三层目录、改名）时当场 loud。
- *  抽成函数是为了能直接单测失败分支（2026-09 审查：新 fail-closed 分支原先无负例）。 */
+ *  抽成函数是为了能直接单测失败分支。 */
 export function assertBridgeShimPresent(resourceBundleDir, source = '', exists = existsSync) {
   if (!exists(path.join(resourceBundleDir, 'bridge-shim.js'))) {
     throw new Error('装配后的资源包缺 bridge-shim.js：' + resourceBundleDir
@@ -311,10 +311,10 @@ export function renderInfoPlist(template, values) {
 export const STABLE_BUNDLE_SUFFIX = 999999999
 
 /**
- * chamber 版本字符串 → CFBundleVersion（S-23；纯函数，单测直测）。
+ * chamber 版本字符串 → CFBundleVersion（纯函数，单测直测）。
  *
  * 为什么不能只取数字段：Sparkle 用 CFBundleVersion 作 sparkle:version 做版本
- * 比较，旧实现把 X.Y.Z-beta.N 与 X.Y.Z 都映射成 X.Y.Z ⇒ beta.N→final 不提示、
+ * 比较，若把 X.Y.Z-beta.N 与 X.Y.Z 都映射成 X.Y.Z ⇒ beta.N→final 不提示、
  * beta.N→beta.N+1 也不可区分。
  *
  * 方案（只含点分十进制整数，4 段）：
@@ -359,7 +359,7 @@ export function parseBuildSwiftAppArgs(argv) {
     // 显式值（arm64|x64）时两者都必须包含它。
     arch: null,
     swiftArgs: [],
-    // Sparkle（S-01 / 裁决 D-1 选 B）：feed 与 EdDSA 公钥由发布腿注入；
+    // Sparkle：feed 与 EdDSA 公钥由发布腿注入；
     // 缺省空串 = 更新不可用（壳禁用「检查更新…」菜单项，也不向内嵌 sidecar
     // 声明 --native-updater）。
     sparkleFeed: '',
@@ -420,7 +420,7 @@ export function assemblePlan(options) {
 }
 
 /**
- * appcast feed 的通道判定（S-22；纯函数，单测直测）：按 feed 末段文件名区分
+ * appcast feed 的通道判定（纯函数，单测直测）：按 feed 末段文件名区分
  * 稳定/beta；其他 .xml 名（本地自定义 feed）返回 null，只做 https/.xml 形状校验。
  */
 export function sparkleFeedChannel(feed) {
@@ -430,9 +430,9 @@ export function sparkleFeedChannel(feed) {
 }
 
 /**
- * web dist 条目的跨侧过滤（G40；纯函数，单测直测）：Electron 的 build.files
+ * web dist 条目的跨侧过滤（纯函数，单测直测）：Electron 的 build.files
  * （packages/desktop/package.json）排除 dist 下任意 .map 文件与 dist/.vite 目录，
- * Swift 装配此前无条件 cpSync 整棵 dist/web，随包带出 .vite/manifest.json 与
+ * 装配无条件 cpSync 整棵 dist/web 会随包带出 .vite/manifest.json 与
  * 源码映射等构建内部文件。规则**逐条对齐 Electron**（目录名 .vite 出现在任意
  * 层级 + 任何 .map 文件），不另造第二套规则。relativePath 相对 web dist 根。
  */
@@ -473,18 +473,18 @@ export function shouldCopyWebDistEntry(relativePath) {
 }
 
 /**
- * --dry-run 的计划报告 + 一致性断言（G30；纯函数：不发命令、不写盘、单测直测）。
+ * --dry-run 的计划报告 + 一致性断言（纯函数：不发命令、不写盘、单测直测）。
  *
  * ci.yml 的 packaging dry run 声称 ".app assembly plan validates its inputs"；
- * 此前 --dry-run 只打印二进制/sidecar 存在性便返回 0。这里把已解析的 app 布局、
+ * 这里把已解析的 app 布局、
  * 精确产物名与 Sparkle 注入面完整输出，并对**计划本身不合法**的组合直接 throw：
  * - feed 与公钥必须成对（半配置 = Info.plist 一半有值，壳会误判更新面）；
  * - feed 必须是 https（Sparkle/ATS 都拒绝明文；发布腿的 GitHub URL 天然满足）；
  * - feed 必须指向 .xml appcast；
- * - S-22 通道 URL 形状：appcast-swift-beta.xml 必须落在滚动 tag
+ * - 通道 URL 形状：appcast-swift-beta.xml 必须落在滚动 tag
  *   （NATIVE_BETA_ROLLING_TAG）上——版本固定 tag 会让 beta.N 看不到 beta.N+1；
  *   appcast-swift.xml 必须落在 releases/latest（稳定客户端的唯一解析面）；
- * - 产物名必须逐字来自 --artifact-basename（发布腿据此上传精确路径，G29）。
+ * - 产物名必须逐字来自 --artifact-basename（发布腿据此上传精确路径）。
  * @returns {{ layout: object, lines: string[] }} 供调用方逐行打印。
  */
 export function dryRunPlanReport(options) {
@@ -503,7 +503,7 @@ export function dryRunPlanReport(options) {
   if (feed !== '' && !/\.xml($|[?#])/.test(feed)) {
     throw new Error(`dry-run：--sparkle-feed 必须指向 .xml appcast：${feed}`)
   }
-  // S-22 通道 URL 形状：稳定 = releases/latest；beta = 滚动 tag 的 asset。
+  // 通道 URL 形状：稳定 = releases/latest；beta = 滚动 tag 的 asset。
   const channel = sparkleFeedChannel(feed)
   if (channel === 'beta'
     && !feed.endsWith(`/releases/download/${NATIVE_BETA_ROLLING_TAG}/appcast-swift-beta.xml`)) {
@@ -524,12 +524,12 @@ export function dryRunPlanReport(options) {
       throw new Error(`dry-run：${kind} 产物路径与 --artifact-basename 不一致：${file}`)
     }
   }
-  // G38：图标缺件在 electron-builder 是 fatal（InvalidConfigurationError），
+  // 图标缺件在 electron-builder 是 fatal（InvalidConfigurationError），
   // Swift 装配也必须 fail closed——dry-run 是 CI 的计划校验面，计划不合法直接抛。
   if (!existsSync(options.iconPath)) {
     throw new Error(`dry-run：缺少图标（${options.iconPath}）——electron-builder 在缺 mac.icon 时同样致命（G38）`)
   }
-  // S2：声明面与资源面同源。CFBundleLocalizations 声明了却缺 .lproj（或反之）
+  // 声明面与资源面同源。CFBundleLocalizations 声明了却缺 .lproj（或反之）
   // 会让 Bundle 的本地化解析静默回退 DevelopmentRegion；dry-run 是计划校验面，
   // 这里就把 Info.plist.template 的声明与 LOCALIZATIONS 钉在一起（资源断言在装配腿）。
   const declaredLocalizations = plistLocalizations(
@@ -549,7 +549,7 @@ export function dryRunPlanReport(options) {
       ? 'web-dist=（--skip-web-dist 跳过）'
       : `web-dist=${options.webDistDir}（${existsSync(path.join(options.webDistDir, 'index.html')) ? '就绪' : '缺失'}）`,
     `icon=${options.iconPath}（就绪）`,
-    // S2：--dry-run 也打印将写入的本地化路径（含 SwiftPM 源是否已构建），
+    // --dry-run 也打印将写入的本地化路径（含 SwiftPM 源是否已构建），
     // 让 CI 的 packaging dry run 能直接核对 Bundle.main 解析层的确切落点。
     ...LOCALIZATIONS.map((locale) => {
       // 源 = SwiftPM 资源包（含两种后端形态），经 resourceBundleResourcesDir 归一。
@@ -580,8 +580,8 @@ function run(command, args, io, cwd) {
   const result = spawnSync(command, args, {
     stdio: 'inherit',
     shell: false,
-    // SwiftPM 需要 Package.swift 所在目录——脚本可从仓库根调用（2026-09 三审：
-    // 原先依赖调用方 cwd = macos/，从根跑会 "Could not find Package.swift"）。
+    // SwiftPM 需要 Package.swift 所在目录——脚本可从仓库根调用（依赖调用方
+    // cwd = macos/ 时从根跑会 "Could not find Package.swift"）。
     ...(cwd !== undefined ? { cwd } : {}),
   })
   if (result.error) throw new Error(`${command} 启动失败：${result.error.message}`)
@@ -598,7 +598,7 @@ const MACHO_MAGICS = new Set([
   0xfeedface, 0xfeedfacf, // MH_MAGIC / MH_MAGIC_64（大端）
   0xcefaedfe, 0xcffaedfe, // MH_CIGAM / MH_CIGAM_64（小端）
   0xcafebabe, 0xbebafeca, // FAT_MAGIC / FAT_CIGAM
-  0xcafebabf, 0xbfbafeca, // FAT_MAGIC_64 / FAT_CIGAM_64（2026-12 P9：漏判会让 64 位胖文件逃避嵌套签名）
+  0xcafebabf, 0xbfbafeca, // FAT_MAGIC_64 / FAT_CIGAM_64（漏判会让 64 位胖文件逃避嵌套签名）
 ])
 
 /** 读 4 字节判定是否 Mach-O（导出以便单测；读失败 → false）。 */
@@ -623,7 +623,7 @@ export function isMachO(file) {
  *  codesign 只会自动封存它认识的嵌套位置；framework 里的 Updater.app /
  *  XPCServices/*.xpc 必须**先于**所属 framework 单独签名，否则主签名后
  *  codesign --verify 会报 unsealed contents present in the root directory
- *  of an embedded framework（Sparkle 嵌入实测，2026-12）。 */
+ *  of an embedded framework（Sparkle 嵌入实测）。 */
 /** 找出 rootDir 下指向自身之外的符号链接（绝对目标或 .. 逃逸）；fail-closed
  *  用词：bundle 内不得含逃出自身的链接（AGENTS.md「Before changing the Swift
  *  native shell」）。纯函数，单测直测。 */
@@ -664,7 +664,7 @@ export function findNestedBundles(rootDir) {
       const full = path.join(dir, entry.name)
       // 只签真正的**代码** bundle：framework / xpc / app。SwiftPM 的
       // RESOURCE_BUNDLE（DSHChamber_DSHChamber.bundle）是纯资源目录、
-      // 没有 Info.plist，交给它签会得到 "bundle format unrecognized"（2026-12；
+      // 没有 Info.plist，交给它签会得到 "bundle format unrecognized"；
       // 该目录由主 app 的签名封存，历来不需要单独签）。
       if (/\.(framework|xpc|app)$/.test(entry.name)) {
         found.push(full)
@@ -686,7 +686,7 @@ export function findNestedMachOFiles(rootDir) {
     try {
       entries = readdirSync(dir, { withFileTypes: true })
     } catch (error) {
-      // fail closed（2026-12 P9）：旧实现静默 return——枚举不到嵌套 Mach-O 时
+      // fail closed：枚举不到嵌套 Mach-O 时若静默 return，
       // 主签名仍会通过，未签名的 .node/可执行模块被「deep」校验放过，公证才炸。
       throw new Error(
         `无法读取待枚举目录（嵌套 Mach-O 签名前置）：${dir}——`
@@ -708,7 +708,7 @@ export function findNestedMachOFiles(rootDir) {
 }
 
 /**
- * codesign argv（纯函数，build-swift-app.test.mjs 直测——2026-09 审计发现 hardened 分支错序：
+ * codesign argv（纯函数，build-swift-app.test.mjs 直测——hardened 分支不得错序：
  * `--options runtime` 被插到 `--sign` 与 identity 之间，codesign 会把 `--options`
  * 当成 identity 报 "--options: no identity found"）。规则：所有选项先于
  * `--sign <identity>`；ad-hoc（identity === '-'）不带 hardened runtime 与
@@ -732,7 +732,7 @@ export function codesignArgs(options, target, entitlements) {
 export function parseLipoArchs(stdout) {
   const text = String(stdout)
   const marker = 'architecture:'
-  // 旧版 lipo 对 thin 文件打印 "Non-fat file: … is architecture: arm64"。
+  // lipo 对 thin 文件打印 "Non-fat file: … is architecture: arm64"。
   const payload = text.includes(marker) ? text.slice(text.lastIndexOf(marker) + marker.length) : text
   return [...new Set(payload.trim().split(/\s+/).filter(Boolean))]
     .map((arch) => (arch === 'x86_64' ? 'x64' : arch === 'arm64e' ? 'arm64' : arch))
@@ -790,7 +790,7 @@ export async function runBuildSwiftApp(options, io = { log: console.log, error: 
   const bundleSource = path.join(outputDir, RESOURCE_BUNDLE_NAME)
 
   if (options.dryRun) {
-    // G30：不写盘，但把完整计划（路径/产物名/feed 配对）打印出来并做一致性断言；
+    // 不写盘，但把完整计划（路径/产物名/feed 配对）打印出来并做一致性断言；
     // 计划不合法（feed 半配置、非 https、产物名与 --artifact-basename 不符）直接抛。
     const plan = dryRunPlanReport(options)
     io.log(`[build-swift-app] dry-run：模板/entitlements 就绪；二进制 ${binarySource}（${existsSync(binarySource) ? '存在' : '待构建'}）`)
@@ -827,7 +827,7 @@ export async function runBuildSwiftApp(options, io = { log: console.log, error: 
   // fail-closed：形态再变（第三个目录层级）时当场红，绝不产出没有桥 shim 的 .app。
   assertBridgeShimPresent(layout.resourceBundle, bundleResources)
 
-  // S2：本地化资源平移。SwiftPM 资源包里的 .lproj 只服务 Bundle.module；原生面
+  // 本地化资源平移。SwiftPM 资源包里的 .lproj 只服务 Bundle.module；原生面
   // 的 Bundle.main 与系统框架都按 **Contents/Resources/<lang>.lproj** 解析，故
   // 必须在这个解析层各留一份。顺序 = 断言源 → 拷贝 → 断言目标：两处都带每个缺失
   // 文件的精确路径 loud，绝不产出「zh 系统静默回退英文」的次品。
@@ -838,7 +838,7 @@ export async function runBuildSwiftApp(options, io = { log: console.log, error: 
     cpSync(localizationDir(bundleResources, locale), destination, { recursive: true })
   }
   assertLocalizationsPresent(layout.resourcesDir, bundleResources)
-  // S2 内容级 fail-closed（2026-12 审查）：存在性断言挡不住 0 字节/截断/复制损坏
+  // 内容级 fail-closed：存在性断言挡不住 0 字节/截断/复制损坏
   // 的 Localizable.strings——落点必须与源逐字节相等且 plutil 可解析。
   assertLocalizationsContent(bundleResources, layout.resourcesDir)
   io.log('[build-swift-app] 本地化 → ' + LOCALIZATIONS
@@ -846,7 +846,7 @@ export async function runBuildSwiftApp(options, io = { log: console.log, error: 
 
   const desktopPkg = JSON.parse(readFileSync(path.join(desktopDir, 'package.json'), 'utf8'))
   const version = typeof desktopPkg.version === 'string' ? desktopPkg.version : '0.0.0'
-  // S-23：CFBundleVersion 必须让 beta.N、beta.N+1 与同 base 的 final 彼此可区分
+  // CFBundleVersion 必须让 beta.N、beta.N+1 与同 base 的 final 彼此可区分
   // （Sparkle 以它作 sparkle:version 比较）；映射与理由见 bundleVersionFor。
   const bundleVersion = bundleVersionFor(version)
   const plist = renderInfoPlist(readFileSync(templatePath, 'utf8'), {
@@ -861,8 +861,8 @@ export async function runBuildSwiftApp(options, io = { log: console.log, error: 
   if (lint.status !== 0) throw new Error(`Info.plist 非法：${lint.stdout}${lint.stderr}`)
   io.log(`[build-swift-app] Info.plist（version=${version}）→ ${layout.infoPlist}`)
 
-  // G38：图标缺件在 electron-builder 是 fatal（app-builder-lib 的
-  // InvalidConfigurationError），Swift 装配此前只警告并继续，能产出无图标 .app。
+  // 图标缺件在 electron-builder 是 fatal（app-builder-lib 的
+  // InvalidConfigurationError），装配只警告并继续会产出无图标 .app。
   // 对称 fail closed：发布腿永远拿不到「带默认图标」的次品。
   if (!existsSync(options.iconPath)) {
     throw new Error(
@@ -873,16 +873,16 @@ export async function runBuildSwiftApp(options, io = { log: console.log, error: 
   cpSync(options.iconPath, layout.icon)
   io.log(`[build-swift-app] icon.icns → ${layout.icon}`)
 
-  // 3. sidecar（W-23 装配产物）。
+  // 3. sidecar（装配产物）。
   if (options.skipSidecar) {
     io.log('[build-swift-app] 跳过 sidecar 拷贝（--skip-sidecar）')
   } else if (existsSync(options.sidecarDir)) {
-    // P2（2026-09 GUI 验收）：`cpSync` 会把相对符号链接改写成指向**源树**的
+    // `cpSync` 会把相对符号链接改写成指向**源树**的
     // 绝对链接，bundle 内随即出现逃出 bundle 的链接，`codesign --verify
     // --strict` 直接报 `invalid destination for symbolic link in bundle`。
     // copyTree 保留树内相对链接（pnpm `.bin` 的语义）、实体化树外链接。
     rmSync(layout.sidecarDir, { recursive: true, force: true })
-    // D12：copyTree 没有返回值（build-sidecar.mjs 只做 cpSync），旧实现把
+    // copyTree 没有返回值（build-sidecar.mjs 只做 cpSync），把
     // undefined 当计数、日志恒打印「实体化 undefined 处」。归一化计数由
     // normalizeSymlinks 统一返回（它同时负责树外链接实体化与树内相对链接改写）。
     copyTree(options.sidecarDir, layout.sidecarDir)
@@ -891,7 +891,7 @@ export async function runBuildSwiftApp(options, io = { log: console.log, error: 
       io.log(`[build-swift-app] 符号链接归一化 ${normalizedLinks} 处（树外链接实体化 / 树内相对链接改写，bundle 自包含）`)
     }
     io.log(`[build-swift-app] sidecar → ${layout.sidecarDir}`)
-    // A5 前置断言（W-23 已保证，这里防手工/外部装配目录把 node 放错名）：
+    // 前置断言（build:sidecar 已保证，这里防手工/外部装配目录把 node 放错名）：
     // sidecar 目录下任何以 node 开头的条目都必须恰好叫 node。
     const { readdirSync } = await import('node:fs')
     for (const entry of readdirSync(layout.sidecarDir)) {
@@ -902,7 +902,7 @@ export async function runBuildSwiftApp(options, io = { log: console.log, error: 
     if (!existsSync(path.join(layout.sidecarDir, 'sidecar.js'))) {
       throw new Error(`sidecar 装配目录缺少 sidecar.js：${layout.sidecarDir}`)
     }
-    // 2026-12 P2：没有捆绑 node 时 runtime 会静默回落 PATH 上的系统 node——
+    // 没有捆绑 node 时 runtime 会静默回落 PATH 上的系统 node——
     // 签名与打包都会成功，但发布物的运行时依赖构建机环境。存在性与可执行位
     // 必须在这里 fail closed（--skip-sidecar/--dry-run 才允许缺位）。
     const bundledNode = path.join(layout.sidecarDir, 'node')
@@ -919,7 +919,7 @@ export async function runBuildSwiftApp(options, io = { log: console.log, error: 
   } else {
     throw new Error(`缺少 W-23 sidecar 装配目录：${options.sidecarDir}（先跑 build:sidecar，或用 --skip-sidecar）`)
   }
-  // 2026-12 P4：build-sidecar 缺省 darwin-arm64，而 swift build 跟随宿主架构；
+  // build-sidecar 缺省 darwin-arm64，而 swift build 跟随宿主架构；
   // 两者不一致的 .app 能签名、能打包，直到运行时才崩。lipo 读两边架构：必须
   // 存在交集；显式 --arch 时两边都必须包含它（.app 可执行不存在/非 Mach-O 也
   // 在这里 loud，不留给 codesign 的模糊报错）。
@@ -939,10 +939,10 @@ export async function runBuildSwiftApp(options, io = { log: console.log, error: 
       )
     }
   }
-  // S5·F19（2026-12 双端逐函数核对 + 审查修正）：此前缺 renderer dist/web 只静默
+  // 缺 renderer dist/web 不能静默
   // 跳过——装配出来的 .app 首次启动即白屏（release.yml 的 verify 步虽有断言，装配
   // 脚本自身必须 fail-closed）。
-  // 规则（审查后收紧）：**只有显式 --skip-web-dist 才允许缺位**。早先按
+  // 规则：**只有显式 --skip-web-dist 才允许缺位**。按
   // 「是否产出 zip/dmg」放行是错的——release.yml 的正式腿恰以 --no-zip --no-dmg
   // 组装真正发布的 .app（归档在公证之后另做），那种形状也会缺 web 界面。
   // 并且判据是 `dist/web/index.html` 而不是目录存在：emptyOutDir 失败留下的空目录
@@ -955,7 +955,7 @@ export async function runBuildSwiftApp(options, io = { log: console.log, error: 
       + '——装配必须自带 web 界面（先跑 pnpm run build:renderer；仅局部装配可显式 --skip-web-dist）',
     )
   } else {
-    // G40：过滤规则与 Electron 的 build.files 逐条对齐（no *.map / no .vite）——
+    // 过滤规则与 Electron 的 build.files 逐条对齐（no *.map / no .vite）——
     // 过滤是跨侧对称契约，不是「少拷几个文件」：.vite/manifest.json 与源码映射
     // 属构建内部文件，不得随 .app 分发（Electron 侧同样不打进 asar）。
     cpSync(options.webDistDir, layout.webDist, {
@@ -963,14 +963,14 @@ export async function runBuildSwiftApp(options, io = { log: console.log, error: 
       filter: (source) => source === options.webDistDir
         || shouldCopyWebDistEntry(path.relative(options.webDistDir, source)),
     })
-    // S3 审计（2026-12）：**装配后**对已拷入的字节断言 scoper 标记。此前 Swift 侧
-    // 完全没有标记门（只断 index.html），于是「构建把 scoper 摇掉」的空壳可以装进
+    // **装配后**对已拷入的字节断言 scoper 标记。Swift 侧
+    // 若没有标记门（只断 index.html），「构建把 scoper 摇掉」的空壳可以装进
     // .app 并发布——切源白屏就回来了。缺标记即 throw（提示先跑 build:renderer）。
     assertWebDistCarriesScoper(layout.webDist)
     io.log(`[build-swift-app] renderer dist/web → ${layout.webDist}（过滤 *.map 与 .vite/，与 Electron build.files 对齐；已断言 scoper 标记）`)
   }
 
-  // 3b. 嵌入 Sparkle.framework（S-01 / 裁决 D-1 选 B）：必须在签名之前——
+  // 3b. 嵌入 Sparkle.framework：必须在签名之前——
   //     嵌套框架先于主签名，否则 codesign --verify --deep 会报未密封。
   embedSparkle(layout, options, io)
 
@@ -989,7 +989,7 @@ export async function runBuildSwiftApp(options, io = { log: console.log, error: 
     for (const file of nested) {
       // 只有捆绑的 node 需要 JIT/可写可执行内存权限（design 25 §3.2「捆绑 node
       // 另加」）；其余嵌套原生模块（.node/dylib）用裸 hardened runtime 签名，
-      // 避免无谓放大权限面（2026-09 模块评审 minor）。
+      // 避免无谓放大权限面。
       const isNode = path.basename(file) === 'node'
       run('codesign', codesignArgs(options, file, isNode ? nodeEntitlements : undefined), io)
     }
@@ -998,7 +998,7 @@ export async function runBuildSwiftApp(options, io = { log: console.log, error: 
     }
     // 嵌套 bundle（Sparkle.framework 及其 Updater.app / XPCServices）：必须按
     // 由深到浅单独签名——只签内部可执行文件不产生 framework 自己的封存，
-    // 主签名后 --verify 会报 unsealed contents（2026-12 Sparkle 嵌入实测）。
+    // 主签名后 --verify 会报 unsealed contents（Sparkle 嵌入实测）。
     const nestedBundles = findNestedBundles(layout.appDir)
     for (const bundle of nestedBundles) {
       run('codesign', codesignArgs(options, bundle), io)
@@ -1016,13 +1016,12 @@ export async function runBuildSwiftApp(options, io = { log: console.log, error: 
 
   // 5/6. 分发产物。路径 = artifactBasename + .zip/.dmg（精确路径，永不 glob）：
   // 复用输出目录时旧版本的归档会与新版本并存，发布腿必须只上传这两个精确路径
-  // （G29：曾把 0.3.1 与 0.3.2-beta.1 的 *.dmg/*.zip 一并上传）。
   if (!options.noZip) {
     rmSync(layout.zipPath, { force: true })
     run('ditto', ['-c', '-k', '--sequesterRsrc', '--keepParent', layout.appDir, layout.zipPath], io)
   }
   if (!options.noDmg) {
-    // P7（2026-12）+ 2026-09 补强：卷内容 = .app + /Applications 快捷方式
+    // 卷内容 = .app + /Applications 快捷方式
     // **+ Finder 拖拽布局**（背景箭头 + 图标定位，写进卷内 .DS_Store）。
     // 卷名/布局/背景资产全部由 dmg.mjs 单源；产出后立刻做产物级校验（挂载断言
     // .DS_Store/.background/快捷方式），失败 loud——绝不发没有提示的 DMG。

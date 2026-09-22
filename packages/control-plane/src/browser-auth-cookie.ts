@@ -1,8 +1,8 @@
 /**
- * Browser-auth cookie bootstrap for the 0.1.2 wire (review-round3c P0).
+ * Browser-auth cookie bootstrap for the web-profile wire.
  *
- * Upstream dsh-v0.1.2-alpha.1 added an unconditional browser-auth gate to the
- * web-profile host: every `/api` request and every `/api/remote.mux` upgrade
+ * The upstream web-profile host enforces an unconditional browser-auth gate:
+ * every `/api` request and every `/api/remote.mux` upgrade
  * must carry a signed cookie minted through the process launch-token exchange
  * (`GET /?token=<launchToken>` → Set-Cookie; browser-auth.ts). The web
  * profile prints `dsh web: <url>?token=<launchToken>` at readiness
@@ -17,8 +17,8 @@
  *      inject it into every proxied request / upgrade and every direct probe
  *      call for that instance.
  *
- * Old hosts (0.1.1-rc.2, no auth gate) print the URL line without a token —
- * the bootstrap then yields no cookie and operation continues as before.
+ * Hosts with no auth gate print the URL line without a token — the bootstrap
+ * then yields no cookie and operation continues without one.
  */
 
 /** In-memory per-instance browser-auth cookie registry (baseUrl → cookie). */

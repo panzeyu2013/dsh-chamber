@@ -2,14 +2,12 @@
 //  JSLiteralEscapingTests.swift
 //  DSHChamberTests
 //
-//  2026-12 单源化：JS 字面量转义的**唯一实现** = AnyCodable 的单遍写出器
+//  JS 字面量转义的**唯一实现** = AnyCodable 的单遍写出器
 //  （AnyCodable.writeJSONString / jsonLiteralText）。两条生产出口都经它：
 //    - 页面注入：MainWindowController.jsonLiteral(of:) → __dshChamberResolve /
 //      __dshChamberEmit 的 evaluateJavaScript 源码；
 //    - A 桥回执：MessageHandler.jsStringLiteral（委托）。
-//  旧的 JSONSerialization 出口（MainWindowController.jsonLiteral(_:Any)）与
-//  手工转义循环（MessageHandler.jsStringLiteral 原实现）已删除；本文件把
-//  转义矩阵与「同源」做成锁，防任何一侧重新长出第二份转义表。
+//  本文件把转义矩阵与「同源」做成锁，防任何一侧重新长出第二份转义表。
 //
 import XCTest
 @testable import DSHChamber

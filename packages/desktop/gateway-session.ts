@@ -34,7 +34,7 @@
  * (design 17 §7.3 three-state). Audit (S24) records only non-secret events
  * (time/source/auth result) — never credentials or the cookie itself.
  *
- * SPKI pinning (S23, design 17 §13.4.2, P1-2): an https origin may carry an
+ * SPKI pinning (S23, design 17 §13.4.2): an https origin may carry an
  * optional `spkiPin`; the login request is then pinned EXACTLY like the
  * identity probe (rejectUnauthorized:false — the pin replaces CA trust for
  * the internal-CA case — + agent:false so the socket verifier always fires),
@@ -72,7 +72,7 @@ export interface GatewaySessionOrigin {
   /** true = plaintext http (the user's explicit `insecureHttp` choice,
    * design 17 §9.1/§13.1); false = https (the default). */
   insecureHttp: boolean
-  /** Optional SPKI certificate pin (S23, design 17 §13.4.2; P1-2): an https
+  /** Optional SPKI certificate pin (S23, design 17 §13.4.2): an https
    * login is pinned like the identity probe (rejectUnauthorized:false +
    * agent:false + the secureConnect pre-write verifier), so an
    * internal-CA gateway login can succeed and a mismatched peer is a
@@ -98,16 +98,13 @@ export interface GatewaySessionOrigin {
 }
 
 /**
- * THE construction point of a session origin (2026-12 stage-2 single-sourcing):
- * the direct-endpoint provider (gateway-provider gatewaySessionOriginFor), the
- * ssh tunnel provider (ssh-provider tunnelSessionOrigin) and the refresh
- * controller (gateway-session-refresh gatewaySessionOriginForUrl) used to build
- * the same object shape three times, with the optional spkiPin/authority keys
- * conditionally spread by hand in each. They now all come through here, so the
- * login, the cached-session key and the proxy registration can never disagree
- * about which fields form an origin. Optional keys stay ABSENT (not
- * undefined/null) exactly as before — the cache key is built by serializing
- * this object.
+ * THE construction point of a session origin: the direct-endpoint provider
+ * (gateway-provider gatewaySessionOriginFor), the ssh tunnel provider
+ * (ssh-provider tunnelSessionOrigin) and the refresh controller
+ * (gateway-session-refresh gatewaySessionOriginForUrl) all come through here,
+ * so the login, the cached-session key and the proxy registration can never
+ * disagree about which fields form an origin. Optional keys stay ABSENT (not
+ * undefined/null) — the cache key is built by serializing this object.
  */
 export function buildGatewaySessionOrigin(input: {
   baseUrl: string
@@ -267,7 +264,7 @@ export function createGatewaySessionManager(deps: GatewaySessionDeps = {}): Gate
   /** Login attempts whose late result could otherwise repopulate an
    * invalidated connection generation. Invalidating an origin/scope marks
    * every matching attempt stale; the request may still settle for its caller,
-   * but can no longer mutate the shared cookie/backoff state. */
+   * but cannot mutate the shared cookie/backoff state. */
   interface LoginAttempt { invalidated: boolean; generation: number }
   const activeLogins = new Map<string, Set<LoginAttempt>>()
   let disposed = false
@@ -445,7 +442,7 @@ export function createGatewaySessionManager(deps: GatewaySessionDeps = {}): Gate
           // policy (authority port == listen port) accepts the login.
           ...(origin.authority === undefined ? {} : { host: origin.authority }),
         },
-        // S23 (P1-2): a configured SPKI pin on an https origin turns the
+        // S23: a configured SPKI pin on an https origin turns the
         // login into a PINNED connection exactly like the identity probe —
         // rejectUnauthorized:false (the pin replaces CA trust for the
         // internal-CA case) + agent:false (a fresh connection, so the
@@ -468,7 +465,7 @@ export function createGatewaySessionManager(deps: GatewaySessionDeps = {}): Gate
           // A peer whose SPKI does not match the pin is DETERMINISTIC
           // evidence (S23): classified 'other', which the verifyUp flow maps
           // terminal — never the transient 'network' that would keep the
-          // password flow retrying forever (P1-2 永不 ready).
+          // password flow retrying forever (永不 ready).
           done({ ok: false, code: 'other', error: '证书固定不匹配（SPKI）——gateway 证书已更换或 pin 错误' })
           return
         }

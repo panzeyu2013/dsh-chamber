@@ -1,23 +1,19 @@
 /**
- * Gateway chamber surface (design 17 §10, 2026-12 收窄): the gateway-owned
- * `/chamber/*` routes behind the auth gate (dispatch.ts). After the 2026-12
- * orchestration strip (approvals/notifications, cross-session schedule,
- * session index, git worktree records, feature settings all removed — dsh
- * native or design 08 covers them), this surface keeps only:
+ * Gateway chamber surface (design 17 §10): the gateway-owned `/chamber/*`
+ * routes behind the auth gate (dispatch.ts). This surface keeps only:
  *
  *   - `/chamber/channels`        — channel registry projection (MVP empty);
  *   - `/chamber/plugins`          — desktop-synced host-package seed cache
- *                                  (2026-12 Phase 3: GET projection + PUT
- *                                  upload);
+ *                                  (GET projection + PUT upload);
  *   - `/chamber/plugins/installed` — managed web-profile plugin projection
- *                                   (design 21 §6.2, A0 read surface; shares
- *                                   the A1 write fence → retryable 409 while a
- *                                   profile write is in flight);
+ *                                   (design 21 §6.2; shares the write fence →
+ *                                   retryable 409 while a profile write is in
+ *                                   flight);
  *   - `/chamber/plugins/tasks`    — mutation task projection (journal ops +
  *                                   deferred intents + executor busy, design
- *                                   21 §6.2; plan Phase 4.4);
+ *                                   21 §6.2);
  *   - `/chamber/plugins/install`  — registry-spec plugin install (design 21
- *                                   §6.2 A1 write surface: 202 async, queue
+ *                                   §6.2 write surface: 202 async, queue
  *                                   serial + single-writer fence, deferred on
  *                                   busy/pending/absent profile);
  *   - `/chamber/plugins/materialize` — folder/tarball push (streamed upload
@@ -25,9 +21,9 @@
  *                                   third-party/ and installed via file:);
  *   - `/chamber/plugins/remove`   — installed-list remove (never deferred,
  *                                   usable while the managed dsh is stopped);
- *   - `/chamber/session-state*`   — the read-only session-state watcher
- *                                  (plan W1 / WS-B): snapshot / SSE / read /
- *                                  read-all, delegated to sessionState;
+ *   - `/chamber/session-state*`   — the read-only session-state watcher:
+ *                                  snapshot / SSE / read / read-all, delegated
+ *                                  to sessionState;
  *   - `/chamber/` + assets       — the browser dashboard (Credentials +
  *                                  dsh runtime management only);
  *   - `/chamber/runtime/*`       — the runtime controller (design 18 §9.3,
@@ -67,9 +63,9 @@ import { CHAMBER_APP_HTML, CHAMBER_APP_JS, MOBILE_HTML } from './chamber-assets.
 import type { ChamberSessionState } from './session-state.ts'
 import { codedError, headerValue, jsonResponse, readBoundedBody } from './http-utils.ts'
 
-/** The A1 mutation-orchestrator surface the routes drive (design 21 §6.2;
- * plan Phase 4.4): submit + projection only — the routes never drain or
- * reconcile (index.ts owns the ready-edge drain and boot reconciliation). */
+/** The mutation-orchestrator surface the routes drive (design 21 §6.2):
+ * submit + projection only — the routes never drain or reconcile (index.ts
+ * owns the ready-edge drain and boot reconciliation). */
 export interface ChamberSurfacePluginTasks {
   submit(input: PluginTaskSubmitInput, opts?: { defer?: boolean }): Promise<PluginTaskSubmitResult>
   tasks(): PluginTaskTasksProjection
@@ -79,19 +75,19 @@ export interface ChamberSurfaceDeps {
   logger: Logger
   /** The channel registry (design 17 §2.4; MVP empty). */
   channels: ChannelRegistry
-  /** The desktop-synced host-package seed cache (2026-12 Phase 3). */
+  /** The desktop-synced host-package seed cache. */
   plugins: ChamberPlugins
-  /** The managed web-profile plugin read projection (design 21 §6.2 A0 read
-   * surface): readManifest's gateway implementation, read-only. */
+  /** The managed web-profile plugin read projection (design 21 §6.2):
+   * readManifest's gateway implementation, read-only. */
   installed: ChamberInstalled
-  /** The design 21 A1 mutation orchestrator (plan Phase 4.4): install/
+  /** The design 21 mutation orchestrator: install/
    * materialize/remove submissions (202-async, journal + lease + deferred
    * intents) and the task projection. */
   tasks: ChamberSurfacePluginTasks
   /** The gateway stateDir — the materialize route stages uploaded archives
    * under its chamber-plugins/third-party tree. */
   stateDir: string
-  /** The read-only session-state watcher surface (plan W1 / WS-B): snapshot,
+  /** The read-only session-state watcher surface: snapshot,
    * SSE deltas and read marks under /chamber/session-state*. Optional so the
    * surface stays additive for the existing composition tests; the production
    * gateway always supplies it (index.ts), and when absent the prefix falls
@@ -105,7 +101,7 @@ export interface ChamberSurface {
   handle(req: ApiRequest, res: ApiResponse, pathname: string): Promise<boolean>
 }
 
-/** Bounded JSON body reader for the plugin-sync upload (2026-12 Phase 3).
+/** Bounded JSON body reader for the plugin-sync upload.
  * Cap: 8 MiB — a host package's artifact (up to 4 MiB) + manifest, as
  * JSON strings. An oversized body is answered 413 and the request socket is
  * destroyed instead of drained (a slow authenticated upload must not pin the
@@ -123,12 +119,10 @@ async function readUploadJsonBody(req: ApiRequest): Promise<unknown> {
   }
 }
 
-// Gateway-owned browser assets (design 17 D6 / §10/§9). The full dsh frontend
+// Gateway-owned browser assets (design 17 §10/§9). The full dsh frontend
 // remains proxied at `/`; `/chamber/` is a deliberately small operations
-// surface backed only by gateway-owned routes. 2026-12: the dashboard keeps
-// Credentials + dsh runtime management only (feature settings, approvals,
-// sessions, schedule and worktree blocks were removed with the orchestration
-// strip).
+// surface backed only by gateway-owned routes. The dashboard keeps
+// Credentials + dsh runtime management only.
 
 const CHAMBER_APP_CSP = "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'; connect-src 'self'"
 
@@ -158,7 +152,7 @@ function methodNotAllowed(res: ApiResponse): true {
   return true
 }
 
-// A1 write-surface helpers (design 21 §6.2; plan Phase 4.4)
+// Write-surface helpers (design 21 §6.2)
 
 /** Uploaded materialize archive cap (design 21 §6.2: the materialize route
  * has its own STREAMED body reader — the 8 MiB readUploadJsonBody cap does
@@ -223,7 +217,7 @@ function submitRefusalStatus(code: string): number {
 }
 
 /** Read-side half of the design 21 §6.2 "读与写面共享栅栏": true while a
- * plugin mutation holds the managed-profile write fence, i.e. while the A0
+ * plugin mutation holds the managed-profile write fence, i.e. while the
  * installed projection must not be published.
  *
  * Why the tasks projection is the fence seam: the orchestrator takes the
@@ -316,10 +310,9 @@ function materializeSlug(name: string): string {
 }
 
 /**
- * The gateway's own `/chamber/*` surface (design 17 §10, 2026-12 scope):
- * channels projection + plugin-sync seed cache + the design 21 A1 plugin
- * write surface (install/materialize/remove/tasks, plan Phase 4.4) + browser
- * dashboard assets. Reads are GET/HEAD; the plugin MUTATION routes answer
+ * The gateway's own `/chamber/*` surface (design 17 §10): channels projection
+ * + plugin-sync seed cache + the design 21 plugin write surface
+ * (install/materialize/remove/tasks) + browser dashboard assets. Reads are GET/HEAD; the plugin MUTATION routes answer
  * 202 asynchronously and hand every write to the A1 orchestrator
  * (deps.tasks), whose per-op runtime-manager profile-write lease and journal
  * make each mutation durable and serialized — the route tails settle before
@@ -340,7 +333,7 @@ export function createChamberSurface(deps: ChamberSurfaceDeps): ChamberSurface {
       return true
     }
 
-    // /chamber/plugins (2026-12 Phase 3): the desktop-synced host-package
+    // /chamber/plugins: the desktop-synced host-package
     // seed cache. GET = non-secret projection (name + version); PUT = upload
     // one syncable host package (validated + atomically cached; the next dsh
     // spawn re-seeds from the cache, and the syncing desktop triggers the
@@ -409,7 +402,7 @@ export function createChamberSurface(deps: ChamberSurfaceDeps): ChamberSurface {
       return true
     }
 
-    // GET /chamber/plugins/installed (design 21 §6.2, A0 read surface): the
+    // GET /chamber/plugins/installed (design 21 §6.2): the
     // gateway readManifest projection of the MANAGED dsh web profile
     // (<stateDir>/dsh-home/profiles/web/package.json — the manifest the
     // desktop's localPluginList reads for its own instance). Read-only; the
@@ -458,8 +451,8 @@ export function createChamberSurface(deps: ChamberSurfaceDeps): ChamberSurface {
       return true
     }
 
-    // PUT /chamber/plugins/install (design 21 §6.2, A1 write surface; plan
-    // Phase 4.4): registry-spec install — 202 accepted (opId) or deferred
+    // PUT /chamber/plugins/install (design 21 §6.2): registry-spec install —
+    // 202 accepted (opId) or deferred
     // (intentId; ready-edge drain), 400 invalid/reserved input, 409 queue/
     // runtime busy (the lease family), 413/400 body errors.
     if (pathname === '/chamber/plugins/install' || pathname === '/chamber/plugins/install/') {
@@ -511,7 +504,7 @@ export function createChamberSurface(deps: ChamberSurfaceDeps): ChamberSurface {
       return true
     }
 
-    // GET /chamber/plugins/tasks (design 21 §6.2; plan Phase 4.4): the
+    // GET /chamber/plugins/tasks (design 21 §6.2): the
     // durable task projection — journal ops (newest first, retention-capped)
     // + deferred intents + executor busy flag. Never gated: the projection
     // is the read side of the 202 contract.
@@ -570,7 +563,7 @@ export function createChamberSurface(deps: ChamberSurfaceDeps): ChamberSurface {
         jsonResponse(res, 400, { error: 'invalid plugin version header (x-plugin-version)', code: 'invalid_input' })
         return true
       }
-      // Identity binding (2026-12 review, design 21 §6.2/§6.11): the headers are
+      // Identity binding (design 21 §6.2/§6.11): the headers are
       // CLIENT-ASSERTED, and the protected-set judgement judges exactly those
       // headers. pnpm installs the ARCHIVE's own name, so an archive whose
       // `package/package.json` disagrees with (or is missing/oversized relative
@@ -626,8 +619,8 @@ export function createChamberSurface(deps: ChamberSurfaceDeps): ChamberSurface {
       }
       if (!result.ok) {
         // The submission was refused (queue/busy/invalid) — the staged
-        // archive can never be consumed; remove it (staged-archive GC,
-        // design 21 review). Best effort.
+        // archive can never be consumed; remove it (staged-archive GC).
+        // Best effort.
         try {
           rmSync(stagedPath, { force: true })
         } catch (error) {
@@ -640,7 +633,7 @@ export function createChamberSurface(deps: ChamberSurfaceDeps): ChamberSurface {
       return true
     }
 
-    // Gateway-owned browser operations surface (design 17 D6 / §10).
+    // Gateway-owned browser operations surface (design 17 §10).
     // It is already behind dispatch.ts's mandatory auth gate. The document
     // uses an external same-origin script so the control-plane CSP can keep
     // inline script closed; neither asset accepts credentials in its URL.
@@ -658,20 +651,20 @@ export function createChamberSurface(deps: ChamberSurfaceDeps): ChamberSurface {
     }
 
     // Mobile light surface (design 17 §9/§18). The PWA trio
-    // (manifest.webmanifest / sw-register.js / sw.js) was removed: nothing in
-    // the repository referenced those URLs — the HTML link/registration
-    // injection is still the design's deferred P4 item (middleware.ts), so
-    // serving them had no consumer (2026-12 audit F12).
+    // (manifest.webmanifest / sw-register.js / sw.js) is not served: nothing
+    // in the repository references those URLs — the HTML link/registration
+    // injection is deferred (middleware.ts), so serving them would have no
+    // consumer.
     if (pathname === '/chamber/mobile.html') {
       if (!isAssetMethod(req.method)) return methodNotAllowed(res)
       serveAsset(res, 'text/html; charset=utf-8', MOBILE_HTML, req.method === 'HEAD')
       return true
     }
 
-    // /chamber/session-state* (plan W1 / WS-B, design 17 §10 read-only
+    // /chamber/session-state* (design 17 §10 read-only
     // carve-out): snapshot / SSE / read / read-all. Exact-prefix match only —
     // '/chamber/session-stateevil' must NOT be claimed. Host-down still
-    // answers 200 with host.serviceable=false (plan §4 host semantics); the
+    // answers 200 with host.serviceable=false (host semantics); the
     // disabled switch answers 503 session_state_disabled.
     if (deps.sessionState !== undefined
       && (pathname === SESSION_STATE_PATH || pathname.startsWith(SESSION_STATE_PATH + '/'))) {
@@ -684,18 +677,16 @@ export function createChamberSurface(deps: ChamberSurfaceDeps): ChamberSurface {
   }
 
   // `/chamber/*` is NOT read-only, and a managed-profile mutation fence DOES
-  // exist (2026-09-11 review, replacing the retired 2026-12 "Everything on
-  // this surface is read-only … No mutation admission fence exists" claim —
-  // the same file carries the A1 write routes and consults that fence).
+  // exist (the same file carries the write routes and consults that fence).
   // Behind dispatch.ts's mandatory auth gate the gateway's public boundary is
   // the `/` proxy to the managed dsh (gateway-proxy.ts), the gateway-owned
   // READ routes handled above (channels / plugins seed cache / tasks /
   // installed projections + dashboard assets), and the write families: the
-  // third-party plugin MANAGEMENT surface (design 21 §1/§6.2 A1) and the
+  // third-party plugin MANAGEMENT surface (design 21 §1/§6.2) and the
   // separately dispatched /chamber/runtime controller (design 18 §9.3).
   // The write routes are PUT /chamber/plugins (the design 17 §10.2 desktop
   // host-package seed cache — a synchronous atomic gateway-owned write with no
-  // async tail) plus the design 21 §6.2 A1 trio PUT …/install (registry
+  // async tail) plus the design 21 §6.2 trio PUT …/install (registry
   // spec), POST …/remove and PUT …/materialize, which are executed through the
   // managed dsh's OWN CLI (plugins-exec.ts spawns `plugin --profile web
   // add|remove …` under the recorded env discipline): the gateway owns no

@@ -1,14 +1,12 @@
 /**
- * Behavioural coverage for the mux's own recovery (chamber fork, design 14 §D4,
- * 2026-09).
+ * Behavioural coverage for the mux's own recovery (design 14 §D4).
  *
  * WHY THIS FILE EXISTS. The connection lane's generation source is the $events
  * logical stream ON THIS MUX, so when the lane is parked (browser offline, or
  * between attempts) the mux must heal itself — and a single throttled attempt is
  * not enough: a socket that opens and dies inside the interval, or a replacement
  * connect that fails before opening, would park the mux (and every session) with
- * no error edge. The 2026-09 independent review proved that with its own fake
- * socket harness while every suite stayed green, so this suite drives the REAL
+ * no error edge. This suite drives the REAL
  * `RemoteStreamMuxClient` through a fake WebSocket and asserts the recovery.
  */
 import assert from 'node:assert/strict'
@@ -145,7 +143,7 @@ test('a socket that dies inside the heal interval is still replaced', async () =
   assert.ok(await poll(() => FakeSocket.instances.length === 1, 1_000), 'the first attempt must start')
   FakeSocket.instances[0].openNow()
   // The death lands well inside REMOTE_STREAM_MAINTAIN_MIN_INTERVAL_MS: a one-shot
-  // throttle would drop the heal entirely and park the mux (2026-09 BLOCKER).
+  // throttle would drop the heal entirely and park the mux.
   await sleep(20)
   FakeSocket.instances[0].dieNow()
   assert.ok(await poll(() => FakeSocket.instances.length >= 2, 2_500), 'the mux must reschedule its own reconnect')
@@ -208,15 +206,15 @@ test('a lane-commanded reconnect does not widen the mux heal cadence', async () 
   client.start()
   assert.ok(await poll(() => FakeSocket.instances.length === 1, 1_000))
   // The connection lane restarts the socket while the FIRST attempt is still
-  // connecting: that cancellation is not a connect failure (2026-09 review).
+  // connecting: that cancellation is not a connect failure.
   client.reconnect()
   assert.ok(await poll(() => FakeSocket.instances.length === 2, 1_000), 'reconnect must start a fresh attempt')
   const failedAt = Date.now()
   FakeSocket.instances[1].failNow()
   assert.ok(await poll(() => FakeSocket.instances.length >= 3, 6_000), 'a genuine failure must be retried')
   const waited = Date.now() - failedAt
-  // Base 1 s; ONE genuine failure doubles to 2 s. If the cancelled attempt had
-  // also widened (the pre-fix shape), this would be ~4 s.
+  // Base 1 s; ONE genuine failure doubles to 2 s. If the cancelled attempt also
+  // widened the cadence, this would be ~4 s.
   assert.ok(waited < 3_500, 'the cancelled attempt must not widen the cadence (waited ' + String(waited) + 'ms)')
   await client.close()
 })
@@ -264,8 +262,7 @@ test('a silent socket is REPLACED when an opening item times out on it', async (
   )
   // Re-issuing the request is only a cure while the socket still delivers: a socket
   // that stayed silent through the whole window is dead, so the mux must drop it and
-  // start a fresh attempt (the old behaviour re-issued on the same socket forever,
-  // which is exactly the permanent chat.loadingHistory state).
+  // start a fresh attempt.
   assert.equal(FakeSocket.instances.length, 2, 'the silent socket must be replaced at once')
   assert.equal(FakeSocket.instances[0].readyState, FakeSocket.CLOSED)
   assert.deepEqual(facts.map(fact => fact.kind), ['opening-timeout', 'socket-silent'])
@@ -276,7 +273,7 @@ test('a silent socket is REPLACED when an opening item times out on it', async (
 test('a logical stream torn down on a socket that never delivered a frame replaces it', async (t) => {
   installFakeSocket()
   // Date is mocked as well: the teardown escalation is bounded by a minimum life, so
-  // the 20 s tick below must move the clock that guard reads (2026-09-21 review).
+  // the 20 s tick below must move the clock that guard reads.
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
   const facts: Array<{ kind: string; cause: string }> = []
   const client = new RemoteStreamMuxClient('', (kind, cause) => { facts.push({ kind, cause }) })
@@ -486,7 +483,7 @@ function budgetError(ms: number): (error: unknown) => boolean {
 }
 
 // ---------------------------------------------------------------------------
-// The teardown escalation's TWO bounds (design 14 §D4, 2026-09). The positive case
+// The teardown escalation's TWO bounds (design 14 §D4). The positive case
 // — the journal watchdog's sibling probe aborting at 20 s, before the 30 s opening
 // budget — is the test above; these pin the guards that keep the same evidence from
 // churning a healthy carrier: a minimum life, and zero frames on the socket.
@@ -704,8 +701,7 @@ function parkedConnection(): { generation: { getSnapshot: () => undefined; subsc
 }
 
 test('a parked lane no longer waits forever: the bound reopens the stream', async (t) => {
-  // Moved from the deleted behavior/remote-stream-generation-wait.test.ts
-  // (2026-12 trim): the patch lock pins the bound's SHAPE; this is the runtime
+  // The patch lock pins the bound's SHAPE; this is the runtime
   // arm — a lane that never receives a generation must be reopened by the bound
   // and the condition published on the carrier-failed seam.
   t.mock.timers.enable({ apis: ['setTimeout'] })

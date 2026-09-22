@@ -2,16 +2,16 @@
 /**
  * 升级前「pin 预检」——在动 pin **之前**给出重放清单（只读、不改任何文件）。
  *
- * 背景（2026-09 复盘）：0.1.5 升级是在改完 pin 之后才发现 upstream 重构了
- * ui-layout 的三栏模型（`DETAILS_*` 消失、`details` → `rightbar`），chamber 的
- * layout fork 因此立刻编译失败——属于「先动手、后发现问题」。本脚本把这一步
- * 提前：对目标 tag 与当前 pin 做只读 diff，直接回答三个问题：
+ * 背景：pin 升级里 upstream 可能重构 ui-layout 的三栏模型（`DETAILS_*` 消失、
+ * `details` → `rightbar`），chamber 的 layout fork 会因此立刻编译失败——属于
+ * 「先动手、后发现问题」。本脚本把这一步提前：对目标 tag 与当前 pin 做只读
+ * diff，直接回答三个问题：
  *
  *   1. **三个 fork 副本**里哪些文件变了，且各自的处置类别（pure 面 = 直接照抄；
  *      patched/own 面 = 需要人工重放）；
  *   2. **chamber 深引的 vendor 文件**（`@deepseek-ai/<pkg>/src/...`）是否变化
- *      ——这是 0.1.5 踩到的类别（layout fork 直接 import vendor 的
- *      `AppFrame.tsx`/`columns.ts`/`service.ts`）；
+ *      ——layout fork 直接 import vendor 的
+ *      `AppFrame.tsx`/`columns.ts`/`service.ts`，属于 seam 风险类别；
  *   3. **上游包集合变化**（新增/移除）与新增的 **client 行**（带 `dsh.client`
  *      元数据的包 → roster/covered 决策），以及运行时版本是否已发布 npm。
  *
@@ -138,7 +138,7 @@ export function resolvePackageDirs(io, ref) {
 /**
  * 上游 workspace 成员集合（覆盖 `packages/<group>/<pkg>`、`native/**`、
  * `apps/*`、`benchmarks`、`website` 各根，按包名）——非 `packages/<group>/<pkg>` 的成员
- * （如 0.1.5 被移除的 `native/landlock-run/packages/*`）同样被识别。
+ * （如 `native/landlock-run/packages/*`）同样被识别。
  * @param io - `{ list(ref): string, read(ref, path): string }` 只读访问器。
  * @param ref - 目标 ref（pin 或 tag）。
  */

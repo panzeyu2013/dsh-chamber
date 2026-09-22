@@ -2,7 +2,7 @@
 //  DSHChamberWebKitSupport.h
 //  DSHChamberWebKitSupport
 //
-//  S-48（2026-12 实机裁决，design 25 §5.1）：WebKit 默认把页面渲染更新压到 ~60fps
+//  WebKit 默认把页面渲染更新压到 ~60fps（design 25 §5.1）：
 //  （UnifiedWebPreferences.yaml: PreferPageRenderingUpdatesNear60FPSEnabled
 //  defaultValue=true）；准确说只在 nominal > 60 时起作用，且整数商为 1 的 61–119Hz 屏
 //  不受限（100Hz 屏仍是 100fps）。120Hz ProMotion 屏在缺省偏好、未换屏/未重启 WebContent 的
@@ -41,7 +41,7 @@ typedef NS_ENUM(NSInteger, DSHChamberRefreshRatePreference) {
 FOUNDATION_EXPORT DSHChamberRefreshRatePreference
 DSHChamberPreferDisplayRefreshRate(WKPreferences * _Nullable preferences);
 
-/// KVC BOOL 写入结果（W1/W2，2026-12 三轮独立复核）。
+/// KVC BOOL 写入结果。
 typedef NS_ENUM(NSInteger, DSHChamberBoolKVCOutcome) {
     /// 对象为 nil / 键不存在 / 只读 / 设置路径抛异常（预期为
     /// NSUnknownKeyException）：对象未被改动，调用方降级，绝不 fatal。
@@ -55,7 +55,7 @@ typedef NS_ENUM(NSInteger, DSHChamberBoolKVCOutcome) {
 
 /// 异常安全地把 WKWebView 的私有键 drawsBackground 设为指定值（KVC）。
 ///
-/// 为什么存在这层包装（T-4 历史沿革）：drawsBackground **不在公开头文件**里
+/// 为什么存在这层包装：drawsBackground **不在公开头文件**里
 /// （公开面只有 underPageBackgroundColor，只能改「露底色」本身）；透明露底依赖该
 /// 私有键，而私有存取器 _drawsBackground/_setDrawsBackground: 是否存在随 OS
 /// 版本而变。**Swift 无法 catch ObjC 异常**，Swift 侧直设 KVC 在缺该存取器的构建
@@ -67,7 +67,7 @@ FOUNDATION_EXPORT DSHChamberBoolKVCOutcome
 DSHChamberSetDrawsBackground(WKWebView * _Nullable webView, BOOL drawsBackground);
 
 /// 通用异常安全 KVC BOOL 写入（DSHChamberSetDrawsBackground 的可直测接缝，
-/// W3 单测覆盖「键存在」「键不存在且不崩」两条路径；无新依赖）。
+/// 单测覆盖「键存在」「键不存在且不崩」两条路径；无新依赖）。
 FOUNDATION_EXPORT DSHChamberBoolKVCOutcome
 DSHChamberSetBoolValueForKey(id _Nullable object, NSString *key, BOOL value);
 

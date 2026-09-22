@@ -1,5 +1,5 @@
 /**
- * Local-connection lifecycle race tests (2026 audit H2): a health-probe
+ * Local-connection lifecycle race tests: a health-probe
  * verdict landing during/after stop() must never resurrect the connection,
  * and a spawn failure landing after stop() must never flip stopped → error.
  * Pure-Node: injectable spawnDsh/probeHostIdentity, no real dsh.

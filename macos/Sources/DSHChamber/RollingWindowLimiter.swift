@@ -2,15 +2,15 @@
 //  RollingWindowLimiter.swift
 //  DSHChamber
 //
-//  滚动窗口限流器（2026-12 单源化）：外部打开预算、sidecar 重启退避、renderer
-//  重载三处此前各写一份「淘汰窗口外记录 → 计数 ≥ 上限 → 拒绝 → 否则记账」的
-//  同构循环（ExternalOpenBudget / SidecarRestartPolicy.decide /
-//  RendererRecoveryPolicy.decide）。本类型是那段判定的唯一实现。
+//  滚动窗口限流器：外部打开预算、sidecar 重启退避、renderer
+//  重载三处共用「淘汰窗口外记录 → 计数 ≥ 上限 → 拒绝 → 否则记账」的
+//  判定（ExternalOpenBudget / SidecarRestartPolicy.decide /
+//  RendererRecoveryPolicy.decide）。本类型是这段判定的唯一实现。
 //
 //  三处的窗口/上限参数与判定顺序保持不变；「拒绝」的后果（进入冷区、放弃重试、
 //  loud 上报）仍由各自策略表达——本类型只回答「这一次放不放行、窗口内第几次」。
-//  语义逐条对齐迁移前的三份实现：
-//    - 淘汰判据 `now - t < window`（时间相等或回拨时保留旧记录，与原实现一致）；
+//  语义逐条：
+//    - 淘汰判据 `now - t < window`（时间相等或回拨时保留旧记录）；
 //    - 计数 ≥ limit → `.deny(count:)`，**不记账**（拒绝不占配额）；
 //    - 否则记账 → `.allow(count:)`，count = 记账后的窗口内计数（1 起）；
 //    - limit ≤ 0 恒 deny（防御性一致）。
@@ -66,7 +66,7 @@ public struct RollingWindowLimiter: Equatable {
 
 public extension RollingWindowLimiter {
     /// 以调用方持有的历史数组判定一次事件（判定后回写数组）。
-    /// 语义与实例方法 `record(now:)` 完全一致；为既有 inout 契约提供零搬迁入口。
+    /// 语义与实例方法 `record(now:)` 完全一致；为 inout 契约提供入口。
     static func decide(window: TimeInterval, limit: Int,
                        now: Double, events: inout [Double]) -> Decision {
         var limiter = RollingWindowLimiter(window: window, limit: limit, events: events)

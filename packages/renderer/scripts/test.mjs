@@ -3,17 +3,17 @@
  * Grouped by subject area (mirrors test/<domain>/). Every listed file runs as its
  * own node child with piped stdio (stdout/stderr are written through so the
  * transcript stays intact, and the zero-test guard below can read the node:test
- * summary); the first failure ends the run - the same semantics as the inline
- * && chain this replaces. A listed file that does not exist is a failure,
+ * summary); the first failure ends the run.
+ * A listed file that does not exist is a failure,
  * never a silent skip.
  * Entries: a path, or { file, nodeArgs } when a loader (--import ...) is needed.
  *
  * 平台腿（与 packages/desktop/scripts/test.mjs 同款）：`test` 跑 GROUPS，
  * `test:win32`（`--win32`）只跑 WIN32_FILES——host-graph 合并 → 必需行探针 →
- * 降级呈现这条「boot-gap 机制」的平台无关判定面。Windows CI 腿此前完全没跑过
- * 它，Windows 特有的部分安装/加载失败因此只能靠人工发现。
+ * 降级呈现这条「boot-gap 机制」的平台无关判定面。没有这条腿时，
+ * Windows 特有的部分安装/加载失败只能靠人工发现。
  *
- * 零测试守卫（D2b，2026-12）：列出的文件退出 0 但没有 node:test 汇总行、tests 0
+ * 零测试守卫：列出的文件退出 0 但没有 node:test 汇总行、tests 0
  * 或全部 skip（pass 0 / fail 0）时判失败——静默空清单不得变绿。
  */
 
@@ -32,7 +32,7 @@ export const GROUPS = {
   scripts: [
     'scripts/typert-remote-contract.test.mjs',
     'scripts/vendor-patches.test.mjs',
-    // 清单自身的零测试守卫 + 清单锁步（D2b）
+    // 清单自身的零测试守卫 + 清单锁步
     'scripts/test-runner-guard.test.mjs',
   ],
   // lifecycle: 实例启动生命周期 —— shell 引导与降级自愈、宿主图/必需行探测、首屏基线预热、page 读路
@@ -43,7 +43,7 @@ export const GROUPS = {
     'test/lifecycle/required-extra-rows.test.ts',
     // 必需行探针的纯记账（单调钟选择 / 每成员 grace / 有界复查窗口）
     'test/lifecycle/required-service-probe.test.ts',
-    // per-source 注册表收敛内核（阶段 3：live 外删除 / 保序 / identity-preserving 负例）。
+    // per-source 注册表收敛内核（live 外删除 / 保序 / identity-preserving 负例）。
     'test/lifecycle/source-registry.test.ts',
     // The shell *.test.ts split is served from test/support/shell-harness.ts and needs the
     // dsh-client-web fixture loader (see scripts/dev/test-shell-loader.mjs); the --import
@@ -53,13 +53,13 @@ export const GROUPS = {
     { file: 'test/lifecycle/session-open-poll.test.ts', nodeArgs: ['--import', '../../scripts/dev/test-shell-register.mjs'] },
     'test/lifecycle/page-read-path-lockstep.test.ts',
     'test/lifecycle/source-readiness.test.ts',
-    // B2 接线（session-chain 重构）: the App's hidden-window ledger pinned against the
+    // The App's hidden-window ledger pinned against the
     // shared source reducer, including the measured painted/suppression divergence.
     'test/lifecycle/source-ledger-equivalence.test.ts',
-    // B2-a: the self-heal decision's truth table, re-expressed against the container
-    // (the planner keeps its own copy until B7 retires it).
+    // The self-heal decision's truth table, expressed against the container
+    // (the planner keeps its own copy).
     'test/lifecycle/degraded-retry-decision.test.ts',
-    // facts 行刷新提示的四拒 + 1s floor（2026-12 WS-C）。
+    // facts 行刷新提示的四拒 + 1s floor。
     'test/lifecycle/source-refresh-hint.test.ts',
     // P3 会话面绘制信号（[data-phase] 揭示门）的纯决策契约。
     'test/lifecycle/session-surface.test.ts',
@@ -70,13 +70,13 @@ export const GROUPS = {
   aggregate: [
     'test/aggregate/aggregate-refresh.test.ts',
     'test/aggregate/notification-edges.test.ts',
-    // 水位原语单一来源（2026-12 阶段 2：同一完成不重发、坏值不臆造、max/完成水位负例）。
+    // 水位原语单一来源（同一完成不重发、坏值不臆造、max/完成水位负例）。
     'test/aggregate/watermark.test.ts',
     // complete 通知账本内核（两轨：水位 + 武装；撤回只清武装轨 / forget / prune）。
     'test/aggregate/complete-ledger.test.ts',
     'test/aggregate/badge-count.test.ts',
   ],
-  // session-state: gateway session-state 事实源 + 未读 v2 落盘 + 派生账本（2026-12 WS-C）
+  // session-state: gateway session-state 事实源 + 未读 v2 落盘 + 派生账本
   'session-state': [
     // 粗分类/快照/增量/SSE 帧 + 与 control-plane 协议模块的源文本锁步。
     'test/session-state/session-facts-source.test.ts',
@@ -84,15 +84,15 @@ export const GROUPS = {
     'test/session-state/unread-store.test.ts',
     // 派生投影行为（deriveUnread + 通道边沿机 + listComplete 唯一剪枝门）。
     'test/session-state/unread-derivation.test.ts',
-    // I3/I4 仪器：徽标回读 + 通知决定账本（含「没有桥」这一次）与单组装点锁。
+    // 仪器：徽标回读 + 通知决定账本（含「没有桥」这一次）与单组装点锁。
     'test/session-state/notification-ledger.test.ts',
-    // W6：SSH/dsh 远端的无壳观察者（$events + 每边沿一次 session/follow）。
+    // SSH/dsh 远端的无壳观察者（$events + 每边沿一次 session/follow）。
     'test/session-state/source-mux-facts.test.ts',
-    // I8：预热命中率（attempt/hit/cancelled 的定义与计数 + 全局仪器）。
+    // 预热命中率（attempt/hit/cancelled 的定义与计数 + 全局仪器）。
     'test/session-state/prewarm-ledger.test.ts',
-    // 有界集合内核（2026-12 阶段 2：容量/FIFO 淘汰/同键替换裁决的负例）。
+    // 有界集合内核（容量/FIFO 淘汰/同键替换裁决的负例）。
     'test/session-state/bounded-ledger.test.ts',
-    // R19 生产端：probe 判定 → 侧栏档位（含陈旧不得说成 full + 跨包词汇锁）。
+    // 生产端：probe 判定 → 侧栏档位（含陈旧不得说成 full + 跨包词汇锁）。
     'test/session-state/session-facts-mode.test.ts',
   ],
   // session-intent: 会话打开/深链意图管线（路由激活、待发队列、App 意图门接线）
@@ -114,13 +114,13 @@ export const GROUPS = {
     'test/view-runtime/view-transition.test.ts',
     'test/view-runtime/frame-coalescer.test.ts',
     'test/view-runtime/sidebar-scroll-sync.test.ts',
-    // W3 揭示门（选择/绘制分离 + 有界持有窗）：规则本体（稳态/不可挂载/settled/失败/到期/回拨）。
+    // 揭示门（选择/绘制分离 + 有界持有窗）：规则本体（稳态/不可挂载/settled/失败/到期/回拨）。
     'test/view-runtime/reveal-gate.test.ts',
-    // W3 无白帧判据（三形态 + 温壳进度面 + INFO/严格档语义）；采集腿见 scripts/perf/switch-frame-probe.mjs。
+    // 无白帧判据（三形态 + 温壳进度面 + INFO/严格档语义）；采集腿见 scripts/perf/switch-frame-probe.mjs。
     'test/view-runtime/switch-frame-verdict.test.ts',
-    // W3 采集仪器：png-ink 解码自测 + 探针注入表达式/CLI 失败响亮（无 CDP 可跑的部分）。
+    // 采集仪器：png-ink 解码自测 + 探针注入表达式/CLI 失败响亮（无 CDP 可跑的部分）。
     'test/view-runtime/switch-frame-instruments.test.ts',
-    // SemVer precedence 单一实现（2026-12 阶段 2：build metadata 忽略 / prerelease 方向 / 非法 null）。
+    // SemVer precedence 单一实现（build metadata 忽略 / prerelease 方向 / 非法 null）。
     'test/view-runtime/semver.test.ts',
   ],
   // svg-resource: 文档级 SVG 资源 id 归属（N-ctx 失绘不变量，design 05 §4.2）
@@ -129,7 +129,7 @@ export const GROUPS = {
   ],
   // frame-chrome: frame 文案/主题兜底与视觉锁
   'frame-chrome': [
-    // 错误文案助手的敌意值边界（审查补强，2026-12）。
+    // 错误文案助手的敌意值边界。
     'test/frame-chrome/status-error-text.test.ts',
     'test/frame-chrome/theme-fallback.test.ts',
     'test/frame-chrome/frame-locale.test.ts',

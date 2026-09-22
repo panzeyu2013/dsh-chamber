@@ -8,7 +8,7 @@
  * 源码/读上游产物，把文本与文件表传进来，拿回 `{violations, advisories, notes}`，
  * 再由调用方决定 fail/warn。于是每条判据都能用合成夹具做**负例**测试。
  *
- * 本门要回答的问题（STATUS.md 移动档开放项 ⑤ 的另一半）：移动插件的 CSS/JS 锚在
+ * 本门要回答的问题：移动插件的 CSS/JS 锚在
  * 上游 DOM 契约上（`data-*` 属性、slot key、`role`），打包 fork 的 README +
  * `test/behavior/composer-guard.test.ts` 只**自证**（只读本包），拦不住上游漂移。这里把
  * 「插件声明的锚点」与「上游产物里真实发射的锚点」做双向差集：
@@ -22,7 +22,7 @@
  *         登记为 chamber-own，不查上游；
  *       - `data-git-action` 是 **chamber 跨包钩子**（由
  *         `packages/dsh-chamber-client-ui-git` 发射），查本仓发射方而不是上游。
- *     `data-tip` **不**属于上面两类（2026-12 review 更正）：上游
+ *     `data-tip` **不**属于上面两类：上游
  *     `dsh-client-ui-agent-preset` 的 client 行自己在按钮上设置该属性（其打包 CSS
  *     用 `content:attr(data-tip)` 消费），所以它按普通上游锚点查；本插件侧发射方在
  *     `dsh-chamber-client-ui-settings-connections`，那条契约由该包与移动包的
@@ -53,14 +53,14 @@ const OWN_ATTRIBUTE_PATTERNS = [
 
 /**
  * chamber 跨包钩子：由本仓另一个插件发射，锚点契约是**仓内**的，所以查发射方
- * 而不是上游。`data-git-action` 是 2026-09-11 upstream-alignment 定下的
- * 侧栏 git 动作钩子（styles.ts 头注），发射方在 git 插件里。
+ * 而不是上游。`data-git-action` 是侧栏 git 动作钩子（styles.ts 头注），
+ * 发射方在 git 插件里。
  */
 /**
  * 仓内跨包发射方：这些属性由**别的** chamber 包发射，所以查本仓发射方而不是上游。
  * 注意：本插件当前不声明其中任何一条（git 插件自己发射 `data-git-action`，移动端
  * 只在注释里提到它），所以 `--list` 的「跨包」计数是 0——这条规则是为「移动端真的
- * 用上该钩子」预留的，不是死代码待删，也不假装今天在保护什么（2026-12 review）。
+ * 用上该钩子」预留的，不是死代码待删，也不假装今天在保护什么。
  */
 export const CHAMBER_CROSS_PACKAGE = {
   'data-git-action': 'packages/dsh-chamber-client-ui-git',
@@ -73,7 +73,7 @@ export const CHAMBER_CROSS_PACKAGE = {
 const STRUCTURAL_ATTRIBUTE = 'data-slot'
 
 /**
- * 门禁要求的最小断言集（task 逐条点名的那一份；与 §4 登记行同源）。
+ * 门禁要求的最小断言集（与 §4 登记行同源）。
  *
  * `declared: 'plugin'` ⇒ 必须先在本插件源码里被抽到，否则红线（插件侧改名/删除）；
  * `declared: 'external'` ⇒ 只断言上游发射侧（供「上游在用、插件尚未点名」的锚点
@@ -247,7 +247,7 @@ export function anchorCategory(anchor) {
 }
 
 /**
- * 属性锚点的证据分两级（2026-12 review 起）。**写入形**证明上游仍在发射：
+ * 属性锚点的证据分两级。**写入形**证明上游仍在发射：
  *   1. 对象键 / 编译后的 JSX 属性：`"data-x":`、`'data-x':`；
  *   2. DOM 写入：`setAttribute(` / `toggleAttribute(` / `removeAttribute(`；
  *   3. JSX 源码里的属性写法 `data-x=`（**只对 `.ts/.tsx` 这类源码语料开启**；
@@ -362,8 +362,8 @@ export function roleEvidence(files, role) {
  *   2. `"data-slot": "<key>"` / `setAttribute("data-slot", "<key>")` —— 值投影的字面量形。
  * **消费形**：`slots.inject|subscribe|entries("<key>")`（客户端注册/查询 API）与
  * `[data-slot="<key>"]` 选择器——它们证明页面**用**这个槽，不证明渲染器还在**发射**它。
- * 2026-12 第三轮复核：这一层原先没有分级，于是「上游删掉 renderSlot、只留注册 API 或
- * 选择器」这条漂移在 16 个 slot 锚点（含 19 项最小断言集里的一半）上照样绿。
+ * 没有分级时，「上游删掉 renderSlot、只留注册 API 或选择器」这条漂移在 slot
+ * 锚点上会照样绿。
  */
 export function slotEmissionPatterns(slot) {
   const escaped = escapeRe(slot)
@@ -452,7 +452,7 @@ function noEmissionMessage(anchor, where, label, corpusName, selectorHits, extra
  *
  * 语料在匹配前统一过一遍**去注释投影**（`stripCommentsKeepingLines`，字符串感知、
  * 保留行号）：注释里写着 `[data-x]` 或 `"data-x"` 不构成「上游仍在发射」的证据——
- * 上游删掉真实发射点后，残留注释不能让门禁继续绿（2026-12 review；与 C15 的
+ * 上游删掉真实发射点后，残留注释不能让门禁继续绿（与 C15 的
  * 「去注释 + 去字符串」同一防伪纪律，这里字符串必须保留，因为发射形态本身就是
  * 字符串/选择器）。
  *
@@ -475,7 +475,7 @@ export function anchorFindings({ anchors, upstream, chamber, required = REQUIRED
 
   // ---- 结构性前提：data-slot 属性名本身 ----
   // 结构性前提同样只认写入形：选择器里的 `[data-slot=…]` 是消费方证据，上游把
-  // 属性投影删掉、只留选择器时这里也必须红（第三轮复核的 F1）。
+  // 属性投影删掉、只留选择器时这里也必须红。
   const structural = attributeEvidence(upstream, STRUCTURAL_ATTRIBUTE).emissions
   if (structural.length === 0) {
     violations.push(`结构性锚点 ${STRUCTURAL_ATTRIBUTE} 在上游产物零命中——所有 slot 判据都失去前提（渲染器不再发射 data-slot）`)

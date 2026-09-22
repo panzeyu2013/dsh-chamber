@@ -9,8 +9,8 @@
  * the same bound actions.
  *
  * CHAMBER FORK (design 06 — sidebar width sharing): the vendor store is a
- * per-boot unpersisted preference, so a drag in one shell was invisible in
- * the others and every restart reset to SIDEBAR_DEFAULT. This fork seeds
+ * per-boot unpersisted preference, so a drag in one shell is invisible in
+ * the others and every restart resets to SIDEBAR_DEFAULT. This fork seeds
  * `sidebar` from the chamber sidebar package's page-wide view-prefs store
  * (`@dsh-chamber/dsh-chamber-client-ui-sidebar/shared` — ONE in-memory store shared
  * by every boot over the vite shared chunk, persisted under one versioned

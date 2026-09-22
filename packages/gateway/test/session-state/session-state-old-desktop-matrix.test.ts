@@ -1,7 +1,5 @@
 /**
- * Cross-version contract matrix, cell B — OLD desktop × NEW gateway
- * (plan docs/progress/todo/remote-session-state-and-switch.md §6 「兼容矩阵」
- * and §10; protocol-compat-blueprint.md §2.2 R1/R2 + §3.1 cell B + §9-7).
+ * Cross-version contract matrix, cell B — OLD desktop × NEW gateway.
  *
  * The old desktop cannot be rebuilt in-repo, so the only executable evidence for
  * forward compatibility is a FROZEN CALL-SEQUENCE FIXTURE replayed against the
@@ -124,7 +122,7 @@ interface GatewayHarness {
 
 function gatewayFor(t: { after(fn: () => void): void }): GatewayHarness {
   const stateDir = scratch(t)
-  // Shared session-state harness (2026-12 audit F40) on the SAME stateDir the
+  // Shared session-state harness on the SAME stateDir the
   // chamber surface below reads (its plugin/installed fixtures live under it).
   const { surface: sessionState, store } = sessionSurfaceFor(t, { stateDir })
   const surface = createChamberSurface({

@@ -2,8 +2,8 @@
  * Design 18 startup transaction. Reaper has completed and public local-host
  * starts remain gated while this module completes restore/journal recovery.
  *
- * Both entries accept an optional transaction-level AbortSignal (apply-now
- * S1): a pre-aborted signal arriving at the apply entry cancels the attempt
+ * Both entries accept an optional transaction-level AbortSignal: a pre-aborted
+ * signal arriving at the apply entry cancels the attempt
  * with zero side effects and leaves the durable journal for the next startup
  * (see apply-phase's abort semantics). Hosts that never abort simply omit it.
  */
@@ -53,7 +53,7 @@ export interface StartupDeps {
   switchPointer: (version: string | null) => void
   /**
    * Spawn the candidate tree and run the activation probes. `signal`
-   * (apply-now S1) is optional so existing two-argument implementers keep
+   * is optional so existing two-argument implementers keep
    * compiling unchanged. runStartupPhase/runDelayedRollback forward their own
    * optional transaction-level signal here, so hosts wire the abort at the
    * orchestration seam instead of inside the probe closure (apply-phase abort
@@ -62,13 +62,13 @@ export interface StartupDeps {
    */
   spawnAndProbe: (version: string, isBuiltin: boolean, signal?: AbortSignal) => Promise<ProbeResult[]>
   /**
-   * 2026-12 shape-awareness: forwarded verbatim to apply-phase (see
+   * Shape-awareness: forwarded verbatim to apply-phase (see
    * ApplyDeps.probeExpectedNames). It stays a function reference all the way
    * through — the apply phase resolves it only after a probe attempt finished,
    * because a host may refresh its seeded-domain table inside `spawnAndProbe`
    * (desktop's probe closure runs `cp.startLocal()`). Capturing an array here
    * would freeze the cold-start empty table and fail the exact-set verdict
-   * against the freshly seeded run (2026-12 P0).
+   * against the freshly seeded run.
    */
   probeExpectedNames?: () => readonly string[]
   stopHost: () => Promise<void>
@@ -100,7 +100,7 @@ export type StartupBlockedReason =
  *  desktop main (hard-blocked startup surface) and the gateway composition
  *  boundary (index.ts FATAL_RUNTIME_BLOCKS) plus the gateway manager's
  *  RECOVERABLE_METADATA_BLOCKS (which extends this set with its two recovery
- *  sentinels). One owner can no longer drift its block classification from
+ *  sentinels). One owner cannot drift its block classification from
  *  the other's. */
 export const FATAL_STARTUP_BLOCK_REASONS: readonly StartupBlockedReason[] = [
   'journal-corrupt',
@@ -115,7 +115,7 @@ export interface StartupResult {
   blockedReason: StartupBlockedReason | null
   cleanedWorkDirs: string[]
   evicted: string[]
-  /** F7 context for main's restart-exhausted subscription. */
+  /** Restart-exhausted context for main's delayed-rollback subscription. */
   monitoringJournal: ActivationJournal | null
 }
 
@@ -207,7 +207,7 @@ function pointerVersion(state: CurrentPointerState): string | null {
 }
 
 /** Immutable pre-swap facts a non-intent journal contributes to an activation
- *  (shared by the startup replay and the F7 delayed-rollback entries). */
+ *  (shared by the startup replay and the delayed-rollback entries). */
 function activationFactsFromJournal(journal: ActivationJournal): StartupActivationFacts {
   return {
     sourceVersion: journal.sourceVersion,
@@ -230,7 +230,7 @@ function corruptMetadataReason(
 
 /**
  * Execute recovery and, when safe, exactly one pending/builtin activation.
- * `signal` (apply-now S1) is an optional transaction-level abort forwarded to
+ * `signal` is an optional transaction-level abort forwarded to
  * the apply phase: a pre-aborted signal at the apply entry cancels the
  * attempt with zero side effects and leaves the durable journal for the next
  * startup to resume idempotently.
@@ -317,7 +317,7 @@ export async function runStartupPhase(deps: StartupDeps, signal?: AbortSignal): 
         // Crash window: apply durably recorded the probe verdict, but startup
         // died before the single override write that clears pending. Complete
         // only that verdict commit. Re-applying here would snapshot data that
-        // the target may already have migrated and would erase F7 evidence.
+        // the target may already have migrated and would erase delayed-rollback evidence.
         deps.writeOverride({
           ...override,
           chosenVersion: journal.targetVersion,
@@ -335,7 +335,7 @@ export async function runStartupPhase(deps: StartupDeps, signal?: AbortSignal): 
         if (journal.intentKind === 'version-switch') {
           return resultBase(restored, 'journal-mismatch', cleanedWorkDirs, evicted, journal)
         }
-        // Builtin is not F7-monitored. Finish the override verdict (including
+        // Builtin is not restart-exhausted monitored. Finish the override verdict (including
         // an interrupted shell-version invalidation) before dropping the
         // transaction journal.
         if (journal.intentKind === 'reset-builtin') {
@@ -365,7 +365,7 @@ export async function runStartupPhase(deps: StartupDeps, signal?: AbortSignal): 
       }
 
       if (effectivePending === null) {
-        // Normal post-commit boot: keep the durable F7 context until another
+        // Normal post-commit boot: keep the durable restart-exhausted context until another
         // selection/reset/rollback supersedes it.
         return resultBase(restored, null, cleanedWorkDirs, evicted, journal)
       }
@@ -374,7 +374,7 @@ export async function runStartupPhase(deps: StartupDeps, signal?: AbortSignal): 
 
     if (queued !== null && !queued.targetIsBuiltin && effectivePending === null) {
       // Controller committed the intent but failed before override.pending.
-      // Drop only the uncommitted next intent; F7 monitoring stays intact.
+      // Drop only the uncommitted next intent; delayed-rollback monitoring stays intact.
       const monitoring = { ...journal, nextIntent: null, updatedAt: new Date().toISOString() }
       deps.writeActivationJournal(monitoring)
       return resultBase(restored, null, cleanedWorkDirs, evicted, monitoring)
@@ -556,7 +556,7 @@ export async function runStartupPhase(deps: StartupDeps, signal?: AbortSignal): 
       next.resolvedVersion = applyOutcome.rollbackTarget
     }
     if (targetIsBuiltin && applyOutcome.status === 'rolled-back' && applyOutcome.rollbackTarget !== null) {
-      // F4: the startup-time current pointer is the only authoritative old
+      // The startup-time current pointer is the only authoritative old
       // override. Reactivation clears persisted invalidation, not history.
       next.shellVersion = deps.shellVersion
       next.invalidatedAt = null
@@ -581,7 +581,7 @@ export async function runStartupPhase(deps: StartupDeps, signal?: AbortSignal): 
   let postApplyJournalMismatch = false
   if (reachedSafeFallback(applyOutcome) && verdictJournal !== null && queuedIntent !== null) {
     if (queuedIntent.targetIsBuiltin || current?.pending === queuedIntent.targetVersion) {
-      // F7 may race with a user selection. Only after the old activation has
+      // The delayed rollback may race with a user selection. Only after the old activation has
       // safely rolled back do we turn the queued durable selection into a new
       // transaction. A crash before this write re-enters restore-complete and
       // reaches the same decision without losing the selection.
@@ -640,7 +640,7 @@ export async function runStartupPhase(deps: StartupDeps, signal?: AbortSignal): 
 }
 
 /**
- * F7 restart-exhausted entry. `beginDelayedRollback` durably changes the
+ * Restart-exhausted entry. `beginDelayedRollback` durably changes the
  * applied-monitoring journal before any side effect, then the exact same
  * rollback/restore continuation used by startup is executed. Pending may
  * already be null; journal.targetVersion remains authoritative.

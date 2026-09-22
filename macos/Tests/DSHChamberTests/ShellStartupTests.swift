@@ -3,19 +3,19 @@
 //  DSHChamberTests
 //
 //  启动面纯逻辑单测：
-//    - S2 StartupSettings：chamber-settings.json 的 missing/false/true/corrupt；
-//    - S11 ControlPlanePort：DSH_CHAMBER_SHELL_PORT > DSH_CHAMBER_CP_PORT > dev 探测 /
+//    - StartupSettings：chamber-settings.json 的 missing/false/true/corrupt；
+//    - ControlPlanePort：DSH_CHAMBER_SHELL_PORT > DSH_CHAMBER_CP_PORT > dev 探测 /
 //      packaged 缺省，非法值/探测耗尽抛错；真实 bind 探针 smoke；
-//    - S14 ShellDebug 开关（默认关闭）与 BoundedEdgeReplyGuard 有界窗口；
-//    - S13 窗口菜单 performClose/performMiniaturize；
-//    - S3 sidecar 缺失精确文案。
+//    - ShellDebug 开关（默认关闭）与 BoundedEdgeReplyGuard 有界窗口；
+//    - 窗口菜单 performClose/performMiniaturize；
+//    - sidecar 缺失精确文案。
 //
 import XCTest
 @testable import DSHChamber
 
 final class ShellStartupTests: XCTestCase {
 
-    // MARK: - S2：StartupSettings
+    // MARK: - StartupSettings
 
     private func tempUserData() throws -> String {
         let dir = NSTemporaryDirectory() + "dsh-chamber-startup-\(UUID().uuidString)"
@@ -36,7 +36,7 @@ final class ShellStartupTests: XCTestCase {
         XCTAssertFalse(applied, "缺文件 = 默认 off，不调腿、无日志噪音")
     }
 
-    /// 2026-12 双端逐函数核对 S3·D5 / S5·F6：launchAtLogin 启动重放读取器——
+    /// launchAtLogin 启动重放读取器——
     /// 与 keepAwake 同一套文件纪律（损坏文件绝不采信单个合法键）。
     func testStartupSettingsLaunchAtLoginReader() throws {
         let dir = try tempUserData()
@@ -71,7 +71,7 @@ final class ShellStartupTests: XCTestCase {
         XCTAssertNil(StartupSettings.decodeLaunchAtLogin(fromJSON: Data("{}".utf8)))
     }
 
-    /// 对抗验证回归（S-41）：损坏文件只在「当时」成立——共享读取器
+    /// 损坏状态是瞬态的——共享读取器
     /// （chamber-settings.ts；Electron main.ts 与 Swift flavor 的 sidecar-ctx.ts
     /// 同源）把损坏文件改名为 *.corrupt，下一次启动 live 文件缺失。若把
     /// 「缺失 + 副本存在」读成 missing，就会重放默认 launchAtLogin=false，
@@ -177,7 +177,7 @@ final class ShellStartupTests: XCTestCase {
         let path = dir + "/" + StartupSettings.fileName
         // 跨键损坏：keepAwake 本身合法，但 Electron 的 isValidSettingsFile
         // （chamber-settings.ts:222-262）判整个文件损坏 → Swift 必须同判
-        // （2026-12 验证轮缺陷：旧实现只看 keepAwake 键，会把 Electron 判为
+        // （只看 keepAwake 键会把 Electron 判为
         // 损坏的文件当合法采信）。
         let corruptCases: [String] = [
             "{\"keepAwake\": true, \"registryOrigin\": 123}",
@@ -220,7 +220,7 @@ final class ShellStartupTests: XCTestCase {
     }
 
 
-    /// 2026-12 第二轮验证：与 Electron readSettingsFile 的 9 个分歧样本逐例对齐
+    /// 与 Electron readSettingsFile 的 9 个分歧样本逐例对齐
     /// （BOM、重复键、WHATWG 容错、%2e/%2f 点段语义）。
     func testStartupSettingsValidatorMatchesElectronEdgeCases() throws {
         let cases: [(json: String, expectCorrupt: Bool, note: String)] = [
@@ -264,8 +264,8 @@ final class ShellStartupTests: XCTestCase {
     }
 
 
-    /// 2026-12 第三轮验证：这些锚点 Electron 的 normalizeRegistryOrigin 一律拒绝，
-    /// Swift 先前放行（fail-open）。严格主机字符集 + 端口范围把它们全部收回。
+    /// 这些锚点 Electron 的 normalizeRegistryOrigin 一律拒绝；
+    /// 严格主机字符集 + 端口范围把它们全部收回。
     func testStartupSettingsStrictOriginRejectsElectronFailOpenCases() {
         let backslash = String(Unicode.Scalar(0x5C)!)
         let control = String(Unicode.Scalar(0x01)!)
@@ -300,7 +300,7 @@ final class ShellStartupTests: XCTestCase {
         }
     }
 
-    /// 2026-12 第三轮验证：非 UTF-8 字节流、超上限文件、转义写法的重复键都必须
+    /// 非 UTF-8 字节流、超上限文件、转义写法的重复键都必须
     /// 判损坏（JSON.parse 只接受 UTF-8 且对重复键取最后值）。
     func testStartupSettingsRejectsNonUTF8OverSizeAndEscapedDuplicates() throws {
         let dir = try tempUserData()
@@ -338,8 +338,8 @@ final class ShellStartupTests: XCTestCase {
     }
 
 
-    /// 2026-12 第四轮验证：嵌套层级的重复键、端口前导 '+'、非法主机码点都必须
-    /// 判损坏/拒绝（此前三处 fail-open）。
+    /// 嵌套层级的重复键、端口前导 '+'、非法主机码点都必须
+    /// 判损坏/拒绝（不得 fail-open）。
     func testStartupSettingsClosesNestedDuplicateAndHostFailOpens() {
         let nestedDuplicates = [
             "{\"keepAwake\": false, \"notifications\": {\"mode\": \"always\", \"mode\": \"bogus\"}}",
@@ -354,8 +354,8 @@ final class ShellStartupTests: XCTestCase {
         let nbsp = String(Unicode.Scalar(0x00A0)!)
         let lineSeparator = String(Unicode.Scalar(0x2028)!)
         let ideographicSpace = String(Unicode.Scalar(0x3000)!)
-        // 2026-12 第五轮验证：RTL 字母（缺 bidi 上下文）、Arabic-Indic 数字、私用区
-        // 与 UTS46 不许的字母都必须拒绝（此前 isLetter||isNumber 会放行）。
+        // RTL 字母（缺 bidi 上下文）、Arabic-Indic 数字、私用区
+        // 与 UTS46 不许的字母都必须拒绝（isLetter||isNumber 会放行）。
         let hebrewAlef = String(Unicode.Scalar(0x05D0)!)
         let arabicIndicDigit = String(Unicode.Scalar(0x0660)!)
         let privateUse = String(Unicode.Scalar(0xF882)!)
@@ -381,7 +381,7 @@ final class ShellStartupTests: XCTestCase {
             "https://" + String(Unicode.Scalar(0x4F8B)!) + String(Unicode.Scalar(0x3048)!) + ".com"))
     }
 
-    // MARK: - S11：ControlPlanePort
+    // MARK: - ControlPlanePort
 
     func testPortResolutionPrecedenceAndPackagedDefault() {
         XCTAssertEqual(ControlPlanePort.resolve(
@@ -402,7 +402,7 @@ final class ShellStartupTests: XCTestCase {
             .init(port: 17520, source: .devDefault))
     }
 
-    /// S-03（2026-12 复裁决）：非法显式端口与退避耗尽一律**降级不致命**，
+    /// 非法显式端口与退避耗尽一律**降级不致命**，
     /// 对齐 Electron `resolveControlPlanePort()`（shell-core.ts:425-442）。
     func testPortResolutionDegradesInsteadOfFailing() {
         let invalidPortOverride = ControlPlanePort.resolve(
@@ -435,7 +435,7 @@ final class ShellStartupTests: XCTestCase {
         XCTAssertEqual(hopeless.source, .devDefault)
         XCTAssertFalse(hopeless.notices.isEmpty)
 
-        // 2026-12 单源化：自定义 sidecar 形状（probeDevPort == nil，AppDelegate 传 nil）
+        // 自定义 sidecar 形状（probeDevPort == nil，AppDelegate 传 nil）
         // 遇到非法显式端口同样 notice + dev 缺省，绝不 fatal——两种形状共用同一解析。
         let invalidCustomShape = ControlPlanePort.resolve(
             env: ["DSH_CHAMBER_SHELL_PORT": "-1"], isPackaged: false, probeDevPort: nil)
@@ -454,7 +454,7 @@ final class ShellStartupTests: XCTestCase {
         XCTAssertLessThanOrEqual(port, 65535)
     }
 
-    /// P-16：dev 退避耗尽后的最后一档必须是 **bind 0 的系统临时端口**（真
+    /// dev 退避耗尽后的最后一档必须是 **bind 0 的系统临时端口**（真
     /// socket 探针），不是固定 17520——对齐 Electron 最后一档把 port 0 交给
     /// OS（free-port.ts / shell-core.ts:425-442）。早前的优先端口不变。
     func testDevPortLastTierAsksOSForFreePortInsteadOfFixedDefault() {
@@ -493,26 +493,25 @@ final class ShellStartupTests: XCTestCase {
         XCTAssertLessThanOrEqual(port, 49249)
     }
 
-    // MARK: - S14：ShellDebug / BoundedEdgeReplyGuard
+    // MARK: - ShellDebug / BoundedEdgeReplyGuard
 
     func testShellDebugDefaultsOff() {
         XCTAssertFalse(ShellDebug.isEnabled(environment: [:]))
         XCTAssertFalse(ShellDebug.isEnabled(environment: ["DSH_CHAMBER_SHELL_DEBUG": "0"]))
         XCTAssertFalse(ShellDebug.isEnabled(environment: ["DSH_CHAMBER_SHELL_DEBUG": "true"]))
         XCTAssertTrue(ShellDebug.isEnabled(environment: ["DSH_CHAMBER_SHELL_DEBUG": "1"]))
-        // Phase 2 C4：生产调用点缓存与纯函数判定锁步（进程内环境稳定，故相等）。
+        // 生产调用点缓存与纯函数判定锁步（进程内环境稳定，故相等）。
         XCTAssertEqual(ShellDebug.isEnabledCached, ShellDebug.isEnabled())
     }
 
-    /// Phase 2 C7 / 2026-12 单源化：页面字面量出口 = AnyCodable 单遍写出器
-    /// （A 桥回执的 jsStringLiteral 委托同一实现；Any 版 JSONSerialization 出口
-    /// 只有 String 调用点，已删除）。完整转义矩阵见 JSLiteralEscapingTests。
+    /// 页面字面量出口 = AnyCodable 单遍写出器
+    /// （A 桥回执的 jsStringLiteral 委托同一实现）。完整转义矩阵见 JSLiteralEscapingTests。
     func testPageLiteralDelegatesToSinglePassWriter() {
         XCTAssertEqual(MainWindowController.jsonLiteral(of: .object(["k": .number(1)])), "{\"k\":1}")
         XCTAssertEqual(MainWindowController.jsonLiteral(of: .null), "null")
         XCTAssertEqual(MainWindowController.jsonLiteral(of: .number(-0.0)), "0")
         XCTAssertEqual(MainWindowController.jsonLiteral(of: .string("a\"b")), "\"a\\\"b\"")
-        // R3：U+2028/U+2029 必须转义（JS 行终止符），JSON 语义不变
+        // U+2028/U+2029 必须转义（JS 行终止符），JSON 语义不变
         XCTAssertEqual(MainWindowController.jsonLiteral(of: .string("a\u{2028}b")), "\"a\\u2028b\"")
         XCTAssertEqual(MainWindowController.jsonLiteral(of: .string("a\u{2029}b")), "\"a\\u2029b\"")
         // 回执转义与页面字面量逐字节同源（单实现锁）
@@ -537,7 +536,7 @@ final class ShellStartupTests: XCTestCase {
         XCTAssertTrue(guardWindow.firstInsert(1), "清空后可重新插入")
     }
 
-    // MARK: - W2：菜单分组一律按 tag/action 定位（标题已本地化，禁止按标题查找）
+    // MARK: - 菜单分组一律按 tag/action 定位（标题已本地化，禁止按标题查找）
 
     /// 顶层分组子菜单（tag 见 AppDelegate.<section>SectionTag）。
     private func section(_ menu: NSMenu, _ tag: Int) -> NSMenu? {
@@ -551,7 +550,7 @@ final class ShellStartupTests: XCTestCase {
         }?.submenu
     }
 
-    // MARK: - S13：窗口菜单
+    // MARK: - 窗口菜单
 
     func testWindowMenuCarriesCloseAndMiniaturizeSelectors() {
         let menu = AppDelegate.makeMainMenu()
@@ -566,7 +565,7 @@ final class ShellStartupTests: XCTestCase {
         XCTAssertEqual(miniItem?.keyEquivalent, "m")
     }
 
-    /// 2026-12 双端逐函数核对 V5/U4：App 菜单含 About/隐藏/退出（对齐 Electron 的
+    /// App 菜单含 About/隐藏/退出（对齐 Electron 的
     /// 系统默认菜单），窗口菜单含缩放与前置全部窗口。
     func testMainMenuCarriesStandardAppMenuItems() {
         let menu = AppDelegate.makeMainMenu()
@@ -590,7 +589,7 @@ final class ShellStartupTests: XCTestCase {
         XCTAssertNotNil(windowMenu.items.first { $0.action == #selector(NSApplication.arrangeInFront(_:)) })
     }
 
-    /// 2026-12 双端逐函数核对 S4·F1：argv 冷启动深链筛选（跳过 argv[0] 与非本 scheme）。
+    /// argv 冷启动深链筛选（跳过 argv[0] 与非本 scheme）。
     func testCommandLineDeepLinkFilter() {
         let urls = AppDelegate.commandLineDeepLinks(arguments: [
             "/Applications/dsh-chamber.app/Contents/MacOS/dsh-chamber",
@@ -603,7 +602,7 @@ final class ShellStartupTests: XCTestCase {
         XCTAssertEqual(AppDelegate.commandLineDeepLinks(arguments: ["/bin/x"]), [])
     }
 
-    // MARK: - S3：sidecar 缺失文案 / S11 端口来源标签
+    // MARK: - sidecar 缺失文案 / 端口来源标签
 
     func testMissingSidecarMessageIsPrecise() {
         let packaged = AppDelegate.missingSidecarMessage(
@@ -625,7 +624,7 @@ final class ShellStartupTests: XCTestCase {
         XCTAssertTrue(AppDelegate.portSourceLabel(.devEphemeral).contains("系统临时端口"))
     }
 
-    // MARK: - P-02：ready 帧端口必须与即将加载的控制面 origin 一致
+    // MARK: - ready 帧端口必须与即将加载的控制面 origin 一致
 
     /// 一致 → nil（可继续）；不一致 → loud 说明（调用方 fatal，绝不静默加载
     /// 错 origin）；URL 无显式端口按 scheme 默认端口比较。
@@ -648,7 +647,7 @@ final class ShellStartupTests: XCTestCase {
             readyPort: 17520, cpURL: URL(string: "file:///tmp/x")!))
     }
 
-    // MARK: - P-17：登录自启 reconcile 必须可观察失败且不 hard-fail
+    // MARK: - 登录自启 reconcile 必须可观察失败且不 hard-fail
 
     /// dev 无 bundle：腿回 no-bundle（诚实降级）→ .failed（调用方 loud 打印），
     /// 绝不 fatal/抛出；成功 → .applied；设置损坏 → .settingsCorrupt 不动作。
@@ -674,12 +673,12 @@ final class ShellStartupTests: XCTestCase {
         XCTAssertEqual(received, false)
     }
 
-    // MARK: - P-18：shim 资源缺失 = fail-closed 决策
+    // MARK: - shim 资源缺失 = fail-closed 决策
 
     /// 缺失/空 → 返回可见且可操作的致命说明（含已查找目录与修复动作）；
     /// 有源码 → nil（可继续）。AppDelegate 据此对齐 Electron 的
     /// showErrorBox + app.exit(1)，绝不带着无桥页面开窗。
-    /// T-1：内部资源名（bridge-shim.js）不得露进用户可见文案——它只进
+    /// 内部资源名（bridge-shim.js）不得露进用户可见文案——它只进
     /// shell.log（AppDelegate 调用点显式落盘）。
     func testShimStartupFailsClosedWhenResourceMissing() {
         XCTAssertNil(MainWindowController.shimStartupFailure(source: "// shim"))
@@ -695,7 +694,7 @@ final class ShellStartupTests: XCTestCase {
                         "空源码同样是缺资源（静默无桥 = fail-open）")
     }
 
-    // MARK: - S-24：View 菜单 / Edit 扩展 / 页面缩放
+    // MARK: - View 菜单 / Edit 扩展 / 页面缩放
 
     func testViewMenuCarriesReloadZoomAndFullScreen() {
         let menu = AppDelegate.makeMainMenu()
@@ -740,12 +739,12 @@ final class ShellStartupTests: XCTestCase {
         XCTAssertNotNil(speech.items.first { $0.action == Selector(("stopSpeaking:")) })
     }
 
-    /// S-24（残余收口）：Help 组必须存在且保持 macOS 标准分组次序
+    /// Help 组必须存在且保持 macOS 标准分组次序
     /// （App / 文件 / 编辑 / 显示 / 窗口 / 帮助）；唯一菜单项 = 打开项目页——
     /// 原生壳没有页面桥帮助面，这是最小且诚实的帮助入口。
     func testHelpMenuOpensProjectPageAndGroupsStayIntact() {
         let menu = AppDelegate.makeMainMenu()
-        // W2：分组次序改按 tag 断言（标题已本地化，按标题断言会在换语言时假红）。
+        // 分组次序按 tag 断言（标题已本地化，按标题断言会在换语言时假红）。
         XCTAssertEqual(menu.items.map(\.tag),
                        [AppDelegate.appSectionTag, AppDelegate.fileSectionTag, AppDelegate.editSectionTag,
                         AppDelegate.viewSectionTag, AppDelegate.windowSectionTag, AppDelegate.helpSectionTag],
@@ -762,7 +761,7 @@ final class ShellStartupTests: XCTestCase {
                        "帮助入口必须指向项目页（唯一诚实目标，且经外部打开路径）")
     }
 
-    /// S-24：打包态菜单绝不带 DevTools 入口（T-10：devtools 保持 #if DEBUG 可达，
+    /// 打包态菜单绝不带 DevTools 入口（devtools 保持 #if DEBUG 可达，
     /// release 无检查器面——菜单项同样是产品面）。
     func testMainMenuHasNoDevToolsEntry() {
         let menu = AppDelegate.makeMainMenu()
@@ -788,7 +787,7 @@ final class ShellStartupTests: XCTestCase {
                        "非有限值回落 1.0")
     }
 
-    // MARK: - S-32：恢复序列（Dock/托盘/取消退出共用）
+    // MARK: - 恢复序列（Dock/托盘/取消退出共用）
 
     func testRestoreActionsDeminiaturizeBeforeFocus() {
         XCTAssertEqual(MainWindowController.restoreActions(isMiniaturized: true),
@@ -799,7 +798,7 @@ final class ShellStartupTests: XCTestCase {
         MainWindowController.restoreWindow(nil)   // 无窗口 = no-op，绝不崩
     }
 
-    // MARK: - T-11：打包态调试面与 DSH_CHAMBER_SHELL_* 过滤
+    // MARK: - 打包态调试面与 DSH_CHAMBER_SHELL_* 过滤
 
     func testShellDebugForcedOffInPackagedApp() {
         XCTAssertFalse(ShellDebug.isEnabled(environment: ["DSH_CHAMBER_SHELL_DEBUG": "1"], isPackaged: true),
@@ -813,7 +812,7 @@ final class ShellStartupTests: XCTestCase {
         XCTAssertTrue(ShellDebug.isPackaged(executablePath: nil), "路径不可得 → 保守按打包态")
     }
 
-    // MARK: - S-24（残余）：File 组 / Force Reload / Substitutions
+    // MARK: - File 组 / Force Reload / Substitutions
 
     /// Electron 默认 macOS 菜单装配次序 = appMenu/fileMenu/editMenu/viewMenu/
     /// windowMenu（Electron default-menu.ts；fileMenu = File + Close Window）。
@@ -897,7 +896,7 @@ final class ShellStartupTests: XCTestCase {
         }
     }
 
-    // MARK: - S-40：二次启动必须请求 primary 显示/恢复窗口
+    // MARK: - 二次启动必须请求 primary 显示/恢复窗口
 
     /// 手动二次启动（open -n / 直接 exec）走 activateExistingInstance：必须对
     /// 同 bundle 的另一进程做两件事——请求它显示/恢复主窗（本壳私有通知，对偶
@@ -944,13 +943,13 @@ final class ShellStartupTests: XCTestCase {
         XCTAssertFalse(lookedUp, "dev 无 bundle id 时不做任何按名猜测")
     }
 
-    /// S-40 的显窗通知必须与深链转发通知区分（否则二次启动显窗会被当成深链）。
+    /// 显窗通知必须与深链转发通知区分（否则二次启动显窗会被当成深链）。
     func testSecondaryShowWindowNotificationIsDistinct() {
         XCTAssertNotEqual(AppDelegate.secondaryShowWindowNotification,
                           AppDelegate.secondaryDeepLinkNotification)
     }
 
-    // MARK: - S-42：启动窗口呈现门（首个已提交内容才亮窗）
+    // MARK: - 启动窗口呈现门（首个已提交内容才亮窗）
 
     func testStartupPresentationGatePresentsOnlyOnFirstCommit() {
         var gate = MainWindowController.StartupPresentationGate()
@@ -963,7 +962,7 @@ final class ShellStartupTests: XCTestCase {
     }
 
     /// 初始空文档不算「有内容」——启动期窗口保持隐藏（Electron 在
-    /// controlPlane.start() 完成后才建窗的对偶）；S-27 失败说明页必须可见。
+    /// controlPlane.start() 完成后才建窗的对偶）；失败说明页必须可见。
     func testPresentableCommitDecisionExcludesInitialBlankDocument() {
         XCTAssertFalse(MainWindowController.isPresentableCommit(url: nil, failurePage: false))
         XCTAssertFalse(MainWindowController.isPresentableCommit(url: "", failurePage: false))
@@ -982,7 +981,7 @@ final class ShellStartupTests: XCTestCase {
                       "随后的壳文档提交仍必须呈现")
     }
 
-    /// 对抗验证回归（S-42 破坏了 S-27 失败页）：本机实测回调顺序是
+    /// 本机实测回调顺序是
     /// decidePolicyFor(about:blank) 先到、didCommit(about:blank) 后到。豁免若在
     /// decidePolicyFor 处消费，didCommit 看到的就是 failurePage:false →
     /// isPresentableCommit(about:blank, false) = false → 呈现门永不触发，失败页
@@ -1046,7 +1045,7 @@ final class ShellStartupTests: XCTestCase {
         XCTAssertFalse(gate.presented)
     }
 
-    // MARK: - S-46 / D14：Info.plist 模板（About 版权行 + 共存注释）
+    // MARK: - Info.plist 模板（About 版权行 + 共存注释）
 
     func testInfoPlistTemplateCarriesAboutCopyrightAndAcceptedCoexistence() throws {
         // #filePath = macos/Tests/DSHChamberTests/ShellStartupTests.swift
@@ -1067,8 +1066,8 @@ final class ShellStartupTests: XCTestCase {
                        "D14：共存决策已 accepted（S-04），注释不得再写未决")
         XCTAssertTrue(compact.contains("deviations S-04"),
                       "D14：模板注释应指向 accepted 的登记（S-04）")
-        // S-45（2026-12 实机修正）：ATS 例外必须用正确键名
-        // NSExceptionAllowsInsecureHTTPLoads（旧 NSTemporary... 实测不生效），
+        // ATS 例外必须用正确键名
+        // NSExceptionAllowsInsecureHTTPLoads（NSTemporary... 写法实测不生效），
         // 且打包态导航 origin http://localhost:<port> 的例外挂在 localhost 下。
         XCTAssertTrue(compact.contains("<key>NSAppTransportSecurity</key>"),
                       "S-45：ATS 段必须存在")
@@ -1084,9 +1083,9 @@ final class ShellStartupTests: XCTestCase {
                        "S-45：旧键名退役，不再作为放行依据")
     }
 
-    /// S-45（2026-12 实机修正，结构断言）：放行的关键是**正确键名**——
+    /// 放行的关键是**正确键名**——
     /// `localhost` 下的 NSExceptionAllowsInsecureHTTPLoads 是打包态
-    /// http://localhost:<port> 导航的放行依据（旧键 NSTemporary... 实测不生效），
+    /// http://localhost:<port> 导航的放行依据（NSTemporary... 写法实测不生效），
     /// 127.0.0.1 例外键同样用正确键名保留。
     func testInfoPlistATSExceptionIsLocalhostWithModernKey() throws {
         let macosDir = URL(fileURLWithPath: #filePath)
@@ -1115,7 +1114,7 @@ final class ShellStartupTests: XCTestCase {
                         "S-45：127.0.0.1 例外键保留（同样用正确键名；localhost 是打包态放行依据）")
     }
 
-    /// S-45：打包态控制面 origin 用 DNS 名 localhost（ATS 例外域只按域名匹配），
+    /// 打包态控制面 origin 用 DNS 名 localhost（ATS 例外域只按域名匹配），
     /// dev 无 ATS 执行面保持 127.0.0.1；两态端口与 sidecar 单源（resolvedCPPort）。
     func testControlPlaneOriginSelectsLocalhostWhenPackaged() {
         XCTAssertEqual(AppDelegate.controlPlaneHost(isPackaged: true), "localhost",

@@ -8,9 +8,9 @@
  *     transcript streamed through;
  *   - the first failure (non-zero exit or signal) ends the run;
  *   - a child that exits 0 WITHOUT executing a single node:test body fails
- *     (the "zero-test" guard desktop/renderer/sidebar already had: a manifest
+ *     (the "zero-test" guard: a manifest
  *     that silently runs nothing is not a pass — including the all-skipped case
- *     the old count-only guard let through);
+ *     a count-only guard would let through);
  *   - an empty manifest (or an empty group) is a manifest defect, refused
  *     before anything spawns;
  *   - a package with platform legs (win32/macos subsets) selects one leg with

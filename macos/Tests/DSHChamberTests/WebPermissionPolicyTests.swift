@@ -2,7 +2,7 @@
 //  WebPermissionPolicyTests.swift
 //  DSHChamberTests
 //
-//  S-07（2026-12 收尾）：网页权限口径的锁步断言。Electron 只放行
+//  网页权限口径的锁步断言。Electron 只放行
 //  `clipboard-sanitized-write`（`main.ts:3832-3834` 的 setPermissionRequestHandler/
 //  setPermissionCheckHandler），其余权限请求全拒；WKWebView 在 macOS 只暴露
 //  「媒体采集」这一类权限回调，其余类别没有可编程面——因此两侧有效的权限姿态

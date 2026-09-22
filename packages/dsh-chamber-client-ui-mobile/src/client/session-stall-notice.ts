@@ -2,9 +2,9 @@
  * The stall notice's presentation surface: its style tag, class names, geometry
  * and stylesheet.
  *
- * B4: split out of session-stall.ts, which no longer owns presentation - the ladder
- * DECISION moved to @dsh-chamber/dsh-stream-state and this module owns only the DOM
- * face the decision is rendered through. Nothing here decides anything.
+ * The ladder DECISION lives in @dsh-chamber/dsh-stream-state; this module owns
+ * only the DOM face the decision is rendered through. Nothing here decides
+ * anything.
  */
 
 /** The notice's own marker (same naming family as the nav toggle/backdrop). */

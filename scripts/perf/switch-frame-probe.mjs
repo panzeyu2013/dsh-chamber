@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
- * 切源「无白帧」逐帧探针（W3 仪器 I7）：Leg A（DOM 逐帧）+ Leg B（CDP screencast 像素）。
+ * 切源「无白帧」逐帧探针：Leg A（DOM 逐帧）+ Leg B（CDP screencast 像素）。
  *
- * 为什么存在（审计 §4-R7 的结论）：现有探针都给不出这条判据——
+ * 为什么存在：现有探针都给不出这条判据——
  * `switch-measure.mjs:87` 的 done 只断言 `!skeleton && quietMs>700`（settle 下界，
  * 不校验目标/内容），`measure-ui.mjs:88-100` 的帧采样器只记帧间隔（`{t,delta}`，
  * 无内容归属），遮罩层叠探针只在遮罩可见帧判 `elementFromPoint` 归属（证明"谁在命中
@@ -33,7 +33,7 @@ import { CdpSession, discoverPageTarget } from '../gui-acceptance/cdp.mjs'
 import { decodePng, isFlat, regionStats } from '../lib/png-ink.mjs'
 import { applyRequireSwitch, switchFrameVerdict } from '../../packages/renderer/src/switch-frame-verdict.ts'
 
-/** 采样节奏（蓝图 §7.3-1）：每 4 个 rAF 记一帧 ≈15Hz。 */
+/** 采样节奏：每 4 个 rAF 记一帧 ≈15Hz。 */
 const FRAME_SAMPLE_EVERY = 4
 /** 默认采样窗：覆盖一次切换（含 1s 持有窗 + 冷 boot 的遮罩期）后仍在观察。 */
 const DEFAULT_WINDOW_MS = 8_000

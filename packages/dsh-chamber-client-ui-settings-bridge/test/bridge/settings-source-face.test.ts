@@ -1,7 +1,6 @@
 /**
- * Per-instance settings-source face registry (design 05 §5, 2026-12 完整桥接
- * 修订). The registry is the page seam that replaced the detached child cordis
- * context: the panel renders the SELECTED source's own boot-ctx ledger with
+ * Per-instance settings-source face registry (design 05 §5). The registry is
+ * the page seam: the panel renders the SELECTED source's own boot-ctx ledger with
  * that source's own renderer-bound seats, so the publishers and the readiness
  * gate are load-bearing contracts.
  */

@@ -6,9 +6,8 @@
  * the managed instance, never linked into the composite bundle. The two sides
  * are pinned to each other by `test/wire-protocol/open-in-wire-lockstep.test.ts`, which reads
  * the seed's `src/shared.ts` and `src/index.ts` and fails on any drift of the
- * namespace, a method name, the error-code set or the `@Remote` surface. This
- * replaces the retired route/byte mirror (`shared/open-in-app-protocol.ts`,
- * design 20 §8): the protocol is now chamber-owned on both halves.
+ * namespace, a method name, the error-code set or the `@Remote` surface. The
+ * protocol is chamber-owned on both halves (design 20 §8).
  *
  * The transport is the instance's own generic RPC channel — `ctx.connection.
  * rpc.call('/api', <method>, { args }, signal)` — so the per-entry base path,

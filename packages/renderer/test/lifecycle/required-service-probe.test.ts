@@ -1,7 +1,6 @@
 /**
  * The required-service probe's pure bookkeeping (required-extra-rows.ts):
- * monotonic clock selection (2026-12 FIX 2) and per-member grace + bounded
- * re-check windows (2026-12 FIX 1/FIX 4).
+ * monotonic clock selection and per-member grace + bounded re-check windows.
  *
  * The probe's TIMER wiring lives in chamber-entry.ts (not importable by this
  * runner) and is pinned by required-extra-rows.test.ts's source-text locks; the
@@ -37,7 +36,7 @@ test('every member gets its OWN deadline: a re-armed roster member is never judg
   assert.deepEqual(windows.withinGrace(['a'], REQUIRED_SERVICE_PROBE_DEADLINE_MS - 1), ['a'])
   assert.deepEqual(windows.withinGrace(['a'], REQUIRED_SERVICE_PROBE_DEADLINE_MS), [], 'the window is a full deadline long')
   // The deferred cluster's re-arm adds `b` at t=30s: it starts its OWN full
-  // window instead of inheriting `a`'s long-elapsed one (the old bug judged it
+  // window instead of inheriting `a`'s long-elapsed one (which would judge it
   // on the very next pass).
   windows.note(['a', 'b'], 30_000)
   assert.deepEqual(windows.withinGrace(['a', 'b'], 30_000), ['b'])

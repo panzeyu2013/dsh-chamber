@@ -1,6 +1,6 @@
 /**
- * In-source drag state machines and their commit helpers (extracted verbatim
- * from SidebarRoot, 2026-12 split): session/workspace/server drags, the native
+ * In-source drag state machines and their commit helpers: session/workspace/
+ * server drags, the native
  * drag acceptance, the drag-end trailing-click guard refs and the three
  * commits (wire/funnel calls with optimistic order overrides).
  */

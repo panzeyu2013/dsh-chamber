@@ -1,15 +1,14 @@
 /**
- * Plugin-spec single-source lockstep tests (design 21 §6.2/§6.7, plan Phase
- * 4.3 — A1 whitelist centralization): the spec/name whitelist family moved
- * from desktop ssh-provider.ts into the control-plane shared pure module
+ * Plugin-spec single-source lockstep tests (design 21 §6.2/§6.7): the
+ * spec/name whitelist family lives in the control-plane shared pure module
  * (`packages/control-plane/src/plugin-spec.ts`, exported through
  * '@dsh-chamber/control-plane'), which the desktop main consumes through its
  * control-plane-module.ts dual-path facade and the gateway executor imports
  * directly. The WEB/RENDERER chain cannot import the Node-side module, so the
  * renderer's ADD_SPEC stays a hand-written mirror — these tests pin that
  * mirror to the shared PLUGIN_SPEC_PATTERN literal TEXTUALLY (a regex-source
- * change on either side fails here), and assert the desktop files no longer
- * re-declare the moved constants (they only re-export).
+ * change on either side fails here), and assert the desktop files do not
+ * re-declare those constants (they only re-export).
  *
  * Run directly: node packages/gateway/test/plugins/plugin-spec-lockstep.test.ts
  */
@@ -71,7 +70,7 @@ test('the renderer ADD_SPEC literal is byte-identical to the shared PLUGIN_SPEC_
 })
 
 // ---------------------------------------------------------------------------
-// Desktop rewiring: re-export only, no re-declaration
+// Desktop: re-export only, no re-declaration
 // ---------------------------------------------------------------------------
 
 const MOVED_DECLARATIONS = [

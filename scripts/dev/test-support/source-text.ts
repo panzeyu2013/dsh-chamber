@@ -6,8 +6,7 @@
  * pinned by reading their source text instead. A lock that matches raw source
  * can be satisfied by a COMMENT — precisely the failure mode the locks exist to
  * prevent, because the comments next to the code describe the invariant being
- * pinned (2026-09 round-3 W4-12 precedent:
- * `packages/dsh-chamber-client-ui-sidebar/test/plugin-kernel/panel-wiring.test.ts`).
+ * pinned.
  *
  * {@link stripComments} therefore blanks every line/block comment (preserving
  * newlines, so positions and line shapes survive) while leaving string and
@@ -15,8 +14,8 @@
  * formatting change cannot break a semantic lock.
  *
  * Package-local helpers under each package's `test/support/` directory re-export these
- * instead of growing another copy: before the 2026-12 support-layer pass the
- * same implementation existed in 20 test files, nine of them byte-identical.
+ * instead of growing another copy: the same implementation otherwise recurs in 20
+ * test files, nine of them byte-identical.
  * Deliberate variants stay local and say why (e.g. the regex-based interface
  * stripper in `packages/desktop/test/ipc/ipc-surface-mirror.test.ts`, the
  * CSS-only stripper in `packages/dsh-chamber-client-ui-mobile/test/behavior/composer-guard.test.ts`).

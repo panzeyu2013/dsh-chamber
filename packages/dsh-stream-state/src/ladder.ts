@@ -1,5 +1,5 @@
 /**
- * Unified recovery ladder engine (B4 core).
+ * Unified recovery ladder engine.
  *
  * WHY. Four ladders implement one shape with four vocabularies:
  *   session-liveness.ts        (running bit)       tiers: refresh / reconnect / notice
@@ -11,7 +11,7 @@
  * -> quota -> surface. This module owns that skeleton once; each caller supplies
  * its signals, its tier table and its action mapping.
  *
- * THE LOAD-BEARING DISCIPLINE (kept from session-liveness.ts:34-41): silence alone
+ * THE LOAD-BEARING DISCIPLINE (as in session-liveness.ts:34-41): silence alone
  * must NOT escalate past the first tier. Long tool runs and long reasoning are
  * legitimate silences indistinguishable from a real stall at this layer, and every
  * escalation replays the baseline of every open session. So a tier is gated on
@@ -127,7 +127,7 @@ export function collapseRecords(
  * For each sticky source, walk the tiers cheapest-first and dispatch the first one
  * that is (a) due, (b) allowed by its evidence gate, (c) not cooling down, (d) inside
  * its quota, and (e) executable (not blocked). At most ONE tier dispatches per source
- * per tick: escalating two levers at once is how the old layout produced correlated
+ * per tick: escalating two levers at once would produce correlated
  * reconnects nobody asked for.
  */
 export function planLadder(
@@ -145,8 +145,7 @@ export function planLadder(
     if (observation === undefined || !observation.sticky) continue
     const carried = collapsed.records[sourceId]
     // A fresh streak is based at NOW: the caller's symptomSinceMs describes the
-    // symptom that just reset, and inheriting it would re-arm every tier at once
-    // (the mid-streak recreation bug the ladder test caught).
+    // symptom that just reset, and inheriting it would re-arm every tier at once.
     const symptomSinceMs = collapsed.fresh.has(sourceId) ? now : observation.symptomSinceMs
     const previous: LadderRecord = carried ?? {
       symptomSinceMs,
@@ -170,7 +169,7 @@ export function planLadder(
       }
       if (observation.escalationBlocked) {
         // Suppressed WITHOUT consuming quota: a dispatch the caller cannot execute
-        // must not silently eat the lever (the 2026-12 review's accounting gap).
+        // must not silently eat the lever.
         break
       }
       actions.push({ sourceId, tier: tier.name, at: now })
@@ -201,10 +200,10 @@ export function planLadder(
 }
 
 /** Instantiate the known ladders from one place, so their shapes can be compared
- * instead of discovered. Values come from the modules being retired and are the
+ * instead of discovered. Values come from the host modules and are the
  * wiring's input, not this file's policy. */
 /**
- * B4 boundary (2026-12 预核结论, plan §84): this factory maps ONLY the SCHEDULING half of
+ * Boundary: this factory maps ONLY the SCHEDULING half of
  * the renderer's session-liveness ladder - the per-tier thresholds, cooldowns and the
  * rolling quota. The host module's planner (`planSessionLiveness`) keeps everything this
  * engine has no concept of: its phase machine, per-source progress stamps, the stalled-set
@@ -213,7 +212,7 @@ export function planLadder(
  * WHY THIS NOTE EXISTS: the factory has no production consumer, so a reader could mistake
  * it for a wired single source. It is a SHAPE reference - the engine's expressiveness is
  * narrower than these two ladders, so wiring them would mean adding a phase machine to the
- * engine (a design change, not a B4 refactor). See §84 for the field-by-field对照.
+ * engine (a design change, not a scheduling mapping). See §84 for the field-by-field对照.
  *
  * @param config - the scheduling fields, field-for-field the module's own config object.
  */
@@ -239,7 +238,7 @@ export function sessionLivenessLadder(config: {
 }
 
 /**
- * B4 boundary: the same SCHEDULING-only mapping as `sessionLivenessLadder` above, for the
+ * Boundary: the same SCHEDULING-only mapping as `sessionLivenessLadder` above, for the
  * open-in stream-health ladder (tiers `heal` / `auto-resync`). The host module keeps its
  * phase machine, `healFailedLatched`, the healing settle window, the clock-rollback guard
  * and the notice projection - none of which this engine models. See §84.

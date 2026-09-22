@@ -4,7 +4,7 @@
   <dict>
     <!-- Electron's JIT/runtime requirements. Keep this explicit so both the
          normal Developer ID path and the afterPack ad-hoc fallback use the
-         same reviewed entitlement set. -->
+         same entitlement set. -->
     <key>com.apple.security.cs.allow-jit</key>
     <true/>
     <key>com.apple.security.cs.allow-unsigned-executable-memory</key>

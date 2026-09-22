@@ -1,4 +1,4 @@
-/** gateway-ipc-shared (design 21 §6.5, plan Phase 4.6): the pure main-process apply payload
+/** gateway-ipc-shared (design 21 §6.5): the pure main-process apply payload
  *  validator (bounds, whitelists, deferRestart honesty), the registry-spec name parser and the
  *  confirmation copy builder. All pure Node — no Electron. */
 

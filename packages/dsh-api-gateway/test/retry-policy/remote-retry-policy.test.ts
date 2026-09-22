@@ -26,9 +26,9 @@ import { OPENING_TIMEOUT_LADDER_MS, SILENT_TEARDOWN_MIN_MS } from '@dsh-chamber/
 import { setTimeout as delay } from 'node:timers/promises'
 
 /**
- *  single-source tie (): this module must stay IMPORT-FREE at runtime (its
- * own test below asserts that), so it cannot read the shared table itself - which left
- * the opening ladder defined in TWO places with nothing comparing them: the table
+ *  single-source tie: this module must stay IMPORT-FREE at runtime (its
+ * own test below asserts that), so it cannot read the shared table itself - which
+ * leaves the opening ladder defined in TWO places with nothing else comparing them: the table
  * projection (tables.json -> the Swift mirror + the ladder-parity gate) and this file's
  * baked-in numbers, which are what actually drive the carrier. Changing the table alone
  * would silently diverge from the running policy. This tie makes that divergence loud.

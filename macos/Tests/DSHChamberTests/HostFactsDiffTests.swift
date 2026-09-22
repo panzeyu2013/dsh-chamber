@@ -135,7 +135,7 @@ final class HostFactsDiffTests: XCTestCase {
         XCTAssertEqual(last, ["focused": false])
     }
 
-    /// 二轮评审：推送失败后的意图回滚——只撤「本次推送且期间未被更新」的键，
+    /// 推送失败后的意图回滚——只撤「本次推送且期间未被更新」的键，
     /// 期间已变的键保留新意图（避免用旧值覆盖）。
     func testHostFactsRollbackOnlyRevertsUnchangedKeys() {
         let pushed: [String: Bool] = ["mainWindowAlive": true, "webViewContentAlive": true]
@@ -155,14 +155,14 @@ final class HostFactsDiffTests: XCTestCase {
         XCTAssertEqual(MainWindowController.hostFactsRollback(last: ["a": true], pushed: [:]), ["a": true])
     }
 
-    // MARK: - S5/S9：导航失败事实与重启快照（纯逻辑）
+    // MARK: - 导航失败事实与重启快照（纯逻辑）
 
     func testNavigationFactsConvergeOnFailure() {
         XCTAssertEqual(MainWindowController.navigationFacts(for: .started),
                        ["webViewLoading": true])
         XCTAssertEqual(MainWindowController.navigationFacts(for: .finished),
                        ["webViewLoading": false, "webViewContentAlive": true])
-        // S5：失败（didFail / didFailProvisionalNavigation）必须推 loading:false，
+        // 失败（didFail / didFailProvisionalNavigation）必须推 loading:false，
         // 否则 sidecar 侧 webViewLoading 同步门永久 true、通知/深链 drain 被 hold。
         XCTAssertEqual(MainWindowController.navigationFacts(for: .failed),
                        ["webViewLoading": false])
@@ -175,7 +175,7 @@ final class HostFactsDiffTests: XCTestCase {
     }
 
     func testResetFactsCarryLiveFocusState() {
-        // S9：重启快照必须取 window.isKeyWindow 实时值（旧实现漏 focused，
+        // 重启快照必须取 window.isKeyWindow 实时值（漏 focused 时，
         // 缓存 focused=false 会粘滞到下一次 key 事件）。
         XCTAssertEqual(MainWindowController.resetFacts(isKeyWindow: true),
                        ["mainWindowAlive": true, "webViewContentAlive": true, "focused": true])

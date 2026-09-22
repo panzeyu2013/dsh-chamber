@@ -14,7 +14,7 @@
 
 .title {
   margin: 0;
-  /* 2026-11: unified with the other chamber sections (通用 16px/500). */
+  /* 同其他 chamber 区块：通用 16px/500。 */
   font-size: 16px;
   font-weight: 500;
 }
@@ -59,8 +59,8 @@
   transition: border-color .16s, background .16s;
 }
 
-/* 2026-11 横向化: name/status/meta 在左，操作按钮在右（不再纵向堆叠、
-   右半空白）。窄卡时操作行自动换行到下一行。 */
+/* 横向布局: name/status/meta 在左，操作按钮在右（不纵向堆叠）。
+   窄卡时操作行自动换行到下一行。 */
 .localHeadRow {
   display: flex;
   align-items: flex-start;
@@ -116,28 +116,27 @@
   line-height: 17px;
   white-space: nowrap;
   font-weight: 500;
-  /* Official `Tag` outline tone (2026-09 batch 1, F1): l4 hairline. */
+  /* Official `Tag` outline tone: l4 hairline. */
   border: 0.5px solid var(--dsw-alias-border-l4);
   color: var(--dsw-alias-label-tertiary);
 }
 
 .badgeOk {
-  /* Official `Tag tone="success"`: 10% state tint + same-token ink. The solid
-     fill this replaces was the loudest element on a quiet settings page
-     (2026-09 batch 1, F1). */
+  /* Official `Tag tone="success"`: 10% state tint + same-token ink. A solid
+     fill would be the loudest element on a quiet settings page. */
   border-color: transparent;
   background: color-mix(in srgb, var(--dsw-alias-state-success-primary) 10%, transparent);
   color: var(--dsw-alias-state-success-primary);
 }
 
 .badgeBad {
-  /* Official `Tag tone="danger"` (2026-09 batch 1, F1). */
+  /* Official `Tag tone="danger"`. */
   border-color: transparent;
   background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 10%, transparent);
   color: var(--dsw-alias-state-error-primary);
 }
 
-/* 安全姿态徽标（2026-12 配色修订）：描边 + 彩色文字，无填充——与状态
+/* 安全姿态徽标：描边 + 彩色文字，无填充——与状态
    徽标（badgeOk/badgeBad 填充）分层；同类姿态（HTTP 明文 / 无认证）统一
    warn 家族，正面姿态（SPKI 已固定）用 success 家族。 */
 .badgeWarn {
@@ -173,16 +172,16 @@
 }
 
 .card:hover {
-  /* Hover keeps the l4 hairline and paints the system's interactive tint
-     (2026-09 batch 1 E1 follow-up). The previous `border-color: label-dimmed`
-     was slightly stronger than the old l2 rest state; at l4 rest it would FADE
-     the outline below rest — the inverse of a hover affordance. `.card` is an
+  /* Hover keeps the l4 hairline and paints the system's interactive tint.
+     `border-color: label-dimmed` would be slightly stronger than the l4 rest
+     state and would FADE the outline below rest — the inverse of a hover
+     affordance. `.card` is an
      interactive surface, so it uses the same hover tint as every row. */
   border-color: var(--dsw-alias-border-l4);
   background: var(--dsw-alias-interactive-bg-hover);
 }
 
-/* 2026-12 两行化: 身份行（名称 + 类型徽标）与徽标行（状态 + 安全姿态）
+/* 两行布局: 身份行（名称 + 类型徽标）与徽标行（状态 + 安全姿态）
    上下排布——单行 flex-wrap 在 268px 网格底线处换行不可预测，名称会被
    挤压成省略号。 */
 .cardHead {
@@ -220,8 +219,7 @@
 
 .kindBadge {
   flex: none;
-  /* Official Tag metrics (2026-09 batch 1, F1): 11px/17px, 1px 8px, l4
-     hairline — the chamber chip ran one size under the design floor. */
+  /* Official Tag metrics: 11px/17px, 1px 8px, l4 hairline. */
   border: 0.5px solid var(--dsw-alias-border-l4);
   border-radius: 999px;
   corner-shape: round;
@@ -341,12 +339,11 @@
 }
 
 /* Shared by the card's text action buttons (重启 dsh / 启动实例 / systemd
-   restart): the bubble exists solely while data-tip is present. D8 (plan 24):
-   the 重启 dsh button dropped its data-tip (aria-label only); the 启动实例 /
-   systemd buttons tip only when the reason is not already the visible label
-   (disabled states — serviceName null / not connected). Same vocabulary as
-   the icon-button tooltip above. Rename candidate: the class is no longer
-   restart-only — .textActionTip would name the shared use. */
+   restart): the bubble exists solely while data-tip is present. The 重启 dsh
+   button carries aria-label only; the 启动实例 / systemd buttons tip only when
+   the reason is not already the visible label (disabled states — serviceName
+   null / not connected). Same vocabulary as the icon-button tooltip above.
+   Rename candidate: .textActionTip would name the shared use. */
 .restartTip {
   position: relative;
 }
@@ -380,7 +377,7 @@
 }
 
 /* The dashed add entry, after the card grid: it reads as a place a host
-   will appear, not a command. 2026-11: rendered as the LAST GRID CELL
+   will appear, not a command. Rendered as the LAST GRID CELL
    (same card size) when the roster is non-empty; standalone full-width
    below the empty state otherwise. */
 .creatorCell {
@@ -470,8 +467,8 @@
   color: var(--dsw-alias-state-error-primary);
 }
 
-/* 降级缺口（2026-12 复查 NIT）：与框架横幅、侧栏来源行同一色阶——「前端能力受限」
-   是警示而非错误，此前这里借用了 problem 的错误红，同一事实在三处座位两种颜色。 */
+/* 降级缺口：与框架横幅、侧栏来源行同一色阶——「前端能力受限」
+   是警示而非错误，套用 problem 的错误红会让同一事实在两处座位呈现两种颜色。 */
 .pluginDiagnosticWarn {
   color: var(--dsw-alias-state-warn-label);
 }
@@ -481,7 +478,7 @@
 }
 
 /* Diagnostic detail block inside the plugin dialog (above the manage sections;
-   2026-12：对话框合并后已无 tab 结构)。 */
+   对话框已无 tab 结构)。 */
 .pluginDiagnosticDetail {
   margin: 0 0 10px;
 }
@@ -613,7 +610,7 @@
   background: var(--dsw-alias-interactive-bg-hover-danger);
 }
 
-/* 2026-11 两列化: short fields pair side by side; long fields (URL,
+/* 两列布局: short fields pair side by side; long fields (URL,
    credentials, config picker, warnings) span both columns via .spanAll. */
 .dialogFields {
   display: grid;
@@ -679,9 +676,7 @@
 }
 
 .input {
-  /* Official Input atom (2026-09 batch 1 G3 follow-up: the git dialog's fields
-     were aligned to it and this page's 15 form fields stayed on the older
-     13px/r10/l2 box). 32px tall, l4 hairline, r8, 14/22 — same tokens the
+  /* Official Input atom: 32px tall, l4 hairline, r8, 14/22 — same tokens the
      official `_wrap_1g6ru_1` declares. */
   box-sizing: border-box;
   height: 32px;
@@ -709,7 +704,7 @@
   cursor: default;
 }
 
-/* ---- 统一下拉箭头（2026-12）----
+/* ---- 统一下拉箭头 ----
    与设置壳/运行时段同一图标词汇（IconChevronDownOutline14）；箭头右缘
    inset 跟随 .input 的水平内距（12px），与文字左缘对称。 */
 
@@ -724,12 +719,12 @@
   -webkit-appearance: none;
   /* 铺满列宽：select 是 .selectWrap 内唯一的流内 flex item，缺省只取
      内容宽 —— 框身短于列宽，而 chevron 的 right:12px 锚在整行 wrap 上，
-     箭头就会悬在框外（2026-12 回归修复）。flex:1 + min-width:0 让框身
+     箭头就会悬在框外。flex:1 + min-width:0 让框身
      与同列文本输入等宽，箭头右缘回到框内 12px 处。 */
   flex: 1;
   min-width: 0;
-  /* 右内距 32px：chevron 占 [12, 26)px，文字↔箭头净间隙 6px（2026-12
-     复审，与运行时 select 的 8px 同节奏）。 */
+  /* 右内距 32px：chevron 占 [12, 26)px，文字↔箭头净间隙 6px
+     （与运行时 select 的 8px 同节奏）。 */
   padding-right: 32px;
   cursor: pointer;
 }
@@ -847,7 +842,7 @@
 /* Zone-title tier shared by every plugin-management section: the chamber
    injection zone (modal + inventory) AND the installed/tasks manage sections
    (design 21 Phase 5) reuse the same 12/600 secondary title. Rename
-   candidate: .pluginZoneTitle (no longer chamber-only). */
+   candidate: .pluginZoneTitle. */
 .pluginChamberTitle {
   margin: 0;
   font-size: 12px;
@@ -862,16 +857,16 @@
   color: var(--dsw-alias-label-secondary);
 }
 
-/* 空态首句（数据主体层）：secondary 可读；引导次句保持 dim 弱化（2026-12
-   视觉评审：整段 dim 双行几乎不可读）。 */
+/* 空态首句（数据主体层）：secondary 可读；引导次句保持 dim 弱化
+   （整段 dim 双行几乎不可读）。 */
 .pluginEmptyLead {
   margin: 0;
   font-size: 12px;
   color: var(--dsw-alias-label-secondary);
 }
 
-/* 范围注已移除（2026-12 UI 修订）：chamber 区与第三方区的区分由各自表头
-   与行内操作承担，不再渲染成段引导正文。 */
+/* 无范围注：chamber 区与第三方区的区分由各自表头
+   与行内操作承担，不渲染成段引导正文。 */
 
 .pluginChamberRow {
   display: flex;
@@ -946,7 +941,7 @@
   color: var(--dsw-alias-label-primary);
 }
 
-/* 选中的筛选胶囊：dsh 业务蓝填充 + 反白文字（2026-09 用户裁决：与设置页复选框/
+/* 选中的筛选胶囊：dsh 业务蓝填充 + 反白文字（与设置页复选框/
    分段滑块/开关的"开/选中"色统一到 `--dsw-alias-state-business-primary`，而不是
    官方中性 `--dsw-alias-brand-primary`——后者浅色主题下是近黑，选中态会发黑）。
    文字取 `--dsw-alias-bg-layer-3`（浅色即近白、深色为深灰），在蓝底上两档都可读。 */
@@ -1064,7 +1059,7 @@
 }
 
 /* 操作列表头：轨道宽由行内按钮（同宽）决定，表头文字居中于按钮上方，
-   避免左对齐错位 ~14-23px（2026-12 视觉评审 G4②）。 */
+   避免左对齐错位 ~14-23px。 */
 .pluginCellAction {
   flex: none;
   text-align: center;
@@ -1104,9 +1099,7 @@
 }
 
 .pluginKindBadge {
-  /* Official Tag metrics, same as .kindBadge (2026-09 batch 1 F1 follow-up: the
-     first pass aligned .kindBadge and left this co-rendered chip — PluginDialog
-     paints both — on the old 0 7px / border-l2 vocabulary). */
+  /* Official Tag metrics, same as .kindBadge (PluginDialog paints both). */
   border-radius: 999px;
   corner-shape: round;
   padding: 1px 8px;
@@ -1125,7 +1118,7 @@
 }
 
 .pluginKindClient {
-  /* Official `Tag tone="warning"`: 12% warn tint + warn ink (2026-09 batch 1, F1). */
+  /* Official `Tag tone="warning"`: 12% warn tint + warn ink. */
   border-color: transparent;
   background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 12%, transparent);
   color: var(--dsw-alias-state-warn-primary);
@@ -1206,9 +1199,8 @@
 }
 
 /* ---- plugin add view (design 21 §6.6 add zone) ----
-   2026-12 UI 修订：spec 输入缩短并与安装同排；「从本地导入」（插件源码
-   文件夹或 .tgz 包，2026-09 archive-pick）outline 化并上移同排（无分隔
-   线）；添加区输入与 sm 按钮统一定高（--chamber-ctl-h）。 */
+   spec 输入与安装同排；「从本地导入」（插件源码文件夹或 .tgz 包）outline
+   并与安装同排（无分隔线）；添加区输入与 sm 按钮统一定高（--chamber-ctl-h）。 */
 
 .pluginAdd {
   display: flex;
@@ -1232,7 +1224,7 @@
   flex-wrap: wrap;
 }
 
-/* spec 输入缩短为固定宽度，不再占满整行。 */
+/* spec 输入固定宽度，不占满整行。 */
 .pluginAddSpecInput {
   flex: none;
   width: 260px;
@@ -1244,7 +1236,7 @@
   min-width: 150px;
 }
 
-/* 按钮以 className 显式限高（primitives sm 默认高度不齐）；输入框改为
+/* 按钮以 className 显式限高（primitives sm 默认高度不齐）；输入框用
    padding-block: 0 + 显式 height，两条控制排完全等高。 */
 .pluginCtlButton {
   box-sizing: border-box;
@@ -1257,7 +1249,7 @@
   padding-block: 0;
 }
 
-/* 键盘焦点可见（2026-12 UI 修订）：添加区输入框补 focus-visible ring
+/* 键盘焦点可见：添加区输入框补 focus-visible ring
    （iconButton 同款 2px brand 词汇；.input:focus 只有边框变色，键盘用户
    不可辨）。 */
 .pluginAdd .input:focus-visible {
@@ -1329,7 +1321,7 @@
 }
 
 /* 行容器 display:contents —— 表头与所有数据行直接落入外层共享轨道，任何
-   badge/版本内容宽度下列都严格对齐（各列一次定宽，不再逐行自算）。 */
+   badge/版本内容宽度下列都严格对齐（各列一次定宽）。 */
 .chamberTableRow {
   display: contents;
 }
@@ -1366,7 +1358,7 @@
 .recoveryBanner {
   margin: 0;
   padding: 8px 10px;
-  /* Official notice language (2026-09 batch 1, F2): a tinted note, no border —
+  /* Official notice language: a tinted note, no border —
      official warning surfaces never draw a 1px state-coloured outline.
      NOTE: padding-block is unchanged, so removing the border costs 2px of
      height; the block sits in a flex column that absorbs it. */
@@ -1381,13 +1373,13 @@
   gap: 8px;
 }
 
-/* Writer-quiescence notice (2026-09-10, design 02 §3.4 / 04 §3.2): the local
+/* Writer-quiescence notice (design 02 §3.4 / 04 §3.2): the local
    card's reason line when a managed-dsh record keeps the instance from
    starting, plus the explicit 清理并接管 action. */
 .writerBlocked {
   margin-top: 8px;
   padding: 8px 10px;
-  /* Same official tinted-note language as .recoveryBanner (2026-09 batch 1, F2). */
+  /* Same official tinted-note language as .recoveryBanner. */
   border: 0;
   border-radius: 8px;
   background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 12%, transparent);

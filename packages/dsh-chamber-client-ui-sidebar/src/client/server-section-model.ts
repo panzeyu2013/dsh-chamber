@@ -1,9 +1,9 @@
 /**
  * Pure per-source helpers of the chamber sidebar ServerSection subtree: the
  * connection-status kind/label mapping, the public header title/activation
- * contract and the projection-local-search-snapshot rebuild. Moved verbatim
- * out of ServerSection.tsx; the two public helpers stay re-exported there so
- * SidebarRoot keeps importing them from ServerSection.tsx.
+ * contract and the projection-local-search-snapshot rebuild. The two public
+ * helpers stay re-exported there so SidebarRoot keeps importing them from
+ * ServerSection.tsx.
  */
 import { MANAGED_RUNTIME_TRANSIENT_STATES } from '../shared/managed-runtime.ts'
 import type { ChamberServerAggregate } from '../shared/aggregate-store.ts'
@@ -41,7 +41,7 @@ export function projectionToLocalSearchSnapshot(server: ChamberServerAggregate):
       ...(session.updatedAt === undefined ? {} : { updatedAt: session.updatedAt }),
       ...(session.title === '' ? {} : { title: session.title }),
       // The label is what search matches on, so the resolved display title
-      // rides the local snapshot (I3): a directory-named row is searchable by
+      // rides the local snapshot: a directory-named row is searchable by
       // the name the user actually sees.
       displayTitle: session.displayTitle,
     }))),
@@ -69,10 +69,9 @@ export function sourceStatusKind(server: ChamberServerAggregate): SourceStatusKi
 
 /**
  * Header title/aria text: the managed-down reason replaces "switch to this
- * instance". Exported for the collapsed rail (2026-09-11 upstream-alignment
- * T7): its per-source dot buttons are operable controls now and must carry the
- * SAME activation contract as the wide header — one definition, no rail copy
- * that can drift.
+ * instance". Exported for the collapsed rail: its per-source dot buttons are
+ * operable controls and must carry the SAME activation contract as the wide
+ * header — one definition, no rail copy that can drift.
  */
 export function sourceHeaderTitle(
   server: ChamberServerAggregate,
@@ -83,7 +82,7 @@ export function sourceHeaderTitle(
   if (server.managedRuntimeDown === true) {
     return t('source.managedDown', { state: t(sourceStatusLabelKey(server)) })
   }
-  // 瞬态托管态同样不可激活：title 不能还宣称"切换到该实例"（2026-12 复查 MINOR）。
+  // 瞬态托管态同样不可激活：title 不能还宣称"切换到该实例"。
   if (server.kind === 'gateway' && (server.phase === 'starting' || server.phase === 'restarting')) {
     return t('source.managedStarting', { state: t(sourceStatusLabelKey(server)) })
   }
@@ -92,12 +91,12 @@ export function sourceHeaderTitle(
 
 /** Whether a source header is an activation affordance (not self, not
  *  managed-down). Exported beside {@link sourceHeaderTitle} for the rail's
- *  named source buttons (2026-09-11 upstream-alignment T7). */
+ *  named source buttons. */
 export function sourceHeaderActivatable(server: ChamberServerAggregate, chamberInstanceId: string | undefined): boolean {  // 终态停机与瞬态 starting/restarting 都不可激活：两者的壳 boot 必然 503
   // （App 侧同样按 managedRuntimeUnusable 拒绝预热/收割），头部不应承诺切换。
   const managedUnusable = server.managedRuntimeDown === true
     || (server.kind === 'gateway'
-      // Shared constant, not a second literal set (2026-09 audit): the
+      // Shared constant, not a second literal set: the
       // transient states live in managed-runtime.ts, and a set that grows
       // there must reach this header without a second edit.
       && (MANAGED_RUNTIME_TRANSIENT_STATES as readonly string[]).includes(server.phase))
@@ -143,7 +142,7 @@ export interface DragOverCarrier {
 
 /**
  * 推进拖拽的 over 目标：目标（id + half）未变时返回**原对象**（不制造 state
- * churn），否则返回带新 over 的浅拷贝。三处拖拽闭包共用本实现（2026-12 单源化）。
+ * churn），否则返回带新 over 的浅拷贝。三处拖拽闭包共用本实现。
  * 调用方必须同步算好 half（见 {@link rowHalf}：currentTarget 在 dispatch 后即被置空）。
  * @param current - 当前拖拽态（null 表示拖拽未开始，保持 no-op）。
  * @param id - 悬停目标 id。

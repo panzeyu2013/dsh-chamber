@@ -1,6 +1,6 @@
 /**
- * The connections error-text projection (2026-12 audit P1-3: the card and the
- * dialog carried two byte-identical copies, now one module).
+ * The connections error-text projection: the card and the dialog render the
+ * one shared module.
  *
  * The implementation is single-sourced on the sidebar shared face
  * (src/shared/error-text.ts) and covered there; this file keeps the

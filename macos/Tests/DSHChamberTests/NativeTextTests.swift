@@ -2,7 +2,7 @@
 //  NativeTextTests.swift
 //  DSHChamberTests
 //
-//  S3：本地化席位 NativeText 的 .strings 配置完整性。直接读仓库源文件
+//  本地化席位 NativeText 的 .strings 配置完整性。直接读仓库源文件
 //  macos/Sources/DSHChamber/Resources/{en,zh-Hans}.lproj/Localizable.strings
 //  （#filePath 定位仓库根）：缺键/漏译/占位符漂移在读文件这一层就红。
 //  最后一个用例再钉运行期取值链路：逐键 NativeText.string 必须命中
@@ -232,8 +232,8 @@ final class NativeTextTests: XCTestCase {
 
     /// 计数相等但**类型次序**不同仍会让 String(format:) 填错参数（例如 %@ 与 %d
     /// 互换），只比计数抓不到。这里把 %@/%d 按出现顺序提取成类型数组逐键比较。
-    /// 盲区（第三轮 review 修正）：两个**同型**占位符互换后类型序列不变
-    /// （两个 %d 仍是 ["d","d"]），所以旧注释"两个 %d 互换也红"不成立；
+    /// 盲区：两个**同型**占位符互换后类型序列不变
+    /// （两个 %d 仍是 ["d","d"]），不能断言"两个 %d 互换也红"；
     /// frame.tooLarge 的同型 %d 由 ③d 按渲染结果单独钉住，本用例只保证类型
     /// 次序一致且解析非空。
     func testPlaceholderOrderMatchesAcrossLanguages() {
@@ -254,7 +254,7 @@ final class NativeTextTests: XCTestCase {
                        "frame.tooLarge 的两个 %d 顺序必须一致：en=\(enFrame) zh-Hans=\(zhFrame)")
     }
 
-    // MARK: - ③c 拼接标点的键必须与所在语言匹配（第三轮 review：M4 盲区）
+    // MARK: - ③c 拼接标点的键必须与所在语言匹配
 
     /// 由本壳以「`+ NativeText.string/format(…)`」方式拼接使用的键：值自身承载
     /// 整句标点（后缀/分隔符），期望值不能从同一键表动态取（自指）。新增拼接点
@@ -278,8 +278,8 @@ final class NativeTextTests: XCTestCase {
         .commonListSeparator, .quitReasonsSeparator,
     ]
 
-    /// 面向 en/zh 资源文件本身的断言（M4：en 后缀键被改成中文标点时，旧全套
-    /// 23 个相关测试因期望值同源仍绿；这里直接读资源文件钉住语言归属）。
+    /// 面向 en/zh 资源文件本身的断言（en 后缀键被改成中文标点时，
+    /// 期望值同源的测试仍会绿；这里直接读资源文件钉住语言归属）。
     func testPunctuationJoiningKeysMatchTheirLanguage() {
         let tables = loadLocalizables()
         XCTAssertFalse(Self.punctuationJoiningKeys.isEmpty)

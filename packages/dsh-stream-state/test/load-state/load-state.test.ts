@@ -1,8 +1,8 @@
 /**
- * B5 pure core: the shell's load state machine.
+ * Pure core: the shell's load state machine.
  *
- * These cases pin the THREE real-machine defects the machine exists to dissolve
- * (plan B-4), plus the generation fence that dissolves the first one.
+ * These cases pin the generation fence and the THREE real-machine failure modes
+ * the machine exists to prevent.
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'

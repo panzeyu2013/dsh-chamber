@@ -1,8 +1,7 @@
 /**
- * Purged-session row suppression + convergence bookkeeping (design 24 §12
- * 修正轮, 2026-09 实机复核).
+ * Purged-session row suppression + convergence bookkeeping (design 24 §12).
  *
- * WHY THIS EXISTS (实机根因，2026-09 复核): the cleanup purge deletes a
+ * WHY THIS EXISTS: the cleanup purge deletes a
  * session's content and then removes its id from the registry-global archived
  * set in ONE write (host-archive-cleanup core.ts `clearIds`), and the host
  * emits no session-row event for either step (documented no-op). The archived
@@ -30,42 +29,41 @@
  * Meanwhile the producer's own signature dedupe only compares against its
  * LAST EMITTED push, so every projected change (running bit on task
  * completion, activity, title, blank, membership) re-emits the stale rows
- * over the App's clean unary pull — the reported appear/disappear flicker.
+ * over the App's clean unary pull — the appear/disappear flicker.
  *
  * The fix has two halves, both owned by the source's own producer (this
  * module is the pure, node-testable core):
- *   - SUPPRESSION (F1): an id that left the archive set through a shrink is
+ *   - SUPPRESSION: an id that left the archive set through a shrink is
  *     tombstoned and filtered out of the emitted snapshot until the raw
  *     summaries stop listing it (or it is re-archived). This is honest:
  *     `clearIds` only ever contains trees whose content deletion SUCCEEDED
  *     plus orphan members with no session record, so "left the archive set"
  *     ⇔ "the content is gone"; a failed archive-set write leaves the ids in
  *     the set and therefore never arms a tombstone.
- *   - CONVERGENCE (F2): the same shrink triggers the official
+ *   - CONVERGENCE: the same shrink triggers the official
  *     `ctx.sessions.refresh()` in place and then VERIFIES the ids are gone
  *     from the summaries, retrying a bounded number of times
  *     (`purged-convergence.ts` owns the chain: retry on resolve-with-lingering,
  *     on rejection AND on a hung attempt; the terminal step KEEPS the
  *     suppression). That repairs the official client itself (no dead-end
  *     opens) and covers the single-flight/stale-response and
- *     transient-RPC-error holes of `refreshList()`. NOTE (2026-09 review
- *     BLOCKER): the refresh MUST be invoked as a method on the service object
- *     — `ClientSessions.refresh` is a prototype method reading `this.manager`,
- *     so the detached call the §12 seam used threw TypeError and never issued
- *     an RPC at all.
+ *     transient-RPC-error holes of `refreshList()`. The refresh MUST be
+ *     invoked as a method on the service object — `ClientSessions.refresh` is
+ *     a prototype method reading `this.manager`, so a detached call throws
+ *     TypeError and never issues an RPC at all.
  *
  * TOMBSTONE RELEASE RULE: an id is released when the raw summaries stop
  * listing it (the official refresh converged) or when it re-enters the archive
  * set. There is deliberately NO "release because the refresh resolved" valve:
  * `refreshList` also resolves on a failed pull (summaries untouched) and for a
  * joined stale single-flight caller, so a resolve proves nothing — releasing
- * on it re-opened the very ghost-row bug this module exists to close (2026-09
- * closure review). The residual — a shrink that was NOT a content purge
- * leaving a row suppressed — is released by the F2 convergence probe's terminal
+ * on it re-opens the very ghost-row bug this module exists to close. The
+ * residual — a shrink that was NOT a content purge
+ * leaving a row suppressed — is released by the convergence probe's terminal
  * state, which drops every tombstoned id the authoritative list still enumerates
  * (see purged-convergence.ts). Do NOT delete that probe believing the residual
- * is unreachable: without it a non-purge shrink keeps a LIVE row hidden, which
- * is the 2026-09 ghost-row regression this family exists to close.
+ * is unreachable: without it a non-purge shrink keeps a LIVE row hidden — the
+ * ghost-row regression this family exists to close.
  */
 
 /** Bounded convergence attempts after one purge (the official refresh is

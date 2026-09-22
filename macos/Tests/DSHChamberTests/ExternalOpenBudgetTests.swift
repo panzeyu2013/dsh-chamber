@@ -2,7 +2,7 @@
 //  ExternalOpenBudgetTests.swift
 //  DSHChamberTests
 //
-//  二轮评审 A-P2：外链打开预算（10s/8 次 + 30s 冷却，镜像 shell-core）。
+//  外链打开预算（10s/8 次 + 30s 冷却，镜像 shell-core）。
 //
 import XCTest
 @testable import DSHChamber

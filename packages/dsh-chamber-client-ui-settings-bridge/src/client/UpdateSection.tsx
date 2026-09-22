@@ -1,21 +1,19 @@
 /**
  * Chamber-global「更新」group (design 11), rendered inside the「通用」section
- * (design 15 — the update nav entry was merged into General): a LOW-KEY flat
+ * (design 15): a LOW-KEY flat
  * row group in the OpenChamber settings vocabulary — group heading, a version
  * line with the「检查更新」action on the right, and phase status line(s)
  * below. When a newer version exists a quiet notice plus a「更新」
  * button appear; once the download completed, the row offers the explicit
- *「重启并安装」action (2026-12 user decision — the user restarts into the
- * update right from the UI instead of relying on quit alone). No dialogs, no
+ *「重启并安装」action (the user restarts into the update right from the UI
+ * instead of relying on quit alone). No dialogs, no
  * badges, no banners: the user only ever sees this by opening Settings, and
  * the download starts only after the explicit click (autoDownload stays off
  * in the main process). All state is the non-secret projection pushed by the
  * desktop main process over the update bridge (update-store.ts).
  *
- * 2026-09-11 upstream-alignment T9: every action capsule in this file is the
- * shared ui-primitives `Button` (`variant="outline|primary" size="sm"`), the
- * exact recipe the hand-rolled `.updateButton` / `.updatePrimaryButton` rules
- * copied — the local rules are gone.
+ * Every action capsule in this file is the shared ui-primitives `Button`
+ * (`variant="outline|primary" size="sm"`) — the official recipe.
  */
 import { useCallback, useEffect, useState, useSyncExternalStore } from 'react'
 import type { MouseEvent as ReactMouseEvent } from 'react'
@@ -59,7 +57,7 @@ function StatusRow({
 }: {
   update: UpdateState
   /** Which action owns the in-flight busy state — null = idle. The「正在重启
-   *  并安装…」line is drawn ONLY for a RESTART-owned busy (round-2 review A4):
+   *  并安装…」line is drawn ONLY for a RESTART-owned busy:
    *  a DOWNLOAD click's busy can survive one render past the update-downloaded
    *  push and must never briefly mislabel the downloaded row as restarting. */
   busyKind: 'restart' | 'download' | null
@@ -71,7 +69,7 @@ function StatusRow({
   const { phase, latestVersion, downloadPercent, installBlockedReason, releaseUrl } = update
   // window.dshChamber.platform ('darwin'|'win32'|'linux'|…): Linux never
   // offers the「重启并安装」action (update-gate — AppImage single-instance
-  // race, 2026-12 review H1; the quit-install leg stays).
+  // race; the quit-install leg stays).
   const bridgePlatform = typeof window !== 'undefined' ? (window.dshChamber?.platform ?? null) : null
   // Real href + preventDefault: the accessible URL hint stays meaningful, but
   // the actual open goes through the allowlisted main-process bridge (the
@@ -151,26 +149,25 @@ function StatusRow({
           </p>
         )
       case 'installing':
-        // 原生安装中（S-19，Electron 不产生）：Sparkle 正在替换 bundle 并重启，
+        // 原生安装中（Electron 不产生）：Sparkle 正在替换 bundle 并重启，
         // 页面只如实呈现进展——不提供第二次下载/安装入口（updateRestartAvailable
         // 的 phase 门已排除 installing）。
         return <p className={css.updateStatusText}>{t('updateInstalling')}</p>
       case 'downloaded': {
-        // 2026-12 user decision: the「已下载，退出时安装」row gains the
-        // user-triggered「重启并安装」primary action (main-process
-        // quitAndInstall — quit + install + relaunch through the normal quit
-        // path) whenever the restart can actually hold. Quitting alone is not
-        // a controllable install flow on every platform/shape; the explicit
-        // restart is. The gate mirrors updater.restartAndInstall() exactly
-        // (phase downloaded + no install block + NOT linux — the AppImage
-        // single-instance race, review H1), which the main process also
-        // enforces at the IPC boundary (never just UI hiding). Three outcomes
+        // The「已下载，退出时安装」row gains the user-triggered
+        // 「重启并安装」primary action (main-process quitAndInstall — quit +
+        // install + relaunch through the normal quit path) whenever the
+        // restart can actually hold. Quitting alone is not a controllable
+        // install flow on every platform/shape; the explicit restart is. The
+        // gate mirrors updater.restartAndInstall() exactly (phase downloaded +
+        // no install block + NOT linux — the AppImage single-instance race),
+        // which the main process also enforces at the IPC boundary (never just
+        // UI hiding). Three outcomes
         // inside this case: restart offered (mac/win, installable) / install
         // blocked → manual hint / Linux AppImage (or any downloaded-but-
         // uninstallable shape) → plain quit-leg text.
         if (updateRestartAvailable(update.phase, installBlockedReason, bridgePlatform)) {
-          // Restart-failure carry (2026-12 review round F2): the restart was
-          // attempted and FAILED (main keeps the phase `downloaded` for
+          // Restart-failure carry: the restart was attempted and FAILED (main keeps the phase `downloaded` for
           // restart-only failures — an 'error' phase would mislabel this as a
           // download failure). Show the restart-specific failure line with the
           // row's「重启并安装」button as the retry affordance (re-enabled by the
@@ -186,11 +183,11 @@ function StatusRow({
               </div>
             )
           }
-          // Restart busy-in-flight (2026-12 review round F9): the click armed
+          // Restart busy-in-flight: the click armed
           // quitAndInstall (ok) or is mid-invoke — show the honest in-progress
           // line instead of the plain downloaded line while the quit window
           // runs (busy stays until the quit — the designed single-flight).
-          // Only a RESTART-owned busy draws this line (round-2 review A4): a
+          // Only a RESTART-owned busy draws this line: a
           // DOWNLOAD-owned busy frame at phase `downloaded` (the click's busy
           // can survive one render past the update-downloaded push) falls
           // through to the plain downloaded row below, with the button still
@@ -207,9 +204,9 @@ function StatusRow({
             )
           }
           // Plain「已下载，退出时安装」row: restart offered (enabled unless
-          // busy). A DOWNLOAD-owned busy frame at this phase (round-2 review
-          // A4) lands here too — the row is correctly labeled, the restart
-          // button just stays disabled until the download's finally settles.
+          // busy). A DOWNLOAD-owned busy frame at this phase lands here too —
+          // the row is correctly labeled, the restart button just stays
+          // disabled until the download's finally settles.
           return (
             <div className={css.updateStatusLine}>
               <span className={css.updateStatusText}>{t('updateDownloaded')}</span>
@@ -233,9 +230,8 @@ function StatusRow({
         // latestVersion null → a CHECK failure (「无法检查更新」); set → a
         // DOWNLOAD failure (「更新下载失败」+ retry, never without a fresh
         // check — updater.ts clears latestVersion on check errors). A RESTART
-        // failure never reaches this case since 2026-12 review round F2: the
-        // main process keeps phase `downloaded` there and rides
-        // restartFailureText (rendered by the downloaded row above).
+        // failure never reaches this case: the main process keeps phase
+        // `downloaded` there and rides restartFailureText (rendered above).
         return latestVersion !== null ? (
           <div className={css.updateStatusLine}>
             <span className={css.updateStatusText}>{t('updateDownloadFailed')}</span>
@@ -263,7 +259,7 @@ function StatusRow({
 /** The update group content (rendered inside the「通用」settings column). */
 export function UpdateSection({ t }: { t: UpdateTranslate }) {
   const update = useSyncExternalStore(subscribeUpdateState, getUpdateState)
-  // Busy is tracked by its SOURCE (round-2 review A4): 'restart' only ever
+  // Busy is tracked by its SOURCE: 'restart' only ever
   // comes from the「重启并安装」action, 'download' from the「更新」action. The
   // downloaded row's「正在重启并安装…」line must show ONLY for a restart-owned
   // busy — a download click's busy can survive one render past the
@@ -290,7 +286,7 @@ export function UpdateSection({ t }: { t: UpdateTranslate }) {
     })
   }, [])
 
-  // S-21: the click emits exactly one bridge invoke (update-store single-flight)
+  // The click emits exactly one bridge invoke (update-store single-flight)
   // and never starts page-side discovery. In the native flavor that invoke is the
   // frozen updateNativeAction kind=check edge; the「正在检查更新…」row and every
   // later row come from the pushed phases the shell reports. The local busy flag
@@ -300,7 +296,7 @@ export function UpdateSection({ t }: { t: UpdateTranslate }) {
     void requestUpdateCheck().finally(() => setChecking(false))
   }, [])
 
-  // Busy recovery (2026-12 review round F2/F5): after an armed restart the
+  // Busy recovery: after an armed restart the
   // local busy state deliberately stays set (the quit window — the store's
   // module single-flight mirrors main and is NOT reset on ok). But when a
   // PUSHED state proves the restart actually failed — it carries

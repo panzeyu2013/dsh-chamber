@@ -1,10 +1,10 @@
 //
 //  BridgeClientEdgeIntegrationTests.swift — B 桥 sidecar 出站 edge/notify 集成
-//  测试（M3：W-13 60 通道无 GUI 全量冒烟 + W-15/16 基础）
+//  测试（60 通道无 GUI 全量冒烟 + Swift 侧 edge 应答）
 //
 //  覆盖对象：BridgeClient.swift 的出站面（design 25 §4.4.2 + sidecar-entry.ts/
-//  node-edges.ts 的 B 桥协议；W-13 台账项——无 GUI 下用真实 sidecar 全量冒烟，
-//  W-15/16——Swift harness 应答 sidecar 的 edge 出站帧，绝不挂起）。
+//  node-edges.ts 的 B 桥协议；无 GUI 下用真实 sidecar 全量冒烟，Swift harness
+//  应答 sidecar 的 edge 出站帧，绝不挂起）。
 //
 //  与既有 BridgeClientStubIntegrationTests（sidecar-stub.ts 桩）的差异：本文件
 //  拉起的 sidecar 是 **packages/desktop/sidecar-entry.ts**——真实 shell-core
@@ -14,9 +14,9 @@
 //  pendingEdges 无超时——Swift 不应答 = sidecar 永久挂起），UI push 面经
 //  **notify 出站帧** {"notify":…}（ready/rendererPush）。本文件验证：
 //    1. 60 通道逐个 invoke 全量冒烟：每通道 ≤5s 应答且 (ok==true) 或
-//       (ok=false 带 error 文案)——绝无挂起（Swift v1 默认 edge 应答策略兜底，
-//       W-15/16）；记录 ok/error 计数与任何超时；G3：不止二值判定——按命名空间
-//       对代表通道断言具体 wire 形状（与 sidecar-stdio.test.ts W-13①③ 同形状），
+//       (ok=false 带 error 文案)——绝无挂起（Swift v1 默认 edge 应答策略兜底）；
+//       记录 ok/error 计数与任何超时；不止二值判定——按命名空间
+//       对代表通道断言具体 wire 形状（与 sidecar-stdio.test.ts 同形状），
 //       「对每个调用都回泛化错误」的通道不能再静默通过；
 //    2. edge 应答的端到端证据：desktop_local_plugin_add_file 通道必然走到
 //       node-edges 的 pickPluginSource edge——默认策略回
@@ -41,9 +41,9 @@
 //      （swift test 的 cwd 是 macos/ 包根，上溯 1 层即仓库根）→ 找不到
 //      XCTSkip。spawn 参数 --user-data-dir <mkdtemp> --port 17920。
 //
-//  60 通道清单（S16a）：直接迭代生成物 BridgeManifest.invokeChannels（由
+//  60 通道清单：直接迭代生成物 BridgeManifest.invokeChannels（由
 //  ipc-events.ts + main 侧注册事实生成；其余 8 个是主进程→渲染器单向 push
-//  通道，不在此列）——不再手工转录静态数组。
+//  通道，不在此列）。
 //
 //  超时纪律：onReady 30s；每通道 invoke 5s（侧car 全量应 <1s，5s 是「永不
 //  达」余量）；事件等待 10s；单用例心智上限 10s 级（60 通道全绿 ~1-3s）。
@@ -74,13 +74,13 @@ final class BridgeClientEdgeIntegrationTests: XCTestCase {
         let environment: [String: String]
     }
 
-    /// Node/sidecar 路径解析，任何一环缺失 → XCTSkip（跳过而非失败）。
+    /// Node/sidecar 路径解析，任何一环缺失 → XCTSkip（跳过而非失败）——本文件解析真入口 packages/desktop/sidecar-entry.ts。
     private func makeLauncher() throws -> Launcher {
         let env = ProcessInfo.processInfo.environment
 
         let nodePath: String
-        // 校验存在性：`DSH_CHAMBER_SHELL_NODE_BIN=node`（字面名而非路径）曾被当成路径直接
-        // spawn，导致 11 例失败而非跳过（2026-09 模块评审 F 注记）。
+        // 校验存在性：`DSH_CHAMBER_SHELL_NODE_BIN=node`（字面名而非路径）不得直接
+        // spawn——否则 11 例失败而非跳过。
         if let configured = env["DSH_CHAMBER_SHELL_NODE_BIN"],
            !configured.isEmpty,
            FileManager.default.isExecutableFile(atPath: configured) {
@@ -102,12 +102,12 @@ final class BridgeClientEdgeIntegrationTests: XCTestCase {
                           + "向上 ≤6 层未找到 \(Self.sidecarRelativePath)；请设置 DSH_CHAMBER_SHELL_SIDECAR")
         }
 
-        // Electron 二进制当 Node 用（AppDelegate.swift:45-52 同规）：basename
+        // Electron 二进制当 Node 用（本文件 = 真入口用例；AppDelegate.swift:45-52 同规）：basename
         // 含 "dsh-chamber" 时必须注入 ELECTRON_RUN_AS_NODE=1，否则启动的是
         // GUI 应用而非 Node。只传增量：BridgeClient.start() 会把本字典合并到
         // 当前进程环境之上（BridgeClient.swift）。
         var childEnvironment: [String: String] = [:]
-        // 关掉 sidecar 的周期更新检查（2026-12 审查 minor）：集成测试 spawn 同一
+        // 关掉 sidecar 的周期更新检查：集成测试 spawn 同一
         // 入口，存活 >15s 的实例会真打 api.github.com（非 hermetic）。dev 态门，
         // 装配态忽略。
         childEnvironment["DSH_SIDECAR_TEST_NO_UPDATE_CHECK"] = "1"
@@ -154,13 +154,13 @@ final class BridgeClientEdgeIntegrationTests: XCTestCase {
                             defaultEdgeResponder: defaultEdgeResponder)
     }
 
-    // MARK: - invoke 通道清单（W-18 生成物单源）
+    // MARK: - invoke 通道清单（生成物单源）
 
     /// `BridgeManifest.invokeChannels`（Generated/
     /// BridgeManifest.swift；由 packages/desktop/scripts/emit-bridge-manifest.mjs
     /// 从 ipc-events.ts + main 侧注册事实生成，bridge-manifest.test.ts 守
-    /// 「重生成 == 提交物」）。S16a：此前是手工转录的 80 行静态数组——本测试
-    /// 改为直接迭代生成物，通道增删不可能再与测试清单漂移。
+    /// 「重生成 == 提交物」）。本测试直接迭代生成物，
+    /// 通道增删不可能再与测试清单漂移。
     ///
     /// 顺序（成员仍单源 manifest，仅迭代次序是测试关切）：轻通道
     /// （dsh-chamber:*：设置/更新/通知/open-in/deep-link——update-check 是真实
@@ -190,7 +190,7 @@ final class BridgeClientEdgeIntegrationTests: XCTestCase {
             return .object(["payload": .object([:])])
         case "desktop_ssh_connect", "desktop_ssh_disconnect", "desktop_ssh_status":
             // 真入口契约 = {id}（shell-core.ts 的 SSH_* 注册体解构 id；instanceId
-            // 是 sidecar-stub 桩的旧形状）。G3 起代表通道按真实契约给载荷。
+            // 是 sidecar-stub 桩的形状）。代表通道按真实契约给载荷。
             return .object(["id": .string("local")])
         case "desktop_gateway_set_token", "desktop_gateway_plugin_sync":
             // gateway 面的代表通道同样以 {id} 取实例（缺 payload 会得到
@@ -199,7 +199,7 @@ final class BridgeClientEdgeIntegrationTests: XCTestCase {
             return .object(["id": .string("local")])
         case "desktop_npm_search":
             // 空 query → 确定性 {ok:false,error:"empty search query"}（绝不发
-            // 真实 registry 网络请求；G3 形状锚点）。
+            // 真实 registry 网络请求；形状锚点）。
             return .object(["query": .string("")])
         default:
             return nil
@@ -351,7 +351,7 @@ final class BridgeClientEdgeIntegrationTests: XCTestCase {
         var errorCount = 0
         var anomalies: [String] = []
         var byChannel: [String: String] = [:]
-        /// 成功通道的原始结果（G3：代表通道形状断言；错误通道的文案在 byChannel）。
+        /// 成功通道的原始结果（代表通道形状断言；错误通道的文案在 byChannel）。
         var results: [String: AnyCodable] = [:]
         /// 非 nil = 第 timedOut.index 个通道超时/桥失活，循环已中止。
         var timedOut: (channel: String, index: Int)?
@@ -367,7 +367,7 @@ final class BridgeClientEdgeIntegrationTests: XCTestCase {
 
     /// 逐通道 invoke 超时：两个通道做真实的秒级工作——update-check 是真实网络
     /// 探测（上游 releases/registry 查询），网络抖动下可能 >5s；runtime-restart
-    /// 会停掉并重启一个**真实的本地 dsh 宿主**（2026-09 实测冷启动 2–10s，套件里
+    /// 会停掉并重启一个**真实的本地 dsh 宿主**（实测冷启动 2–10s，套件里
     /// 前序用例留下的宿主还要先停），5s 紧界会在本机稳定误判为挂起——两者各给
     /// 20s 余量；其余 58 通道保持 5s 紧界（挂起判定不被稀释）。
     private static func invokeTimeout(for channel: String) -> TimeInterval {
@@ -406,10 +406,10 @@ final class BridgeClientEdgeIntegrationTests: XCTestCase {
         return report
     }
 
-    /// G3（2026-12 审计）：60 通道冒烟此前只有「ok 或任意非空业务错误」的二值
-    /// 判定（一个对每个调用都回泛化错误的通道照样全绿，全文仅对 1 条文案下
-    /// 断言）。本助手按命名空间对代表通道断言具体 wire 形状——形状集与
-    /// sidecar-stdio.test.ts W-13①③ 逐条对应；形状漂移即失败。
+    /// 60 通道冒烟必须不止「ok 或任意非空业务错误」的二值
+    /// 判定（一个对每个调用都回泛化错误的通道会照样全绿）。本助手按命名空间
+    /// 对代表通道断言具体 wire 形状——形状集与
+    /// sidecar-stdio.test.ts 逐条对应；形状漂移即失败。
     private func assertRepresentativeShapes(_ bridge: BridgeClient,
                                             report: SmokeReport,
                                             file: StaticString = #filePath,
@@ -445,7 +445,7 @@ final class BridgeClientEdgeIntegrationTests: XCTestCase {
             return false
         }
 
-        // —— dsh-chamber:info（sidecar-stdio W-13①）——
+        // —— dsh-chamber:info ——
         if let info = object("dsh-chamber:info") {
             if let url = string(info["controlPlaneUrl"], "dsh-chamber:info", "controlPlaneUrl") {
                 XCTAssertTrue(url.hasPrefix("http"),
@@ -456,7 +456,7 @@ final class BridgeClientEdgeIntegrationTests: XCTestCase {
             _ = string(info["version"], "dsh-chamber:info", "version")
         }
 
-        // —— dsh-chamber:settings-get / runtime-state / update-state（W-13③）——
+        // —— dsh-chamber:settings-get / runtime-state / update-state ——
         if let settings = object("dsh-chamber:settings-get") {
             XCTAssertTrue(isObject(settings["settings"]),
                           "settings-get 应返回 {settings,supported}，settings 实际："
@@ -503,7 +503,7 @@ final class BridgeClientEdgeIntegrationTests: XCTestCase {
             XCTFail("desktop_ssh_status 应成功应答，实际："
                     + "\(report.byChannel["desktop_ssh_status"] ?? "<未执行>")", file: file, line: line)
         }
-        // 缺载荷必须 loud（W-13③ 同一条）：类型错误也必须经 ok=false 业务拒绝
+        // 缺载荷必须 loud：类型错误也必须经 ok=false 业务拒绝
         // 回来，绝无静默空成功。
         let missingPayload = await invokeWithTimeout(bridge, method: "desktop_ssh_status", payload: nil)
         switch missingPayload {
@@ -552,7 +552,7 @@ final class BridgeClientEdgeIntegrationTests: XCTestCase {
 
     // MARK: - 用例
 
-    /// W-13 全量冒烟 + W-15/16 默认 edge 应答：60 通道逐个 invoke，每通道 ≤5s
+    /// 全量冒烟 + 默认 edge 应答：60 通道逐个 invoke，每通道 ≤5s
     /// 应答、ok 或带文案 loud 错误（无头 ctx 下未实现字段 loud 抛
     /// 'sidecar-ctx-unavailable:*'——绝大多数通道预期 loud 错误，绝无挂起）。
     /// Swift 侧用构造默认装入的 v1 默认应答器应答 sidecar 的一切 edge 出站帧。
@@ -588,10 +588,10 @@ final class BridgeClientEdgeIntegrationTests: XCTestCase {
         XCTAssertEqual(report.okCount + report.errorCount, channels.count, report.summary)
         XCTAssertEqual(report.anomalies, [], "\(report.summary)；异常：\(report.anomalies)")
 
-        // G3：代表通道的具体 wire 形状（每个命名空间至少一条）。
+        // 代表通道的具体 wire 形状（每个命名空间至少一条）。
         await assertRepresentativeShapes(bridge, report: report)
 
-        // W-15/16 默认 edge 应答的端到端证据：LOCAL_PLUGIN_ADD_FILE 处理器在
+        // 默认 edge 应答的端到端证据：LOCAL_PLUGIN_ADD_FILE 处理器在
         // 任何 ctx stub 之前先经 node-edges 发 pickPluginSource edge 并 await
         // ——Swift 默认策略回 {ok:false,error:"swift-edge-unimplemented:
         // pickPluginSource"}，node-edges 抛错 → sidecar 回 loud 错误帧，文案
@@ -605,7 +605,7 @@ final class BridgeClientEdgeIntegrationTests: XCTestCase {
                       "settings-set 应触发 rendererPush notify（记录：\(notifyRecorder.entries)）")
     }
 
-    /// W-15/16 自定义 edge 应答器：覆盖 pickPluginSource（回 {status:'cancelled'}）
+    /// 自定义 edge 应答器：覆盖 pickPluginSource（回 {status:'cancelled'}）
     /// 的宿主腿形态 + 未处理 edge 回落 defaultEdgeResponse（两路都不挂起）。
     /// 同一通道 desktop_local_plugin_add_file 在自定义下应变成 ok/cancelled:true
     /// （对照默认策略用例的 loud 拒绝）；纯回落应答器下应与默认逐字等价。
@@ -621,7 +621,7 @@ final class BridgeClientEdgeIntegrationTests: XCTestCase {
             edgeRecorder.record(method)
             guard let bridge else { return }
             if method == "pickPluginSource" {
-                // 自定义宿主腿：取消插件源选择（M3 真实实现以 NSAlert/NSPanel
+                // 自定义宿主腿：取消插件源选择（真实实现以 NSAlert/NSPanel
                 // 形态落地后替换本分支）。
                 reply(.object(["status": .string("cancelled")]), nil)
                 return
@@ -656,7 +656,7 @@ final class BridgeClientEdgeIntegrationTests: XCTestCase {
         XCTAssertEqual(report.okCount + report.errorCount, Self.invokeChannels.count, report.summary)
         XCTAssertEqual(report.anomalies, [], "\(report.summary)；异常：\(report.anomalies)")
 
-        // G3：自定义应答器下代表通道形状与默认路径一致（边腿差异已单独断言）。
+        // 自定义应答器下代表通道形状与默认路径一致（边腿差异已单独断言）。
         await assertRepresentativeShapes(bridge, report: report)
 
         // —— spawn 2：纯回落应答器（每个方法都经 defaultEdgeResponse）——
@@ -681,7 +681,7 @@ final class BridgeClientEdgeIntegrationTests: XCTestCase {
         }
     }
 
-    /// W-13 反向验证 + SIGTERM 优雅退出：settings-set（合法最小 patch）→
+    /// 反向验证 + SIGTERM 优雅退出：settings-set（合法最小 patch）→
     /// onNotify 收到 rendererPush（channel 'dsh-chamber:settings-changed'，
     /// payload 带 patch 后设置值）；随后 SIGTERM 优雅退出断言 exit 0
     /// （沿用现测试收尾模式 + BridgeClient.lastTerminationStatus）。

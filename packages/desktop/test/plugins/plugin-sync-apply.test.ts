@@ -3,7 +3,7 @@
  * scopeExecToOwnership, runWithFinalOwnership, ReadyPhaseEdges), applyPlugins
  * (whitelist, remove-before-add, single-flight, failure isolation, restart/verify),
  * materializeAndAdd / materializeArchiveAndAdd and the local writer reaper.
- * Sibling part: plugin-sync.test.ts (round-2 trim keeps this write-face suite).
+ * Sibling part: plugin-sync.test.ts.
  */
 
 import { test } from 'node:test'
@@ -364,11 +364,11 @@ test('applyPlugins: a non-ENOENT journal snapshot failure refuses the whole batc
     assert.match(result.error, /pre-change journal snapshot could not be read/)
     assert.match(result.error, /Connection reset by peer/, 'the sanitized cause is reported, not a bare default')
   }
-  // The defect (P0-2): the row used to execute and be recorded with
-  // specBefore null, so undoing it removed a plugin that was upgraded in
-  // place. Nothing may run, and no op may be recorded — an empty journal makes
-  // latestOkForTarget return null, so the undo IPC answers "no recent plugin
-  // change to undo" instead of issuing a remove.
+  // A row with `specBefore` null would execute and be recorded, so undoing it
+  // would remove a plugin that was upgraded in place. Nothing may run, and no
+  // op may be recorded — an empty journal makes latestOkForTarget return null,
+  // so the undo IPC answers "no recent plugin change to undo" instead of
+  // issuing a remove.
   assert.deepEqual(order, ['cat:snapshot'], 'no remote change may follow the failed snapshot read')
   assert.deepEqual(recorded, [], 'no journal op may be recorded without a trustworthy pre-change spec')
 })
@@ -690,8 +690,7 @@ test('materializeArchiveAndAdd: protected / unpinned-official / malformed names 
   const exec: ExecFn = async () => err('unexpected exec — a refused archive must not touch the remote')
   const bytes = Buffer.from([0x1f, 0x8b, 0x08])
   // A chamber SEED name is protected; a non-seed `@dsh-chamber/*` name is NOT
-  // (the domain-prefix rule is retired — S is the fact) but still needs a
-  // well-formed shape.
+  // (the protected seed set is the fact) but still needs a well-formed shape.
   for (const name of ['@dsh-chamber/dsh-chamber-seed-client-graph', 'bad name!', '']) {
     const result = await materializeArchiveAndAdd(exec, SEED_SPEC, { name, bytes })
     assert.equal(result.ok, false, name)

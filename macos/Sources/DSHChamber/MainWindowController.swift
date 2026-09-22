@@ -1,6 +1,6 @@
 //  MainWindowController.swift —— 主窗口：WKWebView 加载控制面 + A 桥接线
-//  DSHChamber（macos/ SwiftPM POC 壳）：W-03（design 25 §8.1）；
-//  本文件持有 W-04 契约的接线点（ChamberMessageHandler / BridgeShimInjector
+//  DSHChamber（macos/ SwiftPM POC 壳）：design 25 §8.1；
+//  本文件持有 A/B 桥契约的接线点（ChamberMessageHandler / BridgeShimInjector
 //  为 MessageHandler.swift / BridgeShimInjector.swift 中他人实现，见共享契约）
 //
 //  职责：WKWebView 加载控制面 origin 的壳文档（根路径）；把 bridge-shim.js
@@ -10,18 +10,18 @@
 //  导航护栏：仅放行**壳文档**（origin 相等 + pathname=/ + 无 query，与 Electron
 //  isTrustedRendererUrl 对齐）——同源非壳文档（/api/i/* 代理 HTML）一律取消，
 //  其余交给系统打开或一律取消。
-//  hostFacts 推送（S-A）：本控制器是窗口/聚焦/加载事实的唯一事实源——
+//  hostFacts 推送：本控制器是窗口/聚焦/加载事实的唯一事实源——
 //  窗口 key/关闭通知与 WKNavigationDelegate 生命周期回调经
 //  pushHostFacts 以 __host.hostFacts 推送 sidecar（node-edges.ts 同步门
 //  缓存 focused/mainWindowAlive/webViewLoading/webViewContentAlive 刷新，
 //  见本文件 hostFacts 段注释），使通知裁决等同步门与 Electron 侧行为一致。
-//  notify 消费路由（S-D）：sidecar 出站 notify 帧（node-edges sendNotify 族
+//  notify 消费路由：sidecar 出站 notify 帧（node-edges sendNotify 族
 //  ——rendererPush/setBadge/showItemInFolder/retireNotifications）经
 //  BridgeClient.onNotify 到本控制器的 notify 路由：rendererPush 解包进页面
 //  emit（Electron webContents.send 同语义），setBadge/showItemInFolder 走
 //  SwiftEdgeHostLegs 原生腿（守卫同 edge 面、失败 loud），retireNotifications
 //  按 NotificationDeliveryRegistry 的 sourceId→identifier 登记表调
-//  UNUserNotificationCenter.removeDeliveredNotifications（S8），
+//  UNUserNotificationCenter.removeDeliveredNotifications，
 //  notifyClicked/未知事件 loud 不处理——路由决策表见文件底部
 //  decodeNotify/NotifyRoute（纯逻辑，单测直测）。
 import AppKit
@@ -38,26 +38,25 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     private static let bridgeMessageName = "dshChamber"
     /// POC dev 控制台回传通道名（页面脚本约定；见 setupWindow 注入）
     private static let consoleMessageName = "shellConsole"
-    /// A 桥 shim 资源文件名（Resources/ 下，W-04 作者创建，本文件只读取）。
-    /// P-18 起可见性放开到 internal：AppDelegate 启动门与单测引用同一拼写。
+    /// A 桥 shim 资源文件名（Resources/ 下，本文件只读取）。
+    /// 可见性为 internal：AppDelegate 启动门与单测引用同一拼写。
     static let shimResourceName = "bridge-shim.js"
 
-    /// 本次窗口的原生通道令牌（S-06）：注入时写进 shim，回执/推送时作为首参
+    /// 本次窗口的原生通道令牌：注入时写进 shim，回执/推送时作为首参
     /// 回传；页面脚本无从得知（内部管路不在公开面上）。
     private let nativeChannelToken = BridgeShimInjector.makeNativeToken()
 
     /// 令牌的 JS 字符串字面量（十六进制，无需转义）。令牌 init 后不变，用
     /// lazy 缓存（每个 invoke/emit 少一次字符串插值分配；访问恒在主线程）。
     private lazy var nativeTokenLiteral: String = "\"\(nativeChannelToken)\""
-    /// 可 invoke 的 method 白名单：W-04 是最小 7 通道集；W-18 manifest 化后
-    /// 扩为 BridgeManifest.invokeChannels 全集（60/60 真实现都在 sidecar 侧，
-    /// 语义权威与护栏仍在 sidecar/TrustGuard——readiness/badge 等通道不再
-    /// 被 POC 层误拒成 poc-unimplemented）。与桥 shim 暴露面一致性问题：shim
-    /// 只暴露其脚本内实现的方法，未暴露方法在页面层即 stub——两处均以
-    /// manifest 为准的演进是 M3 全量 shim（chamber-bridge.stub.js）的活。
+    /// 可 invoke 的 method 白名单 = BridgeManifest.invokeChannels 全集
+    /// （60/60 真实现都在 sidecar 侧，语义权威与护栏仍在 sidecar/TrustGuard；
+    /// readiness/badge 等通道不被 POC 层拒绝）。与桥 shim 暴露面一致性问题：shim
+    /// 只暴露其脚本内实现的方法，未暴露方法在页面层即 stub——两处均以 manifest
+    /// 为准，全量 shim（chamber-bridge.stub.js）由生成物承载。
     private static let invokeWhitelist: Set<String> = BridgeManifest.invokeChannels
     /// 窗口默认内容尺寸。
-    /// 双 flavor 几何折中（2026-09）：这里的尺寸是**内容区**尺寸
+    /// 双 flavor 几何折中：这里的尺寸是**内容区**尺寸
     /// （NSWindow(contentRect:) + contentView = webView），而 Electron 侧
     /// BrowserWindow 的 1280x800 是**窗口外框**（main.ts 未设 useContentSize；
     /// Electron 43 只在 use_content_size 为真时才 SetContentSize），其 web 视口
@@ -70,13 +69,13 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     /// （deviation T-18），不随本值收敛。
     private static let windowSize = NSSize(width: 1280, height: 786)
 
-    /// 原生壳**可见**产品名（T-1：暂时把 native 标记为 dsh-chamber）：
+    /// 原生壳**可见**产品名（dsh-chamber）：
     /// 窗口标题 / 失败说明页 / fatal 提示框共用。不可见名（SwiftPM target/module =
     /// DSHChamber、资源名 bridge-shim.js）保持 DSHChamber 不变；bundle 内可执行名
     /// 与本值同源（dsh-chamber，见 Info.plist.template 与 build-swift-app.mjs 的 EXECUTABLE_NAME）。
     static let displayName = "dsh-chamber"
 
-    /// 首帧/重载底色（T-4）：与 Electron backgroundColor:#0f1115、前端
+    /// 首帧/重载底色：与 Electron backgroundColor:#0f1115、前端
     /// packages/renderer/index.html 骨架底色同一 token 值
     /// #0f1115 = rgb(15, 17, 21)。WKWebView 缺省白底在首帧/重载时会白闪。
     static let backgroundRed: CGFloat = 15.0 / 255.0
@@ -87,12 +86,12 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
                 blue: backgroundBlue, alpha: 1)
     }
 
-    /// 主题化"露底"色（W4a，2026-12；F1 修正）：**无 last-known 事实时**首帧用
+    /// 主题化"露底"色：**无 last-known 事实时**首帧用
     /// 骨架常量——页面自身骨架恒为 #0f1115 且与主题无关（packages/renderer/index.html
     /// 明示「不跟随 prefers-color-scheme：dsh 主题按实例投影、骨架期不可知」），
     /// 此时跟着骨架走才不会反向闪色；**已有 last-known 事实（第二次启动起）**则建窗
     /// 即收敛到页面主题色（见 setupWindow 的 reconcileThemedBackground），否则 ingest
-    /// 对同值事实早退，浅色页面会整场会话露深色底（F1 真 bug）。页面事实到达后按页面
+    /// 对同值事实早退，浅色页面会整场会话露深色底。页面事实到达后按页面
     /// 主题换色，缩放/全屏/重载的露底就与页面一致（两个方向都不闪）。
     /// nil（无事实）→ 骨架常量；dark → 骨架常量；light → dsh 浅色内容底（白）。
     static func themedBackgroundColor(pageIsDark: Bool?) -> NSColor {
@@ -100,7 +99,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         return .white
     }
 
-    /// W2（2026-12 三轮独立复核）：透明露底 KVC 结果的诊断行（纯函数，单测直测）。
+    /// 透明露底 KVC 结果的诊断行（纯函数，单测直测）。
     /// drawsBackground 是私有键（公开面只有 underPageBackgroundColor）——包装返回
     /// Unavailable 时保持 WebKit 默认、只靠公开露底色，日志必须能区分三种结果；任何
     /// 分支都只记日志，绝不让进程退出。
@@ -127,22 +126,22 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     /// 重载已排定（防同一崩溃回调重入排定）。
     private var recoveryReloadWorkItem: DispatchWorkItem?
     /// 退出中/已开始清理 → 抑制渲染恢复（Electron `reload()` 的 `quitRequested`
-    /// 早退；2026-09 三审 E19 偏离 #3）。
+    /// 早退）。
     private var recoverySuppressed = false
-    /// B5：give-up 的**一次性闸门**。放弃是「这一轮恢复结束」的判断，不是「每次崩溃都
-    /// 通报一次」的事件——旧接线在 give-up 之后每次崩溃都再弹一次模态框。首弹后只写日志，
+    /// give-up 的**一次性闸门**。放弃是「这一轮恢复结束」的判断，不是「每次崩溃都
+    /// 通报一次」的事件——若每次崩溃都通报，give-up 之后会反复弹模态框。首弹后只写日志，
     /// 直到一次**真正成功的加载**（`didFinish`）把它复位，闸门才重新武装。
     private var recoveryGaveUp = false
-    /// 崩溃归因（2026-09 崩溃归因轮）：上次「加载完成」时刻、本次加载窗口内的
-    /// 崩溃次数、以及当前这次加载是否由崩溃恢复触发。证据显示崩溃集中在加载完成后
-    /// 20–34s，而 10 次崩溃里只有 2 次留下 shell 侧痕迹——没有这三个量就无法把
+    /// 崩溃归因：上次「加载完成」时刻、本次加载窗口内的崩溃次数、以及当前这次
+    /// 加载是否由崩溃恢复触发。崩溃集中在加载完成后 20–34s 且大多不留 shell 侧
+    /// 痕迹——没有这三个量就无法把
     /// "应用自己回到载入历史"归因到渲染进程重启。
     private var lastLoadFinishedAt: Date?
     private var crashesSinceLoad = 0
     private var recoveringFromCrash = false
     private var lastCrashAt: Date?
 
-    /// S-02 卡死自愈：空闲 ping 判定器 + 定时器 + 键鼠监听。
+    /// 卡死自愈：空闲 ping 判定器 + 定时器 + 键鼠监听。
     private var hangWatchdog = RendererHangWatchdog(now: Date())
     private var hangProbeTimer: Timer?
     private var userInputMonitor: Any?
@@ -153,14 +152,14 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
 
     private let bridge: BridgeClient
     private let cpURL: URL
-    /// A 桥 shim 源码（P-18：AppDelegate 启动门已 fail-closed 判定非空，
+    /// A 桥 shim 源码（AppDelegate 启动门已 fail-closed 判定非空，
     /// setupWindow 只负责注入）。
     private let shimSource: String
     /// 控制面 origin（scheme://host:port），导航放行与消息护栏共用
     private let cpOrigin: String
     /// sidecar ready 帧已到（A 桥 origin 门在此之前一律拒绝）。
     private var sidecarReady = false
-    /// 退出清理已开始（S7：A 桥 app_quitting 门；AppDelegate
+    /// 退出清理已开始（A 桥 app_quitting 门；AppDelegate
     /// beginTerminationCleanup 置位）。置位后全部 invoke 回 app_quitting。
     private var quitting = false
     /// 外链打开预算（镜像 shell-core openExternally：10s/8 次 + 30s 冷却）。
@@ -170,7 +169,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     private var bridgeHandler: ChamberMessageHandler!
     /// 关窗决策委托（AppDelegate；见 windowShouldClose）。
     weak var closeDelegate: MainWindowCloseDeciding?
-    /// 宿主设置变化回调（2026-12 审查 major）：关窗决策会缓存 quitFacts，设置页改
+    /// 宿主设置变化回调：关窗决策会缓存 quitFacts，设置页改
     /// 「关闭窗口行为」后必须让缓存失效，否则首次关窗仍按旧值决策。
     var onSettingsChanged: (() -> Void)?
 
@@ -179,7 +178,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     /// last-known 页面事实（language/dark/revision；init 时从 UserDefaults 恢复）。
     private let pageFactsStore = ShellPageFactsStore(defaults: .standard)
     /// 露底色当前已应用的页面暗色事实（nil = 尚未按事实着色，仍是骨架常量）。
-    /// 主线程独占；只由 reconcileThemedBackground 写（F1 幂等对账的状态）。
+    /// 主线程独占；只由 reconcileThemedBackground 写（幂等对账的状态）。
     private var appliedPageIsDark: Bool?
     /// 页面事实变化接收方（AppDelegate 注册；nil = 当前无人消费）。
     var pageFactsSink: ShellPageFactsSink?
@@ -188,37 +187,37 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     private var pageFactsHandler: ShellPageFactsMessageHandler?
     private var consoleCatcher: ShellConsoleCatcher?
     private var didSnapshot = false
-    /// 在途下载占用的目标路径（S-26 静默落盘：WebKit 要求目标文件在决策时
+    /// 在途下载占用的目标路径（静默落盘：WebKit 要求目标文件在决策时
     /// 不存在，同一批并发下载因此必须相互避让；完成/失败即释放）。
     private var reservedDownloadPaths: Set<String> = []
     private var downloadDestinations: [ObjectIdentifier: String] = [:]
     private var navRetries = 0
     private var didStartLoading = false
-    /// 首载失败退避重试的挂起调度（T-2：sidecar fatal / 退出 / 成功时取消）。
+    /// 首载失败退避重试的挂起调度（sidecar fatal / 退出 / 成功时取消）。
     private var navRetryWorkItem: DispatchWorkItem?
-    /// sidecar 启动失败的真实原因（T-3：supervisor fatal 时经
+    /// sidecar 启动失败的真实原因（supervisor fatal 时经
     /// noteStartupFailure 注入；失败页与日志共用，绝不只剩 WebKit 的 ATS 文案）。
     private var startupFailureMessage: String?
-    /// hostFacts 推送簿记（S-A）：已推送（含推送意图）事实，键 → 布尔。
+    /// hostFacts 推送簿记：已推送（含推送意图）事实，键 → 布尔。
     /// 仅主线程读写：全部推送调用点都是主线程回调（AppKit 窗口通知 /
     /// WKNavigationDelegate），簿记在事件回调内同步完成（去重判断与推送
     /// 顺序因此与事件顺序一致，见 pushHostFacts 注释）。
     private var lastHostFacts: [String: Bool] = [:]
-    /// S-48：关偏好后的实际状态（建 configuration 时确定，此后不变）。
+    /// 关偏好后的实际状态（建 configuration 时确定，此后不变）。
     private var refreshRatePreference: RefreshRatePreference = .unknown
-    /// S-48：最近一次刷新率对照日志的**整行文本**（startupLogLine 是纯函数，行相等 ⟺ 全部事实
+    /// 最近一次刷新率对照日志的**整行文本**（startupLogLine 是纯函数，行相等 ⟺ 全部事实
     /// 相等，所以整行去重天然覆盖新增事实字段）。
     private var lastRefreshRateLogLine: String?
 
-    /// S-42：启动呈现门——首个可呈现内容（didCommit）才允许亮出启动主窗，且只
-    /// 触发一次（后续重载/重试/失败页后的再次导航不再重复呈现）。同一状态机承载
-    /// S-27 失败说明页的一次性 about: 导航豁免（见 StartupPresentationGate）。
+    /// 启动呈现门——首个可呈现内容（didCommit）才允许亮出启动主窗，且只触发一次
+    /// （后续重载/重试/失败页后的再次导航不重复呈现）。同一状态机承载失败说明页的
+    /// 一次性 about: 导航豁免（见 StartupPresentationGate）。
     private var presentationGate = StartupPresentationGate()
-    /// S-42：首个可呈现内容到达回调（AppDelegate 装配期接线 → makeKeyAndOrderFront；
+    /// 首个可呈现内容到达回调（AppDelegate 装配期接线 → makeKeyAndOrderFront；
     /// 见 didCommit 与 AppDelegate.presentMainWindow）。窗口在此之前保持隐藏，
     /// 绝不先亮出无内容空窗。
     var onFirstCommittedContent: (() -> Void)?
-    /// 文件选择面板呈现器（S-25：composer 回形针）。测试经此 seam 注入假体，
+    /// 文件选择面板呈现器（composer 回形针）。测试经此 seam 注入假体，
     /// 不需要真实 NSOpenPanel / WKOpenPanelParameters 实例（后者无公开构造器）。
     var fileOpenPanelPresenter: FileOpenPanelPresenting = SystemFileOpenPanelPresenter()
 
@@ -226,9 +225,9 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
 
     /// - Parameters:
     ///   - cpURL: 控制面 URL（AppDelegate 解析自 DSH_CHAMBER_SHELL_CP_URL；缺省 dev
-    ///     127.0.0.1:17520 / 打包 localhost:17500，S-45）
-    ///   - bridge: B 桥客户端（BridgeClient.swift，W-04 契约）
-    ///   - shimSource: A 桥 shim 源码（P-18：调用方先经
+    ///     127.0.0.1:17520 / 打包 localhost:17500）
+    ///   - bridge: B 桥客户端（BridgeClient.swift）
+    ///   - shimSource: A 桥 shim 源码（调用方先经
     ///     `shimStartupFailure(source:)` fail-closed 判定，缺失绝不开窗）
     init(cpURL: URL, bridge: BridgeClient, shimSource: String) {
         self.cpURL = cpURL
@@ -265,7 +264,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     private func setupWindow() {
         let configuration = WKWebViewConfiguration()
 
-        // S-48（2026-12 实机裁决，design 25 §5.1）：ProMotion 120Hz。WKWebView 默认把页面渲染更新
+        // ProMotion 120Hz（design 25 §5.1）：WKWebView 默认把页面渲染更新
         // 压到「靠近 60fps」（PreferPageRenderingUpdatesNear60FPSEnabled 缺省 true；只在
         // nominal > 60 且整数商 > 1 时才有影响——61–119Hz 屏本就不受限），低电量模式下 WebKit
         // 再把帧间隔 ×2（→30fps）。**必须在下面 WKWebView(frame:configuration:) 之前关掉该偏好**：
@@ -279,18 +278,18 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         // 所在屏（SDK 只承诺 mainScreen = 有 key window 的屏）。统一由
         // logRefreshRateIfChanged() 在建窗后发出，并在换屏/低电量切换时按值补记。
 
-        // A 桥 shim 注入（W-04：BridgeShimInjector.install 负责落 WKUserScript）。
-        // P-18：资源缺失/为空已在 AppDelegate 启动门 fail-closed（可见错误 +
-        // exit(1)，对齐 Electron showErrorBox + app.exit），这里不再有
+        // A 桥 shim 注入（BridgeShimInjector.install 负责落 WKUserScript）。
+        // 资源缺失/为空已在 AppDelegate 启动门 fail-closed（可见错误 +
+        // exit(1)，对齐 Electron showErrorBox + app.exit），这里没有
         // 「警告后照常开窗」的 fail-open 分支。
-        // S-06：注入前把占位符换成窗口随机令牌（内部管路 resolve/emit/
-        // rehydrate 都要带对令牌才生效）；P-19：install 幂等。
+        // 注入前把占位符换成窗口随机令牌（内部管路 resolve/emit/
+        // rehydrate 都要带对令牌才生效）；install 幂等。
         BridgeShimInjector.install(
             config: configuration,
             source: BridgeShimInjector.injectNativeToken(nativeChannelToken, into: shimSource))
         shellLog("[shell] A 桥 shim 注入完成（\(Self.shimResourceName)）")
 
-        // 视口越界策略（2026-12）：关闭 macOS WebKit 的根级弹性回弹——指针停在
+        // 视口越界策略：关闭 macOS WebKit 的根级弹性回弹——指针停在
         // 不可滚动 chrome（顶栏/侧栏头部）上滚动、或滚动器滚到端点后继续滚时，
         // 整页（含 position: fixed 层）会被整体平移再弹回。按 CSS Overscroll
         // Behavior 规范，视口越界效果由根元素的 overscroll-behavior 决定，故由
@@ -300,7 +299,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         ShellOverscrollPolicy.install(config: configuration)
         shellLog("[shell] 视口越界策略注入完成（\(ShellOverscrollPolicy.rootOverscrollCSS)）")
 
-        // 页面事实载波（本地化/主题跟随，S1）：documentStart、仅主 frame、
+        // 页面事实载波（本地化/主题跟随）：documentStart、仅主 frame、
         // page world 注入 MutationObserver（html[lang]/内联 color-scheme、
         // body[data-ds-dark-theme]、meta[theme-color]），并注册独立消息通道。
         // 与 shim/overscroll 同段：必须在 WKWebView 构造前注册。
@@ -316,17 +315,17 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         ))
         shellLog("[shell] 页面事实载波注入完成（\(ShellPageFactsScript.messageName)）")
 
-        // 消息通道：ChamberMessageHandler 只做护栏与转发（W-04 实现）
+        // 消息通道：ChamberMessageHandler 只做护栏与转发
         let handler = ChamberMessageHandler(
             whitelist: Self.invokeWhitelist,
             // ready 帧前 expectedOrigin = nil → 一律拒绝（design 25 §4.4.1
-            // 第 2 条「port 只在 ready 帧后放开」；2026-09 模块评审 minor）。
+            // 第 2 条「port 只在 ready 帧后放开」）。
             expectedOrigin: { [weak self] in
                 guard let self, self.sidecarReady else { return nil }
                 return self.cpOrigin
             },
-            // S7：退出清理开始后 late invoke 回 app_quitting（renderer-trust
-            // createTrustedIpc 同码），不再向 shutdown 注入传输/运行时工作。
+            // 退出清理开始后 late invoke 回 app_quitting（renderer-trust
+            // createTrustedIpc 同码），不向 shutdown 注入传输/运行时工作。
             isQuitting: { [weak self] in self?.quitting ?? false },
             onInvoke: { [weak self] id, method, payload in
                 self?.handleInvoke(id: id, method: method, payload: payload)
@@ -335,12 +334,12 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         handler.evaluateJavaScript = { [weak self] script in
             self?.evaluateJS(script)
         }
-        // S-06：护栏回执也要带原生通道令牌（与注入 shim 的同一个值）。
+        // 护栏回执也要带原生通道令牌（与注入 shim 的同一个值）。
         handler.nativeChannelToken = nativeChannelToken
         bridgeHandler = handler
         configuration.userContentController.add(handler, name: Self.bridgeMessageName)
 
-        // POC dev 调试（白屏诊断；S14：仅在 DSH_CHAMBER_SHELL_DEBUG=1 时安装——默认关闭，
+        // POC dev 调试（白屏诊断；仅在 DSH_CHAMBER_SHELL_DEBUG=1 时安装——默认关闭，
         // 发布壳不转发渲染器每一行 console）：页面 JS onerror/
         // unhandledrejection/console.* 经 shellConsole 通道回传 → [shell-web] 打印。
         if ShellDebug.isEnabledCached {
@@ -371,9 +370,9 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
                 injectionTime: .atDocumentStart,
                 forMainFrameOnly: true
             ))
-            // S-48：DSH_CHAMBER_SHELL_DEBUG 下的帧率观测——rAF 每 2s 回传一行 [shell-fps]，
+            // DSH_CHAMBER_SHELL_DEBUG 下的帧率观测——rAF 每 2s 回传一行 [shell-fps]，
             // 走既有 shellConsole 通道（[shell-web] 打印）。只活在调试面：
-            // 缺省/DSH_CHAMBER_SHELL_DEBUG=0/打包态都不注入（S14/T-11）。
+            // 缺省/DSH_CHAMBER_SHELL_DEBUG=0/打包态都不注入。
             let fpsSource = """
             (function () {
               var count = 0, mark = -1, last = 0;
@@ -408,15 +407,15 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
             shellLog("[shell] DSH_CHAMBER_SHELL_DEBUG=1：已安装 shellConsole 回传（\(Self.consoleMessageName)）+ 帧率观测")
         }
 
-        // S-02：渲染器卡死自愈（空闲 ping + 有界重载）。
+        // 渲染器卡死自愈（空闲 ping + 有界重载）。
         startHangWatchdog()
 
-        // S-D：sidecar 出站 **notify 帧**（{"notify":event,"payload":…}——
+        // sidecar 出站 **notify 帧**（{"notify":event,"payload":…}——
         // node-edges 的 sendNotify 族：rendererPush/setBadge/
         // showItemInFolder/retireNotifications）→ 本控制器 notify 路由消费。
         // event 帧族（BridgeClient.onEvent）已无生产接线（sidecar-entry 只发
-        // notify；W-05 桩 fixture 仅供 BridgeClientStubIntegrationTests），页面下行
-        // 唯一入口 = 本 onNotify 路由（W-04 双写纪律「乙」）。
+        // notify；桩 fixture 仅供 BridgeClientStubIntegrationTests），页面下行
+        // 唯一入口 = 本 onNotify 路由（双写纪律「乙」）。
         // 线程契约：管道读取线程回调，消费在 routeNotify 内收敛主线程。
         bridge.onNotify = { [weak self] event, payload in
             self?.routeNotify(event: event, payload: payload)
@@ -427,7 +426,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
                                 configuration: configuration)
         webView.navigationDelegate = self
         webView.uiDelegate = self
-        // 开发者工具：只在 DEBUG 构建开放（2026-12 参考独立 Swift 原生壳的通行做法：
+        // 开发者工具：只在 DEBUG 构建开放（参考独立 Swift 原生壳的通行做法：
         // debug 默认开、release 默认关）。构建期常量，页面或环境变量都打不开。
 #if DEBUG
         if #available(macOS 13.3, *) {
@@ -435,24 +434,21 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         }
 #endif
         self.webView = webView
-        // T-4：WKWebView 与窗口共用前端同一底色 token（#0f1115 = rgb(15,17,21)）
+        // WKWebView 与窗口共用前端同一底色 token（#0f1115 = rgb(15,17,21)）
         // ——WKWebView 缺省白底会让首帧/重载白闪；drawsBackground=false 让页面
         // 透明区域直接露出窗口底色（亮/暗主题同值，token 常量见文件顶部）。
         webView.underPageBackgroundColor = Self.windowBackgroundColor
-        // 为什么不直接用公开 API（历史沿革）：公开面只有 underPageBackgroundColor，
-        // 它只改「露底色」本身；页面未覆盖区域要透明露出窗口底，必须关 drawsBackground，
-        // 而它没有公开开关。X2（2026-12 二轮独立复核）：原先以
-        // `responds(to: NSSelectorFromString("setDrawsBackground:"))` 作门，实测恒
-        // false——WKWebView 没有可被 responds 探到的该访问器，T-4 透明露底因此
-        // 从未生效；而 KVC 直设仍有效（实测 value 变 0、快照透明区 alpha 0）。
-        // 但 `drawsBackground` **不在公开头文件**里，私有存取器
+        // 公开面只有 underPageBackgroundColor，它只改「露底色」本身；页面未覆盖
+        // 区域要透明露出窗口底，必须关 drawsBackground，而它没有公开开关
+        // （`responds(to:)` 探不到该访问器，KVC 直设仍有效）。但
+        // `drawsBackground` **不在公开头文件**里，私有存取器
         // `_drawsBackground`/`_setDrawsBackground:` 是否存在随 OS 版本而变；Swift
         // 无法 catch ObjC 异常，直设 KVC 在缺该存取器的构建上以 NSUnknownKeyException
-        // 直接 abort 进程（实测 exit_code=134）。W1/W2（2026-12 三轮独立复核）：
-        // 改走 DSHChamberWebKitSupport 的异常安全包装（@try/@catch 吞异常、返回设置
-        // 结果），成功/失败都写 shellLog 可诊断，缺键时保持 WebKit 默认且绝不崩。
+        // 直接 abort 进程（实测 exit_code=134）。故走 DSHChamberWebKitSupport 的
+        // 异常安全包装（@try/@catch 吞异常、返回设置结果），成功/失败都写 shellLog
+        // 可诊断，缺键时保持 WebKit 默认且绝不崩。
         shellLog(Self.drawsBackgroundLogLine(DSHChamberSetDrawsBackground(webView, false)))
-        // A3-3：恢复本 origin 上次的缩放（Chromium 按 origin 持久化 zoomLevel；
+        // 恢复本 origin 上次的缩放（Chromium 按 origin 持久化 zoomLevel；
         // WKWebView.pageZoom 每次启动回 100%，这里用 UserDefaults 补齐）。
         webView.pageZoom = ZoomPersistence.load(
             defaults: .standard, key: zoomDefaultsKey, range: Self.zoomRange)
@@ -462,10 +458,10 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
                               styleMask: [.titled, .closable, .miniaturizable, .resizable],
                               backing: .buffered,
                               defer: false)
-        // T-1：可见标题 = dsh-chamber（功能对齐 Electron 的标题冻结行为；
-        // 2026-12 双端逐函数核对 U5/V8；不可见 target/可执行名保持 DSHChamber）。
+        // 可见标题 = dsh-chamber（功能对齐 Electron 的标题冻结行为；不可见
+        // target/可执行名保持 DSHChamber）。
         window.title = Self.displayName
-        // T-4：窗口底色 = 同一 #0f1115（缩放/全屏露底不白闪）。
+        // 窗口底色 = 同一 #0f1115（缩放/全屏露底不白闪）。
         window.backgroundColor = Self.windowBackgroundColor
         window.contentView = webView
         window.center()
@@ -474,7 +470,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         window.delegate = self
         self.window = window
 
-        // F1（2026-12 审计）：首帧露底色也按 **last-known 页面事实** 收敛——
+        // 首帧露底色也按 **last-known 页面事实** 收敛——
         // 第二次启动时 store 内已有同值事实（后续 ingest 恒 false），只靠 ingest
         // 的变化分支会让浅色页面整场会话停在骨架深色。建窗收尾立即对账一次
         // （幂等、不记日志；窗口尚未 show，等效于"用 last-known 选初始露底色"，
@@ -482,7 +478,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         reconcileThemedBackground(
             desiredPageIsDark: ShellPageFactsStore.lastKnown(in: .standard)?.pageIsDark)
 
-        // S-A hostFacts 事实观察：窗口 key/关闭通知（主线程投递；object 限定
+        // hostFacts 事实观察：窗口 key/关闭通知（主线程投递；object 限定
         // 本窗）。选择器观察者不被 center 持有；控制器与应用同生命周期
         // （AppDelegate 强持有到退出），无需 removeObserver。
         let center = NotificationCenter.default
@@ -492,7 +488,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
                            name: NSWindow.didResignKeyNotification, object: window)
         center.addObserver(self, selector: #selector(hostFactsWindowWillClose(_:)),
                            name: NSWindow.willCloseNotification, object: window)
-        // S-48：换屏与低电量模式切换都会改变实际上限（WebKit 侧实时生效），
+        // 换屏与低电量模式切换都会改变实际上限（WebKit 侧实时生效），
         // 对照日志按值去重补记（见 logRefreshRateIfChanged）。
         center.addObserver(self, selector: #selector(refreshRateWindowDidChangeScreen(_:)),
                            name: NSWindow.didChangeScreenNotification, object: window)
@@ -504,15 +500,15 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         center.addObserver(self, selector: #selector(refreshRatePowerStateDidChange(_:)),
                            name: Notification.Name.NSProcessInfoPowerStateDidChange,
                            object: ProcessInfo.processInfo)
-        // S-48 验收口径：建窗之后 window.screen 才是可信的「窗口所在屏」；
+        // 验收口径：建窗之后 window.screen 才是可信的「窗口所在屏」；
         // 观察者先注册（避免首记与注册之间的同步窗口漏事件），日志按值去重。
         logRefreshRateIfChanged()
-        // A-1/A-2（审计收口）：macOS 唤醒与窗口/应用显示的事件发送方——
+        // macOS 唤醒与窗口/应用显示的事件发送方——
         // 对偶 electron-edges onSystemResume(powerMonitor)/onMainWindowShown
         // （design 25 §5 E6）。didWake → __host.systemResume {timestamp}；
         // didBecomeActive → __host.mainWindowShown（held lastResume 补发点）。
         // 幂等：core 无 held/无待办时均为 no-op。
-        // 2026-12 双端逐函数核对 D1：NSWorkspace 的通知必须注册在它自己的
+        // NSWorkspace 的通知必须注册在它自己的
         // 通知中心上（SDK NSWorkspace.h 明示），注册到 NotificationCenter.default
         // 永不触发——__host.systemResume 因此从未发出，core 的立即重连/held
         // 补发（shell-core.ts systemResume 路径）在原生 flavor 全失效。
@@ -523,7 +519,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
                            name: NSApplication.didBecomeActiveNotification, object: nil)
     }
 
-    // MARK: - S-48 刷新率对照日志
+    // MARK: - 刷新率对照日志
 
     /// 刷新率对照日志（design 25 §5.1 的验收唯一口径）：刷新率按**窗口所在屏的当前模式**取，
     /// 低电量模式按当前系统态取；只在指纹变化时各写一行（不刷屏）。
@@ -531,7 +527,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         let refreshRate = currentDisplayRefreshRate()
         let lowPowerMode = ProcessInfo.processInfo.isLowPowerModeEnabled
         // 按**渲染后的日志行**去重：startupLogLine 是纯函数，行相等 ⟺ 全部事实相等，
-        // 所以以后新增事实字段不需要记得同步比较逻辑（第二轮就是漏了回落标记）。
+        // 所以以后新增事实字段不需要记得同步比较逻辑。
         let line = RefreshRatePolicy.startupLogLine(
             preference: refreshRatePreference,
             displayRefreshRate: refreshRate.rate,
@@ -580,13 +576,13 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         }
     }
 
-    // MARK: - A-1/A-2 入站事件发送（唤醒/窗口显示）
+    // MARK: - 入站事件发送（唤醒/窗口显示）
 
     @objc private func hostWakeUp(_ note: Notification) {
-        // C4（2026-09 评审）：这一行**必须落盘**（shellLog = print + append）。
-        // 此前只用 print：Dock 启动的 .app stdout 无处可看，shell.log（即
-        // ShellLog.fileName）里零条唤醒行既不能证明「发过」也不能证明「没发」
-        // （只能靠反汇编），真机验收因此分不开「壳没发」与「页面没消费」。
+        // 这一行**必须落盘**（shellLog = print + append）：Dock 启动的 .app
+        // stdout 无处可看，shell.log（即 ShellLog.fileName）里零条唤醒行既不能
+        // 证明「发过」也不能证明「没发」，真机验收因此分不开「壳没发」与
+        // 「页面没消费」。
         shellLog("[shell] 系统唤醒——发送 __host.systemResume")
         Task { @MainActor in
             do {
@@ -594,7 +590,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
                     method: HostInboundMethod.systemResume,
                     payload: .object(["timestamp": .number(Date().timeIntervalSince1970 * 1000)]))
             } catch {
-                // S10：事件边界绝不吞错、绝不崩——失败 loud（同
+                // 事件边界绝不吞错、绝不崩——失败 loud（同
                 // sendRendererLifecycle 风格；core 侧幂等，无需重试）。
                 shellLog("[shell] __host.systemResume 发送失败：\(error.localizedDescription)")
             }
@@ -602,7 +598,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     }
 
     @objc private func appDidBecomeActive(_ note: Notification) {
-        // C4：同样落盘——这是 core held-resume 的补发点，真机取证靠它。
+        // 同样落盘——这是 core held-resume 的补发点，真机取证靠它。
         shellLog("[shell] 应用激活——发送 __host.mainWindowShown")
         Task { @MainActor in
             do {
@@ -621,10 +617,10 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     // MARK: - 页面加载
 
     /// 首次加载控制面（幂等：windowDidLoad / init / noteSidecarReady 都可能触发）。
-    /// T-2：sidecar ready 前**绝不**发起首载——打包态冷启动时控制面还没监听，
-    /// 抢跑只会拿到「连接被拒」的 WebKit/ATS 文案并停在失败页。判定抽成纯函数
+    /// sidecar ready 前**绝不**发起首载——打包态冷启动时控制面还没监听，抢跑只会
+    /// 拿到「连接被拒」的 WebKit/ATS 文案并停在失败页。判定抽成纯函数
     /// （shouldStartFirstLoad，单测直测）。
-    /// S-45：ready 帧只是 sidecar 协议就绪；首载前还必须先过一次 HTTP 就绪探测
+    /// ready 帧只是 sidecar 协议就绪；首载前还必须先过一次 HTTP 就绪探测
     /// （GET /health 期望 2xx）——探测先行、导航在后（StartupLoadPlan 不变量）。
     private func startLoadingIfNeeded() {
         guard Self.shouldStartFirstLoad(sidecarReady: sidecarReady,
@@ -633,13 +629,13 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         beginHealthProbe()
     }
 
-    /// T-2 首载门（纯逻辑，单测直测）：sidecar ready 且尚未首载才放行。
+    /// 首载门（纯逻辑，单测直测）：sidecar ready 且尚未首载才放行。
     static func shouldStartFirstLoad(sidecarReady: Bool, didStartLoading: Bool) -> Bool {
         StartupLoadPlan.firstStep(sidecarReady: sidecarReady,
                                   didStartLoading: didStartLoading) == .probe
     }
 
-    // MARK: - 首载 HTTP 就绪探测（S-45：探测先行）
+    // MARK: - 首载 HTTP 就绪探测（探测先行）
 
     /// 就绪探测路径（控制面 /health；与 sidecar/control-plane 同一路由）。
     static let healthProbePath = "/health"
@@ -661,7 +657,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
             case probe
         }
 
-        /// 探测结果后的动作（复用 T-2 退避预算）。
+        /// 探测结果后的动作（复用首载退避预算）。
         enum ProbeOutcome: Equatable {
             case navigate
             case retry(after: TimeInterval)
@@ -673,7 +669,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
             return sidecarReady ? .probe : .waitForSidecar
         }
 
-        /// 2xx → navigate；否则按 T-2 退避重试/耗尽（sidecar fatal 立即 giveUp）。
+        /// 2xx → navigate；否则按首载退避预算重试/耗尽（sidecar fatal 立即 giveUp）。
         static func outcome(afterProbeReachable reachable: Bool, attempts: Int,
                             sidecarFailed: Bool) -> ProbeOutcome {
             if reachable { return .navigate }
@@ -697,7 +693,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
 
     /// 探测失败的可诊断原因（纯逻辑，单测直测）：NSURLError 带域与码——ATS
     /// 拒绝（NSURLErrorAppTransportSecurityRequiresSecureConnection，-1022）
-    /// 等网络层事实进落盘日志与失败页 detail，不再只剩「未就绪」三个字。
+    /// 等网络层事实进落盘日志与失败页 detail，而不是只有「未就绪」三个字。
     /// 本地化：failure.probeNSURLError（%d = 错误码、%@ = 系统描述）/
     /// failure.probeHTTPStatus（%d = 状态码）/ failure.probeNoResponse；
     /// 非 NSURLError 的 localizedDescription 由系统本地化，原样透出。
@@ -748,15 +744,15 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     private func loadControlPlaneAfterProbe() {
         shellLog("[shell] 控制面就绪（GET \(Self.healthProbePath) 2xx），加载控制面 "
             + "\(cpURL.absoluteString)（origin=\(cpOrigin)）")
-        // Phase 0：启动分段（sidecar ready → 控制面就绪 → 首帧）。
+        // 启动分段（sidecar ready → 控制面就绪 → 首帧）。
         shellLog(ShellPerf.bootLine("controlPlaneReady"))
         webView.load(URLRequest(url: cpURL))
     }
 
-    /// 探测失败 = 「控制面未就绪」的同义事实：走 T-2 同一退避预算；预算耗尽才
+    /// 探测失败 = 「控制面未就绪」的同义事实：走同一退避预算；预算耗尽才
     /// 落失败说明页（原因是探测的真实错误，不是 WebKit 的错误包装）。
     private func handleHealthProbeFailure(statusCode: Int?, error: Error?, probeURL: URL) {
-        // T-3：sidecar 已 fatal 时权威原因已呈现，晚到的探测失败不再覆盖。
+        // sidecar 已 fatal 时权威原因已呈现，晚到的探测失败不覆盖。
         if startupFailureMessage != nil { return }
         let detail = Self.healthProbeFailureDetail(statusCode: statusCode, error: error)
         switch Self.StartupLoadPlan.outcome(afterProbeReachable: false, attempts: navRetries,
@@ -784,12 +780,11 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         var errorDescription: String? { NativeText.format(.failureProbeFailed, detail) }
     }
 
-    // MARK: - S-42：启动窗口呈现门（绝不先亮无内容空窗）
+    // MARK: - 启动窗口呈现门（绝不先亮无内容空窗）
 
     /// 启动呈现门（纯逻辑单测直测）：首个可呈现内容才允许亮窗，且只触发一次；
-    /// 后续提交（重载/重试/失败页后的再次导航）不再重复呈现。
-    /// 同一状态机承载 S-27 失败说明页的一次性 about: 导航豁免——对抗验证回归
-    /// （S-42 破坏了 S-27 失败页的呈现）：WebKit 实测回调顺序是
+    /// 后续提交（重载/重试/失败页后的再次导航）不重复呈现。
+    /// 同一状态机承载失败说明页的一次性 about: 导航豁免：WebKit 实测回调顺序是
     /// decidePolicyFor(about:blank) **先**、didCommit(about:blank) **后**。
     /// 若在 decidePolicyFor 消费豁免，didCommit 就读到 failurePage:false →
     /// isPresentableCommit(about:blank, false) = false → 呈现门永不触发，失败页
@@ -823,13 +818,13 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         }
 
         /// 失败页导航未落地（didFail/didFailProvisionalNavigation）：撤销豁免，
-        /// 绝不让它悬着放行后续 about: 导航（S-27 一次性安全面）。
+        /// 绝不让它悬着放行后续 about: 导航（一次性安全面）。
         mutating func noteNavigationFailed() {
             failurePagePending = false
         }
     }
 
-    /// 一次导航提交是否算「可呈现内容」（纯逻辑单测直测）：S-27 失败说明页恒算
+    /// 一次导航提交是否算「可呈现内容」（纯逻辑单测直测）：失败说明页恒算
     /// （about:blank，但由一次性豁免放行）；WKWebView 初始空文档（url 为 nil /
     /// about:blank 且非失败页）不算——启动期为此保持隐藏。
     static func isPresentableCommit(url: String?, failurePage: Bool) -> Bool {
@@ -838,17 +833,8 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         return true
     }
 
-    // MARK: - hostFacts 推送（S-A：窗口/聚焦/加载事实 → sidecar 同步门缓存）
+    // MARK: - hostFacts 推送（窗口/聚焦/加载事实 → sidecar 同步门缓存）
 
-    /// hostFacts 去重合并（纯逻辑，单测直测——HostFactsDiffTests）。给定
-    /// 已推送（含意图）事实 last 与拟推送变化 changes：
-    ///   - payload = changes 中与 last 同键异值者（last 无该键视为异值——
-    ///     首推必推）；payload 为空 = 无变化，调用方应跳过推送；
-    ///   - merged = last 并入 changes 全部键（意图簿记：无论本次推送成败，
-    ///     后续事件以此值去重——失败时随后的事实变化事件会携带最新值再推
-    ///     收敛，见 pushHostFacts 注释）。
-    /// 字典键序不影响 JSON 对象语义（sidecar 侧 handleHostInbound 按键级
-    /// 合并：仅 typeof boolean 的键生效）。
     /// 推送失败后的意图回滚（纯逻辑，单测直测）：只撤销**本次推送且期间未被
     /// 更新的**键（同键同值才撤），使下一次同类事件重新携带该事实；若期间有
     /// 更新（值已变），保留新意图不撤（避免用旧值覆盖）。
@@ -867,10 +853,10 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         case failed
     }
 
-    /// 导航事实变换（S-A/S5；纯逻辑单测直测）：
+    /// 导航事实变换（纯逻辑单测直测）：
     ///  - started  → webViewLoading:true；
     ///  - finished → webViewLoading:false + webViewContentAlive:true；
-    ///  - failed   → webViewLoading:false（S5：失败无 didFinish，也必须收敛，
+    ///  - failed   → webViewLoading:false（失败无 didFinish，也必须收敛，
     ///    否则 sidecar 侧 webViewLoading 同步门永久为 true，通知打开/深链
     ///    drain 被 hold）。
     static func navigationFacts(for outcome: NavigationOutcome) -> [String: Bool] {
@@ -884,6 +870,15 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         }
     }
 
+    /// hostFacts 去重合并（纯逻辑，单测直测——HostFactsDiffTests）。给定
+    /// 已推送（含意图）事实 last 与拟推送变化 changes：
+    ///   - payload = changes 中与 last 同键异值者（last 无该键视为异值——
+    ///     首推必推）；payload 为空 = 无变化，调用方应跳过推送；
+    ///   - merged = last 并入 changes 全部键（意图簿记：无论本次推送成败，
+    ///     后续事件以此值去重——失败时随后的事实变化事件会携带最新值再推
+    ///     收敛，见 pushHostFacts 注释）。
+    /// 字典键序不影响 JSON 对象语义（sidecar 侧 handleHostInbound 按键级
+    /// 合并：仅 typeof boolean 的键生效）。
     static func hostFactsDiff(last: [String: Bool], changes: [String: Bool])
         -> (payload: [String: Bool], merged: [String: Bool]) {
         var merged = last
@@ -912,15 +907,15 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     ///     将长期返回 false（通知/深链被 hold）。回滚后下一次同类事件重推；
     ///     ready 时的 `resetHostFactsBookkeeping()` 仍会推全量快照兜底。
     /// sidecar 重启（新进程没有历史事实）→ 清空去重簿记，下一次推送即全量
-    /// 快照；否则新 sidecar 会长期以「种子事实」运行（2026-09 三审 #8）。
-    /// S9：快照必须含 focused = window.isKeyWindow 的实时值——否则重启前缓存
+    /// 快照；否则新 sidecar 会长期以「种子事实」运行。
+    /// 快照必须含 focused = window.isKeyWindow 的实时值——否则重启前缓存
     /// 的 focused=false 会粘滞到下一次 key 事件，窗口明明是 key 却推 false。
     func resetHostFactsBookkeeping() {
         lastHostFacts = [:]
         pushHostFacts(Self.resetFacts(isKeyWindow: window?.isKeyWindow ?? false))
     }
 
-    /// sidecar 重启后的全量事实快照（纯逻辑，单测直测；S9）。
+    /// sidecar 重启后的全量事实快照（纯逻辑，单测直测）。
     static func resetFacts(isKeyWindow: Bool) -> [String: Bool] {
         ["mainWindowAlive": true, "webViewContentAlive": true, "focused": isKeyWindow]
     }
@@ -937,7 +932,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
             do {
                 _ = try await bridge.invoke(method: Self.hostFactsMethod, payload: object)
             } catch {
-                // 失败必须回滚意图（2026-09 二轮自查）：首推发生在 bridge.start()
+                // 失败必须回滚意图：首推发生在 bridge.start()
                 // 之前 → invoke 直接抛「未在运行」；若不回滚，去重簿记会认为该
                 // 事实已送达，而 sidecar 侧存活事实缺省为「未知=不可交付」，于是
                 // rendererPush 长期返回 false、通知/深链被永久 hold。
@@ -955,7 +950,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     /// 往返（alive 未变）时去重后不产生额外推送。
     @objc private func hostFactsWindowDidBecomeKey(_ notification: Notification) {
         pushHostFacts(["mainWindowAlive": true, "focused": true])
-        // S-48：上屏兜底一拍——若首次记录时窗口还不在屏上（screen == nil），
+        // 上屏兜底一拍——若首次记录时窗口还不在屏上（screen == nil），
         // 这里补进真实上限；正常路径被整行去重吞掉，不产生重复行。
         logRefreshRateIfChanged()
     }
@@ -1010,7 +1005,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
             do {
                 let result = try await bridge.invoke(method: method, payload: payload)
                 if let started, ShellDebug.isEnabledCached {
-                    // Phase 0：单次 invoke 的端到端耗时（含 B 桥往返与结果编码），
+                    // 单次 invoke 的端到端耗时（含 B 桥往返与结果编码），
                     // 仅调试态打印。
                     shellLog("[perf] invoke \(method) \(Int((Date().timeIntervalSince(started) * 1000).rounded()))ms")
                 }
@@ -1019,7 +1014,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
             } catch {
                 // 失败：__dshChamberResolve(id, null, <errorString>)；errorString
                 // 经 JSON 序列化即为合法 JS 字符串字面量。
-                // A2 兜底（2026-09-18）：fence 的尺寸门用「安全上界」短路，其成立
+                // fence 的尺寸门用「安全上界」短路，其成立
                 // 依赖 AnyCodable.jsonUpperBoundByteCount ≥ 实际线格式字节（含
                 // 「JSONSerialization 不对非 ASCII 转义」这一平台事实，已由
                 // AnyCodableTests.upperBound 用例钉住）。若该前提在某平台不成立，
@@ -1032,9 +1027,9 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
                 } else {
                     message = error.localizedDescription
                 }
-                // 错误串 → JS 字面量 = AnyCodable 单遍写出器（2026-12 单源化）：
-                // String 恒可序列化，故 stage 1 保留的三级兜底（含
-                // NativeText.bridgeErrorFallback）整体删除——那三级本就不可达。
+                // 错误串 → JS 字面量 = AnyCodable 单遍写出器：String 恒可序列化，
+                // 故不设三级兜底（含 NativeText.bridgeErrorFallback）——那三级本就
+                // 不可达。
                 let errorJSON = Self.jsonLiteral(of: .string(message))
                 evaluateJS("__dshChamberResolve(\(nativeTokenLiteral), \(id), null, \(errorJSON))")
             }
@@ -1042,15 +1037,14 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     }
 
     /// 页面 emit 直写（调用方必须已在主线程）：__dshChamberEmit(eventJSON,
-    /// payloadJSON)。两个实参都经 AnyCodable 单遍写出器（2026-12 单源化）——
-    /// String/AnyCodable 恒可序列化，故不存在「注入残缺 JS」的路径（旧的可选
-    /// 返回与 loud 失败日志随之删除）。
+    /// payloadJSON)。两个实参都经 AnyCodable 单遍写出器——String/AnyCodable
+    /// 恒可序列化，故不存在「注入残缺 JS」的路径（无可选返回，也无静默失败）。
     private func emitToPage(event: String, payload: AnyCodable?) {
         let eventJSON = Self.jsonLiteral(of: .string(event))
         let payloadJSON = payload.map { Self.jsonLiteral(of: $0) } ?? "null"
-        // C4 hop3（2026-09 评审）：这一跳此前零落盘——「壳把事件推给页面了吗」
-        // 只能靠猜。失败（JS 抛错 = 页面根本没收到）必须可考古；成功不逐条刷日志
-        // （emit 是用户可见事件的低频面，routeNotify 那行已给出 channel）。
+        // 这一跳必须可考古：失败（JS 抛错 = 页面根本没收到）落盘，否则
+        // 「壳把事件推给页面了吗」只能靠猜；成功不逐条刷日志（emit 是用户可见
+        // 事件的低频面，routeNotify 那行已给出 channel）。
         webView.evaluateJavaScript(
             "__dshChamberEmit(\(nativeTokenLiteral), \(eventJSON), \(payloadJSON))"
         ) { _, error in
@@ -1065,7 +1059,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         webView.evaluateJavaScript(script, completionHandler: nil)
     }
 
-    // MARK: - notify 消费路由（S-D）
+    // MARK: - notify 消费路由
 
     /// sidecar notify → 消费（路由表与解码见文件底部 decodeNotify/
     /// NotifyRoute——纯逻辑，单测直测；本方法只做执行与 loud）。
@@ -1077,11 +1071,11 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         case .emitToPage(let channel, let payload):
             // rendererPush 解包：channel/payload 原样进页面（与 electron-edges
             // rendererPush = webContents.send(channel, payload) 同语义）。
-            // C4 hop3（2026-09 评审）：壳 → 页面这一跳必须落盘，否则真机上
-            // 分不开「sidecar 没推」与「推了但页面没消费」（唤醒链的最后一跳）。
+            // 壳 → 页面这一跳必须落盘，否则真机上分不开「sidecar 没推」与
+            // 「推了但页面没消费」（唤醒链的最后一跳）。
             shellLog("[shell] notify rendererPush → 页面 emit \(channel)")
             if channel == Self.settingsChangedChannel {
-                // 设置变了 → 关窗决策缓存作废（S3·V9：缓存必须随设置失效）。
+                // 设置变了 → 关窗决策缓存作废（缓存必须随设置失效）。
                 onSettingsChanged?()
             }
             Task { @MainActor in
@@ -1104,7 +1098,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
                 }
             }
         case .retireNotifications(let sourceIds, let notificationIds):
-            // S8/P-07：Electron 退役语义 = 关闭登记中的活跃原生通知。Swift 侧经
+            // Electron 退役语义 = 关闭登记中的活跃原生通知。Swift 侧经
             // NotificationDeliveryRegistry（sourceId→chamber-edge-<id>；identifier
             // 末段 = sidecar notificationId）取回已投递 identifier，调
             // UNUserNotificationCenter.removeDeliveredNotifications 清除 OS 通知
@@ -1149,7 +1143,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         ShellPageFactsStore.lastKnown(in: defaults)
     }
 
-    /// 露底色对账决策（纯函数，F1 单测直测）：desired 与已应用值不同才返回要
+    /// 露底色对账决策（纯函数，单测直测）：desired 与已应用值不同才返回要
     /// 应用的色值；nil = 幂等不动（含双方都是"无事实"）。
     static func themedBackgroundColorToApply(pageIsDark: Bool?,
                                              appliedPageIsDark: Bool?) -> NSColor? {
@@ -1157,7 +1151,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         return themedBackgroundColor(pageIsDark: pageIsDark)
     }
 
-    /// 露底色对账（F1：幂等——记录已应用值，不同才改窗口/WKWebView 的露底色）。
+    /// 露底色对账（幂等——记录已应用值，不同才改窗口/WKWebView 的露底色）。
     /// **不**写日志（避免每次 ingest 都刷屏）；appliedPageIsDark 只在这里推进。
     private func reconcileThemedBackground(desiredPageIsDark: Bool?) {
         guard let color = Self.themedBackgroundColorToApply(
@@ -1173,11 +1167,10 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     /// 主线程所有（消息回调 / evaluateJavaScript 回调 / 本方法调用点）。
     func ingestPageFacts(_ payload: [String: Any]) {
         let previous = pageFactsStore.current
-        // F1（2026-12 审计）：露底色对账**不能**挂在 ingest 的"变化"分支上——
-        // 第二次启动时 store 内已有同值事实，ingest 返回 false，浅色页面会整场
-        // 会话停在骨架深色。任何一次 ingest 之后都幂等收敛（与页面事实一致）；
-        // W4（2026-12 三轮独立复核）把该次序抽成静态接缝：无窗口环境可直测，退回
-        // "仅变化时对账"会让 IngestReconcileSeamTests 变红。
+        // 露底色对账**不能**挂在 ingest 的"变化"分支上——第二次启动时 store 内
+        // 已有同值事实，ingest 返回 false，浅色页面会整场会话停在骨架深色。
+        // 任何一次 ingest 之后都幂等收敛（与页面事实一致）；该次序抽成静态接缝，
+        // 无窗口环境可直测，退回"仅变化时对账"会让 IngestReconcileSeamTests 变红。
         let changed = Self.ingestPageFacts(payload, into: pageFactsStore) { desiredPageIsDark in
             self.reconcileThemedBackground(desiredPageIsDark: desiredPageIsDark)
         }
@@ -1188,11 +1181,11 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         pageFactsSink?.pageFactsDidChange(facts, previous: previous)
     }
 
-    /// ingest 接缝（W4，2026-12 三轮独立复核）：Store 合并 + **无条件**露底色对账
-    /// 回调，返回 Store 是否产生变化。生产路径与单测共用本函数（签名
-    /// ingestPageFacts(_:into:reconcile:)，与实例版 ingestPageFacts(_:) 共存），故
-    /// "任何一次 ingest 之后必然对账露底色"（F1）可直测：把对账挪进 changed 分支或
-    /// 挪到其调用之后，无变化的 ingest 就不再触发回调，直测用例即红。
+    /// ingest 接缝：Store 合并 + **无条件**露底色对账回调，返回 Store 是否产生
+    /// 变化。生产路径与单测共用本函数（签名 ingestPageFacts(_:into:reconcile:)，
+    /// 与实例版 ingestPageFacts(_:) 共存），故"任何一次 ingest 之后必然对账露底色"
+    /// 可直测：把对账挪进 changed 分支或挪到其调用之后，无变化的 ingest 就不再
+    /// 触发回调，直测用例即红。
     @discardableResult
     static func ingestPageFacts(_ payload: [String: Any],
                                 into store: ShellPageFactsStore,
@@ -1202,16 +1195,16 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         return changed
     }
 
-    /// 页面事实载波通道的文档面判定（纯函数，X1/F5 单测直测真值表）：只要求
+    /// 页面事实载波通道的文档面判定（纯函数，单测直测真值表）：只要求
     /// **主 frame + 同源**——url 与 expectedOrigin 都非空，且 scheme/host/port 与
     /// expectedOrigin 完全相同；**不**要求 pathname == "/"、**不**要求无 query。
     ///
-    /// 取舍（Z1，2026-12 二轮独立复核收口）：A 桥保留 TrustGuard.isTrustedDocument
+    /// 取舍：A 桥保留 TrustGuard.isTrustedDocument
     /// 的严格壳文档判定——它承载 60 个 IPC 方法，同源非壳文档（/api/i/* 代理回传的
     /// 远端 HTML）继承 shim 是真实风险。本通道只携带 lang/dark 两个非敏感事实，且与
     /// A 桥白名单/就绪门完全解耦（事实必须在 sidecar ready 前可用）；页面一旦采用
     /// history.pushState/replaceState（例如把地址改成 /api/i/1 或带 query 的 SPA
-    /// 路由），WKWebView 的 webView.url 会随 history API 变化，旧「壳文档」判定会
+    /// 路由），WKWebView 的 webView.url 会随 history API 变化，严格的「壳文档」判定会
     /// 把同一文档判成不可信 → 事实通道静默断掉直到下一次
     /// didFinish 才靠对账恢复。故按同源放宽；主 frame 围栏与导航护栏（同源非壳文档
     /// 的主 frame 导航仍被 cancel）保持失败页/异源文档进不了事实面。
@@ -1230,7 +1223,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         return TrustGuard.isTrustedOrigin(url, expectedOrigin: expectedOrigin)
     }
 
-    /// 事实通道文档 URL 的取值规则（纯函数，W4a 单测直测；2026-12 三轮独立复核）。
+    /// 事实通道文档 URL 的取值规则（纯函数，单测直测）。
     ///
     /// **webView.url 优先，frameInfo.request.url 仅兜底**：真实 WKWebView 实测，
     /// 同源 blob:/about:srcdoc 子 frame 调 parent.document.write 可以改写主 frame
@@ -1244,9 +1237,9 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         return frameRequestURL
     }
 
-    /// didFinish 对账路径的准入判定（纯函数，X1 单测直测真值表）：与观察器路径
+    /// didFinish 对账路径的准入判定（纯函数，单测直测真值表）：与观察器路径
     /// ShellPageFactsMessageHandler.accepts 共用 isSameOriginDocument（主 frame 由
-    /// 对账路径本身保证：读的是**回调时刻主 frame 的 webView.url**——W4a 后与观察器
+    /// 对账路径本身保证：读的是**回调时刻主 frame 的 webView.url**——与观察器
     /// 路径同来源）。失败说明页（loadHTMLString → about:blank）与空 url 一律拒绝。
     static func acceptsReconcile(url: String?, expectedOrigin: String?) -> Bool {
         isSameOriginDocument(url: url, expectedOrigin: expectedOrigin)
@@ -1254,15 +1247,13 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
 
     /// didFinish 对账（snapshotSource 与注入脚本同一 dark 判定）。
     ///
-    /// X1（2026-12 二轮独立复核 major 收口）：回调此前无条件 ingest，绕过了
-    /// 观察器路径的门（Z1 起两路共用同一 isSameOriginDocument）——失败说明页
-    /// about:blank 的 didFinish 会把
-    /// {lang:"", dark:false} 灌进 Store：空 lang 不构成语言事实（契约），但
+    /// 回调必须先过 acceptsReconcile 才 ingest：观察器路径与对账路径共用同一
+    /// isSameOriginDocument。失败说明页 about:blank 的 didFinish 若无条件 ingest，
+    /// 会把 {lang:"", dark:false} 灌进 Store：空 lang 不构成语言事实（契约），但
     /// dark 变化仍生效 ⇒ 暗系统被判 pageIsDark=false、强制 .aqua 露浅底，且污染
-    /// 值落盘成 last-known（下次启动先亮浅色）。现改为回调内先过 acceptsReconcile
-    /// 才 ingest；失败页/about:blank 静默丢弃（与观察器路径的拒绝同语义，不误报
-    /// 成「对账失败」）。「对账失败 loud 但不报警」的既有语义只针对下面的
-    /// evaluateJavaScript 错误分支，保持不变。
+    /// 值落盘成 last-known（下次启动先亮浅色）。失败页/about:blank 静默丢弃（与
+    /// 观察器路径的拒绝同语义，不误报成「对账失败」）。「对账失败 loud 但不报警」
+    /// 的语义只针对下面的 evaluateJavaScript 错误分支，保持不变。
     private func reconcilePageFacts() {
         webView.evaluateJavaScript(ShellPageFactsScript.snapshotSource()) { [weak self] result, error in
             if let error {
@@ -1295,13 +1286,13 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         return source
     }
 
-    /// P-18 启动门（纯函数，单测直测）：shim 源码缺失/为空 → 返回不可启动的
+    /// 启动门（纯函数，单测直测）：shim 源码缺失/为空 → 返回不可启动的
     /// 致命说明（含已查找目录与修复动作）；可用 → nil。
     ///
     /// 对齐 Electron：preload 脚本加载失败会经 dialog.showErrorBox + app.exit(1)
-    /// 拒绝开窗（fail-closed）；Swift 此前只 print 警告后照常开窗，用户得到
-    /// 一个没有桥、全部本机能力静默缺席的页面。
-    /// T-1：本说明是**用户可见**文案——内部资源名（bridge-shim.js）与 SwiftPM
+    /// 拒绝开窗（fail-closed）——照常开窗会让用户得到一个没有桥、全部本机能力
+    /// 静默缺席的页面。
+    /// 本说明是**用户可见**文案——内部资源名（bridge-shim.js）与 SwiftPM
     /// bundle 名只进 shell.log（AppDelegate 调用点显式落盘），这里只列查找
     /// 目录，绝不把 "poc" 露到提示框。
     static func shimStartupFailure(source: String?) -> String? {
@@ -1331,8 +1322,8 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         // 与浏览器规范化结果不同而在逐字比较处失配）。
         let host = rawHost.lowercased()
         // IPv6 字面量：URL.host 去掉方括号（"::1"），拼回 origin 时必须补回，
-        // 否则生成的 origin 串不可解析（2026-09 二审：`http://[::1]:17520` 曾
-        // 归到 `http://::1:17520` 导致归一化静默跳过、IPC 全拒）。
+        // 否则生成的 origin 串不可解析（`http://[::1]:17520` 会被归到
+        // `http://::1:17520`，导致归一化静默跳过、IPC 全拒）。
         let hostPart = host.contains(":") && !host.hasPrefix("[") ? "[\(host)]" : host
         var origin = "\(scheme)://\(hostPart)"
         if let port = url.port {
@@ -1341,13 +1332,11 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         return origin
     }
 
-    /// **页面 JS 字面量的唯一出口**（2026-12 单源化）：AnyCodable → 单遍写出
+    /// **页面 JS 字面量的唯一出口**：AnyCodable → 单遍写出
     /// （AnyCodable.jsonLiteralText），免去把整棵载荷物化成 [String: Any] 树的
-    /// 深拷贝，也不再经 JSONEncoder（实测在深树上慢 2.1×）。
+    /// 深拷贝，也不经 JSONEncoder（实测在深树上慢 2.1×）。
     /// JSON 文本是 JS 字面量的合法子集；无失败路径（非有限数值降级为 null），
-    /// 故返回非可选。旧的 `jsonLiteral(_ value: Any)`（JSONSerialization +
-    /// `.fragmentsAllowed`）只有 String 调用点，已随单源化删除；A 桥回执用的
-    /// MessageHandler.jsStringLiteral 现委托同一实现。
+    /// 故返回非可选。A 桥回执用的 MessageHandler.jsStringLiteral 委托同一实现。
     static func jsonLiteral(of value: AnyCodable) -> String {
         value.jsonLiteralText
     }
@@ -1363,14 +1352,14 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
 
     // MARK: - WKNavigationDelegate：导航护栏
 
-    /// 导航决策（S-26/S-27/S-35；纯逻辑单测直测）。优先级：
+    /// 导航决策（纯逻辑单测直测）。优先级：
     ///  1. shouldPerformDownload → .download（WebKit 转交 WKDownload 保存，
-    ///     **绝不**把响应装进壳 webview——原围栏对此类导航一律 cancel，导致
+    ///     **绝不**把响应装进壳 webview——对此类导航 cancel 会让
     ///     session 日志导出静默假成功）；
-    ///  2. 首载失败说明页的 about:blank（S-27 一次性放行）；
+    ///  2. 首载失败说明页的 about:blank（一次性放行）；
     ///  3. 壳文档 allow；同源非壳文档 cancel（文档绝不继承 shim/IPC 面）；
     ///     外部 http(s) / mailto 交系统；
-    ///  4. S-35：**非主 frame** 的 blob: 放行（随包文档预览插件的
+    ///  4. **非主 frame** 的 blob: 放行（随包文档预览插件的
     ///     HTML/PDF/图片经 URL.createObjectURL 子 frame 呈现）；主 frame 的
     ///     blob 与其余 scheme 一律 cancel（主 frame 围栏不变）。
     enum NavigationDecision: Equatable {
@@ -1393,12 +1382,12 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         if failurePagePending, scheme == "about" { return .allow }
         if scheme == "http" || scheme == "https" {
             // 目标是 cp origin 的 http(s)：放行（与 TrustGuard 同款大小写
-            // 折叠判定——静态审查 #11：导航/消息两门行为统一）
+            // 折叠判定——导航/消息两门行为统一）
             if TrustGuard.isTrustedDocument(url.absoluteString, expectedOrigin: expectedOrigin) {
                 return .allow
             }
             // 同源但非壳文档（如 /api/i/<id>/* 代理回传的远端 HTML）：绝不
-            // 放行——放行会让该文档继承 shim 与全量 IPC 面（审计 major）。
+            // 放行——放行会让该文档继承 shim 与全量 IPC 面。
             // 判定不分 frame：同源非壳文档在任何 frame 都取消。
             if TrustGuard.isTrustedOrigin(url.absoluteString, expectedOrigin: expectedOrigin) {
                 return .cancel(reason: "同源非壳文档")
@@ -1408,14 +1397,14 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         }
         if scheme == "mailto" { return .openExternally }
         if scheme == "blob", !isMainFrame {
-            // S-35：文档预览插件的 HTML/PDF/图片走 URL.createObjectURL 的 blob
+            // 文档预览插件的 HTML/PDF/图片走 URL.createObjectURL 的 blob
             // 子 frame（vendor ui-sidebar-documentpreview）。非主 frame 的该文档
             // 拿不到桥：shim 只注入主 frame（BridgeShimInjector.makeUserScript
             // forMainFrameOnly=true），且消息围栏丢弃非主 frame 消息
             // （MessageHandler.fence 的 isMainFrame 门）——因此放行不扩大桥面。
-            // 主 frame 的 blob 仍按原围栏取消：壳文档只允许 ready 的 cp origin。
+            // 主 frame 的 blob 仍按主 frame 围栏取消：壳文档只允许 ready 的 cp origin。
             // about:blank/data: 不在放行之列（预览插件不需要；主 frame 的
-            // about:blank 仅经 S-27 失败页一次性门放行）。
+            // about:blank 仅经失败页一次性门放行）。
             return .allow
         }
         return .cancel(reason: "非 http(s) scheme")
@@ -1429,14 +1418,14 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
                                        shouldPerformDownload: navigationAction.shouldPerformDownload,
                                        failurePagePending: presentationGate.allowsFailurePageNavigation(),
                                        expectedOrigin: cpOrigin,
-                                       // S-35：targetFrame 缺省（新窗口等）按主 frame
+                                       // targetFrame 缺省（新窗口等）按主 frame
                                        // 最严围栏处理，绝不因未知而放宽。
                                        isMainFrame: navigationAction.targetFrame?.isMainFrame ?? true) {
         case .allow:
-            // S-27/S-42：失败页一次性豁免在这里只**观察**、绝不消费（didCommit
-            // 才消费——本回调实测先于 didCommit 到达，消费会让失败页呈现门失效：
-            // S-42 回归）。只有 about: 导航能带着豁免走到这里，放行面不放大；
-            // blob 子 frame 放行也绝不会吃掉 main frame 的豁免。
+            // 失败页一次性豁免在这里只**观察**、绝不消费（didCommit 才消费——
+            // 本回调实测先于 didCommit 到达，消费会让失败页呈现门失效）。只有
+            // about: 导航能带着豁免走到这里，放行面不放大；blob 子 frame 放行
+            // 也绝不会吃掉 main frame 的豁免。
             if presentationGate.allowsFailurePageNavigation(),
                (url?.scheme ?? "").lowercased() == "about" {
                 shellLog("[shell] 放行首载失败说明页（about:blank，一次性门；didCommit 消费）")
@@ -1445,7 +1434,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
             }
             decisionHandler(.allow)
         case .download:
-            // S-26：.download 不装载文档（WKDownload 负责保存）；前端 session
+            // .download 不装载文档（WKDownload 负责保存）；前端 session
             // 日志导出的 anchor[download] 走这条路，页面仍发布 success。
             shellLog("[shell] 导航转下载（不装入壳 webview）\(url?.absoluteString ?? "")")
             decisionHandler(.download)
@@ -1459,7 +1448,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         }
     }
 
-    /// S-26 响应级下载：MIME 不可呈现（如 application/zip 的 session 导出）
+    /// 响应级下载：MIME 不可呈现（如 application/zip 的 session 导出）
     /// 转下载；能呈现才放行。响应级导航不会是外链——外链在 action 级已转系统。
     func webView(_ webView: WKWebView,
                  decidePolicyFor navigationResponse: WKNavigationResponse,
@@ -1486,14 +1475,13 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         shellLog("[shell] 导航已转为下载（response 级）")
     }
 
-    // MARK: - WKDownloadDelegate（S-26；2026-12 对齐 Electron 默认下载）
+    // MARK: - WKDownloadDelegate（对齐 Electron 默认下载）
 
     /// 保存目标：**静默落盘到下载目录**，与 Electron 默认下载例程等价——Electron
     /// 全仓无 will-download/setSavePath = Chromium 默认静默写
-    /// app.getPath('downloads')，无保存面板、无下载 UI、无用户同意（A1 差异表
-    /// S-26）。此前这里弹的是保存面板（单向多出的确认），其注释还谎称它是
-    /// Electron 默认下载例程的对偶——那是不存在的对偶，已删除；历史取证见
-    /// DownloadDestination.swift 头注释。
+    /// app.getPath('downloads')，无保存面板、无下载 UI、无用户同意。
+    /// 保存面板是单向多出的确认，不是 Electron 默认下载例程的对偶；
+    /// 目标路径规则见 DownloadDestination.swift 头注释。
     ///
     /// WebKit 契约（WKDownloadDelegate.h）：目标必须是**已存在且可写目录里不存在
     /// 的文件** → 按 Chromium 的 " (n)" 规则去重（DownloadDestination），目录缺失
@@ -1542,29 +1530,28 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     }
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
-        // W-04：handler 的 origin 判定以 message.webView?.url 实时值为优先，
+        // handler 的 origin 判定以 message.webView?.url 实时值为优先，
         // 本记录（lastCommittedURL）作兜底（进程终止/测试桩场景）
         bridgeHandler.noteCommitted(url: webView.url?.absoluteString)
-        // S-42：首个「有内容」的提交才呈现启动主窗——窗口在此之前保持隐藏，
-        // 绝不先亮无内容空窗（Electron 在 controlPlane.start() 完成后才
-        // createMainWindow 的对偶；S-27 失败说明页同为已提交内容，因此失败
-        // 终态仍可见）。失败页豁免在此消费（decidePolicyFor 只观察不消费——
-        // 两个回调的真实先后顺序因此都不影响呈现：S-42 回归修复）。
+        // 首个「有内容」的提交才呈现启动主窗——窗口在此之前保持隐藏，绝不先亮
+        // 无内容空窗（Electron 在 controlPlane.start() 完成后才 createMainWindow
+        // 的对偶；失败说明页同为已提交内容，因此失败终态仍可见）。失败页豁免在
+        // 此消费（decidePolicyFor 只观察不消费——两个回调的真实先后顺序因此都
+        // 不影响呈现）。
         if presentationGate.shouldPresentOnCommit(url: webView.url?.absoluteString) {
-            // Phase 0：启动 → 首个可呈现提交（主窗呈现触发点）的耗时。
+            // 启动 → 首个可呈现提交（主窗呈现触发点）的耗时。
             shellLog(ShellPerf.bootLine("firstFrame \(webView.url?.absoluteString ?? "(未知)")"))
             onFirstCommittedContent?()
         }
     }
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
-        // S-A：provisional 导航开始（首载 / 退避重试 / 重载统一入口）→
+        // provisional 导航开始（首载 / 退避重试 / 重载统一入口）→
         // webViewLoading:true（electron-edges webViewLoading = isLoading 的
         // 事件化等价；失败路径由 didFail* 推 false 收敛，见 navigationFacts）
         pushHostFacts(Self.navigationFacts(for: .started))
-        // E19：导航开始即**取消已排定的崩溃重载**（Electron did-start-loading
-        // 里 clearCrashReloadTimer；2026-09 三审 E19 偏离 #2）并上报
-        // （core 复位 ready 位 + in-flight 重排）。
+        // 导航开始即**取消已排定的崩溃重载**（Electron did-start-loading 里
+        // clearCrashReloadTimer）并上报（core 复位 ready 位 + in-flight 重排）。
         recoveryReloadWorkItem?.cancel()
         recoveryReloadWorkItem = nil
         sendRendererLifecycle("did-start-loading")
@@ -1576,7 +1563,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         // "崩溃→重载→可用"这段用户可见空窗的直接量度。
         let previousLoad = lastLoadFinishedAt
         lastLoadFinishedAt = Date()
-        // B5：一次真正成功的加载结束放弃态（give-up 闸门重新武装）。这是闸门的
+        // 一次真正成功的加载结束放弃态（give-up 闸门重新武装）。这是闸门的
         // "生命周期"落点——不是超时、不是重试计数，而是"页面确实活了"。
         if recoveryGaveUp {
             recoveryGaveUp = false
@@ -1590,14 +1577,14 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
             recoveringFromCrash = false
             crashesSinceLoad = 0
         }
-        // T-2：首载/重载成功 → 重试预算归零（下一次失败从最小退避重新开始）。
+        // 首载/重载成功 → 重试预算归零（下一次失败从最小退避重新开始）。
         navRetries = 0
         navRetryWorkItem?.cancel()
         navRetryWorkItem = nil
-        // S-34：首载成功前卡死探测器不 ping/不重载（Electron loadedOnce 门）——
+        // 首载成功前卡死探测器不 ping/不重载（Electron loadedOnce 门）——
         // 建窗到控制面就绪之间的白屏加载不得被误判卡死。
         hangWatchdog.noteFirstLoadFinished()
-        // S-A：加载完成 → webViewLoading:false + webViewContentAlive:true。
+        // 加载完成 → webViewLoading:false + webViewContentAlive:true。
         // 渲染进程终止后的恢复导航成功也在此把 alive 收敛回 true（崩溃回调
         // webViewWebContentProcessDidTerminate 推 false 并触发 E19 有界重载）。
         pushHostFacts(Self.navigationFacts(for: .finished))
@@ -1608,7 +1595,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         // didFinish 时按与注入脚本相同的判定再拉一次（ingest 幂等，无变化
         // 不打扰 sink）。
         reconcilePageFacts()
-        // POC dev 白屏诊断（S14：仅 DSH_CHAMBER_SHELL_DEBUG=1，默认关闭）：延迟数秒后渲染
+        // POC dev 白屏诊断（仅 DSH_CHAMBER_SHELL_DEBUG=1，默认关闭）：延迟数秒后渲染
         // 快照落盘（takeSnapshot 不需要屏幕录制权限；多帧取样便于观察首屏演进）。
         guard ShellDebug.isEnabledCached, !didSnapshot else { return }
         didSnapshot = true
@@ -1639,16 +1626,15 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     func webView(_ webView: WKWebView,
                  didFail navigation: WKNavigation!,
                  withError error: Error) {
-        // S5：失败路径必须推 webViewLoading:false（无 didFinish 可收敛；
+        // 失败路径必须推 webViewLoading:false（无 didFinish 可收敛；
         // sidecar 侧同步门若保持 true，通知打开/深链 drain 会被永久 hold）。
         pushHostFacts(Self.navigationFacts(for: .failed))
-        // S-27/S-42：失败页导航若没有走到提交就失败，一次性豁免没有落地对象——
+        // 失败页导航若没有走到提交就失败，一次性豁免没有落地对象——
         // 撤销，绝不让它悬着放行后续 about: 导航（非失败页导航时为 no-op）。
         presentationGate.noteNavigationFailed()
-        // S-45：打包态控制面 origin 已是 localhost、ATS 例外用正确键名
-        // NSExceptionAllowsInsecureHTTPLoads（旧 NSTemporary... 实测不生效）；
-        // 此处保留退避重试——探测已 2xx 而导航仍失败属 WebKit 层事实，错误
-        // 原文照旧落盘。
+        // 打包态控制面 origin 已是 localhost，ATS 例外用正确键名
+        // NSExceptionAllowsInsecureHTTPLoads；此处保留退避重试——探测已 2xx 而
+        // 导航仍失败属 WebKit 层事实，错误原文照旧落盘。
         shellLog("[shell] 页面加载失败 \(error.localizedDescription)")
     }
 
@@ -1657,22 +1643,22 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
 
     /// sidecar 就绪态（AppDelegate 的 bridge.onReady / 重启回调）。
     /// `false` = 新进程未就绪 → A 桥 origin 门落闸（重启窗口不放行）。
-    /// S12 起无「免门桩态」：dev/装配侧车恒为 sidecar-entry/sidecar.js，
+    /// 无「免门桩态」：dev/装配侧车恒为 sidecar-entry/sidecar.js，
     /// 就绪只由 ready 帧开启；形状未识别的自定义 DSH_CHAMBER_SHELL_SIDECAR 自负 ready 协议。
     func noteSidecarReady(_ ready: Bool = true) {
         sidecarReady = ready
-        // ready 帧后让页面重跑一次 info 水化（2026-12 审查 minor）：shim 在
-        // documentStart 就定义 surface，若首次 1+10 次水化都在 ready 前被就绪门
-        // 拒掉，之前没有任何 re-kick → 版本/平台整会话缺失。
+        // ready 帧后让页面重跑一次 info 水化：shim 在 documentStart 就定义
+        // surface，若首次 1+10 次水化都在 ready 前被就绪门拒掉，没有 re-kick
+        // 就会让版本/平台整会话缺失。
         if ready {
             evaluateJS("window.__dshChamberRehydrateInfo && window.__dshChamberRehydrateInfo(\(nativeTokenLiteral))")
-            // T-2：ready 才允许首载（打包态冷启动竞态的根治点；重启后再次
+            // ready 才允许首载（打包态冷启动竞态的根治点；重启后再次
             // ready 也走这里，didStartLoading 去重）。
             startLoadingIfNeeded()
         }
     }
 
-    /// 退出清理已开始（S7）：A 桥 app_quitting 门置位（AppDelegate
+    /// 退出清理已开始：A 桥 app_quitting 门置位（AppDelegate
     /// beginTerminationCleanup 调用）。置位后 late invoke 一律回 app_quitting。
     func noteQuitting() {
         quitting = true
@@ -1683,7 +1669,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         recoverySuppressed = true
         recoveryReloadWorkItem?.cancel()
         recoveryReloadWorkItem = nil
-        // T-2：退出在途也不再排定首载退避重试（在途就绪探测同样取消）。
+        // 退出在途也不排定首载退避重试（在途就绪探测同样取消）。
         navRetryWorkItem?.cancel()
         navRetryWorkItem = nil
         healthProbeTask?.cancel()
@@ -1692,9 +1678,9 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         hangProbeTimer = nil
     }
 
-    // MARK: - 菜单动作：重新加载 / 页面缩放（S-24）
+    // MARK: - 菜单动作：重新加载 / 页面缩放
 
-    /// A3-3：本 origin 的缩放持久化键（Chromium per_host_zoom_levels 的按 origin
+    /// 本 origin 的缩放持久化键（Chromium per_host_zoom_levels 的按 origin
     /// 语义；读写见 ZoomPersistence 与 setupWindow/zoomIn/zoomOut/resetPageZoom）。
     private var zoomDefaultsKey: String { ZoomPersistence.defaultsKey(cpOrigin: cpOrigin) }
 
@@ -1714,7 +1700,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         webView.reload()
     }
 
-    /// 「强制重新加载」（S-24 残余；Electron 默认菜单 forceReload role 对偶：
+    /// 「强制重新加载」（Electron 默认菜单 forceReload role 对偶：
     /// reloadIgnoringCache 忽略缓存重新取源）。
     func forceReloadPage() {
         shellLog("[shell] 菜单强制重新加载（忽略缓存）")
@@ -1741,13 +1727,13 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         shellLog("[shell] 菜单实际大小 → pageZoom=1.0")
     }
 
-    /// 缩放写回（A3-3；读侧 = setupWindow 的 ZoomPersistence.load）。
+    /// 缩放写回（读侧 = setupWindow 的 ZoomPersistence.load）。
     private func persistPageZoom(_ zoom: Double) {
         ZoomPersistence.save(defaults: .standard, key: zoomDefaultsKey,
                              zoom: zoom, range: Self.zoomRange)
     }
 
-    // MARK: - 窗口恢复（S-32：Dock/托盘/取消退出共用）
+    // MARK: - 窗口恢复（Dock/托盘/取消退出共用）
 
     /// 恢复动作序列（纯值单测直测）：最小化窗口必须先 deminiaturize——
     /// makeKeyAndOrderFront 对最小化窗口不解除最小化（Electron isMinimized →
@@ -1772,7 +1758,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         }
     }
 
-    // MARK: - S-02 渲染器卡死自愈（空闲 ping）
+    // MARK: - 渲染器卡死自愈（空闲 ping）
 
     /// 启动卡死探测：定时器 + 键鼠监听（都在主线程）。
     private func startHangWatchdog() {
@@ -1800,11 +1786,11 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         case .probe:
             webView.evaluateJavaScript("1") { [weak self] _, error in
                 guard let self else { return }
-                // B5: a probe ERROR is not health. The old wiring reported success
-                // unconditionally, so a renderer that answered with an error (a dead
-                // JS context, a navigation in flight, a failed evaluation) could be
-                // judged healthy forever. Both paths now go through the machine, and a
-                // failure that reaches the strike limit reloads on the spot.
+                // A probe ERROR is not health: a renderer that answers with an
+                // error (a dead JS context, a navigation in flight, a failed
+                // evaluation) must not be judged healthy. Both success and failure
+                // go through the machine, and a failure that reaches the strike
+                // limit reloads on the spot.
                 if error == nil {
                     self.hangWatchdog.noteProbeSucceeded()
                     return
@@ -1862,12 +1848,12 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         let sinceLoad = lastLoadFinishedAt.map { now.timeIntervalSince($0) }
         lastCrashAt = now
         recoveringFromCrash = true
-        // 归因行：距上次加载完成的秒数 + 本窗口第几次崩溃。证据里崩溃集中在
+        // 归因行：距上次加载完成的秒数 + 本窗口第几次崩溃。崩溃集中在
         // boot 窗口（21–34s），因此这句是"是不是同一个形态"的第一判据。
         shellLog("[shell] Web 内容进程终止（webViewWebContentProcessDidTerminate）——"
                  + RendererCrashAttribution.describe(secondsSinceLoad: sinceLoad, ordinal: crashesSinceLoad))
         // 退出中：不重载、不上报（Electron render-process-gone 在 quitRequested
-        // 时直接 return；2026-09 三审 E19 偏离 #3）。
+        // 时直接 return）。
         guard !recoverySuppressed else {
             shellLog("[shell] 退出中——抑制渲染恢复")
             return
@@ -1877,15 +1863,15 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         // 上报 crashed，否则 core 会继续向死 frame 推送丢事件。
         sendRendererLifecycle("crashed")
 
-        // 重载走共享的有界恢复策略（不置永久放弃位：滚动窗口自身限制 60s 内 ≤3 次；
-        // 2026-09 三审 E19 偏离 #1）。S-02 的卡死腿同用这一份预算。
+        // 重载走共享的有界恢复策略（不置永久放弃位：滚动窗口自身限制 60s 内 ≤3 次）。
+        // 卡死腿同用这一份预算。
         scheduleRecoveryReload(reason: "crashed")
     }
 
     func webView(_ webView: WKWebView,
                  didFailProvisionalNavigation navigation: WKNavigation!,
                  withError error: Error) {
-        // S5：初载失败同样收敛 webViewLoading:false（退避重试会在
+        // 初载失败同样收敛 webViewLoading:false（退避重试会在
         // didStartProvisionalNavigation 再推 true；失败间隙保持 true 会让
         // sidecar 侧的 drain 门被 hold）。
         pushHostFacts(Self.navigationFacts(for: .failed))
@@ -1893,22 +1879,22 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         // 取消不是失败：loadHTMLString 替换在途导航（含失败页自身导航）与主动
         // reload 都会以 cancelled 收尾——重试或落失败页只会自扰。**也不得**撤销
         // 失败页豁免：noteStartupFailure 的 loadHTMLString 会取消在途的 cpURL
-        // 导航，若这里清掉 pending，随后 about: 失败页会被自家围栏拦掉（S-27）。
+        // 导航，若这里清掉 pending，随后 about: 失败页会被自家围栏拦掉。
         if nsError.domain == NSURLErrorDomain, nsError.code == NSURLErrorCancelled {
             shellLog("[shell] 导航被取消（不重试、不落失败页）：\(error.localizedDescription)")
             return
         }
-        // S-27/S-42：失败页导航若在提交前失败，一次性豁免没有落地对象——撤销，
+        // 失败页导航若在提交前失败，一次性豁免没有落地对象——撤销，
         // 绝不让它悬着放行后续 about: 导航（非失败页导航时为 no-op）。
         presentationGate.noteNavigationFailed()
-        // T-3：sidecar 已 fatal 时失败页的权威原因已经在（noteStartupFailure
+        // sidecar 已 fatal 时失败页的权威原因已经在（noteStartupFailure
         // 已呈现）——晚到的 WebKit 错误绝不覆盖它。
         if startupFailureMessage != nil {
             shellLog("[shell] 页面加载失败（sidecar 启动失败已呈现为失败页）：\(error.localizedDescription)")
             return
         }
-        // T-2：首载只在 sidecar ready 后发起；失败后按退避重试至成功或真正
-        // 耗尽（说明页只在耗尽/不可重试时出现），不再「首次失败就停在说明页」。
+        // 首载只在 sidecar ready 后发起；失败后按退避重试至成功或真正耗尽
+        // （说明页只在耗尽/不可重试时出现），不会「首次失败就停在说明页」。
         guard Self.StartupLoadRetry.isRetryableLoadError(error) else {
             shellLog("[shell] 页面加载失败(不可重试) \(error.localizedDescription)")
             showLoadFailurePage(in: webView, error: error, exhausted: false)
@@ -1928,8 +1914,8 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         }
     }
 
-    /// T-2：退避重试调度（可取消；退出 / sidecar fatal / 加载成功时取消）。
-    /// S-45：probe=true 时重试的是首载前的 /health 探测（而不是导航）。
+    /// 退避重试调度（可取消；退出 / sidecar fatal / 加载成功时取消）。
+    /// probe=true 时重试的是首载前的 /health 探测（而不是导航）。
     private func scheduleNavRetry(probe: Bool = false, url: URL, after delay: TimeInterval) {
         navRetryWorkItem?.cancel()
         let item = DispatchWorkItem { [weak self] in
@@ -1946,13 +1932,13 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
     }
 
-    /// 首载失败的可见错误面（2026-12 双端逐函数核对 S5·U4）：Electron 失败时显示
-    /// 浏览器错误页，Swift 侧此前只打印 stderr → 用户面对白屏。这里落一张最小
-    /// 说明页（原因 + 控制面地址 + T-3 sidecar 真实原因），绝不自行重开会话。
+    /// 首载失败的可见错误面：Electron 失败时显示浏览器错误页；只打印 stderr
+    /// 会让用户面对白屏。这里落一张最小说明页（原因 + 控制面地址 + sidecar
+    /// 真实原因），绝不自行重开会话。
     private func showLoadFailurePage(in webView: WKWebView, error: Error, exhausted: Bool) {
         // 提示句：failure.title 即通用状态句；sidecar 分支用 failure.sidecarLabel
         // 组合出「sidecar 启动失败：<状态>」；耗尽分支用 failure.retryExhausted
-        // （%d = 已重试次数），绝不再手拼 ASCII "(N)" 后缀。
+        // （%d = 已重试次数），绝不手拼 ASCII "(N)" 后缀。
         let statusLine = NativeText.string(.failureTitle)
         let hint: String
         if startupFailureMessage != nil {
@@ -1966,7 +1952,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
                                         detail: error.localizedDescription,
                                         cpURL: cpURL.absoluteString,
                                         sidecarFailure: startupFailureMessage)
-        // S-27/S-42：loadHTMLString(baseURL: nil) 导航到 about:blank，会被自家
+        // loadHTMLString(baseURL: nil) 导航到 about:blank，会被自家
         // 围栏 cancel（说明页因此永不显示）——置一次性豁免：decidePolicyFor 只
         // 观察放行、didCommit 消费并触发呈现门（两个回调谁先到都呈现，见
         // StartupPresentationGate 注记）。
@@ -1978,8 +1964,8 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         webView.loadHTMLString(html, baseURL: nil)
     }
 
-    /// 失败说明页 HTML（T-1 文案锁步的纯函数）：可见面恒用 displayName，
-    /// 绝不出现 "poc"/"DSHChamber"；sidecar 失败原因（T-3）附加在页面上。
+    /// 失败说明页 HTML（文案锁步的纯函数）：可见面恒用 displayName，
+    /// 绝不出现 "poc"/"DSHChamber"；sidecar 失败原因附加在页面上。
     static func failurePageHTML(hint: String, detail: String, cpURL: String,
                                 sidecarFailure: String?) -> String {
         func escape(_ text: String) -> String {
@@ -1995,7 +1981,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         //   failure.sidecarLabel = 「sidecar 启动失败：%@」（%@ = 已转义原因）
         // 主题：补 <meta name="color-scheme" content="light dark"> 与
         // @media (prefers-color-scheme: dark) 两条分支——浅色仍用原
-        // #1d1d1f/#6e6e73，深色用等价的浅色文字配方；不再硬编码内联颜色。
+        // #1d1d1f/#6e6e73，深色用等价的浅色文字配方；不硬编码内联颜色。
         var html = """
         <!doctype html><meta charset="utf-8"><title>\(displayName)</title>
         <meta name="color-scheme" content="light dark">
@@ -2020,10 +2006,10 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         return html
     }
 
-    /// T-3：sidecar 启动失败（supervisor fatal）→ 记录真实原因（退出码 +
-    /// stderr 摘要 + 端口占用提示），停掉首载退避重试并立即呈现失败说明页。
-    /// 应用随后仍走既有 fatal 提示框/退出链；本函数保证失败页不是 WebKit 的
-    /// ATS 文案，而是 sidecar 的诚实报错（S-27/S-42 呈现门照常生效）。
+    /// sidecar 启动失败（supervisor fatal）→ 记录真实原因（退出码 + stderr
+    /// 摘要 + 端口占用提示），停掉首载退避重试并立即呈现失败说明页。应用随后仍走
+    /// 既有 fatal 提示框/退出链；本函数保证失败页不是 WebKit 的 ATS 文案，而是
+    /// sidecar 的诚实报错（呈现门照常生效）。
     func noteStartupFailure(_ message: String) {
         startupFailureMessage = message
         navRetryWorkItem?.cancel()
@@ -2042,7 +2028,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         var errorDescription: String? { message }
     }
 
-    /// T-2：首载失败退避重试策略（纯逻辑单测直测）。首载只在 sidecar ready
+    /// 首载失败退避重试策略（纯逻辑单测直测）。首载只在 sidecar ready
     /// 后发起；失败后指数退避（baseDelay 起、maxDelay 封顶）重试至多
     /// maxAttempts 次——说明页只在真正耗尽或 sidecar 已 fatal 时出现
     /// （sidecar fatal 由 noteStartupFailure 立即呈现真实原因，不等耗尽）。
@@ -2091,8 +2077,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
                  windowFeatures: WKWindowFeatures) -> WKWebView? {
         // 一律不开新窗；但 target=_blank 的**外链**必须先交系统打开再拒绝
         // （Electron main.ts setWindowOpenHandler 先 openExternally 再 deny；
-        // vendor markdown 的外链恒 _blank——2026-09 模块评审 major：原实现
-        // 静默丢弃）。
+        // vendor markdown 的外链恒 _blank，静默丢弃会让点击无反应）。
         if navigationAction.targetFrame == nil,
            let url = navigationAction.request.url,
            TrustGuard.isExternalLink(url.absoluteString, expectedOrigin: cpOrigin) {
@@ -2104,7 +2089,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         return nil
     }
 
-    // MARK: - WKUIDelegate：文件选择面板（S-25）
+    // MARK: - WKUIDelegate：文件选择面板
 
     /// composer 回形针（input type=file）：不实现本回调时 WebKit 在 macOS 视同
     /// 用户取消（WKUIDelegate.h:291-295）。参数投影 → 呈现 seam（真机 NSOpenPanel /
@@ -2124,10 +2109,10 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         }
     }
 
-    /// 媒体采集权限：默认拒绝（2026-12 双端逐函数核对 S4·F9/S3·D11）。Electron 只
-    /// 放行 clipboard-sanitized-write、其余权限请求全拒（main.ts:3832-3834）；WKWebView
-    /// 只暴露媒体采集这一类权限回调（macOS 12+），因此这里拒绝摄像头/麦克风/屏幕共享，
-    /// 剪贴板与网页 Notification 的等价面登记在台账。
+    /// 媒体采集权限：默认拒绝。Electron 只放行 clipboard-sanitized-write、
+    /// 其余权限请求全拒（main.ts:3832-3834）；WKWebView 只暴露媒体采集这一类
+    /// 权限回调（macOS 12+），因此这里拒绝摄像头/麦克风/屏幕共享，剪贴板与网页
+    /// Notification 的等价面登记在台账。
     func webView(_ webView: WKWebView,
                  requestMediaCapturePermissionFor origin: WKSecurityOrigin,
                  initiatedByFrame frame: WKFrameInfo,
@@ -2137,7 +2122,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         decisionHandler(.deny)
     }
 
-    /// S-24：Help 菜单等原生入口复用既有外部打开路径（预算 + NSWorkspace
+    /// Help 菜单等原生入口复用既有外部打开路径（预算 + NSWorkspace
     /// loud 失败）——页面 window.open 与原生菜单动作共享同一预算纪律，绝不
     /// 绕开预算另开一条（openExternally 保持私有）。
     func openExternalPage(_ url: URL) {
@@ -2147,7 +2132,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     // MARK: - 私有
 
     private func openExternally(_ url: URL) {
-        // 预算（二轮评审 A-P2）：页面可经 window.open 连续刷外链，超限后
+        // 预算：页面可经 window.open 连续刷外链，超限后
         // 30s 冷却并 loud（与 shell-core 同参数）。
         switch externalBudget.decide(now: Date().timeIntervalSince1970) {
         case .blocked(let remaining):
@@ -2156,9 +2141,8 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         case .allow:
             break
         }
-        // 打开失败必须 loud（2026-12 双端逐函数核对 S4·F7）：Electron 的
-        // openExternal 失败会 reject 并记录；此处此前把错误回调整个吞掉，
-        // 用户点了链接没反应且日志无痕。
+        // 打开失败必须 loud：Electron 的 openExternal 失败会 reject 并记录；
+        // 把错误回调整个吞掉会让用户点了链接没反应且日志无痕。
         if #available(macOS 14.0, *) {
             NSWorkspace.shared.open(url, configuration: NSWorkspace.OpenConfiguration()) { _, error in
                 if let error {
@@ -2171,7 +2155,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     }
 }
 
-// MARK: - notify 路由解码（S-D：sidecar 出站 notify 的消费决策，纯值纯逻辑）
+// MARK: - notify 路由解码（sidecar 出站 notify 的消费决策，纯值纯逻辑）
 
 /// 事件名与 node-edges.ts 的 sendNotify 出站拼写逐字对应（权威形状 =
 /// node-edges.ts / BridgeClientEdgeIntegrationTests 的 notify 载荷断言）：
@@ -2247,7 +2231,7 @@ extension MainWindowController {
                     return .malformed(reason: "retireNotifications sourceIds 含非字符串元素（丢弃）")
                 }
             }
-            // P-07：notificationIds 与 sourceIds 并存；缺省 = []（旧 sidecar
+            // notificationIds 与 sourceIds 并存；缺省 = []（旧 sidecar
             // 形状仍可消费）。存在时逐元素必须是整数——形状非法即 loud 丢弃，
             // 绝不部分消费。
             var notificationIds: [Int] = []
@@ -2289,11 +2273,11 @@ final class ShellConsoleCatcher: NSObject, WKScriptMessageHandler {
     }
 }
 
-/// 页面事实通道 handler（S1）：独立 WKScriptMessageHandler，**绝不**混进
+/// 页面事实通道 handler：独立 WKScriptMessageHandler，**绝不**混进
 /// ChamberMessageHandler 的白名单/origin 就绪门判定链——它承载本地化/主题
 /// 跟随所需的 DOM 事实，必须在 sidecar ready 前就可用。
 ///
-/// 护栏（Z1 放宽 + W4a 收严）：主 frame + 同源文档面
+/// 护栏：主 frame + 同源文档面
 /// （MainWindowController.isSameOriginDocument；scheme/host/port 与 expectedOrigin
 /// 完全相同，**不**限定 pathname=/、**不**限定无 query——pushState/replaceState 后
 /// webView.url 会变化）；URL 来源以 message.webView?.url 为准（frameInfo.request.url
@@ -2311,7 +2295,7 @@ final class ShellPageFactsMessageHandler: NSObject, WKScriptMessageHandler {
         self.controller = controller
     }
 
-    /// 准入判定（纯函数，F5 单测直测真值表）：名称相等 + 主 frame + 同源文档面
+    /// 准入判定（纯函数，单测直测真值表）：名称相等 + 主 frame + 同源文档面
     /// （MainWindowController.isSameOriginDocument）。放行 = 同源根路径 / 带 query /
     /// 同源 /api/i/*（pushState 场景）/ hash；拒绝 = about:blank、data:/file:/blob:、
     /// 空 url、空 expectedOrigin、跨源（不同端口 / 不同 host / 子域 / https / userinfo）。
@@ -2324,7 +2308,7 @@ final class ShellPageFactsMessageHandler: NSObject, WKScriptMessageHandler {
         return MainWindowController.isSameOriginDocument(url: url, expectedOrigin: expectedOrigin)
     }
 
-    /// W4a 双来源重载（纯函数，单测直测「frameInfo 陈旧 URL 与 webView.url 不同时
+    /// 双来源重载（纯函数，单测直测「frameInfo 陈旧 URL 与 webView.url 不同时
     /// 以 webView.url 为准」）：先把两个来源收敛成文档 URL（factsDocumentURL），
     /// 再走与上面完全相同的名称/主 frame/同源判定。
     static func accepts(messageName: String, isMainFrame: Bool,
@@ -2338,11 +2322,11 @@ final class ShellPageFactsMessageHandler: NSObject, WKScriptMessageHandler {
 
     func userContentController(_ userContentController: WKUserContentController,
                                didReceive message: WKScriptMessage) {
-        // 名称/主 frame 门先行（与改造前顺序一致）：不匹配的通道连
+        // 名称/主 frame 门先行：不匹配的通道连
         // expectedOrigin 闭包都不求值。
         guard message.name == ShellPageFactsScript.messageName else { return }
         guard message.frameInfo.isMainFrame else { return }
-        // W4a：URL 以 message.webView?.url（实时，与 A 桥同来源）为准；
+        // URL 以 message.webView?.url（实时，与 A 桥同来源）为准；
         // frameInfo.request.url 只作 webView 缺席时的兜底。
         guard Self.accepts(messageName: message.name,
                            isMainFrame: message.frameInfo.isMainFrame,

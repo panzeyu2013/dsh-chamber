@@ -8,7 +8,7 @@
  * (notifications.badgeEnabled, chamber-settings.json) → platform gate →
  * `app.setBadgeCount(n)` (macOS Dock / Linux Unity launcher). 0 = clear.
  *
- * SINGLE AUTHORITY (plan §0-4 / §3.3-7 / §5-14,主计划裁决 14): that integer is
+ * SINGLE AUTHORITY: that integer is
  * the renderer's **merged projection** count — the same merged facts projection
  * that drives the in-window dots, the todo entries and the notification edges.
  * This module (and the BADGE_COUNT handler in shell-core) consumes exactly that

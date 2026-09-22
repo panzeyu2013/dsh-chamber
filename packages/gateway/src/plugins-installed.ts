@@ -1,7 +1,7 @@
 /**
  * Gateway-side projection of the MANAGED web profile's plugin manifest
- * (design 21 §6.2 — the readManifest gateway implementation, A0 read surface,
- * plan Phase 3a): parses `<stateDir>/dsh-home/profiles/web/package.json` —
+ * (design 21 §6.2 — the readManifest gateway implementation): parses
+ * `<stateDir>/dsh-home/profiles/web/package.json` —
  * the profile manifest of the gateway-managed dsh instance, the same file the
  * desktop reads for its own instance (plugin-sync.ts localPluginList, whose
  * web profile lives at `<home>/profiles/web/package.json`).
@@ -14,9 +14,9 @@
  *     → profile_corrupt with the evidence in `error`. A torn read caught by
  *     the private-file stable-snapshot discipline (a non-atomic in-place
  *     rewrite) also lands here. The design 21 §6.2 read/write fence is
- *     DELIVERED, not pending: the A1 executor (plan Phase 4) serializes the
- *     gateway's own writers behind the runtime-manager profile-write lease,
- *     and the read route consults that fence before reading (routes.ts
+ *     enforced by the executor, which serializes the gateway's own writers
+ *     behind the runtime-manager profile-write lease; the read route consults
+ *     that fence before reading (routes.ts
  *     `pluginProfileWriteInFlight` → retryable 409 runtime_busy while a
  *     mutation is queued or running). This read module stays a pure
  *     projection — it takes no lease and never blocks; the fence lives one
@@ -79,9 +79,8 @@ export function isFileValue(spec: string): boolean {
 
 /**
  * Masking predicate: **the same ruler the role classifier uses** — `file:`/`link:`/
- * relative/absolute/`~` values all name a machine-local path (2026-12 review: masking
- * only `file:` leaked `link:`/absolute values into `dependencies` and `rows[].spec`).
- * The mask keeps the `file:` prefix, so the name-based diff and both spec classifiers
+ * relative/absolute/`~` values all name a machine-local path. The mask keeps
+ * the `file:` prefix, so the name-based diff and both spec classifiers
  * still classify the value as materialized.
  */
 function isMaskableValue(spec: string): boolean {
@@ -93,7 +92,7 @@ export type InstalledResult =
     ok: true
     dependencies: Record<string, string>
     bundles: string[]
-    /** Read-face row projection (design 21 §6.11.5, 2026-09 revision): one row per
+    /** Read-face row projection (design 21 §6.11.5): one row per
      *  declared dependency, each with role + the SERVER-computed `protected` flag
      *  (the gateway is the authority for a gateway target — the family facts live
      *  here, not in the desktop). B₀ and the seed registry only classify rows;
@@ -192,7 +191,7 @@ export function createChamberInstalled(
       // The accessor resolves the runtime workspace, which THROWS on corrupt
       // override/pointer metadata (design 18). The read face must survive that:
       // a throwing projection would kill the §6.8 r1 recovery read with a
-      // generic 500 (2026-12 review). Null facts ⇒ B₀ ∪ S only.
+      // generic 500. Null facts ⇒ B₀ ∪ S only.
       let facts: GatewayRuntimeFacts | null = null
       if (runtimeFacts !== undefined) {
         try {
@@ -205,7 +204,7 @@ export function createChamberInstalled(
       // ALWAYS applied. `protected` stays exactly "name ∈ P": the official-scope
       // INSTALL conservatism is a capability of the write face (refused with its own
       // code), not a read-face protection fact — marking such rows protected would
-      // hide a remove the write face allows (2026-12 review).
+      // hide a remove the write face allows.
       const derived = gatewayProtectedSet(facts)
       const protectedSet = derived ?? deriveBootProtectedSet()
       const rows = derivePluginRows({

@@ -1,5 +1,5 @@
 /**
- * SessionFactsSource 纯契约（主计划 §3.1/§4/§3.3-6；蓝图 §2-接线 1/4/6）。
+ * SessionFactsSource 纯契约。
  *
  * 覆盖：粗分类全分支（404=版本事实；5xx/超时绝不是「旧网关」）、快照/增量/SSE
  * 帧解析、游标幂等、read 透传、serviceable、**源文本锁步**（对着
@@ -170,9 +170,9 @@ test('delta: cursor monotonicity is idempotent; hints classify added/changed/rem
   const removed = applySessionFactsDelta(changed.next!, { cursor: 10, sessions: [], removedSessionIds: ['s2'] })
   assert.equal(removed.hint, 'removed')
   assert.equal(removed.next?.rows.s2, undefined)
-  // 坏载荷 ⇒ refetch（R21 的收敛路径）。
+  // 坏载荷 ⇒ refetch（收敛路径）。
   assert.deepEqual(applySessionFactsDelta(current, null), { next: null, refetch: true, hint: null })
-  // CL-11：坏/缺失游标必须走重取，不得被降到 0 后当「更旧帧」静默丢弃（那会把真丢帧当成重复）。
+  // 坏/缺失游标必须走重取，不得被降到 0 后当「更旧帧」静默丢弃（那会把真丢帧当成重复）。
   for (const bad of [undefined, null, '7', 1.5, -3, Number.NaN]) {
     assert.deepEqual(
       applySessionFactsDelta(current, { cursor: bad, sessions: [] }),
@@ -241,9 +241,9 @@ test('lockstep: our route/protocol/disabled literals are pinned to the control-p
   assert.equal(SESSION_FACTS_DISABLED_CODE, 'session_state_disabled')
 })
 
-// ── R22：ack 失败重放（恢复钩子 = 既有 facts 帧到达点） ─────────────────────
+// ── ack 失败重放（恢复钩子 = 既有 facts 帧到达点） ─────────────────────
 
-/** R22 假件：GET 回合法快照；POST 可编程失败；服务端按单调 max 合并水位。 */
+/** 假件：GET 回合法快照；POST 可编程失败；服务端按单调 max 合并水位。 */
 function r22Harness(options: { ackFailures?: number; ackStatus?: number } = {}) {
   const gets: string[] = []
   const acks: Array<{ url: string; body: Record<string, unknown> }> = []
@@ -388,7 +388,7 @@ test('R22: the source-level queue honors the injected bound and reports overflow
   source.stop()
 })
 
-// ── R21 收口：SSE 建连 deadline 与「请求发起即武装」的静默看门狗 ───────────────
+// ── SSE 收口：建连 deadline 与「请求发起即武装」的静默看门狗 ───────────────
 
 const SSE_PROBE_BODY = {
   protocol: 1,
@@ -483,7 +483,7 @@ test('R21: a silent stream (headers arrived, no frames) is re-subscribed by the 
   source.stop()
 })
 
-// ── 阶段 2：快照构造单一工厂（probe / SSE sync 帧 / refetch 同形状） ─────────────
+// ── 快照构造单一工厂（probe / SSE sync 帧 / refetch 同形状） ─────────────
 
 test('snapshot factory: an SSE sync frame builds the same shape as the probe and falls back to the prior mode', async () => {
   const syncFrame = JSON.stringify({

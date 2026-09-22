@@ -1,8 +1,8 @@
 /**
  * core-constants.ts — Bundle constants and capacity limits.
  *
- * Extracted verbatim from core.ts (B5 split); core.ts re-exports the public
- * names so the package/test import surface is unchanged.
+ * core.ts re-exports the public names so the package/test import surface
+ * stays stable.
  */
 
 export const READ_TIMEOUT_MS = 10_000

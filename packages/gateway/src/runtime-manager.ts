@@ -123,13 +123,12 @@ import { createMetadataStatusProjection } from './runtime-status-projection.ts'
 import { assertSingleOwner, releaseSingleOwner } from './runtime-owner-lease.ts'
 import { resolvePnpmEntry } from './pnpm-entry.ts'
 import type { GatewayConfig } from './config.ts'
-// The in-flight writer matrix + mutation/profile-write fences now live in
-// runtime-actions.ts (2026-12 audit F2 split; F3 semantics unchanged).
-// Refusal construction + recovery-name classification single sources (audit
-// N2): every code/message this manager shares with the route pre-gates in
-// runtime-routes.ts comes from runtime-refusals.ts; canonical recovery reason
-// sets (incl. RECOVERABLE_METADATA_BLOCKS, formerly defined here) live there
-// and are consumed by both runtime layers.
+// The in-flight writer matrix + mutation/profile-write fences live in
+// runtime-actions.ts. Refusal construction + recovery-name classification
+// single sources: every code/message this manager shares with the route
+// pre-gates in runtime-routes.ts comes from runtime-refusals.ts; canonical
+// recovery reason sets (incl. RECOVERABLE_METADATA_BLOCKS) live there and are
+// consumed by both runtime layers.
 import {
   applyNowNotRunningRefusal,
   envPinnedRefusal,
@@ -145,7 +144,7 @@ import {
 const gatewayRequire = nodeCreateRequire(import.meta.url)
 
 /**
- * The builtin anchor's real semver (design 18 §9.3 F1): apply-phase snapshots
+ * The builtin anchor's real semver (design 18 §9.3): apply-phase snapshots
  * the switching-from source under a semver name, so the anchor workspace must
  * contribute its @deepseek-ai/dsh package version — exactly like desktop's
  * bundledVersion. Unreadable/missing → null (fail-loud at apply time, never a
@@ -184,8 +183,8 @@ const GATEWAY_RUNTIME_LOGICAL_DISK_LIMIT_BYTES = RUNTIME_LOGICAL_DISK_LIMIT_BYTE
 export const GATEWAY_RUNTIME_STATUS_KIND = 'dsh-chamber-gateway-runtime' as const
 
 /**
- * Rollback-vs-lease serialization bound (design 21 §6.3 decision 6/17 F7
- * review gate): the automatic restart-exhausted rollback waits at most this
+ * Rollback-vs-lease serialization bound (design 21 §6.3 decision 6/17, F7
+ * gate): the automatic restart-exhausted rollback waits at most this
  * long for the managed profile-write lease counter to drain before it DEFERS
  * — a DSH_HOME write must never interleave a live plugin pnpm child, and the
  * only lease-aware point inside the rollback transaction (the spawn
@@ -312,7 +311,7 @@ export type GatewayRuntimeStatus = RuntimeStatusProjection & {
   diskLimitBytes: number
   diskLimitExceeded: boolean | null
   progress: RuntimeInstallProgress | null
-  /** Desktop-shaped metadata health projection (2026-12 recover-metadata). */
+  /** Desktop-shaped metadata health projection (recover-metadata). */
   metadataHealth: 'unknown' | 'healthy' | 'selection-corrupt' | 'recovery-in-progress' | 'recovery-finalized' | 'recovery-marker-corrupt'
   metadataComponents: string[]
   canRecoverMetadata: boolean
@@ -363,7 +362,7 @@ export interface GatewayRuntimeManager {
    * resume. 202 semantics — the caller receives `{ accepted: true }`
    * synchronously and the outcome is projected via status(). */
   applyNow(): Promise<{ accepted: boolean }>
-  /** Synchronous apply-now gate (review fix): every manager refusal
+  /** Synchronous apply-now gate: every manager refusal
    * (platform / busy / env / target resolution / tree validation / no-op)
    * runs here so the route answers a 409/403 BEFORE any 202 can go out —
    * a preflight throw must never be swallowed into a fake 202 whose status
@@ -371,21 +370,21 @@ export interface GatewayRuntimeManager {
   applyNowPreflight(): string
   rollback(version: string): Promise<{ accepted: boolean }>
   /** User-authorized cleanup of one explicitly installed version tree
-   *  (desktop-parity, 2026-12): ledger-gated + protection-set re-read at the
+   *  (desktop parity): ledger-gated + protection-set re-read at the
    *  deletion point; consumes the durable store-prune marker afterwards. */
   cleanupVersion(version: string): Promise<{ version: string; removed: boolean }>
-  /** Restore the newest pre-rollback stash over DSH_HOME (desktop-parity,
-   *  2026-12); half leaves restore-blocked for retry-restore to resume. */
+  /** Restore the newest pre-rollback stash over DSH_HOME (desktop parity);
+   *  half leaves restore-blocked for retry-restore to resume. */
   restorePreRollback(stashName: string): Promise<{ accepted: true }>
-  /** Metadata FATAL rescue (desktop-parity, 2026-12): archives corrupt
+  /** Metadata FATAL rescue (desktop parity): archives corrupt
    *  selection metadata with a full DSH_HOME copy and runs the builtin
    *  anchor through the probe gate before restoring access. */
   recoverMetadata(): Promise<{ accepted: true }>
   /** True while a durable metadata-recovery transaction is pending or the
-   *  recovery marker is corrupt (boot preflight gate, H1 review fix). */
+   *  recovery marker is corrupt (boot preflight gate). */
   metadataRecoveryPending(): boolean
-  /** Consume the durable store-prune marker if present (boot boundary, L1
-   *  review fix); single-flight, marker retained on failure. */
+  /** Consume the durable store-prune marker if present (boot boundary);
+   *  single-flight, marker retained on failure. */
   pruneStoreIfNeeded(): Promise<void>
   restoreBuiltin(): Promise<{ accepted: boolean }>
   /** Resume an interrupted pointer switch (swap-attempted) by re-running the
@@ -492,7 +491,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
    * notifications cannot enqueue two writers. */
   let restartExhaustedRollbackInFlight = false
   /** Design 21 §6.3 managed profile-write lease counter (decision 6/17). A
-   * count (not a bool) lets the A1 executor nest per-operation acquisitions
+   * count (not a bool) lets the executor nest per-operation acquisitions
    * inside a wider queue-drain lease; the barrier opens only at zero. Runtime
    * writers refuse while it is non-zero and beginProfileWrite refuses while
    * any runtime writer is live, so the two write families never interleave. */
@@ -509,13 +508,12 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
   const activeOperations = new Set<Promise<unknown>>()
   let disposePromise: Promise<void> | null = null
   let localHealthWindowOpen = false
-  /** Last select/restart failure, surfaced in status (R7 review: async job
-   *  failures must stay observable; cleared by the next successful action). */
+  /** Last select/restart failure, surfaced in status (async job failures must
+   *  stay observable; cleared by the next successful action). */
   let operationError: string | null = null
   let installProgress: RuntimeInstallProgress | null = null
-  // Metadata health facts/projection live in their own module (2026-12 audit
-  // F2 split); the in-memory recover gate is injected as getters so writer
-  // transitions stay immediate (F4 semantics unchanged).
+  // Metadata health facts/projection live in their own module; the in-memory
+  // recover gate is injected as getters so writer transitions stay immediate.
   const metadataStatus = createMetadataStatusProjection({
     platform,
     baseDir,
@@ -528,8 +526,8 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     isDisposed: () => disposed,
   })
 
-  // Disk stats live in their own module (2026-12 audit F2 split); the cache
-  // and the coalesced walk moved there unchanged (perf T3/A4/N3 semantics).
+  // Disk stats live in their own module; the cache and the coalesced walk keep
+  // the same semantics.
   const diskCacheProjection = createRuntimeDiskProjection({ baseDir, dshHome })
 
   function invalidateDiskCache(): void {
@@ -544,11 +542,11 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
 
   let transactionWorkspace: string | null = null
 
-  /** Store-prune executor (2026-12 parity fix): the shared core leaves a
-   *  durable `store-prune-needed` marker after explicit cleanup/eviction;
-   *  desktop consumes it (main.ts runStorePruneIfNeeded) but the gateway had
-   *  no consumer, so the pnpm store only ever grew. Single-flight, marker
-   *  retained on failure (retried by the next cleanup/operation). */
+  /** Store-prune executor (desktop parity): the shared core leaves a durable
+   *  `store-prune-needed` marker after explicit cleanup/eviction; the desktop
+   *  consumes it (main.ts runStorePruneIfNeeded), and this executor gives the
+   *  gateway the same consumer. Single-flight, marker retained on failure
+   *  (retried by the next cleanup/operation). */
   let storePruneOperation: Promise<void> | null = null
   const runStorePruneIfNeeded = (): Promise<void> => {
     if (storePruneOperation !== null) return storePruneOperation
@@ -674,8 +672,8 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
             baseUrl,
             dshHome,
             signal,
-            // 2026-12 Phase 3 shape gate (design 24 §7 C, M2): the expected
-            // chamber host domains are derived from the seed cache packages
+            // Shape gate (design 24 §7 C): the expected chamber host domains
+            // are derived from the seed cache packages
             // actually present (partial syncs included), snapshot ONCE per
             // startup transaction (see buildStartupDeps): probe set and
             // verdict-expected set must always agree, or an exact-set drift
@@ -700,7 +698,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     }
   }
 
-  /** Env-override activation probe (A-U2 desktop parity): spawn the env
+  /** Env-override activation probe (desktop parity): spawn the env
    *  workspace through the plane and run the shared activation probe set
    *  against it. Returns null when every probe passed, otherwise a
    *  sanitized failure summary. The probe engine converts transport/timeout
@@ -764,7 +762,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
   }
 
   function activationFacts(): { sourceVersion: string | null; sourceIsBuiltin: boolean; sourceWasKnownGood: boolean; knownGoodVersion: string | null } {
-    // ACTIVATION-FACTS DIVERGENCE (stage2 ruling, 2026): desktop twin
+    // ACTIVATION-FACTS DIVERGENCE: desktop twin
     // (main.ts readActivationFacts) excludes journalIntent.targetVersion ??
     // override.pending and validates the tree; this side excludes the POINTER
     // and the win32 shortcut below returns knownGoodVersion null. Unification
@@ -782,8 +780,8 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     const knownGood = listKnownGoodVersions(baseDir)
     const record = readOverride(baseDir)
     return {
-      // The builtin anchor contributes its REAL semver as the snapshot source
-      // (F1): apply-phase rejects a null sourceVersion as snapshot-failed, so
+      // The builtin anchor contributes its REAL semver as the snapshot source:
+      // apply-phase rejects a null sourceVersion as snapshot-failed, so
       // the very first install from the anchor would otherwise never switch.
       sourceVersion: pointer === null ? builtinVersion : pointer,
       sourceIsBuiltin: pointer === null,
@@ -794,8 +792,8 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
   }
 
   function buildStartupDeps(): StartupDeps {
-    // 2026-12 Phase 3 shape gate (design 24 §7 C, M2): the probe shape is
-    // snapshot ONCE per startup transaction, DERIVED from the synced seed
+    // Shape gate (design 24 §7 C): the probe shape is snapshot ONCE per
+    // startup transaction, DERIVED from the synced seed
     // cache (the exact chamber domains present — partial syncs included). A
     // desktop sync landing mid-transaction must not flip the derived list
     // while the verdict expects the other set (probeExpectedNames) —
@@ -840,7 +838,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
         }
       },
       spawnAndProbe: (version, isBuiltin, signal) => spawnAndProbeCandidate(version, isBuiltin, hostSeedDomains, signal),
-      // Lazy seam (2026-12 P0): the shared core resolves this AFTER a probe
+      // Lazy seam: the shared core resolves this AFTER a probe
       // attempt, exactly like the desktop hosts. The gateway's own probe does
       // not seed at spawn (its cache is synced by the desktop), so this still
       // returns the snapshot taken above — same source and same snapshot as
@@ -879,16 +877,13 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     //     first startLocal ('current pointer has no matching active
     //     override'). Desktop-parity: the desktop controller arms exactly
     //     this fingerprint (main.ts "A newly observed shell-version mismatch
-    //     starts F4"); the pre-fix gateway owner required the journal to be
-    //     MISSING, so a healthy upgrade over an applied override (settled
-    //     journal) never armed and the gateway crash-looped into the
-    //     installer's rollback. Only LIVE-transaction
-    //     journals (prepared/switched/restoring/…) are NOT armed: an old
-    //     shell's in-flight transaction must never be re-armed under the new
-    //     shell — it keeps its own journal-mismatch block / rollback-
-    //     continuation semantics (runStartupPhase), and writeActivationIntent
-    //     refuses anyway. An intent-phase old-shell transaction IS replaced
-    //     by the fresh arm (desktop parity).
+    //     starts F4"). Only LIVE-transaction journals (prepared/switched/
+    //     restoring/…) are NOT armed: an old shell's in-flight transaction
+    //     must never be re-armed under the new shell — it keeps its own
+    //     journal-mismatch block / rollback-continuation semantics
+    //     (runStartupPhase), and writeActivationIntent refuses anyway. An
+    //     intent-phase old-shell transaction IS replaced by the fresh arm
+    //     (desktop parity).
     //  2. STRANDED invalidation — pointer set + override invalidated + no
     //     resumable journal: an update rollback (installer restarts an older
     //     gateway shell against the newer shell's journal) or a crash window
@@ -939,7 +934,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
           lastError: null,
         })
       }
-      // Arming gate (2026-09 upgrade-regression fix, desktop parity): a
+      // Arming gate (desktop parity): a
       // FRESH shell mismatch arms unless a LIVE transaction journal exists
       // (prepared/switched/restoring/… phases — an old shell's in-flight
       // transaction must not be re-armed under the new shell; it keeps its
@@ -973,8 +968,8 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
         // (snapshot-failed is not a blocked-but-alive reason in index.ts).
         // invalidate() already resets swapAttempted; clear the remaining
         // markers whenever one exists (invalidatedAt == null always writes
-        // the invalidation). Historical fields (chosen/resolved/invalidated*)
-        // stay intact.
+        // the invalidation). The chosen/resolved/invalidated* fields stay
+        // intact.
         if (record.invalidatedAt == null
           || record.swapAttempted
           || record.lastOutcome !== null
@@ -997,11 +992,11 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     // startup outcome only AFTER the env runtime has passed the activation
     // probe gate: env is the highest-priority active runtime, but it is also
     // the one selection the core NEVER probes itself (no activation
-    // transaction runs for it). Desktop parity (A-U2): the desktop opens an
+    // transaction runs for it). Desktop parity: the desktop opens an
     // env boot only when the full current-runtime probe set passes; the
-    // gateway previously normalized env-override to healthy with no probe at
-    // all, so a runtime that answered the control-plane health check but
-    // lacked required features was exposed and marked healthy. Probe the env
+    // gateway must not normalize env-override to healthy without a probe: a
+    // runtime that answers the control-plane health check but lacks required
+    // features would otherwise be exposed and marked healthy. Probe the env
     // runtime here; a failed probe keeps the managed dsh stopped with an
     // honest blocked verdict (resume: fix the DSH_GATEWAY_DSH_PATH target and
     // restart the gateway — the next startup transaction re-probes).
@@ -1043,12 +1038,11 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
       await plane.stopLocal()
     }
     // Snapshot bounding (desktop parity): the desktop main process runs the
-    // shared retention prune after every runtime startup operation; this
-    // gateway never did, so every activation/rollback snapshot accumulated
-    // without bound against the 10 GiB logical disk limit. Every
-    // snapshot-creating transaction funnels through this function (boot,
-    // apply-now, restore-builtin and the automatic restart-exhausted
-    // rollback), so one call here closes the gap for all of them. It runs
+    // shared retention prune after every runtime startup operation; every
+    // gateway snapshot-creating transaction funnels through this function
+    // (boot, apply-now, restore-builtin and the automatic restart-exhausted
+    // rollback), so one call here bounds them all against the 10 GiB logical
+    // disk limit. It runs
     // INSIDE the activation window (single-flight) and never fails the
     // transaction — a prune error is logged and bounded at the next one.
     await maintenanceSnapshotPrune()
@@ -1121,7 +1115,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
       || restartExhaustedRollbackInFlight || startInFlight
   }
 
-  // Action guards/resolution live in their own module (2026-12 audit F2 split):
+  // Action guards/resolution live in their own module:
   // the pending fences, the in-flight writer matrix and the profile-write lease
   // gates are shared by every transaction body below.
   const actionGuards = createRuntimeActionGuards({
@@ -1263,7 +1257,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
       if (active.source !== 'override' || active.version === null) return
 
       // Rollback-vs-lease serialization (design 21 §6.3 decision 6/17, F7
-      // review gate): the transaction's restore step writes DSH_HOME BEFORE
+      // gate): the transaction's restore step writes DSH_HOME BEFORE
       // the only lease-aware point (the spawn checkpoint inside
       // plane.startLocal) — a plugin mutation whose pnpm child is live under
       // a held profile-write lease must drain first, or this rollback would
@@ -1273,7 +1267,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
       // the bound DEFERS the rollback with NO writes: the instance stays in
       // restart-exhausted with its existing honest projection and
       // start remains available; restore-builtin stays restricted to
-      // pending/healthy selections (2026 audit R2 — recovery-marked states
+      // pending/healthy selections (recovery-marked states
       // expose only their matching retry). The next restart-exhausted
       // edge (or gateway restart) re-arms it. dispose() aborts the wait, so
       // shutdown never stalls behind an undrained lease even though index.ts
@@ -1435,8 +1429,8 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
 
   async function status(): Promise<GatewayRuntimeStatus> {
     assertManagerReadable()
-    // Desktop-shaped metadata health projection (2026-12 recover-metadata
-    // parity): category-only components, never paths.
+    // Desktop-shaped metadata health projection (recover-metadata parity):
+    // category-only components, never paths.
     const metadata = metadataStatus.projection()
     if (platform === 'win32') {
       const resolved = resolveWorkspace()
@@ -1520,7 +1514,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
       at: failures.latest.lastFailedAt,
       reason: failures.latest.error,
     }
-    // Full logical accounting is a batched async tree walk (perf T3). Cache
+    // Full logical accounting is a batched async tree walk. Cache
     // it so the authenticated 3s UI poll and gateway identity probes never
     // turn status into a hot 10 GiB filesystem walk; mutations invalidate the
     // cache.
@@ -1528,10 +1522,10 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     const effectiveBlockedReason = startupBlockReason ?? resolutionError
     const effectivePending = envPath === null && override !== null && !shouldInvalidate(override, shellVersion) && override.pending !== null
       ? override.pending : null
-    // 2026-12 (H2 review fix): a FATAL/RECOVERABLE metadata block must also
-    // suppress the ordinary-pending phase — journal-corrupt + stale pending
-    // would otherwise lock the only recovery surface behind the pending gate.
-    // Block-outranks-pending classification single source (audit N2:
+    // A FATAL/RECOVERABLE metadata block must also suppress the
+    // ordinary-pending phase — journal-corrupt + stale pending would otherwise
+    // lock the only recovery surface behind the pending gate.
+    // Block-outranks-pending classification single source:
     // startupBlockReasonOutranksPending — RECOVERABLE ∪ retry-apply ∪
     // retry-restore reasons).
     const blockOutranksPending = startupBlockReasonOutranksPending(startupBlockReason)
@@ -1564,7 +1558,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
         : startupBlockReason === 'restore-half' || startupBlockReason === 'restore-incomplete' ? 'restore-blocked'
         : ordinaryPending ? 'pending'
         : 'idle',
-      // Review fix: blocked startups are projected so clients can see WHY the
+      // Blocked startups are projected so clients can see WHY the
       // managed dsh is down and which resume route applies.
       startupBlockedReason: effectiveBlockedReason,
       pending: effectivePending,
@@ -1574,7 +1568,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
       platform,
       mutationsAllowed: true,
       operationError,
-      // Last restart outcome (design 18 §9.3 review fix): 'running' from the
+      // Last restart outcome (design 18 §9.3): 'running' from the
       // moment a restart is accepted until it settles; 'ok'/'failed' terminal.
       // The settings-bridge poll uses this to distinguish a post-202 entry
       // rejection (operationError set, connectionState still 'ready') from a
@@ -1602,7 +1596,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     }
   }
 
-  /** Cleanup candidates for the settings UI (2026-12 desktop parity): the
+  /** Cleanup candidates for the settings UI (desktop parity): the
    *  explicit-install ledger minus everything the deletion-point protection
    *  set would refuse (current/pending/chosen/known-good/failure evidence).
    *  Fail-closed: any read trouble projects an empty list — the cleanup route
@@ -1658,8 +1652,8 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
    * 'intent'-phase journal is cleared — an in-flight transaction
    * (prepared/applying/monitoring) keeps its evidence; writeActivationIntent
    * supersedes intent-phase journals and queues nextIntent onto
-   * applied-monitoring ones (round-4 fix: rollback → re-select → apply must
-   * not strand a mismatched journal that FATAL-blocks the next boot). */
+   * applied-monitoring ones (rollback → re-select → apply must not strand a
+   * mismatched journal that FATAL-blocks the next boot). */
   function clearStaleIntent(): void {
     const state = readActivationJournalState(baseDir)
     if (state.kind === 'valid' && state.journal.phase === 'intent') {
@@ -1670,7 +1664,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
   /** Consume an app-update invalidation stamp when the user makes a FRESH
    * selection under the CURRENT shell. `shouldInvalidate` reads the ACTIVE
    * `invalidatedAt`/`invalidatedReason` pair, so carrying it into a new record
-   * (the spread this replaces) makes that selection born-invalidated: pending
+   * makes that selection born-invalidated: pending
    * is then permanently ignored by effectivePending/persistedPendingVersion,
    * apply-now refuses it as `no_selection`, and the leftover intent journal
    * next to the still-stamped record is classified `selection-corrupt` by the
@@ -1678,7 +1672,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
    *
    * Desktop parity: dsh-runtime-controller.ts writes a clean literal record on
    * install, so the desktop's post-update re-selection does take effect. The
-   * historical `lastInvalidated*` fields are deliberately KEPT (design 18 F4:
+   * `lastInvalidated*` fields are deliberately KEPT (design 18 F4:
    * they are the durable user-visible "original selection retained" history and
    * must survive); only the active stamp is cleared.
    *
@@ -1751,9 +1745,9 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
           // selectedOnly MUST remain false so losing v1's pointer still
           // quarantines DSH_HOME instead of silently falling back to builtin.
           selectedOnly: currentAtSelection === null,
-          // Round-3 fix: a fresh user transaction supersedes a failed
-          // snapshot — the durable lastOutcome marker must not re-block the
-          // next startup (desktop parity: its install writes a fresh record).
+          // A fresh user transaction supersedes a failed snapshot — the
+          // durable lastOutcome marker must not re-block the next startup
+          // (desktop parity: its install writes a fresh record).
           lastOutcome: null,
           lastError: null,
         })
@@ -1826,7 +1820,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
         pending: null,
         swapAttempted: false,
         selectedOnly: currentAtSelection === null,
-        // Round-3 fix: a fresh user transaction supersedes a failed snapshot.
+        // A fresh user transaction supersedes a failed snapshot.
         lastOutcome: null,
         lastError: null,
       })
@@ -1873,7 +1867,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
         { code: 'no_selection' },
       )
     }
-    // Round-4 fix: the activation intent must agree with the pending target —
+    // The activation intent must agree with the pending target —
     // a stale intent journal (e.g. from an earlier rollback) would otherwise
     // FATAL-block the next boot on journal-mismatch. writeActivationIntent
     // replaces intent-phase journals and queues onto applied-monitoring ones
@@ -1900,11 +1894,11 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
       pending: record.chosenVersion,
       swapAttempted: false,
       selectedOnly: false,
-      // Round-3 fix: a fresh apply transaction supersedes a failed snapshot.
+      // A fresh apply transaction supersedes a failed snapshot.
       lastOutcome: null,
       lastError: null,
     })
-    startupBlockReason = null // round-4: a fresh apply supersedes the in-memory block marker
+    startupBlockReason = null // a fresh apply supersedes the in-memory block marker
     operationError = null
     restartOutcome = null
     startOutcome = null
@@ -1923,8 +1917,8 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     // Direction guard (fail-loud): rollback is the DOWNGRADE path only — a
     // same-as-active or newer target is select+apply's job, and accepting it
     // here would journal a manualRollback intent with upgrade semantics (the
-    // UI regression this guard closes: the API/dashboard misusing rollback for
-    // an upgrade). The comparison uses the EFFECTIVE active version (pointer
+    // API/dashboard must not misuse rollback for an upgrade). The comparison
+    // uses the EFFECTIVE active version (pointer
     // ?? builtin anchor), the same formula as apply()/applyNowPreflight() and
     // the desktop controller's activeVersion(): a builtin-active downgrade to
     // an installed tree is a legitimate manual rollback (data restore, design
@@ -1952,7 +1946,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
       pending: null,
       swapAttempted: false,
     }
-    // Journal FIRST, then the override (round-4 order fix): a crash between
+    // Journal FIRST, then the override: a crash between
     // the two writes must not strand a pending override without its
     // manualRollback intent — the intent is the durable record of the
     // transaction's kind; the override only arms it.
@@ -1974,12 +1968,12 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
       pending: version,
       swapAttempted: false,
       selectedOnly: false,
-      // Round-3 fix: a fresh rollback transaction supersedes a failed snapshot.
+      // A fresh rollback transaction supersedes a failed snapshot.
       lastOutcome: null,
       lastError: null,
     })
-    // Round-4 fix: a fresh transaction supersedes the in-memory blocked
-    // phase marker (parity with restoreBuiltin); the durable markers above
+    // A fresh transaction supersedes the in-memory blocked phase marker
+    // (parity with restoreBuiltin); the durable markers above
     // are the authority — the next boot re-derives any real block.
     startupBlockReason = null
     operationError = null
@@ -1988,8 +1982,8 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     return { accepted: true }
   }
 
-  /** User-authorized cleanup of one explicitly retained version tree (2026-12
-   *  desktop-parity route): mirrors desktop RUNTIME_CLEANUP_VERSION — ledger
+  /** User-authorized cleanup of one explicitly retained version tree
+   *  (desktop-parity route): mirrors desktop RUNTIME_CLEANUP_VERSION — ledger
    *  membership is required (never an arbitrary tree), the shared core
    *  re-reads the complete protection set at the deletion point, the durable
    *  store-prune marker is consumed by runStorePruneIfNeeded, and a success
@@ -2020,8 +2014,8 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     return { version: safe, removed: result.removed }
   }
 
-  /** Restore the newest pre-rollback stash over DSH_HOME (2026-12 desktop
-   *  parity, main.ts RUNTIME_RESTORE_PRE_ROLLBACK): stash-name whitelist →
+  /** Restore the newest pre-rollback stash over DSH_HOME (desktop parity,
+   *  main.ts RUNTIME_RESTORE_PRE_ROLLBACK): stash-name whitelist →
    *  stop the managed dsh → shared crash-safe restorePreRollback →
    *  resume/blocked projection. env stays allowed (data recovery is
    *  source-independent, design 18 §3.6); win32 read-only refuses. */
@@ -2088,9 +2082,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     }
   }
 
-  /** Disk-derived metadata facts behind a short TTL (the scan the audit F4
-   *  finding targets): status + category-only components + whether any
-  /** H1 review fix: true while a durable metadata-recovery transaction is
+  /** True while a durable metadata-recovery transaction is
    *  pending (engine record mid-flight) or the recovery marker is corrupt.
    *  The boot path consults this BEFORE starting the managed dsh — an
    *  archived/metadata-cleared state must never serve DSH_HOME through the
@@ -2107,7 +2099,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     }
   }
 
-  /** Metadata FATAL rescue (2026-12 desktop parity, main.ts executeMetadataRecovery
+  /** Metadata FATAL rescue (desktop parity, main.ts executeMetadataRecovery
    *  mirror): archives corrupt selection metadata byte-for-byte while keeping a
    *  full DSH_HOME copy, runs the builtin anchor through the full read-only
    *  probe gate, and only then finalizes access. The shared engine owns the
@@ -2135,7 +2127,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
       || health.status === 'recovery-in-progress'
       || markerRescueAvailable
     if (startupBlockReason === 'metadata-start-failed') {
-      // M3 review fix: the metadata is healthy behind a failed resume start —
+      // The metadata is healthy behind a failed resume start —
       // recover simply retries the plain start of the builtin anchor.
       if (!disposed) {
         await plane.startLocal()
@@ -2196,7 +2188,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
           await plane.startLocal()
           plane.refreshLocalExposure()
         } catch (error) {
-          // M3 review fix: a failed resume start must stay recoverable — the
+          // A failed resume start must stay recoverable — the
           // metadata is healthy now, so keep a dedicated sentinel the recover
           // route resolves by retrying the plain start.
           startupBlockReason = 'metadata-start-failed'
@@ -2228,7 +2220,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     if (platform === 'win32') throw Object.assign(new Error('windows runtime mutations are read-only'), { code: 'platform_read_only' })
     assertMutationIdle()
     if (envPath !== null) throw refusalError(envPinnedRefusal('version mutations'))
-    // Desktop parity (A-U4): reset-builtin without an override is a pointless
+    // Desktop parity: reset-builtin without an override is a pointless
     // stop → snapshot → probe cycle (the anchor is already authoritative and
     // there is nothing to clear) — the desktop only offers the action when
     // hasOverride, and a no-override API call must not manufacture downtime.
@@ -2236,7 +2228,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     if (overrideState.kind === 'missing') {
       throw Object.assign(new Error('no override exists — the runtime is already on the builtin anchor; nothing to restore'), { code: 'runtime_no_override' })
     }
-    // Desktop parity (A-F5 + 2026 audit R2): reset-builtin only applies to a
+    // Desktop parity: reset-builtin only applies to a
     // HEALTHY or ordinary-pending selection. Inside an interrupted apply
     // (durable swapAttempted / lastOutcome snapshot-failed), an interrupted
     // data restore (restore marker), a corrupt override, or any armed memory
@@ -2264,7 +2256,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
                 : null
     if (recoveryReason !== null) {
       // Same code/message as start()/applyNowPreflight/profileWriteRefusal
-      // (audit N2: recoveryRetryRequiredRefusal).
+      // (recoveryRetryRequiredRefusal).
       throw refusalError(recoveryRetryRequiredRefusal(recoveryReason))
     }
 
@@ -2324,7 +2316,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
 
   let restartInFlight = false
   let applyNowInFlight = false
-  /** Last restart outcome, projected in status() (review fix): the settings
+  /** Last restart outcome, projected in status(): the settings
    * poll must be able to distinguish a post-202 entry rejection from success
    * even when connectionState has already returned to 'ready'. */
   let restartOutcome: 'ok' | 'failed' | 'running' | null = null
@@ -2344,10 +2336,10 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
       // CONTRACT (design 18 §9.3): resolve ≠ success — restartLocal() also
       // resolves from restart-exhausted / error / stopped (the shared window
       // or a concurrent stop); project that honestly instead of a false 'ok'
-      // (review fix: the settings poll must not show「已重启」for a restart
-      // that never reached ready).
+      // (the settings poll must not show「已重启」for a restart that never
+      // reached ready).
       const connectionState = plane.connectionState
-      // Whitelist (round-3 fix): restartLocal() resolves from
+      // Whitelist: restartLocal() resolves from
       // restart-exhausted / error / stopped AND can bail on an epoch bump
       // while 'restarting' is still the live state — every non-ready settle
       // is a failure; only ready/degraded (process alive) count as success.
@@ -2386,15 +2378,15 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
    */
   async function start(): Promise<void> {
     if (startInFlight) {
-      // Same code/message as the route /start pre-gate (audit N2:
-      // startAlreadyInFlightRefusal).
+      // Same code/message as the route /start pre-gate
+      // (startAlreadyInFlightRefusal).
       throw refusalError(startAlreadyInFlightRefusal())
     }
     assertMutationIdle()
     // Recovery gate (decision 12: "恢复门不可绕过"): an in-memory startup
     // block is the authoritative recovery verdict; only its matching retry
     // (recover-metadata for FATAL) may run — restore-builtin applies to
-    // pending/healthy selections only (2026 audit R2: an armed reset is
+    // pending/healthy selections only (an armed reset is
     // re-blocked by the shared core against durable recovery markers, so the
     // recovery surface never includes it). F7's auto-rollback tail and
     // gateway-boot blocks all land here, so a raw start can never skip the
@@ -2407,8 +2399,8 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     assertNoPending()
     const connectionState = plane.connectionState
     if (connectionState !== 'stopped' && connectionState !== 'error' && connectionState !== 'restart-exhausted') {
-      // Same code/message as the route /start pre-gate (audit N2:
-      // startNotApplicableRefusal).
+      // Same code/message as the route /start pre-gate
+      // (startNotApplicableRefusal).
       throw refusalError(startNotApplicableRefusal(connectionState))
     }
     startInFlight = true
@@ -2444,19 +2436,19 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
   }
 
   /**
-   * Synchronous apply-now preflight (review R3/R5): every manager gate that
-   * can refuse the action runs here, synchronously, so the route can answer a
-   * 409/403 BEFORE any 202 goes out — a preflight throw must never be
-   * swallowed into a fake 202 whose status never settles (F3).
+   * Synchronous apply-now preflight: every manager gate that can refuse the
+   * action runs here, synchronously, so the route can answer a 409/403 BEFORE
+   * any 202 goes out — a preflight throw must never be swallowed into a fake
+   * 202 whose status never settles.
    *
    * Order: platform → assertMutationIdle (incl. applyNowInFlight) → env →
-   * fail-closed metadata/state gates (P2 review fix: corrupt activation
+   * fail-closed metadata/state gates (corrupt activation
    * journal / in-memory startup block / managed dsh not ready — each mirrors a
    * route-level refusal so a DIRECT manager call refuses identically) → target
    * resolution (ordinary pending, else a NON-invalidated staged chosenVersion;
    * both empty → no_selection) → installed-tree validation → no-op rejection
-   * (target already active with no in-flight transaction to continue) → F2 arm
-   * of the pending switch when only a selection is staged (journal-first,
+   * (target already active with no in-flight transaction to continue) → arm of
+   * the pending switch when only a selection is staged (journal-first,
    * apply() ordering; manualRollback mirrors apply() :1084).
    *
    * Returns the resolved target version.
@@ -2466,7 +2458,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     assertMutationIdle()
     if (envPath !== null) throw refusalError(envPinnedRefusal('version mutations'))
 
-    // P2-1 (review fix): a corrupt activation journal must fail closed BEFORE
+    // A corrupt activation journal must fail closed BEFORE
     // any 202/stop can go out. The startup transaction cannot read it either
     // (runStartupPhase answers journal-corrupt), so proceeding would stop a
     // healthy managed dsh and leave it down. Recovery is the retry/restore
@@ -2484,19 +2476,19 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     // Direct-call parity with the route's connection gate: a managed dsh that
     // never reached ready cannot be switched in-session (mirrors /restart).
     if (plane.connectionState !== 'ready' && plane.connectionState !== 'degraded') {
-      // Same code/message as the route /apply-now pre-gate (audit N2:
-      // applyNowNotRunningRefusal).
+      // Same code/message as the route /apply-now pre-gate
+      // (applyNowNotRunningRefusal).
       throw refusalError(applyNowNotRunningRefusal(plane.connectionState))
     }
 
-    // F2: the target is the ordinary pending version when one exists, else the
+    // The target is the ordinary pending version when one exists, else the
     // staged chosenVersion (a selectedOnly selection with no pending yet).
     // Both empty → no_selection (never a no-op dsh stop/start cycle). An
     // invalidated record (gateway upgrade, shellVersion mismatch) keeps its
     // chosenVersion but is NOT a valid target — the selection gate must filter
     // it HERE, not at the route's status projection, whose selectedVersion
-    // field does not see the invalidation (review R3/R5: a status-based
-    // no_selection gate mis-let the stale choice through to a fake 202).
+    // field does not see the invalidation (a status-based no_selection gate
+    // would let the stale choice through to a fake 202).
     let target = ordinaryPendingVersion()
     if (target === null) {
       const record = readOverride(baseDir)
@@ -2511,11 +2503,11 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
 
     // No-op rejection: the target is already the active runtime and no
     // transaction is in flight — applying again would run a pointless
-    // stop → snapshot → spawn → probe cycle. P2-2 (review fix): the exception
-    // was too wide — applied-monitoring (no nextIntent) is the durable end
-    // state of every successful apply (pending=null, chosen==active), and the
-    // old gate let apply-now through to that empty stop/start loop on the
-    // ALREADY-ACTIVE version. Only the crash-continuation phases (prepared /
+    // stop → snapshot → spawn → probe cycle. The exception was too wide —
+    // applied-monitoring (no nextIntent) is the durable end state of every
+    // successful apply (pending=null, chosen==active), and apply-now must not
+    // run that empty stop/start loop on the ALREADY-ACTIVE version. Only the
+    // crash-continuation phases (prepared /
     // switched / manual-restoring / manual-restored / rollback-needed /
     // restoring / restore-complete / fallback-builtin) still pass — those are
     // real interrupted transactions that apply-now must continue. An
@@ -2535,7 +2527,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
       }
     }
 
-    // F2 (continuation): when only the selection is staged (no pending yet),
+    // When only the selection is staged (no pending yet),
     // arm the pending switch journal-first — the exact apply() ordering — so
     // runStartupPhase sees effectivePending === targetVersion. assertNoPending
     // is deliberately NOT used: a pending/selection existing is the semantic
@@ -2553,8 +2545,8 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
         writeActivationIntent(baseDir, {
           targetVersion: target,
           targetIsBuiltin: false,
-          // Review fix: mirror apply() :1084's downgrade-aware formula instead
-          // of a hardcoded false — a staged downgrade (chosen < current) arms
+          // Mirror apply() :1084's downgrade-aware formula instead of a
+          // hardcoded false — a staged downgrade (chosen < current) arms
           // a real manual rollback intent so runStartupPhase prepares the
           // pre-rollback stash, exactly like a rollback()-armed switch.
           manualRollback: isVersionDowngrade(target, current),
@@ -2571,13 +2563,13 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
         pending: target,
         swapAttempted: false,
         selectedOnly: false,
-        // Round-3 fix: a fresh apply-now transaction supersedes a failed
-        // snapshot's durable lastOutcome marker (desktop parity).
+        // A fresh apply-now transaction supersedes a failed snapshot's durable
+        // lastOutcome marker (desktop parity).
         lastOutcome: null,
         lastError: null,
       })
-      // Round-4 fix: a fresh transaction supersedes the in-memory blocked
-      // phase marker; the durable writes above are the authority.
+      // A fresh transaction supersedes the in-memory blocked phase marker; the
+      // durable writes above are the authority.
       startupBlockReason = null
       operationError = null
       restartOutcome = null
@@ -2591,35 +2583,34 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
    * session (design 18 addendum · apply-now, §5.1): the version-switch twin of
    * restoreBuiltin — durable intent → quiesce DSH_HOME → snapshot → atomic
    * pointer switch → spawn candidate → full probe gate → verdict/rollback.
-   * 202 semantics (F3): the caller receives `{ accepted: true }` synchronously;
+   * 202 semantics: the caller receives `{ accepted: true }` synchronously;
    * the async job's outcome is projected into status() (operationError /
    * startupBlockReason), never only into the log. Every synchronous refusal
    * happens in applyNowPreflight() BEFORE applyNowInFlight is armed — the
    * route answers 409/403 from the preflight and never sends a fake 202.
    */
   async function applyNow(): Promise<{ accepted: boolean }> {
-    // The preflight arms the pending switch (F2) when only a selection is
-    // staged; the transaction body below relies on that persisted pending —
+    // The preflight arms the pending switch when only a selection is staged;
+    // the transaction body below relies on that persisted pending —
     // runStartupPhase derives effectivePending === targetVersion from the
     // override/journal, so `target` needs no separate plumbing into it.
     // `target` is intentionally not bound: the preflight arms the persisted
-    // pending (F2) and the transaction derives the target from override/journal.
+    // pending and the transaction derives the target from override/journal.
     applyNowPreflight()
     applyNowInFlight = true
     const job = (async () => {
-      // P0 (review fix): the recovery segment (startLocal + exposure resync)
-      // and the F3 projection run AFTER endActivation() closes the quarantine
-      // window — restoreBuiltin order (mirror restoreBuiltin :1180-1192). The
-      // OLD placement ran the recovery startLocal INSIDE
-      // beginActivation()…endActivation(), where index.ts's canStartLocal gate
-      // (activationInProgress() && !internalSpawnActive() → connection_busy)
-      // refuses every non-internal spawn → every production apply-now recovery
-      // threw connection_busy and the operationError was overwritten with the
-      // misleading 'dsh runtime activation in progress'.
+      // The recovery segment (startLocal + exposure resync) and the outcome
+      // projection run AFTER endActivation() closes the quarantine window —
+      // restoreBuiltin order (mirror restoreBuiltin :1180-1192). Running the
+      // recovery startLocal INSIDE beginActivation()…endActivation() would hit
+      // index.ts's canStartLocal gate (activationInProgress() &&
+      // !internalSpawnActive() → connection_busy), which refuses every
+      // non-internal spawn, and the operationError would be overwritten with
+      // the misleading 'dsh runtime activation in progress'.
       let result: Awaited<ReturnType<typeof runStartupPhase>> | null = null
       try {
-        // P2-4 (review fix): a new transaction supersedes any stale projection
-        // from a previous select/restart/apply-now the moment it is accepted —
+        // A new transaction supersedes any stale projection from a previous
+        // select/restart/apply-now the moment it is accepted —
         // the 202 window must not keep echoing the last failure's text.
         operationError = null
         beginActivation()
@@ -2630,14 +2621,14 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
           endActivation()
           invalidateDiskCache()
         }
-        // P2-5 (review fix): stop()/dispose() during the in-flight job must
-        // never let the recovery startLocal resurrect the managed dsh.
+        // stop()/dispose() during the in-flight job must never let the
+        // recovery startLocal resurrect the managed dsh.
         if (disposed) return
         if (result.blockedReason === null || result.blockedReason === 'snapshot-failed') {
           await plane.startLocal()
           plane.refreshLocalExposure()
         }
-        // F3: the 202 job's failure must project into manager state (restart
+        // The 202 job's failure must project into manager state (restart
         // parity) — the settings poll reads these fields, not the log. Hard
         // recovery/metadata blocks stay stopped and pollable (restoreBuiltin
         // :1180-1192 semantics); executeStartupTransaction already projected
@@ -2691,7 +2682,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     // Mirror the desktop retry-apply (design 18 §3.6): clear the interrupted-
     // switch markers, then re-run the startup transaction so the pending switch
     // proceeds (snapshot → pointer switch → spawn → probe gate). snapshot-failed
-    // is included (review fix): the gateway must have a NON-destructive recovery
+    // is included: the gateway must have a NON-destructive recovery
     // from a snapshot failure, exactly like the desktop's canRetryApply.
     writeOverride(baseDir, { ...record!, swapAttempted: false, lastOutcome: null, lastError: null })
     const result = await resumeAfterBlockedStartup()
@@ -2702,9 +2693,9 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
   async function retryRestore(): Promise<{ accepted: boolean; blockedReason: string | null }> {
     if (platform === 'win32') throw Object.assign(new Error('windows runtime mutations are read-only'), { code: 'platform_read_only' })
     assertMutationIdle()
-    // 2026-12 parity fix (audit h): interrupted data-restore continuation is
-    // source-independent — desktop never refuses env here, so neither does the
-    // gateway (retry-apply stays env-refused: it resumes a VERSION switch).
+    // Interrupted data-restore continuation is source-independent — the desktop
+    // never refuses env here, so neither does the gateway (retry-apply stays
+    // env-refused: it resumes a VERSION switch).
     assertNoOrdinaryPending()
     if (startupBlockReason === null || !RETRY_RESTORE_REASONS.has(startupBlockReason)) {
       throw Object.assign(new Error('no interrupted restore to retry'), { code: 'no_retry_target' })

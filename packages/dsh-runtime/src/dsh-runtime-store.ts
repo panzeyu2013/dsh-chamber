@@ -65,7 +65,7 @@ export interface OverrideRecord {
   selectedOnly?: boolean
   invalidatedAt?: string | null
   invalidatedReason?: string | null
-  /** Durable user-visible F4 history. Unlike invalidatedAt, this survives a
+  /** Durable user-visible invalidation history. Unlike invalidatedAt, this survives a
    * failed builtin probe followed by automatic reactivation of the old tree. */
   lastInvalidatedAt?: string | null
   lastInvalidatedReason?: string | null
@@ -142,7 +142,7 @@ export interface RuntimeDiskSummary {
    * Real byte figure: the runtime root plus the dsh-home.old* restore
    * backups are walked once and every entry is counted by (dev, ino)
    * identity exactly once, so hard-linked tree/store entries are never
-   * double counted. Category fields keep their historical per-path sums
+   * double counted. Category fields keep per-path sums
    * (a shared hard link is still charged to both categories).
    * Honest boundary: (dev, ino) dedupe cannot see APFS clone/reflink copies
    * (shared physical blocks, distinct inodes), so on APFS this remains an
@@ -206,7 +206,7 @@ export interface ActivationJournal {
   preRollbackStashName: string | null
   /** null is also the explicit builtin rollback target. */
   rollbackTarget: string | null
-  /** A later selection can queue without erasing F7 monitoring context. */
+  /** A later selection can queue without erasing delayed-rollback monitoring context. */
   nextIntent: ActivationJournalIntent | null
   startedAt: string
   updatedAt: string
@@ -672,9 +672,7 @@ export function writeActivationIntent(
   // Builtin targets may name the exact sentinel token ('builtin-anchor',
   // the gateway's builtin/fallback identity) instead of a semver — the
   // startup/apply phases only compare targetVersion for non-builtin targets.
-  // Anything else must still pass the strict path-safe semver gate
-  // (2026-09 release gate: F4 shell-invalidation with an existing override
-  // crashed the gateway on the builtin-anchor token).
+  // Anything else must still pass the strict path-safe semver gate.
   const targetVersion = input.targetIsBuiltin
     ? (input.targetVersion === BUILTIN_ANCHOR_VERSION_TOKEN
       ? input.targetVersion
@@ -747,12 +745,6 @@ export function queueActivationIntent(
   input: ActivationIntentInput,
   now = new Date(),
 ): ActivationJournal {
-  // Builtin targets may name the exact sentinel token ('builtin-anchor',
-  // the gateway's builtin/fallback identity) instead of a semver — the
-  // startup/apply phases only compare targetVersion for non-builtin targets.
-  // Anything else must still pass the strict path-safe semver gate
-  // (2026-09 release gate: F4 shell-invalidation with an existing override
-  // crashed the gateway on the builtin-anchor token).
   const targetVersion = input.targetIsBuiltin
     ? (input.targetVersion === BUILTIN_ANCHOR_VERSION_TOKEN
       ? input.targetVersion
@@ -935,8 +927,8 @@ function quarantineCorruptTimestampMap(baseDir: string, filePath: string, state:
 
 function seedExplicitInstalls(baseDir: string, state: VersionTimestampMapState): Record<string, string> {
   if (state.kind === 'valid') return { ...state.versions }
-  // Before the retention ledger existed every runtime installation was a user
-  // action. Missing/corrupt ledger therefore preserves all existing trees.
+  // With no retention ledger, every runtime installation counts as a user
+  // action; a missing/corrupt ledger therefore preserves all existing trees.
   const timestamp = new Date().toISOString()
   return Object.fromEntries(listVersionTrees(baseDir).map((version) => [version, timestamp]))
 }
@@ -1466,27 +1458,23 @@ function isRuntimePublishBackupName(name: string): boolean {
 
 /** Logical runtime disk soft-limit (10 GiB, design 18) — shared single
  * source. Both owners project it as their `diskLimitBytes` and gate installs
- * against it (desktop dsh-runtime-controller / gateway runtime-manager used
- * to hard-code the same value in each package; alias exports keep their
- * public constant names). */
+ * against it (desktop dsh-runtime-controller / gateway runtime-manager; alias
+ * exports keep their public constant names). */
 export const RUNTIME_LOGICAL_DISK_LIMIT_BYTES = 10 * 1024 ** 3
 
 /* ============================================================================
- * perf T3（2026-09，D8 组合方案：异步分批单遍遍历 + 节流/单飞/终态一次）
+ * 磁盘核算：异步分批单遍遍历 + 节流/单飞/终态一次
  *
- * 每个 runtime 拥有的根只遍历**一遍**（2026-12 单源化前存在一份同步孪生，
- * 按类别各走一遍 + 两遍 (dev,ino) 去重，一次调用约 15 遍重叠遍历；10⁵–10⁶
- * 项量级下单遍即数秒到数十秒，再乘以 desktop owner 的 15 个 refresh 调用
- * 点）。单遍会计契约：
+ * 每个 runtime 拥有的根只遍历**一遍**。单遍会计契约：
  *   - 类别字段保持"逐路径求和"语义（每处出现都计）；
  *   - unclassifiedBytes 在"未分类残渣"集合内去重（独立 identity 集）；
  *   - totalBytes 跨 runtime 根与 dsh-home.old* 恢复备份共享同一 identity
  *     集（硬链接树/store 字节只计一次）。
  * 遍历按 `yieldEvery` 个节点一批，向事件循环让渡（macrotask），超大 store
- * 不再冻结 owner 进程；调用方（desktop main / gateway runtime-manager）经
+ * 不会冻结 owner 进程；调用方（desktop main / gateway runtime-manager）经
  * coalesced-refresh.ts 的 createCoalescedRefresher 叠加节流/单飞/终态一次。
  *
- * 残差登记（2026-09 review，均仅并发竞态/文件系统病理，稳定状态无差异）：
+ * 并发残差（仅并发竞态/文件系统病理，稳定状态无差异）：
  * - 嵌套 lstat ENOENT（list 与 lstat 间并发删除）：抛错而非静默低估
  *   （宁失败不静默当 0），见 chargeNodeAsync 注；
  * - 版本名同名**非目录** dirent：单桶归 unclassified——仅两次列目录间
@@ -1543,8 +1531,7 @@ async function chargeNodeAsync(
     info = await lstatP(path)
   } catch (error) {
     // 根级 ENOENT = 该根不存在；其余（含 list 与 lstat 之间目录被并发删除的
-    // 嵌套 ENOENT）一律抛错——绝不把并发删除静默计成 0（宁失败不静默低估，
-    // 2026-09 review P2-1）。
+    // 嵌套 ENOENT）一律抛错——绝不把并发删除静默计成 0（宁失败不静默低估）。
     if (rootMissingIsZero && (error as NodeJS.ErrnoException).code === 'ENOENT') return
     throw error
   }
@@ -1587,9 +1574,8 @@ async function chargeNodeAsync(
 
 /** runtimeEntries 顶层条目 → 会计类别规则表。**单一来源**：known 判定与类别
  *  分类共用同一有序规则（按声明序取首个命中；无命中 = 'unclassified' 残渣），
- *  新增类别只改这一处——杜绝「谓词认了而 switch 漏分类」的双份维护陷阱
- *  （2026-09 perf review M2；'none' 死分支随之消失）。顺序与原实现等价：
- *  versionTree 最优先，.work-/.failed/备份名三类 failure 系先于固定名。 */
+ *  新增类别只改这一处——杜绝「谓词认了而 switch 漏分类」的双份维护陷阱。
+ *  顺序：versionTree 最优先，.work-/.failed/备份名三类 failure 系先于固定名。 */
 const ENTRY_TARGET_RULES: ReadonlyArray<{
   test: (name: string, isDirectory: boolean, treeSet: Set<string>) => boolean
   target: AsyncWalkTarget
@@ -1620,8 +1606,8 @@ function asyncTargetForEntry(name: string, isDirectory: boolean, treeSet: Set<st
   return 'unclassified'
 }
 
-/** 异步单遍磁盘统计（perf T3）——唯一的磁盘核算实现（2026-12 单源化后不再有
- *  同步孪生）。会计契约与并发残差见上方 T3 段注释；真实布局 + 硬链接/符号链接
+/** 异步单遍磁盘统计——唯一的磁盘核算实现。会计契约与并发残差见上方段注释；
+ *  真实布局 + 硬链接/符号链接
  *  fixture 的用例见 test/store/disk-accounting.test.ts。 */
 export async function runtimeDiskSummaryAsync(
   baseDir: string,
@@ -1630,7 +1616,7 @@ export async function runtimeDiskSummaryAsync(
 ): Promise<RuntimeDiskSummary> {
   const opts = {
     // yieldEvery ≤0 会让 visited % yieldEvery 恒为 NaN 而永不让渡（静默退化
-    // 为阻塞遍历，2026-09 review）——钳制到 ≥1。
+    // 为阻塞遍历）——钳制到 ≥1。
     yieldEvery: Math.max(1, Math.floor(options.yieldEvery ?? 512)),
     onVisited: options.onVisited ?? (() => undefined),
   }

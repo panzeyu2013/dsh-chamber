@@ -1,20 +1,18 @@
 /**
- * Repository file walking — ONE walk for the gates that each carried their own
- * copy (verify-test-wiring.mjs, verify-md-links.mjs, run-script-tests.mjs;
- * P2-17 of the 13-scripts audit).
+ * Repository file walking — ONE walk for the gates that scan the repository
+ * (verify-test-wiring.mjs, verify-md-links.mjs, run-script-tests.mjs).
  *
- * IGNORED_DIRECTORIES is the UNION of the old lists: build output, VCS metadata,
+ * IGNORED_DIRECTORIES names directories that never hold sources: build output, VCS metadata,
  * dependency trees and local dev runtime state. Two names are deliberately NOT
  * in it: 'lib' (scripts/lib/ and package lib/ trees are real source/content —
- * ignoring the name hid scripts/lib/test-manifest.test.mjs from the script-test
+ * ignoring the name would hide scripts/lib/test-manifest.test.mjs from the script-test
  * manifest check) and any other directory that can legitimately hold sources. A
  * caller whose scan root
  * legitimately contains a directory named like one of those (scripts/release/ is
  * a real source directory, while 'release' is electron-builder output elsewhere)
  * passes its own `ignoredDirs` set instead — see SCRIPT_TEST_IGNORED_DIRECTORIES
- * in run-script-tests.mjs: applying the union there silently dropped every
- * scripts/release/** test (2026-12 stage-2 regression, locked by
- * run-script-tests.test.mjs).
+ * in run-script-tests.mjs: applying the union there would silently drop every
+ * scripts/release/** test (locked by run-script-tests.test.mjs).
  */
 import { readdirSync } from 'node:fs'
 import { join } from 'node:path'

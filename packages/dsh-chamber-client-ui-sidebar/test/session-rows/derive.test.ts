@@ -3,12 +3,11 @@
  * workspace membership, blank/subagent visibility, the blank-ghost /
  * membership / fork first-observation graces, plus the consolidated projection
  * contracts (facts merge, ordering, labels/reuse, search/archive and the
- * publish signatures) that round 2 folded in from the former sibling files.
+ * publish signatures).
  *
- * The publish-signature identity and the separator-forgery negative are folded
- * in below (formerly completed-dots-signatures.test.ts). Sibling:
- * derive-unread.test.ts (the shared unread predicate, referenced by the
- * remote-state injection matrix).
+ * The publish-signature identity and the separator-forgery negative live
+ * below. Sibling: derive-unread.test.ts (the shared unread predicate,
+ * referenced by the remote-state injection matrix).
  */
 
 import { test } from 'node:test'
@@ -84,12 +83,11 @@ test('projectInstanceSnapshot requires complete reconnect baselines and maps ctx
     workspaces: [workspace('w1', 'Work', ['s1', 'sub'])],
     sessions: [{ sessionId: 's1', updatedAt: 42, running: true, blank: false, cwd: '/w1', title: 'One', displayTitle: 'One' }],
     archivedSessionIds: ['old'],
-    // Mounted baseline = authoritative archive set (2026-09 review round).
+    // Mounted baseline = authoritative archive set.
     archiveSetKnown: true,
   })
-  // v0.1.2-alpha.1: the upstream `baselinesReady` field was removed — the
-  // workspace completeness check is `state === 'idle'` + `phase === 'ready'`.
-  // The withdrawal on `state` deviation is REQUIRED (2026-09 review): it
+  // The workspace completeness check is `state === 'idle'` + `phase === 'ready'`.
+  // The withdrawal on `state` deviation is REQUIRED: it
   // clears the producer's content signature so an identical recovered
   // baseline re-emits after reconnect; the renderer App keeps the last pushed
   // view through the withdrawal window instead of falling back.
@@ -111,13 +109,12 @@ test('projectInstanceSnapshot requires complete reconnect baselines and maps ctx
     workspaces: [workspace('w1', 'Work', ['s1', 'sub'])],
     sessions: [{ sessionId: 's1', updatedAt: 42, running: true, blank: false, cwd: '/w1', title: 'One', displayTitle: 'One' }],
     archivedSessionIds: ['old'],
-    // Mounted baseline = authoritative archive set (2026-09 review round).
     archiveSetKnown: true,
   })
 })
 
 test('projectInstanceSnapshot synthesizes workspace membership from cwd facts when the baseline sessionIds are degenerate', () => {
-  // M1 wire-degradation defense (2026-09): the host's canonical-cwd header
+  // Wire-degradation defense: the host's canonical-cwd header
   // index can be incomplete at init, so the follow baseline carries workspace
   // rows with EMPTY sessionIds while sessions exist. When every workspace is
   // empty AND at least one session's cwd matches a workspace path, membership
@@ -175,7 +172,7 @@ test('blank sessions are hidden from workspaces and from the ungrouped bucket wh
 
 test('deriveServerWorkspaces passes the synthetic marker through for cwd-derived fallback groups', () => {
   // fetchInstanceSnapshot marks its `__cwd__:` groups synthetic: true so the
-  // sidebar can disable their host-scoped mutations (2026-11 fix). The
+  // sidebar can disable their host-scoped mutations. The
   // derive layer must keep the marker; real rows never carry it.
   const syntheticRow: WorkspaceRow = {
     ...workspace('__cwd__:/work/a', 'a', ['s1']),
@@ -228,7 +225,7 @@ test('a non-current blank session stays hidden even when another blank session i
   assert.deepEqual(result[0].sessions, [{ id: 'b2', title: '', displayTitle: 'b2', running: false, updatedAt: 2, blank: true }])
 })
 
-// ---- blank-row ghost slot (2026-08 review: double-click mis-target fix) ----
+// ---- blank-row ghost slot (double-click mis-target guard) ----
 
 test('a departed blank session keeps its layout slot (ghost) while the grace is live', () => {
   __resetBlankGhostsForTests()
@@ -486,7 +483,7 @@ test('a fork child of an UNACCOUNTED parent stays visible in the ungrouped bucke
   __resetMembershipGracesForTests()
   // Forking a stray: the host skips the attach (workspace-less source), so
   // the child is genuinely ungrouped — the parent-accounted rule must NOT
-  // hide it (the flows reviewer's fork-of-stray case).
+  // hide it (the fork-of-stray case).
   const result = deriveOf(
     [workspace('w1', 'Work', ['a'])],
     [ session('a', 1), session('stray-parent', 40), session('stray-child', 500, { parentSessionId: 'stray-parent' }), ],
@@ -512,16 +509,15 @@ test('an accounted fork child renders in its workspace even while an unrelated g
 })
 
 // =====================================================================
-// Consolidated projection contracts (round 2): the key invariants of the
-// former sibling files merge-runtime-facts / workspace-membership /
-// schedule-label-reuse / source-ordering / search-and-archive. Edge cases not
-// reproduced here were deleted with those files; the retained assertions are
-// the fail-closed, cross-source and upstream-alignment ones.
+// Consolidated projection contracts: the key invariants of
+// merge-runtime-facts / workspace-membership / schedule-label-reuse /
+// source-ordering / search-and-archive. The retained assertions are the
+// fail-closed, cross-source and upstream-alignment ones.
 // =====================================================================
 
 // ---- mergeRuntimeFacts: two-argument compatibility lock + overlay/stale ----
 
-/** The two-argument implementation as it stood before the overlay/stale extension (verbatim oracle). */
+/** Verbatim two-argument oracle for the compatibility lock. */
 function legacyMergeRuntimeFacts(
   runtime: InstanceRuntimeReport | undefined,
   completedBySource: Record<string, boolean> | undefined,
@@ -780,10 +776,9 @@ test('archiveSetKnown and archivedSessions participate in the publish signatures
     serversProjectionSignature([{ ...plain, archivedSessions: [], archiveSetKnown: true }] as never))
 })
 
-// ---- completed-dot state machine + report signatures (consolidated from
-//      completed-dots-signatures.test.ts; the separator-forgery negative is
-//      retained verbatim because a signature collision silently skips a real
-//      republish) ----
+// ---- completed-dot state machine + report signatures (the separator-forgery
+//      negative is retained verbatim because a signature collision silently
+//      skips a real republish) ----
 
 function reconcile(
   prevCompleted: Record<string, boolean>,
@@ -855,12 +850,6 @@ test('producer projects listComplete from the official list store phase (source 
   assert.match(producer, /baseReport\.listComplete = snapshot\.phase === 'ready'/)
   assert.match(producer, /const snapshot = sessionsList\.getSnapshot\(\)/)
 })
-
-// =====================================================================
-// 2026-12 deletion-review restores: invariants that the round-2 folds left
-// without any surviving assertion. Each block is taken from the deleted
-// sibling file's branch and adjusted to this file's helpers.
-// =====================================================================
 
 test('round-3 restore: the schedule fact reaches the snapshot, the signature and the rows', () => {
   const projected = projectInstanceSnapshot(

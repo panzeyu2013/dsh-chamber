@@ -1,5 +1,5 @@
 /**
- * shell-ipc-update — domain IPC registrations split out of shell-core.ts
+ * shell-ipc-update — domain IPC registrations
  */
 import type { ShellIpcCtx } from './shell-core.ts'
 import { IPC_CHANNELS } from './ipc-events.ts'
@@ -13,13 +13,13 @@ export function registerUpdateHandlers(ctx: ShellIpcCtx): void {
   // Update controller (design 11): the state projection is non-secret only
   // (versions / channel / release URL / short error text) and every failure is
   // silent (main-process log), never blocking startup — the settings section
-  // renders the honest state. W-10 S9：控制器现实例仍在 main 装配侧构造
+  // renders the honest state. 控制器实例在 main 装配侧构造
   // （createUpdateController——electron-updater 生命周期、autoDownload=false /
   // autoInstallOnAppQuit 语义、quitAndInstall 的 quit 腿均归装配侧实例），经
   // ctx.updateController 注入；本段注册状态 push 订阅与 4 个 UPDATE 注册体 +
-  // OPEN_RELEASE（按原 main.ts 顺序）。
+  // OPEN_RELEASE。
   updater.subscribe((updateState) => {
-    // 2026-12 合并（main 的更新退出腿回收）：装配侧在 quitAndInstall 前武装
+    // 装配侧在 quitAndInstall 前武装
     // 「更新退出腿」（关窗不 hide），武装期间唯一可能出现的 push 就是重启失败
     // （一次性 restartFailureText；phase 保持 downloaded，见 updater.ts 的
     // 'error' 分支）或相位离开 downloaded——两者都证明退出腿没有发生，经
@@ -32,9 +32,9 @@ export function registerUpdateHandlers(ctx: ShellIpcCtx): void {
     if (updateState.restartFailureText !== undefined || updateState.phase !== 'downloaded') {
       disarmUpdaterQuit?.(updateState.restartFailureText !== undefined ? 'restart failed' : `phase=${updateState.phase}`);
     }
-    // 状态 push（UPDATE_STATE_CHANGED send 源；主窗身份折算见组注释——S2 同款
-    // committed-push 包装 + rendererPush 叶）：无存活主窗（原 updateWindow ===
-    // null）静默跳过；push 失败 loud（等待 renderer 重拉兜底）。
+    // 状态 push（UPDATE_STATE_CHANGED send 源；主窗身份折算见组注释——
+    // committed-push 包装 + rendererPush 叶）：无存活主窗静默跳过；push 失败
+    // loud（等待 renderer 重拉兜底）。
     if (!deps.edges.mainWindowAlive()) return;
     const pushed = attemptCommittedRegistryPush(() => {
       if (!deps.edges.rendererPush(IPC_CHANNELS.UPDATE_STATE_CHANGED, updateState)) {
@@ -46,20 +46,20 @@ export function registerUpdateHandlers(ctx: ShellIpcCtx): void {
     }
   });
   deps.ipc.handle(IPC_CHANNELS.UPDATE_STATE, () => updater.state());
-  // S-21 发现单源：页面「检查更新」只经本注册体进控制器；控制器在原生腿在场时把
+  // 发现单源：页面「检查更新」只经本注册体进控制器；控制器在原生腿在场时把
   // 它转成冻结边 updateNativeAction kind=check（壳内 Sparkle appcast），否则才走
   // 该 flavor 自己的 feed。页面从不自跑发现，注册体也不分支 flavor。
   deps.ipc.handle(IPC_CHANNELS.UPDATE_CHECK, () => updater.checkNow());
   deps.ipc.handle(IPC_CHANNELS.UPDATE_DOWNLOAD, () => updater.download());
-  // The settings update section's「重启并安装」button (2026-12 user
-  // decision): a completed download restarts the app into the install
+  // The settings update section's「重启并安装」button: a completed download
+  // restarts the app into the install
   // (quitAndInstall) — the user controls when the update applies instead of
   // relying on the quit-install leg alone. Controller-side gates mirror the
   // rendered state (phase downloaded + no install block) — not just UI
   // hiding; quitAndInstall then quits through before-quit (the
   // update-downloaded exemption) and will-quit (cleanup first).
   // 重启并安装：原生更新器（Swift/Sparkle）提供异步变体时优先走它（结果跨进程），
-  // 否则用 Electron 的同步实现（S-01 / 裁决 D-1 选 B）。
+  // 否则用 Electron 的同步实现。
   deps.ipc.handle(IPC_CHANNELS.UPDATE_RESTART,
     () => updater.restartAndInstallAsync?.() ?? updater.restartAndInstall());
   // The settings update section's「前往下载页」link: popups are denied and
@@ -67,7 +67,7 @@ export function registerUpdateHandlers(ctx: ShellIpcCtx): void {
   // page must go through the main process. Strict allowlist — parsed, not
   // prefix-string matched: only this repo's GitHub pages can ever be opened
   // (never an arbitrary URL, subdomain, userinfo or path-root trick).
-  // W-10 S9：宿主打开叶 = deps.edges.openExternal（原直包 shell.openExternal）。
+  // 宿主打开叶 = deps.edges.openExternal。
   deps.ipc.handle(IPC_CHANNELS.OPEN_RELEASE, (payload: unknown) => {
     const { url } = payload as { url: unknown };
     return openReleasePage(url, value => deps.edges.openExternal(value));

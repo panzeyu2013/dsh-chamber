@@ -10,7 +10,7 @@
 
 /* ---- sidebar trigger (official chrome rhythm) ---- */
 
-/* 2026-09-11 upstream-alignment T7: the trigger row is upstream's 42px row
+/* The trigger row is upstream's 42px row
    (SettingsRoot.module.css `.triggerRow` + `.trigger`). The chamber renders the
    button alone, so the wrapper's row metrics (100%+4px wide, 4px/-2px margin)
    are folded into it; `.trigger.rail` below keeps upstream's railRow box. */
@@ -86,10 +86,9 @@
   width: 800px;
   height: min(800px, calc(100vh - 48px));
   max-width: calc(100vw - 48px);
-  /* 2026-09-11 upstream-alignment「small invented bits」: upstream's actual rule
-     is r32 (SettingsRoot.module.css `.panel`) — the r24 the chamber copied came
-     from that rule's stale comment (which claims the Modal treatment). The
-     panel now matches the rule, not the comment. The hairline stroke still
+  /* upstream's actual rule is r32 (SettingsRoot.module.css `.panel`) — the
+     rule's stale comment claims the Modal treatment; this panel matches the
+     rule, not the comment. The hairline stroke still
      rides the shadow at the default l4 stroke color, exactly as upstream leaves
      it — no border of its own to double-draw the outline. */
   border-radius: 32px;
@@ -245,8 +244,7 @@
      spec rejects. The stroke rebinds one step lighter than the default l4,
      as every menu surface does. */
   border: 0;
-  /* Official Menu `.list` radius (2026-09 batch 1, E4): 20px, closing the
-     "12px vs upstream 20px" deviation STATUS used to register. */
+  /* Official Menu `.list` radius: 20px. */
   border-radius: 20px;
   background: var(--dsw-alias-bg-layer-3);
   --dsw-elevation-stroke-color: var(--dsw-alias-border-l1);
@@ -299,12 +297,10 @@
   min-width: 0;
   width: 100%;
   box-sizing: border-box;
-  /* 2026-09 menu-density decision (P2-A, A-4): the batch-1 E4 pass copied the
-     official dense item (34px / 14px-22px), which is taller and larger than the
-     chamber scale this dropdown lives in. `padding: 7px 10px` and the 13px
-     label are the v0.2.4 release values; the 18px line box is explicit here
-     (chamber's 13/18 idiom — v0.2.4 inherited 1.5, so its rows sat at ~34px and
-     these are 32px). The official chrome won by E4 stays: 10px per-row radius,
+  /* Menu density: the official dense item (34px / 14px-22px) is taller and
+     larger than the chamber scale this dropdown lives in. `padding: 7px 10px`
+     and the 13px label keep the chamber 13/18 idiom (rows at 32px); the 18px
+     line box is explicit here. The official chrome stays: 10px per-row radius,
      r20 list, bg-layer-3 + elevation. */
   padding: 7px 10px;
   border: none;
@@ -387,7 +383,7 @@
   display: flex;
   justify-content: space-between;
   gap: 8px;
-  /* 2026-09 (P2-B, B-5): the official settings header is
+  /* The official settings header is
      `height:54px; padding:20px 14px 8px 10px; align-items:flex-start` (decoded
      pinned module `dsh-client-ui-settings-general/SettingsRoot.module.css`),
      i.e. a 54px box around a 26px content row. OUR content row is 28px (the
@@ -402,7 +398,7 @@
   box-sizing: border-box;
 }
 
-/* Header context (2026-09-11 upstream-alignment T7): upstream's header holds
+/* Header context: upstream's header holds
    only the `settings.action` seat + close, because each section renders its own
    <h2> — so the chamber keeps exactly ONE page title too. What remains here is
    the server sub-line (the N-source addition) that names the selected server
@@ -460,29 +456,29 @@
 }
 
 .inlineAction {
-  /* Layout only (2026-09, P2-B B-5b): the control itself is the official
-     `Button` primitive now (`variant="outline"`, design 15 §D1), so this class
+  /* Layout only: the control itself is the official `Button` primitive
+     (`variant="outline"`, design 15 §D1), so this class
      must not re-draw a second button chrome. */
   margin-top: 8px;
   align-self: flex-start;
 }
 
-/* (the former `.inlineAction:hover/:focus-visible` border repaint is gone with the
-   self-drawn button: the official `Button variant="outline"` already ships
+/* `.inlineAction` deliberately has no border repaint: the official
+   `Button variant="outline"` already ships
    `border: .5px solid var(--dsw-alias-border-l3)` + a hover background, and a
-   `border-color` override here would have repainted that official outline.) */
+   `border-color` override here would repaint that official outline. */
 
 /* Server-switch intermediate state: the content column switches to a
    dedicated loading view IMMEDIATELY (honest signal, no stale-content wait
    on slow targets); a source whose shell is already mounted renders its own
    published face at once (no intermediate at all).
-   2026-12: the wrapper fade that used to smooth that swap is retired. It was a
-   `from { opacity: 0 }` animation keyed by the selected server — it replayed
-   exactly on the switch where a suspended subtree can pin it at the first frame
-   and leave the panel body invisible-but-interactive (same class as the sidebar
-   entrance animations, see SidebarRoot.module.css). The swap is already carried
-   by the keyed remount; `.contentFade` stays mounted as that remount hook, and
-   content must never depend on a timeline to become visible. */
+   No wrapper fade: a `from { opacity: 0 }` animation keyed by the selected
+   server would replay exactly on the switch where a suspended subtree can pin it
+   at the first frame and leave the panel body invisible-but-interactive (same
+   class as the sidebar entrance animations, see SidebarRoot.module.css). The
+   swap is already carried by the keyed remount; `.contentFade` stays mounted as
+   that remount hook, and content must never depend on a timeline to become
+   visible. */
 
 .loadingView {
   display: flex;
@@ -526,8 +522,8 @@
    vocabulary), compact cards + flat rows with label + hint, capsule buttons;
    active states take the dsh business blue (--dsw-alias-state-business-
    primary, deepseek-500/400) — slider thumb, switch ON track, checkbox
-   accent — 2026-09 用户裁决（撤销 2026-09 阶段 2 的"统一中性色"收口：官方
-   `--dsw-alias-brand-primary` 在中性档，浅色主题下整页"开"态会发黑）；switch
+   accent — 不采用官方中性 `--dsw-alias-brand-primary`（在中性档，浅色主题下
+   整页"开"态会发黑）；switch
    ON track 由本文件的 `.panel [role='switch'][aria-checked='true']` 覆盖官方原语。
    Every color resolves through a `--dsw-alias-*` token. */
 
@@ -581,9 +577,8 @@
   color: var(--dsw-alias-label-tertiary);
 }
 
-/* 组内块分栏（2026-12，dsh 运行时段两块：版本操作 / 版本源；D6-A 紧凑
-   事实块——数据快照 + 运行时占用——复用本类的 border-l2 发丝线置于「版本
-   源」块内容之后、段尾）：与通用页组间分隔同词汇——border-l2 发丝线 +
+/* 组内块分栏（dsh 运行时段两块：版本操作 / 版本源；紧凑事实块——数据快照
+   + 运行时占用——复用本类的 border-l2 发丝线置于「版本源」块内容之后、段尾）：与通用页组间分隔同词汇——border-l2 发丝线 +
    12px 上内距；块间距由所在 group 的 10px gap 提供，线与上一块内容之间
    视觉居中。 */
 .generalGroupTitleBlock {
@@ -614,11 +609,10 @@
 /* ---- 通用 section 布局（紧凑卡片网格 + 全宽行）----
    行范式为「文字在左/上、控件在右/下」的紧凑卡片：短开关组用双列卡片
    网格（.generalGrid + .generalCard，auto-fit 窄面板自动降列），单选对用
-   滑块式分段控件（SegmentedControl，选中态 = dsh 业务蓝，2026-09 用户裁决），通知事件开关
+   滑块式分段控件（SegmentedControl，选中态 = dsh 业务蓝），通知事件开关
    用一行迷你卡片（.generalEventGrid）。卡片沿用官方设置面板的卡片词汇，
    但**不是**逐值复制：官方 `ModelsSection.rowCard` 实际是
-   `border-l4 + r16 + 无底色`（本注释 2026-09 batch 1 E1 纠错，此前写成
-   border-l2/bg-layer-3/r12 与官方不符）；chamber 保留自己的
+   `border-l4 + r16 + 无底色`；chamber 保留自己的
    `r12 + bg-layer-3` 底色（双列紧凑网格需要卡片有面），只把发丝线对齐到
    官方 `border-l4`。控件形态仍为原生 checkbox/radio（滑块/开关是纯装饰层）。 */
 
@@ -630,7 +624,7 @@
   gap: 10px;
 }
 
-/* 运行组三列变体（2026-12）：保持唤醒 / 退出确认 / VS Code 新窗口 三个开关
+/* 运行组三列变体：保持唤醒 / 退出确认 / VS Code 新窗口 三个开关
    固定同一行。列宽允许收缩（.generalCard 有 min-width:0 + 文案自动换行），
    窄面板呈紧凑三列而非降列换行——该组三张都是短开关卡，240px 列宽下限只
    服务于双卡组（启动与关闭）。 */
@@ -673,12 +667,10 @@
 /* 卡片内的复选框（原生 checkbox + accent token）：accent 取 dsh 业务蓝
    `--dsw-alias-state-business-primary`（`--dsw-static-deepseek-500` / `-400`，
    浅色 #4176e6、深色 #679efe）。
-   2026-09 用户裁决：撤销 2026-09 阶段 2 B-3 的「统一为官方中性 brand-primary」。
-   官方 token 表里 `--dsw-alias-brand-primary` 是**中性色**（浅色
+   不采用官方中性 `--dsw-alias-brand-primary`（浅色
    `--dsw-static-neutral-bluish-1000` 近黑、深色 `--dsw-static-neutral-bluish-50`
-   近白），照它取值会让浅色主题下整页的"开/选中"态发黑，而不是 dsh 蓝。本页的
-   复选框/分段滑块/开关与侧栏选中态、Git 面板滑块同取业务蓝（design 15 §D1②
-   已按同一裁决改回）。 */
+   近白）：照它取值会让浅色主题下整页的"开/选中"态发黑，而不是 dsh 蓝。本页的
+   复选框/分段滑块/开关与侧栏选中态、Git 面板滑块同取业务蓝（design 15 §D1②）。 */
 .generalCardCheck {
   flex: none;
   width: 16px;
@@ -687,10 +679,10 @@
   cursor: pointer;
 }
 
-/* 2px 顶微调只在**顶对齐**的卡片头里成立（2026-09-13 间距审计）：16px 盒与
+/* 2px 顶微调只在**顶对齐**的卡片头里成立：16px 盒与
    13/20 行框顶端对齐时，盒中心比文字视觉中心高 2px，这 2px 正是那笔补偿。
    事件行（.generalEventRow）是单行 `align-items: center`，flex 已经把两者居中，
-   再带这笔补偿只会让勾选框比行中线低 1px——因此它按上下文归属，不再写在基类上。 */
+   再带这笔补偿只会让勾选框比行中线低 1px——因此它只写在顶对齐的卡片头里。 */
 .generalCardHead .generalCardCheck {
   margin: 2px 0 0;
 }
@@ -703,12 +695,10 @@
    （见 SegmentedControl.tsx / SegmentedControl.module.css）：轨道内中性色
    滑块滑向选中项、选中文字反白。列宽按内容自适应。 */
 
-/* 通知主开关行（披露头，2026-12 边框修订）：无边框无底色——它只是子设置卡
-   的展开开关，不再是独立卡片。行布局与 .generalLinePlain 相同（文字左、控件右；
-   （2026-09 batch 1 N1 follow-up：原注释引用的 .generalLine 在本包并不存在。）
-   flex-wrap 让极窄窗口下控件换行而非被 panel 裁切）。2026-12 复审：水平
-   14px 内距与子设置卡（.generalNotifyCard padding 12px 14px）对齐，行高
-   抬到 ~32px 与事件行同节奏；hover 填充给出「可点」暗示。 */
+/* 通知主开关行（披露头）：无边框无底色——它只是子设置卡的展开开关，不是独立
+   卡片。行布局与 .generalLinePlain 相同（文字左、控件右；flex-wrap 让极窄窗口下控件
+   换行而非被 panel 裁切）。水平 14px 内距与子设置卡（.generalNotifyCard
+   padding 12px 14px）对齐，行高 ~32px 与事件行同节奏；hover 填充给出「可点」暗示。 */
 .generalSwitchRow {
   display: flex;
   align-items: center;
@@ -739,9 +729,9 @@
 /* 事件开关（会话完成时 / 代理提问时 / 审批请求时）：卡内一行三个（窄面板
    自动降列；min() 下限同 .generalGrid 防窄窗溢出）。行本身无边框无底色
    （.generalNotifyCard 是唯一边界），保留垂直内距维持点按区域。
-   2026-09 布局修订（用户反馈）：勾选框**紧跟**其所属选项文字（去掉
-   space-between 拉伸——原先勾选被推到单元右缘、视觉上与下一列的文字
-   连在一起），单元之间以竖分隔线明确分割；降列（一列/两列）时不画竖线
+   勾选框**紧跟**其所属选项文字（不用 space-between 拉伸——那会把勾选推到
+   单元右缘、视觉上与下一列的文字连在一起），单元之间以竖分隔线明确分割；
+   降列（一列/两列）时不画竖线
    （容器查询：只有能并排三列时才加分隔线），行间距提供分割。 */
 .generalEventGrid {
   container-type: inline-size;
@@ -817,44 +807,39 @@
   text-align: right;
 }
 
-/* 启用通知后展开的子设置容器（2026-12 边框修订；2026-09 batch 1 E1 follow-up
-   把描边并到 l4）：通知组唯一的外边框卡片（border-l4 + layer-3 + r12，与
-   .generalCard 同词汇）——主开关是
-   无边框披露行，内部行（通知时机 / 事件开关 / 测试按钮）不再自带边框。
+/* 启用通知后展开的子设置容器：通知组唯一的外边框卡片（border-l4 + layer-3 +
+   r12，与 .generalCard 同词汇）——主开关是无边框披露行，内部行（通知时机 /
+   事件开关 / 测试按钮）不自带边框。
    挂载淡入保留。 */
 .generalNotifyCard {
   display: flex;
   flex-direction: column;
   gap: 10px;
   padding: 12px 14px;
-  /* Same card hairline as .generalCard (2026-09 batch 1, E1 follow-up: this
-     card was missed on the first pass, leaving two card families on one page). */
+  /* Same card hairline as .generalCard: one card family across the page. */
   border: 0.5px solid var(--dsw-alias-border-l4);
   border-radius: 12px;
   background: var(--dsw-alias-bg-layer-3);
 }
 
-/* ---- 通知主开关（2026-09-11 upstream-alignment T9）----
+/* ---- 通知主开关 ----
    开关本身是官方 ui-primitives `Switch`（36x20 轨道 / 16px thumb / 120ms /
-   aria-checked 选中色由原语自绘），本文件不复制它的样式——原先的
-   .generalSwitchInput / .generalSwitch / .generalSwitchThumb 三件套（原生
-   checkbox + role=switch + 手写轨道）已删除。这里只剩布局盒子，不带任何
-   ARIA：披露关系（aria-expanded / aria-controls）由 DisclosureSwitch 写到
-   原语自己的 role=switch 按钮上（2026-09-11 review F3）。
+   aria-checked 选中色由原语自绘），本文件不复制它的样式。这里只剩布局
+   盒子，不带任何 ARIA：披露关系（aria-expanded / aria-controls）由
+   DisclosureSwitch 写到原语自己的 role=switch 按钮上。
    唯一的例外是"开"色：原语的选中轨道仍是官方中性
    `--dsw-alias-brand-primary`，由下方 `.panel [role='switch'][aria-checked='true']`
-   一条规则重绘为业务蓝（2026-09 用户裁决），几何与其余状态依旧是原语的。 */
+   一条规则重绘为业务蓝，几何与其余状态依旧是原语的。 */
 
 .generalSwitchBox {
   flex: none;
   display: inline-flex;
 }
 
-/* 官方 `Switch` 原语的"开"色覆盖（2026-09 用户裁决，理由见 .generalCardCheck）：
+/* 官方 `Switch` 原语的"开"色覆盖（理由见 .generalCardCheck）：
    原语自己的规则是 `[aria-checked=true]{background:var(--dsw-alias-brand-primary)}`
    ——官方 token 表里那是中性色（浅色近黑、深色近白），与同页复选框/分段滑块的
-   业务蓝冲突（2026-09 阶段 2 曾反其道行之：把 chamber 自绘控件改成中性来迁就它，
-   结果浅色主题下整页"开"态发黑）。
+   业务蓝冲突（照它取值会让浅色主题下整页"开"态发黑）。
    这里在**面板范围内**重绘开启轨道，特异性 `.panel`(0,1,0) + `[role]`(0,1,0) +
    `[aria-checked]`(0,1,0) = 0,3,0，胜过原语的 0,2,0，不依赖打包顺序；原语的结构、
    36x20 轨道、thumb 位移、过渡、禁用透明度与焦点环一概保留（thumb 仍是
@@ -908,14 +893,12 @@
   gap: 10px;
 }
 
-/* Action capsules (2026-09-11 upstream-alignment T9): the hand-rolled
-   `.updateButton` / `.updatePrimaryButton` rules are gone — every call site
-   renders the shared ui-primitives `Button` (`variant="outline|primary"
-   size="sm"`), whose `.sm`/`.outline`/`.primary` recipe is exactly this
-   geometry (28px capsule, 12px/18px, 0 10px, r14) at the official token
-   values. Layout-only helpers below stay. */
+/* Action capsules: every call site renders the shared ui-primitives `Button`
+   (`variant="outline|primary" size="sm"`), whose `.sm`/`.outline`/`.primary`
+   recipe is exactly this geometry (28px capsule, 12px/18px, 0 10px, r14) at the
+   official token values. Layout-only helpers below stay. */
 
-/* Destructive-action confirmation (2026-09-11 upstream-alignment T2): the dsh
+/* Destructive-action confirmation: the dsh
    runtime section confirms through the official ui-primitives Modal, so this
    file only sets the compact dialog width and the error tone of the shared
    Button's `.outline` capsule — geometry, focus and hover stay the primitive's.
@@ -995,7 +978,7 @@
 
 /* Live install progress: label above a slim track; determinate fill when the
    registry declared content-length, sliding stripe otherwise.
-   填充取色（2026-09 用户裁决，与复选框/分段滑块/开关同一裁决）：dsh 业务蓝
+   填充取色（与复选框/分段滑块/开关同一理由）：dsh 业务蓝
    `--dsw-alias-state-business-primary`（`--dsw-static-deepseek-500` / `-400`），
    不是官方中性 `--dsw-alias-brand-primary`——后者浅色主题下是近黑，下载/安装
    进度会与"开/选中"态一起发黑。6px 轨道仍是 `--dsw-alias-border-l2` 浅灰；
@@ -1043,18 +1026,16 @@
   100% { transform: translateX(250%); }
 }
 
-/* Unified status badge on the runtime version row (2026-12: local and
-   gateway branches share one pill vocabulary; tone variants below). */
+/* Unified status badge on the runtime version row: local and gateway branches
+   share one pill vocabulary; tone variants below. */
 .runtimeBadge {
   display: inline-flex;
   align-items: center;
   box-sizing: border-box;
-  /* Official Tag metrics + hairline (2026-09 batch 1 F1 follow-up: the
-     connections page moved to 11px/17px + l4 and this pill stayed on 11/16 + l2,
-     so two settings pages rendered two different pills). */
+  /* Official Tag metrics + hairline: one pill across both settings pages
+     (the connections page is 11px/17px + l4). */
   height: 20px;
-  /* Inline spacing between the version text and the pill (2026-09-13 spacing
-     audit): the pill renders INSIDE the `.updateRow` paragraph, so the enclosing
+  /* Inline spacing between the version text and the pill: the pill renders INSIDE the `.updateRow` paragraph, so the enclosing
      `.updateVersionRow` 10px flex gap never reaches it — the two values answer
      different pairs and cannot conflict. */
   margin-left: 8px;
@@ -1067,7 +1048,7 @@
   color: var(--dsw-alias-label-tertiary);
 }
 
-/* Coloured badge tones (2026-12 runtime-settings unification): the pill
+/* Coloured badge tones (runtime-settings unification): the pill
    reuses the .runtimeBadge base and tints text + hairline with one dsw
    semantic token per tone (transparent background — tokens stay the only
    colour source). */
@@ -1091,12 +1072,12 @@
   border-color: var(--dsw-alias-state-error-primary);
 }
 
-/* Form-shaped select/input for the runtime section (2026-11): a boxed field
+/* Form-shaped select/input for the runtime section: a boxed field
    with border + background, deliberately DISTINCT from the capsule action
    buttons (the shared ui-primitives Button) so a dropdown is recognizable as an
    input.
-   2026-12 有意不统一：字段字号 12px vs 服务器下拉**触发器** 13px/600——服务器
-   下拉是导航选择器（强调选中项，其菜单行已按官方 dense item 为 14/22，见 E4），
+   有意不统一：字段字号 12px vs 服务器下拉**触发器** 13px/600——服务器下拉是
+   导航选择器（强调选中项，其菜单行取官方 dense item 的 14/22），
    运行时字段是紧凑表单行；只统一箭头词汇。 */
 .runtimeField {
   box-sizing: border-box;
@@ -1121,7 +1102,7 @@
   cursor: default;
 }
 
-/* ---- 统一下拉箭头（2026-12）----
+/* ---- 统一下拉箭头 ----
    Chamber 的 select 一律 appearance:none + 官方 IconChevronDownOutline14
    （服务器下拉/运行时段与连接表单同一图标词汇）；箭头右缘 inset 与文字左缘
    （.runtimeField padding 10px）对称，pointer-events:none 保证点击落在
@@ -1138,7 +1119,7 @@
   appearance: none;
   -webkit-appearance: none;
   /* 右内距 32px：chevron 占 [10, 24)px，文字↔箭头净间隙 8px，与服务器
-     下拉（flex gap 8px）同节奏（2026-12 复审）。max-width 兜底超长版本
+     下拉（flex gap 8px）同节奏。max-width 兜底超长版本
      串，保证版本行动行在 564px 列宽下单行。 */
   padding-right: 32px;
   max-width: min(240px, 100%);
@@ -1159,9 +1140,9 @@
   opacity: 0.5;
 }
 
-/* ---- 紧凑事实块（D6-A，2026-12）----
-   数据快照 + 运行时占用两行移出「当前状态」，置于「版本源」块内容之后、
-   段尾（与版本源错误行同区域）；发丝线分隔复用 .generalGroupTitleBlock。 */
+/* ---- 紧凑事实块 ----
+   数据快照 + 运行时占用两行置于「版本源」块内容之后、段尾（与版本源错误行
+   同区域）；发丝线分隔复用 .generalGroupTitleBlock。 */
 
 /* 事实行：标签 12px tertiary，数值 12px/600 primary 加粗。 */
 .runtimeFactRow {
@@ -1195,5 +1176,4 @@
   gap: 4px;
 }
 
-/* （2026-09-11 退役：nav 行的「插件」来源标记 —— 上游只渲染图标+标签、
-   `registrant` 仅用于诊断，本仓不再自造反标。）*/
+

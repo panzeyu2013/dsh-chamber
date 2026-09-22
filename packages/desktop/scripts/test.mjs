@@ -3,12 +3,12 @@
  * package test script.
  * Grouped by subject area (mirrors test/<domain>/). Every listed file runs as
  * its own node child; stdout/stderr are piped through so the transcript stays
- * intact, and the first failure ends the run — the same semantics as the inline
- * && chain this replaces. Two failures are never silent skips:
+ * intact, and the first failure ends the run — the same semantics as an inline
+ * && chain. Two failures are never silent skips:
  *   - a listed file that does not exist;
  *   - a listed file that exits 0 without running any test (no node:test summary
  *     or "tests 0"), or that cannot be spawned. Such a file must be recorded in
- *     ZERO_TEST_ALLOWLIST with a justification (D2b guard).
+ *     ZERO_TEST_ALLOWLIST with a justification.
  * Entries: a path, or { file, nodeArgs } when a loader (--import ...) is needed.
  *
  * Platform split (same precedent as packages/control-plane/scripts/test.mjs):
@@ -20,7 +20,7 @@
  * The macOS-only files need macOS tools (O_EXLOCK/plutil/codesign/ditto), so
  * --macos is their only entry point and they never ride the ubuntu leg.
  *
- * macOS leg skip discipline (G2, 2026-12 parity audit): the packaging suites
+ * macOS leg skip discipline: the packaging suites
  * carry five environment-conditional `t.skip` sites (codesign/hdiutil, the
  * SwiftPM .build/release product, the resolved Sparkle artifact). A skipped case
  * there is exactly the silent-coverage-loss this runner exists to stop, so the
@@ -53,7 +53,7 @@ export const GROUPS = {
   ],
   // gateway: gateway provider/session and the manual gateway plugin sync apply path
   gateway: [
-    // 凭据两维交叉矩阵（design 17 §2.3；N8 前置，先于 gw-provider 抽取）。
+    // 凭据两维交叉矩阵（design 17 §2.3）。
     'test/gateway/gateway-credential-matrix.test.ts',
     'test/gateway/gateway-provider.test.ts',
     'test/gateway/gateway-session-spki.test.ts',
@@ -71,7 +71,7 @@ export const GROUPS = {
     'test/plugins/ssh-apply-rows.test.ts',
     'test/plugins/ssh-plugin-journal.test.ts',
     // pnpm 启动器解析（design 21 §6.3 / design 23 D2，win32 .cmd 拒绝）——
-    // 其他流的模块，清单归属本流维护（S4 跨流接线）。
+    // 其他流的模块，清单归属本流维护。
     'test/plugins/pnpm-launcher.test.ts',
   ],
   // runtime: managed dsh runtime controller, renderer<->main action lockstep, and the main.ts decision gates
@@ -87,7 +87,7 @@ export const GROUPS = {
   ],
   // ipc: preload/renderer IPC surface mirror, cross-package protocol lockstep and IPC sender trust
   ipc: [
-    // clear-only 凭据 IPC 的准入契约（共享前奏，2026-12 单源化）。
+    // clear-only 凭据 IPC 的准入契约。
     'test/ipc/clear-only-credentials.test.ts',
     'test/ipc/renderer-trust.test.ts',
     'test/ipc/cross-package-contract.test.ts',
@@ -109,20 +109,20 @@ export const GROUPS = {
     'test/desktop-shell/open-in.test.ts',
     'test/desktop-shell/updater.test.ts',
     'test/desktop-shell/updater-restart-install.test.ts',
-    // 两个 GitHub 发现面的锁步（审计项 2：共享 update-discovery.ts）
+    // 两个 GitHub 发现面的锁步（共享 update-discovery.ts）
     'test/desktop-shell/update-discovery.test.ts',
     // swift-side headless update controller (design 25 §7)
     'update-headless.test.ts',
   ],
   // local-state: durable local files — settings, audit log, owner-private ACLs and
-  // the installed-runtime closure sample (S4)
+  // the installed-runtime closure sample
   'local-state': [
     'test/local-state/audit-log.test.ts',
     'test/local-state/chamber-settings.test.ts',
     'test/local-state/win-acl.test.ts',
-    // 安装树上游 client-plugin 闭包抽样（S4 P1）：纯函数 + 临时目录 fixture
+    // 安装树上游 client-plugin 闭包抽样：纯函数 + 临时目录 fixture
     'test/local-state/runtime-tree-check.test.ts',
-    // lockfile-derived family facts memo (审计项 7)：mtime+size 失效
+    // lockfile-derived family facts memo：mtime+size 失效
     'test/local-state/lockfile-facts-memo.test.ts',
   ],
   // scripts: package build/packaging helper tests (stay in scripts/ by design)
@@ -133,7 +133,7 @@ export const GROUPS = {
     'scripts/before-pack.test.mjs',
     'scripts/electron-shared.test.mjs',
     'scripts/control-plane-freshness.test.mjs',
-    // lockstep of this manifest + the zero-test guard (D2b)
+    // lockstep of this manifest + the zero-test guard
     'scripts/test-runner-lockstep.test.mjs',
   ],
 }
@@ -151,8 +151,8 @@ export const MACOS_FILES = [
 ]
 
 /**
- * Listed files that legitimately run zero node:test tests, each with the reason
- * a reviewer accepted. A file that exits 0 without reporting a runner summary
+ * Listed files that legitimately run zero node:test tests, each with its reason.
+ * A file that exits 0 without reporting a runner summary
  * is a silent skip — the failure mode this guard exists to stop — so it is a
  * failure unless recorded here. The current corpus runs at least one test in
  * every listed file, so the list is empty; do not add an entry to paper over a

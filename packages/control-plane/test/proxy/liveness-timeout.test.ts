@@ -237,10 +237,10 @@ test('http: non-SSE timeout is idle-based and re-arms on every body chunk', asyn
 })
 
 // ---------------------------------------------------------------------------
-// Long-RPC window (design 03 §3.4, 2026-09): /api/commands/execute (the
+// Long-RPC window (design 03 §3.4): /api/commands/execute (the
 // single funnel for every upstream slash command — /compact LLM summarization,
-// dsh-command-compact → dsh-compaction-basic, measured: a ~627k-token manual
-// compaction was cut at exactly 45 001 ms with the session unchanged) and
+// dsh-command-compact → dsh-compaction-basic, a ~627k-token manual
+// compaction long enough to cross the ordinary idle window) and
 // /api/archiveCleanup/purge (chamber archived-session cleanup host domain,
 // design 24 — unbounded fs deletions, client budget 5 min) carry host business
 // with NO upstream cap and out-of-band progress, so the ordinary idle window
@@ -349,7 +349,7 @@ test('long-RPC window is method-scoped: GET on commands/execute keeps the ordina
 })
 
 test('long-RPC window keeps a fuse: total silence → explicit 504 upstream_timeout', async () => {
-  const upstream = fakeHttpRequest(() => undefined) // hang: no response, no error
+  const upstream = fakeHttpRequest(() => undefined)
   const proxy = proxyFor(upstream.fn, { upstreamTimeoutMs: 40, longRpcUpstreamTimeoutMs: 80 })
   const res = fakeResponse()
   try {
@@ -465,8 +465,8 @@ test('transport revoke is owner-scoped and closeAllStreams aborts every remainin
   proxy.registerTransport('dsh:pending', 'http://127.0.0.1:19191')
   const local = fakeSocket()
   const remote = fakeSocket()
-  // 0.1.2 wire: the mux is the only stream path (events.mux/events.host
-  // were deleted upstream) — both pending handshakes ride /api/remote.mux.
+  // The mux is the only stream path — both pending handshakes ride
+  // /api/remote.mux.
   await proxy.handleUpgrade(fakeRequest('/api/i/local/api/remote.mux'), local, Buffer.alloc(0))
   await proxy.handleUpgrade(fakeRequest('/api/i/dsh-pending/api/remote.mux'), remote, Buffer.alloc(0))
   assert.equal(proxy.getDiagnostics().pendingUpgrades, 2)

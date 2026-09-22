@@ -12,9 +12,9 @@ import { fileURLToPath } from 'node:url'
 
 const ROOT = resolve(fileURLToPath(new URL('../../', import.meta.url)))
 const PAIRS = [
-  // 2026: Chinese promoted to primary (user decision) — every top-level doc
+  // Every top-level doc
   // is the Chinese primary; English mirrors live under docs/ as *.en-US.md
-  // (secondary). AGENTS.md is English-only (user decision, 2026-08) and has
+  // (secondary). AGENTS.md is English-only and has
   // no bilingual pair. Positional order stays EN first, ZH second.
   ['docs/README.en-US.md', 'README.md'],
   ['docs/DEVELOPMENT.en-US.md', 'docs/DEVELOPMENT.md'],

@@ -1,8 +1,8 @@
 /**
- * runtimeDiskSummaryAsync 磁盘核算测试（design 18 §3.5），拆分自
- * dsh-runtime-store.test.ts（P0）。共享 fixture：test/support/store-fixtures.ts。
+ * runtimeDiskSummaryAsync 磁盘核算测试（design 18 §3.5）。
+ * 共享 fixture：test/support/store-fixtures.ts。
  *
- * 2026-12 单源化：同步孪生 runtimeDiskSummary 已删除，本文件只驱动唯一的异步
+ * 本文件只驱动唯一的异步
  * 单遍实现（含真实布局、硬链接/符号链接、网关布局、错误传播与让渡样本）。
  */
 import { test } from 'node:test';
@@ -255,10 +255,9 @@ test('runtimeDiskSummaryAsync batches: yields to the event loop and reports prog
 
 test('builtin activation intents accept the exact builtin-anchor sentinel (F4 shell-invalidation regression)', () => {
   const base = freshBase();
-  // The gateway's F4 fallback passes the sentinel token when a shell upgrade
-  // invalidates an existing override (2026-09 release gate: assertSafeVersion
-  // used to reject it, crashing gateway startup on any upgrade with an
-  // existing override record).
+  // The gateway's fallback passes the sentinel token when a shell upgrade
+  // invalidates an existing override; assertSafeVersion accepts it for a
+  // builtin target instead of crashing gateway startup.
   const sentinel = writeActivationIntent(base, {
     targetVersion: 'builtin-anchor', targetIsBuiltin: true, manualRollback: false, intentKind: 'shell-invalidation',
   });

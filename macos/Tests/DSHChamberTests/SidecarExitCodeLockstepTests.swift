@@ -2,12 +2,12 @@
 //  SidecarExitCodeLockstepTests.swift
 //  DSHChamberTests
 //
-//  G7：sidecar 退出码 0/1/3/70 的跨语言锁步。单源是 TS
+//  sidecar 退出码 0/1/3/70 的跨语言锁步。单源是 TS
 //  `packages/desktop/sidecar-exit-codes.ts`；Swift 侧
 //  `SidecarSupervisor.handleTermination` 按 0/3/70 显式分级，其余非零
 //  （含 1 = 运行期崩溃）落崩溃退避配额。
 //
-//  此前两侧各自测各自：把 TS 的 70 改成 71，两侧测试都还是绿，而 Swift 会把
+//  两侧各自测各自时，把 TS 的 70 改成 71 仍两侧全绿，而 Swift 会把
 //  启动失败当崩溃退避重启。本测试逐值解析两份源文本并互相锁定——任一侧改值、
 //  改名、删码或让崩溃码变成特判，立即红。读源模式沿用
 //  CrossLanguageLockstepTests 的 #filePath 约定。

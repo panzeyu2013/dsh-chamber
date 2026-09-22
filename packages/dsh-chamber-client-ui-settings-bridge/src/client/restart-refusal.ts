@@ -1,10 +1,10 @@
 /**
  * Gateway restart 409 refusal projection for the runtime section (design 21
- * §5.1/§5.2, 2026-12 audit P1-2).
+ * §5.1/§5.2).
  *
  * The classifier and the verbatim-error projection are single-sourced on the
- * sidebar shared face (dsh-chamber-client-ui-sidebar/src/shared/runtime-refusal.ts,
- * 2026-12 single-sourcing pass): the settings-connections package re-exports
+ * sidebar shared face (dsh-chamber-client-ui-sidebar/src/shared/runtime-refusal.ts):
+ * the settings-connections package re-exports
  * the same implementations. This module keeps only what is bridge-local — the
  * bridge dictionary keys and the localized sentence — and re-exports the shared
  * names under their original bridge names for its own callers.

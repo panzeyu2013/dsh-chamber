@@ -16,7 +16,7 @@
  * 3. The 409 refusal — {error, code} bodies from the runtime routes are
  *    localized; serverRefusalText projects body.error verbatim for everything
  *    else (English copy there is a registered deviation, design 21 §5.2).
- * 4. The READ-side fence (2026-12 wiring) — the §6.2 read/write fence's 409 on
+ * 4. The READ-side fence — the §6.2 read/write fence's 409 on
  *    a gateway READ is a retryable busy state, classified by the SAME 409
  *    classifier (classifyGatewayReadFence) and rendered with a dedicated
  *    dictionary key (gatewayReadFenceText), never as a read failure.
@@ -33,9 +33,8 @@
  *
  * The refusal projection (the 409 classifier plus the verbatim-error path) is
  * single-sourced on the sidebar shared face —
- * dsh-chamber-client-ui-sidebar/src/shared/runtime-refusal.ts (2026-12
- * single-sourcing pass); this module re-exports it for its own callers and
- * keeps only the localized wording below.
+ * dsh-chamber-client-ui-sidebar/src/shared/runtime-refusal.ts; this module
+ * re-exports it for its own callers and keeps only the localized wording below.
  */
 
 import {
@@ -132,7 +131,7 @@ export function runtimeRefusalText(
   return t(key).replace('{code}', refusal.code ?? String(status))
 }
 
-/* ---- Gateway READ-side fence (design 21 §6.2 读/写面共享栅栏, 2026-12 接线) ----
+/* ---- Gateway READ-side fence (design 21 §6.2 读/写面共享栅栏) ----
  * The gateway's A0 read `GET /chamber/plugins/installed` shares the A1 write
  * fence: while a plugin mutation holds the managed-profile write lease the
  * route answers 409 `runtime_busy` (the /chamber/runtime lease family) rather

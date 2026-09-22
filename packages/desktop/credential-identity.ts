@@ -1,12 +1,12 @@
 /**
  * Credential / live-transport identity predicates (design 17 §9.1/§9.3) —
  * the SINGLE source for "which spec fields make two connections the same
- * target". Before this module the same field lists existed three times: the
+ * target". Three call sites share these field lists: the
  * live-transport comparison (connection-save liveTransportChanged +
  * transport-manager transportFieldsChanged), the SSH password retirement
  * triple (transport-manager computePasswordRetirementIds) and the gateway
  * credential-target pair (connection-save gatewayCredentialTargetChanged +
- * credential-binding's fingerprint). A new spec field now has ONE place to be
+ * credential-binding's fingerprint). A new spec field has ONE place to be
  * classified, in or out, for each identity.
  *
  * Ownership rules (design 17 §9.1):

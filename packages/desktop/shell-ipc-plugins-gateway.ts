@@ -1,5 +1,5 @@
 /**
- * shell-ipc-plugins-gateway — domain IPC registrations split out of shell-core.ts
+ * shell-ipc-plugins-gateway — domain IPC registrations
  */
 import type { ShellIpcCtx } from './shell-core.ts'
 import { INSTANCE_ID_PATTERN } from './transport-manager.ts'
@@ -15,8 +15,8 @@ import { sanitizeErrorText } from './sanitize-error.ts'
 export function registerGatewayPluginHandlers(ctx: ShellIpcCtx): void {
   const { deps, confirmPluginAction } = ctx
   const { transportManager: sm, syncGatewayChamberPluginsFor } = ctx.deps.ctx
-  // Manual chamber-plugin sync onto a gateway instance (design 21 §6.5,
-  // Phase 3b): re-run the seed-cache sync the ready registration performs
+  // Manual chamber-plugin sync onto a gateway instance (design 21 §6.5):
+  // re-run the seed-cache sync the ready registration performs
   // automatically, over the REGISTERED transport origin/headers/SPKI pin —
   // never a renderer-supplied URL or credential. No ready registration →
   // loud {ok:false}; otherwise the awaited auto-sync path answers with the
@@ -40,7 +40,7 @@ export function registerGatewayPluginHandlers(ctx: ShellIpcCtx): void {
     try {
       const result = await syncGatewayChamberPluginsFor(id, reg.url, reg.headers, reg.spkiPin);
       if (result === null) return { ok: false as const, error: 'gateway instance not found' };
-      // Honesty (design 21 review P2-B1): a sync that failed on the wire is
+      // Honesty (design 21): a sync that failed on the wire is
       // {ok:false} — the both-false tuple must never masquerade as the
       // "already up to date" answer.
       if (result.failed === true) {
@@ -51,7 +51,7 @@ export function registerGatewayPluginHandlers(ctx: ShellIpcCtx): void {
       return { ok: false as const, error: `gateway plugin sync failed: ${sanitizeErrorText(describeUnknownError(error))}` };
     }
   });
-  // Gateway batch plugin apply (design 21 §6.5, plan Phase 4.6): registry
+  // Gateway batch plugin apply (design 21 §6.5): registry
   // add/remove over the REGISTERED transport origin/headers/SPKI pin —
   // never a renderer-supplied URL or credential. Main-process confirmation
   // (decision 14 桌面通道纪律): the batch modifies the gateway's managed
@@ -79,11 +79,7 @@ export function registerGatewayPluginHandlers(ctx: ShellIpcCtx): void {
       return { ok: false as const, error: 'gateway instance not found' };
     }
     // Batch confirmation with the restart/multi-desktop copy (default
-    // cancel — same convention as the local plugin actions). W-10 S7: 经上方
-    // S6 edges 版 confirmPluginAction 助手（原 main.ts 调用为
-    // confirmPluginAction(mainWindow, …) 双参闭包——宿主腿相同（showMessage +
-    // 当前主窗为父窗 sheet）、按钮序/取消默认一致，行为零改；main 侧闭包已随
-    // W-10 S8 H 组删除（LOCAL_PLUGIN_ADD/REMOVE 迁出后无使用点）。
+    // cancel — same convention as the local plugin actions).
     const confirm = await confirmPluginAction(buildApplyConfirmMessage({
       targetLabel: instance.label ?? null,
       targetId: id,
@@ -93,7 +89,7 @@ export function registerGatewayPluginHandlers(ctx: ShellIpcCtx): void {
     }));
     if ('cancelled' in confirm) return { ok: true as const, cancelled: true };
     if (!confirm.ok) return { ok: false as const, error: confirm.error };
-    // Post-confirm re-check (design 21 review P2-B2, mirroring the
+    // Post-confirm re-check (design 21, mirroring the
     // materialize handler): the user may have kept the dialog open across
     // a disconnect/reconnect — the batch must execute on the CURRENT
     // registration/ready state, never on the pre-dialog snapshot.
@@ -163,8 +159,7 @@ export function registerGatewayPluginHandlers(ctx: ShellIpcCtx): void {
     if (sm.status(id)?.phase !== 'ready') {
       return { ok: false as const, error: 'gateway is not ready' };
     }
-    // W-10 S7: 无存活主窗预检经 edges.mainWindowAlive（S2 已有——与原
-    // mainWindow === null || isDestroyed 判据同值，F 组同款改法）。
+    // 无存活主窗预检经 edges.mainWindowAlive。
     if (!deps.edges.mainWindowAlive()) return { ok: false as const, error: 'no main window' };
     const instance = sm.listInstances().find(candidate => candidate.id === id);
     if (instance === undefined || instance.kind !== 'gateway') {
@@ -218,10 +213,9 @@ export function registerGatewayPluginHandlers(ctx: ShellIpcCtx): void {
         version,
         authority: instance.transport === 'ssh' ? gatewayTunnelAuthority(instance.remotePort) : undefined,
       });
-      // d86a772（main 侧，2026-09 合并移植）：materialize 的 202/受控重启
-      // 对账结果带 outcome{executed,restarted}——成功分支优先回传 outcome，
-      // 失败分支同样透传 outcome（网关侧已脱敏），无 outcome 时保持旧的
-      // deferred 语义。
+      // materialize 的 202/受控重启对账结果带 outcome{executed,restarted}——
+      // 成功分支优先回传 outcome，失败分支同样透传 outcome（网关侧已脱敏），
+      // 无 outcome 时保持 deferred 语义。
       if (result.ok && 'outcome' in result) {
         return { ok: true as const, outcome: result.outcome };
       }
@@ -241,23 +235,4 @@ export function registerGatewayPluginHandlers(ctx: ShellIpcCtx): void {
     }
   });
 
-  // —— H 组（S8 批；W-10 S8 施工图第 1 项）——
-  // 本地插件 + npm 搜索 5 注册体（LOCAL_PLUGIN_LIST / NPM_SEARCH /
-  // LOCAL_PLUGIN_ADD_FILE / LOCAL_PLUGIN_ADD / LOCAL_PLUGIN_REMOVE——按原
-  // main.ts 顺序紧接 G 组追加；注册体自 main.ts 逐字迁入，全零 Electron，
-  // trustedIpc 围栏由装配侧注入 registrar 包装）。编排纯模块直接 import
-  // （plugin-sync：localPluginList / runLocalDshPlugin /
-  // describeLocalPluginAddConfirmation / describeLocalPluginRemoveConfirmation；
-  // plugin-tarball classifyPluginPick 为 S6 已 import；npm 搜索的 registry URL
-  // 白名单 = @dsh-chamber/dsh-runtime isAllowedRegistryUrl——§6 R3-5 P2-6
-  // 纪律注释随迁，见 NPM_SEARCH 注册体）。本地安装的宿主子进程编排
-  // （runLocalPluginMutation：runtime writer fence 租约 + 启动门 +
-  // resolveActiveRuntime workspace 解析）经 ctx 注入叶——本体留 main 装配侧
-  // （fence/启动门是装配侧运行时事务状态；add 子进程 env 装配在 plugin-sync
-  // runLocalDshPlugin 纯模块内，W-14 关联 C-F12 纪律注释随原模块），core 注册体
-  // 文本以原名逐字调用。确认对话框 = 上方 S6 edges 版 confirmPluginAction 助手
-  // （单参 copy；无存活主窗 → 'native confirmation unavailable'；response === 1
-  // （'继续'）→ ok；否则 cancelled——按钮序/取消默认/无窗文案与 main 闭包逐字
-  // 一致）；ADD_FILE 的无存活主窗预检 = edges.mainWindowAlive、插件源 pick =
-  // edges.pickPluginSource（宿主腿均在 electron-edges.ts S6 实现）。main 侧原
 }

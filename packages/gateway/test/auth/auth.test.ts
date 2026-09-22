@@ -1,7 +1,7 @@
 /**
  * Gateway auth unit tests (design 17 §5/§7): token (hash-stored,
  * constant-time), none, the password provider (scrypt + JWT cookie + login),
- * and Phase 1 runtime credential changes (changePassword/changeToken:
+ * and runtime credential changes (changePassword/changeToken:
  * proofs, rotate-first, last-credential gate, revert, restart survival).
  * Run with `node packages/gateway/test/auth/auth.test.ts`.
  */
@@ -381,7 +381,7 @@ test('password: changing configuration across restart invalidates old cookies', 
     const cookie = /dsh_gateway_session=([^;]+)/.exec(login.setCookie ?? '')?.[1]
     assert.ok(cookie !== undefined)
 
-    // The stateDir exclusive lock must be released before reopening (Phase 1).
+    // The stateDir exclusive lock must be released before reopening.
     store.close()
     const restartedStore = open()
     const second = createAuth({ kind: 'password', password: 'different-correct-password' }, restartedStore)
@@ -463,7 +463,7 @@ test('password limiter ignores caller-supplied XFF unless the boundary validated
 })
 
 // ---------------------------------------------------------------------------
-// Phase 1: runtime credential changes
+// Runtime credential changes
 // ---------------------------------------------------------------------------
 
 test('changePassword: success rotates old cookies, the new password logs in, the old password dies', async () => {
@@ -680,9 +680,10 @@ test('changeToken returns the committed one-time token without re-reading the un
   try {
     const auth = createAuth({ kind: 'token', token: TOKEN }, store)
     // Model an unrelated password-credential read failure that begins only
-    // after provider initialization. The token verifier/write path is healthy.
-    // A post-commit cache refresh used to throw here after the new hash and
-    // generation were already committed, losing the only plaintext response.
+    // after provider initialization. The token verifier/write path is healthy
+    // and must not re-read it: a post-commit cache refresh that throws once
+    // the new hash and generation are committed would lose the only plaintext
+    // response.
     store.getPasswordCredential = () => { throw new Error('injected password read failure') }
     const newToken = 'committed-token-0123456789abcdef0123456789'
     const result = await auth.changeToken!({ newToken }, {
@@ -812,8 +813,8 @@ test('seeding rule 3: a config-less restart clears a config-sourced password (ro
     const restarted = createAuth({ kind: 'none' }, restartedStore)
     assert.equal(restartedStore.getPasswordCredential(), null, 'config-less restart removes the persisted password')
     assert.notEqual(restartedStore.getJwtSecret(), secretBefore, 'removing the password rotates the jwt-secret')
-    // The old cookie is no longer a password principal (the deployment is
-    // anonymous now — verify answers with the none principal, never null).
+    // The old cookie is not a password principal on the anonymous deployment
+    // — verify answers with the none principal, never null.
     assert.equal((await restarted.verify({ headers: { cookie: `dsh_gateway_session=${cookie}` }, socketAddr: '127.0.0.1' }))?.kind, 'none')
   } finally { cleanup() }
 })

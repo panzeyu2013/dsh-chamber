@@ -1,14 +1,14 @@
 /**
- * HOST ↔ CLIENT LOCKSTEP (cross-package, 2026-09 review items 3 + 4).
+ * HOST ↔ CLIENT LOCKSTEP (cross-package).
  *
- * Both sides were previously tested only against their OWN fixture: this
- * package's `snapshot-facts.test.ts` hand-writes snapshot objects, and the host
- * package's `core.test.ts` mocks host state. A host row field renamed (or a
- * snapshot diagnostic code added) therefore kept both suites green while the
- * real UI silently dropped rows — `normalizeWorktree` fails closed and the row
+ * Each side's own fixture cannot catch drift: this package's
+ * `snapshot-facts.test.ts` hand-writes snapshot objects, and the host package's
+ * `core.test.ts` mocks host state. A host row field renamed (or a snapshot
+ * diagnostic code added) would therefore keep both suites green while the real
+ * UI silently drops rows — `normalizeWorktree` fails closed and the row
  * disappears with only an `invalid-worktree` error.
  *
- * This suite closes that gap from the client side: it imports the REAL host
+ * This suite closes the gap from the client side: it imports the REAL host
  * core and runs a REAL `GitWorktreeCore.snapshot()` against in-memory host
  * mocks, then feeds that exact response to `normalizeGitSnapshot`.
  *
@@ -55,9 +55,9 @@ const DETACHED_HEAD = '4'.repeat(40)
 /** The linked worktree's admin git dir (`<common>/worktrees/feature`). */
 const LINKED_GIT_DIR = '/repos/project/.git/worktrees/feature'
 /** Host core source text: the code-vocabulary side of the error-code lockstep.
- *  Scans the WHOLE host source set — core.ts plus every extracted core-*.ts
- *  family module (B5 split) — so a code moved into an ops module stays covered
- *  instead of silently dropping out of this scan. */
+ *  Scans the WHOLE host source set — core.ts plus every core-*.ts family
+ *  module — so a code in an ops module stays covered instead of silently
+ *  dropping out of this scan. */
 const HOST_CORE_SOURCE = readdirSync(
   new URL('../../../dsh-chamber-seed-git-worktree/src/', import.meta.url),
 ).filter(name => name.startsWith('core') && name.endsWith('.ts')).sort()

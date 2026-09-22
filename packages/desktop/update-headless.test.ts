@@ -1,5 +1,5 @@
 /**
- * update-headless.test.ts —— Swift flavor 更新控制器单测（W-22；design 25 §7）
+ * update-headless.test.ts —— Swift flavor 更新控制器单测（design 25 §7）
  *
  * 覆盖：
  *  ① selectLatestReleaseVersion：stable/beta 通道的 draft/prerelease/tag 形状
@@ -11,13 +11,12 @@
  *  ⑤ HTTP 失败 / 响应非数组 → error（绝不把 feed 故障伪装成「已是最新」）；
  *  ⑥ download/restartAndInstall 核心层显式拒绝（不是 UI 隐藏）；
  *  ⑦ subscribe 推送与退订；start() 立即不改状态（首检在定时器上）；
- *  ⑨ 订阅者（宿主推送腿）抛错不反噬控制器：check 不卡死、二次检查仍推进
- *     （2026-12 审查 blocker 回归——sidecar ctx 的缺失成员 stub 曾在此路径抛出）；
+ *  ⑨ 订阅者（宿主推送腿）抛错不反噬控制器：check 不卡死、二次检查仍推进；
  *  ⑩ start() 与 Electron 同节奏（15s 静默首检 + 6h 周期）、定时器 unref/幂等/
- *     stop 可停、失败轮不抛穿（S5·F3/S6·F2）；
- *  ⑮/⑯ S-21 发现单源：原生腿在场 → 零 GitHub 出网、恰一次 kind=check、页面
+ *     stop 可停、失败轮不抛穿；
+ *  ⑮/⑯ 发现单源：原生腿在场 → 零 GitHub 出网、恰一次 kind=check、页面
  *     checking → 壳推送结果、不排静默定时器；原生腿缺席 → 既有 GitHub 检查原样；
- *  ⑰ S-38 坏配置：能力探测原因被记录、保持 blocked，check 落 error（不停 checking）。
+ *  ⑰ 坏配置：能力探测原因被记录、保持 blocked，check 落 error（不停 checking）。
  * 纯逻辑（无网络、无 Electron、无真实 timer 等待——⑩/⑮ 用假定时器注入）。
  */
 import { test } from 'node:test'
@@ -175,7 +174,7 @@ test('⑤ feed 三态：本通道暂无发布物 → up-to-date；形状全坏 �
   await allDrafts.checkNow()
   assert.equal(allDrafts.state().phase, 'up-to-date', '可解析但全 draft 不算 feed 异常')
 
-  // 全是 beta → 稳定通道无候选（三审 #14：不再是 error 的 UX 翻转）。
+  // 全是 beta → 稳定通道无候选。
   const allBeta = createHeadlessUpdateController({
     version: '0.2.2',
     logger,
@@ -239,8 +238,8 @@ test('⑦ subscribe 推送与退订；start() 立即不改状态（首检在 15s
 
 test('⑧ 渲染器侧 known reason 映射与本地化键锁步（跨包文本断言）', () => {
   const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
-  // 字面量已抽到纯模块 blocked-reason.ts（.tsx 无法被 node:test 直接 import；
-  // 2026-09 模块评审 E#1 的重构），此处按新落位断言。
+  // 字面量在纯模块 blocked-reason.ts（.tsx 无法被 node:test 直接 import），
+  // 此处按该落位断言。
   const reasonModule = readFileSync(
     path.join(repoRoot, 'packages/dsh-chamber-client-ui-settings-bridge/src/client/blocked-reason.ts'),
     'utf8')
@@ -279,8 +278,8 @@ test('⑨ 订阅者抛错不反噬控制器：check 不卡死、二次检查仍�
     seen.push(state.phase)
     throw new Error('listener boom')
   })
-  // 每个相位的 listener 抛错都只响亮记录，IPC 仍 resolve（原缺陷：首个
-  // 'checking' 推送就把异常抛穿 runCheck，checking 卡死、后续检查永久 no-op）。
+  // 每个相位的 listener 抛错都只响亮记录，IPC 仍 resolve（首个 'checking' 推送
+  // 若把异常抛穿 runCheck，checking 会卡死、后续检查永久 no-op）。
   await assert.doesNotReject(controller.checkNow())
   assert.deepEqual(seen, ['checking', 'available'], '推送照常推进（抛错不吞相位）')
   assert.equal(controller.state().phase, 'available')
@@ -290,7 +289,7 @@ test('⑨ 订阅者抛错不反噬控制器：check 不卡死、二次检查仍�
 
 test('⑩ start()：15s 静默首检 + 6h 周期（与 Electron 同参数），unref/幂等/stop 可停；失败轮不抛穿', async () => {
   // 与 Electron updater.ts 同值（那边常量未导出——这里同时断自身字面量与**源锚点**，
-  // 2026-12 审查：只断自身字面量时 updater.ts 漂移不会红）。
+  // 只断自身字面量时 updater.ts 漂移不会红）。
   const updaterSource = readFileSync(
     path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'updater.ts'), 'utf8',
   )
@@ -399,7 +398,7 @@ test('⑪ 原生更新器可用：start() 清空 installBlockedReason；check/av
   assert.deepEqual(await controller.download(), { ok: false, error: 'no update available' })
   // 未下载完成（available）时「重启并安装」也不得转发（与 Electron 同门）。
   assert.deepEqual(await controller.restartAndInstallAsync!(), { ok: false, error: NATIVE_SHELL_RESTART_REFUSAL })
-  // S-21：检查经冻结边 kind=check 交壳（不再跑 GitHub）；壳推送 available。
+  // 检查经冻结边 kind=check 交壳（不走 GitHub）；壳推送 available。
   await controller.checkNow()
   assert.deepEqual(calls, ['check'], '检查恰发一次 kind=check')
   assert.equal(controller.state().phase, 'checking', '终态等壳的 __host.nativeUpdatePhase，不自行判定')
@@ -517,7 +516,7 @@ test('⑫ 原生腿已声明但不可用/探测失败：check 仍交壳（绝不
   await Promise.resolve(); await Promise.resolve()
   assert.equal(unavailable.state().installBlockedReason, NATIVE_SHELL_INSTALL_BLOCKED_REASON, '探测 false 不得清空 blocked')
   await unavailable.checkNow()
-  // S-21 无回退：壳拒绝就是终态（响亮 error），绝不再跑 GitHub 发现给出相反结论。
+  // 无回退：壳拒绝就是终态（响亮 error），绝不跑 GitHub 发现给出相反结论。
   assert.equal(unavailable.state().phase, 'error')
   assert.equal(unavailable.state().error, 'native-updater-unavailable')
   assert.equal(requests, 0, 'S-21：声明过原生腿后绝不跑 GitHub releases 发现')
@@ -556,7 +555,7 @@ test('⑮ S-21 提交形态：原生腿在场 → 零 GitHub 出网、恰一次 
       async trigger(kind: 'check' | 'download' | 'install') { calls.push(kind); return { ok: true as const } },
     },
   })
-  // 假定时器：原生腿在场时 start() 必须零排程（静默 GitHub 检查退役；Sparkle 的
+  // 假定时器：原生腿在场时 start() 必须零排程（不排静默 GitHub 检查；Sparkle 的
   // 用户发起窗口绝不能被定时调用打开）。
   const realSetTimeout = globalThis.setTimeout
   const realSetInterval = globalThis.setInterval

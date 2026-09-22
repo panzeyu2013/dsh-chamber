@@ -1,10 +1,6 @@
 /**
  * Session-state wire contract — THE single source for the read-only
- * /chamber/session-state facts (plan of record
- * docs/progress/todo/remote-session-state-and-switch.md §4, 2026-12;
- * executable blueprints docs/progress/todo/notes/
- * gateway-session-state-blueprint.md §3.2/§4 and
- * protocol-compat-blueprint.md §2/§8.1):
+ * /chamber/session-state facts:
  *
  *   - packages/gateway/src/session-state.ts — the watcher SERVER projects
  *     rows, advertises the descriptor and answers the four claimed routes;
@@ -14,8 +10,8 @@
  *     fact projection, never by parsing this wire directly.
  *
  * Why one module: the gateway server and the desktop client have no shared
- * runtime and can no longer drift on the protocol version, the feature ids,
- * the row model or the read rules — the same cross-shape single-source role
+ * runtime, so this module keeps the protocol version, the feature ids, the
+ * row model and the read rules from drifting — the same cross-shape single-source role
  * gateway-session-protocol.ts plays for the gateway credential facts (see its
  * header). The desktop cannot import a workspace package from node_modules at
  * runtime (packages/desktop/control-plane-module.ts:1-12), so it consumes this
@@ -24,22 +20,22 @@
  * Hard rules encoded here (all pure — no I/O, no clock reads, no timers):
  *
  *   - `protocol` is the INTERFACE version, independent of any product version
- *     (plan §4: 「protocol 独立于产品版本」). `features[]` is the capability
+ *     (「protocol 独立于产品版本」). `features[]` is the capability
  *     axis; an unknown feature id is ignored and NEVER degrades the source
- *     (0.4.x only adds — protocol-compat-blueprint §2.2 R2).
+ *     (0.4.x only adds).
  *   - Only HTTP 404 is a VERSION fact (`legacy-gateway`). 5xx and timeouts are
  *     `unavailable`: a starting gateway must never be labelled "not upgraded"
- *     (protocol-compat-blueprint §1.3/§10-3; R17 "不静默/不撒谎").
+ *     (R17 "不静默/不撒谎").
  *   - `features[]` missing an advertised-required id ⇒ `forward-skew` with the
- *     exact missing ids, so the client degrades per capability (plan §4
- *     「features[] 缺项 ⇒ forward-skew（按缺失项降级）」).
+ *     exact missing ids, so the client degrades per capability
+ *     (「features[] 缺项 ⇒ forward-skew（按缺失项降级）」).
  *   - `completedAtSource` distinguishes an observed completion edge from a gap
  *     reconstruction; only an observed completion may feed a notification — a
- *     reconstructed one merely shows unread (plan §4 「离线完成不补通知」).
+ *     reconstructed one merely shows unread (「离线完成不补通知」).
  *   - Read marks merge monotonically (max) and are evaluated SOURCE-WIDE: the
  *     max over every client's mark for a session plus the source `floor`. This
- *     is what makes "phone read it ⇒ desktop dot goes out" hold (R4/R10 and
- *     plan 裁决 4: 存储按 client-install、判定按来源取 max).
+ *     is what makes "phone read it ⇒ desktop dot goes out" hold (R4/R10:
+ *     存储按 client-install、判定按来源取 max).
  *   - Turn-end classification is the R12 closure: `completed` counts as a
  *     completion, `aborted`+`cause=user` is a user stop (never unread), and
  *     blocked/error/max-tokens/interrupted (plus aborted for any other cause)
@@ -49,11 +45,11 @@
 /**
  * Interface major version of the /chamber/session-state wire. A semantic
  * deletion/change bumps this and keeps one version of dual reads; 0.4.x only
- * adds (plan §6 「0.4.x 规则」).
+ * adds (「0.4.x 规则」).
  */
 export const PROTOCOL_VERSION = 1
 
-/** Blueprint-name alias of PROTOCOL_VERSION (protocol-compat-blueprint §8.1):
+/** Alias of PROTOCOL_VERSION:
  *  one initializer, so the two exported names can never drift. */
 export const SESSION_STATE_PROTOCOL_VERSION = PROTOCOL_VERSION
 
@@ -69,8 +65,8 @@ export const SESSION_STATE_STREAM_PATH = `${SESSION_STATE_PATH}/stream`
 /** Idempotent, monotonic per-session read-mark upsert. */
 export const SESSION_STATE_READ_PATH = `${SESSION_STATE_PATH}/read`
 
-/** Idempotent, monotonic source-wide read-floor upsert (`through`; the plan
- *  explicitly rejects a server-side "take the current maximum" — plan §4). */
+/** Idempotent, monotonic source-wide read-floor upsert (`through`; a
+ *  server-side "take the current maximum" is explicitly rejected). */
 export const SESSION_STATE_READ_ALL_PATH = `${SESSION_STATE_PATH}/read-all`
 
 /** The four claimed paths in canonical order (route tests iterate this). */
@@ -85,7 +81,7 @@ export const SESSION_STATE_ROUTES = Object.freeze([
  * The frozen feature tuple advertised in the descriptor: dotted, lowercase,
  * stable ids; a minor may only ADD ids. The protocol module test keeps an
  * explicit coverage net that fails when this tuple grows without a conscious
- * test update (protocol-compat-blueprint §2.2 R10).
+ * test update (R10).
  */
 export const SESSION_STATE_FEATURES = Object.freeze([
   /** GET /chamber/session-state returns the snapshot descriptor. */
@@ -114,9 +110,9 @@ export type SessionStateFeature = (typeof SESSION_STATE_FEATURES)[number]
 const KNOWN_SESSION_STATE_FEATURES: ReadonlySet<string> = new Set(SESSION_STATE_FEATURES)
 
 /**
- * The features a client requires for unread/pending to be meaningful
- * (protocol-compat-blueprint §2.2 R3). A conforming descriptor missing any of
- * these classifies as forward-skew, and the source degrades explicitly instead
+ * The features a client requires for unread/pending to be meaningful (R3).
+ * A conforming descriptor missing any of these classifies as forward-skew, and
+ * the source degrades explicitly instead
  * of claiming ok with silently narrower facts.
  */
 export const SESSION_STATE_BASE_FEATURES: readonly SessionStateFeature[] = Object.freeze([
@@ -125,7 +121,7 @@ export const SESSION_STATE_BASE_FEATURES: readonly SessionStateFeature[] = Objec
 ])
 
 /**
- * Stable, structured degradation codes (protocol-compat-blueprint §5.2). They
+ * Stable, structured degradation codes. They
  * are wire-independent diagnostics: the client maps them to user-visible copy
  * through sessionStateNoteKey, never by parsing prose.
  */
@@ -166,11 +162,10 @@ export const SESSION_STATE_CLIENT_ID_PATTERN = /^[A-Za-z0-9._:-]{1,64}$/
  *  by the route validator, not here). */
 export const SESSION_STATE_SESSION_ID_MAX_CHARS = 128
 
-/** One capability probe deadline: a single retry, then exponential backoff
- *  (protocol-compat-blueprint §1.2). */
+/** One capability probe deadline: a single retry, then exponential backoff. */
 export const SESSION_STATE_PROBE_TIMEOUT_MS = 5_000
 
-/** Runtime dsh-events handshake window (plan §4: 5s ⇒ mode:poll +
+/** Runtime dsh-events handshake window (5s ⇒ mode:poll +
  *  dsh-events-absent; no half-subscribed row may survive). */
 export const SESSION_STATE_HANDSHAKE_WINDOW_MS = 5_000
 
@@ -194,9 +189,9 @@ export type SessionStatePendingKind = 'approval' | 'question'
 /**
  * How a completion edge was obtained. `observed` = a live
  * api-session/status true→false edge (notification-eligible); `reconstructed`
- * = gap reconstruction across an observer restart (unread only — the plan
- * forbids back-filling a notification for a completion that happened while the
- * desktop was closed).
+ * = gap reconstruction across an observer restart (unread only — back-filling
+ * a notification for a completion that happened while the desktop was closed
+ * is forbidden).
  */
 export type SessionStateCompletedAtSource = 'observed' | 'reconstructed'
 
@@ -224,14 +219,14 @@ export interface SessionTurnEnd {
 }
 
 /** One session row of the snapshot/delta. Session ids and state metadata
- *  only — never a title, cwd, prompt or message (plan §4 privacy clause). */
+ *  only — never a title, cwd, prompt or message (privacy rule). */
 export interface SessionStateRow {
   sessionId: string
   running: boolean
   pendingKind: SessionStatePendingKind | null
   subagentCount: number
   /** Host-clock milliseconds (summary.updatedAt; on the current pin it only
-   *  advances on user-authored durable messages — plan §3.1 track B). */
+   *  advances on user-authored durable messages). */
   updatedAt: number
   /** Observer-clock milliseconds of the observed true→false edge (or null). */
   completedAt: number | null
@@ -258,7 +253,7 @@ export interface SessionStateReadState {
 
 /** Host gate + clock carried by every snapshot. When `serviceable` is false
  *  the rows are still returned, but they MUST be read as unknown — host-down
- *  never fabricates a completion (plan §4 「host 停机语义」). */
+ *  never fabricates a completion (「host 停机语义」). */
 export interface SessionStateHostInfo {
   now: number
   serviceable: boolean
@@ -268,10 +263,10 @@ export interface SessionStateHostInfo {
 /** Full snapshot (GET {SESSION_STATE_PATH}); the SSE first frame is the same
  *  shape. */
 /**
- * Watcher self-diagnostics（仪表 I6/I16，plan §10）：只读计数器，让客户端与验收
+ * Watcher self-diagnostics（仪表 I6/I16）：只读计数器，让客户端与验收
  * 仪器**看见**丢帧、重连、follow 读取与 turn/end 分类的构成，而不是从沉默里猜。
  * 描述符上的加法字段：不认识它的客户端照常工作（v0.4.0 允许加法）。
- * 命名与蓝图 §5 的示意字段名有一处诚实偏离：蓝图写 `gapsDetected`，实现给的是
+ * 命名与设计示意字段名有一处诚实偏离：示意写 `gapsDetected`，实现给的是
  * `baselines`/`reconnects`（每次 ready/重连都对账并重读基线）——不存在"检测到缺口"
  * 的独立事件，据此命名会编造一个没有语义的计数器。
  */
@@ -315,8 +310,8 @@ export interface SessionStateSnapshot {
 
 /** One SSE increment. Emitted events have no replay, so every (re)connect also
  *  performs a full session/list baseline reconciliation — a delta is an
- *  optimization on top of that baseline, never a replacement for it (plan §4
- *  「（重）连必须对账」). */
+ *  optimization on top of that baseline, never a replacement for it
+ *  (「（重）连必须对账」). */
 export interface SessionStateDelta {
   cursor: number
   sessions: readonly SessionStateRow[]
@@ -332,13 +327,13 @@ export interface ReadRequest {
   clientId: string
   sessionId: string
   /** The client's monotonic completion cursor for this session (never a
-   *  client wall clock — plan 裁决 13). */
+   *  client wall clock). */
   readThrough: number
 }
 
 /** POST {SESSION_STATE_READ_ALL_PATH} body: source-wide floor upsert. The
  *  client supplies `through` so late-discovered rows at or below it are read
- *  from the start — the server must NOT compute "now" (plan §4/R13). */
+ *  from the start — the server must NOT compute "now". */
 export interface ReadAllRequest {
   clientId: string
   through: number
@@ -356,7 +351,7 @@ export interface SessionStateDescriptor {
   cursor: number | null
 }
 
-/** Capability verdict family (protocol-compat-blueprint §1.3). */
+/** Capability verdict family (the protocol contract). */
 export type SessionStateCapabilityKind =
   | 'ok'
   | 'legacy-gateway'
@@ -452,17 +447,16 @@ export function sessionStateFeatureSupport(
 }
 
 /**
- * Classify one capability probe observation into the verdict family
- * (protocol-compat-blueprint §1.3). The order of the checks IS the contract:
+ * Classify one capability probe observation into the verdict family.
+ * The order of the checks IS the contract:
  *
  *   1. transport failure          ⇒ unavailable (never legacy)
  *   2. 404                        ⇒ legacy-gateway
  *   3. 503 + session_state_disabled ⇒ disabled
  *   4. any other non-2xx          ⇒ unavailable
  *   5. 2xx without protocol field ⇒ unversioned
- *   6. 2xx with mode==='off'      ⇒ disabled ("observer off" second shape,
- *      gateway-session-state-blueprint §6.4/§11-④ — the client must not read
- *      it as "not upgraded")
+ *   6. 2xx with mode==='off'      ⇒ disabled ("observer off" second shape —
+ *      the client must not read it as "not upgraded")
  *   7. protocol > PROTOCOL_VERSION ⇒ forward-skew
  *   8. required feature missing   ⇒ forward-skew (+ missingFeatures)
  *   9. otherwise                  ⇒ ok
@@ -508,8 +502,7 @@ export function classifySessionStateProbe(
     return { kind: 'unversioned', status, ...empty, degradation: 'unversioned', detail: 'status' }
   }
   const features = knownFeatures(descriptor.features)
-  // The kill switch has two server shapes (protocol-compat-blueprint §1.3:
-  // 503 session_state_disabled; gateway-session-state-blueprint §6.4/§11-④:
+  // The kill switch has two server shapes (503 session_state_disabled;
   // 200 + mode:'off'). Both mean "upgraded gateway, observer turned off" and
   // must never be rendered as a version-skew hint.
   if (descriptor.mode === 'off') {
@@ -573,7 +566,7 @@ function isSessionStateDisabledBody(body: unknown): boolean {
 /**
  * Map one verdict kind to its user-visible copy key, or null for `ok`. The
  * exhaustive switch (no default) makes a new verdict kind a compile error, so
- * a degraded source can never render silently — review rule "不静默/不噪声".
+ * a degraded source can never render silently — the "不静默/不噪声" rule.
  * The sidebar owns the actual translations; this function owns the key set.
  * @param kind - classified verdict kind.
  * @returns the stable i18n key, or null when no note is due.
@@ -606,9 +599,9 @@ export function mergeReadMark(existing: number | null | undefined, incoming: num
 
 /**
  * Clamp an incoming read mark to the HOST clock at acceptance time. Read marks
- * live in the host domain (plan §5-13/R2), so a client may claim to have read
+ * live in the host domain (R2), so a client may claim to have read
  * up to "now" but never into its own future: a desktop whose clock runs ahead
- * — the §10 ≥1h clock-skew injection — would otherwise send
+ * — the ≥1h clock-skew injection — would otherwise send
  * `readThrough = now + 3600_000` and suppress every completion landing in that
  * hour, i.e. lose true unread. Watermarks are produced by the same host domain
  * (`row.updatedAt` / `row.completedAt`), so a legitimate mark is unaffected;
@@ -625,7 +618,7 @@ export function clampReadThrough(value: number, at: number): number {
 /**
  * Source-wide effective read mark for ONE session: the max over every client's
  * mark for that session plus the source floor. "Stored per client-install,
- * judged per source" (plan 裁决 4) is what lets a read on one client clear
+ * judged per source" is what lets a read on one client clear
  * unread on every other client (R10).
  * @param marks - every known client's mark for the session (missing marks
  *   remain absent; invalid values are ignored).

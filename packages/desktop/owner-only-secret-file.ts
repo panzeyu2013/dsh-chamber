@@ -6,7 +6,7 @@
  * it shared prevents one credential store from silently losing the 0600 /
  * regular-file / inode-race discipline (design 05 §8, design 17 S22).
  *
- * The mechanism is single-sourced in control-plane (private-file.ts, P2-2a,
+ * The mechanism is single-sourced in control-plane (private-file.ts,
  * reached through the desktop dual-path facade): the delegated read pins the
  * real parent directory, refuses a symlink / multi-link / non-regular leaf,
  * and `tightenMode` fchmods the already-pinned inode to 0600 before any bytes

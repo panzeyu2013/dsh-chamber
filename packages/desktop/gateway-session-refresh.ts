@@ -28,7 +28,7 @@
  *   `reconnect` seam, wired to transport-manager's existing disconnect →
  *   connect public API): verifyUp re-authenticates with the stored password
  *   (the single re-login → terminal path, design 17 §9.3), so a healthy
- *   transport never rides a dead cookie answering 401 indefinitely (P2-1).
+ *   transport never rides a dead cookie answering 401 indefinitely.
  *   The recovery is bounded — at most one reconnect per refresh fire, only
  *   while the transport is still ready on the SAME origin, and the failure
  *   path arms no further timer, so a fresh ready re-arms with the new
@@ -70,7 +70,7 @@ export function gatewayTunnelAuthority(remotePort: number): string {
  * `insecureHttp` is the scheme selector the session manager's origin gate
  * requires (http → true; for a tunnel this is a scheme fact, not an
  * "insecure" judgement — the ssh encryption protects the loopback hop).
- * `spkiPin` (S23, P1-2) rides the origin when provided, so the REFRESH login
+ * `spkiPin` rides the origin when provided, so the REFRESH login
  * is pinned exactly like the verifyUp login — a pinned internal-CA gateway
  * re-authenticates pre-expiry instead of failing as an untrusted-chain
  * network failure. Returns null for a structurally invalid URL (programmer-
@@ -116,9 +116,9 @@ export interface GatewaySessionRefreshDeps {
   tokenFor(id: string): string | null
   /** The instance's current ready transport URL, or null when not ready. */
   readyUrlFor(id: string): string | null
-  /** The instance's configured SPKI certificate pin (S23), or null — rides
+  /** The instance's configured SPKI certificate pin, or null — rides
    * the re-registration exactly like the ready registration AND the refresh
-   * login origin (P1-2: the pre-expiry re-login is pinned like verifyUp's),
+   * login origin (the pre-expiry re-login is pinned like verifyUp's),
    * so a pinned internal-CA gateway never fails the refresh as an
    * untrusted-chain network failure. */
   tlsPinFor(id: string): string | null
@@ -137,7 +137,7 @@ export interface GatewaySessionRefreshDeps {
   register(id: string, url: string, headers: Record<string, string> | undefined, tls: { tls: { spkiPin: string } } | undefined, authority: string | undefined): void
   /**
    * Controlled reconnect of one instance's transport — the bounded recovery
-   * for a re-login that failed AFTER the old cookie died (P2-1): without it
+   * for a re-login that failed AFTER the old cookie died: without it
    * a healthy transport would ride the dead cookie and the proxy would
    * answer 401 indefinitely. Wired in main.ts to the transport runtime's
    * EXISTING public API (transport-manager has no single reconnect entry):
@@ -262,7 +262,7 @@ export function createGatewaySessionRefresh(deps: GatewaySessionRefreshDeps): Ga
     // (disarm covers the status path; this is the race guard).
     const facts = liveFacts(id)
     if (facts === null) return
-    // P1-2: the refresh login carries the configured SPKI pin (S23) exactly
+    // The refresh login carries the configured SPKI pin exactly
     // like the verifyUp login — an internal-CA gateway re-authenticates
     // pre-expiry instead of failing as an unpinned untrusted-chain 'network'.
     // The tunnel Host override (design 17 §9.3 隧道 Host 覆盖) rides the same
@@ -279,7 +279,7 @@ export function createGatewaySessionRefresh(deps: GatewaySessionRefreshDeps): Ga
       // entry is gone), the proxy rides a dead cookie: warn honestly and
       // trigger ONE controlled reconnect so verifyUp re-authenticates with
       // the stored password — a healthy transport must never answer 401
-      // indefinitely (P2-1 bounded recovery, design 17 §9.3).
+      // indefinitely (bounded recovery, design 17 §9.3).
       const expiresAt = deps.sessionManager.expiresAt(facts.origin)
       if (expiresAt !== null && expiresAt > now()) {
         if (factsAreCurrent(id, epoch, facts)) scheduleRefresh(id, epoch, expiresAt - now())
@@ -327,7 +327,7 @@ export function createGatewaySessionRefresh(deps: GatewaySessionRefreshDeps): Ga
     // never suppress the independently configured session.
     const facts = liveFacts(id)
     if (facts === null) return
-    // P1-2: the armed login (and the cached-session key) rides the pin and
+    // The armed login (and the cached-session key) rides the pin and
     // the tunnel Host override (design 17 §9.3) — same key as verifyUp.
     const expiresAt = deps.sessionManager.expiresAt(facts.origin)
     if (expiresAt === null) return

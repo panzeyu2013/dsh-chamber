@@ -5,8 +5,8 @@
  * WHY A SEPARATE FILE. The TS literals are the runtime source (the module is
  * import-clean for the browser); the JSON is what the Swift mirror reads. Two
  * representations of one truth drift silently without this assertion - and a
- * drifted threshold in the shell is exactly the class of bug this refactor is
- * about (uncalibrated numbers nobody can see).
+ * drifted threshold in the shell is exactly the class of bug this lockstep
+ * exists to prevent (uncalibrated numbers nobody can see).
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'

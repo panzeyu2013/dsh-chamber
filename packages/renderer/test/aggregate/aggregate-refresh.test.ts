@@ -35,7 +35,7 @@ import {
 } from '../../src/transport-source.ts'
 import type { InstanceAggregate, InstanceSnapshot } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
 
-// ---- commitAggregatePull (2026-09 beta regression: archived-resurfacing) ----
+// ---- commitAggregatePull ----
 
 /** A session row as the aggregate/snapshot wire carries it, with blank defaulting false. */
 const sessionRow = (sessionId: string, running = false): InstanceAggregate['sessions'][number] => ({ sessionId, running, blank: false })
@@ -81,11 +81,11 @@ test('commitAggregatePull: a mounted pushed source keeps groups/archive/state; o
 })
 
 test('commitAggregatePull: the mounted merge preserves archive-set provenance (archiveSetKnown) — a mutation pull must never flip the archive manager into the degraded branch', () => {
-  // Regression (2026 dev-QA): the manager's tri-state reads archiveSetKnown;
-  // the unary fallback carries no archive wire source (fetchInstanceSnapshot
-  // marks the set unknown). The merge used to drop the flag, so the first
-  // requestRefresh pull after an archive action landed the source in the
-  // degraded manager view ("无法列出已归档会话") until a reload.
+  // The manager's tri-state reads archiveSetKnown; the unary fallback carries
+  // no archive wire source (fetchInstanceSnapshot marks the set unknown).
+  // The merge preserves the flag: otherwise the first requestRefresh pull
+  // after an archive action puts the source in the degraded manager view
+  // ("无法列出已归档会话") until a reload.
   const authoritative: InstanceAggregate = {
     ...mountedAggregate,
     archiveSetKnown: true,
@@ -183,8 +183,8 @@ test('watchdog × mounted-source invariant: a ready source with a complete produ
   const plan = planAggregateRefreshes(['local'], new Set(['local']), { local: true })
   assert.deepEqual(plan.refreshSourceIds, [])
   // Watchdog path (recency-driven, App.tsx): the pull DOES run, but the
-  // commit preserves the mounted groups/archive — the archived-resurfacing
-  // regression is impossible end to end.
+  // commit preserves the mounted groups/archive — archived conversations
+  // cannot resurface end to end.
   const committed = commitAggregatePull(mountedAggregate, fallbackSnapshot, true)
   assert.deepEqual(committed.archivedSessionIds, mountedAggregate.archivedSessionIds)
   assert.deepEqual(committed.workspaces, mountedAggregate.workspaces)
@@ -295,9 +295,7 @@ test('chamber source-id validation accepts canonical and legacy prefixes but rej
   )
 })
 
-// ---- disconnect retention + fallback-view heal (2026-09: reconnect
-// resurfaces archived conversations / clicks dead-end into the new-session
-// view) ----
+// ---- disconnect retention + fallback-view heal ----
 
 test('isFallbackDerivedView: only ok aggregates with synthetic rows are the degraded unary view', () => {
   assert.equal(isFallbackDerivedView(undefined), false)
@@ -322,14 +320,14 @@ test('shouldRetainPushedAggregate: never-pushed / unmounted / degraded / non-ok 
   assert.equal(shouldRetainPushedAggregate(true, okAggregate([], true, { state: 'not-connected' })), false)
   assert.equal(shouldRetainPushedAggregate(true, okAggregate([], true, { state: 'error', error: 'x' })), false)
   // A current ALREADY degraded to the fallback view is not retainable — the
-  // retention fix prevents NEW degraded views, it must not freeze existing ones.
+  // retention prevents NEW degraded views, it must not freeze existing ones.
   assert.equal(shouldRetainPushedAggregate(true, okAggregate([], true, {
     workspaces: [syntheticWorkspace('/real', 'Real', ['s1'])], sessions: [sessionRow('s1')],
   })), false)
 })
 
 test('retention closes the ready-edge full-commit: a retained ok aggregate merges sessions-only (archive set survives the reconnect pull)', () => {
-  // End-to-end shape of the 2026-09 fix: the aggregate that survived the
+  // End-to-end shape: the aggregate that survived the
   // outage (state ok, real workspaces, archive set) meets the ready-edge
   // unary pull — the commit is the MOUNTED MERGE, never the full fallback.
   const committed = commitAggregatePull(mountedAggregate, fallbackSnapshot, true)
@@ -338,7 +336,7 @@ test('retention closes the ready-edge full-commit: a retained ok aggregate merge
   assert.deepEqual(committed.sessions, fallbackSnapshot.sessions)
 })
 
-// ---- shouldRebaselineFallbackView (2026-09: heal a mounted source whose
+// ---- shouldRebaselineFallbackView (heal a mounted source whose
 // aggregate is stuck on the degraded fallback view via a bounded ctx
 // reconnect) ----
 
@@ -389,7 +387,7 @@ test('shouldRebaselineFallbackView: unmounted sources and healthy (non-fallback)
   }), false, 'a real pushed view needs no rebaseline bounce')
 })
 
-// ---- refresh pull validity domains (2026-10: create/fork latency fix) ----
+// ---- refresh pull validity domains (create/fork latency) ----
 
 test('a mutation-triggered pull stays committable across pushes (the interim frame cross-section must not kill it)', () => {
   assert.equal(refreshPullStillCurrent({
@@ -662,7 +660,7 @@ test('planSessionListRefresh: unknown provenance or non-ok previous never reques
   assert.deepEqual(planSessionListRefresh(notConnected, snapshotWithRows(['a2'], ['s0', 'a2']), ['a2']), { request: true, pending: ['a2'] })
 })
 
-// ---- 2026-09 §12 F3: remembered authoritative archive set ----
+// ---- design 24 §12: remembered authoritative archive set ----
 
 test('archiveSetShrink: a remembered authoritative set is the baseline when the committed aggregate lost provenance', () => {
   const fallbackView = okAggregate([], false)
@@ -670,7 +668,7 @@ test('archiveSetShrink: a remembered authoritative set is the baseline when the 
     archiveSetShrink(fallbackView, { archivedSessionIds: ['keep'], archiveSetKnown: true }, ['g1', 'g2', 'keep']),
     ['g1', 'g2'],
   )
-  // No memory and no provenance -> no shrink (unchanged conservative rule).
+  // No memory and no provenance -> no shrink (the conservative rule).
   assert.deepEqual(archiveSetShrink(fallbackView, { archivedSessionIds: [], archiveSetKnown: true }), [])
   // A non-authoritative next snapshot never shrinks, memory or not.
   assert.deepEqual(
@@ -720,7 +718,7 @@ test('commitAggregatePull: the remembered set never leaks into the mounted merge
   assert.equal(merged.archiveSetKnown, true)
 })
 
-// ---- 保留视图的「无法验证」界限（2026-12 残留修复，design 05 §2.3）----
+// ---- 保留视图的「无法验证」界限（design 05 §2.3）----
 
 test('shouldDropUnverifiedRunningFacts: 从未验证过就没有断言可丢（fail-open，不误伤首拉）', () => {
   assert.equal(shouldDropUnverifiedRunningFacts({ factsAt: undefined, now: 1_000_000 }), false)
@@ -752,7 +750,7 @@ test('shouldDropUnverifiedRunningFacts: budgetMs 可注入（测试与未来调�
   )
 })
 
-// ---- shouldReconnectStaleMounted (S2: watchdog reconnect of stale MOUNTED
+// ---- shouldReconnectStaleMounted (watchdog reconnect of stale MOUNTED
 // sources — 对齐 ssh 断链自动恢复; see aggregate-refresh.ts). The predicate
 // takes `mounted` as a CALLER-DEFINED flag (the App passes "pushed at least
 // once this generation"); these tests exercise the pure predicate with
@@ -819,7 +817,7 @@ test('shouldReconnectStaleMounted: a fresh push after a reconnect clears stalene
   assert.equal(decide({ lastSnapshotAt: NOW - 1, lastReconnectAt: NOW - 1 }), false)
 })
 
-// ---- reconnectStalenessMsForTransport (2026-09 extension: per-transport
+// ---- reconnectStalenessMsForTransport (per-transport
 // watchdog thresholds — http tight heal, ssh last-resort heal, local/unknown
 // skipped). ----
 

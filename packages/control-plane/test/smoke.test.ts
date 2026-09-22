@@ -27,7 +27,7 @@ const repoRoot = resolve(fileURLToPath(new URL('../../..', import.meta.url)))
  * probe spawn-dsh.ts uses. A git-checked-out vendor/dsh holding nothing but the
  * committed pnpm-lock.yaml (no node_modules) must NOT count as installed,
  * otherwise CI runs a real smoke against an empty bundle and fails instead of
- * SKIPping (2026-08 CI fix). Returns null when none is present.
+ * SKIPping. Returns null when none is present.
  */
 function resolveDshWorkspace(): string | null {
   if (process.env.DSH_CHAMBER_DSH_PATH !== undefined) {

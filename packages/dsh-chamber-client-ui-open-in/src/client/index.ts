@@ -17,11 +17,11 @@
  *
  * Registered into the OFFICIAL conversation header utilities slot
  * (`conversation.session.header.utilities`, the same right-aligned row as the
- * vendor "Session log" action) — placement fix 2026-08: the original
- * `shell.overlay` top-right anchor was measured to overlap that row (details
- * column closed ⇒ the center column reaches the frame edge), so the button
- * now lays out inline beside the vendor utilities instead of floating on the
- * frame layer. The slot is session-scoped, so the component receives the
+ * vendor "Session log" action). The button lays out inline beside the vendor
+ * utilities rather than floating on the frame layer: a `shell.overlay`
+ * top-right anchor would overlap that row (details column closed ⇒ the center
+ * column reaches the frame edge). The slot is session-scoped, so the component
+ * receives the
  * per-header `sessionId` and the framework's global `useWorkspaces` hook —
  * no direct ctx store access.
  *
@@ -29,8 +29,8 @@
  * `chamberSourceFingerprint`, all provided by chamber-entry/shell.ts): the
  * source id and transport decide the matrix, and the fingerprint is the
  * exact-boot proof the trusted main process verifies before a launch. This
- * entry owns NO connection carrier of its own any more (2026-09-12): the
- * machine catalog's transport belongs to the page, not to a source.
+ * entry owns NO connection carrier of its own: the machine catalog's transport
+ * belongs to the page, not to a source.
  */
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
@@ -69,8 +69,8 @@ export function apply(ctx: ClientContext): void {
 
   const t = ctx.locale.bind(NS) as Translate
 
-  // Session stream-health seat (2026-12): the chamber's recovery arm for the
-  // reproduced ui-chat freeze (an 'error' journal is never re-opened by the
+  // Session stream-health seat: the chamber's recovery arm for the ui-chat
+  // freeze (an 'error' journal is never re-opened by the
   // official stack), registered BEFORE the open-in gates below and
   // independently of them — a source whose open-in id does not parse still
   // gets the recovery chip. See session-stream-health.ts for the defect, the
@@ -79,7 +79,7 @@ export function apply(ctx: ClientContext): void {
 
   // Per-boot instance id provided by chamber-entry; loose cast (the sidebar
   // plugin uses the same `as any` seam — the vendor cordis face stays loose).
-  // Bail on an absent id (frontend-review P2-4): without it the gate-2 local
+  // Bail on an absent id: without it the gate-2 local
   // check would let a bogus '' source render a button that can only fail.
   const source = parseOpenInSource(
     (ctx as { chamberInstanceId?: string }).chamberInstanceId,
@@ -135,9 +135,9 @@ export function apply(ctx: ClientContext): void {
     getChoice: adapter.getChoice,
     choose: adapter.choose,
     iconUrl: adapter.iconUrl,
-    // 保持一次性读取（2026-12 审查后回退）：根因修在 Swift shim——它现在与 preload
-    // 同序（只有 info 成功才暴露 dshChamber），因此注入发生时 platform 必然已填；
-    // 之前那个 getter 是在补偿 shim 的早暴露，不该由共享插件承担。
+    // 保持一次性读取：根因在 Swift shim——它与 preload 同序（只有 info 成功才暴露
+    // dshChamber），因此注入发生时 platform 必然已填；让共享插件用 getter 补偿 shim
+    // 的早暴露不是它的职责。
     platform: bridgePlatform(),
   })
 
@@ -151,10 +151,10 @@ export function apply(ctx: ClientContext): void {
     // slot, same right-aligned position).
     id: 'open-in',
     // Row order is ascending by `order` (default 0). -10 is the official
-    // `open-in-app` row's own value (2026-09-12 thorough unification), which
-    // keeps the vendor "Session log" entry (order 0) pinned at the row's far
-    // RIGHT and places this button to its left (2026-08 user requirement) with
-    // upstream's exact ordering behaviour for any third-party row in between.
+    // `open-in-app` row's own value, which keeps the vendor "Session log" entry
+    // (order 0) pinned at the row's far RIGHT and places this button to its left,
+    // with upstream's exact ordering behaviour for any third-party row in
+    // between.
     order: -10,
     // Neutral entry label (slot registrant diagnostics — the user-facing
     // tooltip/aria-label comes from the component per app, see OpenInButton).

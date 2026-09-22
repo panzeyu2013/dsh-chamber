@@ -3,8 +3,7 @@
  * documentation set must resolve — the target file must exist, and a `#fragment`
  * onto a Markdown target must name a real heading slug or an explicit anchor.
  *
- * Why it exists (2026-12, first run: 72 documents / 157 relative links, all
- * resolving): the repository moves files between `docs/design`,
+ * Why it exists: the repository moves files between `docs/design`,
  * `docs/checklists` and `docs/progress` often enough that a link left behind is
  * a silent loss — the reader follows a path that no longer exists and nothing
  * turns red. Two frozen upstream mirrors stay outside the checked set by design
@@ -38,7 +37,7 @@ export const LINK_SCAN_FILES = ['AGENTS.md', 'CONTRIBUTING.md', 'README.md', 'CH
  * hundreds of dead-link reports that CI (which has no such directory) never sees.
  */
 // ONE ignore set + one walk for every gate that scans the repository
-// (scripts/lib/walk.mjs; P2-17 of the 13-scripts audit).
+// (scripts/lib/walk.mjs).
 export { IGNORED_DIRECTORIES } from '../lib/walk.mjs'
 
 /**

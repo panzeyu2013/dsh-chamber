@@ -18,7 +18,7 @@ test('rc.8 dsh-api-remotes assembly and renderer generation stay in lockstep', (
   // with the upgrade gate's C4) so an upstream assembly change is ONE edit.
   assert.deepEqual(packages, [...EXPECTED_REMOTE_PACKAGES])
   // Imports are only the SELECTION; the apply() mount array is what becomes
-  // ctx.remote. A same-length edit to the array alone must fail (W4-Q5-F1).
+  // ctx.remote. A same-length edit to the array alone must fail.
   assert.deepEqual(remoteMountPackages(source), [...EXPECTED_REMOTE_PACKAGES])
   for (const packageName of packages) {
     const shortName = packageName.slice('@deepseek-ai/'.length)

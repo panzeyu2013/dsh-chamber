@@ -65,9 +65,9 @@ cleanStaleWorkspaces();
 const recovery = recoverBundleSwap(dest, backup);
 if (recovery === 'restored') console.warn('[bundle-dsh] 已恢复上次中断交换前的可用 dsh 封装。');
 
-/** Derive the default dsh version from the COMMITTED runtime lockfile — the
- *  hardcoded twin of release.yml's DSH_CHAMBER_DSH_VERSION used to drift
- *  silently (2026 review); the lockfile is the single source of truth for
+/** Derive the default dsh version from the COMMITTED runtime lockfile — a
+ *  hardcoded twin of release.yml's DSH_CHAMBER_DSH_VERSION would drift
+ *  silently, so the lockfile is the single source of truth for
  *  the no-env path. The lockfile path is resolved HERE (sourceLockfile is
  *  declared later in the module — a TDZ reference from this call site would
  *  silently fall back to the pin). */
@@ -89,8 +89,7 @@ if (!EXACT_SEMVER.test(VERSION)) {
 }
 
 /** 允许执行安装脚本的依赖（原生模块/编译步骤）——单一来源常量，见
- *  @dsh-chamber/dsh-runtime（design 18 §4：与运行期安装器编译产物同源；原
- *  ../allow-builds.mjs 垫片已删除,dedupe audit N8）。 */
+ *  @dsh-chamber/dsh-runtime（design 18 §4：与运行期安装器编译产物同源）。 */
 
 const installed = path.join(dest, 'node_modules', '@deepseek-ai', 'dsh');
 // 平台感知的幂等跳过：node_modules 内含平台原生二进制（node-pty/sharp/ripgrep），
@@ -135,7 +134,7 @@ writeFileSync(
  */
 function resolvePnpmCommand() {
   // 与下方 run() 同一平台感知启动形状：Windows 上 pnpm 是 pnpm.cmd，只有经
-  // shell 才能从 PATH 解析（Node 拒绝直启 .cmd，2026-12 复核 P2）；直启会让
+  // shell 才能从 PATH 解析（Node 拒绝直启 .cmd）；直启会让
   // PATH 上的精确版本被误判为"未检测到"，每次都走 npx 兜底。
   const launcher = bundlePnpmLaunch();
   const probe = spawnSync(launcher.command, ['--version'], {
@@ -179,7 +178,7 @@ function run(args, what) {
  *   无重复展开，解压负担降为约 1/3（dsh 官方发行即 npm 全局安装，扁平布局
  *   是 dsh 已验证的运行形态；控制面冒烟对 hoisted 树实测通过）。
  * 裁剪实现见 @dsh-chamber/dsh-runtime prune-runtime（独立模块,可对任意目录
- * 直接验证；原 ../prune-runtime.mjs 垫片已删除,dedupe audit N8）；
+ * 直接验证）；
  * 安装后 `node bin.js --version` 冒烟检查兜底裁剪正确性。
  */
 const sourceLockfile = path.join(dest, 'pnpm-lock.yaml');

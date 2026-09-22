@@ -153,7 +153,7 @@ test('the packaged hook restores the link when the pack process exits', () => {
 
 test('a materialization failure still restores the link (handler armed first)', () => {
   // materializeRuntimeCore clears the link before it copies, so a failure in
-  // between must not leave the workspace without it (2026-09 review).
+  // between must not leave the workspace without it.
   const { root, sourceDir, targetDir, linkTarget } = fixture();
   try {
     // make the copy fail after the link is already gone

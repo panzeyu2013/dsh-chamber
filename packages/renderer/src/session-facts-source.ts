@@ -1,6 +1,5 @@
 /**
- * Gateway session-state facts source（主计划 §3.2/§3.3-1/§3.3-6，蓝图
- * notes/desktop-facts-wiring-blueprint.md §2-接线 1/接线 4/接线 6）。
+ * Gateway session-state facts source。
  *
  * 只读事实源，**浏览器安全**（零 Node import；只用 fetch / ReadableStream /
  * 定时器；测试全部经注入的 fetchImpl 驱动）：
@@ -13,14 +12,14 @@
  *     completedAtSource），两侧不得静默漂移；
  *   - mode === 'sse' 时消费 SSE 增量（sync / session-state / resync，id 单调游标，
  *     重连带 Last-Event-ID；心跳注释帧只用于活性）；
- *   - mode === 'poll' 时按 pollIntervalMs 重取快照（R18 降级不静默）；
- *   - R21：静默超时（连在、事件停）⇒ 关流重订阅并整量重取快照，期间标 stale。
- *   - R22：ack 上行（/read、/read-all）失败（网络错误 / 5xx）进 unread-store 的
+ *   - mode === 'poll' 时按 pollIntervalMs 重取快照（降级不静默）；
+ *   - 静默超时（连在、事件停）⇒ 关流重订阅并整量重取快照，期间标 stale。
+ *   - ack 上行（/read、/read-all）失败（网络错误 / 5xx）进 unread-store 的
  *     有界待发表；probe 快照 / SSE sync·增量·心跳任一「通道恢复」点重放，
  *     成功才出队。重放幂等（服务端单调 max），且绝不阻塞读推进。
  *
  * 行数据只承载会话元数据（sessionId / running / pendingKind / 水位），**绝不**
- * 带 title/cwd/消息（主计划 §4 隐私条）。判定输入（completedAt/updatedAt/
+ * 带 title/cwd/消息（隐私条）。判定输入（completedAt/updatedAt/
  * lastTurnEnd）刻意留在本模块产物里，不过侧栏投影（derive.ts 的反 churn 纪律）。
  */
 
@@ -44,14 +43,14 @@ export const SESSION_FACTS_PROBE_TIMEOUT_MS = 5_000
  * 流建连/首字节 deadline：同一条 HTTP 通道上的同类等待，与 probe 同预算。
  * 到点按「流断开」收口（abort + markStale + 诊断 + 有界重连）——半死隧道下
  * 裸 fetch 可能永不落定，没有它这条流会带着 streamStarted=true 永久楔死：
- * 无 stale、无重连、该来源未读/通知/行刷新静默冻结（2026-12 审计 P0）。
+ * 无 stale、无重连、该来源未读/通知/行刷新静默冻结。
  */
 export const SESSION_FACTS_STREAM_CONNECT_TIMEOUT_MS = SESSION_FACTS_PROBE_TIMEOUT_MS
 
 /** 流断开后的重连退避（有界）。 */
 export const SESSION_FACTS_RECONNECT_MS = 3_000
 
-/** R21 静默探针周期：超过该时长没有任何帧（含心跳注释）即重订阅。 */
+/** 静默探针周期：超过该时长没有任何帧（含心跳注释）即重订阅。 */
 export const SESSION_FACTS_SILENCE_MS = 60_000
 
 /** poll 档的快照重取周期（与 30s unary watchdog 同量级）。 */
@@ -84,7 +83,7 @@ export type SessionFactsTurnEndKind =
 /** wire aborted cause 族（缺失 = 字段缺席，绝不臆造 legacy）。 */
 export type SessionFactsTurnEndCause = 'user' | 'parent' | 'hook' | 'disposed' | 'legacy'
 
-/** R12 判定输入；形状与 sidebar shared 的 TurnEndFact 结构兼容（可直接喂 deriveUnread）。 */
+/** 判定输入；形状与 sidebar shared 的 TurnEndFact 结构兼容（可直接喂 deriveUnread）。 */
 export interface SessionFactsTurnEnd {
   kind: SessionFactsTurnEndKind
   cause?: SessionFactsTurnEndCause
@@ -102,7 +101,7 @@ export interface SessionFactsRow {
   updatedAt: number
   /**
    * 完成边沿时刻。**时钟域见 {@link SessionFactsRow.completedAtDomain}**：
-   * 取到 host `turn/end.time` 时是 host 域；拿不到时是观察者域（降级，B5）。
+   * 取到 host `turn/end.time` 时是 host 域；拿不到时是观察者域（降级）。
    */
   completedAt: number | null
   /**
@@ -111,13 +110,13 @@ export interface SessionFactsRow {
    */
   completedAtSource: SessionFactsCompletedAtSource | null
   /**
-   * 完成戳的时钟域（B5）：`host` = 可直接与读水位比较；`observer` = 客户端观察者时钟，
+   * 完成戳的时钟域：`host` = 可直接与读水位比较；`observer` = 客户端观察者时钟，
    * **只用于武装、不得推进 host 域读标记**（`unread-derivation` 的 factsWatermark 据此剔除）。
-   * 缺席 = host 域（gateway 行不携带，行为逐字节不变）。
+   * 缺席 = host 域（gateway 行不携带）。
    */
   completedAtDomain?: 'host' | 'observer' | null
   lastTurnEnd: SessionFactsTurnEnd | null
-  /** I5：观察者刷新这一行事实的 host 域毫秒（0 = 未知）。 */
+  /** 观察者刷新这一行事实的 host 域毫秒（0 = 未知）。 */
   factAt: number
 }
 
@@ -135,7 +134,7 @@ export interface SessionFactsSnapshot {
   /** host 生命周期（gateway 平面）；serviceable=false 时行只读作未知。 */
   hostState: string
   serviceable: boolean
-  /** 流断/静默/断连时 true；R14 仍渲染这些只读事实并明确标注。 */
+  /** 流断/静默/断连时 true；这些只读事实仍会被渲染并明确标注。 */
   stale: boolean
   cursor: number
   rows: Readonly<Record<string, SessionFactsRow>>
@@ -164,7 +163,7 @@ export interface SessionFactsSourceOptions {
   basePath?: string
   fetchImpl?: typeof fetch
   now?: () => number
-  /** R21 静默窗（0 = 关闭探针）；测试注入小值。 */
+  /** 静默窗（0 = 关闭探针）；测试注入小值。 */
   silenceMs?: number
   /** poll 档重取周期（0 = 不轮询）。 */
   pollIntervalMs?: number
@@ -248,7 +247,7 @@ export function parseSessionFactsRow(value: unknown): SessionFactsRow | null {
     pendingKind: pending,
     subagentCount: nonNegativeInt(value.subagentCount),
     updatedAt: numberOrZero(value.updatedAt),
-    // I5：缺失/非法一律 0（= 未知），绝不臆造时间戳。
+    // 缺失/非法一律 0（= 未知），绝不臆造时间戳。
     factAt: numberOrZero(value.factAt),
     completedAt: isWatermark(value.completedAt) ? value.completedAt : null,
     completedAtSource,
@@ -317,7 +316,7 @@ export function parseSessionFactsSnapshotValue(value: unknown): {
  *   2. 404            ⇒ legacy-gateway
  *   3. 503 + session_state_disabled ⇒ degraded('watcher-disabled')
  *   4. 2xx 无 protocol / 解析失败  ⇒ degraded('unversioned')
- *   5. protocol > 1   ⇒ degraded('forward-skew')（不静默；走现状路径）
+ *   5. protocol > 1   ⇒ degraded('forward-skew')（不静默）
  *   6. protocol === 1 ⇒ ok（mode==='off' 除外）
  *   7. mode === 'off' ⇒ degraded('watcher-disabled')
  */
@@ -386,12 +385,12 @@ export interface SessionFactsDeltaOutcome {
  * 应用一帧 SSE 增量（纯函数；调用方负责重取与 emit）。
  * - cursor <= 当前 cursor ⇒ 幂等丢弃（重复/更旧 id）；
  * - 行数变化 / 行内容变化 → hint（added > removed > changed 优先级）；
- * - 坏载荷 ⇒ refetch（R21 丢帧的收敛路径）。
+ * - 坏载荷 ⇒ refetch（丢帧的收敛路径）。
  */
 export function applySessionFactsDelta(current: SessionFactsSnapshot, value: unknown): SessionFactsDeltaOutcome {
   if (!isPlainRecord(value)) return { next: null, refetch: true, hint: null }
-  // 审计 CL-11：非法/缺失游标过去被 nonNegativeInt 降到 0，随后按「更旧帧」**静默丢弃**——
-  // 与本模块「坏载荷 ⇒ refetch」的契约矛盾（真丢帧会被当成重复）。坏游标一律走重取。
+  // 非法/缺失游标一律走重取：nonNegativeInt 会把它们降到 0，随后按「更旧帧」**静默丢弃**——
+  // 这与本模块「坏载荷 ⇒ refetch」的契约矛盾（真丢帧会被当成重复）。
   if (typeof value.cursor !== 'number' || !Number.isInteger(value.cursor) || value.cursor <= 0) {
     return { next: null, refetch: true, hint: null }
   }
@@ -518,7 +517,7 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
   }
 
   /**
-   * R22 有界待发 ack 队列（unread-store.createUnreadAckOutbox）：失败（网络
+   * 有界待发 ack 队列（unread-store.createUnreadAckOutbox）：失败（网络
    * 错误 / 5xx）的 /read、/read-all 在此等待重放，2xx 才出队；读推进永不等待它。
    */
   const ackOutbox = createUnreadAckOutbox({
@@ -549,8 +548,8 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
   }
 
   /**
-   * 快照构造单一工厂（阶段 2 单源化）：probe / SSE sync 帧 / refetch 三个入口此前各
-   * 手写一份同形状对象，字段一旦增删就会漂移。verdict / degradation / mode 仍由调用点
+   * 快照构造单一工厂：probe / SSE sync 帧 / refetch 三个入口共用同形状对象，
+   * 字段一旦增删不会漂移。verdict / degradation / mode 仍由调用点
    * 按各自入口语义给（SSE 帧的 mode 缺失时沿用上一份快照），本工厂只负责形状。
    */
   const buildSnapshot = (
@@ -696,8 +695,8 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
   }
 
   /**
-   * R21 静默看门狗：在**请求发起时**武装（而不是响应头到达之后）——建连/首字节
-   * 挂起同样是「通道静默」，旧武装点让半死隧道既无 stale 也无重连。间隔保留
+   * 静默看门狗：在**请求发起时**武装（而不是响应头到达之后）——建连/首字节
+   * 挂起同样是「通道静默」，晚武装会让半死隧道既无 stale 也无重连。间隔保留
    * 1s floor 防高频；真正的收口判据仍是 lastFrameAt。
    */
   const armSilenceWatchdog = (): void => {
@@ -795,7 +794,7 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
     // 建连/首字节 deadline：到点按「流断开」收口。收口动作放在定时器里而不是
     // 依赖 fetch 因 abort 而 reject —— 忽略 abort 的 carrier 也必须被收口，
     // 且 catch 侧对 aborted 的早退不得把这次失败吞成「静默」（半死隧道下
-    // 这条流此前会带着 streamStarted=true 永久楔死）。
+    // 这条流会带着 streamStarted=true 永久楔死）。
     const connectTimer = setTimeout(() => {
       if (state.stopped || state.streamController !== controller) return
       diagnostic('[session-facts] stream connect timed out after ' + String(streamConnectTimeoutMs) + 'ms; reconnecting')

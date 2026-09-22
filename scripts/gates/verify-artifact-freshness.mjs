@@ -1,6 +1,6 @@
 /**
  * verify-artifact-freshness.mjs —— 已提交/打包产物的「陈旧即红」守卫
- * （design 21 §7 G2–G8 的 2026-12 遗留四项）。
+ * （design 21 §7 G2–G8）。
  *
  * 为什么需要：这四类产物都不是 C8（host dist / dsh-runtime dist / mobile
  * dist+lib）的覆盖对象，也没有各自的 freshness 测试，因此「改了 src 没重建
@@ -16,12 +16,12 @@
  *
  * 语义（与 control-plane-freshness / build-smoke 同款豁免）：
  *   - 输入缺失（clean checkout、未 build 的环境）⇒ **loud SKIP**，不判红；
- *   - seed 产物缺失（源目录在而 dist/index.js 不在）⇒ **FAIL**：这些产物已在
- *     2026-12 移出 git，缺失不再是「未构建的合法态」，而是 clean checkout 未
+ *   - seed 产物缺失（源目录在而 dist/index.js 不在）⇒ **FAIL**：这些产物不在
+ *     git 中，缺失不是「未构建的合法态」，而是 clean checkout 未
  *     自举；必须点名包与 `pnpm run build:artifacts`，不得静默跳过；
  *   - 产物在但与「从当前 src 重建/重算」的结果不一致 ⇒ **FAIL（陈旧）**，
- *     绝不自动修复（自动重建会让操作者以为产物被检查过——2026-12 review 的
- *     教训，见 build-smoke.test.ts:110-134）。
+ *     绝不自动修复（自动重建会让操作者以为产物被检查过，见
+ *     build-smoke.test.ts:110-134）。
  * 退出码：0 无陈旧 / 1 有陈旧 / 2 用法错误。
  *   --self-test  负控：证明比对能抓到人为差异（仪表必须能失败）。
  */
@@ -71,7 +71,7 @@ async function checkSeedDist() {
   const seeds = ['dsh-chamber-seed-client-graph', 'dsh-chamber-seed-git-worktree', 'dsh-chamber-seed-archive-cleanup', 'dsh-chamber-seed-open-in']
   // Missing-ness is decided BEFORE esbuild loads: a clean checkout without a
   // build toolchain must not turn "artifact absent" into a skip (the seed
-  // artifacts left Git in 2026-12; their absence is a bootstrap failure, not an
+  // artifacts are untracked; their absence is a bootstrap failure, not an
   // unbuilt-but-legal state).
   const missing = []
   const present = []

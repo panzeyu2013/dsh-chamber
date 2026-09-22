@@ -1,6 +1,5 @@
 /**
- * Document-level theme projection, scoped to the ACTIVE view (design 06, N-ctx
- * hardening 2026-12).
+ * Document-level theme projection, scoped to the ACTIVE view (design 06).
  *
  * The vendor ThemePresenter writes DOCUMENT-global state — `html{color-scheme}`
  * (native widget chrome), `body[data-ds-dark-theme]` (the token palette), the
@@ -21,7 +20,7 @@
  *  - teardown never retracts the document (the page-wide presenter is reused by
  *    whichever view is active next), so unmounting one view cannot repaint
  *    another;
- *  - an unknown active source fails OPEN to the previous unconditional
+ *  - an unknown active source fails OPEN to the unconditional
  *    projection (official single-shell boot, a boot without a chamber instance
  *    id, or a renderer that has not published yet).
  */
@@ -56,9 +55,9 @@ export interface DocumentThemeProjector {
 }
 
 /**
- * Optional page-wide priming (W3 切源体验, 2026-12). Omitting `cache` keeps the
- * pre-2026-12 behavior byte-for-byte (the unit tests lock that shape): without a
- * cache the projector only re-projects its OWN remembered snapshot on activation,
+ * Optional page-wide priming. Omitting `cache` keeps the no-cache behavior
+ * byte-for-byte (the unit tests lock that shape): without a cache the projector
+ * only re-projects its OWN remembered snapshot on activation,
  * so a cold target boots on whatever palette the previous view left behind.
  */
 export interface DocumentThemeProjectorOptions {
@@ -77,7 +76,7 @@ export interface DocumentThemeProjectorOptions {
  * Build one instance's projector over a page-wide environment.
  * @param instanceId - This boot's chamber source id, or undefined outside the chamber shell.
  * @param env - Page-wide active-view fact and document writer.
- * @param options - Optional page-wide priming; omitted = legacy behavior.
+ * @param options - Optional page-wide priming; omitted = no priming.
  * @returns The projector; `dispose` only unsubscribes (and releases the mount mark).
  */
 export function createDocumentThemeProjector(

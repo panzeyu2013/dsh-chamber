@@ -2,10 +2,10 @@
  * node:test for the chamber apply seam (`src/client/index.ts`, design 05 §6/§4):
  * the per-entry `chamberBasePath` bound on the entry Context reaches the generic
  * RPC carrier as its URL prefix — no plugin config and no page-global knob
- * participate (2026-09 Batch 2 retired the config-passing form). The wake-event
+ * participate. The wake-event
  * constant is pinned here too: the shell's App layer dispatches exactly this
- * window event. The fixture retirement is locked here as well: a `?fixture` page
- * URL must not swap the production transport, and the dropped scaffold file
+ * window event. The fixture path is locked here as well: a `?fixture` page
+ * URL must not swap the production transport, and the scaffold file
  * must stay absent.
  */
 import { test } from 'node:test'
@@ -72,9 +72,9 @@ test('the wake-event name is the canonical chamber export', () => {
 })
 
 test('a ?fixture page URL no longer selects a fixture transport (retired with src/client/fixture.ts)', async () => {
-  // Regression lock for the fixture retirement: the apply seam must always
+  // The apply seam must always
   // build the real per-entry carrier, so a stale bookmark cannot swap the
-  // production transport for fabricated data. Re-introducing a fixture branch
+  // production transport for fabricated data. A fixture branch
   // keyed on the page URL fails here (the fixture RPC never reaches fetch).
   const globals = globalThis as { location?: unknown }
   const previousLocation = globals.location

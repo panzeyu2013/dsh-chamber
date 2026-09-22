@@ -44,7 +44,7 @@ export class FakeAutoUpdater extends EventEmitter implements AutoUpdaterLike {
   /** When set, quitAndInstall throws synchronously (nothing armed). */
   quitAndInstallError: Error | null = null
   /** When set, quitAndInstall dispatches an 'error' event with this error
-   *  (2026-12 review round F3 — real electron-updater 6.8.9 sync failures
+   *  (real electron-updater 6.8.9 sync failures
    *  DISPATCH 'error' from install() and return false instead of throwing). */
   quitAndInstallDispatchError: Error | null = null
   /** What quitAndInstall returns after any dispatch; undefined mirrors the
