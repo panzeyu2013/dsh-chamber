@@ -135,3 +135,27 @@ export function rowHalf(event: { clientY: number; currentTarget: HTMLElement | n
   if (rect.height <= 0) return 'after'
   return event.clientY < rect.top + rect.height / 2 ? 'before' : 'after'
 }
+
+/** 拖拽态里「当前 over 目标」的形状（服务器 / 工作区 / 会话行三种拖拽共用）。 */
+export interface DragOverCarrier {
+  over: { id: string; half: 'before' | 'after' } | null
+}
+
+/**
+ * 推进拖拽的 over 目标：目标（id + half）未变时返回**原对象**（不制造 state
+ * churn），否则返回带新 over 的浅拷贝。三处拖拽闭包共用本实现（2026-12 单源化）。
+ * 调用方必须同步算好 half（见 {@link rowHalf}：currentTarget 在 dispatch 后即被置空）。
+ * @param current - 当前拖拽态（null 表示拖拽未开始，保持 no-op）。
+ * @param id - 悬停目标 id。
+ * @param half - 目标的插入半边。
+ * @returns 新状态或原状态。
+ */
+export function dragOverState<T extends DragOverCarrier>(
+  current: T | null,
+  id: string,
+  half: 'before' | 'after',
+): T | null {
+  if (current === null) return current
+  if (current.over?.id === id && current.over.half === half) return current
+  return { ...current, over: { id, half } }
+}
