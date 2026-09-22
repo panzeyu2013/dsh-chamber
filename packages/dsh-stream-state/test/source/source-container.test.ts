@@ -13,7 +13,6 @@ import assert from 'node:assert/strict'
 import {
   dispatchSource,
   epochOf,
-  incarnationOf,
   reincarnate,
   retainSourceIds,
   projectAutoPrewarmed,
@@ -46,7 +45,7 @@ test('the key is the source id, and a new fingerprint bumps the epoch', () => {
   assert.equal(epochOf(first, 'remote-1'), 1)
   const second = reincarnate(first, { sourceId: 'remote-1', fingerprint: 'fp-B' })
   assert.equal(Object.keys(second).length, 1, 'one source id has exactly one live generation')
-  assert.equal(incarnationOf(second, 'remote-1')?.fingerprint, 'fp-B')
+  assert.equal(second['remote-1']?.incarnation.fingerprint, 'fp-B')
   assert.equal(epochOf(second, 'remote-1'), 2)
   assert.equal(reincarnate(second, { sourceId: 'remote-1', fingerprint: 'fp-B' }), second, 'same fingerprint = same generation')
 })

@@ -41,7 +41,48 @@ const PACKAGE_SPECIFIER = '@dsh-chamber/dsh-stream-state'
  * reason must name where the consumer lands.
  * @type {readonly { name: string, reason: string }[]}
  */
-export const DEAD_EXPORT_EXEMPTIONS = []
+export const DEAD_EXPORT_EXEMPTIONS = [
+  // Table value surface: the constants are consumed through CARRIER_ENV /
+  // TABLE_SNAPSHOT by the reducer, the api-gateway and the G-G parity gate. The
+  // values are the table's public record, so there is no direct importer by design.
+  { name: 'REBUILD_WINDOW_MS', reason: 'table value consumed via CARRIER_ENV + parity gate' },
+  { name: 'MAX_REBUILDS_PER_WINDOW', reason: 'table value consumed via CARRIER_ENV + parity gate' },
+  { name: 'MIN_REBUILD_SPACING_MS', reason: 'table value consumed via CARRIER_ENV + parity gate' },
+  { name: 'IN_FLIGHT_GRACE_MS', reason: 'table value consumed via CARRIER_ENV + parity gate' },
+  { name: 'OPENING_TIMEOUT_LADDER_MS', reason: 'table value consumed via openingBudgetMs + parity gate' },
+  { name: 'OPENING_STALL_STREAK', reason: 'table value consumed via CARRIER_ENV + parity gate' },
+  { name: 'TABLE_SNAPSHOT', reason: 'tables.json lockstep projection (tables test)' },
+  // Cross-language reference implementations: mirrored field-for-field by the Swift
+  // mirror and exercised by the G-B/G-F gates. Retirement: when the renderer
+  // consumes the package for its load-state decisions, or the mirror is dropped
+  // (engine model extension, design 14 section D4 item 5).
+  { name: 'initialLoadState', reason: 'Swift-mirror reference implementation (G-F); retires with the engine extension' },
+  { name: 'contentIsBelievable', reason: 'Swift-mirror reference implementation (G-F); retires with the engine extension' },
+  { name: 'loadIsLate', reason: 'Swift-mirror reference implementation (G-F); retires with the engine extension' },
+  { name: 'reduceLoadState', reason: 'Swift-mirror reference implementation (G-F); retires with the engine extension' },
+  // Differential-harness surface: imported by test/equivalence and
+  // scripts/refactor/equivalence.mjs, not by a production module.
+  { name: 'reasonClassOf', reason: 'differential normalizer; consumed by the equivalence harness' },
+  { name: 'normalizeEffect', reason: 'differential normalizer; consumed by the equivalence harness' },
+  { name: 'equivalents', reason: 'differential comparison; consumed by the equivalence harness' },
+  // Aggregate reducers re-exported for the differential replay and the Swift
+  // mirror; production callers use reduceCarrier/reduceSource.
+  { name: 'decideRebuild', reason: 'pure rebuild predicate; used by reduceCarrier and the vectors' },
+  { name: 'initialSourceLifecycle', reason: 'source reducer face; used by container + vectors' },
+  { name: 'reduceSource', reason: 'source reducer face; used by container + vectors' },
+  { name: 'reduceSourceSequence', reason: 'source reducer replay face; used by the vectors' },
+  { name: 'collapseRecords', reason: 'ladder internal; used by planLadder + its suite' },
+  // Ladder shape references (design 14 section D4 item 5, plan section 84): the two
+  // host ladders are NOT mechanically migratable until the engine gains a phase
+  // machine. Retirement: the engine model extension lands and the hosts consume
+  // these factories; until then they are the recorded shape of that target.
+  { name: 'sessionLivenessLadder', reason: 'shape reference; retires when the engine phase machine lands (design 14 D4-5)' },
+  { name: 'streamHealthLadder', reason: 'shape reference; retires when the engine phase machine lands (design 14 D4-5)' },
+  // Presentation outer-bound helpers superseded by decidePresentation/planVeilTimer;
+  // kept for the renderer suite's bound cases.
+  { name: 'surfaceBoundMs', reason: 'outer-bound helper; retires when the renderer tests use the frame API only' },
+  { name: 'veilUpperBoundMs', reason: 'outer-bound helper; retires when the renderer tests use the frame API only' },
+]
 
 /** Parse `export * from './x.ts'` (and named re-exports) out of the index. */
 export function parseIndexModules(indexText) {

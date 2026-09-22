@@ -52,11 +52,6 @@ export function epochOf(registry: SourceRegistry, sourceId: string): number | un
   return registry[sourceId]?.epoch
 }
 
-/** The current incarnation for a source, or undefined when unregistered. */
-export function incarnationOf(registry: SourceRegistry, sourceId: string): SourceIncarnation | undefined {
-  return registry[sourceId]?.incarnation
-}
-
 /**
  * Register (or re-register) a source incarnation. Same fingerprint = the SAME
  * generation and the same registry reference (a reclaim/re-mount cycle keeps its
