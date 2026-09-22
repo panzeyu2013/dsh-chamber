@@ -2,13 +2,19 @@
 import type {
   GitRepoTopology, GitWorktreeError, GitWorktreeInfo, GitWorktreeSnapshot,
 } from './types.ts'
-
-function isRecord(value: unknown): value is Record<string, any> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
+import { isRecord } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value !== ''
+}
+
+/** 状态字面量收窄（`Set.has` 本身不是类型守卫；非字符串一律判不合规）。 */
+function isWorktreeState(value: unknown): value is 'invalid' | 'missing' | 'not-a-repo' | 'ready' {
+  return typeof value === 'string' && WORKTREE_STATES.has(value)
+}
+
+function isHeadState(value: unknown): value is 'branch' | 'detached' | 'unborn' {
+  return typeof value === 'string' && HEAD_STATES.has(value)
 }
 
 const REPO_ID = /^repo_[0-9a-f]{64}$/u
@@ -87,10 +93,10 @@ function normalizeWorktree(value: unknown): GitWorktreeInfo | undefined {
     : (isNonEmptyString(value.upstream) ? value.upstream : undefined)
   const ahead = value.ahead === undefined
     ? 0
-    : (Number.isInteger(value.ahead) && value.ahead >= 0 ? value.ahead : undefined)
+    : (typeof value.ahead === 'number' && Number.isInteger(value.ahead) && value.ahead >= 0 ? value.ahead : undefined)
   const behind = value.behind === undefined
     ? 0
-    : (Number.isInteger(value.behind) && value.behind >= 0 ? value.behind : undefined)
+    : (typeof value.behind === 'number' && Number.isInteger(value.behind) && value.behind >= 0 ? value.behind : undefined)
   if (
     !isNonEmptyString(value.worktreeId)
     || !WORKTREE_ID.test(value.worktreeId)
@@ -101,8 +107,8 @@ function normalizeWorktree(value: unknown): GitWorktreeInfo | undefined {
     || typeof value.isMain !== 'boolean'
     || !(value.dirty === null || typeof value.dirty === 'boolean')
     || typeof value.locked !== 'boolean'
-    || !WORKTREE_STATES.has(value.status)
-    || !HEAD_STATES.has(value.headState)
+    || !isWorktreeState(value.status)
+    || !isHeadState(value.headState)
     || upstream === undefined
     || ahead === undefined
     || behind === undefined

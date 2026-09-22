@@ -647,3 +647,23 @@ pre-remove 归档**不**停止，仍由归档管理器的删除前停止兜底�
 - 专属验证门：`typecheck:git`、`typecheck:host-git`、`test:git`、`test:host-git`、`build:renderer`；
   同时运行 sidebar/renderer-shell/desktop/control-plane 回归。
 - 打包前必须重建 host 产物（`build:artifacts` / `build:host-packages`），再拷贝到 desktop `dist/`。
+
+## 被否方案（2026-12 重复实现单源化：`isRecord`）
+
+`isRecord`（untrusted 响应 → 记录的边界判定）的规范实现在 sidebar `shared/wire-common.ts`，
+其注释本身即声明「B/C/D/E 副本与其边界语义逐字同形」。本次把 git 的 `snapshot.ts`、`git-api.ts`
+与 renderer 的 `source-mux-facts.ts` 三处私有副本改为复用该实现（ARCH-IMPL-024）。
+
+被否方案：
+
+- **保留各包私有副本**：git 两份用 `Record<string, any>`，与规范实现的 `Record<string, unknown>`
+  不同——私有副本会长期漂移出「更宽」的类型面（本次收紧后立即暴露出 `snapshot.ts` 内 10 处
+  未检查的属性读取），正是要消除的漂移。
+- **新建独立 shared 包承载 `isRecord`**：为一个 6 行判定引入新包与新的包级依赖边；而 sidebar 已是
+  对外共享叶子的既有出口（git 与 renderer 均早已从它导入 `errorMessage` 等），属过度设计。
+- **只换实现、保留 `any` 类型**：会把上述 10 处类型缺口留在下游。本次一并补上显式收窄
+  （`typeof` 判定 + `isWorktreeState`/`isHeadState` 类型守卫），行为不变，由 tsc 与 16 项快照事实
+  测试双重锁定。
+
+边界说明：本改动**不新增包级依赖**（git/renderer→sidebar 的依赖早已存在），只新增文件级导入边；
+sidebar 侧实现未改一行。

@@ -33,6 +33,7 @@
  * 与 gateway 事实源的**同形**是刻意的：产出的快照直接喂 App 既有的 applySessionFacts
  * 管线，不需要第二条判定路径（同一份事实、同一套未读判定）。
  */
+import { isRecord } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
 import type {
   SessionFactsCompletedAtSource, SessionFactsRow, SessionFactsSnapshot, SessionFactsTurnEnd,
 } from './session-facts-source.ts'
@@ -138,10 +139,6 @@ export function parseMuxFrame(raw: unknown): ParsedFrame | null {
   if (value.type === 'waterfall') return { kind: 'waterfall', streamId: frame.streamId }
   if (value.type === 'cancel') return { kind: 'cancel', streamId: frame.streamId }
   return { kind: 'other', streamId: frame.streamId }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 
 /** B5：host 域 epoch ms 校验（整数且 >= 1e12 才算可用）；不可用一律 null，绝不臆造。 */
