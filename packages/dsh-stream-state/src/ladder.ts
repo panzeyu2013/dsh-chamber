@@ -21,6 +21,8 @@
  * PURITY: zero imports, no clock reads, no DOM. Every time arrives on the input.
  */
 
+import { countWithin, isUsableAt, pushWindowed } from './time.ts'
+
 /** One tier of a ladder. */
 export interface LadderTier {
   /** Diagnostic name, used in actions and notes. */
@@ -136,6 +138,10 @@ export function planLadder(
   observations: Readonly<Record<string, LadderObservation | undefined>>,
   now: number,
 ): LadderPlan {
+  // An unusable decision clock only ever holds: no action is authorized, and the
+  // records are returned untouched so the caller can retry once the clock is real.
+  if (!isUsableAt(now)) return { records, actions: [], exhausted: [] }
+
   const collapsed = collapseRecords(records, observations)
   const next: Record<string, LadderRecord> = { ...collapsed.records }
   const actions: LadderAction[] = []
@@ -147,11 +153,19 @@ export function planLadder(
     // A fresh streak is based at NOW: the caller's symptomSinceMs describes the
     // symptom that just reset, and inheriting it would re-arm every tier at once
     // (the mid-streak recreation bug the ladder test caught).
-    const symptomSinceMs = collapsed.fresh.has(sourceId) ? now : observation.symptomSinceMs
+    const fresh = collapsed.fresh.has(sourceId)
+    const anchored = fresh || Number.isFinite(observation.symptomSinceMs)
+    const symptomSinceMs = fresh ? now : observation.symptomSinceMs
     const previous: LadderRecord = carried ?? {
       symptomSinceMs,
       progressStamp: observation.progressStamp,
       dispatches: {},
+    }
+    if (!anchored) {
+      // A non-finite anchor is not a streak: re-base it at NOW and dispatch nothing
+      // this tick. Reading NaN as "due" dispatched the most expensive tier (I4).
+      next[sourceId] = { ...previous, symptomSinceMs: now }
+      continue
     }
     const elapsed = now - symptomSinceMs
     if (elapsed < 0) continue
@@ -164,10 +178,7 @@ export function planLadder(
       const history = previous.dispatches[tier.name] ?? []
       const last = history.length === 0 ? null : (history[history.length - 1] as number)
       if (last !== null && now - last < tier.cooldownMs) continue
-      if (tier.quota !== null) {
-        const inWindow = history.filter((at) => at > now - ladder.quotaWindowMs).length
-        if (inWindow >= tier.quota) continue
-      }
+      if (tier.quota !== null && countWithin(history, now, ladder.quotaWindowMs) >= tier.quota) continue
       if (observation.escalationBlocked) {
         // Suppressed WITHOUT consuming quota: a dispatch the caller cannot execute
         // must not silently eat the lever (the 2026-12 review's accounting gap).
@@ -177,7 +188,10 @@ export function planLadder(
       next[sourceId] = {
         ...previous,
         symptomSinceMs,
-        dispatches: { ...previous.dispatches, [tier.name]: [...history, now] },
+        // The only writer of a dispatch ledger: pruning at write time keeps the
+        // array inside its quota window (G-C) instead of growing for the process
+        // lifetime.
+        dispatches: { ...previous.dispatches, [tier.name]: pushWindowed(history, now, now, ladder.quotaWindowMs) },
       }
       dispatched = true
     }
@@ -185,13 +199,17 @@ export function planLadder(
       next[sourceId] = { ...previous, symptomSinceMs }
     }
 
-    // Exhausted = every tier has spent its quota inside the window: the caller must
-    // show the user something instead of waiting for a lever that cannot come back.
+    // Exhausted = no tier can act: every quota is spent OR its evidence gate cannot
+    // be satisfied with what the caller reports. Counting evidence-gated tiers as
+    // live levers kept the ladder from ever declaring exhaustion, so a caller whose
+    // reconciler never concludes parked forever with no notice (F18). Blocked and
+    // cooling tiers still count - those are transient.
     if (!dispatched) {
       const anyLever = ladder.tiers.some((tier) => {
+        if (tier.requiresStuckEvidence && !observation.stuckEvidence) return false
         if (tier.quota === null) return true
         const history = (next[sourceId]?.dispatches[tier.name] ?? []) as readonly number[]
-        return history.filter((at) => at > now - ladder.quotaWindowMs).length < tier.quota
+        return countWithin(history, now, ladder.quotaWindowMs) < tier.quota
       })
       if (!anyLever) exhausted.push(sourceId)
     }

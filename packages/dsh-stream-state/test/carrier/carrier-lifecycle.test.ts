@@ -77,7 +77,10 @@ test('an allowed event during the in-flight connect is denied (never-stabilizes 
 test('after the window and spacing expire a new rebuild is admitted', () => {
   const first = reduceCarrier(initialCarrierState(), { kind: 'rebuildRequested', at: 0, reason: 'socketNoFrame' }, env)
   const later = reduceCarrier(first.state, { kind: 'rebuildRequested', at: 61000, reason: 'laneReconnect' }, env)
-  assert.equal(later.state.rebuildsAt.length, 2)
+  // The ledger keeps only what the throttle window can still see: the stamp at 0 is
+  // outside (0 > 1000 is false), so the admission replaces it rather than stacking
+  // (G-C pins the general bound).
+  assert.deepEqual(later.state.rebuildsAt, [61000])
   assert.equal(later.effects[0]?.e, 'rebuildCarrier')
 })
 

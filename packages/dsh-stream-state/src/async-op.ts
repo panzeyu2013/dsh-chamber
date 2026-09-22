@@ -59,25 +59,37 @@ export async function withDeadline<T>(
   operation: Promise<T>,
   options: DeadlineOptions<T>,
 ): Promise<DeadlineResult<T>> {
+  // An unusable bound is not a deadline. setTimeout(run, NaN) fires at ~0 ms, so the
+  // old code expired the operation immediately and released whatever the caller's
+  // deadline was protecting. Without a timer the operation itself governs (I4).
+  if (!Number.isFinite(options.ms) || options.ms < 0) {
+    return operation.then((value) => ({ settled: 'operation' as const, value }))
+  }
   let handle: unknown
-  let fired = false
-  const deadline = new Promise<DeadlineResult<T>>((resolve) => {
-    handle = options.scheduler.setTimeout(() => {
-      fired = true
-      resolve({ settled: 'deadline', value: options.onExpire() })
-    }, options.ms)
+  const deadline = new Promise<DeadlineResult<T>>((resolve, reject) => {
+    try {
+      handle = options.scheduler.setTimeout(() => {
+        // onExpire decides what the deadline MEANS; a throw from it settles the
+        // deadline as a rejection instead of leaving the caller parked forever.
+        try {
+          resolve({ settled: 'deadline', value: options.onExpire() })
+        } catch (error) {
+          reject(error)
+        }
+      }, options.ms)
+    } catch (error) {
+      reject(error)
+    }
   })
   try {
-    const settled = await Promise.race([
+    return await Promise.race([
       operation.then((value) => ({ settled: 'operation' as const, value })),
       deadline,
     ])
-    return settled
   } finally {
     // The timer can only exist before the race settles; clearing an already-fired
     // handle is harmless, and clearing it on the operation path is the whole point.
     options.scheduler.clearTimeout(handle)
-    void fired
   }
 }
 
@@ -117,7 +129,16 @@ export type WaitOutcome = 'done' | 'expired' | 'aborted'
  * first and relied on `finish` clearing it, which is easy to get wrong).
  */
 export function waitForCondition(options: BoundedWaitOptions, signal?: AbortSignal): Promise<WaitOutcome> {
-  return new Promise<WaitOutcome>((resolve) => {
+  // Invalid pacing is a programming error and a silent pass is worse than a throw:
+  // setTimeout(run, NaN) hot-loops and a non-finite bound is not a deadline. Fail
+  // loudly BEFORE the first timer is armed.
+  if (!Number.isFinite(options.pollMs) || options.pollMs <= 0) {
+    throw new RangeError('waitForCondition: pollMs must be a positive finite number, got ' + String(options.pollMs))
+  }
+  if (!Number.isFinite(options.boundMs) || options.boundMs < 0) {
+    throw new RangeError('waitForCondition: boundMs must be a finite non-negative number, got ' + String(options.boundMs))
+  }
+  return new Promise<WaitOutcome>((resolve, reject) => {
     let handle: unknown
     let elapsed = 0
     let settled = false
@@ -137,9 +158,22 @@ export function waitForCondition(options: BoundedWaitOptions, signal?: AbortSign
       signal?.removeEventListener('abort', aborted)
       resolve(outcome)
     }
+    const fail = (error: unknown): void => {
+      if (settled) return
+      settled = true
+      options.scheduler.clearTimeout(handle)
+      signal?.removeEventListener('abort', aborted)
+      reject(error)
+    }
     const aborted = (): void => finish('aborted')
     const inspect = (): void => {
-      if (options.isDone()) return finish('done')
+      try {
+        if (options.isDone()) return finish('done')
+      } catch (error) {
+        // A predicate that throws must settle the wait, not crash the process from
+        // inside a timer callback.
+        return fail(error)
+      }
       if (elapsedMs() >= options.boundMs) return finish('expired')
       elapsed += options.pollMs
       handle = options.scheduler.setTimeout(inspect, options.pollMs)

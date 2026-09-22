@@ -178,6 +178,8 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
 > ④ **等待形状**：`withDeadline` / `waitForCondition` / `retryDelayMs` / `createSingleFlight` 四个原语替换手写计时器记账
 > （B6 七站点中 W1/W2/W3/W5/W6 已迁；W4 不做，W7 因异步探测不适用）；
 > ⑤ **阈值**：四条阶梯的值集中于 `tables.json` 的 `ladders`，由 `scripts/gates/verify-ladder-table-parity.mjs` 与各模块锁步。
+> ⑥ **时间与账本**：`src/time.ts` 是「可用钟/滚动窗口」的唯一所有者——NaN/±Inf/回拨只保守持有（never release/0ms），
+>    `rebuildsAt`/dispatch 账本只在窗口内保留；适配器不再各自比较时间戳（G-B/G-C/G-F）。
 > 对照数据：`node scripts/refactor/stream-state-metrics.mjs --compare`（`_MS` 39→34、依赖文件 28→27、App 生命周期命中 115→114）。
 
 **被否方案（2026-12 重构评审）**：

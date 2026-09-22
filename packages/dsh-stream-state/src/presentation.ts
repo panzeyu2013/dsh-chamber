@@ -22,6 +22,8 @@
  * `unknown` is NEW as a distinct state: the old reader folded an unreadable
  * `data-phase` into `hero`, i.e. a version-skewed anchor held the veil for the
  * full outer bound while looking exactly like 'no content yet'. */
+import { elapsedSince, normalizeAt } from './time.ts'
+
 export type SessionSurfacePhase = 'absent' | 'hero' | 'settling' | 'active' | 'unknown'
 
 export interface PresentationFacts {
@@ -77,28 +79,38 @@ export interface PresentationFrame {
  * absent bound on purpose: a phase this build cannot read is not evidence that the
  * session has content, and the shell's own loading surface plus the boot-gap banner
  * are a better answer than holding an opaque veil for a minute. */
+/**
+ * A threshold set with every unusable value replaced by the largest finite one (0
+ * when none is usable). An unusable threshold must not become a NaN deadline: a
+ * held veil whose deadline is NaN can never be scheduled for release.
+ */
+function usableThresholds(thresholds: PresentationThresholds): PresentationThresholds {
+  const candidates = [thresholds.veilActionsAfterMs, thresholds.surfaceMaxHoldMs, thresholds.surfaceAbsentFallbackMs]
+    .filter((value) => Number.isFinite(value) && value >= 0)
+  const fallback = candidates.length > 0 ? Math.max(...candidates) : 0
+  const usable = (value: number): number => (Number.isFinite(value) && value >= 0 ? value : fallback)
+  return {
+    veilActionsAfterMs: usable(thresholds.veilActionsAfterMs),
+    surfaceMaxHoldMs: usable(thresholds.surfaceMaxHoldMs),
+    surfaceAbsentFallbackMs: usable(thresholds.surfaceAbsentFallbackMs),
+  }
+}
+
 export function surfaceBoundMs(
   phase: SessionSurfacePhase,
   thresholds: PresentationThresholds,
 ): number {
+  const safe = usableThresholds(thresholds)
   switch (phase) {
     case 'active':
       return 0
     case 'hero':
     case 'settling':
-      return thresholds.surfaceMaxHoldMs
+      return safe.surfaceMaxHoldMs
     case 'absent':
     case 'unknown':
-      return thresholds.surfaceAbsentFallbackMs
+      return safe.surfaceAbsentFallbackMs
   }
-}
-
-function elapsedSince(startedAt: number | null, nowMs: number): number | null {
-  if (startedAt === null) return null
-  const elapsed = nowMs - startedAt
-  // A non-finite or negative elapsed (clock rollback) must never release: hold on
-  // and let the caller re-arm. Same discipline as reveal-gate.ts.
-  return Number.isFinite(elapsed) && elapsed >= 0 ? elapsed : null
 }
 
 /**
@@ -114,6 +126,7 @@ export function decidePresentation(
   facts: PresentationFacts,
   thresholds: PresentationThresholds,
 ): PresentationFrame {
+  const safe = usableThresholds(thresholds)
   if (facts.failureOverlayVisible) {
     return { mode: 'failure', veilVisible: false, actions: false, reevaluateInMs: Number.POSITIVE_INFINITY }
   }
@@ -122,8 +135,9 @@ export function decidePresentation(
     if (facts.bootDeferred) {
       return { mode: 'deferred', veilVisible: true, actions: true, reevaluateInMs: Number.POSITIVE_INFINITY }
     }
-    const stuck = facts.waitedMs >= thresholds.veilActionsAfterMs
-    const remaining = Math.max(0, thresholds.veilActionsAfterMs - facts.waitedMs)
+    const waitedMs = normalizeAt(facts.waitedMs)
+    const stuck = waitedMs >= safe.veilActionsAfterMs
+    const remaining = Math.max(0, safe.veilActionsAfterMs - waitedMs)
     return {
       mode: stuck ? 'loading-stuck' : 'loading',
       veilVisible: true,
@@ -146,7 +160,7 @@ export function decidePresentation(
   if (phase === 'active') {
     return { mode: 'contents', veilVisible: false, actions: false, reevaluateInMs: Number.POSITIVE_INFINITY }
   }
-  const bound = surfaceBoundMs(phase, thresholds)
+  const bound = surfaceBoundMs(phase, safe)
   const base = phase === 'absent' || phase === 'unknown' ? (facts.absentSinceMs ?? facts.holdStartedAtMs) : facts.holdStartedAtMs
   const elapsed = elapsedSince(base, facts.nowMs)
   if (elapsed === null) {

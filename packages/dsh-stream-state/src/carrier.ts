@@ -21,6 +21,7 @@
  *   effect and NO second rebuild. Deliberate; the old behavior is the defect
  *   recorded in the stream-carrier audit (replaceSocket dropping the candidate).
  */
+import { countWithin, isUsableAt, pushWindowed } from './time.ts'
 import type {
   CarrierEnv,
   CarrierEvent,
@@ -46,13 +47,17 @@ export function decideRebuild(state: CarrierState, env: CarrierEnv, at: number):
   // below is a ratio against `at`, and NaN makes all of them false - so without this
   // guard an unusable timestamp would SLIP THROUGH the throttle and rebuild on every
   // call (the retired predicate failed safe here; this preserves it).
-  if (!Number.isFinite(at)) return false
+  if (!isUsableAt(at)) return false
   if (state.phase === 'closed') return false
-  if (state.pendingRebuild !== null && at - latestRebuildAt(state) < env.inFlightGraceMs) return false
-  const windowStart = at - env.rebuildWindowMs
-  const inWindow = state.rebuildsAt.filter((t) => t > windowStart).length
-  if (inWindow >= env.maxRebuildsPerWindow) return false
   const last = latestRebuildAt(state)
+  // A clock that went backwards is not evidence that the throttle window is empty.
+  // Holding is the only conservative answer: a rollback must never authorize a
+  // replacement (I4).
+  if (Number.isFinite(last) && last >= 0 && at < last) return false
+  if (state.pendingRebuild !== null && at - last < env.inFlightGraceMs) return false
+  // countWithin only counts stamps the window can still see; the ledger is pruned at
+  // every reduction, so this stays O(window) and never O(history).
+  if (countWithin(state.rebuildsAt, at, env.rebuildWindowMs) >= env.maxRebuildsPerWindow) return false
   if (Number.isFinite(last) && last >= 0 && at - last < env.minRebuildSpacingMs) return false
   return true
 }
@@ -76,8 +81,23 @@ function withStreams(state: CarrierState, next: readonly string[]): CarrierState
 /**
  * One reduction step. Total function: every event kind, matched or not,
  * returns a valid state; unmatched kinds add no effects.
+ *
+ * The rebuild ledger is pruned against EVERY event's timestamp before the step, not
+ * only when an entry is admitted: otherwise a long denial streak leaves stamps that
+ * fell out of the window sitting in memory (and in every read).
  */
 export function reduceCarrier(state: CarrierState, event: CarrierEvent, env: CarrierEnv): CarrierReduction {
+  return reduceCarrierStep(pruneCarrierLedger(state, event.at, env), event, env)
+}
+
+function pruneCarrierLedger(state: CarrierState, at: number, env: CarrierEnv): CarrierState {
+  if (!isUsableAt(at) || state.rebuildsAt.length === 0) return state
+  const start = at - env.rebuildWindowMs
+  const next = state.rebuildsAt.filter((stamp) => stamp > start)
+  return next.length === state.rebuildsAt.length ? state : { ...state, rebuildsAt: next }
+}
+
+function reduceCarrierStep(state: CarrierState, event: CarrierEvent, env: CarrierEnv): CarrierReduction {
   switch (event.kind) {
     case 'carrierConnecting':
       return { state: { ...state, phase: 'connecting' }, effects: [] }
@@ -161,7 +181,9 @@ export function reduceCarrier(state: CarrierState, event: CarrierEvent, env: Car
           framesOnSocket: 0,
           pendingRebuild: reason,
           pendingRebuildBy: event.episodeId ?? null,
-          rebuildsAt: [...state.rebuildsAt, event.at],
+          // pushWindowed is the ledger's only writer: a new entry cannot outlive the
+          // window it is counted in.
+          rebuildsAt: pushWindowed(state.rebuildsAt, event.at, event.at, env.rebuildWindowMs),
         },
         effects,
       }
