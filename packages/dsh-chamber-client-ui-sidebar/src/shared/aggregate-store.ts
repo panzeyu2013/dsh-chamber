@@ -13,6 +13,7 @@
 import type { InstanceSnapshot } from './instance-api.ts'
 import type { ArchivedSessionMetaRow } from './derive.ts'
 import type { SessionFactReconcileSnapshot } from './session-fact-reconcile.ts'
+import type { SubagentActivity } from './session-row-state.ts'
 import { assertSingletonModule } from './singleton.ts'
 import {
   publishSessionCreationInstrument, sessionCreationLedger, type SessionCreationOrigin,
@@ -391,6 +392,8 @@ export interface InstanceRuntimeReport {
     pending?: 'approval' | 'plan-review' | 'question'
     /** Running subagent descendants (vendor runningSubagentCount semantics); absent = 0. */
     runningSubagents?: number
+    /** P5 子代理活动三值：none（索引在场且为零）| running | unknown（索引缺席或来源 stale）。 */
+    subagentActivity?: SubagentActivity
     /** I5：观察者刷新这一行事实的 host 域毫秒（0/缺席 = 无观察者事实）。 */
     factAt?: number
   }>

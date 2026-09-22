@@ -472,6 +472,12 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
   武装、subagents 分支优先呈现」同构）。
 - tooltip/aria：`status.subagentsRunning.one/other`
   （官方 copy：`{n} 个子代理运行中` / `{n} subagent(s) running`）。
+- **可呈现性三值（P5，2026-12）**：计数只说明「索引在场时算出了几个运行中的后代」，
+  不是「正在干活」的证据。父行改带 `subagentActivity: none | running | unknown`：
+  索引缺席或来源 stale（R14）时读数是 `unknown`，中性呈现——不点亮子代理圆环/播报，
+  也不据此压制 completed/running 读数与待办条目；`runningSubagents` 保持稀疏计数供诊断。
+  守卫单源 = `shared/session-row-state.ts` 的 `subagentActivityOf`（行读数、圆点、待办共用）；
+  上游完整性信号落地后删除本地 fallback（见 `docs/progress/todo/upstream-proposals.md` §7）。
 
 **残留（记录）**：one-shot await 期间父回合与子 agent 同活，我们只显示子 agent
 计数文案（官方显示「运行中」主标签 + 计数次标签；圆环同形，仅 tooltip 单值取舍）；

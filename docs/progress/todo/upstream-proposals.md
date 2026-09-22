@@ -164,3 +164,25 @@ chamber 侧已落地缓解（`packages/renderer/src/svg-resource-scope.ts`，des
 4. **宿主侧持久 unread/pending 事实**。当前只有「有人正在观察」时才能记录完成边沿；桌面关闭且无观察者运行的窗口内完成的会话仍会丢。若宿主为每个会话持久化「最后完成水位 + 是否未读」（或至少给出稳定的 per-session unread 投影），这类丢失就能被根除，下游无需再各自维护观察者。
 
 chamber 侧现状（非上游阻塞项，供参照）：只读镜像的边界与验收判据见 `docs/design/17-server-side-gateway.md` §10.7 与 §20；协议单一源 `packages/control-plane/src/session-state-protocol.ts`；watcher `packages/gateway/src/session-state.ts`（`/chamber/session-state*`，能力协商 + 优雅降级）。
+## 7. 子代理生命周期/计数与完整性信号（2026-12，P5）
+
+背景：侧边栏父会话行的「N 个子代理运行中」读数来自 vendor 纯函数
+`indexSubagentDescendants` 对当前 `session/list` 快照的投影（design 06 §4.5）。它有两个
+下游无法自行消除的不确定性：
+
+1. **没有完整性信号**：索引是对「本快照里还在的会话行」求的，缺席既可能是「没有运行中的
+   子代理」，也可能是「列表不完整/超时/断连」。chamber 只能把「索引缺席」读作 unknown
+   （P5 本地收口：`subagentActivity: none | running | unknown`，stale 来源上的残留计数降为
+   unknown，中性呈现）。请求：在 `session/list`（或 `subagentsByParent` 旁）给出一个
+   显式的完整/新鲜度位（如 `lineageAsOf`/`complete`），让客户端能区分这两者。
+2. **没有生命周期边沿**：子代理结束（或行离开列表）后计数才消失，客户端无法从边沿判断
+   「刚刚结束」与「从未开始」。请求：把子代理的 start/end 作为稳定事件（或纳入
+   `API_REMOTE_FORWARDED_EVENTS` 的白名单），侧边栏就不必每 tick 重算谱系。
+
+chamber 侧现状（非上游阻塞项）：`packages/dsh-chamber-client-ui-sidebar/src/shared/derive.ts`
+的 `projectRuntimeFacts` 把缺席索引写成 `unknown`、`mergeRuntimeFacts` 在 stale 报告上把
+`running` 降为 `unknown`，呈现层（`server-section-session-state.tsx`、`session-row-state.ts`、
+`todo-attention.ts`）共用 `subagentActivityOf` 一个守卫。上游给出完整性信号后，删除该
+fallback 与 `test/session-rows/session-row-state.test.ts` 里钉住它的契约测试。
+
+

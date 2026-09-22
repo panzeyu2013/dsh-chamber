@@ -31,6 +31,7 @@
  */
 import type { ChamberServerAggregate } from './aggregate-store.ts'
 import { sessionDisplayTitle } from './derive.ts'
+import { subagentActivityOf } from './session-row-state.ts'
 
 /** The attention kinds the todo area renders. `completed` = completed-but-
  *  unread (the blue-dot merged state); the other three are the vendor pending
@@ -139,8 +140,9 @@ export function deriveTodoAttention(
         // 指示的 sessionStateDot 顺序：pending > 子代理 > completed > 运行
         // 环；wire running 只在无 completed 时渲染环），vendor-completed 与
         // wire running 的通道错位窗口内不得漏报（06 §4.3 同序纪律）。
-        const runningSubagents = facts.runningSubagents ?? 0
-        if (runningSubagents > 0) continue
+        // P5：只有确证在跑的子代理才压制「完成未读」条目；unknown（stale/索引缺席）
+        // 不压制——用不可信的计数压掉用户可见面，正是这次要消除的形态。
+        if (subagentActivityOf(facts, factsStale) === 'running') continue
         if (facts.completed !== true || !opts.filters.completed) continue
         const entry: TodoAttentionEntry = {
           sourceId: server.id,
@@ -170,7 +172,7 @@ export function deriveTodoAttention(
       if (server.id === opts.viewingSourceId && sessionId === opts.viewingSessionId) continue
       const facts = runtime.sessions[sessionId]
       if (facts?.completed !== true || !opts.filters.completed) continue
-      if ((facts.runningSubagents ?? 0) > 0) continue
+      if (subagentActivityOf(facts, true) === 'running') continue
       completed.push({
         sourceId: server.id,
         sessionId,

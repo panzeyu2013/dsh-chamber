@@ -638,12 +638,30 @@ test('projectRuntimeFacts: live bits, pending kinds, subagent and sparse lineage
   assert.deepEqual(report, {
     current: 's1',
     sessions: {
-      s1: { running: true, completed: true, pending: 'question', runningSubagents: 2 },
-      s2: { running: false, completed: true },
-      c: { running: false },
+      s1: { running: true, completed: true, pending: 'question', runningSubagents: 2, subagentActivity: 'running' },
+      s2: { running: false, completed: true, subagentActivity: 'none' },
+      c: { running: false, subagentActivity: 'none' },
     },
   }, 'subagent rows and unknown kinds never enter the report; zero counts stay sparse')
   assert.deepEqual(projectRuntimeFacts({}), { sessions: {} })
+})
+
+test('P5: subagent activity is tri-state, and a stale report downgrades running to unknown', () => {
+  const snapshot = {
+    byId: {
+      s1: { running: false },
+      sub1: { running: true, origin: 'subagent' as const, parentId: 's1' },
+    },
+  }
+  // The lineage index is absent: honest answer is unknown, never "none".
+  assert.deepEqual(projectRuntimeFacts(snapshot).sessions.s1, { running: false, subagentActivity: 'unknown' })
+  const withIndex = projectRuntimeFacts(snapshot, new Map([['s1', 1]]))
+  assert.deepEqual(withIndex.sessions.s1, { running: false, runningSubagents: 1, subagentActivity: 'running' })
+  // A disconnected source's leftover count is not evidence of live work: the merge
+  // downgrades the claim (neutral), while the count itself stays for diagnosis.
+  const merged = mergeRuntimeFacts(withIndex, undefined, undefined, true)
+  assert.deepEqual(merged?.sessions.s1, { running: false, runningSubagents: 1, subagentActivity: 'unknown' })
+  assert.equal(merged?.stale, true)
 })
 
 // ---- labels / schedule / blank reuse ----

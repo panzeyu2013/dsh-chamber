@@ -23,6 +23,7 @@
  * No React, no DOM — plain-node unit-testable (see test/session-rows/derive.test.ts).
  */
 import type { InstanceSnapshot, SearchRow, SessionRow, WorkspaceRow } from './instance-api.ts'
+import type { SubagentActivity } from './session-row-state.ts'
 import type { ChamberServerAggregate, ChamberServerWorkspace, InstanceRuntimeReport, ServerBootGap } from './aggregate-store.ts'
 import { forgetMapSources } from './ledger.ts'
 import { assertSingletonModule } from './singleton.ts'
@@ -633,6 +634,7 @@ export function projectRuntimeFacts(
       completed?: boolean
       pending?: 'approval' | 'plan-review' | 'question'
       runningSubagents?: number
+      subagentActivity?: SubagentActivity
     } = {
       running: facts?.running === true,
     }
@@ -641,8 +643,13 @@ export function projectRuntimeFacts(
     // kinds stay undefined so a future upstream kind cannot leak into the UI.
     const pending = pendingKindOf(pendingInteractions?.get(id)?.kind)
     if (pending !== undefined) row.pending = pending
-    const runningSubagents = subagentRunning?.get(id) ?? 0
-    if (runningSubagents > 0) row.runningSubagents = runningSubagents
+    // P5：索引缺席 = unknown（不是「没有运行中的子代理」）；索引在场且计数为零 =
+    // none。计数保持稀疏（>0 才写字段），三值单独承载可呈现性。
+    const runningSubagents = subagentRunning === undefined ? undefined : (subagentRunning.get(id) ?? 0)
+    if (runningSubagents !== undefined && runningSubagents > 0) row.runningSubagents = runningSubagents
+    row.subagentActivity = subagentRunning === undefined
+      ? 'unknown'
+      : (runningSubagents !== undefined && runningSubagents > 0 ? 'running' : 'none')
     sessions[id] = row
   }
   const report: InstanceRuntimeReport = { sessions }
@@ -906,6 +913,16 @@ export function mergeRuntimeFacts(
       sessions[sessionId] = next
     }
   }
+  // P5：断连来源上残留的子代理计数不是「正在干活」的证据——把 running 声明降为
+  // unknown（中性呈现），计数本身保留给诊断。放在 overlay 合并之后，通道补进来
+  // 的计数同样受守卫，不留旁路。
+  if (hasStale) {
+    for (const [sessionId, row] of Object.entries(sessions)) {
+      if (row.subagentActivity === 'running' || (row.subagentActivity === undefined && (row.runningSubagents ?? 0) > 0)) {
+        sessions[sessionId] = { ...row, subagentActivity: 'unknown' }
+      }
+    }
+  }
   // 刻意的形状收敛：`sessionFactReconcile` **不进**投影（侧边栏不渲染它，
   // 且投影签名按此形状去重）——守卫读的是 App 原始 runtimeFacts（App.tsx 的
   // setRuntimeFacts），不是 server.runtime。下一个想读回执的 consumer 请直接
@@ -1023,7 +1040,7 @@ export function runtimeReportSignature(
     .filter(([id]) => onlyIds === undefined || onlyIds.has(id))
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
     .map(([id, facts]) =>
-      `${id}:${includeRunning && facts.running === true ? 'r' : ''}${facts.completed === true ? 'c' : ''}${facts.pending ?? ''}:${facts.runningSubagents ?? 0}`)
+      `${id}:${includeRunning && facts.running === true ? 'r' : ''}${facts.completed === true ? 'c' : ''}${facts.pending ?? ''}:${facts.runningSubagents ?? 0}:${facts.subagentActivity ?? ''}`)
   // 2026-12 修复（运行位活性守卫）：L1 对账回执也是事实内容的一部分，必须进
   // 签名——App 的运行时事实提交按本签名去重，回执若不入签名，一次「事实没变、
   // 只有回执结算」的上报会被整个丢弃，守卫永远看不到结论（随后误判为「对账
