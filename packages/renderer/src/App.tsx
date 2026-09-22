@@ -41,6 +41,11 @@ import {
   waitForCondition,
   type SourceEvent,
   type SourceRegistry,
+  LADDER_TABLES,
+  planLadder,
+  sessionAuthorityEscalationLadder,
+  type LadderObservation,
+  type LadderRecord,
 } from '@dsh-chamber/dsh-stream-state'
 import api, { type ConnectionSummary, type HealthResponse } from './api.ts'
 import {
@@ -114,7 +119,7 @@ import {
   type UnreadStorageLike,
 } from './unread-store.ts'
 import { deriveSourceUnread, sameBooleanMap as sameBooleanLedger, viewingReadWatermark } from './unread-derivation.ts'
-import { completionWatermark, nextNotifiedWatermark, shouldNotifyWatermark } from './watermark.ts'
+import { planFactsNotifications } from './notification-projection.ts'
 import { pruneSourceList, pruneSourceRecord, pruneSourceSet } from './source-registry.ts'
 import { LOCAL_INSTANCE_ID } from './local-instance.ts'
 import { shouldDispatchRefreshHint } from './source-refresh-hint.ts'
@@ -192,13 +197,7 @@ import {
   AGGREGATE_RECONNECT_HTTP_STALE_MS,
   AGGREGATE_RECONNECT_SSH_STALE_MS,
 } from './aggregate-refresh.ts'
-import {
-  createSessionLivenessState,
-  markSessionLivenessReconnect,
-  markSessionLivenessReconnectNoop,
-  planSessionLiveness,
-  type SessionLivenessSourceInput,
-} from './session-liveness.ts'
+// P2 单一权威链：App 侧不再持有 liveness planner/state（见下方升级 ladder）。
 import { errorMessage } from './status.ts'
 import type { SshInstanceSpec, SshStatusProjection, TransportKind } from './global.d.ts'
 import {
@@ -227,6 +226,12 @@ import { PERF_MARKS, perfMark } from './perf-marks.ts'
  * presumed to have a dead push channel and is re-pulled from the authority.
  */
 const AGGREGATE_FALLBACK_POLL_MS = 30_000
+/**
+ * 会话事实权威的升级 ladder（P2）：一个引擎实例，数值来自
+ * `LADDER_TABLES.authority`（tables.json 的 ladders.authority）。探针 cadence 在
+ * producer 执行端；这里只决定 reconnect 与 notice，且两者都要求 stuck 证据。
+ */
+const SESSION_AUTHORITY_ESCALATION_LADDER = sessionAuthorityEscalationLadder(LADDER_TABLES.authority)
 /** Minimum gap between two connection reconnects of one stale MOUNTED source
  * (S2): the watchdog may mark a healthy-but-quiet producer stale on recency
  * alone, so a failed (or unnecessary) reconnect must not retry every tick. */
@@ -1121,8 +1126,8 @@ export default function App() {
     () => ({ ...unreadBoot.payload.edge }),
   )
   const prevRunningRef = useRef<Record<string, Record<string, boolean>>>({})
-  // 通知边沿记忆（设计 19 ）：每来源每会话的上一份事实快照，供
-  // detectNotificationEdges 判定 running→idle / pending 武装边沿。与
+  // 通知边沿记忆（设计 19 / P3）：每来源每会话的上一份事实快照，供
+  // notification-projection.planRuntimeNotifications 判定 running→idle / pending 边沿。与
   // prevRunningRef（蓝点机）并存互不耦合：蓝点带「正在阅读」解除，通知边沿
   // 不受解除影响——窗口隐藏到托盘时活动来源的当前会话完成也必须通知
   // （requireHidden 豁免在主进程裁决）。随来源生命周期收敛（onRuntimeReport
@@ -2112,7 +2117,10 @@ export default function App() {
   // 上报重建）+ 守卫状态 ref + 需要用户可见提示的来源。
   const watchdogRuntimeFactsRef = useRef(runtimeFacts)
   watchdogRuntimeFactsRef.current = runtimeFacts
-  const sessionLivenessRef = useRef(createSessionLivenessState())
+  // P2：App 只跑升级 ladder（reconnect/notice），probe cadence 与写回在执行端。
+  const escalationRecordsRef = useRef<Record<string, LadderRecord>>({})
+  /** 已亮 notice 的来源 → 亮灯时的 progressStamp（健康进展即撤下）。 */
+  const noticeProgressRef = useRef<Record<string, number>>({})
   const [stalledSources, setStalledSources] = useState<readonly string[]>([])
   // 用户已经「忽略」过的停滞来源：同一停滞时段不再重复提示（与 mobile
   // session-stall.ts 的 dismiss 语义一致——误报不得反复打扰），来源恢复
@@ -2234,89 +2242,78 @@ export default function App() {
         reconnectedThisTick.add(id)
       }
     }
-    // 运行位活性守卫（）：ui-chat 的
-    // 「深度求索中」由官方 session 的 running 位驱动，而该位只由 mux 上一条
-    // emit 型事件 api-session/status 递送（无重传），官方唯一的收敛路径
-    // handleConnected() → refreshList() 又只挂在连接代际重置上 ⇒ 丢一帧或
-    // carrier 静默半死时 running 永久为 true。本臂：L1 对账（官方 session.list →
-    // 本地判定 → 独立权威探针；权威正面证伪而契约内纠正不了时**回写官方 store**，
-    // 只写 false、写后自校验 —— design 14 §D4 ①b）→ 仅当回执证明对账通道坏掉才
-    // L2 reconnect → L3 可见提示。local 刻意不排除：本次缺陷的现场就是本地实例，
-    // 且升级依据是「拿不到权威结论」而非「沉默很久」（长工具/长推理的合法
-    // 静默与真卡死在本层不可区分，误升级会引入 reconnect 风暴）。
-    const generationBySourceId = new Map(
-      servers.map(server => [server.id, server.sourceFingerprint]),
-    )
-    const livenessSources: Record<string, SessionLivenessSourceInput | undefined> = {}
+    // 会话事实单一权威（P2，docs/progress/todo/session-authority-refactor.md）：
+    // producer 执行端持有 reducer（运行位真相 + N=2 + tier-3 写回）与 probe cadence，
+    // 并把 `runningSince` / `stuckSince` / `progressStamp` 投影进运行时事实。这里
+    // 只做两件事：给它一个 30s tick，以及在**拿不到权威结论**的 stuck 证据上跑升级
+    // ladder（reconnect → notice）。绝不按静默时长升级：长工具/长推理的合法静默与真
+    // 卡死在本层不可区分，误升级会重放全部 baseline（design 14 §D4 的核心取舍）。
+    const escalationObservations: Record<string, LadderObservation | undefined> = {}
     for (const id of ready) {
       const report = watchdogRuntimeFactsRef.current[id]
-      livenessSources[id] = {
-        sessions: report?.sessions,
-        // 共享重连账本（同一 tick 的 S2/fallback 臂已经写过，见上方循环）：挡住时
-        // 守卫不派遣 L2，只继续 L1——被 App 丢弃的派遣会静默整个退避窗且停摆 L1
-        // （）。
-        reconnectBlocked: reconnectedThisTick.has(id)
+      const sessions = report?.sessions ?? {}
+      const sticky = Object.values(sessions).some(facts => facts?.running === true)
+      if (sticky) chamberBridge.requestSessionListRefresh(id)
+      const authority = report?.sessionAuthority
+      escalationObservations[id] = {
+        sticky,
+        symptomSinceMs: authority?.runningSince ?? now,
+        progressStamp: authority?.progressStamp ?? 0,
+        stuckEvidence: authority?.stuckSince !== undefined,
+        // 共享重连账本（同一 tick 的 S2/fallback 臂已经写过）：挡住时不派遣，
+        // 也不消耗 ladder 配额——被 App 丢弃的派遣不得静默吃掉杠杆。
+        escalationBlocked: reconnectedThisTick.has(id)
           || (lastReconnectAtRef.current[id] !== undefined
             && now - lastReconnectAtRef.current[id] < AGGREGATE_RECONNECT_BACKOFF_MS),
-        // 代际指纹（registry 投影同源）：不变量是「A 结束、B 开始」若发生在两次
-        // tick 之间（隐藏期跳过），新会话绝不能继承旧时段的配额/提示。
-        ...(generationBySourceId.get(id) === undefined
-          ? {}
-          : { generation: generationBySourceId.get(id) }),
-        ...(report?.sessionFactReconcile === undefined
-          ? {}
-          : { reconcile: report.sessionFactReconcile }),
       }
     }
-    const livenessPlan = planSessionLiveness(sessionLivenessRef.current, { now, sources: livenessSources })
-    sessionLivenessRef.current = livenessPlan.state
-    for (const action of livenessPlan.actions) {
-      // watchdog 绝不向 App 抛错（与上面的 reconnect 臂同纪律）；动作次数由
-      // 守卫自身的预算封顶（L1 滚动窗口 10 分钟 ≤3 次、L2 每时段 ≤1 次），日志因此有界。
+    const escalationPlan = planLadder(
+      SESSION_AUTHORITY_ESCALATION_LADDER, escalationRecordsRef.current, escalationObservations, now)
+    escalationRecordsRef.current = escalationPlan.records
+    for (const action of escalationPlan.actions) {
+      // watchdog 绝不向 App 抛错；动作次数由 ladder 自身的冷却/配额封顶，日志有界。
       try {
-        if (action.kind === 'refresh') {
-          console.warn(`[renderer] session-liveness: reconciling session facts for ${action.sourceId}`)
-          chamberBridge.requestSessionListRefresh(action.sourceId)
-        } else if (action.kind === 'reconnect') {
+        if (action.tier === 'reconnect') {
           // 与既有臂共用同一份 per-source 账本：同一 tick 内已经重连过的来源不得
-          // 被多条臂各重连一次；跨 tick 也要看账本——S2/fallback 臂可能刚在几十秒前
-          // 重连过（它们各自会重放全部 baseline），此时 L2 应当让位而不是紧跟一次
-          // （）。
-          // 守卫已用同一账本事实（reconnectBlocked）提前排除被挡住的派遣，这两道
-          // 检查是防御性兜底（账本在同一 tick 的更早阶段被 S2/fallback 臂写入）。
+          // 被多条臂各重连一次；跨 tick 也要看账本（S2/fallback 可能刚重连过）。
           if (reconnectedThisTick.has(action.sourceId)) continue
           const lastReconnectAt = lastReconnectAtRef.current[action.sourceId]
           if (lastReconnectAt !== undefined && now - lastReconnectAt < AGGREGATE_RECONNECT_BACKOFF_MS) {
-            console.warn(`[renderer] session-liveness: ${action.sourceId} was reconnected ${String(Math.round((now - lastReconnectAt) / 1000))}s ago; deferring L2`)
+            console.warn(`[renderer] session-authority: ${action.sourceId} was reconnected ${String(Math.round((now - lastReconnectAt) / 1000))}s ago; deferring`)
             continue
           }
-          console.warn(`[renderer] session-liveness: reconciler unresponsive for ${action.sourceId}; reconnecting`)
-          // 只有真正执行了才消耗 L2 预算：shell 未 boot / ctx 缺失时该杠杆是
-          // no-op 并返回 false，此时升级会给出「一次都没试过」的假提示；no-op 另计
-          // 一条账（连续多次 ⇒ 允许 L3，否则用户永远看不到提示）。
+          console.warn(`[renderer] session-authority: reconciler stuck for ${action.sourceId}; reconnecting`)
           if (reconnectInstanceConnection(action.sourceId)) {
-            sessionLivenessRef.current = markSessionLivenessReconnect(
-              sessionLivenessRef.current, action.sourceId, now)
             lastReconnectAtRef.current = { ...lastReconnectAtRef.current, [action.sourceId]: now }
-          } else {
-            sessionLivenessRef.current = markSessionLivenessReconnectNoop(
-              sessionLivenessRef.current, action.sourceId)
+            reconnectedThisTick.add(action.sourceId)
           }
-        } else {
-          console.warn(`[renderer] session-liveness: ${action.sourceId} still stalled after a reconnect`)
+        } else if (action.tier === 'notice') {
+          // notice 是闩锁：记下亮灯时的 progressStamp，健康进展或症状消失才撤下。
+          noticeProgressRef.current = {
+            ...noticeProgressRef.current,
+            [action.sourceId]: escalationObservations[action.sourceId]?.progressStamp ?? 0,
+          }
         }
       } catch (error) {
-        console.error('[renderer] session-liveness action failed:', error)
+        console.error('[renderer] session-authority escalation failed:', error)
       }
     }
-    setStalledSources(prev => (prev.length === livenessPlan.stalled.length
-      && prev.every((id, index) => id === livenessPlan.stalled[index])
+    const stalledNow: string[] = []
+    for (const [id, stamp] of Object.entries(noticeProgressRef.current)) {
+      const observation = escalationObservations[id]
+      const stillStalled = observation?.sticky === true
+        && (observation.progressStamp ?? 0) <= stamp
+      if (stillStalled) stalledNow.push(id)
+      else delete noticeProgressRef.current[id]
+    }
+    setStalledSources(prev => (prev.length === stalledNow.length
+      && prev.every((id, index) => id === stalledNow[index])
       ? prev
-      : [...livenessPlan.stalled]))
+      : [...stalledNow]))
     setDismissedStalls(prev => {
-      // 只在「既未停滞、也未被判无法验证」时解除忽略（）：只看
-      // livenessPlan.stalled 会把「无法确认」来源的忽略立刻剪掉 ⇒ 横幅反复重现。
-      const next = prev.filter(id => livenessPlan.stalled.includes(id)
+      // 只在「既未停滞、也未被判无法验证」时解除忽略：只看 stalledNow 会把
+      // 「无法确认」来源的忽略立刻剪掉 ⇒ 横幅反复重现。
+      const next = prev.filter(id => stalledNow.includes(id)
         || unverifiedSourcesRef.current.includes(id))
       return next.length === prev.length ? prev : next
     })
@@ -3159,29 +3156,35 @@ export default function App() {
     setSessionFacts(prev => (prev[sourceId] === snapshot ? prev : { ...prev, [sourceId]: snapshot }))
     sessionFactsRef.current = { ...sessionFactsRef.current, [sourceId]: snapshot }
     if (usable) {
-      // 第二入口：watcher 观察到的完成（completedAtSource === 'observed'）。
-      // reconstructed（缺口重建）只出未读、不通知（主计划 -5）；首份快照
-      // 只播种水位（桌面关闭期间的完成不得补发通知）。
+      // P3 单入口：facts 证据走同一投影。reconstructed 只出未读、不通知（主计划 -5）；
+      // 首份快照只播种水位（桌面关闭期间的完成不得补发通知）。水位轨是跨重挂的
+      // durable 去重依据，武装位只做本轮即时去重。
       const seeded = factsSeededRef.current.has(sourceId)
       const lifecycle = sourceLifecyclesRef.current!.capture(sourceId)
+      const watermarks: Record<string, number | undefined> = {}
       for (const row of Object.values(snapshot.rows)) {
-        // 子代理压制（与壳通道同一谓词）：不记账，待子代理全部结束后补发。
-        if (row.subagentCount > 0) continue
-        if (row.completedAtSource !== 'observed' || row.completedAt === null) continue
-        const watermark = completionWatermark(row)
-        if (watermark === undefined) continue
-        const previous = completeLedgerRef.current.notifiedWatermark(sourceId, row.sessionId, 'complete')
-        const nextWatermark = nextNotifiedWatermark(previous, watermark)
-        if (nextWatermark !== undefined && nextWatermark !== previous) {
-          completeLedgerRef.current.setNotifiedWatermark(sourceId, row.sessionId, 'complete', nextWatermark)
+        watermarks[row.sessionId] = completeLedgerRef.current.notifiedWatermark(sourceId, row.sessionId, 'complete')
+      }
+      const plan = planFactsNotifications({
+        rows: snapshot.rows,
+        seeded,
+        watermarks,
+        armed: completeLedgerRef.current.armed(sourceId),
+      })
+      for (const [sessionId, watermark] of Object.entries(plan.watermarks)) {
+        if (completeLedgerRef.current.notifiedWatermark(sourceId, sessionId, 'complete') !== watermark) {
+          completeLedgerRef.current.setNotifiedWatermark(sourceId, sessionId, 'complete', watermark)
         }
-        if (seeded && lifecycle !== null && shouldNotifyWatermark(previous, watermark)) {
+      }
+      completeLedgerRef.current.setArmed(sourceId, plan.armed)
+      if (lifecycle !== null) {
+        for (const edge of plan.edges) {
           emitSessionNotification({
             sourceId,
             sourceFingerprint: lifecycle.fingerprint,
-            sessionId: row.sessionId,
-            kind: 'complete',
-            watermark,
+            sessionId: edge.sessionId,
+            kind: edge.kind,
+            ...(edge.watermark === undefined ? {} : { watermark: edge.watermark }),
           })
         }
       }
@@ -3878,8 +3881,6 @@ const HEALTH_ERROR_GRACE_MS = 10_000
                       const lastReconnectAt = lastReconnectAtRef.current[id]
                       if (lastReconnectAt !== undefined && at - lastReconnectAt < AGGREGATE_RECONNECT_BACKOFF_MS) continue
                       if (!reconnectInstanceConnection(id)) continue
-                      sessionLivenessRef.current = markSessionLivenessReconnect(
-                        sessionLivenessRef.current, id, at)
                       lastReconnectAtRef.current = { ...lastReconnectAtRef.current, [id]: at }
                     }
                   }}

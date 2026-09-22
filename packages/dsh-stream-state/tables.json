@@ -30,23 +30,15 @@
         "resyncMax": 3,
         "failedMs": 90000
       },
-      "factReconcile": {
-        "maxAttempts": 2,
-        "retryMs": 1500,
-        "attemptTimeoutMs": 20000,
-        "verifyTimeoutMs": 65000,
-        "correctivePhaseTimeoutMs": 5000
-      },
-      "sessionLiveness": {
-        "refreshAfterMs": 60000,
-        "refreshCoalesceMs": 200000,
-        "maxRefreshRequests": 3,
-        "refreshWindowMs": 600000,
-        "refreshOutcomeTimeoutMs": 190000,
-        "reconnectBackoffMs": 300000,
+      "authority": {
+        "probeAfterMs": 60000,
+        "probeCoalesceMs": 200000,
+        "probeWindowMs": 600000,
+        "maxProbesPerWindow": 3,
+        "reconnectAfterMs": 190000,
+        "reconnectCooldownMs": 300000,
         "maxReconnects": 1,
-        "maxNoopReconnects": 3,
-        "noticeAfterMs": 120000
+        "noticeAfterMs": 310000
       },
       "streamHealth": {
         "errorGraceMs": 8000,

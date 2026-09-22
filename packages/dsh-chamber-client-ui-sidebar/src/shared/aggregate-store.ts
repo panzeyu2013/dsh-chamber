@@ -12,8 +12,8 @@
  */
 import type { InstanceSnapshot } from './instance-api.ts'
 import type { ArchivedSessionMetaRow } from './derive.ts'
-import type { SessionFactReconcileSnapshot } from './session-fact-reconcile.ts'
 import type { SubagentActivity } from './session-row-state.ts'
+import type { SessionAuthoritySnapshot } from './session-fact-reconcile.ts'
 import { assertSingletonModule } from './singleton.ts'
 import {
   publishSessionCreationInstrument, sessionCreationLedger, type SessionCreationOrigin,
@@ -398,12 +398,12 @@ export interface InstanceRuntimeReport {
     factAt?: number
   }>
   /**
-   * 运行位活性守卫（renderer/src/session-liveness.ts）最近一次 L1 对账的回执；
-   * 缺席 = 本记录内从未请求过。守卫只在「拿不到权威结论」（ok:false，或请求后
-   * 超时无回执）时升级 reconnect，因此回执必须与事实同源上报——执行端是
-   * shared/session-fact-reconcile.ts（单飞 + 有界重试）。
+   * 会话事实单一权威（P2，docs/progress/todo/session-authority-refactor.md）的快照；
+   * 缺席 = 本记录内从未请求过。App 的升级 ladder 只读它的事实（runningSince /
+   * stuckSince / progressStamp）决定 reconnect 与 notice——策略不在 App 侧。
+   * 执行端是 shared/session-fact-reconcile.ts（reducer + probe ladder + I/O）。
    */
-  sessionFactReconcile?: SessionFactReconcileSnapshot
+  sessionAuthority?: SessionAuthoritySnapshot
   /**
    * Whether `sessions` came from a COMPLETE session-list baseline (plan §6,
    * R13): the mounted producer projects the official list store's arrival

@@ -65,13 +65,13 @@ export const GROUPS = {
     'test/lifecycle/session-surface.test.ts',
     // P2 露屏接线：held 帧的定时器必须来自帧的绝对期限（>0ms），越界必须揭示租客。
     'test/lifecycle/veil-release-timer.test.ts',
-    // 运行位活性守卫的决策纯模块契约（design 14 §D4）。
-    'test/lifecycle/session-liveness.test.ts',
   ],
   // aggregate: 多来源聚合状态与通知投影（聚合拉取/重连、通知边、角标计数）
   aggregate: [
     'test/aggregate/aggregate-refresh.test.ts',
     'test/aggregate/notification-edges.test.ts',
+    // P3 单通知投影：两条证据、一个策略、一个账本键空间。
+    'test/aggregate/notification-projection.test.ts',
     // 水位原语单一来源（2026-12 阶段 2：同一完成不重发、坏值不臆造、max/完成水位负例）。
     'test/aggregate/watermark.test.ts',
     // complete 通知账本内核（两轨：水位 + 武装；撤回只清武装轨 / forget / prune）。
@@ -104,9 +104,8 @@ export const GROUPS = {
   ],
   // wiring: 跨文件源码文本接线契约（App/InstanceView/侧栏桥）
   wiring: [
-    // 运行位活性守卫的跨模块不变量（design 14 §D4：最坏回执 < 等回执期限、
-    // verify 预算 ≥ 探针 30s 上限、生产装配不得 override）。
-    'test/wiring/session-liveness-wiring.test.ts',
+    // P2 单一权威链接线锁：一个策略所有者、一个执行端、App 无第二 planner。
+    'test/wiring/session-authority-wiring.test.ts',
     // 遮罩层叠不变量（P0 租客边界 / P1 遮罩期隐藏 / P2 过渡作用域 / P3 揭幕信号）。
     'test/wiring/veil-layering-invariants.test.ts',
     // P4 源注册表接线：指纹只在 roster 刷新处换代，事件只带 epoch，退役即出表。

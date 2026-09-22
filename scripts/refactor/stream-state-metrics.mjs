@@ -39,7 +39,7 @@ export const LIFECYCLE_MODULES = [
   'packages/dsh-api-gateway/src/client/remote-retry-policy.ts',
   'packages/dsh-api-gateway/src/client/journal-stream.ts',
   'packages/dsh-api-gateway/src/client/remote-stream.ts',
-  'packages/renderer/src/session-liveness.ts',
+  'packages/dsh-stream-state/src/session-authority.ts',
   'packages/dsh-chamber-client-ui-sidebar/src/shared/session-fact-reconcile.ts',
   'packages/dsh-chamber-client-ui-open-in/src/client/session-stream-health.ts',
   'packages/dsh-chamber-client-ui-open-in/src/client/session-stream-health-probe.ts',
@@ -55,7 +55,6 @@ export const THRESHOLD_SCOPE = [
   'packages/dsh-stream-state/src',
   'packages/dsh-stream-state/tables.json',
   'packages/dsh-api-gateway/src/client',
-  'packages/renderer/src/session-liveness.ts',
   'packages/renderer/src/session-surface.ts',
   'packages/renderer/src/source-readiness.ts',
   'packages/renderer/src/reveal-gate.ts',
@@ -75,7 +74,7 @@ export const DEPENDENCY_ROOTS = [
 
 /** The module basenames a dependant counts as depending on. */
 export const DEPENDENCY_MARKERS = [
-  'session-liveness',
+  'session-authority',
   'session-fact-reconcile',
   'retention',
   'reveal-gate',

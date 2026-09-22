@@ -10,7 +10,8 @@ import assert from 'node:assert/strict'
 
 import {
   planLadder,
-  sessionLivenessLadder,
+  sessionAuthorityEscalationLadder,
+  sessionAuthorityProbeLadder,
   streamHealthLadder,
   mobileStallLadder,
 } from '../../src/ladder.ts'
@@ -140,20 +141,26 @@ test('exhaustion is reported only after every lever spent its quota', () => {
   assert.deepEqual(second.exhausted, ['a'], 'nothing left: the caller must surface')
 })
 
-test('the three instantiated ladders keep their owners values', () => {
-  const liveness = sessionLivenessLadder({
-    refreshAfterMs: 60000,
-    refreshCoalesceMs: 200000,
-    maxRefreshRequests: 3,
-    refreshWindowMs: 600000,
-    refreshOutcomeTimeoutMs: 190000,
-    reconnectBackoffMs: 300000,
-    maxReconnects: 1,
-    noticeAfterMs: 120000,
+test('the instantiated ladders keep their owners values', () => {
+  const probe = sessionAuthorityProbeLadder({
+    probeAfterMs: 60000,
+    probeCoalesceMs: 200000,
+    maxProbesPerWindow: 3,
+    probeWindowMs: 600000,
   })
-  assert.deepEqual(liveness.tiers.map((tier) => tier.name), ['refresh', 'reconnect', 'notice'])
-  assert.equal(liveness.tiers[1]?.requiresStuckEvidence, true, 'reconnect needs a failed reconcile, not silence')
-  assert.equal(liveness.tiers[1]?.quota, 1)
+  assert.deepEqual(probe.tiers.map((tier) => tier.name), ['probe'])
+  assert.equal(probe.tiers[0]?.requiresStuckEvidence, false, 'a read may fire on time alone')
+  const escalation = sessionAuthorityEscalationLadder({
+    reconnectAfterMs: 190000,
+    reconnectCooldownMs: 300000,
+    maxReconnects: 1,
+    noticeAfterMs: 310000,
+    probeWindowMs: 600000,
+  })
+  assert.deepEqual(escalation.tiers.map((tier) => tier.name), ['reconnect', 'notice'])
+  assert.equal(escalation.tiers[0]?.requiresStuckEvidence, true, 'reconnect needs a failed probe, not silence')
+  assert.equal(escalation.tiers[0]?.quota, 1)
+  assert.ok(escalation.tiers[1]!.afterMs > escalation.tiers[0]!.afterMs, 'notice stays behind reconnect')
   const health = streamHealthLadder({
     errorGraceMs: 8000,
     loadingStallMs: 20000,

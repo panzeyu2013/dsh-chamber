@@ -73,8 +73,9 @@ export const GROUPS = {
     // B2: the per-source container (incarnation keying + the ref projections the
     // App migrates onto, one ledger at a time).
     'test/source/source-container.test.ts',
-    // B4: the sidebar receipt chain's decision (verdict branches + write-back outcome).
-    'test/authority/authority-decision.test.ts',
+    // P1 session-authority: the single running-bit truth reducer + its scenario corpus
+    // (it subsumes the retired authority-decision verdict branches).
+    'test/authority/session-authority.test.ts',
     // B5: the shell's load state machine (the three real-machine defects + generation fence).
     'test/load-state/load-state.test.ts',
     // B2: the prewarm ledgers' events (Set-shaped ledgers need methods, not views).

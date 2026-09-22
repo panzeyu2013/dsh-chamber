@@ -100,6 +100,8 @@
  * can repeat the call, which the seat serializes (double-click guard).
  */
 
+import { LADDER_TABLES, planLadder, streamHealthLadder } from '@dsh-chamber/dsh-stream-state'
+
 /** Official session lifecycle state (`SessionSnapshot.openState`). */
 export type SessionOpenState = 'cold' | 'loading' | 'open' | 'error'
 
@@ -206,21 +208,11 @@ export interface SessionStreamHealthConfig {
 }
 
 /**
- * Defaults. The grace is short because an `error` state is not a state the
- * user can read anything new from (the window is already frozen); the loading
- * threshold sits far above the loopback/gateway p99 open latency, so it only
- * fires on a genuinely parked open.
+ * Defaults: the single table (`LADDER_TABLES.streamHealth`), never literals
+ * here. The grace is short because an `error` state is not a state the user can
+ * read anything new from (the window is already frozen).
  */
-export const SESSION_STREAM_HEALTH_DEFAULTS: SessionStreamHealthConfig = {
-  errorGraceMs: 8_000,
-  loadingStallMs: 20_000,
-  loadingFailedMs: 90_000,
-  healCooldownMs: 120_000,
-  healBudgetWindowMs: 600_000,
-  healBudgetMax: 3,
-  healSettleMs: 20_000,
-  carrierChurnMs: 10_000,
-}
+export const SESSION_STREAM_HEALTH_DEFAULTS: SessionStreamHealthConfig = LADDER_TABLES.streamHealth
 
 /**
  * What the plan asks of the seat this tick.
@@ -240,13 +232,35 @@ export interface SessionStreamHealthPlan {
   readonly notice: SessionStreamNotice | null
 }
 
+/** One engine tick: the session's executed levers are the record's dispatch
+ *  history, the caller supplies the host signals, and the engine owns grace +
+ *  cooldown + budget + evidence; the phase machine stays here. */
+function planHealthEngine(
+  state: SessionStreamHealthState,
+  now: number,
+  config: SessionStreamHealthConfig,
+  symptomSinceMs: number,
+  escalationBlocked: boolean,
+) {
+  // The engine reads the cooldown anchor from the history tail and the budget
+  // from every entry inside the window. A backwards clock leaves stamps in the
+  // future: they still spend budget, so a window-edge sentinel rides the tail.
+  const stamps = state.healStamps
+  const anchor = state.lastHealAt !== undefined && state.lastHealAt <= now ? state.lastHealAt : undefined
+  const tail = anchor ?? (stamps.length === 0 ? undefined : now - Math.max(config.healBudgetWindowMs, config.healCooldownMs))
+  const history = anchor === undefined
+    ? (tail === undefined ? [] : [...stamps, tail])
+    : [...stamps.filter(stamp => stamp !== anchor), anchor]
+  const record = { symptomSinceMs, progressStamp: 0, dispatches: { heal: history, 'auto-resync': history } }
+  const observation = { sticky: true, symptomSinceMs, progressStamp: 0, stuckEvidence: false, escalationBlocked }
+  return planLadder(streamHealthLadder(config), { session: record }, { session: observation }, now)
+}
+
 /**
  * True while this session's lever ledger still permits an attempt: not inside
  * the cooldown after the last EXECUTED lever, and not past the rolling budget.
- * Both the automatic heal and the user-armed resync spend the same ledger, so
- * this is the one place the storm bound is evaluated for a SESSION rather than
- * per arm — the plan calls it before arming the resync control, and the seat
- * calls it again on the click (2026-12).
+ * Both arms spend the same ledger; the plan arms the resync control with it and
+ * the seat re-checks it on the click (2026-12).
  *
  * @param state - the session's ladder state (pruned internally).
  * @param now - current time (epoch ms).
@@ -258,10 +272,9 @@ export function sessionStreamLeversAvailable(
   now: number,
   config: SessionStreamHealthConfig = SESSION_STREAM_HEALTH_DEFAULTS,
 ): boolean {
-  const sinceHeal = state.lastHealAt === undefined ? undefined : now - state.lastHealAt
-  const cooling = sinceHeal !== undefined && sinceHeal >= 0 && sinceHeal < config.healCooldownMs
-  const inBudget = state.healStamps.filter(stamp => now - stamp < config.healBudgetWindowMs).length < config.healBudgetMax
-  return !cooling && inBudget
+  // Back-dating the symptom to the grace makes the first tier due, so the
+  // answer is the ledger alone (the cooldown and the rolling budget).
+  return planHealthEngine(state, now, config, now - config.errorGraceMs, false).actions.length > 0
 }
 
 /** A state that holds nothing (used for the initial value and after recovery). */
@@ -281,12 +294,10 @@ export function planSessionStreamHealth(
   const healStamps = state.healStamps.filter(stamp => now - stamp < config.healBudgetWindowMs)
 
   // Clocks only run while the surface is really on screen: anything else means
-  // "we cannot know", and the fail-closed answer to that is idle. The EVENT
-  // LEDGER survives the hidden stretch on purpose (2026-12 review): the cooldown
-  // and the rolling budget are this module's only storm bound, and hide-to-tray
-  // is a first-class flow here — resetting them would hand the user a fresh
-  // budget of stage moves per visibility toggle, each of which materializes
-  // another session window.
+  // "we cannot know", and the fail-closed answer is idle. The EVENT LEDGER
+  // survives the hidden stretch on purpose (2026-12 review): hide-to-tray is a
+  // first-class flow, and resetting the storm bound would hand the user a fresh
+  // budget of stage moves per visibility toggle.
   if (!observation.presented) {
     return {
       state: {
@@ -335,24 +346,18 @@ export function planSessionStreamHealth(
       held = 0
     }
 
-    // C2 (2026-09 review): the judgment hangs off the SETTLE CLOCK, not off the
-    // 'healing' phase. The lever re-opens the session and vendor `Session.doOpen()`
-    // writes `openState = 'loading'` SYNCHRONOUSLY before its first await, so a
-    // loading observation (or a hidden stretch, which zeroes the phase) routinely
-    // interrupts the error hold — gating the latch on `phase === 'healing'`
-    // silently dropped the button in exactly those cases (probe: 28s → >128s, and
-    // a flapping re-open never latched at all). What proves the executed heal did
-    // not settle is `sinceHeal >= healSettleMs` while the state is still `error`;
-    // a recovery marks the episode as recovered (`recoveredSinceHeal`, while the
-    // cooldown anchor survives for the flapping bound), so a fresh error cannot
-    // inherit this heal's clock. A backwards wall clock (negative delta) must NOT
-    // latch: a clock step is not evidence that the repair failed.
+    // C2 (2026-09): the judgment hangs off the SETTLE CLOCK, not the 'healing'
+    // phase — the re-open reports `loading` synchronously, so a phase-gated latch
+    // dropped the button; `recoveredSinceHeal` keeps a fresh error off this
+    // episode's clock, and a backwards clock must not latch.
     if (state.recoveredSinceHeal !== true
         && sinceHeal !== undefined && sinceHeal >= config.healSettleMs) latched = true
 
-    const cooling = sinceHeal !== undefined && sinceHeal >= 0 && sinceHeal < config.healCooldownMs
-    const inBudget = healStamps.length < config.healBudgetMax
-    if (held >= config.errorGraceMs && !cooling && inBudget && observation.neighborAvailable) {
+    // One engine call answers grace + cooldown + budget + executability; its
+    // `exhausted` is the exhausted budget the notice projection still reads.
+    const engine = planHealthEngine(state, now, config, since, !observation.neighborAvailable)
+    const inBudget = engine.exhausted.length === 0
+    if (engine.actions.some(action => action.tier === 'heal')) {
       // The seat executes the heal and marks it; 'since' restarts at execution.
       return {
         state: {
@@ -370,22 +375,17 @@ export function planSessionStreamHealth(
     // 2026-09 review: the stage move needs a CURRENT, LISTED target plus another
     // listed session to carry the detour. A target it must refuse (an address-only
     // subagent selection) still has the concrete per-session resync, so ARM that
-    // user control instead of degrading to a bare reload. Same ledger, and still
-    // user-executed: the plan never calls it, only the chip's click does.
-    // NOT ledger-gated (2026-09-21 ruling, symmetric with the loading arm): the
-    // ledger bounds the AUTOMATIC arms; this control is executed by the user's
-    // click, so gating its visibility on a spent budget removed the only exit that
-    // keeps the page (an error state with no neighbour has no stage move either).
-    // `resyncAvailable` — the capability — still gates it.
+    // user control instead of degrading to a bare reload. NOT ledger-gated
+    // (2026-09-21 ruling, symmetric with the loading arm): the ledger bounds the
+    // AUTOMATIC arms, while the user's click is its own bound; `resyncAvailable`
+    // — the capability — still gates it.
     const resyncArmed = held >= config.errorGraceMs
       && observation.resyncAvailable === true
 
-    // No usable lever (no neighbor and no resync face, budget spent, or cooling):
-    // say so once the hold has clearly outlived a repair attempt — never on the
-    // first frames, where an in-flight open can still resolve the state on its own.
-    // Without the resync face the only remaining exits are a stage move (needs a
-    // neighbour AND budget) and the full reload, so an exhausted budget or a
-    // missing neighbour is what makes the hold hopeless then.
+    // No usable lever (no neighbor, no resync face, budget spent or cooling):
+    // report it once the hold has outlived a repair attempt, never on the first
+    // frames. Without the resync face the only exits left are a stage move
+    // (needs a neighbour AND budget) and the full reload.
     const hopeless = held >= config.errorGraceMs + config.healSettleMs
       && observation.resyncAvailable !== true
       && (!inBudget || !observation.neighborAvailable)
@@ -454,11 +454,9 @@ export function planSessionStreamHealth(
   }
 
   // 'open' / 'cold': the stream is alive (or never asked for a window): clear
-  // every clock and the notice. The heal budget survives recovery so a flapping
-  // source cannot be healed once per recovery forever.
-  // chamber (design 14 §D4): 'open' is no longer proof that events flow — the
-  // gateway fork paces carrier failures instead of failing terminally, so a
-  // recent churn fact is the user's only signal that the stream is reopening.
+  // every clock and the notice; the heal budget survives so a flapping source
+  // cannot be healed once per recovery. chamber (design 14 §D4): a recent
+  // carrier-churn fact is the user's only signal that the stream is reopening.
   const churn = observation.carrierChurn
   const churning = churn !== undefined && churn.count > 0 && now - churn.at <= config.carrierChurnMs
   return {

@@ -542,7 +542,7 @@ function legacyMergeRuntimeFacts(
 
 const RUNTIME_FACTS: InstanceRuntimeReport = {
   current: 's1',
-  sessionFactReconcile: { requestedAt: 1_000, settledAt: 2_000, ok: true, attempts: 1 },
+  sessionAuthority: { requestedAt: 1_000, settledAt: 2_000, ok: true, progressStamp: 1, probes: 0, corrections: 0, recent: [] },
   sessions: {
     s1: { running: true },
     s2: { running: false, pending: 'approval', runningSubagents: 2 },
@@ -830,10 +830,10 @@ test('reconcileCompletedFacts: a background edge arms, the read session never ar
 })
 
 test('runtimeReportSignature: the L1 receipt, onlyIds and listComplete identity discipline', () => {
-  const receipt: InstanceRuntimeReport = { sessions: { p: { running: true } }, sessionFactReconcile: { requestedAt: 1_000, settledAt: 2_000, ok: true, attempts: 1 } }
+  const receipt: InstanceRuntimeReport = { sessions: { p: { running: true } }, sessionAuthority: { requestedAt: 1_000, settledAt: 2_000, ok: true, progressStamp: 1, probes: 0, corrections: 0, recent: [] } }
   assert.notEqual(runtimeReportSignature({ sessions: { p: { running: true } } }), runtimeReportSignature(receipt),
     'a receipt-only settlement must re-sign, or the liveness guard never sees the verdict')
-  assert.equal(runtimeReportSignature(receipt), runtimeReportSignature({ ...receipt, sessionFactReconcile: { requestedAt: 1_000, settledAt: 2_000, ok: true, attempts: 1 } }))
+  assert.equal(runtimeReportSignature(receipt), runtimeReportSignature({ ...receipt, sessionAuthority: { requestedAt: 1_000, settledAt: 2_000, ok: true, progressStamp: 1, probes: 0, corrections: 0, recent: [] } }))
   const hidden = { current: 's1', sessions: { s1: { running: true }, s2: { completed: true } } }
   assert.equal(runtimeReportSignature(hidden, new Set(['s1'])),
     runtimeReportSignature({ ...hidden, sessions: { s1: { running: true }, s2: { completed: true, running: true } } }, new Set(['s1'])),
@@ -1150,7 +1150,7 @@ test('round-3 restore: reconcile composition, replaced receipt variants and repo
   assert.notEqual(runtimeReportSignature({ sessions: { p: { running: false } } }), runtimeReportSignature({ sessions: { p: { running: false, runningSubagents: 2 } } }), 'subagent counts matter')
   assert.notEqual(runtimeReportSignature({ sessions: { p: { running: false } } }), runtimeReportSignature({ sessions: { p: { running: false, pending: 'approval' } } }), 'pending kinds matter')
   assert.notEqual(runtimeReportSignature({ sessions: { p: { pending: 'approval' } } }, undefined, false), runtimeReportSignature({ sessions: { p: { pending: 'question' } } }, undefined, false))
-  assert.notEqual(runtimeReportSignature({ sessions: {}, sessionFactReconcile: { requestedAt: 1_000, settledAt: 2_000, ok: true, attempts: 1 } }), '', 'a receipt-only report is content')
+  assert.notEqual(runtimeReportSignature({ sessions: {}, sessionAuthority: { requestedAt: 1_000, settledAt: 2_000, ok: true, progressStamp: 1, probes: 0, corrections: 0, recent: [] } }), '', 'a receipt-only report is content')
   assert.equal(runtimeReportSignature({ sessions: {} }), '', 'a truly empty report stays empty')
   assert.equal(runtimeReportSignature({ current: 's1', sessions: { s1: { running: true } } }, undefined, false), runtimeReportSignature({ current: 's1', sessions: { s1: { running: false } } }, undefined, false), 'the projection path drops the running bit')
   assert.notEqual(runtimeReportSignature({ sessions: { s1: { completed: true } } }, undefined, false), runtimeReportSignature({ sessions: { s1: {} } }, undefined, false), 'rendered facts still matter in the projection path')

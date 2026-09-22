@@ -2,7 +2,7 @@
  * Unified recovery ladder engine (B4 core).
  *
  * WHY. Four ladders implement one shape with four vocabularies:
- *   session-liveness.ts        (running bit)       tiers: refresh / reconnect / notice
+ *   session-authority.ts       (running bit)       tiers: probe / reconnect / notice
  *   session-fact-reconcile.ts  (reconcile receipt) phases + single-flight retries
  *   session-stream-health.ts   (openState/phase)   tiers: heal / resync / auto-resync
  *   mobile session-stall.ts    (DOM phase)         a 975-line COPY of the above
@@ -222,35 +222,46 @@ export function planLadder(
  * instead of discovered. Values come from the modules being retired and are the
  * wiring's input, not this file's policy. */
 /**
- * B4 boundary (2026-12 预核结论, plan §84): this factory maps ONLY the SCHEDULING half of
- * the renderer's session-liveness ladder - the per-tier thresholds, cooldowns and the
- * rolling quota. The host module's planner (`planSessionLiveness`) keeps everything this
- * engine has no concept of: its phase machine, per-source progress stamps, the stalled-set
- * projection and the notice tier's message keys.
+ * The session-fact authority's two engine instances - ONE engine, two hosts
+ * (docs/progress/todo/session-authority-refactor.md). The former renderer-local
+ * `planSessionLiveness` planner is retired; its scheduling half is exactly these tiers.
  *
- * WHY THIS NOTE EXISTS: the factory has no production consumer, so a reader could mistake
- * it for a wired single source. It is a SHAPE reference - the engine's expressiveness is
- * narrower than these two ladders, so wiring them would mean adding a phase machine to the
- * engine (a design change, not a B4 refactor). See §84 for the field-by-field对照.
+ * The executor (sidebar producer) runs the PROBE ladder: a read-only probe of the
+ * independent authority, dispatchable on time alone (requiresStuckEvidence=false) -
+ * a read cannot harm the host, so it is the cheapest tier.
  *
- * @param config - the scheduling fields, field-for-field the module's own config object.
+ * The App runs the ESCALATION ladder: reconnect and notice, both gated on stuck
+ * evidence (a probe that could not conclude) - never on silence alone. The ladder
+ * breaks at the first not-yet-due tier, so `noticeAfterMs` must stay above
+ * `reconnectAfterMs` to preserve the escalation order.
  */
-export function sessionLivenessLadder(config: {
-  readonly refreshAfterMs: number
-  readonly refreshCoalesceMs: number
-  readonly maxRefreshRequests: number
-  readonly refreshWindowMs: number
-  readonly refreshOutcomeTimeoutMs: number
-  readonly reconnectBackoffMs: number
-  readonly maxReconnects: number
-  readonly noticeAfterMs: number
+export function sessionAuthorityProbeLadder(config: {
+  readonly probeAfterMs: number
+  readonly probeCoalesceMs: number
+  readonly maxProbesPerWindow: number
+  readonly probeWindowMs: number
 }): Ladder {
   return {
-    name: 'session-liveness',
-    quotaWindowMs: config.refreshWindowMs,
+    name: 'session-authority-probe',
+    quotaWindowMs: config.probeWindowMs,
     tiers: [
-      { name: 'refresh', afterMs: config.refreshAfterMs, cooldownMs: config.refreshCoalesceMs, quota: config.maxRefreshRequests, requiresStuckEvidence: false },
-      { name: 'reconnect', afterMs: config.refreshOutcomeTimeoutMs, cooldownMs: config.reconnectBackoffMs, quota: config.maxReconnects, requiresStuckEvidence: true },
+      { name: 'probe', afterMs: config.probeAfterMs, cooldownMs: config.probeCoalesceMs, quota: config.maxProbesPerWindow, requiresStuckEvidence: false },
+    ],
+  }
+}
+
+export function sessionAuthorityEscalationLadder(config: {
+  readonly reconnectAfterMs: number
+  readonly reconnectCooldownMs: number
+  readonly maxReconnects: number
+  readonly noticeAfterMs: number
+  readonly probeWindowMs: number
+}): Ladder {
+  return {
+    name: 'session-authority-escalation',
+    quotaWindowMs: config.probeWindowMs,
+    tiers: [
+      { name: 'reconnect', afterMs: config.reconnectAfterMs, cooldownMs: config.reconnectCooldownMs, quota: config.maxReconnects, requiresStuckEvidence: true },
       { name: 'notice', afterMs: config.noticeAfterMs, cooldownMs: 0, quota: 1, requiresStuckEvidence: true },
     ],
   }

@@ -54,6 +54,10 @@ export const GROUPS = {
     'test/session-state/aggregate-store.test.ts',
     // 运行位对账链（官方 refresh + 权威判定 seam + 有界重试/单次尝试超时）。
     'test/session-state/session-fact-reconcile.test.ts',
+    // 端到端语料：真实执行端快照驱动 App 升级 ladder（table 值下的 190s/310s 行为）。
+    'test/session-state/session-authority-escalation.test.ts',
+    // P5 取证面：机内持久 authority 动作环（有界、fail-soft）。
+    'test/session-state/authority-log-store.test.ts',
     // R19 能力一览：来源行的会话事实档位展示读数（源文本锁）。
     'test/session-state/facts-capability-note.test.ts',
     // I10：会话创建归因账本（含 blank 的按标签聚合与「无标签外来源」判据）。

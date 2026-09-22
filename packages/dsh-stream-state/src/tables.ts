@@ -108,28 +108,27 @@ export const LADDER_TABLES = {
     resyncMax: 3,
     failedMs: 90_000,
   },
-  /** sidebar session-fact-reconcile.ts: the 190 s-class receipt chain. */
-  factReconcile: {
-    maxAttempts: 2,
-    retryMs: 1_500,
-    attemptTimeoutMs: 20_000,
-    verifyTimeoutMs: 65_000,
-    correctivePhaseTimeoutMs: 5_000,
-  },
-  /** renderer session-liveness.ts (design 14 D4 liveness arm). Lockstep until P5
-   * lands the ladder wiring, then this section retires with the module copy. */
-  sessionLiveness: {
-    refreshAfterMs: 60_000,
-    refreshCoalesceMs: 200_000,
-    maxRefreshRequests: 3,
-    refreshWindowMs: 600_000,
-    refreshOutcomeTimeoutMs: 190_000,
-    reconnectBackoffMs: 300_000,
+  /**
+   * The session-fact authority (docs/progress/todo/session-authority-refactor.md):
+   * ONE set of numbers for two hosts of the same engine - the sidebar executor's
+   * probe cadence and the App's reconnect/notice escalation. They replace the
+   * former renderer-local SESSION_LIVENESS_DEFAULTS and the sidebar's 190 s
+   * receipt chain (both retired by P2).
+   */
+  authority: {
+    /** Probes (independent authority reads) per running episode. */
+    probeAfterMs: 60_000,
+    probeCoalesceMs: 200_000,
+    probeWindowMs: 600_000,
+    maxProbesPerWindow: 3,
+    /** Reconnect only with stuck evidence (a probe that could not conclude). */
+    reconnectAfterMs: 190_000,
+    reconnectCooldownMs: 300_000,
     maxReconnects: 1,
-    maxNoopReconnects: 3,
-    noticeAfterMs: 120_000,
+    /** Notice = reconnectAfterMs + the former 120 s grace, preserving tier order. */
+    noticeAfterMs: 310_000,
   },
-  /** open-in session-stream-health.ts (design 14 D4 stream-health chip). */
+  /** open-in session-stream-health.ts: the conversation-stream health ladder. */
   streamHealth: {
     errorGraceMs: 8_000,
     loadingStallMs: 20_000,

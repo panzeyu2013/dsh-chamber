@@ -14,7 +14,8 @@ import {
   type RendererDeliveryCoordinates,
 } from '../deep-link-activation.ts'
 import { LOCAL_INSTANCE_ID } from '../local-instance.ts'
-import { detectNotificationEdges, dedupeCompleteEdges, type SessionFacts } from '../notification-edges.ts'
+import { type SessionFacts } from '../notification-edges.ts'
+import { planRuntimeNotifications } from '../notification-projection.ts'
 import { errorMessage } from '../status.ts'
 import { sourceIdForRawInstance } from '../transport-source.ts'
 import { completionWatermark } from '../watermark.ts'
@@ -742,59 +743,33 @@ export function useBridgeSubscriptions(deps: BridgeSubscriptionsDeps): void {
         recomputeSourceUnread(sourceId)
         return
       }
-      // 通知边沿（设计 19 /）：独立纯函数 detectNotificationEdges +
-      // dedupeCompleteEdges，与蓝点机互不耦合——蓝点带「正在阅读」解除，
-      // 通知边沿不受解除影响（窗口隐藏时活动来源的当前会话完成也必须通知，
-      // requireHidden 豁免在主进程裁决）。首份上报（prev === undefined）只
-      // 播种记忆不发事件；边沿为空也更新记忆（记忆是后续上报的 prev，report
-      // 为不可变新对象，直接存引用即可）。
+      // 通知边沿（设计 19 / P3 单入口）：两条证据（壳 running 边沿 + facts 水位）的
+      // 裁决全部在 notification-projection.ts；本处只接线 + 唯一 emit。有可用 facts
+      // 的来源 complete 归 facts 入口（水位轨可跨端/跨重挂收敛），壳边沿只发
+      // ask/request——不再有第二处 `usableFacts` 抑制分支。
       const prevFacts = prevRuntimeFactsRef.current[sourceId]
-      const edges = detectNotificationEdges(prevFacts, report.sessions)
       prevRuntimeFactsRef.current[sourceId] = report.sessions
-      // 父会话回合结束但后台子代理仍在运行时（runningSubagents > 0）不视为
-      // 完成（06  与官方 Rows 呈现优先级 pending > runningSubagents >
-      // completed 一致）：通知面不得成为唯一「大声」的错位表面——用户点开
-      // 发现子代理还在干活。抑制发生在去重之前（不记账），若 vendor 在子
-      // 代理全部结束后才武装 completed，届时 completed 边沿正常补发。
-      const edgesWithoutRunningSubagents = edges.filter(edge =>
-        !(edge.kind === 'complete'
-          && (report.sessions[edge.sessionId]?.runningSubagents ?? 0) > 0)
-      )
-      // complete 去重（跨上报记忆）：正被查看的会话完成先走 running 边沿，
-      // 切走后 vendor 延迟武装 completed 的重复边沿在此丢弃；running=true
-      // 的会话清除记忆（下次完成重新可发）。
-      const runningIds = Object.entries(report.sessions)
-        .filter(([, facts]) => facts?.running === true)
-        .map(([sessionId]) => sessionId)
-      const notifiedBefore = completeLedgerRef.current.armed(sourceId)
-      const deduped = dedupeCompleteEdges(edgesWithoutRunningSubagents, notifiedBefore, runningIds)
-      // 已离开列表的会话清除已发记忆（与蓝点机 leave-the-list 清扫同纪律，
-      // 防长活来源上的记忆缓慢增长）。
-      for (const sessionId of [...deduped.notified]) {
-        if (report.sessions[sessionId] === undefined) deduped.notified.delete(sessionId)
-      }
-      completeLedgerRef.current.setArmed(sourceId, deduped.notified)
-      if (deduped.edges.length > 0) {
-        // 唯一组装点（）：文案/标题/requireHidden 全在 emitSessionNotification。
-        // facts.ok 的完成由**第二入口**（watcher completedAt）负责——本入口只发
-        // 无 facts 来源的 completes 与两路共担的 ask/request，避免同一次完成双横幅
-        // （W2 出口「双入口单横幅」；同一行取同一水位函数 completedAt ?? updatedAt）。
-        const factsSnapshot = sessionFactsRef.current[sourceId]
-        const usableFacts = factsSnapshot !== undefined && factsSnapshot.verdict === 'ok' ? factsSnapshot : undefined
-        for (const edge of deduped.edges) {
-          if (edge.kind === 'complete' && usableFacts !== undefined) continue
-          const row = usableFacts?.rows[edge.sessionId]
-          const watermark = edge.kind === 'complete'
-            ? completionWatermark(row ?? {})
-            : row !== undefined && row.updatedAt > 0 ? row.updatedAt : undefined
-          emitSessionNotification({
-            sourceId,
-            sourceFingerprint,
-            sessionId: edge.sessionId,
-            kind: edge.kind,
-            ...(watermark !== undefined ? { watermark } : {}),
-          })
-        }
+      const factsSnapshot = sessionFactsRef.current[sourceId]
+      const usableFacts = factsSnapshot !== undefined && factsSnapshot.verdict === 'ok' ? factsSnapshot : undefined
+      const plan = planRuntimeNotifications({
+        prev: prevFacts,
+        next: report.sessions,
+        factsUsable: usableFacts !== undefined,
+        armed: completeLedgerRef.current.armed(sourceId),
+      })
+      completeLedgerRef.current.setArmed(sourceId, plan.armed)
+      for (const edge of plan.edges) {
+        const row = usableFacts?.rows[edge.sessionId]
+        const watermark = edge.kind === 'complete'
+          ? completionWatermark(row ?? {})
+          : row !== undefined && row.updatedAt > 0 ? row.updatedAt : undefined
+        emitSessionNotification({
+          sourceId,
+          sourceFingerprint,
+          sessionId: edge.sessionId,
+          kind: edge.kind,
+          ...(watermark !== undefined ? { watermark } : {}),
+        })
       }
       // 派生账本重算（）：规则全在纯模块
       // unread-derivation.ts（4 参 deriveUnread + 通道边沿机）；「正在阅读」谓词

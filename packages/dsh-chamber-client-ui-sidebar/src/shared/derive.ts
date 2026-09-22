@@ -923,9 +923,9 @@ export function mergeRuntimeFacts(
       }
     }
   }
-  // 刻意的形状收敛：`sessionFactReconcile` **不进**投影（侧边栏不渲染它，
-  // 且投影签名按此形状去重）——守卫读的是 App 原始 runtimeFacts（App.tsx 的
-  // setRuntimeFacts），不是 server.runtime。下一个想读回执的 consumer 请直接
+  // 刻意的形状收敛：`sessionAuthority` **不进**投影（侧边栏不渲染它，
+  // 且投影签名按此形状去重）——升级 ladder 读的是 App 原始 runtimeFacts（App.tsx 的
+  // setRuntimeFacts），不是 server.runtime。下一个想读权威快照的 consumer 请直接
   // 读原始事实，不要以为投影里有。
   const report: InstanceRuntimeReport = { current: runtime?.current, sessions }
   if (hasStale) report.stale = true
@@ -1049,10 +1049,10 @@ export function runtimeReportSignature(
   // （serversProjectionSignature，includeRunning=false）不得因回执变化而重发布
   // ——侧边栏不渲染回执，回执变化对它永远是 churn（与「channel-only running
   // flip 不得 re-publish」同一条纪律）。
-  const reconcile = report.sessionFactReconcile
-  const receipt = !includeRunning || reconcile === undefined
+  const authority = report.sessionAuthority
+  const receipt = !includeRunning || authority === undefined
     ? ''
-    : `#f:${reconcile.settledAt === undefined ? 'p' : String(reconcile.settledAt)}:${reconcile.ok ? '1' : '0'}:${String(reconcile.attempts)}`
+    : `#a:${authority.settledAt === undefined ? 'p' : String(authority.settledAt)}:${authority.ok ? '1' : '0'}:${String(authority.progressStamp)}:${authority.stuckSince === undefined ? '-' : String(authority.stuckSince)}`
   // listComplete（主计划 §6 / R13）：官方 session list 的 arrival phase（pending
   // → ready 后不回退）是「缺席即删除」的权威门。它是**判定输入**（App 的派生
   // 未读据此剪枝），不是侧边栏渲染事实，所以与回执同一纪律：只签在

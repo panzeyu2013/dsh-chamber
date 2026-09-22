@@ -188,19 +188,37 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
 >    absent/unknown 走 2s 兜底、未 settle 过了反馈窗给可操作面（P2：删除「越界后 0ms 重臂仍不出租客」的旧形态；`unknown` 不再折进 hero）；
 > ④ **等待形状**：`withDeadline` / `waitForCondition` / `retryDelayMs` / `createSingleFlight` 四个原语替换手写计时器记账
 > （B6 七站点中 W1/W2/W3/W5/W6 已迁；W4 不做，W7 因异步探测不适用）；
-> ⑤ **阈值**：四条阶梯的值集中于 `tables.json` 的 `ladders`，由 `scripts/gates/verify-ladder-table-parity.mjs` 与各模块锁步；
->    阶梯**调度半**（tier/cooldown/配额/窗口/证据门）由包内 `planLadder` 单源持有——mobile session-stall 已在其中（「loading 且无在途」移进
->    tier 的 `requiresStuckEvidence`，宿主只执行 `actions` 并携带 `records`）。**边界（已核实，2026-12）**：renderer `session-liveness` 与
->    open-in `stream-health` 的相位/回执状态机**不在**引擎表达力内——per-session running 身份、outcome-wait/unknown-absorbed、no-op/blocked 的
->    L3 出口、跨 tier 共享账本、notice/latch 组合、carrier-churn 窗口都无对应概念（字段级对照见 `ladder.ts` 的工厂注记与 plan §84）；机械迁移等于
->    给引擎加相位机，属设计变更而非本轮重构，故两者保持宿主决策，收编前必须先扩展引擎模型；sidebar 对账是单飞 + 有界重试链，非 tier 阶梯；
->    露屏阈值（10s 反馈窗 / 70s 外层保险 / 2s 兜底）在 `tables.ts` 的 `PRESENTATION_THRESHOLDS`（tables.json 同源），renderer 直接消费，不再持有副本。
+> ⑤ **阈值**：四条阶梯的值集中于 `tables.json` 的 `ladders`（`mobile` / `authority` / `streamHealth`），
+>    消费方直接读表（producer probe、App escalation、mobile、open-in）；`scripts/gates/verify-ladder-table-parity.mjs`
+>    保留为「未来本地声明」的漂移守卫（自测见同目录 `.test.mjs`）。阶梯**调度半**（tier/cooldown/配额/窗口/证据门）由
+>    包内 `planLadder` 单源持有；**边界**：open-in 的 stage 迁移与具象 `resync()`、producer 权威执行端的 I/O 仍在宿主，
+>    引擎只持调度（字段级注记见 `ladder.ts` 的工厂）。
 > ⑥ **时间与账本**：`src/time.ts` 是「可用钟/滚动窗口」的唯一所有者——NaN/±Inf/回拨只保守持有（never release/0ms），
 >    `rebuildsAt`/dispatch 账本只在窗口内保留；适配器不再各自比较时间戳（G-B/G-C/G-F）。
 > ⑦ **取证**：包内 `forensics.ts` 是唯一常驻环形缓冲（默认 cap 256，记录时脱敏，非有限时间戳保守为 0）；api-gateway 的
 >    `StreamForensicsReporter` 记录每次载波决策（含 `carrier-rebuild`/`carrier-throttled` 事实），探针经
 >    `dsh-chamber:stream-forensics-request` 触发 `ForensicsSink` 导出（逐条 snapshot 事件），live 页事件不变（P5）。
-> 对照数据（2026-12 P0–P6 收口后基线）：`node scripts/refactor/stream-state-metrics.mjs --compare`（`_MS` 39→33、依赖文件 28→29（api-gateway 直连包内表/决策）、App 生命周期命中 115→114、Swift shell marker 命中 31→33）。
+>    对照数据以 `node scripts/refactor/stream-state-metrics.mjs --check` 的输出为准（集成后快照见
+>    `scripts/refactor/stream-state-baseline.json`）。
+>
+> **会话事实单一权威（2026-12 P0–P5）**：
+> 运行位/「静默完成」不再有第二套判定。纯 reducer `session-authority.ts` 持有每会话 episode、
+> N=2 权威确认与恰好一次的完成边沿；`ladder.ts` 的一个引擎以两个实例运行（producer 的 probe
+> ladder + App 的 reconnect/notice escalation）；producer 执行端
+> （`shared/session-fact-reconcile.ts`）只做官方 store 读、独立 unary 读与 tier-3 写回
+> （只写 false、写后自校验）。旧 `renderer/src/session-liveness.ts` planner、190s 回执链
+> （官方 refresh 相位 + 有界重试）、`authority-decision.ts`、`usableFacts` 抑制与第二完成入口
+> 均已删除；完成通知由 `notification-projection.ts` 单点裁决（两条证据、一个账本键空间）。
+> **缺席作证**：unary 全量列表缺席 + 两次独立读一致 ⇒ 判 stale 并可写回（此前「缺席一律
+> unknown」的保守口径被裁决替换，由 N=2 与 host-wins 自愈兜底）。
+> **被否替代**：① 保留官方 refresh 作为每轮首个相位——vendor `refreshList()` 对失败照常
+> resolve（观察不到），等于第二层不透明兜底，且 refresh 成功路径不能替代独立读的证伪面；
+> ② 保留 App 侧第二 planner——同一事实两个所有者，跨模块不变量锁不住；③ 用 TTL/latch 在
+> 显示层覆盖 running 位——第二份权威，TTL 到期旧位复浮（2026-12 首版方案已被否）。
+> 仍未闭合：阈值真机校准（60s probe / 190s reconnect / 310s notice）、ssh 远端写回时延、
+> macOS 腿、动作的**集中日志面**（机内 Local Storage 有界环 `dsh-chamber.authority-log.v1`
+> 已落、跨重载可回读；控制面集中 verb 未做）。
+> 校准程序见 [session-authority-calibration.md](../checklists/session-authority-calibration.md)。
 
 **被否方案（2026-12 重构评审）**：
 
@@ -296,7 +314,7 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
   代理**主动**撤销（`closeAllStreams`/revoke）也会记成 `upstream close`，
   故该行不可单独用于判定"实例侧判死"。
 
-- **会话运行位活性守卫（2026-12，Swift 原生版「深度求索中」永久卡死修复）**：
+- **会话事实单一权威（2026-12 P0–P5，Swift 原生版「深度求索中」永久卡死修复）**：
   ui-chat 的运行指示器由官方 session 的 `running` 位驱动
   （`dsh-client-ui-chat`: `running = useSession(s => s.running)` → `TurnStatus` →
   `chat.deepDiving`），而该位只由 mux `$events` 流上一条 **emit 型转发事件**
@@ -308,79 +326,50 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
   `sessions.refresh()` 调用者、无 session.list 轮询）⇒ 稳态下丢一帧或 carrier 静默
   半死时该位永久为 true（客户端零超时、零出口）。**残留故障类要精确命名**：传输层已有
   周期性 liveness（宿主 mux 2s×2、控制面浏览器腿 30s×1），已覆盖的是「socket/心跳死亡」；
-  本守卫针对的是「**socket 与心跳全健康、而宿主侧转发事件源停摆**」（fiber 被 dispose /
+  本节针对的是「**socket 与心跳全健康、而宿主侧转发事件源停摆**」（fiber 被 dispose /
   源静默；emit 无重传也无游标）——这一类没有任何现成触发器。宿主侧无责：agent loop 在
-  `finally` 必写 `turn/end`。**上述 §D4 的 liveness 触发器覆盖不到
-  这一类**（它们全部要求 OS 级事件：唤醒/网络/可见性；窗口可见且机器未睡时一个都不响）。
-  修复 = 三级阶梯（决策半 `renderer/src/session-liveness.ts` 纯模块，执行半
-  `dsh-chamber-client-ui-sidebar/src/shared/session-fact-reconcile.ts` +
-  producer 既有 refresh seam）：
-  **状态机不变量**（2026-12 二轮复核后定稿）：时段按**每会话计时**（`runningSince`）
-  起算——同一来源下短会话反复开始/结束**不得**重置一个真正卡住的长会话的时段；只有
-  来源代际（registry fingerprint）变化、或当前运行集合与上一 tick 完全不相交时才重起
-  算（挡住「A 结束、B 开始」继承旧配额与旧提示）。**L3 门 = 未收敛证据 + 宽限**：
-  (`outcomeFailed`（最近一次**非 unknown** 结算 ok:false（且结算时刻晚于最近一次真实重连——重连前的 sticky 失败不算新证据，否则重连后一个宽限期就亮一条 30s 假横幅））或 `outcomeMissing`（等回执超过 190s = 对账链
-   最坏回执时延 2×(20s+65s)+1.5s ≈171.5s 之上，见 sidebar 的相位预算）)
-  ∧ **梯子到顶**（真实 L2 预算用尽 **或** 连续 no-op 派遣达 `maxNoopReconnects`——后者是「杠杆一直不可用」时的第二条出口）∧ 距**梯子到顶那一刻**（`ladderAnchorAt`，只记一次）≥ `noticeAfterMs` ∧ 本轮尚未提示。健康回执清除未收敛
-  证据并撤下已亮提示，**新的**失败证据可再次武装——既不会被守卫自己的 L1 请求无限推迟，
-  也不会被一次健康回执永久 latch，更不会在「配额间隙没发请求」时误报（只用时间锚点的
-  版本正是这样产生周期性假横幅的，2026-12 二轮复核修复）。
-  ① **L1 对账（读 + 权威纠正）**：某来源持续 running ≥ 60s ⇒ 经既有
-     `chamberBridge.requestSessionListRefresh` 请挂载 ctx 重跑官方
-     `ctx.sessions.refresh()`（single-flight；其内部 `refreshList()` 把权威
-     summary 的 running 回灌到已物化会话 ⇒ 卡死的位自然掉落）；节拍 = `refreshCoalesceMs`
-     `200s`（**= refreshWindowMs / maxRefreshRequests**：把配额铺成均匀节拍——用 60s 会在
-     120/180/240s 爆发用完窗口、之后失明 8 分钟；相等时平均成本不变而最坏未探测时长 = 200s），
-     滚动窗口 10 分钟 ≤3 次。门槛 60s 的收益与成本见下方 ①b。
-  **①b 彻底修复（2026-12；tier-1.5 本地判定 + tier-3 写回；执行端
-  `shared/session-fact-reconcile.ts`、装配 `client/index.ts`）**：refresh 结算后先做
-  **本地判定**——store 快照已没有任何「非子代理」running 行即收敛，**省掉一次 host
-  `session.list`**（修复成功后的常见路径只需 refresh 的 1 次 host 读）；仍有 running 行才发
-  独立 unary 探针，且**只有两次独立读数都证伪同一个 id（N=2）**才判 `stale`（一次不完整
-  列表既会造成假写回、也会造成假升级）。判 `stale` 后先走**写回**：把权威结论写进官方
-  store 自己的公开写路径（`ClientSessions.handleSessionStatus(id, false)`；`ISessions`
-  契约只暴露 `refresh()`，故此面属**上游公开但非契约**的方法）——一次调用同时改侧栏摘要、
-  物化 Session 的 `running`（聊天面「深度求索中」）与子代理 activity，并顺带武装完成
-  蓝点/通知边沿；写后**自校验**（等一个宏任务让 store 投影 flush，投影迟一拍时再等一拍；全部掉落才算成功）才按
-  `converged` 结算（回执 `corrected: true`）；写回缺失/失败/自校验不过一律按 `stale` 结算
-  （允许 L2/L3）。纪律：**只写 false、从不写 true**；**无 TTL、无 latch**——后续任何成功的
-  官方基线与状态事件都能覆盖写入（host 永远赢）；方法面缺失 WARN 一次后降级到升级阶梯。
-  **为什么需要它**：官方 `refreshList()` 对拉取失败照常 resolve，且 store 快照**不暴露**
-  `state`/`error`（`projectList()` 只投影 ids/byId/current/phase/…），因此「refresh 成功而
-  running 未回灌」与「官方 `session.list` 单飞悬挂」在契约内没有任何纠正路径——写回是仓内
-  唯一不依赖上游修改的确定性修复动作（2026-12 用户裁决：**不新增 fork、不改上游**）。
-  **权威相位不依赖 refresh**（2026-12 四轮独立复核后修订）：refresh 被拒或 refresh 相位超时
-  **不再直接结算失败**，而是照常进入「独立探针 + 写回」相位；该相位由一次性栅栏独占
-  （晚到的 refresh 结算/拒绝在相位在飞时不得并发开第二轮，否则会重复探针与重复写回）；且直接结论由
-  `decideAfterFirstAuthorityRead` 纯函数给出：**「未覆盖的 running 行」一律按无结论**
-  （`unknown`），不得按健康结算——否则「官方对账持续坏 + 权威缺席行」会回执 ok:true 并永久关掉
-  升级阶梯（2026-12 五轮复核的 HIGH 回归）。**该判定与 refresh 相位的成败无关**：官方
-  `refreshList()` 的主流失败形态是**照常 resolve** 成 `ok:false`（只把 `listState` 置
-  `'error'`），而 `ISessions.refresh()` 又把结果抹平成 `Promise<void>` ⇒ reconciliation
-  侧观察不到「这次 refresh 其实没应用」；真正成功的 refresh 会经 `mergeOrderedBaseline`
-  清掉缺席 id，所以「未覆盖的 running 行」本身就说明官方对账没落地——因此这类行一律按
-  无结论结算，代价只是一次被吸收的 unknown（期限由下一次 L1 重新起算，不立即升级）——因此官方
-  `session.list` 单飞悬挂时，侧栏与聊天面的**事实**仍能被写回纠正；只有「store 自己解除
-  loading」仍需重载（STATUS ③ 的上游诉求不变）。
-  首探门槛因此从 120s 降到 60s：动作是读 + 官方 refresh + 可能的写回，**不是升级**；每个
-  running 时段的探测次数仍由 coalesce/配额封顶（60/260/460s 与 120/320/520s 稳态次数相同），
-  只是把「丢帧 → 纠正」的**最好情形**可见窗口从 ~200s 级压到 60s 级（最坏交错仍受
-  `refreshCoalesceMs` 200s 约束，见上）。
-  ② **L2 有界 reconnect**：仅当**对账回执**证明**对账通道**已坏（**非 `unknown` 的**失败回执 `ok:false`，或请求后 190s；与吸收 `unknown` 同一 tick 发出的 L1 也算"之前"——保守方向，最多多等一个 coalesce 窗；**第一次 `unknown` 被吸收**：在它之后再发出一次 L1 之前，期限一律不生效——见下
-     无回执）才 `reconnectInstanceConnection`（复用 S2 watchdog 的杠杆与**同一份
-     per-source 记账**：同 tick 去重集合 + 跨 tick 的 60s 账本；no-op 不消耗预算，但计入
-     `noopReconnects` 供 L3 收口）；**local 刻意不排除**（本次缺陷现场就是
-     本地实例）。回执由 `verify` seam 做**权威判定**——官方 `refreshList()` 对拉取
-     失败照常 resolve（2026-12 独立复核：`result.ok===false` 只置 `listState='error'`），
-     所以「promise 解决」不算成功：只有独立 unary 探针确认官方 running 位与权威快照
-     一致才结算 `converged`；探针**正面证伪**（官方说 running 而权威说没在跑）才结算 `stale`（允许升级）；**探针自己失败/超时结算 `unknown`**——它走控制面 HTTP 代理，与被守卫的 WS 事实通道是两条载体，只推进水位、不升级也不清「等回执」计时；但**第一次 `unknown` 被吸收**：在它之后再发出一次 L1（并重新起算期限）之前，`outcomeMissing` 一律不生效——生产常量下等回执期限 190s < coalesce 200s，若不吸收，"探针无法裁决"必然抢在下一次 L1 之前被判成"对账通道已坏"，一次 502/代理重启就会制造假 L2 并吃掉该 running 时段唯一重连预算（2026-12 独立复核的时间线仿真；只从 unknown 时刻顺延对**快 unknown** 仍然不够——期限还是在下一次 L1 之前到点，二轮复核的 L1#1@120s→L2@330s→L1#2@360s 时间线）。第二次 unknown 不再吸收，持续无结论由那次 L1 的期限收口（有界）。
-  ③ **L3 可见提示**：有未收敛证据且距梯子到顶（`ladderAnchorAt`）≥ 120s ⇒ 顶部非模态
-     横幅（重连 / 重载应用页面 / 忽略），**绝不自动重载**（与 mobile `session-stall.ts`
-     同纪律）；横幅只在有证据时出现，通道健康时不会因探测间隙反复亮灭。
+  `finally` 必写 `turn/end`。**§D4 的 liveness 触发器覆盖不到这一类**（它们全部要求
+  OS 级事件：唤醒/网络/可见性；窗口可见且机器未睡时一个都不响）。
+  修复 = **单一权威链**：决策半是纯包 reducer `packages/dsh-stream-state/src/session-authority.ts`，
+  调度半是同一个 `ladder.ts` 引擎的两个实例（producer 的 probe ladder + App 的 escalation
+  ladder），执行端是 `dsh-chamber-client-ui-sidebar/src/shared/session-fact-reconcile.ts`
+  （只做 I/O），通知面是 `packages/renderer/src/notification-projection.ts`（单入口）。
+  旧 `renderer/src/session-liveness.ts` planner、190s 回执链（官方 refresh 相位 +
+  有界重试 + verdict 分支）与 `authority-decision.ts` 已删除。
+  **① probe（读，不是升级）**：某来源持续 running ≥ 60s ⇒ probe ladder 派遣一次独立
+     unary `session.list`（控制面 HTTP 代理，与被守卫的 WS 事实通道是**两条载体**）；
+     节拍 = 200s（= 滚动窗口 10min / 配额 3：均匀铺开，避免 60s 节拍在 120/180/240s
+     爆发用完窗口后失明 8 分钟）；门槛 60s 只影响「丢帧 → 纠正」的最快可见窗口。
+  **①b tier-3 写回（彻底修复；只写 false）**：独立读**正面证伪**（官方说 running、权威说
+     没在跑）且**两次独立读数一致（N=2）**才写；目标 = 已确认证伪 ∩ 此刻 store 仍
+     claiming running（幂等、最小写面）。写进官方 store 自己的公开写路径
+     （`ClientSessions.handleSessionStatus(id, false)`；`ISessions` 契约只暴露
+     `refresh()`，故此面属**上游公开但非契约**的方法）——一次调用同时改侧栏摘要、
+     物化 Session 的 `running`（聊天面「深度求索中」）与子代理 activity。写后**自校验**
+     （等一个宏任务让 store 投影 flush，迟一拍再等一拍；全部掉落才算成功）；写回缺失/
+     失败/自校验不过 ⇒ 记 stuck 证据，允许升级。纪律：**只写 false、从不写 true**；
+     **无 TTL、无 latch**——后续任何成功的官方基线与状态事件都能覆盖写入（host 永远赢）；
+     方法面缺失 WARN 一次后降级升级阶梯。**为什么需要它**：官方 `refreshList()` 对拉取
+     失败照常 resolve，且 store 快照**不暴露** `state`/`error`（`projectList()` 只投影
+     ids/byId/current/phase/…），因此「refresh 成功而 running 未回灌」与「官方
+     `session.list` 单飞悬挂」在契约内没有任何纠正路径——写回是仓内唯一不依赖上游修改的
+     确定性修复动作（2026-12 用户裁决：**不新增 fork、不改上游**）。
+     **缺席作证**：unary 全量列表缺席 + 两次独立读一致 ⇒ 判 stale（此前「未覆盖一律
+     unknown」的保守口径被裁决替换），残余是宿主返回**不完整列表**（无完整性信号），
+     由 N=2 与 host-wins 自愈兜底。
+  **② reconnect（App 升级 ladder，要求 stuck 证据）**：probe 读失败/写回失败产生
+     `stuckSince`；只有带 stuck 证据、且症状年龄到 190s 才派发一次
+     `reconnectInstanceConnection`（复用 S2 watchdog 的杠杆与**同一份 per-source 记账**：
+     同 tick 去重集合 + 跨 tick 的 60s 账本；账单在 App，producer 用 `escalationBlocked`
+     避免被丢弃的派遣吃掉 ladder 配额）；**local 刻意不排除**（本次缺陷现场就是本地实例）。
+  **③ notice（App 升级 ladder）**：症状 310s（= reconnect 190s + 原 120s 宽限）、仍有 stuck
+     证据 ⇒ 顶部非模态横幅（重连 / 重载应用页面 / 忽略），**绝不自动重载**（与 mobile
+     `session-stall.ts` 同纪律）；`progressStamp` 前进（一次健康裁决）即撤销。
   **核心取舍**：升级的唯一依据是「拿不到权威结论」，不是「沉默很久」——长工具/长推理
   的合法静默与真卡死在 App 层不可区分，误升级（每次 reconnect 重放全部会话 baseline）
-  会引入比原缺陷更糟的风暴；L1 默认只是读（官方 refresh + 本地判定），写回只在 N=2 权威证伪后发生，因此可以廉价重复。实测依据：活跃 turn 期间宿主
-  durable 进展 5–21s/次（median 11s，161s 13 次），而合法静默可达 75s（TTFT）到数分钟。
+  会引入比原缺陷更糟的风暴；probe 只是读（+ 可能的写回），因此可以按配额廉价重复。
+  实测依据：活跃 turn 期间宿主 durable 进展 5–21s/次（median 11s，161s 13 次），
+  而合法静默可达 75s（TTFT）到数分钟。
   **被否替代（Rejected alternatives，2026-12）**：
    - **显示层证伪覆盖（latch + TTL）**（2026-12 第一版方案，已否）：在 App 渲染层把被证伪的
      `running` 位强制成 false 并设 TTL。否因：① 引入**第二份权威**（渲染层与 store 两份事实），
@@ -388,6 +377,12 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
      （把永久卡死换成周期性假「运行中」）；③ 下一次 producer push 会把渲染层修正整块写回原地；
      ④ 只治侧栏，聊天面与订阅同一 `running` 位的完成边沿/子代理计数照旧。改为**写进 store
      本身**（①b tier-3）：一次修复覆盖全部消费面，且无 TTL、无 latch。
+   - **保留官方 refresh 作为 probe 的第一相位（或保留 receipt 计数/相位预算）**（2026-12
+     否决）：vendor `refreshList()` 对失败**照常 resolve**（只置 `listState='error'`），
+     `ISessions.refresh()` 又把结果抹平成 `Promise<void>` ⇒ 对账侧观察不到「这次 refresh
+     其实没应用」；相位预算/重试/verdict 分支只增加了第二层不透明兜底，而独立 unary 读本来
+     就是唯一可判定「官方位是否真的回灌」的证据面。删除后 probe 只剩一条载体、一次读
+     （N=2 时两次），语义与成本都可单测。
    - **新增 `dsh-api-session-controller` fork**（2026-12 用户裁决：不做）：根治「事件源丢失」
      要改 host 半的 emit 与 client 半的订阅（上游 `packages/api/session-controller`），而该包
      **仓内没有 fork**（现有三个 fork 是 connection / client-web / api-gateway-client），新增
@@ -398,58 +393,50 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
      seed 宿主包本可监听 `agent/status` 并周期性再断言——不改上游即可让**所有**客户端（含
      官方 UI）免于丢帧。暂缓原因：只覆盖 chamber 能 seed 的实例、需重启生效，且与 design 13
      的保护集合/注入流程耦合；登记为后续根治选项，不阻塞本次仓内修复。
-   - **把 L1 放进 mobile 的 `session-stall.ts`**：该插件只有 gateway/mobile flavor 加载，
-     desktop 与 Swift 原生壳不挂它 ⇒ 缺陷现场打不到；且它自带一个未校准的 45s 阈值，
-     会造出第二套「停滞」概念。
-   - **只做 L3 横幅、不做 L1 对账**：`running` 位不会收敛，用户唯一出路是整页重载
+   - **把运行位权威下放进各宿主自己的停滞阶梯**：mobile/desktop/Swift 各有自己的停滞面；
+     权威只允许一个所有者（纯包 reducer + producer 执行端），各宿主的阶梯只调度自己的面
+     （mobile 的 DOM 停滞、open-in 的对话流健康），不复制 running 位判定。
+   - **只做 ③ 横幅、不做 probe**：`running` 位不会收敛，用户唯一出路是整页重载
      （丢页面状态），而真正的收敛动作其实只是（最多）两次独立 `session.list`（N=2 确认后可能写回一次）。
    - **用 disconnected/close 事件驱动升级**：本次缺陷本体是「carrier 静态半死、socket
      不 close」，事件根本不发，按事件升级只覆盖已经自愈的那一半场景。
    - **决策机放进 client-plugin 直接盯官方 running 位**：插件拿不到 App 的 reconnect
-     杠杆与 registry 代际，且每个挂载页各持一份预算（多 ctx 放大成 N 次对账）。
+     杠杆与 registry 代际，且每个挂载页各持一份预算（多 ctx 放大成 N 次对账）；现形态把
+     决策放纯包、执行放挂载 producer、升级放 App。
    - **改 vendor 在宿主侧加日志/心跳**：pin 升级即丢，违反「不改上游」边界；诊断价值
      已由 P1 的两处落盘（02 §3.8 与 25 §3.1）拿到。
    - **把 local 也纳入既有 S2 重连臂**（最省的想法）：S2 的判据是「mounted 快照静默」
      ——本缺陷里工作区/会话列表的推送照常活着（丢的只是 status 事件）⇒ 源看起来「新鲜」，
-     该臂永远不响；守卫必须按**运行位本身**的收敛证据判定，不能复用快照静默。
-   - **改用 App 每 30s 兜底 unary pull 的权威 running 行直接对表**（STATUS ⑪ 记录的
-     下轮首选）：可删掉 reconcile/verify/回执整条链（≈450–500 行），但硬证据三条：
-     ① 挂载源的 `aggregates` 会被 producer push **整块覆盖**，而 push 与 runtimeFacts
-     同源于官方 store ⇒ 两份事实不独立；② push 会作废在途 pull；③ 该 pull 只在源
-     stale 时发生，推流存活的源根本不拉。要覆盖「丢一帧而流仍活」必须另加旁路采样面，
-     收益不足以承担新的 push/pull race，故选保留现形态。
-   - **把 `unknown` 当失败立即升级**：辅助探针走控制面 HTTP 代理、被守卫的是 WS 事实
-     通道，一次 502/代理重启就会拆流并把全部 baseline 重放一遍；改为 unknown 只推进
-     水位、并忽略期限直到下一次 L1 发出（第一次 unknown 被吸收），持续无结论由那次
-     L1 的期限收口（不吸收则期限必然抢在下一次 L1 之前到点，等于"立即升级"）。
-   - **refresh 失败/超时保持原判（直接结算 `stale`）**（2026-12 四轮复核实际否决的方案）：
-     这正是本轮修掉的形态——官方 `session.list` 单飞悬挂下写回不可达（而文档声称可达），
-     而 L2 本就清不掉悬挂的 in-flight（STATUS ③）；权威相位走另一条载体，能在该形态下
-     把侧栏与聊天面的事实一起纠正。代价：官方 refresh 持续损坏但权威相位仍收敛时不再
-     自动升 L2——由有界告警（reconcile 的 authority phase 一行）、保留视图 90s 界限与
-     对话流健康臂各自收口。
-   - **refresh/verify 共用一个尝试计时器（或沿用 90s 总预算）**：慢宿主上「refresh 用了
-     十几秒 + 探针还没回」会被判成「拿不到权威结论」⇒ 假 L2；改为两相位各自计时
-     （20s / 65s），等回执期限随之抬到 190s，并由接线测试锁住五条不变量
-     （最坏回执 < 等回执期限、verify 预算 ≥ **两次**探针自身 30s 上限（N=2 串行）、
-     生产构造点不得 override、保留视图的 90s 界限接线、两条恢复路径都「记水位 + 撤标记」）。
+     该臂永远不响；权威必须按**运行位本身的收敛证据**判定，不能复用快照静默。
+   - **改用 App 每 30s 兜底 unary pull 的权威 running 行直接对表**：挂载源的 `aggregates`
+     会被 producer push **整块覆盖**，而 push 与 runtimeFacts 同源于官方 store ⇒ 两份事实
+     不独立；push 会作废在途 pull；该 pull 只在源 stale 时发生，推流存活的源根本不拉。
+     要覆盖「丢一帧而流仍活」必须另加旁路采样面——现形态的 probe 就是那条旁路。
+   - **把一次读失败当成失败事实立即升级/写回**：读走控制面 HTTP 代理、被守卫的是 WS 事实
+     通道，一次 502/代理重启就会拆流并把全部 baseline 重放一遍；读失败只记 `stuckSince`，
+     reconnect 仍要等 190s 的症状年龄，写回更要 N=2 一致。
   **未闭合**：**权威清单与逐条失效判据见 `docs/progress/STATUS.md`「会话运行位卡死」
-  条（编号以 STATUS 为准）**；与本设计直接相关的形态摘要：① transcript 与运行位可能分别
-  收敛（STATUS ②，需上游逐流交付统计/游标）；② 官方 `session.list` 单飞悬挂时 L2 无效、
-  store 自身的 `listState` 永久 loading；①b 的权威相位在 refresh 失败/超时（含单飞悬挂）下仍
-  可达，因此能纠正**事实**（侧栏/聊天面），但 store 级悬挂本身仍只能靠「重新加载」收口
-  （STATUS ③）；③ 子代理会话不在事实通道（STATUS ④）；
+  条（编号以 STATUS 为准）**；与本设计直接相关的形态摘要：
+  ① transcript 与运行位可能分别收敛（STATUS ②，需上游逐流交付统计/游标）；
+  ② 官方 `session.list` 单飞悬挂时 store 自身的 `listState` 永久 loading，只能靠
+  「重新加载」收口——但侧栏/聊天面的**事实**仍由写回纠正（STATUS ③）；
+  ③ 子代理会话不在事实通道（STATUS ④）；
   ④ 隐藏期不 tick，恢复补偿 tick 按**累计** running 时长判定（STATUS ⑤）；
-  ⑤ 守卫自身的三级动作（含写回）目前只落 renderer console（STATUS ⑩，真机取证仍缺一条
-  落盘链）；⑥ `handleSessionStatus` 是非契约方法面，pin 升级移除/改名即降级为「WARN 一次 +
-  升级阶梯」——运行时能力守卫 + 接线锁（`packages/renderer/test/wiring/session-liveness-wiring.test.ts`、
-  `test/session-state/session-fact-reconcile.test.ts`（含原 wiring 的生产接线锁））已就位，两个上游诉求见
-  `docs/progress/todo/upstream-proposals.md` §4；⑦ 60s 门槛 / N=2 确认 / 写回链的端到端时延
-  与打包态、远端（ssh）实机未校准（STATUS ⑥）；⑧ 未挂载/已回收来源没有 producer ⇒ 不在守卫
-  输入内（其事实由 30s unary 兜底直供；读取失败导致的冻结保留仍是 STATUS 的未闭合门）。
-  另：L1 对账把卡住的 running 位压回 false 时，官方完成通知/完成蓝点的边沿照常触发
-  （`syncCompletedNotifications`），用户能看到这一回合确实结束了——这是修复的副产品，
-  不需要额外机制。
+  ⑤ 权威动作落有界 ring + renderer console，并写入机内 Local Storage 持久环
+  （`dsh-chamber.authority-log.v1`，跨重载可回读）；控制面集中日志 verb 未做（可选增强，STATUS ⑩）；
+  ⑥ `handleSessionStatus` 是非契约方法面，pin 升级移除/改名即降级为「WARN 一次 + 升级
+     阶梯」——能力守卫 + 接线锁在 `packages/renderer/test/wiring/session-authority-wiring.test.ts`
+     与 `packages/dsh-chamber-client-ui-sidebar/test/session-state/session-fact-reconcile.test.ts`，
+     两个上游诉求见 `docs/progress/todo/upstream-proposals.md` §4；
+  ⑦ probe/reconnect/notice 阈值（60s / 190s / 310s）与 ssh 远端写回时延未在真机校准——
+     程序见 `docs/checklists/session-authority-calibration.md`；
+  ⑧ 未挂载/已回收来源没有 producer ⇒ 不在权威输入内（其事实由 30s unary 兜底直供；
+     读取失败导致的冻结保留仍是 STATUS 的未闭合门）；
+  ⑨ 宿主返回**不完整列表**是唯一无法在仓内区分的残余（无完整性信号），由 N=2 与
+     host-wins 自愈兜底。
+  另：写回把卡住的 running 位压回 false 时，官方 store 的 `running` 边沿照常触发
+  完成蓝点/通知——通知由 `notification-projection.ts` 单入口裁决（有可判 facts 的来源
+  完成归 facts、其余归壳边沿），用户能看到这一回合确实结束了。
 - **控制面日志落盘（2026-12，取证缺口修复）**：动机在本节——控制面自身日志
   （含 WS splice 的 `WebSocket stream <id> closed (<cause>, Nms)` 与
   `heartbeat lost …`）此前只交给注入的 logger（默认 console），而打包态从
@@ -603,8 +590,8 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
 |---|---|
 | `packages/desktop/main.ts` | 关窗分支（hide vs quit，**托盘可用门控**）；隐藏态节流 = Chromium 默认（2026-12 修订，见 D1）；`powerMonitor.on('resume')` → push；`powerSaveBlocker`；退出确认（仅本地实例实际 live process，远程隧道/连接不影响关闭；**含更新安装豁免 + 单飞**）；will-quit single-flight 并行等待 plugin-sync/本地插件子进程、transport、control-plane 与 runtime 工作；`chamber-settings.json` store + `dsh-chamber:settings-get/set` IPC + push |
 | `packages/desktop/preload.cts` | `settings` 面（get/set/onChanged，覆盖 chamber 级全部设置键）+ `systemResume` 订阅；`DshChamberBridge` 扩展 |
-| `packages/renderer` | App 层订阅 system-resume → 分发实例重连 + transport 即时重探；**D4 运行位活性守卫的决策与呈现**：`src/session-liveness.ts`（纯决策，含阈值/每会话计时/预算）+ App 内接线（staleness watchdog 内规划 → L1 广播 / L2 共享账本重连 / L3 横幅 + 忽略集合） |
-| `packages/dsh-chamber-client-ui-sidebar` | **D4 的执行半**：`shared/session-fact-reconcile.ts`（单飞 + 有界重试 + 相位超时 + 三值权威判定回执）；producer 订阅既有刷新通道并驱动它，回执经 `InstanceRuntimeReport.sessionFactReconcile` 回流（05 §3） |
+| `packages/renderer` | App 层订阅 system-resume → 分发实例重连 + transport 即时重探；**D4 升级 ladder 的宿主与呈现**：30s tick 请求 producer 对账；`planLadder` + `sessionAuthorityEscalationLadder`（阈值读 `tables.json` 的 `ladders.authority`）决定 reconnect / notice；共享 per-source 重连账本；notice 横幅 + 忽略集合 |
+| `packages/dsh-chamber-client-ui-sidebar` | **D4 的执行端**：`shared/session-fact-reconcile.ts`（唯一 I/O：官方 store 读、独立 unary 读、tier-3 写回、probe ladder 单飞、有界动作 ring）；producer 订阅 App 的 tick 通道并驱动它，快照经 `InstanceRuntimeReport.sessionAuthority` 回流（05 §3） |
 | `packages/dsh-chamber-client-ui-open-in` | **D4 对话流健康臂的座席宿主**（2026-12）：`src/client/session-stream-health.ts`（纯决策）+ `session-stream-health-probe.ts`（stage 迁移、具象 `Session.resync()` 与面形状，全部 fail-closed）+ `SessionStreamHealthChip.tsx`、`session-stream-health-seat.ts`（注册进 `conversation.session.header.actions`，list/session 作用域）；2026-09 起含用户触发的「重建对话通道」控制 |
 | settings-bridge 壳 | 「通用」视图（见设计 15：固定入口 `__general` 平铺） |
 | 测试 | `test:desktop`（关窗行为/退出确认/设置 store 单测）、`typecheck`、`build:renderer`（§6 验证门） |
@@ -633,9 +620,12 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
 由「关窗到托盘」覆盖）；会话级托盘（P2 纪律）。
 
 验证门：`pnpm run test:desktop`、`pnpm run typecheck`、`pnpm run build:renderer`；
-**D4 附加门**：`pnpm run test:renderer-shell`（`test/lifecycle/session-liveness.test.ts`（行为契约）、
-`test/wiring/session-liveness-wiring.test.ts`（跨模块预算不变量 + 保留视图接线锁））、`test:sidebar`
-（`test/session-state/session-fact-reconcile.test.ts`（含写回 seam / 权威相位 / 判定纯函数与生产接线锁）、
+**D4 附加门**：`pnpm run test:stream-state`（`test/authority/session-authority.test.ts` 运行位真相语料、
+`test/ladder/ladder-engine.test.ts` 引擎与工厂）、`pnpm run test:renderer-shell`
+（`test/wiring/session-authority-wiring.test.ts` 架构守卫：无第二 planner / 无第二通知入口、
+`test/aggregate/notification-projection.test.ts` 单通知投影）、`test:sidebar`
+（`test/session-state/session-fact-reconcile.test.ts`（执行端：probe 节流 / N=2 / 写回 / 恢复）、
+`test/session-state/session-authority-escalation.test.ts`（真实执行端 × App 升级 ladder 的端到端时序）、
 `test/session-state/vendor-session-fact-contract.test.ts`（读 vendor 源的六条语义 lockstep；缺树默认失败）、
 `test/session-rows/derive.test.ts`（含原 completed-dots-signatures / workspace-membership 的回执投影边界））、`test:control-plane`
 （`test/log-file.test.ts`、`test/host-lifecycle/lifecycle.test.ts` 的落盘/reopen 端到端、
@@ -648,9 +638,10 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
 确认**）→ 唤醒秒级重连 → 无窗口常驻期间 resume 补发 → **托盘缺失回退**
 （dev 模式关窗即退、窗口不消失）→ **对话流健康臂可见性**（对同一来源反复拆 mux socket，制造
 `openState='error'`：不整页刷新即自动恢复，恢复后聊天面继续渲染；无第二个会话时只出现
-「重新加载」提示；`loading` 停滞满 20s 才出提示）→ **运行位守卫可见性**（故意让某来源的 running 位不收敛：
-不自动重载；横幅出现后「重新连接」生效、「忽略」在来源恢复前不再弹、「重新加载」才丢页面态；
-判据回 STATUS「会话运行位卡死」①）。
+「重新加载」提示；`loading` 停滞满 20s 才出提示）→ **单一权威可见性**（按
+`docs/checklists/session-authority-calibration.md` 注入丢帧/载波半死：位在 probe 预算内掉落、
+完成通知恰好一条；横幅出现后「重新连接」生效、「忽略」在来源恢复前不再弹、「重新加载」才丢页面态；
+判据回 STATUS「会话运行位卡死」）。
 
 ## 7. 关联
 

@@ -3,6 +3,12 @@ export interface SessionFacts {
   running?: boolean
   completed?: boolean
   pending?: 'approval' | 'plan-review' | 'question'
+  /**
+   * 运行中子代理计数（06 §4.5；>0 稀疏）。边沿检测本身忽略它；
+   * notification-projection 用它做「父回合结束但子代理仍在跑」的完成压制
+   * （与官方 Rows 的 pending > runningSubagents > completed 呈现优先级一致）。
+   */
+  runningSubagents?: number
 }
 export type NotificationKind = 'complete' | 'ask' | 'request'
 export interface NotificationEdge { sessionId: string; kind: NotificationKind }
