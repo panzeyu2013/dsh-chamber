@@ -56,7 +56,9 @@ final class JSLiteralEscapingTests: XCTestCase {
             let literal = AnyCodable.string(value).jsonLiteralText
             XCTAssertTrue(literal.hasPrefix("\""), "字面量必须以引号开始：\(literal)")
             XCTAssertTrue(literal.hasSuffix("\""), "字面量必须以引号结束：\(literal)")
-            let decoded = try JSONSerialization.jsonObject(with: Data(literal.utf8))
+            // A top-level JSON string is a fragment: Foundation only parses it
+            // with the explicit opt-in (the first matrix entry is '').
+            let decoded = try JSONSerialization.jsonObject(with: Data(literal.utf8), options: [.fragmentsAllowed])
             XCTAssertEqual(decoded as? String, value,
                            "字面量回解不等于原值：\(literal)")
             for scalar in literal.unicodeScalars {
