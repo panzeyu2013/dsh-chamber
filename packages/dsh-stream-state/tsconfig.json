@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    // Pure, dependency-free package: src is the value surface, test drives it with
+    // node:test plus node:assert against the sources directly (strip-types, same
+    // mode as scripts/test.mjs). No paths, no project references - if this program
+    // ever needs one, the package has stopped being pure (see scripts/test.mjs head).
+    "rootDir": "."
+  },
+  "include": [
+    "src",
+    "test"
+  ]
+}

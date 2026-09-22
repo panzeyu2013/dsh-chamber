@@ -50,6 +50,9 @@
     "verify:test-wiring": "node scripts/gates/verify-test-wiring.mjs",
     "verify:shim-payload": "node scripts/gates/verify-shim-payload-shape.mjs",
     "verify:md-links": "node scripts/gates/verify-md-links.mjs",
+    "verify:stream-state-equivalence": "node scripts/refactor/equivalence.mjs",
+    "verify:stream-state-swift-parity": "node scripts/gates/verify-stream-state-swift-parity.mjs",
+    "verify:ladder-table-parity": "node scripts/gates/verify-ladder-table-parity.mjs",
     "verify:registry": "node scripts/upstream/verify-registry.mjs",
     "verify:anchors": "node scripts/upstream/check-anchors.mjs",
     "check:static": "node scripts/gates/run-checks.mjs static",
@@ -81,6 +84,7 @@
     "typecheck:host-open-in": "pnpm --filter @dsh-chamber/dsh-chamber-seed-open-in run typecheck",
     "typecheck:open-in": "tsc -p packages/dsh-chamber-client-ui-open-in/tsconfig.json --noEmit",
     "test:api-gateway": "pnpm --filter @deepseek-ai/dsh-api-gateway run test",
+    "test:stream-state": "pnpm --filter @dsh-chamber/dsh-stream-state run test",
     "test:control-plane": "pnpm --filter @dsh-chamber/control-plane run test",
     "typecheck:gateway": "tsc -p packages/gateway/tsconfig.json --noEmit",
     "test:desktop": "pnpm --filter @dsh-chamber/desktop run test",
@@ -106,7 +110,8 @@
     "test:gateway": "pnpm --filter @dsh-chamber/gateway run test",
     "test:win32": "pnpm --filter @dsh-chamber/dsh-runtime run test:win32 && pnpm --filter @dsh-chamber/control-plane run test:win32 && pnpm --filter @dsh-chamber/desktop run test:win32 && pnpm --filter @dsh-chamber/renderer run test:win32 && pnpm --filter @dsh-chamber/dsh-chamber-client-ui-sidebar run test:win32",
     "release:preflight": "node scripts/release/release-preflight.mjs",
-    "typecheck:api-gateway": "node scripts/dev/typecheck-api-gateway.mjs"
+    "typecheck:api-gateway": "node scripts/dev/typecheck-api-gateway.mjs",
+    "typecheck:stream-state": "tsc -p packages/dsh-stream-state/tsconfig.json --noEmit"
   },
   "devDependencies": {
     "@types/node": "^26.2.0",

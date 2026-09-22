@@ -14,12 +14,19 @@ import {
   CHAT_FLOW_QUERY, CHAT_ROW_QUERY, CONVERSATION_PHASE_QUERY,
   SESSION_HEADER_QUERY, STALL_NOTICE_ACTION_CLASS, STALL_NOTICE_CLASS,
   STALL_NOTICE_CSS, STALL_NOTICE_DISMISS_CLASS, STALL_NOTICE_GAP_PX, STALL_NOTICE_MESSAGE_CLASS,
-  STALL_NOTICE_MIN_VISIBLE_PX, STALL_POLL_MS, STALL_STYLE_TAG, STALL_THRESHOLD_MS,
-  STALL_FAILED_MS, STALL_PHASES, STALL_RESYNC_COOLDOWN_MS, STALL_RESYNC_MAX, STALL_RESYNC_WINDOW_MS,
+  STALL_NOTICE_MIN_VISIBLE_PX, STALL_STYLE_TAG,
+  STALL_PHASES,
   decideStallNotice, installSessionStallNotice, isRendered, isStallPhase, isStallShape,
   markStallResync, noticeTopFor, probeStall, sessionStallFace, stallMessageKey, stallResyncAvailable,
 } from '../../src/client/session-stall.ts'
 import type { RenderedNodeFace, StallNodeFace } from '../../src/client/session-stall.ts'
+//  the six ladder thresholds now belong to the shared table, so the test reads them
+// from there. Keeping the same local names means every behavioural assertion below is
+// unchanged - only the values' owner moved.
+import { LADDER_TABLES } from '@dsh-chamber/dsh-stream-state'
+
+// Named `mobileTable` because this file has a local `mobile(...)` helper further down.
+const mobileTable = LADDER_TABLES.mobile
 import {
   createSessionStreamHealthState, planSessionStreamHealth, SESSION_STREAM_HEALTH_DEFAULTS,
 } from '../../../dsh-chamber-client-ui-open-in/src/client/session-stream-health.ts'
@@ -28,7 +35,7 @@ import { FakeNode, attach } from '../support/dom-double.ts'
 const SOURCE_URL = new URL('../../src/client/session-stall.ts', import.meta.url)
 
 /**
- * The legacy decision projection (clock + notice) of the pre-2026-09-21
+ * The legacy decision projection (clock + notice) of the pre-
  * assertions: the automatic arm's `resync`/`resyncStamps` fields are asserted by
  * their own tests below, so these keep pinning exactly what they always pinned.
  */
@@ -135,9 +142,9 @@ function shapeOf(tree: ConversationTree): boolean {
 // ---------------------------------------------------------------------------
 
 test('the stall window is the documented 45s and the poll stays in the low-frequency band', () => {
-  assert.equal(STALL_THRESHOLD_MS, 45_000)
-  assert.ok(STALL_POLL_MS >= 2_000 && STALL_POLL_MS <= 5_000,
-    `poll cadence ${STALL_POLL_MS}ms must stay in the documented 2-5s band`)
+  assert.equal(mobileTable.thresholdMs, 45_000)
+  assert.ok(mobileTable.pollMs >= 2_000 && mobileTable.pollMs <= 5_000,
+    `poll cadence ${mobileTable.pollMs}ms must stay in the documented 2-5s band`)
 })
 
 test('every anchor is an attribute selector — no hashed class, no copy', () => {
@@ -313,10 +320,10 @@ test('the clock seeds at the first sighting and fires exactly at the threshold',
   const first = decide({ shape: true, pageVisible: true, since: 0, now: 1_000, dismissed: false })
   assert.deepEqual(first, { since: 1_000, show: false }, 'the clock starts, the notice does not')
   assert.deepEqual(
-    decide({ shape: true, pageVisible: true, since: first.since, now: 1_000 + STALL_THRESHOLD_MS - 1, dismissed: false }),
+    decide({ shape: true, pageVisible: true, since: first.since, now: 1_000 + mobileTable.thresholdMs - 1, dismissed: false }),
     { since: 1_000, show: false }, 'one millisecond short is not a stall')
   assert.deepEqual(
-    decide({ shape: true, pageVisible: true, since: first.since, now: 1_000 + STALL_THRESHOLD_MS, dismissed: false }),
+    decide({ shape: true, pageVisible: true, since: first.since, now: 1_000 + mobileTable.thresholdMs, dismissed: false }),
     { since: 1_000, show: true }, 'the threshold is inclusive')
 })
 
@@ -329,7 +336,7 @@ test('the stall must be CONTINUOUS: any break zeroes the clock and restarts the 
   const broken = decide({ shape: true, pageVisible: true, since: 0, now: 10_000, dismissed: false })
   const reset = decide({ shape: false, pageVisible: true, since: broken.since, now: 40_000, dismissed: false })
   const again = decide({ shape: true, pageVisible: true, since: reset.since, now: 40_000, dismissed: false })
-  assert.deepEqual(decide({ shape: true, pageVisible: true, since: again.since, now: 40_000 + STALL_THRESHOLD_MS - 1, dismissed: false }),
+  assert.deepEqual(decide({ shape: true, pageVisible: true, since: again.since, now: 40_000 + mobileTable.thresholdMs - 1, dismissed: false }),
     { since: 40_000, show: false })
 })
 
@@ -339,7 +346,7 @@ test('a hidden page never counts and discards the accumulated visible time', () 
   assert.deepEqual(decide({ shape: true, pageVisible: true, since: 0, now: 900_000, dismissed: false }),
     { since: 900_000, show: false }, 'coming back starts a fresh visible window')
   assert.deepEqual(
-    decide({ shape: true, pageVisible: true, since: 900_000, now: 900_000 + STALL_THRESHOLD_MS, dismissed: false }),
+    decide({ shape: true, pageVisible: true, since: 900_000, now: 900_000 + mobileTable.thresholdMs, dismissed: false }),
     { since: 900_000, show: true })
 })
 
@@ -478,10 +485,10 @@ test('the installer shows nothing before the threshold, then a role=status notic
     assert.equal(harness.intervals(), 1, 'one low-frequency poll, nothing else')
     assert.equal(harness.notice(), null, 'the install-time seed starts the clock, it does not show')
 
-    harness.at(STALL_THRESHOLD_MS - 1)
+    harness.at(mobileTable.thresholdMs - 1)
     assert.equal(harness.notice(), null, 'one millisecond short is not a stall')
 
-    harness.at(STALL_THRESHOLD_MS)
+    harness.at(mobileTable.thresholdMs)
     const notice = harness.notice()
     assert.ok(notice !== null, 'the stall notice appears exactly at the threshold')
     assert.equal(notice.getAttribute('role'), 'status')
@@ -503,7 +510,7 @@ test('the installer shows nothing before the threshold, then a role=status notic
 
     // A row arrives: the notice goes away and the clock resets.
     if (tree.flow !== null) attach(tree.flow, new FakeNode('div')).setAttribute('data-chat-anchor-key', 'k')
-    harness.at(STALL_THRESHOLD_MS + STALL_POLL_MS)
+    harness.at(mobileTable.thresholdMs + mobileTable.pollMs)
     assert.equal(harness.notice(), null, 'a rendered row disproves the stall')
 
     dispose()
@@ -518,15 +525,15 @@ test('a background round trip keeps an announced notice (and the clock is discar
     const tree = conversation()
     harness.document.body.appendChild(tree.root)
     const dispose = installSessionStallNotice(key => zh[key])
-    harness.at(STALL_THRESHOLD_MS)
+    harness.at(mobileTable.thresholdMs)
     assert.ok(harness.notice() !== null)
 
     harness.visibility('hidden')
-    harness.at(STALL_THRESHOLD_MS + STALL_POLL_MS)
+    harness.at(mobileTable.thresholdMs + mobileTable.pollMs)
     assert.ok(harness.notice() !== null, 'hiding the page does not take the notice away')
 
     harness.visibility('visible')
-    harness.at(STALL_THRESHOLD_MS + 2 * STALL_POLL_MS)
+    harness.at(mobileTable.thresholdMs + 2 * mobileTable.pollMs)
     assert.ok(harness.notice() !== null, 'resuming must not restart the wait for a stall already announced')
     dispose()
   })
@@ -542,9 +549,9 @@ test('a stall that starts while hidden waits for the full visible threshold', ()
     assert.equal(harness.notice(), null, 'background time is not stall time')
     harness.visibility('visible')
     assert.equal(harness.notice(), null, 'coming back starts a fresh visible window')
-    harness.at(600_000 + STALL_THRESHOLD_MS - 1)
+    harness.at(600_000 + mobileTable.thresholdMs - 1)
     assert.equal(harness.notice(), null)
-    harness.at(600_000 + STALL_THRESHOLD_MS)
+    harness.at(600_000 + mobileTable.thresholdMs)
     assert.ok(harness.notice() !== null)
     dispose()
   })
@@ -555,14 +562,14 @@ test('switching sessions resets the clock and the notice (a new conversation roo
     const first = conversation()
     harness.document.body.appendChild(first.root)
     const dispose = installSessionStallNotice(key => zh[key])
-    harness.at(STALL_THRESHOLD_MS)
+    harness.at(mobileTable.thresholdMs)
     assert.ok(harness.notice() !== null)
     first.root.remove()
     const second = conversation()
     harness.document.body.appendChild(second.root)
-    harness.at(STALL_THRESHOLD_MS + STALL_POLL_MS)
+    harness.at(mobileTable.thresholdMs + mobileTable.pollMs)
     assert.equal(harness.notice(), null, 'the new session gets its own window')
-    harness.at(STALL_THRESHOLD_MS + STALL_POLL_MS + STALL_THRESHOLD_MS)
+    harness.at(mobileTable.thresholdMs + mobileTable.pollMs + mobileTable.thresholdMs)
     assert.ok(harness.notice() !== null, 'and its own notice once IT is stalled')
     dispose()
   })
@@ -577,7 +584,7 @@ test('a session switch that keeps the phase node still resets (the header node i
     const tree = conversation()
     harness.document.body.appendChild(tree.root)
     const dispose = installSessionStallNotice(key => zh[key])
-    harness.at(STALL_THRESHOLD_MS)
+    harness.at(mobileTable.thresholdMs)
     assert.ok(harness.notice() !== null)
 
     // Session B: same phase node, a NEW header element under the same outlet.
@@ -588,9 +595,9 @@ test('a session switch that keeps the phase node still resets (the header node i
     oldHeader.remove()
     const replacement = attach(slot, new FakeNode('header'))
     replacement.rect = { bottom: 120 }
-    harness.at(STALL_THRESHOLD_MS + STALL_POLL_MS)
+    harness.at(mobileTable.thresholdMs + mobileTable.pollMs)
     assert.equal(harness.notice(), null, 'the switched-to session gets its own window')
-    harness.at(STALL_THRESHOLD_MS + STALL_POLL_MS + STALL_THRESHOLD_MS)
+    harness.at(mobileTable.thresholdMs + mobileTable.pollMs + mobileTable.thresholdMs)
     assert.ok(harness.notice() !== null, 'and its own notice once IT is stalled')
     dispose()
   })
@@ -601,7 +608,7 @@ test('the dismissal keeps waiting: it hides the notice for THIS stall and re-arm
     const tree = conversation()
     harness.document.body.appendChild(tree.root)
     const dispose = installSessionStallNotice(key => zh[key])
-    harness.at(STALL_THRESHOLD_MS)
+    harness.at(mobileTable.thresholdMs)
     const notice = harness.notice()
     assert.ok(notice !== null)
     assert.equal(harness.reloads(), 0)
@@ -615,32 +622,32 @@ test('the dismissal keeps waiting: it hides the notice for THIS stall and re-arm
     assert.equal(harness.reloads(), 0, 'dismissing never reloads')
 
     // The same continuous stall must NOT bring it back on the next polls.
-    harness.at(STALL_THRESHOLD_MS + STALL_POLL_MS)
-    harness.at(STALL_THRESHOLD_MS + 90 * STALL_POLL_MS)
+    harness.at(mobileTable.thresholdMs + mobileTable.pollMs)
+    harness.at(mobileTable.thresholdMs + 90 * mobileTable.pollMs)
     assert.equal(harness.notice(), null, 'a dismissed stall stays dismissed while it lasts')
 
     // A background round trip ends the episode too (the clock restarts on
     // resume), so the dismissal must not outlive it — otherwise a resumed app
     // onto a still-stalled session would never be told again.
     harness.visibility('hidden')
-    harness.at(STALL_THRESHOLD_MS + 91 * STALL_POLL_MS)
+    harness.at(mobileTable.thresholdMs + 91 * mobileTable.pollMs)
     harness.visibility('visible')
-    const resumedBase = STALL_THRESHOLD_MS + 92 * STALL_POLL_MS
+    const resumedBase = mobileTable.thresholdMs + 92 * mobileTable.pollMs
     harness.at(resumedBase)
     assert.equal(harness.notice(), null, 'the resumed episode still waits its full threshold')
-    harness.at(resumedBase + STALL_THRESHOLD_MS)
+    harness.at(resumedBase + mobileTable.thresholdMs)
     assert.ok(harness.notice() !== null, 'a resumed stall is announced again after a dismissal')
 
     // Progress (a row) ends the stall episode; the next one re-arms.
-    const episodeBreak = resumedBase + STALL_THRESHOLD_MS + STALL_POLL_MS
+    const episodeBreak = resumedBase + mobileTable.thresholdMs + mobileTable.pollMs
     if (tree.flow !== null) attach(tree.flow, new FakeNode('div')).setAttribute('data-chat-anchor-key', 'k')
     harness.at(episodeBreak)
     if (tree.flow !== null) tree.flow.children.pop()
-    const rearmBase = episodeBreak + STALL_POLL_MS
+    const rearmBase = episodeBreak + mobileTable.pollMs
     harness.at(rearmBase)
-    harness.at(rearmBase + STALL_THRESHOLD_MS - 1)
+    harness.at(rearmBase + mobileTable.thresholdMs - 1)
     assert.equal(harness.notice(), null, 'the fresh window still waits its full threshold')
-    harness.at(rearmBase + STALL_THRESHOLD_MS)
+    harness.at(rearmBase + mobileTable.thresholdMs)
     assert.ok(harness.notice() !== null, 'a new stall is announced again after a dismissal')
     dispose()
   })
@@ -656,13 +663,13 @@ test('installations share one watcher and the LAST disposer tears it down', () =
     // Dispose the FIRST holder first: the pre-fix code handed every later
     // install a dead disposer, so releasing the first stopped watching for a
     // context that was still alive. Disposing the second first would pass under
-    // both versions (2026-12 review: the earlier assertion order could not fail
+    // both versions (
     // on the regression it named).
     first()
     assert.equal(harness.intervals(), 1, 'releasing the first reference keeps the watcher alive')
-    harness.at(STALL_THRESHOLD_MS)
+    harness.at(mobileTable.thresholdMs)
     assert.ok(harness.notice() !== null, 'the surviving holder is still watching')
-    harness.at(STALL_THRESHOLD_MS + STALL_POLL_MS)
+    harness.at(mobileTable.thresholdMs + mobileTable.pollMs)
     assert.ok(harness.notice() !== null)
     // Idempotent: a double release must not consume the other holder's count.
     first()
@@ -684,11 +691,11 @@ test('the notice copy follows the locale binding on the next poll', () => {
     harness.document.body.appendChild(tree.root)
     let language: 'zh' | 'en' = 'zh'
     const dispose = installSessionStallNotice(key => (language === 'zh' ? zh : en)[key])
-    harness.at(STALL_THRESHOLD_MS)
+    harness.at(mobileTable.thresholdMs)
     const notice = harness.notice()
     assert.equal(notice?.children[0]?.textContent, zh['dsh-chamber.mobile.stall.message'])
     language = 'en'
-    harness.at(STALL_THRESHOLD_MS + STALL_POLL_MS)
+    harness.at(mobileTable.thresholdMs + mobileTable.pollMs)
     assert.equal(harness.notice()?.children[0]?.textContent, en['dsh-chamber.mobile.stall.message'])
     assert.equal(harness.notice()?.children[1]?.textContent, en['dsh-chamber.mobile.stall.dismiss'])
     assert.equal(harness.notice()?.children[2]?.textContent, en['dsh-chamber.mobile.stall.action'])
@@ -700,7 +707,7 @@ test('the automatic arm fires only on PROVEN loading-with-no-open, and the ledge
   const parked = { ...base, loading: true, openInFlight: false }
   const first = decideStallNotice(parked)
   assert.equal(first.resync, false, 'the hold must age first, exactly like the notice')
-  const stalledAt = BASE_TIME + STALL_THRESHOLD_MS
+  const stalledAt = BASE_TIME + mobileTable.thresholdMs
   const stalled = decideStallNotice({ ...parked, since: first.since, now: stalledAt })
   assert.equal(stalled.resync, true)
   assert.equal(stalled.show, true, 'the notice still rides along')
@@ -713,28 +720,28 @@ test('the automatic arm fires only on PROVEN loading-with-no-open, and the ledge
   assert.equal(decideStallNotice({ ...base, openInFlight: false, since: first.since, now: stalledAt }).resync, false)
   assert.equal(decideStallNotice({ ...parked, loading: false, since: first.since, now: stalledAt }).resync, false, 'a healthy open session is never rebuilt')
   let stamps = markStallResync(stalled.resyncStamps, stalledAt)
-  assert.equal(stallResyncAvailable(stamps, stalledAt + STALL_RESYNC_COOLDOWN_MS - 1), false)
-  assert.equal(stallResyncAvailable(stamps, stalledAt + STALL_RESYNC_COOLDOWN_MS), true)
+  assert.equal(stallResyncAvailable(stamps, stalledAt + mobileTable.resyncCooldownMs - 1), false)
+  assert.equal(stallResyncAvailable(stamps, stalledAt + mobileTable.resyncCooldownMs), true)
   for (let index = 1; index < 3; index++) {
-    stamps = markStallResync(stamps, stalledAt + index * STALL_RESYNC_COOLDOWN_MS)
+    stamps = markStallResync(stamps, stalledAt + index * mobileTable.resyncCooldownMs)
   }
   assert.equal(stamps.length, 3)
-  assert.equal(stallResyncAvailable(stamps, stalledAt + 3 * STALL_RESYNC_COOLDOWN_MS), false, 'the rolling budget caps it inside the window')
+  assert.equal(stallResyncAvailable(stamps, stalledAt + 3 * mobileTable.resyncCooldownMs), false, 'the rolling budget caps it inside the window')
   const last = stamps.at(-1) as number
-  assert.equal(stallResyncAvailable(stamps, last + STALL_RESYNC_WINDOW_MS), true, 'the window releases the budget')
+  assert.equal(stallResyncAvailable(stamps, last + mobileTable.resyncWindowMs), true, 'the window releases the budget')
   // A backwards clock step (NTP correction, VM restore) settles the ledger instead
   // of parking the automatic arm until the wall clock catches up.
   assert.equal(stallResyncAvailable(stamps, last - 3_600_000), true)
-  const pruned = decideStallNotice({ ...base, now: last + STALL_RESYNC_WINDOW_MS, resyncStamps: stamps, openInFlight: true })
+  const pruned = decideStallNotice({ ...base, now: last + mobileTable.resyncWindowMs, resyncStamps: stamps, openInFlight: true })
   assert.equal(pruned.resyncStamps.length, 0)
 })
 
 test('the notice copy switches to the failure wording after the failure bound', () => {
   assert.equal(stallMessageKey(0), 'dsh-chamber.mobile.stall.message')
-  assert.equal(stallMessageKey(STALL_FAILED_MS - 1), 'dsh-chamber.mobile.stall.message')
-  assert.equal(stallMessageKey(STALL_FAILED_MS), 'dsh-chamber.mobile.stall.messageFailed')
-  assert.equal(typeof zh[stallMessageKey(STALL_FAILED_MS)], 'string')
-  assert.equal(typeof en[stallMessageKey(STALL_FAILED_MS)], 'string')
+  assert.equal(stallMessageKey(mobileTable.failedMs - 1), 'dsh-chamber.mobile.stall.message')
+  assert.equal(stallMessageKey(mobileTable.failedMs), 'dsh-chamber.mobile.stall.messageFailed')
+  assert.equal(typeof zh[stallMessageKey(mobileTable.failedMs)], 'string')
+  assert.equal(typeof en[stallMessageKey(mobileTable.failedMs)], 'string')
 })
 
 test('sessionStallFace is fail-closed on every drifted shape and resolves late services', () => {
@@ -756,7 +763,7 @@ test('sessionStallFace is fail-closed on every drifted shape and resolves late s
   assert.equal(sessionStallFace(undefined), undefined)
   assert.equal(sessionStallFace({}), undefined)
   assert.equal(sessionStallFace({ reflect: {} }), undefined, 'a ctx without reflect.get gets no arm')
-  // The service is resolved PER CALL (2026-09-21 review): an install that happens
+  // The service is resolved PER CALL (): an install that happens
   // before the session controller registers must not disable the arm forever.
   let service: unknown
   const late = sessionStallFace({ reflect: { get: () => service } })
@@ -782,12 +789,12 @@ test('sessionStallFace is fail-closed on every drifted shape and resolves late s
 })
 
 test('the shipped automatic-arm limits are the documented ones', () => {
-  assert.equal(STALL_RESYNC_COOLDOWN_MS, 120_000)
-  assert.equal(STALL_RESYNC_WINDOW_MS, 600_000)
-  assert.equal(STALL_RESYNC_MAX, 3)
+  assert.equal(mobileTable.resyncCooldownMs, 120_000)
+  assert.equal(mobileTable.resyncWindowMs, 600_000)
+  assert.equal(mobileTable.resyncMax, 3)
   // Aligned with the desktop ladder's loadingFailedMs (design 14 §D4); the
   // cross-tier lockstep assertions live below in this file (CROSS-TIER RECOVERY LOCKSTEP).
-  assert.equal(STALL_FAILED_MS, 90_000)
+  assert.equal(mobileTable.failedMs, 90_000)
 })
 
 test('a parked open is rebuilt automatically once, and the copy turns into the failure wording', () => {
@@ -801,26 +808,25 @@ test('a parked open is rebuilt automatically once, and the copy turns into the f
       loading: () => true,
       resync: () => { resyncs += 1 },
     })
-    harness.at(STALL_THRESHOLD_MS - 1)
+    harness.at(mobileTable.thresholdMs - 1)
     assert.equal(resyncs, 0, 'nothing before the threshold')
-    harness.at(STALL_THRESHOLD_MS)
+    harness.at(mobileTable.thresholdMs)
     assert.equal(resyncs, 1, 'the parked open is rebuilt exactly once at the threshold')
     assert.equal(harness.notice()?.children[0]?.textContent, zh['dsh-chamber.mobile.stall.message'])
     // Still stalled inside the cooldown: the ledger holds the automatic arm back.
-    harness.at(STALL_THRESHOLD_MS + STALL_RESYNC_COOLDOWN_MS - 1)
+    harness.at(mobileTable.thresholdMs + mobileTable.resyncCooldownMs - 1)
     assert.equal(resyncs, 1)
-    harness.at(STALL_THRESHOLD_MS + STALL_RESYNC_COOLDOWN_MS)
+    harness.at(mobileTable.thresholdMs + mobileTable.resyncCooldownMs)
     assert.equal(resyncs, 2, 'the automatic lever returns after the cooldown')
     // Past the failure bound the copy says the content is not loaded.
-    harness.at(STALL_THRESHOLD_MS + STALL_FAILED_MS)
+    harness.at(mobileTable.thresholdMs + mobileTable.failedMs)
     assert.equal(harness.notice()?.children[0]?.textContent, zh['dsh-chamber.mobile.stall.messageFailed'])
     dispose()
   })
 })
 
 /**
- * CROSS-TIER RECOVERY LOCKSTEP (restored 2026-09-21 deletion review).
- *
+ * CROSS-TIER RECOVERY LOCKSTEP (restored ).
  * The mobile stall observer and the desktop open-in stream-health ladder
  * implement the SAME recovery contract (design 14 §D4) on two tiers. These
  * assertions import BOTH pure decision modules and pin the shared ledger, the
@@ -836,18 +842,18 @@ function desktopLoadingHold(heldMs: number) {
 }
 
 test('parity: the shared ledger and the failure bound are equal across tiers', () => {
-  assert.equal(STALL_RESYNC_COOLDOWN_MS, SESSION_STREAM_HEALTH_DEFAULTS.healCooldownMs)
-  assert.equal(STALL_RESYNC_WINDOW_MS, SESSION_STREAM_HEALTH_DEFAULTS.healBudgetWindowMs)
-  assert.equal(STALL_RESYNC_MAX, SESSION_STREAM_HEALTH_DEFAULTS.healBudgetMax)
-  assert.equal(STALL_FAILED_MS, SESSION_STREAM_HEALTH_DEFAULTS.loadingFailedMs)
+  assert.equal(mobileTable.resyncCooldownMs, SESSION_STREAM_HEALTH_DEFAULTS.healCooldownMs)
+  assert.equal(mobileTable.resyncWindowMs, SESSION_STREAM_HEALTH_DEFAULTS.healBudgetWindowMs)
+  assert.equal(mobileTable.resyncMax, SESSION_STREAM_HEALTH_DEFAULTS.healBudgetMax)
+  assert.equal(mobileTable.failedMs, SESSION_STREAM_HEALTH_DEFAULTS.loadingFailedMs)
 })
 
 test('parity: the notice threshold is the ONE documented deviation (mobile is DOM-only)', () => {
   assert.equal(SESSION_STREAM_HEALTH_DEFAULTS.loadingStallMs, 20_000)
-  assert.equal(STALL_THRESHOLD_MS, 45_000)
-  assert.ok(STALL_THRESHOLD_MS > SESSION_STREAM_HEALTH_DEFAULTS.loadingStallMs,
+  assert.equal(mobileTable.thresholdMs, 45_000)
+  assert.ok(mobileTable.thresholdMs > SESSION_STREAM_HEALTH_DEFAULTS.loadingStallMs,
     'the mobile tier has no openState channel and must stay conservative')
-  assert.ok(STALL_THRESHOLD_MS < STALL_FAILED_MS, 'the failure wording must not precede the notice')
+  assert.ok(mobileTable.thresholdMs < mobileTable.failedMs, 'the failure wording must not precede the notice')
 })
 
 test('parity: the automatic-rebuild evidence rule agrees on every in-flight value', () => {
@@ -857,7 +863,7 @@ test('parity: the automatic-rebuild evidence rule agrees on every in-flight valu
     PARITY_NOW,
   ).action === 'auto-resync'
   const mobile = (openInFlight: boolean | undefined): boolean => decideStallNotice({
-    shape: true, pageVisible: true, since: PARITY_NOW - STALL_THRESHOLD_MS, now: PARITY_NOW,
+    shape: true, pageVisible: true, since: PARITY_NOW - mobileTable.thresholdMs, now: PARITY_NOW,
     dismissed: false, loading: true, openInFlight, resyncStamps: [],
   }).resync
   for (const openInFlight of [false, true, undefined]) {
@@ -871,11 +877,11 @@ test('parity: the automatic-rebuild evidence rule agrees on every in-flight valu
 
 test('parity: the loading evidence is required on both tiers (the shape alone is not enough)', () => {
   assert.equal(decideStallNotice({
-    shape: true, pageVisible: true, since: PARITY_NOW - STALL_THRESHOLD_MS, now: PARITY_NOW,
+    shape: true, pageVisible: true, since: PARITY_NOW - mobileTable.thresholdMs, now: PARITY_NOW,
     dismissed: false, loading: false, openInFlight: false, resyncStamps: [],
   }).resync, false)
   assert.equal(decideStallNotice({
-    shape: true, pageVisible: true, since: PARITY_NOW - STALL_THRESHOLD_MS, now: PARITY_NOW,
+    shape: true, pageVisible: true, since: PARITY_NOW - mobileTable.thresholdMs, now: PARITY_NOW,
     dismissed: false, openInFlight: false, resyncStamps: [],
   }).resync, false, 'an unreadable loading state fails closed')
   const errorArm = planSessionStreamHealth(

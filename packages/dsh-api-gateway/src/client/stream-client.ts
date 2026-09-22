@@ -1,6 +1,5 @@
 /**
  * Browser owner for the Gateway multiplexed Remote stream socket.
- *
  * ## chamber fork (WP3/M3): chamber copy of the upstream
  * `packages/api/gateway` client half with the per-entry base-path patch. The
  * upstream route is hardcoded to `/api/remote.mux` on the page origin; chamber
@@ -27,11 +26,41 @@ import {
   REMOTE_STREAM_MAINTAIN_MIN_INTERVAL_MS,
   remoteStreamOpeningTimeoutMs,
   REMOTE_STREAM_SILENT_TEARDOWN_MIN_MS,
-  shouldEscalateOpeningStall,
   shouldReplaceSilentSocket,
   streamOpeningKey,
 } from './remote-retry-policy.ts'
+// The opening-stall rule (streak threshold + 60 s cooldown) lives in the shared
+// reducer (@dsh-chamber/dsh-stream-state); the fork-side predicate that used to own it
+// was retired with its constants in .
 import type { StreamForensicsReporter } from './stream-forensics.ts'
+import {
+  CARRIER_ENV,
+  initialCarrierState,
+  reduceCarrier,
+  withDeadline,
+  type CarrierEnv,
+  type CarrierEvent,
+  type RebuildReason,
+  type RecoveryEffect,
+} from '@dsh-chamber/dsh-stream-state'
+
+/** The real clock, injected (the package imports nothing). W2's bound is the only
+ *  timer left on the opening path; its VALUE still comes from the policy module. */
+/** W3's bound must not hold the process open: its handles are unref'd exactly as the
+ *  retired hand-written timer was. */
+const UNREF_SCHEDULER = {
+  setTimeout: (run: () => void, ms: number): unknown => {
+    const handle = setTimeout(run, ms)
+    ;(handle as unknown as { unref?: () => void }).unref?.()
+    return handle
+  },
+  clearTimeout: (handle: unknown): void => { clearTimeout(handle as ReturnType<typeof setTimeout>) },
+}
+
+const DEADLINE_SCHEDULER = {
+  setTimeout: (run: () => void, ms: number): unknown => setTimeout(run, ms),
+  clearTimeout: (handle: unknown): void => { clearTimeout(handle as ReturnType<typeof setTimeout>) },
+}
 
 const INTERNAL_BASE = 'http://dsh.internal'
 
@@ -48,7 +77,7 @@ export class RemoteStreamCarrierError extends Error {
 }
 
 /**
- * chamber patch (2026-09 review): a candidate rejection the MUX itself requested
+ * chamber patch (): a candidate rejection the MUX itself requested
  * (the connection lane asked for a fresh socket). It is not a connect failure, so
  * it must not widen the self-heal interval — otherwise the ~20 s page-side socket
  * cycling this change exists to survive would inflate the mux cadence to the cap
@@ -63,7 +92,7 @@ interface SocketWaiter {
 }
 
 /**
- * Upper bound on the opening-budget ledger (chamber patch, 2026-09-21 review).
+ * Upper bound on the opening-budget ledger (chamber patch, ).
  * One entry per timed-out request, cleared only by close() before this bound.
  */
 const OPENING_BUDGET_KEYS_MAX = 256
@@ -77,12 +106,15 @@ export class RemoteStreamMuxClient {
   private keepAlive: Promise<void> | undefined
   private revision = 0
   private readonly streams = new Map<string, StreamInbox>()
+  /**  episode release handles, so the reducer's `reopenLogicalStream` can reach
+   *  the exact stream it releases without disturbing `streams`' teardown order. */
+  private readonly pendingOpens = new Map<string, (reason: unknown) => void>()
   private readonly waiters = new Set<SocketWaiter>()
   /** chamber patch: consecutive opening-item timeouts per logical stream REQUEST (endpoint + payload digest; see remote-retry-policy.ts). */
   private readonly openingTimeouts = new Map<string, number>()
 
   /**
-   * Request key of every LIVE logical stream (chamber patch, 2026-09-21 review).
+   * Request key of every LIVE logical stream (chamber patch, ).
    * The opening budget is keyed by endpoint+payload, so it survived the stream that
    * earned it: a rebuilt session (auto/manual resync) re-issues the SAME payload and
    * inherited a widening of up to 300 s. This registry is what lets the finally block
@@ -90,10 +122,15 @@ export class RemoteStreamMuxClient {
    * from "a new logical stream is asking for it" (start at the tight base budget).
    */
   private readonly streamOpeningKeys = new Map<string, string>()
-  /** chamber patch (design 14 §D4, 2026-09): frames received on the CURRENT socket — the liveness evidence the silent-socket escalation keys on. Reset whenever the current socket changes. */
+  /** chamber patch (design 14 §D4, ): frames received on the CURRENT socket — the liveness evidence the silent-socket escalation keys on. Reset whenever the current socket changes. */
   private socketFrames = 0
-  /** chamber patch (2026-09-21): when the physical carrier was last rebuilt because an opening item went unanswered (cooldown account for the stall escalation). */
-  private lastOpeningEscalationAt: number | undefined
+  /**  carrier lifecycle, owned by the shared reducer (see requestCarrierRebuild). */
+  private carrierState = initialCarrierState()
+  /** Table values; the package owns them. */
+  private readonly carrierEnv: CarrierEnv = CARRIER_ENV
+  /** Numeric token: a captured object token does not survive generator suspensions. */
+  private decisionCycle: number | undefined
+  private decisionEpoch = 0
   /** chamber patch: when the mux itself last started a connect attempt (self-heal throttle). */
   private lastMaintainAt = 0
   /** chamber patch: current self-heal interval; doubles while attempts keep failing. */
@@ -129,17 +166,72 @@ export class RemoteStreamMuxClient {
   reconnect(): void {
     if (!this.running || this.disposed) return
     this.forensics?.('socket-reconnect', 'reconnect requested by the connection lane')
-    this.replaceSocket(
+    // A lane-commanded reconnect is its own decision cycle: a fresh token means the
+    // guard can never suppress it (its old defect was being superseded by, not
+    // duplicating, another lever).
+    this.requestCarrierRebuild(
       new RemoteStreamReconnectRequest('api gateway: Remote stream reconnect requested'),
       'reconnect requested',
+      'laneReconnect',
+      this.nextDecisionCycle(),
     )
   }
 
+  /** A fresh decision cycle (one replacement budget per deciding operation). */
+  private nextDecisionCycle(): number {
+    this.decisionEpoch += 1
+    return this.decisionEpoch
+  }
+
+  /** Record one carrier event in the shared reducer; its effects are the decision. */
+  private observeCarrier(event: CarrierEvent): readonly RecoveryEffect[] {
+    const reduction = reduceCarrier(this.carrierState, event, this.carrierEnv)
+    this.carrierState = reduction.state
+    return reduction.effects
+  }
+
+  /** The single replacement path. The gate is the shared reducer's; a refusal still
+   *  yields `reopenLogicalStream`. `cycle` = one replacement per decision cycle. */
+  private requestCarrierRebuild(
+    failure: RemoteStreamCarrierError,
+    closeReason: string,
+    reason: RebuildReason,
+    cycle: number,
+    streamId?: string,
+    streak?: number,
+  ): boolean {
+    if (this.decisionCycle === cycle) return false
+    this.decisionCycle = cycle
+    const effects = this.observeCarrier({
+      kind: 'rebuildRequested',
+      at: Date.now(), // the reducer's window is a time window
+      reason,
+      streak,
+      streamId,
+    })
+    const decided = effects.some((effect) => effect.e === 'rebuildCarrier')
+    if (decided) this.replaceSocket(failure, closeReason)
+    // A refusal is paired with `reopenLogicalStream`: no exitless spinner.
+    this.applyRecoveryEffects(effects, failure)
+    return decided
+  }
+
+  /** Execute the reducer's typed effects. Unknown effects are ignored so the package
+   *  can add observability-only effects without breaking older executors. */
+  private applyRecoveryEffects(effects: readonly RecoveryEffect[], failure: unknown): void {
+    for (const effect of effects) {
+      if (effect.e !== 'reopenLogicalStream') continue
+      const fail = this.pendingOpens.get(effect.streamId)
+      if (fail === undefined) continue
+      this.pendingOpens.delete(effect.streamId)
+      fail(failure)
+    }
+  }
+
   /**
-   * chamber patch (design 14 §D4, 2026-09): throw the CURRENT physical socket away
+   * chamber patch (design 14 §D4, ): throw the CURRENT physical socket away
    * and start a fresh attempt at once, failing every logical stream with a carrier
    * error so their retry lanes re-issue on the replacement.
-   *
    * `lost()` owns a socket that announced its own death; this is the same teardown
    * for a socket the fork itself decided is unusable while the page still sees it
    * OPEN. Two callers: the connection lane's `reconnect()` (deliberate restart) and
@@ -183,6 +275,9 @@ export class RemoteStreamMuxClient {
     signal.throwIfAborted()
     const streamId = randomUUID()
     const inbox = new StreamInbox()
+    //  publish this episode's release handle so the reducer's
+    // `reopenLogicalStream` effect can reach the exact stream it is releasing.
+    this.pendingOpens.set(streamId, (reason: unknown) => { inbox.fail(reason) })
     let carrier: WebSocket | undefined
     let opened = false
     let terminal = false
@@ -195,13 +290,12 @@ export class RemoteStreamMuxClient {
     let framesAtSend = 0
     // When that open frame was sent: the teardown escalation's own evidence window.
     let sentAt = 0
-    let opening: ReturnType<typeof setTimeout> | undefined
     const abort = (): void => { inbox.fail(signal.reason) }
     signal.addEventListener('abort', abort, { once: true })
     try {
       const socket = await this.waitForSocket(signal)
       signal.throwIfAborted()
-      // chamber patch (design 14 §D4, 2026-09 ui-chat freeze investigation): a
+      // chamber patch (design 14 §D4, ): a
       // socket that was replaced, or started closing, since `waitForSocket`
       // resolved would DISCARD the open frame silently — RFC 6455 only throws
       // for CONNECTING; CLOSING/CLOSED drops the payload. The guard closes that
@@ -226,17 +320,20 @@ export class RemoteStreamMuxClient {
       // aborting it would settle the retry lane terminally) so the existing paced
       // reopen re-issues the stream, and the page fact/chip report the churn.
       const openingBudgetMs = remoteStreamOpeningTimeoutMs(this.openingTimeouts.get(openingKey) ?? 0)
-      // chamber patch (design 14 §D4, 2026-09): liveness baseline for the escalation
+      // chamber patch (design 14 §D4, ): liveness baseline for the escalation
       // below. `socketFrames` counts frames received on the CURRENT socket, so this
       // subtraction answers exactly "did this socket deliver anything while this
       // attempt's opening item was pending".
       framesAtSend = this.socketFrames
       sentAt = Date.now()
-      opening = setTimeout(() => {
+      const deadlineCycle = this.nextDecisionCycle()
+      //  (W2): the expiry body becomes the primitive's onExpire. It runs at the
+      // same moment the old timer did and returns the sentinel the race reports.
+      const onOpeningExpire = (): 'expired' => {
         timedOut = true
         const streak = (this.openingTimeouts.get(openingKey) ?? 0) + 1
         this.openingTimeouts.set(openingKey, streak)
-        // Bounded (2026-09-21 review): this map held one entry per timed-out request
+        // Bounded (): this map held one entry per timed-out request
         // and was cleared only by close(), so a page that timed out on many sessions
         // grew it without a limit. Oldest-first eviction is enough — an evicted key
         // merely starts its next attempt at the tight base budget.
@@ -265,29 +362,48 @@ export class RemoteStreamMuxClient {
         if (socket === this.socket && socket.readyState === WebSocket.OPEN) {
           if (shouldReplaceSilentSocket(this.socketFrames - framesAtSend)) {
             this.forensics?.('socket-silent', `${endpoint} timed out with no frame delivered on the current socket`)
-            this.replaceSocket(new RemoteStreamCarrierError(
+            this.requestCarrierRebuild(new RemoteStreamCarrierError(
               'api gateway: Remote stream socket delivered no frame while an opening item was pending',
-            ), 'silent socket replaced')
-          } else if (shouldEscalateOpeningStall(streak, this.lastOpeningEscalationAt, Date.now())) {
-            this.lastOpeningEscalationAt = Date.now()
-            this.forensics?.(
-              'opening-stall-escalation',
-              `${endpoint} unanswered ${String(streak)}x; rebuilding the physical carrier`,
-            )
-            this.replaceSocket(new RemoteStreamCarrierError(
+            ), 'silent socket replaced', 'socketNoFrame', deadlineCycle, streamId)
+          } else {
+            //  the streak threshold AND the cooldown now live in the shared
+            // reducer, so this branch no longer pre-judges with a time comparison.
+            // It still reports the escalation before asking, because the forensics
+            // line is evidence a human reads, not a decision input.
+            const escalated = this.requestCarrierRebuild(new RemoteStreamCarrierError(
               'api gateway: Remote stream carrier rebuilt after an unanswered opening item',
-            ), 'opening stall')
+            ), 'opening stall', 'openingStall', deadlineCycle, streamId, streak)
+            if (escalated) {
+              this.forensics?.(
+                'opening-stall-escalation',
+                `${endpoint} unanswered ${String(streak)}x; rebuilding the physical carrier`,
+              )
+            }
           }
         }
-      }, openingBudgetMs)
+        return 'expired'
+      }
       let awaitingOpeningItem = true
       while (true) {
-        const frame = await inbox.next()
+        //  (W2): the bound must NOT cancel this wait - it fails the inbox, and the
+        // frame that failure produces is what the loop still has to receive. So the
+        // primitive races the frame's OWN promise, and on the deadline branch we keep
+        // awaiting that same promise. (withDeadline is the right primitive precisely
+        // because it takes no signal: "timeout does not cancel" is its documented
+        // semantic, and it is this site's contract.)
+        let frame: RemoteStreamServerMessage
         if (awaitingOpeningItem) {
+          const firstFrame = inbox.next()
+          const raced = await withDeadline<RemoteStreamServerMessage | 'expired'>(firstFrame, {
+            ms: openingBudgetMs,
+            onExpire: onOpeningExpire,
+            scheduler: DEADLINE_SCHEDULER,
+          })
+          frame = raced.settled === 'deadline' ? await firstFrame : (raced.value as RemoteStreamServerMessage)
           awaitingOpeningItem = false
           this.openingTimeouts.delete(openingKey)
-          clearTimeout(opening)
-          opening = undefined
+        } else {
+          frame = await inbox.next()
         }
         signal.throwIfAborted()
         if (frame.type === 'item') {
@@ -301,9 +417,9 @@ export class RemoteStreamMuxClient {
         return
       }
     } finally {
-      if (opening !== undefined) clearTimeout(opening)
       signal.removeEventListener('abort', abort)
       this.streams.delete(streamId)
+      this.pendingOpens.delete(streamId)
       const departedKey = this.streamOpeningKeys.get(streamId)
       this.streamOpeningKeys.delete(streamId)
       // A stream that ended WITHOUT an opening timeout left through its consumer (a
@@ -311,7 +427,7 @@ export class RemoteStreamMuxClient {
       // logical stream for that request is therefore a NEW episode and must start at
       // the tight base budget: keeping a widening earned by the stream it replaced
       // would make the auto/manual resync wait up to 300 s for its first frame
-      // (2026-09-21 review). The widening survives only while a live sibling still
+      // (). The widening survives only while a live sibling still
       // owns the same request key.
       if (!timedOut && departedKey !== undefined) {
         let shared = false
@@ -323,7 +439,7 @@ export class RemoteStreamMuxClient {
         }
         if (!shared) this.openingTimeouts.delete(departedKey)
       }
-      // chamber patch (design 14 §D4, 2026-09): the opening deadline is not the only
+      // chamber patch (design 14 §D4, ): the opening deadline is not the only
       // place a silent carrier can be proved. The journal watchdog aborts its sibling
       // probe at 20 s — BEFORE the 30 s opening budget can fire — so a session that had
       // already opened could lose its carrier with no page-level signal at all. A
@@ -342,9 +458,14 @@ export class RemoteStreamMuxClient {
         && carrier !== undefined && carrier === this.socket && carrier.readyState === WebSocket.OPEN
         && shouldReplaceSilentSocket(this.socketFrames - framesAtSend)) {
         this.forensics?.('socket-silent', endpoint + ' torn down with no frame delivered on the current socket')
-        this.replaceSocket(new RemoteStreamCarrierError(
+        //  a teardown is its own decision cycle, so a lane reconnect landing in the
+        // same turn can no longer be the SECOND replacement of one socket (the
+        // correlated-replacement defect). The legacy `!timedOut` guard above still
+        // enforces "one verdict per stream", so the two rules stack instead of
+        // duplicating: the token guards the turn, `!timedOut` guards the stream.
+        this.requestCarrierRebuild(new RemoteStreamCarrierError(
           'api gateway: Remote stream socket delivered no frame for the whole life of a logical stream',
-        ), 'silent socket replaced on teardown')
+        ), 'silent socket replaced on teardown', 'teardownNoFrame', this.nextDecisionCycle(), streamId)
       }
       if (opened && !terminal && carrier?.readyState === WebSocket.OPEN) {
         this.send(carrier, { type: 'cancel', streamId })
@@ -377,7 +498,7 @@ export class RemoteStreamMuxClient {
     await this.keepAlive
   }
 
-  private connect(): Promise<WebSocket> {
+  private async connect(): Promise<WebSocket> {
     let socket: WebSocket
     try {
       socket = new WebSocket(this.remoteStreamUrl())
@@ -390,21 +511,13 @@ export class RemoteStreamMuxClient {
         { cause: error },
       ))
     }
+    //  (W3): declared in THIS scope because the deadline hook below runs outside the
+    // executor; the executor assigns it (it needs the executor's cleanup closure).
+    let expireHandshake: (() => void) | undefined
     const connecting = new Promise<WebSocket>((resolve, reject) => {
       let settled = false
-      // chamber patch (2026-09 review): bound the handshake itself. A socket that
-      // never fires open/error/close would otherwise park this attempt until the
-      // connection lane's readiness timeout, and the mux's self-heal cannot arm
-      // while an attempt is in flight.
-      let handshake: ReturnType<typeof setTimeout> | undefined
-      const clearHandshake = (): void => {
-        if (handshake === undefined) return
-        clearTimeout(handshake)
-        handshake = undefined
-      }
       const rejectCandidate = (error: Error): void => {
         settled = true
-        clearHandshake()
         socket.removeEventListener('open', opened)
         socket.removeEventListener('error', failed)
         socket.removeEventListener('message', received)
@@ -415,7 +528,6 @@ export class RemoteStreamMuxClient {
       }
       const opened = (): void => {
         settled = true
-        clearHandshake()
         this.cancelCandidate = undefined
         // chamber patch: an established socket resets the self-heal cadence, so its
         // own loss is healed at once (and no stale timer fires behind it).
@@ -448,19 +560,29 @@ export class RemoteStreamMuxClient {
       }
       const received = (event: MessageEvent): void => { this.receive(socket, event.data) }
       this.cancelCandidate = rejectCandidate
-      const candidate = setTimeout(() => {
+      expireHandshake = (): void => {
         rejectCandidate(new RemoteStreamCarrierError(
           'api gateway: Remote stream WebSocket handshake timed out',
         ))
-      }, REMOTE_STREAM_HANDSHAKE_TIMEOUT_MS)
-      ;(candidate as unknown as { unref?: () => void }).unref?.()
-      handshake = candidate
+      }
       socket.addEventListener('open', opened, { once: true })
       socket.addEventListener('error', failed, { once: true })
       socket.addEventListener('message', received)
       socket.addEventListener('close', closed, { once: true })
     })
-    return connecting
+    //  (W3): one bound, owned by the primitive. On expiry the hook above rejects
+    // `connecting` (same error, same listener cleanup as the old timer); the deadline
+    // branch below then surfaces that rejection by awaiting it, so the caller sees
+    // exactly what it saw before.
+    const raced = await withDeadline<WebSocket | 'expired'>(connecting, {
+      ms: REMOTE_STREAM_HANDSHAKE_TIMEOUT_MS,
+      onExpire: () => {
+        expireHandshake?.()
+        return 'expired' as const
+      },
+      scheduler: UNREF_SCHEDULER,
+    })
+    return raced.settled === 'deadline' ? await connecting : (raced.value as WebSocket)
   }
 
   /** chamber patch: instance method so the mux route carries the per-entry base path ('' = stock route). */
@@ -548,7 +670,7 @@ export class RemoteStreamMuxClient {
   }
 
   /**
-   * chamber patch (2026-09 review): maintain the mux's own reconnect without ever
+   * chamber patch (): maintain the mux's own reconnect without ever
    * parking. Maintain now when the current interval has elapsed, otherwise arm
    * exactly one timer for the remainder; failed attempts widen the interval in
    * maintain()'s rejection path, and a successful open resets it.
@@ -596,9 +718,6 @@ export class RemoteStreamMuxClient {
         // consumes the rejection and so the derived task fulfils.
         if (!(error instanceof RemoteStreamReconnectRequest)) {
           this.maintainIntervalMs = Math.min(this.maintainIntervalMs * 2, REMOTE_STREAM_MAINTAIN_MAX_INTERVAL_MS)
-          // A construction/handshake failure that no logical stream is waiting for
-          // would otherwise retry silently forever (2026-09 review): one bounded
-          // fact per attempt makes the loop visible without any log channel.
           this.forensics?.(
             'socket-attempt-failed',
             'connect attempt failed; next attempt in ' + String(this.maintainIntervalMs) + 'ms',

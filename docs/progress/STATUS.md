@@ -6,6 +6,14 @@
 
 ## 未完成 / 部分完成（剩余验收）
 
+- 会话链重构（design 14 §D4）：**仍开放**
+  - **阶梯单源**：四条阶梯的阈值已单源（`packages/dsh-stream-state/tables.json` 的 `ladders`，锁步门 `scripts/gates/verify-ladder-table-parity.mjs`）。未完成：sidebar 的 190s 回执链与 tier-3 写回尚未成为 reducer 的 effect；`packages/renderer/src/session-liveness.ts` 与 open-in 健康 chip 的判定未收编。
+  - **mobile `session-stall.ts` 的行数验收需重新表述**（范围决策，2026-12）：原定 ≤150，实测拆分后仍 835，其构成约 9 成为 DOM 与提示运行壳、决策核心约 95 行且已表驱动；继续压行只能把 DOM/运行壳搬到兄弟文件（总行数不变）。待裁决 = 接受「值与规则单源」为判据，或明确接受搬家式收口。
+  - **Swift 壳**：`LoadState` 状态机的纯逻辑已落（`packages/dsh-stream-state/src/load-state.ts`，含世代围栏、探针失败记 strike、一次性 give-up 闸门）。未完成：其 Swift 镜像与跨语言锁步断言、`macos/Sources/DSHChamber/RendererRecovery.swift`（181→≤90）与 `RendererHangWatchdog.swift`（105→≤60）的接线、`ShellRecoveryPolicy` 的判定/记账分离、`BridgeClient` 超时携带。判据 `pnpm run test:macos` + `test:swift` 只在 macOS 腿可跑。
+  - **等待原语**：`withDeadline` / `waitForCondition` 已替换 5 处手写期限（stream 开帧/握手/重试道、排队期限、serving 轮询）与 shell 的两处手写记账；`host-graph` 的异步探测重试环不适用（同步谓词表达不了 `await`），`journal-stream` 按设计保留 `AbortSignal.timeout`。未完成：`withBootTimeout` / `boundedTailWait` 两个名字是否字面删除（记账已归零）。
+  - **收口跑未做**：`run-checks.mjs full`、`pnpm run test:macos`、`remote-state-acceptance`（后两项含 macOS 腿与既有 flaky）。
+  - **状态更新（2026-12，本会话收尾）**：`withBootTimeout` / `boundedTailWait` 已按目标**删除**（内联到各自唯一调用点，两处各一个调用者）；`run-checks.mjs full` 已在 Linux 侧 **48/48** 通过；B6 无剩余项。**净减纪律未达成**：11 模块行数合计 5864 → **5874（+10）**（`*_MS` 39→34、依赖 28→27、App 生命周期命中 115→114 均为下降）；上涨主因是载波单所有者的 effects 执行层（stream-client +160）与露屏 arbiter（InstanceView +20），下降来自提示面拆出（session-stall −140）与谓词退役（remote-retry-policy −50）——逐模块账与机器复算见 `node scripts/refactor/stream-state-metrics.mjs --compare`。
+  - **既有 flaky（非本重构引入）**：`packages/gateway/test/session-state/session-state-observer.test.ts` 的 `the grace window is honoured`（单独重跑可复现，断言 `the mux grace timer delegates after the window`）；另一类只在 `tests` 模式内出现的偶发（`test:gateway` / `test:control-plane`，单独均通过）未定位。
 - 结构精简后的平台腿（2026-09，未验证）：本轮新增/改动的 Swift 单测（RollingWindowLimiter/StrictJSONNumber/PrivateFS/JSLiteralEscaping）与编译态 sidecar/native 走查需 macOS 腿复验（`pnpm run test:swift`；`build:sidecar` + `DSH_CHAMBER_SIDECAR_COMPILED=1 pnpm run test:sidecar:compiled`；`acceptance:gui --flavor native --require-assembly`）。Linux 本机只 loud skip，不得当绿。
 
 - 实机门禁（未验证；缺真实实例 / 打包态环境）：

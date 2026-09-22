@@ -81,6 +81,9 @@ importers:
       '@deepseek-ai/schemastery':
         specifier: workspace:^
         version: link:../../vendor/harness-packages/@deepseek-ai/schemastery
+      '@dsh-chamber/dsh-stream-state':
+        specifier: workspace:^
+        version: link:../dsh-stream-state
       ws:
         specifier: ^8.21.0
         version: 8.21.3
@@ -164,6 +167,10 @@ importers:
         version: 19.2.8
 
   packages/dsh-chamber-client-ui-mobile:
+    dependencies:
+      '@dsh-chamber/dsh-stream-state':
+        specifier: workspace:^
+        version: link:../dsh-stream-state
     devDependencies:
       '@deepseek-ai/cordis':
         specifier: workspace:^
@@ -303,6 +310,9 @@ importers:
 
   packages/dsh-chamber-client-ui-sidebar:
     dependencies:
+      '@dsh-chamber/dsh-stream-state':
+        specifier: workspace:^
+        version: link:../dsh-stream-state
       clsx:
         specifier: ^2.0.0
         version: 2.1.1
@@ -522,6 +532,8 @@ importers:
         specifier: ^7.0.2
         version: 7.0.2
 
+  packages/dsh-stream-state: {}
+
   packages/gateway:
     dependencies:
       pnpm:
@@ -552,6 +564,9 @@ importers:
       '@dsh-chamber/dsh-chamber-client-ui-sidebar':
         specifier: workspace:^
         version: link:../dsh-chamber-client-ui-sidebar
+      '@dsh-chamber/dsh-stream-state':
+        specifier: workspace:^
+        version: link:../dsh-stream-state
       react:
         specifier: ^19.0.0
         version: 19.2.8
@@ -2478,10 +2493,10 @@ importers:
     dependencies:
       '@testing-library/dom':
         specifier: ^10.4.1
-        version: 10.4.1
+        version: 10.4.2
       '@testing-library/react':
         specifier: ^16.3.2
-        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@18.3.0)(@types/react@18.3.31)(react-dom@18.2.0(react@18.2.0))(react@18.2.0)
+        version: 16.3.2(@testing-library/dom@10.4.2)(@types/react-dom@18.3.0)(@types/react@18.3.31)(react-dom@18.2.0(react@18.2.0))(react@18.2.0)
       vitest:
         specifier: ^4.1.8
         version: 4.1.10(@opentelemetry/api@1.9.1)(@types/node@26.2.0)(happy-dom@20.11.15)(vite@6.4.3(@types/node@26.2.0)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0))
@@ -2710,7 +2725,7 @@ importers:
         version: link:../dsh-client-ui-sidebar
       '@testing-library/react':
         specifier: ^16.1.0
-        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.4(@types/react@18.3.31))(@types/react@18.3.31)(react-dom@18.2.0(react@18.2.0))(react@18.2.0)
+        version: 16.3.2(@testing-library/dom@10.4.2)(@types/react-dom@19.2.4(@types/react@18.3.31))(@types/react@18.3.31)(react-dom@18.2.0(react@18.2.0))(react@18.2.0)
       '@types/react':
         specifier: ~18.3.1
         version: 18.3.31
@@ -3184,7 +3199,7 @@ importers:
         version: link:../dsh-client-ui-workspace
       '@testing-library/react':
         specifier: ^16.1.0
-        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.4(@types/react@18.3.31))(@types/react@18.3.31)(react-dom@18.2.0(react@18.2.0))(react@18.2.0)
+        version: 16.3.2(@testing-library/dom@10.4.2)(@types/react-dom@19.2.4(@types/react@18.3.31))(@types/react@18.3.31)(react-dom@18.2.0(react@18.2.0))(react@18.2.0)
       '@types/react':
         specifier: ~18.3.1
         version: 18.3.31
@@ -3211,7 +3226,7 @@ importers:
         version: link:../dsh-client-ui-workspace
       '@testing-library/react':
         specifier: ^16.1.0
-        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.4(@types/react@18.3.31))(@types/react@18.3.31)(react-dom@18.2.0(react@18.2.0))(react@18.2.0)
+        version: 16.3.2(@testing-library/dom@10.4.2)(@types/react-dom@19.2.4(@types/react@18.3.31))(@types/react@18.3.31)(react-dom@18.2.0(react@18.2.0))(react@18.2.0)
       '@types/react':
         specifier: ~18.3.1
         version: 18.3.31
@@ -3235,7 +3250,7 @@ importers:
         version: link:../dsh-client-ui-primitives
       '@testing-library/react':
         specifier: ^16.1.0
-        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@18.3.0)(@types/react@18.3.31)(react-dom@18.2.0(react@18.2.0))(react@18.2.0)
+        version: 16.3.2(@testing-library/dom@10.4.2)(@types/react-dom@18.3.0)(@types/react@18.3.31)(react-dom@18.2.0(react@18.2.0))(react@18.2.0)
       '@types/react':
         specifier: ~18.3.1
         version: 18.3.31
@@ -3301,7 +3316,7 @@ importers:
         version: link:../dsh-typert-protocol
       '@testing-library/react':
         specifier: ^16.1.0
-        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.4(@types/react@18.3.31))(@types/react@18.3.31)(react-dom@18.2.0(react@18.2.0))(react@18.2.0)
+        version: 16.3.2(@testing-library/dom@10.4.2)(@types/react-dom@19.2.4(@types/react@18.3.31))(@types/react@18.3.31)(react-dom@18.2.0(react@18.2.0))(react@18.2.0)
       '@types/react':
         specifier: ~18.3.1
         version: 18.3.31
@@ -3484,7 +3499,7 @@ importers:
         version: link:../dsh-typert-protocol
       '@testing-library/react':
         specifier: ^16.1.0
-        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@18.3.0)(@types/react@18.3.31)(react-dom@18.2.0(react@18.2.0))(react@18.2.0)
+        version: 16.3.2(@testing-library/dom@10.4.2)(@types/react-dom@18.3.0)(@types/react@18.3.31)(react-dom@18.2.0(react@18.2.0))(react@18.2.0)
       '@types/react':
         specifier: ~18.3.1
         version: 18.3.31
@@ -3835,7 +3850,7 @@ importers:
         version: 18.3.0
       '@types/use-sync-external-store':
         specifier: ^1.5.0
-        version: 1.5.0
+        version: 1.7.0
       react:
         specifier: ^18.2.0
         version: 18.2.0
@@ -3883,7 +3898,7 @@ importers:
         version: link:../dsh-session
       '@testing-library/react':
         specifier: ^16.1.0
-        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@18.3.0)(@types/react@18.3.31)(react-dom@18.2.0(react@18.2.0))(react@18.2.0)
+        version: 16.3.2(@testing-library/dom@10.4.2)(@types/react-dom@18.3.0)(@types/react@18.3.31)(react-dom@18.2.0(react@18.2.0))(react@18.2.0)
       '@types/react':
         specifier: ~18.3.1
         version: 18.3.31
@@ -4085,7 +4100,7 @@ importers:
         version: link:../dsh-client-ui-slots
       '@testing-library/react':
         specifier: ^16.1.0
-        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.4(@types/react@18.3.31))(@types/react@18.3.31)(react-dom@18.2.0(react@18.2.0))(react@18.2.0)
+        version: 16.3.2(@testing-library/dom@10.4.2)(@types/react-dom@19.2.4(@types/react@18.3.31))(@types/react@18.3.31)(react-dom@18.2.0(react@18.2.0))(react@18.2.0)
       '@types/react':
         specifier: ~18.3.1
         version: 18.3.31
@@ -4232,7 +4247,7 @@ importers:
         version: link:../dsh-util-workspace-path
       '@testing-library/react':
         specifier: ^16.1.0
-        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@18.3.0)(@types/react@18.3.31)(react-dom@18.2.0(react@18.2.0))(react@18.2.0)
+        version: 16.3.2(@testing-library/dom@10.4.2)(@types/react-dom@18.3.0)(@types/react@18.3.31)(react-dom@18.2.0(react@18.2.0))(react@18.2.0)
       '@types/react':
         specifier: ~18.3.1
         version: 18.3.31
@@ -4298,7 +4313,7 @@ importers:
         version: link:../dsh-util-workspace-path
       '@testing-library/react':
         specifier: ^16.1.0
-        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@18.3.0)(@types/react@18.3.31)(react-dom@18.2.0(react@18.2.0))(react@18.2.0)
+        version: 16.3.2(@testing-library/dom@10.4.2)(@types/react-dom@18.3.0)(@types/react@18.3.31)(react-dom@18.2.0(react@18.2.0))(react@18.2.0)
       '@types/react':
         specifier: ~18.3.1
         version: 18.3.31
@@ -4361,7 +4376,7 @@ importers:
         version: link:../dsh-session
       '@testing-library/react':
         specifier: ^16.1.0
-        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@18.3.0)(@types/react@18.3.31)(react-dom@18.2.0(react@18.2.0))(react@18.2.0)
+        version: 16.3.2(@testing-library/dom@10.4.2)(@types/react-dom@18.3.0)(@types/react@18.3.31)(react-dom@18.2.0(react@18.2.0))(react@18.2.0)
       '@types/picomatch':
         specifier: ^4.0.2
         version: 4.0.3
@@ -4424,7 +4439,7 @@ importers:
         version: link:../dsh-session
       '@testing-library/react':
         specifier: ^16.1.0
-        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.4(@types/react@18.3.31))(@types/react@18.3.31)(react-dom@18.2.0(react@18.2.0))(react@18.2.0)
+        version: 16.3.2(@testing-library/dom@10.4.2)(@types/react-dom@19.2.4(@types/react@18.3.31))(@types/react@18.3.31)(react-dom@18.2.0(react@18.2.0))(react@18.2.0)
       '@types/react':
         specifier: ~18.3.1
         version: 18.3.31
@@ -4626,7 +4641,7 @@ importers:
         version: link:../dsh-util-workspace-path
       '@testing-library/react':
         specifier: ^16.1.0
-        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.4(@types/react@18.3.31))(@types/react@18.3.31)(react-dom@18.2.0(react@18.2.0))(react@18.2.0)
+        version: 16.3.2(@testing-library/dom@10.4.2)(@types/react-dom@19.2.4(@types/react@18.3.31))(@types/react@18.3.31)(react-dom@18.2.0(react@18.2.0))(react@18.2.0)
       '@types/react':
         specifier: ~18.3.1
         version: 18.3.31
@@ -5609,7 +5624,7 @@ importers:
         version: link:../dsh-typert-protocol
       '@testing-library/react':
         specifier: ^16.1.0
-        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.4(@types/react@18.3.31))(@types/react@18.3.31)(react-dom@18.2.0(react@18.2.0))(react@18.2.0)
+        version: 16.3.2(@testing-library/dom@10.4.2)(@types/react-dom@19.2.4(@types/react@18.3.31))(@types/react@18.3.31)(react-dom@18.2.0(react@18.2.0))(react@18.2.0)
       '@types/react':
         specifier: ~18.3.1
         version: 18.3.31
@@ -6361,7 +6376,7 @@ importers:
         version: link:../schemastery
       compression:
         specifier: ^1.8.1
-        version: 1.8.1(supports-color@9.4.0)
+        version: 1.8.2(supports-color@9.4.0)
       negotiator:
         specifier: ^1.0.0
         version: 1.1.0
@@ -11325,19 +11340,9 @@ packages:
     peerDependencies:
       zod: ^3.25.0 || ^4.0.0
 
-  '@anthropic-ai/claude-agent-sdk-darwin-arm64@0.3.241':
-    resolution: {integrity: sha512-v26ta54lKFMFEZzbOE+6p3YhKERWnDiEA6OmkSAg+3fAQHOa1+aLTKw222cfgzxgiVixwFtHMk8c63zsDd8aXQ==}
-    cpu: [arm64]
-    os: [darwin]
-
   '@anthropic-ai/claude-agent-sdk-darwin-arm64@0.3.263':
     resolution: {integrity: sha512-H4eLd4Tkx3rJkt739CHb+9AcaKiiOpibU4tYsmma47mV+2zAPjUyFxpuE2N57VSmpAgbLQxu44du0TFN+UH5dg==}
     cpu: [arm64]
-    os: [darwin]
-
-  '@anthropic-ai/claude-agent-sdk-darwin-x64@0.3.241':
-    resolution: {integrity: sha512-5jweT0vft1ZCaGSoxZHF9vJlHbx8Yxx4+x5aHAIXTd4lx7ZbT4o5buEF8kpmTeHUB+Fw9jtFIm4QDsRiBXgf+Q==}
-    cpu: [x64]
     os: [darwin]
 
   '@anthropic-ai/claude-agent-sdk-darwin-x64@0.3.263':
@@ -11345,23 +11350,11 @@ packages:
     cpu: [x64]
     os: [darwin]
 
-  '@anthropic-ai/claude-agent-sdk-linux-arm64-musl@0.3.241':
-    resolution: {integrity: sha512-GslvPvSzehfCZyzOaJAt4lgodznm5zpl/LMXN8ygD12z5qnpM+I9/eFnmAaISJ0L8/vyohtlAP1jjaeR2jz1AQ==}
-    cpu: [arm64]
-    os: [linux]
-    libc: [musl]
-
   '@anthropic-ai/claude-agent-sdk-linux-arm64-musl@0.3.263':
     resolution: {integrity: sha512-TiOmi9mqYvu3uGgM+0eQrUQzgXb7pgTzqahtRyEjpJrNigddGoANHcbNKL7P7y4etJpyIuYXGuVh5SLJzySYVA==}
     cpu: [arm64]
     os: [linux]
     libc: [musl]
-
-  '@anthropic-ai/claude-agent-sdk-linux-arm64@0.3.241':
-    resolution: {integrity: sha512-SxszQGffXiLzMEnAv+pJXEmQbA8haijKyRjjH/jOt1CLeMIfpjKcO9WQDv8dEA8nREWS3zJ103zjgecAF7oOQQ==}
-    cpu: [arm64]
-    os: [linux]
-    libc: [glibc]
 
   '@anthropic-ai/claude-agent-sdk-linux-arm64@0.3.263':
     resolution: {integrity: sha512-2KPY1wu1hdjpVsw+Tg3i50uhxhhetO1fB24wjUJAQJ8YPSogqO32UbtYPJ6I3F17lBNHb/Mq3nRYGAuSU5yjtg==}
@@ -11369,23 +11362,11 @@ packages:
     os: [linux]
     libc: [glibc]
 
-  '@anthropic-ai/claude-agent-sdk-linux-x64-musl@0.3.241':
-    resolution: {integrity: sha512-kZigJ5Ug2I2G/n7Cunmwy4TGr0lOGnWrz6TkzyWiDcUmJOodoTH6GZECNarWAtETfN03AAeLfrpiz8z3hOEDqA==}
-    cpu: [x64]
-    os: [linux]
-    libc: [musl]
-
   '@anthropic-ai/claude-agent-sdk-linux-x64-musl@0.3.263':
     resolution: {integrity: sha512-PWctt/XjebBxtI37i2xx2OMxSscPMnKmxU82MWdtIvoAyJ40U5yfqpm92fm45R02eLn9j4LQpvNocVTcRAHv+g==}
     cpu: [x64]
     os: [linux]
     libc: [musl]
-
-  '@anthropic-ai/claude-agent-sdk-linux-x64@0.3.241':
-    resolution: {integrity: sha512-gJRa922Qcm7loumHcXMDFEFg//tz1aOi7Nx0sQa9I9lC1JSN8yL6i7/idzOU5Hp193tEDFOgqIMFL/yRiXg+rw==}
-    cpu: [x64]
-    os: [linux]
-    libc: [glibc]
 
   '@anthropic-ai/claude-agent-sdk-linux-x64@0.3.263':
     resolution: {integrity: sha512-un7HJzTT+DSQLgM33emQ0qHAwIY3CXIwe8JXoD9PaT7pdLepK4Ffa4r5j84pHTVS5uoGqxcf196tBgqb5/Z7FA==}
@@ -11393,33 +11374,15 @@ packages:
     os: [linux]
     libc: [glibc]
 
-  '@anthropic-ai/claude-agent-sdk-win32-arm64@0.3.241':
-    resolution: {integrity: sha512-/3yA9jQuCvHDVlILzhtslH6kFYOvydXyMZiKwnzqM8ZfvFTNO41w8TpiFpBLseyM+4A4E8QMeTKu3L01Xyb5IQ==}
-    cpu: [arm64]
-    os: [win32]
-
   '@anthropic-ai/claude-agent-sdk-win32-arm64@0.3.263':
     resolution: {integrity: sha512-n8owOwNSSi7/KpONb/ut+uXRjBIp9N6EjwADiB+YygPwGRtpWP+PR/qFsGdTVBE5cpPwhgKVAf27xEZEfNvcSQ==}
     cpu: [arm64]
-    os: [win32]
-
-  '@anthropic-ai/claude-agent-sdk-win32-x64@0.3.241':
-    resolution: {integrity: sha512-cHYdAgORl9kynujMeYXyV1uj/hbmsBjRw9dRVkIW4/4sF7S6L4u/qDSzn1/wiNP7g2yWSJ4KbsvHDH2WWDnCBQ==}
-    cpu: [x64]
     os: [win32]
 
   '@anthropic-ai/claude-agent-sdk-win32-x64@0.3.263':
     resolution: {integrity: sha512-EwqzsOLxIJTX6RIXtQ21ekOKmYBNfwbtGtqaPqdWZGzpMbHaie8kGsM630h9RFaoxeytS/jbg8B3fPCdUKfhPw==}
     cpu: [x64]
     os: [win32]
-
-  '@anthropic-ai/claude-agent-sdk@0.3.241':
-    resolution: {integrity: sha512-pIHdCSTywFe30H0oWDCKZzC4ipBLtF5YMDRKjf6PHyARg57O4l/72v3b6QKnnefwtKKMe6uWJ1Y9lUJg/sKWyA==}
-    engines: {node: '>=18.0.0'}
-    peerDependencies:
-      '@anthropic-ai/sdk': '>=0.93.0'
-      '@modelcontextprotocol/sdk': ^1.29.0
-      zod: ^4.0.0
 
   '@anthropic-ai/claude-agent-sdk@0.3.263':
     resolution: {integrity: sha512-0QWoHgWWlSmgXfEqZRbVYRoXT9p4tx/yKaZ4eLJ8l1MR65SIvMGR+cd5ZXUpGYZpj9RzbYiYU9LoFg90mdIjmw==}
@@ -11431,15 +11394,6 @@ packages:
 
   '@anthropic-ai/sdk@0.123.0':
     resolution: {integrity: sha512-Y9oX9mPNGZClHQOFqrWRk43Srcu/UHuPq3rfxxOq7JgW0gi+lJA2MAOK4Ul3k/+AUrwRWFJvd0tK3oC0Pw25dw==}
-    hasBin: true
-    peerDependencies:
-      zod: ^3.25.0 || ^4.0.0
-    peerDependenciesMeta:
-      zod:
-        optional: true
-
-  '@anthropic-ai/sdk@0.91.1':
-    resolution: {integrity: sha512-LAmu761tSN9r66ixvmciswUj/ZC+1Q4iAfpedTfSVLeswRwnY3n2Nb6Tsk+cLPP28aLOPWeMgIuTuCcMC6W/iw==}
     hasBin: true
     peerDependencies:
       zod: ^3.25.0 || ^4.0.0
@@ -11688,19 +11642,10 @@ packages:
     peerDependencies:
       '@bufbuild/protobuf': ^2.2.0
 
-  '@earendil-works/pi-ai@0.84.4':
-    resolution: {integrity: sha512-AClAZxf5+c4RRu44NJPS6wyQy+Nmq+Mzyyrdvm4ZVMNuixelO02RZX4G4Aq1F145Yzp43wnM5S+hLlSI7ypfVw==}
-    engines: {node: '>=22.19.0'}
-    hasBin: true
-
   '@earendil-works/pi-ai@0.85.1':
     resolution: {integrity: sha512-+VgVIJDkDO2efYJKEEqvPTH4zmnIaXdAppGbO+vKFA9qy5PdhFiAenuFAkU+oiCSfOC4dMHDyrjdQeL4ZoC5CQ==}
     engines: {node: '>=22.19.0'}
     hasBin: true
-
-  '@earendil-works/pi-telemetry@0.84.4':
-    resolution: {integrity: sha512-8e2CuxM+ht+hedQXTZmi5JVl6/xDK9RpSDL2+MbITevKYQhMZ/z6lJOTFgox3HQyGxO8mOZEtYGVeQNaD4OzqA==}
-    engines: {node: '>=22.19.0'}
 
   '@earendil-works/pi-telemetry@0.85.1':
     resolution: {integrity: sha512-Bg/YN6kA7Swja/NQxka8xFdecb4E/auIEGF2G5A25EaQXhRnPj300/7/KpgsDDMYUzHTDAv4RyUxaQPJKW81Rw==}
@@ -12620,47 +12565,6 @@ packages:
     resolution: {integrity: sha512-da6KbdNCV5sr1/txD896V+6W0iamFWrvVl8cHkBSPT+YlvmT3DwXa4jxZnQc+gnuTEqSWbBeoSZYTayXH9wXcw==}
     engines: {node: '>= 20'}
 
-  '@openai/codex@0.149.1':
-    resolution: {integrity: sha512-6q5pbcpFbJbqOpkubSDBwXmktQ55aD8eUzGzBF1zASob2DjwhBKDSNGtdZKalfrNJUdTDTPDMmzCXEXs5tMBYA==}
-    engines: {node: '>=16'}
-    hasBin: true
-
-  '@openai/codex@0.149.1-darwin-arm64':
-    resolution: {integrity: sha512-6X84kTCbnTgPIJ2EdcPsrvwS0Wxsqpa+bCswGmRf4BjhcQ5nPMnBC6yCAaCMj+vrbXQHj+L6sa9FaR4QkmA1qw==}
-    engines: {node: '>=16'}
-    cpu: [arm64]
-    os: [darwin]
-
-  '@openai/codex@0.149.1-darwin-x64':
-    resolution: {integrity: sha512-MfLBQLfcElJL9tvj6y45qVHHMGSXCPnQOixuD3/Zq0g1BW/eFizkrGLdn48cFpc+l8cK+gt5nYG5pQYwVs6g4A==}
-    engines: {node: '>=16'}
-    cpu: [x64]
-    os: [darwin]
-
-  '@openai/codex@0.149.1-linux-arm64':
-    resolution: {integrity: sha512-OqxUfZ1TVvHd18zHPKK/8ZRlpk8Vy11mg5CMHaLxNWldTbwVImDKtSLWT+m8m4NM5Sz4PbjtZMrVT/RfpBW/mQ==}
-    engines: {node: '>=16'}
-    cpu: [arm64]
-    os: [linux]
-
-  '@openai/codex@0.149.1-linux-x64':
-    resolution: {integrity: sha512-Of5fGYgr7tAMsyj6vhXb4/RM/UoA3Zq8BLegUBDC09UNy1XTLGYP/2XD+UX8z3qh0NDwxYdCjFIWdDNijKZggQ==}
-    engines: {node: '>=16'}
-    cpu: [x64]
-    os: [linux]
-
-  '@openai/codex@0.149.1-win32-arm64':
-    resolution: {integrity: sha512-5K0DmOKGK9Bos627p8sK8ATHjovPK0sDyT6h9Cb+4v+5CW5SGw1HLgjGxoLfJ8g3cg6mtg/pRCXXo2L/j71UVA==}
-    engines: {node: '>=16'}
-    cpu: [arm64]
-    os: [win32]
-
-  '@openai/codex@0.149.1-win32-x64':
-    resolution: {integrity: sha512-G3QXGAg7nyyhqOeooAMUekBCeHd8a1QByhKcVAFyzNBaI06t6Ft7nsF+1SzFS0spuIdU4YyMi5YD26ukADBQUQ==}
-    engines: {node: '>=16'}
-    cpu: [x64]
-    os: [win32]
-
   '@openai/codex@0.153.4':
     resolution: {integrity: sha512-wbHDmit7S/YvBGVX1DQmk13xtWblZ2cApeJ/pB7xDZ10Cna+DZc5ij7f0F4OxdsXN4FW1oLT48OpogUI1+8Y2w==}
     engines: {node: '>=16'}
@@ -13069,8 +12973,8 @@ packages:
   '@tanstack/virtual-core@3.17.7':
     resolution: {integrity: sha512-bp+v10y65sp2H7WpWfIMyxTNfl8ZVfxFTLRjPIFRryi6FV/J33z4IS53WO4pTk36KlvJ4iLiQz+oaydDC1xbcA==}
 
-  '@testing-library/dom@10.4.1':
-    resolution: {integrity: sha512-o4PXJQidqJl82ckFaXUeoAW+XysPLauYI43Abki5hABd853iMhitooc6znOnczgbTYmEP6U6/y1ZyKAIsvMKGg==}
+  '@testing-library/dom@10.4.2':
+    resolution: {integrity: sha512-yzr2S9HyAIdhz2/6qHgbs665Q7PKVcDF05vsOlHPxG1mo36gKVesdYVeDLnXgfjJ03CrKRk08knc6+E/9m8v2Q==}
     engines: {node: '>=18'}
 
   '@testing-library/react@16.3.2':
@@ -13135,9 +13039,6 @@ packages:
 
   '@types/express@5.0.6':
     resolution: {integrity: sha512-sKYVuV7Sv9fbPIt/442koC7+IIwK5olP1KWeD88e/idgoJqDm3JV/YUiPwkoKK92ylff2MGxSz1CSjsXelx0YA==}
-
-  '@types/fs-ext@2.0.3':
-    resolution: {integrity: sha512-0j2F+laosJF2NTd2DVheQ5GvXo8ln9L175VwLPfbsppE33iYC+6gn6XlOQS0pGvZm2yrQ32/LRZh0As/7rCs2Q==}
 
   '@types/fs-extra@9.0.13':
     resolution: {integrity: sha512-nEnwB++1u5lVDM2UI4c1+5R+FYaKfaAzS4OococimjVm3nQw3TuzH5UNsocrcTBbhnerblyHj4A49qXbIiZdpA==}
@@ -13253,8 +13154,8 @@ packages:
   '@types/unist@3.0.3':
     resolution: {integrity: sha512-ko/gIFJRv177XgZsZcBwnqJN5x/Gien8qNOn0D5bQU/zAzVf9Zt3BlcUiLqhV9y4ARk0GbT3tnUiPNgnTXzc/Q==}
 
-  '@types/use-sync-external-store@1.5.0':
-    resolution: {integrity: sha512-5dyB8nLC/qogMrlCizZnYWQTA4lnb/v+It+sqNl5YnSRAPMlIqY/X0Xn+gZw8vOL+TgTTr28VEbn3uf8fUtAkw==}
+  '@types/use-sync-external-store@1.7.0':
+    resolution: {integrity: sha512-v8435kzWm3FuxyUa4r8o4sG6b0D+r+uOrzF5MXHxZKW4Haoo6txu/lq56Vio45e2i1nkmFPA+R7myWcmV7Z7Bg==}
 
   '@types/whatwg-mimetype@3.0.2':
     resolution: {integrity: sha512-c2AKvDT8ToxLIOUlN51gTiHXflsfIFisS4pO7pDPoKouJCESkhZnEy623gwP9laCy5lnLDAw1vAzu2vM2YLOrA==}
@@ -13823,8 +13724,8 @@ packages:
     resolution: {integrity: sha512-AF3r7P5dWxL8MxyITRMlORQNaOA2IkAFaTr4k7BUumjPtRpGDTZpl0Pb1XCO6JeDCBdp126Cgs9sMxqSjgYyRg==}
     engines: {node: '>= 0.6'}
 
-  compression@1.8.1:
-    resolution: {integrity: sha512-9mAqGPHLakhCLeNyxPkK4xVo746zQ/czLH1Ky+vkitMnWfWZps8r0qXuwhwizagCRttsL4lfG4pIOvaWLpAP0w==}
+  compression@1.8.2:
+    resolution: {integrity: sha512-o8vI5RE5A6EVVOd9o41jKp41aJom+QTEO/Bx8MYNjexMo/Bv2WOjUfZr+aL0WnYSgymUy6zeguqLTsIhV0gMvQ==}
     engines: {node: '>= 0.8.0'}
 
   concat-map@0.0.1:
@@ -13937,6 +13838,10 @@ packages:
   dequal@2.0.3:
     resolution: {integrity: sha512-0je+qPKHEMohvfRTCEo3CrPG6cAzAYgmzKyxRiYSSDkS6eGJdyVJm7WaYA5ECaAD9wLB2T4EEeymA5aFVcYXCA==}
     engines: {node: '>=6'}
+
+  destroy@1.2.0:
+    resolution: {integrity: sha512-2sJGJTaXIIaR1w4iJSNoN0hnMY7Gpc/n8D4qSCJw8QqFWXf7cuAgnEHxBpweaVcPevC2l3KpjYCx3NypQQgaJg==}
+    engines: {node: '>= 0.8', npm: 1.2.8000 || >= 1.4.16}
 
   detect-libc@2.1.2:
     resolution: {integrity: sha512-Btj2BOOO83o3WyH59e8MgXsxEQVcarkUOpEYrubB0urwnN10yQ364rsiByU11nZlqWYZm05i/of7io4mzihBtQ==}
@@ -14231,10 +14136,6 @@ packages:
   fresh@2.0.0:
     resolution: {integrity: sha512-Rx/WycZ60HOaqLKAi6cHRKKI7zxWbJ31MhntmtwMoaTeF7XFH9hhBp8vITaMidfljRQ6eYWCKkaTK+ykVJHP2A==}
     engines: {node: '>= 0.8'}
-
-  fs-ext@2.1.1:
-    resolution: {integrity: sha512-/TrISPOFhCkbgIRWK9lzscRzwPCu0PqtCcvMc9jsHKBgZGoqA0VzhspVht5Zu8lxaXjIYIBWILHpRotYkCCcQA==}
-    engines: {node: '>= 8.0.0'}
 
   fs-extra@10.1.0:
     resolution: {integrity: sha512-oRXApq54ETRj4eMiFzGnHWGy+zo5raudjuxN0b8H7s/RU2oW0Wvsx9O0ACRN/kRq9E8Vu/ReskGB5o3ji+FzHQ==}
@@ -14911,9 +14812,6 @@ packages:
   msgpackr@2.0.4:
     resolution: {integrity: sha512-o1C5KRmuRt+apqMr1HuGSqWStZoRBUpEsCsl15uM9VdAF1qHLtvMOU2En747EnTyEl6c4pzPewRMFF31s1CNbA==}
 
-  nan@2.28.0:
-    resolution: {integrity: sha512-fTsDz99OTq2sVePhGdp4qQhggZFtKr64ZNVyVajRKtMOkJxYekplBh577PiJB12v/D3s2E5cGtOI45LWp6rnLQ==}
-
   nanoid@3.3.18:
     resolution: {integrity: sha512-DTg4MJbGMWkfi6VZFdNt2/caMbQy4Ou+Op/hJQvGEWcnVfoA1QA+xzRKAzw9jD6+GVOOeYr/mIcuDSdug6F6+w==}
     engines: {node: ^10 || ^12 || ^13.7 || ^14 || >=15.0.1}
@@ -15261,8 +15159,8 @@ packages:
     resolution: {integrity: sha512-/FPD0nUc9jH6rfFjji9IBqOz4pcSE3CsT1m7Ep6Mdb0LxSUMj8hgl6GomOvZzpNpAqqGaXA0P3VSrZLFzIhQrw==}
     engines: {node: '>=12.0.0'}
 
-  proxy-addr@2.0.7:
-    resolution: {integrity: sha512-llQsMLSUDUPT44jdrU/O37qlnifitDP+ZwrmmZcoSKyLKvtZxpyV0n2/bD/N4tBAAZ/gJEdZU7KMraoK1+XYAg==}
+  proxy-addr@2.0.8:
+    resolution: {integrity: sha512-5nnx0yGyVUcY6t9RnWcARWtwT9F1D8O9rt08htPvnd49W1IgZtmLkhu9WfMzQj1cFxjHIO6connUNVW5k7AVyQ==}
     engines: {node: '>= 0.10'}
 
   pump@3.0.4:
@@ -16036,68 +15934,29 @@ snapshots:
     dependencies:
       zod: 4.4.3
 
-  '@anthropic-ai/claude-agent-sdk-darwin-arm64@0.3.241':
-    optional: true
-
   '@anthropic-ai/claude-agent-sdk-darwin-arm64@0.3.263':
-    optional: true
-
-  '@anthropic-ai/claude-agent-sdk-darwin-x64@0.3.241':
     optional: true
 
   '@anthropic-ai/claude-agent-sdk-darwin-x64@0.3.263':
     optional: true
 
-  '@anthropic-ai/claude-agent-sdk-linux-arm64-musl@0.3.241':
-    optional: true
-
   '@anthropic-ai/claude-agent-sdk-linux-arm64-musl@0.3.263':
-    optional: true
-
-  '@anthropic-ai/claude-agent-sdk-linux-arm64@0.3.241':
     optional: true
 
   '@anthropic-ai/claude-agent-sdk-linux-arm64@0.3.263':
     optional: true
 
-  '@anthropic-ai/claude-agent-sdk-linux-x64-musl@0.3.241':
-    optional: true
-
   '@anthropic-ai/claude-agent-sdk-linux-x64-musl@0.3.263':
-    optional: true
-
-  '@anthropic-ai/claude-agent-sdk-linux-x64@0.3.241':
     optional: true
 
   '@anthropic-ai/claude-agent-sdk-linux-x64@0.3.263':
     optional: true
 
-  '@anthropic-ai/claude-agent-sdk-win32-arm64@0.3.241':
-    optional: true
-
   '@anthropic-ai/claude-agent-sdk-win32-arm64@0.3.263':
-    optional: true
-
-  '@anthropic-ai/claude-agent-sdk-win32-x64@0.3.241':
     optional: true
 
   '@anthropic-ai/claude-agent-sdk-win32-x64@0.3.263':
     optional: true
-
-  '@anthropic-ai/claude-agent-sdk@0.3.241(@anthropic-ai/sdk@0.93.0(zod@4.4.3))(@modelcontextprotocol/sdk@1.30.0(supports-color@9.4.0)(zod@4.4.3))(zod@4.4.3)':
-    dependencies:
-      '@anthropic-ai/sdk': 0.93.0(zod@4.4.3)
-      '@modelcontextprotocol/sdk': 1.30.0(supports-color@9.4.0)(zod@4.4.3)
-      zod: 4.4.3
-    optionalDependencies:
-      '@anthropic-ai/claude-agent-sdk-darwin-arm64': 0.3.241
-      '@anthropic-ai/claude-agent-sdk-darwin-x64': 0.3.241
-      '@anthropic-ai/claude-agent-sdk-linux-arm64': 0.3.241
-      '@anthropic-ai/claude-agent-sdk-linux-arm64-musl': 0.3.241
-      '@anthropic-ai/claude-agent-sdk-linux-x64': 0.3.241
-      '@anthropic-ai/claude-agent-sdk-linux-x64-musl': 0.3.241
-      '@anthropic-ai/claude-agent-sdk-win32-arm64': 0.3.241
-      '@anthropic-ai/claude-agent-sdk-win32-x64': 0.3.241
 
   '@anthropic-ai/claude-agent-sdk@0.3.263(@anthropic-ai/sdk@0.93.0(zod@4.4.3))(@modelcontextprotocol/sdk@1.30.0(supports-color@9.4.0)(zod@4.4.3))(zod@4.4.3)':
     dependencies:
@@ -16118,12 +15977,6 @@ snapshots:
     dependencies:
       json-schema-to-ts: 3.1.1
       standardwebhooks: 1.1.1
-    optionalDependencies:
-      zod: 4.4.3
-
-  '@anthropic-ai/sdk@0.91.1(zod@4.4.3)':
-    dependencies:
-      json-schema-to-ts: 3.1.1
     optionalDependencies:
       zod: 4.4.3
 
@@ -16548,26 +16401,6 @@ snapshots:
     dependencies:
       '@bufbuild/protobuf': 2.14.0
 
-  '@earendil-works/pi-ai@0.84.4(@modelcontextprotocol/sdk@1.30.0(supports-color@9.4.0)(zod@4.4.3))(supports-color@9.4.0)(ws@8.21.3)(zod@4.4.3)':
-    dependencies:
-      '@anthropic-ai/sdk': 0.91.1(zod@4.4.3)
-      '@aws-sdk/client-bedrock-runtime': 3.1048.0
-      '@earendil-works/pi-telemetry': 0.84.4
-      '@google/genai': 1.52.0(@modelcontextprotocol/sdk@1.30.0(supports-color@9.4.0)(zod@4.4.3))(supports-color@9.4.0)
-      '@smithy/node-http-handler': 4.7.3
-      http-proxy-agent: 7.0.2(supports-color@9.4.0)
-      https-proxy-agent: 7.0.6(supports-color@9.4.0)
-      openai: 6.40.0(ws@8.21.3)(zod@4.4.3)
-      partial-json: 0.1.7
-      typebox: 1.3.7
-    transitivePeerDependencies:
-      - '@modelcontextprotocol/sdk'
-      - bufferutil
-      - supports-color
-      - utf-8-validate
-      - ws
-      - zod
-
   '@earendil-works/pi-ai@0.85.1(@modelcontextprotocol/sdk@1.30.0(supports-color@9.4.0)(zod@4.4.3))(supports-color@9.4.0)(ws@8.21.3)(zod@4.4.3)':
     dependencies:
       '@anthropic-ai/sdk': 0.123.0(zod@4.4.3)
@@ -16587,8 +16420,6 @@ snapshots:
       - utf-8-validate
       - ws
       - zod
-
-  '@earendil-works/pi-telemetry@0.84.4': {}
 
   '@earendil-works/pi-telemetry@0.85.1': {}
 
@@ -17324,33 +17155,6 @@ snapshots:
       '@octokit/request-error': 7.1.1
       '@octokit/webhooks-methods': 6.0.0
 
-  '@openai/codex@0.149.1':
-    optionalDependencies:
-      '@openai/codex-darwin-arm64': '@openai/codex@0.149.1-darwin-arm64'
-      '@openai/codex-darwin-x64': '@openai/codex@0.149.1-darwin-x64'
-      '@openai/codex-linux-arm64': '@openai/codex@0.149.1-linux-arm64'
-      '@openai/codex-linux-x64': '@openai/codex@0.149.1-linux-x64'
-      '@openai/codex-win32-arm64': '@openai/codex@0.149.1-win32-arm64'
-      '@openai/codex-win32-x64': '@openai/codex@0.149.1-win32-x64'
-
-  '@openai/codex@0.149.1-darwin-arm64':
-    optional: true
-
-  '@openai/codex@0.149.1-darwin-x64':
-    optional: true
-
-  '@openai/codex@0.149.1-linux-arm64':
-    optional: true
-
-  '@openai/codex@0.149.1-linux-x64':
-    optional: true
-
-  '@openai/codex@0.149.1-win32-arm64':
-    optional: true
-
-  '@openai/codex@0.149.1-win32-x64':
-    optional: true
-
   '@openai/codex@0.153.4':
     optionalDependencies:
       '@openai/codex-darwin-arm64': '@openai/codex@0.153.4-darwin-arm64'
@@ -17706,7 +17510,7 @@ snapshots:
 
   '@tanstack/virtual-core@3.17.7': {}
 
-  '@testing-library/dom@10.4.1':
+  '@testing-library/dom@10.4.2':
     dependencies:
       '@babel/code-frame': 7.29.7
       '@babel/runtime': 7.29.7
@@ -17717,20 +17521,20 @@ snapshots:
       picocolors: 1.1.1
       pretty-format: 27.0.2
 
-  '@testing-library/react@16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@18.3.0)(@types/react@18.3.31)(react-dom@18.2.0(react@18.2.0))(react@18.2.0)':
+  '@testing-library/react@16.3.2(@testing-library/dom@10.4.2)(@types/react-dom@18.3.0)(@types/react@18.3.31)(react-dom@18.2.0(react@18.2.0))(react@18.2.0)':
     dependencies:
       '@babel/runtime': 7.29.7
-      '@testing-library/dom': 10.4.1
+      '@testing-library/dom': 10.4.2
       react: 18.2.0
       react-dom: 18.2.0(react@18.2.0)
     optionalDependencies:
       '@types/react': 18.3.31
       '@types/react-dom': 18.3.0
 
-  '@testing-library/react@16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.4(@types/react@18.3.31))(@types/react@18.3.31)(react-dom@18.2.0(react@18.2.0))(react@18.2.0)':
+  '@testing-library/react@16.3.2(@testing-library/dom@10.4.2)(@types/react-dom@19.2.4(@types/react@18.3.31))(@types/react@18.3.31)(react-dom@18.2.0(react@18.2.0))(react@18.2.0)':
     dependencies:
       '@babel/runtime': 7.29.7
-      '@testing-library/dom': 10.4.1
+      '@testing-library/dom': 10.4.2
       react: 18.2.0
       react-dom: 18.2.0(react@18.2.0)
     optionalDependencies:
@@ -17808,10 +17612,6 @@ snapshots:
       '@types/body-parser': 1.19.6
       '@types/express-serve-static-core': 5.1.3
       '@types/serve-static': 2.2.0
-
-  '@types/fs-ext@2.0.3':
-    dependencies:
-      '@types/node': 26.2.0
 
   '@types/fs-extra@9.0.13':
     dependencies:
@@ -17935,7 +17735,7 @@ snapshots:
 
   '@types/unist@3.0.3': {}
 
-  '@types/use-sync-external-store@1.5.0': {}
+  '@types/use-sync-external-store@1.7.0': {}
 
   '@types/whatwg-mimetype@3.0.2': {}
 
@@ -18345,7 +18145,7 @@ snapshots:
 
   buffer-image-size@0.6.4:
     dependencies:
-      '@types/node': 22.20.1
+      '@types/node': 26.2.0
 
   buffer@6.0.3:
     dependencies:
@@ -18494,11 +18294,12 @@ snapshots:
     dependencies:
       mime-db: 1.54.0
 
-  compression@1.8.1(supports-color@9.4.0):
+  compression@1.8.2(supports-color@9.4.0):
     dependencies:
       bytes: 3.1.2
       compressible: 2.0.18
       debug: 2.6.9(supports-color@9.4.0)
+      destroy: 1.2.0
       negotiator: 0.6.4
       on-headers: 1.1.0
       safe-buffer: 5.2.1
@@ -18592,6 +18393,8 @@ snapshots:
   depd@2.0.0: {}
 
   dequal@2.0.3: {}
+
+  destroy@1.2.0: {}
 
   detect-libc@2.1.2: {}
 
@@ -18922,7 +18725,7 @@ snapshots:
       on-finished: 2.4.1
       once: 1.4.0
       parseurl: 1.3.3
-      proxy-addr: 2.0.7
+      proxy-addr: 2.0.8
       qs: 6.15.3
       range-parser: 1.3.0
       router: 2.2.0(supports-color@9.4.0)
@@ -19015,10 +18818,6 @@ snapshots:
   forwarded@0.2.0: {}
 
   fresh@2.0.0: {}
-
-  fs-ext@2.1.1:
-    dependencies:
-      nan: 2.28.0
 
   fs-extra@10.1.0:
     dependencies:
@@ -19199,7 +18998,7 @@ snapshots:
 
   happy-dom@20.11.15:
     dependencies:
-      '@types/node': 22.20.1
+      '@types/node': 26.2.0
       '@types/whatwg-mimetype': 3.0.2
       '@types/ws': 8.18.1
       buffer-image-size: 0.6.4
@@ -19969,8 +19768,6 @@ snapshots:
     optionalDependencies:
       msgpackr-extract: 3.0.4
 
-  nan@2.28.0: {}
-
   nanoid@3.3.18: {}
 
   negotiator@0.6.4: {}
@@ -20294,7 +20091,7 @@ snapshots:
       '@types/node': 26.2.0
       long: 5.3.2
 
-  proxy-addr@2.0.7:
+  proxy-addr@2.0.8:
     dependencies:
       forwarded: 0.2.0
       ipaddr.js: 1.9.1

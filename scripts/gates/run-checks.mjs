@@ -43,6 +43,9 @@ const PACKAGE_TESTS = [
   'test:runtime',
   'test:control-plane',
   'test:api-gateway',
+  // Pure lifecycle reducers (refactor plan Phase A): no deps, no artifacts, so a
+  // structural break in the shared model fails first and names itself.
+  'test:stream-state',
   'test:desktop',
   'test:gateway',
   'test:renderer-shell',
@@ -77,6 +80,7 @@ const CLIENT_TYPECHECKS = [
   'typecheck:client-web',
   'typecheck:connection',
   'typecheck:api-gateway',
+  'typecheck:stream-state',
   'typecheck:open-in',
   'typecheck:mobile',
 ]
@@ -132,6 +136,18 @@ const STATIC_CHECKS = [
   // 远端完成未读/切源计划的故障注入矩阵（plan §10）：快、离线、自带 --self-test 负控。
   // 2026-12 审计 M9：它与 remote-state-acceptance.mjs 此前完全是人工-only。
   'node scripts/gates/remote-state-injection-matrix.mjs',
+  // A1 差分回放：把旧路轨迹与新 reducer 的 effects 对着 vectors.json 比一遍。
+  // 纯 node、无依赖、离线，故属 static；drift≠0 即红（差异必须在 DIVERGENCE.md 登记）。
+  'node scripts/refactor/equivalence.mjs',
+  // Stream-state 的 Swift 镜像锁步（B5 前置）：编译 Foundation-only 的
+  // packages/dsh-stream-state/swift/CarrierDecision.swift 并对着共享 tables.json 断言。
+  // 只读、离线、临时目录内编译（不写工作树），故属 static 模式；
+  // 负控：node scripts/... --simulate-skip 会明确打印 SKIP。
+  'node scripts/gates/verify-stream-state-swift-parity.mjs',
+  // B4 前置：四条恢复阶梯的阈值锁步——值记在共享 tables.json，仍各自持有常量的模块
+  // 由本门逐个比对（漂移即红；模块删掉常量正是 B4 的退役，不算失败）。
+  // 只读、离线、无依赖，故属 static 模式。
+  'node scripts/gates/verify-ladder-table-parity.mjs',
   'test:scripts',
 ]
 

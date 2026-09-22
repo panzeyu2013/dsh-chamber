@@ -1,6 +1,5 @@
 /**
  * Carrier-retry pacing for {@link RemoteStream} — chamber fork patch (design 14 §D4).
- *
  * Upstream's `waitForRemoteStreamRetry` treats a SECOND carrier failure inside
  * one LIVE connection generation as terminal (`throw error`); the gateway wraps
  * that carrier error as `gateway/internal` and the session controller latches it
@@ -8,10 +7,8 @@
  * socket can legitimately die several times inside one live generation (protocol
  * proxy churn, missed heartbeats, upstream close under load), so the retry lane
  * paces and reopens instead of escaping.
- *
  * This module owns ONLY the delay math: pure, no imports, so the policy is
  * unit-testable without the vendor dependency graph.
- *
  * The numbers are not arbitrary: the ceiling equals the connection lane's own
  * `backoffMaxMs` default (10_000, `dsh-client-connection/src/recovery-config.ts`,
  * restated as `DEFAULT_MIN_RESTART_INTERVAL_MS` in its `liveness-triggers.ts`), so
@@ -32,8 +29,7 @@ export const REMOTE_STREAM_RETRY_MAX_MS = 10_000
 
 /**
  * Upper bound on the retry lane's wait for a live connection generation
- * (chamber fork, 2026-09 renderer-crash round).
- *
+ * (chamber fork, ).
  * Upstream's wait subscribes to the generation source and resolves only when a
  * generation appears — with the lane parked (offline suspension, or a lane that
  * stopped restarting) that is an UNBOUNDED wait with no timer, no error edge and
@@ -49,7 +45,6 @@ export const REMOTE_STREAM_NO_GENERATION_WAIT_MAX_MS = 30_000
 
 /**
  * Abortable backoff wait for the carrier's live-generation retry branch.
- *
  * It lives HERE rather than in the carrier so the abort contract is exercised in
  * plain Node: the carrier module cannot be imported without the vendor graph, and
  * a source lock alone cannot prove that an aborted generation stops waiting.
@@ -76,7 +71,6 @@ export function delayRemoteStreamRetry(delayMs: number, signal: AbortSignal): Pr
  * Delay before reopening after carrier failure number `attempt` (1-based, counted
  * per episode: it resets whenever the opening baseline/cursor is accepted or the
  * stream is explicitly restarted).
- *
  * Attempt 1 is immediate; later attempts double from the base up to the ceiling,
  * so a persistently failing carrier settles into one reopen per ceiling interval
  * instead of a hot loop — and never becomes a terminal stream error.
@@ -93,8 +87,7 @@ export function remoteStreamRetryDelayMs(attempt: number): number {
 
 /**
  * Opening-item deadline for one logical Remote stream (chamber fork patch,
- * design 14 §D4 2026-09 ui-chat freeze investigation).
- *
+ * design 14 §D4 ).
  * Every logical stream is answered by its Host with an opening item (a snapshot
  * or a ready frame); the domain consumer awaits that first item with NO deadline
  * anywhere between the socket and the UI. A frame that is lost — discarded by a
@@ -111,7 +104,6 @@ export const REMOTE_STREAM_OPENING_TIMEOUT_MS = 30_000
 
 /**
  * Ceiling of the consecutive-timeout widening (30 → 60 → 120 → 240 → 300 s).
- *
  * This ceiling is the HARD LIMIT of what any client-side retry can ever load,
  * because a timeout does not merely re-issue: the mux cancels the host-side
  * follow (the retry lane's replacement opens a NEW stream), so the Host restarts
@@ -120,14 +112,13 @@ export const REMOTE_STREAM_OPENING_TIMEOUT_MS = 30_000
  * is what widens the set of loadable sessions. 5 minutes covers a cold huge
  * session on a loaded disk; anything beyond that is a Host that cannot serve
  * (the real fix is a Host-side first-frame bound, see
- * docs/progress/todo/upstream-proposals.md §4).
+ * docs/progress/todo/upstream-proposals.md ).
  */
 export const REMOTE_STREAM_OPENING_TIMEOUT_MAX_MS = 300_000
 
 /**
  * Minimum life a logical stream must have had before its TEARDOWN may call the
- * physical socket silent (chamber fork, design 14 §D4, 2026-09).
- *
+ * physical socket silent (chamber fork, design 14 §D4, ).
  * The opening deadline already proves silence after a whole budget, but a consumer
  * can give up earlier: the journal watchdog aborts its sibling probe at 20 s, and
  * the mux never saw that stream's opening item. Judging the socket on a stream torn
@@ -141,14 +132,14 @@ export const REMOTE_STREAM_SILENT_TEARDOWN_MIN_MS = 15_000
 
 /**
  * Minimum distance between two mux-client connect attempts started by the mux
- * itself (chamber patch, 2026-09 review): a lost socket triggers one immediate
+ * itself (chamber patch, ): a lost socket triggers one immediate
  * reconnect instead of waiting for the connection lane, but a flapping network
  * must not let the mux hot-loop faster than the lane's own backoff would.
  */
 export const REMOTE_STREAM_MAINTAIN_MIN_INTERVAL_MS = 1_000
 
 /**
- * Deadline for one WebSocket handshake (TCP + upgrade), chamber patch (2026-09
+ * Deadline for one WebSocket handshake (TCP + upgrade), chamber patch (
  * review). Without it a socket that never fires open/error/close parks every
  * open() until the connection lane's own readiness timeout (15 s local / 45 s
  * remote) aborts the generation, and the mux's self-heal cannot arm while that
@@ -158,7 +149,7 @@ export const REMOTE_STREAM_MAINTAIN_MIN_INTERVAL_MS = 1_000
 export const REMOTE_STREAM_HANDSHAKE_TIMEOUT_MS = 30_000
 
 /**
- * Ceiling of the mux's own reconnect interval (chamber patch, 2026-09 review).
+ * Ceiling of the mux's own reconnect interval (chamber patch, ).
  * Every failed self-heal attempt doubles the interval up to this bound, so a
  * parked connection lane cannot be hammered faster than its own backoff ceiling
  * (REMOTE_STREAM_RETRY_MAX_MS, the lane's `backoffMaxMs` default) while the mux
@@ -166,61 +157,10 @@ export const REMOTE_STREAM_HANDSHAKE_TIMEOUT_MS = 30_000
  */
 export const REMOTE_STREAM_MAINTAIN_MAX_INTERVAL_MS = 10_000
 
-/**
- * Consecutive unanswered opening deadlines for ONE logical-stream request before
- * the PHYSICAL carrier is rebuilt (chamber patch, 2026-09-21 second ui-chat
- * freeze investigation).
- *
- * The opening deadline added earlier only ever fails that request's inbox; the
- * retry lane above it can do nothing but re-issue the SAME request on the SAME
- * physical generation. A carrier that stays WebSocket-OPEN while never
- * delivering — a silently dead socket whose `readyState` never leaves OPEN, a
- * wedged `$events` generation source, or a Host fiber that never answers
- * `session/follow` — therefore parked `chat.loadingHistory` forever with no
- * error edge, and every arm that already exists (the deadline, the health chip,
- * `Session.resync()`) lived inside that same loop. Two consecutive timeouts
- * (30 s + 60 s on the widened budget) are far above every measured Host answer
- * (opening frames arrive in ~15–35 ms through the control-plane proxy) while
- * staying below a user's patience, and a host that answers at all deletes the
- * streak before it can reach this bound.
- */
-export const REMOTE_STREAM_OPENING_ESCALATION_STREAK = 2
-
-/**
- * Minimum distance between two physical-carrier rebuilds caused by an
- * unanswered opening item. Bounds the churn when the fault is NOT the socket
- * (a Host fiber that stays stuck for one request): one socket rebuild per
- * minute, and every other logical stream on that socket is merely reopened —
- * measured at ~30 ms on a healthy Host.
- */
-export const REMOTE_STREAM_OPENING_ESCALATION_COOLDOWN_MS = 60_000
-
-/**
- * Decide whether one request's consecutive opening timeouts must escalate from
- * "reopen the logical stream" to "rebuild the physical carrier".
- *
- * Pure so the bound is unit-testable without a socket: the first timeout may
- * never rebuild (a slow-but-working host must not lose its in-flight answer),
- * and a rebuild is never issued twice inside the cooldown.
- * @param streak - this request's consecutive opening-item timeouts (1-based).
- * @param lastEscalationAt - when the carrier was last rebuilt for a stall, if ever.
- * @param now - current wall clock.
- * @returns whether the physical carrier must be rebuilt now.
- */
-export function shouldEscalateOpeningStall(
-  streak: number,
-  lastEscalationAt: number | undefined,
-  now: number,
-): boolean {
-  if (!Number.isFinite(streak) || streak < REMOTE_STREAM_OPENING_ESCALATION_STREAK) return false
-  if (lastEscalationAt === undefined) return true
-  return now - lastEscalationAt >= REMOTE_STREAM_OPENING_ESCALATION_COOLDOWN_MS
-}
 
 /**
  * Stable key for one logical stream's opening-budget episode: the endpoint plus a
  * bounded FNV-1a digest of its request payload.
- *
  * The opening budget widens per CONSECUTIVE timeout; keying it by endpoint alone
  * would let one slow session reset another's budget (every session follow shares
  * the endpoint), and keying it globally (the first version) let any stream reset
@@ -252,7 +192,6 @@ export function streamOpeningKey(endpoint: string, payload: unknown): string {
 /**
  * Opening-item budget for one logical stream REQUEST, widened by that request's
  * own CONSECUTIVE opening timeouts.
- *
  * The widening exists so a genuinely slow-but-working Host — a huge session over
  * a cold link, a loaded disk — is never starved by a deadline tuned for the
  * ordinary case: the request's first attempt waits 30 s, then 60 s, 120 s,
@@ -272,10 +211,8 @@ export function remoteStreamOpeningTimeoutMs(streak: number): number {
 
 /**
  * Whether one opening-item timeout must escalate from "re-open the request" to
- * "replace the physical socket" (chamber fork, design 14 §D4, 2026-09).
- *
+ * "replace the physical socket" (chamber fork, design 14 §D4, ).
  * ## Why a timeout alone is not enough
- *
  * Re-issuing the request through the retry lane is the right answer for a dropped
  * frame — but only while the socket still delivers. A WebSocket can stay OPEN for
  * the page while the leg behind it is silently dead (an ssh tunnel or a direct
@@ -287,9 +224,7 @@ export function remoteStreamOpeningTimeoutMs(streak: number): number {
  * transport watchdog rebuilds the link. Nothing else in the page can see it: the
  * connection generation's readiness handshake already succeeded, and the health
  * arm's per-session rebuild also re-issues on the same socket.
- *
  * ## The decision
- *
  * `framesReceivedSinceSend` counts the frames the CURRENT socket delivered while
  * this attempt's opening item was pending. A healthy socket answers every open —
  * the `$events` opening frame arrives in ~25 ms through the proxy — so a socket
@@ -298,7 +233,6 @@ export function remoteStreamOpeningTimeoutMs(streak: number): number {
  * dead one, and replacing it is the only lever that can restore the stream. A
  * socket that HAS delivered during the window is left alone: a genuinely slow
  * Host (huge session, cold link) keeps its widening and is never interrupted.
- *
  * The escalation needs no extra rate limit: it can only fire from an opening
  * deadline, whose budget is at least {@link REMOTE_STREAM_OPENING_TIMEOUT_MS}, so
  * replacements are paced ≥ 30 s apart by construction.

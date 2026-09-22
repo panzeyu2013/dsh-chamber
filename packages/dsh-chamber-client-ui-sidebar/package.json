@@ -45,6 +45,7 @@
   },
   "license": "MIT",
   "dependencies": {
+    "@dsh-chamber/dsh-stream-state": "workspace:^",
     "clsx": "^2.0.0"
   },
   "peerDependencies": {

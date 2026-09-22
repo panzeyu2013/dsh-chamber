@@ -170,6 +170,26 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
 
 ### D4 唤醒恢复与连接活性
 
+> **单一所有者（2026-12 会话链重构，Phase A + B1–B3 已落地）**：本节的判定与记忆不再散落在各执行器里。
+> ① **载波**：四条替换入口收敛为 `RemoteStreamMuxClient.requestCarrierRebuild`，判定由共享 reducer
+> （`packages/dsh-stream-state` 的 `reduceCarrier`/`decideRebuild` + `tables.json`）持有，执行器只执行返回的 effects；
+> ② **页面生命周期**：六个账本（hidden/自愈 mark/预热来源/抑制/弃置/收割）由容器投影持有，App 侧只剩活视图；
+> ③ **露屏**：遮罩分类（`veilState`）与会话面持有（`shouldReleaseVeilForSurface`）合为一次 `decidePresentation`；
+> ④ **等待形状**：`withDeadline` / `waitForCondition` / `retryDelayMs` / `createSingleFlight` 四个原语替换手写计时器记账
+> （B6 七站点中 W1/W2/W3/W5/W6 已迁；W4 不做，W7 因异步探测不适用）；
+> ⑤ **阈值**：四条阶梯的值集中于 `tables.json` 的 `ladders`，由 `scripts/gates/verify-ladder-table-parity.mjs` 与各模块锁步。
+> 对照数据：`node scripts/refactor/stream-state-metrics.mjs --compare`（`_MS` 39→34、依赖文件 28→27、App 生命周期命中 115→114）。
+
+**被否方案（2026-12 重构评审）**：
+
+| 方案 | 为什么否 |
+|---|---|
+| 保留各执行器的分散判定，只在其上加锁 | 锁只能串行化同一进程内的调用；被否是因为它锁不住**跨模块不变量**（同一时限两份记账、同一阈值两处取值、同一载波两个所有者）——本轮三类症状都出自这类不变量 |
+| Swift 与 TS 各写一份契据、各自维护 | 漂移无法机器检出；改为「纯 TS 包唯一所有者 + Swift 只做镜像」，由 `scripts/gates/verify-stream-state-swift-parity.mjs` 与 `verify-ladder-table-parity.mjs` 钉住（镜像的**运行**验证仍在 macOS 腿） |
+| 把 DOM 适配与提示运行壳也收进纯包 | 纯包必须零 import（`packages/dsh-stream-state/scripts/test.mjs` 会红）；DOM 面是各宿主特有的、与「单一所有者」判据无关——mobile 的约 9 成行数正由此构成 |
+| 把所有等待形状都换成原语 | `host-graph` 的异步探测重试环表达不了（`waitForCondition` 的谓词是同步的），`journal-stream` 的 `AbortSignal.timeout` 已是标准原语；故逐站记录「不迁」而非硬套 |
+| 用「mobile 主模块 ≤150 行」作为阶梯单源的验收 | 原定值以「mobile 只保留薄适配」为前提，实测该模块约 9 成为 DOM 与运行壳；被否的理由是**压行只能靠把代码搬到兄弟文件（总行数不变）**——那正是本次重构要消除的自欺。改以「阈值与规则单源 + 决策核心无本地阈值」为判据 |
+
 - 主进程 `powerMonitor.on('resume')` → 向主窗口 push `dsh-chamber:system-resume`
   → renderer chamber App 层分发 → ① 当前实例连接 runtime 立即重连
   （dsh-client-connection 原生 reconnect 兜底，事件只消除心跳等待延迟）；
@@ -478,7 +498,7 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
   - **缺陷（上一轮修复的剩余缺口）**：首帧期限只把「没有 opening」变成一次**重发**，而重发仍落在**同一条物理 socket** 上。浏览器视角 OPEN、而载波后段静默死亡（SSH 隧道/直连 http 网关的**部分半开**：宿主→页面方向静默死亡而页面→宿主方向仍可写——代理 30 s 浏览器腿心跳由浏览器自动 pong 仍通过，宿主 2 s×2 心跳因 pong 回不到宿主而 terminate，其 FIN 同样走不回代理，于是页面收不到任何事件）时，每一条逻辑流（含 `$events`）都收不到帧：会话打开停在 `chat.loadingHistory`，而**页面内没有任何东西看得见它**——连接车道的 generation 就绪握手早已成功（车道不会因静默掉世代），健康臂的「重建对话通道」也只是在同一 socket 上再发一次；恢复只剩传输层看门狗（http ~120 s / ssh ~300 s）或 OS 级唤醒事件。此时首帧预算的**放宽**（30→60→120→240→300 s）把等待越拉越长，与「更快恢复」相反。
   - **落地**：`stream-client.ts` 的 `open()` 在发送开帧时记录**当前 socket 已收帧数基线**；首帧期限到期时若该 socket 一帧未收（`socketFrames` 未前进），按纯函数 `shouldReplaceSilentSocket`（`remote-retry-policy.ts`，零 import）判定「静默而非慢」，并走 `replaceSocket()`：与连接泵 `reconnect()` 共用同一条拆除道（bump revision、丢弃旧 socket、`failAll` 把每条逻辑流交给各自的重试道、以基线节拍立刻补连），页面事实 `dsh-chamber:stream-forensics` 记 `socket-silent`。**放宽预算刻意保留**：同一 socket 上的慢宿主仍按 30→60→120→240→300 s 拿机会；判定只看「是否收过帧」（socket 级存活证据），不看帧内容或流身份；升级不额外限速——它只能由 ≥30 s 的首帧期限触发，天然 ≥30 s 一次。
   - **teardown 分支（第 4 补丁的第二入口，2026-09-21 独立评审 B2）**：首帧期限不是唯一的证据出口——journal 静默看门狗的 sibling follow 在 `probeTimeoutMs`=20 s 主动 abort，早于 30 s 预算，因此**已开启会话**的静默载波原样漏过（评审用仓内 fake-timer 复现：不 abort 时 30 s 换 socket，20 s abort 后 150 s 仍零替换、零事实）。现在任意逻辑流 teardown（abort / dispose / 消费者 break）时，若该 stream 的**整个生命期内该 socket 一帧未收**（`socketFrames - framesAtSend <= 0`，已收开帧自身也会推进计数 ⇒ 零增量即「始终未被应答」）且生命期 ≥ `REMOTE_STREAM_SILENT_TEARDOWN_MIN_MS`（15 s），走同一条 `replaceSocket()`；`!timedOut` 保证一条 stream 一个判决，`carrier === this.socket && OPEN` 保证判决只落在它发过帧的那条 socket 上，`this.running && !this.disposed` 保证 dispose 不触发。**15 s 最短生命是必需的**：`socketFrames` 每次换 socket 归零，若只看「零帧」，任何在 socket 首帧之前被取消的流（会话切换、请求 abort、组件重挂）都会换掉一条健康载波；15 s 远高于实测应答（~25–75 ms）、又低于看门狗 20 s 探针窗口，故「探针放弃」这一目标场景仍能触发。
-  - **第二个入口：同一请求连续两次未应答（2026-09-21 第二次排查）** —— 本条此前的缺口还有「期限只失败 inbox，重试道只能在同一物理世代上重发同一个请求」：`stream-client.ts` 的开帧期限回调在同一请求连续第 2 次超时（30 s + 60 s 已放宽预算）且 socket 仍为 OPEN 时走同一条 `replaceSocket()` 拆除道（退休当前 socket、以普通 `RemoteStreamCarrierError` 失败全部待决流、从基线节奏立刻补连），并留一条 `opening-stall-escalation` 取证事实；`shouldEscalateOpeningStall()`（`remote-retry-policy.ts`，纯函数）把「第一次超时永不升级」与「60 s 冷却内不重复重建」钉死在真值表里。它覆盖的正是**宿主侧无期限**的那类卡死（`session/follow` 无首帧、宿主 fiber 挂住、静默半死 socket、`$events` 世代卡住）——chamber 不改宿主，于是把期限权威放在客户端载波层；宿主一旦作答即删除该请求的 streak，慢而健康的宿主（本次实测开局帧 14–273 ms，含并发/大会话/缺 maxMessages 各形态）永不被升级。行为用例 `mux-self-heal.test.ts`「an opening that is never answered rebuilds the physical carrier and recovers」与「a slow-but-answering Host keeps its carrier」，并已变异验证（关掉升级 → 前一条红）。
+  - **第二个入口：同一请求连续两次未应答（2026-09-21 第二次排查）** —— 本条此前的缺口还有「期限只失败 inbox，重试道只能在同一物理世代上重发同一个请求」：`stream-client.ts` 的开帧期限回调在同一请求连续第 2 次超时（30 s + 60 s 已放宽预算）且 socket 仍为 OPEN 时走同一条 `replaceSocket()` 拆除道（退休当前 socket、以普通 `RemoteStreamCarrierError` 失败全部待决流、从基线节奏立刻补连），并留一条 `opening-stall-escalation` 取证事实；「第一次超时永不升级」与「60 s 冷却内不重复重建」两条规则由共享 reducer（`@dchamber/dsh-stream-state` 的 `decideRebuild`，纯函数、表驱动）钉死在真值表里：载波判定在 B1/B7 收敛为单一所有者后，fork 侧的同名谓词已随常量退役。它覆盖的正是**宿主侧无期限**的那类卡死（`session/follow` 无首帧、宿主 fiber 挂住、静默半死 socket、`$events` 世代卡住）——chamber 不改宿主，于是把期限权威放在客户端载波层；宿主一旦作答即删除该请求的 streak，慢而健康的宿主（本次实测开局帧 14–273 ms，含并发/大会话/缺 maxMessages 各形态）永不被升级。行为用例 `mux-self-heal.test.ts`「an opening that is never answered rebuilds the physical carrier and recovers」与「a slow-but-answering Host keeps its carrier」，并已变异验证（关掉升级 → 前一条红）。
   - **升级的被否替代**：①只在第 1 次超时后重建——拒：慢而健康的宿主会丢掉在途答案（30 s 首额本就是为它设的）；②把 `connection.reconnect()`（整代际重建）接进 mux——拒：车道代际源自身跑在这条 mux 上，升级应停在载波层。
   - **被否替代**：(a) 盲空闲超时/无条件重开世代——拒：TTFT 与长工具调用是合法静默，必然误报（同上一条理由）；(b) 每次首帧超时都换 socket——拒：`$events` 健康而某一条 `session/follow` 宿主读得慢时，会把一次慢打开升级成载波 churn，而放宽预算正是为这种宿主设的；(c) fork 侧新增应用层心跳协议——拒：远端可跑任意 dsh 版本，改协议即引入兼容面，且代理腿已有 30 s 浏览器腿心跳、宿主腿已有 2 s×2；(d) 升级时清空放宽预算——拒：一条 socket 上的连续超时正是「单次宿主读需要 31–300 s」的保护对象，清空会饿死该形态。
   - **未闭合**：① 阈值（一帧未收 + 一次期限）**未经真机校准**：判决只证明「该 socket 静默 ≥ 一个预算窗」，一个合法静默又恰逢慢打开的宿主会被多换一次 socket（代价 = 一次载波重启 + 基线重放）；② 宿主**永不回答**（socket 活着、宿主侧 follow 卡死）不是本杠杆能治的形态，恢复面仍是座席的「重建对话通道 / 重新加载」+ 上游首帧期限诉求；③ `socket-silent` 事实的持久消费面仍缺（STATUS「会话打开停滞」残余项）。

@@ -15,6 +15,7 @@
     "@dsh-chamber/dsh-chamber-client-ui-layout": "workspace:^",
     "@dsh-chamber/dsh-chamber-client-ui-open-in": "workspace:^",
     "@dsh-chamber/dsh-chamber-client-ui-sidebar": "workspace:^",
+    "@dsh-chamber/dsh-stream-state": "workspace:^",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },

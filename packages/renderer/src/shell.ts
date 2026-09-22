@@ -1,5 +1,5 @@
 /**
- * N-ctx shell orchestration (design 05 §1/§3.6): one AppWebEntry per dsh
+ * N-ctx shell orchestration (design 05 /): one AppWebEntry per dsh
  * instance, each an independent cordis ctx with a full ui-* tree, mounted
  * into its own container div. Boots normally serialize module/plugin
  * materialization; per-instance identity and basePath are bound into each
@@ -11,18 +11,15 @@
  * the generation gate plus the boot-generation fence on producer registration,
  * so no producer reversal or two-React-roots container can survive. Instance shells stay mounted once
  * booted (hide/show switching is pure CSS, sessions stay alive).
- *
- * 保留策略例外（2026 性能整改，05 §1/§4 偏差）：上述"booted 后常驻"是 App
+ * 保留策略例外（2026 性能整改，05 / 偏差）：上述"booted 后常驻"是 App
  * 层默认编排；App 的保留策略（src/retention.ts）可在空闲期回收超限隐藏壳——
  * 回收走与注册表删除相同的 disposeInstanceShell 原语（generation cancel +
  * 异步 teardown barrier），本模块语义不变（视图代际/同 id 串行 barrier 同样
  * 保证回收后的重 boot 不与异步 teardown 交错），实例进程/连接不受影响。
- *
  * The module table and bundle registry are page-level singletons shared
  * across instances (boot.ts reuse seam — the module system refuses a second
  * `__ModuleLoader__` install); materialized exports are stateless plugin
  * definitions applied per-ctx, so sharing is safe.
- *
  * Bundle loading uses module-script elements (the chamber bundle is an ESM
  * chunk of the vite build — see vite.config.mjs) instead of the stock
  * classic-script loader.
@@ -35,6 +32,15 @@ import type { Context } from '@deepseek-ai/cordis'
 
 import { parseAuthoritativeSourceFingerprint } from './deep-link-activation.ts'
 import { BOOT_TIMEOUT_MS } from './boot-budget.ts'
+import { withDeadline } from '@dsh-chamber/dsh-stream-state'
+
+/** The real clock, injected: the package imports nothing.  moved the shell's two
+ *  hand-written timeout bookkeepings (the instance tail wait and the boot-chain
+ *  guard) onto the shared primitive; their budgets stay local constants. */
+const SHELL_SCHEDULER = {
+  setTimeout: (run: () => void, ms: number): unknown => setTimeout(run, ms),
+  clearTimeout: (handle: unknown): void => { clearTimeout(handle as ReturnType<typeof setTimeout>) },
+}
 // The settled-boot gap fact + its identity live in the leaf module
 // (boot-gap.ts): chamber-entry.ts produces it, this module carries it, and the
 // App renders it — a leaf keeps that triangle acyclic (host-graph.ts is
@@ -64,8 +70,7 @@ const CHAMBER_BOOT = '@dsh-chamber/app'
 export type ChamberTransport = 'local' | 'ssh' | 'http'
 
 /**
- * The page's ONE machine application catalog (design 20 §5).
- *
+ * The page's ONE machine application catalog (design 20 ).
  * "Which apps are installed on this machine, what do their icons look like and
  * how do you launch them" describes the MACHINE, not the source on screen:
  * upstream can read it from `location.origin` because one page is served by one
@@ -75,7 +80,6 @@ export type ChamberTransport = 'local' | 'ssh' | 'http'
  * injects the settled catalog into every entry's Context — so a remote-ssh
  * entry's VS Code is drawn with the machine's real bundle art instead of a
  * bundled snapshot, and no entry re-reads the host for itself.
- *
  * Created on the first entry boot and shared by every later one (one page, one
  * machine). A failing read is fail-closed inside the catalog (empty pool), so a
  * stopped local instance degrades the marks to upstream's rounded square
@@ -114,18 +118,16 @@ export interface BootLoaderEntryFace {
 
 /**
  * The plugin ids that did NOT activate in a failed boot — the item list the
- * official failure report shows (2026-09-11 upstream-alignment T15).
- *
+ * official failure report shows ().
  * Upstream derives it twice from the same source: its post-settle sweep names
  * every entry whose root fiber is not active (`assertEntriesActive`, vendor
  * packages/client/web/src/boot.ts:138-158 — the chamber copy carries the same
  * loop plus the version-tolerance split) and its framework-free boot page
  * renders one item per failed entry id (boot-page.ts, `Failed to load
- * plugins`). The chamber's overlay replaced that in-shell page (design 05 §4:
+ * plugins`). The chamber's overlay replaced that in-shell page (design 05 :
  * the failed entry is disposed so a retry re-boots the container cleanly), so
  * the SAME live loader is read here, BEFORE teardown, and the ids travel to the
  * App on the ShellState it already receives — no new channel, no invented list.
- *
  * Tolerated rows (the per-instance EXTRA host-graph rows, whose version skew
  * must never fail a boot — see the chamber fork's `boot-tolerance.ts`) are
  * excluded: upstream's report lists failures, not tolerated degradations, and
@@ -235,13 +237,13 @@ export interface ShellState {
   booting: boolean
   /**
    * Boot failure report: run() rejection (missing/malformed boot manifest, …),
-   * or a resolved-but-failed boot surfaced via AppWebEntry.bootError (05 §4
+   * or a resolved-but-failed boot surfaced via AppWebEntry.bootError (05
    * failure-presentation revision) — null on a clean settle.
    */
   error: string | null
   /**
    * The plugin ids of a FAILED boot, as the official report lists them
-   * (2026-09-11 upstream-alignment T15): every loader entry of the failed boot
+   * (): every loader entry of the failed boot
    * that did not activate, in loader order. Upstream's boot page renders
    * exactly this list (`Failed to load plugins` + one item per id,
    * packages/client/web/src/boot-page.ts) and its post-settle sweep names the
@@ -253,7 +255,7 @@ export interface ShellState {
   failedEntries?: string[]
   /**
    * The boot settled with a KNOWN gap that the App is expected to self-heal
-   * (2026-09-10, sidebarRight 彻底修复):
+   * ():
    *  - `graph-unavailable`: the source never served its client plugin graph
    *    inside the boot window, so this entry runs with no profile client
    *    plugins — `ui-chat` pends on `sidebarRight`, the conversation view
@@ -269,8 +271,7 @@ export interface ShellState {
    * All three are recoverable by a fresh boot once the source serves: the App
    * re-boots the instance on the ready transition instead of leaving a
    * half-dead mount (previously only a manual page reload recovered), and the
-   * fact now ALSO has a user surface (2026-12, design 05 §4 「降级呈现」).
-   *
+   * fact now ALSO has a user surface ().
    * SINGLE SLOT: the field holds ONE fact — the last one reported wins. Two
    * producers can fire in one boot (the deferred cluster at ~0ms, the probe at
    * 5s), so a boot that both loses a chunk AND misses a service shows only the
@@ -324,16 +325,16 @@ export function createChamberContextSetup(
     ctx.provide('chamberTransport', transport)
     // The machine catalog is a page fact, not a per-source one: every entry
     // reads the same instance the shell built for the LOCAL instance (design 20
-    // §5) — the machine's installed apps and their icons are what a remote
+    // ) — the machine's installed apps and their icons are what a remote
     // source's VS Code mark needs, and its own instance can never serve them.
     ctx.provide('chamberMachineCatalog', machineCatalogForPage())
-    // 代际事实（2026-12 复查 BLOCKER）：页面的 producer 注册表按注册顺序
+    // 代际事实（）：页面的 producer 注册表按注册顺序
     // 授权，一个挂死后又恢复的老 boot 会夺走生产权，其 teardown clear 会把
     // 健康后继的通道永久清空。消费者（侧栏 producer 注册）用它做代际栅栏。
     if (bootGeneration !== undefined) ctx.provide('chamberBootGeneration', bootGeneration)
     // The entry's post-settle producers (the 5s required-service probe and the
     // deferred-cluster verdict) report a STRUCTURED gap through this seam
-    // (2026-09-10; structured 2026-12): the App re-boots the instance instead of
+    // (): the App re-boots the instance instead of
     // leaving a mount whose conversation view never registers, and renders the
     // same fact as copy. The fact travels whole — the frame never parses the
     // diagnostic message to recover which service is missing.
@@ -344,7 +345,7 @@ export function createChamberContextSetup(
 }
 
 /**
- * Boot cancellation (design 05 §4: view lifetime = registry entry lifetime):
+ * Boot cancellation (design 05 : view lifetime = registry entry lifetime):
  * `bootGenerations` hands each bootInstanceShell call the next generation of
  * its instance; `disposeInstanceShell` (registry removal) records, per
  * instance, the highest generation pending at that moment. A boot whose
@@ -362,7 +363,7 @@ const bootGenerations = new Map<string, number>()
 /** Page-monotonic boot serial (never per-id, never reused): the post-settle fact
  * path compares it, so a stale producer cannot pass an identity check by landing
  * on a generation number that cleanup + a same-id re-boot handed out again
- * (2026-12 review F4). Unlike `bootGenerations` it is never deleted. */
+ * (). Unlike `bootGenerations` it is never deleted. */
 let bootSerialCounter = 0
 const cancelledBoots = new Map<string, number>()
 
@@ -378,20 +379,19 @@ interface ShellHolder {
    * Monotonic per-PAGE boot serial (never per-id, never reused): the pending
    * replay and the holder identity both compare it, so a stale producer that
    * survived an id's lifecycle-owner cleanup cannot pass the fence by landing on
-   * a REUSED generation number (2026-12 review F4).
+   * a REUSED generation number ().
    */
   serial: number
   /**
    * The VIEW's state channel (the 4th `bootInstanceShell` argument — in
    * production the `InstanceView` React setter). A degrade discovered AFTER
    * settle is republished here so the view's own copy of the state stays true;
-   * it is NOT what reaches the App — see `onRepublish` (2026-12: the original
-   * 2026-09-10 note claimed this seam carried the verdict to the App, and that
+   * it is NOT what reaches the App — see `onRepublish` (
    * claim was false for the whole life of the probe arm).
    */
   onState?: (next: ShellState) => void
   /**
-   * App-facing sink for POST-SETTLE republishes (2026-12 BLOCKER fix). It is
+   * App-facing sink for POST-SETTLE republishes (). It is
    * deliberately distinct from `onState`: that one is the VIEW's React setter,
    * so publishing only through it re-rendered `InstanceView` and never reached
    * the App's `shellStates` mirror — which is what the active-view banner, the
@@ -405,14 +405,13 @@ interface ShellHolder {
 }
 
 /**
- * Reports that arrived BEFORE their boot settled (2026-12 review F2/F3; FIX 3).
+ * Reports that arrived BEFORE their boot settled ().
  * The holder only exists once `entry.run()` resolves, and a slow boot (cold SSH
  * bundle/extra-row loads) can outlive the probe's 5s timer; the deferred
  * cluster's report is a bare macrotask racing the same window. Dropping those
  * lost the boot's only user-visible verdict (console.error was all that was
  * left), so the newest report per id waits here and is replayed at settle —
  * keyed by the boot SERIAL, so only the boot that was loading can claim it.
- *
  * LAST-WINS, like the live path (FIX 3): the slot used to keep the FIRST report
  * of a serial, so a 0ms deferred-cluster verdict could shadow the probe's 5s
  * verdict even though the live path lets the later fact replace the earlier one.
@@ -427,13 +426,11 @@ const pendingDegrades = new Map<string, { serial: number; report: ShellDegradedR
  * No-op when the instance has no holder (never booted / disposed), its boot did
  * not succeed (a failed boot already reports its own error), or the report
  * changes nothing (the SAME fact kind + payload is already recorded).
- *
  * Identity is {@link bootGapSignature}, not the kind alone: two producers used
  * to share one kind and the probe's re-armed pass can name a LARGER missing set,
- * so a kind-only comparison silently dropped the richer verdict (2026-12
+ * so a kind-only comparison silently dropped the richer verdict (
  * review). Payload equality still absorbs a repeated identical report.
- *
- * A {@link ShellDegradedClear} is the producers' retraction path (2026-12 FIX 1):
+ * A {@link ShellDegradedClear} is the producers' retraction path ():
  * it removes the recorded fact only when {@link bootGapClearMatchesFact} says it
  * retracts exactly that fact — kind AND payload — so a newer/richer verdict is
  * never erased by an older producer's retraction. A no-op retraction (nothing
@@ -443,7 +440,7 @@ function reportSettledDegrade(instanceId: string, report: ShellDegradedReport, s
   const holder = entries.get(instanceId)
   // A holder of ANOTHER boot owns the slot: this report is from a dead
   // incarnation (its generation may even have been reused after cleanup) and must
-  // never spread that holder's `lastState` (2026-12 review F4).
+  // never spread that holder's `lastState` ().
   if (holder !== undefined && holder.serial !== serial) return
   if (holder?.lastState === undefined || holder.onState === undefined) {
     // Still booting: hold the NEWEST report for the settle that is coming (FIX 3:
@@ -465,7 +462,7 @@ function reportSettledDegrade(instanceId: string, report: ShellDegradedReport, s
     return
   }
   if (current !== null && bootGapSignature(current) === bootGapSignature(report)) return
-  // Cause outranks consequence (2026-12 FIX 6 follow-up): a still-current
+  // Cause outranks consequence (): a still-current
   // higher-priority fact is not overwritten by its own symptom, so the banner
   // keeps naming the actionable cause (see shouldReplaceBootGap).
   if (!shouldReplaceBootGap(current, report)) return
@@ -528,19 +525,17 @@ export function __testShellLifecycleOwnerCounts(): {
 const pendingOpens = new PendingOpenQueue(QUEUED_OPEN_TIMEOUT_MS)
 
 /**
- * The LAST session each instance was asked to open (2026-12, design 05 §2.2
+ * The LAST session each instance was asked to open (
  * revision). Every open request enters through {@link openInstanceSession}, so
  * this map is the renderer-side record of the per-source request stream — the
  * dispatcher drops requests it has already superseded (see dispatchOpen). It
  * deliberately survives the settle of the request that set it: a stale request
  * may reach its dispatch only after the newer one finished.
- *
  * Cleared by {@link disposeInstanceShell} and {@link disposeAllShells} — the
  * paths that retire a source's shell — so a same-id re-add is a new generation
  * whose first open is not judged against the previous incarnation's request.
- *
  * The boot-failure / replacement paths deliberately do NOT clear it
- * (2026-09-11 review F5, doc narrowed to what the code does): the displaced
+ * (): the displaced
  * holder, the "boot failed after registration" teardown and the
  * pre-registration failure branches reject that instance's QUEUED opens but
  * leave this record. That is inert, because a dispatch is always preceded by
@@ -555,8 +550,7 @@ const lastRequestedSession = new Map<string, string>()
 
 /**
  * Test-only seam: read one source's supersede record ({@link lastRequestedSession}).
- *
- * Why the record needs a seam at all (2026-09-11 review F4(b)): its retirement
+ * Why the record needs a seam at all ()): its retirement
  * is NOT observable through the public surface. Every dispatch is preceded by
  * the write of its own request, so a re-added source's first open overwrites the
  * leftover record before anything can compare it — a purely behavioral test of
@@ -571,7 +565,7 @@ export function __testLastRequestedSession(instanceId: string): string | undefin
 /**
  * settle 事实的唯一判据：booted 或已失败（`ShellState` 契约）。retention 候选、
  * 后台预热槽占用、W2 推迟回收臂与视图的遮罩分类共用它——各写一遍
- * `booted || error !== null` 会在下一次修订里漂移（2026-12 复核）。
+ * `booted || error !== null` 会在下一次修订里漂移（）。
  */
 export function isSettledShellState(state: ShellState | undefined): boolean {
   return state !== undefined && (state.booted || state.error !== null)
@@ -594,14 +588,14 @@ export function bootInstanceShell(
   sourceFingerprint: string,
   transport: ChamberTransport = instanceId === 'local' ? 'local' : 'ssh',
   /**
-   * Boot seams the App owns (2026-09-10): `waitForServing` lets the host-graph
+   * Boot seams the App owns (): `waitForServing` lets the host-graph
    * fetch wait for a still-starting source instead of losing its client
    * plugins (see host-graph.ts CollectExtraRowsDeps.waitForServing).
    */
   options: {
     waitForServing?: (instanceId: string) => Promise<boolean>
     /**
-     * App-owned sink for post-settle republishes (2026-12 BLOCKER fix). The
+     * App-owned sink for post-settle republishes (). The
      * caller supplies the SAME handler it passes as `onStateChange`, because the
      * shell's `onState` argument is the view's local setter and cannot reach the
      * App's mirror.
@@ -620,7 +614,7 @@ export function bootInstanceShell(
   bootGenerations.set(instanceId, gen)
   // Page-monotonic boot serial: unlike `gen` (which restarts at 1 once an id's
   // lifecycle owner is cleaned up) it is NEVER reused, so it is the identity the
-  // post-settle fact path compares (2026-12 review F4).
+  // post-settle fact path compares ().
   const serial = ++bootSerialCounter
   // Only the current, non-cancelled generation may publish: an old slow boot's
   // late failure must never overwrite a newer healthy mount's facts.
@@ -666,7 +660,7 @@ export function bootInstanceShell(
     previousInstanceTail ?? Promise.resolve(),
     previousTeardownBarrier ?? Promise.resolve(),
   ]).then(() => undefined)
-  // 首启竞态修复（2026-08，05 §4）：任何 bundle 脚本执行前必须装好页面级
+  // 首启竞态修复（）：任何 bundle 脚本执行前必须装好页面级
   // 模块表（window.__DSH_MODULES__ + __ModuleLoader__ 注册 sink）——额外
   // bundle 的脚本在加载时即执行并自注册 factory，sink 不存在则官方 bundle
   // 的无守卫顶层交接直接抛错、factory 永未注册，boot 以难懂的 "cannot
@@ -685,7 +679,7 @@ export function bootInstanceShell(
   // Const capture: TS does not narrow a mutable captured variable inside the
   // closure below.
   const installedModulesSystem = modulesSystem
-  // C3 门（2026-09 性能审计；平台词偏差登记见 dsh-client-web platform.ts /
+  // C3 门（
   // seed.ts）：`@deepseek-ai/dsh-client-ui-primitives` 不再由主图 seed 回答，
   // extra bundle 对该词的同步 require 由 chamber 入口顶层注册的 covered
   // factory 回答——因此 chamber 入口必须在任何 extra bundle 执行前完成求值。
@@ -740,26 +734,22 @@ export function bootInstanceShell(
     && !hadLiveHolder
     ? startExtraRows()
     : undefined
-  // Wait for the exact same-id predecessor BEFORE claiming a page-global
-  // queue position. Thus a hung source never hides a different source behind
-  // its strict instance tail: after the predecessor's 60s page-level slot is
-  // released, unrelated ids may proceed while this successor keeps waiting.
-  // The wait is BOUNDED by the same boot budget (2026-12 review BLOCKER): a
-  // predecessor whose entry.run() never settles must not pin the id forever.
-  // Releasing the tail instead would be wrong — the tail is what keeps
-  // `bootGenerations`/`cancelledBoots` owned, so a late abandoned boot would
-  // compare equal to its successor's generation and register over it. A bounded
-  // wait keeps the generation records intact and therefore keeps the late
-  // predecessor correctly superseded.
-  const task = boundedTailWait(
-    previousInstanceBoot,
-    previousInstanceBootStartedAt === undefined
-      ? undefined
-      : previousInstanceBootStartedAt + INSTANCE_TAIL_WAIT_CAP_MS,
+  const tailDeadlineAt = previousInstanceBootStartedAt === undefined
+    ? undefined
+    : previousInstanceBootStartedAt + INSTANCE_TAIL_WAIT_CAP_MS
+  const tailRemainingMs = previousInstanceBoot === undefined
+    ? 0
+    : tailWaitRemainingMs(tailDeadlineAt, Date.now())
+  const task = (tailRemainingMs <= 0
+    ? Promise.resolve()
+    : withDeadline<undefined>(
+      previousInstanceBoot.then(() => undefined, () => undefined),
+      { ms: tailRemainingMs, onExpire: () => undefined, scheduler: SHELL_SCHEDULER },
+    ).then(() => undefined)
   ).then(() => {
     const runTask = bootChain.then(async () => {
     let staleEntry: AppWebEntry | undefined
-    // 2026-09-11 review-fix (finding 4g): hoisted out of the try so the catch
+    // ): hoisted out of the try so the catch
     // arm below can apply the SAME tolerated-row filter the T15 sweep uses
     // (see collectFailedEntries). It stays `[]` until the rows resolved, and an
     // entry can only exist after that, so the catch arm's filter is never
@@ -841,7 +831,7 @@ export function bootInstanceShell(
         if (bootGenerations.get(instanceId) === gen) rejectPendingOpens(instanceId, blocked.message)
         return { instanceId, basePath, booted: false, booting: false, error: blocked.message, degraded: null } satisfies ShellState
       }
-      // chamber (2026-08 failure-presentation revision, 05 §4): run() RESOLVES
+      // chamber (): run() RESOLVES
       // on boot-chain failures by design (the dsh loading page renders the
       // in-shell report — fail loud, never a silent partial UI), but the
       // chamber must see the failure to show its own per-instance fallback
@@ -852,7 +842,7 @@ export function bootInstanceShell(
       // a run() rejection.
       const bootFailure = entry.bootError
       if (bootFailure !== undefined) {
-        // T15 (2026-09-11 upstream-alignment): read the failed loader entries
+        // T15 (): read the failed loader entries
         // NOW — the context is live until teardownEntry disposes it — so the
         // chamber overlay can list the same plugin ids the official report
         // does (collectFailedEntries). The read is guarded like every other
@@ -931,7 +921,7 @@ export function bootInstanceShell(
       // run() 不再拒绝（rc.8 形状：一切失败经 bootError 上浮），catch 兜底
       // 构造期/挂载期的同步异常——若 entry 已在容器上画过加载页或挂载过 UI，
       // 先 dispose（移除 boot DOM / 卸载 React root），重试才能干净重 boot。
-      // 2026-09-11 review-fix（finding 4g）：这条兜底路径同样要带上失败插件清单。
+      // ）：这条兜底路径同样要带上失败插件清单。
       // 它确实（罕见地）可达：`entry.run()` 在 rc.8 形状下解析失败，但构造器
       // （AppWebEntry/new）或 run() 之前的行解析仍可能同步抛出，此时 live ctx
       // 已经存在、loader 也可能已物化过条目——正是 T15 想在同一 ShellState 上
@@ -976,8 +966,20 @@ export function bootInstanceShell(
     // 页面级链推进用超时护栏：一个永不 settle 的 boot 在
     // BOOT_TIMEOUT_MS 后只放行其他 id。runTask 本身仍被本 id 的
     // instance tail 持有；同 id 新代必须等它 settle + async teardown。
-    // withBootTimeout 本身不 reject，无需再套一层重复 then。
-    bootChain = withBootTimeout(runTask)
+    //  deletion: this was `withBootTimeout`, inlined at its only call site. It never
+    // rejects (the boot chain's own rejection is swallowed), and expiry only LOGS -
+    // a late settle stays generation-gated.
+    bootChain = withDeadline<ShellState | undefined>(
+      runTask.then(value => value, () => undefined),
+      {
+        ms: BOOT_TIMEOUT_MS,
+        onExpire: () => {
+          console.error(`[shell] boot timed out after ${BOOT_TIMEOUT_MS}ms — queue continues (late settle remains generation-gated)`)
+          return undefined
+        },
+        scheduler: SHELL_SCHEDULER,
+      },
+    ).then(() => undefined)
     return runTask
   })
   const instanceTail = task.then(() => undefined, () => undefined)
@@ -1014,14 +1016,12 @@ function blockedBoot(instanceId: string, gen: number): { superseded: boolean; me
  */
 /**
  * Absolute cap on waiting for a same-id predecessor that never settles.
- *
  * (See boundedTailWait below.)
- *
  * The strict per-id tail is what keeps a successor from racing a live
  * predecessor's registration/teardown, so it must stay (and it is what keeps
  * `bootGenerations`/`cancelledBoots` owned — releasing the tail early would let
  * a late abandoned boot compare equal to its successor's generation and
- * register over it; 2026-12 review BLOCKER). But an unbounded wait means a
+ * register over it; ). But an unbounded wait means a
  * boot whose `entry.run()` never settles pins the id forever. The cap is two
  * boot budgets: comfortably past a slow-but-healthy predecessor (queue + boot),
  * and below the App's absolute harvest-abandon cap (135 s), so by the time a
@@ -1033,7 +1033,7 @@ export const INSTANCE_TAIL_WAIT_CAP_MS = BOOT_TIMEOUT_MS * 2
  * Remaining wait for a same-id predecessor, in ms. All successors of one
  * predecessor share the ABSOLUTE deadline (predecessor start + cap) instead of
  * each arming a fresh cap — otherwise a retry at the abandon cap would wait a
- * whole extra cap before joining the queue (2026-12 review MAJOR). Exported for
+ * whole extra cap before joining the queue (). Exported for
  * its unit test (the integration path is timing-sensitive).
  */
 export function tailWaitRemainingMs(deadlineAt: number | undefined, now: number): number {
@@ -1041,31 +1041,6 @@ export function tailWaitRemainingMs(deadlineAt: number | undefined, now: number)
   return Math.max(0, deadlineAt - now)
 }
 
-function boundedTailWait(previous: Promise<void> | undefined, deadlineAt?: number): Promise<void> {
-  if (previous === undefined) return Promise.resolve()
-  const remaining = tailWaitRemainingMs(deadlineAt, Date.now())
-  if (remaining <= 0) return Promise.resolve()
-  return new Promise<void>((resolve) => {
-    const timer = setTimeout(resolve, remaining)
-    void previous.then(
-      () => { clearTimeout(timer); resolve() },
-      () => { clearTimeout(timer); resolve() },
-    )
-  })
-}
-
-function withBootTimeout(promise: Promise<ShellState>): Promise<void> {
-  return new Promise((resolve) => {
-    const timer = setTimeout(() => {
-      console.error(`[shell] boot timed out after ${BOOT_TIMEOUT_MS}ms — queue continues (late settle remains generation-gated)`)
-      resolve()
-    }, BOOT_TIMEOUT_MS)
-    promise.then(
-      () => { clearTimeout(timer); resolve() },
-      () => { clearTimeout(timer); resolve() },
-    )
-  })
-}
 
 /**
  * Request opening one session on an instance: dispatch immediately when the
@@ -1078,7 +1053,7 @@ function withBootTimeout(promise: Promise<ShellState>): Promise<void> {
  * flush).
  */
 export function openInstanceSession(instanceId: string, sessionId: string): Promise<void> {
-  // Record the request stream BEFORE dispatching (2026-12, design 05 §2.2
+  // Record the request stream BEFORE dispatching (
   // revision): the dispatcher drops requests a newer one has superseded, and the
   // record must already hold THIS request when its own dispatch starts.
   lastRequestedSession.set(instanceId, sessionId)
@@ -1193,9 +1168,9 @@ function dispatchOpen(
         fail(new Error(`实例 ${instanceId} shell 已失效，会话 ${sessionId} 未打开`))
         return
       }
-      // 2026-12（design 05 §2.2 修订）——被取代的请求不得再开：同一来源的 open
+      // ）——被取代的请求不得再开：同一来源的 open
       // 请求是"最后意图胜出"流（登记入口是 App.openSession 的两个调用点：侧栏
-      // `chamberBridge.onOpenSession` 订阅与通知 runner——2026-09-11 review F5 更正：
+      // `chamberBridge.onOpenSession` 订阅与通知 runner——
       // 深链不经本函数，它只激活视图，settlePendingDeepLinkActivation → selectView），
       // 而官方 `sessions.open` 就是一次普通 select，一个用户已经离开的旧
       // 请求会把壳**翻回**旧会话：连点两个会话时可见 X→Y→X/Y 抖动，而 boot 期早开臂
@@ -1299,7 +1274,7 @@ function disposeHolder(instanceId: string, holder: ShellHolder, reason: string):
 }
 
 /**
- * Tear down ONE instance's shell (design 05 §4: view lifetime = registry
+ * Tear down ONE instance's shell (design 05 : view lifetime = registry
  * entry lifetime — the source was REMOVED from the registry, or the chamber
  * retention policy reaps an over-limit hidden view — App.tsx reclaimView,
  * 2026 性能整改): dispose the
@@ -1320,7 +1295,7 @@ export function disposeInstanceShell(instanceId: string): void {
   cancelledBoots.set(instanceId, Math.max(cancelledBoots.get(instanceId) ?? 0, currentGeneration))
   // The request-stream record retires with the source: a same-id re-add is a new
   // generation, and its first open must not be judged as superseded by the
-  // previous incarnation's last request (design 05 §2.2 revision).
+  // previous incarnation's last request (design 05  revision).
   lastRequestedSession.delete(instanceId)
   const holder = entries.get(instanceId)
   if (holder !== undefined) {
@@ -1336,7 +1311,7 @@ export function disposeInstanceShell(instanceId: string): void {
  * In-flight or queued boots must also be cancelled (generation threshold):
  * a boot that settles after this call would re-register its entry and either
  * overwrite a retry re-boot's fresh entry (leaking its ctx) or double-root the
- * same container — the 05 §4 no-zombie invariant. Fresh boots started after
+ * same container — the 05  no-zombie invariant. Fresh boots started after
  * this call carry higher generations, so the thresholds never touch them.
  */
 export function disposeAllShells(): void {
@@ -1368,12 +1343,10 @@ export function disposeAllShells(): void {
  * NO shell reboot: the shell, ctx stores and UI state stay mounted — only the
  * underlying connection is replaced (the official runtime's reconnect
  * semantics).
- *
  * Guard discipline mirrors dispatchOpen: no holder (never booted / already
  * disposed) and no runtime ctx are no-ops, and every external access is
  * try/catch-wrapped — errors are logged, never thrown (a watchdog timer must
  * not surface into the App).
- *
  * @returns true only when reconnect() was actually invoked — callers use the
  *   return to decide whether a no-op attempt should consume their backoff
  *   window (M4 review fix: a boot-failure retry window or a missing ctx must

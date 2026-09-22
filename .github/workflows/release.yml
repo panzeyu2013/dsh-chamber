@@ -358,6 +358,16 @@ jobs:
         run: pnpm run verify:registry
       - name: Upstream anchor probe (symbol anchors + legacy budget)
         run: pnpm run verify:anchors
+      # Stream-state refactor gates — same two commands as ci.yml's push path
+      # (the policy test derives the release chain from ci.yml, so a missing
+      # command here is a red). The differential replay must keep showing zero
+      # drift, and the Swift carrier-decision mirror must stay in lockstep.
+      - name: Stream-state differential replay (recorded vectors, drift = failure)
+        run: pnpm run verify:stream-state-equivalence
+      - name: Stream-state Swift parity (cross-language lockstep)
+        run: pnpm run verify:stream-state-swift-parity
+      - name: Ladder-table parity (B4 lockstep over the four recovery ladders)
+        run: pnpm run verify:ladder-table-parity
       # Upstream design-token conformance (S1–S7) — same gate as ci.yml's push
       # path; needs the bootstrapped vendor tree above (2026-12 review P2: the
       # release validation job silently omitted it).

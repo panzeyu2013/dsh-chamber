@@ -53,6 +53,12 @@ export const GROUPS = {
     { file: 'test/lifecycle/session-open-poll.test.ts', nodeArgs: ['--import', '../../scripts/dev/test-shell-register.mjs'] },
     'test/lifecycle/page-read-path-lockstep.test.ts',
     'test/lifecycle/source-readiness.test.ts',
+    // B2 接线（session-chain 重构）: the App's hidden-window ledger pinned against the
+    // shared source reducer, including the measured painted/suppression divergence.
+    'test/lifecycle/source-ledger-equivalence.test.ts',
+    // B2-a: the self-heal decision's truth table, re-expressed against the container
+    // (the planner keeps its own copy until B7 retires it).
+    'test/lifecycle/degraded-retry-decision.test.ts',
     // facts 行刷新提示的四拒 + 1s floor（2026-12 WS-C）。
     'test/lifecycle/source-refresh-hint.test.ts',
     // P3 会话面绘制信号（[data-phase] 揭示门）的纯决策契约。
