@@ -31,10 +31,11 @@
 import { spawnSync } from 'node:child_process'
 
 // 30s (2026-09 real-runner finding; sibling parity with win-probes.ts
-// WINDOWS_PROBE_TIMEOUT_MS): PowerShell 5.1 first-run + Defender scan on
-// fresh windows runners exceeded 10s; the table cache bounds the cost.
-const PROBE_TIMEOUT_MS = 30_000
-const TABLE_CACHE_TTL_MS = 500
+// WINDOWS_PROBE_TIMEOUT_MS — the parity test compares both pairs): PowerShell
+// 5.1 first-run + Defender scan on fresh windows runners exceeded 10s; the
+// table cache bounds the cost.
+export const PROBE_TIMEOUT_MS = 30_000
+export const TABLE_CACHE_TTL_MS = 500
 
 /** One normalized Win32_Process row: pid, stale parent chain and the stable
  *  identity fields (S5) a fresh probe must match before a residual pid is

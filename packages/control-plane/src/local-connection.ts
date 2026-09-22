@@ -45,6 +45,7 @@ import { isWriterQuiescenceUnknown, spawnDsh } from './spawn-dsh.ts'
 import { clearAuthCookie } from './browser-auth-cookie.ts'
 import { probeHostIdentity as probeHostIdentityFn } from './dsh-client.ts'
 import { createHostLogWriter } from './host-logs.ts'
+import { errorMessage } from './error-text.ts'
 import type { Logger } from './types.ts'
 
 /** The connection state machine vocabulary (the REST dsh.status contract). */
@@ -675,7 +676,7 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, log
       // Never let an unexpected restart-loop failure reach an unhandled
       // rejection — the desktop treats those as fatal (app.exit(1)); project
       // the honest process-local error state instead.
-      try { setState('error', error instanceof Error ? error.message : String(error)) } catch { /* nothing left to write */ }
+      try { setState('error', errorMessage(error)) } catch { /* nothing left to write */ }
     })
     return restartPromise
   }

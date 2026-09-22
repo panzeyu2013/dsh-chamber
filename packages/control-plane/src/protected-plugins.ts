@@ -24,6 +24,7 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import type { Dirent } from 'node:fs'
 import { join } from 'node:path'
+import { errorMessage } from './error-text.ts'
 import { MAX_PLUGIN_SPEC_CHARS } from './plugin-spec.ts'
 
 /**
@@ -925,9 +926,10 @@ function profileLayerClosure(profileDir: string, direct: ReadonlySet<string>): S
   return seen
 }
 
-/** 一个未知错误的简短文案（复验跳过理由用；不引入额外依赖）。 */
+/** 一个未知错误的简短文案（复验跳过理由用）。实现为共享叶子 error-text.ts；
+ *  本地名保留以免改动调用点。 */
 function messageOfUnknown(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
+  return errorMessage(error)
 }
 
 /**
