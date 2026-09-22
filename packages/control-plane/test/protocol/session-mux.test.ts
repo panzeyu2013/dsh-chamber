@@ -160,6 +160,7 @@ function makeHarness(options: {
   items?: unknown[]
   callImpl?: MuxUnaryCall
   graceMs?: number
+  now?: () => number
   reconnectMinMs?: number
   reconnectMaxMs?: number
   handshakeTimeoutMs?: number
@@ -213,6 +214,7 @@ function makeHarness(options: {
       return socket
     },
     waterfallGraceMs: options.graceMs ?? 5,
+    ...(options.now === undefined ? {} : { now: options.now }),
     reconnectMinMs: options.reconnectMinMs ?? 5,
     reconnectMaxMs: options.reconnectMaxMs ?? 10,
     handshakeTimeoutMs: options.handshakeTimeoutMs ?? 0,
@@ -431,7 +433,13 @@ test('waterfall: held silently while no downstream mux client is attached (never
 })
 
 test('waterfall: delegates exactly once only when attached AND past the grace window', async () => {
-  const h = makeHarness({ attached: false, graceMs: 10 })
+  // The elapsed check reads the injected mux clock while the grace timer is a
+  // real timer, so on a slow runner the real timer can cross graceMs before the
+  // "inside the window" assertion below is reached (observed flake on the
+  // windows leg). Hold the clock still for that assertion, then step it past
+  // graceMs here instead of sleeping and hoping.
+  let clock = 1_000
+  const h = makeHarness({ attached: false, graceMs: 10, now: () => clock })
   await startSession(h)
   h.sockets[0].deliver(waterfallFrame())
   await flush()
@@ -442,7 +450,7 @@ test('waterfall: delegates exactly once only when attached AND past the grace wi
   await flush()
   assert.equal(h.results.length, 0)
   // Cross the grace window, then trigger the sweep again.
-  await wait(30)
+  clock += 10
   h.mux.kick('tick')
   await until(() => h.results.length === 1)
   assert.deepEqual(h.results[0].payload, {
@@ -525,7 +533,10 @@ test('event silence (R21) fires onSilence and resubscribes with a fresh baseline
 })
 
 test('a ready frame resets the silence clock (activity is not silence)', async () => {
-  const h = makeHarness({ silenceTimeoutMs: 25 })
+  // 1s, not 25ms: the emits below are real sleeps and a loaded runner can
+  // stretch them past a tighter window, firing the silence timer the test means
+  // to prove was reset (observed flake on the windows leg).
+  const h = makeHarness({ silenceTimeoutMs: 1_000 })
   await startSession(h)
   for (let index = 0; index < 3; index++) {
     await wait(10)
