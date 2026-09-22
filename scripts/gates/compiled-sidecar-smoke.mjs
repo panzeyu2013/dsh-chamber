@@ -31,16 +31,16 @@
 
 import { spawn } from 'node:child_process'
 import { existsSync, mkdtempSync, rmSync } from 'node:fs'
-import { createServer } from 'node:net'
 import { createInterface } from 'node:readline'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { resolveNodeBinary, resolveSidecarDir } from '../lib/sidecar-assembly.mjs'
+import { SIDECAR_COMPILED_ENV, freeLoopbackPort, sidecarLaunchArgs, sidecarLaunchEnv } from '../lib/sidecar-launch.mjs'
 
 /** Assembly-sidecar marker consumed by control-plane-module.isPackagedSidecarRuntime. */
-export const COMPILED_ENV = 'DSH_CHAMBER_SIDECAR_COMPILED'
+export const COMPILED_ENV = SIDECAR_COMPILED_ENV
 export const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 
 
@@ -65,19 +65,6 @@ export function smokeDecision({ enabled, entryPath, entryExists, controlPlanePat
   return { action: 'run' }
 }
 
-/** Pick a free loopback port (the sidecar binds it; never a fixed test port). */
-function freePort() {
-  return new Promise((resolvePort, reject) => {
-    const server = createServer()
-    server.unref()
-    server.on('error', reject)
-    server.listen(0, '127.0.0.1', () => {
-      const address = server.address()
-      const port = typeof address === 'object' && address !== null ? address.port : 0
-      server.close(() => resolvePort(port))
-    })
-  })
-}
 
 /** Minimal NDJSON driver over the sidecar's stdio (same frames the Swift B bridge sends). */
 function createDriver(child, stderrRef) {
@@ -148,18 +135,13 @@ function createDriver(child, stderrRef) {
 /** Run the smoke; throws on any failure. */
 async function runSmoke({ nodeBinary, entryPath, controlPlanePath }) {
   const userDataDir = mkdtempSync(join(tmpdir(), 'dsh-compiled-sidecar-'))
-  const port = await freePort()
+  const port = await freeLoopbackPort()
   let child
   let stderr = ''
   try {
-    child = spawn(nodeBinary, [entryPath, '--user-data-dir', userDataDir, '--port', String(port)], {
+    child = spawn(nodeBinary, [entryPath, ...sidecarLaunchArgs({ userDataDir, port })], {
       cwd: dirname(entryPath),
-      env: {
-        ...process.env,
-        [COMPILED_ENV]: '1',
-        ELECTRON_RUN_AS_NODE: '1',
-        DSH_SIDECAR_TEST_NO_UPDATE_CHECK: '1',
-      },
+      env: sidecarLaunchEnv(),
       stdio: ['pipe', 'pipe', 'pipe'],
     })
     child.stderr.on('data', (chunk) => {
