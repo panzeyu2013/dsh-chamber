@@ -17,7 +17,7 @@
  * run-script-tests.test.mjs).
  */
 import { readdirSync } from 'node:fs'
-import { join, relative, sep } from 'node:path'
+import { join } from 'node:path'
 
 export const IGNORED_DIRECTORIES = new Set([
   'node_modules',
@@ -63,7 +63,3 @@ export function walkFiles(root, predicate, { ignoredDirs = IGNORED_DIRECTORIES, 
   return found.sort()
 }
 
-/** Repository-root-relative path in the `/`-separated form every gate key uses. */
-export function repoRelative(repoRoot, absolutePath) {
-  return relative(repoRoot, absolutePath).split(sep).join('/')
-}
