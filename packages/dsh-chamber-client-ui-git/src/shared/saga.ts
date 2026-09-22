@@ -1,13 +1,10 @@
 /** Pure two-domain saga policy. Transport adapters live in coordinator.ts. */
+import { errorMessage as errorText } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
 import { collectSessionClosure } from './git-facts.ts'
 import { GitWorktreeRpcError } from './git-api.ts'
 import type {
   CreateWorktreeResult, GitRecovery, PreviewCreateResult, RemoveWorktreeResult,
 } from './types.ts'
-
-function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
-}
 
 /** Prefer a newly established durable recovery; otherwise never erase an older unknown state. */
 export function recoveryForFailure(error: unknown, previous?: GitRecovery): GitRecovery | undefined {

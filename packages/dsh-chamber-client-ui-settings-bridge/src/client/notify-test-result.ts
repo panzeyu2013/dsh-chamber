@@ -9,6 +9,8 @@
  * 之所以独立成纯模块：这条「原因不丢」契约要能被单测钉住，UI 只负责渲染。
  */
 
+import { errorMessage } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
+
 /** 'dsh-chamber:notify' 的诚实结果（与 renderer global.d.ts 的 NotificationSurface 同形）。 */
 export interface TestNotifyOutcome {
   shown: boolean
@@ -28,7 +30,7 @@ export function testNotifyResult(outcome: TestNotifyOutcome): TestNotifyResult {
 
 /** invoke 直接 reject（桥/IPC 异常）时同样如实带原因，绝不吞掉。 */
 export function testNotifyRejected(error: unknown): TestNotifyResult {
-  return withReason(error instanceof Error ? error.message : String(error))
+  return withReason(errorMessage(error))
 }
 
 function withReason(raw: unknown): TestNotifyResult {

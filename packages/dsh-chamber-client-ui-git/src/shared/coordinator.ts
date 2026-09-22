@@ -27,6 +27,7 @@ import {
   GitSagaError, isProvenPreMutationRefusal, recoveryForFailure, runAdoptSessionSaga, runCreateSaga, runPreRemoveArchive,
   runRemoveSaga, runRollbackRecovery, runWorkspaceAdoptRecovery, runWorkspaceDeleteRecovery,
 } from './saga.ts'
+import { errorMessage as errorText } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
 import type { WorkspaceCreationPlacement } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
 import type {
   GitBusyState, GitRecovery, GitSourceError, GitSourceState, GitWorktreeInfo, GitWorktreeSnapshot, PreviewCreateInput, PreviewCreateResult, RemoveWorktreeResult, UnregisteredWorktreeInfo,
@@ -57,10 +58,6 @@ if (globalRegistry[SINGLETON_KEY] === true) {
 
 function nextId(prefix: string): string {
   return globalThis.crypto?.randomUUID?.() ?? `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`
-}
-
-function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
 }
 
 function emit(): void {

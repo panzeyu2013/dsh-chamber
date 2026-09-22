@@ -49,7 +49,7 @@ import type { GraphGapKind } from './source-readiness.ts'
 import { isChamberSourceId, rawInstanceIdFromSourceId } from './transport-source.ts'
 import { collectExtraRows, type ExtraModuleRow } from './host-graph.ts'
 import { BundleLoadTimeoutError } from '../../dsh-chamber-client-ui-sidebar/src/shared/client-plugin-loader.ts'
-import { chamberBridge, type PluginGraphDiagnostic } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
+import { chamberBridge, describeThrown, type PluginGraphDiagnostic } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
 // Page-level machine catalog + the page-level instance client it reads through:
 // both are pure modules with no vendor/runtime links, so the isolated shell
 // test resolves them the same way it resolves the sidebar's loader above.
@@ -91,27 +91,13 @@ function machineCatalogForPage(): MachineCatalog {
 }
 
 /** Convert an arbitrary thrown value into a stable diagnostic without ever
- * throwing again. External runtime stores/plugins may throw proxies whose
- * getPrototypeOf, message, or string-conversion traps also throw; every shell
- * catch boundary must still settle its caller instead of stranding a boot or
- * timer-driven session-open promise. */
+ * throwing again (shared implementation, sidebar/src/shared/error-text.ts):
+ * external runtime stores/plugins may throw proxies whose getPrototypeOf,
+ * message, or string-conversion traps also throw; every shell catch boundary
+ * must still settle its caller instead of stranding a boot or timer-driven
+ * session-open promise. The local name is kept for this file's call sites. */
 function describeShellError(reason: unknown): string {
-  try {
-    if (reason instanceof Error) {
-      const message = typeof reason.message === 'string' ? reason.message : ''
-      if (message !== '') return message
-      const name = typeof reason.name === 'string' ? reason.name : ''
-      if (name !== '') return name
-    }
-  } catch {
-    // Fall through to the separately guarded String conversion.
-  }
-  try {
-    const text = String(reason)
-    return text === '' ? 'unknown error' : text
-  } catch {
-    return 'unknown error'
-  }
+  return describeThrown(reason)
 }
 
 /** Direct opens get 8s of list polling; queued opens retain their earlier

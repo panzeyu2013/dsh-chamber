@@ -1,7 +1,7 @@
 /** Remove-worktree dialog shared by the per-workspace Git occupant. */
 import { useEffect, useState } from 'react'
 import { Button, Modal, RiskConfirmation } from '@deepseek-ai/dsh-client-ui-primitives'
-import { chamberBridge, fetchInstanceSnapshot, getInstanceClient } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
+import { chamberBridge, errorMessage, fetchInstanceSnapshot, getInstanceClient } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
 import { gitCoordinator, removeWorktree, WorktreeDirtyError } from '../shared/coordinator.ts'
 import { GitSagaError } from '../shared/saga.ts'
 import { GitWorktreeRpcError } from '../shared/git-api.ts'
@@ -210,7 +210,7 @@ export function RemoveWorktreeDialog({
         })
       } catch (error) {
         if (cancelled) return
-        setSessionFactsError(error instanceof Error ? error.message : String(error))
+        setSessionFactsError(errorMessage(error))
       }
     })()
     return () => { cancelled = true }

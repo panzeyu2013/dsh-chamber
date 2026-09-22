@@ -23,6 +23,7 @@
  * growing parallel names for one user-facing situation.
  */
 import type { GitSidebarKey } from '../locales.ts'
+import { describeThrown } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
 import { removeFailureCode, removeFailureCopyKey } from './remove-notes.ts'
 
 /**
@@ -93,24 +94,10 @@ export function gitActionErrorCode(error: unknown): string | undefined {
   return removeFailureCode(error)
 }
 
-/** Stable text for a failure with no localized copy (hostile values safe). */
+/** Stable text for a failure with no localized copy (hostile values safe).
+ *  The shared projection with this package's historical fallback. */
 function rawMessage(error: unknown): string {
-  try {
-    if (error instanceof Error) {
-      const message = typeof error.message === 'string' ? error.message : ''
-      if (message !== '') return message
-      const name = typeof error.name === 'string' ? error.name : ''
-      if (name !== '') return name
-    }
-  } catch {
-    // Fall through to the guarded primitive conversion.
-  }
-  try {
-    const text = String(error)
-    return text === '' ? 'unknown Git error' : text
-  } catch {
-    return 'unknown Git error'
-  }
+  return describeThrown(error, 'unknown Git error')
 }
 
 /**
