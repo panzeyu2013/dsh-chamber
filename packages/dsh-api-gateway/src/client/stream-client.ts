@@ -220,11 +220,27 @@ export class RemoteStreamMuxClient {
    *  can add observability-only effects without breaking older executors. */
   private applyRecoveryEffects(effects: readonly RecoveryEffect[], failure: unknown): void {
     for (const effect of effects) {
-      if (effect.e !== 'reopenLogicalStream') continue
-      const fail = this.pendingOpens.get(effect.streamId)
-      if (fail === undefined) continue
-      this.pendingOpens.delete(effect.streamId)
-      fail(failure)
+      switch (effect.e) {
+        case 'reopenLogicalStream': {
+          const fail = this.pendingOpens.get(effect.streamId)
+          if (fail === undefined) break
+          this.pendingOpens.delete(effect.streamId)
+          fail(failure)
+          break
+        }
+        case 'rebuildCarrier':
+          // P5: the replacement is a reducer decision, so the resident tail records
+          // the DECISION (and its reason), not only the executor's callback.
+          this.forensics?.('carrier-rebuild', effect.reason)
+          break
+        case 'throttled':
+          this.forensics?.('carrier-throttled', effect.reason)
+          break
+        default:
+          // Unknown/observability effects are ignored so the package can add faces
+          // without breaking older executors.
+          break
+      }
     }
   }
 

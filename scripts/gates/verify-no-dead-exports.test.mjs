@@ -47,8 +47,13 @@ test('the real index and its modules parse into a non-trivial surface', () => {
   const modules = parseIndexModules(indexText)
   assert.ok(modules.length >= 10, 'the index must re-export every module: ' + String(modules.length))
   const names = modules.reduce((sum, entry) => {
-    const file = join(REPO_ROOT, 'packages', 'dsh-stream-state', 'src', String(entry).replace(/^\.\//u, ''))
-    return sum + extractRuntimeExports(readFileSync(file, 'utf8')).length
+    // The index has two re-export shapes: `export * from './x.ts'` (a string) and
+    // `export { ... } from './x.ts'` (a named-entry object).
+    const module = typeof entry === 'string' ? entry : entry.module
+    const file = join(REPO_ROOT, 'packages', 'dsh-stream-state', 'src', module.replace(/^\.\//u, ''))
+    return sum + (typeof entry === 'string'
+      ? extractRuntimeExports(readFileSync(file, 'utf8')).length
+      : entry.names.length)
   }, 0)
   assert.ok(names >= 30, 'the parsed runtime surface must be non-trivial: ' + String(names))
 })

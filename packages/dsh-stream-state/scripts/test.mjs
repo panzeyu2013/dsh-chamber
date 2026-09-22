@@ -31,6 +31,10 @@ export const GROUPS = {
   wiring: [
     'test/wiring/emission-coverage.test.ts',
   ],
+  // forensics: the bounded resident tail buffer every export path drains (P5).
+  forensics: [
+    'test/forensics/forensics.test.ts',
+  ],
   // carrier: the single-owner carrier lifecycle reducer + its throttle tables.
   carrier: [
     'test/carrier/carrier-lifecycle.test.ts',

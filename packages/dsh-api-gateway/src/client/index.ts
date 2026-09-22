@@ -41,7 +41,7 @@ import {
   type RemoteStreamOptions,
 } from './remote-stream.ts'
 import { createCarrierFailureReporter } from './stream-carrier-fact.ts'
-import { createStreamForensicsReporter } from './stream-forensics.ts'
+import { createStreamForensicsReporter, installStreamForensicsSnapshotBridge } from './stream-forensics.ts'
 
 export { RemoteStreamCarrierError } from './stream-client.ts'
 export { RemoteJournalStream } from './journal-stream.ts'
@@ -179,9 +179,11 @@ class ClientRemoteService extends Service implements ClientRemote {
     // durable surface recorded why; these facts (page events) name the transition
     // and the caller, so the next investigation does not depend on renderer
     // DevTools (the Swift shell exposes none).
-    const forensics = createStreamForensicsReporter({
-      instanceId: (ctx as { readonly chamberInstanceId?: string }).chamberInstanceId,
-    })
+    const chamberInstanceId = (ctx as { readonly chamberInstanceId?: string }).chamberInstanceId
+    const forensics = createStreamForensicsReporter({ instanceId: chamberInstanceId })
+    // P5: a page probe can flush the retained tail through the snapshot sink; the
+    // bridge is a no-op outside a DOM, so plain-Node suites are unaffected.
+    installStreamForensicsSnapshotBridge(forensics, chamberInstanceId)
     this.streams = new RemoteStreamMuxClient(basePath, forensics)
     const connection = ctx.get('connection') as ConnectionHandle
     this.connection = connection

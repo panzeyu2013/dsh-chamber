@@ -183,6 +183,9 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
 >    露屏阈值（10s 反馈窗 / 70s 外层保险 / 2s 兜底）在 `tables.ts` 的 `PRESENTATION_THRESHOLDS`（tables.json 同源），renderer 直接消费，不再持有副本。
 > ⑥ **时间与账本**：`src/time.ts` 是「可用钟/滚动窗口」的唯一所有者——NaN/±Inf/回拨只保守持有（never release/0ms），
 >    `rebuildsAt`/dispatch 账本只在窗口内保留；适配器不再各自比较时间戳（G-B/G-C/G-F）。
+> ⑦ **取证**：包内 `forensics.ts` 是唯一常驻环形缓冲（默认 cap 256，记录时脱敏，非有限时间戳保守为 0）；api-gateway 的
+>    `StreamForensicsReporter` 记录每次载波决策（含 `carrier-rebuild`/`carrier-throttled` 事实），探针经
+>    `dsh-chamber:stream-forensics-request` 触发 `ForensicsSink` 导出（逐条 snapshot 事件），live 页事件不变（P5）。
 > 对照数据：`node scripts/refactor/stream-state-metrics.mjs --compare`（`_MS` 39→34、依赖文件 28→27、App 生命周期命中 115→114）。
 
 **被否方案（2026-12 重构评审）**：
