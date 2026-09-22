@@ -15,6 +15,11 @@
     "silentTeardownMinMs": 15000,
     "openingStallStreak": 2,
     "handshakeTimeoutMs": 30000,
+    "presentation": {
+      "veilActionsAfterMs": 10000,
+      "surfaceMaxHoldMs": 70000,
+      "surfaceAbsentFallbackMs": 2000
+    },
     "ladders": {
       "mobile": {
         "thresholdMs": 45000,

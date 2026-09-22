@@ -8,7 +8,6 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   SERVING_TERMINAL_GRACE_MS,
-  VEIL_ACTIONS_AFTER_MS,
   decideServingGate,
   isDeferredReclaimDue,
   isTerminalUnreadyPhase,
@@ -16,13 +15,13 @@ import {
   shouldAnnounceRetryQueue,
   shouldDeferBootForSource,
   graphGapKindFor,
-  veilShowsActions,
-  veilState,
 } from '../../src/source-readiness.ts'
+import { PRESENTATION_THRESHOLDS } from '@dsh-chamber/dsh-stream-state'
 import { VIEW_RECLAIM_GRACE_MS } from '../../src/retention.ts'
 
 test('the window and grace values carry the numbers the design promises', () => {
-  assert.equal(VEIL_ACTIONS_AFTER_MS, 10_000, 'design 05 §4.1: a 10s feedback window')
+  // The feedback window is the shared table's presentation section (one owner since P2).
+  assert.equal(PRESENTATION_THRESHOLDS.veilActionsAfterMs, 10_000, 'design 05 §4.1: a 10s feedback window')
   assert.equal(SERVING_TERMINAL_GRACE_MS, 1_500, 'design 05 §4.1: a 1.5s terminal grace')
   assert.equal(VIEW_RECLAIM_GRACE_MS, 60_000, 'design 05 §4.1: deferred mounts reclaim on the 60s hidden grace')
 })
@@ -98,21 +97,6 @@ test('only a manual disconnect defers the boot; an unknown projection never does
   for (const phase of ['connecting', 'ready', 'degraded', 'error', undefined]) {
     assert.equal(shouldDeferBootForSource(phase), false, String(phase) + ' must still boot')
   }
-})
-
-test('veil state: the feedback window upgrades to actionable, and settling always wins', () => {
-  assert.equal(veilState({ deferred: false, settled: false, waitedMs: 0 }), 'loading')
-  assert.equal(veilState({ deferred: false, settled: false, waitedMs: VEIL_ACTIONS_AFTER_MS - 1 }), 'loading')
-  assert.equal(veilState({ deferred: false, settled: false, waitedMs: VEIL_ACTIONS_AFTER_MS }), 'loading-stuck')
-  // 未连接来源：立即是可操作态（本来就没有 boot 在跑，不必等反馈窗）。
-  assert.equal(veilState({ deferred: true, settled: false, waitedMs: 0 }), 'boot-deferred')
-  // settle 永远是终局：遮罩不再给动作，失败呈现归 App 覆盖层（结构互斥）。
-  assert.equal(veilState({ deferred: false, settled: true, waitedMs: 0 }), 'settled')
-  assert.equal(veilState({ deferred: true, settled: true, waitedMs: 0 }), 'settled')
-  assert.equal(veilShowsActions('loading-stuck'), true)
-  assert.equal(veilShowsActions('boot-deferred'), true)
-  assert.equal(veilShowsActions('loading'), false)
-  assert.equal(veilShowsActions('settled'), false)
 })
 
 test('every channel failure but the 404 "no graph injected" shape reaches the App as a degrade', () => {

@@ -49,6 +49,17 @@ export const OPENING_STALL_STREAK = 2
  * moves the decision into the carrier reducer. */
 export const HANDSHAKE_TIMEOUT_MS = 30_000
 
+/** Presentation-arbiter thresholds (provenance: source-readiness.ts
+ * VEIL_ACTIONS_AFTER_MS, session-surface.ts SURFACE_MAX_HOLD_MS /
+ * SURFACE_ABSENT_FALLBACK_MS). P2 moved them here so the renderer imports ONE table
+ * instead of owning module-local copies; the frame carries the resulting absolute
+ * release deadline. */
+export const PRESENTATION_THRESHOLDS = {
+  veilActionsAfterMs: 10_000,
+  surfaceMaxHoldMs: 70_000,
+  surfaceAbsentFallbackMs: 2_000,
+} as const
+
 /** Environment handed to the carrier reducer - tables, never literals at the
  * call site, so the executor cannot drift from the table. */
 export const CARRIER_ENV = {
@@ -134,5 +145,6 @@ export const TABLE_SNAPSHOT = {
   silentTeardownMinMs: SILENT_TEARDOWN_MIN_MS,
   openingStallStreak: OPENING_STALL_STREAK,
   handshakeTimeoutMs: HANDSHAKE_TIMEOUT_MS,
+  presentation: PRESENTATION_THRESHOLDS,
   ladders: LADDER_TABLES,
 } as const

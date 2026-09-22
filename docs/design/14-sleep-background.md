@@ -174,10 +174,13 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
 > ① **载波**：四条替换入口收敛为 `RemoteStreamMuxClient.requestCarrierRebuild`，判定由共享 reducer
 > （`packages/dsh-stream-state` 的 `reduceCarrier`/`decideRebuild` + `tables.json`）持有，执行器只执行返回的 effects；
 > ② **页面生命周期**：六个账本（hidden/自愈 mark/预热来源/抑制/弃置/收割）由容器投影持有，App 侧只剩活视图；
-> ③ **露屏**：遮罩分类（`veilState`）与会话面持有（`shouldReleaseVeilForSurface`）合为一次 `decidePresentation`；
+> ③ **露屏**：遮罩分类与会话面持有合为一次 `decidePresentation`；帧带 `veil`（released/held/actionable）与绝对 `releaseAtMonoMs`，
+>    只有 `planVeilTimer` 能把期限换算成定时器（held 必 >0ms），hero/settling 越 70s 外层保险即 `actionable` 揭示租客、
+>    absent/unknown 走 2s 兜底、未 settle 过了反馈窗给可操作面（P2：删除「越界后 0ms 重臂仍不出租客」的旧形态；`unknown` 不再折进 hero）；
 > ④ **等待形状**：`withDeadline` / `waitForCondition` / `retryDelayMs` / `createSingleFlight` 四个原语替换手写计时器记账
 > （B6 七站点中 W1/W2/W3/W5/W6 已迁；W4 不做，W7 因异步探测不适用）；
-> ⑤ **阈值**：四条阶梯的值集中于 `tables.json` 的 `ladders`，由 `scripts/gates/verify-ladder-table-parity.mjs` 与各模块锁步。
+> ⑤ **阈值**：四条阶梯的值集中于 `tables.json` 的 `ladders`，由 `scripts/gates/verify-ladder-table-parity.mjs` 与各模块锁步；
+>    露屏阈值（10s 反馈窗 / 70s 外层保险 / 2s 兜底）在 `tables.ts` 的 `PRESENTATION_THRESHOLDS`（tables.json 同源），renderer 直接消费，不再持有副本。
 > ⑥ **时间与账本**：`src/time.ts` 是「可用钟/滚动窗口」的唯一所有者——NaN/±Inf/回拨只保守持有（never release/0ms），
 >    `rebuildsAt`/dispatch 账本只在窗口内保留；适配器不再各自比较时间戳（G-B/G-C/G-F）。
 > 对照数据：`node scripts/refactor/stream-state-metrics.mjs --compare`（`_MS` 39→34、依赖文件 28→27、App 生命周期命中 115→114）。

@@ -62,7 +62,7 @@ test('P1：遮罩持有期隐藏租客，并进"隐藏壳不创建动画"门', (
     assert.match(body, /transition: none !important/, `${selector} 的过渡同样要关门`)
   }
   const view = read('../../src/components/InstanceView.tsx')
-  assert.match(view, /const shellHeld = settled && veilVisible/, '隐藏判定耦合合成后的 veilVisible（P3 释放时同帧恢复可见）')
+  assert.match(view, /const shellHeld = settled && veilHeld/, '隐藏判定耦合帧的 held 事实（P2 释放时同帧恢复可见）')
   assert.ok(view.includes('instance-veil-held'), '状态类必须存在')
   assert.ok(
     view.includes('className="instance-shell"'),
@@ -113,10 +113,11 @@ test('P3：揭幕信号来自会话面 DOM 事实，窗口锚在本次持有起�
   // 与相位→上界映射都已迁到共享 arbiter。本锁因此改为钉**单一所有者**：组件必须消费
   // arbiter 的帧，且不得把合成式或映射在组件里再写一遍（那正是本次重构要消除的第二份）。
   // 两条规则的真值表由新包 presentation 套件覆盖（含 absent 2s 含边界、hero/settling 70s）。
-  assert.ok(view.includes('const veilVisible = presentation.veilVisible'), '遮罩可见性必须来自 arbiter 的帧')
+  assert.ok(view.includes("const veilHeld = presentation.veil === 'held'"), '遮罩覆盖事实必须来自 arbiter 的帧')
+  assert.ok(view.includes('PRESENTATION_THRESHOLDS'), '阈值必须来自共享表，不得在组件里另存一份')
   assert.equal(view.includes('holdVeil === true && !surfaceRelease'), false, '不得在组件里再写一遍合成式')
   assert.equal(view.includes('surfaceHoldBoundMs('), false, '不得在组件里再写一遍相位→上界映射')
-  assert.ok(view.includes('const delay = presentation.reevaluateInMs'), '兜底时钟的重臂时刻必须来自同一帧')
+  assert.ok(view.includes('const delay = planVeilTimer(presentation, frameNowMs)'), '兜底时钟只从帧的绝对 releaseAtMonoMs 换算（planVeilTimer），不得再重算窗口')
   // 接线行为锁（）：组件级真实渲染在本 worktree 跑不了，
   // 这六条文本锁各自对应 MAJOR(C) / 二轮突变矩阵里"改坏也不红"的点：
   // N4 单向闩锁、N3 观察器 deps 混入 surfaceRelease、N5 观察器改成文档级作用域、
@@ -155,14 +156,15 @@ test('P3：揭幕信号来自会话面 DOM 事实，窗口锚在本次持有起�
   )
   assert.ok(view.includes("setSurfacePhase('absent')"), '持有上升沿必须复位相位（与 leaf 时钟门双重保险）')
   assert.ok(view.includes('absentSinceMs: absentSince'), 'absent 必须把"连续缺失起点"交给 leaf')
-  assert.ok(view.includes('nowMs: monotonicNow()'), '判定的时基必须是单调钟（墙钟回拨会让外层保险静默失效）')
+  assert.ok(view.includes('const frameNowMs = monotonicNow()'), '判定的时基必须是单调钟（墙钟回拨会让外层保险静默失效）')
+  assert.ok(view.includes('nowMs: frameNowMs'), '判定必须吃同一拍单调钟读数（帧的绝对期限与它同基）')
   assert.ok(
-    view.includes('}, [surfaceHoldActive, holdStartedAt, absentSince, surfacePhase, surfaceFallbackTick])'),
-    '定时器 deps 必须含相位档、缺失起点与到期 tick（否则换档后 bound 陈旧、提前触发后不再重臂）',
+    view.includes('}, [presentation.veil, presentation.releaseAtMonoMs, frameNowMs, surfaceFallbackTick])'),
+    '定时器 deps 必须含帧的 held 事实、绝对期限与到期 tick（提前触发只重算，不再 0ms 空转）',
   )
   const leaf = read('../../src/session-surface.ts')
-  assert.match(leaf, /export const SURFACE_ABSENT_FALLBACK_MS = 2_000/, 'absent 兜底窗是导出常量（有界出口）')
-  assert.match(leaf, /export const SURFACE_MAX_HOLD_MS = 70_000/, 'hero/settling 的外层保险是导出常量')
+  assert.equal(leaf.includes('SURFACE_ABSENT_FALLBACK_MS'), false, 'absent 兜底窗已收归共享表，leaf 不得留副本')
+  assert.equal(leaf.includes('SURFACE_MAX_HOLD_MS'), false, 'hero/settling 外层保险已收归共享表，leaf 不得留副本')
   assert.ok(
     leaf.includes('SESSION_SCROLL_ANCHOR'),
     '相位读取必须从 [data-conversation-scroll] 反查祖先（composer 也发 data-phase，first-match 不可靠）',

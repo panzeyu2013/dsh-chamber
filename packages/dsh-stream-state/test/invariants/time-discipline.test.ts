@@ -19,7 +19,7 @@ import { decideRebuild, reduceCarrier } from '../../src/carrier.ts'
 import { initialCarrierState } from '../../src/state.ts'
 import { CARRIER_ENV } from '../../src/tables.ts'
 import { planLadder, type Ladder } from '../../src/ladder.ts'
-import { decidePresentation, type PresentationFacts, type PresentationThresholds } from '../../src/presentation.ts'
+import { decidePresentation, planVeilTimer, type PresentationFacts, type PresentationThresholds } from '../../src/presentation.ts'
 import { initialLoadState, loadIsLate, reduceLoadState, type LoadEnv } from '../../src/load-state.ts'
 import { waitForCondition, withDeadline, type Scheduler } from '../../src/async-op.ts'
 
@@ -88,14 +88,15 @@ test('a non-finite ladder clock never dispatches a tier', () => {
 test('a non-finite presentation clock holds the veil with a finite deadline', () => {
   for (const nowMs of NON_FINITE) {
     const frame = decidePresentation(facts({ nowMs }), THRESHOLDS)
-    assert.equal(frame.veilVisible, true, 'the veil must hold at now=' + String(nowMs))
-    assert.notEqual(frame.mode, 'contents', 'an unusable clock must not reveal the tenant')
+    assert.equal(frame.veil, 'held', 'the veil must hold at now=' + String(nowMs))
+    assert.ok(Number.isFinite(frame.releaseAtMonoMs), 'a held frame must carry a finite releaseAtMonoMs')
   }
   const rolled = decidePresentation(facts({ nowMs: 500 }), THRESHOLDS)
-  assert.equal(rolled.veilVisible, true, 'a clock that went backwards must hold the veil')
+  assert.equal(rolled.veil, 'held', 'a clock that went backwards must hold the veil')
   const nanWait = decidePresentation(facts({ settled: false, waitedMs: Number.NaN }), THRESHOLDS)
-  assert.equal(nanWait.veilVisible, true)
-  assert.ok(Number.isFinite(nanWait.reevaluateInMs), 'a held frame must carry a finite re-evaluation deadline')
+  assert.equal(nanWait.veil, 'held')
+  assert.ok(Number.isFinite(nanWait.releaseAtMonoMs), 'a held frame must carry a finite release deadline')
+  assert.ok(planVeilTimer(nanWait, 0) > 0, 'a held frame must never arm a 0 ms timer')
 })
 
 test('loadIsLate is false on a non-finite, rolled-back or terminal clock', () => {
