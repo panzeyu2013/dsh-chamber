@@ -8,6 +8,10 @@
  * renderer build must generate exactly that set before Vite resolves it.
  */
 
+// Comment stripping is the repository's single implementation (2026-12
+// support-layer pass); this script used to carry a byte-identical copy.
+import { stripComments } from '../../../scripts/dev/test-support/source-text.ts'
+
 /**
  * The pinned assembly contract: every remote package the official
  * `dsh-api-remotes` client half VALUE-imports, in assembly order
@@ -42,42 +46,6 @@ const IMPORT_CLAUSE = new RegExp(
   `^\\s*import\\s+([^'"\\n]+?)\\s+from\\s+['\"]${REMOTE_SPECIFIER}['\"]`,
   'gm',
 )
-
-/**
- * Remove line/block comments so a commented-out import cannot be counted and
- * an import inside a block comment cannot be missed (2026-09 round-3 W4-Q5-F6).
- * @param {string} source - the module text.
- * @returns {string} comment-free text (string bodies preserved).
- */
-function stripComments(source) {
-  let out = ''
-  let quote
-  let line = false
-  let block = false
-  for (let i = 0; i < source.length; i += 1) {
-    const ch = source[i]
-    const next = source[i + 1]
-    if (line) {
-      if (ch === '\n') { line = false; out += ch } else out += ' '
-      continue
-    }
-    if (block) {
-      if (ch === '*' && next === '/') { block = false; out += '  '; i += 1 } else out += ch === '\n' ? ch : ' '
-      continue
-    }
-    if (quote !== undefined) {
-      out += ch
-      if (ch === '\\') { out += next ?? ''; i += 1; continue }
-      if (ch === quote) quote = undefined
-      continue
-    }
-    if (ch === '/' && next === '/') { line = true; out += '  '; i += 1; continue }
-    if (ch === '/' && next === '*') { block = true; out += '  '; i += 1; continue }
-    if (ch === '"' || ch === "'" || ch === '`') { quote = ch; out += ch; continue }
-    out += ch
-  }
-  return out
-}
 
 /**
  * Is this import clause type-only? `import type X` and
