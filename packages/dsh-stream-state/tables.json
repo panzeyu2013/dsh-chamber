@@ -1,0 +1,35 @@
+{
+  "$comment": "Machine-readable lifecycle thresholds. Source of truth: packages/dsh-stream-state/src/tables.ts. This projection is what the Swift mirror (swift/CarrierDecision.swift) reads, and what scripts/gates/verify-ladder-table-parity.mjs locks the four recovery ladders' surviving module constants to (B4). The package suite fails if the two disagree (test/tables/tables-parity.test.ts) and scripts/gates/verify-stream-state-swift-parity.mjs fails if the mirror disagrees.",
+  "tables": {
+    "rebuildWindowMs": 60000,
+    "maxRebuildsPerWindow": 1,
+    "minRebuildSpacingMs": 1000,
+    "inFlightGraceMs": 1000,
+    "openingTimeoutLadderMs": [
+      30000,
+      60000,
+      120000,
+      240000,
+      300000
+    ],
+    "silentTeardownMinMs": 15000,
+    "openingStallStreak": 2,
+    "ladders": {
+      "mobile": {
+        "thresholdMs": 45000,
+        "pollMs": 3000,
+        "resyncCooldownMs": 120000,
+        "resyncWindowMs": 600000,
+        "resyncMax": 3,
+        "failedMs": 90000
+      },
+      "factReconcile": {
+        "maxAttempts": 2,
+        "retryMs": 1500,
+        "attemptTimeoutMs": 20000,
+        "verifyTimeoutMs": 65000,
+        "correctivePhaseTimeoutMs": 5000
+      }
+    }
+  }
+}

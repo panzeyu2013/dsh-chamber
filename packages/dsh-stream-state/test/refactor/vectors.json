@@ -1,0 +1,194 @@
+{
+  "$comment": "A1 differential vectors: one scenario per old-wiring defect class. Each vector is a legacy-trace event list; legacyEffects() and the reducer both read it, and the divergence column names the DIVERGENCE.md entry that authorizes the difference.",
+  "vectors": [
+    {
+      "id": "clean-single-timeout-no-frames",
+      "intent": "One opening deadline expires on a socket that delivered nothing.",
+      "expectEquivalent": true,
+      "events": [
+        {
+          "kind": "socketOpened",
+          "at": 0
+        },
+        {
+          "kind": "openingTimeout",
+          "at": 30000,
+          "frames": 0,
+          "request": "s1"
+        }
+      ]
+    },
+    {
+      "id": "clean-second-stall-after-cooldown",
+      "intent": "Two frame-answering misses far apart: both readings escalate once, on the same reason class.",
+      "expectEquivalent": true,
+      "events": [
+        {
+          "kind": "socketOpened",
+          "at": 0
+        },
+        {
+          "kind": "framesSinceSend",
+          "at": 250,
+          "frames": 2
+        },
+        {
+          "kind": "openingTimeout",
+          "at": 30000,
+          "frames": 2,
+          "request": "s1"
+        },
+        {
+          "kind": "openingTimeout",
+          "at": 200000,
+          "frames": 2,
+          "request": "s1"
+        }
+      ]
+    },
+    {
+      "id": "one-miss-with-frames-does-not-escalate",
+      "intent": "Frames arrive but the first deadline misses: neither reading may replace the carrier. This is the case that must stay non-divergent - a frame-answering socket keeps its in-flight answer.",
+      "expectEquivalent": true,
+      "events": [
+        {
+          "kind": "socketOpened",
+          "at": 0
+        },
+        {
+          "kind": "framesSinceSend",
+          "at": 250,
+          "frames": 1
+        },
+        {
+          "kind": "openingTimeout",
+          "at": 30000,
+          "frames": 1,
+          "request": "s1"
+        }
+      ]
+    },
+    {
+      "id": "defect-double-replace-zero-frames-streak2",
+      "intent": "Two unreached deadlines with zero frames. MEASURED: both readings fire exactly two replacements, so this is NOT a divergence - the legacy else-branch is unreachable behind the silent branch. Kept as an equality pin so a future edit cannot turn the second miss into a double replacement.",
+      "expectEquivalent": true,
+      "events": [
+        {
+          "kind": "socketOpened",
+          "at": 0
+        },
+        {
+          "kind": "openingTimeout",
+          "at": 30000,
+          "frames": 0,
+          "request": "s1"
+        },
+        {
+          "kind": "openingTimeout",
+          "at": 90000,
+          "frames": 0,
+          "request": "s1"
+        }
+      ]
+    },
+    {
+      "id": "defect-teardown-ignores-cooldown",
+      "intent": "A teardown right after an allowed stall escalation, on a long-lived zero-frame stream: the teardown branch never consults the cooldown marker.",
+      "expectEquivalent": false,
+      "divergence": "D-1",
+      "events": [
+        {
+          "kind": "socketOpened",
+          "at": 0
+        },
+        {
+          "kind": "framesSinceSend",
+          "at": 500,
+          "frames": 3
+        },
+        {
+          "kind": "openingTimeout",
+          "at": 30000,
+          "frames": 3,
+          "request": "s1"
+        },
+        {
+          "kind": "openingTimeout",
+          "at": 100000,
+          "frames": 3,
+          "request": "s1"
+        },
+        {
+          "kind": "teardown",
+          "at": 101000,
+          "frames": 20000,
+          "frameDelta": 0,
+          "request": "s1"
+        }
+      ]
+    },
+    {
+      "id": "defect-lane-unbounded",
+      "intent": "The lane tears the socket down with no throttle, four times inside one minute.",
+      "expectEquivalent": false,
+      "divergence": "D-3",
+      "events": [
+        {
+          "kind": "socketOpened",
+          "at": 0
+        },
+        {
+          "kind": "laneReconnect",
+          "at": 1000
+        },
+        {
+          "kind": "socketOpened",
+          "at": 1500
+        },
+        {
+          "kind": "laneReconnect",
+          "at": 5000
+        },
+        {
+          "kind": "socketOpened",
+          "at": 6000
+        },
+        {
+          "kind": "laneReconnect",
+          "at": 20000
+        },
+        {
+          "kind": "socketOpened",
+          "at": 21000
+        },
+        {
+          "kind": "laneReconnect",
+          "at": 40000
+        }
+      ]
+    },
+    {
+      "id": "defect-correlated-replacements",
+      "intent": "Teardown and lane both judge the same socket inside the same second.",
+      "expectEquivalent": false,
+      "divergence": "D-2",
+      "events": [
+        {
+          "kind": "socketOpened",
+          "at": 0
+        },
+        {
+          "kind": "teardown",
+          "at": 20000,
+          "frames": 16000,
+          "frameDelta": 0,
+          "request": "s1"
+        },
+        {
+          "kind": "laneReconnect",
+          "at": 20500
+        }
+      ]
+    }
+  ]
+}
