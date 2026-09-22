@@ -60,7 +60,7 @@
 
 - 设计21网关插件能力对齐：剩余 §9实机E2E矩阵（真实gateway×desktop双通道门禁、registry传递依赖/lifecycle、故障注入、journal中断对账；发布前执行；.172升级因凭据轮换暂停待恢复）；UI余留：who/when tooltip未渲染、拒绝码→本地化映射未做（409逐字英文）、pollGatewayReady英文串未本地化；archive-pick双模式对话框为macOS-v1。
 
-- 产物新鲜度守卫只覆盖两个产物（2026-12 §6.11）：`desktop/dist/control-plane/**`（`control-plane-freshness.test.mjs`）与 `gateway/dist/**`（`build-smoke.test.ts`）已有「存在但缺当前标记 ⇒失败」守卫；其余陈旧无测试变红——`desktop/dist/web/**`（`electron-shared.test.mjs` 只断路径文本）、`dist/preload.cjs`、`dist/host-{graph,git-worktree,archive-cleanup,open-in}-package/**`（`build-host-graph-package.test.mjs` 只断言行序 /outDir；C8守已提交 `dist/index.js`）、`gateway/host-packages/**`（仅存在性）、vendor `allowBuilds` 锁步、`renderer/src/generated/**`。G2–G8（G1落地 `verify:test-wiring`）见`todo/product-freshness-guards.md`，design 21 §7登记。失效判据：每个产物有「陈旧 ⇒ 红」守卫或进入豁免表（G8）。（2026-12 W8/R15③ 收窄：`dsh-chamber-client-ui-mobile/lib/client.js` 由 `scripts/artifact-scope-marker.test.mjs` 守卫（缺标记/缺文件即红，含负控）；`desktop/dist/web/assets/*.js` 由 `build:renderer` 之后的 `scripts/assert-scoper-artifact.mjs` 在 ci.yml 断言——本仓无 node_modules 时该步骤只在 CI 生效。其余产物仍按上文无守卫。）
+- 产物新鲜度守卫只覆盖两个产物（2026-12 §6.11）：`desktop/dist/control-plane/**`（`control-plane-freshness.test.mjs`）与 `gateway/dist/**`（`build-smoke.test.ts`）已有「存在但缺当前标记 ⇒失败」守卫；其余陈旧无测试变红——`desktop/dist/web/**`（`electron-shared.test.mjs` 只断路径文本）、`dist/preload.cjs`、`dist/host-{graph,git-worktree,archive-cleanup,open-in}-package/**`（`build-host-graph-package.test.mjs` 只断言行序 /outDir；C8 守构建期生成物 `dist/index.js`（clean checkout 由 `pnpm run build:artifacts` 自举））、`gateway/host-packages/**`（仅存在性）、vendor `allowBuilds` 锁步、`renderer/src/generated/**`。G2–G8（G1落地 `verify:test-wiring`）见`todo/product-freshness-guards.md`，design 21 §7登记。失效判据：每个产物有「陈旧 ⇒ 红」守卫或进入豁免表（G8）。（2026-12 W8/R15③ 收窄：`dsh-chamber-client-ui-mobile/lib/client.js` 由 `scripts/artifact-scope-marker.test.mjs` 守卫（缺标记/缺文件即红，含负控）；`desktop/dist/web/assets/*.js` 由 `build:renderer` 之后的 `scripts/assert-scoper-artifact.mjs` 在 ci.yml 断言——本仓无 node_modules 时该步骤只在 CI 生效。其余产物仍按上文无守卫。）
 
 - CI无任何腿能证明SMOKE PASS：`control-plane/test/smoke.test.ts` 在CI恒SKIP（不设 `DSH_CHAMBER_DSH_PATH`、无`ref-dsh`/vendor运行时），release.yml同样没有smoke；`ci.yml` 只接受显式 `SMOKE PASS` 或显式 `SKIP: …`（静默exit0会红），绿灯从未代表真跑过安装链。失效判据：至少一条CI/发布腿真跑出 `SMOKE PASS`（或明确改判「不做」并登记缺席理由）时删除本条。
 
@@ -386,7 +386,7 @@
 
 - 依赖声明补齐与跨包原语合并暂缓（2026-09）：renderer→6 个 client-ui 包、layout→sidebar 的 devDeps 缺口已确认；linux 上 `pnpm install --lockfile-only` 会剥离跨平台 optional 解析（296 删/31 增，pnpm 以本机平台规范化），本机无法自证 → 待平台正确的 lockfile 重生成 + 人工审 optional churn；在此之前 private-fs/windows-process/semver 的跨包单一实现以 parity/lockstep 门（已常驻测试）代替。
 
-- 提交进仓构建产物维持现状（2026-09精简评估）：真正 tracked 的是 `dsh-runtime/dist/index.js`（7,709 行）、四个 seed `dist/index.js`（4,786 行）与 mobile `dist`+`lib` 工件（3,222 行），共约 15.7k 行；三者在 `.gitignore` 反选处各有明确设计理由（seed 播种零构建依赖 / desktop shim 静态 import 包 main / gateway 打包复制），移出需改 design 08/09/17 契约与「clean checkout 可直接 typecheck/test」的前提，属构建流程裁决，未动。`renderer/src/generated` 本就只在本地生成、从未 tracked（`upstream-touchpoints.md:206` 契约即「不提交」）。
+- 构建产物移出 git（2026-12；原「提交进仓产物维持现状」登记已不成立）：clean checkout 首次 typecheck/static/test/打包前需 `pnpm run build:artifacts`（`run-checks` 与相关包测试自动前置）；产物不再入库。设计契约与取舍见 design 05 §6 Rejected alternatives 与 design 08 §7 / 09 §3.1 / 17 §15 / 18 §9.6 / 20 §6.1 / 24 §7；`renderer/src/generated` 维持只在本地生成、不提交。
 
 - 测试面精简已到证据化上限（2026-09）：已完成逐删除覆盖复核与最小恢复（恢复落在存活文件）；继续压缩须删除安全/fail-closed、跨包 parity、golden/pin 或 CI 显式引用类测试，属保护面取舍，需显式裁决。
 

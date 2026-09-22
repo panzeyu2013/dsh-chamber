@@ -1091,7 +1091,9 @@ Node 22+；package export 不指向源码 TypeScript。根脚本包含 `build:ga
 运行时版本管理（design 18 §9）：`@dsh-chamber/dsh-runtime` 以 workspace devDependency
 经 `scripts/build.mjs` 与 control-plane 一起打入 `dist/`；gateway 另新增钉版本运行时
 依赖 `pnpm@11.21.0`（与 desktop 同源，design 18 §9.2 D1）。pack/install smoke 必须
-覆盖 pnpm 依赖安装成功与 `gateway --help`。
+覆盖 pnpm 依赖安装成功与 `gateway --help`。移动插件产物（`dist/index.js` 与
+`lib/client.js`(+map)/`lib/index.js`）为构建期生成、不提交；clean checkout 由
+`pnpm run build:artifacts` 自举（取舍见 design 05 §6）。
 
 CI 运行 Gateway typecheck、完整测试、release workflow policy 和 pack/install CLI
 smoke。release workflow 只在 macOS 与 Windows Desktop 产物门禁完成后 pack Gateway，

@@ -59,7 +59,7 @@ plugin inventory 只读（`dsh-host-plugin-inventory` 仅 `list()`），都不�
   本地 profile seed 该行（`--patch` overlay，模块 B；先例 `seedDshHomeDefaults` 已 seed
   `settings.yaml`）。本文模块 A 为单包；同 seed 机制的 chamber 宿主包现为四个（+git-worktree（设计 08）、
   +archive-cleanup（设计 24）、+open-in（设计 20 §6，`localOnly`）），机制同构、清单以 05 §6/02 §2.6
-  为权威。**包分发契约**：seed 时控制面把模块 A 包（package.json + dist/index.js）裸包拷贝进
+  为权威。**包分发契约**：seed 时控制面把模块 A 包（package.json + dist/index.js；产物构建期生成、不提交，clean checkout 由 `pnpm run build:artifacts` 自举，取舍见 design 05 §6）裸包拷贝进
   `profiles/web/node_modules/@dsh-chamber/dsh-chamber-seed-client-graph/`（免 pnpm，行内注释记录），
   `--patch` 行经 profile node_modules 锚点解析。
 - **方案 B（备选，未采用）：前端提取宿主注入的图**。`GET /api/i/<id>/` 反代到宿主根路径，宿主返回官方
@@ -217,7 +217,7 @@ plugin inventory 只读（`dsh-host-plugin-inventory` 仅 `list()`），都不�
   cordis.patch.yml / dsh CLI `--patch <path>` overlay 同格式，`@deepseek-ai/dsh-app-boot`
   loadOverlayPatches 为权威），幂等自愈（一致不动、漂移重写）。spawn 每次注入 `--patch`：
   `webProfileArgs(port, patchPath?)`（须在 `--profile web` 之后、web-app 自有 flags 之前），经
-  local-connection 对每次 spawn/重启透传；模块 A 产物（dist/index.js）缺失时不注 overlay——命令行保持
+  local-connection 对每次 spawn/重启透传；模块 A 产物（dist/index.js；clean checkout 由 `pnpm run build:artifacts` 自举）缺失时不注 overlay——命令行保持
   v4 基础（插了行却解析不到的 overlay 会让宿主 boot 响亮失败，缺失模块 A 必须等价于"未发货"）。
   已运行的本地实例在下一次重启按官方插件集变更节奏生效。同一 spawn gate 的首次 `settings.yaml` 默认值复用
   owner-private O_EXCL writer：`dsh-home` 最终目录必须真实，既有 settings leaf（含用户 symlink）只视为

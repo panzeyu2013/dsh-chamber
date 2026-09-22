@@ -916,6 +916,9 @@ Windows 只读口径与验证门例外同 §6（正式解锁待真实 Windows �
 - **`packages/dsh-runtime` 发版形态**：作为 desktop/gateway 的 workspace
   依赖打入产物、不单独进 npm 发版集；若改为独立发版，需同步修订
   §7 版本集口径与 release.yml 断言；
+- **产物纪律**：`packages/dsh-runtime/dist/index.js`（包 main 指向它）为构建期生成、
+  不提交；desktop shim 的静态 import 与 gateway 打包复制都以先构建为前提，clean
+  checkout 由 `pnpm run build:artifacts` 自举（取舍见 design 05 §6）；
 - **lockfile 纪律**：新增 workspace 包与 pnpm 依赖后，按 AGENTS.md 用带 vendor 树的
   现场重新生成 lockfile 并 frozen 验证（pnpm 11 prunes
   `vendor/harness-packages/@deepseek-ai/*` importer 记录的坑）；

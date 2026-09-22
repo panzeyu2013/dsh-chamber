@@ -636,12 +636,14 @@ pre-remove 归档**不**停止，仍由归档管理器的删除前停止兜底�
 ## 7. 工程接线与验证
 
 - host 包与 client-graph 包一起进入本地 profile seed、远程 ready-time seed、desktop 打包资源和
-  loader patch；seed 继续只经已实现的受限 `run/write-file` 通道。四个 host 包都提交 esbuild
-  `dist/index.js`（`@deepseek-ai/*` external）。
+  loader patch；seed 继续只经已实现的受限 `run/write-file` 通道。四个 host 包的 esbuild
+  `dist/index.js`（`@deepseek-ai/*` external）为构建期生成、不提交；clean checkout 由
+  `pnpm run build:artifacts` 自举（seed 与打包都以此为前提；取舍见 design 05 §6
+  Rejected alternatives）。
 - loader id 与 package name 在 profile 中是全局身份：单个 exact 既有 row 复用，同 id/异包、同包/异 id
   或重复 exact row 都在写包/启动前 fail-loud，不追加出下一次重启才暴露的 Cordis 冲突。
 - client 包是首屏静态覆盖行：Vite aliases、`chamber-entry` apply + module factory、
   `CHAMBER_COVERED_IDS`、`CHAMBER_COVERED_FACTORY_IDS` 必须锁步。
 - 专属验证门：`typecheck:git`、`typecheck:host-git`、`test:git`、`test:host-git`、`build:renderer`；
   同时运行 sidebar/renderer-shell/desktop/control-plane 回归。
-- 打包前必须重建两个 host 产物，再拷贝到 desktop `dist/`。
+- 打包前必须重建 host 产物（`build:artifacts` / `build:host-packages`），再拷贝到 desktop `dist/`。

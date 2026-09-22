@@ -15,11 +15,11 @@
 |`packages/desktop/dist/host-{graph,git-worktree,archive-cleanup,open-in}-package/**`|`scripts/build-host-graph-package.mjs`（各seed包 `dist` cpSync）|忽略|只有行序/outDir断言（`scripts/release/packaging-manifest-lockstep.test.mjs`，原 build-host-graph-package 断言已并入）|打包seed旧宿主包|
 |`packages/gateway/dist/**`（含 `dist/pnpm/**`）|`packages/gateway/scripts/build.mjs`|忽略|✅ 标记守卫 + 内嵌pnpm版本/pin断言（`packages/gateway/test/packaging/build-smoke.test.ts`）|打包gateway旧服务端（本轮实际发生）|
 |`packages/gateway/host-packages/dsh-chamber-client-ui-mobile/**`|`packages/gateway/scripts/build.mjs`（`HOST_PACKAGES` 拷贝）|忽略|只有存在性/导出契约断言（缺文件才按需构建）|gateway seed旧移动端（`lib/client.js` 旧DOM锚点）|
-|seed包 `dist/index.js` ×4 + `packages/dsh-runtime/dist/index.js` + mobile `dist/index.js`/`lib/**`|各自 `scripts/build.mjs`|提交|✅ C8重建-比对（`scripts/upstream/verify-upstream-touchpoints.mjs`，硬失败）|已由门禁挡住|
+|seed包 `dist/index.js` ×4 + `packages/dsh-runtime/dist/index.js` + mobile `dist/index.js`/`lib/**`|各自 `scripts/build.mjs`（clean checkout 由 `pnpm run build:artifacts` 自举）|不提交|✅ C8重建-比对（`scripts/upstream/verify-upstream-touchpoints.mjs`，硬失败）|已由门禁挡住|
 |`packages/renderer/src/generated/**`、`packages/renderer/.cache/**`|gen-typert/构建|忽略|构建期重新生成|构建失败或旧remote契约|
 |`packages/desktop/vendor/dsh/**`（运行时线）|`bundle:dsh`/`scripts/upstream/update-vendor.mjs`|lockfile提交、树忽略|C10/C11 + release preflight|运行时线漂移（已有门）|
 
-`dist/` 整族在 `.gitignore`：干净checkout的"缺失"是正常态（守卫按需构建）；要防的是本地/打包态的"存在但陈旧"——CI每次全新构建，看不到这一类。
+`dist/` 整族在 `.gitignore`：干净checkout的"缺失"是正常态——首批 host/dsh-runtime/mobile 产物须先由 `pnpm run build:artifacts` 自举，其余按需构建；要防的是本地/打包态的"存在但陈旧"——CI每次全新构建，看不到这一类。
 
 > 表中 `scripts/*` 指 `packages/desktop/scripts/*`（Electron构建脚本；gateway侧 `packages/gateway/scripts/*`），非仓库根 `scripts/`。
 

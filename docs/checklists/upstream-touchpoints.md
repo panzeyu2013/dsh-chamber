@@ -156,7 +156,7 @@ host插件入口/半、上游 `tests/`、`tsdown.config.ts`、上游README（api
 | `src/index.ts` | [patch-mod] | typert 门面取代 webServer 路由 + Config schema + SSH 休眠门（design 20 §6.1） |
 | `src/shared.ts` | [patch-mod] | wire 契约家：上游三条 webServer 路由常量 → typert Remote 方法名 + 域载体（design 20 §4.1/§6.1） |
 | `tsconfig.json` | [patch-mod] | chamber 构面（vendor paths + 本包 files） |
-| `dist/index.js` | [own] | chamber 提交态产物（C8 逐字节重建-比对；上游无对应文件） |
+| `dist/index.js` | [own] | chamber 构建期生成产物（不提交；clean checkout 由 pnpm run build:artifacts 自举；C8 逐字节重建-比对；上游无对应文件） |
 | `scripts/build.mjs` | [own] | chamber esbuild 产物构建 |
 | `src/core.ts` | [own] | chamber 域核心：上游 apply() 的目录/图标/拉起状态机（去掉路由与 SSH 门） |
 | `test/` | [own] | chamber 自有测试（域契约 + 载荷拒绝矩阵 + vendor stub loader） |
@@ -204,7 +204,7 @@ verify 预算 ≥ **两次**探针上限（N=2 串行读；探针上限直接 im
 |再生物|源|提交纪律|
 |---|---|---|
 |renderer typert工件（gen-typert-remotes输出）|vendor typert/remote源码|**构建期生成、`.gitignore` 忽略，不提交**（`renderer/src/generated/`；升级后由 `build:renderer` 重生成）|
-|host dist ×4（`dist/index.js`，含seed-open-in）+ `dsh-runtime/dist/index.js` + mobile `dist/index.js`/`lib/index.js`/`lib/client.js`(+map)|chamber host包src / dsh-runtime src / mobile src|`build:host-packages` / `build:dsh-runtime` / mobile `build` 后提交（C8共6组）。C8重建-比对硬失败盯陈旧（mobile产物由gateway逐字节seed，陈旧即线上锚点失效）；两个build脚本都带 `absWorkingDir`，产物与调用者CWD无关|
+|host dist ×4（`dist/index.js`，含seed-open-in）+ `dsh-runtime/dist/index.js` + mobile `dist/index.js`/`lib/index.js`/`lib/client.js`(+map)|chamber host包src / dsh-runtime src / mobile src|**构建期生成、`.gitignore` 忽略，不提交**（clean checkout 由 `pnpm run build:artifacts` 自举；C8共6组重建-比对硬失败盯陈旧——mobile产物由gateway逐字节seed，陈旧即线上锚点失效）；两个build脚本都带 `absWorkingDir`，产物与调用者CWD无关|
 |boot manifest / perf-sizes|build:renderer|构建产物diff随批审查|
 |schemastery桩loader（connection/web测试）|vendor source-only现实|新增vendor运行时导入面时同步补桩|
 
@@ -215,11 +215,11 @@ verify 预算 ≥ **两次**探针上限（N=2 串行读；探针上限直接 im
   - `node scripts/upstream/registry-views.mjs --check|--write`：生成物保鲜（本表 §2/§9的GENERATED块）；手改生成块 ⇒ `verify-registry` 红。
   - `node scripts/upstream/verify-registry.mjs`：schema / canonical / 引用存在性 / deviations id / 覆盖面网（§2.x标题 ↔ 条目、`chamberNamedForks` ↔ `versionAnchor: chamber`、`excludedUpstreamDirs` ↔ `ensure-harness-vendor` 的EXCLUDED）/ 生成块字节一致。
   - `node scripts/upstream/check-anchors.mjs`：registry符号锚可解析 + 遗留 `文件:行` 锚预算棘轮（`anchors-budget.json`，只降不升）；`--report` 出漂移与测试面三分类，`--fix --file <md> [--apply]` 只回写「同行唯一可解析符号」的锚点、拒绝生成块。
-- 参数守卫与退出码（措辞与脚本头注同源）：默认模式会就地重建并还原提交态生成物（唯一写盘路径），因此任何未知参数/位置参数都由 `verify-upstream-touchpoints-args.mjs` 判为用法错误——`--help`/`-h` = 打印权威用法文本、exit 0，不跑任何门、不写盘；未知参数（如拼错的 `--no-artifact-rebuid`）、位置参数、重复flag或 `--tags` 缺值 = exit 2（用法错误）且不先跑门；门硬失败 = exit 1；全部通过 = exit 0。拼错的flag以前被静默忽略并照跑全量写盘门，故这里响亮失败而非容错。判定逻辑是纯函数（单测 `verify-upstream-touchpoints-args.test.mjs`）。
+- 参数守卫与退出码（措辞与脚本头注同源）：默认模式会就地重建并还原构建期生成物（唯一写盘路径），因此任何未知参数/位置参数都由 `verify-upstream-touchpoints-args.mjs` 判为用法错误——`--help`/`-h` = 打印权威用法文本、exit 0，不跑任何门、不写盘；未知参数（如拼错的 `--no-artifact-rebuid`）、位置参数、重复flag或 `--tags` 缺值 = exit 2（用法错误）且不先跑门；门硬失败 = exit 1；全部通过 = exit 0。拼错的flag以前被静默忽略并照跑全量写盘门，故这里响亮失败而非容错。判定逻辑是纯函数（单测 `verify-upstream-touchpoints-args.test.mjs`）。
 - C1 pure字节恒等 / C3完整性（fork每文件分类、上游每文件裁决，漏 = 硬失败）/
   C5过期锚扫描 / C6 EXCLUDED存在性 —— CI在Bootstrap后fail-loud；
 - C4 roster（covered/factory哨兵 + remote契约15的集合与顺序）—— 本地/CI均可；
-- C7种子域锁步、C8提交态生成物 == src（重建-比对，硬失败；写后原样还原，`--no-artifact-rebuild` 退回mtime advisory）、C9 vendor补丁锚**唯一**命中（硬失败）、C10版本锚一致性 + 活版本字面量白名单（硬失败，判据见 §3：运行时版本单一来源、六锚 + 3 fork等值、未登记「活」版本字面量即红、具名常量按上限1处白名单）—— CI与本地均跑（CI分pre/post-install两段）。
+- C7种子域锁步、C8生成物 == src（重建-比对，硬失败；写后原样还原，`--no-artifact-rebuild` 退回mtime advisory）、C9 vendor补丁锚**唯一**命中（硬失败）、C10版本锚一致性 + 活版本字面量白名单（硬失败，判据见 §3：运行时版本单一来源、六锚 + 3 fork等值、未登记「活」版本字面量即红、具名常量按上限1处白名单）—— CI与本地均跑（CI分pre/post-install两段）。
 - C11–C14受保护集合与代耦合（硬失败，只读，CI两段都跑；判据纯函数在 `plugin-protection-gate.mjs`，负例测试随 `pnpm run test:upgrade-tools`）：
   C11运行时线族集合——F分量**只**认已提交的运行时锁文件闭包（见 §0；实例树物化时另做等价性交叉校验，允许差集 = 其他平台 `node-addon-system-*`）；同一闭包也是design 21 §6.11装后复验所用name→version事实的来源，但本门只判名字集（版本事实不进门禁）；
   C12 **profile契约锚**——上游源码仍以 `dsh.profile.bundles` 承载层列表、以 `dsh.bundle.patch` 声明层、web模板默认组合不变、profile workspace仍是 `nodeLinker: hoisted` + `autoInstallPeers: false`；**两个锚点文件（`packages/boot/app-boot/src/profile.ts` 与 `apps/cli/src/plugin.ts`）都必须可读**——树已部分物化时缺文件 = 改名/搬移（违规），只有整体未物化才降级为note；

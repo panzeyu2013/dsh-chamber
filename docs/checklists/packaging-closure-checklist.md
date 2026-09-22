@@ -13,6 +13,8 @@
 
 ## 2. 构建链产物（改构建脚本后必查）
 
+> 产物移出 git 后（2026-12）：本节与 §3 的产物检查前先 `pnpm run build:artifacts`（缺件时 `pnpm run ensure:artifacts` 会自举并 loud 失败，不静默跳过）；产物不入库，取舍见 design 05 §6。
+
 - [ ] `build:control-plane`：`tsconfig.control-plane.build.json` 的include覆盖 `index.ts` 传递引用的全部源文件。
 - [ ] `build:preload`：`tsconfig.preload.build.json` 输入与输出一致。
 - [ ] `build:renderer`：`dist/assets/*` 与 `manifest.json` entries一一对应（`__DSH_BOOT__` 指向真实bundle）。

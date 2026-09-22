@@ -260,7 +260,7 @@ IPC 形状、载荷守卫、`sourceFingerprint` 来源代 proof、vscode deliver
   `src/shared.ts` 与 `src/index.ts` 登记 `patched`（前者为**本包 wire 契约家**：方法名 + 载荷/结果
   类型，客户端镜像由契约测试钉住；后者换 typert 门面）；`src/internals.ts`（上游测试接缝）不需要则
   `dropped`；上游没有的（`scripts/build.mjs`、`test/`、own 模块）登记 `own`。`scripts/build.mjs` 用
-  esbuild bundle（`external: ['@deepseek-ai/*']`，产物 `dist/index.js` 为提交产物）。
+  esbuild bundle（`external: ['@deepseek-ai/*']`，产物 `dist/index.js` 为构建期生成、不提交；clean checkout 由 `pnpm run build:artifacts` 自举，取舍见 design 05 §6）。
 
 ### 6.2 seed 接线（锁步点，逐处）
 
@@ -306,7 +306,7 @@ IPC 形状、载荷守卫、`sourceFingerprint` 来源代 proof、vscode deliver
    （`scripts/build-host-graph-package.mjs` → `dist/host-open-in-package`，打包态 `main.ts` 的
    `hostOpenInPackageSourceDir` 读它）；CI/release 类型检查与单测清单、`docs/checklists/packaging-closure-checklist.md`
    登记；`pnpm-lock.yaml` importer 记录（新工作区成员必须落锁，否则 CI 的 "Assert lockfile not rewritten" 红）；
-8. `.gitignore` 的 dist 负向登记（首启产物须随仓提交，design 09 §3.5）。
+8. 产物不提交、`.gitignore` 无需 dist 负向登记（根规则忽略 `dist/`；clean checkout 由 `pnpm run build:artifacts` 自举，design 05 §6）。
 
 ### 6.3 安全不变量（host 侧）
 
@@ -423,7 +423,7 @@ IPC 形状、载荷守卫、`sourceFingerprint` 来源代 proof、vscode deliver
   `dsh-runtime`/其他 seed 一致）；registry 每条登记 `versionAnchor: 'upstream' | 'chamber'`（既有三条 =
   upstream、本 fork = chamber），C5 只比对 `upstream`；脚本头注、C5 日志文案与触点表 §4 已同步改写。实测：
   `✓ [seed-open-in] C1/C3: pure=3 patched=4 own=9 dropped=6`、`✓ C7 … openInApp/probe`、
-  `✓ C8 提交态生成物与 src 一致（6 组）`。（被否决的替代：携带上游版本的 copy 包 + seed 包装包——需把
+  `✓ C8 生成物与 src 一致（6 组）`。（被否决的替代：携带上游版本的 copy 包 + seed 包装包——需把
   `packages/host/open-in-app` 从 vendor 树排除（破坏 C1 锚）并新增"seed 引 copy 包源码"构建边。）分歧逐条
   写在 `patched`/`dropped` 原因里并复述于包首页；
 - **图标传输**：`openInApp/icon` 以 base64 走 RPC（有界大小 + 客户端缓存）；若日后受 CSP/体积所限，

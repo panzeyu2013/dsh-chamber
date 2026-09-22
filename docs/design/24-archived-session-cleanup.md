@@ -71,8 +71,8 @@
 
 ## 3. 宿主域契约（wire）
 
-新宿主包（结构镜像 `packages/dsh-chamber-seed-git-worktree`，含提交态 esbuild 产物
-`dist/index.js`）。**命名**：scoped name 沿用两既有宿主包先例
+新宿主包（结构镜像 `packages/dsh-chamber-seed-git-worktree`，含构建期生成的
+esbuild 产物 `dist/index.js`；不提交）。**命名**：scoped name 沿用两既有宿主包先例
 （`@dsh-chamber/dsh-chamber-seed-client-graph`、`@dsh-chamber/dsh-chamber-seed-git-worktree`
 ——旧的 `dsh-chamber-host-*` 目录前缀已退役，包名/目录均为
 `dsh-chamber-seed-<loader-id>`）：包名
@@ -616,12 +616,10 @@ generic throw（无 status 透出）；503 `instance_unavailable` 有专类特�
 > 漏挂。本清单按类别列全：常量/seed 面、探针契约面、分发/打包面、门禁面、文档面。
 
 **A. 新包本体**：`packages/dsh-chamber-seed-archive-cleanup/`（src/index.ts +
-src/core.ts + src/binding.ts + scripts/build.mjs + test/*.test.ts + **提交态 dist**）。
-根 `.gitignore` 需为 `packages/dsh-chamber-seed-archive-cleanup/dist/` 新增否定，并入既有
-「chamber host 包提交态产物」按包否定块——按内容描述：
-`# The chamber host packages ship committed esbuild artifacts…` 注释段 + 逐包
-`!packages/<pkg>/dist/` 与 `!packages/<pkg>/dist/index.js` 否定行，**不引用行号**：
-行布局随包增删变化——否则提交态 dist 无法入库、CI 缺产物 → seed 跳过 → 激活失败。
+src/core.ts + src/binding.ts + scripts/build.mjs + test/*.test.ts + **构建期生成的 dist（不提交）**）。
+产物移出 git 后 `.gitignore` **不再**逐包写 dist 否定行（根 `dist/` 规则直接覆盖；历史的
+「chamber host 包提交态产物」否定块已删除）；clean checkout 由 `pnpm run build:artifacts`
+自举（design 05 §6），seed 前产物缺失只跳过对应行，不再有「CI 缺产物 → 激活失败」的入库依赖。
 
 **B. control-plane seed 面**：`host-graph-seed.ts` 新增 `HOST_ARCHIVE_CLEANUP_*` 常量
 （PACKAGE_NAME / INSERT_ID / INSERT）；`index.ts` `seedEntries()` 第三行 +
@@ -645,12 +643,13 @@ src/core.ts + src/binding.ts + scripts/build.mjs + test/*.test.ts + **提交态 
   做强于旧语义的验证（2-of-3 部分同步不会与静态期望集错配而 observe→fail→回退）；
 - **探针 accept 语义**（新域无 gitWorktree 式「确定性业务拒绝」输入可依赖）：accept =
   generic envelope `ok:true` 且 domain 结果形态良好（value 为对象）；`ok:false` = 在位但异常 → fail-closed；
-- 提交态产物：**`packages/dsh-runtime/dist/index.js`（承载探针常量；包 main 指向 dist）**
+- 构建期生成产物：**`packages/dsh-runtime/dist/index.js`（承载探针常量；包 main 指向 dist；
+  不提交，clean checkout 由 `pnpm run build:artifacts` 自举）**
   ——desktop 经 runtime-probes shim 消费包 main，test/ipc/cross-package-contract.test.ts
-  钉提交态 dist，dist-sync.test.ts 锁定同步；
+  钉生成物 dist，dist-sync.test.ts 锁定同步；
 - **rollout 顺序（激活是硬门）**：desktop 启动事务/暴露门控跑全量探针
   （main.ts startAndProbeWorkspace），fail→observe→fail→回退——探针集改动、
-  seed 行与提交态 dist **必须同 commit 落地**，否则本地启动事务失败；
+  seed 行与 dsh-runtime 源改动 **必须同 commit 落地**（产物由构建重建），否则本地启动事务失败；
 - 测试：runtime-probes.test.ts（精简集/顺序断言 + 第三域与部分派生 fixture）、
   desktop/gateway 锁步断言。
 
