@@ -30,14 +30,17 @@ import {
   createSetLedgerView,
   projectHarvest,
   dispatchSource,
+  epochOf,
   projectAbandonedTargets,
   projectAutoPrewarmed,
   projectDegradedRetried,
   projectHiddenSince,
   projectPrewarmSuppressed,
+  reincarnate,
+  retainSourceIds,
   waitForCondition,
   type SourceEvent,
-  type SourceLifecycleState,
+  type SourceRegistry,
 } from '@dsh-chamber/dsh-stream-state'
 import api, { type ConnectionSummary, type HealthResponse } from './api.ts'
 import {
@@ -742,18 +745,32 @@ export default function App() {
   // Declared BEFORE the ledger views below: they close over it, and their useMemo
   // dependency arrays read it during render, so a later declaration would be a TDZ
   // error in a real browser (the node suites strip types and never render App).
-  const dispatchLifecycle = useCallback((viewId: string, event: SourceEvent) => {
-    const fingerprint = sourceLifecyclesRef.current?.capture(viewId)?.fingerprint ?? viewId
+  const dispatchLifecycle = useCallback((viewId: string, event: SourceEvent, capturedEpoch?: number) => {
+    let registry = sourceLedgerStoreRef.current
+    let epoch = capturedEpoch ?? epochOf(registry, viewId)
+    if (epoch === undefined) {
+      // The authoritative roster refresh pre-registers every source through
+      // reincarnate(), so this lazy path only covers an event that beats that refresh
+      // (or a local view). It is the ONLY place the ownership fingerprint is read -
+      // an event no longer recomputes it, and it must never resurrect a retired
+      // generation.
+      const fingerprint = sourceLifecyclesRef.current?.capture(viewId)?.fingerprint ?? viewId
+      registry = reincarnate(registry, { sourceId: viewId, fingerprint })
+      epoch = epochOf(registry, viewId)
+    }
+    if (epoch === undefined) return undefined
     // `retryableGap` is the SAME table the retired degraded-retry planner used
-    // (`isRetryableBootGap`), passed as data: the container owns the decision, the App
+    // (`isRetryableBootGap`), passed as data: the registry owns the decision, the App
     // keeps owning the table it supplies.
     const reduction = dispatchSource(
-      sourceLedgerStoreRef.current,
-      { sourceId: viewId, fingerprint },
-      event,
+      registry,
+      viewId,
+      { ...event, epoch },
       { reclaimGraceMs: 0, retryableGap: (kind) => isRetryableBootGap(kind as ShellDegradedKind) },
     )
-    sourceLedgerStoreRef.current = reduction.states
+    // A dropped event (superseded epoch / unregistered source) returns the SAME
+    // registry reference, so this write cannot resurrect or mutate a retired life.
+    sourceLedgerStoreRef.current = reduction.registry
     return reduction.effects[0]?.effect
   }, [])
   //  a Set LEDGER view - reads project the container, and each add/delete becomes
@@ -824,7 +841,7 @@ export default function App() {
   // into reducer events. That keeps the existing call sites unchanged while leaving
   // exactly one owner, which is what the migration is for; the writes become explicit
   // dispatches as each remaining ledger moves over.
-  const sourceLedgerStoreRef = useRef<Record<string, SourceLifecycleState>>({})
+  const sourceLedgerStoreRef = useRef<SourceRegistry>({})
   // The incarnation fence uses the ownership registry's REAL fingerprint (the
   // registry above already tracks it per view), so a re-registered source gets a
   // fresh record and a reclaim/re-mount cycle keeps its history - the distinction
@@ -1562,6 +1579,12 @@ export default function App() {
     const retired = new Set([...sourceIds].filter(sourceId => sourceId !== LOCAL_INSTANCE_ID))
     if (retired.size === 0) return
     sourceLifecyclesRef.current!.retire(retired)
+    // P4: a retired source's generation leaves the registry with it, so a same-id
+    // re-add starts from a clean epoch instead of inheriting the retired life.
+    const liveSourceIds = new Set(
+      Object.keys(sourceLedgerStoreRef.current).filter((sourceId) => !retired.has(sourceId)),
+    )
+    sourceLedgerStoreRef.current = retainSourceIds(sourceLedgerStoreRef.current, liveSourceIds)
     aggregateRequestOwnersRef.current!.retire(retired)
     for (const sourceId of retired) {
       delete aggregatePollSeqRef.current[sourceId]
@@ -1741,8 +1764,16 @@ export default function App() {
       )
       retireSources(retired)
       sourceLifecyclesRef.current!.activate(LOCAL_INSTANCE_ID, 'local')
+      // P4: the authoritative roster is the one place a fingerprint change is
+      // observed; registering it here is what turns a re-registration into an epoch
+      // bump. Events never recompute the fingerprint.
+      sourceLedgerStoreRef.current = reincarnate(
+        sourceLedgerStoreRef.current,
+        { sourceId: LOCAL_INSTANCE_ID, fingerprint: 'local' },
+      )
       for (const { sourceId, fingerprint } of acceptedInstances) {
         sourceLifecyclesRef.current!.activate(sourceId, fingerprint)
+        sourceLedgerStoreRef.current = reincarnate(sourceLedgerStoreRef.current, { sourceId, fingerprint })
       }
       liveServerIdsRef.current = nextLiveServerIds
       remoteRosterSettledRef.current = true

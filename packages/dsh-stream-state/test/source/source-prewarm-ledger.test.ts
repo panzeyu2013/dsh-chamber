@@ -22,12 +22,19 @@ import {
   projectPrewarmSuppressed,
   reduceSource,
 } from '../../src/index.ts'
-import type { SourceEnv, SourceLifecycleState } from '../../src/index.ts'
+import type { SourceEnv, SourceLifecycleState, SourceRegistry, SourceRegistryEntry } from '../../src/index.ts'
 
 const ENV: SourceEnv = { reclaimGraceMs: 60_000, retryableGap: () => true }
 
 function base(): SourceLifecycleState {
   return initialSourceLifecycle({ sourceId: 'remote-1', fingerprint: 'fp' })
+}
+
+/** Wrap raw states in the registry the projections read (epoch 1 = first generation). */
+function registryOf(...states: SourceLifecycleState[]): SourceRegistry {
+  const out: Record<string, SourceRegistryEntry> = {}
+  for (const state of states) out[state.incarnation.sourceId] = { epoch: 1, incarnation: state.incarnation, state }
+  return out
 }
 
 test('prewarmStarted records the origin flag only', () => {
@@ -36,7 +43,7 @@ test('prewarmStarted records the origin flag only', () => {
   assert.equal(after.autoPrewarmed, true)
   assert.equal(after.prewarmSuppressed, before.prewarmSuppressed, 'suppression is a different question')
   assert.equal(after.mounted, true)
-  assert.deepEqual([...projectAutoPrewarmed({ k: after })], ['remote-1'])
+  assert.deepEqual([...projectAutoPrewarmed(registryOf(after))], ['remote-1'])
 })
 
 test('prewarmStarted does not add a hidden-window entry', () => {
@@ -59,7 +66,7 @@ test('prewarmUnsuppressed lifts suppression without asking for a boot', () => {
   const reduction = reduceSource(settled, { kind: 'prewarmUnsuppressed' }, ENV)
   assert.equal(reduction.state.prewarmSuppressed, false)
   assert.deepEqual(reduction.effects, [], 'no mount effect: this is not a user selection')
-  assert.deepEqual([...projectPrewarmSuppressed({ k: reduction.state })], [])
+  assert.deepEqual([...projectPrewarmSuppressed(registryOf(reduction.state))], [])
 })
 
 test('prewarmForgotten drops the origin flag and nothing else', () => {
@@ -81,7 +88,7 @@ test('prewarmForgotten drops the origin flag and nothing else', () => {
 test('the Set view reads from the projection and dispatches on mutation', () => {
   // The adapter is the bridge for the three sweep loops that mutate a Set through
   // METHODS: add/delete must become events, and reads must never be a local copy.
-  const state: Record<string, SourceLifecycleState> = { k: { ...base(), autoPrewarmed: true } }
+  const state = registryOf({ ...base(), autoPrewarmed: true })
   const events: string[] = []
   const view = createSetLedgerView({
     read: () => projectAutoPrewarmed(state),
@@ -101,21 +108,18 @@ test('the Set view survives delete-during-iteration (the sweep loops)', () => {
   // snapshot, so the loop completes and the next read sees the new state.
   // Two sources, neither alive: the sweep must remove BOTH. The hazard is that
   // deleting during iteration invalidates the iterator and one entry is skipped.
-  let state: Record<string, SourceLifecycleState> = {
-    a: { ...base(), autoPrewarmed: true },
-    b: { ...initialSourceLifecycle({ sourceId: 'remote-2', fingerprint: 'fp' }), autoPrewarmed: true },
-  }
-  const bySourceId = (id: string): string | undefined =>
-    Object.keys(state).find((key) => state[key]?.incarnation.sourceId === id)
+  let state = registryOf(
+    { ...base(), autoPrewarmed: true },
+    { ...initialSourceLifecycle({ sourceId: 'remote-2', fingerprint: 'fp' }), autoPrewarmed: true },
+  )
   const view = createSetLedgerView({
     read: () => projectAutoPrewarmed(state),
     onAdd: () => undefined,
     onDelete: (id) => {
       // Applying the dispatch immediately is what makes the hazard real.
-      const key = bySourceId(id)
-      if (key === undefined) return
+      if (state[id] === undefined) return
       const next = { ...state }
-      delete next[key]
+      delete next[id]
       state = next
     },
   })
@@ -134,15 +138,15 @@ test('abandoned carries its target and abandonmentCleared removes the key', () =
   const marked = reduceSource(base(), { kind: 'abandoned', target: 'remote-9' }, ENV).state
   assert.equal(marked.abandoned, true)
   assert.equal(marked.abandonedTarget, 'remote-9')
-  assert.deepEqual([...projectAbandonedTargets({ k: marked })], [['remote-1', 'remote-9']])
+  assert.deepEqual([...projectAbandonedTargets(registryOf(marked))], [['remote-1', 'remote-9']])
   const cleared = reduceSource(marked, { kind: 'abandonmentCleared' }, ENV).state
   assert.equal(cleared.abandoned, false)
   assert.equal(cleared.abandonedTarget, undefined, 'the key must be gone, not stale')
-  assert.deepEqual([...projectAbandonedTargets({ k: cleared })], [])
+  assert.deepEqual([...projectAbandonedTargets(registryOf(cleared))], [])
 })
 
 test('the Map view reads the projection and dispatches on mutation', () => {
-  let state: Record<string, SourceLifecycleState> = { k: { ...base(), abandoned: true, abandonedTarget: 'remote-9' } }
+  const state = registryOf({ ...base(), abandoned: true, abandonedTarget: 'remote-9' })
   const events: string[] = []
   const view = createMapLedgerView({
     read: () => projectAbandonedTargets(state),
@@ -160,25 +164,32 @@ test('an abandoned view is excluded from the reclaim projection after clearing',
   // project an EMPTY map, or the sweep would run forever on stale entries.
   const marked = reduceSource(base(), { kind: 'abandoned', target: 'x' }, ENV).state
   const cleared = reduceSource(marked, { kind: 'abandonmentCleared' }, ENV).state
-  assert.equal(projectAbandonedTargets({ a: marked }).size, 1)
-  assert.equal(projectAbandonedTargets({ a: cleared }).size, 0)
+  assert.equal(projectAbandonedTargets(registryOf(marked)).size, 1)
+  assert.equal(projectAbandonedTargets(registryOf(cleared)).size, 0)
 })
 
 test('the harvest view reads whole records and accepts finished ones', () => {
   // The App reads a record, runs baseline-harvest's pure function, and writes the
   // RESULT back - so the container must accept a whole record (not re-derive it) and
   // an absent source must read as the legacy initial value.
-  let state: Record<string, SourceLifecycleState> = {}
+  let state: SourceRegistry = {}
   const view = createHarvestView({
     read: () => projectHarvest(state),
     onWrite: (id, record) => {
-      const key = Object.keys(state).find((k) => k === id) ?? id
-      state = { ...state, [key]: { ...base(), harvest: record } }
+      const previous = state[id]
+      state = {
+        ...state,
+        [id]: {
+          epoch: previous?.epoch ?? 1,
+          incarnation: previous?.incarnation ?? { sourceId: id, fingerprint: 'fp' },
+          state: { ...(previous?.state ?? base()), harvest: record },
+        },
+      }
     },
     onDelete: (id) => {
-      const key = Object.keys(state).find((k) => k === id)
-      if (key === undefined) return
-      state = { ...state, [key]: { ...state[key]!, harvest: null } }
+      const previous = state[id]
+      if (previous === undefined) return
+      state = { ...state, [id]: { ...previous, state: { ...previous.state, harvest: null } } }
     },
     initial: () => ({ attempts: 0, mountedAt: 0, retryAt: 0, satisfied: false }),
   })

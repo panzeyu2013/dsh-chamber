@@ -109,6 +109,8 @@ export const GROUPS = {
     'test/wiring/session-liveness-wiring.test.ts',
     // 遮罩层叠不变量（P0 租客边界 / P1 遮罩期隐藏 / P2 过渡作用域 / P3 揭幕信号）。
     'test/wiring/veil-layering-invariants.test.ts',
+    // P4 源注册表接线：指纹只在 roster 刷新处换代，事件只带 epoch，退役即出表。
+    'test/wiring/source-registry-wiring.test.ts',
   ],
   // view-runtime: 视图运行时 —— 隐藏视图回收、视图过渡队列、侧栏滚动恢复、切源揭示
   'view-runtime': [
