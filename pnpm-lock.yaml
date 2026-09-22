@@ -198,6 +198,9 @@ importers:
       '@deepseek-ai/dsh-client-ui-slots':
         specifier: workspace:^
         version: link:../../vendor/harness-packages/@deepseek-ai/dsh-client-ui-slots
+      '@dsh-chamber/dsh-chamber-client-ui-sidebar':
+        specifier: workspace:^
+        version: link:../../dsh-chamber-client-ui-sidebar
       react-dom:
         specifier: ^19.0.0
         version: 19.2.8(react@19.2.8)
