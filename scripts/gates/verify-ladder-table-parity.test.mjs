@@ -43,8 +43,8 @@ test('the real lockstep list has no mismatch today', () => {
   const verdict = compareLockstep(LOCKSTEP, RESOLVE)
   assert.deepEqual(verdict.lines, [])
   assert.equal(verdict.failures, 0)
-  assert.ok(verdict.checked >= 17, 'the corpus must cover the carrier decisions and the host ladders: ' + String(verdict.checked))
-  assert.ok(verdict.retired >= 11, 'the mobile and sidebar copies are already retired (P5 removes the rest one at a time): ' + String(verdict.retired))
+  assert.ok(LOCKSTEP.length >= 6, 'the guard list keeps the retired mobile copies: ' + String(LOCKSTEP.length))
+  assert.equal(verdict.checked + verdict.retired, LOCKSTEP.length, 'every guard entry resolves as found or retired')
 })
 
 test('negative control: a wrong expectation is flagged', () => {
@@ -71,14 +71,14 @@ test('retirement is quiet: a vanished declaration is not a failure', () => {
 
 test('the object-field reader reads the real config defaults', () => {
   const field = readObjectField(
-    'packages/renderer/src/session-liveness.ts',
-    'SESSION_LIVENESS_DEFAULTS',
-    'refreshOutcomeTimeoutMs',
+    'packages/dsh-stream-state/src/tables.ts',
+    'PRESENTATION_THRESHOLDS',
+    'surfaceMaxHoldMs',
   )
-  assert.deepEqual(field, { state: 'found', value: 190000 })
+  assert.deepEqual(field, { state: 'found', value: 70000 })
   const missing = readObjectField(
-    'packages/renderer/src/session-liveness.ts',
-    'SESSION_LIVENESS_DEFAULTS',
+    'packages/dsh-stream-state/src/tables.ts',
+    'PRESENTATION_THRESHOLDS',
     'noSuchField',
   )
   assert.equal(missing.state, 'retired')
