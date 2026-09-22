@@ -284,7 +284,11 @@ export function seedRegistryFindings({ seedSource }) {
 // C14 —— manifest 三方字段集镜像
 // ---------------------------------------------------------------------------
 
-/** 去掉注释（字符串感知：引号内的 `//`/`/*` 不是注释）。 */
+/** 去掉注释（字符串感知：引号内的 `//`/`/*` 不是注释）。
+ *
+ * 刻意不复用 `scripts/dev/test-support/source-text.ts` 的同名助手：本门要在**未安装的工作区**
+ * （CI 的静态步骤、以及 preflight 的裸 checkout 路径）里独立运行，不能依赖任何 dev 侧模块；
+ * 且这里只需要「代码投影」，不需要保行/归一化。两处实现由各自的用例锁定。 */
 export function stripComments(source) {
   let out = ''
   let quote = null
