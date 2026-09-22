@@ -388,11 +388,13 @@ R2 只看**直接 spec**；官方层的**依赖闭包**同样进入实例树（�
 - ssh 端 `plugin_apply` / `seed_host_graph` / `materialize_add(_pick)` 的主进程确认对话框缺口（design 13 §7.0 设计意图；确认链只覆盖 gateway apply/undo 与 ssh undo）——补齐并登记。
 - 实机 E2E 矩阵（ssh+gateway 双通道）未勾销——发布前按 §9 执行；archive-pick 的 Windows/Linux 腿（非 macOS 保持文件夹对话框）随 design 22/23 排期。
 - 已发布 gateway 发行树的 `dist/index.js` 可能仍是旧的 executor env pin（重装/重打包即复发）——正式修复须随 HEAD 版本树部署后按 §9 矩阵复跑；
-- **产物新鲜度的守卫覆盖面**（本轮 §6.11 漂移暴露）：只有 `packages/desktop/dist/control-plane/**` 与
-  `packages/gateway/dist/**` 有"**存在但缺当前标记 ⇒ 失败**"的守卫（缺失才按需构建，绝不静默自愈）；
-  `dist/web/**`、`dist/preload.cjs`、`dist/host-*-package/**` 陈旧时仍没有任何测试变红，CI 也从未真跑出
-  `SMOKE PASS`（smoke 恒 SKIP）。缺口清单与 7 条未落地的最小守卫建议（G2–G8；G1 已落地 `verify:test-wiring`）见
-  `docs/progress/todo/product-freshness-guards.md`，开放状态与失效判据见 STATUS；
+- **产物新鲜度的守卫覆盖面**（本轮 §6.11 漂移暴露；2026-12 progress 清理复核）：`packages/desktop/dist/control-plane/**` 与
+  `packages/gateway/dist/**` 有"**存在但缺当前标记 ⇒ 失败**"的标记守卫（缺失才按需构建，绝不静默自愈）；
+  `scripts/gates/verify-artifact-freshness.mjs`（`run-checks tests/full`，经 `ci.yml:179` 进 CI）另覆盖 seed
+  `dist/index.js` ×4、`gateway/host-packages/**`、`dist/preload.cjs`、`renderer/src/generated/**` 的「重跑/重建比对」，
+  `verify-electron-artifacts.mjs`（macOS 腿/CI）执行编译产物冒烟。仍无守卫：`dist/web/**`、`dist/host-*-package/**`、
+  vendor `allowBuilds` 锁步；CI 也从未真跑出 `SMOKE PASS`（smoke 恒 SKIP）。仍未落地的最小守卫建议（G2/G3/G5/G7/G8；
+  G1 已落地 `verify:test-wiring`）见 `docs/progress/todo/product-freshness-guards.md`，开放状态与失效判据见 STATUS；
 - gateway 拒绝码→本地化文案映射未做（登记接受），范围是**全部**服务端拒绝码：409 族与
   §6.11 的 400 判定码（`protected`/`needs-version`/`needs-exact-version`/`generation-mismatch`/
   `runtime-version-unknown`/`invalid-name`）以及 503 `protected-set-unavailable` 都逐字显示服务端英文 `error`；

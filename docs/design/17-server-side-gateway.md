@@ -878,7 +878,7 @@ inert；2026-09 复核实测）——要让响应头也条件化需把「是否�
 > §10 开头的「不得回流」针对的是**编排**（审批/提问代理、跨会话调度、会话索引、功能开关、feature host）。
 > 本节只开一条**只读事实镜像**：gateway 观察它托管的本地 dsh 的会话状态并向外提供只读投影，供桌面在
 > 「未挂载该来源」时仍能正确显示运行 / 等待 / 完成未读。它不写、不发命令、不代替用户响应，也不是 dsh
-> 事实的权威（权威永远是 dsh 宿主与其前端）。实现与里程碑见 `docs/progress/todo/remote-session-state-and-switch.md`。
+> 事实的权威（权威永远是 dsh 宿主与其前端）。实现面见 `packages/gateway/src/session-state.ts` 与 `packages/control-plane/src/session-state-protocol.ts`；仍开放的实机/CI 权威验收见 `docs/progress/STATUS.md`「远端完成未读 / 切源体验」条。
 
 **边界（review 判据，任一不成立即越界）**：
 

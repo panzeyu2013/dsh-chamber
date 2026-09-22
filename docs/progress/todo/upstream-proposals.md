@@ -154,7 +154,7 @@ chamber 侧已落地缓解（`packages/renderer/src/svg-resource-scope.ts`，des
 在每个 `<svg>` 内把「自定 ∩ 自用」的资源 id 改名到文档唯一 token，外部引用复制进消费方。
 未覆盖的是 gateway/mobile 独立部署的官方壳（由实例自带 bundle 渲染，见 STATUS）。
 
-## 6. 会话状态的只读观察者与未读事实（2026-12，plan `todo/remote-session-state-and-switch.md` W7 / 裁决 20）
+## 6. 会话状态的只读观察者与未读事实（2026-12，design 17 §10.7 只读镜像 carve-out 的上游根治诉求）
 
 背景：chamber 的 gateway 侧 watcher 需要一个**不渲染任何界面**的进程持续观察会话状态，才能在桌面关壳/关闭期间仍把「完成未读」带到下次启动。当前 pin 下这条路能走通（`$events` + 每条完成边沿一次 `session/follow` 读尾巴），但有三处本可由上游消掉的尖锐面——每处的 chamber 侧现状与判据都已在 plan 里登记。
 
