@@ -289,7 +289,11 @@ export function mobileStallLadder(config: {
     name: 'mobile-session-stall',
     quotaWindowMs: config.windowMs,
     tiers: [
-      { name: 'resync', afterMs: config.thresholdMs, cooldownMs: config.cooldownMs, quota: config.max, requiresStuckEvidence: false },
+      // The mobile arm fires only on PROVEN loading-with-no-open: the host passes
+      // `stuckEvidence: loading === true && openInFlight === false`, so an unknown
+      // liveness bit or a session with nothing in flight fails closed here instead
+      // of in a host-private gate.
+      { name: 'resync', afterMs: config.thresholdMs, cooldownMs: config.cooldownMs, quota: config.max, requiresStuckEvidence: true },
     ],
   }
 }

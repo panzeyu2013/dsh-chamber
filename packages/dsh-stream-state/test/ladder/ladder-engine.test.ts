@@ -166,4 +166,5 @@ test('the three instantiated ladders keep their owners values', () => {
   const mobile = mobileStallLadder({ thresholdMs: 45000, cooldownMs: 120000, windowMs: 600000, max: 3 })
   assert.deepEqual(mobile.tiers.map((tier) => tier.name), ['resync'])
   assert.equal(mobile.tiers[0]?.afterMs, 45000, 'the mobile copy keeps its own (uncalibrated) number for now')
+  assert.equal(mobile.tiers[0]?.requiresStuckEvidence, true, 'the concrete loading/no-open evidence is the tier gate')
 })

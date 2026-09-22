@@ -1,4 +1,9 @@
-import { LADDER_TABLES } from '@dsh-chamber/dsh-stream-state'
+import {
+  LADDER_TABLES,
+  mobileStallLadder,
+  planLadder,
+  type LadderRecord,
+} from '@dsh-chamber/dsh-stream-state'
 import type { MobileKey } from './locales.ts'
 
 //  this module no longer OWNS its six ladder thresholds - they are read from the
@@ -110,6 +115,17 @@ export interface StallShapeFacts {
   readonly hasRows: boolean
 }
 
+/** The shared engine's mobile ladder, built once from the table values. */
+const MOBILE_STALL_LADDER = mobileStallLadder({
+  thresholdMs: LADDER_TABLES.mobile.thresholdMs,
+  cooldownMs: LADDER_TABLES.mobile.resyncCooldownMs,
+  windowMs: LADDER_TABLES.mobile.resyncWindowMs,
+  max: LADDER_TABLES.mobile.resyncMax,
+})
+
+/** The shared engine's per-session ledger shape (one `stall` observation). */
+export type StallLadderRecords = Readonly<Record<string, LadderRecord>>
+
 /** The notice decision, plus the clock and ledger it leaves behind. */
 export interface StallDecision {
   /** The first sighting of the current continuous stall, 0 when not timing. */
@@ -118,8 +134,8 @@ export interface StallDecision {
   readonly show: boolean
   /** Execute the per-session rebuild NOW (evidence + ledger allow it). */
   readonly resync: boolean
-  /** The ledger carried forward (pruned to the rolling window). */
-  readonly resyncStamps: readonly number[]
+  /** The shared engine's ledger carried forward. */
+  readonly records: StallLadderRecords
 }
 
 export interface StallNoticeInput {
@@ -138,8 +154,8 @@ export interface StallNoticeInput {
   /** Concrete `openState === 'loading'`: TRUE unlocks the automatic rebuild, and
    *  FALSE / UNDEFINED both fail closed (the stall shape alone is not evidence). */
   readonly loading?: boolean | undefined
-  /** Timestamps of the automatic rebuilds already executed for this session. */
-  readonly resyncStamps?: readonly number[]
+  /** The shared engine's ladder ledger for this session (empty = nothing spent). */
+  readonly records?: StallLadderRecords
 }
 
 /**
@@ -166,59 +182,39 @@ export function isStallShape(facts: StallShapeFacts): boolean {
  * @returns the clock to carry forward and whether to show the notice.
  */
 export function decideStallNotice(input: StallNoticeInput): StallDecision {
-  const resyncStamps = pruneStallResync(input.resyncStamps ?? [], input.now)
-  if (!input.shape || !input.pageVisible) return { since: 0, show: false, resync: false, resyncStamps }
+  // A stall nobody is observing ends its episode: the ladder ledger dies with it,
+  // so the next stall starts from a full quota instead of inheriting the last
+  // one's spent budget. (`since === 0` is the clock; this is the budget.)
+  if (!input.shape || !input.pageVisible) return { since: 0, show: false, resync: false, records: {} }
   const since = input.since === 0 ? input.now : input.since
-  const stalled = input.now - since >= LADDER_TABLES.mobile.thresholdMs
+  const plan = planLadder(
+    MOBILE_STALL_LADDER,
+    input.records ?? {},
+    {
+      stall: {
+        sticky: true,
+        symptomSinceMs: since,
+        // BOTH evidences are required (): the concrete state must be
+        // `loading` (not a healthy open session whose first turn is merely slow),
+        // and nothing may be in flight. Either one unknown ⇒ no evidence, and the
+        // tier's requiresStuckEvidence gate holds the automatic arm.
+        stuckEvidence: input.loading === true && input.openInFlight === false,
+        progressStamp: 0,
+        escalationBlocked: false,
+      },
+    },
+    input.now,
+  )
+  // The notice's own clock: the ladder's tier IS the threshold, so the host never
+  // compares a second copy of it.
+  const thresholdMs = MOBILE_STALL_LADDER.tiers[0]?.afterMs ?? LADDER_TABLES.mobile.thresholdMs
+  const stalled = input.now - since >= thresholdMs
   return {
     since,
     show: !input.dismissed && stalled,
-    // BOTH evidences are required (): the concrete state must be
-    // `loading` (not a healthy open session whose first turn is merely slow), and
-    // nothing may be in flight. Either one unknown ⇒ no automatic write.
-    resync: stalled
-      && input.loading === true
-      && input.openInFlight === false
-      && stallResyncAvailable(resyncStamps, input.now),
-    resyncStamps,
+    resync: plan.actions.some((action) => action.tier === 'resync'),
+    records: plan.records,
   }
-}
-
-/**
- * Timestamps still inside the rolling budget window. FUTURE stamps are dropped
- * too: a wall clock that stepped backwards (NTP correction, VM restore) would
- * otherwise keep them "inside the window" for up to that whole step and the
- * budget would count them forever (). Dropping them resets the
- * ledger to "nothing spent" instead, which is the desktop ladder's ruling for a
- * negative elapsed time.
- */
-function pruneStallResync(stamps: readonly number[], now: number): readonly number[] {
-  return stamps.filter(stamp => Number.isFinite(stamp) && stamp <= now && now - stamp < LADDER_TABLES.mobile.resyncWindowMs)
-}
-
-/**
- * Whether the automatic rebuild may run: at most {@link LADDER_TABLES.mobile.resyncMax} per
- * {@link LADDER_TABLES.mobile.resyncWindowMs}, spaced by {@link LADDER_TABLES.mobile.resyncCooldownMs}.
- * Pure — unit-tested.
- * @param stamps - the session's previous automatic rebuild times.
- * @param now - current wall clock.
- * @returns whether one more automatic rebuild is allowed.
- */
-export function stallResyncAvailable(stamps: readonly number[], now: number): boolean {
-  const recent = pruneStallResync(stamps, now)
-  if (recent.length >= LADDER_TABLES.mobile.resyncMax) return false
-  const last = recent.at(-1)
-  return last === undefined || now - last >= LADDER_TABLES.mobile.resyncCooldownMs
-}
-
-/**
- * The ledger after one executed automatic rebuild. Pure — unit-tested.
- * @param stamps - the session's previous automatic rebuild times.
- * @param now - the execution time.
- * @returns the pruned ledger plus this attempt.
- */
-export function markStallResync(stamps: readonly number[], now: number): readonly number[] {
-  return [...pruneStallResync(stamps, now), now]
 }
 
 /**
@@ -481,8 +477,8 @@ export function installSessionStallNotice(t: (key: MobileKey) => string, session
 
   let since = 0
   let dismissed = false
-  /** Automatic-rebuild ledger for the CURRENT session (reset on a session switch). */
-  let resyncStamps: readonly number[] = []
+  /** Shared-engine ladder ledger for the CURRENT session (reset on a session switch). */
+  let records: StallLadderRecords = {}
   // The session identity: the displayed header, and ONLY it (the phase node is
   // keyed by entry and survives a session switch — see the module header; when no
   // header is displayed the shape is false anyway, so nothing is being timed).
@@ -587,7 +583,7 @@ export function installSessionStallNotice(t: (key: MobileKey) => string, session
         sessionAnchor = anchor
         since = 0
         dismissed = false
-        resyncStamps = []
+        records = {}
         unmount()
       }
       const shape = isStallShape(probe)
@@ -601,21 +597,21 @@ export function installSessionStallNotice(t: (key: MobileKey) => string, session
         dismissed,
         openInFlight: readOpenInFlight(),
         loading: readLoading(),
-        resyncStamps,
+        records,
       })
       since = decision.since
+      // The shared engine records a dispatch when it AUTHORIZES one, so the ledger
+      // is carried before the effect runs: the action is accounted whether or not
+      // the guarded face performed anything.
+      records = decision.records
       if (decision.resync) {
         // The ONLY automatic write in this module: the pinned per-session rebuild,
-        // executed strictly on the plan's evidence (no open in flight) and
-        // accounted whether or not the guarded face performed anything.
+        // executed strictly on the plan's evidence (no open in flight).
         try {
           session?.resync()
         } catch {
           // Fail closed: the watcher must never throw into the poll loop.
         }
-        resyncStamps = markStallResync(decision.resyncStamps, now)
-      } else {
-        resyncStamps = decision.resyncStamps
       }
       // A broken shape ends the stall episode — and so does a hidden page, which
       // zeroes the clock for the same reason (background time is not stall time).

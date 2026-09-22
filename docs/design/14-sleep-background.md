@@ -180,6 +180,8 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
 > ④ **等待形状**：`withDeadline` / `waitForCondition` / `retryDelayMs` / `createSingleFlight` 四个原语替换手写计时器记账
 > （B6 七站点中 W1/W2/W3/W5/W6 已迁；W4 不做，W7 因异步探测不适用）；
 > ⑤ **阈值**：四条阶梯的值集中于 `tables.json` 的 `ladders`，由 `scripts/gates/verify-ladder-table-parity.mjs` 与各模块锁步；
+>    阶梯决策由包内 `planLadder`（tier/cooldown/配额/窗口/证据门）单源持有——mobile session-stall 已把「loading 且无在途」移进 tier 的
+>    `requiresStuckEvidence`，宿主只执行 `actions` 并携带 `records`；renderer liveness / open-in chip / sidebar 三条仍在宿主私有决策，收编中；
 >    露屏阈值（10s 反馈窗 / 70s 外层保险 / 2s 兜底）在 `tables.ts` 的 `PRESENTATION_THRESHOLDS`（tables.json 同源），renderer 直接消费，不再持有副本。
 > ⑥ **时间与账本**：`src/time.ts` 是「可用钟/滚动窗口」的唯一所有者——NaN/±Inf/回拨只保守持有（never release/0ms），
 >    `rebuildsAt`/dispatch 账本只在窗口内保留；适配器不再各自比较时间戳（G-B/G-C/G-F）。

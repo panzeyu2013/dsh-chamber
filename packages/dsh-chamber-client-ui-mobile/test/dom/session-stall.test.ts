@@ -17,7 +17,7 @@ import {
   STALL_NOTICE_MIN_VISIBLE_PX, STALL_STYLE_TAG,
   STALL_PHASES,
   decideStallNotice, installSessionStallNotice, isRendered, isStallPhase, isStallShape,
-  markStallResync, noticeTopFor, probeStall, sessionStallFace, stallMessageKey, stallResyncAvailable,
+  noticeTopFor, probeStall, sessionStallFace, stallMessageKey,
 } from '../../src/client/session-stall.ts'
 import type { RenderedNodeFace, StallNodeFace } from '../../src/client/session-stall.ts'
 //  the six ladder thresholds now belong to the shared table, so the test reads them
@@ -35,9 +35,9 @@ import { FakeNode, attach } from '../support/dom-double.ts'
 const SOURCE_URL = new URL('../../src/client/session-stall.ts', import.meta.url)
 
 /**
- * The legacy decision projection (clock + notice) of the pre-
- * assertions: the automatic arm's `resync`/`resyncStamps` fields are asserted by
- * their own tests below, so these keep pinning exactly what they always pinned.
+ * The legacy decision projection (clock + notice): the automatic arm's `resync`
+ * and `records` fields are asserted by their own tests below, so these keep
+ * pinning exactly what they always pinned.
  */
 function decide(input: Parameters<typeof decideStallNotice>[0]): { since: number; show: boolean } {
   const { since, show } = decideStallNotice(input)
@@ -702,7 +702,7 @@ test('the notice copy follows the locale binding on the next poll', () => {
     dispose()
   })
 })
-test('the automatic arm fires only on PROVEN loading-with-no-open, and the ledger bounds it', () => {
+test('the automatic arm fires only on PROVEN loading-with-no-open, and the shared ladder bounds it', () => {
   const base = { shape: true, pageVisible: true, since: 0, now: BASE_TIME, dismissed: false }
   const parked = { ...base, loading: true, openInFlight: false }
   const first = decideStallNotice(parked)
@@ -719,21 +719,34 @@ test('the automatic arm fires only on PROVEN loading-with-no-open, and the ledge
   assert.equal(decideStallNotice({ ...base, loading: true, since: first.since, now: stalledAt }).resync, false)
   assert.equal(decideStallNotice({ ...base, openInFlight: false, since: first.since, now: stalledAt }).resync, false)
   assert.equal(decideStallNotice({ ...parked, loading: false, since: first.since, now: stalledAt }).resync, false, 'a healthy open session is never rebuilt')
-  let stamps = markStallResync(stalled.resyncStamps, stalledAt)
-  assert.equal(stallResyncAvailable(stamps, stalledAt + mobileTable.resyncCooldownMs - 1), false)
-  assert.equal(stallResyncAvailable(stamps, stalledAt + mobileTable.resyncCooldownMs), true)
-  for (let index = 1; index < 3; index++) {
-    stamps = markStallResync(stamps, stalledAt + index * mobileTable.resyncCooldownMs)
+  // The engine records a dispatch when it AUTHORIZES one: the host carries the
+  // returned ledger straight through, so no host-side mark step is needed.
+  let records = stalled.records
+  const cooling = decideStallNotice({ ...parked, since: first.since, now: stalledAt + mobileTable.resyncCooldownMs - 1, records })
+  assert.equal(cooling.resync, false, 'the cooldown spaces the automatic arm')
+  assert.equal(cooling.show, true, 'the notice does not wait for the cooldown')
+  const second = decideStallNotice({ ...parked, since: first.since, now: stalledAt + mobileTable.resyncCooldownMs, records: cooling.records })
+  assert.equal(second.resync, true)
+  records = second.records
+  let at = stalledAt + mobileTable.resyncCooldownMs
+  for (let index = 2; index < mobileTable.resyncMax; index++) {
+    at += mobileTable.resyncCooldownMs
+    const next = decideStallNotice({ ...parked, since: first.since, now: at, records })
+    assert.equal(next.resync, true)
+    records = next.records
   }
-  assert.equal(stamps.length, 3)
-  assert.equal(stallResyncAvailable(stamps, stalledAt + 3 * mobileTable.resyncCooldownMs), false, 'the rolling budget caps it inside the window')
-  const last = stamps.at(-1) as number
-  assert.equal(stallResyncAvailable(stamps, last + mobileTable.resyncWindowMs), true, 'the window releases the budget')
-  // A backwards clock step (NTP correction, VM restore) settles the ledger instead
-  // of parking the automatic arm until the wall clock catches up.
-  assert.equal(stallResyncAvailable(stamps, last - 3_600_000), true)
-  const pruned = decideStallNotice({ ...base, now: last + mobileTable.resyncWindowMs, resyncStamps: stamps, openInFlight: true })
-  assert.equal(pruned.resyncStamps.length, 0)
+  const spent = decideStallNotice({ ...parked, since: first.since, now: at + mobileTable.resyncCooldownMs, records })
+  assert.equal(spent.resync, false, 'the rolling budget caps it inside the window')
+  const released = decideStallNotice({ ...parked, since: first.since, now: at + mobileTable.resyncWindowMs, records: spent.records })
+  assert.equal(released.resync, true, 'the window releases the budget')
+  // A backwards clock step (NTP correction, VM restore) must HOLD: the shared engine
+  // never releases protection on a negative elapsed time.
+  const rolled = decideStallNotice({ ...parked, since: first.since, now: at - 3_600_000, records })
+  assert.equal(rolled.resync, false, 'a backwards clock step holds the automatic arm')
+  // An unobserved stall ends its episode: the engine's ledger is not carried, so the
+  // next stall starts from a full quota.
+  const broken = decideStallNotice({ ...parked, shape: false, now: at })
+  assert.deepEqual(broken.records, {})
 })
 
 test('the notice copy switches to the failure wording after the failure bound', () => {
@@ -864,7 +877,7 @@ test('parity: the automatic-rebuild evidence rule agrees on every in-flight valu
   ).action === 'auto-resync'
   const mobile = (openInFlight: boolean | undefined): boolean => decideStallNotice({
     shape: true, pageVisible: true, since: PARITY_NOW - mobileTable.thresholdMs, now: PARITY_NOW,
-    dismissed: false, loading: true, openInFlight, resyncStamps: [],
+    dismissed: false, loading: true, openInFlight,
   }).resync
   for (const openInFlight of [false, true, undefined]) {
     assert.equal(desktop(openInFlight), mobile(openInFlight),
@@ -878,11 +891,11 @@ test('parity: the automatic-rebuild evidence rule agrees on every in-flight valu
 test('parity: the loading evidence is required on both tiers (the shape alone is not enough)', () => {
   assert.equal(decideStallNotice({
     shape: true, pageVisible: true, since: PARITY_NOW - mobileTable.thresholdMs, now: PARITY_NOW,
-    dismissed: false, loading: false, openInFlight: false, resyncStamps: [],
+    dismissed: false, loading: false, openInFlight: false,
   }).resync, false)
   assert.equal(decideStallNotice({
     shape: true, pageVisible: true, since: PARITY_NOW - mobileTable.thresholdMs, now: PARITY_NOW,
-    dismissed: false, openInFlight: false, resyncStamps: [],
+    dismissed: false, openInFlight: false,
   }).resync, false, 'an unreadable loading state fails closed')
   const errorArm = planSessionStreamHealth(
     createSessionStreamHealthState(),
