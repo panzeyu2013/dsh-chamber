@@ -72,12 +72,6 @@ export const DEAD_EXPORT_EXEMPTIONS = [
   { name: 'reduceSource', reason: 'source reducer face; used by container + vectors' },
   { name: 'reduceSourceSequence', reason: 'source reducer replay face; used by the vectors' },
   { name: 'collapseRecords', reason: 'ladder internal; used by planLadder + its suite' },
-  // Ladder shape references (design 14 section D4 item 5, plan section 84): the two
-  // host ladders are NOT mechanically migratable until the engine gains a phase
-  // machine. Retirement: the engine model extension lands and the hosts consume
-  // these factories; until then they are the recorded shape of that target.
-  { name: 'sessionLivenessLadder', reason: 'shape reference; retires when the engine phase machine lands (design 14 D4-5)' },
-  { name: 'streamHealthLadder', reason: 'shape reference; retires when the engine phase machine lands (design 14 D4-5)' },
   // Presentation outer-bound helpers superseded by decidePresentation/planVeilTimer;
   // kept for the renderer suite's bound cases.
   { name: 'surfaceBoundMs', reason: 'outer-bound helper; retires when the renderer tests use the frame API only' },
