@@ -56,6 +56,11 @@ public struct RendererRecoveryPolicy: Equatable {
     /// `attempts`（窗口外旧记录自动淘汰）。
     /// 窗口淘汰 / 上限判定 / 记账 = `RollingWindowLimiter` 单源（2026-12 单源化）；
     /// inout 数组契约保持不变（本策略是值类型，状态由调用方持有）。
+    ///
+    /// B5 复核（2026-12）：曾试拆「判定 / 记账」，但**两个调用点都在判定之前守卫**
+    /// （`MainWindowController.scheduleRecoveryReload` 的 `recoveryReloadWorkItem == nil`、
+    /// `SidecarSupervisor` 的崩溃分支守卫 —— 后者 2026-12 已把配额消耗移进崩溃路径），
+    /// 不存在「判定后拒绝排程」的路径，故拆分是**无消费点的能力**，已回退。
     public func decide(now: Double, attempts: inout [Double]) -> Decision {
         switch RollingWindowLimiter.decide(window: window, limit: maxReloads,
                                            now: now, events: &attempts) {

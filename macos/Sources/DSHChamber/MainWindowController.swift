@@ -129,6 +129,10 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     /// 退出中/已开始清理 → 抑制渲染恢复（Electron `reload()` 的 `quitRequested`
     /// 早退；2026-09 三审 E19 偏离 #3）。
     private var recoverySuppressed = false
+    /// B5：give-up 的**一次性闸门**。放弃是「这一轮恢复结束」的判断，不是「每次崩溃都
+    /// 通报一次」的事件——旧接线在 give-up 之后每次崩溃都再弹一次模态框。首弹后只写日志，
+    /// 直到一次**真正成功的加载**（`didFinish`）把它复位，闸门才重新武装。
+    private var recoveryGaveUp = false
     /// 崩溃归因（2026-09 崩溃归因轮）：上次「加载完成」时刻、本次加载窗口内的
     /// 崩溃次数、以及当前这次加载是否由崩溃恢复触发。证据显示崩溃集中在加载完成后
     /// 20–34s，而 10 次崩溃里只有 2 次留下 shell 侧痕迹——没有这三个量就无法把
@@ -1572,6 +1576,12 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         // "崩溃→重载→可用"这段用户可见空窗的直接量度。
         let previousLoad = lastLoadFinishedAt
         lastLoadFinishedAt = Date()
+        // B5：一次真正成功的加载结束放弃态（give-up 闸门重新武装）。这是闸门的
+        // "生命周期"落点——不是超时、不是重试计数，而是"页面确实活了"。
+        if recoveryGaveUp {
+            recoveryGaveUp = false
+            shellLog("[shell] 渲染恢复放弃态已随加载完成复位")
+        }
         if recoveringFromCrash {
             let recoveredAfter = lastCrashAt.map { Date().timeIntervalSince($0) } ?? -1
             let sincePrevious = previousLoad.map { Date().timeIntervalSince($0) } ?? -1
@@ -1788,8 +1798,21 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         case .nothing:
             return
         case .probe:
-            webView.evaluateJavaScript("1") { [weak self] _, _ in
-                self?.hangWatchdog.noteProbeSucceeded()
+            webView.evaluateJavaScript("1") { [weak self] _, error in
+                guard let self else { return }
+                // B5: a probe ERROR is not health. The old wiring reported success
+                // unconditionally, so a renderer that answered with an error (a dead
+                // JS context, a navigation in flight, a failed evaluation) could be
+                // judged healthy forever. Both paths now go through the machine, and a
+                // failure that reaches the strike limit reloads on the spot.
+                if error == nil {
+                    self.hangWatchdog.noteProbeSucceeded()
+                    return
+                }
+                if self.hangWatchdog.noteProbeFailed() == .reload {
+                    self.shellLog("[shell] 渲染器探针连续失败 (RendererHangWatchdog.maxStrikes) 次 → 有界重载")
+                    self.scheduleRecoveryReload(reason: "unresponsive")
+                }
             }
         case .reload:
             shellLog("[shell] 渲染器疑似卡死（连续 \(RendererHangWatchdog.maxStrikes) 次 ping 超时且用户空闲 ≥\(Int(RendererHangWatchdog.idleGrace))s）→ 有界重载")
@@ -1813,6 +1836,11 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
             recoveryReloadWorkItem = item
             DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
         case .giveUp(let attempts):
+            guard !recoveryGaveUp else {
+                shellLog("[shell] 渲染恢复已在放弃态（\(reason)，\(attempts) 次），不再重复通报")
+                return
+            }
+            recoveryGaveUp = true
             shellLog("[shell] 渲染恢复正常化放弃（\(reason)，\(attempts) 次），本次不重载")
             let alert = NSAlert()
             alert.alertStyle = .critical

@@ -2,18 +2,19 @@
 //  RendererHangWatchdog.swift
 //  DSHChamber
 //
-//  S-02（2026-12 复裁决）：Electron 在渲染进程 `unresponsive` 15s 后重载窗口；
-//  WKWebView 没有对应回调（只有「进程终止」有 webViewWebContentProcessDidTerminate），
-//  于是用「空闲时周期性 ping」逼近同一语义：
+//  S-02（2026-12 复裁决）：Electron 在渲染进程 unresponsive 15s 后重载窗口；WKWebView
+//  没有对应回调（只有进程终止有 webViewWebContentProcessDidTerminate），于是用「空闲时
+//  周期性 ping」逼近同一语义：用户至少 15s 无键鼠输入才 ping；连续 3 次 ping 超时（每次
+//  3s、间隔 5s）判定卡死；一次正常返回即清零。重载复用既有的有界恢复策略
+//  （RendererRecoveryPolicy：60s 窗口 ≤3 次），卡死与崩溃共享同一预算。
 //
-//    - 只有用户**至少 15s 没有键鼠输入**时才 ping（绝不打断正在输入的人，
-//      也避免丢弃未提交的编辑态）；
-//    - 连续 3 次 ping 超时（每次 3s、间隔 5s，累计 ≈15s+）才判定卡死；
-//    - 一次正常返回即清零（hiccup 不累积）。
+//  S-34 首载门：didFinish 前只记录键鼠活动，不 ping、不重载。
 //
-//  重载本身复用既有的有界恢复策略（RendererRecoveryPolicy：60s 窗口内 ≤3 次，
-//  与 Electron main.ts installRendererRecovery 同参数）——卡死重载与崩溃重载
-//  共享同一份预算，不会互相绕过对方的限流。
+//  B5（2026-12 会话链重构）：探针失败必须**记 strike**，不再当作成功。此前的接线在
+//  `evaluateJavaScript` 报错时也走 noteProbeSucceeded()，于是一个**卡住但报错**的渲染器
+//  可以被永久判为健康——纯逻辑这一侧原本就分不清两者，因为只有成功这一个入口。
+//  现在失败有独立入口，判定器与 `LoadState`（packages/dsh-stream-state）的探针 strike
+//  语义同名同义：失败累加、成功/输入清零、达上限交回调用方。
 //
 //  本类型是纯逻辑（注入时钟）：GUI 接线只负责定时 tick、发 ping、消费 Action。
 //
@@ -33,7 +34,7 @@ struct RendererHangWatchdog {
     enum Action: Equatable {
         /// 什么都不做。
         case nothing
-        /// 发一次 ping；调用方完成后回调 noteProbeSucceeded()。
+        /// 发一次 ping；调用方完成后回调 noteProbeSucceeded() 或 noteProbeFailed()。
         case probe
         /// 判定卡死 → 走有界恢复策略重载。
         case reload
@@ -43,9 +44,7 @@ struct RendererHangWatchdog {
     private var lastInputAt: Date
     private var lastProbeAt: Date?
     private var probeInFlightSince: Date?
-    /// 首载成功门（S-34）：与 Electron main.ts 的 loadedOnce 同义——didFinish 前
-    /// 只记录键鼠活动，**不 ping、不重载**（建窗到控制面就绪期间的白屏加载不得
-    /// 被误判卡死）。
+    /// 首载成功门（S-34）：didFinish 前只记录键鼠活动，不 ping、不重载。
     private(set) var loadedOnce = false
 
     init(now: Date) {
@@ -67,32 +66,33 @@ struct RendererHangWatchdog {
 
     /// ping 正常返回 → 渲染器活着，清零。
     mutating func noteProbeSucceeded() {
-        strikes = 0
+        clearProbe()
+    }
+
+    /// ping **失败**（evaluateJavaScript 报错、超时、无结果）→ 记一次 strike。
+    /// 与 noteProbeSucceeded() 严格对称：这是「卡住但报错」不再被误判为健康的唯一入口。
+    /// 达到上限时返回 .reload（并清零，与 tick 的超时路径同一语义）。
+    mutating func noteProbeFailed() -> Action {
         probeInFlightSince = nil
+        strikes += 1
+        guard strikes >= Self.maxStrikes else { return .nothing }
+        strikes = 0
+        return .reload
     }
 
     /// 定时 tick（调用方每 probeInterval 秒调用一次）。
     mutating func tick(now: Date) -> Action {
-        // S-34 首载门：didFinish 前只记录（noteUserInput 照常更新空闲计时），
-        // 绝不 ping/重载——strike 语义在门打开后原样保留。
+        // S-34 首载门：didFinish 前只记录（noteUserInput 照常更新空闲计时），绝不 ping。
         guard loadedOnce else { return .nothing }
         // 有人刚动过键鼠：不 ping、不重载。
         if now.timeIntervalSince(lastInputAt) < Self.idleGrace {
-            strikes = 0
-            probeInFlightSince = nil
-            lastProbeAt = nil
+            clearProbe()
             return .nothing
         }
         // 在飞的 ping 超时 → 记一次 strike；满 3 次 → 重载（计数清零）。
         if let started = probeInFlightSince {
             guard now.timeIntervalSince(started) >= Self.probeTimeout else { return .nothing }
-            probeInFlightSince = nil
-            strikes += 1
-            if strikes >= Self.maxStrikes {
-                strikes = 0
-                return .reload
-            }
-            return .nothing
+            return noteProbeFailed()
         }
         // 距上次 ping 不足间隔 → 等下一轮。
         if let last = lastProbeAt, now.timeIntervalSince(last) < Self.probeInterval {
@@ -101,5 +101,11 @@ struct RendererHangWatchdog {
         lastProbeAt = now
         probeInFlightSince = now
         return .probe
+    }
+
+    /// 一次「活着」的证据：清零 strike 与在飞状态。
+    private mutating func clearProbe() {
+        strikes = 0
+        probeInFlightSince = nil
     }
 }
