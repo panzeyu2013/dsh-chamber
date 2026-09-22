@@ -2,26 +2,23 @@
  * Gateway restart 409 refusal projection for the runtime section (design 21
  * §5.1/§5.2, 2026-12 audit P1-2).
  *
- * The connections package owns the same classifier for the card and the plugin
- * dialog (managed-restart.ts classifyRuntimeRefusal / runtimeRefusalText).
- * The bridge cannot share that code across the plugin boundary, so this is the
- * bridge-local copy of the SAME semantics, and
- * settings-connections/test/runtime-gate/restart-refusal-parity.test.ts drives
- * both modules over one body matrix and asserts identical verdicts — the
- * lockstep the two copies must keep.
- *
- * Dependency-free on purpose: the parity test imports this file in plain node.
+ * The classifier and the verbatim-error projection are single-sourced on the
+ * sidebar shared face (dsh-chamber-client-ui-sidebar/src/shared/runtime-refusal.ts,
+ * 2026-12 single-sourcing pass): the settings-connections package re-exports
+ * the same implementations. This module keeps only what is bridge-local — the
+ * bridge dictionary keys and the localized sentence — and re-exports the shared
+ * names under their original bridge names for its own callers.
  */
 
-/** The two 409 families the runtime routes answer (same as the connections side). */
-export type BridgeRestartRefusalKind = 'not-running' | 'busy'
+import { classifyRuntimeRefusal, serverRefusalText, type RuntimeRefusalKind } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
 
-/** The bridge dictionary keys for those families. */
-export type BridgeRestartRefusalKey = 'dshRuntimeRestartRefusedNotRunning' | 'dshRuntimeRestartRefusedBusy'
+/** The two 409 families the runtime routes answer (the shared union). */
+export type BridgeRestartRefusalKind = RuntimeRefusalKind
 
 /**
  * Classify a runtime-action refusal: every 409 yields a projection, any other
- * status yields null. The route's wording is the only discriminator it ships.
+ * status yields null. Delegates to the shared classifier — the bridge keeps the
+ * name (and this doc) for its own callers; the verdicts live in one place.
  * @param body - the parsed response body.
  * @param status - the HTTP status.
  * @returns the family + code, or null for a non-409.
@@ -30,12 +27,11 @@ export function classifyBridgeRestartRefusal(
   body: unknown,
   status: number,
 ): { kind: BridgeRestartRefusalKind; code: string | null } | null {
-  if (status !== 409) return null
-  const raw = body as { error?: unknown; code?: unknown } | null | undefined
-  const code = typeof raw?.code === 'string' && raw.code !== '' ? raw.code : null
-  const error = typeof raw?.error === 'string' ? raw.error : ''
-  return { kind: /is not running\b/iu.test(error) ? 'not-running' : 'busy', code }
+  return classifyRuntimeRefusal(body, status)
 }
+
+/** The bridge dictionary keys for those families. */
+export type BridgeRestartRefusalKey = 'dshRuntimeRestartRefusedNotRunning' | 'dshRuntimeRestartRefusedBusy'
 
 /**
  * Localized text for a restart refusal: a 409 renders the family key with
@@ -53,11 +49,7 @@ export function bridgeRestartRefusalText(
   t: (key: BridgeRestartRefusalKey) => string,
 ): string {
   const refusal = classifyBridgeRestartRefusal(body, status)
-  if (refusal === null) {
-    const error = (body as { error?: unknown } | null | undefined)?.error
-    if (typeof error === 'string' && error !== '') return error
-    return `restart refused (${status})`
-  }
+  if (refusal === null) return serverRefusalText(body, status)
   const key: BridgeRestartRefusalKey = refusal.kind === 'not-running'
     ? 'dshRuntimeRestartRefusedNotRunning'
     : 'dshRuntimeRestartRefusedBusy'

@@ -11,9 +11,11 @@ import type { SettingsConnectionsKey } from '../locales.ts'
 // The settled-boot gap vocabulary is OWNED by the sidebar's shared bridge
 // contract (next to PluginGraphDiagnostic): this package imports the TYPE, not a
 // copy of the union (P4-4 — the specifier resolves to the real sidebar source
-// through the root tsconfig paths). Type-only, so the plain-node tests and the
-// tsdown bundle see no runtime dependency.
-import type { ServerBootGap } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
+// through the root tsconfig paths). The payload extraction (bootGapShape) is the
+// same shared face's implementation (2026-12 single-sourcing pass), so this file
+// now has ONE runtime dependency on that pure module — the same shape
+// managed-restart.ts already has.
+import { bootGapShape, type ServerBootGap } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
 
 export type { ServerBootGap }
 
@@ -46,25 +48,23 @@ export function bootGapText(
   gap: ServerBootGap,
   t: (key: SettingsConnectionsKey, params?: Record<string, string | number>) => string,
 ): string {
-  switch (gap.kind) {
+  // Payload extraction is the shared projection (sidebar shared/boot-gap-shape.ts):
+  // the exhaustiveness now lives there, and this switch maps the shape onto the
+  // connections dictionary. 2026-12 FIX 6: the LOCAL instance's missing graph
+  // endpoint is a chamber-side installation/seed fact; its own sentence never
+  // advises a runtime upgrade.
+  const shape = bootGapShape(gap)
+  switch (shape.key) {
     case 'graph-unavailable':
       return t('bootGapGraphUnavailable')
-    // 2026-12 FIX 6: the LOCAL instance's missing graph endpoint is a chamber-side
-    // installation/seed fact; its own sentence never advises a runtime upgrade.
     case 'local-graph-not-injected':
       return t('bootGapLocalGraphNotInjected')
-    case 'required-services-missing': {
-      const services = gap.services ?? []
-      return services.length === 0
-        ? t('bootGapGeneric')
-        : t('bootGapRequiredServicesMissing', { services: services.join(', ') })
-    }
-    case 'deferred-registration-failed': {
-      const failed = (gap.failedIds ?? []).length
-      return failed === 0
-        ? t('bootGapGeneric')
-        : t('bootGapDeferredRegistrationFailed', { n: failed })
-    }
+    case 'required-services-missing':
+      return t('bootGapRequiredServicesMissing', { services: shape.services })
+    case 'deferred-registration-failed':
+      return t('bootGapDeferredRegistrationFailed', { n: shape.failed })
+    case 'generic':
+      return t('bootGapGeneric')
   }
 }
 

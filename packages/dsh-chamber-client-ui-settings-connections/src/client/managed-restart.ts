@@ -31,8 +31,23 @@
  * distinguishes the timeout so the caller can show the localized
  * accepted-but-recovering copy.
  *
- * Self-contained on purpose: no imports outside this file.
+ * The refusal projection (the 409 classifier plus the verbatim-error path) is
+ * single-sourced on the sidebar shared face —
+ * dsh-chamber-client-ui-sidebar/src/shared/runtime-refusal.ts (2026-12
+ * single-sourcing pass); this module re-exports it for its own callers and
+ * keeps only the localized wording below.
  */
+
+import {
+  classifyRuntimeRefusal,
+  serverRefusalText,
+  type RuntimeRefusalKind,
+} from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
+
+// Re-exported under their original names: callers and tests import them from
+// this module, while the implementations live in the shared face.
+export { classifyRuntimeRefusal, serverRefusalText }
+export type { RuntimeRefusalKind }
 
 /** The poll's English timeout marker (shared gateway-runtime-poll.ts). */
 const READY_TIMEOUT_MARKER = 'did not reach ready in time'
@@ -56,16 +71,6 @@ export function classifyRestartError(error: unknown): { kind: 'failed' | 'accept
     return { kind: 'accepted-timeout', detail: '' }
   }
   return { kind: 'failed', detail: message.trim() }
-}
-
-/**
- * Project a restart refusal body: body.error verbatim when the server carried
- * one ({error, code} shape — 409/400), else a status-anchored fallback text.
- */
-export function serverRefusalText(body: unknown, fallbackStatus: number): string {
-  const error = (body as { error?: unknown } | null | undefined)?.error
-  if (typeof error === 'string' && error !== '') return error
-  return `restart refused (${fallbackStatus})`
 }
 
 /**
@@ -106,34 +111,8 @@ export function applyRuntimeProbe(
   return { ...prev, [specId]: state }
 }
 
-/** The two 409 families the runtime routes answer a UI action with
- *  (gateway/src/runtime-refusals.ts): 'not-running' — the managed dsh itself is
- *  down, so the actionable recovery is /chamber/runtime/start; 'busy' — a
- *  mutation/start/restart is in flight, a profile write holds the lease, or the
- *  runtime needs its recovery route first. Both carry code `runtime_busy` (or
- *  `runtime_recovery_required`), so the code alone cannot tell them apart. */
-export type RuntimeRefusalKind = 'not-running' | 'busy'
-
 /** Locale keys the connections dictionary owns for those refusals. */
 export type RuntimeRefusalKey = 'restartRefusedNotRunning' | 'restartRefusedBusy' | 'startManagedDshRefused'
-
-/**
- * Classify a runtime-action refusal. Every 409 yields a projection (a 409 body
- * is never shown verbatim, not even a body-less one); any other status yields
- * null so the caller keeps the status-anchored/verbatim projection.
- */
-export function classifyRuntimeRefusal(body: unknown, status: number): { kind: RuntimeRefusalKind; code: string | null } | null {
-  if (status !== 409) return null
-  const raw = body as { error?: unknown; code?: unknown } | null | undefined
-  const code = typeof raw?.code === 'string' && raw.code !== '' ? raw.code : null
-  const error = typeof raw?.error === 'string' ? raw.error : ''
-  // The route's own wording is the only discriminator it ships: "managed dsh
-  // is not running (<state>); start the managed dsh …" (restart/apply-now) vs
-  // "a restart is already in flight" / "another runtime mutation …" /
-  // "runtime recovery … is required". Anything unmatched is a busy family
-  // refusal — the safe default, since its advice ("retry later") is harmless.
-  return { kind: /is not running\b/iu.test(error) ? 'not-running' : 'busy', code }
-}
 
 /**
  * Localized text for a runtime-action refusal: a 409 renders `keys[kind]` with

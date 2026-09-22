@@ -1063,8 +1063,12 @@ export function runtimeReportSignature(
  * empty array, `null` and an empty string all encode to nothing, so a producer
  * that omits vs materializes an empty field cannot churn the gate. The
  * producer's sentence is not part of the projection at all.
+ *
+ * Exported for the settings bridge, which had a byte-identical private copy
+ * until the 2026-12 single-sourcing pass (its roster signature is the other
+ * consumer of this identity).
  */
-function gapSignature(gap: ServerBootGap | undefined): string | null {
+export function gapSignature(gap: ServerBootGap | undefined): string | null {
   if (gap === undefined) return null
   const encode = (value: unknown): string | null => {
     if (value === undefined || value === null || value === '') return null

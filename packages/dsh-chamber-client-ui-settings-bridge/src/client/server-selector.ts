@@ -1,4 +1,4 @@
-import type { ServerBootGap } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
+import { gapSignature, type ServerBootGap } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
 
 export interface ServerSelectorRow {
   id: string
@@ -31,30 +31,9 @@ export interface ServerProjectionRow extends ServerSelectorRow {
   bootGap?: ServerBootGap
 }
 
-/**
- * Field-GENERIC identity of a settled-boot gap for publish signatures: every
- * payload field takes part (so a field added to the fact later cannot freeze a
- * subscription), fields are order-normalized, array order is preserved (roster
- * order is meaningful) — and "no payload" is one thing: an absent field, an
- * empty array, `null` and an empty string all encode to nothing, so a producer
- * that omits vs materializes an empty field cannot churn the gate. The
- * producer's sentence is not part of the projection at all.
- */
-function gapSignature(gap: ServerBootGap | undefined): string | null {
-  if (gap === undefined) return null
-  const encode = (value: unknown): string | null => {
-    if (value === undefined || value === null || value === '') return null
-    if (Array.isArray(value)) return value.length === 0 ? null : `[${value.map(item => String(item)).join('\u0000')}]`
-    return JSON.stringify(value)
-  }
-  return Object.entries(gap)
-    .flatMap(([key, value]) => {
-      const encoded = encode(value)
-      return encoded === null ? [] : [`${key}=${encoded}`]
-    })
-    .sort()
-    .join('\u0001')
-}
+// gapSignature is the sidebar shared implementation (derive.ts), imported above:
+// the bridge roster signature and the sidebar projection signature must be the
+// same identity, so the byte-identical copy that lived here is gone.
 
 /** Rendered settings-roster signature; excludes timestamp-only refreshes. */
 export function serverProjectionSignature(rows: readonly ServerProjectionRow[]): string {
