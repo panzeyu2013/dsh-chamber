@@ -1468,6 +1468,11 @@ export type { ApiCorsDecision, ApiCorsEvaluator, ApiRequest, ApiResponse, ApiSur
 // rewrite + WS splice + limits/errors without forking.
 export * from './proxy-forward.ts'
 export * from './browser-auth-cookie.ts'
+// Node-side primitives shared with the desktop main process and the gateway
+// server (2026-12 single-sourcing pass; the browser-side twins live in the
+// sidebar's shared face).
+export * from './record-read.ts'
+export * from './error-text.ts'
 export { createJsonStore, JsonStorePersistError, JsonStoreRevisionConflictError } from './json-store.ts'
 export type { JsonStore, JsonStoreDocument, JsonStoreMutator, JsonStoreOptions } from './json-store.ts'
 export {
