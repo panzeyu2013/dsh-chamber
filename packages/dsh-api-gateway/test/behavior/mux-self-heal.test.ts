@@ -21,10 +21,7 @@ import {
 } from '../../src/client/remote-retry-policy.ts'
 // P3: the opening budget and the teardown floor are table values now (the fork
 // copies were retired with their G-G lockstep entries).
-import { OPENING_TIMEOUT_LADDER_MS, SILENT_TEARDOWN_MIN_MS } from '@dsh-chamber/dsh-stream-state'
-
-const REMOTE_STREAM_OPENING_TIMEOUT_MS = OPENING_TIMEOUT_LADDER_MS[0] as number
-const REMOTE_STREAM_SILENT_TEARDOWN_MIN_MS = SILENT_TEARDOWN_MIN_MS
+import { SILENT_TEARDOWN_MIN_MS, openingBudgetMs } from '@dsh-chamber/dsh-stream-state'
 
 class FakeSocket {
   static readonly CONNECTING = 0
@@ -510,7 +507,7 @@ test('a stream aborted inside the evidence window never judges the socket', asyn
   await flushMicrotasks()
   // A consumer that gives up inside the evidence window (a session switch, an
   // aborted unary-style read) must not churn a carrier that may simply be young.
-  t.mock.timers.tick(REMOTE_STREAM_SILENT_TEARDOWN_MIN_MS - 1)
+  t.mock.timers.tick(SILENT_TEARDOWN_MIN_MS - 1)
   deadline.abort(new Error('consumer gave up'))
   await assert.rejects(pending)
   await flushMicrotasks()
@@ -565,7 +562,7 @@ test('a stream answered with its opening item clears the opening budget key', as
   socket.deliverNow()
   t.mock.timers.tick(20_000)
   await flushMicrotasks()
-  assert.ok(budgetError(REMOTE_STREAM_OPENING_TIMEOUT_MS)(firstSeen.read()), 'the first episode must time out on the base budget')
+  assert.ok(budgetError(openingBudgetMs(0))(firstSeen.read()), 'the first episode must time out on the base budget')
 
   // 2) The SAME request re-issued and answered. The answered stream stays LIVE: a
   //    teardown would clear the key too, so only a live sibling can prove that the
@@ -591,11 +588,47 @@ test('a stream answered with its opening item clears the opening budget key', as
   t.mock.timers.tick(20_000)
   await flushMicrotasks()
   assert.ok(
-    budgetError(REMOTE_STREAM_OPENING_TIMEOUT_MS)(nextSeen.read()),
+    budgetError(openingBudgetMs(0))(nextSeen.read()),
     'a stream opened beside the answered one must start at the base budget',
   )
   await answered.return(undefined)
   await next.return(undefined)
+  await client.close()
+  t.mock.timers.reset()
+})
+
+test('the retry chain for one request keeps the widening its timed-out predecessor earned', async (t) => {
+  installFakeSocket()
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
+  const client = new RemoteStreamMuxClient()
+  client.start()
+  await flushMicrotasks()
+  const socket = FakeSocket.instances[0]
+  socket.openNow()
+  await flushMicrotasks()
+  const payload = { args: { request: { address: { kind: 'session', sessionId: 'retry-chain' } } } }
+  const first = client.open('session/follow', payload, new AbortController().signal)
+  const firstSeen = observe(first.next())
+  await flushMicrotasks()
+  t.mock.timers.tick(10_000)
+  socket.deliverNow()
+  t.mock.timers.tick(20_000)
+  await flushMicrotasks()
+  assert.ok(budgetError(openingBudgetMs(0))(firstSeen.read()), 'the predecessor times out on the base rung')
+  // The predecessor has left `streams` by now (its finally ran), so its ledger entry
+  // hands the streak to the retry-lane successor (B2): the SAME request re-issued
+  // immediately must get the widened 60 s budget instead of restarting at 30 s.
+  const second = client.open('session/follow', payload, new AbortController().signal)
+  const secondSeen = observe(second.next())
+  await flushMicrotasks()
+  t.mock.timers.tick(15_000)
+  socket.deliverNow()
+  t.mock.timers.tick(44_000)
+  await flushMicrotasks()
+  assert.equal(secondSeen.read(), PENDING, 'the successor must still be waiting at 59 s')
+  t.mock.timers.tick(1_000)
+  await flushMicrotasks()
+  assert.ok(budgetError(openingBudgetMs(1))(secondSeen.read()), 'the successor times out on the inherited rung')
   await client.close()
   t.mock.timers.reset()
 })
@@ -620,7 +653,7 @@ test('replacing a silent socket fails EVERY logical stream, not only the timed-o
   t.mock.timers.tick(5_000)
   await flushMicrotasks()
   assert.ok(
-    budgetError(REMOTE_STREAM_OPENING_TIMEOUT_MS)(firstSeen.read()),
+    budgetError(openingBudgetMs(0))(firstSeen.read()),
     'the timed-out stream reaches its retry lane',
   )
   const secondError = asError(secondSeen.read())

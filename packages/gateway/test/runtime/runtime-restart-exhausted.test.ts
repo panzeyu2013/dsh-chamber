@@ -11,10 +11,10 @@ import { join } from 'node:path'
 import { type Logger } from '@dsh-chamber/control-plane'
 import { createGatewayRuntimeManager } from '../../src/runtime-manager.ts'
 import {
-  listKnownGoodVersions,
+  listKnownGoodVersionsState,
   readActivationJournalState,
-  readCurrentPointer,
-  readOverride,
+  readCurrentPointerState,
+  readOverrideState,
   recordProbePass,
   writeActivationJournal,
   writeCurrentPointer,
@@ -93,7 +93,7 @@ test('gateway host state edges maintain and promote the full 24h + one-boot know
 
     nowMs += 24 * 60 * 60 * 1_000
     promotionTick()
-    assert.deepEqual(listKnownGoodVersions(stateDir), ['1.0.0'], 'the live hourly tick promotes at the exact 24h boundary')
+    assert.deepEqual(listKnownGoodVersionsState(stateDir), { kind: 'ok', versions: ['1.0.0'] }, 'the live hourly tick promotes at the exact 24h boundary')
     assert.equal(readCandidate(), undefined, 'promotion consumes the candidate ledger entry')
     await manager.dispose()
     assert.equal(schedulerCancelled, 1, 'dispose cancels the sustained-health timer exactly once')
@@ -190,14 +190,14 @@ test('authoritative restart-exhausted rolls an active override back exactly once
     const monitoring = readActivationJournalState(stateDir)
     assert.equal(monitoring.kind, 'valid')
     if (monitoring.kind === 'valid') assert.equal(monitoring.journal.phase, 'applied-monitoring')
-    assert.equal(readCurrentPointer(stateDir), '2.0.0')
+    assert.deepEqual(readCurrentPointerState(stateDir), { kind: 'valid', version: '2.0.0' })
     assert.equal(candidateExists('2.0.0'), true, 'the validated candidate starts in its monitoring window')
 
     manager.observeLocalState('restart-exhausted')
     await new Promise(resolve => setImmediate(resolve))
     assert.equal(manager.mutationInProgress(), false,
       'a stale callback argument cannot trigger F7 while the authoritative plane state is ready')
-    assert.equal(readCurrentPointer(stateDir), '2.0.0')
+    assert.deepEqual(readCurrentPointerState(stateDir), { kind: 'valid', version: '2.0.0' })
 
     // Model data migrated by v2. F7 must restore the pre-v2 snapshot before
     // exposing the old v1 runtime again.
@@ -218,9 +218,10 @@ test('authoritative restart-exhausted rolls an active override back exactly once
     assert.equal(f7Stops, 1, 'duplicate restart-exhausted edges execute one rollback transaction')
     assert.equal(durableBeforeFirstEffect, true, 'rollback-needed is durable before the first host stop')
     assert.equal(candidateRemovedBeforeFirstEffect, true, 'the failed candidate is removed before the first host stop')
-    assert.equal(readCurrentPointer(stateDir), '1.0.0')
-    assert.equal(readOverride(stateDir)?.resolvedVersion, '1.0.0')
-    assert.equal(readOverride(stateDir)?.lastOutcome, 'rolled-back')
+    assert.deepEqual(readCurrentPointerState(stateDir), { kind: 'valid', version: '1.0.0' })
+    const rollbackOverride = readOverrideState(stateDir)
+    assert.equal(rollbackOverride.kind === 'valid' ? rollbackOverride.record.resolvedVersion : null, '1.0.0')
+    assert.equal(rollbackOverride.kind === 'valid' ? rollbackOverride.record.lastOutcome : null, 'rolled-back')
     assert.equal(candidateExists('2.0.0'), false)
     assert.equal(readFileSync(join(home, 'settings.json'), 'utf8'), '{"source":"v1"}')
     assert.equal(readActivationJournalState(stateDir).kind, 'missing', 'safe terminal rollback consumes the F7 journal')
@@ -271,7 +272,7 @@ test('gateway F7 keeps a failed fallback probe stopped behind a sticky exposure 
 
     await manager.applyNow()
     await waitForSettle(manager)
-    assert.equal(readCurrentPointer(stateDir), '2.0.0')
+    assert.deepEqual(readCurrentPointerState(stateDir), { kind: 'valid', version: '2.0.0' })
     assert.equal(manager.exposureQuarantined(), false)
     releasedStates.length = 0
 
@@ -354,7 +355,7 @@ test('F7 journal persistence failure is fail-closed before candidate or host eff
     manager.observeLocalState('restart-exhausted')
     await waitForMutationSettle(manager)
     assert.equal(stops, 0, 'a failed durable latch must not stop the host')
-    assert.equal(readCurrentPointer(stateDir), '2.0.0')
+    assert.deepEqual(readCurrentPointerState(stateDir), { kind: 'valid', version: '2.0.0' })
     assert.equal(readFileSync(candidatesPath, 'utf8'), candidatesBefore,
       'the failed candidate remains untouched when rollback-needed could not be persisted')
     assert.equal(readActivationJournalState(stateDir).kind, 'corrupt')
@@ -440,7 +441,7 @@ test('dispose drains a persisted F7 rollback and final-stop fences its fallback 
     })
     await manager.applyNow()
     await waitForSettle(manager)
-    assert.equal(readCurrentPointer(stateDir), '2.0.0')
+    assert.deepEqual(readCurrentPointerState(stateDir), { kind: 'valid', version: '2.0.0' })
     writeFileSync(join(home, 'settings.json'), '{"source":"v2-migrated"}')
 
     const startsBeforeF7 = starts
@@ -462,7 +463,7 @@ test('dispose drains a persisted F7 rollback and final-stop fences its fallback 
 
     releaseF7Stop()
     await disposal
-    assert.equal(readCurrentPointer(stateDir), '1.0.0', 'the already-durable safety rollback is allowed to finish')
+    assert.deepEqual(readCurrentPointerState(stateDir), { kind: 'valid', version: '1.0.0' }, 'the already-durable safety rollback is allowed to finish')
     assert.equal(readFileSync(join(home, 'settings.json'), 'utf8'), '{"source":"v1"}')
     assert.equal(starts, startsBeforeF7 + 1, 'only the shared fallback probe may start after disposal; the recovery tail is suppressed')
     assert.equal(plane._state.connectionState, 'stopped', 'dispose final-stop fences the fallback probe before owner release')
@@ -493,7 +494,7 @@ test('restart-exhausted rollback holds every write while the profile-write lease
 
     await manager.applyNow()
     await waitForSettle(manager)
-    assert.equal(readCurrentPointer(stateDir), '2.0.0')
+    assert.deepEqual(readCurrentPointerState(stateDir), { kind: 'valid', version: '2.0.0' })
     writeFileSync(join(home, 'settings.json'), '{"source":"v2-migrated"}')
 
     // A plugin mutation holds the profile-write lease exactly when the host
@@ -516,7 +517,7 @@ test('restart-exhausted rollback holds every write while the profile-write lease
     if (waiting.kind === 'valid') {
       assert.equal(waiting.journal.phase, 'applied-monitoring', 'no durable rollback-needed write while the lease is held')
     }
-    assert.equal(readCurrentPointer(stateDir), '2.0.0', 'no pointer switch while the lease is held')
+    assert.deepEqual(readCurrentPointerState(stateDir), { kind: 'valid', version: '2.0.0' }, 'no pointer switch while the lease is held')
     assert.equal(readFileSync(join(home, 'settings.json'), 'utf8'), '{"source":"v2-migrated"}',
       'no DSH_HOME restore while the lease is held')
 
@@ -534,7 +535,7 @@ test('restart-exhausted rollback holds every write while the profile-write lease
     lease.release()
     await waitForMutationSettle(manager)
     assert.equal(f7Stops, 1)
-    assert.equal(readCurrentPointer(stateDir), '1.0.0')
+    assert.deepEqual(readCurrentPointerState(stateDir), { kind: 'valid', version: '1.0.0' })
     assert.equal(readFileSync(join(home, 'settings.json'), 'utf8'), '{"source":"v1"}')
     assert.equal(readActivationJournalState(stateDir).kind, 'missing', 'safe terminal rollback consumes the F7 journal')
     assert.match((await manager.status()).operationError ?? '', /automatically rolled back/)
@@ -576,7 +577,7 @@ test('restart-exhausted rollback defers with no writes when the lease outlives t
 
     await manager.applyNow()
     await waitForSettle(manager)
-    assert.equal(readCurrentPointer(stateDir), '2.0.0')
+    assert.deepEqual(readCurrentPointerState(stateDir), { kind: 'valid', version: '2.0.0' })
     writeFileSync(join(home, 'settings.json'), '{"source":"v2-migrated"}')
 
     const lease = manager.beginProfileWrite()
@@ -597,7 +598,7 @@ test('restart-exhausted rollback defers with no writes when the lease outlives t
     if (deferred.kind === 'valid') {
       assert.equal(deferred.journal.phase, 'applied-monitoring', 'no durable write on the deferred path')
     }
-    assert.equal(readCurrentPointer(stateDir), '2.0.0', 'no pointer switch on the deferred path')
+    assert.deepEqual(readCurrentPointerState(stateDir), { kind: 'valid', version: '2.0.0' }, 'no pointer switch on the deferred path')
     assert.equal(readFileSync(join(home, 'settings.json'), 'utf8'), '{"source":"v2-migrated"}',
       'no DSH_HOME restore on the deferred path — the instance keeps its honest restart-exhausted projection')
 
@@ -608,7 +609,7 @@ test('restart-exhausted rollback defers with no writes when the lease outlives t
     manager.observeLocalState('restart-exhausted')
     await waitForMutationSettle(manager)
     assert.equal(f7Stops, 1, 'the re-armed rollback executes one transaction')
-    assert.equal(readCurrentPointer(stateDir), '1.0.0')
+    assert.deepEqual(readCurrentPointerState(stateDir), { kind: 'valid', version: '1.0.0' })
     assert.equal(readFileSync(join(home, 'settings.json'), 'utf8'), '{"source":"v1"}')
     assert.equal(readActivationJournalState(stateDir).kind, 'missing')
 

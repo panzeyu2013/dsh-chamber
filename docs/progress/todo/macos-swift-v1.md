@@ -1,21 +1,21 @@
 # macOS Swift 原生壳 v1：剩余门禁、验收协议与 WBS 索引
 
-> 状态：代码面已落地（路线A：Swift写壳 + Node sidecar；契约见 `docs/design/25-macos-swift-native-shell.md`）。本文只留
-> 双端验收协议/中止条件与W-xx索引（代码与测试注释按编号引用契约）；开放门禁状态归 `docs/progress/STATUS.md`（矩阵design 25 §8.5）。M0–M4的执行记录、逐里程碑叙述、施工分批与工期估算已随收口删除（留存git历史）。
+> 路线A：Swift写壳 + Node sidecar；契约见 `docs/design/25-macos-swift-native-shell.md`。本文只留
+> 双端验收协议/中止条件与W-xx索引（代码与测试注释按编号引用契约）；开放门禁状态归 `docs/progress/STATUS.md`（矩阵design 25 §8.5）。M0–M4的执行记录、逐里程碑叙述、施工分批与工期估算不在本文（留存git历史）。
 
 ## 〇、决策结果索引（D1–D7；原签核表）
 
 |决策|结果|契约|
 |---|---|---|
-|D1路线确认 + P0先行|按路线A启动并落地；G1–G5 + C1/C2判定随M5复跑|design 25 §8.1|
+|D1路线确认 + P0先行|按路线A；G1–G5 + C1/C2判定随M5复跑|design 25 §8.1|
 |D2双壳共存 + bundle id|共存；bundle id `com.dshchamber.native`（改动 = 通知授权重来 + 打包身份返工）|design 25 §1|
-|D3更新路线|v1 `blocked-available` 已被Sparkle 2取代（裁决D-1 = B）；见design 25 §7|design 25 §7|
+|D3更新路线|v1 `blocked-available` 由Sparkle 2取代（D-1 = B）；见design 25 §7|design 25 §7|
 |D4仓库落位|`macos/`（SwiftPM，同design 25 §3.2布局）|design 25 §3.2|
 |D5原生UI渐进（路线B/C）|不做；HostEdges边界即未来接缝|design 25 §5|
 |D6 Node版本/架构/来源|构建期fetch固定版本 + SHA-256校验（`DEFAULT_NODE_VERSION` 24.18.1，大版本对齐Electron 43.4.0内置Node）；v1 arm64-only|`packages/desktop/scripts/build-sidecar.mjs`|
 |D7静态凭据加密|不做：诚实0600明文 + 旧safeStorage「保留禁用待重录」|design 25 §6|
 
-## 一、未闭合门禁（坐标；状态归 STATUS）
+## 一、待验收门禁（坐标；状态归 STATUS）
 
 - M5实机门禁W-28…W-32：状态/范围见 `docs/progress/STATUS.md`「macOS Swift原生壳（design 25，路线A）开放门禁」；矩阵design 25 §8.5，判定标准见 §七。
 - 双端harness未实施：`swift-harness-driver.test.ts`（真实窗口/桥/通信/深链）需GUI会话，不进普通push链（design 25 §8.3/§8.6）。
@@ -24,7 +24,7 @@
 
 ## 二、WBS 任务号索引（W-01…W-32 → 契约落点）
 
-> 2026-12已执行实施的WBS任务号；代码/测试注释按此引用，表只给「任务→契约所在」。
+> WBS任务号索引；代码/测试注释按此引用，表只给「任务→契约所在」。
 
 |任务|内容|契约落点|
 |---|---|---|
@@ -41,11 +41,11 @@
 |W-17/W-18|bridge-manifest生成物（JSON + Swift白名单 + stub）+ shim表面锁步|design 25 §4.4.3|
 |W-19/W-20|HostEdges原生腿（SwiftEdgeHostLegs：对话/面板/文件/通知）|design 25 §5 E1–E20、§4.5|
 |W-21|窗口/菜单/通知/深链/渲染器恢复（MainWindowController/RendererRecovery）|design 25 §4.5、§5|
-|W-22|更新v1（blocked-available）→ 已被Sparkle取代|design 25 §7|
+|W-22|更新v1（blocked-available）→ 由Sparkle取代|design 25 §7|
 |W-23/W-24|sidecar打包（内建node + dist/web）与 .app组装/Info.plist/ATS|design 25 §3.2、§4.3|
-|W-25|Sparkle预研→已落地为S-01实现|design 25 §7|
+|W-25|Sparkle预研→S-01实现|design 25 §7|
 |W-26/W-27|CI（ci.yml `test-macos`）与发布产物（`-native` 命名、appcast、回滚）|design 25 §8.4|
-|W-28…W-32|M5实机门禁与收口|design 25 §8.5；开放状态见STATUS|
+|W-28…W-32|M5实机门禁与验收|design 25 §8.5；开放状态见STATUS|
 
 ## 三、双线防漂移门禁清单（压缩索引；断言细节见各文件与 design 25 §8.4）
 
@@ -86,7 +86,7 @@ Swift产物出问题 ⇒ draft不publish、Electron照发（共存主通道，Sw
 |W3富文本粘贴 + 文件拖拽|拖文件进composer成附件；拖进归档对话框入口可用|拖拽无反应或触发导航|同W1|
 |W4打印/查找|Cmd+P弹系统打印对话框且内容合理；Cmd+F若dsh UI未实现查找则N/A（登记不视为失败）|打印无对话框/空白|N/A不阻断；真失败按渲染差异排查|
 |W5字体/滚动/IME|中文输入无吞字/乱序；长会话滚动无感卡顿；无方块字|IME丢字；滚动明显劣于Electron；字体破损|归因WebKit渲染差异→按W1预算|
-|W6后台节流对SSE/WS|隐藏/失焦后SSE/WS心跳不断、恢复即时（≤现Electron语义）|后台WS掉线且无法自动重连或恢复 >30s|归因WebKit节流→改keep-alive/唤醒补发（core已具备）|
+|W6后台节流对SSE/WS|隐藏/失焦后SSE/WS心跳不断、恢复即时（≤现Electron语义）|后台WS掉线且无法自动重连或恢复 >30s|归因WebKit节流→改keep-alive/唤醒补发（core具备）|
 |W7刷新率三工况|打包态：插电120fps；电池 + 低电量模式60fps（系统级帧间隔 ×2）；60Hz外接屏不回退|任一工况达不到，或启动日志与 `[shell-fps]` 实测矛盾|归因（渲染侧偏好vs系统节流）；日志标「面板上限」时以 `[shell-fps]` 实测为准；判据见design 25 §5.1/deviations S-48|
 
 ### 7.3 双端性能与产物体积验收协议（P0 预检 / M4–M5 定标）
@@ -119,10 +119,10 @@ Swift产物出问题 ⇒ draft不publish、Electron照发（共存主通道，Sw
 
 ## 八、决策门日程
 
-决策门随执行已全部拍板（结果见 §〇；原「最迟拍板门 / 错过后果」表在git历史）；日后重开路线会连带通知授权/打包身份/路径与CI返工。
+决策门结果见 §〇（原「最迟拍板门 / 错过后果」表在git历史）；日后重开路线会连带通知授权/打包身份/路径与CI返工。
 
 ## 九、工具与 dev 侧约定
 
 - ATS：dev态以 `NSAllowsLocalNetworking` 放行loopback（生产同值）；WebView只加载控制面origin。
 - dev后端：Swift dev用 `DSH_CHAMBER_SHELL_PORT` 钉死的控制面 + `dsh-chamber-dev` userData（与Electron dev的 `.dev-user-data` 隔离，见 `deviations.md` §3 P-10）。
-- 工期估算（三档人-日）与里程碑排期已删；量级与关键路径见design 25 §0。
+- 工期估算（三档人-日）与里程碑排期不在本文；量级与关键路径见design 25 §0。

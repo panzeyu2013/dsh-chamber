@@ -119,6 +119,20 @@ test('the shell wiring reads the installed catalog and its real icons through th
   }
 })
 
+test('connections.createLocal refuses a body without a connection row instead of fabricating one', () => {
+  // 6.1.2 契约锁。源码文本而非 wire 调用：api.ts 经 sidebar shared barrel 取 client，
+  // 该 barrel 会拉入页面级 store（restart-window-reload.ts 明记普通 node 测试不可载入），
+  // 所以这里钉契约守卫的形状，行为由 api 的 wire 契约（2xx 必带 connection 行）约束。
+  const api = normalize(stripComments(
+    readFileSync(fileURLToPath(new URL('../../src/api.ts', import.meta.url)), 'utf8'),
+  ))
+  assert.ok(api.includes('const row = body?.connection'), 'createLocal 必须显式读 connection 行')
+  assert.match(api, /if \(row === undefined \|\| row === null\) \{[\s\S]*?throw error/,
+    'connection 行缺席必须抛错，不得继续走合法行投影')
+  assert.match(api, /error\.status = 200/, '契约破缺是 2xx 响应体违约：status 记为 200')
+  assert.equal(api.includes("id: 'local', status: 'starting'"), false, '伪造连接行不得复活')
+})
+
 test('the page-level wiring this test drives is still the shell\'s own', () => {
   const shell = normalize(stripComments(
     readFileSync(fileURLToPath(new URL('../../src/shell.ts', import.meta.url)), 'utf8'),

@@ -1,6 +1,6 @@
 # 04 · 控制面 API 与数据模型（v1 定稿）
 
-> **状态：现行（控制面 API 面与持久化数据模型，2026-09）**——对外全部 API 面（管理
+> **控制面 API 面与持久化数据模型**——对外全部 API 面（管理
 > REST / 每实例反代 / 前端服务）见 §1；未完成门禁见 `docs/progress/STATUS.md`。
 > v2 薄壳 API 面（sessions / projects / project-sessions / interactions / events
 > SSE / config / external / runtime 透传族）**全部删除**——业务由 dsh 前端 runtime
@@ -128,7 +128,7 @@ runtime，本仓不承载）、远程隧道与 systemd（desktop transport-manag
   （`spawned: true`），就绪经 GET 轮询；`starting/ready/degraded/…` → 返回既有状态
   （`spawned: false`），绝不重复 spawn；`kind: 'local'` 以外的值一律 400（远程实例由
   桌面注册表管理，03 §2.2）；DELETE = 优雅停止（02 §3.7），行保留（local 不可删）；
-- **POST 的 409 `connection_busy` 带结构化 `detail`**（2026-09-10，02 §3.4）：
+- **POST 的 409 `connection_busy` 带结构化 `detail`**（02 §3.4）：
   `{writers:[{pid,reason,takeOverAvailable}], errors:[…], sticky:bool}`——连接页据此
   点名阻塞写者并在可接管时给出「清理并接管」；`sticky:true` 表示写入期终止失败
   （扫描无法再证明），只提示重启应用。

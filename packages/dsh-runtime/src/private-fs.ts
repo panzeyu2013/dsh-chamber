@@ -39,6 +39,33 @@ export interface RuntimeFileIdentity {
   ino: number | bigint
 }
 
+/**
+ * 一次读操作的材质判定：成功读到、确认不存在、内容非法、读取失败（EACCES/EIO/未知）。
+ *
+ * `unknown` 与 `corrupt` 必须保持可区分：读失败时字节既未被证明不存在，也未被证明
+ * 非法，调用方只能 fail closed（拒绝覆写/prune），不能把它当作"损坏可隔离"或
+ * "缺失"处理。
+ */
+export type ArtifactReadState<T> =
+  | { kind: 'present'; value: T }
+  | { kind: 'missing' }
+  | { kind: 'corrupt'; detail: string }
+  | { kind: 'unknown'; detail: string }
+
+/** OS-level read-failure classification for {@link ArtifactReadState}: every
+ *  errno besides ENOENT (EACCES/EIO/ESTALE/ELOOP/…) means the bytes were not
+ *  proven absent or illegal, so the material is `unknown`, never `corrupt`.
+ *  Our own structural/identity refusals carry no errno and stay `corrupt`. */
+export function isUnreadableFsError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | null)?.code
+  return typeof code === 'string' && code !== 'ENOENT'
+}
+
+function readFailureDetail(error: unknown, label: string): string {
+  const code = (error as NodeJS.ErrnoException | null)?.code
+  return typeof code === 'string' ? label + '（' + code + '）' : label
+}
+
 export type PrivateFileRead =
   | { kind: 'missing' }
   | { kind: 'unsafe' }
@@ -707,38 +734,58 @@ export function quarantineRuntimeFileNoFollow(
   }
 }
 
-/** Bounded no-follow read for secondary runtime metadata. */
-export function readPrivateFileNoFollow(
+export interface PrivateFileArtifact {
+  raw: string
+  identity: RuntimeFileIdentity
+}
+
+/**
+ * Read one bounded private leaf and classify the failure material. Unlike the
+ * legacy readPrivateFileNoFollow projection this keeps an OS-level read
+ * failure (EACCES/EIO/ESTALE/…) separate from a structurally illegal leaf:
+ * the former is 'unknown', the latter 'corrupt'. Callers deciding on
+ * destructive/selection actions must branch on all four kinds.
+ */
+export function readPrivateFileStateNoFollow(
   filePath: string,
   maxBytes: number,
   options: PrivateFileReadOptions = {},
-): PrivateFileRead {
-  if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) return { kind: 'unsafe' }
+): ArtifactReadState<PrivateFileArtifact> {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) {
+    return { kind: 'corrupt', detail: '私有文件读取上限非法' }
+  }
   const parent = dirname(filePath)
   let parentBefore: Stats
   try {
     parentBefore = inspectRealDirectory(parent, options.tightenMode !== false)
   } catch (error) {
-    return (error as NodeJS.ErrnoException).code === 'ENOENT' ? { kind: 'missing' } : { kind: 'unsafe' }
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { kind: 'missing' }
+    return isUnreadableFsError(error)
+      ? { kind: 'unknown', detail: readFailureDetail(error, '私有文件父目录不可读：' + basename(parent)) }
+      : { kind: 'corrupt', detail: '私有文件父目录不安全：' + basename(parent) }
   }
   let leafBefore: Stats
   try {
     leafBefore = lstatSync(filePath)
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return { kind: 'unsafe' }
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      return isUnreadableFsError(error)
+        ? { kind: 'unknown', detail: readFailureDetail(error, '私有文件不可读：' + basename(filePath)) }
+        : { kind: 'corrupt', detail: '私有文件不安全：' + basename(filePath) }
+    }
     try {
       const parentAfter = lstatSync(parent)
       return parentAfter.isDirectory()
         && !parentAfter.isSymbolicLink()
         && sameIdentity(parentBefore, parentAfter)
         ? { kind: 'missing' }
-        : { kind: 'unsafe' }
-    } catch {
-      return { kind: 'unsafe' }
+        : { kind: 'corrupt', detail: '私有文件父目录身份不稳定：' + basename(parent) }
+    } catch (error) {
+      return { kind: 'unknown', detail: readFailureDetail(error, '私有文件父目录不可读：' + basename(parent)) }
     }
   }
   if (leafBefore.isSymbolicLink() || !leafBefore.isFile() || leafBefore.nlink !== 1 || leafBefore.size > maxBytes) {
-    return { kind: 'unsafe' }
+    return { kind: 'corrupt', detail: '私有文件形状非法：' + basename(filePath) }
   }
 
   let fd: number | null = null
@@ -747,7 +794,7 @@ export function readPrivateFileNoFollow(
     fd = openedFile.fd
     const opened = openedFile.stats
     if (!opened.isFile() || opened.nlink !== 1 || !sameIdentity(leafBefore, opened) || opened.size > maxBytes) {
-      return { kind: 'unsafe' }
+      return { kind: 'corrupt', detail: '私有文件打开后身份复验失败：' + basename(filePath) }
     }
     if (options.tightenMode !== false && (opened.mode & 0o777) !== PRIVATE_RUNTIME_FILE_MODE) {
       fchmodSync(fd, PRIVATE_RUNTIME_FILE_MODE)
@@ -755,7 +802,7 @@ export function readPrivateFileNoFollow(
     const beforeRead = fstatSync(fd)
     const beforeReadPrecise = fstatSync(fd, { bigint: true })
     if (!beforeRead.isFile() || beforeRead.nlink !== 1 || beforeRead.size > maxBytes) {
-      return { kind: 'unsafe' }
+      return { kind: 'corrupt', detail: '私有文件读取前形状非法：' + basename(filePath) }
     }
     const buffer = Buffer.allocUnsafe(maxBytes + 1)
     const read = options.read ?? readSync
@@ -765,7 +812,9 @@ export function readPrivateFileNoFollow(
       if (count === 0) break
       offset += count
     }
-    if (offset > maxBytes || offset !== beforeRead.size) return { kind: 'unsafe' }
+    if (offset > maxBytes || offset !== beforeRead.size) {
+      return { kind: 'corrupt', detail: '私有文件读取不完整：' + basename(filePath) }
+    }
     const after = fstatSync(fd)
     const afterPrecise = fstatSync(fd, { bigint: true })
     const leafAfter = lstatSync(filePath)
@@ -775,19 +824,45 @@ export function readPrivateFileNoFollow(
       || !sameIdentity(after, leafAfter)
       || parentAfter.isSymbolicLink()
       || !parentAfter.isDirectory()
-      || !sameIdentity(parentBefore, parentAfter)) return { kind: 'unsafe' }
-    return {
-      kind: 'valid',
-      raw: buffer.subarray(0, offset).toString('utf8'),
-      identity: { dev: after.dev, ino: after.ino },
+      || !sameIdentity(parentBefore, parentAfter)) {
+      return { kind: 'corrupt', detail: '私有文件读取后身份复验失败：' + basename(filePath) }
     }
-  } catch {
-    return { kind: 'unsafe' }
+    return {
+      kind: 'present',
+      value: {
+        raw: buffer.subarray(0, offset).toString('utf8'),
+        identity: { dev: after.dev, ino: after.ino },
+      },
+    }
+  } catch (error) {
+    // ENOENT here means the leaf vanished after lstat: fail closed as corrupt
+    // rather than aliasing the absence of a file we had already begun proving.
+    if (isUnreadableFsError(error)) {
+      return { kind: 'unknown', detail: readFailureDetail(error, '私有文件读取失败：' + basename(filePath)) }
+    }
+    return { kind: 'corrupt', detail: '私有文件读取失败：' + basename(filePath) }
   } finally {
     if (fd !== null) {
       try { closeSync(fd) } catch { /* best effort */ }
     }
   }
+}
+
+/**
+ * Legacy material projection: preserves the historical missing|unsafe|valid
+ * vocabulary for the private-fs parity suite and secondary-metadata callers.
+ * An unreadable leaf folds into 'unsafe' here; authority readers that must
+ * tell an unreadable leaf from an illegal one consume
+ * readPrivateFileStateNoFollow directly.
+ */
+export function readPrivateFileNoFollow(
+  filePath: string,
+  maxBytes: number,
+  options: PrivateFileReadOptions = {},
+): PrivateFileRead {
+  const state = readPrivateFileStateNoFollow(filePath, maxBytes, options)
+  if (state.kind === 'present') return { kind: 'valid', raw: state.value.raw, identity: state.value.identity }
+  return state.kind === 'missing' ? { kind: 'missing' } : { kind: 'unsafe' }
 }
 
 /** Classify one leaf for destructive/selection decisions without following it:

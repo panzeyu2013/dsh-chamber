@@ -25,6 +25,7 @@ import {
   parseSessionFactsSseBlock,
 } from '../../src/session-facts-source.ts'
 import { advanceReadMark } from '../../src/unread-store.ts'
+import { sourceSessionFactsMode } from '../../src/session-facts-mode.ts'
 import { stripComments } from '../../../../scripts/dev/test-support/source-text.ts'
 
 const SNAPSHOT = {
@@ -553,6 +554,102 @@ test('snapshot factory negative: a malformed sync frame refetches instead of sil
   await waitFor(() => probeGets.length >= 1)
   await waitFor(() => probeGets.length >= 2, 2_000)
   assert.equal(source.getSnapshot()?.cursor, SSE_PROBE_BODY.cursor, '坏帧不得清空既有快照（走 refetch 收敛）')
+  source.stop()
+})
+
+// ── probe outcome → 快照（2026-12 单源化：classifier 是唯一判定 owner） ─────────
+
+test('404 producer: the probe delivers an EMPTY legacy snapshot (not undefined) so mode legacy is reachable', async () => {
+  let probeGets = 0
+  const fetchImpl = (async () => {
+    probeGets += 1
+    return new Response(JSON.stringify({ error: 'not found' }), {
+      status: 404,
+      headers: { 'content-type': 'application/json' },
+    })
+  }) as unknown as typeof fetch
+  const source = createSessionFactsSource({
+    sourceId: 'gw-legacy-producer',
+    fetchImpl,
+    pollIntervalMs: 0,
+    silenceMs: 0,
+    reconnectMs: 5,
+  })
+  source.update({ fingerprint: 'f1', connected: true })
+  await waitFor(() => source.getSnapshot() !== undefined)
+  const snapshot = source.getSnapshot()
+  assert.equal(snapshot?.verdict, 'legacy-gateway', '404 是版本事实，不是"没有事实"')
+  assert.equal(snapshot?.degradation, 'legacy-gateway')
+  assert.equal(snapshot?.mode, null)
+  assert.deepEqual(snapshot?.rows, {}, 'legacy 快照是空行（事实），不是猜出来的行')
+  assert.equal(snapshot?.stale, false)
+  assert.equal(sourceSessionFactsMode(snapshot), 'legacy', '侧栏 legacy 档位此前因 404 折 undefined 恒不可达')
+  // 网关可能升级：legacy 走有界低频重探，而不是停摆。
+  await waitFor(() => probeGets >= 2, 1_000)
+  source.stop()
+})
+
+test('2xx without protocol (unversioned) keeps the snapshot empty and does not fake a legacy row', async () => {
+  let probeGets = 0
+  const fetchImpl = (async () => {
+    probeGets += 1
+    return new Response(JSON.stringify({ oops: true }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    })
+  }) as unknown as typeof fetch
+  const source = createSessionFactsSource({
+    sourceId: 'gw-unversioned',
+    fetchImpl,
+    pollIntervalMs: 0,
+    silenceMs: 0,
+    reconnectMs: 5,
+  })
+  let emitted = 0
+  source.subscribe(() => { emitted += 1 })
+  source.update({ fingerprint: 'f1', connected: true })
+  await waitFor(() => emitted >= 1)
+  assert.equal(source.getSnapshot(), undefined, '2xx 非协议载荷 ⇒ 无快照（旧语义：unversioned 等价 undefined，绝非 legacy）')
+  const settled = probeGets
+  await new Promise(resolve => setTimeout(resolve, 30))
+  assert.equal(probeGets, settled, 'unversioned 不排重探/轮询，等下一次显式 probe')
+  source.stop()
+})
+
+test('a protocol-2 payload still delivers a degraded forward-skew snapshot without starting delivery', async () => {
+  let probeGets = 0
+  const forward = {
+    protocol: 2,
+    mode: 'poll',
+    features: [],
+    cursor: 5,
+    host: { state: 'ready', serviceable: true },
+    sessions: [],
+  }
+  const fetchImpl = (async () => {
+    probeGets += 1
+    return new Response(JSON.stringify(forward), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    })
+  }) as unknown as typeof fetch
+  const source = createSessionFactsSource({
+    sourceId: 'gw-forward-skew',
+    fetchImpl,
+    pollIntervalMs: 10,
+    silenceMs: 0,
+    reconnectMs: 5,
+  })
+  source.update({ fingerprint: 'f1', connected: true })
+  await waitFor(() => source.getSnapshot() !== undefined)
+  const snapshot = source.getSnapshot()
+  assert.equal(snapshot?.verdict, 'degraded')
+  assert.equal(snapshot?.degradation, 'forward-skew', '协议超前必须保留降级快照（不许静默清空或折成 legacy）')
+  assert.equal(snapshot?.mode, 'poll')
+  assert.equal(snapshot?.hostState, 'ready')
+  const settled = probeGets
+  await new Promise(resolve => setTimeout(resolve, 30))
+  assert.equal(probeGets, settled, '降级档不启动交付（不轮询）')
   source.stop()
 })
 

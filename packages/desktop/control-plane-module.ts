@@ -106,6 +106,11 @@ export const LEGACY_HOST_PROBE_METHOD = controlPlaneModule.LEGACY_HOST_PROBE_MET
 export const HOST_PROBE_MAX_RESPONSE_BYTES = controlPlaneModule.HOST_PROBE_MAX_RESPONSE_BYTES
 export const buildHostIdentityProbePayload = controlPlaneModule.buildHostIdentityProbePayload
 export const buildLegacyHostProbePayload = controlPlaneModule.buildLegacyHostProbePayload
+// The canonical legacy session/list shape predicate (rpc-envelope.ts, 2.1
+// audit) — consumed by ssh-provider's legacy dsh-signature arm and the
+// startup-host activation-probe seam; the same judgement the control plane's
+// dsh-client applies.
+export const isLegacyHostProbeValue = controlPlaneModule.isLegacyHostProbeValue
 
 // Cordis loader insert primitives (cordis-inserts.ts) — consumed by
 // plugin-sync.

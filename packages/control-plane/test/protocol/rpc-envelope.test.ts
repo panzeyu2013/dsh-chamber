@@ -21,6 +21,7 @@ import {
   buildLegacyHostProbePayload,
   HOST_IDENTITY_METHOD,
   HOST_PROBE_MAX_RESPONSE_BYTES,
+  isLegacyHostProbeValue,
   LEGACY_HOST_PROBE_METHOD,
   mintRpcId,
   parseServerResponse,
@@ -59,6 +60,24 @@ test('mintRpcId returns distinct UUIDs (the initiator mints every rpcId)', () =>
   const b = mintRpcId()
   assert.match(a, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)
   assert.notEqual(a, b)
+})
+
+test('isLegacyHostProbeValue accepts only a plain record with an items array', () => {
+  // The canonical legacy session/list answer shape; the identity fallback
+  // (dsh-client.ts) fails closed on everything else.
+  assert.equal(isLegacyHostProbeValue({ items: [] }), true)
+  assert.equal(isLegacyHostProbeValue({ items: [{ id: 's1' }], truncated: false }), true)
+  // A bare object, a wrong-typed/absent items slot, an array (even one that
+  // carries an items property), null and primitives are all malformed.
+  assert.equal(isLegacyHostProbeValue({}), false)
+  assert.equal(isLegacyHostProbeValue({ items: 'x' }), false)
+  assert.equal(isLegacyHostProbeValue({ items: null }), false)
+  assert.equal(isLegacyHostProbeValue([]), false)
+  assert.equal(isLegacyHostProbeValue([{ items: [] }]), false)
+  assert.equal(isLegacyHostProbeValue(null), false)
+  assert.equal(isLegacyHostProbeValue('yes'), false)
+  assert.equal(isLegacyHostProbeValue(42), false)
+  assert.equal(isLegacyHostProbeValue(true), false)
 })
 
 test('buildClientRequest produces the exact client-request wire shape with canonical key order', () => {

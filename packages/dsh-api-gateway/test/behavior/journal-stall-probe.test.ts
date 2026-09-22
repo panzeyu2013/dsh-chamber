@@ -207,3 +207,37 @@ test('dispose stops the watchdog and releases the logical stream', async () => {
   assert.equal(journalStream.probeCount, probed, 'a disposed journal must not keep probing')
   assert.ok(stream.calls.disposed >= 1)
 })
+
+test('a settled probe leaves no deadline timer armed', async () => {
+  const originalSetTimeout = globalThis.setTimeout
+  const originalClearTimeout = globalThis.clearTimeout
+  const armed = new Set<unknown>()
+  const cleared = new Set<unknown>()
+  // The probe's deadline and its teardown bound are the only timers armed with
+  // probeTimeoutMs; tracking that window alone keeps the suite's own 2 ms sleeps
+  // (and any runner timer) out of the count. A timer that FIRES removes itself, but
+  // a probe that answers inside its window must never let its timer fire: a leaked
+  // deadline is still in `armed` when this asserts.
+  ;(globalThis as { setTimeout: typeof setTimeout }).setTimeout = ((run: () => void, ms?: number) => {
+    let handle: ReturnType<typeof setTimeout>
+    handle = originalSetTimeout(() => { armed.delete(handle); run() }, ms)
+    if (ms === TIMING.probeTimeoutMs) armed.add(handle)
+    return handle
+  }) as unknown as typeof setTimeout
+  ;(globalThis as { clearTimeout: typeof clearTimeout }).clearTimeout = ((handle: unknown) => {
+    if (armed.has(handle)) cleared.add(handle)
+    originalClearTimeout(handle as ReturnType<typeof setTimeout>)
+  }) as typeof clearTimeout
+  try {
+    const { journalStream } = journal([7])
+    await journalStream.open({ maxMessages: 10 })
+    assert.ok(await pollUntil(() => journalStream.probeCount >= 1, 1_000), 'the probe must have run')
+    await sleep(10)
+    assert.ok(armed.size >= 1, 'the shared deadline must have been armed')
+    assert.equal(cleared.size, armed.size, 'every deadline timer must be cleared once the probe settles')
+    await journalStream.dispose()
+  } finally {
+    ;(globalThis as { setTimeout: typeof setTimeout }).setTimeout = originalSetTimeout
+    ;(globalThis as { clearTimeout: typeof clearTimeout }).clearTimeout = originalClearTimeout
+  }
+})

@@ -289,3 +289,37 @@ test('connections add: a 409 connection_busy refusal reaches the user as localiz
   assert.match(result.stderr, /connections writers/u)
   assert.equal(/writer quiescence is not proven/u.test(result.stderr), false)
 })
+
+// 4. Connection-row projection: contract-legal nulls are rendered, never fabricated
+
+test('connections add: a contract-legal null connection row renders none, never a fabricated local id', async () => {
+  const result = await runPlane((req, res) => {
+    if (req.method === 'POST' && req.url === '/api/connections') {
+      sendJson(res, 200, { connection: null })
+      return
+    }
+    sendJson(res, 404, { error: 'not_found' })
+  }, ['connections', 'add', '--kind', 'local'])
+  assert.equal(result.code, 0, result.stderr)
+  assert.deepEqual(result.calls, ['POST /api/connections'])
+  assert.match(result.stdout, /^connection\s+none$/mu,
+    'connection:null is an absence, not a local connection row')
+  assert.equal(/\blocal\b/u.test(result.stdout), false,
+    'the shell must never fabricate the local id for a null row')
+  assert.match(result.stdout, /^spawned\s+unknown$/mu,
+    'a broken spawned field is unknown, never false')
+})
+
+test('connections reclaim: a null connection row renders none and spawned stays unknown', async () => {
+  const result = await runPlane((req, res) => {
+    if (req.method === 'POST' && req.url === '/api/connections/local/reclaim') {
+      sendJson(res, 200, { reclaimed: [], connection: null })
+      return
+    }
+    sendJson(res, 404, { error: 'not_found' })
+  }, ['connections', 'reclaim'])
+  assert.equal(result.code, 0, result.stderr)
+  assert.match(result.stdout, /^connection\s+none$/mu)
+  assert.equal(/\blocal\b/u.test(result.stdout), false)
+  assert.match(result.stdout, /^spawned\s+unknown$/mu)
+})

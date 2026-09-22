@@ -16,9 +16,11 @@ import {
 } from '@dsh-chamber/control-plane'
 import {
   activationProbeNamesForDomains,
+  readOverrideState,
   writeActivationIntent,
   writeCurrentPointer,
   writeOverride,
+  type OverrideRecord,
 } from '@dsh-chamber/dsh-runtime'
 import type { GatewayConfig } from '../../src/config.ts'
 import { syncedHostDomainProbeNames } from '../../src/plugins.ts'
@@ -159,6 +161,13 @@ export function writeOverrideRow(stateDir: string, fields: {
     swapAttempted: false,
     ...fields,
   })
+}
+
+/** State-backed override projection for assertions (D5a retired the production
+ *  compat read): valid → record, every other state → no record. */
+export function readOverrideRow(stateDir: string): OverrideRecord | null {
+  const state = readOverrideState(stateDir)
+  return state.kind === 'valid' ? state.record : null
 }
 
 /** The canonical pending version-switch fixture: valid tree, pending settings.json,

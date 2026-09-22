@@ -25,6 +25,8 @@ import {
   REMOTE_STREAM_MAINTAIN_MIN_INTERVAL_MS,
   streamOpeningKey,
 } from './remote-retry-policy.ts'
+// The opening-budget ladder and the silent-teardown floor are the SHARED table's
+// (@dsh-chamber/dsh-stream-state); this fork's driver reads them, never a copy.
 // The opening-stall rule (streak threshold + 60 s cooldown) lives in the shared
 // reducer (@dsh-chamber/dsh-stream-state).
 import type { StreamForensicsReporter } from './stream-forensics.ts'
@@ -44,8 +46,9 @@ import {
 
 /** The real clock, injected (the package imports nothing). This bound is the only
  *  timer on the opening path; its VALUE comes from the policy module. */
-/** This bound must not hold the process open: its handles are unref'd. */
-const UNREF_SCHEDULER = {
+/** This bound must not hold the process open: its handles are unref'd. Exported so the
+ *  journal probe rides the same single unref scheduler instead of declaring a second one. */
+export const UNREF_SCHEDULER = {
   setTimeout: (run: () => void, ms: number): unknown => {
     const handle = setTimeout(run, ms)
     ;(handle as unknown as { unref?: () => void }).unref?.()

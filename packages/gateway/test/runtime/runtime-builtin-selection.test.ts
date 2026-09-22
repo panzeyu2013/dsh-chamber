@@ -13,8 +13,7 @@ import { createRequire } from 'node:module'
 import { createGatewayRuntimeManager, readBuiltinVersion } from '../../src/runtime-manager.ts'
 import {
   readActivationJournalState,
-  readCurrentPointer,
-  readOverride,
+  readCurrentPointerState,
   writeCurrentPointer,
   writeOverride,
   stashPreRollback,
@@ -29,6 +28,7 @@ import {
   waitForSettle,
   probeResultsFor,
   makeValidTree,
+  readOverrideRow,
   writeOverrideRow,
   writeVersionSwitchIntent,
   runtimeManager,
@@ -168,8 +168,7 @@ test('builtin-active cached selection stays staged across restart without weaken
     const manager = runtimeManager(stateDir, fakePlane())
     const result = await manager.select('1.0.0')
     assert.equal(result.accepted, true)
-    const { readOverride } = await import('@dsh-chamber/dsh-runtime')
-    const override = readOverride(stateDir)
+    const override = readOverrideRow(stateDir)
     assert.equal(override?.chosenVersion, '1.0.0')
     assert.equal(override?.pending, null)
     assert.equal(override?.selectedOnly, true, 'builtin remains the explicit active authority until apply')
@@ -220,13 +219,13 @@ test('a post-update re-selection consumes the invalidation stamp instead of stra
     const refused = await runRoute(routes, 'POST', '/chamber/runtime/apply')
     assert.equal(refused.status, 409, 'an invalidated selection must not be armed')
     assert.equal((refused.json as { code: string }).code, 'no_selection')
-    assert.equal(readOverride(stateDir)?.pending, null, 'the refused apply must not rewrite pending')
+    assert.equal(readOverrideRow(stateDir)?.pending, null, 'the refused apply must not rewrite pending')
     assert.equal(readActivationJournalState(stateDir).kind, 'missing', 'the refused apply must not strand an intent journal')
 
     // Re-selecting under the CURRENT shell is the user re-expressing intent: it
     // consumes the ACTIVE stamp (desktop parity) and keeps the F4 history.
     assert.equal((await manager.select('1.0.0')).accepted, true)
-    const reselected = readOverride(stateDir)
+    const reselected = readOverrideRow(stateDir)
     assert.equal(reselected?.chosenVersion, '1.0.0')
     assert.equal(reselected?.invalidatedAt, null, 'the active invalidation stamp is consumed')
     assert.equal(reselected?.invalidatedReason, null, 'the active invalidation reason is consumed')
@@ -236,11 +235,11 @@ test('a post-update re-selection consumes the invalidation stamp instead of stra
     // The switch now arms for real and actually commits.
     const applied = await runRoute(routes, 'POST', '/chamber/runtime/apply')
     assert.equal(applied.status, 200)
-    assert.equal(readOverride(stateDir)?.pending, '1.0.0')
+    assert.equal(readOverrideRow(stateDir)?.pending, '1.0.0')
     const now = await runRoute(routes, 'POST', '/chamber/runtime/apply-now')
     assert.equal(now.status, 202)
     await waitForSettle(manager)
-    assert.equal(readCurrentPointer(stateDir), '1.0.0', 'the re-selected switch commits')
+    assert.deepEqual(readCurrentPointerState(stateDir), { kind: 'valid', version: '1.0.0' }, 'the re-selected switch commits')
     const settled = await manager.status()
     assert.equal(settled.activeVersion, '1.0.0')
     assert.equal(settled.metadataHealth, 'healthy', 'a completed switch must never project selection-corrupt')
@@ -290,7 +289,7 @@ test('an instance already stranded in post-update selection-corrupt metadata hea
     // surgery: select consumes the stamp (and clears the stale intent journal),
     // apply then arms for real, apply-now commits.
     assert.equal((await manager.select('1.0.0')).accepted, true)
-    const healed = readOverride(stateDir)
+    const healed = readOverrideRow(stateDir)
     assert.equal(healed?.invalidatedAt, null)
     assert.equal(healed?.lastInvalidatedAt, '2026-09-10T15:45:50.948Z',
       'the stamp is folded into history instead of being lost')
@@ -299,7 +298,7 @@ test('an instance already stranded in post-update selection-corrupt metadata hea
     assert.equal(applied.status, 200, 'apply is admitted again once the stamp is consumed')
     assert.equal((await runRoute(routes, 'POST', '/chamber/runtime/apply-now')).status, 202)
     await waitForSettle(manager)
-    assert.equal(readCurrentPointer(stateDir), '1.0.0', 'the healed instance actually switched')
+    assert.deepEqual(readCurrentPointerState(stateDir), { kind: 'valid', version: '1.0.0' }, 'the healed instance actually switched')
     const settled = await manager.status()
     assert.equal(settled.activeVersion, '1.0.0')
     assert.equal(settled.metadataHealth, 'healthy', 'the stranded metadata is fully cleared')
@@ -318,7 +317,7 @@ test('staging v2 from active user v1 never authorizes builtin if v1 current poin
     writeOverrideRow(stateDir, { chosenVersion: '1.0.0', pending: null, lastOutcome: 'applied' })
     const manager = runtimeManager(stateDir, fakePlane())
     await manager.select('2.0.0')
-    assert.equal(readOverride(stateDir)?.selectedOnly, false)
+    assert.equal(readOverrideRow(stateDir)?.selectedOnly, false)
     assert.equal(manager.resolveWorkspace().version, '1.0.0', 'the active pointer, not the staged choice, remains authoritative')
     rmSync(join(stateDir, 'dsh-runtime', 'current'))
     assert.throws(() => manager.resolveWorkspace(), /missing its authoritative current pointer/,

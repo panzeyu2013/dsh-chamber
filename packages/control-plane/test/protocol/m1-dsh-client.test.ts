@@ -256,12 +256,12 @@ test('probeHostIdentity: 404 on BOTH methods fails loud WITHOUT a fallback warni
 })
 
 test('probeHostIdentity: a malformed legacy value slot fails loud WITHOUT a warning', async () => {
-  // The legacy fallback restores the pre-degrade session/list probe's value
-  // check (describeCapabilities validated the slot): an ok:true envelope
-  // carrying a non-object value is a protocol violation — a damaged legacy
-  // host must never pass the health probe, and the fallback warn (reserved
-  // for SUCCESSFUL legacy answers) must not fire.
-  for (const value of [null, 'yes', 42]) {
+  // The legacy fallback applies the canonical legacy-answer predicate
+  // (isLegacyHostProbeValue, rpc-envelope.ts): an ok:true envelope carrying
+  // anything but a plain record with an `items` array is a protocol
+  // violation — a damaged legacy host must never pass the health probe, and
+  // the fallback warn (reserved for SUCCESSFUL legacy answers) must not fire.
+  for (const value of [null, 'yes', 42, {}, { items: null }, [{ items: [] }]]) {
     const host = uniqueHost()
     const warn = warnRecorder()
     await withFetchHandler(routeHost({

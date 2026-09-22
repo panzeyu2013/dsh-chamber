@@ -21,6 +21,14 @@ import {
 
 assertSingletonModule('aggregate-store')
 
+/**
+ * 事实未到（投影缺席）——**绝不折叠为 'idle'**（未连接）。App 的 deriveServers 在
+ * `remoteStatus[statusKey]` 缺席时发布本常量：'idle' 是"手动断开"的合法事实，折叠
+ * 会让 hover/aria 把一次投影延迟/拉取失败说成"未连接"；'unknown' 在侧栏读作
+ * 「状态未知」文案，而 transportUsable 对二者同为 false（行为面不变，只是不再撒谎）。
+ */
+export const SOURCE_PHASE_UNKNOWN = 'unknown'
+
 /** Fail-closed validation for the immutable Context proof bound by shell.ts. */
 export function isValidProducerSourceFingerprint(sourceId: string, value: unknown): value is string {
   return sourceId === 'local'

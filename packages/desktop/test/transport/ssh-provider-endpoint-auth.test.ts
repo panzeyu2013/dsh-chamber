@@ -108,6 +108,32 @@ test('probeDshSignature: an identity 404 re-answers the legacy session/list prob
     assert.equal(sessionListCalls, 1, 'the legacy session/list arm is re-answered exactly once')
   })
 })
+test('probeDshSignature: a malformed legacy session/list answer is NOT a dsh signature (2.1 canonical predicate)', async () => {
+  const server = createServer((req, res) => {
+    let body = ''
+    req.on('data', (chunk: Buffer) => { body += String(chunk) })
+    req.on('end', () => {
+      if (req.url === '/api/session/canOpenWorkspacePath') {
+        res.writeHead(404)
+        res.end('nope')
+        return
+      }
+      if (req.url === '/api/session/list') {
+        const envelope = JSON.parse(body) as { rpcId?: unknown }
+        // ok:true WITHOUT the {items} session list = a damaged old host, not
+        // a healthy old tree (the pre-fix arm accepted any ok:true).
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ type: 'server-response', rpcId: envelope.rpcId, result: { ok: true, value: {} } }))
+        return
+      }
+      res.writeHead(404)
+      res.end()
+    })
+  })
+  await withLoopbackServer(server, async port => {
+    assert.equal(await probeDshSignature({ host: '127.0.0.1', port }), 'none')
+  })
+})
 test('probeDshSignature: a non-404 identity failure never re-answers the legacy probe', async () => {
   let sessionListCalls = 0
   const server = createServer((req, res) => {
@@ -536,6 +562,69 @@ test('ssh provider verifyUp: a refused password login falls back to a valid tunn
   } finally {
     setGatewayToken('gw-tunnel-fallback', null)
     setGatewayPassword('gw-tunnel-fallback', null)
+    configureGatewaySessionProvider({})
+    await closeLoopbackServer(server)
+  }
+})
+test('ssh provider verifyUp: a token cleared during the login exchange is never sent by the bearer fallback (4.3 live read)', async () => {
+  const id = 'gw-tunnel-live-clear'
+  configureGatewaySessionProvider(completeTestGatewaySessionHooks({
+    ensureSession: async () => {
+      // The credential store is mutated while verifyUp is in flight. The
+      // fallback must observe the LIVE value: a cleared token means "no
+      // bearer principal to try", never a credential-free probe whose 200
+      // (a --no-auth deployment) would be misreported as a bearer success.
+      setGatewayToken(id, null)
+      return { ok: false, code: 'invalid_credentials', error: 'password rejected' }
+    },
+    cachedCookie: () => null,
+  }))
+  let probes = 0
+  const server = tunnelGatewayServer((_req, res) => {
+    probes += 1
+    res.writeHead(401)
+    res.end('unauthorized')
+  })
+  const port = await listenEphemeral(server)
+  try {
+    setGatewayToken(id, 'r'.repeat(32))
+    setGatewayPassword(id, GATEWAY_PASSWORD)
+    const result = await sshProvider.verifyUp!(gatewaySshSpec(id), { host: '127.0.0.1', port })
+    assert.equal(result.ok, false)
+    assert.equal(probes, 0, 'a cleared token must not degrade the fallback into an unauthenticated probe')
+    if (!result.ok) assert.equal(result.terminal, true, 'the password failure classification stays authoritative')
+  } finally {
+    setGatewayToken(id, null)
+    setGatewayPassword(id, null)
+    configureGatewaySessionProvider({})
+    await closeLoopbackServer(server)
+  }
+})
+test('ssh provider verifyUp: a token rotated during the login exchange rides the SAME-cycle cookie probe (4.3 live read)', async () => {
+  const id = 'gw-tunnel-live-rotate'
+  const ROTATED = 'n'.repeat(32)
+  const seen: Array<string | undefined> = []
+  configureGatewaySessionProvider(completeTestGatewaySessionHooks({
+    ensureSession: async () => {
+      setGatewayToken(id, ROTATED)
+      return { ok: true, cookie: SESSION_COOKIE }
+    },
+    cachedCookie: () => null,
+  }))
+  const server = tunnelGatewayServer((req, res) => {
+    seen.push(req.headers.authorization)
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end(JSON.stringify(GATEWAY_RUNTIME_STATUS))
+  })
+  const port = await listenEphemeral(server)
+  try {
+    setGatewayToken(id, 'o'.repeat(32))
+    setGatewayPassword(id, GATEWAY_PASSWORD)
+    assert.deepEqual(await sshProvider.verifyUp!(gatewaySshSpec(id), { host: '127.0.0.1', port }), { ok: true })
+    assert.deepEqual(seen, [`Bearer ${ROTATED}`], 'each exchange reads the live token, never the verifyUp-entry snapshot')
+  } finally {
+    setGatewayToken(id, null)
+    setGatewayPassword(id, null)
     configureGatewaySessionProvider({})
     await closeLoopbackServer(server)
   }

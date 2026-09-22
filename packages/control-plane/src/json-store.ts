@@ -58,7 +58,7 @@ export interface JsonStoreLogger {
  * owns are the optional schemaVersion and the revision counter; domain
  * fields are free-form.
  */
-export interface JsonStoreDocument {
+interface JsonStoreDocument {
   schemaVersion?: number
   revision?: number
   [key: string]: unknown
@@ -101,7 +101,7 @@ export interface JsonStoreValidateResult {
 }
 
 /** createJsonStore options (see the module header for semantics). */
-export interface JsonStoreOptions {
+interface JsonStoreOptions {
   filePath: string
   logger?: JsonStoreLogger
   initial?: JsonStoreDocument

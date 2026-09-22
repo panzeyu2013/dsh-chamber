@@ -27,8 +27,9 @@ import { RESTORE_MARKER_BASENAME } from './restore-marker.ts'
 import { assertSafeVersion, isSafeVersion } from './version-safety.ts'
 import {
   atomicWriteRuntimeFileNoFollow,
+  isUnreadableFsError,
   openPrivateNoFollowSync,
-  readPrivateFileNoFollow,
+  readPrivateFileStateNoFollow,
 } from './private-fs.ts'
 
 const PRIVATE_DIR_MODE = 0o700
@@ -42,6 +43,7 @@ interface FileIdentity {
 type RestoreMarkerAuthorityRead =
   | { kind: 'missing' }
   | { kind: 'unsafe' }
+  | { kind: 'unknown'; detail: string }
   | { kind: 'valid'; raw: string }
 
 export type RestoreMarkerAuthorityStatus = 'missing' | 'present' | 'unsafe'
@@ -69,16 +71,19 @@ function sameIdentity(left: FileIdentity, right: FileIdentity): boolean {
  *  a marker present on Windows reads 'unsafe' and cannot be written, so
  *  restore recovery on win32 requires the documented manual removal path. */
 function readRestoreMarkerAuthority(baseDir: string): RestoreMarkerAuthorityRead {
-  const state = readPrivateFileNoFollow(
+  const state = readPrivateFileStateNoFollow(
     snapshotPaths(baseDir).restoreMarker,
     MAX_RESTORE_MARKER_BYTES,
     { tightenMode: false },
   )
-  return state.kind === 'valid'
-    ? { kind: 'valid', raw: state.raw }
-    : { kind: state.kind }
+  if (state.kind === 'present') return { kind: 'valid', raw: state.value.raw }
+  if (state.kind === 'unknown') return { kind: 'unknown', detail: state.detail }
+  return state.kind === 'missing' ? { kind: 'missing' } : { kind: 'unsafe' }
 }
 
+/** Public status keeps its historical fail-closed union: an unreadable marker
+ *  (EACCES/EIO) reports 'unsafe' here, while the restore entries consume the
+ *  richer authority state to report cause 'io-error'. */
 export function restoreMarkerAuthorityStatus(baseDir: string): RestoreMarkerAuthorityStatus {
   const state = readRestoreMarkerAuthority(baseDir)
   if (state.kind === 'missing') return 'missing'
@@ -117,6 +122,63 @@ export function snapshotPaths(baseDir: string): SnapshotPaths {
 export type CopyFn = (src: string, dest: string) => Promise<void>
 export type RestoreOutcome = 'complete' | 'half' | 'incomplete'
 export type RestorePhase = 'copying' | 'staged' | 'backing-up' | 'publishing' | 'published'
+
+/** Honest restore result: the outcome still describes the durable disk state
+ *  (complete / resumable-half / resumable-incomplete), while cause/error name
+ *  the real failure that used to be folded into 'incomplete'. */
+export interface RestoreReport {
+  readonly outcome: 'complete' | 'half' | 'incomplete'
+  readonly cause: 'copy-failed' | 'io-error' | 'marker-invalid' | 'state-refused' | 'unexpected' | null
+  readonly error: string | null
+}
+
+function cleanReport(outcome: RestoreOutcome): RestoreReport {
+  return { outcome, cause: null, error: null }
+}
+
+/** Boolean refusal of an owned-directory state (unsafe symlink/identity, or a
+ *  failed tighten re-verification): the outcome keeps the historical resumable
+ *  value, while cause/error name the directory that failed the trust check
+ *  (B1 R3 — these refusals used to fold into a bare 'incomplete'). Like
+ *  marker-invalid, this is a validation refusal, not a thrown failure. */
+function refusedReport(outcome: RestoreOutcome, error: string): RestoreReport {
+  return { outcome, cause: 'state-refused', error }
+}
+
+function blockedReport(
+  cause: NonNullable<RestoreReport['cause']>,
+  error: string,
+  outcome: RestoreOutcome = 'incomplete',
+): RestoreReport {
+  return { outcome, cause, error }
+}
+
+function failureReport(
+  outcome: RestoreOutcome,
+  cause: 'copy-failed' | 'io-error' | 'unexpected',
+  error: unknown,
+): RestoreReport {
+  return { outcome, cause, error: error instanceof Error ? error.message : String(error) }
+}
+
+/** EACCES/EIO/unknown OS failures are 'io-error'; a context-specific fallback
+ *  (copy-failed / unexpected) covers refusal-style errors without an errno. */
+function classifyRestoreFailure(
+  error: unknown,
+  fallback: 'copy-failed' | 'unexpected',
+): 'copy-failed' | 'io-error' | 'unexpected' {
+  return isUnreadableFsError(error) ? 'io-error' : fallback
+}
+
+/** Legacy outcome projection. A real failure is no longer silently folded
+ *  into 'incomplete': it throws with the report attached, while a validation
+ *  refusal (marker-invalid / state-refused) keeps the historical result. */
+function requireOutcome(report: RestoreReport): RestoreOutcome {
+  if (report.cause === null || report.cause === 'marker-invalid' || report.cause === 'state-refused') return report.outcome
+  const error = new Error('runtime restore failed (' + report.cause + '): ' + (report.error ?? 'unknown error'))
+  ;(error as Error & { restoreReport?: RestoreReport }).restoreReport = report
+  throw error
+}
 
 export interface RestoreMarker {
   schemaVersion: 1
@@ -603,53 +665,73 @@ async function runRestoreTransaction(
   marker: RestoreMarker,
   copyFn: CopyFn,
   hooks: RestoreHooks,
-): Promise<RestoreOutcome> {
+): Promise<RestoreReport> {
   const markerPath = snapshotPaths(baseDir).restoreMarker
   try {
     if (marker.phase === 'copying') {
-      if (!(await isPublishedRestoreSource(baseDir, marker.snapshotPath))) return 'incomplete'
-      // Contents in a `copying` staging dir are never trusted, even non-empty.
+      if (!(await isPublishedRestoreSource(baseDir, marker.snapshotPath))) {
+        return blockedReport('marker-invalid', '恢复标记指向的 snapshot 不再可发布')
+      }
+      // Contents in a copying staging dir are never trusted, even non-empty.
       await rm(marker.stagingPath, { recursive: true, force: true })
       await ensurePrivateDir(marker.stagingPath)
       try {
         await copyFn(marker.snapshotPath, marker.stagingPath)
-      } catch {
+      } catch (error) {
         await rm(marker.stagingPath, { recursive: true, force: true }).catch(() => {})
-        return 'incomplete'
+        // Reported instead of folded: the marker stays durable for a retry,
+        // but the caller learns the copy itself failed.
+        return failureReport('incomplete', classifyRestoreFailure(error, 'copy-failed'), error)
       }
-      if (!tightenOwnedDirectory(marker.stagingPath)) return 'incomplete'
+      if (!tightenOwnedDirectory(marker.stagingPath)) {
+        return refusedReport('incomplete', '复制的暂存目录身份无法确认，拒绝发布：' + basename(marker.stagingPath))
+      }
       await persistPhase(baseDir, markerPath, marker, 'staged', hooks)
     }
 
     if (marker.phase === 'staged') {
       const stagingState = ownedDirectoryState(marker.stagingPath)
-      if (stagingState === 'unsafe') return 'incomplete'
+      if (stagingState === 'unsafe') {
+        return refusedReport('incomplete', '暂存目录状态不安全，拒绝继续恢复：' + basename(marker.stagingPath))
+      }
       if (stagingState === 'missing') {
         await persistPhase(baseDir, markerPath, marker, 'copying', hooks)
         return runRestoreTransaction(baseDir, dshHome, marker, copyFn, hooks)
       }
-      if (!tightenOwnedDirectory(marker.stagingPath)) return 'incomplete'
+      if (!tightenOwnedDirectory(marker.stagingPath)) {
+        return refusedReport('incomplete', '暂存目录身份在备份前无法确认：' + basename(marker.stagingPath))
+      }
       await persistPhase(baseDir, markerPath, marker, 'backing-up', hooks)
     }
 
     if (marker.phase === 'backing-up') {
       let homeState = ownedDirectoryState(dshHome)
       let backupState = ownedDirectoryState(marker.backupPath)
-      if (homeState === 'unsafe' || backupState === 'unsafe') return 'incomplete'
+      if (homeState === 'unsafe' || backupState === 'unsafe') {
+        return refusedReport('incomplete', 'DSH_HOME 或备份目录状态不安全，拒绝备份')
+      }
       if (marker.hadDshHome) {
-        if (homeState === 'directory' && backupState === 'directory') return 'half'
-        if (homeState === 'missing' && backupState === 'missing') return 'incomplete'
+        if (homeState === 'directory' && backupState === 'directory') return cleanReport('half')
+        if (homeState === 'missing' && backupState === 'missing') {
+          return refusedReport('incomplete', 'DSH_HOME 与其备份同时缺失，恢复无法继续')
+        }
         if (homeState === 'directory') {
-          if (!tightenOwnedDirectory(dshHome)) return 'incomplete'
+          if (!tightenOwnedDirectory(dshHome)) {
+            return refusedReport('incomplete', 'DSH_HOME 身份无法确认，拒绝备份')
+          }
           await renameWithWindowsRetry(dshHome, marker.backupPath)
           homeState = ownedDirectoryState(dshHome)
           backupState = ownedDirectoryState(marker.backupPath)
-          if (homeState !== 'missing' || backupState !== 'directory') return 'incomplete'
+          if (homeState !== 'missing' || backupState !== 'directory') {
+            return refusedReport('incomplete', '备份重命名后目录状态不符合预期（DSH_HOME 未消失或备份不是目录）')
+          }
         }
-        if (!tightenOwnedDirectory(marker.backupPath)) return 'incomplete'
+        if (!tightenOwnedDirectory(marker.backupPath)) {
+          return refusedReport('incomplete', '备份目录身份无法确认，拒绝发布恢复数据：' + basename(marker.backupPath))
+        }
       } else if (homeState !== 'missing' || backupState !== 'missing') {
         // An external path appeared after the transaction began; preserve it.
-        return 'half'
+        return cleanReport('half')
       }
       await persistPhase(baseDir, markerPath, marker, 'publishing', hooks)
     }
@@ -657,29 +739,158 @@ async function runRestoreTransaction(
     if (marker.phase === 'publishing') {
       let stagingState = ownedDirectoryState(marker.stagingPath)
       let homeState = ownedDirectoryState(dshHome)
-      if (stagingState === 'unsafe' || homeState === 'unsafe') return 'incomplete'
-      if (stagingState === 'directory' && homeState === 'directory') return 'half'
-      if (stagingState === 'missing' && homeState === 'missing') return 'incomplete'
+      if (stagingState === 'unsafe' || homeState === 'unsafe') {
+        return refusedReport('incomplete', '暂存目录或 DSH_HOME 状态不安全，拒绝发布')
+      }
+      if (stagingState === 'directory' && homeState === 'directory') return cleanReport('half')
+      if (stagingState === 'missing' && homeState === 'missing') {
+        return refusedReport('incomplete', '暂存目录与 DSH_HOME 同时缺失，发布无法继续')
+      }
       if (stagingState === 'directory') {
-        if (!tightenOwnedDirectory(marker.stagingPath)) return 'incomplete'
+        if (!tightenOwnedDirectory(marker.stagingPath)) {
+          return refusedReport('incomplete', '暂存目录身份无法确认，拒绝重命名发布：' + basename(marker.stagingPath))
+        }
         await renameWithWindowsRetry(marker.stagingPath, dshHome)
         stagingState = ownedDirectoryState(marker.stagingPath)
         homeState = ownedDirectoryState(dshHome)
-        if (stagingState !== 'missing' || homeState !== 'directory') return 'incomplete'
+        if (stagingState !== 'missing' || homeState !== 'directory') {
+          return refusedReport('incomplete', '发布重命名后目录状态不符合预期（暂存目录未消失或 DSH_HOME 不是目录）')
+        }
       }
-      if (!tightenOwnedDirectory(dshHome)) return 'incomplete'
+      if (!tightenOwnedDirectory(dshHome)) {
+        return refusedReport('incomplete', '发布后的 DSH_HOME 身份无法确认：' + basename(dshHome))
+      }
       await persistPhase(baseDir, markerPath, marker, 'published', hooks)
     }
 
     if (marker.phase === 'published') {
-      if (ownedDirectoryState(dshHome) !== 'directory' || !tightenOwnedDirectory(dshHome)) return 'incomplete'
+      if (ownedDirectoryState(dshHome) !== 'directory' || !tightenOwnedDirectory(dshHome)) {
+        return refusedReport('incomplete', '已发布状态复核失败：DSH_HOME 不是可信目录')
+      }
       await rm(markerPath, { force: true })
-      return 'complete'
+      return cleanReport('complete')
     }
-  } catch {
-    return interruptedOutcome(marker, dshHome)
+  } catch (error) {
+    // A real exception no longer masquerades as "the disk state is merely
+    // resumable": the outcome still describes the durable disk state while
+    // cause/error carry the failure to the caller.
+    return {
+      outcome: interruptedOutcome(marker, dshHome),
+      cause: classifyRestoreFailure(error, 'unexpected'),
+      error: error instanceof Error ? error.message : String(error),
+    }
   }
-  return interruptedOutcome(marker, dshHome)
+  return cleanReport(interruptedOutcome(marker, dshHome))
+}
+
+export type RestoreMarkerSpawn =
+  | { kind: 'snapshot'; path: string }
+  | { kind: 'stash'; path: string }
+  | { kind: 'resume' }
+
+export type RestoreMarkerSession =
+  | { kind: 'marker'; marker: RestoreMarker }
+  | { kind: 'none' }
+  | { kind: 'blocked'; report: RestoreReport }
+
+/**
+ * Shared authority prefix of every restore entry (audit 2.6): read the
+ * marker, create the private runtime dir when absent, resume any valid marker
+ * (legacy included), or begin a new transaction from the caller's source.
+ * spawn.kind === 'resume' never starts a transaction, so
+ * completeInterruptedRestore keeps its 'none' short-circuit without touching
+ * the filesystem. spawn/hooks are optional additions to the frozen
+ * two-argument contract, required to preserve the two restore entries'
+ * begin semantics and crash-injection hooks.
+ */
+export async function openOrResumeRestoreMarker(
+  baseDir: string,
+  dshHome: string,
+  spawn: RestoreMarkerSpawn = { kind: 'resume' },
+  hooks: RestoreHooks = {},
+): Promise<RestoreMarkerSession> {
+  const { restoreMarker, snapshotsDir } = snapshotPaths(baseDir)
+  let authority = readRestoreMarkerAuthority(baseDir)
+  if (authority.kind === 'unknown') {
+    return { kind: 'blocked', report: blockedReport('io-error', authority.detail) }
+  }
+  if (authority.kind === 'unsafe') {
+    return { kind: 'blocked', report: blockedReport('marker-invalid', '恢复标记不安全或形状非法') }
+  }
+  if (authority.kind === 'missing') {
+    if (spawn.kind === 'resume') return { kind: 'none' }
+    await ensurePrivateDir(dirname(restoreMarker))
+    authority = readRestoreMarkerAuthority(baseDir)
+    if (authority.kind === 'unknown') {
+      return { kind: 'blocked', report: blockedReport('io-error', authority.detail) }
+    }
+    if (authority.kind === 'unsafe') {
+      return { kind: 'blocked', report: blockedReport('marker-invalid', '恢复标记不安全或形状非法') }
+    }
+  }
+
+  if (authority.kind === 'valid') {
+    const parsed = parseMarker(authority.raw, baseDir, dshHome)
+    if (parsed === null) {
+      return { kind: 'blocked', report: blockedReport('marker-invalid', '恢复标记形状非法') }
+    }
+    if (!('legacySnapshotPath' in parsed)) return { kind: 'marker', marker: parsed }
+    // Legacy markers predate stashes and can only reference snapshots.
+    const legacySnapshot = parsed.legacySnapshotPath
+    if (!pathIsInside(legacySnapshot, snapshotsDir) || !(await isPublishedSnapshotPath(baseDir, legacySnapshot))) {
+      return {
+        kind: 'blocked',
+        report: blockedReport('marker-invalid', 'legacy 恢复标记指向的 snapshot 不再可发布'),
+      }
+    }
+    return beginRestoreSession(baseDir, dshHome, legacySnapshot, hooks)
+  }
+
+  if (spawn.kind === 'snapshot') {
+    if (!pathIsInside(spawn.path, snapshotsDir) || !(await isPublishedSnapshotPath(baseDir, spawn.path))) {
+      return {
+        kind: 'blocked',
+        report: blockedReport('marker-invalid', 'snapshot 路径不合法或不再可发布'),
+      }
+    }
+    return beginRestoreSession(baseDir, dshHome, spawn.path, hooks)
+  }
+  if (spawn.kind === 'stash') return beginRestoreSession(baseDir, dshHome, spawn.path, hooks)
+  return { kind: 'none' }
+}
+
+/** Begin a fresh marker transaction and map any begin failure to a report
+ *  (previously folded into a bare 'incomplete'). */
+async function beginRestoreSession(
+  baseDir: string,
+  dshHome: string,
+  snapshotPath: string,
+  hooks: RestoreHooks,
+): Promise<RestoreMarkerSession> {
+  try {
+    return { kind: 'marker', marker: await beginRestore(baseDir, dshHome, snapshotPath, hooks) }
+  } catch (error) {
+    return {
+      kind: 'blocked',
+      report: failureReport('incomplete', classifyRestoreFailure(error, 'unexpected'), error),
+    }
+  }
+}
+
+/** Report-returning snapshot restore core (audit 2.6). */
+export async function restoreSnapshotReport(
+  baseDir: string,
+  dshHome: string,
+  snapshotPath: string,
+  copyFn: CopyFn = defaultCopy,
+  hooks: RestoreHooks = {},
+): Promise<RestoreReport> {
+  const session = await openOrResumeRestoreMarker(baseDir, dshHome, { kind: 'snapshot', path: snapshotPath }, hooks)
+  if (session.kind === 'blocked') return session.report
+  if (session.kind === 'none') {
+    return blockedReport('marker-invalid', 'snapshot 路径不合法或不再可发布')
+  }
+  return runRestoreTransaction(baseDir, dshHome, session.marker, copyFn, hooks)
 }
 
 /** Restore a snapshot over DSH_HOME using the durable phase transaction. */
@@ -690,52 +901,40 @@ export async function restoreSnapshot(
   copyFn: CopyFn = defaultCopy,
   hooks: RestoreHooks = {},
 ): Promise<RestoreOutcome> {
-  const { restoreMarker, snapshotsDir } = snapshotPaths(baseDir)
-  let authority = readRestoreMarkerAuthority(baseDir)
-  if (authority.kind === 'unsafe') return 'incomplete'
-  if (authority.kind === 'missing') {
-    await ensurePrivateDir(dirname(restoreMarker))
-    // A marker appearing during directory creation is authoritative too.
-    authority = readRestoreMarkerAuthority(baseDir)
-    if (authority.kind === 'unsafe') return 'incomplete'
-  }
+  return requireOutcome(await restoreSnapshotReport(baseDir, dshHome, snapshotPath, copyFn, hooks))
+}
 
-  let marker: RestoreMarker
-  if (authority.kind === 'valid') {
-    const parsed = parseMarker(authority.raw, baseDir, dshHome)
-    if (parsed === null) return 'incomplete'
-    if ('legacySnapshotPath' in parsed) {
-      const legacySnapshot = parsed.legacySnapshotPath
-      if (!pathIsInside(legacySnapshot, snapshotsDir) || !(await isPublishedSnapshotPath(baseDir, legacySnapshot))) return 'incomplete'
-      try {
-        marker = await beginRestore(baseDir, dshHome, legacySnapshot, hooks)
-      } catch {
-        return 'incomplete'
-      }
-    } else {
-      marker = parsed
-    }
-  } else {
-    if (!pathIsInside(snapshotPath, snapshotsDir) || !(await isPublishedSnapshotPath(baseDir, snapshotPath))) return 'incomplete'
-    try {
-      marker = await beginRestore(baseDir, dshHome, snapshotPath, hooks)
-    } catch {
-      return 'incomplete'
-    }
+/** Report-returning pre-rollback core (audit 2.6). */
+export async function restorePreRollbackReport(
+  baseDir: string,
+  dshHome: string,
+  stashName: string,
+  copyFn: CopyFn = defaultCopy,
+  hooks: RestoreHooks = {},
+): Promise<RestoreReport> {
+  const stashPath = await resolveStashPath(baseDir, stashName)
+  if (stashPath === null) {
+    return blockedReport('marker-invalid', '回滚暂存不存在或不可信：' + stashName)
   }
-  return runRestoreTransaction(baseDir, dshHome, marker, copyFn, hooks)
+  const session = await openOrResumeRestoreMarker(baseDir, dshHome, { kind: 'stash', path: stashPath }, hooks)
+  if (session.kind === 'blocked') return session.report
+  if (session.kind === 'none') return blockedReport('marker-invalid', '没有可恢复的回滚暂存')
+  const report = await runRestoreTransaction(baseDir, dshHome, session.marker, copyFn, hooks)
+  if (report.outcome === 'complete') {
+    // The stash has been consumed: its content now lives in DSH_HOME and the
+    // pre-restore data is preserved in dsh-home.old. Remove it so the restore
+    // action disappears and the next manual rollback writes a fresh stash. A
+    // 'half' outcome keeps the stash (the durable marker resumes from it).
+    await rm(stashPath, { recursive: true, force: true }).catch(() => {})
+  }
+  return report
 }
 
 /**
  * Restore a pre-rollback stash over DSH_HOME. The stash is validated as a
- * real, non-symlink directory under the private pre-rollback root (identity
- * re-checked without following either the leaf or its parent) BEFORE the
+ * real, non-symlink directory under the private pre-rollback root before the
  * restore marker is written, and again inside the copying phase on resume.
- * The transaction is the same durable two-phase rename used by
- * `restoreSnapshot`: the live DSH_HOME is renamed to `dsh-home.old` and the
- * marker remains authoritative until the published phase completes, so a
- * crash or an unsafe stash always leaves the data recoverable. An existing
- * valid marker (snapshot or stash) wins: recovery continues it.
+ * An existing valid marker (snapshot or stash) wins: recovery continues it.
  */
 export async function restorePreRollback(
   baseDir: string,
@@ -744,49 +943,7 @@ export async function restorePreRollback(
   copyFn: CopyFn = defaultCopy,
   hooks: RestoreHooks = {},
 ): Promise<RestoreOutcome> {
-  const stashPath = await resolveStashPath(baseDir, stashName)
-  if (stashPath === null) return 'incomplete'
-  const { restoreMarker, snapshotsDir } = snapshotPaths(baseDir)
-  let authority = readRestoreMarkerAuthority(baseDir)
-  if (authority.kind === 'unsafe') return 'incomplete'
-  if (authority.kind === 'missing') {
-    await ensurePrivateDir(dirname(restoreMarker))
-    authority = readRestoreMarkerAuthority(baseDir)
-    if (authority.kind === 'unsafe') return 'incomplete'
-  }
-
-  let marker: RestoreMarker
-  if (authority.kind === 'valid') {
-    const parsed = parseMarker(authority.raw, baseDir, dshHome)
-    if (parsed === null) return 'incomplete'
-    if ('legacySnapshotPath' in parsed) {
-      // Legacy markers predate stashes and can only reference snapshots.
-      const legacySnapshot = parsed.legacySnapshotPath
-      if (!pathIsInside(legacySnapshot, snapshotsDir) || !(await isPublishedSnapshotPath(baseDir, legacySnapshot))) return 'incomplete'
-      try {
-        marker = await beginRestore(baseDir, dshHome, legacySnapshot, hooks)
-      } catch {
-        return 'incomplete'
-      }
-    } else {
-      marker = parsed
-    }
-  } else {
-    try {
-      marker = await beginRestore(baseDir, dshHome, stashPath, hooks)
-    } catch {
-      return 'incomplete'
-    }
-  }
-  const outcome = await runRestoreTransaction(baseDir, dshHome, marker, copyFn, hooks)
-  if (outcome === 'complete') {
-    // The stash has been consumed: its content now lives in DSH_HOME and the
-    // pre-restore data is preserved in dsh-home.old. Remove it so the restore
-    // action disappears and the next manual rollback writes a fresh stash. A
-    // 'half' outcome keeps the stash (the durable marker resumes from it).
-    await rm(stashPath, { recursive: true, force: true }).catch(() => {})
-  }
-  return outcome
+  return requireOutcome(await restorePreRollbackReport(baseDir, dshHome, stashName, copyFn, hooks))
 }
 
 /** Return snapshots for an exact source version, newest first. */
@@ -973,7 +1130,9 @@ async function readRestoreSnapshotProtection(baseDir: string): Promise<RestoreSn
   const paths = snapshotPaths(baseDir)
   const authority = readRestoreMarkerAuthority(baseDir)
   if (authority.kind === 'missing') return { kind: 'missing' }
-  if (authority.kind === 'unsafe') return { kind: 'corrupt' }
+  // Unsafe or unreadable marker: the only recovery snapshot is unknowable, so
+  // preserve the whole set instead of trading it for bounded storage.
+  if (authority.kind === 'unsafe' || authority.kind === 'unknown') return { kind: 'corrupt' }
   try {
     const parsed = JSON.parse(authority.raw) as unknown
     if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return { kind: 'corrupt' }
@@ -1075,7 +1234,10 @@ export async function pruneRuntimeSnapshots(
     return { removedSnapshots: [], artifactCleanup, skippedReason: 'blocked-marker' }
   }
   const retention = runtimeSnapshotRetentionState(baseDir)
-  if (retention.kind === 'corrupt') {
+  if (retention.kind !== 'valid') {
+    // corrupt OR unknown (EACCES/EIO) protection set: preserve every snapshot.
+    // The detail lives on the retention state; the wire vocabulary keeps its
+    // historical skippedReason value.
     return { removedSnapshots: [], artifactCleanup, skippedReason: 'retention-corrupt' }
   }
   const removedSnapshots = await pruneSnapshots(baseDir, {
@@ -1139,13 +1301,17 @@ export async function snapshotSummary(baseDir: string): Promise<SnapshotSummary>
   }
 }
 
-/** Startup completion entry. Marker snapshot/phase is authoritative. */
+/** Startup completion entry. Marker snapshot/phase is authoritative; the
+ *  shared openOrResumeRestoreMarker prefix is the third consumer of the
+ *  authority/resume path (audit 2.6). */
 export async function completeInterruptedRestore(
   baseDir: string,
   dshHome: string,
   copyFn: CopyFn = defaultCopy,
   hooks: RestoreHooks = {},
 ): Promise<'none' | RestoreOutcome> {
-  if (restoreMarkerAuthorityStatus(baseDir) === 'missing') return 'none'
-  return restoreSnapshot(baseDir, dshHome, '', copyFn, hooks)
+  const session = await openOrResumeRestoreMarker(baseDir, dshHome, { kind: 'resume' }, hooks)
+  if (session.kind === 'none') return 'none'
+  if (session.kind === 'blocked') return requireOutcome(session.report)
+  return requireOutcome(await runRestoreTransaction(baseDir, dshHome, session.marker, copyFn, hooks))
 }

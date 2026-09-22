@@ -1,5 +1,5 @@
 {
-  "$comment": "Machine-readable lifecycle thresholds. Source of truth: packages/dsh-stream-state/src/tables.ts. This projection is what the Swift mirror (swift/CarrierDecision.swift) reads, and what scripts/gates/verify-ladder-table-parity.mjs locks the surviving module constants of the carrier decisions and the four recovery ladders to (B4/G-G). The package suite fails if the two disagree (test/tables/tables-parity.test.ts) and scripts/gates/verify-stream-state-swift-parity.mjs fails if the mirror disagrees.",
+  "$comment": "Machine-readable lifecycle thresholds. Source of truth: packages/dsh-stream-state/src/tables.ts. This projection is what the Swift mirror (swift/CarrierDecision.swift) reads, and what scripts/gates/verify-ladder-table-parity.mjs locks the surviving module constants of the carrier decisions and the four recovery ladders to (B4/G-G), and checks that every named consumer reads the table instead of owning a copy. The package suite fails if the two disagree (test/tables/tables-parity.test.ts) and scripts/gates/verify-stream-state-swift-parity.mjs fails if the mirror disagrees.",
   "tables": {
     "rebuildWindowMs": 60000,
     "maxRebuildsPerWindow": 1,

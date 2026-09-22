@@ -753,7 +753,12 @@ async function spawnAttempt({
   // Per-port rolling log (design 02 §3.8 / host-logs.ts): stdout/stderr go
   // to the control-plane log AND to <stateDir>/host-logs/<port>.log (JSONL)
   // so GET /api/host/logs can serve the recent lines without re-spawning.
-  const hostLog = createHostLogWriter(stateDir, port)
+  const hostLog = createHostLogWriter(stateDir, port, {
+    // A dropped host-log batch is diagnostic-only, but it must not be silent:
+    // the writer reports the first failure of each episode here, on the same
+    // logger as the live stdio forwarding.
+    warn: message => logger.warn(message),
+  })
   const entry = resolveDshEntry(dshWorkspacePath, port, patchPath)
   // The cwd is never the installed runtime tree: an in-place app update
   // replaces it and would leave the host with an unlinked working directory

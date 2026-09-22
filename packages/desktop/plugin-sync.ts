@@ -1162,14 +1162,6 @@ export async function remotePluginList(
   }
 }
 
-/**
- * Live-effect probe of the running instance (design 09 module A): true = the
- * instance's clientGraph/graph remote answered (module A loaded), false =
- * injected but restart pending, null = unknown/unprobed. The desktop main
- * adapts probeChamberHostLive (ssh-provider.ts) onto this shape.
- */
-export type LiveProbe = () => Promise<boolean | null>
-
 /** Per-package liveness probe (the registry descriptor names the Remote). */
 export type ChamberLiveProbe = (descriptor: ChamberHostPackageDescriptor) => Promise<boolean | null>
 

@@ -23,8 +23,7 @@ import {
   REQUIRED_ACTIVATION_PROBES,
   clearActivationJournal,
   readActivationJournalState,
-  readCurrentPointer,
-  readOverride,
+  readCurrentPointerState,
 } from '@dsh-chamber/dsh-runtime'
 import {
   silentLogger,
@@ -35,6 +34,7 @@ import {
   probeResultsFor,
   makeValidTree,
   armPendingSwitch,
+  readOverrideRow,
   writeOverrideRow,
   writeVersionSwitchIntent,
 } from '../support/runtime-routes-harness.ts'
@@ -76,7 +76,7 @@ test('applyNow runs the version-switch activation transaction in stop → transa
       'the verdict-winner resume happens only after the activation window closes (restoreBuiltin parity)')
     assert.ok(readdirSync(join(stateDir, 'dsh-runtime', 'snapshots')).some(name => name.startsWith(`${TEST_BUILTIN_VERSION}-`)),
       'the switching-from builtin DSH_HOME is snapshotted under its real source version')
-    assert.equal(readCurrentPointer(stateDir), '1.0.0', 'the pointer switched inside the activation transaction')
+    assert.deepEqual(readCurrentPointerState(stateDir), { kind: 'valid', version: '1.0.0' }, 'the pointer switched inside the activation transaction')
     const journal = readActivationJournalState(stateDir)
     assert.equal(journal.kind, 'valid')
     if (journal.kind === 'valid') {
@@ -165,7 +165,7 @@ test('real manager: the B1 16 MiB settings/describe cap reaches the wire carrier
     await waitForSettle(manager)
     assert.equal(manager.applyNowInFlight(), false)
     assert.equal(settingsDescribeAnswered, true, 'the settings/describe probe reached the fake host')
-    assert.equal(readCurrentPointer(stateDir), '1.0.0',
+    assert.deepEqual(readCurrentPointerState(stateDir), { kind: 'valid', version: '1.0.0' },
       'activation passed — the 16 MiB per-call cap reached the carrier through the manager seam')
     const status = await manager.status()
     assert.equal(status.operationError, null, 'a clean apply-now clears the operationError projection')
@@ -222,7 +222,7 @@ test('2026-12 shape gate: a synced seed cache flips the activation to the FULL p
     })
     await passing.applyNow()
     await waitForSettle(passing)
-    assert.equal(readCurrentPointer(stateDir), '1.0.0', 'full-set activation passes once the cache is synced')
+    assert.deepEqual(readCurrentPointerState(stateDir), { kind: 'valid', version: '1.0.0' }, 'full-set activation passes once the cache is synced')
     assert.equal((await passing.status()).operationError, null)
     await passing.dispose()
 
@@ -249,9 +249,9 @@ test('2026-12 shape gate: a synced seed cache flips the activation to the FULL p
     // the exact-set check, and the fallback/builtin verification probes fail
     // the same way — the activation ends 'failed' with the pointer cleared
     // (fail-closed), never a partial 'pass' on a reduced probe set.
-    assert.equal(readOverride(stateDir)?.lastOutcome, 'failed',
+    assert.equal(readOverrideRow(stateDir)?.lastOutcome, 'failed',
       'the reduced-set drift must fail the activation (fallback verification included)')
-    assert.equal(readCurrentPointer(stateDir), null, 'the drift-failed activation clears the pointer (builtin fallback)')
+    assert.deepEqual(readCurrentPointerState(stateDir), { kind: 'missing' }, 'the drift-failed activation clears the pointer (builtin fallback)')
     assert.notEqual((await drifting.status()).operationError, null, 'the drift failure projects into the operationError')
     await drifting.dispose()
   } finally {

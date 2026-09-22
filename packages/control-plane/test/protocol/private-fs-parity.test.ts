@@ -818,6 +818,11 @@ test('the shared primitive surface and the one-sided extras are exactly as regis
     'classifyPrivateFileNoFollow',
     'openPrivateNoFollowReadAsync',
     'syncPrivateFileNoFollow',
+    // Read-material classification (fail-closed runtime metadata): the
+    // dsh-runtime side reads EACCES/EIO as its own state, so both new names
+    // are registered here and must not grow a control-plane twin silently.
+    'isUnreadableFsError',
+    'readPrivateFileStateNoFollow',
   ] as const
   for (const [cpName, rtName] of shared) {
     assert.equal(typeof (cp as Record<string, unknown>)[cpName], 'function', 'control-plane export ' + cpName)

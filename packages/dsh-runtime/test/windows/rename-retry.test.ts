@@ -9,7 +9,12 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { isTransientWindowsRenameError, renameWithWindowsRetry, WINDOWS_RENAME_RETRY_DELAYS_MS } from '../../src/rename-retry.ts'
+import {
+  isTransientWindowsRenameError,
+  renameWithWindowsRetry,
+  renameWithWindowsRetrySync,
+  WINDOWS_RENAME_RETRY_DELAYS_MS,
+} from '../../src/rename-retry.ts'
 
 function errWithCode(code: string): NodeJS.ErrnoException {
   const error = new Error(code) as NodeJS.ErrnoException
@@ -63,4 +68,46 @@ test('win32 policy: transient retries, exhaustion rethrows, permanent fails fast
   const permanent = await driveWin32Rename(() => errWithCode('ENOENT'))
   assert.equal(permanent.error?.code, 'ENOENT')
   assert.deepEqual(permanent.sleeps, [])
+})
+
+test('sync schedule mirrors the async policy: plain off win32, bounded retries on win32', () => {
+  let syncCalls = 0
+  const sleeps: number[] = []
+  renameWithWindowsRetrySync('a', 'b', {
+    isWindows: false,
+    renameSyncFn: () => { syncCalls += 1 },
+    sleepSync: (ms) => { sleeps.push(ms) },
+  })
+  assert.equal(syncCalls, 1)
+  assert.deepEqual(sleeps, [])
+
+  let attempts = 0
+  const drive = (failures: number) => {
+    attempts = 0
+    renameWithWindowsRetrySync('a', 'b', {
+      isWindows: true,
+      renameSyncFn: () => {
+        attempts += 1
+        if (attempts <= failures) throw errWithCode('EPERM')
+      },
+      sleepSync: (ms) => { sleeps.push(ms) },
+    })
+  }
+  drive(2)
+  assert.equal(attempts, 3)
+  assert.deepEqual(sleeps, [WINDOWS_RENAME_RETRY_DELAYS_MS[0], WINDOWS_RENAME_RETRY_DELAYS_MS[1]])
+
+  let exhaustedSleeps = 0
+  assert.throws(() => renameWithWindowsRetrySync('a', 'b', {
+    isWindows: true,
+    renameSyncFn: () => { throw errWithCode('EBUSY') },
+    sleepSync: () => { exhaustedSleeps += 1 },
+  }), /EBUSY/)
+  assert.equal(exhaustedSleeps, WINDOWS_RENAME_RETRY_DELAYS_MS.length)
+
+  assert.throws(() => renameWithWindowsRetrySync('a', 'b', {
+    isWindows: true,
+    renameSyncFn: () => { throw errWithCode('ENOENT') },
+    sleepSync: () => undefined,
+  }), /ENOENT/)
 })

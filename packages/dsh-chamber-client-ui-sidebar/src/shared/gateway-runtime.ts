@@ -148,6 +148,12 @@ export interface RemoteRuntimeStatus {
   preRollbackCount: number | null
   preRollbackLatestName: string | null
   failure: RemoteRuntimeFailure | null
+  /** Failure-ledger read failure behind `failure` (B2 残余 c, the gateway
+   *  status twin of the desktop renderer's `failureError`): non-null means the
+   *  server could not read the failure ledger, so `failure` stays null — an
+   *  unreadable set is never projected as "no failures". Absent/null on older
+   *  servers and on every successful ledger read. */
+  failureError: string | null
   diskUsage: RemoteRuntimeDiskUsage | null
   diskError: string | null
   diskLimitBytes: number | null
@@ -174,6 +180,12 @@ export interface RemoteVersions {
   /** Cleanup candidates (desktop parity): ledger entries the server
    *  would actually delete. Absent on older servers → empty (UI row hidden). */
   removableVersions: string[]
+  /** Ledger read failure behind `removableVersions` (2026-12, new servers):
+   *  non-null means the server could not read the explicit-install ledger.
+   *  The client then projects no candidates (the cleanup row stays hidden) and
+   *  carries the failure for the settings surface to render. Absent/null on
+   *  older servers and on every successful ledger read. */
+  removableVersionsError?: string | null
   error?: string
 }
 
@@ -354,6 +366,13 @@ export function parseRemoteRuntimeStatus(value: unknown): RemoteRuntimeStatus {
     preRollbackCount: nullableNumber(row, 'preRollbackCount', 'runtime status'),
     preRollbackLatestName: nullableString(row, 'preRollbackLatestName', 'runtime status'),
     failure: parseFailure(row.failure),
+    // Ledger read failure (B2 残余 c): old servers project no field → null; a
+    // present non-string value is malformed like every sibling whitelist field.
+    // An empty string is not a usable reason: fold it to null so the UI never
+    // renders an empty alert row (the gateway only projects a real reason).
+    // `failure` stays null in that case — the read failure is carried here
+    // instead of being lost as a fabricated "no failures".
+    failureError: nullableString(row, 'failureError', 'runtime status') || null,
     diskUsage: parseDiskUsage(row.diskUsage),
     diskError: nullableString(row, 'diskError', 'runtime status'),
     diskLimitBytes: nullableNumber(row, 'diskLimitBytes', 'runtime status'),
@@ -392,27 +411,36 @@ export function parseRemoteVersions(value: unknown): RemoteVersions {
     }
   })
   const error = nullableString(row, 'error', 'runtime versions')
+  // Ledger read failure: old servers project no field → null; a
+  // present non-string value is malformed like every sibling whitelist field.
+  // An empty string is not a usable reason: fold it to null so the UI never
+  // renders an empty alert row (the gateway only projects a real reason).
+  const removableVersionsError = nullableString(row, 'removableVersionsError', 'runtime versions') || null
   // Cleanup candidates: a pre-cleanup server projects no field →
   // empty list (UI row hidden); a malformed present field fails closed.
   const removable = row.removableVersions
-  if (removable === undefined || removable === null) {
-    return {
-      registryOrigin: stringField(row, 'registryOrigin', 'runtime versions'),
-      versions,
-      removableVersions: [],
-      ...(error !== null ? { error } : {}),
+  let candidates: string[] = []
+  if (removable !== undefined && removable !== null) {
+    if (!Array.isArray(removable)) throw new Error('Gateway returned malformed runtime versions.removableVersions')
+    for (const entry of removable) {
+      if (typeof entry !== 'string' || entry === '') {
+        throw new Error('Gateway returned malformed runtime versions.removableVersions')
+      }
     }
+    candidates = removable as string[]
   }
-  if (!Array.isArray(removable)) throw new Error('Gateway returned malformed runtime versions.removableVersions')
-  for (const entry of removable) {
-    if (typeof entry !== 'string' || entry === '') {
-      throw new Error('Gateway returned malformed runtime versions.removableVersions')
-    }
-  }
+  // Settings-surface projection (2026-12): a ledger read failure means no
+  // candidate is trustworthy. The gateway's fail-closed branch already
+  // projects an empty list; enforcing it here as well keeps the cleanup row
+  // hidden — and the accept-time cleanup guard refusing — even if a server
+  // ever pairs a partial list with the error. An absent/null error keeps the
+  // old byte-exact output (no new key), so old servers and healthy ledgers are
+  // untouched.
   return {
     registryOrigin: stringField(row, 'registryOrigin', 'runtime versions'),
     versions,
-    removableVersions: removable as string[],
+    removableVersions: removableVersionsError === null ? candidates : [],
+    ...(removableVersionsError !== null ? { removableVersionsError } : {}),
     ...(error !== null ? { error } : {}),
   }
 }

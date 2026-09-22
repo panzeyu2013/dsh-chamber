@@ -39,8 +39,3 @@ export function openNativePath() {
 export function canOpenNativePath() {
   return false
 }
-
-/** Real text-file opener (upstream `path-opener.ts`); unused by the fork. */
-export function openNativeTextFile() {
-  throw new Error(MESSAGE)
-}

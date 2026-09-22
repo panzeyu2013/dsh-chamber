@@ -1,6 +1,6 @@
 # 07 · 模型额外参数与默认推理等级（设计先行，实现待上游）
 
-> **状态：推迟（设计定稿，待上游解锁）**——关键能力受上游（vendor，只读）约束，**实现暂缓**；未完成门禁见
+> **范围与前置：设计定稿、待上游解锁**——关键能力受上游（vendor，只读）约束，**实现暂缓**；门禁见
 > `docs/progress/STATUS.md`。上游更新阶段须按 §4 复查、按 §5 实现。本文档 + 05 为实现契约（05 的
 > `settings.section` 槽位契约见 05 §5）；官方 Models 页为 vendor `dsh-client-ui-settings-models`。
 > 上游证据以**当前 pin 树**为准（版本单一来源见 AGENTS.md）：settings `describe` 全量返回；`serialize.ts`

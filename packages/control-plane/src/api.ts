@@ -187,7 +187,7 @@ export interface ApiSurface {
 
 /** A composer's complete Host/Origin decision. `headers` contains only CORS
  * response headers that are safe to reflect for this exact request. */
-export interface ApiCorsDecision {
+interface ApiCorsDecision {
   allowed: boolean
   headers?: Record<string, string>
 }

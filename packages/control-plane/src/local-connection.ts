@@ -391,7 +391,9 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, log
         hostLogWriter = null
       }
       try {
-        hostLogWriter = createHostLogWriter(stateDir, port)
+        // A dropped host-log batch must be visible in the control-plane log
+        // (5.1): the lane warns once per failure episode through this sink.
+        hostLogWriter = createHostLogWriter(stateDir, port, { warn: message => logger.warn(message) })
         hostLogWriterPort = port
       } catch {
         hostLogWriter = { write() {}, async close() {} }

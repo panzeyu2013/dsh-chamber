@@ -728,6 +728,11 @@ export async function resolveGithubBetaFeed(
 function resolveRuntimeBetaFeed(): Promise<string> {
   // Electron net.fetch inherits the app's proxy/session policy. Resolve it
   // lazily so pure-Node tests with an injected resolver never load Electron.
+  // HARD GUARD (4.5, same as getRealApp/getRealAutoUpdater): requiring the
+  // `electron` specifier outside the Electron runtime can spawn a ~100MB
+  // binary download, and this seam has no injected resolver to fall back to
+  // — reaching it under plain node is a wiring bug, so fail loudly.
+  if (process.versions.electron === undefined) throw realElectronUnavailable('electron net.fetch')
   const electron = require('electron') as typeof import('electron')
   const request = typeof electron === 'object' && typeof electron.net?.fetch === 'function'
     ? electron.net.fetch.bind(electron.net) as typeof fetch

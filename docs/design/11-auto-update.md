@@ -1,6 +1,6 @@
 # 11 · 桌面端更新提示（settings 低调展示，无弹窗）与通道灰度
 
-> **状态：现行（dsh-chamber 应用本体更新；macOS/Windows/Linux 按运行形态门控，2026-12）**——本文是应用更新通道的权威行为契约：GitHub Releases feed、后台静默检查、settings 低调提示、用户明确确认后才下载、退出时安装 + 界面内「重启并安装」、beta → stable 通道模型与发布侧纪律；未完成门禁见 `docs/progress/STATUS.md`。
+> **dsh-chamber 应用本体更新；macOS/Windows/Linux 按运行形态门控**——本文是应用更新通道的权威行为契约：GitHub Releases feed、后台静默检查、settings 低调提示、用户明确确认后才下载、退出时安装 + 界面内「重启并安装」、beta → stable 通道模型与发布侧纪律；未完成门禁见 `docs/progress/STATUS.md`。
 
 ## 1. 需求与动机（当前形态）
 
@@ -44,8 +44,8 @@
   退出腿在清理超时走 `app.exit(1)` 时会跳过 onQuit 安装等），因此 `downloaded`
   状态行提供**「重启并安装」**主按钮（IPC `dsh-chamber:update-restart` →
   `updater.restartAndInstall()` → electron-updater `quitAndInstall()`）。平台范围：**macOS + Windows**；**Linux 一律不提供**（AppImageUpdater 点击瞬间原位替换并同步拉起新实例，新实例必被仍存活的老实例吸收——自动重启结构性落空；Linux 保留退出腿）。门：`downloaded` + 安装未被阻塞（mac 签名），主进程在 IPC 边界再强制一次（与 `download()` 同纪律）；成功即 fire-and-forget（单飞闸不复位），同步失败不回退 phase（保持 `downloaded` 原位重试），`error` 事件（含 arm 后异步失败）释放单飞闸；arm 后宽限期未退出由 no-event watchdog（`restartWatchdogMs`，默认 60s）释放单飞并给如实文案。重启失败经一次性 `restartFailureText` carry（脱敏）呈现，phase 保持 `downloaded` 并渲染重启专用失败行 + 原位重试。
-    **关窗次序不变量（2026-12 实机缺陷修复）**：`quitAndInstall` **先关闭全部窗口、关完才退出，不走正常退出序列开头**（Electron 43.4.0 typings `AutoUpdater#before-quit-for-update` 明文「`before-quit` 不会在所有窗口关闭前发出」；43.4.0/darwin 探针证实 `before-quit-for-update` 与窗口 `close` 都在 `quitAndInstall()` 内部、早于 `before-quit`）。而「关窗到托盘」（design 14 D1，默认 `hide-to-tray`）以 `quitRequested`（`before-quit` 置位，即关窗**之后**）为放行条件——退出腿的关窗会被 hide 吞掉：页面消失、进程永久留存、更新永不安装。故控制器在 `quitAndInstall()` 前同步回调 `onQuitAndInstallArmed`，主进程在该回调武装 `updaterQuitArmed`（关窗在该调用内部，返回后再置位已晚；拒绝路径不回调，无「假武装」），武装期间 `shouldHideToTray` 恒 false；重启失败或停滞（`restartFailureText` / 相位离开 `downloaded`）立即撤回，并把被更新关掉的窗口拉回主界面（失败/停滞文案的唯一诚实呈现面；窗口若**重建**，同一次 `UPDATE_STATE_CHANGED` 推送会落在还没装监听的 renderer 上，靠 renderer 挂载时的 `UPDATE_STATE` pull 补齐——2026-09-13 review C7b）。回归契约（main.ts + 武装标志生命周期）+ `test/local-state/chamber-settings.test.ts`（含 `shouldUpdaterQuitTakeOver` 真值表）+ `test/desktop-shell/updater-restart-install.test.ts`（native 退出事件必须把停滞 watchdog **重锚**——不是清除：它是该路径单飞闸唯一释放者，清掉会「永远 restart in progress」，重锚则既不中途误报停滞、又保证腿走不完时仍有如实文案与就地重试）；真实 macOS 端到端仍是实机门禁（§9）。
-  **原生退出桥与兜底（同一条缺陷的另一半）**：控制器订阅原生 autoUpdater 的 `before-quit-for-update`（在 `quitAndInstall()` 内部、关窗之前发出——43.4.0/darwin 实测），经 `onNativeUpdaterQuitting` 回调宿主：①**每次**原生退出都重新武装关窗豁免（覆盖「首次武装已被停滞 watchdog 撤回、原生退出迟到」的窗口）；②宿主在宽限期（5s）后若进程仍未进入退出序列（`before-quit` 未到）就自行 `app.quit()`，走正常 before-quit/will-quit 清理完成退出。**此刻自退安全**：该事件只在 Squirrel 完成 staging 后发出（MacUpdater 仅在 `squirrelDownloadedUpdate` 或原生 `update-downloaded` 之后才调原生 quitAndInstall），退出即安装。**「原生腿关窗后走不到 `before-quit`」仍是未复测的观察**（2026-09-13 review C4）：typing 只保证 `before-quit` 不在所有窗口关闭前发出；兜底两种情形都安全（`before-quit` 会到时 `quitRequested` 已置位，`shouldUpdaterQuitTakeOver` 返回 false），§9 实机门禁顺带记录。原生 autoUpdater 的解析严格门控在 Electron 运行时内（`process.versions.electron`）且仅在宿主提供回调时进行：`electron` 说明符在普通 node 下解析到 npm 包，dist 缺失时会触发 ~100MB 二进制下载（实测踩中），绝不允许出现在测试路径上。
+    **关窗次序不变量（缺陷修复）**：`quitAndInstall` **先关闭全部窗口、关完才退出，不走正常退出序列开头**（Electron 43.4.0 typings `AutoUpdater#before-quit-for-update` 明文「`before-quit` 不会在所有窗口关闭前发出」；43.4.0/darwin 探针证实 `before-quit-for-update` 与窗口 `close` 都在 `quitAndInstall()` 内部、早于 `before-quit`）。而「关窗到托盘」（design 14 D1，默认 `hide-to-tray`）以 `quitRequested`（`before-quit` 置位，即关窗**之后**）为放行条件——退出腿的关窗会被 hide 吞掉：页面消失、进程永久留存、更新永不安装。故控制器在 `quitAndInstall()` 前同步回调 `onQuitAndInstallArmed`，主进程在该回调武装 `updaterQuitArmed`（关窗在该调用内部，返回后再置位已晚；拒绝路径不回调，无「假武装」），武装期间 `shouldHideToTray` 恒 false；重启失败或停滞（`restartFailureText` / 相位离开 `downloaded`）立即撤回，并把被更新关掉的窗口拉回主界面（失败/停滞文案的唯一诚实呈现面；窗口若**重建**，同一次 `UPDATE_STATE_CHANGED` 推送会落在还没装监听的 renderer 上，靠 renderer 挂载时的 `UPDATE_STATE` pull 补齐）。回归契约（main.ts + 武装标志生命周期）+ `test/local-state/chamber-settings.test.ts`（含 `shouldUpdaterQuitTakeOver` 真值表）+ `test/desktop-shell/updater-restart-install.test.ts`（native 退出事件必须把停滞 watchdog **重锚**——不是清除：它是该路径单飞闸唯一释放者，清掉会「永远 restart in progress」，重锚则既不中途误报停滞、又保证腿走不完时仍有如实文案与就地重试）；真实 macOS 端到端仍是实机门禁（§9）。
+  **原生退出桥与兜底（同一条缺陷的另一半）**：控制器订阅原生 autoUpdater 的 `before-quit-for-update`（在 `quitAndInstall()` 内部、关窗之前发出——43.4.0/darwin 实测），经 `onNativeUpdaterQuitting` 回调宿主：①**每次**原生退出都重新武装关窗豁免（覆盖「首次武装已被停滞 watchdog 撤回、原生退出迟到」的窗口）；②宿主在宽限期（5s）后若进程仍未进入退出序列（`before-quit` 未到）就自行 `app.quit()`，走正常 before-quit/will-quit 清理完成退出。**此刻自退安全**：该事件只在 Squirrel 完成 staging 后发出（MacUpdater 仅在 `squirrelDownloadedUpdate` 或原生 `update-downloaded` 之后才调原生 quitAndInstall），退出即安装。**「原生腿关窗后走不到 `before-quit`」仍是未复测的观察**：typing 只保证 `before-quit` 不在所有窗口关闭前发出；兜底两种情形都安全（`before-quit` 会到时 `quitRequested` 已置位，`shouldUpdaterQuitTakeOver` 返回 false），§9 实机门禁顺带记录。原生 autoUpdater 的解析严格门控在 Electron 运行时内（`process.versions.electron`）且仅在宿主提供回调时进行：`electron` 说明符在普通 node 下解析到 npm 包，dist 缺失时会触发 ~100MB 二进制下载（实测踩中），绝不允许出现在测试路径上。
   **退出腿与重启腿对 `app.exit(1)` 的语义不同**：超时强制退出只跳过退出腿的 onQuit 安装；重启腿 NSIS 安装器已 detached 先行、AppImage 已原位替换，安装照常完成；用户不点击则退出时安装仍开启。
 - **macOS 签名前置（非 UX 分支）**：Squirrel.Mac（electron-updater mac 安装器）**要求有效 Developer ID 代码签名**。正式发布强制签名/公证/stapler/spctl，失败阻断公开；`updater.ts` 启动时仍以 `codesign -dv` 探测签名 authority（读 stderr、异步免阻塞启动），非正式 ad-hoc 包置 `installBlockedReason`，settings 响亮提示手动安装，**绝不假装自动安装可用**。dry-run ad-hoc 资产不上传/公开。
 - **channel 实现细节**：打包版本只有精确 canonical `-beta.N` 后缀时自动判 beta，不依赖未烘焙环境变量；其他 prerelease 门禁直接拒绝；`DSH_CHAMBER_UPDATE_CHANNEL=beta` 仍供开发/显式 opt-in。stable 用打包态 `app-update.yml` 的 GitHub provider；beta 每次检查前按上条解析并显式 `setFeedURL` 到精确 tag Generic feed，且必须开启 `allowPrerelease`（否则会去最新正式 release 找 `beta.yml` 而 404）；`autoUpdater.channel` setter 会重置 `allowDowngrade=true`，赋值顺序须保证 `allowDowngrade=false` 最后生效；dev 形态需 `forceDevUpdateConfig`。
@@ -60,7 +60,7 @@
   push）→ settings 壳渲染。
 - **挂载位置**：settings 壳（`packages/dsh-chamber-client-ui-settings-bridge`）
   的**「客户端」段内**（`__general` 固定入口 → `GeneralView` 底部嵌入 `UpdateSection`
-  控制组）——原独立的 `__update` 固定入口已并入「客户端」（2026-09-11 由「通用」
+  控制组）——原独立的 `__update` 固定入口已并入「客户端」（由「通用」
   改名，避免与官方 `general.nav` 同名，见 design 15）；固定入口结构（`__connections` / `__general`）与并入决策以**设计 15** 为权威。「更新」控制组 = `UpdateSection` 组件（`update-store.ts` 模块单例
   订阅，N-ctx 共享）。内容小、只读一个 IPC 状态 → 无需
   新插件包，直接扩展 settings 壳。
@@ -161,7 +161,7 @@ electron-updater 6.x **安装成功后从不删除**下载产物（`DownloadedUp
 - `01-overview.md` §3 文档地图（本文档编号 11）。
 - `docs/progress/STATUS.md`：本文**尚未闭环的实机验证项**与**未排期开放项**的唯一记录处——含真实 Developer ID 凭据下的发布 CI 实跑（公证/stapling/spctl + 更新
   安装链路）、`--publish=always` → draft release 上传路径的一次真实 CI 运行
-、mac/win/linux 实机检查
+mac/win/linux 实机检查
   与「确认前不下载 → 下载 → 退出时安装 → 重启并安装」端到端、打包态实测一次
   「升级 → 重启 → 更新缓存被自动清空」、真实同步失败路径下的 `quitAndInstall`、
   以及 mac 原生 quit 语义断言清单（窗口**真正关闭**而非隐藏到托盘；剩余待实机确证 = **签名正式包**端到端：will-quit 清理日志先于新版本启动、无孤儿进程、退出码 0、新版本自动启动、staging 失败下的文案与窗口恢复）。仓库转私有、beta 通道开关形态（仅环境变量 vs 设置项）、百分比灰度评估（§4）同样登记在那里。

@@ -432,6 +432,10 @@ export function registerRuntimeHandlersC(ctx: ShellIpcCtx): void {
       await stopLocalDsh().catch(() => undefined);
       // Recorded, not hard-blocked: the startup transaction below restarts
       // the instance (a thrown transaction leaves a resumeable marker).
+      // B1 §2.6: a real restore failure throws with its RestoreReport attached
+      // (cause io-error/copy-failed/unexpected) and requireOutcome embeds that
+      // cause in the thrown message, which describeError preserves verbatim —
+      // so the diagnostic below carries WHY the restore stopped.
       restoreResult.error = sanitizeErrorText(describeError(error));
       return null;
     }).finally(() => {
@@ -439,7 +443,11 @@ export function registerRuntimeHandlersC(ctx: ShellIpcCtx): void {
     });
     runtimeOperationSlot.begin(operation);
     await operation;
-    if (restoreResult.outcome === 'blocked') return runtimeInstance.getState();
+    // Only a fence-refused no-op (nothing recorded) may resolve silently. A
+    // thrown restore leaves outcome at 'blocked' while recording its cause;
+    // that MUST reach the error branch below instead of being swallowed here
+    // (B1 §2.6 restoring no longer folds failures into 'incomplete').
+    if (restoreResult.outcome === 'blocked' && restoreResult.error === null) return runtimeInstance.getState();
     // A 'half' restore leaves the durable marker for retry-restore to resume
     // (the standard restore-half convention).
     if (restoreResult.outcome === 'half') {

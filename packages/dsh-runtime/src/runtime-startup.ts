@@ -10,6 +10,7 @@
 import { applyPendingVersion, beginDelayedRollback, type ApplyOutcome } from './apply-phase.ts'
 import type { ManualRollbackPreparation } from './apply-phase.ts'
 import type {
+  ActivationIntentKind,
   ActivationJournal,
   ActivationJournalIntent,
   ActivationJournalState,
@@ -223,9 +224,218 @@ function corruptMetadataReason(
   override: OverrideState,
 ): StartupBlockedReason | null {
   if (journal.kind === 'corrupt') return 'journal-corrupt'
-  if (pointer.kind === 'corrupt') return 'current-corrupt'
-  if (override.kind === 'corrupt') return 'override-corrupt'
+  // 'unknown' (EACCES/EIO) is not a lesser state: it proves neither absence
+  // nor corruption, so it blocks on exactly the corrupt reasons instead of
+  // aliasing builtin / no-override.
+  if (pointer.kind === 'corrupt' || pointer.kind === 'unknown') return 'current-corrupt'
+  if (override.kind === 'corrupt' || override.kind === 'unknown') return 'override-corrupt'
   return null
+}
+
+/** The verdict policy: the five dimensions that used to differ between
+ *  runStartupPhase (A) and runDelayedRollback (B), plus the explicit A-only
+ *  applied-override reachability (commitAppliedOverride). See
+ *  commitApplyVerdict. */
+export interface VerdictPolicy {
+  readonly allowBuiltin: boolean
+  readonly pendingOnRetain: 'target' | 'current'
+  readonly mismatch: 'report' | 'fatal'
+  readonly clearJournalWhenApplied: boolean
+  readonly clearInvalidationOnBuiltinRollback: boolean
+  /** A-only applied-override commit (B1 R4): A(runStartupPhase)=true,
+   *  B(runDelayedRollback)=false. B's verdict input always comes from a
+   *  rollback-needed journal (beginDelayedRollback) whose continuation can
+   *  only settle rolled-back/failed, so the shared 'applied' override clause
+   *  is unreachable from B — declared here instead of relying on caller
+   *  discipline. */
+  readonly commitAppliedOverride: boolean
+}
+
+/** Everything the verdict commit reads; the host shells pre-check the corrupt
+ *  journal/override material states and pass only valid-or-null records. */
+export interface VerdictInput {
+  readonly shellVersion: string
+  readonly applyOutcome: ApplyOutcome
+  readonly journal: ActivationJournal | null
+  readonly queuedIntent: ActivationJournalIntent | null
+  readonly current: OverrideRecord | null
+  readonly targetVersion: string
+  readonly targetIsBuiltin: boolean
+  readonly intentKind: ActivationIntentKind
+}
+
+/** Declarative result of one verdict commit. The shells only map this onto
+ *  StartupResult (A) or ApplyOutcome (B). */
+export interface VerdictCommit {
+  readonly override: OverrideRecord | null
+  readonly deleteOverride: boolean
+  readonly journalAction: 'convert' | 'clear' | 'keep' | 'none'
+  readonly mismatch: boolean
+  readonly failOutcome?: ApplyOutcome
+}
+
+export const STARTUP_VERDICT_POLICY: VerdictPolicy = {
+  allowBuiltin: true,
+  pendingOnRetain: 'target',
+  mismatch: 'report',
+  clearJournalWhenApplied: false,
+  clearInvalidationOnBuiltinRollback: true,
+  commitAppliedOverride: true,
+}
+
+export const DELAYED_ROLLBACK_VERDICT_POLICY: VerdictPolicy = {
+  allowBuiltin: false,
+  pendingOnRetain: 'current',
+  mismatch: 'fatal',
+  clearJournalWhenApplied: true,
+  clearInvalidationOnBuiltinRollback: false,
+  commitAppliedOverride: false,
+}
+
+/**
+ * Pure commit of one apply verdict (audit 2.4). The F4 branch body and every
+ * override/journal mutation are moved here verbatim; only the policy
+ * dimensions that actually differed between runStartupPhase and
+ * runDelayedRollback remain parameterized. The applied-override commit is
+ * A-only: runDelayedRollback (B) builds its verdict from a rollback-needed
+ * journal (beginDelayedRollback) whose continuation can only settle
+ * rolled-back/failed, so B declares commitAppliedOverride=false and never
+ * reaches that clause (B1 R4 — explicit policy dimension, not caller
+ * discipline).
+ */
+export function commitApplyVerdict(input: VerdictInput, policy: VerdictPolicy): VerdictCommit {
+  const {
+    applyOutcome, journal, queuedIntent, current, targetVersion, targetIsBuiltin, intentKind,
+  } = input
+
+  if (targetIsBuiltin && !policy.allowBuiltin) {
+    return {
+      override: null,
+      deleteOverride: false,
+      journalAction: 'keep',
+      mismatch: false,
+      failOutcome: {
+        ...applyOutcome,
+        status: 'failed',
+        retainPending: true,
+        runtimeBlocked: true,
+        failureKind: 'journal',
+        error: 'builtin runtime is not an F7 override target',
+      },
+    }
+  }
+
+  const resetBuiltinApplied = targetIsBuiltin
+    && intentKind === 'reset-builtin'
+    && applyOutcome.status === 'applied'
+
+  // B1 R4: the applied-override commit is an explicit A-only policy dimension
+  // (see VerdictPolicy.commitAppliedOverride). B's input journal is always
+  // rollback-needed, so its outcome can never be 'applied'; the false policy
+  // keeps the clause unreachable even if a caller ever passed one.
+  const commitsAppliedOverride = policy.commitAppliedOverride && applyOutcome.status === 'applied'
+
+  let override: OverrideRecord | null = null
+  let deleteOverride = false
+  if (resetBuiltinApplied) {
+    deleteOverride = true
+  } else if (current !== null) {
+    const next: OverrideRecord = {
+      ...current,
+      pending: queuedIntent !== null && !queuedIntent.targetIsBuiltin
+        ? current.pending
+        : targetIsBuiltin
+          ? current.pending
+          : applyOutcome.retainPending
+            ? policy.pendingOnRetain === 'target' ? targetVersion : current.pending
+            : null,
+      swapAttempted: applyOutcome.retryAction === 'apply' && applyOutcome.status === 'failed',
+      lastOutcome: applyOutcome.status,
+      lastError: applyOutcome.error,
+      restoreOutcome: applyOutcome.restoreOutcome,
+    }
+    if (!targetIsBuiltin && commitsAppliedOverride) {
+      next.chosenVersion = targetVersion
+      next.resolvedVersion = targetVersion
+      next.swapAttempted = false
+    } else if (targetIsBuiltin && commitsAppliedOverride) {
+      // shell-invalidation preserves the historical selection; reset-builtin
+      // took the deleteOverride branch above.
+      next.invalidatedAt = current.invalidatedAt ?? new Date().toISOString()
+      next.invalidatedReason = current.invalidatedReason ?? 'shell-version-changed'
+      next.lastInvalidatedAt = current.lastInvalidatedAt ?? next.invalidatedAt
+      next.lastInvalidatedReason = current.lastInvalidatedReason ?? next.invalidatedReason
+      next.lastInvalidatedFromVersion = current.lastInvalidatedFromVersion
+        ?? current.resolvedVersion
+        ?? current.chosenVersion
+      next.lastInvalidationRecovered = false
+      next.swapAttempted = false
+    } else if (applyOutcome.status === 'rolled-back' && applyOutcome.rollbackTarget !== null) {
+      next.chosenVersion = applyOutcome.rollbackTarget
+      next.resolvedVersion = applyOutcome.rollbackTarget
+    }
+    if (policy.clearInvalidationOnBuiltinRollback
+      && targetIsBuiltin
+      && applyOutcome.status === 'rolled-back'
+      && applyOutcome.rollbackTarget !== null) {
+      // The startup-time current pointer is the only authoritative old
+      // override. Reactivation clears persisted invalidation, not history.
+      next.shellVersion = input.shellVersion
+      next.invalidatedAt = null
+      next.invalidatedReason = null
+      next.lastInvalidatedAt = current.lastInvalidatedAt ?? current.invalidatedAt ?? new Date().toISOString()
+      next.lastInvalidatedReason = current.lastInvalidatedReason
+        ?? current.invalidatedReason
+        ?? 'shell-version-changed'
+      next.lastInvalidatedFromVersion = current.lastInvalidatedFromVersion
+        ?? current.resolvedVersion
+        ?? current.chosenVersion
+      next.lastInvalidationRecovered = true
+      next.pending = null
+      next.chosenVersion = applyOutcome.rollbackTarget
+      next.resolvedVersion = applyOutcome.rollbackTarget
+      next.swapAttempted = false
+    }
+    override = next
+  }
+
+  const monitoringRetained = !policy.clearJournalWhenApplied
+    && applyOutcome.status === 'applied'
+    && !targetIsBuiltin
+  let journalAction: VerdictCommit['journalAction'] = 'none'
+  let mismatch = false
+  let failOutcome: ApplyOutcome | undefined
+  if (reachedSafeFallback(applyOutcome) && journal !== null && queuedIntent !== null) {
+    if (queuedIntent.targetIsBuiltin || current?.pending === queuedIntent.targetVersion) {
+      journalAction = 'convert'
+    } else if (current?.pending == null) {
+      journalAction = 'clear'
+    } else {
+      // A different pending cannot be attributed to this journal.
+      mismatch = true
+      journalAction = 'keep'
+      if (policy.mismatch === 'fatal') {
+        failOutcome = {
+          ...applyOutcome,
+          status: 'failed',
+          retainPending: true,
+          runtimeBlocked: true,
+          failureKind: 'journal',
+          error: 'F7 queued intent 与 override.pending 不一致；已安全回退但拒绝继续选择',
+        }
+      }
+    }
+  } else if (!applyOutcome.retainPending && !monitoringRetained && queuedIntent === null) {
+    journalAction = 'clear'
+  }
+
+  return {
+    override: deleteOverride ? null : override,
+    deleteOverride,
+    journalAction,
+    mismatch,
+    ...(failOutcome === undefined ? {} : { failOutcome }),
+  }
 }
 
 /**
@@ -506,7 +716,7 @@ export async function runStartupPhase(deps: StartupDeps, signal?: AbortSignal): 
   const verdictJournal = verdictJournalState.kind === 'valid' ? verdictJournalState.journal : null
   const queuedIntent = verdictJournal?.nextIntent ?? null
   const currentState = deps.readOverrideState()
-  if (currentState.kind === 'corrupt') {
+  if (currentState.kind === 'corrupt' || currentState.kind === 'unknown') {
     return {
       applyOutcome,
       restored,
@@ -517,85 +727,30 @@ export async function runStartupPhase(deps: StartupDeps, signal?: AbortSignal): 
     }
   }
   const current = currentState.kind === 'valid' ? currentState.record : null
-  const resetBuiltinApplied = targetIsBuiltin
-    && intentKind === 'reset-builtin'
-    && applyOutcome.status === 'applied'
-  if (resetBuiltinApplied) {
-    deps.deleteOverride()
-  } else if (current !== null) {
-    const next: OverrideRecord = {
-      ...current,
-      pending: queuedIntent !== null && !queuedIntent.targetIsBuiltin
-        ? current.pending
-        : targetIsBuiltin
-          ? current.pending
-          : applyOutcome.retainPending ? targetVersion : null,
-      swapAttempted: applyOutcome.retryAction === 'apply' && applyOutcome.status === 'failed',
-      lastOutcome: applyOutcome.status,
-      lastError: applyOutcome.error,
-      restoreOutcome: applyOutcome.restoreOutcome,
-    }
-    if (!targetIsBuiltin && applyOutcome.status === 'applied') {
-      next.chosenVersion = targetVersion
-      next.resolvedVersion = targetVersion
-      next.swapAttempted = false
-    } else if (targetIsBuiltin && applyOutcome.status === 'applied') {
-      // shell-invalidation preserves the historical selection; reset-builtin
-      // took the deleteOverride branch above.
-      next.invalidatedAt = current.invalidatedAt ?? new Date().toISOString()
-      next.invalidatedReason = current.invalidatedReason ?? 'shell-version-changed'
-      next.lastInvalidatedAt = current.lastInvalidatedAt ?? next.invalidatedAt
-      next.lastInvalidatedReason = current.lastInvalidatedReason ?? next.invalidatedReason
-      next.lastInvalidatedFromVersion = current.lastInvalidatedFromVersion
-        ?? current.resolvedVersion
-        ?? current.chosenVersion
-      next.lastInvalidationRecovered = false
-      next.swapAttempted = false
-    } else if (applyOutcome.status === 'rolled-back' && applyOutcome.rollbackTarget !== null) {
-      next.chosenVersion = applyOutcome.rollbackTarget
-      next.resolvedVersion = applyOutcome.rollbackTarget
-    }
-    if (targetIsBuiltin && applyOutcome.status === 'rolled-back' && applyOutcome.rollbackTarget !== null) {
-      // The startup-time current pointer is the only authoritative old
-      // override. Reactivation clears persisted invalidation, not history.
-      next.shellVersion = deps.shellVersion
-      next.invalidatedAt = null
-      next.invalidatedReason = null
-      next.lastInvalidatedAt = current.lastInvalidatedAt ?? current.invalidatedAt ?? new Date().toISOString()
-      next.lastInvalidatedReason = current.lastInvalidatedReason
-        ?? current.invalidatedReason
-        ?? 'shell-version-changed'
-      next.lastInvalidatedFromVersion = current.lastInvalidatedFromVersion
-        ?? current.resolvedVersion
-        ?? current.chosenVersion
-      next.lastInvalidationRecovered = true
-      next.pending = null
-      next.chosenVersion = applyOutcome.rollbackTarget
-      next.resolvedVersion = applyOutcome.rollbackTarget
-      next.swapAttempted = false
-    }
-    deps.writeOverride(next)
-  }
-
-  const keepMonitoring = applyOutcome.status === 'applied' && !targetIsBuiltin
-  let postApplyJournalMismatch = false
-  if (reachedSafeFallback(applyOutcome) && verdictJournal !== null && queuedIntent !== null) {
-    if (queuedIntent.targetIsBuiltin || current?.pending === queuedIntent.targetVersion) {
-      // The delayed rollback may race with a user selection. Only after the old activation has
-      // safely rolled back do we turn the queued durable selection into a new
-      // transaction. A crash before this write re-enters restore-complete and
-      // reaches the same decision without losing the selection.
-      deps.writeActivationJournal(convertMonitoringToIntent(verdictJournal, queuedIntent))
-    } else if (current?.pending == null) {
-      // Intent commit gap: controller never published override.pending.
-      safeClearJournal(deps)
-    } else {
-      // A different pending cannot be attributed to this journal.
-      postApplyJournalMismatch = true
-    }
-  } else if (!applyOutcome.retainPending && !keepMonitoring && queuedIntent === null) {
+  const commit = commitApplyVerdict({
+    shellVersion: deps.shellVersion,
+    applyOutcome,
+    journal: verdictJournal,
+    queuedIntent,
+    current,
+    targetVersion,
+    targetIsBuiltin,
+    intentKind,
+  }, STARTUP_VERDICT_POLICY)
+  if (commit.deleteOverride) deps.deleteOverride()
+  else if (commit.override !== null) deps.writeOverride(commit.override)
+  if (commit.journalAction === 'convert' && verdictJournal !== null && queuedIntent !== null) {
+    // The delayed rollback may race with a user selection. Only after the old activation has
+    // safely rolled back do we turn the queued durable selection into a new
+    // transaction. A crash before this write re-enters restore-complete and
+    // reaches the same decision without losing the selection.
+    deps.writeActivationJournal(convertMonitoringToIntent(verdictJournal, queuedIntent))
+  } else if (commit.journalAction === 'clear') {
+    // Intent commit gap or fully committed activation: only the pure verdict
+    // decides; the shell just applies the action.
     safeClearJournal(deps)
   }
+  const postApplyJournalMismatch = commit.mismatch
 
   if (applyOutcome.status !== 'applied') {
     try {
@@ -664,7 +819,10 @@ export async function runDelayedRollback(
   if (pointer.kind !== 'valid' || pointer.version !== durableState.journal.targetVersion) {
     throw new Error('F7 current pointer no longer matches the monitored activation')
   }
-  if (deps.readOverrideState().kind === 'corrupt') throw new Error('override metadata 损坏；拒绝 F7 回退')
+  const overridePrecheck = deps.readOverrideState()
+  if (overridePrecheck.kind === 'corrupt' || overridePrecheck.kind === 'unknown') {
+    throw new Error('override metadata 损坏或不可读；拒绝 F7 回退')
+  }
   // Use the latest durable record, not the caller's possibly stale copy, so a
   // concurrently queued selection remains attached through rollback.
   const journal = beginDelayedRollback(durableState.journal, deps.writeActivationJournal)
@@ -710,53 +868,35 @@ export async function runDelayedRollback(
   const verdictJournal = verdictJournalState.kind === 'valid' ? verdictJournalState.journal : null
   const queuedIntent = verdictJournal?.nextIntent ?? null
   const currentState = deps.readOverrideState()
-  if (currentState.kind === 'corrupt') {
+  if (currentState.kind === 'corrupt' || currentState.kind === 'unknown') {
     return {
       ...applyOutcome,
       status: 'failed',
       retainPending: true,
       runtimeBlocked: true,
       failureKind: 'journal',
-      error: 'F7 回退后 override metadata 损坏；拒绝提交裁决',
+      error: 'F7 回退后 override metadata 损坏或不可读；拒绝提交裁决',
     }
   }
   const current = currentState.kind === 'valid' ? currentState.record : null
-  if (current !== null) {
-    const next: OverrideRecord = {
-      ...current,
-      pending: queuedIntent !== null && !queuedIntent.targetIsBuiltin
-        ? current.pending
-        : applyOutcome.retainPending ? current.pending : null,
-      swapAttempted: applyOutcome.retryAction === 'apply' && applyOutcome.status === 'failed',
-      lastOutcome: applyOutcome.status,
-      lastError: applyOutcome.error,
-      restoreOutcome: applyOutcome.restoreOutcome,
-    }
-    if (applyOutcome.status === 'rolled-back' && applyOutcome.rollbackTarget !== null) {
-      next.chosenVersion = applyOutcome.rollbackTarget
-      next.resolvedVersion = applyOutcome.rollbackTarget
-    }
-    deps.writeOverride(next)
-  }
-  let finalOutcome = applyOutcome
-  if (reachedSafeFallback(applyOutcome) && verdictJournal !== null && queuedIntent !== null) {
-    if (queuedIntent.targetIsBuiltin || current?.pending === queuedIntent.targetVersion) {
-      deps.writeActivationJournal(convertMonitoringToIntent(verdictJournal, queuedIntent))
-    } else if (current?.pending == null) {
-      safeClearJournal(deps)
-    } else {
-      finalOutcome = {
-        ...applyOutcome,
-        status: 'failed',
-        retainPending: true,
-        runtimeBlocked: true,
-        failureKind: 'journal',
-        error: 'F7 queued intent 与 override.pending 不一致；已安全回退但拒绝继续选择',
-      }
-    }
-  } else if (!applyOutcome.retainPending && queuedIntent === null) {
+  const commit = commitApplyVerdict({
+    shellVersion: deps.shellVersion,
+    applyOutcome,
+    journal: verdictJournal,
+    queuedIntent,
+    current,
+    targetVersion,
+    targetIsBuiltin: journal.targetIsBuiltin,
+    intentKind: journal.intentKind,
+  }, DELAYED_ROLLBACK_VERDICT_POLICY)
+  if (commit.deleteOverride) deps.deleteOverride()
+  else if (commit.override !== null) deps.writeOverride(commit.override)
+  if (commit.journalAction === 'convert' && verdictJournal !== null && queuedIntent !== null) {
+    deps.writeActivationJournal(convertMonitoringToIntent(verdictJournal, queuedIntent))
+  } else if (commit.journalAction === 'clear') {
     safeClearJournal(deps)
   }
+  const finalOutcome = commit.failOutcome ?? applyOutcome
   try {
     deps.recordFailure({
       version: targetVersion,

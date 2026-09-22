@@ -185,18 +185,6 @@ export function __testSetChamberPrefetchError(value) {
   chamberPrefetchError = value
 }
 
-/** Gate the next chamber prefetch: release() lets the "eval" settle. */
-export function __testQueueChamberPrefetchGate() {
-  let markStarted
-  let release
-  const started = new Promise(resolve => { markStarted = resolve })
-  const wait = new Promise(resolve => { release = resolve })
-  const gate = { wait, markStarted, release }
-  prefetchGates.push(gate)
-  allPrefetchGates.add(gate)
-  return { started, release }
-}
-
 export function __testDisposedCount() {
   return disposedCount
 }

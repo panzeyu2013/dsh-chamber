@@ -395,6 +395,8 @@ const MAIN_SIDE_FILES = [
   'shell-ipc-update.ts', 'shell-ipc-runtime.ts',
   // P0-6（并发抽取）：runtime state push 现定义于 runtime-startup-host.ts。
   'runtime-startup-host.ts',
+  // 4.4b 的 shell-assembly-shared.ts 抽取未接线（默认无生产导入，已在合入时不采），
+  // 故不进入本读取面——只有当 main.ts/sidecar-ctx 真正导入它时才随定义面同步。
 ]
 const desktopMain = MAIN_SIDE_FILES
   .map(file => readFileSync(join(ROOT, 'packages/desktop', file), 'utf8'))
@@ -962,11 +964,14 @@ function collectPreloadChannels(source: string, call: 'invoke' | 'on'): string[]
 }
 
 /** Send-side channels: webContents.send(...) text plus the rendererPush(IPC_CHANNELS.X)
- *  leaf calls; the union is what must equal the preload on-set. */
+ *  leaf calls (main.ts names the registry/status channels inline and forwards them
+ *  to rendererPush; the 4.4b shell-assembly-shared funnel is not adopted);
+ *  the union is what must equal the preload on-set. */
 function collectMainSendChannels(source: string): string[] {
   return [...new Set([
     ...collectMainChannels(source, 'webContents.send'),
     ...collectMainChannels(source, 'rendererPush'),
+    ...collectMainChannels(source, 'pushCommitted'),
   ])].sort()
 }
 

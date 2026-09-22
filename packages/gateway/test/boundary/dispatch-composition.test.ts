@@ -12,6 +12,7 @@ import type { ApiRequest } from '@dsh-chamber/control-plane'
 import { type AuthProvider } from '../../src/auth.ts'
 import { renderBoundaryErrorPage } from '../../src/login-page.ts'
 import { FakeRequest, gatewayRequest } from '../support/utils.ts'
+import type { WarmupDeps } from '../../src/warmup.ts'
 import { TOKEN, setup, realAuth, readAudit, runHttp } from '../support/dispatch-harness.ts'
 
 test('login page has a self form-action and accepts its form-urlencoded body', async () => {
@@ -55,6 +56,36 @@ test('unauthenticated document navigation reaches /auth/login while API, health 
   const asset = await runHttp(dispatch, gatewayRequest('GET', '/assets/app.js', { accept: '*/*' }))
   assert.equal(asset.status, 401)
   assert.equal(verifyCalls, 4)
+})
+
+test('a throwing warm-up links() seam keeps the login page intact and warns exactly once', async () => {
+  // The dispatch catch around warmup.links() is defensive (links() contracts to
+  // fail soft), but it must never swallow a contract break silently — and it
+  // must not turn every render into a log line. A throwing port seam is the
+  // reachable trigger: readyPort() calls getLocalDshPort() before anything is
+  // caught inside links().
+  const auth: AuthProvider = { kind: 'password', async verify() { return null }, async login() { return {} } }
+  const warns: string[] = []
+  const warmup: WarmupDeps = {
+    enabled: true,
+    getLocalDshPort() { throw new Error('warm-up port seam fault') },
+    getLocalState: () => 'ready',
+    getSecret: () => 'secret',
+    logger: { warn() {} },
+  }
+  const { dispatch } = setup(auth, undefined, undefined, undefined, warmup, {
+    log() {}, warn(line: string) { warns.push(line) }, error() {},
+  })
+  const first = await runHttp(dispatch, gatewayRequest('GET', '/auth/login'))
+  const second = await runHttp(dispatch, gatewayRequest('GET', '/auth/login'))
+  assert.equal(first.status, 200, 'the login page still renders')
+  assert.equal(second.status, 200)
+  assert.ok(String(first.body).includes('<!doctype html>'))
+  assert.equal(
+    warns.filter(line => line.includes('warm-up links unavailable')).length,
+    1,
+    `the contract break is recorded once, not per render: ${warns.join(' | ')}`,
+  )
 })
 
 test('a forbidden external origin is rejected before auth or dsh proxying', async () => {

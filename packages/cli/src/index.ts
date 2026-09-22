@@ -213,6 +213,25 @@ function printKeyValue(data: unknown) {
   printTable(['项目', '值'], entries)
 }
 
+/**
+ * connections add / reclaim 共用的连接结果投影（04 §3.2 契约：
+ * connection: ConnectionRow | null、spawned?: boolean）。两者都可能缺失，缺失
+ * **不是**失败值：null 行如实呈现 connection: none（绝不伪造成一个 id），
+ * spawned 缺失如实写 unknown（绝不伪造成 false）。
+ */
+function printConnectionOutcome(data: { connection?: ConnectionRow | null; spawned?: boolean }) {
+  const row = data?.connection ?? null
+  if (row === null) {
+    printKeyValue({ connection: 'none', spawned: data?.spawned ?? 'unknown' })
+    return
+  }
+  printKeyValue({
+    connectionId: row.id,
+    status: row.status ?? 'unknown',
+    spawned: data?.spawned ?? 'unknown',
+  })
+}
+
 async function serveCommand({ flags }: ParsedArgs) {
   const port = flags.has('port') ? Number(flags.get('port')) : DEFAULT_CONTROL_PLANE_PORT
   if (flags.has('port') && !Number.isInteger(port)) {
@@ -327,11 +346,7 @@ async function connectionsAddCommand(flags: FlagMap) {
     console.log(JSON.stringify(data, null, 2))
     return
   }
-  printKeyValue({
-    connectionId: data?.connection?.id ?? 'local',
-    status: data?.connection?.status ?? 'unknown',
-    spawned: data?.spawned ?? false,
-  })
+  printConnectionOutcome(data)
 }
 
 /** PATCH /api/connections/local（04 §3.2）：仅 label / accentColor。 */
@@ -440,11 +455,7 @@ async function connectionsReclaimCommand(flags: FlagMap) {
   console.log(reclaimed.length === 0
     ? '接管完成：无需清理写者记录'
     : `接管完成：已清理 ${reclaimed.length} 条写者记录（pid ${reclaimed.join(', ')}）`)
-  printKeyValue({
-    connectionId: data?.connection?.id ?? 'local',
-    status: data?.connection?.status ?? 'unknown',
-    spawned: data?.spawned ?? false,
-  })
+  printConnectionOutcome(data)
 }
 
 /** GET /health 的 dsh 子面（宿主状态/端口/错误）。 */

@@ -46,7 +46,7 @@ import {
   resolveRuntimeFamily,
 } from '@dsh-chamber/control-plane'
 import { readStringArray } from '@dsh-chamber/control-plane'
-import type { PluginRow, ProtectedSet } from '@dsh-chamber/control-plane'
+import type { FamilyVersions, PluginRow, ProtectedSet } from '@dsh-chamber/control-plane'
 import { readPrivateTextOrNull } from './private-read.ts'
 
 /** Managed dsh home directory name under the gateway stateDir (the runtime
@@ -116,6 +116,15 @@ export function deriveBootProtectedSet(): ProtectedSet {
   return derived.set
 }
 
+/** The protected-set derivation for an ALREADY resolved family closure: the
+ *  single step `gatewayProtectedSet` and `resolveJudgementInputs` share, so a
+ *  judgement reads the runtime lockfile once. */
+function protectedSetFromFamily(family: ReturnType<typeof resolveRuntimeFamily> | null): ProtectedSet | null {
+  if (family === null || !family.ok) return null
+  const derived = deriveProtectedSet({ seedNames: SEED_NAMES, familyNames: family.names })
+  return derived.ok ? derived.set : null
+}
+
 /**
  * Derive the server-side protected set from the ACTIVE runtime's lockfile
  * closure. F cannot be derived ⇒ null (the write faces fail closed; the read
@@ -123,10 +132,50 @@ export function deriveBootProtectedSet(): ProtectedSet {
  */
 export function gatewayProtectedSet(facts: GatewayRuntimeFacts | null): ProtectedSet | null {
   if (facts === null) return null
-  const family = resolveRuntimeFamily(facts.path)
-  if (!family.ok) return null
-  const derived = deriveProtectedSet({ seedNames: SEED_NAMES, familyNames: family.names })
-  return derived.ok ? derived.set : null
+  return protectedSetFromFamily(resolveRuntimeFamily(facts.path))
+}
+
+/** The facts one protected-set judgement needs (design 21 §6.11.3), resolved
+ *  ONCE per judgement. Submit-time and execution-time judgements are
+ *  DELIBERATELY different snapshots, so this is a returned bundle, never a
+ *  module-level cache.
+ *
+ *  `resolve` must be a GUARDED accessor: it returns null instead of throwing
+ *  (each caller owns its own warning and the degraded-ladder policy). */
+export interface JudgementInputs {
+  /** The resolved runtime workspace facts, or null when unavailable. */
+  facts: GatewayRuntimeFacts | null
+  /** `facts.version`, or null when unavailable. */
+  runtimeVersion: string | null
+  /** Never null: the full P when derivable, B₀ ∪ S otherwise — the decision
+   *  needs a set either way, and `familySource` names which ladder was used. */
+  derivation: { ok: true; set: ProtectedSet }
+  familySource: 'runtime' | 'unavailable'
+  /** Active family closure names; null when the facts are unavailable or the
+   *  closure cannot be trusted (verification falls back to the generation arm). */
+  familyNames: readonly string[] | null
+  /** Version facts for the family names; null on the same conditions as
+   *  `familyNames`. */
+  familyVersions: FamilyVersions | null
+}
+
+/** Resolve the protected-set judgement inputs from one guarded facts accessor
+ *  (2026-12 review): the protected set AND the family version facts come from
+ *  the SAME lockfile resolution, so a write face reads runtime facts once per
+ *  judgement instead of once per derived fact. F underivable ⇒ B₀ ∪ S with
+ *  `familySource:'unavailable'` (fail closed, never a skip). */
+export function resolveJudgementInputs(resolve: () => GatewayRuntimeFacts | null): JudgementInputs {
+  const facts = resolve()
+  const family = facts === null ? null : resolveRuntimeFamily(facts.path)
+  const protectedSet = protectedSetFromFamily(family)
+  return {
+    facts,
+    runtimeVersion: facts === null ? null : facts.version,
+    derivation: { ok: true, set: protectedSet ?? deriveBootProtectedSet() },
+    familySource: protectedSet === null ? 'unavailable' : 'runtime',
+    familyNames: family === null ? null : (family.ok ? family.names : null),
+    familyVersions: family === null ? null : (family.ok ? family.versions : null),
+  }
 }
 
 export interface ChamberInstalled {

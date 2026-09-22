@@ -12,8 +12,7 @@ import { join } from 'node:path'
 import { createGatewayRuntimeManager } from '../../src/runtime-manager.ts'
 import {
   readActivationJournalState,
-  readCurrentPointer,
-  readOverride,
+  readCurrentPointerState,
   writeActivationIntent,
   writeActivationJournal,
   writeCurrentPointer,
@@ -29,6 +28,7 @@ import {
   fakePlane,
   runRoute,
   makeValidTree,
+  readOverrideRow,
   writeVersionSwitchIntent,
   writeDshHome,
   runtimeManager,
@@ -585,9 +585,9 @@ test('a stranded F4 invalidation (pointer + invalidatedAt, journal lost) self-he
       const startup = await manager.startupTransaction()
       assert.deepEqual(startup, { blockedReason: null }, 'the re-armed F4 transaction completes cleanly')
       assertBuiltinWorkspace(manager, stateDir, 'the stranded pointer was cleared through the probe-gated builtin switch — no resolveWorkspace crash')
-      assert.equal(readCurrentPointer(stateDir), null, 'current pointer cleared by the builtin switch')
+      assert.deepEqual(readCurrentPointerState(stateDir), { kind: 'missing' }, 'current pointer cleared by the builtin switch')
       assert.equal(readActivationJournalState(stateDir).kind, 'missing', 'transaction journal consumed')
-      const preserved = readOverride(stateDir)
+      const preserved = readOverrideRow(stateDir)
       assert.equal(preserved?.chosenVersion, '1.0.0', 'the historical selection is preserved for re-selection')
       assert.equal(preserved?.invalidatedAt, '2026-09-03T07:28:00.000Z', 'invalidation record retained')
     } finally {
@@ -668,16 +668,16 @@ test('a FRESH shell-version mismatch over an APPLIED override with a settled app
       updatedAt: new Date().toISOString(),
     }
     writeActivationJournal(stateDir, monitoring)
-    assert.equal(readOverride(stateDir)?.invalidatedAt, undefined, 'the override is NOT yet invalidated (fresh mismatch)')
+    assert.equal(readOverrideRow(stateDir)?.invalidatedAt, undefined, 'the override is NOT yet invalidated (fresh mismatch)')
 
     const manager = runtimeManager(stateDir, fakePlane())
     try {
       const startup = await manager.startupTransaction()
       assert.deepEqual(startup, { blockedReason: null }, 'the armed F4 transaction completes cleanly')
       assertBuiltinWorkspace(manager, stateDir, 'the fresh mismatch resolved through the probe-gated builtin switch — no resolveWorkspace crash')
-      assert.equal(readCurrentPointer(stateDir), null, 'current pointer cleared by the builtin switch')
+      assert.deepEqual(readCurrentPointerState(stateDir), { kind: 'missing' }, 'current pointer cleared by the builtin switch')
       assert.equal(readActivationJournalState(stateDir).kind, 'missing', 'transaction journal consumed')
-      const preserved = readOverride(stateDir)
+      const preserved = readOverrideRow(stateDir)
       assert.equal(preserved?.chosenVersion, '1.0.0', 'the historical selection is preserved for re-selection')
       assert.ok(preserved?.invalidatedAt !== undefined && preserved?.invalidatedAt !== null,
         'the fresh mismatch invalidated the record (kept, one-click re-selectable)')
@@ -710,15 +710,15 @@ test('a FRESH shell mismatch with an intent-phase old-shell transaction replaces
       lastOutcome: 'applied',
     })
     writeVersionSwitchIntent(stateDir, '1.0.0')
-    assert.equal(readOverride(stateDir)?.invalidatedAt, undefined, 'fresh mismatch')
+    assert.equal(readOverrideRow(stateDir)?.invalidatedAt, undefined, 'fresh mismatch')
 
     const manager = runtimeManager(stateDir, fakePlane())
     try {
       const startup = await manager.startupTransaction()
       assert.deepEqual(startup, { blockedReason: null }, 'the replaced F4 transaction completes cleanly')
       assertBuiltinWorkspace(manager, stateDir, 'the old-shell intent was superseded by the probe-gated builtin switch')
-      assert.equal(readCurrentPointer(stateDir), null, 'pointer cleared through the builtin switch')
-      const preserved = readOverride(stateDir)
+      assert.deepEqual(readCurrentPointerState(stateDir), { kind: 'missing' }, 'pointer cleared through the builtin switch')
+      const preserved = readOverrideRow(stateDir)
       assert.equal(preserved?.chosenVersion, '1.0.0', 'the historical selection is preserved')
       assert.ok(preserved?.invalidatedAt != null, 'the record was invalidated by the fresh-mismatch F4 arm')
     } finally {
@@ -780,7 +780,7 @@ test('a FRESH shell mismatch with a LIVE old-shell transaction journal (prepared
       updatedAt: '2026-09-03T07:28:00.000Z',
     }
     writeActivationJournal(stateDir, prepared)
-    assert.equal(readOverride(stateDir)?.invalidatedAt, undefined, 'the override is NOT yet invalidated (fresh mismatch)')
+    assert.equal(readOverrideRow(stateDir)?.invalidatedAt, undefined, 'the override is NOT yet invalidated (fresh mismatch)')
 
     let probes = 0
     const manager = createGatewayRuntimeManager({
@@ -809,10 +809,10 @@ test('a FRESH shell mismatch with a LIVE old-shell transaction journal (prepared
       }
       // The record is NOT invalidated by the new shell (arming is the only
       // writer of the fresh-mismatch invalidation).
-      const preserved = readOverride(stateDir)
+      const preserved = readOverrideRow(stateDir)
       assert.equal(preserved?.invalidatedAt, undefined, 'the live transaction record is not invalidated')
       assert.equal(preserved?.pending, '1.0.0', 'the old transaction pending is preserved')
-      assert.equal(readCurrentPointer(stateDir), null, 'the pointer was never written (pre-swap crash window)')
+      assert.deepEqual(readCurrentPointerState(stateDir), { kind: 'missing' }, 'the pointer was never written (pre-swap crash window)')
       assert.equal(probes, 0, 'no spawn/probe was attempted under the blocked verdict')
     } finally {
       await manager.dispose()
@@ -840,8 +840,8 @@ test('a stranded F4 invalidation carrying stale failure markers still self-heals
       const startup = await manager.startupTransaction()
       assert.deepEqual(startup, { blockedReason: null }, 'stale failure markers must not block the re-armed transaction')
       assertBuiltinWorkspace(manager, stateDir)
-      assert.equal(readCurrentPointer(stateDir), null, 'pointer cleared through the builtin switch')
-      const record = readOverride(stateDir)
+      assert.deepEqual(readCurrentPointerState(stateDir), { kind: 'missing' }, 'pointer cleared through the builtin switch')
+      const record = readOverrideRow(stateDir)
       assert.equal(record?.lastOutcome, 'applied', 'the re-armed transaction ran and committed its own verdict (stale snapshot-failed superseded)')
       assert.equal(record?.lastError, null, 'stale lastError superseded')
       assert.equal(record?.swapAttempted, false, 'stale swapAttempted superseded')
@@ -881,9 +881,9 @@ test('an interrupted F4 apply that failed at snapshot (intent journal + stale ma
       const startup = await manager.startupTransaction()
       assert.deepEqual(startup, { blockedReason: null }, 'stale markers must not block the journaled resume')
       assertBuiltinWorkspace(manager, stateDir)
-      assert.equal(readCurrentPointer(stateDir), null)
+      assert.deepEqual(readCurrentPointerState(stateDir), { kind: 'missing' })
       assert.equal(readActivationJournalState(stateDir).kind, 'missing', 'intent journal consumed')
-      const record = readOverride(stateDir)
+      const record = readOverrideRow(stateDir)
       assert.equal(record?.lastOutcome, 'applied', 'the resumed transaction committed its own verdict')
       assert.equal(record?.lastError, null)
       assert.equal(record?.swapAttempted, false)

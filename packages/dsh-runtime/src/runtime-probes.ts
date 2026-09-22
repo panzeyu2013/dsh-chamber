@@ -12,12 +12,12 @@
  * how many sessions exist. The identity probe deliberately never reads the
  * session list, so no session-readability row exists. Runtime trees that
  * predate the identity method answer HTTP 404; the probe layer then falls back
- * to the legacy `session/list`
- * probe, keeping old-tree
- * activation/rollback behavior identical. A legacy
- * fallback fires the optional `warn` sink when the caller wired one (the
- * desktop control-plane's own identity probes warn on the same condition via
- * their logger — see control-plane dsh-client probeHostIdentity).
+ * to the legacy `session/list` probe, keeping old-tree activation/rollback
+ * behavior identical. A legacy fallback fires the caller's `warn` sink — a
+ * REQUIRED RuntimeProbeOptions member since the 2026-12 audit found every
+ * production caller had omitted the optional one, which made the downgrade
+ * silent (the desktop control-plane's own identity probes warn on the same
+ * condition via their logger — see control-plane dsh-client probeHostIdentity).
  *
  * commands/execute wire argument (the probe payload below carries it): the
  * third argument of the upstream projection `execute(agent, line,
@@ -59,7 +59,7 @@ export interface RuntimeProbeRpcOptions {
   maxResponseBytes?: number
 }
 
-/** Optional warning sink for the legacy identity-method fallback. Fired only
+/** Warning sink for the legacy identity-method fallback. Fired only
  *  AFTER the legacy session/list fallback succeeded (same timing as the
  *  control-plane probeHostIdentity): a successful legacy answer proves the
  *  runtime tree predates session/canOpenWorkspacePath, while a both-404 or a
@@ -84,8 +84,21 @@ export interface RuntimeProbeOptions {
   rpcTimeoutMs?: number
   /** Warning sink fired when the session probe's legacy session/list
    *  fallback SUCCEEDS after an identity-method 404 (upstream method drift
-   *  must stay visible, never silent; a failing fallback is already loud). */
-  warn?: RuntimeProbeWarn
+   *  must stay visible, never silent; a failing fallback is already loud).
+   *  REQUIRED (2026-12 audit): this layer is the only place the fallback is
+   *  observable, so omitting the sink silently degrades the host to the legacy
+   *  wire — the type rejects it now instead of the runtime. */
+  warn: RuntimeProbeWarn
+  /**
+   * Legacy-fallback value predicate seam (2026-12 audit, 2.1). On an
+   * identity-method 404 the session/list value must prove the old-tree session
+   * shape; the default (defaultLegacyShape) demands an object carrying an items
+   * array — the pre-migration session row's own check. A host that owns a
+   * different canonical predicate (the control-plane's isLegacyHostProbeValue)
+   * injects it here instead of editing this core: dsh-runtime deliberately has
+   * no dependency on the control plane.
+   */
+  legacyShape?: (value: unknown) => boolean
   /**
    * Design 24 §7 C: the EXACT chamber host domains this
    * spawn actually carries, derived from the seeded host entries
@@ -343,6 +356,20 @@ function identityMethodNotFound(error: unknown): boolean {
   return (error as { status?: unknown }).status === 404
 }
 
+/**
+ * The default legacy-fallback value predicate: the pre-migration session/list
+ * row demanded an object carrying an `items` array, and "old-tree activation
+ * identical" includes exactly that check. Callers whose canonical predicate
+ * differs inject it through RuntimeProbeOptions.legacyShape.
+ */
+function defaultLegacyShape(value: unknown): boolean {
+  // Same predicate as the canonical control-plane `isLegacyHostProbeValue`:
+  // a plain record carrying an items array. The array exclusion matters — an
+  // ARRAY that happens to own an `items` property is not a legacy session row.
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    && Array.isArray((value as { items?: unknown }).items)
+}
+
 /** Execute the exact closed probe set required by activation-gate.ts. */
 export async function runRuntimeActivationProbes(opts: RuntimeProbeOptions): Promise<ProbeResult[]> {
   const windowMs = opts.windowMs ?? 60_000
@@ -426,22 +453,22 @@ export async function runRuntimeActivationProbes(opts: RuntimeProbeOptions): Pro
             const legacy = await call(LEGACY_HOST_PROBE_METHOD, { args: { _request: {} } })
             // IDENTITY-LEG DIVERGENCE: the cp twin
             // (dsh-client.ts probeHostIdentity) only requires an object; this
-            // core leg demands Array.isArray(items) — align only via a probe-
-            // seam shape injection (dsh-runtime cannot import cp); do not
-            // relax this check without a ruling.
+            // core leg's DEFAULT demands Array.isArray(items) — alignment now
+            // rides the RuntimeProbeOptions.legacyShape injection seam
+            // (dsh-runtime cannot import cp); do not relax the default without
+            // a ruling.
             // An ok:true legacy envelope
             // carrying no {items} session list is a damaged host, not a healthy
             // old tree —
             // "old-tree activation identical" includes this check.
             const legacyValue = legacy.result?.value
-            if (typeof legacyValue !== 'object' || legacyValue === null
-              || !Array.isArray((legacyValue as { items?: unknown }).items)) {
+            if (!(opts.legacyShape ?? defaultLegacyShape)(legacyValue)) {
               return { name, ok: false, error: 'malformed session list' }
             }
             // Warn only after the fallback SUCCEEDED — same timing as the
             // control-plane probeHostIdentity; a both-404 or failing legacy
             // fallback is already loud on its own.
-            opts.warn?.(`runtime activation session probe: ${name} answered HTTP 404 while the legacy ${LEGACY_HOST_PROBE_METHOD} probe succeeded — the runtime tree predates the identity method (dsh < ${HOST_IDENTITY_METHOD_SINCE}); the legacy probe response grows with session data`)
+            opts.warn(`runtime activation session probe: ${name} answered HTTP 404 while the legacy ${LEGACY_HOST_PROBE_METHOD} probe succeeded — the runtime tree predates the identity method (dsh < ${HOST_IDENTITY_METHOD_SINCE}); the legacy probe response grows with session data`)
             return { name, ok: true }
           } catch (legacyError) {
             if (identityMethodNotFound(legacyError)) {

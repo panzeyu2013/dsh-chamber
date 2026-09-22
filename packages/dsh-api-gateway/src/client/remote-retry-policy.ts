@@ -16,6 +16,10 @@
  * transport itself. The base is half that lane's `backoffBaseMs` (500): a stream
  * reopen is cheaper than a transport restart and restores the event stream
  * sooner, while staying far from a hot loop.
+ *
+ * The opening-budget ladder and the silent-teardown floor are NOT here: they are the
+ * shared table's (@dsh-chamber/dsh-stream-state tables.ts, OPENING_TIMEOUT_LADDER_MS /
+ * openingBudgetMs / SILENT_TEARDOWN_MIN_MS), read directly by the mux client.
  */
 
 /** First carrier failure of an episode reopens immediately. */

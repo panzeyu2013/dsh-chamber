@@ -46,15 +46,6 @@ export interface ClientPluginRow {
 }
 
 /**
- * The page module table face the loader materializes through
- * (`ClientModuleSystem.import` — async, resolves registered factories and
- * memoized records; a loaded-but-unregistered id throws loud).
- */
-export interface ClientModuleTable {
-  import(specifier: string): Promise<unknown>
-}
-
-/**
  * A module element can still execute after its request-level timeout. The
  * explicit type keeps that one exceptional lifecycle distinct from ordinary
  * load failures without inspecting arbitrary thrown objects.

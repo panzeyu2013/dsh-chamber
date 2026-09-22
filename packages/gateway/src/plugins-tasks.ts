@@ -64,7 +64,7 @@ import {
 } from '@dsh-chamber/control-plane'
 import { readPrivateTextOrNull } from './private-read.ts'
 import { messageOf, newestFirst } from './util.ts'
-import { deriveBootProtectedSet, gatewayProtectedSet } from './plugins-installed.ts'
+import { resolveJudgementInputs } from './plugins-installed.ts'
 import { resolveDshCliEntry } from './dsh-path.ts'
 import type { SpawnFn } from './plugins-exec.ts'
 import { createPluginsExec, PLUGIN_QUEUE_CAP, type PluginExec } from './plugins-exec.ts'
@@ -287,18 +287,21 @@ function validateSubmission(input: PluginTaskSubmitInput, deps: ChamberPluginTas
     // skipping the judgement — a protected name must not sit in the deferred
     // store until some later edge silently drops it.
     // `manager.resolveWorkspace()` throws on corrupt override/pointer metadata
-    // (design 18), and that throw must not escape submit() as a 500.
-    let facts: { path: string; version: string | null } | null = null
-    if (manager !== null) {
+    // (design 18), and that throw must not escape submit() as a 500: the
+    // resolution below runs behind a guarded accessor, so the throw is logged
+    // and degrades the ladder. One resolution per judgement
+    // (resolveJudgementInputs): the protected set and the runtime version fact
+    // come from the SAME snapshot.
+    const inputs = resolveJudgementInputs(() => {
+      if (manager === null) return null
       try {
         const workspace = manager.resolveWorkspace()
-        facts = { path: workspace.path, version: workspace.version }
+        return { path: workspace.path, version: workspace.version }
       } catch (error) {
         deps.logger.warn(`plugins-tasks: runtime facts unavailable (${messageOf(error)}); judging with the conservative ladder`)
-        facts = null
+        return null
       }
-    }
-    const protectedSet = facts === null ? null : gatewayProtectedSet(facts)
+    })
     // F underivable (missing/unparseable runtime lockfile+tree) ⇒ conservative
     // ladder, not a blanket refusal: official-scope installs are refused
     // (stronger than the generation check), B₀ ∪ S still protects, and
@@ -307,13 +310,13 @@ function validateSubmission(input: PluginTaskSubmitInput, deps: ChamberPluginTas
       op,
       name,
       version,
-      runtimeVersion: facts === null ? null : facts.version,
-      derivation: { ok: true as const, set: protectedSet ?? deriveBootProtectedSet() },
+      runtimeVersion: inputs.runtimeVersion,
+      derivation: inputs.derivation,
       // The profile-absent defer is decided by the callers' own projection
       // checks (which also carry the corrupt/absent evidence); this judgement
       // is about the NAME, so it runs with the profile assumed initialized.
       profileState: 'ready',
-      familySource: protectedSet === null ? 'unavailable' : 'runtime',
+      familySource: inputs.familySource,
     })
     if (decision.kind === 'allow') return null
     if (decision.kind === 'defer') return { kind: 'defer-profile-absent' }

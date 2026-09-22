@@ -47,6 +47,7 @@ import {
   createPrivateDirectoryNoFollow,
   ensureRuntimeRootNoFollow,
   ensureRuntimeSubdirectoryNoFollow,
+  isUnreadableFsError,
 } from './private-fs.ts'
 
 /**
@@ -332,16 +333,22 @@ async function writeFailedScene(
   }
 }
 
-/** Only a new-format, digest-verified tree receives overwrite protection.
- * Legacy/partial trees are replaced through the backup→publish transaction. */
-function existingRuntimeTreeIsValid(baseDir: string, version: string): boolean {
+/** Material classification of an existing version tree. 'valid' keeps the
+ * historical never-overwritten verdict, 'invalid' allows the backup→publish
+ * replacement, and 'unknown' (EACCES/EIO/unreadable digest) refuses to touch
+ * the tree at all — an unreadable tree may be the only working copy.
+ * Legacy/partial trees are 'invalid' and are replaced through the transaction. */
+type ExistingRuntimeTreeState = 'valid' | 'invalid' | 'unknown'
+
+function existingRuntimeTreeIsValid(baseDir: string, version: string): ExistingRuntimeTreeState {
   const structural = validateVersionTree(baseDir, version)
-  if (!structural.ok) return false
+  if (structural.kind === 'unknown') return 'unknown'
+  if (!structural.ok) return 'invalid'
   try {
     verifyRuntimeTreeCriticalFiles(structural.path, version)
-    return true
-  } catch {
-    return false
+    return 'valid'
+  } catch (error) {
+    return isUnreadableFsError(error) ? 'unknown' : 'invalid'
   }
 }
 
@@ -1052,8 +1059,16 @@ export async function installRuntimeVersion(opts: InstallOptions): Promise<Insta
   const version = resolution.version
   const runtimeDir = ensureRuntimeRootNoFollow(opts.baseDir)
   const versionTreeDir = join(runtimeDir, version)
-  if (existsSync(versionTreeDir) && existingRuntimeTreeIsValid(opts.baseDir, version)) {
-    throw new Error(`dsh runtime ${version} is already installed and valid; refusing to overwrite it`)
+  if (existsSync(versionTreeDir)) {
+    const existing = existingRuntimeTreeIsValid(opts.baseDir, version)
+    if (existing === 'valid') {
+      throw new Error('dsh runtime ' + version + ' is already installed and valid; refusing to overwrite it')
+    }
+    if (existing === 'unknown') {
+      // The existing tree could not be read: replacing it would destroy bytes
+      // that were never proven invalid. Writer-unsafe keeps the work dir too.
+      throw writerUnsafeError('dsh runtime ' + version + ' exists but its tree is unreadable; refusing to overwrite it')
+    }
   }
   const workDir = join(runtimeDir, `.work-${randomBytes(4).toString('hex')}`)
   const backupDir = join(runtimeDir, `.${version}.publish-backup-${randomBytes(4).toString('hex')}`)
@@ -1220,8 +1235,13 @@ export async function installRuntimeVersion(opts: InstallOptions): Promise<Insta
     // Re-check at the commit point: a concurrent installer may have published
     // after our early refusal check. Valid trees are never replaced or reused.
     if (existsSync(versionTreeDir)) {
-      if (existingRuntimeTreeIsValid(opts.baseDir, version)) {
-        throw new Error(`dsh runtime ${version} became valid during install; refusing to overwrite it`)
+      const existing = existingRuntimeTreeIsValid(opts.baseDir, version)
+      if (existing === 'valid') {
+        throw new Error('dsh runtime ' + version + ' became valid during install; refusing to overwrite it')
+      }
+      if (existing === 'unknown') {
+        // Commit point: an unreadable existing tree is never renamed aside.
+        throw writerUnsafeError('dsh runtime ' + version + ' exists but its tree is unreadable; refusing to replace it')
       }
       await renameFn(versionTreeDir, backupDir)
       previousTreeBackedUp = true

@@ -1,7 +1,7 @@
 /** Cursor, page, and live-tail coordination over a reconnecting Remote stream. */
 
 import { RemoteError } from '@deepseek-ai/dsh-typert-protocol'
-import { RemoteStreamCarrierError } from './stream-client.ts'
+import { RemoteStreamCarrierError, UNREF_SCHEDULER } from './stream-client.ts'
 import {
   decideStreamStallAction,
   DEFAULT_STREAM_STALL_TIMING,
@@ -12,6 +12,7 @@ import type {
   RemoteStreamItem,
   RemoteStreamOptions,
 } from './remote-stream.ts'
+import { withDeadline } from '@dsh-chamber/dsh-stream-state'
 
 function protocolViolation(message: string): RemoteError<'gateway/internal'> {
   return new RemoteError('gateway/internal', message, {})
@@ -348,12 +349,25 @@ export abstract class RemoteJournalStream<
   private async probeHostAdvance(): Promise<boolean> {
     const deadline = new AbortController()
     const signal = AbortSignal.any([this.stream.signal, deadline.signal])
-    const timer = setTimeout(() => {
-      deadline.abort(new Error('journal stall probe deadline'))
-    }, this.stallTiming.probeTimeoutMs)
     const iterator = this.follow(this.initialRequest, signal)[Symbol.asyncIterator]()
     try {
-      const next = await iterator.next()
+      //  (W2): the deadline is the shared primitive, not a hand-written timer — one
+      // handle armed and ALWAYS cleared, so a probe that answers inside its window
+      // cannot leave a timer behind. Expiry still aborts the sibling follow (the mux
+      // then sends its cancel frame) and reports "no advance" instead of escaping.
+      // A sibling follow yields RemoteJournalFrame directly (see the comment
+      // below), so the deadline's generic is the frame iterator result — NOT the
+      // RemoteStreamItem wrapper used by consume().
+      const raced = await withDeadline<IteratorResult<RemoteJournalFrame<Entry, Cursor, Page, Notification>>>(iterator.next(), {
+        ms: this.stallTiming.probeTimeoutMs,
+        onExpire: () => {
+          deadline.abort(new Error('journal stall probe deadline'))
+          return { done: true as const, value: undefined as never }
+        },
+        scheduler: UNREF_SCHEDULER,
+      })
+      if (raced.settled === 'deadline' || raced.value === undefined) return false
+      const next = raced.value
       // A sibling follow yields RemoteJournalFrame directly — the RemoteStreamItem
       // wrapper only exists inside RemoteStream (that is why consume() reads
       // item.value.type). Reading a double-wrapped frame here throws on every probe
@@ -363,7 +377,6 @@ export abstract class RemoteJournalStream<
       if (applied === undefined) return false
       return this.options.compare(next.value.cursor, applied) > 0
     } finally {
-      clearTimeout(timer)
       deadline.abort(new Error('journal stall probe finished'))
       // Bounded teardown: a follow whose return() ignores the
       // aborted signal must not leave probing=true forever — that would silently
@@ -373,14 +386,13 @@ export abstract class RemoteJournalStream<
         () => undefined,
         () => undefined,
       )
-      await Promise.race([
-        closing,
-        new Promise<void>((resolve) => {
-          const bound = setTimeout(resolve, this.stallTiming.probeTimeoutMs)
-          ;(bound as unknown as { unref?: () => void }).unref?.()
-          void closing.then(() => { clearTimeout(bound) })
-        }),
-      ])
+      // Same primitive for the bound: it clears its own (unref'd) timer, so the
+      // retired hand-written one-shot and its clearTimeout bookkeeping are gone (1.5).
+      await withDeadline(closing, {
+        ms: this.stallTiming.probeTimeoutMs,
+        onExpire: () => undefined,
+        scheduler: UNREF_SCHEDULER,
+      })
     }
   }
 

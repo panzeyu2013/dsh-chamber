@@ -101,6 +101,8 @@ test('offline version listing retains every valid local cache tree', async () =>
     })
     const result = await manager.listVersions() as {
       versions: Array<{ version: string; cached: boolean }>
+      removableVersions: string[]
+      removableVersionsError: string | null
       error: string
     }
     assert.match(result.error, /registry offline/)
@@ -111,6 +113,12 @@ test('offline version listing retains every valid local cache tree', async () =>
     )
     assert.equal(result.versions.find(entry => entry.version === TEST_BUILTIN_VERSION)?.cached, false,
       'the active builtin anchor stays visible but is not mislabeled as an installed cache tree')
+    // 3.5 (2026-12 review): the removable-candidates read has its OWN projection
+    // field, so a ledger read failure can never be read as "no candidates" (and
+    // it stays distinguishable from the registry error above).
+    assert.deepEqual(result.removableVersions, ['2.0.0', '1.0.0'],
+      'every valid non-protected tree is a cleanup candidate, newest first')
+    assert.equal(result.removableVersionsError, null, 'the healthy ledger projects no error')
     assert.equal((await manager.select(TEST_BUILTIN_VERSION)).accepted, true,
       'selecting the active builtin row is a no-op')
     assert.equal(fetches, 1, 'the builtin no-op never performs another offline registry request')

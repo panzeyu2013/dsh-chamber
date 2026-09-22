@@ -51,6 +51,7 @@ import {
   HOST_IDENTITY_METHOD,
   HOST_IDENTITY_METHOD_SINCE,
   HOST_PROBE_MAX_RESPONSE_BYTES,
+  isLegacyHostProbeValue,
   LEGACY_HOST_PROBE_METHOD,
   mintRpcId,
   parseServerResponse,
@@ -429,7 +430,7 @@ export async function call(
 }
 
 /** Options for probeHostIdentity. */
-export interface ProbeHostIdentityOptions {
+interface ProbeHostIdentityOptions {
   signal?: AbortSignal
   generationSignal?: AbortSignal
   /** Per-call unary timeout (default 30s policy). */
@@ -539,11 +540,13 @@ export async function probeHostIdentity(
           buildLegacyHostProbePayload(),
           { signal, generationSignal, timeoutMs },
         )
-        // Legacy-answer shape check: the session/list probe validates the
-        // value slot — ok:true with a non-object value is a
-        // protocol_violation, never a healthy host. A damaged legacy host
+        // Legacy-answer shape check, single-sourced in rpc-envelope.ts
+        // (isLegacyHostProbeValue): the session/list probe validates the value
+        // slot — it answered a plain record carrying an `items` array, so
+        // ok:true with any other value (including a bare object or an array)
+        // is a protocol_violation, never a healthy host. A damaged legacy host
         // must fail loud, not pass the health probe.
-        if (typeof result.value !== 'object' || result.value === null) {
+        if (!isLegacyHostProbeValue(result.value)) {
           throw new RpcTransportError(
             `dsh ${LEGACY_HOST_PROBE_METHOD}: malformed value slot`,
             0,

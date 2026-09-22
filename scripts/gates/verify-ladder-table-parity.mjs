@@ -1,12 +1,21 @@
 /**
  * Ladder-table parity gate.
  *
- * The target is "four ladders -> one reducer + ONE TABLE". This gate is the
- * first half, staged exactly like the Swift parity gate: the values are recorded in
- * `packages/dsh-stream-state/tables.json`, and every module that still OWNS a copy
- * (until the table is imported) is checked against that table here. Until the modules import
- * the table, this gate is what makes drift impossible - the same "lockstep while
- * both exist" pattern as the Swift mirror.
+ * The target is "four ladders -> one reducer + ONE TABLE". The gate covers both
+ * halves:
+ *
+ *  1. LOCKSTEP - the values are recorded in `packages/dsh-stream-state/tables.json`,
+ *     and every module that still OWNS a copy (until the table is imported) is
+ *     checked against that table here. A module that no longer declares a constant
+ *     is NOT a failure (that is the retirement working); a constant that EXISTS with
+ *     a different value IS a failure. Once every copy is retired this list is green
+ *     by construction, so it is a retirement ledger, not proof of collection.
+ *  2. CONSUMERS - the ladder modules read the table. Each named consumer must
+ *     reference `LADDER_TABLES.<ladder>` in code, must not re-declare a retired
+ *     constant, and must not assign a ladder leaf a numeric literal; the ladder must
+ *     be present in tables.json. Without this half "the table is the single driver"
+ *     would be a comment: a green "0 locked + N retired" line with a ladder never
+ *     collected at all.
  *
  * WHY A GATE AND NOT A UNIT TEST: the modules live in four different packages, and the
  * dependency direction is "modules import the package", so a package test cannot read
@@ -26,6 +35,10 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+// Comment-proof source locks (the same helper every source-lock test uses): a
+// comment that NAMES the table must not satisfy the consumer check - only code
+// can. The helper is a pure TS module; node >= 24 strips its types natively.
+import { stripComments } from '../dev/test-support/source-text.ts'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = join(HERE, '..', '..')
@@ -74,6 +87,64 @@ export const LOCKSTEP = [
   // is a failure; a missing one is the retirement working).
 ]
 
+/**
+ * The collection half: the ladder modules read the table.
+ * Each entry names:
+ *  - `table`: the ladder path that must exist in tables.json;
+ *  - `source`: the module that must reference the table;
+ *  - `reference`: the exact `LADDER_TABLES.<ladder>` expression that makes the
+ *    import the driver, matched against comment-stripped source (a comment
+ *    claiming it does not count);
+ *  - `retiredNames`: constants the module used to own; a new declaration of one
+ *    (const/let/var) is a regression, a prose mention is not;
+ *  - the leaves of the ladder object are additionally checked as "must not be
+ *    assigned a numeric literal" (`leaf: 123`), which is the shape a re-declared
+ *    copy takes.
+ */
+export const CONSUMERS = [
+  {
+    table: 'tables.ladders.mobile',
+    source: 'packages/dsh-chamber-client-ui-mobile/src/client/session-stall.ts',
+    reference: 'LADDER_TABLES.mobile',
+    retiredNames: [
+      'STALL_THRESHOLD_MS',
+      'STALL_POLL_MS',
+      'STALL_RESYNC_COOLDOWN_MS',
+      'STALL_RESYNC_WINDOW_MS',
+      'STALL_RESYNC_MAX',
+      'STALL_FAILED_MS',
+    ],
+  },
+  {
+    // The sidebar executor's probe cadence; the authority ladder replaced the
+    // 190 s fact-reconcile receipt chain (the retired names below).
+    table: 'tables.ladders.authority',
+    source: 'packages/dsh-chamber-client-ui-sidebar/src/shared/session-fact-reconcile.ts',
+    reference: 'LADDER_TABLES.authority',
+    retiredNames: [
+      'DEFAULT_MAX_ATTEMPTS',
+      'DEFAULT_RETRY_MS',
+      'DEFAULT_ATTEMPT_TIMEOUT_MS',
+      'DEFAULT_VERIFY_TIMEOUT_MS',
+      'CORRECTIVE_PHASE_TIMEOUT_MS',
+    ],
+  },
+  {
+    // The App's reconnect/notice escalation, the renderer host of the same
+    // authority ladder (the retired renderer-local liveness defaults below).
+    table: 'tables.ladders.authority',
+    source: 'packages/renderer/src/App.tsx',
+    reference: 'LADDER_TABLES.authority',
+    retiredNames: ['SESSION_LIVENESS_DEFAULTS'],
+  },
+  {
+    table: 'tables.ladders.streamHealth',
+    source: 'packages/dsh-chamber-client-ui-open-in/src/client/session-stream-health.ts',
+    reference: 'LADDER_TABLES.streamHealth',
+    retiredNames: [],
+  },
+]
+
 /** Read a dotted table path, array indices included. */
 export function readTable(path) {
   let node = JSON.parse(readFileSync(TABLES, 'utf8'))
@@ -108,6 +179,13 @@ export function readObjectField(source, objectName, fieldName, repoRoot = REPO_R
   const match = pattern.exec(block)
   if (match === null) return { state: 'retired' }
   return { state: 'found', value: Number(match[1].replace(/_/gu, '')) }
+}
+
+/** Read one consumer module's source text, or null when the file is absent. */
+export function readSourceText(source, repoRoot = REPO_ROOT) {
+  const absolute = join(repoRoot, source)
+  if (!existsSync(absolute)) return null
+  return readFileSync(absolute, 'utf8')
 }
 
 /**
@@ -152,6 +230,65 @@ export function compareLockstep(entries, resolve) {
   return { failures, checked, retired, lines }
 }
 
+/**
+ * Compare one consumer list: each entry's module must read its ladder from the
+ * table in code (a comment naming it does not count), must not re-declare a
+ * retired constant, and must not assign a ladder leaf a numeric literal.
+ * Pure: all I/O arrives through `resolve`, so a fabricated expectation can be
+ * driven without touching the tree.
+ * @returns {{ failures: number, checked: number, lines: string[] }} verdict.
+ */
+export function compareConsumers(entries, resolve) {
+  let failures = 0
+  let checked = 0
+  const lines = []
+  for (const entry of entries) {
+    const ladder = resolve.table(entry.table)
+    if (ladder === undefined || ladder === null || typeof ladder !== 'object') {
+      failures += 1
+      lines.push('x tables.json is missing ' + entry.table + ' (the single table must name it)')
+      continue
+    }
+    const text = resolve.sourceText(entry.source)
+    if (text === null) {
+      failures += 1
+      lines.push('x ' + entry.source + ': file does not exist (declared as a table consumer)')
+      continue
+    }
+    // Only CODE counts: comments are blanked (newlines preserved) so prose that
+    // names the table or a retired constant cannot satisfy or trip a check.
+    const code = resolve.strip(text)
+    let consumerOk = true
+    if (!code.includes(entry.reference)) {
+      failures += 1
+      consumerOk = false
+      lines.push(
+        'x ' + entry.source + ' no longer reads ' + entry.reference +
+        ' - the ladder is not driven by the single table',
+      )
+    }
+    for (const name of entry.retiredNames ?? []) {
+      // Declaration form only: prose that names a retired constant is not a copy.
+      const declaration = new RegExp('(?:^|\\s)(?:export\\s+)?(?:const|let|var)\\s+' + name + '\\s*=')
+      if (declaration.test(code)) {
+        failures += 1
+        consumerOk = false
+        lines.push('x ' + entry.source + ' declares retired ladder constant ' + name + ' again - the table is the only owner')
+      }
+    }
+    for (const leaf of Object.keys(ladder)) {
+      const literal = new RegExp('(?:^|[^A-Za-z0-9_$])' + leaf + '\\s*:\\s*[0-9]')
+      if (literal.test(code)) {
+        failures += 1
+        consumerOk = false
+        lines.push('x ' + entry.source + ' assigns ' + leaf + ' a literal again - read ' + entry.reference + ' instead')
+      }
+    }
+    if (consumerOk) checked += 1
+  }
+  return { failures, checked, lines }
+}
+
 /** Negative control: the comparison must flag a deliberately wrong expectation. */
 function selfTest() {
   const resolve = {
@@ -184,12 +321,18 @@ function main() {
     selfTest()
     return
   }
-  const { failures, checked, retired, lines } = compareLockstep(LOCKSTEP, {
+  const lockstep = compareLockstep(LOCKSTEP, {
     table: readTable,
     constant: readConstant,
     objectField: readObjectField,
   })
-  for (const line of lines) console.error(line)
+  const consumers = compareConsumers(CONSUMERS, {
+    table: readTable,
+    sourceText: readSourceText,
+    strip: stripComments,
+  })
+  for (const line of [...lockstep.lines, ...consumers.lines]) console.error(line)
+  const failures = lockstep.failures + consumers.failures
   if (failures > 0) {
     console.error('')
     console.error('ladder-table parity: ' + String(failures) + ' mismatch(es). The single table is the authority;')
@@ -197,8 +340,9 @@ function main() {
     process.exit(1)
   }
   console.log(
-    'ok ladder-table parity: ' + String(checked) + ' constant(s) locked to tables.json' +
-    (retired > 0 ? ', ' + String(retired) + ' already retired' : ''),
+    'ok ladder-table parity: ' + String(lockstep.checked) + ' constant(s) locked to tables.json' +
+    (lockstep.retired > 0 ? ', ' + String(lockstep.retired) + ' already retired' : '') +
+    ', ' + String(consumers.checked) + '/' + String(CONSUMERS.length) + ' consumer(s) read the table',
   )
 }
 

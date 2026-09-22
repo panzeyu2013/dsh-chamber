@@ -26,6 +26,3 @@ export function scrubbedParentEnv() {
   }
   return out
 }
-
-/** Upstream's environment-name prefix for child-facing dsh variables. */
-export const DSH_ENV_PREFIX = 'DSH_'

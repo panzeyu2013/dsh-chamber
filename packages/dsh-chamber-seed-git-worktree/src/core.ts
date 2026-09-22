@@ -943,6 +943,29 @@ export class GitWorktreeCore {
     if (head !== expected.head) fail('expected-mismatch', 'worktree HEAD changed')
   }
 
+  /** Pure re-comparison of one resolved topology row against the bound removal
+   *  intent (2026-12 convergence): the three replay/commit guards used to
+   *  inline the identical repository/worktree-id/branch/head/main/locked
+   *  comparisons. This comparison performs no I/O and never reads the state
+   *  source — the caller already resolved `topology` and `target`. Each call
+   *  site keeps its own `fail(code, message)` mapping, so the historical wire
+   *  codes and texts stay byte-identical. Precedence mirrors the historical
+   *  check order: repository identity, worktree id, branch, head, then main,
+   *  then locked. */
+  private boundTargetDiff(
+    topology: WorktreeTopology,
+    target: RawWorktree,
+    intent: RemoveIntent,
+  ): 'repo' | 'main' | 'locked' | 'worktree-id' | 'branch' | 'head' | null {
+    if (opaqueId('repo', topology.commonDir) !== intent.repoId) return 'repo'
+    if (opaqueId('worktree', topology.commonDir, target.path) !== intent.worktreeId) return 'worktree-id'
+    if (target.branch !== intent.branch) return 'branch'
+    if (target.head !== intent.head) return 'head'
+    if (target === topology.worktrees[0]) return 'main'
+    if (target.locked) return 'locked'
+    return null
+  }
+
   private async removeMissingUnregistered(
     input: RemoveInput,
     operation: RemoveOperationRecord,
@@ -1083,16 +1106,11 @@ export class GitWorktreeCore {
       return this.removeResult(input.operationId, intent, true)
     }
 
-    const repoId = opaqueId('repo', topology.commonDir)
-    const worktreeId = opaqueId('worktree', topology.commonDir, target.path)
-    if (repoId !== intent.repoId
-      || worktreeId !== intent.worktreeId
-      || target.branch !== intent.branch
-      || target.head !== intent.head) {
-      fail('operation-conflict', 'bound removal target changed while its outcome was uncertain')
-    }
-    if (target === topology.worktrees[0]) fail('operation-conflict', 'bound linked worktree became the main checkout')
-    if (target.locked) fail('worktree-locked', 'locked worktrees cannot be removed')
+    // One shared pure comparison; this replay keeps its own code/message map.
+    const boundDiff = this.boundTargetDiff(topology, target, intent)
+    if (boundDiff === 'main') fail('operation-conflict', 'bound linked worktree became the main checkout')
+    if (boundDiff === 'locked') fail('worktree-locked', 'locked worktrees cannot be removed')
+    if (boundDiff !== null) fail('operation-conflict', 'bound removal target changed while its outcome was uncertain')
 
     if (input.workspaceId === undefined) {
       // UNREGISTERED replay: no workspace — skip the registry/workspace
@@ -1185,19 +1203,15 @@ export class GitWorktreeCore {
       await this.attemptBranchDelete(operation, intent, finalTopology.mainPath)
       return this.removeResult(operationIdValue, intent, replayed)
     }
-    if (finalTarget === finalTopology.worktrees[0]
-      || finalTarget.locked
-      || finalTarget.missing !== true
-      || opaqueId('worktree', finalTopology.commonDir, finalTarget.path) !== intent.worktreeId
-      || finalTarget.branch !== intent.branch
-      || finalTarget.head !== intent.head) {
-      if (finalTarget.missing !== true) {
-        // The directory REAPPEARED (moved back / restored): the record is a
-        // live worktree again, so the record-only cleanup no longer applies —
-        // and nothing was mutated. Deterministic refusal: refresh and retry
-        // the ordinary removal instead (never delete a restored tree).
-        fail('worktree-invalid', 'the missing worktree directory reappeared; refresh and retry')
-      }
+    if (finalTarget.missing !== true) {
+      // The directory REAPPEARED (moved back / restored): the record is a
+      // live worktree again, so the record-only cleanup no longer applies —
+      // and nothing was mutated. Deterministic refusal: refresh and retry
+      // the ordinary removal instead (never delete a restored tree).
+      fail('worktree-invalid', 'the missing worktree directory reappeared; refresh and retry')
+    }
+    const boundDiff = this.boundTargetDiff(finalTopology, finalTarget, intent)
+    if (boundDiff !== null) {
       fail('operation-conflict', 'missing worktree record changed immediately before removal')
     }
     operation.attemptedRemove = true
@@ -1259,11 +1273,8 @@ export class GitWorktreeCore {
       await this.attemptBranchDelete(operation, intent, finalTopology.mainPath)
       return this.removeResult(operationIdValue, intent, true)
     }
-    if (finalTarget === finalTopology.worktrees[0]
-      || finalTarget.locked
-      || opaqueId('worktree', finalTopology.commonDir, finalTarget.path) !== intent.worktreeId
-      || finalTarget.branch !== intent.branch
-      || finalTarget.head !== intent.head) {
+    const boundDiff = this.boundTargetDiff(finalTopology, finalTarget, intent)
+    if (boundDiff !== null) {
       fail('operation-conflict', 'removal target changed immediately before mutation')
     }
     // The final pre-mutation re-read may resolve the target row MISSING (its

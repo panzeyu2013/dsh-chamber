@@ -406,7 +406,11 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
       // （出口判据正是"不依赖 gateway 版本"）。
       verdict: ready ? 'ok' : 'degraded',
       degradation: ready ? null : 'unavailable',
-      mode: ready ? 'sse' : 'poll',
+      // 诚实修法：本观察者全程走 WS mux + unary，从不轮询——'sse'/'poll' 都是
+      // gateway 平面的词，在这里是谎报。契约本就允许 null（SessionFactsMode | null），
+      // 当前也没有消费者读 .mode；若要新增 'ws' 需同步 gateway 镜像三处白名单，
+      // 收益为 0（2026-12 审计 §6.1.3）。
+      mode: null,
       hostState: ready ? 'ready' : 'unknown',
       serviceable: ready,
       stale: !ready,

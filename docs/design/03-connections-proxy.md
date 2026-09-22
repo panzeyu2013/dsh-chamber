@@ -1,6 +1,6 @@
 # 03 · 连接模型与每实例通用反代（v1 定稿）
 
-> **状态：现行（连接模型与每实例反代，2026-09 起为连接模型 v2）**——**连接模型**（本地 =
+> **连接模型与每实例反代（连接模型 v2）**——**连接模型**（本地 =
 > 控制面 catalog 单行；远程 = 桌面主进程注册表）+ **每实例通用反代** `/api/i/<id>/*`
 > （HTTP/WS/SSE 全量透传）；未完成门禁见 `docs/progress/STATUS.md`。**远程连接模型以
 > `17-server-side-gateway.md` 为权威**：kind（dsh|gateway）× transport（ssh|http）× 认证 ×
@@ -246,7 +246,7 @@ WS   /api/i/<id>/api/remote.mux    → 实例 WS  /api/remote.mux
   请求体分片空闲超过 30s → 408 并取消底层请求 iterator，不能用慢速上传长期占用代理槽位。
 - **请求头收敛**：剥离 cookie、authorization、proxy authentication、客户端 `content-length`
   与 hop-by-hop framing；代理完成有界缓冲后，仅按实际接收字节重建 `content-length`。
-  **压缩协商边界（2026-12，修订原「压缩协商不跨代理」）**：请求侧只对两类必须 identity 的请求
+  **压缩协商边界（修订原「压缩协商不跨代理」）**：请求侧只对两类必须 identity 的请求
   剥离 `accept-encoding` —— HTML 文档导航（`proxy-forward.ts` `isHtmlDocumentNavigation`；S0 注入
   前提）与 `Accept: text/event-stream` 的 SSE 请求（`acceptsEventStream`；传输层保险），判定入口
   `requiresIdentityUpstreamEncoding`，取舍见设计 17 §8；其余请求把协商交给上游 gzip 中间件
@@ -268,8 +268,8 @@ WS   /api/i/<id>/api/remote.mux    → 实例 WS  /api/remote.mux
   收敛）**带外交付**，HTTP 响应只是完成回执——45s 窗等于替仍在等待的客户端伪造断开并取消合法
   宿主工作（实测：~62.7 万 token 会话的手动 `/compact` 在 45 001 ms 被代理切断，宿主记
   `compaction/end {error: "DeepSeek request aborted by caller"}`）。结束条件由真实活性驱动：客户端
-  断连 abort 上游（res close）；宿主 socket 死亡显式收尾为 502（health/reaper 是实例级机制，不负责
-  单请求收尾）；wedged-but-alive handler 占一个有界请求槽直到保险丝或客户端断开。豁免名单刻意狭窄
+  断连 abort 上游（res close）；宿主 socket 死亡显式终结为 502（health/reaper 是实例级机制，不负责
+  单请求终结）；wedged-but-alive handler 占一个有界请求槽直到保险丝或客户端断开。豁免名单刻意狭窄
   （POST + 精确路径、扩展须符合同一契约——git worktree 域宿主 mutation 有 30s 硬上限，明确不入列）；
   豁免命中与保险丝触发均有独立计数器（`longRpcRequests`/`longRpcTimeouts`，兼作名单活性探针）。任意
   长命令的治本方案是上游把 `commands.execute` 改为受理即回、结果经会话事件流交付（宿主非 chamber

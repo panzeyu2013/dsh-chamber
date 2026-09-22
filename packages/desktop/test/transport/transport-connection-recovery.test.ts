@@ -433,8 +433,9 @@ test('verifyDshEndpoint: an ok:true envelope with a non-boolean value is termina
 test('verifyDshEndpoint flags an old-version dsh destination (positive legacy signature)', async t => {
   // The identity method call (session/canOpenWorkspacePath) answers 404 —
   // the destination is an old-version dsh (dsh < 0.1.2-rc.1) — but the
-  // signature re-probe's LEGACY session/list arm answers a valid
-  // server-response envelope: positive dsh evidence, so the detail tells the
+  // signature re-probe's LEGACY session/list arm answers the canonical
+  // legacy payload shape (a plain record carrying an items array, the
+  // single-sourced predicate): positive dsh evidence, so the detail tells the
   // user the destination IS dsh ("check or upgrade") instead of claiming
   // "not dsh".
   let calls = 0
@@ -443,7 +444,7 @@ test('verifyDshEndpoint flags an old-version dsh destination (positive legacy si
     if (req.method === 'POST' && req.url === '/api/session/list' && calls > 1) {
       readBody(req, body => {
         const envelope = JSON.parse(body) as { rpcId?: unknown }
-        jsonReply(res, { type: 'server-response', rpcId: envelope.rpcId, result: { ok: true, value: {} } })
+        jsonReply(res, { type: 'server-response', rpcId: envelope.rpcId, result: { ok: true, value: { items: [] } } })
       })
     } else {
       res.writeHead(404)

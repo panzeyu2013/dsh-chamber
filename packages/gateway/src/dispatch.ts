@@ -352,6 +352,10 @@ export function createGatewayDispatch(
   warmupDeps: WarmupDeps | null = null,
 ): GatewayDispatch {
   const warmup = warmupDeps === null ? null : createWarmupController(warmupDeps)
+  /** warn-once latch for an unexpected warm-up links() rejection (see the
+   *  login-page build): links() fails soft by contract, so an exception here is
+   *  a contract break that must be visible exactly once, never per render. */
+  let warmupLinksFailureWarned = false
   // Every request/socket admitted by one credential generation stays tracked
   // until its downstream leg ends. Rotation closes the old generation at the
   // dispatch boundary, which covers gateway-proxy, the chamber surface and
@@ -807,7 +811,17 @@ export function createGatewayDispatch(
       // body to carry the links, so no grant is minted either).
       const warmupLinks: WarmupLinks = warmup === null || req.method !== 'GET'
         ? { urls: [] }
-        : await warmup.links({ clientAddress: decision.clientAddress, secure: decision.secure }).catch(() => ({ urls: [] }))
+        : await warmup.links({ clientAddress: decision.clientAddress, secure: decision.secure }).catch((error: unknown) => {
+            // links() fails soft (warmup.ts owns discovery logging), so this is
+            // a defensive catch — never delete it (the login page must render
+            // without links), but never swallow it silently either (2026-12
+            // review of §3.3): one warn line records the contract break.
+            if (!warmupLinksFailureWarned) {
+              warmupLinksFailureWarned = true
+              logger.warn(`gateway dispatch: warm-up links unavailable; login page renders without pre-warm links: ${String(error)}`)
+            }
+            return { urls: [] }
+          })
       if (warmupLinks.cookie !== undefined && warmupLinks.cookie !== '') res.setHeader('set-cookie', warmupLinks.cookie)
       res.writeHead(200, LOGIN_HTML_HEADERS)
       res.end(req.method === 'HEAD' ? undefined : renderLoginPage({ lang, secure: decision.secure, error: expired ? 'expired' : null, desktop: loginDesktop, warmupUrls: warmupLinks.urls }))

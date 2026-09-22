@@ -111,11 +111,6 @@ export function getApps(options: OpenInAppProbeOptions = {}): Promise<OpenInApp[
   return appsPromise
 }
 
-/** True once the preload bridge exposes the openIn surface (desktop only). */
-export function openInBridgeReady(): boolean {
-  return (window as unknown as OpenInBridgeSurface).dshChamber?.openIn !== undefined
-}
-
 /** Force a fresh probe bypassing the memo (menu-open/window-focus refresh): a mid-session
  *  app install/uninstall becomes visible without a page reload. The probe
  *  epoch is bumped so a still-in-flight older probe cannot overwrite the
@@ -148,17 +143,4 @@ export function subscribeOpenIn(listener: () => void): () => void {
  * catches apps installed or removed while Chamber was in the background. */
 function refreshAppsOnFocus(): void {
   void refreshApps()
-}
-
-/** Test-only: reset the shared probe state (list, in-flight promise, epoch
- *  and listeners) for isolation — same pattern as the sidebar's
- *  `__resetViewPrefsForTests`. */
-export function __resetOpenInForTests(): void {
-  if (listeners.size > 0 && typeof window !== 'undefined' && typeof window.removeEventListener === 'function') {
-    window.removeEventListener('focus', refreshAppsOnFocus)
-  }
-  apps = null
-  appsPromise = null
-  probeEpoch = 0
-  listeners.clear()
 }

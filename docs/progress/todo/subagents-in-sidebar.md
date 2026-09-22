@@ -1,6 +1,6 @@
 # todo · session 的 subagents 在侧边栏中的显示
 
-> 状态：想法（未设计、未排期）。记录于2026-08-16。
+> 未设计、未排期。
 
 ## 动机
 
@@ -9,9 +9,9 @@
 ## 现状对照
 
 - 侧边栏 = 每来源分组 + workspace/未分组桶 + session行（06定稿）；行尾状态槽表达running/completed/pending。
-- 计数/状态解读已覆盖：06 §4.5（2026-08）已实现 `runningSubagents` 计数徽标（会话行尾「N个子代理运行中」圆环 + tooltip，经运行时事实通道上报；逐父会话计数经vendor `indexSubagentDescendants` 路由）。
+- 计数/状态解读由 06 §4.5 的 `runningSubagents` 计数徽标承担（会话行尾「N个子代理运行中」圆环 + tooltip，经运行时事实通道上报；逐父会话计数经vendor `indexSubagentDescendants` 路由）。
 - 剩余开放（06未做）：会话行下嵌套子层级（subagent行缩进显示其状态/会话）、层级折叠/截断、跨会话总览视图。
-- 宿主覆盖（2026审计，原"需调研"已闭合）：逐子代理的可浏览行级列表面仍不存在（未发现其他命名暴露逐项事实的wire/store/UI）；形态评估（chamber插件vs不做）按08先例留待设计。
+- 宿主覆盖（原"需调研"项）：逐子代理的可浏览行级列表面仍不存在（未发现其他命名暴露逐项事实的wire/store/UI）；形态评估（chamber插件vs不做）按08先例留待设计。
 
 ## 开放问题（设计时再定）
 

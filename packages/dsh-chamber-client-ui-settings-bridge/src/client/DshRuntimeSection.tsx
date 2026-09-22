@@ -1261,6 +1261,12 @@ function GatewayRuntimeSection({
         </div>
       )}
 
+      {remoteVersions?.removableVersionsError != null && !checkingVersions && (
+        <p className={css.generalError} role="alert">
+          {t('dshRuntimeCleanupCandidatesUnavailable', { error: remoteVersions.removableVersionsError })}
+        </p>
+      )}
+
       {remoteStatus.failure !== null && (
         <p className={css.generalError} role="alert">
           {t('dshRuntimeFailureRecord', {
@@ -1268,6 +1274,15 @@ function GatewayRuntimeSection({
             at: formatTimestamp(remoteStatus.failure.at),
             reason: remoteStatus.failure.reason,
           })}
+        </p>
+      )}
+
+      {/* B2 残余 (c) / D5b 远端分支：台账读失败（EACCES/EIO 等）时 failure
+          行为 null，这条独立错误行说明「空/不完整」不是「无失败」；与 local
+          分支同口径（state?.failureError），复用同一 key。 */}
+      {remoteStatus.failureError != null && (
+        <p className={css.generalError} role="alert">
+          {t('dshRuntimeFailureLedgerUnreadable', { error: remoteStatus.failureError })}
         </p>
       )}
 
@@ -2282,6 +2297,14 @@ export function DshRuntimeSection({
             {t('dshRuntimeClearFailure')}
           </Button>
         </div>
+      )}
+
+      {/* B2 残余 (c)：台账读失败（EACCES/EIO 等）时 failure 行为 null，
+          这条独立错误行说明「空/不完整」不是「无失败」。 */}
+      {state?.failureError != null && (
+        <p className={css.generalError} role="alert">
+          {t('dshRuntimeFailureLedgerUnreadable', { error: state.failureError })}
+        </p>
       )}
 
       <h4 className={clsx(css.generalGroupTitle, css.generalGroupTitleBlock)}>{t('dshRuntimeGroupSource')}</h4>

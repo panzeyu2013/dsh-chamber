@@ -37,7 +37,9 @@ export const STREAM_FORENSICS_REQUEST_EVENT = 'dsh-chamber:stream-forensics-requ
 /** One retained entry delivered to a registered probe (detail: { instanceId, entry }). */
 export const STREAM_FORENSICS_SNAPSHOT_EVENT = 'dsh-chamber:stream-forensics-snapshot'
 
-/** Lifecycle transitions the fork can attribute without renderer tooling. */
+/** Lifecycle transitions the fork can attribute without renderer tooling.
+ *  `carrier-forensic` carries the shared carrier reducer's own bounded evidence
+ *  (carrier-closed / stall-below-threshold / episode-claim-released, 1.4). */
 export type StreamForensicsKind =
   | 'socket-lost'
   | 'socket-reconnect'
@@ -46,6 +48,7 @@ export type StreamForensicsKind =
   | 'socket-silent'
   | 'opening-timeout'
   | 'opening-stall-escalation'
+  | 'carrier-forensic'
   | 'generation-ready'
   | 'generation-lost'
   /** The reducer authorized a physical replacement (P5: the effect trace, not just the callback). */

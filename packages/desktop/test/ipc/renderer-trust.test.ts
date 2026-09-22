@@ -166,14 +166,17 @@ test('committed settings, registry and held-resume pushes use the non-throwing s
   // pushSettingsChanged, the held-resume push and the updater state push live in
   // shell-core.installIpcHandlers (their send leaves go through HostEdges rendererPush with the
   // non-throwing attemptCommittedRegistryPush wrapper); the assertions read shell-core.ts. The
-  // remaining push anchors (instances / status) still live in main.ts.
+  // registry/status push anchors live inline in main.ts, where the shared send boundary and the
+  // window-proof race discipline are asserted directly (the 4.4b extraction is not adopted).
   const core = readFileSync(new URL('../../shell-core.ts', import.meta.url), 'utf8')
     + readFileSync(new URL('../../shell-ipc-update.ts', import.meta.url), 'utf8')
   const main = readFileSync(new URL('../../main.ts', import.meta.url), 'utf8')
   assert.match(core, /function pushSettingsChanged\(\): void \{[\s\S]*?attemptCommittedRegistryPush\(\(\) => \{/)
   assert.match(core, /function pushHeldSystemResume[\s\S]*?attemptCommittedRegistryPush\(\(\) => \{/)
-  assert.match(main, /IPC_CHANNELS\.SSH_INSTANCES_CHANGED[\s\S]*?return projectedSaved;/)
-  assert.match(main, /const statusWindow = mainWindow;[\s\S]*?attemptCommittedRegistryPush\(\(\) => \{[\s\S]*?IPC_CHANNELS\.SSH_STATUS_CHANGED/)
+  // The registry/status pushes are asserted at their inline committed-push sites:
+  // captured window + identity/destroyed re-proof inside the non-throwing boundary.
+  assert.match(main, /const registryWindow = mainWindow[\s\S]*?attemptCommittedRegistryPush\(\(\) => \{[\s\S]*?registryWindow\.isDestroyed\(\)[\s\S]*?IPC_CHANNELS\.SSH_INSTANCES_CHANGED/)
+  assert.match(main, /const statusWindow = mainWindow[\s\S]*?attemptCommittedRegistryPush\(\(\) => \{[\s\S]*?statusWindow\.isDestroyed\(\)[\s\S]*?IPC_CHANNELS\.SSH_STATUS_CHANGED/)
   assert.match(core, /updater\.subscribe\(\(updateState\) => \{[\s\S]*?attemptCommittedRegistryPush\(\(\) => \{[\s\S]*?IPC_CHANNELS\.UPDATE_STATE_CHANGED/)
 })
 

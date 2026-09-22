@@ -53,6 +53,7 @@ const GROUPS = {
     'test/runtime/runtime-restart-exhausted.test.ts',
     'test/runtime/runtime-route-gates.test.ts',
     'test/runtime/runtime-start-lease-invalidation.test.ts',
+    'test/runtime/runtime-metadata-fail-closed.test.ts',
   ],
   // plugins: the managed-profile plugin pipeline - journal, executor, tgz scan, orchestrator, spec lockstep.
   plugins: [

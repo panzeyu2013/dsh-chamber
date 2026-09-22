@@ -28,7 +28,6 @@ import {
   readSync,
   readdirSync,
   realpathSync,
-  renameSync,
   rmSync,
   symlinkSync,
   writeSync,
@@ -67,6 +66,7 @@ import {
   syncPrivateDirectoryNoFollow as fsyncRealDirectory,
   syncPrivateFileNoFollow as fsyncRegularFileNoFollow,
 } from './private-fs.ts'
+import { renameWithWindowsRetrySync } from './rename-retry.ts'
 
 const PRIVATE_DIR_MODE = 0o700
 const PRIVATE_FILE_MODE = 0o600
@@ -721,7 +721,12 @@ function defaultCopyFile(
 
 const DEFAULT_OPERATIONS: RuntimeMetadataRecoveryOperations = {
   copyFile: defaultCopyFile,
-  renamePath: (source, destination) => renameSync(source, destination),
+  // All four recovery rename sites (stash publish, evidence rotation, marker
+  // publish, marker-rescue commit) publish through this seam: the synchronous
+  // bounded-retry variant absorbs a transient Windows third-party handle while
+  // keeping the sync RuntimeMetadataRecoveryOperations contract byte-identical
+  // off win32.
+  renamePath: (source, destination) => renameWithWindowsRetrySync(source, destination),
   now: () => new Date(),
   randomHex: () => randomBytes(8).toString('hex'),
   afterCheckpoint: () => undefined,
@@ -881,8 +886,11 @@ export function detectRuntimeMetadataHealth(baseDir: string, shellVersion?: stri
     : readActivationJournalState(baseDir)
   const corruptEvidence = corruptEvidenceBasenames(runtimeDir)
   const recovery = readMetadataRecoveryState(baseDir)
-  const selectionCorrupt = current.kind === 'corrupt'
-    || override.kind === 'corrupt'
+  // An unreadable (EACCES/EIO) selection leaf is precisely as recoverable-
+  // escape-dependent as a corrupt one: it must offer selection-corrupt, never
+  // fall through to 'healthy'.
+  const selectionCorrupt = current.kind === 'corrupt' || current.kind === 'unknown'
+    || override.kind === 'corrupt' || override.kind === 'unknown'
     || activationJournal.kind === 'corrupt'
     || corruptEvidence.length > 0
     || detectSemanticMismatch(baseDir, shellVersion, current, override, activationJournal)

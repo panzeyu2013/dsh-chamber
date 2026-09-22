@@ -19,6 +19,7 @@ import {
   SETTINGS_FILE_MAX_BYTES,
   runRuntimeActivationProbes,
   type RuntimeProbeCall,
+  type RuntimeProbeWarn,
 } from '../../src/runtime-probes.ts'
 import { sanitizeErrorText } from '../../src/sanitize-error.ts'
 import type { NoFollowConstantsLike } from '../../src/private-fs.ts'
@@ -39,6 +40,10 @@ interface Fixture {
   settingsPath: string
   calls: Array<{ method: string; payload: unknown }>
 }
+
+/** The now-REQUIRED warn sink, made explicit: these cases exercise probe
+ *  shapes, not warnings; the fallback-warning timing has its own case below. */
+const NO_WARN: RuntimeProbeWarn = () => {}
 
 function fixture(): Fixture {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-runtime-probes-'))
@@ -66,6 +71,7 @@ function probes(
     baseUrl: 'http://127.0.0.1:17510',
     dshHome: fx.dshHome,
     call,
+    warn: NO_WARN,
     ...overrides,
   })
 }
@@ -359,6 +365,68 @@ test('identity 404 legacy session/list fallback: success, double-404, malformed,
   }
 })
 
+test('legacyShape seam owns the legacy value check; the default stays the item-object check', async () => {
+  const fx = fixture()
+  try {
+    // An ok:true legacy envelope WITHOUT the items list: the default predicate
+    // (pre-migration check) calls it damaged, and a host-injected predicate
+    // decides instead — the seam, not an edit of this core.
+    const legacyCall: RuntimeProbeCall = async (_base, method) => {
+      if (method === 'commands/execute') throw missingSessionError();
+      if (method === 'session/canOpenWorkspacePath') {
+        const error = new Error('not found') as Error & { status?: number };
+        error.status = 404;
+        throw error;
+      }
+      if (method === 'session/list') return { result: { value: { ok: true } } };
+      return { result: { value: successfulValue(method) } };
+    };
+
+    const defaultWarnings: string[] = [];
+    const byDefault = await probes(fx, legacyCall, { warn: line => defaultWarnings.push(line) });
+    const strictSession = byDefault.find(result => result.name === 'session/canOpenWorkspacePath');
+    assert.equal(strictSession?.ok, false, 'the default predicate keeps rejecting a list-less legacy answer');
+    assert.match(strictSession?.error ?? '', /malformed session list/);
+    assert.equal(defaultWarnings.length, 0, 'a rejected legacy value never warns');
+
+    const seamWarnings: string[] = [];
+    const injected = await probes(fx, legacyCall, {
+      warn: line => seamWarnings.push(line),
+      legacyShape: value => typeof value === 'object' && value !== null,
+    });
+    assert.equal(injected.find(result => result.name === 'session/canOpenWorkspacePath')?.ok, true,
+      'the injected predicate decides the legacy shape');
+    assert.equal(seamWarnings.length, 1, 'a successful legacy fallback still warns through the mandatory sink');
+    assert.match(seamWarnings[0], /session\/list/);
+  } finally {
+    rmSync(fx.root, { recursive: true, force: true })
+  }
+})
+
+test('the default legacy predicate rejects an array that merely owns an items property', async () => {
+  const fx = fixture()
+  try {
+    const legacyCall: RuntimeProbeCall = async (_base, method) => {
+      if (method === 'commands/execute') throw missingSessionError();
+      if (method === 'session/canOpenWorkspacePath') {
+        const error = new Error('not found') as Error & { status?: number };
+        error.status = 404;
+        throw error;
+      }
+      // An ARRAY with an own items property: the canonical predicate (and now
+      // this default, which mirrors it) must reject it, not read it as a row.
+      if (method === 'session/list') return { result: { value: [{ items: [{ sessionId: 's1' }] }] } };
+      return { result: { value: successfulValue(method) } };
+    };
+    const results = await probes(fx, legacyCall)
+    const strictSession = results.find(result => result.name === 'session/canOpenWorkspacePath')
+    assert.equal(strictSession?.ok, false, 'an array is never a legacy session list')
+    assert.match(strictSession?.error ?? '', /malformed session list/)
+  } finally {
+    rmSync(fx.root, { recursive: true, force: true })
+  }
+})
+
 test('an empty hostDomainNames list returns the reduced set and never invokes the chamber host domains (2026-12 shape)', async () => {
   const fx = fixture()
   try {
@@ -389,7 +457,7 @@ test('a malformed identity value and unreadable settings fail explicit probes', 
       if (method === 'session/canOpenWorkspacePath') return { result: { value: {} } }
       return { result: { value: successfulValue(method) } }
     }
-    const results = await runRuntimeActivationProbes({ baseUrl: 'http://127.0.0.1:1', dshHome: fx.dshHome, call })
+    const results = await runRuntimeActivationProbes({ baseUrl: 'http://127.0.0.1:1', dshHome: fx.dshHome, call, warn: NO_WARN })
     const failed = new Set(results.filter(result => !result.ok).map(result => result.name))
     assert.ok(failed.has('session/canOpenWorkspacePath'))
     assert.ok(failed.has('data.settings'))
@@ -412,7 +480,7 @@ test('commands and git probes accept only their statically side-effect-free miss
       return { result: { value: successfulValue(method) } }
     }
     const results = await runRuntimeActivationProbes({
-      baseUrl: 'http://127.0.0.1:1', dshHome: fx.dshHome, call,
+      baseUrl: 'http://127.0.0.1:1', dshHome: fx.dshHome, call, warn: NO_WARN,
     })
     assert.equal(results.find(result => result.name === 'commands/execute')?.ok, false)
     assert.equal(results.find(result => result.name === 'gitWorktree/previewCreate')?.ok, false)
@@ -426,7 +494,7 @@ test('commands and git probes accept only their statically side-effect-free miss
       return { result: { value: successfulValue(method) } }
     }
     const wrongCodeResults = await runRuntimeActivationProbes({
-      baseUrl: 'http://127.0.0.1:1', dshHome: fx.dshHome, call: wrongBusinessCode,
+      baseUrl: 'http://127.0.0.1:1', dshHome: fx.dshHome, call: wrongBusinessCode, warn: NO_WARN,
     })
     assert.equal(wrongCodeResults.find(result => result.name === 'commands/execute')?.ok, false)
   } finally {
@@ -449,7 +517,7 @@ test('archiveCleanup/probe accepts only a well-formed domain carrier (design 24 
       }
       return { result: { value: successfulValue(method) } }
     }
-    const businessResults = await runRuntimeActivationProbes({ baseUrl: 'http://127.0.0.1:1', dshHome: fx.dshHome, call: businessCall })
+    const businessResults = await runRuntimeActivationProbes({ baseUrl: 'http://127.0.0.1:1', dshHome: fx.dshHome, call: businessCall, warn: NO_WARN })
     assert.equal(businessResults.find(result => result.name === 'archiveCleanup/probe')?.ok, false)
     assert.match(
       businessResults.find(result => result.name === 'archiveCleanup/probe')?.error ?? '',
@@ -466,7 +534,7 @@ test('archiveCleanup/probe accepts only a well-formed domain carrier (design 24 
       }
       return { result: { value: successfulValue(method) } }
     }
-    const malformedResults = await runRuntimeActivationProbes({ baseUrl: 'http://127.0.0.1:1', dshHome: fx.dshHome, call: malformedCall })
+    const malformedResults = await runRuntimeActivationProbes({ baseUrl: 'http://127.0.0.1:1', dshHome: fx.dshHome, call: malformedCall, warn: NO_WARN })
     assert.equal(malformedResults.find(result => result.name === 'archiveCleanup/probe')?.ok, false)
     assert.match(
       malformedResults.find(result => result.name === 'archiveCleanup/probe')?.error ?? '',
@@ -483,7 +551,7 @@ test('settings.yaml size is rejected from fstat before any unbounded read', asyn
     // Sparse growth avoids allocating the attacker-controlled file size in the test too.
     truncateSync(fx.settingsPath, SETTINGS_FILE_MAX_BYTES + 1)
     const results = await runRuntimeActivationProbes({
-      baseUrl: 'http://127.0.0.1:1', dshHome: fx.dshHome, call: successfulCall(fx),
+      baseUrl: 'http://127.0.0.1:1', dshHome: fx.dshHome, call: successfulCall(fx), warn: NO_WARN,
     })
     const settings = results.find(result => result.name === 'data.settings')
     assert.equal(settings?.ok, false)
@@ -506,7 +574,7 @@ test('settings.yaml rejects directories and symlinks instead of following non-re
         symlinkSync(target, fx.settingsPath)
       }
       const results = await runRuntimeActivationProbes({
-        baseUrl: 'http://127.0.0.1:1', dshHome: fx.dshHome, call: successfulCall(fx),
+        baseUrl: 'http://127.0.0.1:1', dshHome: fx.dshHome, call: successfulCall(fx), warn: NO_WARN,
       })
       assert.equal(results.find(result => result.name === 'data.settings')?.ok, false, kind)
     } finally {
@@ -526,6 +594,7 @@ test('settings.yaml symlink is refused through the win32 no-O_NOFOLLOW fallback 
       baseUrl: 'http://127.0.0.1:1',
       dshHome: fx.dshHome,
       call: successfulCall(fx),
+      warn: NO_WARN,
       settingsNoFollowConstants: FALLBACK_CONSTANTS,
     })
     const settings = results.find(result => result.name === 'data.settings')
@@ -543,6 +612,7 @@ test('the win32 no-O_NOFOLLOW fallback branch still reads a regular settings.yam
       baseUrl: 'http://127.0.0.1:1',
       dshHome: fx.dshHome,
       call: successfulCall(fx),
+      warn: NO_WARN,
       settingsNoFollowConstants: FALLBACK_CONSTANTS,
     })
     assert.equal(results.find(result => result.name === 'data.settings')?.ok, true)
@@ -561,6 +631,7 @@ test('probe layer enforces per-RPC and whole-window timeouts when call ignores i
       baseUrl: 'http://127.0.0.1:1',
       dshHome: fx.dshHome,
       call: never,
+      warn: NO_WARN,
       windowMs: 80,
       rpcTimeoutMs: 10,
     })
@@ -623,6 +694,7 @@ test('a pre-aborted whole-window signal prevents every RPC invocation', async ()
         calls += 1
         return { result: { value: {} } }
       },
+      warn: NO_WARN,
     })
     assert.equal(calls, 0)
     assert.ok(results.every(result => !result.ok))
@@ -642,7 +714,7 @@ test('settings errors are path-redacted and projected error text is bounded', as
       return { result: { value: successfulValue(method) } }
     }
     const results = await runRuntimeActivationProbes({
-      baseUrl: 'http://127.0.0.1:1', dshHome: fx.dshHome, call,
+      baseUrl: 'http://127.0.0.1:1', dshHome: fx.dshHome, call, warn: NO_WARN,
     })
     const hostError = results.find(result => result.name === 'session/canOpenWorkspacePath')?.error ?? ''
     const settingsError = results.find(result => result.name === 'data.settings')?.error ?? ''
@@ -660,10 +732,10 @@ test('timeout options reject fractional and timer-overflow values', async () => 
   const fx = fixture()
   try {
     await assert.rejects(runRuntimeActivationProbes({
-      baseUrl: 'http://127.0.0.1:1', dshHome: fx.dshHome, call: successfulCall(fx), windowMs: 1.5,
+      baseUrl: 'http://127.0.0.1:1', dshHome: fx.dshHome, call: successfulCall(fx), warn: NO_WARN, windowMs: 1.5,
     }), /timer-safe integer/)
     await assert.rejects(runRuntimeActivationProbes({
-      baseUrl: 'http://127.0.0.1:1', dshHome: fx.dshHome, call: successfulCall(fx), rpcTimeoutMs: 2_147_483_648,
+      baseUrl: 'http://127.0.0.1:1', dshHome: fx.dshHome, call: successfulCall(fx), warn: NO_WARN, rpcTimeoutMs: 2_147_483_648,
     }), /timer-safe integer/)
   } finally {
     rmSync(fx.root, { recursive: true, force: true })

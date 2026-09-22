@@ -140,3 +140,17 @@ test('the fork reports the transitions the investigation needed', () => {
   assert.match(service, /new RemoteStreamMuxClient\(basePath, forensics\)/u)
   assert.match(service, /unsubscribeForensics\(\)/u, 'the generation subscription must be released on dispose')
 })
+
+
+test('a carrier-forensic fact is counted, bounded and attributed like every other kind', () => {
+  const facts: StreamForensicsFact[] = []
+  const report = createStreamForensicsReporter({
+    now: () => 7,
+    dispatch: (fact) => { facts.push(fact) },
+  })
+  report('carrier-forensic', 'carrier-closed: 1700000000000')
+  assert.equal(facts.length, 1)
+  assert.equal(facts[0]?.kind, 'carrier-forensic')
+  assert.equal(facts[0]?.kindCount, 1)
+  assert.equal(facts[0]?.cause, 'carrier-closed: 1700000000000')
+})

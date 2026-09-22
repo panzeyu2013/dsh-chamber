@@ -62,7 +62,17 @@ export const api = {
     /** POST /api/connections {kind:'local'} → {connection, spawned}（幂等启动） */
     createLocal: async (): Promise<ConnectionSummary> => {
       const body = await post<{ connection?: ConnectionRowWire }>('/api/connections', { kind: 'local' })
-      return toConnectionSummary(body?.connection ?? { id: 'local', status: 'starting' })
+      const row = body?.connection
+      // 契约破缺（2xx 但没有连接行）绝不折成伪造的 {id:'local', status:'starting'}：
+      // 那让调用方以为本地实例已在启动，真实的契约破缺被静默吞掉。按本文件既有构造
+      // 方式抛 ApiError（Error + status/body）；status=200 = HTTP 成功但响应体违约。
+      if (row === undefined || row === null) {
+        const error = new Error('connections.createLocal: response carried no connection row') as ApiError
+        error.status = 200
+        error.body = null
+        throw error
+      }
+      return toConnectionSummary(row)
     },
     /** DELETE /api/connections/<id> → {stopped:true}（04 §3.2；本面上只有 local 行） */
     remove: (connectionId: string): Promise<{ stopped: boolean }> =>

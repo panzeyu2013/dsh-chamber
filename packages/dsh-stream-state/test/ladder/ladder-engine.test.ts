@@ -15,6 +15,7 @@ import {
   streamHealthLadder,
   mobileStallLadder,
 } from '../../src/ladder.ts'
+import { LADDER_TABLES } from '../../src/tables.ts'
 import type { Ladder, LadderObservation } from '../../src/ladder.ts'
 
 const LADDER: Ladder = {
@@ -142,36 +143,39 @@ test('exhaustion is reported only after every lever spent its quota', () => {
 })
 
 test('the instantiated ladders keep their owners values', () => {
-  const probe = sessionAuthorityProbeLadder({
-    probeAfterMs: 60000,
-    probeCoalesceMs: 200000,
-    maxProbesPerWindow: 3,
-    probeWindowMs: 600000,
-  })
+  // The factories are fed the shared table itself (never literals), so the tier
+  // mapping is pinned to the single source rather than to a copy.
+  const probe = sessionAuthorityProbeLadder(LADDER_TABLES.authority)
   assert.deepEqual(probe.tiers.map((tier) => tier.name), ['probe'])
   assert.equal(probe.tiers[0]?.requiresStuckEvidence, false, 'a read may fire on time alone')
-  const escalation = sessionAuthorityEscalationLadder({
-    reconnectAfterMs: 190000,
-    reconnectCooldownMs: 300000,
-    maxReconnects: 1,
-    noticeAfterMs: 310000,
-    probeWindowMs: 600000,
-  })
+  assert.equal(probe.tiers[0]?.afterMs, LADDER_TABLES.authority.probeAfterMs)
+  assert.equal(probe.tiers[0]?.cooldownMs, LADDER_TABLES.authority.probeCoalesceMs)
+  assert.equal(probe.tiers[0]?.quota, LADDER_TABLES.authority.maxProbesPerWindow)
+  assert.equal(probe.quotaWindowMs, LADDER_TABLES.authority.probeWindowMs)
+  const escalation = sessionAuthorityEscalationLadder(LADDER_TABLES.authority)
   assert.deepEqual(escalation.tiers.map((tier) => tier.name), ['reconnect', 'notice'])
   assert.equal(escalation.tiers[0]?.requiresStuckEvidence, true, 'reconnect needs a failed probe, not silence')
-  assert.equal(escalation.tiers[0]?.quota, 1)
+  assert.equal(escalation.tiers[0]?.quota, LADDER_TABLES.authority.maxReconnects)
+  assert.equal(escalation.tiers[0]?.afterMs, LADDER_TABLES.authority.reconnectAfterMs)
+  assert.equal(escalation.tiers[0]?.cooldownMs, LADDER_TABLES.authority.reconnectCooldownMs)
+  assert.equal(escalation.tiers[1]?.afterMs, LADDER_TABLES.authority.noticeAfterMs)
   assert.ok(escalation.tiers[1]!.afterMs > escalation.tiers[0]!.afterMs, 'notice stays behind reconnect')
-  const health = streamHealthLadder({
-    errorGraceMs: 8000,
-    loadingStallMs: 20000,
-    healCooldownMs: 120000,
-    healBudgetWindowMs: 600000,
-    healBudgetMax: 3,
-  })
+  assert.equal(escalation.quotaWindowMs, LADDER_TABLES.authority.probeWindowMs)
+  const health = streamHealthLadder(LADDER_TABLES.streamHealth)
   assert.deepEqual(health.tiers.map((tier) => tier.name), ['heal', 'auto-resync'])
-  assert.equal(health.tiers[0]?.afterMs, 8000)
-  const mobile = mobileStallLadder({ thresholdMs: 45000, cooldownMs: 120000, windowMs: 600000, max: 3 })
+  assert.equal(health.tiers[0]?.afterMs, LADDER_TABLES.streamHealth.errorGraceMs)
+  assert.equal(health.tiers[0]?.cooldownMs, LADDER_TABLES.streamHealth.healCooldownMs)
+  assert.equal(health.tiers[0]?.quota, LADDER_TABLES.streamHealth.healBudgetMax)
+  assert.equal(health.tiers[1]?.afterMs, LADDER_TABLES.streamHealth.loadingStallMs)
+  assert.equal(health.quotaWindowMs, LADDER_TABLES.streamHealth.healBudgetWindowMs)
+  const mobile = mobileStallLadder({
+    thresholdMs: LADDER_TABLES.mobile.thresholdMs,
+    cooldownMs: LADDER_TABLES.mobile.resyncCooldownMs,
+    windowMs: LADDER_TABLES.mobile.resyncWindowMs,
+    max: LADDER_TABLES.mobile.resyncMax,
+  })
   assert.deepEqual(mobile.tiers.map((tier) => tier.name), ['resync'])
-  assert.equal(mobile.tiers[0]?.afterMs, 45000, 'the mobile copy keeps its own (uncalibrated) number for now')
+  assert.equal(mobile.tiers[0]?.afterMs, LADDER_TABLES.mobile.thresholdMs, 'the mobile copy reads the shared table')
+  assert.equal(mobile.quotaWindowMs, LADDER_TABLES.mobile.resyncWindowMs)
   assert.equal(mobile.tiers[0]?.requiresStuckEvidence, true, 'the concrete loading/no-open evidence is the tier gate')
 })
