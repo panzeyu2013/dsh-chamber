@@ -13,15 +13,15 @@
  * markers are read out of the built artifact, staleness fails loudly with the
  * rebuild command, and the check logic is exported so the negative controls can
  * prove the assertion actually fires. Two deliberate differences:
- *   - the artifact is committed, so a MISSING file is a defect (a clean checkout
- *     always has it) and is NOT rebuilt on demand;
+ *   - the artifact is a build output, so a MISSING file after the test preflight (ensure-artifacts
+ *     builds it on a clean checkout) is a defect and the guard does NOT rebuild on demand;
  *   - the guard also pins the host half as scoper-free (the scoper is
  *     browser-half only: dist/index.js is loaded by the cordis host loader and
  *     never runs in a document).
  *
  * Coverage boundary (which artifacts are NOT guarded here, and why):
  *   - packages/desktop/dist/web/assets/chamber-*.js (the desktop page bundle) is
- *     a build output of `pnpm run build:renderer`, not a committed artifact of
+ *     a build output of `pnpm run build:renderer`, not an artifact of
  *     this package; its scoper module face is asserted by
  *     packages/renderer/test/svg-resource/svg-resource-scope.test.ts (the
  *     install-order source lock was retired in the 2026-12 trim) and its built
@@ -59,7 +59,7 @@ import {
 export function assertClientBundleCarriesScoper(file) {
   if (!existsSync(file)) {
     throw new Error(
-      `${file} is missing: the mobile client bundle is a committed artifact — `
+      `${file} is missing: the mobile client bundle is a build-time artifact (ensure-artifacts builds it) — `
       + 'rebuild with `node packages/dsh-chamber-client-ui-mobile/scripts/build.mjs` and commit lib/client.js + lib/client.js.map',
     )
   }
@@ -108,7 +108,7 @@ test('the marker guard fires on a client bundle without the scoper (negative con
     writeFileSync(alien, 'export const apply = () => {}\n')
     assert.throws(() => assertClientBundleCarriesScoper(alien), /is not the client bundle/)
 
-    // Missing file: a committed artifact that vanished is a defect, never a skip.
+    // Missing file: a build-time artifact that vanished after the preflight is a defect, never a skip.
     assert.throws(() => assertClientBundleCarriesScoper(join(dir, 'absent.js')), /is missing/)
   } finally {
     rmSync(dir, { recursive: true, force: true })
@@ -116,7 +116,7 @@ test('the marker guard fires on a client bundle without the scoper (negative con
 })
 
 test('the markers are satisfied by marker text, not by the file path (positive control)', () => {
-  // 两种真实形态都要过：未压缩（mobile committed bundle）与压缩（页面 chunk）。
+  // 两种真实形态都要过：未压缩（mobile build-time bundle）与压缩（页面 chunk）。
   const pretty = [CLIENT_BUNDLE_MARKER, ...SCOPER_LITERAL_MARKERS, 'globalThis.' + SCOPER_CALL_MARKER_NAME + ' = installSvgResourceScope()'].join('\n')
   assert.deepEqual(missingScoperMarkers(pretty), [])
   const minified = [CLIENT_BUNDLE_MARKER, ...SCOPER_LITERAL_MARKERS, 'globalThis.' + SCOPER_CALL_MARKER_NAME + '=Aw()'].join('\n')

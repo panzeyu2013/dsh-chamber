@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/** Bundle @dsh-chamber/dsh-chamber-seed-open-in into its committed dist/index.js (shared bundler: scripts/lib/seed-build.mjs). */
+/** Bundle @dsh-chamber/dsh-chamber-seed-open-in into its build-time dist/index.js (shared bundler: scripts/lib/seed-build.mjs). */
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { buildSeedBundle } from '../../../scripts/lib/seed-build.mjs'

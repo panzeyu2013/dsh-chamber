@@ -36,7 +36,7 @@ const EXTERNALS = [
 ]
 
 // Absolute working dir = this package: esbuild renders source comments in
-// the bundle relative to it, so the committed artifacts are byte-identical
+// the bundle relative to it, so the build-time artifacts are byte-identical
 // regardless of the caller's CWD (the host-package build.mjs carries the same
 // fix; the C8 gate rebuilds from the repo root and byte-compares).
 await build({
