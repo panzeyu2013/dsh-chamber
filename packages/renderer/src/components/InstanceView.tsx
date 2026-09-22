@@ -1,27 +1,24 @@
 /**
- * InstanceView — one dsh shell per instance (design 05 §1: N-ctx).
+ * InstanceView — one dsh shell per instance (design 05 : N-ctx).
  * The container div hosts a full AppWebEntry (independent cordis ctx + full
  * ui-* tree, connected to this instance through the /api/i/<id> proxy via the
  * base-path parameterized connection client). shell.ts installs immutable
  * instance facts into each entry Context; once booted the shell stays mounted
  * and switching is pure CSS hide/show.
- *
- * 保留策略（2026 性能整改，05 §1/§4 偏差）：App 层不再让隐藏壳无限常驻——
+ * 保留策略（2026 性能整改，05 / 偏差）：App 层不再让隐藏壳无限常驻——
  * 超限的隐藏壳由 App 先 disposeInstanceShell 再从 mountedViews 移除，本组件
  * 随之卸载（回收语义与注册表删除一致，aliveRef 的卸载丢弃逻辑同时覆盖两种
  * 回收路径）；重开 = 重新挂载 + 冷 boot + entry 重放。本组件自身从不
  * dispose shell——卸载只发生在 App 已处置之后。
- *
  * Switching is driven by the App layer wrapping the active-view change in a
  * View Transition (view-transition.ts): the previous view is captured as a
  * static snapshot that stays on screen until the incoming view is actually
  * painted — no black frame ever, including the incremental re-layout a hidden
  * shell pays on reveal when its content kept streaming while hidden (the
  * content-visibility render cache was invalidated by those DOM changes).
- *
  * This component owns the per-view loading state: a full-area same-tone veil
- * (`.instance-loading`, design 05 §4) shown while the shell boots. Perf T1
- * (2026-09, D1=A) dropped the layout-mimicking skeleton blocks (rail + sidebar
+ * (`.instance-loading`, design 05 ) shown while the shell boots. Perf T1
+ * () dropped the layout-mimicking skeleton blocks (rail + sidebar
  * placeholders): the real sidebar width is layout-store persisted and
  * user-draggable, so a fixed 280px mock geometry mismatched widened instances
  * and could shift the main-area left edge on settle reveal (CLS on the
@@ -33,8 +30,7 @@
  * use `.instance-pending`: visibility-only hidden, layout kept alive so the
  * vendor shells' measurement / IntersectionObserver machinery works during
  * boot.
- *
- * 2026-12（boot 死区收敛 W1/W2/W4）：遮罩不再是无出口的纯转圈。多来源导航
+ * ）：遮罩不再是无出口的纯转圈。多来源导航
  * （侧栏）在**壳内部**，App 级失败覆盖层又只在已 settle 的失败时出现——于是
  * 未 settle 的 boot 会形成一段没有任何导航的死区（最长由 135s 收割放弃臂
  * 兜底）。本组件因此持有遮罩的三条诚实通道：
@@ -44,7 +40,7 @@
  *  - 重试在途（W4）：如实播报同 id boot 尾的排队上限（`INSTANCE_TAIL_WAIT_CAP_MS`）。
  * 决策全部来自纯模块 `source-readiness.ts`，本组件只做接线与呈现。
  */
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Button } from '@deepseek-ai/dsh-client-ui-primitives/src/Button.tsx'
 import { dismissVisibleRowCard } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
 import {
@@ -55,17 +51,20 @@ import {
 import { runViewTransition } from '../view-transition.ts'
 import { createFrameCoalescer } from '../frame-coalescer.ts'
 import {
-  isTerminalUnreadyPhase, shouldAnnounceRetryQueue, veilShowsActions, veilState,
+  isTerminalUnreadyPhase, shouldAnnounceRetryQueue, VEIL_ACTIONS_AFTER_MS,
 } from '../source-readiness.ts'
+import { decidePresentation } from '@dsh-chamber/dsh-stream-state'
 import {
-  readSessionSurfacePhase, shouldReleaseVeilForSurface, surfaceHoldBoundMs, SESSION_PHASE_ATTRIBUTE,
+  readSessionSurfacePhase, SESSION_PHASE_ATTRIBUTE,
+  SURFACE_ABSENT_FALLBACK_MS,
+  SURFACE_MAX_HOLD_MS,
   SURFACE_SAMPLE_MIN_INTERVAL_MS,
   type SessionSurfacePhase,
 } from '../session-surface.ts'
 import { frameText, type FrameLocale } from '../locales.ts'
 
 /**
- * 单调时基（2026-12 第二轮 review MINOR-2）：持有时钟与相位计窗都只做差值比较，绝不能
+ * 单调时基（）：持有时钟与相位计窗都只做差值比较，绝不能
  * 受墙钟步进影响——NTP 校时/休眠唤醒把 `Date.now()` 拉回 10 分钟，会让"70s 外层保险"
  * 的定时器到期后算出负 elapsed、判定拒绝释放，而一次性定时器不会重臂：那次持有的有界
  * 出口就此静默消失。`performance.now()` 在渲染器里恒在，缺失时退回墙钟（测试/异常环境）。
@@ -93,7 +92,7 @@ interface InstanceViewProps {
   /** 服务器显示名（骨架屏文案）。 */
   label: string
   /**
-   * 框架文案语言（T16 2026-09-11 upstream-alignment）：框架没有 `t` 席位，
+   * 框架文案语言（T16 ）：框架没有 `t` 席位，
    * App 用 locales.ts 的 typed 字典按文档语言解析后传入（本组件只渲染，
    * 不自己读文档语言，保证同一帧内所有 chamber chrome 用同一语言）。
    */
@@ -101,7 +100,7 @@ interface InstanceViewProps {
   /** boot settle 回调（成功或失败均触发）：App 用于预热队列推进。 */
   onSettled?: (instanceId: string) => void
   /**
-   * Shell 状态上报（chamber 2026-08，05 §4 失败呈现修订）：每次 settle 落
+   * Shell 状态上报（chamber ）：每次 settle 落
    * 地后把最终 ShellState 报给 App——失败呈现（失败报告 + 重试 + 服务器
    * 切换）由 App 在活动视图上统一渲染（覆盖层），InstanceView 自身不再
    * 画失败面板。非活动视图的失败在激活时才呈现。
@@ -114,16 +113,18 @@ interface InstanceViewProps {
    */
   retryToken?: number
   /**
-   * 来源就绪门（2026-09-10）：交给实例 shell 的取图重试——实例仍在启动时
+   * 来源就绪门（）：交给实例 shell 的取图重试——实例仍在启动时
    * （冷启动 / 重启跨越窗口）先等它就绪再取客户端插件图，而不是在固定预算用尽后
    * 静默少一片插件（`ui-chat` 会因此永久 PENDING、对话视图不注册）。
    */
   waitForServing?: (instanceId: string) => Promise<boolean>
   /**
-   * 打开意图揭示门（2026-12，design 05 §2.2 修订；真机问题 1）：由 App 用共享纯规则
+   * 打开意图揭示门（）：由 App 用共享纯规则
    * `shouldHoldViewVeil` 判定后传入的**最终判定**——遮罩在干净 settle 之后继续保留，
    * 直到该壳显示的会话就是要打开的那个为止（规则与两个输入都在 App：壳状态镜像 +
-   * 原始 runtime current；本组件只负责合成 `(!settled || (holdVeil === true && !surfaceRelease)) && !failureOverlayVisible`——`surfaceRelease` 由 `session-surface.ts` 的会话面相位判定给出）。冷 boot 期间官方
+   * 原始 runtime current；本组件不再自己合成遮罩可见性——它只把事实交给共享 arbiter
+   * （`decidePresentation`）并消费帧里的 `veilVisible`/`mode`/`reevaluateInMs`，合成式与
+   * 相位窗口都在那一个所有者处）。冷 boot 期间官方
    * 初始导航策略会新建并打开一个 blank 会话，而排队中的 open 要等
    * session-controller 子 fiber + 一次 400ms 重试才分发；壳失败时 App 永远传 false
    * （失败呈现归 App 覆盖层所有），因此遮罩不会挂住。
@@ -133,7 +134,7 @@ interface InstanceViewProps {
    * 本次持有对应的**请求身份**（`openIntents[viewId]`，即要打开的那个 session id；无在途
    * 请求时不传）。持有窗必须随"请求换代"重置：同一视图里"点 A 未结束又点 B"会**替换**
    * 意图而不产生持有上升沿，若沿用 A 的窗口起点，新请求可能只剩很短（极端时立即过期）的
-   * 兜底窗（2026-12 二轮 review MINOR-4）。同一个 id 重开不重置——那是同一个请求。
+   * 兜底窗（）。同一个 id 重开不重置——那是同一个请求。
    */
   openIntentId?: string
   /**
@@ -150,7 +151,7 @@ interface InstanceViewProps {
    * App 的全局失败覆盖层正在渲染（`activeShellError !== null`）：覆盖层是模态的
    * 失败报告，此时遮罩（及其按钮/文案）必须**离开 DOM**——否则它仍可被 Tab 聚焦、
    * 被读屏播报（overlay 只保证视觉不透明；veil 自身是 view 隔离层，两者在过渡
-   * 落地前的一两个帧内不同步，2026-12 独立复核）。
+   * 落地前的一两个帧内不同步，）。
    */
   failureOverlayVisible?: boolean
   /**
@@ -184,7 +185,7 @@ export default function InstanceView({
   const startedRef = useRef(false)
   /** 每次 boot 尝试的令牌：丢弃被重试取代的迟到 settle。 */
   const bootTokenRef = useRef(0)
-  // 卸载门控（2026-08 review 加固）：视图被回收（注册表删除）后，在途 boot
+  // 卸载门控（）：视图被回收（注册表删除）后，在途 boot
   // 的 settle 仍会经 .then 回调——若不经门控上报，陈旧终态（如取消 boot 的
   // "shell disposed"）会写进 App 的 shellStates，在 remove→re-add 窗口内对
   // 新挂载视图的骨架屏盖上一个虚假的"实例启动失败"覆盖层。卸载即丢弃。
@@ -200,7 +201,7 @@ export default function InstanceView({
   const [shell, setShell] = useState<ShellState>(() => shellStateIdle(instanceId, basePath))
   /** 本次尝试的开始时刻（已等待时长的基准）。null 只出现在"尚未发起这一次尝试"
    *  时——包括 boot 被推迟（`bootDeferred`）；首次 boot 之后每次重试都会重设它，
-   *  不会回到 null（2026-12 复核：旧注释写成"尚未发起 = boot 被推迟"，失真）。 */
+   *  不会回到 null（）。 */
   const bootStartedAtRef = useRef<number | null>(null)
   /** 已等待毫秒（仅未 settle 时按秒推进）。 */
   const [waitedMs, setWaitedMs] = useState(0)
@@ -210,19 +211,19 @@ export default function InstanceView({
   /**
    * 本次尝试是否排在"上一次未 settle 的 boot"后面（W4 诚实播报的事实）。
    * 只有上一次尝试从未 settle 时同 id boot 尾才会挡住这次重试；失败后重试
-   * 不排队，绝不能播报排队文案（2026-12 复核 F3）。
+   * 不排队，绝不能播报排队文案（）。
    */
   const queuedBehindPredecessorRef = useRef(false)
   /**
    * P3：**本次持有**开始的时刻（遮罩兜底窗的基准）。必须是持有起点而**不是** shell 的
    * settle 时刻——温壳上 settle 早已是几分钟前，用它会令窗口在第一帧就过期、揭示门在
-   * 温壳上整体失效（2026-12 review 复现的 MAJOR）。落成 state 而非 ref：依赖数组自洽。
+   * 温壳上整体失效（）。落成 state 而非 ref：依赖数组自洽。
    */
   const [holdStartedAt, setHoldStartedAt] = useState<number | null>(null)
   /** P3：容器内观察到的会话根相位（`[data-phase]` 的 DOM 事实，非 App 镜像）。 */
   const [surfacePhase, setSurfacePhase] = useState<SessionSurfacePhase>('absent')
   /**
-   * P3：相位为 absent 时的**连续缺失起点**（2026-12 二轮 review MINOR-1）。会话根中途短暂
+   * P3：相位为 absent 时的**连续缺失起点**（）。会话根中途短暂
    * 消失（插件重注册、会话切换空档）不能让遮罩按"持有起点 + 2s"立刻揭幕、下一帧又回遮
    * ——那是"遮罩→露壳→遮罩"的闪动。null = 当前不是 absent（或窗口未开）。
    */
@@ -243,13 +244,13 @@ export default function InstanceView({
     startedRef.current = true
     bootStartedAtRef.current = Date.now()
     setWaitedMs(0)
-    // 本次尝试的令牌（2026-12 复查 MINOR）：重试后旧 boot 若迟到 settle，
+    // 本次尝试的令牌（）：重试后旧 boot 若迟到 settle，
     // 不得覆盖新尝试已经落地的健康状态。
     const bootToken = bootTokenRef.current + 1
     bootTokenRef.current = bootToken
     void bootInstanceShell(instanceId, basePath, el, setShell, sourceFingerprint, transport, {
       waitForServing,
-      // 结算后补发的事实（5s 探针判词、延迟簇失败）必须到达 **App**（2026-12
+      // 结算后补发的事实（5s 探针判词、延迟簇失败）必须到达 **App**（
       // BLOCKER 修复）：shell 的 onState 形参是本视图的 React setter，只发它
       // 就只重渲染本视图（settled 已为真，DOM 无变化），App 的 shellStates 镜像
       // ——横幅、侧栏/连接页投射、每 ready 世代一次的自愈全都读它——永远收不到。
@@ -304,18 +305,17 @@ export default function InstanceView({
   }, [shell.booted, shell.error, bootDeferred, retryToken])
 
   const settled = isSettledShellState(shell)
-  // 2026-12（design 05 §2.2 修订）：遮罩 = boot 期（未 settle）**或** App 判定的
+  // ）：遮罩 = boot 期（未 settle）**或** App 判定的
   // 打开意图揭示门。判定规则（含"壳已经显示请求的会话就不遮"与"壳失败不遮"）在
   // sidebar 包 shared/open-intent.ts 内单测覆盖。
-  //
-  // P3（2026-12 会话面绘制信号）：揭示门的"继续持有"不再只由 App 侧两个异步镜像
+  // P3（）：揭示门的"继续持有"不再只由 App 侧两个异步镜像
   // 事实（runtimeFacts.current / aggregates 的 blank 行）决定——它们迟到或抖动时
   // 遮罩会挂在已渲染的壳上，最长烧满 open 预算（单次 8s、排队 68s），正是"白屏 /
   // 直接显示载入中"交替的来源。现在以壳自己的 DOM 事实为准（`session-surface.ts`）：
   // 会话根画到 `active`（真实会话面）即揭幕；hero/settling 保持遮罩（不闪空白"新
   // 会话"），absent（观察不到会话根，降级形态）以 2s 兜底、hero/settling 只留 70s
   // 外层保险——**窗口基准是本次持有的起点**，绝不是 shell 的 settle 时刻（温壳上后者
-  // 早已是几分钟前，用它会让持有窗第一帧就过期、揭示门整体失效；2026-12 review 复现）。
+  // 早已是几分钟前，用它会让持有窗第一帧就过期、揭示门整体失效；）。
   // 锚点是已登记的上游触点（scripts/upstream/mobile-anchors.mjs 的 data-phase）。
   // 第三个合取项仍是 App 拥有的失败覆盖层事实（模态；覆盖层在场时遮罩退出 DOM）。
   const surfaceHoldActive = settled && holdVeil === true && failureOverlayVisible !== true
@@ -337,28 +337,40 @@ export default function InstanceView({
     // openIntentId（请求身份）进依赖：请求换代 = 新的一次持有，窗口从这一帧重新起算
     // （二轮 review MINOR-4；同 id 重开时身份不变，不重置）。
   }, [surfaceHoldActive, retryToken, openIntentId])
-  const surfaceRelease = useMemo(
-    () => shouldReleaseVeilForSurface({
+  //  ONE decision for everything the user sees. The boot veil's classification, the
+  // surface hold (was shouldReleaseVeilForSurface) and the fallback timer's re-arm
+  // moment (was surfaceHoldBoundMs) all come from this single frame, so the three can
+  // no longer disagree — they are one computation over one threshold table.
+  const presentation = decidePresentation(
+    {
       settled,
-      phase: surfacePhase,
+      bootDeferred: bootDeferred === true,
+      waitedMs,
+      holdForOpenIntent: holdVeil === true,
+      surfacePhase,
       holdStartedAtMs: holdStartedAt,
       absentSinceMs: absentSince,
       nowMs: monotonicNow(),
-    }),
-    // surfaceFallbackTick 只作"兜底窗到期"的重算触发器；相位/窗口/时钟/缺失起点变化同样重算。
-    [settled, surfacePhase, holdStartedAt, absentSince, surfaceFallbackTick],
+      failureOverlayVisible: failureOverlayVisible === true,
+    },
+    {
+      veilActionsAfterMs: VEIL_ACTIONS_AFTER_MS,
+      // Both read from their owners, not re-typed: the arbiter's table is data.
+      surfaceMaxHoldMs: SURFACE_MAX_HOLD_MS,
+      surfaceAbsentFallbackMs: SURFACE_ABSENT_FALLBACK_MS,
+    },
   )
   // P3：相位观察器在**整个持有窗**内运行（不因一次释放而断开）。释放是"电平"而不是
   // "闩锁"：官方初始导航可能先显示持久化的真实会话（active）再复用/新建 blank 会话
   // （相位回 hero），此时空白"新会话"仍必须被遮住——观察器一旦在首次释放时断开，相位
-  // 就永远冻结在 active，遮罩再也回不来（2026-12 review 的第二个 MAJOR）。来回抖动被
+  // 就永远冻结在 active，遮罩再也回不来（）。来回抖动被
   // 持有窗本身（open 生命周期 ≤ 8s / 外层 70s）限制；窗口结束即断开，绝不为整个生命
   // 周期挂 subtree 观察器。相位只在 rAF 节流后落 state。
   useEffect(() => {
     if (!surfaceHoldActive) return
     const el = containerRef.current
     if (el === null) return
-    // 采样合并（2026-09 渲染进程崩溃轮）：boot 窗口里 DOM 变更密集，原来的
+    // 采样合并（）：boot 窗口里 DOM 变更密集，原来的
     // "每次变更排一帧" 等于每帧一次 setState（React 同步 commit 就发生在 rAF
     // 回调里——正是崩溃栈的入口形态）。合并器保证"首个变更下一帧、其后每
     // SURFACE_SAMPLE_MIN_INTERVAL_MS 一次、尾部必采"，相位语义不变。
@@ -397,11 +409,14 @@ export default function InstanceView({
   // "窗口已到期但定时器未到"把持有拖长（review MINOR）。
   useEffect(() => {
     if (!surfaceHoldActive || holdStartedAt === null) return
-    const bound = surfaceHoldBoundMs(surfacePhase)
-    // absent 按"连续缺失起点"计窗（根从未出现时它等于持有起点，仍是 2s 有界出口）；
-    // 延时钳到 [0, bound]：负值/超界都不该出现，真出现也不能把窗口拉长。
-    const base = surfacePhase === 'absent' ? (absentSince ?? holdStartedAt) : holdStartedAt
-    const delay = Math.min(bound, Math.max(0, base + bound - monotonicNow()))
+    //  step 3: the delay IS the frame's own re-arm moment. It was recomputed here
+    // from surfaceHoldBoundMs + the phase's window base — the same arithmetic, but a
+    // second copy of the thresholds that could drift from the judge's.
+    const delay = presentation.reevaluateInMs
+    // A non-finite moment means the frame already settled the question (revealed, or
+    // deferred/unbounded): arming setTimeout(Infinity) would fire immediately and spin,
+    // so arm nothing — a state change re-renders through this effect anyway.
+    if (!Number.isFinite(delay)) return
     const handle = setTimeout(
       () => setSurfaceFallbackTick(tick => tick + 1),
       delay,
@@ -411,21 +426,21 @@ export default function InstanceView({
     // 因别的原因此刻不放行），"没有释放"的 tick 必须重臂一次，否则本次持有的外层保险
     // 就此消失。单调钟下重臂不会空转：真正到期后判定必然放行，持有窗随之关闭。
   }, [surfaceHoldActive, holdStartedAt, absentSince, surfacePhase, surfaceFallbackTick])
-  const veilVisible = (!settled || (holdVeil === true && !surfaceRelease))
-    && failureOverlayVisible !== true
-  // W1/W2/W4：遮罩呈现分类（决策全在 source-readiness.ts）。这里**不改**
-  // veilVisible 的合成——它属于会话意图门（holdVeil）与本地 boot 状态的契约。
-  const veil = veilState({ deferred: bootDeferred === true, settled, waitedMs })
-  const veilActions = veilShowsActions(veil)
+  const veilActions = presentation.actions
+  // The veil is the frame's answer, verbatim: shown while booting, while a held intent
+  // has not released, and never under the failure overlay. (surfaceRelease was a
+  // second name for the same bit and had no readers left once the timer started
+  // consuming reevaluateInMs.)
+  const veilVisible = presentation.veilVisible
   // W4：只有**前一次尝试尚未 settle**时重试才排队；那种情况必须如实播报。
   // 推迟态（来源未连接）例外：那儿根本没有 boot 在跑，"排队"会和「未连接 + 连接」
-  // 自相矛盾（2026-12 复核 MINOR-2：App 覆盖层重试后来源转 idle 可以走到这里）。
-  const retryQueued = veil !== 'boot-deferred'
+  // 自相矛盾（）。
+  const retryQueued = presentation.mode !== 'deferred'
     && shouldAnnounceRetryQueue(queuedBehindPredecessorRef.current, settled)
   const waitedSeconds = String(Math.round(waitedMs / 1000))
   const retryQueueSeconds = String(Math.round(INSTANCE_TAIL_WAIT_CAP_MS / 1000))
   const sourceFailed = isTerminalUnreadyPhase(sourcePhase)
-  // P1（2026-12 兜底不变量）：遮罩在**已 settle** 的壳上仍然可见，就是打开意图
+  // P1（）：遮罩在**已 settle** 的壳上仍然可见，就是打开意图
   // 揭示门在持有它（boot 期 settled 为假）——这段时间遮罩是唯一可见面，租客整体
   // 不可见。判断耦合的是合成后的 veilVisible 而不是 holdVeil 入参：P3 的会话面
   // 信号一旦释放遮罩，同一 commit 里壳也跟着恢复可见，绝不出现"遮罩没了壳还藏着"。
@@ -437,13 +452,13 @@ export default function InstanceView({
       ? 'instance-view instance-hidden'
       : 'instance-view instance-pending'
 
-  // chamber (2026-12 悬浮卡修复): 视图一离开活动态就套上 .instance-pending /
+  // chamber (): 视图一离开活动态就套上 .instance-pending /
   // .instance-hidden（上面 viewClass），而行悬浮卡被 portal 到 document.body——
   // 它**不在**本视图 DOM 内，所以 visibility:hidden + pointer-events:none 既不会
   // 把卡藏起来，也不会给卡送来任何指针事件：指针停在卡上时切视图，卡会一直画在
   // 新视图之上，直到下一次指针移动（判据是仓内用例：
   // packages/renderer/test/wiring/hover-card-view-hide-wiring.test.ts；设计侧见
-  // docs/design/06-sidebar-enhancements.md §7 的视图隐藏关闭条）。
+  // docs/design/06-sidebar-enhancements.md  的视图隐藏关闭条）。
   // 因此在**同一个 commit**（useLayoutEffect = 绘制前）显式关掉页级唯一那张卡。
   // 只认 active 的 true→false 跳变：后台预热/后台 boot 的视图挂载时本就是非活动
   // 态，若按"非活动即关"会把活动视图里用户正悬停的卡误关。
@@ -479,18 +494,18 @@ export default function InstanceView({
                 (aria-busy on the veil carries the busy fact). */}
             <div className="instance-loading-spinner" aria-hidden="true" />
             <div className="instance-loading-title">
-              {veil === 'boot-deferred'
+              {presentation.mode === 'deferred'
                 ? frameText(locale, 'boot.deferred', { label })
                 : frameText(locale, 'boot.loading', { label })}
             </div>
             <div className="instance-loading-hint">
-              {veil === 'boot-deferred'
+              {presentation.mode === 'deferred'
                 ? frameText(locale, 'boot.deferredHint')
                 : frameText(locale, 'boot.loadingHint')}
             </div>
             {/* W1：超过反馈窗后，遮罩把"还在等"变成"你可以走"——**不是**失败
                 声明（失败由 App 的 .fatal-overlay 专有，两者结构互斥）。 */}
-            {veilActions && veil === 'loading-stuck' && (
+            {veilActions && presentation.mode === 'loading-stuck' && (
               <div className="instance-loading-elapsed">
                 {frameText(locale, 'boot.elapsed', { seconds: waitedSeconds })}
               </div>
@@ -505,7 +520,7 @@ export default function InstanceView({
             )}
             {veilActions && (
               <div className="instance-loading-actions" role="status">
-                {veil === 'boot-deferred' ? (
+                {presentation.mode === 'deferred' ? (
                   <Button variant="primary" onClick={() => onConnectSource?.()}>
                     {frameText(locale, 'action.connect')}
                   </Button>
@@ -516,7 +531,7 @@ export default function InstanceView({
                 )}
               </div>
             )}
-            {veilActions && veil === 'loading-stuck' && (
+            {veilActions && presentation.mode === 'loading-stuck' && (
               <div className="instance-loading-note">
                 {sourceFailed
                   ? frameText(locale, 'boot.sourceFailedHint')

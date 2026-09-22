@@ -32,6 +32,9 @@
     "test": "node ../../scripts/dev/ensure-artifacts.mjs && node ./scripts/test.mjs"
   },
   "license": "MIT",
+  "dependencies": {
+    "@dsh-chamber/dsh-stream-state": "workspace:^"
+  },
   "devDependencies": {
     "@types/react": "^19.0.0",
     "@deepseek-ai/cordis": "workspace:^",

@@ -1,6 +1,5 @@
 /**
  * Carrier-retry pacing truth table (chamber fork patch, design 14 §D4).
- *
  * A SECOND carrier failure inside one live connection generation is paced and
  * reopened instead of escaping terminally, so the delay function is the contract:
  * immediate once, then double up to a cap.
@@ -9,8 +8,6 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
   delayRemoteStreamRetry,
-  REMOTE_STREAM_OPENING_ESCALATION_COOLDOWN_MS,
-  REMOTE_STREAM_OPENING_ESCALATION_STREAK,
   REMOTE_STREAM_OPENING_TIMEOUT_MAX_MS,
   REMOTE_STREAM_OPENING_TIMEOUT_MS,
   REMOTE_STREAM_NO_GENERATION_WAIT_MAX_MS,
@@ -21,12 +18,43 @@ import {
   remoteStreamOpeningTimeoutMs,
   remoteStreamRetryDelayMs,
   REMOTE_STREAM_MAINTAIN_MIN_INTERVAL_MS,
-  shouldEscalateOpeningStall,
   shouldReplaceSilentSocket,
   streamOpeningKey,
 } from '../../src/client/remote-retry-policy.ts'
 import { DEFAULT_STREAM_STALL_TIMING } from '../../src/client/stream-stall-policy.ts'
+import { OPENING_TIMEOUT_LADDER_MS, SILENT_TEARDOWN_MIN_MS } from '@dsh-chamber/dsh-stream-state'
 import { setTimeout as delay } from 'node:timers/promises'
+
+/**
+ *  single-source tie (): this module must stay IMPORT-FREE at runtime (its
+ * own test below asserts that), so it cannot read the shared table itself - which left
+ * the opening ladder defined in TWO places with nothing comparing them: the table
+ * projection (tables.json -> the Swift mirror + the ladder-parity gate) and this file's
+ * baked-in numbers, which are what actually drive the carrier. Changing the table alone
+ * would silently diverge from the running policy. This tie makes that divergence loud.
+ */
+test('the opening ladder is the shared table, not a second copy (B4 tie)', () => {
+  assert.deepEqual(
+    OPENING_TIMEOUT_LADDER_MS.map((_, streak) => remoteStreamOpeningTimeoutMs(streak)),
+    [...OPENING_TIMEOUT_LADDER_MS],
+    'every rung of the ladder must equal the table rung',
+  )
+  assert.equal(
+    remoteStreamOpeningTimeoutMs(99),
+    REMOTE_STREAM_OPENING_TIMEOUT_MAX_MS,
+    'the cap is the last rung (and the exported ceiling)',
+  )
+  assert.equal(
+    REMOTE_STREAM_OPENING_TIMEOUT_MS,
+    OPENING_TIMEOUT_LADDER_MS[0],
+    'the base budget is the first rung',
+  )
+  assert.equal(
+    REMOTE_STREAM_SILENT_TEARDOWN_MIN_MS,
+    SILENT_TEARDOWN_MIN_MS,
+    'the teardown floor is the table value',
+  )
+})
 
 test('the first carrier failure of an episode reopens immediately', () => {
   assert.equal(REMOTE_STREAM_RETRY_FIRST_MS, 0)
@@ -121,7 +149,7 @@ test('the opening budget is monotone and never leaves its bounds', () => {
 })
 
 test('the opening budget clears the measured healthy Host answer by orders of magnitude', () => {
-  // Measured 2026-09 through the control-plane proxy: $events ready 25 ms,
+  // Measured
   // session snapshot 57 ms, subagent snapshot 73 ms. The base must be far above
   // those while remaining a bound a user would still call "stuck for a moment".
   assert.ok(REMOTE_STREAM_OPENING_TIMEOUT_MS >= 10_000)
@@ -185,28 +213,3 @@ test('the teardown evidence window stays inside every window it must serve', () 
     'a stream that outlives this bound is judged by the opening deadline instead')
 })
 
-test('an unanswered opening escalates to a physical rebuild only after a whole extra budget', () => {
-  // The bound must sit strictly above the FIRST timeout: one unanswered deadline
-  // is still the retry lane's business (a slow-but-working Host may answer the
-  // reopened request inside the widened budget), and strictly below unlimited.
-  assert.equal(REMOTE_STREAM_OPENING_ESCALATION_STREAK, 2)
-  assert.equal(shouldEscalateOpeningStall(0, undefined, 0), false)
-  assert.equal(shouldEscalateOpeningStall(1, undefined, 0), false, 'the first timeout must never rebuild the carrier')
-  assert.equal(shouldEscalateOpeningStall(REMOTE_STREAM_OPENING_ESCALATION_STREAK, undefined, 0), true)
-  assert.equal(shouldEscalateOpeningStall(9, undefined, 0), true)
-})
-
-test('the escalation cooldown bounds carrier rebuilds to one per minute', () => {
-  assert.equal(REMOTE_STREAM_OPENING_ESCALATION_COOLDOWN_MS, 60_000)
-  const at = 1_000_000
-  assert.equal(shouldEscalateOpeningStall(2, at, at), false, 'a rebuild must not repeat inside the cooldown')
-  assert.equal(shouldEscalateOpeningStall(2, at, at + REMOTE_STREAM_OPENING_ESCALATION_COOLDOWN_MS - 1), false)
-  assert.equal(shouldEscalateOpeningStall(2, at, at + REMOTE_STREAM_OPENING_ESCALATION_COOLDOWN_MS), true)
-})
-
-test('degenerate escalation inputs fail safe to no rebuild', () => {
-  for (const streak of [Number.NaN, Number.NEGATIVE_INFINITY]) {
-    assert.equal(shouldEscalateOpeningStall(streak, undefined, 0), false, String(streak))
-  }
-  assert.equal(shouldEscalateOpeningStall(2, Number.NaN, 0), false, 'an unusable account must not rebuild')
-})

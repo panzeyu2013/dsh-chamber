@@ -1,12 +1,10 @@
 /**
- * 遮罩层叠不变量（2026-12 P0/P1/P2/P3 回归锁）。
- *
+ * 遮罩层叠不变量（）。
  * 这条缺陷（加载遮罩期间官方 composer 画在遮罩之上）此前**没有任何断言**：运行构建里的
  * `.instance-loading{z-index:1}` 与 `[data-phase=active] .composerSeat{z-index:7}` 同处
  * `.instance-view` 的 stacking context，而 `.instance-shell` 是静态元素——数值上 7>1，
  * 绘制上穿透。修复把边界画在租客根上（`.instance-shell{isolation:isolate}`），使遮罩按结构
  * 获胜，与壳内未来的任何 z 值无关。本文件用源码文本把不变量钉住（node 直跑，无 DOM 依赖）：
- *
  *  1. P0：`.instance-shell` 必须声明 `isolation: isolate`，遮罩仍是 z-index:1；
  *  2. P1：`.instance-view.instance-veil-held .instance-shell` 必须 `visibility:hidden`，
  *     且三条隐藏态选择器都必须进"隐藏壳不创建动画"门（跨包锁在 sidebar 包，这里是我方半边）；
@@ -111,13 +109,16 @@ test('P3：揭幕信号来自会话面 DOM 事实，窗口锚在本次持有起�
     false,
     '不得再回到"以 shell 的 settle 时刻为基准"的实现',
   )
-  assert.ok(
-    view.includes('(!settled || (holdVeil === true && !surfaceRelease))'),
-    '揭幕由 surfaceRelease 约束：active 立即释放，hero/settling 保持、absent 走 2s 兜底',
-  )
-  assert.ok(view.includes('surfaceHoldBoundMs(surfacePhase)'), '相位→上界映射必须取自 leaf（唯一一份，不得在组件里再写一遍三元）')
-  // 接线行为锁（2026-12 二轮 review MINOR-5）：组件级真实渲染在本 worktree 跑不了，
-  // 这六条文本锁各自对应第一轮 MAJOR(C) / 二轮突变矩阵里"改坏也不红"的点：
+  // 合成式（未 settle ⇒ 遮罩；持有意图未释放 ⇒ 遮罩；失败覆盖层在场 ⇒ 无遮罩）
+  // 与相位→上界映射都已迁到共享 arbiter。本锁因此改为钉**单一所有者**：组件必须消费
+  // arbiter 的帧，且不得把合成式或映射在组件里再写一遍（那正是本次重构要消除的第二份）。
+  // 两条规则的真值表由新包 presentation 套件覆盖（含 absent 2s 含边界、hero/settling 70s）。
+  assert.ok(view.includes('const veilVisible = presentation.veilVisible'), '遮罩可见性必须来自 arbiter 的帧')
+  assert.equal(view.includes('holdVeil === true && !surfaceRelease'), false, '不得在组件里再写一遍合成式')
+  assert.equal(view.includes('surfaceHoldBoundMs('), false, '不得在组件里再写一遍相位→上界映射')
+  assert.ok(view.includes('const delay = presentation.reevaluateInMs'), '兜底时钟的重臂时刻必须来自同一帧')
+  // 接线行为锁（）：组件级真实渲染在本 worktree 跑不了，
+  // 这六条文本锁各自对应 MAJOR(C) / 二轮突变矩阵里"改坏也不红"的点：
   // N4 单向闩锁、N3 观察器 deps 混入 surfaceRelease、N5 观察器改成文档级作用域、
   // N6 观察器回调不再重采样、N7 删掉上升沿相位复位、N8 定时器丢掉相位档。
   assert.ok(view.includes('if (!surfaceHoldActive) return'), '观察器必须只在持有窗内装，但不得因一次释放就断开（电平，不是闩锁）')
@@ -130,7 +131,7 @@ test('P3：揭幕信号来自会话面 DOM 事实，窗口锚在本次持有起�
   assert.equal(view.includes('[surfaceHoldActive, surfaceRelease, retryToken]'), false, 'surfaceRelease 不得进观察器依赖（每次释放都会 teardown/重订阅）')
   assert.ok(view.includes('observer.observe(el, {'), '观察器必须观察本视图容器（文档级作用域会配错遮罩与锚点，第一轮 W-1b 假红同类）')
   assert.match(view, /attributeFilter: \[SESSION_PHASE_ATTRIBUTE\]/, '观察器必须监听 data-phase 属性变化')
-  // N6（2026-09 渲染进程崩溃轮改版）：观察器回调必须继续重采样（只剩挂载时一次 ⇒
+  // N6（）：观察器回调必须继续重采样（只剩挂载时一次 ⇒
   // 相位永不更新），但不再"每次变更排一帧"——boot 窗口里那等于每帧一次 React 同步
   // commit，而崩溃栈的入口正是 rAF 回调内一个被 OSR 编译的热函数。改走
   // frame-coalescer：首帧一次、窗口内合并、尾部必采；三条语义由
@@ -166,7 +167,7 @@ test('P3：揭幕信号来自会话面 DOM 事实，窗口锚在本次持有起�
     leaf.includes('SESSION_SCROLL_ANCHOR'),
     '相位读取必须从 [data-conversation-scroll] 反查祖先（composer 也发 data-phase，first-match 不可靠）',
   )
-  // App 侧接线锁（2026-12 二轮 review）：paint resolver 是纯接线、node 单测覆盖不到，
+  // App 侧接线锁（）：paint resolver 是纯接线、node 单测覆盖不到，
   // 只能按本仓既有惯例（baseline-harvest/session-liveness-wiring 同款）读源码钉住——
   // 否则"改回静态 cut 或漏传第三参"会让 P2 的修复静默消失。
   const app = read('../../src/App.tsx')
@@ -183,12 +184,11 @@ test('P3：揭幕信号来自会话面 DOM 事实，窗口锚在本次持有起�
 })
 
 /**
- * P4/W3（2026-12 延迟揭示；蓝图 §2.6 的语义同步清单）：
+ * P4/W3（）：
  * 可见性 = paintedView（屏上），选择 = activeView（意图）。这些锁各自对应一条
  * "改坏也不红"的接线（判定本体在 view-runtime/reveal-gate.test.ts，这里钉 App 的
  * 装配）：可见性绑定、揭示回调的重验守卫、保留/回收与 hiddenSince 跟随屏上、
  * 侧栏 current 高亮跟随屏上、退役回落、失败/控制面不可达强制释放持有。
- *
  * 阅读/蓝点武装（notify requireHidden / reconcile 的 readingCurrent / 清 current
  * 蓝点 effect）按同一语义也应当读 paintedView，但那三处位于 runtime-facts handler
  * 与 completedBySource 账本内——本工作流的写权限冻结在它们之外，交接给 WS-C
@@ -208,7 +208,7 @@ test('P4/W3：可见性由 paintedView 驱动，选择与绘制分离', () => {
     '不得回到 activeView 驱动可见性——那会让持有窗内目标壳提前露出（未 settle 时是 pending）',
   )
   // 揭示回调的重验：单槽队列里的揭示意图可能已过期（用户点了 B 又点回 A；来源退役）。
-  // 没有这道守卫，一个过期揭示会把已撤销的目标画回屏上（蓝图 §2.3）。
+  // 没有这道守卫，一个过期揭示会把已撤销的目标画回屏上（蓝图 ）。
   assert.ok(
     app.split('if (activeViewRef.current !== selected) return').length - 1 >= 2,
     '揭示的 microtask 与 view 过渡 update 回调都必须重验 activeViewRef.current === selected',
