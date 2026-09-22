@@ -19,6 +19,21 @@
     "paths": {
       "@dsh-chamber/dsh-chamber-client-ui-sidebar/shared": [
         "./packages/dsh-chamber-client-ui-sidebar/src/shared/index.ts"
+      ],
+      // The four chamber client-plugin entries are checked by their own package
+      // programs (their loose vendor faces collide when merged into one program);
+      // the renderer consumes them only through this narrow registration face.
+      "@dsh-chamber/dsh-chamber-client-ui-sidebar/client": [
+        "./packages/renderer/src/ambient/chamber-client-plugins.d.ts"
+      ],
+      "@dsh-chamber/dsh-chamber-client-ui-layout/client": [
+        "./packages/renderer/src/ambient/chamber-client-plugins.d.ts"
+      ],
+      "@dsh-chamber/dsh-chamber-client-ui-git/client": [
+        "./packages/renderer/src/ambient/chamber-client-plugins.d.ts"
+      ],
+      "@dsh-chamber/dsh-chamber-client-ui-open-in/client": [
+        "./packages/renderer/src/ambient/chamber-client-plugins.d.ts"
       ]
     }
   },

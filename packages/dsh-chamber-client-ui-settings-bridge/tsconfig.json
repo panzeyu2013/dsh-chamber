@@ -29,6 +29,14 @@
       "@dsh-chamber/dsh-chamber-client-ui-settings-connections/section": [
         "./src/ambient/connections-section.d.ts"
       ],
+      // The shared gateway-runtime fixture lives under scripts/dev/test-support
+      // (one implementation for the settings suites), outside this package, so
+      // the node_modules workspace link the comment above relies on cannot
+      // resolve the specifier from there. Map it at the REAL shared source, so
+      // no mirror face comes back; the in-package consumers keep using the link.
+      "@dsh-chamber/dsh-chamber-client-ui-sidebar/shared": [
+        "../../packages/dsh-chamber-client-ui-sidebar/src/shared/index.ts"
+      ],
       "@deepseek-ai/dsh-client-ui-renderer/src/client/bindings.tsx": [
         "./src/ambient/renderer-bindings.d.ts"
       ]

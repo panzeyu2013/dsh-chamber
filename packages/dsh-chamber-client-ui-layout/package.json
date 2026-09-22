@@ -56,8 +56,5 @@
     "lib/index.js",
     "lib/client.js",
     "lib/types/**/*.d.ts"
-  ],
-  "dependencies": {
-    "@deepseek-ai/dsh-client-ui-layout": "workspace:^"
-  }
+  ]
 }

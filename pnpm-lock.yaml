@@ -134,9 +134,6 @@ importers:
 
   packages/dsh-chamber-client-ui-layout:
     dependencies:
-      '@deepseek-ai/dsh-client-ui-layout':
-        specifier: workspace:^
-        version: link:../../vendor/harness-packages/@deepseek-ai/dsh-client-ui-layout
       '@dsh-chamber/dsh-chamber-client-ui-sidebar':
         specifier: workspace:^
         version: link:../dsh-chamber-client-ui-sidebar
@@ -167,10 +164,6 @@ importers:
         version: 19.2.8
 
   packages/dsh-chamber-client-ui-mobile:
-    dependencies:
-      '@deepseek-ai/dsh-client-ui-primitives':
-        specifier: workspace:^
-        version: link:../../vendor/harness-packages/@deepseek-ai/dsh-client-ui-primitives
     devDependencies:
       '@deepseek-ai/cordis':
         specifier: workspace:^
@@ -196,9 +189,6 @@ importers:
 
   packages/dsh-chamber-client-ui-open-in:
     dependencies:
-      '@deepseek-ai/dsh-client-ui-primitives':
-        specifier: workspace:^
-        version: link:../../vendor/harness-packages/@deepseek-ai/dsh-client-ui-primitives
       '@deepseek-ai/cordis':
         specifier: workspace:^
         version: link:../../vendor/harness-packages/@deepseek-ai/cordis
@@ -550,78 +540,6 @@ importers:
 
   packages/renderer:
     dependencies:
-      '@deepseek-ai/cordis':
-        specifier: workspace:^
-        version: link:../../vendor/harness-packages/@deepseek-ai/cordis
-      '@deepseek-ai/dsh-api-gateway':
-        specifier: workspace:^
-        version: link:../dsh-api-gateway
-      '@deepseek-ai/dsh-api-remotes':
-        specifier: workspace:^
-        version: link:../../vendor/harness-packages/@deepseek-ai/dsh-api-remotes
-      '@deepseek-ai/dsh-api-session-controller':
-        specifier: workspace:^
-        version: link:../../vendor/harness-packages/@deepseek-ai/dsh-api-session-controller
-      '@deepseek-ai/dsh-api-workspace-controller':
-        specifier: workspace:^
-        version: link:../../vendor/harness-packages/@deepseek-ai/dsh-api-workspace-controller
-      '@deepseek-ai/dsh-client-connection':
-        specifier: workspace:^
-        version: link:../dsh-client-connection
-      '@deepseek-ai/dsh-client-file-upload':
-        specifier: workspace:^
-        version: link:../../vendor/harness-packages/@deepseek-ai/dsh-client-file-upload
-      '@deepseek-ai/dsh-client-locale':
-        specifier: workspace:^
-        version: link:../../vendor/harness-packages/@deepseek-ai/dsh-client-locale
-      '@deepseek-ai/dsh-client-store':
-        specifier: workspace:^
-        version: link:../../vendor/harness-packages/@deepseek-ai/dsh-client-store
-      '@deepseek-ai/dsh-client-ui-approval':
-        specifier: workspace:^
-        version: link:../../vendor/harness-packages/@deepseek-ai/dsh-client-ui-approval
-      '@deepseek-ai/dsh-client-ui-chat':
-        specifier: workspace:^
-        version: link:../../vendor/harness-packages/@deepseek-ai/dsh-client-ui-chat
-      '@deepseek-ai/dsh-client-ui-commands':
-        specifier: workspace:^
-        version: link:../../vendor/harness-packages/@deepseek-ai/dsh-client-ui-commands
-      '@deepseek-ai/dsh-client-ui-conversation':
-        specifier: workspace:^
-        version: link:../../vendor/harness-packages/@deepseek-ai/dsh-client-ui-conversation
-      '@deepseek-ai/dsh-client-ui-directory-picker-browse':
-        specifier: workspace:^
-        version: link:../../vendor/harness-packages/@deepseek-ai/dsh-client-ui-directory-picker-browse
-      '@deepseek-ai/dsh-client-ui-dockkit':
-        specifier: workspace:^
-        version: link:../../vendor/harness-packages/@deepseek-ai/dsh-client-ui-dockkit
-      '@deepseek-ai/dsh-client-ui-input-trigger':
-        specifier: workspace:^
-        version: link:../../vendor/harness-packages/@deepseek-ai/dsh-client-ui-input-trigger
-      '@deepseek-ai/dsh-client-ui-model-selection':
-        specifier: workspace:^
-        version: link:../../vendor/harness-packages/@deepseek-ai/dsh-client-ui-model-selection
-      '@deepseek-ai/dsh-client-ui-primitives':
-        specifier: workspace:^
-        version: link:../../vendor/harness-packages/@deepseek-ai/dsh-client-ui-primitives
-      '@deepseek-ai/dsh-client-ui-session':
-        specifier: workspace:^
-        version: link:../../vendor/harness-packages/@deepseek-ai/dsh-client-ui-session
-      '@deepseek-ai/dsh-client-ui-settings':
-        specifier: workspace:^
-        version: link:../../vendor/harness-packages/@deepseek-ai/dsh-client-ui-settings
-      '@deepseek-ai/dsh-client-ui-theme':
-        specifier: workspace:^
-        version: link:../../vendor/harness-packages/@deepseek-ai/dsh-client-ui-theme
-      '@deepseek-ai/dsh-client-ui-workspace':
-        specifier: workspace:^
-        version: link:../../vendor/harness-packages/@deepseek-ai/dsh-client-ui-workspace
-      '@deepseek-ai/dsh-client-web':
-        specifier: workspace:^
-        version: link:../dsh-client-web
-      '@deepseek-ai/dsh-typert-registry':
-        specifier: workspace:^
-        version: link:../../vendor/harness-packages/@deepseek-ai/dsh-typert-registry
       '@dsh-chamber/dsh-chamber-client-ui-git':
         specifier: workspace:^
         version: link:../dsh-chamber-client-ui-git
