@@ -180,6 +180,8 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
 > `openingAnswered`/`episodeClosed`（`timedOut` 决定放宽是否留给重试道）维护，宿主只上报观测、执行 `armOpeningDeadline` 等 effects。
 > **身份边界（本地无旁路）**：vendor 的 `open(signal)` 回调不携带流 token，跨重试道的稳定身份仍是 endpoint+payload 摘要
 > （`streamOpeningKey`）；真正的 per-stream token 或宿主侧首帧期限见 `docs/progress/todo/upstream-proposals.md` §3/§8。
+> **退役 tripwire**：`verify:upstream-lifecycle-contract`（四方注册）钉住 pin 源的两半——宿主 `follow` 仍以 opening snapshot 开帧且无期限、
+> 客户端 `doOpen` 仍无界 await；上游任一半落地期限时该门禁转红并点名「退役客户端加宽阶梯」。
 > ② **页面生命周期**：六个账本由**单世代注册表**（`sourceId → {epoch, incarnation, state}`，`packages/dsh-stream-state`）的投影持有——指纹变化只在权威 roster 刷新处 `reincarnate` 换代，事件携带捕获的 epoch（错代丢弃），退役经 `retainSourceIds` 出表；App 侧只剩活视图（P4：删 `incarnationKey`/`retainSources` 键式记录面）；
 > ③ **露屏**：遮罩分类与会话面持有合为一次 `decidePresentation`；帧带 `veil`（released/held/actionable）与绝对 `releaseAtMonoMs`，
 >    只有 `planVeilTimer` 能把期限换算成定时器（held 必 >0ms），hero/settling 越 70s 外层保险即 `actionable` 揭示租客、

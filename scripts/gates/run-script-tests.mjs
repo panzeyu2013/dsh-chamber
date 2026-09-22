@@ -50,6 +50,7 @@ export const GROUPS = {
     // dead-export gate's surface resolver (G-H negative control).
     'scripts/gates/verify-ladder-table-parity.test.mjs',
     'scripts/gates/verify-no-dead-exports.test.mjs',
+    'scripts/gates/verify-upstream-lifecycle-contract.test.mjs',
     'scripts/gates/verify-workflow-yaml-scalars.test.mjs',
     // Shared package-test runner (its zero-case guard is a repository gate
     // helper, so it runs with the gate suites).

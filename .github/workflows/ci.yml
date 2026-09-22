@@ -161,6 +161,8 @@ jobs:
         run: pnpm run verify:ladder-table-parity
       - name: Dead-export gate (the stream-state surface has production consumers)
         run: pnpm run verify:no-dead-exports
+      - name: Upstream lifecycle contract (first-frame bound retirement tripwire)
+        run: pnpm run verify:upstream-lifecycle-contract
       # Upstream design-token conformance: S1 未声明 --dsw-* 引用 / S2 命名空间越界 /
       # S3 0.5px 发丝线 / S4 字面量 fallback / S5 边框+阴影配对 / S6 死声明 /
       # S7 全圆角配对. Upstream enforces these with specs that scan ITS OWN

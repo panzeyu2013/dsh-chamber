@@ -370,6 +370,8 @@ jobs:
         run: pnpm run verify:ladder-table-parity
       - name: Dead-export gate (the stream-state surface has production consumers)
         run: pnpm run verify:no-dead-exports
+      - name: Upstream lifecycle contract (first-frame bound retirement tripwire)
+        run: pnpm run verify:upstream-lifecycle-contract
       # Upstream design-token conformance (S1–S7) — same gate as ci.yml's push
       # path; needs the bootstrapped vendor tree above (2026-12 review P2: the
       # release validation job silently omitted it).
