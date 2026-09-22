@@ -63,7 +63,6 @@ import {
   liveSessionFacts,
   requireRegistrySurface,
   type HostCtxServices,
-  type RegistryDomainState,
   type RegistryLike,
   type SessionHeaderLike,
 } from './binding-parts.ts'

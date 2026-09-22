@@ -1,13 +1,13 @@
 # 22 · Linux 桌面支持（发行形态 / 自动更新形态门 / 系统集成）
 
-> **状态：现行**——本文是 dsh-chamber Linux 桌面支持的权威契约：AppImage(x64) 发行形态、按运行形态
+> **范围**——本文是 dsh-chamber Linux 桌面支持的权威契约：AppImage(x64) 发行形态、按运行形态
 > 门控的自动更新、XDG/$APPIMAGE 桌面集成纪律、build-linux 发布腿与控制面/运行时平台适配；未完成门禁见
 > `docs/progress/STATUS.md`。运行时核心（macOS/Linux mutation 契约）见 18；深链契约见 16；自启/托盘/关窗
 > 行为见 14；更新通道模型见 11。
 
 ## 1. 范围与形态决策
 
-1. **发行形态 = AppImage（x64 首版）**；`deb`/`rpm` 与 `arm64` 后续排期（arm64 需原生 arm runner 腿 +
+1. **发行形态 = AppImage（x64）**；`deb`/`rpm` 与 `arm64` 后续排期（arm64 需原生 arm runner 腿 +
    分架构 feed）。`dir` 不再是默认 `linux.target`（仍可用 `electron-builder --dir` 显式构建）。
    `packages/desktop/package.json` 的 `build.linux` = `target: ["AppImage"]` + `desktop.entry`
    （Name/Comment/Icon/StartupWMClass）。
@@ -16,7 +16,7 @@
    dev / 解包目录 / deb 等形态保持历史 inert 状态与同一 blocked 文案，无 UX 回退（按钮门控见 §2）。
 3. **CI 构建基线 = ubuntu-22.04**（glibc 2.35）：AppImage 的 glibc 下限 = 构建机，在 24.04 构建会排除 22.04
    时代桌面；与本仓库测试机基线一致，形成「构建 → 实机验证」闭环（§4）。
-4. Windows 支持（design 23，首版未出）与 Linux 相互独立：Linux 走完整 POSIX 变更路径，不得复制 win32 只读门
+4. Windows 支持（design 23，尚未发布）与 Linux 相互独立：Linux 走完整 POSIX 变更路径，不得复制 win32 只读门
    （设计 18 平台范围本就是 macOS/Linux）。
 5. **Linux 就绪面（本设计的落地前提）**：运行时核心的 macOS/Linux mutation 契约、gateway 即 Linux 服务器产品、
    CI 全量测试跑 ubuntu、askpass（`SSH_ASKPASS_REQUIRE=force`，`ssh-provider.ts`）非 win32 即用、reaper 的

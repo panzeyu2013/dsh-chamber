@@ -122,7 +122,13 @@ function errorText(error: unknown): string {
 
 function currentPointer(deps: ApplyDeps): string | null {
   const state = deps.readCurrentPointerState()
-  if (state.kind === 'corrupt') throw new Error('current pointer metadata 损坏；拒绝继续激活事务')
+  // 'unknown' (EACCES/EIO) proves neither absence nor corruption; treating it
+  // as "no pointer" would silently activate builtin over an unreadable
+  // selection, so it fails closed exactly like corruption (parent-approved
+  // scope extension, 2026-12 B1).
+  if (state.kind === 'corrupt' || state.kind === 'unknown') {
+    throw new Error('current pointer metadata 损坏或不可读；拒绝继续激活事务')
+  }
   return state.kind === 'valid' ? state.version : null
 }
 

@@ -32,6 +32,21 @@ export interface MetadataHealthProjectionFacts {
 }
 
 /**
+ * The boot gate's decision on one metadata-health fact (2026-12 audit 3.1):
+ * whether the recover-metadata escape stays eligible, and whether the managed
+ * host must not start until recovery has run.
+ */
+export interface MetadataRecoveryGateDecision {
+  /** The facts projection's recovery need (rescue-seam aware). */
+  needsRecovery: boolean
+  /** The boot gate. Status-only and UNCONDITIONAL: an in-progress transaction
+   *  or a corrupt recovery marker blocks startup whatever the rescue seam
+   *  says. The three component predicates (and selection-corrupt) deliberately
+   *  do NOT block the boot — they are the recoverable selection states. */
+  startupMustBlock: boolean
+}
+
+/**
  * Project one metadata-health fact into the wire facts.
  * @param health - detectRuntimeMetadataHealth() output.
  * @param options.markerRescueAvailable - whether the corrupt recovery marker is
@@ -43,9 +58,9 @@ export function projectMetadataHealthFacts(
   { markerRescueAvailable }: { markerRescueAvailable: boolean },
 ): MetadataHealthProjectionFacts {
   const components = new Set<RuntimeMetadataComponent>()
-  if (health.current.kind === 'corrupt'
+  if (health.current.kind === 'corrupt' || health.current.kind === 'unknown'
     || health.corruptEvidence.some(name => name.startsWith('current.'))) components.add('current')
-  if (health.override.kind === 'corrupt'
+  if (health.override.kind === 'corrupt' || health.override.kind === 'unknown'
     || health.corruptEvidence.some(name => name.startsWith('override.json.'))) components.add('override')
   if (health.activationJournal.kind === 'corrupt'
     || health.corruptEvidence.some(name => name.startsWith('activation-journal.json.'))) components.add('activation-journal')
@@ -57,8 +72,41 @@ export function projectMetadataHealthFacts(
   // The rescue flag is honored only for the marker-corrupt status. Both hosts
   // compute it as exactly that conjunction today, so this guard is redundant for
   // them — but it keeps the shared leaf from depending on a caller's discipline.
+  // An unreadable (EACCES/EIO) selection leaf is exactly as unrecoverable
+  // without the escape as a corrupt one: detectRuntimeMetadataHealth already
+  // reports it as selection-corrupt, and this explicit disjunct keeps the
+  // shared leaf honest for hosts that feed a partially-populated fact set.
+  const selectionUnreadable = health.current.kind === 'unknown' || health.override.kind === 'unknown'
   const needsRecovery = health.status === 'selection-corrupt'
+    || selectionUnreadable
     || health.status === 'recovery-in-progress'
     || (health.status === 'recovery-marker-corrupt' && markerRescueAvailable)
   return { components: [...components], needsRecovery }
+}
+
+/**
+ * The pre-start gate the two hosts consult before serving DSH_HOME (2026-12
+ * audit 3.1, gateway runtime-manager.metadataRecoveryPending): a boot path may
+ * not use {@link projectMetadataHealthFacts}.needsRecovery as its gate — that
+ * predicate adds `selection-corrupt` (recoverable, does not require a restart)
+ * and subtracts the marker-corrupt-without-rescue case via the seam. The boot
+ * block is the raw status conjunction: an unfinished recovery transaction
+ * (status `recovery-in-progress` covers the valid-unfinalized record too) or a
+ * corrupt recovery marker must stop the managed dsh regardless of what the
+ * rescue seam reports.
+ *
+ * @param health - detectRuntimeMetadataHealth() output.
+ * @param options.markerRescueAvailable - forwarded unchanged to the facts
+ *   projection for {@link MetadataRecoveryGateDecision.needsRecovery}.
+ * @returns the recovery need plus the boot block.
+ */
+export function projectMetadataRecoveryGate(
+  health: RuntimeMetadataHealth,
+  options: { markerRescueAvailable: boolean },
+): MetadataRecoveryGateDecision {
+  return {
+    needsRecovery: projectMetadataHealthFacts(health, options).needsRecovery,
+    startupMustBlock: health.status === 'recovery-in-progress'
+      || health.status === 'recovery-marker-corrupt',
+  }
 }

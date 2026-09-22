@@ -792,7 +792,11 @@ export function createWarmupController(deps: WarmupDeps): WarmupController {
         const grant = createWarmupCookie(secret, nowSeconds(), options.clientAddress)
         return { urls: discovered, cookie: buildWarmupCookieHeader(grant, options.secure === true) }
       } catch (error) {
-        // The login page must never fail because of warm-up.
+        // Layer ownership (2026-12 review of §3.3): discovery failures are
+        // owned by discover() above — it warns and caches ok=false — so this
+        // outer arm is reachable only from the grant mint (createWarmupCookie /
+        // buildWarmupCookieHeader). It stays as the login-page fail-soft guard:
+        // the login page must never fail because of warm-up.
         deps.logger.warn('gateway warmup: link build failed (' + (error instanceof Error ? error.name : 'unknown') + ')')
         return { urls: [] }
       }

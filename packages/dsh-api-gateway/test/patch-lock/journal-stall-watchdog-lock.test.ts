@@ -74,7 +74,10 @@ test('the probe compares the Host opening cursor against the applied one', () =>
   assert.match(probe, /this\.options\.compare\(next\.value\.cursor, applied\) > 0/u)
   assert.doesNotMatch(probe, /next\.value\.value/u)
   assert.match(probe, /deadline\.abort\(new Error\('journal stall probe deadline'\)\)/u)
-  assert.match(probe, /clearTimeout\(timer\)/u, 'the probe deadline must always be cleared')
+  //  (W2): the probe deadline moved to the shared deadline primitive, which owns
+  // the single timer and always clears it — the hand-written timer must not return.
+  assert.match(probe, /await withDeadline<IteratorResult<JournalStreamItem<Page, Entry, Cursor, Notification>>>\(iterator\.next\(\), \{/u)
+  assert.doesNotMatch(probe, /setTimeout\(/u, 'the hand-written probe timer is retired with the primitive')
   assert.doesNotMatch(probe, /this\.stream\.restart\(\)/u, 'the probe only reads')
 })
 

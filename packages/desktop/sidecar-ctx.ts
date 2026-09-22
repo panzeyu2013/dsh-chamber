@@ -102,12 +102,18 @@
  *     保留供后续 HostEdges 面。settings 只加载不应用注记随之更新为「宿主腿经
  *     settings-set 转发；启动 reconcile 归 Swift 宿主（M3/W-22）」。
  *
+ * 4.4b（B3a）：上述 F/G 组的共享闭包族（ssh 目标闭包束 / 自动 seed / gateway
+ * sync / ready auth 派生 / session refresh / onStatusChanged+onVerified 订阅 /
+ * publishRegistryTransition）已收敛到包内顶层 shell-assembly-shared.ts
+ * （owner=shell-core；依赖方向 main|sidecar-ctx → shared，禁止反向、不得 import
+ * electron）——本文件只保留 Swift flavor 适配面（planeRef / edges / 源目录映射 /
+ * 诊断文案）与装配；S-C-1/S-C-2 的逐字搬注记指该共享模块。
+ *
  * Electron-free 不变式：本文件零 electron import（electron-free-gate 面 A 对
  * packages/desktop 顶层源码自动覆盖）；secret 存储路径一律 <userData> 等价位。
  * sidecar 无 Electron safeStorage：gateway 凭据镜像按 design 17 §12/S22 走诚实
  * loud 的 0600 plaintext 回退（main 无 keychain 分支同语义），绝不静默。
  */
-import { createHash } from 'node:crypto';
 import { describeError } from './describe-error.ts';
 import { preserveFileAside } from './store-file-hygiene.ts';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
@@ -116,29 +122,24 @@ import { fileURLToPath } from 'node:url';
 import type { PlaneHandle } from '@dsh-chamber/control-plane';
 import type { ChamberSettings } from './chamber-settings.ts';
 import { DEFAULT_CHAMBER_SETTINGS, readSettingsFile, writeSettingsFile } from './chamber-settings.ts';
-import { IPC_CHANNELS } from './ipc-events.ts';
-import { auditLogFilePath, captureNotificationSource, chamberSettingsFilePath, gatewaySecretsFilePath, instancesFilePath, LOCAL_RUNNING_STATES, localDshHomeDir, ownsNotificationSource, projectInstanceSecrets, projectNotificationSourceInstances, proxyTransport, readDshVersion, resolveActiveRuntime, sshPasswordsFilePath, syncNotificationSourceRegistry, type HostMessageOptions, type NotificationSourceToken, type ProjectedRegistryInstance, type ShellAssemblyCtx } from './shell-core.ts';
-import { attemptCommittedRegistryPush, computeRemovedInstanceIds, computeRetiredInstanceIds, createTransportManager, type TransportManager } from './transport-manager.ts';
+import { auditLogFilePath, chamberSettingsFilePath, gatewaySecretsFilePath, instancesFilePath, LOCAL_RUNNING_STATES, localDshHomeDir, projectNotificationSourceInstances, readDshVersion, resolveActiveRuntime, sshPasswordsFilePath, syncNotificationSourceRegistry, type HostMessageOptions, type ShellAssemblyCtx } from './shell-core.ts';
+import { createTransportManager, type TransportManager } from './transport-manager.ts';
 import { reconnectStaleTransports } from './transport-reconnect.ts';
 import type { TransportInstanceSpec } from './transport-provider.ts';
-import { cleanupStaleAskpassHelpers, configureSshPasswordStore, probeChamberHostLive, sshProvider } from './ssh-provider.ts';
-import { configureGatewaySecretStore, configureGatewaySessionProvider, gatewayProvider, getGatewayPassword, getGatewayToken, syncGatewayChamberPlugins, type LocalChamberHostPackage } from './gateway-provider.ts';
-import { createGatewaySessionManager, gatewayRegistrationAuthHeaders, gatewaySessionScopeForConnection, type GatewayRegistrationAuthProof } from './gateway-session.ts';
-import { createGatewaySessionRefresh, gatewaySessionOriginForUrl, gatewayTunnelAuthority, type GatewaySessionRefresh } from './gateway-session-refresh.ts';
+import { cleanupStaleAskpassHelpers, configureSshPasswordStore, sshProvider } from './ssh-provider.ts';
+import { configureGatewaySecretStore, configureGatewaySessionProvider, gatewayProvider } from './gateway-provider.ts';
+import { createGatewaySessionManager } from './gateway-session.ts';
 import { appendAuditEvent, type AuditEvent } from './audit-log.ts';
 import { createSshPluginJournal } from './ssh-plugin-journal.ts';
 import { sanitizeErrorText } from './sanitize-error.ts';
 import { createHeadlessUpdateController } from './update-headless.ts';
-import type { HeadlessUpdateController, NativeUpdaterBridge } from './update-headless.ts';
-import { CHAMBER_HOST_PACKAGES } from './control-plane-module.ts';
+import type { NativeUpdaterBridge } from './update-headless.ts';
 import { packageDirName } from './host-package-dirs.ts';
-import type { ChamberHostPackageSeed, ExecFn, RemoteSpec, StatusFn } from './plugin-sync.ts';
-import type { ChamberHostPackageDescriptor } from './control-plane-module.ts';
-import { ARCHIVE_CLEANUP_PACKAGE_NAME, CLIENT_GRAPH_PACKAGE_NAME, ExactOwnershipRegistry, GIT_WORKTREE_PACKAGE_NAME, ReadyPhaseEdges, builtChamberHostPackageSeeds, disposePluginSyncChildren, portableChamberHostPackageSeeds, reapStaleLocalPluginWriters, remoteHome, scopeExecToOwnership, seedRemoteChamberHostPackages } from './plugin-sync.ts';
-import { setGatewaySyncRegistration } from './gateway-sync-registry.ts';
-import { RuntimeOperationFence, clearStorePruneRequest, detectRuntimeMetadataHealth, disposeRuntimeInstaller, invalidate, isSafeVersion, pruneRuntimeStore, readActivationJournalState, readStorePruneRequest, resetCandidateHealthWindow, writeActivationIntent, writeOverride, type RuntimeMetadataHealth, type StartupResult } from '@dsh-chamber/dsh-runtime';
+import { ARCHIVE_CLEANUP_PACKAGE_NAME, CLIENT_GRAPH_PACKAGE_NAME, GIT_WORKTREE_PACKAGE_NAME, disposePluginSyncChildren, reapStaleLocalPluginWriters } from './plugin-sync.ts';
+import { RuntimeOperationFence, detectRuntimeMetadataHealth, disposeRuntimeInstaller, invalidate, isSafeVersion, readActivationJournalState, resetCandidateHealthWindow, writeActivationIntent, writeOverride, type RuntimeMetadataHealth, type StartupResult } from '@dsh-chamber/dsh-runtime';
 import { RUNTIME_ABORT_REASON } from './shell-core.ts';
-import { createRuntimeStartupHost } from './runtime-startup-host.ts';
+import { createRuntimeHostDeps, createRuntimeStartupHost } from './runtime-startup-host.ts';
+import { createShellAssemblyShared } from './shell-assembly-shared.ts';
 import type { RuntimeStartupHostState } from './runtime-startup-host.ts';
 
 // 打包布局锚点（P-13）与 host 包源目录解析（P-05）——具名纯/近纯函数，Swift 布局
@@ -591,96 +592,6 @@ export async function buildHeadlessCtx(
   // 装配序与 main 相同：先 sync 后 handler 注册）。
   syncNotificationSourceRegistry(projectNotificationSourceInstances(sm.listInstances()))
 
-  // Transport-manager 执行/状态投影面（main 1577-1578 同源——plugin-sync 在
-  // 本地重新声明 exec/status 契约，经结构等价收窄别名桥接）。
-  const execTransport = sm.exec as unknown as ExecFn
-  const statusTransport: StatusFn = (id) => sm.status(id)
-  // 插件管理面实例级恒等指纹（main 1470-1482 逐字——registry 变更生命周期与
-  // F 组目标闭包共用）。
-  const transportIdentityFingerprint = (instance: TransportInstanceSpec): string => JSON.stringify([
-    instance.kind,
-    instance.transport,
-    instance.host,
-    instance.user,
-    instance.sshPort,
-    instance.remotePort,
-  ])
-  const operationalFingerprint = (instance: TransportInstanceSpec): string => JSON.stringify([
-    transportIdentityFingerprint(instance),
-    instance.serviceName,
-    instance.remoteDshHome,
-  ])
-  // S24 audit transition dedupe（main 1565-1569 同源——PHASE TRANSITIONS only）。
-  const lastAuditedPhase = new Map<string, string>()
-  const auditRegistered = new Set<string>()
-
-  // —— S-C-2 G 组：live-proxy 会话自愈（design 17 §9.3，main 1492-1564 行区
-  // 装配镜像）。纯 Node 控制器（gateway-session-refresh.ts 零 electron——时钟/
-  // 计时器注入为纯 Node 缺省）；ready 注册 arm / 离开 ready disarm 随下方
-  // sm.onStatusChanged 订阅接线（与 main 1976/1998 同点）。register 腿 =
-  // planeRef → plane.registerInstanceTransport（main 1525-1542 同参——隧道
-  // Host authority 覆盖 + registeredAuthFingerprints 锁步，见下方共享面）。——
-  const registeredAuthFingerprints = new Map<string, string>()
-  const authHeadersFingerprint = (headers: Record<string, string> | undefined): string => {
-    const canonical = headers === undefined
-      ? 'none'
-      : Object.keys(headers).sort().map(key => `${key}:${headers[key]}`).join('|')
-    return createHash('sha256').update(canonical).digest('hex')
-  }
-  const sanitizedRegistrationHeaders = (headers: Record<string, string>): Record<string, string> | undefined =>
-    Object.keys(headers).length === 0 ? undefined : headers
-  const sessionRefresh: GatewaySessionRefresh = createGatewaySessionRefresh({
-    sessionManager: gatewaySessions,
-    passwordFor: id => getGatewayPassword(id),
-    tokenFor: id => getGatewayToken(id),
-    readyUrlFor: id => sm.readyUrl(id),
-    tlsPinFor: id => sm.listInstances().find(instance => instance.id === id)?.spkiPin ?? null,
-    // Tunnel Host override（main 1508-1518 同源注释：ssh 隧道 gateway 目标以远端
-    // LOOPBACK 权威重注册——Host 头/稳定 connection-target scope/网络 origin 与
-    // verifyUp-minted session key 同构；authority 只路由、非所有权）。
-    authorityFor: id => {
-      const instance = sm.listInstances().find(candidate => candidate.id === id)
-      return instance !== undefined && instance.kind === 'gateway' && instance.transport === 'ssh'
-        ? gatewayTunnelAuthority(instance.remotePort)
-        : undefined
-    },
-    scopeFor: id => {
-      const instance = sm.listInstances().find(candidate => candidate.id === id)
-      return instance !== undefined && instance.kind === 'gateway'
-        ? gatewaySessionScopeForConnection(instance)
-        : undefined
-    },
-    register: (id, url, headers, tls, authority) => {
-      const livePlane = planeRef.current
-      const registered = sm.listInstances().find(instance => instance.id === id)
-      if (livePlane !== null) livePlane.registerInstanceTransport(`gateway:${id}`, url, headers, {
-        ...(registered === undefined ? {} : { transport: proxyTransport(registered.transport) }),
-        ...(tls === undefined ? {} : tls),
-        ...(authority === undefined ? {} : { authority }),
-      })
-      // Keep the registered-auth fingerprint in lockstep（main 1533-1541 同源：
-      // refresh 重注册 REPLACES 代理 headers——onVerified 指纹门须看到已轮换
-      // cookie 为 "already registered"，否则下次 ready 探针无条件再注册）。
-      registeredAuthFingerprints.set(`gateway:${id}`, authHeadersFingerprint(
-        headers === undefined ? undefined : sanitizedRegistrationHeaders(headers),
-      ))
-    },
-    // Bounded dead-cookie recovery（main 1543-1562 同源注释 + 实现：disconnect
-    // （idle → 控制面注销 + 本 refresh disarm）→ connect（verifyUp 用存储密码
-    // 重认证——单次 re-login → terminal path）；每次 refresh fire 至多一次、
-    // 仅 transport 仍 ready 且同 origin 时；disconnect/connect 抛错绝不击穿
-    // refresh 控制器）。
-    reconnect: (id) => {
-      try {
-        sm.disconnect(id)
-        sm.connect(id)
-      } catch (error) {
-        console.warn(`[sidecar] session-refresh recovery reconnect failed for ${id}: ${String(error)}`)
-      }
-    },
-    warn: message => console.warn(`[sidecar] ${message}`),
-  })
-
   // —— S-C-2 F 组：chamber host 包源目录（main 1624-1635 分支的 sidecar 位——
   // 显式参数（打包 Resources 布局由 Swift 传 --host-*-dir）优先；缺省 = 具名
   // resolveHostPackageSourceDir：workspace 根检索（P-05，限定含
@@ -697,521 +608,55 @@ export async function buildHeadlessCtx(
   // control-plane 的 CHAMBER_HOST_PACKAGES（与 main.ts 的 chamberHostSourceDirs
   // 同构）——2026-12 审查：原先这里手抄三行，注册表新增一行会被静默漏掉。
   // 包名 → 仓库目录名（去 scope）的单源纯函数（有单测）；映射表仍只登记需要
-  // 显式 CLI 目录的三个包——注册表新增非 localOnly 行若漏登记，下面的构造会
-  // loud 警告，绝不静默少 seed 一个域（2026-12 验证轮收口）。
+  // 显式 CLI 目录的三个包——注册表新增非 localOnly 行若漏登记，
+  // createShellAssemblyShared 的 onUnmappedHostPackage 会 loud 警告，绝不静默
+  // 少 seed 一个域（2026-12 验证轮收口）。
   const hostPackageSourceDirs: Record<string, string> = {
     [CLIENT_GRAPH_PACKAGE_NAME]: hostPackageSourceDir(packageDirName(CLIENT_GRAPH_PACKAGE_NAME), hostDirs.graph),
     [GIT_WORKTREE_PACKAGE_NAME]: hostPackageSourceDir(packageDirName(GIT_WORKTREE_PACKAGE_NAME), hostDirs.git),
     [ARCHIVE_CLEANUP_PACKAGE_NAME]: hostPackageSourceDir(packageDirName(ARCHIVE_CLEANUP_PACKAGE_NAME), hostDirs.archive),
   }
-  // Host 包种子数组：注册表驱动（main 1636-1655 同形——insertId/packageName/
-  // sourceDir/label 全部来自 descriptor）。localOnly 行（open-in）保留在数组里但
-  // sourceDir 恒为空——「哪一行可以去别的机器」只由
-  // portableChamberHostPackageSeeds（下方 portableHostSeeds）判，它绝不会把该行
-  // 交给远端 seed、gateway 上传或控制面注入；本地播种走 --host-open-in-dir →
-  // 控制面 hostOpenInPackageSourceDir（design 20 §6）。
-  const chamberHostPackageSeeds: ChamberHostPackageSeed[] = CHAMBER_HOST_PACKAGES.map(descriptor => {
-    const sourceDir = descriptor.localOnly === true
-      ? ''
-      : (hostPackageSourceDirs[descriptor.insert.name] ?? '')
-    if (descriptor.localOnly !== true && sourceDir === '') {
+  // Host 包种子数组自 4.4b 起由下方 shellAssembly 的
+  // buildRemoteChamberHostPackageSeeds（shell-assembly-shared.ts）注册表驱动构造
+  // （insertId/packageName/sourceDir/label 全部来自 descriptor + 本映射）。localOnly
+  // 行（open-in）保留在数组里但 sourceDir 恒为空——「哪一行可以去别的机器」只由
+  // portableChamberHostPackageSeeds 判，它绝不会把该行交给远端 seed、gateway 上传
+  // 或控制面注入；本地播种走 --host-open-in-dir → 控制面
+  // hostOpenInPackageSourceDir（design 20 §6）。
+  // —— 4.4b：共用壳装配闭包族（ssh 目标闭包束/自动 seed/gateway 同步/ready
+  // auth 派生/session refresh/状态订阅/publishRegistryTransition）收敛到
+  // shell-assembly-shared.ts（owner=shell-core；依赖方向 main|sidecar-ctx →
+  // shared，禁止反向）。Swift flavor 只注入日志前缀/plane 晚绑定/窗口与推送
+  // 证明/HostEdges 叶/host 包源目录与诊断文案。
+  const shellAssembly = createShellAssemblyShared({
+    logTag: 'sidecar',
+    transportManager: sm,
+    plane: () => planeRef.current,
+    windowAlive: () => edges.mainWindowAlive(),
+    capturePushTarget: () => null,
+    pushTargetStillCurrent: () => edges.mainWindowAlive(),
+    rendererPush: (channel, payload) => edges.rendererPush(channel, payload),
+    audit,
+    retireNotificationsForSources: sources => edges.retireNotificationsForSources(sources),
+    gatewaySessions,
+    sshPluginJournal,
+    hostPackageSourceDirs,
+    onUnmappedHostPackage: descriptor => {
       // 注册表新增一行而本 flavor 没给源目录 = 该域在远端 seed 与 gateway 上传
       // 都会被静默跳过（界面无提示）。Electron 侧同款判据是 loud 的，这里对齐。
       console.warn(
         `[sidecar] chamber host 包 ${descriptor.insert.name} (${descriptor.insert.id}) 在注册表里非 localOnly 但本 flavor 无源目录映射：`
         + '远端 seed 与 gateway 上传都会跳过该域（需在 hostPackageSourceDirs 登记）',
       )
-    }
-    return {
-      insertId: descriptor.insert.id,
-      packageName: descriptor.insert.name,
-      sourceDir,
-      label: descriptor.insert.id,
-      ...(descriptor.localOnly === true ? { localOnly: true as const } : {}),
-    }
+    },
+    missingHostPackageSourceWarning: seed => {
+      console.warn(
+        `[sidecar] chamber host 包 ${seed.packageName} (${seed.insertId}) 缺源目录：`
+        + '它不会被上传到 gateway seed cache，gateway 形态实例的对应宿主域会 404 且界面无提示',
+      )
+    },
   })
-
-  // 可移植（非 localOnly）seed 列表：本数组按构造已排除 open-in localOnly 行，
-  // 但「哪一行可以去别的机器」的**规则**仍取自单一实现（design 20 §6；main.ts
-  // 的 portableHostSeeds 同源）——Swift flavor 不再自带一份过滤判定，规则分叉
-  // 在结构上不可能（2026-12 合并审计 advisory 收口）。
-  const portableHostSeeds = portableChamberHostPackageSeeds(chamberHostPackageSeeds)
-
-  // Exact-incarnation single-flight for ready/manual host-package seeds（main
-  // 1615-1619 同源——changed same-id target 立即 supersede；stale finally/log/
-  // result 路径绝不清理/写入其替换者）。
-  const hostPackageSeeding = new ExactOwnershipRegistry()
-  const readySeedEdges = new ReadyPhaseEdges()
-  // Remote install-level fallback path shared by both chamber host packages
-  // （main 1684-1686 同源）。
-  const remoteHostPackageDir = (spec: RemoteSpec, packageName: string): string =>
-    `${remoteHome(spec.remoteDshHome)}/profiles/node_modules/${packageName}`
-
-  // —— S-C-2 F 组：ssh 插件管理目标闭包束（main 1656-1683 逐字搬）。目标 =
-  // spec + operational fingerprint + 来源代际 token（F 组 owns 复验与 C 组来源
-  // 证明同一代际面）。——
-  type RemoteTarget = {
-    spec: RemoteSpec
-    fingerprint: string
-    sourceToken: NotificationSourceToken
-  }
-  const findRemoteTarget = (id: string): RemoteTarget | null => {
-    const instance = sm.listInstances().find((entry) => entry.id === id)
-    if (instance === undefined || instance.kind !== 'dsh' || instance.transport !== 'ssh') return null
-    const sourceToken = captureNotificationSource(`${instance.kind}-${instance.id}`)
-    if (sourceToken === null) return null
-    return {
-      spec: { id: instance.id, remoteDshHome: instance.remoteDshHome ?? null },
-      fingerprint: operationalFingerprint(instance),
-      sourceToken,
-    }
-  }
-  const ownsRemoteTarget = (target: RemoteTarget): boolean =>
-    ownsNotificationSource(target.sourceToken)
-    && findRemoteTarget(target.spec.id)?.fingerprint === target.fingerprint
-  const scopedExecForTarget = (target: RemoteTarget, extraOwner: () => boolean = () => true): ExecFn =>
-    scopeExecToOwnership(execTransport, target.spec.id, () => extraOwner() && ownsRemoteTarget(target))
-  const scopedStatusForTarget = (target: RemoteTarget): StatusFn => id =>
-    id === target.spec.id && ownsRemoteTarget(target) ? statusTransport(id) : null
-  const scopedProbeForTarget = (
-    target: RemoteTarget,
-    probe: (descriptor: ChamberHostPackageDescriptor) => Promise<boolean | null>,
-  ): ((descriptor: ChamberHostPackageDescriptor) => Promise<boolean | null>) => async (descriptor) => {
-    if (!ownsRemoteTarget(target)) return null
-    const result = await probe(descriptor)
-    return ownsRemoteTarget(target) ? result : null
-  }
-  // Live-effect probe for the chamber host packages（design 09 module A / 08 §11 /
-  // 24 §7，与 main.ts 同源契约）：单个通用隧道 RPC 探针，由控制面注册表自带的
-  // probe 描述子（method + args）驱动——不再有每包分支（合并前 host-graph /
-  // git-worktree 各一个专用探针，main 已泛化）。无 ready 隧道 → null = "未探测"。
-  const liveProbeFor = (id: string): ((descriptor: ChamberHostPackageDescriptor) => Promise<boolean | null>) => async (descriptor) => {
-    const url = sm.readyUrl(id)
-    if (url === null) return null
-    try {
-      const parsed = new URL(url)
-      const port = parsed.port === '' ? null : Number(parsed.port)
-      if (port === null || !Number.isInteger(port) || port < 1 || port > 65535) return null
-      const result = await probeChamberHostLive({ host: parsed.hostname, port }, descriptor.probe.method, descriptor.probe.args)
-      return result === 'live' ? true : result === 'not-live' ? false : null
-    } catch {
-      return null
-    }
-  }
-  // 自动 chamber host seed（main 1687-1734 逐字搬：单飞注册表 begin/owns/finish +
-  // 构建产物 existsSync 过滤（缺失 loud 入实例环形日志）+ seedRemoteChamberHostPackages
-  // 幂等注入）。自动路径与手动 seed 注册体共用同一 seed 数组/注册表/目标闭包。
-  const startAutomaticHostSeed = (id: string): void => {
-    const target = findRemoteTarget(id)
-    if (target === null) return
-    const begun = hostPackageSeeding.begin(id, target.fingerprint)
-    if (!begun.accepted) return
-    const token = begun.token
-    const ownsSeed = () => hostPackageSeeding.owns(token) && ownsRemoteTarget(target)
-    const appendSeedLog = (level: 'info' | 'error', message: string): void => {
-      if (ownsSeed()) sm.appendLog(id, level, message)
-    }
-    void (async () => {
-      try {
-        // 已构建判定与 main/shell-core 同一实现（空 sourceDir 绝不解析进程 CWD
-        // 的 dist/index.js；可移植列表也不把 localOnly 行算作缺件）。
-        const builtSeeds = builtChamberHostPackageSeeds(portableHostSeeds)
-        if (builtSeeds.length === 0) {
-          if (ownsSeed()) console.log(`[sidecar] chamber host seed skipped for ${id}: no built host package artifacts`)
-          appendSeedLog('info', 'chamber host 包未注入：构建产物缺失；远端相关客户端能力不可用')
-          return
-        }
-        const missingSeeds = portableHostSeeds.filter(seed => !builtSeeds.includes(seed))
-        if (missingSeeds.length > 0) {
-          appendSeedLog('info', `chamber host 包部分未注入（构建产物缺失）：${missingSeeds.map(seed => seed.label).join(', ')}`)
-        }
-        const result = await seedRemoteChamberHostPackages(
-          scopedExecForTarget(target, ownsSeed),
-          target.spec,
-          portableHostSeeds,
-        )
-        if (!ownsSeed()) return
-        if (result.ok) {
-          const seeded = result.packages.map(entry => entry.insertId).join(',')
-          console.log(`[sidecar] chamber host packages seeded onto ${id} (${seeded}; wrote=${result.wrote}, patched=${result.patched})`)
-          const packageSummary = result.packages.map(entry =>
-            `${entry.insertId}${entry.wrote ? ' 已写入' : ' 已是最新'}（${remoteHostPackageDir(target.spec, entry.packageName)}）`).join('；')
-          appendSeedLog('info', `chamber host 包注入完成：${packageSummary}；boot 层${result.patched ? '已合并挂载' : '无需改动'}（重启后生效）`)
-        } else {
-          console.warn(`[sidecar] chamber host seed failed for ${id}: ${result.error}`)
-          appendSeedLog('error', `chamber host 包注入失败：${result.error}`)
-        }
-      } catch (err) {
-        if (!ownsSeed()) return
-        const detail = describeError(err)
-        console.warn(`[sidecar] chamber host seed error for ${id}: ${detail}`)
-        appendSeedLog('error', `chamber host 包注入异常：${detail}`)
-      } finally {
-        hostPackageSeeding.finish(token)
-      }
-    })()
-  }
-
-  // —— S-C-2 G 组：本地 chamber host 包源 + 手动 gateway 同步执行闭包（main
-  // 1735-1794 逐字搬——2026-12 Phase 3 desktop-synced chamber host packages；
-  // app.isPackaged 分支 = sidecar 源目录解析（上方 hostPackageSourceDir 同值）；
-  // ready 注册自动 sync 与手动 gateway_plugin_sync re-entry 共用同一执行路径）。
-  const localChamberHostPackageSources = (): Array<{ name: string; packageJsonPath: string; distIndexPath: string }> => {
-    // 注册表驱动 + 可移植驱动（与 main.ts 的 localChamberHostPackageSources 同
-    // 语义）：只遍历 portableHostSeeds，本地专属行绝不进 gateway 上传；源目录仍
-    // 来自上方唯一的注册表映射。缺目录 = 响亮跳过（绝不静默少上传一个域）。
-    return portableHostSeeds.flatMap(seed => {
-      const dir = hostPackageSourceDirs[seed.packageName]
-      if (dir === undefined || dir === '') {
-        console.warn(
-          `[sidecar] chamber host 包 ${seed.packageName} (${seed.insertId}) 缺源目录：`
-          + '它不会被上传到 gateway seed 缓存，gateway 形态实例的对应宿主域会 404 且界面无提示',
-        )
-        return []
-      }
-      return [{
-        name: seed.packageName,
-        packageJsonPath: path.join(dir, 'package.json'),
-        distIndexPath: path.join(dir, 'dist', 'index.js'),
-      }]
-    })
-  }
-  const syncGatewayChamberPluginsFor = async (
-    id: string,
-    url: string,
-    headers: Record<string, string>,
-    spkiPin: string | null,
-  ): Promise<{ uploaded: boolean; skipped: boolean; failed?: boolean; error?: string } | null> => {
-    const instance = sm.listInstances().find(candidate => candidate.id === id)
-    if (instance === undefined || instance.kind !== 'gateway') return null
-    const packages: LocalChamberHostPackage[] = []
-    for (const source of localChamberHostPackageSources()) {
-      try {
-        packages.push({
-          name: source.name,
-          packageJson: readFileSync(source.packageJsonPath, 'utf8'),
-          distIndex: readFileSync(source.distIndexPath, 'utf8'),
-        })
-      } catch {
-        // Not built/bundled in this runtime — nothing to sync for this entry.
-      }
-    }
-    return syncGatewayChamberPlugins({
-      // Sync through the REGISTERED transport origin (the ready URL)（main
-      // 1780-1786 同源注释：ssh 隧道 = 用户验证过的 loopback 端点，绝非远端
-      // host:port；tunnel authority 覆盖呈现远端 gateway）。
-      origin: url,
-      authority: instance.transport === 'ssh' ? gatewayTunnelAuthority(instance.remotePort) : undefined,
-      headers,
-      spkiPin,
-      packages,
-      logger: { warn: message => console.warn(message), log: message => console.log(message) },
-    })
-  }
-
-  // —— S-C-2 F/G 组：ready 注册期 auth 事实派生（main 1795-1834 逐字搬——S23
-  // SPKI pin 随注册；token/password 存在性投影；会话 cookie 仅缓存读，值绝不
-  // 出主进程）。——
-  const currentGatewayAuth = (id: string, url: string, registered: TransportInstanceSpec | undefined): {
-    auth: ReturnType<typeof gatewayRegistrationAuthHeaders>
-    tunnelAuthority: string | undefined
-    scope: string | undefined
-    spkiPin: string | undefined
-  } => {
-    const token = getGatewayToken(id)
-    const password = getGatewayPassword(id)
-    const tunnelAuthority = registered !== undefined && registered.transport === 'ssh'
-      ? gatewayTunnelAuthority(registered.remotePort)
-      : undefined
-    const scope = registered === undefined ? undefined : gatewaySessionScopeForConnection(registered)
-    let cookie: string | null = null
-    let authProof: GatewayRegistrationAuthProof | null = null
-    if (password !== null) {
-      const origin = gatewaySessionOriginForUrl(url, undefined, tunnelAuthority, scope)
-      cookie = origin === null ? null : gatewaySessions.cachedCookie(origin) ?? null
-      authProof = origin === null ? null : gatewaySessions.registrationAuthProof(origin) ?? null
-    }
-    return {
-      auth: gatewayRegistrationAuthHeaders(token, password !== null, cookie, authProof),
-      tunnelAuthority,
-      scope,
-      spkiPin: registered !== undefined ? registered.spkiPin : undefined,
-    }
-  }
-
-  // —— S-C-2 F/G 组：sm.onStatusChanged 订阅（main 1857-2040 镜像）——S24 audit
-  // transition 记录（非秘密 phase 转换，注册边沿一次）+ ready → 代理注册/凭据
-  // 注入 + gateway 自动 sync + session refresh arm + 自动 chamber host seed
-  // ready 边缘（readySeedEdges.observe）+ SSH_STATUS_CHANGED committed push。
-  // Electron 差异注记：main 以 mainWindow 身份判据 + registryWindow !== null
-  // 门；Swift flavor 无 window——同值判据 = edges.mainWindowAlive()（node-edges
-  // 事实缓存）；plane 腿以 planeRef.current（bindPlane 前 = main cp===null 的
-  // 跳过语义——同 main 1889-2014 的 if (cp !== null) 门）。——
-  sm.onStatusChanged((id, status) => {
-    // S24 audit（main 1857-1875 同源）：仅 phase TRANSITIONS；requiresUserAction
-    // 终态分类同源。绝不落凭据/cookie/会话体。
-    const prevPhase = lastAuditedPhase.get(id)
-    if (prevPhase !== status.phase) {
-      lastAuditedPhase.set(id, status.phase)
-      audit({
-        ts: new Date().toISOString(),
-        event: 'transport_phase',
-        sourceId: id,
-        kind: status.kind,
-        transport: status.transport,
-        detail: status.phase === 'error' && status.requiresUserAction
-          ? 'error:requires_user_action'
-          : status.phase,
-      })
-    }
-    // Non-secret auth-mode marker（main 1876-1884 同源——存在性投影）。
-    const auditAuth = status.kind === 'gateway'
-      ? getGatewayToken(id) !== null && getGatewayPassword(id) !== null ? 'token+password'
-        : getGatewayToken(id) !== null ? 'token'
-          : getGatewayPassword(id) !== null ? 'password' : 'none'
-      : 'none'
-    const auditDetail = `auth:${auditAuth}${status.insecureHttp ? ',http_plaintext' : ''}`
-    // Ready transport → per-instance reverse proxy（design 05 §7.1：main
-    // 1885-2014 镜像——ready 注册/离开 ready 注销；transport URL 只在主进程）。
-    const cp = planeRef.current
-    if (cp !== null) {
-      if (status.phase === 'ready') {
-        const url = sm.readyUrl(id)
-        if (url !== null) {
-          if (status.kind === 'gateway') {
-            const registered = sm.listInstances().find(instance => instance.id === id)
-            const facts = currentGatewayAuth(id, url, registered)
-            const auth = facts.auth
-            if (!auth.ok) {
-              // Fail closed on the verify→ready→register TOCTOU（main 1908-1934
-              // 同源：密码 gateway 绝不因 cookie 在间隙被逐/失效而无头注册；
-              // 有 token 时纯决策助手允许有意的 OR-principal bearer 回退）。
-              cp.unregisterInstanceTransport(`${status.kind}:${id}`)
-              registeredAuthFingerprints.delete(`${status.kind}:${id}`)
-              sessionRefresh.disarm(id)
-              sm.appendLog(id, 'warn', 'gateway session changed before proxy registration; re-authenticating')
-              const scope = facts.scope
-              queueMicrotask(() => {
-                const currentStatus = sm.status(id)
-                const currentSpec = sm.listInstances().find(instance => instance.id === id)
-                if (currentStatus?.phase !== 'ready' || sm.readyUrl(id) !== url
-                  || currentSpec === undefined || currentSpec.kind !== 'gateway'
-                  || getGatewayPassword(id) === null
-                  || scope === undefined
-                  || gatewaySessionScopeForConnection(currentSpec) !== scope) return
-                sm.disconnect(id)
-                sm.connect(id)
-              })
-              return
-            }
-            const connectionId = `${status.kind}:${id}`
-            const headers = sanitizedRegistrationHeaders(auth.headers)
-            cp.registerInstanceTransport(
-              connectionId,
-              url,
-              headers,
-              {
-                ...(registered === undefined ? {} : { transport: proxyTransport(registered.transport) }),
-                ...(facts.spkiPin === undefined ? {} : { tls: { spkiPin: facts.spkiPin } }),
-                ...(facts.tunnelAuthority === undefined ? {} : { authority: facts.tunnelAuthority }),
-              },
-            )
-            registeredAuthFingerprints.set(connectionId, authHeadersFingerprint(headers))
-            // 2026-12 Phase 3（main 1948-1964 同源）：每次 gateway ready 注册后
-            // best-effort 把本地 chamber host 包 sync 进 gateway seed cache
-            // （幂等：仅版本失配重传 + 上传请求 gateway 受控重启）。手动 sync
-            // re-entry 参数（design 21 §6.5）经 setGatewaySyncRegistration 落
-            // 注册表——C 组删除/离开 ready 撤销同表。
-            setGatewaySyncRegistration(id, { url, headers: { ...auth.headers }, spkiPin: facts.spkiPin ?? null })
-            void syncGatewayChamberPluginsFor(id, url, auth.headers, facts.spkiPin ?? null)
-          } else {
-            cp.registerInstanceTransport(`${status.kind}:${id}`, url, undefined, {
-              transport: proxyTransport(status.transport),
-            })
-            registeredAuthFingerprints.set(`${status.kind}:${id}`, authHeadersFingerprint(undefined))
-          }
-          // Live-proxy session self-healing（main 1971-1976 同源）：ready 注册即
-          // arm 预到期 refresh（无密码目标 no-op、重连后新隧道 origin 下幂等
-          // re-arm）；dsh 目标无 auth 面 → 不 refresh。
-          if (status.kind === 'gateway') sessionRefresh.arm(id)
-          // S24: one registration edge per instance（main 1977-1990 同源）。
-          if (!auditRegistered.has(id)) {
-            auditRegistered.add(id)
-            audit({
-              ts: new Date().toISOString(),
-              event: 'transport_registered',
-              sourceId: id,
-              kind: status.kind,
-              transport: status.transport,
-              detail: auditDetail,
-            })
-          }
-        }
-      } else {
-        cp.unregisterInstanceTransport(`${status.kind}:${id}`)
-        registeredAuthFingerprints.delete(`${status.kind}:${id}`)
-        // Leaving ready cancels the pre-expiry refresh（main 1995-1998 同源）。
-        sessionRefresh.disarm(id)
-        // Manual gateway_plugin_sync re-entry dies with the ready registration
-        // （design 21 §6.5，main 1999-2002 同源）。
-        setGatewaySyncRegistration(id, null)
-        if (auditRegistered.delete(id)) {
-          audit({
-            ts: new Date().toISOString(),
-            event: 'transport_unregistered',
-            sourceId: id,
-            kind: status.kind,
-            transport: status.transport,
-            detail: auditDetail,
-          })
-        }
-      }
-    }
-    // Remote chamber host-package seed ready 边缘（main 2015-2027 同源：kind dsh
-    // + transport ssh 才 seed（seed 走 ssh exec 通道——http-direct/gateway 排除）；
-    // 幂等 + 结果入环形日志 + 失败随下次 ready 重试；readySeedEdges.observe =
-    // ready 边沿恰好一次门）。
-    if (status.kind === 'dsh' && status.transport === 'ssh' && readySeedEdges.observe(id, status.phase)) {
-      startAutomaticHostSeed(id)
-    }
-    // Committed status push（main 2028-2039 镜像——窗口门 = edges.mainWindowAlive；
-    // push 前竞态复查同一叶；false → loud 等待下次查询兜底）。
-    if (edges.mainWindowAlive()) {
-      const pushed = attemptCommittedRegistryPush(() => {
-        if (!edges.mainWindowAlive()) {
-          throw new Error('status renderer changed before push')
-        }
-        if (!edges.rendererPush(IPC_CHANNELS.SSH_STATUS_CHANGED, { id, status })) {
-          throw new Error('status renderer push failed')
-        }
-      })
-      if (!pushed.sent) {
-        try { console.warn(`[sidecar] transport 状态已更新但 renderer push 失败：${pushed.error}`); } catch { /* callback boundary */ }
-      }
-    }
-  })
-  // Ready-state re-verification → proxy re-registration（main 2042-2078 镜像——
-  // 心跳/用户探针可在 verifyUp 内轮换密码会话（401 → 一次存储密码 re-login），
-  // 代理仍骑旧（死）cookie——仅当当前 auth headers 与已注册指纹不同才重注册
-  // （注册会撤销在途流量——健康未变注册绝不重注册）；仅非秘密 sha256 指纹存
-  // 储（headers VALUES 绝不进 map）；失败绝不 emit——翻转 phase 自愈）。
-  sm.onVerified(id => {
-    const cp = planeRef.current
-    const current = sm.status(id)
-    if (cp === null || current === null || current.phase !== 'ready' || current.kind !== 'gateway') return
-    const url = sm.readyUrl(id)
-    const registered = sm.listInstances().find(instance => instance.id === id)
-    if (url === null || registered === undefined || registered.kind !== 'gateway') return
-    const facts = currentGatewayAuth(id, url, registered)
-    // Fail closed like the ready registration（main 2058-2062 同源注释）。
-    if (!facts.auth.ok) return
-    const connectionId = `gateway:${id}`
-    const headers = sanitizedRegistrationHeaders(facts.auth.headers)
-    if (authHeadersFingerprint(headers) === registeredAuthFingerprints.get(connectionId)) return
-    cp.registerInstanceTransport(
-      connectionId,
-      url,
-      headers,
-      {
-        transport: proxyTransport(registered.transport),
-        ...(facts.spkiPin === undefined ? {} : { tls: { spkiPin: facts.spkiPin } }),
-        ...(facts.tunnelAuthority === undefined ? {} : { authority: facts.tunnelAuthority }),
-      },
-    )
-    registeredAuthFingerprints.set(connectionId, authHeadersFingerprint(headers))
-    sm.appendLog(id, 'info', 'gateway session re-established — proxy registration refreshed with the new session')
-  })
-
-  // —— publishRegistryTransition 真实叶（main 2094-2159 纯逻辑部分的同源装配；
-  // S-C-2 补回 reseed 调度行 main 2114/2125/2140-2142）——
-  // registry 变更生命周期权威 sidecar（source-lifecycle）：投影计算/来源代际
-  // 同步/journal 撤销/committed push。main 侧宿主对象中凡纯模块工厂者按 S6 字段
-  // 注入真实实例：sshPluginJournal（上方 createSshPluginJournal）、
-  // hostPackageSeeding（ExactOwnershipRegistry）、readySeedEdges（ReadyPhaseEdges
-  // ——S-C-2 起自动 seed ready 边缘（sm.onStatusChanged 订阅）已装配，observe/
-  // forget 同实例对自动与撤销路径同效）。
-  /**
-   * Finish every committed registry transition through the source-lifecycle
-   * authority. Metadata/secret persistence is owned by the transaction
-   * (connection-save.ts → sm.saveInstances); this sidecar rotates
-   * renderer/native-notification proofs, revokes exact plugin-seed owners,
-   * and publishes the committed roster.
-   */
-  const publishRegistryTransition = (
-    before: readonly TransportInstanceSpec[],
-    after: readonly TransportInstanceSpec[],
-  ): ProjectedRegistryInstance[] => {
-    const projected = projectNotificationSourceInstances(after)
-    if (JSON.stringify(before) === JSON.stringify(after)) {
-      return projected.map(projectInstanceSecrets)
-    }
-    const projectedSaved = projected.map(projectInstanceSecrets)
-
-    const removedIds = computeRemovedInstanceIds(before, after)
-    // Manual gateway-sync re-entry dies with the instance (design 21 §6.5):
-    // a removed row must never keep a registration a later
-    // gateway_plugin_sync(id) call could sync against. setGatewaySyncRegistration
-    // = gateway-sync-registry.ts 纯模块级注册表（shell-core G 组同源直 import）。
-    for (const id of removedIds) {
-      setGatewaySyncRegistration(id, null)
-      sshPluginJournal.clear(id)
-    }
-    const retiredIds = computeRetiredInstanceIds(before, after)
-    const afterById = new Map(after.map(instance => [instance.id, instance]))
-    const reseedIds: string[] = []
-    for (const previous of before) {
-      const current = afterById.get(previous.id)
-      if (current === undefined || operationalFingerprint(previous) !== operationalFingerprint(current)) {
-        readySeedEdges.forget(previous.id)
-        hostPackageSeeding.revoke(previous.id)
-        // The plugin undo journal is bound to the OPERATIONAL target: an
-        // id-stable edit that changed host/user/service/home invalidates
-        // every op recorded on the previous target (design 21 §6.4 review
-        // P1) — drop them here AND at undo time (latestOkForTarget).
-        sshPluginJournal.clear(previous.id)
-        // main 2125：service/home 编辑后仍是 dsh+ssh 目标的同 id 替换 →
-        // 若已完成即显式 reseed（普通重连由 ready 边缘拾取）。
-        if (current?.kind === 'dsh' && current.transport === 'ssh') reseedIds.push(previous.id)
-      }
-    }
-
-    // 代际同步 + 队列退役丢弃 = syncNotificationSourceRegistry（core 导出）；
-    // 活跃原生通知驱逐 = edges.retireNotificationsForSources（node-edges →
-    // Swift notify 'retireNotifications'）。
-    const retiredNotificationSources = new Set(syncNotificationSourceRegistry(projected))
-    if (retiredNotificationSources.size > 0) {
-      edges.retireNotificationsForSources(retiredNotificationSources)
-    }
-
-    // A service/home edit may complete while the transport is already
-    // ready. Seed the replacement owner explicitly; ordinary reconnects
-    // are picked up by the ready edge above.（main 2137-2142 逐字——仅 ready
-    // 实例可达：startAutomaticHostSeed 经 findRemoteTarget 解析 + 单飞注册表。）
-    for (const id of reseedIds) {
-      if (sm.status(id)?.phase === 'ready') startAutomaticHostSeed(id)
-    }
-
-    // Committed lifecycle push（{removedIds, retiredIds} 文本与 main 2144-2157
-    // 逐字一致；renderer-trust 锚定）。Electron main 以 registryWindow !== null
-    // 为门 + push 前窗口身份复查；Swift flavor 无 window 对象——同值判据 =
-    // edges.mainWindowAlive()（node-edges 事实缓存，hostFacts 推送刷新），
-    // push 前竞态复查同一叶。叶 false = 无存活主窗，折算失败 loud（与 main
-    // 的「throw → {sent:false}」语义等价）；无窗口常驻期间由下次查询兜底。
-    if (edges.mainWindowAlive()) {
-      const pushed = attemptCommittedRegistryPush(() => {
-        if (!edges.mainWindowAlive()) {
-          throw new Error('registry renderer changed before push')
-        }
-        if (!edges.rendererPush(IPC_CHANNELS.SSH_INSTANCES_CHANGED, { removedIds, retiredIds })) {
-          throw new Error('registry renderer push failed')
-        }
-      })
-      if (!pushed.sent) {
-        console.warn(`[sidecar] registry 已保存但 lifecycle push 失败（等待 renderer 重拉）：${pushed.error}`)
-      }
-    }
-    return projectedSaved
-  }
+  shellAssembly.subscribeTransportStatus()
 
   // S-C-2 J/K 组：dsh runtime 管理宿主（design 18；main 2291-3560 行区的
   // 装配镜像——控制器现实例/证据刷新/启动门/启动事务/元数据恢复/apply-now
@@ -1228,36 +673,11 @@ export async function buildHeadlessCtx(
   //  P-13：三条候选拼写全部收进打包布局具名函数（packagedPnpmEntry /
   //  legacyPackagedPnpmEntry / devPnpmEntry），Swift 布局锁步测试锚定源文本。
   const pnpmEntry = resolvePnpmEntry(moduleDir)
-  let storePruneOperation: Promise<void> | null = null
-  // The shared core's default node executor is plain node (design 18 §9.1);
-  // the desktop injects its Electron-as-node branch for EVERY pnpm child —
-  // installs AND store-prune（main 2297-2304 逐字：sidecar 自身可能跑在
-  // Electron-as-node（测试/打包腿）或 Swift 捆绑纯 node 下——两分支同表达式
-  // 自动选择，Electron-as-node 分支与 main 完全同参）。
-  const runtimeNodeExecutor = (): { file: string; args: string[]; env: Record<string, string> } =>
-    process.versions.electron !== undefined
-      ? { file: process.execPath, args: ['--expose-internals'], env: { ELECTRON_RUN_AS_NODE: '1' } }
-      : { file: process.execPath, args: [], env: {} }
-  const runStorePruneIfNeeded = (): Promise<void> => {
-    if (storePruneOperation !== null) return storePruneOperation
-    if (quittingRequested || readStorePruneRequest(runtimeBaseDir) === null) return Promise.resolve()
-    const operation = pruneRuntimeStore({ baseDir: runtimeBaseDir, pnpmEntry, deps: { node: runtimeNodeExecutor } })
-      .then(() => { clearStorePruneRequest(runtimeBaseDir) })
-      .catch((error) => {
-        // Retain the marker: the next safe startup/operation retries. Prune
-        // failure is disk hygiene, not permission to block a verified tree.
-        console.error('[sidecar] dsh runtime store prune failed:', sanitizeErrorText(describeError(error)))
-      })
-      .finally(() => {
-        if (storePruneOperation === operation) storePruneOperation = null
-      })
-    storePruneOperation = operation
-    return operation
-  }
-
-  // —— DshRuntimeController 现实例（main 2321-2382 的 ControllerOptions + DI
-  // 全参镜像；K 组注册体与启动/证据路径共用——状态权威单一）。——
-  const runtimeHost = createRuntimeStartupHost({
+  // 4.4b：RuntimeStartupHostDeps 的固定尾（Electron-as-node pnpm 执行器 +
+  // store-prune 单飞叶）由 createRuntimeHostDeps 生成——sidecar-ctx 与 main
+  // 共用同一实现（sidecar 自身可能跑在 Electron-as-node（测试/打包腿）或
+  // Swift 捆绑纯 node 下——两分支同表达式自动选择）；此处只注入 flavor 事实。
+  const runtimeDeps = createRuntimeHostDeps({
     logTag: 'sidecar',
     rendererPush: (channel, payload) => edges.rendererPush(channel, payload),
     windowAlive: () => edges.mainWindowAlive(),
@@ -1288,9 +708,11 @@ export async function buildHeadlessCtx(
     runtimeBootstrapWriterUnsafe,
     bootstrapMetadataCorrupt,
     pnpmEntry,
-    runtimeNodeExecutor,
-    runStorePruneIfNeeded,
   })
+
+  // —— DshRuntimeController 现实例（main 2321-2382 的 ControllerOptions + DI
+  // 全参镜像；K 组注册体与启动/证据路径共用——状态权威单一）。——
+  const runtimeHost = createRuntimeStartupHost(runtimeDeps)
   const {
     runtimeInstance,
     refreshRuntimeEvidence,
@@ -1325,6 +747,32 @@ export async function buildHeadlessCtx(
     }
   }
 
+  // - updateController（I 组；W-22 真化——design 25 §7「v1 blocked-available
+  //   诚实形态」）：Swift flavor 用 update-headless.ts 的纯 Node 控制器。
+  //   发现单源（S-21）：inputs.nativeUpdater 在场（壳声明 --native-updater
+  //   sparkle）时，check 经冻结边 updateNativeAction kind=check 交壳内 Sparkle
+  //   （appcast 单源），相位经 __host.nativeUpdatePhase 回来，sidecar 绝不再跑
+  //   GitHub releases 查询、也不排静默检查定时器；未声明原生腿时（dev /
+  //   dry-run / 未配置密钥）才走 GitHub 发现 + installBlockedReason 恒为
+  //   「原生壳不支持自动安装」+ download/restart 核心层显式拒绝。**不是**
+  //   electron-updater 的伪造注入：Electron 版 createUpdateController 的
+  //   autoUpdater 依赖 app 生命周期（quitAndInstall/autoInstallOnAppQuit），
+  //   本 flavor 明确不做自带的安装实现。
+  //   契约零改动（UpdateState 七值/字段集不变），消费面 settings-bridge
+  //   UpdateSection 只按 phase + installBlockedReason 呈现。
+  //   4.4a：real 现按 ShellAssemblyCtx 全量声明，updater 实例必须先于 ctx
+  //   字面量构造（不再用字面量后赋值绕过类型检查）。
+  const updateController = createHeadlessUpdateController({
+    version: chamberVersion,
+    // 原生安装腿（可选）：壳声明 --native-updater sparkle 时启用 Sparkle 转发。
+    nativeUpdater: inputs.nativeUpdater ?? undefined,
+    logger: {
+      log: (...args: unknown[]) => console.log('[updater-headless]', ...args),
+      warn: (...args: unknown[]) => console.warn('[updater-headless]', ...args),
+      error: (...args: unknown[]) => console.error('[updater-headless]', ...args),
+    },
+  })
+
   // —— ctx 完成形态：真实字段 + Proxy 兜底（未实现字段 = loud 抛
   // 'sidecar-ctx-unavailable:<field>'——绝不静默）。——
   const hostFacts = {
@@ -1333,7 +781,7 @@ export async function buildHeadlessCtx(
     platform: process.platform,
     trayPresent: () => true,
   }
-  const real: Record<string, unknown> = {
+  const real: ShellAssemblyCtx = {
     hostFacts,
     runtimeBaseDir,
     localDshHome,
@@ -1410,7 +858,7 @@ export async function buildHeadlessCtx(
     audit,
     transportManager: sm,
     gatewaySessions,
-    publishRegistryTransition,
+    publishRegistryTransition: shellAssembly.publishRegistryTransition,
     confirmRegistryOriginSwitch: async (currentOrigin: string, nextOrigin: string) => {
       // registryOrigin 切换确认（SETTINGS_SET——design 18 trust boundary 变更需
       // 原生用户确认）。文案/按钮/默认序与 main.ts 3752-3766 闭包逐字一致；
@@ -1440,28 +888,21 @@ export async function buildHeadlessCtx(
     },
     // S-C-1 部分注资（S6 字段——publish 叶撤销清理依赖；F 组落地共用实例）：
     sshPluginJournal,
-    hostPackageSeeding,
-    // —— S-C-2 真化字段（F/G/H/J/K 组注册体装配依赖；runtimeBaseDir /
-    // localDshHome 已在顶部 real 字段（S-C-1 值 = 本作用域同值常量）——
-    // chamberHostPackageSeeds / sshPluginTargets / syncGatewayChamberPluginsFor
-    // / runLocalPluginMutation 与 runtime 控制器族为本片新增。——
-    chamberHostPackageSeeds,
-    sshPluginTargets: {
-      findRemoteTarget,
-      ownsRemoteTarget,
-      scopedExecForTarget,
-      scopedStatusForTarget,
-      scopedProbeForTarget,
-      liveProbeFor,
-    },
-    syncGatewayChamberPluginsFor,
+    // —— 4.4b：F/G 组共享现实例/闭包束（hostPackageSeeding / chamberHostPackageSeeds
+    // / sshPluginTargets / syncGatewayChamberPluginsFor）全部来自 shellAssembly
+    // ——单飞/代际/指纹语义见 shell-assembly-shared.ts（owner=shell-core）。
+    hostPackageSeeding: shellAssembly.hostPackageSeeding,
+    chamberHostPackageSeeds: shellAssembly.chamberHostPackageSeeds,
+    sshPluginTargets: shellAssembly.sshPluginTargets,
+    syncGatewayChamberPluginsFor: shellAssembly.syncGatewayChamberPluginsFor,
     runLocalPluginMutation,
+    updateController,
     runtimeController: runtimeInstance,
     runtimeOperationBusy: () => runtimeState.operation !== null,
     runtimeWriterFence,
     runtimeActionAllowed,
     refreshRuntimeEvidence,
-    runStorePruneIfNeeded,
+    runStorePruneIfNeeded: runtimeDeps.runStorePruneIfNeeded,
     restartLocalDsh: async () => {
       // PlaneHandle 宿主腿（main 3716-3720 同形——controlPlane null 门 +
       // restartLocal() + resolve 后实时 connectionState 读；resolve ≠ success
@@ -1537,41 +978,21 @@ export async function buildHeadlessCtx(
         },
       },
     ) as ((..._args: never[]) => never)
-  // - updateController（I 组；W-22 真化——design 25 §7「v1 blocked-available
-  //   诚实形态」）：Swift flavor 用 update-headless.ts 的纯 Node 控制器。
-  //   发现单源（S-21）：inputs.nativeUpdater 在场（壳声明 --native-updater
-  //   sparkle）时，check 经冻结边 updateNativeAction kind=check 交壳内 Sparkle
-  //   （appcast 单源），相位经 __host.nativeUpdatePhase 回来，sidecar 绝不再跑
-  //   GitHub releases 查询、也不排静默检查定时器；未声明原生腿时（dev /
-  //   dry-run / 未配置密钥）才走 GitHub 发现 + installBlockedReason 恒为
-  //   「原生壳不支持自动安装」+ download/restart 核心层显式拒绝。**不是**
-  //   electron-updater 的伪造注入：Electron 版 createUpdateController 的
-  //   autoUpdater 依赖 app 生命周期（quitAndInstall/autoInstallOnAppQuit），
-  //   本 flavor 明确不做自带的安装实现。
-  //   契约零改动（UpdateState 七值/字段集不变），消费面 settings-bridge
-  //   UpdateSection 只按 phase + installBlockedReason 呈现。
-  real.updateController = createHeadlessUpdateController({
-    version: chamberVersion,
-    // 原生安装腿（可选）：壳声明 --native-updater sparkle 时启用 Sparkle 转发。
-    nativeUpdater: inputs.nativeUpdater ?? undefined,
-    logger: {
-      log: (...args: unknown[]) => console.log('[updater-headless]', ...args),
-      warn: (...args: unknown[]) => console.warn('[updater-headless]', ...args),
-      error: (...args: unknown[]) => console.error('[updater-headless]', ...args),
-    },
-  })
   // - setKeepAwake / setLoginItem（A 组 SETTINGS_SET 副作用叶）已于 S-C-2 真化、
   //   S-E async 化（见上方 real 字段——async 叶经注入 edges.sendEdge（node-edges
   //   公开转发）await B 桥应答；不再走 node-edges 的 HostEdges 同步叶）。
   // - ctx 无其他残留 stub：A 组两叶真化后，注册体可达字段全部真实（I 组
   //   updateController 于 W-22 真化，见上方注记）。
-  const ctx = new Proxy(real as object, {
-    get(target: Record<string, unknown>, key: string | symbol) {
+  // 4.4a：real 已按 ShellAssemblyCtx 全量类型化（少/错一个字段都是编译期
+  // 失败——不再有双重断言擦除检查）；Proxy 只做运行期兜底：未实现成员访问
+  // 返回 loud stub（见上方 methodStub 注记）。
+  const ctx: ShellAssemblyCtx = new Proxy(real, {
+    get(target, key: string | symbol) {
       if (typeof key === 'symbol') return undefined
-      if (key in target) return target[key]
+      if (key in target) return Reflect.get(target, key)
       return methodStub(String(key))
     },
-  }) as unknown as ShellAssemblyCtx
+  })
 
   // —— 装配面返回（S-C-2）：本地 spawn 门 + plane 晚绑定 + 启动尾部 + 优雅
   // 回收腿。——
@@ -1667,7 +1088,7 @@ export async function buildHeadlessCtx(
       ])
     } finally {
       // 计时器先停：refresh 触发绝不可竞态已 dispose 的 manager（main 1058-1063）。
-      sessionRefresh.dispose()
+      shellAssembly.sessionRefresh.dispose()
       gatewaySessions.dispose()
     }
   }
@@ -1689,7 +1110,7 @@ export async function buildHeadlessCtx(
     // Electron before-quit 的「更新已下载豁免」等价态（main.ts:1042
     // updateState.phase === 'downloaded'）——退出确认不得拦下即将安装的重启。
     // 无原生安装腿时相位永不到 downloaded，恒 false（原语义不变）。
-    const updatePhase = (real.updateController as HeadlessUpdateController).state().phase
+    const updatePhase = updateController.state().phase
     return {
       windowCloseBehavior: settings.windowCloseBehavior,
       quitConfirmation: settings.quitConfirmation,

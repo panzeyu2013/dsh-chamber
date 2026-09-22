@@ -22,17 +22,17 @@ import {
   evictVersions,
   forgetExplicitInstall,
   isProtectedVersion,
-  latestKnownGood,
   listExplicitlyInstalledVersions,
-  listKnownGoodVersions,
+  listKnownGoodVersionsState,
+  listRuntimeFailuresState,
   listVersionTrees,
   markKnownGood,
   overridePath,
   queueActivationIntent,
   readActivationJournalState,
-  readCurrentPointer,
-  readOverride,
-  readRuntimeFailure,
+  readCurrentPointerState,
+  readOverrideState,
+  readRuntimeFailureState,
   readStorePruneRequest,
   recordExplicitInstall,
   recordRuntimeFailure,
@@ -139,10 +139,10 @@ test('current/override explicit clear APIs do not conflate pointer and history',
   writeCurrentPointer(base, '1.0.0');
   writeOverride(base, record);
   clearCurrentPointer(base);
-  assert.equal(readCurrentPointer(base), null);
-  assert.deepEqual(readOverride(base), record, 'pointer clear preserves override history');
+  assert.deepEqual(readCurrentPointerState(base), { kind: 'missing' });
+  assert.deepEqual(readOverrideState(base), { kind: 'valid', record }, 'pointer clear preserves override history');
   deleteOverride(base);
-  assert.equal(readOverride(base), null);
+  assert.deepEqual(readOverrideState(base), { kind: 'missing' });
 });
 
 test('override optional lifecycle evidence round-trips while old five-field shape remains readable', () => {
@@ -164,7 +164,7 @@ test('override optional lifecycle evidence round-trips while old five-field shap
     restoreOutcome: 'complete',
   };
   writeOverride(base, record);
-  assert.deepEqual(readOverride(base), record);
+  assert.deepEqual(readOverrideState(base), { kind: 'valid', record });
   const raw = JSON.parse(readFileSync(overridePath(base), 'utf8'));
   assert.equal(raw.restoreOutcome, 'complete');
 });
@@ -310,7 +310,7 @@ test('activation journal protects source, target, rollback, known-good, and queu
 
 test('validateVersionTree rejects directory-only, manifest version/platform drift, and missing bin', () => {
   const base = freshBase();
-  assert.deepEqual(validateVersionTree(base, '1.0.0'), { ok: false, error: '版本树不存在或不可读' });
+  assert.deepEqual(validateVersionTree(base, '1.0.0'), { ok: false, kind: 'invalid', error: '版本树不存在或不可读' });
   mkdirSync(path.join(base, 'dsh-runtime', '1.0.0'), { recursive: true });
   const missingManifest = validateVersionTree(base, '1.0.0');
   assert.match(missingManifest.ok ? '' : missingManifest.error, /package\.json/);
@@ -318,7 +318,7 @@ test('validateVersionTree rejects directory-only, manifest version/platform drif
   const wrongPlatform = validateVersionTree(base, '1.0.0');
   assert.match(wrongPlatform.ok ? '' : wrongPlatform.error, /平台/);
   makeVersionTree(base, '1.0.0');
-  assert.deepEqual(validateVersionTree(base, '1.0.0'), { ok: true, path: path.join(base, 'dsh-runtime', '1.0.0') });
+  assert.deepEqual(validateVersionTree(base, '1.0.0'), { ok: true, kind: 'valid', path: path.join(base, 'dsh-runtime', '1.0.0') });
   writeFileSync(path.join(base, 'dsh-runtime', '1.0.0', 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js'), '// tampered');
   const tampered = validateVersionTree(base, '1.0.0');
   assert.match(tampered.ok ? '' : tampered.error, /摘要不匹配/);
@@ -510,11 +510,16 @@ test('known-good ordering returns latest valid tree and supports exclusion', () 
   makeVersionTree(base, '1.0.1');
   markKnownGood(base, '1.0.0', new Date('2026-08-22T00:00:00.000Z'));
   markKnownGood(base, '1.0.1', new Date('2026-08-23T00:00:00.000Z'));
-  assert.deepEqual(listKnownGoodVersions(base), ['1.0.1', '1.0.0']);
-  assert.equal(latestKnownGood(base), '1.0.1');
-  assert.equal(latestKnownGood(base, '1.0.1'), '1.0.0');
+  const knownGoodState = listKnownGoodVersionsState(base);
+  assert.deepEqual(knownGoodState, { kind: 'ok', versions: ['1.0.1', '1.0.0'] });
+  // Production known-good candidate scan: first ledger entry that is not
+  // excluded and whose tree passes the platform validation.
+  const latestValidKnownGood = (excludeVersion: string | null = null): string | null =>
+    knownGoodState.versions.find(version => version !== excludeVersion && validateVersionTree(base, version).ok) ?? null;
+  assert.equal(latestValidKnownGood(), '1.0.1');
+  assert.equal(latestValidKnownGood('1.0.1'), '1.0.0');
   rmSync(path.join(base, 'dsh-runtime', '1.0.1', 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js'));
-  assert.equal(latestKnownGood(base), '1.0.0', 'invalid latest marker is skipped');
+  assert.equal(latestValidKnownGood(), '1.0.0', 'invalid latest marker is skipped');
 });
 
 test('failure records are atomic, sanitized, cumulative, summarized, and protect the tree', () => {
@@ -531,11 +536,13 @@ test('failure records are atomic, sanitized, cumulative, summarized, and protect
   assert.equal(second.firstFailedAt, '2026-08-22T00:00:00.000Z');
   assert.equal(second.lastFailedAt, '2026-08-23T00:00:00.000Z');
   assert.equal(second.restoreOutcome, 'incomplete');
-  assert.equal(readRuntimeFailure(base, '1.0.0')?.occurrences, 2);
-  assert.deepEqual(runtimeFailureSummary(base), { count: 1, latest: second });
+  const failureState = readRuntimeFailureState(base, '1.0.0');
+  assert.equal(failureState.kind, 'valid');
+  if (failureState.kind === 'valid') assert.equal(failureState.record.occurrences, 2);
+  assert.deepEqual(runtimeFailureSummary(base), { kind: 'ok', count: 1, latest: second, detail: null });
   assert.equal(isProtectedVersion(base, '1.0.0'), true);
   clearRuntimeFailure(base, '1.0.0');
-  assert.equal(readRuntimeFailure(base, '1.0.0'), null);
+  assert.deepEqual(readRuntimeFailureState(base, '1.0.0'), { kind: 'missing' });
 });
 
 test('corrupt failure evidence continues protecting its version after quarantine', () => {
@@ -544,10 +551,14 @@ test('corrupt failure evidence continues protecting its version after quarantine
   const file = path.join(base, 'dsh-runtime', 'failures', '1.0.0.json');
   mkdirSync(path.dirname(file), { recursive: true });
   writeFileSync(file, '{ broken', 'utf8');
-  assert.equal(readRuntimeFailure(base, '1.0.0'), null);
+  assert.equal(readRuntimeFailureState(base, '1.0.0').kind, 'corrupt');
+  assert.deepEqual(listRuntimeFailuresState(base), { kind: 'ok', failures: [] }, 'the set read quarantines the corrupt record and skips it');
   assert.ok(existsSync(`${file}.corrupt`));
   assert.equal(isProtectedVersion(base, '1.0.0'), true);
-  assert.deepEqual(runtimeSnapshotRetentionState(base), { kind: 'corrupt' });
+  assert.deepEqual(runtimeSnapshotRetentionState(base), {
+    kind: 'corrupt',
+    detail: 'failure evidence 已损坏；拒绝 prune',
+  });
 });
 
 test('unsafe failure evidence directory fails closed for cleanup and eviction', () => {
@@ -583,3 +594,74 @@ test('snapshot retention facts close over pointer/known-good/journal/failure ref
   });
 });
 
+
+/** Deterministic EACCES fixture: chmod 000 blocks a non-root POSIX reader,
+ *  while root (and win32 mode semantics) cannot express the failure. */
+const noPermissionFixture = {
+  skip: process.platform === 'win32' || (typeof process.getuid === 'function' && process.getuid() === 0)
+    ? 'requires a non-root POSIX host (chmod 000 must block the reader)'
+    : false,
+}
+
+test('unreadable selection metadata is unknown - never corrupt, never missing', noPermissionFixture, () => {
+  const base = freshBase();
+  const runtimeDir = path.join(base, 'dsh-runtime');
+  mkdirSync(runtimeDir, { recursive: true });
+  chmodSync(runtimeDir, 0o000);
+  try {
+    const pointer = readCurrentPointerState(base);
+    assert.equal(pointer.kind, 'unknown');
+    assert.match(pointer.kind === 'unknown' ? pointer.detail : '', /EACCES/);
+    const override = readOverrideState(base);
+    assert.equal(override.kind, 'unknown');
+  } finally {
+    chmodSync(runtimeDir, 0o700);
+  }
+});
+
+test('unreadable failure ledger reports unknown, never a fabricated count 0', noPermissionFixture, () => {
+  const base = freshBase();
+  const failures = path.join(base, 'dsh-runtime', 'failures');
+  mkdirSync(failures, { recursive: true });
+  chmodSync(failures, 0o000);
+  try {
+    const summary = runtimeFailureSummary(base);
+    assert.equal(summary.kind, 'unknown');
+    assert.equal(summary.count, null);
+    assert.equal(summary.latest, null);
+    assert.ok(summary.detail !== null);
+    assert.equal(runtimeSnapshotRetentionState(base).kind, 'unknown');
+  } finally {
+    chmodSync(failures, 0o700);
+  }
+});
+
+test('unreadable known-good ledger is an explicit unknown state, not an empty list', noPermissionFixture, () => {
+  const base = freshBase();
+  const runtimeDir = path.join(base, 'dsh-runtime');
+  mkdirSync(runtimeDir, { recursive: true });
+  const file = path.join(runtimeDir, 'known-good.json');
+  writeFileSync(file, JSON.stringify({ versions: { '1.0.0': '2026-08-23T00:00:00.000Z' } }), 'utf8');
+  chmodSync(file, 0o000);
+  try {
+    const state = listKnownGoodVersionsState(base);
+    assert.equal(state.kind, 'unknown');
+    assert.equal(isProtectedVersion(base, '1.0.0'), true);
+  } finally {
+    chmodSync(file, 0o600);
+  }
+});
+
+test('unreadable version tree validates as unknown, not invalid', noPermissionFixture, () => {
+  const base = freshBase();
+  const tree = path.join(base, 'dsh-runtime', '1.0.0');
+  mkdirSync(tree, { recursive: true });
+  chmodSync(tree, 0o000);
+  try {
+    const result = validateVersionTree(base, '1.0.0');
+    assert.equal(result.ok, false);
+    assert.equal(result.kind, 'unknown');
+  } finally {
+    chmodSync(tree, 0o700);
+  }
+});

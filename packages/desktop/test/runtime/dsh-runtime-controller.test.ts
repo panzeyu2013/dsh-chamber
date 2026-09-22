@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { DshRuntimeController } from '../../dsh-runtime-controller.ts';
 import type { ControllerDeps, RuntimeState } from '../../dsh-runtime-controller.ts';
 import type { RegistryMetadata } from '@dsh-chamber/dsh-runtime';
-import type { OverrideRecord } from '@dsh-chamber/dsh-runtime';
+import type { CurrentPointerState, OverrideRecord, OverrideState } from '@dsh-chamber/dsh-runtime';
 import type { ActivationIntentInput } from '@dsh-chamber/dsh-runtime';
 import type { RuntimeDiskSummary } from '@dsh-chamber/dsh-runtime';
 import type { InstallResult } from '@dsh-chamber/dsh-runtime';
@@ -24,6 +24,11 @@ function meta(latest: string | null, versions: string[]): RegistryMetadata {
 interface Store {
   override: OverrideRecord | null
   pointer: string | null
+  /** Authoritative three-state fixtures (B1 §2.3): when present they take
+   *  precedence over the legacy record/pointer projections, so the fail-closed
+   *  corrupt/unknown paths can be driven without a real filesystem. */
+  overrideState?: OverrideState
+  pointerState?: CurrentPointerState
   trees: string[]
   deleted: boolean
   activationIntent: ActivationIntentInput | null
@@ -68,9 +73,11 @@ function makeDeps(store: Store, opts?: { meta?: RegistryMetadata; installResult?
       return opts?.installResult ?? { versionTreeDir: '/rt/0.2.0', resolvedVersion: '0.2.0' };
     },
     store: {
-      readOverride: () => store.override,
+      readOverrideState: () => store.overrideState
+        ?? (store.override === null ? { kind: 'missing' } : { kind: 'valid', record: store.override }),
       writeOverride: (_b: string, record: OverrideRecord) => { store.override = record; },
-      readCurrentPointer: () => store.pointer,
+      readCurrentPointerState: () => store.pointerState
+        ?? (store.pointer === null ? { kind: 'missing' } : { kind: 'valid', version: store.pointer }),
       listVersionTrees: () => store.trees,
       validateVersionTree: () => ({ ok: true }),
       deleteOverride: () => { store.deleted = true; store.override = null; },
@@ -479,4 +486,172 @@ test('metadata recovery capability is an explicit category-only lifecycle projec
   assert.equal(projected.metadataHealth, 'selection-corrupt');
   assert.deepEqual(projected.metadataComponents, ['current', 'activation-journal', 'retained-evidence']);
   assert.equal(projected.canRecoverMetadata, true);
+});
+
+// ---------------------------------------------------------------------------
+// B1/B3 2.2 authority lockstep: corrupt | unknown material is a blocked
+// verdict, never the bundled default and never "no override".
+// ---------------------------------------------------------------------------
+
+function settledOverride(pending: string | null = null): OverrideRecord {
+  return {
+    shellVersion: '0.1.4',
+    chosenVersion: '0.2.0',
+    resolvedVersion: '0.2.0',
+    pending,
+    swapAttempted: false,
+  };
+}
+
+test('authority: a corrupt override blocks active resolution (never bundled) and refuses install', async () => {
+  const store = makeStore();
+  store.pointer = '0.2.0';
+  store.override = settledOverride(null);
+  store.overrideState = { kind: 'corrupt' };
+  store.trees = ['0.2.0', '0.3.0'];
+  let installCalls = 0;
+  const deps = makeDeps(store, { meta: meta('0.3.0', ['0.3.0']) });
+  deps.install = async () => { installCalls += 1; return { versionTreeDir: '/x', resolvedVersion: '0.3.0' }; };
+  const c = makeController(store, deps, { bundled: '0.1.1-rc.2' });
+
+  const state = c.getState();
+  assert.equal(state.active, null, 'corrupt override must not project the bundled version as active');
+  assert.equal(state.source, 'bundled');
+  assert.equal(state.runtimeBlocked, true);
+  assert.match(state.runtimeBlockedReason ?? '', /override 元数据损坏/);
+  assert.equal(state.hasOverride, true, 'corrupt bytes are not "no override"');
+  assert.equal(state.pending, null, 'a corrupt override cannot license its pending');
+
+  // The lock outranks every lifecycle patch while the material stays broken.
+  const patched = c.setLifecycle({ phase: 'idle', runtimeBlocked: false, runtimeBlockedReason: null });
+  assert.equal(patched.runtimeBlocked, true);
+  assert.match(patched.runtimeBlockedReason ?? '', /override 元数据损坏/);
+
+  const afterInstall = await c.install('0.3.0');
+  assert.equal(installCalls, 0, 'a fresh install must never overwrite corrupt authority material');
+  assert.equal(afterInstall.phase, 'idle');
+  assert.equal(store.overrideState.kind, 'corrupt');
+});
+
+test('authority: an unknown override State blocks with the read detail and refuses install', async () => {
+  const store = makeStore();
+  store.pointer = '0.2.0';
+  store.override = settledOverride('0.2.0');
+  store.overrideState = { kind: 'unknown', detail: '私有文件不可读：override.json（EACCES）' };
+  let installCalls = 0;
+  const deps = makeDeps(store, { meta: meta('0.3.0', ['0.3.0']) });
+  deps.install = async () => { installCalls += 1; return { versionTreeDir: '/x', resolvedVersion: '0.3.0' }; };
+  const c = makeController(store, deps, { bundled: '0.1.1-rc.2' });
+
+  const state = c.getState();
+  assert.equal(state.active, null);
+  assert.equal(state.runtimeBlocked, true);
+  assert.match(state.runtimeBlockedReason ?? '', /override 元数据不可读：私有文件不可读：override.json（EACCES）/);
+  assert.equal(state.hasOverride, true);
+
+  const afterInstall = await c.install('0.3.0');
+  assert.equal(installCalls, 0);
+  assert.equal(afterInstall.active, null);
+});
+
+test('authority: an unreadable current pointer blocks even under a valid override (with detail)', async () => {
+  const store = makeStore();
+  store.pointer = '0.2.0';
+  store.override = settledOverride(null);
+  store.pointerState = { kind: 'unknown', detail: '私有文件不可读：current（EIO）' };
+  let installCalls = 0;
+  const deps = makeDeps(store, { meta: meta('0.3.0', ['0.3.0']) });
+  deps.install = async () => { installCalls += 1; return { versionTreeDir: '/x', resolvedVersion: '0.3.0' }; };
+  const c = makeController(store, deps, { bundled: '0.1.1-rc.2' });
+
+  const state = c.getState();
+  assert.equal(state.active, null, 'an unreadable pointer proves neither absence nor corruption');
+  assert.equal(state.runtimeBlocked, true);
+  assert.match(state.runtimeBlockedReason ?? '', /current pointer 元数据不可读：私有文件不可读：current（EIO）/);
+  assert.equal((await c.install('0.3.0')).active, null);
+  assert.equal(installCalls, 0);
+});
+
+test('authority: a corrupt current pointer blocks a valid override instead of falling back to builtin', () => {
+  const store = makeStore();
+  store.pointer = '0.2.0';
+  store.override = settledOverride(null);
+  store.pointerState = { kind: 'corrupt' };
+  const c = makeController(store, undefined, { bundled: '0.1.1-rc.2' });
+
+  const state = c.getState();
+  assert.equal(state.active, null);
+  assert.equal(state.runtimeBlocked, true);
+  assert.match(state.runtimeBlockedReason ?? '', /current pointer 元数据损坏/);
+  assert.equal(state.hasOverride, true, 'the readable override leaf stays visible');
+});
+
+test('authority: check never fabricates an available verdict from an unknowable active runtime', async () => {
+  const store = makeStore();
+  store.pointerState = { kind: 'unknown', detail: 'EIO' };
+  const deps = makeDeps(store, { meta: meta('0.9.9', ['0.9.9']) });
+  const c = makeController(store, deps, { bundled: '0.1.1-rc.2' });
+
+  const state = await c.check();
+  assert.equal(state.phase, 'idle', 'resolution.kind !== ok can never mean "no active → update available"');
+  assert.equal(state.latest, '0.9.9');
+  assert.equal(state.runtimeBlocked, true);
+  assert.match(state.runtimeBlockedReason ?? '', /current pointer 元数据不可读/);
+});
+
+test('authority: a missing-state store keeps the legacy bundled/pointer selection semantics', () => {
+  // Regression guard for the unchanged happy path: the State readers derive
+  // missing/valid from the same fixture and the orphan-pointer rule survives.
+  const store = makeStore();
+  const c = makeController(store, undefined, { bundled: '0.1.1-rc.2' });
+  assert.equal(c.getState().active, '0.1.1-rc.2');
+  assert.equal(c.getState().hasOverride, false);
+  store.pointer = '0.2.0';
+  assert.equal(c.getState().active, '0.1.1-rc.2', 'orphan pointer stays ignored without a valid override');
+  store.override = settledOverride(null);
+  assert.equal(c.getState().active, '0.2.0');
+  assert.equal(c.getState().hasOverride, true);
+});
+
+test('authority: a valid applied override missing its current pointer blocks instead of folding bundled (shell-core parity)', async () => {
+  const store = makeStore();
+  // settledOverride(null): chosen + resolved recorded, no pending, no
+  // rolled-back/failed outcome — an APPLIED selection whose authoritative
+  // current pointer vanished. shell-core resolveActiveRuntime fails closed
+  // with this exact reason; the controller must not project the bundled
+  // default as active over a user-migrated DSH_HOME.
+  store.override = settledOverride(null);
+  let installCalls = 0;
+  const deps = makeDeps(store, { meta: meta('0.3.0', ['0.3.0']) });
+  deps.install = async () => { installCalls += 1; return { versionTreeDir: '/x', resolvedVersion: '0.3.0' }; };
+  const c = makeController(store, deps, { bundled: '0.1.1-rc.2' });
+
+  const state = c.getState();
+  assert.equal(state.active, null, 'a missing authoritative current pointer must not project the bundled default');
+  assert.equal(state.runtimeBlocked, true);
+  assert.equal(state.runtimeBlockedReason, 'active user override is missing its authoritative current pointer');
+  assert.equal(state.source, 'bundled');
+  assert.equal(state.hasOverride, true, 'the readable override leaf stays visible');
+
+  const afterInstall = await c.install('0.3.0');
+  assert.equal(installCalls, 0, 'a fresh install must never overwrite a stalled applied selection');
+  assert.equal(afterInstall.active, null);
+});
+
+test('authority: pending / rolled-back overrides without a pointer keep builtin authoritative (shell-core predicate)', () => {
+  // The same predicate's other side: these states ARE builtin-authoritative in
+  // shell-core resolveActiveRuntime, so the controller keeps folding bundled
+  // and must NOT publish the missing-pointer lock.
+  const pendingStore = makeStore();
+  pendingStore.override = settledOverride('0.2.0');
+  const pendingState = makeController(pendingStore, undefined, { bundled: '0.1.1-rc.2' }).getState();
+  assert.equal(pendingState.active, '0.1.1-rc.2', 'pending keeps builtin active until the swap applies');
+  assert.equal(pendingState.pending, '0.2.0');
+  assert.notEqual(pendingState.runtimeBlockedReason, 'active user override is missing its authoritative current pointer');
+
+  const rolledBackStore = makeStore();
+  rolledBackStore.override = { ...settledOverride(null), lastOutcome: 'rolled-back' };
+  const rolledBackState = makeController(rolledBackStore, undefined, { bundled: '0.1.1-rc.2' }).getState();
+  assert.equal(rolledBackState.active, '0.1.1-rc.2', 'a rolled-back selection falls back to builtin');
+  assert.notEqual(rolledBackState.runtimeBlockedReason, 'active user override is missing its authoritative current pointer');
 });

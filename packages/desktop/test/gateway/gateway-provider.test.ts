@@ -9,8 +9,9 @@ import type { AddressInfo } from 'node:net'
 import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { configureGatewaySecretStore as configureGatewaySecretStoreRaw, configureGatewayTokenStore as configureGatewayTokenStoreRaw, DEFAULT_GATEWAY_HTTP_PORT, DEFAULT_GATEWAY_PORT, GATEWAY_HOST_PATTERN, gatewayHttpFailureIsTerminal, gatewayPasswordValidationError, gatewayProvider, gatewaySecretStorageCrossFlavorUnreadable, gatewaySecretStorageMode, gatewayTokenValidationError, getGatewayPassword, getGatewayToken, setGatewayPassword, setGatewayToken, setInstanceSecrets } from '../../gateway-provider.ts'
+import { configureGatewaySecretStore as configureGatewaySecretStoreRaw, configureGatewayTokenStore as configureGatewayTokenStoreRaw, DEFAULT_GATEWAY_HTTP_PORT, DEFAULT_GATEWAY_PORT, GATEWAY_HOST_PATTERN, gatewayHttpFailureIsTerminal, gatewayPasswordValidationError, gatewayProvider, gatewaySecretStorageCrossFlavorUnreadable, gatewaySecretStorageMode, gatewayTokenValidationError, getGatewayPassword, getGatewayToken, setGatewayPassword, setGatewayToken, setInstanceSecrets, verifyGatewayRuntimeIdentity } from '../../gateway-provider.ts'
 import { GATEWAY_RUNTIME_STATUS } from '../support/gateway-session-test-hooks.ts'
+import { boundedGatewayRequest } from '../../gateway-http-core.ts'
 import type { SecretCryptoAdapter } from '../../gateway-provider.ts'
 import { gatewayCredentialBinding } from '../../credential-binding.ts'
 import type { TransportInstanceSpec } from '../../transport-provider.ts'
@@ -796,6 +797,70 @@ test('verifyUp: 403/421 stay terminal and 5xx stays transient (design 17 §7.3 s
         // one. Pinned so the shared probe core cannot silently flip the shape.
         assert.equal('statusCode' in result, false, `direct probe has no statusCode on HTTP ${status}`)
       }
+    }
+  } finally {
+    await server.close()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// gateway-http-core (4.1 audit): the shared bounded request core
+// ---------------------------------------------------------------------------
+
+test('boundedGatewayRequest classifies response bodies and reports oversize without rejecting', async () => {
+  let payload = JSON.stringify({ a: 1 })
+  const server = await startHttpProbeServer((_req, res) => {
+    res.on('error', () => {})
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end(payload)
+  })
+  const request = (maxBodyBytes = 1024) => boundedGatewayRequest(`http://127.0.0.1:${server.port}/x`, {
+    method: 'GET', headers: {}, insecure: true, spkiPin: null, timeoutMs: 1_000, maxBodyBytes,
+  })
+  try {
+    assert.deepEqual(await request(), { kind: 'response', status: 200, payload: { a: 1 }, json: 'ok' })
+    payload = ''
+    assert.deepEqual(await request(), { kind: 'response', status: 200, payload: null, json: 'empty' })
+    payload = 'not json'
+    assert.deepEqual(await request(), { kind: 'response', status: 200, payload: null, json: 'invalid' })
+    payload = '0123456789'
+    assert.deepEqual(await request(4), { kind: 'oversize' }, 'the size bound settles as an outcome, never a rejection')
+  } finally {
+    await server.close()
+  }
+})
+
+test('verifyGatewayRuntimeIdentity settles non-200 from the status line and classifies oversize as terminal (4.1)', async () => {
+  let hanging401 = true
+  const server = await startHttpProbeServer((_req, res) => {
+    res.on('error', () => {})
+    if (hanging401) {
+      res.writeHead(401)
+      // Never ends: the probe must classify the raw 401 from the status line
+      // instead of waiting for (or bounding) a body it does not read.
+      res.write('partial body that never ends')
+      return
+    }
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end('x'.repeat(4096))
+  })
+  const probe = () => verifyGatewayRuntimeIdentity({
+    host: '127.0.0.1', port: server.port, token: null, insecure: true, timeoutMs: 1_500, maxBodyBytes: 64, cookie: null,
+  })
+  try {
+    const unauth = await probe()
+    assert.equal(unauth.ok, false)
+    if (!unauth.ok) {
+      assert.equal(unauth.terminal, true)
+      assert.equal(unauth.statusCode, 401, 'the raw 401 still rides the result (the session flow keys on it)')
+      assert.match(unauth.detail ?? '', /requires authentication \(401\)/)
+    }
+    hanging401 = false
+    const oversized = await probe()
+    assert.equal(oversized.ok, false)
+    if (!oversized.ok) {
+      assert.equal(oversized.terminal, true, 'a body beyond maxBodyBytes is a terminal identity answer')
+      assert.match(oversized.detail ?? '', /oversized runtime identity response/)
     }
   } finally {
     await server.close()

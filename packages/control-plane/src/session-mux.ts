@@ -883,9 +883,19 @@ export function createSessionMux(deps: SessionMuxDeps): SessionMux {
   }
   /** Drop every held waterfall without settling anything (socket death,
    *  stop). The host removes this client from the deliveries on close, so a
-   *  held frame must never survive into the next generation. */
+   *  held frame must never survive into the next generation. A held PENDING
+   *  waterfall (kind !== null) also has a session-state pending entry keyed by
+   *  eventId; without this onCancel the entry stayed pending until an
+   *  unrelated waterfall or observer.stop. onCancel only clears the local
+   *  pending map (it never answers the host), so it is safe on every
+   *  non-answering release; a foreign waterfall (kind === null) never had an
+   *  entry and is deliberately not reported. */
   const releaseHeldWaterfalls = (): void => {
-    for (const held of heldWaterfalls.values()) clearTimer(held.timer)
+    const at = now()
+    for (const held of heldWaterfalls.values()) {
+      clearTimer(held.timer)
+      if (held.kind !== null) deps.onCancel?.(held.eventId, at)
+    }
     heldWaterfalls.clear()
     status.heldWaterfalls = 0
   }

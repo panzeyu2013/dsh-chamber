@@ -36,9 +36,11 @@ import { makeOwnedTreeWritable } from './tree-writable.ts'
 import {
   atomicWriteRuntimeFileNoFollow,
   ensureRuntimeRootNoFollow,
+  isUnreadableFsError,
   quarantineRuntimeFileNoFollow,
-  readPrivateFileNoFollow,
+  readPrivateFileStateNoFollow,
   removeRuntimeFileNoFollow,
+  type ArtifactReadState,
 } from './private-fs.ts'
 
 const MAX_CURRENT_POINTER_BYTES = 16 * 1024
@@ -76,14 +78,19 @@ export interface OverrideRecord {
   restoreOutcome?: RestoreOutcomeRecord | null
 }
 
+/** Read-failure material is its own state: EACCES/EIO on the authority leaf
+ *  proves neither absence nor corruption, so it can never alias 'missing'
+ *  (builtin / no override) or 'corrupt' (quarantine evidence). */
 export type CurrentPointerState =
   | { kind: 'missing' }
   | { kind: 'corrupt' }
+  | { kind: 'unknown'; detail: string }
   | { kind: 'valid'; version: string }
 
 export type OverrideState =
   | { kind: 'missing' }
   | { kind: 'corrupt' }
+  | { kind: 'unknown'; detail: string }
   | { kind: 'valid'; record: OverrideRecord }
 
 export interface RuntimeFailureRecord {
@@ -107,12 +114,19 @@ export interface RuntimeFailureInput {
 }
 
 export interface RuntimeFailureSummary {
-  count: number
+  /** 'ok' when the failure set is fully known; 'unknown' when a read error
+   *  made it unknowable (count/latest are then not facts). */
+  kind: 'ok' | 'unknown'
+  /** Failure count; null — never a fabricated 0 — when kind === 'unknown'. */
+  count: number | null
   latest: RuntimeFailureRecord | null
+  /** Read-failure detail when kind === 'unknown', else null. */
+  detail: string | null
 }
 
 export type RuntimeSnapshotRetentionState =
-  | { kind: 'corrupt' }
+  | { kind: 'corrupt'; detail: string }
+  | { kind: 'unknown'; detail: string }
   | { kind: 'valid'; protectedVersions: string[]; protectedSnapshotNames: string[] }
 
 export interface StorePruneRequest {
@@ -246,13 +260,7 @@ interface FileIdentity {
   ino: number | bigint
 }
 
-interface StableAuthorityRead {
-  kind: 'valid'
-  raw: string
-  identity: FileIdentity
-}
-
-type AuthorityRead = StableAuthorityRead | { kind: 'missing' } | { kind: 'unsafe' }
+type AuthorityRead = ArtifactReadState<{ raw: string; identity: FileIdentity }>
 
 function sameIdentity(left: FileIdentity, right: FileIdentity): boolean {
   return left.dev === right.dev && left.ino === right.ino
@@ -262,10 +270,11 @@ function sameIdentity(left: FileIdentity, right: FileIdentity): boolean {
  * Read one authority leaf without ever following the leaf itself. The runtime
  * directory and leaf identities are checked around the operation, the file is
  * required to have a single link, and permission tightening happens through
- * the already-verified descriptor rather than a path lookup.
+ * the already-verified descriptor rather than a path lookup. The material
+ * state keeps an OS-level read failure separate from corrupt content.
  */
 function readAuthorityMetadata(filePath: string, maxBytes: number): AuthorityRead {
-  return readPrivateFileNoFollow(filePath, maxBytes)
+  return readPrivateFileStateNoFollow(filePath, maxBytes)
 }
 
 function hasCorruptOverrideSentinel(filePath: string): boolean {
@@ -311,9 +320,10 @@ export function readCurrentPointerState(baseDir: string): CurrentPointerState {
   const filePath = currentPointerPath(baseDir)
   const read = readAuthorityMetadata(filePath, MAX_CURRENT_POINTER_BYTES)
   if (read.kind === 'missing') return { kind: 'missing' }
-  if (read.kind === 'unsafe') return { kind: 'corrupt' }
+  if (read.kind === 'unknown') return { kind: 'unknown', detail: read.detail }
+  if (read.kind === 'corrupt') return { kind: 'corrupt' }
   try {
-    const parsed = JSON.parse(read.raw) as unknown
+    const parsed = JSON.parse(read.value.raw) as unknown
     if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return { kind: 'corrupt' }
     const version = (parsed as Record<string, unknown>).version
     return typeof version === 'string' && isSafeVersion(version)
@@ -322,13 +332,6 @@ export function readCurrentPointerState(baseDir: string): CurrentPointerState {
   } catch {
     return { kind: 'corrupt' }
   }
-}
-
-/** Compatibility projection. Security-sensitive startup/resolution code must
- * consume readCurrentPointerState so corrupt never aliases builtin. */
-export function readCurrentPointer(baseDir: string): string | null {
-  const state = readCurrentPointerState(baseDir)
-  return state.kind === 'valid' ? state.version : null
 }
 
 export function writeCurrentPointer(baseDir: string, version: string): void {
@@ -409,27 +412,21 @@ export function readOverrideState(baseDir: string): OverrideState {
   if (read.kind === 'missing') {
     return hasCorruptOverrideSentinel(filePath) ? { kind: 'corrupt' } : { kind: 'missing' }
   }
-  if (read.kind === 'unsafe') return { kind: 'corrupt' }
+  if (read.kind === 'unknown') return { kind: 'unknown', detail: read.detail }
+  if (read.kind === 'corrupt') return { kind: 'corrupt' }
   let parsed: unknown
   try {
-    parsed = JSON.parse(read.raw)
+    parsed = JSON.parse(read.value.raw)
   } catch {
-    preserveSafeCorruptAuthority(baseDir, filePath, read.identity)
+    preserveSafeCorruptAuthority(baseDir, filePath, read.value.identity)
     return { kind: 'corrupt' }
   }
   const record = parseOverrideRecord(parsed)
   if (record === null) {
-    preserveSafeCorruptAuthority(baseDir, filePath, read.identity)
+    preserveSafeCorruptAuthority(baseDir, filePath, read.value.identity)
     return { kind: 'corrupt' }
   }
   return { kind: 'valid', record }
-}
-
-/** Compatibility projection. Security-sensitive startup/resolution code must
- * consume readOverrideState so corruption never aliases no override. */
-export function readOverride(baseDir: string): OverrideRecord | null {
-  const state = readOverrideState(baseDir)
-  return state.kind === 'valid' ? state.record : null
 }
 
 function assertOptionalText(value: string | null | undefined, field: string): void {
@@ -647,9 +644,11 @@ export function readActivationJournalState(baseDir: string): ActivationJournalSt
   const filePath = activationJournalPath(baseDir)
   const read = readAuthorityMetadata(filePath, MAX_ACTIVATION_JOURNAL_BYTES)
   if (read.kind === 'missing') return { kind: 'missing' }
-  if (read.kind === 'unsafe') return { kind: 'corrupt' }
+  // The journal has no 'unknown' state on purpose: an unreadable journal is
+  // exactly as fail-closed as corruption and must never alias "no journal".
+  if (read.kind === 'unknown' || read.kind === 'corrupt') return { kind: 'corrupt' }
   try {
-    const journal = parseActivationJournal(JSON.parse(read.raw) as unknown)
+    const journal = parseActivationJournal(JSON.parse(read.value.raw) as unknown)
     return journal === null ? { kind: 'corrupt' } : { kind: 'valid', journal }
   } catch {
     return { kind: 'corrupt' }
@@ -812,79 +811,132 @@ export function listVersionTrees(baseDir: string): string[] {
     .sort()
 }
 
-export type VersionTreeValidation = { ok: true; path: string } | { ok: false; error: string }
+export type VersionTreeValidation =
+  | { ok: true; kind: 'valid'; path: string }
+  | { ok: false; kind: 'invalid'; error: string }
+  | { ok: false; kind: 'unknown'; error: string }
+
+type TreeValidationFailure = { kind: 'invalid' | 'unknown'; error: string }
+
+function validationFailure(kind: 'invalid' | 'unknown', error: string): TreeValidationFailure {
+  return { kind, error }
+}
 
 function validateCriticalRuntimeFiles(
   treePath: string,
   version: string,
   dshManifest: Record<string, unknown>,
-): string | null {
+): TreeValidationFailure | null {
   const critical = dshManifest.criticalFiles
   if (critical === null || typeof critical !== 'object' || Array.isArray(critical)) {
-    return '版本树缺少关键文件摘要'
+    return validationFailure('invalid', '版本树缺少关键文件摘要')
   }
   let rootReal: string
-  try { rootReal = realpathSync(treePath) } catch { return '版本树真实路径不可解析' }
+  try {
+    rootReal = realpathSync(treePath)
+  } catch (error) {
+    return validationFailure(isUnreadableFsError(error) ? 'unknown' : 'invalid', '版本树真实路径不可解析')
+  }
   for (const relativePath of CRITICAL_RUNTIME_FILES) {
     const expected = (critical as Record<string, unknown>)[relativePath]
     if (typeof expected !== 'string' || !CRITICAL_FILE_DIGEST_PATTERN.test(expected)) {
-      return `版本树关键文件摘要无效：${relativePath}`
+      return validationFailure('invalid', '版本树关键文件摘要无效：' + relativePath)
     }
     const candidate = join(treePath, relativePath)
     try {
       const opened = openCriticalRuntimeFile(rootReal, candidate)
-      if (opened.kind === 'not-regular-file') return `版本树关键文件不是实体文件：${relativePath}`
-      if (opened.kind === 'escapes-tree') return `版本树关键文件逃逸目录：${relativePath}`
-      if (sha256FileDigest(opened.path) !== expected) return `版本树关键文件摘要不匹配：${relativePath}`
-    } catch {
-      return `版本树关键文件缺失或不可读：${relativePath}`
+      if (opened.kind === 'not-regular-file') return validationFailure('invalid', '版本树关键文件不是实体文件：' + relativePath)
+      if (opened.kind === 'escapes-tree') return validationFailure('invalid', '版本树关键文件逃逸目录：' + relativePath)
+      if (sha256FileDigest(opened.path) !== expected) return validationFailure('invalid', '版本树关键文件摘要不匹配：' + relativePath)
+    } catch (error) {
+      // ENOENT and digest/shape drift mean damaged content; EACCES/EIO only
+      // means the bytes are unreadable and must be reported as unknown.
+      return validationFailure(
+        isUnreadableFsError(error) ? 'unknown' : 'invalid',
+        '版本树关键文件缺失或不可读：' + relativePath,
+      )
     }
   }
+  let rawManifest: string
   try {
-    const packageManifest = JSON.parse(readFileSync(join(treePath, CRITICAL_RUNTIME_FILES[0]), 'utf8')) as unknown
-    if (packageManifest === null || typeof packageManifest !== 'object' || Array.isArray(packageManifest)) {
-      return '版本树 dsh package manifest 形状无效'
-    }
-    const pkg = packageManifest as Record<string, unknown>
-    if (pkg.name !== '@deepseek-ai/dsh' || pkg.version !== version) return '版本树 dsh package 身份不匹配'
+    rawManifest = readFileSync(join(treePath, CRITICAL_RUNTIME_FILES[0]), 'utf8')
+  } catch (error) {
+    return validationFailure(
+      isUnreadableFsError(error) ? 'unknown' : 'invalid',
+      '版本树 dsh package manifest 缺失或不可读',
+    )
+  }
+  let packageManifest: unknown
+  try {
+    packageManifest = JSON.parse(rawManifest) as unknown
   } catch {
-    return '版本树 dsh package manifest 无效'
+    return validationFailure('invalid', '版本树 dsh package manifest 无效')
+  }
+  if (packageManifest === null || typeof packageManifest !== 'object' || Array.isArray(packageManifest)) {
+    return validationFailure('invalid', '版本树 dsh package manifest 形状无效')
+  }
+  const pkg = packageManifest as Record<string, unknown>
+  if (pkg.name !== '@deepseek-ai/dsh' || pkg.version !== version) {
+    return validationFailure('invalid', '版本树 dsh package 身份不匹配')
   }
   return null
 }
 
-/** Validate the complete immutable-tree contract, not merely its directory. */
+/** Validate the complete immutable-tree contract, not merely its directory.
+ *  'kind' distinguishes a proven-invalid tree from an unreadable one: the
+ *  installer may replace an invalid tree but must never overwrite an unknown
+ *  one. */
 export function validateVersionTree(
   baseDir: string,
   version: string,
-  platform = `${process.platform}-${process.arch}`,
+  platform = process.platform + '-' + process.arch,
 ): VersionTreeValidation {
-  if (!isSafeVersion(version)) return { ok: false, error: '版本号不是安全的精确 semver' }
+  if (!isSafeVersion(version)) return { ok: false, kind: 'invalid', error: '版本号不是安全的精确 semver' }
   const treePath = join(runtimeDirPath(baseDir), version)
   try {
-    if (!lstatSync(treePath).isDirectory()) return { ok: false, error: '版本树不存在或不是实体目录' }
-  } catch {
-    return { ok: false, error: '版本树不存在或不可读' }
+    if (!lstatSync(treePath).isDirectory()) return { ok: false, kind: 'invalid', error: '版本树不存在或不是实体目录' }
+  } catch (error) {
+    return {
+      ok: false,
+      kind: isUnreadableFsError(error) ? 'unknown' : 'invalid',
+      error: '版本树不存在或不可读',
+    }
+  }
+  let rawManifest: string
+  try {
+    rawManifest = readFileSync(join(treePath, 'package.json'), 'utf8')
+  } catch (error) {
+    return {
+      ok: false,
+      kind: isUnreadableFsError(error) ? 'unknown' : 'invalid',
+      error: '版本树 package.json 缺失或损坏',
+    }
   }
   let manifest: unknown
   try {
-    manifest = JSON.parse(readFileSync(join(treePath, 'package.json'), 'utf8')) as unknown
+    manifest = JSON.parse(rawManifest) as unknown
   } catch {
-    return { ok: false, error: '版本树 package.json 缺失或损坏' }
+    return { ok: false, kind: 'invalid', error: '版本树 package.json 缺失或损坏' }
   }
-  if (manifest === null || typeof manifest !== 'object' || Array.isArray(manifest)) return { ok: false, error: '版本树 manifest 形状无效' }
+  if (manifest === null || typeof manifest !== 'object' || Array.isArray(manifest)) {
+    return { ok: false, kind: 'invalid', error: '版本树 manifest 形状无效' }
+  }
   const root = manifest as Record<string, unknown>
   const dependencies = root.dependencies
-  if (dependencies === null || typeof dependencies !== 'object' || Array.isArray(dependencies) || (dependencies as Record<string, unknown>)['@deepseek-ai/dsh'] !== version) {
-    return { ok: false, error: `版本树 manifest 未精确钉住 @deepseek-ai/dsh@${version}` }
+  if (dependencies === null || typeof dependencies !== 'object' || Array.isArray(dependencies)
+    || (dependencies as Record<string, unknown>)['@deepseek-ai/dsh'] !== version) {
+    return { ok: false, kind: 'invalid', error: '版本树 manifest 未精确钉住 @deepseek-ai/dsh@' + version }
   }
   const dsh = root.dsh
-  if (dsh === null || typeof dsh !== 'object' || Array.isArray(dsh) || (dsh as Record<string, unknown>).platform !== platform) {
-    return { ok: false, error: `版本树平台不匹配（需要 ${platform}）` }
+  if (dsh === null || typeof dsh !== 'object' || Array.isArray(dsh)
+    || (dsh as Record<string, unknown>).platform !== platform) {
+    return { ok: false, kind: 'invalid', error: '版本树平台不匹配（需要 ' + platform + '）' }
   }
-  const criticalError = validateCriticalRuntimeFiles(treePath, version, dsh as Record<string, unknown>)
-  if (criticalError !== null) return { ok: false, error: criticalError }
-  return { ok: true, path: treePath }
+  const criticalFailure = validateCriticalRuntimeFiles(treePath, version, dsh as Record<string, unknown>)
+  if (criticalFailure !== null) {
+    return { ok: false, kind: criticalFailure.kind, error: criticalFailure.error }
+  }
+  return { ok: true, kind: 'valid', path: treePath }
 }
 
 export function listValidVersionTrees(baseDir: string, platform = `${process.platform}-${process.arch}`): string[] {
@@ -898,45 +950,53 @@ function explicitInstallsPath(baseDir: string): string {
 type VersionTimestampMapState =
   | { kind: 'missing'; versions: Record<string, never> }
   | { kind: 'corrupt'; versions: Record<string, never>; identity?: FileIdentity }
+  | { kind: 'unknown'; detail: string }
   | { kind: 'valid'; versions: Record<string, string> }
 
 function readVersionTimestampMap(filePath: string): VersionTimestampMapState {
   const read = readAuthorityMetadata(filePath, 256 * 1024)
   if (read.kind === 'missing') return { kind: 'missing', versions: {} }
-  if (read.kind === 'unsafe') return { kind: 'corrupt', versions: {} }
+  if (read.kind === 'unknown') return { kind: 'unknown', detail: read.detail }
+  if (read.kind === 'corrupt') return { kind: 'corrupt', versions: {} }
   try {
-    const parsed: unknown = JSON.parse(read.raw)
+    const parsed: unknown = JSON.parse(read.value.raw)
     if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      return { kind: 'corrupt', versions: {}, identity: read.identity }
+      return { kind: 'corrupt', versions: {}, identity: read.value.identity }
     }
     const versions = (parsed as Record<string, unknown>).versions
     if (versions === null || typeof versions !== 'object' || Array.isArray(versions)) {
-      return { kind: 'corrupt', versions: {}, identity: read.identity }
+      return { kind: 'corrupt', versions: {}, identity: read.value.identity }
     }
     const out: Record<string, string> = {}
     for (const [version, timestamp] of Object.entries(versions as Record<string, unknown>)) {
       if (!isSafeVersion(version) || typeof timestamp !== 'string' || Number.isNaN(Date.parse(timestamp))) {
-        return { kind: 'corrupt', versions: {}, identity: read.identity }
+        return { kind: 'corrupt', versions: {}, identity: read.value.identity }
       }
       out[version] = timestamp
     }
     return { kind: 'valid', versions: out }
   } catch {
-    return { kind: 'corrupt', versions: {}, identity: read.identity }
+    return { kind: 'corrupt', versions: {}, identity: read.value.identity }
   }
 }
 
-function quarantineCorruptTimestampMap(baseDir: string, filePath: string, state: VersionTimestampMapState): void {
+function assertTimestampMapWritable(baseDir: string, filePath: string, state: VersionTimestampMapState): void {
+  if (state.kind === 'unknown') {
+    // The ledger could not be read: overwriting would destroy bytes that were
+    // never proven illegal (e.g. a transient EIO), so writes fail closed.
+    throw new Error('runtime 版本保留元数据不可读，拒绝覆盖：' + basename(filePath))
+  }
   if (state.kind !== 'corrupt') return
   if (state.identity === undefined || !preserveSafeCorruptAuthority(baseDir, filePath, state.identity)) {
-    throw new Error(`runtime 版本保留元数据不安全，拒绝覆盖：${basename(filePath)}`)
+    throw new Error('runtime 版本保留元数据不安全，拒绝覆盖：' + basename(filePath))
   }
 }
 
 function seedExplicitInstalls(baseDir: string, state: VersionTimestampMapState): Record<string, string> {
   if (state.kind === 'valid') return { ...state.versions }
   // Before the retention ledger existed every runtime installation was a user
-  // action. Missing/corrupt ledger therefore preserves all existing trees.
+  // action. A missing, corrupt, or unreadable ledger therefore protects all
+  // existing trees rather than inventing an empty protected set.
   const timestamp = new Date().toISOString()
   return Object.fromEntries(listVersionTrees(baseDir).map((version) => [version, timestamp]))
 }
@@ -959,7 +1019,7 @@ export function recordExplicitInstall(
   if (Number.isNaN(now.getTime())) throw new Error('显式安装时间戳无效')
   const filePath = explicitInstallsPath(baseDir)
   const state = readVersionTimestampMap(filePath)
-  quarantineCorruptTimestampMap(baseDir, filePath, state)
+  assertTimestampMapWritable(baseDir, filePath, state)
   const versions = seedExplicitInstalls(baseDir, state)
   versions[safe] = now.toISOString()
   atomicWriteJson(baseDir, filePath, { versions })
@@ -972,7 +1032,7 @@ export function forgetExplicitInstall(baseDir: string, version: string): void {
   const safe = assertSafeVersion(version)
   const filePath = explicitInstallsPath(baseDir)
   const state = readVersionTimestampMap(filePath)
-  quarantineCorruptTimestampMap(baseDir, filePath, state)
+  assertTimestampMapWritable(baseDir, filePath, state)
   const versions = seedExplicitInstalls(baseDir, state)
   delete versions[safe]
   atomicWriteJson(baseDir, filePath, { versions })
@@ -988,21 +1048,25 @@ function knownGoodPath(baseDir: string): string {
   return join(runtimeDirPath(baseDir), 'known-good.json')
 }
 
-export function listKnownGoodVersions(baseDir: string): string[] {
-  const state = readVersionTimestampMap(knownGoodPath(baseDir))
-  if (state.kind !== 'valid') return []
-  return Object.entries(state.versions)
-    .sort((a, b) => Date.parse(b[1]) - Date.parse(a[1]))
-    .map(([version]) => version)
-}
+export type KnownGoodVersionsState =
+  | { kind: 'ok'; versions: string[] }
+  | { kind: 'corrupt'; detail: string }
+  | { kind: 'unknown'; detail: string }
 
-export function latestKnownGood(
-  baseDir: string,
-  excludeVersion: string | null = null,
-  platform = `${process.platform}-${process.arch}`,
-): string | null {
-  return listKnownGoodVersions(baseDir)
-    .find((version) => version !== excludeVersion && validateVersionTree(baseDir, version, platform).ok) ?? null
+/** Retention-facing known-good read. A corrupt or unreadable ledger returns
+ *  an explicit reason instead of an empty list, so a prune decision can never
+ *  read "unknown protection set" as "no protection". */
+export function listKnownGoodVersionsState(baseDir: string): KnownGoodVersionsState {
+  const state = readVersionTimestampMap(knownGoodPath(baseDir))
+  if (state.kind === 'missing') return { kind: 'ok', versions: [] }
+  if (state.kind === 'corrupt') return { kind: 'corrupt', detail: 'known-good 元数据损坏' }
+  if (state.kind === 'unknown') return { kind: 'unknown', detail: state.detail }
+  return {
+    kind: 'ok',
+    versions: Object.entries(state.versions)
+      .sort((a, b) => Date.parse(b[1]) - Date.parse(a[1]))
+      .map(([version]) => version),
+  }
 }
 
 export function markKnownGood(
@@ -1018,7 +1082,7 @@ export function markKnownGood(
   if (Number.isNaN(now.getTime())) throw new Error('known-good 时间戳无效')
   const filePath = knownGoodPath(baseDir)
   const state = readVersionTimestampMap(filePath)
-  quarantineCorruptTimestampMap(baseDir, filePath, state)
+  assertTimestampMapWritable(baseDir, filePath, state)
   const versions = state.kind === 'valid' ? { ...state.versions } : {}
   versions[safe] = now.toISOString()
   atomicWriteJson(baseDir, filePath, { versions })
@@ -1056,32 +1120,25 @@ function parseFailureRecord(parsed: unknown, expectedVersion?: string): RuntimeF
   }
 }
 
-type RuntimeFailureState =
+export type RuntimeFailureState =
   | { kind: 'missing' | 'unsafe' }
   | { kind: 'corrupt'; identity: FileIdentity }
+  | { kind: 'unknown'; detail: string }
   | { kind: 'valid'; record: RuntimeFailureRecord }
 
-function readRuntimeFailureState(baseDir: string, version: string): RuntimeFailureState {
+export function readRuntimeFailureState(baseDir: string, version: string): RuntimeFailureState {
   const safe = assertSafeVersion(version)
   const filePath = failurePath(baseDir, safe)
   const read = readAuthorityMetadata(filePath, 64 * 1024)
-  if (read.kind === 'missing' || read.kind === 'unsafe') return { kind: read.kind }
+  if (read.kind === 'missing') return { kind: 'missing' }
+  if (read.kind === 'corrupt') return { kind: 'unsafe' }
+  if (read.kind === 'unknown') return { kind: 'unknown', detail: read.detail }
   let parsed: unknown
-  try { parsed = JSON.parse(read.raw) } catch { parsed = null }
+  try { parsed = JSON.parse(read.value.raw) } catch { parsed = null }
   const record = parseFailureRecord(parsed, safe)
   return record === null
-    ? { kind: 'corrupt', identity: read.identity }
+    ? { kind: 'corrupt', identity: read.value.identity }
     : { kind: 'valid', record }
-}
-
-export function readRuntimeFailure(baseDir: string, version: string): RuntimeFailureRecord | null {
-  const safe = assertSafeVersion(version)
-  const state = readRuntimeFailureState(baseDir, safe)
-  if (state.kind === 'corrupt') {
-    preserveSafeCorruptAuthority(baseDir, failurePath(baseDir, safe), state.identity)
-    return null
-  }
-  return state.kind === 'valid' ? state.record : null
 }
 
 export function recordRuntimeFailure(baseDir: string, input: RuntimeFailureInput, now = new Date()): RuntimeFailureRecord {
@@ -1090,8 +1147,11 @@ export function recordRuntimeFailure(baseDir: string, input: RuntimeFailureInput
   if (!validFailurePhase(input.phase)) throw new Error('failure.phase 必须是安全的短横线标识符')
   const filePath = failurePath(baseDir, version)
   const previousState = readRuntimeFailureState(baseDir, version)
+  if (previousState.kind === 'unknown') {
+    throw new Error('runtime failure 元数据不可读，拒绝覆盖：' + basename(filePath))
+  }
   if (previousState.kind === 'unsafe') {
-    throw new Error(`runtime failure 元数据不安全，拒绝覆盖：${basename(filePath)}`)
+    throw new Error('runtime failure 元数据不安全，拒绝覆盖：' + basename(filePath))
   }
   if (previousState.kind === 'corrupt'
     && !preserveSafeCorruptAuthority(baseDir, filePath, previousState.identity)) {
@@ -1113,24 +1173,54 @@ export function recordRuntimeFailure(baseDir: string, input: RuntimeFailureInput
   return record
 }
 
-export function listRuntimeFailures(baseDir: string): RuntimeFailureRecord[] {
+export type RuntimeFailuresState =
+  | { kind: 'ok'; failures: RuntimeFailureRecord[] }
+  | { kind: 'unknown'; detail: string }
+
+/** Failure-set material. A non-ENOENT readdir error or an unreadable record
+ *  makes the whole set unknowable; it must never project to an empty list.
+ *  Corrupt records keep the historical quarantine-and-skip behavior. */
+export function listRuntimeFailuresState(baseDir: string): RuntimeFailuresState {
   const dir = join(runtimeDirPath(baseDir), 'failures')
   let entries
-  try { entries = readdirSync(dir, { withFileTypes: true }) } catch { return [] }
+  try {
+    entries = readdirSync(dir, { withFileTypes: true })
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { kind: 'ok', failures: [] }
+    return { kind: 'unknown', detail: 'runtime failures 目录不可读：' + String((error as NodeJS.ErrnoException).code ?? 'unknown') }
+  }
   const records: RuntimeFailureRecord[] = []
   for (const entry of entries) {
     if (!entry.isFile() || !entry.name.endsWith('.json')) continue
     const version = entry.name.slice(0, -'.json'.length)
     if (!isSafeVersion(version)) continue
-    const record = readRuntimeFailure(baseDir, version)
-    if (record !== null) records.push(record)
+    const filePath = failurePath(baseDir, version)
+    const state = readRuntimeFailureState(baseDir, version)
+    if (state.kind === 'unknown') return { kind: 'unknown', detail: state.detail }
+    if (state.kind === 'corrupt') {
+      preserveSafeCorruptAuthority(baseDir, filePath, state.identity)
+      continue
+    }
+    if (state.kind === 'valid') records.push(state.record)
   }
-  return records.sort((a, b) => Date.parse(b.lastFailedAt) - Date.parse(a.lastFailedAt))
+  return {
+    kind: 'ok',
+    failures: records.sort((a, b) => Date.parse(b.lastFailedAt) - Date.parse(a.lastFailedAt)),
+  }
+}
+
+/** Compatibility list projection; an unknown set is empty only here. */
+export function listRuntimeFailures(baseDir: string): RuntimeFailureRecord[] {
+  const state = listRuntimeFailuresState(baseDir)
+  return state.kind === 'ok' ? state.failures : []
 }
 
 export function runtimeFailureSummary(baseDir: string): RuntimeFailureSummary {
-  const failures = listRuntimeFailures(baseDir)
-  return { count: failures.length, latest: failures[0] ?? null }
+  const state = listRuntimeFailuresState(baseDir)
+  if (state.kind === 'unknown') {
+    return { kind: 'unknown', count: null, latest: null, detail: state.detail }
+  }
+  return { kind: 'ok', count: state.failures.length, latest: state.failures[0] ?? null, detail: null }
 }
 
 /** Fail-closed facts for snapshot pruning. This deliberately includes every
@@ -1141,10 +1231,15 @@ export function runtimeSnapshotRetentionState(baseDir: string): RuntimeSnapshotR
   const override = readOverrideState(baseDir)
   const activation = readActivationJournalState(baseDir)
   const knownGood = readVersionTimestampMap(knownGoodPath(baseDir))
+  if (pointer.kind === 'unknown') return { kind: 'unknown', detail: pointer.detail }
+  if (override.kind === 'unknown') return { kind: 'unknown', detail: override.detail }
+  if (knownGood.kind === 'unknown') return { kind: 'unknown', detail: knownGood.detail }
   if (pointer.kind === 'corrupt'
     || override.kind === 'corrupt'
     || activation.kind === 'corrupt'
-    || knownGood.kind === 'corrupt') return { kind: 'corrupt' }
+    || knownGood.kind === 'corrupt') {
+    return { kind: 'corrupt', detail: 'runtime 保留元数据损坏；拒绝 prune' }
+  }
 
   const protectedVersions = new Set<string>()
   const protectedSnapshotNames = new Set<string>()
@@ -1175,18 +1270,27 @@ export function runtimeSnapshotRetentionState(baseDir: string): RuntimeSnapshotR
 
   const failureDir = join(runtimeDirPath(baseDir), 'failures')
   let failureEntries: string[] = []
-  try { failureEntries = readdirSync(failureDir) } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return { kind: 'corrupt' }
+  try {
+    failureEntries = readdirSync(failureDir)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      return { kind: 'unknown', detail: 'runtime failures 目录不可读；拒绝 prune' }
+    }
   }
-  if (failureEntries.some((name) => name.includes('.json.corrupt'))) return { kind: 'corrupt' }
+  if (failureEntries.some((name) => name.includes('.json.corrupt'))) {
+    return { kind: 'corrupt', detail: 'failure evidence 已损坏；拒绝 prune' }
+  }
   for (const name of failureEntries) {
     if (!name.endsWith('.json')) continue
     const version = name.slice(0, -'.json'.length)
-    if (!isSafeVersion(version)) return { kind: 'corrupt' }
-    const failure = readRuntimeFailure(baseDir, version)
-    if (failure === null) return { kind: 'corrupt' }
-    protectedVersions.add(failure.version)
-    if (failure.snapshotName !== null) protectedSnapshotNames.add(failure.snapshotName)
+    if (!isSafeVersion(version)) return { kind: 'corrupt', detail: 'failure evidence 名称非法；拒绝 prune' }
+    const failureState = readRuntimeFailureState(baseDir, version)
+    if (failureState.kind === 'unknown') return { kind: 'unknown', detail: failureState.detail }
+    if (failureState.kind !== 'valid') {
+      return { kind: 'corrupt', detail: 'failure evidence 损坏；拒绝 prune' }
+    }
+    protectedVersions.add(failureState.record.version)
+    if (failureState.record.snapshotName !== null) protectedSnapshotNames.add(failureState.record.snapshotName)
   }
   return {
     kind: 'valid',
@@ -1201,17 +1305,21 @@ export function clearRuntimeFailure(baseDir: string, version: string): void {
 
 function isKnownGoodProtected(baseDir: string, version: string): boolean {
   const state = readVersionTimestampMap(knownGoodPath(baseDir))
-  // Corruption makes the protected set unknowable. Preserve all trees.
-  return state.kind === 'corrupt' || (state.kind === 'valid' && Object.prototype.hasOwnProperty.call(state.versions, version))
+  // Corruption or an unreadable ledger makes the protected set unknowable.
+  // Preserve all trees rather than evicting a possibly protected version.
+  return state.kind === 'corrupt' || state.kind === 'unknown'
+    || (state.kind === 'valid' && Object.prototype.hasOwnProperty.call(state.versions, version))
 }
 
 function isKnownGoodCandidateProtected(baseDir: string, version: string): boolean {
   const filePath = join(runtimeDirPath(baseDir), 'known-good-candidates.json')
   const read = readAuthorityMetadata(filePath, 256 * 1024)
   if (read.kind === 'missing') return false
-  if (read.kind === 'unsafe') return true
+  // Corrupt or unreadable candidate evidence makes the set unknowable; keep
+  // every possibly candidate-referenced tree.
+  if (read.kind !== 'present') return true
   let parsed: unknown
-  try { parsed = JSON.parse(read.raw) } catch { return true }
+  try { parsed = JSON.parse(read.value.raw) } catch { return true }
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return true
   const versions = (parsed as Record<string, unknown>).versions
   if (versions === null || typeof versions !== 'object' || Array.isArray(versions)) return true
@@ -1255,12 +1363,14 @@ export function isProtectedVersion(
       || journal.nextIntent?.targetVersion === version) return true
   }
   const pointer = readCurrentPointerState(baseDir)
-  if (pointer.kind === 'corrupt') return true
+  // unknown is as protective as corrupt: bytes never proven absent/illegal must
+  // not be deleted (B1 acceptance residual R1).
+  if (pointer.kind === 'corrupt' || pointer.kind === 'unknown') return true
   if (pointer.kind === 'valid' && pointer.version === version) return true
   if (isKnownGoodProtected(baseDir, version)) return true
   if (isKnownGoodCandidateProtected(baseDir, version)) return true
   const override = readOverrideState(baseDir)
-  if (override.kind === 'corrupt') return true
+  if (override.kind === 'corrupt' || override.kind === 'unknown') return true
   if (override.kind === 'valid'
     && (override.record.pending === version
       || override.record.chosenVersion === version
@@ -1307,9 +1417,9 @@ function storePruneMarkerPath(baseDir: string): string {
 
 export function readStorePruneRequest(baseDir: string): StorePruneRequest | null {
   const read = readAuthorityMetadata(storePruneMarkerPath(baseDir), 64 * 1024)
-  if (read.kind !== 'valid') return null
+  if (read.kind !== 'present') return null
   let parsed: unknown
-  try { parsed = JSON.parse(read.raw) } catch { return null }
+  try { parsed = JSON.parse(read.value.raw) } catch { return null }
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return null
   const rec = parsed as Record<string, unknown>
   if (typeof rec.requestedAt !== 'string' || !Array.isArray(rec.reasons) || !rec.reasons.every((v) => typeof v === 'string')) return null

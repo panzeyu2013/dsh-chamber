@@ -1,5 +1,5 @@
 {
-  "$comment": "Machine-readable lifecycle thresholds. Source of truth: packages/dsh-stream-state/src/tables.ts. This projection is what the Swift mirror (swift/CarrierDecision.swift) reads, and what scripts/gates/verify-ladder-table-parity.mjs locks the four recovery ladders' surviving module constants to (B4). The package suite fails if the two disagree (test/tables/tables-parity.test.ts) and scripts/gates/verify-stream-state-swift-parity.mjs fails if the mirror disagrees.",
+  "$comment": "Machine-readable lifecycle thresholds. Source of truth: packages/dsh-stream-state/src/tables.ts. This projection is what the Swift mirror (swift/CarrierDecision.swift) reads, and what scripts/gates/verify-ladder-table-parity.mjs locks the four recovery ladders' consumers to (B4). The package suite fails if the two disagree (test/tables/tables-parity.test.ts) and scripts/gates/verify-stream-state-swift-parity.mjs fails if the mirror disagrees.",
   "tables": {
     "rebuildWindowMs": 60000,
     "maxRebuildsPerWindow": 1,
@@ -29,6 +29,27 @@
         "attemptTimeoutMs": 20000,
         "verifyTimeoutMs": 65000,
         "correctivePhaseTimeoutMs": 5000
+      },
+      "sessionLiveness": {
+        "refreshAfterMs": 60000,
+        "refreshCoalesceMs": 200000,
+        "maxRefreshRequests": 3,
+        "refreshWindowMs": 600000,
+        "refreshOutcomeTimeoutMs": 190000,
+        "reconnectBackoffMs": 300000,
+        "maxReconnects": 1,
+        "maxNoopReconnects": 3,
+        "noticeAfterMs": 120000
+      },
+      "sessionStreamHealth": {
+        "errorGraceMs": 8000,
+        "loadingStallMs": 20000,
+        "loadingFailedMs": 90000,
+        "healCooldownMs": 120000,
+        "healBudgetWindowMs": 600000,
+        "healBudgetMax": 3,
+        "healSettleMs": 20000,
+        "carrierChurnMs": 10000
       }
     }
   }

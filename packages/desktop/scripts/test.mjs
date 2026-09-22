@@ -79,6 +79,10 @@ export const GROUPS = {
     'test/runtime/runtime-lockstep.test.ts',
     'test/runtime/dsh-runtime-controller.test.ts',
     'test/runtime/main-decision-gates.test.ts',
+    // 同步 spawn 解析器的三态 fail-closed（B3 2.2/2.3：corrupt|unknown 绝不落 builtin）
+    'test/runtime/authority-fail-closed.test.ts',
+    // B1 §2.6 restore blocked+cause 路径：真实 throw 必须走错误分支（不静默吞掉）
+    'test/runtime/restore-pre-rollback-cause.test.ts',
     // swift-side runtime probe diagnostics pure module (flat path, same reason
     // as the ipc group's flat swift-side files)
     'runtime-probe-detail.test.ts',
@@ -166,7 +170,6 @@ function main() {
     label: 'desktop',
     packageRoot: PACKAGE_ROOT,
     groups: GROUPS,
-    platformFiles: { win32: WIN32_FILES, macos: MACOS_FILES },
     platformFiles: { win32: WIN32_FILES, macos: MACOS_FILES },
     zeroTestAllowlist: ZERO_TEST_ALLOWLIST,
     requireNoSkipsLegs: ['macos'],

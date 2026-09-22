@@ -659,6 +659,33 @@ test('post-install family verification: the generation fallback still fails a cr
     `the no-version-fact branch keeps the generation wording: ${failureText}`)
 })
 
+test('execution-time judgement and post-mutation verification share one runtime-facts read per install op', async t => {
+  const workspace = writeLockfileRuntimeWorkspace(t, '0.5.0')
+  let reads = 0
+  const h = makeExecHarness(t, {
+    runtimeFacts: () => {
+      reads += 1
+      return { path: workspace, version: '0.5.0' }
+    },
+  })
+  await enqueueOk(h.exec, { kind: 'install', name: 'once-pkg', spec: 'once-pkg@1' })
+  await waitFor(() => h.harness.calls.length === 1, 'spawn happened')
+  h.harness.calls[0]!.child.close(0)
+  await waitFor(() => h.journal.recent()[0]?.status !== 'pending', 'op terminal')
+  assert.equal(h.journal.recent()[0]?.status, 'ok', h.journal.recent()[0]?.error)
+  assert.equal(reads, 1,
+    'ONE resolveJudgementInputs feeds the execution-time judgement and the post-mutation family verification')
+
+  // A remove judges no version and has no family verification to feed: the
+  // execution boundary must not pay for a runtime-facts read (≤1 per op).
+  await enqueueOk(h.exec, { kind: 'remove', name: 'once-pkg' })
+  await waitFor(() => h.harness.calls.length === 2, 'remove spawned')
+  h.harness.calls[1]!.child.close(0)
+  await waitFor(() => h.journal.recent()[0]?.status !== 'pending', 'remove terminal')
+  assert.equal(h.journal.recent()[0]?.status, 'ok', h.journal.recent()[0]?.error)
+  assert.equal(reads, 1, 'the remove op reads no runtime facts')
+})
+
 test('post-mutation re-check: instance (re)started during the mutation is failed, never recorded ok', async t => {
   let state = 'ready'
   const h = makeExecHarness(t, { statusProbe: () => state })

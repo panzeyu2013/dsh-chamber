@@ -30,7 +30,8 @@
   },
   "license": "MIT",
   "dependencies": {
-    "@dsh-chamber/dsh-chamber-client-ui-sidebar": "workspace:^"
+    "@dsh-chamber/dsh-chamber-client-ui-sidebar": "workspace:^",
+    "@dsh-chamber/dsh-stream-state": "workspace:^"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "workspace:^",

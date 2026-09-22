@@ -15,10 +15,14 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  commitApplyVerdict,
+  DELAYED_ROLLBACK_VERDICT_POLICY as ROLLBACK_POLICY,
   runDelayedRollback,
   runStartupPhase,
   shouldProbeEnvWithDormantCorruptSelection,
+  STARTUP_VERDICT_POLICY as STARTUP_POLICY,
 } from '../../src/runtime-startup.ts'
+import type { ApplyOutcome } from '../../src/apply-phase.ts'
 import { activationProbeNamesForDomains, REQUIRED_ACTIVATION_PROBES, type ProbeResult } from '../../src/activation-gate.ts'
 import { journalBuilder } from '../support/store-fixtures.ts'
 import type { ActivationJournal, OverrideRecord } from '../../src/dsh-runtime-store.ts'
@@ -316,6 +320,10 @@ test('corrupt current or override metadata blocks cleanup, eviction, and builtin
   for (const [expected, mutate] of [
     ['current-corrupt', (deps: ReturnType<RunPhaseFixture['makeStartupDeps']>) => { deps.readCurrentPointerState = () => ({ kind: 'corrupt' as const }) }],
     ['override-corrupt', (deps: ReturnType<RunPhaseFixture['makeStartupDeps']>) => { deps.readOverrideState = () => ({ kind: 'corrupt' as const }) }],
+    // 'unknown' (EACCES/EIO) blocks on the same reasons: it proves neither
+    // absence nor corruption and can never alias builtin / no-override.
+    ['current-corrupt', (deps: ReturnType<RunPhaseFixture['makeStartupDeps']>) => { deps.readCurrentPointerState = () => ({ kind: 'unknown' as const, detail: 'EACCES' }) }],
+    ['override-corrupt', (deps: ReturnType<RunPhaseFixture['makeStartupDeps']>) => { deps.readOverrideState = () => ({ kind: 'unknown' as const, detail: 'EACCES' }) }],
   ] as const) {
     const fixture = new RunPhaseFixture()
     const deps = fixture.makeStartupDeps()
@@ -473,4 +481,156 @@ test('F7 persists rollback-needed before effects and preserves a concurrently qu
     assert.equal(durable.journal.manualRollback, true)
   }
   assert.equal(fixture.currentState().override?.pending, '0.3.0')
+})
+
+function verdictOutcome(patch: Partial<ApplyOutcome> = {}): ApplyOutcome {
+  return {
+    status: 'failed',
+    snapshotPath: null,
+    rollbackTarget: null,
+    restoreOutcome: 'none',
+    swapAttempted: false,
+    error: null,
+    retainPending: false,
+    retryAction: null,
+    runtimeBlocked: false,
+    failureKind: null,
+    ...patch,
+  }
+}
+
+test('commitApplyVerdict parameterizes both verdict policies without semantic drift', () => {
+  const current = record('0.2.0')
+
+  // allowBuiltin=false (delayed rollback) refuses a builtin verdict outright.
+  const builtinRefused = commitApplyVerdict({
+    shellVersion: '0.1.4',
+    applyOutcome: verdictOutcome({ status: 'applied' }),
+    journal: null,
+    queuedIntent: null,
+    current,
+    targetVersion: '0.1.1-rc.2',
+    targetIsBuiltin: true,
+    intentKind: 'shell-invalidation',
+  }, ROLLBACK_POLICY)
+  assert.equal(builtinRefused.deleteOverride, false)
+  assert.equal(builtinRefused.failOutcome?.status, 'failed')
+  assert.equal(builtinRefused.failOutcome?.runtimeBlocked, true)
+  assert.equal(builtinRefused.failOutcome?.retainPending, true)
+
+  // pendingOnRetain: startup keeps the TARGET, delayed rollback keeps CURRENT.pending.
+  const retainedTarget = commitApplyVerdict({
+    shellVersion: '0.1.4',
+    applyOutcome: verdictOutcome({ status: 'failed', retainPending: true }),
+    journal: null,
+    queuedIntent: null,
+    current,
+    targetVersion: '0.3.0',
+    targetIsBuiltin: false,
+    intentKind: 'version-switch',
+  }, STARTUP_POLICY)
+  assert.equal(retainedTarget.override?.pending, '0.3.0')
+  const retainedCurrent = commitApplyVerdict({
+    shellVersion: '0.1.4',
+    applyOutcome: verdictOutcome({ status: 'failed', retainPending: true }),
+    journal: null,
+    queuedIntent: null,
+    current,
+    targetVersion: '0.3.0',
+    targetIsBuiltin: false,
+    intentKind: 'version-switch',
+  }, ROLLBACK_POLICY)
+  assert.equal(retainedCurrent.override?.pending, '0.2.0')
+
+  // mismatch: startup reports it (journal kept), delayed rollback makes it fatal.
+  const monitoring = journal('applied-monitoring', {
+    nextIntent: { targetVersion: '0.4.0', targetIsBuiltin: false, manualRollback: false, intentKind: 'version-switch' },
+  })
+  const mismatchInput = {
+    shellVersion: '0.1.4',
+    applyOutcome: verdictOutcome({ status: 'rolled-back', rollbackTarget: '0.1.0' }),
+    journal: monitoring,
+    queuedIntent: monitoring.nextIntent,
+    current: record('0.3.0'),
+    targetVersion: '0.2.0',
+    targetIsBuiltin: false,
+    intentKind: 'version-switch' as const,
+  }
+  const reported = commitApplyVerdict(mismatchInput, STARTUP_POLICY)
+  assert.equal(reported.mismatch, true)
+  assert.equal(reported.journalAction, 'keep')
+  assert.equal(reported.failOutcome, undefined)
+  const fatal = commitApplyVerdict(mismatchInput, ROLLBACK_POLICY)
+  assert.equal(fatal.mismatch, true)
+  assert.equal(fatal.failOutcome?.status, 'failed')
+  assert.equal(fatal.failOutcome?.runtimeBlocked, true)
+  assert.equal(fatal.failOutcome?.retainPending, true)
+
+  // clearJournalWhenApplied: startup retains F7 monitoring, rollback clears.
+  const appliedInput = {
+    shellVersion: '0.1.4',
+    applyOutcome: verdictOutcome({ status: 'applied' }),
+    journal: null,
+    queuedIntent: null,
+    current,
+    targetVersion: '0.3.0',
+    targetIsBuiltin: false,
+    intentKind: 'version-switch' as const,
+  }
+  const startupApplied = commitApplyVerdict(appliedInput, STARTUP_POLICY)
+  assert.equal(startupApplied.journalAction, 'none')
+  assert.equal(startupApplied.override?.chosenVersion, '0.3.0')
+  assert.equal(commitApplyVerdict(appliedInput, ROLLBACK_POLICY).journalAction, 'clear')
+
+  // F4 body: the startup policy clears persisted invalidation on a builtin rollback.
+  const f4 = commitApplyVerdict({
+    shellVersion: '0.1.4',
+    applyOutcome: verdictOutcome({ status: 'rolled-back', rollbackTarget: '0.2.0' }),
+    journal: null,
+    queuedIntent: null,
+    current: {
+      shellVersion: '0.1.3', chosenVersion: '0.2.0', resolvedVersion: '0.2.0', pending: null,
+      swapAttempted: false, invalidatedAt: '2026-08-23T00:00:00.000Z', invalidatedReason: 'shell-version-changed',
+    },
+    targetVersion: '0.1.1-rc.2',
+    targetIsBuiltin: true,
+    intentKind: 'shell-invalidation',
+  }, STARTUP_POLICY)
+  assert.equal(f4.override?.shellVersion, '0.1.4')
+  assert.equal(f4.override?.invalidatedAt, null)
+  assert.equal(f4.override?.invalidatedReason, null)
+  assert.equal(f4.override?.lastInvalidatedAt, '2026-08-23T00:00:00.000Z')
+  assert.equal(f4.override?.lastInvalidationRecovered, true)
+  assert.equal(f4.override?.pending, null)
+  assert.equal(f4.override?.chosenVersion, '0.2.0')
+  assert.equal(f4.override?.resolvedVersion, '0.2.0')
+})
+
+test('commitApplyVerdict: the applied-override commit is an explicit A-only policy dimension (R4)', () => {
+  // R5 single source: the test consumes the production policies, so this
+  // dimension cannot drift from runtime-startup.ts.
+  assert.equal(STARTUP_POLICY.commitAppliedOverride, true)
+  assert.equal(ROLLBACK_POLICY.commitAppliedOverride, false)
+
+  const current = record('0.2.0')
+  const input = {
+    shellVersion: '0.1.4',
+    applyOutcome: verdictOutcome({ status: 'applied' }),
+    journal: null,
+    queuedIntent: null,
+    current,
+    targetVersion: '0.3.0',
+    targetIsBuiltin: false,
+    intentKind: 'version-switch' as const,
+  }
+  const applied = commitApplyVerdict(input, STARTUP_POLICY)
+  assert.equal(applied.override?.chosenVersion, '0.3.0')
+  assert.equal(applied.override?.resolvedVersion, '0.3.0')
+  // B's verdict always comes from a rollback-needed journal, so the applied
+  // clause is unreachable there; the false policy dimension keeps it from
+  // committing even on a synthetic applied input.
+  const delayed = commitApplyVerdict(input, ROLLBACK_POLICY)
+  assert.equal(delayed.override?.chosenVersion, '0.2.0')
+  assert.equal(delayed.override?.resolvedVersion, '0.2.0')
+  assert.equal(delayed.override?.lastOutcome, 'applied')
 })

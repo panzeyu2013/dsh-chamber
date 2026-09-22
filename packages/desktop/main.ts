@@ -33,9 +33,11 @@
  *   runUserMetadataRecovery / readApplyNowGateInput / selectedJournalIntent）。
  * - Transport manager（transport-manager.ts + the `ssh` and direct `gateway`
  *   providers）：persisted instance registry（<userData>/ssh-instances.json）、
- *   transport lifecycle、SSH-only remote systemd exec、registry 变更生命周期
- *   sidecar（publishRegistryTransition——SSH_INSTANCES_CHANGED/SSH_STATUS_CHANGED
- *   committed push 文本与插件 seed/journal 撤销仍在此）。
+ *   transport lifecycle、SSH-only remote systemd exec。registry 变更生命周期
+ *   sidecar（publishRegistryTransition / ssh 目标闭包束 / 插件 seed/journal
+ *   撤销 / gateway sync / session refresh / ready 注册订阅）自 4.4b 起在
+ *   shell-assembly-shared.ts——本文件只注入 Electron flavor 面（见 whenReady
+ *   的 createShellAssemblyShared 调用）。
  *
  * Responsibilities (pre-W-10 wording preserved for history):
  * - Single-frame BrowserWindow (contextIsolation, no nodeIntegration).
@@ -51,55 +53,47 @@ import { app, BrowserWindow, crashReporter, dialog, ipcMain, Menu, Tray, nativeI
 import { describeError } from './describe-error.ts';
 import { preserveFileAside } from './store-file-hygiene.ts';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { PlaneHandle } from '@dsh-chamber/control-plane';
-import { attemptCommittedRegistryPush, computeRemovedInstanceIds, computeRetiredInstanceIds, createTransportManager } from './transport-manager.ts';
+import { createTransportManager } from './transport-manager.ts';
 import { reconnectStaleTransports } from './transport-reconnect.ts';
 import type { TransportManager } from './transport-manager.ts';
 import type { TransportInstanceSpec } from './transport-provider.ts';
-import { sshProvider, probeChamberHostLive } from './ssh-provider.ts';
+import { sshProvider } from './ssh-provider.ts';
 import { cleanupStaleAskpassHelpers, configureSshPasswordStore } from './ssh-provider.ts';
 import { applyWindowsAclTightening } from './win-acl.ts';
 import { verifyRuntimeClientClosure } from './runtime-tree-check.ts';
-import { configureGatewaySecretStore, configureGatewaySessionProvider, gatewayProvider, getGatewayPassword, getGatewayToken, syncGatewayChamberPlugins } from './gateway-provider.ts';
-import type { LocalChamberHostPackage } from './gateway-provider.ts';
-import { setGatewaySyncRegistration } from './gateway-sync-registry.ts';
-import { createGatewaySessionManager, gatewayRegistrationAuthHeaders, gatewaySessionScopeForConnection } from './gateway-session.ts';
-import { createGatewaySessionRefresh, gatewaySessionOriginForUrl, gatewayTunnelAuthority } from './gateway-session-refresh.ts';
+import { configureGatewaySecretStore, configureGatewaySessionProvider, gatewayProvider } from './gateway-provider.ts';
+import { createGatewaySessionManager } from './gateway-session.ts';
 import type { GatewaySessionRefresh } from './gateway-session-refresh.ts';
 import { appendAuditEvent, type AuditEvent } from './audit-log.ts';
-import type { GatewayRegistrationAuthProof, GatewaySessionManager } from './gateway-session.ts';
+import type { GatewaySessionManager } from './gateway-session.ts';
 import { createTrustedIpc, isChamberPermissionGranted, isExternalLinkUrl, isTrustedIpcSender, isTrustedRendererUrl } from './renderer-trust.ts';
 import { createControlPlane } from './control-plane-module.ts';
 import { attemptDeepLinkProtocolRegistration, canRestoreMainWindow, decideDeepLinkProtocolRegistration, describeUnknownError, ensureLinuxProtocolDesktopFile, linuxAutostartDesktopEntry, linuxAutostartDirectory, resolveLinuxLaunchExecutable } from './deep-link.ts';
 import { createUpdateController } from './updater.ts';
 import { acquireChamberLock } from './chamber-lock.ts';
 import { DshRuntimeController } from './dsh-runtime-controller.ts';
-import { disposeRuntimeInstaller, pruneRuntimeStore } from '@dsh-chamber/dsh-runtime';
+import { disposeRuntimeInstaller } from '@dsh-chamber/dsh-runtime';
 import { sanitizeErrorText } from './sanitize-error.ts';
-import { clearStorePruneRequest, readActivationJournalState, readStorePruneRequest, writeActivationIntent, writeOverride } from '@dsh-chamber/dsh-runtime';
+import { readActivationJournalState, writeActivationIntent, writeOverride } from '@dsh-chamber/dsh-runtime';
 import { resetCandidateHealthWindow } from '@dsh-chamber/dsh-runtime';
 import { invalidate } from '@dsh-chamber/dsh-runtime';
 import { RuntimeOperationFence } from '@dsh-chamber/dsh-runtime';
 import { detectRuntimeMetadataHealth, type RuntimeMetadataHealth } from '@dsh-chamber/dsh-runtime';
 import { isSafeVersion } from '@dsh-chamber/dsh-runtime';
-import { ARCHIVE_CLEANUP_PACKAGE_NAME, CLIENT_GRAPH_PACKAGE_NAME, ExactOwnershipRegistry, GIT_WORKTREE_PACKAGE_NAME, remoteHome, ReadyPhaseEdges, reapStaleLocalPluginWriters, seedRemoteChamberHostPackages, builtChamberHostPackageSeeds, portableChamberHostPackageSeeds, disposePluginSyncChildren, scopeExecToOwnership } from './plugin-sync.ts';
-import type { ChamberHostPackageSeed, ExecFn, StatusFn, RemoteSpec } from './plugin-sync.ts';
-import { CHAMBER_HOST_PACKAGES } from './control-plane-module.ts';
-import type { ChamberHostPackageDescriptor } from './control-plane-module.ts';
+import { ARCHIVE_CLEANUP_PACKAGE_NAME, CLIENT_GRAPH_PACKAGE_NAME, GIT_WORKTREE_PACKAGE_NAME, reapStaleLocalPluginWriters, disposePluginSyncChildren } from './plugin-sync.ts';
 import { DEFAULT_CHAMBER_SETTINGS, computeQuitRisk, decideMainWindowClose, launchAtLoginReconcileDecision, readSettingsFile, shouldUpdaterQuitTakeOver, verifyLaunchAtLoginReadBack, writeSettingsFile } from './chamber-settings.ts';
 import type { ChamberSettings } from './chamber-settings.ts';
 import { shouldFocusApplicationBeforeShowing } from './notifications.ts';
-import type { NotificationSourceToken } from './notifications.ts';
-import { IPC_CHANNELS } from './ipc-events.ts';
 import { createSshPluginJournal } from './ssh-plugin-journal.ts';
-import { RENDERER_CRASH_RELOAD_DELAY_MS, RENDERER_HANG_RELOAD_DELAY_MS, RENDERER_RECOVERY_MAX_RELOADS, RUNTIME_ABORT_REASON, noteRendererReload, auditLogFilePath, chamberSettingsFilePath, gatewaySecretsFilePath, instancesFilePath, LOCAL_RUNNING_STATES, localDshHomeDir, proxyTransport, QUIT_CLEANUP_TIMEOUT_MS, readDshVersion, resolveActiveRuntime, resolveControlPlanePort, scanDeepLinkUrls, sshPasswordsFilePath, stateRootDir, installIpcHandlers, captureNotificationSource, clearBadgeIntentForQuit, drainDeepLinkLaunches, enqueueDeepLink, onRendererLifecycle, openExternally, ownsNotificationSource, projectInstanceSecrets, projectNotificationSourceInstances, resolveDevBuiltinDshWorkspace , shouldReloadAfterCrash, shouldScheduleHangReload, syncNotificationSourceRegistry } from './shell-core.ts';
+import { RENDERER_CRASH_RELOAD_DELAY_MS, RENDERER_HANG_RELOAD_DELAY_MS, RENDERER_RECOVERY_MAX_RELOADS, RUNTIME_ABORT_REASON, noteRendererReload, auditLogFilePath, chamberSettingsFilePath, gatewaySecretsFilePath, instancesFilePath, LOCAL_RUNNING_STATES, localDshHomeDir, QUIT_CLEANUP_TIMEOUT_MS, readDshVersion, resolveActiveRuntime, resolveControlPlanePort, scanDeepLinkUrls, sshPasswordsFilePath, stateRootDir, installIpcHandlers, clearBadgeIntentForQuit, drainDeepLinkLaunches, enqueueDeepLink, onRendererLifecycle, openExternally, projectNotificationSourceInstances, resolveDevBuiltinDshWorkspace, shouldReloadAfterCrash, shouldScheduleHangReload, syncNotificationSourceRegistry } from './shell-core.ts';
 import type { RendererReloadBudgetState, ShellAssemblyCtx } from './shell-core.ts';
 import { createElectronEdges } from './electron-edges.ts';
-import { createRuntimeStartupHost } from './runtime-startup-host.ts';
+import { createShellAssemblyShared } from './shell-assembly-shared.ts';
+import { createRuntimeHostDeps, createRuntimeStartupHost } from './runtime-startup-host.ts';
 import type { RuntimeStartupHostState } from './runtime-startup-host.ts';
 
 // Last-resort crash boundary. Expected socket/stream failures are handled at
@@ -1524,19 +1518,6 @@ if (!gotTheLock) {
     // Capture the non-null manager before registering closures over it (the
     // ipc handlers run later, after startup).
     const sm = transportManager;
-    const transportIdentityFingerprint = (instance: TransportInstanceSpec): string => JSON.stringify([
-      instance.kind,
-      instance.transport,
-      instance.host,
-      instance.user,
-      instance.sshPort,
-      instance.remotePort,
-    ]);
-    const operationalFingerprint = (instance: TransportInstanceSpec): string => JSON.stringify([
-      transportIdentityFingerprint(instance),
-      instance.serviceName,
-      instance.remoteDshHome,
-    ]);
     // —— W-10 S2：来源证明/代际实例（NotificationSourceProofs /
     // NotificationSourceIncarnations）与其投影/同步闭包已迁 shell-core（导出
     // projectNotificationSourceInstances / syncNotificationSourceRegistry /
@@ -1546,120 +1527,6 @@ if (!gotTheLock) {
     // authoritative registry. This also establishes the initial incarnation
     // before the notify IPC handler can run.
     syncNotificationSourceRegistry(projectNotificationSourceInstances(sm.listInstances()));
-    // Live-proxy session self-healing (design 17 §9.3): for every REGISTERED
-    // password-authenticated gateway target (ssh tunnel AND http direct), arm
-    // a pre-expiry re-login ~60s before the session's expiry instant and
-    // re-register the transport with the fresh cookie — without this a
-    // healthy transport rides its registration-time Cookie past expiry and
-    // the proxy answers 401 until a reconnect (the S2 gap fixed here). The
-    // controller is armed/disarmed by the ready-phase status transitions
-    // below; the residual window (a refresh that fails after the old cookie
-    // died) is honestly warned and recovers through the disconnect→reconnect
-    // verifyUp re-login path.
-    sessionRefresh = createGatewaySessionRefresh({
-      sessionManager: gatewaySessions!,
-      passwordFor: id => getGatewayPassword(id),
-      tokenFor: id => getGatewayToken(id),
-      readyUrlFor: id => sm.readyUrl(id),
-      tlsPinFor: id => sm.listInstances().find(instance => instance.id === id)?.spkiPin ?? null,
-      // Tunnel Host override (design 17 §9.3 隧道 Host 覆盖): an ssh-tunneled
-      // gateway target re-registers with the remote LOOPBACK destination
-      // authority (never the SSH hostname/alias) so the proxy's Host header,
-      // stable connection-target scope, and network origin reproduce the
-      // verifyUp-minted session key. Authority routes; it is not ownership.
-      authorityFor: id => {
-        const instance = sm.listInstances().find(candidate => candidate.id === id);
-        return instance !== undefined && instance.kind === 'gateway' && instance.transport === 'ssh'
-          ? gatewayTunnelAuthority(instance.remotePort)
-          : undefined;
-      },
-      scopeFor: id => {
-        const instance = sm.listInstances().find(candidate => candidate.id === id);
-        return instance !== undefined && instance.kind === 'gateway'
-          ? gatewaySessionScopeForConnection(instance)
-          : undefined;
-      },
-      register: (id, url, headers, tls, authority) => {
-        const livePlane = controlPlane;
-        const registered = sm.listInstances().find(instance => instance.id === id);
-        if (livePlane !== null) livePlane.registerInstanceTransport(`gateway:${id}`, url, headers, {
-          ...(registered === undefined ? {} : { transport: proxyTransport(registered.transport) }),
-          ...(tls === undefined ? {} : tls),
-          ...(authority === undefined ? {} : { authority }),
-        });
-        // Keep the registered-auth fingerprint in lockstep: the refresh
-        // re-registration REPLACES the proxy headers, so the onVerified
-        // fingerprint gate must see the rotated cookie as "already
-        // registered" — otherwise the next successful ready-state probe
-        // (≤60s later) re-registers AGAIN, an unconditional traffic
-        // revocation the gate exists to prevent.
-        registeredAuthFingerprints.set(`gateway:${id}`, authHeadersFingerprint(
-          headers === undefined ? undefined : sanitizedRegistrationHeaders(headers),
-        ));
-      },
-      // Bounded dead-cookie recovery (design 17 §9.3, P2-1): a re-login that
-      // failed AFTER the old cookie died would otherwise leave a healthy
-      // transport riding it, so the proxy answers 401 indefinitely.
-      // transport-manager has no single "reconnect" entry, so this uses its
-      // EXISTING public API: disconnect (emits idle → the control plane
-      // unregisters gateway:<id> and this refresh disarms) then connect (a
-      // fresh transport whose verifyUp re-authenticates with the stored
-      // password — the single re-login → terminal path). The refresh
-      // controller calls this at most once per refresh fire and only while
-      // the transport is still ready on the same origin, so there is no
-      // reconnect storm; a throwing disconnect/connect must never take the
-      // refresh controller down.
-      reconnect: (id) => {
-        try {
-          sm.disconnect(id);
-          sm.connect(id);
-        } catch (error) {
-          console.warn(`[dsh-chamber] session-refresh recovery reconnect failed for ${id}: ${String(error)}`);
-        }
-      },
-      warn: message => console.warn(`[dsh-chamber] ${message}`),
-    });
-    // S24 audit transition dedupe (design 17 §13.4.4): record PHASE
-    // TRANSITIONS only (a summary-only status push keeps the same phase and is
-    // not a transition) and one register/unregister edge per instance.
-    const lastAuditedPhase = new Map<string, string>();
-    const auditRegistered = new Set<string>();
-    // Plugin-sync dependency injection (design 13 M2+M3, contract A): the
-    // orchestration in plugin-sync.ts is decoupled from the transport runtime,
-    // so it is adapted here onto transport-manager.exec(id, action, payload?).
-    // plugin-sync re-declares the exec/status contract locally (no transport
-    // import); the `as unknown as ExecFn` cast bridges that contract onto the
-    // transport manager's structurally-identical runtime surface. `status`
-    // matches the runtime status(id) projection directly.
-    const execTransport = sm.exec as unknown as ExecFn;
-    const statusTransport: StatusFn = (id) => sm.status(id);
-    // Live-effect probe for the chamber host packages (design 09 module A /
-    // 08 §11 / 24 §7): adapts the generic tunnel RPC probe onto plugin-sync's
-    // per-package LiveProbe shape, driven by the control-plane registry's own
-    // probe descriptor (method + args) — no per-package branch here. A 404 is
-    // deterministic "the running instance never loaded that boot row"; a
-    // package live from an older boot does NOT prove a later-seeded row
-    // loaded. `readyUrl` is main-process only (never the renderer); no ready
-    // tunnel → null = "not probed" (the plugin UI then renders 生效状态未知
-    // instead of a guessed claim).
-    const liveProbeFor = (id: string): ((descriptor: ChamberHostPackageDescriptor) => Promise<boolean | null>) => async (descriptor) => {
-      const url = sm.readyUrl(id);
-      if (url === null) return null;
-      try {
-        const parsed = new URL(url);
-        const port = parsed.port === '' ? null : Number(parsed.port);
-        if (port === null || !Number.isInteger(port) || port < 1 || port > 65535) return null;
-        const result = await probeChamberHostLive({ host: parsed.hostname, port }, descriptor.probe.method, descriptor.probe.args);
-        return result === 'live' ? true : result === 'not-live' ? false : null;
-      } catch {
-        return null;
-      }
-    };
-    // Exact-incarnation single-flight for ready/manual host-package seeds. A
-    // changed same-id target supersedes immediately; stale finally/log/result
-    // paths cannot clear or write into its replacement.
-    const hostPackageSeeding = new ExactOwnershipRegistry();
-    const readySeedEdges = new ReadyPhaseEdges();
     // The authoritative local dsh home is <userData>/state/dsh-home (the real
     // spawn home, design 13 §4.2) — never dsh-chamber:info.dshHome.
     // localDshHome was resolved before control-plane construction so the
@@ -1693,565 +1560,50 @@ if (!gotTheLock) {
       // Their local source dir is passed to the control plane separately
       // (hostOpenInPackageSourceDir, design 20 §6).
     };
-    const chamberHostPackageSeeds: ChamberHostPackageSeed[] = CHAMBER_HOST_PACKAGES.map(descriptor => ({
-      insertId: descriptor.insert.id,
-      packageName: descriptor.insert.name,
-      // A registry package with no desktop source dir is "not shipped here":
-      // the shipped-artifact gate (builtChamberHostPackageSeeds) rejects an
-      // empty dir before any existsSync, so it can never resolve the process
-      // CWD's own dist/index.js; seedRemoteChamberHostPackages then skips it
-      // instead of writing a dangling loader row.
-      sourceDir: chamberHostSourceDirs[descriptor.insert.name] ?? '',
-      label: descriptor.insert.id,
-      // The registry's ownership flag travels with the seed so the remote
-      // writer drops the row explicitly (never "seeded because a path appeared").
-      ...(descriptor.localOnly === true ? { localOnly: true as const } : {}),
-    }));
-    // Everything that judges "what should be on that OTHER host" reads the
-    // portable list, never the full registry projection: a `localOnly` row has
-    // an empty sourceDir by design (`chamberHostSourceDirs` above), so counting
-    // it as a seedable package made the manual 注入 action fail with a
-    // "构建产物缺失" error naming the one package that must never be seeded, and
-    // appended a false gap to the REMOTE instance's log on every ready
-    // transition (design 20 §6, 2026-12 review). The writer re-applies the same
-    // rule internally (portableChamberHostPackageSeeds).
-    const portableHostSeeds = portableChamberHostPackageSeeds(chamberHostPackageSeeds);
-    type RemoteTarget = {
-      spec: RemoteSpec
-      fingerprint: string
-      sourceToken: NotificationSourceToken
-    }
-    const findRemoteTarget = (id: string): RemoteTarget | null => {
-      const instance = sm.listInstances().find((entry) => entry.id === id);
-      if (instance === undefined || instance.kind !== 'dsh' || instance.transport !== 'ssh') return null;
-      const sourceToken = captureNotificationSource(`${instance.kind}-${instance.id}`);
-      if (sourceToken === null) return null;
-      return {
-        spec: { id: instance.id, remoteDshHome: instance.remoteDshHome ?? null },
-        fingerprint: operationalFingerprint(instance),
-        sourceToken,
-      };
-    };
-    const ownsRemoteTarget = (target: RemoteTarget): boolean =>
-      ownsNotificationSource(target.sourceToken)
-      && findRemoteTarget(target.spec.id)?.fingerprint === target.fingerprint;
-    const scopedExecForTarget = (target: RemoteTarget, extraOwner: () => boolean = () => true): ExecFn =>
-      scopeExecToOwnership(execTransport, target.spec.id, () => extraOwner() && ownsRemoteTarget(target));
-    const scopedStatusForTarget = (target: RemoteTarget): StatusFn => id =>
-      id === target.spec.id && ownsRemoteTarget(target) ? statusTransport(id) : null;
-    const scopedProbeForTarget = (
-      target: RemoteTarget,
-      probe: (descriptor: ChamberHostPackageDescriptor) => Promise<boolean | null>,
-    ): ((descriptor: ChamberHostPackageDescriptor) => Promise<boolean | null>) => async (descriptor) => {
-      if (!ownsRemoteTarget(target)) return null;
-      const result = await probe(descriptor);
-      return ownsRemoteTarget(target) ? result : null;
-    };
-    // Remote install-level fallback path shared by the chamber host packages.
-    const remoteHostPackageDir = (spec: RemoteSpec, packageName: string): string =>
-      `${remoteHome(spec.remoteDshHome)}/profiles/node_modules/${packageName}`;
-    const startAutomaticHostSeed = (id: string): void => {
-      const target = findRemoteTarget(id);
-      if (target === null) return;
-      const begun = hostPackageSeeding.begin(id, target.fingerprint);
-      if (!begun.accepted) return;
-      const token = begun.token;
-      const ownsSeed = () => hostPackageSeeding.owns(token) && ownsRemoteTarget(target);
-      const appendSeedLog = (level: 'info' | 'error', message: string): void => {
-        if (ownsSeed()) sm.appendLog(id, level, message);
-      };
-      void (async () => {
-        try {
-          const builtSeeds = builtChamberHostPackageSeeds(portableHostSeeds);
-          if (builtSeeds.length === 0) {
-            if (ownsSeed()) console.log(`[dsh-chamber] chamber host seed skipped for ${id}: no built host package artifacts`);
-            appendSeedLog('info', 'chamber host 包未注入：构建产物缺失；远端相关客户端能力不可用');
-            return;
-          }
-          const missingSeeds = portableHostSeeds.filter(seed => !builtSeeds.includes(seed));
-          if (missingSeeds.length > 0) {
-            appendSeedLog('info', `chamber host 包部分未注入（构建产物缺失）：${missingSeeds.map(seed => seed.label).join(', ')}`);
-          }
-          const result = await seedRemoteChamberHostPackages(
-            scopedExecForTarget(target, ownsSeed),
-            target.spec,
-            portableHostSeeds,
-          );
-          if (!ownsSeed()) return;
-          if (result.ok) {
-            const seeded = result.packages.map(entry => entry.insertId).join(',');
-            console.log(`[dsh-chamber] chamber host packages seeded onto ${id} (${seeded}; wrote=${result.wrote}, patched=${result.patched})`);
-            const packageSummary = result.packages.map(entry =>
-              `${entry.insertId}${entry.wrote ? ' 已写入' : ' 已是最新'}（${remoteHostPackageDir(target.spec, entry.packageName)}）`).join('；');
-            appendSeedLog('info', `chamber host 包注入完成：${packageSummary}；boot 层${result.patched ? '已合并挂载' : '无需改动'}（重启后生效）`);
-          } else {
-            console.warn(`[dsh-chamber] chamber host seed failed for ${id}: ${result.error}`);
-            appendSeedLog('error', `chamber host 包注入失败：${result.error}`);
-          }
-        } catch (err) {
-          if (!ownsSeed()) return;
-          const detail = describeUnknownError(err);
-          console.warn(`[dsh-chamber] chamber host seed error for ${id}: ${detail}`);
-          appendSeedLog('error', `chamber host 包注入异常：${detail}`);
-        } finally {
-          hostPackageSeeding.finish(token);
-        }
-      })();
-    };
-    // 2026-12 Phase 3: desktop-synced chamber host packages. The local copies
-    // (dev source tree / packaged dist) are the same sources the local
-    // control-plane seed uses; the sync uploads them into the gateway seed
-    // cache after every gateway ready registration.
-    const localChamberHostPackageSources = (): Array<{ name: string; packageJsonPath: string; distIndexPath: string }> => {
-      // Registry-driven AND portability-driven: this iterates the SAME portable
-      // list the ssh seed/preflight paths read (`portableHostSeeds`), so the
-      // local-shape-only rule has exactly one implementation and a future
-      // portability dimension cannot leak a row into the gateway seed cache by
-      // forgetting this site. The per-package source dirs still come from the
-      // single map declared with the seed list above (2026-09 P2 round).
-      return portableHostSeeds.flatMap(seed => {
-        const dir = chamberHostSourceDirs[seed.packageName];
-        if (dir === undefined) {
-          // NEVER silent (a registry entry with no desktop source dir used to
-          // disappear here without a trace). This is the ssh seed list's
-          // graceful skip inverted: there, an empty sourceDir is a deliberate
-          // "not shipped here" that seedRemoteChamberHostPackages skips; here
-          // the omission means the package is silently MISSING from the
-          // gateway seed upload, so the gateway's seed cache never carries it,
-          // the managed instance cannot serve it (its host domain 404s) and
-          // the UI shows no hint. Loud, with the missing name and that
-          // consequence — the fix is a new entry in chamberHostSourceDirs.
-          console.warn(
-            `[dsh-chamber] chamber host package ${seed.packageName} (${seed.insertId}) has no desktop source dir in chamberHostSourceDirs: `
-            + 'it is NOT uploaded to the gateway seed cache, so the gateway-hosted instance cannot load it (its host domain 404s) and no UI surface reports the gap',
-          );
-          return [];
-        }
-        return [{
-          name: seed.packageName,
-          packageJsonPath: path.join(dir, 'package.json'),
-          distIndexPath: path.join(dir, 'dist', 'index.js'),
-        }];
-      });
-    };
-    // Resolves the awaited sync outcome for the caller (the manual
-    // gateway_plugin_sync IPC, design 21 §6.5) or null when the instance is
-    // missing / no longer a gateway. The ready-registration call site keeps
-    // the original fire-and-forget behavior via `void`.
-    const syncGatewayChamberPluginsFor = async (
-      id: string,
-      url: string,
-      headers: Record<string, string>,
-      spkiPin: string | null,
-    ): Promise<{ uploaded: boolean; skipped: boolean; failed?: boolean; error?: string } | null> => {
-      const instance = sm.listInstances().find(candidate => candidate.id === id);
-      if (instance === undefined || instance.kind !== 'gateway') return null;
-      const packages: LocalChamberHostPackage[] = [];
-      for (const source of localChamberHostPackageSources()) {
-        try {
-          packages.push({
-            name: source.name,
-            packageJson: readFileSync(source.packageJsonPath, 'utf8'),
-            distIndex: readFileSync(source.distIndexPath, 'utf8'),
-          });
-        } catch (error) {
-          // Not built/bundled in this runtime — nothing to sync for this entry.
-          // Still loud: a silently skipped source would present as a gateway
-          // that is missing chamber host packages with no diagnostic at all.
-          console.warn(
-            `[dsh-chamber] chamber host package source skipped (${source.name}): ${sanitizeErrorText(describeError(error))}`,
-          );
-        }
-      }
-      return syncGatewayChamberPlugins({
-        // Sync through the REGISTERED transport origin (the ready URL): for
-        // an ssh tunnel that is the loopback endpoint the user verified,
-        // never the (usually unreachable) remote host:port. The tunnel
-        // authority override presents the remote gateway in the Host header
-        // so the gateway's request policy (authority port == listen port)
-        // accepts the request — the same discipline the control-plane proxy
-        // registration above uses.
-        origin: url,
-        authority: instance.transport === 'ssh' ? gatewayTunnelAuthority(instance.remotePort) : undefined,
-        headers,
-        spkiPin,
-        packages,
-        logger: { warn: message => console.warn(message), log: message => console.log(message) },
-      });
-    };
-    /**
-     * Current ready-registration auth facts for one gateway instance (design
-     * 17 §9.3): token/password existence, the live cached login cookie +
-     * registration auth proof (keyed to the TRANSPORT's origin — for an ssh
-     * tunnel the loopback endpoint `http://127.0.0.1:<localPort>` plus the
-     * exact connection/target scope; for a direct http(s) endpoint the same
-     * key as verifyUp minted), the tunnel Host authority and the SPKI pin.
-     * S23: the SPKI pin rides the registration so the reverse proxy gates
-     * every outbound https connection on it (the identity probe already
-     * enforced it in verifyUp; a pin edit while live restarts the transport,
-     * so this derivation always carries the current pin).
-     * Derived identically by the ready registration and the post-verify
-     * re-registration (onVerified below) so the two can never drift.
-     */
-    const currentGatewayAuth = (id: string, url: string, registered: TransportInstanceSpec | undefined): {
-      auth: ReturnType<typeof gatewayRegistrationAuthHeaders>;
-      tunnelAuthority: string | undefined;
-      scope: string | undefined;
-      spkiPin: string | undefined;
-    } => {
-      const token = getGatewayToken(id);
-      const password = getGatewayPassword(id);
-      const tunnelAuthority = registered !== undefined && registered.transport === 'ssh'
-        ? gatewayTunnelAuthority(registered.remotePort)
-        : undefined;
-      const scope = registered === undefined ? undefined : gatewaySessionScopeForConnection(registered);
-      let cookie: string | null = null;
-      let authProof: GatewayRegistrationAuthProof | null = null;
-      if (password !== null) {
-        const origin = gatewaySessionOriginForUrl(url, undefined, tunnelAuthority, scope);
-        cookie = origin === null ? null : gatewaySessions?.cachedCookie(origin) ?? null;
-        authProof = origin === null ? null : gatewaySessions?.registrationAuthProof(origin) ?? null;
-      }
-      return {
-        auth: gatewayRegistrationAuthHeaders(token, password !== null, cookie, authProof),
-        tunnelAuthority,
-        scope,
-        spkiPin: registered !== undefined ? registered.spkiPin : undefined,
-      };
-    };
-    /**
-     * Proxy-registration auth-header fingerprints (design 17 §9.3): the ready
-     * registration captures the session Cookie at ready time; a ready-state
-     * re-verification (heartbeat / user activation) that finds the session
-     * revoked and re-logs in (verifyUp's 401 → one stored-password re-login)
-     * leaves the session manager with a FRESH cookie while the proxy keeps
-     * riding the OLD (dead) one — live traffic would answer 401 until the
-     * pre-expiry refresh timer (potentially hours away) or a manual
-     * reconnect. The onVerified subscription below therefore re-registers
-     * whenever the CURRENT auth headers differ from the registered ones.
-     * Only NON-SECRET sha256 fingerprints are kept — header VALUES never
-     * enter this map (credentials stay in the session manager / stores).
-     */
-    const registeredAuthFingerprints = new Map<string, string>();
-    const authHeadersFingerprint = (headers: Record<string, string> | undefined): string => {
-      const canonical = headers === undefined
-        ? 'none'
-        : Object.keys(headers).sort().map(key => `${key}:${headers[key]}`).join('|');
-      return createHash('sha256').update(canonical).digest('hex');
-    };
-    const sanitizedRegistrationHeaders = (headers: Record<string, string>): Record<string, string> | undefined =>
-      Object.keys(headers).length === 0 ? undefined : headers;
-    sm.onStatusChanged((id, status) => {
-      // S24 audit (design 17 §13.4.4): record non-secret phase TRANSITIONS
-      // only (connecting/ready/error, incl. the requiresUserAction terminal
-      // classification) — a summary-only push with the same phase is not a
-      // transition. Never a credential, cookie or session body.
-      const prevPhase = lastAuditedPhase.get(id);
-      if (prevPhase !== status.phase) {
-        lastAuditedPhase.set(id, status.phase);
-        audit({
-          ts: new Date().toISOString(),
-          event: 'transport_phase',
-          sourceId: id,
-          kind: status.kind,
-          transport: status.transport,
-          detail: status.phase === 'error' && status.requiresUserAction
-            ? 'error:requires_user_action'
-            : status.phase,
-        });
-      }
-      // Non-secret auth-mode marker for the registration audit (design 17
-      // §2.3): token+password | token | password | none — an EXISTENCE projection, never the
-      // value (S24). dsh targets have no auth surface → always none.
-      const auditAuth = status.kind === 'gateway'
-        ? getGatewayToken(id) !== null && getGatewayPassword(id) !== null ? 'token+password'
-          : getGatewayToken(id) !== null ? 'token'
-            : getGatewayPassword(id) !== null ? 'password' : 'none'
-        : 'none';
-      const auditDetail = `auth:${auditAuth}${status.insecureHttp ? ',http_plaintext' : ''}`;
-      // Ready transport → per-instance reverse proxy (design 05 §7.1):
-      // register the instance transport while it is ready, unregister the
-      // moment it leaves ready. The transport URL only exists in the main
-      // process — it never rides the renderer payload below (design 05 §8).
-      const cp = controlPlane;
-      if (cp !== null) {
-        if (status.phase === 'ready') {
-          const url = sm.readyUrl(id);
-          if (url !== null) {
-            if (status.kind === 'gateway') {
-              // The gateway target is authenticated (design 17 §7/§9.3):
-              // inject 0..2 sanctioned headers — the shared token as
-              // Authorization Bearer when configured AND independently a
-              // configured password's login session as the Cookie header
-              // (verifyUp ensured the session before this registration, so
-              // the cached cookie is header-ready). Neither → register
-              // headerless (0 headers is legal — a --no-auth deployment).
-              // dsh targets never inject auth headers (transport-
-              // independent, §2.1/§9.3); the instance-proxy re-validates
-              // the 0..2 whitelist on every registration.
-              const registered = sm.listInstances().find(instance => instance.id === id);
-              const facts = currentGatewayAuth(id, url, registered);
-              const auth = facts.auth;
-              if (!auth.ok) {
-                // Fail closed on the verify→ready→register TOCTOU. A
-                // password-only gateway must never be registered headerless
-                // because its verified cookie was evicted/invalidated in the
-                // gap. When a token is also configured, the pure decision
-                // helper permits the intentional OR-principal bearer fallback.
-                cp.unregisterInstanceTransport(`${status.kind}:${id}`);
-                registeredAuthFingerprints.delete(`${status.kind}:${id}`);
-                sessionRefresh?.disarm(id);
-                sm.appendLog(id, 'warn', 'gateway session changed before proxy registration; re-authenticating');
-                // Capture ONLY the scope for the recovery microtask — never
-                // close over the whole facts object (its auth.headers carry
-                // the session cookie).
-                const scope = facts.scope;
-                queueMicrotask(() => {
-                  const currentStatus = sm.status(id);
-                  const currentSpec = sm.listInstances().find(instance => instance.id === id);
-                  if (currentStatus?.phase !== 'ready' || sm.readyUrl(id) !== url
-                    || currentSpec === undefined || currentSpec.kind !== 'gateway'
-                    || getGatewayPassword(id) === null
-                    || scope === undefined
-                    || gatewaySessionScopeForConnection(currentSpec) !== scope) return;
-                  sm.disconnect(id);
-                  sm.connect(id);
-                });
-                return;
-              }
-              const connectionId = `${status.kind}:${id}`;
-              const headers = sanitizedRegistrationHeaders(auth.headers);
-              cp.registerInstanceTransport(
-                connectionId,
-                url,
-                headers,
-                {
-                  ...(registered === undefined ? {} : { transport: proxyTransport(registered.transport) }),
-                  ...(facts.spkiPin === undefined ? {} : { tls: { spkiPin: facts.spkiPin } }),
-                  ...(facts.tunnelAuthority === undefined ? {} : { authority: facts.tunnelAuthority }),
-                },
-              );
-              registeredAuthFingerprints.set(connectionId, authHeadersFingerprint(headers));
-              // 2026-12 Phase 3: desktop-synced chamber host packages — after
-              // every gateway ready registration, best-effort sync the local
-              // host packages into the gateway seed cache (idempotent: only
-              // version mismatches re-upload, and the upload asks the gateway
-              // for a controlled dsh restart so the running profile picks
-              // them up). The gateway no longer ships its own copies, so the
-              // managed dsh keeps its chamber host layer version-locked to
-              // this desktop. Mobile access is NOT covered here: the mobile
-              // plugin ships inside the gateway distribution instead (its
-              // access chain has no desktop).
-              // Manual-sync re-entry parameters (design 21 §6.5): keep the
-              // registration-time origin/auth headers/SPKI pin (main process
-              // only — never renderer-supplied, never persisted or logged)
-              // so a later gateway_plugin_sync(id) can re-run this exact
-              // sync without waiting for a fresh ready edge.
-              setGatewaySyncRegistration(id, { url, headers: { ...auth.headers }, spkiPin: facts.spkiPin ?? null });
-              void syncGatewayChamberPluginsFor(id, url, auth.headers, facts.spkiPin ?? null);
-            } else {
-              cp.registerInstanceTransport(`${status.kind}:${id}`, url, undefined, {
-                transport: proxyTransport(status.transport),
-              });
-              registeredAuthFingerprints.set(`${status.kind}:${id}`, authHeadersFingerprint(undefined));
-            }
-            // Live-proxy session self-healing (design 17 §9.3): arm the
-            // pre-expiry refresh for every gateway target — the controller
-              // no-ops for no-password targets and re-arms idempotently
-            // (a reconnect re-arms under the new tunnel origin). dsh targets
-            // have no auth surface → nothing to refresh.
-            if (status.kind === 'gateway') sessionRefresh?.arm(id);
-            // S24: one registration edge per instance (ready-phase summary
-            // pushes are not re-audited); the marker carries auth mode +
-            // insecureHttp honesty, never a credential value.
-            if (!auditRegistered.has(id)) {
-              auditRegistered.add(id);
-              audit({
-                ts: new Date().toISOString(),
-                event: 'transport_registered',
-                sourceId: id,
-                kind: status.kind,
-                transport: status.transport,
-                detail: auditDetail,
-              });
-            }
-          }
-        } else {
-          cp.unregisterInstanceTransport(`${status.kind}:${id}`);
-          registeredAuthFingerprints.delete(`${status.kind}:${id}`);
-          // Leaving ready cancels the pre-expiry refresh — a disconnected /
-          // removed transport must not re-login or re-register (a later ready
-          // re-arms with the fresh session).
-          sessionRefresh?.disarm(id);
-          // Manual gateway_plugin_sync re-entry dies with the ready
-          // registration: its transport origin/headers/pin are only valid
-          // while the instance is ready (design 21 §6.5).
-          setGatewaySyncRegistration(id, null);
-          if (auditRegistered.delete(id)) {
-            audit({
-              ts: new Date().toISOString(),
-              event: 'transport_unregistered',
-              sourceId: id,
-              kind: status.kind,
-              transport: status.transport,
-              detail: auditDetail,
-            });
-          }
-        }
-      }
-      // Remote chamber host-package seed: when an SSH-transport dsh target
-      // comes ready, materialize every built package and merge their loader
-      // rows together (v2 semantics, design 17 §2: kind 'dsh' + transport
-      // 'ssh' is the v1 kind 'ssh' shape — the seed runs over the ssh exec
-      // channel, so http-direct and gateway targets are excluded).
-      // NOT silent — the plugin management UI probes the live state and shows
-      // the injection block verbatim (installed/patched), and the seed result
-      // is logged here; a failure is retried on the next ready (the seed is
-      // idempotent, content-hash skip). The exact token is only an in-flight
-      // owner, never a persisted "seeded" claim.
-      if (status.kind === 'dsh' && status.transport === 'ssh' && readySeedEdges.observe(id, status.phase)) {
-        startAutomaticHostSeed(id);
-      }
-      const statusWindow = mainWindow;
-      if (statusWindow !== null) {
-        const pushed = attemptCommittedRegistryPush(() => {
-          if (mainWindow !== statusWindow || statusWindow.isDestroyed()) throw new Error('status renderer changed before push');
-          if (!edges.rendererPush(IPC_CHANNELS.SSH_STATUS_CHANGED, { id, status })) {
-            throw new Error('status renderer push failed');
-          }
-        });
-        if (!pushed.sent) {
-          try { console.warn(`[dsh-chamber] transport 状态已更新但 renderer push 失败：${pushed.error}`); } catch { /* callback boundary */ }
-        }
-      }
+    // —— 4.4b：共用壳装配闭包族（ssh 目标闭包束/自动 seed/gateway 同步/ready
+    // auth 派生/session refresh/状态订阅/publishRegistryTransition）收敛到
+    // shell-assembly-shared.ts（owner=shell-core；依赖方向 main|sidecar-ctx →
+    // shared，禁止反向）。Electron flavor 只注入日志前缀/plane 晚绑定/窗口推送
+    // 证明/HostEdges 叶/host 包源目录与诊断文案。
+    const shellAssembly = createShellAssemblyShared({
+      logTag: 'dsh-chamber',
+      transportManager: sm,
+      plane: () => controlPlane,
+      windowAlive: () => mainWindow !== null,
+      capturePushTarget: () => mainWindow,
+      pushTargetStillCurrent: target => target === mainWindow && mainWindow !== null && !mainWindow.isDestroyed(),
+      rendererPush: (channel, payload) => edges.rendererPush(channel, payload),
+      audit,
+      retireNotificationsForSources: sources => edges.retireNotificationsForSources(sources),
+      gatewaySessions: gatewaySessions!,
+      sshPluginJournal,
+      hostPackageSourceDirs: chamberHostSourceDirs,
+      missingHostPackageSourceWarning: seed => {
+        console.warn(
+          `[dsh-chamber] chamber host package ${seed.packageName} (${seed.insertId}) has no desktop source dir in chamberHostSourceDirs: `
+          + 'it is NOT uploaded to the gateway seed cache, so the gateway-hosted instance cannot load it (its host domain 404s) and no UI surface reports the gap',
+        );
+      },
+      onHostPackageSourceReadError: (source, error) => {
+        // Not built/bundled in this runtime — nothing to sync for this entry.
+        // Still loud: a silently skipped source would present as a gateway
+        // that is missing chamber host packages with no diagnostic at all.
+        console.warn(
+          `[dsh-chamber] chamber host package source skipped (${source.name}): ${sanitizeErrorText(describeError(error))}`,
+        );
+      },
     });
+    sessionRefresh = shellAssembly.sessionRefresh;
+    shellAssembly.subscribeTransportStatus();
 
-    // Ready-state re-verification → proxy re-registration (design 17 §9.3):
-    // a heartbeat/user probe can rotate the password session inside verifyUp
-    // (401 → one stored-password re-login), leaving the proxy riding the
-    // registered (dead) cookie. Re-register ONLY when the current auth
-    // headers differ from the registered ones — registerInstanceTransport
-    // revokes live traffic, so an unchanged healthy registration must never
-    // be re-registered (the 60s heartbeat would otherwise blink every
-    // instance every minute). dsh targets have no auth surface and no-op
-    // here; failures never emit (they flip the phase instead).
-    sm.onVerified(id => {
-      const cp = controlPlane;
-      const current = sm.status(id);
-      if (cp === null || current === null || current.phase !== 'ready' || current.kind !== 'gateway') return;
-      const url = sm.readyUrl(id);
-      const registered = sm.listInstances().find(instance => instance.id === id);
-      if (url === null || registered === undefined || registered.kind !== 'gateway') return;
-      const facts = currentGatewayAuth(id, url, registered);
-      // Fail closed like the ready registration: never replace the live
-      // registration with a headerless one because the cookie vanished in
-      // the gap — the next probe/heartbeat re-evaluates.
-      if (!facts.auth.ok) return;
-      const connectionId = `gateway:${id}`;
-      const headers = sanitizedRegistrationHeaders(facts.auth.headers);
-      if (authHeadersFingerprint(headers) === registeredAuthFingerprints.get(connectionId)) return;
-      cp.registerInstanceTransport(
-        connectionId,
-        url,
-        headers,
-        {
-          transport: proxyTransport(registered.transport),
-          ...(facts.spkiPin === undefined ? {} : { tls: { spkiPin: facts.spkiPin } }),
-          ...(facts.tunnelAuthority === undefined ? {} : { authority: facts.tunnelAuthority }),
-        },
-      );
-      registeredAuthFingerprints.set(connectionId, authHeadersFingerprint(headers));
-      sm.appendLog(id, 'info', 'gateway session re-established — proxy registration refreshed with the new session');
-    });
-
-    /**
-     * Finish every committed registry transition through the main-branch
-     * source-lifecycle authority. Metadata/secret persistence is owned by the
-     * transaction; this sidecar rotates renderer/native-notification proofs,
-     * revokes exact plugin-seed owners, and publishes the committed roster.
-     * W-10 S2：证明投影/代际同步/队列退役清理在 shell-core
-     * （projectNotificationSourceInstances / syncNotificationSourceRegistry），
-     * 活跃原生通知的退役驱逐经 edges.retireNotificationsForSources（B4 登记在
-     * electron-edges 私有）。
-     * W-10 S3：本 sidecar 留 main 装配侧（C 组注册体已迁 shell-core
-     * installIpcHandlers ②，save/delete 经 ctx.publishRegistryTransition
-     * 调用本函数）；projectInstanceSecrets 定义随投影链迁入 shell-core
-     * （core→main 单向 import，S2 同款），本函数不再持有局部定义。
-     */
-    const publishRegistryTransition = (
-      before: readonly TransportInstanceSpec[],
-      after: readonly TransportInstanceSpec[],
-    ) => {
-      const projected = projectNotificationSourceInstances(after);
-      if (JSON.stringify(before) === JSON.stringify(after)) {
-        return projected.map(projectInstanceSecrets);
-      }
-      const projectedSaved = projected.map(projectInstanceSecrets);
-
-      const removedIds = computeRemovedInstanceIds(before, after);
-      // Manual gateway-sync re-entry dies with the instance (design 21 §6.5):
-      // a removed row must never keep a registration a later
-      // gateway_plugin_sync(id) call could sync against.
-      for (const id of removedIds) {
-        setGatewaySyncRegistration(id, null);
-        sshPluginJournal.clear(id);
-      }
-      const retiredIds = computeRetiredInstanceIds(before, after);
-      const afterById = new Map(after.map(instance => [instance.id, instance]));
-      const reseedIds: string[] = [];
-      for (const previous of before) {
-        const current = afterById.get(previous.id);
-        if (current === undefined || operationalFingerprint(previous) !== operationalFingerprint(current)) {
-          readySeedEdges.forget(previous.id);
-          hostPackageSeeding.revoke(previous.id);
-          // The plugin undo journal is bound to the OPERATIONAL target: an
-          // id-stable edit that changed host/user/service/home invalidates
-          // every op recorded on the previous target (design 21 §6.4 review
-          // P1) — drop them here AND at undo time (latestOkForTarget).
-          sshPluginJournal.clear(previous.id);
-          if (current?.kind === 'dsh' && current.transport === 'ssh') reseedIds.push(previous.id);
-        }
-      }
-
-      // W-10 S2：代际同步 + 两条队列的退役丢弃 = shell-core
-      // syncNotificationSourceRegistry（返回退役 id）；活跃原生通知驱逐 =
-      // edges.retireNotificationsForSources（原 activeNotifications 迭代）。
-      const retiredNotificationSources = new Set(syncNotificationSourceRegistry(projected));
-      if (retiredNotificationSources.size > 0) {
-        edges.retireNotificationsForSources(retiredNotificationSources);
-      }
-
-      // A service/home edit may complete while the transport is already
-      // ready. Seed the replacement owner explicitly; ordinary reconnects
-      // are picked up by the ready edge above.
-      for (const id of reseedIds) {
-        if (sm.status(id)?.phase === 'ready') startAutomaticHostSeed(id);
-      }
-
-      const registryWindow = mainWindow;
-      if (registryWindow !== null) {
-        const pushed = attemptCommittedRegistryPush(() => {
-          if (mainWindow !== registryWindow || registryWindow.isDestroyed()) {
-            throw new Error('registry renderer changed before push');
-          }
-          if (!edges.rendererPush(IPC_CHANNELS.SSH_INSTANCES_CHANGED, { removedIds, retiredIds })) {
-            throw new Error('registry renderer push failed');
-          }
-        });
-        if (!pushed.sent) {
-          console.warn(`[dsh-chamber] registry 已保存但 lifecycle push 失败（等待 renderer 重拉）：${pushed.error}`);
-        }
-      }
-      return projectedSaved;
-    };
     // —— W-10 S3：registry+凭据 C 组 6 注册体（SSH_INSTANCES_GET /
     // SSH_SAVE_CONNECTION / SSH_DELETE_CONNECTION /
     // SSH_SET_PASSWORD / GATEWAY_SET_TOKEN / GATEWAY_SET_PASSWORD）自 main.ts
     // 迁入 shell-core installIpcHandlers ② C 组段（注册体/纯辅助/投影链逐字
     // 随迁；装配依赖经 ctx：transportManager/audit/gatewaySessions/
-    // publishRegistryTransition）。本 sidecar 与其宿主生命周期对象
-    // （readySeedEdges/hostPackageSeeding/sshPluginJournal/… 与
-    // SSH_INSTANCES_CHANGED push 文本）留本文件——renderer-trust 锚定。
+    // publishRegistryTransition）。宿主生命周期对象与 SSH_INSTANCES_CHANGED
+    // push 装配面自 4.4b 起在 shell-assembly-shared.ts（ctx 经下方 shellAssembly
+    // 注入；renderer-trust 的推送锚定已随迁到该文件）。
 
     // —— W-10 S4：ssh 连接状态 D 组 7 注册体（SSH_CONFIG_LIST / SSH_CONNECT /
     // SSH_DISCONNECT / SSH_STATUS / SSH_REVERIFY / SSH_LOGS / SSH_LOGS_CLEAR）
@@ -2389,32 +1741,10 @@ if (!gotTheLock) {
     const pnpmEntry = app.isPackaged
       ? path.join(process.resourcesPath, 'pnpm', 'bin', 'pnpm.cjs')
       : path.join(pkgDir, 'node_modules', 'pnpm', 'bin', 'pnpm.cjs');
-    let storePruneOperation: Promise<void> | null = null;
-    // The shared core's default node executor is plain node (design 18 §9.1);
-    // the desktop injects its Electron-as-node branch for EVERY pnpm child —
-    // installs AND store-prune — so dev and packaged modes run pnpm with the
-    // same deliberate process semantics (ELECTRON_RUN_AS_NODE + --expose-internals).
-    const runtimeNodeExecutor = (): { file: string; args: string[]; env: Record<string, string> } =>
-      process.versions.electron !== undefined
-        ? { file: process.execPath, args: ['--expose-internals'], env: { ELECTRON_RUN_AS_NODE: '1' } }
-        : { file: process.execPath, args: [], env: {} };
-    const runStorePruneIfNeeded = (): Promise<void> => {
-      if (storePruneOperation !== null) return storePruneOperation;
-      if (quitRequested || readStorePruneRequest(runtimeBaseDir) === null) return Promise.resolve();
-      const operation = pruneRuntimeStore({ baseDir: runtimeBaseDir, pnpmEntry, deps: { node: runtimeNodeExecutor } })
-        .then(() => { clearStorePruneRequest(runtimeBaseDir); })
-        .catch((error) => {
-          // Retain the marker: the next safe startup/operation retries. Prune
-          // failure is disk hygiene, not permission to block a verified tree.
-          console.error('[dsh-chamber] dsh runtime store prune failed:', sanitizeErrorText(describeError(error)));
-        })
-        .finally(() => {
-          if (storePruneOperation === operation) storePruneOperation = null;
-        });
-      storePruneOperation = operation;
-      return operation;
-    };
-    const runtimeHost = createRuntimeStartupHost({
+    // 4.4b：RuntimeStartupHostDeps 的固定尾（Electron-as-node pnpm 执行器 +
+    // store-prune 单飞叶）由 createRuntimeHostDeps 生成——main 与 sidecar-ctx
+    // 共用同一实现；此处只注入 flavor 事实。
+    const runtimeDeps = createRuntimeHostDeps({
       logTag: 'dsh-chamber',
       rendererPush: (channel, payload) => edges.rendererPush(channel, payload),
       windowAlive: () => mainWindow !== null && !mainWindow.isDestroyed(),
@@ -2445,10 +1775,9 @@ if (!gotTheLock) {
       runtimeBootstrapWriterUnsafe,
       bootstrapMetadataCorrupt,
       pnpmEntry,
-      runtimeNodeExecutor,
-      runStorePruneIfNeeded,
       onRuntimeInstance: instance => { runtimeController = instance; },
     });
+    const runtimeHost = createRuntimeStartupHost(runtimeDeps);
     const {
       runtimeInstance,
       refreshRuntimeEvidence,
@@ -2551,9 +1880,10 @@ if (!gotTheLock) {
       // 例，registry 读写 + 状态/生命周期投影）；audit = 绑定 auditLogPath 的
       // S24 审计叶；gatewaySessions = 模块级会话管理器装配期取值（null 仅
       // will-quit 清理可达——处理器不可达，见 ShellAssemblyCtx 字段注释）；
-      // publishRegistryTransition = registry 变更生命周期 sidecar（宿主对象
-      // readySeedEdges/hostPackageSeeding/sshPluginJournal/… 与
-      // SSH_INSTANCES_CHANGED push 文本留本文件，经 ctx 供 core 调用）。
+      // publishRegistryTransition = registry 变更生命周期 sidecar（4.4b 起宿主
+      // 对象 readySeedEdges/hostPackageSeeding/sshPluginJournal/… 与
+      // SSH_INSTANCES_CHANGED push 装配面在 shell-assembly-shared.ts，经 ctx
+      // 供 core 调用；本文件只注入 flavor 面）。
       // W-10 S4（ssh 连接状态批）：D 组 7 注册体同经 transportManager——core 侧
       // Pick 扩 reverify/logs/clearLogs（本装配注入完整现实例，无新增字段）。
       // W-10 S5（exec/systemd 批）：E 组 4 注册体（SSH_START/STOP/IS_ACTIVE/
@@ -2563,12 +1893,11 @@ if (!gotTheLock) {
       // SSH_SEED_HOST_GRAPH / SSH_PLUGIN_MATERIALIZE_ADD(_PICK)）迁入
       // installIpcHandlers ② F 组段的装配依赖——core 侧 Pick 扩 appendLog；
       // 共享现实例/闭包束经 ctx 注入：localDshHome（本作用域装配期解析值——
-      // core 不碰 Electron paths）、sshPluginJournal（本作用域现实例——main
-      // 的 publishRegistryTransition 撤销清理与 core undo/apply 共用同一 journal
-      // 写者）、hostPackageSeeding / chamberHostPackageSeeds（自动 seed 路径与
-      // core 手动 seed 共用同一注册表/数组）、sshPluginTargets（findRemoteTarget
-      // / ownsRemoteTarget / scoped* / liveProbeFor 闭包——自动 seed 与 ready
-      // 边缘同族，core 经 ctx 调用、文本以原名逐字保留）。确认对话框与插件源
+      // core 不碰 Electron paths）、sshPluginJournal（装配侧现实例——4.4b 起
+      // 其撤销清理与 core undo/apply 共用同一 journal 写者）、hostPackageSeeding
+      // / chamberHostPackageSeeds / sshPluginTargets（自动 seed 路径与 core 手动
+      // seed 共用同一注册表/数组/闭包族，全部来自 shellAssembly——单飞与代际
+      // 语义见 shell-assembly-shared.ts）。确认对话框与插件源
       // picker 宿主腿（confirmPluginAction 形状 / pickPluginSource 函数体）已迁
       // electron-edges.ts（HostEdges.showMessage / pickPluginSource）——W-10 S8
       // 起本地插件注册体（H 组）同经 core 内 confirmPluginAction 助手与 edges
@@ -2576,19 +1905,12 @@ if (!gotTheLock) {
       transportManager: sm,
       audit,
       gatewaySessions,
-      publishRegistryTransition,
+      publishRegistryTransition: shellAssembly.publishRegistryTransition,
       localDshHome,
       sshPluginJournal,
-      hostPackageSeeding,
-      chamberHostPackageSeeds,
-      sshPluginTargets: {
-        findRemoteTarget,
-        ownsRemoteTarget,
-        scopedExecForTarget,
-        scopedStatusForTarget,
-        scopedProbeForTarget,
-        liveProbeFor,
-      },
+      hostPackageSeeding: shellAssembly.hostPackageSeeding,
+      chamberHostPackageSeeds: shellAssembly.chamberHostPackageSeeds,
+      sshPluginTargets: shellAssembly.sshPluginTargets,
       // W-10 S7（gateway 插件批）：G 组 3 注册体（GATEWAY_PLUGIN_SYNC/APPLY/
       // MATERIALIZE）迁入 installIpcHandlers ② G 组段的装配依赖——syncGateway
       // ChamberPluginsFor（本作用域定义的上传执行闭包，ready 自动 sync 与手动
@@ -2596,7 +1918,7 @@ if (!gotTheLock) {
       // pin + 本地 chamber host 包源（app.isPackaged/pkgDir/repoRoot 解析在
       // 闭包内））；core 侧确认对话框复用 S6 edges 助手、窗口预检与 pick 经
       // edges——本装配不再新增宿主叶。
-      syncGatewayChamberPluginsFor,
+      syncGatewayChamberPluginsFor: shellAssembly.syncGatewayChamberPluginsFor,
       // W-10 S8（本地插件批）：H 组 3 个本地插件注册体（LOCAL_PLUGIN_ADD/
       // ADD_FILE/REMOVE）的本地执行叶——runLocalPluginMutation（本作用域定义，
       // 见定义处注释：runtime writer fence 租约 + runtimeState.startBlocked 启动门 +
@@ -2633,7 +1955,7 @@ if (!gotTheLock) {
       runtimeActionAllowed,
       runtimeBaseDir,
       refreshRuntimeEvidence,
-      runStorePruneIfNeeded,
+      runStorePruneIfNeeded: runtimeDeps.runStorePruneIfNeeded,
       restartLocalDsh: async () => {
         if (controlPlane === null) throw new Error('control plane not initialized')
         await controlPlane.restartLocal();

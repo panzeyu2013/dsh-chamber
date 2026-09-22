@@ -48,6 +48,7 @@
  * `reconnectInstanceConnection`），并把 `state` 写回 ref。来源离开 ready
  * 或会话不再 running 时记录自动清除（`stalled` 随之收敛）。
  */
+import { LADDER_TABLES } from '@dsh-chamber/dsh-stream-state'
 
 /** 每会话事实（App 已持有的 `runtimeFacts[sourceId].sessions` 行）。 */
 export interface SessionLivenessSessionFacts {
@@ -142,7 +143,11 @@ export interface SessionLivenessConfig {
 }
 
 /**
- * 默认时序。取值依据（2026-12 实测）：活跃 turn 期间宿主 durable 进展
+ * 默认时序。**数值单源 = tables.ts 的 `LADDER_TABLES.sessionLiveness`**（B4 收编：
+ * 本模块不再自持字面量；表 ↔ 消费者的锁步由 scripts/gates/verify-ladder-table-parity.mjs
+ * 消费检查与 test/wiring/session-liveness-wiring.test.ts 的表到表不变量共同钉住）。
+ *
+ * 取值依据（2026-12 实测）：活跃 turn 期间宿主 durable 进展
  * 5–21s/次（median 11s，161s 13 次），而合法静默可达 75s（TTFT）到数分钟
  * （长工具）——L1 门槛取 60s（2026-12 彻底修复后由「事实年龄」驱动：动作只是读 +
  * 官方 refresh，**不是**升级；每个 running 时段的探测次数仍由 coalesce/配额封顶，
@@ -152,31 +157,23 @@ export interface SessionLivenessConfig {
  * 覆盖 N=2 的两次串行探针，故 65s）；L2 退避
  * 300s 是「重连是重动作」的量级（同类的 S2 臂用 60s，但那条臂每 ~2min 就会自己重连，
  * 不需要同值）；L3 在 L2 后 120s。
+ *
+ * 逐值推导（字面量时代保留，避免"数值搬了、理由丢了"）：
+ * - refreshAfterMs：生产 tick 30s（AGGREGATE_FALLBACK_POLL_MS）+ 门槛 60s ⇒ L1 落在
+ *   60/260/460s…（**均匀**铺开；coalesce = refreshWindowMs / maxRefreshRequests ⇒ 每
+ *   10 分钟仍至多 3 次，与门槛 120s 的稳态成本相同，只是首次探测提前一个 coalesce 窗）。
+ *   2026-12 彻底修复：本轮动作从「只升级」变成「refresh + 本地判定 + 权威探针 +
+ *   写回」，修复成功后陈旧位立刻掉落、守卫记录随之清除 —— 更短的首探**不**增加稳态
+ *   成本，只把可见陈旧窗口从 ~200s 级压到 60s 级。
+ * - refreshOutcomeTimeoutMs：必须 > 对账链最坏回执时延（2 次尝试 × (refresh 20s +
+ *   verify 65s) + 退避 1.5s ≈ 171.5s，见 sidebar/src/shared/session-fact-reconcile.ts
+ *   的默认值）：相位预算拆开之后，90s 会在「一切正常但宿主很慢」时误判成「拿不到结论」
+ *   ⇒ 假 L2（2026-12 三轮自审发现的跨模块不变量，由 wiring 测试锁住；四轮复核把 verify
+ *   抬到覆盖 N=2 的两次串行探针后，本值同步抬到 190s）。本值 < coalesce 200s：单次
+ *   「探针无结论」（unknown）由 unknownAbsorbedAt 挂起期限，直到下一次 L1 发出，否则它
+ *   必然抢在下一次 L1 之前到点（2026-12 独立复核实测）。
  */
-export const SESSION_LIVENESS_DEFAULTS: SessionLivenessConfig = {
-  refreshAfterMs: 60_000,
-  // 生产 tick 30s（AGGREGATE_FALLBACK_POLL_MS）+ 门槛 60s ⇒ L1 落在 60/260/460s…
-  // （**均匀**铺开；coalesce = refreshWindowMs / maxRefreshRequests ⇒ 每 10 分钟仍
-  // 至多 3 次，与门槛 120s 的稳态成本相同，只是首次探测提前一个 coalesce 窗）。
-  // 2026-12 彻底修复：本轮动作从「只升级」变成「refresh + 本地判定 + 权威探针 +
-  // 写回」，修复成功后陈旧位立刻掉落、守卫记录随之清除 —— 更短的首探**不**增加稳态
-  // 成本，只把可见陈旧窗口从 ~200s 级压到 60s 级。
-  refreshCoalesceMs: 200_000,
-  maxRefreshRequests: 3,
-  refreshWindowMs: 600_000,
-  // 必须 > 对账链最坏回执时延（2 次尝试 × (refresh 20s + verify 65s) + 退避 1.5s
-  // ≈ 171.5s，见 sidebar/src/shared/session-fact-reconcile.ts 的默认值）：相位预算
-  // 拆开之后，90s 会在「一切正常但宿主很慢」时误判成「拿不到结论」⇒ 假 L2
-  // （2026-12 三轮自审发现的跨模块不变量，由 wiring 测试锁住；四轮复核把 verify
-  // 抬到覆盖 N=2 的两次串行探针后，本值同步抬到 190s）。
-  // 本值 190s < coalesce 200s：单次「探针无结论」（unknown）由 unknownAbsorbedAt
-  // 挂起期限，直到下一次 L1 发出，否则它必然抢在下一次 L1 之前到点（2026-12 独立复核实测）。
-  refreshOutcomeTimeoutMs: 190_000,
-  reconnectBackoffMs: 300_000,
-  maxReconnects: 1,
-  maxNoopReconnects: 3,
-  noticeAfterMs: 120_000,
-}
+export const SESSION_LIVENESS_DEFAULTS: SessionLivenessConfig = LADDER_TABLES.sessionLiveness
 
 /** 一个来源的守卫记录。 */
 export interface SessionLivenessRecord {

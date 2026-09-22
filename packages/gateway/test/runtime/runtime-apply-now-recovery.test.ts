@@ -12,8 +12,7 @@ import { join } from 'node:path'
 import { createGatewayRuntimeManager } from '../../src/runtime-manager.ts'
 import {
   readActivationJournalState,
-  readCurrentPointer,
-  readOverride,
+  readCurrentPointerState,
   writeActivationJournal,
   writeCurrentPointer,
   writeOverride,
@@ -31,6 +30,7 @@ import {
   probeResultsFor,
   makeValidTree,
   armPendingSwitch,
+  readOverrideRow,
   writeOverrideRow,
   runtimeManager,
 } from '../support/runtime-routes-harness.ts'
@@ -64,7 +64,7 @@ test('applyNow with only a staged selection (selectedOnly, no pending) arms the 
     assert.equal(accepted.accepted, true)
     // F2: the pending switch is armed journal-first, synchronously, before the
     // transaction — runStartupPhase requires effectivePending === targetVersion.
-    const armed = readOverride(stateDir)
+    const armed = readOverrideRow(stateDir)
     assert.equal(armed?.pending, '1.0.0')
     assert.equal(armed?.chosenVersion, '1.0.0')
     assert.equal(armed?.selectedOnly, false)
@@ -80,7 +80,7 @@ test('applyNow with only a staged selection (selectedOnly, no pending) arms the 
     releaseStop()
     await waitForSettle(manager)
     assert.equal(manager.applyNowInFlight(), false)
-    assert.equal(readCurrentPointer(stateDir), '1.0.0', 'the armed switch committed')
+    assert.deepEqual(readCurrentPointerState(stateDir), { kind: 'valid', version: '1.0.0' }, 'the armed switch committed')
     assert.ok(order.indexOf('stop') < order.indexOf('probe'), 'host quiesced before the transaction')
     await manager.dispose()
   } finally {
@@ -112,9 +112,9 @@ test('applyNow snapshot failure stays snapshot-failed, resumes the untouched sou
     assert.equal(status.startupBlockedReason, 'snapshot-failed')
     assert.equal(typeof status.operationError, 'string', 'F3: the 202 job failure projects into status, not only the log')
     assert.notEqual(status.operationError, '')
-    assert.equal(readCurrentPointer(stateDir), null, 'a failed snapshot never touches the pointer')
-    assert.equal(readOverride(stateDir)?.pending, '1.0.0', 'snapshot-failed retains the pending switch for retry-apply')
-    assert.equal(readOverride(stateDir)?.lastOutcome, 'snapshot-failed')
+    assert.deepEqual(readCurrentPointerState(stateDir), { kind: 'missing' }, 'a failed snapshot never touches the pointer')
+    assert.equal(readOverrideRow(stateDir)?.pending, '1.0.0', 'snapshot-failed retains the pending switch for retry-apply')
+    assert.equal(readOverrideRow(stateDir)?.lastOutcome, 'snapshot-failed')
     assert.deepEqual(order, ['stop', 'start'],
       'the source is quiesced, the snapshot fails without spawning, then the untouched source is resumed (restoreBuiltin :1180-1192 parity)')
     await manager.dispose()
@@ -323,7 +323,7 @@ test('apply-now preflight rejects an applied-monitoring no-op — 409 noop_targe
       'dsh v1.0.0 is already the active runtime; apply-now has nothing to do')
     assert.equal(manager.applyNowInFlight(), false, 'a no-op rejection arms nothing')
     assert.deepEqual(stops, [], 'no stop/start cycle on the already-active version')
-    assert.equal(readOverride(stateDir)?.pending, null, 'no pending switch is armed')
+    assert.equal(readOverrideRow(stateDir)?.pending, null, 'no pending switch is armed')
     assert.equal(readActivationJournalState(stateDir).kind, 'valid', 'the monitoring journal is left untouched')
     await assert.rejects(manager.applyNow(), (error: unknown) =>
       (error as { code?: string }).code === 'noop_target', 'the direct manager call refuses identically')
@@ -428,9 +428,9 @@ test('applyNow rolled-back runs the rolled-back version and projects operationEr
     assert.equal(status.activeVersion, '1.0.0', 'the rolled-back version is the running version')
     assert.equal(status.phase, 'idle')
     assert.equal(typeof status.operationError, 'string', 'F3: a rolled-back apply-now projects operationError')
-    assert.equal(readCurrentPointer(stateDir), '1.0.0')
-    assert.equal(readOverride(stateDir)?.lastOutcome, 'rolled-back')
-    assert.equal(readOverride(stateDir)?.pending, null, 'a rolled-back transaction clears the pending switch')
+    assert.deepEqual(readCurrentPointerState(stateDir), { kind: 'valid', version: '1.0.0' })
+    assert.equal(readOverrideRow(stateDir)?.lastOutcome, 'rolled-back')
+    assert.equal(readOverrideRow(stateDir)?.pending, null, 'a rolled-back transaction clears the pending switch')
     assert.equal(readFileSync(join(home, 'settings.json'), 'utf8'), '{"source":"preserved"}', 'data is restored from the pre-swap snapshot')
     await manager.dispose()
   } finally {
@@ -569,7 +569,7 @@ test('restore-builtin durable guards: interrupted apply / restore marker / corru
       message: /swap-attempted/,
     })
     assert.deepEqual(stops, [], 'a refused reset never stops the managed dsh')
-    assert.equal(readOverride(stateDir)?.swapAttempted, true, 'the durable marker is untouched by a refused reset')
+    assert.equal(readOverrideRow(stateDir)?.swapAttempted, true, 'the durable marker is untouched by a refused reset')
     assert.equal(readActivationJournalState(stateDir).kind, 'missing', 'a refused reset writes no intent journal')
     // Route-level parity on the real manager: the recovery gate refuses too.
     const routes = createRuntimeRoutes(() => swapManager, silentLogger)

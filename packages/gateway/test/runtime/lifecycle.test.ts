@@ -87,6 +87,69 @@ test('gateway start: a swap-attempted block keeps the gateway up with dsh stoppe
   }
 })
 
+/** 3.1 (2026-12 review): the boot metadata-recovery preflight is tri-state and
+ *  fail-closed — ONLY an explicit `false` may fall through to startLocal(). */
+test('gateway start: metadata preflight stops the managed dsh for pending AND unreadable metadata', async () => {
+  const cases = [
+    { answer: true as const, expected: /metadata recovery is pending/ },
+    { answer: 'unknown' as const, expected: /metadata is unreadable/ },
+  ]
+  for (const entry of cases) {
+    const stateDir = mkdtempSync(join(tmpdir(), 'gateway-metadata-preflight-'))
+    try {
+      const order: string[] = []
+      const state = { connectionState: 'stopped' }
+      const plane = compositionPlane(state, order)
+      const errors: string[] = []
+      const runtime = runtimeStub(stateDir, { metadataRecoveryPending: () => entry.answer })
+      const gateway = createGateway({
+        config: config(stateDir),
+        logger: { ...silentLogger, error: (line: string) => errors.push(line) },
+        deps: {
+          createPlane: (() => plane) as never,
+          createRuntimeManager: (() => runtime) as never,
+          createProxy: (() => ({ async handleHttp() {}, async handleUpgrade() {}, closeAllStreams() {} })) as never,
+        },
+      })
+      await gateway.start()
+      assert.equal(gateway.connectionState, 'stopped', `answer=${entry.answer}: managed dsh left stopped`)
+      assert.ok(!order.includes('local:start'), `answer=${entry.answer}: the preflight never reached startLocal`)
+      assert.ok(order.includes('local:stop'), `answer=${entry.answer}: the idempotent stop ran`)
+      assert.ok(
+        errors.some(line => entry.expected.test(line)),
+        `answer=${entry.answer}: the log names the arm (${errors.join(' | ')})`,
+      )
+      await gateway.stop()
+    } finally {
+      rmSync(stateDir, { recursive: true, force: true })
+    }
+  }
+})
+
+test('gateway start: an explicit false metadata preflight is the only answer that starts the managed dsh', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gateway-metadata-preflight-false-'))
+  try {
+    const order: string[] = []
+    const state = { connectionState: 'stopped' }
+    const plane = compositionPlane(state, order)
+    const runtime = runtimeStub(stateDir, { metadataRecoveryPending: () => false })
+    const gateway = createGateway({
+      config: config(stateDir),
+      logger: silentLogger,
+      deps: {
+        createPlane: (() => plane) as never,
+        createRuntimeManager: (() => runtime) as never,
+        createProxy: (() => ({ async handleHttp() {}, async handleUpgrade() {}, closeAllStreams() {} })) as never,
+      },
+    })
+    await gateway.start()
+    assert.ok(order.includes('local:start'), 'an explicit false passes the preflight')
+    await gateway.stop()
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
 test('gateway start quarantines and stops a blocked verdict that left its probe process ready', async () => {
   const stateDir = mkdtempSync(join(tmpdir(), 'gateway-blocked-ready-'))
   let state = 'stopped'

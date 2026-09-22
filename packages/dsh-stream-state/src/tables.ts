@@ -62,13 +62,14 @@ export function openingBudgetMs(streak: number): number {
 /**
  * B4: the FOUR recovery ladders' thresholds, recorded here as the single table.
  *
- * These values are still OWNED by their modules today (the mobile stall machine, the
- * sidebar fact-reconcile receipt chain, liveness and the health chip); B4 retires
- * those copies one node at a time. Until then
- * `scripts/gates/verify-ladder-table-parity.mjs` locks every surviving declaration to
- * the numbers below, so the table and the modules cannot drift apart while both
- * exist - the same lockstep B5 used for the Swift mirror. A module that no longer
- * declares its constant is B4's retirement working, not a failure.
+ * Every ladder READS this table instead of declaring its own literals: the mobile
+ * stall machine (dsh-chamber-client-ui-mobile), the sidebar fact-reconcile receipt
+ * chain, the renderer liveness guard and the open-in stream-health chip.
+ * `scripts/gates/verify-ladder-table-parity.mjs` keeps the collection honest in both
+ * directions: each retired declaration/leaf literal must stay absent from its module
+ * (the table is the authority), and every named consumer must reference
+ * `LADDER_TABLES.<ladder>` in its source - a module that starts carrying its own
+ * copy again turns the gate red instead of drifting silently.
  *
  * Provenance: measured from each module's own declarations (2026-12), not chosen
  * here. Changing a value is a BEHAVIOR_CHANGES entry, never a free parameter.
@@ -90,6 +91,29 @@ export const LADDER_TABLES = {
     attemptTimeoutMs: 20_000,
     verifyTimeoutMs: 65_000,
     correctivePhaseTimeoutMs: 5_000,
+  },
+  /** renderer session-liveness.ts: the running-bit guard's L1/L2/L3 timing. */
+  sessionLiveness: {
+    refreshAfterMs: 60_000,
+    refreshCoalesceMs: 200_000,
+    maxRefreshRequests: 3,
+    refreshWindowMs: 600_000,
+    refreshOutcomeTimeoutMs: 190_000,
+    reconnectBackoffMs: 300_000,
+    maxReconnects: 1,
+    maxNoopReconnects: 3,
+    noticeAfterMs: 120_000,
+  },
+  /** open-in session-stream-health.ts: the conversation health chip's ladder. */
+  sessionStreamHealth: {
+    errorGraceMs: 8_000,
+    loadingStallMs: 20_000,
+    loadingFailedMs: 90_000,
+    healCooldownMs: 120_000,
+    healBudgetWindowMs: 600_000,
+    healBudgetMax: 3,
+    healSettleMs: 20_000,
+    carrierChurnMs: 10_000,
   },
 } as const
 

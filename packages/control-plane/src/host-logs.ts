@@ -228,10 +228,31 @@ class AsyncHostLogLane {
   #pendingEntries = 0
   #pendingBytes = 0
   #drainPromise: Promise<void> | null = null
+  #warn: ((message: string) => void) | null
+  #warnedOnce = false
 
-  constructor(stateDir: string, port: number) {
+  constructor(stateDir: string, port: number, warn?: (message: string) => void) {
     this.path = logPathFor(stateDir, port)
     this.directory = join(stateDir, LOG_DIR)
+    this.#warn = warn ?? null
+  }
+
+  /** Rebind the diagnostic sink when a later handle (one lane is shared per
+   *  backing path and can outlive its creator) brings its own logger. */
+  setWarn(warn: (message: string) => void): void {
+    this.#warn = warn
+  }
+
+  /** Report a dropped batch once per failure episode. The sink runs under
+   *  try/catch: a throwing logger must never escape into #drain (a rejected
+   *  drain would surface on the managed host's stdout/stderr callback stack)
+   *  or into the caller's setState path. */
+  #warnDrop(detail: string): void {
+    if (this.#warnedOnce) return
+    this.#warnedOnce = true
+    try {
+      this.#warn?.(`host-logs: host log writes are failing; buffered host log entries were dropped (${detail})`)
+    } catch { /* a diagnostic sink must never take the host pipe down */ }
   }
 
   /**
@@ -437,11 +458,18 @@ class AsyncHostLogLane {
         }
         this.#pendingEntries -= batch.length
         this.#pendingBytes -= batchBytes
-      } catch {
+        // This batch reached disk: a following failure is a NEW episode and
+        // is allowed to warn again.
+        this.#warnedOnce = false
+      } catch (error) {
         // The failed batch and everything queued behind it are diagnostic-only
-        // and are dropped together. A later NEW write gets one fresh setup
-        // attempt; a permanently broken disk never creates an infinite retry
-        // loop or wedges the managed host's stdout/stderr pipe.
+        // and are dropped together — no longer silently: the first failure of
+        // an episode reports the drop once through the injected sink
+        // (spawn-dsh/local-connection pass logger.warn). A later NEW write
+        // gets one fresh setup attempt; a permanently broken disk never
+        // creates an infinite retry loop or wedges the managed host's
+        // stdout/stderr pipe.
+        this.#warnDrop(error instanceof Error ? error.message : String(error))
         this.#pending = []
         this.#pendingEntries = 0
         this.#pendingBytes = 0
@@ -486,12 +514,18 @@ class AsyncHostLogLane {
   }
 }
 
-function getHostLogLane(stateDir: string, port: number): AsyncHostLogLane {
+function getHostLogLane(
+  stateDir: string,
+  port: number,
+  warn?: (message: string) => void,
+): AsyncHostLogLane {
   const path = logPathFor(stateDir, port)
   let lane = hostLogLanes.get(path)
   if (lane === undefined) {
-    lane = new AsyncHostLogLane(stateDir, port)
+    lane = new AsyncHostLogLane(stateDir, port, warn)
     hostLogLanes.set(path, lane)
+  } else if (warn !== undefined) {
+    lane.setWarn(warn)
   }
   return lane
 }
@@ -507,14 +541,23 @@ function maybeReleaseHostLogLane(lane: AsyncHostLogLane): void {
  * share one bounded asynchronous lane: writes and compaction are serialized,
  * so fixing event-loop blocking does not revive the old WriteStream/rename
  * race. The high-water policy drops the newest entry; the control-plane logger
- * already carried it, and diagnostics must never backpressure the host pipe. */
-export function createHostLogWriter(stateDir: string, port: number): HostLogWriter {
+ * already carried it, and diagnostics must never backpressure the host pipe.
+ *
+ * `options.warn` receives ONE diagnostic per drop episode (the lane re-arms
+ * its warning latch after a successful append/compaction). The sink is called
+ * under try/catch and never awaited, so a throwing logger cannot surface on
+ * the managed host's stdout/stderr callback stack. */
+export function createHostLogWriter(
+  stateDir: string,
+  port: number,
+  options: { warn?: (message: string) => void } = {},
+): HostLogWriter {
   let ownedLane: AsyncHostLogLane | null = null
   let closed = false
 
   function laneForWrite(): AsyncHostLogLane {
     if (ownedLane === null) {
-      ownedLane = getHostLogLane(stateDir, port)
+      ownedLane = getHostLogLane(stateDir, port, options.warn)
       ownedLane.handleCount += 1
     }
     return ownedLane

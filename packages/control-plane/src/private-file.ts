@@ -31,7 +31,7 @@ export interface PrivateFileRead {
   mtimeMs: number
 }
 
-export interface PrivateFileModeOptions {
+interface PrivateFileModeOptions {
   mode?: number
 }
 
@@ -44,7 +44,7 @@ export interface PrivateFileReadOptions {
   tightenMode?: number
 }
 
-export interface PrivateDirectoryOptions {
+interface PrivateDirectoryOptions {
   /** Existing directories historically converged to `mode`. Security
    * boundaries may instead require the caller to provision the exact mode,
    * or preserve an existing non-secret root without mutating it. Newly

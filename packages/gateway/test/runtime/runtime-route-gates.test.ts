@@ -15,7 +15,6 @@ import { createGatewayRuntimeManager } from '../../src/runtime-manager.ts'
 import {
   clearActivationJournal,
   readActivationJournalState,
-  readOverride,
   writeCurrentPointer,
 } from '@dsh-chamber/dsh-runtime'
 import { createRuntimeRoutes } from '../../src/runtime-routes.ts'
@@ -26,6 +25,7 @@ import {
   fakePlane,
   runRoute,
   makeValidTree,
+  readOverrideRow,
   writeOverrideRow,
   runtimeManager,
 } from '../support/runtime-routes-harness.ts'
@@ -273,7 +273,7 @@ test('rollback pending cannot be silently superseded by re-select/apply', async 
       assert.equal(journalAfterRefusals.journal.targetVersion, '1.0.0')
       assert.equal(journalAfterRefusals.journal.manualRollback, true)
     }
-    const override = readOverride(stateDir)
+    const override = readOverrideRow(stateDir)
     assert.equal(override?.pending, '1.0.0')
   } finally {
     rmSync(stateDir, { recursive: true, force: true })
@@ -331,7 +331,7 @@ test('rollback direction guard: only an installed version OLDER than the active 
     await assert.rejects(manager.rollback('1.0.0'), directionRefusal,
       'a target newer than the builtin-active runtime is not a rollback')
     assert.equal(readActivationJournalState(stateDir).kind, 'missing', 'a refused rollback writes no journal')
-    assert.equal(readOverride(stateDir), null, 'a refused rollback arms no override')
+    assert.equal(readOverrideRow(stateDir), null, 'a refused rollback arms no override')
     const builtinDowngrade = await manager.rollback('0.8.0')
     assert.equal(builtinDowngrade.accepted, true)
     let journal = readActivationJournalState(stateDir)
@@ -341,7 +341,7 @@ test('rollback direction guard: only an installed version OLDER than the active 
         'a builtin-active downgrade keeps the data-restore semantics (effective-version formula)')
       assert.equal(journal.journal.targetVersion, '0.8.0')
     }
-    assert.equal(readOverride(stateDir)?.pending, '0.8.0')
+    assert.equal(readOverrideRow(stateDir)?.pending, '0.8.0')
     // Reset the armed pending before the pointer cases below.
     clearActivationJournal(stateDir)
     writeOverrideRow(stateDir, { chosenVersion: null, pending: null })
@@ -365,7 +365,7 @@ test('rollback direction guard: only an installed version OLDER than the active 
       assert.equal(journal.journal.targetVersion, '1.0.0')
       assert.equal(journal.journal.intentKind, 'version-switch')
     }
-    assert.equal(readOverride(stateDir)?.pending, '1.0.0')
+    assert.equal(readOverrideRow(stateDir)?.pending, '1.0.0')
   } finally {
     rmSync(stateDir, { recursive: true, force: true })
   }
@@ -395,7 +395,7 @@ test('apply() journals manualRollback for staged downgrades (pointer and builtin
       assert.equal(journal.journal.manualRollback, true, 'builtin-active staged downgrade keeps data-restore semantics')
       assert.equal(journal.journal.targetVersion, '0.8.0')
     }
-    assert.equal(readOverride(stateDir)?.pending, '0.8.0')
+    assert.equal(readOverrideRow(stateDir)?.pending, '0.8.0')
     reset()
 
     // Pointer v2 active: a staged downgrade to 1.0.0 arms manualRollback.
@@ -409,7 +409,7 @@ test('apply() journals manualRollback for staged downgrades (pointer and builtin
       assert.equal(journal.journal.manualRollback, true, 'pointer-active staged downgrade arms a manual rollback')
       assert.equal(journal.journal.targetVersion, '1.0.0')
     }
-    assert.equal(readOverride(stateDir)?.pending, '1.0.0')
+    assert.equal(readOverrideRow(stateDir)?.pending, '1.0.0')
     reset()
 
     // Pointer v2 active: a staged UPGRADE to 3.0.0 is a plain switch
@@ -423,7 +423,7 @@ test('apply() journals manualRollback for staged downgrades (pointer and builtin
       assert.equal(journal.journal.manualRollback, false, 'an upgrade never arms data-restore semantics')
       assert.equal(journal.journal.targetVersion, '3.0.0')
     }
-    assert.equal(readOverride(stateDir)?.pending, '3.0.0')
+    assert.equal(readOverrideRow(stateDir)?.pending, '3.0.0')
   } finally {
     rmSync(stateDir, { recursive: true, force: true })
   }

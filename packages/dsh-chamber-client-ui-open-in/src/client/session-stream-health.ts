@@ -99,6 +99,7 @@
  * never rebuilds the stream once per tick; only spam-clicking the visible control
  * can repeat the call, which the seat serializes (double-click guard).
  */
+import { LADDER_TABLES } from '@dsh-chamber/dsh-stream-state'
 
 /** Official session lifecycle state (`SessionSnapshot.openState`). */
 export type SessionOpenState = 'cold' | 'loading' | 'open' | 'error'
@@ -206,21 +207,16 @@ export interface SessionStreamHealthConfig {
 }
 
 /**
- * Defaults. The grace is short because an `error` state is not a state the
+ * Defaults. **数值单源 = tables.ts 的 `LADDER_TABLES.sessionStreamHealth`**
+ * (B4: this module no longer declares its own literals; the gate's consumer check
+ * plus the table-to-table wiring assertions pin the collection).
+ *
+ * The grace is short because an `error` state is not a state the
  * user can read anything new from (the window is already frozen); the loading
  * threshold sits far above the loopback/gateway p99 open latency, so it only
  * fires on a genuinely parked open.
  */
-export const SESSION_STREAM_HEALTH_DEFAULTS: SessionStreamHealthConfig = {
-  errorGraceMs: 8_000,
-  loadingStallMs: 20_000,
-  loadingFailedMs: 90_000,
-  healCooldownMs: 120_000,
-  healBudgetWindowMs: 600_000,
-  healBudgetMax: 3,
-  healSettleMs: 20_000,
-  carrierChurnMs: 10_000,
-}
+export const SESSION_STREAM_HEALTH_DEFAULTS: SessionStreamHealthConfig = LADDER_TABLES.sessionStreamHealth
 
 /**
  * What the plan asks of the seat this tick.

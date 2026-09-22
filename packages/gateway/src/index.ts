@@ -558,16 +558,26 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
         // clean and would otherwise bypass it. Keep the gateway up with the
         // managed dsh stopped and resume via recover-metadata. (Duck-typed:
         // composition tests inject fake managers without the new seam.)
-        const recoveryPreflight = (runtimeManager as { metadataRecoveryPending?: () => boolean }).metadataRecoveryPending
-        if (startup.blockedReason === null
-          && typeof recoveryPreflight === 'function'
-          && recoveryPreflight.call(runtimeManager)) {
-          logger.error('gateway runtime metadata recovery is pending (mid-recovery record or corrupt marker); managed dsh left stopped — resume via POST /chamber/runtime/recover-metadata')
-          await createdPlane.stopLocal()
-          assertStartEpoch(epoch)
-          unsubscribeLocalState = createdPlane.onLocalStateChange(snapshot => syncFeatures(snapshot.status))
-          started = true
-          return
+        // 2026-12 review (3.1): the preflight is tri-state and the gate is
+        // fail-closed — ONLY an explicit `false` may fall through to
+        // startLocal(). `'unknown'` (metadata unreadable) is treated exactly
+        // like true: the recover-metadata route would fail on the same read,
+        // so the operator must fix the state directory and restart. The two
+        // messages stay distinct so the operator knows whether a resume route
+        // exists.
+        const recoveryPreflight = (runtimeManager as { metadataRecoveryPending?: () => boolean | 'unknown' }).metadataRecoveryPending
+        if (startup.blockedReason === null && typeof recoveryPreflight === 'function') {
+          const metadataRecovery = recoveryPreflight.call(runtimeManager)
+          if (metadataRecovery !== false) {
+            logger.error(metadataRecovery === 'unknown'
+              ? 'gateway runtime metadata is unreadable (the recovery preflight could not read the state directory); managed dsh left stopped — fix the runtime state directory and restart the gateway'
+              : 'gateway runtime metadata recovery is pending (mid-recovery record or corrupt marker); managed dsh left stopped — resume via POST /chamber/runtime/recover-metadata')
+            await createdPlane.stopLocal()
+            assertStartEpoch(epoch)
+            unsubscribeLocalState = createdPlane.onLocalStateChange(snapshot => syncFeatures(snapshot.status))
+            started = true
+            return
+          }
         }
         // The transaction's candidate spawn emits transient ready transitions;
         // the feature-consumer subscription attaches only AFTER the verdict,

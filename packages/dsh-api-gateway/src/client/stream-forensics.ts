@@ -20,7 +20,9 @@
 /** Window-level event name (globalThis; the page consumer listens on window) carrying one {@link StreamForensicsFact}. */
 export const STREAM_FORENSICS_EVENT = 'dsh-chamber:stream-forensics'
 
-/** Lifecycle transitions the fork can attribute without renderer tooling. */
+/** Lifecycle transitions the fork can attribute without renderer tooling.
+ *  `carrier-forensic` carries the shared carrier reducer's own bounded evidence
+ *  (carrier-closed / stall-below-threshold / episode-claim-released, 1.4). */
 export type StreamForensicsKind =
   | 'socket-lost'
   | 'socket-reconnect'
@@ -29,6 +31,7 @@ export type StreamForensicsKind =
   | 'socket-silent'
   | 'opening-timeout'
   | 'opening-stall-escalation'
+  | 'carrier-forensic'
   | 'generation-ready'
   | 'generation-lost'
 

@@ -1,6 +1,6 @@
 # 18 · dsh 运行时版本管理（运行期从 npm 拉取安装）
 
-> **状态：现行（dsh 运行时版本管理；macOS/Linux 为安装/切换/回退/恢复的 mutation 契约目标，Windows 只读，2026-12）**——本文是该管理的权威行为契约：运行期从 npm 做 source-bound 安装、不可变版本树 + 原子指针切换、探针门控激活与自动回退、DSH_HOME 快照与幂等恢复、per-server 设置段与 gateway `/chamber/runtime` 管理面；未完成门禁见 `docs/progress/STATUS.md`（design 18 条目）。
+> **dsh 运行时版本管理；macOS/Linux 为安装/切换/回退/恢复的 mutation 契约目标，Windows 只读**——本文是该管理的权威行为契约：运行期从 npm 做 source-bound 安装、不可变版本树 + 原子指针切换、探针门控激活与自动回退、DSH_HOME 快照与幂等恢复、per-server 设置段与 gateway `/chamber/runtime` 管理面；未完成门禁见 `docs/progress/STATUS.md`（design 18 条目）。
 
 ## 1. 需求与动机
 
@@ -10,7 +10,7 @@
   **不随 chamber 发版**的获取路径，内建树始终是回退锚。
 - 版本显示：本地版本号已有既成投影（`dsh-chamber:info.dshVersion`），settings
   「dsh 运行时」段与 connections 本地卡片消费同一 resolve 结果。
-- 目标（用户拍板）：① **dsh 版本更新不等 chamber 发版**（运行期从 npm 拉包装进壳）；
+- 目标：① **dsh 版本更新不等 chamber 发版**（运行期从 npm 拉包装进壳）；
   ② **版本选择/回滚**：settings 自由选版本（默认当前激活版本，见 §3.6 A.2），坏了可
   回滚，或升级应用本体求兼容；③ **显示本地 dsh 版本号**。
 
@@ -128,7 +128,7 @@ reaper（回收孤儿实例）→ 快照 DSH_HOME（§3.7，断言无存活写�
 - **探针形态化（design 17 §10；design 24 §7 C 的按域派生）**：
   `clientGraph/graph`、`gitWorktree/previewCreate` 与 `archiveCleanup/probe`
   三个 chamber 宿主域只在「种子缓存就绪」时验证——gateway 宿主包由连接的桌面经
-  `/chamber/plugins` 同步（Phase 3），缓存缺包时托管 dsh 是纯 dsh。**期望集按本次
+  `/chamber/plugins` 同步，缓存缺包时托管 dsh 是纯 dsh。**期望集按本次
   spawn 实际 seed 的宿主域派生**（`activationProbeNamesForDomains` 于 dsh-runtime、
   `syncedHostDomainProbeNames` 于 gateway：空缓存 = 缩减
   `PROBE_NAMES_WITHOUT_HOST_DOMAINS` 四项；部分同步（2-of-3，老桌面↔新 gateway）=
@@ -257,7 +257,7 @@ applied → 下一周期 checking；rollback/failed → 终态（回滚后可再
 - **结果文案按分支（绝不无条件「数据已恢复」）**：
   - 完整恢复 →「dsh 运行时已回退 vX，数据已恢复」；
   - 半态（树已回旧、数据未恢复）→「运行时已回退 vX，**数据恢复失败**（保留现场
-    .old），可重试恢复或联系排查」；
+    .old），可重试恢复或联系诊断」；
   - 启动补完失败（restore-in-progress 标记 + 快照缺失）→「数据恢复未完成（现场
     保留），请勿删除 userData 中的 dsh-runtime 目录」+ [重试恢复]。
 - **「状态 × 可见动作 × 文案」矩阵（UI 验收契约）**：覆盖全部状态（含 error /
@@ -319,7 +319,7 @@ chamber-settings.json，非秘密）：
    applying「应用 dsh vY…」；applied「已更新到 vY」；rollback/failed 错误文案（脱敏））。
 6. **失败记录行**（仅失败时）：「vY 安装失败：<原因> — 建议升级 dsh-chamber / 重试」。
    失败现场清除**仅本地**：desktop 经 `dsh-chamber:runtime-clear-failure` trustedIpc
-   调 `clearRuntimeFailure`（保护集复核后显式删除对应 `failures/*.json`）；gateway
+   调 `clearRuntimeFailure`（保护集校验通过后显式删除对应 `failures/*.json`）；gateway
    无清除按钮（无 `/chamber/runtime` 清除路由），按仅 local 降级并登记偏差（见 STATUS）。
 7. **快照 + 运行时占用事实块**（`.runtimeDiskFacts`，紧凑 gap 4px，与版本源错误行
    同区域、发丝线分隔；位置见组件树；local/gateway 同构）：快照行 = 标签 + 值
@@ -346,7 +346,7 @@ chamber-settings.json，非秘密）：
    gateway = `POST /chamber/runtime/restart`（202 + status 轮询，§9.3）。远端重启窗口内
    隧道 phase 保持 `ready`（隧道未断）、实例反代对目标连接拒绝返回显式 503（诚实失败，
    03 §3），会话/侧边栏短时错误属预期。
-   **窗口随动作重载一次（2026-12 修订）**：宿主侧插件行每次 boot 重新确定（上），但
+   **窗口随动作重载一次**：宿主侧插件行每次 boot 重新确定（上），但
    **页面侧 client 插件集在窗口 boot 时固定**（宿主图每 boot 取一次、`dsh.client`
    bundle 那时执行；模块表按 id first-load-wins，design 09 §3.2/§3.5），新装或重打包
    的客户端半身只有窗口重 boot 才出现；因此**插件刷新语义的重启动作** = 就绪探测通过
@@ -354,7 +354,7 @@ chamber-settings.json，非秘密）：
    **实现 = 一个 page-owned completion**（sidebar 共享面
    `restart-window-reload.ts`，两个客户端插件都不得互相 value-import）：按来源 key
    （`local` / `gateway-<id>` / `dsh-<id>`）单飞；**发起面板卸载不取消**（重启是宿主
-   事实，完成动作不能随按钮消失，review F6）；就绪预算内未恢复则**不重载**并如实报错；
+   事实，完成动作不能随按钮消失）；就绪预算内未恢复则**不重载**并如实报错；
    就绪 waiter 由调用方提供（本地 `/health` 的 `ready|degraded`；gateway
    `pollGatewayReady`；ssh `waitForSourceServing`）。**接线范围**：本段「重启 dsh」
    两种形态、本地「立即应用」/「重试应用」/「重试恢复」三类重启事务（仅成功时 arm）、
@@ -381,7 +381,7 @@ chamber-settings.json，非秘密）：
   id `RUNTIME_SECTION_ID = 'dsh-runtime'`、order 31；connections 为壳的固定 nav
   入口、在分隔线之下，不占 ledger order——视觉顺序即 agent-presets → dsh-runtime）。**不出现在
   `__general`（通用）视图**——`GeneralView` 只保留设计 15 的控制组（启动与关闭 /
-  运行 / 更新）。桥接面（design 05 §5，2026-12 修订）：该段由本包在**该来源自己的 boot
+  运行 / 更新）。桥接面（design 05 §5）：该段由本包在**该来源自己的 boot
   ctx** 上注册（`settings-bridge` 的 `apply`，随 `chamberBridge` roster 投影
   reconcile），与官方 `settings.section`、该来源第三方分节同处一份台账——视觉位置
   不变，邻居可能含第三方分节（同形、无来源标记；见 design 05 §5）。投影不可识别时
@@ -428,14 +428,14 @@ chamber-settings.json，非秘密）：
 - 字段行 `.generalRow` + `.runtimeField`：列向 gap 6px，label `.generalFieldLabel`
   14px / 500；下拉 `.runtimeField`（radius 8px / bg layer-1 / 12px，focus 时 border
   brand）。**下拉文本字号不强统一**：服务器下拉**触发器** 13px/600 为导航强调
-  （菜单行 = chamber 密度：2026-09 batch 1 的 E4 对齐官方 dense item 14px/22px +
-  min-height 34px，2026-09 阶段 2 的 A-4 按其同批裁决改回 v0.2.4 `padding:7px 10px`
+  （菜单行 = chamber 密度：E4 对齐官方 dense item 14px/22px +
+  min-height 34px，A-4 同批裁决改回 v0.2.4 `padding:7px 10px`
   + 13px、行框 18px（32px 高），保留 r10/列表 r20——见 design 06 §7「菜单密度 =
   chamber 档」），运行时/表单字段 12px/400 为紧凑行；只统一箭头词汇。
 - 下拉箭头统一 `IconChevronDownOutline14`（`.runtimeSelectChevron`，appearance:none +
   自定义 chevron，右缘与文字左缘对称；文字↔箭头净间隙 ≥6px）。
 - 动作按钮：主（更新到/切换到 vY）与次（恢复内建 / 重启 dsh / 清理版本 / 恢复回滚前
-  数据等）**一律用官方 `ui-primitives` `Button`**（2026-09-11 upstream-alignment T9）：
+  数据等）**一律用官方 `ui-primitives` `Button`**：
   主 = `variant="primary" size="sm"`（28px capsule / radius 14 /
   `--dsw-alias-button-primary-fill` / label-primary-foreground）、次 =
   `variant="outline" size="sm"`（透明 + border l2），禁用态 opacity .4（原手写
@@ -628,7 +628,7 @@ chamber-settings.json，非秘密）：
   与 gateway executor 同一常量；安装代码 = gateway 用户级等价，脚本默认允许，见
   design 21 §6.1/§6.3）。
 - **隐私**：不携带用户/SSH 材料；失败记录仅版本/时间戳/探测结果/脱敏路径。
-- **已接受让步（用户拍板）**：无验证 + 自由选版本 = 壳可能跑在未重基的 dsh 上；
+- **已接受让步**：无验证 + 自由选版本 = 壳可能跑在未重基的 dsh 上；
   不做「已验证/未验证」徽标、不区别对待版本。安全网 = §3.4 探针门控（含延迟裁决）+
   known-good 终态 + §3.7 快照/两阶段恢复/pre-rollback 暂存/一键恢复 + 失败记录引导
   「升级应用求兼容」。

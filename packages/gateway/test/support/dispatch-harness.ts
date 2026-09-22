@@ -7,7 +7,7 @@
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { ApiRequest, ApiResponse } from '@dsh-chamber/control-plane'
+import type { ApiRequest, ApiResponse, Logger } from '@dsh-chamber/control-plane'
 import { createAuth, type AuthProvider } from '../../src/auth.ts'
 import { parseGatewayConfig } from '../../src/config.ts'
 import { createGatewayDispatch } from '../../src/dispatch.ts'
@@ -28,6 +28,9 @@ export function setup(
   surface?: () => { handle(req: unknown, res: FakeResponse, pathname: string): Promise<boolean> },
   /** Optional login-phase pre-warm deps (design 17 §10.6); null = not composed. */
   warmup: WarmupDeps | null = null,
+  /** Optional dispatch logger (defaults to silentLogger): warn-once wiring
+   *  assertions need the sink without re-assembling the dispatch. */
+  logger: Logger = silentLogger,
 ) {
   const config = parseGatewayConfig({
     host: '0.0.0.0',
@@ -49,7 +52,7 @@ export function setup(
     start() {},
     stop() {},
   }
-  const dispatch = createGatewayDispatch(auth, () => proxy as never, () => features as never, runtime as never, silentLogger, policy, auditFile, false, undefined, undefined, warmup)
+  const dispatch = createGatewayDispatch(auth, () => proxy as never, () => features as never, runtime as never, logger, policy, auditFile, false, undefined, undefined, warmup)
   return { dispatch, get httpProxyCalls() { return httpProxyCalls }, get upgradeProxyCalls() { return upgradeProxyCalls } }
 }
 

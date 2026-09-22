@@ -158,6 +158,26 @@ export function buildLegacyHostProbePayload(): { args: { _request: Record<string
 }
 
 /**
+ * The canonical legacy session/list answer shape: a PLAIN RECORD carrying an
+ * `items` array. The pre-identity `session/list` probe answered
+ * `{ items: [...] }`, so an `ok:true` value with any other shape is a
+ * damaged legacy host and must fail closed, never pass a health probe.
+ *
+ * Single-sourced here (beside the identity/legacy method constants) so the
+ * control-plane fallback (dsh-client.ts), the dsh-runtime activation probe
+ * (through its injected `legacyShape` seam) and the desktop SSH probes apply
+ * the SAME predicate — three hand-maintained copies of this shape previously
+ * disagreed (arrays counted as legacy in control-plane, anything non-null in
+ * desktop).
+ * @param value - the parsed `result.value` of an `ok:true` legacy answer.
+ * @returns true only for a non-array object whose `items` property is an array.
+ */
+export function isLegacyHostProbeValue(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  return Array.isArray((value as { items?: unknown }).items)
+}
+
+/**
  * Narrow a parsed response body to a matching server-response envelope.
  * Never guesses: any shape that is not provably a matching server-response
  * with an object result slot is classified explicitly (see ServerResponseParse).

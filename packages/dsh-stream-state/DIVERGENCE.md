@@ -24,7 +24,7 @@
 
 | # | 现象 | Proof（钉住它的用例） | 为何是修复 | 退役条件 |
 |---|---|---|---|---|
-| **D-4** | 加宽预算的**归属**从「endpoint+payload 键」改为「逻辑流 episode」：预算所有权变化，替换次数与时刻都不变，因此差分器看不到 | `Proof: packages/dsh-stream-state/test/carrier/carrier-lifecycle.test.ts`（`openingBudgetMs` 阶梯真值表，含 `-1`/`99` 退化输入） | 旧键在消费者 dispose 后无人清除，重进同一会话从 60–300s 起步（审计 §4.3 的加宽存活洞） | episode 所有权在 B1 接线落地后，键的存活期等于逻辑流存活期 |
+| **D-4** | 加宽预算的**归属**从「endpoint+payload 键」改为「逻辑流 episode」（2026-12 落地为 stream-client 的 owner 账本：每 open 以本地 `baseStreak` 认领、仅 owner 可发布、live 兄弟不继承、仅死前驱传递；digest 保留为请求身份）：预算所有权变化，替换次数与时刻都不变，因此差分器看不到 | `Proof: packages/dsh-stream-state/test/carrier/carrier-lifecycle.test.ts`（`openingBudgetMs` 阶梯真值表，含 `-1`/`99` 退化输入） | 旧键在消费者 dispose 后无人清除，重进同一会话从 60–300s 起步（审计 §4.3 的加宽存活洞） | 已按逻辑流所有权收紧，键的存活期等于逻辑流存活期；**彻底删除 digest 仅剩的上游条件** = 领域 opener 转发 episode 参数（vendor 触点，提案见 `docs/progress/todo/upstream-proposals.md`） |
 
 ## C. 实测撤销的记录（防止重造差异）
 

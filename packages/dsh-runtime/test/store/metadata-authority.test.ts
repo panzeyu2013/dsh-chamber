@@ -2,7 +2,7 @@
  * dsh-runtime-store.ts 目录数据面测试（design 18 §3.2/§3.5）——node:test，
  * 无 electron；baseDir 用 mkdtempSync(os.tmpdir()) 隔离（仿 chamber-settings
  * 测试）。覆盖：current 指针 round-trip / 损坏 / 原子写无残留 tmp；override
- * round-trip / 损坏 → *.corrupt 保留 + null；isProtectedVersion 四类受保护
+ * round-trip / 损坏 → *.corrupt 保留 + corrupt State；isProtectedVersion 四类受保护
  * （current / known-good / pending / .failed）与不受保护；listVersionTrees
  * 排除非版本树条目。
  *
@@ -22,9 +22,7 @@ import {
   currentPointerPath,
   overridePath,
   readActivationJournalState,
-  readCurrentPointer,
   readCurrentPointerState,
-  readOverride,
   readOverrideState,
   recordRuntimeFailure,
   writeCurrentPointer,
@@ -292,37 +290,34 @@ test('private filesystem detects a replaced parent and never follows it during t
     'unproved cleanup retains the exact private temporary evidence fail-closed');
 });
 
-test('current 指针: 缺失 → null; 写读 round-trip; 切换指针', () => {
+test('current 指针: 缺失 → missing; 写读 round-trip; 切换指针', () => {
   const base = freshBase();
-  assert.equal(readCurrentPointer(base), null, '缺失 → null');
   assert.deepEqual(readCurrentPointerState(base), { kind: 'missing' });
   writeCurrentPointer(base, '0.1.1-rc.2');
-  assert.equal(readCurrentPointer(base), '0.1.1-rc.2');
   assert.deepEqual(readCurrentPointerState(base), { kind: 'valid', version: '0.1.1-rc.2' });
   const raw = JSON.parse(readFileSync(currentPointerPath(base), 'utf8'));
   assert.deepEqual(raw, { version: '0.1.1-rc.2' }, '指针文件 = 普通 JSON {version}');
   writeCurrentPointer(base, '1.0.0');
-  assert.equal(readCurrentPointer(base), '1.0.0');
+  assert.deepEqual(readCurrentPointerState(base), { kind: 'valid', version: '1.0.0' });
 });
 
-test('current 指针: 损坏 → null（不误判、不写坏数据参与判定）', () => {
+test('current 指针: 损坏 → corrupt（不误判、不写坏数据参与判定）', () => {
   const base = freshBase();
   mkdirSync(path.dirname(currentPointerPath(base)), { recursive: true });
   writeFileSync(currentPointerPath(base), '{ not json !!!', 'utf8');
-  assert.equal(readCurrentPointer(base), null);
   assert.deepEqual(readCurrentPointerState(base), { kind: 'corrupt' });
   writeFileSync(currentPointerPath(base), '["nope"]', 'utf8');
-  assert.equal(readCurrentPointer(base), null);
+  assert.deepEqual(readCurrentPointerState(base), { kind: 'corrupt' });
   writeFileSync(currentPointerPath(base), '{}', 'utf8');
-  assert.equal(readCurrentPointer(base), null);
+  assert.deepEqual(readCurrentPointerState(base), { kind: 'corrupt' });
   writeFileSync(currentPointerPath(base), JSON.stringify({ version: '../evil' }), 'utf8');
-  assert.equal(readCurrentPointer(base), null, '不安全版本串按损坏处理');
+  assert.deepEqual(readCurrentPointerState(base), { kind: 'corrupt' }, '不安全版本串按损坏处理');
 });
 
 test('current 指针: 原子写（tmp + rename）后无残留 tmp; rename 失败时清理 tmp', () => {
   const base = freshBase();
   writeCurrentPointer(base, '0.1.1');
-  assert.equal(readCurrentPointer(base), '0.1.1');
+  assert.deepEqual(readCurrentPointerState(base), { kind: 'valid', version: '0.1.1' });
   assert.ok(!existsSync(`${currentPointerPath(base)}.tmp`), '成功写后 tmp 已由 rename 清理');
   // 用非空目录占据 dest → rename 必败（EISDIR/ENOTEMPTY）→ tmp 必须被清理
   rmSync(currentPointerPath(base), { force: true });
@@ -332,9 +327,9 @@ test('current 指针: 原子写（tmp + rename）后无残留 tmp; rename 失败
   assert.ok(!existsSync(`${currentPointerPath(base)}.tmp`), '异常后 tmp 已清理');
 });
 
-test('override: 缺失 → null; 写读 round-trip（含 null 字段）; 原子写无残留 tmp', () => {
+test('override: 缺失 → missing; 写读 round-trip（含 null 字段）; 原子写无残留 tmp', () => {
   const base = freshBase();
-  assert.equal(readOverride(base), null, '缺失 → null');
+  assert.deepEqual(readOverrideState(base), { kind: 'missing' });
   const record: OverrideRecord = {
     shellVersion: '0.1.3',
     chosenVersion: '0.1.1-rc.2',
@@ -344,7 +339,7 @@ test('override: 缺失 → null; 写读 round-trip（含 null 字段）; 原子�
     selectedOnly: true,
   };
   writeOverride(base, record);
-  assert.deepEqual(readOverride(base), record);
+  assert.deepEqual(readOverrideState(base), { kind: 'valid', record });
   assert.ok(!existsSync(`${overridePath(base)}.tmp`), '成功写后 tmp 已由 rename 清理');
   const noPending: OverrideRecord = {
     shellVersion: '0.1.3',
@@ -354,7 +349,7 @@ test('override: 缺失 → null; 写读 round-trip（含 null 字段）; 原子�
     swapAttempted: true,
   };
   writeOverride(base, noPending);
-  assert.deepEqual(readOverride(base), noPending);
+  assert.deepEqual(readOverrideState(base), { kind: 'valid', record: noPending });
   assert.throws(
     () => writeOverride(base, { ...noPending, selectedOnly: 'yes' as never }),
     /selectedOnly/,
@@ -362,17 +357,17 @@ test('override: 缺失 → null; 写读 round-trip（含 null 字段）; 原子�
   );
 });
 
-test('override: 损坏 → 保留 *.corrupt 并返回 null（可逆，绝不静默当默认）', () => {
+test('override: 损坏 → 保留 *.corrupt 且 State 读为 corrupt（可逆，绝不静默当默认）', () => {
   const base = freshBase();
   mkdirSync(path.dirname(overridePath(base)), { recursive: true });
   writeFileSync(overridePath(base), '{ nope', 'utf8');
-  assert.equal(readOverride(base), null);
+  assert.deepEqual(readOverrideState(base), { kind: 'corrupt' });
   assert.ok(existsSync(`${overridePath(base)}.corrupt`), '损坏文件保留为 *.corrupt');
   assert.ok(!existsSync(overridePath(base)), '损坏文件已移走');
   assert.deepEqual(readOverrideState(base), { kind: 'corrupt' }, '后续启动仍 fail closed，不降级为 missing');
   // 形状不合法（缺字段）同样按损坏处理
   writeFileSync(overridePath(base), JSON.stringify({ shellVersion: '0.1.3' }), 'utf8');
-  assert.equal(readOverride(base), null);
+  assert.deepEqual(readOverrideState(base), { kind: 'corrupt' });
   assert.ok(existsSync(`${overridePath(base)}.corrupt`), '形状不合法同样保留 *.corrupt');
 });
 
@@ -548,6 +543,6 @@ test('override: 写入前校验（不安全版本串拒绝，不落盘）', () =
       swapAttempted: false,
     }),
   );
-  assert.equal(readOverride(base), null, '拒绝后 override 未写入');
+  assert.deepEqual(readOverrideState(base), { kind: 'missing' }, '拒绝后 override 未写入');
 });
 

@@ -237,6 +237,17 @@ test('beta discovery failure is fail-closed before updater check; stable never i
   assert.equal(stable.fake.channel, null)
   assert.deepEqual(stable.fake.feedUrl, { provider: 'github', owner: 'panzeyu2013', repo: 'dsh-chamber' })
 })
+test('plain-node beta discovery refuses at the electron net.fetch guard instead of requiring electron (4.5)', async () => {
+  // The default resolver is the only path that touches the real `electron`
+  // specifier; outside the Electron runtime it must fail loudly (the former
+  // code could trigger a ~100MB binary download) instead of silently falling
+  // back to globalThis.fetch.
+  const { fake, controller } = makeController({ version: '0.2.0-beta.3' })
+  await controller.checkNow()
+  assert.equal(fake.checkCalls, 0, 'the beta feed was never resolved — no updater check may run')
+  assert.equal(controller.state().phase, 'error')
+  assert.match(controller.state().error ?? '', /electron net\.fetch is unavailable outside the Electron runtime/)
+})
 test('checking-for-update transitions to checking and clears error', () => {
   const { fake, controller } = makeController()
   const states = collect(controller)

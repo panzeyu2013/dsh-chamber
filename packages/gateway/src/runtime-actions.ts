@@ -6,6 +6,7 @@
  * writer/lifecycle state at call time (F3 parity semantics unchanged).
  */
 import { readOverrideState, shouldInvalidate } from '@dsh-chamber/dsh-runtime'
+import type { OverrideRecord } from '@dsh-chamber/dsh-runtime'
 import {
   pendingOnlyRefusal,
   recoveryRetryRequiredRefusal,
@@ -47,20 +48,43 @@ export interface RuntimeActionGuards {
 
 export function createRuntimeActionGuards(deps: RuntimeActionGuardDeps): RuntimeActionGuards {
   const { platform, baseDir, shellVersion } = deps
-  function persistedPendingVersion(): string | null {
+  /**
+   * ONE authority read per guard call: both the pending projection and the
+   * recovery-phase classification below consume the SAME OverrideRecord. The
+   * former two-read shape (persistedPendingVersion then a second
+   * readOverrideState in ordinaryPendingVersion) let the durable override
+   * change between the two reads — a TOCTOU window in which a swapAttempted/
+   * lastOutcome transition could be observed by only one of them (B2 residual
+   * (b)). Returns null when there is no pending in force; a corrupt/unreadable
+   * leaf still throws the coded refusal.
+   */
+  function readPendingSelection(): { pending: string; record: OverrideRecord } | null {
     if (deps.getEnvPath() !== null || platform === 'win32') return null
     const state = readOverrideState(baseDir)
-    if (state.kind === 'corrupt') throw new Error('gateway runtime override metadata is corrupt')
+    if (state.kind === 'corrupt' || state.kind === 'unknown') {
+      // Coded refusal (B2 acceptance residual b): the route layer maps
+      // runtime_recovery_required to 409; a bare Error would surface as a 500.
+      throw Object.assign(
+        new Error(state.kind === 'corrupt'
+          ? 'gateway runtime override metadata is corrupt'
+          : 'gateway runtime override metadata is unreadable: ' + state.detail),
+        { code: 'runtime_recovery_required' as const },
+      )
+    }
     if (state.kind !== 'valid' || shouldInvalidate(state.record, shellVersion) || state.record.pending === null) return null
-    return state.record.pending
+    return { pending: state.record.pending, record: state.record }
+  }
+
+  function persistedPendingVersion(): string | null {
+    const selection = readPendingSelection()
+    return selection === null ? null : selection.pending
   }
 
   function ordinaryPendingVersion(): string | null {
     const startupBlockReason = deps.getStartupBlockReason()
-    const pending = persistedPendingVersion()
-    if (pending === null) return null
-    const state = readOverrideState(baseDir)
-    if (state.kind !== 'valid') return null
+    const selection = readPendingSelection()
+    if (selection === null) return null
+    const { record, pending } = selection
     // These are explicit recovery phases with their own Design 18 actions,
     // not the normal installed/pending terminal state. The recovery-name
     // classification is the route layer's canonical set (audit N2:
@@ -69,7 +93,7 @@ export function createRuntimeActionGuards(deps: RuntimeActionGuardDeps): Runtime
     // here — a FATAL metadata block does NOT (that suppression lives in
     // status()'s startupBlockReasonOutranksPending, a deliberately wider
     // predicate — see runtime-refusals.ts).
-    if (state.record.swapAttempted === true || state.record.lastOutcome === 'snapshot-failed'
+    if (record.swapAttempted === true || record.lastOutcome === 'snapshot-failed'
       || (startupBlockReason !== null
         && (RETRY_APPLY_REASONS.has(startupBlockReason) || RETRY_RESTORE_REASONS.has(startupBlockReason)))) {
       return null

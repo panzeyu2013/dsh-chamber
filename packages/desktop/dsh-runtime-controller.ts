@@ -23,7 +23,7 @@ import {
   effectivePending,
   shouldInvalidate,
 } from '@dsh-chamber/dsh-runtime'
-import type { ActivationIntentInput, OverrideRecord, RuntimeDiskSummary } from '@dsh-chamber/dsh-runtime'
+import type { ActivationIntentInput, CurrentPointerState, OverrideRecord, OverrideState, RuntimeDiskSummary } from '@dsh-chamber/dsh-runtime'
 import type { InstallOptions, InstallResult, RuntimeInstallProgress } from '@dsh-chamber/dsh-runtime'
 import { sanitizeErrorText } from './sanitize-error.ts'
 import { allowedActions, transition, transitionLifecycleProjection, type RuntimePhase } from '@dsh-chamber/dsh-runtime'
@@ -103,6 +103,11 @@ export interface RuntimeState {
   runtimeBlockedReason?: string | null
   swapAttempted?: boolean
   failure?: RuntimeFailure | null
+  /** Read-failure detail when the runtime failure ledger is unknowable
+   *  (EACCES/EIO/non-ENOENT readdir); null when the set is known. The
+   *  `failure` row stays null in that case — an unknowable set is never
+   *  projected as "no failures" (B1 §2.3 / gateway status twin failureError). */
+  failureError?: string | null
   /** Durable F4 notice; remains visible even if the old user tree was
    * automatically reactivated after the bundled compatibility probe failed. */
   invalidationNotice?: RuntimeInvalidationNotice | null
@@ -148,6 +153,7 @@ export interface RuntimeLifecycleProjection {
   runtimeBlockedReason?: string | null
   swapAttempted?: boolean
   failure?: RuntimeFailure | null
+  failureError?: string | null
   diskUsage?: RuntimeDiskSummary | null
   diskError?: string | null
   diskLimitBytes?: number
@@ -159,13 +165,26 @@ export interface RuntimeLifecycleProjection {
   progress?: RuntimeInstallProgress | null
 }
 
+/** Controller-local authority verdict (audit 2.2 / Phase B contract §2): a
+ *  corrupt or unreadable current-pointer/override pair never resolves to the
+ *  bundled default, and a valid applied override that lost its authoritative
+ *  current pointer is blocked instead of folded to bundled. Mirrors shell-core
+ *  resolveActiveRuntime and the shared core's apply-phase throw semantics. */
+type ActiveVersionResolution =
+  | { kind: 'ok'; version: string | null }
+  | { kind: 'blocked'; reason: string }
+
 export interface ControllerDeps {
   fetchMetadata: (packageName: string, origin: string) => Promise<RegistryMetadata>
   install: (opts: InstallOptions) => Promise<InstallResult>
   store: {
-    readOverride: (baseDir: string) => OverrideRecord | null
     writeOverride: (baseDir: string, record: OverrideRecord) => void
-    readCurrentPointer: (baseDir: string) => string | null
+    /** Authoritative material reads (B1 §2.3 / Phase B contract §1). The
+     *  compatibility record/pointer projections were retired (D5a); these
+     *  State reads are the only reads and must be injected so a read failure
+     *  can never alias the bundled default or "no override". */
+    readOverrideState: (baseDir: string) => OverrideState
+    readCurrentPointerState: (baseDir: string) => CurrentPointerState
     listVersionTrees: (baseDir: string) => string[]
     deleteOverride: (baseDir: string) => void
     clearCurrentPointer: (baseDir: string) => void
@@ -245,6 +264,7 @@ export class DshRuntimeController {
     runtimeBlockedReason: '正在确认 dsh 运行时安全状态',
     swapAttempted: false,
     failure: null,
+    failureError: null,
     metadataHealth: 'unknown',
     metadataComponents: [],
     canRecoverMetadata: false,
@@ -276,15 +296,76 @@ export class DshRuntimeController {
     }
   }
 
-  private activeVersion(): string | null {
-    if (this.envOverrideActive) return this.envVersion;
-    const override = this.deps.store.readOverride(this.baseDir)
+  /** Read both authority leaves once. Both are always classified (even when
+   *  one would have been sufficient): a corrupt pointer blocks under a valid
+   *  override and vice versa, exactly like shell-core resolveActiveRuntime and
+   *  the shared core's apply-phase currentPointer(). */
+  private readAuthorityState(): { overrideState: OverrideState; pointerState: CurrentPointerState } {
+    return {
+      overrideState: this.deps.store.readOverrideState(this.baseDir),
+      pointerState: this.deps.store.readCurrentPointerState(this.baseDir),
+    }
+  }
+
+  /** First corrupt/unreadable authority leaf, or null when both are
+   *  classifiable. The reason rides runtimeBlockedReason and the install gate. */
+  private authorityBlockedReason(overrideState: OverrideState, pointerState: CurrentPointerState): string | null {
+    if (overrideState.kind === 'corrupt') return sanitizeErrorText('dsh runtime override 元数据损坏')
+    if (overrideState.kind === 'unknown') {
+      return sanitizeErrorText(`dsh runtime override 元数据不可读：${overrideState.detail}`)
+    }
+    if (pointerState.kind === 'corrupt') return sanitizeErrorText('dsh runtime current pointer 元数据损坏')
+    if (pointerState.kind === 'unknown') {
+      return sanitizeErrorText(`dsh runtime current pointer 元数据不可读：${pointerState.detail}`)
+    }
+    return null
+  }
+
+  private activeVersionFromStates(
+    overrideState: OverrideState,
+    pointerState: CurrentPointerState,
+  ): ActiveVersionResolution {
+    if (this.envOverrideActive) return { kind: 'ok', version: this.envVersion }
+    const blockedReason = this.authorityBlockedReason(overrideState, pointerState)
+    if (blockedReason !== null) return { kind: 'blocked', reason: blockedReason }
+    const override = overrideState.kind === 'valid' ? overrideState.record : null
     // User-override validity is the shared core invalidation predicate; the
     // env branch above stays outside it (env bypasses the override entirely).
     const invalidated = override !== null && shouldInvalidate(override, this.deps.shellVersion)
-    const pointer = invalidated || override === null ? null : this.deps.store.readCurrentPointer(this.baseDir)
-    if (pointer !== null && this.isUsableTree(pointer)) return pointer
-    return this.bundledVersion
+    // Selection semantics are unchanged: an orphan pointer (no override) is
+    // still ignored. Only the READ MATERIAL changed — corrupt/unknown bytes
+    // are a blocked verdict instead of a bundled fallback.
+    const pointer = invalidated || override === null
+      ? null
+      : (pointerState.kind === 'valid' ? pointerState.version : null)
+    if (pointer !== null && this.isUsableTree(pointer)) return { kind: 'ok', version: pointer }
+    // A valid APPLIED user override whose authoritative current pointer is
+    // missing fails closed with shell-core resolveActiveRuntime's exact
+    // predicate and reason (pending / chosenVersion / resolvedVersion absent,
+    // or a rolled-back/failed last termination, still make builtin
+    // authoritative). Folding to the bundled version here would silently boot
+    // the builtin tree over a user-migrated DSH_HOME — the same divergent
+    // verdict the shell-core side already refuses.
+    if (override !== null && !invalidated && pointer === null) {
+      const builtinIsAuthoritative = override.pending !== null
+        || override.chosenVersion === null
+        || override.resolvedVersion === null
+        || override.lastOutcome === 'rolled-back'
+        || override.lastOutcome === 'failed'
+      if (!builtinIsAuthoritative) {
+        return {
+          kind: 'blocked',
+          reason: sanitizeErrorText('active user override is missing its authoritative current pointer'),
+        }
+      }
+    }
+    return { kind: 'ok', version: this.bundledVersion }
+  }
+
+  private activeVersion(): ActiveVersionResolution {
+    if (this.envOverrideActive) return { kind: 'ok', version: this.envVersion }
+    const { overrideState, pointerState } = this.readAuthorityState()
+    return this.activeVersionFromStates(overrideState, pointerState)
   }
 
   private isUsableTree(version: string): boolean {
@@ -333,10 +414,17 @@ export class DshRuntimeController {
 
   getState(): RuntimeState {
     this.refreshMetadataOrigin()
-    const override = this.deps.store.readOverride(this.baseDir)
-    const active = this.activeVersion()
-    const pointer = this.deps.store.readCurrentPointer(this.baseDir)
-    const effectiveUserPointer = !this.envOverrideActive
+    const { overrideState, pointerState } = this.readAuthorityState()
+    const resolution = this.activeVersionFromStates(overrideState, pointerState)
+    // A blocked verdict publishes NO active version: the bundled default must
+    // never stand in for unreadable selection material (fail closed, same
+    // direction as shell-core resolveActiveRuntime).
+    const blockedReason = resolution.kind === 'blocked' ? resolution.reason : null
+    const active = resolution.kind === 'ok' ? resolution.version : null
+    const override = overrideState.kind === 'valid' ? overrideState.record : null
+    const pointer = pointerState.kind === 'valid' ? pointerState.version : null
+    const effectiveUserPointer = resolution.kind === 'ok'
+      && !this.envOverrideActive
       && override !== null
       && !shouldInvalidate(override, this.deps.shellVersion)
       && pointer !== null
@@ -379,9 +467,15 @@ export class DshRuntimeController {
       error: this.error,
       connectionState: this.deps.connectionState?.() ?? 'unknown',
       ...this.lifecycle,
+      // The authority lock outranks every lifecycle patch: while a leaf stays
+      // corrupt/unreadable no projection may reopen resolution. The reason is
+      // the same one the install gate consumes.
+      ...(blockedReason === null ? {} : { runtimeBlocked: true, runtimeBlockedReason: blockedReason }),
       targetVersion: this.lifecycle.targetVersion ?? override?.pending ?? null,
       swapAttempted: this.lifecycle.swapAttempted === true || override?.swapAttempted === true,
-      hasOverride: override !== null,
+      // Corrupt/unreadable override bytes are NOT "no override": the leaf
+      // exists and is deliberately represented as an unusable override.
+      hasOverride: overrideState.kind !== 'missing',
       invalidationNotice,
       managementSupported: this.managementSupported,
       managementUnsupportedReason: this.managementUnsupportedReason,
@@ -431,8 +525,13 @@ export class DshRuntimeController {
       const origin = this.getRegistryOrigin()
       this.lastMeta = await this.deps.fetchMetadata(this.packageName, origin)
       if (this.lastMeta.origin !== origin) throw new Error('registry metadata source mismatch')
-      const active = this.activeVersion()
-      this.phase = transition(this.phase, { type: 'check-done', available: this.lastMeta.latest !== null
+      const resolution = this.activeVersion()
+      const active = resolution.kind === 'ok' ? resolution.version : null
+      // A blocked authority verdict is never "no active version", so it can
+      // never manufacture an available update either (getState publishes the
+      // blocked state and reason).
+      this.phase = transition(this.phase, { type: 'check-done', available: resolution.kind === 'ok'
+        && this.lastMeta.latest !== null
         && (active === null || compareRuntimeVersions(this.lastMeta.latest, active) === 1)
       })
     } catch (err) {
@@ -458,7 +557,14 @@ export class DshRuntimeController {
     // next startup — installing a DIFFERENT version now would overwrite it, so
     // reject until [恢复内建] clears the pending. Enforced in the controller,
     // not just the UI (AGENTS.md core-logic enforcement).
-    const pendingOverride = this.deps.store.readOverride(this.baseDir)?.pending ?? null
+    const overrideState = this.deps.store.readOverrideState(this.baseDir)
+    if (overrideState.kind === 'corrupt' || overrideState.kind === 'unknown') {
+      // Corrupt/unreadable override bytes are a lock, not an empty slot: a new
+      // pending write would destroy the only pointer to the staged selection.
+      // (getState publishes runtimeBlocked + the exact reason.)
+      return this.getState()
+    }
+    const pendingOverride = overrideState.kind === 'valid' ? overrideState.record.pending : null
     if (pendingOverride !== null) {
       // A pending activation is a terminal gate. A forged/late renderer call
       // must not overwrite the authoritative pending phase with a generic
@@ -466,7 +572,12 @@ export class DshRuntimeController {
       // the swap is unresolved).
       return this.getState()
     }
-    const active = this.activeVersion()
+    const activeResolution = this.activeVersion()
+    // A corrupt/unreadable pointer (or an override that changed between the
+    // gate above and this read) blocks a fresh install instead of installing
+    // over material the controller cannot classify.
+    if (activeResolution.kind === 'blocked') return this.getState()
+    const active = activeResolution.version
     // No-op guard: choosing the already-active version is a no-op (§3.6).
     if (isNoopSelection(version, active)) return this.getState()
     // F11 offline cached rollback: a locally-cached tree skips the registry
@@ -540,6 +651,7 @@ export class DshRuntimeController {
       runtimeBlockedReason: null,
       swapAttempted: false,
       failure: null,
+      failureError: null,
       diskUsage: this.lifecycle.diskUsage,
       diskError: this.lifecycle.diskError,
       diskLimitBytes: this.logicalDiskLimitBytes,

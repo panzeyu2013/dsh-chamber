@@ -30,7 +30,7 @@ import {
 import { randomBytes } from 'node:crypto'
 import { createRequire as nodeCreateRequire } from 'node:module'
 import { basename, join } from 'node:path'
-import { call as dshCall, type Logger, type PlaneHandle } from '@dsh-chamber/control-plane'
+import { call as dshCall, isLegacyHostProbeValue, type Logger, type PlaneHandle } from '@dsh-chamber/control-plane'
 import { syncedHostDomainProbeNames } from './plugins.ts'
 import {
   bindRuntimeInstallResolution,
@@ -59,23 +59,21 @@ import {
   invalidate,
   isProtectedVersion,
   isSafeVersion,
-  latestKnownGood,
   listExplicitlyInstalledVersions,
-  listKnownGoodVersions,
+  listKnownGoodVersionsState,
   listPreRollbackStashes,
   listValidVersionTrees,
   noteBoot,
   planRestartExhaustedRollback,
   promoteDueCandidates,
+  projectMetadataRecoveryGate,
   pruneRuntimeSnapshots,
   pruneRuntimeStore,
   quarantineRuntimeFileNoFollow,
   prepareManualRollbackData,
   RUNTIME_LOGICAL_DISK_LIMIT_BYTES,
   readActivationJournalState,
-  readCurrentPointer,
   readCurrentPointerState,
-  readOverride,
   readOverrideState,
   readPrivateFileNoFollow,
   readStorePruneRequest,
@@ -94,6 +92,7 @@ import {
   resolveSnapshotName,
   runRuntimeActivationProbes,
   runStartupPhase,
+  validateVersionTree,
   runtimeFailureSummary,
   PROBE_TEXT_KEEP_TOKENS,
   sanitizeErrorText,
@@ -107,6 +106,7 @@ import {
   type ActivationIntentKind,
   type ActivationJournalState,
   type CurrentPointerState,
+  type KnownGoodVersionsState,
   type OverrideRecord,
   type OverrideState,
   type ProbeResult,
@@ -307,6 +307,9 @@ export type GatewayRuntimeStatus = RuntimeStatusProjection & {
   preRollbackCount: number | null
   preRollbackLatestName: string | null
   failure: { version: string; at: string; reason: string } | null
+  /** Failure-ledger material: non-null exactly when the failure set could not
+   *  be read; `failure` is then null because a fabricated 0 is not a fact. */
+  failureError: string | null
   diskUsage: RuntimeDiskSummary | null
   diskError: string | null
   diskLimitBytes: number
@@ -382,8 +385,10 @@ export interface GatewayRuntimeManager {
    *  anchor through the probe gate before restoring access. */
   recoverMetadata(): Promise<{ accepted: true }>
   /** True while a durable metadata-recovery transaction is pending or the
-   *  recovery marker is corrupt (boot preflight gate, H1 review fix). */
-  metadataRecoveryPending(): boolean
+   *  recovery marker is corrupt (boot preflight gate, H1 review fix). The
+   *  tri-state `'unknown'` is the fail-closed answer when the metadata cannot
+   *  be READ (2026-12 review): the boot path treats it exactly like `true`. */
+  metadataRecoveryPending(): boolean | 'unknown'
   /** Consume the durable store-prune marker if present (boot boundary, L1
    *  review fix); single-flight, marker retained on failure. */
   pruneStoreIfNeeded(): Promise<void>
@@ -609,6 +614,45 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     return builtinVersion
   }
 
+  /** 2026-12 Phase B fail-closed authority consumption: a corrupt or
+   *  unreadable override/pointer/known-good read proves neither absence nor a
+   *  legal record, so decision sites must refuse instead of projecting it as
+   *  "no override" / builtin / an empty protection set. */
+  function overrideMetadataRefusal(state: Extract<OverrideState, { kind: 'corrupt' } | { kind: 'unknown' }>): Error {
+    return refusalError({
+      code: 'runtime_recovery_required',
+      error: state.kind === 'corrupt'
+        ? 'gateway runtime override metadata is corrupt'
+        : 'gateway runtime override metadata is unreadable: ' + state.detail,
+    })
+  }
+
+  function pointerMetadataRefusal(state: Extract<CurrentPointerState, { kind: 'corrupt' } | { kind: 'unknown' }>): Error {
+    return refusalError({
+      code: 'runtime_recovery_required',
+      error: state.kind === 'corrupt'
+        ? 'gateway runtime current pointer is corrupt'
+        : 'gateway runtime current pointer is unreadable: ' + state.detail,
+    })
+  }
+
+  function knownGoodMetadataRefusal(state: Extract<KnownGoodVersionsState, { kind: 'corrupt' } | { kind: 'unknown' }>): Error {
+    return refusalError({
+      code: 'runtime_recovery_required',
+      error: state.kind === 'corrupt'
+        ? 'gateway runtime known-good metadata is corrupt'
+        : 'gateway runtime known-good metadata is unreadable: ' + state.detail,
+    })
+  }
+
+  /** Decision-time override read: corrupt/unknown never aliases "no override". */
+  function readOverrideForDecision(): OverrideRecord | null {
+    const state = readOverrideState(baseDir)
+    if (state.kind === 'valid') return state.record
+    if (state.kind === 'missing') return null
+    throw overrideMetadataRefusal(state)
+  }
+
   /** env → matching active override/current → builtin anchor (design 18
    * §3.5/§9.3). Corrupt or contradictory selection metadata is never treated
    * as an absent override; callers fail loud instead of spawning builtin over
@@ -620,8 +664,11 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     }
     const pointerState = readCurrentPointerState(baseDir)
     const overrideState = readOverrideState(baseDir)
-    if (pointerState.kind === 'corrupt') throw new Error('gateway runtime current pointer is corrupt')
-    if (overrideState.kind === 'corrupt') throw new Error('gateway runtime override metadata is corrupt')
+    // 2026-12 Phase B: 'unknown' (EACCES/EIO) proves neither absence nor
+    // corruption, so it blocks on exactly the corrupt path instead of falling
+    // through to builtin / "no override".
+    if (pointerState.kind === 'corrupt' || pointerState.kind === 'unknown') throw pointerMetadataRefusal(pointerState)
+    if (overrideState.kind === 'corrupt' || overrideState.kind === 'unknown') throw overrideMetadataRefusal(overrideState)
     const pointer = pointerState.kind === 'valid' ? pointerState.version : null
     const override = overrideState.kind === 'valid' ? overrideState.record : null
     const overrideActive = override !== null && !shouldInvalidate(override, shellVersion)
@@ -681,6 +728,13 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
             // verdict-expected set must always agree, or an exact-set drift
             // would spuriously fail a healthy activation.
             hostDomainNames,
+            // 2026-12 (2.1): the legacy identity-method fallback must never
+            // be silent — a successful legacy answer proves this tree predates
+            // session/canOpenWorkspacePath. `legacyShape` is the canonical
+            // control-plane predicate (single-sourced; the dsh-runtime default
+            // stays in place for callers without the seam).
+            warn: line => logger.warn(sanitizeErrorText(line, PROBE_TEXT_KEEP_TOKENS)),
+            legacyShape: isLegacyHostProbeValue,
             call: async (url, method, payload, opts) => {
               // Forward the per-call response cap (runtime-probes widens
               // settings/describe to SETTINGS_FILE_MAX_BYTES=16 MiB so a
@@ -743,6 +797,10 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
             dshHome,
             signal,
             hostDomainNames: syncedHostDomainProbeNames(config.plane.stateDir),
+            // Same never-silent legacy fallback contract as the managed-tree
+            // probe above: the env-override path injects both seams too.
+            warn: line => logger.warn(sanitizeErrorText(line, PROBE_TEXT_KEEP_TOKENS)),
+            legacyShape: isLegacyHostProbeValue,
             call: async (url, method, payload, opts) => {
               // Per-call response-cap forwarding — same contract as the
               // managed-tree seam above (settings/describe 16 MiB).
@@ -778,9 +836,22 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
         knownGoodVersion: null,
       }
     }
-    const pointer = readCurrentPointer(baseDir)
-    const knownGood = listKnownGoodVersions(baseDir)
-    const record = readOverride(baseDir)
+    const pointerState = readCurrentPointerState(baseDir)
+    if (pointerState.kind === 'corrupt' || pointerState.kind === 'unknown') throw pointerMetadataRefusal(pointerState)
+    const overrideState = readOverrideState(baseDir)
+    if (overrideState.kind === 'corrupt' || overrideState.kind === 'unknown') throw overrideMetadataRefusal(overrideState)
+    // The known-good ledger decides rollback trust; corrupt/unreadable
+    // material must refuse the snapshot facts, never report "not known good".
+    const knownGoodState = listKnownGoodVersionsState(baseDir)
+    if (knownGoodState.kind !== 'ok') throw knownGoodMetadataRefusal(knownGoodState)
+    const pointer = pointerState.kind === 'valid' ? pointerState.version : null
+    const knownGood = knownGoodState.versions
+    const record = overrideState.kind === 'valid' ? overrideState.record : null
+    // D5a: the retired latestKnownGood compatibility projection inlined against
+    // the authoritative ledger already read above — same ledger, order,
+    // exclusion and per-version validateVersionTree gate.
+    const knownGoodVersion = knownGood.find((version) => version !== pointer
+      && validateVersionTree(baseDir, version, `${process.platform}-${process.arch}`).ok) ?? null
     return {
       // The builtin anchor contributes its REAL semver as the snapshot source
       // (F1): apply-phase rejects a null sourceVersion as snapshot-failed, so
@@ -789,7 +860,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
       sourceIsBuiltin: pointer === null,
       sourceWasKnownGood: pointer === null || knownGood.includes(pointer)
         || (record?.lastOutcome === 'applied' && record.resolvedVersion === pointer),
-      knownGoodVersion: latestKnownGood(baseDir, pointer),
+      knownGoodVersion,
     }
   }
 
@@ -905,9 +976,18 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     //     + journal-missing uniquely identifies the stranded state — never a
     //     healthy post-F4 boot.
     if (envPath === null) {
-      const record = readOverride(baseDir)
+      const overrideState = readOverrideState(baseDir)
       const existingJournal = readActivationJournalState(baseDir)
       const pointerState = readCurrentPointerState(baseDir)
+      // 2026-12 Phase B: corrupt/unknown override metadata proves neither the
+      // shell stamp nor the invalidation stamp. Skip the F4 pre-arm (the
+      // shared startup phase below answers the same state as override-corrupt)
+      // rather than deriving "no override" from unreadable bytes.
+      const overrideFactsReadable = overrideState.kind !== 'corrupt' && overrideState.kind !== 'unknown'
+      if (!overrideFactsReadable) {
+        logger.warn('gateway runtime override metadata is ' + overrideState.kind + '; F4 pre-arm skipped (startup phase blocks on the same state)')
+      }
+      const record = overrideState.kind === 'valid' ? overrideState.record : null
       const shellMismatch = record !== null
         && record.invalidatedAt == null
         && record.shellVersion !== shellVersion
@@ -1467,6 +1547,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
         preRollbackCount: null,
         preRollbackLatestName: null,
         failure: null,
+        failureError: null,
         diskUsage: null,
         diskError: null,
         diskLimitBytes: GATEWAY_RUNTIME_LOGICAL_DISK_LIMIT_BYTES,
@@ -1520,6 +1601,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
       at: failures.latest.lastFailedAt,
       reason: failures.latest.error,
     }
+    const failureError = failures.kind === 'unknown' ? failures.detail : null
     // Full logical accounting is a batched async tree walk (perf T3). Cache
     // it so the authenticated 3s UI poll and gateway identity probes never
     // turn status into a hot 10 GiB filesystem walk; mutations invalidate the
@@ -1589,6 +1671,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
       preRollbackCount,
       preRollbackLatestName,
       failure,
+      failureError,
       diskUsage,
       diskError,
       diskLimitBytes: GATEWAY_RUNTIME_LOGICAL_DISK_LIMIT_BYTES,
@@ -1606,15 +1689,20 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
    *  explicit-install ledger minus everything the deletion-point protection
    *  set would refuse (current/pending/chosen/known-good/failure evidence).
    *  Fail-closed: any read trouble projects an empty list — the cleanup route
-   *  stays authoritative and re-validates. */
-  function removableCleanupVersions(): string[] {
-    if (platform === 'win32') return []
+   *  stays authoritative and re-validates — and NOW also reports the failure
+   *  in `error` (2026-12 review: the same ledger read failure was loud on the
+   *  main path but projected as a silent "no candidates" here). */
+  function removableCleanupVersions(): { versions: string[]; error: string | null } {
+    if (platform === 'win32') return { versions: [], error: null }
     try {
-      return listExplicitlyInstalledVersions(baseDir)
-        .filter((version) => !isProtectedVersion(baseDir, version, { ignoreExplicitInstall: true }))
-        .sort((a, b) => compareRuntimeVersions(b, a) ?? 0)
-    } catch {
-      return []
+      return {
+        versions: listExplicitlyInstalledVersions(baseDir)
+          .filter((version) => !isProtectedVersion(baseDir, version, { ignoreExplicitInstall: true }))
+          .sort((a, b) => compareRuntimeVersions(b, a) ?? 0),
+        error: null,
+      }
+    } catch (error) {
+      return { versions: [], error: sanitizeErrorText(String(error)) }
     }
   }
 
@@ -1622,6 +1710,10 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     assertManagerReadable()
     const origin = platform === 'win32' ? DEFAULT_REGISTRY_ORIGIN : readRegistryOrigin(baseDir)
     const cachedVersions = platform === 'win32' ? [] : listValidVersionTrees(baseDir)
+    // Resolved once per listing: the removable candidates and their read
+    // failure ride every response branch (the registry-error branch must not
+    // ALSO look like "no cleanup candidates" — 2026-12 review).
+    const removable = removableCleanupVersions()
     let active: string | null = null
     try { active = resolveWorkspace().version } catch { /* status carries the loud selection error */ }
     try {
@@ -1636,7 +1728,8 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
           cachedVersions,
           compatibilityBaseline: null,
         }),
-        removableVersions: removableCleanupVersions(),
+        removableVersions: removable.versions,
+        removableVersionsError: removable.error,
       }
     } catch (error) {
       const versions = buildCachedVersionList(cachedVersions, active).map(entry => (
@@ -1647,7 +1740,8 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
       return {
         registryOrigin: origin,
         versions,
-        removableVersions: removableCleanupVersions(),
+        removableVersions: removable.versions,
+        removableVersionsError: removable.error,
         error: sanitizeErrorText(String(error)),
       }
     }
@@ -1706,7 +1800,13 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
   }
 
   function currentPointerVersion(): string | null {
-    return readCurrentPointer(baseDir)
+    const state = readCurrentPointerState(baseDir)
+    if (state.kind === 'valid') return state.version
+    if (state.kind === 'missing') return null
+    // Corrupt/unreadable material is not "no pointer": callers use null as
+    // "builtin is active", which would bypass the downgrade guard and arm a
+    // switch over unverified authority. Fail closed instead.
+    throw pointerMetadataRefusal(state)
   }
 
   async function select(version: string): Promise<{ accepted: boolean; version: string }> {
@@ -1731,7 +1831,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     // installed-but-inactive → record the choice so apply() can arm it.
     if (listValidVersionTrees(baseDir).includes(version)) {
       if (currentAtSelection !== version) {
-        const previous: OverrideRecord = readOverride(baseDir) ?? {
+        const previous: OverrideRecord = readOverrideForDecision() ?? {
           shellVersion,
           chosenVersion: null,
           resolvedVersion: null,
@@ -1810,7 +1910,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
       // select records the choice WITHOUT pending (design 18 §9.3): apply()
       // is the separate action that arms the next-startup switch.
       recordExplicitInstall(baseDir, version)
-      const previous: OverrideRecord = readOverride(baseDir) ?? {
+      const previous: OverrideRecord = readOverrideForDecision() ?? {
         shellVersion,
         chosenVersion: null,
         resolvedVersion: null,
@@ -1851,7 +1951,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     if (envPath !== null) throw refusalError(envPinnedRefusal('version mutations'))
     assertNoPending()
 
-    const record: OverrideRecord = readOverride(baseDir) ?? {
+    const record: OverrideRecord = readOverrideForDecision() ?? {
       shellVersion,
       chosenVersion: null,
       resolvedVersion: null,
@@ -1945,7 +2045,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     // arm the pending switch — the startup transaction's prepareManualRollback
     // dep performs the pre-rollback stash and records it in the journal (an
     // eager stash here would be orphaned and double the work).
-    const record: OverrideRecord = readOverride(baseDir) ?? {
+    const record: OverrideRecord = readOverrideForDecision() ?? {
       shellVersion,
       chosenVersion: null,
       resolvedVersion: null,
@@ -2094,16 +2194,33 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
    *  pending (engine record mid-flight) or the recovery marker is corrupt.
    *  The boot path consults this BEFORE starting the managed dsh — an
    *  archived/metadata-cleared state must never serve DSH_HOME through the
-   *  builtin anchor without the probe gate. */
-  function metadataRecoveryPending(): boolean {
+   *  builtin anchor without the probe gate.
+   *
+   *  The predicate is the shared `projectMetadataRecoveryGate().startupMustBlock`
+   *  (2026-12 single-sourcing): its `needsRecovery` sibling carries the DIFFERENT
+   *  rule the recover-metadata eligibility uses (selection-corrupt and the
+   *  marker-rescue conjunction), so the boot gate must not reuse it.
+   *  2026-12 review (3.1): the answer is tri-state — a metadata READ failure is
+   *  'unknown', never false. The boot path is fail-closed on it (starting the
+   *  managed dsh on an unreadable state directory is exactly the fail-open this
+   *  gate prevents, and the recover-metadata escape would fail on the same read). */
+  function metadataRecoveryPending(): boolean | 'unknown' {
     if (platform === 'win32') return false
     try {
       const health = detectRuntimeMetadataHealth(baseDir, shellVersion)
-      return health.status === 'recovery-in-progress'
-        || health.status === 'recovery-marker-corrupt'
-        || (health.recovery.kind === 'valid' && health.recovery.record.phase !== 'finalized')
-    } catch {
+      const markerRescueAvailable = health.status === 'recovery-marker-corrupt'
+        && inspectCorruptMetadataRecoveryMarker(baseDir).recoverable
+      if (projectMetadataRecoveryGate(health, { markerRescueAvailable }).startupMustBlock) return true
+      // B2 acceptance residual (a): the shared startup transaction refuses to
+      // resolve a runtime when the known-good ledger is corrupt/unreadable
+      // (runtime-manager.ts activationFacts -> knownGoodMetadataRefusal). Without
+      // this preflight the throw would tear the whole gateway down and leave no
+      // recovery route; answering 'unknown' keeps the gateway up with the managed
+      // dsh stopped and the operator told to fix the state directory.
+      if (listKnownGoodVersionsState(baseDir).kind !== 'ok') return 'unknown'
       return false
+    } catch {
+      return 'unknown'
     }
   }
 
@@ -2253,9 +2370,9 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
       ? startupBlockReason
       : journalState.kind === 'corrupt'
         ? 'journal-corrupt'
-        : pointerState.kind === 'corrupt'
+        : pointerState.kind === 'corrupt' || pointerState.kind === 'unknown'
           ? 'current-corrupt'
-          : overrideState.kind === 'corrupt'
+          : overrideState.kind === 'corrupt' || overrideState.kind === 'unknown'
             ? 'override-corrupt'
             : durable !== null && (durable.swapAttempted === true || durable.lastOutcome === 'snapshot-failed')
               ? durable.swapAttempted === true ? 'swap-attempted' : 'snapshot-failed'
@@ -2499,7 +2616,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     // no_selection gate mis-let the stale choice through to a fake 202).
     let target = ordinaryPendingVersion()
     if (target === null) {
-      const record = readOverride(baseDir)
+      const record = readOverrideForDecision()
       if (record === null || record.chosenVersion === null || shouldInvalidate(record, shellVersion)) {
         throw Object.assign(new Error('no runtime version selected or pending'), { code: 'no_selection' })
       }
@@ -2541,7 +2658,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     // is deliberately NOT used: a pending/selection existing is the semantic
     // premise of apply-now.
     if (persistedPendingVersion() === null) {
-      const record: OverrideRecord = readOverride(baseDir) ?? {
+      const record: OverrideRecord = readOverrideForDecision() ?? {
         shellVersion,
         chosenVersion: null,
         resolvedVersion: null,
@@ -2683,7 +2800,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     assertMutationIdle()
     if (envPath !== null) throw refusalError(envPinnedRefusal('version mutations'))
     assertNoOrdinaryPending()
-    const record = readOverride(baseDir)
+    const record = readOverrideForDecision()
     const interrupted = record !== null && (record.swapAttempted === true || record.lastOutcome === 'snapshot-failed')
     if (!interrupted) {
       throw Object.assign(new Error('no interrupted apply to retry (swap-attempted or snapshot-failed)'), { code: 'no_retry_target' })

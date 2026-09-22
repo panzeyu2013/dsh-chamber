@@ -155,6 +155,9 @@ export const zh = {
   dshRuntimeCleanupVersion: '清理版本',
   dshRuntimeClearFailure: '清除',
   dshRuntimeFailureRecord: 'dsh {version} 失败（{at}）：{reason}。请重试；若持续失败，可更换版本源或升级 dsh-chamber。',
+  // B2 残余 (c)：失败台账读失败（EACCES/EIO 等）时 failure 行为 null，
+  // 该行说明「读不到」而不是「没有失败」。
+  dshRuntimeFailureLedgerUnreadable: '运行时失败台账不可读：{error}；失败记录可能不完整。',
   dshRuntimePendingRecord: '仍有待处理版本 {version}',
   dshRuntimeSnapshotUnknown: '数据快照状态尚不可用',
   dshRuntimeSnapshotLabel: '数据快照',
@@ -188,6 +191,8 @@ export const zh = {
   dshRuntimeBadgeMetadata: '元数据异常',
   // 常驻「清理已安装版本」入口（2026-12 统一）。
   dshRuntimeCleanupCandidatesLabel: '可清理的已安装版本',
+  // 3.5：服务端台账读失败时，候选列表不可信（客户端已强制投影为空）。
+  dshRuntimeCleanupCandidatesUnavailable: '清理候选不可用：{error}',
   dshRuntimeCleanupConfirmTitle: '清理 dsh 运行时 {version}？',
   dshRuntimeCleanupConfirmBody: '仅删除该不可变版本树并回收 pnpm store；当前、待应用、回退、known-good 与失败现场保护版本不会被删除。',
   // 恢复回滚前数据（2026-12 gateway 对齐；2026-09-11 upstream-alignment T2：
@@ -425,6 +430,9 @@ export const en: Record<keyof typeof zh, string> = {
   dshRuntimeCleanupVersion: 'Clean up version',
   dshRuntimeClearFailure: 'Clear',
   dshRuntimeFailureRecord: 'dsh {version} failed ({at}): {reason}. Retry it; if it keeps failing, switch the registry source or upgrade dsh-chamber.',
+  // B2 residual (c): an unknowable failure ledger (EACCES/EIO, …) keeps the
+  // failure row null; this line says "unreadable", never "no failures".
+  dshRuntimeFailureLedgerUnreadable: 'The runtime failure ledger is unreadable: {error}; failure records may be incomplete.',
   dshRuntimePendingRecord: 'Pending version {version} still requires attention',
   dshRuntimeSnapshotUnknown: 'Data snapshot status is not available yet',
   dshRuntimeSnapshotLabel: 'Data snapshots',
@@ -459,6 +467,9 @@ export const en: Record<keyof typeof zh, string> = {
   dshRuntimeBadgeMetadata: 'Metadata invalid',
   // Always-visible "clean up installed versions" entry (2026-12 unification).
   dshRuntimeCleanupCandidatesLabel: 'Cleanable installed versions',
+  // 3.5: the server-side ledger read failed, so no candidate list is trustworthy
+  // (the client already forces the projection empty).
+  dshRuntimeCleanupCandidatesUnavailable: 'Cleanup candidates unavailable: {error}',
   dshRuntimeCleanupConfirmTitle: 'Clean up dsh runtime {version}?',
   dshRuntimeCleanupConfirmBody: 'Deletes only that immutable version tree and reclaims the pnpm store. Current, pending, rollback, known-good and failure-evidence protected versions are never deleted.',
   // Pre-rollback data restore (2026-12 gateway parity; 2026-09-11

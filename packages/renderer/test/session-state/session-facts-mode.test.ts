@@ -50,6 +50,21 @@ test('the App projects the mode onto every aggregate entry, after the entry lite
   assert.ok(entryLiteral > 0 && assignment > entryLiteral, 'assignment must come after the entry literal')
 })
 
+test('投影缺席不得折成 idle：App 必须发布侧栏的 SOURCE_PHASE_UNKNOWN（跨包单源）', () => {
+  assert.match(SIDEBAR, /export const SOURCE_PHASE_UNKNOWN = 'unknown'/, '常量必须由侧栏 shared 单源导出')
+  assert.match(APP, /SOURCE_PHASE_UNKNOWN,/, 'App 必须 import 该常量，而不是本地再写一个字面量')
+  assert.match(
+    APP,
+    /remoteStatus\[statusKey\]\?\.phase \?\? SOURCE_PHASE_UNKNOWN/,
+    '远端投影缺席必须发布 unknown——idle 是"手动断开"的合法事实，折叠会把未知说成未连接',
+  )
+  assert.equal(
+    /remoteStatus\[statusKey\]\?\.phase \?\? 'idle'/.test(APP),
+    false,
+    "旧的 ?? 'idle' 折叠不得复活",
+  )
+})
+
 test('the two packages agree on the mode vocabulary (cross-package lock)', () => {
   const sidebarUnion = (SIDEBAR.match(/export type SourceSessionFactsMode = ([^\n]+)/) ?? [])[1] ?? ''
   const rendererUnion = readFileSync(

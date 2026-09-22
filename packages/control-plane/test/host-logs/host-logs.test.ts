@@ -465,9 +465,10 @@ test('writer: a write landing on a removed dir is swallowed, not an uncaughtExce
   const stateDir = tempDir(t)
   const port = 17779
   const writer = createHostLogWriter(stateDir, port)
-  // A write that lands while the log dir is dead is LOST silently — a dead
-  // log file must never become an uncaughtException or take the host pipes
-  // down; a later NEW write lazily recreates dir + file.
+  // A write that lands while the log dir is dead must never become an
+  // uncaughtException or take the host pipes down; with no injected warn sink
+  // this handle stays quiet (the injected-sink episode test lives below) and a
+  // later NEW write lazily recreates dir + file.
   assert.equal(writer.write('first line', 'stdout'), true)
   await writer.flush()
 
@@ -493,6 +494,47 @@ test('writer: a write landing on a removed dir is swallowed, not an uncaughtExce
   assert.equal(result.lines[0].line, 'third line')
   assert.equal(result.lines[0].stream, 'stdout')
   assert.ok(typeof result.lines[0].ts === 'string' && result.lines[0].ts !== '')
+})
+
+test('writer: an injected warn sink reports a dropped batch once per failure episode; a throwing sink never escapes', async t => {
+  const stateDir = tempDir(t)
+  const port = 17787
+  const warnings: string[] = []
+  const writer = createHostLogWriter(stateDir, port, {
+    warn: message => {
+      warnings.push(message)
+      throw new Error('warn sink boom')
+    },
+  })
+  const uncaught: Error[] = []
+  const onUncaught = (error: Error) => uncaught.push(error)
+  process.on('uncaughtException', onUncaught)
+  try {
+    assert.equal(writer.write('first line', 'stdout'), true)
+    await writer.flush()
+
+    // First failure of the episode: exactly one warning, emitted before the
+    // pending batch is dropped; the throwing sink is contained.
+    rmSync(join(stateDir, 'host-logs'), { recursive: true, force: true })
+    assert.equal(writer.write('second line', 'stderr'), true)
+    await writer.flush()
+    assert.equal(warnings.length, 1, 'the first drop of an episode warns exactly once')
+    assert.match(warnings[0], /host log writes are failing/)
+    assert.match(warnings[0], /ENOENT/)
+
+    // The next write recreates the generation (success re-arms the latch)…
+    assert.equal(writer.write('third line', 'stdout'), true)
+    await writer.flush()
+    // …so a second failure is a NEW episode and warns again.
+    rmSync(join(stateDir, 'host-logs'), { recursive: true, force: true })
+    assert.equal(writer.write('fourth line', 'stderr'), true)
+    await writer.flush()
+    assert.equal(warnings.length, 2, 'a successful batch re-arms the warning')
+    assert.deepEqual(uncaught, [], 'a throwing warn sink never escapes the writer')
+  } finally {
+    process.removeListener('uncaughtException', onUncaught)
+  }
+  await writer.close()
 })
 
 test('writer: a removed backing file near the compaction threshold never resurrects the old ring', async t => {

@@ -115,6 +115,12 @@ export interface RuntimeState {
   runtimeBlockedReason?: string | null
   swapAttempted?: boolean
   failure?: RuntimeFailure | null
+  /** Read-failure detail when the runtime failure ledger is unknowable
+   *  (EACCES/EIO/non-ENOENT readdir); null when the set is known. The
+   *  `failure` row stays null in that case — an unknowable set is never
+   *  projected as "no failures" (B1 §2.3, desktop RuntimeLifecycleProjection
+   *  `failureError` twin). */
+  failureError?: string | null
   /** Persistent shell-update fallback/reactivation record. */
   invalidationNotice?: RuntimeInvalidationNotice | null
   diskUsage?: RuntimeDiskUsage | null

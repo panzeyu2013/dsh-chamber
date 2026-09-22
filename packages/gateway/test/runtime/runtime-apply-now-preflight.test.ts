@@ -12,8 +12,7 @@ import { join } from 'node:path'
 import { createGatewayRuntimeManager } from '../../src/runtime-manager.ts'
 import {
   readActivationJournalState,
-  readCurrentPointer,
-  readOverride,
+  readCurrentPointerState,
   writeCurrentPointer,
 } from '@dsh-chamber/dsh-runtime'
 import { createRuntimeRoutes } from '../../src/runtime-routes.ts'
@@ -27,6 +26,7 @@ import {
   probeResultsFor,
   makeValidTree,
   armPendingSwitch,
+  readOverrideRow,
   writeOverrideRow,
   writeVersionSwitchIntent,
   runtimeManager,
@@ -60,7 +60,7 @@ test('ordinary pending is a core+route terminal gate: apply-now is allowed (202,
       const response = await runRoute(routes, method, `/chamber/runtime/${suffix}`, body)
       assert.equal(response.status, 409, `${suffix} must be refused while pending`)
       assert.equal((response.json as { code: string }).code, 'runtime_pending', `${suffix} exposes the stable pending code`)
-      assert.equal(readOverride(stateDir)?.pending, '1.0.0', `${suffix} must not clear or rewrite pending`)
+      assert.equal(readOverrideRow(stateDir)?.pending, '1.0.0', `${suffix} must not clear or rewrite pending`)
     }
 
     // apply-now is pending's own semantic premise (design 18 addendum ยง5.1):
@@ -70,8 +70,8 @@ test('ordinary pending is a core+route terminal gate: apply-now is allowed (202,
     assert.equal(now.status, 202)
     assert.equal((now.json as { accepted: boolean }).accepted, true)
     assert.equal((now.json as { version: string }).version, '1.0.0', 'the 202 body carries the preflighted target')
-    assert.equal(readOverride(stateDir)?.pending, '1.0.0', 'the 202 answer must not clear or rewrite pending')
-    assert.equal(readOverride(stateDir)?.chosenVersion, '1.0.0')
+    assert.equal(readOverrideRow(stateDir)?.pending, '1.0.0', 'the 202 answer must not clear or rewrite pending')
+    assert.equal(readOverrideRow(stateDir)?.chosenVersion, '1.0.0')
     assert.equal(readActivationJournalState(stateDir).kind, 'valid', 'the armed intent journal is preserved')
     assert.equal(manager.applyNowInFlight(), true, 'the apply-now job is in flight')
     assert.equal((await manager.status()).phase, 'applying', 'the 202 window polls as applying')
@@ -79,11 +79,11 @@ test('ordinary pending is a core+route terminal gate: apply-now is allowed (202,
     await waitForSettle(manager)
     assert.equal(manager.applyNowInFlight(), false)
     assert.equal((await manager.status()).phase, 'idle')
-    assert.equal(readCurrentPointer(stateDir), '1.0.0', 'apply-now committed the armed switch')
+    assert.deepEqual(readCurrentPointerState(stateDir), { kind: 'valid', version: '1.0.0' }, 'apply-now committed the armed switch')
 
     const restored = await runRoute(routes, 'POST', '/chamber/runtime/restore-builtin')
     assert.equal(restored.status, 200, 'restore-builtin remains the recovery escape after apply-now')
-    assert.equal(readOverride(stateDir), null)
+    assert.equal(readOverrideRow(stateDir), null)
     assert.equal((await manager.status()).phase, 'idle')
     await manager.dispose()
   } finally {
@@ -207,12 +207,12 @@ test('apply-now preflight refuses an invalidated (stale-shell) selection synchro
     assert.equal(response.status, 409)
     assert.equal((response.json as { code: string }).code, 'no_selection')
     assert.equal(manager.applyNowInFlight(), false, 'a refused apply-now must not arm in-flight state')
-    assert.equal(readOverride(stateDir)?.pending, null, 'no pending switch is armed')
+    assert.equal(readOverrideRow(stateDir)?.pending, null, 'no pending switch is armed')
     assert.equal(readActivationJournalState(stateDir).kind, 'missing', 'no journal is written')
     await assert.rejects(manager.applyNow(), (error: unknown) =>
       (error as { code?: string }).code === 'no_selection', 'the direct manager call refuses identically')
     assert.equal(manager.applyNowInFlight(), false)
-    assert.equal(readCurrentPointer(stateDir), null, 'no transaction was armed')
+    assert.deepEqual(readCurrentPointerState(stateDir), { kind: 'missing' }, 'no transaction was armed')
     await manager.dispose()
   } finally {
     rmSync(stateDir, { recursive: true, force: true })
@@ -259,7 +259,7 @@ test('apply-now preflight rejects a no-op re-application of the active runtime โ
     assert.equal((response.json as { code: string }).code, 'noop_target')
     assert.equal((response.json as { error: string }).error, 'dsh v1.0.0 is already the active runtime; apply-now has nothing to do')
     assert.equal(manager.applyNowInFlight(), false, 'a no-op rejection arms nothing')
-    assert.equal(readOverride(stateDir)?.pending, null, 'no pending switch is armed')
+    assert.equal(readOverrideRow(stateDir)?.pending, null, 'no pending switch is armed')
     assert.equal(readActivationJournalState(stateDir).kind, 'missing', 'no journal is written')
     await assert.rejects(manager.applyNow(), (error: unknown) =>
       (error as { code?: string }).code === 'noop_target', 'the direct manager call refuses identically')
@@ -305,7 +305,7 @@ test('applyNowInFlight fences every other runtime mutation at the manager level 
     releaseStop()
     await waitForSettle(manager)
     assert.equal(manager.applyNowInFlight(), false)
-    assert.equal(readCurrentPointer(stateDir), '1.0.0', 'the fenced window still committed its own switch')
+    assert.deepEqual(readCurrentPointerState(stateDir), { kind: 'valid', version: '1.0.0' }, 'the fenced window still committed its own switch')
     await manager.dispose()
   } finally {
     rmSync(stateDir, { recursive: true, force: true })
@@ -330,7 +330,7 @@ test('applyNow F2 arm mirrors the apply() manualRollback formula: a staged downg
     const manager = runtimeManager(stateDir, plane, { probeCandidate: derivedProbe(stateDir) })
     const accepted = await manager.applyNow()
     assert.equal(accepted.accepted, true)
-    const armed = readOverride(stateDir)
+    const armed = readOverrideRow(stateDir)
     assert.equal(armed?.pending, '1.0.0')
     const journal = readActivationJournalState(stateDir)
     assert.equal(journal.kind, 'valid')
@@ -343,7 +343,7 @@ test('applyNow F2 arm mirrors the apply() manualRollback formula: a staged downg
     releaseStop()
     await waitForSettle(manager)
     assert.equal(manager.applyNowInFlight(), false)
-    assert.equal(readCurrentPointer(stateDir), '1.0.0', 'the downgrade switch committed')
+    assert.deepEqual(readCurrentPointerState(stateDir), { kind: 'valid', version: '1.0.0' }, 'the downgrade switch committed')
     assert.equal((await manager.status()).activeVersion, '1.0.0')
     await manager.dispose()
   } finally {
@@ -379,7 +379,7 @@ test('apply-now 202: the window polls as applying with connectionState stopped, 
     assert.equal(settled.phase, 'idle')
     assert.equal(settled.connectionState, 'ready')
     assert.equal(settled.activeVersion, '1.0.0')
-    assert.equal(readCurrentPointer(stateDir), '1.0.0', 'the apply-now transaction committed the switch')
+    assert.deepEqual(readCurrentPointerState(stateDir), { kind: 'valid', version: '1.0.0' }, 'the apply-now transaction committed the switch')
     await manager.dispose()
   } finally {
     rmSync(stateDir, { recursive: true, force: true })
@@ -419,8 +419,8 @@ test('restoreBuiltin runs the full shared activation transaction before deleting
     assert.ok(readdirSync(join(stateDir, 'dsh-runtime', 'snapshots')).some(name => name.startsWith('2.0.0-')),
       'the switching-from DSH_HOME is snapshotted under its real source version')
     assert.equal(readFileSync(join(home, 'settings.json'), 'utf8'), '{"kept":true}')
-    assert.equal(readCurrentPointer(stateDir), null, 'the pointer clears only inside the activation transaction')
-    assert.equal(readOverride(stateDir), null, 'override is deleted only after the builtin probe passes')
+    assert.deepEqual(readCurrentPointerState(stateDir), { kind: 'missing' }, 'the pointer clears only inside the activation transaction')
+    assert.equal(readOverrideRow(stateDir), null, 'override is deleted only after the builtin probe passes')
     assert.equal(readActivationJournalState(stateDir).kind, 'missing', 'restore-builtin must not leave a mismatching journal behind')
     const status = await manager.status()
     assert.equal(status.kind, 'dsh-chamber-gateway-runtime')
@@ -454,9 +454,9 @@ test('restoreBuiltin preserves the override and rolls data back when the builtin
     })
     await assert.rejects(manager.restoreBuiltin(), /previous runtime and data were restored/)
     assert.deepEqual(probed, ['builtin', 'builtin', 'override'], 'failed builtin is observed twice, then the source tree is probed')
-    assert.equal(readCurrentPointer(stateDir), '2.0.0')
-    assert.equal(readOverride(stateDir)?.resolvedVersion, '2.0.0', 'failed reset never deletes the recoverable override')
-    assert.equal(readOverride(stateDir)?.lastOutcome, 'rolled-back')
+    assert.deepEqual(readCurrentPointerState(stateDir), { kind: 'valid', version: '2.0.0' })
+    assert.equal(readOverrideRow(stateDir)?.resolvedVersion, '2.0.0', 'failed reset never deletes the recoverable override')
+    assert.equal(readOverrideRow(stateDir)?.lastOutcome, 'rolled-back')
     assert.equal(readFileSync(join(home, 'settings.json'), 'utf8'), '{"source":"preserved"}')
     assert.equal(readActivationJournalState(stateDir).kind, 'missing')
     await manager.dispose()

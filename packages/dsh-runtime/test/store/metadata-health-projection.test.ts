@@ -9,7 +9,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { projectMetadataHealthFacts } from '../../src/metadata-health-projection.ts'
+import { projectMetadataHealthFacts, projectMetadataRecoveryGate } from '../../src/metadata-health-projection.ts'
 import type { RuntimeMetadataHealth } from '../../src/runtime-metadata-recovery.ts'
 
 const health = (overrides: Record<string, unknown> = {}): RuntimeMetadataHealth => ({
@@ -65,4 +65,42 @@ test('needsRecovery follows the status plus the caller-computed marker rescue', 
   // flag cannot make another status claim a recovery need.
   assert.equal(projectMetadataHealthFacts(health({ status: 'recovery-finalized' }), rescue).needsRecovery, false)
   assert.equal(projectMetadataHealthFacts(health({ status: 'recovery-in-progress' }), rescue).needsRecovery, true)
+})
+
+test('the boot gate blocks the two unconditional statuses whatever the rescue seam says', () => {
+  // 2026-12 audit 3.1: the boot path may NOT reuse needsRecovery (it adds the
+  // recoverable selection-corrupt and subtracts marker-corrupt-without-rescue
+  // through the seam). Only an unfinished transaction or a corrupt recovery
+  // marker blocks the managed dsh, and the rescue flag does not soften it.
+  for (const status of ['recovery-in-progress', 'recovery-marker-corrupt'] as const) {
+    for (const markerRescueAvailable of [false, true]) {
+      const gate = projectMetadataRecoveryGate(health({ status }), { markerRescueAvailable })
+      assert.equal(gate.startupMustBlock, true,
+        status + ' must block startup unconditionally (rescue=' + String(markerRescueAvailable) + ')')
+    }
+  }
+  for (const status of ['healthy', 'selection-corrupt', 'recovery-finalized'] as const) {
+    for (const markerRescueAvailable of [false, true]) {
+      const gate = projectMetadataRecoveryGate(health({ status }), { markerRescueAvailable })
+      assert.equal(gate.startupMustBlock, false,
+        status + ' must not block startup by itself (rescue=' + String(markerRescueAvailable) + ')')
+    }
+  }
+})
+
+test('the gate delegates needsRecovery to the facts projection (no second rule copy)', () => {
+  const statuses = ['healthy', 'selection-corrupt', 'recovery-in-progress', 'recovery-marker-corrupt', 'recovery-finalized'] as const
+  for (const status of statuses) {
+    for (const markerRescueAvailable of [false, true]) {
+      const fact = health({ status })
+      assert.deepEqual(
+        projectMetadataRecoveryGate(fact, { markerRescueAvailable }),
+        {
+          needsRecovery: projectMetadataHealthFacts(fact, { markerRescueAvailable }).needsRecovery,
+          startupMustBlock: status === 'recovery-in-progress' || status === 'recovery-marker-corrupt',
+        },
+        status + ' (rescue=' + String(markerRescueAvailable) + ')',
+      )
+    }
+  }
 })

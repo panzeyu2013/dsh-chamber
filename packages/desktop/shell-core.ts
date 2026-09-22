@@ -392,11 +392,29 @@ export function resolveActiveRuntime(baseDir: string, builtinWorkspace: string |
 
   const overrideState = readOverrideState(baseDir);
   const pointerState = readCurrentPointerState(baseDir);
-  if (overrideState.kind === 'corrupt') {
-    return { path: null, version: null, source: 'bundled', blockedReason: 'dsh runtime override metadata is corrupt' };
+  // Unreadable (EACCES/EIO/ESTALE) material is exactly as un-resolvable as
+  // corrupt material: it proves neither absence nor corruption, so it must
+  // fail closed too — the same direction as dsh-runtime apply-phase.ts's
+  // currentPointer() throw (B1 §2.3 / Phase B contract §2).
+  if (overrideState.kind === 'corrupt' || overrideState.kind === 'unknown') {
+    return {
+      path: null,
+      version: null,
+      source: 'bundled',
+      blockedReason: overrideState.kind === 'corrupt'
+        ? 'dsh runtime override metadata is corrupt'
+        : `dsh runtime override metadata is unreadable: ${overrideState.detail}`,
+    };
   }
-  if (pointerState.kind === 'corrupt') {
-    return { path: null, version: null, source: 'bundled', blockedReason: 'dsh runtime current pointer is corrupt' };
+  if (pointerState.kind === 'corrupt' || pointerState.kind === 'unknown') {
+    return {
+      path: null,
+      version: null,
+      source: 'bundled',
+      blockedReason: pointerState.kind === 'corrupt'
+        ? 'dsh runtime current pointer is corrupt'
+        : `dsh runtime current pointer is unreadable: ${pointerState.detail}`,
+    };
   }
   const override = overrideState.kind === 'valid' ? overrideState.record : null;
   const pointer = pointerState.kind === 'valid' ? pointerState.version : null;

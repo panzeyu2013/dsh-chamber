@@ -29,14 +29,14 @@ import { join } from 'node:path'
  * 只收"语义明确为附属物"的名字：yaml 的 `dist/doc/` 是 Document 模型的
  * 运行时代码（目录名 doc 但实际是代码），因此 `doc`/`docs` 不进此表，文档
  * 文件由 PRUNE_FILE_PATTERNS 的 *.md 规则单独清理。 */
-export const PRUNE_DIR_NAMES = new Set([
+const PRUNE_DIR_NAMES = new Set([
   'test', 'tests', '__tests__', '__snapshots__', 'fixtures', 'test-fixtures',
   'examples', 'example', 'benchmark', 'bench', 'perf', 'coverage',
   '.github', '.nyc_output',
 ])
 
 /** 运行期零使用的文件模式（文档/许可/CI 配置/测试文件/构建中间产物）。 */
-export const PRUNE_FILE_PATTERNS = [
+const PRUNE_FILE_PATTERNS = [
   /\.md$/i,
   /^(licen[cs]e|notice|authors|patents|copying)(\.|$)/i,
   /\.(test|spec)\.(js|cjs|mjs|mts|cts|ts|tsx|jsx)$/i,

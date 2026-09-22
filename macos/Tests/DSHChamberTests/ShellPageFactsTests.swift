@@ -271,6 +271,29 @@ final class ShellPageFactsTests: XCTestCase {
                        "对账表达式不得安装 observer（只返回快照）")
     }
 
+    /// 2026-12 收口：dark 判定只能有一个实现——source() 与 snapshotSource()
+    /// 都插值同一个 readDark() 函数（ShellPageFactsScript.readDarkJS），各自的
+    /// 产物里 body 深色判定只出现一次；任一脚本退回内联重算即红。
+    func testSharedDarkPredicateIsSingleSource() {
+        let source = ShellPageFactsScript.source()
+        let snapshot = ShellPageFactsScript.snapshotSource()
+        // 共享实现（编译后 JS 文本）：去空白前缀 + 前 4 字符小写比较。
+        let bodyAnchor = "inline.replace(/^\\s+/, '').slice(0, 4).toLowerCase()"
+        XCTAssertTrue(source.contains(bodyAnchor), "注入脚本必须包含共享 dark 判定")
+        XCTAssertTrue(snapshot.contains(bodyAnchor), "对账表达式必须包含同一 dark 判定")
+        XCTAssertTrue(source.contains("function readDark()"),
+                      "注入脚本必须定义共享 dark 函数")
+        XCTAssertTrue(snapshot.contains("function readDark()"),
+                      "对账表达式必须定义共享 dark 函数")
+        XCTAssertTrue(snapshot.contains("dark: readDark()"),
+                      "对账表达式必须调用共享 dark 函数，不得内联重算")
+        for (label, script) in [("source", source), ("snapshotSource", snapshot)] {
+            let occurrences = script.components(separatedBy: "hasAttribute('data-ds-dark-theme')").count - 1
+            XCTAssertEqual(occurrences, 1,
+                           "\(label) 的 body 深色判定必须只有一处（发现 \(occurrences) 处）")
+        }
+    }
+
     /// 取所有 attributeFilter 列表文本的并集（observer 配置可能不止一处）。
     private func attributeFilterSource(_ source: String) -> String {
         var union = ""

@@ -24,6 +24,8 @@ import {
   coreOver,
   previewNew,
   mutationCalls,
+  STALE,
+  addStaleRecord,
 } from './support/fake-repository.ts'
 
 test('remove refuses a submodule-hosting worktree unless discardChanges authorizes --force', async () => {
@@ -272,6 +274,124 @@ test('domain carrier preserves stable business errors and lets true internal fai
     domainResult(async () => { throw new Error('programming failure') }),
     /programming failure/,
   )
+})
+
+test('bound-removal replay/commit guards keep their exact per-site codes and messages', async () => {
+  /** Exact code+message refusal: these strings are the wire contract
+   *  (git-api.ts routes on the code; the dialog shows the text). */
+  const exactRefusal = async (promise: Promise<unknown>, code: string, message: string): Promise<void> => {
+    let caught: unknown
+    try {
+      await promise
+    } catch (error) {
+      caught = error
+    }
+    assert.ok(caught instanceof GitWorktreeError, `expected a ${code} refusal, got ${String(caught)}`)
+    assert.equal(caught.code, code)
+    assert.equal(caught.message, message)
+  }
+
+  // commitBoundRemove: the final in-lock topology read resolves a changed row.
+  const commit = setup({ linked: true })
+  const commitTarget = await targetOf(commit.core)
+  let commitLists = 0
+  commit.repo.onWorktreeList = () => {
+    commitLists += 1
+    if (commitLists === 2) commit.repo.worktrees[1]!.branch = 'changed'
+  }
+  await exactRefusal(
+    commit.core.remove({ operationId: 'bound-diff-commit', workspaceId: 'ws-feature', expected: commitTarget.expected }),
+    'operation-conflict',
+    'removal target changed immediately before mutation',
+  )
+  assert.equal(mutationCalls(commit.repo, 'remove').length, 0)
+
+  // ...the same guard maps a newly locked row to the SAME operation-conflict
+  // code/text (commitBoundRemove never emits worktree-locked here).
+  const commitLocked = setup({ linked: true })
+  const commitLockedTarget = await targetOf(commitLocked.core)
+  let commitLockedLists = 0
+  commitLocked.repo.onWorktreeList = () => {
+    commitLockedLists += 1
+    if (commitLockedLists === 2) commitLocked.repo.worktrees[1]!.locked = true
+  }
+  await exactRefusal(
+    commitLocked.core.remove({ operationId: 'bound-diff-commit-locked', workspaceId: 'ws-feature', expected: commitLockedTarget.expected }),
+    'operation-conflict',
+    'removal target changed immediately before mutation',
+  )
+  assert.equal(mutationCalls(commitLocked.repo, 'remove').length, 0)
+
+  // reconcileBoundRemove: an uncertain replay whose bound target changed.
+  const reconcile = setup({ linked: true })
+  const reconcileTarget = await targetOf(reconcile.core)
+  const reconcileInput = { operationId: 'bound-diff-reconcile', workspaceId: 'ws-feature', expected: reconcileTarget.expected }
+  reconcile.repo.throwBeforeRemove = new GitWorktreeError('git-timeout', 'simulated pre-commit timeout')
+  await assert.rejects(reconcile.core.remove(reconcileInput))
+  reconcile.repo.worktrees[1]!.head = 'f'.repeat(40)
+  await exactRefusal(
+    reconcile.core.remove(reconcileInput),
+    'operation-conflict',
+    'bound removal target changed while its outcome was uncertain',
+  )
+  assert.equal(mutationCalls(reconcile.repo, 'remove').length, 1)
+
+  // A changed identity outranks a concurrently locked row, exactly like the
+  // original identity-first check (and unlike assertRemovableTarget, which
+  // tests locked first).
+  const precedence = setup({ linked: true })
+  const precedenceTarget = await targetOf(precedence.core)
+  const precedenceInput = { operationId: 'bound-diff-precedence', workspaceId: 'ws-feature', expected: precedenceTarget.expected }
+  precedence.repo.throwBeforeRemove = new GitWorktreeError('git-timeout', 'simulated pre-commit timeout')
+  await assert.rejects(precedence.core.remove(precedenceInput))
+  precedence.repo.worktrees[1]!.head = 'f'.repeat(40)
+  precedence.repo.worktrees[1]!.locked = true
+  await exactRefusal(
+    precedence.core.remove(precedenceInput),
+    'operation-conflict',
+    'bound removal target changed while its outcome was uncertain',
+  )
+
+  // ...while a locked-only replay keeps its own worktree-locked refusal.
+  const locked = setup({ linked: true })
+  const lockedTarget = await targetOf(locked.core)
+  const lockedInput = { operationId: 'bound-diff-locked', workspaceId: 'ws-feature', expected: lockedTarget.expected }
+  locked.repo.throwBeforeRemove = new GitWorktreeError('git-timeout', 'simulated pre-commit timeout')
+  await assert.rejects(locked.core.remove(lockedInput))
+  locked.repo.worktrees[1]!.locked = true
+  await exactRefusal(locked.core.remove(lockedInput), 'worktree-locked', 'locked worktrees cannot be removed')
+
+  // commitMissingRecordRemove: a changed leftover record (still missing).
+  const missing = setup({ linked: true })
+  addStaleRecord(missing.repo)
+  const missingTarget = await targetOf(missing.core, STALE)
+  let missingLists = 0
+  missing.repo.onWorktreeList = () => {
+    missingLists += 1
+    if (missingLists === 2) missing.repo.worktrees.find(row => row.path === STALE)!.head = 'f'.repeat(40)
+  }
+  await exactRefusal(
+    missing.core.remove({ operationId: 'bound-diff-missing', expected: missingTarget.expected, path: STALE }),
+    'operation-conflict',
+    'missing worktree record changed immediately before removal',
+  )
+  assert.equal(mutationCalls(missing.repo, 'remove').length, 0)
+
+  // ...and a reappeared directory keeps the worktree-invalid refusal.
+  const reappeared = setup({ linked: true })
+  addStaleRecord(reappeared.repo)
+  const reappearedTarget = await targetOf(reappeared.core, STALE)
+  let reappearedLists = 0
+  reappeared.repo.onWorktreeList = () => {
+    reappearedLists += 1
+    if (reappearedLists === 2) reappeared.repo.existing.add(STALE)
+  }
+  await exactRefusal(
+    reappeared.core.remove({ operationId: 'bound-diff-reappeared', expected: reappearedTarget.expected, path: STALE }),
+    'worktree-invalid',
+    'the missing worktree directory reappeared; refresh and retry',
+  )
+  assert.equal(mutationCalls(reappeared.repo, 'remove').length, 0)
 })
 
 

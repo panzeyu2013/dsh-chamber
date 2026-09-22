@@ -237,31 +237,9 @@ export const OPEN_EVENTS_FRAME = {
   payload: { args: {} },
 }
 
-export function readyFrame(clientId = 'mux-client-1'): unknown {
-  return { type: 'item', streamId: 'events', value: { type: 'ready', clientId } }
-}
-
-export function statusFrame(sessionId: string, running: boolean): unknown {
-  return { type: 'item', streamId: 'events', value: { type: 'emit', event: 'api-session/status', args: [sessionId, running] } }
-}
-
 export function baselineItem(sessionId: string, running: boolean, updatedAt = 1, extra: Record<string, unknown> = {}): SessionListBaselineItem {
   // The cast is deliberate: callers also feed hostile/unknown wire fields
   // (persistence privacy test) that must survive the spread untyped.
   return { sessionId, running, updatedAt, parentSessionId: null, origin: null, ...extra } as SessionListBaselineItem
 }
 
-/** One session/follow snapshot carrying a tail turn/end event. */
-export function followSnapshotFrame(streamId: string, reason: unknown, seq = 4): unknown {
-  return {
-    type: 'item',
-    streamId,
-    value: {
-      type: 'snapshot',
-      records: [
-        { type: 'event', event: { type: 'turn/start', seq: seq - 1, time: 1, data: { turn: 1 } } },
-        { type: 'event', event: { type: 'turn/end', seq, time: 2, data: { turn: 1, reason } } },
-      ],
-    },
-  }
-}

@@ -166,15 +166,28 @@ test('committed settings, registry and held-resume pushes use the non-throwing s
   // W-10 S1/S2/S9: pushSettingsChanged, the held-resume push and the updater state push moved into
   // shell-core.installIpcHandlers (their send leaves now go through HostEdges rendererPush with the
   // non-throwing attemptCommittedRegistryPush wrapper); the assertions read shell-core.ts and keep
-  // their intent unchanged. The remaining push anchors (instances / status) still live in main.ts.
+  // their intent unchanged. 4.4b moved the registry/status push anchors into
+  // shell-assembly-shared.ts (one shared send boundary, push text + window-proof race discipline);
+  // main.ts keeps the Electron window proof wiring.
   const core = readFileSync(new URL('../../shell-core.ts', import.meta.url), 'utf8')
     + readFileSync(new URL('../../shell-ipc-update.ts', import.meta.url), 'utf8')
   const main = readFileSync(new URL('../../main.ts', import.meta.url), 'utf8')
+  const shared = readFileSync(new URL('../../shell-assembly-shared.ts', import.meta.url), 'utf8')
   assert.match(core, /function pushSettingsChanged\(\): void \{[\s\S]*?attemptCommittedRegistryPush\(\(\) => \{/)
   assert.match(core, /function pushHeldSystemResume[\s\S]*?attemptCommittedRegistryPush\(\(\) => \{/)
-  assert.match(main, /IPC_CHANNELS\.SSH_INSTANCES_CHANGED[\s\S]*?return projectedSaved;/)
-  assert.match(main, /const statusWindow = mainWindow;[\s\S]*?attemptCommittedRegistryPush\(\(\) => \{[\s\S]*?IPC_CHANNELS\.SSH_STATUS_CHANGED/)
+  assert.match(shared, /const pushCommitted = \([\s\S]*?attemptCommittedRegistryPush\(\(\) => \{/)
+  assert.match(shared, /pushCommitted\(\s*IPC_CHANNELS\.SSH_INSTANCES_CHANGED[\s\S]*?return projectedSaved;/)
+  assert.match(shared, /pushCommitted\(\s*IPC_CHANNELS\.SSH_STATUS_CHANGED/)
+  assert.match(main, /capturePushTarget: \(\) => mainWindow[\s\S]*?pushTargetStillCurrent: target => target === mainWindow && mainWindow !== null && !mainWindow\.isDestroyed\(\)/)
   assert.match(core, /updater\.subscribe\(\(updateState\) => \{[\s\S]*?attemptCommittedRegistryPush\(\(\) => \{[\s\S]*?IPC_CHANNELS\.UPDATE_STATE_CHANGED/)
+})
+
+test('shell-assembly-shared is a shared leaf: no electron, no reverse import of its call sites', () => {
+  // 4.4b 依赖方向：main.ts | sidecar-ctx.ts → shell-assembly-shared.ts → 叶模块；
+  // 反向 import（shared 引用 main/sidecar/electron）会让共享装配重新 flavor 化。
+  const shared = readFileSync(new URL('../../shell-assembly-shared.ts', import.meta.url), 'utf8')
+  assert.doesNotMatch(shared, /from ['"]electron(?:\/[^'"]*)?['"]/)
+  assert.doesNotMatch(shared, /from ['"]\.\/(?:main|sidecar-ctx|sidecar-entry|electron-edges)\.ts['"]/)
 })
 
 test('renderer ACK deliveries project and preload-validates the captured lifecycle proof', () => {

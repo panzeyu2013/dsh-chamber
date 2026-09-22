@@ -429,7 +429,10 @@ test('waterfall: held silently while no downstream mux client is attached (never
   assert.equal(h.mux.status().heldWaterfalls, 1)
   assert.deepEqual(h.pending.map(entry => [entry.sessionId, entry.kind, entry.eventId]), [['s1', 'approval', 'e1']])
   assert.equal(JSON.stringify([h.warnings, h.order]).includes('SECRET-REQUEST-PAYLOAD'), false)
+  // stop() releases the hold WITHOUT answering the host; the pending entry
+  // must still be cancelled locally so session-state drops it.
   h.mux.stop()
+  assert.deepEqual(h.cancels, ['e1'])
 })
 
 test('waterfall: delegates exactly once only when attached AND past the grace window', async () => {
@@ -486,6 +489,33 @@ test('waterfall: a cancel frame releases the hold and is never answered afterwar
   assert.deepEqual(h.cancels, ['e1'])
   assert.equal(h.mux.status().heldWaterfalls, 0)
   h.mux.stop()
+})
+
+test('waterfall release: a socket death cancels held pending waterfalls and never answers them', async () => {
+  const h = makeHarness({ attached: false })
+  await startSession(h)
+  h.sockets[0].deliver(waterfallFrame())
+  await flush()
+  assert.equal(h.mux.status().heldWaterfalls, 1)
+  h.sockets[0].serverClose(1006, 'network')
+  await until(() => h.cancels.length === 1)
+  assert.deepEqual(h.cancels, ['e1'])
+  assert.equal(h.results.length, 0, 'a released waterfall is cancelled, never answered')
+  assert.equal(h.mux.status().heldWaterfalls, 0)
+  h.mux.stop()
+})
+
+test('waterfall release: only pending (kind !== null) holds are cancelled, foreign holds are not', async () => {
+  const h = makeHarness({ attached: false })
+  await startSession(h)
+  h.sockets[0].deliver(waterfallFrame('e1'))
+  h.sockets[0].deliver(waterfallFrame('f1', 'session/other'))
+  await flush()
+  assert.equal(h.mux.status().heldWaterfalls, 2)
+  assert.deepEqual(h.pending.map(entry => entry.eventId), ['e1'])
+  h.mux.stop()
+  assert.deepEqual(h.cancels, ['e1'], 'a foreign waterfall never had a pending entry')
+  assert.equal(h.mux.status().heldWaterfalls, 0)
 })
 
 // ---------------------------------------------------------------------------
@@ -639,6 +669,7 @@ test('stop() closes the socket, drops held waterfalls and stops reconnecting', a
   assert.equal(h.sockets[0].closes.length, 1)
   assert.equal(h.mux.status().state, 'stopped')
   assert.equal(h.mux.status().heldWaterfalls, 0)
+  assert.deepEqual(h.cancels, ['e1'], 'the held approval is cancelled when the mux stops')
   await wait(30)
   assert.equal(h.sockets.length, 1)
   assert.equal(h.baselines.length, baselineCount)

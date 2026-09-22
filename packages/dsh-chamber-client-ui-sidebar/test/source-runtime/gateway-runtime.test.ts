@@ -333,6 +333,20 @@ test('fetchRemoteRuntimeStatus/fetchRemoteRuntimeVersions consume the documented
   const versionsOk = fetchSequence([{ payload: { registryOrigin: 'https://registry.npmjs.org', versions: [] } }])
   const versions = await fetchRemoteRuntimeVersions('gateway-x', { fetchImpl: versionsOk.fetchImpl })
   assert.deepEqual(versions, { registryOrigin: 'https://registry.npmjs.org', versions: [], removableVersions: [] })
+
+  const ledgerError = fetchSequence([{ payload: {
+    registryOrigin: 'https://registry.npmjs.org',
+    versions: [],
+    removableVersions: ['0.9.0'],
+    removableVersionsError: 'ledger unreadable',
+  } }])
+  const failed = await fetchRemoteRuntimeVersions('gateway-x', { fetchImpl: ledgerError.fetchImpl })
+  assert.deepEqual(failed, {
+    registryOrigin: 'https://registry.npmjs.org',
+    versions: [],
+    removableVersions: [],
+    removableVersionsError: 'ledger unreadable',
+  })
 })
 
 test('remoteRuntimeSetRegistry PUTs the origin and passes bad-registry rejections through', async () => {
@@ -597,7 +611,37 @@ test('status parsing: documented contract, backward defaults, unknown safety enu
   assert.throws(() => parseRemoteRuntimeStatus([]), /malformed runtime status/)
 })
 
-test('versions parsing: whitelist projection, error field preserved, malformed entries fail loud', () => {
+test('status parsing: the failure-ledger read error rides failureError (verbatim, empty folded, malformed fails loud)', () => {
+  // B2 残余 (c): an unreadable ledger keeps `failure` null (an unknowable set
+  // is never a fabricated "no failures") and carries the server's read reason
+  // verbatim on `failureError` — the settings row reads exactly this field.
+  const unreadable = parseRemoteRuntimeStatus({
+    kind: 'dsh-chamber-gateway-runtime', phase: 'idle', failure: null,
+    failureError: 'EACCES: permission denied, scandir /home/u/.dsh/runtime/failures',
+  })
+  assert.equal(unreadable.failure, null)
+  assert.equal(unreadable.failureError, 'EACCES: permission denied, scandir /home/u/.dsh/runtime/failures')
+  // Older servers project no field and a healthy ledger projects null: both
+  // are the null wire shape, never malformed.
+  assert.equal(parseRemoteRuntimeStatus({ kind: 'dsh-chamber-gateway-runtime' }).failureError, null)
+  assert.equal(
+    parseRemoteRuntimeStatus({ kind: 'dsh-chamber-gateway-runtime', failureError: null }).failureError,
+    null,
+  )
+  // An empty string is not a usable reason: folded to null so the UI never
+  // renders an empty alert row (the gateway only ever projects a real reason).
+  assert.equal(
+    parseRemoteRuntimeStatus({ kind: 'dsh-chamber-gateway-runtime', failureError: '' }).failureError,
+    null,
+  )
+  // A present non-string value is malformed like every sibling whitelist field.
+  assert.throws(
+    () => parseRemoteRuntimeStatus({ kind: 'dsh-chamber-gateway-runtime', failureError: 42 }),
+    /malformed runtime status\.failureError/,
+  )
+})
+
+test('versions parsing: whitelist projection, error fields preserved (registry + ledger), malformed entries fail loud', () => {
   const versionRows = [
     { version: '1.2.0', latest: true, cached: false, belowBaseline: false },
     { version: '1.0.0', latest: false, cached: true, belowBaseline: true },
@@ -615,6 +659,29 @@ test('versions parsing: whitelist projection, error field preserved, malformed e
   }), {
     registryOrigin: 'https://registry.npmjs.org', versions: [], removableVersions: ['1.0.0', '0.9.0'],
   })
+  // 2026-12: a ledger read failure rides `removableVersionsError`; the candidate
+  // list fails closed with it (settings row hidden, cleanup guard refusing).
+  assert.deepEqual(parseRemoteVersions({
+    registryOrigin: 'https://registry.npmjs.org',
+    versions: [],
+    removableVersions: ['1.0.0'],
+    removableVersionsError: 'EACCES: permission denied, scandir ledger',
+  }), {
+    registryOrigin: 'https://registry.npmjs.org',
+    versions: [],
+    removableVersions: [],
+    removableVersionsError: 'EACCES: permission denied, scandir ledger',
+  })
+  // Explicit null / the field's absence is the pre-error wire shape: candidates
+  // stay untouched and no new key is added (old servers stay byte-compatible).
+  assert.deepEqual(parseRemoteVersions({
+    registryOrigin: 'https://registry.npmjs.org',
+    versions: [],
+    removableVersions: ['1.0.0'],
+    removableVersionsError: null,
+  }), {
+    registryOrigin: 'https://registry.npmjs.org', versions: [], removableVersions: ['1.0.0'],
+  })
   assert.throws(
     () => parseRemoteVersions({ registryOrigin: 'x', versions: [{ version: 1 }] }),
     /malformed runtime version entry\.version/,
@@ -630,6 +697,10 @@ test('versions parsing: whitelist projection, error field preserved, malformed e
   assert.throws(
     () => parseRemoteVersions({ registryOrigin: 'x', versions: [], removableVersions: [42] }),
     /malformed runtime versions\.removableVersions/,
+  )
+  assert.throws(
+    () => parseRemoteVersions({ registryOrigin: 'x', versions: [], removableVersionsError: 42 }),
+    /malformed runtime versions\.removableVersionsError/,
   )
 })
 

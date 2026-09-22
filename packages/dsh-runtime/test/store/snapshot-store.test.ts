@@ -30,6 +30,7 @@ import {
   restoreMarkerAuthorityStatus,
   restorePreRollback,
   restoreSnapshot,
+  restoreSnapshotReport,
   snapshotDshHome,
   snapshotPaths,
   snapshotSummary,
@@ -117,8 +118,11 @@ test('restoreSnapshot: partial copy fails twice without deleting or misreporting
     throw new Error('copy interrupted')
   }
 
-  assert.equal(await restoreSnapshot(base, dshHome, snap, partialFailure), 'incomplete')
-  assert.equal(await completeInterruptedRestore(base, dshHome, partialFailure), 'incomplete')
+  // A copy failure is reported (cause copy-failed) instead of folding into a
+  // bare 'incomplete'; the legacy entry surfaces it as a thrown error while
+  // leaving the durable marker resumable.
+  await assert.rejects(restoreSnapshot(base, dshHome, snap, partialFailure), /copy-failed/)
+  await assert.rejects(completeInterruptedRestore(base, dshHome, partialFailure), /copy-failed/)
   assert.equal(readFileSync(path.join(dshHome, 'current.txt'), 'utf8'), 'unique-current')
   assert.ok(existsSync(snapshotPaths(base).restoreMarker))
   assert.equal(existsSync(`${dshHome}.old`), false)
@@ -135,10 +139,10 @@ test('restoreSnapshot: empty partial copy failure remains incomplete and retries
   rmSync(dshHome, { recursive: true, force: true })
   const empty = await snapshotDshHome(base, dshHome, '0.1.1')
   put(dshHome, 'current.txt', 'keep-until-staged')
-  assert.equal(await restoreSnapshot(base, dshHome, empty, async (_src, dest) => {
+  await assert.rejects(restoreSnapshot(base, dshHome, empty, async (_src, dest) => {
     mkdirSync(dest, { recursive: true })
     throw new Error('failed after creating empty destination')
-  }), 'incomplete')
+  }), /copy-failed/)
   assert.equal(readFileSync(path.join(dshHome, 'current.txt'), 'utf8'), 'keep-until-staged')
   assert.equal(await completeInterruptedRestore(base, dshHome), 'complete')
   assert.deepEqual(readdirSync(dshHome), [])
@@ -156,7 +160,9 @@ test('restoreSnapshot: crash after backup resumes from explicit publishing phase
       throw new Error('simulated process death')
     }
   }
-  assert.equal(await restoreSnapshot(base, dshHome, snap, undefined, { afterPhase }), 'half')
+  // The injected crash throw is an unexpected failure in-process; the durable
+  // marker still describes the 'half' disk state that startup resumes from.
+  await assert.rejects(restoreSnapshot(base, dshHome, snap, undefined, { afterPhase }), /unexpected/)
   assert.equal(existsSync(dshHome), false)
   assert.equal(readFileSync(path.join(`${dshHome}.old`, 'current.txt'), 'utf8'), 'current')
   assert.equal(await completeInterruptedRestore(base, dshHome), 'complete')
@@ -169,14 +175,14 @@ test('restoreSnapshot: crash after publish is recognized only from published pha
   const snap = await snapshotDshHome(base, dshHome, '0.1.1')
   put(snap, 'restored.txt', 'restored')
   let crashed = false
-  assert.equal(await restoreSnapshot(base, dshHome, snap, undefined, {
+  await assert.rejects(restoreSnapshot(base, dshHome, snap, undefined, {
     afterPhase(phase) {
       if (phase === 'published' && !crashed) {
         crashed = true
         throw new Error('simulated process death')
       }
     },
-  }), 'half')
+  }), /unexpected/)
   assert.ok(existsSync(snapshotPaths(base).restoreMarker))
   assert.equal(await completeInterruptedRestore(base, dshHome), 'complete')
   assert.equal(readFileSync(path.join(dshHome, 'restored.txt'), 'utf8'), 'restored')
@@ -253,20 +259,26 @@ test('restore transaction rejects staged and published directory symlinks withou
   put(staged.dshHome, 'source.txt', 'source')
   const stagedSnapshot = await snapshotDshHome(staged.base, staged.dshHome, '0.1.1')
   let stagingPath = ''
-  assert.equal(await restoreSnapshot(staged.base, staged.dshHome, stagedSnapshot, undefined, {
+  await assert.rejects(restoreSnapshot(staged.base, staged.dshHome, stagedSnapshot, undefined, {
     afterPhase(phase, marker) {
       if (phase === 'staged') {
         stagingPath = marker.stagingPath
         throw new Error('pause at staged')
       }
     },
-  }), 'incomplete')
+  }), /unexpected/)
   const stagedOutside = path.join(staged.base, 'staged-outside')
   mkdirSync(stagedOutside, { mode: 0o755 })
   chmodSync(stagedOutside, 0o755)
   rmSync(stagingPath, { recursive: true, force: true })
   symlinkSync(stagedOutside, stagingPath, 'dir')
   const stagedOutsideBefore = statSync(stagedOutside)
+  // B1 R3: the boolean refusal is diagnosable now (cause + the failing dir)
+  // while the resumed legacy projection still returns the historical outcome.
+  const stagedReport = await restoreSnapshotReport(staged.base, staged.dshHome, '')
+  assert.equal(stagedReport.outcome, 'incomplete')
+  assert.equal(stagedReport.cause, 'state-refused')
+  assert.match(String(stagedReport.error), /暂存目录/)
   assert.equal(await completeInterruptedRestore(staged.base, staged.dshHome), 'incomplete')
   assert.equal(lstatSync(stagingPath).isSymbolicLink(), true)
   assert.equal(statSync(stagedOutside).mode & 0o777, stagedOutsideBefore.mode & 0o777)
@@ -275,17 +287,21 @@ test('restore transaction rejects staged and published directory symlinks withou
   const published = makeDirs()
   put(published.dshHome, 'source.txt', 'source')
   const publishedSnapshot = await snapshotDshHome(published.base, published.dshHome, '0.1.1')
-  assert.equal(await restoreSnapshot(published.base, published.dshHome, publishedSnapshot, undefined, {
+  await assert.rejects(restoreSnapshot(published.base, published.dshHome, publishedSnapshot, undefined, {
     afterPhase(phase) {
       if (phase === 'published') throw new Error('pause at published')
     },
-  }), 'half')
+  }), /unexpected/)
   const publishedOutside = path.join(published.base, 'published-outside')
   mkdirSync(publishedOutside, { mode: 0o755 })
   chmodSync(publishedOutside, 0o755)
   rmSync(published.dshHome, { recursive: true, force: true })
   symlinkSync(publishedOutside, published.dshHome, 'dir')
   const publishedOutsideBefore = statSync(publishedOutside)
+  const publishedReport = await restoreSnapshotReport(published.base, published.dshHome, '')
+  assert.equal(publishedReport.outcome, 'incomplete')
+  assert.equal(publishedReport.cause, 'state-refused')
+  assert.match(String(publishedReport.error), /DSH_HOME/)
   assert.equal(await completeInterruptedRestore(published.base, published.dshHome), 'incomplete')
   assert.equal(lstatSync(published.dshHome).isSymbolicLink(), true)
   assert.equal(statSync(publishedOutside).mode & 0o777, publishedOutsideBefore.mode & 0o777)
@@ -298,11 +314,11 @@ test('restore marker and snapshot store modes are owner-only even from permissiv
   const runtimeDir = path.join(base, 'dsh-runtime')
   mkdirSync(runtimeDir, { recursive: true, mode: 0o777 })
   const snap = await snapshotDshHome(base, dshHome, '0.1.1')
-  assert.equal(await restoreSnapshot(base, dshHome, snap, undefined, {
+  await assert.rejects(restoreSnapshot(base, dshHome, snap, undefined, {
     afterPhase(phase) {
       if (phase === 'copying') throw new Error('pause after marker')
     },
-  }), 'incomplete')
+  }), /unexpected/)
   assert.equal(mode(runtimeDir), 0o700)
   assert.equal(mode(snapshotPaths(base).snapshotsDir), 0o700)
   assert.equal(mode(snapshotPaths(base).restoreMarker), 0o600)
@@ -387,7 +403,7 @@ test('restorePreRollback: crash after backup resumes from the stash marker at st
       throw new Error('simulated process death')
     }
   }
-  assert.equal(await restorePreRollback(base, dshHome, path.basename(stash), undefined, { afterPhase }), 'half')
+  await assert.rejects(restorePreRollback(base, dshHome, path.basename(stash), undefined, { afterPhase }), /unexpected/)
   assert.equal(existsSync(dshHome), false, 'backup rename happened but publish did not')
   assert.equal(readFileSync(path.join(`${dshHome}.old`, 'current.txt'), 'utf8'), 'current')
   assert.equal(await completeInterruptedRestore(base, dshHome), 'complete')
@@ -689,4 +705,42 @@ test('restoreSnapshot: staged copy itself may use node cp injection', async () =
     await new Promise<void>((resolve, reject) => cp(src, dest, { recursive: true }, (error) => error ? reject(error) : resolve()))
   }), 'complete')
   assert.equal(copied, true)
+})
+
+test('restoreSnapshotReport carries cause/error instead of folding failures into incomplete', async () => {
+  const { base, dshHome } = makeDirs()
+  put(dshHome, 'current.txt', 'current')
+  const snap = await snapshotDshHome(base, dshHome, '0.1.1')
+  const failed = await restoreSnapshotReport(base, dshHome, snap, async (_src, dest) => {
+    put(dest, 'partial.txt', 'partial')
+    throw new Error('copy interrupted')
+  })
+  assert.equal(failed.outcome, 'incomplete')
+  assert.equal(failed.cause, 'copy-failed')
+  assert.match(String(failed.error), /copy interrupted/)
+  assert.ok(existsSync(snapshotPaths(base).restoreMarker), 'the durable marker stays resumable')
+  assert.equal(readFileSync(path.join(dshHome, 'current.txt'), 'utf8'), 'current')
+
+  const resumed = await restoreSnapshotReport(base, dshHome, snap)
+  assert.deepEqual(resumed, { outcome: 'complete', cause: null, error: null })
+  assert.ok(!existsSync(snapshotPaths(base).restoreMarker))
+})
+
+test('restore entry report: an unreadable marker is an io-error, not a silent incomplete', {
+  skip: process.platform === 'win32' || (typeof process.getuid === 'function' && process.getuid() === 0)
+    ? 'requires a non-root POSIX host (chmod 000 must block the reader)'
+    : false,
+}, async () => {
+  const { base, dshHome } = makeDirs()
+  const marker = snapshotPaths(base).restoreMarker
+  mkdirSync(path.dirname(marker), { recursive: true, mode: 0o700 })
+  writeFileSync(marker, '{}', { mode: 0o600 })
+  chmodSync(marker, 0o000)
+  try {
+    const report = await restoreSnapshotReport(base, dshHome, '')
+    assert.equal(report.cause, 'io-error')
+    assert.equal(report.outcome, 'incomplete')
+  } finally {
+    chmodSync(marker, 0o600)
+  }
 })

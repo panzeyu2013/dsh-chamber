@@ -75,7 +75,6 @@ import {
 } from './core.ts'
 import {
   assertHostSurface,
-  BUSY_MESSAGE,
   makeHostBinding,
   RunGate,
   type HostCtxServices,

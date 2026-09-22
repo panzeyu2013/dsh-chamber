@@ -1,6 +1,6 @@
 # 15 · Chamber 设置呈现（settings 壳固定入口）
 
-> **状态：现行（settings 壳平铺固定入口，v1 范围）**——chamber 全局设置与实例配置平面严格分离；
+> **settings 壳平铺固定入口（v1 范围）**——chamber 全局设置与实例配置平面严格分离；
 > **统一 Chamber 设置页 / 两级分组导航推迟（不排期）**；未完成门禁见 `docs/progress/STATUS.md`。
 > 范围契约：固定入口只有 `__connections`（连接）与 `__general`（**客户端 / Desktop**；命名理据见 D1；含
 > 设计 11 的更新块、设计 14 的运行设置、通知与会话待办区控制组）；**移除 B 项**见 D2。

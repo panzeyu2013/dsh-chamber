@@ -69,6 +69,7 @@ import {
   reconcileCompletedFacts,
   serversProjectionSignature,
   shouldHoldViewVeil,
+  SOURCE_PHASE_UNKNOWN,
   subscribeOpenIntent,
   refreshPendingArchives,
   sweepPendingArchives,
@@ -411,7 +412,7 @@ function deriveServers(
     const statusKey = kind === 'local' ? id : (rawId ?? id)
     const transportPhase = kind === 'local'
       ? (health?.dsh?.status ?? 'unknown')
-      : (remoteStatus[statusKey]?.phase ?? 'idle')
+      : (remoteStatus[statusKey]?.phase ?? SOURCE_PHASE_UNKNOWN)
     // 问题 B 修复（）：gateway 形态的 ready 只证明 gateway 进程活着
     // （desktop 的就绪探针读的就是 `/chamber/runtime/status`），托管 dsh 是
     // 独立进程。把它的 connectionState 投影进该源——phase 走侧栏既有的状态点
@@ -1162,8 +1163,8 @@ export default function App() {
 
   // 相位镜像（waitForServing 读它；effect 里写，避免渲染期改 ref）。远端来源取
   // **原始 transport 投影**的相位（与 deferredBootIds 同源）：deriveServers 把
-  // "投影未到达"折叠成 'idle'，那是缺失事实的合成值——折叠值当输入会让一次投影
-  // 延迟被就绪门快判成"未连接"（）。本地来源没有 transport 投影，
+  // "投影未到达"发布成 SOURCE_PHASE_UNKNOWN（'unknown'），那是缺失事实的合成值——
+  // 折叠值当输入会让一次投影延迟被就绪门快判成"未连接"（）。本地来源没有 transport 投影，
   // 用派生相位；undefined = 事实未到，门在预算内继续等。
   useEffect(() => {
     const phases: Record<string, string | undefined> = {}
@@ -1190,7 +1191,7 @@ export default function App() {
     for (const server of servers) {
       if (server.id === LOCAL_INSTANCE_ID) continue
       // 事实源必须是**原始 transport 投影**（remoteStatus 以 raw id 为键）：
-      // deriveServers 把"投影未到达"折叠成 `'idle'`（`remoteStatus[...]?.phase ?? 'idle'`），
+      // deriveServers 把"投影未到达"发布成 `SOURCE_PHASE_UNKNOWN`（`remoteStatus[...]?.phase ?? SOURCE_PHASE_UNKNOWN`），
       // 那不是手动断开事实——拿折叠值当输入会把一次投影延迟/状态拉取失败变成
       // "该来源未连接、拒绝 boot"，而纯契约明确要求 undefined 绝不推迟。
       const rawId = rawInstanceIdFromSourceId(server.id)

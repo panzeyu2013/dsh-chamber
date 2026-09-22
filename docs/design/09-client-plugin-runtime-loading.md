@@ -1,6 +1,6 @@
 # 09 · dsh 客户端插件运行时加载（方案 A：每实例合并宿主 boot 图）
 
-> **状态：现行（方案 A：chamber 自有 host 行暴露宿主 boot 图，前端按实例合并加载，2026-12）**——本文是客户端插件运行时加载的权威行为契约：官方 `dsh.client` 链路与 chamber 消费点、每实例图合并与去重、N-ctx 生命周期、失败降级与诊断分类、vendor 补丁集与信任边界；未完成门禁见 `docs/progress/STATUS.md`。与设计 08（git worktree 插件，**构建期强制打包**）互补：08 走编译期打包，本文走**运行期加载**（第三方/自研 `dsh.client` 包，装进 profile 后前端按实例加载，不重建 chamber 前端）。
+> **方案 A：chamber 自有 host 行暴露宿主 boot 图，前端按实例合并加载**——本文是客户端插件运行时加载的权威行为契约：官方 `dsh.client` 链路与 chamber 消费点、每实例图合并与去重、N-ctx 生命周期、失败降级与诊断分类、vendor 补丁集与信任边界；未完成门禁见 `docs/progress/STATUS.md`。与设计 08（git worktree 插件，**构建期强制打包**）互补：08 走编译期打包，本文走**运行期加载**（第三方/自研 `dsh.client` 包，装进 profile 后前端按实例加载，不重建 chamber 前端）。
 
 ## 1. 背景：官方机制与 chamber 的消费点
 
@@ -32,7 +32,7 @@ plugin inventory 只读（`dsh-host-plugin-inventory` 仅 `list()`），都不�
 
 - 任何**已装进 profile 的 `dsh.client` 包** → chamber 前端**按实例运行时加载**：
   装法维持官方语义（profile 装包 + `cordis.patch.yml` 加行），宿主图变化后
-  chamber 前端自然看到新插件（插件集变化在宿主重启生效）。**2026-12 修订**：
+  chamber 前端自然看到新插件（插件集变化在宿主重启生效）。**修订**：
   chamber 是常驻窗口，页面侧 client 插件集在**窗口 boot** 时固定（宿主图每 boot 取一次、
   bundle 那时执行；模块表按 id first-load-wins），所以「用户发起重启」的完整动作
   = 宿主重启 **+ 一次窗口重载**——由 sidebar 共享面的 page-owned completion
@@ -74,27 +74,27 @@ plugin inventory 只读（`dsh-host-plugin-inventory` 仅 `list()`），都不�
   `ui-*` 包（`chamber-entry.ts` 静态注册），宿主图里这些 id **跳过**，只加载
   chamber 复合未覆盖的新 entry（用户新装包）。去重集 = `CHAMBER_COVERED_IDS`
   （`packages/renderer/src/chamber-covered.ts`，见 §3.5）。
-- **反向依赖（现行仅 1 条；名单自 2026-09-11 起为派生）**：覆盖集解决「复合行不需要宿主图」，但复合内
+- **反向依赖（现行仅 1 条；名单为派生）**：覆盖集解决「复合行不需要宿主图」，但复合内
   首屏家族的 cordis inject 成员里仍有反向依赖：只有 `ui-chat` ← `sidebarRight`（`ui-sidebar-right` 行
   提供）来自**未覆盖**行（`ui-conversation`/`api-session-controller` 的 `fileUpload` 依赖已随
   `client-file-upload` **转为 covered** 消除，见 §3.6；渲染期 `useResource` 座 `resources` 因
   「非任何复合插件的 inject、且不可能单独缺失」不再登记）。宿主图通道降级（返回 `[]`）或该行 apply
   失败时，`ui-chat` 的 fiber 停在 PENDING、整个 apply 被跳过、会话视图不注册，而 boot 仍报成功。
-  **两级自愈（2026-09-10）**：① 取图撞上 `503 instance_unavailable`（实例仍在启动）时，shell 经 App
+  **两级自愈**：① 取图撞上 `503 instance_unavailable`（实例仍在启动）时，shell 经 App
   注入的 `waitForServing` 门**等来源就绪**再取一次（`host-graph.ts` 的 `MAX_SERVING_WAITS` /
   `SERVING_HEAL_BUDGET_MS`，App 侧门上限 60s），而非在固定预算（10×500ms）用尽后丢掉整套 profile
   客户端插件；② 门也用尽、或该行仍不 apply 时 boot **不再静默**：发布 `graph-unreachable` 诊断 +
   `console.error` 点名 instance，并把 `ShellState.degraded`（kind：`graph-unavailable` /
-  `required-services-missing`，2026-12 起另有 `deferred-registration-failed`）交给 App，由 App
+  `required-services-missing`，另有 `deferred-registration-failed`）交给 App，由 App
   在该来源 ready 时**自动重挂一次**（每个 ready 世代一次，纯判定在 `degraded-retry.ts`）。
-  **W3 边界（2026-12）**：② 覆盖**除 `not-injected` 之外的所有通道失败**（503 预算耗尽、502/504、
+  **W3 边界**：② 覆盖**除 `not-injected` 之外的所有通道失败**（503 预算耗尽、502/504、
   网络错误、图形非法），边界判定在叶模块 `renderer/src/source-readiness.ts` 的
   `graphGapKindFor`；`not-injected`（HTTP 404 或通道答 method 缺失）仍是 gateway/mobile
-  的合法无图形态，不是降级。该事实自 2026-12 起**并有用户面**：形状与呈现裁决在叶模块
+  的合法无图形态，不是降级。该事实**并有用户面**：形状与呈现裁决在叶模块
   `renderer/src/boot-gap.ts`（`Record<kind, …>` 强制每个 kind 带文案与 retryable 裁决），App 在活动
   视图渲染非阻断横幅，并作为**独立字段** `ChamberServerAggregate.bootGap` 过既有投影通道给侧栏来源行
   与连接页卡片（`pluginDiagnostic` 保持"图通道健康"语义：缺口在场时连接页抑制其 `ok` 行）——见
-  design 05 §4「降级呈现」。投递（2026-12 修订）：结算前的判词随 settle 进 App；**结算后**的由 App 侧
+  design 05 §4「降级呈现」。投递：结算前的判词随 settle 进 App；**结算后**的由 App 侧
   汇道投递（`bootInstanceShell` 的 `options.onRepublish`，InstanceView 接的就是传给
   `onStateChange` 的处理器；`onState` 是视图本地 setter，只发它则 App 的 `shellStates` 镜像收不到，
   横幅/投射/自愈全瞎）；未 settle 的
@@ -108,13 +108,12 @@ plugin inventory 只读（`dsh-host-plugin-inventory` 仅 `list()`），都不�
   （名字不变；纯判定在 `required-extra-rows.ts`）在 5s 内探测**派生并集**里仍未被 provide 的服务，点名
   「服务 + 注入它的已注册插件」，并经 shell 的 `chamberReportBootDegraded` 上报（**仍是诊断，不是启动
   门**：gateway/移动形态可合法不加载该行）。
-  **被探测集合是派生的，不是手写清单（2026-09-11 upstream-alignment；延迟簇入名单见
-  2026-09-11 review-fix）**：首屏每个挂载都经 `chamber-entry.ts` 的 `register(id, plugin)`，由各命名
+  **被探测集合是派生的，不是手写清单**：首屏每个挂载都经 `chamber-entry.ts` 的 `register(id, plugin)`，由各命名
   空间**导出的 `inject` 面**推导并集（`registeredInjectMembers` / `injectedServices` /
   `missingInjectedServices`，`required-extra-rows.ts`）——这正是上游 `assertEntriesActive` 读的
   `Object.keys(entry.fiber.inject)`（`packages/client/web/src/boot.ts:138-158`，本仓副本
   `packages/dsh-client-web/src/boot.ts` 另含版本容忍规则）。**延迟簇成员同样进名单并被探测**
-  （2026-09-11 review-fix，finding 1）：`registerDeferred` 在每行 chunk 装载、`ctx.plugin(...)` 之后把
+  `registerDeferred` 在每行 chunk 装载、`ctx.plugin(...)` 之后把
   该行**自己导出的** `inject` 面按同一套归一化推进同一份名单，确有行挂载时
   `probeRearm.reArm?.()` 重新武装一轮探测（探针在"干净判词"上会停）。此前延迟簇被排除（其 chunk
   尚未求值，且延迟拆分不变式称其 inject 成员已固定在首屏服务内），导致 **11 个只出现延迟面里的成员
@@ -189,7 +188,7 @@ plugin inventory 只读（`dsh-host-plugin-inventory` 仅 `list()`），都不�
 ### 3.5 加载契约（端点、seed 与去重集）
 
 - **端点契约（全局固定，其他 chamber 模块依赖）**：namespace `clientGraph`、method `graph` → wire 端点
-  `clientGraph/graph`，调用形状同侧边栏 `instance-api.ts`（`bridge-api.ts` 已随 2026-12 完整桥接修订
+  `clientGraph/graph`，调用形状同侧边栏 `instance-api.ts`（`bridge-api.ts` 随完整桥接调整
   删除）：`POST {base}/api/clientGraph/graph`（`{base}` =
   `/api/i/<id>` 反代前缀），body = `{type:'client-request', rpcId: crypto.randomUUID(),
   method:'clientGraph/graph', payload:{args:{}}}`，响应 envelope `{rpcId, result:{ok, value?, error?}}`。
@@ -199,7 +198,7 @@ plugin inventory 只读（`dsh-host-plugin-inventory` 仅 `list()`），都不�
   `packages/host/plugin-inventory` 的 `PluginInventoryGateway`）。gateway **纯只读**：不写、不执行、不触
   Loader，每次直接返回 `this.ctx.clientModules.graph()`（无缓存，读即单一事实源）；
   `static inject=['clientModules']` 保证排在 client-modules 行之后启动。
-- **图的行校验照上游、解析刻意更宽（A4，2026-09-11 upstream-alignment）**：`host-graph.ts` 的字段校验
+- **图的行校验照上游、解析刻意更宽**：`host-graph.ts` 的字段校验
   改用上游那两个纯 wire helper（`optionalStringArray` / `stripClientSuffix`，`manifest.ts`；后者取代
   内联的 `endsWith('/client')` 切片），但**解析仍是本地的、刻意比上游 `parseBootManifest` 松**
   （`manifest.ts:167-256`）：上游要把整个 `window.__DSH_BOOT__` 解成两个消费视图，故额外要求 `batches`
@@ -261,7 +260,7 @@ plugin inventory 只读（`dsh-host-plugin-inventory` 仅 `list()`），都不�
   产物写入 chamber-owned `renderer/src/generated/typert/`，Vite 的通用 `/remote` resolver 只消费这些产物。
   当前 15 个 contribution（`EXPECTED_REMOTE_PACKAGES`，含 file/session/workspace reference）由独立锁步测试
   固定，避免手抄包表滞后到 Rollup 才报缺模块；vendor 始终只读。
-- **失败降级与诊断语义（模块 C）**：图**通道**失败（fetch 网络错 / 非 2xx / 图畸形 / 行缺 id/url/rev）→ 降级为无额外插件继续 boot + console.error，并经 renderer-local chamberBridge 上报用户可见诊断（404/方法缺失 = `not-injected`，其余 = `graph-unreachable`；复合 bundle 仍提供完整官方壳，仅丢失 profile 新装插件；畸形图响亮报错，不做猜测式合并）；503 `instance_unavailable` 是未就绪预期态，静默。**2026-12（W3）**：**除 404 外的通道失败同样上浮 `ShellState.degraded`**（kind `graph-unavailable`，判定在 `renderer/src/source-readiness.ts` 的 `graphGapKindFor`），由 App 的非阻断 boot-gap 横幅说明并沿用「每个 ready 世代自动重挂一次」；`not-injected`（HTTP 404 或通道答 method 缺失）仍是 gateway/mobile 的合法无图形态。**bundle 加载**失败**不降级**——响亮失败、该实例 boot 报错呈现（§4 fail-loud）。**实例重启跨代恢复（一轮有界恢复）**：上游 bundle rev 是**每进程随机 nonce + 行序号**（`dsh-client-modules` `allocateInitialRevision`，非内容哈希），重启即令上一代 URL 全失效、跨重启 boot 全部 404；故 `collectExtraRows` 对普通失败行重拉一次宿主图（同一 503 预算）并按 fresh URL 重载，仍失败才响亮失败（DOM script **超时**不进恢复轮：迟到 load 收敛成功、迟到 error 允许重试）；恢复成功的行以 fresh url/rev 返回（旧代 URL 已死，不得作为可加载源下发）。**根治在上游（vendor 只读，登记不修）**：`allocateInitialRevision` 改用内容哈希即可让 rev 跨重启稳定（激活扫描本就经 `initialBundleSnapshot` 读入内存），chamber 恢复轮只是缓解（§5）。**分层**：`loadModuleBundle` 失败即 throw → 该实例 boot 响亮失败；预加载成功后内核不再为额外行发起新加载，只剩 materialize/apply 失败，按下一条降级。
+- **失败降级与诊断语义（模块 C）**：图**通道**失败（fetch 网络错 / 非 2xx / 图畸形 / 行缺 id/url/rev）→ 降级为无额外插件继续 boot + console.error，并经 renderer-local chamberBridge 上报用户可见诊断（404/方法缺失 = `not-injected`，其余 = `graph-unreachable`；复合 bundle 仍提供完整官方壳，仅丢失 profile 新装插件；畸形图响亮报错，不做猜测式合并）；503 `instance_unavailable` 是未就绪预期态，静默。**（W3）**：**除 404 外的通道失败同样上浮 `ShellState.degraded`**（kind `graph-unavailable`，判定在 `renderer/src/source-readiness.ts` 的 `graphGapKindFor`），由 App 的非阻断 boot-gap 横幅说明并沿用「每个 ready 世代自动重挂一次」；`not-injected`（HTTP 404 或通道答 method 缺失）仍是 gateway/mobile 的合法无图形态。**bundle 加载**失败**不降级**——响亮失败、该实例 boot 报错呈现（§4 fail-loud）。**实例重启跨代恢复（一轮有界恢复）**：上游 bundle rev 是**每进程随机 nonce + 行序号**（`dsh-client-modules` `allocateInitialRevision`，非内容哈希），重启即令上一代 URL 全失效、跨重启 boot 全部 404；故 `collectExtraRows` 对普通失败行重拉一次宿主图（同一 503 预算）并按 fresh URL 重载，仍失败才响亮失败（DOM script **超时**不进恢复轮：迟到 load 收敛成功、迟到 error 允许重试）；恢复成功的行以 fresh url/rev 返回（旧代 URL 已死，不得作为可加载源下发）。**根治在上游（vendor 只读，登记不修）**：`allocateInitialRevision` 改用内容哈希即可让 rev 跨重启稳定（激活扫描本就经 `initialBundleSnapshot` 读入内存），chamber 恢复轮只是缓解（§5）。**分层**：`loadModuleBundle` 失败即 throw → 该实例 boot 响亮失败；预加载成功后内核不再为额外行发起新加载，只剩 materialize/apply 失败，按下一条降级。
 - **额外行 apply 失败降级（模块 D）**：额外行**加载成功但 entry 未能 apply**（materialize 出非插件对象——如壳种子词表把某包静态注册、后端新增其 client half 后 seed 遮蔽 factory 导致的 "invalid plugin"；注册进本壳未声明的槽；重复安装壳已提供的服务）→ **降级不致命**：
   console.error + status 'failed'，shell 照常 boot（boot.ts 对 extraRows 逐行容错 + sweep 排除）。理由：复合
   bundle 固定一个 dsh client 版本，"后端 dsh 版本 ≠ 壳版本"时新/旧核心行与壳不兼容是**正常条件**（特性缺席），
@@ -297,7 +296,7 @@ N-ctx 同源壳要求每个实例的 API 走自己的反代前缀 `/api/i/<id>/*
 （connection / web / api-gateway）；**非载波**的官方绝对 URL 没有接缝——`ui-chat` 的 `AssistantMarkdown`
 用 `${window.location.origin}/api/file?path=…` 取 Markdown 里的本地图片，同源壳里 origin 是控制面 ⇒ 404
 （用户可见的坏图）。裁决（以上游为准 + 最小侵入）：**不为一行 URL 去 fork 整个 `ui-chat`（82 文件 /
-~11.3k 行）**，改为登记式 vendor 补丁集。**本集合不含 open-in**：本地目录自 2026-09-11 起改由实例进程内的 chamber host 包提供
+~11.3k 行）**，改为登记式 vendor 补丁集。**本集合不含 open-in**：本地目录改由实例进程内的 chamber host 包提供
 （`dsh-chamber-seed-open-in`，设计 20 §2.2/§6 fork & supersede），不读官方路由、无需同源 URL 补丁；客户端半
 是我们自己的插件，base path 取自各 entry 的私有 ctx。
 
@@ -333,7 +332,7 @@ N-ctx 同源壳要求每个实例的 API 走自己的反代前缀 `/api/i/<id>/*
   宿主 `ClientModuleRegistry` 激活即 fail-loud，chamber 侧同样报错不静默）。
 - entry id 冲突 → 显式去重（§3.3）；`inject` 边缺失 → 官方机制已有的 loud 失败，
   不降级。
-- **设置面不装载插件（2026-12 完整桥接修订）**：桌面设置壳**不再**为选中来源二次装载任何插件行——它渲染
+- **设置面不装载插件（完整桥接修订）**：桌面设置壳**不再**为选中来源二次装载任何插件行——它渲染
   该来源自己 boot ctx 的 `settings.section` 台账与标准座（design 05 §5），故：①执行面回到
   「已打开/被面板要求挂载的来源自己的 ctx」，面板只保证该 ctx **挂在屏外也保持挂载**
   （`chamberBridge.setSettingsTarget`），关闭即撤除；②没有第二次实例化 ⇒ 没有重复注册、跨来源模块共享报告与

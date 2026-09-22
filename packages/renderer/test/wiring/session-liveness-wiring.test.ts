@@ -4,7 +4,8 @@
  * design 14 声称这些跨模块不变量「由接线测试锁住」，但 `packages/renderer/test/wiring/`
  * 长期为空（STATUS ⑦ 登记的缺口）。本文件把它们落地，共五条——两侧默认值都直接 import
  * 生产模块，不复制数字：
- *  1. 对账链最坏回执时延 < 守卫的「等回执」期限（否则慢宿主 ⇒ 假 L2/假横幅）；
+ *  1. 对账链最坏回执时延 < 守卫的「等回执」期限（两侧取自 LADDER_TABLES，表到表；
+ *     否则慢宿主 ⇒ 假 L2/假横幅）；
  *  2. verify 相位预算 ≥ **两次**独立 unary 探针自身的上限（N=2 确认要串行读两次）；
  *  3. 生产装配不得 override 任何对账预算（override 会让上面两条推导失效）；
  *  4. 保留视图 90s 界限的接线（判定 → 只清 running 位 → 进会话停滞横幅）；
@@ -14,18 +15,20 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { SESSION_LIVENESS_DEFAULTS } from '../../src/session-liveness.ts'
+import { LADDER_TABLES } from '@dsh-chamber/dsh-stream-state'
 import { SESSION_FACT_RECONCILE_DEFAULTS } from '../../../dsh-chamber-client-ui-sidebar/src/shared/session-fact-reconcile.ts'
 import { INSTANCE_UNARY_TIMEOUT_MS } from '../../../dsh-chamber-client-ui-sidebar/src/shared/instance-api.ts'
 import { stripComments } from '../../../../scripts/dev/test-support/source-text.ts'
 
 
 test('对账链最坏回执时延必须小于守卫的等回执期限（慢宿主不得被误判）', () => {
-  const d = SESSION_FACT_RECONCILE_DEFAULTS
+  // 两侧都来自 LADDER_TABLES（B4 收编后的表到表断言）：171.5s < 190s 这条跨模块
+  // 不变量在表内成立，任何一侧漂移都会先让 parity 门红、再让这里红。
+  const d = LADDER_TABLES.factReconcile
   const worstReceiptMs = d.maxAttempts * (d.attemptTimeoutMs + d.verifyTimeoutMs) + d.retryMs
   assert.ok(
-    worstReceiptMs < SESSION_LIVENESS_DEFAULTS.refreshOutcomeTimeoutMs,
-    `最坏回执 ${worstReceiptMs}ms 必须 < 等回执期限 ${SESSION_LIVENESS_DEFAULTS.refreshOutcomeTimeoutMs}ms`,
+    worstReceiptMs < LADDER_TABLES.sessionLiveness.refreshOutcomeTimeoutMs,
+    `最坏回执 ${worstReceiptMs}ms 必须 < 等回执期限 ${LADDER_TABLES.sessionLiveness.refreshOutcomeTimeoutMs}ms`,
   )
 })
 

@@ -1398,7 +1398,6 @@ export { resolveNodeExecutable, sanitizeManagedDshEnv, spawnDsh } from './spawn-
 // deleted with the control-plane session-runtime domain, not re-exported
 // (2026-09-11 review).
 export { call, probeHostIdentity, RpcBusinessError, RpcTransportError } from './dsh-client.ts'
-export type { ProbeHostIdentityOptions } from './dsh-client.ts'
 // The dsh RPC wire envelope single source (A2 cross-package protocol
 // single-sourcing): envelope construction, server-response parse/validation
 // and the raw node:http unary carrier shared with the desktop probes
@@ -1412,6 +1411,7 @@ export {
   buildLegacyHostProbePayload,
   HOST_IDENTITY_METHOD,
   HOST_PROBE_MAX_RESPONSE_BYTES,
+  isLegacyHostProbeValue,
   LEGACY_HOST_PROBE_METHOD,
   mintRpcId,
   parseServerResponse,
@@ -1459,7 +1459,7 @@ export {
   HOST_SEED_PACKAGE_PREFIX,
 } from './host-graph-seed.ts'
 export type { ChamberHostPackageDescriptor, HostPackageInsert, HostPackageSeedFile } from './host-graph-seed.ts'
-export type { ApiCorsDecision, ApiCorsEvaluator, ApiRequest, ApiResponse, ApiSurface } from './api.ts'
+export type { ApiCorsEvaluator, ApiRequest, ApiResponse } from './api.ts'
 // Shared forwarding core (design 17 §8, 方案 A): extracted from
 // instance-proxy.ts so `gateway-proxy.ts` reuses the same Host/Origin
 // rewrite + WS splice + limits/errors without forking.
@@ -1471,7 +1471,7 @@ export * from './browser-auth-cookie.ts'
 export * from './record-read.ts'
 export * from './error-text.ts'
 export { createJsonStore, JsonStorePersistError, JsonStoreRevisionConflictError } from './json-store.ts'
-export type { JsonStore, JsonStoreDocument, JsonStoreMutator, JsonStoreOptions } from './json-store.ts'
+export type { JsonStore, JsonStoreMutator } from './json-store.ts'
 export {
   atomicWritePrivateFileNoFollow,
   createPrivateFileExclusiveNoFollow,
@@ -1481,9 +1481,7 @@ export {
   syncPrivateDirectoryNoFollow,
 } from './private-file.ts'
 export type {
-  PrivateDirectoryOptions,
   PrivateFileIdentity,
-  PrivateFileModeOptions,
   PrivateFileRead,
   PrivateFileReadOptions,
 } from './private-file.ts'

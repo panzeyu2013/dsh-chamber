@@ -82,6 +82,7 @@ import {
   ensurePrivateDirectoryNoFollow,
   HOST_IDENTITY_METHOD,
   HOST_PROBE_MAX_RESPONSE_BYTES,
+  isLegacyHostProbeValue,
   LEGACY_HOST_PROBE_METHOD,
   mintRpcId,
   parseServerResponse,
@@ -330,7 +331,10 @@ export function probeDshSignature(
     if (legacyOutcome.timeout || legacyOutcome.status === null
       || legacyOutcome.status !== 200 || legacyOutcome.oversized) return 'none'
     const legacyParsed = parseServerResponse(legacyOutcome.body, legacyRpcId)
-    return legacyParsed.kind === 'ok' && legacyParsed.envelope.result.ok === true ? 'dsh' : 'none'
+    // 2.1（2026-12 审计）：旧树正签名必须证明 legacy session/list 形状
+    // （control-plane canonical 谓词），畸形旧主机不再被当成 dsh。
+    return legacyParsed.kind === 'ok' && legacyParsed.envelope.result.ok === true
+      && isLegacyHostProbeValue(legacyParsed.envelope.result.value) ? 'dsh' : 'none'
   })
 }
 
@@ -522,18 +526,30 @@ function tunnelSessionOrigin(
  * tunnel endpoint WITH the session Cookie. `authority` is the remote gateway
  * host:port the tunnel presents in the Host header (design 17 §9.3 隧道 Host
  * 覆盖 — the gateway's request policy requires the authority port to equal
- * its listen port). */
+ * its listen port).
+ *
+ * 4.3: the bearer token is NEVER frozen at verifyUp entry — getGatewayToken is
+ * read immediately before EACH network exchange, exactly like the
+ * direct-endpoint provider (gateway-provider.ts verifyUp). A bearer fallback
+ * triggered after the token was cleared returns a non-ok result instead of
+ * sending a credential-free probe whose 200 (a --no-auth deployment) would be
+ * misreported as a bearer success; the password flow's own failure
+ * classification stays authoritative. */
 async function verifyGatewayWithPasswordViaTunnel(
   spec: TransportInstanceSpec,
   endpoint: TransportProbeEndpoint,
   password: string,
   authority: string | undefined,
-  token: string | null,
 ): Promise<TransportVerifyResult> {
   return verifyGatewayPasswordSession(tunnelSessionOrigin(spec, endpoint, authority), password, cookie =>
-    verifyGatewayEndpointViaTunnel(endpoint, token, VERIFY_UP_TIMEOUT_MS, VERIFY_UP_MAX_BODY_BYTES, cookie, authority),
-  token === null ? undefined : () =>
-    verifyGatewayEndpointViaTunnel(endpoint, token, VERIFY_UP_TIMEOUT_MS, VERIFY_UP_MAX_BODY_BYTES, null, authority))
+    verifyGatewayEndpointViaTunnel(endpoint, getGatewayToken(spec.id), VERIFY_UP_TIMEOUT_MS, VERIFY_UP_MAX_BODY_BYTES, cookie, authority),
+  () => {
+    const token = getGatewayToken(spec.id)
+    if (token === null) {
+      return Promise.resolve({ ok: false, detail: 'no gateway bearer token configured', terminal: false })
+    }
+    return verifyGatewayEndpointViaTunnel(endpoint, token, VERIFY_UP_TIMEOUT_MS, VERIFY_UP_MAX_BODY_BYTES, null, authority)
+  })
 }
 
 /**
@@ -1313,7 +1329,6 @@ export const sshProvider: TransportProvider = {
       // gateway's request policy (authority port == listen port) rejects the
       // tunnel's local port otherwise (verified on the 172 实机: 421).
       const authority = gatewayTunnelAuthority(spec.remotePort)
-      const token = getGatewayToken(spec.id)
       const password = getGatewayPassword(spec.id)
       // A configured password + wired session hooks: the login
       // session is keyed to the LOOPBACK tunnel origin (the only origin the
@@ -1323,9 +1338,11 @@ export const sshProvider: TransportProvider = {
       // when present. Without hooks, the token still probes normally and a
       // password-only target stays credential-free (the inert default).
       if (password !== null && getGatewaySessionHooks().ensureSession !== undefined) {
-        return verifyGatewayWithPasswordViaTunnel(spec, endpoint, password, authority, token)
+        return verifyGatewayWithPasswordViaTunnel(spec, endpoint, password, authority)
       }
-      return verifyGatewayEndpointViaTunnel(endpoint, token, VERIFY_UP_TIMEOUT_MS, VERIFY_UP_MAX_BODY_BYTES, null, authority)
+      // 4.3: read at the use point (each network exchange), never at entry —
+      // a token rotated after verifyUp was invoked must be observed here.
+      return verifyGatewayEndpointViaTunnel(endpoint, getGatewayToken(spec.id), VERIFY_UP_TIMEOUT_MS, VERIFY_UP_MAX_BODY_BYTES, null, authority)
     }
     return verifyDshEndpoint(endpoint)
   },
@@ -1333,6 +1350,136 @@ export const sshProvider: TransportProvider = {
   exec(spec: TransportInstanceSpec, action: TransportExecAction, deps: TransportExecDeps, payload?: TransportRunPayload): Promise<TransportExecResult> {
     return runExec(spec, action, deps, payload)
   },
+}
+
+/**
+ * One bounded short-lived ssh child lifecycle, shared by the systemctl exec
+ * (runExec) and the run channel (spawnRemote). It used to exist as two
+ * byte-identical finish/timeout chunks plus a third hand-written stdout
+ * SIGKILL arm inside spawnRemote; all of that is now this single body.
+ *
+ * Caller-specific semantics stay in the callbacks: spawn/timeout wording,
+ * stderr classification (auth / ENOENT / redaction), stdout handling
+ * (capture, streaming SHA-256, size bound) and exit classification
+ * (projection / systemctl exit codes). Only the mechanical lifecycle is
+ * single-sourced: settled + finish, the askpass auth lease, the timeout
+ * SIGTERM + grace SIGKILL fallback, bounded stderr lines, and the spawn
+ * error path.
+ *
+ * INVARIANT (kept from both former copies): finish() clears killTimer, so a
+ * bound-stop path must call finish() BEFORE arming the SIGKILL fallback -
+ * arming first would let finish clear the fallback immediately.
+ */
+interface BoundedSshRun<T> {
+  spec: TransportInstanceSpec
+  args: readonly string[]
+  spawnOptions: SpawnOptions
+  timeoutMs: number
+  deps: TransportExecDeps
+  /** Optional stdin payload (write-file), written and ended right after spawn. */
+  stdin?: string
+  /** Caller-spelled spawn-failure log; `phase` separates the spawn throw
+   *  from the child error event. */
+  logSpawnFailure(errorText: string, phase: 'throw' | 'error'): void
+  /** Caller-spelled spawn-failure result. */
+  spawnFailureResult(errorText: string): T
+  /** Caller-spelled timeout log line and result. */
+  timeoutLog: string
+  timeoutResult: T
+  /** One complete stderr line, or the dropped-line signal. */
+  onStderrLine(line: string, dropped: boolean): void
+  /** One stdout chunk; a non-null return is a bound-stop (log + SIGTERM +
+   *  finish + SIGKILL grace). `settled` lets a caller that still wants to
+   *  drain/echo output after a teardown decide for itself. */
+  onStdout?: (bytes: Buffer, settled: boolean) => { log: string; result: T } | null
+  /** Exit classification. The helper has already flushed the bounded stderr
+   *  processor and skipped timeout/settled exits. */
+  onExit(code: number | null, exitSignal: NodeJS.Signals | null, finish: (result: T) => void): void
+}
+
+function spawnBoundedSsh<T>(options: BoundedSshRun<T>): Promise<T> {
+  const { spec, args, spawnOptions, timeoutMs, deps } = options
+  return new Promise<T>(resolve => {
+    let settled = false
+    let timedOut = false
+    let timer: ReturnType<typeof setTimeout> | null = null
+    let killTimer: ReturnType<typeof setTimeout> | null = null
+    const finish = (result: T) => {
+      if (settled) return
+      settled = true
+      if (timer !== null) { clearTimeout(timer); timer = null }
+      if (killTimer !== null) { clearTimeout(killTimer); killTimer = null }
+      resolve(result)
+    }
+    let child: SpawnedProcess
+    // Password auth (design 05 §8): the exec spawn gets the same askpass env
+    // as the tunnel - a password-only host must answer ssh exec/run just like
+    // the tunnel connects. Null = key/agent auth, no env merge.
+    const authLease = acquireSshAuthLease(spec)
+    if (authLease !== null) spawnOptions.env = { ...process.env, ...authLease.env }
+    try {
+      child = deps.spawnFn('ssh', args, spawnOptions)
+    } catch (spawnError) {
+      authLease?.release()
+      const detail = String(spawnError)
+      options.logSpawnFailure(detail, 'throw')
+      finish(options.spawnFailureResult(detail))
+      return
+    }
+    if (authLease !== null) {
+      child.on('error', () => authLease.release())
+      child.on('exit', () => authLease.release())
+    }
+    if (options.stdin !== undefined && child.stdin !== null) {
+      child.stdin.write(options.stdin)
+      child.stdin.end()
+    }
+    timer = setTimeout(() => {
+      timedOut = true
+      deps.log('error', options.timeoutLog)
+      signalChild(child, 'SIGTERM')
+      // INVARIANT: finish() clears killTimer - settle BEFORE arming the
+      // SIGKILL fallback.
+      finish(options.timeoutResult)
+      killTimer = setTimeout(() => signalChild(child, 'SIGKILL'), deps.disconnectGraceMs)
+      killTimer.unref?.()
+    }, timeoutMs)
+    timer.unref?.()
+    // Line-buffered stderr, mirroring the tunnel channel: redaction and
+    // auth detection run on complete lines, never on arbitrary chunks.
+    const processStderr = createBoundedLineProcessor(
+      line => options.onStderrLine(line, false),
+      () => options.onStderrLine('', true),
+    )
+    if (child.stderr !== null) {
+      child.stderr.on('data', chunk => processStderr(String(chunk)))
+    }
+    if (options.onStdout !== undefined && child.stdout !== null) {
+      const onStdout = options.onStdout
+      child.stdout.on('data', chunk => {
+        const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+        const stop = onStdout(bytes, settled)
+        if (stop === null || settled) return
+        deps.log('error', stop.log)
+        signalChild(child, 'SIGTERM')
+        finish(stop.result)
+        killTimer = setTimeout(() => signalChild(child, 'SIGKILL'), deps.disconnectGraceMs)
+        killTimer.unref?.()
+      })
+    }
+    child.on('error', error => {
+      // Spawn failure (e.g. the ssh binary is missing): loud result, never
+      // swallowed; the tunnel's terminal classification stays untouched.
+      const detail = String(error)
+      options.logSpawnFailure(detail, 'error')
+      finish(options.spawnFailureResult(detail))
+    })
+    child.on('exit', (code, exitSignal) => {
+      if (timedOut || settled) return
+      processStderr('\n')
+      options.onExit(code, exitSignal, finish)
+    })
+  })
 }
 
 /**
@@ -1370,90 +1517,45 @@ function runExec(
   const args = spec.sshPort === null
     ? [target, 'systemctl', action, '--', spec.serviceName]
     : ['-p', String(spec.sshPort), target, 'systemctl', action, '--', spec.serviceName]
-  return new Promise(resolve => {
-    let settled = false
-    let timedOut = false
-    let authFailed = false
-    let timer: ReturnType<typeof setTimeout> | null = null
-    let killTimer: ReturnType<typeof setTimeout> | null = null
-    const finish = (result: TransportExecResult) => {
-      if (settled) return
-      settled = true
-      if (timer !== null) {
-        clearTimeout(timer)
-        timer = null
+  let authFailed = false
+  const processStdout = createBoundedLineProcessor(
+    line => {
+      const redacted = redactSshStderr(line)
+      if (redacted !== '') deps.log('info', redacted)
+    },
+    () => deps.log('error', `ssh output line dropped: exceeds ${CHILD_LINE_MAX_CHARS} characters`),
+  )
+  return spawnBoundedSsh<TransportExecResult>({
+    spec,
+    args,
+    spawnOptions: { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true },
+    timeoutMs: deps.execTimeoutMs,
+    deps,
+    logSpawnFailure: (errorText, phase) => deps.log('error', phase === 'throw'
+      ? `failed to spawn ssh for systemctl ${action}: ${errorText}`
+      : `ssh spawn error for systemctl ${action}: ${errorText}`),
+    spawnFailureResult: errorText => ({ ok: false, error: `failed to spawn ssh: ${errorText}` }),
+    timeoutLog: `systemctl ${action} ${spec.serviceName} timed out after ${deps.execTimeoutMs}ms`,
+    timeoutResult: { ok: false, error: `systemctl ${action} timed out after ${deps.execTimeoutMs}ms` },
+    onStderrLine: (line, dropped) => {
+      if (dropped) {
+        deps.log('error', `ssh output line dropped: exceeds ${CHILD_LINE_MAX_CHARS} characters`)
+        return
       }
-      if (killTimer !== null) {
-        clearTimeout(killTimer)
-        killTimer = null
+      const { log, terminalAuth } = sshProvider.classifyStderr(line)
+      if (log === '') return
+      deps.log('info', log)
+      if (terminalAuth) {
+        authFailed = true
+        deps.log('error', 'authentication failure detected (requires user action)')
       }
-      resolve(result)
-    }
-    let child: SpawnedProcess
-    const spawnOptions: SpawnOptions = { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true }
-    // Password auth (design 05 §8): the exec spawn gets the same askpass env
-    // as the tunnel — a password-only host must answer `systemctl` over ssh
-    // just like the tunnel connects. Null = key/agent auth, no env merge.
-    const authLease = acquireSshAuthLease(spec)
-    if (authLease !== null) spawnOptions.env = { ...process.env, ...authLease.env }
-    try {
-      child = deps.spawnFn('ssh', args, spawnOptions)
-    } catch (spawnError) {
-      authLease?.release()
-      deps.log('error', `failed to spawn ssh for systemctl ${action}: ${String(spawnError)}`)
-      finish({ ok: false, error: `failed to spawn ssh: ${String(spawnError)}` })
-      return
-    }
-    if (authLease !== null) {
-      child.on('error', () => authLease.release())
-      child.on('exit', () => authLease.release())
-    }
-    timer = setTimeout(() => {
-      timedOut = true
-      deps.log('error', `systemctl ${action} ${spec.serviceName} timed out after ${deps.execTimeoutMs}ms`)
-      signalChild(child, 'SIGTERM')
-      finish({ ok: false, error: `systemctl ${action} timed out after ${deps.execTimeoutMs}ms` })
-      killTimer = setTimeout(() => signalChild(child, 'SIGKILL'), deps.disconnectGraceMs)
-      killTimer.unref?.()
-    }, deps.execTimeoutMs)
-    timer.unref?.()
-    // Line-buffered stderr, mirroring the tunnel channel: redaction and
-    // auth detection run on complete lines, never on arbitrary chunks.
-    const processStderr = createBoundedLineProcessor(
-      line => {
-        const { log, terminalAuth } = sshProvider.classifyStderr(line)
-        if (log === '') return
-        deps.log('info', log)
-        if (terminalAuth) {
-          authFailed = true
-          deps.log('error', 'authentication failure detected (requires user action)')
-        }
-      },
-      () => deps.log('error', `ssh output line dropped: exceeds ${CHILD_LINE_MAX_CHARS} characters`),
-    )
-    const processStdout = createBoundedLineProcessor(
-      line => {
-        const redacted = redactSshStderr(line)
-        if (redacted !== '') deps.log('info', redacted)
-      },
-      () => deps.log('error', `ssh output line dropped: exceeds ${CHILD_LINE_MAX_CHARS} characters`),
-    )
-    if (child.stdout !== null) {
-      child.stdout.on('data', chunk => processStdout(String(chunk)))
-    }
-    if (child.stderr !== null) {
-      child.stderr.on('data', chunk => processStderr(String(chunk)))
-    }
-    child.on('error', error => {
-      // Spawn failure (e.g. the ssh binary is missing): loud result, never
-      // swallowed; the tunnel's terminal classification stays untouched.
-      deps.log('error', `ssh spawn error for systemctl ${action}: ${String(error)}`)
-      finish({ ok: false, error: `failed to spawn ssh: ${String(error)}` })
-    })
-    child.on('exit', (code, exitSignal) => {
-      if (timedOut || settled) return
+    },
+    onStdout: bytes => {
+      processStdout(String(bytes))
+      return null
+    },
+    onExit: (code, exitSignal, finish) => {
       processStdout('\n')
-      processStderr('\n')
       if (authFailed) {
         finish({ ok: false, error: 'authentication failure — requires user action' })
         return
@@ -1512,7 +1614,7 @@ function runExec(
       }
       deps.log('error', `systemctl ${action} ${spec.serviceName} failed (exit ${code ?? exitSignal})`)
       finish({ ok: false, error: `systemctl ${action} failed (exit ${code ?? exitSignal})` })
-    })
+    },
   })
 }
 
@@ -1625,110 +1727,66 @@ function spawnRemote(
   const args = spec.sshPort === null
     ? [target, ...remoteArgv]
     : ['-p', String(spec.sshPort), target, ...remoteArgv]
-  return new Promise<TransportExecResult & { stdoutSha256?: string }>(resolve => {
-    let settled = false
-    let timedOut = false
-    let authFailed = false
-    let enoentDetected = false
-    let timer: ReturnType<typeof setTimeout> | null = null
-    let killTimer: ReturnType<typeof setTimeout> | null = null
-    const stdoutChunks: Buffer[] = []
-    const stdoutHash = opts.stdoutMode === 'sha256' ? createHash('sha256') : null
-    let stdoutBytes = 0
-    const finish = (result: TransportExecResult & { stdoutSha256?: string }) => {
-      if (settled) return
-      settled = true
-      if (timer !== null) { clearTimeout(timer); timer = null }
-      if (killTimer !== null) { clearTimeout(killTimer); killTimer = null }
-      resolve(result)
-    }
-    let child: SpawnedProcess
-    const spawnOptions: SpawnOptions = { stdio: [opts.stdin !== undefined ? 'pipe' : 'ignore', 'pipe', 'pipe'], windowsHide: true }
-    const authLease = acquireSshAuthLease(spec)
-    if (authLease !== null) spawnOptions.env = { ...process.env, ...authLease.env }
-    try {
-      child = deps.spawnFn('ssh', args, spawnOptions)
-    } catch (spawnError) {
-      authLease?.release()
-      deps.log('error', `failed to spawn ssh for run: ${String(spawnError)}`)
-      finish({ ok: false, error: `failed to spawn ssh: ${String(spawnError)}` })
-      return
-    }
-    if (authLease !== null) {
-      child.on('error', () => authLease.release())
-      child.on('exit', () => authLease.release())
-    }
-    if (opts.stdin !== undefined && child.stdin !== null) {
-      child.stdin.write(opts.stdin)
-      child.stdin.end()
-    }
-    timer = setTimeout(() => {
-      timedOut = true
-      deps.log('error', `run timed out after ${timeoutMs}ms`)
-      signalChild(child, 'SIGTERM')
-      finish({ ok: false, error: `run timed out after ${timeoutMs}ms` })
-      killTimer = setTimeout(() => signalChild(child, 'SIGKILL'), deps.disconnectGraceMs)
-      killTimer.unref?.()
-    }, timeoutMs)
-    timer.unref?.()
-    // Redacted stderr lines collected for the failure detail (never raw —
-    // classifyStderr already applies redactSshStderr, so no key/password
-    // material can ride the error string).
-    let stderrDetail = ''
-    const appendStderrDetail = (line: string) => {
-      if (stderrDetail.length >= RUN_STDERR_DETAIL_MAX_CHARS) return
-      const separator = stderrDetail === '' ? '' : ' | '
-      const remaining = RUN_STDERR_DETAIL_MAX_CHARS - stderrDetail.length
-      stderrDetail += `${separator}${line}`.slice(0, remaining)
-    }
-    const processStderr = createBoundedLineProcessor(
-      line => {
-        const { log, terminalAuth, enoent } = sshProvider.classifyStderr(line)
-        if (log === '') return
-        appendStderrDetail(log)
-        // Quiet runs (expected-failure probes): the redacted stderr still
-        // rides the failure detail, but the raw INFO echo is suppressed so
-        // an expected ENOENT probe cannot pollute the instance log panel.
-        if (opts.quiet !== true) deps.log('info', log)
-        if (terminalAuth) {
-          authFailed = true
-          deps.log('error', 'authentication failure detected (requires user action)')
-        }
-        if (enoent) enoentDetected = true
-      },
-      () => {
+  let authFailed = false
+  let enoentDetected = false
+  const stdoutChunks: Buffer[] = []
+  const stdoutHash = opts.stdoutMode === 'sha256' ? createHash('sha256') : null
+  let stdoutBytes = 0
+  // Redacted stderr lines collected for the failure detail (never raw —
+  // classifyStderr already applies redactSshStderr, so no key/password
+  // material can ride the error string).
+  let stderrDetail = ''
+  const appendStderrDetail = (line: string) => {
+    if (stderrDetail.length >= RUN_STDERR_DETAIL_MAX_CHARS) return
+    const separator = stderrDetail === '' ? '' : ' | '
+    const remaining = RUN_STDERR_DETAIL_MAX_CHARS - stderrDetail.length
+    stderrDetail += `${separator}${line}`.slice(0, remaining)
+  }
+  return spawnBoundedSsh<TransportExecResult & { stdoutSha256?: string }>({
+    spec,
+    args,
+    spawnOptions: { stdio: [opts.stdin !== undefined ? 'pipe' : 'ignore', 'pipe', 'pipe'], windowsHide: true },
+    stdin: opts.stdin,
+    timeoutMs,
+    deps,
+    logSpawnFailure: (errorText, phase) => deps.log('error', phase === 'throw'
+      ? `failed to spawn ssh for run: ${errorText}`
+      : `ssh spawn error for run: ${errorText}`),
+    spawnFailureResult: errorText => ({ ok: false, error: `failed to spawn ssh: ${errorText}` }),
+    timeoutLog: `run timed out after ${timeoutMs}ms`,
+    timeoutResult: { ok: false, error: `run timed out after ${timeoutMs}ms` },
+    onStderrLine: (line, dropped) => {
+      if (dropped) {
         const summary = `ssh output line dropped: exceeds ${CHILD_LINE_MAX_CHARS} characters`
         appendStderrDetail(summary)
         if (opts.quiet !== true) deps.log('error', summary)
-      },
-    )
-    if (child.stdout !== null) {
-      child.stdout.on('data', chunk => {
-        if (opts.stdoutMode === undefined || settled) return
-        const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
-        if (stdoutBytes + bytes.length > RUN_STDOUT_MAX_BYTES) {
-          deps.log('error', `run stdout exceeds the ${RUN_STDOUT_MAX_BYTES}-byte limit`)
-          signalChild(child, 'SIGTERM')
-          finish({ ok: false, error: `run stdout exceeds the ${RUN_STDOUT_MAX_BYTES}-byte limit` })
-          killTimer = setTimeout(() => signalChild(child, 'SIGKILL'), deps.disconnectGraceMs)
-          killTimer.unref?.()
-          return
-        }
-        stdoutBytes += bytes.length
-        if (opts.stdoutMode === 'capture') stdoutChunks.push(bytes)
-        else stdoutHash!.update(bytes)
-      })
-    }
-    if (child.stderr !== null) {
-      child.stderr.on('data', chunk => processStderr(String(chunk)))
-    }
-    child.on('error', error => {
-      deps.log('error', `ssh spawn error for run: ${String(error)}`)
-      finish({ ok: false, error: `failed to spawn ssh: ${String(error)}` })
-    })
-    child.on('exit', (code, exitSignal) => {
-      if (timedOut || settled) return
-      processStderr('\n')
+        return
+      }
+      const { log, terminalAuth, enoent } = sshProvider.classifyStderr(line)
+      if (log === '') return
+      appendStderrDetail(log)
+      // Quiet runs (expected-failure probes): the redacted stderr still
+      // rides the failure detail, but the raw INFO echo is suppressed so
+      // an expected ENOENT probe cannot pollute the instance log panel.
+      if (opts.quiet !== true) deps.log('info', log)
+      if (terminalAuth) {
+        authFailed = true
+        deps.log('error', 'authentication failure detected (requires user action)')
+      }
+      if (enoent) enoentDetected = true
+    },
+    onStdout: (bytes, settled) => {
+      if (opts.stdoutMode === undefined || settled) return null
+      if (stdoutBytes + bytes.length > RUN_STDOUT_MAX_BYTES) {
+        const detail = `run stdout exceeds the ${RUN_STDOUT_MAX_BYTES}-byte limit`
+        return { log: detail, result: { ok: false, error: detail } }
+      }
+      stdoutBytes += bytes.length
+      if (opts.stdoutMode === 'capture') stdoutChunks.push(bytes)
+      else stdoutHash!.update(bytes)
+      return null
+    },
+    onExit: (code, exitSignal, finish) => {
       if (authFailed) {
         finish({ ok: false, error: 'authentication failure — requires user action' })
         return
@@ -1772,7 +1830,7 @@ function spawnRemote(
         stdoutBytes: capturedStdout,
         stdoutSha256: stdoutHash?.digest('hex'),
       })
-    })
+    },
   })
 }
 

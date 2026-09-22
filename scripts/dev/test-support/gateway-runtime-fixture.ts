@@ -34,6 +34,7 @@ export function remoteStatus(overrides: Partial<RemoteRuntimeStatus> = {}): Remo
     preRollbackCount: 0,
     preRollbackLatestName: null,
     failure: null,
+    failureError: null,
     diskUsage: null,
     diskError: null,
     diskLimitBytes: 10 * 1024 ** 3,

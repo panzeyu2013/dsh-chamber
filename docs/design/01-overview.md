@@ -1,6 +1,6 @@
 # dsh-chamber 设计总览（v1：多来源会话统一导航）
 
-> **状态：现行（设计体系入口与索引 · v1 定稿，2026-12）**——dsh-chamber = dsh 的
+> **设计体系入口与索引（v1）**——dsh-chamber = dsh 的
 > **桌面连接管理器**：Electron 包装 dsh 官方前端，本地实例与远程服务器**同等接入**；
 > 界面 = **dsh 官方前端源码复用自建**，首屏即 dsh 主界面，**多来源 session/workspace
 > 在 dsh 原生侧边栏平等呈现**（仅按来源分类、远程以颜色标注——
@@ -85,12 +85,12 @@ roster 来自该 session 所属实例，选择结果写回该实例。因此"本
 | 17 | [17-server-side-gateway.md](17-server-side-gateway.md) | 现行（连接模型 v2 + 认证边界；实机门禁见 STATUS） | 独立启动的认证默认 server 形态（`--no-auth` 为显式可信网络例外）：单本地 dsh 公网接入、Desktop `gateway` target 与 gateway 自有派生编排；普通 control-plane 仍 loopback-only |
 | 18 | [18-dsh-runtime-version.md](18-dsh-runtime-version.md)；增补 [18-addendum-apply-now.md](18-addendum-apply-now.md)（「立即应用」） | 现行（打包/实机证据见 STATUS） | dsh 运行时版本管理：source-bound 安装、per-server 设置段、探针门控激活/回退、快照/失败现场与磁盘治理；§9 扩展 gateway 宿主（`/chamber/runtime` + 启动切换相位） |
 | 19 | [19-notifications.md](19-notifications.md) | 现行（macOS 权限/打包态实机验收未完成） | 桌面通知：session complete/ask/request 推送原生通知（设置可选项）+ 未读徽标。检测 = renderer 复用 06 §4 事实通道边沿检测（零控制面改动）；呈现 = 主进程 Electron Notification + 点击打开会话；设置 = chamber-settings.json 新增 `notifications` + 并入客户端页「通知」控制组（无新设置入口）；OpenChamber 通知功能调研见文内 §2 |
-| 20 | [20-open-in-registry.md](20-open-in-registry.md) | 现行 | open-in 打开面（design 16 演进；**2026-09-11 fork & supersede**）：官方两份都不使用——宿主半 fork 进实例内 seed 包（`@dsh-chamber/dsh-chamber-seed-open-in`：本机全量目录 + 真实图标 + 拉起，localOnly），客户端半由 `@dsh-chamber/dsh-chamber-client-ui-open-in` 承接为官方超集。单一 header 入口按 per-source 视图模型选通道：本地走实例内 Remote、远程 ssh 走主进程 VS Code Remote、http/未知无入口；主进程注册表 vscode-only + 六步 loud 管线 + 能力协商 IPC。无 vendor 补丁、无 spawn/overlay 改动 |
+| 20 | [20-open-in-registry.md](20-open-in-registry.md) | 现行 | open-in 打开面（design 16 演进；**fork & supersede**）：官方两份都不使用——宿主半 fork 进实例内 seed 包（`@dsh-chamber/dsh-chamber-seed-open-in`：本机全量目录 + 真实图标 + 拉起，localOnly），客户端半由 `@dsh-chamber/dsh-chamber-client-ui-open-in` 承接为官方超集。单一 header 入口按 per-source 视图模型选通道：本地走实例内 Remote、远程 ssh 走主进程 VS Code Remote、http/未知无入口；主进程注册表 vscode-only + 六步 loud 管线 + 能力协商 IPC。无 vendor 补丁、无 spawn/overlay 改动 |
 | 21 | [21-gateway-plugin-parity.md](21-gateway-plugin-parity.md) | 现行（A/B/C；余留项见文内登记） | 统一插件管理模型与 gateway 连接对齐：单一模型、末段执行分叉（ssh exec / gateway 编排面） |
 | 22 | [22-linux-desktop.md](22-linux-desktop.md) | 现行（实机门禁见 STATUS） | Linux 桌面支持：AppImage（x64）发行形态 + 自动更新形态门（可写 $APPIMAGE）、XDG/$APPIMAGE 桌面集成纪律（自启 + 每启重写的协议 .desktop）、node 兜底平台分表与目录 fsync 平台无关容错、release.yml build-linux 腿 |
-| 23 | [23-windows-support.md](23-windows-support.md) | 未实现（代码项已落地；真实 runner/实机门禁未过） | Windows 支持：平台适配、运行时管理解锁纪律、妥协点与验收矩阵 |
+| 23 | [23-windows-support.md](23-windows-support.md) | Windows 11 x64 支持契约（代码面可用；真实 runner/实机门禁未过） | Windows 支持：平台适配、运行时管理解锁纪律、妥协点与验收矩阵 |
 | 24 | [24-archived-session-cleanup.md](24-archived-session-cleanup.md) | 现行（gateway/远程与打包版目检待验） | 已归档会话内容清理：第三个 chamber 宿主域 `archiveCleanup/{preview,purge}`（purge 带可选子集过滤 / `force` / 保护集 `protectSessionIds`；有界例外动议，AGENTS 已登记）+ 归档管理器对话框（server 行 hover 打开，逐条删除 / 显式全选后删除选中——无独立「删除全部」；按工作区分组、可折叠；销毁确认 = 对话框内两段式）；探针期望集派生契约见 design 18 §3.4 |
-| 25 | [25-macos-swift-native-shell.md](25-macos-swift-native-shell.md) | 已实现（路线 A 代码面；实机/凭据门禁见 STATUS） | macOS Swift 原生壳：WKWebView 载控制面 origin 的壳文档 + 打包 Node sidecar（A/B 桥、60 通道 manifest 锁步、目录锁、原生边沿），与 Electron 三平台版共存保留 |
+| 25 | [25-macos-swift-native-shell.md](25-macos-swift-native-shell.md) | 路线 A 代码面；实机/凭据门禁见 STATUS | macOS Swift 原生壳：WKWebView 载控制面 origin 的壳文档 + 打包 Node sidecar（A/B 桥、60 通道 manifest 锁步、目录锁、原生边沿），与 Electron 三平台版共存保留 |
 
 ---
 
@@ -100,14 +100,14 @@ roster 来自该 session 所属实例，选择结果写回该实例。因此"本
 
 | 域 | 处置 | 依据 |
 |---|---|---|
-| 认证/审计（统一登录/Passkey/会话 cookie/client token/审计 SQLite） | **从桌面/control-plane 移除；gateway 入口认证 + 桌面 S22/S24 受限形态为有界例外** | loopback-only 是桌面 v1 安全面；design 17 的独立公网进程必须有认证（默认；`--no-auth` 为有界偏差），但不提供 control-plane 审计域。**design 17 有界例外已实现**：S22——桌面凭据经 safeStorage 加密落盘（`<userData>/gateway-secrets.json` schema v3 target binding，不可用时回退 0600 明文）；S24——桌面/gateway 轻量非秘密审计（连接/认证事件）。两者都不构成域回流：凭据仅表单瞬时 write-only 输入，永不由主进程返回/回填或持久化到 renderer，也不进注册表/日志；审计永不回流匿名控制面 |
+| 认证/审计（统一登录/Passkey/会话 cookie/client token/审计 SQLite） | **从桌面/control-plane 移除；gateway 入口认证 + 桌面 S22/S24 受限形态为有界例外** | loopback-only 是桌面 v1 安全面；design 17 的独立公网进程必须有认证（默认；`--no-auth` 为有界偏差），但不提供 control-plane 审计域。**design 17 有界例外**：S22——桌面凭据经 safeStorage 加密落盘（`<userData>/gateway-secrets.json` schema v3 target binding，不可用时回退 0600 明文）；S24——桌面/gateway 轻量非秘密审计（连接/认证事件）。两者都不构成域回流：凭据仅表单瞬时 write-only 输入，永不由主进程返回/回填或持久化到 renderer，也不进注册表/日志；审计永不回流匿名控制面 |
 | 控制面薄壳聊天/会话列表/审批弹窗 | **移除** | dsh 官方前端复用取代 |
 | 控制面会话运行时/统一索引/交互管线 | **移除** | 各实例前端 runtime 自有（N-ctx） |
 | 连接注入适配器 / broker / 绑定 | **移除** | 远程实例由桌面主进程注册表管理，不再 seed 控制面 |
 | 协议层深挖文档/委托映射独立文档 | **移除（文档）** | 协议细节以 dsh 自身 wire 与 vendor 源码为权威；处置映射并入本文 §4 |
 | walkthrough、通知中心、MCP、文件夹/笔记、web 预览、目标/终端渲染等宿主 UI 职责面 | **不变（移出）** | 宿主原生覆盖，控制面只接入/服务 |
-| 跨会话调度/审批通知投影 | **桌面移出；gateway 有界例外** | design 17 只消费控制帧/权威摘要并驱动既有 dsh API；不消费 session 内容、不实现聊天 runtime。**2026-12 修订（用户拍板）**：gateway 编排面整体剥离——审批/提问经侧边栏既有事实通道呈现（与本地/ssh 实例同一通道），调度/会话索引/服务器侧 worktree 记录/功能开关全部移除；gateway 只剩认证壳 + 反代 + runtime 管理（design 18 §9）+ 凭据面板 + 种子注册表（宿主包由桌面同步、mobile 打包例外，design 17 §10）+ **第三方插件管理写面**（design 21 A1 裁决：`installed`/`install`/`remove`/`materialize`/`tasks`，串行队列 + 持久 journal + 单写者租约，契约见 design 17 §10.2 与 design 21 §6.2/§6.3，受保护集合与代耦合见 design 21 §6.11） |
-| git/GitHub | **插件化** | design 08 实例内插件是唯一实现（本地/ssh/gateway 同通道，宿主包由控制面/远程同步/gateway 种子注入）；gateway 服务器侧 worktree 记录已随编排面剥离（2026-12） |
+| 跨会话调度/审批通知投影 | **桌面移出；gateway 有界例外** | design 17 只消费控制帧/权威摘要并驱动既有 dsh API；不消费 session 内容、不实现聊天 runtime。gateway 编排面整体剥离——审批/提问经侧边栏既有事实通道呈现（与本地/ssh 实例同一通道），调度/会话索引/服务器侧 worktree 记录/功能开关全部移除；gateway 只剩认证壳 + 反代 + runtime 管理（design 18 §9）+ 凭据面板 + 种子注册表（宿主包由桌面同步、mobile 打包例外，design 17 §10）+ **第三方插件管理写面**（design 21 A1 裁决：`installed`/`install`/`remove`/`materialize`/`tasks`，串行队列 + 持久 journal + 单写者租约，契约见 design 17 §10.2 与 design 21 §6.2/§6.3，受保护集合与代耦合见 design 21 §6.11） |
+| git/GitHub | **插件化** | design 08 实例内插件是唯一实现（本地/ssh/gateway 同通道，宿主包由控制面/远程同步/gateway 种子注入）；gateway 服务器侧 worktree 记录已随编排面剥离 |
 
 > **有界例外（与 AGENTS.md 同列：designs 08 / 17 / 19 / 20 / 24）**：design 08 实例内
 > Git 插件、design 17 独立 gateway、design 19 桌面原生边沿通知投影、design 20 可信
@@ -119,14 +119,14 @@ roster 来自该 session 所属实例，选择结果写回该实例。因此"本
 > control-plane 版本切换零改动（「重启 dsh」另增事务化 `restartLocal()` 接口，
 > design 18 §9.3）、P3 移出项不回流。
 >
-> **2026-09-11 追加（design 20 §2.2/§6）**：open-in 裁决为 **fork & supersede**——官方宿主半
+> **open-in 裁决为 fork & supersede（design 20 §2.2/§6）**——官方宿主半
 > 的 fork `packages/dsh-chamber-seed-open-in` 是**第四个实例内宿主域**（命名空间 `openInApp`，
 > **仅本地形态 seed**：`localOnly`，不同步到远程/gateway）。边界收窄为：只做「本机应用目录探测 +
 > 真实 bundle 图标 + 一次拉起」，只接受 catalog 白名单 id 与绝对**目录**（`isDirectory()` 校验），
 > 无读取面、无任意 argv、无本地文件级打开；控制面仍零执行面，桌面主进程仍 vscode-only。
 > 该域仅由我们的客户端插件消费（官方两份都不加载），不构成会话域或执行面先例。
 >
-> **2026-12 追加（design 24 §2）**：`archiveCleanup/{preview,purge,probe}` 是实例内归档
+> **design 24 §2**：`archiveCleanup/{preview,purge,probe}` 是实例内归档
 > 清理宿主域（宿主包 `packages/dsh-chamber-seed-archive-cleanup`，控制面只随种子把它同步进
 > 实例图，见 `packages/control-plane/src/host-graph-seed.ts`）：只删不读、运行中整棵跳过、
 > 幂等，域缺失 404 给诚实文案；控制面不持有归档事实、不新增执行面，最窄边界见 design 24 §2。
@@ -138,7 +138,7 @@ renderer 已有的每实例运行时事实，不建立控制面通知消费者/�
 
 ## 5. 全局设计原则（沿用）
 
-1. **复用优先**：dsh 或宿主插件已实现的能力（含整个前端）只复用/接入，绝不重造执行面。
+1. **复用优先**：dsh 或宿主插件已有的能力（含整个前端）只复用/接入，绝不重造执行面。
 2. **单窗口多实例**：一个前端窗口内 N 个 dsh shell（N-ctx），导航层统一、执行层按来源路由。
 3. **同源唯一入口**：实例流量一律经控制面 `/api/i/<id>/*` 同源反代；前端永不直连非 loopback。
 4. **权威边界纪律**：宿主侧事实控制面只服务/探活，绝不成为权威；会话列表只来自各实例 API。

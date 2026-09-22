@@ -966,9 +966,6 @@ export function bootInstanceShell(
     // 页面级链推进用超时护栏：一个永不 settle 的 boot 在
     // BOOT_TIMEOUT_MS 后只放行其他 id。runTask 本身仍被本 id 的
     // instance tail 持有；同 id 新代必须等它 settle + async teardown。
-    //  deletion: this was `withBootTimeout`, inlined at its only call site. It never
-    // rejects (the boot chain's own rejection is swallowed), and expiry only LOGS -
-    // a late settle stays generation-gated.
     bootChain = withDeadline<ShellState | undefined>(
       runTask.then(value => value, () => undefined),
       {
@@ -1008,20 +1005,12 @@ function blockedBoot(instanceId: string, gen: number): { superseded: boolean; me
 }
 
 /**
- * Resolve once the wrapped boot settles OR the timeout elapses — the serialized
- * queue must never be wedged by a boot that never settles. The wrapped promise
- * only drives the page-level chain for other ids; callers and the strict
- * per-id tail still await the original task. A same-id successor therefore
- * never passes a predecessor that has not settled and torn down.
- */
-/**
  * Absolute cap on waiting for a same-id predecessor that never settles.
- * (See boundedTailWait below.)
  * The strict per-id tail is what keeps a successor from racing a live
  * predecessor's registration/teardown, so it must stay (and it is what keeps
  * `bootGenerations`/`cancelledBoots` owned — releasing the tail early would let
  * a late abandoned boot compare equal to its successor's generation and
- * register over it; ). But an unbounded wait means a
+ * register over it). But an unbounded wait means a
  * boot whose `entry.run()` never settles pins the id forever. The cap is two
  * boot budgets: comfortably past a slow-but-healthy predecessor (queue + boot),
  * and below the App's absolute harvest-abandon cap (135 s), so by the time a

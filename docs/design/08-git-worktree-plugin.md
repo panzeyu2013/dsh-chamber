@@ -1,6 +1,6 @@
 # 08 · Git Worktree 独立插件
 
-> **状态：现行（v1 实现，Design 17 迁移期保留，2026-12）**——Git 执行在每个 dsh
+> **v1 实现（Design 17 迁移期保留）**——Git 执行在每个 dsh
 > 实例内的 chamber host plugin；会话创建/打开和工作区注册仍只走 dsh 现有 wire。
 > Design 17 的 gateway Git offload 是待实机稳定的替代路线，过 canonical path、
 > 补偿 provenance、真 dsh/worktree 冒烟与回滚门禁前不得停止 seed、不得删包；两条
@@ -193,7 +193,7 @@ Git 事实不加进 App 的 session aggregate，v1 徽标只在 Git 区内；普
   揭示的动作与工作区管理对话框呈现；主 checkout 也不显示 chip（root 组只显示项目名）。
   行内动作图标 16px；空 workspace 组体显示"该工作区暂无会话"提示行。**揭示态下 occupant
   是行尾动作簇的最左成员**：它与 `rowActions` 之间只有头部自身的 4px 间距，故簇内
-  （`+` ↔ kebab）一致同为 4px（2026-09-13 修订——此前用官方 `Rows .rowActions` 的 12px，
+  （`+` ↔ kebab）一致同为 4px（此前用官方 `Rows .rowActions` 的 12px，
   一簇被切成 4px + 12px；见 06 §7「行内操作」条）。
 - **行内动作揭示 pointer-safe**：动作按钮的样式钩子是 **`data-git-action` 属性**
   （主行「分支+」创建 / worktree 行删除，`SidebarWorkspaceGitLine.tsx:387,400`），由 sidebar
@@ -201,12 +201,11 @@ Git 事实不加进 App 的 session aggregate，v1 徽标只在 Git 区内；普
   （`sidebar-chamber.module.css` 的 `.workspaceHeader:hover [data-git-action]`、
   `.workspaceHeader:has(:focus-visible) [data-git-action]`、
   `.workspaceHeader:has(.rowActionsVisible) [data-git-action]`，禁用态 `.42` 走同钩子的
-  `[data-git-action]:disabled`；按选择器锚定——行号随文件增长漂移，2026-09-13 复核时旧引用
+  `[data-git-action]:disabled`；按选择器锚定——行号随文件增长漂移，旧引用
   的 958-960 / 974-976 已不对），occupant 自身也在 `:has(:focus-visible)` 下按同一钩子揭示
   （`SidebarGit.module.css` 的 `.headerGit:has(:focus-visible) [data-git-action]`）。
   **不用字面量类名**：属性选择器不被 CSS Modules 哈希，跨包模块才能匹配同一钩子（本仓既有
-  规则见 `packages/dsh-chamber-client-ui-mobile/src/client/styles.ts:10-20`；2026-09-11
-  upstream-alignment，原 `git-ws-action` 全局类名已退役）。它与**折叠字形交换**（workspace
+  规则见 `packages/dsh-chamber-client-ui-mobile/src/client/styles.ts:10-20`；原 `git-ws-action` 全局类名已退役）。它与**折叠字形交换**（workspace
   folder/branch ↔ chevron、source monitor ↔ chevron、rename 期抑制）同触发：
   **`:has(:focus-visible)`** 而非 `:focus-within`——揭示状态只有三种：hover、kebab 展开
   （`.rowActionsVisible`）、键盘焦点；而 Chromium 在 mousedown
@@ -270,19 +269,19 @@ Git 事实不加进 App 的 session aggregate，v1 徽标只在 Git 区内；普
 ### 3.4 未注册工作树与孤儿 workspace（Plan A：显示全部 worktree）
 
 - **未注册工作树按仓库分散到 repo 组末尾**（名称=目录 basename、与派生 workspace 一致的行
-  样式：26px 行 / r8 / 名称 14px-600-次级色 + 20px 行内动作钮——2026-09 batch 1 G1 收口，
+  样式：26px 行 / r8 / 名称 14px-600-次级色 + 20px 行内动作钮，
   其中 20px 命中 < WCAG 2.2 2.5.8 的 24px 属模块图标按钮语言的既有权衡）。
-  **2026-09-14（用户指令「按照 v0.2.4 恢复」）**：2026-09 命中盒 pass（`33238ffe`）的两层
+  **按 v0.2.4 恢复**：命中盒 pass（`33238ffe`）的两层
   不可见 `::after` 24px rim **与它顺带加宽的 `.headerGit` 2→4px gap 一并回退**——命中区重新
   就是视觉盒，gap 回到 v0.2.4 的 2px。机制/
   范围/局限见 `sidebar-chamber.module.css` 的 `.actionIcon` 注释块（唯一权威处）与 design 06
   §7：这是对"从按钮上离开头部"主触发的**缓解**，不是根治。**20px/r5 视觉盒不是本次回退
-  对象**——那是 batch 1 G1 的图标钮语言，v0.2.4 此处为 22px/r6；24px 目标
+  对象**——那是同批的图标钮语言，v0.2.4 此处为 22px/r6；24px 目标
   尺寸重新成为本模块的已登记偏差，见 design 24 §13 第 17 条与 design 06 §7。行内动作钮命中区
   见 `SidebarGit.module.css` 的 `.unregisteredAction`：分支图标 + 名称 + 健康徽标；非 ready 行
   的状态胶囊是官方 `Tag tone="warning"`（`SidebarWorkspaceGitLine.tsx:208`，官方 11px/17px
   胶囊词汇，本模块只保留占位类 `.unregisteredStatus`——原先手写胶囊的中性填充与行自身 hover
-  填充同值，指针悬停时整块消失，2026-09-11 upstream-alignment）。无已注册 workspace 的仓库
+  填充同值，指针悬停时整块消失）。无已注册 workspace 的仓库
   在列表末尾渲染其未注册块；数据经 flags 存储的每来源仓库布局（`RepoGitLayout`）发布，侧栏
   以 `repoKey` 上下文第三次挂载该座位，occupant 渲染行与动作（"新建会话"= adopt 懒注册、
   "删除"= 未注册删除）。
@@ -342,7 +341,7 @@ preflight -> git-creating -> workspace-adopting -> session-creating
   完整保留），错误直接显示。
 - **创建永不提交会话**：`createSession: false` 显式传入；recovery 记录携带 `createSession` 标志，
   重试尊重原意图（无会话创建重试不建会话、不跳转）；existing tab 不得残留 new 模式的建议分支。
-- **创建后的可见性（design 05 §2.2.1 第二入口，2026-12）**：注册 workspace 的 unary 调用必须走
+- **创建后的可见性（design 05 §2.2.1 第二入口）**：注册 workspace 的 unary 调用必须走
   `shared/workspace-mutations.ts` 唯一出口上报回声事实，并带 `afterWorkspaceId = 来源主 checkout`
   的位置锚点；否则未挂载来源上的这个 **0 会话**工作区没有读通道（unary 兜底按会话 cwd 反推
   分组），行只能等用户点开该服务器。worktree flag（`isWorktree`/`mainWorkspaceId`，与 §3.2 行
@@ -406,7 +405,7 @@ fresh-preflight -> git-removing -> git-removed
 工作树删除**不停、不取消、不隐式归档、也不删除任何会话**（「先归档（含子会话）」是 §5.4 的
 **显式、默认关闭**独立勾选项）；**运行中的会话仍阻塞删除，除非它已归档（或其经 subagent-origin
 边链到的祖先已归档）**——归档即「已了结」，停止与内容清理只属归档侧（design 24 §5：本 saga 的
-pre-remove 归档**不**停止，仍由归档管理器的删除前停止兜底；chamber 侧边栏的归档动词自 2026-09 起
+pre-remove 归档**不**停止，仍由归档管理器的删除前停止兜底；chamber 侧边栏的归档动词
 **就地**终止该会话与 subagent 闭包）。
 
 - **判据（宿主侧，`assertNoRunningSessions` / `assertNoRunningAtPath` 共用；同一条判据作用于所有
@@ -442,7 +441,7 @@ pre-remove 归档**不**停止，仍由归档管理器的删除前停止兜底�
 
 ### 5.3 显式授权：dirty / 子模块 / 删分支
 
-- **dirty 工作树不硬性阻断删除**（用户拍板）：删除对话框列出该工作树有未提交更改（host 快照
+- **dirty 工作树不硬性阻断删除**：删除对话框列出该工作树有未提交更改（host 快照
   `dirty` 事实），用户勾选「丢弃未提交更改并移除」后客户端才发 `discardChanges: true`，
   host 以 `git worktree remove --force` 移除。**force 只经显式授权**：
   - `--force` 只丢弃工作树工作区文件（已修改/未跟踪文件），不触碰分支/提交/HEAD；本地分支只在用户
@@ -490,8 +489,8 @@ pre-remove 归档**不**停止，仍由归档管理器的删除前停止兜底�
   分支」（§5.3）。
 - **dirty**：删除图标不再禁用（仅 dirty），点击进对话框显示醒目警示（"该工作树有未提交的更改，将被
   永久丢弃"）；授权由**官方 `RiskConfirmation`** 收集
-  （`RemoveWorktreeDialog.tsx:411`，2026-09-11 upstream-alignment；单手势与撤销语义按 2026-09-11
-  review-fix F1 校正）：对话框内无勾选框，点「移除」时尚缺授权则先弹官方风险确认（警示图标 + 同上
+  （`RemoveWorktreeDialog.tsx:411`，单手势与撤销语义按 
+   F1 校正）：对话框内无勾选框，点「移除」时尚缺授权则先弹官方风险确认（警示图标 + 同上
   说明 + 自动聚焦勾选框「我了解这些更改将被丢弃」，主按钮勾选前不可用），
   **该门自己的 Confirm 就地执行这次删除**——一次手势即 `移除 → 勾选 → 确认`，确认后以
   `discardChanges: true` 跑同一删除路径，无需第二次「移除」。门开关由点击「移除」时选定的**授权
@@ -525,15 +524,14 @@ pre-remove 归档**不**停止，仍由归档管理器的删除前停止兜底�
   current（blank 例外）→ runtime-unknown → running → locked → unhealthy → dirty →
   status-unknown**：`current` / `runtime-unknown` 都在 `running` **之前**，故过时
   或「仅已归档」的 running 事实无法绕过二者。
-- **未注册行删除**走**应用内官方 `RiskConfirmation`**（`SidebarWorkspaceGitLine.tsx:262`，2026-09-11
-  upstream-alignment；该行原用原生 `window.confirm`，无法使用 alias token）：行内删除按钮只武装
+- **未注册行删除**走**应用内官方 `RiskConfirmation`**（`SidebarWorkspaceGitLine.tsx:262`，该行原用原生 `window.confirm`，无法使用 alias token）：行内删除按钮只武装
   确认（勾选框「我了解该移除不可撤销」，主按钮勾选前不可用，每次关闭都重置），确认后才发出移除。该
   行**仍无对话框授权流**——dirty 沿用不对称：移除不携带 `discardChanges`，确定性拒绝 + host 英文提示
   （终端删除 modules 目录或 `--force`）。未注册块的 **missing 行**（§5.5）删除按钮不再硬禁用：行
   文案明示这是「残留记录清理」（等效该记录的 `git worktree prune`，不涉及任何文件或分支），确认文案
   单独措辞；adopt（新建会话）对 missing 行保持禁用。
 
-### 5.5 级联（先归档）、missing 记录清理与收尾
+### 5.5 级联（先归档）、missing 记录清理与完成写
 
 - **删除级联语义**：删除确认时递归枚举（`collectSessionClosure`：`parentSessionId` 闭包，环安全）直接 +
   全部子会话并显式呈现；文案明示「会话保留并转未分组，不删除」。「先归档（含子会话）」归档在**任何
@@ -636,7 +634,7 @@ pre-remove 归档**不**停止，仍由归档管理器的删除前停止兜底�
 ## 7. 工程接线与验证
 
 - host 包与 client-graph 包一起进入本地 profile seed、远程 ready-time seed、desktop 打包资源和
-  loader patch；seed 继续只经已实现的受限 `run/write-file` 通道。四个 host 包的 esbuild
+  loader patch；seed 继续只经既有的受限 `run/write-file` 通道。四个 host 包的 esbuild
   `dist/index.js`（`@deepseek-ai/*` external）为构建期生成、不提交；clean checkout 由
   `pnpm run build:artifacts` 自举（seed 与打包都以此为前提；取舍见 design 05 §6
   Rejected alternatives）。
@@ -648,7 +646,7 @@ pre-remove 归档**不**停止，仍由归档管理器的删除前停止兜底�
   同时运行 sidebar/renderer-shell/desktop/control-plane 回归。
 - 打包前必须重建 host 产物（`build:artifacts` / `build:host-packages`），再拷贝到 desktop `dist/`。
 
-## 被否方案（2026-12 重复实现单源化：`isRecord`）
+## 被否方案（重复实现单源化：`isRecord`）
 
 `isRecord`（untrusted 响应 → 记录的边界判定）的规范实现在 sidebar `shared/wire-common.ts`，
 其注释本身即声明「B/C/D/E 副本与其边界语义逐字同形」。本次把 git 的 `snapshot.ts`、`git-api.ts`

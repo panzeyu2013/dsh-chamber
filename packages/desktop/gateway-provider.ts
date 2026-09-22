@@ -38,8 +38,6 @@
  * its base64 shape happens to pass the visible-ASCII/length gates.
  */
 
-import { request as httpsRequest } from 'node:https'
-import { request as httpRequest } from 'node:http'
 import { rmSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { INSTANCE_ID_PATTERN, MAX_INSTANCE_LABEL_CHARS } from './transport-provider.ts'
@@ -79,6 +77,10 @@ import {
 import { GATEWAY_PLUGIN_VERSION_PATTERN, TARBALL_MAX_ARCHIVE_BYTES } from './plugin-tarball.ts'
 import { sanitizeErrorText } from './sanitize-error.ts'
 import { describeError } from './describe-error.ts'
+// The shared bounded-request core (4.1): the two plugin-sync request forms
+// and the runtime-identity probe map its BoundedHttpOutcome onto their own
+// contracts (the former three hand-written response bodies).
+import { boundedGatewayRequest } from './gateway-http-core.ts'
 
 /** Gateway hostname whitelist: a bare hostname/IPv4 (NO colon — the port is
  * carried separately in `remotePort`, never embedded in the host) or a fully
@@ -891,7 +893,7 @@ export interface GatewayIdentityProbeOptions {
  * 2026-09. Both transports probe the SAME /chamber/runtime/status identity
  * contract; this core keeps the two classification paths byte-identical so a
  * fix on one side can never drift from the other. */
-export function verifyGatewayRuntimeIdentity(
+export async function verifyGatewayRuntimeIdentity(
   options: GatewayIdentityProbeOptions,
 ): Promise<TransportVerifyResult & { statusCode?: number }> {
   const {
@@ -899,113 +901,85 @@ export function verifyGatewayRuntimeIdentity(
     authority, spkiPin, carryStatusCodes = false,
   } = options
   const pin = spkiPin ?? null
-  return new Promise(resolve => {
-    const request = insecure ? httpRequest : httpsRequest
-    const url = `${insecure ? 'http' : 'https'}://${host}:${port}/chamber/runtime/status`
-    let settled = false
-    let timer: ReturnType<typeof setTimeout> | null = null
-    const done = (ok: boolean, detail?: string, terminal?: boolean, statusCode?: number) => {
-      if (settled) return
-      settled = true
-      if (timer !== null) { clearTimeout(timer); timer = null }
-      req.destroy()
-      // A SUCCESS is the pure {ok:true} shape (the ssh provider's contract) —
-      // `statusCode` rides the result only when a real answer produced it, so
-      // the ok form never carries a stray statusCode:undefined key that
-      // deep-compare callers would trip on.
-      const result: TransportVerifyResult & { statusCode?: number } = ok
-        ? { ok: true }
-        : { ok: false, detail, terminal }
-      if (statusCode !== undefined) result.statusCode = statusCode
-      resolve(result)
-    }
-    const headers: Record<string, string> = {}
-    if (authority !== undefined) headers.host = authority
-    // No credentials → NO Authorization header on the probe (design 17
-    // §2.3): the gateway itself is the authority on whether auth is needed.
-    if (token !== null) headers.authorization = `Bearer ${token}`
-    if (cookie !== null) headers.cookie = cookie
-    const req = request(url, {
-      method: 'GET',
-      headers,
-      // S23: with a configured pin the probe opens a FRESH https connection
-      // with the pin as its trust anchor (rejectUnauthorized: false — the
-      // internal-CA case); request dispatch stays gated until that socket's
-      // peer key matches, so even credential headers are never queued early.
-      ...(insecure || pin === null ? {} : { rejectUnauthorized: false, agent: false }),
-    }, res => {
-      res.on('error', () => {})
-      // 401 = auth required / rejected; 403 = an origin/Host policy
-      // rejection (design 17 §7.3: Host→421, Origin→403) — the credentials
-      // may be fine but the gateway refuses this deployment's peer. Split
-      // the guidance so a missing-token probe is not misreported as a token
-      // problem, a policy misconfiguration is not a token problem, and a
-      // session-cookie rejection is reported as the password being refused.
-      if (res.statusCode === 401) {
-        res.resume()
-        if (cookie !== null) {
-          done(false, 'the gateway rejected the password authentication (401) — re-enter the password', true, 401)
-        } else if (token === null) {
-          done(false, 'the gateway requires authentication (401) — configure the shared token or password', true, 401)
-        } else {
-          done(false, 'the gateway rejected the token (401) — check the shared token', true, 401)
-        }
-        return
-      }
-      if (res.statusCode === 403) {
-        res.resume()
-        done(false, 'the gateway refused the request origin/Host policy (403) — check the gateway deployment origin settings', true, carryStatusCodes ? 403 : undefined)
-        return
-      }
-      if (res.statusCode !== 200) {
-        const statusCode = res.statusCode ?? 0
-        res.resume()
-        // Authentication and deterministic client/protocol mistakes require
-        // user action. A gateway/local-dsh startup window, overload, reverse-
-        // proxy failure, or maintenance response is time-dependent: every 5xx
-        // remains transient so the manager's bounded/slow retry machinery can
-        // recover without a manual reconnect.
-        const terminal = gatewayHttpFailureIsTerminal(statusCode)
-        done(false, `the gateway answered HTTP ${res.statusCode ?? '?'} to the runtime identity probe`, terminal, carryStatusCodes ? statusCode : undefined)
-        return
-      }
-      const chunks: Buffer[] = []
-      let size = 0
-      res.on('data', chunk => {
-        if (settled) return
-        size += chunk.length
-        if (size > maxBodyBytes) {
-          done(false, 'the gateway answered an oversized runtime identity response', true)
-          return
-        }
-        chunks.push(chunk)
-      })
-      res.on('end', () => {
-        let status: unknown = null
-        try { status = JSON.parse(Buffer.concat(chunks).toString('utf8')) } catch { status = null }
-        if (!isGatewayRuntimeStatus(status)) {
-          done(false, 'the gateway answered an unexpected runtime identity response — it does not appear to be a compatible dsh-chamber gateway', true)
-          return
-        }
-        done(true)
-      })
-    })
-    const dispatch = (): void => { req.end() }
-    // S23: the secureConnect pre-write pin gate (see the mechanism note in
-    // the options doc). A pinned request is deliberately NOT ended until the
-    // peer key matches.
-    if (!insecure && pin !== null) attachSpkiPinVerifier(req, pin, dispatch)
-    timer = setTimeout(() => done(false, `the gateway did not answer the runtime identity probe within ${timeoutMs}ms`), timeoutMs)
-    timer.unref?.()
-    req.on('error', (error: NodeJS.ErrnoException) => {
-      if (error.code === SPKI_PIN_MISMATCH_CODE) {
-        done(false, '证书固定不匹配（SPKI）——gateway 证书已更换或 pin 错误', true)
-        return
-      }
-      done(false, 'the gateway did not answer the runtime identity probe')
-    })
-    if (insecure || pin === null) dispatch()
+  const headers: Record<string, string> = {}
+  if (authority !== undefined) headers.host = authority
+  // No credentials → NO Authorization header on the probe (design 17
+  // §2.3): the gateway itself is the authority on whether auth is needed.
+  if (token !== null) headers.authorization = `Bearer ${token}`
+  if (cookie !== null) headers.cookie = cookie
+  const url = `${insecure ? 'http' : 'https'}://${host}:${port}/chamber/runtime/status`
+  // The bounded request mechanics (the S23 pre-write SPKI dispatch gate and
+  // the former probe connection teardown included) live in gateway-http-core.ts;
+  // this core keeps the identity CLASSIFICATION that the ssh tunnel branch
+  // and the direct-endpoint probe must share byte for byte.
+  const outcome = await boundedGatewayRequest(url, {
+    method: 'GET',
+    headers,
+    insecure,
+    spkiPin: pin,
+    timeoutMs,
+    maxBodyBytes,
+    // 401/403/non-200 classification keys on the status alone: settle from
+    // the status line and drain the body instead of buffering (or bounding)
+    // a body this probe never reads.
+    readBodyForStatus: status => status === 200,
+    // The former probe core destroyed its request once settled (a probe
+    // never reused a keep-alive socket).
+    destroyOnSettle: true,
   })
+  if (outcome.kind === 'oversize') {
+    return { ok: false, detail: 'the gateway answered an oversized runtime identity response', terminal: true }
+  }
+  if (outcome.kind === 'network') {
+    if (outcome.spkiMismatch) {
+      return { ok: false, detail: '证书固定不匹配（SPKI）——gateway 证书已更换或 pin 错误', terminal: true }
+    }
+    if (outcome.timedOut) {
+      return { ok: false, detail: `the gateway did not answer the runtime identity probe within ${timeoutMs}ms` }
+    }
+    return { ok: false, detail: 'the gateway did not answer the runtime identity probe' }
+  }
+  const statusCode = outcome.status
+  // 401 = auth required / rejected; 403 = an origin/Host policy
+  // rejection (design 17 §7.3: Host→421, Origin→403) — the credentials
+  // may be fine but the gateway refuses this deployment's peer. Split
+  // the guidance so a missing-token probe is not misreported as a token
+  // problem, a policy misconfiguration is not a token problem, and a
+  // session-cookie rejection is reported as the password being refused.
+  if (statusCode === 401) {
+    const detail = cookie !== null
+      ? 'the gateway rejected the password authentication (401) — re-enter the password'
+      : token === null
+        ? 'the gateway requires authentication (401) — configure the shared token or password'
+        : 'the gateway rejected the token (401) — check the shared token'
+    return { ok: false, detail, terminal: true, statusCode: 401 }
+  }
+  if (statusCode === 403) {
+    const detail = 'the gateway refused the request origin/Host policy (403) — check the gateway deployment origin settings'
+    return carryStatusCodes
+      ? { ok: false, detail, terminal: true, statusCode: 403 }
+      : { ok: false, detail, terminal: true }
+  }
+  if (statusCode !== 200) {
+    // Authentication and deterministic client/protocol mistakes require
+    // user action. A gateway/local-dsh startup window, overload, reverse-
+    // proxy failure, or maintenance response is time-dependent: every 5xx
+    // remains transient so the manager's bounded/slow retry machinery can
+    // recover without a manual reconnect.
+    const terminal = gatewayHttpFailureIsTerminal(statusCode)
+    const detail = `the gateway answered HTTP ${statusCode} to the runtime identity probe`
+    return carryStatusCodes
+      ? { ok: false, detail, terminal, statusCode }
+      : { ok: false, detail, terminal }
+  }
+  if (!isGatewayRuntimeStatus(outcome.payload)) {
+    return { ok: false, detail: 'the gateway answered an unexpected runtime identity response — it does not appear to be a compatible dsh-chamber gateway', terminal: true }
+  }
+  // A SUCCESS is the pure {ok:true} shape (the ssh provider's contract) —
+  // `statusCode` rides the result only when a real answer produced it, so
+  // the ok form never carries a stray statusCode:undefined key that
+  // deep-compare callers would trip on.
+  return { ok: true }
 }
 
 /** Direct-endpoint wrapper (design 17 §2): https by default, http when
@@ -1283,7 +1257,6 @@ export const gatewayProvider: TransportProvider = {
    * the verify URL needs the bracketed literal. */
   verifyUp(spec: TransportInstanceSpec, endpoint: TransportProbeEndpoint): Promise<TransportVerifyResult> {
     void endpoint
-    const token = getGatewayToken(spec.id)
     const password = getGatewayPassword(spec.id)
     // A configured password + wired session hooks: ensure a login session and
     // probe with its Cookie plus the independent Bearer when present (the
@@ -1292,13 +1265,31 @@ export const gatewayProvider: TransportProvider = {
     // design 17 §9.2/§9.3). Without hooks the probe stays credential-free
     // (the old no-auth behavior — the flow is inert until main.ts wires the
     // gateway-session manager in).
+    //
+    // 4.3：bearer token 绝不装配期定格——每次网络交换前实时读
+    // getGatewayToken（凭据在 verify 周期内轮换即可生效）。共享会话流保证每个
+    // 周期至多一次 bearer fallback，现有 generation 栅栏在每次 await 后复验；
+    // fallback 触发时若 token 已被清除，返回非 ok 结果（绝不发无凭据探测并把它
+    // 当 bearer 成功——密码流自己的失败分类保持权威，且绝不循环重试）。
     if (password !== null && sessionHooks.ensureSession !== undefined) {
-      return verifyGatewayPasswordSession(gatewaySessionOriginFor(spec), password, cookie =>
-        verifyGatewayEndpoint(spec.host, spec.remotePort, token, spec.insecureHttp, GATEWAY_VERIFY_TIMEOUT_MS, GATEWAY_VERIFY_MAX_BODY_BYTES, cookie, spec.spkiPin ?? null),
-      token === null ? undefined : () =>
-        verifyGatewayEndpoint(spec.host, spec.remotePort, token, spec.insecureHttp, GATEWAY_VERIFY_TIMEOUT_MS, GATEWAY_VERIFY_MAX_BODY_BYTES, null, spec.spkiPin ?? null))
+      return verifyGatewayPasswordSession(
+        gatewaySessionOriginFor(spec),
+        password,
+        cookie => {
+          const token = getGatewayToken(spec.id)
+          return verifyGatewayEndpoint(spec.host, spec.remotePort, token, spec.insecureHttp, GATEWAY_VERIFY_TIMEOUT_MS, GATEWAY_VERIFY_MAX_BODY_BYTES, cookie, spec.spkiPin ?? null)
+        },
+        () => {
+          const token = getGatewayToken(spec.id)
+          if (token === null) {
+            return Promise.resolve({ ok: false, detail: 'no gateway bearer token configured', terminal: false })
+          }
+          return verifyGatewayEndpoint(spec.host, spec.remotePort, token, spec.insecureHttp, GATEWAY_VERIFY_TIMEOUT_MS, GATEWAY_VERIFY_MAX_BODY_BYTES, null, spec.spkiPin ?? null)
+        },
+      )
     }
-    return verifyGatewayEndpoint(spec.host, spec.remotePort, token, spec.insecureHttp, GATEWAY_VERIFY_TIMEOUT_MS, GATEWAY_VERIFY_MAX_BODY_BYTES, null, spec.spkiPin ?? null)
+    // 无会话钩子（无密码 / 未接线）：同样在使用点实时读 token。
+    return verifyGatewayEndpoint(spec.host, spec.remotePort, getGatewayToken(spec.id), spec.insecureHttp, GATEWAY_VERIFY_TIMEOUT_MS, GATEWAY_VERIFY_MAX_BODY_BYTES, null, spec.spkiPin ?? null)
   },
 
   /** No child process → no stderr stream. Never called for direct endpoints,
@@ -1382,8 +1373,15 @@ export interface GatewayPluginSyncResult {
   error?: string
 }
 
-/** Bounded JSON request to a gateway endpoint with the S23 pin discipline. */
-function gatewayJsonRequest(
+/** Response bound for the plugin-sync exchanges (the former per-core 8 MiB
+ *  literal, now one value shared by both adapters). */
+const GATEWAY_PLUGIN_RESPONSE_MAX_BODY_BYTES = 8 * 1024 * 1024
+
+/** Bounded JSON request to a gateway endpoint with the S23 pin discipline.
+ *  A thin adapter over gateway-http-core.ts: `response` maps 1:1, while
+ *  `oversize` and transport failures keep the former reject semantics (the
+ *  call sites rely on the thrown message). */
+async function gatewayJsonRequest(
   url: string,
   options: {
     method: 'GET' | 'PUT' | 'POST'
@@ -1394,52 +1392,24 @@ function gatewayJsonRequest(
     timeoutMs: number
   },
 ): Promise<{ status: number; payload: unknown }> {
-  return new Promise((resolve, reject) => {
-    const request = options.insecure ? httpRequest : httpsRequest
-    const req = request(url, {
-      method: options.method,
-      headers: {
-        accept: 'application/json',
-        ...(options.body === undefined ? {} : { 'content-type': 'application/json' }),
-        ...options.headers,
-      },
-      ...(options.insecure || options.spkiPin === null ? {} : { rejectUnauthorized: false, agent: false }),
-    }, res => {
-      const chunks: Buffer[] = []
-      let size = 0
-      res.on('data', chunk => {
-        size += chunk.length
-        if (size > 8 * 1024 * 1024) {
-          res.destroy()
-          reject(new Error('gateway plugin sync response exceeds the size bound'))
-          return
-        }
-        chunks.push(chunk)
-      })
-      res.on('end', () => {
-        let payload: unknown
-        try {
-          payload = chunks.length === 0 ? null : JSON.parse(Buffer.concat(chunks).toString('utf8'))
-        } catch {
-          payload = null
-        }
-        resolve({ status: res.statusCode ?? 0, payload })
-      })
-      res.on('error', error => reject(error))
-    })
-    req.on('error', error => reject(error))
-    const timer = setTimeout(() => {
-      req.destroy(new Error('gateway plugin sync timed out'))
-    }, options.timeoutMs)
-    timer.unref?.()
-    req.on('close', () => clearTimeout(timer))
-    const dispatch = (): void => {
-      if (options.body === undefined) req.end()
-      else req.end(JSON.stringify(options.body))
-    }
-    if (options.spkiPin === null || options.insecure) dispatch()
-    else attachSpkiPinVerifier(req, options.spkiPin, dispatch)
+  const outcome = await boundedGatewayRequest(url, {
+    method: options.method,
+    headers: {
+      accept: 'application/json',
+      ...(options.body === undefined ? {} : { 'content-type': 'application/json' }),
+      ...options.headers,
+    },
+    body: options.body,
+    insecure: options.insecure,
+    spkiPin: options.spkiPin,
+    timeoutMs: options.timeoutMs,
+    maxBodyBytes: GATEWAY_PLUGIN_RESPONSE_MAX_BODY_BYTES,
+    timeoutMessage: 'gateway plugin sync timed out',
   })
+  if (outcome.kind === 'response') return { status: outcome.status, payload: outcome.payload }
+  throw outcome.kind === 'oversize'
+    ? new Error('gateway plugin sync response exceeds the size bound')
+    : outcome.error
 }
 
 /** Sync the local chamber host packages into the gateway seed cache. */
@@ -1956,8 +1926,9 @@ export type GatewayChamberMaterializeResult =
   | { ok: false; error: string; outcome?: GatewayMaterializeOutcome }
 
 /** Raw-body PUT with the S23 pin discipline: the tarball bytes never leave
- *  the machine before the peer key matches a configured pin. */
-function gatewayRawBodyPut(
+ *  the machine before the peer key matches a configured pin. Thin adapter
+ *  over gateway-http-core.ts (same reject mapping as gatewayJsonRequest). */
+async function gatewayRawBodyPut(
   url: string,
   options: {
     headers: Record<string, string>
@@ -1967,48 +1938,23 @@ function gatewayRawBodyPut(
     timeoutMs: number
   },
 ): Promise<{ status: number; payload: unknown }> {
-  return new Promise((resolve, reject) => {
-    const request = options.insecure ? httpRequest : httpsRequest
-    const req = request(url, {
-      method: 'PUT',
-      headers: {
-        accept: 'application/json',
-        ...options.headers,
-      },
-      ...(options.insecure || options.spkiPin === null ? {} : { rejectUnauthorized: false, agent: false }),
-    }, res => {
-      const chunks: Buffer[] = []
-      let size = 0
-      res.on('data', chunk => {
-        size += chunk.length
-        if (size > 8 * 1024 * 1024) {
-          res.destroy()
-          reject(new Error('gateway plugin materialize response exceeds the size bound'))
-          return
-        }
-        chunks.push(chunk)
-      })
-      res.on('end', () => {
-        let payload: unknown
-        try {
-          payload = chunks.length === 0 ? null : JSON.parse(Buffer.concat(chunks).toString('utf8'))
-        } catch {
-          payload = null
-        }
-        resolve({ status: res.statusCode ?? 0, payload })
-      })
-      res.on('error', error => reject(error))
-    })
-    req.on('error', error => reject(error))
-    const timer = setTimeout(() => {
-      req.destroy(new Error('gateway plugin materialize timed out'))
-    }, options.timeoutMs)
-    timer.unref?.()
-    req.on('close', () => clearTimeout(timer))
-    const dispatch = (): void => { req.end(options.body) }
-    if (options.spkiPin === null || options.insecure) dispatch()
-    else attachSpkiPinVerifier(req, options.spkiPin, dispatch)
+  const outcome = await boundedGatewayRequest(url, {
+    method: 'PUT',
+    headers: {
+      accept: 'application/json',
+      ...options.headers,
+    },
+    body: options.body,
+    insecure: options.insecure,
+    spkiPin: options.spkiPin,
+    timeoutMs: options.timeoutMs,
+    maxBodyBytes: GATEWAY_PLUGIN_RESPONSE_MAX_BODY_BYTES,
+    timeoutMessage: 'gateway plugin materialize timed out',
   })
+  if (outcome.kind === 'response') return { status: outcome.status, payload: outcome.payload }
+  throw outcome.kind === 'oversize'
+    ? new Error('gateway plugin materialize response exceeds the size bound')
+    : outcome.error
 }
 
 /** Upload a desktop-built plugin tarball to PUT /chamber/plugins/materialize

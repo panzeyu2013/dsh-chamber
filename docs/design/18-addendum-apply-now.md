@@ -1,6 +1,6 @@
 # 18 增补 · dsh 运行时版本「立即应用」（Apply Now）
 
-> **状态：现行（apply-now 立即应用；desktop 本地实例与 gateway 托管 dsh，2026-12）**——本文是 `docs/design/18-dsh-runtime-version.md` §3.3（应用时机 = 下次启动的异步相位）的受控扩展契约：在保留「仅下次启动」路径的同时，新增用户可随时触发的「立即应用」动作，在当前会话内执行既有激活事务（停机 → 快照 → 切指针 → spawn 新树 → 探针门控 → 裁决/回退），不等待下次启动；未完成门禁见 `docs/progress/STATUS.md`。
+> **apply-now 立即应用；desktop 本地实例与 gateway 托管 dsh**——本文是 `docs/design/18-dsh-runtime-version.md` §3.3（应用时机 = 下次启动的异步相位）的受控扩展契约：在保留「仅下次启动」路径的同时，新增用户可随时触发的「立即应用」动作，在当前会话内执行既有激活事务（停机 → 快照 → 切指针 → spawn 新树 → 探针门控 → 裁决/回退），不等待下次启动；未完成门禁见 `docs/progress/STATUS.md`。
 
 ## 0. 决策与约束（现行契约）
 
@@ -56,7 +56,7 @@ design 18 现行契约：apply 只置 pending，激活事务在下次启动相�
 | 不改 journal/override schema | 「立即 vs 下次启动」是宿主决策；`writeActivationIntent`/`queueActivationIntent` 已支持运行中排程（`dsh-runtime-store.ts`） |
 | 不改 activation-gate / snapshot-store / override-lifecycle / runtime-probes / runtime-operation-fence / known-good-monitor / runtime-metadata-recovery / registry-* | 全部已是宿主无关纯函数 |
 
-### 3.1 门控组合为何不共享（2026-12 单源化复核结论，M16）
+### 3.1 门控组合为何不共享
 
 §2.2 的「两个宿主同一契约」指**执行序列**（停机前置 → 快照 → 切指针 → spawn → 探针门控），该序列已由
 本节共享核心（apply-phase / runtime-startup / activation-gate）承载。**各宿主的门控组合不共享**：它们是各自
@@ -163,7 +163,7 @@ gateway 路由 + manager 套件），共享化会同时改写两个边界，而�
 - 点击后立即置 busy 并禁用整组，防同帧双击。
 
 ### 6.3 文案（zh / en）
-- 二次确认对话框（desktop IPC 入口仍由 main 原生 `confirmRuntimeMutation` 交付，不动；settings-bridge 面板自身一切确认——含 gateway 源重启——统一走应用内官方 `Modal`（2026-09-11 upstream-alignment T2，原为 `window.confirm`）；**浏览器页按动作分档**（2026-09-11 review-fix）：apply-now 等运行时动作由控件直接触发、**无二次确认**，但该页自有的应用内确认对话框只服务**凭据移除**两处门——标记/控制器/inert 与 Tab 陷阱见 design 17 §10.3）：
+- 二次确认对话框（desktop IPC 入口仍由 main 原生 `confirmRuntimeMutation` 交付，不动；settings-bridge 面板自身一切确认——含 gateway 源重启——统一走应用内官方 `Modal`（原为 `window.confirm`）；**浏览器页按动作分档**：apply-now 等运行时动作由控件直接触发、**无二次确认**，但该页自有的应用内确认对话框只服务**凭据移除**两处门——标记/控制器/inert 与 Tab 陷阱见 design 17 §10.3）：
   - zh 标题：立即切换到 v{version}？正文：dsh 将立即重启并切换到 v{version}（约 30–90 秒）。进行中的会话会中断，你的数据不受影响；若切换失败，dsh 会自动回滚并保留现场。确认/取消：立即应用并重启 / 取消。
   - en：Switch to v{version} now? / dsh will restart immediately and switch to v{version} (about 30–90 seconds). In-progress sessions will be interrupted; your data is unaffected. If the switch fails, dsh rolls back automatically and retains the recovery state. / Apply and restart / Cancel.
 - 按钮/hint：pending 主按钮「立即应用 v{version} / Apply now v{version}」；pending hint 注明「切换将在下次启动生效；如需立即生效，点击『立即应用』（dsh 会短暂重启，约 30–90 秒）」；applying 窗口状态行「应用 dsh v{version}… 正在重启 / Applying dsh v{version}… restarting」。

@@ -74,6 +74,26 @@ public enum ShellPageFactsScript {
     /// 页面 → 壳的事实上报通道名（独立于 A 桥 dshChamber）。
     public static let messageName = "dshChamberFacts"
 
+    /// dark 判定的唯一实现（S1 收口，2026-12）：body[data-ds-dark-theme] 存在，
+    /// 或 html 内联 color-scheme 以 dark 开头（如 'dark' / 'dark light'）。
+    /// source() 与 snapshotSource() 都插值本串，两份脚本不得各自维护判定
+    /// （ShellPageFactsTests.testSharedDarkPredicateIsSingleSource 钉住两份产物
+    /// 都含本实现，且各自的 body 深色判定各只出现一次）。
+    private static let readDarkJS = """
+    function readDark() {
+      try {
+        if (document.body && document.body.hasAttribute('data-ds-dark-theme')) {
+          return true;
+        }
+        var root = document.documentElement;
+        var inline = root && root.style ? root.style.colorScheme : '';
+        if (typeof inline !== 'string') { return false; }
+        var lead = inline.replace(/^\\s+/, '').slice(0, 4).toLowerCase();
+        return lead === 'dark';
+      } catch (e) { return false; }
+    }
+    """
+
     /// 注入源码：安装一次 MutationObserver，首次与每次变化上报。
     ///
     /// 观察面：documentElement 子树内
@@ -108,18 +128,8 @@ public enum ShellPageFactsScript {
 
             // dark 判定 = body[data-ds-dark-theme] 存在，或 html 内联
             // color-scheme 以 dark 开头（如 'dark' / 'dark light'）。
-            function readDark() {
-              try {
-                if (document.body && document.body.hasAttribute('data-ds-dark-theme')) {
-                  return true;
-                }
-                var root = document.documentElement;
-                var inline = root && root.style ? root.style.colorScheme : '';
-                if (typeof inline !== 'string') { return false; }
-                var lead = inline.replace(/^\\s+/, '').slice(0, 4).toLowerCase();
-                return lead === 'dark';
-              } catch (e) { return false; }
-            }
+            // 实现单源：readDarkJS（与 snapshotSource 共用）。
+            \(readDarkJS)
 
             function report() {
               try {
@@ -163,7 +173,8 @@ public enum ShellPageFactsScript {
         """
     }
 
-    /// didFinish 对账表达式（S1 追加；与 source() 完全相同的 dark 判定）。
+    /// didFinish 对账表达式（S1 追加；dark 判定与 source() 共用 readDarkJS，
+    /// 2026-12 收口——两份脚本只此一个判定实现）。
     /// evaluateJavaScript 直接返回值，页面侧不产生副作用，revision 由 Store
     /// 补（对账路径无需版本号）。
     public static func snapshotSource() -> String {
@@ -171,14 +182,10 @@ public enum ShellPageFactsScript {
         (function () {
           try {
             var root = document.documentElement;
-            var inline = root && root.style ? root.style.colorScheme : '';
-            var dark = !!(document.body && document.body.hasAttribute('data-ds-dark-theme'));
-            if (!dark && typeof inline === 'string') {
-              dark = inline.replace(/^\\s+/, '').slice(0, 4).toLowerCase() === 'dark';
-            }
+            \(readDarkJS)
             return {
               lang: (root && root.lang) || '',
-              dark: dark,
+              dark: readDark(),
             };
           } catch (e) { return null; }
         })();
