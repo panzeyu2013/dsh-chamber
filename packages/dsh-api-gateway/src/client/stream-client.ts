@@ -21,10 +21,8 @@ import {
 import { Deque } from '@deepseek-ai/dsh-deque'
 import { randomUUID } from '@deepseek-ai/dsh-util-crypto'
 import {
-  REMOTE_STREAM_HANDSHAKE_TIMEOUT_MS,
   REMOTE_STREAM_MAINTAIN_MAX_INTERVAL_MS,
   REMOTE_STREAM_MAINTAIN_MIN_INTERVAL_MS,
-  remoteStreamOpeningTimeoutMs,
   streamOpeningKey,
 } from './remote-retry-policy.ts'
 // The opening-stall rule (streak threshold + 60 s cooldown) lives in the shared
@@ -33,8 +31,10 @@ import {
 import type { StreamForensicsReporter } from './stream-forensics.ts'
 import {
   CARRIER_ENV,
+  HANDSHAKE_TIMEOUT_MS,
   SILENT_TEARDOWN_MIN_MS,
   initialCarrierState,
+  openingBudgetMs,
   reduceCarrier,
   withDeadline,
   type CarrierEnv,
@@ -338,7 +338,7 @@ export class RemoteStreamMuxClient {
       // from a live-but-silent stream. Fail the INBOX (never the generation signal:
       // aborting it would settle the retry lane terminally) so the existing paced
       // reopen re-issues the stream, and the page fact/chip report the churn.
-      const openingBudgetMs = remoteStreamOpeningTimeoutMs(this.openingTimeouts.get(openingKey) ?? 0)
+      const budgetMs = openingBudgetMs(this.openingTimeouts.get(openingKey) ?? 0)
       // chamber patch (design 14 §D4, ): liveness baseline for the escalation
       // below. `socketFrames` counts frames received on the CURRENT socket, so this
       // subtraction answers exactly "did this socket deliver anything while this
@@ -360,9 +360,9 @@ export class RemoteStreamMuxClient {
           const oldest = this.openingTimeouts.keys().next().value
           if (oldest !== undefined) this.openingTimeouts.delete(oldest)
         }
-        this.forensics?.('opening-timeout', `${endpoint} waited ${String(openingBudgetMs)}ms`)
+        this.forensics?.('opening-timeout', `${endpoint} waited ${String(budgetMs)}ms`)
         inbox.fail(new RemoteStreamCarrierError(
-          `api gateway: Remote stream ${JSON.stringify(endpoint)} delivered no opening item within ${String(openingBudgetMs)}ms`,
+          `api gateway: Remote stream ${JSON.stringify(endpoint)} delivered no opening item within ${String(budgetMs)}ms`,
         ))
         // TWO evidence paths, ONE teardown (design 14 §D4, 2026-09 + 2026-09-21):
         // 1. ZERO frames on this socket across the whole budget window — the carrier
@@ -412,7 +412,7 @@ export class RemoteStreamMuxClient {
         if (awaitingOpeningItem) {
           const firstFrame = inbox.next()
           const raced = await withDeadline<RemoteStreamServerMessage | 'expired'>(firstFrame, {
-            ms: openingBudgetMs,
+            ms: budgetMs,
             onExpire: onOpeningExpire,
             scheduler: DEADLINE_SCHEDULER,
           })
@@ -593,7 +593,7 @@ export class RemoteStreamMuxClient {
     // branch below then surfaces that rejection by awaiting it, so the caller sees
     // exactly what it saw before.
     const raced = await withDeadline<WebSocket | 'expired'>(connecting, {
-      ms: REMOTE_STREAM_HANDSHAKE_TIMEOUT_MS,
+      ms: HANDSHAKE_TIMEOUT_MS,
       onExpire: () => {
         expireHandshake?.()
         return 'expired' as const

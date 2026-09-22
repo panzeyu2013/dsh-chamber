@@ -198,28 +198,10 @@ export const LOCKSTEP = [
     object: 'SESSION_STREAM_HEALTH_DEFAULTS',
     name: 'carrierChurnMs',
   },
-  // G-G: the api-gateway carrier decisions, locked to the same table until P3 moves
-  // the decisions into the carrier reducer.
-  {
-    table: 'tables.openingTimeoutLadderMs.0',
-    source: 'packages/dsh-api-gateway/src/client/remote-retry-policy.ts',
-    name: 'REMOTE_STREAM_OPENING_TIMEOUT_MS',
-  },
-  {
-    table: 'tables.openingTimeoutLadderMs.4',
-    source: 'packages/dsh-api-gateway/src/client/remote-retry-policy.ts',
-    name: 'REMOTE_STREAM_OPENING_TIMEOUT_MAX_MS',
-  },
-  {
-    table: 'tables.silentTeardownMinMs',
-    source: 'packages/dsh-api-gateway/src/client/remote-retry-policy.ts',
-    name: 'REMOTE_STREAM_SILENT_TEARDOWN_MIN_MS',
-  },
-  {
-    table: 'tables.handshakeTimeoutMs',
-    source: 'packages/dsh-api-gateway/src/client/remote-retry-policy.ts',
-    name: 'REMOTE_STREAM_HANDSHAKE_TIMEOUT_MS',
-  },
+  // P3 (2026-12): the api-gateway carrier constants and the opening budget were
+  // retired into the package (stream-client consumes openingBudgetMs /
+  // HANDSHAKE_TIMEOUT_MS / SILENT_TEARDOWN_MIN_MS directly), so their lockstep
+  // entries are gone with them.
 ]
 
 /** Read a dotted table path, array indices included. */
@@ -303,14 +285,14 @@ export function compareLockstep(entries, resolve) {
 /** Negative control: the comparison must flag a deliberately wrong expectation. */
 function selfTest() {
   const resolve = {
-    table: (path) => (path === 'tables.silentTeardownMinMs' ? 1 : readTable(path)),
+    table: (path) => (path === 'tables.handshakeTimeoutMs' ? 1 : readTable(path)),
     constant: (source, name) => readConstant(source, name),
     objectField: (source, object, name) => readObjectField(source, object, name),
   }
   const wrong = [{
-    table: 'tables.silentTeardownMinMs',
-    source: 'packages/dsh-api-gateway/src/client/remote-retry-policy.ts',
-    name: 'REMOTE_STREAM_SILENT_TEARDOWN_MIN_MS',
+    table: 'tables.handshakeTimeoutMs',
+    source: 'packages/dsh-stream-state/src/tables.ts',
+    name: 'HANDSHAKE_TIMEOUT_MS',
   }]
   const verdict = compareLockstep(wrong, resolve)
   const detected = verdict.failures === 1 && verdict.lines.length === 1

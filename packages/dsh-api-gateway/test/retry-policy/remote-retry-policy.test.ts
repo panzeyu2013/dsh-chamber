@@ -9,51 +9,30 @@ import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import {
   delayRemoteStreamRetry,
-  REMOTE_STREAM_OPENING_TIMEOUT_MAX_MS,
-  REMOTE_STREAM_OPENING_TIMEOUT_MS,
   REMOTE_STREAM_NO_GENERATION_WAIT_MAX_MS,
   REMOTE_STREAM_RETRY_BASE_MS,
   REMOTE_STREAM_RETRY_FIRST_MS,
   REMOTE_STREAM_RETRY_MAX_MS,
-  REMOTE_STREAM_SILENT_TEARDOWN_MIN_MS,
-  remoteStreamOpeningTimeoutMs,
   remoteStreamRetryDelayMs,
   REMOTE_STREAM_MAINTAIN_MIN_INTERVAL_MS,
   streamOpeningKey,
 } from '../../src/client/remote-retry-policy.ts'
 import { DEFAULT_STREAM_STALL_TIMING } from '../../src/client/stream-stall-policy.ts'
-import { OPENING_TIMEOUT_LADDER_MS, SILENT_TEARDOWN_MIN_MS } from '@dsh-chamber/dsh-stream-state'
+import { OPENING_TIMEOUT_LADDER_MS, SILENT_TEARDOWN_MIN_MS, openingBudgetMs } from '@dsh-chamber/dsh-stream-state'
 import { setTimeout as delay } from 'node:timers/promises'
 
 /**
- *  single-source tie (): this module must stay IMPORT-FREE at runtime (its
- * own test below asserts that), so it cannot read the shared table itself - which left
- * the opening ladder defined in TWO places with nothing comparing them: the table
- * projection (tables.json -> the Swift mirror + the ladder-parity gate) and this file's
- * baked-in numbers, which are what actually drive the carrier. Changing the table alone
- * would silently diverge from the running policy. This tie makes that divergence loud.
+ * P3 short-circuit tie: the opening ladder used to be re-derived in this module
+ * (with a G-G lockstep entry comparing it to the table). The fork copy is retired;
+ * the budget and the teardown floor now come straight from the package table, and
+ * this source-text tie keeps a second derivation from creeping back in.
  */
-test('the opening ladder is the shared table, not a second copy (B4 tie)', () => {
-  assert.deepEqual(
-    OPENING_TIMEOUT_LADDER_MS.map((_, streak) => remoteStreamOpeningTimeoutMs(streak)),
-    [...OPENING_TIMEOUT_LADDER_MS],
-    'every rung of the ladder must equal the table rung',
-  )
-  assert.equal(
-    remoteStreamOpeningTimeoutMs(99),
-    REMOTE_STREAM_OPENING_TIMEOUT_MAX_MS,
-    'the cap is the last rung (and the exported ceiling)',
-  )
-  assert.equal(
-    REMOTE_STREAM_OPENING_TIMEOUT_MS,
-    OPENING_TIMEOUT_LADDER_MS[0],
-    'the base budget is the first rung',
-  )
-  assert.equal(
-    REMOTE_STREAM_SILENT_TEARDOWN_MIN_MS,
-    SILENT_TEARDOWN_MIN_MS,
-    'the teardown floor is the table value',
-  )
+test('the opening ladder is the shared table, and this module no longer re-derives it (B4/P3 tie)', () => {
+  const source = (relative: string): string =>
+    readFileSync(new URL('../../' + relative, import.meta.url), 'utf8')
+  assert.match(source('src/client/stream-client.ts'), /const budgetMs = openingBudgetMs\(this\.openingTimeouts\.get\(openingKey\) \?\? 0\)/u)
+  assert.doesNotMatch(source('src/client/remote-retry-policy.ts'), /REMOTE_STREAM_OPENING_TIMEOUT|remoteStreamOpeningTimeoutMs/u)
+  assert.match(source('src/client/stream-client.ts'), /Date\.now\(\) - sentAt >= SILENT_TEARDOWN_MIN_MS/u)
 })
 
 test('the first carrier failure of an episode reopens immediately', () => {
@@ -127,21 +106,22 @@ test('degenerate attempt counts fail safe to the immediate branch', () => {
 })
 
 test('the opening-item budget starts tight and widens only while timeouts stay consecutive', () => {
-  assert.equal(REMOTE_STREAM_OPENING_TIMEOUT_MS, 30_000)
-  assert.equal(remoteStreamOpeningTimeoutMs(0), REMOTE_STREAM_OPENING_TIMEOUT_MS)
-  assert.equal(remoteStreamOpeningTimeoutMs(1), 60_000)
-  assert.equal(remoteStreamOpeningTimeoutMs(2), 120_000)
-  assert.equal(remoteStreamOpeningTimeoutMs(3), 240_000)
-  assert.equal(remoteStreamOpeningTimeoutMs(4), REMOTE_STREAM_OPENING_TIMEOUT_MAX_MS)
-  assert.equal(remoteStreamOpeningTimeoutMs(9), REMOTE_STREAM_OPENING_TIMEOUT_MAX_MS)
+  // P3: the budget function is the package table's now; this keeps the widening
+  // contract visible from the host side (the fork re-derivation is retired).
+  const ladder = [...OPENING_TIMEOUT_LADDER_MS]
+  assert.equal(ladder[0], 30_000)
+  assert.deepEqual(ladder.map((_, streak) => openingBudgetMs(streak)), ladder)
+  assert.equal(openingBudgetMs(ladder.length + 5), ladder[ladder.length - 1])
 })
 
 test('the opening budget is monotone and never leaves its bounds', () => {
+  const base = OPENING_TIMEOUT_LADDER_MS[0] as number
+  const cap = OPENING_TIMEOUT_LADDER_MS[OPENING_TIMEOUT_LADDER_MS.length - 1] as number
   let previous = 0
   for (let streak = 0; streak <= 40; streak++) {
-    const budget = remoteStreamOpeningTimeoutMs(streak)
-    assert.ok(budget >= REMOTE_STREAM_OPENING_TIMEOUT_MS, 'streak ' + String(streak) + ' stays above the base')
-    assert.ok(budget <= REMOTE_STREAM_OPENING_TIMEOUT_MAX_MS, 'streak ' + String(streak) + ' stays capped')
+    const budget = openingBudgetMs(streak)
+    assert.ok(budget >= base, 'streak ' + String(streak) + ' stays above the base')
+    assert.ok(budget <= cap, 'streak ' + String(streak) + ' stays capped')
     assert.ok(budget >= previous, 'streak ' + String(streak) + ' must not shrink the budget')
     assert.ok(Number.isInteger(budget), 'streak ' + String(streak) + ' must be whole milliseconds')
     previous = budget
@@ -152,10 +132,12 @@ test('the opening budget clears the measured healthy Host answer by orders of ma
   // Measured
   // session snapshot 57 ms, subagent snapshot 73 ms. The base must be far above
   // those while remaining a bound a user would still call "stuck for a moment".
-  assert.ok(REMOTE_STREAM_OPENING_TIMEOUT_MS >= 10_000)
-  assert.ok(REMOTE_STREAM_OPENING_TIMEOUT_MAX_MS >= 240_000,
-    'the ceiling is the widest single Host load the retry ladder can ever complete')
-  assert.ok(REMOTE_STREAM_OPENING_TIMEOUT_MAX_MS <= 600_000)
+  const ladder = [...OPENING_TIMEOUT_LADDER_MS]
+  const base = ladder[0] as number
+  const cap = ladder[ladder.length - 1] as number
+  assert.ok(base >= 10_000)
+  assert.ok(cap >= 240_000, 'the ceiling is the widest single Host load the retry ladder can ever complete')
+  assert.ok(cap <= 600_000)
 })
 
 test('the opening episode key is stable per stream and separates endpoints and payloads', () => {
@@ -178,11 +160,6 @@ test('the mux self-heal throttle stays a second-scale bound', () => {
   assert.ok(REMOTE_STREAM_MAINTAIN_MIN_INTERVAL_MS <= 10_000, 'self-heal must stay useful while the lane is parked')
 })
 
-test('degenerate opening streaks fail safe to the base budget', () => {
-  for (const streak of [-1, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
-    assert.equal(remoteStreamOpeningTimeoutMs(streak), REMOTE_STREAM_OPENING_TIMEOUT_MS, String(streak))
-  }
-})
 
 test('the silent-carrier verdict belongs to the reducer, not this module (P3)', () => {
   // The predicate that used to live here is retired: stream-client reports the
@@ -202,10 +179,10 @@ test('the teardown evidence window stays inside every window it must serve', () 
   // minimum life must sit BELOW that probe window (or the probe teardown it exists
   // for would always be judged too young) and below the opening budget (anything
   // that waits longer is the deadline path's verdict).
-  assert.equal(REMOTE_STREAM_SILENT_TEARDOWN_MIN_MS, 15_000)
-  assert.ok(REMOTE_STREAM_SILENT_TEARDOWN_MIN_MS < DEFAULT_STREAM_STALL_TIMING.probeTimeoutMs,
+  assert.equal(SILENT_TEARDOWN_MIN_MS, 15_000)
+  assert.ok(SILENT_TEARDOWN_MIN_MS < DEFAULT_STREAM_STALL_TIMING.probeTimeoutMs,
     'the watchdog probe window must be able to reach the bound')
-  assert.ok(REMOTE_STREAM_SILENT_TEARDOWN_MIN_MS < REMOTE_STREAM_OPENING_TIMEOUT_MS,
+  assert.ok(SILENT_TEARDOWN_MIN_MS < (OPENING_TIMEOUT_LADDER_MS[0] as number),
     'a stream that outlives this bound is judged by the opening deadline instead')
 })
 

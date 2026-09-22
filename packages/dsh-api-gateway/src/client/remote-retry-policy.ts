@@ -86,67 +86,12 @@ export function remoteStreamRetryDelayMs(attempt: number): number {
 }
 
 /**
- * Opening-item deadline for one logical Remote stream (chamber fork patch,
- * design 14 §D4 ).
- * Every logical stream is answered by its Host with an opening item (a snapshot
- * or a ready frame); the domain consumer awaits that first item with NO deadline
- * anywhere between the socket and the UI. A frame that is lost — discarded by a
- * socket that started closing between `waitForSocket` and `send`, dropped by a
- * revoked splice, or never produced by a stalled Host fiber — therefore hung the
- * conversation forever: `Session.doOpen` stayed pending, the chat view rendered
- * `chat.loadingHistory` (which upstream renders exactly when `openState ===
- * 'loading'`), no error edge ever fired, and every chamber heal arm (all keyed on
- * `'error'`) was blind to it. 30 s is far above the measured Host answer
- * (opening frames arrive in ~25 ms through the control-plane proxy) while staying
- * below a user's "this is stuck" threshold.
- */
-export const REMOTE_STREAM_OPENING_TIMEOUT_MS = 30_000
-
-/**
- * Ceiling of the consecutive-timeout widening (30 → 60 → 120 → 240 → 300 s).
- * This ceiling is the HARD LIMIT of what any client-side retry can ever load,
- * because a timeout does not merely re-issue: the mux cancels the host-side
- * follow (the retry lane's replacement opens a NEW stream), so the Host restarts
- * its own load from scratch. A session whose single load needs longer than this
- * window can therefore never be served by the retry ladder — raising the ceiling
- * is what widens the set of loadable sessions. 5 minutes covers a cold huge
- * session on a loaded disk; anything beyond that is a Host that cannot serve
- * (the real fix is a Host-side first-frame bound, see
- * docs/progress/todo/upstream-proposals.md ).
- */
-export const REMOTE_STREAM_OPENING_TIMEOUT_MAX_MS = 300_000
-
-/**
- * Minimum life a logical stream must have had before its TEARDOWN may call the
- * physical socket silent (chamber fork, design 14 §D4, ).
- * The opening deadline already proves silence after a whole budget, but a consumer
- * can give up earlier: the journal watchdog aborts its sibling probe at 20 s, and
- * the mux never saw that stream's opening item. Judging the socket on a stream torn
- * down before it could possibly have been answered would replace healthy carriers —
- * every reconnect starts a socket whose frame counter is 0, so a stream cancelled
- * inside that first window would otherwise churn the carrier. 15 s is far above the
- * measured Host answer (~25–75 ms through the proxy) and below the watchdog's own
- * 20 s probe window, so a probe that gives up on a silent socket still counts.
- */
-export const REMOTE_STREAM_SILENT_TEARDOWN_MIN_MS = 15_000
-
-/**
  * Minimum distance between two mux-client connect attempts started by the mux
  * itself (chamber patch, ): a lost socket triggers one immediate
  * reconnect instead of waiting for the connection lane, but a flapping network
  * must not let the mux hot-loop faster than the lane's own backoff would.
  */
 export const REMOTE_STREAM_MAINTAIN_MIN_INTERVAL_MS = 1_000
-
-/**
- * Deadline for one WebSocket handshake (TCP + upgrade), chamber patch (
- * review). Without it a socket that never fires open/error/close parks every
- * open() until the connection lane's own readiness timeout (15 s local / 45 s
- * remote) aborts the generation, and the mux's self-heal cannot arm while that
- * attempt is in flight. Expiring the attempt as a carrier-style failure feeds the
- * same rescheduling heal.
- */
-export const REMOTE_STREAM_HANDSHAKE_TIMEOUT_MS = 30_000
 
 /**
  * Ceiling of the mux's own reconnect interval (chamber patch, ).
@@ -156,7 +101,6 @@ export const REMOTE_STREAM_HANDSHAKE_TIMEOUT_MS = 30_000
  * still never parks permanently.
  */
 export const REMOTE_STREAM_MAINTAIN_MAX_INTERVAL_MS = 10_000
-
 
 /**
  * Stable key for one logical stream's opening-budget episode: the endpoint plus a
@@ -188,25 +132,4 @@ export function streamOpeningKey(endpoint: string, payload: unknown): string {
   }
   return endpoint + '#' + hash.toString(16)
 }
-
-/**
- * Opening-item budget for one logical stream REQUEST, widened by that request's
- * own CONSECUTIVE opening timeouts.
- * The widening exists so a genuinely slow-but-working Host — a huge session over
- * a cold link, a loaded disk — is never starved by a deadline tuned for the
- * ordinary case: the request's first attempt waits 30 s, then 60 s, 120 s,
- * 240 s, up to {@link REMOTE_STREAM_OPENING_TIMEOUT_MAX_MS}. The budget is keyed
- * by {@link streamOpeningKey}, so a normal answer for
- * THIS request resets only its own key (the mux deletes that key on the first
- * delivered frame) and never another request's: a stream that answers normally
- * always keeps the tight 30 s bound, while one slow request keeps its widening.
- * @param streak - that request's consecutive opening-item timeouts so far (0-based).
- * @returns milliseconds to wait for the opening item before failing the inbox.
- */
-export function remoteStreamOpeningTimeoutMs(streak: number): number {
-  if (!Number.isFinite(streak) || streak <= 0) return REMOTE_STREAM_OPENING_TIMEOUT_MS
-  const step = Math.min(Math.floor(streak), 4)
-  return Math.min(REMOTE_STREAM_OPENING_TIMEOUT_MS * 2 ** step, REMOTE_STREAM_OPENING_TIMEOUT_MAX_MS)
-}
-
 

@@ -43,21 +43,21 @@ test('the real lockstep list has no mismatch today', () => {
   const verdict = compareLockstep(LOCKSTEP, RESOLVE)
   assert.deepEqual(verdict.lines, [])
   assert.equal(verdict.failures, 0)
-  assert.ok(verdict.checked >= 21, 'the corpus must cover the carrier decisions and the host ladders: ' + String(verdict.checked))
+  assert.ok(verdict.checked >= 17, 'the corpus must cover the carrier decisions and the host ladders: ' + String(verdict.checked))
   assert.ok(verdict.retired >= 11, 'the mobile and sidebar copies are already retired (P5 removes the rest one at a time): ' + String(verdict.retired))
 })
 
 test('negative control: a wrong expectation is flagged', () => {
   const verdict = compareLockstep(
     [{
-      table: 'tables.silentTeardownMinMs',
-      source: 'packages/dsh-api-gateway/src/client/remote-retry-policy.ts',
-      name: 'REMOTE_STREAM_SILENT_TEARDOWN_MIN_MS',
+      table: 'tables.handshakeTimeoutMs',
+      source: 'packages/dsh-stream-state/src/tables.ts',
+      name: 'HANDSHAKE_TIMEOUT_MS',
     }],
     { ...RESOLVE, table: () => 1 },
   )
   assert.equal(verdict.failures, 1)
-  assert.match(verdict.lines[0] ?? '', /REMOTE_STREAM_SILENT_TEARDOWN_MIN_MS/)
+  assert.match(verdict.lines[0] ?? '', /HANDSHAKE_TIMEOUT_MS/)
 })
 
 test('retirement is quiet: a vanished declaration is not a failure', () => {
