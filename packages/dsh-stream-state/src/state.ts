@@ -28,8 +28,6 @@ export type RecoveryEffect =
   | { readonly e: 'rebuildCarrier'; readonly reason: RebuildReason; readonly at: number }
   /** Reopen one logical stream on the current carrier. */
   | { readonly e: 'reopenLogicalStream'; readonly streamId: string; readonly reason: string }
-  /** Outbound call to the authority (session.list / running reconciliation). */
-  | { readonly e: 'reconcileFacts'; readonly scope: 'running' | 'list' }
   /** An allowed event arrived while a rebuild was in flight (see DIVERGENCE.md 2). */
   | { readonly e: 'throttled'; readonly reason: RebuildReason; readonly at: number }
   /** Bounded observability, never a behavior switch. */
