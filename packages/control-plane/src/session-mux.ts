@@ -848,7 +848,22 @@ export function createSessionMux(deps: SessionMuxDeps): SessionMux {
     const at = now()
     for (const held of [...heldWaterfalls.values()]) {
       if (held.delegated || held.attempts >= 2) continue
-      if (at - held.at < graceMs) continue
+      const elapsed = at - held.at
+      if (elapsed < graceMs) {
+        // The grace timer is a real timer while the elapsed check uses the mux
+        // clock, so its callback can observe elapsed = graceMs - 1 and reject
+        // the sweep. Re-arm for the remainder: without this the rejection is
+        // final until the next tick (5s default) and, when no further event
+        // arrives, the held waterfall never delegates at all.
+        if (held.timer === null) {
+          held.timer = setTimeout(() => {
+            held.timer = null
+            tryDelegateHeld()
+          }, Math.max(1, graceMs - elapsed + 1))
+          held.timer.unref?.()
+        }
+        continue
+      }
       // HARD RULE: never answer unless another downstream mux client is
       // attached AND the grace window has elapsed. Otherwise hold silently.
       if (!deps.otherMuxClientsAttached()) continue
