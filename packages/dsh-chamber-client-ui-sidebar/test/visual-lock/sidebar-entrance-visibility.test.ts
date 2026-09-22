@@ -42,7 +42,7 @@ test('the state-driven collapse fade is the only opacity transition left', () =>
 test('the removed animations are documented and their class hooks stay mounted', () => {
   // The animation retirement covers the animation-face risk; the blank-icon root
   // cause is design 05 §4.2.
-  assert.match(sidebarCss, /2026-09-20 更正/u)
+  assert.match(sidebarCss, /必要内容不参与任何入场动画/u)
   assert.match(sidebarCss, /design 05 §4\.2/u)
   assert.match(sidebarTsx, /clsx\(css\.brand, css\.wide\)/u, 'the wide hook still marks the brand row')
   assert.match(sidebarTsx, /css\.railIn/u, 'the railIn hook still marks a live collapse')

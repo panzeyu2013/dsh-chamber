@@ -55,7 +55,7 @@ test('the user-initiated page read carries its own deadline', () => {
   const prepend = bodyOf(
     journal,
     '  async prepend(request: PageRequest): Promise<void> {',
-    '  /**\n   * chamber patch (2026-09 review): bound one user-initiated page read.',
+    '  /**\n   * chamber patch: bound one user-initiated page read.',
   )
   assert.match(prepend, /this\.readPage\(request, this\.currentCursor\(\), this\.prependSignal\(\)\)/u)
   assert.match(prepend, /this\.prependSignal\(\)/u, 'the read must not use the lifetime signal directly')
