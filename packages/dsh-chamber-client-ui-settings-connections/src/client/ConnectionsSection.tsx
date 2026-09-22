@@ -61,6 +61,7 @@ import { ConnectionFormModal } from './ConnectionFormModal.tsx'
 import { PluginManageIcon16 } from './ConnectionAuthFields.tsx'
 import { credentialReentryEdit, formatTime, gatewayUrlErrorText, localStatusKey, phaseKey, slugifyAlias } from './connection-helpers.ts'
 import { errorMessage } from './error-text.ts'
+import { CLEAR_GATEWAY_PASSWORD, CLEAR_GATEWAY_TOKEN, CLEAR_SSH_PASSWORD, clearCredential } from './clear-credential.ts'
 import { runManagedRestart } from './restart-action.ts'
 // The desktop-gate mirrors (and their byte-parity test) are the ONE copy of
 // these patterns/limits: the form validates with them instead of re-spelling
@@ -876,64 +877,23 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
   }, [])
 
   /** 清除该主机在主进程内存与 owner-only 镜像中的密码（改用密钥/ssh-agent）。 */
-  const clearPassword = useCallback(async (): Promise<void> => {
-    const bridge = ssh()
-    if (bridge === null || editing === null || editing === 'new') return
-    const result = await bridge.set_password(editing.id, null)
-    if ('error' in result) {
-      setFormError(result.error)
-    } else {
-      setDraft(prev => (prev === null ? prev : { ...prev, password: '' }))
-      setInstances(prev => prev.map(instance => instance.id === editing.id
-        ? { ...instance, sshPasswordSet: false }
-        : instance))
-      setEditing(prev => prev === null || prev === 'new'
-        ? prev
-        : { ...prev, sshPasswordSet: false })
-      setFormError(null)
-    }
-  }, [editing])
+  const clearPassword = useCallback(
+    (): Promise<void> => clearCredential(CLEAR_SSH_PASSWORD, { bridge: ssh(), editing, setDraft, setInstances, setEditing, setFormError }),
+    [editing],
+  )
 
   /** Clear a stored gateway token without ever reading it into the renderer. */
-  const clearGatewayToken = useCallback(async (): Promise<void> => {
-    const bridge = ssh()
-    if (bridge === null || editing === null || editing === 'new') return
-    const result = await bridge.set_gateway_token(editing.id, null)
-    if ('error' in result) {
-      setFormError(result.error)
-    } else {
-      setDraft(prev => (prev === null ? prev : { ...prev, gatewayToken: '' }))
-      setInstances(prev => prev.map(instance => instance.id === editing.id
-        ? { ...instance, tokenSet: false }
-        : instance))
-      setEditing(prev => prev === null || prev === 'new'
-        ? prev
-        : { ...prev, tokenSet: false })
-      setFormError(null)
-    }
-  }, [editing])
+  const clearGatewayToken = useCallback(
+    (): Promise<void> => clearCredential(CLEAR_GATEWAY_TOKEN, { bridge: ssh(), editing, setDraft, setInstances, setEditing, setFormError }),
+    [editing],
+  )
 
   /** Clear a stored gateway login password (design 17 §7.1) without ever
    *  reading it into the renderer. */
-  const clearGatewayPassword = useCallback(async (): Promise<void> => {
-    const bridge = ssh()
-    if (bridge === null || editing === null || editing === 'new') return
-    // set_gateway_password is on the authoritative DesktopSshSurface (design
-    // 17 §7.1, desktop gateway-secrets task).
-    const result = await bridge.set_gateway_password(editing.id, null)
-    if ('error' in result) {
-      setFormError(result.error)
-    } else {
-      setDraft(prev => (prev === null ? prev : { ...prev, gatewayPassword: '' }))
-      setInstances(prev => prev.map(instance => instance.id === editing.id
-        ? { ...instance, passwordSet: false }
-        : instance))
-      setEditing(prev => prev === null || prev === 'new'
-        ? prev
-        : { ...prev, passwordSet: false })
-      setFormError(null)
-    }
-  }, [editing])
+  const clearGatewayPassword = useCallback(
+    (): Promise<void> => clearCredential(CLEAR_GATEWAY_PASSWORD, { bridge: ssh(), editing, setDraft, setInstances, setEditing, setFormError }),
+    [editing],
+  )
 
   const closeForm = useCallback((): void => {
     if (saving) return

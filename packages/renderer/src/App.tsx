@@ -98,7 +98,7 @@ import {
   saveUnread,
   type UnreadStorageLike,
 } from './unread-store.ts'
-import { deriveSourceUnread, viewingReadWatermark } from './unread-derivation.ts'
+import { deriveSourceUnread, sameBooleanMap as sameBooleanLedger, viewingReadWatermark } from './unread-derivation.ts'
 import { completionWatermark, nextNotifiedWatermark, shouldNotifyWatermark } from './watermark.ts'
 import { pruneSourceList, pruneSourceRecord, pruneSourceSet } from './source-registry.ts'
 import { LOCAL_INSTANCE_ID } from './local-instance.ts'
@@ -328,16 +328,8 @@ function collectReadySourceIds(
  *  channel was removed — host.describe was deleted upstream). */
 type HostFacts = { dshVersion?: string }
 
-/** 同形布尔表比较（账本 identity 闸；避免无变化时换 state 对象）。 */
-function sameBooleanLedger(left: Record<string, boolean>, right: Record<string, boolean>): boolean {
-  const leftKeys = Object.keys(left)
-  const rightKeys = Object.keys(right)
-  if (leftKeys.length !== rightKeys.length) return false
-  for (const key of leftKeys) {
-    if ((left[key] === true) !== (right[key] === true)) return false
-  }
-  return true
-}
+// 同形布尔表比较（账本 identity 闸；避免无变化时换 state 对象）：实现已单源到
+// ./unread-derivation.ts 的 sameBooleanMap（本文件以别名 sameBooleanLedger 复用它）。
 
 /**
  * facts 行 → 侧栏渲染字段 overlay（2026-12 facts wiring，主计划 §3.3-1）：

@@ -439,7 +439,7 @@ function isNonRetryableSpawnError(error: unknown): error is Error & { code: Spaw
  * `null`. Failure messages are user-facing (health/API/desktop log), so a
  * non-Error throw must still name that fact instead of printing a hole (F1).
  */
-function describeThrown(value: unknown): string {
+function describeThrownValue(value: unknown): string {
   if (value === undefined) return 'no error object was thrown'
   if (value === null) return 'null was thrown'
   if (value instanceof Error) return value.message === '' ? `${value.name === '' ? 'Error' : value.name} (no message)` : value.message
@@ -452,7 +452,7 @@ function writerQuiescenceUnknown(child: ChildProcess, context: string, cause: un
   const pid = child.pid ?? 'unknown'
   return new SpawnLifecycleError(
     DSH_WRITER_QUIESCENCE_UNKNOWN_CODE,
-    `${context}; dsh process group ${pid} quiescence is unknown: ${describeThrown(cause)}`,
+    `${context}; dsh process group ${pid} quiescence is unknown: ${describeThrownValue(cause)}`,
     cause,
   )
 }
@@ -552,7 +552,7 @@ function recordSpawnAttemptFailure(attempt: number, port: number, error: unknown
     if (stderr !== '') record.stderr = stderr
     return record.message === '' ? { ...record, message: `attempt failed (${error.kind}) without a message` } : record
   }
-  return { attempt, port, kind: 'unknown', message: describeThrown(error) }
+  return { attempt, port, kind: 'unknown', message: describeThrownValue(error) }
 }
 
 /** Map one readiness outcome (timeout / exit / spawn-error / abort) to the typed attempt failure. */
@@ -911,7 +911,7 @@ async function spawnAttempt({
     } catch (terminationError) {
       throw writerQuiescenceUnknown(
         child,
-        `pid ledger publication failed (${describeThrown(ledgerError)}) and cleanup failed`,
+        `pid ledger publication failed (${describeThrownValue(ledgerError)}) and cleanup failed`,
         terminationError,
       )
     }
@@ -920,7 +920,7 @@ async function spawnAttempt({
     removePidRecord(stateDir, pid)
     throw new SpawnLifecycleError(
       DSH_SPAWN_NON_RETRYABLE_CODE,
-      `dsh pid ledger publication failed on port ${port}; child was reclaimed: ${describeThrown(ledgerError)}`,
+      `dsh pid ledger publication failed on port ${port}; child was reclaimed: ${describeThrownValue(ledgerError)}`,
       ledgerError,
     )
   }
@@ -1053,7 +1053,7 @@ async function spawnAttempt({
       }
       return 'the host did not mint a session cookie'
     } catch (error) {
-      return describeThrown(error)
+      return describeThrownValue(error)
     } finally {
       clearTimeout(bootstrapTimer)
       signal?.removeEventListener('abort', onSpawnAbort)
@@ -1094,7 +1094,7 @@ async function spawnAttempt({
         if (child.exitCode !== null || child.signalCode !== null) {
           throw new SpawnAttemptError(
             'child-exit',
-            `child exited: ${describeThrown(probeError)}`,
+            `child exited: ${describeThrownValue(probeError)}`,
             { stderr: stderrDigest },
           )
         }
@@ -1137,7 +1137,7 @@ async function spawnAttempt({
     removePidRecord(stateDir, pid)
     throw new SpawnAttemptError(
       'identity-probe',
-      `host identity probe failed: ${describeThrown(error)}`,
+      `host identity probe failed: ${describeThrownValue(error)}`,
       { stderr: stderrDigest },
     )
   } finally {

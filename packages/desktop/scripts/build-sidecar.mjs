@@ -66,6 +66,7 @@ import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { isCliEntry, runCliTool } from '../../../scripts/lib/cli.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const desktopDir = path.resolve(here, '..')
@@ -973,22 +974,17 @@ export async function runBuildSidecar(options, io = {}) {
   return { dryRun: false, layout }
 }
 
-const isMain = process.argv[1] !== undefined
-  && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href
-if (isMain) {
-  try {
-    const options = parseBuildSidecarArgs(process.argv.slice(2))
-    if (options.help) {
-      console.log('用法：build-sidecar.mjs [--out <dir>] [--dry-run] [--arch <arm64|x64>]')
-      console.log('       [--skip-node] [--skip-bundle] [--skip-host-packages] [--skip-vendor]')
-      console.log('       [--vendor-dsh <dir>] [--pnpm-dir <dir>]')
-      console.log('       [--node-version <v>] [--node-sha256 <hex>（覆盖仓库固定摘要，冲突即拒绝）]')
-      console.log('       [--node-archive <tar.gz>] [--help]')
-      process.exit(0)
-    }
-    await runBuildSidecar(options)
-  } catch (error) {
-    console.error(`[build-sidecar] 失败：${error instanceof Error ? error.message : String(error)}`)
-    process.exit(1)
-  }
+if (isCliEntry(import.meta.url)) {
+  await runCliTool({
+    label: 'build-sidecar',
+    usage: [
+      '用法：build-sidecar.mjs [--out <dir>] [--dry-run] [--arch <arm64|x64>]',
+      '       [--skip-node] [--skip-bundle] [--skip-host-packages] [--skip-vendor]',
+      '       [--vendor-dsh <dir>] [--pnpm-dir <dir>]',
+      '       [--node-version <v>] [--node-sha256 <hex>（覆盖仓库固定摘要，冲突即拒绝）]',
+      '       [--node-archive <tar.gz>] [--help]',
+    ],
+    parse: parseBuildSidecarArgs,
+    run: runBuildSidecar,
+  })
 }

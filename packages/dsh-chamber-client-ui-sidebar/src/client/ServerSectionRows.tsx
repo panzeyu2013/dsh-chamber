@@ -16,7 +16,7 @@ import { openErrorKey } from '../shared/open-outcome.ts'
 import { clearPendingClick, noteSessionRowClick } from '../shared/pending-click.ts'
 import { RowHoverCard } from './RowHoverCard.tsx'
 import { ServerSectionRenameForm, SessionScheduleIndicator } from './server-section-controls.tsx'
-import { rowHalf } from './server-section-model.ts'
+import { dragOverState, rowHalf } from './server-section-model.ts'
 import { useServerSectionSessionState } from './server-section-session-state.tsx'
 import { useSidebarSection } from './sidebar-context.ts'
 import cc from './sidebar-chamber.module.css'
@@ -161,11 +161,7 @@ export function ServerSectionSessionRows({ server, workspace, sessions, currentI
                                         event.preventDefault()
                                         event.dataTransfer.dropEffect = 'move'
                                         const half = rowHalf(event)
-                                        setSessionDrag(current => {
-                                          if (current === null) return current
-                                          if (current.over?.id === session.id && current.over.half === half) return current
-                                          return { ...current, over: { id: session.id, half } }
-                                        })
+                                        setSessionDrag(current => dragOverState(current, session.id, half))
                                       }}
                                     onDrop={!activeSessionDrag
                                       ? undefined

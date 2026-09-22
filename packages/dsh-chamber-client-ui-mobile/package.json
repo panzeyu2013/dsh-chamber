@@ -40,5 +40,8 @@
     "@deepseek-ai/dsh-client-ui-slots": "workspace:^",
     "esbuild": "^0.25.0",
     "react": "^19.0.0"
+  },
+  "dependencies": {
+    "@deepseek-ai/dsh-client-ui-primitives": "workspace:^"
   }
 }

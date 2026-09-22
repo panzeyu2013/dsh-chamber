@@ -24,6 +24,9 @@ import {
   resetRemoteRuntimeActivityOwners,
   type RemoteRuntimeStatus,
 } from '../../src/shared/gateway-runtime.ts'
+// Shared fixture (this suite carried the same one inline as `status()`):
+// scripts/dev/test-support/gateway-runtime-fixture.ts.
+import { remoteStatus } from '../../../../scripts/dev/test-support/gateway-runtime-fixture.ts'
 
 test('instance switch aborts both request owners and returns visible idle flags', () => {
   const action = new AbortController()
@@ -44,18 +47,8 @@ test('instance switch aborts both request owners and returns visible idle flags'
   assert.deepEqual(idle, { actionBusy: false, registryBusy: false })
 })
 
-function status(overrides: Partial<RemoteRuntimeStatus> = {}): RemoteRuntimeStatus {
-  return {
-    kind: 'dsh-chamber-gateway-runtime', activeVersion: '1.0.0', builtinVersion: '0.9.0',
-    currentVersion: '1.0.0', selectedVersion: '1.0.0', hasOverride: true, source: 'builtin-anchor',
-    phase: 'idle', startupBlockedReason: null, pending: null, connectionState: 'ready',
-    registry: 'https://registry.npmjs.org', registryError: null, platform: 'darwin', mutationsAllowed: true,
-    operationError: null, restart: null, restoreOutcome: null, snapshotCount: 0, latestSnapshotAt: null,
-    snapshotError: null, restoreInProgress: false, preRollbackCount: 0, preRollbackLatestName: null,
-    failure: null, diskUsage: null, diskError: null, diskLimitBytes: 10 * 1024 ** 3,
-    diskLimitExceeded: false, progress: null, ...overrides,
-  }
-}
+/** Local alias so this suite's existing call sites stay unchanged. */
+const status = remoteStatus
 
 /** Expected action-gate vector: every field defaults to locked, override only the escapes under test. */
 function gates(overrides: Partial<ReturnType<typeof remoteRuntimeActionGates>> = {}): ReturnType<typeof remoteRuntimeActionGates> {

@@ -37,12 +37,12 @@
 import { spawn } from 'node:child_process'
 import { createInterface } from 'node:readline'
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createRecorder, isShellIndex, parseShellAssets, renderMarkdown, safeJson } from './checks.mjs'
 import { DEFAULT_SIDECAR_DIR, resolveNodeBinary, resolveSidecarDir } from '../lib/sidecar-assembly.mjs'
+import { freeLoopbackPort, sidecarLaunchArgs, sidecarLaunchEnv } from '../lib/sidecar-launch.mjs'
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 
@@ -79,34 +79,25 @@ export function nativePreflight({ sidecarDir = DEFAULT_SIDECAR_DIR } = {}) {
 }
 
 /**
- * The argv the native sidecar is launched with. Exported so the launch contract
- * (compiled marker, throwaway user data, explicit port) is a testable pure
- * function.
+ * The argv the native sidecar is launched with — the shared launch contract
+ * (scripts/lib/sidecar-launch.mjs, M13: the G4 smoke gate carried the same
+ * argv/env assembly). Exported so the contract stays a testable pure function.
  * @param {{ userDataDir: string, port: number }} input - launch inputs.
  * @returns {string[]} argv.
  */
 export function nativeSidecarArgs({ userDataDir, port }) {
-  return ['--user-data-dir', userDataDir, '--port', String(port)]
+  return sidecarLaunchArgs({ userDataDir, port })
 }
 
-/** The environment the shipped sidecar.js requires (compiled assembly marker + no update check). */
+/** The environment the shipped sidecar.js requires — the shared launch contract
+ * (scripts/lib/sidecar-launch.mjs, M13: compiled marker + update-check opt-out).
+ * @param {NodeJS.ProcessEnv} [base] - the environment to extend.
+ * @returns {NodeJS.ProcessEnv} the launch environment.
+ */
 export function nativeSidecarEnv(base = process.env) {
-  return { ...base, DSH_CHAMBER_SIDECAR_COMPILED: '1', ELECTRON_RUN_AS_NODE: '1', DSH_SIDECAR_TEST_NO_UPDATE_CHECK: '1' }
+  return sidecarLaunchEnv(base)
 }
 
-/** Pick a free loopback port for the sidecar's control plane. */
-function freePort() {
-  return new Promise((resolvePort, reject) => {
-    const server = createServer()
-    server.unref()
-    server.on('error', reject)
-    server.listen(0, '127.0.0.1', () => {
-      const address = server.address()
-      const port = typeof address === 'object' && address !== null ? address.port : 0
-      server.close(() => resolvePort(port))
-    })
-  })
-}
 
 /** A small NDJSON driver for the sidecar stdio (subset of the G4 smoke driver). */
 function createBridgeDriver(child) {
@@ -162,7 +153,7 @@ async function get(origin, target, headers = {}) {
 export async function launchNativeSidecar({ sidecarDir, outDir, timeoutMs = 30_000 }) {
   mkdirSync(outDir, { recursive: true })
   const userDataDir = mkdtempSync(path.join(tmpdir(), 'dsh-native-acceptance-'))
-  const port = await freePort()
+  const port = await freeLoopbackPort()
   const logPath = path.join(outDir, 'native-sidecar.log')
   const child = spawn(resolveNodeBinary(sidecarDir), [path.join(sidecarDir, 'sidecar.js'), ...nativeSidecarArgs({ userDataDir, port })], {
     cwd: sidecarDir,

@@ -456,3 +456,25 @@ IPC 形状、载荷守卫、`sourceFingerprint` 来源代 proof、vscode deliver
 - `docs/checklists/upstream-touchpoints.md` §4（fork 行）
 - `docs/progress/todo/open-in-superset-batches.md`（超集分批与降级留档）
 - `docs/progress/STATUS.md`（唯一进度记录）
+
+## 被否方案（2026-12 单源化：open-in 错误文本 + 失败路径健壮性）
+
+open-in 域原有两处错误文本处理：`shared/capabilities.ts` 的 `describeOpenInError`（敌意值安全）与
+`client/OpenInButton.tsx` 的失败路径（朴素 `error instanceof Error ? error.message : String(error)`）。
+本次令两者都归 sidebar 的 `describeThrown`（ARCH-IMPL-029）：域内名保留为该实现的**重导出**
+（不是包装函数），按钮改调同一原语。
+
+被否方案：
+
+- **保留本地实现**：与 renderer/git/bridge/connections 已经共用的那份实现逐字同形，留下会在下一次
+  边界修复时漂移出两种强度（本次两处正是两种强度的实例）。
+- **不声明依赖、用相对路径越包导入 sidebar 源码**：绕过包边界与 peer/lockfile 语义，typecheck 与
+  wiring 门都会失真；因此按 git 包既有形态新增 `dependencies`（`workspace:^`）。
+- **只修按钮、不合并 `describeOpenInError`**：会把「同一不变量」留成两份实现，且按钮与 adapter 会各自
+  演进；反之只合并不修按钮，则按钮的 `.catch` 内仍可再抛。
+- **把新依赖放进 `peerDependencies`**：实测 git 包把它作为普通 `dependencies`（本仓库的既有形态），
+  且 sidebar 只提供构建期源码、不注入客户端图，故无需改 `dsh.client.inject`。
+
+**行为变化（有意、已测）**：`OpenInButton` 的失败路径在**敌意错误对象**（`message` getter 或 `toString`
+抛错）下，由「在 `.catch` 内再抛」变为返回文本（`unknown error`）；普通 `Error` 与空值行为不变。
+该变化由 `test/ui-lock/hostile-error-text.test.ts` 锁定（含 `describeOpenInError === describeThrown` 的身份断言）。

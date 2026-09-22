@@ -43,7 +43,7 @@ import { ServerSectionHeader } from './ServerSectionHeader.tsx'
 import { ServerSectionSearchCapsule, ServerSectionSearchResults } from './ServerSectionSearch.tsx'
 import { ServerSectionSessionRows } from './ServerSectionRows.tsx'
 import { ServerSectionRenameForm } from './server-section-controls.tsx'
-import { projectionToLocalSearchSnapshot, rowHalf } from './server-section-model.ts'
+import { dragOverState, projectionToLocalSearchSnapshot, rowHalf } from './server-section-model.ts'
 import cc from './sidebar-chamber.module.css'
 
 export { sourceHeaderActivatable, sourceHeaderTitle } from './server-section-model.ts'
@@ -359,11 +359,7 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                     event.preventDefault()
                     event.dataTransfer.dropEffect = 'move'
                     const half = rowHalf(event)
-                    setServerDrag(current => {
-                      if (current === null) return current
-                      if (current.over?.id === server.id && current.over.half === half) return current
-                      return { ...current, over: { id: server.id, half } }
-                    })
+                    setServerDrag(current => dragOverState(current, server.id, half))
                   }}
                 onDrop={serverDrag === null
                   ? undefined
@@ -913,11 +909,7 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                                     // target — the drop/commit no-ops there.
                                     return
                                   }
-                                  setWorkspaceDrag(current => {
-                                    if (current === null) return current
-                                    if (current.over?.id === workspace.id && current.over.half === half) return current
-                                    return { ...current, over: { id: workspace.id, half } }
-                                  })
+                                  setWorkspaceDrag(current => dragOverState(current, workspace.id, half))
                                 }}
                               onDrop={workspace.ungrouped === true || workspace.synthetic === true
                                 || workspaceDrag === null

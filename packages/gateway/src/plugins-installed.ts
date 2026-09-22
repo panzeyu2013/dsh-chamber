@@ -45,6 +45,7 @@ import {
   readInstalledVersion,
   resolveRuntimeFamily,
 } from '@dsh-chamber/control-plane'
+import { readStringArray } from '@dsh-chamber/control-plane'
 import type { PluginRow, ProtectedSet } from '@dsh-chamber/control-plane'
 import { readPrivateTextOrNull } from './private-read.ts'
 
@@ -140,18 +141,6 @@ export interface ChamberInstalled {
  * 0600-owned by construction; requiring 0600 would misclassify a legit file). */
 function readProfileManifest(path: string): string | null {
   return readPrivateTextOrNull(path, { tightenMode: 0o600, maxBytes: INSTALLED_MANIFEST_MAX_BYTES })
-}
-
-/** String-array member of a nested record path (bundles), mirroring the
- * desktop parseRemoteManifest helper: absent/non-array → []. */
-function readStringArray(record: Record<string, unknown>, path: string[]): string[] {
-  let current: unknown = record
-  for (const key of path) {
-    if (current === null || typeof current !== 'object') return []
-    current = (current as Record<string, unknown>)[key]
-  }
-  if (!Array.isArray(current)) return []
-  return current.filter((item): item is string => typeof item === 'string')
 }
 
 export function createChamberInstalled(

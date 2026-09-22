@@ -237,6 +237,17 @@ test('the shared probe surface and the one-sided extras are exactly as registere
     'treeKillWindows',
   ] as const
   const rtOnly = ['hasWindowsDescendants', 'killWindowsTree', 'killWindowsTreeWithResidual'] as const
+  /**
+   * Non-function twins: the probe budget and the CIM table cache TTL. They used
+   * to be comment-locked ("MUST stay in sync") only — the export-surface lock
+   * cannot see a value change, so a one-sided edit would silently split the two
+   * probes' timeouts. Assert agreement AND the absolute values, the same
+   * discipline the fixture corpus uses (a synchronized regression must fail).
+   */
+  const sharedConstants = [
+    ['WINDOWS_PROBE_TIMEOUT_MS', 'PROBE_TIMEOUT_MS', 30_000],
+    ['TABLE_CACHE_TTL_MS', 'TABLE_CACHE_TTL_MS', 500],
+  ] as const
   for (const [cpName, rtName] of shared) {
     assert.equal(typeof (cp as Record<string, unknown>)[cpName], 'function', 'control-plane export ' + cpName)
     assert.equal(typeof (rt as Record<string, unknown>)[rtName], 'function', 'dsh-runtime export ' + rtName)
@@ -249,8 +260,17 @@ test('the shared probe surface and the one-sided extras are exactly as registere
     assert.equal(typeof (rt as Record<string, unknown>)[name], 'function', 'dsh-runtime-only export ' + name)
     assert.equal((cp as Record<string, unknown>)[name], undefined, 'control-plane must not grow ' + name + ' without registering it')
   }
-  const expectedCp = [...shared.map(pair => pair[0]), ...cpOnly].sort()
-  const expectedRt = [...shared.map(pair => pair[1]), ...rtOnly].sort()
+  for (const [cpName, rtName, expected] of sharedConstants) {
+    const cpValue = (cp as Record<string, unknown>)[cpName]
+    const rtValue = (rt as Record<string, unknown>)[rtName]
+    assert.equal(typeof cpValue, 'number', 'control-plane export ' + cpName)
+    assert.equal(typeof rtValue, 'number', 'dsh-runtime export ' + rtName)
+    assert.equal(cpValue, expected, 'control-plane ' + cpName + ' drifted from the registered budget')
+    assert.equal(rtValue, expected, 'dsh-runtime ' + rtName + ' drifted from the registered budget')
+    assert.equal(cpValue, rtValue, 'probe budget parity between the twins')
+  }
+  const expectedCp = [...shared.map(pair => pair[0]), ...sharedConstants.map(pair => pair[0]), ...cpOnly].sort()
+  const expectedRt = [...shared.map(pair => pair[1]), ...sharedConstants.map(pair => pair[1]), ...rtOnly].sort()
   assert.deepEqual(Object.keys(cp).sort(), expectedCp, 'the control-plane export set changed - update the register')
   assert.deepEqual(Object.keys(rt).sort(), expectedRt, 'the dsh-runtime export set changed - update the register')
 })

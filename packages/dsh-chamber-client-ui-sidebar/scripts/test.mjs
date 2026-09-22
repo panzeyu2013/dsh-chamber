@@ -16,10 +16,13 @@
  * 零测试守卫（D2b，2026-12）：列出的文件退出 0 但没有 node:test 汇总行、tests 0
  * 或全部 skip（pass 0 / fail 0）时判失败——静默空清单不得变绿。
  */
-import { existsSync } from 'node:fs'
-import { spawnSync } from 'node:child_process'
-import { join, resolve } from 'node:path'
+
+// Runner semantics (missing listed file, zero-test guard, first-failure stop,
+// platform legs, per-file timeout) are the shared engine settings below:
+// scripts/lib/test-manifest.mjs. This file owns only the manifest tables.
+import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { runTestManifest } from '../../../scripts/lib/test-manifest.mjs'
 
 const PACKAGE_ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)))
 
@@ -30,6 +33,8 @@ export const GROUPS = {
   ],
   // session-rows: session/workspace projection, row windowing, row hover and the shell's row wiring
   'session-rows': [
+    // 三处拖拽闭包共用的 over-目标推进（纯叶子，2026-12 单源化）。
+    'test/session-rows/drag-over-state.test.ts',
     'test/session-rows/derive.test.ts',
     // The shared unread predicate of the B edge track (plan §3.3-1/§3.2); the
     // facts-merge / ordering / label / search-archive contracts were consolidated
@@ -83,6 +88,17 @@ export const GROUPS = {
     'test/source-runtime/gateway-runtime.test.ts',
     'test/source-runtime/gateway-runtime-poll.test.ts',
     'test/source-runtime/managed-runtime.test.ts',
+    // Cross-host lockstep for the gateway runtime-status identity literal
+    // (gateway producer + inline payload, desktop constant, this package's contract).
+    'test/source-runtime/gateway-runtime-status-kind-lockstep.test.ts',
+    // The shared 409 refusal classifier + verbatim-error projection (the plugins re-export it).
+    'test/shared/runtime-refusal.test.ts',
+    // The shared error-text projections (errorMessage / describeThrown).
+    'test/shared/error-text.test.ts',
+    // The settled-boot gap identity both publish signatures consume.
+    'test/shared/boot-gap-signature.test.ts',
+    // The settled-boot gap -> copy-shape projection (sidebar + connections consumers).
+    'test/shared/boot-gap-shape.test.ts',
   ],
   // plugin-kernel: the page-level client-plugin load kernel, plugin graph and the panel/settings seats
   'plugin-kernel': [
@@ -107,70 +123,23 @@ export const GROUPS = {
   ],
 }
 
-/** Windows CI leg（`test:win32` / `--win32`）：boot-gap 文案/词表的平台无关契约。 */
 export const WIN32_FILES = [
   // settled-boot gap 的四种 kind → 各自 copy key，以及两种语言的词表存在性。
   'test/source-runtime/source-boot-gap.test.ts',
 ]
 
-/** node:test 汇总行：spec（ℹ tests N）与 TAP（# tests N）两种。 */
-const SUMMARY_LINE = /^(?:ℹ|#) (tests|pass|fail|skipped) (\d+)\s*$/gm
-
-/**
- * 最后一个 node:test 汇总块实际执行的测试体数（pass + fail）；没有测试体执行
- * （无汇总行 / tests 0 / 全部 skip）返回 null。与 desktop runner 的 D2b 守卫
- * 同义：列出的文件退出 0 但没跑测试时不得视为通过。
- */
-export function parseExecutedTestCount(output) {
-  let block = null
-  for (const match of output.matchAll(SUMMARY_LINE)) {
-    const key = match[1]
-    if (block === null || key === 'tests') block = { tests: 0, pass: 0, fail: 0, skipped: 0 }
-    block[key] = Number(match[2])
-  }
-  if (block === null || block.tests === 0) return null
-  const executed = (block.pass ?? 0) + (block.fail ?? 0)
-  return executed > 0 ? executed : null
-}
-
-/** Build the manifest entry list for the selected platform leg. */
-export function collectEntries({ win32 = false } = {}) {
-  const toEntries = (group, files) =>
-    files.map(entry => (typeof entry === 'string' ? { group, file: entry, nodeArgs: [] } : { group, nodeArgs: [], ...entry }))
-  if (win32) return toEntries('win32', WIN32_FILES)
-  return Object.entries(GROUPS).flatMap(([group, list]) => toEntries(group, list))
-}
-
 function main() {
-  const entries = collectEntries({ win32: process.argv.includes('--win32') })
-  const missing = entries.filter(entry => !existsSync(join(PACKAGE_ROOT, entry.file)))
-  if (missing.length > 0) {
-    console.error('[test] listed test file(s) missing:')
-    for (const entry of missing) console.error('  - ' + entry.file)
-    process.exit(1)
-  }
-  for (const [index, entry] of entries.entries()) {
-    if (index === 0 || entries[index - 1].group !== entry.group) console.log('\n=== ' + entry.group + ' ===')
-    const result = spawnSync(process.execPath, [...entry.nodeArgs, entry.file], {
-      cwd: PACKAGE_ROOT,
-      stdio: ['inherit', 'pipe', 'pipe'],
-      encoding: 'utf8',
-      maxBuffer: 64 * 1024 * 1024,
-    })
-    if (typeof result.stdout === 'string' && result.stdout !== '') process.stdout.write(result.stdout)
-    if (typeof result.stderr === 'string' && result.stderr !== '') process.stderr.write(result.stderr)
-    if (result.status !== 0) {
-      console.error('[test] ' + entry.file + ' failed (exit ' + (result.status ?? ('signal ' + result.signal)) + ')')
-      process.exit(1)
-    }
-    if (parseExecutedTestCount((result.stdout ?? '') + '\n' + (result.stderr ?? '')) === null) {
-      console.error('[test] ' + entry.file + ' ran no test body（零测试文件不得视为通过）')
-      process.exit(1)
-    }
-  }
+  runTestManifest({
+    label: 'dsh-chamber-client-ui-sidebar',
+    packageRoot: PACKAGE_ROOT,
+    groups: GROUPS,
+    platformFiles: { win32: WIN32_FILES },
+    guard: 'executed',
+  })
 }
 
-// Import guard：本清单同时被 scripts/test-runner-guard.test.mjs 以纯函数方式
-// import（零测试守卫 + 清单锁步），CLI 只在作为入口运行时执行。
+// Import guard: this manifest is also imported by its zero-test guard test as
+// a pure module (table lockstep assertions), so the CLI only runs as the
+// entry point.
 const isMain = process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)
 if (isMain) main()

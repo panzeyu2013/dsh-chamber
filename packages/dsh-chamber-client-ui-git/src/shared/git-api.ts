@@ -6,6 +6,7 @@ import type {
   CreateWorktreeResult, GitWorktreeSnapshot, PreviewCreateInput, PreviewCreateResult,
   RemoveWorktreeResult, RollbackCreateResult,
 } from './types.ts'
+import { errorMessage, isRecord } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
 import { normalizeGitSnapshot } from './snapshot.ts'
 
 // 60s, not 30s (2026-08 bug report): the proxy's upstream idle timeout is
@@ -136,10 +137,6 @@ const REPO_ID = /^repo_[0-9a-f]{64}$/u
 const WORKTREE_ID = /^worktree_[0-9a-f]{64}$/u
 const OBJECT_ID = /^[0-9a-f]{40,64}$/u
 
-function isRecord(value: unknown): value is Record<string, any> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
 function invalidValue(method: string, reason: string, details?: unknown): never {
   throw new GitWorktreeRpcError(
     'invalid-domain-value',
@@ -195,7 +192,7 @@ export function decodeSnapshotValue(value: unknown): GitWorktreeSnapshot {
   try {
     return normalizeGitSnapshot(value)
   } catch (error) {
-    invalidValue('snapshot', error instanceof Error ? error.message : String(error))
+    invalidValue('snapshot', errorMessage(error))
   }
 }
 

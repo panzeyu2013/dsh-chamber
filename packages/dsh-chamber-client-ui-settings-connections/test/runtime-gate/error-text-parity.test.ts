@@ -1,13 +1,16 @@
 /**
- * The connections error-text helper (2026-12 audit P1-3): the card and the
- * dialog carried two byte-identical copies, now one module. settings-bridge
- * keeps its own one-liner (no cross-package sharing), so the second case locks
- * the two bodies to the same expression.
+ * The connections error-text projection (2026-12 audit P1-3: the card and the
+ * dialog carried two byte-identical copies, now one module).
+ *
+ * The implementation is single-sourced on the sidebar shared face
+ * (src/shared/error-text.ts) and covered there; this file keeps the
+ * connections-side behavior assertion through the module this package's callers
+ * import. The former cross-package source-text lockstep case is gone with the
+ * duplicate it pinned.
  */
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import { errorMessage } from '../../src/client/error-text.ts';
 
 test('errorMessage: Error.message verbatim, everything else stringified', () => {
@@ -20,14 +23,3 @@ test('errorMessage: Error.message verbatim, everything else stringified', () => 
   assert.equal(errorMessage({ message: 'not an Error' }), '[object Object]')
 })
 
-test('the settings-bridge copy is the same expression (cross-package lockstep)', () => {
-  const source = readFileSync(
-    new URL('../../../dsh-chamber-client-ui-settings-bridge/src/client/DshRuntimeSection.tsx', import.meta.url),
-    'utf8',
-  )
-  assert.match(
-    source,
-    /function errorMessage\(error: unknown\): string \{\s*return error instanceof Error \? error\.message : String\(error\)\s*\}/u,
-    'the bridge copy must stay the same one-liner as error-text.ts',
-  )
-})

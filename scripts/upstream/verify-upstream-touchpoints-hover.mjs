@@ -176,6 +176,9 @@ function skipTemplateExpression(source, start) {
  * misdetected JSX closing tag cannot swallow the rest of its line.
  * @param {string} source - TS/TSX source text.
  * @returns {string} a code-only projection of `source`.
+ *
+ * 刻意不复用 `scripts/dev/test-support/source-text.ts` 的助手：本门必须能在裸 checkout
+ * 独立运行，且这里需要比通用助手更强的 JSX/正则启发（见上），失败模式是「宁可保留原文」。
  */
 export function stripComments(source) {
   let out = ''

@@ -47,11 +47,12 @@ import { spawnSync } from 'node:child_process'
  *  real-time scan latency that exceeded 10s (spawnSync ETIMEDOUT in the
  *  win32 lifecycle integration); the 500ms table cache means the slow path
  *  is paid once per TTL, not per poll. MUST stay in sync with
- *  windows-process.ts PROBE_TIMEOUT_MS (sibling-parity audit). */
-const WINDOWS_PROBE_TIMEOUT_MS = 30_000
+ *  windows-process.ts PROBE_TIMEOUT_MS — enforced by the parity test
+ *  (test/protocol/win-probes-parity.test.ts), not by this comment. */
+export const WINDOWS_PROBE_TIMEOUT_MS = 30_000
 
-/** CIM table cache TTL — MUST match windows-process.ts (sibling-parity audit, round 2). */
-const TABLE_CACHE_TTL_MS = 500
+/** CIM table cache TTL — MUST match windows-process.ts; parity-test-enforced. */
+export const TABLE_CACHE_TTL_MS = 500
 
 /** One parsed Win32_Process row (JSON-normalized). */
 export interface CimProcessRow {

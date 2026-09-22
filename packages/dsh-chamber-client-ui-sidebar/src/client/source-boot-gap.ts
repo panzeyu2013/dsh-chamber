@@ -15,6 +15,7 @@
  */
 
 import type { ChamberServerAggregate } from '../shared/aggregate-store.ts'
+import { bootGapShape } from '../shared/boot-gap-shape.ts'
 import type { SidebarKey } from './locales.ts'
 
 /** The dictionary lookup the renderer passes in (`t` from the package locale). */
@@ -36,25 +37,24 @@ type Translate = (key: SidebarKey, params?: Record<string, string | number>) => 
 export function sourceBootGapNote(server: ChamberServerAggregate, t: Translate): string {
   const gap = server.bootGap
   if (gap === undefined) return ''
-  switch (gap.kind) {
+  // Payload extraction is the shared projection (shared/boot-gap-shape.ts): the
+  // exhaustiveness that used to live in this switch now lives there (a future
+  // ServerBootGapKind is a compile error at the shared function), and this switch
+  // maps the shape onto THIS package's keys.
+  // 2026-12 FIX 6: the LOCAL instance's 404/method-missing is a chamber-side
+  // installation/seed fact, so it gets its own sentence (no "upgrade that
+  // source's runtime" advice — the copy boundary keeps that in the frame).
+  const shape = bootGapShape(gap)
+  switch (shape.key) {
     case 'graph-unavailable':
       return t('source.bootGap.graphUnavailable')
-    // 2026-12 FIX 6: the LOCAL instance's 404/method-missing is a chamber-side
-    // installation/seed fact, so it gets its own sentence (no "upgrade that
-    // source's runtime" advice — the copy boundary keeps that in the frame).
     case 'local-graph-not-injected':
       return t('source.bootGap.localGraphNotInjected')
-    case 'required-services-missing': {
-      const services = gap.services ?? []
-      return services.length === 0
-        ? t('source.bootGap.generic')
-        : t('source.bootGap.requiredServicesMissing', { services: services.join(', ') })
-    }
-    case 'deferred-registration-failed': {
-      const failed = (gap.failedIds ?? []).length
-      return failed === 0
-        ? t('source.bootGap.generic')
-        : t('source.bootGap.deferredRegistrationFailed', { n: failed })
-    }
+    case 'required-services-missing':
+      return t('source.bootGap.requiredServicesMissing', { services: shape.services })
+    case 'deferred-registration-failed':
+      return t('source.bootGap.deferredRegistrationFailed', { n: shape.failed })
+    case 'generic':
+      return t('source.bootGap.generic')
   }
 }

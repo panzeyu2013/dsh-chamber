@@ -81,7 +81,9 @@ export interface UnreadDerivationResult {
   changed: boolean
 }
 
-function sameBooleanMap(
+/** 同形布尔表比较（账本 identity 闸）：App 的 sameBooleanLedger 曾是逐字副本，
+ *  2026-12 单源化后以 `sameBooleanMap as sameBooleanLedger` 复用本实现。 */
+export function sameBooleanMap(
   left: Readonly<Record<string, boolean>>,
   right: Readonly<Record<string, boolean>>,
 ): boolean {

@@ -9,10 +9,22 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { deriveUnread, reconcileCompletedFacts } from '../../../dsh-chamber-client-ui-sidebar/src/shared/derive.ts'
-import { deriveSourceUnread, viewingReadWatermark } from '../../src/unread-derivation.ts'
+import { deriveSourceUnread, sameBooleanMap, viewingReadWatermark } from '../../src/unread-derivation.ts'
 import type { UnreadDerivationInput, UnreadDerivationFactsRow } from '../../src/unread-derivation.ts'
 
 const deps = { deriveUnread, reconcileCompletedFacts }
+
+test('sameBooleanMap: 同形布尔表比较（App 的账本 identity 闸与模块内部共用同一实现）', () => {
+  assert.equal(sameBooleanMap({}, {}), true)
+  assert.equal(sameBooleanMap({ a: true }, { a: true }), true)
+  assert.equal(sameBooleanMap({ a: true, b: false }, { a: true, b: false }), true)
+  assert.equal(sameBooleanMap({ a: true }, { a: false }), false)
+  assert.equal(sameBooleanMap({ a: true }, {}), false, '键数不同即不同')
+  assert.equal(sameBooleanMap({}, { a: true }), false, '右侧多键也即不同')
+  assert.equal(sameBooleanMap({ a: true, b: false }, { a: true, b: true }), false)
+  // 语义是「真值位相同」：非 true 的一切（false/undefined）等价。
+  assert.equal(sameBooleanMap({ a: false } as Record<string, boolean>, { a: undefined } as unknown as Record<string, boolean>), true)
+})
 
 function input(overrides: Partial<UnreadDerivationInput> = {}): UnreadDerivationInput {
   return {

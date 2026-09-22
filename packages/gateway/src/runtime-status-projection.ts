@@ -13,6 +13,7 @@ import {
   inspectCorruptMetadataRecoveryMarker,
   isSafeVersion,
   overridePath,
+  projectMetadataHealthFacts,
 } from '@dsh-chamber/dsh-runtime'
 import { RECOVERABLE_METADATA_BLOCKS } from './runtime-refusals.ts'
 
@@ -101,24 +102,14 @@ export function createMetadataStatusProjection(deps: MetadataStatusProjectionDep
     let facts: ReturnType<typeof metadataHealthFacts> = null
     try {
       const health = detectRuntimeMetadataHealth(baseDir, shellVersion)
-      const components = new Set<string>()
-      if (health.current.kind === 'corrupt'
-        || health.corruptEvidence.some(name => name.startsWith('current.'))) components.add('current')
-      if (health.override.kind === 'corrupt'
-        || health.corruptEvidence.some(name => name.startsWith('override.json.'))) components.add('override')
-      if (health.activationJournal.kind === 'corrupt'
-        || health.corruptEvidence.some(name => name.startsWith('activation-journal.json.'))) components.add('activation-journal')
-      if (health.recovery.kind === 'corrupt'
-        || (health.recovery.kind === 'valid' && health.recovery.record.phase !== 'finalized')) {
-        components.add('recovery-marker')
-      }
-      if (health.corruptEvidence.length > 0) components.add('retained-evidence')
-      const markerRescueAvailable = health.status === 'recovery-marker-corrupt'
-        && inspectCorruptMetadataRecoveryMarker(baseDir).recoverable
-      const needsRecovery = health.status === 'selection-corrupt'
-        || health.status === 'recovery-in-progress'
-        || markerRescueAvailable
-      facts = { status: health.status, components: [...components], needsRecovery }
+      // The component set and needsRecovery are the shared projection
+      // (dsh-runtime/src/metadata-health-projection.ts, M14); the marker rescue
+      // stays here because it inspects THIS host's base directory.
+      const projected = projectMetadataHealthFacts(health, {
+        markerRescueAvailable: health.status === 'recovery-marker-corrupt'
+          && inspectCorruptMetadataRecoveryMarker(baseDir).recoverable,
+      })
+      facts = { status: health.status, components: projected.components, needsRecovery: projected.needsRecovery }
     } catch {
       facts = null
     }

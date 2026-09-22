@@ -50,6 +50,16 @@ export const GROUPS = {
     // Shared package-test runner (its zero-case guard is a repository gate
     // helper, so it runs with the gate suites).
     'scripts/lib/test-manifest.test.mjs',
+    // The shared SDK-copy typecheck engine (the two gate entry points are
+    // run-checks typecheck steps; the engine's path/diagnostic split is where a
+    // silently-wrong filter would hide).
+    'scripts/dev/typecheck-sdk-copy.test.mjs',
+    // The shared test-only vendor resolve-hook factory (three package loaders).
+    'scripts/dev/test-support/vendor-resolve.test.mjs',
+    // Shared sidecar launch plumbing (free-port picker + argv/env contract).
+    'scripts/lib/sidecar-launch.test.mjs',
+    // Shared scripts-toolbox CLI epilogue (usage block / failure projection).
+    'scripts/lib/cli.test.mjs',
   ],
   // Upstream pin and touchpoint tooling (pin preflight, lockfile repair,
   // registry/touchpoint gates, protected-set and anchor gates).

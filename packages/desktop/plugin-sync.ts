@@ -44,6 +44,7 @@ import {
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { homedir, tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
+import { readStringArray } from '@dsh-chamber/control-plane'
 // The cordis loader insert render/parse/conflict logic is single-sourced in
 // control-plane (cordis-inserts.ts, A2 cross-package protocol single-
 // sourcing) — consumed through control-plane-module.ts (the desktop
@@ -686,16 +687,6 @@ export function parseRemoteManifest(text: string): { dependencies: Record<string
     }
   }
   return { dependencies, bundles: readStringArray(record, ['dsh', 'profile', 'bundles']) }
-}
-
-function readStringArray(record: Record<string, unknown>, path: string[]): string[] {
-  let current: unknown = record
-  for (const key of path) {
-    if (current === null || typeof current !== 'object') return []
-    current = (current as Record<string, unknown>)[key]
-  }
-  if (!Array.isArray(current)) return []
-  return current.filter((item): item is string => typeof item === 'string')
 }
 
 /** Read the `version` string from a JSON package-manifest text; null when

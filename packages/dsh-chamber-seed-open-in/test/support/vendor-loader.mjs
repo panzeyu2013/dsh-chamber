@@ -11,22 +11,10 @@
  * bundle, or the typecheck.
  */
 
-import { fileURLToPath, pathToFileURL } from 'node:url'
-
-/** @param {string} relative - path relative to this file. */
-function stubUrl(relative) {
-  return pathToFileURL(fileURLToPath(new URL(relative, import.meta.url))).href
-}
+import { createVendorResolve } from '../../../../scripts/dev/test-support/vendor-resolve.mjs'
 
 /** Vendor specifier → stand-in module. */
-const STUBS = new Map([
-  ['@deepseek-ai/dsh-native-command', stubUrl('../fixtures/native-command-stub.mjs')],
-  ['@deepseek-ai/dsh-subprocess', stubUrl('../fixtures/subprocess-stub.mjs')],
-])
-
-/** @type {import('node:module').ResolveHook} */
-export async function resolve(specifier, context, nextResolve) {
-  const stub = STUBS.get(specifier)
-  if (stub !== undefined) return { url: stub, shortCircuit: true }
-  return nextResolve(specifier, context)
-}
+export const resolve = createVendorResolve(new Map([
+  ['@deepseek-ai/dsh-native-command', '../fixtures/native-command-stub.mjs'],
+  ['@deepseek-ai/dsh-subprocess', '../fixtures/subprocess-stub.mjs'],
+]), import.meta.url)

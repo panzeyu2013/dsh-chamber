@@ -1737,3 +1737,23 @@ PWA / Web Push 社区实现机制（dsh-ui-mobile，jasondu，npm 0.1.8，MIT，
   exit 1——**否决**：CI 与裸 clone 上没有上游树（`packages/desktop/vendor/dsh` 只提交 lockfile），
   常态红会把门变成噪声；改为默认 fail-soft + 升级流程 §7 显式 `--require-anchor-root`（缺根、无
   client 产物、锚点树版本与 pin 不符都 exit 1），让「真的查过」可断言。
+
+## 被否方案（2026-12 单源化：gateway token/password 写入驱动）
+
+`setGatewayToken` / `setGatewayPassword`（design 17 §2.3 的相互独立 nullable 凭据）原为逐字同形的实现。
+本次抽出描述符 + 共享驱动 `setGatewayCredential`（ARCH-IMPL-026），并在改造前先补了**两维交叉矩阵**测试
+（`packages/desktop/test/gateway/gateway-credential-matrix.test.ts`，7 例：只写一维 / 两维都写 / 两向清除互不触碰 /
+清除不存在维度是磁盘 no-op / 非法 id 与校验失败分维 / 无绑定时两维各自拒绝且不落盘）。
+
+被否方案：
+
+- **共享函数 + `kind`/布尔开关**：会让「token 与 password 相互独立」从类型面上消失，N8 明文禁止——
+  一次 `kind` 传错就会写错维度。本实现改为每个维度一个描述符（各自的 `validate`/`has`/`write`/`clear`），
+  另一维度的表在类型上根本不出现在该描述符里。
+- **把清除体也合并**（用 `dimension` 分派到统一分支）：三维语义不同（SSH 传输重建 / token 撤销 / 网关会话失效），
+  以及 token 与 password 的表各不相同，合并会在共享函数里重新引入「按维度分派」的开关。
+- **只在调用点加注释而不抽共享**：本次重复的正是「校验顺序 + no-op 语义 + 单次持久化 + 提交」这条不变量，
+  留下两份副本会随任一侧修复而漂移。
+
+独立性由三组负控锁定：①清除 token 顺手删 password；②本维度 `has` 去查另一维度；③清除不存在维度不再 no-op——
+三者都会让矩阵测试变红。

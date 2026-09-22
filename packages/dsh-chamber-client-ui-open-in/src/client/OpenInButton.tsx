@@ -68,6 +68,7 @@ import {
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import { useInstanceViewDismissal } from './instance-view-guard.ts'
 import type { Translate } from '../shared/coordinator.ts'
+import { describeOpenInError } from '../shared/capabilities.ts'
 import type { OpenInResult, OpenInSource } from '../shared/capabilities.ts'
 import type { OpenInViewEntry, OpenInViewModel } from '../shared/open-in-view-model.ts'
 import { OPEN_IN_APP_LABEL_KEY } from '../locales.ts'
@@ -299,7 +300,7 @@ export function OpenInButton({
       // the app, never an unhandled rejection.
       inFlight.current = false
       clearTimeout(busyTimer.current)
-      setFailureReason(error instanceof Error ? error.message : String(error))
+      setFailureReason(describeOpenInError(error))
       setPhase('error')
       errorTimer.current = setTimeout(() => {
         setPhase('idle')

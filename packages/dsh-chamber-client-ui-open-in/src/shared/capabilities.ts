@@ -43,27 +43,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
 }
 
-/** Stable text for an IPC rejection. Error formatting is itself an exception
- * boundary: hostile getters/proxies/toString values must not turn the catch
- * handler into a new unhandled rejection. */
-export function describeOpenInError(error: unknown): string {
-  try {
-    if (error instanceof Error) {
-      const message = typeof error.message === 'string' ? error.message : ''
-      if (message !== '') return message
-      const name = typeof error.name === 'string' ? error.name : ''
-      if (name !== '') return name
-    }
-  } catch {
-    // Continue to the separately guarded primitive conversion.
-  }
-  try {
-    const text = String(error)
-    return text === '' ? 'unknown error' : text
-  } catch {
-    return 'unknown error'
-  }
-}
+/** Stable text for an IPC rejection — the hostile-value projection is the sidebar's
+ *  shared `describeThrown` (single source, 2026-12 M2/ARCH-IMPL-029): error formatting
+ *  is itself an exception boundary, so hostile getters/proxies/toString values must
+ *  never turn a catch handler into a new unhandled rejection. The open-in domain keeps
+ *  its own call-site name; the implementation lives in exactly one place. */
+export { describeThrown as describeOpenInError } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
 
 /**
  * Validate the untyped IPC projection one entry at a time. Invalid entries are

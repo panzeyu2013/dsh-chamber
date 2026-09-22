@@ -34,7 +34,7 @@ import { FATAL_STARTUP_BLOCK_REASONS, runDelayedRollback, runStartupPhase, shoul
 import { planRestartExhaustedRollback } from '@dsh-chamber/dsh-runtime';
 import { RuntimeOperationFence, type OperationLease } from '@dsh-chamber/dsh-runtime';
 import { runRuntimeActivationProbes } from '@dsh-chamber/dsh-runtime';
-import { detectRuntimeMetadataHealth, inspectCorruptMetadataRecoveryMarker, recoverRuntimeMetadata, rescueCorruptMetadataRecoveryMarker, type RuntimeMetadataHealth } from '@dsh-chamber/dsh-runtime';
+import { detectRuntimeMetadataHealth, inspectCorruptMetadataRecoveryMarker, projectMetadataHealthFacts, recoverRuntimeMetadata, rescueCorruptMetadataRecoveryMarker, type RuntimeMetadataHealth } from '@dsh-chamber/dsh-runtime';
 import { allowedActions } from '@dsh-chamber/dsh-runtime';
 import { isSafeVersion } from '@dsh-chamber/dsh-runtime';
 import { IPC_CHANNELS } from './ipc-events.ts';
@@ -194,24 +194,15 @@ export function createRuntimeStartupHost(host: RuntimeStartupHostDeps) {
       } catch {
         return { metadataHealth: 'unknown', metadataComponents: [], canRecoverMetadata: false };
       }
-      const components = new Set<RuntimeMetadataComponent>();
-      if (health.current.kind === 'corrupt'
-        || health.corruptEvidence.some(name => name.startsWith('current.'))) components.add('current');
-      if (health.override.kind === 'corrupt'
-        || health.corruptEvidence.some(name => name.startsWith('override.json.'))) components.add('override');
-      if (health.activationJournal.kind === 'corrupt'
-        || health.corruptEvidence.some(name => name.startsWith('activation-journal.json.'))) components.add('activation-journal');
-      if (health.recovery.kind === 'corrupt'
-        || (health.recovery.kind === 'valid' && health.recovery.record.phase !== 'finalized')) {
-        components.add('recovery-marker');
-      }
-      if (health.corruptEvidence.length > 0) components.add('retained-evidence');
       const effectivePhase = phase ?? runtimeInstance.getState().phase;
-      const markerRescueAvailable = health.status === 'recovery-marker-corrupt'
-        && inspectCorruptMetadataRecoveryMarker(runtimeBaseDir).recoverable;
-      const needsRecovery = health.status === 'selection-corrupt'
-        || health.status === 'recovery-in-progress'
-        || markerRescueAvailable;
+      // The component set and needsRecovery are the shared projection
+      // (dsh-runtime/src/metadata-health-projection.ts, M14); the marker rescue
+      // stays here because it inspects THIS host's base directory.
+      const metadataFacts = projectMetadataHealthFacts(health, {
+        markerRescueAvailable: health.status === 'recovery-marker-corrupt'
+          && inspectCorruptMetadataRecoveryMarker(runtimeBaseDir).recoverable,
+      });
+      const needsRecovery = metadataFacts.needsRecovery;
       // 'incomplete' is a permanent restore outcome: the journaled snapshot is
       // missing or untrustworthy, so retry-restore can never succeed and the
       // recover-metadata escape must stay eligible (including when a stale
@@ -231,7 +222,7 @@ export function createRuntimeStartupHost(host: RuntimeStartupHostDeps) {
         && (permanentIncomplete || restoreMarkerAuthorityStatus(runtimeBaseDir) === 'missing');
       return {
         metadataHealth: health.status,
-        metadataComponents: [...components],
+        metadataComponents: metadataFacts.components,
         canRecoverMetadata,
       };
     };

@@ -31,20 +31,9 @@
  * the build, the bundle, or the typecheck.
  */
 
-import { fileURLToPath, pathToFileURL } from 'node:url'
+import { createVendorResolve } from '../../../../scripts/dev/test-support/vendor-resolve.mjs'
 
 /** Vendor specifier → vendor source entry, exactly as vite resolves it. */
-const SOURCES = new Map([
-  [
-    '@deepseek-ai/dsh-client-ui-slots',
-    '../../../../vendor/harness-packages/@deepseek-ai/dsh-client-ui-slots/src/index.ts',
-  ],
-])
-
-/** @type {import('node:module').ResolveHook} */
-export async function resolve(specifier, context, nextResolve) {
-  const relative = SOURCES.get(specifier)
-  if (relative === undefined) return nextResolve(specifier, context)
-  const url = pathToFileURL(fileURLToPath(new URL(relative, import.meta.url))).href
-  return { url, shortCircuit: true }
-}
+export const resolve = createVendorResolve(new Map([
+  ['@deepseek-ai/dsh-client-ui-slots', '../../../../vendor/harness-packages/@deepseek-ai/dsh-client-ui-slots/src/index.ts'],
+]), import.meta.url)

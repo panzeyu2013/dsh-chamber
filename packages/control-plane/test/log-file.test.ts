@@ -186,10 +186,11 @@ test('轮转失败必须降级并告警一次，绝不让文件无界增长', ()
   const sink = createControlLogSink({ stateDir, maxBytes: 10, warn: message => { warnings.push(message) } })
   const dir = join(stateDir, CONTROL_LOG_DIR)
   sink.write({ ts: 't', level: 'log', line: 'a'.repeat(20) })
-  // 目录设为不可写：rename 必然 EPERM ⇒ 轮转不成立（当前文件仍在且超限）。
-  chmodSync(dir, 0o500)
+  // 预置不安全归档槽（目录）⇒ 环的槽位校验拒绝整个轮转，与进程 uid 无关。
+  // 原实现用 chmod 0500 制造 EPERM，但 uid 0 下 rename 仍会成功（2026-12 实测），
+  // 该注入在 root 环境/容器里恒不成立，等于这条用例在那里无法失败。
+  mkdirSync(join(dir, CONTROL_LOG_FILE + '.1'))
   sink.write({ ts: 't', level: 'log', line: 'b'.repeat(20) })
-  chmodSync(dir, 0o700)
   assert.equal(sink.isActive(), false, '轮转失败即降级为不落盘')
   assert.equal(warnings.length, 1, '只告警一次')
   const size = statSync(join(dir, CONTROL_LOG_FILE)).size

@@ -29,6 +29,10 @@
     "test": "node ./scripts/test.mjs"
   },
   "license": "MIT",
+  "dependencies": {
+    "@deepseek-ai/dsh-client-ui-primitives": "workspace:^",
+    "@dsh-chamber/dsh-chamber-client-ui-sidebar": "workspace:^"
+  },
   "peerDependencies": {
     "@deepseek-ai/cordis": "workspace:^",
     "@deepseek-ai/dsh-client-locale": "workspace:^",

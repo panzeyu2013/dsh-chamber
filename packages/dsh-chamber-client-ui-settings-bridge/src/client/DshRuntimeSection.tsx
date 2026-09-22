@@ -92,6 +92,7 @@ import {
   retryRestoreStillValid,
   type GatewayConfirmFacts,
 } from './runtime-confirm-guards.ts'
+import { errorMessage } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
 import { bridgeRestartRefusalText } from './restart-refusal.ts'
 import { RUNTIME_BADGE_KEYS, RUNTIME_BADGE_TONE_CLASS, formatTimestamp, localizeRegistryError, metadataComponentText, type RuntimeTranslate } from './runtime-display.ts'
 import css from './SettingsShell.module.css'
@@ -118,10 +119,6 @@ const CUSTOM_REGISTRY = '__custom__'
  * the dialog forever.
  */
 const REMOTE_ACTION_TIMEOUT_MS = REMOTE_STATUS_POLL_TIMEOUT_MS + 60_000
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
-}
 
 /* Unified coloured status badge (2026-12): one pill vocabulary shared by the
    local and gateway branches — label keys + dsw tone classes. The badge

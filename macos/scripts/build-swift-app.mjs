@@ -66,6 +66,7 @@ import {
 } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { isCliEntry, runCliTool } from '../../scripts/lib/cli.mjs'
 // 共享装配 seam（monorepo 内相对导入，同 packages/desktop/scripts/
 // build-swift-app.test.mjs 的反向引用）：bundle 内符号链接归一化必须与 W-23
 // sidecar 装配同源，绝不允许两份实现漂移。
@@ -1038,22 +1039,17 @@ export async function runBuildSwiftApp(options, io = { log: console.log, error: 
   return { dryRun: false, layout, version }
 }
 
-const isMain = process.argv[1] !== undefined
-  && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href
-if (isMain) {
-  try {
-    const options = parseBuildSwiftAppArgs(process.argv.slice(2))
-    if (options.help) {
-      console.log('用法：build-swift-app.mjs [--out <dir>] [--config release] [--identity <id>|-]')
-      console.log('       [--app-name <name>] [--artifact-basename <name>] [--arch arm64|x64]')
-      console.log('       [--sidecar <dir>] [--icon <icns>] [--web-dist <dir>] [--skip-build]')
-      console.log('       [--skip-sidecar] [--skip-web-dist] [--no-sign] [--no-zip] [--no-dmg] [--dry-run]')
-      console.log('       [--sparkle-feed <url>] [--sparkle-public-key <ed25519>] [--swift-args "<args>"]')
-      process.exit(0)
-    }
-    await runBuildSwiftApp(options)
-  } catch (error) {
-    console.error(`[build-swift-app] 失败：${error instanceof Error ? error.message : String(error)}`)
-    process.exit(1)
-  }
+if (isCliEntry(import.meta.url)) {
+  await runCliTool({
+    label: 'build-swift-app',
+    usage: [
+      '用法：build-swift-app.mjs [--out <dir>] [--config release] [--identity <id>|-]',
+      '       [--app-name <name>] [--artifact-basename <name>] [--arch arm64|x64]',
+      '       [--sidecar <dir>] [--icon <icns>] [--web-dist <dir>] [--skip-build]',
+      '       [--skip-sidecar] [--skip-web-dist] [--no-sign] [--no-zip] [--no-dmg] [--dry-run]',
+      '       [--sparkle-feed <url>] [--sparkle-public-key <ed25519>] [--swift-args "<args>"]',
+    ],
+    parse: parseBuildSwiftAppArgs,
+    run: runBuildSwiftApp,
+  })
 }
