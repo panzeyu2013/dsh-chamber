@@ -180,8 +180,11 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
 > ④ **等待形状**：`withDeadline` / `waitForCondition` / `retryDelayMs` / `createSingleFlight` 四个原语替换手写计时器记账
 > （B6 七站点中 W1/W2/W3/W5/W6 已迁；W4 不做，W7 因异步探测不适用）；
 > ⑤ **阈值**：四条阶梯的值集中于 `tables.json` 的 `ladders`，由 `scripts/gates/verify-ladder-table-parity.mjs` 与各模块锁步；
->    阶梯决策由包内 `planLadder`（tier/cooldown/配额/窗口/证据门）单源持有——mobile session-stall 已把「loading 且无在途」移进 tier 的
->    `requiresStuckEvidence`，宿主只执行 `actions` 并携带 `records`；renderer liveness / open-in chip / sidebar 三条仍在宿主私有决策，收编中；
+>    阶梯**调度半**（tier/cooldown/配额/窗口/证据门）由包内 `planLadder` 单源持有——mobile session-stall 已在其中（「loading 且无在途」移进
+>    tier 的 `requiresStuckEvidence`，宿主只执行 `actions` 并携带 `records`）。**边界（已核实，2026-12）**：renderer `session-liveness` 与
+>    open-in `stream-health` 的相位/回执状态机**不在**引擎表达力内——per-session running 身份、outcome-wait/unknown-absorbed、no-op/blocked 的
+>    L3 出口、跨 tier 共享账本、notice/latch 组合、carrier-churn 窗口都无对应概念（字段级对照见 `ladder.ts` 的工厂注记与 plan §84）；机械迁移等于
+>    给引擎加相位机，属设计变更而非本轮重构，故两者保持宿主决策，收编前必须先扩展引擎模型；sidebar 对账是单飞 + 有界重试链，非 tier 阶梯；
 >    露屏阈值（10s 反馈窗 / 70s 外层保险 / 2s 兜底）在 `tables.ts` 的 `PRESENTATION_THRESHOLDS`（tables.json 同源），renderer 直接消费，不再持有副本。
 > ⑥ **时间与账本**：`src/time.ts` 是「可用钟/滚动窗口」的唯一所有者——NaN/±Inf/回拨只保守持有（never release/0ms），
 >    `rebuildsAt`/dispatch 账本只在窗口内保留；适配器不再各自比较时间戳（G-B/G-C/G-F）。
