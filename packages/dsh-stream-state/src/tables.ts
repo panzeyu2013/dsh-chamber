@@ -42,6 +42,13 @@ export const SILENT_TEARDOWN_MIN_MS = 15_000
  * socket - is stuck. */
 export const OPENING_STALL_STREAK = 2
 
+/** Deadline for one WebSocket handshake (provenance:
+ * REMOTE_STREAM_HANDSHAKE_TIMEOUT_MS). A socket that never fires open/error/close
+ * must fail the attempt, not park every open() until the connection lane's own
+ * readiness timeout. G-G locks the fork-side constant to this value until P3
+ * moves the decision into the carrier reducer. */
+export const HANDSHAKE_TIMEOUT_MS = 30_000
+
 /** Environment handed to the carrier reducer - tables, never literals at the
  * call site, so the executor cannot drift from the table. */
 export const CARRIER_ENV = {
@@ -91,6 +98,30 @@ export const LADDER_TABLES = {
     verifyTimeoutMs: 65_000,
     correctivePhaseTimeoutMs: 5_000,
   },
+  /** renderer session-liveness.ts (design 14 D4 liveness arm). Lockstep until P5
+   * lands the ladder wiring, then this section retires with the module copy. */
+  sessionLiveness: {
+    refreshAfterMs: 60_000,
+    refreshCoalesceMs: 200_000,
+    maxRefreshRequests: 3,
+    refreshWindowMs: 600_000,
+    refreshOutcomeTimeoutMs: 190_000,
+    reconnectBackoffMs: 300_000,
+    maxReconnects: 1,
+    maxNoopReconnects: 3,
+    noticeAfterMs: 120_000,
+  },
+  /** open-in session-stream-health.ts (design 14 D4 stream-health chip). */
+  streamHealth: {
+    errorGraceMs: 8_000,
+    loadingStallMs: 20_000,
+    loadingFailedMs: 90_000,
+    healCooldownMs: 120_000,
+    healBudgetWindowMs: 600_000,
+    healBudgetMax: 3,
+    healSettleMs: 20_000,
+    carrierChurnMs: 10_000,
+  },
 } as const
 
 /** The literal table as a value, for the tables.json lockstep assertion. */
@@ -102,5 +133,6 @@ export const TABLE_SNAPSHOT = {
   openingTimeoutLadderMs: OPENING_TIMEOUT_LADDER_MS,
   silentTeardownMinMs: SILENT_TEARDOWN_MIN_MS,
   openingStallStreak: OPENING_STALL_STREAK,
+  handshakeTimeoutMs: HANDSHAKE_TIMEOUT_MS,
   ladders: LADDER_TABLES,
 } as const

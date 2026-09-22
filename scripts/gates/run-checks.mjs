@@ -148,6 +148,9 @@ const STATIC_CHECKS = [
   // 由本门逐个比对（漂移即红；模块删掉常量正是 B4 的退役，不算失败）。
   // 只读、离线、无依赖，故属 static 模式。
   'node scripts/gates/verify-ladder-table-parity.mjs',
+  // G-H 死面扫描：src/index.ts 的每个运行时导出必须有一个生产 importer，否则红；
+  // 显式豁免必须带理由且不得过期。当前红 = 阶梯引擎等（P3/P4 删除、P5 接线、P6 收口）。
+  'verify:no-dead-exports',
   'test:scripts',
 ]
 

@@ -26,6 +26,11 @@ import { fileURLToPath } from 'node:url'
 const PACKAGE_ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)))
 
 export const GROUPS = {
+  // wiring: the declared lifecycle faces (event/effect literals) must each have a
+  // producer or executor - a union member nothing performs is a dead promise. G-A.
+  wiring: [
+    'test/wiring/emission-coverage.test.ts',
+  ],
   // carrier: the single-owner carrier lifecycle reducer + its throttle tables.
   carrier: [
     'test/carrier/carrier-lifecycle.test.ts',
@@ -36,6 +41,11 @@ export const GROUPS = {
   // Phase B nodes are checked against.
   invariants: [
     'test/invariants/reducer-invariants.test.ts',
+    // G-B: NaN / Inf / rollback fuzz over every waiting decision - an unusable
+    // clock may only hold, never release and never produce a 0 ms deadline.
+    'test/invariants/time-discipline.test.ts',
+    // G-C: the rolling ledgers are pruned to the window their readers use.
+    'test/invariants/ledger-bounds.test.ts',
   ],
   // equivalence: the action normalizer used by scripts/refactor/equivalence.mjs
   // to compare an old wiring against a new one without false-red on wording.
@@ -65,11 +75,17 @@ export const GROUPS = {
     'test/load-state/load-state.test.ts',
     // B2: the prewarm ledgers' events (Set-shaped ledgers need methods, not views).
     'test/source/source-prewarm-ledger.test.ts',
+    // G-D: one source id has one live incarnation - stale events are dropped and
+    // the projections never merge two generations of the same id.
+    'test/source/incarnation-fence.test.ts',
   ],
   // presentation: the single veil/reveal decision (B3 core) that replaces four
   // independent timers and computes the total bound in one place.
   presentation: [
     'test/presentation/presentation-arbiter.test.ts',
+    // G-E: a held veil carries a finite absolute releaseAtMonoMs, and
+    // planVeilTimer refuses to arm a 0 ms timer for a held frame.
+    'test/presentation/veil-release.test.ts',
   ],
   // ladder: the unified recovery-ladder engine (B4 core) that all four ladders
   // (liveness / reconcile / stream-health / mobile stall) become instances of.
