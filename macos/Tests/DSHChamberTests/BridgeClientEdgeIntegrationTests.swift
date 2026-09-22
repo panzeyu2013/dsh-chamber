@@ -574,7 +574,7 @@ final class BridgeClientEdgeIntegrationTests: XCTestCase {
 
         let channels = Self.invokeChannels
         // 通道数不在此硬编码：单一事实源是生成物（BridgeManifestConsistencyTests 钉
-        // 精确计数 61），这里只钉「非空 + 无重复 + 全部被 smoke 覆盖」。
+        // 精确计数 60），这里只钉「非空 + 无重复 + 全部被 smoke 覆盖」。
         XCTAssertFalse(channels.isEmpty, "BridgeManifest.invokeChannels 不得为空")
         XCTAssertEqual(Set(channels).count, channels.count, "清单不得含重复通道")
 
