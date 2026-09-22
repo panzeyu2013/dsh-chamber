@@ -63,6 +63,8 @@ export const GROUPS = {
     'test/lifecycle/source-refresh-hint.test.ts',
     // P3 会话面绘制信号（[data-phase] 揭示门）的纯决策契约。
     'test/lifecycle/session-surface.test.ts',
+    // P2 露屏接线：held 帧的定时器必须来自帧的绝对期限（>0ms），越界必须揭示租客。
+    'test/lifecycle/veil-release-timer.test.ts',
     // 运行位活性守卫的决策纯模块契约（design 14 §D4）。
     'test/lifecycle/session-liveness.test.ts',
   ],
