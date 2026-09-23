@@ -133,22 +133,14 @@ const AUTH_BOOTSTRAP_WAIT_MS = 15_000
 export const PORT_PROBE_TIMEOUT_MS = 1_000
 
 /**
- * Per-pipe-event input ceiling. Child stdout/stderr arrives as Buffer objects;
- * slice those bytes before decoding so one hostile/buggy write cannot first
- * allocate an unbounded string in both the control-plane logger and host-log
- * JSON encoder. 64 KiB also leaves ample room below host-logs' 512 KiB
+ * Ceiling for the INCOMPLETE-LINE carry of the child-output forward path. Child
+ * stdout/stderr arrives as Buffer objects and is decoded raw (the readiness
+ * scanner must see complete, untrimmed lines), so the bound lives on the tail
+ * buffer a newline-less writer would otherwise grow without limit — see
+ * forwardChildOutput. 64 KiB also leaves ample room below host-logs' 512 KiB
  * encoded-entry admission ceiling for worst-case JSON escaping.
  */
 export const MAX_CHILD_OUTPUT_CHUNK_BYTES = 64 * 1024
-const CHILD_OUTPUT_TRUNCATION_MARKER = '\n...[output chunk truncated]'
-
-/** Format one child-pipe chunk once for both logger and rolling-log sinks. */
-export function formatChildOutputChunk(chunk: Buffer): string {
-  if (chunk.byteLength <= MAX_CHILD_OUTPUT_CHUNK_BYTES) return chunk.toString('utf8').trimEnd()
-  const markerBytes = Buffer.byteLength(CHILD_OUTPUT_TRUNCATION_MARKER)
-  const retainedBytes = Math.max(0, MAX_CHILD_OUTPUT_CHUNK_BYTES - markerBytes)
-  return `${chunk.subarray(0, retainedBytes).toString('utf8').trimEnd()}${CHILD_OUTPUT_TRUNCATION_MARKER}`
-}
 
 /**
  * Mask credential-bearing query values in ONE COMPLETE child-output line —
@@ -814,9 +806,9 @@ async function spawnAttempt({
   // what the child itself printed, not only that it exited.
   let stderrDigest = ''
   const forwardChildOutput = (chunk: Buffer, stream: 'stdout' | 'stderr') => {
-    // RAW bytes, not the trimmed formatter: the trailing newline must
-    // survive so line splitting works (trimEnd swallowed it and left every
-    // line stuck in the tail). The scanner has the same raw-bytes rule.
+    // RAW bytes, never a trimmed form: the trailing newline must survive so
+    // line splitting works (trimEnd swallowed it and left every line stuck in
+    // the tail). The scanner has the same raw-bytes rule.
     const text = chunk.toString('utf8')
     const segments = (forwardLineTail + text).split('\n')
     // Bound the incomplete-line tail: a child that
@@ -854,9 +846,9 @@ async function spawnAttempt({
       resolve(value)
     }
     const onStdout = (chunk: Buffer) => {
-      // RAW bytes, never the log formatter: formatChildOutputChunk trims the
-      // chunk end, which would swallow the space before `(LAN: …)` at a chunk
-      // boundary and corrupt the token query.
+      // RAW bytes, never a trimmed form: trimming the chunk end would swallow
+      // the space before `(LAN: …)` at a chunk boundary and corrupt the token
+      // query.
       stdoutTail = (stdoutTail + chunk.toString('utf8')).slice(-8_192)
       // Match only COMPLETE lines: the readiness line
       // always ends with a newline; a chunk-split URL must never mint a
@@ -1268,30 +1260,6 @@ async function waitForManagedGroupExit(child: ChildProcess, timeoutMs: number): 
     await new Promise(resolve => setTimeout(resolve, Math.min(PROCESS_GROUP_POLL_MS, remaining)))
   }
   return true
-}
-
-/**
- * Abandon a FAILED spawn attempt: process-group SIGKILL → wait for the exit →
- * remove the pid record. Every spawnAttempt failure path converges here so a
- * broken attempt can never leave an untracked detached process behind. Mirror
- * of terminateChild's group discipline; the record is removed only after the
- * process is confirmed dead (design 02 §3.3: 注销只在确认进程已退出后) — a
- * child that somehow survives the SIGKILL stays tracked for the orphan reaper.
- * The merged spawnAttempt failure paths use the stronger terminateAndProveQuiet,
- * and there are currently NO production callers of this export. Callers MUST
- * await and catch: on Windows a failed tree kill throws, the pid record is
- * retained (fail closed) and the orphan reaper is the fallback. Tests cover
- * the POSIX group-kill semantics.
- */
-export async function killFailedSpawn(stateDir: string, child: ChildProcess): Promise<void> {
-  const pid = child.pid
-  if (pid === undefined) return
-  if (child.exitCode === null && child.signalCode === null) {
-    const exited = new Promise<void>(resolve => child.once('exit', () => resolve()))
-    signalManagedGroup(child, pid, 'SIGKILL')
-    await exited
-  }
-  removePidRecord(stateDir, pid)
 }
 
 /**

@@ -36,10 +36,12 @@ import {
   HOST_GRAPH_INSERT,
   HOST_GRAPH_PACKAGE_NAME,
   HOST_GRAPH_PATCH_FILENAME,
+  HOST_OPEN_IN_INSERT,
+  OFFICIAL_OPEN_IN_DISABLE,
 } from '../../src/host-graph-seed.ts'
 import { webProfileArgs, DEFAULT_DSH_START_PORT } from '../../src/spawn-dsh.ts'
 import { createLocalConnection } from '../../src/local-connection.ts'
-import { resolveLocalHostGraphOverlay } from '../../src/index.ts'
+import { resolveLocalHostGraphOverlay } from '../../src/local-host-seeding.ts'
 import type { SpawnedDsh } from '../../src/local-connection.ts'
 
 const silentLogger = { log() {}, warn() {}, error() {} }
@@ -517,6 +519,84 @@ test('resolveLocalHostGraphOverlay: a built artifact + an empty profile patch wr
   })
   assert.equal(overlay, join(dir, HOST_GRAPH_PATCH_FILENAME))
   assert.equal(readFileSync(overlay as string, 'utf8'), EXPECTED_OVERLAY)
+  assert.ok(!readFileSync(overlay as string, 'utf8').includes('open-in-app'),
+    'no chamber open-in seeded => the official open-in host row is left alone (the gateway/localOnly shape)')
+})
+
+/** A built host source dir for an arbitrary registry package name. */
+function writeBuiltHostSource(dir: string, packageName: string, label: string, content: string): string {
+  const sourceDir = join(dir, `built-${label}-source`)
+  mkdirSync(join(sourceDir, 'dist'), { recursive: true })
+  writeFileSync(join(sourceDir, 'package.json'), JSON.stringify({ name: packageName }))
+  writeFileSync(join(sourceDir, 'dist', 'index.js'), content)
+  return sourceDir
+}
+
+/** The exact id-targeted disable row the local overlay appends (audit P2-3). */
+const OFFICIAL_OPEN_IN_DISABLE_ROW = `- id: open-in-app
+  name: '@deepseek-ai/dsh-host-open-in-app'
+  disabled: true
+`
+
+/** Both chamber rows a graph+open-in seed inserts, in seed order. */
+const EXPECTED_GRAPH_OPEN_IN_OVERLAY = `- insert:
+    - id: client-graph
+      name: '@dsh-chamber/dsh-chamber-seed-client-graph'
+    - id: open-in
+      name: '${HOST_OPEN_IN_PACKAGE_NAME}'
+`
+
+test('resolveLocalHostGraphOverlay: a seeded chamber open-in appends the official host disable (exact row)', t => {
+  const dir = tempDir(t)
+  const dshHome = writeLocalProfileFixture(dir, '# user layer\n[]\n')
+  const graphSource = writeBuiltSeedSource(dir, true)
+  const openInSource = writeBuiltHostSource(dir, HOST_OPEN_IN_PACKAGE_NAME, 'open-in', 'export const openIn = 1\n')
+  const overlay = resolveLocalHostGraphOverlay({
+    stateDir: dir,
+    dshHome,
+    entries: [
+      { insert: HOST_GRAPH_INSERT, kind: 'host', source: 'packaged', sourceDir: graphSource, probeDomains: [] },
+      { insert: HOST_OPEN_IN_INSERT, kind: 'host', source: 'packaged', sourceDir: openInSource, probeDomains: [] },
+    ],
+    log() {},
+    warn() {},
+  })
+  assert.equal(overlay, join(dir, HOST_GRAPH_PATCH_FILENAME))
+  assert.equal(
+    readFileSync(overlay as string, 'utf8'),
+    EXPECTED_GRAPH_OPEN_IN_OVERLAY + OFFICIAL_OPEN_IN_DISABLE_ROW,
+    'the disable row rides the same --patch overlay, AFTER every chamber insert row',
+  )
+  assert.equal(OFFICIAL_OPEN_IN_DISABLE.id, 'open-in-app')
+  assert.equal(OFFICIAL_OPEN_IN_DISABLE.name, '@deepseek-ai/dsh-host-open-in-app')
+})
+
+test('resolveLocalHostGraphOverlay: a user-owned open-in row still gets the official disable (disable-only overlay)', t => {
+  const dir = tempDir(t)
+  // The user's own layer already mounts both chamber rows, so there is nothing
+  // to insert — but the official host half is still superseded and its disable
+  // is not an insert identity, so it must not ride the "no overlay" path.
+  const userPatch = `- insert:
+    - id: client-graph
+      name: '${HOST_GRAPH_PACKAGE_NAME}'
+    - id: open-in
+      name: '${HOST_OPEN_IN_PACKAGE_NAME}'
+`
+  const dshHome = writeLocalProfileFixture(dir, userPatch)
+  const graphSource = writeBuiltSeedSource(dir, true)
+  const openInSource = writeBuiltHostSource(dir, HOST_OPEN_IN_PACKAGE_NAME, 'open-in', 'export const openIn = 1\n')
+  const overlay = resolveLocalHostGraphOverlay({
+    stateDir: dir,
+    dshHome,
+    entries: [
+      { insert: HOST_GRAPH_INSERT, kind: 'host', source: 'packaged', sourceDir: graphSource, probeDomains: [] },
+      { insert: HOST_OPEN_IN_INSERT, kind: 'host', source: 'packaged', sourceDir: openInSource, probeDomains: [] },
+    ],
+    log() {},
+    warn() {},
+  })
+  assert.equal(overlay, join(dir, HOST_GRAPH_PATCH_FILENAME), 'the disable still needs a --patch file')
+  assert.equal(readFileSync(overlay as string, 'utf8'), OFFICIAL_OPEN_IN_DISABLE_ROW)
 })
 
 test('resolveLocalHostGraphOverlay: a row already owned by the profile patch yields no overlay AND clears the leftover file', t => {
@@ -696,8 +776,8 @@ test('createControlPlane.startLocal() seeds ALL FOUR host packages behind one me
     assert.ok(overlay.includes(`- id: archive-cleanup`), 'third insert row present')
     assert.ok(overlay.includes(`name: '${HOST_ARCHIVE_CLEANUP_PACKAGE_NAME}'`), 'third package named')
     // probeDomains is documented pure metadata (never serialized into the
-    // overlay) — the activation-contract lockstep (catches
-    // archiveCleanup/preview↔probe drift) is asserted at the seed
+    // overlay) — the activation-contract lockstep (the archiveCleanup probe
+    // domain drift) is asserted at the seed
     // SOURCE. Since the seed rows DERIVE from the registry
     // (CHAMBER_HOST_PACKAGES), the probe endpoint lives in the registry row
     // and the call site must carry no parallel literal at all.
@@ -714,6 +794,14 @@ test('createControlPlane.startLocal() seeds ALL FOUR host packages behind one me
     assert.ok(overlay.includes(`name: '${HOST_OPEN_IN_PACKAGE_NAME}'`), 'fourth package named')
     assert.ok(registrySource.includes(`probe: { method: 'openInApp/probe'`), 'the open-in registry row names its probe endpoint')
     assert.ok(registrySource.includes('localOnly: true'), 'the open-in row is marked local-shape-only (design 20 §6)')
+    // Audit arch-03 P2-3: the same overlay disables the official web-bundle
+    // open-in HOST half, so the seeded chamber host package is the only live
+    // wire face for the domain.
+    assert.ok(
+      overlay.endsWith(`- id: open-in-app\n  name: '${OFFICIAL_OPEN_IN_DISABLE.name}'\n  disabled: true\n`),
+      `the official open-in host row must be disabled after every insert row: ${overlay}`,
+    )
+    assert.equal((overlay.match(/- id: open-in-app/g) ?? []).length, 1, 'exactly one disable row')
     assert.equal(
       readFileSync(join(dir, 'dsh-home', 'profiles', 'web', 'node_modules', HOST_OPEN_IN_PACKAGE_NAME, 'dist', 'index.js'), 'utf8'),
       'export const openIn = 1\n',

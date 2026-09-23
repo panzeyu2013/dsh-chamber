@@ -25,7 +25,7 @@ import {
   type RuntimePhase,
   type RuntimeState,
   type RuntimeSurface,
-} from '../../../renderer/src/runtime-management.ts'
+} from '@dsh-chamber/dsh-chamber-client-core/runtime-management'
 
 function runtimeState(phase: RuntimePhase, overrides: Partial<RuntimeState> = {}): RuntimeState {
   return {
@@ -151,26 +151,21 @@ test('reset-builtin stays visible on error/failed/rollback/applied only when an 
 test('retry actions require explicit capabilities and never pierce pending/applying gates', () => {
   assert.deepEqual(
     runtimeAllowedActions(runtimeState('snapshot-failed', { canRetryApply: true })),
-    ['retry-apply', 'reset-builtin'],
-  )
+    ['retry-apply', 'reset-builtin'])
   assert.deepEqual(
     runtimeAllowedActions(runtimeState('failed', { canRetryRestore: true, restoreOutcome: 'incomplete', hasOverride: true, source: 'user' })),
-    ['retry-restore', 'check', 'restore-pre-rollback', 'select-version', 'install', 'cleanup-version', 'reset-builtin', 'restart-dsh'],
-  )
+    ['retry-restore', 'check', 'restore-pre-rollback', 'select-version', 'install', 'cleanup-version', 'reset-builtin', 'restart-dsh'])
   assert.deepEqual(
     runtimeAllowedActions(runtimeState('failed', { canRetryApply: true, hasOverride: true, source: 'user' })),
-    ['retry-apply', 'check', 'restore-pre-rollback', 'select-version', 'install', 'cleanup-version', 'reset-builtin', 'restart-dsh'],
-  )
+    ['retry-apply', 'check', 'restore-pre-rollback', 'select-version', 'install', 'cleanup-version', 'reset-builtin', 'restart-dsh'])
   assert.deepEqual(
     runtimeAllowedActions(runtimeState('applying', { canRetryApply: true, canRetryRestore: true })),
-    ['reset-builtin'],
-  )
+    ['reset-builtin'])
   assert.deepEqual(runtimeAllowedActions(runtimeState('idle', { source: 'env' })), ['check', 'restart-dsh'])
   assert.deepEqual(
     runtimeAllowedActions(runtimeState('failed', { source: 'env', canRetryRestore: true })),
     ['retry-restore', 'check', 'restart-dsh'],
-    'env source still exposes the mandatory interrupted-data recovery action; restart is source-independent (2026-12)',
-  )
+    'env source still exposes the mandatory interrupted-data recovery action; restart is source-independent ')
   assert.equal(
     runtimeAllowedActions(runtimeState('idle', { canRetryRestore: true })).includes('retry-restore'),
     false,
@@ -247,8 +242,7 @@ test('unsupported platform is read-only except for mandatory interrupted restore
   assert.deepEqual(
     runtimeAllowedActions(runtimeState('available', { managementSupported: false })),
     ['restart-dsh'],
-    'restart stays available on read-only platforms (gateway parity, design 18 §3.6 项 8)',
-  )
+    'restart stays available on read-only platforms (gateway parity, design 18 §3.6 项 8)')
   assert.deepEqual(
     runtimeAllowedActions(runtimeState('failed', {
       source: 'env',
@@ -257,8 +251,7 @@ test('unsupported platform is read-only except for mandatory interrupted restore
       canRetryRestore: true,
       restoreOutcome: 'incomplete',
     })),
-    ['retry-restore', 'restart-dsh'],
-  )
+    ['retry-restore', 'restart-dsh'])
   assert.deepEqual(
     runtimeAllowedActions(runtimeState('applying', { managementSupported: false })),
     [],
@@ -295,8 +288,7 @@ test('an unknown active runtime is labeled as a forward install, never rollback'
 test('active user override keeps the restore-builtin exit after periodic checks settle', () => {
   assert.deepEqual(
     runtimeAllowedActions(runtimeState('idle', { source: 'user', hasOverride: true })),
-    ['check', 'restore-pre-rollback', 'select-version', 'install', 'cleanup-version', 'reset-builtin', 'restart-dsh'],
-  )
+    ['check', 'restore-pre-rollback', 'select-version', 'install', 'cleanup-version', 'reset-builtin', 'restart-dsh'])
   assert.deepEqual(
     runtimeAllowedActions(runtimeState('available', { source: 'user', hasOverride: true })),
     ['check', 'select-version', 'install', 'cleanup-version', 'reset-builtin', 'restart-dsh'],
@@ -381,21 +373,17 @@ test('projectRuntimeBadge maps local states onto the unified badge vocabulary wi
   assert.deepEqual(
     projectRuntimeBadge(runtimeState('rollback', { restoreOutcome: 'half' })),
     { label: 'restore-blocked', tone: 'danger' },
-    'half restore never renders next to a healthy pill',
-  )
+    'half restore never renders next to a healthy pill')
   assert.deepEqual(
     projectRuntimeBadge(runtimeState('rollback')),
-    { label: 'rolling-back', tone: 'warn' },
-  )
+    { label: 'rolling-back', tone: 'warn' })
   assert.deepEqual(
     projectRuntimeBadge(runtimeState('rollback', { restoreOutcome: 'complete' })),
     { label: 'ok', tone: 'ok' },
-    'a terminal complete rollback (data restored) never lingers as a rolling-back warn pill',
-  )
+    'a terminal complete rollback (data restored) never lingers as a rolling-back warn pill')
   assert.deepEqual(
     projectRuntimeBadge(runtimeState('failed', { swapAttempted: true, error: 'pointer rename denied' })),
-    { label: 'swap-attempted', tone: 'danger' },
-  )
+    { label: 'swap-attempted', tone: 'danger' })
   assert.deepEqual(
     projectRuntimeBadge(runtimeState('failed', {
       runtimeBlocked: true,
@@ -403,16 +391,14 @@ test('projectRuntimeBadge maps local states onto the unified badge vocabulary wi
       metadataComponents: ['current'],
       canRecoverMetadata: true,
     })),
-    { label: 'metadata', tone: 'danger' },
-  )
+    { label: 'metadata', tone: 'danger' })
   assert.deepEqual(
     projectRuntimeBadge(runtimeState('failed', {
       runtimeBlocked: true,
       canRetryRestore: true,
       restoreOutcome: 'half',
     })),
-    { label: 'restore-blocked', tone: 'danger' },
-  )
+    { label: 'restore-blocked', tone: 'danger' })
   assert.deepEqual(
     projectRuntimeBadge(runtimeState('idle', { runtimeBlocked: true, metadataHealth: 'healthy' })),
     { label: 'blocked', tone: 'danger' },

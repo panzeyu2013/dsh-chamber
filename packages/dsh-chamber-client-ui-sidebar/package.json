@@ -15,13 +15,17 @@
   "types": "lib/types/index.d.ts",
   "exports": {
     ".": {
-      "types": "./lib/types/index.d.ts",
-      "default": "./lib/index.js"
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
     },
-    "./invariant": "./src/invariant.ts",
-    "./client": "./src/client/index.ts",
-    "./shared": "./src/shared/index.ts",
-    "./src/*": "./src/*",
+    "./invariant": {
+      "types": "./src/invariant.ts",
+      "default": "./src/invariant.ts"
+    },
+    "./client": {
+      "types": "./src/client/index.ts",
+      "default": "./src/client/index.ts"
+    },
     "./package.json": "./package.json"
   },
   "dsh": {
@@ -38,13 +42,13 @@
     }
   },
   "scripts": {
-    "bundle": "tsdown",
-    "watch": "tsdown --watch",
     "test": "node ./scripts/test.mjs",
     "test:win32": "node ./scripts/test.mjs --win32"
   },
   "license": "MIT",
   "dependencies": {
+    "@dsh-chamber/dsh-chamber-client-core": "workspace:^",
+    "@dsh-chamber/dsh-chamber-wire": "workspace:^",
     "@dsh-chamber/dsh-stream-state": "workspace:^",
     "clsx": "^2.0.0"
   },
@@ -78,11 +82,5 @@
     "@types/react": "^19.2.18",
     "@deepseek-ai/cordis": "workspace:^",
     "react": "^19.0.0"
-  },
-  "files": [
-    "lib/index.js",
-    "lib/invariant.js",
-    "lib/client.js",
-    "lib/types/**/*.d.ts"
-  ]
+  }
 }

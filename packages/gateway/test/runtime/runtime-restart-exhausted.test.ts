@@ -451,7 +451,7 @@ test('dispose drains a persisted F7 rollback and final-stop fences its fallback 
     const latched = readActivationJournalState(stateDir)
     assert.equal(latched.kind, 'valid')
     if (latched.kind === 'valid') assert.equal(latched.journal.phase, 'rollback-needed')
-    const ownerPath = join(stateDir, 'dsh-runtime', 'owner.json')
+    const ownerPath = join(stateDir, 'owner.json') // the state-root writer lease
     assert.ok(existsSync(ownerPath))
 
     let disposeSettled = false

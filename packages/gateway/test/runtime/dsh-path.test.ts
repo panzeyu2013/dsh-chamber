@@ -4,7 +4,8 @@ import { mkdirSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs'
 import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { findDshWorkspace, isDshWorkspace } from '../../src/dsh-path.ts'
+import { isDshWorkspace } from '@dsh-chamber/dsh-runtime'
+import { findDshWorkspace } from '../../src/dsh-path.ts'
 
 test('findDshWorkspace accepts a source checkout fallback', async () => {
   const root = await mkdtemp(join(tmpdir(), 'gateway-dsh-source-'))

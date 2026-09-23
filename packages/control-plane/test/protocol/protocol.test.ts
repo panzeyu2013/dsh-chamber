@@ -26,7 +26,7 @@ import {
   pendingStats,
 } from '../../src/dsh-client.ts'
 import type { SpawnedDsh } from '../../src/local-connection.ts'
-import { seedDshHomeDefaults } from '../../src/index.ts'
+import { seedDshHomeDefaults } from '../../src/local-host-seeding.ts'
 
 import {
   DEFAULT_DSH_START_PORT,

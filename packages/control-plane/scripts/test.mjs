@@ -44,6 +44,11 @@ const GROUPS = {
     'test/api/writer-latch.test.ts',
     'test/api/storage.test.ts',
   ],
+  // state: state 根写者唯一租约（R2 W1）。契约模块 + 真实跨进程矩阵（两进程竞争、
+  // SIGKILL 认领、exit 释放、stale 并发接管）与单进程搬移用例；只依赖 node 内建。
+  'state': [
+    'test/state/state-root-lease.test.ts',
+  ],
   // protocol: 启动握手、dsh 客户端、A2 跨包 RPC envelope 与浏览器 auth cookie
   'protocol': [
     'test/protocol/protocol.test.ts',
@@ -66,9 +71,11 @@ const GROUPS = {
     'test/protocol/private-fs-parity.test.ts',
     'test/protocol/win-probes-parity.test.ts',
     // Node-side shared primitives with the desktop main process and the gateway
-    // (single-sourcing; record-read / error-text leaves).
-    'test/protocol/record-read.test.ts',
+    // (single-sourcing; error-text leaf).
     'test/protocol/error-text.test.ts',
+    // Git 三层超时阶梯（host 30s < 反代 45s < 浏览器 60s）的可执行锁步：真实
+    // import 三包常量并断言严格嵌套 + 答题余量 + 登记槽位，取代只靠注释维持。
+    'test/protocol/git-timeout-ladder.test.ts',
   ],
   // host-lifecycle: 宿主进程生命周期（spawn/readiness/健康/回收/重启）
   'host-lifecycle': [
@@ -110,11 +117,23 @@ const GROUPS = {
   // plugins: 宿主图种子、cordis insert 渲染与受保护插件集合判定
   'plugins': [
     'test/plugins/host-graph-seed.test.ts',
+    // 新 host 域的接线锁步（audit arch-03 P1-1）：以 CHAMBER_HOST_PACKAGES 为驱动，
+    // 断言 desktop 两 flavor 的 sourceDir 映射、dsh-runtime 的探针常量与
+    // runtime-probes 的每域分支都覆盖注册表；漏登记任一处即红，且远端映射缺键
+    // 是 throw（不再 filter/warn）。
+    'test/plugins/host-domain-wiring-lockstep.test.ts',
     'test/plugins/cordis-inserts.test.ts',
     // 受保护集合 / 代耦合 / 装后复验的完整判定面（design 21 §6.11，决策 19）。
     // §6.11 的全部 pin 与 familyNamesFromLockfileClosure（C11 同源解析器）是
     // 「官方 opt-in 层可装可卸」这条契约唯一的单测锚点。
     'test/plugins/protected-plugins.test.ts',
+    // plugin-manifest 单一定义（wire 共享面）的 parse/版本/掩码/版本门矩阵 +
+    // control-plane 公开面的同源断言（design 21 §3 readManifest）。
+    'test/plugins/plugin-manifest.test.ts',
+    // 受限 mutation 子进程执行器（design 21 §6.3）：env 白名单（dsh-runtime
+    // INSTALL_ENV_WHITELIST 单一来源 + 注入式 spawn 假体）、有界输出 tail、
+    // 超时 TERM→KILL、argvPrefix/cwd 与注入式 childExecutor 缝。
+    'test/plugins/plugin-mutation-executor.test.ts',
   ],
   // windows: Windows 探针解析/分类与 win32-only 生命周期集成
   'windows': [
@@ -141,6 +160,10 @@ const WIN32_FILES = [
   // runs in ~25 ms, so the Windows leg gets the same pins as the POSIX legs —
   // including symlink/junction semantics of readInstalledVersion.
   'test/plugins/protected-plugins.test.ts',
+  // The plugin-manifest single source is pure data projection (no fs
+  // permissions, no platform branches) plus a mkdtemp version fixture, so the
+  // Windows leg pins the same matrix.
+  'test/plugins/plugin-manifest.test.ts',
   // Session-state wire contract + mux client: pure modules (no fs permissions,
   // no network, injected socket/carrier) whose contract must hold on every
   // platform — the failure mode they guard (a downstream-less observer

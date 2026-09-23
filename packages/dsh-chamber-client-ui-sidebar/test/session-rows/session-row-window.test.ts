@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   sessionRowDisclosure, sessionRowWindow, SESSION_ROWS_VISIBLE_FIRST,
-} from '../../src/shared/session-row-window.ts'
+} from '@dsh-chamber/dsh-chamber-client-core/session-row-window'
 
 // 会话行渲染窗口（见 src/shared/session-row-window.ts）：
 // 渲染层截断 + "还有 N 个会话"展开条；数据面保持全量（组件接线不在此测）。

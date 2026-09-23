@@ -4,7 +4,7 @@
  */
 
 import { useEffect } from 'react'
-import { clearPendingClick, isClickInsidePendingRow } from '../shared/pending-click.ts'
+import { clearPendingClick, isClickInsidePendingRow } from '@dsh-chamber/dsh-chamber-client-core/pending-click'
 
 export function useSidebarClickGuard(): void {
   // chamber (06): the session row's single click opens the session IMMEDIATELY

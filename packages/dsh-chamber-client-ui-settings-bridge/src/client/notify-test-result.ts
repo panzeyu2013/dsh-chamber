@@ -9,7 +9,7 @@
  * 之所以独立成纯模块：这条「原因不丢」契约要能被单测钉住，UI 只负责渲染。
  */
 
-import { errorMessage } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
+import { errorMessage } from '@dsh-chamber/dsh-chamber-client-core'
 
 /** 'dsh-chamber:notify' 的诚实结果（与 renderer global.d.ts 的 NotificationSurface 同形）。 */
 export interface TestNotifyOutcome {

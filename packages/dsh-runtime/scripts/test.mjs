@@ -83,6 +83,12 @@ const GROUPS = {
     'test/install/allow-builds.test.ts',
     'test/install/dist-sync.test.ts',
   ],
+  // host: 宿主入口 / 锚点版本解析的共享单一来源（pnpm 入口、dsh CLI 入口、内建版本）
+  host: [
+    'test/host/pnpm-entry.test.ts',
+    'test/host/dsh-cli-entry.test.ts',
+    'test/host/anchor-version.test.ts',
+  ],
   // windows: Windows 进程树探针、瞬时重命名重试与只读清理（design 21）
   windows: [
     'test/windows/windows-process.test.ts',

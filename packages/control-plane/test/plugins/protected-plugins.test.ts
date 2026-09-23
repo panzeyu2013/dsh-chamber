@@ -13,6 +13,10 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
+  isMaterializedValue,
+  PLUGIN_MATERIALIZED_VALUE_MASK,
+} from '@dsh-chamber/dsh-chamber-wire/plugin-manifest'
+import {
   decidePluginMutation,
   derivePluginRows,
   deriveProtectedSet,
@@ -20,10 +24,8 @@ import {
   familyNamesFromRuntimeTree,
   familyVersionsFromLockfileClosure,
   isExactVersion,
-  isMaterializedValue,
   officialScope,
   parseExactVersion,
-  PLUGIN_MATERIALIZED_VALUE_MASK,
   PROFILE_BUNDLES_SNAPSHOT,
   RUNTIME_FAMILY_CORE,
   protectedReason,
@@ -788,7 +790,7 @@ test('resolveRuntimeFamily: 两条来源都产出 name→version（锁文件取 
   }
 })
 
-test('verifyProfileFamilyConsistency: 第三方层夹带官方 scope 名字不再被闭包豁免（2026-12 review 收紧）', () => {
+test('verifyProfileFamilyConsistency: 第三方层夹带官方 scope 名字不再被闭包豁免（review 收紧）', () => {
   const profileDir = mkdtempSync(join(tmpdir(), 'dsh-verify-carry-'))
   try {
     // A plain third-party layer whose closure carries an official-scope name the

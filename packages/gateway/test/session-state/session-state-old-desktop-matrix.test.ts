@@ -34,14 +34,17 @@ import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
+import { SESSION_STATE_FEATURES } from '@dsh-chamber/control-plane'
+// The session-state wire-primitive faces are importable from this package's
+// source module; they are not part of the control-plane entry's consumed
+// surface (the entry keeps only names with a production importer).
 import {
   PROTOCOL_VERSION,
   SESSION_STATE_BASE_FEATURES,
-  SESSION_STATE_FEATURES,
   SESSION_STATE_ROUTES,
   classifySessionStateProbe,
   parseSessionStateDescriptor,
-} from '@dsh-chamber/control-plane'
+} from '../../../control-plane/src/session-state-protocol.ts'
 import { createChamberInstalled } from '../../src/plugins-installed.ts'
 import { createChamberPlugins } from '../../src/plugins.ts'
 import { createChamberSurface } from '../../src/routes.ts'

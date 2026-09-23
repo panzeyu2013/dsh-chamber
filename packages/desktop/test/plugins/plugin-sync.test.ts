@@ -11,8 +11,9 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdirSync, realpathSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { ARCHIVE_CLEANUP_PACKAGE_NAME, classifyDependencyValue, classifyLocalDependency, classifySpec, CLIENT_GRAPH_INSERT_ID, CLIENT_GRAPH_PACKAGE_NAME, computeCordisPatchUpdate, describeLocalPluginAddConfirmation, describeLocalPluginRemoveConfirmation, describeMaterializeConfirmation, describePluginApplyConfirmation, describeSeedConfirmation, GIT_WORKTREE_INSERT_ID, GIT_WORKTREE_PACKAGE_NAME, guardPluginMutation, isAllowedLocalFileSpec, localPluginList, MATERIALIZED_VALUE_MASK, OPEN_IN_PACKAGE_NAME, packageNameFromSpec, resolveLocalMaterializeDirectory, PLUGIN_SPEC_PATTERN, PLUGIN_NAME_PATTERN, CHAMBER_HOST_PACKAGES, redactLocalPluginManifest, redactRemotePluginManifest, remotePluginList, runLocalDshPlugin, seedRemoteChamberHostPackages, shouldPreferPinnedRuntimeLockfile, sshProtectionFacts } from '../../plugin-sync.ts'
+import { ARCHIVE_CLEANUP_PACKAGE_NAME, classifyDependencyValue, classifyLocalDependency, CLIENT_GRAPH_INSERT_ID, CLIENT_GRAPH_PACKAGE_NAME, computeCordisPatchUpdate, describeLocalPluginAddConfirmation, describeLocalPluginRemoveConfirmation, describeMaterializeConfirmation, describePluginApplyConfirmation, describeSeedConfirmation, GIT_WORKTREE_INSERT_ID, GIT_WORKTREE_PACKAGE_NAME, guardPluginMutation, hasXWildcardVersion, isAllowedLocalFileSpec, localPluginList, MATERIALIZED_VALUE_MASK, packageNameFromSpec, parseRemoteManifest, resolveLocalMaterializeDirectory, PLUGIN_SPEC_PATTERN, PLUGIN_NAME_PATTERN, CHAMBER_HOST_PACKAGES, redactLocalPluginManifest, redactRemotePluginManifest, remotePluginList, runLocalDshPlugin, seedRemoteChamberHostPackages, shouldPreferPinnedRuntimeLockfile, sshProtectionFacts } from '../../plugin-sync.ts'
 import type { ChamberHostPackageSeed, ExecFn } from '../../plugin-sync.ts'
+import { HOST_OPEN_IN_INSERT, isMaterializedValue, parsePluginManifest } from '../../control-plane-module.ts'
 import { chamberPackageOf, chamberFacts, chamberProjection, chamberStateOf } from '../support/chamber-projection.ts'
 import { chamberFact, err, expectedChamberFacts, ok, okBytes, SEED_SPEC, tempDir } from './plugin-sync-fixtures.ts'
 
@@ -35,32 +36,21 @@ function writeDepManifest(profileDir: string, name: string, dsh?: unknown): void
 }
 
 // ============================================================================
-// classifySpec / packageNameFromSpec
+// dependency-value classification / packageNameFromSpec
 // ============================================================================
 
-test('classifySpec: registry specs sync, file/link/path materialize, ranges unsyncable', () => {
-  assert.deepEqual(classifySpec('foo'), { kind: 'sync' })
-  assert.deepEqual(classifySpec('foo@^1.2.3'), { kind: 'sync' })
-  assert.deepEqual(classifySpec('@scope/foo@~2.0.0'), { kind: 'sync' })
-  assert.deepEqual(classifySpec('foo@latest'), { kind: 'sync' })
-  assert.deepEqual(classifySpec('file:../pkg'), { kind: 'materialize' })
-  assert.deepEqual(classifySpec('link:./pkg'), { kind: 'materialize' })
-  assert.deepEqual(classifySpec('../relative'), { kind: 'materialize' })
-  assert.deepEqual(classifySpec('/abs/path'), { kind: 'materialize' })
-  const unsyncable = classifySpec('foo@>=1.0.0 <2.0.0')
-  assert.equal(unsyncable.kind, 'unsyncable')
-  assert.equal(classifySpec('git+https://example.com/x.git').kind, 'unsyncable')
-  assert.equal(classifySpec('npm:alias@^1.0.0').kind, 'unsyncable')
-})
-test('classifySpec / classifyDependencyValue reject semver x-wildcards (ranges)', () => {
+test('hasXWildcardVersion rejects full name@spec x-wildcards (ranges) — the apply gate single source', () => {
   for (const spec of ['foo@1.x', 'foo@1.2.x', 'foo@x', '@scope/foo@1.x', 'foo@^1.x']) {
-    assert.equal(classifySpec(spec).kind, 'unsyncable', `spec ${spec} is an x-wildcard range`)
+    assert.equal(hasXWildcardVersion(spec), true, `spec ${spec} is an x-wildcard range`)
   }
+  assert.equal(hasXWildcardVersion('foo@1.2.3'), false)
+  assert.equal(hasXWildcardVersion('foo'), false, 'an unversioned spec cannot carry a wildcard')
+})
+test('classifyDependencyValue rejects semver x-wildcards (ranges), exact versions stay sync', () => {
   for (const value of ['1.x', '1.2.x', 'x', '^1.x', '~1.2.x']) {
     assert.equal(classifyDependencyValue(value).kind, 'unsyncable', `value ${value} is an x-wildcard range`)
   }
   // Exact / locked versions still sync.
-  assert.deepEqual(classifySpec('foo@1.2.3'), { kind: 'sync' })
   assert.deepEqual(classifyDependencyValue('^1.2.3'), { kind: 'sync' })
 })
 test('PLUGIN_SPEC_PATTERN / PLUGIN_NAME_PATTERN reject shell metacharacters and file specs', () => {
@@ -80,20 +70,70 @@ test('packageNameFromSpec strips the version suffix', () => {
 test('classifyDependencyValue: ordinary version VALUES are syncable, never unsyncable', () => {
   // Dependency values are synced as `<name>@<value>` — a bare `^1.0.0` must
   // be judged by the version grammar, not the full name@spec grammar (the
-  // old classifySpec mislabeled these as unsyncable → a wrong badge in the
-  // local list tab).
+  // latter mislabels these as unsyncable → a wrong badge in the local list
+  // tab).
   for (const value of ['^1.0.0', '~2.0.0', '1.2.3', 'v1.0.0', '1.0.0-beta.1', 'latest', 'next', '^0.0.1-alpha.2']) {
     assert.deepEqual(classifyDependencyValue(value), { kind: 'sync' }, `value ${value} is syncable`)
   }
-  // Materialize specs keep their kind.
-  assert.deepEqual(classifyDependencyValue('file:../pkg'), { kind: 'materialize' })
-  assert.deepEqual(classifyDependencyValue('link:./pkg'), { kind: 'materialize' })
-  assert.deepEqual(classifyDependencyValue('../relative'), { kind: 'materialize' })
+  // Materialize specs keep their kind — now judged by the SHARED wire ruler
+  // `isMaterializedValue` (design 21 decision 18), not a desktop-local regex:
+  // file:/link:, relative (./ ../, including bare . / .. and backslash forms),
+  // absolute (/ \ C:\) and home-relative (~ ~/x ~\x) are all machine-local
+  // paths.
+  const PATH_VALUES = [
+    'file:../pkg', 'FILE:/x', 'link:./pkg',
+    './pkg', '../pkg', '.', '..', '.\\pkg', '..\\pkg',
+    '/abs/pkg', '\\abs\\pkg', '~/pkg', '~', '~\\pkg',
+    'C:\\pkg', 'c:/pkg', '\\\\srv\\share',
+  ]
+  for (const value of PATH_VALUES) {
+    assert.deepEqual(classifyDependencyValue(value), { kind: 'materialize' }, `value ${value} is a materialize path`)
+  }
+  // The classifier IS the shared ruler: every corpus value (and the values that
+  // must NOT be paths) classifies identically on both.
+  for (const value of [...PATH_VALUES, '^1.2.3', '~1.2.0', '~1.2.x', '.foo', 'latest', 'workspace:*', 'https://example.com/pkg.tgz']) {
+    assert.equal(
+      classifyDependencyValue(value).kind === 'materialize',
+      isMaterializedValue(value),
+      `value ${value} agrees with the wire ruler`,
+    )
+  }
+  // Ruler exclusions stay pinned: a bare dot-name is not a path and a tilde
+  // RANGE is a registry value, never a home path.
+  assert.equal(isMaterializedValue('.foo'), false)
+  assert.equal(classifyDependencyValue('.foo').kind, 'unsyncable')
+  assert.deepEqual(classifyDependencyValue('~1.2.0'), { kind: 'sync' })
   // Genuinely unsyncable values stay unsyncable with a reason.
   for (const value of ['workspace:*', 'npm:alias@^1.0.0', 'git+https://example.com/x.git', '>=1.0.0 <2.0.0', '1.0.0 || 2.0.0', '*']) {
     const cls = classifyDependencyValue(value)
     assert.equal(cls.kind, 'unsyncable', `value ${value} is unsyncable`)
     assert.ok(cls.kind === 'unsyncable' && cls.reason.length > 0, `value ${value} carries a reason`)
+  }
+})
+
+test('parseRemoteManifest delegates to the wire parse algorithm, keeping the desktop fault wording', () => {
+  const text = JSON.stringify({
+    dependencies: { a: '^1.0.0', bad: 7, 'file-dep': 'file:../x' },
+    dsh: { profile: { bundles: ['a', 7] } },
+  })
+  const wire = parsePluginManifest(text)
+  assert.ok(wire.ok)
+  assert.deepEqual(parseRemoteManifest(text), { dependencies: wire.dependencies, bundles: wire.bundles })
+  assert.deepEqual(parseRemoteManifest(text).dependencies, { a: '^1.0.0', 'file-dep': 'file:../x' },
+    'non-string dependency values are dropped, raw values are kept')
+  assert.deepEqual(parseRemoteManifest(text).bundles, ['a'], 'non-string bundle members are dropped')
+  // invalid-json keeps the JSON error detail in the desktop's message.
+  const wireInvalid = parsePluginManifest('{ nope')
+  assert.ok(!wireInvalid.ok && wireInvalid.fault === 'invalid-json')
+  const invalid = parseRemoteManifest('{ nope')
+  assert.equal(invalid.error, `failed to parse remote package.json: ${wireInvalid.detail}`)
+  // not-an-object keeps the exact desktop copy for every primitive/array shape.
+  for (const notObject of ['null', '[]', '"x"', '42', 'true']) {
+    assert.deepEqual(parseRemoteManifest(notObject), {
+      dependencies: {},
+      bundles: [],
+      error: 'remote package.json is not a JSON object',
+    }, notObject)
   }
 })
 
@@ -483,6 +523,39 @@ test('runLocalDshPlugin: protected / generation-mismatch / file-pick gates refus
   assert.match(gated.error ?? '', /no dsh CLI entry found/)
 })
 
+test('runLocalDshPlugin scrubs the child env: whitelist + pins only, credential carriers never cross (C-F12)', async () => {
+  const workspace = tempDir()
+  mkdirSync(join(workspace, 'node_modules', '@deepseek-ai', 'dsh', 'lib'), { recursive: true })
+  writeFileSync(join(workspace, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js'), '#!/usr/bin/env node\n')
+  const home = tempDir()
+  const poisoned = ['NODE_AUTH_TOKEN', 'npm_config_registry', 'NPM_CONFIG_USERCONFIG', 'NPM_TOKEN', 'DSH_GATEWAY_TOKEN', 'GITHUB_TOKEN']
+  const previous = poisoned.map(key => [key, process.env[key]] as const)
+  for (const key of poisoned) process.env[key] = `poison-${key}`
+  try {
+    const seen: Array<Record<string, string>> = []
+    const result = await runLocalDshPlugin(workspace, home, 'add', 'third-party-pkg@1.0.0', {
+      childExecutor: async execution => {
+        seen.push(execution.env)
+        return { code: 0, signal: null, stdout: '', stderr: '' }
+      },
+    })
+    assert.deepEqual(result, { ok: true })
+    assert.equal(seen.length, 1)
+    const env = seen[0]!
+    for (const key of poisoned) assert.equal(Object.hasOwn(env, key), false, `${key} must never reach the child`)
+    // HOME is deliberately not re-added by the executor: pnpm then falls back
+    // to the passwd home store the profile was provisioned against.
+    assert.equal(Object.hasOwn(env, 'HOME'), false)
+    assert.equal(env.DSH_HOME, home, 'the DSH_HOME pin still applies')
+    assert.equal(typeof env.PATH, 'string')
+  } finally {
+    for (const [key, value] of previous) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+  }
+})
+
 test('redactLocalPluginManifest / redactRemotePluginManifest: local paths are masked on every channel, registry values untouched', () => {
   const local = redactLocalPluginManifest({
     dependencies: { 'file-dep': 'file:/Users/x/pkg', 'link-dep': 'link:../pkg', 'registry-dep': '^1.2.3', 'url-dep': 'https://example.com/pkg.tgz' },
@@ -497,16 +570,40 @@ test('redactLocalPluginManifest / redactRemotePluginManifest: local paths are ma
   assert.equal(local.dependencies['url-dep'], 'https://example.com/pkg.tgz')
   assert.equal(local.rows.find(row => row.name === 'file-dep')?.spec, MATERIALIZED_VALUE_MASK, 'rows[].spec is a second channel for the same value')
   assert.equal(classifyDependencyValue(MATERIALIZED_VALUE_MASK).kind, 'materialize', 'the mask keeps the client isPathSpec parity')
-  const remote = redactRemotePluginManifest({
-    dependencies: { 'file-dep': 'file:/root/x.tgz', 'uppercase-file': 'FILE:/root/x', 'link-dep': 'link:/root/x', 'registry-dep': '^1.2.3' },
+  // The ssh face judges with the SAME shared ruler (design 21 decision 18):
+  // every machine-local path form is masked, not just file:.
+  const remoteDependencies: Record<string, string> = {
+    'file-dep': 'file:/root/x.tgz', 'uppercase-file': 'FILE:/root/x', 'link-dep': 'link:/root/x',
+    'relative-dep': './pkg', 'parent-dep': '../pkg', 'dot-dep': '..', 'backslash-dep': '..\\pkg',
+    'absolute-dep': '/srv/x', 'win-dep': 'C:\\Users\\x', 'tilde-dep': '~/pkg', 'bare-tilde': '~',
+    'registry-dep': '^1.2.3', 'range-dep': '~1.2.0', 'dot-name': '.foo',
+  }
+  const remote = {
+    dependencies: remoteDependencies,
     bundles: ['file-dep'], profileExists: true,
     chamber: chamberProjection({ [CLIENT_GRAPH_PACKAGE_NAME]: { installed: true, patched: true } }),
-  } as never)
-  assert.equal(remote.dependencies['file-dep'], MATERIALIZED_VALUE_MASK)
-  assert.equal(remote.dependencies['uppercase-file'], MATERIALIZED_VALUE_MASK)
-  assert.equal(remote.dependencies['link-dep'], 'link:/root/x', 'link: cannot reach a profile and stays untouched')
-  assert.equal(remote.dependencies['registry-dep'], '^1.2.3')
-  assert.equal(classifyDependencyValue(remote.dependencies['file-dep']).kind, 'materialize')
+  } as never
+  const remoteMasked = redactRemotePluginManifest(remote)
+  for (const value of [
+    'file:/root/x.tgz', 'FILE:/root/x', 'link:/root/x', './pkg', '../pkg', '..', '..\\pkg',
+    '/srv/x', 'C:\\Users\\x', '~/pkg', '~',
+  ]) {
+    const name = Object.entries(remoteDependencies).find(([, spec]) => spec === value)?.[0]
+    assert.ok(name !== undefined, `corpus value ${value} is present`)
+    assert.equal(remoteMasked.dependencies[name], MATERIALIZED_VALUE_MASK, `${value} must be masked on the ssh face`)
+  }
+  assert.equal(remoteMasked.dependencies['registry-dep'], '^1.2.3')
+  assert.equal(remoteMasked.dependencies['range-dep'], '~1.2.0', 'a tilde RANGE is a registry value, not a home path')
+  assert.equal(remoteMasked.dependencies['dot-name'], '.foo', 'a bare dot-name is not a machine-local path')
+  // Masking == the shared ruler, on both faces.
+  for (const [name, spec] of Object.entries(remoteDependencies)) {
+    assert.equal(
+      remoteMasked.dependencies[name] === MATERIALIZED_VALUE_MASK,
+      isMaterializedValue(spec),
+      `${name} masking agrees with isMaterializedValue(${spec})`,
+    )
+  }
+  assert.equal(classifyDependencyValue(remoteMasked.dependencies['file-dep']).kind, 'materialize')
   const remoteError = redactRemotePluginManifest({
     dependencies: { broken: 'file:/srv/x' }, bundles: [], profileExists: true,
     error: 'failed to parse remote package.json: boom', chamber: { ok: false, error: 'probe failed' },
@@ -632,7 +729,7 @@ test('remotePluginList: parses dependencies/bundles and projects the registry ro
       if (path.endsWith('/profiles/web/package.json')) {
         return ok(JSON.stringify({ dependencies: { foo: '^1.0.0' }, dsh: { profile: { bundles: ['foo'] } } }))
       }
-      if (path.includes(OPEN_IN_PACKAGE_NAME) || path.includes(ARCHIVE_CLEANUP_PACKAGE_NAME)) {
+      if (path.includes(HOST_OPEN_IN_INSERT.name) || path.includes(ARCHIVE_CLEANUP_PACKAGE_NAME)) {
         return err('run command failed (exit 1): cat: ' + path + ': No such file or directory')
       }
       if (path.includes(CLIENT_GRAPH_PACKAGE_NAME + '/dist/index.js')) return ok('export const graph = 1')
@@ -656,7 +753,7 @@ test('remotePluginList: parses dependencies/bundles and projects the registry ro
     [CLIENT_GRAPH_PACKAGE_NAME]: chamberFact({ installed: true, patched: true }),
     [GIT_WORKTREE_PACKAGE_NAME]: chamberFact({ installed: true, patched: true }),
   }))
-  assert.equal(chamberPackageOf(result.manifest.chamber, OPEN_IN_PACKAGE_NAME).localOnly, true,
+  assert.equal(chamberPackageOf(result.manifest.chamber, HOST_OPEN_IN_INSERT.name).localOnly, true,
     'open-in is projected for the local shape but never travels')
 })
 

@@ -199,35 +199,15 @@ export function parseNetstatListeningRows(text: string): TcpListenRow[] {
   return rows
 }
 
-/** Port-scoped view of {@link parseNetstatListeningRows} (reaper seam). */
-export function parseNetstatListeningPids(text: string, port: number): number[] {
-  const pids = new Set<number>()
-  for (const row of parseNetstatListeningRows(text)) {
-    if (row.port === port) pids.add(row.pid)
-  }
-  return [...pids]
-}
-
 /**
- * Parse the output of
+ * Normalize the `Get-NetTCPConnection -State Listen` JSON rows produced by
  *   $rows = @(Get-NetTCPConnection -State Listen | Select-Object LocalPort,OwningProcess)
  *   ConvertTo-Json -InputObject $rows -Compress
- * into normalized rows. `-State Listen` already narrows the table to
- * listeners, so only the local port and owning pid are read. Unparseable
- * input yields [] (the caller then falls back to netstat / fails closed); a
- * JSON document that is neither an array nor an object is ignored.
+ * into port/pid rows. `-State Listen` already narrows the table to listeners,
+ * so only the local port and owning pid are read. Unparseable input yields []
+ * (the caller then falls back to netstat / fails closed); a JSON document that
+ * is neither an array nor an object is ignored.
  */
-export function parseTcpConnectionListenJson(text: string): TcpListenRow[] {
-  if (typeof text !== 'string' || text.trim() === '') return []
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(text)
-  } catch {
-    return []
-  }
-  return collectTcpListenRows(parsed)
-}
-
 function collectTcpListenRows(parsed: unknown): TcpListenRow[] {
   const rows: TcpListenRow[] = []
   const visit = (value: unknown): void => {

@@ -6,11 +6,11 @@
  */
 
 import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react'
-import { chamberBridge, type ChamberServerAggregate } from '../shared/aggregate-store.ts'
-import { nextServerOrder, orderServersForDisplay, reconciledSessionOrder } from '../shared/derive.ts'
-import { getInstanceClient, insertSessionBefore, insertWorkspaceBefore } from '../shared/instance-api.ts'
-import { flushScheduledActivityWrites, getViewPrefs, updateViewPrefs, type ChamberSidebarViewPrefs } from '../shared/view-prefs.ts'
-import { resolveWorkspaceDrop } from '../shared/workspace-drag-order.ts'
+import { chamberBridge, type ChamberServerAggregate } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
+import { nextServerOrder, orderServersForDisplay, reconciledSessionOrder } from '@dsh-chamber/dsh-chamber-client-core/derive'
+import { getInstanceClient, insertSessionBefore, insertWorkspaceBefore } from '@dsh-chamber/dsh-chamber-client-core/instance-api'
+import { flushScheduledActivityWrites, getViewPrefs, updateViewPrefs, type ChamberSidebarViewPrefs } from '@dsh-chamber/dsh-chamber-client-core/view-prefs'
+import { resolveWorkspaceDrop } from '@dsh-chamber/dsh-chamber-client-core/workspace-drag-order'
 import {
   workspaceDropEnv, type ServerDragState, type SessionDragState, type WorkspaceDragState,
 } from './sidebar-context.ts'

@@ -411,9 +411,9 @@ export function makeHostBinding(ctx: HostCtxServices): ArchiveCleanupHost {
   }
 }
 
-/* Single-flight gate (domain-level; the wire methods stay arg-free or   */
-/* optional-arg — preview is zero-arg, purge takes an OPTIONAL sessionIds */
-/* filter — so concurrency control is the host's job — design 24 §3).   */
+/* Single-flight gate (domain-level; the wire methods stay optional-arg — */
+/* purge takes an OPTIONAL sessionIds filter, probe is zero-arg and never */
+/* contends — so concurrency control is the host's job — design 24 §3).   */
 
 export class RunGate {
   private inFlight = false

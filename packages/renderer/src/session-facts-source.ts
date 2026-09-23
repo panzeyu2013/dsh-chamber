@@ -4,11 +4,14 @@
  * 只读事实源，**浏览器安全**（零 Node import；只用 fetch / ReadableStream /
  * 定时器；测试全部经注入的 fetchImpl 驱动）：
  *   - 探测 GET  {base}/chamber/session-state（每来源单飞、一次、Abort 超时）；
- *   - 分类**粗粒度**（权威分类器在 packages/control-plane/src/session-state-protocol.ts，
- *     本包不能 import 它：exports map 只有 "." 且 barrel 拉 Node 代码）：
- *       404 ⇒ legacy-gateway；其余非 ok ⇒ degraded；2xx 且 protocol 命中 ⇒ ok。
+ *   - 分类**粗粒度**且只有一份：classifySessionFactsProbe 是本客户端唯一分类器
+ *     （权威分类器在 packages/control-plane/src/session-state-protocol.ts，两者的
+ *     状态语义逐条对齐；本包不能 import 它：exports map 只有 "." 且 barrel 拉
+ *     Node 代码）。probe 与流恢复重取**都**调用它，模块内不得再内联一份判定：
+ *       404 ⇒ legacy-gateway；503 + session_state_disabled / mode off ⇒
+ *       watcher-disabled；其余非 ok ⇒ degraded；2xx 且 protocol 命中 ⇒ ok。
  *     共享字面量由 test/session-state/session-facts-source.test.ts 的源文本锁步测试
- *     对着该模块钉住（route 路径 / protocol / session-state_disabled / serviceable /
+ *     对着该模块钉住（route 路径 / protocol / session_state_disabled / serviceable /
  *     completedAtSource），两侧不得静默漂移；
  *   - mode === 'sse' 时消费 SSE 增量（sync / session-state / resync，id 单调游标，
  *     重连带 Last-Event-ID；心跳注释帧只用于活性）；
@@ -83,7 +86,7 @@ export type SessionFactsTurnEndKind =
 /** wire aborted cause 族（缺失 = 字段缺席，绝不臆造 legacy）。 */
 export type SessionFactsTurnEndCause = 'user' | 'parent' | 'hook' | 'disposed' | 'legacy'
 
-/** 判定输入；形状与 sidebar shared 的 TurnEndFact 结构兼容（可直接喂 deriveUnread）。 */
+/** 判定输入；形状与 client-core 的 TurnEndFact 结构兼容（可直接喂 deriveUnread）。 */
 export interface SessionFactsTurnEnd {
   kind: SessionFactsTurnEndKind
   cause?: SessionFactsTurnEndCause
@@ -130,7 +133,6 @@ export interface SessionFactsReadState {
 export interface SessionFactsSnapshot {
   verdict: SessionFactsVerdict
   degradation: SessionFactsDegradation
-  mode: SessionFactsMode | null
   /** host 生命周期（gateway 平面）；serviceable=false 时行只读作未知。 */
   hostState: string
   serviceable: boolean
@@ -417,10 +419,8 @@ export function applySessionFactsDelta(current: SessionFactsSnapshot, value: unk
       changed += 1
     }
   }
-  const mode = value.mode === 'sse' || value.mode === 'poll' || value.mode === 'off' ? value.mode : null
   const next: SessionFactsSnapshot = {
     ...current,
-    mode: mode ?? current.mode,
     cursor,
     rows: nextRows,
     read: read ?? current.read,
@@ -549,18 +549,17 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
 
   /**
    * 快照构造单一工厂：probe / SSE sync 帧 / refetch 三个入口共用同形状对象，
-   * 字段一旦增删不会漂移。verdict / degradation / mode 仍由调用点
-   * 按各自入口语义给（SSE 帧的 mode 缺失时沿用上一份快照），本工厂只负责形状。
+   * 字段一旦增删不会漂移。verdict / degradation 由调用点经**唯一分类器**
+   * （classifySessionFactsProbe）判定后传入；快照不携带任何传输 mode——
+   * 唯一消费 mode 的是 payload 局部的 startDelivery，没有会失真的副本。
    */
   const buildSnapshot = (
     parsed: NonNullable<ReturnType<typeof parseSessionFactsSnapshotValue>>,
     verdict: SessionFactsVerdict,
     degradation: SessionFactsDegradation,
-    mode: SessionFactsMode | null = parsed.mode,
   ): SessionFactsSnapshot => ({
     verdict,
     degradation,
-    mode,
     hostState: parsed.hostState,
     serviceable: parsed.serviceable,
     stale: false,
@@ -620,7 +619,12 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
     return { signal: controller.signal, done: () => clearTimeout(timer) }
   }
 
-  const fetchSnapshot = async (): Promise<unknown> => {
+  /**
+   * 一次探测观测（HTTP carrier 归本模块，判定不在这里）：非 2xx 与坏 JSON 体
+   * 都以 status/body 交回分类器，**永不 throw**。超时经 abort 归入
+   * failure('timeout')，其余异常是 carrier 层的网络失败。
+   */
+  const observeProbe = async (): Promise<SessionFactsProbeOutcome> => {
     const timeout = withTimeout()
     try {
       const response = await fetchImpl(urlFor(SESSION_FACTS_ROUTE), {
@@ -630,57 +634,93 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
         cache: 'no-store',
         signal: timeout.signal,
       })
-      if (!response.ok) {
-        const body = await response.json().catch(() => undefined)
-        const error = new Error('session-state probe answered ' + String(response.status)) as Error & { status?: number; body?: unknown }
-        error.status = response.status
-        error.body = body
-        throw error
-      }
-      return await response.json()
+      const body: unknown = await response.json().catch(() => undefined)
+      return { kind: 'response', status: response.status, ...(body === undefined ? {} : { body }) }
+    } catch (error) {
+      const aborted = (error as { name?: unknown } | null)?.name === 'AbortError'
+      return { kind: 'failure', reason: aborted ? 'timeout' : 'network' }
     } finally {
       timeout.done()
     }
   }
+
+  /**
+   * 分类 + 发布（**全源唯一判定点**）：探测与流恢复重取都经
+   * classifySessionFactsProbe（纯测试直测的同一函数），快照只携带它的
+   * verdict/degradation；模块内不再有第二份「protocol===1 && mode!=='off'」
+   * 之类的内联分类。发布规则：
+   *   - 2xx 且载荷可解析：快照带该载荷的行/读状态 + 分类器判定
+   *     （forward-skew / mode off 与旧行为一致地保留行）；
+   *   - 无载荷且 unavailable：传输层坏答案不擦除既有镜像事实——保留行、
+   *     标 stale（消费者据此降档）；
+   *   - 其余无载荷结果（404 legacy / 503 disabled / unversioned / 首次失败）：发布
+   *     分类器判定的降级快照，能力投影（session-facts-mode）因此仍能区分
+   *     legacy / disabled / degraded，而不是静默 undefined。
+   */
+  const publishProbe = (
+    outcome: SessionFactsProbeOutcome,
+  ): { probe: SessionFactsProbe; parsed: ReturnType<typeof parseSessionFactsSnapshotValue> } => {
+    const probe = classifySessionFactsProbe(outcome)
+    const is2xx = probe.status !== null && probe.status >= 200 && probe.status < 300
+    const parsed = parseSessionFactsSnapshotValue(is2xx && outcome.kind === 'response' ? outcome.body : undefined)
+    if (parsed !== null) {
+      state.snapshot = buildSnapshot(parsed, probe.verdict, probe.degradation)
+      state.lastEventId = parsed.cursor
+      emit()
+      noteChannelAlive()
+      return { probe, parsed }
+    }
+    if (probe.degradation === 'unavailable' && state.snapshot !== undefined) {
+      markStale()
+      return { probe, parsed: null }
+    }
+    state.snapshot = {
+      verdict: probe.verdict,
+      degradation: probe.degradation,
+      hostState: 'unknown',
+      serviceable: false,
+      stale: true,
+      cursor: 0,
+      rows: {},
+      read: null,
+      lastEventAt: now(),
+    }
+    emit()
+    return { probe, parsed: null }
+  }
+
+  /**
+   * 坏答案是否值得**有界重试**（probe 与流恢复重取共用的唯一重试谓词，
+   * 不由各调用点各自判断；谓词只说「是否重试」，退避动作仍归调用路径）：
+   *   - unavailable（网络 / 5xx）与 unversioned（2xx 却无 protocol / 不可解析体）
+   *     都是 carrier 层可能自愈的答案——后者可能是旧宿主缺形状，也可能是反代把
+   *     未注册路由回落成 200 HTML/SPA；
+   *   - 404 与 forward-skew 是版本事实、watcher-disabled 是服务事实，重试无意义。
+   */
+  const shouldRetryProbe = (probe: SessionFactsProbe): boolean =>
+    probe.degradation === 'unavailable' || probe.degradation === 'unversioned'
 
   const probeOnce = async (): Promise<void> => {
     if (state.probing || state.stopped || !state.connected) return
     state.probing = true
     const generation = state.generation
     try {
-      const body = await fetchSnapshot()
+      const outcome = await observeProbe()
       if (state.stopped || !state.connected || generation !== state.generation) return
-      const parsed = parseSessionFactsSnapshotValue(body)
-      if (parsed === null) {
-        state.snapshot = undefined
-        emit()
+      const { probe, parsed } = publishProbe(outcome)
+      if (probe.verdict === 'ok' && parsed !== null) {
+        startDelivery(parsed.mode, parsed.features)
         return
       }
-      const verdict: SessionFactsVerdict = parsed.protocol === SESSION_FACTS_PROTOCOL_VERSION && parsed.mode !== 'off'
-        ? 'ok'
-        : 'degraded'
-      const degradation: SessionFactsDegradation = parsed.mode === 'off'
-        ? 'watcher-disabled'
-        : parsed.protocol > SESSION_FACTS_PROTOCOL_VERSION
-          ? 'forward-skew'
-          : verdict === 'ok' ? null : 'unversioned'
-      state.snapshot = buildSnapshot(parsed, verdict, degradation)
-      state.lastEventId = parsed.cursor
-      emit()
-      noteChannelAlive()
-      if (verdict !== 'ok') return
-      startDelivery(parsed.mode, parsed.features)
-    } catch (error) {
-      if (state.stopped || !state.connected) return
-      const status = (error as { status?: number } | null)?.status
-      if (status === 404) {
-        state.snapshot = undefined
-        emit()
-        return
+      // 重试裁决唯一在 shouldRetryProbe（分类语义不变：unversioned 仍是
+      // degraded；重试只是 carrier 层对不可解析 2xx 的有界兜底）。
+      if (shouldRetryProbe(probe)) {
+        diagnostic(
+          probe.degradation === 'unversioned' ? '[session-facts] probe unversioned' : '[session-facts] probe failed',
+          new Error('session-state probe ' + String(probe.status ?? outcome.kind)),
+        )
+        scheduleProbe(reconnectMs)
       }
-      markStale()
-      diagnostic('[session-facts] probe failed', error)
-      scheduleProbe(reconnectMs)
     } finally {
       state.probing = false
     }
@@ -737,7 +777,7 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
     if (frame.event === 'sync' || frame.event === 'snapshot') {
       const parsed = parseSessionFactsSnapshotValue(data)
       if (parsed === null) { void refetchSnapshot(); return }
-      state.snapshot = buildSnapshot(parsed, 'ok', null, parsed.mode ?? state.snapshot?.mode ?? 'sse')
+      state.snapshot = buildSnapshot(parsed, 'ok', null)
       state.lastEventId = parsed.cursor
       emit()
       return
@@ -757,19 +797,22 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
     const generation = state.generation
     closeStream()
     state.lastEventId = null
-    try {
-      const body = await fetchSnapshot()
-      if (state.stopped || generation !== state.generation) return
-      const parsed = parseSessionFactsSnapshotValue(body)
-      if (parsed === null) return
-      state.snapshot = buildSnapshot(parsed, 'ok', null)
-      state.lastEventId = parsed.cursor
-      emit()
-      noteChannelAlive()
+    const outcome = await observeProbe()
+    if (state.stopped || generation !== state.generation) return
+    const { probe, parsed } = publishProbe(outcome)
+    if (probe.verdict === 'ok' && parsed !== null) {
       startDelivery(parsed.mode, parsed.features)
-    } catch (error) {
-      markStale()
-      diagnostic('[session-facts] snapshot refetch failed', error)
+      return
+    }
+    // 该重取是「流收口后的再对账」：与 probe 共用 shouldRetryProbe 的重试裁决，
+    // 但恢复动作是重连流（本路径要的是可投递的流载体，reprobe 不产生新流）。
+    // unavailable 与 unversioned 都按既有退避重连；404 / forward-skew /
+    // watcher-disabled 是版本或服务事实，不重连假流，也不留静止降级。
+    if (shouldRetryProbe(probe)) {
+      diagnostic(
+        '[session-facts] snapshot refetch failed',
+        new Error('session-state probe ' + String(probe.status ?? outcome.kind)),
+      )
       scheduleStreamReconnect()
     }
   }

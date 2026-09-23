@@ -8,7 +8,12 @@ import {
 } from '../../src/host-graph.ts'
 import {
   BundleLoadTimeoutError, dedupeCoveredRows,
-} from '../../../dsh-chamber-client-ui-sidebar/src/shared/client-plugin-loader.ts'
+} from '@dsh-chamber/dsh-chamber-client-core/client-plugin-loader'
+// The channel-classification single source (audit arch-03 P2-2): the boot
+// fetch's expected state/message copy is asserted AGAINST it, never re-spelled.
+import {
+ classifyPluginGraphOutcome, graphEntryImmediatelyMessage,
+} from '@dsh-chamber/dsh-chamber-client-core/plugin-graph-classify'
 import { CHAMBER_COVERED_FACTORY_IDS, CHAMBER_COVERED_IDS } from '../../src/chamber-covered.ts'
 import { DEFERRED_EXTRA_ROW_IDS } from '../../src/required-extra-rows.ts'
 import { normalize, stripComments } from '../../../../scripts/dev/test-support/source-text.ts'
@@ -264,6 +269,56 @@ test('fetchHostGraph: malformed envelope/rows throw loud (never silently merged)
   }
 })
 
+test('fetchHostGraph: every channel verdict equals the shared classifier single source', async (t) => {
+  // The boot fetch and client-core's recheck must answer the same wire question
+  // identically (audit arch-03 P2-2). For every branch, the thrown error's
+  // message/state is compared with the shared classifier's verdict verbatim; a
+  // local re-spelling or a re-grown status branch fails this test.
+  const cases: { status: number; body: unknown }[] = [
+    { status: 404, body: {} },
+    { status: 500, body: {} },
+    { status: 200, body: { rpcId: 'r1', result: { ok: false, error: { code: 'boom', message: 'graph exploded' } } } },
+    { status: 200, body: { rpcId: 'r1', result: { ok: false, error: { code: 'rpc_failed', message: 'unknown method clientGraph/graph' } } } },
+    { status: 200, body: { rpcId: 'r1' } },
+    { status: 200, body: envelope('not-an-array') },
+    { status: 200, body: envelope([42]) },
+    { status: 200, body: envelope([{ id: 'x', url: '/plugins/x' }]) },
+  ]
+  let current = cases[0]!
+  stubFetchImpl(t, (async () => new Response(JSON.stringify(current.body), {
+    status: current.status,
+    headers: { 'content-type': 'application/json' },
+  })) as typeof fetch)
+  for (const c of cases) {
+    current = c
+    const verdict = classifyPluginGraphOutcome({
+      status: c.status,
+      ok: c.status >= 200 && c.status < 300,
+      body: c.status === 200 ? c.body : undefined,
+      jsonError: undefined,
+    })
+    assert.ok(verdict.kind === 'channel' || verdict.kind === 'malformed', JSON.stringify(c))
+    const expectedMessage = verdict.message
+    const expectedState = verdict.kind === 'channel' ? verdict.state : undefined
+    await assert.rejects(fetchHostGraph('/api/i/local'), (error: unknown) => {
+      const thrown = error as Error & { diagnosticState?: string }
+      assert.equal(thrown.message, expectedMessage, JSON.stringify(c))
+      if (expectedState !== undefined) {
+        assert.equal(thrown.diagnosticState, expectedState, JSON.stringify(c))
+      }
+      return true
+    })
+  }
+  // The renderer-only optional-field gate takes its copy from the same source.
+  current = { status: 200, body: envelope([row('@scope/bad-flag', { immediately: 'yes' as unknown as boolean })]) }
+  await assert.rejects(fetchHostGraph('/api/i/local'), (error: unknown) => {
+    assert.equal((error as Error).message, graphEntryImmediatelyMessage({ id: '@scope/bad-flag' }))
+    return true
+  })
+  // The pre-ready 503 probe stays null — no channel classification is thrown.
+  current = { status: 503, body: { code: 'instance_unavailable' } }
+  assert.equal(await fetchHostGraph('/api/i/local'), null)
+})
 test('dedupeCoveredRows: drops covered ids, keeps extras, preserves optional fields', () => {
   const covered = ['@deepseek-ai/dsh-client-ui-sidebar', '@deepseek-ai/dsh-client-ui-session']
   const entries = [
@@ -585,7 +640,7 @@ test('collectExtraRows: a local 404 surfaces the local-graph-not-injected gap th
   assert.deepEqual(diagnostics, [{ state: 'not-injected' }])
 })
 
-test('collectExtraRows: a 502/504 channel failure reports the App-facing degrade fact (2026-12 W3)', async (t) => {
+test('collectExtraRows: a 502/504 channel failure reports the App-facing degrade fact (W3)', async (t) => {
   // 隧道活着而远端 dsh 端口死了：本轮挂载缺掉整套 profile 客户端插件，只发一条
   // "由没被加载的包渲染"的诊断会让用户侧零解释。通道失败（非 404）必须上浮
   // onGraphUnavailable，让 App 的 boot-gap 横幅说得出话。
@@ -656,8 +711,7 @@ test('collectExtraRows: a bundle load failing BOTH attempts rejects loud (never 
       loaded.push(url)
       throw new Error(`bundle ${url} exploded`)
     }, reportDiagnostic: (_sourceId, next) => { diagnostic = next } }),
-    /bundle .* exploded/,
-  )
+    /bundle .* exploded/)
   // One bounded recovery cycle: the refetched graph carries the same rev
   // (no restart), the retried load fails identically, and the boot fails
   // loud — a broken plugin never silently disappears.
@@ -720,8 +774,7 @@ test('collectExtraRows: a recovery-refetch channel failure keeps the original bu
       loadModuleBundle: async () => { throw new Error('bundle exploded') },
       reportDiagnostic: (_sourceId, next) => { diagnostic = next },
     }),
-    /bundle exploded/,
-  )
+    /bundle exploded/)
   assert.equal(calls, 2)
   assert.equal(diagnostic?.state, 'bundle-load-failed')
   assert.equal(diagnostic?.pluginId, id)
@@ -796,8 +849,7 @@ test('collectExtraRows: a failed owner preload rolls the id back so ANOTHER inst
   // the id record (owner included) and the boot fails loud.
   await assert.rejects(
     collectExtraRows('owner-a', '/api/i/a', { loadModuleBundle: async () => { throw new Error('bundle exploded') } }),
-    /bundle exploded/,
-  )
+    /bundle exploded/)
   // Instance B (a different source) re-preloads the same id at a new rev:
   // the rollback cleared A's ownership, so B claims it as the owner — no
   // conflict diagnostic, the merged row surfaces.
@@ -994,15 +1046,13 @@ test('collectExtraRows: an awaitBeforeLoad rejection fails the boot loud without
       loadModuleBundle: async () => { loaded = true },
       awaitBeforeLoad: async () => { throw new Error('chamber eval gate failed') },
     }),
-    /chamber eval gate failed/,
-  )
+    /chamber eval gate failed/)
   assert.equal(loaded, false)
 })
 
 test('A4: the wire helpers are upstream\'s own and the parse stays entries-only', async (t) => {
   const source = normalize(stripComments(
-    readFileSync(new URL('../../src/host-graph.ts', import.meta.url), 'utf8'),
-  ))
+    readFileSync(new URL('../../src/host-graph.ts', import.meta.url), 'utf8')))
   // The deep vendor specifier is deliberate: manifest.ts is the browser-safe
   // contract face of the pinned dsh-client-modules (zero runtime imports), and
   // the renderer has no install-tree copy of it — the plain-node run of this
@@ -1010,8 +1060,7 @@ test('A4: the wire helpers are upstream\'s own and the parse stays entries-only'
   assert.match(
     source,
     /import \{ optionalStringArray, stripClientSuffix \} from '\.\.\/\.\.\/\.\.\/vendor\/harness-packages\/@deepseek-ai\/dsh-client-modules\/src\/client\/manifest\.ts'/,
-    'the row validators must come from upstream, not from a local copy',
-  )
+    'the row validators must come from upstream, not from a local copy')
   assert.match(source, /optionalStringArray\(subject, 'inject', row\.inject\)/)
   assert.match(source, /optionalStringArray\(subject, 'external', row\.external\)/)
   assert.match(source, /const id = stripClientSuffix\(request\)/, 'the kernel-key normalization is upstream\'s helper')

@@ -2,13 +2,15 @@
  * Cross-host lockstep for the gateway runtime-status identity literal
  * (design 18 §9.3 status contract; design 17 §3).
  *
- * The same wire identity is minted and consumed in four places that cannot
- * import each other:
- *   - packages/gateway/src/runtime-manager.ts   (producer constant, Node)
+ * The same wire identity is single-sourced in
+ *   - packages/dsh-chamber-wire/src/runtime-status.ts (the neutral contract)
+ * and consumed/re-exported by
+ *   - packages/gateway/src/runtime-manager.ts   (producer re-export, Node)
+ *   - packages/dsh-chamber-client-core/src/gateway-runtime.ts
+ *     (browser consumer contract — the anchor of this test)
+ * while two raw/inline payload sites cannot import and are pinned here:
  *   - packages/gateway/src/chamber-assets.ts    (inline browser payload, raw JS)
  *   - packages/desktop/gateway-provider.ts      (Electron main constant)
- *   - packages/dsh-chamber-client-ui-sidebar/src/shared/gateway-runtime.ts
- *     (browser consumer contract — the anchor of this test)
  *
  * A one-sided rename makes the remote status parse fail closed (the consumer
  * rejects the row), which surfaces as a silently missing feature rather than a
@@ -19,11 +21,11 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { GATEWAY_RUNTIME_STATUS_KIND } from '../../src/shared/gateway-runtime.ts'
+import { GATEWAY_RUNTIME_STATUS_KIND } from '../../../dsh-chamber-client-core/src/gateway-runtime.ts'
 
 const SITES = [
   {
-    file: '../../../gateway/src/runtime-manager.ts',
+    file: '../../../dsh-chamber-wire/src/runtime-status.ts',
     pattern: /export const GATEWAY_RUNTIME_STATUS_KIND = '([^']+)' as const/u,
     count: 1,
   },
@@ -54,8 +56,10 @@ for (const site of SITES) {
   })
 }
 
-test('the local constant is the only source of that literal in this package', () => {
-  const source = readFileSync(new URL('../../src/shared/gateway-runtime.ts', import.meta.url), 'utf8')
-  const occurrences = [...source.matchAll(/'dsh-chamber-gateway-runtime'/gu)]
-  assert.equal(occurrences.length, 1)
+test('the wire face is the only literal source; consumers re-export it', () => {
+  const wire = readFileSync(new URL('../../../dsh-chamber-wire/src/runtime-status.ts', import.meta.url), 'utf8')
+  assert.equal([...wire.matchAll(/'dsh-chamber-gateway-runtime'/gu)].length, 1)
+  const consumer = readFileSync(new URL('../../../dsh-chamber-client-core/src/gateway-runtime.ts', import.meta.url), 'utf8')
+  assert.equal([...consumer.matchAll(/'dsh-chamber-gateway-runtime'/gu)].length, 0,
+    'client-core must re-export the wire identity, never mint a second literal')
 })

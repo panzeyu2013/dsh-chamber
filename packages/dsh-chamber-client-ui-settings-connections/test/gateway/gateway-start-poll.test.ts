@@ -8,7 +8,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { pollGatewayReady } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
+import { pollGatewayReady } from '@dsh-chamber/dsh-chamber-client-core'
 
 type StatusPayload = Record<string, unknown>
 

@@ -1,26 +1,31 @@
 /**
- * The gateway's own pnpm: resolution + PATH shim (design 18 §9.2 D1, design 21
+ * The gateway's pnpm PATH shim + entry binding (design 18 §9.2 D1, design 21
  * §6.3).
  *
- * Why this exists: the managed `dsh plugin` CLI is a thin pnpm forwarder —
+ * Why the shim exists: the managed `dsh plugin` CLI is a thin pnpm forwarder —
  * upstream spawns a literal `pnpm` from PATH and answers 127
  * ("pnpm not found on PATH") when the server has none
  * (`apps/cli/src/plugin.ts`). The
- * gateway ships the pinned pnpm as a bare `dist/pnpm/bin/pnpm.cjs` script (used
- * by the runtime installer through {@link resolvePnpmEntry}), which is not an
- * executable named `pnpm` and therefore invisible to a PATH lookup. A gateway
- * deployed on a host provisioned with npm alone could not seed or mutate the
- * managed profile at all.
+ * gateway ships the pinned pnpm as a bare `dist/pnpm/bin/pnpm.cjs` script,
+ * which is not an executable named `pnpm` and therefore invisible to a PATH
+ * lookup. A gateway deployed on a host provisioned with npm alone could not
+ * seed or mutate the managed profile at all.
  *
  * The shim is generated, not shipped: two tiny wrappers that exec the bundled
  * pnpm through the current node binary. The directory is derived from the
  * state dir so it stays inside the gateway-owned 0700 area, and generation is
  * idempotent (content-compared) so concurrent mutations cannot race a rewrite.
+ *
+ * Entry RESOLUTION is not gateway-owned: the candidate order lives in the
+ * shared core (`@dsh-chamber/dsh-runtime` pnpm-entry.ts) — bundled copy first,
+ * then the package-resolution fallback this file contributes through
+ * `explicitEntries`. Only the shim/PATH mechanics below are gateway-specific.
  */
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createRequire as nodeCreateRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { resolvePnpmEntry as resolveSharedPnpmEntry } from '@dsh-chamber/dsh-runtime'
 
 const gatewayRequire = nodeCreateRequire(import.meta.url)
 
@@ -33,27 +38,48 @@ export function pathDelimiter(): string {
 }
 
 /**
- * Absolute path of the pnpm entry script the gateway runs.
+ * The package-resolution fallback entries for the dev / npm-installed shape:
+ * pnpm is a real runtime dependency there, and its `package.json` `exports`
+ * hides `./bin/pnpm.cjs` (ERR_PACKAGE_PATH_NOT_EXPORTED), so the package entry
+ * is resolved and the bin path joined by hand.
  *
- * Bundled shape first (design 18 §9.2 D1): the installer's local path unpacks
- * the gateway tarball and NEVER installs gateway dependencies, so resolving the
- * `pnpm` package cannot hit a real `node_modules` tree there. `scripts/build.mjs`
- * copies the pinned pnpm into `dist/pnpm`; prefer it whenever the build carried
- * it. NOTE: `dist/pnpm` sits next to the bundled module, so the path is derived
- * with `fileURLToPath` — `path.dirname` over a `file://` URL would mangle it.
+ * A resolution failure yields NO explicit entry instead of throwing: a bundled
+ * deployment (the installer's local path unpacks the gateway tarball and NEVER
+ * installs gateway dependencies) has no `pnpm` package to resolve, and the
+ * shared resolver must still be able to prefer the bundled copy there.
+ */
+function packagePnpmEntries(): readonly string[] {
+  try {
+    return [join(dirname(gatewayRequire.resolve('pnpm')), 'bin', 'pnpm.cjs')]
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Absolute path of the pnpm entry script the gateway runs — the shared core's
+ * first existing candidate.
  *
- * Dev / npm-installed shape: pnpm is a real runtime dependency of the gateway.
- * Its `package.json` `exports` hides `./bin/pnpm.cjs`
- * (ERR_PACKAGE_PATH_NOT_EXPORTED), so the package entry is resolved and the bin
- * path joined by hand.
+ * Bundled shape first (design 18 §9.2 D1): `scripts/build.mjs` copies the
+ * pinned pnpm into `dist/pnpm`, and the shared resolver is handed
+ * `bundledDir` = this module's directory, so that copy wins whenever the build
+ * carried it. NOTE `dist/pnpm` sits next to the bundled module, so the path is
+ * derived with `fileURLToPath` — `path.dirname` over a `file://` URL would
+ * mangle it. The dev / npm-installed shape follows with the resolved `pnpm`
+ * package bin.
  *
- * @returns the absolute pnpm entry path (existence is the caller's business in
- *   the dev shape; the bundled shape is checked here).
+ * @returns the absolute pnpm entry path; when every candidate is absent the
+ *   shared resolver returns its first candidate, so existence stays the
+ *   caller's business (loud failure, never a silently different pnpm).
  */
 export function resolvePnpmEntry(): string {
-  const bundled = join(dirname(fileURLToPath(import.meta.url)), 'pnpm', 'bin', 'pnpm.cjs')
-  if (existsSync(bundled)) return bundled
-  return join(dirname(gatewayRequire.resolve('pnpm')), 'bin', 'pnpm.cjs')
+  return resolveSharedPnpmEntry({
+    platform: process.platform,
+    execPath: process.execPath,
+    env: process.env,
+    bundledDir: dirname(fileURLToPath(import.meta.url)),
+    explicitEntries: packagePnpmEntries(),
+  })
 }
 
 /** POSIX wrapper: exec the bundled pnpm through the current node binary.

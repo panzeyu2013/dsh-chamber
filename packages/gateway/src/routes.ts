@@ -8,7 +8,9 @@
  *   - `/chamber/plugins/installed` — managed web-profile plugin projection
  *                                   (design 21 §6.2; shares the write fence →
  *                                   retryable 409 while a profile write is in
- *                                   flight);
+ *                                   flight; a failed fence probe withholds the
+ *                                   projection with a loud retryable 503 —
+ *                                   never an unfenced read);
  *   - `/chamber/plugins/tasks`    — mutation task projection (journal ops +
  *                                   deferred intents + executor busy, design
  *                                   21 §6.2);
@@ -21,6 +23,11 @@
  *                                   third-party/ and installed via file:);
  *   - `/chamber/plugins/remove`   — installed-list remove (never deferred,
  *                                   usable while the managed dsh is stopped);
+ *   - `/chamber/plugins/undo`     — undo = RESTORE the managed profile's
+ *                                   package.json + lockfile from the latest
+ *                                   ok op's preImage backup (design 21 §6.3/
+ *                                   §6.8 r2; 202 async through the same queue/
+ *                                   lease/single-flight fence as install);
  *   - `/chamber/session-state*`   — the read-only session-state watcher:
  *                                  snapshot / SSE / read / read-all, delegated
  *                                  to sessionState;
@@ -210,15 +217,23 @@ function submitRefusalStatus(code: string): number {
   // Derivation failure (missing runtime facts) is the GATEWAY's own state, not
   // the client's mistake — the caller may retry once the instance is up.
   if (code === 'protected-set-unavailable') return 503
+  // The undo target cannot be picked because the durable journal is corrupt /
+  // unreadable: the record set is UNKNOWN, not empty. Gateway-side state.
+  if (code === 'journal_unavailable') return 503
   // A journal/deferred-store write failure is the GATEWAY's, never the
   // client's — 500 persistence_failed (design 21 §6.2 code table).
   if (code === 'persistence_failed') return 500
   return 409
 }
 
-/** Read-side half of the design 21 §6.2 "读与写面共享栅栏": true while a
- * plugin mutation holds the managed-profile write fence, i.e. while the
- * installed projection must not be published.
+/** The design 21 §6.2 "读与写面共享栅栏" probe outcome.
+ *
+ * `ok: false` means the probe itself could not be evaluated (the task
+ * projection threw): the writer state is UNKNOWN, which is a different fact
+ * from "no writer is in flight". The caller must not publish a projection it
+ * cannot prove unfenced, so the route answers a loud retryable 503 — there is
+ * deliberately no fail-open/unfenced fallback (a fence that may not be
+ * trusted is not a fence).
  *
  * Why the tasks projection is the fence seam: the orchestrator takes the
  * runtime-manager `ProfileWriteLease` at submit acceptance and releases it
@@ -241,17 +256,17 @@ function submitRefusalStatus(code: string): number {
  *
  * Observation only, never a lease acquisition: the manifest read that follows
  * is synchronous (readPrivateFileNoFollow), so no in-process writer can start
- * between the probe and the read. A failing projection must not take the read
- * down (it is the §6.8 r1 recovery surface), so the probe fails OPEN with a
- * loud warn — the read's own profile_absent/profile_corrupt outcomes remain
- * the honest signal for the manifest itself. */
-function pluginProfileWriteInFlight(tasks: ChamberSurfacePluginTasks, logger: Logger): boolean {
+ * between the probe and the read. */
+type PluginWriteFenceProbe = { ok: true; inFlight: boolean } | { ok: false; error: string }
+
+function probePluginProfileWriteFence(tasks: ChamberSurfacePluginTasks, logger: Logger): PluginWriteFenceProbe {
   try {
     const projection = tasks.tasks()
-    return projection.busy || projection.tasks.some(op => op.status === 'pending')
+    return { ok: true, inFlight: projection.busy || projection.tasks.some(op => op.status === 'pending') }
   } catch (error) {
-    logger.warn(`chamber-plugins-installed: write-fence probe failed, reading unfenced: ${String(error)}`)
-    return false
+    const detail = error instanceof Error ? error.message : String(error)
+    logger.warn(`chamber-plugins-installed: write-fence probe failed: ${detail} — withholding the installed projection (503)`)
+    return { ok: false, error: detail }
   }
 }
 
@@ -427,10 +442,25 @@ export function createChamberSurface(deps: ChamberSurfaceDeps): ChamberSurface {
     //                             lease family's code — the same 409
     //                             /chamber/runtime answers while a plugin
     //                             mutation holds that lease).
+    //   fence unreadable   → 503 {code:'write_fence_unavailable'} — the fence
+    //                             probe itself failed, so the writer state is
+    //                             UNKNOWN. The projection is withheld (loud,
+    //                             retryable); there is no unfenced fallback.
+    //                             A stopped/error instance still reads 200/404:
+    //                             this 503 is about the probe, never about the
+    //                             managed runtime's connection state.
     // file: dependency values are already masked by the projection module.
     if (pathname === '/chamber/plugins/installed' || pathname === '/chamber/plugins/installed/') {
       if (req.method !== 'GET') return methodNotAllowed(res)
-      if (pluginProfileWriteInFlight(deps.tasks, logger)) {
+      const fence = probePluginProfileWriteFence(deps.tasks, logger)
+      if (!fence.ok) {
+        jsonResponse(res, 503, {
+          error: 'managed profile write fence is unavailable; the installed projection was withheld rather than published unfenced — retry after the gateway task store recovers',
+          code: 'write_fence_unavailable',
+        })
+        return true
+      }
+      if (fence.inFlight) {
         jsonResponse(res, 409, {
           error: 'managed profile write in flight (plugin mutation); the installed projection is fenced — retry after the task settles',
           code: 'runtime_busy',
@@ -493,6 +523,37 @@ export function createChamberSurface(deps: ChamberSurfaceDeps): ChamberSurface {
         result = await deps.tasks.submit({ kind: 'remove', name, initiator: mutationInitiator(req) })
       } catch (error) {
         logger.warn(`chamber-plugins-remove: deferred-intent persistence failure: ${String(error)}`)
+        jsonResponse(res, 500, { error: 'persistence_failed', code: 'persistence_failed' })
+        return true
+      }
+      if (result.ok) {
+        submitAccepted(res, result)
+      } else {
+        jsonResponse(res, submitRefusalStatus(result.code), { error: result.error, code: result.code })
+      }
+      return true
+    }
+
+    // POST /chamber/plugins/undo (design 21 §3 undoJournal / §6.3 write order
+    // / §6.8 r2): undo = RESTORE the latest ok op's preImage pair
+    // (package.json + pnpm-lock.yaml, pair-validated, byte-for-byte) — the same
+    // 撤销=恢复 semantics as the ssh backend, deliberately NOT a remove-only
+    // shortcut. The orchestrator owns the single-flight and fence: nothing to
+    // undo → 409 no_undoable_op, corrupt journal → 503 journal_unavailable,
+    // writer in flight → 409 runtime_busy (the lease family), queue refusals
+    // → their usual 409 family; an accepted undo is 202 + opId and runs
+    // through the SAME serial queue/lease as install/remove.
+    if (pathname === '/chamber/plugins/undo' || pathname === '/chamber/plugins/undo/') {
+      if (req.method !== 'POST') return methodNotAllowed(res)
+      let result: PluginTaskSubmitResult
+      try {
+        // The target, its spec and its preImage are selected by the
+        // orchestrator from the durable journal — the request carries only
+        // attribution. No body is read: a body-less POST is the contract
+        // (the client cannot pick an arbitrary op id).
+        result = await deps.tasks.submit({ kind: 'undo', name: '', initiator: mutationInitiator(req) })
+      } catch (error) {
+        logger.warn(`chamber-plugins-undo: undo submission failed: ${String(error)}`)
         jsonResponse(res, 500, { error: 'persistence_failed', code: 'persistence_failed' })
         return true
       }
@@ -697,7 +758,7 @@ export function createChamberSurface(deps: ChamberSurfaceDeps): ChamberSurface {
   // single-writer fence restart/apply share, re-checked at
   // beforeSpawnCheckpoint in index.ts), and the READ side is fenced by that
   // same lease: GET /chamber/plugins/installed answers 409 runtime_busy while
-  // a mutation is in flight (pluginProfileWriteInFlight above, design 21
+  // a mutation is in flight (probePluginProfileWriteFence above, design 21
   // §6.2). No further server-side admission gate exists — a fully
   // authenticated caller is trusted at /chamber/runtime action level (design
   // 21 decision 14).

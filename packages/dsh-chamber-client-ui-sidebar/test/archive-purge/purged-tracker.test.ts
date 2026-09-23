@@ -1,7 +1,9 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { createPurgeTracker } from '../../src/shared/purged-tracker.ts'
-import { createPurgedConvergence, nextConvergenceStep, releasableAfterProbe } from '../../src/shared/purged-convergence.ts'
+import { createPurgeTracker } from '@dsh-chamber/dsh-chamber-client-core/purged-tracker'
+// purged-convergence.ts / purged-rows.ts are package-internal (no public face,
+// not on the barrel): the test references the sources directly.
+import { createPurgedConvergence, nextConvergenceStep, releasableAfterProbe } from '../../../dsh-chamber-client-core/src/purged-convergence.ts'
 import {
   filterPurgedRows,
   lingeringPurgedIds,
@@ -9,7 +11,7 @@ import {
   PURGED_REFRESH_RETRY_MS,
   reconcilePurgedRows,
   trackArchiveSetShrink,
-} from '../../src/shared/purged-rows.ts'
+} from '../../../dsh-chamber-client-core/src/purged-rows.ts'
 
 const flush = (): Promise<void> => new Promise(resolve => setImmediate(resolve))
 

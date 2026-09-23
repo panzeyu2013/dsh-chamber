@@ -3,14 +3,14 @@
  * §5.1/§5.2).
  *
  * The classifier and the verbatim-error projection are single-sourced on the
- * sidebar shared face (dsh-chamber-client-ui-sidebar/src/shared/runtime-refusal.ts):
+ * client-core face (dsh-chamber-client-core/src/runtime-refusal.ts):
  * the settings-connections package re-exports
  * the same implementations. This module keeps only what is bridge-local — the
  * bridge dictionary keys and the localized sentence — and re-exports the shared
  * names under their original bridge names for its own callers.
  */
 
-import { classifyRuntimeRefusal, serverRefusalText, type RuntimeRefusalKind } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
+import { classifyRuntimeRefusal, serverRefusalText, type RuntimeRefusalKind } from '@dsh-chamber/dsh-chamber-client-core'
 
 /** The two 409 families the runtime routes answer (the shared union). */
 export type BridgeRestartRefusalKind = RuntimeRefusalKind

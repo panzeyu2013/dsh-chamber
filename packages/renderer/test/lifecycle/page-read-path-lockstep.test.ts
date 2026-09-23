@@ -32,12 +32,12 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
-import { createMachineCatalog } from '../../../dsh-chamber-client-ui-open-in/src/client/machine-catalog.ts'
+import { createMachineCatalog } from '@dsh-chamber/dsh-chamber-client-ui-open-in/machine-catalog'
 import {
   OPEN_IN_APP_APPS_METHOD,
   OPEN_IN_APP_ICON_METHOD,
 } from '../../../dsh-chamber-client-ui-open-in/src/shared/open-in-wire.ts'
-import { getInstanceClient } from '../../../dsh-chamber-client-ui-sidebar/src/shared/instance-api.ts'
+import { getInstanceClient } from '@dsh-chamber/dsh-chamber-client-core/instance-api'
 import { normalize, stripComments } from '../../../../scripts/dev/test-support/source-text.ts'
 
 interface HostTable {

@@ -11,7 +11,7 @@ import type {
   RuntimeBadgeLabel,
   RuntimeBadgeTone,
   RuntimeMetadataComponent,
-} from '../../../../packages/renderer/src/runtime-management.ts'
+} from '@dsh-chamber/dsh-chamber-client-core/runtime-management'
 
 export type RuntimeTranslate = (key: SettingsBridgeKey, params?: Record<string, unknown>) => string
 

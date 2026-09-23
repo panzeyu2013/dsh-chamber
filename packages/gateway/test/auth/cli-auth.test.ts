@@ -11,6 +11,7 @@ import assert from 'node:assert/strict'
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { acquireStateRootLease } from '@dsh-chamber/control-plane'
 import { createGatewayStore, hashCredential, verifyCredential } from '../../src/store.ts'
 import {
   GatewayAuthUsageError,
@@ -39,7 +40,6 @@ test('gateway auth reset-password writes a v2 runtime credential, rotates the se
     const seed = createGatewayStore(dir, silentLogger)
     seed.setPasswordCredential(hashCredential(OLD_PASSWORD), 'config')
     const oldSecret = seed.getJwtSecret()
-    seed.close()
 
     const logs: string[] = []
     await gatewayAuthResetPassword(dir, NEW_PASSWORD, {
@@ -57,24 +57,23 @@ test('gateway auth reset-password writes a v2 runtime credential, rotates the se
     assert.equal(verifyCredential(OLD_PASSWORD, doc.verifier), false)
     // Rotate-first (S13): the old session secret is dead.
     assert.notEqual(jwtSecret(dir), oldSecret)
-    // The lock was released: the same stateDir can be reopened immediately.
-    const reopened = createGatewayStore(dir, silentLogger)
-    reopened.close()
+    // The short state-root lease was released: the state root is free again.
+    assert.equal(existsSync(join(dir, 'owner.json')), false)
     assert.ok(logs.some(line => line.includes('runtime-managed')), 'reset prints the runtime-managed notice')
   } finally { cleanup() }
 })
 
-test('gateway auth reset-password refuses while the gateway holds the state lock', async () => {
+test('gateway auth reset-password refuses while a live writer holds the state-root lease', async () => {
   const { dir, cleanup } = tempDir()
   try {
-    const store = createGatewayStore(dir, silentLogger) // lock held, NOT closed
+    const lease = acquireStateRootLease(dir, { scope: 'state-root', flavor: 'gateway' }) // held, NOT released
     try {
       await assert.rejects(
         () => gatewayAuthResetPassword(dir, NEW_PASSWORD, silentLogger),
         /gateway is running \(pid \d+\); use the web UI \/auth\/change-password instead/,
       )
     } finally {
-      store.close()
+      lease.release()
     }
   } finally { cleanup() }
 })
@@ -91,9 +90,10 @@ test('gateway auth reset-password rejects an out-of-bounds password with a usage
       () => gatewayAuthResetPassword(dir, 'x'.repeat(1025), silentLogger),
       (error: unknown) => error instanceof GatewayAuthUsageError,
     )
-    // The lock was never touched: the stateDir stays free for a normal open.
-    const store = createGatewayStore(dir, silentLogger)
-    store.close()
+    // Usage validation runs before the lease: the state root is untouched.
+    assert.equal(existsSync(join(dir, 'owner.json')), false)
+    const lease = acquireStateRootLease(dir, { scope: 'state-root', flavor: 'gateway' })
+    lease.release()
   } finally { cleanup() }
 })
 
@@ -104,7 +104,6 @@ test('gateway auth clear removes both credentials, rotates the secret, and relea
     seed.setPasswordCredential(hashCredential(OLD_PASSWORD), 'runtime')
     seed.setTokenHash(hashCredential(TOKEN), 'runtime')
     const oldSecret = seed.getJwtSecret()
-    seed.close()
 
     const warns: string[] = []
     await gatewayAuthClear(dir, {
@@ -117,23 +116,22 @@ test('gateway auth clear removes both credentials, rotates the secret, and relea
     assert.equal(existsSync(join(dir, 'tokens.json')), false)
     assert.notEqual(jwtSecret(dir), oldSecret)
     assert.ok(warns.some(line => line.includes('NO authentication')), 'clear prints the S1 warning for --no-auth deployments')
-    // Lock released: the same stateDir can be reopened immediately.
-    const reopened = createGatewayStore(dir, silentLogger)
-    reopened.close()
+    // The short state-root lease was released: the state root is free again.
+    assert.equal(existsSync(join(dir, 'owner.json')), false)
   } finally { cleanup() }
 })
 
-test('gateway auth clear refuses while the gateway holds the state lock', async () => {
+test('gateway auth clear refuses while a live writer holds the state-root lease', async () => {
   const { dir, cleanup } = tempDir()
   try {
-    const store = createGatewayStore(dir, silentLogger)
+    const lease = acquireStateRootLease(dir, { scope: 'state-root', flavor: 'gateway' })
     try {
       await assert.rejects(
         () => gatewayAuthClear(dir, silentLogger),
         /gateway is running \(pid \d+\); stop the gateway first/,
       )
     } finally {
-      store.close()
+      lease.release()
     }
   } finally { cleanup() }
 })
@@ -144,7 +142,6 @@ test('gateway auth status reports source and time, never the secret values', () 
     const store = createGatewayStore(dir, silentLogger)
     store.setPasswordCredential(hashCredential(OLD_PASSWORD), 'runtime')
     store.setTokenHash(hashCredential(TOKEN), 'config')
-    store.close()
 
     const text = gatewayAuthStatus(dir)
     assert.match(text, /password: configured \(runtime, \d{4}-\d{2}-\d{2}T/)

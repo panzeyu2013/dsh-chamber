@@ -63,7 +63,7 @@ import net from 'node:net'
 import { readFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { canonicalizeTransportInstanceInput, MAX_TRANSPORT_INSTANCES, signalChild } from './transport-provider.ts'
-import { liveTransportIdentityChanged, sshCredentialEndpointChanged } from './credential-identity.ts'
+import { liveTransportIdentityChanged } from './credential-identity.ts'
 // Failure text is single-sourced in describe-error.ts;
 // the export name stays for the state-machine call sites.
 import { describeError } from './describe-error.ts'
@@ -246,28 +246,6 @@ export function computeRemovedInstanceIds(
     }
   }
   return removed
-}
-
-/** Stored SSH passwords are credentials for an authentication endpoint, not
- * for a stable UI id. Deletion or an edit to host/user/sshPort retires the
- * old secret; label, forwarded remotePort and remote service/home changes do
- * not alter the SSH authentication peer and keep it. */
-export function computePasswordRetirementIds(
-  before: readonly Pick<TransportInstanceSpec, 'id' | 'host' | 'user' | 'sshPort'>[],
-  after: readonly Pick<TransportInstanceSpec, 'id' | 'host' | 'user' | 'sshPort'>[],
-): string[] {
-  const afterById = new Map(after.map(instance => [instance.id, instance]))
-  const retired: string[] = []
-  const seen = new Set<string>()
-  for (const previous of before) {
-    if (seen.has(previous.id)) continue
-    seen.add(previous.id)
-    const current = afterById.get(previous.id)
-    if (current === undefined || sshCredentialEndpointChanged(previous, current)) {
-      retired.push(previous.id)
-    }
-  }
-  return retired
 }
 
 /** Renderer lifecycle retirement is broader than deletion: changing the

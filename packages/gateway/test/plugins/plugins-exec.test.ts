@@ -1,9 +1,11 @@
 /**
- * plugins-exec tests (design 21 §6.3 executor core): env
- * discipline, bounded runDshPluginMutation outcomes (exit/timeout/spawn
- * error), and the serial worker (order, cap, dup fast-fail, blocked/probe
- * gates, preImage backups, dispose). Plain node:test; fake spawn injection —
- * no real dsh CLI is ever spawned.
+ * plugins-exec tests (design 21 §6.3 executor core): the serial worker (order,
+ * cap, dup fast-fail, blocked/probe gates, preImage backups, dispose) plus the
+ * gateway's own error-text sanitizer. The restricted child runner itself
+ * (env whitelist + bounded output + timeout kill) is the control-plane single
+ * implementation and is tested in
+ * packages/control-plane/test/plugins/plugin-mutation-executor.test.ts.
+ * Plain node:test; fake spawn injection — no real dsh CLI is ever spawned.
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -24,15 +26,11 @@ import {
   ERROR_RESTARTED_DURING_MUTATION,
   ERROR_RUNTIME_BUSY,
   ERROR_STARTING,
-  ERROR_TIMED_OUT,
-  OUTPUT_TRUNCATION_MARKER,
   PLUGIN_QUEUE_CAP,
   createPluginsExec,
-  runDshPluginMutation,
-  scrubInstallEnv,
-  truncateOutputTail,
+  defaultSanitize,
 } from '../../src/plugins-exec.ts'
-import type { EnqueueResult, OnOpTerminal, SpawnFn } from '../../src/plugins-exec.ts'
+import type { EnqueueResult, OnOpTerminal } from '../../src/plugins-exec.ts'
 import { backupDirFor, createPluginsJournal, thirdPartyRoot } from '../../src/plugins-journal.ts'
 import { PNPM_SHIM_DIR } from '../../src/pnpm-entry.ts'
 import type { JournalLogger } from '../../src/plugins-journal.ts'
@@ -113,202 +111,6 @@ async function enqueueOk(exec: { enqueue(input: unknown): Promise<EnqueueResult>
   assert.ok(result.ok, `enqueue must succeed: ${JSON.stringify(result)}`)
   return (result as { ok: true; opId: string }).opId
 }
-
-// ---------------------------------------------------------------------------
-// Pure env discipline + capture helpers
-// ---------------------------------------------------------------------------
-
-test('scrubInstallEnv is a WHITELIST: only PATH/proxies survive; every ambient var is dropped, pins always apply', () => {
-  const source: Record<string, string | undefined> = {
-    PATH: '/usr/bin:/bin',
-    HTTP_PROXY: 'http://proxy:3128',
-    https_proxy: 'http://proxy:3128',
-    NO_PROXY: '*.local',
-    no_proxy: '127.0.0.1',
-    // Everything below must NEVER cross into install children: gateway
-    // control vars, npm token carriers, operator HOME/XDG, and any other
-    // ambient secret a lifecycle script or pnpm could read (design 21 §6.3
-    // whitelist discipline — a denylist cannot enumerate every carrier).
-    DSH_GATEWAY_TOKEN: 'secret-token',
-    dsh_gateway_inner: 'x',
-    npm_config_registry: 'https://evil.example',
-    NPM_CONFIG_USERCONFIG: '/operator/.npmrc',
-    NPM_TOKEN: 'npm-secret',
-    Npm_Config_Registry: 'case-insensitive-drop',
-    NODE_AUTH_TOKEN: 'registry-token',
-    GITHUB_TOKEN: 'gh-token',
-    SSH_AUTH_SOCK: '/operator/agent.sock',
-    AWS_SECRET_ACCESS_KEY: 'aws-secret',
-    HOME: '/operator/home',
-    XDG_CONFIG_HOME: '/operator/.config',
-    KEEP_ME: 'kept',
-    UNSET_VAR: undefined,
-  }
-  const pins = {
-    DSH_HOME: '/state/dsh-home',
-    XDG_CACHE_HOME: '/state/chamber-plugins/third-party/.pnpm-cache',
-    XDG_CONFIG_HOME: '/state/chamber-plugins/third-party/.pnpm-xdg',
-    NPM_CONFIG_USERCONFIG: '/state/chamber-plugins/third-party/.npmrc-empty',
-    npm_config_userconfig: '/state/chamber-plugins/third-party/.npmrc-empty',
-  }
-  const result = scrubInstallEnv(source, pins)
-
-  assert.equal(result.PATH, '/usr/bin:/bin')
-  assert.equal(result.HTTP_PROXY, 'http://proxy:3128')
-  assert.equal(result.https_proxy, 'http://proxy:3128')
-  assert.equal(result.NO_PROXY, '*.local')
-  assert.equal(result.no_proxy, '127.0.0.1')
-  // A whitelist keeps ONLY the proxy family: KEEP_ME is ambient and must fall.
-  for (const key of ['DSH_GATEWAY_TOKEN', 'dsh_gateway_inner', 'npm_config_registry', 'NPM_TOKEN',
-    'Npm_Config_Registry', 'NODE_AUTH_TOKEN', 'GITHUB_TOKEN', 'SSH_AUTH_SOCK', 'AWS_SECRET_ACCESS_KEY',
-    'KEEP_ME']) {
-    assert.equal(Object.hasOwn(result, key), false, `${key} must be dropped by the whitelist`)
-  }
-  // HOME is dropped and NOT restored: pinning HOME would move pnpm's default
-  // store away from the store the managed profile was provisioned against
-  // (pnpm 11 refuses every mutation on that mismatch — design 21 §6.3 ⑨).
-  assert.equal(Object.hasOwn(result, 'HOME'), false, 'HOME must stay absent so pnpm falls back to the passwd home store')
-  assert.equal(result.DSH_HOME, '/state/dsh-home')
-  assert.equal(result.XDG_CACHE_HOME, '/state/chamber-plugins/third-party/.pnpm-cache')
-  assert.equal(result.XDG_CONFIG_HOME, '/state/chamber-plugins/third-party/.pnpm-xdg')
-  assert.equal(result.NPM_CONFIG_USERCONFIG, '/state/chamber-plugins/third-party/.npmrc-empty', 'upper-case pin restores the pinned name')
-  assert.equal(result.npm_config_userconfig, '/state/chamber-plugins/third-party/.npmrc-empty', 'lower-case pin restores the pinned name (pnpm 11 reads either casing)')
-  assert.equal(result.UNSET_VAR, undefined)
-})
-
-test('truncateOutputTail keeps the tail and marks truncation', () => {
-  assert.deepEqual(truncateOutputTail('short', 64), { value: 'short', truncated: false })
-  const bounded = truncateOutputTail('abcdefghij', 4)
-  assert.equal(bounded.truncated, true)
-  assert.equal(bounded.value, `${OUTPUT_TRUNCATION_MARKER}ghij`)
-  assert.ok(OUTPUT_TRUNCATION_MARKER.includes('truncated'))
-})
-
-// ---------------------------------------------------------------------------
-// runDshPluginMutation outcomes (injected spawn only)
-// ---------------------------------------------------------------------------
-
-test('runDshPluginMutation: exit 0 is ok and forwards argv/env to the spawn seam', async () => {
-  const harness = makeSpawnHarness()
-  const env = { PATH: '/usr/bin', DSH_HOME: '/state/dsh-home' }
-  const mutation = runDshPluginMutation({
-    dshCliPath: '/managed/dsh',
-    argv: ['plugin', '--profile', 'web', 'add', 'pkg@^1'],
-    env,
-    spawn: harness.spawn,
-    timeoutMs: 1000,
-  })
-  harness.calls[0]!.child.close(0)
-  assert.deepEqual(await mutation, { ok: true })
-  assert.equal(harness.calls.length, 1)
-  assert.equal(harness.calls[0]!.command, '/managed/dsh')
-  assert.deepEqual(harness.calls[0]!.args, ['plugin', '--profile', 'web', 'add', 'pkg@^1'])
-  assert.deepEqual(harness.calls[0]!.options.env, env)
-  assert.deepEqual(harness.calls[0]!.options.stdio, ['ignore', 'pipe', 'pipe'])
-  if (posix) assert.equal(harness.calls[0]!.options.detached, true)
-})
-
-test('runDshPluginMutation: non-zero exit surfaces the sanitized last stderr line, falling back to stdout', async () => {
-  // stderr present → last non-empty stderr line wins.
-  const harness1 = makeSpawnHarness()
-  const mutation1 = runDshPluginMutation({
-    dshCliPath: 'dsh', argv: [], env: {}, spawn: harness1.spawn, timeoutMs: 1000,
-    sanitize: text => text, // raw: exact line assertions
-  })
-  harness1.calls[0]!.child.stderrLine('line one')
-  harness1.calls[0]!.child.stderrLine('line two')
-  harness1.calls[0]!.child.stdoutLine('ignored stdout')
-  harness1.calls[0]!.child.close(7)
-  assert.deepEqual(await mutation1, { ok: false, error: 'line two' })
-
-  // Empty stderr → stdout's last line.
-  const harness2 = makeSpawnHarness()
-  const mutation2 = runDshPluginMutation({
-    dshCliPath: 'dsh', argv: [], env: {}, spawn: harness2.spawn, timeoutMs: 1000,
-    sanitize: text => text,
-  })
-  harness2.calls[0]!.child.stdoutLine('stdout says this failed')
-  harness2.calls[0]!.child.close(7)
-  assert.deepEqual(await mutation2, { ok: false, error: 'stdout says this failed' })
-
-  // No output at all → honest exit-code message.
-  const harness3 = makeSpawnHarness()
-  const mutation3 = runDshPluginMutation({ dshCliPath: 'dsh', argv: [], env: {}, spawn: harness3.spawn, timeoutMs: 1000 })
-  harness3.calls[0]!.child.close(7)
-  const result3 = await mutation3
-  assert.ok(!result3.ok)
-  assert.ok(result3.error.includes('exited with code 7'), result3.error)
-})
-
-test('runDshPluginMutation: bounded tail capture keeps the last line under tiny limits', async () => {
-  const harness = makeSpawnHarness()
-  const mutation = runDshPluginMutation({
-    dshCliPath: 'dsh', argv: [], env: {}, spawn: harness.spawn, timeoutMs: 1000,
-    stdoutLimit: 32, stderrLimit: 32, sanitize: text => text,
-  })
-  const child = harness.calls[0]!.child
-  child.stderrLine('y'.repeat(500))
-  child.stderrLine('boom-line')
-  child.close(7)
-  const result = await mutation
-  assert.ok(!result.ok)
-  assert.equal(result.error, 'boom-line', 'the error line survives head-truncation')
-})
-
-test('runDshPluginMutation: default sanitize redacts absolute paths; custom sanitize is applied', async () => {
-  // Default sanitize (shared-core path redaction).
-  const harness1 = makeSpawnHarness()
-  const mutation1 = runDshPluginMutation({
-    dshCliPath: '/private/tmp/dsh', argv: [], env: {}, spawn: harness1.spawn, timeoutMs: 1000,
-  })
-  harness1.calls[0]!.child.stderrLine('pnpm error at /private/tmp/state/dsh-home/npm-secret-file')
-  harness1.calls[0]!.child.close(7)
-  const result1 = await mutation1
-  assert.ok(!result1.ok)
-  assert.equal(result1.error.includes('/private/tmp/state'), false, 'absolute paths must not leak: ' + result1.error)
-
-  // Explicit custom sanitize.
-  const harness2 = makeSpawnHarness()
-  const mutation2 = runDshPluginMutation({
-    dshCliPath: 'dsh', argv: [], env: {}, spawn: harness2.spawn, timeoutMs: 1000,
-    sanitize: text => text.replaceAll('secret', 'XXX'),
-  })
-  harness2.calls[0]!.child.stderrLine('token secret leaked')
-  harness2.calls[0]!.child.close(1)
-  const result2 = await mutation2
-  assert.ok(!result2.ok)
-  assert.equal(result2.error, 'token XXX leaked')
-})
-
-test('runDshPluginMutation: timeout SIGTERMs then SIGKILLs and reports the timeout error', async () => {
-  const harness = makeSpawnHarness()
-  const mutation = runDshPluginMutation({
-    dshCliPath: 'dsh', argv: [], env: {}, spawn: harness.spawn, timeoutMs: 60,
-  })
-  const child = harness.calls[0]!.child
-  const result = await mutation
-  assert.deepEqual(result, { ok: false, error: ERROR_TIMED_OUT })
-  assert.deepEqual(child.signals, ['SIGTERM', 'SIGKILL'])
-  assert.ok(child.killTimes[1]! - child.killTimes[0]! >= 900, 'SIGKILL follows after the SIGTERM grace window')
-})
-
-test('runDshPluginMutation: spawn error event and synchronous spawn throw are reported sanitized', async () => {
-  const harness1 = makeSpawnHarness()
-  const mutation1 = runDshPluginMutation({ dshCliPath: 'dsh', argv: [], env: {}, spawn: harness1.spawn, timeoutMs: 1000 })
-  harness1.calls[0]!.child.error(Object.assign(new Error('spawn /no/such/dsh ENOENT'), { code: 'ENOENT' }))
-  const result1 = await mutation1
-  assert.ok(!result1.ok)
-  assert.ok(result1.error.includes('ENOENT'), result1.error)
-  assert.equal(result1.error.includes('/no/such/dsh'), false, 'spawn error paths are sanitized: ' + result1.error)
-
-  const throwing: SpawnFn = () => {
-    throw Object.assign(new Error('spawn /blocked/dsh ENOENT'), { code: 'ENOENT' })
-  }
-  const result2 = await runDshPluginMutation({ dshCliPath: 'dsh', argv: [], env: {}, spawn: throwing, timeoutMs: 1000 })
-  assert.ok(!result2.ok)
-  assert.ok(result2.error.includes('ENOENT'), result2.error)
-  assert.equal(result2.error.includes('/blocked/dsh'), false)
-})
 
 // ---------------------------------------------------------------------------
 // Executor worker
@@ -828,24 +630,6 @@ test('onTerminal fires for dispose-blocked ops (queued blocked, in-flight failed
   assert.equal(terminals.length, 2)
 })
 
-test('runDshPluginMutation splices argvPrefix between the executable and argv and honors cwd', async () => {
-  const harness = makeSpawnHarness()
-  const mutation = runDshPluginMutation({
-    dshCliPath: '/managed/node',
-    argvPrefix: ['--expose-internals', '/managed/dsh/lib/bin.js'],
-    argv: ['plugin', '--profile', 'web', 'add', 'pkg@1'],
-    env: { PATH: '/usr/bin' },
-    cwd: '/managed/dsh',
-    spawn: harness.spawn,
-    timeoutMs: 1000,
-  })
-  harness.calls[0]!.child.close(0)
-  assert.deepEqual(await mutation, { ok: true })
-  assert.equal(harness.calls[0]!.command, '/managed/node')
-  assert.deepEqual(harness.calls[0]!.args, ['--expose-internals', '/managed/dsh/lib/bin.js', 'plugin', '--profile', 'web', 'add', 'pkg@1'])
-  assert.equal(harness.calls[0]!.options.cwd, '/managed/dsh')
-})
-
 test('cliLaunch per-op resolution reaches the spawn (second op sees a switched workspace)', async t => {
   let entry = '/ws-a/node_modules/@deepseek-ai/dsh/lib/bin.js'
   const h = makeExecHarness(t, {
@@ -870,31 +654,17 @@ test('cliLaunch per-op resolution reaches the spawn (second op sees a switched w
 // default sanitizer, and crash-orphan childPid journaling.
 // ---------------------------------------------------------------------------
 
-test('default sanitize redacts URL credentials + named secrets and byte-bounds the error', async () => {
-  const harness = makeSpawnHarness()
-  const mutation = runDshPluginMutation({
-    dshCliPath: '/managed/dsh', argv: [], env: {}, spawn: harness.spawn, timeoutMs: 1000,
-  })
-  harness.calls[0]!.child.stderrLine('pnpm error fetching https://user:super-secret@registry.example/pkg (token=abc123, password=hunter2)')
-  harness.calls[0]!.child.close(7)
-  const result = await mutation
-  assert.ok(!result.ok)
-  assert.equal(result.error.includes('super-secret'), false, 'URL userinfo must be redacted: ' + result.error)
-  assert.equal(result.error.includes('abc123'), false, 'named token must be redacted: ' + result.error)
-  assert.equal(result.error.includes('hunter2'), false, 'named password must be redacted: ' + result.error)
-  assert.ok(result.error.includes('registry.example'), 'the URL origin survives for diagnosis')
+test('defaultSanitize redacts URL credentials + named secrets and byte-bounds the text', () => {
+  const sanitized = defaultSanitize('pnpm error fetching https://user:super-secret@registry.example/pkg (token=abc123, password=hunter2)')
+  assert.equal(sanitized.includes('super-secret'), false, 'URL userinfo must be redacted: ' + sanitized)
+  assert.equal(sanitized.includes('abc123'), false, 'named token must be redacted: ' + sanitized)
+  assert.equal(sanitized.includes('hunter2'), false, 'named password must be redacted: ' + sanitized)
+  assert.ok(sanitized.includes('registry.example'), 'the URL origin survives for diagnosis')
 
-  // Byte bound: a pathological single-line error is truncated to the cap.
-  const harness2 = makeSpawnHarness()
-  const mutation2 = runDshPluginMutation({
-    dshCliPath: '/managed/dsh', argv: [], env: {}, spawn: harness2.spawn, timeoutMs: 1000,
-  })
-  harness2.calls[0]!.child.stderrLine(`${'x'.repeat(9000)}boom`)
-  harness2.calls[0]!.child.close(1)
-  const result2 = await mutation2
-  assert.ok(!result2.ok)
-  assert.ok((result2.error as string).length <= 2400, `error must be byte-bounded: ${(result2.error as string).length}`)
-  assert.equal((result2.error as string).includes('boom'), false, 'the tail beyond the bound is dropped')
+  // Byte bound: a pathological single-line text is truncated at the cap.
+  const bounded = defaultSanitize('x'.repeat(9000) + 'boom')
+  assert.ok(bounded.length <= 2400, `sanitized text must be byte-bounded: ${bounded.length}`)
+  assert.equal(bounded.includes('boom'), false, 'the tail beyond the bound is dropped')
 })
 
 test('terminal hook STILL fires when the journal terminal write throws (lease must not outlive its op)', async t => {

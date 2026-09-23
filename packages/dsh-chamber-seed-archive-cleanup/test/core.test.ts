@@ -1,5 +1,5 @@
 /**
- * Archive cleanup core — preview/purge planning, retention, force, the event
+ * Archive cleanup core — purge planning, retention, force, the event
  * contract, and the subset/orphan-sweep fail-closed legs.
  * Sibling: sweep-gates-and-protection.
  * Shared fixtures: support/archive-host.ts.
@@ -26,25 +26,6 @@ import {
   buildHost,
   codeIs,
 } from './support/archive-host.ts'
-
-test('preview: counts deletable trees, subagents, running subtrees and orphans', async () => {
-  const core = new ArchiveCleanupCore(buildHost())
-  const preview = await core.preview()
-  assert.equal(preview.archived, 4)
-  assert.equal(preview.deletableSessions, 2) // s1 + s2; s3 skipped (running child), s-orphan has no record
-  assert.equal(preview.deletableSubagents, 2) // a1 + a1a
-  assert.equal(preview.skippedRunning, 1)
-  assert.equal(preview.skippedLoaded, 0)
-})
-
-test('preview: loaded-only subtrees are reported separately from running ones', async () => {
-  const host = buildHost()
-  host.loaded.add('s2')
-  const preview = await new ArchiveCleanupCore(host).preview()
-  assert.equal(preview.skippedRunning, 1) // s3 (running child)
-  assert.equal(preview.skippedLoaded, 1) // s2 (attached but idle)
-  assert.equal(preview.deletableSessions, 1) // s1 only under the default guard
-})
 
 test('indexChildren: uninterrupted subagent-origin children only', () => {
   const host = buildHost()
@@ -538,7 +519,7 @@ test('purge reads the state corpus once plus ONE orphan-sweep confirmation scan,
   assert.equal(result.clearedOrphanMembers, 1)
   assert.equal(host.stateListCalls, 1 + 1, 'snapshot scan + the ONE sweep confirmation scan (s-orphan exists)')
   assert.equal(host.liveListCalls, 1 + 2 + 1 + 1,
-    'snapshot + one live refresh per deletable tree (s1, s2) + the sweep confirmation + the LAST re-check before the batched write (2026-13 review: the write may land minutes after the deletions, so nothing may be cleared without one final live read; the extra call reads the LIVE store/agent list only — never the durable corpus, whose scan count below is unchanged)')
+    'snapshot + one live refresh per deletable tree (s1, s2) + the sweep confirmation + the LAST re-check before the batched write (review: the write may land minutes after the deletions, so nothing may be cleared without one final live read; the extra call reads the LIVE store/agent list only — never the durable corpus, whose scan count below is unchanged)')
   assert.equal(host.removalCalls.length, 1, 'archived-set removal is ONE batched write')
   assert.deepEqual(host.removalCalls[0], ['s1', 's2', 's-orphan'])
 })
@@ -674,8 +655,7 @@ test('orphanArchivedMembers: record-less members only; a live record-less id is 
   ])
   assert.deepEqual(
     orphanArchivedMembers(['with-record', 'ghost-1', 'sub', 'ghost-2'], states, new Set()),
-    ['ghost-1', 'ghost-2'],
-  )
+    ['ghost-1', 'ghost-2'])
   // A record-less id that is live/open is NEVER swept (defense in depth: its
   // content is real even if the durable enumeration momentarily misses it).
   assert.deepEqual(orphanArchivedMembers(['ghost-1', 'ghost-2'], states, new Set(['ghost-1'])), ['ghost-2'])

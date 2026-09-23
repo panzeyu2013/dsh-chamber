@@ -25,6 +25,7 @@ import {
   parseSessionFactsSseBlock,
 } from '../../src/session-facts-source.ts'
 import { advanceReadMark } from '../../src/unread-store.ts'
+import { sourceSessionFactsMode } from '../../src/session-facts-mode.ts'
 import { stripComments } from '../../../../scripts/dev/test-support/source-text.ts'
 
 const SNAPSHOT = {
@@ -99,6 +100,165 @@ test('classify: protocol 1 is ok; protocol 2 and mode off degrade explicitly', (
   assert.equal(off.degradation, 'watcher-disabled')
 })
 
+// ── F2：生产路径必须经唯一分类器（404/503 语义真实生效） ────────────────
+
+/** 探测假件：probe 请求按序取响应（Error = carrier 失败），超出后重复最后一个。 */
+function probeHarness(responses: Array<Response | Error>) {
+  let calls = 0
+  const fetchImpl = (async () => {
+    const next = responses[Math.min(calls, responses.length - 1)]
+    calls += 1
+    if (next instanceof Error) throw next
+    return next
+  }) as unknown as typeof fetch
+  return { fetchImpl, calls: () => calls }
+}
+
+function jsonResponse(status: number, body: unknown): Response {
+  return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
+}
+
+function sourceOver(
+  responses: Array<Response | Error>,
+  over: Partial<Parameters<typeof createSessionFactsSource>[0]> = {},
+) {
+  const harness = probeHarness(responses)
+  const source = createSessionFactsSource({
+    sourceId: 'gw-verdict',
+    fetchImpl: harness.fetchImpl,
+    silenceMs: 0,
+    pollIntervalMs: 0,
+    ...over,
+  })
+  source.subscribe(() => {})
+  source.update({ fingerprint: 'f1', connected: true })
+  return { harness, source }
+}
+
+test('F2: 404 publishes the classifier legacy-gateway verdict (and drives the sidebar legacy mode)', async () => {
+  const { harness, source } = sourceOver([jsonResponse(404, { error: 'not found' })], { reconnectMs: 5 })
+  await waitFor(() => source.getSnapshot() !== undefined)
+  const snapshot = source.getSnapshot()
+  assert.equal(snapshot?.verdict, 'legacy-gateway')
+  assert.equal(snapshot?.degradation, 'legacy-gateway')
+  assert.equal(snapshot?.stale, true)
+  assert.deepEqual(snapshot?.rows, {})
+  assert.equal(sourceSessionFactsMode(snapshot), 'legacy')
+  // 版本事实不重探：退避窗口过去后请求数不动。
+  await new Promise(resolve => setTimeout(resolve, 60))
+  assert.equal(harness.calls(), 1)
+  source.stop()
+})
+
+test('F2: 503 + session_state_disabled publishes watcher-disabled (and drives the sidebar disabled mode)', async () => {
+  const { harness, source } = sourceOver([jsonResponse(503, { error: { code: SESSION_FACTS_DISABLED_CODE } })], { reconnectMs: 5 })
+  await waitFor(() => source.getSnapshot() !== undefined)
+  const snapshot = source.getSnapshot()
+  assert.equal(snapshot?.verdict, 'degraded')
+  assert.equal(snapshot?.degradation, 'watcher-disabled')
+  assert.equal(sourceSessionFactsMode(snapshot), 'disabled')
+  // 服务事实不重探（与 mode:'off' 同一语义，正是唯一分类器的等价口径）。
+  await new Promise(resolve => setTimeout(resolve, 60))
+  assert.equal(harness.calls(), 1)
+  source.stop()
+})
+
+test('F2: a plain 5xx is unavailable (never legacy) and schedules a bounded reprobe', async () => {
+  const { harness, source } = sourceOver([new Response('oops', { status: 502 })], { reconnectMs: 5 })
+  await waitFor(() => source.getSnapshot() !== undefined)
+  assert.equal(source.getSnapshot()?.verdict, 'degraded')
+  assert.equal(source.getSnapshot()?.degradation, 'unavailable')
+  await waitFor(() => harness.calls() >= 2, 1_000)
+  source.stop()
+})
+
+test('F2: protocol 2 is forward-skew; mode off is watcher-disabled; both are version/service facts and never retry', async () => {
+  const skew = sourceOver([jsonResponse(200, { ...SNAPSHOT, protocol: 2 })], { reconnectMs: 5 })
+  await waitFor(() => skew.source.getSnapshot() !== undefined)
+  assert.equal(skew.source.getSnapshot()?.verdict, 'degraded')
+  assert.equal(skew.source.getSnapshot()?.degradation, 'forward-skew')
+  assert.equal(skew.source.getSnapshot()?.rows.s1.sessionId, 's1', 'forward-skew 与旧行为一致地保留镜像行')
+  await new Promise(resolve => setTimeout(resolve, 60))
+  assert.equal(skew.harness.calls(), 1, '版本事实不重探')
+  skew.source.stop()
+
+  const off = sourceOver([jsonResponse(200, { ...SNAPSHOT, mode: 'off' })], { reconnectMs: 5 })
+  await waitFor(() => off.source.getSnapshot() !== undefined)
+  assert.equal(off.source.getSnapshot()?.degradation, 'watcher-disabled')
+  assert.equal(sourceSessionFactsMode(off.source.getSnapshot()), 'disabled')
+  await new Promise(resolve => setTimeout(resolve, 60))
+  assert.equal(off.harness.calls(), 1, '观察者关闭是服务事实，不重探')
+  off.source.stop()
+})
+
+test('F2: a transport fault after a good mirror keeps the facts and marks them stale', async () => {
+  const { source } = sourceOver([
+    jsonResponse(200, { ...SNAPSHOT, mode: 'poll', features: [] }),
+    new Error('network down'),
+  ], { pollIntervalMs: 10, reconnectMs: 5 })
+  await waitFor(() => source.getSnapshot()?.rows.s1 !== undefined)
+  await waitFor(() => source.getSnapshot()?.stale === true, 1_000)
+  const snapshot = source.getSnapshot()
+  assert.equal(snapshot?.verdict, 'ok', '传输层坏答案不擦除既有镜像事实')
+  assert.equal(snapshot?.degradation, null)
+  assert.equal(snapshot?.rows.s1.completedAt, 1_700_000_000_200)
+  assert.equal(sourceSessionFactsMode(snapshot), 'degraded', 'stale 事实呈现为受限，绝不冒充 full')
+  source.stop()
+})
+
+test('F2: a 200 HTML fallback (unversioned) retries on the carrier backoff and recovers to ok', async () => {
+  // 反代把未注册路由回落成 200 HTML/SPA 的瞬态：分类语义仍是 unversioned
+  // （先发布 degraded），但 carrier 层按 reconnectMs 有界重探，下一答恢复 ok。
+  const { harness, source } = sourceOver([
+    new Response('<html>spa fallback</html>', { status: 200, headers: { 'content-type': 'text/html' } }),
+    jsonResponse(200, { ...SNAPSHOT, mode: 'poll', features: [] }),
+  ], { reconnectMs: 5 })
+  await waitFor(() => source.getSnapshot()?.degradation === 'unversioned')
+  assert.equal(sourceSessionFactsMode(source.getSnapshot()), 'degraded')
+  await waitFor(() => source.getSnapshot()?.verdict === 'ok', 1_000)
+  assert.equal(source.getSnapshot()?.degradation, null)
+  assert.equal(source.getSnapshot()?.rows.s1.sessionId, 's1', '恢复后带回真实镜像行')
+  assert.ok(harness.calls() >= 2, '不可解析的 2xx 必须按 reconnectMs 有界重探')
+  source.stop()
+})
+
+test('F2: an unversioned refetch re-arms the stream instead of wedging', async () => {
+  let streams = 0
+  let probes = 0
+  const fetchImpl = (async (url: unknown) => {
+    const text = String(url)
+    if (text.endsWith(SESSION_FACTS_STREAM_ROUTE)) {
+      streams += 1
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          // 第一条流立刻要求整量重取；重取答案是 200 HTML（不可解析）。
+          if (streams === 1) controller.enqueue(new TextEncoder().encode('event: resync\ndata: {}\n\n'))
+        },
+      })
+      return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } })
+    }
+    probes += 1
+    if (probes === 1) {
+      return new Response(JSON.stringify(SSE_PROBE_BODY), { status: 200, headers: { 'content-type': 'application/json' } })
+    }
+    return new Response('<html>spa fallback</html>', { status: 200, headers: { 'content-type': 'text/html' } })
+  }) as unknown as typeof fetch
+  const source = createSessionFactsSource({
+    sourceId: 'gw-unversioned-refetch',
+    fetchImpl,
+    silenceMs: 0,
+    streamConnectTimeoutMs: 60_000,
+    reconnectMs: 10,
+  })
+  source.subscribe(() => {})
+  source.update({ fingerprint: 'f1', connected: true })
+  await waitFor(() => streams >= 1)
+  await waitFor(() => source.getSnapshot()?.degradation === 'unversioned', 2_000)
+  // 与 probe 共用 shouldRetryProbe：refetch 的恢复动作是重连流，不得静止降级。
+  await waitFor(() => streams >= 2, 2_000)
+  source.stop()
+})
+
 test('snapshot parser: rows, host gate, read state and unknown fields are defensive', () => {
   const parsed = parseSessionFactsSnapshotValue(SNAPSHOT)
   assert.ok(parsed !== null)
@@ -140,7 +300,6 @@ test('delta: cursor monotonicity is idempotent; hints classify added/changed/rem
   const current = {
     verdict: 'ok' as const,
     degradation: null,
-    mode: 'sse' as const,
     hostState: base.hostState,
     serviceable: base.serviceable,
     stale: false,
@@ -183,12 +342,11 @@ test('delta: cursor monotonicity is idempotent; hints classify added/changed/rem
   assert.deepEqual(applySessionFactsDelta(current, { cursor: 0, sessions: [] }), { next: null, refetch: true, hint: null }, '0 不是合法事件游标')
 })
 
-test('delta: host gate and mode updates ride the frame', () => {
+test('delta: host gate updates ride the frame', () => {
   const base = parseSessionFactsSnapshotValue(SNAPSHOT)!
   const current = {
     verdict: 'ok' as const,
     degradation: null,
-    mode: 'sse' as const,
     hostState: base.hostState,
     serviceable: true,
     stale: false,
@@ -201,11 +359,9 @@ test('delta: host gate and mode updates ride the frame', () => {
     cursor: 8,
     sessions: [],
     host: { state: 'stopped', serviceable: false },
-    mode: 'poll',
   })
   assert.equal(outcome.next?.hostState, 'stopped')
   assert.equal(outcome.next?.serviceable, false)
-  assert.equal(outcome.next?.mode, 'poll')
 })
 
 test('SSE frame parser: data/id/event; comment-only heartbeat returns null', () => {
@@ -485,7 +641,7 @@ test('R21: a silent stream (headers arrived, no frames) is re-subscribed by the 
 
 // ── 快照构造单一工厂（probe / SSE sync 帧 / refetch 同形状） ─────────────
 
-test('snapshot factory: an SSE sync frame builds the same shape as the probe and falls back to the prior mode', async () => {
+test('snapshot factory: an SSE sync frame builds the same shape as the probe', async () => {
   const syncFrame = JSON.stringify({
     protocol: 1,
     mode: null,
@@ -516,7 +672,6 @@ test('snapshot factory: an SSE sync frame builds the same shape as the probe and
   const snapshot = source.getSnapshot()
   assert.equal(snapshot?.verdict, 'ok')
   assert.equal(snapshot?.degradation, null)
-  assert.equal(snapshot?.mode, 'sse', 'sync 帧缺 mode 时沿用上一份快照的 mode')
   assert.equal(snapshot?.hostState, 'stopped')
   assert.equal(snapshot?.serviceable, false)
   assert.equal(snapshot?.stale, false)

@@ -11,7 +11,8 @@
  * (§6.11.5).
  *
  * Discipline notes:
- * - PURE + LOCALE-FREE: imports nothing, touches no window/ambient surface,
+ * - PURE + LOCALE-FREE: no runtime imports (the wire faces it names are
+ *   type-only), touches no window/ambient surface,
  *   returns no localized copy — plain node can run every function. Phase 5C
  *   owns the zh/en key table; only the doc-only batch-policy sentence keeps an
  *   unlocalized English constant here (§6.6 policy 文案如实呈现; zh wording in
@@ -356,15 +357,19 @@ export function describeBatchPolicy(): string {
 
 export type TaskStatus = 'pending' | 'ok' | 'failed' | 'blocked'
 
+/** The journal op kinds the gateway can record (`undo` is the design 21 §6.3
+ *  restore op — it carries `undoOf`). */
+export type TaskKind = 'install' | 'remove' | 'materialize' | 'undo'
+
 /** One projected row: a journal op or a deferred intent. */
 export interface TaskRow {
   /** Journal op id; '' for a deferred intent that has no journal op yet (the
    *  drained op receives its own opId later). */
   opId: string
-  kind: 'install' | 'remove' | 'materialize'
+  kind: TaskKind
   name: string
   /** Registry spec / materialized path; journaled for install/materialize
-   *  only — null for removes and for unknown specs. */
+   *  only — null for removes/undo and for unknown specs. */
   spec: string | null
   status: TaskStatus
   error: string | null
@@ -376,6 +381,12 @@ export interface TaskRow {
   deferred: boolean
   /** Deferred-intent id; null for journal-op rows. */
   intentId: string | null
+  /** The op's pre-mutation backup reference (`backups/<op-id>/`), or null.
+   *  This is the undo verb's restoring material: only an op that carries one
+   *  is undoable (design 21 §6.3 preImage semantics). */
+  preImage: string | null
+  /** For `kind: 'undo'` rows: the op whose preImage this undo restored. */
+  undoOf: string | null
 }
 
 /** Structural twin of the gateway JournalOp (authority:
@@ -384,12 +395,14 @@ export interface TaskRow {
 export interface GatewayJournalOpShape {
   id: string
   ts: number
-  kind: 'install' | 'remove' | 'materialize'
+  kind: TaskKind
   name: string
   spec?: string
   /** Reference to the pre-mutation backup dir (backups/<op-id>/) when the
    *  executor placed one, null otherwise. */
   preImage: string | null
+  /** Present only for `kind: 'undo'` ops: the restored op's id. */
+  undoOf?: string
   initiator?: string
   status: 'pending' | 'ok' | 'failed' | 'blocked'
   error?: string
@@ -438,6 +451,8 @@ export function projectTasks(shape: GatewayTasksShape): { rows: TaskRow[]; busy:
       ts: intent.ts,
       deferred: true,
       intentId: intent.id,
+      preImage: null,
+      undoOf: null,
     })
   }
   for (const op of shape.tasks) {
@@ -452,42 +467,57 @@ export function projectTasks(shape: GatewayTasksShape): { rows: TaskRow[]; busy:
       ts: op.ts,
       deferred: false,
       intentId: null,
+      preImage: op.preImage ?? null,
+      undoOf: op.undoOf ?? null,
     })
   }
   return { rows, busy: shape.busy }
 }
 
 /* ---------------------------------------------------------------------------
- * 6. Undo derive for 「撤销最近变更」(design 21 §6.4/§6.8 r2) — v1 policy
+ * 6. Undo derive for 「撤销最近变更」(design 21 §6.4/§6.8 r2) — gateway
+ * implementation
  * V1 (UNDO_V1_POLICY = 'ok-only'): only ops that actually took effect are
- * undoable — a failed/blocked op never is (its recovery belongs to the
- * r2-r4 恢复阶梯 flows, driven backend-side from the journal + preImage
- * backups, not to this ok-only derive). Undoing an executed install/
- * materialize = removing the name it installed (materialize undo = remove of
- * the name it installed — the preImage-restore true undo of a later phase is
- * backend-side). An executed REMOVE cannot be synthesized here: the tasks
- * projection journals specs only for install/materialize, so the re-add
- * spec is unknown ('remove-lacks-spec' — only a backend preImage restore
- * could undo it).
+ * undoable — a failed/blocked op never is (its recovery belongs to the r2-r4
+ * 恢复阶梯 flows, driven backend-side from the journal + preImage backups).
+ *
+ * The gateway undo is 撤销=恢复 (the §6.4 ssh semantics, one model): the
+ * backend RESTORES the latest ok op's preImage pair (package.json + lockfile,
+ * byte-for-byte), which undoes an install, a materialize and a remove alike —
+ * there is no synthesized remove/add action here and no remove-only shortcut.
+ * The renderer's only job is to decide WHETHER the affordance is offered and
+ * to carry the op identity for projection; the request itself is
+ * `POST /chamber/plugins/undo` (id-only, main/backend picks the target from
+ * the durable journal).
  *
  * The scan reads only journal-op rows (intentId === null; deferred intents
  * are pending, never executed) in list order and takes the NEWEST op with
  * status 'ok' — rows must be newest-first within the op group, which
- * projectTasks() guarantees. When no ok op exists: a failed/blocked terminal
- * exists → 'only-failed' (attempted, never succeeded); no terminal op at all
- * (empty journal / pending-only) → 'none-executed'. A newer failed/blocked op
- * above the newest ok op does not hide it in v1 (only successful changes are
+ * projectTasks() guarantees. That op must ALSO carry a preImage reference
+ * (the restoring material): an ok op with a lost/pruned backup is NOT
+ * undoable, and the derive does NOT skip to an older ok op — a wholesale
+ * preImage restore would revert the newer change too, so the honest answer is
+ * 'no-preimage'. When no ok op exists: a failed/blocked terminal exists →
+ * 'only-failed' (attempted, never succeeded); no terminal op at all (empty
+ * journal / pending-only) → 'none-executed'. A newer failed/blocked op above
+ * the newest ok op does not hide it in v1 (only successful changes are
  * undoable; the failed row owns its own surface). */
 export const UNDO_V1_POLICY = 'ok-only' as const
 
-/** The undo the UI can offer. `remove` = re-submit the name for removal.
- *  `add` (name + spec) is reserved for the future when the prior spec is
- *  recoverable — never produced by the v1 ok-only derive. */
-export type UndoAction =
-  | { kind: 'remove'; name: string }
-  | { kind: 'add'; name: string; spec: string }
+/** The undo the UI can offer: the op whose preImage the backend will restore.
+ *  `opId`/name/kind ride the projection for the affordance and its copy;
+ *  the request itself carries no id (the backend re-selects the latest
+ *  undoable op under its single-flight fence). */
+export interface UndoAction {
+  kind: 'restore'
+  /** The journal op the backend would restore (the newest ok op). */
+  opId: string
+  name: string
+  /** The kind of the op being undone (for the recovery copy). */
+  opKind: TaskKind
+}
 
-export type UndoRefusalReason = 'none-executed' | 'remove-lacks-spec' | 'only-failed'
+export type UndoRefusalReason = 'none-executed' | 'only-failed' | 'no-preimage'
 
 export type UndoLatest =
   | { action: UndoAction }
@@ -497,8 +527,10 @@ export function undoForLatest(rows: readonly TaskRow[]): UndoLatest {
   const ops = rows.filter(row => row.intentId === null)
   for (const row of ops) {
     if (row.status !== 'ok') continue
-    if (row.kind === 'remove') return { action: null, reason: 'remove-lacks-spec' }
-    return { action: { kind: 'remove', name: row.name } }
+    // The newest ok op: only its own preImage may be restored (no skipping —
+    // see the section comment).
+    if (row.preImage === null) return { action: null, reason: 'no-preimage' }
+    return { action: { kind: 'restore', opId: row.opId, name: row.name, opKind: row.kind } }
   }
   const terminal = ops.some(row => row.status === 'failed' || row.status === 'blocked')
   return terminal
@@ -526,25 +558,16 @@ export function undoForLatest(rows: readonly TaskRow[]): UndoLatest {
  * （ssh 装面对官方 scope 整批拒绝），不是保护判定（§6.11.5/§6.11.3）。
  */
 
-/** 行角色（wire 契约的字面量并集；渲染端只渲染，绝不推导）。 */
-export type PluginRowRoleShape = 'composition' | 'seed' | 'layer' | 'third-party' | 'materialized' | 'unknown'
-
-/** 一行已安装事实的本地结构孪生（authority: renderer global.d.ts
- *  `PluginRowProjection`（local/ssh 两侧 manifest 的 `rows`）/ control-plane
- *  protected-plugins.ts 的 `PluginRow`（gateway 投影）；mirror discipline——
- *  环境类型归 global.d.ts，纯模块读自己的孪生）。 */
-export interface PluginRowShape {
-  name: string
-  /** 声明的依赖值（后端按各自掩码纪律处理）。投影行恒来自依赖表，因此除非
-   *  掩码器显式返回 null，它不会是 null。 */
-  spec: string | null
-  /** 能从已装清单读到的版本；读不到为 null（绝不作为判据）。 */
-  version: string | null
-  role: PluginRowRoleShape
-  /** 后端计算的受保护判定；渲染端绝不重算（§6.11.5）。 */
-  protected: boolean
-  owner?: 'installation' | 'chamber' | 'user'
-}
+/** 行角色（wire 单源的字面量并集；渲染端只渲染，绝不推导）。
+ *  一行已安装事实的**唯一声明**在 wire 的 `./plugin-row` 面，这里经
+ *  client-core 的浏览器面（`@dsh-chamber/dsh-chamber-client-core/plugin-row`）
+ *  只 import/再导出，**不重声明**字段（C14 断言：引用面 + 无本地重声明）。旧名
+ *  `PluginRowShape` / `PluginRowRoleShape` 由 import 别名保持，其余模块引用不变。 */
+import type {
+  PluginRow as PluginRowShape,
+  PluginRowRole as PluginRowRoleShape,
+} from '@dsh-chamber/dsh-chamber-client-core/plugin-row'
+export type { PluginRowShape, PluginRowRoleShape }
 
 /** 加性 `rows` 成员的载体孪生（可选：旧 gateway 不返回，§6.11.7）。 */
 export interface PluginRowsCarrierShape {

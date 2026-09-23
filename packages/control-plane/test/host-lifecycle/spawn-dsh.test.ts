@@ -1,15 +1,17 @@
 /**
- * Spawn cleanup tests: killFailedSpawn must SIGKILL the whole
- * process group, WAIT for the exit, and only then remove the pid record
- * (design 02 §3.3: 注销只在确认进程已退出后) — and every failed spawnAttempt
- * path must converge on it so no untracked detached process can leak.
+ * Spawn lifecycle tests: every failed spawnAttempt path must converge on the
+ * production cleanup — terminateAndProveQuiet (process-group kill → prove
+ * quiescence → pid-record removal; design 02 §3.3: 注销只在确认进程已退出后) —
+ * so no untracked detached process can leak. The child-output forwarding
+ * contract is exercised through the REAL spawn path — raw bytes preserved for
+ * line splitting/redaction and a bounded incomplete-line carry — never through
+ * a standalone formatter (none exists).
  * Pure-Node with a fake dsh entry; no real dsh. Ports come from an ephemeral
  * bind so the suite does not depend on 17510+ being free on the developer machine.
  */
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { spawn } from 'node:child_process'
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { EventEmitter, once } from 'node:events'
@@ -20,8 +22,6 @@ import { isAbsolute, join, relative, resolve } from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import {
-  formatChildOutputChunk,
-  killFailedSpawn,
   probePortBusy,
   readPidRecord,
   resolveSpawnCwd,
@@ -92,21 +92,6 @@ test('resolveSpawnCwd: the installed (replaceable) layout gets the stable manage
   // The source checkout is not install-replaceable and its `tsx/esm` loader is
   // resolved through the workspace's own node_modules.
   assert.equal(resolveSpawnCwd({ layout: 'source', dshWorkspacePath: workspace, dshHome }), workspace)
-})
-
-test('child output formatter bounds Buffer bytes before decode and marks truncation once', () => {
-  assert.equal(formatChildOutputChunk(Buffer.from('ordinary output\n')), 'ordinary output')
-
-  const hiddenTail = 'must-not-reach-logger-or-host-log'
-  const oversized = Buffer.concat([
-    Buffer.alloc(MAX_CHILD_OUTPUT_CHUNK_BYTES, 0x61),
-    Buffer.from(hiddenTail),
-  ])
-  const formatted = formatChildOutputChunk(oversized)
-  assert.equal(formatted.includes(hiddenTail), false)
-  assert.equal(formatted.endsWith('\n...[output chunk truncated]'), true)
-  assert.equal(Buffer.byteLength(formatted), MAX_CHILD_OUTPUT_CHUNK_BYTES)
-  assert.equal(formatted.match(/output chunk truncated/g)?.length, 1)
 })
 
 test('probePortBusy: abort destroys an inconclusive socket and rejects promptly', async () => {
@@ -218,21 +203,6 @@ test('spawnDsh: an early child exit records the exit code and the stderr digest 
         return true
       },
     )
-  } finally {
-    rmSync(stateDir, { recursive: true, force: true })
-  }
-})
-
-test('killFailedSpawn: SIGKILLs the process group, waits for the exit, then removes the pid record', async () => {
-  const stateDir = tempDir()
-  try {
-    const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore' })
-    assert.ok(child.pid !== undefined)
-    writePidRecord(stateDir, child.pid!, DEFAULT_DSH_START_PORT, process.pid)
-    assert.ok(readPidRecord(stateDir, child.pid!) !== null)
-    await killFailedSpawn(stateDir, child)
-    assert.notEqual(child.exitCode ?? child.signalCode, null, 'child is dead after killFailedSpawn')
-    assert.equal(readPidRecord(stateDir, child.pid!), null, 'record removed only after the confirmed exit')
   } finally {
     rmSync(stateDir, { recursive: true, force: true })
   }
@@ -615,6 +585,82 @@ test('spawnDsh: a readiness line split across chunks is still fully redacted and
     await reapSpawned(spawned)
   } finally {
     controller.abort()
+    clearAuthCookie(`http://127.0.0.1:${DEFAULT_DSH_START_PORT}`)
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('spawnDsh: an oversized unterminated child chunk is bounded on the REAL forward path', async () => {
+  // The bound lives on the incomplete-line carry of the real forwarding path
+  // (raw chunks must reach the line splitter untrimmed, so no per-chunk
+  // formatter can own this): a child that never emits a newline must not grow
+  // the carry without limit, and the bytes dropped are the OLDEST, never the
+  // newest. Complete lines are deliberately forwarded untruncated (the deleted
+  // formatter's marker must never come back), so the observable proof is the
+  // dropped head plus the surviving tail, not a line length. The newline is
+  // written in a LATER event-loop turn so the oversized write is delivered
+  // first. The readiness line flushed afterwards must still be parsed and its
+  // token redacted.
+  const logged: string[] = []
+  const stateDir = tempDir()
+  const dshWorkspacePath = join(stateDir, 'ws')
+  const droppedHead = 'must-not-reach-logger-or-host-log'
+  const keptTail = 'tail-marker-survives'
+  writeFakeDshEntry(dshWorkspacePath, [
+    ...FAKE_DSH_PREAMBLE,
+    // The oversized newline-less write lands first; the newline is written in a
+    // LATER event-loop turn so the two writes cannot coalesce into one pipe
+    // chunk (the carry bound is only observable when the newline arrives in a
+    // later data event — that is the honest production semantics).
+    `process.stdout.write('${droppedHead}' + 'a'.repeat(${MAX_CHILD_OUTPUT_CHUNK_BYTES}) + '${keptTail}')`,
+    'setTimeout(() => {',
+    "  process.stdout.write('\\n')",
+    // The readiness line follows (same shape as the split-chunk test above).
+    "  process.stdout.write('dsh web: http://127.0.0.1:' + port + '/?token=launch-secret (LAN: http://10.0.0.5:' + port + '/?token=launch-secret)\\n')",
+    "  createServer((req, res) => {",
+    "    if (req.url === '/?token=launch-secret') { res.writeHead(303, { location: '/', 'set-cookie': authCookieName(req.headers.host) + '=sess; Max-Age=3600; Path=/; HttpOnly; SameSite=Strict' }); res.end(); return }",
+    "    if (req.url === '/api/session/canOpenWorkspacePath') {",
+    "      let body = ''; req.on('data', c => { body += c }); req.on('end', () => {",
+    "        res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ type: 'server-response', rpcId: JSON.parse(body).rpcId, result: { ok: true, value: true } })) })",
+    "      return",
+    "    }",
+    "    res.writeHead(404); res.end()",
+    "  }).listen(port, '127.0.0.1')",
+    '}, 100)',
+    '',
+  ].join('\n'))
+  const controller = new AbortController()
+  let spawned: Awaited<ReturnType<typeof spawnDsh>> | undefined
+  try {
+    try {
+      spawned = await spawnHost(stateDir, dshWorkspacePath, controller.signal, {
+        authBootstrapWaitMs: 500,
+        logger: {
+          log(line: string) { logged.push(String(line)) },
+          warn(_line: string) {},
+          error(_line: string) {},
+        },
+      })
+    } catch (error) {
+      throw new Error(`spawn failed; logged: ${JSON.stringify(logged.slice(0, 6))}; cause: ${String(error)}`)
+    }
+    const lines = logged.join('\n')
+    assert.equal(lines.includes(droppedHead), false, 'the oldest bytes of the oversized carry must be dropped')
+    assert.equal(lines.includes(keptTail), true, 'the newest bytes of the carry must survive')
+    assert.equal(
+      lines.includes('output chunk truncated'),
+      false,
+      'the raw path must never inject the deleted formatter truncation marker',
+    )
+    // The raw path still served the readiness line after the hostile chunk.
+    assert.equal(authCookieFor(`http://127.0.0.1:${spawned.port}`), `${browserAuthCookieName(`127.0.0.1:${spawned.port}`)}=sess`)
+    assert.equal(lines.includes('launch-secret'), false, 'the token still never reaches the log')
+    await reapSpawned(spawned)
+  } finally {
+    controller.abort()
+    // A failed assertion must not leave the detached fake host running (that
+    // would hang the test child until the manifest's per-file timeout).
+    spawned?.child.kill()
     clearAuthCookie(`http://127.0.0.1:${DEFAULT_DSH_START_PORT}`)
     rmSync(stateDir, { recursive: true, force: true })
   }

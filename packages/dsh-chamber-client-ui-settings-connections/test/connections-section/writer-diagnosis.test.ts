@@ -8,7 +8,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { writerNotice, writerReasonKey } from '../../src/client/writer-diagnosis.ts'
-import type { LocalWriterDiagnosisWire } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
+import type { LocalWriterDiagnosisWire } from '@dsh-chamber/dsh-chamber-client-core'
 
 const blocker = (over: Partial<LocalWriterDiagnosisWire['writers'][number]> = {}) => ({
   name: '4242.json',

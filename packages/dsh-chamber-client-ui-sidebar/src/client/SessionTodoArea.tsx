@@ -45,12 +45,12 @@ import clsx from 'clsx'
 import {
   IconChecklistOutline14, IconQuestionOutline14, IconWarningOutline16, Tooltip,
 } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { ChamberServerAggregate } from '../shared/aggregate-store.ts'
-import { sourceAccentColor } from '../shared/derive.ts'
+import type { ChamberServerAggregate } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
+import { sourceAccentColor } from '@dsh-chamber/dsh-chamber-client-core/derive'
 import {
   deriveTodoAttention, type TodoAttentionEntry, type TodoAttentionKind,
-} from '../shared/todo-attention.ts'
-import { getTodoPrefs, subscribeTodoPrefs } from '../shared/todo-prefs.ts'
+} from '@dsh-chamber/dsh-chamber-client-core/todo-attention'
+import { getTodoPrefs, subscribeTodoPrefs } from '@dsh-chamber/dsh-chamber-client-core/todo-prefs'
 import type { SidebarKey } from './locales.ts'
 import cc from './sidebar-chamber.module.css'
 

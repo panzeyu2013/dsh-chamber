@@ -21,8 +21,9 @@
  *     .tgz archive, design 21 §6.5 archive-pick; the macOS picker offers
  *     both, Windows/Linux keep the folder dialog);
  *   ④ recovery/action row (gateway only: runtimeDown + undoForLatest →
- *     recovery banner + recoveryUninstallRestart through the remove confirm
- *     and applyRemove origin:'undo' pipeline).
+ *     recovery banner + the 撤销=恢复 entry, which posts
+ *     POST /chamber/plugins/undo and waits for the restore op's terminal
+ *     state — never a remove-only shortcut).
  *
  * Backend surfaces (design 21 §3):
  *   local  → localPluginList / localPluginAdd / localPluginAddFile /
@@ -60,7 +61,7 @@ import type { ReactNode } from 'react'
 import clsx from 'clsx'
 import { chamberBadgeClass, categoryLabel, isActionable, kindLabel, manageStatusClass, remoteStatusClass, roleBadgeClass, roleLabel, type CategoryFilter, type ManageStatus, type PluginPhase, type RemoteListStatus, type RemoteListTone, type RestartNote, type StatusFilter, type ViewPhase } from './plugin-dialog-status.ts'
 import { Button, IconRefreshOutline16, IconTrashOutline16, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
-// The page-owned restart→reload completion (design 18 §3.6 item 8, sidebar shared
+// The page-owned restart→reload completion (design 18 §3.6 item 8, client-core
 // face): a restart-to-apply refreshes the host's plugin mounts, but this window
 // keeps running the pre-restart client plugin set until it boots again.
 import {
@@ -68,7 +69,7 @@ import {
   armWindowReloadWhenServed,
   pollGatewayReady,
   waitForSourceServing,
-} from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
+} from '@dsh-chamber/dsh-chamber-client-core'
 import type {
   ChamberHostPackageState,
   LocalPluginManifest,
@@ -97,6 +98,8 @@ import {
   restartService,
   seedHostGraph,
   sshPluginUndo,
+  gatewayPluginUndo,
+  waitForGatewayOpTerminal,
   type GatewayInstalledProjection,
 } from './control-plane.ts'
 import { gatewayReadFenceText } from './managed-restart.ts'
@@ -265,7 +268,6 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
   /** Row awaiting its per-row remove/undo confirm modal. */
   const [removeTarget, setRemoveTarget] = useState<string | null>(null)
   /** Which flow opened the confirm modal ('undo' vs 'row'). */
-  const [removeOrigin, setRemoveOrigin] = useState<'row' | 'undo' | null>(null)
   /** Management-zone outcome line (remove/undo executed/refused). */
   const [manageStatus, setManageStatus] = useState<ManageStatus | null>(null)
 
@@ -420,7 +422,7 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
     setSeedError(null)
     try {
       const res = await seedHostGraph(sshSpec.id)
-      // SshSeedHostGraphResult has no cancelled arm (renderer/src/global.d.ts):
+      // SshSeedHostGraphResult has no cancelled arm (@dsh-chamber/renderer/global.d.ts):
       // the main-process seed has no dialog/picker to dismiss.
       if (res.ok) {
         setPendingRestart(res.wrote === true || res.patched === true)
@@ -793,11 +795,11 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
     }
   }
 
-  /** 逐行移除 / 撤销最近变更的共同执行面（design 21 §6.6/§6.8）：以
-   *  {remove:[name], deferRestart:false} 走 gateway_plugin_apply IPC（主进程
-   *  二次确认 + 白名单复核）。结果经模型层分类（classifyGatewayApplyResult +
+  /** 逐行移除的执行面（design 21 §6.6）：以 {remove:[name],
+   *  deferRestart:false} 走 gateway_plugin_apply IPC（主进程二次确认 +
+   *  白名单复核）。结果经模型层分类（classifyGatewayApplyResult +
    *  partialCounts）。 */
-  const applyRemove = async (name: string, origin: 'row' | 'undo'): Promise<void> => {
+  const applyRemove = async (name: string): Promise<void> => {
     if (gatewayId === null || removeBusy || restarting || syncing) return
     setRemoveBusy(true)
     setManageStatus(null)
@@ -815,15 +817,9 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
         return
       }
       const executed = outcome.executed
-      if (origin === 'row') {
-        setManageStatus(executed.restarted
-          ? { tone: 'ok', text: `${name} · ${t('restartManagedDshOk')}` }
-          : { tone: 'warn', text: `${name} · ${t('restartNeededHint')}` })
-      } else {
-        setManageStatus(executed.restarted
-          ? { tone: 'ok', text: t('undoDone') }
-          : { tone: 'warn', text: `${t('undoDone')} · ${t('restartNeededHint')}` })
-      }
+      setManageStatus(executed.restarted
+        ? { tone: 'ok', text: `${name} · ${t('restartManagedDshOk')}` }
+        : { tone: 'warn', text: `${name} · ${t('restartNeededHint')}` })
       if (executed.restarted) armSourceReload('gateway', gatewayId)
       setReloadNonce(n => n + 1)
     } catch (err) {
@@ -831,7 +827,37 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
     } finally {
       setRemoveBusy(false)
       setRemoveTarget(null)
-      setRemoveOrigin(null)
+    }
+  }
+
+  /** 恢复横幅的撤销动作（design 21 §3 undoJournal / §6.8 r2）：撤销=恢复。
+   *  直发 POST /chamber/plugins/undo（后端在单飞栅栏下自行选取最新可撤销 op
+   *  并还原其 preImage 两文件），随后按 tasks 投影等到该 op 终态——绝不把
+   *  「已受理」谎报成成功，也不退回 remove-only 语义。 */
+  const applyUndo = async (): Promise<void> => {
+    if (gatewayId === null || removeBusy || restarting || syncing) return
+    setRemoveBusy(true)
+    setManageStatus(null)
+    try {
+      const accepted = await gatewayPluginUndo(gatewayId)
+      if (!accepted.ok) {
+        setManageStatus({ tone: 'error', text: accepted.error })
+        return
+      }
+      const terminal = await waitForGatewayOpTerminal(gatewayId, accepted.opId)
+      if (terminal.status === 'timeout') {
+        // 受理但未在窗口内终态：如实呈现忙态，交由既有刷新节奏。
+        setManageStatus({ tone: 'warn', text: t('busyTasks') })
+      } else if (terminal.status === 'ok') {
+        setManageStatus({ tone: 'ok', text: t('undoDone') })
+      } else {
+        setManageStatus({ tone: 'error', text: terminal.error ?? t('undoNotEffective') })
+      }
+    } catch (err) {
+      setManageStatus({ tone: 'error', text: errorMessage(err) })
+    } finally {
+      setRemoveBusy(false)
+      setReloadNonce(n => n + 1)
     }
   }
 
@@ -1597,7 +1623,6 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
                                 {rowActionCell(row, opsBlocked, () => {
                                   setManageStatus(null)
                                   setRemoveTarget(row.name)
-                                  setRemoveOrigin('row')
                                 })}
                               </div>
                             ))}
@@ -1671,8 +1696,9 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
   // ---- ④ recovery row (gateway only, runtimeDown-gated) ----
   /** The recovery undo affordance (plan 24 B1.6): only while the managed dsh
    *  is down (stopped/error/restart-exhausted, as the card projects it) AND
-   *  the task journal's newest ok op is undoable (undoForLatest). The tasks
-   *  read is the ONLY journal consumer — no task rows render (D4-A). */
+   *  the task journal's newest ok op is undoable (undoForLatest — the op must
+   *  carry a preImage backup). The tasks read is the ONLY journal consumer —
+   *  no task rows render (D4-A); the action itself is the 撤销=恢复 route. */
   const recoveryUndo = useMemo(() => {
     if (!isGateway || runtimeDown !== true || taskRows === null) return null
     const undo = undoForLatest(taskRows)
@@ -1695,7 +1721,7 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
             variant="outline"
             size="sm"
             disabled={removeBusy || restarting || syncing}
-            onClick={() => { setManageStatus(null); setRemoveTarget(recoveryUndo.name); setRemoveOrigin('undo') }}
+            onClick={() => { setManageStatus(null); void applyUndo() }}
           >
             {t('recoveryUninstallRestart')}
           </Button>
@@ -2204,9 +2230,9 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
         </label>
       </Modal>
 
-      {/* Row-remove / undo confirm (gateway, Phase 5 ③): shared by both
-          origins — the undo confirm mirrors the ssh list's remove confirm
-          copy (removing the name the undo derives IS a removal). */}
+      {/* Row-remove confirm (gateway, Phase 5 ③): the per-row remove keeps its
+          main-process confirm; the recovery undo does NOT ride this modal any
+          more — it is a RESTORE posted to /chamber/plugins/undo. */}
       {isGateway
         ? (
           <Modal
@@ -2225,7 +2251,7 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
                   variant="outline"
                   className={css.deleteConfirm}
                   disabled={removeBusy}
-                  onClick={() => { if (removeTarget !== null && removeOrigin !== null) void applyRemove(removeTarget, removeOrigin) }}
+                  onClick={() => { if (removeTarget !== null) void applyRemove(removeTarget) }}
                 >
                   {removeBusy ? t('pluginsRemoving') : t('pluginsConfirmRemove')}
                 </Button>

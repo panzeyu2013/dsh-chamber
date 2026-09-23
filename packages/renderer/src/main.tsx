@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client'
 import App from './App.tsx'
 import { frameText, readDocumentLocale } from './locales.ts'
 import { installPageLanguageOwner } from './page-language.ts'
-import { installSvgResourceScope } from './svg-resource-scope.ts'
+import { installSvgResourceScope } from '@dsh-chamber/dsh-chamber-client-core/svg-resource-scope'
 import './styles.css'
 
 // The static first-frame skeleton in

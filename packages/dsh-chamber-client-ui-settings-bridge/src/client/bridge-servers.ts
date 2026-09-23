@@ -8,7 +8,7 @@
  * the sidebar package `exports["./shared"]`); no handwritten ambient mirror
  * (vendor-modules.d.ts) is kept.
  */
-import { chamberBridge, type ChamberServerAggregate } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
+import { chamberBridge, type ChamberServerAggregate } from '@dsh-chamber/dsh-chamber-client-core'
 import { serverProjectionSignature } from './server-selector.ts'
 
 /** One server row the bridge section renders. */

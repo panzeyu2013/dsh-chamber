@@ -233,20 +233,18 @@ export type ChamberInjectionState =
  *  means the remote profile is not yet initialized (first `dsh plugin add`
  *  creates it); error is the loud reason when cat/parse failed. */
 /**
- * One read-face plugin row (design 21 §6.11.5): one row
- * per profile dependency, carrying the backend-computed role and `protected`
- * flag (the renderer never re-derives protection). The installation baseline
- * (B₀) and the chamber seed registry (S) only classify rows; they are not
- * projected as installed plugins.
+ * One read-face plugin row (design 21 §6.11.5): one row per profile dependency,
+ * carrying the backend-computed role and `protected` flag (the renderer never
+ * re-derives protection). The installation baseline (B₀) and the chamber seed
+ * registry (S) only classify rows; they are not projected as installed plugins.
+ *
+ * The field set has ONE definition — the wire `./plugin-row` face — reached
+ * through client-core's pass-through face (type-only; same pattern as
+ * `RuntimeSurface` below). This file must never re-declare the fields: C14
+ * asserts the reference face and the absence of a local redeclaration.
  */
-export interface PluginRowProjection {
-  name: string
-  spec: string | null
-  version: string | null
-  role: 'composition' | 'seed' | 'layer' | 'third-party' | 'materialized' | 'unknown'
-  protected: boolean
-  owner?: 'installation' | 'chamber' | 'user'
-}
+import type { PluginRow as PluginRowProjection } from '@dsh-chamber/dsh-chamber-client-core/plugin-row'
+export type { PluginRowProjection }
 
 export interface RemotePluginManifest {
   dependencies: Record<string, string>
@@ -734,7 +732,7 @@ export interface DeepLinkSurface {
 }
 
 /** dsh runtime management types and complete design-18 state projection. */
-import type { RuntimeSurface } from './runtime-management.ts'
+import type { RuntimeSurface } from '@dsh-chamber/dsh-chamber-client-core/runtime-management'
 export type {
   RuntimeAction,
   RuntimeFailure,
@@ -745,7 +743,7 @@ export type {
   RuntimeState,
   RuntimeSurface,
   RuntimeVersionEntry,
-} from './runtime-management.ts'
+} from '@dsh-chamber/dsh-chamber-client-core/runtime-management'
 
 /** window.dshChamber.badge — 未读徽标计数（design 19 §3.7）：推当前「完成未读」
  *  会话数（0 = 清除）；主进程白名单校验 + badgeEnabled 裁决 + 平台门后应用

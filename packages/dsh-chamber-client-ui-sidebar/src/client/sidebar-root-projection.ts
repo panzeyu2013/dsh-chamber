@@ -6,13 +6,13 @@
  */
 
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { chamberBridge, type ChamberServerAggregate } from '../shared/aggregate-store.ts'
-import { nextUpdatedOrder, orderServersForDisplay, serversProjectionSignature, type SessionOrderBy } from '../shared/derive.ts'
+import { chamberBridge, type ChamberServerAggregate } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
+import { nextUpdatedOrder, orderServersForDisplay, serversProjectionSignature, type SessionOrderBy } from '@dsh-chamber/dsh-chamber-client-core/derive'
 import {
   clearSourceBookkeeping, flushScheduledActivityWrites, getViewPrefs, scheduleUpdatedOrderWrite,
   subscribeViewPrefs, updateViewPrefs, type ChamberSidebarViewPrefs,
-} from '../shared/view-prefs.ts'
-import { getWorkspaceGitFlagsVersion, subscribeWorkspaceGitFlags } from '../shared/workspace-git-flags.ts'
+} from '@dsh-chamber/dsh-chamber-client-core/view-prefs'
+import { getWorkspaceGitFlagsVersion, subscribeWorkspaceGitFlags } from '@dsh-chamber/dsh-chamber-client-core/workspace-git-flags'
 
 export function useSidebarProjection() {
   // chamber: the multi-source projection (05 §3) — the App layer publishes

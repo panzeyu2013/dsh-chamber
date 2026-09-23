@@ -1,5 +1,4 @@
 /** Runtime-validated faces for the desktop open-in capability projection. */
-import { buildOpenInViewModel } from './open-in-view-model.ts'
 
 /** One launchable app as reported by the main-process bridge. */
 export interface OpenInApp {
@@ -48,7 +47,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  *  is itself an exception boundary, so hostile getters/proxies/toString values must
  *  never turn a catch handler into a new unhandled rejection. The open-in domain keeps
  *  its own call-site name; the implementation lives in exactly one place. */
-export { describeThrown as describeOpenInError } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
+export { describeThrown as describeOpenInError } from '@dsh-chamber/dsh-chamber-client-core'
 
 /**
  * Validate the untyped IPC projection one entry at a time. Invalid entries are
@@ -148,21 +147,4 @@ export function buildOpenInLaunchRequest(
   sourceFingerprint: string,
 ): OpenInLaunchRequest {
   return { appId, instanceId: source.instanceId, path, sourceFingerprint }
-}
-
-/**
- * Source-aware capability filter kept pure for deterministic client tests.
- * This delegates to the per-source view-model
- * (`open-in-view-model.ts`): this helper folds the main-process pool only (the
- * instance-hosted local pool is supplied by the adapter, not here), so the
- * main pool decides — the returned apps are the input objects in view-model
- * order.
- */
-export function usableOpenInApps(apps: readonly OpenInApp[] | null, source: OpenInSource): OpenInApp[] {
-  const pool = apps ?? []
-  const model = buildOpenInViewModel({ source, localEntries: null, mainEntries: pool })
-  const byId = new Map(pool.map(app => [app.id, app]))
-  return model.entries
-    .map(entry => byId.get(entry.id))
-    .filter((app): app is OpenInApp => app !== undefined)
 }

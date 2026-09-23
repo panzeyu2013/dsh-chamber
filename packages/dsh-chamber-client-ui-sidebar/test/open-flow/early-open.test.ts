@@ -12,7 +12,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { startEarlyOpenArm, type EarlyOpenArmDeps } from '../../src/client/early-open.ts'
-import { EARLY_OPEN_BUDGET_MS, EARLY_OPEN_RETRY_MS } from '../../src/shared/open-intent.ts'
+import { EARLY_OPEN_BUDGET_MS, EARLY_OPEN_RETRY_MS } from '@dsh-chamber/dsh-chamber-client-core/open-intent'
 
 /** Manual clock + timer queue: `advance` runs whatever the cadence scheduled. */
 function harness(overrides: Partial<EarlyOpenArmDeps> = {}) {

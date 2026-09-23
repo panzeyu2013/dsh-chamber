@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { PlaneHandle } from '@dsh-chamber/control-plane'
+import { StateRootLeaseError, acquireStateRootLease, type PlaneHandle } from '@dsh-chamber/control-plane'
 import { createGateway } from '../../src/index.ts'
 import type { GatewayConfig } from '../../src/config.ts'
 import type { GatewayRuntimeManager, GatewayRuntimeManagerOptions } from '../../src/runtime-manager.ts'
@@ -282,8 +282,9 @@ test('stop() begins runtime quiescence before a deferred startup transaction set
     )
     await stopping
 
-    const reopened = createGatewayStore(stateDir, silentLogger)
-    reopened.close()
+    // stop() released the state-root lease: the root is free again.
+    const reopened = acquireStateRootLease(stateDir, { scope: 'state-root', flavor: 'gateway' })
+    reopened.release()
   } finally {
     rmSync(stateDir, { recursive: true, force: true })
   }
@@ -644,9 +645,9 @@ test('the S1 override warns only for anonymous-external, never loopback-only or 
   const warnings: string[] = []
   const capturing = { log() {}, warn: (...parts: unknown[]) => warnings.push(parts.join(' ')), error() {} }
   const build = (mutate: (c: ReturnType<typeof config>) => void) => {
-    // Each build owns a fresh stateDir — createGatewayStore holds an
-    // exclusive .gateway.lock for the process lifetime, so reusing one dir
-    // across builds would fail the live-owner lock.
+    // Each build owns a fresh stateDir — createGateway holds the state-root
+    // writer lease for the process lifetime, so reusing one dir across builds
+    // would fail the live-owner lease.
     const stateDir = mkdtempSync(join(tmpdir(), 'gateway-lifecycle-warn-'))
     try {
       const c = config(stateDir)
@@ -695,7 +696,6 @@ test('--no-auth with a persisted runtime credential is authenticated in effect: 
     {
       const seedStore = createGatewayStore(stateDir, silentLogger)
       seedStore.setPasswordCredential(hashCredential('runtime-correct-password'), 'runtime')
-      seedStore.close()
     }
     const c = config(stateDir)
     c.plane.host = '0.0.0.0'
@@ -748,15 +748,15 @@ test('stop() releases the stateDir lock even when the plane stop fails', async (
       },
     })
     await assert.rejects(() => gateway.stop(), /plane stop failed/)
-    // The exclusive lock must be released despite the failed plane stop.
-    const reopened = createGatewayStore(stateDir, silentLogger)
-    reopened.close()
+    // The state-root lease must be released despite the failed plane stop.
+    const reopened = acquireStateRootLease(stateDir, { scope: 'state-root', flavor: 'gateway' })
+    reopened.release()
   } finally {
     rmSync(stateDir, { recursive: true, force: true })
   }
 })
 
-test('stop() retains the stateDir lock when runtime writer disposal is unsafe', async () => {
+test('stop() retains the state-root lease when runtime writer disposal is unsafe', async () => {
   const stateDir = mkdtempSync(join(tmpdir(), 'gateway-stop-writer-lock-'))
   try {
     const state = { connectionState: 'stopped' }
@@ -775,9 +775,9 @@ test('stop() retains the stateDir lock when runtime writer disposal is unsafe', 
     await gateway.start()
     await assert.rejects(gateway.stop(), /runtime writer unsafe/)
     assert.throws(
-      () => createGatewayStore(stateDir, silentLogger),
-      (error: unknown) => (error as { code?: string }).code === 'gateway_locked',
-      'the outer stateDir lock is the fail-closed backstop when runtime ownership cannot be released',
+      () => acquireStateRootLease(stateDir, { scope: 'state-root', flavor: 'gateway' }),
+      (error: unknown) => error instanceof StateRootLeaseError && error.code === 'state_root_duplicate',
+      'the outer state-root lease is the fail-closed backstop when runtime ownership cannot be released',
     )
   } finally {
     rmSync(stateDir, { recursive: true, force: true })

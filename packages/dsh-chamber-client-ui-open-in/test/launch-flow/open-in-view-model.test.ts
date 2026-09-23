@@ -4,14 +4,15 @@
  * (desktop IPC) pools, the channel-priority dedup, the explicit suppression
  * reasons and the default selection. Plain node:test — the module is pure over
  * plain data. The gate half below shares this file and its fixtures because
- * src/client/open-in-gates.ts builds its matrix ON buildOpenInViewModel
- * (src/shared/open-in-view-model.ts): one contract chain.
+ * the production component path calls the same functions
+ * (src/shared/open-in-view-model.ts + src/shared/capabilities.ts): one contract
+ * chain, no test-only copy.
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import { buildOpenInViewModel, type OpenInViewModel } from '../../src/shared/open-in-view-model.ts'
-import { parseOpenInSource, type OpenInApp, type OpenInSource } from '../../src/shared/capabilities.ts'
+import { buildOpenInLaunchRequest, parseOpenInSource, type OpenInApp, type OpenInSource } from '../../src/shared/capabilities.ts'
 import { FINDER, GHOST, TERMINAL, VSCODE } from '../support/harness.ts'
 
 function source(value: string, transport: 'local' | 'ssh' | 'http'): OpenInSource {
@@ -134,51 +135,55 @@ test('view-model / the local default falls back to the first entry without VS Co
 
 /**
  * OpenInButton render-gate unit tests (plain node:test, no React/DOM): the
- * pure decision surface in src/client/open-in-gates.ts — gate 1
- * (per-source usable apps across target kind × transport), gate 2
- * (workspace-path lookup) and the launch instance-id prefix strip. The
- * component itself (React + CSS + a raster mark) is not importable under node;
- * these tests pin its decision logic.
+ * pure decision surface the production component path calls — the shared
+ * per-source view-model (gate 1: which apps THIS source may use across target
+ * kind × transport) and the workspace-path lookup (gate 2). The component
+ * itself (React + CSS + a raster mark) is not importable under node; these
+ * tests pin its decision logic on the SAME functions it calls.
  */
 
-import {
-  rawInstanceIdForLaunch,
-  usableAppsForSource,
-  workspacePathForSession,
-} from '../../src/client/open-in-gates.ts'
+import { workspacePathForSession } from '../../src/client/open-in-gates.ts'
 
 const EXPLORER_UNAVAILABLE: OpenInApp = { id: 'explorer', displayKind: 'file-manager', remoteCapable: false, available: false }
 const ALL: OpenInApp[] = [FINDER, VSCODE, EXPLORER_UNAVAILABLE]
 
+/** Gate 1 through the production single decision surface (main pool only). */
+function gate1Ids(sourceId: string, transport: 'local' | 'ssh' | 'http', apps: readonly OpenInApp[]): string[] {
+  return ids(buildOpenInViewModel({ source: source(sourceId, transport), localEntries: null, mainEntries: apps }))
+}
+
 test('gate 1 / local: every AVAILABLE app is usable (Finder + VS Code), unavailable ones are hidden', () => {
-  assert.deepEqual(usableAppsForSource('local', ALL, 'local'), [FINDER, VSCODE])
-  assert.deepEqual(usableAppsForSource('local', [], 'local'), [])
+  assert.deepEqual(gate1Ids('local', 'local', ALL), ['finder', 'vscode'])
+  assert.deepEqual(gate1Ids('local', 'local', []), [])
 })
 
 test('gate 1 / ssh transport: dsh, gateway, and the legacy ssh alias get only remote-capable apps', () => {
-  assert.deepEqual(usableAppsForSource('dsh-edge-west', ALL, 'ssh'), [VSCODE])
-  assert.deepEqual(usableAppsForSource('gateway-edge-west', ALL, 'ssh'), [VSCODE])
-  assert.deepEqual(usableAppsForSource('ssh-edge-west', ALL, 'ssh'), [VSCODE])
+  assert.deepEqual(gate1Ids('dsh-edge-west', 'ssh', ALL), ['vscode'])
+  assert.deepEqual(gate1Ids('gateway-edge-west', 'ssh', ALL), ['vscode'])
+  assert.deepEqual(gate1Ids('ssh-edge-west', 'ssh', ALL), ['vscode'])
   // An unavailable remote-capable app stays hidden (fail-closed).
   const unavailableVscode: OpenInApp = { id: 'vscode', displayKind: 'vscode', remoteCapable: true, available: false }
-  assert.deepEqual(usableAppsForSource('gateway-edge-west', [FINDER, unavailableVscode], 'ssh'), [])
+  assert.deepEqual(gate1Ids('gateway-edge-west', 'ssh', [FINDER, unavailableVscode]), [])
 })
 
 test('gate 1 / http transport: neither target kind exposes vscode-remote', () => {
-  assert.deepEqual(usableAppsForSource('dsh-edge-west', ALL, 'http'), [])
-  assert.deepEqual(usableAppsForSource('gateway-edge-west', ALL, 'http'), [])
+  assert.deepEqual(gate1Ids('dsh-edge-west', 'http', ALL), [])
+  assert.deepEqual(gate1Ids('gateway-edge-west', 'http', ALL), [])
 })
 
-test('gate 1 / unknown or malformed sources get nothing (fail-closed)', () => {
-  assert.deepEqual(usableAppsForSource('', ALL, 'ssh'), [])
-  assert.deepEqual(usableAppsForSource('http-edge', ALL, 'ssh'), [])
-  assert.deepEqual(usableAppsForSource('ssh-', [VSCODE], 'ssh'), [])
-  assert.deepEqual(usableAppsForSource(undefined as unknown as string, ALL, 'ssh'), [])
-  assert.deepEqual(
-    usableAppsForSource('gateway-edge', ALL, undefined as unknown as 'ssh'),
-    [],
-    'missing transport never guesses ssh',
-  )
+test('gate 1 / unknown or malformed sources never reach the button (fail-closed parse)', () => {
+  // The production entry parses the loose ctx facts with parseOpenInSource and
+  // bails on null; malformed OpenInSource shapes are pinned in the top half of
+  // this file (buildOpenInViewModel's unknown-source branch).
+  for (const [value, transport] of [
+    ['', 'ssh'],
+    ['http-edge', 'ssh'],
+    ['ssh-', 'ssh'],
+    [undefined, 'ssh'],
+    ['gateway-edge', undefined],
+  ] as const) {
+    assert.equal(parseOpenInSource(value as unknown, transport as unknown), null, String(value) + ' must not parse')
+  }
 })
 
 test('gate 2: the session must live in a workspace with a concrete path', () => {
@@ -195,9 +200,21 @@ test('gate 2: the session must live in a workspace with a concrete path', () => 
   assert.equal(workspacePathForSession([], 's1'), undefined)
 })
 
-test('launch instance id: canonical dsh/gateway and legacy ssh prefixes are stripped', () => {
-  assert.equal(rawInstanceIdForLaunch('local'), 'local')
-  assert.equal(rawInstanceIdForLaunch('dsh-edge-west'), 'edge-west')
-  assert.equal(rawInstanceIdForLaunch('ssh-edge-west'), 'edge-west')
-  assert.equal(rawInstanceIdForLaunch('gateway-edge-west'), 'edge-west')
+test('launch instance id: the single parseOpenInSource path strips every view prefix', () => {
+  const cases = [
+    ['local', 'local', 'local'],
+    ['dsh-edge-west', 'ssh', 'edge-west'],
+    ['ssh-edge-west', 'ssh', 'edge-west'],
+    ['gateway-edge-west', 'ssh', 'edge-west'],
+  ] as const
+  for (const [sourceId, transport, raw] of cases) {
+    const parsed = parseOpenInSource(sourceId, transport)
+    assert.ok(parsed !== null, sourceId + '/' + transport + ' must parse')
+    assert.equal(parsed.instanceId, raw)
+    assert.equal(
+      buildOpenInLaunchRequest('vscode', parsed, '/workspace', parsed.local ? 'local' : 'a'.repeat(64)).instanceId,
+      raw,
+      'the launch request carries the raw registry id',
+    )
+  }
 })

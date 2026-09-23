@@ -11,11 +11,11 @@ import {
   IconChevronRightOutline14, IconLoadingOutline16, IconPersonalizationOutline16,
   IconProjectAddOutline16, IconSearchOutline16, IconTrashOutline16, Menu, Tooltip,
 } from '@deepseek-ai/dsh-client-ui-primitives'
-import { chamberBridge } from '../shared/aggregate-store.ts'
-import type { ChamberServerAggregate } from '../shared/aggregate-store.ts'
-import { clearPendingClick } from '../shared/pending-click.ts'
-import type { PrewarmIntent } from '../shared/prewarm-intent.ts'
-import { collapseSearch, expandSearch, type SourceSearchState } from '../shared/search-state.ts'
+import { chamberBridge } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
+import type { ChamberServerAggregate } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
+import { clearPendingClick } from '@dsh-chamber/dsh-chamber-client-core/pending-click'
+import type { PrewarmIntent } from '@dsh-chamber/dsh-chamber-client-core/prewarm-intent'
+import { collapseSearch, expandSearch, type SourceSearchState } from '@dsh-chamber/dsh-chamber-client-core/search-state'
 import type { SidebarKey } from './locales.ts'
 import { sourceBootGapNote } from './source-boot-gap.ts'
 import { IconMonitorOutline16 } from './icons.tsx'

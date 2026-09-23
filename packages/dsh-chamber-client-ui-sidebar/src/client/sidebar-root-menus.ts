@@ -4,10 +4,10 @@
  */
 
 import { useEffect, useState, useSyncExternalStore } from 'react'
-import { chamberBridge, type ChamberServerAggregate } from '../shared/aggregate-store.ts'
-import { getInstanceClient, renameSession } from '../shared/instance-api.ts'
-import { getSearchStates, subscribeSearch } from '../shared/search-state.ts'
-import { renameWorkspaceForSource } from '../shared/workspace-mutations.ts'
+import { chamberBridge, type ChamberServerAggregate } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
+import { getInstanceClient, renameSession } from '@dsh-chamber/dsh-chamber-client-core/instance-api'
+import { getSearchStates, subscribeSearch } from '@dsh-chamber/dsh-chamber-client-core/search-state'
+import { renameWorkspaceForSource } from '@dsh-chamber/dsh-chamber-client-core/workspace-mutations'
 import type { RenameTarget } from './sidebar-context.ts'
 import type { RunAction } from './sidebar-root-actions.ts'
 

@@ -18,8 +18,6 @@ import assert from 'node:assert/strict'
 import {
   forgetPendingArchives,
   forgetPendingSessions,
-  PENDING_ARCHIVE_TTL_MS,
-  PENDING_SESSION_TTL_MS,
   reconcilePendingArchives,
   reconcilePendingSessions,
   recordPendingArchive,
@@ -30,13 +28,18 @@ import {
   sweepPendingSessions,
   withPendingArchives,
   withSessionEcho,
-  sessionEchoRow,
   type PendingSession,
   type SessionArchiveLedger,
   type SessionEchoLedger,
-} from '../../src/shared/session-echo.ts'
-import { __resetMembershipGracesForTests, deriveServerWorkspaces } from '../../src/shared/derive.ts'
-import type { InstanceAggregate, SessionRow, WorkspaceRow } from '../../src/shared/instance-api.ts'
+} from '@dsh-chamber/dsh-chamber-client-core'
+import {
+  PENDING_ARCHIVE_TTL_MS,
+  PENDING_SESSION_TTL_MS,
+  sessionEchoRow,
+} from '../../../dsh-chamber-client-core/src/session-echo.ts'
+import { deriveServerWorkspaces } from '@dsh-chamber/dsh-chamber-client-core/derive'
+import { __resetMembershipGracesForTests } from '../../../dsh-chamber-client-core/src/derive.ts'
+import type { InstanceAggregate, SessionRow, WorkspaceRow } from '@dsh-chamber/dsh-chamber-client-core/instance-api'
 
 function aggregate(
   workspaces: WorkspaceRow[],

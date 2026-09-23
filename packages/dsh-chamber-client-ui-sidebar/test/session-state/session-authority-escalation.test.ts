@@ -22,7 +22,7 @@ import {
   type LadderObservation,
   type LadderRecord,
 } from '@dsh-chamber/dsh-stream-state'
-import { SessionAuthorityReconciler } from '../../src/shared/session-fact-reconcile.ts'
+import { SessionAuthorityReconciler } from '@dsh-chamber/dsh-chamber-client-core/session-fact-reconcile'
 
 const LADDER = sessionAuthorityEscalationLadder(LADDER_TABLES.authority)
 

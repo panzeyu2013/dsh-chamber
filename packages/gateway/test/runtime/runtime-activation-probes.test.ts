@@ -180,7 +180,7 @@ test('real manager: the B1 16 MiB settings/describe cap reaches the wire carrier
   }
 })
 
-test('2026-12 shape gate: a synced seed cache flips the activation to the FULL probe set — and drift fails closed', async () => {
+test('shape gate: a synced seed cache flips the activation to the FULL probe set — and drift fails closed', async () => {
   const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-shape-'))
   try {
     // Seed EVERY registry host package into the gateway seed cache, exactly
@@ -302,15 +302,13 @@ test('assertChamberHostRegistry: a 4th row reusing an existing probe domain fail
       ...CHAMBER_HOST_PACKAGES,
       { insert: { id: 'ghost', name: '@dsh-chamber/dsh-host-ghost' }, probe: { method: HOST_PACKAGE_DOMAINS[0], args: {} } },
     ]),
-    /probe method .* is claimed by more than one host package/,
-  )
+    /probe method .* is claimed by more than one host package/)
   assert.throws(
     () => assertChamberHostRegistry([
       ...CHAMBER_HOST_PACKAGES,
       { insert: { id: CHAMBER_HOST_PACKAGES[0].insert.id, name: '@dsh-chamber/dsh-host-other' }, probe: { method: 'future/domain', args: {} } },
     ]),
-    /duplicate loader insert id/,
-  )
+    /duplicate loader insert id/)
   assert.throws(
     () => assertChamberHostRegistry([
       ...CHAMBER_HOST_PACKAGES,
@@ -373,8 +371,7 @@ test('syncedHostDomainProbeNames: a cache entry whose package has no domain mapp
     writeFileSync(join(stateDir, SYNCED_PLUGIN_DIR, 'dsh-host-ghost', 'dist', 'index.js'), 'export const ghost = 1\n')
     assert.throws(
       () => syncedHostDomainProbeNames(stateDir, [...SYNCABLE_HOST_PACKAGES, ghost]),
-      /"@dsh-chamber\/dsh-host-ghost" has no activation probe domain/,
-    )
+      /"@dsh-chamber\/dsh-host-ghost" has no activation probe domain/)
   } finally {
     rmSync(stateDir, { recursive: true, force: true })
   }

@@ -64,8 +64,7 @@ function hasSpecifierCaller(code: string, quoteIndex: number): boolean {
   const lineStart = Math.max(
     code.lastIndexOf(newline, quoteIndex - 1),
     code.lastIndexOf(';', quoteIndex - 1),
-    code.lastIndexOf(',', quoteIndex - 1),
-  ) + 1
+    code.lastIndexOf(',', quoteIndex - 1)) + 1
   const windowStart = Math.max(lineStart, quoteIndex - 64)
   const before = code.slice(windowStart, quoteIndex)
   for (const caller of SPECIFIER_CALLERS) {
@@ -352,13 +351,13 @@ function evaluateGate(root: string): GateResult {
       const resolved = path.resolve(path.dirname(absolute), spec)
       if (resolved !== root && !resolved.startsWith(root + path.sep)) {
         outside.push(relative + ' -> ' + spec)
-        continue
-      }
+      continue
+    }
       const target = resolveSpecifier(root, relative, spec)
       if (target === null) {
         unresolved.push(relative + ' -> ' + spec)
-        continue
-      }
+      continue
+    }
       faceDEdges += 1
       queue.push(target)
     }
@@ -552,7 +551,7 @@ test('自测 ④：跳出包根的相对 import 未登记即红（不静默跳�
   )
 })
 
-test('自测 ⑤：字符串/注释扫描与说明符形态（2026-12 验证轮的三处绕过 + 一处合法用法）', () => {
+test('自测 ⑤：字符串/注释扫描与说明符形态（验证轮的三处绕过 + 一处合法用法）', () => {
   withFixture(
     {
       ...GREEN_FIXTURE,
@@ -588,7 +587,7 @@ test('自测 ⑤：字符串/注释扫描与说明符形态（2026-12 验证轮�
   )
 })
 
-test('自测 ⑥：多行 import/export-from 与关键字边界（2026-12 第三轮验证）', () => {
+test('自测 ⑥：多行 import/export-from 与关键字边界（第三轮验证）', () => {
   withFixture(
     {
       ...GREEN_FIXTURE,
@@ -612,7 +611,7 @@ test('自测 ⑥：多行 import/export-from 与关键字边界（2026-12 第三
   )
 })
 
-test('自测 ⑦：调用位窗口、成员访问与函数体懒加载（2026-12 第四轮验证）', () => {
+test('自测 ⑦：调用位窗口、成员访问与函数体懒加载（第四轮验证）', () => {
   withFixture(
     {
       ...GREEN_FIXTURE,

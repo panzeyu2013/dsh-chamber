@@ -1,0 +1,52 @@
+{
+  "name": "@dsh-chamber/dsh-chamber-client-core",
+  "version": "0.3.2-beta.5",
+  "private": true,
+  "description": "Chamber client-core: the shared client kernel every chamber client package consumes (multi-source session/workspace projection, the chamberBridge singleton, the page-level client-plugin load kernel, the per-instance unary client, the settings-seat contract, plus the framework-free runtime-management and SVG-resource-scope leaf contracts). Source-only: consumers resolve the TypeScript sources through these named faces; the seed bundle inlines them.",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./aggregate-store": "./src/aggregate-store.ts",
+    "./authority-log-store": "./src/authority-log-store.ts",
+    "./boot-gap-shape": "./src/boot-gap-shape.ts",
+    "./client-plugin-loader": "./src/client-plugin-loader.ts",
+    "./derive": "./src/derive.ts",
+    "./hover-intent": "./src/hover-intent.ts",
+    "./instance-api": "./src/instance-api.ts",
+    "./managed-runtime": "./src/managed-runtime.ts",
+    "./open-intent": "./src/open-intent.ts",
+    "./open-outcome": "./src/open-outcome.ts",
+    "./pending-click": "./src/pending-click.ts",
+    "./plugin-graph-classify": "./src/plugin-graph-classify.ts",
+    "./plugin-manifest": "./src/plugin-manifest.ts",
+    "./plugin-row": "./src/plugin-row.ts",
+    "./prewarm-intent": "./src/prewarm-intent.ts",
+    "./purged-tracker": "./src/purged-tracker.ts",
+    "./search-state": "./src/search-state.ts",
+    "./session-create-ledger": "./src/session-create-ledger.ts",
+    "./session-fact-reconcile": "./src/session-fact-reconcile.ts",
+    "./session-mutations": "./src/session-mutations.ts",
+    "./session-row-state": "./src/session-row-state.ts",
+    "./session-row-window": "./src/session-row-window.ts",
+    "./settings-shell": "./src/settings-shell.ts",
+    "./subagent-lineage": "./src/subagent-lineage.ts",
+    "./todo-attention": "./src/todo-attention.ts",
+    "./todo-prefs": "./src/todo-prefs.ts",
+    "./view-prefs": "./src/view-prefs.ts",
+    "./wire-common": "./src/wire-common.ts",
+    "./workspace-drag-order": "./src/workspace-drag-order.ts",
+    "./workspace-git-flags": "./src/workspace-git-flags.ts",
+    "./workspace-mutations": "./src/workspace-mutations.ts",
+    "./runtime-management": "./src/runtime-management.ts",
+    "./svg-resource-scope": "./src/svg-resource-scope.ts",
+    "./package.json": "./package.json"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@dsh-chamber/dsh-chamber-wire": "workspace:^",
+    "@dsh-chamber/dsh-stream-state": "workspace:^"
+  }
+}

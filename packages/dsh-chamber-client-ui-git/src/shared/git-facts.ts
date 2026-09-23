@@ -167,8 +167,8 @@ export function canTargetSession(worktree: GitWorktreeInfo): boolean {
  * enumerate the full session tree a worktree removal would orphan.
  *
  * This is the FORK closure over the VISIBLE (non-subagent) session rows: the
- * caller's row source is `fetchInstanceSnapshot`, which DROPS subagent-origin
- * rows upstream (`@dsh-chamber/dsh-client-ui-sidebar/shared` instance-api
+ * caller's row source is `fetchInstanceSnapshot` (client-core
+ * `src/instance-api.ts`), which DROPS subagent-origin rows upstream (it
  * filters `origin === 'subagent'`), so every edge this function can see is a
  * fork edge — and a fork IS a worktree session by construction, so it belongs
  * in the closure. Vendor evidence (dsh-api-session-controller/lib/index.js):

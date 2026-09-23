@@ -1,7 +1,7 @@
 /**
  * 会话面绘制信号——以"壳自己画出了什么"为准，而非"App 侧事实猜就绪"。
  * ## 背景
- * 打开意图揭示门（`sidebar/src/shared/open-intent.ts` 的 `shouldHoldViewVeil`）在 boot
+ * 打开意图揭示门（`client-core/src/open-intent.ts` 的 `shouldHoldViewVeil`）在 boot
  * settle 后继续持有遮罩，直到**请求的会话**在屏上。但它的输入是两个异步镜像事实——
  * `runtimeFacts[viewId].current`（推送）与 `aggregates` 的 session `blank` 行（未知按
  * blank 处理）——两者迟到或抖动时，遮罩会挂在已经渲染好的壳上，最长烧满 open 预算

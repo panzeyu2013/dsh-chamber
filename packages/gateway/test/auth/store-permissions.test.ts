@@ -1,10 +1,9 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { execFileSync, spawn } from 'node:child_process'
-import { chmodSync, chownSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
-import { homedir, tmpdir } from 'node:os'
-import { parse, resolve, join } from 'node:path'
-import { createGatewayStore, hashCredential, readCredentialProjection, validateGatewayStateDirPath } from '../../src/store.ts'
+import { chmodSync, chownSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { createGatewayStore, hashCredential, readCredentialProjection } from '../../src/store.ts'
 
 const mode = (path: string): number => statSync(path).mode & 0o777
 const readJson = (path: string): any => JSON.parse(readFileSync(path, 'utf8'))
@@ -36,18 +35,16 @@ test('gateway state directories and every persisted document are owner-only', as
     assert.equal(mode(join(stateDir, 'gateway')), 0o700)
   }
   for (const file of [
-    'tokens.json', 'jwt-secret', 'password-credential', '.gateway.lock',
+    'tokens.json', 'jwt-secret', 'password-credential',
   ]) assert.equal(mode(join(stateDir, file)), 0o600, file)
-  store.close()
 })
 
 test('gateway creates a new dedicated stateDir as 0700 on POSIX', { skip: process.platform === 'win32' }, t => {
   const parent = mkdtempSync(join(tmpdir(), 'gateway-new-state-parent-'))
   const stateDir = join(parent, 'state')
   t.after(() => rmSync(parent, { recursive: true, force: true }))
-  const store = createGatewayStore(stateDir, { log() {}, warn() {}, error() {} })
+  createGatewayStore(stateDir, { log() {}, warn() {}, error() {} })
   assert.equal(mode(stateDir), 0o700)
-  store.close()
 })
 
 test('gateway tightens a loose existing stateDir to 0700 on POSIX', { skip: process.platform === 'win32' }, t => {
@@ -59,18 +56,13 @@ test('gateway tightens a loose existing stateDir to 0700 on POSIX', { skip: proc
   assert.equal(mode(stateDir), 0o700)
   assert.equal(mode(join(stateDir, 'gateway')), 0o700)
   assert.equal(warnings.some(message => message.includes('tightening to 0700')), true, 'a loose root must be announced once')
-  // Tightening must leave the store fully usable: credentials and the lock
-  // stay 0600, values round-trip, and a later reopen succeeds.
+  // Tightening must leave the store fully usable: credentials stay 0600 and
+  // values round-trip.
   store.setPasswordCredential(hashCredential('a sufficiently long private password'))
   store.getJwtSecret()
   assert.equal(mode(join(stateDir, 'password-credential')), 0o600)
   assert.equal(mode(join(stateDir, 'jwt-secret')), 0o600)
-  assert.equal(mode(join(stateDir, '.gateway.lock')), 0o600)
   assert.notEqual(store.getPasswordCredential(), null)
-  store.close()
-  const reopened = createGatewayStore(stateDir, { log() {}, warn() {}, error() {} })
-  assert.equal(mode(stateDir), 0o700)
-  reopened.close()
 })
 
 test('gateway tightens a loose pre-existing gateway/ subdirectory to 0700 on POSIX', { skip: process.platform === 'win32' }, t => {
@@ -83,13 +75,10 @@ test('gateway tightens a loose pre-existing gateway/ subdirectory to 0700 on POS
   const root = join(stateDir, 'gateway')
   mkdirSync(root, { mode: 0o755 })
   writeFileSync(join(root, 'tokens.json'), '{"schemaVersion":2,"source":"config","updatedAt":1,"hash":"scrypt$x"}\n', { mode: 0o600 })
-  const store = createGatewayStore(stateDir, { log() {}, warn() {}, error() {} })
+  createGatewayStore(stateDir, { log() {}, warn() {}, error() {} })
   assert.equal(mode(stateDir), 0o700)
   assert.equal(mode(root), 0o700)
   assert.equal(mode(join(root, 'tokens.json')), 0o600, 'pre-existing credential files keep their mode after tightening')
-  store.close()
-  const reopened = createGatewayStore(stateDir, { log() {}, warn() {}, error() {} })
-  reopened.close()
 })
 
 test('gateway refuses a stateDir owned by another user on POSIX', { skip: process.platform === 'win32' || process.getuid?.() !== 0 }, t => {
@@ -113,19 +102,9 @@ test('gateway preserves an existing Windows stateDir ACL/mode projection', { ski
   const stateDir = mkdtempSync(join(tmpdir(), 'gateway-windows-state-'))
   t.after(() => rmSync(stateDir, { recursive: true, force: true }))
   const beforeMode = mode(stateDir)
-  const store = createGatewayStore(stateDir, { log() {}, warn() {}, error() {} })
+  createGatewayStore(stateDir, { log() {}, warn() {}, error() {} })
   assert.equal(mode(stateDir), beforeMode)
-  store.close()
 })
-
-test('gateway rejects exact broad filesystem roots', () => {
-  for (const broadRoot of [parse(resolve('/')).root, homedir(), tmpdir()]) {
-    assert.throws(() => validateGatewayStateDirPath(broadRoot), /dedicated child directory/)
-  }
-})
-
-
-
 
 test('pre-existing JWT and password verifier files are tightened before reading', t => {
   const stateDir = mkdtempSync(join(tmpdir(), 'gateway-private-store-existing-'))
@@ -139,8 +118,7 @@ test('pre-existing JWT and password verifier files are tightened before reading'
 
   chmodSync(jwtSecretFile, 0o644)
   chmodSync(passwordCredentialFile, 0o644)
-  // The stateDir exclusive lock must be released before reopening.
-  store.close()
+  // A later open tightens the loose files before reading them.
   const reloaded = createGatewayStore(stateDir, { log() {}, warn() {}, error() {} })
 
   assert.equal(reloaded.getJwtSecret(), expectedJwtSecret)
@@ -259,7 +237,6 @@ test('credential writes ignore predictable temp symlinks and never touch their t
   assert.equal(readFileSync(passwordVictim, 'utf8'), 'DO NOT TOUCH PASSWORD')
   assert.equal(mode(tokenVictim), 0o644)
   assert.equal(mode(passwordVictim), 0o644)
-  store.close()
 })
 
 test('legacy v1 credential files read as config-sourced and migrate to v2 on write', t => {
@@ -295,24 +272,6 @@ test('legacy v1 credential files read as config-sourced and migrate to v2 on wri
   assert.equal(readJson(join(stateDir, 'tokens.json')).schemaVersion, 2)
 })
 
-test('stateDir exclusive lock is acquired on open and released by close', t => {
-  const stateDir = mkdtempSync(join(tmpdir(), 'gateway-lock-close-'))
-  t.after(() => rmSync(stateDir, { recursive: true, force: true }))
-  const store = createGatewayStore(stateDir, { log() {}, warn() {}, error() {} })
-  const lockFile = join(stateDir, '.gateway.lock')
-
-  assert.equal(existsSync(lockFile), true)
-  assert.equal(mode(lockFile), 0o600)
-  const lock = readJson(lockFile)
-  assert.equal(lock.pid, process.pid)
-  assert.ok(Number.isInteger(lock.createdAt) && lock.createdAt > 0)
-
-  store.close()
-  assert.equal(existsSync(lockFile), false)
-  store.close() // close is idempotent
-  assert.equal(existsSync(lockFile), false)
-})
-
 test('credential deletion is idempotent only for absence and propagates real filesystem failures', t => {
   const stateDir = mkdtempSync(join(tmpdir(), 'gateway-credential-delete-failure-'))
   t.after(() => rmSync(stateDir, { recursive: true, force: true }))
@@ -324,152 +283,6 @@ test('credential deletion is idempotent only for absence and propagates real fil
   mkdirSync(join(stateDir, 'password-credential'))
   assert.throws(() => store.setTokenHash(null), 'a non-file token path must not be reported as removed')
   assert.throws(() => store.setPasswordCredential(null), 'a non-file password path must not be reported as removed')
-  store.close()
-})
-
-test('stateDir exclusive lock rejects a live owner loudly', t => {
-  const stateDir = mkdtempSync(join(tmpdir(), 'gateway-lock-live-'))
-  t.after(() => rmSync(stateDir, { recursive: true, force: true }))
-  const store = createGatewayStore(stateDir, { log() {}, warn() {}, error() {} })
-  assert.throws(
-    () => createGatewayStore(stateDir, { log() {}, warn() {}, error() {} }),
-    /already locked by running process/,
-  )
-  store.close()
-  // After release the same directory can be reopened.
-  const reopened = createGatewayStore(stateDir, { log() {}, warn() {}, error() {} })
-  reopened.close()
-})
-
-test('stateDir exclusive lock takes over a stale lock from a dead pid with a warning', t => {
-  const stateDir = mkdtempSync(join(tmpdir(), 'gateway-lock-stale-'))
-  t.after(() => rmSync(stateDir, { recursive: true, force: true }))
-  // A crashed owner left a lock behind; pid 99999999 is not running.
-  writeFileSync(join(stateDir, '.gateway.lock'), JSON.stringify({ pid: 99_999_999, createdAt: 1 }), { mode: 0o600 })
-  const warns: string[] = []
-  const store = createGatewayStore(stateDir, { log() {}, warn: (message: unknown) => warns.push(String(message)), error() {} })
-  const lock = readJson(join(stateDir, '.gateway.lock'))
-  assert.equal(lock.pid, process.pid)
-  assert.equal(warns.some(message => message.includes('taking over a stale state lock')), true)
-  store.close()
-  assert.equal(existsSync(join(stateDir, '.gateway.lock')), false)
-
-  // A crash can leave an O_EXCL-created lock before its JSON write. Empty is
-  // corrupt evidence, not absence; it must be claimable rather than wedging
-  // every future start behind repeated EEXIST.
-  writeFileSync(join(stateDir, '.gateway.lock'), '', { mode: 0o600 })
-  const afterTornCreate = createGatewayStore(stateDir, { log() {}, warn() {}, error() {} })
-  assert.equal(readJson(join(stateDir, '.gateway.lock')).pid, process.pid)
-  afterTornCreate.close()
-})
-
-test('stateDir exclusive lock is released on process exit (best-effort)', t => {
-  const stateDir = mkdtempSync(join(tmpdir(), 'gateway-lock-exit-'))
-  t.after(() => rmSync(stateDir, { recursive: true, force: true }))
-  const lockFile = join(stateDir, '.gateway.lock')
-  // A child process opens the store and exits normally; its exit handler must
-  // remove the lock so the next process can start without manual cleanup.
-  const script = [
-    `import { createGatewayStore } from ${JSON.stringify(new URL('../../src/store.ts', import.meta.url).href)};`,
-    `createGatewayStore(${JSON.stringify(stateDir)}, console);`,
-  ].join('')
-  execFileSync(process.execPath, ['--input-type=module', '-e', script], { stdio: 'ignore' })
-  assert.equal(existsSync(lockFile), false)
-})
-
-test('a FAILED lock acquisition never deletes the live owner lock on process exit', t => {
-  const stateDir = mkdtempSync(join(tmpdir(), 'gateway-lock-failed-exit-'))
-  t.after(() => rmSync(stateDir, { recursive: true, force: true }))
-  const lockFile = join(stateDir, '.gateway.lock')
-  const owner = createGatewayStore(stateDir, { log() {}, warn() {}, error() {} })
-  assert.equal(existsSync(lockFile), true)
-
-  // A child process attempts to open the same directory (live lock → throws),
-  // then exits normally. Its failure path must NOT register an exit listener
-  // that removes the owner's lock.
-  const script = [
-    `import { createGatewayStore } from ${JSON.stringify(new URL('../../src/store.ts', import.meta.url).href)};`,
-    `try { createGatewayStore(${JSON.stringify(stateDir)}, console); process.exit(3); } catch (error) { process.exit(1); }`,
-  ].join('')
-  let childExitCode = 0
-  try {
-    execFileSync(process.execPath, ['--input-type=module', '-e', script], { stdio: 'ignore' })
-  } catch (error) {
-    childExitCode = (error as { status?: number }).status ?? -1
-  }
-  assert.equal(childExitCode, 1, 'child exited 1 after the refused acquisition')
-  assert.equal(existsSync(lockFile), true, 'the live owner lock must survive the failed child acquisition')
-
-  owner.close()
-})
-
-test('live-lock errors carry the structured gateway_locked code and owner pid', t => {
-  const stateDir = mkdtempSync(join(tmpdir(), 'gateway-lock-structured-'))
-  t.after(() => rmSync(stateDir, { recursive: true, force: true }))
-  const owner = createGatewayStore(stateDir, { log() {}, warn() {}, error() {} })
-  try {
-    const error = (() => {
-      try {
-        createGatewayStore(stateDir, { log() {}, warn() {}, error() {} })
-        return null
-      } catch (caught) {
-        return caught as Error & { code?: string; pid?: number }
-      }
-    })()
-    assert.ok(error !== null)
-    assert.equal(error.code, 'gateway_locked')
-    assert.equal(error.pid, process.pid)
-  } finally {
-    owner.close()
-  }
-})
-
-test('releaseLock only removes a lock still owned by this process', t => {
-  const stateDir = mkdtempSync(join(tmpdir(), 'gateway-lock-foreign-release-'))
-  t.after(() => rmSync(stateDir, { recursive: true, force: true }))
-  const lockFile = join(stateDir, '.gateway.lock')
-  const store = createGatewayStore(stateDir, { log() {}, warn() {}, error() {} })
-  // Simulate a takeover successor with a distinct inode (same-process tests
-  // must prove identity, not merely changed JSON content).
-  const successor = join(stateDir, '.gateway.lock.successor')
-  const successorText = JSON.stringify({ pid: 99_999_999, createdAt: Date.now() })
-  writeFileSync(successor, successorText, { mode: 0o644 })
-  renameSync(successor, lockFile)
-  store.close()
-  assert.equal(existsSync(lockFile), true, 'close() must refuse to delete a foreign-owned lock')
-  assert.equal(readFileSync(lockFile, 'utf8'), successorText)
-  assert.equal(mode(lockFile), 0o644, 'an obsolete owner must not chmod its successor while inspecting it')
-  // Ownership was released by the refusal (fail-closed): reacquire re-takes
-  // the lock — the foreign pid is dead, so the stale takeover applies and the
-  // lock becomes ours again.
-  store.reacquire()
-  assert.equal(readJson(lockFile).pid, process.pid, 'reacquire re-takes the directory after the refused release')
-  store.close()
-  assert.equal(existsSync(lockFile), false)
-})
-
-test('reacquire re-takes the lock after close and stays a no-op while held', t => {
-  const stateDir = mkdtempSync(join(tmpdir(), 'gateway-lock-reacquire-'))
-  t.after(() => rmSync(stateDir, { recursive: true, force: true }))
-  const lockFile = join(stateDir, '.gateway.lock')
-  const store = createGatewayStore(stateDir, { log() {}, warn() {}, error() {} })
-
-  // While held, reacquire is a no-op.
-  store.reacquire()
-  assert.equal(readJson(lockFile).pid, process.pid)
-
-  store.close()
-  assert.equal(existsSync(lockFile), false)
-  // After close, reacquire re-takes the lock (gateway start() retry path).
-  store.reacquire()
-  assert.equal(existsSync(lockFile), true)
-  assert.equal(readJson(lockFile).pid, process.pid)
-  assert.throws(
-    () => createGatewayStore(stateDir, { log() {}, warn() {}, error() {} }),
-    /already locked by running process/,
-  )
-  store.close()
-  assert.equal(existsSync(lockFile), false)
 })
 
 test('a v2 credential with a garbage verifier shape is corrupt (never silently disables auth)', t => {
@@ -492,54 +305,6 @@ test('a v2 credential with a garbage verifier shape is corrupt (never silently d
   store.getPasswordCredential()
   store.getTokenHash()
   assert.equal(warns.filter(message => message.includes('corrupt v2')).length, 2)
-  store.close()
-})
-
-test('concurrent stale-lock takeovers never double-hold the directory (pair stress)', async t => {
-  // The takeover scheme (rename-claim + moved-content verification +
-  // restore + final ownership verification) PROVABLY closes the two-process
-  // case: with exactly two contenders, the loser's restore always finds an
-  // empty path (no third process can occupy it), so a fresh live lock is
-  // never destroyed and at most one contender can ever hold. A 3-process
-  // interleaving (a third process creating in the restore gap) retains a
-  // documented residual — the same class every pidfile lock accepts without
-  // kernel flock. This test asserts the provable property under repeated
-  // real multi-process races (0 winners is legal — both contenders can
-  // fail closed; 2 winners is the regression).
-  const stateDir = mkdtempSync(join(tmpdir(), 'gateway-lock-stress-'))
-  t.after(() => rmSync(stateDir, { recursive: true, force: true }))
-  const lockFile = join(stateDir, '.gateway.lock')
-  const childScript = [
-    `import { createGatewayStore } from ${JSON.stringify(new URL('../../src/store.ts', import.meta.url).href)};`,
-    `import { writeFileSync } from 'node:fs';`,
-    `const stateDir = ${JSON.stringify(stateDir)};`,
-    `try {`,
-    `  const store = createGatewayStore(stateDir, console);`,
-    `  writeFileSync(process.argv[1], JSON.stringify({ pid: process.pid }));`,
-    // Hold the lock long enough that a slightly delayed second contender
-    // (slow node startup under CI load) still sees the live lock instead of
-    // legitimately taking over after our release.
-    `  setTimeout(() => { store.close(); process.exit(0); }, 1000);`,
-    `} catch { process.exit(1); }`,
-  ].join('\n')
-
-  for (let round = 0; round < 15; round += 1) {
-    // Fresh stale lock (dead pid) for every round.
-    writeFileSync(lockFile, JSON.stringify({ pid: 99_999_999, createdAt: round }), { mode: 0o600 })
-    const children: Array<{ child: import('node:child_process').ChildProcess; won: string }> = []
-    for (let i = 0; i < 2; i += 1) {
-      const won = join(stateDir, `won-${round}-${i}`)
-      const child = spawn(process.execPath, ['--input-type=module', '-e', childScript, won], { stdio: 'ignore' })
-      children.push({ child, won })
-      // Watchdog: a wedged child must not hang the suite forever.
-      const watchdog = setTimeout(() => child.kill('SIGKILL'), 20_000)
-      child.on('exit', () => clearTimeout(watchdog))
-    }
-    await Promise.all(children.map(({ child }) => new Promise<void>(resolve => child.on('exit', () => resolve()))))
-    const winners = children.filter(({ won }) => existsSync(won))
-    assert.ok(winners.length <= 1, `round ${round}: at most one contender may hold the directory (got ${winners.length})`)
-    for (const { won } of children) rmSync(won, { force: true })
-  }
 })
 
 test('readCredentialProjection is read-only: it never mutates the credential files', t => {
@@ -561,7 +326,6 @@ test('readCredentialProjection is read-only: it never mutates the credential fil
   assert.equal(projection.token, null)
   assert.equal(mode(join(stateDir, 'password-credential')), 0o644)
   assert.equal(mode(join(stateDir, 'tokens.json')), 0o644)
-  store.close()
 })
 
 test('credential projection refuses oversized private files at a KiB-scale bound', t => {

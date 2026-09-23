@@ -18,6 +18,12 @@ import {
 
 const APP = readFileSync(fileURLToPath(new URL('../../src/App.tsx', import.meta.url)), 'utf8')
 const APP_LINES = APP.split('\n')
+// 唯一组装点（emitSessionNotification）已随通知/未读投影簇抽到命名 hook；
+// 决策账本与单组装点锁跨 App + 该 hook 取并集（数量锁仍是"全 frame 恰好一次"）。
+const UNREAD_HOOK = readFileSync(
+  fileURLToPath(new URL('../../src/app-hooks/use-unread-notifications.ts', import.meta.url)), 'utf8')
+const UNREAD_LINES = UNREAD_HOOK.split('\n')
+const FRAME = APP + '\n' + UNREAD_HOOK
 // 徽标推送 effect 簇是命名 hook；锁钉在该 hook（App 内不可渲染测试，
 // hook 的行为由窗口桥面在真机验证）。
 const BADGE_HOOK = readFileSync(
@@ -61,18 +67,18 @@ test('the badge hook publishes the dispatched count next to the projection', () 
 })
 
 test('every notification decision is recorded — including the no-bridge case', () => {
-  assert.match(APP, /if \(bridge === undefined\) \{[\s\S]{0,600}?decision: 'skipped'[\s\S]{0,200}?no-notification-bridge/)
-  assert.match(APP, /decision: result\.shown \? 'sent' : 'suppressed'/)
-  assert.match(APP, /catch\(err => \{[\s\S]{0,300}?decision: 'skipped'/)
-  assert.match(APP, /publishNotificationInstrument\(\)/)
+  assert.match(FRAME, /if \(bridge === undefined\) \{[\s\S]{0,600}?decision: 'skipped'[\s\S]{0,200}?no-notification-bridge/)
+  assert.match(FRAME, /decision: result\.shown \? 'sent' : 'suppressed'/)
+  assert.match(FRAME, /catch\(err => \{[\s\S]{0,300}?decision: 'skipped'/)
+  assert.match(FRAME, /publishNotificationInstrument\(\)/)
 })
 
 test('the ledger records the MAIN-PROCESS result, and notify is still called exactly once', () => {
   // 账本读的是回执（shown/error），不是"调用了"。
-  assert.doesNotMatch(APP, /notificationLedger\.record\(\{\s*\.\.\.ledgerBase,\s*decision: 'sent' \}\)/)
-  // 单组装点锁：去掉注释行后 bridge.notify( 只出现一次。
+  assert.doesNotMatch(FRAME, /notificationLedger\.record\(\{\s*\.\.\.ledgerBase,\s*decision: 'sent' \}\)/)
+  // 单组装点锁：去掉注释行后 bridge.notify( 在 App + 投影 hook 的并集里只出现一次。
   // 注释行两种形态都要剔除：行注释 `//` 与块注释体 `*`（文档注释里也会提到这个调用）。
-  const calls = APP_LINES.filter(line => {
+  const calls = [...APP_LINES, ...UNREAD_LINES].filter(line => {
     const trimmed = line.trimStart()
     return !trimmed.startsWith('//') && !trimmed.startsWith('*') && line.includes('bridge.notify(')
   })

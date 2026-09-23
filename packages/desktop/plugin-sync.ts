@@ -44,7 +44,6 @@ import {
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { homedir, tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
-import { readStringArray } from '@dsh-chamber/control-plane'
 // The cordis loader insert render/parse/conflict logic is single-sourced in
 // control-plane (cordis-inserts.ts, cross-package protocol single-
 // sourcing) — consumed through control-plane-module.ts (the desktop
@@ -64,13 +63,25 @@ import {
   decidePluginMutation,
   derivePluginRows,
   deriveProtectedSet,
+  isMaterializedValue,
   MAX_PLUGIN_SPEC_CHARS,
+  parsePluginManifest,
   PLUGIN_MATERIALIZED_VALUE_MASK,
   PLUGIN_NAME_PATTERN,
   PLUGIN_SPEC_PATTERN,
   readInstalledVersion,
+  readManifestVersion,
+  runPluginMutation,
+  scrubMutationEnv,
 } from './control-plane-module.ts'
-import type { FamilyVersions, PluginMutationDecision, PluginRow, ProtectedSet } from './control-plane-module.ts'
+import type {
+  FamilyVersions,
+  MutationChildExecutor,
+  PluginManifestParseResult,
+  PluginMutationDecision,
+  PluginRow,
+  ProtectedSet,
+} from './control-plane-module.ts'
 // Owner-private file primitives (control-plane private-file.ts) —
 // consumed through the same dual-path facade for the local-plugin-writer
 // ledger (owner-only 0600 atomic replace, owner-only parent).
@@ -81,7 +92,7 @@ import { atomicWritePrivateFileNoFollow, ensurePrivateDirectoryNoFollow, readPri
 // constants below derive from control-plane's own seed and can never drift.
 import {
   CHAMBER_HOST_PACKAGES, HOST_ARCHIVE_CLEANUP_INSERT, HOST_GIT_WORKTREE_INSERT, HOST_GRAPH_INSERT,
-  HOST_GRAPH_PATCH_FILENAME, HOST_OPEN_IN_INSERT, HOST_PACKAGE_SEED_FILES,
+  HOST_GRAPH_PATCH_FILENAME, HOST_PACKAGE_SEED_FILES,
   type ChamberHostPackageDescriptor, type HostPackageInsert, type HostPackageSeedFile,
 } from './control-plane-module.ts'
 // ssh unified increments (design 21 §6.4): the protected-set
@@ -110,8 +121,9 @@ import type { TransportExecAction, TransportRunPayload } from './transport-provi
 // pnpm.cjs script through node/Electron — Node >=18.20.2/20.12.2 refuses to
 // spawn a .cmd without a shell (CVE-2024-27980). Pure module, unit-tested in
 // test/plugins/pnpm-launcher.test.ts.
-import { pnpmScriptEntryCandidates, resolvePnpmLauncher, windowsPnpmSearchDirs } from './pnpm-launcher.ts'
+import { bundledPnpmEntryCandidates, firstExistingPnpmEntry, pnpmBinDirCandidates, pnpmBinNames, pnpmScriptEntryCandidates, resolvePnpmLauncher } from './pnpm-launcher.ts'
 import {
+  INSTALL_ENV_WHITELIST,
   RuntimeInstallerSupervisor,
   isRuntimeInstallerWriterSafetyError,
 } from '@dsh-chamber/dsh-runtime'
@@ -387,7 +399,7 @@ export const DEFAULT_REMOTE_DSH_HOME = '~/.dsh'
 export const WEB_PROFILE = 'web'
 // Chamber host-package seed facts: the id/name pairs are control-plane's own
 // (host-graph-seed.ts HOST_GRAPH_INSERT / HOST_GIT_WORKTREE_INSERT /
-// HOST_ARCHIVE_CLEANUP_INSERT / HOST_OPEN_IN_INSERT,
+// HOST_ARCHIVE_CLEANUP_INSERT,
 // consumed through control-plane-module.ts) —
 // the desktop keeps its established names because main.ts and the
 // cross-package tests import them from here; values can never drift from the
@@ -398,12 +410,6 @@ export const GIT_WORKTREE_PACKAGE_NAME = HOST_GIT_WORKTREE_INSERT.name
 export const GIT_WORKTREE_INSERT_ID = HOST_GIT_WORKTREE_INSERT.id
 export const ARCHIVE_CLEANUP_PACKAGE_NAME = HOST_ARCHIVE_CLEANUP_INSERT.name
 export const ARCHIVE_CLEANUP_INSERT_ID = HOST_ARCHIVE_CLEANUP_INSERT.id
-/** The open-in host domain (design 20 §6) — a `localOnly` registry row: it is
- *  seeded into the local profile and never travels to a remote target or a
- *  gateway (see `ChamberHostPackageSeed.localOnly`). */
-export const OPEN_IN_PACKAGE_NAME = HOST_OPEN_IN_INSERT.name
-export const OPEN_IN_INSERT_ID = HOST_OPEN_IN_INSERT.id
-
 /**
  * The module-A seed files (design 09 module A / design 13 §3): the
  * install-level flat fallback carries the SAME set the local seed
@@ -468,11 +474,6 @@ export type SpecClass =
   | { kind: 'materialize' }
   | { kind: 'unsyncable'; reason: string }
 
-/** `file:` / `link:` / relative / absolute path specs → materialize (design 13 §3). */
-export function isMaterializeSpec(spec: string): boolean {
-  return /^(file:|link:|\.{1,2}\/|\/|~\/)/i.test(spec)
-}
-
 export function unsyncableReason(spec: string): string {
   if (/^workspace:/i.test(spec)) return 'workspace:* spec is monorepo-internal and cannot be transferred directly'
   if (/^(git\+|git:|github:|gitlab:|bitbucket:)/i.test(spec)) return 'git dependency is not synced directly (install manually over ssh)'
@@ -501,15 +502,6 @@ export function hasXWildcardVersion(spec: string): boolean {
   return hasXWildcard(spec.slice(at + 1))
 }
 
-export function classifySpec(spec: string): SpecClass {
-  if (PLUGIN_SPEC_PATTERN.test(spec)) {
-    if (hasXWildcardVersion(spec)) return { kind: 'unsyncable', reason: 'x-wildcard version is a range, not a locked version (use an exact version)' }
-    return { kind: 'sync' }
-  }
-  if (isMaterializeSpec(spec)) return { kind: 'materialize' }
-  return { kind: 'unsyncable', reason: unsyncableReason(spec) }
-}
-
 /**
  * The syncable dependency-VALUE whitelist (design 13 §7.2): the version part of
  * PLUGIN_SPEC_PATTERN alone — `^1.0.0`, `~2.0.0`, `1.2.3`, `v1.0.0`,
@@ -527,9 +519,15 @@ export const PLUGIN_VERSION_VALUE_PATTERN = /^(\^|~)?([0-9A-Za-z][0-9A-Za-z._+-]
  * version whitelist are syncable (`<name>@<value>`); everything else
  * (ranges with spaces/`>`/`<`/`*`/`||`, `npm:` aliases, git/URL, workspace)
  * is unsyncable.
+ *
+ * The materialize arm is the SHARED ruler `isMaterializedValue` (wire
+ * plugin-manifest.ts, design 21 decision 18): any machine-local path form
+ * (`file:`/`link:`/relative/absolute/home/Windows-drive) is materialize, so
+ * the desktop main, the ssh redaction, the gateway projection and the browser
+ * classifier can never disagree about what a path value is.
  */
 export function classifyDependencyValue(spec: string): SpecClass {
-  if (isMaterializeSpec(spec)) return { kind: 'materialize' }
+  if (isMaterializedValue(spec)) return { kind: 'materialize' }
   if (PLUGIN_VERSION_VALUE_PATTERN.test(spec)) {
     if (hasXWildcard(spec)) return { kind: 'unsyncable', reason: 'x-wildcard version is a range, not a locked version (use an exact version)' }
     return { kind: 'sync' }
@@ -653,45 +651,42 @@ export type ApplyPluginsResult = { ok: true; result: PluginApplyResult } | { ok:
 
 // Manifest parsing
 
-/** Parse a remote profile package.json into its projected dependencies + bundles. */
+/**
+ * Parse a remote profile package.json into its projected dependencies +
+ * bundles.
+ *
+ * The parse algorithm is the shared wire implementation (plugin-manifest.ts
+ * `parsePluginManifest`, design 21 §3) through the desktop's dual-path facade:
+ * JSON faults stay classified the desktop's way here — `invalid-json` keeps
+ * the JSON error text in `failed to parse remote package.json: <detail>`,
+ * `not-an-object` keeps `remote package.json is not a JSON object` — while the
+ * model projection (string-valued `dependencies`, `dsh.profile.bundles`
+ * string members) has exactly ONE definition.
+ */
 export function parseRemoteManifest(text: string): { dependencies: Record<string, string>; bundles: string[]; error?: string } {
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(text)
-  } catch (error) {
-    return { dependencies: {}, bundles: [], error: `failed to parse remote package.json: ${String(error)}` }
-  }
-  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    return { dependencies: {}, bundles: [], error: 'remote package.json is not a JSON object' }
-  }
-  const record = parsed as Record<string, unknown>
-  const dependencies: Record<string, string> = {}
-  const rawDeps = record.dependencies
-  if (rawDeps !== null && typeof rawDeps === 'object' && !Array.isArray(rawDeps)) {
-    for (const [name, spec] of Object.entries(rawDeps as Record<string, unknown>)) {
-      if (typeof spec === 'string') dependencies[name] = spec
+  const parsed: PluginManifestParseResult = parsePluginManifest(text)
+  if (!parsed.ok) {
+    return {
+      dependencies: {},
+      bundles: [],
+      error: parsed.fault === 'invalid-json'
+        ? `failed to parse remote package.json: ${parsed.detail}`
+        : 'remote package.json is not a JSON object',
     }
   }
-  return { dependencies, bundles: readStringArray(record, ['dsh', 'profile', 'bundles']) }
+  return { dependencies: parsed.dependencies, bundles: parsed.bundles }
 }
 
 /** Read the `version` string from a JSON package-manifest text; null when
- *  unreadable or version-less — never a guessed default. */
+ *  unreadable or version-less — never a guessed default. The judgement itself
+ *  is the shared wire `readManifestVersion`; this only owns the
+ *  text→JSON byte-layer step (the backend owns byte acquisition). */
 function parsePackageVersion(text: string): string | null {
   try {
-    const parsed = JSON.parse(text) as { version?: unknown }
-    return typeof parsed?.version === 'string' && parsed.version !== '' ? parsed.version : null
+    return readManifestVersion(JSON.parse(text))
   } catch {
     return null
   }
-}
-
-/** Read the `version` string from an already-parsed package manifest; null
- *  when absent/unreadable. */
-function readManifestVersion(pkg: unknown): string | null {
-  if (pkg === null || typeof pkg !== 'object' || Array.isArray(pkg)) return null
-  const version = (pkg as Record<string, unknown>).version
-  return typeof version === 'string' && version !== '' ? version : null
 }
 
 /**
@@ -747,24 +742,22 @@ export function localPluginList(localDshHome: string, facts?: PluginProtectionFa
     : protectedSetFromFacts(facts)
   const profileDir = join(localDshHome, 'profiles', WEB_PROFILE)
   const manifestPath = join(profileDir, 'package.json')
-  let parsed: unknown
+  let text: string
   try {
-    parsed = JSON.parse(readFileSync(manifestPath, 'utf8'))
+    text = readFileSync(manifestPath, 'utf8')
   } catch (error) {
     throw new Error(`cannot read local profile manifest (${manifestPath}): ${String(error)}`)
   }
-  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new Error(`local profile manifest is not a JSON object (${manifestPath})`)
+  // The parse body is the wire single source (plugin-manifest.ts
+  // `parsePluginManifest`, design 21 §3): the dependencies projection and the
+  // `dsh.profile.bundles` walk are defined once there, never mirrored here.
+  const parsed: PluginManifestParseResult = parsePluginManifest(text)
+  if (!parsed.ok) {
+    throw new Error(parsed.fault === 'invalid-json'
+      ? `cannot read local profile manifest (${manifestPath}): ${parsed.detail}`
+      : `local profile manifest is not a JSON object (${manifestPath})`)
   }
-  const record = parsed as Record<string, unknown>
-  const dependencies: Record<string, string> = {}
-  const rawDeps = record.dependencies
-  if (rawDeps !== null && typeof rawDeps === 'object' && !Array.isArray(rawDeps)) {
-    for (const [name, spec] of Object.entries(rawDeps as Record<string, unknown>)) {
-      if (typeof spec === 'string') dependencies[name] = spec
-    }
-  }
-  const bundles = readStringArray(record, ['dsh', 'profile', 'bundles'])
+  const { dependencies, bundles } = parsed
   const clientLines: string[] = []
   const bundleLines: string[] = []
   const unsyncable: UnsyncableEntry[] = []
@@ -780,8 +773,8 @@ export function localPluginList(localDshHome: string, facts?: PluginProtectionFa
     if (kind === 'bundle') bundleLines.push(name)
     // The dependency VALUE is classified by the value grammar
     // (classifyDependencyValue): `^1.0.0` / `~2.0.0` are ordinary registry
-    // ranges → syncable, never mislabeled unsyncable. `classifySpec` (full
-    // name@spec grammar) would reject a bare `^1.0.0` as a non-registry spec.
+    // ranges → syncable, never mislabeled unsyncable. The full name@spec
+    // grammar would reject a bare `^1.0.0` as a non-registry spec.
     const cls = classifyDependencyValue(spec)
     if (cls.kind === 'unsyncable') unsyncable.push({ name, reason: cls.reason })
   }
@@ -852,8 +845,9 @@ export function localPluginList(localDshHome: string, facts?: PluginProtectionFa
  * The IPC surface must never echo local absolute paths: a remote instance's
  * client bundle executes in the chamber page (declared trust boundary, design
  * 09 §4) and could read them. The mask keeps a `file:` prefix so BOTH sides'
- * spec classifiers (main `isMaterializeSpec` / client `isPathSpec`) still
- * classify the value as materialize and the name-based diff matching
+ * spec classifiers — this module and the client `plugin-diff.ts`, both judging
+ * with the shared wire `isMaterializedValue` ruler (design 21 decision 18) —
+ * still classify the value as materialize and the name-based diff matching
  * (plugin-diff.ts §6) keeps working unchanged.
  */
 export const MATERIALIZED_VALUE_MASK = PLUGIN_MATERIALIZED_VALUE_MASK
@@ -870,7 +864,7 @@ export const MATERIALIZED_VALUE_MASK = PLUGIN_MATERIALIZED_VALUE_MASK
 export function redactLocalPluginManifest(manifest: LocalPluginManifest): LocalPluginManifest {
   const dependencies: Record<string, string> = {}
   for (const [name, spec] of Object.entries(manifest.dependencies)) {
-    dependencies[name] = classifyDependencyValue(spec).kind === 'materialize' ? MATERIALIZED_VALUE_MASK : spec
+    dependencies[name] = isMaterializedValue(spec) ? MATERIALIZED_VALUE_MASK : spec
   }
   return { ...manifest, dependencies, rows: maskRowSpecs(manifest.rows, dependencies) }
 }
@@ -888,33 +882,29 @@ function maskRowSpecs(rows: readonly PluginRow[], masked: Record<string, string>
   })
 }
 
-/** Is this dependency spec a remote-local-path `file:` value? Case-
- *  insensitive, mirroring the gateway installed-route semantics (design 21
- *  §6.2: on a dsh-managed profile only `file:` forms can name machine-local
- *  paths — the write flows land registry or file: entries; link:/relative/
- *  absolute forms cannot reach a profile through `dsh plugin`). */
-export function isRemoteFileValue(spec: string): boolean {
-  return /^file:/i.test(spec)
-}
-
 /**
  * Project a REMOTE manifest for the renderer (design 21 §6.2/§6.4 readManifest
- * 投影统一掩码): dependency VALUES that are `file:` specs would
- * name remote-machine paths and must never leave the main process in a
- * renderer-bound IPC response. Each is replaced with MATERIALIZED_VALUE_MASK
- * (file:-prefixed only — exactly the gateway `/chamber/plugins/installed`
- * semantics); the mask keeps the `file:` prefix so both sides' spec
- * classifiers still classify the value as materialize and the name-based diff
- * matching (plugin-diff.ts §6) keeps working unchanged. Names, bundles,
- * profileExists, error and the chamber block pass through untouched. The
- * main-process-internal manifest (verifyApplied's post-change read-back, the
- * undo journal snapshot, materialize resolution) is NEVER projected — only
- * the plugin_list IPC response is redacted (main.ts SSH_PLUGIN_LIST handler).
+ * 投影统一掩码): dependency VALUES that name a machine-local path would expose
+ * the remote machine's filesystem and must never leave the main process in a
+ * renderer-bound IPC response. The judge is the SHARED ruler
+ * `isMaterializedValue` (wire plugin-manifest.ts, design 21 decision 18):
+ * `file:`/`link:`/relative/absolute/home/Windows-drive values are all masked —
+ * "判据是共享 isMaterializedValue，不再只掩 file:" — exactly the gateway
+ * `/chamber/plugins/installed` projection semantics (plugins-installed.ts
+ * masks with the same function), so the two backends cannot disagree about
+ * which remote path value is safe to project. The mask keeps the `file:`
+ * prefix so both sides' spec classifiers still classify the value as
+ * materialize and the name-based diff matching (plugin-diff.ts §6) keeps
+ * working unchanged. Names, bundles, profileExists, error and the chamber
+ * block pass through untouched. The main-process-internal manifest
+ * (verifyApplied's post-change read-back, the undo journal snapshot,
+ * materialize resolution) is NEVER projected — only the plugin_list IPC
+ * response is redacted (main.ts SSH_PLUGIN_LIST handler).
  */
 export function redactRemotePluginManifest(manifest: RemotePluginManifest): RemotePluginManifest {
   const dependencies: Record<string, string> = {}
   for (const [name, spec] of Object.entries(manifest.dependencies)) {
-    dependencies[name] = isRemoteFileValue(spec) ? MATERIALIZED_VALUE_MASK : spec
+    dependencies[name] = isMaterializedValue(spec) ? MATERIALIZED_VALUE_MASK : spec
   }
   return { ...manifest, dependencies }
 }
@@ -1063,7 +1053,10 @@ export function resolveLocalMaterializeDirectory(
     return { ok: false, error: 'local plugin manifest is unreadable' }
   }
   const spec = manifest.dependencies[name]
-  if (typeof spec !== 'string' || classifyDependencyValue(spec).kind !== 'materialize') {
+  // Same shared ruler as classification/redaction (wire isMaterializedValue):
+  // the resolver can never accept a value the renderer projection would mask
+  // differently, or vice versa.
+  if (typeof spec !== 'string' || !isMaterializedValue(spec)) {
     return { ok: false, error: 'plugin is not a materialize dependency in the local manifest' }
   }
   let raw = spec
@@ -1150,10 +1143,11 @@ export async function remotePluginList(
         // (removal is judged by B₀ ∪ S only) and would print a false "protected by the
         // composition" hint. The reconcile batch is kept safe by the ssh transport
         // filter instead (UI `sshSyncableDependencies`).
-        // Mirror redactRemotePluginManifest's rule (below): a remote-local
-        // `file:` path is masked in `dependencies`, so it must be masked in the
-        // rows the renderer renders too.
-        maskSpec: spec => (isRemoteFileValue(spec) ? MATERIALIZED_VALUE_MASK : spec),
+        // Mirror redactRemotePluginManifest's rule (below): a machine-local
+        // path VALUE is masked in `dependencies` by the shared
+        // `isMaterializedValue` ruler, so it must be masked in the rows the
+        // renderer renders too (design 21 §6.4: the two channels agree).
+        maskSpec: spec => (isMaterializedValue(spec) ? MATERIALIZED_VALUE_MASK : spec),
       }),
       profileExists: true,
       error: parsed.error,
@@ -1631,21 +1625,91 @@ export function portableChamberHostPackageSeeds(
 }
 
 /**
- * The seeds that are actually SHIPPED here (design 09 §3.5): a real source dir
- * whose built entry exists. The `sourceDir !== ''` guard is load bearing, not
- * defensive noise — an unmapped registry row carries an empty `sourceDir`, and
- * `existsSync(join('', 'dist', 'index.js'))` resolves against the process CWD,
- * so a shell whose working directory happens to contain `dist/index.js` would
- * stage the CWD's OWN bytes as that package's seed and report success.
- * An empty dir means "not shipped here", never "the artifact
- * is somewhere else".
+ * Registry → desktop seed array. THE construction point for the two REMOTE
+ * consumers (the ssh seed list and the gateway upload), so the registry row,
+ * the flavor's sourceDir map and the portability rule are folded exactly once
+ * instead of being re-derived per consumer.
+ *
+ * Fail-loud (the local control-plane seed's semantics, aligned): a
+ * NON-localOnly registry row whose sourceDir key is missing (or empty) is a
+ * WIRING defect — both remote paths would silently skip that domain — so it
+ * THROWS with the domain name and the missing key. A `localOnly` row is
+ * exempt: it deliberately carries an empty sourceDir and never travels.
+ *
+ * "Not built" is NOT this function's call: the key must exist here, and only
+ * `builtChamberHostPackageSeeds` may skip a mapped package whose
+ * `dist/index.js` is absent (`existsSync`).
+ * @param sourceDirs - map from the registry PACKAGE NAME to the flavor's
+ *   package source directory (Electron: packaged dist/<pkg> vs repo tree;
+ *   Swift: --host-*-dir / workspace root / packaged layout).
+ * @param registry - the authoritative registry (injectable so the plain-node
+ *   suites can pin the missing-key case with a synthetic list).
+ * @returns one seed per registry row, in registry order.
+ */
+export function chamberHostPackageSeedsFrom(
+  sourceDirs: Readonly<Record<string, string | undefined>>,
+  registry: readonly ChamberHostPackageDescriptor[] = CHAMBER_HOST_PACKAGES,
+): ChamberHostPackageSeed[] {
+  return registry.map((descriptor): ChamberHostPackageSeed => {
+    if (descriptor.localOnly === true) {
+      return {
+        insertId: descriptor.insert.id,
+        packageName: descriptor.insert.name,
+        sourceDir: '',
+        label: descriptor.insert.id,
+        localOnly: true,
+      }
+    }
+    const sourceDir = sourceDirs[descriptor.insert.name]
+    if (sourceDir === undefined || sourceDir === '') {
+      throw new Error(
+        `chamber host 包 '${descriptor.insert.name}' (insert id '${descriptor.insert.id}', `
+        + `probe '${descriptor.probe.method}') 在注册表里非 localOnly，但源目录映射缺少 sourceDir 键 `
+        + `'${descriptor.insert.name}'：远端 seed 与 gateway 上传都会跳过该域。补上该键（值 = 该 flavor 的包源目录；`
+        + '包未构建时键仍须在，只允许 builtChamberHostPackageSeeds 按 dist/index.js 的 existsSync 结果跳过）',
+      )
+    }
+    return {
+      insertId: descriptor.insert.id,
+      packageName: descriptor.insert.name,
+      sourceDir,
+      label: descriptor.insert.id,
+    }
+  })
+}
+
+/**
+ * The seeds that are actually SHIPPED here (design 09 §3.5): a mapped source
+ * dir whose built entry exists.
+ *
+ * Fail-loud: a NON-localOnly seed with an empty `sourceDir` is a wiring defect
+ * (no mapping), never "not shipped here" — it THROWS, mirroring
+ * {@link chamberHostPackageSeedsFrom} and the local control-plane seed. The
+ * `existsSync` result is the ONLY skip this function may take: a package that
+ * is mapped but not built (the packaged desktop without the bundle) is
+ * legitimately absent. The old `sourceDir !== ''` guard was load bearing for a
+ * second reason: `existsSync(join('', 'dist', 'index.js'))` resolves against
+ * the process CWD, so a shell whose working directory happens to contain
+ * `dist/index.js` would stage the CWD's OWN bytes as that package's seed and
+ * report success — the empty-dir case must never reach `existsSync`.
+ * `localOnly` rows never travel, so they are not "built" for a remote target.
  * @param seeds - portable seeds (or any registry projection), input order.
  * @returns the shipped seeds, input order.
  */
 export function builtChamberHostPackageSeeds(
   seeds: readonly ChamberHostPackageSeed[],
 ): readonly ChamberHostPackageSeed[] {
-  return seeds.filter(seed => seed.sourceDir !== '' && existsSync(join(seed.sourceDir, 'dist', 'index.js')))
+  return seeds.filter(seed => {
+    if (seed.localOnly === true) return false
+    if (seed.sourceDir === '') {
+      throw new Error(
+        `chamber host 包 '${seed.packageName}' (insert id '${seed.insertId}') 非 localOnly 但 sourceDir 键为空：`
+        + '这是接线缺陷（源目录映射漏登记），不是「未构建」——未构建由 dist/index.js 的 existsSync 判定；'
+        + '远端 seed 与 gateway 上传绝不静默跳过该域',
+      )
+    }
+    return existsSync(join(seed.sourceDir, 'dist', 'index.js'))
+  })
 }
 
 type ChamberHostInsert = Pick<ChamberHostPackageSeed, 'insertId' | 'packageName'>
@@ -2192,21 +2256,35 @@ export function disposePluginSyncChildren(): Promise<void> {
   return pluginSyncDisposePromise
 }
 
-/** Run a bounded child without blocking Electron's main event loop. */
+/** Run a bounded child without blocking Electron's main event loop, through
+ *  the SHARED restricted-mutation executor (control-plane
+ *  plugin-mutation-executor.ts, design 21 §6.3). The desktop add-on is the
+ *  writer-safety supervision: RuntimeInstallerSupervisor is injected as the
+ *  executor's child seam, so the crash-safe writer ledger and the
+ *  process-group-quiescence proof stay intact while env discipline, output
+ *  bounds, timeout/kill and the failure vocabulary are single-sourced. */
 export async function runChild(
   command: string,
   args: string[],
-  options: { cwd: string; env: NodeJS.ProcessEnv; timeoutMs: number; writerHome?: string },
+  options: {
+    cwd: string
+    env: NodeJS.ProcessEnv
+    timeoutMs: number
+    writerHome?: string
+    /** Child execution seam (tests inject a probe; production uses the
+     *  supervisor adapter below). */
+    childExecutor?: MutationChildExecutor
+  },
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const env = Object.fromEntries(
     Object.entries(options.env).filter((entry): entry is [string, string] => entry[1] !== undefined),
   )
   let supervisionComplete = false
-  try {
-    const result = await localPluginChildSupervisor.run([command, ...args], {
-      cwd: options.cwd,
-      env,
-      timeoutMs: options.timeoutMs,
+  const supervisorExecutor: MutationChildExecutor = async execution => {
+    const result = await localPluginChildSupervisor.run([execution.command, ...execution.args], {
+      cwd: execution.cwd ?? options.cwd,
+      env: execution.env,
+      timeoutMs: execution.timeoutMs,
       onSpawn: options.writerHome === undefined
         ? undefined
         : pid => writeLocalPluginWriterRecord(options.writerHome!, pid),
@@ -2215,8 +2293,31 @@ export async function runChild(
     // process group have both been proven gone. Only then may crash evidence
     // be cleared, regardless of the command's exit status.
     supervisionComplete = true
-    if (result.status === 0) return { ok: true }
-    return { ok: false, error: result.stderr.trim() || `child exited ${result.status ?? 'unknown'}` }
+    if (result.status === 0) return { code: 0, signal: null, stdout: result.stdout, stderr: result.stderr }
+    // Preserve the desktop's existing operator-facing text exactly: the whole
+    // trimmed stderr, falling back to an honest exit note.
+    return {
+      code: result.status,
+      signal: null,
+      stdout: result.stdout,
+      stderr: result.stderr,
+      error: result.stderr.trim() || `child exited ${result.status ?? 'unknown'}`,
+    }
+  }
+  try {
+    const result = await runPluginMutation({
+      command,
+      argv: args,
+      env,
+      cwd: options.cwd,
+      timeoutMs: options.timeoutMs,
+      // Local main-process errors are operator-facing only (never rendered
+      // remotely): keep them verbatim instead of the gateway's URL/path
+      // redaction.
+      sanitize: text => text,
+      childExecutor: options.childExecutor ?? supervisorExecutor,
+    })
+    return result.ok ? { ok: true } : { ok: false, error: result.error }
   } catch (error) {
     // A residual/unknown writer is not an ordinary command failure. Preserve
     // the durable ledger in `finally` and reject so the caller's writer fence
@@ -2249,29 +2350,34 @@ function packagedResourcesPath(): string | null {
 }
 
 /** The app's bundled pnpm bin directory (packaged extraResources
- *  `<resources>/pnpm/bin`, dev `node_modules/pnpm/bin`), or null. */
+ *  `<resources>/pnpm/bin`, dev `node_modules/pnpm/bin`), or null — the dirname of
+ *  the first existing entry in the single bundled-entry candidate set
+ *  (pnpm-launcher.bundledPnpmEntryCandidates). */
 function bundledPnpmBinDir(): string | null {
-  const resourcesPath = packagedResourcesPath()
-  if (resourcesPath !== null) {
-    const packaged = join(resourcesPath, 'pnpm', 'bin')
-    if (existsSync(packaged)) return packaged
-  }
-  const dev = join(desktopModuleDir, 'node_modules', 'pnpm', 'bin')
-  return existsSync(dev) ? dev : null
+  const entry = firstExistingPnpmEntry(
+    bundledPnpmEntryCandidates({
+      platform: process.platform,
+      moduleDir: desktopModuleDir,
+      resourcesPath: packagedResourcesPath(),
+    }),
+    existsSync,
+  )
+  return entry === null ? null : dirname(entry)
 }
 
-/** The first existing pnpm.cjs entry (the bundled copy preferred), or null. */
+/** The first existing pnpm.cjs entry (bundled copy preferred, then the installer
+ *  roots), or null — the single candidate set + selection are pnpm-launcher's. */
 function resolvePnpmScriptEntry(): string | null {
-  for (const entry of pnpmScriptEntryCandidates({
-    platform: process.platform,
-    moduleDir: desktopModuleDir,
-    resourcesPath: packagedResourcesPath(),
-    env: process.env,
-    execPath: process.execPath,
-  })) {
-    if (existsSync(entry)) return entry
-  }
-  return null
+  return firstExistingPnpmEntry(
+    pnpmScriptEntryCandidates({
+      platform: process.platform,
+      moduleDir: desktopModuleDir,
+      resourcesPath: packagedResourcesPath(),
+      env: process.env,
+      execPath: process.execPath,
+    }),
+    existsSync,
+  )
 }
 
 async function packDirectory(localDir: string): Promise<{ bytes: Buffer } | null> {
@@ -2454,44 +2560,27 @@ function pathDelimiter(): string {
 /**
  * Resolve a directory holding a `pnpm` executable (for local `dsh plugin` and
  * `pnpm pack` under a desktop-launched packaged app, whose PATH is minimal —
- * `/usr/bin:/bin:/usr/sbin:/sbin` — and lacks pnpm). Scans PATH first, then
- * well-known install roots: nvm versions / volta / homebrew / the Linux
- * official-installer roots on POSIX, and on win32 the official
- * installer roots (`%LOCALAPPDATA%\pnpm` standalone, `%APPDATA%\npm` global
- * prefix, the node install dir) plus the app's own bundled pnpm bin dir
- * (design 21 §6.3 / design 23 D2). The win32 probe also accepts the bundled
- * script form `pnpm.cjs`. Returns null when no pnpm is found — the caller then fails
- * with an honest "pnpm not found".
+ * `/usr/bin:/bin:/usr/sbin:/sbin` — and lacks pnpm): PATH first, then the
+ * well-known install roots (design 21 §6.3 / design 23 D2). The candidate
+ * directories and the win32 file names are pnpm-launcher's single
+ * implementation (`pnpmBinDirCandidates` / `pnpmBinNames`, both pure); this
+ * function owns only the existence probes — including the POSIX nvm version
+ * directories, which are read here. Returns null when no pnpm is found — the
+ * caller then fails with an honest "pnpm not found".
  */
 export function resolvePnpmBinDir(): string | null {
-  const windows = process.platform === 'win32'
-  const names = windows ? ['pnpm.cmd', 'pnpm.exe', 'pnpm.cjs'] : ['pnpm']
-  const candidates: string[] = []
-  for (const dir of (process.env.PATH ?? '').split(pathDelimiter())) {
-    if (dir !== '') candidates.push(dir)
-  }
-  if (windows) {
-    candidates.push(...windowsPnpmSearchDirs({
-      env: process.env,
-      execPath: process.execPath,
-      bundledBinDir: bundledPnpmBinDir(),
-    }))
-  } else {
-    const nvmRoot = join(homedir(), '.nvm', 'versions', 'node')
-    if (existsSync(nvmRoot)) {
-      for (const version of readdirSync(nvmRoot)) candidates.push(join(nvmRoot, version, 'bin'))
-    }
-    candidates.push(
-      join(homedir(), '.volta', 'bin'),
-      join(homedir(), '.local', 'share', 'pnpm'),
-      join(homedir(), '.local', 'bin'),
-      '/opt/homebrew/bin',
-      '/usr/local/bin',
-      '/usr/bin',
-    )
-  }
+  const nvmRoot = join(homedir(), '.nvm', 'versions', 'node')
+  const candidates = pnpmBinDirCandidates({
+    platform: process.platform,
+    pathEntries: (process.env.PATH ?? '').split(pathDelimiter()),
+    env: process.env,
+    execPath: process.execPath,
+    bundledBinDir: bundledPnpmBinDir(),
+    nvmVersionDirs: process.platform !== 'win32' && existsSync(nvmRoot) ? readdirSync(nvmRoot) : [],
+    homedir: homedir(),
+  })
   for (const dir of candidates) {
-    for (const name of names) {
+    for (const name of pnpmBinNames(process.platform)) {
       if (existsSync(join(dir, name))) return dir
     }
   }
@@ -2536,7 +2625,13 @@ export async function runLocalDshPlugin(
   localDshHome: string,
   action: 'add' | 'remove',
   spec: string,
-  options: { allowFileSpec?: boolean; protection?: PluginProtectionFacts } = {},
+  options: {
+    allowFileSpec?: boolean
+    protection?: PluginProtectionFacts
+    /** Child execution seam (tests inject an env probe; production uses
+     *  runChild's writer-safety supervisor adapter). */
+    childExecutor?: MutationChildExecutor
+  } = {},
 ): Promise<LocalPluginExecResult> {
   if (typeof spec !== 'string') return { ok: false, error: 'plugin spec must be a string' }
   const addOk = spec.length <= 4096 && (
@@ -2574,17 +2669,22 @@ export async function runLocalDshPlugin(
   const isElectron = process.versions.electron !== undefined
   const nodeArgs = isElectron ? ['--expose-internals', ...entryArgs] : entryArgs
   const pnpmBin = resolvePnpmBinDir()
-  const env: Record<string, string | undefined> = {
-    ...process.env,
-    DSH_HOME: localDshHome,
-    ...(isElectron ? { ELECTRON_RUN_AS_NODE: '1' } : {}),
-    ...(pnpmBin !== null ? { PATH: `${pnpmBin}${pathDelimiter()}${process.env.PATH ?? ''}` } : {}),
-  }
+  // Env discipline (design 21 §6.3, C-F12): the child receives ONLY the
+  // shared whitelist (PATH + proxy family, the canonical
+  // INSTALL_ENV_WHITELIST) plus explicit pins. Every credential carrier
+  // (NODE_AUTH_TOKEN, npm_config_*, NPM_*, DSH_GATEWAY_*) is dropped; HOME is
+  // deliberately NOT pinned, so pnpm falls back to the passwd home and keeps
+  // the same default store the local profile was provisioned against.
+  const pins: Record<string, string> = { DSH_HOME: localDshHome }
+  if (isElectron) pins.ELECTRON_RUN_AS_NODE = '1'
+  if (pnpmBin !== null) pins.PATH = `${pnpmBin}${pathDelimiter()}${process.env.PATH ?? ''}`
+  const env = scrubMutationEnv(process.env, pins, INSTALL_ENV_WHITELIST)
   const result = await runChild(process.execPath, [...nodeArgs, 'plugin', '--profile', 'web', action, spec], {
     cwd: dshWorkspace,
     env,
     timeoutMs: 120_000,
     writerHome: localDshHome,
+    ...(options.childExecutor === undefined ? {} : { childExecutor: options.childExecutor }),
   })
   return result.ok ? { ok: true } : { ok: false, error: result.error }
 }

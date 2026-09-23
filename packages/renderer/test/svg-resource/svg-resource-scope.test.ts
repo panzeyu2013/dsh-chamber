@@ -25,7 +25,7 @@
 import { beforeEach, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { fileURLToPath } from 'node:url'
+import { createRequire } from 'node:module'
 
 import {
   SVG_SCOPE_ATTRIBUTE,
@@ -35,7 +35,7 @@ import {
   rewriteUrlReferences,
   scopeSvgElement,
   urlReferenceIds,
-} from '../../src/svg-resource-scope.ts'
+} from '@dsh-chamber/dsh-chamber-client-core/svg-resource-scope'
 import { normalize, stripComments } from '../../../../scripts/dev/test-support/source-text.ts'
 
 // Module-level memory (rename map / preserved ids / scoped identity) is per realm, not per test.
@@ -1244,8 +1244,10 @@ test('dispose() removes the link load listeners and a reinstall watches its own 
 // to the url(#…) cases, and "no runtime import" is a static property.
 
 test('the scoper source stays framework-free and the rename face stays resource-only', () => {
+  // Resolved through the package's exports face (no path literal): the module
+  // moved to @dsh-chamber/dsh-chamber-client-core in R4 P3b.
   const source = normalize(stripComments(readFileSync(
-    fileURLToPath(new URL('../../src/svg-resource-scope.ts', import.meta.url)),
+    createRequire(import.meta.url).resolve('@dsh-chamber/dsh-chamber-client-core/svg-resource-scope'),
     'utf8',
   )))
   // The scoper runs before React mounts and takes its document surface by

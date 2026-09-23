@@ -41,7 +41,7 @@ import {
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 // Type-only: pulls the settings shell's SlotMap merge ('settings.section').
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
-// The page-owned restart→reload completion (design 18 §3.6 item 8, sidebar shared
+// The page-owned restart→reload completion (design 18 §3.6 item 8, client-core
 // face): a restarted source's client-plugin set only changes on a window boot, so
 // every restart-to-apply entry point arms the same completion.
 import {
@@ -50,12 +50,12 @@ import {
   armWindowReloadWhenServed,
   pollGatewayReady,
   waitForSourceServing,
-} from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
+} from '@dsh-chamber/dsh-chamber-client-core'
 import type {
   DesktopSshSurface, SshConfigDiscovery, SshConfigHost, SshInstanceSpec, SshLogEntry, SshStatusProjection,
 } from '../global.d.ts'
 import type { SettingsConnectionsKey } from '../locales.ts'
-import type { LocalWriterDiagnosisWire } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
+import type { LocalWriterDiagnosisWire } from '@dsh-chamber/dsh-chamber-client-core'
 import { writerNotice, writerReasonKey } from './writer-diagnosis.ts'
 import { ConnectionFormModal } from './ConnectionFormModal.tsx'
 import { PluginManageIcon16 } from './ConnectionAuthFields.tsx'
@@ -111,7 +111,7 @@ import {
   getRuntimeState,
   runtimeBlocksLocalStart,
   subscribeRuntimeState,
-} from '../../../../packages/renderer/src/runtime-management.ts'
+} from '@dsh-chamber/dsh-chamber-client-core/runtime-management'
 import css from './ConnectionsSection.module.css'
 
 /** Registration-side business face for the connections section. */

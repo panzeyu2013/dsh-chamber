@@ -5,9 +5,9 @@
  * helpers stay re-exported there so SidebarRoot keeps importing them from
  * ServerSection.tsx.
  */
-import { MANAGED_RUNTIME_TRANSIENT_STATES } from '../shared/managed-runtime.ts'
-import type { ChamberServerAggregate } from '../shared/aggregate-store.ts'
-import type { InstanceSnapshot } from '../shared/instance-api.ts'
+import { MANAGED_RUNTIME_TRANSIENT_STATES } from '@dsh-chamber/dsh-chamber-client-core/managed-runtime'
+import type { ChamberServerAggregate } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
+import type { InstanceSnapshot } from '@dsh-chamber/dsh-chamber-client-core/instance-api'
 import type { SidebarKey } from './locales.ts'
 
 /** Connection-status visual kind: dot colors plus the connecting spinner. */

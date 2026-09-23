@@ -33,7 +33,7 @@
  * 与 gateway 事实源的**同形**是刻意的：产出的快照直接喂 App 既有的 applySessionFacts
  * 管线，不需要第二条判定路径（同一份事实、同一套未读判定）。
  */
-import { isRecord } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
+import { isRecord } from '@dsh-chamber/dsh-chamber-client-core'
 import type {
   SessionFactsCompletedAtSource, SessionFactsRow, SessionFactsSnapshot, SessionFactsTurnEnd,
 } from './session-facts-source.ts'
@@ -403,10 +403,11 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
     for (const [sessionId, row] of rows) record[sessionId] = row
     return {
       // 观察者自带通道：verdict=ok 表示"这条通道可用"，与网关镜像的版本协商无关
-      // （出口判据正是"不依赖 gateway 版本"）。
+      // （出口判据正是"不依赖 gateway 版本"）。这里是 $events WebSocket 观察者，
+      // 没有网关镜像的 sse/poll 传输档——快照也不携带 mode（唯一消费 mode 的是
+      // session-facts-source 的 startDelivery，只读它自己 payload 的 mode）。
       verdict: ready ? 'ok' : 'degraded',
       degradation: ready ? null : 'unavailable',
-      mode: ready ? 'sse' : 'poll',
       hostState: ready ? 'ready' : 'unknown',
       serviceable: ready,
       stale: !ready,

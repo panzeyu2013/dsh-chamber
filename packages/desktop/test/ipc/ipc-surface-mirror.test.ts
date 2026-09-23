@@ -386,16 +386,10 @@ const connectionSave = readFileSync(join(ROOT, 'packages/desktop/connection-save
  *  electron-edges.ts) preserves the lockstep strength: the handle/send sets must still equal
  *  the preload invoke/on sets, handle spellings accept both main-side spellings, and the
  *  per-test text anchors stay anchored to the union rather than one file. */
-const MAIN_SIDE_FILES = [
-  'main.ts', 'shell-core.ts', 'electron-edges.ts',
-  // installIpcHandlers 的注册体分布在 shell-ipc-*.ts——channel 集合/唯一性断言的
-  // 读取面必须与注册面同步（否则集合静默缩小）。
-  'shell-ipc-settings.ts', 'shell-ipc-connections.ts', 'shell-ipc-plugins-ssh.ts',
-  'shell-ipc-plugins-gateway.ts', 'shell-ipc-plugins-local.ts', 'shell-ipc-open-in.ts',
-  'shell-ipc-update.ts', 'shell-ipc-runtime.ts',
-  // P0-6（并发抽取）：runtime state push 现定义于 runtime-startup-host.ts。
-  'runtime-startup-host.ts',
-]
+// R1（装配单源化）后 main 侧名单的唯一来源 = scripts/lib/main-side-files.mjs
+// （与 emit-bridge-manifest.mjs 的扫描面同一份；host-assembly.ts 已收进名单，
+// 集合不放宽：原 main.ts 断言逐条仍在，只是来源换成实现真正所在处）。
+import { MAIN_SIDE_FILES } from '../../scripts/main-side-files.mjs'
 const desktopMain = MAIN_SIDE_FILES
   .map(file => readFileSync(join(ROOT, 'packages/desktop', file), 'utf8'))
   .join('\n')
@@ -453,11 +447,11 @@ test('DesktopSshSurface matches the GOLDEN baseline — a method deleted from AL
 })
 
 test('RuntimeSurface matches the GOLDEN baseline across preload and renderer mirrors (L3 golden guard)', () => {
-  // The renderer's runtime-management.ts is the authoritative contract; the
-  // preload duplicates the interface (single-file build) and the renderer
-  // global.d.ts re-exports it. A method removed from ALL mirrors still fails
-  // against this golden.
-  const runtimeManagement = readFileSync(join(ROOT, 'packages/renderer/src/runtime-management.ts'), 'utf8')
+  // The client-core runtime-management module is the authoritative contract
+  // (R4 P3b moved it out of packages/renderer/src); the preload duplicates the
+  // interface (single-file build) and the renderer global.d.ts re-exports it.
+  // A method removed from ALL mirrors still fails against this golden.
+  const runtimeManagement = readFileSync(join(ROOT, 'packages/dsh-chamber-client-core/src/runtime-management.ts'), 'utf8')
   const golden = [
     'applyNow', 'check', 'cleanupVersion', 'clearFailure', 'install', 'onChanged',
     'recoverMetadata', 'resetBuiltin', 'restart', 'restorePreRollback', 'retryApply',
@@ -465,7 +459,7 @@ test('RuntimeSurface matches the GOLDEN baseline across preload and renderer mir
   ].sort()
   assert.deepEqual(interfaceMethodNames(preload, 'RuntimeSurface'), golden, 'preload RuntimeSurface drifted from the golden baseline')
   assert.deepEqual(interfaceMethodNames(runtimeManagement, 'RuntimeSurface'), golden, 'renderer runtime-management RuntimeSurface drifted from the golden baseline')
-  assert.match(renderer, /RuntimeSurface[\s\S]*?}\s*from '\.\/runtime-management\.ts'/, 'renderer global.d.ts must re-export the runtime surface')
+  assert.match(renderer, /RuntimeSurface[\s\S]*?}\s*from '@dsh-chamber\/dsh-chamber-client-core\/runtime-management'/, 'renderer global.d.ts must re-export the runtime surface from the client-core face')
 })
 
 test('main-owned connection transaction is wired through the preload without returning credentials', () => {
@@ -898,7 +892,12 @@ test('settings-connections re-exports the whole IPC face from the renderer (sing
   // re-export statement covers the critical names.
   const start = settings.indexOf('export type {')
   assert.ok(start !== -1, 'settings-connections must re-export the IPC face')
-  const exportBlock = settings.slice(start, settings.indexOf("} from '../../renderer/src/global.d.ts'", start))
+  // The terminator must be the renderer package's single declared face: a
+  // missing terminator would make slice() read to the file end and pass the
+  // name checks by accident, so the position is asserted, not assumed.
+  const exportEnd = settings.indexOf("} from '@dsh-chamber/renderer/global.d.ts'", start)
+  assert.ok(exportEnd !== -1, 'settings-connections must re-export the IPC face from @dsh-chamber/renderer/global.d.ts')
+  const exportBlock = settings.slice(start, exportEnd)
   for (const name of ['ConnectionCredentialMutations', 'DesktopSshSurface', 'SaveConnectionResult', 'SshInstanceSpec', 'SshStatusProjection', 'ChamberSettings', 'PluginApplyResult']) {
     assert.ok(exportBlock.includes(name), `settings-connections must re-export ${name}`)
   }

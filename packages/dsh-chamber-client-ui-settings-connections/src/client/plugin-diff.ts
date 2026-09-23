@@ -22,7 +22,14 @@
  * "materialized/consistent", never a phantom update.
  */
 
+import { hasXWildcard, isMaterializedValue } from '@dsh-chamber/dsh-chamber-client-core/plugin-manifest'
 import type { LocalPluginManifest, RemotePluginManifest } from '../global.d.ts'
+
+// The dependency-value grammars are THE single definition in the neutral wire
+// package (design 21 §3 readManifest / §6.2 掩码纪律), reached through
+// client-core's browser face because this package's dependency list is frozen
+// for this batch. Re-exported so this module's public surface is unchanged.
+export { hasXWildcard }
 
 /** Sync row kind (the actionable four + unsyncable + consistent). */
 export type PluginRowKind = 'missing' | 'update' | 'extra' | 'materialize' | 'unsyncable' | 'consistent'
@@ -63,21 +70,14 @@ const REGISTRY_SPEC = /^[~^]?[0-9A-Za-z][0-9A-Za-z._+-]*$/
  *  `v` prefix: `1.2.3` / `^1.2.3` / `~1.2.3` / `v1.2.3` / `^v1.2.3` / `~v1.2.3`). */
 const PINNED = /^[~^]?v?\d/
 
-/** Local-path spec forms that must be materialized (§4.6): file:/link: plus
- *  relative (`./`/`../` — aligned with the main process `isMaterializeSpec`,
- *  which requires `.{1,2}\/`), absolute (`/`), and home-relative (`~/`) paths.
- *  Note `~/` (tilde then slash) is a home path, while a bare `~1.2.3` is a
- *  tilde range; a bare `.foo` is NOT a path on either side (unsyncable). */
-function isPathSpec(spec: string): boolean {
-  // Scheme checks are case-insensitive to match the main process
-  // (plugin-sync isMaterializeSpec, /i) — a `FILE:`/`LINK:` value must
-  // classify as materialize on BOTH sides.
-  return /^file:/i.test(spec)
-    || /^link:/i.test(spec)
-    || /^\.{1,2}\//.test(spec)
-    || spec.startsWith('/')
-    || spec.startsWith('~/')
-}
+// Local-path classification = the shared mask ruler `isMaterializedValue`
+// (wire): file:/link:, relative (./ ../ — including bare . / .. and backslash
+// separators), absolute (/ \\ C:\) and home-relative (~ ~/x ~\x) values all
+// name a machine-local path. A bare `.foo` is NOT a path, and a bare `~1.2.3`
+// is a tilde RANGE, not a home path — both stay unsyncable. The rule is
+// deliberately the WIDER shared ruler (design 21 decision 18): the desktop
+// main converges onto the same function in R6 phase 2, so the UI can never
+// offer a materialize row for a value the backend masks/classifies differently.
 
 /** Human-readable reason for a refused spec (§7.2). */
 function unsyncableReason(spec: string): string {
@@ -93,20 +93,9 @@ type SpecClass =
   | { type: 'materialize' }
   | { type: 'unsyncable'; reason: string }
 
-/** True when the version VALUE contains a semver x-wildcard (`x`, `1.x`,
- *  `1.2.x`, with an optional `^`/`~` prefix) — mirror of the main-process
- *  gate (desktop plugin-sync `hasXWildcard`): an x-wildcard
- *  is a RANGE, and the authoritative apply path rejects the whole batch as
- *  unsyncable. The UI classifier must refuse it up front so a row is never
- *  offered as actionable while the main process would wholesale-reject it. */
-export function hasXWildcard(versionOrValue: string): boolean {
-  const bare = versionOrValue.replace(/^[\^~]/, '')
-  return /(^|\.)x(\.|$)/i.test(bare)
-}
-
 /** Classify a dependency spec VALUE into syncable / materialize / refused. */
 export function classifySpec(spec: string): SpecClass {
-  if (isPathSpec(spec)) return { type: 'materialize' }
+  if (isMaterializedValue(spec)) return { type: 'materialize' }
   if (REGISTRY_SPEC.test(spec)) {
     if (hasXWildcard(spec)) {
       return { type: 'unsyncable', reason: 'x-wildcard version is a range, not a locked version (use an exact version)' }
@@ -166,8 +155,10 @@ export function computePluginDiff(local: LocalPluginManifest, remote: RemotePlug
     }
 
     if (cls.type === 'materialize') {
-      // Name-based match: remote already holds a file: for this name → done.
-      const materialized = remoteSpec !== undefined && isPathSpec(remoteSpec)
+      // Name-based match: remote already holds a local-path spec for this name
+      // (every masking backend projects the shared mask, which keeps a `file:`
+      // prefix) → done.
+      const materialized = remoteSpec !== undefined && isMaterializedValue(remoteSpec)
       rows.push({
         name,
         kind: materialized ? 'consistent' : 'materialize',

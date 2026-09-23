@@ -43,13 +43,11 @@ test('serving gate: ready serves, idle is unavailable, a terminal phase fast-fai
   assert.equal(first.terminalSinceMs, 1000)
   assert.equal(
     decideServingGate({ phase: 'error', nowMs: 1000 + SERVING_TERMINAL_GRACE_MS - 1, terminalSinceMs: first.terminalSinceMs }).action,
-    'wait',
-  )
+    'wait')
   assert.equal(
     decideServingGate({ phase: 'error', nowMs: 1000 + SERVING_TERMINAL_GRACE_MS, terminalSinceMs: first.terminalSinceMs }).action,
     'unavailable',
-    'a persistent terminal phase must stop burning the boot budget',
-  )
+    'a persistent terminal phase must stop burning the boot budget')
   // 恢复：相位翻回 connecting 即清掉终态计时，绝不用旧终态判死。
   const recovered = decideServingGate({ phase: 'connecting', nowMs: 2000, terminalSinceMs: 1000 })
   assert.equal(recovered.action, 'wait')
@@ -59,8 +57,7 @@ test('serving gate: ready serves, idle is unavailable, a terminal phase fast-fai
   assert.equal(
     decideServingGate({ phase: 'degraded', nowMs: 100000, terminalSinceMs: 0 }).action,
     'wait',
-    'a reconnecting source must keep its chance to serve the graph',
-  )
+    'a reconnecting source must keep its chance to serve the graph')
   assert.equal(isTerminalUnreadyPhase('error'), true)
   // 托管运行时的终态与 sidebar 姊妹门（serving-gate.ts 的 TERMINAL_PHASES）同词汇：
   // 再等也不会服务，必须同样快判（否则网关卡死要烧满 60s）。
@@ -140,7 +137,7 @@ test('the deferred reclaim decision only takes never-settled, unhidden, unheld m
   assert.equal(due({ busy: true }), false, 'a displayed/pending view is never reclaimed')
   // 设置面板正在编辑的来源：拆壳 = 面板面消失（design 05 §5 的面板 hold）。
   assert.equal(due({ settingsTarget: true }), false,
-    'without this guard the settings panel is pinned on "starting this instance" (2026-12 review MAJOR)')
+    'without this guard the settings panel is pinned on "starting this instance" (review MAJOR)')
 })
 
 // ── 2. App 接线（源码文本契约） ─────────────────────────────────────────────

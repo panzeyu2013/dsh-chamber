@@ -5,21 +5,23 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  __resetViewPrefsForTests,
   clearSourceBookkeeping,
   flushScheduledActivityWrites,
   getViewPrefs,
-  loadViewPrefs,
-  saveViewPrefs,
   scheduleUpdatedOrderWrite,
   subscribeViewPrefs,
   updateViewPrefs,
-  VIEW_PREFS_ACTIVITY_DEBOUNCE_MS,
-  VIEW_PREFS_KEY,
   type ChamberSidebarViewPrefs,
   type StorageLike,
-} from '../../src/shared/view-prefs.ts'
-import { chamberBridge, type ChamberServerAggregate } from '../../src/shared/aggregate-store.ts'
+} from '@dsh-chamber/dsh-chamber-client-core/view-prefs'
+import {
+  __resetViewPrefsForTests,
+  loadViewPrefs,
+  saveViewPrefs,
+  VIEW_PREFS_ACTIVITY_DEBOUNCE_MS,
+  VIEW_PREFS_KEY,
+} from '../../../dsh-chamber-client-core/src/view-prefs.ts'
+import { chamberBridge, type ChamberServerAggregate } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
 import { server } from '../support/derive-fixtures.ts'
 
 /** Publish server fixtures into the shared bridge (defaults: local, connected, ready). */

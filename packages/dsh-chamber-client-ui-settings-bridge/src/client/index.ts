@@ -20,7 +20,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-slots'
 import {
   SETTINGS_SHELL_ENTRY_ID, SETTINGS_SHELL_SHADOW_PRIORITY,
   chamberBridge, isValidProducerSourceFingerprint,
-} from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
+} from '@dsh-chamber/dsh-chamber-client-core'
 import { SettingsShell } from './SettingsShell.tsx'
 import type { SettingsShellInjected } from './SettingsShell.tsx'
 import {
@@ -51,7 +51,7 @@ const CONNECTIONS_NS = 'dsh-chamber.settings.connections'
  * Shadow priority: the official SettingsRoot registers at the default 0; the
  * slot core's shadowing rule renders the LOWEST priority winner, so a lower
  * value replaces the official shell without touching its ledger entry. The
- * value is the documented RESERVED range (sidebar shared face
+ * value is the documented RESERVED range (client-core face
  * `settings-shell.ts`) — the chamber sidebar watchdog reports any registrant
  * that goes below it, because the shell is the only renderer of the
  * connections/general pages and of every per-source plugin settings section.

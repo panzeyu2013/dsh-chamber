@@ -27,12 +27,17 @@ import {
   type HealthResponse,
   type HostLogLine,
   type HostLogsResponse,
-} from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
+} from '@dsh-chamber/dsh-chamber-client-core'
 import { classifyGatewayReadFence } from './managed-restart.ts'
+import { errorMessage } from './error-text.ts'
 import type {
   GatewayPluginApplyIpcResult, GatewayPluginApplyInput, GatewayPluginMaterializeIpcResult, GatewayPluginSyncIpcResult, LocalPluginManifest, NpmSearchPackage, PluginApplyInput, PluginApplyResult, RemotePluginManifest,
   SshExecIpcResult, SshLocalPluginExecIpcResult, SshMaterializeResult, SshPluginUndoIpcResult, SshSeedHostGraphResult,
 } from '../global.d.ts'
+// The manifest projection model (dependencies + bundles) and the refusal-code
+// vocabulary are THE single definition in the neutral wire package, reached
+// through client-core's browser face (type-only: erased at build time).
+import type { PluginManifestModel, PluginProfileRefusalCode } from '@dsh-chamber/dsh-chamber-client-core/plugin-manifest'
 import type { GatewayTasksShape, PluginRowShape } from './plugin-model.ts'
 
 /** 统一错误形状（design 04 D1：{error, code?}）+ HTTP 状态 + 响应体 + 限流提示。 */
@@ -170,18 +175,21 @@ export interface ChamberSeedCacheProjection {
  *  §6.11.5 row projection; HTTP 404/500 map to the absent/corrupt codes, the
  *  §6.2 read/write fence's 409 maps to the retryable busy arm (see
  *  gatewayInstalled), every other refusal stays a loud ApiError.
+ *  The manifest half (dependencies + bundles + profileExists) and the refusal
+ *  codes come from the wire single source (`PluginManifestModel` /
+ *  `PluginProfileRefusalCode`, design 21 §3 readManifest); this module owns
+ *  only the HTTP-status mapping.
  *  `rows` is OPTIONAL on purpose: an in-place OLDER gateway answers without it
  *  (version skew, §6.11.7), and the dialog then falls back to the legacy
  *  dependencies filter + the "gateway is older" hint. */
 export type GatewayInstalledProjection =
-  | {
+  | ({
     ok: true
-    dependencies: Record<string, string>
-    bundles: string[]
+    /** Additive §6.11.5 row projection; absent on an OLDER gateway. */
     rows?: readonly PluginRowShape[]
     profileExists: true
-  }
-  | { ok: false; code: 'profile_absent' | 'profile_corrupt' }
+  } & PluginManifestModel)
+  | { ok: false; code: PluginProfileRefusalCode }
   /** The §6.2 读/写面共享栅栏: a plugin mutation held the
    *  managed-profile write lease, so the gateway withheld the projection with
    *  409 `runtime_busy` rather than publishing a torn one. NOT a read failure
@@ -380,4 +388,62 @@ export function gatewayPluginApply(id: string, input: GatewayPluginApplyInput): 
  *  intent for the next ready edge (false = accepted onto the executor queue). */
 export function gatewayPluginMaterialize(id: string): Promise<GatewayPluginMaterializeIpcResult> {
   return desktopSsh().gateway_plugin_materialize(id)
+}
+
+/** POST /chamber/plugins/undo (design 21 §3 undoJournal / §6.8 r2): the
+ *  gateway-side 撤销=恢复 verb — RESTORE the latest ok op's preImage pair.
+ *  Id-only by design (the durable journal picks the target under the
+ *  backend's single-flight fence); a non-2xx {error, code} refusal is
+ *  projected verbatim, never folded into an ok shape. */
+export type GatewayPluginUndoResult =
+  | { ok: true; opId: string }
+  | { ok: false; error: string; code: string | null }
+
+export async function gatewayPluginUndo(id: string): Promise<GatewayPluginUndoResult> {
+  try {
+    const body = await post<{ accepted?: unknown; opId?: unknown }>(`/api/i/gateway-${id}/chamber/plugins/undo`, {})
+    if (body?.accepted !== true || typeof body.opId !== 'string' || body.opId === '') {
+      return { ok: false, error: 'the gateway accepted the undo without an operation id', code: null }
+    }
+    return { ok: true, opId: body.opId }
+  } catch (error) {
+    const apiError = error as ApiError
+    return {
+      ok: false,
+      error: apiError?.body?.error ?? errorMessage(error),
+      code: apiError?.body?.code ?? null,
+    }
+  }
+}
+
+/** Terminal state of one gateway mutation op, as the renderer can see it
+ *  through GET /chamber/plugins/tasks. `timeout` means the op was accepted but
+ *  did not settle inside the bounded window — the caller must render the busy
+ *  state, never a success claim. */
+export type GatewayOpTerminal =
+  | { status: 'ok' | 'failed' | 'blocked'; error: string | null }
+  | { status: 'timeout' }
+
+/** Wait for one accepted op (202 opId) to reach a terminal state by polling
+ *  the SAME task projection the backend serves (1 s cadence, 120 s bound by
+ *  default — the main-process gateway-provider settle discipline). Injectable
+ *  sleep for the pure-node tests. */
+export async function waitForGatewayOpTerminal(
+  id: string,
+  opId: string,
+  deps: { pollMs?: number; timeoutMs?: number; sleep?: (ms: number) => Promise<void> } = {},
+): Promise<GatewayOpTerminal> {
+  const pollMs = deps.pollMs ?? 1000
+  const timeoutMs = deps.timeoutMs ?? 120_000
+  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>(resolve => { setTimeout(resolve, ms) }))
+  const deadline = Date.now() + timeoutMs
+  for (;;) {
+    const projection = await gatewayTasks(id)
+    const op = projection.tasks.find(candidate => candidate.id === opId)
+    if (op !== undefined && op.status !== 'pending') {
+      return { status: op.status, error: op.error ?? null }
+    }
+    if (Date.now() >= deadline) return { status: 'timeout' }
+    await sleep(pollMs)
+  }
 }

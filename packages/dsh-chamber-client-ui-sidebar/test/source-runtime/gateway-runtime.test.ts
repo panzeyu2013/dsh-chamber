@@ -1,6 +1,6 @@
 /**
  * Gateway runtime CORE tests (design 18 §3.6/§9.3; moved with the pure core
- * into the sidebar shared face — design 21 §5.2): the action error
+ * into the client-core face — design 21 §5.2): the action error
  * classification (409/400 pass-through vs classified 401/403/5xx/network),
  * the action gates, the post-202 settle poll and the versions/status
  * parsers. Pure node:test with injected fake fetch — no DOM.
@@ -12,18 +12,20 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  RemoteRuntimeApiError,
   fetchRemoteRuntimeStatus,
   fetchRemoteRuntimeVersions,
-  parseRemoteRuntimeStatus,
-  parseRemoteVersions,
   pollRemoteRuntimeUntilSettled,
   remoteRuntimeAction,
   remoteRuntimeActionGates,
   remoteRuntimeSetRegistry,
   resetRemoteRuntimeActivityOwners,
   type RemoteRuntimeStatus,
-} from '../../src/shared/gateway-runtime.ts'
+} from '@dsh-chamber/dsh-chamber-client-core'
+import {
+  RemoteRuntimeApiError,
+  parseRemoteRuntimeStatus,
+  parseRemoteVersions,
+} from '../../../dsh-chamber-client-core/src/gateway-runtime.ts'
 // Shared fixture (this suite carried the same one inline as `status()`):
 // scripts/dev/test-support/gateway-runtime-fixture.ts.
 import { remoteStatus } from '../../../../scripts/dev/test-support/gateway-runtime-fixture.ts'

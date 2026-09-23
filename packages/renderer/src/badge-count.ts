@@ -32,7 +32,7 @@
  * sessions rows): suppression reads only the `runningSubagents` row field, but
  * the sibling fields real rows carry (`running`, `completed`, `pending`) are
  * part of the shape so realistic row literals typecheck without casts.
- * Deliberately NOT imported from the sidebar shared module so this module
+ * Deliberately NOT imported from the client-core module so this module
  * keeps zero imports and stays runnable anywhere.
  */
 export interface BadgeSuppressionFacts {

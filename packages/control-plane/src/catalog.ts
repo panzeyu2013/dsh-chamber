@@ -43,9 +43,6 @@ import type {
 /** Persisted catalog file name under the state dir. */
 export const CATALOG_FILE = 'catalog.json'
 
-/** Backup file name (backup-first protocol, design 03 §2.1). */
-export const CATALOG_BACKUP_FILE = 'catalog.json.bak'
-
 /** Current catalog schema version. */
 export const CATALOG_SCHEMA_VERSION = 2
 

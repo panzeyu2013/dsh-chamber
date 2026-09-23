@@ -1,5 +1,5 @@
 /**
- * The shared error-text projections (sidebar shared face).
+ * The shared error-text projections (client-core face).
  *
  * These two primitives are intentionally different, and this file pins the
  * difference: errorMessage is the cheap verbatim projection (may be '' and may
@@ -10,7 +10,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { describeThrown, errorMessage } from '../../src/shared/error-text.ts'
+import { describeThrown, errorMessage } from '@dsh-chamber/dsh-chamber-client-core'
 
 /** An object whose message getter and both string coercions throw. */
 function hostileThrowingBoth(): unknown {

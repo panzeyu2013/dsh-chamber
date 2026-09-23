@@ -16,20 +16,23 @@
  *     rewrite) also lands here. The design 21 §6.2 read/write fence is
  *     enforced by the executor, which serializes the gateway's own writers
  *     behind the runtime-manager profile-write lease; the read route consults
- *     that fence before reading (routes.ts
- *     `pluginProfileWriteInFlight` → retryable 409 runtime_busy while a
- *     mutation is queued or running). This read module stays a pure
+ *     that fence before reading (routes.ts `probePluginProfileWriteFence`:
+ *     retryable 409 runtime_busy while a mutation is queued or running, and a
+ *     loud retryable 503 write_fence_unavailable when the probe itself fails —
+ *     the projection is never published unfenced). This read module stays a pure
  *     projection — it takes no lease and never blocks; the fence lives one
  *     layer up, at the route. A tear that still reaches here is therefore
  *     evidence of a writer OUTSIDE the gateway's fence (an operator-run
  *     `dsh plugin add` against the managed profile, or the managed dsh's own
  *     boot-time profile write during a spawn) and stays loud on purpose.
  *
- * Masking: dependency VALUES that are local-path `file:` specs would name
- * gateway-local paths and must never leave this read — each is replaced with
- * MATERIALIZED_VALUE_MASK. The mask keeps the `file:` prefix so both sides'
- * spec classifiers still classify the value as a materialize spec and the
- * name-based diff keeps working. Scope filtering (official/chamber/reserved
+ * Masking: dependency VALUES that are local paths (`file:`/`link:`/relative/
+ * absolute/`~`) would name gateway-local paths and must never leave this read —
+ * each is replaced with MATERIALIZED_VALUE_MASK by the shared mask ruler
+ * (`isMaterializedValue`, single source = @dsh-chamber/dsh-chamber-wire/
+ * plugin-manifest; design 21 §6.2/decision 18). The mask keeps the `file:`
+ * prefix so both sides' spec classifiers still classify the value as a
+ * materialize spec and the name-based diff keeps working. Scope filtering (official/chamber/reserved
  * domains) is deliberately NOT done here — the model layer owns it (design 21
  * §6.2/§6.7: the UI and the route are same-origin); the full masked map is
  * returned.
@@ -40,13 +43,20 @@ import {
   CHAMBER_HOST_PACKAGES,
   derivePluginRows,
   deriveProtectedSet,
-  PLUGIN_MATERIALIZED_VALUE_MASK,
-  isMaterializedValue,
   readInstalledVersion,
   resolveRuntimeFamily,
 } from '@dsh-chamber/control-plane'
-import { readStringArray } from '@dsh-chamber/control-plane'
 import type { PluginRow, ProtectedSet } from '@dsh-chamber/control-plane'
+// The manifest read algorithm + mask ruler: THE single definition in the
+// neutral wire package (design 21 §3 readManifest / §6.2 掩码纪律). This module
+// keeps only its byte read and the gateway-specific projection.
+import {
+  isMaterializedValue,
+  maskMaterializedDependencies,
+  parsePluginManifest,
+  PLUGIN_MATERIALIZED_VALUE_MASK,
+} from '@dsh-chamber/dsh-chamber-wire/plugin-manifest'
+import type { PluginProfileRefusalCode } from '@dsh-chamber/dsh-chamber-wire/plugin-manifest'
 import { readPrivateTextOrNull } from './private-read.ts'
 
 /** Managed dsh home directory name under the gateway stateDir (the runtime
@@ -63,11 +73,12 @@ export const INSTALLED_PROFILE_DIR = join('profiles', 'web')
 export const INSTALLED_MANIFEST_MAX_BYTES = 1024 * 1024
 
 /**
- * Mask replacing `file:` dependency VALUES in the read projection. Keeps the
+ * Mask replacing local-path dependency VALUES in the read projection. Keeps the
  * `file:` prefix so the value's materialize classification survives the
- * projection. Single source = control-plane `PLUGIN_MATERIALIZED_VALUE_MASK`
- * (desktop plugin-sync.ts re-exports the same constant);
- * chamber-installed.test.ts still pins the two exported literals together.
+ * projection. Single source = the wire package's
+ * `PLUGIN_MATERIALIZED_VALUE_MASK` (control-plane re-exports the same constant
+ * for the desktop facade; chamber-installed.test.ts pins the three faces
+ * together).
  */
 export const MATERIALIZED_VALUE_MASK = PLUGIN_MATERIALIZED_VALUE_MASK
 
@@ -75,16 +86,6 @@ export const MATERIALIZED_VALUE_MASK = PLUGIN_MATERIALIZED_VALUE_MASK
  *  the narrow questions that really mean `file:`). */
 export function isFileValue(spec: string): boolean {
   return /^file:/i.test(spec)
-}
-
-/**
- * Masking predicate: **the same ruler the role classifier uses** — `file:`/`link:`/
- * relative/absolute/`~` values all name a machine-local path. The mask keeps
- * the `file:` prefix, so the name-based diff and both spec classifiers
- * still classify the value as materialized.
- */
-function isMaskableValue(spec: string): boolean {
-  return isMaterializedValue(spec)
 }
 
 export type InstalledResult =
@@ -100,7 +101,7 @@ export type InstalledResult =
     rows: PluginRow[]
     profileExists: true
   }
-  | { ok: false; code: 'profile_absent' | 'profile_corrupt'; error?: string }
+  | { ok: false; code: PluginProfileRefusalCode; error?: string }
 
 /** Runtime facts the protected-set derivation needs (design 21 §6.11.1): the
  *  effective workspace path + its version, or null before the manager exists. */
@@ -167,27 +168,20 @@ export function createChamberInstalled(
         // torn read) → corrupt, never a silent empty list.
         return { ok: false, code: 'profile_corrupt', error: `managed profile manifest is present but unreadable: ${String(error)}` }
       }
-      let parsed: unknown
-      try {
-        parsed = JSON.parse(text)
-      } catch (error) {
-        return { ok: false, code: 'profile_corrupt', error: `managed profile manifest is not valid JSON: ${String(error)}` }
+      // The read algorithm — JSON fault classification, dependencies
+      // projection (string values only) and the dsh.profile.bundles walk — is
+      // the single definition in the wire package; this module keeps only its
+      // byte read above and the projection below.
+      const parsed = parsePluginManifest(text)
+      if (!parsed.ok) {
+        return parsed.fault === 'invalid-json'
+          ? { ok: false, code: 'profile_corrupt', error: `managed profile manifest is not valid JSON: ${parsed.detail}` }
+          : { ok: false, code: 'profile_corrupt', error: 'managed profile manifest is not a JSON object' }
       }
-      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-        return { ok: false, code: 'profile_corrupt', error: 'managed profile manifest is not a JSON object' }
-      }
-      const record = parsed as Record<string, unknown>
-      const dependencies: Record<string, string> = {}
-      const rawDeps = record.dependencies
-      if (rawDeps !== null && typeof rawDeps === 'object' && !Array.isArray(rawDeps)) {
-        for (const [name, spec] of Object.entries(rawDeps as Record<string, unknown>)) {
-          // String values only, kept raw — except file: values, which are
-          // masked (gateway-local paths never leave this module).
-          if (typeof spec !== 'string') continue
-          dependencies[name] = isMaskableValue(spec) ? MATERIALIZED_VALUE_MASK : spec
-        }
-      }
-      const bundles = readStringArray(record, ['dsh', 'profile', 'bundles'])
+      // Local-path values name gateway-local paths and never leave this module
+      // through either channel — the shared mask ruler (design 21 §6.2).
+      const dependencies = maskMaterializedDependencies(parsed.dependencies)
+      const bundles = parsed.bundles
       // The accessor resolves the runtime workspace, which THROWS on corrupt
       // override/pointer metadata (design 18). The read face must survive that:
       // a throwing projection would kill the §6.8 r1 recovery read with a
@@ -222,9 +216,9 @@ export function createChamberInstalled(
           }
         })(),
         // Same masking rule the `dependencies` projection above applies: a
-        // managed-profile `file:` value names a gateway-local path and must
-        // never reach the renderer through `rows` either (design 21 §6.2).
-        maskSpec: spec => (isMaskableValue(spec) ? MATERIALIZED_VALUE_MASK : spec),
+        // managed-profile local-path value must never reach the renderer
+        // through `rows` either (design 21 §6.2).
+        maskSpec: spec => (isMaterializedValue(spec) ? MATERIALIZED_VALUE_MASK : spec),
       })
       return { ok: true, dependencies, bundles, rows, profileExists: true }
     },

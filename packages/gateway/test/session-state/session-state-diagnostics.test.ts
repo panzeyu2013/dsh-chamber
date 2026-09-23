@@ -8,7 +8,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { PROTOCOL_VERSION } from '@dsh-chamber/control-plane'
+import { PROTOCOL_VERSION } from '../../../control-plane/src/session-state-protocol.ts'
 import {
   createChamberSessionState,
   type SessionStateObserverStatus,

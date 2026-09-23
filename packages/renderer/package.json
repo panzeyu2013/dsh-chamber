@@ -3,6 +3,10 @@
   "version": "0.3.2-beta.5",
   "private": true,
   "type": "module",
+  "exports": {
+    "./global.d.ts": "./src/global.d.ts",
+    "./package.json": "./package.json"
+  },
   "scripts": {
     "dev": "vite",
     "build": "node scripts/gen-typert-remotes.mjs && vite build && node scripts/gen-boot-manifest.mjs && node scripts/check-chunk-budgets.mjs && node scripts/verify-vendor-patch-applied.mjs",
@@ -11,6 +15,7 @@
     "test:win32": "node ./scripts/test.mjs --win32"
   },
   "dependencies": {
+    "@dsh-chamber/dsh-chamber-client-core": "workspace:^",
     "@dsh-chamber/dsh-chamber-client-ui-git": "workspace:^",
     "@dsh-chamber/dsh-chamber-client-ui-layout": "workspace:^",
     "@dsh-chamber/dsh-chamber-client-ui-open-in": "workspace:^",

@@ -4,7 +4,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { compareSemver } from '../../src/semver.ts'
+import { compareSemver } from '@dsh-chamber/dsh-chamber-client-core/runtime-management'
 
 test('core triples compare numerically, not lexically', () => {
   assert.equal(compareSemver('1.2.3', '1.2.3'), 0)

@@ -187,6 +187,13 @@ export class JsonStorePersistError extends Error {
   }
 }
 
+/** The backup leaf for a document path (`<file>.bak`; backup-first protocol,
+ *  design 03 §2.1). Single source for the derivation: the store, the catalog
+ *  tests and any future recovery reader all name the same leaf. */
+export function backupPathFor(filePath: string): string {
+  return `${filePath}.bak`
+}
+
 /**
  * Create a JSON document store.
  * @param options - {filePath, logger, initial, onLoadValidate, fileMode}.
@@ -213,7 +220,7 @@ export function createJsonStore({
   onLoadValidate,
   fileMode,
 }: JsonStoreOptions): JsonStore {
-  const backupPath = `${filePath}.bak`
+  const backupPath = backupPathFor(filePath)
   const warnSink = logger?.warn
   const warn = typeof warnSink === 'function' ? (message: string) => warnSink(message) : () => {}
 

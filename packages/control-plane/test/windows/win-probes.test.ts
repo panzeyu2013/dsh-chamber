@@ -28,29 +28,12 @@ import {
   classifyCimLivenessFromTableReads,
   hasWindowsResidualTree,
   parseCimProcessTable,
-  parseNetstatListeningPids,
   parseNetstatListeningRows,
-  parseTcpConnectionListenJson,
   queryWindowsProcessTable,
   treeKillWindows,
   windowsIdentity,
   windowsPortOwnedBy,
 } from '../../src/win-probes.ts'
-
-test('parseNetstatListeningPids extracts LISTENING pids for the exact port', () => {
-  const sample = [
-    'Active Connections',
-    '  Proto  Local Address          Foreign Address        State           PID',
-    '  TCP    127.0.0.1:17510        0.0.0.0:0              LISTENING       9021',
-    '  TCP    [::1]:17510             [::]:0                 LISTENING       9021',
-    '  TCP    127.0.0.1:5354         0.0.0.0:0              LISTENING       1000',
-    '  TCP    0.0.0.0:135            0.0.0.0:0              LISTENING       888',
-    '  UDP    127.0.0.1:17510        *:*                                    777',
-  ].join('\r\n')
-  assert.deepEqual(parseNetstatListeningPids(sample, 17510), [9021])
-  assert.deepEqual(parseNetstatListeningPids(sample, 135), [888])
-  assert.deepEqual(parseNetstatListeningPids(sample, 9999), [])
-})
 
 test('parseNetstatListeningRows is case-insensitive on proto and state and drops junk pids', () => {
   const sample = [
@@ -64,35 +47,6 @@ test('parseNetstatListeningRows is case-insensitive on proto and state and drops
     { port: 17510, pid: 9021 },
     { port: 5354, pid: 1000 },
   ])
-  assert.deepEqual(parseNetstatListeningPids(sample, 17510), [9021])
-})
-
-test('parseTcpConnectionListenJson reads LocalPort/OwningProcess rows (array, single object, numeric strings)', () => {
-  assert.deepEqual(parseTcpConnectionListenJson(JSON.stringify([
-    { LocalPort: 17510, OwningProcess: 9021 },
-    { LocalPort: 5354, OwningProcess: '1000' },
-  ])), [
-    { port: 17510, pid: 9021 },
-    { port: 5354, pid: 1000 },
-  ])
-  // A single listener still serializes as a bare object, not an array.
-  assert.deepEqual(
-    parseTcpConnectionListenJson(JSON.stringify({ LocalPort: '17510', OwningProcess: 9021 })),
-    [{ port: 17510, pid: 9021 }],
-  )
-})
-
-test('parseTcpConnectionListenJson drops junk rows and unparseable documents', () => {
-  assert.deepEqual(parseTcpConnectionListenJson('not json'), [])
-  assert.deepEqual(parseTcpConnectionListenJson(''), [])
-  assert.deepEqual(parseTcpConnectionListenJson(JSON.stringify([
-    { LocalPort: 17510 },
-    { OwningProcess: 9021 },
-    { LocalPort: 0, OwningProcess: 4 },
-    { LocalPort: 70000, OwningProcess: 4 },
-    { LocalPort: 17510, OwningProcess: 0 },
-    { LocalPort: 17510, OwningProcess: 9021 },
-  ])), [{ port: 17510, pid: 9021 }])
 })
 
 test('classifyCimLiveness turns a CIM row into alive / dead / unknown (S5)', () => {

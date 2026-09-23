@@ -12,13 +12,11 @@ import {
   chmodSync,
   chownSync,
   closeSync,
-  constants,
   existsSync,
   linkSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
-  openSync,
   readdirSync,
   readFileSync,
   rmSync,
@@ -32,8 +30,9 @@ import { join } from 'node:path'
 import {
   CONTROL_LOG_DIR, CONTROL_LOG_FILE, DEFAULT_CONTROL_LOG_FILES, DEFAULT_CONTROL_LOG_MAX_BYTES,
   IDENTITY_CHECK_EVERY, MIN_CONTROL_LOG_FILES, createControlLogSink, formatControlLogLine,
-  verifyOpenedLeafIdentity, withControlLogFile,
+ withControlLogFile,
 } from '../src/log-file.ts'
+import { openPrivateAppendNoFollow } from '../src/private-file.ts'
 
 const tempDir = (): string => mkdtempSync(join(tmpdir(), 'cp-log-'))
 
@@ -44,7 +43,7 @@ test('logger 包装：原样转发给底层 sink 并落盘 JSONL', () => {
     log: (...args: unknown[]) => { forwarded.push(`log:${String(args[0])}`) },
     warn: (...args: unknown[]) => { forwarded.push(`warn:${String(args[0])}`) },
     error: (...args: unknown[]) => { forwarded.push(`error:${String(args[0])}`) },
-  }, stateDir, { now: () => new Date('2026-12-01T00:00:00.000Z') })
+  }, stateDir, { now: () => new Date('2026-09-01T00:00:00.000Z') })
   logger.log('WebSocket stream 7 closed (heartbeat lost after 1 unanswered ping(s), 30123ms)')
   logger.warn('warned')
   logger.error(new Error('boom'))
@@ -52,7 +51,7 @@ test('logger 包装：原样转发给底层 sink 并落盘 JSONL', () => {
   const lines = readFileSync(join(stateDir, CONTROL_LOG_DIR, CONTROL_LOG_FILE), 'utf8')
     .trim().split('\n').map(line => JSON.parse(line))
   assert.equal(lines.length, 3)
-  assert.equal(lines[0].ts, '2026-12-01T00:00:00.000Z')
+  assert.equal(lines[0].ts, '2026-09-01T00:00:00.000Z')
   assert.equal(lines[0].level, 'log')
   assert.match(lines[0].line, /closed \(heartbeat lost after 1 unanswered ping\(s\), 30123ms\)/)
   assert.equal(lines[2].level, 'error')
@@ -68,7 +67,7 @@ test('按字节轮转：超过上限后当前文件重置，旧内容进 .1', ()
   const stateDir = tempDir()
   const sink = createControlLogSink({ stateDir, maxBytes: 200, files: 3 })
   const write = (index: number): void => {
-    sink.write({ ts: '2026-12-01T00:00:00.000Z', level: 'log', line: `line-${String(index)}-${'x'.repeat(60)}` })
+    sink.write({ ts: '2026-09-01T00:00:00.000Z', level: 'log', line: `line-${String(index)}-${'x'.repeat(60)}` })
   }
   for (let index = 0; index < 8; index += 1) write(index)
   const ring = (suffix: string): string =>
@@ -409,24 +408,23 @@ test('stateDir 下的 logs 目录被创建（与 host-logs 并列，不互相干
   rmSync(stateDir, { recursive: true, force: true })
 })
 
-test('win32 回退身份复验：符号链接叶子与换文件被拒绝，真实叶子通过（C2）', () => {
-  // win32 无 O_NOFOLLOW：open 后必须按 (dev, ino) 复验 path 仍是刚打开的叶子，
-  // 否则 logs/control-plane.log 被换成链接时会跟随写入并对目标 fchmod 0600。
+test('win32 回退身份复验的单一源：openPrivateAppendNoFollow 拒绝符号链接叶子，真实叶子通过（C2）', () => {
+  // win32 无 O_NOFOLLOW：单一源在 open 之后按 (dev, ino) 复验 path 仍是刚打开的叶子，
+  // （openPrivateAppendNoFollow 的 verifyPathIdentity），否则 control-plane.log 被换成
+ // 链接时会跟随写入并对目标 fchmod 0600。POSIX 上 O_NOFOLLOW 在 open 处就拒绝同
+ // 一攻击——两种平台都不得写进链接目标。
   const stateDir = tempDir()
   const real = join(stateDir, 'real.log')
   writeFileSync(real, 'x' + String.fromCharCode(10))
-  const fd = openSync(real, constants.O_WRONLY | constants.O_APPEND)
-  try {
-    verifyOpenedLeafIdentity(real, fd)
     const link = join(stateDir, 'link.log')
     symlinkSync(real, link)
-    assert.throws(() => verifyOpenedLeafIdentity(link, fd), /symbolic link/)
-    const other = join(stateDir, 'other.log')
-    writeFileSync(other, 'y' + String.fromCharCode(10))
-    assert.throws(() => verifyOpenedLeafIdentity(other, fd), /changed while being opened/)
+  try {
+ const opened = openPrivateAppendNoFollow(real, { create: true, verifyPathIdentity: true })
+ assert.equal(opened.size, 2)
+ closeSync(opened.fd)
+ assert.throws(() => openPrivateAppendNoFollow(link, { create: true, verifyPathIdentity: true }))
   } finally {
-    closeSync(fd)
-    rmSync(stateDir, { recursive: true, force: true })
+  rmSync(stateDir, { recursive: true, force: true })
   }
 })
 

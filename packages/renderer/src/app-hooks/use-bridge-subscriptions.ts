@@ -48,7 +48,7 @@ import {
   type SessionArchiveLedger,
   type SessionEchoLedger,
   type WorkspaceEchoLedger,
-} from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
+} from '@dsh-chamber/dsh-chamber-client-core'
 
 /** 会话列表刷新合并窗（唯一消费者在本 hook）。 */
 const SESSION_LIST_REFRESH_COALESCE_MS = 5_000
@@ -454,7 +454,7 @@ export function useBridgeSubscriptions(deps: BridgeSubscriptionsDeps): void {
   }, [updateWorkspaceEcho])
   /**
    * 会话创建回声的记账端：唯一出口
-   * （sidebar shared/session-mutations.ts）在 wire 成功后发布宿主会话 id，这里
+   * （client-core/session-mutations.ts）在 wire 成功后发布宿主会话 id，这里
    * 把它记入渲染端账本。与会话打开意图同栅栏（活跃来源 + 生命周期捕获），投影的
    * 唯一写者仍是 App。
    * 成员位解析（best-effort，全部来自 App 手里的权威聚合）：

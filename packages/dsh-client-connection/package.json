@@ -11,8 +11,6 @@
     "directory": "packages/client/connection"
   },
   "type": "module",
-  "main": "lib/index.js",
-  "types": "lib/types/index.d.ts",
   "exports": {
     ".": {
       "types": "./lib/types/index.d.ts",
@@ -22,7 +20,6 @@
       "types": "./lib/types/client/index.d.ts",
       "default": "./lib/client.js"
     },
-    "./src/*": "./src/*",
     "./package.json": "./package.json"
   },
   "dsh": {
@@ -38,11 +35,6 @@
     "@deepseek-ai/schemastery": "workspace:^",
     "zod": "^4.4.3"
   },
-  "files": [
-    "lib/index.js",
-    "lib/client.js",
-    "lib/types/**/*.d.ts"
-  ],
   "peerDependencies": {
     "@deepseek-ai/cordis": "workspace:^"
   },

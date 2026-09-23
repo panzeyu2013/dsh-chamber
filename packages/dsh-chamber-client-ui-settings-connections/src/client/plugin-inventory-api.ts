@@ -15,7 +15,7 @@
  *
  * The transport byte (URL join + client-request envelope + POST +
  * body collection, bounded unary 30s) rides the shared kernel postUnary
- * (`@dsh-chamber/dsh-chamber-client-ui-sidebar/shared`, wire-common.ts) — the SAME
+ * (`@dsh-chamber/dsh-chamber-client-core`, wire-common.ts) — the SAME
  * source copy the renderer bundles; the envelope/server-response
  * classification ('plugin-inventory:' validation + snapshot ok-value shaping)
  * stays local, while the wrapWireError fold + 503 instance_unavailable
@@ -32,7 +32,7 @@
 import {
   isRecord, postUnary, throwIfInstanceUnavailable, wrapWireError,
   type UnaryPostOutcome,
-} from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
+} from '@dsh-chamber/dsh-chamber-client-core'
 
 /** Lifecycle state of an entry's root Fiber, or null when it has no live root Fiber. */
 export type PluginFiberPhase = 'pending' | 'loading' | 'active' | 'failed' | 'unloading' | null

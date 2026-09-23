@@ -11,8 +11,9 @@
  *
  * CLI: --port (default 17500 — unified with the cli serve default via
  * DEFAULT_CONTROL_PLANE_PORT), --bind (default 127.0.0.1), --state-dir
- * (default ~/.dsh-chamber / $DSH_CHAMBER_STATE), --dsh-path (optional
- * dshWorkspacePath override), --help.
+ * (resolveStateRoot: explicit > $DSH_CHAMBER_STATE > ~/.dsh-chamber), --dsh-path
+ * (optional dshWorkspacePath override), --help. A live state-root writer fails
+ * boot with `state_root_locked` (exit 1, no stack).
  *
  * Exit codes: 0 clean shutdown (SIGTERM) / --help, 1 startup failure,
  * 2 configuration error, 130 SIGINT.
@@ -24,6 +25,8 @@ import {
   DEFAULT_CONTROL_PLANE_PORT,
   DEFAULT_STATE_DIR,
   defaultDshWorkspacePath,
+  resolveStateRoot,
+  StateRootLeaseError,
 } from './index.ts'
 import type { Logger } from './types.ts'
 
@@ -42,8 +45,10 @@ Usage:
 Options:
   --port N          control-plane HTTP port (default ${DEFAULT_PORT})
   --bind ADDR       listen address (default ${DEFAULT_BIND})
-  --state-dir DIR   control-plane state root
-                    (default $DSH_CHAMBER_STATE or ${DEFAULT_STATE_DIR})
+  --state-dir DIR   control-plane state root (--state-dir > $DSH_CHAMBER_STATE >
+                    ${DEFAULT_STATE_DIR}); one state root has exactly ONE writer —
+                    a live holder on the same root fails boot (state_root_locked),
+                    so pass this or DSH_CHAMBER_STATE to move it
   --dsh-path PATH   dsh workspace path override
                     (default $DSH_CHAMBER_DSH_PATH or <repo>/ref-dsh)
   -h, --help        show this help
@@ -166,20 +171,33 @@ async function main(): Promise<number | null> {
     }
   }
 
-  const stateDir = args.stateDir ?? process.env.DSH_CHAMBER_STATE ?? DEFAULT_STATE_DIR
+  const stateDir = resolveStateRoot({ explicit: args.stateDir })
   const dshWorkspacePath = args.dshPath ?? process.env.DSH_CHAMBER_DSH_PATH ?? defaultDshWorkspacePath()
 
   logger.log(`boot: state dir ${stateDir}`)
   logger.log(`boot: dsh workspace ${dshWorkspacePath}`)
   logger.log(`boot: bind ${args.bind}:${args.port}`)
 
-  const plane = createControlPlane({
-    logger,
-    port: args.port,
-    host: args.bind,
-    stateDir,
-    dshWorkspacePath,
-  })
+  let plane: ReturnType<typeof createControlPlane>
+  try {
+    plane = createControlPlane({
+      logger,
+      port: args.port,
+      host: args.bind,
+      stateDir,
+      dshWorkspacePath,
+    })
+  } catch (error) {
+    // A live writer on this state root is a startup failure (exit 1), never a
+    // configuration error: the message already carries the holder pid/flavor and
+    // the explicit escape hatch, but the stderr line must start with the
+    // machine-readable code. Never print a stack here.
+    if (error instanceof StateRootLeaseError) {
+      logger.error(`${error.code}: ${error.message}`)
+      return 1
+    }
+    throw error
+  }
 
   let exiting = false
   async function shutdown(signal: string, code: number): Promise<void> {

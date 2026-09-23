@@ -166,14 +166,19 @@ test('committed settings, registry and held-resume pushes use the non-throwing s
   // pushSettingsChanged, the held-resume push and the updater state push live in
   // shell-core.installIpcHandlers (their send leaves go through HostEdges rendererPush with the
   // non-throwing attemptCommittedRegistryPush wrapper); the assertions read shell-core.ts. The
-  // remaining push anchors (instances / status) still live in main.ts.
+  // remaining push anchors (instances / status) now live in the SINGLE shared assembly
+  // (host-assembly.ts) consumed by both flavors — the assertion reads that source of truth,
+  // still requiring the window-liveness gate, the race re-check inside the closure and the
+  // non-throwing boundary.
   const core = readFileSync(new URL('../../shell-core.ts', import.meta.url), 'utf8')
     + readFileSync(new URL('../../shell-ipc-update.ts', import.meta.url), 'utf8')
-  const main = readFileSync(new URL('../../main.ts', import.meta.url), 'utf8')
+  const assembly = readFileSync(new URL('../../host-assembly.ts', import.meta.url), 'utf8')
   assert.match(core, /function pushSettingsChanged\(\): void \{[\s\S]*?attemptCommittedRegistryPush\(\(\) => \{/)
   assert.match(core, /function pushHeldSystemResume[\s\S]*?attemptCommittedRegistryPush\(\(\) => \{/)
-  assert.match(main, /IPC_CHANNELS\.SSH_INSTANCES_CHANGED[\s\S]*?return projectedSaved;/)
-  assert.match(main, /const statusWindow = mainWindow;[\s\S]*?attemptCommittedRegistryPush\(\(\) => \{[\s\S]*?IPC_CHANNELS\.SSH_STATUS_CHANGED/)
+  assert.match(assembly, /IPC_CHANNELS\.SSH_INSTANCES_CHANGED[\s\S]*?return projectedSaved;/)
+  assert.match(assembly, /if \(deps\.edges\.mainWindowAlive\(\)\) \{[\s\S]*?attemptCommittedRegistryPush\(\(\) => \{[\s\S]*?IPC_CHANNELS\.SSH_STATUS_CHANGED/)
+  assert.match(assembly, /if \(!deps\.edges\.mainWindowAlive\(\)\) \{\s*throw new Error\('status renderer changed before push'\)/,
+    'the status push must re-check window liveness inside the closure (replaced-window race)')
   assert.match(core, /updater\.subscribe\(\(updateState\) => \{[\s\S]*?attemptCommittedRegistryPush\(\(\) => \{[\s\S]*?IPC_CHANNELS\.UPDATE_STATE_CHANGED/)
 })
 

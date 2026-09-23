@@ -264,7 +264,7 @@ declare module '@deepseek-ai/dsh-client-ui-primitives' {
 }
 
 declare module '@deepseek-ai/dsh-client-ui-directory-picker-browse/client/DirectoryBrowser.tsx' {
-  import type { DirectoryListingRow } from '../shared/instance-api.ts'
+  import type { DirectoryListingRow } from '@dsh-chamber/dsh-chamber-client-core/instance-api'
   /**
    * The in-app workspace-directory browser (design 05 §4). Props mirror the
    * vendor component's contract; the browse calls ride the per-source unary

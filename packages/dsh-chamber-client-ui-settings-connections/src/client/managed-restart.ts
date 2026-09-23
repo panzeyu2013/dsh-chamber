@@ -24,7 +24,7 @@
  * The restart action itself is 202 + readiness polling: POST
  * /api/i/gateway-<id>/chamber/runtime/restart accepts with 202 only; a
  * 409/400 refusal carries {error, code}. The readiness poll (pollGatewayReady
- * in the sidebar shared face, gateway-runtime-poll.ts) resolves on success and
+ * in the client-core face, gateway-runtime-poll.ts) resolves on success and
  * throws English error strings on failure (restart failed / terminal connection
  * states / 401/403/404 fast fail) or on timeout ('restart accepted but the
  * gateway did not reach ready in time'). classifyRestartError only
@@ -32,8 +32,8 @@
  * accepted-but-recovering copy.
  *
  * The refusal projection (the 409 classifier plus the verbatim-error path) is
- * single-sourced on the sidebar shared face —
- * dsh-chamber-client-ui-sidebar/src/shared/runtime-refusal.ts; this module
+ * single-sourced on the client-core face —
+ * dsh-chamber-client-core/src/runtime-refusal.ts; this module
  * re-exports it for its own callers and keeps only the localized wording below.
  */
 
@@ -41,7 +41,7 @@ import {
   classifyRuntimeRefusal,
   serverRefusalText,
   type RuntimeRefusalKind,
-} from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
+} from '@dsh-chamber/dsh-chamber-client-core'
 
 // Re-exported under their original names: callers and tests import them from
 // this module, while the implementations live in the shared face.

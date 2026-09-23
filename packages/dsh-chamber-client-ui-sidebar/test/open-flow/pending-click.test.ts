@@ -9,12 +9,14 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  __resetPendingClickForTests,
   clearPendingClick,
-  DOUBLE_CLICK_WINDOW_MS,
   isClickInsidePendingRow,
   noteSessionRowClick,
-} from '../../src/shared/pending-click.ts'
+} from '@dsh-chamber/dsh-chamber-client-core/pending-click'
+import {
+  __resetPendingClickForTests,
+  DOUBLE_CLICK_WINDOW_MS,
+} from '../../../dsh-chamber-client-core/src/pending-click.ts'
 
 /** Reset the module slot, then record the first click on `srcA` at `at` (open verdict). */
 function firstClick(sessionId: string, at: number): boolean {

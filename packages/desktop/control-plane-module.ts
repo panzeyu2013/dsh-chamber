@@ -16,8 +16,7 @@
  *     verifyDshEndpoint / probeRemoteMethod, and re-exports the plugin
  *     spec/name whitelist family (plugin-spec.ts) to its own consumers;
  *   - plugin-sync.ts consumes the cordis insert primitives
- *     (renderCordisInserts / parseLoaderRows / hasExactInsert / fieldCount /
- *     insertConflict) for the remote cordis.patch.yml seed merge, the
+ *     (renderCordisInserts / hasExactInsert / insertConflict) for the remote cordis.patch.yml seed merge, the
  *     plugin-spec whitelist constants for its add/remove re-validation, and
  *     the host-package insert facts (HOST_GRAPH_INSERT / HOST_GIT_WORKTREE_INSERT
  *     / HOST_ARCHIVE_CLEANUP_INSERT from host-graph-seed.ts) its
@@ -91,6 +90,16 @@ const controlPlaneModule: typeof import('@dsh-chamber/control-plane') = await (i
 export const createControlPlane = controlPlaneModule.createControlPlane
 export const call = controlPlaneModule.call
 
+// State-root writer lease (R2; control-plane/src/state-root-lease.ts): the
+// desktop main and the Swift sidecar take the <userData> host-root lease
+// through this facade (host-root-lease.ts); the packaged sidecar's control
+// plane takes <userData>/state from the same module — one lease contract for
+// both roots, never a desktop-local reimplementation.
+export const acquireStateRootLease = controlPlaneModule.acquireStateRootLease
+export const StateRootLeaseError = controlPlaneModule.StateRootLeaseError
+/** Type face of the same class (a facade `const` re-export is value-only). */
+export type StateRootLeaseError = InstanceType<typeof controlPlaneModule.StateRootLeaseError>
+
 // RPC wire envelope primitives (rpc-envelope.ts) — consumed by ssh-provider.
 export const buildClientRequest = controlPlaneModule.buildClientRequest
 export const parseServerResponse = controlPlaneModule.parseServerResponse
@@ -110,9 +119,7 @@ export const buildLegacyHostProbePayload = controlPlaneModule.buildLegacyHostPro
 // Cordis loader insert primitives (cordis-inserts.ts) — consumed by
 // plugin-sync.
 export const renderCordisInserts = controlPlaneModule.renderCordisInserts
-export const parseLoaderRows = controlPlaneModule.parseLoaderRows
 export const hasExactInsert = controlPlaneModule.hasExactInsert
-export const fieldCount = controlPlaneModule.fieldCount
 export const insertConflict = controlPlaneModule.insertConflict
 
 // Chamber host-package insert facts (host-graph-seed.ts, design 09 module A /
@@ -124,11 +131,6 @@ export const HOST_GRAPH_INSERT = controlPlaneModule.HOST_GRAPH_INSERT
 export const HOST_GIT_WORKTREE_INSERT = controlPlaneModule.HOST_GIT_WORKTREE_INSERT
 export const HOST_ARCHIVE_CLEANUP_INSERT = controlPlaneModule.HOST_ARCHIVE_CLEANUP_INSERT
 export const HOST_OPEN_IN_INSERT = controlPlaneModule.HOST_OPEN_IN_INSERT
-// The canonical host-seed namespace + its fail-loud assertion — consumed by
-// plugin-sync's remote cordis.patch.yml merge, which must also recognize the
-// pre-rename names to fold them once.
-export const HOST_SEED_PACKAGE_PREFIX = controlPlaneModule.HOST_SEED_PACKAGE_PREFIX
-export const assertHostSeedInsertNaming = controlPlaneModule.assertHostSeedInsertNaming
 // The authoritative chamber host-package registry (name + insert id + liveness
 // probe): the desktop derives every chamber row/probe from it — never a
 // hand-maintained parallel list.
@@ -140,6 +142,16 @@ export const CHAMBER_HOST_PACKAGES = controlPlaneModule.CHAMBER_HOST_PACKAGES
 export const HOST_PACKAGE_SEED_FILES = controlPlaneModule.HOST_PACKAGE_SEED_FILES
 export const HOST_GRAPH_PATCH_FILENAME = controlPlaneModule.HOST_GRAPH_PATCH_FILENAME
 
+// Plugin-manifest read algorithm + materialize ruler (wire plugin-manifest.ts
+// is the single source, design 21 §6.2/decision 18; the control-plane index
+// re-exports them) — consumed by plugin-sync.ts's remote/local manifest reads,
+// masking and materialize resolution. Through THIS facade, the packaged app
+// reads the definitions inlined in dist/control-plane/index.js instead of a
+// bare `@dsh-chamber/dsh-chamber-wire` specifier (node_modules .ts sources are
+// not type-strippable at runtime).
+export const isMaterializedValue = controlPlaneModule.isMaterializedValue
+export const parsePluginManifest = controlPlaneModule.parsePluginManifest
+export const readManifestVersion = controlPlaneModule.readManifestVersion
 // Plugin spec/name whitelist family (no reserved-name deny predicate here;
 // `protected-plugins.ts` owns the judgement, design 21 §6.11)
 // (plugin-spec.ts, design 21 §6.2/§6.7 — the shared source for the desktop
@@ -161,23 +173,20 @@ export const WRITE_FILE_MAX_BYTES = controlPlaneModule.WRITE_FILE_MAX_BYTES
 export const decidePluginMutation = controlPlaneModule.decidePluginMutation
 export const derivePluginRows = controlPlaneModule.derivePluginRows
 export const deriveProtectedSet = controlPlaneModule.deriveProtectedSet
-export const familyNamesFromLockfileClosure = controlPlaneModule.familyNamesFromLockfileClosure
-export const familyNamesFromRuntimeTree = controlPlaneModule.familyNamesFromRuntimeTree
-export const isExactVersion = controlPlaneModule.isExactVersion
-export const isMaterializedValue = controlPlaneModule.isMaterializedValue
-export const officialScope = controlPlaneModule.officialScope
-export const OFFICIAL_SCOPE = controlPlaneModule.OFFICIAL_SCOPE
-export const CHAMBER_SCOPE = controlPlaneModule.CHAMBER_SCOPE
-export const PROFILE_BUNDLES_SNAPSHOT = controlPlaneModule.PROFILE_BUNDLES_SNAPSHOT
 export const PLUGIN_MATERIALIZED_VALUE_MASK = controlPlaneModule.PLUGIN_MATERIALIZED_VALUE_MASK
-export const protectedReason = controlPlaneModule.protectedReason
 export const readInstalledVersion = controlPlaneModule.readInstalledVersion
 export const registrySpecVersion = controlPlaneModule.registrySpecVersion
 export const resolveRuntimeFamily = controlPlaneModule.resolveRuntimeFamily
-export const sameGeneration = controlPlaneModule.sameGeneration
 export const verifyProfileFamilyConsistency = controlPlaneModule.verifyProfileFamilyConsistency
 export const describeFamilyFindings = controlPlaneModule.describeFamilyFindings
-export const suggestExactSpec = controlPlaneModule.suggestExactSpec
+
+// Restricted plugin-mutation child executor (plugin-mutation-executor.ts,
+// design 21 §6.3 — the single env/bounds/timeout/kill protocol shared with the
+// gateway). plugin-sync's local `dsh plugin` path consumes it through THIS
+// facade: packaged reads the definitions inlined in
+// dist/control-plane/index.js, dev/tests read the workspace source.
+export const runPluginMutation = controlPlaneModule.runPluginMutation
+export const scrubMutationEnv = controlPlaneModule.scrubMutationEnv
 
 // Owner-private file primitives (private-file.ts) — consumed by the
 // desktop main's credential mirrors (ssh-provider / gateway-provider /
@@ -217,43 +226,19 @@ export const SPKI_PIN_MISMATCH_CODE = controlPlaneModule.SPKI_PIN_MISMATCH_CODE
 export const spkiPinOfPeerCertificate = controlPlaneModule.spkiPinOfPeerCertificate
 export const attachSpkiPinVerifier = controlPlaneModule.attachSpkiPinVerifier
 
-// Session-state wire contract (control-plane session-state-protocol.ts) — ONE
-// source for the protocol version,
-// feature ids, descriptor classification, read-mark merge and turn/end
-// classification shared with the gateway watcher. The desktop session-facts
-// probe consumes it through this facade because the packaged desktop cannot
-// import a workspace package from node_modules (see the module header). The
-// re-exports below require packages/control-plane/src/index.ts to export the
-// module (the facade resolves `typeof import('@dsh-chamber/control-plane')` to
-// that package root).
-export const PROTOCOL_VERSION = controlPlaneModule.PROTOCOL_VERSION
-export const SESSION_STATE_PROTOCOL_VERSION = controlPlaneModule.SESSION_STATE_PROTOCOL_VERSION
-export const SESSION_STATE_FEATURES = controlPlaneModule.SESSION_STATE_FEATURES
-export const SESSION_STATE_BASE_FEATURES = controlPlaneModule.SESSION_STATE_BASE_FEATURES
-export const SESSION_STATE_DEGRADATION_CODES = controlPlaneModule.SESSION_STATE_DEGRADATION_CODES
-export const SESSION_STATE_PATH = controlPlaneModule.SESSION_STATE_PATH
-export const SESSION_STATE_STREAM_PATH = controlPlaneModule.SESSION_STATE_STREAM_PATH
-export const SESSION_STATE_READ_PATH = controlPlaneModule.SESSION_STATE_READ_PATH
-export const SESSION_STATE_READ_ALL_PATH = controlPlaneModule.SESSION_STATE_READ_ALL_PATH
-export const SESSION_STATE_ROUTES = controlPlaneModule.SESSION_STATE_ROUTES
-export const SESSION_STATE_READ_BODY_MAX_BYTES = controlPlaneModule.SESSION_STATE_READ_BODY_MAX_BYTES
-export const SESSION_STATE_CLIENT_ID_PATTERN = controlPlaneModule.SESSION_STATE_CLIENT_ID_PATTERN
-export const SESSION_STATE_SESSION_ID_MAX_CHARS = controlPlaneModule.SESSION_STATE_SESSION_ID_MAX_CHARS
-export const SESSION_STATE_PROBE_TIMEOUT_MS = controlPlaneModule.SESSION_STATE_PROBE_TIMEOUT_MS
-export const SESSION_STATE_HANDSHAKE_WINDOW_MS = controlPlaneModule.SESSION_STATE_HANDSHAKE_WINDOW_MS
-export const parseSessionStateDescriptor = controlPlaneModule.parseSessionStateDescriptor
-export const sessionStateFeatureSupport = controlPlaneModule.sessionStateFeatureSupport
-export const classifySessionStateProbe = controlPlaneModule.classifySessionStateProbe
-export const sessionStateNoteKey = controlPlaneModule.sessionStateNoteKey
-export const mergeReadMark = controlPlaneModule.mergeReadMark
-export const effectiveReadMark = controlPlaneModule.effectiveReadMark
-export const classifyTurnEnd = controlPlaneModule.classifyTurnEnd
 
 // Types ride the same single source; type-only exports are erased at build
 // time, so re-exporting from the workspace package costs nothing at runtime.
 export type {
   AuditTrailEvent,
   ChamberHostPackageDescriptor,
+  MutationChild,
+  MutationChildExecutor,
+  MutationChildOutcome,
+  MutationProcessStream,
+  MutationSpawnFn,
+  PluginMutationParams,
+  PluginMutationResult,
   ClientRequestEnvelope,
   CordisInsert,
   DecidePluginMutationInput,
@@ -266,6 +251,9 @@ export type {
   InsertConflictKind,
   ParsedInsertRow,
   ParsedVersion,
+  PluginManifestFault,
+  PluginManifestModel,
+  PluginManifestParseResult,
   PluginMutationDecision,
   PluginMutationOp,
   PluginRefusalCode,
@@ -301,4 +289,7 @@ export type {
   SessionTurnEndCause,
   SessionTurnEndDisposition,
   SessionTurnEndKind,
+  StateRootLease,
+  StateRootLeaseFlavor,
+  StateRootLeaseScope,
 } from '@dsh-chamber/control-plane'

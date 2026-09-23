@@ -42,12 +42,21 @@ test('dist/index.js carries the CURRENT probe-contract constant values (value-le
     ['REQUIRED_ACTIVATION_PROBES', REQUIRED_ACTIVATION_PROBES],
     ['HOST_DOMAIN_PROBE_NAMES', HOST_DOMAIN_PROBE_NAMES],
     ['PROBE_NAMES_WITHOUT_HOST_DOMAINS', PROBE_NAMES_WITHOUT_HOST_DOMAINS],
-    ['SETTINGS_FILE_MAX_BYTES', SETTINGS_FILE_MAX_BYTES],
     ['PROBE_TEXT_KEEP_TOKENS', PROBE_TEXT_KEEP_TOKENS],
   ]
   for (const [name, expected] of constCases) {
     assert.deepEqual(dist[name], expected, `${name} drifted in the committed dist — rebuild with \`pnpm run build:dsh-runtime\``)
   }
+  // SETTINGS_FILE_MAX_BYTES is deliberately NOT an entry face (the narrowed
+  // index exports only consumed symbols). Pin both facts a stale bundle would
+  // violate: the value the bundled source must carry, and the narrowed entry
+  // that no longer re-exposes it (a pre-narrowing bundle still would). Its
+  // runtime behaviour stays locked at the source level by
+  // test/activation/runtime-probes.test.ts ("settings/describe rides a per-call
+  // 16 MiB response cap").
+  assert.equal(SETTINGS_FILE_MAX_BYTES, 16 * 1024 * 1024, 'the shared settings cap stays 16 MiB')
+  assert.equal('SETTINGS_FILE_MAX_BYTES' in dist, false,
+    'the committed dist still re-exports the internal probe cap - rebuild with pnpm run build:dsh-runtime')
   // Behavioural marker: the identity probe name must be part of the closed
   // activation set (a stale pre-migration bundle carries session/list +
   // data.sessions instead).

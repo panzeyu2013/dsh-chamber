@@ -39,13 +39,13 @@
  *       provisioned under the same effective home (see ensurePrivateRunEnv /
  *       §6.3 ⑨) — a pinned HOME silently moves the store and pnpm 11 refuses
  *       every mutation against the provisioned profile;
- *   (4) spawn with bounded stdout/stderr capture (512 KiB tail default),
- *       process-group kill on timeout (SIGTERM → SIGKILL after 1 s),
- *       sanitized errors (URL userinfo/query capability tokens and named
- *       secrets redacted, absolute paths removed, byte-bounded — the
- *       dsh-runtime sanitizeInstallerOutput family) and the spawned child's
- *       pid durably journaled (markChildPid) so a gateway crash mid-mutation
- *       leaves a reapable record for the next boot's reconcile;
+ *   (4) spawn through the SHARED control-plane restricted-mutation executor
+ *       (plugin-mutation-executor.ts — the single implementation of the
+ *       bounded stdout/stderr capture, timeout TERM→KILL on the process
+ *       group and terminal-text vocabulary; design 21 §6.3), with the
+ *       gateway's own sanitizer and the spawned child's pid durably journaled
+ *       (markChildPid) so a gateway crash mid-mutation leaves a reapable
+ *       record for the next boot's reconcile;
  *   (5) post-mutation probe re-check (design 21 §6.3 pre/post double check):
  *       a successful mutation is re-verified before it is recorded ok — an
  *       instance that entered 'starting'/'restarting' mid-mutation fails the
@@ -57,8 +57,6 @@
  * waits for the worker; workerBusy() reports an in-flight mutation.
  */
 
-import { spawn as spawnCommand } from 'node:child_process'
-import type { SpawnOptions } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import {
@@ -70,7 +68,11 @@ import {
   verifyProfileFamilyConsistency,
   ensurePrivateDirectoryNoFollow,
   readPrivateFileNoFollow,
+  runPluginMutation,
+  scrubMutationEnv,
+  spawnMutationChild,
 } from '@dsh-chamber/control-plane'
+import type { MutationChild, MutationSpawnFn } from '@dsh-chamber/control-plane'
 import { INSTALL_ENV_WHITELIST, sanitizeInstallerOutput } from '@dsh-chamber/dsh-runtime'
 import { sanitizeRouteError } from './sanitize-route-error.ts'
 import { messageOf } from './util.ts'
@@ -82,14 +84,18 @@ import {
   MANAGED_DSH_HOME_DIR,
 } from './plugins-installed.ts'
 import { backupDirFor, thirdPartyRoot } from './plugins-journal.ts'
+import {
+  judgeUndo,
+  PROFILE_LOCKFILE_MAX_BYTES,
+  readUndoPreImage,
+  restoreUndoPreImage,
+} from './plugins-undo.ts'
 import { ensurePnpmOnPath, withPnpmOnPath } from './pnpm-entry.ts'
 import type { JournalLogger, JournalOp, JournalOpKind, JournalPending, JournalTerminalPatch, PluginsJournal } from './plugins-journal.ts'
 import type { FamilyVersions, PluginRefusalCode } from '@dsh-chamber/control-plane'
 
 /** Queue depth cap (design 21 §6.9: queue depth ≤ 8). */
 export const PLUGIN_QUEUE_CAP = 8
-/** Single-op timeout default (design 21 §6.9: 10 minutes). */
-export const MUTATION_TIMEOUT_DEFAULT_MS = 10 * 60 * 1000
 /** Execution-window wait bound (design 21 decision 6/7): a dequeued op
  * whose canRun() gate is closed polls for the window
  * to open for up to this long before it is marked blocked ('runtime busy;
@@ -98,15 +104,9 @@ export const MUTATION_TIMEOUT_DEFAULT_MS = 10 * 60 * 1000
 export const CAN_RUN_WAIT_MAX_MS = 120_000
 /** canRun() re-check cadence during the execution-window wait. */
 export const CAN_RUN_POLL_MS = 250
-/** Default bounded capture ceiling per stream (tail kept). */
-export const OUTPUT_CAPTURE_LIMIT_DEFAULT_BYTES = 512 * 1024
-/** Grace between SIGTERM and SIGKILL on timeout/dispose. */
+/** Grace between SIGTERM and SIGKILL on dispose (the per-mutation timeout
+ * grace belongs to the shared control-plane executor). */
 export const SIGNAL_GRACE_MS = 1000
-/** Marker prepended when captured output was truncated to its tail. */
-export const OUTPUT_TRUNCATION_MARKER = '\n...[output truncated]...\n'
-/** Bounded read for the profile lockfile copy (manifest bound comes from
- * plugins-installed.ts). */
-export const PROFILE_LOCKFILE_MAX_BYTES = 64 * 1024 * 1024
 /** Byte cap for op/journal error text (design 21 §6.3 sanitize discipline,
  * mirroring the dsh-runtime installer's FAILED_ERROR_LIMIT family): child
  * output and failure detail are sanitized AND bounded before they land in
@@ -122,7 +122,9 @@ export const ERROR_RESTARTED_DURING_MUTATION = 'instance (re)started during the 
 /** Post-install family verification failure (design 21 §6.11.4). */
 export const ERROR_FAMILY_DRIFT = 'installed, but the profile tree no longer matches the instance runtime'
 export const ERROR_DUPLICATE_PENDING = 'duplicate operation pending'
-export const ERROR_TIMED_OUT = 'mutation timed out'
+/** The undo verb's honest refusal when the journal no longer carries the
+ * bound target as an ok op with a preImage backup (design 21 §6.3/§6.8 r2). */
+export const ERROR_NO_UNDOABLE_OP = 'no undoable plugin operation is recorded'
 
 /** StatusProbe states during which a mutation must neither start nor be
  * recorded as ok (design 21 §6.3 pre/post double check). */
@@ -130,25 +132,9 @@ function isRefusedProbeState(state: string): boolean {
   return (REFUSED_PROBE_STATES as readonly string[]).includes(state)
 }
 
-/** Structural minimal child surface (real ChildProcess or test fake). */
-export interface SpawnedProcessStream {
-  on(event: 'data', listener: (chunk: Buffer | string) => void): unknown
-  on(event: 'end', listener: () => void): unknown
-}
-
-export interface SpawnedChild {
-  pid: number | undefined
-  kill(signal?: NodeJS.Signals | number): boolean
-  once(event: 'error' | 'close', listener: (...args: any[]) => void): unknown
-  stdout: SpawnedProcessStream | null
-  stderr: SpawnedProcessStream | null
-}
-
-export type SpawnFn = (command: string, args: string[], options: SpawnOptions) => SpawnedChild
-
 /** Journal methods the executor drives. markChildPid is optional on the
  * surface so minimal fakes stay compatible; the real journal implements it. */
-export type JournalSurface = Pick<PluginsJournal, 'appendPending' | 'recordPreImage' | 'markTerminal'> & {
+export type JournalSurface = Pick<PluginsJournal, 'appendPending' | 'recordPreImage' | 'markTerminal' | 'recent'> & {
   markChildPid?(opId: string, pid: number): void
 }
 
@@ -158,123 +144,6 @@ export type JournalSurface = Pick<PluginsJournal, 'appendPending' | 'recordPreIm
  * profile-write lease here (the executor has no other terminal seam). */
 export type OnOpTerminal = (op: JournalOp, terminalStatus: 'ok' | 'failed' | 'blocked') => void
 
-export interface PluginMutationParams {
-  dshCliPath: string
-  argv: string[]
-  env: Record<string, string>
-  timeoutMs?: number
-  spawn?: SpawnFn
-  stdoutLimit?: number
-  stderrLimit?: number
-  sanitize?: (text: string) => string
-  /** Optional argv prefix spliced between the executable and `argv` (the
-   * managed dsh CLI is spawned as `node <entry> …`; tests omit it). */
-  argvPrefix?: string[]
-  /** Optional working directory for the spawned child (the active runtime
-   * workspace root; absent inherits the gateway process cwd). */
-  cwd?: string
-}
-
-export type PluginMutationResult = { ok: true } | { ok: false; error: string }
-
-/** Env discipline (design 21 §6.3): ONLY the variables pnpm/network needs
- * may cross the process boundary — PATH + the proxy family, i.e. the SAME
- * canonical whitelist the dsh-runtime installer applies to its own install
- * children (INSTALL_ENV_WHITELIST, exported by the shared core; design 21
- * §6.3: "白名单 env（PATH+代理族）"). Everything else — DSH_GATEWAY_*
- * control variables, npm_config_* / NPM_* token carriers, and any OTHER
- * ambient secret (NODE_AUTH_TOKEN, GITHUB_TOKEN, SSH_AUTH_SOCK, …) that an
- * arbitrary third-party lifecycle script (allowed by decision 13) or pnpm
- * could read — is DROPPED before the caller's pins apply unconditionally.
- * A denylist cannot enumerate every secret carrier; the whitelist can. */
-export function scrubInstallEnv(
-  source: Record<string, string | undefined>,
-  pins: Record<string, string>,
-): Record<string, string> {
-  const result: Record<string, string> = {}
-  for (const [key, value] of Object.entries(source)) {
-    if (value === undefined) continue
-    if (INSTALL_ENV_WHITELIST.test(key)) result[key] = value
-  }
-  for (const [key, value] of Object.entries(pins)) result[key] = value
-  return result
-}
-
-/** Pure tail bound used by the capture buffers: over-limit input keeps its
- * last `limit` bytes, prefixed with the truncation marker. */
-export function truncateOutputTail(text: string, limit: number): { value: string; truncated: boolean } {
-  if (text.length <= limit) return { value: text, truncated: false }
-  return { value: `${OUTPUT_TRUNCATION_MARKER}${text.slice(text.length - limit)}`, truncated: true }
-}
-
-/** Rolling bounded capture: keeps the last `limit` bytes of pushed chunks. */
-class BoundedOutput {
-  private parts: string[] = []
-  private length = 0
-  private dropped = false
-  private readonly limit: number
-
-  constructor(limit: number) {
-    this.limit = limit
-  }
-
-  push(chunk: Buffer | string): void {
-    const text = typeof chunk === 'string' ? chunk : chunk.toString('utf8')
-    if (text.length === 0) return
-    this.parts.push(text)
-    this.length += text.length
-    while (this.parts.length > 1 && this.length - this.parts[0]!.length >= this.limit) {
-      this.length -= this.parts.shift()!.length
-      this.dropped = true
-    }
-    if (this.length > this.limit) {
-      const excess = this.length - this.limit
-      this.parts[0] = this.parts[0]!.slice(excess)
-      this.length -= excess
-      this.dropped = true
-    }
-  }
-
-  text(): string {
-    const joined = this.parts.join('')
-    // push() keeps the retained tail within the limit; when anything was
-    // dropped the tail is surfaced with the truncation marker up front.
-    return this.dropped ? `${OUTPUT_TRUNCATION_MARKER}${joined}` : joined
-  }
-}
-
-function lastNonEmptyLine(text: string): string | null {
-  const lines = text.split(/\r?\n/u)
-  for (let index = lines.length - 1; index >= 0; index -= 1) {
-    const line = lines[index]!.trim()
-    if (line !== '') return line
-  }
-  return null
-}
-
-/** Real spawn: detached child + process-group kill wrapper (POSIX), so a
- * hung install child can be reaped as a group. */
-function spawnManagedCommand(command: string, args: string[], options: SpawnOptions): SpawnedChild {
-  const child = spawnCommand(command, args, { ...options, detached: process.platform !== 'win32' })
-  return {
-    pid: child.pid,
-    kill(signal) {
-      if (process.platform === 'win32' || child.pid === undefined) return child.kill(signal)
-      try {
-        process.kill(-child.pid, signal)
-        return true
-      } catch {
-        return child.kill(signal)
-      }
-    },
-    once(event, listener) {
-      child.once(event as never, listener as never)
-    },
-    stdout: child.stdout,
-    stderr: child.stderr,
-  }
-}
-
 /** Default error-text sanitizer for every executor/journal error string
  * (design 21 §6.3): registry URLs are reduced to their origin (userinfo /
  * query / path capability tokens removed), named secrets redacted, absolute
@@ -283,91 +152,6 @@ function spawnManagedCommand(command: string, args: string[], options: SpawnOpti
  * journal (whose tasks projection is served verbatim to clients). */
 export const defaultSanitize = (text: string): string =>
   sanitizeInstallerOutput(text, JOURNAL_ERROR_TEXT_MAX_BYTES)
-
-/** Run one managed-dsh plugin CLI mutation with strict env discipline,
- * bounded output capture and group-kill timeouts. Never throws; resolves the
- * terminal outcome. */
-export function runDshPluginMutation(params: PluginMutationParams): Promise<PluginMutationResult> {
-  const timeoutMs = params.timeoutMs ?? MUTATION_TIMEOUT_DEFAULT_MS
-  const stdoutLimit = params.stdoutLimit ?? OUTPUT_CAPTURE_LIMIT_DEFAULT_BYTES
-  const stderrLimit = params.stderrLimit ?? OUTPUT_CAPTURE_LIMIT_DEFAULT_BYTES
-  const sanitize = params.sanitize ?? defaultSanitize
-  const spawnFn = params.spawn ?? spawnManagedCommand
-
-  return new Promise(resolve => {
-    let settled = false
-    let child: SpawnedChild | null = null
-    const stdout = new BoundedOutput(stdoutLimit)
-    const stderr = new BoundedOutput(stderrLimit)
-    let timedOut = false
-    let timeoutHandle: NodeJS.Timeout | undefined
-    let graceHandle: NodeJS.Timeout | undefined
-
-    const finish = (result: PluginMutationResult): void => {
-      if (settled) return
-      settled = true
-      if (timeoutHandle !== undefined) clearTimeout(timeoutHandle)
-      if (graceHandle !== undefined) clearTimeout(graceHandle)
-      resolve(result)
-    }
-
-    try {
-      child = spawnFn(params.dshCliPath, [...(params.argvPrefix ?? []), ...params.argv], {
-        env: params.env,
-        cwd: params.cwd,
-        detached: process.platform !== 'win32',
-        stdio: ['ignore', 'pipe', 'pipe'],
-      })
-    } catch (error) {
-      finish({ ok: false, error: sanitize(`failed to spawn dsh plugin command: ${messageOf(error)}`) })
-      return
-    }
-    const running = child
-
-    timeoutHandle = setTimeout(() => {
-      timedOut = true
-      try {
-        running.kill('SIGTERM')
-      } catch {
-        // kill is best effort; the grace timer settles the outcome.
-      }
-      graceHandle = setTimeout(() => {
-        try {
-          running.kill('SIGKILL')
-        } catch {
-          // ignore
-        }
-        finish({ ok: false, error: sanitize(ERROR_TIMED_OUT) })
-      }, SIGNAL_GRACE_MS)
-    }, timeoutMs)
-
-    running.once('error', error => {
-      finish({ ok: false, error: sanitize(`failed to spawn dsh plugin command: ${messageOf(error)}`) })
-    })
-    running.once('close', (code: number | null, signal: NodeJS.Signals | null) => {
-      if (timedOut) {
-        finish({ ok: false, error: sanitize(ERROR_TIMED_OUT) })
-        return
-      }
-      if (code === 0) {
-        finish({ ok: true })
-        return
-      }
-      const line = lastNonEmptyLine(stderr.text()) ?? lastNonEmptyLine(stdout.text())
-      let error: string
-      if (code === null) {
-        error = `dsh plugin command was terminated by ${signal ?? 'unknown signal'}`
-      } else if (line === null) {
-        error = `dsh plugin command exited with code ${code}`
-      } else {
-        error = line
-      }
-      finish({ ok: false, error: sanitize(error) })
-    })
-    running.stdout?.on('data', chunk => stdout.push(chunk))
-    running.stderr?.on('data', chunk => stderr.push(chunk))
-  })
-}
 
 export type EnqueueRejection = { ok: false; code: 'queue_full' | 'queue_busy' | 'persistence_failed'; error: string }
 export type EnqueueResult = { ok: true; opId: string } | EnqueueRejection
@@ -388,7 +172,7 @@ export interface PluginExecDeps {
   /** Current connectionState projection; 'starting'/'restarting' refuses. */
   statusProbe: () => string
   logger: JournalLogger
-  spawn?: SpawnFn
+  spawn?: MutationSpawnFn
   timeoutMs?: number
   /** Execution-window gate (design 21 decision 6/7): while it answers false
    * the worker polls it at canRunPollMs for up to canRunWaitMaxMs before the
@@ -459,7 +243,7 @@ export function createPluginsExec(deps: PluginExecDeps): PluginExec {
   /** Ops appended to the journal and not yet terminal (dup + cap source). */
   const liveOps = new Map<string, { kind: JournalOpKind; name: string }>()
   let workerPromise: Promise<void> | null = null
-  let current: { item: QueueItem; child: SpawnedChild | null } | null = null
+  let current: { item: QueueItem; child: MutationChild | null } | null = null
   /** Wake handle for a pending execution-window poll (dispose() resolves it
    * so shutdown never waits out the poll cadence). */
   let pollWake: (() => void) | null = null
@@ -485,6 +269,7 @@ export function createPluginsExec(deps: PluginExecDeps): PluginExec {
     }
     if (item.spec !== undefined) op.spec = item.spec
     if (item.initiator !== undefined) op.initiator = item.initiator
+    if (item.undoOf !== undefined) op.undoOf = item.undoOf
     if (patch.error !== undefined) op.error = patch.error
     return op
   }
@@ -648,8 +433,8 @@ export function createPluginsExec(deps: PluginExecDeps): PluginExec {
    * child writing DSH_HOME; the next boot's reconcileJournal() kills the
    * recorded pid before any new mutation can start. Best effort: a pid that
    * cannot be recorded only warns (the op itself is unaffected). */
-  const childSpawn: SpawnFn = (command, args, options) => {
-    const child = (deps.spawn ?? spawnManagedCommand)(command, args, options)
+  const childSpawn: MutationSpawnFn = (command, args, options) => {
+    const child = (deps.spawn ?? spawnMutationChild)(command, args, options)
     if (current !== null) current.child = child
     const pid = child.pid
     if (pid !== undefined && current !== null) {
@@ -705,7 +490,9 @@ export function createPluginsExec(deps: PluginExecDeps): PluginExec {
    * fails the op honestly, before the pre-mutation backup.
    */
   function judgeAtExecution(item: QueueItem): { code: PluginRefusalCode; error: string } | null {
-    if (item.kind === 'remove') return null
+    // remove never judges a version; undo judges its own inverse direction
+    // inside runUndo (the target's name/spec, not this item's).
+    if (item.kind === 'remove' || item.kind === 'undo') return null
     const facts = readRuntimeFacts()
     const set = facts === null ? null : gatewayProtectedSet(facts)
     const decision = decidePluginMutation({
@@ -721,15 +508,10 @@ export function createPluginsExec(deps: PluginExecDeps): PluginExec {
     return { code: decision.code, error: decision.error }
   }
 
-  async function runMutation(item: QueueItem): Promise<void> {
-    const { opId, kind, name, spec } = item
-    // (0) Execution-time re-judgement (see judgeAtExecution).
-    const judged = judgeAtExecution(item)
-    if (judged !== null) {
-      complete(item, { status: 'failed', error: sanitize(`${judged.error} [${judged.code}]`) })
-      return
-    }
-    // (1) Pre-mutation backup BEFORE anything touches the profile.
+  /** Write order step ② (design 21 §6.3): atomically copy the CURRENT
+   * profile pair into the op's backup dir and durably reference it. Returns
+   * the (unsanitized) failure message, or null on success. */
+  function backupProfile(opId: string): string | null {
     try {
       const backupDir = backupDirFor(stateDir, opId)
       ensurePrivateDirectoryNoFollow(backupDir, 0o700)
@@ -743,8 +525,84 @@ export function createPluginsExec(deps: PluginExecDeps): PluginExec {
         atomicWritePrivateFileNoFollow(join(backupDir, 'pnpm-lock.yaml'), lockText, { mode: 0o600 })
       }
       journal.recordPreImage(opId)
+      return null
     } catch (error) {
-      complete(item, { status: 'failed', error: sanitize(`pre-mutation profile backup failed: ${messageOf(error)}`) })
+      return `pre-mutation profile backup failed: ${messageOf(error)}`
+    }
+  }
+
+  /**
+   * The undo op (design 21 §6.3/§6.8 r2): undo = RESTORE. The target was
+   * bound at submit (`item.undoOf`); at execution it must still be an ok op
+   * with a preImage backup — when the queue ran other ops in between, the
+   * bound change is no longer the latest and the op fails loudly instead of
+   * silently restoring a different point in history. The inverse direction is
+   * re-judged with the same single decision implementation (protected set /
+   * generation coupling), then the CURRENT profile is backed up (the undo is
+   * itself undoable) and the pair is restored. */
+  async function runUndo(item: QueueItem): Promise<void> {
+    if (item.undoOf === undefined) {
+      complete(item, { status: 'failed', error: sanitize(ERROR_NO_UNDOABLE_OP) })
+      return
+    }
+    const bound = journal.recent().find(op => op.id === item.undoOf)
+    if (bound === undefined || bound.status !== 'ok' || bound.preImage === null) {
+      complete(item, {
+        status: 'failed',
+        error: sanitize(`${ERROR_NO_UNDOABLE_OP} (operation ${item.undoOf} is no longer an ok op with a preImage backup)`),
+      })
+      return
+    }
+    const preflight = readUndoPreImage(stateDir, bound)
+    if (!preflight.ok) {
+      complete(item, { status: 'failed', error: sanitize(`${preflight.error} [${preflight.code}]`) })
+      return
+    }
+    const judged = judgeUndo(preflight.preImage, readRuntimeFacts())
+    if (!judged.ok) {
+      complete(item, { status: 'failed', error: sanitize(`${judged.error} [${judged.code}]`) })
+      return
+    }
+    const backupError = backupProfile(item.opId)
+    if (backupError !== null) {
+      complete(item, { status: 'failed', error: sanitize(backupError) })
+      return
+    }
+    // Execution-window double check, exactly like install/remove (design 21
+    // §6.3): never restore while the managed instance is mid-(re)start.
+    if (isRefusedProbeState(statusProbe())) {
+      complete(item, { status: 'failed', error: ERROR_STARTING })
+      return
+    }
+    try {
+      restoreUndoPreImage(stateDir, preflight.preImage)
+    } catch (error) {
+      complete(item, { status: 'failed', error: sanitize(`preImage restore failed: ${messageOf(error)}`) })
+      return
+    }
+    if (isRefusedProbeState(statusProbe())) {
+      complete(item, { status: 'failed', error: ERROR_RESTARTED_DURING_MUTATION })
+      return
+    }
+    complete(item, { status: 'ok' })
+  }
+
+  async function runMutation(item: QueueItem): Promise<void> {
+    const { opId, kind, name, spec } = item
+    if (kind === 'undo') {
+      await runUndo(item)
+      return
+    }
+    // (0) Execution-time re-judgement (see judgeAtExecution).
+    const judged = judgeAtExecution(item)
+    if (judged !== null) {
+      complete(item, { status: 'failed', error: sanitize(`${judged.error} [${judged.code}]`) })
+      return
+    }
+    // (1) Pre-mutation backup BEFORE anything touches the profile.
+    const backupError = backupProfile(opId)
+    if (backupError !== null) {
+      complete(item, { status: 'failed', error: sanitize(backupError) })
       return
     }
     // (2) Execution-window pre-check: never start a mutation while the
@@ -767,7 +625,7 @@ export function createPluginsExec(deps: PluginExecDeps): PluginExec {
       // host provisioned with npm alone has none — the op would answer 127
       // even though the gateway ships the pinned pnpm.
       env = withPnpmOnPath(
-        scrubInstallEnv(process.env, {
+        scrubMutationEnv(process.env, {
           DSH_HOME: join(stateDir, MANAGED_DSH_HOME_DIR),
           XDG_CACHE_HOME: join(thirdParty, '.pnpm-cache'),
           XDG_CONFIG_HOME: join(thirdParty, '.pnpm-xdg'),
@@ -778,7 +636,7 @@ export function createPluginsExec(deps: PluginExecDeps): PluginExec {
           // minor honors.
           NPM_CONFIG_USERCONFIG: join(thirdParty, '.npmrc-empty'),
           npm_config_userconfig: join(thirdParty, '.npmrc-empty'),
-        }),
+        }, INSTALL_ENV_WHITELIST),
         ensurePnpmOnPath(thirdParty),
       )
     } catch (error) {
@@ -792,8 +650,8 @@ export function createPluginsExec(deps: PluginExecDeps): PluginExec {
     // resolution failure fails the op loudly — the preImage backup is
     // retained for state verification/rollback.
     const launch = deps.cliLaunch === undefined ? null : deps.cliLaunch()
-    const result = await runDshPluginMutation({
-      dshCliPath: deps.dshCliPath,
+    const result = await runPluginMutation({
+      command: deps.dshCliPath,
       argvPrefix: launch?.argvPrefix,
       cwd: launch?.cwd,
       argv,

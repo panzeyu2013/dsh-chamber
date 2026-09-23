@@ -67,32 +67,3 @@ export function pushWindowed(
   next.push(at)
   return next
 }
-
-/**
- * Drop stamps that fell out of the window without appending anything.
- * Same conservative rule as {@link pushWindowed}; kept separate so readers can
- * prune even when no new entry is admitted.
- */
-export function pruneWindowed(
-  stamps: readonly number[],
-  now: number,
-  windowMs: number,
-): readonly number[] {
-  if (stamps.length === 0 || !Number.isFinite(now) || !Number.isFinite(windowMs) || windowMs < 0) {
-    return stamps
-  }
-  const start = now - windowMs
-  const next = stamps.filter((stamp) => stamp > start)
-  return next.length === stamps.length ? stamps : next
-}
-
-/**
- * A monotonic clock read: the larger of the previous reading and the new one.
- * Returns null when the new reading is unusable. This is for hosts that keep one
- * "last observed" stamp; reducers prefer {@link elapsedSince}'s hold-on-rollback.
- */
-export function advanceClock(previous: number | null, now: number): number | null {
-  if (!Number.isFinite(now)) return null
-  if (previous === null || !Number.isFinite(previous)) return now
-  return now >= previous ? now : previous
-}

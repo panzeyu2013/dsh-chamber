@@ -11,7 +11,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  __resetOpenIntentsForTests,
   armOpenIntent,
   clearOpenIntents,
   EARLY_OPEN_BUDGET_MS,
@@ -22,7 +21,8 @@ import {
   shouldEarlyOpenSession,
   shouldHoldViewVeil,
   subscribeOpenIntent,
-} from '../../src/shared/open-intent.ts'
+} from '@dsh-chamber/dsh-chamber-client-core/open-intent'
+import { __resetOpenIntentsForTests } from '../../../dsh-chamber-client-core/src/open-intent.ts'
 
 test('arm records the requested session; a repeated arm for the same session is a no-op', () => {
   __resetOpenIntentsForTests()

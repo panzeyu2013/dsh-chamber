@@ -15,7 +15,7 @@ import {
   authorityLogStorage,
   loadAuthorityLog,
   type AuthorityLogStorage,
-} from '../../src/shared/authority-log-store.ts'
+} from '@dsh-chamber/dsh-chamber-client-core/authority-log-store'
 
 class MemoryStorage implements AuthorityLogStorage {
   readonly map = new Map<string, string>()

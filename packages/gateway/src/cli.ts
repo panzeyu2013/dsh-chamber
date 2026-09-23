@@ -15,9 +15,10 @@
  */
 
 import { readFileSync } from 'node:fs'
-import { DEFAULT_STATE_DIR, defaultDshWorkspacePath, type Logger } from '@dsh-chamber/control-plane'
+import { StateRootLeaseError, defaultDshWorkspacePath, resolveStateRoot, type Logger } from '@dsh-chamber/control-plane'
+import { isDshWorkspace } from '@dsh-chamber/dsh-runtime'
 import { GatewayConfigError, parseGatewayConfig } from './config.ts'
-import { findDshWorkspace, isDshWorkspace } from './dsh-path.ts'
+import { findDshWorkspace } from './dsh-path.ts'
 import { createGateway } from './index.ts'
 import {
   GatewayAuthUsageError,
@@ -37,7 +38,10 @@ Options:
   --port N            HTTP port (default 3000)
   --dsh-port N        first port attempted for the managed dsh host
                       (default 17510; server installs commonly use 30800)
-  --state-dir DIR     state root (default $DSH_GATEWAY_STATE or ~/.dsh-chamber)
+  --state-dir DIR     state root (default $DSH_GATEWAY_STATE > $DSH_CHAMBER_STATE
+                      > ~/.dsh-chamber); one state root has exactly ONE writer —
+                      a second gateway/serve/standalone on the same root is
+                      refused (exit 1), so pass this or DSH_*_STATE to move it
   --dsh-path PATH     builtin anchor dsh workspace (design 18 §9.3 resolution:
                       $DSH_GATEWAY_DSH_PATH env > runtime override > this anchor;
                       default: repo-adjacent checkout if found)
@@ -91,9 +95,9 @@ Exit codes: 0 clean shutdown/help, 1 startup failure, 2 configuration error,
 const AUTH_HELP = `gateway auth — manage gateway credentials while the gateway is STOPPED
 (design 17 §7 / Phase 3)
 
-reset-password and clear take the stateDir exclusive lock, so a live gateway
-is refused loudly. status is a lock-free read-only projection and also works
-while the gateway is running. For runtime changes use the browser /chamber/
+reset-password and clear take a short state-root writer lease, so a live
+gateway is refused loudly. status is a lock-free read-only projection and also
+works while the gateway is running. For runtime changes use the browser /chamber/
 page or the API (POST /auth/change-password, POST /auth/change-token) instead.
 
 Usage:
@@ -113,7 +117,10 @@ Subcommands:
                    — a --no-auth deployment returns to anonymous mode
 
 Options:
-  --state-dir DIR  state root (default $DSH_GATEWAY_STATE or ~/.dsh-chamber)
+  --state-dir DIR  state root (default $DSH_GATEWAY_STATE > $DSH_CHAMBER_STATE
+                   > ~/.dsh-chamber); one state root has exactly one writer, so a
+                   live gateway/serve/standalone on the same root refuses the
+                   credential operation (exit 1)
   --new PASSWORD   the new password for reset-password
   -h, --help       show this help
 
@@ -254,7 +261,7 @@ async function runAuth(args: ParsedArgs, logger: Logger): Promise<number> {
     console.error(AUTH_HELP)
     return 2
   }
-  const stateDir = args.stateDir ?? process.env.DSH_GATEWAY_STATE ?? DEFAULT_STATE_DIR
+  const stateDir = resolveStateRoot({ explicit: args.stateDir, flavorEnv: 'DSH_GATEWAY_STATE' })
   try {
     if (args.subcommand === 'status') {
       console.log(gatewayAuthStatus(stateDir))
@@ -321,7 +328,7 @@ async function main(): Promise<number | null> {
     logger.error(`dsh workspace has no supported CLI entry: ${args.dshPath}`)
     return 2
   }
-  const stateDir = args.stateDir ?? process.env.DSH_GATEWAY_STATE ?? DEFAULT_STATE_DIR
+  const stateDir = resolveStateRoot({ explicit: args.stateDir, flavorEnv: 'DSH_GATEWAY_STATE' })
   // design 18 §9.3 anchor semantics: --dsh-path / findDshWorkspace is the
   // BUILTIN ANCHOR; DSH_GATEWAY_DSH_PATH is the runtime env override (highest
   // priority at resolve time). Compatibility: an env-only deployment stays
@@ -367,7 +374,19 @@ async function main(): Promise<number | null> {
   logger.log(`boot: state dir ${config.plane.stateDir}`)
   logger.log(`boot: dsh workspace ${config.plane.dshWorkspacePath}`)
 
-  const gateway = createGateway({ config, logger })
+  let gateway: ReturnType<typeof createGateway>
+  try {
+    gateway = createGateway({ config, logger })
+  } catch (error) {
+    // A live writer on this state root is a startup failure (exit 1), never a
+    // configuration error: the message carries the holder pid/flavor and the
+    // explicit escape hatch.
+    if (error instanceof StateRootLeaseError) {
+      logger.error(error.message)
+      return 1
+    }
+    throw error
+  }
   // The effective auth kind AFTER config seeding (design 17 §7.4): a
   // runtime-managed credential makes `authKind` differ from the deployment
   // config kind — the boot line must not misreport `none` for an actually

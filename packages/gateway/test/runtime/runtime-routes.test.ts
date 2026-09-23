@@ -190,7 +190,7 @@ test('resolution falls back to the builtin anchor without env or pointer', () =>
   }
 })
 
-test('cleanup-version / restore-pre-rollback / recover-metadata route matrix (2026-12 desktop parity)', async () => {
+test('cleanup-version / restore-pre-rollback / recover-metadata route matrix (desktop parity)', async () => {
   let phase = 'idle'
   const calls: string[] = []
   const manager = {

@@ -26,7 +26,7 @@ const SECTION = [
   read('../../src/client/server-section-session-state.tsx'),
 ].join('\n')
 const LOCALES = read('../../src/client/locales.ts')
-const AGGREGATE = read('../../src/shared/aggregate-store.ts')
+const AGGREGATE = read('../../../dsh-chamber-client-core/src/aggregate-store.ts')
 
 test('the aggregate exposes the facts-mode fact as an additive optional field', () => {
   assert.match(AGGREGATE, /export type SourceSessionFactsMode = 'full' \| 'degraded' \| 'legacy' \| 'disabled'/)

@@ -1,7 +1,9 @@
 /**
  * tsconfig vendor-dep mapping lockstep.
  *
- * WHY THIS EXISTS: this package's tsconfig resolves `@deepseek-ai/*` to the
+ * WHY THIS EXISTS: the shared seed tsconfig base
+ * (`../dsh-chamber-seed-client-graph/tsconfig.seed-base.json`, which this
+ * package's tsconfig extends) resolves `@deepseek-ai/*` to the
  * VENDOR SOURCES (`../../vendor/harness-packages/@deepseek-ai/<pkg>/src/index.ts`)
  * because the vendor workspace members publish no built `lib/`. Compiling
  * upstream sources means compiling THEIR registry deps too, and pnpm never
@@ -21,16 +23,28 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const PACKAGE_ROOT = join(HERE, '..')
 const LOCKFILE = join(PACKAGE_ROOT, '..', '..', 'pnpm-lock.yaml')
+/** The ONE shared base every seed package's tsconfig extends (it owns paths). */
+const SHARED_SEED_TSCONFIG = join(PACKAGE_ROOT, '..', 'dsh-chamber-seed-client-graph', 'tsconfig.seed-base.json')
+
+/** The vendor-mapping text, from the shared base this package must extend. */
+function sharedSeedTsconfigText(): string {
+  const ownPath = join(PACKAGE_ROOT, 'tsconfig.json')
+  const target = /"extends"\s*:\s*"([^"]+)"/u.exec(readFileSync(ownPath, 'utf8'))?.[1]
+  assert.ok(target !== undefined, 'tsconfig.json must extend the shared seed tsconfig base')
+  const resolved = resolve(dirname(ownPath), target)
+  assert.equal(resolved, SHARED_SEED_TSCONFIG, 'tsconfig.json must extend the shared seed tsconfig base')
+  return readFileSync(resolved, 'utf8')
+}
 
 /** The version in `paths.undici[0]` (`…/.pnpm/undici@<version>/node_modules/undici`). */
 function mappedUndiciVersion() {
-  const tsconfig = readFileSync(join(PACKAGE_ROOT, 'tsconfig.json'), 'utf8')
+  const tsconfig = sharedSeedTsconfigText()
   const entry = /"undici":\s*\[\s*"([^"]+)"/.exec(tsconfig)?.[1]
   assert.ok(entry !== undefined, 'tsconfig.json must map "undici" for the vendor sources it compiles')
   const version = /\/\.pnpm\/undici@([^/]+)\/node_modules\/undici$/.exec(entry)?.[1]

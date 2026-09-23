@@ -38,7 +38,7 @@ import { collapsedOf } from './store-core.ts'
 import type { LayoutState } from './store-core.ts'
 import { LayoutController } from '@deepseek-ai/dsh-client-ui-layout/src/client/service.ts'
 import { ThemePresenter } from '@deepseek-ai/dsh-client-ui-layout/src/client/theme-presenter.ts'
-import { chamberBridge } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
+import { chamberBridge } from '@dsh-chamber/dsh-chamber-client-core'
 import { createDocumentThemeProjector, type DocumentThemeSnapshot } from './document-theme.ts'
 import { resolveSourceThemeCache } from './theme-cache.ts'
 

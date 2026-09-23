@@ -18,7 +18,7 @@
  * applying window.
  *
  * The AUTHORITATIVE gate itself stays where it is
- * (`renderer/src/runtime-management.ts` `runtimeBlocksLocalStart`: fail closed
+ * (`@dsh-chamber/dsh-chamber-client-core/runtime-management` `runtimeBlocksLocalStart`: fail closed
  * while the bridge hydrates and for every phase with an unsafe DSH_HOME). This
  * module reads that verdict as an INPUT and owns only the projection the card
  * renders — one verdict for both entries plus the one visible reason row — so

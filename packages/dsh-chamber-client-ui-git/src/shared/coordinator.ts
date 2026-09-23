@@ -13,7 +13,7 @@ import {
   insertWorkspaceBefore,
   clearWorkspaceGitFlags, getSourceRepoLayouts, getWorkspaceGitFlag, markSourceGitFlagsLoaded, retainSourceWorkspaceFlags, setSourceRepoLayouts, setWorkspaceGitFlag,
   fetchInstanceSnapshot, getInstanceClient, InstanceRpcError,
-} from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
+} from '@dsh-chamber/dsh-chamber-client-core'
 import { GitActionError, gitActionErrorCode } from './action-error.ts'
 import { GitActionLedger } from './action-ledger.ts'
 import { SerializedRefreshes } from './refresh-flight.ts'
@@ -27,8 +27,8 @@ import {
   GitSagaError, isProvenPreMutationRefusal, recoveryForFailure, runAdoptSessionSaga, runCreateSaga, runPreRemoveArchive,
   runRemoveSaga, runRollbackRecovery, runWorkspaceAdoptRecovery, runWorkspaceDeleteRecovery,
 } from './saga.ts'
-import { errorMessage as errorText } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
-import type { WorkspaceCreationPlacement } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
+import { errorMessage as errorText } from '@dsh-chamber/dsh-chamber-client-core'
+import type { WorkspaceCreationPlacement } from '@dsh-chamber/dsh-chamber-client-core'
 import type {
   GitBusyState, GitRecovery, GitSourceError, GitSourceState, GitWorktreeInfo, GitWorktreeSnapshot, PreviewCreateInput, PreviewCreateResult, RemoveWorktreeResult, UnregisteredWorktreeInfo,
 } from './types.ts'

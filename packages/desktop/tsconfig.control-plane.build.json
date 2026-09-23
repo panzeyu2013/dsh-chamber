@@ -1,12 +1,13 @@
 {
+  // Compile-closure/type face of build:control-plane (R6 phase 2): the script
+  // runs `tsc -p tsconfig.control-plane.build.json --noEmit` as the closure
+  // check and esbuild as the emitter, so this project must NOT emit — the
+  // former per-file tsc tree left bare workspace specifiers that the packaged
+  // asar / sidecar assembly cannot resolve.
   "extends": "../../tsconfig.json",
   "compilerOptions": {
-    "noEmit": false,
-    "rootDir": "../control-plane/src",
-    "outDir": "dist/control-plane",
-    "rewriteRelativeImportExtensions": true,
-    "declaration": false,
-    "sourceMap": false
+    "noEmit": true,
+    "rootDir": "../control-plane/src"
   },
   "include": ["../control-plane/src/**/*.ts"]
 }

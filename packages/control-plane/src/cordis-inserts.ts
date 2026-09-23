@@ -1,13 +1,18 @@
 /**
- * The cordis loader `insert` row format — single source of truth for the
- * `- insert:` overlay entries (cross-package protocol single-sourcing).
+ * The cordis loader patch-entry format — single source of truth for the
+ * overlay entries (cross-package protocol single-sourcing).
  *
  * The dsh app-boot `--patch` overlay and a bundle's cordis.patch.yml share
  * one format: a top-level YAML array of loader patch entries
- * (`- insert:\n    - id: <id>\n      name: '<pkg>'\n`, @deepseek-ai/
- * dsh-app-boot loadOverlayPatches). The shape and its parsing/conflict logic
- * are consumed by:
- *   - control-plane host-graph-seed.ts (renderPatchOverlay + profileLoaderRows
+ * (@deepseek-ai/dsh-app-boot loadOverlayPatches -> cordis-plugin-include's
+ * `PatchOptions`). Two entry shapes are rendered here:
+ *   - the `insert` bundle — `- insert:\n    - id: <id>\n      name: '<pkg>'\n`
+ *     — mounting new rows (renderCordisInserts);
+ *   - the id-targeted non-insert row — `- id: <id>\n  name: '<pkg>'\n  disabled: true\n`
+ *     — configuring or disabling a row an earlier layer mounted
+ *     (renderCordisDisablePatches / renderCordisOverlay).
+ * The shape and its parsing/conflict logic are consumed by:
+ *   - control-plane host-graph-seed.ts (renderCordisOverlay + profileLoaderRows
  *     family — the local `--patch` overlay seed);
  *   - desktop plugin-sync.ts (renderCordisInserts + cordisLoaderRows family —
  *     the remote cordis.patch.yml seed merge).
@@ -19,7 +24,9 @@
  * Invariants:
  * - renderCordisInserts output is the canonical wire bytes: `- insert:` then
  *   one `    - id: <id>\n      name: '<name>'\n` line per row — byte-identical
- *   across every consumer (the cross-package contract test pins it).
+ *   across every consumer (the cross-package contract test pins it). The
+ *   id-targeted shapes are ADDITIVE: a pure-insert overlay renders byte for
+ *   byte what it always did (the desktop remote seed depends on that).
  * - renderCordisInserts is the single validation point for desired rows
  *   (syntax whitelist + unique ids/names); it THROWS on invalid input (both
  *   callers either pre-validate or let the throw surface as their fail-loud).
@@ -28,7 +35,8 @@
  *   for an exact loader identity.
  * - `result.ok`-style strictness does not exist here: hasExactInsert /
  *   insertConflict classify only id/name identity facts; message wording is
- *   the callers' own.
+ *   the callers' own. A non-insert row never contributes an insert identity
+ *   (parseLoaderRows only reads mappings under an `insert:` key).
  */
 
 /** One loader insert row (`- insert:` → `- id` / `name`). */
@@ -38,9 +46,13 @@ export interface CordisInsert {
 }
 
 /** The id/name whitelists enforced by renderCordisInserts (chamber package
- *  rows: plain loader ids, `@dsh-chamber/...` package names). */
+ *  rows: plain loader ids, `@dsh-chamber/...` package names) and by
+ *  renderCordisDisablePatches (the same loader-id charset, but a scoped
+ *  UPSTREAM package name — a disable row targets a bundle-mounted row, so it
+ *  never carries the chamber insert namespace). */
 const INSERT_ID_PATTERN = /^[a-zA-Z0-9._-]+$/
 const INSERT_NAME_PATTERN = /^@dsh-chamber\/[a-zA-Z0-9._-]+$/
+const DISABLE_NAME_PATTERN = /^@[a-zA-Z0-9._-]+\/[a-zA-Z0-9._-]+$/
 
 /**
  * Render the canonical loader overlay for the given rows: a top-level YAML
@@ -68,6 +80,79 @@ export function renderCordisInserts(inserts: readonly CordisInsert[]): string {
     names.add(entry.name)
   }
   return `- insert:\n${inserts.map(entry => `    - id: ${entry.id}\n      name: '${entry.name}'\n`).join('')}`
+}
+
+/**
+ * One id-targeted non-insert overlay row: the loader's `PatchOptions`
+ * counterpart of an insert row, rendered as `- id: … / name: … / disabled: true`.
+ *
+ * Semantics (frozen upstream pin, cordis-plugin-include/src/index.ts):
+ * `applyEntryPatches` destructures `{ id, insert, name, ...overrides }`, looks
+ * the entry up by id, warns and skips when `name` is present and differs from
+ * the mounted row's package, then copies every override onto the row — so an
+ * unmatched or name-mismatched row is a per-entry Loader WARNING, never a boot
+ * failure. `disabled` is the loader's own EntryOptions field
+ * (cordis-plugin-loader/src/config/entry.ts: `disabled?: boolean | null` —
+ * "Prevents this entry and descendants from running") and `Entry.update`
+ * refuses to `init()` a disabled row, so the target package is never imported.
+ */
+export interface CordisDisablePatch {
+  /** The loader entry id of the row to disable. */
+  readonly id: string
+  /** Exact package-name guard. Required here even though the loader makes it
+   *  optional: a naked id-targeted disable would also hit a future unrelated
+   *  row that inherited the id. */
+  readonly name: string
+}
+
+/**
+ * Render id-targeted disable rows: one top-level YAML mapping per patch
+ * (`- id: <id>\n  name: '<name>'\n  disabled: true\n`). Validation is the
+ * render point for these rows: the loader-id charset, a scoped upstream
+ * package name, and no duplicate target id (two disables for one row is at
+ * best redundant and at worst a fold bug). Duplicated package names across
+ * different ids are legal patches and therefore allowed.
+ */
+export function renderCordisDisablePatches(disables: readonly CordisDisablePatch[]): string {
+  const ids = new Set<string>()
+  for (const entry of disables) {
+    if (!INSERT_ID_PATTERN.test(entry.id) || !DISABLE_NAME_PATTERN.test(entry.name)) {
+      throw new Error(`cordis disable render: invalid overlay row ${JSON.stringify(entry)}`)
+    }
+    if (ids.has(entry.id)) {
+      throw new Error(`cordis disable render: duplicate overlay row ${JSON.stringify(entry)}`)
+    }
+    ids.add(entry.id)
+  }
+  return disables.map(entry => `- id: ${entry.id}\n  name: '${entry.name}'\n  disabled: true\n`).join('')
+}
+
+/**
+ * Render one complete overlay patch list from its live rows: the `insert`
+ * bundle first (when any), then the id-targeted disable rows — the order the
+ * loader applies them in, so a disable supersedes a row a bundle (or user)
+ * layer mounted before this overlay.
+ *
+ * Validation: at least one row overall, and no disable may target an id this
+ * same overlay inserts (mount-then-disable is a caller bug, never a shape the
+ * local seed should emit silently). A disable-only overlay is legal: the local
+ * seed reuses a user-owned insert row from the profile patch and still has to
+ * carry the disable.
+ */
+export function renderCordisOverlay(
+  inserts: readonly CordisInsert[],
+  disables: readonly CordisDisablePatch[] = [],
+): string {
+  if (inserts.length === 0 && disables.length === 0) {
+    throw new Error('cordis overlay render: overlay requires at least one row')
+  }
+  const insertIds = new Set(inserts.map(entry => entry.id))
+  for (const disable of disables) {
+    if (insertIds.has(disable.id)) {
+      throw new Error(`cordis overlay render: disable row ${JSON.stringify(disable)} targets a row this overlay inserts`)
+    }
+  }
+  return (inserts.length > 0 ? renderCordisInserts(inserts) : '') + renderCordisDisablePatches(disables)
 }
 
 function escapeRegExp(value: string): string {

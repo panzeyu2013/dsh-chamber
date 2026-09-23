@@ -50,7 +50,7 @@ import {
 } from './bridge-servers.ts'
 import {
   chamberBridge, isChannelClassDiagnostic, recheckPluginGraphDiagnostic,
-} from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
+} from '@dsh-chamber/dsh-chamber-client-core'
 import { sectionRows } from './section-rows.ts'
 import { nestedModalOwnsEscape } from './escape-owner.ts'
 import {

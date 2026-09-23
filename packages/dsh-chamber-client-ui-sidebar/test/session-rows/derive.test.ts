@@ -17,17 +17,14 @@ import { fileURLToPath } from 'node:url'
 import { stripComments } from '../../../../scripts/dev/test-support/source-text.ts'
 import {
   armBlankGhost,
-  armMembershipGrace,
   basenameOf,
   BLANK_GHOST_GRACE_MS,
   deriveArchivedSessions,
   deriveLocalSearchMatches,
   deriveServerWorkspaces,
-  findReusableBlankSession,
   groupArchivedRows,
   hasActiveScheduleOf,
   instanceSnapshotSignature,
-  MEMBERSHIP_GRACE_MS,
   mergeRuntimeFacts,
   mergeSearchResults,
   nextServerOrder,
@@ -39,19 +36,24 @@ import {
   reconcileCompletedFacts,
   reconciledSessionOrder,
   relativeTimeBucket,
-  retainMembershipGraceSources,
   runningRingVisible,
   runtimeReportSignature,
   sanitizeSearchQuery,
   SEARCH_QUERY_MAX_CODE_UNITS,
   serversProjectionSignature,
   sessionDisplayTitle,
+} from '@dsh-chamber/dsh-chamber-client-core/derive'
+import {
+  armMembershipGrace,
+  findReusableBlankSession,
+  MEMBERSHIP_GRACE_MS,
+  retainMembershipGraceSources,
   UNGROUPED_WORKSPACE_ID,
   __resetBlankGhostsForTests,
   __resetMembershipGracesForTests,
-} from '../../src/shared/derive.ts'
-import type { InstanceRuntimeReport } from '../../src/shared/aggregate-store.ts'
-import type { InstanceSnapshot, SearchRow, SessionRow, WorkspaceRow } from '../../src/shared/instance-api.ts'
+} from '../../../dsh-chamber-client-core/src/derive.ts'
+import type { InstanceRuntimeReport } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
+import type { InstanceSnapshot, SearchRow, SessionRow, WorkspaceRow } from '@dsh-chamber/dsh-chamber-client-core/instance-api'
 import { server, session, snapshot, workspace } from '../support/derive-fixtures.ts'
 
 /** Workspace-store projection fixture (idle/ready) for the projectInstanceSnapshot cases. */
@@ -1171,7 +1173,7 @@ test('round-3 restore: serversProjectionSignature tracks render-relevant fields 
 })
 
 test('round-3 restore: InstanceRuntimeReport declares the optional judgment facts', () => {
-  const store = stripComments(readFileSync(fileURLToPath(new URL('../../src/shared/aggregate-store.ts', import.meta.url)), 'utf8'))
+  const store = stripComments(readFileSync(fileURLToPath(new URL('../../../dsh-chamber-client-core/src/aggregate-store.ts', import.meta.url)), 'utf8'))
   assert.match(store, /listComplete\?: boolean/, 'listComplete is an optional additive field')
   assert.match(store, /stale\?: boolean/, 'the stale marker is optional')
 })

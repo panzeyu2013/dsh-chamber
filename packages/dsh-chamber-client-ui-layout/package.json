@@ -8,11 +8,13 @@
   "types": "lib/types/index.d.ts",
   "exports": {
     ".": {
-      "types": "./lib/types/index.d.ts",
-      "default": "./lib/index.js"
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
     },
-    "./client": "./src/client/index.ts",
-    "./src/*": "./src/*",
+    "./client": {
+      "types": "./src/client/index.ts",
+      "default": "./src/client/index.ts"
+    },
     "./package.json": "./package.json"
   },
   "dsh": {
@@ -27,11 +29,12 @@
     }
   },
   "scripts": {
-    "bundle": "tsdown",
-    "watch": "tsdown --watch",
     "test": "node test/layout-store.test.ts && node test/document-theme.test.ts"
   },
   "license": "MIT",
+  "dependencies": {
+    "@dsh-chamber/dsh-chamber-client-core": "workspace:^"
+  },
   "peerDependencies": {
     "@deepseek-ai/cordis": "workspace:^",
     "@deepseek-ai/dsh-client-locale": "workspace:^",
@@ -51,10 +54,5 @@
     "@deepseek-ai/dsh-client-ui-slots": "workspace:^",
     "@deepseek-ai/dsh-client-ui-theme": "workspace:^",
     "react": "^19.0.0"
-  },
-  "files": [
-    "lib/index.js",
-    "lib/client.js",
-    "lib/types/**/*.d.ts"
-  ]
+  }
 }

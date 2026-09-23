@@ -11,8 +11,6 @@
     "directory": "packages/api/gateway"
   },
   "type": "module",
-  "main": "lib/index.js",
-  "types": "lib/types/index.d.ts",
   "exports": {
     ".": {
       "types": "./lib/types/index.d.ts",
@@ -22,7 +20,6 @@
       "types": "./lib/types/client/index.d.ts",
       "default": "./lib/client.js"
     },
-    "./src/*": "./src/*",
     "./package.json": "./package.json"
   },
   "dsh": {
@@ -35,12 +32,6 @@
       "immediately": true
     }
   },
-  "files": [
-    "lib/index.js",
-    "lib/client.js",
-    "lib/types/**/*.js",
-    "lib/types/**/*.d.ts"
-  ],
   "scripts": {
     "test": "node ./scripts/test.mjs"
   },

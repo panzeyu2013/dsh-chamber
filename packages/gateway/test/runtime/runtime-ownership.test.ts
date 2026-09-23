@@ -1,20 +1,19 @@
 /**
- * /chamber/runtime ownership and the single-owner guard: unsafe owner leaves,
- * live/dead-pid records, stale-owner takeover, duplicate managers and dispose
- * release.
+ * /chamber/runtime ownership boundaries after R2: the dsh-runtime tree-safety
+ * refusals stay here, and the state-root writer lease is either ADOPTED from
+ * createGateway (never released by the manager) or SELF-ACQUIRED by a directly
+ * constructed manager and released in dispose(). The lock contract itself
+ * (live/dead pid, stale takeover, torn record, release token+inode) lives in
+ * the shared contract suite packages/control-plane/test/state/state-root-lease.test.ts.
  */
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  chmodSync,
   existsSync,
-  lstatSync,
   mkdtempSync,
-  mkdirSync,
   readFileSync,
   readdirSync,
-  renameSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -22,6 +21,7 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { STATE_ROOT_LEASE_FILENAME, StateRootLeaseError, acquireStateRootLease } from '@dsh-chamber/control-plane'
 import { createGatewayRuntimeManager } from '../../src/runtime-manager.ts'
 import {
   silentLogger,
@@ -31,6 +31,9 @@ import {
   probeResultsFor,
   armPendingSwitch,
 } from '../support/runtime-routes-harness.ts'
+
+const leaseFile = (stateDir: string): string => join(stateDir, STATE_ROOT_LEASE_FILENAME)
+const readLease = (stateDir: string): Record<string, unknown> => JSON.parse(readFileSync(leaseFile(stateDir), 'utf8')) as Record<string, unknown>
 
 test('gateway runtime ownership fails closed when dsh-runtime root is a symlink', () => {
   const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-root-link-'))
@@ -47,80 +50,92 @@ test('gateway runtime ownership fails closed when dsh-runtime root is a symlink'
     )
     assert.equal(readFileSync(sentinel, 'utf8'), 'outside-state')
     assert.equal(statSync(sentinel).mode & 0o777, 0o644)
-    assert.ok(!existsSync(join(externalDir, 'owner.json')), 'owner guard never writes through the linked root')
+    assert.ok(!existsSync(join(externalDir, 'owner.json')), 'no lease or owner guard writes through the linked root')
     assert.ok(!existsSync(join(externalDir, 'registry.json')), 'registry state never writes through the linked root')
+    assert.ok(!existsSync(leaseFile(stateDir)), 'the reachability check runs before the lease is taken')
   } finally {
     rmSync(stateDir, { recursive: true, force: true })
     rmSync(externalDir, { recursive: true, force: true })
   }
 })
 
-test('gateway runtime ownership refuses an unsafe owner leaf without touching its target', () => {
-  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-owner-link-'))
-  const externalDir = mkdtempSync(join(tmpdir(), 'gw-rt-owner-target-'))
+test('a directly constructed manager self-acquires the one state-root lease and dispose releases it', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-self-lease-'))
   try {
-    const gatewayConfig = config(stateDir)
-    const stateRoot = join(stateDir, 'dsh-runtime')
-    const externalOwner = join(externalDir, 'owner-target')
-    mkdirSync(stateRoot, { mode: 0o700 })
-    writeFileSync(externalOwner, JSON.stringify({ pid: 99_999_999 }), { mode: 0o644 })
-    symlinkSync(externalOwner, join(stateRoot, 'owner.json'), 'file')
-
-    assert.throws(
-      () => createGatewayRuntimeManager({ config: gatewayConfig, plane: fakePlane(), logger: silentLogger }),
-      /owner record is unsafe or unreadable/,
-    )
-    assert.equal(readFileSync(externalOwner, 'utf8'), JSON.stringify({ pid: 99_999_999 }))
-    assert.equal(statSync(externalOwner).mode & 0o777, 0o644)
-    assert.ok(lstatSync(join(stateRoot, 'owner.json')).isSymbolicLink(), 'unsafe owner evidence remains in place')
+    const manager = createGatewayRuntimeManager({ config: config(stateDir), plane: fakePlane(), logger: silentLogger })
+    assert.ok(existsSync(leaseFile(stateDir)), 'a direct construction owns exactly one lease')
+    const record = readLease(stateDir)
+    assert.equal(record.pid, process.pid)
+    assert.equal(record.scope, 'state-root')
+    assert.equal(record.flavor, 'gateway')
+    assert.equal(typeof record.token, 'string')
+    assert.equal((record.token as string).length, 48)
+    assert.equal(statSync(leaseFile(stateDir)).mode & 0o777, 0o600)
+    await manager.dispose()
+    assert.ok(!existsSync(leaseFile(stateDir)), 'dispose releases the self-acquired lease')
   } finally {
     rmSync(stateDir, { recursive: true, force: true })
-    rmSync(externalDir, { recursive: true, force: true })
   }
 })
 
-test('single-process guard: a live owner record from another pid fails loud', () => {
-  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-owner-'))
+test('an adopted gateway lease is asserted but never released or rewritten by the manager', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-adopt-lease-'))
   try {
-    mkdirSync(join(stateDir, 'dsh-runtime'), { recursive: true, mode: 0o700 })
-    writeFileSync(join(stateDir, 'dsh-runtime', 'owner.json'), JSON.stringify({ pid: process.ppid }), { mode: 0o600 })
+    const lease = acquireStateRootLease(stateDir, { scope: 'state-root', flavor: 'gateway' })
+    const before = readFileSync(leaseFile(stateDir), 'utf8')
+    const manager = createGatewayRuntimeManager({
+      config: config(stateDir),
+      plane: fakePlane(),
+      logger: silentLogger,
+      stateLease: lease,
+    })
+    assert.equal(readFileSync(leaseFile(stateDir), 'utf8'), before, 'adoption never rewrites the record')
+    await manager.dispose()
+    assert.equal(lease.held(), true, 'the gateway handle survives manager disposal')
+    assert.equal(readFileSync(leaseFile(stateDir), 'utf8'), before)
+    lease.release()
+    assert.ok(!existsSync(leaseFile(stateDir)))
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('a stateLease for a different root is refused before any runtime write', () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-wrong-lease-'))
+  const otherDir = mkdtempSync(join(tmpdir(), 'gw-rt-wrong-lease-other-'))
+  try {
+    const lease = acquireStateRootLease(otherDir, { scope: 'state-root', flavor: 'gateway' })
+    try {
+      assert.throws(
+        () => createGatewayRuntimeManager({
+          config: config(stateDir),
+          plane: fakePlane(),
+          logger: silentLogger,
+          stateLease: lease,
+        }),
+        /does not match the state-root lease/,
+      )
+    } finally {
+      lease.release()
+    }
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+    rmSync(otherDir, { recursive: true, force: true })
+  }
+})
+
+test('same-process duplicate managers cannot share one runtime stateDir', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-owner-same-process-'))
+  try {
+    const manager = createGatewayRuntimeManager({ config: config(stateDir), plane: fakePlane(), logger: silentLogger })
     assert.throws(
       () => createGatewayRuntimeManager({ config: config(stateDir), plane: fakePlane(), logger: silentLogger }),
-      /another gateway process/,
+      (error: unknown) => error instanceof StateRootLeaseError && error.code === 'state_root_duplicate',
     )
-  } finally {
-    rmSync(stateDir, { recursive: true, force: true })
-  }
-})
-
-test('stale-owner takeover detects A-move/A-create/B-move and restores the exact fresh owner', () => {
-  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-owner-interleave-'))
-  try {
-    const stateRoot = join(stateDir, 'dsh-runtime')
-    const owner = join(stateRoot, 'owner.json')
-    const displacedOld = join(stateRoot, 'owner.old-fixture')
-    mkdirSync(stateRoot, { recursive: true, mode: 0o700 })
-    writeFileSync(owner, `${JSON.stringify({ pid: 99_999_999, startedAt: 'old' })}\n`, { mode: 0o600 })
-    const freshPayload = `${JSON.stringify({ pid: process.pid, startedAt: 'fresh', token: 'a'.repeat(48) })}\n`
-
-    assert.throws(
-      () => createGatewayRuntimeManager({
-        config: config(stateDir),
-        plane: fakePlane(),
-        logger: silentLogger,
-        ownerTakeoverBeforeRename: () => {
-          // A has already read the stale owner. Just after B's final old-inode
-          // check, A wins the rename and publishes its fresh token; B's rename
-          // therefore moves A's fresh owner and must detect/restore it.
-          renameSync(owner, displacedOld)
-          writeFileSync(owner, freshPayload, { mode: 0o600 })
-        },
-      }),
-      /replaced the owner during stale takeover|could not be durably claimed/,
-    )
-    assert.equal(readFileSync(owner, 'utf8'), freshPayload,
-      'the losing takeover restores A\'s exact fresh token instead of entering or deleting it')
-    assert.ok(existsSync(displacedOld), 'the original dead-owner evidence remains available')
+    await manager.dispose()
+    const replacement = createGatewayRuntimeManager({ config: config(stateDir), plane: fakePlane(), logger: silentLogger })
+    await replacement.dispose()
+    assert.ok(!existsSync(leaseFile(stateDir)))
   } finally {
     rmSync(stateDir, { recursive: true, force: true })
   }
@@ -139,11 +154,11 @@ test('constructor and scheduler cancellation failures release ownership safely',
         throw new Error('scheduler setup failed')
       },
     }), /scheduler setup failed/)
-    assert.equal(existsSync(join(constructDir, 'dsh-runtime', 'owner.json')), false,
+    assert.equal(existsSync(leaseFile(constructDir)), false,
       'a constructor tail failure releases the exact acquired lease')
     assert.equal(abandonedTicks.length, 1)
     abandonedTicks[0]!()
-    assert.equal(existsSync(join(constructDir, 'dsh-runtime', 'owner.json')), false,
+    assert.equal(existsSync(leaseFile(constructDir)), false,
       'a scheduler callback retained by a throwing adapter is permanently fenced')
     const replacement = createGatewayRuntimeManager({ config: config(constructDir), plane: fakePlane(), logger: silentLogger })
     await replacement.dispose()
@@ -160,7 +175,7 @@ test('constructor and scheduler cancellation failures release ownership safely',
       scheduleKnownGoodPromotion: () => () => { throw new Error('scheduler cancel failed') },
     })
     await manager.dispose()
-    assert.equal(existsSync(join(cancelDir, 'dsh-runtime', 'owner.json')), false,
+    assert.equal(existsSync(leaseFile(cancelDir)), false,
       'a fenced stale callback cannot make cancellation failure skip writer drain/release')
   } finally {
     rmSync(cancelDir, { recursive: true, force: true })
@@ -201,70 +216,11 @@ test('Windows read-only projection never enters POSIX runtime-root writer primit
     assert.equal(readFileSync(sentinel, 'utf8'), 'untouched')
     assert.equal(statSync(sentinel).mode & 0o777, 0o644)
     assert.equal(existsSync(join(external, 'owner.json')), false)
+    assert.equal(existsSync(leaseFile(stateDir)), false, 'the Windows read-only projection owns no state-root lease')
     await manager.dispose()
   } finally {
     rmSync(stateDir, { recursive: true, force: true })
     rmSync(external, { recursive: true, force: true })
-  }
-})
-
-test('same-process duplicate managers cannot share one runtime stateDir', async () => {
-  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-owner-same-process-'))
-  try {
-    const manager = createGatewayRuntimeManager({ config: config(stateDir), plane: fakePlane(), logger: silentLogger })
-    assert.throws(
-      () => createGatewayRuntimeManager({ config: config(stateDir), plane: fakePlane(), logger: silentLogger }),
-      /already owns/,
-    )
-    await manager.dispose()
-    const replacement = createGatewayRuntimeManager({ config: config(stateDir), plane: fakePlane(), logger: silentLogger })
-    await replacement.dispose()
-  } finally {
-    rmSync(stateDir, { recursive: true, force: true })
-  }
-})
-
-test('an owner record with this pid is rejected even without a module-local lease', () => {
-  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-owner-same-pid-record-'))
-  try {
-    mkdirSync(join(stateDir, 'dsh-runtime'), { recursive: true, mode: 0o700 })
-    writeFileSync(join(stateDir, 'dsh-runtime', 'owner.json'), JSON.stringify({ pid: process.pid }), { mode: 0o600 })
-    assert.throws(
-      () => createGatewayRuntimeManager({ config: config(stateDir), plane: fakePlane(), logger: silentLogger }),
-      /already owns/,
-    )
-  } finally {
-    rmSync(stateDir, { recursive: true, force: true })
-  }
-})
-
-test('single-process guard: a stale owner record from a dead pid is taken over', () => {
-  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-owner-esrch-'))
-  try {
-    mkdirSync(join(stateDir, 'dsh-runtime'), { recursive: true, mode: 0o700 })
-    // A pid that cannot exist on any platform probing kill(pid,0).
-    writeFileSync(join(stateDir, 'dsh-runtime', 'owner.json'), JSON.stringify({ pid: 99_999_999 }), { mode: 0o600 })
-    const manager = createGatewayRuntimeManager({ config: config(stateDir), plane: fakePlane(), logger: silentLogger })
-    assert.equal(manager.resolveWorkspace().source, 'builtin')
-  } finally {
-    rmSync(stateDir, { recursive: true, force: true })
-  }
-})
-
-test('dispose() reaps install children and removes the owner record', async () => {
-  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-dispose-'))
-  try {
-    const manager = createGatewayRuntimeManager({ config: config(stateDir), plane: fakePlane(), logger: silentLogger })
-    const ownerPath = join(stateDir, 'dsh-runtime', 'owner.json')
-    assert.ok(existsSync(ownerPath))
-    assert.equal(statSync(ownerPath).mode & 0o777, 0o600, 'owner record created via wx is owner-only')
-    const owner = JSON.parse(readFileSync(ownerPath, 'utf8')) as { token?: unknown }
-    assert.equal(typeof owner.token, 'string')
-    assert.equal((owner.token as string).length, 48, 'owner release authority is a random exact token')
-    await manager.dispose()
-    assert.ok(!existsSync(join(stateDir, 'dsh-runtime', 'owner.json')), 'owner record dropped on dispose')
-  } finally {
-    rmSync(stateDir, { recursive: true, force: true })
   }
 })
 
@@ -276,7 +232,7 @@ test('a disposed manager cannot read/quarantine authority owned by its replaceme
     const replacement = createGatewayRuntimeManager({ config: config(stateDir), plane: fakePlane(), logger: silentLogger })
     const registry = join(stateDir, 'dsh-runtime', 'registry.json')
     writeFileSync(registry, '{replacement-owned-broken-json', { mode: 0o644 })
-    chmodSync(registry, 0o644)
+    assert.equal(statSync(registry).mode & 0o777, 0o644)
 
     await assert.rejects(oldManager.status(), (error: unknown) => (
       (error as Error & { code?: string }).code === 'runtime_disposed'
@@ -326,7 +282,7 @@ test('dispose() aborts and drains an apply-now probe before releasing runtime ow
         return probeResultsFor(stateDir).map(name => ({ name, ok: true }))
       },
     })
-    const ownerPath = join(stateDir, 'dsh-runtime', 'owner.json')
+    const ownerPath = leaseFile(stateDir)
     await manager.applyNow()
     await entered
 
@@ -336,7 +292,7 @@ test('dispose() aborts and drains an apply-now probe before releasing runtime ow
     assert.equal(disposeSettled, false, 'dispose waits for the complete detached activation job')
     assert.equal(manager.activationInProgress(), true, 'dispose immediately enters a sticky exposure quarantine')
     assert.equal(probeSignal?.aborted, true, 'the manager lifecycle abort reaches the live candidate probe')
-    assert.ok(existsSync(ownerPath), 'owner.json remains while an activation writer can still settle')
+    assert.ok(existsSync(ownerPath), 'the state-root lease remains while an activation writer can still settle')
 
     releaseProbe()
     await disposal
@@ -371,7 +327,7 @@ test('dispose() drains the full select promise and forwards abort to registry me
         throw new Error('registry fetch released after disposal')
       },
     })
-    const ownerPath = join(stateDir, 'dsh-runtime', 'owner.json')
+    const ownerPath = leaseFile(stateDir)
     const selection = manager.select('2.0.0')
     await entered
     let disposeSettled = false
@@ -397,12 +353,12 @@ test('dispose() retains runtime ownership when final process quiescence cannot b
       plane: fakePlane({ stopLocal: async () => { throw new Error('stop ownership unsafe') } }),
       logger: silentLogger,
     })
-    const ownerPath = join(stateDir, 'dsh-runtime', 'owner.json')
+    const ownerPath = leaseFile(stateDir)
     await assert.rejects(manager.dispose(), /writers could not be proven quiescent/)
-    assert.ok(existsSync(ownerPath), 'failed writer proof retains owner.json')
+    assert.ok(existsSync(ownerPath), 'failed writer proof retains the state-root lease')
     assert.throws(
       () => createGatewayRuntimeManager({ config: config(stateDir), plane: fakePlane(), logger: silentLogger }),
-      /already owns/,
+      (error: unknown) => error instanceof StateRootLeaseError && error.code === 'state_root_duplicate',
       'a replacement manager cannot enter after unsafe disposal',
     )
   } finally {
@@ -410,19 +366,24 @@ test('dispose() retains runtime ownership when final process quiescence cannot b
   }
 })
 
-test('dispose() releases only its exact owner token and inode', async () => {
+test('dispose() releases only its exact lease token and inode', async () => {
   const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-owner-release-token-'))
   try {
     const manager = createGatewayRuntimeManager({ config: config(stateDir), plane: fakePlane(), logger: silentLogger })
-    const ownerPath = join(stateDir, 'dsh-runtime', 'owner.json')
+    const ownerPath = leaseFile(stateDir)
     rmSync(ownerPath)
-    const replacementPayload = `${JSON.stringify({
+    const replacementPayload = JSON.stringify({
+      schemaVersion: 1,
       pid: process.pid,
-      startedAt: 'replacement',
+      startedAt: 2,
       token: 'b'.repeat(48),
-    })}\n`
+      scope: 'state-root',
+      flavor: 'gateway',
+    }) + '\n'
     writeFileSync(ownerPath, replacementPayload, { mode: 0o600 })
-    await assert.rejects(manager.dispose(), /owner token no longer matches/)
+    await assert.rejects(manager.dispose(), (error: unknown) => (
+      error instanceof StateRootLeaseError && error.code === 'state_root_not_owner'
+    ))
     assert.equal(readFileSync(ownerPath, 'utf8'), replacementPayload,
       'an old manager never unlinks a replacement lease')
   } finally {

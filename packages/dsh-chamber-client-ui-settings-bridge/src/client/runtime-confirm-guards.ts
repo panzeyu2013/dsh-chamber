@@ -24,7 +24,7 @@
 import {
   remoteRuntimeActionGates,
   type RemoteRuntimeStatus,
-} from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
+} from '@dsh-chamber/dsh-chamber-client-core'
 
 /**
  * The live facts one armed gateway request is re-validated against. The section

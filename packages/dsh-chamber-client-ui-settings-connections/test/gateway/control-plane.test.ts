@@ -12,7 +12,9 @@ import {
   gatewayInstalled,
   gatewayPluginApply,
   gatewayPluginSync,
+  gatewayPluginUndo,
   gatewayTasks,
+  waitForGatewayOpTerminal,
   type GatewayInstalledProjection,
 } from '../../src/client/control-plane.ts'
 import { gatewayReadFenceText, type GatewayReadFenceKey } from '../../src/client/managed-restart.ts'
@@ -307,6 +309,72 @@ test('gatewayTasks: GETs the task projection (journal + deferred + busy) through
     assert.equal(stub.calls.length, 1)
     assert.equal(stub.calls[0]!.url, 'http://127.0.0.1:17500/api/i/gateway-gw-prod/chamber/plugins/tasks')
     assert.deepEqual(result, tasksBody)
+  } finally {
+    stub.restore()
+    restoreOrigin()
+  }
+})
+
+/* ---- design 21 §3 undoJournal / §6.8 r2: POST /chamber/plugins/undo ---- */
+
+test('gatewayPluginUndo: POSTs the id-only undo through the instance proxy and returns the accepted opId', async () => {
+  const restoreOrigin = withPageOrigin('http://127.0.0.1:17500')
+  const stub = stubFetch(202, { accepted: true, opId: 'op-undo' })
+  try {
+    const result = await gatewayPluginUndo('gw-prod')
+    assert.deepEqual(result, { ok: true, opId: 'op-undo' })
+    assert.equal(stub.calls.length, 1)
+    assert.equal(stub.calls[0]!.url, 'http://127.0.0.1:17500/api/i/gateway-gw-prod/chamber/plugins/undo')
+    assert.equal(stub.calls[0]!.init.method, 'POST')
+  } finally {
+    stub.restore()
+    restoreOrigin()
+  }
+})
+
+test('gatewayPluginUndo: a refusal keeps the server {error, code} verbatim, never an ok shape', async () => {
+  const restoreOrigin = withPageOrigin('http://127.0.0.1:17500')
+  const stub = stubFetch(409, { error: 'no undoable plugin operation is recorded', code: 'no_undoable_op' })
+  try {
+    const result = await gatewayPluginUndo('gw-prod')
+    assert.equal(result.ok, false)
+    if (!result.ok) {
+      assert.equal(result.code, 'no_undoable_op')
+      assert.equal(result.error, 'no undoable plugin operation is recorded')
+    }
+  } finally {
+    stub.restore()
+    restoreOrigin()
+  }
+})
+
+test('waitForGatewayOpTerminal: polls the task projection until the op settles (ok/failed carry their own error)', async () => {
+  const restoreOrigin = withPageOrigin('http://127.0.0.1:17500')
+  const pendingBody = { ok: true, busy: true, tasks: [
+    { id: 'op-undo', ts: 2, kind: 'undo', name: 'pkg', preImage: 'op-undo', status: 'pending' },
+  ], deferred: [] }
+  const okBody = { ok: true, busy: false, tasks: [
+    { id: 'op-undo', ts: 2, kind: 'undo', name: 'pkg', preImage: 'op-undo', undoOf: 'op-1', status: 'ok' },
+  ], deferred: [] }
+  const stub = stubFetchSequence([{ status: 200, body: pendingBody }, { status: 200, body: okBody }])
+  try {
+    const terminal = await waitForGatewayOpTerminal('gw-prod', 'op-undo', { pollMs: 0, sleep: async () => {} })
+    assert.deepEqual(terminal, { status: 'ok', error: null })
+    assert.equal(stub.calls.length, 2, 'one pending read then the terminal read')
+  } finally {
+    stub.restore()
+    restoreOrigin()
+  }
+})
+
+test('waitForGatewayOpTerminal: an op that never settles inside the bound answers timeout (never a success claim)', async () => {
+  const restoreOrigin = withPageOrigin('http://127.0.0.1:17500')
+  const stub = stubFetchSequence([{ status: 200, body: { ok: true, busy: true, tasks: [
+    { id: 'op-undo', ts: 2, kind: 'undo', name: 'pkg', preImage: 'op-undo', status: 'pending' },
+  ], deferred: [] } }])
+  try {
+    const terminal = await waitForGatewayOpTerminal('gw-prod', 'op-undo', { pollMs: 0, timeoutMs: 0, sleep: async () => {} })
+    assert.deepEqual(terminal, { status: 'timeout' })
   } finally {
     stub.restore()
     restoreOrigin()

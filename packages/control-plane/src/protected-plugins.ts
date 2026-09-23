@@ -24,6 +24,11 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import type { Dirent } from 'node:fs'
 import { join } from 'node:path'
+import {
+  isMaterializedValue,
+  readManifestVersion,
+} from '@dsh-chamber/dsh-chamber-wire/plugin-manifest'
+import type { PluginRow, PluginRowRole } from '@dsh-chamber/dsh-chamber-wire/plugin-row'
 import { errorMessage } from './error-text.ts'
 import { MAX_PLUGIN_SPEC_CHARS } from './plugin-spec.ts'
 
@@ -104,30 +109,14 @@ export const PROFILE_BUNDLES_SNAPSHOT: readonly string[] = [
   '@deepseek-ai/dsh-web-app',
 ]
 
-/** 行角色（读面投影；渲染端只渲染，不推导）。 */
-export type PluginRowRole =
-  | 'composition'
-  | 'seed'
-  | 'layer'
-  | 'third-party'
-  | 'materialized'
-  | 'unknown'
-
 /** 受保护来源（用于文案与 tooltip；同一名字可能同时命中多个来源，取最先命中的）。 */
 export type ProtectedSource = 'installation' | 'chamber' | 'family'
 
-/** 一行已安装事实（design 21 §6.11.5 的 wire 形状）。 */
-export interface PluginRow {
-  name: string
-  /** 声明的依赖值（各后端按自己的掩码纪律处理）。投影行恒来自依赖表，
-   *  因此除非掩码器显式返回 null，它不会是 null。 */
-  spec: string | null
-  /** 已装版本（能从 node_modules 清单读到才有；否则 null）。 */
-  version: string | null
-  role: PluginRowRole
-  protected: boolean
-  owner?: 'installation' | 'chamber' | 'user'
-}
+// 读面行形状（PluginRow / PluginRowRole）的**唯一声明**在 wire 的 ./plugin-row 面
+// （design 21 §6.11.5 单源；C14 断言本文件只有 import/type 再导出、无本地字段重声明）。
+// 名字原样再导出：gateway、桌面 main 与既有调用点的
+// `PluginRow` / `PluginRowRole` 引用逐字不变。
+export type { PluginRow, PluginRowRole }
 
 /** 派生后的受保护集合。 */
 export interface ProtectedSet {
@@ -620,29 +609,13 @@ export function resolveRuntimeFamily(
 // 读面行投影
 
 /**
- * 投影里 materialize 值（`file:`/`link:`/本地路径）的掩码。**保留 `file:` 前缀**，
- * 这样掩码后的值仍被三端的 spec 分类器判为 materialize（name 基 diff 不受影响）。
- * 单一来源：desktop plugin-sync.ts 与 gateway plugins-installed.ts 的
- * `MATERIALIZED_VALUE_MASK` 都指回这里（design 21 §6.2 掩码纪律）。
+ * 掩码与 materialize 判据的**单一来源** = 中立契约包
+ * `@dsh-chamber/dsh-chamber-wire/plugin-manifest`（design 21 §6.2/决策 18）。
+ * 本模块不重声明常量与路径文法：判据从单源导入，掩码常量经本模块的公开面透传
+ * （desktop 经 control-plane-module.ts 双路径 facade 消费；打包态由
+ * build-control-plane 的 esbuild bundle 内联 wire，产物无裸说明符——R6 第 2 阶段）。
  */
-export const PLUGIN_MATERIALIZED_VALUE_MASK = 'file:<hidden>'
-
-/**
- * `file:`/`link:`/路径类依赖值 = materialize 行（与各后端既有 value grammar 同义）。
- *
- * **必须与 semver 范围区分**：`~1.2.0`（波浪号范围）、`^1.0.0`、`>=1 <2`、`1.x`、`latest`
- * 都是 registry 值而不是路径——「任何 `~` 开头都算路径」会把 `~1.2.0` 误判为 materialize
- * 行。只有 `~/`、`./`、`../`、`/abs`、`C:\`、`\\unc` 这类
- * **路径形态**才算。
- */
-export function isMaterializedValue(value: string): boolean {
-  if (typeof value !== 'string' || value === '') return false
-  if (/^(file|link):/i.test(value)) return true
-  if (/^\.\.?([/\\]|$)/.test(value)) return true
-  if (value.startsWith('/') || value.startsWith('\\')) return true
-  if (value === '~' || /^~[/\\]/.test(value)) return true
-  return /^[a-zA-Z]:[\\/]/.test(value)
-}
+export { PLUGIN_MATERIALIZED_VALUE_MASK } from '@dsh-chamber/dsh-chamber-wire/plugin-manifest'
 
 export interface DerivePluginRowsInput {
   /** profile 声明的依赖（name → spec/value；各后端已按自己的掩码纪律处理过）。
@@ -955,10 +928,9 @@ export function readInstalledVersion(profileDir: string, name: string): string |
   const manifestPath = join(profileDir, 'node_modules', name, 'package.json')
   if (!existsSync(manifestPath)) return null
   try {
-    const parsed: unknown = JSON.parse(readFileSync(manifestPath, 'utf8'))
-    if (parsed === null || typeof parsed !== 'object') return null
-    const version = (parsed as Record<string, unknown>).version
-    return typeof version === 'string' && version !== '' ? version : null
+    // 版本判据的单一来源 = wire plugin-manifest readManifestVersion（非空字符串
+    // 才算版本；非对象/数组/缺失一律 null，绝不给猜测值）。
+    return readManifestVersion(JSON.parse(readFileSync(manifestPath, 'utf8')))
   } catch {
     return null
   }

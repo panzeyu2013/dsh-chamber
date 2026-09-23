@@ -46,7 +46,7 @@ import {
   type RuntimeBadgeView,
   type RuntimeMetadataComponent,
   type RuntimeVersionEntry,
-} from '../../../../packages/renderer/src/runtime-management.ts'
+} from '@dsh-chamber/dsh-chamber-client-core/runtime-management'
 import { applySettingsPatch, getSettingsStatus, subscribeSettings } from './settings-store.ts'
 // Pure gateway runtime core (design 21 §5.2 split): parsers/fetchers/action
 // gates/errors/settle poll + the restart-readiness poll live in the sidebar
@@ -64,7 +64,7 @@ import {
   resetRemoteRuntimeActivityOwners,
   type RemoteRuntimeStatus,
   type RemoteVersions,
-} from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
+} from '@dsh-chamber/dsh-chamber-client-core'
 import { projectRemoteRuntimeBadge, remoteRuntimeStatusView } from './gateway-runtime-api.ts'
 // Page-owned restart→reload completion (design 18 §3.6 item 8), shared with the
 // connections package's restart entry points — design 21 §5.2 shared face.
@@ -72,7 +72,7 @@ import {
   RESTART_RELOAD_BUDGET_MS,
   armLocalDshRestartCompletion,
   armWindowReloadWhenServed,
-} from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
+} from '@dsh-chamber/dsh-chamber-client-core'
 import {
   acceptConfirm as acceptConfirmStep, armConfirm, cancelConfirm as cancelConfirmStep,
   IDLE_CONFIRM, type ConfirmState,
@@ -89,7 +89,7 @@ import {
   retryRestoreStillValid,
   type GatewayConfirmFacts,
 } from './runtime-confirm-guards.ts'
-import { errorMessage } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
+import { errorMessage } from '@dsh-chamber/dsh-chamber-client-core'
 import { bridgeRestartRefusalText } from './restart-refusal.ts'
 import { RUNTIME_BADGE_KEYS, RUNTIME_BADGE_TONE_CLASS, formatTimestamp, localizeRegistryError, metadataComponentText, type RuntimeTranslate } from './runtime-display.ts'
 import css from './SettingsShell.module.css'

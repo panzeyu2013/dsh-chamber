@@ -91,6 +91,7 @@ export const GROUPS = {
     'test/ipc/clear-only-credentials.test.ts',
     'test/ipc/renderer-trust.test.ts',
     'test/ipc/cross-package-contract.test.ts',
+    'test/ipc/local-plugin-list-redaction.test.ts',
     'test/ipc/ipc-surface-mirror.test.ts',
     // swift-side electron-free core seam gate + the Swift-flavor sidecar/B-bridge
     // surface (flat paths on purpose; kept out of the test/<domain>/ regrouping).
@@ -124,6 +125,9 @@ export const GROUPS = {
     'test/local-state/runtime-tree-check.test.ts',
     // lockfile-derived family facts memo：mtime+size 失效
     'test/local-state/lockfile-facts-memo.test.ts',
+    // <userData> host-root 租约（R2 §3.6 L2）：desktop/sidecar 接线 + sidecar
+    // 冲突 stderr/exit 契约与生命周期（源文本锁 + 真进程端到端）。
+    'test/local-state/host-root-lease.test.ts',
   ],
   // scripts: package build/packaging helper tests (stay in scripts/ by design)
   scripts: [

@@ -707,7 +707,7 @@ test('binding: assertHostSurface passes on the full surface and refuses otherwis
   assert.throws(() => assertHostSurface({} as never), codeIs('registry-unreadable'))
   // A registry-only host (no enumeration/locate surface) must fail the probe
   // loudly — presence without surface health would only registry-unreadable
-  // on the first preview/purge.
+  // on the first purge.
   assert.throws(() => assertHostSurface({
     workspaceRegistry: { archivedSessionIds: [], list: () => [], setState: async () => {} },
     agents: { list: () => [] },

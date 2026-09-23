@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { controlPlaneUrl } from '../../src/shared/control-plane-client.ts'
+import { controlPlaneUrl } from '@dsh-chamber/dsh-chamber-client-core'
 
 test('control-plane requests use the shell page origin before the async bridge', () => {
   const previous = Object.getOwnPropertyDescriptor(globalThis, 'window')

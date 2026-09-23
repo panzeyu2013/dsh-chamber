@@ -41,7 +41,7 @@ import {
   EARLY_OPEN_BUDGET_MS,
   EARLY_OPEN_RETRY_MS,
   shouldEarlyOpenSession,
-} from '../shared/open-intent.ts'
+} from '@dsh-chamber/dsh-chamber-client-core/open-intent'
 
 export interface EarlyOpenArmDeps {
   /** Chamber instance id of the ctx hosting this arm (log context). */

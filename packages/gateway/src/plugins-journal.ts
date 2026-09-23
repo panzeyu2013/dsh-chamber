@@ -71,8 +71,11 @@ export const JOURNAL_MAX_BYTES = 256 * 1024
 export const JOURNAL_RETENTION_LIMIT = 50
 /** Aside-name prefix for corrupt-journal evidence. */
 export const CORRUPT_ASIDE_PREFIX = 'journal.json.corrupt-'
-/** The op kinds the journal can record. */
-export type JournalOpKind = 'install' | 'remove' | 'materialize'
+/** The op kinds the journal can record. `undo` is a first-class mutation
+ * kind (design 21 §6.3/§6.8 r2): the undo RESTORES the latest ok op's
+ * preImage pair and is itself backed up + journaled, so the journal's
+ * terminal-state and preImage-reference accounting stays complete. */
+export type JournalOpKind = 'install' | 'remove' | 'materialize' | 'undo'
 /** Lifecycle of one recorded op. */
 export type JournalOpStatus = 'pending' | 'ok' | 'failed' | 'blocked'
 /** Post-mutation restart outcome (recorded by the wiring layer, later). */
@@ -108,6 +111,9 @@ export interface JournalOp {
   /** Reference to the pre-mutation backup dir: backups/<op-id>/ when the
    * executor successfully placed one, null otherwise. */
   preImage: string | null
+  /** For `kind: 'undo'` ops: the id of the op whose preImage pair this undo
+   * restored (design 21 §6.3). Absent for every other kind. */
+  undoOf?: string
   /** Human attribution label (desktop connection label) when known. */
   initiator?: string
   /** Pid of the spawned `dsh plugin` child (the detached process-group
@@ -133,6 +139,9 @@ export interface JournalPending {
    *  (design 21 §6.11.3 R2) needs it for official-scope installs. */
   version?: string
   initiator?: string
+  /** For `kind: 'undo'` submissions: the id of the op to restore (bound at
+   * submit; the executor verifies it is still the undoable target). */
+  undoOf?: string
 }
 
 export interface JournalTerminalPatch {
@@ -354,6 +363,7 @@ export function createPluginsJournal(stateDir: string, logger: JournalLogger): P
       if (input.spec !== undefined) op.spec = input.spec
       if (input.version !== undefined) op.version = input.version
       if (input.initiator !== undefined) op.initiator = input.initiator
+      if (input.undoOf !== undefined) op.undoOf = input.undoOf
       const ops = loadOpsOrEmpty()
       ops.push(op)
       persistOps(ops)

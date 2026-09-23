@@ -1,7 +1,7 @@
 /**
  * The shared Node-side error-text projection (control-plane/src/error-text.ts):
  * the control plane's instance of the primitive the browser side shares in
- * dsh-chamber-client-ui-sidebar/src/shared/error-text.ts.
+ * packages/dsh-chamber-client-core/src/error-text.ts.
  *
  * Run directly: node packages/control-plane/test/protocol/error-text.test.ts
  */

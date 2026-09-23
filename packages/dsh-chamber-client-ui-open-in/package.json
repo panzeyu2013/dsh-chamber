@@ -1,6 +1,6 @@
 {
   "name": "@dsh-chamber/dsh-chamber-client-ui-open-in",
-  "description": "Chamber-bundled open-in client plugin (designs 16/20 + Batch 3 unification): one header entry over the per-source view-model — the page-level machine catalog (installed apps and their real icons, read once from the local instance) plus the source's launch carrier (the machine host domain, or the desktop main-process VS Code provider for a remote SSH target). Since 2026-12 this package also hosts the conversation stream-health seat (design 14 §D4): the chamber's recovery arm for a journal the official stack latches into 'error' (stage-move re-open) and for a parked 'loading' open: the stall notice, the user's per-session rebuild control, and — since 2026-09-21 — an EVIDENCE-GATED automatic rebuild (the concrete open promise must report NO open in flight, so a slow Host is never interrupted) plus a 90 s hard-failure notice so the user is never left on a silent spinner",
+  "description": "Chamber-bundled open-in client plugin (designs 16/20 + Batch 3 unification): one header entry over the per-source view-model — the page-level machine catalog (installed apps and their real icons, read once from the local instance) plus the source's launch carrier (the machine host domain, or the desktop main-process VS Code provider for a remote SSH target). This package also hosts the conversation stream-health seat (design 14 §D4): the chamber's recovery arm for a journal the official stack latches into 'error' (stage-move re-open) and for a parked 'loading' open: the stall notice, the user's per-session rebuild control, and — since 2026-09-21 — an EVIDENCE-GATED automatic rebuild (the concrete open promise must report NO open in flight, so a slow Host is never interrupted) plus a 90 s hard-failure notice so the user is never left on a silent spinner",
   "version": "0.3.2-beta.5",
   "private": true,
   "type": "module",
@@ -8,12 +8,14 @@
   "types": "lib/types/index.d.ts",
   "exports": {
     ".": {
-      "types": "./lib/types/index.d.ts",
-      "default": "./lib/index.js"
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
     },
-    "./client": "./src/client/index.ts",
-    "./shared": "./src/shared/index.ts",
-    "./src/*": "./src/*",
+    "./client": {
+      "types": "./src/client/index.ts",
+      "default": "./src/client/index.ts"
+    },
+    "./machine-catalog": "./src/client/machine-catalog.ts",
     "./package.json": "./package.json"
   },
   "dsh": {
@@ -30,6 +32,7 @@
   },
   "license": "MIT",
   "dependencies": {
+    "@dsh-chamber/dsh-chamber-client-core": "workspace:^",
     "@dsh-chamber/dsh-chamber-client-ui-sidebar": "workspace:^",
     "@dsh-chamber/dsh-stream-state": "workspace:^"
   },

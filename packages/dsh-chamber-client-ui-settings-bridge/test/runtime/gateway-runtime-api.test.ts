@@ -6,9 +6,9 @@
  *
  * The pure core's cases live where the core lives: parsers / fetchers /
  * action gates / error classification / the settle poll are covered by the
- * sidebar shared test (gateway-runtime.test.ts,
- * `@dsh-chamber/dsh-chamber-client-ui-sidebar/shared`), and the restart poll by the
- * sidebar shared poll test (gateway-runtime-poll.test.ts).
+ * client-core test (gateway-runtime.test.ts,
+ * `@dsh-chamber/dsh-chamber-client-core`), and the restart poll by the
+ * client-core poll test (gateway-runtime-poll.test.ts).
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'

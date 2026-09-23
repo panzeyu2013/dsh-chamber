@@ -5,7 +5,7 @@
  */
 import clsx from 'clsx'
 import { IconAlarmClockOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
-import { clearPendingClick } from '../shared/pending-click.ts'
+import { clearPendingClick } from '@dsh-chamber/dsh-chamber-client-core/pending-click'
 import { useSidebarSection } from './sidebar-context.ts'
 import cc from './sidebar-chamber.module.css'
 

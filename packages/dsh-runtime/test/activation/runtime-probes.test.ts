@@ -60,8 +60,7 @@ function missingSessionError(message = 'missing probe session'): never {
 function probes(
   fx: Fixture,
   call: RuntimeProbeCall,
-  overrides: Partial<Parameters<typeof runRuntimeActivationProbes>[0]> = {},
-): ReturnType<typeof runRuntimeActivationProbes> {
+  overrides: Partial<Parameters<typeof runRuntimeActivationProbes>[0]> = {}): ReturnType<typeof runRuntimeActivationProbes> {
   return runRuntimeActivationProbes({
     baseUrl: 'http://127.0.0.1:17510',
     dshHome: fx.dshHome,
@@ -122,8 +121,7 @@ function assertCommandsExecuteArgShape(payload: unknown): void {
     unexpected.length > 0 ? `unexpected ${unexpected.map(name => `"${name}"`).join(', ')}` : '',
   ].filter(part => part !== '')
   const error = new Error(
-    `typert gateway: commands/execute: args fields do not match the descriptor: ${parts.join('; ')}`,
-  ) as Error & { code: string }
+    `typert gateway: commands/execute: args fields do not match the descriptor: ${parts.join('; ')}`) as Error & { code: string }
   error.code = 'gateway/arguments-invalid'
   throw error
 }
@@ -160,8 +158,7 @@ test('the commands/execute probe arg name is locked to the pinned upstream signa
   // never silently desynchronize the probe.
   const vendorSource = readFileSync(
     join(repoRoot, 'vendor', 'harness-checkout', 'packages', 'interaction', 'commands', 'src', 'index.ts'),
-    'utf8',
-  )
+    'utf8')
   const signature = vendorSource.match(/async execute\(\s*agent\s*:[^,]*,\s*line\s*:[^,]*,\s*([A-Za-z_$][\w$]*)\s*:/)
   assert.ok(signature !== null, 'the vendored interaction/commands execute signature must declare agent, line and its third parameter')
   const upstreamArgName = signature![1]!
@@ -176,8 +173,7 @@ test('the commands/execute probe arg name is locked to the pinned upstream signa
     assert.deepEqual(
       Object.keys(payload.args).sort(),
       ['agentId', upstreamArgName, 'line'].sort(),
-      `the probe must send exactly the pinned upstream arg names (upstream third parameter = "${upstreamArgName}")`,
-    )
+      `the probe must send exactly the pinned upstream arg names (upstream third parameter = "${upstreamArgName}")`)
   } finally {
     rmSync(fx.root, { recursive: true, force: true })
   }
@@ -194,8 +190,7 @@ test('a failing probe reports its method name verbatim and still redacts paths',
       fx.calls.push({ method, payload })
       if (method === 'commands/execute') {
         const error = new Error(
-          'typert gateway: commands/execute: args fields do not match the descriptor (cwd /Users/alice/Library/dsh)',
-        ) as Error & { code: string }
+          'typert gateway: commands/execute: args fields do not match the descriptor (cwd /Users/alice/Library/dsh)') as Error & { code: string }
         error.code = 'gateway/arguments-invalid'
         throw error
       }
@@ -359,7 +354,7 @@ test('identity 404 legacy session/list fallback: success, double-404, malformed,
   }
 })
 
-test('an empty hostDomainNames list returns the reduced set and never invokes the chamber host domains (2026-12 shape)', async () => {
+test('an empty hostDomainNames list returns the reduced set and never invokes the chamber host domains (shape)', async () => {
   const fx = fixture()
   try {
     const results = await probes(fx, successfulCall(fx), { windowMs: 1_000, rpcTimeoutMs: 100, hostDomainNames: [] })
@@ -453,8 +448,7 @@ test('archiveCleanup/probe accepts only a well-formed domain carrier (design 24 
     assert.equal(businessResults.find(result => result.name === 'archiveCleanup/probe')?.ok, false)
     assert.match(
       businessResults.find(result => result.name === 'archiveCleanup/probe')?.error ?? '',
-      /business failure/,
-    )
+      /business failure/)
 
     // A malformed shape (success without an object value) is malformed.
     const malformedCall: RuntimeProbeCall = async (_base, method) => {
@@ -470,8 +464,7 @@ test('archiveCleanup/probe accepts only a well-formed domain carrier (design 24 
     assert.equal(malformedResults.find(result => result.name === 'archiveCleanup/probe')?.ok, false)
     assert.match(
       malformedResults.find(result => result.name === 'archiveCleanup/probe')?.error ?? '',
-      /malformed probe response/,
-    )
+      /malformed probe response/)
   } finally {
     rmSync(fx.root, { recursive: true, force: true })
   }
@@ -594,8 +587,7 @@ test('openInApp/probe accepts only a well-formed domain carrier (design 20 §4.1
     assert.deepEqual(
       fx.calls.find(entry => entry.method === 'openInApp/probe')?.payload,
       { args: {} },
-      'the activation probe must stay zero-arg',
-    )
+      'the activation probe must stay zero-arg')
 
     const businessResults = await probes(fx, withOpenInApp({ ok: false, error: { code: 'unavailable-app', message: 'x' } }), { windowMs: 1_000, rpcTimeoutMs: 100 })
     assert.equal(businessResults.find(result => result.name === 'openInApp/probe')?.ok, false)
@@ -677,8 +669,7 @@ test('hostDomainNames derives the exact probe set for partial syncs (design 24 �
     const results = await probes(fx, successfulCall(fx), { windowMs: 1_000, rpcTimeoutMs: 100, hostDomainNames: ['gitWorktree/previewCreate'] })
     assert.deepEqual(
       results.map(result => result.name),
-      [...activationProbeNamesForDomains(['gitWorktree/previewCreate'])],
-    )
+      [...activationProbeNamesForDomains(['gitWorktree/previewCreate'])])
     assert.ok(results.every(result => result.ok))
     assert.equal(fx.calls.some(entry => entry.method === 'clientGraph/graph'), false)
     assert.equal(fx.calls.some(entry => entry.method === 'archiveCleanup/probe'), false)
@@ -695,8 +686,7 @@ test('activationProbeNamesForDomains: full list equals REQUIRED; unknown names t
   assert.deepEqual([...activationProbeNamesForDomains([...HOST_DOMAIN_PROBE_NAMES])], [...REQUIRED_ACTIVATION_PROBES])
   assert.deepEqual(
     [...activationProbeNamesForDomains([])],
-    [...PROBE_NAMES_WITHOUT_HOST_DOMAINS],
-  )
+    [...PROBE_NAMES_WITHOUT_HOST_DOMAINS])
   // A drift name (e.g. 'archiveCleanup/preview') must FAIL
   // LOUD — silently dropping it would remove the domain from the expected
   // set AND its run legs, letting a dead domain pass activation (fail-open).

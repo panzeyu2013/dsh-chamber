@@ -10,7 +10,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { sessionRowState, subagentActivityOf } from '../../src/shared/session-row-state.ts'
+import { sessionRowState, subagentActivityOf } from '@dsh-chamber/dsh-chamber-client-core/session-row-state'
 
 const read = (rel: string): string => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8')
 const SECTION = [
@@ -67,7 +67,7 @@ test('P5: the upstream completeness-signal ask is pinned until upstream lands it
   const proposals = read('../../../../docs/progress/todo/upstream-proposals.md')
   assert.match(proposals, /## 7\. 子代理生命周期\/计数与完整性信号/)
   // The local fallback this test retires: an ABSENT lineage index is unknown, never "none".
-  assert.match(read('../../src/shared/derive.ts'), /subagentRunning === undefined\s*\n\s*\? 'unknown'/)
+  assert.match(read('../../../dsh-chamber-client-core/src/derive.ts'), /subagentRunning === undefined\s*\n\s*\? 'unknown'/)
 })
 
 test('the row and the todo strip carry the markers (no copy/class-name dependence)', () => {
@@ -105,7 +105,7 @@ test('W4: the source menu offers 全部已读 and asks the App instead of writin
 
 /** 桥的行为：意图必须真的到达订阅者，且取消订阅后不再投递。 */
 test('W4: requestMarkAllRead reaches App-layer subscribers and unsubscribes cleanly', async () => {
-  const { chamberBridge } = await import('../../src/shared/aggregate-store.ts')
+  const { chamberBridge } = await import('@dsh-chamber/dsh-chamber-client-core/aggregate-store')
   const seen: string[] = []
   const unsubscribe = chamberBridge.onMarkAllRead(({ sourceId }) => { seen.push(sourceId) })
   chamberBridge.requestMarkAllRead('local')

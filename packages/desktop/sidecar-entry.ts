@@ -47,7 +47,16 @@ import { computeQuitRisk, shouldHideToTray } from './chamber-settings.ts'
 // 没有 node_modules 树，facade 的 isPackagedSidecarRuntime 分支加载
 // `<sidecar>/dist/control-plane/index.js`；裸说明符在打包态 ERR_MODULE_NOT_FOUND。
 // dev/测试态 facade 仍走 workspace 符号链接。
-import { createControlPlane, isPackagedSidecarRuntime } from './control-plane-module.ts'
+import {
+  createControlPlane,
+  isPackagedSidecarRuntime,
+  type StateRootLease,
+} from './control-plane-module.ts'
+import {
+  acquireHostRootLease,
+  describeHostRootLeaseFailure,
+  describeStateRootLeaseError,
+} from './host-root-lease.ts'
 import {
   drainDeepLinkLaunches,
   enqueueDeepLink,
@@ -55,6 +64,7 @@ import {
   onRendererLifecycle,
   QUIT_CLEANUP_TIMEOUT_MS,
   resolveSidecarBuiltinDshWorkspace,
+  stateRootDir,
   type IpcRegistrar,
   type ShellAssemblyCtx,
 } from './shell-core.ts'
@@ -482,6 +492,8 @@ const shellVersion = ((): string => {
 let headless: HeadlessCtxAssembly | null = null
 let ctx: ShellAssemblyCtx | null = null
 let controlPlaneInstance: Awaited<ReturnType<typeof createControlPlane>> | null = null
+/** <userData> host-root 租约（R2 §3.6 L2）：boot 首段取得，两条写者腿静止后释放。 */
+let hostRootLease: StateRootLease | null = null
 let shuttingDown = false
 /** 更新检查定时器的测试注入门（与 DSH_SIDECAR_TEST_STALL_SHUTDOWN_MS 同纪律：
  *  仅 dev/测试态生效、装配态忽略）。sidecar-stdio 的 spawn 用例不需要真实出网，
@@ -489,6 +501,20 @@ let shuttingDown = false
 const TEST_NO_UPDATE_CHECK_ENV = 'DSH_SIDECAR_TEST_NO_UPDATE_CHECK'
 
 async function boot(): Promise<void> {
+  // host-root 租约（R2 §3.6 L2；scope host-root，与 plane 自取的
+  // <userData>/state state-root 租约不同文件）：<userData> 的 registry/凭据/
+  // runtime 树写者身份，先于 buildHeadlessCtx 的任何装配写入与 createControlPlane
+  // 构造（后者构造期自取 state-root 并启动 reaper）。冲突/不可读 = 另一写者占用
+  // 该 userData → 可诊断 stderr（state_root_locked + holder pid/flavor + root +
+  // 操作提示）+ startup-failure 语义退出（EXIT_STARTUP_FAILURE=70；Swift
+  // SidecarSupervisor 视作 fatal，不重启）。
+  try {
+    hostRootLease = acquireHostRootLease(args.userDataDir, 'sidecar')
+  } catch (error) {
+    console.error('[sidecar] ' + describeHostRootLeaseFailure(error))
+    process.exit(EXIT_STARTUP_FAILURE)
+  }
+
   // 无头 ctx（async：启动前导 reaps 本地插件写进程账目；edges =
   // 上方 nodeEdges 同一实例——单装配不变式，publish push/确认对话框/设置
   // 副作用宿主腿与 installIpcHandlers 投递状态机同对象）。
@@ -577,7 +603,10 @@ const nativeUpdater: NativeUpdaterBridge | undefined = args.nativeUpdater === 's
     : (headless!.localSpawnGates as unknown as SpawnGateShape)
   const controlPlane = createControlPlane({
     port: args.port ?? 17500,
-    stateDir: path.join(args.userDataDir, 'state'),
+    stateDir: stateRootDir(args.userDataDir),
+    // 租约记录的诊断 flavor：冲突方读到「sidecar」而不是笼统的 control-plane
+    // （state 根拼写仍只有 shell-core.stateRootDir 一个派生点）。
+    stateWriter: 'sidecar',
     webDistDir,
     ...(args.hostGraphDir !== null ? { hostGraphPackageSourceDir: args.hostGraphDir } : {}),
     ...(args.hostGitDir !== null ? { hostGitWorktreePackageSourceDir: args.hostGitDir } : {}),
@@ -716,6 +745,15 @@ async function shutdown(code: number): Promise<void> {
         console.error(`[sidecar] ${label}：` + String(err))
       },
     )
+    // 两条写者腿都静止后才释放 host-root 租约（先 dispose/cp.stop，再放租约；
+    // 与 main 的 quit 序同义）。释放失败 loud，但绝不改写本次退出码——进程退出
+    // 时租约模块的 exit listener 仍会 best-effort 兜底。
+    try {
+      hostRootLease?.release()
+      hostRootLease = null
+    } catch (err) {
+      console.error('[sidecar] host-root 租约释放失败：' + String(err))
+    }
   })()
   let deadlineTimer: NodeJS.Timeout | undefined
   const completed = await Promise.race([
@@ -736,7 +774,12 @@ async function shutdown(code: number): Promise<void> {
 }
 
 void boot().catch((err) => {
-  console.error(`[sidecar] boot 失败（fatal exit ${EXIT_STARTUP_FAILURE}）：` + String(err))
+  // 租约错误带机器可读 code（state_root_locked 等）+ root + holder pid/flavor；
+  // 其余错误沿用原样 String(err)。释放 best-effort：绝不因释放异常改写 fatal
+  // 退出码（exit listener 是兜底）。
+  const detail = describeStateRootLeaseError(err) ?? String(err)
+  console.error(`[sidecar] boot 失败（fatal exit ${EXIT_STARTUP_FAILURE}）：` + detail)
+  try { hostRootLease?.release() } catch { /* exit listener 兜底 */ }
   process.exit(EXIT_STARTUP_FAILURE)
 })
 

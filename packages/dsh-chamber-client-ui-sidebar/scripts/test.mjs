@@ -106,6 +106,8 @@ export const GROUPS = {
   // plugin-kernel: the page-level client-plugin load kernel, plugin graph and the panel/settings seats
   'plugin-kernel': [
     'test/plugin-kernel/client-plugin-loader.test.ts',
+    // host-graph 通道分类的单一来源（各状态码/信封分支 + 逐字文案 + 两个消费点锁）。
+    'test/plugin-kernel/plugin-graph-classify.test.ts',
     'test/plugin-kernel/plugin-graph-recheck.test.ts',
     'test/plugin-kernel/restart-window-reload.test.ts',
     // panel-source.ts value-imports the dsh store engine, so this file runs through

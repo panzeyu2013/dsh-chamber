@@ -31,10 +31,9 @@
 import { createServer, type Server } from 'node:http'
 import type { Duplex } from 'node:stream'
 import { randomBytes } from 'node:crypto'
-import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { existsSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { existsSync, statSync } from 'node:fs'
 import type { ConnectionRowView } from './api.ts'
 import { createCatalog } from './catalog.ts'
 import { createLocalConnection } from './local-connection.ts'
@@ -47,26 +46,25 @@ import {
   type InstanceTransportRegistrationOptions,
 } from './instance-proxy.ts'
 import { ensureInstanceId } from './instance-id.ts'
+import { ensurePrivateDirectoryNoFollow } from './private-file.ts'
 import {
-  createPrivateFileExclusiveNoFollow,
-  ensurePrivateDirectoryNoFollow,
-} from './private-file.ts'
+  acquireStateRootLease,
+  resolveStateRoot,
+  type StateRootLease,
+  type StateRootLeaseFlavor,
+} from './state-root-lease.ts'
 import { hostLogs } from './host-logs.ts'
 import { createStaticServing } from './static-serving.ts'
 import {
   assertHostSeedEntryNaming,
-  buildPatchOverlay,
   CHAMBER_HOST_PACKAGES,
-  ensureSeedPackage,
-  missingHostPackageInserts,
   HOST_ARCHIVE_CLEANUP_INSERT,
   HOST_GIT_WORKTREE_INSERT,
   HOST_GRAPH_INSERT,
-  HOST_GRAPH_PATCH_FILENAME,
   HOST_OPEN_IN_INSERT,
   type SeedEntry,
 } from './host-graph-seed.ts'
-import { planHostLogBridge } from './host-log-bridge.ts'
+import { resolveLocalHostGraphOverlay, seedDshHomeDefaults } from './local-host-seeding.ts'
 import { withControlLogFile } from './log-file.ts'
 import type { Logger } from './types.ts'
 import type { ApiCorsEvaluator, ApiRequest, ApiResponse, ApiSurface } from './api.ts'
@@ -83,15 +81,15 @@ import type { ApiCorsEvaluator, ApiRequest, ApiResponse, ApiSurface } from './ap
  * privacy intent (referers never leave the origin; these surfaces have no
  * cross-site outbound document requests) without nulling the Origin of form
  * POSTs. JSON/fetch traffic is unaffected by the policy either way. */
-export const CONTROL_PLANE_SECURITY_HEADERS: Readonly<Record<string, string>> = Object.freeze({
+const CONTROL_PLANE_SECURITY_HEADERS: Readonly<Record<string, string>> = Object.freeze({
   'cross-origin-opener-policy': 'same-origin',
   'referrer-policy': 'same-origin',
   'x-content-type-options': 'nosniff',
   'x-frame-options': 'DENY',
 })
 
-/** Default control-plane state root when DSH_CHAMBER_STATE is unset. */
-export const DEFAULT_STATE_DIR = join(homedir(), '.dsh-chamber')
+// DEFAULT_STATE_DIR and the state-root resolution live in state-root-lease.ts
+// (the single source re-exported below) so every shape resolves one root alike.
 
 /**
  * Baseline default for the control plane's own HTTP bind: the port desktop
@@ -112,14 +110,14 @@ const REPO_ROOT = resolve(fileURLToPath(new URL('../../..', import.meta.url)))
  * runtimes pass the bundled location through ControlPlaneOptions (an absent
  * source is skipped, never an error).
  */
-export const DEFAULT_HOST_GRAPH_PACKAGE_SOURCE_DIR = join(REPO_ROOT, 'packages', 'dsh-chamber-seed-client-graph')
+const DEFAULT_HOST_GRAPH_PACKAGE_SOURCE_DIR = join(REPO_ROOT, 'packages', 'dsh-chamber-seed-client-graph')
 
 /** Default source for the chamber in-host Git worktree service package. */
-export const DEFAULT_HOST_GIT_WORKTREE_PACKAGE_SOURCE_DIR = join(REPO_ROOT, 'packages', 'dsh-chamber-seed-git-worktree')
+const DEFAULT_HOST_GIT_WORKTREE_PACKAGE_SOURCE_DIR = join(REPO_ROOT, 'packages', 'dsh-chamber-seed-git-worktree')
 
 /** Default source for the chamber in-host archived-session cleanup domain
  *  package (design 24; packaged runtimes pass the bundled location). */
-export const DEFAULT_HOST_ARCHIVE_CLEANUP_PACKAGE_SOURCE_DIR = join(REPO_ROOT, 'packages', 'dsh-chamber-seed-archive-cleanup')
+const DEFAULT_HOST_ARCHIVE_CLEANUP_PACKAGE_SOURCE_DIR = join(REPO_ROOT, 'packages', 'dsh-chamber-seed-archive-cleanup')
 
 /**
  * Default source for the chamber in-host open-in domain package (design 20 §6;
@@ -127,7 +125,7 @@ export const DEFAULT_HOST_ARCHIVE_CLEANUP_PACKAGE_SOURCE_DIR = join(REPO_ROOT, '
  * bundled location). LOCAL shape only: the row is marked `localOnly` in the
  * registry, so no remote target and no gateway ever receives it.
  */
-export const DEFAULT_HOST_OPEN_IN_PACKAGE_SOURCE_DIR = join(REPO_ROOT, 'packages', 'dsh-chamber-seed-open-in')
+const DEFAULT_HOST_OPEN_IN_PACKAGE_SOURCE_DIR = join(REPO_ROOT, 'packages', 'dsh-chamber-seed-open-in')
 
 /**
  * Default dsh workspace: <repo root>/ref-dsh when present, otherwise the
@@ -145,30 +143,6 @@ export function defaultDshWorkspacePath() {
 }
 
 /**
- * Seed first-run defaults into the managed dsh home ($DSH_HOME of the
- * spawned local host, design 02 §3.1). The dsh web UI derives its locale
- * from the settings document (`locale.preference`, dsh-settings-file) and
- * otherwise falls back to the browser/OS language — seed `zh` so the local
- * instance defaults to Chinese regardless of the system language. Absent
- * file only: an existing document (the user's own edit or an explicit
- * choice) is never touched.
- */
-export function seedDshHomeDefaults(dshHome: string): boolean {
-  const documentPath = join(dshHome, 'settings.yaml')
-  ensurePrivateDirectoryNoFollow(dshHome, 0o700)
-  try {
-    createPrivateFileExclusiveNoFollow(documentPath, 'locale:\n  preference: zh\n', { mode: 0o600 })
-    return true
-  } catch (error) {
-    // O_EXCL refuses every existing leaf, including a symlink, without
-    // opening or modifying it. The dsh settings service owns existing
-    // documents, so seeding must not impose a new content/size/type policy.
-    if ((error as { code?: unknown } | null)?.code === 'EEXIST') return false
-    throw error
-  }
-}
-
-/**
  * createControlPlane options (all optional; see the module docblock).
  * `corsOrigins` is the explicit cross-origin allowlist; `webDistDir`
  * enables the static frontend service (design 05 §7.3).
@@ -177,6 +151,16 @@ export interface ControlPlaneOptions {
   port?: number
   host?: string
   stateDir?: string
+  /**
+   * Caller-held state-root lease (the gateway shape acquires it before its
+   * first store write and passes the same handle here). When provided it is
+   * adopted — same root verified plus assertCurrent — and never released by the
+   * plane; when absent the plane acquires its own at construction, reacquires
+   * it in start() and releases it in stop() after the writer-quiescence proof.
+   */
+  stateLease?: StateRootLease
+  /** Diagnostic writer label for the plane-owned lease record. */
+  stateWriter?: StateRootLeaseFlavor
   dshWorkspacePath?: string
   /** Resolve the workspace for each local spawn/restart (runtime switching). */
   getDshWorkspacePath?: () => string
@@ -349,163 +333,6 @@ export interface PlaneHandle {
 }
 
 /**
- * Drop the local `--patch` overlay file. Called by every resolution that passes
- * NO overlay, so the file's presence keeps meaning exactly "the last spawn
- * passed it": the desktop's chamber probe reads that file as a mount fact
- * (`packages/desktop/plugin-sync.ts` localOverlayCarriesInsert), and a leftover
- * from an earlier spawn would report a row the current tree does not carry.
- * An undeletable file is a broken state root (this plane's own layout) — fail
- * loud, never a silent skip that leaves the false fact in place.
- * @param stateDir - the control-plane state root.
- */
-function clearHostGraphPatchOverlay(stateDir: string): void {
-  rmSync(join(stateDir, HOST_GRAPH_PATCH_FILENAME), { force: true })
-}
-
-/** Inputs of one local host-graph overlay resolution (see {@link resolveLocalHostGraphOverlay}). */
-export interface LocalHostGraphOverlayInput {
-  /** The control-plane state root (the overlay lives directly under it). */
-  readonly stateDir: string
-  /** The managed dsh home (the profile's own patch layer is read from under it). */
-  readonly dshHome: string
-  /** The resolved seed registry entries (the four base host packages + extras). */
-  readonly entries: readonly SeedEntry[]
-  /** Informational sink (the plane's logger in production; tests pass no-ops). */
-  readonly log?: (message: string) => void
-  /** Warning sink (absent/stub seed sources). */
-  readonly warn?: (message: string) => void
-  /** Error sink for a packaged host entry whose sourceDir exists but lacks its
-   *  built artifact (a packaging defect, not a stub). Defaults to `warn` so a
-   *  caller that wires only the warn sink still sees the message. */
-  readonly error?: (message: string) => void
-  /**
-   * Environment that decides the opt-in host-log bridge
-   * (DSH_CHAMBER_HOST_LOG_LEVEL — host-log-bridge.ts). Defaults to an EMPTY
-   * environment (bridge off), so a synthetic/test caller can never pick up the
-   * ambient shell by accident; the production spawn-thunk wiring passes
-   * `process.env` explicitly.
-   */
-  readonly env?: NodeJS.ProcessEnv
-  /**
-   * Receives the probe domains backed by the host packages this resolution
-   * actually seeds: the plane's spawn thunk records
-   * them on `PlaneHandle.seededProbeDomains`, so the desktop's activation
-   * expectation set follows the real seed set. Optional — direct test callers
-   * omit it and keep the resolver a pure overlay producer.
-   */
-  readonly onSeededProbeDomains?: (domains: readonly string[]) => void
-}
-
-/**
- * Resolve one local spawn's `--patch` overlay (design 09 module B), or null
- * when that spawn passes none.
- *
- * Returned path = the overlay this spawn hands the launcher, carrying ONLY the
- * rows the profile's own `cordis.patch.yml` does not already own (loader
- * identities are global across both layers: a duplicated id/name pair is a
- * boot failure, so an already user-owned row is reused, never repeated).
- *
- * The no-overlay paths (no built `dist/index.js` artifact; every row already
- * user-owned in the profile patch) REMOVE a leftover overlay file. That keeps
- * one invariant the desktop probe relies on: the file exists exactly when the
- * spawn about to run passes it, so reading it is reading this spawn's mount
- * set — never a previous spawn's.
- *
- * @param input - state root, managed dsh home, resolved seed entries, sinks.
- * @returns the `--patch` overlay path, or null (no overlay passed).
- */
-export function resolveLocalHostGraphOverlay(input: LocalHostGraphOverlayInput): string | null {
-  const { stateDir, dshHome, entries: baseEntries } = input
-  const log = input.log ?? (() => {})
-  const warn = input.warn ?? (() => {})
-  const error = input.error ?? warn
-  // Opt-in managed-dsh application-log bridge (host-log-bridge.ts): ONE extra
-  // seed entry while DSH_CHAMBER_HOST_LOG_LEVEL is set for this spawn, carrying
-  // the generated logger-exporter plugin. With the switch absent the entry list
-  // (and therefore every write, row and overlay byte below) carries no bridge
-  // entry.
-  const bridgeEntry = planHostLogBridge({ stateDir, env: input.env ?? {}, warn })
-  const entries = bridgeEntry === null ? baseEntries : [...baseEntries, bridgeEntry]
-  // An extra entry with no packaged source is warned, never fatal — but the
-  // wording distinguishes a true stub (packaged entry whose package has not
-  // shipped yet, e.g. the gateway mobile slot) from a desktop-synced entry
-  // merely awaiting its first sync (an expected pre-sync state, logged once
-  // per spawn as informational). The base packaged dirs keep their documented
-  // silent-skip behavior (absent source or dist = no row, no overlay).
-  for (const entry of entries) {
-    if (entry.sourceDir === null || !existsSync(entry.sourceDir)) {
-      const message = `seed entry '${entry.insert.id}' (${entry.insert.name}): source absent; skipped`
-      if (entry.source === 'desktop-synced') log(`${message} (awaiting the first desktop sync)`)
-      else warn(`${message} (stub: package not shipped in this runtime)`)
-      continue
-    }
-    // A sourceDir that EXISTS without <sourceDir>/dist/index.js is filtered out
-    // of `available` below (no seed, no --patch row). A packaged host package
-    // missing its artifact is a real packaging defect and must not disappear
-    // silently.
-    const artifact = join(entry.sourceDir, 'dist', 'index.js')
-    if (!existsSync(artifact)) {
-      const message = `seed entry '${entry.insert.id}' (${entry.insert.name}): built artifact missing at ${artifact}; skipped — this spawn has no --patch row for it`
-      if (entry.kind === 'host' && entry.source === 'packaged') error(message)
-      else warn(message)
-    }
-  }
-  // 影子条目（extraSeedEntries 覆盖同 id）若缺 probeDomains，会让该宿主域在
-  // 激活期望集中静默消失——必须 loud。桥接条目由
-  // resolver 自己追加（无宿主域），不在用户声明的 seed 集合里，故排除在外。
-  for (const entry of baseEntries) {
-    if (entry.kind === 'host' && (entry.probeDomains ?? []).length === 0) {
-      warn(`seed entry '${entry.insert.id}' (${entry.insert.name}): host entry without probeDomains; its chamber domain will not be probed`)
-    }
-  }
-  const available = entries
-    .filter(entry => entry.sourceDir !== null && existsSync(join(entry.sourceDir, 'dist', 'index.js')))
-    .map(entry => ({
-      label: entry.insert.id,
-      sourceDir: entry.sourceDir as string,
-      seedFiles: entry.seedFiles,
-      insert: entry.insert,
-      packageName: entry.insert.name,
-      probeDomains: entry.probeDomains ?? [],
-    }))
-  // The activation expectation set follows exactly what this resolution seeds
-  // (the callback fires on the empty set too, so a previously seeded plane
-  // resets instead of keeping a stale domain list).
-  input.onSeededProbeDomains?.(available.flatMap(entry => entry.probeDomains))
-
-  if (available.length === 0) {
-    clearHostGraphPatchOverlay(stateDir)
-    return null
-  }
-  // Preflight every declared package before writing any of them. A damaged
-  // second artifact must not leave the first package partially refreshed.
-  for (const entry of available) {
-    const manifest = join(entry.sourceDir, 'package.json')
-    if (!existsSync(manifest)) {
-      throw new Error(`${entry.label}: built seed package is missing ${manifest}`)
-    }
-  }
-  // Loader identities are global across the profile patch and this external
-  // overlay. Reuse an exact user-owned row, but fail before any package write
-  // when an id/name is duplicated or bound differently.
-  const profilePatchPath = join(dshHome, 'profiles', 'web', 'cordis.patch.yml')
-  const overlayInserts = missingHostPackageInserts(
-    existsSync(profilePatchPath) ? readFileSync(profilePatchPath, 'utf8') : null,
-    available.map(entry => entry.insert),
-  )
-  for (const entry of available) {
-    if (ensureSeedPackage(dshHome, entry.packageName, entry.sourceDir, entry.seedFiles)) {
-      log(`${entry.label}: seeded ${entry.packageName} into the local web profile`)
-    }
-  }
-  if (overlayInserts.length === 0) {
-    clearHostGraphPatchOverlay(stateDir)
-    return null
-  }
-  return buildPatchOverlay(stateDir, overlayInserts)
-}
-
-/**
  * Create the control plane.
  * @param options - {port?, host?, stateDir?, dshWorkspacePath?, webDistDir?,
  *   logger?, corsOrigins?}.
@@ -522,7 +349,27 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
     // network, and the Host/Origin fence (api.ts corsFor) is browser-only.
     throw new Error(`control plane refuses non-loopback bind ${JSON.stringify(host)} without an external request-boundary evaluator plus HTTP/upgrade middleware; loopback-only is the anonymous v1 invariant`)
   }
-  const stateDir = options.stateDir ?? process.env.DSH_CHAMBER_STATE ?? DEFAULT_STATE_DIR
+  const stateDir = resolveStateRoot({ explicit: options.stateDir, env: process.env })
+  // The state root has exactly one writer. A caller that already holds the lease
+  // (gateway shape: acquired before its first store write) passes it in and the
+  // plane adopts it — same root verified plus assertCurrent, never released here.
+  // Otherwise the plane takes its own, reacquires in start() and releases in
+  // stop() after the writer-quiescence proof.
+  const providedStateLease = options.stateLease
+  const stateLease = providedStateLease ?? acquireStateRootLease(stateDir, {
+    scope: 'state-root',
+    flavor: options.stateWriter ?? 'control-plane',
+    logger: options.logger ?? console,
+  })
+  const ownsStateLease = providedStateLease === undefined
+  if (providedStateLease !== undefined) {
+    if (providedStateLease.stateRoot !== stateDir) {
+      throw new Error(
+        'control plane stateLease root ' + providedStateLease.stateRoot + ' does not match stateDir ' + stateDir,
+      )
+    }
+    providedStateLease.assertCurrent()
+  }
   const defaultWorkspacePath = options.dshWorkspacePath ?? process.env.DSH_CHAMBER_DSH_PATH ?? defaultDshWorkspacePath()
   const getDshWorkspacePath = options.getDshWorkspacePath ?? (() => defaultWorkspacePath)
   const webDistDir = options.webDistDir === undefined ? undefined : options.webDistDir
@@ -1072,6 +919,9 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
       if (stopPromise !== null) await stopPromise
       if (server !== null) return
       if (startPromise !== null) return startPromise
+      // stop() 在 writer 静止证明后释放 plane 自持的租约；stop→start 重启必须在
+      // 任何 state 写入之前重新证明写者权威（他者已接管时 fail-closed）。
+      if (ownsStateLease && !stateLease.held()) stateLease.reacquire()
       // stop() 会关闭日志句柄，而 start() 支持 stop→start 重启：不在这里重开，
       // 重启后的控制面日志只转发不落盘（取证缺口以「看起来还在写」的方式复发）。
       logger.reopen()
@@ -1284,6 +1134,9 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
           await closeHttpServer(srv, true)
         }
         if (localStopError !== undefined) throw localStopError
+        // Only a proven-quiescent stop releases writer authority; a failed
+        // local stop retains the lease so no successor can write behind it.
+        if (ownsStateLease) stateLease.release()
       })()
       stopPromise = pending
       try {
@@ -1460,11 +1313,51 @@ export type { ApiCorsDecision, ApiCorsEvaluator, ApiRequest, ApiResponse, ApiSur
 // Shared forwarding core (design 17 §8, 方案 A): the Host/Origin rewrite +
 // WS splice + limits/errors shared by instance-proxy.ts and
 // `gateway-proxy.ts` without forking.
-export * from './proxy-forward.ts'
+export {
+  CLIENT_BODY_IDLE_TIMEOUT_MS,
+  convergeLocation,
+  createPendingUpgradeTracker,
+  forwardHttp,
+  forwardUpgrade,
+  getProcessBufferedRequestBytes,
+  isHashedStaticAssetPath,
+  LONG_RPC_PATHS,
+  LONG_RPC_UPSTREAM_TIMEOUT_MS,
+  MAX_BUFFERED_REQUEST_BYTES,
+  MAX_CONCURRENT_HTTP_REQUESTS,
+  MAX_CONCURRENT_WS_STREAMS,
+  MAX_HTML_INJECTION_BYTES,
+  MAX_PENDING_WS_HANDSHAKES,
+  MAX_REQUEST_BODY_BYTES,
+  MAX_RESPONSE_BODY_BYTES,
+  rejectUpgrade,
+  RESPONSE_HEADER_WHITELIST,
+  UPSTREAM_TIMEOUT_MS,
+  writeError,
+  WS_PING_INTERVAL_MS,
+  WS_PING_MISSES_BEFORE_TEARDOWN,
+  WS_STREAM_PATHS,
+} from './proxy-forward.ts'
+export type {
+  HttpRequestFactory,
+  ProxyForwardCounters,
+  ProxyForwardDeps,
+  ProxyRequest,
+  ProxyResponse,
+  ProxySocket,
+} from './proxy-forward.ts'
+// SPKI pin helpers live in spki-pin.ts and reach consumers through
+// proxy-forward.ts (which re-exports them); named here explicitly instead of
+// riding the star export.
+export {
+  attachSpkiPinVerifier,
+  spkiPinOfPeerCertificate,
+  SPKI_PIN_MISMATCH_CODE,
+  SPKI_PIN_PATTERN,
+} from './spki-pin.ts'
 export * from './browser-auth-cookie.ts'
 // Node-side primitives shared with the desktop main process and the gateway
 // server (the browser-side twins live in the sidebar's shared face).
-export * from './record-read.ts'
 export * from './error-text.ts'
 export { createJsonStore, JsonStorePersistError, JsonStoreRevisionConflictError } from './json-store.ts'
 export type { JsonStore, JsonStoreDocument, JsonStoreMutator, JsonStoreOptions } from './json-store.ts'
@@ -1503,6 +1396,22 @@ export {
   RUN_STDOUT_MAX_BYTES,
   WRITE_FILE_MAX_BYTES,
 } from './plugin-spec.ts'
+// The restricted plugin-mutation child executor (plugin-mutation-executor.ts,
+// design 21 §6.3): the single env-scrubbed / bounded-output / timeout-killed
+// child protocol shared by the gateway server (direct import) and the desktop
+// main process (through control-plane-module.ts). The canonical
+// INSTALL_ENV_WHITELIST stays dsh-runtime's single source and is passed in by
+// each caller — this package deliberately does not depend on dsh-runtime.
+export { runPluginMutation, scrubMutationEnv, spawnMutationChild } from './plugin-mutation-executor.ts'
+export type {
+  MutationChild,
+  MutationChildExecutor,
+  MutationChildOutcome,
+  MutationProcessStream,
+  MutationSpawnFn,
+  PluginMutationParams,
+  PluginMutationResult,
+} from './plugin-mutation-executor.ts'
 // The protected-plugin set + generation coupling (design 21 §6.11, decision 19):
 // P = B₀ ∪ S ∪ F derivation, the op-phased write-face
 // decision (install/remove judge P alike; remove never judges a version;
@@ -1517,7 +1426,6 @@ export {
   familyNamesFromLockfileClosure,
   familyNamesFromRuntimeTree,
   isExactVersion,
-  isMaterializedValue,
   OFFICIAL_SCOPE,
   officialScope,
   parseExactVersion,
@@ -1550,6 +1458,23 @@ export type {
   ProtectedSource,
   RuntimeFamilyResolution,
 } from './protected-plugins.ts'
+// The plugin-manifest read algorithm + materialize ruler (design 21 §6.2,
+// decision 18; single source = @dsh-chamber/dsh-chamber-wire/plugin-manifest).
+// Re-exported on this package surface because the desktop main must consume
+// them WITHOUT a bare wire specifier: the packaged asar loads the
+// esbuild-bundled dist/control-plane entry (node_modules .ts sources are not
+// type-strippable), so control-plane-module.ts reads them off this module —
+// dev (workspace source) and packaged (bundle) resolve the same definitions.
+export {
+  isMaterializedValue,
+  parsePluginManifest,
+  readManifestVersion,
+} from '@dsh-chamber/dsh-chamber-wire/plugin-manifest'
+export type {
+  PluginManifestFault,
+  PluginManifestModel,
+  PluginManifestParseResult,
+} from '@dsh-chamber/dsh-chamber-wire/plugin-manifest'
 // Gateway wire-protocol credential/session facts + SPKI pin helpers (design
 // 17 §7.1/§9.3/§13.4.2) — the single source shared by the gateway server
 // (auth.ts/config.ts), the proxy injection gate (instance-proxy.ts) and the
@@ -1571,5 +1496,83 @@ export {
 // shared by the gateway watcher (packages/gateway/src/session-state.ts) and the
 // desktop probe (through control-plane-module.ts). The Typert mux client
 // (session-mux.ts) is the client half of the same contract.
-export * from './session-state-protocol.ts'
-export * from './session-mux.ts'
+export {
+  clampReadThrough,
+  classifyTurnEnd,
+  mergeReadMark,
+  SESSION_STATE_CLIENT_ID_PATTERN,
+  SESSION_STATE_FEATURES,
+  SESSION_STATE_HANDSHAKE_WINDOW_MS,
+  SESSION_STATE_PATH,
+  SESSION_STATE_PROTOCOL_VERSION,
+  SESSION_STATE_READ_ALL_PATH,
+  SESSION_STATE_READ_BODY_MAX_BYTES,
+  SESSION_STATE_READ_PATH,
+  SESSION_STATE_SESSION_ID_MAX_CHARS,
+  SESSION_STATE_STREAM_PATH,
+} from './session-state-protocol.ts'
+export type {
+  ReadAllRequest,
+  ReadRequest,
+  SessionStateCapability,
+  SessionStateCapabilityKind,
+  SessionStateCompletedAtSource,
+  SessionStateDegradationCode,
+  SessionStateDelta,
+  SessionStateDescriptor,
+  SessionStateDiagnostics,
+  SessionStateFeature,
+  SessionStateHostInfo,
+  SessionStateHostState,
+  SessionStateMode,
+  SessionStatePendingKind,
+  SessionStateProbeFailureReason,
+  SessionStateProbeOutcome,
+  SessionStateReadState,
+  SessionStateRow,
+  SessionStateSnapshot,
+  SessionTurnEnd,
+  SessionTurnEndCause,
+  SessionTurnEndDisposition,
+  SessionTurnEndKind,
+} from './session-state-protocol.ts'
+export {
+  createSessionMux,
+  DEFAULT_BASELINE_TIMEOUT_MS,
+  DEFAULT_FOLLOW_TIMEOUT_MS,
+  DEFAULT_MUX_RECONNECT_MAX_MS,
+  DEFAULT_MUX_RECONNECT_MIN_MS,
+  DEFAULT_WATERFALL_GRACE_MS,
+  parseSessionListBaselineItems,
+  SESSION_LIST_MAX_RESPONSE_BYTES,
+  SESSION_LIST_PAYLOAD,
+} from './session-mux.ts'
+export type {
+  MuxKickReason,
+  MuxSocket,
+  MuxUnaryCall,
+  SessionListBaselineItem,
+  SessionMux,
+  SessionMuxStatus,
+} from './session-mux.ts'
+
+// state-root writer lease (R2): createControlPlane is the production importer
+// (resolveStateRoot + acquireStateRootLease); the gateway/desktop shapes consume
+// the same contract through this package entry.
+export {
+  acquireStateRootLease,
+  assertDedicatedStateRoot,
+  DEFAULT_STATE_DIR,
+  LEGACY_STATE_ROOT_LOCK_PATHS,
+  resolveStateRoot,
+  retireLegacyStateLocks,
+  STATE_ROOT_LEASE_FILENAME,
+  StateRootLeaseError,
+} from './state-root-lease.ts'
+export type {
+  ResolveStateRootOptions,
+  StateRootLease,
+  StateRootLeaseFlavor,
+  StateRootLeaseOptions,
+  StateRootLeaseScope,
+} from './state-root-lease.ts'

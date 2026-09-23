@@ -203,26 +203,6 @@ export interface ArchiveCleanupHost {
   removeArchivedSessionIds(ids: readonly string[]): Promise<void>
 }
 
-export interface PreviewResult {
-  /** Total archived-set members in the authoritative registry-global set
-   *  (archived subagent-origin rows included — the set is not strictly
-   *  top-level ids). */
-  readonly archived: number
-  /** Archived-set members this run would delete as deletable tree roots
-   *  (one per tree; a root may itself be an archived subagent-origin row
-   *  that no deletable ancestor covers — counting unchanged). */
-  readonly deletableSessions: number
-  /** Non-root members this run would delete — subagent-origin descendants
-   *  of the deletable trees (a subagent-origin row that IS a deletable tree
-   *  root counts in deletableSessions, not here). */
-  readonly deletableSubagents: number
-  /** Whole subtrees skipped because a member is running. */
-  readonly skippedRunning: number
-  /** Whole subtrees skipped only because a member is LOADED (idle agent or
-   *  attached session) — deletable through an explicit `force` purge. */
-  readonly skippedLoaded: number
-}
-
 interface PurgeItemError {
   readonly sessionId: string
   readonly code: string
@@ -258,8 +238,8 @@ export interface PurgeResult {
    *  is converged by a later run's orphan sweep. Bounded by the run's
    *  candidate roots (same order of magnitude as the caller's own
    *  `sessionIds` request), present only when at least one root was retained.
-   *  Additive optional field: old clients ignore unknown result keys
-   *  (`countField` reads named counts), so the wire contract is unchanged. */
+   *  Additive optional field: old clients ignore unknown result keys (the
+   *  client decodes named counts), so the wire contract is unchanged. */
   readonly residentRetainedRoots?: readonly string[]
   readonly errors: readonly PurgeItemError[]
   /** True when item errors were truncated at MAX_PURGE_ERROR_RECORDS. */
@@ -271,8 +251,7 @@ export interface PurgeResult {
    *  DELIBERATELY NOT part of `deletedSessions`/`deletedSubagents` — those
    *  count CONTENT deletions only, and the sweep deletes no content.
    *  Additive optional field: old clients ignore unknown result keys (the
-   *  chamber sidebar reads named counts through `countField`), so the wire
-   *  contract is unchanged. */
+   *  chamber sidebar reads named counts), so the wire contract is unchanged. */
   readonly clearedOrphanMembers?: number
 }
 
@@ -289,7 +268,7 @@ export type ArchiveCleanupDomainResult<T> =
   | { readonly ok: false; readonly error: ArchiveCleanupDomainError }
 
 /** Stable action error code (serialized over the wire). Codes:
- *  - `busy`: another purge/preview is in flight on this domain (host single-
+ *  - `busy`: another purge is in flight on this domain (host single-
  *    flight, design 24 §3) — retry after the in-flight run settles;
  *  - `registry-unreadable`: an overall precondition failed (authoritative
  *    state could not be read) — nothing was mutated;
@@ -515,7 +494,7 @@ export class ArchiveCleanupCore {
     this.host = host
   }
 
-  /** Step 1–3 read pass shared by preview and purge. */
+  /** Step 1–3 read pass of every purge run. */
   private async readAuthoritativeState(): Promise<{
     archivedIds: string[]
     statesBySession: Map<string, ArchivedSessionState>
@@ -693,26 +672,6 @@ export class ArchiveCleanupCore {
       recordNote('', 'archive-set', `archiveCleanup: orphan sweep kept ${probeFailures} member(s) — content-existence probe failed (fail-closed): ${firstProbeFailure}`)
     }
     return swept
-  }
-
-  /** Read-only preview (design 24 §3): a point-in-time snapshot for confirm
-   *  copy — never authoritative for the purge itself. */
-  async preview(): Promise<PreviewResult> {
-    const { archivedIds, statesBySession, childrenOf, liveFacts } = await this.readAuthoritativeState()
-    const plan = this.resolvePlan(archivedIds, statesBySession, childrenOf, liveFacts, false)
-    let deletableSessions = 0
-    let deletableSubagents = 0
-    for (const tree of plan.trees) {
-      deletableSessions += 1
-      deletableSubagents += tree.subagentCount
-    }
-    return {
-      archived: archivedIds.length,
-      deletableSessions,
-      deletableSubagents,
-      skippedRunning: plan.skippedRunning,
-      skippedLoaded: plan.skippedLoaded,
-    }
   }
 
   /**

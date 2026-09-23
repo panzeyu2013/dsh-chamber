@@ -168,7 +168,7 @@ export function headerToState(header: SessionHeaderLike): ArchivedSessionState {
  * Zero-IO structural surface check: the activation probe uses this so a
  * mounted-but-corrupt/missing
  * registry OR enumeration/storage surface fails the activation loudly
- * instead of passing presence while the first preview/purge later
+ * instead of passing presence while the first purge later
  * registry-unreadables/storages. Mirrors requireRegistry's checks; throws
  * ArchiveCleanupError('registry-unreadable', …) when a surface is wrong.
  */

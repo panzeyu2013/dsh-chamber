@@ -1,12 +1,13 @@
 /**
  * Gateway restart readiness polling tests (design 18 §9.3: restart is 202 + status polling) — pollGatewayReady
- * lives in the sidebar shared face (design 21 §5.2; the English inline strings travel with the module).
+ * lives in the client-core face (design 21 §5.2; the English inline strings travel with the module).
  * Pure node:test with inline fake fetch — no DOM.
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { pollGatewayReady } from '../../src/shared/gateway-runtime-poll.ts'
-import { pollUntil } from '../../src/shared/poll.ts'
+import { pollGatewayReady } from '@dsh-chamber/dsh-chamber-client-core'
+// poll.ts is package-internal (no public face, not on the barrel) — the test references the source directly.
+import { pollUntil } from '../../../dsh-chamber-client-core/src/poll.ts'
 
 /** One status-route fetch stub: HTTP `status` and a canned JSON body. */
 const stubFetch = (status: number, body: unknown): typeof fetch => (async () => ({ status, json: async () => body })) as unknown as typeof fetch

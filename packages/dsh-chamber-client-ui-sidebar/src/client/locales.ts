@@ -47,7 +47,7 @@ export const zh = {
   // 未保护提示：无法点名"正在查看的会话"时如实说明，而不是
   // 禁用删除控件——运行中的会话仍不会被删除。
   'archive.manager.unprotected': '无法确认你正在查看的会话：本次删除不排除任何会话（运行中的会话仍不会被删除）。',
-  // 归档清理的结果行（`shared/archive-purge.ts` 只返回 key+params，对话框用
+  // 归档清理的结果行（`./archive-purge.ts` 只返回 key+params，对话框用
   // t() 渲染）。删除没有"拒绝"分支：客户端不以"证不出当前会话"为由拒绝删除。
   'archive.purge.note.stopped': '已先停止 {count} 个运行中的会话。',
   'archive.purge.note.protected': '已跳过 {count} 个归档树：其中包含你正在查看的会话（未删除——切换会话后重试，或稍后重试：归档后选中可能尚未清空）。',

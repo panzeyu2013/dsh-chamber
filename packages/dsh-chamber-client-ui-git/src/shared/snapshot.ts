@@ -2,7 +2,7 @@
 import type {
   GitRepoTopology, GitWorktreeError, GitWorktreeInfo, GitWorktreeSnapshot,
 } from './types.ts'
-import { isRecord } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
+import { isRecord } from '@dsh-chamber/dsh-chamber-client-core'
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value !== ''

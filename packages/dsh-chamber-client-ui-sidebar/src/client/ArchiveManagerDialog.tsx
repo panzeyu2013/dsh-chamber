@@ -123,12 +123,12 @@ import {
   Modal,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import cc from './sidebar-chamber.module.css'
-import type { ChamberServerAggregate } from '../shared/aggregate-store.ts'
-import { chamberBridge } from '../shared/aggregate-store.ts'
-import { groupArchivedRows, workspaceAccentStyle, type ArchivedSessionGroup } from '../shared/derive.ts'
-import { getInstanceClient } from '../shared/instance-api.ts'
-import { archivePurgeNote, purgeRemovedContent, runArchivePurge } from '../shared/archive-purge.ts'
-import { getWorkspaceGitFlag, isSourceGitFlagsLoaded } from '../shared/workspace-git-flags.ts'
+import type { ChamberServerAggregate } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
+import { chamberBridge } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
+import { groupArchivedRows, workspaceAccentStyle, type ArchivedSessionGroup } from '@dsh-chamber/dsh-chamber-client-core/derive'
+import { getInstanceClient } from '@dsh-chamber/dsh-chamber-client-core/instance-api'
+import { archivePurgeNote, purgeRemovedContent, runArchivePurge } from './archive-purge.ts'
+import { getWorkspaceGitFlag, isSourceGitFlagsLoaded } from '@dsh-chamber/dsh-chamber-client-core/workspace-git-flags'
 import type { SidebarKey } from './locales.ts'
 
 /** The dialog's `t`: the shell's translate (sidebar namespace keys). */

@@ -25,6 +25,7 @@
     "pnpm": "11.21.0"
   },
   "devDependencies": {
+    "@dsh-chamber/dsh-chamber-client-core": "workspace:^",
     "@electron/asar": "^3.2.1",
     "electron": "43.4.0",
     "electron-builder": "^26.0.12"

@@ -2,9 +2,11 @@
  * Gateway credential CLI operations (design 17 §7): offline
  * (`gateway auth`) management of the persisted credentials while the gateway
  * is STOPPED. Runtime changes belong to the web UI /auth/change-* endpoints;
- * these commands take the stateDir exclusive lock, so a live gateway is
- * rejected loudly (a stale crash-left lock is taken over by the store, which
- * is the correct behavior).
+ * these commands take a SHORT state-root writer lease (flavor 'gateway-cli')
+ * around the credential write, so a live writer is rejected loudly — whether
+ * it is a foreign process ('state_root_locked') or a writer already holding
+ * the root in this process ('state_root_duplicate') — and a stale
+ * crashed-writer lease is taken over by the lease module (correct).
  *
  * Pure functions (no argv parsing, no process.exit — cli.ts owns those), so
  * this module is unit-testable with the node:test suite. Secrets are never
@@ -12,6 +14,7 @@
  * only reports that a new verifier was persisted.
  */
 
+import { StateRootLeaseError, acquireStateRootLease, type StateRootLease } from '@dsh-chamber/control-plane'
 import { createGatewayStore, hashCredential, readCredentialProjection, type GatewayStore } from './store.ts'
 import { MAX_GATEWAY_PASSWORD_CHARS, MIN_GATEWAY_PASSWORD_CHARS } from './config.ts'
 
@@ -47,20 +50,33 @@ export function gatewayAuthStatus(stateDir: string): string {
   return lines.join('\n')
 }
 
-/** Open the stateDir store with the CLI's lock semantics: a live gateway
- * (live pid in `.gateway.lock`, structured error code 'gateway_locked' +
- * owner pid) fails with a clear message instead of the raw lock error; a
- * stale lock is taken over by the store (correct). */
-function acquireStoppedStore(stateDir: string, logger: GatewayAuthLogger, runningHint: string): GatewayStore {
+/** Open the stateDir store under the CLI's short state-root writer lease: a
+ * live writer (StateRootLeaseError 'state_root_locked' from a foreign pid, or
+ * 'state_root_duplicate' for a lease already held in this process) fails with
+ * a clear message instead of the raw lease error; a stale lease is taken over
+ * by the lease module (correct). The caller releases the returned lease after
+ * the operation. */
+function acquireStoppedStore(
+  stateDir: string,
+  logger: GatewayAuthLogger,
+  runningHint: string,
+): { store: GatewayStore; lease: StateRootLease } {
+  let lease: StateRootLease
   try {
-    return createGatewayStore(stateDir, logger)
+    lease = acquireStateRootLease(stateDir, { scope: 'state-root', flavor: 'gateway-cli', logger })
   } catch (error) {
-    const coded = error as Error & { code?: string; pid?: number }
-    if (coded.code === 'gateway_locked') {
-      throw new Error(coded.pid !== undefined
-        ? `gateway is running (pid ${coded.pid}); ${runningHint}`
+    if (error instanceof StateRootLeaseError
+      && (error.code === 'state_root_locked' || error.code === 'state_root_duplicate')) {
+      throw new Error(error.pid !== null
+        ? `gateway is running (pid ${error.pid}); ${runningHint}`
         : `gateway is running; ${runningHint}`)
     }
+    throw error instanceof Error ? error : new Error(String(error))
+  }
+  try {
+    return { store: createGatewayStore(stateDir, logger, { stateLease: lease }), lease }
+  } catch (error) {
+    try { lease.release() } catch { /* retain ambiguous evidence for the exit listener */ }
     throw error instanceof Error ? error : new Error(String(error))
   }
 }
@@ -76,12 +92,12 @@ export async function gatewayAuthResetPassword(stateDir: string, newPassword: st
     || newPassword.length < MIN_GATEWAY_PASSWORD_CHARS || newPassword.length > MAX_GATEWAY_PASSWORD_CHARS) {
     throw new GatewayAuthUsageError(`new password must be ${MIN_GATEWAY_PASSWORD_CHARS}-${MAX_GATEWAY_PASSWORD_CHARS} characters`)
   }
-  const store = acquireStoppedStore(stateDir, logger, 'use the web UI /auth/change-password instead')
+  const { store, lease } = acquireStoppedStore(stateDir, logger, 'use the web UI /auth/change-password instead')
   try {
     store.rotateJwtSecret()
     store.setPasswordCredential(hashCredential(newPassword), 'runtime')
   } finally {
-    store.close()
+    lease.release()
   }
   logger.log('password reset: a runtime-managed password is now active')
   logger.log('the password is runtime-managed: config seeding will not overwrite it on the next start;')
@@ -93,13 +109,13 @@ export async function gatewayAuthResetPassword(stateDir: string, newPassword: st
  * credential files. The next start re-seeds from deployment config; a
  * --no-auth deployment returns to anonymous mode (loud S1 warning). */
 export async function gatewayAuthClear(stateDir: string, logger: GatewayAuthLogger = console): Promise<void> {
-  const store = acquireStoppedStore(stateDir, logger, 'stop the gateway first, or remove credentials via the web UI /auth/change-*')
+  const { store, lease } = acquireStoppedStore(stateDir, logger, 'stop the gateway first, or remove credentials via the web UI /auth/change-*')
   try {
     store.rotateJwtSecret()
     store.setPasswordCredential(null)
     store.setTokenHash(null)
   } finally {
-    store.close()
+    lease.release()
   }
   logger.log('credentials cleared: password-credential and tokens.json removed')
   logger.log('the next start re-seeds credentials from deployment config (--ui-password/--api-token or DSH_GATEWAY_*)')

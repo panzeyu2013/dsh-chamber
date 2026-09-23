@@ -12,7 +12,6 @@
       "default": "./lib/index.js"
     },
     "./client": "./lib/client.js",
-    "./src/*": "./src/*",
     "./package.json": "./package.json"
   },
   "dsh": {
@@ -33,6 +32,7 @@
   },
   "license": "MIT",
   "dependencies": {
+    "@dsh-chamber/dsh-chamber-client-core": "workspace:^",
     "@dsh-chamber/dsh-stream-state": "workspace:^"
   },
   "devDependencies": {

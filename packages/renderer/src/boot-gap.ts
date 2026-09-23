@@ -39,7 +39,7 @@
  *    verdict fails the build instead of silently inheriting a wrong sentence or
  *    burning a futile cold re-mount (the self-heal container feeds
  *    {@link isRetryableBootGap} to the reducer as its retryability table).
- * The kind union itself is OWNED by the sidebar's shared bridge contract
+ * The kind union itself is OWNED by the client-core shared bridge contract
  * (`ServerBootGapKind`, next to `PluginGraphDiagnostic`): the same vocabulary
  * crosses to the sidebar package and to the connections page, which render
  * their own copy — one definition, aliased here.
@@ -48,7 +48,7 @@
 import type {
   ServerBootGap,
   ServerBootGapKind,
-} from '../../dsh-chamber-client-ui-sidebar/src/shared/aggregate-store.ts'
+} from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
 
 /** Why a settled boot is known to be incomplete. */
 export type ShellDegradedKind = ServerBootGapKind

@@ -12,7 +12,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { describeOpenInError } from '../../src/shared/capabilities.ts'
-import { describeThrown } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
+import { describeThrown } from '@dsh-chamber/dsh-chamber-client-core'
 
 const CAPABILITIES = readFileSync(new URL('../../src/shared/capabilities.ts', import.meta.url), 'utf8')
 const BUTTON = readFileSync(new URL('../../src/client/OpenInButton.tsx', import.meta.url), 'utf8')
@@ -23,7 +23,7 @@ test('describeOpenInError 就是 sidebar 的 describeThrown（同一函数对象
 
 test('capabilities.ts 不再持有本地实现，只重导出规范来源', () => {
   assert.ok(!/export function describeOpenInError/u.test(CAPABILITIES), '不得再有本地函数实现')
-  assert.match(CAPABILITIES, /export \{ describeThrown as describeOpenInError \} from '@dsh-chamber\/dsh-chamber-client-ui-sidebar\/shared'/u)
+  assert.match(CAPABILITIES, /export \{ describeThrown as describeOpenInError \} from '@dsh-chamber\/dsh-chamber-client-core'/u)
 })
 
 test('按钮的 catch 走敌意值安全原语，不得回到朴素格式化', () => {

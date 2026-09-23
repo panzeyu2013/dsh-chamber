@@ -22,7 +22,7 @@ import {
   NotificationSourceIncarnations,
   NotificationSourceProofs,
   REMOTE_SOURCE_FINGERPRINT_PATTERN,
-  claimNotification,
+  claimNotificationDetailed,
   decideNotification,
   describeNativeNotificationFailure,
   interpretNativeNotificationReply,
@@ -250,19 +250,19 @@ test('default source proofs are strict 64-character lowercase hex and unique', (
   assert.notEqual(first, second)
 });
 
-test('claimNotification: same key within TTL is deduped, different keys independent', () => {
+test('claimNotificationDetailed: same key within TTL is deduped, different keys independent', () => {
   const now = 1_000_000;
   const a1 = makeRequest({ sourceId: 'local', sessionId: 's1', kind: 'complete' });
   const a2 = makeRequest({ sourceId: 'local', sessionId: 's1', kind: 'complete' });
   const b = makeRequest({ sourceId: 'ssh-2', sessionId: 's9', kind: 'complete' });
   const c = makeRequest({ sourceId: 'local', sessionId: 's1', kind: 'ask' });
-  assert.equal(claimNotification(a1, now), true);
-  assert.equal(claimNotification(a2, now + 100), false, 'same key within TTL → false');
-  assert.equal(claimNotification(b, now + 100), true, 'different source → independent');
-  assert.equal(claimNotification(c, now + 100), true, 'different kind → independent');
+  assert.equal(claimNotificationDetailed(a1, now).accepted, true);
+  assert.equal(claimNotificationDetailed(a2, now + 100).accepted, false, 'same key within TTL → false');
+  assert.equal(claimNotificationDetailed(b, now + 100).accepted, true, 'different source → independent');
+  assert.equal(claimNotificationDetailed(c, now + 100).accepted, true, 'different kind → independent');
 });
 
-test('claimNotification treats a fresh authoritative source proof as a new incarnation', () => {
+test('claimNotificationDetailed treats a fresh authoritative source proof as a new incarnation', () => {
   const now = 1_500_000
   const oldIncarnation = makeRequest({
     sourceId: 'ssh-same',
@@ -274,44 +274,44 @@ test('claimNotification treats a fresh authoritative source proof as a new incar
     ...oldIncarnation,
     sourceFingerprint: 'b'.repeat(64),
   })
-  assert.equal(claimNotification(oldIncarnation, now), true)
-  assert.equal(claimNotification(oldIncarnation, now + 1), false)
-  assert.equal(claimNotification(replacement, now + 1), true, 'old proof cannot suppress a fresh same-id host')
+  assert.equal(claimNotificationDetailed(oldIncarnation, now).accepted, true)
+  assert.equal(claimNotificationDetailed(oldIncarnation, now + 1).accepted, false)
+  assert.equal(claimNotificationDetailed(replacement, now + 1).accepted, true, 'old proof cannot suppress a fresh same-id host')
 });
 
-test('claimNotification: claim recovers after TTL elapses', () => {
+test('claimNotificationDetailed: claim recovers after TTL elapses', () => {
   const now = 2_000_000;
   // 边界：TTL-1 仍拦，恰好 TTL 放行（claim 重置窗口）。
   const boundary = makeRequest({ sourceId: 'local', sessionId: 'b', kind: 'request' });
-  assert.equal(claimNotification(boundary, now), true);
-  assert.equal(claimNotification(boundary, now + NOTIFICATION_DEDUPE_TTL_MS - 1), false, 'still inside TTL');
-  assert.equal(claimNotification(boundary, now + NOTIFICATION_DEDUPE_TTL_MS), true, 'exactly at TTL → allowed again');
+  assert.equal(claimNotificationDetailed(boundary, now).accepted, true);
+  assert.equal(claimNotificationDetailed(boundary, now + NOTIFICATION_DEDUPE_TTL_MS - 1).accepted, false, 'still inside TTL');
+  assert.equal(claimNotificationDetailed(boundary, now + NOTIFICATION_DEDUPE_TTL_MS).accepted, true, 'exactly at TTL → allowed again');
   // 恢复：TTL+1 放行（独立 key，避免恰好 TTL 的 claim 重置窗口）。
   const recovered = makeRequest({ sourceId: 'local', sessionId: 'r', kind: 'request' });
-  assert.equal(claimNotification(recovered, now), true);
-  assert.equal(claimNotification(recovered, now + NOTIFICATION_DEDUPE_TTL_MS + 1), true, 'beyond TTL → allowed again');
+  assert.equal(claimNotificationDetailed(recovered, now).accepted, true);
+  assert.equal(claimNotificationDetailed(recovered, now + NOTIFICATION_DEDUPE_TTL_MS + 1).accepted, true, 'beyond TTL → allowed again');
 });
 
-test('claimNotification: test kind never claims (always true)', () => {
+test('claimNotificationDetailed: test kind never claims (always true)', () => {
   const req = makeRequest({ kind: 'test' });
-  assert.equal(claimNotification(req, 3_000_000), true);
-  assert.equal(claimNotification(req, 3_000_000 + 1), true, 'test 连点每次都放行');
-  assert.equal(claimNotification(req, 3_000_000 + 5_000), true);
+  assert.equal(claimNotificationDetailed(req, 3_000_000).accepted, true);
+  assert.equal(claimNotificationDetailed(req, 3_000_000 + 1).accepted, true, 'test 连点每次都放行');
+  assert.equal(claimNotificationDetailed(req, 3_000_000 + 5_000).accepted, true);
 });
 
-test('claimNotification: key space covers sourceId|sourceFingerprint|sessionId|kind (title/body excluded)', () => {
+test('claimNotificationDetailed: key space covers sourceId|sourceFingerprint|sessionId|kind (title/body excluded)', () => {
   const now = 4_000_000;
   const base = makeRequest({ sourceId: 'local', sessionId: 's1', kind: 'complete' });
   const retitled = makeRequest({ sourceId: 'local', sessionId: 's1', kind: 'complete', title: '另一标题' });
-  assert.equal(claimNotification(base, now), true);
-  assert.equal(claimNotification(retitled, now + 100), false, 'title 变化不构成新 key');
+  assert.equal(claimNotificationDetailed(base, now).accepted, true);
+  assert.equal(claimNotificationDetailed(retitled, now + 100).accepted, false, 'title 变化不构成新 key');
 });
 
 // ---------------------------------------------------------------------------
 // 内容水位：claim 键的第五个分量
 // ---------------------------------------------------------------------------
 
-test('claimNotification: watermark is event identity — same completion once, later completion not swallowed', () => {
+test('claimNotificationDetailed: watermark is event identity — same completion once, later completion not swallowed', () => {
   const now = 5_000_000;
   const firstCompletion = makeRequest({
     sourceId: 'gateway-a',
@@ -325,12 +325,12 @@ test('claimNotification: watermark is event identity — same completion once, l
   const sameCompletion = { ...firstCompletion };
   // 同会话的下一次完成水位更高 ⇒ 新事件，不得被前一次的 claim 吞掉。
   const nextCompletion = { ...firstCompletion, watermark: firstCompletion.watermark! + 60_000 };
-  assert.equal(claimNotification(firstCompletion, now), true);
-  assert.equal(claimNotification(sameCompletion, now + 100), false, '同一完成（同水位）不得被二次通知');
-  assert.equal(claimNotification(nextCompletion, now + 200), true, '不同完成（水位更高）不得被吞');
+  assert.equal(claimNotificationDetailed(firstCompletion, now).accepted, true);
+  assert.equal(claimNotificationDetailed(sameCompletion, now + 100).accepted, false, '同一完成（同水位）不得被二次通知');
+  assert.equal(claimNotificationDetailed(nextCompletion, now + 200).accepted, true, '不同完成（水位更高）不得被吞');
 });
 
-test('claimNotification: kind and fingerprint stay in the watermark-era key', () => {
+test('claimNotificationDetailed: kind and fingerprint stay in the watermark-era key', () => {
   const now = 6_000_000;
   const complete = makeRequest({
     sourceId: 'gateway-a',
@@ -341,9 +341,9 @@ test('claimNotification: kind and fingerprint stay in the watermark-era key', ()
   });
   const askAtSameWatermark = makeRequest({ ...complete, kind: 'ask' });
   const freshHost = makeRequest({ ...complete, sourceFingerprint: 'b'.repeat(64) });
-  assert.equal(claimNotification(complete, now), true);
-  assert.equal(claimNotification(askAtSameWatermark, now + 1), true, '同水位的 ask 不得被 complete 吞并');
-  assert.equal(claimNotification(freshHost, now + 1), true, 'same-id 换宿主（新 fingerprint）不继承旧 claim');
+  assert.equal(claimNotificationDetailed(complete, now).accepted, true);
+  assert.equal(claimNotificationDetailed(askAtSameWatermark, now + 1).accepted, true, '同水位的 ask 不得被 complete 吞并');
+  assert.equal(claimNotificationDetailed(freshHost, now + 1).accepted, true, 'same-id 换宿主（新 fingerprint）不继承旧 claim');
 });
 
 test('NotificationClaimWindow: the claim key is the five-tuple with watermark ?? null (L13)', () => {

@@ -1,6 +1,6 @@
 {
   "name": "@dsh-chamber/dsh-chamber-client-ui-settings-bridge",
-  "description": "Chamber settings bridge section plugin: a server selector plus the target instance's official Settings content, rendered from that instance's OWN boot-ctx settings.section ledger with the seats its own renderer bound (2026-12 complete-bridge revision). Config facts stay on the target host — the bridge only proxies the existing settings/credentials/llm RPC surface.",
+  "description": "Chamber settings bridge section plugin: a server selector plus the target instance's official Settings content, rendered from that instance's OWN boot-ctx settings.section ledger with the seats its own renderer bound (complete-bridge revision). Config facts stay on the target host — the bridge only proxies the existing settings/credentials/llm RPC surface.",
   "version": "0.3.2-beta.5",
   "publishConfig": {
     "access": "public"
@@ -11,15 +11,15 @@
     "directory": "packages/dsh-chamber-client-ui-settings-bridge"
   },
   "type": "module",
-  "main": "lib/index.js",
-  "types": "lib/types/index.d.ts",
   "exports": {
     ".": {
-      "types": "./lib/types/index.d.ts",
-      "default": "./lib/index.js"
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
     },
-    "./client": "./src/client/index.ts",
-    "./src/*": "./src/*",
+    "./client": {
+      "types": "./src/client/index.ts",
+      "default": "./src/client/index.ts"
+    },
     "./package.json": "./package.json"
   },
   "dsh": {
@@ -33,6 +33,8 @@
   },
   "license": "MIT",
   "dependencies": {
+    "@dsh-chamber/dsh-chamber-client-core": "workspace:^",
+    "@dsh-chamber/renderer": "workspace:^",
     "clsx": "^2.0.0"
   },
   "peerDependencies": {
@@ -69,11 +71,6 @@
     "@types/react": "~18.3.1",
     "react": "^18.2.0"
   },
-  "files": [
-    "lib/index.js",
-    "lib/client.js",
-    "lib/types/**/*.d.ts"
-  ],
   "scripts": {
     "test": "node ./scripts/test.mjs"
   }
