@@ -200,7 +200,13 @@ test('the shipped map covers every package and no step is left on a chain', () =
 })
 test('tests mode drives one global pool over every resolved package manifest', async () => {
   const logged = []
-  const packageSteps = MODES.tests.filter(step => step !== 'node scripts/gates/verify-artifact-freshness.mjs')
+  // Phase 2 pools exactly the manifest-based package steps; the darwin/CI
+  // serial leftovers (artifact freshness, the macos assembly chain) are phase 3
+  // and intentionally do not run once a package step has failed. Deriving the
+  // set from the shipped root scripts keeps the expectation platform-neutral.
+  const scripts = rootScripts()
+  const packageSteps = MODES.tests.filter(step =>
+    typeof scripts[step] === 'string' && /^pnpm --filter \S+ run test$/u.test(scripts[step]))
   const run = await runMode('tests', {
     log: line => logged.push(line),
     jobs: 2,

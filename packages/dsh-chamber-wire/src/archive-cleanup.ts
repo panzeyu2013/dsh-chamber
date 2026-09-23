@@ -25,7 +25,12 @@
 /** Wire namespace (camel, two-segment endpoints — design 24 §3). */
 export const ARCHIVE_CLEANUP_DOMAIN = 'archiveCleanup'
 
-/** `archiveCleanup/purge` export name. */
+/**
+ * The purge method's `@Remote` export name — ONE protocol segment, which is
+ * all the pinned `dsh-typert-protocol` accepts on a host decorator
+ * (`/^[A-Za-z0-9_$.-]+$/`). The client-side ENVELOPE path is the different
+ * string `archiveCleanup/purge`, built by {@link archiveCleanupEndpoint}.
+ */
 export const ARCHIVE_CLEANUP_PURGE_METHOD = 'purge'
 
 /**
@@ -39,10 +44,17 @@ export const ARCHIVE_CLEANUP_PURGE_METHOD = 'purge'
  */
 const ARCHIVE_CLEANUP_PURGE_ARGS = ['sessionIds', 'force', 'protectSessionIds'] as const
 
-/** The zero-argument activation probe (design 18 §3.4). */
+/** The zero-argument activation probe's `@Remote` export name (design 18
+ *  §3.4) — one segment; its envelope path `archiveCleanup/probe` comes from
+ *  {@link archiveCleanupEndpoint}. */
 export const ARCHIVE_CLEANUP_PROBE_METHOD = 'probe'
 
-/** The two-segment endpoint string as the generic RPC envelope spells it. */
+/**
+ * The two-segment ENVELOPE path the generic RPC client spells
+ * (`archiveCleanup/purge`) — for the CLIENT call site only, never for a host
+ * `@Remote` export name, which must stay a single segment
+ * ({@link ARCHIVE_CLEANUP_PURGE_METHOD}).
+ */
 export function archiveCleanupEndpoint(method: string): string {
   return `${ARCHIVE_CLEANUP_DOMAIN}/${method}`
 }

@@ -600,11 +600,21 @@ test('RuntimeInstallerSupervisor: dispose waits for a stubborn descendant after 
     cwd: root,
     onSpawn: pid => { leaderPid = pid },
   })
-  for (let attempt = 0; attempt < 100 && !existsSync(descendantRecord); attempt += 1) {
-    await new Promise(resolve => setTimeout(resolve, 5))
+  // Wait for real CONTENT: writeFileSync opens (creating the file) before it
+  // writes, so an existsSync-only poll can read the record while it is still
+  // empty and make the pid look like 0.
+  const readDescendantPid = () => {
+    try {
+      return Number(readFileSync(descendantRecord, 'utf8'))
+    } catch {
+      return 0
+    }
   }
-  assert.equal(existsSync(descendantRecord), true)
-  const descendantPid = Number(readFileSync(descendantRecord, 'utf8'))
+  let descendantPid = 0
+  for (let attempt = 0; attempt < 100 && !(descendantPid > 0); attempt += 1) {
+    descendantPid = readDescendantPid()
+    if (!(descendantPid > 0)) await new Promise(resolve => setTimeout(resolve, 5))
+  }
   assert.ok(leaderPid > 0)
   assert.ok(descendantPid > 0)
   for (let attempt = 0; attempt < 100; attempt += 1) {

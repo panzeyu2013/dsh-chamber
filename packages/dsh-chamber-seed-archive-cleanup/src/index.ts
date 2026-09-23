@@ -74,7 +74,6 @@ import {
   ARCHIVE_CLEANUP_DOMAIN,
   ARCHIVE_CLEANUP_PROBE_METHOD,
   ARCHIVE_CLEANUP_PURGE_METHOD,
-  archiveCleanupEndpoint,
 } from '@dsh-chamber/dsh-chamber-wire'
 import {
   assertHostSurface,
@@ -116,7 +115,13 @@ export class ArchiveCleanupGateway extends TypertRemoteService {
    *  text, so the signature must stay plain identifiers without defaults or
    *  rest; its names and order ARE the wire contract declared in ./wire.ts and
    *  pinned by test/wire-lockstep.test.ts. */
-  @Remote(archiveCleanupEndpoint(ARCHIVE_CLEANUP_PURGE_METHOD))
+  // @Remote takes the protocol's single SEGMENT name, never the client
+  // envelope path: the client calls `archiveCleanup/purge` (the domain comes
+  // from `super(ctx, ARCHIVE_CLEANUP_DOMAIN)`), while the decorator export name
+  // must satisfy the pinned protocol grammar [A-Za-z0-9_$.-]+ — a '/' here
+  // rejects the whole plugin tree at load. `archiveCleanupEndpoint()` builds
+  // the ENVELOPE path and is for the client call site only.
+  @Remote(ARCHIVE_CLEANUP_PURGE_METHOD)
   purge(
     sessionIds?: readonly string[],
     force?: boolean,
@@ -150,7 +155,7 @@ export class ArchiveCleanupGateway extends TypertRemoteService {
    *  Not routed through RunGate (never contends with purge). The
    *  carrier is single-layer like every other domain method:
    *  RPC value = {ok:true,value:{}}. */
-  @Remote(archiveCleanupEndpoint(ARCHIVE_CLEANUP_PROBE_METHOD))
+  @Remote(ARCHIVE_CLEANUP_PROBE_METHOD)
   probe(): Promise<ArchiveCleanupDomainResult<Record<string, never>>> {
     // Presence AND surface health — zero IO (structural
     // check only). A corrupt/unmounted registry surface answers ok:false →

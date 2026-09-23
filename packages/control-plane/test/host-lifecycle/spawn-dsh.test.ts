@@ -394,11 +394,16 @@ test('spawnDsh: the installed layout runs the host with the stable managed home 
   try {
     const spawned = await spawnHost(stateDir, dshWorkspacePath, controller.signal)
     const childCwd = readFileSync(childCwdMarker, 'utf8').trim()
+    // getcwd(3) canonicalizes symlinks — on macOS a temp dir under /var comes
+    // back as /private/var — so the textual containment check must compare
+    // against canonical parents, never the spawn-time spelling.
+    const canonicalWorkspace = realpathSync(dshWorkspacePath)
+    const canonicalStateDir = realpathSync(stateDir)
     // The defect lock: cwd must not name (or live under) the runtime tree an
     // update replaces in place...
-    assert.equal(isInsideOrEqual(childCwd, dshWorkspacePath), false, 'host cwd must not be the replaceable runtime tree')
+    assert.equal(isInsideOrEqual(childCwd, canonicalWorkspace), false, 'host cwd must not be the replaceable runtime tree')
     // ...and must be the stable control-plane-owned home the spawn created.
-    assert.equal(isInsideOrEqual(childCwd, stateDir), true, 'host cwd must stay under the control-plane state root')
+    assert.equal(isInsideOrEqual(childCwd, canonicalStateDir), true, 'host cwd must stay under the control-plane state root')
     assert.equal(realpathSync(childCwd), realpathSync(dshHome))
     await reapSpawned(spawned)
   } finally {

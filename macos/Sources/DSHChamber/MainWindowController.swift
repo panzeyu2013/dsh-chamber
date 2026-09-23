@@ -1796,7 +1796,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
                     return
                 }
                 if self.hangWatchdog.noteProbeFailed() == .reload {
-                    self.shellLog("[shell] 渲染器探针连续失败 (RendererHangWatchdog.maxStrikes) 次 → 有界重载")
+                    shellLog("[shell] 渲染器探针连续失败 (RendererHangWatchdog.maxStrikes) 次 → 有界重载")
                     self.scheduleRecoveryReload(reason: "unresponsive")
                 }
             }

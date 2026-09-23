@@ -161,10 +161,17 @@ function checkGatewayDist() {
     // '<root>/packages/<x>' -> '../<x>'.
     const inPlaceRoot = relative(pkgDir, ROOT)
     const stagedRoot = relative(stage, ROOT)
+    // esbuild spells module comments as paths relative to the build cwd, so the
+    // staged tree emits a different number of up-level rungs than the in-place
+    // build (a macOS TMPDIR under /var/folders, and symlinked node_modules,
+    // both shift the depth). Canonicalize the RUNG RUNS on both sides before
+    // comparing: the module list, every referenced file and all code still
+    // compare byte for byte, so a stale bundle cannot hide behind this.
+    const canonicalRungs = (text) => text.replace(/(?:\.\.\/)+/gu, '@up@/')
     let rebuilt = readFileSync(join(stage, 'dist', 'index.js'), 'utf8')
     if (stagedRoot !== inPlaceRoot) rebuilt = rebuilt.split(stagedRoot).join(inPlaceRoot)
-    rebuilt = rebuilt.split(inPlaceRoot + '/packages/').join('../')
-    const onDisk = readFileSync(dist, 'utf8')
+    rebuilt = canonicalRungs(rebuilt.split(inPlaceRoot + '/packages/').join('../'))
+    const onDisk = canonicalRungs(readFileSync(dist, 'utf8'))
     if (rebuilt !== onDisk) {
       note('gateway/dist/index.js', 'stale', '与 src 重建结果不一致（重建：pnpm run build:gateway）')
     } else {

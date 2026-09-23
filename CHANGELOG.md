@@ -11,7 +11,7 @@
 > English: [docs/CHANGELOG.en-US.md](docs/CHANGELOG.en-US.md)
 
 
-## [0.3.2-beta.5] - 2026-09-21
+## [0.3.2-beta.6] - 2026-09-23
 
 ### 新增
 - **本地来源缺图端点现在给出病因，而不只是后果** —— 新增 boot-gap 事实 `local-graph-not-injected`（仅本地实例；远程与 gateway 逐字保留）：本机实例没有注入 chamber 的客户端图通道时，横幅先报「安装 / seed 完整性」这一病因，并以优先级压过 5 秒后到达的 `required-services-missing` 后果；同一 ready 世代内可撤销、可复查（判词后 +30s 有界复查，provider 迟到即清事实），不再长期挂着并白烧一次冷重挂。
@@ -35,6 +35,16 @@
 
 - **原生壳文案本地化并跟随应用内语言（design 25 §5.3）** —— 原生壳的菜单、托盘、对话框与错误文案此前是写死的中文；现在整表（121 键）以 en / zh-Hans 两份字符串资源随包发布，键表由 `NativeTextKey` 单一来源锁步，两份文件的占位符逐键同型同序。壳自建文案跟随**页面语言**（应用内切换即生效），系统与框架面（Sparkle 标准窗、AppKit 内建串、右键菜单）默认跟随系统语言，仅当语言族不同时才写 `AppleLanguages` 让它们一起跟随（下次启动生效）。装配期对每个 `.lproj` 做存在 + 逐字节 + `plutil` 三重 fail-closed 断言，缺件不再出包。
 
+- **共享会话生命周期包与三道锁步门（design 14 §D4）** —— 新增零依赖、零时钟的纯状态包 `@dsh-chamber/dsh-stream-state`：载体重建 reducer 与节流表、页面生命周期账本/容器、揭幕仲裁、四条恢复阶梯的**单张阈值表**、有界异步原语（`withDeadline`/`waitForCondition`）、带世代围栏的 load 状态机与对账权威判定，并带 Foundation-only 的 Swift 镜像（`CarrierDecision.swift`/`LoadState.swift`）。api-gateway / renderer / sidebar / mobile / open-in 一律改用这一所有者，阈值只剩一处；三道锁步门进 static、CI 与发布验证（差分回放 drift≠0 即红、Swift 镜像编译断言、阶梯阈值逐模块比对），并新增**有界流取证环**（默认 256 条 FIFO、记录时脱敏、实时分发前先写入）与页面侧快照桥，无 DevTools 的 Swift 壳里也能事后回读载波决策。
+- **远端会话状态镜像与完成未读（design 17 §10.7、design 06、design 19）** —— 控制面新增只读 session-state 协议与每宿主一个 mux 观察者（重连必做全量对账、无下游客户端时持住 waterfall 不代答、只观察 `$events` 永不自答审批）；gateway 提供 `GET /chamber/session-state`、`/stream`（SSE，`Last-Event-ID` 续传或快照兜底）、`POST /read`、`/read-all`（默认开，`--no-session-state`/`DSH_GATEWAY_SESSION_STATE=0` 关闭即逐路由 503），只存元数据、0600/0700、corrupt 不当空。客户端据此把「完成未读」从隐藏壳通道升级为独立事实通道：renderer 用「事实 + 本机已读水位」派生未读并以五元组身份做单通知投影，壳被回收后仍保账本（后台完成照样点亮侧栏完成点、todo 条、应用角标与通知）；侧栏新增机器可读行标记与「全部已读」，会话创建一律带来源标注；手机端读会话时回传已读水位（每安装 client id、单调、5s 节流、失败静默），手机上读过即清桌面圆点与角标。
+- **原生壳签名增量更新（design 25 §7）** —— Sparkle 更新链从「每次下整包」改为真正的 delta：per-channel appcast staging（按归档内嵌 `SUFeedURL` 分组，混目录即 `multiple appcasts found`）、只接受带非空且与签名钥一致的 `SUPublicEDKey` 且同 branch point 的基线、逐基线 `sparkle:deltaFrom`/`.ignore` 账目、`verify-native-appcast` 对发布 zip 与每个 delta 做 Ed25519 **真验签**、滚动 beta feed 从已发布 stable feed 合并、同版本重跑须与已发布 zip 字节一致才允许覆盖、appcast 在归档之后上传。
+- **gateway 插件撤销改为恢复（design 21 §6.3/§6.8）** —— 新增 `POST /chamber/plugins/undo`（202 `{accepted,opId}` + tasks 轮询）：取最新一笔成功且带 preImage 的操作，对备份目录里的 package.json + lockfile 成对校验后按「先 lockfile、后 manifest」恢复；undo 自身写 journal（`kind:'undo'` + `undoOf`）并先备份当前态，因此可再撤销；读面新增 409 `runtime_busy` / 503 `write_fence_unavailable` 的本地化投影，插件对话框不再渲染「变更记录」区。
+- **state 根单写者租约 `<stateRoot>/owner.json`（design 17 §12、design 25 §6.3）** —— no-follow O_EXCL + 回读终验；活 pid 拒绝返回机器可读 `state_root_locked` + holder pid/flavor；死 pid rename 认领 + 字节/inode 证明；gateway / desktop / CLI / standalone / sidecar 全部接入，**同一 state 根第二个写者 fail-closed 退出 1**；解析单源 `resolveStateRoot`（`--state-dir` > `DSH_<FLAVOR>_STATE` > `DSH_CHAMBER_STATE` > `~/.dsh-chamber`），旧 `.gateway.lock`/`dsh-runtime/owner.json` 一次性退役。
+- **架构单源化与具名包边界（design 01 §5、design 21 §6.11、design 24 §3）** —— 三个新包：`@dsh-chamber/dsh-chamber-wire`（宿主↔客户端 wire 契约：插件 manifest/掩码、`PluginRow` 行模型、archive-cleanup、runtime-status）、`@dsh-chamber/dsh-chamber-client-core`（浏览器安全的共享客户端内核，取代 `sidebar/src/shared`）、`@dsh-chamber/dsh-stream-state`；11 个包移除 `./src/*` 通配出口，消费方改用显式具名面（782 个运行时导出全部有生产消费者）。宿主侧：Electron main 与 Swift sidecar 共用一份 `host-assembly`（装配重复 167→3 行，`main.ts` 4097→1391、`shell-core.ts` 4560→2492）；gateway runtime 拆为 `src/runtime/*`（runtime-manager 3179→551 行，导出面不变、dist 自包含）；renderer `App.tsx` 分解为 app-hooks；dsh-runtime 改为显式入口面。新增零容忍包边界门（生产面禁跨包相对 import + exports 白名单双向一致）与 C16。
+- **构建期产物不入 git** —— dsh-runtime dist、四个 seed 的 dist、mobile dist+lib 九件产物从索引移除，构建改为显式前置（`build:artifacts`/`ensure:artifacts`，清单单源）；所有检查模式要么自举要么响亮失败（缺失即点名 id/路径/构建命令，static 只读、不写脏工作树），`verify-artifact-freshness` 覆盖 mobile 产物、编译 preload、renderer 生成物与 gateway bundle 四类「陈旧即红」。
+- **测试运行器单池化** —— 每个包先以 `DSH_TEST_MANIFEST_DUMP=1` 直接解析清单（不再启动 pnpm），全部条目在**同一个**有界全局池上跨步骤 round-robin 调度（转写仍按声明序）；`--jobs`/`DSH_TEST_JOBS` 在开跑前校验，清单 dump 缺失由「静默通过」改为硬失败；node/tsc 步骤不再经 pnpm 启动，`run-checks.mjs <mode> --list` 可打印计划。
+- **发布验证腿扩围** —— validation 腿新增远端状态故障注入矩阵与验收矩阵（`blocked` 不判绿、空组为错）、三道 stream-state 锁步门、包边界/死导出/上游生命周期契约等门；发布提交必须先有 `main` 上 linux+windows+macos 三腿的完整成功运行。
+
 ### 变更
 - **win32 私有状态读写不再要求 `O_NOFOLLOW`** —— 平台没有该旗标时改为身份回退：open 前后 lstat 拒符号链接并以 dev/ino 复验，不可证即 fail-closed（不再在事务首步抛错）；Windows 上 `<userData>/dsh-runtime` 已存在也不再被误判为 corrupt 而永久阻断。登记为 design 23 F8（身份回退的 TOCTOU 残余）。
 - **win32 插件打包改用 node 启动 pnpm** —— Windows 上不再直接 spawn `pnpm.cmd`（Node ≥ 20.12 拒绝 `.cmd`），改为 `node <pnpm.cjs>`，POSIX 保持裸 `pnpm`；`resolvePnpmBinDir` 补上 win32 候选与随包 pnpm。
@@ -49,6 +59,15 @@
 - **协议写侧与帧上限收严** —— sidecar 出站帧加上限、协议写侧改为有界写：超大响应 fail-closed 结算全部未决请求并响亮上报，不再让渲染端请求永久悬挂或让缓冲无界增长。
 - **原生壳热路径成本下降（性能）** —— 去掉热路径上的重复工作与每帧分配，实测原生壳稳定在 114–120fps。
 - **发布命名归属反转：Swift 原生壳 = `dsh-chamber`，Electron = `dsh-chamber-electron`** —— 原生腿的 .app/DMG/zip/卷名去掉 `-native` 后缀改用裸名，Electron 腿的 app/安装器/产物名加上 `-electron`。appId、原生 CFBundleIdentifier、共享 userData 身份（`@dsh-chamber/desktop`）、目录锁与深链 scheme `dsh-chamber` 全部不变，因此权限、凭据与双 flavor 共存语义不受影响；既有安装的旧 .app 目录名不会自动改写（更新只替换当前 bundle），要清爽目录名需重装。
+
+- **公共入口面收窄（BREAKING）** —— 全仓移除 `./src/*` 通配出口，包根 `.` 改为源码口径（source-only），消费方（含把本仓当插件/嵌入方使用的人）必须改走显式具名面；`@dsh-chamber/dsh-runtime` 入口变为显式具名面（137 个 runtime 值 + 签名类型），内部实现仅供包内相对 import；gateway/desktop 的宿主原语（pnpm 入口、anchor 版本、dsh CLI 入口、registry URL、版本安全）迁入 dsh-runtime 并被 gateway 采用。
+- **desktop IPC 面 69→68（invoke 61→60）** —— 整表写 SSH 实例的 `desktop_ssh_instances_set` 通道端到端移除；连接变更只剩事务化 save/delete 与仅接受 clear 的三个单凭据 setter；`bridge-manifest.json` 与 Swift 白名单继续锁步。
+- **本地插件清单掩码偏差闭合（design 21 决策 18）** —— 桌面 `LOCAL_PLUGIN_LIST` 不再原样透传本地路径：`dependencies` 与 `rows[].spec` 两个通道都经 `redactLocalPluginManifest` 掩码，判据单源在 `dsh-chamber-wire`。
+- **共享受限插件变更执行器（design 21 §6.3）** —— control-plane 的执行器成为 gateway 与桌面主进程唯一的插件变更子进程实现：env 只留 PATH+代理族白名单（丢掉 `DSH_GATEWAY_*`/`npm_config_*`/`NODE_AUTH_TOKEN` 等）、POSIX 进程组 leader + 超时组杀、输出有界截断、错误文本经调用方脱敏后才进 journal/投影。
+- **打包产物形态与自包含断言** —— 桌面 `build-control-plane` 改为 esbuild 单文件自包含（绝对入口、node22 ESM、require shim），并新增「重建产物只能有一个自身输入」断言（残留说明符即失败）；gateway bundle 同步重建为自包含；`electron-builder` 的 `files` 闭包同步。
+- **macOS Swift 侧单源化** —— 新增 `PrivateFS.swift`（no-follow 私有文件打开的判据并集：常规文件 + 单硬链 + O_NOFOLLOW + fstat/dev-ino 一致 + 尺寸上限）、`RollingWindowLimiter.swift`（外部打开预算/sidecar 重启退避/renderer 重载三处共用一个限流判定）、`StrictJSONNumber.swift`（严格 JSON 数值取值，禁止 `NSNumber as? Bool` 误判）、`BridgeLimits.swift`（A/B 桥共享 4 MiB 预算）；判据只收紧不放松。
+- **安装器输入校验收敛** —— `install-gateway.sh` 的端口/canonical SemVer/bind/origin/IPv4/版本比较改为一枚内嵌纯 node 程序（带自测），缺 node 直接硬失败；校正文案不变。
+- **契约文档与许可清单** —— design 文档状态行去掉日期与「已实现」叙述，新增 design 17 §10.7/§12、design 21 undo 与栅栏、design 18 §7 产物纪律、design 02 §3.1、design 25 §6.3/§7，并在 11 篇设计文档补 Rejected alternatives；第三方许可清单按当前树再生成（38 个包）。
 
 ### 修复
 - **win32 存活探针不再只认英文 `LISTENING`** —— 新增 `Get-NetTCPConnection -State Listen` JSON 主探针（纯解析器有测试）+ 大小写不敏感的 netstat 回退，共用 500ms 缓存；非英文 Windows 不再把活着的端口判死。
@@ -83,6 +102,29 @@
 
 - **设置导航齿轮、侧栏字标与设置座席的空白图标已修（design 05 §4.2）** —— 入场动画退役后同一症状仍复现，真机判因是上游图标把 Figma 导出 id 写死在组件里，而 `url(#…)` 按**文档**解析：N-ctx 在同一文档里挂 N 个实例壳，同一 id 被逐壳重复定义，macOS WKWebView 在新建图标首次绘制解析到隐藏壳里的 clipper/mask 时把整块丢绘并缓存结果（属性回写、揭示壳、视图过渡都不自愈）。现在 renderer 在 React root 之前安装一个 scoper，让每个 `<svg>` 自足：只把「本 svg 内定义 ∩ 本 svg 内被引用」的资源 id 改名为文档唯一 token，跨 svg 的引用把定义复制进消费方；aria、内嵌 `<style>` 与文档级样式表引用的 id 一律保留原名。上游的最小改法另登记为提案。
 - **boot 遮罩不再被租客画穿，会话面画好即揭幕（design 05 §2.2.1/§4）** —— 真机两形态：遮罩期官方 composer（`position: sticky`，z-index 7）画在 z-index 1 的遮罩之上（「白屏里出现输入栏」）；揭示门只吃 App 侧两个异步镜像事实，迟到或抖动时遮罩挂在已经渲染好的壳上直到 open 预算烧完（「白屏 / 直接显示载入中」交替）。现在把 stacking 边界画在租客根（`.instance-shell{isolation:isolate}`）、持有期直接隐藏租客（并入隐藏壳禁动画门），并以壳自己暴露的 `[data-phase]` 决定揭幕（`active` 立即、`absent` 2s 兜底、`hero`/`settling` 保持 + 70s 外层保险；释放是电平、绑请求身份），只对「落地面是遮罩」的切换取硬切，避免旧视图输入栏与新遮罩混色。
+
+- **远端来源点开会话不再停在「加载历史」** —— 开帧预算的加宽键由「请求」改为「逻辑流 episode」（重建流不再继承最长 300s 的加宽，账本有界），keep-alive 竞态改在微任务队列重排；重试道等活连接世代有 30s 上界（到点按 expired 交回调用方重开而不是抛错）；teardown 路径改走同一静默升级，并要求该流至少活过 15s（会话切换/中断请求/重挂不再误杀健康载波）；open-in 阶梯只对「openPromise 恰为 null 且状态 loading」的停滞自动重建，另有 90s 硬失败文案「会话内容未载入」，手动重建不设账本门控。
+- **静默完成：running 位卡 true 导致完成边沿丢失** —— 官方 store 的 running 只由一条不重传的 mux 事件给出，丢一帧即永远 running、完成通知永不武装；现由单一权威链（独立 unary session.list 读 + N=2 一致确认 + 经官方公开写路径回写）对账，每条 running episode 恰好一个完成边沿；阈值（probe 60s / reconnect 190s 且须有 stuck 证据 / notice 310s）单源在共享表，动作落机内有界环 dsh-chamber.authority-log.v1 供事后回读。
+- **壳回收后完成未读/通知丢失** —— 不再把隐藏壳通道当唯一完成边：消费网关镜像与无壳观察者（SSH/本地来源经实例代理 mux 只观察瀑布帧、永不代答审批），回收后仍保账本，后台完成继续点亮侧栏完成点、待办条、应用角标与通知。
+- **跨代际事实被合并成矛盾视图** —— 来源注册表改为按 sourceId+epoch：一个 id 只有一个 live generation，reincarnate() 是唯一新代入口，被取代 epoch 的派发直接丢弃，投影只读当前 entry。
+- **veil 到外层上限不释放 / 0ms 重臂** —— 揭幕帧改为携带绝对截止：hero/settling 超过 70s 变为可操作（揭布并仍给退出动作），absent/未知相位 2s 回退，未知 data-phase 不再被折叠成 hero 停到 70s；坏时钟返回 Infinity（保持）而不是 0ms 重臂。
+- **切源首帧闪上一来源主题 / 被截断的 effect teardown** —— 主题按来源指纹缓存已 settle 的快照（LRU 12），未挂载的新来源优先用自身缓存，冷切换不再闪出上一个来源的底色；被截断的 effect cleanup 恢复。
+- **陈旧子代理计数被当成「正在跑」并压制未读** —— 行新增 subagentActivity: none|running|unknown：谱系索引缺席是 unknown（不是 none），stale 报告把 running 降级 unknown，unknown 中性呈现——不再谎称「N 个子代理在跑」，也不再压掉未读。
+- **投影延迟被折叠成「未连接」** —— 来源相位缺席时发布 unknown（侧栏读作「未知」）而非 idle；hover/aria 不再把投影延迟或拉取失败说成手动断开。
+- **运行时失败台账不可读被当作「无失败」** —— gateway 状态新增 failureError、版本列表新增 removableVersionsError：读失败时单出一行「运行时失败台账不可读…，失败记录可能不完整」，removableVersions 强制投影为空（清理行隐藏、接受时清理守卫拒绝）。
+- **审计 P0（客户端面）** —— 本地卡「清理并接管」与「启动」共用同一 runtime spawn 门（hydrating/applying 等不安全相位一律 fail closed），不再有绕过未决切换窗口的启动路径；facts SSE 的静默看门狗改为请求发起时即武装并加建连 deadline，半死隧道不再既无 stale 也无重连。
+- **托管宿主 spawn cwd 事故（design 02 §3.1）** —— installed 布局不再以可被就地替换的安装树为 cwd（否则宿主持有已 unlink 的目录、worker_threads 共享 process.cwd() 后每个工具调用报 uv_cwd ENOENT），改用控制面自有 0700 的 <stateDir>/dsh-home；source 布局仍用工作区根。
+- **审计面的三个 fail-closed 缺口** —— ①任何远端插件变更前必须读到变更前 journal 快照，读不到即拒绝整次变更（否则事后 undo 会删掉就地升级过的插件而不是恢复它）；②激活探针的期望域集改为在 spawn 快照之后派生；③openInApp/probe 真正进探针注册表并按 {ok,value.platform} 形状判定，open-in 宿主域缺失因此可被检测。
+- **运行时可读性 fail-closed** —— 元数据读取不再把 EACCES/EIO 折成 corrupt/missing：一次分类 present/missing/corrupt/unknown，store/snapshot/health 四态分支；gateway status 投影 failureError 而不是伪造「0 个失败」；boot 门把 metadataRecoveryPending() === "unknown" 视为阻断，不可读的叶不再被隔离、覆写或伪报为空。
+- **gateway session-mux 宽限定时器在窗口内触发后重新武装** —— 定时器回调可能读到 graceMs - 1 而否决 sweep，且否决到下一个 5s tick 前是终局：无后续事件时被持住的 waterfall 永远不会委派（CI 与 CPU 负载下实测复现）。改为按剩余窗口重臂。
+- **桌面通知按完成身份去重 + 角标 + 恢复补发** —— 去重身份把内容水位作为第 5 个分量（同一次完成的两条目击合并为一条横幅，同一会话的后续完成仍是新事件），渲染端合并后的未读数投影到应用角标；被 hold 住的系统唤醒补发在渲染端重新可投递时立即 flush。
+- **macOS 原生壳探针错误不再算健康，渲染器崩溃可归因** —— hang watchdog 新增 noteProbeFailed()（探针报错记 strike，达到上限重载一次；首次放弃弹窗、后续只记日志，成功 didFinish 重置门）；WebContent 崩溃回调记录「距上次加载完成 X.XXs（boot 窗口内/已稳定）+ 本窗口第 N 次崩溃」，恢复落地再记一条，静默整页重载终于有事后判据。
+- **boot 窗口的 rAF 热路径引发 WebContent 崩溃** —— sidebar 滚动同步的容器缺失重试只在 200ms 内帧紧、随后退到 80ms 定时器，锚定行用一次转义属性查找替代全行扫描；InstanceView 表面采样经帧合并器（下一帧首变、有界间隔、保证尾采样）合并，去掉 boot 期「每帧采样 → 每帧 React commit」的热形状。
+- **测试套件去掉固定端口与泄漏定时器** —— sidecar fixture 改用 --port 0 并由 ready 帧报告 OS 分配的端口，manager-api 的连续端口预留只在 EADDRINUSE 时重试，watchdog/grace 定时器在 finally 清理；cleanup 期限注入 seam 只在 dev/test 生效、装配态忽略。
+- **根 typecheck 程序不再被 chamber 客户端插件污染** —— 根 tsconfig 把四个 /client specifier 映射到 renderer 本地的消费面，插件包自身 program 仍权威（此前把四份宽松 vendor 面并进一个程序、117 个错误），layout/mobile/open-in/renderer 上误加的 vendor 依赖一并删除。
+- **scoper 标记门不再对每个真实构建误红，mobile 提交产物与源一致** —— 标记载体由会被 minify 掉的裸调用改为锚定赋值并要求真实调用（负控仍成立），守卫覆盖 mobile 提交 bundle、构建后页块、拷进 Swift app 的字节与两条发布腿；mobile 的已提交 bundle 与 src 不一致一并修复。
+- **CLI connections add/reclaim 不再伪造契约合法的 null** —— 返回 connection:null 时如实打印 connection none、spawned 缺失打印 unknown，不再伪造成 local 行与 spawned:false。
+- **失败文案与敌意值** —— OpenIn 的失败原因统一经共享 describeThrown（永不抛、永不空串、空 message 回落 name 再回落 unknown error）；Git 新增 10 条本地化失败文案（操作进行中/需先恢复/事实不可用/工作树不在拓扑/未关联 workspace/工作树不可用/归档失败/刷新失败/Git 插件未加载/远端调用失败），只有真正未映射的失败保留原始英文消息。
 
 ## [0.3.1] - 2026-09-15
 

@@ -78,12 +78,27 @@ test('the HOST method signature is exactly the descriptor args, in order',() => 
 test('the HOST derives every wire name from the shared package',() => {
  assert.ok(HOST_SOURCE.includes("from '@dsh-chamber/dsh-chamber-wire'"), 'the host must import the shared contract package')
  assert.match(HOST_SOURCE, /super\(ctx, ARCHIVE_CLEANUP_DOMAIN\)/)
- assert.ok(HOST_SOURCE.includes('@Remote(archiveCleanupEndpoint(ARCHIVE_CLEANUP_PURGE_METHOD))'))
- assert.ok(HOST_SOURCE.includes('@Remote(archiveCleanupEndpoint(ARCHIVE_CLEANUP_PROBE_METHOD))'))
+ assert.ok(HOST_SOURCE.includes('@Remote(ARCHIVE_CLEANUP_PURGE_METHOD)'))
+ assert.ok(HOST_SOURCE.includes('@Remote(ARCHIVE_CLEANUP_PROBE_METHOD)'))
  assert.equal(
  /'archiveCleanup\//.test(HOST_SOURCE),
  false,
  'the host must not hand-write an endpoint literal beside the shared contract')
+})
+
+test('every host @Remote name is a protocol SEGMENT, never the client envelope path',() => {
+ // The domain half lives in `super(ctx, ARCHIVE_CLEANUP_DOMAIN)`; `@Remote`
+ // takes the bare method segment, and the pinned dsh-typert-protocol rejects
+ // a '/' at PLUGIN LOAD — which takes the whole managed instance down (only a
+ // real host, not a unit test, used to catch it). Pinning the decorator
+ // arguments to the constants keeps `archiveCleanupEndpoint()` (the ENVELOPE
+ // path, which belongs to the client call site) out of the host.
+ const decorated = [...HOST_SOURCE.matchAll(/@Remote\(([^)]*)\)/gu)].map(match => match[1].trim())
+ assert.deepEqual(decorated.sort(), ['ARCHIVE_CLEANUP_PROBE_METHOD', 'ARCHIVE_CLEANUP_PURGE_METHOD'],
+  'the host decorators must name the shared method constants directly')
+ for (const name of [ARCHIVE_CLEANUP_PURGE_METHOD, ARCHIVE_CLEANUP_PROBE_METHOD]) {
+  assert.match(name, /^[A-Za-z0-9_$.-]+$/u, 'a host @Remote export name must be one protocol segment')
+ }
 })
 
 test('the CLIENT imports the shared package and builds its call from it',() => {

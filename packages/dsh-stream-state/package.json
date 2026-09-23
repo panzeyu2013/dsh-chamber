@@ -1,6 +1,6 @@
 {
   "name": "@dsh-chamber/dsh-stream-state",
-  "version": "0.3.2-beta.5",
+  "version": "0.3.2-beta.6",
   "private": true,
   "description": "Pure, clockless lifecycle state for the session/stream chain. Reducers take observations and return typed recovery actions; all thresholds live in tables. Zero runtime dependencies, no timers, no DOM, no imports from any existing chamber module.",
   "type": "module",
