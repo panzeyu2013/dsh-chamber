@@ -1576,7 +1576,7 @@ if (!gotTheLock) {
     const statusTransport: StatusFn = (id) => sm.status(id);
     // Live-effect probe for the chamber host packages (design 09 module A /
     // 08 §11 / 24 §7): adapts the generic tunnel RPC probe onto plugin-sync's
-    // per-package LiveProbe shape, driven by the control-plane registry's own
+    // per-package live-probe shape (the retired LiveProbe type), driven by the control-plane registry's own
     // probe descriptor (method + args) — no per-package branch here. A 404 is
     // deterministic "the running instance never loaded that boot row"; a
     // package live from an older boot does NOT prove a later-seeded row

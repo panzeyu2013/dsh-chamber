@@ -132,27 +132,17 @@ export class AppWebEntry {
 // Gate face: mirrors the slice of the real ClientModuleSystem
 // that shell.ts consumes after C3 — `manifest` (the chamber boot row) and
 // `prefetch(id)`. prefetch pushes an event synchronously so tests can pin
-// call order, and honors two knobs: an injected error (the shell gate
-// swallows it — the loud path is run()'s create-side import, not tested
-// here) and an optional gate (tests can hold extra-bundle loads until the
-// chamber "eval" settles).
+// call order, and honors the injected-error knob (the shell gate swallows it —
+// the loud path is run()'s create-side import, not tested here). The optional
+// prefetch gate was never wired (nothing queued it), so it is retired: the
+// await-before-load behavior is driven by shell-core's awaitBeforeLoad /
+// chamberEval instead.
 let chamberPrefetchError = undefined
-const prefetchGates = []
-const allPrefetchGates = new Set()
 const moduleSystemFace = {
   manifest: { plugins: [{ id: '@dsh-chamber/app', immediately: true }] },
   async prefetch(id) {
     eventLog.push(`prefetch:${id}`)
     if (chamberPrefetchError !== undefined) throw chamberPrefetchError
-    const gate = prefetchGates.shift()
-    if (gate !== undefined) {
-      gate.markStarted()
-      try {
-        await gate.wait
-      } finally {
-        allPrefetchGates.delete(gate)
-      }
-    }
   },
 }
 
@@ -277,13 +267,10 @@ export function __testSetLoaderEntries(value) {
 export function __testResetLifecycle() {
   for (const gate of allRunGates) gate.release()
   for (const gate of allDisposeGates) gate.release()
-  for (const gate of allPrefetchGates) gate.release()
   allRunGates.clear()
   allDisposeGates.clear()
-  allPrefetchGates.clear()
   runGates.length = 0
   disposeGates.length = 0
-  prefetchGates.length = 0
   entryStates.length = 0
   openedSessions.length = 0
   entrySequence = 0
