@@ -91,9 +91,14 @@ test('a ladder dispatch ledger stays inside its quota window after 10^5 ticks', 
   )
 })
 
-test('the opening ledger is bounded by its key cap after 10^5 expiries', () => {
+test('the opening ledger is bounded by its key cap across repeated expiry rounds', () => {
+  // The opening-ledger arm prunes by scanning the live key set on every event,
+  // so 10^5 iterations spend their time in that scan (8.7s) without showing the
+  // bound assertion anything new. 5,000 ticks = 10 full eviction cycles over the
+  // 500 reused keys, which is what the invariant needs.
+  const EXPIRY_TICKS = 5_000
   let state = initialCarrierState()
-  for (let index = 0; index < EVENTS; index++) {
+  for (let index = 0; index < EXPIRY_TICKS; index++) {
     const requestKey = 'k' + String(index % 500)
     state = reduceCarrier(state, { kind: 'openingSent', at: index * 1_000, streamId: 's', requestKey }, CARRIER_ENV).state
     state = reduceCarrier(state, { kind: 'openingExpired', at: index * 1_000 + 1, streamId: 's', requestKey, framesSinceSend: 1 }, CARRIER_ENV).state

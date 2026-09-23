@@ -51,7 +51,16 @@ export const bootInstanceShell = (
   basePath: string,
   el: HTMLElement,
   onState: Parameters<typeof shellModule.bootInstanceShell>[3],
-) => shellModule.bootInstanceShell(instanceId, basePath, el, onState, testSourceFingerprint(instanceId))
+  options: Parameters<typeof shellModule.bootInstanceShell>[6] = {},
+) => shellModule.bootInstanceShell(instanceId, basePath, el, onState, testSourceFingerprint(instanceId), undefined, {
+  // The 503 retry cadence is not what these suites assert: the bounded window is
+  // driven by an immediately-resolving sleep so a 9-failure-path file does not
+  // pay the real 10×500ms budget per boot. Attempts/message stay the shipped
+  // defaults; a test that pins the fresh-budget-after-serving-wait behavior
+  // overrides retry explicitly.
+  retry: { sleep: async () => {} },
+  ...options,
+})
 
 // ── Plumbing ───────────────────────────────────────────────────────────────
 

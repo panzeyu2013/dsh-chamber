@@ -165,7 +165,12 @@ test('bootInstanceShell: the serving gate is threaded into the host-graph fetch 
     const state = await shellModule.bootInstanceShell(
       'ssh-test-gate-8', '/api/i/ssh-test-gate-8', {} as HTMLElement, () => {},
       testSourceFingerprint('ssh-test-gate-8'), 'ssh',
-      { waitForServing: async (instanceId) => { waits.push(instanceId); return true } },
+      {
+        waitForServing: async (instanceId) => { waits.push(instanceId); return true },
+        // The fresh-budget retry is the behavior under test, not its wall clock:
+        // an immediate sleep keeps the 10-attempt budget deterministic and free.
+        retry: { sleep: async () => {} },
+      },
     )
     assert.equal(state.booted, true)
     assert.equal(state.degraded, null, 'a boot that got its rows after the wait must not be marked degraded')
@@ -202,6 +207,7 @@ test('bootInstanceShell: a graph-less boot keeps its cause over a late lower-pri
         onRepublish: (_id, next) => {
           republished.push(next as unknown as { booted: boolean; degraded: { kind: string } | null })
         },
+        retry: { sleep: async () => {} },
       },
     )
     assert.equal(state.booted, true)
@@ -332,6 +338,7 @@ test('bootInstanceShell: pre-settle reports are LAST-wins under priority and a r
         onRepublish: (_id, next) => {
           republished.push(next as unknown as { booted: boolean; degraded: { kind: string } | null })
         },
+        retry: { sleep: async () => {} },
       },
     )
     // The fixture consumes the run gate AFTER configureContext, so the seam is

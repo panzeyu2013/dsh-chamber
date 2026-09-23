@@ -192,6 +192,16 @@ export function derivedProbe(stateDir: string): NonNullable<GatewayRuntimeManage
   return async () => probeResultsFor(stateDir).map(name => ({ name, ok: true }))
 }
 
+/**
+ * The deterministic not-serving probe: every derived name answers not-ok — the
+ * same verdict the production probe engine reaches after its real transport
+ * timeout against a fixture port with no listener, without the timeout. F4
+ * recovery tests inject this when they exercise the probe-gated builtin switch.
+ */
+export function unavailableProbe(stateDir: string): NonNullable<GatewayRuntimeManagerOptions['probeCandidate']> {
+  return async () => probeResultsFor(stateDir).map(name => ({ name, ok: false, error: 'test probe: candidate not serving' }))
+}
+
 /** Runtime manager over the shared config/plane/logger. The probe seam stays
  *  real unless the caller injects one (derivedProbe for the derived-set shape). */
 export function runtimeManager(

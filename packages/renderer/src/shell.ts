@@ -53,7 +53,7 @@ import {
 // this module only carries the verdict it returns into the settled state.
 import type { GraphGapKind } from './source-readiness.ts'
 import { isChamberSourceId, rawInstanceIdFromSourceId } from './transport-source.ts'
-import { collectExtraRows, type ExtraModuleRow } from './host-graph.ts'
+import { collectExtraRows, type CollectExtraRowsDeps, type ExtraModuleRow } from './host-graph.ts'
 import { BundleLoadTimeoutError } from '../../dsh-chamber-client-ui-sidebar/src/shared/client-plugin-loader.ts'
 import { chamberBridge, describeThrown, type PluginGraphDiagnostic } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
 // Page-level machine catalog + the page-level instance client it reads through:
@@ -597,6 +597,14 @@ export function bootInstanceShell(
      * App's mirror.
      */
     onRepublish?: (instanceId: string, state: ShellState) => void
+    /**
+     * Test seam: the host-graph 503 retry budget (attempts/delayMs/sleep, see
+     * host-graph.ts CollectExtraRowsDeps.retry). Production callers omit it and
+     * keep the shipped 10×500ms window; suites inject an immediately-resolving
+     * sleep so a failure-path boot does not pay real wall clock for a retry
+     * cadence it never asserts.
+     */
+    retry?: CollectExtraRowsDeps['retry']
   } = {},
 ): Promise<ShellState> {
   // perf 埋点：boot 入口（含全局队列排队；注册表见 perf-marks.ts）。
@@ -717,6 +725,7 @@ export function bootInstanceShell(
         // 503 = the source is still starting (cold start / restart straddle).
         // Wait for it instead of booting without any profile client plugins.
         ...(options.waitForServing === undefined ? {} : { waitForServing: options.waitForServing }),
+        ...(options.retry === undefined ? {} : { retry: options.retry }),
         onGraphUnavailable: (message, kind) => { if (mayPublish()) graphUnavailable = { kind, message } },
       })
       : Promise.resolve<ExtraModuleRow[]>([])

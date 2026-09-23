@@ -33,6 +33,7 @@ import {
   writeDshHome,
   runtimeManager,
   derivedProbe,
+  unavailableProbe,
 } from '../support/runtime-routes-harness.ts'
 
 // ---------------------------------------------------------------------------
@@ -580,7 +581,13 @@ test('a stranded F4 invalidation (pointer + invalidatedAt, journal lost) self-he
     writeF4Override(stateDir)
     assert.equal(readActivationJournalState(stateDir).kind, 'missing', 'the stranded state has no resumable journal')
 
-    const manager = runtimeManager(stateDir, fakePlane())
+    // Deterministic not-serving probe (the production one would hit
+    // 127.0.0.1:17510 with no listener) plus the shared delayed-verdict seam:
+    // the confirmation pass still runs, only the production 2s wait is skipped.
+    const manager = runtimeManager(stateDir, fakePlane(), {
+      probeCandidate: unavailableProbe(stateDir),
+      waitBeforeRetry: async () => {},
+    })
     try {
       const startup = await manager.startupTransaction()
       assert.deepEqual(startup, { blockedReason: null }, 'the re-armed F4 transaction completes cleanly')
@@ -670,7 +677,10 @@ test('a FRESH shell-version mismatch over an APPLIED override with a settled app
     writeActivationJournal(stateDir, monitoring)
     assert.equal(readOverride(stateDir)?.invalidatedAt, undefined, 'the override is NOT yet invalidated (fresh mismatch)')
 
-    const manager = runtimeManager(stateDir, fakePlane())
+    const manager = runtimeManager(stateDir, fakePlane(), {
+      probeCandidate: unavailableProbe(stateDir),
+      waitBeforeRetry: async () => {},
+    })
     try {
       const startup = await manager.startupTransaction()
       assert.deepEqual(startup, { blockedReason: null }, 'the armed F4 transaction completes cleanly')
@@ -712,7 +722,10 @@ test('a FRESH shell mismatch with an intent-phase old-shell transaction replaces
     writeVersionSwitchIntent(stateDir, '1.0.0')
     assert.equal(readOverride(stateDir)?.invalidatedAt, undefined, 'fresh mismatch')
 
-    const manager = runtimeManager(stateDir, fakePlane())
+    const manager = runtimeManager(stateDir, fakePlane(), {
+      probeCandidate: unavailableProbe(stateDir),
+      waitBeforeRetry: async () => {},
+    })
     try {
       const startup = await manager.startupTransaction()
       assert.deepEqual(startup, { blockedReason: null }, 'the replaced F4 transaction completes cleanly')
