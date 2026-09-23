@@ -671,6 +671,21 @@ function shutdownStallMs(): number {
 /** 退出清理硬顶（见 shutdown 头注释）：必须早于宿主 5s SIGKILL grace。 */
 const QUIT_CLEANUP_DEADLINE_MS = QUIT_CLEANUP_TIMEOUT_MS - 500
 
+/** D1c 测试注入（与 DSH_SIDECAR_TEST_STALL_SHUTDOWN_MS 同纪律）：非装配态下
+ *  缩短退出清理硬顶，使测试能在毫秒级验证「硬顶先于注入挂起、先于宿主 grace」
+ *  的次序；产品路径不设置该变量，装配态一律忽略并使用生产常量。 */
+const TEST_QUIT_CLEANUP_ENV = 'DSH_SIDECAR_TEST_QUIT_CLEANUP_MS'
+function quitCleanupDeadlineMs(): number {
+  const raw = process.env[TEST_QUIT_CLEANUP_ENV]
+  if (raw === undefined || raw.length === 0) return QUIT_CLEANUP_DEADLINE_MS
+  if (isPackagedSidecarRuntime()) {
+    console.error(`[sidecar] ${TEST_QUIT_CLEANUP_ENV} 在装配态被忽略（测试注入仅限 dev/测试）`)
+    return QUIT_CLEANUP_DEADLINE_MS
+  }
+  const ms = Number(raw)
+  return Number.isFinite(ms) && ms > 0 ? ms : QUIT_CLEANUP_DEADLINE_MS
+}
+
 /** 优雅退出（信号/EOF 共用）：quitting 门 → ctx 侧回收（transport/插件子进程/
  *  安装器/runtime 事务 abort/gateway 会话/session refresh——dispose 内序与
  *  main will-quit 同源）→ cp.stop（本地 dsh 子进程不孤儿化）→ exit code。
@@ -686,6 +701,7 @@ const QUIT_CLEANUP_DEADLINE_MS = QUIT_CLEANUP_TIMEOUT_MS - 500
 async function shutdown(code: number): Promise<void> {
   if (shuttingDown) return
   shuttingDown = true
+  const cleanupDeadlineMs = quitCleanupDeadlineMs()
   // 更新控制器停表：定时器已 unref（不阻止退出），退出路径再显式
   // 停掉——清理收尾期间绝不再发起网络检查。控制器契约面只保证 UpdateController，
   // stop 是 headless 附加成员（见 update-headless.ts）。
@@ -723,13 +739,13 @@ async function shutdown(code: number): Promise<void> {
     // 会成为 unhandledRejection 并命中 exit 1，绝不能到达）。
     cleanup.then(() => true as const),
     new Promise<false>((resolve) => {
-      deadlineTimer = setTimeout(() => resolve(false), QUIT_CLEANUP_DEADLINE_MS)
+      deadlineTimer = setTimeout(() => resolve(false), cleanupDeadlineMs)
     }),
   ])
   if (deadlineTimer !== undefined) clearTimeout(deadlineTimer)
   if (!completed) {
     console.error(
-      `[sidecar] 退出清理超时（${QUIT_CLEANUP_DEADLINE_MS}ms，宿主 ${QUIT_CLEANUP_TIMEOUT_MS}ms 前留 500ms 余量），强制退出（code=${code}；可能有子进程残留）`,
+      `[sidecar] 退出清理超时（${cleanupDeadlineMs}ms，宿主 ${QUIT_CLEANUP_TIMEOUT_MS}ms 前留 500ms 余量），强制退出（code=${code}；可能有子进程残留）`,
     )
   }
   process.exit(code)

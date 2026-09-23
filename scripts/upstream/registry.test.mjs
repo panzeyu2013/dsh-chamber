@@ -62,9 +62,10 @@ test('registry 值锁：分类桶形状 + 符号锚字符串（防"同计数下�
   // 值锁：api-gateway 桶按合并后的 registry 重算（载波重试纯函数 / 页面事实 / 静默看门狗策略 /
   // 生命周期取证事实 / journal 补丁 / 仓内测试清单）；形状变化必须同批改本哈希。
   // connection 的 dropped 含 src/client/fixture.ts（浏览器夹具不镜像）。
+  // seed-open-in / client-web 的 own 含 scripts/test.mjs（测试清单统一委托共享 runner）。
   assert.equal(
     createHash('sha256').update(JSON.stringify(shape)).digest('hex').slice(0, 16),
-    'feb294ff74c6f9e2',
+    '0ad711d3ccb84dd0',
     '分类桶形状变了（桶间搬家或增删文件）——必须同批改本断言的哈希；当前形状：' + JSON.stringify(shape),
   )
   assert.deepEqual(
@@ -96,7 +97,7 @@ test('verifierForks 与迁移前内嵌 FORKS 同形：顺序、路径、分类�
   ])
   assert.deepEqual(
     forks.map((fork) => [Object.keys(fork.patched).length, Object.keys(fork.own).length, fork.ownPrefix.length, fork.dropped.length]),
-    [[7, 4, 4, 3], [9, 2, 1, 2], [7, 7, 1, 9], [4, 3, 1, 6]],
+    [[7, 4, 4, 3], [9, 3, 1, 2], [7, 7, 1, 9], [4, 4, 1, 6]],
   )
   assert.equal(forks[3].versionAnchor, 'chamber')
   for (const fork of forks.slice(0, 3)) assert.equal(fork.versionAnchor, undefined)

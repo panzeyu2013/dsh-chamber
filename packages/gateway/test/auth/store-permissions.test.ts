@@ -509,36 +509,65 @@ test('concurrent stale-lock takeovers never double-hold the directory (pair stre
   const stateDir = mkdtempSync(join(tmpdir(), 'gateway-lock-stress-'))
   t.after(() => rmSync(stateDir, { recursive: true, force: true }))
   const lockFile = join(stateDir, '.gateway.lock')
+  // The contender announces that it holds the lock and then WAITS for the
+  // parent's release file: the parent can therefore guarantee a true overlap
+  // (the loser has already attempted while the winner still holds) without a
+  // fixed dwell. The hold is still a real lock held by a real process; only
+  // the dead time between "loser decided" and "winner closes" is gone.
   const childScript = [
     `import { createGatewayStore } from ${JSON.stringify(new URL('../../src/store.ts', import.meta.url).href)};`,
-    `import { writeFileSync } from 'node:fs';`,
+    `import { existsSync, writeFileSync } from 'node:fs';`,
     `const stateDir = ${JSON.stringify(stateDir)};`,
+    `const [won, ready, release] = process.argv.slice(1);`,
     `try {`,
     `  const store = createGatewayStore(stateDir, console);`,
-    `  writeFileSync(process.argv[1], JSON.stringify({ pid: process.pid }));`,
-    // Hold the lock long enough that a slightly delayed second contender
-    // (slow node startup under CI load) still sees the live lock instead of
-    // legitimately taking over after our release.
-    `  setTimeout(() => { store.close(); process.exit(0); }, 1000);`,
+    `  writeFileSync(won, JSON.stringify({ pid: process.pid }));`,
+    `  writeFileSync(ready, '1');`,
+    `  const deadline = Date.now() + 10_000;`,
+    `  while (!existsSync(release) && Date.now() < deadline) {`,
+    `    await new Promise(resolve => setTimeout(resolve, 5));`,
+    `  }`,
+    `  store.close(); process.exit(0);`,
     `} catch { process.exit(1); }`,
   ].join('\n')
 
-  for (let round = 0; round < 15; round += 1) {
+  // 10 rounds × 2 contenders on one fresh stale lock. Every round still races
+  // two real processes; the barrier removes the 500ms-per-round dead hold that
+  // used to make this case 6.8s while proving the same two-contender property.
+  for (let round = 0; round < 10; round += 1) {
     // Fresh stale lock (dead pid) for every round.
     writeFileSync(lockFile, JSON.stringify({ pid: 99_999_999, createdAt: round }), { mode: 0o600 })
-    const children: Array<{ child: import('node:child_process').ChildProcess; won: string }> = []
+    const release = join(stateDir, `release-${round}`)
+    const children: Array<{ child: import('node:child_process').ChildProcess; won: string; ready: string }> = []
     for (let i = 0; i < 2; i += 1) {
       const won = join(stateDir, `won-${round}-${i}`)
-      const child = spawn(process.execPath, ['--input-type=module', '-e', childScript, won], { stdio: 'ignore' })
-      children.push({ child, won })
+      const ready = join(stateDir, `ready-${round}-${i}`)
+      const child = spawn(process.execPath, ['--input-type=module', '-e', childScript, won, ready, release], { stdio: 'ignore' })
+      children.push({ child, won, ready })
       // Watchdog: a wedged child must not hang the suite forever.
       const watchdog = setTimeout(() => child.kill('SIGKILL'), 20_000)
       child.on('exit', () => clearTimeout(watchdog))
     }
-    await Promise.all(children.map(({ child }) => new Promise<void>(resolve => child.on('exit', () => resolve()))))
+    // Barrier: every contender must have either refused (exited) or announced
+    // that it holds the lock. Only then does the parent release the holders.
+    await Promise.all(children.map(({ child, ready }) => new Promise<void>(resolve => {
+      const check = (): void => {
+        if (child.exitCode !== null || existsSync(ready)) { resolve(); return }
+        setTimeout(check, 5)
+      }
+      check()
+    })))
+    writeFileSync(release, '1')
+    await Promise.all(children.map(({ child }) => child.exitCode !== null
+      ? Promise.resolve()
+      : new Promise<void>(resolve => child.on('exit', () => resolve()))))
     const winners = children.filter(({ won }) => existsSync(won))
     assert.ok(winners.length <= 1, `round ${round}: at most one contender may hold the directory (got ${winners.length})`)
-    for (const { won } of children) rmSync(won, { force: true })
+    for (const { won, ready } of children) {
+      rmSync(won, { force: true })
+      rmSync(ready, { force: true })
+    }
+    rmSync(release, { force: true })
   }
 })
 

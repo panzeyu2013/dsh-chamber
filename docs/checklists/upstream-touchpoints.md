@@ -93,6 +93,7 @@ CSS `packages/renderer/src/styles.css` 引入）+ client构面未列出的小项
 | `src/platform.ts` | [patch-mod] | PLATFORM_MODULES/静态表 chamber 接线（C3 偏差：ui-primitives 不 seed） |
 | `src/seed.ts` | [patch-mod] | seed 行 chamber 接线（extraRows/__ModuleLoader__；C3 偏差同步） |
 | `tsconfig.json` | [patch-mod] | chamber 构面（vendor paths/检查面） |
+| `scripts/test.mjs` | [own] | chamber 测试清单委托共享 runner（scripts/lib/test-manifest.mjs）：3 文件表 + configure-context 的 vendor register 参数 |
 | `src/boot-rows.ts` | [own] | chamber 每实例 boot-rows（design 09 module D） |
 | `src/boot-tolerance.ts` | [own] | chamber boot 容忍/恢复（design 09） |
 | `test/` | [own] | chamber 自有测试（boot-tolerance/boot-rows/configure-context + fixtures） |
@@ -158,6 +159,7 @@ host插件入口/半、上游 `tests/`、`tsdown.config.ts`、上游README（api
 | `tsconfig.json` | [patch-mod] | chamber 构面（vendor paths + 本包 files） |
 | `dist/index.js` | [own] | chamber 构建期生成产物（不提交；clean checkout 由 pnpm run build:artifacts 自举；C8 逐字节重建-比对；上游无对应文件） |
 | `scripts/build.mjs` | [own] | chamber esbuild 产物构建 |
+| `scripts/test.mjs` | [own] | chamber 测试清单委托共享 runner（scripts/lib/test-manifest.mjs）：文件表 + core.test.ts 的 transform-types/vendor-stub 加载参数 |
 | `src/core.ts` | [own] | chamber 域核心：上游 apply() 的目录/图标/拉起状态机（去掉路由与 SSH 门） |
 | `test/` | [own] | chamber 自有测试（域契约 + 载荷拒绝矩阵 + vendor stub loader） |
 | `README.i18n.yaml` | [dropped] | 上游 README 不携带（fork 描述在 package.json/源码首页） |

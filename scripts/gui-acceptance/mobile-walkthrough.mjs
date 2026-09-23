@@ -183,6 +183,9 @@ async function discoverMobileTarget(cdpPort, url, secrets = []) {
  * @param {object} opts.device - 设备模型（`--width/--height/--dpr` 组装）
  * @param {'off'|'summary'|'full'} opts.wsFrames - 帧输出档
  * @param {boolean} opts.requireRun - 未执行（INFO）计为 FAIL（对应 run.mjs 的 --require-hover）
+ * @param {number} [opts.navigateSettleMs] - 导航后等待（默认 1500）
+ * @param {number} [opts.reloadSettleMs] - reload 后等待设备模拟生效（默认 3000）
+ * @param {number} [opts.frameSettleMs] - 帧/控制台观察窗前等待（默认 1000）
  * @param {string} opts.authTokenEnv - Bearer 凭据的环境变量名（值永不打印）
  * @param {string} opts.cookieEnv - Cookie 头的环境变量名（值永不打印）
  * @returns {Promise<{results: object[], reportPath: string, framesPath: string|null, shots: string, passed: number, failed: number, info: number, skipped: boolean}>}
@@ -197,6 +200,12 @@ export async function runMobileWalkthrough({
   authTokenEnv = 'DSH_MOBILE_AUTH_TOKEN',
   cookieEnv = 'DSH_MOBILE_COOKIE',
   settleMs = 2_000,
+  // Wall-clock waits the real CDP run needs; injectable so the hermetic test
+  // (which drives the same code path with fake sessions) does not pay ~5.5s of
+  // page-settle time per case for behaviour it never observes.
+  navigateSettleMs = 1_500,
+  reloadSettleMs = 3_000,
+  frameSettleMs = 1_000,
   frameCap = DEFAULT_FRAME_CAP,
   env = process.env,
   // Test seams (defaults are the real CDP paths). Injectable so the whole run —
@@ -262,12 +271,12 @@ export async function runMobileWalkthrough({
   try {
     if (url !== null) {
       await session.send('Page.navigate', { url })
-      await sleep(1_500)
+      await sleep(navigateSettleMs)
     }
     // ---- 设备模拟（模拟是会话级；reload 后仍生效，实测） ----
     for (const step of deviceEmulationSteps(device)) await session.send(step.method, step.params)
     await session.reload()
-    await sleep(3_000)
+    await sleep(reloadSettleMs)
     session.beginObservationWindow()
     // The mount wait must not be swallowed (`.catch(() => {})`): a 500/login page
     // would then produce a fully green walkthrough, because the emulation and
@@ -314,7 +323,7 @@ export async function runMobileWalkthrough({
     addGated('M-7', '会话头内所有 button 命中盒 ≥ 44px', hitBoxVerdict(headerFacts))
 
     // ---- 观察项：帧 + 控制台/网络（沿用桌面走查的容忍表） ----
-    await sleep(1_000)
+    await sleep(frameSettleMs)
     const scrub = value => redactSecrets(String(value), credentials.secrets)
     const frameSummary = summarizeWebSocketFrames(ws.frames, { redact: scrub })
     rec.add('M-8', 'WebSocket 帧捕获（会话打开停滞的证据来源）', null,

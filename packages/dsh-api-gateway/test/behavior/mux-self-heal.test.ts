@@ -122,59 +122,77 @@ const installFakeSocket = (): void => {
   ;(globalThis as { location?: unknown }).location = { origin: 'http://127.0.0.1:17500' }
 }
 
-const sleep = (ms: number): Promise<void> => new Promise((resolve) => { setTimeout(resolve, ms) })
-
-async function poll(predicate: () => boolean, timeoutMs: number): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
-    if (predicate()) return true
-    await sleep(10)
-  }
-  return predicate()
-}
-
 const flushMicrotasks = async (): Promise<void> => {
   for (let index = 0; index < 50; index++) await Promise.resolve()
 }
 
-test('a socket that dies inside the heal interval is still replaced', async () => {
+test('a socket that dies inside the heal interval is still replaced', async (t) => {
   installFakeSocket()
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
+  t.after(() => t.mock.timers.reset())
   const client = new RemoteStreamMuxClient()
   client.start()
-  assert.ok(await poll(() => FakeSocket.instances.length === 1, 1_000), 'the first attempt must start')
+  await flushMicrotasks()
+  assert.equal(FakeSocket.instances.length, 1, 'the first attempt must start')
   FakeSocket.instances[0].openNow()
+  // Let the settled-open bookkeeping clear keepAlive before the death, exactly
+  // as the real cadence does between open and a later close.
+  await flushMicrotasks()
   // The death lands well inside REMOTE_STREAM_MAINTAIN_MIN_INTERVAL_MS: a one-shot
   // throttle would drop the heal entirely and park the mux.
-  await sleep(20)
+  t.mock.timers.tick(20)
   FakeSocket.instances[0].dieNow()
-  assert.ok(await poll(() => FakeSocket.instances.length >= 2, 2_500), 'the mux must reschedule its own reconnect')
+  await flushMicrotasks()
+  // runAll drains the freshly armed heal timer (and any re-arm the partially
+  // elapsed interval needs) without depending on tick's nested-timer semantics.
+  t.mock.timers.runAll()
+  await flushMicrotasks()
+  assert.equal(FakeSocket.instances.length, 2, 'the mux must reschedule its own reconnect')
   await client.close()
 })
 
-test('a reconnect that fails before opening is retried', async () => {
+test('a reconnect that fails before opening is retried', async (t) => {
   installFakeSocket()
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
+  t.after(() => t.mock.timers.reset())
   const client = new RemoteStreamMuxClient()
   client.start()
-  assert.ok(await poll(() => FakeSocket.instances.length === 1, 1_000))
+  await flushMicrotasks()
+  assert.equal(FakeSocket.instances.length, 1)
   FakeSocket.instances[0].openNow()
-  await sleep(20)
+  // The settled-open bookkeeping must clear keepAlive before the death: a close
+  // inside the same task would otherwise find the attempt still in flight.
+  await flushMicrotasks()
+  t.mock.timers.tick(20)
   FakeSocket.instances[0].dieNow()
-  assert.ok(await poll(() => FakeSocket.instances.length === 2, 2_500), 'the heal attempt must start')
+  await flushMicrotasks()
+  t.mock.timers.runAll()
+  await flushMicrotasks()
+  assert.equal(FakeSocket.instances.length, 2, 'the heal attempt must start')
   FakeSocket.instances[1].failNow()
-  assert.ok(await poll(() => FakeSocket.instances.length >= 3, 4_000), 'a failed attempt must not end the recovery')
+  await flushMicrotasks()
+  // The failed attempt earned the doubled cadence; the next timer still fires.
+  t.mock.timers.runAll()
+  await flushMicrotasks()
+  assert.ok(FakeSocket.instances.length >= 3, 'a failed attempt must not end the recovery')
   await client.close()
 })
 
-test('close disposes the mux and stops the self-heal', async () => {
+test('close disposes the mux and stops the self-heal', async (t) => {
   installFakeSocket()
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
+  t.after(() => t.mock.timers.reset())
   const client = new RemoteStreamMuxClient()
   client.start()
-  assert.ok(await poll(() => FakeSocket.instances.length === 1, 1_000))
+  await flushMicrotasks()
+  assert.equal(FakeSocket.instances.length, 1)
   FakeSocket.instances[0].openNow()
-  await sleep(20)
+  t.mock.timers.tick(20)
   FakeSocket.instances[0].dieNow()
   await client.close()
-  await sleep(1_500)
+  await flushMicrotasks()
+  t.mock.timers.tick(60_000)
+  await flushMicrotasks()
   assert.equal(FakeSocket.instances.length, 1, 'a disposed mux must not keep reconnecting')
 })
 
@@ -201,27 +219,37 @@ test('a handshake that never settles is abandoned on its own deadline', async (t
   t.mock.timers.reset()
 })
 
-test('a lane-commanded reconnect does not widen the mux heal cadence', async () => {
+test('a lane-commanded reconnect does not widen the mux heal cadence', async (t) => {
   installFakeSocket()
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
+  t.after(() => t.mock.timers.reset())
   const client = new RemoteStreamMuxClient()
   client.start()
-  assert.ok(await poll(() => FakeSocket.instances.length === 1, 1_000))
+  await flushMicrotasks()
+  assert.equal(FakeSocket.instances.length, 1)
   // The connection lane restarts the socket while the FIRST attempt is still
   // connecting: that cancellation is not a connect failure.
   client.reconnect()
-  assert.ok(await poll(() => FakeSocket.instances.length === 2, 1_000), 'reconnect must start a fresh attempt')
-  const failedAt = Date.now()
+  await flushMicrotasks()
+  assert.equal(FakeSocket.instances.length, 2, 'reconnect must start a fresh attempt')
   FakeSocket.instances[1].failNow()
-  assert.ok(await poll(() => FakeSocket.instances.length >= 3, 6_000), 'a genuine failure must be retried')
-  const waited = Date.now() - failedAt
-  // Base 1 s; ONE genuine failure doubles to 2 s. If the cancelled attempt also
-  // widened the cadence, this would be ~4 s.
-  assert.ok(waited < 3_500, 'the cancelled attempt must not widen the cadence (waited ' + String(waited) + 'ms)')
+  await flushMicrotasks()
+  // Base 1 s; ONE genuine failure doubles to 2 s — and the assertion is exact
+  // now: no third attempt before 2 s, and one after it. A cancelled attempt that
+  // widened the cadence would push the retry to 4 s and fail the first line.
+  t.mock.timers.tick(REMOTE_STREAM_MAINTAIN_MIN_INTERVAL_MS * 2 - 1)
+  await flushMicrotasks()
+  assert.equal(FakeSocket.instances.length, 2, 'the cancelled attempt must not widen the cadence')
+  t.mock.timers.tick(1)
+  await flushMicrotasks()
+  assert.equal(FakeSocket.instances.length, 3, 'a genuine failure must be retried at the doubled interval')
   await client.close()
 })
 
-test('a synchronous socket construction failure still recovers', async () => {
+test('a synchronous socket construction failure still recovers', async (t) => {
   installFakeSocket()
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
+  t.after(() => t.mock.timers.reset())
   let attempts = 0
   class ThrowingSocket {
     static readonly CONNECTING = 0
@@ -238,7 +266,12 @@ test('a synchronous socket construction failure still recovers', async () => {
   // A constructor throw must not escape into the caller (an uncaught throw inside
   // the heal timer would kill recovery silently) and must still schedule retries.
   assert.doesNotThrow(() => { client.start() }, 'a construction failure must not escape the mux')
-  assert.ok(await poll(() => attempts >= 2, 4_000), 'recovery must keep retrying after a construction failure')
+  await flushMicrotasks()
+  assert.equal(attempts, 1)
+  // One wide tick covers whichever cadence the failed attempt earned.
+  t.mock.timers.tick(REMOTE_STREAM_MAINTAIN_MAX_INTERVAL_MS)
+  await flushMicrotasks()
+  assert.ok(attempts >= 2, 'recovery must keep retrying after a construction failure')
   await client.close()
 })
 

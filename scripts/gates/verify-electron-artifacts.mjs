@@ -220,10 +220,16 @@ export async function bootCompiledControlPlane({ nodeBinary, entry, stateDir, ti
       throw new Error(`compiled control-plane /health is not JSON: ${body.slice(0, 200)}`)
     }
     child.kill('SIGTERM')
+    // The 10s grace timer must be cleared once the child exits: an uncancelled
+    // timer keeps the caller alive for its full window (the smoke ran inside a
+    // node:test file, so the leaked handle delayed the whole suite by 10s).
+    let graceTimer
     const outcome = await Promise.race([
       exited,
-      new Promise((resolveTimeout) => setTimeout(() => resolveTimeout({ code: 'timeout', signal: null }), 10_000)),
-    ])
+      new Promise((resolveTimeout) => {
+        graceTimer = setTimeout(() => resolveTimeout({ code: 'timeout', signal: null }), 10_000)
+      }),
+    ]).finally(() => { clearTimeout(graceTimer) })
     if (outcome.code !== 0) {
       throw new Error(`compiled control-plane SIGTERM exit was ${String(outcome.code)} signal ${String(outcome.signal)}, expected 0 (graceful shutdown)\n---- stderr tail ----\n${stderr.slice(-800)}`)
     }

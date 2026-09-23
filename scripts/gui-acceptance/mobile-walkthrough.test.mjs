@@ -116,6 +116,9 @@ async function runCase(t, { wsFrames = 'summary', requireRun = false, target = F
       return session
     },
     settleMs: 0,
+    navigateSettleMs: 0,
+    reloadSettleMs: 0,
+    frameSettleMs: 0,
     env: { DSH_MOBILE_AUTH_TOKEN: 'SECRET_ENV_TOKEN' },
   }))
   return { outDir, stdout, result, subscriptions }
@@ -189,7 +192,7 @@ test('--require-run turns an unmounted page into FAIL (M-1 and the geometry legs
   const { value: result } = await captureConsole(() => runMobileWalkthrough({
     outDir, requireRun: true,
     discover: async () => ({ url: 'http://127.0.0.1:9/', title: 'fake', webSocketDebuggerUrl: 'ws://fake' }),
-    connect: async () => session, settleMs: 0, env: {},
+    connect: async () => session, settleMs: 0, navigateSettleMs: 0, reloadSettleMs: 0, frameSettleMs: 0, env: {},
   }))
   assert.equal(result.failed >= 5, true, `M-1/M-3/M-5/M-6/M-7 must fail under --require-run (failed=${result.failed})`)
   const byId = new Map(result.results.map(row => [row.id, row.ok]))

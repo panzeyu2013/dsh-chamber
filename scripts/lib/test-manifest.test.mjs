@@ -8,10 +8,14 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
-  collectEntries, emptyManifestProblems, evaluateChildRun, parseExecutedTestCount, parseReportedTotals, selectManifest,
+  DEFAULT_DRAIN_GRACE_MS, MANIFEST_DUMP_PREFIX, collectEntries, emptyManifestProblems, evaluateChildRun,
+  parseExecutedTestCount, parseManifestDump, parseReportedTotals, resolveJobs, runEntries, selectManifest,
+  spawnCaptured,
 } from './test-manifest.mjs'
 
 test('parseExecutedTestCount: spec summary counts executed bodies (pass + fail)', () => {
@@ -56,7 +60,9 @@ test('emptyManifestProblems: a manifest that would run zero children is a defect
 test('the zero-case guard is WIRED into the runner, not just exported', () => {
   const source = readFileSync(fileURLToPath(new URL('./test-manifest.mjs', import.meta.url)), 'utf8')
   assert.match(source, /const problems = emptyManifestProblems\(runGroups\)/u)
-  assert.match(source, /const verdict = evaluateChildRun\(entry.file, result, zeroTestAllowlist, \{ requireNoSkips: noSkips, guard \}\)/u)
+  assert.match(source, /evaluateChildRun\(entry\.file, result, entry\.zeroTestAllowlist \?\? zeroTestAllowlist, \{/u)
+  assert.match(source, /requireNoSkips: entry\.requireNoSkips \?\? requireNoSkips/u)
+  assert.match(source, /guard: entry\.guard \?\? guard,/u)
 })
 
 test('parseReportedTotals: the LAST summary block, nulls when the child never reported', () => {
@@ -128,5 +134,264 @@ test('evaluateChildRun: guard "registered" keeps a fully platform-skipped file g
 
 test('the per-file timeout is wired into the spawn, not just accepted as an option', () => {
   const source = readFileSync(fileURLToPath(new URL('./test-manifest.mjs', import.meta.url)), 'utf8')
-  assert.match(source, /timeout: timeoutMs/u)
+  assert.match(source, /cwd: entry\.packageRoot \?\? packageRoot/u)
+  assert.match(source, /timeoutMs: entry\.timeoutMs \?\? timeoutMs/u)
+  assert.match(source, /timer = setTimeout\(\(\) => \{/u)
+})
+
+test('resolveJobs: --jobs wins over DSH_TEST_JOBS, the default is bounded, invalid values are refused', () => {
+  const fallback = resolveJobs([], {})
+  assert.ok('jobs' in fallback && fallback.jobs >= 1 && fallback.jobs <= 8, 'the default stays inside 1..8')
+  assert.deepEqual(resolveJobs([], { DSH_TEST_JOBS: '7' }), { jobs: 7 })
+  assert.deepEqual(resolveJobs(['--win32', '--jobs', '3'], { DSH_TEST_JOBS: '7' }), { jobs: 3 })
+  assert.deepEqual(resolveJobs(['--jobs=2'], {}), { jobs: 2 })
+  assert.match(resolveJobs(['--jobs', '0'], {}).error, /positive integer/u)
+  assert.match(resolveJobs([], { DSH_TEST_JOBS: 'x' }).error, /positive integer/u)
+})
+
+/** A passing node:test fixture that prints its marker after the optional delay. */
+const passingFixture = (marker, delayMs = 0) => [
+  ...(delayMs === 0 ? [] : [`await new Promise((resolve) => setTimeout(resolve, ${String(delayMs)}))`]),
+  "console.log('ℹ tests 1')",
+  "console.log('ℹ pass 1')",
+  `console.log('OUT-${marker}')`,
+  '',
+].join('\n')
+
+test('runEntries: the bounded pool flushes transcripts in manifest order, not completion order', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-manifest-pool-'))
+  try {
+    writeFileSync(join(root, 'a-slow.test.mjs'), passingFixture('A', 150))
+    writeFileSync(join(root, 'b-fast.test.mjs'), passingFixture('B'))
+    const entries = [
+      { group: 'g', file: 'a-slow.test.mjs', nodeArgs: [] },
+      { group: 'g', file: 'b-fast.test.mjs', nodeArgs: [] },
+    ]
+    const log = []
+    const out = []
+    const { failed } = await runEntries(entries, {
+      packageRoot: root,
+      jobs: 2,
+      log: line => log.push(line),
+      writeStdout: text => out.push(text),
+      writeStderr: () => {},
+    })
+    assert.equal(failed, null)
+    const transcript = out.join('')
+    assert.ok(transcript.includes('OUT-A') && transcript.includes('OUT-B'), 'both transcripts must be written')
+    assert.ok(transcript.indexOf('OUT-A') < transcript.indexOf('OUT-B'),
+      'manifest order must win over completion order (A is slow but declared first)')
+    assert.deepEqual(log, ['\n=== g ==='])
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('runEntries: a failure stops new launches at the pool bound (fail-fast survives parallelism)', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-manifest-stop-'))
+  try {
+    writeFileSync(join(root, 'a-fail.test.mjs'), [
+      "console.log('ℹ tests 1')",
+      "console.log('ℹ pass 0')",
+      "console.log('ℹ fail 1')",
+      'process.exit(1)',
+      '',
+    ].join('\n'))
+    writeFileSync(join(root, 'b-slow.test.mjs'), passingFixture('B', 200))
+    writeFileSync(join(root, 'c-never.test.mjs'), [
+      "const { writeFileSync } = await import('node:fs')",
+      "writeFileSync(new URL('./started-c', import.meta.url), 'x')",
+      ...passingFixture('C').split('\n'),
+    ].join('\n'))
+    const entries = [
+      { group: 'g', file: 'a-fail.test.mjs', nodeArgs: [] },
+      { group: 'g', file: 'b-slow.test.mjs', nodeArgs: [] },
+      { group: 'g', file: 'c-never.test.mjs', nodeArgs: [] },
+    ]
+    const { failed } = await runEntries(entries, {
+      packageRoot: root,
+      jobs: 2,
+      log: () => {},
+      writeStdout: () => {},
+      writeStderr: () => {},
+    })
+    assert.equal(failed?.entry.file, 'a-fail.test.mjs', 'the first failing entry in manifest order is reported')
+    assert.equal(existsSync(join(root, 'started-c')), false, 'no new child may start after a failure is recorded')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('runEntries: command entries spawn their own invocation and pass on exit 0 alone', async () => {
+  const entries = [
+    { file: 'gate-ok', label: 'pnpm run gate:ok', group: '', command: process.execPath, args: ['-e', "console.log('ok')"], rawStatus: true },
+    { file: 'gate-bad', label: 'pnpm run gate:bad', group: '', command: process.execPath, args: ['-e', 'process.exit(3)'], rawStatus: true },
+  ]
+  const log = []
+  const { failed } = await runEntries(entries, {
+    jobs: 2,
+    log: line => log.push(line),
+    writeStdout: () => {},
+    writeStderr: () => {},
+  })
+  assert.equal(failed?.entry.file, 'gate-bad')
+  assert.equal(failed.reason, 'exit 3')
+  assert.deepEqual(log, ['\n=== pnpm run gate:ok ===', '\n=== pnpm run gate:bad ==='])
+})
+
+test('spawnCaptured: a leaked stdout-inheriting descendant cannot hold the capture past the drain grace', async t => {
+  // The grandchild inherits stdout and outlives the child by 30s: 'close' alone
+  // would keep this capture (and a pool slot) for the full 30s. After the child
+  // exits, only buffered bytes remain, so the drain grace is a safe bound.
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-drain-'))
+  const pidFile = join(dir, 'pid')
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const script = [
+    "const { spawn } = require('node:child_process')",
+    "const { writeFileSync } = require('node:fs')",
+    "const g = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], { stdio: ['ignore', 'inherit', 'ignore'] })",
+    "g.unref()",
+    `writeFileSync(${JSON.stringify(pidFile)}, String(g.pid))`,
+    "process.stdout.write('payload')",
+  ].join(';')
+  const startedAt = Date.now()
+  const handle = spawnCaptured(process.execPath, ['-e', script], { drainGraceMs: 300 })
+  try {
+    const result = await handle.promise
+    const elapsed = Date.now() - startedAt
+    assert.equal(result.status, 0)
+    assert.equal(result.stdout, 'payload', 'the child output is complete')
+    assert.ok(elapsed >= 300 && elapsed < 5000, 'the capture is released by the grace, not by the survivor (' + elapsed + 'ms)')
+    assert.match(result.stderr, /stdio stayed open 300ms after exit/,
+      'the bounded release is loud: a truncated tail must be visible in the transcript')
+    assert.ok(DEFAULT_DRAIN_GRACE_MS >= 1000, 'the production grace stays generous for slow pipes')
+  } finally {
+    // Never leave the simulated survivor behind for the rest of the suite.
+    try {
+      const pid = Number(readFileSync(pidFile, 'utf8'))
+      if (Number.isSafeInteger(pid) && pid > 0) process.kill(pid, 'SIGKILL')
+    } catch { /* already gone */ }
+  }
+})
+
+test('spawnCaptured: a large stdout write is captured in full, not just up to process exit', async () => {
+  // 1 MiB fills the pipe buffer several times over, so the child stays alive
+  // while the parent drains and the process exits with bytes still queued: the
+  // capture must wait for the pipe EOF ('close'), not for the process exit —
+  // an exit-time snapshot intermittently lost the manifest dump line.
+  const bytes = 1024 * 1024
+  const handle = spawnCaptured(process.execPath, ['-e', `process.stdout.write('x'.repeat(${bytes}))`], {})
+  const result = await handle.promise
+  assert.equal(result.status, 0)
+  assert.equal(result.stdout.length, bytes, 'the pipe must be drained through close, not process exit')
+})
+
+test('runEntries: schedule reorders launches but not transcript flushes', async () => {
+  const entries = [
+    { file: 'a', label: 's', group: 'g', nodeArgs: [], rawStatus: true },
+    { file: 'b', label: 's', group: 'g', nodeArgs: [], rawStatus: true },
+    { file: 'c', label: 's', group: 'g', nodeArgs: [], rawStatus: true },
+  ]
+  const launched = []
+  const out = []
+  const runner = (entry) => {
+    launched.push(entry.file)
+    return {
+      promise: Promise.resolve({ status: 0, signal: null, stdout: 'OUT-' + entry.file, stderr: '' }),
+      kill() {},
+    }
+  }
+  const { failed } = await runEntries(entries, {
+    jobs: 1,
+    schedule: [2, 0, 1],
+    runner,
+    log: () => {},
+    writeStdout: text => out.push(text),
+    writeStderr: () => {},
+  })
+  assert.equal(failed, null)
+  assert.deepEqual(launched, ['c', 'a', 'b'], 'the schedule is the launch order')
+  assert.equal(out.join(''), 'OUT-aOUT-bOUT-c', 'the transcript still flushes in declaration order')
+})
+
+test('parseManifestDump: the last marker line wins; malformed or absent payloads are null', () => {
+  const good = { entries: [], packageRoot: '/p', label: 'x' }
+  assert.deepEqual(parseManifestDump('noise\n' + MANIFEST_DUMP_PREFIX + JSON.stringify(good)), good)
+  assert.equal(parseManifestDump('noise only'), null)
+  assert.equal(parseManifestDump(MANIFEST_DUMP_PREFIX + 'not-json'), null)
+  assert.equal(parseManifestDump(MANIFEST_DUMP_PREFIX + '{"entries":"x","packageRoot":"/p"}'), null)
+})
+
+test('the dump switch is wired into the runner after its validation path', () => {
+  const source = readFileSync(fileURLToPath(new URL('./test-manifest.mjs', import.meta.url)), 'utf8')
+  assert.match(source, /env\[MANIFEST_DUMP_ENV\] === '1'/u)
+  assert.match(source, /MANIFEST_DUMP_PREFIX \+ JSON\.stringify/u)
+})
+
+test('runEntries: pre-run rawStatus sections are ordered, flushed and judged by exit status alone', async () => {
+  const entries = [
+    { file: 'chain-a', label: 'step-a', group: 'step', rawStatus: true, preResult: { status: 0, signal: null, stdout: 'A', stderr: '' } },
+    { file: 'chain-b', label: 'step-b', group: 'step', rawStatus: true, preResult: { status: 1, signal: null, stdout: 'B', stderr: '' } },
+  ]
+  const log = []
+  const out = []
+  const { failed, failures } = await runEntries(entries, {
+    jobs: 2,
+    log: line => log.push(line),
+    writeStdout: text => out.push(text),
+    writeStderr: () => {},
+  })
+  assert.equal(failed?.entry.file, 'chain-b')
+  assert.equal(failures.length, 1)
+  assert.deepEqual(log, ['\n=== step-a / step ===', '\n=== step-b / step ==='])
+  assert.equal(out.join(''), 'AB', 'pre-run transcripts flush in entry order')
+})
+
+test('runEntries: keepGoing collects every failure instead of stopping at the first', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-manifest-keepgoing-'))
+  try {
+    const failingFixture = ["console.log('ℹ tests 1')", "console.log('ℹ fail 1')", 'process.exit(1)', ''].join('\n')
+    writeFileSync(join(root, 'a-fail.test.mjs'), failingFixture)
+    writeFileSync(join(root, 'b-pass.test.mjs'), passingFixture('B'))
+    writeFileSync(join(root, 'c-fail.test.mjs'), failingFixture)
+    const { failed, failures } = await runEntries([
+      { group: 'g', file: 'a-fail.test.mjs', nodeArgs: [] },
+      { group: 'g', file: 'b-pass.test.mjs', nodeArgs: [] },
+      { group: 'g', file: 'c-fail.test.mjs', nodeArgs: [] },
+    ], {
+      packageRoot: root,
+      jobs: 1,
+      keepGoing: true,
+      log: () => {},
+      writeStdout: () => {},
+      writeStderr: () => {},
+    })
+    assert.equal(failed?.entry.file, 'a-fail.test.mjs')
+    assert.deepEqual(failures.map(record => record.entry.file), ['a-fail.test.mjs', 'c-fail.test.mjs'])
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('runEntries: an unanswered child is killed at timeoutMs and fails as ETIMEDOUT', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-manifest-timeout-'))
+  try {
+    // The interval keeps the child alive: a bare unsettled top-level await makes
+    // node exit 13 on its own, which would test that exit code and not the timer.
+    writeFileSync(join(root, 'hang.test.mjs'), 'setInterval(() => {}, 1000)\nawait new Promise(() => {})\n')
+    const started = Date.now()
+    const { failed } = await runEntries([{ group: 'g', file: 'hang.test.mjs', nodeArgs: [] }], {
+      packageRoot: root,
+      jobs: 1,
+      timeoutMs: 250,
+      log: () => {},
+      writeStdout: () => {},
+      writeStderr: () => {},
+    })
+    assert.equal(failed?.entry.file, 'hang.test.mjs')
+    assert.match(failed.reason, /ETIMEDOUT/u)
+    assert.ok(Date.now() - started < 5_000, 'the per-file timeout must end the child, not the suite')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
 })

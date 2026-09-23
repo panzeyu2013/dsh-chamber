@@ -294,6 +294,8 @@
 
 ## 一致性债务与开放登记（低–中，未排期；均指回代码面注释/design 登记）
 
+- **测试运行器并发上限（2026-12；未闭合）**：`run-checks tests` 的全局文件池默认 `min(8, 核数)`——同窗口实测 c12 文件总工作 217s vs c8 141s（每文件膨胀），吞吐收益递减，默认不动。并发暴露的两处**测试自身缺陷已根治**：`manager-api` 的「占满候选端口」改为整段区间重试；`sidecar-stdio.test.ts` 的固定端口（17910/17921/17922/17924/17926/17931）全部改为 `--port 0`（OS 分配 + ready 帧回传真实端口）——固定端口是跨进程共享资源，并发下 EADDRINUSE 会在 ready 前 exit 70（4 路同端口必现、6 路并行套件可复现；修复后 24 轮并行 0 失败）。仍未定位：`carrier-assembly.test.ts` 的 c16 零汇总。失效判据 = c12/c16 连续跑绿（或端口/资源隔离落地）。
+
 - **消息来源判定依赖 `isMainFrame`：`parent.`/`top.` 上的 handler 会把子 frame 消息归属成主 frame（2026-12第三轮审查；真实 WKWebView 实测）**：
   同源 `blob:`/`about:srcdoc` 子 frame 调 `parent.webkit.messageHandlers.<name>.postMessage(...)` 时，WebKit 投递的 `frameInfo.isMainFrame=true` 且 `frameInfo.request.url` 为主 frame URL（归属随 `parent.` 取到的 handler 对象而非调用脚本；走 `self.` 时归属正确）——`macos/Sources/DSHChamber/MessageHandler.swift#ChamberMessageHandler`（A 桥）与 `macos/Sources/DSHChamber/MainWindowController.swift#ShellPageFactsMessageHandler`（事实通道）都受影响；加 `sandbox="allow-scripts"`（不含 `allow-same-origin`）后 `parent.`/`top.` 抛 SecurityError。
   同路子 frame 还可用 `parent.document.write(...)` 改写主 frame 文档，此后 `frameInfo.request.url` 保持**过期的旧主 frame URL**（读 frameInfo 的门据此被绕过），而 `message.webView.url`/`location.href` 变为 `blob:`——A 桥读 `message.webView.url` 故仍拒；事实通道的三个门（`#isSameOriginDocument`、`#acceptsReconcile`、handler `accepts`）按同一更严来源取值。

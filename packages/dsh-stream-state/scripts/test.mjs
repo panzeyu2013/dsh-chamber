@@ -2,10 +2,10 @@
  * @dsh-chamber/dsh-stream-state test manifest - authoritative file list for this
  * package test script.
  *
- * Every listed file runs as its own node child with inherited stdio; the first
- * failure ends the run. A listed file that does not exist is a failure, never a
- * silent skip. The zero-test guard fails a listed file that exits 0 without a
- * node:test summary line (a silently empty suite must not read as green).
+ * Runner semantics (a missing listed file, the zero-test verdict, first-failure
+ * stop, the bounded parallel pool, the dump mode the global tests gate reads)
+ * are the shared engine's: scripts/lib/test-manifest.mjs. This file owns only
+ * the data tables and the per-file --experimental-strip-types argument.
  *
  * Why strip-types only: this package's sources are erasable-syntax pure TypeScript
  * (no parameter properties, no enums, no decorators), so production and tests run
@@ -18,10 +18,10 @@
  * a real socket, DOM or React belongs to the consumer. If a change makes a file
  * here import a runtime module, that change is a design error, not a build error.
  */
-import { existsSync } from 'node:fs'
-import { spawnSync } from 'node:child_process'
-import { join, resolve } from 'node:path'
+import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+
+import { runTestManifest } from '../../../scripts/lib/test-manifest.mjs'
 
 const PACKAGE_ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)))
 
@@ -106,57 +106,18 @@ export const GROUPS = {
     'test/metrics/metrics-tool.test.ts',
   ],
 }
+/** Every listed file is erasable-syntax TypeScript: strip types explicitly. */
+const withStripTypes = entry => (typeof entry === 'string'
+  ? { file: entry, nodeArgs: ['--experimental-strip-types'] }
+  : { ...entry, nodeArgs: ['--experimental-strip-types', ...(entry.nodeArgs ?? [])] })
 
-/** node:test summary lines: spec (ℹ tests N) and TAP (# tests N). */
-const SUMMARY_LINE = /^(?:ℹ|#) (tests|pass|fail|skipped) (\d+)\s*$/gm
-
-/**
- * Test bodies actually executed by the last node:test summary block
- * (pass + fail); null when nothing ran (no summary / tests 0 / all skipped).
- * Same contract as the renderer and desktop runners' D2b guard: a listed file
- * that exits 0 without running a test body must not read as green.
- */
-export function parseExecutedTestCount(output) {
-  let block = null
-  for (const match of output.matchAll(SUMMARY_LINE)) {
-    const key = match[1]
-    if (block === null || key === 'tests') block = { tests: 0, pass: 0, fail: 0, skipped: 0 }
-    block[key] = Number(match[2])
-  }
-  if (block === null || block.tests === 0) return null
-  const executed = (block.pass ?? 0) + (block.fail ?? 0)
-  return executed > 0 ? executed : null
-}
-
-function runOne(file) {
-  const absolute = join(PACKAGE_ROOT, file)
-  if (!existsSync(absolute)) {
-    console.error(`[stream-state] listed test file is missing: ${file}`)
-    process.exit(1)
-  }
-  const result = spawnSync(process.execPath, ['--experimental-strip-types', absolute], {
-    cwd: PACKAGE_ROOT,
-    stdio: ['ignore', 'pipe', 'pipe'],
-    encoding: 'utf8',
+function main() {
+  runTestManifest({
+    label: 'dsh-stream-state',
+    packageRoot: PACKAGE_ROOT,
+    groups: Object.fromEntries(Object.entries(GROUPS).map(([group, files]) => [group, files.map(withStripTypes)])),
   })
-  if (typeof result.stdout === 'string' && result.stdout !== '') process.stdout.write(result.stdout)
-  if (typeof result.stderr === 'string' && result.stderr !== '') process.stderr.write(result.stderr)
-  if (result.status !== 0) {
-    console.error(`[stream-state] FAILED: ${file}`)
-    process.exit(result.status ?? 1)
-  }
-  if (parseExecutedTestCount((result.stdout ?? '') + '\n' + (result.stderr ?? '')) === null) {
-    console.error(`[stream-state] ${file} ran no test body - refusing to read as green`)
-    process.exit(1)
-  }
 }
 
-const only = process.argv.slice(2).filter((arg) => !arg.startsWith('-'))
-for (const [group, files] of Object.entries(GROUPS)) {
-  if (only.length > 0 && !only.includes(group)) continue
-  for (const entry of files) {
-    const file = typeof entry === 'string' ? entry : entry.file
-    runOne(file)
-  }
-}
-console.log('[stream-state] all listed suites passed')
+const isMain = process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+if (isMain) main()

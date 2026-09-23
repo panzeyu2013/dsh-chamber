@@ -269,7 +269,7 @@ test('candidate quarantine also hides internal error state, port, and detail bef
 test('an exhausted start (every candidate port occupied) is a visible /health failure with the concrete reason', async () => {
   const stateDir = mkdtempSync(join(tmpdir(), 'dsh-chamber-start-exhausted-'))
   const holders: Array<ReturnType<typeof createServer>> = []
-  const base = await new Promise<number>((resolvePort, rejectPort) => {
+  const freePort = (): Promise<number> => new Promise<number>((resolvePort, rejectPort) => {
     const probe = createServer()
     probe.on('error', rejectPort)
     probe.listen(0, '127.0.0.1', () => {
@@ -277,6 +277,31 @@ test('an exhausted start (every candidate port occupied) is a visible /health fa
       probe.close(() => resolvePort(typeof address === 'object' && address !== null ? address.port : 0))
     })
   })
+  // The global file pool runs this file next to every other package's tests, so
+  // another process can steal a reserved port between the probe and the bind.
+  // Retrying the whole contiguous range with a fresh base turns that scheduler
+  // race into a retry instead of a false exhausted-start verdict.
+  let base = 0
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    base = await freePort()
+    try {
+      for (let offset = 0; offset < MAX_SPAWN_ATTEMPTS; offset++) {
+        const holder = createServer()
+        await new Promise<void>((resolveListen, rejectListen) => {
+          holder.once('error', rejectListen)
+          holder.listen(base + offset, '127.0.0.1', () => resolveListen())
+        })
+        holders.push(holder)
+      }
+      break
+    } catch (error) {
+      for (const held of holders.splice(0)) held.close()
+      // Retry only the cross-process race that no atomic contiguous-range
+      // reservation can avoid. EACCES/EADDRNOTAVAIL are real failures: surfacing
+      // them immediately is what keeps this loop from masking an environment bug.
+      if ((error as NodeJS.ErrnoException).code !== 'EADDRINUSE' || attempt === 4) throw error
+    }
+  }
   // The plane uses the REAL spawnDsh: the failure under test is the real
   // exhausted-retry error, not an injected string.
   const plane = createControlPlane({
@@ -287,14 +312,6 @@ test('an exhausted start (every candidate port occupied) is a visible /health fa
     dshPortBase: base,
   })
   try {
-    for (let offset = 0; offset < MAX_SPAWN_ATTEMPTS; offset++) {
-      const holder = createServer()
-      await new Promise<void>((resolveListen, rejectListen) => {
-        holder.once('error', rejectListen)
-        holder.listen(base + offset, '127.0.0.1', () => resolveListen())
-      })
-      holders.push(holder)
-    }
     await plane.start()
     await assert.rejects(plane.startLocal(), (error: unknown) => {
       assert.ok(error instanceof DshSpawnExhaustedError)

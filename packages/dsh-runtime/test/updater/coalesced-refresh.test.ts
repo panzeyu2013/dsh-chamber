@@ -69,11 +69,22 @@ test('maxReruns caps the trailing chain instead of looping forever', async () =>
     for (let i = 0; i < 1000 && gates.length === 0; i += 1) await Promise.resolve()
     assert.equal(gates.length > 0, true, '放行一遍后链应当立刻开始下一遍')
   }
-  /** cap 失效时（无界补跑）链永不结束：绑一个宽超时，让它以具名失败而非挂死套件。 */
-  const settledWithin = async <T>(promise: Promise<T>, label: string): Promise<T> => Promise.race([
-    promise,
-    sleep(5000).then((): never => { throw new Error(`${label} 5s 内未结束——maxReruns 封顶失效（无界补跑）`) }),
-  ])
+  /** cap 失效时（无界补跑）链永不结束：绑一个宽超时，让它以具名失败而非挂死套件。
+   *  看门狗必须在竞速胜出后 clearTimeout：否则一个已通过的用例仍会留下 5s
+   *  未 unref 的定时器吊住整个测试进程（泄漏的是墙钟，不是断言）。 */
+  const settledWithin = async <T>(promise: Promise<T>, label: string): Promise<T> => {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      return await Promise.race([
+        promise,
+        new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(() => { reject(new Error(`${label} 5s 内未结束——maxReruns 封顶失效（无界补跑）`)) }, 5000)
+        }),
+      ])
+    } finally {
+      if (timer !== undefined) clearTimeout(timer)
+    }
+  }
 
   const first = refresh()          // 第 1 遍在途
   await nextRunInFlight()
