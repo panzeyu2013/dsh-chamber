@@ -53,6 +53,8 @@ export const GROUPS = {
     'scripts/gates/verify-no-dead-exports.test.mjs',
     'scripts/gates/verify-upstream-lifecycle-contract.test.mjs',
     'scripts/gates/verify-workflow-yaml-scalars.test.mjs',
+    // 包边界门（R4 P7）：A/B 判据的负控与真实仓库正控。
+    'scripts/gates/verify-package-boundaries.test.mjs',
     // Shared package-test runner (its zero-case guard is a repository gate
     // helper, so it runs with the gate suites).
     'scripts/lib/test-manifest.test.mjs',

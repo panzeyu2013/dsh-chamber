@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { chamberBridge, isValidProducerSourceFingerprint } from '../../src/shared/aggregate-store.ts'
-import type { InstanceSnapshot } from '../../src/shared/instance-api.ts'
+import { chamberBridge, isValidProducerSourceFingerprint } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
+import type { InstanceSnapshot } from '@dsh-chamber/dsh-chamber-client-core/instance-api'
 
 const snapshot = (id: string): InstanceSnapshot =>
   ({ workspaces: [], sessions: [{ sessionId: id, running: false, blank: false }], archivedSessionIds: [] })

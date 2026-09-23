@@ -24,15 +24,19 @@ const root = join(here, '..')
 
 const ID = '@dsh-chamber/dsh-client-ui-mobile'
 
-/** Resolved through the loader module table (never bundled). esbuild
- *  externals are string patterns — `*` wildcards for the scoped packages. */
+/** Resolved through the loader module table (never bundled): the react family
+ *  and the @deepseek-ai/* rows the platform seed/module table provides. The
+ *  former '@dsh-chamber/*' wildcard is GONE on purpose (R4 Q3): a chamber
+ *  package has no reliable module-table row in the gateway deployment, so
+ *  @dsh-chamber/dsh-stream-state and @dsh-chamber/dsh-chamber-client-core must
+ *  be INLINED into this bundle (asserted after the build by
+ *  scripts/artifact-scope-marker.test.mjs and the EXTERNALS evidence check). */
 const EXTERNALS = [
   'react',
   'react/jsx-runtime',
   'react-dom',
   'react-dom/client',
   '@deepseek-ai/*',
-  '@dsh-chamber/*',
 ]
 
 // Absolute working dir = this package: esbuild renders source comments in

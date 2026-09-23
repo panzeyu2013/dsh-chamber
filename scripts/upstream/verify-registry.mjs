@@ -3,12 +3,14 @@
  * verify-registry.mjs — 上游触点 registry 的保鲜与覆盖面门。
  *
  * 检查面（任一不成立 = exit 1，绝不静默）：
- *   ① schema（registry.mjs 的纯校验，含 `criteria` ∪ `criteriaCodeOnly` == C1–C15）；
+ *   ① schema（registry.mjs 的纯校验，含 `criteria` ∪ `criteriaCodeOnly` == C1–C16）；
  *   ② canonical：盘上文本 == canonical 序列化（键顺序/映射排序/数组顺序）；
  *   ③ 引用存在性：`ours` 存在、`upstream` 在 vendor/harness-checkout 内存在
  *      （退役面用 `upstream: null` + `upstreamFormer` + status ∈ {not-applicable, accepted}）；
- *   ④ deviations id：`deviations`(S/T/P 表行) 与 `relatedGates`(G/D 项目符号) 必须命中
- *      docs/progress/deviations.md 里真实存在的行 id；
+ *   ④ deviations id：`deviations`(S/T/P 表行) 必须命中 docs/progress/deviations.md 里
+ *      真实存在的行 id；`relatedGates` 是真实门引用（根 package.json script 名或仓内
+ *      脚本/测试路径），必须可解析；
+ *      脚本/测试路径），必须可解析；
  *   ⑤ 覆盖面网（防"静默缩小"）：
  *      A. checklist §2.x 标题（人手写）↔ registry 的每个 fork/seed 条目一一对应；
  *      B. `chamberNamedForks` ↔ `versionAnchor: chamber` 条目（在 schema 校验里）；
@@ -105,16 +107,28 @@ function main(argv) {
     }
   }
 
-  // ④ deviations / relatedGates id
-  const deviationIds = parseDeviationIds(readFileSync(DEVIATIONS, 'utf8'))
-  for (const entry of registry.entries) {
-    for (const id of entry.deviations ?? []) {
-      if (!deviationIds.has(id)) fail(`[${entry.id}] deviations 引用了不存在的行 id: ${id}`)
-    }
-    for (const id of entry.relatedGates ?? []) {
-      if (!deviationIds.has(id)) fail(`[${entry.id}] relatedGates 引用了不存在的行 id: ${id}`)
-    }
+  // C16 登记（vendorSourceConsumers）：consumer 与 vendorFile 都必须真实存在——
+  // 符号集合与 import 双向一致由 C16 判，这里守住「登记指向不存在的路径」在 registry 层即红。
+  for (const item of registry.vendorSourceConsumers ?? []) {
+    if (!existsSync(join(ROOT, item.consumer))) fail(`vendorSourceConsumers 的 consumer 不存在: ${item.consumer}`)
+    if (!existsSync(join(ROOT, item.vendorFile))) fail(`vendorSourceConsumers 的 vendorFile 不存在: ${item.vendorFile}`)
   }
+
+    // ④ deviations 行 id（deviations.md）+ relatedGates 真实门引用
+    const deviationIds = parseDeviationIds(readFileSync(DEVIATIONS, 'utf8'))
+    const rootScripts = (() => {
+      try { return JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).scripts ?? {} } catch { return {} }
+    })()
+    for (const entry of registry.entries) {
+      for (const id of entry.deviations ?? []) {
+        if (!deviationIds.has(id)) fail(`[${entry.id}] deviations 引用了不存在的行 id: ${id}`)
+      }
+      for (const ref of entry.relatedGates ?? []) {
+        if (Object.hasOwn(rootScripts, ref)) continue
+        if (ref.includes('/') && existsSync(join(ROOT, ref))) continue
+        fail(`[${entry.id}] relatedGates 引用了不存在的门: ${ref}（要求根 package.json script 名或仓内脚本/测试路径）`)
+      }
+    }
 
   // ⑤A checklist §2.x 标题 ↔ fork/seed 条目
   const checklist = readFileSync(CHECKLIST_PATH, 'utf8')
@@ -168,7 +182,7 @@ function main(argv) {
 export function parseDeviationIds(text) {
   const ids = new Set()
   for (const match of text.matchAll(/^\|\s*([STPGD]-?\d+)\s*\|/gmu)) ids.add(match[1])
-  for (const match of text.matchAll(/^-\s*\*\*([GD]\d+)\b/gmu)) ids.add(match[1])
+  for (const match of text.matchAll(/^-\s*(?:\*\*)?([GD]\d+)\b/gmu)) ids.add(match[1])
   return ids
 }
 

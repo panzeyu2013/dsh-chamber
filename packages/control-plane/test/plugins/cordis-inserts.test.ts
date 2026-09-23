@@ -7,8 +7,12 @@
  *     complete a loader identity; name-first rows work; boundaries hold);
  *   - insertConflict: the shared classification host-graph-seed.ts and
  *     plugin-sync.ts both map onto their own message wording;
+ *   - the id-targeted non-insert shape (renderCordisDisablePatches /
+ *     renderCordisOverlay): the disable row bytes, the mixed overlay order, the
+ *     disable-only overlay, validation, and the fact that a disable row never
+ *     joins the insert identity parse the desktop probe reads;
  *   - the host-graph-seed reuse: buildPatchOverlay materializes EXACTLY
- *     renderCordisInserts output (byte-identical overlay render).
+ *     renderCordisOverlay output (byte-identical overlay render).
  * Run directly: node packages/control-plane/test/plugins/cordis-inserts.test.ts
  */
 
@@ -22,7 +26,9 @@ import {
   hasExactInsert,
   insertConflict,
   parseLoaderRows,
+  renderCordisDisablePatches,
   renderCordisInserts,
+  renderCordisOverlay,
   type CordisInsert,
 } from '../../src/cordis-inserts.ts'
 import {
@@ -30,6 +36,7 @@ import {
   HOST_GIT_WORKTREE_INSERT,
   HOST_GRAPH_INSERT,
   HOST_GRAPH_PATCH_FILENAME,
+  OFFICIAL_OPEN_IN_DISABLE,
 } from '../../src/host-graph-seed.ts'
 
 const CLIENT_GRAPH: CordisInsert = { id: 'client-graph', name: '@dsh-chamber/dsh-chamber-seed-client-graph' }
@@ -45,6 +52,11 @@ const GOLDEN_BOTH = `- insert:
       name: '@dsh-chamber/dsh-chamber-seed-client-graph'
     - id: git-worktree
       name: '@dsh-chamber/dsh-chamber-seed-git-worktree'
+`
+/** The id-targeted non-insert row (the loader PatchOptions disable form). */
+const GOLDEN_OFFICIAL_DISABLE = `- id: open-in-app
+  name: '@deepseek-ai/dsh-host-open-in-app'
+  disabled: true
 `
 
 // ---------------------------------------------------------------------------
@@ -63,6 +75,64 @@ test('renderCordisInserts is the validation point: empty / invalid / duplicate r
   // Duplicate id OR name — a duplicate would break the next host boot.
   assert.throws(() => renderCordisInserts([CLIENT_GRAPH, { id: 'client-graph', name: '@dsh-chamber/other' }]), /duplicate overlay row/)
   assert.throws(() => renderCordisInserts([CLIENT_GRAPH, { id: 'other', name: CLIENT_GRAPH.name }]), /duplicate overlay row/)
+})
+
+// ---------------------------------------------------------------------------
+// renderCordisDisablePatches / renderCordisOverlay (the non-insert rows)
+// ---------------------------------------------------------------------------
+
+test('renderCordisDisablePatches emits the canonical id-targeted disable bytes', () => {
+  assert.equal(renderCordisDisablePatches([OFFICIAL_OPEN_IN_DISABLE]), GOLDEN_OFFICIAL_DISABLE)
+})
+
+test('renderCordisOverlay appends the disable rows AFTER the insert bundle (pure-insert bytes unchanged)', () => {
+  assert.equal(renderCordisOverlay([CLIENT_GRAPH]), GOLDEN_ONE, 'no disables = the legacy insert-only bytes')
+  assert.equal(renderCordisOverlay([CLIENT_GRAPH, GIT_WORKTREE]), GOLDEN_BOTH)
+  assert.equal(renderCordisOverlay([], [OFFICIAL_OPEN_IN_DISABLE]), GOLDEN_OFFICIAL_DISABLE,
+    'a disable-only overlay is legal (every insert row is user-owned in the profile patch)')
+  assert.equal(
+    renderCordisOverlay([CLIENT_GRAPH, GIT_WORKTREE], [OFFICIAL_OPEN_IN_DISABLE]),
+    GOLDEN_BOTH + GOLDEN_OFFICIAL_DISABLE,
+    'the disable applies after the rows an earlier layer mounted',
+  )
+})
+
+test('renderCordisDisablePatches is a validation point: invalid id/name and duplicate targets throw', () => {
+  assert.throws(
+    () => renderCordisDisablePatches([{ id: 'bad id!', name: '@deepseek-ai/x' }]),
+    /invalid overlay row/,
+  )
+  assert.throws(
+    () => renderCordisDisablePatches([{ id: 'ok-id', name: 'not-a-scoped-package' }]),
+    /invalid overlay row/,
+  )
+  assert.throws(
+    () => renderCordisDisablePatches([
+      OFFICIAL_OPEN_IN_DISABLE,
+      { ...OFFICIAL_OPEN_IN_DISABLE, name: '@deepseek-ai/other-package' },
+    ]),
+    /duplicate overlay row/,
+  )
+})
+
+test('renderCordisOverlay refuses an empty list and a disable that targets a row it inserts', () => {
+  assert.throws(() => renderCordisOverlay([], []), /at least one row/)
+  assert.throws(
+    () => renderCordisOverlay(
+      [{ id: 'open-in-app', name: '@dsh-chamber/dsh-chamber-seed-open-in-app' }],
+      [OFFICIAL_OPEN_IN_DISABLE],
+    ),
+    /targets a row this overlay inserts/,
+  )
+})
+
+test('a disable row never joins the insert identity parse (the desktop probe keeps reading mounts)', () => {
+  const mixed = GOLDEN_BOTH + GOLDEN_OFFICIAL_DISABLE
+  assert.equal(parseLoaderRows(mixed).length, 2, 'the disable row is not an insert row')
+  assert.equal(hasExactInsert(mixed, CLIENT_GRAPH), true)
+  assert.equal(hasExactInsert(mixed, GIT_WORKTREE), true)
+  assert.equal(insertConflict(mixed, CLIENT_GRAPH), null)
+  assert.equal(fieldCount(mixed, 'id', 'open-in-app'), 1, 'the disable target id is counted once, never as an insert')
 })
 
 // ---------------------------------------------------------------------------
@@ -182,5 +252,22 @@ test('buildPatchOverlay materializes EXACTLY renderCordisInserts output (single 
   assert.equal(onDisk, renderCordisInserts([CLIENT_GRAPH, GIT_WORKTREE]))
   assert.equal(onDisk, GOLDEN_BOTH)
   assert.equal(join(dir, HOST_GRAPH_PATCH_FILENAME), path)
+})
+
+test('buildPatchOverlay materializes the insert bundle PLUS the disable rows (single render source)', t => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-cordis-overlay-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const path = buildPatchOverlay(dir, [HOST_GRAPH_INSERT], [OFFICIAL_OPEN_IN_DISABLE])
+  const onDisk = readFileSync(path, 'utf8')
+  assert.equal(onDisk, renderCordisOverlay([CLIENT_GRAPH], [OFFICIAL_OPEN_IN_DISABLE]))
+  assert.equal(onDisk, GOLDEN_ONE + GOLDEN_OFFICIAL_DISABLE)
+  assert.equal(join(dir, HOST_GRAPH_PATCH_FILENAME), path)
+})
+
+test('buildPatchOverlay writes a disable-only overlay (all insert rows user-owned)', t => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-cordis-disable-only-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const path = buildPatchOverlay(dir, [], [OFFICIAL_OPEN_IN_DISABLE])
+  assert.equal(readFileSync(path, 'utf8'), GOLDEN_OFFICIAL_DISABLE)
 })
 

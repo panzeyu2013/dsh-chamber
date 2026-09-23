@@ -4,8 +4,8 @@
  */
 
 import { useEffect, useRef, useState } from 'react'
-import { armBlankGhost, BLANK_GHOST_GRACE_MS } from '../shared/derive.ts'
-import type { ChamberServerAggregate } from '../shared/aggregate-store.ts'
+import { armBlankGhost, BLANK_GHOST_GRACE_MS } from '@dsh-chamber/dsh-chamber-client-core/derive'
+import type { ChamberServerAggregate } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
 
 export function useSidebarGhost({ servers, chamberInstanceId }: {
   servers: readonly ChamberServerAggregate[]

@@ -23,27 +23,28 @@
  * silently dropped.
  *
  * Self-contained on purpose (no dsh package types, like the other self-built
- * wire carriers such as the sidebar's instance-api.ts):
+ * wire carriers such as the client-core instance-api.ts):
  * the wire shapes here are the fetch-carrier envelope and the graph rows
  * (vendor dsh-client-modules src/client/manifest.ts `WebBootEntry` /
  * `WebBootGraph` are the authoritative shapes; the two pure WIRE HELPERS of
  * that module — `optionalStringArray` / `stripClientSuffix` — are imported by
  * real-source relative path). The
  * plugin-graph diagnostic
- * types are the chamber shared face (sidebar shared/aggregate-store.ts,
+ * types are the chamber client-core face (client-core src/aggregate-store.ts,
  * the single source) — imported below and re-exported, never re-declared.
  *
  * The shared transport byte of fetchHostGraph — URL join +
  * client-request envelope + POST + body collection, bounded unary 30s — rides
- * the shared kernel postUnary (sidebar shared/wire-common.ts), imported HERE
- * by real-source relative path rather than the
- * '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared' specifier: the renderer has no
- * install-tree copy of the sidebar package, and its plain-node tests
- * (host-graph.test.ts, no module loader) must resolve the real module without
- * a bundler. Specifier imports from other renderer files resolve to the same
- * real source through the root tsconfig paths (no
- * ambient table is involved). Every status/envelope classification
- * below stays local — the envelope contract source remains
+ * the shared kernel postUnary (@dsh-chamber/dsh-chamber-client-core/wire-common),
+ * and the HTTP-status/envelope classification rides the SHARED single source
+ * plugin-graph-classify.ts (audit arch-03 P2-2): client-core's channel recheck
+ * consumes the same module, so a boot verdict and a self-heal verdict for the
+ * same wire answer can never drift. Since R4 P3 the renderer declares a real
+ * dependency on client-core, so the package faces (wire-common /
+ * plugin-graph-classify / client-plugin-loader / instance-api, plus the `.`
+ * face for the diagnostic types) resolve through the workspace node_modules
+ * link + the core package exports (source targets) — no alias, no ambient
+ * table, no root tsconfig path. The envelope contract source remains
  * packages/control-plane/src/rpc-envelope.ts (the browser cannot import that
  * Node module; the client-request half is built by the shared kernel).
  */
@@ -54,10 +55,10 @@ import { graphGapKindFor, type GraphGapKind } from './source-readiness.ts'
 // UPSTREAM's own — never a hand-rolled copy. manifest.ts is the browser-safe
 // contract face of the pinned dsh-client-modules (zero runtime imports), the
 // very module whose `parseBootManifest` consumes this same wire shape, and it
-// is imported HERE by real-source relative path for the same reason the sidebar
-// shared kernel is (below): the renderer has no install-tree copy of the dsh
-// packages, and its plain-node tests (host-graph.test.ts, no module loader)
-// must resolve the real module without a bundler. Keep the local parse LOOSER
+// is imported HERE by real-source relative path: the renderer has no
+// install-tree copy of the dsh packages, and its plain-node tests
+// (host-graph.test.ts, no module loader) must resolve the real module without a
+// bundler. Keep the local parse LOOSER
 // than upstream's — see the fetchHostGraph comment.
 import { optionalStringArray, stripClientSuffix } from '../../../vendor/harness-packages/@deepseek-ai/dsh-client-modules/src/client/manifest.ts'
 // The deferred-covered roster: the covered ids whose module-table
@@ -65,22 +66,25 @@ import { optionalStringArray, stripClientSuffix } from '../../../vendor/harness-
 // shares with the composite entry (chamber-entry.ts asserts its own roster
 // against it at apply time).
 import { DEFERRED_EXTRA_ROW_IDS } from './required-extra-rows.ts'
-import type { PluginGraphDiagnostic, PluginGraphDiagnosticState } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
+import type { PluginGraphDiagnostic, PluginGraphDiagnosticState } from '@dsh-chamber/dsh-chamber-client-core'
+import { postUnary, type UnaryPostOutcome } from '@dsh-chamber/dsh-chamber-client-core/wire-common'
+// The HTTP-status/envelope classification SINGLE SOURCE: also consumed by
+// client-core's plugin-graph-recheck.ts, so boot and self-heal verdicts are
+// word-for-word the same for the same wire answer (audit arch-03 P2-2).
 import {
-  classifyGraphChannelFailure, postUnary, type UnaryPostOutcome,
-} from '../../dsh-chamber-client-ui-sidebar/src/shared/wire-common.ts'
+  classifyPluginGraphOutcome, graphEntryImmediatelyMessage, graphEntryLabel, wrapGraphTransportFailure,
+} from '@dsh-chamber/dsh-chamber-client-core/plugin-graph-classify'
 // Page-level client-plugin load kernel:
 // the boot path and the settings bridge share ONE implementation of combo/id
-// bookkeeping, timeout tombstones and rev-conflict facts. Imported by real
-// relative source path for the same reason wire-common is (the renderer has no
-// install-tree copy of the sidebar package and its plain-node tests must
-// resolve the real module without a bundler).
+// bookkeeping, timeout tombstones and rev-conflict facts. Imported through the
+// client-core face: the renderer's plain-node tests resolve it via the
+// workspace node_modules link, the same way the build does.
 import {
   clientPluginRowOwner,
   dedupeCoveredRows,
   loadClientPluginRows,
   type ClientRowOutcome,
-} from '../../dsh-chamber-client-ui-sidebar/src/shared/client-plugin-loader.ts'
+} from '@dsh-chamber/dsh-chamber-client-core/client-plugin-loader'
 
 /** Re-exported for existing consumers (the type lives in the chamber shared face). */
 export type { PluginGraphDiagnostic, PluginGraphDiagnosticState }
@@ -134,16 +138,6 @@ export interface ExtraModuleRow {
   external: string[]
 }
 
-/** The fetch-carrier wire envelope (the shape every self-built carrier sends). */
-interface HostGraphEnvelope {
-  rpcId: string
-  result: {
-    ok: boolean
-    value?: unknown
-    error?: { code?: string; message?: string }
-  }
-}
-
 // The client-request / server-response envelope shape is AUTHORITATIVE in
 // the control-plane Node package (packages/control-plane/src/rpc-envelope.ts,
 // cross-package protocol single-sourcing) — this renderer (browser-side)
@@ -153,12 +147,6 @@ interface HostGraphEnvelope {
 // (wire-common.ts postUnary) and the server-response classification
 // below stays local; any change to the shared contract must land in
 // rpc-envelope.ts first and be mirrored there.
-
-/** One transport failure, folded with an honest prefix (proxy honesty, design 03 §3.3). */
-function wrapGraphError(error: unknown): Error {
-  const message = error instanceof Error ? error.message : String(error)
-  return new Error(`宿主启动图不可达：${message}`)
-}
 
 class HostGraphChannelError extends Error {
   readonly diagnosticState: Extract<PluginGraphDiagnosticState, 'not-injected' | 'graph-unreachable'>
@@ -182,9 +170,10 @@ class HostGraphChannelError extends Error {
  * hazard, not a candidate for guesswork).
  *
  * How this parse relates to upstream's:
- * the field validation rides upstream's own helpers (`optionalStringArray`,
- * `stripClientSuffix`; manifest.ts, imported above), but the PARSE ITSELF stays
- * local and is deliberately LOOSER than upstream's `parseBootManifest`
+ * the optional-field validation rides upstream's own helpers (`optionalStringArray`,
+ * `stripClientSuffix`; manifest.ts, imported above) and the envelope/base-row
+ * classification rides the shared single source (plugin-graph-classify.ts); the
+ * PARSE ITSELF stays deliberately LOOSER than upstream's `parseBootManifest`
  * (manifest.ts:167-256): upstream parses the whole `window.__DSH_BOOT__`
  * manifest into its two consumer views and therefore also requires `batches` to
  * be an array (:186-188) and EVERY entry to belong to exactly one initial-load
@@ -207,43 +196,23 @@ export async function fetchHostGraph(basePath: string): Promise<HostGraphRow[] |
       rpcId: crypto.randomUUID(),
     })
   } catch (error) {
-    throw wrapGraphError(error)
+    // Proxy honesty (design 03 §3.3): fold the transport rejection with the
+    // shared single-source prefix.
+    throw new Error(wrapGraphTransportFailure(error))
   }
-  if (outcome.status === 503) {
-    const body = outcome.body as { code?: string } | null
-    if (body?.code === 'instance_unavailable') return null
-  }
-  if (!outcome.ok) {
-    const state = outcome.status === 404 ? 'not-injected' : 'graph-unreachable'
-    throw new HostGraphChannelError(state, `宿主启动图不可达：HTTP ${outcome.status}`)
-  }
-  if (outcome.jsonError !== undefined) {
-    const error = outcome.jsonError
-    throw new Error(`宿主启动图：envelope 不是合法 JSON：${error instanceof Error ? error.message : String(error)}`)
-  }
-  const envelope = outcome.body as HostGraphEnvelope
-  if (typeof envelope !== 'object' || envelope === null || typeof envelope.result !== 'object' || envelope.result === null) {
-    throw new Error('宿主启动图：envelope 缺少 result')
-  }
-  if (envelope.result.ok !== true) {
-    const hostError = envelope.result.error?.message ?? envelope.result.error?.code ?? 'unknown'
-    const state = classifyGraphChannelFailure(`${envelope.result.error?.code ?? ''} ${envelope.result.error?.message ?? ''}`)
-    throw new HostGraphChannelError(state, `宿主启动图：graph 调用失败：${hostError}`)
-  }
-  const value = envelope.result.value
-  if (typeof value !== 'object' || value === null || !Array.isArray((value as Record<string, unknown>).entries)) {
-    throw new Error('宿主启动图：result.value.entries 必须是数组')
-  }
+  // The HTTP-status + envelope classification is the SHARED single source
+  // (plugin-graph-classify.ts, also consumed by client-core's recheck): only
+  // this boot-policy mapping stays local. A 503 instance_unavailable is the
+  // expected pre-ready state → null; a classified channel failure carries its
+  // diagnostic state; a malformed answer is a plain Error; `ok` hands over the
+  // rows that passed the shared base gate.
+  const verdict = classifyPluginGraphOutcome(outcome)
+  if (verdict.kind === 'instance-unavailable') return null
+  if (verdict.kind === 'channel') throw new HostGraphChannelError(verdict.state, verdict.message)
+  if (verdict.kind === 'malformed') throw new Error(verdict.message)
   const rows: HostGraphRow[] = []
-  for (const raw of (value as { entries: unknown[] }).entries) {
-    if (typeof raw !== 'object' || raw === null) {
-      throw new Error('宿主启动图：entry 不是对象')
-    }
-    const row = raw as Record<string, unknown>
-    const where = typeof row.id === 'string' ? `"${row.id}"` : JSON.stringify(row)
-    if (typeof row.id !== 'string' || typeof row.url !== 'string' || typeof row.rev !== 'string') {
-      throw new Error(`宿主启动图：entry ${where} 必须携带 string id/url/rev`)
-    }
+  for (const row of verdict.entries) {
+    const where = graphEntryLabel(row)
     // The optional fields are validated by
     // UPSTREAM's helper (manifest.ts `optionalStringArray`, which upstream's own
     // `parseBootManifest` uses for this exact wire). Present-but-malformed
@@ -255,7 +224,7 @@ export async function fetchHostGraph(basePath: string): Promise<HostGraphRow[] |
     const inject = optionalStringArray(subject, 'inject', row.inject)
     const external = optionalStringArray(subject, 'external', row.external)
     if (row.immediately !== undefined && typeof row.immediately !== 'boolean') {
-      throw new Error(`宿主启动图：entry ${where} 的 immediately 必须是 boolean`)
+      throw new Error(graphEntryImmediatelyMessage(row))
     }
     rows.push({
       id: row.id,
@@ -416,7 +385,7 @@ export function findDeferredExternalDependencies(
  * the misleading "restart the app to switch").
  *
  * The combo/id tables, the timeout tombstone and the per-row load
- * verdicts live in the sidebar shared face (`client-plugin-loader.ts`) so the
+ * verdicts live in the client-core face (`client-plugin-loader.ts`) so the
  * settings bridge mounts a source's plugins through the exact same
  * bookkeeping. This module keeps the BOOT policy: fail loud, one bounded
  * recovery pass, and the per-boot diagnostic projection.

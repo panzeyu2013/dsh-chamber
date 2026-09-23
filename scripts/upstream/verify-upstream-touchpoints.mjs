@@ -48,13 +48,14 @@
  *       可读：树部分物化时缺文件 = 改名/搬移（违规），只有整体未物化才降级为 note
  *   C13 播种注册表结构（硬失败）：`HOST_*_PACKAGE_NAME` 常量 ↔ `HOST_*_INSERT` 行 ↔
  *       `CHAMBER_HOST_PACKAGES` 注册表三面一一对应（S 分量与播种机制脱节即红）
- *   C14 manifest 三方镜像（硬失败）：`plugin-sync.ts`（producer）↔ `preload.cts` ↔
- *       `renderer/src/global.d.ts` 的字段集一致，**且**加性读面投影 `rows` 的**元素类型**
- *       三方一致（control-plane `PluginRow` ↔ preload/renderer `PluginRowProjection`：
- *       字段名 + role/owner 字面量并集，`?` 不属于字段名，producer 的命名类型别名在同源内
- *       解析后一起比较，声明了却读不出并集按违规；ipc-surface-mirror 只覆盖后两者）
+ *   C14 plugin-row 单源 + manifest 三方镜像（硬失败）：行形状的唯一声明在 wire 的
+ *       `./plugin-row` 面（字段集与 role 并集 = 预期锚），五个消费方
+ *       （control-plane / client-core face / preload / renderer / settings-connections）
+ *       只许 import/type 引用——本地重声明 / 引用面漂移 / 单源字段缺失都红；
+ *       manifest 宿主接口另做 `plugin-sync.ts`（producer）↔ `preload.cts` ↔
+ *       `renderer/src/global.d.ts` 字段集对照（ipc-surface-mirror 只覆盖后两者）
  *   C15 悬停卡自持移植的上游退役门（硬失败）：chamber 的
- *       `RowHoverCard` + `shared/hover-intent.ts` 取代 vendor `HoverCard`，退役
+ *       `RowHoverCard` + client-core `src/hover-intent.ts` 取代 vendor `HoverCard`，退役
  *       条件是「上游修掉 leave 落在 dwell→commit 窗口就残留的竞态」。本门在**冻结
  *       pin** 上读 ① 该竞态形状仍在（HoverCard 组件内 onPointerLeave 的**每一个**
  *       arm 调用都由已提交 open 守卫；注释与字符串/模板先中和，诱饵无法伪证）与
@@ -62,6 +63,12 @@
  *       openDelayMs 默认 == HOVER_OPEN_DELAY_MS，取值必须唯一——零命中/多值都红），
  *       任一不成立即红——上游修掉竞态那天必须做退役/再登记裁决（判定逻辑纯函数，
  *       单测随 args 测试同文件）
+ *   C16 vendor 源消费者（硬失败）：`packages/<pkg>/src` 里任何「相对 import 出包到
+ *       `vendor/`」必须与 registry 的 `vendorSourceConsumers` 双向一致——登记的
+ *       (consumer, vendorFile) 必须真实存在且符号集合逐条相等，每个符号在 vendor
+ *       文件里仍是 `export function`，未登记的 vendor 相对 import 一律红。判定逻辑
+ *       纯函数在 verify-upstream-touchpoints-vendor.mjs，负控随
+ *       verify-upstream-touchpoints-args.test.mjs 在 test:upgrade-tools 跑。
  *
  * 登记纪律：单一来源 = scripts/upstream/registry.json（本文件启动即读它）。给某个文件打 chamber 补丁 = 在 entry.classify.patched 里登记
  * （含原因）；新增 chamber 自有文件 = own；上游文件有意不镜像 = dropped。任何对 pure 文件
@@ -69,7 +76,7 @@
  * docs/checklists/upstream-touchpoints.md 的 GENERATED 块（每 tag 维护循环见文档 §7）。
  *
  * 用法（`--help` 打印权威文本；未知参数 = 用法错误 exit 2，绝不静默跑默认模式）：
- *   node scripts/upstream/verify-upstream-touchpoints.mjs            # C1/C3–C15
+ *   node scripts/upstream/verify-upstream-touchpoints.mjs            # C1/C3–C16
  *   node scripts/upstream/verify-upstream-touchpoints.mjs --no-artifact-rebuild
  *   node scripts/upstream/verify-upstream-touchpoints.mjs --tags <old> <new>  # +C2
  *   node scripts/upstream/verify-upstream-touchpoints.mjs --help
@@ -89,12 +96,15 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { spawn, spawnSync } from 'node:child_process'
 import { artifactGateVerdict, compareOutputs, restoreDir, snapshotDir } from './artifact-gate.mjs'
 import {
-  familyFindings, manifestMirrorFindings, profileContractFindings, runtimeFamilyNames, seedRegistryFindings,
+  familyFindings, manifestMirrorFindings, pluginRowSingleSourceFindings, profileContractFindings,
+  PLUGIN_ROW_CONSUMERS, PLUGIN_ROW_SINGLE_SOURCE, runtimeFamilyNames, seedRegistryFindings,
 } from './plugin-protection-gate.mjs'
 import { USAGE_EXIT_CODE, VERIFY_USAGE, parseVerifyArgs } from './verify-upstream-touchpoints-args.mjs'
 import { HOVER_PORT_SOURCES, hoverPortVerdict } from './verify-upstream-touchpoints-hover.mjs'
+import { relativeVendorImports, vendorSourceVerdict } from './verify-upstream-touchpoints-vendor.mjs'
 import { loadRegistry, validateRegistry, verifierForks } from './registry.mjs'
 import { resolveEsbuildPath } from '../lib/esbuild.mjs'
+import { ARTIFACT_REBUILD_GROUPS } from '../lib/build-artifacts.mjs'
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url))
 const SUBMODULE = join(ROOT, 'vendor', 'harness-checkout')
@@ -449,46 +459,10 @@ for (const fork of FORKS) {
 // artifact no longer matches its source. `--no-artifact-rebuild` keeps the
 // advisory mtime behavior for environments without esbuild.
 {
-  const groups = [
-    {
-      script: 'packages/dsh-chamber-seed-client-graph/scripts/build.mjs',
-      outputs: ['packages/dsh-chamber-seed-client-graph/dist/index.js'],
-    },
-    {
-      script: 'packages/dsh-chamber-seed-git-worktree/scripts/build.mjs',
-      outputs: ['packages/dsh-chamber-seed-git-worktree/dist/index.js'],
-    },
-    {
-      script: 'packages/dsh-chamber-seed-archive-cleanup/scripts/build.mjs',
-      outputs: ['packages/dsh-chamber-seed-archive-cleanup/dist/index.js'],
-    },
-    {
-      // design 20 §6: the open-in host domain (fork of upstream's open-in host
-      // half) is seeded into the local profile the same way, so its built
-      // bundle must equal a fresh rebuild too.
-      script: 'packages/dsh-chamber-seed-open-in/scripts/build.mjs',
-      outputs: ['packages/dsh-chamber-seed-open-in/dist/index.js'],
-    },
-    {
-      // The shared runtime core's build-time bundle (the desktop/gateway
-      // installer ships it; a stale copy is as wrong as a stale seed bundle).
-      script: 'packages/dsh-runtime/scripts/build.mjs',
-      outputs: ['packages/dsh-runtime/dist/index.js'],
-    },
-    {
-      // The mobile browser half is a build-time artifact too (package.json
-      // exports ./client -> lib/client.js) and the gateway seeds it byte for
-      // byte; a stale bundle silently keeps retired DOM anchors.
-      // lib/index.js is the mirrored host half.
-      script: 'packages/dsh-chamber-client-ui-mobile/scripts/build.mjs',
-      outputs: [
-        'packages/dsh-chamber-client-ui-mobile/dist/index.js',
-        'packages/dsh-chamber-client-ui-mobile/lib/index.js',
-        'packages/dsh-chamber-client-ui-mobile/lib/client.js',
-        'packages/dsh-chamber-client-ui-mobile/lib/client.js.map',
-      ],
-    },
-  ]
+  // Single source: scripts/lib/build-artifacts.mjs — the same manifest
+  // ensure-artifacts.mjs bootstraps and docs/checklists/upstream-touchpoints.md
+  // §5 registers. C8 re-runs each group's own build script.
+  const groups = ARTIFACT_REBUILD_GROUPS
   if (noArtifactRebuild) {
     // Advisory fallback: mtime is unreliable on fresh checkouts — say so.
     const stale = []
@@ -956,23 +930,38 @@ for (const fork of FORKS) {
   })
   reportFindings('C13', '播种注册表（HOST_*_PACKAGE_NAME ↔ HOST_*_INSERT ↔ CHAMBER_HOST_PACKAGES）', c13)
 
-  // C14 —— manifest 三方字段集镜像（producer ↔ preload ↔ renderer）+ 嵌套行类型
-  // （`rows` 元素：control-plane `PluginRow` ↔ preload/renderer `PluginRowProjection`）
+  // C14 —— plugin-row 单源 + manifest 宿主接口三方字段集镜像。
+  // ① wire `./plugin-row` 是行形状的唯一声明：字段集 = 预期，且五个消费方
+  //    （control-plane / client-core face / preload / renderer / settings-connections）
+  //    只有 import/type 引用——本地重声明、引用面漂移、单源字段缺失都硬失败；
+  // ② 宿主 manifest 接口仍做 producer ↔ preload ↔ renderer 字段集对照。
   const manifestSources = {
     producerSource: join(ROOT, 'packages', 'desktop', 'plugin-sync.ts'),
     preloadSource: join(ROOT, 'packages', 'desktop', 'preload.cts'),
     rendererSource: join(ROOT, 'packages', 'renderer', 'src', 'global.d.ts'),
-    rowProducerSource: join(ROOT, 'packages', 'control-plane', 'src', 'protected-plugins.ts'),
   }
-  const c14 = manifestMirrorFindings(Object.fromEntries(
+  const c14Host = manifestMirrorFindings(Object.fromEntries(
     Object.entries(manifestSources).map(([key, file]) => [key, existsSync(file) ? readFileSync(file, 'utf8') : '']),
   ))
-  reportFindings('C14', 'manifest 三方字段集镜像 + rows 行类型（plugin-sync.ts / preload.cts / renderer/global.d.ts / control-plane protected-plugins.ts）', c14)
+  const c14Row = pluginRowSingleSourceFindings({
+    singleSource: existsSync(join(ROOT, PLUGIN_ROW_SINGLE_SOURCE.path))
+      ? readFileSync(join(ROOT, PLUGIN_ROW_SINGLE_SOURCE.path), 'utf8')
+      : '',
+    consumers: Object.fromEntries(PLUGIN_ROW_CONSUMERS.map((consumer) => {
+      const file = join(ROOT, consumer.source)
+      return [consumer.side, existsSync(file) ? readFileSync(file, 'utf8') : '']
+    })),
+  })
+  const c14 = {
+    violations: [...c14Host.violations, ...c14Row.violations],
+    notes: [...c14Host.notes, ...c14Row.notes],
+  }
+  reportFindings('C14', 'plugin-row 单源 + manifest 三方字段集镜像（wire ./plugin-row = 唯一声明；control-plane/client-core/preload/renderer/settings-connections 只引用不重声明）', c14)
 }
 
 // C15 —— 悬停卡自持移植的上游退役门（硬失败，design 06 §7）
 //
-// chamber 的侧栏行卡片用自己的 `RowHoverCard` + `shared/hover-intent.ts` 取代
+// chamber 的侧栏行卡片用自己的 `RowHoverCard` + client-core `src/hover-intent.ts` 取代
 // vendor 的 `ui-primitives HoverCard`：vendor 原子以**上一次已提交的 `open`**
 // 决定是否 arm 宽限关闭（`HoverCard.tsx` 的 `onPointerLeave` =
 // `clearTimer()` + `if (open) armClose()`），dwell 定时器触发到 React 提交之间
@@ -1008,6 +997,46 @@ for (const fork of FORKS) {
   else for (const failure of verdict.failures) fail(failure)
 }
 
+// C16 —— vendor 源消费者清单（registry.vendorSourceConsumers）与真实相对 import
+// 双向一致（硬失败，只读）：被审计的缺陷是「未登记」，不是「引用了 vendor」。
+{
+  const vendorConsumers = REGISTRY.vendorSourceConsumers
+  const vendorImports = []
+  const vendorSources = {}
+  /** 生产源面 = packages/<pkg>/src/**（不含 test/dist/lib/vendor），与 P7 的 A 判据同面。 */
+  const walkProductionSources = (dir) => {
+    const out = []
+    const walk = (current) => {
+      for (const entry of readdirSync(current, { withFileTypes: true })) {
+        const full = join(current, entry.name)
+        if (entry.isDirectory()) {
+          if (['node_modules', 'test', 'tests', 'dist', 'lib', 'coverage'].includes(entry.name)) continue
+          walk(full)
+        } else if (/\.(ts|tsx|mts|cts|js|mjs|cjs)$/.test(entry.name)) {
+          out.push(full)
+        }
+      }
+    }
+    if (existsSync(dir)) walk(dir)
+    return out
+  }
+  const packagesDir = join(ROOT, 'packages')
+  if (existsSync(packagesDir)) {
+    for (const pkg of readdirSync(packagesDir)) {
+      for (const full of walkProductionSources(join(packagesDir, pkg, 'src'))) {
+        vendorImports.push(...relativeVendorImports(repoRel(ROOT, full), readFileSync(full, 'utf8')))
+      }
+    }
+  }
+  for (const entry of Array.isArray(vendorConsumers) ? vendorConsumers : []) {
+    const full = join(ROOT, entry.vendorFile)
+    vendorSources[entry.vendorFile] = existsSync(full) ? readFileSync(full, 'utf8') : null
+  }
+  const verdict = vendorSourceVerdict({ entries: vendorConsumers, imports: vendorImports, vendorSources })
+  if (verdict.ok) console.log(verdict.summary)
+  else for (const failure of verdict.failures) fail(failure)
+}
+
 // C2 —— tag 重放报告（advisory）
 {
   if (tagRange !== null) {
@@ -1028,5 +1057,5 @@ if (hardFails > 0 || (process.exitCode ?? 0) !== 0) {
   process.exitCode = 1
   console.error(`\n✗ verify-upstream-touchpoints: ${hardFails} 项硬失败——见上。`)
 } else {
-  console.log('\n✓ verify-upstream-touchpoints 全部通过（C1/C3–C15）')
+  console.log('\n✓ verify-upstream-touchpoints 全部通过（C1/C3–C16）')
 }

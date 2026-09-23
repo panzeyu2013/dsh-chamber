@@ -9,7 +9,7 @@ import type { AddressInfo } from 'node:net'
 import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { configureGatewaySecretStore as configureGatewaySecretStoreRaw, configureGatewayTokenStore as configureGatewayTokenStoreRaw, DEFAULT_GATEWAY_HTTP_PORT, DEFAULT_GATEWAY_PORT, GATEWAY_HOST_PATTERN, gatewayHttpFailureIsTerminal, gatewayPasswordValidationError, gatewayProvider, gatewaySecretStorageCrossFlavorUnreadable, gatewaySecretStorageMode, gatewayTokenValidationError, getGatewayPassword, getGatewayToken, setGatewayPassword, setGatewayToken, setInstanceSecrets, verifyGatewayRuntimeIdentity } from '../../gateway-provider.ts'
+import { configureGatewaySecretStore as configureGatewaySecretStoreRaw, DEFAULT_GATEWAY_HTTP_PORT, DEFAULT_GATEWAY_PORT, GATEWAY_HOST_PATTERN, gatewayHttpFailureIsTerminal, gatewayPasswordValidationError, gatewayProvider, gatewaySecretStorageCrossFlavorUnreadable, gatewaySecretStorageMode, gatewayTokenValidationError, getGatewayPassword, getGatewayToken, setGatewayPassword, setGatewayToken, setInstanceSecrets, verifyGatewayRuntimeIdentity } from '../../gateway-provider.ts'
 import { GATEWAY_RUNTIME_STATUS } from '../support/gateway-session-test-hooks.ts'
 import { boundedGatewayRequest } from '../../gateway-http-core.ts'
 import type { SecretCryptoAdapter } from '../../gateway-provider.ts'
@@ -30,10 +30,6 @@ function storedGatewaySpec(id: string): TransportInstanceSpec {
 
 function configureGatewaySecretStore(file: string | null, crypto?: SecretCryptoAdapter): string | null {
   return configureGatewaySecretStoreRaw(file, crypto, id => storedGatewaySpec(id))
-}
-
-function configureGatewayTokenStore(file: string | null): string | null {
-  return configureGatewayTokenStoreRaw(file, id => storedGatewaySpec(id))
 }
 
 function boundPlaintextFile(tokens: Record<string, string>, passwords: Record<string, string>) {
@@ -588,26 +584,25 @@ test('a legacy gateway-tokens.json beside a valid bound v3 file stays preserved 
   }
 })
 
-test('configureGatewayTokenStore stays a working plaintext alias and refuses non-empty unbound v1 files', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'dsh-gw-alias-'))
+test('the plaintext store writes bound schemaVersion 3 and moves a non-empty unbound v1 file aside', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-gw-v1-in-place-'))
   const file = join(dir, 'gateway-tokens.json')
   try {
-    // Fresh bound v3 write through the backward-compatible plaintext alias.
-    assert.equal(configureGatewayTokenStore(file), null)
+    assert.equal(configureGatewaySecretStore(file), null)
     setGatewayToken('a-token', TOKEN)
-    assert.equal(JSON.parse(readFileSync(file, 'utf8')).schemaVersion, 3, 'the alias persists bound schemaVersion 3')
-    assert.equal(configureGatewayTokenStore(file), null)
+    assert.equal(JSON.parse(readFileSync(file, 'utf8')).schemaVersion, 3, 'the store persists bound schemaVersion 3')
+    assert.equal(configureGatewaySecretStore(file), null)
     assert.equal(getGatewayToken('a-token'), TOKEN)
     // In-place v1 has no endpoint binding and cannot be adopted safely.
     const v1file = join(dir, 'v1-in-place.json')
     writeFileSync(v1file, JSON.stringify({ schemaVersion: 1, tokens: { 'a-legacy': TOKEN } }))
-    const notice = configureGatewayTokenStore(v1file)
+    const notice = configureGatewaySecretStore(v1file)
     assert.match(notice ?? '', /no target bindings|re-enter/)
     assert.equal(getGatewayToken('a-legacy'), null)
     assert.equal(existsSync(v1file), false, 'the unbound file is moved aside under a unique recovery name')
     assert.equal(readdirSync(dir).some(name => name.startsWith('v1-in-place.json.unbound-')), true)
   } finally {
-    configureGatewayTokenStore(null)
+    configureGatewaySecretStore(null)
     rmSync(dir, { recursive: true, force: true })
   }
 })

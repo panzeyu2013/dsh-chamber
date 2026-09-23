@@ -21,9 +21,9 @@ import {
   type RuntimeAction,
   type RuntimePhase,
   type RuntimeState,
-} from '../../../renderer/src/runtime-management.ts'
+} from '@dsh-chamber/dsh-chamber-client-core/runtime-management'
 import type { RuntimeInstallProgress as MainRuntimeInstallProgress } from '@dsh-chamber/dsh-runtime'
-import type { RuntimeInstallProgress as RendererRuntimeInstallProgress } from '../../../renderer/src/runtime-management.ts'
+import type { RuntimeInstallProgress as RendererRuntimeInstallProgress } from '@dsh-chamber/dsh-chamber-client-core/runtime-management'
 import { balancedBlock } from './source-blocks.ts'
 
 const PHASES: readonly RuntimePhase[] = [
@@ -212,7 +212,7 @@ test('the renderer RuntimeInstallProgress flat mirror projects from the main-pro
 })
 
 test('renderer compareSemver stays lockstep with the shared compareRuntimeVersions (main)', async () => {
-  const { compareSemver } = await import('../../../renderer/src/runtime-management.ts')
+  const { compareSemver } = await import('@dsh-chamber/dsh-chamber-client-core/runtime-management')
   const { compareRuntimeVersions } = await import('@dsh-chamber/dsh-runtime')
   const corpus: Array<[string, string]> = [
     ['1.0.0', '1.0.0'],

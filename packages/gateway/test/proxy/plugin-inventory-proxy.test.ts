@@ -179,7 +179,6 @@ test('pluginInventory/list reaches the managed dsh through the full gateway chai
     await desktopPlane.stop()
     await gatewayPlane.stop()
     await new Promise<void>(resolve => fakeDsh.close(() => resolve()))
-    store.close()
     rmSync(stateDir, { recursive: true, force: true })
   }
 })

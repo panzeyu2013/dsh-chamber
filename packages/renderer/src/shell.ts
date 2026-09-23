@@ -54,15 +54,15 @@ import {
 import type { GraphGapKind } from './source-readiness.ts'
 import { isChamberSourceId, rawInstanceIdFromSourceId } from './transport-source.ts'
 import { collectExtraRows, type CollectExtraRowsDeps, type ExtraModuleRow } from './host-graph.ts'
-import { BundleLoadTimeoutError } from '../../dsh-chamber-client-ui-sidebar/src/shared/client-plugin-loader.ts'
-import { chamberBridge, describeThrown, type PluginGraphDiagnostic } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
+import { BundleLoadTimeoutError } from '@dsh-chamber/dsh-chamber-client-core/client-plugin-loader'
+import { chamberBridge, describeThrown, type PluginGraphDiagnostic } from '@dsh-chamber/dsh-chamber-client-core'
 // Page-level machine catalog + the page-level instance client it reads through:
 // both are pure modules with no vendor/runtime links, so the isolated shell
-// test resolves them the same way it resolves the sidebar's loader above.
+// test resolves them the same way it resolves the client-core loader above.
 import {
   createMachineCatalog, type MachineCatalog,
-} from '../../dsh-chamber-client-ui-open-in/src/client/machine-catalog.ts'
-import { getInstanceClient } from '../../dsh-chamber-client-ui-sidebar/src/shared/instance-api.ts'
+} from '@dsh-chamber/dsh-chamber-client-ui-open-in/machine-catalog'
+import { getInstanceClient } from '@dsh-chamber/dsh-chamber-client-core/instance-api'
 import { PendingOpenQueue } from './pending-open-queue.ts'
 import { PERF_MARKS, perfMark } from './perf-marks.ts'
 
@@ -95,7 +95,7 @@ function machineCatalogForPage(): MachineCatalog {
 }
 
 /** Convert an arbitrary thrown value into a stable diagnostic without ever
- * throwing again (shared implementation, sidebar/src/shared/error-text.ts):
+ * throwing again (shared implementation, client-core/src/error-text.ts):
  * external runtime stores/plugins may throw proxies whose getPrototypeOf,
  * message, or string-conversion traps also throw; every shell catch boundary
  * must still settle its caller instead of stranding a boot or timer-driven
@@ -197,7 +197,7 @@ function loadModuleBundle(url: string): Promise<void> {
     // A hung bundle (server stalls, never fires load/error) must not keep this
     // instance's boot pending forever — fail loud at the same order of
     // magnitude as the graph fetch (host-graph.ts, whose bounded-unary 30s
-    // budget rides the shared postUnary kernel of sidebar shared
+    // budget rides the shared postUnary kernel of client-core
     // wire-common.ts); the
     // rejection runs through the same fail-loud boot path as a load error.
     // Removing a module element does not reliably cancel its fetch, so leave

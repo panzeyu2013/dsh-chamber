@@ -9,7 +9,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { SpawnOptions } from 'node:child_process'
-import type { SpawnFn, SpawnedChild, SpawnedProcessStream } from '../../src/plugins-exec.ts'
+import type { MutationChild, MutationProcessStream, MutationSpawnFn } from '@dsh-chamber/control-plane'
 import { INSTALLED_PROFILE_DIR, MANAGED_DSH_HOME_DIR } from '../../src/plugins-installed.ts'
 
 export function scratchDir(t: { after(fn: () => void): void }, prefix: string): string {
@@ -39,10 +39,10 @@ class FakeStream extends EventEmitter {
   }
 }
 
-export class FakeChild implements SpawnedChild {
+export class FakeChild implements MutationChild {
   pid: number
-  stdout: SpawnedProcessStream = new FakeStream()
-  stderr: SpawnedProcessStream = new FakeStream()
+  stdout: MutationProcessStream = new FakeStream()
+  stderr: MutationProcessStream = new FakeStream()
   readonly signals: NodeJS.Signals[] = []
   readonly killTimes: number[] = []
   closeOnKill = false
@@ -88,9 +88,9 @@ export interface SpawnCall {
   child: FakeChild
 }
 
-export function makeSpawnHarness(): { spawn: SpawnFn; calls: SpawnCall[] } {
+export function makeSpawnHarness(): { spawn: MutationSpawnFn; calls: SpawnCall[] } {
   const calls: SpawnCall[] = []
-  const spawn: SpawnFn = (command, args, options) => {
+  const spawn: MutationSpawnFn = (command, args, options) => {
     const child = new FakeChild(9000 + calls.length)
     calls.push({ command, args, options, child })
     return child

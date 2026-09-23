@@ -2,7 +2,7 @@
  * The connections error-text projection: the card and the dialog render the
  * one shared module.
  *
- * The implementation is single-sourced on the sidebar shared face
+ * The implementation is single-sourced on the client-core face
  * (src/shared/error-text.ts) and covered there; this file keeps the
  * connections-side behavior assertion through the module this package's callers
  * import. The former cross-package source-text lockstep case is gone with the

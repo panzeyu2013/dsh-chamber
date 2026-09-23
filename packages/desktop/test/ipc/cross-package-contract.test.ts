@@ -24,6 +24,7 @@ import {
 import {
   buildClientRequest as planeBuildClientRequest,
   HOST_GRAPH_PATCH_FILENAME as planeHostGraphPatchFilename,
+  HOST_OPEN_IN_INSERT,
   HOST_PACKAGE_SEED_FILES as planeSeedFiles,
   renderCordisInserts as planeRenderCordisInserts,
 } from '@dsh-chamber/control-plane'
@@ -36,8 +37,6 @@ import {
   GIT_WORKTREE_INSERT_ID,
   GIT_WORKTREE_PACKAGE_NAME,
   localPluginList,
-  OPEN_IN_INSERT_ID,
-  OPEN_IN_PACKAGE_NAME,
   SEED_FILES,
 } from '../../plugin-sync.ts'
 import { syncedPluginUploadFiles } from '../../gateway-provider.ts'
@@ -62,7 +61,7 @@ const GIT_WORKTREE = { id: GIT_WORKTREE_INSERT_ID, name: GIT_WORKTREE_PACKAGE_NA
 const ARCHIVE_CLEANUP = { id: ARCHIVE_CLEANUP_INSERT_ID, name: ARCHIVE_CLEANUP_PACKAGE_NAME }
 // The local-shape-only row (design 20 §6) — part of the registry and of the
 // LOCAL profile's overlay, never of a remote seed (design 20 §6 sync points).
-const OPEN_IN = { id: OPEN_IN_INSERT_ID, name: OPEN_IN_PACKAGE_NAME }
+const OPEN_IN = { id: HOST_OPEN_IN_INSERT.id, name: HOST_OPEN_IN_INSERT.name }
 
 test('the control-plane facade selects packaged artifacts without importing Electron in pure Node', () => {
   assert.equal(isPackagedElectronRuntime({}), false, 'pure Node must use the workspace package')
@@ -111,7 +110,7 @@ test('computeCordisPatchUpdate embeds the shared render bytes verbatim (the fold
     { insertId: CLIENT_GRAPH_INSERT_ID, packageName: CLIENT_GRAPH_PACKAGE_NAME },
     { insertId: GIT_WORKTREE_INSERT_ID, packageName: GIT_WORKTREE_PACKAGE_NAME },
     { insertId: ARCHIVE_CLEANUP_INSERT_ID, packageName: ARCHIVE_CLEANUP_PACKAGE_NAME },
-    { insertId: OPEN_IN_INSERT_ID, packageName: OPEN_IN_PACKAGE_NAME },
+    { insertId: HOST_OPEN_IN_INSERT.id, packageName: HOST_OPEN_IN_INSERT.name },
   ])
   assert.equal('error' in update, false)
   if ('error' in update || !update.write) return

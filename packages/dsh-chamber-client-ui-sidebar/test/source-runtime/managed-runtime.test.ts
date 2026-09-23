@@ -2,10 +2,11 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import {
-  fetchManagedRuntimeState, MANAGED_RUNTIME_DOWN_STATES, MANAGED_RUNTIME_TRANSIENT_STATES,
+  fetchManagedRuntimeState, MANAGED_RUNTIME_TRANSIENT_STATES,
   managedRuntimeDown, managedRuntimeUnusable,
-} from '../../src/shared/managed-runtime.ts'
-import { GATEWAY_RUNTIME_STATUS_KIND } from '../../src/shared/gateway-runtime.ts'
+} from '@dsh-chamber/dsh-chamber-client-core/managed-runtime'
+import { MANAGED_RUNTIME_DOWN_STATES } from '../../../dsh-chamber-client-core/src/managed-runtime.ts'
+import { GATEWAY_RUNTIME_STATUS_KIND } from '../../../dsh-chamber-client-core/src/gateway-runtime.ts'
 
 // design 17 §2：gateway 来源的托管 dsh 状态投影。desktop 的 ready 只证明 gateway 进程活着，
 // 停机窗口必须能被侧栏看见/禁用，而探针缺失时绝不能把健康来源隐藏（fail open）。

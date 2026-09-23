@@ -42,7 +42,7 @@
  */
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Button } from '@deepseek-ai/dsh-client-ui-primitives/src/Button.tsx'
-import { dismissVisibleRowCard } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
+import { dismissVisibleRowCard } from '@dsh-chamber/dsh-chamber-client-core'
 import {
   bootInstanceShell, INSTANCE_TAIL_WAIT_CAP_MS, shellStateIdle,
   type ChamberTransport, type ShellState,

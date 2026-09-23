@@ -17,19 +17,29 @@ const app = stripComments(readFileSync(fileURLToPath(new URL('../../src/App.tsx'
 const sidebar = stripComments(readFileSync(
   fileURLToPath(new URL('../../../dsh-chamber-client-ui-sidebar/src/client/index.ts', import.meta.url)), 'utf8'))
 const executor = stripComments(readFileSync(
-  fileURLToPath(new URL('../../../dsh-chamber-client-ui-sidebar/src/shared/session-fact-reconcile.ts', import.meta.url)), 'utf8'))
+  fileURLToPath(new URL('../../../dsh-chamber-client-core/src/session-fact-reconcile.ts', import.meta.url)), 'utf8'))
 const hook = stripComments(readFileSync(
   fileURLToPath(new URL('../../src/app-hooks/use-bridge-subscriptions.ts', import.meta.url)), 'utf8'))
+// 事实第二入口（planFactsNotifications）与升级 ladder 的执行端已随
+// 通知/未读投影簇、聚合刷新簇抽到命名 hook；锁跨 App + 两个 hook 取并集
+// （presence/absence 都不放松）。
+const unreadHook = stripComments(readFileSync(
+  fileURLToPath(new URL('../../src/app-hooks/use-unread-notifications.ts', import.meta.url)), 'utf8'))
+const aggregateHook = stripComments(readFileSync(
+  fileURLToPath(new URL('../../src/app-hooks/use-aggregate-refresh.ts', import.meta.url)), 'utf8'))
+const factsHook = stripComments(readFileSync(
+  fileURLToPath(new URL('../../src/app-hooks/use-session-facts-lifecycle.ts', import.meta.url)), 'utf8'))
+const frame = app + '\n' + unreadHook + '\n' + aggregateHook + '\n' + factsHook
 const projection = stripComments(readFileSync(
   fileURLToPath(new URL('../../src/notification-projection.ts', import.meta.url)), 'utf8'))
 const logStore = stripComments(readFileSync(
-  fileURLToPath(new URL('../../../dsh-chamber-client-ui-sidebar/src/shared/authority-log-store.ts', import.meta.url)), 'utf8'))
+  fileURLToPath(new URL('../../../dsh-chamber-client-core/src/authority-log-store.ts', import.meta.url)), 'utf8'))
 
 test('the App has no second liveness planner or state machine', () => {
-  assert.doesNotMatch(app, /planSessionLiveness|sessionLivenessRef|markSessionLiveness/)
-  assert.match(app, /sessionAuthorityEscalationLadder\(LADDER_TABLES\.authority\)/)
-  assert.match(app, /planLadder\(/)
-  assert.match(app, /chamberBridge\.requestSessionListRefresh\(id\)/, 'the tick drives the executor')
+  assert.doesNotMatch(frame, /planSessionLiveness|sessionLivenessRef|markSessionLiveness/)
+  assert.match(frame, /sessionAuthorityEscalationLadder\(LADDER_TABLES\.authority\)/)
+  assert.match(frame, /planLadder\(/)
+  assert.match(frame, /chamberBridge\.requestSessionListRefresh\(id\)/, 'the tick drives the executor')
 })
 
 test('the producer executes the one authority reducer + probe ladder', () => {
@@ -58,19 +68,19 @@ test('authority actions persist to the machine-local ring (P5)', () => {
 test('completion notifications have one policy entry (P3)', () => {
   assert.match(hook, /planRuntimeNotifications\(/)
   assert.doesNotMatch(hook, /detectNotificationEdges|dedupeCompleteEdges/)
-  assert.match(app, /planFactsNotifications\(/)
-  assert.doesNotMatch(app, /shouldNotifyWatermark|nextNotifiedWatermark/)
+  assert.match(frame, /planFactsNotifications\(/)
+  assert.doesNotMatch(frame, /shouldNotifyWatermark|nextNotifiedWatermark/)
   assert.match(projection, /export function planRuntimeNotifications/)
   assert.match(projection, /export function planFactsNotifications/)
 })
 
 test('the retained-view unverified-running arm stays wired (design 05)', () => {
-  assert.ok(app.includes('shouldDropUnverifiedRunningFacts('), 'the 90s bound must stay wired to the drop decision')
-  assert.ok(app.includes('...new Set([...stalledSources, ...unverifiedSources])'), 'both banner sources share one visible set')
-  assert.ok(app.includes('unverified: unverifiedSourcesRef.current.includes(sourceId)'), 'the report must mark unverified sources')
+  assert.ok(frame.includes('shouldDropUnverifiedRunningFacts('), 'the 90s bound must stay wired to the drop decision')
+  assert.ok(frame.includes('...new Set([...stalledSources, ...unverifiedSources])'), 'both banner sources share one visible set')
+  assert.ok(frame.includes('unverified: unverifiedSourcesRef.current.includes(sourceId)'), 'the report must mark unverified sources')
 })
 
 test('the escalation ladder gates both levers on stuck evidence', () => {
-  assert.match(app, /stuckEvidence: authority\?\.stuckSince !== undefined/)
-  assert.match(app, /escalationBlocked:/)
+  assert.match(frame, /stuckEvidence: authority\?\.stuckSince !== undefined/)
+  assert.match(frame, /escalationBlocked:/)
 })

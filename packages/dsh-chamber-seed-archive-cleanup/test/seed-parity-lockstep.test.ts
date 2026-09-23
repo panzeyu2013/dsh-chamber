@@ -2,9 +2,11 @@
  * Cross-seed parity lockstep (design 08 / 20 / 24 host domains).
  *
  * The three seed domains each own a private copy of the wire carrier
- * (`domainResult` + a typed error class) because seed packages MUST stay
- * standalone bundles: a shared runtime module would have to be a workspace
- * dependency, which the seed/packaging boundary forbids. This test is the
+ * (`domainResult` + a typed error class). Seed packages MUST stay standalone
+ * dist bundles — the build keeps only `@deepseek-ai/*` external, so any chamber
+ * workspace dependency (e.g. `@dsh-chamber/dsh-chamber-wire`) is inlined by
+ * esbuild and costs nothing at runtime; the carrier copies predate that shared
+ * package and are not part of its domain-contract surface. This test is the
  * compensating lockstep: it imports all three domains' REAL carriers and pins
  * the observable semantics they share, plus the two divergences that are
  * deliberate rather than accidental.
@@ -23,15 +25,17 @@
  *   (src/core.ts KeyedMutex) because its mutations must QUEUE per repository
  *   instead of refusing. Not unifiable without changing the git contract.
  *
- * Also pins the shared vendor-resolution seam of the four seed tsconfigs
- * (single set; the version↔lockfile half is gated by
- * scripts/upstream/lockfile-store-path-mappings.test.mjs).
+ * Also pins the shared vendor-resolution seam of the four seed tsconfigs:
+ * they all EXTEND one base (`tsconfig.seed-base.json`) and declare no paths
+ * of their own (the version↔lockfile half of the seam is gated by
+ * scripts/upstream/lockfile-store-path-mappings.test.mjs, which scans
+ * `packages/<pkg>/tsconfig*.json`).
  */
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { ArchiveCleanupError, domainResult as archiveDomainResult, errorText } from '../src/core.ts'
 import { RunGate } from '../src/binding.ts'
@@ -172,7 +176,10 @@ const SEED_PACKAGES = [
   'dsh-chamber-seed-open-in',
 ] as const
 
-/** The vendor-source + pnpm-store mappings a seed tsconfig declares (order-insensitive). */
+/** The ONE shared base every seed config extends (it carries the seam). */
+const SHARED_SEED_TSCONFIG = join(ROOT, 'packages', 'dsh-chamber-seed-client-graph', 'tsconfig.seed-base.json')
+
+/** The vendor-source + pnpm-store mappings a tsconfig declares (order-insensitive). */
 function vendorPathMappings(tsconfigPath: string): string[] {
   const text = readFileSync(tsconfigPath, 'utf8')
   return [...text.matchAll(/"([^"]+)"\s*:\s*\[\s*"([^"]+)"\s*\]/gu)]
@@ -181,18 +188,30 @@ function vendorPathMappings(tsconfigPath: string): string[] {
     .sort()
 }
 
-test('the four seed tsconfigs declare the SAME vendor-resolution seam', () => {
-  const reference = vendorPathMappings(join(ROOT, 'packages', SEED_PACKAGES[0], 'tsconfig.json'))
+/** The `extends` target of a tsconfig, resolved to an absolute path (null when absent). */
+function extendsTarget(tsconfigPath: string): string | null {
+  const target = /"extends"\s*:\s*"([^"]+)"/u.exec(readFileSync(tsconfigPath, 'utf8'))?.[1]
+  return target === undefined ? null : resolve(dirname(tsconfigPath), target)
+}
+
+test('the four seed tsconfigs extend ONE shared vendor-resolution base', () => {
+  const reference = vendorPathMappings(SHARED_SEED_TSCONFIG)
   assert.deepEqual(
     reference.map(entry => entry.split(' -> ')[0]),
     ['@deepseek-ai/*', '@standard-schema/spec', 'compression', 'negotiator', 'undici'],
-    'the unified seam must keep the wildcard plus the four documented store mappings',
+    'the shared base must keep the wildcard plus the four documented store mappings',
   )
-  for (const pkg of SEED_PACKAGES.slice(1)) {
+  for (const pkg of SEED_PACKAGES) {
+    const config = join(ROOT, 'packages', pkg, 'tsconfig.json')
+    assert.equal(
+      extendsTarget(config),
+      SHARED_SEED_TSCONFIG,
+      `${pkg}/tsconfig.json must extend the shared seed base`,
+    )
     assert.deepEqual(
-      vendorPathMappings(join(ROOT, 'packages', pkg, 'tsconfig.json')),
-      reference,
-      `${pkg}/tsconfig.json vendor seam drifted from ${SEED_PACKAGES[0]}`,
+      vendorPathMappings(config),
+      [],
+      `${pkg}/tsconfig.json must declare no vendor mapping of its own (single source: the shared base)`,
     )
   }
 })

@@ -383,12 +383,6 @@ export function claimNotificationDetailed(request: NotificationRequest, now: num
   return notificationClaims.claim(request, now)
 }
 
-/** Compatibility boolean used by the pure dedupe tests. Main uses the
- * detailed result so saturation is distinguishable and loud. */
-export function claimNotification(request: NotificationRequest, now: number = Date.now()): boolean {
-  return claimNotificationDetailed(request, now).accepted
-}
-
 export function releaseNotificationClaim(token: NotificationClaimToken | null): void {
   notificationClaims.release(token)
 }

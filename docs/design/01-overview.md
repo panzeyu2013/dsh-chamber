@@ -144,3 +144,10 @@ renderer 已有的每实例运行时事实，不建立控制面通知消费者/�
 4. **权威边界纪律**：宿主侧事实控制面只服务/探活，绝不成为权威；会话列表只来自各实例 API。
 5. **信任最小化**：桌面前端只连 127.0.0.1（本地 dsh 端口或隧道 localPort）；隧道 URL、私钥与代理配置永不进 renderer/日志/持久层；密码/token 仅表单瞬时 write-only 输入，绝不返回/回填。普通 control-plane 仅 loopback；design 17 的 gateway 可非 loopback，但必须同时启用认证（默认；`--no-auth` 为有界偏差）、Host/Origin/peer evaluator 与 HTTP/WS 一致门禁。
 6. **P3 硬纪律**：移出项不回流。
+
+### Rejected alternatives（架构调整）
+
+- **保留 `./src/*` 通配出口与 `sidebar/shared` 面**：否决——包依赖图不是机制（跨包相对 import 可穿过任何出口），且 `sidebar/shared` 被 7 个包 49 处消费、无单一归属；改为 11 包去通配、具名面从生产消费方反推，`sidebar/src/shared` 提升为 `@dsh-chamber/dsh-chamber-client-core`（浏览器安全的共享客户端核心），并以 `scripts/gates/verify-package-boundaries.mjs`（A 禁生产面跨包相对 import、B exports 白名单双向一致）作为零容忍门。
+- **测试面跨包相对 import 一并禁止**：否决——测试不是发布契约，文本锁与夹具需要直读源文件；门只判生产面，48 条测试面例外按 §8.3 的误报边界显式列出并由 `--self-test` 锁死。
+- **为消除 renderer↔settings-* 反向边而给 renderer 补导出面**：否决——`runtime-management.ts`/`semver.ts`/`svg-resource-scope.ts` 是纯叶子（零依赖或仅 `semver`），迁入 client-core 后 6 条穿包与未声明反向边一并消失；renderer 只保留 `./global.d.ts` 一个 type-only 面（settings 两包以 devDependency 声明该面）。
+- **vendor 深路径 import 本地重实现**：否决——上游的 boot-graph wire 校验器（`dsh-client-modules/src/client/manifest.ts`）不手工重写；保留相对路径 + registry `vendorSourceConsumers` 登记 + C16 保鲜门 + 边界门 A 放行。

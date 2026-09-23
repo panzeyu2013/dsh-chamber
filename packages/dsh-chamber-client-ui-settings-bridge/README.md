@@ -3,14 +3,14 @@
 English | [中文](README.zh.md)
 
 Chamber's self-built **settings shell** plugin (design discussion 2026-08;
-graph-driven revision 2026-12): it registers the 设置 / Settings shell into the
+graph-driven revision ): it registers the 设置 / Settings shell into the
 `sidebar.settings` slot at the RESERVED shadow priority (`-1000`, shared face
 `settings-shell.ts`), so the official SettingsRoot is shadowed — never
 conflicted: the official entry stays on the ledger and its `settings.*` children
 declarations remain valid. The chamber sidebar watches the seat's cell winner and
 reports (console) any registrant that goes below the reserved range.
 
-## Complete bridge (2026-12 revision)
+## Complete bridge (revision)
 
 The panel renders the **selected source's own settings surface** — the
 `settings.section` ledger of that source's own boot cordis context, with the
@@ -115,12 +115,12 @@ from retention reclaim); closing the panel releases both guarantees.
   confirms an action is otherwise unchanged — the local apply-now transaction is
   still confirmed inside the local runtime surface, so the panel never
   double-asks.
-- **Restart = host restart + one window reload (2026-12)**: the page-side
+- **Restart = host restart + one window reload ()**: the page-side
   client-plugin set is fixed at the window's boot (the host graph is fetched once
   per boot and the module table is first-load-wins per plugin id), so "restart dsh
   to refresh mounted plugins" only makes a newly installed or rebuilt
   `dsh.client` contribution (a settings section, e.g.) appear once the window
-  boots again. The implementation is the sidebar shared face's **page-owned
+  boots again. The implementation is the client-core face's **page-owned
   completion** (`restart-window-reload.ts` — this package and the connections
   package must not value-import each other): this section's two restart shapes —
   plus the local "apply now" / "retry apply" / "retry restore" transactions (armed
@@ -139,14 +139,12 @@ from retention reclaim); closing the panel releases both guarantees.
 
 - The pure gateway dsh-runtime core (status parse/fetch, action gates, error
   classification, restart-readiness poll) moved OUT of this package into the
-  sidebar shared face (`@dsh-chamber/dsh-chamber-client-ui-sidebar/shared`, exported from
-  `src/shared/gateway-runtime*.ts`); this package imports it back for its
-  gateway dsh-runtime section and typechecks it against the REAL sidebar shared
-  source (P4-4: the handwritten ambient mirror
-  `src/ambient/chamber-bridge.d.ts` was deleted — this package keeps its own
-  tsconfig `paths` for the connections-section mapping, so its sidebar/shared
-  specifier resolves via the node_modules workspace link + the sidebar
-  package exports to the REAL `src/shared/index.ts`).
+ client-core kernel (`@dsh-chamber/dsh-chamber-client-core`;
+ `packages/dsh-chamber-client-core/src/gateway-runtime*.ts`, reached through
+ the core `.` face); this package imports it back for its
+  gateway dsh-runtime section and typechecks it against the REAL client-core source through the
+ node_modules workspace link + the client-core package exports. P4-4: the handwritten ambient mirror
+  `src/ambient/chamber-bridge.d.ts` was deleted.
 - Only the settings-bridge-local view mapping stays here:
   `remoteRuntimeStatusView` / `RemoteRuntimeStatusView` (SettingsBridgeKey
   coupling) in `src/client/gateway-runtime-api.ts`.

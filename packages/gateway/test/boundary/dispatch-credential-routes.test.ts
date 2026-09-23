@@ -474,7 +474,6 @@ test('POST /auth/change-password: removing the last credential with no config re
     // last-credential case (no token, no config password to revert to).
     store = createGatewayStore(dir, silentLogger)
     store.setPasswordCredential(hashCredential(NEW_PASSWORD), 'runtime')
-    store.close()
     store = createGatewayStore(dir, silentLogger)
     const auth = createAuth({ kind: 'none' }, store)
     assert.equal(auth.kind, 'password', 'the runtime credential survives config seeding')
@@ -484,7 +483,6 @@ test('POST /auth/change-password: removing the last credential with no config re
     assert.equal(res.status, 409)
     assert.equal(JSON.parse(res.body).code, 'last_credential')
   } finally {
-    store?.close()
     rmSync(dir, { recursive: true, force: true })
   }
 })

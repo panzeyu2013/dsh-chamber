@@ -15,8 +15,8 @@ import {
   setSearchFetcher,
   setSearchQuery,
   subscribeSearch,
-} from '../../src/shared/search-state.ts'
-import { chamberBridge, type ChamberServerAggregate } from '../../src/shared/aggregate-store.ts'
+} from '@dsh-chamber/dsh-chamber-client-core/search-state'
+import { chamberBridge, type ChamberServerAggregate } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
 
 function server(id: string, connected: boolean): ChamberServerAggregate {
   return { id, sourceFingerprint: 'a'.repeat(64), kind: 'dsh', transport: 'ssh', label: id, connected,

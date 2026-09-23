@@ -21,7 +21,10 @@
  *     a top-level YAML array of loader patch entries (the exact format the
  *     dsh CLI's `--patch <path>` overlay and a bundle's cordis.patch.yml
  *     share, @deepseek-ai/dsh-app-boot loadOverlayPatches) inserting the
- *     client-graph row. Idempotent: content-identical files are left alone.
+ *     chamber host rows and, when the chamber open-in host package is seeded,
+ *     an id-targeted disable row for the official web-bundle open-in HOST half
+ *     chamber supersedes (audit arch-03 P2-3, design 20 §2.2/§6). Idempotent:
+ *     content-identical files are left alone.
  *
  * The overlay is appended to every spawn command line (webProfileArgs in
  * spawn-dsh.ts) and applies at host boot — a pre-existing running local
@@ -42,7 +45,13 @@ import { dirname, join } from 'node:path'
 // cordis-inserts.ts (cross-package protocol single-sourcing) — shared with
 // the desktop remote seed (plugin-sync.ts); only the fail-loud message
 // wording stays here.
-import { hasExactInsert, insertConflict, renderCordisInserts } from './cordis-inserts.ts'
+import {
+  hasExactInsert,
+  insertConflict,
+  renderCordisInserts,
+  renderCordisOverlay,
+  type CordisDisablePatch,
+} from './cordis-inserts.ts'
 import {
   atomicWritePrivateFileNoFollow,
   ensurePrivateDirectoryNoFollow,
@@ -59,7 +68,7 @@ export const HOST_GRAPH_PACKAGE_NAME = '@dsh-chamber/dsh-chamber-seed-client-gra
 export const HOST_GIT_WORKTREE_PACKAGE_NAME = '@dsh-chamber/dsh-chamber-seed-git-worktree'
 
 /** Chamber-owned host package that purges archived session content in-host
- *  (design 24: `archiveCleanup/{preview,purge}`). */
+ *  (design 24: `archiveCleanup/{purge,probe}`). */
 export const HOST_ARCHIVE_CLEANUP_PACKAGE_NAME = '@dsh-chamber/dsh-chamber-seed-archive-cleanup'
 
 /** Chamber-owned host package that serves the local open-in domain in-host
@@ -100,16 +109,74 @@ export const HOST_OPEN_IN_INSERT: HostPackageInsert = {
 }
 
 /**
+ * The official web bundle's open-in HOST row — `@deepseek-ai/dsh-host-open-in-app`,
+ * mounted by `@deepseek-ai/dsh-web-app`'s patch layer (the frozen pin's
+ * vendor/harness-packages/@deepseek-ai/dsh-web-app/cordis.patch.yml, the `insert`
+ * bundle's `- id: open-in-app` row) — and the id-targeted disable patch that
+ * supersedes it whenever chamber's own open-in host package is seeded.
+ *
+ * Root cause (audit arch-03 P2-3): chamber replaces BOTH halves (design 20
+ * §2.2/§6) — the renderer page-own-skips the official CLIENT row
+ * (renderer/src/chamber-covered.ts) and chamber's seed-open-in registers the
+ * host Remote — but the official HOST half still mounted its three open-in
+ * webServer routes with no caller, leaving the domain with a second live wire
+ * authority. The disable row rides the same `--patch`
+ * overlay, which composes AFTER every bundle layer and both user layers
+ * (dsh profile-boot allPatches), so a user layer that re-enables or
+ * re-configures the row is superseded too.
+ *
+ * Shape authority (exact file:line in the frozen pin):
+ * - row identity: vendor/harness-packages/@deepseek-ai/dsh-web-app/cordis.patch.yml:65-66
+ * - `PatchOptions.disabled?: boolean | null`:
+ *   vendor/harness-packages/@deepseek-ai/cordis-plugin-include/src/index.ts:145-156
+ * - id lookup + name guard + overrides copy, unmatched row warns and skips:
+ *   same file, `applyEntryPatches` (:58-128)
+ * - disable means "never init": vendor/harness-packages/@deepseek-ai/cordis-plugin-loader/src/config/entry.ts:19,
+ *   :84-108, :168-179.
+ */
+export const OFFICIAL_OPEN_IN_INSERT_ID = 'open-in-app'
+export const OFFICIAL_OPEN_IN_PACKAGE_NAME = '@deepseek-ai/dsh-host-open-in-app'
+export const OFFICIAL_OPEN_IN_DISABLE: CordisDisablePatch = {
+  id: OFFICIAL_OPEN_IN_INSERT_ID,
+  name: OFFICIAL_OPEN_IN_PACKAGE_NAME,
+}
+
+/**
  * One chamber host package: its loader overlay row plus the Typert Remote that
  * proves it live inside a RUNNING instance.
  *
- * THE single source for every consumer — the control-plane seed registry, the
- * gateway's syncable/probe map, the desktop's local+remote injection probes
- * and the connections plugin-management page all derive from this list.
- * Adding a chamber host package means adding ONE row here; a hand-maintained
- * parallel row table anywhere else is a defect (a
- * seeded host package MUST show up in the plugin-management page, and the
- * page must not hardcode the package set).
+ * THIS list is the single source for every chamber host domain's IDENTITY —
+ * the loader insert id/name plus the liveness probe method/args — and the
+ * consumers DERIVE from it: the control-plane seed registry, the gateway's
+ * syncable/probe maps, the desktop's local+remote injection probes and the
+ * connections plugin-management page.
+ *
+ * Identity is not the whole wiring: adding a chamber host package still needs
+ * ONE row here PLUS these hand-registered wire-ups, each with its own single
+ * source and each fail-loud when the domain is absent (a seed/sync skip at any
+ * of them is never acceptable):
+ *   1. control-plane local profile seed — src/index.ts
+ *      (`DEFAULT_HOST_*_PACKAGE_SOURCE_DIR` + `hostPackageSourceDirs`; a
+ *      missing insert id throws in `seedEntries`);
+ *   2. desktop Electron remote/gateway source dir — main.ts
+ *      `chamberHostSourceDirs`;
+ *   3. desktop Swift sidecar source dir — sidecar-ctx.ts
+ *      `chamberHostSourceDirsFor`;
+ *      (2)+(3) are consumed by plugin-sync.ts `chamberHostPackageSeedsFrom`,
+ *      which THROWS for a non-localOnly row with no sourceDir key; only a
+ *      mapped package whose dist/index.js is absent (existsSync in
+ *      `builtChamberHostPackageSeeds`) may be skipped;
+ *   4. dsh-runtime `REQUIRED_ACTIVATION_PROBES` — activation-gate.ts;
+ *   5. dsh-runtime `HOST_DOMAIN_PROBE_NAMES` — activation-gate.ts (stays
+ *      COMPLETE even for `localOnly` rows: the gateway's load-time pin
+ *      compares it wholesale);
+ *   6. dsh-runtime per-domain probe branch — runtime-probes.ts.
+ *
+ * packages/control-plane/test/plugins/host-domain-wiring-lockstep.test.ts
+ * executes that lockstep from THIS registry: forgetting any of the six fails
+ * it red. A hand-maintained parallel row table anywhere else is still a
+ * defect (a seeded host package MUST show up in the plugin-management page,
+ * and the page must not hardcode the package set).
  */
 export interface ChamberHostPackageDescriptor {
   /** The loader overlay row (id/name — see cordis-inserts.ts). */
@@ -235,15 +302,16 @@ export interface SeedEntry {
    *  (packages/gateway/src/plugins.ts) over its per-package domain map
    *  `HOST_PACKAGE_PROBE_DOMAINS` (cache presence per package), and
    *  dsh-runtime folds that derived list into the expected set through
-   *  `activationProbeNamesForDomains`. The hand-synced places that must stay
-   *  in lockstep — named explicitly: the per-package probeDomains attached
-   *  to the HOST_*_INSERT rows at the two seed-registry call sites
-   *  (control-plane/src/index.ts and gateway/src/index.ts — the values do
-   *  NOT live on the INSERT constants themselves), the gateway's
-   *  SYNCABLE_HOST_PACKAGES and HOST_PACKAGE_PROBE_DOMAINS, and
-   *  `HOST_DOMAIN_PROBE_NAMES` in
+   *  `activationProbeNamesForDomains`. Both seed-registry call sites attach
+   *  this field by DERIVING it from the row (`probeDomains:
+   *  [descriptor.probe.method]` in control-plane/src/index.ts and
+   *  gateway/src/index.ts), and the gateway's SYNCABLE_HOST_PACKAGES /
+   *  HOST_PACKAGE_PROBE_DOMAINS are likewise derived from this registry — the
+   *  remaining hand-registered consumer is `HOST_DOMAIN_PROBE_NAMES` in
    *  packages/dsh-runtime/src/activation-gate.ts (the same domain set, which
-   *  stays complete even for `localOnly` rows — see the descriptor's note). */
+   *  stays complete even for `localOnly` rows — see the descriptor's note),
+   *  pinned by the host-domain wiring lockstep test beside the six wire-ups
+   *  named on the descriptor. */
   probeDomains?: readonly string[]
 }
 
@@ -285,11 +353,14 @@ export function assertHostSeedEntryNaming(entries: readonly SeedEntry[]): void {
 /**
  * The canonical overlay content: a top-level YAML array of loader patch
  * entries — `[{ insert: [{ id: 'client-graph', name: '@dsh-chamber/…' }] }]`
+ * possibly followed by id-targeted disable rows
+ * (`{ id: 'open-in-app', name: '@deepseek-ai/dsh-host-open-in-app', disabled: true }`)
  * — matching @deepseek-ai/dsh-app-boot's loadOverlayPatches format exactly
  * (a `--patch` overlay and a bundle's cordis.patch.yml share the format;
- * rendered by the shared renderCordisInserts, single-sourced in
- * cordis-inserts.ts). `name` resolves through the profile's node_modules
- * anchor, which ensureSeedPackage fills.
+ * rendered by the shared renderCordisOverlay, single-sourced in
+ * cordis-inserts.ts). Insert `name`s resolve through the profile's
+ * node_modules anchor, which ensureSeedPackage fills; a disable row's `name`
+ * is the upstream bundle's own package specifier.
  */
 
 /**
@@ -396,14 +467,22 @@ function ensureSeedTargetParent(dshHome: string, packageName: string, relative: 
  * plane's own layout, so an unwritable overlay is a plane problem, never a
  * silent skip.
  * @param stateDir - the control-plane state root.
+ * @param inserts - the chamber host rows this spawn must mount (default: the
+ *   client-graph row).
+ * @param disables - id-targeted non-insert rows applied after every layer
+ *   (default: none). The production caller ({@link resolveLocalHostGraphOverlay})
+ *   passes {@link OFFICIAL_OPEN_IN_DISABLE} exactly when the chamber open-in
+ *   host package is seeded, so the superseded official host half is never
+ *   mounted next to chamber's own Remote.
  * @returns the overlay path to pass to spawns as `--patch`.
  */
 export function buildPatchOverlay(
   stateDir: string,
   inserts: readonly HostPackageInsert[] = [HOST_GRAPH_INSERT],
+  disables: readonly CordisDisablePatch[] = [],
 ): string {
   const path = join(stateDir, HOST_GRAPH_PATCH_FILENAME)
-  const content = renderCordisInserts(inserts)
+  const content = renderCordisOverlay(inserts, disables)
   ensurePrivateDirectoryNoFollow(stateDir, 0o700, { existingMode: 'preserve' })
   if (readSeedTarget(path) === content) return path
   atomicWritePrivateFileNoFollow(path, content, { mode: 0o600 })

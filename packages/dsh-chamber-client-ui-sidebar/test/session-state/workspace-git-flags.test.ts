@@ -8,7 +8,7 @@ import assert from 'node:assert/strict'
 import {
   clearWorkspaceGitFlags, getSourceRepoLayouts, getWorkspaceGitFlag, getWorkspaceGitFlagsVersion,
   hiddenByMainWorkspaceFold, isSourceGitFlagsLoaded, markSourceGitFlagsLoaded, retainSourceWorkspaceFlags, setSourceRepoLayouts, setWorkspaceGitFlag,
-} from '../../src/shared/workspace-git-flags.ts'
+} from '@dsh-chamber/dsh-chamber-client-core/workspace-git-flags'
 
 test('set/clear + version counter bumps on change only', () => {
   const v0 = getWorkspaceGitFlagsVersion()
@@ -42,7 +42,7 @@ test('repo layouts publish + clear with the source', () => {
   clearWorkspaceGitFlags('s'); assert.equal(getSourceRepoLayouts('s').length, 0)
 })
 
-test('git-flags-loaded marker: per-source, idempotent, reset on clear (2026-10, F4)', () => {
+test('git-flags-loaded marker: per-source, idempotent, reset on clear ( F4)', () => {
   const v0 = getWorkspaceGitFlagsVersion()
   assert.equal(isSourceGitFlagsLoaded('s'), false, 'not loaded by default')
   markSourceGitFlagsLoaded('s'); assert.equal(isSourceGitFlagsLoaded('s'), true)

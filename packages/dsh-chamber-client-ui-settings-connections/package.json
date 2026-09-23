@@ -11,16 +11,16 @@
     "directory": "packages/dsh-chamber-client-ui-settings-connections"
   },
   "type": "module",
-  "main": "lib/index.js",
-  "types": "lib/types/index.d.ts",
   "exports": {
     ".": {
-      "types": "./lib/types/index.d.ts",
-      "default": "./lib/index.js"
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
     },
-    "./client": "./src/client/index.ts",
+    "./client": {
+      "types": "./src/client/index.ts",
+      "default": "./src/client/index.ts"
+    },
     "./section": "./src/client/ConnectionsSection.tsx",
-    "./src/*": "./src/*",
     "./package.json": "./package.json"
   },
   "dsh": {
@@ -34,6 +34,8 @@
   },
   "license": "MIT",
   "dependencies": {
+    "@dsh-chamber/dsh-chamber-client-core": "workspace:^",
+    "@dsh-chamber/renderer": "workspace:^",
     "clsx": "^2.0.0"
   },
   "peerDependencies": {
@@ -54,11 +56,6 @@
     "@types/react": "~18.3.1",
     "react": "^18.2.0"
   },
-  "files": [
-    "lib/index.js",
-    "lib/client.js",
-    "lib/types/**/*.d.ts"
-  ],
   "scripts": {
     "test": "node ./scripts/test.mjs"
   }

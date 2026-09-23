@@ -40,7 +40,7 @@ export const LIFECYCLE_MODULES = [
   'packages/dsh-api-gateway/src/client/journal-stream.ts',
   'packages/dsh-api-gateway/src/client/remote-stream.ts',
   'packages/dsh-stream-state/src/session-authority.ts',
-  'packages/dsh-chamber-client-ui-sidebar/src/shared/session-fact-reconcile.ts',
+  'packages/dsh-chamber-client-core/src/session-fact-reconcile.ts',
   'packages/dsh-chamber-client-ui-open-in/src/client/session-stream-health.ts',
   'packages/dsh-chamber-client-ui-open-in/src/client/session-stream-health-probe.ts',
   'packages/dsh-chamber-client-ui-open-in/src/client/session-stream-health-seat.ts',
@@ -60,14 +60,14 @@ export const THRESHOLD_SCOPE = [
   'packages/renderer/src/reveal-gate.ts',
   'packages/renderer/src/retention.ts',
   'packages/dsh-chamber-client-ui-open-in/src/client',
-  'packages/dsh-chamber-client-ui-sidebar/src/shared/session-fact-reconcile.ts',
+  'packages/dsh-chamber-client-core/src/session-fact-reconcile.ts',
 ]
 
 /** Directories scanned for 'depends on a lifecycle module' (import or reference). */
 export const DEPENDENCY_ROOTS = [
   'packages/renderer/src',
   'packages/dsh-chamber-client-ui-open-in/src',
-  'packages/dsh-chamber-client-ui-sidebar/src',
+  'packages/dsh-chamber-client-core/src',
   'packages/dsh-chamber-client-ui-mobile/src',
   'packages/dsh-chamber-client-ui-layout/src',
 ]

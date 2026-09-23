@@ -8,12 +8,13 @@
   "types": "lib/types/index.d.ts",
   "exports": {
     ".": {
-      "types": "./lib/types/index.d.ts",
-      "default": "./lib/index.js"
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
     },
-    "./client": "./src/client/index.ts",
-    "./shared": "./src/shared/index.ts",
-    "./src/*": "./src/*",
+    "./client": {
+      "types": "./src/client/index.ts",
+      "default": "./src/client/index.ts"
+    },
     "./package.json": "./package.json"
   },
   "dsh": {
@@ -30,6 +31,7 @@
   },
   "license": "MIT",
   "dependencies": {
+    "@dsh-chamber/dsh-chamber-client-core": "workspace:^",
     "@dsh-chamber/dsh-chamber-client-ui-sidebar": "workspace:^"
   },
   "peerDependencies": {

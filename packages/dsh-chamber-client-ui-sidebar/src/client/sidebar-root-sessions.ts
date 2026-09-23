@@ -5,10 +5,10 @@
  */
 
 import { useRef } from 'react'
-import { chamberBridge, type ChamberServerAggregate } from '../shared/aggregate-store.ts'
-import { increasedForkTitle } from '../shared/derive.ts'
-import { getInstanceClient, renameSession, stopArchivedSubtree } from '../shared/instance-api.ts'
-import { archiveSessionForSource, createSessionForSource, forkSessionForSource } from '../shared/session-mutations.ts'
+import { chamberBridge, type ChamberServerAggregate } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
+import { increasedForkTitle } from '@dsh-chamber/dsh-chamber-client-core/derive'
+import { getInstanceClient, renameSession, stopArchivedSubtree } from '@dsh-chamber/dsh-chamber-client-core/instance-api'
+import { archiveSessionForSource, createSessionForSource, forkSessionForSource } from '@dsh-chamber/dsh-chamber-client-core/session-mutations'
 import type { RunAction } from './sidebar-root-actions.ts'
 
 export function useSidebarSessionActions({ runAction }: { runAction: RunAction }) {

@@ -10,7 +10,7 @@
  * - 输出：人读表格；--json 时 JSON.stringify 原样输出。
  */
 
-import { createControlPlane, DEFAULT_CONTROL_PLANE_PORT } from '@dsh-chamber/control-plane'
+import { createControlPlane, DEFAULT_CONTROL_PLANE_PORT, StateRootLeaseError } from '@dsh-chamber/control-plane'
 import { followNewLines } from './follow-filter.ts'
 
 const DEFAULT_URL = `http://127.0.0.1:${DEFAULT_CONTROL_PLANE_PORT}`
@@ -128,8 +128,12 @@ function usage() {
 
 环境变量:
   DSH_CHAMBER_URL     控制面 URL（默认 ${DEFAULT_URL}）
-  DSH_CHAMBER_STATE   控制面状态目录（serve 默认 ~/.dsh-chamber）
+  DSH_CHAMBER_STATE   控制面状态目录（serve --state-dir 的回退；默认 ~/.dsh-chamber）
   DSH_CHAMBER_DSH_PATH dsh 工作区路径（serve --dsh-path 的默认值）
+
+serve 的状态目录按 --state-dir > DSH_CHAMBER_STATE > ~/.dsh-chamber 解析；同一状态
+目录同一时刻只允许一个写者，已有活写者时启动失败（stderr 含 state_root_locked），
+停掉对方或显式指定 --state-dir。
 `)
 }
 
@@ -263,7 +267,11 @@ async function serveCommand({ flags }: ParsedArgs) {
   try {
     await plane.start()
   } catch (error) {
-    logger.error(`failed to start: ${String(error)}`)
+    // A lease conflict while re-acquiring (the root was taken over between
+    // construction and start) must keep the machine-readable code in stderr.
+    logger.error(error instanceof StateRootLeaseError
+      ? `failed to start: ${error.code}: ${error.message}`
+      : `failed to start: ${String(error)}`)
     process.exit(1)
   }
 }
@@ -579,6 +587,13 @@ async function main(argv: string[]) {
 try {
   await main(process.argv.slice(2))
 } catch (err) {
-  console.error(`dsh-chamber: ${err instanceof Error ? err.message : String(err)}`)
+  // A state-root lease conflict (createControlPlane construction) must expose
+  // the machine-readable code literally; the message already carries the
+  // root/pid/flavor and the escape hatch, and no stack is ever printed.
+  if (err instanceof StateRootLeaseError) {
+    console.error(`dsh-chamber: ${err.code}: ${err.message}`)
+  } else {
+    console.error(`dsh-chamber: ${err instanceof Error ? err.message : String(err)}`)
+  }
   process.exit(1)
 }

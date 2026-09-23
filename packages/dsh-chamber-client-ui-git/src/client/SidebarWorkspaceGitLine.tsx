@@ -20,7 +20,7 @@ import {
   IconBranchOutline16, IconPlusOutline16, IconRefreshOutline16, IconTrashOutline16,
   RiskConfirmation, Tag,
 } from '@deepseek-ai/dsh-client-ui-primitives'
-import { chamberBridge } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
+import { chamberBridge } from '@dsh-chamber/dsh-chamber-client-core'
 import {
   clearActionError, createSessionHere, currentSessionIsBlank, gitCoordinator, removeUnregisteredWorktree, retryRecovery,
 } from '../shared/coordinator.ts'

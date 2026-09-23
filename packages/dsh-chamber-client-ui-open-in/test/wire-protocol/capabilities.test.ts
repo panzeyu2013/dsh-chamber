@@ -7,9 +7,9 @@ import {
   parseOpenInResult,
   parseOpenInSource,
   parseOpenInSourceFingerprint,
-  usableOpenInApps,
   type OpenInApp,
 } from '../../src/shared/capabilities.ts'
+import { buildOpenInViewModel } from '../../src/shared/open-in-view-model.ts'
 import { VALID_APPS as validApps } from '../support/harness.ts'
 
 test('parseOpenInApps strictly accepts the capability projection', () => {
@@ -86,7 +86,7 @@ test('open-in launch preserves the boot-bound proof across a same-id same-fields
   assert.equal(parseOpenInSourceFingerprint(parseOpenInSource('local', 'local')!, oldFingerprint), null)
 })
 
-test('usableOpenInApps filters by transport, independently of dsh/gateway target kind', () => {
+test('the main-pool view-model filters by transport, independently of dsh/gateway target kind', () => {
   const local = parseOpenInSource('local', 'local')
   const dshSsh = parseOpenInSource('dsh-dev', 'ssh')
   const gatewaySsh = parseOpenInSource('gateway-gw', 'ssh')
@@ -100,10 +100,15 @@ test('usableOpenInApps filters by transport, independently of dsh/gateway target
     remoteCapable: true,
     available: false,
   }
-  assert.deepEqual(usableOpenInApps([...validApps, unavailable], local), validApps)
-  assert.deepEqual(usableOpenInApps([...validApps, unavailable], dshSsh), [validApps[1]])
-  assert.deepEqual(usableOpenInApps([...validApps, unavailable], gatewaySsh), [validApps[1]])
-  assert.deepEqual(usableOpenInApps([...validApps, unavailable], dshHttp), [])
-  assert.deepEqual(usableOpenInApps([...validApps, unavailable], gatewayHttp), [])
-  assert.deepEqual(usableOpenInApps(null, local), [])
+  const pool = [...validApps, unavailable]
+  // The production single decision surface (buildOpenInViewModel), main pool
+  // only: suppression follows the transport, never the dsh/gateway target kind.
+  const ids = (source: NonNullable<ReturnType<typeof parseOpenInSource>>): string[] =>
+    buildOpenInViewModel({ source, localEntries: null, mainEntries: pool }).entries.map(entry => entry.id)
+  assert.deepEqual(ids(local), validApps.map(app => app.id))
+  assert.deepEqual(ids(dshSsh), [validApps[1].id])
+  assert.deepEqual(ids(gatewaySsh), [validApps[1].id])
+  assert.deepEqual(ids(dshHttp), [])
+  assert.deepEqual(ids(gatewayHttp), [])
+  assert.deepEqual(buildOpenInViewModel({ source: local, localEntries: null, mainEntries: null }).entries, [])
 })

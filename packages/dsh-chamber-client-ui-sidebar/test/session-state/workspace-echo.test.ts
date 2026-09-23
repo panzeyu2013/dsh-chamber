@@ -16,19 +16,18 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import {
   forgetPendingWorkspaces,
-  PENDING_WORKSPACE_TTL_MS,
   reconcilePendingWorkspaces,
   recordPendingWorkspace,
   removePendingWorkspace,
   renamePendingWorkspace,
   sweepPendingWorkspaces,
   withWorkspaceEcho,
-  workspaceEchoRow,
   type PendingWorkspace,
   type WorkspaceEchoLedger,
-} from '../../src/shared/workspace-echo.ts'
-import { deriveServerWorkspaces } from '../../src/shared/derive.ts'
-import type { InstanceAggregate, SessionRow, WorkspaceRow } from '../../src/shared/instance-api.ts'
+} from '@dsh-chamber/dsh-chamber-client-core'
+import { PENDING_WORKSPACE_TTL_MS, workspaceEchoRow } from '../../../dsh-chamber-client-core/src/workspace-echo.ts'
+import { deriveServerWorkspaces } from '@dsh-chamber/dsh-chamber-client-core/derive'
+import type { InstanceAggregate, SessionRow, WorkspaceRow } from '@dsh-chamber/dsh-chamber-client-core/instance-api'
 
 const basename = (path: string): string => path.slice(path.lastIndexOf('/') + 1)
 
@@ -353,7 +352,7 @@ test('wiring: the single funnel publishes every workspace fact right after its w
   // bugs return. 事实由
   // shared/workspace-mutations.ts 的单一出口随 wire 调用发布——逐点发布正是 Git worktree
   // create/adopt 漏发、行要等用户点开那个服务器才出现的成因。
-  const funnel = readFileSync(new URL('../../src/shared/workspace-mutations.ts', import.meta.url), 'utf8')
+  const funnel = readFileSync(new URL('../../../dsh-chamber-client-core/src/workspace-mutations.ts', import.meta.url), 'utf8')
   const code = funnel.replace(/\s+/g, ' ')
   const createWire = code.indexOf('await createWorkspace(getInstanceClient(sourceId), path)')
   const decorate = code.indexOf('try { options.beforePublish(created) } catch (error) {')

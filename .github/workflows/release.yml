@@ -366,6 +366,12 @@ jobs:
         run: pnpm run verify:no-dead-exports
       - name: Upstream lifecycle contract (first-frame bound retirement tripwire)
         run: pnpm run verify:upstream-lifecycle-contract
+      # 包边界门（R4 P7）——与 ci.yml 的 push 路径同一条命令；file-only（只读、离线、
+      # 自带 --self-test 负控），release-workflow policy 从 ci.yml 机械对齐门集合，
+      # 单侧缺失即红。生产面禁跨包相对 import（vendor 直穿按 registry 放行）+
+      # exports 面白名单。
+      - name: Package boundaries (cross-package relative imports + exports allowlist)
+        run: pnpm run verify:package-boundaries
       # Upstream design-token conformance (S1–S7) — same gate as ci.yml's push
       # path; needs the bootstrapped vendor tree above.
       - name: Upstream design-token conformance (S1–S7)

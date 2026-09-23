@@ -8,8 +8,8 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { gapSignature } from '../../src/shared/derive.ts'
-import type { ServerBootGap } from '../../src/shared/aggregate-store.ts'
+import { gapSignature } from '@dsh-chamber/dsh-chamber-client-core/derive'
+import type { ServerBootGap } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
 
 /** The documented shape, plus payload fields the type does not know yet. */
 const asGap = (value: Record<string, unknown>): ServerBootGap => value as unknown as ServerBootGap

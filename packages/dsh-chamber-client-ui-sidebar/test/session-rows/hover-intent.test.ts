@@ -18,10 +18,10 @@ import assert from 'node:assert/strict'
 import {
   createHoverIntent,
   dismissVisibleRowCard,
-  HOVER_CLOSE_GRACE_MS,
   HOVER_OPEN_DELAY_MS,
   type HoverIntent,
-} from '../../src/shared/hover-intent.ts'
+} from '@dsh-chamber/dsh-chamber-client-core/hover-intent'
+import { HOVER_CLOSE_GRACE_MS } from '../../../dsh-chamber-client-core/src/hover-intent.ts'
 
 /** Machines created by the current test. The visible-card slot is page-global (two N-ctx shells
  * share it), so every test disposes what it built — a card left open here would be dismissed by

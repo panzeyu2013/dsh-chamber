@@ -7,9 +7,9 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  RESTART_RELOAD_BUDGET_MS, armLocalDshRestartCompletion, armWindowReloadWhenServed, reloadWindow,
-  waitForLocalDshServing,
-} from '../../src/shared/restart-window-reload.ts'
+  RESTART_RELOAD_BUDGET_MS, armLocalDshRestartCompletion, armWindowReloadWhenServed,
+} from '@dsh-chamber/dsh-chamber-client-core'
+import { reloadWindow, waitForLocalDshServing } from '../../../dsh-chamber-client-core/src/restart-window-reload.ts'
 
 /** Run `body` with a countable page-reload spy installed as globalThis.window. */
 async function withReloadSpy<T>(body: (reloads: () => number) => Promise<T>): Promise<T> {

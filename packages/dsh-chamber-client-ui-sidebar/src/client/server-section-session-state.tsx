@@ -5,9 +5,9 @@
  */
 import type { ReactNode } from 'react'
 import { IconChecklistOutline14, IconQuestionOutline14, IconWarningOutline16, StateDot } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { ChamberServerAggregate } from '../shared/aggregate-store.ts'
-import { runningRingVisible } from '../shared/derive.ts'
-import { sessionRowState, subagentActivityOf } from '../shared/session-row-state.ts'
+import type { ChamberServerAggregate } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
+import { runningRingVisible } from '@dsh-chamber/dsh-chamber-client-core/derive'
+import { sessionRowState, subagentActivityOf } from '@dsh-chamber/dsh-chamber-client-core/session-row-state'
 import { useSidebarSection } from './sidebar-context.ts'
 import cc from './sidebar-chamber.module.css'
 

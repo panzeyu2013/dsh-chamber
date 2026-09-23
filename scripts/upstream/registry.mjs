@@ -8,6 +8,7 @@
  * canonical 规则（`verify-registry.mjs` 逐字节强制，`registry-views.mjs --write` 产出）：
  * - 2 空格缩进 / LF / 末尾换行；顶层与 entry 键按固定顺序；classify 内映射按键排序；
  *   `entries` **保持数组顺序**（C2 报告顺序由它决定，不许重排）；
+ * - `vendorSourceConsumers` 按 (consumer, vendorFile) 排序（C16 登记是集合语义）；
  * - 字符串数组（criteria/deviations/relatedGates/symbols/…）排序。
  *
  * 有意不做的事：这里不读文件系统、不解析 deviations.md、不渲染文档 —— 那些属于
@@ -32,11 +33,17 @@ export const ENTRY_STATUSES = Object.freeze(['aligned', 'open', 'accepted', 'not
 /** 需要 `classify` 块（文件级分类）的类型。 */
 export const CLASSIFIED_TYPES = Object.freeze(['fork', 'seed'])
 
-const TOP_KEYS = ['schema', 'pins', 'authorityEnum', 'chamberNamedForks', 'excludedUpstreamDirs', 'criteriaCodeOnly', 'generatedBlocks', 'entries', 'notes']
+const TOP_KEYS = ['schema', 'pins', 'authorityEnum', 'chamberNamedForks', 'excludedUpstreamDirs', 'criteriaCodeOnly', 'vendorSourceConsumers', 'generatedBlocks', 'entries', 'notes']
 const ENTRY_KEYS = ['id', 'type', 'name', 'ours', 'upstream', 'upstreamFormer', 'versionAnchor', 'classify', 'authority', 'criteria', 'deviations', 'relatedGates', 'symbols', 'evidence', 'status', 'rationale']
 const CLASSIFY_KEYS = ['patched', 'own', 'ownPrefix', 'ownNotes', 'dropped', 'droppedNotes']
+/** `vendorSourceConsumers[]` 的字段集（C16：登记一条 vendor 源直穿的最小机械事实）。 */
+const VENDOR_CONSUMER_KEYS = ['consumer', 'vendorFile', 'symbols', 'reason', 'retiresWhen']
+/** `vendorSourceConsumers[].symbols[]` 的允许形态（一个 ECMAScript 标识符）。 */
+const VENDOR_SYMBOL_PATTERN = /^[A-Za-z_$][A-Za-z0-9_$]*$/u
 const ID_PATTERN = /^(fork|seed|seam|mirror|artifact|seat)\.[a-z0-9][a-z0-9-]*$/
 const DEVIATION_ID_PATTERN = /^[STPGD]-?[0-9]+$/
+/** `entries[].relatedGates` 引用真实门：根 package.json script 名或仓内脚本/测试路径（存在性门在 verify-registry.mjs）。 */
+export const GATE_REF_PATTERN = /^[A-Za-z0-9][A-Za-z0-9:._/@-]*$/
 const BLOCK_ID_PATTERN = /^[a-z0-9][a-z0-9.-]*$/
 export const SYMBOL_PATTERN = /^[^#]+#(=literal:.+|[A-Za-z_$][A-Za-z0-9_$.-]*)$/
 
@@ -68,6 +75,21 @@ function canonicalizeClassify(classify) {
   return out
 }
 
+/** canonical 形态：按 (consumer, vendorFile) 排序，符号数组排序（集合语义，作者顺序不算事实）。 */
+function canonicalizeVendorConsumers(consumers) {
+  return consumers
+    .map((entry) => ({
+      consumer: entry.consumer,
+      vendorFile: entry.vendorFile,
+      symbols: sortedStrings(entry.symbols ?? []),
+      reason: entry.reason,
+      retiresWhen: entry.retiresWhen,
+    }))
+    .sort((a, b) => (a.consumer === b.consumer
+      ? (a.vendorFile < b.vendorFile ? -1 : a.vendorFile > b.vendorFile ? 1 : 0)
+      : (a.consumer < b.consumer ? -1 : 1)))
+}
+
 function canonicalizeEntry(entry) {
   const out = {}
   for (const key of ENTRY_KEYS) {
@@ -91,7 +113,8 @@ export function canonicalizeRegistry(registry) {
         runtimeLine: registry.pins.runtimeLine,
         forkAnchors: sortedStrings(registry.pins.forkAnchors ?? []),
       }
-    } else if (Array.isArray(registry[key])) out[key] = sortedStrings(registry[key])
+    } else if (key === 'vendorSourceConsumers') out[key] = canonicalizeVendorConsumers(registry[key])
+    else if (Array.isArray(registry[key])) out[key] = sortedStrings(registry[key])
     else out[key] = registry[key]
   }
   return out
@@ -165,6 +188,43 @@ export function validateRegistry(registry) {
     for (const id of registry.generatedBlocks) if (!BLOCK_ID_PATTERN.test(id)) push(`generatedBlocks id 非法: ${id}`)
   }
 
+  // vendorSourceConsumers（C16）：一条 = 一次「package 生产源相对 import 出包到 vendor/」的直穿登记。
+  // 符号集合/存在性由 C16 对真实 import 双向判定；这里只锁形状与最小事实（consumer 在 packages/ 下、
+  // vendorFile 在 vendor/ 下、至少一个合法符号、无重复登记），防止块被清空/写坏后静默放行。
+  if (registry.vendorSourceConsumers !== undefined) {
+    if (!Array.isArray(registry.vendorSourceConsumers)) push('vendorSourceConsumers 必须是数组')
+    else {
+      const seenConsumers = new Set()
+      for (const [index, item] of registry.vendorSourceConsumers.entries()) {
+        const at = `vendorSourceConsumers[${index}]`
+        if (!isPlainObject(item)) { push(`${at} 不是对象`); continue }
+        for (const key of Object.keys(item)) if (!VENDOR_CONSUMER_KEYS.includes(key)) push(`${at} 未知字段: ${key}`)
+        for (const key of ['consumer', 'vendorFile', 'reason', 'retiresWhen']) {
+          if (typeof item[key] !== 'string' || item[key] === '') push(`${at}.${key} 必须是非空字符串`)
+        }
+        if (typeof item.consumer === 'string' && item.consumer !== '' && !item.consumer.startsWith('packages/')) {
+          push(`${at}.consumer 必须是 packages/ 下的仓内路径: ${JSON.stringify(item.consumer)}`)
+        }
+        if (typeof item.vendorFile === 'string' && item.vendorFile !== '' && !item.vendorFile.startsWith('vendor/')) {
+          push(`${at}.vendorFile 必须是 vendor/ 下的仓内路径: ${JSON.stringify(item.vendorFile)}`)
+        }
+        if (!Array.isArray(item.symbols) || item.symbols.length === 0) {
+          push(`${at}.symbols 必须是非空字符串数组（清空符号 = 直穿的消费面不可证明）`)
+        } else {
+          for (const symbol of item.symbols) {
+            if (typeof symbol !== 'string' || !VENDOR_SYMBOL_PATTERN.test(symbol)) push(`${at}.symbols 非法符号: ${JSON.stringify(symbol)}`)
+          }
+          if (new Set(item.symbols).size !== item.symbols.length) push(`${at}.symbols 有重复`)
+        }
+        if (typeof item.consumer === 'string' && typeof item.vendorFile === 'string') {
+          const pair = item.consumer + ' -> ' + item.vendorFile
+          if (seenConsumers.has(pair)) push(`${at}: (consumer, vendorFile) 重复登记`)
+          else seenConsumers.add(pair)
+        }
+      }
+    }
+  }
+
   if (!Array.isArray(registry.entries) || registry.entries.length === 0) {
     push('entries 必须是非空数组')
     return findings
@@ -226,10 +286,10 @@ export function validateRegistry(registry) {
     if (entry.authority !== undefined && !(registry.authorityEnum ?? []).includes(entry.authority)) push(`${at}.authority 不在 authorityEnum: ${entry.authority}`)
     if (!Array.isArray(entry.criteria)) push(`${at}.criteria 必须是数组`)
     else for (const id of entry.criteria) if (!CRITERIA_IDS.includes(id)) push(`${at}.criteria 未知判据 id: ${id}`)
-    for (const key of ['deviations', 'relatedGates']) {
-      if (!Array.isArray(entry[key])) { push(`${at}.${key} 必须是数组`); continue }
-      for (const id of entry[key]) if (typeof id !== 'string' || !DEVIATION_ID_PATTERN.test(id)) push(`${at}.${key} id 非法: ${JSON.stringify(id)}`)
-    }
+    if (!Array.isArray(entry.deviations)) push(`${at}.deviations 必须是数组`)
+    else for (const id of entry.deviations) if (typeof id !== 'string' || !DEVIATION_ID_PATTERN.test(id)) push(`${at}.deviations id 非法: ${JSON.stringify(id)}`)
+    if (!Array.isArray(entry.relatedGates)) push(`${at}.relatedGates 必须是数组`)
+    else for (const ref of entry.relatedGates) if (typeof ref !== 'string' || !GATE_REF_PATTERN.test(ref)) push(`${at}.relatedGates 门引用非法（要求根 package.json script 名或仓内脚本路径）: ${JSON.stringify(ref)}`)
     if (!Array.isArray(entry.symbols)) push(`${at}.symbols 必须是数组`)
     else for (const symbol of entry.symbols) if (typeof symbol !== 'string' || !SYMBOL_PATTERN.test(symbol)) push(`${at}.symbols 格式非法（要求 path#symbol 或 path#=literal:…）: ${JSON.stringify(symbol)}`)
     if (!ENTRY_STATUSES.includes(entry.status)) push(`${at}.status 非法: ${JSON.stringify(entry.status)}`)

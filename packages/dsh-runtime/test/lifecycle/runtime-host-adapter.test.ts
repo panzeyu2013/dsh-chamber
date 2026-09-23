@@ -2,7 +2,8 @@
  * RuntimeHostAdapter seam + shared fake fixture smoke test (design 18 §9.1).
  *
  * Proves the shared core is host-agnostic: the `FakeHostAdapter` satisfies the
- * `RuntimeHostAdapter` interface (re-exported from the package index) over a
+ * `RuntimeHostAdapter` interface (imported from its definition module — the
+ * documented sketch is deliberately not part of the package entry) over a
  * temp state root, an in-memory clock, and recorded spawn/stop/restart fakes —
  * no Electron/userData/IPC.
  */
@@ -10,12 +11,12 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { existsSync } from 'node:fs'
 import { REQUIRED_ACTIVATION_PROBES } from '../../src/activation-gate.ts'
-import type { RuntimeHostAdapter } from '../../src/index.ts'
+import type { RuntimeHostAdapter } from '../../src/runtime-host-adapter.ts'
 import { FakeHostAdapter } from '../support/fake-adapter.ts'
 
 test('FakeHostAdapter satisfies RuntimeHostAdapter over a temp state root', async () => {
   const fake = new FakeHostAdapter()
-  const adapter: RuntimeHostAdapter = fake // assignability check against the package index
+  const adapter: RuntimeHostAdapter = fake // assignability check against the definition module
   assert.ok(existsSync(adapter.stateRoot()), 'stateRoot is a real temp dir')
   assert.ok(existsSync(adapter.dshHome()), 'dshHome is a real temp dir')
   assert.equal(adapter.shellVersion(), '0.2.0-beta.1')

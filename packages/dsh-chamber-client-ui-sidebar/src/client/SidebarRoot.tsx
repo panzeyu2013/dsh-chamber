@@ -128,9 +128,9 @@ import {
   BrandWordmark, FishLogo, IconNewChatOutline16, IconPanelLeftOutline16, Tooltip,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { SidebarRootComponentProps } from './contract/slots.ts'
-import { chamberBridge } from '../shared/aggregate-store.ts'
-import { getInstanceClient, searchSessions } from '../shared/instance-api.ts'
-import { setSearchFetcher } from '../shared/search-state.ts'
+import { chamberBridge } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
+import { getInstanceClient, searchSessions } from '@dsh-chamber/dsh-chamber-client-core/instance-api'
+import { setSearchFetcher } from '@dsh-chamber/dsh-chamber-client-core/search-state'
 import { SessionTodoArea } from './SessionTodoArea.tsx'
 import { ServerSection, sourceHeaderActivatable, sourceHeaderTitle } from './ServerSection.tsx'
 import { SidebarSectionContext, sourceAccentStyle, type SidebarSectionContextValue } from './sidebar-context.ts'

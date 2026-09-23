@@ -4,7 +4,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { openErrorKey, withoutOpenError } from '../../src/shared/open-outcome.ts'
+import { openErrorKey, withoutOpenError } from '@dsh-chamber/dsh-chamber-client-core/open-outcome'
 
 test('openErrorKey produces the reader/writer-shared rowErrors key shape', () => {
   assert.equal(openErrorKey('local', 'session-1'), 'local/session/session-1/open')

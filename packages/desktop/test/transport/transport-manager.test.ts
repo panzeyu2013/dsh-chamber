@@ -1,6 +1,6 @@
 /**
  * Transport manager (design 03 §2.2, desktop main process) unit tests — part 1:
- * registry delta/password retirement, instances persistence, the ssh phase
+ * registry delta, instances persistence, the ssh phase
  * machine (connecting → ready / error), option guards and stderr redaction.
  *
  * Sibling part: transport-connection-recovery.test.ts (load recovery, auth
@@ -13,7 +13,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { attemptCommittedRegistryPush, computePasswordRetirementIds, computeRemovedInstanceIds, computeRetiredInstanceIds, createTransportManager } from '../../transport-manager.ts'
+import { attemptCommittedRegistryPush, computeRemovedInstanceIds, computeRetiredInstanceIds, createTransportManager } from '../../transport-manager.ts'
 import { MAX_TRANSPORT_INSTANCES } from '../../transport-provider.ts'
 import type { TransportInstanceInput, TransportInstanceSpec, TransportKind, TransportProvider } from '../../transport-provider.ts'
 import { redactSshStderr, SERVER_ALIVE_COUNT_MAX, SERVER_ALIVE_INTERVAL_SECONDS, sshProvider } from '../../ssh-provider.ts'
@@ -48,21 +48,6 @@ test('registry lifecycle retires deletion and transport identity edits, but not 
   assert.deepEqual(computeRetiredInstanceIds(before, [{ ...before[0], sshPort: 2222 }]), ['same'])
   assert.deepEqual(computeRetiredInstanceIds(before, [{ ...before[0], remotePort: 4080 }]), ['same'])
   assert.deepEqual(computeRetiredInstanceIds(before, []), ['same'])
-})
-test('password ownership follows the SSH authentication peer, not unrelated host metadata', () => {
-  const before: TransportInstanceSpec[] = [{
-    id: 'same', label: 'old label', kind: 'dsh', transport: 'ssh', insecureHttp: false,
-    host: 'old.example.com', user: 'alice', sshPort: 22, remotePort: 3080,
-    serviceName: 'dsh-old', remoteDshHome: '~/.old',
-  }]
-  assert.deepEqual(computePasswordRetirementIds(before, []), ['same'])
-  assert.deepEqual(computePasswordRetirementIds(before, [{ ...before[0], host: 'new.example.com' }]), ['same'])
-  assert.deepEqual(computePasswordRetirementIds(before, [{ ...before[0], user: 'bob' }]), ['same'])
-  assert.deepEqual(computePasswordRetirementIds(before, [{ ...before[0], sshPort: 2222 }]), ['same'])
-  const nonAuthenticationEdit: TransportInstanceSpec[] = [{
-    ...before[0], label: 'new label', remotePort: 4080, serviceName: 'dsh-new', remoteDshHome: '~/.new',
-  }]
-  assert.deepEqual(computePasswordRetirementIds(before, nonAuthenticationEdit), [])
 })
 test('a renderer send throw after registry commit is a loud delivery miss, never a save failure', () => {
   const hostile = new Proxy({}, {

@@ -459,7 +459,7 @@ chrome；`[role="menu"] [role="menuitem"][aria-selected]` 高亮信号在本 pin
   的 `grid-template-columns: 0 minmax(0,1fr) 0` 锁不可能在上游改掉中心列 key 之后把
   会话内容困在 0px 第一轨（此时页面退化为官方窄窗布局）。
 
-**会话打开停滞提示的锚点（2026-09-14；取值空间 2026-12 重审）**，同样全为属性形：
+**会话打开停滞提示的锚点（2026-09-14；取值空间 重审）**，同样全为属性形：
 
 - `[data-chat-flow]`——`ui-chat` 的消息列；缺失即屏幕上没有会话面，其余锚点一律不读；
 - flow 的**最近** `[data-phase]` 祖先——会话根（`ConversationRoot.tsx`），其属性取值
@@ -470,7 +470,7 @@ chrome；`[role="menu"] [role="menuitem"][aria-selected]` 高亮信号在本 pin
   子节点，同时是**会话身份**：该出口是会话作用域槽，渲染器按会话重挂；keyed 的
   root 作用域 `[data-phase]` 节点则会跨会话复用。
 
-**主题观察器的锚点（2026-12）**：`data-ds-dark-theme`——`index.ts` 用
+**主题观察器的锚点（）**：`data-ds-dark-theme`——`index.ts` 用
 `MutationObserver.observe(document.body, { attributeFilter: ['data-ds-dark-theme', …] })`
 观察它。该 pin 上上游**唯一**的写入点是
 `document.body.toggleAttribute('data-ds-dark-theme', dark)`（`dsh-client-ui-theme` 的

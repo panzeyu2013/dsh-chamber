@@ -353,7 +353,7 @@ interface HostEdges {
   `.app/Contents/Resources/sidecar/
   node`。**摘要的信任基座在仓库内**（`build-sidecar.mjs` 的
   `PINNED_NODE_SHA256`，逐字取自官方 `SHASUMS256.txt`）：默认版本两个 darwin 归档必须在表内，`--node-sha256` 与固定值冲突即拒绝；未固定版本（`--node-version`）回退联网 SHASUMS256.txt 并响亮说明——「没固定」不得呈现为「已校验」；升级默认版本 = 同一提交更新该表（`build-sidecar.test.mjs` 会红）。**基名必须叫 `node`**：`resolveNodeExecutable`（spawn-dsh.ts:435-447）的纯 Node 分支只在 `basename(execPath) ∈ {node,node.exe}` 时直用 process.execPath，否则回落 PATH/knownNodeLocations（nvm 等）→ 裸 'node'（系统版本不可控）；P1 加解析断言测试钉死该前提（A5；`build-sidecar.test.mjs` 断言归档成员名 + 解包后基名 + `resolveNodeExecutable` 直用分支）。Electron 分支 = execPath + ELECTRON_RUN_AS_NODE=1 + `--expose-internals`（dsh loader 的 node-addon-require-builtin 需要；updater 的 runtimeNodeExecutor 同构，main.ts:4034-4037）。
-- **必须绑 Node**：dsh 实例本身是 Node 进程（vendor dsh 由 pnpm 安装），控制面 spawn 它、dsh-runtime 安装它；pnpm 11.21.0 已随 desktop 依赖，改由 sidecar 目录内嵌 + 注入（**plugin-sync resolvePnpmBinDir 不感知 bundled pnpm**，需 PATH 前置或 env 注入，plugin-sync.ts:2023-2041）。
+- **必须绑 Node**：dsh 实例本身是 Node 进程（vendor dsh 由 pnpm 安装），控制面 spawn 它、dsh-runtime 安装它；pnpm 11.21.0 已随 desktop 依赖，改由 sidecar 目录内嵌 + 注入（**plugin-sync resolvePnpmBinDir 不感知 bundled pnpm**，需 PATH 前置或 env 注入，plugin-sync.ts:41）。
 - **dsh-runtime 默认执行器恒纯 Node**（{file: process.execPath}，runtime-installer.ts:777）。
 - Node 版本策略：与 desktop 的 Electron 内置 Node 大版本对齐或取 LTS（决策 6）。
 
@@ -739,6 +739,7 @@ zh-Hant 显示；简繁混排是否可接受需实机判断，若要收口须先
     flavor 仅 macOS，故非 darwin 返回 `unsupported` 并放行（调用方 loud 记录该范围，绝不假装已互斥）。
 - 与既有机制：RuntimeOperationFence/RuntimeWriterFence（进程内单飞，dsh-runtime/runtime-operation-fence.ts）与
   跨进程 flock **正交互补**。
+- **state 根写者租约（L2）**：与上方 app 实例锁（L1，`<userData>/.dsh-chamber.lock`）不同 scope——L2 的单一文件是 `<stateRoot>/owner.json`（桌面/CLI 默认 `<userData>/state/owner.json`；host-root 另取 `<userData>/owner.json`，`scope` 字段区分），契约模块 `packages/control-plane/src/state-root-lease.ts`：no-follow O_EXCL + 回读终验、活 pid 拒绝（结构化 `state_root_locked` + holder pid/flavor）、死 pid rename 认领 + 字节/identity 证明、token+inode 精确 release（不匹配 `state_root_not_owner` 且绝不删除）、未知 `schemaVersion` fail-closed、同进程同根 `state_root_duplicate`。gateway 在首次 store 写之前取锁并把**同一 handle** 传 store/plane/runtime-manager（它们只 `assertCurrent`，仅顶层 owner 在其写者静止后 release）；**同一 state 根只有一个写者**，第二写者 fail-closed 退出 1，逃生口由单一 `resolveStateRoot` 承担（`--state-dir` > `DSH_<FLAVOR>_STATE` > `DSH_CHAMBER_STATE` > `~/.dsh-chamber`）。Swift 时序：壳先持 L1 flock → spawn sidecar → sidecar 取 host-root（L2）→ 装配期经 plane 取 state-root（L2，严格先于 `start` 的 reaper）；host-root 冲突时 sidecar stderr 输出 `state_root_locked` + holder pid/flavor + root 并以 `EXIT_STARTUP_FAILURE=70` 退出（Supervisor 按 fatal 不重启）。
 
 ### 6.4 凭据与安全文件
 
@@ -967,3 +968,10 @@ loopback-http-test-server.ts 同款思路）**未实施——需 GUI 会话，�
 5. **原生 UI 渐进**（路线 B/C）：本文不覆盖；HostEdges 边界即未来接缝，侵蚀需另立设计。
 6. **Node 版本与架构**：与 Electron 43 内置 Node 大版本对齐 vs LTS；arm64-only vs universal2。
 7. **静态凭据加密**：v1 诚实 0600 明文（推荐）；或提前排 Keychain 协助加密 edge。
+
+### Rejected alternatives（架构调整）
+
+- **装配保持两份**（main.ts 与 sidecar-ctx.ts 各自维护整套装配）：否决——去空白后 186 行逐字重复且已出现微差漂移；改为 `packages/desktop/host-assembly.ts` 的 `createHostAssembly(deps)` 单实现，两 flavor 只留各自 edge 接线（实测重复 186→3；差异全部经 `HostAssemblyDeps` 显式注入，体内零 flavor 分支）。
+- **深链 scheme 放 shell-core、deep-link 反向 import**：否决——shell-core 顶层 `new BoundedVscodeIntentQueue(...)` 来自 deep-link.ts，反向 import 形成 ESM 值依赖环并命中 class TDZ；改为零依赖 leaf `deep-link-scheme.ts`，两侧比较收敛为 `isDeepLinkUrl`/`isDeepLinkProtocol`。
+- **state 根沿用三把锁**（gateway `.gateway.lock` + `dsh-runtime/owner.json` + serve/standalone 无锁入口）：否决——三处语义不同，且无锁入口可与运行中 gateway 双写同一 state 根；改为单一 `<stateRoot>/owner.json` 租约模块（`state-root-lease.ts`，§6.3 的 L2），L1 app 实例 flock 保持不动（不同文件、不同 scope）。
+- **把 Swift 布局锚点迁移与 R1/R2 同批做**：推迟——`PackagedLayoutTests.swift:156-205` 文本锁 sidecar-ctx 的七个助手与 `resolvePnpmEntry` 候选顺序，迁移属 macOS 实机门；本批保持锚点逐字成立（静态复核 17/17）。

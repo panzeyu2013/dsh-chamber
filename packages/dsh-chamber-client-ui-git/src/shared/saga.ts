@@ -1,5 +1,5 @@
 /** Pure two-domain saga policy. Transport adapters live in coordinator.ts. */
-import { errorMessage as errorText } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
+import { errorMessage as errorText } from '@dsh-chamber/dsh-chamber-client-core'
 import { collectSessionClosure } from './git-facts.ts'
 import { GitWorktreeRpcError } from './git-api.ts'
 import type {

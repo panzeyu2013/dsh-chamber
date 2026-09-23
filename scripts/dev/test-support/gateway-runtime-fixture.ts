@@ -3,7 +3,7 @@
  * snapshot the status-view, confirm-guard and action-gate suites override per
  * case.
  */
-import type { RemoteRuntimeStatus } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
+import type { RemoteRuntimeStatus } from '../../../packages/dsh-chamber-client-core/src/gateway-runtime.ts'
 
 /** One gateway runtime status with every field at a healthy default. */
 export function remoteStatus(overrides: Partial<RemoteRuntimeStatus> = {}): RemoteRuntimeStatus {

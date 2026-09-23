@@ -14,7 +14,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { deriveUnread, type TurnEndFact } from '../../src/shared/derive.ts'
+import { deriveUnread, type TurnEndFact } from '@dsh-chamber/dsh-chamber-client-core/derive'
 
 const COMPLETED: TurnEndFact = { kind: 'completed' }
 

@@ -1,7 +1,7 @@
 # 24 · 已归档会话内容清理（server 行 hover 动作 · 第三个 chamber 宿主域）
 
 > **archiveCleanup 宿主域 + 归档管理器 + purge 后会话列表收敛 + 常驻保留**——本文是
-> dsh-chamber「删除已归档会话内容」宿主域（wire `archiveCleanup/{probe,preview,purge}`）、
+> dsh-chamber「删除已归档会话内容」宿主域（wire `archiveCleanup/{probe,purge}`）、
 > 归档管理器交互与 purge 后会话列表收敛的权威契约；未完成门禁见 docs/progress/STATUS.md。
 >
 > 承接并修订原 `docs/progress/todo/12-todo-archived-sessions.md`（归档单向、不可见、
@@ -59,7 +59,7 @@
    两分语义见 §13⑦）；读取结果**不进任何返回面、不进日志、不落盘**，只被消费于「该成员是否
    可移出归档集合」这一个成员关系判断。该例外**不扩展**本域内容接触面（无标题/
    路径/正文投影，无检索/导出，无字节统计），也**不构成**新能力的先例（见第 5 条）；
-2. 域无读取面：`preview` 只返回计数，不返回标题/路径/内容投影；
+2. 域无读取面：`purge`/`probe` 不返回标题/路径/内容投影（purge 只回计数与逐项错误码）；
 3. 删除语义逐条镜像上游 `sessions.delete` 草案（todo 12 §5.2，逐条映射表见 §4），
    **不发明新语义**；上游 wire 落地后本域收敛退役（§11），chamber 不永久 fork 会话域；
 4. 该域随 chamber 分发并 seed 到所有实例形态（本地 spawn overlay、远程 dsh
@@ -93,13 +93,6 @@ esbuild 产物 `dist/index.js`；不提交）。**命名**：scoped name 沿用�
 ```
 archiveCleanup/probe({})          → domain { ok, value: {} }
                                        // 零成本激活探针端点（presence+协议，无 IO）
-archiveCleanup/preview({})        → domain { ok, value: {
-                                       archived: number         // 已归档集合成员总数（registry-global；成员口径——含被归档的 subagent 起源行）
-                                       deletableSessions: number     // 本次可删的集合成员根数（整棵可删的已归档根行）
-                                       deletableSubagents: number    // 可删的级联 subagent 起源成员数（非根成员）
-                                       skippedRunning: number        // 运行中被整棵跳过的子树数（每根计 1）
-                                       skippedLoaded: number         // 仅因「本进程已加载（idle/attached）」被整棵跳过的子树数（每根计 1；force 可删）
-                                     } }
 archiveCleanup/purge({})          → domain { ok, value: {
                                        deletedSessions: number
                                        deletedSubagents: number
@@ -127,7 +120,7 @@ archiveCleanup/purge({sessionIds}) → 同上（sessionIds 仅收窄候选集）
 archiveCleanup/purge({sessionIds?, force?, protectSessionIds?}) → 同上
 ```
 
-- 入参：`preview`/`probe` **零参**（envelope `payload: { args: {} }`——
+- 入参：`probe` **零参**（envelope `payload: { args: {} }`——
   `gitWorktree/snapshot`/`clientGraph/graph` 先例）；`purge` 带**可选** `sessionIds`
   JSON 参数（SRC 描述符对缺失 JSON 字段放行 → `undefined` = 全量）与**可选**
   `protectSessionIds`（保护集，保护修正新增）两个 JSON 参数，客户端照 §5 恒发
@@ -151,8 +144,7 @@ archiveCleanup/purge({sessionIds?, force?, protectSessionIds?}) → 同上
 - **可选 `force` 语义**：缺省 = 既有 fail-closed 行为，逐字节不变；`force: true` = 只放过
   「**已加载（idle/attached）**」子树，**running 永远拒绝**（含 force）。改动全落在**删除侧**，
   且是「**先停止、再删除**」，不放松任何安全守卫判据。结果口径按 `skippedRunning`/
-  `skippedLoaded`/`forcedLoaded` 拆分（定义见上方 wire 注释），`PreviewResult` 同步带
-  `skippedLoaded`。**归档语义不动**（哪些会话被归档、级联与
+  `skippedLoaded`/`forcedLoaded` 拆分（定义见上方 wire 注释）。**归档语义不动**（哪些会话被归档、级联与
   wire 面均保持原样；交互形态改为：归档动词移入会话行
   kebab 菜单、不再弹确认——见 design 05 §2.2 / 06 §7）。
 - **常驻保留**：官方会话列表 live 优先（`sessionQuery.listSessions()` =
@@ -177,8 +169,8 @@ archiveCleanup/purge({sessionIds?, force?, protectSessionIds?}) → 同上
   attach 的会话否则仍会被摘掉成员关系，可能留下**部分保留**（同树非常驻成员照常摘除），
   方向仍是 fail-closed。收敛时机：被覆盖但**从未 attached** 的后代在**下一次 run** 被孤儿
   清扫摘掉；**仍常驻的成员自身**只在**实例重启后**的某次 run 收敛。
-- `preview` 是**执行时快照**：只回计数（管理器列表来自会话快照投影，不调用 preview）；
-  `purge` 开头重读权威状态，**不信任** preview 结果，两者之间状态可变化（UI 文案避免
+- `purge` 开头重读权威状态；管理器列表**不来自本域**（来自会话快照投影的
+ archivedSessions，§6），UI 文案避免
   「恰好 N 个」暗示）。
 - **已归档集合在 purge 开始时一次性快照**（`archivedAtStart`，core.ts）：run 期间不再
   重读——用户中途「取消归档」某成员，本次 run 仍按快照当已归档处理（可能已删或已清
@@ -186,7 +178,7 @@ archiveCleanup/purge({sessionIds?, force?, protectSessionIds?}) → 同上
   候选集。单飞（`busy`）保证同进程内不会有两个 run 同时改集合。
 - 返回值走 `domainResult` `{ok,value}|{ok:false,error}` 载体（generic gateway 不保留
   thrown business 字段，同 git-worktree 理由）。`ok:false` code 枚举（最小集）：`busy`
-  （本域另一 purge/preview 在途——**宿主侧单飞**，跨 N-ctx 并发 purge 靠它收敛）、
+  （本域另一 purge 在途——**宿主侧单飞**，跨 N-ctx 并发 purge 靠它收敛）、
   `registry-unreadable`（整体前提失败；probe 的 `assertHostSurface` 结构检查亦覆盖会话
   枚举/存储面——把官方 `sessionPersistence.stat` 列为必备面，**最低宿主版本
   0.1.3-alpha.1**（`stat` 取代退役的 `inspect`），更旧宿主上 `archiveCleanup/probe` 恒
@@ -199,12 +191,9 @@ archiveCleanup/purge({sessionIds?, force?, protectSessionIds?}) → 同上
   `loaded` 已加载但未授权 force / `storage` 宿主存储失败；最终批量写失败记
   `archive-set`），不中断、不 throw；`errors` 超过 1,000 条截断并置 `truncated: true`
   （core.ts 常量 MAX_PURGE_SESSIONS / MAX_PURGE_ERROR_RECORDS）。
-- **计数口径**：`archived` = 集合成员总数（含被归档的 subagent 起源行）；
-  `deletableSessions` = 可删集合成员根数（archived subagent 行自身为可删根时计入此桶而非
-  `deletableSubagents`）；`deletableSubagents` = 被完成树覆盖的非根成员——UI 不列 subagent
-  行，该桶仅 wire 可达。容量门按 `archived` 成员计；`archive-set` 注记与逐项错误共享同一
+- **容量口径**：容量门按权威 archived 集合成员总数计（registry-global，含被归档的 subagent 起源行）；上限 `MAX_PURGE_SESSIONS`）；`archive-set` 注记与逐项错误共享同一
   条目上限（MAX_PURGE_ERROR_RECORDS）。
-- **宿主审计**：preview/purge 起止行走实例 logger（`[archiveCleanup] …`）。purge 是产品
+- **宿主审计**：purge 起止行走实例 logger（`[archiveCleanup] …`）。purge 是产品
   唯一的持久内容销毁原语、local 匿名 loopback 也可到达——**UI 确认只是点击保护，wire 本身
   才是信任边界**（与官方 archiveSession wire 同一条边界）。
 - `probe` 是**零成本激活探针端点**（presence + 协议、不读会话数据、无 IO、响应与会话量
@@ -352,9 +341,7 @@ generic throw（无 status 透出）；503 `instance_unavailable` 有专类特�
 - 新专用错误类 `InstanceDomainMissingError` + `isInstanceDomainMissing()`（镜像
   `InstanceUnavailableError` 模式，放其旁），404 + 开关开启时抛它；wrapper 层据此
   输出 §6 文案；
-- wrapper：`previewArchiveCleanup(client)`（默认 30s；UI 不调用，保留为 preview 端点的已测
-  客户端半面）/
-  `purgeArchivedSessions(client, sessionIds?)`（长预算 `PURGE_CALL_TIMEOUT_MS = 5 * 60_000`，
+- wrapper：`purgeArchivedSessions(client, sessionIds?)`（长预算 `PURGE_CALL_TIMEOUT_MS = 5 * 60_000`，
   放 instance-api.ts；`sessionIds` 可选子集过滤，§3）。**wire 上游空闲窗**：代理豁免名单
   `LONG_RPC_PATHS` 已含 `/api/archiveCleanup/purge`（03 §3.4），30 分钟保险丝覆盖上游
   静止容忍——5 分钟客户端预算是唯一先到截止，诚实超时文案（下条）不再被代理 45s 窗的
@@ -632,8 +619,7 @@ src/core.ts + src/binding.ts + scripts/build.mjs + test/*.test.ts + **构建期�
 
 **C. 探针契约面（design 18 §3.4）**：
 - `dsh-runtime/src/activation-gate.ts`：`REQUIRED_ACTIVATION_PROBES` 含
-  `'archiveCleanup/probe'`（激活探针打零成本 `probe` 端点而非 `preview`——preview 仅用户
-  点击路径，probe 不读会话数据、无 IO、响应与会话量解耦）；`HOST_DOMAIN_PROBE_NAMES` 含
+  `'archiveCleanup/probe'`（激活探针打零成本 `probe` 端点：不读会话数据、无 IO、响应与会话量解耦）；`HOST_DOMAIN_PROBE_NAMES` 含
   第三域（typed subtraction 守卫保留——拼错域名的行在缩减集断言处红）；
 - **期望集按实际 seed 派生**：（`syncedHostDomainProbeNames` 逐包派生 → `activationProbeNamesForDomains`；
   二元 `hostDomains` 布尔与 `hasSyncedHostSeed` 同删；seed 清单逐条 `probeDomains` 为源；
@@ -708,8 +694,9 @@ STATUS.md。
   **新客户端 + 未重启的旧宿主会复现修正前症状**（旧宿主仍摘标记 ⇒ 已加载会话的行回流，
   客户端按 §5 回退旧文案、F2 探针按 §12 主动放行）——正是「重启该实例」口径覆盖的窗口，
   **不做客户端兜底修补**（sticky 抑制会引入新死端，见 §13⑭）；
-- 无已归档内容：preview 空计数 → 空态提示，不进入确认（empty 与全被跳过子句的优先级
-  见 §6）；
+- 无已归档内容：会话快照投影的 archivedSessions 为空 → 空态提示，不进入确认（empty 与全被跳过子句的优先级
+  见 §6；投影不可信 / `archiveSetKnown:false` 时走 §6 的
+ 非破坏性降级分支，不调用本域）；
 - **无挂载基线的来源**：`archiveSetKnown:false` / 快照未落地的降级窗口内**无法清理任何
   已归档内容**（非破坏性降级分支，§6）。登记的范围后果：v1 全量 purge 曾在未挂载来源可用，
   能力回归被接受；未来需要时须等 unary 归档集 wire 或上游 delete wire（§11 退役
@@ -1029,7 +1016,7 @@ vendor/harness-packages（pinned submodule，当前 pin dsh-v0.1.5-rc.2 fb2c4b9e
 18. **`deriveArchivedSessions` 每源派生缓存未做**：App 侧按 identity-preserving aggregate
     对象缓存未采纳（跨 mounted push/merged pull 双生产路径的缓存失效管理复杂化收益面窄），
     65k 规模 + 高频 derive 场景再现时再议；
-19. **可选增强（未排期）**：PluginDialog 归档清理三态行（§7 F）、rowError 本地化（§5）；若上游
+19. **可选增强**：PluginDialog 归档清理三态行（§7 F）、rowError 本地化（§5）；若上游
     Modal 获得层级（stack/优先级/Escape 仲裁），确认弹层可迁官方 `RiskConfirmation`。
 20. **常驻保留的四条残余（均为"不可见、自愈、不影响正确性"）**：
     (a) **无内容的归档 tombstone**——保留的成员不再有会话记录，需孤儿清扫（F4/G3 `stat` 证明
@@ -1049,3 +1036,8 @@ vendor/harness-packages（pinned submodule，当前 pin dsh-v0.1.5-rc.2 fb2c4b9e
     量级；病态上界 = 手写 wire 全集 force purge × 数万同时常驻会话（≈ 每 id 47 B，65,536 时
     ≈3 MB），UI 路径永不带全集（§6 无「删除全部」）。加 cap 需**额外诚实计数键**（静默截断
     会让文案与标注数量对不上），收益仅在该病态场景 ⇒ 已接受的边界，不引入新字段。
+
+### Rejected alternatives（架构调整）
+
+- **archiveCleanup 契约继续两端手抄 + 宽容解码**：否决——客户端对缺失计数字段静默取 0（「已删除 0 个」的静默错误），且方法名/入参键/结果字段没有跨包锁步；改为中立契约包 `@dsh-chamber/dsh-chamber-wire`（唯一声明；seed esbuild 内联；行为锁步测试解析真实 `purge(` 签名比对键序），必需计数（6 项）缺失或非法即 loud，可选计数缺省 = 合法旧宿主。
+- **保留 `preview` 端点**（原文曾描述 wrapper）：否决——§5 已写明管理器列表来自会话快照投影且不调用 preview，wrapper 从未存在；删除宿主方法/core/类型/测试并同步本文，而不是补一个没有调用方的 RPC 面。

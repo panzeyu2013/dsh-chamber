@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { fetchInstanceSnapshot } from '../../src/shared/instance-api.ts'
+import { fetchInstanceSnapshot } from '@dsh-chamber/dsh-chamber-client-core/instance-api'
 
 /** One wire summary row (SessionSummary shape the unary client decodes). */
 function summary(overrides: Record<string, unknown>): Record<string, unknown> {
@@ -103,28 +103,42 @@ test('fetchInstanceSnapshot cwd grouping titles handle Windows separators, trail
 // ---------------------------------------------------------------------------
 
 import {
-  cancelSession,
-  fetchSessionRunningLineage,
   getInstanceClient,
-  InstanceUnavailableError,
-  isSessionNotAttached,
   purgeArchivedSessions,
-  sessionPurgeClosure,
   stopArchivedSubtree,
   stopSessionsForPurge,
-  upwardChainComplete,
   type SessionRunningLineage,
   type ArchiveCleanupPurgeResult,
-} from '../../src/shared/instance-api.ts'
+} from '@dsh-chamber/dsh-chamber-client-core/instance-api'
+import {
+  cancelSession,
+  fetchSessionRunningLineage,
+  InstanceUnavailableError,
+  isSessionNotAttached,
+  sessionPurgeClosure,
+  upwardChainComplete,
+} from '../../../dsh-chamber-client-core/src/instance-api.ts'
+import {
+  ARCHIVE_CLEANUP_PURGE_METHOD,
+  archiveCleanupEndpoint,
+} from '@dsh-chamber/dsh-chamber-wire'
+
+/** The REQUIRED purge counts every host always emits; overrides replace one. */
+const REQUIRED_COUNT_DEFAULTS = {
+  deletedSessions: 2,
+  deletedSubagents: 2,
+  skippedRunning: 1,
+  skippedLoaded: 0,
+  forcedLoaded: 0,
+  skippedProtected: 0,
+} as const
 
 function cleanupClient(overrides: Record<string, unknown> = {}) {
   const nested = (payload: unknown) => ({ ok: true as const, value: { ok: true as const, value: payload } })
   return {
     archiveCleanup: {
       purge: async () => nested({
-        deletedSessions: 2,
-        deletedSubagents: 2,
-        skippedRunning: 1,
+        ...REQUIRED_COUNT_DEFAULTS,
         errors: [],
         ...overrides,
       }),
@@ -167,6 +181,7 @@ test('purgeArchivedSessions decodes counts and per-item errors (partial failure 
   assert.equal(result.deletedSessions, 1)
   assert.equal(result.deletedSubagents, 2)
   assert.equal(result.skippedRunning, 1)
+  assert.equal(result.skippedLoaded, 0)
   assert.deepEqual(result.errors, [{ sessionId: 's2', code: 'storage', message: 'fake failure' }])
   // The host's registry-global orphan sweep count (design 24 §12)
   // is absent when the host did not report it.
@@ -178,9 +193,47 @@ test('purgeArchivedSessions carries the orphan-sweep count when the host reports
   const result: ArchiveCleanupPurgeResult = await purgeArchivedSessions(client as never, ['s1'])
   assert.equal(result.deletedSessions, 0)
   assert.equal(result.clearedOrphanMembers, 3)
-  // A malformed/negative count degrades to absent, never to a fabricated zero.
-  const malformed = await purgeArchivedSessions(cleanupClient({ clearedOrphanMembers: -2 }) as never, ['s1'])
-  assert.equal(malformed.clearedOrphanMembers, undefined)
+})
+
+test('purgeArchivedSessions fails loud on REQUIRED-count drift — absence is never a zero', async () => {
+  // Every REQUIRED count is part of the pinned host contract: a renamed or
+  // dropped field must surface, never decode into "the host deleted nothing".
+  for (const key of Object.keys(REQUIRED_COUNT_DEFAULTS) as Array<keyof typeof REQUIRED_COUNT_DEFAULTS>) {
+    // An explicit undefined overrides the fixture default (a deleted key would
+    // just let the default spread back in): the decoder sees the key as absent.
+    const drifted = { ...REQUIRED_COUNT_DEFAULTS, [key]: undefined }
+    await assert.rejects(
+      () => purgeArchivedSessions(cleanupClient(drifted) as never, ['s1']),
+      (error: unknown) => error instanceof Error && error.message.includes(`缺少必需的 ${key}`),
+      `a missing ${key} must throw`,
+    )
+  }
+  // Present-but-malformed is drift too (JSON cannot carry NaN/Infinity, so the
+  // fixture passes the values the decoder must still refuse).
+  for (const bad of [-1, Number.NaN, Number.POSITIVE_INFINITY, '2', null]) {
+    await assert.rejects(
+      () => purgeArchivedSessions(cleanupClient({ deletedSessions: bad }) as never, ['s1']),
+      /畸形结果.*deletedSessions/,
+      String(bad),
+    )
+  }
+})
+
+test('purgeArchivedSessions fails loud on a PRESENT malformed optional count or truncated flag', async () => {
+  // Only a missing key is the documented "zero / old host" answer; a present
+  // malformed value is contract drift, never silently absent.
+  await assert.rejects(
+    () => purgeArchivedSessions(cleanupClient({ clearedOrphanMembers: -2 }) as never, ['s1']),
+    /畸形结果.*clearedOrphanMembers/,
+  )
+  await assert.rejects(
+    () => purgeArchivedSessions(cleanupClient({ clearedOrphanMembers: '3' }) as never, ['s1']),
+    /畸形结果.*clearedOrphanMembers/,
+  )
+  await assert.rejects(
+    () => purgeArchivedSessions(cleanupClient({ truncated: 'yes' }) as never, ['s1']),
+    /畸形结果.*truncated/,
+  )
 })
 
 test('purgeArchivedSessions carries the resident-retained id list (design 24 §4 step 9) and never fabricates ids', async () => {
@@ -295,7 +348,7 @@ test('404 discrimination: instance_not_found stays a generic transport failure; 
   assert.equal(calls.length, 2)
   assert.ok(calls.every(call => call.url.includes('/api/i/local/api/archiveCleanup/purge')))
   const body = JSON.parse(String(calls[0]?.init?.body)) as { method?: string; payload?: unknown }
-  assert.equal(body.method, 'archiveCleanup/purge')
+  assert.equal(body.method, archiveCleanupEndpoint(ARCHIVE_CLEANUP_PURGE_METHOD))
   assert.deepEqual(body.payload, { args: { sessionIds: ['s1'], force: true, protectSessionIds: [] } })
 })
 
@@ -393,11 +446,14 @@ test('purgeArchivedSessions: no protectable session still sends the same shape w
   const bodies: string[] = []
   const client = getInstanceClient('local')
   const result = await withFetch(
-    rpcStub({ ok: true, value: { deletedSessions: 0, deletedSubagents: 0, skippedRunning: 0, errors: [] } }, bodies),
+    rpcStub({
+      ok: true,
+      value: { ...REQUIRED_COUNT_DEFAULTS, deletedSessions: 0, deletedSubagents: 0, skippedRunning: 0, errors: [] },
+    }, bodies),
     () => purgeArchivedSessions(client, []),
   )
   assert.equal(result.deletedSessions, 0)
-  assert.equal(result.skippedProtected, 0, 'an absent count decodes to 0, never undefined')
+  assert.equal(result.skippedProtected, 0, 'the host-reported protected-tree count rides through verbatim')
   const payload = (JSON.parse(bodies[0] as string) as { payload?: unknown }).payload
   // [] is the delimiter for "delete nothing" and MUST NOT be normalized to a
   // whole-set request; the protected set is explicit and empty.
@@ -471,7 +527,7 @@ test('stopSessionsForPurge: session/not-found is an already-settled success; oth
     fetchRunning: async () => lineageOf(new Set(['gone', 'broken']), new Map()),
     cancel: async (_client, sessionId) => {
       if (sessionId === 'gone') {
-        const { InstanceRpcError: RpcError } = await import('../../src/shared/instance-rpc-error.ts')
+        const { InstanceRpcError: RpcError } = await import('../../../dsh-chamber-client-core/src/instance-rpc-error.ts')
         throw new RpcError('session/not-found', `session "${sessionId}" not found (not attached)`)
       }
       throw new Error('boom')

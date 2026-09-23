@@ -7,7 +7,7 @@
 import { useCallback, useEffect, useRef } from 'react'
 import { projectBadgeCount } from '../badge-count.ts'
 import { publishBadgeCount } from '../notification-ledger.ts'
-import type { InstanceRuntimeReport } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
+import type { InstanceRuntimeReport } from '@dsh-chamber/dsh-chamber-client-core'
 
 export interface BadgeCountDeps {
   /** 完成未读蓝点集（每来源每会话布尔）。 */

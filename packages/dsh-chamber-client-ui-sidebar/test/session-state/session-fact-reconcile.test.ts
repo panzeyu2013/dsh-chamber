@@ -1,5 +1,5 @@
 /**
- * 执行端契约（dsh-chamber-client-ui-sidebar/src/shared/session-fact-reconcile.ts）。
+ * 执行端契约（dsh-chamber-client-core/src/session-fact-reconcile.ts）。
  *
  * 策略测试在纯包（packages/dsh-stream-state/test/authority/）；本文件只锁执行端与
  * reducer 的接线行为：
@@ -20,7 +20,7 @@ import {
   writeBackTargets,
   type AuthorityActionLogEntry,
   type SessionAuthoritySnapshot,
-} from '../../src/shared/session-fact-reconcile.ts'
+} from '@dsh-chamber/dsh-chamber-client-core/session-fact-reconcile'
 import type { AuthorityOfficialRow, AuthorityRead } from '@dsh-chamber/dsh-stream-state'
 
 class Harness {

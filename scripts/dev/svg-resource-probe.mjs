@@ -2,7 +2,7 @@
  * 真机验收探针：文档级 SVG 资源 id 失绘不变量（design 05 §4.2）。
  *
  * 为什么存在：文档级 SVG 资源 id 失绘的唯一权威证据是 macOS WKWebView 上的实际绘制行为 —— 单元测试只能钉住
- * DOM 变换契约。本脚本把**仓库里真实的** `packages/renderer/src/svg-resource-scope.ts`（类型
+ * DOM 变换契约。本脚本把**仓库里真实的** `packages/dsh-chamber-client-core/src/svg-resource-scope.ts`（类型
  * 剥离后）注入宿主 WKWebView，重放触发序列，用可判定的不变量代替人眼看图。
  *
  * 用法（需要控制面已在跑；默认 http://localhost:17500）：
@@ -35,7 +35,7 @@ import { decodePng } from '../lib/png-ink.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const REPO = resolve(HERE, '..', '..')
-const MODULE_PATH = join(REPO, 'packages', 'renderer', 'src', 'svg-resource-scope.ts')
+const MODULE_PATH = join(REPO, 'packages', 'dsh-chamber-client-core', 'src', 'svg-resource-scope.ts')
 const INK_THRESHOLD = 5
 
 function parseArgs(argv) {

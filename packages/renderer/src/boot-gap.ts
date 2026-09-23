@@ -39,7 +39,7 @@
  *    verdict fails the build instead of silently inheriting a wrong sentence or
  *    burning a futile cold re-mount (the self-heal container feeds
  *    {@link isRetryableBootGap} to the reducer as its retryability table).
- * The kind union itself is OWNED by the sidebar's shared bridge contract
+ * The kind union itself is OWNED by the client-core shared bridge contract
  * (`ServerBootGapKind`, next to `PluginGraphDiagnostic`): the same vocabulary
  * crosses to the sidebar package and to the connections page, which render
  * their own copy — one definition, aliased here.
@@ -48,7 +48,8 @@
 import type {
   ServerBootGap,
   ServerBootGapKind,
-} from '../../dsh-chamber-client-ui-sidebar/src/shared/aggregate-store.ts'
+} from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
+import { factRecordSignature } from '@dsh-chamber/dsh-chamber-client-core/derive'
 
 /** Why a settled boot is known to be incomplete. */
 export type ShellDegradedKind = ServerBootGapKind
@@ -179,20 +180,8 @@ export function shouldReplaceBootGap(current: ShellDegradedFact | null, incoming
  * @returns a stable signature string.
  */
 export function bootGapSignature(fact: ShellDegradedFact): string {
-    const encode = (value: unknown): string | null => {
-    if (value === undefined || value === null || value === '') return null
-    if (Array.isArray(value)) return value.length === 0 ? null : `[${value.map(item => String(item)).join('\u0000')}]`
-    return JSON.stringify(value)
-  }
-  return Object.entries(fact)
-    // The producer's sentence is NOT part of the identity (see the doc above).
-    .filter(([key]) => key !== 'message')
-    .flatMap(([key, value]) => {
-      const encoded = encode(value)
-      return encoded === null ? [] : [`${key}=${encoded}`]
-    })
-    .sort()
-    .join('\u0001')
+  // The producer's sentence is NOT part of the identity (see the doc above).
+  return factRecordSignature(fact, ['message'])
 }
 
 /**

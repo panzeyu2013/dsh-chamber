@@ -2,7 +2,7 @@
  * The bridge's refusal projection (design 21 §5.1/§5.2).
  *
  * The classifier and the verbatim-error projection are single-sourced in the
- * sidebar shared face (src/shared/runtime-refusal.ts); what stays bridge-local
+ * client-core face (src/shared/runtime-refusal.ts); what stays bridge-local
  * is the dictionary mapping and its wording, so this file asserts exactly that:
  * the delegation, the localized sentence with {code}, and the bridge
  * dictionaries' placeholders. No cross-package import.

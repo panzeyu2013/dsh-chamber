@@ -129,7 +129,7 @@ test('dashboard script parses and carries only credentials + runtime logic', asy
   assert.doesNotMatch(source, /loadApprovals|loadSessions|loadSchedule|loadWorktrees/)
   assert.doesNotMatch(source, /chamber\/approvals|chamber\/schedule|chamber\/sessions|chamber\/git\/worktrees|chamber\/settings/)
   assert.doesNotMatch(source, /enabled !== false/, 'feature flags are gone with the orchestration strip')
-  assert.doesNotMatch(source, /revision/, 'the settings revision counter display is removed (2026-12)')
+  assert.doesNotMatch(source, /revision/, 'the settings revision counter display is removed ()')
 })
 
 // ---------------------------------------------------------------------------
@@ -216,8 +216,7 @@ function assertOnlyPaths(page: DashboardHarness, allowed: readonly string[]): vo
 async function dashboardWithCredentials(
   t: { after(fn: () => void): void },
   configured: { password: boolean; token: boolean } = { password: true, token: true },
-  answerRemoval?: (request: DashboardRequest) => unknown,
-) {
+  answerRemoval?: (request: DashboardRequest) => unknown) {
   const host = surface(t)
   const html = (await handle(host, 'GET', '/chamber/')).chunks.join('')
   const script = (await handle(host, 'GET', '/chamber/app.js')).chunks.join('')
@@ -255,8 +254,7 @@ async function assertDismissPerformsNothing(
   page: DashboardHarness,
   invokeId: string,
   path: string,
-  dismiss: () => void,
-): Promise<void> {
+  dismiss: () => void): Promise<void> {
   const before = page.requestsTo(path).length
   page.click(invokeId)
   assert.equal(page.dialogOpen(), true)
@@ -607,7 +605,7 @@ test('unknown chamber paths are claimed with a stable 404', async t => {
   }
 })
 
-test('chamber plugins sync caches desktop-provided host packages (2026-12 Phase 3)', async t => {
+test('chamber plugins sync caches desktop-provided host packages (Phase 3)', async t => {
   const host = surface(t)
   const manifest = JSON.stringify({
     name: '@dsh-chamber/dsh-chamber-seed-client-graph',
@@ -759,8 +757,7 @@ test('chamber plugins cache lands 0600 files under 0700 dirs and rejects symlink
   const decoy = join(stateDir, 'decoy.json')
   symlinkSync(decoy, target)
   await assert.rejects(
-    () => plugins.put('@dsh-chamber/dsh-chamber-seed-client-graph', { 'package.json': manifest, 'dist/index.js': artifact }),
-  )
+    () => plugins.put('@dsh-chamber/dsh-chamber-seed-client-graph', { 'package.json': manifest, 'dist/index.js': artifact }))
   assert.equal(existsSync(decoy), false, 'the decoy must never be written through the link')
 })
 

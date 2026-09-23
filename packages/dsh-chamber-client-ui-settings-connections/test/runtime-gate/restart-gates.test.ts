@@ -3,7 +3,7 @@
  * managed-restart.ts result/refusal classification plus the connections-card
  * RESTART gate / PROBE projection / 409 localization built on it. Plain node:test,
  * no dsh, no React — the poll errors under test are the English strings thrown by
- * the sidebar shared pollGatewayReady (gateway-runtime-poll.ts); unlocalized copy
+ * the client-core pollGatewayReady (gateway-runtime-poll.ts); unlocalized copy
  * is a registered deviation (design 21 §5.2).
  */
 

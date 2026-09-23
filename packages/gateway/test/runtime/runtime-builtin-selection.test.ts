@@ -10,14 +10,18 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os'
 import { dirname, basename, join } from 'node:path'
 import { createRequire } from 'node:module'
-import { createGatewayRuntimeManager, readBuiltinVersion } from '../../src/runtime-manager.ts'
+import { createGatewayRuntimeManager } from '../../src/runtime-manager.ts'
 import {
   readActivationJournalState,
+  readAnchorVersion,
   readCurrentPointerState,
   writeCurrentPointer,
   writeOverride,
-  stashPreRollback,
 } from '@dsh-chamber/dsh-runtime'
+// Fixture-only internal helper: stashPreRollback has no production consumer, so
+// it is deliberately outside the package entry (the public manual-rollback
+// preparation is prepareManualRollbackData). Reach the definition module.
+import { stashPreRollback } from '../../../dsh-runtime/src/snapshot-store.ts'
 import { createRuntimeRoutes } from '../../src/runtime-routes.ts'
 import {
   silentLogger,
@@ -122,19 +126,19 @@ test('the gateway pnpm installer entry resolves to an existing file (R9-R1: expo
 })
 
 
-test('readBuiltinVersion reads the anchor package version (F1 regression)', () => {
+test('readAnchorVersion reads the anchor package version (F1 regression)', () => {
   const dir = mkdtempSync(join(tmpdir(), 'gw-rt-builtin-ver-'))
   try {
-    assert.equal(readBuiltinVersion(dir), null, 'missing package.json → null')
+    assert.equal(readAnchorVersion(dir), null, 'missing package.json → null')
     const pkgDir = join(dir, 'node_modules', '@deepseek-ai', 'dsh')
     mkdirSync(pkgDir, { recursive: true })
     writeFileSync(join(pkgDir, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: '9.9.9' }))
-    assert.equal(readBuiltinVersion(dir), '9.9.9')
+    assert.equal(readAnchorVersion(dir), '9.9.9')
     rmSync(join(dir, 'node_modules'), { recursive: true, force: true })
     const sourceDir = join(dir, 'apps', 'cli')
     mkdirSync(sourceDir, { recursive: true })
     writeFileSync(join(sourceDir, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: '8.8.8' }))
-    assert.equal(readBuiltinVersion(dir), '8.8.8', 'a source-checkout anchor reads apps/cli/package.json')
+    assert.equal(readAnchorVersion(dir), '8.8.8', 'a source-checkout anchor reads apps/cli/package.json')
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

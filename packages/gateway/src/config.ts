@@ -208,8 +208,9 @@ function trustedProxyList(input: string[] | undefined): string[] {
 /**
  * Parse + validate the gateway config. Throws GatewayConfigError on any
  * invalid value (S1 exposure guard included). stateDir/dshWorkspacePath are
- * required here — the caller resolves their defaults (DEFAULT_STATE_DIR /
- * defaultDshWorkspacePath from @dsh-chamber/control-plane) before calling.
+ * required here — the caller resolves them first (stateDir through the shared
+ * resolveStateRoot(), dshWorkspacePath through defaultDshWorkspacePath(), both
+ * from @dsh-chamber/control-plane) before calling.
  */
 export function parseGatewayConfig(input: GatewayConfigInput, stateDir: string, dshWorkspacePath: string): GatewayConfig {
   const host = input.host ?? firstEnv('DSH_GATEWAY_HOST') ?? '127.0.0.1'

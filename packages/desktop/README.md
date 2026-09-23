@@ -4,9 +4,10 @@ dsh-chamber 的 Electron 壳（v4 连接管理器形态）：单 frame 加载控
 
 ## 目录
 
-- `main.ts` — Electron 主进程的唯一装配与 IPC 注册入口：单窗口单 frame、control-plane、connection v2 transport/plugin/open-in/deep-link/通知/设置/运行时/更新接线，以及退出清理。避免并存一套未导入的 handler 实现。
+- `main.ts` — Electron 主进程入口：单窗口单 frame、control-plane 生命周期、Electron edge 接线（edges/dialog/safeStorage/tray/窗口）、退出清理与 IPC 注册点；宿主装配本体在 `host-assembly.ts`。避免并存一套未导入的 handler 实现。
+- `host-assembly.ts` — **两 flavor 共享的宿主装配单一实现**（`createHostAssembly(deps)`：运行时启动前导 / 凭据存储 / gateway 会话 / transportManager / host 包 seed / `publishRegistryTransition` / runtime 启动事务宿主 / ctx / 启动尾部 / 回收腿）。`main.ts`（Electron）与 `sidecar-ctx.ts`（Swift sidecar）只保留各自的 edge 差异注入；差异全部在依赖参数层，装配体内无 flavor 分支。
 - `ipc-events.ts` — IPC 通道名常量（`IPC_CHANNELS`，主进程侧单一来源；preload 重复字面量由 `test/ipc/ipc-surface-mirror.test.ts` 守卫）
-- `control-plane-module.ts` — `@dsh-chamber/control-plane` 双路径门面（dev/测试 → workspace 源码；打包态 → `dist/control-plane/` 编译产物），导出 `createControlPlane` 与共享协议工具（rpc-envelope / cordis-inserts）
+- `control-plane-module.ts` — `@dsh-chamber/control-plane` 双路径门面（dev/测试 → workspace 源码；打包态 → `dist/control-plane/index.js` 自包含 esbuild 产物），导出 `createControlPlane`、共享协议工具（rpc-envelope / cordis-inserts）与 wire plugin-manifest 读算法（parsePluginManifest / readManifestVersion / isMaterializedValue）
 - `updater.ts` — 更新控制器（设计 11）：stable 走 GitHub provider；beta 按应用自身版本自动锁定，经有界 Releases API 选择最高 canonical published beta 后切 exact-tag Generic feed（发现失败绝不回退 `latest*`）；静默检查（启动延迟 + 6h 周期）+ 状态机 + 用户确认后下载（autoDownload=false）+ 退出时安装；非秘密状态投影
 - `preload.cts` — 沙箱 preload 源码，经 contextBridge 暴露 `window.dshChamber`；运行时使用编译产物 `dist/preload.cjs`（见 `scripts/build-preload.mjs`）
 - `renderer-trust.ts` — IPC 围栏（`createTrustedIpc`：sender/frame/origin 校验，语义不变抛 `ipc_sender_forbidden`）+ 渲染进程 URL 信任判定
@@ -16,12 +17,13 @@ dsh-chamber 的 Electron 壳（v4 连接管理器形态）：单 frame 加载控
 - `gateway-provider.ts` — HTTP direct transport + gateway 认证/SPKI/session；同一 provider 的 dsh 目标分支严格无认证
 - `ssh-config.ts` — `~/.ssh/config` 非秘密投影解析
 - `chamber-settings.ts` — chamber 全局设置 holder（`chamber-settings.json`，原子写，`dsh-chamber:settings-*` 数据面）
-- `notifications.ts` — 通知决策纯逻辑（validateNotificationRequest / decideNotification / claimNotification，electron-free）
-- `deep-link.ts` — 深链解析/VS Code 启动（electron-free 决策 + 主进程执行）
+- `notifications.ts` — 通知决策纯逻辑（validateNotificationRequest / decideNotification / claimNotificationDetailed，electron-free）
+- `deep-link.ts` — 深链解析/VS Code 启动（electron-free 决策 + 主进程执行）；scheme 判定/大小写规范化的单源 = `deep-link-scheme.ts`（leaf：shell-core 与 deep-link 之间有既有 ESM 值依赖环，scheme 放任一侧都会命中 class TDZ）
+- `pnpm-launcher.ts` — pnpm 位置事实单源：直接 spawn 的 launcher 形态（win32 禁 `.cmd`）+ 入口候选集/顺序/选择（`bundledPnpmEntryCandidates` / `firstExistingPnpmEntry`）与 bin-dir 扫描候选（runtime 安装器、sidecar 装配、`pnpm pack`、PATH 前缀共用）
 - `open-in.ts` — OpenInApp 注册表 + 六步 loud 执行管线（electron-free 决策 + 主进程执行）
-- `plugin-sync.ts` — 插件编排纯逻辑：manifest 解析/spec 分类/远端 probe/apply/seed/materialize（cordis insert 渲染经 control-plane-module 共享实现）
+- `plugin-sync.ts` — 插件编排纯逻辑：manifest 解析/spec 分类/远端 probe/apply/seed/materialize（cordis insert 渲染与 wire manifest 读算法/掩码判据均经 control-plane-module 共享实现——打包态不引裸包名）
 - `scripts/bundle-dsh.mjs` — 将官方发布包 `@deepseek-ai/dsh` 安装为本地运行时（`vendor/dsh`）
-- `scripts/build-control-plane.mjs` — 打包态将 `@dsh-chamber/control-plane` 编译为 JS（`dist/control-plane/`，见下）
+- `scripts/build-control-plane.mjs` — 打包态将 `@dsh-chamber/control-plane` esbuild 打包为**自包含 ESM 单文件**（`dist/control-plane/index.js`，依赖全部内联，见下）
 - `scripts/build-preload.mjs` — 将 `preload.cts` 编译为纯 CJS（`dist/preload.cjs`；沙箱 preload 无 TS 类型擦除，`import type` 直接 SyntaxError，dev/打包统一用编译产物）
 - `scripts/electron-dev.mjs` — dev 编排：共享 Electron dist（每机器一份，worktree 共用，见 `scripts/electron-shared.mjs`）缺失时自动物化 → 按需构建 renderer/preload → 以进程组方式启动 Electron → 信号/退出时清理子进程
 - `dist/` — 渲染层构建产物（由 renderer 包构建输出到这里，不在此提交）
@@ -34,7 +36,7 @@ pnpm install
 ```
 
 - pnpm install 默认不再下载 Electron 二进制（DSH_CHAMBER_ELECTRON=1 或 dev:desktop 首启时经 electron_mirror 物化）。二进制是**每机器共享 dist**（见 `scripts/electron-shared.mjs`）：位于平台缓存目录、按 `<版本>-<平台>-<架构>` 分键（macOS `~/Library/Caches/dsh-chamber/electron/v43.4.0-darwin-arm64/`；Linux `$XDG_CACHE_HOME|~/.cache/dsh-chamber/electron/...`；Windows `%LOCALAPPDATA%\dsh-chamber\Cache\electron\...`），所有 git worktree / 重复 dev 运行共用同一份——每台机器每个 (版本, 平台, 架构) 只需下载解压一次，不再每个 worktree 各 ~300MB。旧流程遗留的本地 dist（electron 包目录内、版本匹配）会被自动复用（status=legacy，离线可用），`DSH_CHAMBER_ELECTRON_DIST` 可显式指向任意现成 dist 目录并跳过缓存。
-- `@dsh-chamber/control-plane` 是工作区包，`main.ts` 直接 `import` 使用。
+- `@dsh-chamber/control-plane` 是工作区包，dev/测试态经 `control-plane-module.ts` 门面直接 `import` 工作区源码；打包态该门面改加载 esbuild 自包含产物（同一条 `main.ts` 代码路径）。
 
 ## 运行
 
@@ -69,11 +71,11 @@ pnpm run dist:desktop
 - 控制面 spawn 入口统一为 `<node> <workspace>/node_modules/@deepseek-ai/dsh/lib/bin.js --profile web`（`resolveDshEntry` + `resolveNodeExecutable`，spawn-dsh.ts）。node 可执行不假设在 PATH 上：Electron 主进程内用 `process.execPath` + `ELECTRON_RUN_AS_NODE=1`（另前置 `--expose-internals`，dsh loader 需要），纯 node 环境用 `process.execPath`，兜底 PATH 搜索——打包 App 从 Finder 启动时 PATH 极简，裸 `spawn('node')` 会 ENOENT。
 - 封装完成后 `vendor/dsh/package.json` 记录实际解析到的精确版本（`dependencies["@deepseek-ai/dsh"]`）与封装平台（`dsh.platform`）；已封装且**平台一致**时再次 bundle 跳过（跨平台复用会打进错误平台的原生二进制，自动重封装），`--force` 刷新当前 pin。重新封装期间保留 last-known-good 目录；只有安装、裁剪、版本核验与 smoke 全部通过后才交换目录，交换失败自动回滚，进程中断后的下次运行会恢复备份。
 
-### build:control-plane：打包态控制面编译（scripts/build-control-plane.mjs）
+### build:control-plane：打包态控制面打包（scripts/build-control-plane.mjs）
 
-- `build:desktop` 先执行 `build:control-plane`（tsc emit + `rewriteRelativeImportExtensions` 把 `.ts` 导入重写为 `.js`，产物 `dist/control-plane/`），再执行 `build:preload`（`preload.cts` → `dist/preload.cjs`）。
-- 打包态 `main.ts` 条件导入该编译产物；开发态仍走 workspace 符号链接零构建直接运行源码（`pnpm run dev:desktop` 不需要编译步骤）。
-- 原因：Node 类型擦除不覆盖 node_modules，workspace 包的 raw TS 无法在 asar 内运行，打包态必须用编译产物；沙箱 preload 没有类型擦除，必须预编译为纯 CJS（`main.ts` 优先加载 `dist/preload.cjs`，`electron-dev.mjs` 缺失时自动编译）。
+- `build:desktop` 先执行 `build:control-plane`（① `tsc -p tsconfig.control-plane.build.json --noEmit` 编译闭包校验；② esbuild 打包 `packages/control-plane/src/index.ts` 为**自包含 ESM 单文件** `dist/control-plane/index.js`），再执行 `build:preload`（`preload.cts` → `dist/preload.cjs`）。
+- 打包态 `main.ts`（经 `control-plane-module.ts` 门面，打包分支走相对入口 `./dist/control-plane/index.js`；sidecar 装配同路径）条件导入该产物；开发态仍走 workspace 符号链接零构建直接运行源码（`pnpm run dev:desktop` 不需要编译步骤）。
+- 原因：Node 类型擦除不覆盖 node_modules，workspace 包的 raw TS 无法在 asar/装配目录内运行；而**逐文件 tsc 产物会残留裸说明符**（如 `@dsh-chamber/dsh-chamber-wire/plugin-manifest`，打包树里解析到 node_modules 下的 .ts → `ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`；sidecar 装配目录没有 node_modules → `ERR_MODULE_NOT_FOUND`）。因此打包必须把 workspace/运行时依赖**全部内联**（与 gateway dist 同规；`ws` 的 CJS 内建 require 由 createRequire banner 承接）。构建脚本在产物上断言「只含 `node:` 说明符」，`scripts/control-plane-freshness.test.mjs` 对既有产物重复同一断言与保鲜标记检查。沙箱 preload 没有类型擦除，必须预编译为纯 CJS（`main.ts` 优先加载 `dist/preload.cjs`，`electron-dev.mjs` 缺失时自动编译）。
 
 ### electron-builder 配置要点（packages/desktop/package.json 的 `build` 键）
 

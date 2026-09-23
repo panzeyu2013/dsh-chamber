@@ -110,10 +110,11 @@ test('every audited frame string is dictionary-owned (no inline literals remain)
   const frameSources = {
     'App.tsx': readCode('../../src/App.tsx'),
     'InstanceView.tsx': readCode('../../src/components/InstanceView.tsx'),
-    // 视图调度/桥订阅簇的 hook 同样是 frame 文案的持有者；
+    // 视图调度/桥订阅/通知投影簇的 hook 同样是 frame 文案的持有者；
     // 既纳入 inline 字面量审计（更强），也纳入下方调用点 presence 的并集。
     'use-view-scheduler.ts': readCode('../../src/app-hooks/use-view-scheduler.ts'),
     'use-bridge-subscriptions.ts': readCode('../../src/app-hooks/use-bridge-subscriptions.ts'),
+    'use-unread-notifications.ts': readCode('../../src/app-hooks/use-unread-notifications.ts'),
   }
   const retired = [
     '界面发生错误', '实例启动失败', '无法连接控制面', '切换到其他服务器', '正在加载',
@@ -131,7 +132,7 @@ test('every audited frame string is dictionary-owned (no inline literals remain)
     }
   }
   // …and the sites use the dictionary instead (each audited site, explicitly).
-  const app = frameSources['App.tsx'] + '\n' + frameSources['use-view-scheduler.ts'] + '\n' + frameSources['use-bridge-subscriptions.ts']
+  const app = frameSources['App.tsx'] + '\n' + frameSources['use-view-scheduler.ts'] + '\n' + frameSources['use-bridge-subscriptions.ts'] + '\n' + frameSources['use-unread-notifications.ts']
   for (const call of [
     "t('fatal.boot.title')", "t('fatal.controlPlane.title')", "t('action.retry')",
     "t('action.switchServer')", "t('fatal.entries.title')", "t('source.local')",

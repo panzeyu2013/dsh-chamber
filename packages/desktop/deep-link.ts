@@ -37,6 +37,9 @@ import os from 'node:os'
 import path from 'node:path'
 import { INSTANCE_ID_PATTERN } from './transport-provider.ts'
 import { describeError } from './describe-error.ts'
+// 深链 scheme 的单一来源（leaf——避免 shell-core ↔ deep-link 的 ESM 循环）：
+// 大小写规范化与比较只有那一份实现。
+import { DEEP_LINK_SCHEME, isDeepLinkProtocol } from './deep-link-scheme.ts'
 
 /** A normalized deep-link launch request (design 16 §3.1). */
 export interface VscodeLaunchRequest {
@@ -407,7 +410,7 @@ export function linuxProtocolDesktopEntry(input: {
   scheme?: string
   executable: string
 }): string | null {
-  const scheme = input.scheme ?? 'dsh-chamber'
+  const scheme = input.scheme ?? DEEP_LINK_SCHEME
   if (!LINUX_SCHEME_PATTERN.test(scheme)) return null
   const { executable } = input
   if (typeof executable !== 'string' || executable === '' || !path.isAbsolute(executable)) return null
@@ -577,7 +580,7 @@ export function parseOpenVscodeIntent(raw: string): { ok: true; intent: VscodeLa
   } catch {
     return { ok: false, error: 'invalid deep-link URL' }
   }
-  if (url.protocol !== 'dsh-chamber:') {
+  if (!isDeepLinkProtocol(url.protocol)) {
     return { ok: false, error: `unsupported deep-link scheme: ${url.protocol}` }
   }
   if (url.hostname !== 'open-vscode') {

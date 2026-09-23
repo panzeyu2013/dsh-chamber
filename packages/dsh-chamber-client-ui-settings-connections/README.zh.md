@@ -14,8 +14,8 @@ order 30，排在 agent-presets 之后）。本分区是 chamber 连接管理器
 - **远程连接列表**：覆盖四种已交付组合（`dsh|gateway × ssh|http`），卡片展示
   label、端点、目标/传输徽标、phase，以及适用时的 systemd/日志投影；支持
   连接/断开、编辑、删除和 schema 驱动的虚线添加卡。
-- **重启 = 宿主重启 + 一次窗口重载（2026-12，design 18 §3.6 项 8）**：页面侧 client
-  插件集在窗口 boot 时固定，故插件刷新型重启由 sidebar 共享面的 page-owned
+- **重启 = 宿主重启 + 一次窗口重载（design 18 §3.6 项 8）**：页面侧 client
+  插件集在窗口 boot 时固定，故插件刷新型重启由 client-core 共享面的 page-owned
   completion（`restart-window-reload.ts`，按来源单飞、面板卸载不取消、未就绪不重载）
   收尾。已接：gateway 卡「重启 dsh」/「启动实例」、插件对话框 footer 重启与
   restart-to-apply（行删/加/导入/撤销/批量应用）、ssh 卡「重启实例」（仅 `dsh` 目标）、

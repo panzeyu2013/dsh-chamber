@@ -14,8 +14,8 @@ import { spawn as spawnChild } from 'node:child_process'
 import fs, { chmodSync, existsSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { syncBuiltinESMExports } from 'node:module'
 import { join } from 'node:path'
-import { createJsonStore, JsonStorePersistError, JsonStoreRevisionConflictError } from '../../src/json-store.ts'
-import { createCatalog, CATALOG_BACKUP_FILE, CATALOG_FILE } from '../../src/catalog.ts'
+import { backupPathFor, createJsonStore, JsonStorePersistError, JsonStoreRevisionConflictError } from '../../src/json-store.ts'
+import { createCatalog, CATALOG_FILE } from '../../src/catalog.ts'
 import type { CatalogConnectionRow } from '../../src/catalog.ts'
 import { ensureInstanceId } from '../../src/instance-id.ts'
 import { readPrivateFileNoFollow } from '../../src/private-file.ts'
@@ -403,7 +403,7 @@ test('legacy schemaVersion-less catalog migrates in place with connections prese
   assert.deepEqual(main.connections, [{ connectionId: 'local', kind: 'local', label: 'Local dsh' }])
   assert.equal(main.projects, undefined)
   assert.deepEqual(main.migration, { legacyProjectsImported: false, pendingConnectionIds: [] })
-  const backup = readJson(join(dir, CATALOG_BACKUP_FILE))
+  const backup = readJson(backupPathFor(join(dir, CATALOG_FILE)))
   assert.equal(backup.schemaVersion, undefined)
   assert.deepEqual(backup.connections, v1.connections)
   assert.deepEqual(catalog.getConnection('local'), { connectionId: 'local', kind: 'local', label: 'Local dsh' })

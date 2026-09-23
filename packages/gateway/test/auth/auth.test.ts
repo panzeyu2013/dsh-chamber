@@ -13,7 +13,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createAuth } from '../../src/auth.ts'
-import { createGatewayStore, hashCredential, verifyCredential, type GatewayStore } from '../../src/store.ts'
+import { createGatewayStore, hashCredential, verifyCredential } from '../../src/store.ts'
 
 const silentLogger = { log() {}, warn() {}, error() {} }
 const TOKEN = '0123456789abcdef0123456789abcdef'
@@ -23,21 +23,13 @@ const RUNTIME_PASSWORD = 'runtime-correct-password'
 
 function tempStore() {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-gw-auth-'))
-  const stores: GatewayStore[] = []
-  const open = () => {
-    const store = createGatewayStore(dir, silentLogger)
-    stores.push(store)
-    return store
-  }
+  const open = () => createGatewayStore(dir, silentLogger)
   const store = open()
   return {
     dir,
     store,
     open,
-    cleanup: () => {
-      for (const s of stores) s.close()
-      rmSync(dir, { recursive: true, force: true })
-    },
+    cleanup: () => rmSync(dir, { recursive: true, force: true }),
   }
 }
 
@@ -381,8 +373,6 @@ test('password: changing configuration across restart invalidates old cookies', 
     const cookie = /dsh_gateway_session=([^;]+)/.exec(login.setCookie ?? '')?.[1]
     assert.ok(cookie !== undefined)
 
-    // The stateDir exclusive lock must be released before reopening.
-    store.close()
     const restartedStore = open()
     const second = createAuth({ kind: 'password', password: 'different-correct-password' }, restartedStore)
     assert.equal(await second.verify({
@@ -597,7 +587,6 @@ test('changePassword: removing the last credential without a config replacement 
     // password-less config leaves only the runtime credential (source runtime).
     const first = createAuth({ kind: 'password', password: PASSWORD }, store)
     await first.changePassword!({ newPassword: RUNTIME_PASSWORD, currentPassword: PASSWORD }, { headers: {}, socketAddr: '127.0.0.1' })
-    store.close()
     const restartedStore = open()
     const restarted = createAuth({ kind: 'none' }, restartedStore)
     assert.equal(restarted.kind, 'password', 'the runtime credential survives config seeding')
@@ -622,7 +611,6 @@ test('runtime credentials survive a restart: config seeding is ignored with a lo
   try {
     const auth = createAuth({ kind: 'password', password: PASSWORD }, store)
     await auth.changePassword!({ newPassword: RUNTIME_PASSWORD, currentPassword: PASSWORD }, { headers: {}, socketAddr: '127.0.0.1' })
-    store.close()
 
     const restartedStore = open()
     const logger = { log() {}, warn: (message: unknown) => warns.push(String(message)), error() {} }
@@ -736,7 +724,6 @@ test('changeToken: removing the last credential without a config replacement is 
       headers: { authorization: `Bearer ${TOKEN}` },
       socketAddr: '203.0.113.8',
     })
-    store.close()
     const restartedStore = open()
     const restarted = createAuth({ kind: 'none' }, restartedStore)
     assert.equal(restarted.kind, 'token', 'the runtime token survives config seeding')
@@ -761,7 +748,6 @@ test('changeToken: a runtime token survives a restart while the config token is 
       headers: { authorization: `Bearer ${TOKEN}` },
       socketAddr: '203.0.113.8',
     })
-    store.close()
 
     const restartedStore = open()
     const logger = { log() {}, warn: (message: unknown) => warns.push(String(message)), error() {} }
@@ -807,7 +793,6 @@ test('seeding rule 3: a config-less restart clears a config-sourced password (ro
     const cookie = /dsh_gateway_session=([^;]+)/.exec(login.setCookie ?? '')?.[1]
     assert.ok(cookie !== undefined)
     const secretBefore = store.getJwtSecret()
-    store.close()
 
     const restartedStore = open()
     const restarted = createAuth({ kind: 'none' }, restartedStore)
@@ -824,7 +809,6 @@ test('seeding rule 3: a config-less restart clears a config-sourced token (no jw
   try {
     createAuth({ kind: 'token', token: TOKEN }, store)
     const secretBefore = store.getJwtSecret()
-    store.close()
 
     const restartedStore = open()
     const restarted = createAuth({ kind: 'none' }, restartedStore)

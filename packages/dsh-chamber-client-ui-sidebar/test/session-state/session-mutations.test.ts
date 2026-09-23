@@ -11,14 +11,14 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { chamberBridge } from '../../src/shared/aggregate-store.ts'
-import { getInstanceClient, releaseInstanceClient, type UnaryResult } from '../../src/shared/instance-api.ts'
+import { chamberBridge } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
+import { getInstanceClient, releaseInstanceClient, type UnaryResult } from '@dsh-chamber/dsh-chamber-client-core/instance-api'
 import {
   archiveSessionForSource,
   createSessionForSource,
   forkSessionForSource,
-} from '../../src/shared/session-mutations.ts'
-import { createWorkspaceForSource } from '../../src/shared/workspace-mutations.ts'
+} from '@dsh-chamber/dsh-chamber-client-core/session-mutations'
+import { createWorkspaceForSource } from '@dsh-chamber/dsh-chamber-client-core/workspace-mutations'
 
 interface SessionFacts { created: Record<string, unknown>[]; removed: Record<string, unknown>[]; off(): void }
 

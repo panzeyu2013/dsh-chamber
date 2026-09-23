@@ -5,11 +5,17 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { chamberBridge, type PluginGraphDiagnostic } from '../../src/shared/aggregate-store.ts'
-import { isChannelClassDiagnostic, recheckPluginGraphDiagnostic } from '../../src/shared/plugin-graph-recheck.ts'
+import { chamberBridge, type PluginGraphDiagnostic } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
+import { isChannelClassDiagnostic, recheckPluginGraphDiagnostic } from '@dsh-chamber/dsh-chamber-client-core'
+// The classifier single source (audit arch-03 P2-2): the pinned HTTP literal and
+// the lockstep expectations below come FROM it, never from a second copy here.
+import {
+  classifyPluginGraphOutcome, graphHttpFailureMessage,
+} from '@dsh-chamber/dsh-chamber-client-core/plugin-graph-classify'
+import type { UnaryPostOutcome } from '@dsh-chamber/dsh-chamber-client-core/wire-common'
 
 const CP = 'http://cp'
-const HTTP_404 = '宿主启动图不可达：HTTP 404'
+const HTTP_404 = graphHttpFailureMessage(404)
 
 /** One recorded diagnostic for a source (report through the real store). */
 const record = (sourceId: string, state: PluginGraphDiagnostic['state'], message?: string, updatedAt = 1): void =>
@@ -20,6 +26,15 @@ const diag = (sourceId: string): PluginGraphDiagnostic | undefined => chamberBri
 
 /** Recheck one source against a canned fetch on the shared control-plane origin. */
 const recheck = (sourceId: string, fetchImpl: typeof fetch) => recheckPluginGraphDiagnostic(sourceId, { fetchImpl, origin: CP })
+
+/** The shared single-source verdict for one canned wire answer: the recheck's
+ *  published state/message must equal it (the design 09 §3.5 mirror contract). */
+const verdictOf = (status: number, body: unknown): { state: 'not-injected' | 'graph-unreachable'; message: string } => {
+  const outcome: UnaryPostOutcome = { status, ok: status >= 200 && status < 300, body, jsonError: undefined }
+  const verdict = classifyPluginGraphOutcome(outcome)
+  assert.ok(verdict.kind === 'channel' || verdict.kind === 'malformed', `unexpected verdict ${verdict.kind}`)
+  return { state: verdict.kind === 'channel' ? verdict.state : 'graph-unreachable', message: verdict.message }
+}
 
 /** The boot's server-response envelope around a `result` payload. */
 const envelope = (result: unknown): unknown => ({ type: 'server-response', rpcId: 'any', result })
@@ -167,10 +182,12 @@ test('recheck never heals malformed graph rows to ok (boot mirror)', async () =>
   assert.equal(await recheck('recheck-bad-row-obj', fakeObj.fetch), 'reported-graph-unreachable')
   assert.equal(diag('recheck-bad-row-obj')?.message, '宿主启动图：entry 不是对象')
   record('recheck-bad-row-fields', 'not-injected', HTTP_404)
-  const fakeFields = fakeFetchFor(200, envelope({ ok: true, value: { rev: 'rev', entries: [{ id: 'x', url: '/plugins/??x/client.js' }] } }))
+  const badRowEnvelope = envelope({ ok: true, value: { rev: 'rev', entries: [{ id: 'x', url: '/plugins/??x/client.js' }] } })
+  const fakeFields = fakeFetchFor(200, badRowEnvelope)
   assert.equal(await recheck('recheck-bad-row-fields', fakeFields.fetch), 'reported-graph-unreachable')
-  assert.equal(diag('recheck-bad-row-fields')?.message,
-    '宿主启动图：entry {"id":"x","url":"/plugins/??x/client.js"} 必须携带 string id/url/rev')
+  // The published message must equal the shared classifier's verdict for the
+  // same answer (the boot's compact `"x"` label, not a second local spelling).
+  assert.equal(diag('recheck-bad-row-fields')?.message, verdictOf(200, badRowEnvelope).message)
   // An ok:true value that is not an object/array still answers the entries message (boot's combined gate).
   record('recheck-bad-value', 'not-injected', HTTP_404)
   const fakeValue = fakeFetchFor(200, envelope({ ok: true, value: 'nope' }))
@@ -211,5 +228,32 @@ test('recheck reports a not-injected verdict when the recorded state was graph-u
   assert.equal(await recheck('recheck-reclassify', fake.fetch), 'reported-not-injected')
   const after = diag('recheck-reclassify')
   assert.equal(after?.state, 'not-injected')
-  assert.equal(after?.message, '宿主启动图不可达：HTTP 404')
+  assert.equal(after?.message, HTTP_404)
+})
+
+test('recheck publishes the shared single-source verdict for the same wire answer (lockstep)', async () => {
+  // The recheck's whole write-back discipline is "word-for-word what the next
+  // boot would report": every published state/message must equal the shared
+  // classifier's verdict (plugin-graph-classify.ts) for the same answer.
+  const cases: { status: number; body: unknown }[] = [
+    { status: 404, body: {} },
+    { status: 500, body: {} },
+    { status: 200, body: envelope({ ok: false, error: { code: 'internal_error' } }) },
+    { status: 200, body: envelope({ ok: false, error: { code: 'rpc_failed', message: 'unknown method clientGraph/graph' } }) },
+    { status: 200, body: { type: 'server-response', rpcId: 'any' } },
+    { status: 200, body: envelope({ ok: true, value: { rev: 'rev', entries: 'nope' } }) },
+    { status: 200, body: envelope({ ok: true, value: { rev: 'rev', entries: [42] } }) },
+    { status: 200, body: envelope({ ok: true, value: { rev: 'rev', entries: [{ id: 'x', url: '/plugins/x' }] } }) },
+  ]
+  for (const [index, current] of cases.entries()) {
+    const sourceId = `recheck-lockstep-${index}`
+    const expected = verdictOf(current.status, current.body)
+    // Record the OPPOSITE state so a changed verdict must write.
+    record(sourceId, expected.state === 'not-injected' ? 'graph-unreachable' : 'not-injected', 'stale opposite state')
+    const fake = fakeFetchFor(current.status, current.body)
+    const recheckOutcome = await recheck(sourceId, fake.fetch)
+    assert.notEqual(recheckOutcome, 'unchanged', JSON.stringify(current))
+    assert.equal(diag(sourceId)?.state, expected.state, JSON.stringify(current))
+    assert.equal(diag(sourceId)?.message, expected.message, JSON.stringify(current))
+  }
 })

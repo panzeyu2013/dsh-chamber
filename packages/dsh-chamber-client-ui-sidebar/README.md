@@ -22,7 +22,7 @@ The shell declares and renders the three holes the alpha.2 official
   one `PanelRow` per entry, and a click calls `ctx.layout.selectPanel(id)`.
   Upstream ships an empty list, so the section is invisible by default; the
   projection is pinned by `test/plugin-kernel/panel-source.test.ts` (the source-text
-  wiring lock that paired with it was retired by the 2026-12 ruling).
+  wiring lock that paired with it was retired by the ruling).
 
 ## Structure
 
@@ -31,7 +31,7 @@ The shell declares and renders the three holes the alpha.2 official
   only. Source header = label + connection-status badge (active source
   highlighted); remote sources carry a stable accent derived from the source
   id (hue hash), local keeps the default ink (the old header identity DOT is
-  gone — 2026-10 user feedback; identity rides the fold-glyph accent, the
+  gone — user feedback; identity rides the fold-glyph accent, the
   active left inset and the rail dots); the rail renders the source color dots
   (one named, operable button per source since the 2026-09-11 upstream
   alignment — see Interactions).
@@ -72,7 +72,7 @@ The shell declares and renders the three holes the alpha.2 official
   header's left slot holds a MONITOR glyph (self-drawn `IconMonitorOutline16`
   in `client/icons.tsx` — the primitives set has no server glyph, and the
   former folder glyph read as another workspace; folder = workspace,
-  monitor = server, 2026-10 user feedback) that swaps to the collapse
+  monitor = server user feedback) that swaps to the collapse
   chevron on hover — clicking collapses the source's ENTIRE workspace list
   (search capsule, source-scope git alert and list included) WITHOUT touching
   any workspace's own conversation fold state (`sourceFolded`, separate from
@@ -83,7 +83,7 @@ The shell declares and renders the three holes the alpha.2 official
   `shared/derive.ts`): a golden-angle hue spread of the
   `(sourceId, family seed)` hash plus a per-workspace lightness jitter
   (56/61/66 %) at a SOFT palette (34 % saturation; 21 % for derived
-  worktrees — user feedback 2026-10 softened the original 62/45 % jewel
+  worktrees — user feedback softened the original 62/45 % jewel
   tones; the source accent matches at `hsl(hue 34% 61%)`) — no user
   customization, no persistence, selection-independent
   (the current-session row keeps its own official selected tint). Worktrees
@@ -169,7 +169,7 @@ The shell declares and renders the three holes the alpha.2 official
   can also be switched from the rail; the coloured dot and the active accent
   ring are unchanged, geometry included.
 
-## Open-intent gates, the workspace echo and the session echo (design 05 §2.2.1, 2026-12)
+## Open-intent gates, the workspace echo and the session echo (design 05 §2.2.1)
 
 This package owns the page-wide open-intent slot (`shared/open-intent.ts` — the
 same vite-shared singleton discipline as `pending-click.ts`, because the target
@@ -318,20 +318,19 @@ session-echo ledger (`shared/session-echo.ts`) and its own single funnel
 
 ## Shared gateway-runtime face (design 21 §5.2)
 
-- `src/shared/gateway-runtime.ts` + `src/shared/gateway-runtime-poll.ts` hold the
-  pure gateway dsh-runtime core (status parse/fetch, action gates, error
+- The pure gateway dsh-runtime core (status parse/fetch, action gates, error
   classification, restart-readiness poll — `pollGatewayReady`, 1 s interval /
-  120 s cap, abort-aware), exported through `@dsh-chamber/dsh-chamber-client-ui-sidebar/shared`
-  (`./shared` → `./src/shared/index.ts`, no build step; vite consumers bundle the
-  real source).
+  120 s cap, abort-aware) lives in client-core:
+ `packages/dsh-chamber-client-core/src/gateway-runtime.ts` +
+ `gateway-runtime-poll.ts`, reached through the
+ `@dsh-chamber/dsh-chamber-client-core` `.` face (source-only; vite consumers
+ bundle the real source). R4 P3 moved it out of this package and deleted
+ `src/shared/`.
 - Consumer packages (settings-bridge, connections, git, layout, renderer)
-  typecheck the REAL shared sources: P4-4 (2026-09) deleted the handwritten
-  ambient mirrors (`src/ambient/*.d.ts`) and their tsconfigs now resolve the
-  specifier to this package's source (root tsconfig paths, or the node_modules
-  workspace link + package exports where a package keeps its own `paths`). The
-  former mirror-lockstep test (`test/gateway-runtime-mirror.test.ts`) was
-  removed with the mirrors — drift is impossible by construction now that the
-  consumers compile this source directly.
+  typecheck the REAL client-core sources through the node_modules workspace
+ link + the client-core package exports: P4-4 (2026-09) deleted the handwritten
+  ambient mirrors (`src/ambient/*.d.ts`) — drift is impossible by construction
+ now that the consumers compile this one source.
 - The settings-bridge `remoteRuntimeStatusView` view mapping and its
   SettingsBridgeKey coupling stay in settings-bridge; nothing in this face
   imports settings-bridge.

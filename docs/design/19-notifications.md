@@ -4,7 +4,7 @@
 > 推送原生通知，Dock/任务栏图标显示未读红气泡（均为主进程裁决的设置可选项）；检测端
 > 复用 renderer 既有事实通道，控制面零改动、无新 host 插件；**未完成门禁**：macOS
 > 权限/拒绝行为的**打包态实机走查**（拒绝态设置页提示与「打开系统设置」恢复入口存在，
-> 见 §3.3/§4 ）、Windows 任务栏 overlay 门控（design 23 排期）——见
+> 见 §3.3/§4）、Windows 任务栏 overlay 门控（design 23 排期）——见
 > `docs/progress/STATUS.md`。
 > 需求来源：用户要求「一个 session 在 complete、ask、request 时推送通知」并做成设置
 > 可选项；未读徽标是同一投影的被动指示。
@@ -125,8 +125,7 @@ type NotificationKind = 'complete' | 'ask' | 'request'
 // 纯函数：prev 事实 → next 事实 的边沿事件集
 function detectNotificationEdges(
   prev: Record<string, SessionFacts> | undefined,   // 首份上报 = undefined（只播种，不发事件）
-  next: Record<string, SessionFacts>,
-): Array<{ sessionId: string; kind: NotificationKind }>
+  next: Record<string, SessionFacts>): Array<{ sessionId: string; kind: NotificationKind }>
 ```
 
 | 事件 | 边沿定义 | 说明 |
@@ -140,7 +139,7 @@ function detectNotificationEdges(
   与 `prevRunningRef` 同生命周期纪律；主进程 claim 兜底）。
 - subagent 会话不产生事件（事实通道不含 subagent 行；父会话的 `runningSubagents`
   只驱动子代理计数徽标）。
-- **2026-12 P3 单入口修订**：裁决模块为 `packages/renderer/src/notification-projection.ts`——
+- **P3 单入口修订**：裁决模块为 `packages/renderer/src/notification-projection.ts`——
   `planRuntimeNotifications`（壳边沿；有可判 facts 的来源只发 ask/request，complete 归 facts）
   与 `planFactsNotifications`（observed 完成，host 域水位严格前进才通知，reconstructed 只出未读）
   共用 `complete-ledger` 的键空间与唯一 `emitSessionNotification` 出口。原 `usableFacts` 抑制

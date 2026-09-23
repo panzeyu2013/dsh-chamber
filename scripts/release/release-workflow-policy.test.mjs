@@ -14,8 +14,7 @@ function jobBlock(text, name) {
 
 const workflow = readFileSync(new URL('../../.github/workflows/release.yml', import.meta.url), 'utf8')
 const desktopPackage = JSON.parse(
-  readFileSync(new URL('../../packages/desktop/package.json', import.meta.url), 'utf8'),
-)
+  readFileSync(new URL('../../packages/desktop/package.json', import.meta.url), 'utf8'))
 
 function between(startMarker, endMarker) {
   const start = workflow.indexOf(startMarker)
@@ -27,12 +26,10 @@ function between(startMarker, endMarker) {
 
 const tagBinding = between(
   '      - name: Bind release tag to the checked-out commit',
-  '      - name: Assert version matches package.json',
-)
+ ' - name: Assert version matches package.json')
 const prepare = between(
   '      - name: Refuse published release and replace stale drafts for this tag',
-  '      - name: Create GitHub Release (draft)',
-)
+ ' - name: Create GitHub Release (draft)')
 const createJob = between('\n  create-release:', '\n  validation:')
 const create = between('      - name: Create GitHub Release (draft)', '\n  validation:')
 // 与 swiftBuild 同一纪律：整行注释必须先剥掉，否则被 `#` 注释掉的 release 步骤仍能满足 includes(gate) 断言。
@@ -67,8 +64,7 @@ assert.match(prepare, /PUBLISHED_IDS/)
 assert.match(prepare, /refusing destructive rerun/)
 assert.ok(
   prepare.indexOf('refusing destructive rerun') < prepare.indexOf('gh api -X DELETE'),
-  'published-release guard must run before any draft deletion',
-)
+  'published-release guard must run before any draft deletion')
 
 assert.match(create, /if: \$\{\{ github\.event\.inputs\.dry_run != 'true' \}\}/)
 assert.match(create, /target_commitish: \$\{\{ github\.sha \}\}/)
@@ -78,8 +74,7 @@ assert.match(createJob, /formal releases require CSC_LINK/)
 assert.ok(
   createJob.indexOf('Require macOS release signing credentials before mutation') <
     createJob.indexOf('Refuse published release and replace stale drafts for this tag'),
-  'formal signing credentials must be verified before any GitHub Release mutation',
-)
+  'formal signing credentials must be verified before any GitHub Release mutation')
 assert.doesNotMatch(workflow, /npm publish|npm dist-tag/)
 assert.match(gatewayBuild, /sha256sum/)
 assert.match(gatewayBuild, /packages\/gateway\/release\/\*\.tgz\.sha256/)
@@ -103,8 +98,7 @@ assert.match(swiftBuild, /dry_run/, 'the native leg must branch on the dry-run i
 // imported p12 → red; the no-credentials path is the explicit dry-run branch only.
 assert.ok(
   swiftBuild.includes('test -n "${CSC_LINK:-}" || { echo "::error::formal Swift release requires CSC_LINK"; exit 1; }'),
-  'formal native release must fail closed when CSC_LINK is absent',
-)
+  'formal native release must fail closed when CSC_LINK is absent')
 assert.ok(swiftBuild.includes('no Developer ID Application identity in CSC_LINK'),
   'formal native release must fail closed when the p12 carries no Developer ID identity')
 // Formal leg assembles+signs only (--no-zip --no-dmg): archives are made AFTER
@@ -118,8 +112,7 @@ assert.ok(
   swiftBuild.includes('if [[ "$DRY_RUN" != "true" ]]; then')
   && swiftBuild.indexOf('ARTIFACT_ARGS=(--no-zip --no-dmg)')
     > swiftBuild.indexOf('if [[ "$DRY_RUN" != "true" ]]; then'),
-  '--no-zip/--no-dmg are the FORMAL branch, never the dry run',
-)
+  '--no-zip/--no-dmg are the FORMAL branch, never the dry run')
 assert.ok(swiftBuild.includes('${ARTIFACT_ARGS[@]+"${ARTIFACT_ARGS[@]}"}'),
   'the artifact args must use the bash-3.2-guarded array expansion')
 assert.equal((swiftBuild.split('ARTIFACT_ARGS[@]').length - 1), 2,
@@ -195,8 +188,7 @@ assert.ok(
 // Fail-closed verification of the UPLOADED blobs, not only the staged .app.
 assert.ok(
   swiftBuild.split('\n').some((line) => line.trim() === 'node scripts/release/release-artifacts.mjs "$VERSION" --check-dir macos/release'),
-  'release-artifacts must be a real consumer so its collision assertion observes the real tag names',
-)
+  'release-artifacts must be a real consumer so its collision assertion observes the real tag names')
 assert.ok(swiftBuild.includes('ditto -x -k "${BASE}.zip" "$EXTRACT"'),
   'the zip actually uploaded must be extracted and re-verified (P4)')
 assert.ok(swiftBuild.includes('codesign --verify --deep --strict --verbose=2 "$ZIP_APP"'),
@@ -218,8 +210,7 @@ assert.ok(hostLoop !== null, 'the closure check must iterate the host packages t
 assert.deepEqual(
   (hostLoop?.[1] ?? '').replace(/\\\n\s*/g, ' ').trim().split(/\s+/).sort(),
   ['dsh-chamber-seed-archive-cleanup', 'dsh-chamber-seed-client-graph', 'dsh-chamber-seed-git-worktree', 'dsh-chamber-seed-open-in'],
-  'the host-package loop list must be exactly the four shipped host packages',
-)
+  'the host-package loop list must be exactly the four shipped host packages')
 assert.ok(swiftBuild.includes('test -f "$APP/Contents/Resources/sidecar/dist/$HOST/dist/index.js"'),
   'the closure loop must test the per-host dist entry inside the .app')
 
@@ -243,22 +234,19 @@ assert.ok(swiftBuild.includes('test -f "$APP/Contents/Resources/sidecar/dist/$HO
 // overwriting the rolling beta feed), while the stable feed keeps releases/latest/download.
 const appcastStep = between(
   '      - name: Generate + sign the Sparkle appcast',
-  '      - name: Verify native app + uploaded archives',
-)
+ ' - name: Verify native app + uploaded archives')
   .split('\n')
   .filter((line) => !/^[ \t]*#/.test(line))
   .join('\n')
 const verifyStep = between(
   '      - name: Verify native app + uploaded archives',
-  '      - name: Upload native artifacts',
-)
+ ' - name: Upload native artifacts')
   .split('\n')
   .filter((line) => !/^[ \t]*#/.test(line))
   .join('\n')
 const uploadStep = between(
   '      - name: Upload native artifacts',
-  '\n  finalize-release:',
-)
+  '\n  finalize-release:')
   .split('\n')
   .filter((line) => !/^[ \t]*#/.test(line))
   .join('\n')
@@ -529,8 +517,7 @@ assert.notEqual(prefixAssign, -1, 'the beta branch must assign the rolling downl
 assert.ok(
   appcastStep.lastIndexOf('if [[ -n "$ROLLING_TAG" ]]; then', prefixAssign) !== -1
   && appcastStep.lastIndexOf('if [[ -n "$ROLLING_TAG" ]]; then', prefixAssign) < prefixAssign,
-  'the prefix assignment must sit inside the beta-only branch (stable never gets one)',
-)
+  'the prefix assignment must sit inside the beta-only branch (stable never gets one)')
 assert.ok(appcastStep.includes('--download-url-prefix "https://github.com/${GITHUB_REPOSITORY}/releases/download/${ROLLING_TAG}/"'),
   'the prefix must be the rolling download dir (trailing slash)')
 assert.ok(appcastStep.includes('${PREFIX_ARGS[@]+"${PREFIX_ARGS[@]}"}'),
@@ -548,14 +535,12 @@ assert.ok(uploadStep.includes('-o /tmp/appcast-stable-refresh-out/appcast-swift-
 assert.match(
   swiftBuild,
   /if \[\[ "\$VERSION" == \*-\* \]\]; then\n\s+SPARKLE_FEED="\$SPARKLE_FEED_BETA"\n\s+else\n\s+SPARKLE_FEED="\$SPARKLE_FEED_STABLE"\n\s+fi/,
-  'the feed must be selected from the release channel (beta vs stable)',
-)
+  'the feed must be selected from the release channel (beta vs stable)')
 assert.ok(swiftBuild.includes('--sparkle-feed "$SPARKLE_FEED"'),
   'the build must inject the selected feed, not a hard-coded URL')
 assert.ok(
   appcastStep.includes('APPCAST="appcast-swift-beta.xml"') && appcastStep.includes('APPCAST="appcast-swift.xml"'),
-  'the appcast output name must be channel-selected to match the injected feed',
-)
+  'the appcast output name must be channel-selected to match the injected feed')
 
 // Rolling publish happens in the POST-verify upload step: archives first, then the appcast
 // that references them. The probe/create-if-absent guard keeps the same rule (prerelease → never
@@ -579,8 +564,7 @@ assert.match(uploadStep, /gh release create "\$ROLLING_TAG"/,
   'the rolling release/tag must be created when absent')
 assert.ok(
   uploadStep.indexOf('gh release view "$ROLLING_TAG"') < uploadStep.indexOf('gh release create "$ROLLING_TAG"'),
-  'the create must be guarded by the existence probe',
-)
+  'the create must be guarded by the existence probe')
 assert.match(uploadStep, /--prerelease/,
   'the rolling release must be a prerelease so releases/latest stays on stable')
 assert.ok(uploadStep.includes('STAGED_ZIP="/tmp/appcast-in-beta/$(basename "${BASE}.zip")"'),
@@ -592,13 +576,11 @@ assert.ok(uploadStep.includes('for ARCHIVE in /tmp/appcast-in-beta/*.delta; do')
 assert.ok(
   uploadStep.indexOf('gh release upload "$ROLLING_TAG" "$STAGED_ZIP" --clobber')
   < uploadStep.indexOf('gh release upload "$ROLLING_TAG" "$BETA_APPCAST" --clobber'),
-  'archives must be published BEFORE the appcast that references them',
-)
+  'archives must be published BEFORE the appcast that references them')
 assert.ok(
   uploadStep.indexOf('for ARCHIVE in /tmp/appcast-in-beta/*.delta; do')
   < uploadStep.indexOf('gh release upload "$ROLLING_TAG" "$BETA_APPCAST" --clobber'),
-  'delta 归档必须先于引用它的 appcast 上传（S-36：delta enclosure 不留 404）',
-)
+  'delta 归档必须先于引用它的 appcast 上传（S-36：delta enclosure 不留 404）')
 assert.ok(!uploadStep.includes('/tmp/appcast-in/'),
   '旧的两通道共用收件目录必须彻底消失（历史 beta zip 已在滚动 release 上，不重复上传）')
 assert.match(uploadStep, /::error::appcast 引用的 beta zip 不在收件目录/,
@@ -652,13 +634,11 @@ assert.ok(uploadStep.includes('for ARCHIVE in /tmp/appcast-in-stable/*.delta; do
 assert.ok(
   uploadStep.indexOf('gh release upload "$ROLLING_TAG" "${BASE}.zip" --clobber')
   < uploadStep.indexOf('gh release upload "$ROLLING_TAG" /tmp/appcast-stable-refresh-out/appcast-swift-beta.xml --clobber'),
-  'the refresh must publish archives before the merged feed',
-)
+  'the refresh must publish archives before the merged feed')
 assert.ok(
   uploadStep.indexOf('gh release upload "$ROLLING_TAG" "$ARCHIVE" --clobber', uploadStep.indexOf('STABLE_APPCAST='))
   < uploadStep.indexOf('gh release upload "$ROLLING_TAG" /tmp/appcast-stable-refresh-out/appcast-swift-beta.xml --clobber'),
-  '刷新步的 delta 归档同样必须先于合并 feed 上传（S-36）',
-)
+  '刷新步的 delta 归档同样必须先于合并 feed 上传（S-36）')
 // stable feed 自己的 delta 也必须随 draft 上传（enclosure 指向 releases/latest/download/<delta>）。
 assert.ok(uploadStep.includes('gh release upload "v${VERSION}" "$ARCHIVE" --clobber'),
   'the stable deltas must be uploaded to the draft release before finalize')
@@ -696,8 +676,7 @@ assert.match(between('      - name: Verify mac zip contents', '  build-windows:'
 // already published the unstapled dmg, so the stapled file is re-uploaded over it.
 const dmgStep = between(
   '      - name: Notarize + staple the Electron dmg',
-  '      - name: Verify mac zip contents',
-)
+ ' - name: Verify mac zip contents')
   .split('\n')
   .filter((line) => !/^[ \t]*#/.test(line))
   .join('\n')
@@ -723,8 +702,7 @@ assert.match(dmgStep, /gh release upload "v\$\{VERSION\}" "\$DMG" --clobber/,
 // G28: the uploaded zip is not just `test -n`-ed — it is extracted and the .app inside re-verified.
 const zipVerifyStep = between(
   '      - name: Verify mac zip contents',
-  '\n  build-windows:',
-)
+  '\n  build-windows:')
   .split('\n')
   .filter((line) => !/^[ \t]*#/.test(line))
   .join('\n')
@@ -798,8 +776,7 @@ const missingGates = gateCommands(ciTestJob).filter(gate => !validation.includes
 assert.deepEqual(
   missingGates,
   [],
-  `release validation must run every gate the push path runs (or list it in EXEMPT with a reason). Missing: ${missingGates.join(', ')}`,
-)
+  `release validation must run every gate the push path runs (or list it in EXEMPT with a reason). Missing: ${missingGates.join(', ')}`)
 // An exemption that stops being needed must be removed, not left to rot.
 for (const gate of EXEMPT.keys()) {
   assert.ok(
@@ -808,8 +785,7 @@ for (const gate of EXEMPT.keys()) {
   )
   assert.ok(
     !validation.includes(gate),
-    `EXEMPT lists ${gate}, but release validation runs it now — drop the exemption`,
-  )
+    `EXEMPT lists ${gate}, but release validation runs it now — drop the exemption`)
 }
 
 // ---------------------------------------------------------------- CI proof + alignment
@@ -820,36 +796,30 @@ for (const gate of EXEMPT.keys()) {
 assert.doesNotMatch(
   ciWorkflow,
   /github\.ref_type/,
-  'ci.yml must not branch on tags anymore: a release proves its commit ran this chain on main instead of re-running it',
-)
+  'ci.yml must not branch on tags anymore: a release proves its commit ran this chain on main instead of re-running it')
 assert.doesNotMatch(
   ciWorkflow,
   /^\s+tags:\s*\[[^\]]*'v\*'[^\]]*\]\s*$/m,
-  'ci.yml must not trigger on tag pushes: release.yml owns the tag path and rejects a commit main never validated',
-)
+  'ci.yml must not trigger on tag pushes: release.yml owns the tag path and rejects a commit main never validated')
 const ciWindowsJob = jobBlock(ciWorkflow, 'test-windows')
 // The proof names every required leg explicitly, so release validation cannot pass on a commit whose linux chain or windows leg never ran.
 assert.match(
   validation,
   /- name: Release commit passed CI on main[\s\S]{0,400}?run: node scripts\/release\/verify-release-ci-proof\.mjs --sha/,
-  'release validation must prove the released commit passed ci.yml on main (linux + windows legs)',
-)
+  'release validation must prove the released commit passed ci.yml on main (linux + windows legs)')
 assert.match(
   validation,
   /permissions:\n\s+contents: read\n\s+actions: read\n/,
-  'the proof lists workflow runs/jobs, so the validation job needs actions: read',
-)
+  'the proof lists workflow runs/jobs, so the validation job needs actions: read')
 for (const manifest of ['dsh-runtime', 'control-plane', 'desktop']) {
   assert.ok(
     ciWindowsJob.includes(`--filter @dsh-chamber/${manifest} run test:win32`),
-    `the windows leg must keep the ${manifest} test:win32 manifest`,
-  )
+    `the windows leg must keep the ${manifest} test:win32 manifest`)
 }
 assert.match(
   ciWorkflow,
   /^concurrency:\n  group:\s*ci-\$\{\{\s*github\.ref\s*\}\}\n  cancel-in-progress:\s*\$\{\{\s*github\.event_name\s*==\s*'pull_request'\s*\}\}$/m,
-  'the push chain must serialize per ref and cancel ONLY pull-request runs: cancelling a branch push could drop the validation of a code commit when a prose-only push follows it (the classifier spares prose the heavy chain, so nothing would re-validate that commit)',
-)
+  'the push chain must serialize per ref and cancel ONLY pull-request runs: cancelling a branch push could drop the validation of a code commit when a prose-only push follows it (the classifier spares prose the heavy chain, so nothing would re-validate that commit)')
 // The package test set and the client typecheck set are each invoked through
 // `scripts/gates/run-checks.mjs`, so the gated step count must not fall below the floor
 // while both concentrated entries stay classifier-gated.
@@ -857,13 +827,11 @@ for (const entry of ['node scripts/gates/run-checks.mjs tests', 'node scripts/ga
   assert.match(
     ciTestJob,
     new RegExp(`if:\\s*steps\\.classify\\.outputs\\.code\\s*==\\s*'true'\\n\\s+run:\\s*${entry.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')}`),
-    `the classifier must gate the heavy single entry: ${entry}`,
-  )
+    `the classifier must gate the heavy single entry: ${entry}`)
 }
 assert.ok(
   classifiesHeavySteps(ciTestJob) >= 10,
-  'the heavy push chain must stay classified by the change classifier (floor 10 after the 2026-12 single-entry collapse)',
-)
+  'the heavy push chain must stay classified by the change classifier (floor 10 after the single-entry collapse)')
 
 /** Count the heavy steps the classifier can skip. */
 function classifiesHeavySteps(jobText) {
@@ -878,13 +846,11 @@ assert.ok(prefixes && files, 'the classifier must export its prose allowlist')
 assert.deepEqual(
   [...prefixes[1].matchAll(/'([^']+)'/g)].map(match => match[1]),
   ['docs/'],
-  'prose prefixes decide which pushes skip gates — widen deliberately, in this test',
-)
+  'prose prefixes decide which pushes skip gates — widen deliberately, in this test')
 assert.deepEqual(
   [...files[1].matchAll(/'([^']+)'/g)].map(match => match[1]),
   ['README.md', 'AGENTS.md', 'CONTRIBUTING.md', 'CHANGELOG.md', 'LICENSE', 'SECURITY.md', 'CODE_OF_CONDUCT.md'],
-  'prose files decide which pushes skip gates — widen deliberately, in this test',
-)
+  'prose files decide which pushes skip gates — widen deliberately, in this test')
 // The upstream-touchpoint registry gate runs in TWO passes, both load-bearing: a substring
 // check on the script path alone would pass with either missing, so pin the exact command
 // lines AND their order around the install (advisory file-only before, C8 rebuild after).
@@ -892,8 +858,7 @@ const upstreamGateRuns = validation.match(/^\s+run: node scripts\/upstream\/veri
 assert.equal(
   upstreamGateRuns.length,
   2,
-  `release validation must run the upstream gate exactly twice (advisory + C8 rebuild), found ${upstreamGateRuns.length}`,
-)
+  `release validation must run the upstream gate exactly twice (advisory + C8 rebuild), found ${upstreamGateRuns.length}`)
 const advisoryGate = validation.indexOf('run: node scripts/upstream/verify-upstream-touchpoints.mjs --no-artifact-rebuild')
 const rebuildGate = validation.indexOf('run: node scripts/upstream/verify-upstream-touchpoints.mjs\n')
 const installStep = validation.indexOf('run: pnpm install --frozen-lockfile')
@@ -901,14 +866,12 @@ assert.notEqual(advisoryGate, -1, 'release validation must run the upstream gate
 assert.notEqual(rebuildGate, -1, 'release validation must run the upstream gate in its default (C8 rebuild) mode')
 assert.ok(
   advisoryGate < installStep && installStep < rebuildGate,
-  'the upstream gate must run file-only before the install and its C8 rebuild pass after it (ci.yml order)',
-)
+  'the upstream gate must run file-only before the install and its C8 rebuild pass after it (ci.yml order)')
 // Regenerating the notices file is not a gate by itself — the committed file must be proven current, on both the English mirror and the canonical one.
 assert.match(
   validation,
   /git diff --exit-code -- THIRD_PARTY_NOTICES\.md docs\/THIRD_PARTY_NOTICES\.en-US\.md/,
-  'release validation must assert the regenerated third-party notices are committed',
-)
+  'release validation must assert the regenerated third-party notices are committed')
 assert.equal(releaseChannel('1.2.3'), 'latest')
 assert.equal(releaseChannel('1.2.3-beta.1'), 'beta')
 assert.equal(releaseChannel('1.2.3-beta.0'), 'beta')
@@ -921,8 +884,7 @@ assert.throws(() => releaseChannel('1.2.3;echo injected'))
 assert.equal(
   desktopPackage.build?.electronDownload,
   undefined,
-  'formal desktop builds must not trust a committed third-party Electron mirror',
-)
+  'formal desktop builds must not trust a committed third-party Electron mirror')
 // Support-matrix floor: the native shell runs the SHIPPED BUNDLE on the OS WebKit, so
 // the floor is the JS baseline that bundle needs, not the Electron runtime's own floor (12.0
 // in Electron 43.x). The bundle calls Promise.withResolvers unconditionally (approval /
@@ -936,18 +898,15 @@ const swiftPackageManifest = readFileSync(new URL('../../macos/Package.swift', i
 assert.equal(
   desktopPackage.build?.mac?.minimumSystemVersion,
   '14.4',
-  'the Electron flavor must declare the native macOS floor 14.4 (S-30)',
-)
+  'the Electron flavor must declare the native macOS floor 14.4 (S-30)')
 assert.match(
   nativeInfoPlistTemplate,
   /<key>LSMinimumSystemVersion<\/key>\s*<string>14\.4<\/string>/,
-  'the native .app must carry the exact LSMinimumSystemVersion 14.4 (the release floor)',
-)
+  'the native .app must carry the exact LSMinimumSystemVersion 14.4 (the release floor)')
 assert.match(
   swiftPackageManifest,
   /\.macOS\(\.v14\)/,
-  'the Swift package must declare the same macOS floor (.v14) as the shipped plist',
-)
+  'the Swift package must declare the same macOS floor (.v14) as the shipped plist')
 assert.doesNotMatch(nativeInfoPlistTemplate, /<string>1[23]\.0<\/string>/,
   'no pre-14.4 fallback may be reintroduced in the native plist')
 assert.doesNotMatch(swiftPackageManifest, /\.macOS\(\.v1[23]\)/,
@@ -960,13 +919,11 @@ assert.doesNotMatch(swiftPackageManifest, /\.macOS\(\.v1[23]\)/,
 assert.ok(
   Array.isArray(desktopPackage.build?.mac?.electronLanguages)
   && desktopPackage.build.mac.electronLanguages.includes('zh_CN'),
-  'the mac leg must declare the real lproj basename zh_CN (zh-CN never matches zh_CN.lproj)',
-)
+  'the mac leg must declare the real lproj basename zh_CN (zh-CN never matches zh_CN.lproj)')
 assert.ok(
   Array.isArray(desktopPackage.build?.electronLanguages)
   && desktopPackage.build.electronLanguages.includes('zh-CN'),
-  'the win/linux .pak legs keep the hyphenated zh-CN spelling',
-)
+  'the win/linux .pak legs keep the hyphenated zh-CN spelling')
 
 // Every build job (build-gateway / build-macos / build-windows / build-linux / build-swift)
 // must build from the exact SHA create-release validated and bound the tag to; a default-branch
@@ -976,13 +933,11 @@ const buildRefPins = buildJobs.match(/ref: \$\{\{ github\.sha \}\}/g) ?? []
 assert.equal(
   buildRefPins.length,
   5,
-  'every build-job checkout must pin ref: ${{ github.sha }} to the validated workflow SHA',
-)
+  'every build-job checkout must pin ref: ${{ github.sha }} to the validated workflow SHA')
 assert.match(
   swiftBuild,
   /ref: \$\{\{ github\.sha \}\}/,
-  'the native leg ships artifacts from the tag too: it must build the validated SHA like every other leg',
-)
+  'the native leg ships artifacts from the tag too: it must build the validated SHA like every other leg')
 
 // --------------------------------------------------------- proof decision logic
 // The proof gate's decision surface is pure, so every arm is covered here (the network poll
@@ -1026,16 +981,14 @@ assert.equal(
     jobWithoutStep('test-macos', 'Swift tests (release configuration, XCTSkip == 0)'),
   ]).state,
   'failed',
-  'deleting the macOS Swift/XCTest step must fail the proof',
-)
+  'deleting the macOS Swift/XCTest step must fail the proof')
 assert.match(
   judgeRun(GREEN_RUN, [
     job('test', 'success'),
     job('test-windows', 'success'),
     jobWithoutStep('test-macos', 'Swift tests (release configuration, XCTSkip == 0)'),
   ]).reason,
-  /no "Swift tests \(release configuration, XCTSkip == 0\)" step/,
-)
+  /no "Swift tests \(release configuration, XCTSkip == 0\)" step/)
 assert.equal(
   judgeRun(GREEN_RUN, [
     jobWithoutStep('test', 'Package unit tests — single entry (runtime / control-plane / desktop / gateway / renderer-shell / client+host plugins)'),
@@ -1043,8 +996,7 @@ assert.equal(
     job('test-macos', 'success'),
   ]).state,
   'failed',
-  'deleting a linux-chain step must fail the proof',
-)
+  'deleting a linux-chain step must fail the proof')
 assert.equal(
   judgeRun(GREEN_RUN, [
     job('test', 'success', 'skipped'),
@@ -1052,8 +1004,7 @@ assert.equal(
     job('test-macos', 'success'),
   ]).state,
   'failed',
-  'a step the classifier skipped does not prove that gate ran on the release commit',
-)
+  'a step the classifier skipped does not prove that gate ran on the release commit')
 // The mac packaging rehearsal is in the required table, so a run whose rehearsal was
 // deleted (or classifier-skipped on a prose-only push) fails the proof even with all jobs green.
 assert.equal(
@@ -1063,8 +1014,7 @@ assert.equal(
     jobWithoutStep('test-macos', 'macOS packaging rehearsal (ad-hoc, no publish, no credentials)'),
   ]).state,
   'failed',
-  'deleting the mac packaging rehearsal step must fail the release proof',
-)
+  'deleting the mac packaging rehearsal step must fail the release proof')
 // The WINDOWS packaging rehearsal is the win32 mirror of the mac one. Release.yml
 // must never be the first place the NSIS pack runs (with release credentials loaded):
 // the proof requires the ci.yml rehearsal by name, so deleting or classifier-skipping
@@ -1074,19 +1024,16 @@ assert.equal(
 const WIN_REHEARSAL_STEP = 'Windows packaging rehearsal (no publish, no credentials)'
 assert.ok(
   REQUIRED_JOB_STEPS['test-windows'].includes(WIN_REHEARSAL_STEP),
-  'G25/P2: the proof must require the Windows packaging rehearsal step',
-)
+  'G25/P2: the proof must require the Windows packaging rehearsal step')
 const winRehearsal = jobBlock(ciWorkflow, 'test-windows').slice(
-  jobBlock(ciWorkflow, 'test-windows').indexOf(`- name: ${WIN_REHEARSAL_STEP}`),
-)
+  jobBlock(ciWorkflow, 'test-windows').indexOf(`- name: ${WIN_REHEARSAL_STEP}`))
 assert.notEqual(winRehearsal, '', 'ci.yml test-windows must define the Windows packaging rehearsal step')
 assert.match(winRehearsal,
   /if: github\.event_name == 'push' && github\.ref == 'refs\/heads\/main' && steps\.classify\.outputs\.code == 'true'/,
   'the win rehearsal is push-only and classifier-gated: never minutes of NSIS work per pull request')
 assert.ok(
   winRehearsal.includes('pnpm --filter @dsh-chamber/desktop exec electron-builder --win --x64 --publish=never'),
-  'the win rehearsal must run the release packaging invocation with --publish=never',
-)
+  'the win rehearsal must run the release packaging invocation with --publish=never')
 assert.doesNotMatch(winRehearsal, /--publish=always|gh release upload/,
   'the win rehearsal must not publish or upload anything')
 assert.equal(
@@ -1096,8 +1043,7 @@ assert.equal(
     job('test-macos', 'success'),
   ]).state,
   'failed',
-  'deleting the windows packaging rehearsal step must fail the release proof',
-)
+  'deleting the windows packaging rehearsal step must fail the release proof')
 assert.equal(
   judgeRun(GREEN_RUN, [
     { name: 'test', conclusion: 'success' },
@@ -1105,8 +1051,7 @@ assert.equal(
     job('test-macos', 'success'),
   ]).state,
   'failed',
-  'a job entry with no step data cannot prove its steps ran (fail closed)',
-)
+  'a job entry with no step data cannot prove its steps ran (fail closed)')
 assert.deepEqual(
   pickCandidateRuns([
     GREEN_RUN,
@@ -1115,16 +1060,14 @@ assert.deepEqual(
     { ...GREEN_RUN, id: 4, head_sha: 'b'.repeat(40) },
   ], { sha: GREEN_RUN.head_sha, branch: 'main' }).map(run => run.id),
   [1],
-  'only a push run on the base branch proves a release',
-)
+  'only a push run on the base branch proves a release')
 assert.equal(
   judgeCandidates([GREEN_RUN, { ...GREEN_RUN, id: 5, created_at: '2026-09-13T06:00:00Z' }], new Map([
     [5, [job('test', 'success'), job('test-windows', 'failure'), job('test-macos', 'success')]],
     [1, [job('test', 'success'), job('test-windows', 'success'), job('test-macos', 'success')]],
   ])).state,
   'ok',
-  'a flaky failure that was re-run green still proves the commit',
-)
+  'a flaky failure that was re-run green still proves the commit')
 assert.equal(judgeCandidates([{ ...GREEN_RUN, status: 'queued', conclusion: null }], new Map()).state, 'pending')
 assert.equal(judgeCandidates([], new Map()).state, 'pending', 'no run yet is "not proven yet", never a failure')
 
@@ -1133,23 +1076,19 @@ assert.equal(judgeCandidates([], new Map()).state, 'pending', 'no run yet is "no
 assert.deepEqual(
   REQUIRED_JOBS,
   ['test', 'test-windows', 'test-macos'],
-  'the proof must require the push chain plus both platform contract legs, including the macOS leg that validates the native artifacts',
-)
+  'the proof must require the push chain plus both platform contract legs, including the macOS leg that validates the native artifacts')
 // G25: job names alone are not a proof. Every required job pins its load-bearing steps, and
 // those names must exist verbatim in the ci.yml job the proof watches (rename => two-file edit).
 assert.deepEqual(
   Object.keys(REQUIRED_JOB_STEPS).sort(),
   [...REQUIRED_JOBS].sort(),
-  'every required job must pin the load-bearing steps the proof checks',
-)
+  'every required job must pin the load-bearing steps the proof checks')
 assert.ok(
   REQUIRED_JOB_STEPS['test-macos'].includes('Swift tests (release configuration, XCTSkip == 0)'),
-  'the proof must require the step that runs `swift test`',
-)
+  'the proof must require the step that runs `swift test`')
 assert.ok(
   REQUIRED_JOB_STEPS['test-macos'].includes('Compiled sidecar smoke (shipped sidecar.js executes)'),
-  'the proof must require the step that executes the shipped sidecar',
-)
+  'the proof must require the step that executes the shipped sidecar')
 // The Electron mac pack must not be first really executed inside release.yml (after
 // the draft exists, with Apple credentials loaded). ci.yml rehearses the exact chain on an
 // ordinary main push and the release proof must require that rehearsal by name, else a
@@ -1159,11 +1098,9 @@ assert.ok(
 const MAC_REHEARSAL_STEP = 'macOS packaging rehearsal (ad-hoc, no publish, no credentials)'
 assert.ok(
   REQUIRED_JOB_STEPS['test-macos'].includes(MAC_REHEARSAL_STEP),
-  'G25/A2: the proof must require the mac packaging rehearsal step',
-)
+  'G25/A2: the proof must require the mac packaging rehearsal step')
 const macRehearsal = jobBlock(ciWorkflow, 'test-macos').slice(
-  jobBlock(ciWorkflow, 'test-macos').indexOf(`- name: ${MAC_REHEARSAL_STEP}`),
-)
+  jobBlock(ciWorkflow, 'test-macos').indexOf(`- name: ${MAC_REHEARSAL_STEP}`))
 assert.notEqual(macRehearsal, '', 'ci.yml test-macos must define the mac packaging rehearsal step')
 assert.match(macRehearsal,
   /if: github\.event_name == 'push' && github\.ref == 'refs\/heads\/main' && steps\.classify\.outputs\.code == 'true'/,
@@ -1172,8 +1109,7 @@ assert.match(macRehearsal, /CSC_IDENTITY_AUTO_DISCOVERY: 'false'/,
   'the rehearsal must never pick up a runner keychain identity (afterPack ad-hoc signs)')
 assert.ok(
   macRehearsal.includes('pnpm --filter @dsh-chamber/desktop exec electron-builder --mac --arm64 --publish=never'),
-  'the rehearsal must run the release packaging invocation with --publish=never',
-)
+  'the rehearsal must run the release packaging invocation with --publish=never')
 assert.doesNotMatch(macRehearsal, /--publish=always|notarytool|gh release upload/,
   'the rehearsal must not publish, notarize or upload anything')
 // G32: the two EXECUTED-assembly gates are the only steps that prove the shipped artifacts
@@ -1191,13 +1127,11 @@ for (const step of [
   )
   assert.ok(
     jobBlock(ciWorkflow, 'test-macos').includes(`- name: ${step}`),
-    `ci.yml test-macos must keep the proof-required step: ${step}`,
-  )
+    `ci.yml test-macos must keep the proof-required step: ${step}`)
 }
 assert.ok(
   REQUIRED_JOB_STEPS['test'].includes('Package unit tests — single entry (runtime / control-plane / desktop / gateway / renderer-shell / client+host plugins)'),
-  'the proof must require the linux-chain package test entry',
-)
+  'the proof must require the linux-chain package test entry')
 for (const [jobName, steps] of Object.entries(REQUIRED_JOB_STEPS)) {
   const block = jobBlock(ciWorkflow, jobName)
   for (const step of steps) {

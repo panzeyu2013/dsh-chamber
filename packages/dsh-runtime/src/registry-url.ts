@@ -12,8 +12,12 @@
  * not reusable (design 18 §6). `desktop_npm_search` is folded onto this same
  * gate; this module itself is pure logic with no IPC.
  */
+/** npm 官方 registry origin —— 默认源与白名单首项的单一来源（gateway
+ * runtime-manager 的 DEFAULT_REGISTRY_ORIGIN 也消费它，本轮起）。 */
+export const DEFAULT_REGISTRY_ORIGIN = 'https://registry.npmjs.org'
+
 export const ALLOWED_REGISTRY_ORIGINS: readonly string[] = [
-  'https://registry.npmjs.org',
+  DEFAULT_REGISTRY_ORIGIN,
   'https://registry.npmmirror.com',
 ]
 

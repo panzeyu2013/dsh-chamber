@@ -26,7 +26,7 @@ import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 import type {} from '@deepseek-ai/dsh-client-ui-slots'
-import { installSvgResourceScope } from '../../../../packages/renderer/src/svg-resource-scope.ts'
+import { installSvgResourceScope } from '@dsh-chamber/dsh-chamber-client-core/svg-resource-scope'
 import { en, zh, type MobileKey } from './locales.ts'
 import { MOBILE_CSS, PLUGIN_STYLE_TAG, VIEWPORT_TOKENS } from './styles.ts'
 import {

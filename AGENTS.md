@@ -127,11 +127,11 @@ surfaces, applicable guidance, validation, or failure/rollback considerations fr
 | `packages/renderer` | Self-built dsh frontend: composite entry build, per-instance host-graph merge and extra-entry preloading, N-ctx multi-instance orchestration, notification edge projection, boot manifest (designs 09, 19) |
 | `packages/dsh-client-connection` | In-repo copy of the official connection client plus the per-entry base-path patch |
 | `packages/dsh-client-web` | In-repo copy of the official web shell with the N-ctx boot re-base (design 09) |
-| `packages/dsh-api-gateway` | In-repo copy of the official api-gateway client half plus the per-entry base-path patch on its stream carrier |
+| `packages/dsh-api-gateway` | Second-implementation fork of the official api-gateway client half (client half only): per-entry base path plus chamber-owned stream reliability — carrier retry, opening deadline + silent-socket upgrade, journal stall watchdog — over `@dsh-chamber/dsh-stream-state`; pin upgrades replay it as a fork, never mirror-sync (registry `fork.dsh-api-gateway`, deviation G43) |
 | `packages/dsh-chamber-client-ui-sidebar` | Self-built sidebar: multi-source session navigation, chamberBridge, the page-level client-plugin load kernel, settings-seat contract (design 05) |
 | `packages/dsh-chamber-client-ui-layout` | Self-built ui-layout shell fork: layout store persistence and the only document-level theme projection (design 06) |
 | `packages/dsh-chamber-client-ui-settings-connections` | Chamber-global connections settings page (design 05) |
-| `packages/dsh-chamber-client-ui-settings-bridge` | Self-built settings shell: server dropdown over the SELECTED source's own boot-ctx `settings.section` ledger, rendered with that ctx's renderer-bound seats (design 05 §5, 2026-12 complete-bridge revision) |
+| `packages/dsh-chamber-client-ui-settings-bridge` | Self-built settings shell: server dropdown over the SELECTED source's own boot-ctx `settings.section` ledger, rendered with that ctx's renderer-bound seats (design 05 §5 complete-bridge revision) |
 | `packages/dsh-chamber-client-ui-git` | Git worktree client plugin (design 08); facts and actions stay client-side and never become a control-plane execution surface |
 | `packages/dsh-chamber-client-ui-open-in` | Desktop open-in client plugin (designs 16, 20) + the conversation stream-health seat (design 14 §D4) |
 | `packages/dsh-chamber-client-ui-mobile` | Packaged mobile client served by the gateway — the single packaged plugin exception (design 17) |
@@ -163,7 +163,7 @@ surfaces, applicable guidance, validation, or failure/rollback considerations fr
 - Package manager is pnpm, and runtime dependencies are not added without an explicit request (current
   set: `ws`, `electron-updater`, React/Vite, Electron, the embedded pinned `pnpm`, the dsh client
   workspace packages; `Sparkle` 2.10.0 is the Swift native shell's only SwiftPM dependency — the
-  in-app update chain, added on the user's explicit 2026-12 ruling "D-1 = B"). `typescript` /
+  in-app update chain, added on the user's explicit ruling "D-1 = B"). `typescript` /
   `@types/*` / `node-pty` are devDependencies — `node-pty` is the root resolution target for
   `@deepseek-ai/dsh-subprocess-local`'s workspace postinstall (`pnpm-workspace.yaml` allowBuilds note
   + `scripts/dev/ensure-harness-vendor.mjs` shim), not a runtime dependency of the chamber tree; it

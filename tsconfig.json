@@ -17,9 +17,9 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "paths": {
-      "@dsh-chamber/dsh-chamber-client-ui-sidebar/shared": [
-        "./packages/dsh-chamber-client-ui-sidebar/src/shared/index.ts"
-      ],
+      // @dsh-chamber/dsh-chamber-client-core resolves through the workspace
+      // node_modules link + its package.json exports (source targets): no paths
+      // mirror is declared here on purpose (R4 P3; typecheck proves the link).
       // The four chamber client-plugin entries are checked by their own package
       // programs (their loose vendor faces collide when merged into one program);
       // the renderer consumes them only through this narrow registration face.

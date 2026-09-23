@@ -1,4 +1,4 @@
-import { gapSignature, type ServerBootGap } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
+import { gapSignature, type ServerBootGap } from '@dsh-chamber/dsh-chamber-client-core'
 
 export interface ServerSelectorRow {
   id: string
@@ -31,7 +31,7 @@ export interface ServerProjectionRow extends ServerSelectorRow {
   bootGap?: ServerBootGap
 }
 
-// gapSignature is the sidebar shared implementation (derive.ts), imported above:
+// gapSignature is the client-core implementation (derive.ts), imported above:
 // the bridge roster signature and the sidebar projection signature must be the
 // same identity, so both use the one implementation.
 

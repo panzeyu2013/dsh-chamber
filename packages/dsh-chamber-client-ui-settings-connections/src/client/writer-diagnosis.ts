@@ -15,7 +15,7 @@
  * re-prove) never offers the action — it needs an app restart.
  */
 
-import type { LocalWriterDiagnosisWire } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
+import type { LocalWriterDiagnosisWire } from '@dsh-chamber/dsh-chamber-client-core'
 import type { SettingsConnectionsKey } from '../locales.ts'
 
 /** Ready-to-render state of the writer notice under the local card. */

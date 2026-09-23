@@ -31,7 +31,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { writeClipboard } from '@deepseek-ai/dsh-client-ui-primitives'
-import { createHoverIntent, HOVER_OPEN_DELAY_MS, type HoverIntent } from '../shared/hover-intent.ts'
+import { createHoverIntent, HOVER_OPEN_DELAY_MS, type HoverIntent } from '@dsh-chamber/dsh-chamber-client-core/hover-intent'
 import cc from './sidebar-chamber.module.css'
 
 /** Feedback dwell: how long the copy success label stays in the card. */

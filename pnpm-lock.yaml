@@ -38,6 +38,9 @@ importers:
 
   packages/control-plane:
     dependencies:
+      '@dsh-chamber/dsh-chamber-wire':
+        specifier: workspace:^
+        version: link:../dsh-chamber-wire
       ws:
         specifier: ^8.18.0
         version: 8.21.3
@@ -57,6 +60,9 @@ importers:
         specifier: 11.21.0
         version: 11.21.0
     devDependencies:
+      '@dsh-chamber/dsh-chamber-client-core':
+        specifier: workspace:^
+        version: link:../dsh-chamber-client-core
       '@electron/asar':
         specifier: ^3.2.1
         version: 3.2.1
@@ -110,6 +116,15 @@ importers:
         specifier: ^4.4.3
         version: 4.4.3
 
+  packages/dsh-chamber-client-core:
+    dependencies:
+      '@dsh-chamber/dsh-chamber-wire':
+        specifier: workspace:^
+        version: link:../dsh-chamber-wire
+      '@dsh-chamber/dsh-stream-state':
+        specifier: workspace:^
+        version: link:../dsh-stream-state
+
   packages/dsh-chamber-client-ui-git:
     dependencies:
       '@deepseek-ai/cordis':
@@ -124,6 +139,9 @@ importers:
       '@deepseek-ai/dsh-client-ui-slots':
         specifier: workspace:^
         version: link:../../vendor/harness-packages/@deepseek-ai/dsh-client-ui-slots
+      '@dsh-chamber/dsh-chamber-client-core':
+        specifier: workspace:^
+        version: link:../dsh-chamber-client-core
       '@dsh-chamber/dsh-chamber-client-ui-sidebar':
         specifier: workspace:^
         version: link:../dsh-chamber-client-ui-sidebar
@@ -137,6 +155,9 @@ importers:
 
   packages/dsh-chamber-client-ui-layout:
     dependencies:
+      '@dsh-chamber/dsh-chamber-client-core':
+        specifier: workspace:^
+        version: link:../dsh-chamber-client-core
       '@dsh-chamber/dsh-chamber-client-ui-sidebar':
         specifier: workspace:^
         version: link:../dsh-chamber-client-ui-sidebar
@@ -168,6 +189,9 @@ importers:
 
   packages/dsh-chamber-client-ui-mobile:
     dependencies:
+      '@dsh-chamber/dsh-chamber-client-core':
+        specifier: workspace:^
+        version: link:../dsh-chamber-client-core
       '@dsh-chamber/dsh-stream-state':
         specifier: workspace:^
         version: link:../dsh-stream-state
@@ -205,6 +229,9 @@ importers:
       '@deepseek-ai/dsh-client-ui-slots':
         specifier: workspace:^
         version: link:../../vendor/harness-packages/@deepseek-ai/dsh-client-ui-slots
+      '@dsh-chamber/dsh-chamber-client-core':
+        specifier: workspace:^
+        version: link:../dsh-chamber-client-core
       '@dsh-chamber/dsh-chamber-client-ui-sidebar':
         specifier: workspace:^
         version: link:../dsh-chamber-client-ui-sidebar
@@ -230,6 +257,12 @@ importers:
       '@deepseek-ai/cordis':
         specifier: workspace:^
         version: link:../../vendor/harness-packages/@deepseek-ai/cordis
+      '@dsh-chamber/dsh-chamber-client-core':
+        specifier: workspace:^
+        version: link:../dsh-chamber-client-core
+      '@dsh-chamber/renderer':
+        specifier: workspace:^
+        version: link:../renderer
       clsx:
         specifier: ^2.0.0
         version: 2.1.1
@@ -282,6 +315,12 @@ importers:
 
   packages/dsh-chamber-client-ui-settings-connections:
     dependencies:
+      '@dsh-chamber/dsh-chamber-client-core':
+        specifier: workspace:^
+        version: link:../dsh-chamber-client-core
+      '@dsh-chamber/renderer':
+        specifier: workspace:^
+        version: link:../renderer
       clsx:
         specifier: ^2.0.0
         version: 2.1.1
@@ -313,6 +352,12 @@ importers:
 
   packages/dsh-chamber-client-ui-sidebar:
     dependencies:
+      '@dsh-chamber/dsh-chamber-client-core':
+        specifier: workspace:^
+        version: link:../dsh-chamber-client-core
+      '@dsh-chamber/dsh-chamber-wire':
+        specifier: workspace:^
+        version: link:../dsh-chamber-wire
       '@dsh-chamber/dsh-stream-state':
         specifier: workspace:^
         version: link:../dsh-stream-state
@@ -380,6 +425,9 @@ importers:
       '@deepseek-ai/dsh-workspace':
         specifier: workspace:^
         version: link:../../vendor/harness-packages/@deepseek-ai/dsh-workspace
+      '@dsh-chamber/dsh-chamber-wire':
+        specifier: workspace:^
+        version: link:../dsh-chamber-wire
 
   packages/dsh-chamber-seed-client-graph:
     dependencies:
@@ -430,6 +478,8 @@ importers:
       '@deepseek-ai/dsh-typert-protocol':
         specifier: workspace:^
         version: link:../../vendor/harness-packages/@deepseek-ai/dsh-typert-protocol
+
+  packages/dsh-chamber-wire: {}
 
   packages/dsh-client-connection:
     dependencies:
@@ -546,6 +596,9 @@ importers:
       '@dsh-chamber/control-plane':
         specifier: workspace:^
         version: link:../control-plane
+      '@dsh-chamber/dsh-chamber-wire':
+        specifier: workspace:^
+        version: link:../dsh-chamber-wire
       '@dsh-chamber/dsh-runtime':
         specifier: workspace:^
         version: link:../dsh-runtime
@@ -555,6 +608,9 @@ importers:
 
   packages/renderer:
     dependencies:
+      '@dsh-chamber/dsh-chamber-client-core':
+        specifier: workspace:^
+        version: link:../dsh-chamber-client-core
       '@dsh-chamber/dsh-chamber-client-ui-git':
         specifier: workspace:^
         version: link:../dsh-chamber-client-ui-git
@@ -20501,7 +20557,8 @@ snapshots:
     dependencies:
       has-flag: 4.0.0
 
-  supports-color@9.4.0: {}
+  supports-color@9.4.0:
+    optional: true
 
   tar@7.5.22:
     dependencies:
@@ -20561,6 +20618,7 @@ snapshots:
       esbuild: 0.28.2
     optionalDependencies:
       fsevents: 2.3.3
+    optional: true
 
   turndown@7.2.4:
     dependencies:
@@ -20615,7 +20673,8 @@ snapshots:
 
   undici@6.28.0: {}
 
-  undici@7.29.0: {}
+  undici@7.29.0:
+    optional: true
 
   undici@8.10.0: {}
 
@@ -20870,7 +20929,8 @@ snapshots:
 
   yallist@5.0.0: {}
 
-  yaml@2.9.0: {}
+  yaml@2.9.0:
+    optional: true
 
   yargs-parser@21.1.1: {}
 

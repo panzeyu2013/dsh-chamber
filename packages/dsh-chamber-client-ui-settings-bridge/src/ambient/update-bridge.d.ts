@@ -4,12 +4,13 @@
  * Non-secret projections only: versions, channel, a release-page URL, a
  * short error text.
  *
- * Type source: packages/renderer/src/global.d.ts is the authoritative
- * full-shape declaration of window.dshChamber (interface merging requires
- * IDENTICAL property types, so a partial/subset declaration could never
- * merge with it). The update types are re-exported from that file.
+ * Type source: @dsh-chamber/renderer/global.d.ts (the renderer package's
+ * single declared face) is the authoritative full-shape declaration of
+ * window.dshChamber (interface merging requires IDENTICAL property types, so a
+ * partial/subset declaration could never merge with it). The update types are
+ * re-exported from that face.
  */
-import type { DshChamberBridge, UpdatePhase, UpdateState, UpdateSurface } from '../../../../packages/renderer/src/global.d.ts'
+import type { DshChamberBridge, UpdatePhase, UpdateState, UpdateSurface } from '@dsh-chamber/renderer/global.d.ts'
 
 export type { UpdatePhase, UpdateState, UpdateSurface }
 

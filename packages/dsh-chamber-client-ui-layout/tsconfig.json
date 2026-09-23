@@ -5,9 +5,9 @@
     // as the injected env face, so the compile root must span the repo-level
     // vendor source tree, not just this package. tsc only type-checks here
     // (root noEmit + tsdown bundles); outDir is a declaration mirror.
-    // The `@dsh-chamber/dsh-chamber-client-ui-sidebar/shared` specifier resolves
-    // through the ROOT tsconfig paths to the REAL sidebar shared source
-    // (src/shared/index.ts); no ambient mirror file exists.
+    // The `@dsh-chamber/dsh-chamber-client-core` specifier resolves through the
+    // workspace node_modules link + the core package exports (source targets);
+    // no ambient mirror file exists.
     "rootDir": "../..",
     "outDir": "lib/types"
   },
@@ -18,6 +18,6 @@
   "exclude": [
     "node_modules",
     "**/vendor/**",
-    "../dsh-chamber-client-ui-sidebar"
+    "../dsh-chamber-client-core"
   ]
 }

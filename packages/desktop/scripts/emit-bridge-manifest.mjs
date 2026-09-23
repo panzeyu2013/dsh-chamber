@@ -61,30 +61,15 @@
  */
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
+import { MAIN_SIDE_FILES } from './main-side-files.mjs'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const desktopDir = join(dirname(fileURLToPath(import.meta.url)), '..')
 const repoRoot = join(desktopDir, '..', '..')
 
-/** main 侧注册文件集（handle/send 调用所在；与 ipc-surface-mirror.test.ts 的
- *  MAIN_SIDE_FILES 同集 —— 注册点再迁移文件时，两处须同步）。 */
-export const MAIN_SIDE_FILES = [
-  'main.ts',
-  'shell-core.ts',
-  'electron-edges.ts',
-  // shell-core 的 installIpcHandlers 注册体按域分布在 shell-ipc-*.ts，
-  // runtime state push 在 runtime-startup-host.ts。制品（bridge-manifest.json /
-  // BridgeManifest.swift）不变，只是扫描面同步。
-  'shell-ipc-settings.ts',
-  'shell-ipc-connections.ts',
-  'shell-ipc-plugins-ssh.ts',
-  'shell-ipc-plugins-gateway.ts',
-  'shell-ipc-plugins-local.ts',
-  'shell-ipc-open-in.ts',
-  'shell-ipc-update.ts',
-  'shell-ipc-runtime.ts',
-  'runtime-startup-host.ts',
-]
+/** main 侧注册文件集（handle/send 调用所在）——单一来源 = scripts/lib/main-side-files.mjs
+ *  （与 ipc-surface-mirror.test.ts 的扫描面同一份名单；注册点迁移只改那里）。 */
+export { MAIN_SIDE_FILES } from './main-side-files.mjs'
 
 /** 提交物/生成物默认路径（CLI 无参时写入）。
  *  Swift 生成物落位 DSHChamber target 目录内（Sources/DSHChamber/Generated/）

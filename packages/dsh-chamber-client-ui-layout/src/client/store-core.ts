@@ -36,7 +36,7 @@ import type {
   EngineStoreInstance,
 } from '@deepseek-ai/dsh-client-store'
 import type { MainPanelId } from '@deepseek-ai/dsh-client-ui-layout/src/client/service.ts'
-import type { ChamberSidebarViewPrefs } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
+import type { ChamberSidebarViewPrefs } from '@dsh-chamber/dsh-chamber-client-core'
 
 /**
  * Column geometry and the right-panel preference set (mirrors the vendor

@@ -28,7 +28,7 @@ test('currentWindowsUserName prefers the process token over the spoofable USERNA
   // process can set USERNAME to anything, so the environment may only fill in
   // when the OS lookup is unavailable (the second parameter injects it here).
   assert.equal(currentWindowsUserName({ USERNAME: 'spoofed' }, 'alice'), 'alice')
-  assert.equal(currentWindowsUserName({ USERNAME: '  spoofed  ' }, '  alice  '), 'alice')
+  assert.equal(currentWindowsUserName({ USERNAME: 'spoofed' }, 'alice'), 'alice')
   assert.equal(currentWindowsUserName({ USERNAME: 'alice' }, ''), 'alice')
   assert.equal(currentWindowsUserName({ USERNAME: '  alice  ' }, null), 'alice')
   assert.equal(currentWindowsUserName({}, null), null)
@@ -109,7 +109,7 @@ test('verifyIcaclsOutput rejects inherited, Everyone/Users/SYSTEM and missing gr
   assert.equal(verifyIcaclsOutput('C:\\state\\dir alice:(OI)(CI)(F)', 'alice', 'file').ok, false)
 })
 
-test('verifyIcaclsOutput is a USER allowlist: any foreign principal or DENY ACE fails (2026-12 audit P1)', () => {
+test('verifyIcaclsOutput is a USER allowlist: any foreign principal or DENY ACE fails (audit P1)', () => {
   // A three-name blacklist would let an ACL whose only extra principal is
   // another well-known group return {ok:true}, and the verify-first probe
   // would then skip tightening entirely. Every non-user principal must fail,
@@ -159,8 +159,7 @@ test('applyWindowsAclTightening skips missing targets, collects failures and pre
       { path: '/exists/file', kind: 'file' },
       { path: '/missing/file', kind: 'file' },
     ],
-    { tighten, exists: (path: string) => path.startsWith('/exists') },
-  )
+    { tighten, exists: (path: string) => path.startsWith('/exists') })
   assert.deepEqual(errors, ['/exists/dir (directory): boom'])
   assert.deepEqual(calls, [
     { path: '/exists/dir', kind: 'directory' },

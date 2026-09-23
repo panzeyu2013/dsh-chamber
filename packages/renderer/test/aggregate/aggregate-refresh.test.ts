@@ -33,7 +33,7 @@ import {
   sourceIdForInstance,
   sourceIdForRawInstance,
 } from '../../src/transport-source.ts'
-import type { InstanceAggregate, InstanceSnapshot } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
+import type { InstanceAggregate, InstanceSnapshot } from '@dsh-chamber/dsh-chamber-client-core'
 
 // ---- commitAggregatePull ----
 

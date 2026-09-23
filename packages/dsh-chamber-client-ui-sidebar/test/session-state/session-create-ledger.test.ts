@@ -10,15 +10,17 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import {
+  publishSessionCreationInstrument,
+} from '@dsh-chamber/dsh-chamber-client-core/session-create-ledger'
+import {
   SESSION_CREATION_ORIGINS,
   createSessionCreationLedger,
-  publishSessionCreationInstrument,
-} from '../../src/shared/session-create-ledger.ts'
-import type { SessionCreationOrigin } from '../../src/shared/session-create-ledger.ts'
+} from '../../../dsh-chamber-client-core/src/session-create-ledger.ts'
+import type { SessionCreationOrigin } from '@dsh-chamber/dsh-chamber-client-core/session-create-ledger'
 
 const read = (rel: string): string => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8')
-const MUTATIONS = read('../../src/shared/session-mutations.ts')
-const BRIDGE = read('../../src/shared/aggregate-store.ts')
+const MUTATIONS = read('../../../dsh-chamber-client-core/src/session-mutations.ts')
+const BRIDGE = read('../../../dsh-chamber-client-core/src/aggregate-store.ts')
 // The sidebar create call site moves with its hook; the
 // contract reads the shell plus the modules that own the locked text.
 const SIDEBAR = read('../../src/client/SidebarRoot.tsx') + read('../../src/client/sidebar-root-sessions.ts')

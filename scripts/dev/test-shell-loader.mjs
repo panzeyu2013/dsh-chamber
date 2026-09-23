@@ -19,10 +19,10 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 const FIXTURE_URL = pathToFileURL(
   fileURLToPath(new URL('../../packages/renderer/test-fixtures/dsh-client-web.mjs', import.meta.url)),
 ).href
-/** shell.ts 的 sidebar-shared 消费面（chamberBridge + describeThrown）：重导出真实实现的
- *  最小 shim，避免整桶把 source-only 的 dsh 包拖进隔离测试。 */
-const SIDEBAR_SHARED_URL = pathToFileURL(
-  fileURLToPath(new URL('../../packages/renderer/test-fixtures/sidebar-shared.mjs', import.meta.url)),
+/** shell.ts 的 client-core barrel 消费面（chamberBridge + describeThrown）：重导出真实
+ *  实现的最小 shim，避免整桶把 source-only 的 dsh 包拖进隔离测试。 */
+const CORE_SHARED_URL = pathToFileURL(
+  fileURLToPath(new URL('../../packages/renderer/test-fixtures/client-core-shared.mjs', import.meta.url)),
 ).href
 
 /** @type {import('node:module').ResolveHook} */
@@ -30,11 +30,11 @@ export async function resolve(specifier, context, nextResolve) {
   if (specifier === '@deepseek-ai/dsh-client-web') {
     return { url: FIXTURE_URL, shortCircuit: true }
   }
-  // Resolve to the two-symbol shim instead of the package's shared barrel: the
+  // Resolve to the two-symbol shim instead of the client-core barrel: the
   // barrel also links the source-only dsh connection/runtime packages that this
   // isolated Node test intentionally does not install or execute.
-  if (specifier === '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared') {
-    return { url: SIDEBAR_SHARED_URL, shortCircuit: true }
+  if (specifier === '@dsh-chamber/dsh-chamber-client-core') {
+    return { url: CORE_SHARED_URL, shortCircuit: true }
   }
   return nextResolve(specifier, context)
 }

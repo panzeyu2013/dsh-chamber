@@ -35,6 +35,7 @@
   },
   "devDependencies": {
     "@dsh-chamber/control-plane": "workspace:^",
+    "@dsh-chamber/dsh-chamber-wire": "workspace:^",
     "@dsh-chamber/dsh-runtime": "workspace:^",
     "esbuild": "^0.28.2"
   }

@@ -1,34 +1,21 @@
 import { existsSync, realpathSync } from 'node:fs'
 import { delimiter, dirname, join, parse, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { isDshWorkspace } from '@dsh-chamber/dsh-runtime'
 
 /**
- * Resolve the CLI entry of a dsh workspace — the single home of the two
- * workspace markers (installed npm artifact preferred, dev source via tsx
- * otherwise — the same markers and priority order control-plane's
- * resolveDshEntry() uses for the managed instance's own spawn).
- * isDshWorkspace() and the plugins-tasks executor launch derive from this
- * resolver.
- */
-export function resolveDshCliEntry(workspace: string): { entry: string; viaTsx: boolean } | null {
-  const installed = join(workspace, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js')
-  if (existsSync(installed)) return { entry: installed, viaTsx: false }
-  const source = join(workspace, 'apps', 'cli', 'src', 'bin.ts')
-  if (existsSync(source)) return { entry: source, viaTsx: true }
-  return null
-}
-
-/** A directory shape accepted by control-plane's resolveDshEntry(). */
-export function isDshWorkspace(path: string): boolean {
-  return resolveDshCliEntry(path) !== null
-}
-
-/**
- * Resolve a dsh installation without relying on the gateway bundle's own
+ * Find a dsh installation without relying on the gateway bundle's own
  * import.meta.url. In a global npm install the `dsh` bin is normally a
  * symlink into `<root>/node_modules/@deepseek-ai/dsh/lib/bin.js`; its real
  * target therefore identifies exactly the workspace root expected by the
  * shared spawn code. Returns null instead of guessing.
+ *
+ * The workspace markers themselves are NOT defined here: `isDshWorkspace` is
+ * derived from the shared core's `resolveDshCliEntry`
+ * (@dsh-chamber/dsh-runtime dsh-cli-entry.ts — the single home of the
+ * installed-entry/dev-source markers, also consumed by the plugins-tasks
+ * executor launch). This file keeps only the gateway-specific PATH/realpath
+ * walk.
  */
 export function findDshWorkspace(
   fallback: string,

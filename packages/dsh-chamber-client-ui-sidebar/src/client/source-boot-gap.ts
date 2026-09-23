@@ -14,8 +14,8 @@
  * text never arrives here (STATUS「跨边界诊断文案」).
  */
 
-import type { ChamberServerAggregate } from '../shared/aggregate-store.ts'
-import { bootGapShape } from '../shared/boot-gap-shape.ts'
+import type { ChamberServerAggregate } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
+import { bootGapShape } from '@dsh-chamber/dsh-chamber-client-core/boot-gap-shape'
 import type { SidebarKey } from './locales.ts'
 
 /** The dictionary lookup the renderer passes in (`t` from the package locale). */

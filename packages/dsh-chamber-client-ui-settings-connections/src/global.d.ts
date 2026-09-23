@@ -6,11 +6,13 @@
  * save_connection alone accepts transient write-only credential input.
  */
 
-import type { DshChamberBridge } from '../../renderer/src/global.d.ts'
+import type { DshChamberBridge } from '@dsh-chamber/renderer/global.d.ts'
 
 /**
  * The whole IPC/type face is RE-EXPORTED from the renderer's authoritative
- * global.d.ts — the single source of truth (settings-bridge pattern). A
+ * global.d.ts, consumed through its single declared face
+ * (@dsh-chamber/renderer/global.d.ts) — the single source of truth
+ * (settings-bridge pattern). A
  * structural mirror here would drift silently; the
  * ipc-surface-mirror test guards the renderer side against the preload.
  * `TransportKind` is the v2 target union (`dsh | gateway`) and
@@ -67,7 +69,7 @@ export type {
   UpdateState,
   UpdateSurface,
   WindowCloseBehavior,
-} from '../../renderer/src/global.d.ts'
+} from '@dsh-chamber/renderer/global.d.ts'
 
 declare global {
   /**

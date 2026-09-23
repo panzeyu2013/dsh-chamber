@@ -2,13 +2,13 @@
 
 [English](README.md) | 中文
 
-chamber 自研**设置壳**插件（2026-08 设计讨论；2026-12 **完整桥接**修订）：以
+chamber 自研**设置壳**插件（2026-08 设计讨论；**完整桥接**修订）：以
 **保留的 shadow 优先级**（`-1000`，shared face `settings-shell.ts`）向
 `sidebar.settings` 槽注册「设置 / Settings」壳，从而**遮蔽官方 SettingsRoot**——
 绝不冲突：官方入口仍在账上，其 `settings.*` 子声明依然有效。chamber 侧边栏监视
 该槽的 cell winner，若有注册者低于保留区间（即顶掉设置壳）则 console 报告。
 
-## 完整桥接（2026-12 修订）
+## 完整桥接（修订）
 
 面板渲染**选中来源自己的设置面**——该来源自己 boot cordis 上下文的
 `settings.section` 台账，配该上下文自己渲染器绑定的标准座
@@ -78,10 +78,10 @@ settings 失效通知，以及真的 `useSessions` / `useWorkspaces` / `usePanel
   `window.confirm`）已移除：原生 chrome 既套不上面板的 `--dsw-alias-*` 词汇，也
   不属于这个多壳文档，而 gateway 形态根本没有原生对话框。确认由哪一层负责其余部分
   不变——本地 apply-now 事务仍由本地运行时面自己确认，面板不会二次追问。
-- **重启 = 宿主重启 + 一次窗口重载（2026-12）**：页面侧 client 插件集在窗口 boot 时固定
+- **重启 = 宿主重启 + 一次窗口重载（）**：页面侧 client 插件集在窗口 boot 时固定
   （宿主图每 boot 取一次、模块表按 id first-load-wins），所以「重启 dsh 刷新插件挂载」这个
   动作只有窗口重新 boot 才会让新装/重打包的 `dsh.client` 半身（例如设置分节）出现。
-  实现是 sidebar 共享面的 **page-owned completion**
+  实现是 client-core 共享面的 **page-owned completion**
   （`restart-window-reload.ts`：本包与 connections 包都不得互相 value-import，故共享）：
   本段的两种重启、以及本地「立即应用」/「重试应用」/「重试恢复」三类重启事务（仅成功时），
   按来源 key（`local` / `gateway-<id>`）单飞 arm；**面板卸载不取消**
@@ -95,12 +95,11 @@ settings 失效通知，以及真的 `useSessions` / `useWorkspaces` / `usePanel
 ## 共享 gateway-runtime split（design 21 §5.2）
 
 - gateway dsh-runtime 纯核心（status parse/fetch、动作门、错误分类、重启就绪轮询）
-  已迁出本包进入 sidebar 共享面（`@dsh-chamber/dsh-chamber-client-ui-sidebar/shared`）；
-  本包在其 gateway dsh-runtime 段回引该共享面，并对真实 sidebar shared 源做
-  typecheck（P4-4：手写 ambient 镜像 `src/ambient/chamber-bridge.d.ts` 已删除——
-  本包保留自身 tsconfig `paths`（connections-section 映射），故其
-  sidebar/shared specifier 经 node_modules workspace 链接 + sidebar 包
-  exports 解析到真实 `src/shared/index.ts`）。
+  已迁出本包进入 client-core 内核（`@dsh-chamber/dsh-chamber-client-core`；
+ `packages/dsh-chamber-client-core/src/gateway-runtime*.ts`，经核心 `.` 面到达）；
+  本包在其 gateway dsh-runtime 段回引该内核，并经 node_modules workspace 链接 +
+ client-core package exports 对真实 client-core 源做
+  typecheck（P4-4：手写 ambient 镜像 `src/ambient/chamber-bridge.d.ts` 已删除）。
 - 本包只保留本地视图映射：`remoteRuntimeStatusView` /
   `RemoteRuntimeStatusView`（SettingsBridgeKey 耦合）驻
   `src/client/gateway-runtime-api.ts`。

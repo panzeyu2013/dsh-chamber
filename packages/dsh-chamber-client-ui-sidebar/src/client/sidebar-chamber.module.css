@@ -444,7 +444,7 @@
    not a theme token, exactly as ui-primitives/HoverCard.module.css declares
    it). The atom is chamber-owned because the vendored one strands a card when
    the pointer leaves inside its open-commit window; the measured defect is
-   documented in src/shared/hover-intent.ts. The card is hit-testable on
+   documented in dsh-chamber-client-core/src/hover-intent.ts. The card is hit-testable on
    purpose: resting the pointer on it holds it open (the intent's grace close
    dismisses it), and a press there starts a text selection instead of
    dismissing. */
@@ -1223,7 +1223,7 @@
    delivery channel that does not depend on React's synthesis (native
    pointerenter/pointerleave on the wrapper + portaled card, plus a dwell-time
    geometry veto); it is NOT implemented — see the hover-port note in design 06
-   §7 and `src/shared/hover-intent.ts`.
+   §7 and `dsh-chamber-client-core/src/hover-intent.ts`.
 
    Consequence, accepted and registered: WCAG 2.2 2.5.8 target size is a
    module deviation for every < 24px icon button here (design 24 §13 item 17,

@@ -33,7 +33,7 @@
  * 与 gateway 事实源的**同形**是刻意的：产出的快照直接喂 App 既有的 applySessionFacts
  * 管线，不需要第二条判定路径（同一份事实、同一套未读判定）。
  */
-import { isRecord } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
+import { isRecord } from '@dsh-chamber/dsh-chamber-client-core'
 import type {
   SessionFactsCompletedAtSource, SessionFactsRow, SessionFactsSnapshot, SessionFactsTurnEnd,
 } from './session-facts-source.ts'
@@ -403,13 +403,14 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
     for (const [sessionId, row] of rows) record[sessionId] = row
     return {
       // 观察者自带通道：verdict=ok 表示"这条通道可用"，与网关镜像的版本协商无关
-      // （出口判据正是"不依赖 gateway 版本"）。
+      // （出口判据正是"不依赖 gateway 版本"）。这里是 $events WebSocket 观察者，
+      // 全程走 WS mux + unary、从不轮询——'sse'/'poll' 都是 gateway 平面的词，
+      // 在这里是谎报；新增 'ws' 需同步 gateway 镜像三处白名单，收益为 0
+      // （2026-12 审计 §6.1.3）。快照的 mode 因此诚实报 null，而不是照抄一个
+      // 它并不使用的传输档（唯一消费 mode 的 session-facts-source.startDelivery
+      // 只读自己 payload 的 mode，不读这里）。
       verdict: ready ? 'ok' : 'degraded',
       degradation: ready ? null : 'unavailable',
-      // 诚实修法：本观察者全程走 WS mux + unary，从不轮询——'sse'/'poll' 都是
-      // gateway 平面的词，在这里是谎报。契约本就允许 null（SessionFactsMode | null），
-      // 当前也没有消费者读 .mode；若要新增 'ws' 需同步 gateway 镜像三处白名单，
-      // 收益为 0（2026-12 审计 §6.1.3）。
       mode: null,
       hostState: ready ? 'ready' : 'unknown',
       serviceable: ready,

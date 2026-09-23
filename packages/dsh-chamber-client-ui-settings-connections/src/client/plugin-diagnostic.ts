@@ -13,7 +13,7 @@ import type { SettingsConnectionsKey } from '../locales.ts'
 // the root tsconfig paths). The payload extraction (bootGapShape) is the same
 // shared face's implementation, so this file has ONE runtime dependency on that
 // pure module — the same shape managed-restart.ts has.
-import { bootGapShape, type ServerBootGap } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
+import { bootGapShape, type ServerBootGap } from '@dsh-chamber/dsh-chamber-client-core'
 
 export type { ServerBootGap }
 
@@ -46,7 +46,7 @@ export function bootGapText(
   gap: ServerBootGap,
   t: (key: SettingsConnectionsKey, params?: Record<string, string | number>) => string,
 ): string {
-  // Payload extraction is the shared projection (sidebar shared/boot-gap-shape.ts):
+  // Payload extraction is the shared projection (client-core/boot-gap-shape.ts):
   // the exhaustiveness now lives there, and this switch maps the shape onto the
   // connections dictionary. The LOCAL instance's missing graph endpoint is a
   // chamber-side installation/seed fact; its own sentence never advises a

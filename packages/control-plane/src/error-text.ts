@@ -1,7 +1,7 @@
 /**
  * Node-side error-text projection — the control plane's instance of the
  * primitive whose browser twin lives in
- * dsh-chamber-client-ui-sidebar/src/shared/error-text.ts.
+ * packages/dsh-chamber-client-core/src/error-text.ts.
  *
  * The primitive is single-sourced here for the two sites inside this package
  * (local-connection.ts's restart-failure state, protected-plugins.ts's

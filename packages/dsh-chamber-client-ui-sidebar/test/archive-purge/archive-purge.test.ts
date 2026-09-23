@@ -9,12 +9,12 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { archivePurgeNote, purgeRemovedContent, runArchivePurge } from '../../src/shared/archive-purge.ts'
+import { archivePurgeNote, purgeRemovedContent, runArchivePurge } from '../../src/client/archive-purge.ts'
 import type {
   ArchiveCleanupPurgeResult,
   SessionRunningLineage,
   StopSessionsResult,
-} from '../../src/shared/instance-api.ts'
+} from '@dsh-chamber/dsh-chamber-client-core/instance-api'
 
 function purgeResult(overrides: Partial<ArchiveCleanupPurgeResult> = {}): ArchiveCleanupPurgeResult {
   return {

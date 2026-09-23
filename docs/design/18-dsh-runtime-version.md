@@ -541,7 +541,7 @@ chamber-settings.json，非秘密）：
   pnpm-workspace.yaml 的祖先下（向上探测实测报错）；**白名单 miss 是硬失败**（实测
   ERR_PNPM_IGNORED_BUILDS）→ 新 dsh 引入新 build-script 依赖时安装失败，UI 给
   「请升级 dsh-chamber」指引（「不等 chamber 发版」对这类版本不成立）。简略 packument
-  与捆绑基线 lockfile 均无 `hasInstallScript`（实测）——**无法从 lockfile 推导
+  与捆绑基线 lockfile 均无 `hasInstallScript`——**无法从 lockfile 推导
   build-script 覆盖**，故以「单一来源常量 + 漂移钉死测试 + 白名单 miss 硬失败」三层
   兜底（真实安装的 ERR_PNPM_IGNORED_BUILDS 显式暴露，UI 引导升级、不静默跳过）。
 - **prune 打包纪律**：prune 规则在共享包 `packages/dsh-runtime/src/prune-runtime.mjs`
@@ -948,3 +948,9 @@ S17–S20 的权威表格在 `design/17-server-side-gateway.md` §17，本节只
   管理，远端 dsh 版本无关）；设计 05 §5（「dsh 运行时」per-server 设置段注册）。
 - 正交事项（非本设计范围，记录在案）：更新带宽差分优化（design 11 §6 遗留，
   electron-builder 差分/blockmap 重评估）——可独立评估。
+
+### Rejected alternatives（架构调整）
+
+- **保持 wholesale `export *` 入口**：否决——入口面看不出谁真正消费，死导出无从判定（审计实测该包曾有一批零消费者导出）；改为显式具名面（137 个 runtime 值 = 有生产消费者的名字），内部实现留在各模块供包内相对 import。
+- **为过死导出门而砍掉导出函数的签名类型**（`PnpmEntrySearch`/`DshCliEntryResolution` 等）：否决——导出函数的参数/返回类型是其 API 的一部分，宿主需可命名/标注；类型导出不参与 runtime 死面判定，故入口规则写明唯一例外：导出函数/类签名引用的具名类型随签名出口（共 112 个类型契约）。
+- **桌面/网关各自维护 pnpm 入口、内建版本、dsh CLI entry 解析**：否决——同一判定多份手抄，布局或上游变化需改多处；共享原语落本包（`pnpm-entry`/`anchor-version`/`dsh-cli-entry`/`registry-url`），gateway 已接入；desktop 接入受 Swift 文本锚点约束，见 STATUS 开放项。

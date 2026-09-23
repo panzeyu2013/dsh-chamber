@@ -2,33 +2,34 @@
  * Per-instance archived-session content cleanup host gateway (design 24).
  *
  * TRUST MODEL — this service runs inside each dsh host process. The browser
- * submits no path or command: `preview` answers counts and `purge` deletes
- * every member of the instance's authoritative archived set
- * (registry-global) plus its subagent-origin descendants, children-first,
- * skipping running subtrees whole. The only caller-supplied session ids are
- * purge's OPTIONAL subset filter (`purge(sessionIds?)` for per-selection
- * deletion) and its OPTIONAL protected set
- * (`protectSessionIds?` for the session the calling client
- * is displaying): the domain intersects the filter with the authoritative
- * archived set at run start and only ever REMOVES protected trees from the
- * run, so neither input can name a non-archived session nor widen the
- * deletion set (fail-closed invariant, enforced in core). The
- * domain never RETURNS session content and never touches non-archived
- * sessions; its ONLY content read is the registry-global orphan sweep's
- * fail-closed existence probe (`sessionPersistence.stat`), consumed solely
- * as a boolean membership gate and never projected, logged or persisted —
- * the owner-approved exception recorded in design 24 §2 boundary 1.
+ * submits no path or command: `purge` deletes every member of the instance's
+ * authoritative archived set (registry-global) plus its subagent-origin
+ * descendants, children-first, skipping running subtrees whole. The only
+ * caller-supplied session ids are purge's OPTIONAL subset filter
+ * (`purge(sessionIds?)` for per-selection deletion) and its OPTIONAL protected
+ * set (`protectSessionIds?` for the session the calling client is displaying):
+ * the domain intersects the filter with the authoritative archived set at run
+ * start and only ever REMOVES protected trees from the run, so neither input
+ * can name a non-archived session nor widen the deletion set (fail-closed
+ * invariant, enforced in core). The domain never RETURNS session content and
+ * never touches non-archived sessions; its ONLY content read is the
+ * registry-global orphan sweep's fail-closed existence probe
+ * (`sessionPersistence.stat`), consumed solely as a boolean membership gate
+ * and never projected, logged or persisted — the owner-approved exception
+ * recorded in design 24 §2 boundary 1.
  *
- * Fixed wire namespace: `archiveCleanup/{preview,purge,probe}` — preview and
- * probe are zero-arg; purge takes an OPTIONAL `sessionIds` JSON parameter
- * (absent = delete the whole archived set, unchanged semantics; the SRC
- * descriptor treats a missing JSON field as `undefined`, so old zero-arg
- * clients keep working against new hosts). `probe` is the ZERO-COST
- * activation-probe method (presence + protocol only, no session data, no IO
- * — design 18 §3.4 probe contract). Every method
- * returns an explicit `{ok,value}|{ok:false,error}` domain carrier because
- * the generic dsh gateway does not preserve thrown business-error fields;
- * only unexpected internal failures escape as throws.
+ * Fixed wire namespace: `archiveCleanup/{purge,probe}` — the domain name, the
+ * method names and purge's argument key order are single-sourced in
+ * `./wire.ts`, which the sidebar client accessor imports as well; the
+ * cross-package lockstep test pins the host method signature to that table.
+ * `probe` is the ZERO-COST activation-probe method (presence + protocol only,
+ * no session data, no IO — design 18 §3.4 probe contract). Purge takes an
+ * OPTIONAL `sessionIds` JSON parameter (absent = delete the whole archived
+ * set, unchanged semantics; the SRC descriptor treats a missing JSON field as
+ * `undefined`, so old zero-arg clients keep working against new hosts).
+ * Every method returns an explicit `{ok,value}|{ok:false,error}` domain
+ * carrier because the generic dsh gateway does not preserve thrown
+ * business-error fields; only unexpected internal failures escape as throws.
  *
  * HOST BINDING (design 24 §10): implemented in ./binding.ts —
  *  - archived set: `workspaceRegistry.archivedSessionIds` (public getter);
@@ -45,8 +46,7 @@
  *    stat(id)` — the official single-id observation resolves the artifact
  *    across all project dirs and generations with cwd unknown; only an
  *    `undefined` answer may mean "no content", every thrown failure fails
- *    closed to "has
- *    content";
+ *    closed to "has content";
  *  - archived-set member removal: NO public official primitive exists — the
  *    binding performs ONE single-state `setState` write INSIDE the official
  *    `enqueueOperation` chain (serialized; runtime-guarded; version-pinned;
@@ -55,11 +55,10 @@
  *    rides the client mutation-pull and the official startup header-index
  *    rebuild.
  *
- * Audit: preview/purge lifecycle lines go
- * through the instance logger (purge = the product's only persistent content
- * destruction primitive; local anonymous-loopback hosts reach it — UI
- * confirm is click-protection, the wire itself is the trust boundary shared
- * with the official archiveSession wire).
+ * Audit: purge lifecycle lines go through the instance logger (purge = the
+ * product's only persistent content destruction primitive; local
+ * anonymous-loopback hosts reach it — UI confirm is click-protection, the wire
+ * itself is the trust boundary shared with the official archiveSession wire).
  */
 
 import type { Context } from '@deepseek-ai/cordis'
@@ -69,9 +68,14 @@ import {
   ArchiveCleanupError,
   domainResult,
   type ArchiveCleanupDomainResult,
-  type PreviewResult,
   type PurgeResult,
 } from './core.ts'
+import {
+  ARCHIVE_CLEANUP_DOMAIN,
+  ARCHIVE_CLEANUP_PROBE_METHOD,
+  ARCHIVE_CLEANUP_PURGE_METHOD,
+  archiveCleanupEndpoint,
+} from '@dsh-chamber/dsh-chamber-wire'
 import {
   assertHostSurface,
   makeHostBinding,
@@ -90,25 +94,11 @@ export class ArchiveCleanupGateway extends TypertRemoteService {
   private readonly hostCtx: HostCtxServices
 
   constructor(ctx: Context) {
-    super(ctx, 'archiveCleanup')
+    super(ctx, ARCHIVE_CLEANUP_DOMAIN)
     this.hostCtx = ctx as unknown as HostCtxServices
     this.core = new ArchiveCleanupCore(makeHostBinding(this.hostCtx))
     const maybeLogger = (ctx as { logger?: Context['logger'] }).logger
     this.logger = maybeLogger
-  }
-
-  @Remote('preview')
-  preview(): Promise<ArchiveCleanupDomainResult<PreviewResult>> {
-    return domainResult(() => this.gate.run(async () => {
-      const value = await this.core.preview()
-      this.logger?.info?.('[archiveCleanup] preview answered', {
-        archived: value.archived,
-        deletable: value.deletableSessions,
-        skippedRunning: value.skippedRunning,
-        skippedLoaded: value.skippedLoaded,
-      })
-      return value
-    }))
   }
 
   /** Delete the WHOLE archived set by default; with the optional `sessionIds`
@@ -124,8 +114,9 @@ export class ArchiveCleanupGateway extends TypertRemoteService {
    *  cwd-less cold records a client-side lineage walk cannot see). NOTE: the
    *  generic gateway derives accepted arg names from this method's source
    *  text, so the signature must stay plain identifiers without defaults or
-   *  rest. */
-  @Remote('purge')
+   *  rest; its names and order ARE the wire contract declared in ./wire.ts and
+   *  pinned by test/wire-lockstep.test.ts. */
+  @Remote(archiveCleanupEndpoint(ARCHIVE_CLEANUP_PURGE_METHOD))
   purge(
     sessionIds?: readonly string[],
     force?: boolean,
@@ -156,10 +147,10 @@ export class ArchiveCleanupGateway extends TypertRemoteService {
 
   /** Zero-cost activation-probe method: presence +
    *  protocol only — NO session data, NO IO, never linear in the corpus.
-   *  Not routed through RunGate (never contends with purge/preview). The
+   *  Not routed through RunGate (never contends with purge). The
    *  carrier is single-layer like every other domain method:
    *  RPC value = {ok:true,value:{}}. */
-  @Remote('probe')
+  @Remote(archiveCleanupEndpoint(ARCHIVE_CLEANUP_PROBE_METHOD))
   probe(): Promise<ArchiveCleanupDomainResult<Record<string, never>>> {
     // Presence AND surface health — zero IO (structural
     // check only). A corrupt/unmounted registry surface answers ok:false →

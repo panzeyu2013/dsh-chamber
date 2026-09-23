@@ -201,7 +201,7 @@ dispatch 追踪的下游 HTTP/WS（未读完 body 的请求不会卡住 drain）
 runtime transaction/install。已经越过 admission 的凭据写入不强行打断，而是持有
 stateDir lock 等待其完整 promise、审计尾与持久化 tail 收敛；credential、runtime
 两类 writer（插件同步缓存是同步 put，随请求收敛）都静止后才停止 control-plane、
-managed dsh 并释放 `.gateway.lock`。启动失败回滚走同一屏障，绝不让旧 handler 在
+managed dsh 并释放 state 根租约（`<stateRoot>/owner.json`）。启动失败回滚走同一屏障，绝不让旧 handler 在
 新 gateway 取得锁后继续写；同一 handle 再次 `start()` 时才重新开放 admission。**例外**：
 `/chamber/runtime` 是 gateway 自有 runtime 控制器（挂在 dispatch 面，不随 ready
 detach）——dsh 停机/重启/applying 窗口内必须持续可轮询进度（design 18 §9.3）。
@@ -233,8 +233,8 @@ gateway 也可读；只读路径验证既有凭据文件已经是 `0600`，权�
 且绝不以 `chmod` 修改文件；`reset-password --new PASSWORD` 以
 `source:'runtime'` 写入新密码并先旋转 `jwt-secret`（12–1024 字符）；`clear` 删除
 密码与 token，下次启动由部署配置重新播种（`--no-auth` 部署恢复匿名并打印 S1
-告警）。后两者取 stateDir 独占锁，**运行中的 gateway 会响亮拒绝**（结构化错误
-`gateway_locked` + 运行中 pid）并提示改用 Web UI（`/chamber/` 凭据面板）或
+告警）。后两者取 stateDir 的 state 根租约，**运行中的 gateway 会响亮拒绝**（结构化错误
+`state_root_locked` + holder pid/flavor）并提示改用 Web UI（`/chamber/` 凭据面板）或
 `/auth/change-*` API；用法错误退出 2，运行失败退出 1。
 `serve` 的 boot 行打印**播种后的有效 auth kind**（§7.4）——runtime 凭据生效时
 不再误报 `auth=none`。
@@ -908,12 +908,12 @@ Gateway state 与 dsh `$DSH_HOME` 分离。主要文件：
 ├─ tokens.json                 # v2 信封 {schemaVersion:2, source, updatedAt, hash}, 0600
 ├─ jwt-secret                  # 0600
 ├─ password-credential         # v2 信封 {schemaVersion:2, source, updatedAt, verifier}, 0600
-├─ .gateway.lock               # 独占锁 JSON {pid, createdAt}, O_EXCL + 0600
+├─ owner.json # state 根租约 {schemaVersion,pid,startedAt,token,scope,flavor}, O_EXCL + 回读终验, 0600
 └─ dsh-runtime/                # design 18 §9.3：版本树/current 指针/override/快照（0700）
 ```
 
 > 编排面剥离后 store 只拥有凭据（tokens.json / password-credential）与
-> `.gateway.lock`；`gateway/settings.json`、`gateway/worktrees.json`、
+> `owner.json`（state 根租约，`scope`/`flavor` 区分 state-root/host-root 与写者）；`gateway/settings.json`、`gateway/worktrees.json`、
 > `gateway/schedule.json` 三文档随编排面删除。
 
 Gateway 拒绝把文件系统根、用户 HOME 或系统 temp 根本身作为 `stateDir`（专用子目录仍合法）。POSIX 上
@@ -938,22 +938,15 @@ legacy secret 到 `0600`，而 `gateway auth status` 只验证不改权限。sec
 （`/^scrypt\$[0-9a-f]{32}\$[0-9a-f]{64}$/i`）——形状合法但内容垃圾按 corrupt v2 处理（**每进程告警
 一次**，按未配置处理），杜绝「垃圾 verifier 静默废认证」。
 
-**stateDir 独占锁（`.gateway.lock`）**：`createGatewayStore` 以 **O_EXCL 优先**创建
-`{"pid":…,"createdAt":…}`（0600，stateDir 0700 内）持有该目录：活 pid 的锁**响亮拒绝启动**
-（结构化错误 `gateway_locked` + 属主 pid）；死 pid 的陈旧锁以 **rename 认领 + 移动内容校验**接管：
-rename 到唯一 `.stale-*` 名（仅一个竞争者成功，其余见 ENOENT 重试），再校验被移动的正是
-读到的陈旧锁；若移动了**新鲜锁**则 rename 还原（覆盖间隙中第三方的新锁——先到者胜，被覆盖者的
-**创建后所有权终验**检出位移并 fail-closed）并响亮失败。不可读的
-锁文件（非普通文件/symlink/inode 竞态）响亮失败（绝不销毁意外内容）；**可读但 pid 缺失/损坏**的
-锁按陈旧锁**接管并告警**（`owner pid unreadable`）——最可能是崩溃残留，接管后目录仍
-被独占（fail-safe）。`releaseLock` 双重守卫：未实际持有不删，且 on-disk 完整 bytes + inode
-identity 必须仍与本次获取一致才删（仅比 pid 不足以区分同进程重取/后继者）；**exit 监听器仅在获取
-成功后注册**——获取失败的进程退出时绝不删除活网关的锁。创建后**所有权终验**（回读 pid+createdAt +
-inode 与刚写入一致）——被并发接管位移的获取者立即失败，绝不无锁运行。`GatewayStore.close()` 幂等
-释放，`reacquire()` 供 start() 重试路径重取（design 17 §4.1）；进程 exit 也 best-effort 释放——
-同 stateDir 重开必须先 close。已知残差：三个进程同时接管同一
-陈旧锁时，第三个可能在还原间隙创建新锁并被覆盖——与所有 pidfile 锁相同，无内核 flock 时不可能数学
-消除；双进程场景（生产现实：systemd + 手动启动）由上述校验**证明地**闭合（双进程压力测试锁定）。
+**state 根租约（`<stateRoot>/owner.json`）**：`createGateway`（gateway 形态）或 `createControlPlane`（desktop/cli，取锁严格在首次 store 写之前）经 `acquireStateRootLease` 以 **no-follow O_EXCL** 创建
+`{schemaVersion,pid,startedAt,token,scope,flavor}`（0600，stateRoot 0700 内）+ **回读终验**持有该根：活 pid 的租约**响亮拒绝启动**
+（结构化错误 `state_root_locked` + holder pid/flavor）；同进程同根重复取 = `state_root_duplicate`；死 pid 的陈旧租约以 **rename 认领 + 字节/identity 证明**接管：
+rename 到唯一 `.stale-<pid>-<hex>` 名（仅一个竞争者成功，其余见 ENOENT 重试），再校验被移动的正是
+读到的陈旧记录；若移动了**新鲜记录**则还原（覆盖间隙中第三方的新租约——先到者胜，被覆盖者的
+**创建后所有权终验**检出位移并 fail-closed）并响亮失败。不可读的租约文件（非普通文件/symlink/inode 竞态）响亮失败（绝不销毁意外内容）；**可读但 pid 缺失/损坏或撕裂**的记录按陈旧**认领并告警**（最可能是崩溃残留）；未知 `schemaVersion` fail-closed。`release` 双重守卫：未实际持有不删，且 on-disk 完整 bytes + **token+inode** 必须仍与本次获取一致才删（仅比 pid 不足以区分同进程重取/后继者；不匹配即 `state_root_not_owner` 且绝不删除）；**exit 监听器仅在获取
+成功后注册**（模块级单一监听器只遍历已持有租约）——获取失败的进程退出时绝不删除活写者的租约。创建后**所有权终验**（回读 + identity 与刚写入一致）——被并发接管位移的获取者立即失败，绝不无锁运行。采用语义：gateway/plane/runtime-manager 共享同一 handle、只 `assertCurrent` 不释放，仅顶层 owner 在其写者静止后 `release`；`start` 自持且已释放时 `reacquire`。逃生口唯一实现 `resolveStateRoot`：`--state-dir` > `DSH_<FLAVOR>_STATE` > `DSH_CHAMBER_STATE` > `~/.dsh-chamber`（一个 state 根一个写者，第二写者 fail-closed 退出 1）。旧 `.gateway.lock` / `dsh-runtime/owner.json` 由 `retireLegacyStateLocks` 一次性退役（一个 minor 后删除该函数）。已知残差：三个进程同时接管同一
+陈旧租约时，第三个可能在还原间隙创建新租约并被覆盖——与所有 pidfile 锁相同，无内核 flock 时不可能数学
+消除；双进程场景（生产现实：systemd + 手动启动）由上述校验**证明地**闭合（`control-plane/test/state/state-root-lease.test.ts` 的 T1/T2/T8/T9 与 13 条单进程矩阵锁定，含 T3–T6 四条生产入口 end-to-end）。
 
 **桌面凭据存储（`<userData>/gateway-secrets.json`，schema v3）**：
 
@@ -1387,8 +1380,8 @@ mexiaosqwq/dsh-web-mobile）、`dsh-ui-mobile`（jasondu，npm 已发布）、
   **局部名后缀**匹配 `:is([class$="_<local>"], [class*="_<local> "])`——实例 bundle 的 CSS Modules
   生产命名是 `[hash]_[local]`（上游 `tsdown.client.ts:517`；产物实测 `JObwrW_row`/`zGbnIq_modelRow`），
   局部名可能不在末位，故后缀 + 后随空格两臂并用；`_<local>_<hash>_<idx>` 是 chamber 自建壳（Vite）的
-  命名，不属于实例 bundle——曾用的 `[class*="_<local>_"]` infix 因此命中不到任何东西
-  。命名翻转时 fail-soft 回官方网格，属记录在案的例外锚点族，后缀契约见 §18.4.2。
+  命名，不属于实例 bundle——曾用的 `[class*="_<local>_"]` infix 因此命中不到任何东西。
+  命名翻转时 fail-soft 回官方网格，属记录在案的例外锚点族，后缀契约见 §18.4.2。
   **卡片网格不再由 chamber 降级（影响面按 
   F3 校正为两张网格）**：该手机档设置分区下有**两张各由上游拥有、规则却不同**的卡片网格——
   - `ui-settings-plugin-inventory/PluginInventorySettingsTab.module.css` 自带折叠断点
@@ -1403,8 +1396,8 @@ mexiaosqwq/dsh-web-mobile）、`dsh-ui-mobile`（jasondu，npm 已发布）、
   弹窗内可编辑字段套用 composer 同款 16px 聚焦缩放底线；
 - **会话头部（会话页顶部标题/面包屑行）**：官方 header 为桌面宽度 chrome，移动面三轴冲突全部以
   结构化锚点覆盖（不依赖哈希类名）——
-  (a) 浮动抽屉开关（左上 44px，官方 `IconPanelLeftOutline16` 字形——不再是自绘 CSS 汉堡，
-；**可访问名**即官方名（`aria-label` 随状态切换，官方 toggle 的
+  (a) 浮动抽屉开关（左上 44px，官方 `IconPanelLeftOutline16` 字形——不再是自绘 CSS 汉堡；
+  **可访问名**即官方名（`aria-label` 随状态切换，官方 toggle 的
   `toggle.open`/`toggle.collapse` 对）；但其 ARIA **不是官方属性表**——官方控件只带那一个 label，
   画外替身另写自身为真的 `aria-expanded`；校正了"ARIA 也是官方形状"多算的
   一个属性。**`aria-haspopup` 已删**——抽屉是侧栏本体被移出画外、无类型弹层；官方只在真有弹层时写
@@ -1625,7 +1618,7 @@ PWA / Web Push 社区实现机制（dsh-ui-mobile，jasondu，npm 0.1.8，MIT，
   - 触控目标 ≥44px 比例（**座席清单**：composer bar / sidebar / 会话头
     actions+utilities+corner / settings.section / 右栏 dockkit 条 chips+按钮 / menuitem+option）、
     无横向溢出、抽屉开合、弹层不出屏、设置全屏可滚动、输入行单行、安全区/100dvh、键盘不遮挡输入区；
-  - 右栏与抽屉（决策的判据）：展开的右栏在 769–1023px 档**全屏**呈现、面板自带
+  - 右栏与抽屉（决策的实机判据）：展开的右栏在 769–1023px 档**全屏**呈现、面板自带
     退出控件可点、面板展开期间抽屉与开关不可见且**不在 Tab 序**——**两档都要走查**：<768（上游
     自身全屏、本插件补齐 inset、让位靠 `data-rightbar-fullscreen` 臂）与 769–1023（本插件全屏 +
     轨道臂）；768–1023 档内面板自带的**模式控件不可见**（翻转是 no-op）、关闭面板后

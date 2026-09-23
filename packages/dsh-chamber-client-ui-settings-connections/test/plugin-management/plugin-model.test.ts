@@ -332,15 +332,16 @@ test('projectTasks: journal ops map onto rows (spec/error/restarted default to n
   assert.equal(rows.length, 3)
   assert.deepEqual(rows[0], {
     opId: 'op-3', kind: 'remove', name: 'old', spec: null, status: 'ok', error: null,
-    restarted: 'ok', ts: 3000, deferred: false, intentId: null,
+    restarted: 'ok', ts: 3000, deferred: false, intentId: null, preImage: 'backups/op-3', undoOf: null,
   })
   assert.deepEqual(rows[1], {
     opId: 'op-2', kind: 'install', name: 'foo', spec: '^1.2.0', status: 'failed', error: 'registry 404',
-    restarted: null, ts: 2000, deferred: false, intentId: null,
+    restarted: null, ts: 2000, deferred: false, intentId: null, preImage: 'backups/op-2', undoOf: null,
   })
   assert.deepEqual(rows[2], {
     opId: 'op-1', kind: 'materialize', name: 'pkg', spec: 'file:/…/pkg-abc.tgz', status: 'blocked',
     error: 'runtime busy; retry later', restarted: null, ts: 1000, deferred: false, intentId: null,
+    preImage: null, undoOf: null,
   })
 })
 
@@ -362,15 +363,15 @@ test('projectTasks: deferred intents project as pending intent rows (opId "", in
   // Deferred intents first, wire order preserved, never claimed executed.
   assert.deepEqual(rows[0], {
     opId: '', kind: 'install', name: 'late', spec: '^2.0.0', status: 'pending', error: null,
-    restarted: null, ts: 2000, deferred: true, intentId: 'int-2',
+    restarted: null, ts: 2000, deferred: true, intentId: 'int-2', preImage: null, undoOf: null,
   })
   assert.deepEqual(rows[1], {
     opId: '', kind: 'materialize', name: 'pkg', spec: 'file:/…/pkg.tgz', status: 'pending', error: null,
-    restarted: null, ts: 1500, deferred: true, intentId: 'int-1',
+    restarted: null, ts: 1500, deferred: true, intentId: 'int-1', preImage: null, undoOf: null,
   })
   assert.deepEqual(rows[2], {
     opId: 'op-1', kind: 'install', name: 'earlier', spec: '^1.0.0', status: 'ok', error: null,
-    restarted: null, ts: 1000, deferred: false, intentId: null,
+    restarted: null, ts: 1000, deferred: false, intentId: null, preImage: null, undoOf: null,
   })
 })
 
@@ -379,32 +380,42 @@ test('projectTasks: deferred intents project as pending intent rows (opId "", in
 // ---------------------------------------------------------------------------
 
 function opRow(over: Partial<TaskRow> & Pick<TaskRow, 'opId' | 'kind' | 'name' | 'status'>): TaskRow {
-  return { spec: null, error: null, restarted: null, ts: 0, deferred: false, intentId: null, ...over }
+  // Default: every journal op carries its own preImage (the normal executor
+  // outcome); tests that need the abnormal shape override it with null.
+  return { spec: null, error: null, restarted: null, ts: 0, deferred: false, intentId: null, preImage: 'backups/op', undoOf: null, ...over }
 }
 
 test('UNDO_V1_POLICY: v1 derives undo from ok ops only (failed/blocked never undoable)', () => {
   assert.equal(UNDO_V1_POLICY, 'ok-only')
 })
 
-test('undoForLatest: newest ok install → remove action (undo an install = remove the name)', () => {
+test('undoForLatest: newest ok install → RESTORE action (undo = restore the op preImage, not a remove)', () => {
   const rows = [opRow({ opId: 'op-2', kind: 'install', name: 'foo', status: 'ok', ts: 2 })]
-  assert.deepEqual(undoForLatest(rows), { action: { kind: 'remove', name: 'foo' } })
+  assert.deepEqual(undoForLatest(rows), { action: { kind: 'restore', opId: 'op-2', name: 'foo', opKind: 'install' } })
 })
 
-test('undoForLatest: newest ok materialize → remove of the name it installed', () => {
+test('undoForLatest: newest ok materialize → RESTORE (the pair returns to the pre-materialize state)', () => {
   const rows = [
     opRow({ opId: 'op-3', kind: 'materialize', name: 'pkg', status: 'ok', spec: 'file:/…/pkg.tgz', ts: 3 }),
     opRow({ opId: 'op-2', kind: 'install', name: 'older', status: 'ok', ts: 2 }),
   ]
-  assert.deepEqual(undoForLatest(rows), { action: { kind: 'remove', name: 'pkg' } })
+  assert.deepEqual(undoForLatest(rows), { action: { kind: 'restore', opId: 'op-3', name: 'pkg', opKind: 'materialize' } })
 })
 
-test('undoForLatest: newest ok REMOVE cannot be undone from task rows (spec never journaled) → remove-lacks-spec', () => {
+test('undoForLatest: an executed REMOVE is undoable too — restore re-adds the declaration (ssh 撤销=恢复 parity)', () => {
   const rows = [
     opRow({ opId: 'op-3', kind: 'remove', name: 'old', status: 'ok', ts: 3 }),
     opRow({ opId: 'op-2', kind: 'install', name: 'foo', status: 'ok', ts: 2 }),
   ]
-  assert.deepEqual(undoForLatest(rows), { action: null, reason: 'remove-lacks-spec' })
+  assert.deepEqual(undoForLatest(rows), { action: { kind: 'restore', opId: 'op-3', name: 'old', opKind: 'remove' } })
+})
+
+test('undoForLatest: an ok op WITHOUT a preImage is not undoable and never skips to an older op → no-preimage', () => {
+  const rows = [
+    opRow({ opId: 'op-3', kind: 'install', name: 'backup-lost', status: 'ok', preImage: null, ts: 3 }),
+    opRow({ opId: 'op-2', kind: 'install', name: 'foo', status: 'ok', ts: 2 }),
+  ]
+  assert.deepEqual(undoForLatest(rows), { action: null, reason: 'no-preimage' })
 })
 
 test('undoForLatest: a newer failed/blocked op above the newest ok op does not hide it in v1 (ok-only policy)', () => {
@@ -412,7 +423,7 @@ test('undoForLatest: a newer failed/blocked op above the newest ok op does not h
     opRow({ opId: 'op-3', kind: 'install', name: 'broken', status: 'blocked', error: 'runtime busy', ts: 3 }),
     opRow({ opId: 'op-2', kind: 'install', name: 'foo', status: 'ok', ts: 2 }),
   ]
-  assert.deepEqual(undoForLatest(rows), { action: { kind: 'remove', name: 'foo' } })
+  assert.deepEqual(undoForLatest(rows), { action: { kind: 'restore', opId: 'op-2', name: 'foo', opKind: 'install' } })
 })
 
 test('undoForLatest: only failed/blocked terminal ops → only-failed (attempted, never succeeded)', () => {
@@ -433,12 +444,12 @@ test('undoForLatest: pending-only rows → none-executed (nothing terminal yet)'
 test('undoForLatest: empty rows and deferred-intent-only rows → none-executed', () => {
   assert.deepEqual(undoForLatest([]), { action: null, reason: 'none-executed' })
   const intents: TaskRow[] = [
-    { opId: '', kind: 'install', name: 'late', spec: '^1.0.0', status: 'pending', error: null, restarted: null, ts: 1, deferred: true, intentId: 'int-1' },
+    { opId: '', kind: 'install', name: 'late', spec: '^1.0.0', status: 'pending', error: null, restarted: null, ts: 1, deferred: true, intentId: 'int-1', preImage: null, undoOf: null },
   ]
   assert.deepEqual(undoForLatest(intents), { action: null, reason: 'none-executed' })
   // A pending intent above executed ops never disturbs the derive.
   const mixed = [...intents, opRow({ opId: 'op-9', kind: 'install', name: 'foo', status: 'ok', ts: 9 })]
-  assert.deepEqual(undoForLatest(mixed), { action: { kind: 'remove', name: 'foo' } })
+  assert.deepEqual(undoForLatest(mixed), { action: { kind: 'restore', opId: 'op-9', name: 'foo', opKind: 'install' } })
 })
 
 // ---------------------------------------------------------------------------

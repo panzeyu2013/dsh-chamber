@@ -1,9 +1,11 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+// Both modules are package-internal (no public face, not on the barrel): the test
+// references the sources directly.
 import {
   decodeSessionCreateValue, decodeWorkspaceCreateValue, decodeWorkspaceDeleteValue,
-} from '../../src/shared/instance-mutation-values.ts'
-import { InstanceRpcError } from '../../src/shared/instance-rpc-error.ts'
+} from '../../../dsh-chamber-client-core/src/instance-mutation-values.ts'
+import { InstanceRpcError } from '../../../dsh-chamber-client-core/src/instance-rpc-error.ts'
 
 /** The decoder rejection contract: an InstanceRpcError with code invalid-response. */
 const invalidResponse = (error: unknown): boolean => error instanceof InstanceRpcError && error.code === 'invalid-response'

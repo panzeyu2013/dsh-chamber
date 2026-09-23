@@ -43,8 +43,9 @@
  * (`resolveWorkspace()`, env → override → builtin anchor — the same source
  * control-plane spawns the managed instance from): node executable
  * (resolveNodeExecutable, shared with control-plane spawn-dsh) + the
- * workspace CLI entry (resolveDshCliEntry in dsh-path.ts — the single home
- * of the installed-entry/dev-source markers). A runtime version switch
+ * workspace CLI entry (resolveDshCliEntry in @dsh-chamber/dsh-runtime
+ * dsh-cli-entry.ts — the single home of the installed-entry/dev-source
+ * markers). A runtime version switch
  * between ops can therefore never leave the queue spawning a stale entry.
  */
 
@@ -62,11 +63,12 @@ import {
   registrySpecVersion,
   resolveNodeExecutable,
 } from '@dsh-chamber/control-plane'
+import { resolveDshCliEntry } from '@dsh-chamber/dsh-runtime'
 import { readPrivateTextOrNull } from './private-read.ts'
 import { messageOf, newestFirst } from './util.ts'
 import { resolveJudgementInputs } from './plugins-installed.ts'
-import { resolveDshCliEntry } from './dsh-path.ts'
-import type { SpawnFn } from './plugins-exec.ts'
+import { latestUndoableOp } from './plugins-undo.ts'
+import type { MutationSpawnFn } from '@dsh-chamber/control-plane'
 import { createPluginsExec, PLUGIN_QUEUE_CAP, type PluginExec } from './plugins-exec.ts'
 import type { ProfileWriteLease } from './runtime-manager.ts'
 import { createPluginsJournal, thirdPartyRoot } from './plugins-journal.ts'
@@ -152,6 +154,8 @@ export type PluginTaskRefusalCode =
   | 'invalid_spec'
   | 'not_installed'
   | 'no_manifest'
+  | 'no_undoable_op'
+  | 'journal_unavailable'
   | 'persistence_failed'
 
 export type PluginTaskSubmitResult =
@@ -194,7 +198,7 @@ export interface ChamberPluginTasksDeps {
   installed: ChamberInstalled
   /** Injectable spawn seam (tests only; production spawns the real dsh CLI
    * through the node executable resolution below). */
-  spawn?: SpawnFn
+  spawn?: MutationSpawnFn
   timeoutMs?: number
   /** Design 21 §6.3 "装完自动受控 restart 一次": after ≥1 drained intent's
    * op ran to ok, the orchestrator asks the wiring layer for ONE controlled
@@ -702,11 +706,73 @@ export function createChamberPluginTasks(deps: ChamberPluginTasksDeps): ChamberP
     return { ok: true, opId: result.opId, deferred: false }
   }
 
+  /**
+   * The undo verb's acceptance path (design 21 §6.3/§6.8 r2; the §6.2 route
+   * POST /chamber/plugins/undo): undo = RESTORE, never remove-only. Undo is
+   * NEVER deferred — the honest answers are the 4xx/409 family (nothing to
+   * undo / corrupt journal / writer in flight) or a queued 202. The target is
+   * selected here and bound to the journal op (`undoOf`); the executor
+   * re-verifies that binding at execution. */
+  async function submitUndo(
+    input: PluginTaskSubmitInput,
+    onTerminal?: (status: 'ok' | 'failed' | 'blocked') => void,
+  ): Promise<PluginTaskSubmitResult> {
+    // Corruption ≠ emptiness (the journal module's rule): a corrupt record
+    // set cannot prove "nothing is undoable", so the answer is the gateway's
+    // own retryable 503, never a confident no_undoable_op.
+    const integrity = journal.integrity()
+    if (integrity.state === 'corrupt') {
+      return {
+        ok: false,
+        code: 'journal_unavailable',
+        error: `plugin journal is corrupt or unreadable (${integrity.error}); refusing to pick an undo target`,
+      }
+    }
+    const manager = deps.manager()
+    if (manager === null) {
+      return {
+        ok: false,
+        code: 'runtime_pending',
+        error: 'gateway runtime manager is not initialized; retry when the managed instance is up',
+      }
+    }
+    // Single-flight FIRST (design 21 §6.3): an undo restores whole-file state,
+    // so it must never race another profile writer. A writer in flight is the
+    // retryable 409 family — the caller re-reads the task projection and
+    // retries after the running operation settles. The check precedes target
+    // selection on purpose: under a writer the target set is mid-change, so
+    // "busy" is the only honest answer (never a confident no_undoable_op).
+    if (manager.profileWriteInFlight()) {
+      return {
+        ok: false,
+        code: 'runtime_busy',
+        error: 'a managed profile write is in flight; retry after the running plugin operation settles',
+      }
+    }
+    const target = latestUndoableOp(journal.recent())
+    if (target === null) {
+      return { ok: false, code: 'no_undoable_op', error: 'no undoable plugin operation is recorded' }
+    }
+    const lease = manager.beginProfileWrite()
+    if (!lease.ok) return { ok: false, code: lease.code, error: lease.error }
+    return submitWithLease(
+      {
+        kind: 'undo',
+        name: target.name,
+        undoOf: target.id,
+        ...(input.initiator === undefined ? {} : { initiator: input.initiator }),
+      },
+      lease.release,
+      onTerminal,
+    )
+  }
+
   async function submitImpl(
     input: PluginTaskSubmitInput,
     allowDefer: boolean,
     onTerminal?: (status: 'ok' | 'failed' | 'blocked') => void,
   ): Promise<PluginTaskSubmitResult> {
+    if (input.kind === 'undo') return await submitUndo(input, onTerminal)
     const outcome = validateSubmission(input, deps)
     if (outcome.kind === 'refuse') {
       return { ok: false, code: outcome.code, error: outcome.error }

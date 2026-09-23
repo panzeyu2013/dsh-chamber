@@ -224,8 +224,6 @@ test('the shared probe surface and the one-sided extras are exactly as registere
   ] as const
   const cpOnly = [
     'parseNetstatListeningRows',
-    'parseNetstatListeningPids',
-    'parseTcpConnectionListenJson',
     'buildTcpListenTableCommand',
     'classifyCimLiveness',
     'classifyCimLivenessFromTableReads',

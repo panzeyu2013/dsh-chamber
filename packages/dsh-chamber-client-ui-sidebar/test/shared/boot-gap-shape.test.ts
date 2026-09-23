@@ -7,8 +7,8 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { bootGapShape } from '../../src/shared/boot-gap-shape.ts'
-import type { ServerBootGap } from '../../src/shared/aggregate-store.ts'
+import { bootGapShape } from '@dsh-chamber/dsh-chamber-client-core/boot-gap-shape'
+import type { ServerBootGap } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
 
 const asGap = (value: Record<string, unknown>): ServerBootGap => value as unknown as ServerBootGap
 

@@ -341,9 +341,7 @@ export function configureGatewaySecretStore(
   passwordBindings.clear()
   if (file === null) return null
   // One-time crash-residue sweep: the fixed `${file}.tmp` residue left by the
-  // legacy persist (see removeLegacyTmpResidue), swept once at
-  // configure — this covers BOTH store entry points: the secret store proper
-  // and configureGatewayTokenStore, which delegates here.
+  // legacy persist (see removeLegacyTmpResidue), swept once at configure.
   removeLegacyTmpResidue(file)
   let text: string
   try {
@@ -458,17 +456,6 @@ export function configureGatewaySecretStore(
   for (const [id, value] of loadedTokenBindings) tokenBindings.set(id, value)
   for (const [id, value] of loadedPasswordBindings) passwordBindings.set(id, value)
   return null
-}
-
-/** Backward-compatible test/embedding alias for callers that still name the
- * former token-only store. The Electron shell uses
- * `configureGatewaySecretStore(<userData>/gateway-secrets.json)` with its
- * safeStorage adapter and live registry resolver. */
-export function configureGatewayTokenStore(
-  file: string | null,
-  resolveSpec?: (id: string) => TransportInstanceSpec | null,
-): string | null {
-  return configureGatewaySecretStore(file, undefined, resolveSpec)
 }
 
 /** Safely handle a schemaVersion 1 `gateway-tokens.json` beside the bound v3

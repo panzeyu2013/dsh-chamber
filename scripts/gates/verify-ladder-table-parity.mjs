@@ -116,10 +116,11 @@ export const CONSUMERS = [
     ],
   },
   {
-    // The sidebar executor's probe cadence; the authority ladder replaced the
-    // 190 s fact-reconcile receipt chain (the retired names below).
+    // The client-core executor's probe cadence (the sidebar shared module moved
+    // into the shared client core); the authority ladder replaced the 190 s
+    // fact-reconcile receipt chain (the retired names below).
     table: 'tables.ladders.authority',
-    source: 'packages/dsh-chamber-client-ui-sidebar/src/shared/session-fact-reconcile.ts',
+    source: 'packages/dsh-chamber-client-core/src/session-fact-reconcile.ts',
     reference: 'LADDER_TABLES.authority',
     retiredNames: [
       'DEFAULT_MAX_ATTEMPTS',

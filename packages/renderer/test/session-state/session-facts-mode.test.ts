@@ -14,13 +14,13 @@ import { sourceSessionFactsMode } from '../../src/session-facts-mode.ts'
 
 const APP = readFileSync(fileURLToPath(new URL('../../src/App.tsx', import.meta.url)), 'utf8')
 const SIDEBAR = readFileSync(
-  fileURLToPath(new URL('../../../dsh-chamber-client-ui-sidebar/src/shared/aggregate-store.ts', import.meta.url)),
+  fileURLToPath(new URL('../../../dsh-chamber-client-core/src/aggregate-store.ts', import.meta.url)),
   'utf8',
 )
 
 function snapshot(overrides: Record<string, unknown> = {}) {
   return {
-    verdict: 'ok', degradation: null, mode: 'sse', hostState: 'ready',
+    verdict: 'ok', degradation: null, hostState: 'ready',
     serviceable: true, stale: false, cursor: 1, rows: {}, read: null, lastEventAt: 1,
     ...overrides,
   } as never

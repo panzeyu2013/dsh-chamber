@@ -6,7 +6,7 @@
     "packages/dsh-api-gateway/src/client/journal-stream.ts": 744,
     "packages/dsh-api-gateway/src/client/remote-stream.ts": 295,
     "packages/dsh-stream-state/src/session-authority.ts": 243,
-    "packages/dsh-chamber-client-ui-sidebar/src/shared/session-fact-reconcile.ts": 301,
+    "packages/dsh-chamber-client-core/src/session-fact-reconcile.ts": 301,
     "packages/dsh-chamber-client-ui-open-in/src/client/session-stream-health.ts": 534,
     "packages/dsh-chamber-client-ui-open-in/src/client/session-stream-health-probe.ts": 375,
     "packages/dsh-chamber-client-ui-open-in/src/client/session-stream-health-seat.ts": 281,
@@ -48,7 +48,7 @@
     "VIEW_RECLAIM_TICK_MS"
   ],
   "thresholdCount": 30,
-  "dependantFileCount": 24,
-  "appLifecycleMarkerHits": 114,
+  "dependantFileCount": 21,
+  "appLifecycleMarkerHits": 110,
   "swiftShellMarkerHits": 33
 }

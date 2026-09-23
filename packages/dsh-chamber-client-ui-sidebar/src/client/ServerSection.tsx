@@ -22,22 +22,22 @@ import {
   IconFolderOpenOutline16, IconPlusOutline16, IconTrashOutline16, Menu,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import { RowHoverCard } from './RowHoverCard.tsx'
-import { chamberBridge, type ChamberServerAggregate, type ChamberServerWorkspace } from '../shared/aggregate-store.ts'
+import { chamberBridge, type ChamberServerAggregate, type ChamberServerWorkspace } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
 import {
   deriveLocalSearchMatches, mergeSearchResults, orderUngroupedSessions, reconciledSessionOrder,
   sanitizeSearchQuery, workspaceAccentStyle,
-} from '../shared/derive.ts'
-import { type SearchRow } from '../shared/instance-api.ts'
+} from '@dsh-chamber/dsh-chamber-client-core/derive'
+import { type SearchRow } from '@dsh-chamber/dsh-chamber-client-core/instance-api'
 import {
   collapseSearch, getSearchStates, subscribeSearch,
   type SourceSearchState,
-} from '../shared/search-state.ts'
-import { clearPendingClick } from '../shared/pending-click.ts'
-import { createPrewarmIntent, type PrewarmIntent } from '../shared/prewarm-intent.ts'
-import { openErrorKey } from '../shared/open-outcome.ts'
-import { getSourceRepoLayouts, getWorkspaceGitFlag, hiddenByMainWorkspaceFold, isSourceGitFlagsLoaded } from '../shared/workspace-git-flags.ts'
-import { resolveWorkspaceDrop } from '../shared/workspace-drag-order.ts'
-import { sessionRowDisclosure, sessionRowWindow, SESSION_ROWS_VISIBLE_FIRST } from '../shared/session-row-window.ts'
+} from '@dsh-chamber/dsh-chamber-client-core/search-state'
+import { clearPendingClick } from '@dsh-chamber/dsh-chamber-client-core/pending-click'
+import { createPrewarmIntent, type PrewarmIntent } from '@dsh-chamber/dsh-chamber-client-core/prewarm-intent'
+import { openErrorKey } from '@dsh-chamber/dsh-chamber-client-core/open-outcome'
+import { getSourceRepoLayouts, getWorkspaceGitFlag, hiddenByMainWorkspaceFold, isSourceGitFlagsLoaded } from '@dsh-chamber/dsh-chamber-client-core/workspace-git-flags'
+import { resolveWorkspaceDrop } from '@dsh-chamber/dsh-chamber-client-core/workspace-drag-order'
+import { sessionRowDisclosure, sessionRowWindow, SESSION_ROWS_VISIBLE_FIRST } from '@dsh-chamber/dsh-chamber-client-core/session-row-window'
 import { useSidebarSection, workspaceDropEnv } from './sidebar-context.ts'
 import { ServerSectionHeader } from './ServerSectionHeader.tsx'
 import { ServerSectionSearchCapsule, ServerSectionSearchResults } from './ServerSectionSearch.tsx'

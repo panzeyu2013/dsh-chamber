@@ -18,15 +18,17 @@ import { fileURLToPath } from 'node:url'
 import {
   createPrewarmIntent,
   emptyIntentPrewarmBudget,
-  INTENT_DWELL_MS,
-  INTENT_LEAVE_GRACE_MS,
-  INTENT_PREWARM_COOLDOWN_MS,
-  INTENT_PREWARM_MAX_PER_SESSION,
   intentPrewarmAllowed,
   intentPrewarmSpent,
   prioritizePrewarmSource,
   type PrewarmIntent,
-} from '../../src/shared/prewarm-intent.ts'
+} from '@dsh-chamber/dsh-chamber-client-core/prewarm-intent'
+import {
+  INTENT_DWELL_MS,
+  INTENT_LEAVE_GRACE_MS,
+  INTENT_PREWARM_COOLDOWN_MS,
+  INTENT_PREWARM_MAX_PER_SESSION,
+} from '../../../dsh-chamber-client-core/src/prewarm-intent.ts'
 
 /** Machines created by the current test; fake timers are installed per test. */
 const created: PrewarmIntent[] = []
@@ -215,7 +217,7 @@ test('an intent buys at most one boot per source and at most the session cap', (
 
 // 接线行为：意图必须真的到达 App 层订阅者，且取消订阅后不再投递。
 test('the intent reaches App-layer bridge subscribers and unsubscribes cleanly', async () => {
-  const { chamberBridge } = await import('../../src/shared/aggregate-store.ts')
+  const { chamberBridge } = await import('@dsh-chamber/dsh-chamber-client-core/aggregate-store')
   const seen: string[] = []
   const unsubscribe = chamberBridge.onIntentPrewarm(({ sourceId }) => { seen.push(sourceId) })
   chamberBridge.requestIntentPrewarm('ssh-a')
@@ -239,7 +241,7 @@ test('round-3 restore: the source header is the one and only intent touchpoint',
     read('../../src/client/server-section-model.ts'),
     read('../../src/client/server-section-session-state.tsx'),
   ].join('\n')
-  assert.match(section, /import \{ createPrewarmIntent, type PrewarmIntent \} from '\.\.\/shared\/prewarm-intent\.ts'/)
+  assert.match(section, /import \{ createPrewarmIntent, type PrewarmIntent \} from '@dsh-chamber\/dsh-chamber-client-core\/prewarm-intent'/)
   assert.equal((section.match(/createPrewarmIntent\(/g) ?? []).length, 1, 'one machine per source header; session rows stay out of scope')
   assert.match(section, /const prewarmIntentRef = useRef<PrewarmIntent \| null>\(null\)/)
   assert.match(section, /onPointerEnter=\{\(\) => \{ prewarmIntent\(\)\.enter\(\) \}\}/)

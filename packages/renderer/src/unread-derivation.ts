@@ -1,9 +1,9 @@
 /**
  * 完成未读账本的**派生投影**。
  *
- * 唯一未读谓词来自 sidebar shared 的 4 参 deriveUnread(completedAt,
+ * 唯一未读谓词来自 client-core 的 4 参 deriveUnread(completedAt,
  * lastTurnEnd, readThrough, updatedAt)（ABSENT/degraded turn-end 的武装分支在
- * sidebar shared 那边，本模块**不重实现**）；本模块只做两件事：
+ * client-core 那边，本模块**不重实现**）；本模块只做两件事：
  *   1. 通道边沿机（reconcileCompletedFacts，现行语义）在 channel-only / 事实
  *      缺席时继续承担 running→idle 武装（一套规则，不新写第二套）；
  *   2. 有 facts 行时 facts 是**该会话的完成权威**：deriveUnread 说未读才未读，
@@ -12,11 +12,11 @@
  * listComplete 是**唯一剪枝门**：只有 report.listComplete === true 才允许
  * 缺席会话离开账本；缺省/undefined 一律保留 prevLedger（列表短暂收缩不得假清）。
  *
- * 依赖注入：两个判定函数由调用方（App）传入 sidebar shared 的导出，
+ * 依赖注入：两个判定函数由调用方（App）传入 client-core 的导出，
  * 使本模块保持零运行时 import——本地无 node_modules 的纯测试可直接 import 本
  * 模块，同时接线锁看得见 App 真的把共享导出喂进来了（反作弊：不得自造一套）。
  */
-import type { TurnEndFact } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
+import type { TurnEndFact } from '@dsh-chamber/dsh-chamber-client-core'
 
 /** facts 源的一行（session-state 判定输入；时间值全在 host/observer 域）。 */
 export interface UnreadDerivationFactsRow {

@@ -77,7 +77,6 @@ export function realAuth(options: {
     dir,
     auditFile: options.auditFile === false ? '' : auditFile,
     cleanup() {
-      store.close()
       rmSync(dir, { recursive: true, force: true })
     },
   }

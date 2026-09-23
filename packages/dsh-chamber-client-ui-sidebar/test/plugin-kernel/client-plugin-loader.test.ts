@@ -8,8 +8,8 @@ import assert from 'node:assert/strict';
 import {
   BundleLoadTimeoutError, clientPluginRowOwner,
   dedupeCoveredRows, loadClientPluginRows,
-  resetClientPluginLoaderState,
-} from '../../src/shared/client-plugin-loader.ts';
+} from '@dsh-chamber/dsh-chamber-client-core/client-plugin-loader';
+import { resetClientPluginLoaderState } from '../../../dsh-chamber-client-core/src/client-plugin-loader.ts';
 
 const row = (id: string, rev = 'r1', url = `/plugins/??${id}/client.js&rev=${rev}`) => ({ id, url, rev });
 

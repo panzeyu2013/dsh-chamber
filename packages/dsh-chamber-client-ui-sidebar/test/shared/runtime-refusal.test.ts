@@ -1,5 +1,5 @@
 /**
- * The shared gateway refusal projection (sidebar shared face) — absolute
+ * The shared gateway refusal projection (client-core face) — absolute
  * verdicts, not merely self-consistency.
  *
  * The body matrix is the contract the gateway runtime routes ship. Asserting
@@ -14,7 +14,7 @@ import {
   classifyRuntimeRefusal,
   serverRefusalText,
   type RuntimeRefusalKind,
-} from '../../src/shared/runtime-refusal.ts'
+} from '@dsh-chamber/dsh-chamber-client-core'
 
 type Verdict = { kind: RuntimeRefusalKind; code: string | null } | null
 

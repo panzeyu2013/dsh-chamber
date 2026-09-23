@@ -26,16 +26,14 @@
  *   design 05 §8 / 17 §8 不变）。调用方仍不得把凭据写进日志。
  */
 
-import { closeSync, constants, fstatSync, lstatSync, statSync } from 'node:fs'
+import { closeSync, constants, statSync } from 'node:fs'
 import { join } from 'node:path'
 
 import {
   ensurePrivateDirectoryNoFollow,
   noFollowOpenFlag,
   openPrivateAppendNoFollow,
-  privateIdentityOf,
   rotatePrivateFileRingNoFollow,
-  samePrivateIdentity,
   writePrivateFdAll,
 } from './private-file.ts'
 import type { Logger } from './types.ts'
@@ -57,23 +55,6 @@ export const CONTROL_LOG_FILE = 'control-plane.log'
  *  不存在：不能依赖位或把 `undefined` 静默转成 0（那正是守卫消失而无告警的原因）。 */
 const CONTROL_LOG_NOFOLLOW_FLAG = noFollowOpenFlag()
 const CONTROL_LOG_NONBLOCK_FLAG = typeof constants.O_NONBLOCK === 'number' ? constants.O_NONBLOCK : 0
-
-/**
- * win32 回退（无 O_NOFOLLOW）：open 标志退化为 O_WRONLY|O_APPEND|O_CREAT，内核不会
- * 拒绝符号链接叶子。open 后把 path 重新 lstat 并与句柄自身 fstat 的 (dev, ino) 复验，
- * 链接或换文件一律抛错（调用方的降级包装把它变成拒绝落盘）——与 private-fs.ts
- * openPrivateNoFollowSync 的保证相同。POSIX 分支不调用（O_NOFOLLOW 已由内核拒绝）；
- * 导出以便平台回退单测直接驱动（该模块没有 constants 注入 seam）。
- */
-export function verifyOpenedLeafIdentity(path: string, handle: number): void {
-  const atPath = lstatSync(path)
-  const opened = fstatSync(handle)
-  // The identity pair is single-sourced in private-file.ts (same predicate the
-  // shared open/rotation primitives use).
-  if (atPath.isSymbolicLink() || !samePrivateIdentity(privateIdentityOf(atPath), privateIdentityOf(opened))) {
-    throw new Error('log leaf is a symbolic link or changed while being opened')
-  }
-}
 
 /** 一行日志的封装（单行、有界；调用方保证无换行注入）。 */
 export interface ControlLogRecord {

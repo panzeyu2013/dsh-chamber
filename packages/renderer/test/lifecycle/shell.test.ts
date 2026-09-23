@@ -19,7 +19,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { chamberBridge } from '../../../dsh-chamber-client-ui-sidebar/src/shared/aggregate-store.ts'
+import { chamberBridge } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
 // The settled-boot fact the seam carries (type-only: erased at runtime, so the
 // loader hook never sees the specifier). Typing the test's ctx cast from the
 // producer's own interface keeps a payload field from drifting out of the test.

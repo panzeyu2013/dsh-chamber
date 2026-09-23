@@ -11,7 +11,7 @@ const silentLogger = { log() {}, warn() {}, error() {} }
 const reaped = { reclaimed: 0, kept: 0, errors: [] as string[] }
 const stateDir = (): string => mkdtempSync(join(tmpdir(), 'dsh-plane-lifecycle-'))
 
-test('loopback-only 是硬不变量：非 loopback host 无边界评估器即拒绝', () => {
+test('loopback-only 是硬不变量：非 loopback host 无边界评估器即拒绝', async () => {
   // AGENTS.md「控制面只监听 loopback」+ design 17：匿名管理 API/反代绝不裸奔。
   const dir = stateDir()
   try {
@@ -25,23 +25,21 @@ test('loopback-only 是硬不变量：非 loopback host 无边界评估器即拒
     )
     // 显式提供三件套（评估器 + HTTP/upgrade 中间件）才允许非 loopback 绑定。
     const boundary = { evaluate: () => ({ ok: true }) } as never
-    assert.doesNotThrow(() => {
-      const plane = createControlPlane({
-        host: '0.0.0.0',
-        port: 0,
-        stateDir: dir,
-        logger: silentLogger,
-        corsEvaluator: boundary,
-        middleware: (async () => {}) as never,
-        upgradeMiddleware: (() => {}) as never,
-      })
-      void plane.stop()
+    // 每次构造都取同一 state 根的写者租约：必须先 await 前一个 plane.stop()
+    // 释放，再构造下一个（未释放时第二个构造是 state_root_duplicate，符合契约）。
+    const boundaryPlane = createControlPlane({
+      host: '0.0.0.0',
+      port: 0,
+      stateDir: dir,
+      logger: silentLogger,
+      corsEvaluator: boundary,
+      middleware: (async () => {}) as never,
+      upgradeMiddleware: (() => {}) as never,
     })
+    await boundaryPlane.stop()
     // loopback 变体不需要三件套。
-    assert.doesNotThrow(() => {
-      const plane = createControlPlane({ host: '127.0.0.1', port: 0, stateDir: dir, logger: silentLogger })
-      void plane.stop()
-    })
+    const loopbackPlane = createControlPlane({ host: '127.0.0.1', port: 0, stateDir: dir, logger: silentLogger })
+    await loopbackPlane.stop()
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

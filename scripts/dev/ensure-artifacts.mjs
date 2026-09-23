@@ -2,16 +2,15 @@
 /**
  * ensure-artifacts.mjs — 构建期产物自举。
  *
- * 这些产物不入 git，在构建期生成，因此 clean checkout 必须能自举。清单就是 C8
- * （scripts/upstream/verify-upstream-touchpoints.mjs）覆盖的同一组产物：
- *   - packages/dsh-runtime/dist/index.js
- *   - packages/dsh-chamber-seed-{client-graph,git-worktree,archive-cleanup,open-in}/dist/index.js
- *   - packages/dsh-chamber-client-ui-mobile/{dist/index.js,lib/index.js,lib/client.js,lib/client.js.map}
+ * 这些产物不入 git，在构建期生成，因此 clean checkout 必须能自举。产物清单的
+ * **单一来源** = scripts/lib/build-artifacts.mjs：本文件与 C8 重建-比对门
+ * （scripts/upstream/verify-upstream-touchpoints.mjs）消费同一模块，这里不再
+ * 手抄第二份路径清单。
  *
  * 契约：
- *   - 默认（ensure）——缺产物就打印清单并执行 `pnpm run build:artifacts`；构建
+ *   - 默认（ensure）——缺产物就打印清单并执行 'pnpm run build:artifacts'；构建
  *     失败或构建后仍缺件 ⇒ exit 1（绝不静默放行）。
- *   - --check —— 只检查不构建；缺件时 exit 1 并指明 `pnpm run build:artifacts`。
+ *   - --check —— 只检查不构建；缺件时 exit 1 并指明 'pnpm run build:artifacts'。
  *     供 run-checks static 模式使用：static 是纯只读门，缺产物必须 loud fail，
  *     而不是替操作者把工作树写脏。
  *
@@ -29,32 +28,15 @@ import { spawnSync } from 'node:child_process'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { ARTIFACTS, BUILD_ARTIFACTS_COMMAND } from '../lib/build-artifacts.mjs'
+
+export { ARTIFACTS, BUILD_ARTIFACTS_COMMAND }
+
 /** Repository root, derived from this file's own location (never the caller CWD). */
 export const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 
-/** Aggregate build command that produces every artifact below. */
-export const BUILD_ARTIFACTS_COMMAND = 'pnpm run build:artifacts'
-
 /**
- * The untracked build artifacts a clean checkout must materialize, in build
- * order. `build` is the narrow command that produces one artifact; the
- * aggregate {@link BUILD_ARTIFACTS_COMMAND} produces all of them.
- * @type {readonly { id: string, path: string, build: string }[]}
- */
-export const ARTIFACTS = [
-  { id: 'dsh-runtime/dist/index.js', path: 'packages/dsh-runtime/dist/index.js', build: 'pnpm run build:dsh-runtime' },
-  { id: 'seed-client-graph/dist/index.js', path: 'packages/dsh-chamber-seed-client-graph/dist/index.js', build: 'pnpm run build:host-graph' },
-  { id: 'seed-git-worktree/dist/index.js', path: 'packages/dsh-chamber-seed-git-worktree/dist/index.js', build: 'pnpm run build:host-git' },
-  { id: 'seed-archive-cleanup/dist/index.js', path: 'packages/dsh-chamber-seed-archive-cleanup/dist/index.js', build: 'pnpm run build:host-archive-cleanup' },
-  { id: 'seed-open-in/dist/index.js', path: 'packages/dsh-chamber-seed-open-in/dist/index.js', build: 'pnpm run build:host-open-in' },
-  { id: 'mobile/dist/index.js', path: 'packages/dsh-chamber-client-ui-mobile/dist/index.js', build: 'pnpm run build:mobile' },
-  { id: 'mobile/lib/index.js', path: 'packages/dsh-chamber-client-ui-mobile/lib/index.js', build: 'pnpm run build:mobile' },
-  { id: 'mobile/lib/client.js', path: 'packages/dsh-chamber-client-ui-mobile/lib/client.js', build: 'pnpm run build:mobile' },
-  { id: 'mobile/lib/client.js.map', path: 'packages/dsh-chamber-client-ui-mobile/lib/client.js.map', build: 'pnpm run build:mobile' },
-]
-
-/**
- * Which artifacts are absent under `repoRoot`.
+ * Which artifacts are absent under 'repoRoot'.
  * @param {string} [repoRoot] - repository root (defaults to this checkout).
  * @returns {{ id: string, path: string, build: string }[]} missing entries, manifest order.
  */
@@ -105,7 +87,7 @@ export function runBuildArtifacts({ repoRoot = REPO_ROOT, log = (line) => { cons
  * Ensure every artifact exists, optionally building the missing ones.
  * @param {{ repoRoot?: string, build?: boolean, log?: (line: string) => void }} [options] - overrides.
  * @returns {{ ok: boolean, missing: { id: string, path: string, build: string }[], built: boolean }} verdict;
- *   `missing` is what is still absent after the attempt.
+ *   'missing' is what is still absent after the attempt.
  */
 export function ensureArtifacts({ repoRoot = REPO_ROOT, build = true, log = (line) => { console.log(line) } } = {}) {
   const before = missingArtifacts(repoRoot)

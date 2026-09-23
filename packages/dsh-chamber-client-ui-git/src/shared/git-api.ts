@@ -1,19 +1,16 @@
 /** Client for the chamber host Git Remote over the shared per-instance carrier. */
 import {
   getInstanceClient, InstanceDomainMissingError, type UnaryResult,
-} from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
+} from '@dsh-chamber/dsh-chamber-client-core'
 import type {
   CreateWorktreeResult, GitWorktreeSnapshot, PreviewCreateInput, PreviewCreateResult,
   RemoveWorktreeResult, RollbackCreateResult,
 } from './types.ts'
-import { errorMessage, isRecord } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
+import { errorMessage, isRecord } from '@dsh-chamber/dsh-chamber-client-core'
 import { normalizeGitSnapshot } from './snapshot.ts'
-
-// 60s: the proxy's upstream idle timeout is
-// 45s (UPSTREAM_TIMEOUT_MS in the control plane) and the host's git mutation
-// budget is 30s — the browser must never abort while the host is still
-// legitimately working, or a committed mutation is misread as ambiguous.
-const RPC_TIMEOUT_MS = 60_000
+// The client leg of the three-layer git timeout ladder; the control-plane
+// lockstep test imports the same module as the client's REAL budget.
+import { RPC_TIMEOUT_MS } from './timeout-budget.ts'
 
 export class GitWorktreeRpcError extends Error {
   readonly code: string

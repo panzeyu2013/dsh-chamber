@@ -163,7 +163,7 @@ chamber 侧缓解（`packages/renderer/src/svg-resource-scope.ts`，design 05 §
 4. **宿主侧持久 unread/pending 事实**。当前只有「有人正在观察」时才能记录完成边沿；桌面关闭且无观察者运行的窗口内完成的会话仍会丢。若宿主为每个会话持久化「最后完成水位 + 是否未读」（或至少给出稳定的 per-session unread 投影），这类丢失就能被根除，下游无需再各自维护观察者。
 
 chamber 侧现状（非上游阻塞项，供参照）：只读镜像的边界与验收判据见 `docs/design/17-server-side-gateway.md` §10.7 与 §20；协议单一源 `packages/control-plane/src/session-state-protocol.ts`；watcher `packages/gateway/src/session-state.ts`（`/chamber/session-state*`，能力协商 + 优雅降级）。
-## 7. 子代理生命周期/计数与完整性信号（2026-12，P5）
+## 7. 子代理生命周期/计数与完整性信号（P5）
 
 背景：侧边栏父会话行的「N 个子代理运行中」读数来自 vendor 纯函数
 `indexSubagentDescendants` 对当前 `session/list` 快照的投影（design 06 §4.5）。它有两个
@@ -186,7 +186,7 @@ fallback 与 `test/session-rows/session-row-state.test.ts` 里钉住它的契约
 
 
 
-## 8. 载波 open 的稳定 episode 身份（2026-12，P3）
+## 8. 载波 open 的稳定 episode 身份（P3）
 
 背景：chamber 的开帧预算按「请求 episode」放宽（30 → 60 → 120 → 240 → 300 s），跨重试道
 （`RemoteStream` 重发 → mux 新 streamId）必须保持同一身份。vendor 的 `$stream({ open: signal => … })`

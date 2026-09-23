@@ -7,7 +7,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { SIDEBAR_TODO_PREFS_DEFAULTS, todoPrefsOf } from '../../src/shared/todo-prefs.ts'
+import { SIDEBAR_TODO_PREFS_DEFAULTS, todoPrefsOf } from '../../../dsh-chamber-client-core/src/todo-prefs.ts'
 
 // ---- decode (pure, no window) ---
 
@@ -43,11 +43,11 @@ console.error = (...args: unknown[]) => {
   if (!(typeof args[0] === 'string' && args[0].includes('共享单例模块'))) originalConsoleError(...args)
 }
 
-type TodoPrefsModule = typeof import('../../src/shared/todo-prefs.ts')
+type TodoPrefsModule = typeof import('../../../dsh-chamber-client-core/src/todo-prefs.ts')
 
 /** Fresh module instance (the store is a page-wide singleton). */
 function freshModule(): Promise<TodoPrefsModule> {
-  return import(`../../src/shared/todo-prefs.ts?case=${Math.random().toString(36).slice(2)}`)
+  return import(`../../../dsh-chamber-client-core/src/todo-prefs.ts?case=${Math.random().toString(36).slice(2)}`)
 }
 
 /** Minimal fake of the consumed settings surface. */

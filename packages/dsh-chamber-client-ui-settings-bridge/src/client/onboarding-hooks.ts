@@ -8,7 +8,7 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import { observableHook } from '@deepseek-ai/dsh-client-ui-renderer/src/client/bindings.tsx'
 import type { HostObservable } from '@deepseek-ai/dsh-client-ui-slots'
-import { chamberBridge } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
+import { chamberBridge } from '@dsh-chamber/dsh-chamber-client-core'
 import {
   ONBOARDING_SLOT, onboardingActive, onboardingSteps,
   type OnboardingLedger, type OnboardingSessionsSeat, type OnboardingSessionsState, type OnboardingStep,

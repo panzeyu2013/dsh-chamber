@@ -307,11 +307,12 @@ function desktopPluginSyncSource(): string {
   )
 }
 
-test('MATERIALIZED_VALUE_MASK is the SHARED control-plane constant on both sides', () => {
-  // The literal lives in control-plane protected-plugins.ts for the
-  // protected-set (design 21 §6.2/§6.11.5): neither side may hardcode its
-  // own copy — the gateway's export and the desktop's export must both
-  // resolve to PLUGIN_MATERIALIZED_VALUE_MASK.
+test('MATERIALIZED_VALUE_MASK is the SHARED wire constant on every side', () => {
+  // The literal lives in @dsh-chamber/dsh-chamber-wire/plugin-manifest
+  // (design 21 §6.2/§6.11.5): no side may hardcode its own copy — the
+  // gateway's export, the control-plane re-export and the desktop's export
+  // must all resolve to PLUGIN_MATERIALIZED_VALUE_MASK (the wire/control-plane
+  // ↔ gateway equality is pinned again by plugin-manifest-lockstep.test.ts).
   assert.equal(MATERIALIZED_VALUE_MASK, PLUGIN_MATERIALIZED_VALUE_MASK)
   assert.equal(PLUGIN_MATERIALIZED_VALUE_MASK, 'file:<hidden>')
   assert.match(desktopPluginSyncSource(),
@@ -464,15 +465,51 @@ test('route: no write in flight → 200 unchanged (terminal ops, deferred intent
   }
 })
 
-test('route: a failing fence probe is loud but fail-open (the §6.8 r1 recovery read stays available)', async t => {
+test('route: a failing fence probe is LOUD → 503, never an unfenced projection', async t => {
   const stateDir = scratch(t)
-  writeManifest(stateDir, JSON.stringify({ dependencies: { a: '^1.0.0' } }))
+  writeManifest(stateDir, JSON.stringify({ dependencies: { leaked: '^1.0.0' } }))
   const warnings: string[] = []
   const capturing = { log() {}, warn(message: string) { warnings.push(message) }, error() {} }
   const host = surface(t, stateDir, tasksProjection({ throws: true }), capturing as never)
   const response = await handle(host, 'GET', '/chamber/plugins/installed')
-  assert.equal(response.status, 200, 'the read itself still answers')
-  assert.equal(response.json().dependencies.a, '^1.0.0')
+  // The fence is unreadable ⇒ the writer state is UNKNOWN. The projection must
+  // be withheld loudly: no fail-open/unfenced read, no profile_absent claim,
+  // no dependencies leaking through any channel.
+  assert.equal(response.status, 503)
+  const body = response.json()
+  assert.equal(body.code, 'write_fence_unavailable')
+  assert.match(body.error, /unfenced/)
+  assert.equal('dependencies' in body, false, 'no projection body on the 503')
+  assert.equal('rows' in body, false, 'no projection body on the 503')
+  assert.equal(response.chunks.join('').includes('leaked'), false, 'the manifest content never leaks through the failure')
   assert.equal(warnings.length, 1)
-  assert.match(warnings[0] ?? '', /write-fence probe failed, reading unfenced/)
+  assert.match(warnings[0] ?? '', /write-fence probe failed/)
+  assert.equal(warnings[0]?.includes('reading unfenced'), false, 'the fail-open fallback is gone')
+
+  // The 503 is about the PROBE, not about profile state: the same broken fence
+  // over an ABSENT profile must not answer 404 (which would tell the client
+  // "nothing is installed" while the writer state is unknown).
+  const absentDir = scratch(t)
+  const absent = await handle(surface(t, absentDir, tasksProjection({ throws: true }), capturing as never), 'GET', '/chamber/plugins/installed')
+  assert.equal(absent.status, 503)
+  assert.equal(absent.json().code, 'write_fence_unavailable')
+})
+
+test('route: a healthy fence keeps the stopped-instance read available (200 / 404)', async t => {
+  // No writer in flight, terminal ops only + a deferred intent: the §6.8 r1
+  // recovery read is NOT fenced. Present profile → 200; absent → 404.
+  const present = scratch(t)
+  writeManifest(present, JSON.stringify({ dependencies: { a: '^1.0.0' } }))
+  const idle = tasksProjection({
+    ops: [journalOp('ok'), journalOp('failed'), journalOp('blocked')],
+    deferred: [{ id: 'int-1', ts: Date.now(), kind: 'install', name: 'later' }],
+  })
+  const ok = await handle(surface(t, present, idle), 'GET', '/chamber/plugins/installed')
+  assert.equal(ok.status, 200)
+  assert.equal(ok.json().dependencies.a, '^1.0.0')
+
+  const absentDir = scratch(t)
+  const absent = await handle(surface(t, absentDir, idle), 'GET', '/chamber/plugins/installed')
+  assert.equal(absent.status, 404)
+  assert.equal(absent.json().code, 'profile_absent')
 })

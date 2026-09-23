@@ -4,8 +4,8 @@
  * ChamberServerAggregate server-stub used by the ordering tests.
  */
 
-import type { ChamberServerAggregate } from '../../src/shared/aggregate-store.ts'
-import type { InstanceSnapshot, SessionRow, WorkspaceRow } from '../../src/shared/instance-api.ts'
+import type { ChamberServerAggregate } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
+import type { InstanceSnapshot, SessionRow, WorkspaceRow } from '@dsh-chamber/dsh-chamber-client-core/instance-api'
 
 export function session(
   id: string,

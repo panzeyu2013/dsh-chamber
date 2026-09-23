@@ -1,12 +1,12 @@
 {
   "extends": "../../tsconfig.json",
   "compilerOptions": {
-    // The `@dsh-chamber/dsh-chamber-client-ui-sidebar/shared` specifier resolves
-    // through the ROOT tsconfig paths to the REAL sidebar shared source
-    // (src/shared/index.ts); no ambient mirror file exists. The shared
-    // sources are compiled into this program as import dependencies, so the
-    // compile root spans the repo root (layout/git precedent); tsc only
-    // type-checks here (root noEmit + tsdown bundles); outDir is a mirror.
+    // The `@dsh-chamber/dsh-chamber-client-core` specifier resolves through the
+    // workspace node_modules link + the core package exports (source targets);
+    // no ambient mirror file exists. The core sources are compiled into this
+    // program as import dependencies, so the compile root spans the repo root
+    // (layout/git precedent); tsc only type-checks here (root noEmit + tsdown
+    // bundles); outDir is a mirror.
     "rootDir": "../..",
     "outDir": "lib/types"
   },

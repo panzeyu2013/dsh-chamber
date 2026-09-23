@@ -23,7 +23,7 @@
  * growing parallel names for one user-facing situation.
  */
 import type { GitSidebarKey } from '../locales.ts'
-import { describeThrown } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
+import { describeThrown } from '@dsh-chamber/dsh-chamber-client-core'
 import { removeFailureCode, removeFailureCopyKey } from './remove-notes.ts'
 
 /**

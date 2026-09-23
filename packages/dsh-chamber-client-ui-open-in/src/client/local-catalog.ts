@@ -7,8 +7,9 @@
  * half). This module is the browser half of that contract: it owns the wire
  * parsing and nothing else — the transport is an injected call, which in
  * production is the page's machine catalog reading the LOCAL instance through
- * the page-level instance client (`sidebar/shared/instance-api.ts`, the same
- * route, envelope and trust fence every entry uses — design 20 §4.2/§5).
+ * the page-level instance client
+ * (`@dsh-chamber/dsh-chamber-client-core/instance-api`, the same route,
+ * envelope and trust fence every entry uses — design 20 §4.2/§5).
  *
  * Fail-closed, like the surrounding button: an unreachable, refusing, drifted
  * or hostile host reads as an EMPTY catalog and never as a thrown UI; a failed
@@ -39,7 +40,8 @@ import {
 
 /**
  * One generic-RPC call against this entry's instance — in production the
- * page-level instance client's `callUnary` (`sidebar/shared/instance-api.ts`
+ * page-level instance client's `callUnary`
+ * (`@dsh-chamber/dsh-chamber-client-core/instance-api`
  * `getInstanceClient('local')`). The carrier adds the per-instance base path
  * (`/api/i/<id>`) and the connection's own trust handling; `args` is the wire
  * envelope's argument map (parameter names). It answers the TRANSPORT result

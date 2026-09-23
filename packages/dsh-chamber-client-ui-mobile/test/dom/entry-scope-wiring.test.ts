@@ -48,11 +48,11 @@ test('the install is a top-level statement, not hidden behind a tier branch', ()
   )
 })
 
-test('the scoper stays one implementation, imported from the renderer source', () => {
+test('the scoper stays one implementation, imported from the client-core face', () => {
   assert.match(
     CODE,
-    /import \{ installSvgResourceScope \} from '\.\.\/\.\.\/\.\.\/\.\.\/packages\/renderer\/src\/svg-resource-scope\.ts'/,
-    'the scoper must be imported from packages/renderer/src/svg-resource-scope.ts',
+    /import \{ installSvgResourceScope \} from '@dsh-chamber\/dsh-chamber-client-core\/svg-resource-scope'/,
+    'the scoper must be imported from the @dsh-chamber/dsh-chamber-client-core/svg-resource-scope face',
   )
   assert.ok(
     !CODE.includes('data-chamber-svg-scope'),

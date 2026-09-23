@@ -15,7 +15,7 @@ import {
   RESTART_RELOAD_BUDGET_MS,
   armWindowReloadWhenServed,
   pollGatewayReady,
-} from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
+} from '@dsh-chamber/dsh-chamber-client-core'
 import { classifyRestartError, runtimeRefusalText, type RuntimeRefusalKey } from './managed-restart.ts'
 import { errorMessage } from './error-text.ts'
 

@@ -1,14 +1,14 @@
 /**
  * 派生未读账本的**行为**契约。
  *
- * 判定函数来自 sidebar shared 的导出（与 App 接线喂进去的是同一对函数，
+ * 判定函数来自 client-core 的导出（与 App 接线喂进去的是同一对函数，
  * 反作弊：不得自造第二套）。覆盖：facts 水位、读水位解除、aborted+user
  * 抑制、ABSENT turn-end 武装、channel-only 边沿、listComplete
  * 唯一剪枝门、factsVerified=false 不 clobber、阅读抑制、水位推进。
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { deriveUnread, reconcileCompletedFacts } from '../../../dsh-chamber-client-ui-sidebar/src/shared/derive.ts'
+import { deriveUnread, reconcileCompletedFacts } from '@dsh-chamber/dsh-chamber-client-core/derive'
 import { deriveSourceUnread, sameBooleanMap, viewingReadWatermark } from '../../src/unread-derivation.ts'
 import type { UnreadDerivationInput, UnreadDerivationFactsRow } from '../../src/unread-derivation.ts'
 

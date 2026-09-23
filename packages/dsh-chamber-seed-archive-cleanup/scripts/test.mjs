@@ -15,7 +15,7 @@ import { runTestManifest } from '../../../scripts/lib/test-manifest.mjs'
 const PACKAGE_ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)))
 
 const GROUPS = {
-  // core: the pure archive-cleanup domain core - preview/purge planning, the
+  // core: the pure archive-cleanup domain core - purge planning, the
   // subset/orphan-sweep fail-closed legs, the credibility gates and
   // protectSessionIds.
   core: [
@@ -34,6 +34,11 @@ const GROUPS = {
   // binding: the host binding.
   binding: [
     'test/binding.test.ts',
+  ],
+  // wire: the cross-package wire descriptor lockstep over the REAL host
+  // signature and the REAL sidebar call site (design 24 §3 single source).
+  wire: [
+    'test/wire-lockstep.test.ts',
   ],
 }
 

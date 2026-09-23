@@ -19,7 +19,7 @@ import { VIEW_RECLAIM_GRACE_MS, decideReclaimCandidates, shouldRunBackgroundPhas
 import { isDeferredReclaimDue } from '../source-readiness.ts'
 import { disposeInstanceShell, isSettledShellState, type ShellState } from '../shell.ts'
 import { instanceBasePath, instanceConnected, sourceIdForInstance } from '../transport-source.ts'
-import { chamberBridge, intentPrewarmSpent, managedRuntimeUnusable, type IntentPrewarmBudget } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
+import { chamberBridge, intentPrewarmSpent, managedRuntimeUnusable, type IntentPrewarmBudget } from '@dsh-chamber/dsh-chamber-client-core'
 import type { HealthResponse } from '../api.ts'
 import type { MapLedgerView, SetLedgerView } from '@dsh-chamber/dsh-stream-state'
 import type { SshInstanceSpec, SshStatusProjection } from '../global.d.ts'

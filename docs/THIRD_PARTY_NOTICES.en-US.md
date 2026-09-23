@@ -55,4 +55,4 @@ The native DMG's Finder background asset `macos/resources/dmg-background.tiff` i
 taken from `electron-builder`'s `dmg-builder/templates/background.tiff` (MIT,
 electron-userland/electron-builder; dual representation 540×380@72dpi +
 1080×760@144dpi) so the native DMG ships the same drag-to-install cue as the
-Electron leg (2026-09).
+Electron leg .

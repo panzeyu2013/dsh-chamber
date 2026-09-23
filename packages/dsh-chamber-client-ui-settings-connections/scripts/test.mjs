@@ -26,6 +26,8 @@ const GROUPS = {
   'plugin-management': [
     'test/plugin-management/plugin-model.test.ts',
     'test/plugin-management/plugin-diff.test.ts',
+    // 浏览器侧单一定义锁步：client-core 面就是 wire 源、classifySpec 就是共享路径判据。
+    'test/plugin-management/plugin-manifest-lockstep.test.ts',
   ],
   // connection-form: 连接表单输入契约（桌面权威常量对齐 + draft/schema 行为）
   'connection-form': [
@@ -39,7 +41,7 @@ const GROUPS = {
     'test/runtime-gate/local-spawn-gate.test.ts',
     'test/runtime-gate/restart-action.test.ts',
     // The classifier and the verbatim-error projection are single-sourced on
-    // the sidebar shared face (test/shared/runtime-refusal.test.ts locks the
+    // the client-core face (test/shared/runtime-refusal.test.ts locks the
     // body matrix absolutely).
     'test/runtime-gate/error-text-parity.test.ts',
   ],

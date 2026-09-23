@@ -6,8 +6,8 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import type { ChamberServerAggregate, ChamberServerWorkspace, InstanceRuntimeReport } from '../../src/shared/aggregate-store.ts'
-import { deriveTodoAttention, type TodoAttentionFilters } from '../../src/shared/todo-attention.ts'
+import type { ChamberServerAggregate, ChamberServerWorkspace, InstanceRuntimeReport } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
+import { deriveTodoAttention, type TodoAttentionFilters } from '@dsh-chamber/dsh-chamber-client-core/todo-attention'
 
 const ALL: TodoAttentionFilters = { completed: true, ask: true, request: true }
 

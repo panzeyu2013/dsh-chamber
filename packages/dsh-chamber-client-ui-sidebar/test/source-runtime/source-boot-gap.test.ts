@@ -9,7 +9,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { sourceBootGapNote } from '../../src/client/source-boot-gap.ts'
 import { en, zh } from '../../src/client/locales.ts'
-import type { ChamberServerAggregate, ServerBootGapKind } from '../../src/shared/aggregate-store.ts'
+import type { ChamberServerAggregate, ServerBootGapKind } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
 
 const read = (rel: string): string => readFileSync(new URL(rel, import.meta.url), 'utf8')
 /** Collapse whitespace so a formatting change cannot break a semantic lock. */

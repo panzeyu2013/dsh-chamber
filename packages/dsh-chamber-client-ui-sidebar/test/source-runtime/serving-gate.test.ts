@@ -4,8 +4,8 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { isServingWindowFailure, waitForSourceServing } from '../../src/shared/serving-gate.ts'
-import type { ServingGateSource } from '../../src/shared/serving-gate.ts'
+import { waitForSourceServing } from '@dsh-chamber/dsh-chamber-client-core'
+import type { ServingGateSource } from '@dsh-chamber/dsh-chamber-client-core'
 
 const source = (over: Partial<ServingGateSource> = {}): ServingGateSource => ({ id: 'local', phase: 'starting', connected: false, ...over })
 
@@ -50,19 +50,4 @@ test('waitForSourceServing: an unknown (retired) source fails fast', async () =>
 test('waitForSourceServing: a source that never serves stops at the deadline', async () => {
   assert.deepEqual(await runGate('local', () => [source({ phase: 'connecting' })], { timeoutMs: 0 }), { served: false, sleeps: [] },
     'a zero budget must not sleep')
-})
-
-test('isServingWindowFailure: only the cold-start refusal classes are retryable', () => {
-  assert.equal(isServingWindowFailure({ code: 'instance_unavailable', message: 'instance not ready' }), true)
-  assert.equal(isServingWindowFailure({ code: 'dsh_not_ready', message: 'dsh is not ready' }), true)
-  assert.equal(isServingWindowFailure({ message: 'upstream answered 503' }), true)
-  for (const error of [
-    { code: 'not_found', message: 'unknown method clientGraph/graph' },
-    { code: 'unauthorized', message: 'browser auth required' },
-    { code: 'instance-version-conflict', message: 'rev mismatch' },
-    { message: 'fetch failed' },
-    {},
-  ]) {
-    assert.equal(isServingWindowFailure(error), false, JSON.stringify(error))
-  }
 })

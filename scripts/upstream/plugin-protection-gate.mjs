@@ -28,9 +28,11 @@ import {
  *   hoisted + 不自动装 peer。任一漂移 ⇒ 停升级、改派生（B₀ 快照）。
  * - C13 播种注册表结构：`HOST_*_PACKAGE_NAME` 常量 ↔ `HOST_*_INSERT` 行 ↔
  *   `CHAMBER_HOST_PACKAGES` 注册表三面一一对应（漏登记即 S 分量失真）。
- * - C14 manifest 三方镜像：`plugin-sync.ts`（producer）↔ `preload.cts` ↔
- *   `renderer/src/global.d.ts` 的字段集必须一致（ipc-surface-mirror 只覆盖
- *   后两者；本门补上 producer 侧）。
+ * - C14 plugin-row 单源 + manifest 三方镜像：行形状的唯一声明在 wire 的
+ *   `./plugin-row` 面（字段集与 role 并集 = 本门预期锚），五个消费方
+ *   （control-plane / client-core face / preload / renderer / settings-connections）
+ *   只许 import/type 引用；manifest 宿主接口另做 producer ↔ preload ↔ renderer
+ *   字段集对照（ipc-surface-mirror 只覆盖后两者，本门补上 producer 侧）。
  */
 
 /**
@@ -321,8 +323,8 @@ export function stripComments(source) {
 
 /**
  * 提取 `interface <name> { … }` 的顶层**成员文本**（`name?: type`，保持出现顺序）。
- * 与 {@link interfaceFields} 同一套分段逻辑，但保留类型文本——C14 的行类型镜像要比较
- * role/owner 的**字面量并集**，只有字段名是不够的。
+ * 与 {@link interfaceFields} 同一套分段逻辑，但保留类型文本——C14 的 plugin-row
+ * 单源判据要逐字比较字段签名（字段名、可选性、类型），只有字段名是不够的。
  *
  * @param {string} source - TS/TSX 源码文本。
  * @param {string} interfaceName - 接口名。
@@ -401,135 +403,211 @@ export function interfaceFields(source, interfaceName) {
   return splitMembers(body).map(member => /^(?:readonly\s+)?([A-Za-z_$][\w$]*)/.exec(member)[1])
 }
 
-/** C14 的三方对照表：同一 wire 事实的三处声明。 */
+/** C14 的宿主接口三方对照表：manifest 字段集（producer ↔ preload ↔ renderer）。
+ *  行类型（rows 元素）不再三方对照——它已收敛为单源，由
+ *  {@link pluginRowSingleSourceFindings} 按「单源 + 消费方只引用不重声明」判定。 */
 export const MANIFEST_MIRRORS = [
   { fact: 'RemotePluginManifest', producer: 'RemotePluginManifest', preload: 'SshRemotePluginManifest', renderer: 'RemotePluginManifest' },
   { fact: 'LocalPluginManifest', producer: 'LocalPluginManifest', preload: 'SshLocalPluginManifest', renderer: 'LocalPluginManifest' },
 ]
 
 /**
- * C14 的**嵌套行类型**对照表：`rows` 元素的三处声明（producer 在 control-plane
- * 的 `PluginRow`，wire 两处是 `PluginRowProjection`，渲染端自持 `PluginRowShape`）。
- * 宿主接口的字段名一致并不能保证行内的字段集一致（删掉
- * `owner?` 或收窄 role 字面量并集时，仅按字段名比较会 0 违规）。
+ * plugin-row 的**唯一**声明（wire 的 ./plugin-row 面）：文件、引用面与预期内容锚。
+ * 单源文件本身也必须与这里的预期逐字一致——字段缺失/改名/顺序漂移/role 并集收窄都会红。
  */
-export const ROW_MIRRORS = [
-  { fact: 'PluginRow', producer: 'PluginRow', preload: 'PluginRowProjection', renderer: 'PluginRowProjection' },
+export const PLUGIN_ROW_SINGLE_SOURCE = Object.freeze({
+  path: 'packages/dsh-chamber-wire/src/plugin-row.ts',
+  specifier: '@dsh-chamber/dsh-chamber-wire/plugin-row',
+  interface: 'PluginRow',
+  roleAlias: 'PluginRowRole',
+  members: [
+    'name: string',
+    'spec: string | null',
+    'version: string | null',
+    'role: PluginRowRole',
+    'protected: boolean',
+    "owner?: 'installation' | 'chamber' | 'user'",
+  ],
+  role: ['composition', 'seed', 'layer', 'third-party', 'materialized', 'unknown'],
+})
+
+/**
+ * plugin-row 的消费方表：每一处必须从指定**引用面**类型引用指定本地名，且不得在本地
+ * 声明行形状。引用面 = wire 面（packages with a declared wire dependency）或 client-core
+ * 的浏览器面（preload / renderer / settings-connections：包内没有 wire link，只能经
+ * client-core 的 pass-through 面到达同一单源）。
+ *
+ * C14 的强度 = 单源声明 = 预期 且 每个消费方只有 import/type 引用：
+ * 「本地重声明字段」「引用面漂移」「单源字段缺失」任一发生都硬失败。
+ */
+export const PLUGIN_ROW_CONSUMERS = Object.freeze([
+  {
+    side: 'control-plane',
+    source: 'packages/control-plane/src/protected-plugins.ts',
+    specifier: '@dsh-chamber/dsh-chamber-wire/plugin-row',
+    names: ['PluginRow', 'PluginRowRole'],
+  },
+  {
+    side: 'client-core-face',
+    source: 'packages/dsh-chamber-client-core/src/plugin-row.ts',
+    specifier: '@dsh-chamber/dsh-chamber-wire/plugin-row',
+    names: ['PluginRow', 'PluginRowRole'],
+  },
+  {
+    side: 'preload',
+    source: 'packages/desktop/preload.cts',
+    specifier: '@dsh-chamber/dsh-chamber-client-core/plugin-row',
+    names: ['PluginRowProjection'],
+  },
+  {
+    side: 'renderer',
+    source: 'packages/renderer/src/global.d.ts',
+    specifier: '@dsh-chamber/dsh-chamber-client-core/plugin-row',
+    names: ['PluginRowProjection'],
+  },
+  {
+    side: 'settings-connections',
+    source: 'packages/dsh-chamber-client-ui-settings-connections/src/client/plugin-model.ts',
+    specifier: '@dsh-chamber/dsh-chamber-client-core/plugin-row',
+    names: ['PluginRowShape', 'PluginRowRoleShape'],
+  },
+])
+
+/** 消费方一律不得本地声明的名字（含历史别名；*Shape 只许来自 import 别名）。 */
+const PLUGIN_ROW_LOCAL_DECLARATION_NAMES = [
+  'PluginRow',
+  'PluginRowRole',
+  'PluginRowProjection',
+  'PluginRowShape',
+  'PluginRowRoleShape',
 ]
 
-/** 从一条字段签名里取出字面量并集（`role: 'a' | 'b'` → ['a','b']；无引号 → null）。 */
-function literalUnionOf(signature) {
-  const literals = [...signature.matchAll(/'([^']*)'/g)].map(match => match[1])
-  return literals.length === 0 ? null : literals.sort()
+/** 成员签名归一：连续空白 → 单空格（与 interfaceMembers 的 trim 衔接）。 */
+function normalizeMember(member) {
+  return member.replace(/\s+/g, ' ').trim()
+}
+
+/** specifier → 正则字面量（specifier 只含 @ / - . 字符；转义 . 即足够，保持本门零依赖）。 */
+function quoteSpecifier(specifier) {
+  return specifier.split('.').join('\\.')
 }
 
 /**
- * Literal union of a field signature, resolving a NAMED type alias declared in
- * the same source (`role: PluginRowRole` + `export type PluginRowRole = 'a' | …`).
- * The producer side declares `role` exactly that way, so a plain literal scan
- * would drop it and compare only the two wire faces. An unresolvable named type returns null and the caller treats it as drift
- * — never as "this side does not count".
- *
- * The alias body ends at a blank line or at the next top-level declaration (the
- * repo's style omits semicolons, so a `;`-terminated match cannot be assumed).
- * @param {string} field - one interface member, e.g. `role: PluginRowRole`.
- * @param {string} source - the whole source text the member came from.
- * @returns {string[] | null} sorted literals, or null when not a literal union.
+ * 取同名类型别名的字面量并集（找不到 / 读不出返回 null——调用方按漂移处理，
+ * 绝不把「读不出」当作「这一侧不算数」）。别名体在下个顶层声明或空行处结束
+ * （本仓风格省略分号，不能按 ; 截断）。
  */
-function unionOfField(field, source) {
-  const direct = literalUnionOf(field)
-  if (direct !== null) return direct
-  const alias = field.split(':').slice(1).join(':').trim().replace(/\?$/, '')
-  if (!/^[A-Za-z_$][\w$]*$/.test(alias)) return null
+function typeAliasLiterals(source, aliasName) {
+  const code = stripComments(source)
   const decl = new RegExp(
-    `\\btype\\s+${alias}\\b\\s*=([\\s\\S]*?)(?=\\n\\s*\\n|\\n\\s*(?:export|type|interface|declare|const|function|\\/\\*)|$)`,
-  ).exec(stripComments(source))
-  return decl === null ? null : literalUnionOf(decl[1])
+    '\\btype\\s+' + aliasName + '\\b\\s*=([\\s\\S]*?)(?=\\n\\s*\\n|\\n\\s*(?:export|type|interface|declare|const|function|\\/\\*)|$)',
+  ).exec(code)
+  if (decl === null) return null
+  const literals = [...decl[1].matchAll(/'([^']*)'/g)].map((match) => match[1])
+  return literals.length === 0 ? null : literals
 }
 
 /**
- * 嵌套行类型的字段名 + 字面量并集对照。比宿主接口那层**浅一层**：
- * 字段名集合必须一致；值域是字面量并集的字段（role / owner）并集也必须一致；
- * 其余字段的类型文本允许命名类型与字面量并集不同（`PluginRowRole` vs `'composition' | …`），
- * 但仍要求字段名存在。
+ * 从一条 import/export type 语句里取「从该 specifier 绑定的本地名」。
+ * 支持 "import type { A, B as C } from '…'" 与 "export type { A } from '…'" 两种形态
+ * （control-plane 的纯再导出没有 from，引用面由它自己的 import 语句承担）。
  */
-export function rowMirrorFindings({ producerSource, preloadSource, rendererSource }) {
+function boundNamesFromFace(code, specifier) {
+  const re = new RegExp(
+    '(?:import|export)\\s+type\\s*\\{([^}]*)\\}\\s*from\\s*[\'"]' + quoteSpecifier(specifier) + '[\'"]',
+    'g',
+  )
+  const bound = new Set()
+  for (const match of code.matchAll(re)) {
+    for (const part of match[1].split(',')) {
+      const clause = part.trim().replace(/^type\s+/, '')
+      if (clause === '') continue
+      const [imported, local] = clause.split(/\s+as\s+/)
+      bound.add((local === undefined ? imported : local).trim())
+    }
+  }
+  return bound
+}
+
+/**
+ * C14 的 plugin-row 单源判据（design 21 §6.11.5 单一定义）：
+ * ① 单源文件 {@link PLUGIN_ROW_SINGLE_SOURCE} 的声明必须逐字等于预期字段集与 role
+ *    并集（单源字段缺失 / 改名 / 漂移即红）；
+ * ② 每个消费方必须从自己的引用面**类型**引用期待本地名（引用面漂移即红）；
+ * ③ 每个消费方都不得本地声明任何 wire 行名（本地重声明字段即红）。
+ *
+ * @param {{ singleSource: string, consumers: Record<string, string> }} input
+ *   singleSource = wire ./plugin-row 源文本；consumers = side → 消费方源文本。
+ * @returns {{ violations: string[], notes: string[] }}
+ */
+export function pluginRowSingleSourceFindings({ singleSource, consumers }) {
   const violations = []
-  for (const mirror of ROW_MIRRORS) {
-    const producer = interfaceMembers(producerSource, mirror.producer)
-    const preload = interfaceMembers(preloadSource, mirror.preload)
-    const renderer = interfaceMembers(rendererSource, mirror.renderer)
-    if (producer === null || preload === null || renderer === null) {
-      violations.push(`C14 ${mirror.fact}：行类型在 ${producer === null ? 'producer' : preload === null ? 'preload' : 'renderer'} 侧找不到声明`)
+  const notes = []
+  const anchor = PLUGIN_ROW_SINGLE_SOURCE
+  const members = interfaceMembers(singleSource, anchor.interface)
+  if (members === null) {
+    violations.push('C14 plugin-row 单源：' + anchor.path + ' 里找不到 interface ' + anchor.interface + ' 声明——唯一来源被改名/搬走')
+  } else {
+    const actual = members.map(normalizeMember)
+    const expected = anchor.members.map(normalizeMember)
+    const missing = expected.filter((member) => !actual.includes(member))
+    const extra = actual.filter((member) => !expected.includes(member))
+    if (missing.length > 0 || extra.length > 0 || actual.join('|') !== expected.join('|')) {
+      violations.push(
+        'C14 plugin-row 单源：' + anchor.interface + ' 字段集与预期不一致（缺失 ' + (missing.join(' / ') || '—')
+        + '；漂移/多出 ' + (extra.join(' / ') || '—') + '；实际 ' + actual.join(' / ') + '）',
+      )
+    }
+  }
+  const role = typeAliasLiterals(singleSource, anchor.roleAlias)
+  if (role === null) {
+    violations.push('C14 plugin-row 单源：读不出 ' + anchor.roleAlias + ' 的字面量并集——单一来源被改成不透明类型')
+  } else if (role.join('|') !== anchor.role.join('|')) {
+    violations.push('C14 plugin-row 单源：' + anchor.roleAlias + ' 并集与预期不一致（' + role.join(', ') + '）')
+  }
+
+  for (const consumer of PLUGIN_ROW_CONSUMERS) {
+    const source = consumers === undefined || consumers === null ? undefined : consumers[consumer.side]
+    if (typeof source !== 'string' || source === '') {
+      violations.push('C14 plugin-row 消费方 ' + consumer.side + '：读不到 ' + consumer.source)
       continue
     }
-    // Field NAME only: `owner?: …` and `owner: …` are the same field. Stripping
-    // the optional marker matters — the producer declares `owner?:`, so keeping
-    // the `?` would make the whole owner arm dead code.
-    const nameOf = (field) => field.split(':')[0].trim().replace(/\?$/, '')
-    const producerNames = producer.map(nameOf)
-    const preloadNames = preload.map(nameOf)
-    const rendererNames = renderer.map(nameOf)
-    const setOf = (list) => new Set(list)
-    const diff = (a, b) => [...a].filter(name => !b.has(name))
-    for (const [leftName, left, rightName, right] of [
-      ['producer', producerNames, 'preload', preloadNames],
-      ['preload', preloadNames, 'renderer', rendererNames],
-    ]) {
-      const onlyLeft = diff(setOf(left), setOf(right))
-      const onlyRight = diff(setOf(right), setOf(left))
-      if (onlyLeft.length > 0 || onlyRight.length > 0) {
-        violations.push(`C14 ${mirror.fact}：${leftName} ↔ ${rightName} 行字段漂移（${leftName} 独有 ${onlyLeft.join(',') || '—'}；${rightName} 独有 ${onlyRight.join(',') || '—'}）`)
-      }
-    }
-    // 字面量并集字段（role / owner）：三处的并集对齐，删值/加值都必须红。
-    // The producer declares `role: PluginRowRole` (a NAMED alias) while the wire
-    // faces inline the literals, so a plain literal scan would drop the producer side
-    // and compare only preload ↔ renderer — the alias is resolved here, and a
-    // side that declares the field with a union we cannot read is a violation
-    // instead of being silently excluded.
-    for (const fieldName of ['role', 'owner']) {
-      const sides = [
-        ['producer', producer.find(field => nameOf(field) === fieldName), producerSource],
-        ['preload', preload.find(field => nameOf(field) === fieldName), preloadSource],
-        ['renderer', renderer.find(field => nameOf(field) === fieldName), rendererSource],
-      ]
-      // Absent on every side: the field-name comparison above owns that case.
-      if (sides.every(([, field]) => field === undefined)) continue
-      const unions = sides.map(([side, field, source]) => [
-        side, field === undefined ? null : unionOfField(field, source),
-      ])
-      const unresolved = unions.filter(([side, union]) => union === null
-        && sides.find(([name]) => name === side)[1] !== undefined)
-      if (unresolved.length > 0) {
-        violations.push(
-          `C14 ${mirror.fact}.${fieldName}：${unresolved.map(([side]) => side).join('/')} 侧的字面量并集读不出来`
-          + '（命名类型未解析/写法漂移）——按漂移处理：把该类型展开成字面量并集，或同步扩展本门的别名解析',
-        )
-        continue
-      }
-      const declared = unions.filter(([, union]) => union !== null)
-      if (declared.length < 2) continue
-      const reference = declared[0][1].join('|')
-      for (const [side, union] of declared) {
-        if (union.join('|') !== reference) {
-          violations.push(`C14 ${mirror.fact}.${fieldName}：${side} 的字面量并集与 ${declared[0][0]} 不一致（${union.join(',')} vs ${declared[0][1].join(',')}）`)
+    const code = stripComments(source)
+    const bound = boundNamesFromFace(code, consumer.specifier)
+    if (bound.size === 0) {
+      violations.push(
+        'C14 plugin-row 消费方 ' + consumer.side + '：引用面漂移——没有从 \'' + consumer.specifier
+        + '\' 的 import/export type（单源只能经该面到达）',
+      )
+    } else {
+      for (const name of consumer.names) {
+        if (!bound.has(name)) {
+          violations.push('C14 plugin-row 消费方 ' + consumer.side + '：\'' + consumer.specifier + '\' 面未绑定本地名 ' + name)
         }
       }
     }
+    for (const name of PLUGIN_ROW_LOCAL_DECLARATION_NAMES) {
+      if (new RegExp('\\b(?:interface|type)\\s+' + name + '\\b').test(code)) {
+        violations.push('C14 plugin-row 消费方 ' + consumer.side + '：本地重声明 ' + name + '——字段集只允许存在于单源文件')
+      }
+    }
   }
-  return { violations, notes: violations.length === 0 ? [`C14 行类型镜像：${ROW_MIRRORS.length} 组字段名/值域一致`] : [] }
+
+  if (violations.length === 0) {
+    notes.push('C14 plugin-row 单源：字段集 = 预期；' + PLUGIN_ROW_CONSUMERS.length + ' 个消费方只引用不重声明')
+  }
+  return { violations, notes }
 }
 
 /**
- * C14 判据：producer ↔ preload ↔ renderer 的字段集必须逐字一致
- * （test/ipc/ipc-surface-mirror.test.ts 只覆盖 preload ↔ renderer 两道门；本门把 producer 侧也纳入）。
- * 宿主接口之后还要过 {@link rowMirrorFindings}（`rows` 的**元素**类型）。
+ * C14 判据（宿主 manifest 层）：producer ↔ preload ↔ renderer 的字段集必须逐字一致
+ * （test/ipc/ipc-surface-mirror.test.ts 只覆盖 preload ↔ renderer 两道门；本门把 producer
+ * 侧也纳入）。行类型层由 {@link pluginRowSingleSourceFindings} 单独判定，调用方分别调用后合并。
  *
  * @param {{ producerSource: string, preloadSource: string, rendererSource: string }} input
  * @returns {{ violations: string[], notes: string[] }}
  */
-export function manifestMirrorFindings({ producerSource, preloadSource, rendererSource, rowProducerSource = producerSource }) {
+export function manifestMirrorFindings({ producerSource, preloadSource, rendererSource }) {
   const violations = []
   const notes = []
   for (const mirror of MANIFEST_MIRRORS) {
@@ -537,27 +615,23 @@ export function manifestMirrorFindings({ producerSource, preloadSource, renderer
     const preload = interfaceFields(preloadSource, mirror.preload)
     const renderer = interfaceFields(rendererSource, mirror.renderer)
     for (const [side, fields] of [['producer', producer], ['preload', preload], ['renderer', renderer]]) {
-      if (fields === null) violations.push(`C14 ${mirror.fact}：${side} 侧找不到接口声明`)
+      if (fields === null) violations.push('C14 ' + mirror.fact + '：' + side + ' 侧找不到接口声明')
     }
     if (producer === null || preload === null || renderer === null) continue
     const producerSet = new Set(producer)
     const preloadSet = new Set(preload)
-    const rendererSet = new Set(renderer)
     const diff = (a, b) => [...a].filter((field) => !b.has(field))
     const onlyProducer = diff(producerSet, preloadSet)
     const onlyPreload = diff(preloadSet, producerSet)
     if (onlyProducer.length > 0 || onlyPreload.length > 0) {
-      violations.push(`C14 ${mirror.fact}：producer ↔ preload 字段集漂移（producer 独有 ${onlyProducer.join(',') || '—'}；preload 独有 ${onlyPreload.join(',') || '—'}）`)
+      violations.push('C14 ' + mirror.fact + '：producer ↔ preload 字段集漂移（producer 独有 ' + (onlyProducer.join(',') || '—') + '；preload 独有 ' + (onlyPreload.join(',') || '—') + '）')
     }
     if (preload.join('|') !== renderer.join('|')) {
-      violations.push(`C14 ${mirror.fact}：preload ↔ renderer 字段集/顺序漂移（preload ${preload.join(',')}；renderer ${renderer.join(',')}）`)
+      violations.push('C14 ' + mirror.fact + '：preload ↔ renderer 字段集/顺序漂移（preload ' + preload.join(',') + '；renderer ' + renderer.join(',') + '）')
     }
   }
-  const rows = rowMirrorFindings({ producerSource: rowProducerSource, preloadSource, rendererSource })
-  violations.push(...rows.violations)
   if (violations.length === 0) {
-    notes.push(`C14 manifest 三方镜像：${MANIFEST_MIRRORS.length} 组宿主字段集一致`)
-    notes.push(...rows.notes)
+    notes.push('C14 manifest 三方镜像：' + MANIFEST_MIRRORS.length + ' 组宿主字段集一致')
   }
   return { violations, notes }
 }

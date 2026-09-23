@@ -19,36 +19,25 @@
  *    (bare `scrypt$salt$hash` for `password-credential`, `{"hash":...}` for
  *    `tokens.json`) read as `source:'config'` (updatedAt = file mtime) and
  *    migrate to v2 on the next write.
- *  - `createGatewayStore` holds an exclusive `<stateDir>/.gateway.lock`
- *    (O_EXCL-first, 0600, `{"pid":...,"createdAt":...}`): a live-owner lock
- *    fails startup loudly (error code 'gateway_locked' + owner pid); a stale
- *    (dead-pid) lock is taken over via rename-claim + moved-content
- *    verification (the moved file must be the exact stale lock we read; a
- *    fresh live lock is renamed back and the contender fails loudly), and a
- *    post-create ownership verification fails any acquirer whose fresh lock
- *    was displaced concurrently — the two-process case is provably
- *    double-hold-free (pair stress test), a three-process interleaving keeps
- *    the same documented residual every pidfile lock has without kernel
- *    flock; releaseLock verifies the on-disk owner is still us before
- *    removing, the exit listener is registered only after a successful
- *    acquisition, and `close()` / process exit release it best-effort.
- *    `reacquire()` re-takes the lock after a close (gateway start() retry
- *    path). All same-stateDir reopen tests must `close()` before reopening.
+ *  - The state ROOT is owned by the caller's state-root writer lease (R2;
+ *    control-plane/src/state-root-lease.ts): createGateway acquires
+ *    `<stateDir>/owner.json` before the first store write and passes the same
+ *    handle here. `createGatewayStore` only asserts the handle's root/scope
+ *    and that it is still current — it never acquires, reacquires or releases
+ *    a lease, and it is no longer a second state lock.
  *
- * The store owns credentials and the lock only, and is never authoritative
- * over dsh facts.
+ * The store owns credentials only, and is never authoritative over dsh facts.
  */
 
-import { closeSync, fchmodSync, fstatSync, fsyncSync, lstatSync, openSync, realpathSync, renameSync, writeSync } from 'node:fs'
-import { homedir, tmpdir } from 'node:os'
-import { join, parse, resolve } from 'node:path'
+import { lstatSync } from 'node:fs'
+import { join, resolve } from 'node:path'
 import { randomBytes, scryptSync } from 'node:crypto'
 import {
   atomicWritePrivateFileNoFollow,
   ensurePrivateDirectoryNoFollow,
   removePrivateFileNoFollow,
-  syncPrivateDirectoryNoFollow,
   type PrivateFileIdentity,
+  type StateRootLease,
 } from '@dsh-chamber/control-plane'
 import { readPrivateEntryOrNull } from './private-read.ts'
 
@@ -77,43 +66,7 @@ export interface CredentialProjection {
   token: { set: true; source: CredentialSource; updatedAt: number } | null
 }
 
-
 const MAX_PRIVATE_CREDENTIAL_BYTES = 16 * 1024
-
-function comparablePath(path: string): string {
-  const absolute = resolve(path)
-  let canonical = absolute
-  try { canonical = realpathSync.native(absolute) } catch { /* a new stateDir has no realpath yet */ }
-  return process.platform === 'win32' ? canonical.toLowerCase() : canonical
-}
-
-/** Reject ambient, broad filesystem roots before createGatewayStore performs
- * any mkdir/chmod. Gateway state must always be an explicitly dedicated
- * directory, never the filesystem root, the account home, or the system temp
- * directory itself (children of those locations remain valid). */
-export function validateGatewayStateDirPath(stateDir: string): void {
-  const absolute = resolve(stateDir)
-  const candidateKeys = new Set([
-    process.platform === 'win32' ? absolute.toLowerCase() : absolute,
-    comparablePath(absolute),
-  ])
-  const forbidden: Array<[string, string]> = [
-    ['filesystem root', parse(absolute).root],
-    ['user home', homedir()],
-    ['system temp root', tmpdir()],
-  ]
-  for (const [label, path] of forbidden) {
-    const forbiddenAbsolute = resolve(path)
-    const forbiddenKeys = [
-      process.platform === 'win32' ? forbiddenAbsolute.toLowerCase() : forbiddenAbsolute,
-      comparablePath(forbiddenAbsolute),
-    ]
-    if (forbiddenKeys.some(key => candidateKeys.has(key))) {
-      throw new Error(`gateway stateDir must be a dedicated child directory; refusing ${label}`)
-    }
-  }
-}
-
 
 /** Read a 0600 file, or null when absent (never a fake-empty on corrupt). */
 function readSecret(file: string): string | null {
@@ -274,11 +227,6 @@ export interface GatewayStore {
    * rotates jwt-secret — the rotate-first discipline is auth.ts's policy
    * (rotate before persisting so a failed write never leaves a mixed state). */
   setPasswordCredential(verifier: string | null, source?: CredentialSource): void
-  /** Release the stateDir exclusive lock (idempotent). */
-  close(): void
-  /** Re-take the stateDir exclusive lock after a close() (gateway start()
-   * retry path, design 17 §4.1). No-op while the lock is still held. */
-  reacquire(): void
 }
 
 const SCRYPT_SALT_LEN = 16
@@ -317,14 +265,27 @@ export function verifyCredential(plain: string, stored: string | null): boolean 
   return derived.equals(expected) // Buffer.equals is constant-time
 }
 
-export function createGatewayStore(stateDir: string, logger: GatewayStoreLogger): GatewayStore {
-  validateGatewayStateDirPath(stateDir)
+export function createGatewayStore(
+  stateDir: string,
+  logger: GatewayStoreLogger,
+  options: { stateLease?: StateRootLease } = {},
+): GatewayStore {
   const root = join(stateDir, 'gateway')
+  // The state-root writer lease is the caller's handle (R2). Assert the same
+  // root/scope and that it is still current; the store never acquires,
+  // reacquires or releases a lease. Broad-root rejection belongs to the lease
+  // module (assertDedicatedStateRoot) and is not duplicated here.
+  if (options.stateLease !== undefined) {
+    if (options.stateLease.scope !== 'state-root' || options.stateLease.stateRoot !== resolve(stateDir)) {
+      throw new Error(`gateway store stateDir does not match the state-root lease: ${options.stateLease.stateRoot}`)
+    }
+    options.stateLease.assertCurrent()
+  }
   // State root converges to 0700 on POSIX: freshly created directories are
   // created 0700; a pre-existing directory is tightened to 0700 via its pinned
   // no-follow descriptor (auto-tighten instead of fail-closed 'require' —
   // installers/upgrades from older layouts must not crash-loop on a legacy
-  // 0755 root). broad-root rejection is unchanged.
+  // 0755 root).
   // A loose pre-existing root is worth one loud warning (once per process):
   // silent permission mutation confuses operators auditing who changed modes.
   try {
@@ -337,247 +298,6 @@ export function createGatewayStore(stateDir: string, logger: GatewayStoreLogger)
   }
   ensurePrivateDirectoryNoFollow(stateDir, 0o700)
   ensurePrivateDirectoryNoFollow(root, 0o700)
-
-  // Exclusive stateDir lock. O_EXCL-first acquisition;
-  // a stale (dead-pid) lock is taken over via rename-claim + moved-content
-  // verification (the moved file must be the exact stale lock we read; a
-  // fresh live lock is renamed back and the contender fails loudly), and a
-  // post-create ownership verification fails any acquirer whose fresh lock
-  // was displaced concurrently — the two-process case is provably
-  // double-hold-free. A live owner fails startup loudly (structured error
-  // code 'gateway_locked' + owner pid); an UNREADABLE lock file (non-regular
-  // / symlink / inode race) fails loudly; a readable but pid-less/corrupt
-  // lock file is treated as a crashed leftover and taken over with a
-  // warning. The process-exit listener is registered ONLY after a successful
-  // acquisition, and releaseLock double-checks both (a) that THIS store
-  // actually holds the lock and (b) that the on-disk owner pid is still ours
-  // — a failed acquisition can never delete another process's lock.
-  // close() releases; reacquire() re-takes it (gateway start() retry path,
-  // design 17 §4.1).
-  const lockFile = join(stateDir, '.gateway.lock')
-
-  /** Locks are not credential documents: preserve empty/corrupt bytes so a
-   * dead pid-less lock can be claimed, never chmod while inspecting another
-   * owner, and cap the tiny pidfile to prevent an unbounded startup read. */
-  function readLockFile(file: string): { value: string; identity: PrivateFileIdentity } | null {
-    const read = readPrivateEntryOrNull(file, { maxBytes: 4 * 1024 })
-    return read === null ? null : { value: read.value, identity: read.identity }
-  }
-
-  function isProcessAlive(pid: number): boolean {
-    if (!Number.isInteger(pid) || pid <= 0) return false
-    try {
-      process.kill(pid, 0)
-      return true
-    } catch (error) {
-      // EPERM means the process exists but belongs to another user — still
-      // alive as far as lock ownership is concerned.
-      return (error as NodeJS.ErrnoException).code === 'EPERM'
-    }
-  }
-
-  function lockedError(message: string, pid?: number): Error & { code: string; pid?: number } {
-    const error = new Error(message) as Error & { code: string; pid?: number }
-    error.code = 'gateway_locked'
-    if (pid !== undefined) error.pid = pid
-    return error
-  }
-
-  let held = false
-  let heldOwner: { raw: string; identity: PrivateFileIdentity } | null = null
-  let exitListenerRegistered = false
-  function onProcessExit(): void {
-    releaseLock()
-  }
-
-  function acquireLock(): void {
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      let fd: number
-      try {
-        fd = openSync(lockFile, 'wx', 0o600) // O_CREAT | O_EXCL
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
-          throw new Error(`gateway state directory lock could not be created (${lockFile}): ${String(error)}`)
-        }
-        // EEXIST: inspect the existing lock before deciding takeover.
-        let existingRecord: NonNullable<ReturnType<typeof readLockFile>>
-        try {
-          const found = readLockFile(lockFile)
-          if (found === null) continue
-          existingRecord = found
-        } catch (readError) {
-          throw new Error(`gateway state directory lock is not a readable regular file (${lockFile}): ${String(readError)}`)
-        }
-        const existing = existingRecord.value
-        let pid: number | null = null
-        try {
-          const parsed = JSON.parse(existing) as { pid?: unknown }
-          pid = typeof parsed.pid === 'number' && Number.isInteger(parsed.pid) ? parsed.pid : null
-        } catch { pid = null }
-        if (pid !== null && isProcessAlive(pid)) {
-          throw lockedError(
-            `gateway state directory is already locked by running process ${pid} (${lockFile}); close that gateway or remove a stale lock`,
-            pid,
-          )
-        }
-        // Atomic claim: rename whatever is at the path aside, then VERIFY the
-        // moved file is the exact stale lock we read. Between our read and
-        // this rename another contender may have completed its own takeover
-        // and left a FRESH live lock at the path — renaming THAT away and
-        // deleting it would displace a live owner (double-hold). On a
-        // mismatch we restore the displaced lock by renaming it back
-        // (clobbering any lock a third contender created in the gap — the
-        // FIRST claimant wins, and the third contender's own final
-        // ownership verification below detects the displacement and fails
-        // closed).
-        const staleName = `${lockFile}.stale-${process.pid}-${randomBytes(4).toString('hex')}`
-        try {
-          renameSync(lockFile, staleName)
-          syncPrivateDirectoryNoFollow(stateDir)
-        } catch (renameError) {
-          if ((renameError as NodeJS.ErrnoException).code === 'ENOENT') continue // another contender took it
-          throw new Error(`gateway state directory lock takeover failed (${lockFile}): ${String(renameError)}`)
-        }
-        let movedRecord: ReturnType<typeof readLockFile> = null
-        try {
-          movedRecord = readLockFile(staleName)
-        } catch { movedRecord = null }
-        const movedIsExact = movedRecord?.value === existing
-          && movedRecord.identity.dev === existingRecord.identity.dev
-          && movedRecord.identity.ino === existingRecord.identity.ino
-        if (!movedIsExact) {
-          // We moved a fresh lock (a live owner's) — restore it, then fail
-          // loudly ourselves. The owner's final verification below confirms
-          // its lock is back in place.
-          try {
-            renameSync(staleName, lockFile)
-            syncPrivateDirectoryNoFollow(stateDir)
-          } catch { /* best effort */ }
-          throw lockedError(`gateway state directory lock takeover race: another process acquired the lock concurrently (${lockFile})`)
-        }
-        logger.warn(`gateway-store: taking over a stale state lock at ${lockFile}${pid === null ? ' (owner pid unreadable)' : ` (owner pid ${pid} is not running)`}`)
-        try { removePrivateFileNoFollow(staleName, movedRecord?.identity ?? undefined) } catch { /* best effort */ }
-        continue // retry the create
-      }
-      let writtenCreatedAt = 0
-      let createdIdentity: PrivateFileIdentity | null = null
-      let writeError: unknown = null
-      try {
-        const created = fstatSync(fd)
-        if (!created.isFile() || created.nlink !== 1) throw new Error('new gateway lock is not a single-link regular file')
-        createdIdentity = { dev: created.dev, ino: created.ino }
-        fchmodSync(fd, 0o600)
-        writtenCreatedAt = Date.now()
-        const lockBytes = Buffer.from(`${JSON.stringify({ pid: process.pid, createdAt: writtenCreatedAt })}\n`)
-        let offset = 0
-        while (offset < lockBytes.length) {
-          const written = writeSync(fd, lockBytes, offset, lockBytes.length - offset)
-          if (written === 0) throw new Error('gateway state directory lock write made no progress')
-          offset += written
-        }
-        fsyncSync(fd)
-      } catch (error) {
-        writeError = error
-      } finally {
-        closeSync(fd)
-      }
-      if (writeError !== null) {
-        if (createdIdentity !== null) {
-          try { removePrivateFileNoFollow(lockFile, createdIdentity) } catch { /* preserve ambiguous leaf */ }
-        }
-        throw writeError
-      }
-      try {
-        syncPrivateDirectoryNoFollow(stateDir)
-      } catch (error) {
-        // The caller must never observe a failed acquisition while a live-pid
-        // lock created by this attempt remains behind.
-        if (createdIdentity !== null) {
-          try { removePrivateFileNoFollow(lockFile, createdIdentity) } catch { /* preserve ambiguous leaf */ }
-        }
-        throw error
-      }
-      // FINAL ownership verification: a concurrent takeover may have displaced
-      // our fresh lock between the create and here (its own verification
-      // restores it or fails). Never run on a directory we do not actually
-      // own — fail closed and let the caller retry.
-      let verify: ReturnType<typeof readLockFile> = null
-      try {
-        verify = readLockFile(lockFile)
-      } catch { verify = null }
-      const expected = `${JSON.stringify({ pid: process.pid, createdAt: writtenCreatedAt })}\n`
-      if (verify?.value !== expected || createdIdentity === null
-        || verify.identity.dev !== createdIdentity.dev || verify.identity.ino !== createdIdentity.ino) {
-        if (createdIdentity !== null) {
-          try { removePrivateFileNoFollow(lockFile, createdIdentity) } catch { /* never remove a successor */ }
-        }
-        throw lockedError(`gateway state directory lock ownership lost during acquisition (${lockFile}); retry`)
-      }
-      held = true
-      heldOwner = { raw: expected, identity: createdIdentity }
-      // Register the exit release ONLY now that we actually hold the lock: a
-      // failed acquisition must never delete a live owner's lock on exit.
-      if (!exitListenerRegistered) {
-        process.on('exit', onProcessExit)
-        exitListenerRegistered = true
-      }
-      return
-    }
-    throw lockedError(`gateway state directory lock could not be acquired after concurrent takeovers (${lockFile})`)
-  }
-
-  function releaseLock(): void {
-    // Never touch the lock file unless THIS store actually holds the lock.
-    if (!held) return
-    // Verify the on-disk owner is still us before removing (prevents
-    // cascading deletion of a successor's lock after a takeover). On any
-    // mismatch we no longer hold the lock — clear `held` so a later
-    // reacquire() re-takes it (fail-closed: the gateway must never keep
-    // running on a directory it does not actually own).
-    let owner: ReturnType<typeof readLockFile> = null
-    try {
-      owner = readLockFile(lockFile)
-    } catch { owner = null }
-    const ownerToRelease = heldOwner
-    const stillExactOwner = ownerToRelease !== null
-      && owner?.value === ownerToRelease.raw
-      && owner.identity.dev === ownerToRelease.identity.dev
-      && owner.identity.ino === ownerToRelease.identity.ino
-    if (!stillExactOwner) {
-      held = false
-      heldOwner = null
-      logger.warn(`gateway-store: refusing to remove state lock ${lockFile} (owner token/identity changed); lock ownership released`)
-      return
-    }
-    try { removePrivateFileNoFollow(lockFile, ownerToRelease.identity) } catch (error) {
-      // The on-disk lock is still ours — keep held=true so a later
-      // reacquire() does not deadlock against our own live pid.
-      logger.warn(`gateway-store: failed to remove state lock ${lockFile}: ${String(error)}; ownership retained`)
-      return
-    }
-    held = false
-    heldOwner = null
-  }
-
-  function close(): void {
-    releaseLock()
-    // A failed precise unlink deliberately retains ownership. Keep the exit
-    // retry registered in that case; removing it first would turn a transient
-    // close failure into a guaranteed live-pid lock leak.
-    if (!held && exitListenerRegistered) {
-      process.removeListener('exit', onProcessExit)
-      exitListenerRegistered = false
-    }
-  }
-
-  /** Re-take the lock after a close() (the gateway start() retry path,
-   * design 17 §4.1). No-op while the lock is still held. */
-  function reacquire(): void {
-    if (held) return
-    acquireLock()
-  }
-
-  acquireLock()
 
   const tokensFile = join(stateDir, 'tokens.json')
   const jwtSecretFile = join(stateDir, 'jwt-secret')
@@ -649,6 +369,5 @@ export function createGatewayStore(stateDir: string, logger: GatewayStoreLogger)
     getTokenHash, getTokenCredential: readTokenCredential, setTokenHash,
     getJwtSecret, rotateJwtSecret,
     getPasswordCredential, getPasswordCredentialRecord: readPasswordCredential, setPasswordCredential,
-    close, reacquire,
   }
 }

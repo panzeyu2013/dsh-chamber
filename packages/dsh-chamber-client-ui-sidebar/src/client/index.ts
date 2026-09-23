@@ -5,36 +5,36 @@ import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type { SessionListState } from '@deepseek-ai/dsh-api-session-controller/client'
 import type { WorkspaceSnapshot } from '@deepseek-ai/dsh-api-workspace-controller/client'
-import { indexSubagentDescendants } from '../shared/subagent-lineage.ts'
+import { indexSubagentDescendants } from '@dsh-chamber/dsh-chamber-client-core/subagent-lineage'
 import type { SidebarRootInjected } from './contract/slots.ts'
 import { SidebarRoot } from './SidebarRoot.tsx'
 import { resolveInstanceListFace } from './instance-list-face.ts'
 import {
   getOpenIntent,
-} from '../shared/open-intent.ts'
+} from '@dsh-chamber/dsh-chamber-client-core/open-intent'
 import { startEarlyOpenArm } from './early-open.ts'
 import { en, zh, type SidebarKey } from './locales.ts'
-import { chamberBridge, isValidProducerSourceFingerprint } from '../shared/aggregate-store.ts'
+import { chamberBridge, isValidProducerSourceFingerprint } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
 import {
   instanceSnapshotSignature,
   projectInstanceSnapshot,
   projectRuntimeFacts,
-} from '../shared/derive.ts'
+} from '@dsh-chamber/dsh-chamber-client-core/derive'
 import { createPanelSource } from './panel-source.ts'
-import { createPurgeTracker } from '../shared/purged-tracker.ts'
-import { publishSessionCreationInstrument } from '../shared/session-create-ledger.ts'
+import { createPurgeTracker } from '@dsh-chamber/dsh-chamber-client-core/purged-tracker'
+import { publishSessionCreationInstrument } from '@dsh-chamber/dsh-chamber-client-core/session-create-ledger'
 import {
   SessionAuthorityReconciler,
   writeBackTargets,
   type AuthorityOfficialRead,
-} from '../shared/session-fact-reconcile.ts'
-import { appendAuthorityLog, authorityLogStorage } from '../shared/authority-log-store.ts'
+} from '@dsh-chamber/dsh-chamber-client-core/session-fact-reconcile'
+import { appendAuthorityLog, authorityLogStorage } from '@dsh-chamber/dsh-chamber-client-core/authority-log-store'
 // P2 单一权威链：reducer 的输入类型（reducer 本体在纯包，策略不在本包）。
 import type { AuthorityOfficialRow, AuthorityRead } from '@dsh-chamber/dsh-stream-state'
-import { fetchInstanceSnapshot, getInstanceClient } from '../shared/instance-api.ts'
+import { fetchInstanceSnapshot, getInstanceClient } from '@dsh-chamber/dsh-chamber-client-core/instance-api'
 import {
   classifySettingsSeatOccupant, settingsSeatTakeoverMessage,
-} from '../shared/settings-shell.ts'
+} from '@dsh-chamber/dsh-chamber-client-core/settings-shell'
 
 export type {
   SidebarBrandMarkOwnerProps, SidebarBrandNameOwnerProps, SidebarFooterActionOwnerProps,
@@ -165,7 +165,7 @@ export function apply(ctx: ClientContext): void {
   syncPanels()
 
   // chamber: the chamber settings shell
-  // owns `sidebar.settings` at the RESERVED shadow priority (sidebar shared
+  // owns `sidebar.settings` at the RESERVED shadow priority (client-core
   // face settings-shell.ts). The slot rule renders the lowest-priority winner,
   // so a registrant BELOW that range would silently replace the whole settings
   // surface — the only renderer of the connections/general pages and of every

@@ -42,7 +42,7 @@ import {
   HOST_GRAPH_PACKAGE_NAME,
   HOST_GRAPH_PATCH_FILENAME,
 } from '../../src/host-graph-seed.ts'
-import { resolveLocalHostGraphOverlay } from '../../src/index.ts'
+import { resolveLocalHostGraphOverlay } from '../../src/local-host-seeding.ts'
 import { redactChildOutputLine } from '../../src/spawn-dsh.ts'
 import { createHostLogWriter, logPathFor, readLogTail } from '../../src/host-logs.ts'
 

@@ -172,10 +172,16 @@ const STATIC_CHECKS = [
   // 由本门逐个比对（漂移即红；模块删掉常量正是退役，不算失败）。
   // 只读、离线、无依赖，故属 static 模式。
   'node scripts/gates/verify-ladder-table-parity.mjs',
-  // G-H 死面扫描：src/index.ts 的每个运行时导出必须有一个生产 importer，否则红；
-  // 显式豁免必须带理由且不得过期。当前红 = 阶梯引擎等（P3/P4 删除、P5 接线、P6 收口）。
+  // G-H 死面扫描：遍历工作区全部 packages/*/src/index.ts，每个运行时导出必须有一个
+  // 生产 importer，否则红；显式豁免必须带理由且不得过期。运行期装载包（dsh loader /
+  // client-plugin loader）单列理由不做判定；待收窄包按 PENDING_PACKAGES（owner + 退役
+  // 阶段）抑制并打印，名单僵尸即红。当前全绿且名单为空（client-core 桶已收敛为生产面）。
   'verify:no-dead-exports',
   'verify:upstream-lifecycle-contract',
+  // 包边界门（R4 P7）：生产面禁跨包相对 import（vendor 直穿按 registry 放行）+
+  // exports 面白名单。只读、离线、自带 --self-test 负控；新增门同时登记在根
+  // package.json 与 ci.yml 的 static 腿（static-gate-parity 双向校验）。
+  'verify:package-boundaries',
   'test:scripts',
 ]
 

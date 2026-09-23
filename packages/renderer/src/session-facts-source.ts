@@ -4,11 +4,14 @@
  * 只读事实源，**浏览器安全**（零 Node import；只用 fetch / ReadableStream /
  * 定时器；测试全部经注入的 fetchImpl 驱动）：
  *   - 探测 GET  {base}/chamber/session-state（每来源单飞、一次、Abort 超时）；
- *   - 分类**粗粒度**（权威分类器在 packages/control-plane/src/session-state-protocol.ts，
- *     本包不能 import 它：exports map 只有 "." 且 barrel 拉 Node 代码）：
- *       404 ⇒ legacy-gateway；其余非 ok ⇒ degraded；2xx 且 protocol 命中 ⇒ ok。
+ *   - 分类**粗粒度**且只有一份：classifySessionFactsProbe 是本客户端唯一分类器
+ *     （权威分类器在 packages/control-plane/src/session-state-protocol.ts，两者的
+ *     状态语义逐条对齐；本包不能 import 它：exports map 只有 "." 且 barrel 拉
+ *     Node 代码）。probe 与流恢复重取**都**调用它，模块内不得再内联一份判定：
+ *       404 ⇒ legacy-gateway；503 + session_state_disabled / mode off ⇒
+ *       watcher-disabled；其余非 ok ⇒ degraded；2xx 且 protocol 命中 ⇒ ok。
  *     共享字面量由 test/session-state/session-facts-source.test.ts 的源文本锁步测试
- *     对着该模块钉住（route 路径 / protocol / session-state_disabled / serviceable /
+ *     对着该模块钉住（route 路径 / protocol / session_state_disabled / serviceable /
  *     completedAtSource），两侧不得静默漂移；
  *   - mode === 'sse' 时消费 SSE 增量（sync / session-state / resync，id 单调游标，
  *     重连带 Last-Event-ID；心跳注释帧只用于活性）；
@@ -89,7 +92,7 @@ export type SessionFactsTurnEndKind =
 /** wire aborted cause 族（缺失 = 字段缺席，绝不臆造 legacy）。 */
 export type SessionFactsTurnEndCause = 'user' | 'parent' | 'hook' | 'disposed' | 'legacy'
 
-/** 判定输入；形状与 sidebar shared 的 TurnEndFact 结构兼容（可直接喂 deriveUnread）。 */
+/** 判定输入；形状与 client-core 的 TurnEndFact 结构兼容（可直接喂 deriveUnread）。 */
 export interface SessionFactsTurnEnd {
   kind: SessionFactsTurnEndKind
   cause?: SessionFactsTurnEndCause
@@ -136,6 +139,7 @@ export interface SessionFactsReadState {
 export interface SessionFactsSnapshot {
   verdict: SessionFactsVerdict
   degradation: SessionFactsDegradation
+  /** 传输档（gateway 平面）；SSE sync 帧缺失时沿用上一份快照，绝不静默丢档。 */
   mode: SessionFactsMode | null
   /** host 生命周期（gateway 平面）；serviceable=false 时行只读作未知。 */
   hostState: string
@@ -564,8 +568,10 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
 
   /**
    * 快照构造单一工厂：probe / SSE sync 帧 / refetch 三个入口共用同形状对象，
-   * 字段一旦增删不会漂移。verdict / degradation / mode 仍由调用点
-   * 按各自入口语义给（SSE 帧的 mode 缺失时沿用上一份快照），本工厂只负责形状。
+   * 字段一旦增删不会漂移。verdict / degradation 由调用点经**唯一分类器**
+   * （classifySessionFactsProbe）判定后传入；mode 仍由调用点按各自入口语义给
+   * （探针默认取 payload 的 mode；SSE sync 帧缺失时沿用上一份快照的 mode 或
+   * 'sse'），本工厂只负责形状——base/main 的 mode 跟踪面原样保留。
    */
   const buildSnapshot = (
     parsed: NonNullable<ReturnType<typeof parseSessionFactsSnapshotValue>>,
@@ -586,20 +592,26 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
   })
 
   /**
-   * 空快照工厂（legacy 专用）：路由 404 = 该网关没有镜像协议，行/游标/read 全空
-   * 是**事实**而不是猜测；verdict/degradation 由 classifier 给。它让 legacy 也走
-   * 同一个形状出口，不再手写第三份 SessionFactsSnapshot。
+   * 无载荷降级快照工厂（legacy / disabled / unversioned / 首次失败）：分类器
+   * 判了非 ok 却拿不到协议载荷时，行/游标/read 全空是**事实**而不是猜测；
+   * verdict/degradation 由 classifier 给。它让这条出口与 buildSnapshot 共用同一
+   * 形状（mode 为 null：没有可携带的传输档），不再手写第三份 SessionFactsSnapshot。
+   * stale 默认 true：这些事实没有活载体在刷新，消费者据此降档
+   * （sourceSessionFactsMode 对 legacy/disabled 有更早的专门档位，stale 不改变它们）。
+   * legacy 例外：它按 reconnectMs 有界低频重探（网关可能升级），快照会继续更新，
+   * 因此按事实标 false（main 侧的诚实值）。
    */
   const buildEmptySnapshot = (
     verdict: SessionFactsVerdict,
     degradation: SessionFactsDegradation,
+    stale = true,
   ): SessionFactsSnapshot => ({
     verdict,
     degradation,
     mode: null,
     hostState: 'unknown',
     serviceable: false,
-    stale: false,
+    stale,
     cursor: 0,
     rows: {},
     read: null,
@@ -660,17 +672,27 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
    * 原始快照响应（**不把 !ok 折成异常**）：HTTP 状态是判定的输入，逐条交给
    * classifySessionFactsProbe；只有传输失败（timeout/network）才走 catch。
    * 判定 owner 因此唯一 —— 本函数只拥有 carrier。
+   *
+   * 一次探测观测（HTTP carrier 归本模块，判定不在这里）：非 2xx 与坏 JSON 体
+   * 都以 status/body 交回分类器，**永不 throw**。超时经 abort 归入
+   * failure('timeout')，其余异常是 carrier 层的网络失败。
    */
-  const fetchSnapshotResponse = async (): Promise<Response> => {
+  const observeProbe = async (): Promise<SessionFactsProbeOutcome> => {
     const timeout = withTimeout()
     try {
-      return await fetchImpl(urlFor(SESSION_FACTS_ROUTE), {
+      const response = await fetchImpl(urlFor(SESSION_FACTS_ROUTE), {
         method: 'GET',
         headers: { accept: 'application/json' },
         credentials: 'same-origin',
         cache: 'no-store',
         signal: timeout.signal,
       })
+      const body: unknown = await response.json().catch(() => undefined)
+      return { kind: 'response', status: response.status, ...(body === undefined ? {} : { body }) }
+    } catch (error) {
+      // 唯一 abort 来源是 withTimeout 的 deadline ⇒ AbortError 即 timeout；
+      // 其余 fetch 拒绝都是 network（main 侧 isAbortError 的语义）。
+      return { kind: 'failure', reason: isAbortError(error) ? 'timeout' : 'network' }
     } finally {
       timeout.done()
     }
@@ -679,64 +701,80 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
   /**
    * 一次探测 = **classifier 的唯一生产消费者**（2026-12 单源化）：carrier 事实
    * （status/body/failure）先组装成 SessionFactsProbeOutcome，判定只由
-   * classifySessionFactsProbe 做，这里只按 verdict 分派既有语义。
-   * 404 ⇒ legacy 快照（不再是 undefined）；2xx 非协议载荷 ⇒ 清空快照；
-   * 降级协议载荷 ⇒ 仍投递降级快照；传输失败/5xx ⇒ stale + 有界重探。
+   * classifySessionFactsProbe 做。
+   *
+   * 分类 + 发布（**全源唯一判定点**）：探测与流恢复重取都经
+   * classifySessionFactsProbe（纯测试直测的同一函数），快照只携带它的
+   * verdict/degradation；模块内不再有第二份「protocol===1 && mode!=='off'」
+   * 之类的内联分类。发布规则：
+   *   - 2xx 且载荷可解析：快照带该载荷的行/读状态 + 分类器判定
+   *     （forward-skew / mode off 与旧行为一致地保留行）；
+   *   - 无载荷且 unavailable：传输层坏答案不擦除既有镜像事实——保留行、
+   *     标 stale（消费者据此降档）；
+   *   - 其余无载荷结果（404 legacy / 503 disabled / unversioned / 首次失败）：发布
+   *     分类器判定的降级快照（buildEmptySnapshot），能力投影（session-facts-mode）
+   *     因此仍能区分 legacy / disabled / degraded，而不是静默 undefined。
    */
+  const publishProbe = (
+    outcome: SessionFactsProbeOutcome,
+  ): { probe: SessionFactsProbe; parsed: ReturnType<typeof parseSessionFactsSnapshotValue> } => {
+    const probe = classifySessionFactsProbe(outcome)
+    const is2xx = probe.status !== null && probe.status >= 200 && probe.status < 300
+    const parsed = parseSessionFactsSnapshotValue(is2xx && outcome.kind === 'response' ? outcome.body : undefined)
+    if (parsed !== null) {
+      state.snapshot = buildSnapshot(parsed, probe.verdict, probe.degradation)
+      state.lastEventId = parsed.cursor
+      emit()
+      noteChannelAlive()
+      return { probe, parsed }
+    }
+    if (probe.degradation === 'unavailable' && state.snapshot !== undefined) {
+      markStale()
+      return { probe, parsed: null }
+    }
+    // legacy 是唯一带活重探的 empty 结果（见 shouldRetryProbe）：快照会继续
+    // 刷新，按事实标 non-stale；disabled / unversioned / 首次失败保持 stale。
+    state.snapshot = buildEmptySnapshot(probe.verdict, probe.degradation, probe.verdict !== 'legacy-gateway')
+    emit()
+    return { probe, parsed: null }
+  }
+
+  /**
+   * 坏答案是否值得**有界重试**（probe 与流恢复重取共用的唯一重试谓词，
+   * 不由各调用点各自判断；谓词只说「是否重试」，退避动作仍归调用路径）：
+   *   - unavailable（网络 / 5xx）与 unversioned（2xx 却无 protocol / 不可解析体）
+   *     都是 carrier 层可能自愈的答案——后者可能是旧宿主缺形状，也可能是反代把
+   *     未注册路由回落成 200 HTML/SPA；
+   *   - 404 legacy 是版本事实，但网关升级后应当被自动接回：给有界低频重探
+   *     （main 契约「网关可能升级，而不是停摆」），退避动作同 unavailable/unversioned；
+   *   - forward-skew 是版本事实、watcher-disabled 是服务事实，重试无意义。
+   */
+  const shouldRetryProbe = (probe: SessionFactsProbe): boolean =>
+    probe.degradation === 'unavailable'
+    || probe.degradation === 'unversioned'
+    || probe.degradation === 'legacy-gateway'
+
   const probeOnce = async (): Promise<void> => {
     if (state.probing || state.stopped || !state.connected) return
     state.probing = true
     const generation = state.generation
     try {
-      let failure: unknown
-      let outcome: SessionFactsProbeOutcome
-      let parsed: ReturnType<typeof parseSessionFactsSnapshotValue> = null
-      try {
-        const response = await fetchSnapshotResponse()
-        const body = await response.json().catch(() => undefined)
-        outcome = { kind: 'response', status: response.status, ...(body === undefined ? {} : { body }) }
-        if (response.ok) parsed = parseSessionFactsSnapshotValue(body)
-      } catch (error) {
-        failure = error
-        outcome = { kind: 'failure', reason: isAbortError(error) ? 'timeout' : 'network' }
-      }
+      const outcome = await observeProbe()
       if (state.stopped || !state.connected || generation !== state.generation) return
-      const classified = classifySessionFactsProbe(outcome)
-      if (classified.verdict === 'ok' && parsed !== null) {
-        state.snapshot = buildSnapshot(parsed, 'ok', classified.degradation)
-        state.lastEventId = parsed.cursor
-        emit()
-        noteChannelAlive()
-        startDelivery(parsed.mode, classified.features)
+      const { probe, parsed } = publishProbe(outcome)
+      if (probe.verdict === 'ok' && parsed !== null) {
+        startDelivery(parsed.mode, parsed.features)
         return
       }
-      if (parsed !== null) {
-        // 2xx 协议载荷但降级（protocol > 1 的 forward-skew / mode off 的
-        // watcher-disabled）：保留既有语义——仍投递这份降级快照（侧栏档位靠它），
-        // 但不启动交付（不轮询、不开流）。
-        state.snapshot = buildSnapshot(parsed, classified.verdict, classified.degradation)
-        state.lastEventId = parsed.cursor
-        emit()
-        return
-      }
-      if (classified.verdict === 'legacy-gateway') {
-        // 404 是版本事实：给一份空行 legacy 快照（不再是 undefined）——只有它能让
-        // session-facts-mode 的 'legacy' 档位可达；网关可能升级，继续低频探测。
-        state.snapshot = buildEmptySnapshot('legacy-gateway', 'legacy-gateway')
-        emit()
+      // 重试裁决唯一在 shouldRetryProbe（分类语义不变：unversioned 仍是
+      // degraded；重试只是 carrier 层对不可解析 2xx 的有界兜底）。
+      if (shouldRetryProbe(probe)) {
+        diagnostic(
+          probe.degradation === 'unversioned' ? '[session-facts] probe unversioned' : '[session-facts] probe failed',
+          new Error('session-state probe ' + String(probe.status ?? outcome.kind)),
+        )
         scheduleProbe(reconnectMs)
-        return
       }
-      if (outcome.kind === 'response' && outcome.status >= 200 && outcome.status < 300) {
-        // 2xx 非协议载荷（classifier: unversioned）：保持既有语义——快照清空
-        // （不折成 legacy、不标 stale），等下一次显式 probe/poll。
-        state.snapshot = undefined
-        emit()
-        return
-      }
-      markStale()
-      diagnostic('[session-facts] probe failed', failure ?? outcome)
-      scheduleProbe(reconnectMs)
     } finally {
       state.probing = false
     }
@@ -813,23 +851,22 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
     const generation = state.generation
     closeStream()
     state.lastEventId = null
-    try {
-      const response = await fetchSnapshotResponse()
-      // refetch 与 probe 的收口不同：这里没有分类任务，只有"重取成败"，任何非 2xx
-      // 都按既有语义走 catch（stale + 有界重连）。
-      if (!response.ok) throw new Error('session-state refetch answered ' + String(response.status))
-      const body = await response.json()
-      if (state.stopped || generation !== state.generation) return
-      const parsed = parseSessionFactsSnapshotValue(body)
-      if (parsed === null) return
-      state.snapshot = buildSnapshot(parsed, 'ok', null)
-      state.lastEventId = parsed.cursor
-      emit()
-      noteChannelAlive()
+    const outcome = await observeProbe()
+    if (state.stopped || generation !== state.generation) return
+    const { probe, parsed } = publishProbe(outcome)
+    if (probe.verdict === 'ok' && parsed !== null) {
       startDelivery(parsed.mode, parsed.features)
-    } catch (error) {
-      markStale()
-      diagnostic('[session-facts] snapshot refetch failed', error)
+      return
+    }
+    // 该重取是「流收口后的再对账」：与 probe 共用 shouldRetryProbe 的重试裁决，
+    // 但恢复动作是重连流（本路径要的是可投递的流载体，reprobe 不产生新流）。
+    // unavailable 与 unversioned 都按既有退避重连；404 / forward-skew /
+    // watcher-disabled 是版本或服务事实，不重连假流，也不留静止降级。
+    if (shouldRetryProbe(probe)) {
+      diagnostic(
+        '[session-facts] snapshot refetch failed',
+        new Error('session-state probe ' + String(probe.status ?? outcome.kind)),
+      )
       scheduleStreamReconnect()
     }
   }

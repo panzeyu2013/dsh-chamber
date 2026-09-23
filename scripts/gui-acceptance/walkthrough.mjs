@@ -391,7 +391,7 @@ const HOVER_ANCHOR_MARKER = 'data-chamber-hovercard-anchor'
 
 /**
  * Hover timing, derived from the machine's own constants
- * (packages/dsh-chamber-client-ui-sidebar/src/shared/hover-intent.ts):
+ * (packages/dsh-chamber-client-core/src/hover-intent.ts):
  *
  *  - the card opens HOVER_DWELL_MS after the pointer enters (`HOVER_OPEN_DELAY_MS`)
  *    and closes HOVER_GRACE_MS after it leaves (`HOVER_CLOSE_GRACE_MS`);

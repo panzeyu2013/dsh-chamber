@@ -10,8 +10,8 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { resolveWorkspaceDrop, type WorkspaceDropEnv, type WorkspaceDropVerdict } from '../../src/shared/workspace-drag-order.ts'
-import type { WorkspaceGitFlag } from '../../src/shared/workspace-git-flags.ts'
+import { resolveWorkspaceDrop, type WorkspaceDropEnv, type WorkspaceDropVerdict } from '@dsh-chamber/dsh-chamber-client-core/workspace-drag-order'
+import type { WorkspaceGitFlag } from '@dsh-chamber/dsh-chamber-client-core/workspace-git-flags'
 
 /** Build a drop environment: order + per-id git flags + a hidden set. */
 function dropEnv(order: string[], flags: Record<string, Partial<WorkspaceGitFlag>>, hiddenIds: string[] = []): WorkspaceDropEnv {

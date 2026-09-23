@@ -1,10 +1,12 @@
 # 产物新鲜度守卫（剩余 G2/G3/G5/G7/G8；未排期）
 
-> 六类产物由「陈旧/缺失 ⇒ 红」的比对门覆盖：`desktop/dist/control-plane/**`（标记守卫）、`gateway/dist/**`（标记守卫）、
-> seed `dist/index.js` ×4、`gateway/host-packages/dsh-chamber-client-ui-mobile/**`、`desktop/dist/preload.cjs`、
-> `renderer/src/generated/**`（`scripts/gates/verify-artifact-freshness.mjs`
-> 的 tests/full，经 `ci.yml:179` 进 CI；`scripts/gates/verify-electron-artifacts.mjs` 的 macOS 腿/CI 另执行编译产物冒烟。
-> G1=`verify:test-wiring`、G4/G6 同属该门）。本文只留仍无守卫的产物与最小守卫建议；开放状态与失效判据见
+> 产物新鲜度：`desktop/dist/control-plane/**`（标记守卫）、`gateway/dist/**`（标记守卫）、
+> `gateway/host-packages/dsh-chamber-client-ui-mobile/**`、`desktop/dist/preload.cjs`、
+> `renderer/src/generated/**` 与 `gateway/dist/index.js`（用包自身 build.mjs 重建-比对）已有「陈旧/缺失 ⇒ 红」的比对门
+> （`scripts/gates/verify-artifact-freshness.mjs` 的 tests/full，经 `ci.yml:179` 进 CI；seed `dist/index.js` ×4 +
+> `dsh-runtime/dist/index.js` + mobile `dist`/`lib` 的新鲜度归 C8（`scripts/upstream/verify-upstream-touchpoints.mjs`
+> 重建-比对，清单单一来源 `scripts/lib/build-artifacts.mjs`）；`scripts/gates/verify-electron-artifacts.mjs`
+> 的 macOS 腿/CI 另执行编译产物冒烟。G1=`verify:test-wiring`、G4/G6 同属该门）。本文只留仍无守卫的产物与最小守卫建议；开放状态与失效判据见
 > `docs/progress/STATUS.md`「产物新鲜度守卫」条，design 21 §7 登记。想法清单非承诺；落地后按
 > `docs/progress/README.md` 移出。
 

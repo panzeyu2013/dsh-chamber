@@ -178,7 +178,7 @@ plugin inventory 只读（`dsh-host-plugin-inventory` 仅 `list()`），都不�
 
 ### 3.4 改动面（全部在可改范围内，vendor 零改动）
 
-| 面 | 改动（现行） |
+| 面 | 改动 |
 |---|---|
 | `packages/renderer` | `host-graph.ts`（`fetchHostGraph` wire 调用 + `dedupeHostEntries` 去重 + `toExtraRows` 注入反代前缀 + `collectExtraRows`，AppWebEntry 构造前预加载额外 bundle，`loadModuleBundle` 依赖注入可测）+ `chamber-covered.ts`（去重集）+ `required-extra-rows.ts`（首屏 inject 并集派生 + 缺失服务点名，§3.2）；页面级一次性加载与 rev 认领由共享 kernel（shared face `client-plugin-loader.ts`）维护 |
 | `packages/dsh-client-web`（拷贝包） | `boot.ts` `AppWebEntryOptions.extraRows` seam：额外 entry id 合并进 boot rows（N-ctx 模块表共享 seam 的扩展，见 05 §6） |

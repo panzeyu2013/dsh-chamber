@@ -1,6 +1,6 @@
 {
   "name": "@dsh-chamber/dsh-chamber-seed-archive-cleanup",
-  "description": "Per-dsh-instance host domain for purging archived session content (design 24): archiveCleanup/{preview,purge} over authoritative workspaceRegistry/agents state",
+  "description": "Per-dsh-instance host domain for purging archived session content (design 24): archiveCleanup/{purge,probe} over authoritative workspaceRegistry/agents state",
   "version": "0.3.2-beta.5",
   "private": true,
   "type": "module",
@@ -17,6 +17,9 @@
     "build": "node scripts/build.mjs",
     "test": "node ./scripts/test.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@dsh-chamber/dsh-chamber-wire": "workspace:^"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "workspace:^",

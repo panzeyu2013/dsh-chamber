@@ -7,7 +7,8 @@ import type {
 } from './transport-provider.ts';
 import type { SshConfigDiscovery } from './ssh-config.ts';
 import type { UpdateState } from './updater.ts';
-import type { RuntimeState } from './dsh-runtime-controller.ts';
+import type { RuntimeState } from './dsh-runtime-controller.ts'
+import type { PluginRow as PluginRowProjection } from '@dsh-chamber/dsh-chamber-client-core/plugin-row';
 const { contextBridge, ipcRenderer } = require('electron');
 
 // Keep preload runtime self-contained: importing a value from a TypeScript ESM
@@ -189,20 +190,18 @@ export type ChamberInjectionState =
   | { ok: true; packages: ChamberHostPackageState[] }
   | { ok: false; error: string }
 /**
- * One read-face plugin row (design 21 §6.11.5): one
- * row per profile dependency, carrying the backend-computed role and
- * `protected` flag (the renderer never re-derives protection). The
- * installation baseline (B₀) and the chamber seed registry (S) only classify
- * rows; they are not projected as installed plugins.
+ * One read-face plugin row (design 21 §6.11.5): one row per profile dependency,
+ * carrying the backend-computed role and `protected` flag (the renderer never
+ * re-derives protection). The installation baseline (B₀) and the chamber seed
+ * registry (S) only classify rows; they are not projected as installed plugins.
+ *
+ * The field set has ONE definition — the wire `./plugin-row` face — reached
+ * through client-core's pass-through face (`@dsh-chamber/dsh-chamber-client-core/
+ * plugin-row`). The import is type-only by construction, so `build:preload`
+ * erases it and `dist/preload.cjs` carries no specifier; this file must never
+ * re-declare the fields (C14 asserts both).
  */
-export interface PluginRowProjection {
-  name: string
-  spec: string | null
-  version: string | null
-  role: 'composition' | 'seed' | 'layer' | 'third-party' | 'materialized' | 'unknown'
-  protected: boolean
-  owner?: 'installation' | 'chamber' | 'user'
-}
+export type { PluginRowProjection }
 
 /** Remote plugin manifest projection (design 13 §4.1). */
 export interface SshRemotePluginManifest {

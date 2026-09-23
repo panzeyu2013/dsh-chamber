@@ -4,7 +4,7 @@
 import type { ShellIpcCtx } from './shell-core.ts'
 import { IPC_CHANNELS } from './ipc-events.ts'
 import { classifyPluginPick, folderPluginIdentity } from './plugin-tarball.ts'
-import { describeLocalPluginAddConfirmation, describeLocalPluginRemoveConfirmation, describePluginDecision, guardPluginMutation, localPluginList, runLocalDshPlugin } from './plugin-sync.ts'
+import { describeLocalPluginAddConfirmation, describeLocalPluginRemoveConfirmation, describePluginDecision, guardPluginMutation, localPluginList, redactLocalPluginManifest, runLocalDshPlugin } from './plugin-sync.ts'
 import { describeUnknownError } from './deep-link.ts'
 import { isAllowedRegistryUrl } from '@dsh-chamber/dsh-runtime'
 import { parseSpecName, parseSpecVersion } from './ssh-apply-rows.ts'
@@ -18,9 +18,16 @@ export function registerLocalPluginHandlers(ctx: ShellIpcCtx): void {
   // localPluginList is a pure plugin-sync read of the same home the mutation
   // leaf writes; loud {error} on any unreadable/corrupt manifest, never a
   // silent empty success.
+  // The IPC response is the redacted projection (design 13 §7.0): every
+  // materialize-class dependency VALUE (file:/link:/relative/absolute/`~/` —
+  // and the rows[].spec channel) becomes MATERIALIZED_VALUE_MASK before it
+  // crosses to the renderer, so a local absolute path can never reach a
+  // remote instance's bundle in the chamber page. The main-process-internal
+  // manifest stays full (resolveLocalMaterializeDirectory, the mutation leaf
+  // and the seed paths read the unredacted read).
   deps.ipc.handle(IPC_CHANNELS.LOCAL_PLUGIN_LIST, () => {
     try {
-      return { ok: true, manifest: localPluginList(localDshHome, localProtectionFacts()) };
+      return { ok: true, manifest: redactLocalPluginManifest(localPluginList(localDshHome, localProtectionFacts())) };
     } catch (error) {
       return { ok: false, error: describeUnknownError(error) };
     }

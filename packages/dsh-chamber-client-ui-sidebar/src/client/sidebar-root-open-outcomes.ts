@@ -5,8 +5,8 @@
  */
 
 import { useCallback, useEffect, useRef, type Dispatch, type SetStateAction } from 'react'
-import { chamberBridge } from '../shared/aggregate-store.ts'
-import { openErrorKey, withoutOpenError } from '../shared/open-outcome.ts'
+import { chamberBridge } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
+import { openErrorKey, withoutOpenError } from '@dsh-chamber/dsh-chamber-client-core/open-outcome'
 
 /**
  * How long a failed session open stays visible as the row's inline error.

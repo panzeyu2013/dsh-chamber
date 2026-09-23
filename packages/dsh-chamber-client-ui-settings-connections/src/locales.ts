@@ -329,7 +329,7 @@ export const zh = {
   partialSep: '：',
   // plan 24 B1.6 恢复横幅（gateway 恢复面）：实例停机/错误/重启耗尽 + journal
   // 存在可撤销的最近成功变更时，与 recoveryUninstallRestart 按钮同区渲染。
-  recoveryUndoBanner: '实例当前未运行；最近一次成功的插件变更可能是原因——可卸载该插件并重启实例恢复。',
+  recoveryUndoBanner: '实例当前未运行；最近一次成功的插件变更可能是原因——可撤销该变更，恢复到变更前的插件清单。',
   busyTasks: '正在执行变更…',
   deferredOfflineNote: '将缓存并在实例就绪后自动安装；可能在你断开后执行',
   profileAbsentBanner: '实例尚未初始化，将缓存安装意图，实例就绪后自动安装',
@@ -356,7 +356,7 @@ export const zh = {
   removeRowConfirmDescription: '将移除 {name} 并在需要时重启实例生效。',
   removeRowConfirmUnconfiguredDescription: '将移除 {name}；该实例未配置 systemd 服务，不会自动重启——需手动重启远端后变更才生效。',
   undoAvailable: '撤销最近变更',
-  recoveryUninstallRestart: '卸载最近安装的插件并重启',
+  recoveryUninstallRestart: '撤销最近变更（恢复）',
   undoUnavailableNone: '没有可撤销的最近成功变更',
   undoUnavailableFileBacked: '该变更由本地导入（文件夹或 .tgz 包）推送，v1 不支持回退',
   undoDone: '已撤销最近变更',
@@ -709,7 +709,7 @@ export const en: Record<SettingsConnectionsKey, string> = {
   // plan 24 B1.6 recovery banner (gateway recovery surface): the instance is
   // down (stopped/error/restart-exhausted) AND the journal holds an undoable
   // latest success — rendered beside the recoveryUninstallRestart button.
-  recoveryUndoBanner: 'The instance is not running; the most recent successful plugin change may be the cause \u2014 uninstall it and restart the instance to recover.',
+  recoveryUndoBanner: 'The instance is not running; the most recent successful plugin change may be the cause \u2014 undo that change to restore the previous plugin set.',
   busyTasks: 'A change is running…',
   deferredOfflineNote: 'Will be cached and installed once the instance is ready \u2014 may run after you disconnect.',
   profileAbsentBanner: 'The instance is not initialized yet; the install intent will be cached and applied when it becomes ready.',
@@ -738,7 +738,7 @@ export const en: Record<SettingsConnectionsKey, string> = {
   removeRowConfirmDescription: 'Removing {name}; a restart applies the change when required.',
   removeRowConfirmUnconfiguredDescription: 'Removing {name}; no systemd service is configured on this instance, so nothing restarts automatically \u2014 restart the remote manually for the change to take effect.',
   undoAvailable: 'Undo latest change',
-  recoveryUninstallRestart: 'Uninstall the most recently installed plugin and restart',
+  recoveryUninstallRestart: 'Undo latest change (restore)',
   undoUnavailableNone: 'No recent successful change to undo',
   undoUnavailableFileBacked: 'This change came from a local import (folder or .tgz archive); undo is unavailable in v1.',
   undoDone: 'Undo complete',

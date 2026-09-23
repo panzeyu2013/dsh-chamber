@@ -11,6 +11,10 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
+  bundledPnpmEntryCandidates,
+  firstExistingPnpmEntry,
+  pnpmBinDirCandidates,
+  pnpmBinNames,
   pnpmScriptEntryCandidates,
   resolvePnpmLauncher,
   windowsPnpmSearchDirs,
@@ -148,4 +152,70 @@ test('plugin-sync packDirectory spawns the resolved launcher, never the .cmd shi
   assert.equal(/process\.platform === 'win32' \? 'pnpm\.cmd'/.test(source), false)
   assert.match(source, /resolvePnpmLauncher\(\{/)
   assert.match(source, /\.\.\.launcher\.args, \.\.\.buildPnpmPackArgs\(outDir\)/)
+})
+
+test('bundledPnpmEntryCandidates: resources → sidecar assembly → legacy assembly → dev, ONE order for both flavors', () => {
+  // Swift sidecar (sidecar-ctx passes its two assembly spellings in; the
+  // resources root does not exist for this flavor).
+  assert.deepEqual(
+    bundledPnpmEntryCandidates({
+      platform: 'darwin',
+      moduleDir: '/R/sidecar',
+      assemblyEntry: '/R/sidecar/pnpm/bin/pnpm.cjs',
+      legacyAssemblyEntry: '/R/pnpm/bin/pnpm.cjs',
+    }),
+    ['/R/sidecar/pnpm/bin/pnpm.cjs', '/R/pnpm/bin/pnpm.cjs', '/R/sidecar/node_modules/pnpm/bin/pnpm.cjs'],
+  )
+  // Electron packaged: the extraResources copy first, no sidecar candidates.
+  assert.deepEqual(
+    bundledPnpmEntryCandidates({
+      platform: 'darwin',
+      moduleDir: '/app/resources/app.asar',
+      resourcesPath: '/app/resources',
+    }),
+    ['/app/resources/pnpm/bin/pnpm.cjs', '/app/resources/app.asar/node_modules/pnpm/bin/pnpm.cjs'],
+  )
+})
+
+test('firstExistingPnpmEntry: the first existing candidate wins, null when nothing exists', () => {
+  const exists = (candidate: string): boolean => candidate.includes('/legacy/')
+  assert.equal(firstExistingPnpmEntry(['/a', '/legacy/b', '/c'], exists), '/legacy/b')
+  assert.equal(firstExistingPnpmEntry(['/a', '/b'], () => false), null)
+  // Empty candidate list is legal (caller keeps its documented fallback shape).
+  assert.equal(firstExistingPnpmEntry([], () => true), null)
+})
+
+test('pnpmBinDirCandidates / pnpmBinNames: PATH first, then the installer roots (win32 dirs vs POSIX)', () => {
+  assert.deepEqual(pnpmBinNames('win32'), ['pnpm.cmd', 'pnpm.exe', 'pnpm.cjs'])
+  assert.deepEqual(pnpmBinNames('linux'), ['pnpm'])
+  assert.deepEqual(
+    pnpmBinDirCandidates({
+      platform: 'win32',
+      pathEntries: ['C:\\bin', ''],
+      env: { LOCALAPPDATA: 'C:\\Users\\a\\AppData\\Local' },
+      execPath: 'C:\\nodejs\\node.exe',
+      bundledBinDir: 'C:\\app\\resources\\pnpm\\bin',
+      homedir: 'C:\\Users\\a',
+    }),
+    ['C:\\bin', 'C:\\app\\resources\\pnpm\\bin', 'C:\\Users\\a\\AppData\\Local\\pnpm', 'C:\\nodejs'],
+  )
+  assert.deepEqual(
+    pnpmBinDirCandidates({
+      platform: 'linux',
+      pathEntries: ['/usr/bin'],
+      execPath: '/usr/bin/node',
+      homedir: '/home/a',
+      nvmVersionDirs: ['v24.0.0'],
+    }),
+    [
+      '/usr/bin',
+      '/home/a/.nvm/versions/node/v24.0.0/bin',
+      '/home/a/.volta/bin',
+      '/home/a/.local/share/pnpm',
+      '/home/a/.local/bin',
+      '/opt/homebrew/bin',
+      '/usr/local/bin',
+      '/usr/bin',
+    ],
+  )
 })

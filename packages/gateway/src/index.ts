@@ -14,6 +14,7 @@ import { FATAL_STARTUP_BLOCK_REASONS } from '@dsh-chamber/dsh-runtime'
 import {
   CHAMBER_HOST_PACKAGES,
   HOST_PACKAGE_SEED_FILES,
+  acquireStateRootLease,
   authCookieFor,
   createControlPlane,
   type Logger,
@@ -123,6 +124,17 @@ function validateMaterializedConfig(config: GatewayConfig): void {
 export function createGateway(options: GatewayOptions): GatewayHandle {
   validateMaterializedConfig(options.config)
   const logger = options.logger ?? console
+  // R2 state-root writer lease (design 17 §4.1/§12): THIS process is the only
+  // writer of this state root for as long as it runs, and the lease is taken
+  // BEFORE the first store write below. The same handle is shared with the
+  // store, the control plane and the runtime manager — one lock, one
+  // <stateRoot>/owner.json, no second acquisition in this process. Only
+  // stop() (after every writer is proven quiescent) releases it.
+  const stateLease = acquireStateRootLease(options.config.plane.stateDir, {
+    scope: 'state-root',
+    flavor: 'gateway',
+    logger,
+  })
   // Mutable holders: the dispatch middleware and chamber surface are wired
   // into createControlPlane BEFORE the plane/proxy exist (the proxy + chamber
   // surface need createdPlane.getLocalDshPort()). They dereference lazily at request time.
@@ -163,16 +175,16 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
     return runtimeManager.exposureQuarantined?.() ?? runtimeManager.activationInProgress()
   }
   // The whole synchronous construction is one transaction: any failure after
-  // the store is created must release the stateDir exclusive lock (a leaked
-  // lock would block every later start on the same directory for the process
-  // lifetime). `store!` is safe past the try — every later use is reachable
-  // only after construction succeeded.
+  // the lease is taken must release it (a leaked lease would block every later
+  // start on the same root for the process lifetime). `store!` is safe past
+  // the try — every later use is reachable only after construction succeeded.
   let store!: GatewayStore
   let auth!: AuthProvider
   try {
     // The gateway store (design 17 §10) owns tokens/jwt-secret; auth needs it
-    // for the token hash + session secret (S5/S13).
-    store = createGatewayStore(options.config.plane.stateDir, logger)
+    // for the token hash + session secret (S5/S13). The state-root lease is
+    // the caller's handle: the store only asserts its root/scope and currency.
+    store = createGatewayStore(options.config.plane.stateDir, logger, { stateLease })
     // The seeding logger is the gateway logger: without it the loud
     // config-ignored warnings for authoritative runtime credentials stay
     // silent.
@@ -364,6 +376,9 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
       host: options.config.plane.host,
       port: options.config.plane.port,
       stateDir: options.config.plane.stateDir,
+      // Same handle: the control plane adopts it (root check + assertCurrent)
+      // instead of acquiring a second lease on the same root.
+      stateLease,
       // Static anchor for fakes/boot log; the live spawn path resolves per-spawn
       // through the runtime manager (env → override → anchor, design 18 §9.3).
       dshWorkspacePath: options.config.plane.dshWorkspacePath,
@@ -442,7 +457,14 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
       canExposeLocal: () => !stopping && !runtimeExposureQuarantined(),
     })
   } catch (error) {
-    store?.close()
+    try {
+      stateLease.release()
+    } catch (releaseError) {
+      throw new AggregateError(
+        [error, releaseError],
+        'gateway construction failed and the state-root lease could not be released',
+      )
+    }
     throw error
   }
   function syncFeatures(status: string): void {
@@ -489,11 +511,11 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
     const epoch = ++lifecycleEpoch
     const operation = (async () => {
       try {
-        // Design 17 §4.1: a failed start (or a stop) releases the stateDir
-        // exclusive lock; a retry must re-take it (fail-closed with a loud
-        // 'gateway_locked' error if another process grabbed the directory in
+        // Design 17 §4.1: a failed start (or a stop) releases the state-root
+        // lease; a retry must re-take it (fail-closed with a loud
+        // 'state_root_locked' error if another process grabbed the root in
         // between).
-        store.reacquire()
+        stateLease.reacquire()
         dispatch.resume()
         await createdPlane.start()
         assertStartEpoch(epoch)
@@ -502,6 +524,9 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
           config: options.config,
           plane: createdPlane,
           logger,
+          // Same handle: the manager adopts it (root check + assertCurrent) and
+          // never releases it; the gateway releases it in stop().
+          stateLease,
           onActivationQuarantineChange: () => syncFeatures(createdPlane.connectionState),
         })
         // design 17 §2.1 step 4: the runtime startup transaction runs BEFORE the
@@ -609,7 +634,7 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
           await runtimeManager?.dispose()
         } catch (stopError) {
           runtimeDisposalError = stopError
-          logger.warn(`gateway runtime disposal failed; stateDir lock retained: ${String(stopError)}`)
+          logger.warn(`gateway runtime disposal failed; state-root lease retained: ${String(stopError)}`)
         }
         if (runtimeDisposalError === null) runtimeManager = null
         let pluginTasksDisposalError: unknown = null
@@ -617,26 +642,33 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
           await pluginTasks.dispose()
         } catch (stopError) {
           pluginTasksDisposalError = stopError
-          logger.warn(`gateway plugin executor disposal failed; stateDir lock retained: ${String(stopError)}`)
+          logger.warn(`gateway plugin executor disposal failed; state-root lease retained: ${String(stopError)}`)
         }
         let dispatchQuiescenceError: unknown = null
         try {
           await dispatchQuiescence
         } catch (drainError) {
           dispatchQuiescenceError = drainError
-          logger.warn(`gateway credential mutation drain failed; stateDir lock retained: ${String(drainError)}`)
+          logger.warn(`gateway credential mutation drain failed; state-root lease retained: ${String(drainError)}`)
         }
         await createdPlane.stop().catch(stopError => logger.warn(`gateway startup rollback failed: ${String(stopError)}`))
-        // Release the stateDir exclusive lock on the rollback path so a retry
-        // (or another process) can take over the directory.
+        // Release the state-root lease on the rollback path so a retry
+        // (or another process) can take over the root.
         // If runtime disposal could not prove every writer quiescent, retain
-        // the outer state lock and owner record: allowing another gateway to
-        // enter would turn a cleanup failure into concurrent state mutation.
-        if (runtimeDisposalError === null && pluginTasksDisposalError === null && dispatchQuiescenceError === null) store.close()
-        if (runtimeDisposalError !== null || pluginTasksDisposalError !== null || dispatchQuiescenceError !== null) {
+        // the lease: allowing another gateway to enter would turn a cleanup
+        // failure into concurrent state mutation.
+        let leaseReleaseError: unknown = null
+        if (runtimeDisposalError === null && pluginTasksDisposalError === null && dispatchQuiescenceError === null) {
+          try {
+            stateLease.release()
+          } catch (releaseError) {
+            leaseReleaseError = releaseError
+          }
+        }
+        if (runtimeDisposalError !== null || pluginTasksDisposalError !== null || dispatchQuiescenceError !== null || leaseReleaseError !== null) {
           throw new AggregateError(
-            [error, runtimeDisposalError, pluginTasksDisposalError, dispatchQuiescenceError].filter(reason => reason !== null),
-            'gateway startup rollback could not prove all state writers quiescent; stateDir lock retained',
+            [error, runtimeDisposalError, pluginTasksDisposalError, dispatchQuiescenceError, leaseReleaseError].filter(reason => reason !== null),
+            'gateway startup rollback could not prove all state writers quiescent; state-root lease retained',
           )
         }
         throw error
@@ -658,8 +690,8 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
     stopping = true
     lifecycleEpoch += 1
     // Admission closes synchronously inside quiesce(), before any async
-    // teardown can release the state lock or stop the dsh dependency of an
-    // already-entered saga. (The credential/runtime writers remain behind the
+    // teardown can release the state-root lease or stop the dsh dependency of
+    // an already-entered saga. (The credential/runtime writers remain behind the
     // dispatch fence; since design 21 §6.2 the /chamber plugin mutation
     // routes answer 202 before their executor children run — pluginTasks.
     // dispose() below kills those children AFTER the manager disposal, when
@@ -671,7 +703,8 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
     unsubscribeLocalState = null
     // Session-state watcher teardown (stop ordering: end SSE → stop
     // mux → flush the snapshot). It starts here, synchronously before the
-    // proxy/dsh teardown, and is awaited below BEFORE store.close().
+    // proxy/dsh teardown, and is awaited below BEFORE the state-root lease is
+    // released.
     const sessionStateShutdown = sessionState.shutdown()
     proxy?.closeAllStreams()
     syncFeatures('stopped')
@@ -688,7 +721,7 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
         await pluginTasks.dispose()
         return null
       } catch (stopError) {
-        logger.warn(`gateway runtime disposal failed; stateDir lock retained: ${String(stopError)}`)
+        logger.warn(`gateway runtime disposal failed; state-root lease retained: ${String(stopError)}`)
         return stopError
       }
     })()
@@ -712,12 +745,12 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
         await dispatchQuiescence
       } catch (error) {
         dispatchQuiescenceError = error
-        logger.warn(`gateway credential mutation drain failed; stateDir lock retained: ${String(error)}`)
+        logger.warn(`gateway credential mutation drain failed; state-root lease retained: ${String(error)}`)
       }
 
       // The watcher is fully stopped and its snapshot flushed before the
       // managed dsh is asked to stop; a flush failure is already loud inside
-      // the store and must not retain the stateDir lock.
+      // the store and must not retain the state-root lease.
       await sessionStateShutdown.catch(error => {
         logger.warn(`gateway session-state shutdown failed: ${String(error)}`)
       })
@@ -746,9 +779,16 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
       // A plane-listener failure alone does not imply a surviving runtime writer,
       // so preserve the existing retryability rule for that case. A failed
       // runtime writer proof is categorically different: never release the
-      // stateDir lock even though the outer plane has been asked to stop.
-      if (runtimeDisposalError === null && dispatchQuiescenceError === null) store.close()
-      const writerErrors = [runtimeDisposalError, dispatchQuiescenceError]
+      // state-root lease even though the outer plane has been asked to stop.
+      let leaseReleaseError: unknown = null
+      if (runtimeDisposalError === null && dispatchQuiescenceError === null) {
+        try {
+          stateLease.release()
+        } catch (error) {
+          leaseReleaseError = error
+        }
+      }
+      const writerErrors = [runtimeDisposalError, dispatchQuiescenceError, leaseReleaseError]
         .filter((error): error is {} => error !== null)
       if (writerErrors.length > 0 && planeStopError !== null) {
         throw new AggregateError(

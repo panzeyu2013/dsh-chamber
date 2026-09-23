@@ -8,11 +8,11 @@
  * Nothing here is a store — the shell re-renders and rebuilds the value.
  */
 import { createContext, useContext, type Dispatch, type MutableRefObject, type ReactNode, type SetStateAction } from 'react'
-import type { ChamberServerAggregate } from '../shared/aggregate-store.ts'
-import { sourceAccentColor, type SessionOrderBy } from '../shared/derive.ts'
-import type { WorkspaceDropEnv } from '../shared/workspace-drag-order.ts'
-import { getWorkspaceGitFlag, hiddenByMainWorkspaceFold } from '../shared/workspace-git-flags.ts'
-import type { ChamberSidebarViewPrefs } from '../shared/view-prefs.ts'
+import type { ChamberServerAggregate } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
+import { sourceAccentColor, type SessionOrderBy } from '@dsh-chamber/dsh-chamber-client-core/derive'
+import type { WorkspaceDropEnv } from '@dsh-chamber/dsh-chamber-client-core/workspace-drag-order'
+import { getWorkspaceGitFlag, hiddenByMainWorkspaceFold } from '@dsh-chamber/dsh-chamber-client-core/workspace-git-flags'
+import type { ChamberSidebarViewPrefs } from '@dsh-chamber/dsh-chamber-client-core/view-prefs'
 import type { SidebarRootComponentProps } from './contract/slots.ts'
 
 /** In-progress inline rename target. */
