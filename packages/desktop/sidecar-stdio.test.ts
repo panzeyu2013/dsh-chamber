@@ -77,7 +77,11 @@ function startDriver(): Promise<Driver> {
     // 同纪律）：跳过 15s 首检/6h 周期定时器——本套用例不需要真实出网，也避免
     // 首检改写 update-state 投影的确定性。
     const env = { ...process.env, ELECTRON_RUN_AS_NODE: '1', DSH_SIDECAR_TEST_NO_UPDATE_CHECK: '1' }
-    const child: ChildProcessWithoutNullStreams = spawn(nodePath, [sidecarPath, '--user-data-dir', userDataDir, '--port', '17910'], {
+    // --port 0: the control plane binds an OS-assigned ephemeral port and the
+    // ready frame reports it. A fixed 17xxx port is a global resource this suite
+    // does not own: concurrent test processes (and anything else on a shared
+    // host) bind it too, and the loser dies with EADDRINUSE before ready.
+    const child: ChildProcessWithoutNullStreams = spawn(nodePath, [sidecarPath, '--user-data-dir', userDataDir, '--port', '0'], {
       env,
       stdio: ['pipe', 'pipe', 'pipe'],
     })
@@ -234,8 +238,9 @@ function startDriver(): Promise<Driver> {
 
 let driver: Driver
 
-/** 目录锁复验用：带预置锁记录 spawn 一个 sidecar（不共享 driver 的 userData）。 */
-function spawnWithLockRecord(lockPid: number, port: string): {
+/** 目录锁复验用：带预置锁记录 spawn 一个 sidecar（不共享 driver 的 userData）。
+ *  端口固定为 0（OS 分配）：锁语义与端口无关，固定端口只会引入跨进程冲突。 */
+function spawnWithLockRecord(lockPid: number): {
   ready: Promise<void>
   exit: Promise<number | null>
   stderr: () => string
@@ -250,14 +255,17 @@ function spawnWithLockRecord(lockPid: number, port: string): {
   )
   const child: ChildProcessWithoutNullStreams = spawn(
     nodePath,
-    [sidecarPath, '--user-data-dir', userDataDir, '--port', port],
+    [sidecarPath, '--user-data-dir', userDataDir, '--port', '0'],
     { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', DSH_SIDECAR_TEST_NO_UPDATE_CHECK: '1' }, stdio: ['pipe', 'pipe', 'pipe'] },
   )
   let stderr = ''
   child.stderr.on('data', (chunk) => {
     stderr += String(chunk)
   })
-  const exit = new Promise<number | null>((resolve) => child.on('exit', (code) => resolve(code)))
+  // Resolve after stdio EOF ('close'), not on process exit: these tests assert
+  // on the captured stderr, and an exit-time snapshot can miss the final loud
+  // lines (observed as a truncated "stderr tail" on a boot failure).
+  const exit = new Promise<number | null>((resolve) => child.on('close', (code) => resolve(code)))
   const ready = new Promise<void>((resolve, reject) => {
     const rl = createInterface({ input: child.stdout })
     const timer = setTimeout(() => reject(new Error('ready 超时（20s）')), 20000)
@@ -292,7 +300,7 @@ function spawnWithLockRecord(lockPid: number, port: string): {
 
 /** 测试用 harness：可注入 env、可等 stderr 行（确定性进入退出在途窗口）、
  *  观察原始响应帧（含 code 字段）的独立 sidecar。 */
-function spawnInjectable(extraEnv: Record<string, string>, port: string): {
+function spawnInjectable(extraEnv: Record<string, string>): {
   ready: Promise<void>
   invoke(method: string, payload: unknown, timeoutMs?: number): Promise<{ ok: boolean; result?: unknown; error?: string; code?: string }>
   waitStderr(pattern: RegExp, timeoutMs?: number): Promise<void>
@@ -305,14 +313,17 @@ function spawnInjectable(extraEnv: Record<string, string>, port: string): {
   const userDataDir = mkdtempSync(path.join(tmpdir(), 'dsh-sidecar-d1c-'))
   const child: ChildProcessWithoutNullStreams = spawn(
     nodePath,
-    [sidecarPath, '--user-data-dir', userDataDir, '--port', port],
+    [sidecarPath, '--user-data-dir', userDataDir, '--port', '0'],
     { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', DSH_SIDECAR_TEST_NO_UPDATE_CHECK: '1', ...extraEnv }, stdio: ['pipe', 'pipe', 'pipe'] },
   )
   let stderr = ''
   child.stderr.on('data', (chunk) => {
     stderr += String(chunk)
   })
-  const exit = new Promise<number | null>((resolve) => child.on('exit', (code) => resolve(code)))
+  // Resolve after stdio EOF ('close'), not on process exit: these tests assert
+  // on the captured stderr, and an exit-time snapshot can miss the final loud
+  // lines (observed as a truncated "stderr tail" on a boot failure).
+  const exit = new Promise<number | null>((resolve) => child.on('close', (code) => resolve(code)))
   const pending = new Map<number, (frame: { ok: boolean; result?: unknown; error?: string; code?: string }) => void>()
   let nextId = 1
   let readyResolve: (() => void) | null = null
@@ -349,7 +360,13 @@ function spawnInjectable(extraEnv: Record<string, string>, port: string): {
       resolve()
     }
     readyTimer = setTimeout(() => reject(new Error('ready 超时（20s）')), 20000)
-    void exit.then(() => reject(new Error('ready 前退出')))
+    // 早退必须清掉 20s ready 定时器，否则一次启动失败会把该文件拖到 ~21s 才
+    // 退出（实测 c8 抖动里 0.4s 的失败变成 21.4s 的池占用）；错误里带上退出码
+    // 与 stderr 尾巴，现场（启动期 loud 行）不再随进程消失而不可考。
+    void exit.then(code => {
+      if (readyTimer !== undefined) clearTimeout(readyTimer)
+      reject(new Error('ready 前退出 code=' + String(code) + '; stderr tail=' + stderr.slice(-400)))
+    })
   })
   void ready.catch(() => {})
   return {
@@ -521,7 +538,7 @@ test('W-15 目录锁复验：记录 pid == 父 pid（Swift 壳持锁）→ 正�
   if (!nodeAvailable) return
   // 本测试进程即被 spawn 的 sidecar 的父进程 → 预置记录 pid = process.pid，
   // 等价于「Swift 壳先持锁再 spawn」的形态；sidecar 必须视为我方父进程，放行。
-  const harness = spawnWithLockRecord(process.pid, '17921')
+  const harness = spawnWithLockRecord(process.pid)
   await harness.ready
   harness.kill('SIGTERM')
   assert.equal(await harness.exit, 0)
@@ -532,7 +549,7 @@ test('W-15 目录锁复验：记录 pid 为其他存活进程 → loud exit 3', 
   // 同用户的无关存活进程（非本进程、非 sidecar 父进程）→ 判为另一实例占用。
   const squatter = spawn('/bin/sleep', ['30'], { stdio: 'ignore' })
   try {
-    const harness = spawnWithLockRecord(squatter.pid ?? 1, '17922')
+    const harness = spawnWithLockRecord(squatter.pid ?? 1)
     assert.equal(await harness.exit, 3)
     assert.match(harness.stderr(), /目录锁被占用/)
   } finally {
@@ -705,11 +722,20 @@ test('S3·D2 唤醒重探叶：只连 error/degraded 非终态；idle/ready/终�
 
 test('D1c 退出在途：入站帧以 app_quitting 拒绝 + 清理硬顶（早于宿主 SIGKILL grace）强退', async () => {
   if (!nodeAvailable) return
-  // 清理注入挂起 8s（> 硬顶 4.5s = QUIT_CLEANUP_TIMEOUT_MS 5s 留 500ms 余量，
-  // 保证先于宿主 SIGKILL grace）：进程只能由内部硬顶强退，
-  // 绝不可能等到清理完成——这正是「不退到被 SIGKILL」要证明的行为。
-  const stallMs = 8000
-  const harness = spawnInjectable({ DSH_SIDECAR_TEST_STALL_SHUTDOWN_MS: String(stallMs) }, '17924')
+  // 注入：清理挂起 3s、硬顶 1s（生产硬顶 = QUIT_CLEANUP_TIMEOUT_MS 5s - 500ms
+  // 余量）。时序关系与生产一致——硬顶 < 宿主 grace，且硬顶 < 挂起——进程只能由
+  // 内部硬顶强退，绝不可能等到清理完成；把 4.5s 真实等待换成注入值后依旧证明
+  // 「不退到被 SIGKILL」，只是不再让套件为常量本身付 4.5s。
+  const stallMs = 3000
+  const cleanupMs = 1000
+  // 宿主 SIGTERM→SIGKILL grace 的镜像（sidecar-entry 的 QUIT_CLEANUP_TIMEOUT_MS
+  // 注释是单源；此文件不 import shell-core，以免把 electron 拖进 node 测试）。
+  const HOST_KILL_GRACE_MS = 5_000
+  assert.ok(cleanupMs < HOST_KILL_GRACE_MS, '注入值必须保持硬顶 < 宿主 grace 的时序关系')
+  const harness = spawnInjectable({
+    DSH_SIDECAR_TEST_STALL_SHUTDOWN_MS: String(stallMs),
+    DSH_SIDECAR_TEST_QUIT_CLEANUP_MS: String(cleanupMs),
+  })
   await harness.ready
   const startedAt = Date.now()
   harness.kill('SIGTERM')
@@ -727,10 +753,10 @@ test('D1c 退出在途：入站帧以 app_quitting 拒绝 + 清理硬顶（早�
   const elapsed = Date.now() - startedAt
   assert.equal(code, EXIT_GRACEFUL, '硬顶强退沿用信号/EOF 路径的文档化退出码（Supervisor 不得误判崩溃）')
   assert.match(harness.stderr(), /退出清理超时/, '硬顶强退必须 loud（stderr 超时日志）')
-  assert.ok(elapsed >= 4000, `硬顶应在 ~4.5s（QUIT_CLEANUP_TIMEOUT_MS 留 500ms 余量）触发，实际 ${elapsed}ms`)
-  // 硬顶必须早于宿主 5s SIGKILL grace：上界取 5000 而不是 stallMs（更大的上界
+  assert.ok(elapsed >= cleanupMs - 100, `硬顶应在 ~${cleanupMs}ms 触发，实际 ${elapsed}ms`)
+  // 硬顶必须早于宿主 SIGKILL grace：上界用生产 grace 而不是 stallMs（更大的上界
   // 会落入宿主先杀死的区间）。
-  assert.ok(elapsed < 5000, `硬顶必须早于宿主 5s grace（实际 ${elapsed}ms）`)
+  assert.ok(elapsed < HOST_KILL_GRACE_MS, `硬顶必须早于宿主 grace（实际 ${elapsed}ms）`)
   assert.ok(elapsed < stallMs, `不得等清理完成（${stallMs}ms），实际 ${elapsed}ms`)
 })
 
@@ -826,7 +852,7 @@ test('S2·F11 正常退出码面：stdin EOF 与 SIGTERM 同为 EXIT_GRACEFUL=0�
   // 崩溃码 1 出现——Swift Supervisor 的 60s 退避配额只应累计「非零/崩溃」退出。
   // 另一半（SidecarSupervisor 不把 exit 0/3/70 计入 attempts）在 macos/ 源内
   // （SidecarSupervisor.swift:400-402 decide 先于退出码分级）。
-  const harness = spawnWithLockRecord(process.pid, '17926')
+  const harness = spawnWithLockRecord(process.pid)
   await harness.ready
   harness.closeStdin()
   assert.equal(await harness.exit, EXIT_GRACEFUL, 'stdin EOF 必须走文档化优雅退出码 0')
@@ -838,7 +864,7 @@ test('S2·F11 正常退出码面：stdin EOF 与 SIGTERM 同为 EXIT_GRACEFUL=0�
 // ---------------------------------------------------------------------------
 test('P-01 入站帧 >4MiB 被 loud 拒绝且不解析；会话继续服务（镜像 Swift 接收侧）', async () => {
   if (!nodeAvailable) return
-  const harness = spawnInjectable({}, '17931')
+  const harness = spawnInjectable({})
   await harness.ready
   try {
     const oversized = JSON.stringify({
@@ -881,6 +907,18 @@ test('P-01 跨语言锁步：TS 入站帧上限 = Swift BridgeLimits.maxMessageB
   const entry = readFileSync(sidecarPath, 'utf8')
   assert.match(entry, /lineBytes > MAX_INBOUND_FRAME_BYTES/, 'sidecar-entry 入站门必须读同一常量')
   assert.match(entry, /Buffer\.byteLength\(line, 'utf8'\)/, '门必须按 UTF-8 字节数判定（与 Swift line.utf8.count 同口径）')
+})
+
+// 端口隔离锁：固定端口是跨进程共享资源——全局文件池 / 同机多跑 / 共享宿主上，
+// 别人先绑就走 EADDRINUSE，sidecar 在 ready 前 exit 70（已实测复现）。夹具一律
+// --port 0（OS 分配，ready 帧回传真实端口）；本断言把这条纪律钉在缺陷发生处。
+test('锁步：本套件不得给 sidecar 传固定非 0 端口', () => {
+  const source = readFileSync(fileURLToPath(import.meta.url), 'utf8')
+  const offenders = source
+    .split('\n')
+    .map((line, index) => ({ line: index + 1, text: line }))
+    .filter(({ text }) => /--port['"]?\s*,\s*['"]?[1-9]/.test(text))
+  assert.deepEqual(offenders, [], '固定端口会在并发下 EADDRINUSE；改用 --port 0 + ready 帧端口')
 })
 
 test('P-03 桌面 TS 入口必须能被 Node 类型擦除真实解析（node --check 对 ESM .ts 是空操作）', async () => {
