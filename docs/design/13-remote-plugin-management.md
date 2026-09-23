@@ -1,6 +1,6 @@
 # 13 · 远程实例插件管理（远程 dsh plugin 编排）
 
-> **状态：现行（ssh 后端插件编排；范围 = `{kind:'dsh', transport:'ssh'}` 目标，2026-12）**。
+> **状态：现行（ssh 后端插件编排；范围 = `{kind:'dsh', transport:'ssh'}` 目标）**。
 > 本设计是 ssh 后端插件管理既有行为的权威（经桌面主进程 + provider exec 通道驱动远端 `dsh plugin`
 > CLI，并做 chamber 宿主包的 ready-time 分发；此前散落于 05 §7.4/§7.6、03 §2.2 与 STATUS 的契约
 > 实体在此补全）；模型与双后端契约的收敛权威在 design 21 §3，未完成门禁见 docs/progress/STATUS.md。
@@ -13,7 +13,7 @@
 > 而是**单一插件管理模型**——UI、流程、差异语义、状态机、文案与恢复能力全仓只有一份
 > （ssh = 桌面主进程 exec 后端；gateway = 宿主 spawn 后端）。ssh 面按模型统一要求必备：已安装
 > 列表逐行移除（consistent 行缺口修复，经 apply remove）、**受保护集合判定**（design 21 §6.11 /
-> 决策 19 的 2026-12 修订口径：`P = B₀ ∪ S ∪ F`，**装面保守**——远端无 family 事实源，官方
+> 决策 19 的 修订口径：`P = B₀ ∪ S ∪ F`，**装面保守**——远端无 family 事实源，官方
 > scope 一律拒；**卸面按 `B₀ ∪ S` 判**，F 缺失只收紧不放松；两向都在 applyPlugins 整批拒绝
 > 语义内落地）、撤销 journal（SSH_PLUGIN_UNDO：变更前远端 spec 快照 + 操作目标指纹绑定）、
 > SSH_PLUGIN_LIST 掩码投影（redactRemotePluginManifest，design 21 决策 18）。spec/name 白名单族单一来源
@@ -21,7 +21,7 @@
 > `control-plane/src/protected-plugins.ts`（desktop 经 control-plane-module.ts 双路径 facade 与原
 > ssh-provider 再导出消费、gateway 经包导出直引——§7.2 归属，常量不可再在 ssh-provider 内
 > 重声明）。
-> **装/卸不对称是显式政策（2026-12）**：旧口径「ssh 与 gateway 同集」（决策 19 原文）已废止
+> **装/卸不对称是显式政策**：旧口径「ssh 与 gateway 同集」（决策 19 原文）已废止
 > ——**F 无远端来源**时，「允许装一个可能 shadow 远端锚点 release 包」的风险无法用事实界定，
 > 故装面保守；卸面的事实（B₀ 与 S）都是本仓常量/注册表，可离线判定，因此照常放行。放开装面
 > 的前提 = 给 ssh 增加远端 family 读（扩 exec 面），须按 §7.2 的 exec 白名单纪律单独评审。
@@ -128,7 +128,7 @@ host 包塞进普通插件 manifest schema。Git 客户端以每实例 `gitWorkt
   探测、ssh 探测、gateway seed-cache 漂移、gateway 同步包表、远端 seed 清单全部由同一清单派生。
   新增宿主包 = 注册表加一行（页面、探测、同步自动覆盖）；任何写死包名的行集都会让已 seed 的包在页面上
   不可见，并让 `remoteNeedsSeed` 误报「已注入」。
-- **按目标适用性列行（`localOnly`，design 20 §6；2026-12 裁决）**：标 `localOnly` 的注册表行只为
+- **按目标适用性列行（`localOnly`，design 20 §6；裁决）**：标 `localOnly` 的注册表行只为
   本地形态存在；非本地目标（ssh/gateway/http）的行集 = 该目标适用行（不再渲染已退役的「本地形态专用」
   badge）。判据是注册表标志而非观测状态——适用但尚未注入的行必须保留（它是「注入」动作的判据）。
   同一个过滤（`applicableChamberPackages`）同时供给 ssh 的两个目标级门（`sshChamberGates`：
@@ -146,7 +146,7 @@ host 包塞进普通插件 manifest schema。Git 客户端以每实例 `gitWorkt
   清单有/无 × installed/patched/live × seed-cache 漂移/缺项/整盘缺/未读 × 空 expected）。**数据源
   矩阵是契约**：LOCAL 目标的 expected 与本地列都读它自己的 profile 清单（`localList.chamber`），
   gateway/http/ssh 读桌面本机清单投影（ssh 一份来自 `loadSync` 已取的本地清单，gateway/http 一份来自
-  专用的本地清单读取；2026-12 review 前 ssh 的本地列恒为「未知」、探测失败还会清空表格），ssh 在远端
+  专用的本地清单读取；review 前 ssh 的本地列恒为「未知」、探测失败还会清空表格），ssh 在远端
   探测成功时优先远端清单；**空 expected 列表不得声称「seed cache 不存在」**。gateway 的**客户端插件
   行**（移动端入口）由 Loader inventory 中 `classifyChamberClientPlugin` 的分类派生
   （`@dsh-chamber/dsh-client-ui-*` 前缀，不是包名字面量）；inventory 不可用时渲染 unknown 行，绝不

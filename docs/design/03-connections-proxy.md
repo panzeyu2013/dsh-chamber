@@ -1,6 +1,6 @@
 # 03 · 连接模型与每实例通用反代（v1 定稿）
 
-> **状态：现行（连接模型与每实例反代，2026-09 起为连接模型 v2）**——**连接模型**（本地 =
+> **状态：现行（连接模型与每实例反代）**——**连接模型**（本地 =
 > 控制面 catalog 单行；远程 = 桌面主进程注册表）+ **每实例通用反代** `/api/i/<id>/*`
 > （HTTP/WS/SSE 全量透传）；未完成门禁见 `docs/progress/STATUS.md`。**远程连接模型以
 > `17-server-side-gateway.md` 为权威**：kind（dsh|gateway）× transport（ssh|http）× 认证 ×
@@ -246,7 +246,7 @@ WS   /api/i/<id>/api/remote.mux    → 实例 WS  /api/remote.mux
   请求体分片空闲超过 30s → 408 并取消底层请求 iterator，不能用慢速上传长期占用代理槽位。
 - **请求头收敛**：剥离 cookie、authorization、proxy authentication、客户端 `content-length`
   与 hop-by-hop framing；代理完成有界缓冲后，仅按实际接收字节重建 `content-length`。
-  **压缩协商边界（2026-12，修订原「压缩协商不跨代理」）**：请求侧只对两类必须 identity 的请求
+  **压缩协商边界（修订原「压缩协商不跨代理」）**：请求侧只对两类必须 identity 的请求
   剥离 `accept-encoding` —— HTML 文档导航（`proxy-forward.ts` `isHtmlDocumentNavigation`；S0 注入
   前提）与 `Accept: text/event-stream` 的 SSE 请求（`acceptsEventStream`；传输层保险），判定入口
   `requiresIdentityUpstreamEncoding`，取舍见设计 17 §8；其余请求把协商交给上游 gzip 中间件

@@ -13,7 +13,7 @@
 
 ## 2. 构建链产物（改构建脚本后必查）
 
-> 产物移出 git 后（2026-12）：本节与 §3 的产物检查前先 `pnpm run build:artifacts`（缺件时 `pnpm run ensure:artifacts` 会自举并 loud 失败，不静默跳过）；产物不入库，取舍见 design 05 §6。
+> 产物移出 git 后：本节与 §3 的产物检查前先 `pnpm run build:artifacts`（缺件时 `pnpm run ensure:artifacts` 会自举并 loud 失败，不静默跳过）；产物不入库，取舍见 design 05 §6。
 
 - [ ] `build:control-plane`：`tsconfig.control-plane.build.json` 的include覆盖 `index.ts` 传递引用的全部源文件。
 - [ ] `build:preload`：`tsconfig.preload.build.json` 输入与输出一致。
@@ -25,7 +25,7 @@
 
 - [ ] 产物启动冒烟：spawn安装包/应用 → 主窗口出现 → 无 `ERR_MODULE_NOT_FOUND` 等启动期异常 → 退出（信号路径与正常退出都验证资源回收）。
 - [ ] 改 `build.files` 后mac + win双平台抽查asar文件列表vs模块闭包；打包链校验在tag触发的release.yml构建腿执行，改动后先用 `workflow_dispatch` dry_run验证。
-- [ ] asar内含 `node_modules/ws`（控制面编译产物 `dsh-client.ts` 的 `await import('ws')`）。
+- [ ] asar内含 `dist/control-plane/index.js` 且该产物**自包含**（起 `build:control-plane` = tsc --noEmit 类型校验 + esbuild 打包，`ws` 与 workspace 依赖全部内联、无裸说明符；构建脚本用「重打包产物后 metafile inputs 恰为该产物」作自包含断言，原「asar 内需含 `node_modules/ws`」的要求随之作废）。
 - [ ] afterPack的asar断言先归一化路径分隔符再比较（`@electron/asar` 在Windows宿主返回反斜杠条目）。
 - [ ] `build.beforePack` 钩子模块导出默认函数（electron-builder直接调用）。
 - [ ] `@dsh-chamber/dsh-runtime` 经 `before-pack.mjs` 物化进node_modules（`files` 的 `from/to` 对node_modules目标无效，勿回归）；物化是进程内临时态：默认导出必须在物化之前注册退出还原（SIGINT/SIGTERM/SIGHUP全覆盖），使成功、失败与中断的打包都还原pnpm的workspace链接（`before-pack.test.mjs` 用子进程覆盖退出路径）——不还原会让开发树永久丢掉dsh-runtime的类型面（`typecheck` TS7016，`pnpm install --frozen-lockfile` 修不回来）。
@@ -49,7 +49,7 @@ glob即闭包：`packages/desktop/package.json` 的 `build.files` 用包根三�
 1. 新增根级运行模块不得命中下面的9条negate。测试的常规位置是 `packages/desktop/test/<domain>/`（包根三条glob不收取）；例外：9个Swift/POC专属测试（bridge-manifest / bridge-shim / bridge-shim-surface / chamber-lock / chamber-lock-wiring / electron-free-gate / node-edges / sidecar-stdio / update-headless）留在包根——由 `scripts/test.mjs` 清单显式接线、`ci.yml` 的 `test-macos` 桥面锁步步骤按包根路径调用，故 `!*.test.ts` negate载荷相关（勿删）；
 2. `main.ts` / `preload.cts` 的传递import闭包不得指到 `scripts/`、`vendor/` 或未编译的 `node_modules/@dsh-chamber/control-plane/**`（见 §1、§2）。
 
-被收取的根级模块（2026-12 清理：`registry-password-commit.ts` 已删除、`gateway-session-test-hooks.ts` 移入 `test/support/`、`sidecar-stub.ts` 移入 negate 不随包；`credential-identity.ts` / `describe-error.ts` / `lockfile-facts-memo.ts` / `transport-reconnect.ts` / `update-discovery.ts` 为后续批次新增运行模块，计数 51 → 54；`runtime-startup-host.ts`（运行时启动事务宿主抽取）与 `shell-ipc-*.ts`（shell-core 域拆分）为 2026-12 结构批次新增运行模块，计数 54 → 63）：
+被收取的根级模块（清理：`registry-password-commit.ts` 已删除、`gateway-session-test-hooks.ts` 移入 `test/support/`、`sidecar-stub.ts` 移入 negate 不随包；`credential-identity.ts` / `describe-error.ts` / `lockfile-facts-memo.ts` / `transport-reconnect.ts` / `update-discovery.ts` 为后续批次新增运行模块，计数 51 → 54；`runtime-startup-host.ts`（运行时启动事务宿主抽取）与 `shell-ipc-*.ts`（shell-core 域拆分）为 结构批次新增运行模块，计数 54 → 63）：
 
 `main.ts`、`preload.cts`、`control-plane-module.ts`、`ipc-events.ts`、
 `apply-now-gate.ts`、`audit-log.ts`、`badge.ts`、`bounded-lines.ts`、

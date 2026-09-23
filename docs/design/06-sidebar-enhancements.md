@@ -1,6 +1,6 @@
 # 06 · 侧边栏增强（搜索 / 拖拽排序 / 视图持久化 / 运行时事实通道）
 
-> **状态：现行（v1 侧边栏增强契约，2026-12）**——本设计定义 chamber 自研侧边栏的
+> **状态：现行（v1 侧边栏增强契约）**——本设计定义 chamber 自研侧边栏的
 > 搜索、来源内拖拽排序、视图偏好持久化与运行时事实通道（完成/待交互状态点、
 > 跨来源当前会话高亮、运行中子 agent 计数、会话待办区）；
 > 未完成门禁见 docs/progress/STATUS.md。
@@ -55,12 +55,12 @@
   （远程内容命中携带，同会话双命中时补入）；点击 →
   `chamberBridge.requestOpenSession`。
   状态行：loading → `search.pending`；error → `search.unavailable` 横幅
-   （**本地命中仍显示**——内容搜索失败不吞本地元数据命中；2026-09-11 文案补齐
+   （**本地命中仍显示**——内容搜索失败不吞本地元数据命中；文案补齐
    「仅显示名称匹配」）；
   空 → `search.noMatches`；`hasMore` → `search.hasMore`（n=20 取常量）。
   **结果树可访问名**：`role="tree"` + `search.results.aria`
   （浏览树同批补名，§7 a11y）；命中行在标题后与树行同样渲染活动定时任务标记
-  （§4.3，2026-09-11 upstream-alignment T7）。
+  （§4.3 upstream-alignment T7）。
 - **取舍**：聚合拉取失败（`aggregateError`）的来源隐藏搜索入口（标题无法
   解析，与"错误行替换列表"一致）；已挂载来源标题随 store 事件即时更新；
   仅未挂载或 reconnect baseline 不完整的来源可能在 30s 兜底窗口内暂显兜底名。
@@ -146,7 +146,7 @@
   pending。
   **行内形态**：workspace 重命名编辑框**嵌入表头行本身**——标题/orphan 徽标/
   计数/git occupant/悬停动作原位替换为输入框 + 保存/取消，行首折叠钮与图标槽保留
-  （行身份与位置不变，**不**在表头下方追加输入行；编辑期行高放宽（2026-09 batch 1
+  （行身份与位置不变，**不**在表头下方追加输入行；编辑期行高放宽（batch 1
   A11 后输入框为官方行内 14/20 + `padding: 0 2px`，21px 盒：编辑期表头只长 ≈1px，
   不再是此前的 ±6px；进入/退出编辑时下方内容仍是一次性、单向位移）、折叠字形
   hover 切换抑制、悬停卡片禁用）；因此**折叠态 workspace 的 kebab 重命名同样
@@ -200,7 +200,7 @@
   键控）；锚点数学为纯函数 `nextServerOrder`（no-op 返回 null，单测覆盖）；渲染期
   `orderServersForDisplay(servers, stored)` 应用（存储序优先、未知 id 跳过、
   未列出 id 按投影序尾随——新来源出现在列表底部直到被拖走）。rail 来源按钮同序
-  渲染（§7；2026-09-11 起 rail 每来源一个具名可操作按钮，颜色点与活动环几何
+  渲染（§7；起 rail 每来源一个具名可操作按钮，颜色点与活动环几何
   不变）。来源从注册表删除后其 id 由写时裁剪清出（与 orderBy 同规则）。
   **取消即放弃**：dragend 时 `dropEffect === 'none'`（ESC 取消）不提交最后
   marker——§2.2"drop/end 提交最后 marker"在来源级收窄为"仅非取消的结束提交"。
@@ -334,7 +334,7 @@
   `test/session-rows/derive.test.ts`）：App 在 `setCompletedBySource` 的函数式
   updater 里调用，每份上报各自捕获 `prevRunning` 快照——同来源两次上报落在同一
   渲染周期时按序组合，不会互相覆盖丢蓝点。
-- **未读判定与事实携带（2026-12，plan §3.2/§5-3/§5-13、W2）**：`runtimeFacts` 每条上报另带
+- **未读判定与事实携带（plan §3.2/§5-3/§5-13、W2）**：`runtimeFacts` 每条上报另带
   `listComplete?: boolean`（vendor list store `phase === 'ready'`，即本客户端至少成功拉过一次基线——
   蓝点缺席剪枝的唯一门控）与 `stale?: boolean`（断连/主机不可达时仍可附加的只读事实，R14）；
   未读是**纯谓词** `shared/derive.ts deriveUnread(completedAt, lastTurnEnd, readThrough, updatedAt)`：
@@ -360,13 +360,12 @@
     `StateDot state="done"`（10px，success 绿 `--dsw-alias-state-success-primary`
     = `--dsw-static-green-500` `#22C55E`）与**来源头连接绿点同一 token**
     （`sidebar-chamber.module.css` `.statusOk`），同侧栏里"会话完成未读"与
-    "服务器已连接"会同色，故 2026-09 用户裁决**不用官方 done 色**；它与运行中同属
+    "服务器已连接"会同色，故 用户裁决**不用官方 done 色**；它与运行中同属
     品牌蓝（`--dsh-state-ongoing` 同为 `--dsw-static-deepseek-450`），但 6px 实心点
-    与官方 10px 八格追逐环可区分。沿革：≤0.2.4 品牌蓝点 → 0.3.0-beta.1（2026-09-12，
-    upstream-alignment T10）官方 `done` 绿点 → 2026-09 用户裁决**回到品牌蓝点**；
+    与官方 10px 八格追逐环可区分。沿革：≤0.2.4 品牌蓝点 → 0.3.0-beta.1（upstream-alignment T10）官方 `done` 绿点 → 用户裁决**回到品牌蓝点**；
     武装/解除事实与通知边沿逻辑未变。判据按本裁决改钉：蓝点必须存在、
     `StateDot state="done"` 不得回归、运行环仍是官方 ongoing。
-  - **活动定时任务标记（2026-09-11 upstream-alignment T7）**：行标题之后渲染官方
+  - **活动定时任务标记（upstream-alignment T7）**：行标题之后渲染官方
     `ActiveScheduleIndicator` 同形标记（16px 闹钟字形 + `role="img"`，可访问名与
     title 都是本地化 `schedule.active`，行本身仍是唯一动作），事实 = 该会话
     `projectionValues.schedule` 非空（`derive.ts hasActiveScheduleOf`，
@@ -379,7 +378,7 @@
     图标徽标**（会话在等用户，必须一眼可辨，ask-user 是动机场景）：`question` = 问号（business 蓝）、`plan-review` = 清单（business
     蓝）、`approval` = 警示三角（warn 琥珀）。
     tooltip/aria 沿用 `status.waitingAnswer/planReview/waitingApproval`。**定稿
-    （2026-09 用户核查裁决）**：官方对三种 pending 一律渲染
+    （用户核查裁决）**：官方对三种 pending 一律渲染
     `StateDot state="warning"`（10px 琥珀圆点，**形状不区分类别**，只有悬停卡与
     读屏文本区分）；chamber **保留**图标徽标形态，不随上游对齐而改。同批确认：
     ongoing（运行中/子代理进行中）与官方**同组件、同默认 10px**；completed 用
@@ -391,7 +390,7 @@
 - **悬停替换（真正替换，零占位）**：行/头操作静止时 `display:none`（不占布局
   空间），状态图标/徽标因此真正位于行/头末端；悬停时操作簇 `display:inline-flex`
   换入、状态槽 `display:none` 换出（session 行：状态环 ↔ **kebab 菜单**（重命名/
-  分叉/归档——2026-09-11 upstream-alignment T2a：归档动词移入行菜单；归档只隐藏行、
+  分叉/归档——upstream-alignment T2a：归档动词移入行菜单；归档只隐藏行、
   不触碰会话日志）；来源头：连接状态 ↔ 排序菜单 + 搜索 + 添加工作区（官方
   project-add 字形，`IconProjectAddOutline16`）；workspace：会话数徽标 ↔ `+`（新建
   会话）+ kebab（重命名/删除））。胶囊/菜单展开时操作簇保持显示
@@ -472,7 +471,7 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
   武装、subagents 分支优先呈现」同构）。
 - tooltip/aria：`status.subagentsRunning.one/other`
   （官方 copy：`{n} 个子代理运行中` / `{n} subagent(s) running`）。
-- **可呈现性三值（P5，2026-12）**：计数只说明「索引在场时算出了几个运行中的后代」，
+- **可呈现性三值（P5）**：计数只说明「索引在场时算出了几个运行中的后代」，
   不是「正在干活」的证据。父行改带 `subagentActivity: none | running | unknown`：
   索引缺席或来源 stale（R14）时读数是 `unknown`，中性呈现——不点亮子代理圆环/播报，
   也不据此压制 completed/running 读数与待办条目；`runningSubagents` 保持稀疏计数供诊断。
@@ -515,7 +514,7 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
   （活动视图发布，`useLayoutEffect` 保证绘制前生效）、`shared/aggregate-store.ts`
   （活动来源事实 + 单测）、`packages/renderer/src/styles.css`（兜底值，
   源码级钉子 `packages/renderer/test/frame-chrome/theme-fallback.test.ts`）。
-- **页面语言（`<html lang>`）归属（2026-12 修复）**：官方 locale 服务的
+- **页面语言（`<html lang>`）归属（修复）**：官方 locale 服务的
   `syncDocumentLanguage` 在**每个实例壳**的 ctx 里无条件写
   `document.documentElement.lang`——激活时一次、之后**每次字典注册**再写一次
   （`@deepseek-ai/dsh-client-locale` 的 `apply()` → `sync()`），无 teardown、
@@ -539,13 +538,13 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
     归属器回写"落在同一同步任务、中间不可能绘制；首屏 `register` 与 `registerDeferred`
     **两条挂载路径**都过装饰器）＋ `main.tsx` 在任何壳 boot 前安装 owner（served
     markup 的 `lang` 即冷启动值）＋ `App.tsx` 在发布活动来源的同一
-    `useLayoutEffect` 里发布给它。三处 2026-12 review 加固：① owner 在**页级
+    `useLayoutEffect` 里发布给它。三处 review 加固：① owner 在**页级
     全局槽**（`globalThis` 上的 `__dshChamberPageLanguageOwner__`）——frame 与
     composite 入口是两个 chunk，重估（HMR）或未来拆构建不得产生第二个
     owner/观察者；② 事实带**挂载世代**（`mountGeneration`），退出的旧挂载不能
     抹掉同 id 新挂载的事实；③ 绑到的 settings scope 与 LocaleFace 一样做**形状
     检查**，坏形状 fail-open 而不是把异常抛进 vendor fiber。
-  - **失败开放（2026-12 review 措辞修正）**：无 `chamberInstanceId`（官方单壳
+  - **失败开放（review 措辞修正）**：无 `chamberInstanceId`（官方单壳
     形态）/读不到 LocaleFace/绑不到 settings scope 时该壳**不参与归属**，其语言
     永不被采纳（页面停在当前语言，直到出现可归属来源），但页级归属器仍把它的写入
     回写为当前页面语言（不会闪）；"vendor 行为完全不变"只对**根本不装归属器**的
@@ -588,7 +587,7 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
   收窄）**——vendor `ui-primitives/Modal`（含 backdrop）与 chamber 的
   SettingsShell 都 portal 到 `document.body`，而 `.instance-hidden` 只隐藏视图
   子树：视图 A 里打开的模态在程序化切换（深链/通知/注册表回落）后仍盖在 B 上；
-  **唯一已收窄的是 open-in 的 chevron 菜单**（2026-09-11 upstream-alignment，
+  **唯一已收窄的是 open-in 的 chevron 菜单**（upstream-alignment，
   design 20 §5）：菜单本体是官方 `ui-primitives` `Menu`（portal 到 body），但
   N-ctx 归属守卫 `instance-view-guard.ts` 在菜单所属 `.instance-view` 失活
   （`instance-hidden`/`instance-pending`/`hidden`/`aria-hidden`/断开）时立刻
@@ -629,18 +628,18 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
   搜索 sanitize、`todo-attention` 派生、`todo-prefs` 水合
   （`test/session-rows/derive.test.ts`、`test/session-state/view-prefs.test.ts`、`test/session-rows/todo-attention.test.ts`、
   `test/session-state/todo-prefs.test.ts`，node:test 风格）。
-- **上游对齐判据（2026-09-11 upstream-alignment；review-fix 扩充）**：以下对齐面仍是契约（判据见该包测试）——归档
+- **上游对齐判据（upstream-alignment；review-fix 扩充）**：以下对齐面仍是契约（判据见该包测试）——归档
   动词只在行菜单、全包无原生 confirm、workspace 删除是官方 `Modal` chrome（含对话框内
   `role="alert"` 失败行与「仅成功才关闭」）、**同一时刻至多一层 chamber Modal**（见下）、
   completed 走 chamber
-  品牌蓝点（2026-09 裁决，官方 `done` 绿点因与来源头连接点同 token 被否）、
+  品牌蓝点（裁决，官方 `done` 绿点因与来源头连接点同 token 被否）、
   行窗口是双向 disclosure、行菜单 `closeOnPointerLeave` 且 `compact`
-  （`compact` 一项在 2026-09 阶段 2 由"非 compact"改回，见 §7 菜单密度裁决）、
+  （`compact` 一项在 阶段 2 由"非 compact"改回，见 §7 菜单密度裁决）、
   `{name}` 参数化可访问名、活动定时任务标记的位置、`data-git-action`
   属性钩子（`:disabled` 在方括号之外）；行为面单测在函数旁边
   （`test/session-rows/session-row-window.test.ts` 的 disclosure 窗口、`test/plugin-kernel/panel-source.test.ts`
   的 `createSnapshotStore` 投影与通知纪律）。
-- **同一时刻至多一层 chamber Modal（2026-09-11 review-fix finding 2，对称门）**：
+- **同一时刻至多一层 chamber Modal（review-fix finding 2，对称门）**：
   官方 `Modal` **没有焦点陷阱**（vendor
   `ui-primitives/src/Modal.tsx`：一层 body portal 遮罩 + 每个打开实例各自一个
   document 级 **BUBBLE** Escape 监听），而「孤儿徽标」是常驻、可 Tab 到的按钮
@@ -685,21 +684,21 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
   `.sessionRow.selected` 的浅 `interactive-bg-hover` 色调（无 inset 阴影、无
   深色调、无标题加粗）；所在 workspace 组 = 无底色、图标色恒定（来源 accent
   不参与 workspace 级高亮），两组高亮永不相邻融合，色调全为官方 token 浅档。
-- **打开意图在途 ⇒ 不投影"非请求中"的 current（2026-12 修订，05 §2.2.1）**：来源
+- **打开意图在途 ⇒ 不投影"非请求中"的 current（修订，05 §2.2.1）**：来源
   还有在途 `openSession` 且其投影 `current` **不是**请求会话时，不投影
   `runtimeFacts.current`（`projectableCurrent` 纯函数）——"切到远程会话先闪一行
   高亮新会话"的侧栏半边（冷 boot 期间官方初始导航先选中 blank 会话，
   `(!blank || current)` 随即渲染出高亮 New Session 行，下一次分发（最多 400ms）又
   消失）。**幂等重开保持高亮**（current 已是目标会话 ⇒ 投影本就正确，摘掉再装回只是
   闪烁）；离开的活动来源的 blank 行仍由 ghost 槽（§2.2）保护列表位移。
-- **回声工作区行（2026-12 修订，05 §2.2.1）**：新建工作区后侧栏立刻渲染一行
+- **回声工作区行（修订，05 §2.2.1）**：新建工作区后侧栏立刻渲染一行
   "回声"工作区（真实宿主 id、`sessionIds: []`、标题 = 路径 basename，同合成组
   规则）；它**不带 `synthetic`**，重命名/删除/新建会话等 workspace 级动作照常
   可用；与同路径合成组相遇时**原位替换**后者（绝不重复渲染同一目录）；来源挂载壳
   的权威 push 列出该 id（或同路径真实行）后由权威行接管。
 - **排版**：字号下限 12px；会话标题 13/18——官方行 14px，13/18 是 chamber
-  多来源密度的刻意折中。**墨色 = v0.2.4 的静止/hover 两级**（2026-09 batch 1 A1 曾
-  照官方改成"常驻 `label-primary` 且无 hover 覆盖"；**2026-09-14 按用户指令恢复
+  多来源密度的刻意折中。**墨色 = v0.2.4 的静止/hover 两级**（batch 1 A1 曾
+  照官方改成"常驻 `label-primary` 且无 hover 覆盖"；**按用户指令恢复
   v0.2.4**）：**会话行标题**静止 `label-secondary`、行 hover 转 `label-primary`
   （`.sessionRow:hover .sessionTitle`），**搜索结果标题**同规则
   （`.searchResultRow:hover .searchResultTitle`），**待办条带**同语言（`.todoRow`
@@ -719,14 +718,14 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
   状态开始）。
 - **行内操作（图标化 + 悬停替换）**：workspace 组头 = `+`（新建会话）+
   官方 16px 横排三点 kebab 菜单（重命名/删除，`Menu` primitive portal 模式；
-  **2026-09 batch 1 A8 修订**：此前把横排省略号旋转 90° 成竖排 14px，现按官方
+  **batch 1 A8 修订**：此前把横排省略号旋转 90° 成竖排 14px，现按官方
   原样 16px 横排，`.actionIcon` 20×20 命中盒不变；`+` 同期由 14px 提到官方
-  16px）。**2026-09-13 修订（用户报告）**：动作簇间距不再取官方
+  16px）。**修订（用户报告）**：动作簇间距不再取官方
   `Rows .rowActions` 的 12px（该 12px 只描述无 git occupant 的两项簇；含 occupant
   揭示态动作 `.headerGit`（同一行兄弟 flex 子项，08 §3.2）的三项簇会被切成 4px +
   12px）。簇统一走头部/本表图标节奏 **4px**（`.rowActions` 与 workspace 头部自身
-  的 4px；`.headerGit`/`.sourceActions` 不在此列：其 4px 出自 2026-09 命中盒
-  pass，已于 2026-09-14 随该 pass 回退到 v0.2.4 的 2px，见下方命中区条；session
+  的 4px；`.headerGit`/`.sourceActions` 不在此列：其 4px 出自 命中盒
+  pass，随该 pass 回退到 v0.2.4 的 2px，见下方命中区条；session
   行簇只有单个 kebab），悬停替换会话数徽标；session 行 =
   **三点 kebab 菜单三项（重命名/分叉/归档，归档无独立图标按钮）**（悬停替换
   行尾状态槽；**session 不显示相对时间**）；**添加工作区** = 来源头部按钮
@@ -738,8 +737,8 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
   `side="bottom" delayMs={500}`），行与状态槽仍用原生 title）。替换为真正 display
   交换（静止不占位，状态图标真正居行/头末尾）；kebab 展开期间该行操作保持可见
   （`.rowActionsVisible`）；行内图标按钮全量 reset（`appearance:none`/
-  `outline:none`/grid 居中，focus-visible 用 brand 自绘环）。**菜单密度 = chamber 档（2026-09 阶段 2
-  裁决，取代 2026-09-11 T12 的"照上游"口径）**：三个菜单（session kebab /
+  `outline:none`/grid 居中，focus-visible 用 brand 自绘环）。**菜单密度 = chamber 档（阶段 2
+  裁决，取代 T12 的"照上游"口径）**：三个菜单（session kebab /
   workspace kebab / 排序）一律用原语 `compact`——item 26px / 12px（= 列表行高），
   容器 r7/padding 2px/min-width 164、item r5；`closeOnPointerLeave` 保留。理由：
   T12 的官方默认（40px/14px，相对官方 32px 行高）与 `dense`（34px）对 26px 的行
@@ -756,7 +755,7 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
   自家 markup：`padding:7px 10px`、`font-size:13px`（v0.2.4 原值）、显式行框 18px
   （chamber 13/18 惯用），圆角/背景 = 官方（item r10、列表 r20 + `bg-layer-3` +
   elevation）。
-- **图标钮命中区 = 视觉盒（2026-09-14 起；回退 2026-09 命中盒 pass `33238ffe`）**：本页
+- **图标钮命中区 = 视觉盒（起；回退 命中盒 pass `33238ffe`）**：本页
   小于 24px 的六个图标钮（`.actionIcon` 20 / `.searchButton` 20 / `.searchClear` 18 /
   `.foldToggle`、`.sourceFoldToggle`、`.railDotButton` 16）连同该 pass 顺带加宽的
   `.sourceActions` 2→4px gap 一起回到 v0.2.4 几何：**命中区就是视觉盒，不再有不可见
@@ -769,14 +768,14 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
   的 ≈3px 带"仍在，根治需要不依赖 React 合成的投递通道（**未实现**，见 §7 悬停移植条
   与 `src/shared/hover-intent.ts`）。代价（已登记）：24px 目标尺寸重新成为本模块偏差
   （design 24 §13 第 17 条、design 08 §3.4）。**簇间距**：`.rowActions` 4px
-  （2026-09-13 用户报告修订）与 footer 4px 保留；`.sourceActions` 与 git 的
+  （用户报告修订）与 footer 4px 保留；`.sourceActions` 与 git 的
   `.headerGit` 回到 v0.2.4 的 2px（其 4px 只出自该 pass，`46b522c9` 没碰它们）。
   **rail**：只回退该 pass 加宽的 `gap`（16→12px），点按钮化
-  （2026-09-11 T7）自带的 `margin: -4px 0` 保留 ⇒ 20px 点距 / 12px 可见间隙 = v0.2.4 节奏；**不要只删
+  （T7）自带的 `margin: -4px 0` 保留 ⇒ 20px 点距 / 12px 可见间隙 = v0.2.4 节奏；**不要只删
   margin 而不改 gap**（点距会松成 28px/20px 间隙）。该几何有测试钉住（含「scoped
   重加 rim 也红」的选择器扫描）。**不要再加回 rim**：加之前必须重测按钮命中盒与
   行/头部边缘之间的纯行带。
-- **会话行窗口与展开条（2026-09-11 upstream-alignment T11；2026-09 batch 1 A10
+- **会话行窗口与展开条（upstream-alignment T11；batch 1 A10
   补几何）**：每个 workspace 只展开前 N 行（`sessionRowWindow`），其余由展开条
   揭示。展开条用官方 `sessionOverflowButton` 几何：28px 高 / r8 /
   `0 12px 0 26px`（左内距取 chamber 会话标题列 26px，官方 28px）/ 12px 字 /
@@ -791,11 +790,11 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
   重命名进行中（`menuOpen`/`sessionDrag`/`workspaceDrag`/`serverDrag`/
   `renamingThisWorkspace` 任一成立即禁用——编辑期卡片不盖住行内输入框；该枚举只
   描述 workspace 头卡片）。
-  - **实现归属（2026-09-13 修订）**：卡片由本包 `client/RowHoverCard.tsx` 渲染，
+  - **实现归属**：卡片由本包 `client/RowHoverCard.tsx` 渲染，
     不再直接用 vendor `ui-primitives HoverCard`；**开合状态机**在
     `shared/hover-intent.ts`。原因：vendor 版
     （`ui-primitives/HoverCard.tsx:183-188`：`onPointerLeave` = `clearTimer()` +
-    `if (open) armClose()`，arm 宽限由**上一次已提交的 `open`** 决定）在 dwell
+    `if  armClose()`，arm 宽限由**上一次已提交的 `open`** 决定）在 dwell
     到 React 提交之间落下的 pointerleave 什么都不 arm，卡片挂载后指针已离开，只能
     靠「再悬停该行并移开」清除（本仓每实例一个大 React root：侧栏 poll/`now` 轮询 +
     N-ctx 多壳共用调度器）。本包机器以**同步指针在场标志**为准（dwell 触发时复查、
@@ -805,10 +804,10 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
     `scripts/upstream/verify-upstream-touchpoints.mjs` C15（断言竞态**两侧**形状
     仍在：CLOSE 侧 `onPointerLeave` 的 arm 仍由已提交 `open` 守卫，OPEN 侧 dwell
     回调仍不复查指针在场——只锁 CLOSE 侧会漏掉「上游在 `setOpen(true)` 前加 inside
-    复查」这一最小修复，2026-09-13 review A1；外加时间常数逐值锁步），登记行见
+    复查」这一最小修复 review A1；外加时间常数逐值锁步），登记行见
     `docs/checklists/upstream-touchpoints.md` §4、偏差本体与剩余实机验收见
     `docs/progress/STATUS.md`。
-  - **相对官方原子的有意增量（2026-09-13）**：卡片盒（244 宽 / r12 / pad 12-16 /
+  - **相对官方原子的有意增量**：卡片盒（244 宽 / r12 / pad 12-16 /
     `--dsw-shadow-lv3` / `#2C2C2E`）、8px 右偏移、200ms 宽限、按下即收与
     「点卡片复制」契约与官方等价；差异：①**同一文档只允许一张行卡片可见**（页面级
     slot，跨 N-ctx 壳共享，后开者关先开者；也是「leave 根本没送达」的自愈路径）；
@@ -832,20 +831,20 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
     `client/RowHoverCard.tsx:205` 与 `:220-240`）；会话行卡复制**标题**（上游
     `Rows.tsx:508` 复制 `row.title`）；⑦会话卡状态行 **0–1 行**，上游
     **1–2 行且至少一行**（上游 `sessionStatuses` 兜底常驻 `status.idle` 行，
-    `Rows.tsx:268`；本包只在有状态时渲染，`client/ServerSection.tsx:2096-2103`；
+    `Rows.tsx:268`；本包只在有状态时渲染，`client/ServerSection.tsx:03`；
     状态优先级见 §4.3）。
   - **同形状但不搁浅的先例（勿误记为竞态）**：vendor `Menu` 的 pointerleave 同形
-    （`ui-primitives/Menu.tsx:319`：`closeOnPointerLeave ? () => { if (open) armClose() } : undefined`），
+    （`ui-primitives/Menu.tsx:319`：`closeOnPointerLeave ? () => { if  armClose() } : undefined`），
     本包两处 kebab 菜单也显式 opt-in（`client/ServerSection.tsx:1645`、`:1985`）；
     但菜单是**点击即同步提交**的受控 `open`（无 dwell 定时器，`Menu.tsx` 内无
     开门 `setTimeout`），且另有外部 pointerdown / Escape / 窗口 blur 三条关闭路径
-    （`Menu.tsx:170-211`，`:175`/`:183`/`:200`），同一个 `if (open)` 不会搁浅。
+    （`Menu.tsx:170-211`，`:175`/`:183`/`:200`），同一个 `if ` 不会搁浅。
 - **a11y**：来源分组 `role="group"`、列表 `role="tree"`（**浏览树带可访问名
-  `section.sessions`**，与搜索结果树 `search.results.aria` 成对，2026-09-11
+  `section.sessions`**，与搜索结果树 `search.results.aria` 成对
   upstream-alignment T7）、workspace 头 `role="treeitem"` + `aria-expanded`、
   会话行 `role="treeitem"` + `aria-selected`、搜索结果行 `button` +
   `role="treeitem"`；来源头（非当前来源）`role="button"` 可键盘激活（Enter/Space
-  切换视图）。**行级动作的可访问名带行名（2026-09-11 upstream-alignment T5）**：
+  切换视图）。**行级动作的可访问名带行名（upstream-alignment T5）**：
   新建会话 `action.newSession.aria`、workspace kebab `action.menu.workspace`、
   会话 kebab `action.menu.session` 都以 `{name}` 参数带上行标题（上游
   `actions.newSession.aria`/`actions.workspace.aria`/`actions.session.aria`）——
@@ -862,7 +861,7 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
   + `.sessionGhost`）——双击窗口内列表绝不位移。
 - **会话状态指示**：固定 10px 行尾状态槽——常态空、
   运行中 = 官方 `StateDot` ongoing 蓝圆环、运行结束未读 = **chamber 品牌蓝点**
-   `.stateCompleted`（6px 实心；2026-09 用户裁决回到蓝点，官方 `done` 绿点因
+   `.stateCompleted`（6px 实心；用户裁决回到蓝点，官方 `done` 绿点因
    与来源头连接绿点同 token 被否——沿革与理由见 §4.3）；
   **待交互（pending）= 14px 图标徽标**（问号/清单/警示三角）——几何与配色
   契约见 §4.3，本节只定稿 token：运行 = `--dsw-static-deepseek-450`、
@@ -887,14 +886,14 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
 
 ---
 
-- **入场动画退役（2026-12，可见性不变式）**：侧栏的 `wide-in`/`rail-in`/`rail-fade-in`
+- **入场动画退役（可见性不变式）**：侧栏的 `wide-in`/`rail-in`/`rail-fade-in`
   整组删除（`SidebarRoot.module.css`）。它们都以 `opacity: 0` 为首帧，而 CSS 时间线只在
   子树被渲染时推进：隐藏实例壳（`content-visibility: hidden`）或窗口被遮挡时字标与设置
   座席会停在首帧——不可见、仍可命中、除重挂载外不自愈（WKWebView 实测见 STATUS）。
   必要内容不再参与入场动画；折叠的位移/裁剪仍由 AppFrame 轨道过渡承担，`.fading` 保留
   （类驱动 + settle 定时器界定）。回归锁：`test/visual-lock/`（该包）+ 渲染器隐藏壳门
   （design 05 §4）。设置壳按来源重放的 `contentFadeIn` 同批退役。
-   2026-09-20 更正：退役后同一「切源后座席/字标空白」症状仍复现，本段只覆盖**入场动画特有**的失绘风险；当前根因（文档级重复 SVG 资源 id × 隐藏壳的 WebKit 丢绘）与修复契约见 design 05 §4.2。
+   更正：退役后同一「切源后座席/字标空白」症状仍复现，本段只覆盖**入场动画特有**的失绘风险；当前根因（文档级重复 SVG 资源 id × 隐藏壳的 WebKit 丢绘）与修复契约见 design 05 §4.2。
 
 ## 8. 会话待办区（sidebar todo area）
 
@@ -972,26 +971,26 @@ onRequest`），**默认全开**——被动呈现（空时零占用），区别
 **行列定格**（状态槽一律在行尾，与普通会话行同列；左右缩进与会话行对齐；
 代码注释与本节同步）：
 
-- **条带边界（2026-09 阶段 2，B-1）**：`.todoArea` 取**下边一条**
+- **条带边界（阶段 2，B-1）**：`.todoArea` 取**下边一条**
   `0.5px solid var(--dsw-alias-border-l2)`——与下方滚动列表分界，不引入第二套边框
   语言（官方 TodoPanel 是 `.5px l1` 描边 + `--dsw-specific-tip` 底 + r12 整卡，
-  我们只取"分隔"这一半）。**只保留下边线**（2026-09 审计裁决）：条带上方 8px 处是
+  我们只取"分隔"这一半）。**只保留下边线**（审计裁决）：条带上方 8px 处是
   自带圆角描边的 New Session 卡，上边线没有可分隔的邻居且会随条带 mount/unmount
   忽隐忽现。
-- **行几何（2026-09 batch 1 C2）**：行高 26px + 2px 间距（间距由 `.todoRows` 的
+- **行几何（batch 1 C2）**：行高 26px + 2px 间距（间距由 `.todoRows` 的
   flex gap 提供，行自身 `margin: 0`；「还有 N 项」是该容器之外的兄弟节点，用自身
   2px 外边距接同一节奏）、计数 pill 12px——与会话行同节距、同 12px 字号下限
   （§7 排版条）。
 - **行序** = 行首来源点（多来源才渲染点；空槽恒占位，标题列不跳动，与来源头字形列
   同列）→ 标题 → **行尾状态槽**：直接复用会话行的 `.sessionStateSlot` /
   `.sessionStateSlotPending`（10/14px 槽）与标记类——`StateDot state="ongoing"`
-  （运行中/子代理）、`.stateCompleted`（完成未读品牌蓝点；2026-09 用户裁决恢复，
+  （运行中/子代理）、`.stateCompleted`（完成未读品牌蓝点；用户裁决恢复，
   官方 `done` 绿点因与来源头连接点同 token 被否，见 §4.3）与 `.statePending*`
   标记，蓝点/徽章与会话行行尾**同列同像素带**（两行容器共享同一右缘与 8px 滚动条
   槽位；展开溢出时 `.todoRows` 的 −8/+8 外扩把滚动条带保持在内容右侧，不压尾槽）。
 - **文字列** = 40px（来源标签列）：表头标题、「还有 N 项」与行标题同列；表头计数
   pill 右缘与行尾状态槽/工作区计数同列。
-- **墨色** = 会话行纪律（v0.2.4 两级，2026-09-14 恢复）：`.todoRow` 自带
+- **墨色** = 会话行纪律（v0.2.4 两级 恢复）：`.todoRow` 自带
   `label-secondary`、hover 转 `label-primary`；`.todoRowTitle` 不自带墨色（v0.2.4
   亦然），随行两级；条带头部标题 `.todoTitle` 与计数 pill 在 `.todoHeader`
   （行外，`SessionTodoArea.tsx:118-119`），两级同为 `label-secondary`。hover 另画

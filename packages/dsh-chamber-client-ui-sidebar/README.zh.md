@@ -18,7 +18,7 @@ chamber 自研侧边栏插件（设计 05 §2）：拷贝官方 ui-sidebar 外�
   槽位台账镜像为 `{id, order, label}` 元数据（label thunk 读取时解析、仅在
   变化时通知），外壳为每条渲染一行 `PanelRow`，点击调用
   `ctx.layout.selectPanel(id)`。上游出厂为空列表，故该区默认不可见；投影与
-  投影由 `test/plugin-kernel/panel-source.test.ts` 钉死（配套的 source-text 接线锁已按 2026-12 裁决退役）。
+  投影由 `test/plugin-kernel/panel-source.test.ts` 钉死（配套的 source-text 接线锁已按 裁决退役）。
 
 ## 结构
 
@@ -54,16 +54,16 @@ chamber 自研侧边栏插件（设计 05 §2）：拷贝官方 ui-sidebar 外�
 - 来源组同样可**折叠**（2026-09，设计 06 §2.4）：每个来源分组头左侧槽位为
   **MONITOR 电脑字形**（自绘 `client/icons.tsx` `IconMonitorOutline16`——
   primitives 无服务器字形，原 folder 字形与 workspace 文件夹图标重合易
-  误解：folder = workspace、monitor = server，2026-10 用户反馈）、hover 换
+  误解：folder = workspace、monitor = server 用户反馈）、hover 换
   折叠 chevron——点击收拢该来源**整个 workspace 列表**
   （搜索胶囊、来源级 git 告警与列表一并隐藏），**不动各 workspace 自身的
   对话折叠态**（`sourceFolded` 独立于 `folded`），展开后各 workspace 及其
-  会话原样恢复。**2026-10 用户反馈**：来源头身份圆点已移除（身份由折叠
+  会话原样恢复。**用户反馈**：来源头身份圆点已移除（身份由折叠
   字形 accent + 激活左内边线 + rail 点承担；连接状态点/转圈保留右端）。
 - 每个 workspace 组头图标（文件夹，或派生 worktree 的 git-branch 字形）带
   各自的**确定性 accent 色**（`shared/derive.ts` 的 `workspaceAccentStyle`）：
   `(来源 id, 家族种子)` 哈希的黄金角色相散布 + 每 workspace 明度抖动
-  （56/61/66%）的**柔和色板**（饱和度 34%，worktree 21%；2026-10 用户
+  （56/61/66%）的**柔和色板**（饱和度 34%，worktree 21%；用户
   反馈由原 62%/45% + 44–54% 明度柔化，来源 accent 同步为
   `hsl(hue 34% 61%)`）；无用户自定义、无持久化、与选中态无关（当前会话行
   保留其官方选中 tint）。worktree 与所属仓库的**主检出共享家族色相**（种子 =
@@ -128,7 +128,7 @@ chamber 自研侧边栏插件（设计 05 §2）：拷贝官方 ui-sidebar 外�
   来源头自己的拒绝理由），取代此前只有 `title` 的惰性色点——因此 rail 上也能
   切换来源；彩色点与活动 accent 环一字未改（含几何）。
 
-## 打开意图闸门、工作区回声与会话回声（design 05 §2.2.1，2026-12）
+## 打开意图闸门、工作区回声与会话回声（design 05 §2.2.1）
 
 本包持有页面级打开意图槽（`shared/open-intent.ts`——与 `pending-click.ts` 同款
 vite shared 单例纪律，因为目标实例自己的 ctx 也要读它）及其供 App 层消费的纯
@@ -238,16 +238,16 @@ vite shared 单例纪律，因为目标实例自己的 ctx 也要读它）及其
 
 ## 共享 gateway-runtime 面（design 21 §5.2）
 
-- `src/shared/gateway-runtime.ts` + `src/shared/gateway-runtime-poll.ts` 承载
-  gateway dsh-runtime 纯核心（status parse/fetch、动作门、错误分类、重启就绪
-  轮询 `pollGatewayReady`：1s/120s、abort 感知），经
-  `@dsh-chamber/dsh-chamber-client-ui-sidebar/shared` 导出（`./shared` →
-  `./src/shared/index.ts`，免构建；vite 消费者打真实源码单实例）。
-- 消费包（settings-bridge/connections/git/layout/renderer）对**真实 shared 源码**
-  做 typecheck：P4-4（2026-09）删除手写 ambient 镜像（`src/ambient/*.d.ts`），
-  各包 tsconfig 现把 specifier 解析到本包源码（继承 root tsconfig paths；保留
-  自身 paths 的包经 node_modules workspace 链接 + package exports）。原镜像
-  锁步测试（`test/gateway-runtime-mirror.test.ts`）随镜像一并删除——消费方直接
-  编译本源码后漂移在构造上不可能。
+- gateway dsh-runtime 纯核心（status parse/fetch、动作门、错误分类、重启就绪
+  轮询 `pollGatewayReady`：1s/120s、abort 感知）现驻 client-core：
+ `packages/dsh-chamber-client-core/src/gateway-runtime.ts` +
+ `gateway-runtime-poll.ts`，经
+  `@dsh-chamber/dsh-chamber-client-core` 的 `.`
+ 面到达（免构建；vite 消费者打真实源码）。R4 P3 已将其迁出本包并删除
+ `src/shared/`。
+- 消费包（settings-bridge/connections/git/layout/renderer）经 node_modules
+ workspace 链接 + client-core package exports 对**真实 client-core 源码**
+  做 typecheck：P4-4（2026-09）删除手写 ambient 镜像（`src/ambient/*.d.ts`）——消费方直接
+  编译这一份源码后漂移在构造上不可能。
 - settings-bridge 的 `remoteRuntimeStatusView` 视图映射与其 SettingsBridgeKey
   耦合留在 settings-bridge；本面不 import settings-bridge。

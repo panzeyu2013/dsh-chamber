@@ -623,7 +623,7 @@ structure-shaped and verified in the rc.2 tree:
   (the page degrades to the official narrow layout instead).
 
 **The session-stall notice's anchors (2026-09-14; value space re-audited
-2026-12)**, likewise attribute-only:
+)**, likewise attribute-only:
 
 - `[data-chat-flow]` — the `ui-chat` message column; absent means no chat
   surface is on screen, so nothing else is read;
@@ -639,7 +639,7 @@ structure-shaped and verified in the rc.2 tree:
   a session-scoped slot the renderer remounts per session, unlike the keyed
   root-scope `[data-phase]` node.
 
-**The theme observer's anchor (2026-12)**: `data-ds-dark-theme` — observed through
+**The theme observer's anchor ()**: `data-ds-dark-theme` — observed through
 `MutationObserver.observe(document.body, { attributeFilter: ['data-ds-dark-theme', …] })`
 in `index.ts`. Upstream's only WRITE at the pin is
 `document.body.toggleAttribute('data-ds-dark-theme', dark)` (`dsh-client-ui-theme`'s

@@ -1,6 +1,6 @@
 # 18 · dsh 运行时版本管理（运行期从 npm 拉取安装）
 
-> **状态：现行（dsh 运行时版本管理；macOS/Linux 为安装/切换/回退/恢复的 mutation 契约目标，Windows 只读，2026-12）**——本文是该管理的权威行为契约：运行期从 npm 做 source-bound 安装、不可变版本树 + 原子指针切换、探针门控激活与自动回退、DSH_HOME 快照与幂等恢复、per-server 设置段与 gateway `/chamber/runtime` 管理面；未完成门禁见 `docs/progress/STATUS.md`（design 18 条目）。
+> **状态：现行（dsh 运行时版本管理；macOS/Linux 为安装/切换/回退/恢复的 mutation 契约目标，Windows 只读）**——本文是该管理的权威行为契约：运行期从 npm 做 source-bound 安装、不可变版本树 + 原子指针切换、探针门控激活与自动回退、DSH_HOME 快照与幂等恢复、per-server 设置段与 gateway `/chamber/runtime` 管理面；未完成门禁见 `docs/progress/STATUS.md`（design 18 条目）。
 
 ## 1. 需求与动机
 
@@ -346,7 +346,7 @@ chamber-settings.json，非秘密）：
    gateway = `POST /chamber/runtime/restart`（202 + status 轮询，§9.3）。远端重启窗口内
    隧道 phase 保持 `ready`（隧道未断）、实例反代对目标连接拒绝返回显式 503（诚实失败，
    03 §3），会话/侧边栏短时错误属预期。
-   **窗口随动作重载一次（2026-12 修订）**：宿主侧插件行每次 boot 重新确定（上），但
+   **窗口随动作重载一次**：宿主侧插件行每次 boot 重新确定（上），但
    **页面侧 client 插件集在窗口 boot 时固定**（宿主图每 boot 取一次、`dsh.client`
    bundle 那时执行；模块表按 id first-load-wins，design 09 §3.2/§3.5），新装或重打包
    的客户端半身只有窗口重 boot 才出现；因此**插件刷新语义的重启动作** = 就绪探测通过
@@ -381,7 +381,7 @@ chamber-settings.json，非秘密）：
   id `RUNTIME_SECTION_ID = 'dsh-runtime'`、order 31；connections 为壳的固定 nav
   入口、在分隔线之下，不占 ledger order——视觉顺序即 agent-presets → dsh-runtime）。**不出现在
   `__general`（通用）视图**——`GeneralView` 只保留设计 15 的控制组（启动与关闭 /
-  运行 / 更新）。桥接面（design 05 §5，2026-12 修订）：该段由本包在**该来源自己的 boot
+  运行 / 更新）。桥接面（design 05 §5 修订）：该段由本包在**该来源自己的 boot
   ctx** 上注册（`settings-bridge` 的 `apply`，随 `chamberBridge` roster 投影
   reconcile），与官方 `settings.section`、该来源第三方分节同处一份台账——视觉位置
   不变，邻居可能含第三方分节（同形、无来源标记；见 design 05 §5）。投影不可识别时
@@ -428,14 +428,14 @@ chamber-settings.json，非秘密）：
 - 字段行 `.generalRow` + `.runtimeField`：列向 gap 6px，label `.generalFieldLabel`
   14px / 500；下拉 `.runtimeField`（radius 8px / bg layer-1 / 12px，focus 时 border
   brand）。**下拉文本字号不强统一**：服务器下拉**触发器** 13px/600 为导航强调
-  （菜单行 = chamber 密度：2026-09 batch 1 的 E4 对齐官方 dense item 14px/22px +
-  min-height 34px，2026-09 阶段 2 的 A-4 按其同批裁决改回 v0.2.4 `padding:7px 10px`
+  （菜单行 = chamber 密度：batch 1 的 E4 对齐官方 dense item 14px/22px +
+  min-height 34px 阶段 2 的 A-4 按其同批裁决改回 v0.2.4 `padding:7px 10px`
   + 13px、行框 18px（32px 高），保留 r10/列表 r20——见 design 06 §7「菜单密度 =
   chamber 档」），运行时/表单字段 12px/400 为紧凑行；只统一箭头词汇。
 - 下拉箭头统一 `IconChevronDownOutline14`（`.runtimeSelectChevron`，appearance:none +
   自定义 chevron，右缘与文字左缘对称；文字↔箭头净间隙 ≥6px）。
 - 动作按钮：主（更新到/切换到 vY）与次（恢复内建 / 重启 dsh / 清理版本 / 恢复回滚前
-  数据等）**一律用官方 `ui-primitives` `Button`**（2026-09-11 upstream-alignment T9）：
+  数据等）**一律用官方 `ui-primitives` `Button`**（upstream-alignment T9）：
   主 = `variant="primary" size="sm"`（28px capsule / radius 14 /
   `--dsw-alias-button-primary-fill` / label-primary-foreground）、次 =
   `variant="outline" size="sm"`（透明 + border l2），禁用态 opacity .4（原手写
@@ -541,7 +541,7 @@ chamber-settings.json，非秘密）：
   pnpm-workspace.yaml 的祖先下（向上探测实测报错）；**白名单 miss 是硬失败**（实测
   ERR_PNPM_IGNORED_BUILDS）→ 新 dsh 引入新 build-script 依赖时安装失败，UI 给
   「请升级 dsh-chamber」指引（「不等 chamber 发版」对这类版本不成立）。简略 packument
-  与捆绑基线 lockfile 均无 `hasInstallScript`（实测）——**无法从 lockfile 推导
+  与捆绑基线 lockfile 均无 `hasInstallScript`——**无法从 lockfile 推导
   build-script 覆盖**，故以「单一来源常量 + 漂移钉死测试 + 白名单 miss 硬失败」三层
   兜底（真实安装的 ERR_PNPM_IGNORED_BUILDS 显式暴露，UI 引导升级、不静默跳过）。
 - **prune 打包纪律**：prune 规则在共享包 `packages/dsh-runtime/src/prune-runtime.mjs`
@@ -948,3 +948,9 @@ S17–S20 的权威表格在 `design/17-server-side-gateway.md` §17，本节只
   管理，远端 dsh 版本无关）；设计 05 §5（「dsh 运行时」per-server 设置段注册）。
 - 正交事项（非本设计范围，记录在案）：更新带宽差分优化（design 11 §6 遗留，
   electron-builder 差分/blockmap 重评估）——可独立评估。
+
+### Rejected alternatives（架构调整）
+
+- **保持 wholesale `export *` 入口**：否决——入口面看不出谁真正消费，死导出无从判定（审计实测该包曾有一批零消费者导出）；改为显式具名面（137 个 runtime 值 = 有生产消费者的名字），内部实现留在各模块供包内相对 import。
+- **为过死导出门而砍掉导出函数的签名类型**（`PnpmEntrySearch`/`DshCliEntryResolution` 等）：否决——导出函数的参数/返回类型是其 API 的一部分，宿主需可命名/标注；类型导出不参与 runtime 死面判定，故入口规则写明唯一例外：导出函数/类签名引用的具名类型随签名出口（共 112 个类型契约）。
+- **桌面/网关各自维护 pnpm 入口、内建版本、dsh CLI entry 解析**：否决——同一判定多份手抄，布局或上游变化需改多处；共享原语落本包（`pnpm-entry`/`anchor-version`/`dsh-cli-entry`/`registry-url`），gateway 已接入；desktop 接入受 Swift 文本锚点约束，见 STATUS 开放项。

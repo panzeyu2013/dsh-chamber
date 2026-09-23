@@ -1,6 +1,6 @@
 # 02 · 宿主管理（web profile）：本地 dsh 宿主进程的托管与部署形态
 
-> **状态：现行（本地实例托管与部署形态，2026-12）**——控制面以 dsh 内置 web profile
+> **状态：现行（本地实例托管与部署形态）**——控制面以 dsh 内置 web profile
 > 拉起本地宿主，并独占其生命周期（spawn → 就绪 → 健康 → 重启 → 优雅停止 →
 > 孤儿回收）；未完成门禁见 `docs/progress/STATUS.md`。
 >
@@ -131,9 +131,9 @@ web profile 的 `--port` 是**固定端口**（非 0 随机）。控制面选定
 - **同端口仲裁**：同一起始端口时，先成功就绪者占住端口；后来者探测到
   `dshPort` 已属于另一活着的托管记录 → 按 P+1 继续重试或报告冲突，**不杀
   进程**（先注册先托管）。
-### 2.6 chamber host 包的 seed 与单一 loader overlay（设计 08/09/20/24；2026-12 起四个 host 包）
+### 2.6 chamber host 包的 seed 与单一 loader overlay（设计 08/09/20/24；起四个 host 包）
 
-官方 web profile 仍是宿主组装权威；chamber 只追加自身拥有、边界明确的 host package（2026-12 起四个：
+官方 web profile 仍是宿主组装权威；chamber 只追加自身拥有、边界明确的 host package（起四个：
 client-graph / git-worktree / archive-cleanup（design 24）/ open-in（design 20 §6，注册表标 `localOnly`
 ——只进本地 profile，远端 seed 与 gateway 上传都跳过））：
 
@@ -191,7 +191,7 @@ rows，不改变官方 web profile 的其它组合层。
   - 兜底 → PATH 搜索 `node` → 常见安装位置（homebrew、`/usr/local/bin`、
     nvm/volta/fnm） → 最终退回裸名 `node`（仅作诊断兜底）。
 - **cwd 决策**：installed 布局（桌面打包态 `vendor/dsh` 运行时树）**不以安装树为 cwd**——就地替换会让宿主持有
-  已 unlink 的工作目录（2026-09-17 `uv_cwd ENOENT` 事故），改用 `<stateDir>/dsh-home`（控制面所有、0700、
+  已 unlink 的工作目录（`uv_cwd ENOENT` 事故），改用 `<stateDir>/dsh-home`（控制面所有、0700、
   宿主整个生命周期稳定存在）为 cwd；source 布局保持 `dshWorkspacePath`（开发态 `ref-dsh` 检出根）为 cwd，
   其 loader（`--import tsx/esm`）经工作区自身 `node_modules` 解析。入口始终以绝对路径传入，两分支都不依赖
   cwd 解析 dsh CLI；会话级工作区由前端 runtime 决定，与宿主 cwd 解耦。
@@ -202,7 +202,7 @@ rows，不改变官方 web profile 的其它组合层。
   `dsh-launch-environment`：非空 `SSH_CONNECTION` 或 `SSH_TTY`）被上游三处消费：①
   `host/directory-picker-auto` 解析 `browse`（本 pin 目的）；② `bundle/web-app` 关闭浏览器
   自启 handoff（`handoffBrowser = openBrowser && !launchedThroughSsh`）；③ `host/open-in-app`
-  在 SSH 标记下不解析任何本机应用（`resolveOpenInAppApps` 返回空表）——**自 2026-09-11 起该
+  在 SSH 标记下不解析任何本机应用（`resolveOpenInAppApps` 返回空表）——**该
   消费者与我们无关**：本地打开面由实例进程内的 chamber host 包提供（设计 20 §2.2/§6，
   fork & supersede），官方宿主行保持挂载但永不被调用，故标记回到「仅目录选择 pin」的唯一
   目的。其余环境继承控制面；`DSH_HOME` **显式 pin 到 `<stateDir>/dsh-home`**（覆盖继承，
@@ -259,7 +259,7 @@ ready
   "binary": "/opt/deepseek/node_modules/@deepseek-ai/dsh/lib/bin.js",
   "profile": "web",
   "source": "spawn",
-  "startedAt": "2026-08-14T07:00:00.000Z"
+  "startedAt": "T07:00:00.000Z"
 }
 ```
 
@@ -299,7 +299,7 @@ ready
 **安全总结**：杀进程须同时满足"本产品记录过 + 身份重验通过（binary/profile 命令串 +
 端口监听者 pid）+ owner 死亡/reparent"，三者缺一不动手。
 
-**闩锁的两种关闭原因与会话内再证明（2026-09-10）**：启动扫描只在"零 kept 且零 errors"
+**闩锁的两种关闭原因与会话内再证明**：启动扫描只在"零 kept 且零 errors"
 时打开 `localWritersQuiescent`；关闭原因两类，只一类可再证明：
 
 - **扫描判定**（记录被保留：身份探测不可用、身份不匹配、端口不可核对、残留进程组…）——可被
@@ -423,7 +423,7 @@ stopped ──spawn──► starting ──ready(§3.2)──► ready ──fa
 - 写入或压缩失败即丢弃失败批次及其后已排队诊断并切到新日志代次（清空旧内存 ring/计数并重新 setup）；
   只有失败后到达的**新写入**发起一次新 setup，永久磁盘故障不会形成无限重试队列；旧 backing file 被
   删除后绝不由临界压缩把历史 ring 复活，失败写也不在下次重建时重复；
-- **控制面自身日志落盘**（2026-12，取证缺口修复）：`createControlPlane` 无条件给注入的
+- **控制面自身日志落盘**（取证缺口修复）：`createControlPlane` 无条件给注入的
   `options.logger`（默认 console）加文件 sink，写 `<stateDir>/logs/control-plane.log`
   （JSONL `{ts,level,line}`；单文件 2 MiB、3 份轮转环（最小 2 份）；目录 0700、文件 0600、**常驻
   句柄 + O_NOFOLLOW**——与本节 host-logs 的 no-follow/0600 纪律同族）。动机：控制面是
@@ -439,7 +439,7 @@ stopped ──spawn──► starting ──ready(§3.2)──► ready ──fa
   原生壳另有 `<userData>/logs/sidecar.log`（design 25 §3.1）作**兜底**；同一批 console 行两处各存
   一份、保留量不同（Electron `2 MiB × 3` = 6 MiB，原生壳另有 `256 KiB × 2` = 512 KiB，合计
   6 MiB + 512 KiB），该 flavor 偏差登记在 deviations。
-  - **写入面纪律（2026-12 独立复核补记）**：①日志行**同步**追加（每行一次 `writeSync`，无 fsync）
+  - **写入面纪律（独立复核补记）**：①日志行**同步**追加（每行一次 `writeSync`，无 fsync）
     ——与本节 host-logs 的"只入队、不阻塞"不同，取舍是"崩溃前最后几行必须在页缓存里"（取证价值）
     换"每行一次系统调用"，开销有界；若实测到事件循环停顿，改法是入队 + 批量 flush（代价：崩溃时丢
     队列里的行）。②`logs/` 与 `control-plane.log` 的 0700/0600 在**每次打开时显式收紧**（`mode` 只在
@@ -489,7 +489,7 @@ Environment=DSH_PERMISSION_MODE=workspace-write
 # host.listDirectory 返回 directory-picker/unavailable、新建工作区对话框
 # 不可用（headless linux 服务器无显示会话，缺行也天然 browse）。该标记的
 # 另一处上游消费（浏览器自启 handoff）见 §3.1；第三处（实例侧官方 open-in 应用
-# 解析）虽仍读该标记，但 chamber 自 2026-09-11 起不再使用官方宿主行（设计 20 §6）。
+# 解析）虽仍读该标记，但 chamber 不再使用官方宿主行（设计 20 §6）。
 Environment=SSH_CONNECTION=127.0.0.1 0 127.0.0.1 0
 NoNewPrivileges=true
 PrivateTmp=true
@@ -532,7 +532,7 @@ WantedBy=multi-user.target
   仅做分发，**不经 SSH 执行 Git**；已运行的远端 dsh 需重启后才加载新 row，完整原子顺序、去重与
   失败语义见设计 13 §3。
 
-**gateway 目标单元形态（design 17，2026-09 v2）**：远程 gateway 部署以
+**gateway 目标单元形态（design 17 v2）**：远程 gateway 部署以
 `dsh-chamber-gateway.service` 单元持久化（`install-gateway.sh` 一键安装器生成，17 §5），默认监听
 远端 30801（gateway 目标 `remotePort` 缺省；dsh 目标 30800 不变，17 §2.2）：`ExecStart=<GATEWAY_BIN>
 serve --host 127.0.0.1 --port 30801 …`，服务账号 / `NoNewPrivileges` / `PrivateTmp` / PATH 环境

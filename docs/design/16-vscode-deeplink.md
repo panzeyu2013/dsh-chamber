@@ -1,13 +1,13 @@
 # 16 · VS Code 深链（deeplink 拉起本机 VS Code 打开对应来源目录）
 
-> **状态：现行（OS 深链与 VS Code 拉起契约，2026-12）**——注册 `dsh-chamber://`，用**本机 VS Code**（本地
+> **状态：现行（OS 深链与 VS Code 拉起契约）**——注册 `dsh-chamber://`，用**本机 VS Code**（本地
 > `vscode://file`、远程 `vscode://vscode-remote/ssh-remote+…`）打开指定/当前来源的工作区目录；应用内入口属 open-in 通用
 > 注册表（设计 20，插件 `dsh-chamber-client-ui-open-in`），本文只留 OS 深链与 vscode 拉起契约；**M3 实机验收未完成**——
 > `docs/progress/STATUS.md`。
 > 形态纪律：**无 host 插件、无 seed**（无实例内执行面）；深链是 OS 级不可信输入，全部校验在主进程。
 > **与设计 20 的分界**：应用内按钮/桥面/IPC 均属设计 20 的 open-in 面（`open-in-apps` / `open-in`）；旧
 > `dsh-chamber:open-vscode` / `vscode-availability` 通道与 `window.dshChamber.vscode` 桥面已随旧插件删除。本地目录探测与
-> launch 由**实例内 chamber host 包**（`@dsh-chamber/dsh-chamber-seed-open-in`，2026-09-11 起 fork 取代官方宿主半，设计 20
+> launch 由**实例内 chamber host 包**（`@dsh-chamber/dsh-chamber-seed-open-in` 起 fork 取代官方宿主半，设计 20
 > §6）经实例通用 RPC 执行；主进程 open-in 注册表**收窄为 vscode-only**（`finder`/`stat`/`openPath`/`showItemInFolder`
 > 面退役）。§7.2 锁步清单与 §6 槽位/门控纪律是共用接线模板（设计 20 §5/§3 为现行形态）。
 > **连接模型 v2 注记**：来源 id 为 `dsh-<id>` / `gateway-<id>`，`ssh-<id>` 仅 legacy 兼容；kind 是目标类型，VS Code
@@ -74,7 +74,7 @@ dsh-chamber://open-vscode?instance=<id>&path=<远端绝对路径>
 - 用 `new URL()` 解析；`hostname` 必须精确等于 `open-vscode`（其余 host 一律拒绝，不猜测、不归一化）；
 - `instance`：`INSTANCE_ID_PATTERN`（`/^(?!local$)[a-zA-Z0-9_-]{1,64}$/`）+ 注册表实查
   （`transportManager.listInstances()`），查无或 `transport !== 'ssh'` → 确定性拒绝 + loud；**`local` 显式放行**
-  （用户决策 2026-08：走 §3.4 local 分支，不查注册表）；
+  （用户决策 ：走 §3.4 local 分支，不查注册表）；
 - `path`：必须以 `/` 开头（绝对路径），拒绝控制字符 / CR / LF / NUL，长度 ≤ 4096；
   缺失/非法 → loud 错误；
 - 幂等/去重：macOS `open-url` 与 argv 可能以不同 raw URL 拼写双触发同一目标；parse 后以 `(instanceId,path)` 归一化
@@ -98,12 +98,12 @@ dsh-chamber://open-vscode?instance=<id>&path=<远端绝对路径>
 buildVscodeRemoteUrl(host, user, sshPort, path): string
 // → vscode://vscode-remote/ssh-remote+<authority><encoded-path>   （远程源）
 buildVscodeFileUrl(path): string
-// → vscode://file/<encoded-path>                                  （local 源，用户决策 2026-08）
+// → vscode://file/<encoded-path>                                  （local 源，用户决策 ）
 ```
 
 - scheme **硬编码 `vscode:`**，绝不把原始深链 URL 透传给 `shell.openExternal`（对比 `isAllowedReleaseUrl` 白名单纪律）；
 - path 逐段 `encodeURIComponent`（首 `/` 保留），空格/中文/`#`/`?`/`&`/`%` 均有单测覆盖；控制字符在 §3.1 已拒绝；
-- **新窗口默认（2026-12，chamber 设置驱动）**：设置 `vscodeOpenInNewWindow`（chamber-settings.json，通用页「运行」组，
+- **新窗口默认（chamber 设置驱动）**：设置 `vscodeOpenInNewWindow`（chamber-settings.json，通用页「运行」组，
   默认开）开启时两个构造器统一追加 `?windowId=_blank`。背景：VS Code 运行中收到外部文件夹 URL 默认「复用最近活动窗口并
   替换内容」（`window.openFoldersInNewWindow` 默认 `default` 不参与覆盖；CLI 与 URL 默认分支不同），该参数在复用决策
   **之前**强制新窗口分支，目标文件夹已开则聚焦旧窗口、不重复开（依据：本机 VS Code 1.135 主进程 bundle 的
@@ -207,7 +207,7 @@ detectVscodeAvailability(platform): { available: boolean }
 - 槽是 session 作用域：组件直接收到**本头部所属的 `sessionId`** 与框架全局
   `useWorkspaces` 选择器钩子（同一 store，侧边栏归组同源），**不直接读 ctx 的
   sessions/workspaces**（inject 声明保持 `['slots','locale']`）；
-- 按钮 CSS：**与官方 open-in 分体按钮同规格**（2026-09-12 样式对齐轮；逐条取自
+- 按钮 CSS：**与官方 open-in 分体按钮同规格**（样式对齐轮；逐条取自
   pin 的 `@deepseek-ai/dsh-client-ui-open-in-app/lib/client.js`
   `OpenInAppAction.module.css`）——`.split` 容器 28px 高、`0.5px solid
   var(--dsw-alias-border-l4)` 描边、`border-radius: 14px`、`overflow: hidden`；
@@ -223,7 +223,7 @@ detectVscodeAvailability(platform): { available: boolean }
   不再比所在行高 4px；aria-label / tooltip / 键盘可聚焦保持；
   **形态只有官方那一种**：可用集 ≥1 就渲染同一条 `.split`（主按钮 + chevron 下拉，
   官方没有单条目形态、也不因只有一个 app 少画 chevron）；
-- **行内排序**：条目注册带 `order: -10`（**官方 `open-in-app` 行的原值**，2026-09-12
+- **行内排序**：条目注册带 `order: -10`（**官方 `open-in-app` 行的原值**
   彻底统一）——utilities 行按 `order` 升序排列（默认 0），因此 open-in 按钮排在
   "Session log"（order 0）**左侧**，session-log 保持在最右侧，且与任何第三方条目
   的相对次序与官方一致；
@@ -235,7 +235,7 @@ detectVscodeAvailability(platform): { available: boolean }
   `/open-in-app/icon/<id>`），本壳一页挂 N 个实例，于是由渲染壳对**本地实例**读一次
   （design 20 §4.2 的页级机器目录）并注入每个 entry——所以 remote ssh 来源的 VS Code
   条目现在画的就是本机那份真实 bundle 图，**仓库内不再有 VS Code 位图资源、也不再有
-  `VscodeMark`/`'vscode'` mark kind**（2026-09-12 删除）。本机没装 VS Code 时这个条目
+  `VscodeMark`/`'vscode'` mark kind**（删除）。本机没装 VS Code 时这个条目
   根本不渲染（`vscodeAvailable()` 是本机探测），所以需要 mark 时真图标总能取到；真的
   取不到（抽取失败 / 本机实例未就绪）就回落**官方那颗圆角方块**（`viewBox 0 0 24 24`、
   `stroke-width 1.8`、`r5`，颜色继承所在槽）——chamber 不再有任何自造 mark；

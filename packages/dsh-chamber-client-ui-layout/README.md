@@ -18,10 +18,9 @@ width the user drags in ONE shell was invisible in the other shells, and every
 restart reset to the 280px contract default.
 
 The chamber fork feeds the store from — and writes every drag back to — the
-chamber sidebar package's page-wide view-prefs store
-(`@dsh-chamber/dsh-chamber-client-ui-sidebar/shared`, the single in-memory store all
-boots share over the vite shared chunk, persisted under one versioned
-`localStorage` key):
+client-core page-wide view-prefs store (`@dsh-chamber/dsh-chamber-client-core`,
+the single in-memory module instance all boots share, persisted under one
+versioned `localStorage` key):
 
 - `init` seeds `sidebar` from `getViewPrefs().sidebarWidth` (clamped into the
   vendor `[SIDEBAR_MIN, SIDEBAR_MAX]` drag range, falling back to

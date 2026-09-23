@@ -18,7 +18,7 @@
 - [ ] 规模与主题：`git log --oneline <旧>..<新> | wc -l`、`git diff --stat <旧> <新>`。
 - [ ] 包集合增删：`git ls-tree -r --name-only <新> -- packages | grep package.json` 对比——新增包进vendor树，删除包在锁文件留下待清importer记录。
 - [ ] chamber import面审计：上游有实质改动的包 × chamber的import/事件消费（改名/重构是否被消费）。
-- [ ] fork副本diff：`packages/client/connection`、`packages/client/web`、`packages/client/api-gateway` → 判断「冲突需合并」vs「干净采纳」（→ §3）。
+- [ ] fork副本diff：`packages/client/connection`、`packages/client/web`、`packages/api/gateway` → 判断「冲突需合并」vs「干净采纳」（→ §3）；chamber-named 的 `packages/dsh-chamber-client-ui-layout`（registry §2.6，上游 `packages/client/ui-layout`）同样逐 diff 裁决，其深引 frame 面由预检以 vendor-seam 报告。
 - [ ] 首屏耦合审计：上游新增/改名的官方client行若被复合首屏inject → 同步host-graph降级注释；探针集合是派生的（不用加名字），但命名空间不再导出 `inject` 的漂移由 `packages/renderer/test/lifecycle/required-extra-rows.test.ts` 的逐id表兜底。
 
 ## 2. 双线 pin 一致性
@@ -37,8 +37,8 @@
 - [ ] 三个fork副本：basePath补丁与上游改动同文件时手工合并（chamber选项对象、`ctx.chamberBasePath`、boot接线）；干净采纳项照抄；上游新增钩子按chamber场景裁决采纳/跳过。
 - [ ] 其余适配面：控制面代理限额、`spawn-dsh` 的pin注释、desktop/renderer注释基线等与上游对齐。
 - [ ] 上游行为变化逐项裁决：限额与代理上限冲突、事件改名是否被消费、新包是否要动作、新wire是否改变例外边界。
-- [ ] 逐面验证：`test:connection`、`test:client-web`、`typecheck:client-web`、`test:control-plane`。
-- [ ] 自建物重放（layout/sidebar fork、covered factory、vendor补丁锚点）逐项裁决：采纳或保留偏差并登记（口径见 `upstream-touchpoints.md` §1–§3）。
+- [ ] 逐面验证：`test:connection`、`test:client-web`、`typecheck:client-web`、`typecheck:connection`、`test:control-plane`、`test:api-gateway`、`typecheck:api-gateway`。
+- [ ] 自建物重放（layout/sidebar fork、covered factory、vendor补丁锚点）逐项裁决：采纳或保留偏差并登记（口径见 `upstream-touchpoints.md` §1–§3）；layout fork 已登记为 chamber-named 副本（registry `seed.dsh-chamber-client-ui-layout`，§2.6），其 client index/store 副本面随 C2 报告 + 预检 vendor-seam 重放。
 
 ## 4. 锁文件
 

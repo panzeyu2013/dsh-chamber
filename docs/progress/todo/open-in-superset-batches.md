@@ -1,17 +1,17 @@
 # todo · open-in：超集分批（S1/S2/S3）与降级留档形态
 
-> 状态：fork & supersede已落地（2026-09-11裁决→design 20定稿→实施完成）。契约/落地见
+> 状态：fork & supersede已落地（裁决→design 20定稿→实施完成）。契约/落地见
 > `docs/design/20-open-in-registry.md`（§4契约、§6 host包与八处接线、§8文件清单、§9验证门）；实机验收与实施后开放项在
 > `docs/progress/STATUS.md`（design 20 §1指向）。本文只留未排期超集分批、不做的边界与两份降级留档形态。
 
 ## 1. 超集分批（S1/S2/S3 未排期；S4 不做）
 
-每批独立PR、各自测试、不引入新运行时依赖。2026-09-11复核重排优先级并收窄：
+每批独立PR、各自测试、不引入新运行时依赖。复核重排优先级并收窄：
 
 - S1远程provider家族：主进程注册表加Insiders/Cursor/Windsurf/JetBrains Gateway/`ssh://` 终端——只构造URL交OS、不启动进程；每项需实机scheme语义验证（本机现只注册 `Visual Studio Code → [vscode]` 与 `iTerm → […, ssh, …]`）。
 - S2远程文件级打开：远程来源允许文件路径（纯URL构造，不经host包）；本地仍目录限定。
 - S3收窄为「复制路径」（唯一保留的非启动出口）：侧栏既有复制模式上暴露工作区/会话路径——会话行已带 `cwd`（`sidebar/src/shared/instance-api.ts` 的 `SessionRow.cwd?`），既有 `HoverCard` 支持 `copyText`（现只复制会话标题，`ServerSection.tsx:2073`；该行本体 `:2027`）⇒ 零新IPC、零新依赖、纯渲染层。「复制 `ssh user@host`/复制VS Code深链」不做（见 §3附录A）。
-- S4多入口：不做（2026-09-11裁决，理由登记STATUS）：header按钮与目标会话同排相邻，侧栏入口边际价值有限；会话行动作已集中在kebab菜单（重命名/分叉/归档，`ServerSection.tsx:1952-1977`），新增入口要么重复要么推翻它——不要把「会话行刻意没有kebab」当理由（该行自T2a起就有kebab；刻意无kebab的是worktree派生的workspace行，`:1288-1290`）。快捷键缺基建（vendor无keybinding注册表，只有聊天输入框keymap），自建document级监听还要处理「哪个entry是活跃视图」与chord冲突；日后做见 §3附录B。
+- S4多入口：不做（裁决，理由登记STATUS）：header按钮与目标会话同排相邻，侧栏入口边际价值有限；会话行动作已集中在kebab菜单（重命名/分叉/归档，`ServerSection.tsx:1952-1977`），新增入口要么重复要么推翻它——不要把「会话行刻意没有kebab」当理由（该行自T2a起就有kebab；刻意无kebab的是worktree派生的workspace行，`:1288-1290`）。快捷键缺基建（vendor无keybinding注册表，只有聊天输入框keymap），自建document级监听还要处理「哪个entry是活跃视图」与chord冲突；日后做见 §3附录B。
 
 ## 2. 边界（不做，登记在 design 20 §7.3）
 
@@ -21,7 +21,7 @@
 
 ## 3. 附录：S3 / S4 完整形态（降级留档，未排期）
 
-> 2026-09-11复核实测证据：全仓chamber代码 `navigator.clipboard`/`writeText` 零调用者（`main.ts:5699-5713` 只是放行 `clipboard-sanitized-write` 权限）；`execCommand(copy)` 仅出现于gateway独立安装页（`gateway/src/routes.ts:960`）；上游官方客户端只有一处槽位注册（`conversation.session.header.utilities`，id `open-in-app`，order -10），无剪贴板、无「无可用应用」出口（`controller.ts:39`：读取失败 ⇒ 空列表 ⇒ 不渲染按钮）⇒ S3/S4都是新增能力，不是「官方有而我们缺」。
+> 复核实测证据：全仓chamber代码 `navigator.clipboard`/`writeText` 零调用者（`main.ts:5699-5713` 只是放行 `clipboard-sanitized-write` 权限）；`execCommand(copy)` 仅出现于gateway独立安装页（`gateway/src/routes.ts:960`）；上游官方客户端只有一处槽位注册（`conversation.session.header.utilities`，id `open-in-app`，order -10），无剪贴板、无「无可用应用」出口（`controller.ts:39`：读取失败 ⇒ 空列表 ⇒ 不渲染按钮）⇒ S3/S4都是新增能力，不是「官方有而我们缺」。
 
 ### 附录 A · S3 全量形态（若要做「复制 ssh 命令 / 复制深链」）
 

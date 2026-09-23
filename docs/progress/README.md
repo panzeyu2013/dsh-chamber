@@ -39,8 +39,8 @@ docs/progress/
 |[subagents-in-sidebar.md](todo/subagents-in-sidebar.md)|session的subagents在侧边栏中的显示（嵌套子层级/跨会话总览）|想法，未设计/未排期|
 |[macos-swift-v1.md](todo/macos-swift-v1.md)|macOS Swift原生壳：双端验收协议（W1–W7判定/性能A/B/中止点A1–A8）+ WBS W-01…W-32编号索引|代码面已落地；外部门禁状态在STATUS|
 
-> 历史：`performance-baseline.md`、`windows-baseline.md`、`todo/electron-swift-parity-audit.md`（211 KB）与 `todo/audit-2026-12-findings.md`
+> 历史：`performance-baseline.md`、`windows-baseline.md`、`todo/electron-swift-parity-audit.md`（211 KB）与 `todo/audit--findings.md`
 > 等执行台账已按「已执行计划不留在工作文档」删除；仍开放内容并入 `STATUS.md` 与 `deviations.md`，原文存git历史。
-> 2026-12：`todo/remote-session-state-and-switch.md`（已实施计划）与 `todo/notes/` 六份蓝图（remote-state
+> ：`todo/remote-session-state-and-switch.md`（已实施计划）与 `todo/notes/` 六份蓝图（remote-state
 > 实现蓝图的执行记录）按同一纪律删除——契约由 design 17 §10.7/§20、design 06 §4.2、design 19 §3.3/§3.7
 > 与 `packages/*` 源码/测试承接，仍开放的实机/CI 验收项并入 `STATUS.md`「远端完成未读 / 切源体验」条。

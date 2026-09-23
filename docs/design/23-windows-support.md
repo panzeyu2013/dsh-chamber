@@ -40,7 +40,7 @@
 ## 3. 运行时管理解锁契约（M2a 能力 + M2b 门禁）
 
 - dsh-runtime 核心本就 Windows 友好:指针为普通文件(禁 symlink)、文件级 tmp+rename+fsync、pnpm 以 `node <pnpm.cjs>` 执行、候选经 `ELECTRON_RUN_AS_NODE` 拉起。
-- M2a 后台能力(已接线):desktop env 门控(纪律 5)、dsh-runtime `windows-process.ts`(supervisor 树终止 + 残余探测)、`rename-retry.ts`(snapshot-store 四处目录 rename,`WINDOWS_RENAME_RETRY_DELAYS_MS` 有界重试)、desktop `win-acl.ts`(icacls 收紧 + 验证 + 启动复合入口)、C16(gateway 凭据 win32 无 safeStorage = 拒绝明文,store 内存驻留);只读属性清理以 win32-only 决策门测试定实现。
+- M2a 后台能力:desktop env 门控(纪律 5)、dsh-runtime `windows-process.ts`(supervisor 树终止 + 残余探测)、`rename-retry.ts`(snapshot-store 四处目录 rename,`WINDOWS_RENAME_RETRY_DELAYS_MS` 有界重试)、desktop `win-acl.ts`(icacls 收紧 + 验证 + 启动复合入口)、C16(gateway 凭据 win32 无 safeStorage = 拒绝明文,store 内存驻留);只读属性清理以 win32-only 决策门测试定实现。
 - **M2b 翻转前必须** M2a 在真实 win32 runner 全绿 + 实机故障注入矩阵记录;翻转点(接线全集):desktop `main.ts`(managementSupported 注入与决策点)、`dsh-runtime-controller.ts`(mutation 拦截)、`apply-now-gate.ts`、settings-bridge 段、版本 chip。
 - Gateway 部署于 Windows:保持只读(服务器支持矩阵 = Linux/macOS,范围决策)。
 

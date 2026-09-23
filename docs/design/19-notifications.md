@@ -1,10 +1,10 @@
 # 19 · 桌面通知与未读徽标（会话 complete / ask / request，设置可选项）
 
-> **状态：现行（桌面原生通知 + 未读徽标，2026-12）**——会话 complete / ask / request 时
+> **状态：现行（桌面原生通知 + 未读徽标）**——会话 complete / ask / request 时
 > 推送原生通知，Dock/任务栏图标显示未读红气泡（均为主进程裁决的设置可选项）；检测端
 > 复用 renderer 既有事实通道，控制面零改动、无新 host 插件；**未完成门禁**：macOS
 > 权限/拒绝行为的**打包态实机走查**（拒绝态设置页提示与「打开系统设置」恢复入口已实现，
-> 见 §3.3/§4 与 2026-09 修订）、Windows 任务栏 overlay 门控（design 23 排期）——见
+> 见 §3.3/§4 与 修订）、Windows 任务栏 overlay 门控（design 23 排期）——见
 > `docs/progress/STATUS.md`。
 > 需求来源：用户要求「一个 session 在 complete、ask、request 时推送通知」并做成设置
 > 可选项；未读徽标是同一投影的被动指示。
@@ -125,8 +125,7 @@ type NotificationKind = 'complete' | 'ask' | 'request'
 // 纯函数：prev 事实 → next 事实 的边沿事件集
 function detectNotificationEdges(
   prev: Record<string, SessionFacts> | undefined,   // 首份上报 = undefined（只播种，不发事件）
-  next: Record<string, SessionFacts>,
-): Array<{ sessionId: string; kind: NotificationKind }>
+  next: Record<string, SessionFacts>): Array<{ sessionId: string; kind: NotificationKind }>
 ```
 
 | 事件 | 边沿定义 | 说明 |
@@ -140,7 +139,7 @@ function detectNotificationEdges(
   与 `prevRunningRef` 同生命周期纪律；主进程 claim 兜底）。
 - subagent 会话不产生事件（事实通道不含 subagent 行；父会话的 `runningSubagents`
   只驱动子代理计数徽标）。
-- **2026-12 P3 单入口修订**：裁决模块为 `packages/renderer/src/notification-projection.ts`——
+- **P3 单入口修订**：裁决模块为 `packages/renderer/src/notification-projection.ts`——
   `planRuntimeNotifications`（壳边沿；有可判 facts 的来源只发 ask/request，complete 归 facts）
   与 `planFactsNotifications`（observed 完成，host 域水位严格前进才通知，reconstructed 只出未读）
   共用 `complete-ledger` 的键空间与唯一 `emitSessionNotification` 出口。原 `usableFacts` 抑制
@@ -160,18 +159,18 @@ interface NotificationRequest {
   title: string
   body: string
   requireHidden: boolean      // 正在屏幕上查看的会话（见下）
-  watermark?: number          // 2026-12：内容水位（host 域），complete=completedAt，ask/request=updatedAt
+  watermark?: number          // ：内容水位（host 域），complete=completedAt，ask/request=updatedAt
 }
 ```
 
-- **身份与去重键（2026-12，plan §5-16）**：主进程 claim 键 = `[sourceId, sourceFingerprint,
+- **身份与去重键（plan §5-16）**：主进程 claim 键 = `[sourceId, sourceFingerprint,
   sessionId, kind, watermark ?? null]`——`kind` 与 `sourceFingerprint` 必须保留，否则同一会话的
   ask/complete 互吞、或 same-id 换宿主继承旧 claim；旧调用方不带 `watermark` 时请求逐字节不变
   （`packages/desktop/notifications.ts`，镜像钳制见 `packages/renderer/src/global.d.ts`）。
 - `requireHidden = (sourceId === activeViewRef.current && sessionId === report.current
   && document.hasFocus())`——用户正看着这个会话（无论主开关/模式都豁免，与 OpenChamber `requireHidden && isAnyWindowFocused()` 同语义；单窗口下
   `document.hasFocus()` 与主进程 `isAnyWindowFocused()` 等价，主进程再查一次作权威）。
-- 文案（v1 固定，renderer 组装）——**2026-09-11 upstream-alignment T16：不再用
+- 文案（v1 固定，renderer 组装）——**upstream-alignment T16：不再用
   zh 字面量**，改取 App 框架的 typed 字典 `packages/renderer/src/locales.ts`（该 effect
   依赖为 `[]`、拿不到 render 作用域的 `t`，故按**文档语言** `<html lang>` 用
   `readDocumentLocale()` 解析）：
@@ -216,7 +215,7 @@ interface NotificationRequest {
      `BoundedActiveNotifications`（`activeNotifications`）把跨多个速率窗口仍不 close 的
      存活通知对象硬上界在 16 条。上界约束「存活引用/OS 监听器」数量而非投递配额：
      **满员时不拒发**——macOS 横幅进通知中心后不触发 Electron close（通常只有用户手动
-     清除才触发），满员 fail-closed 会让 16 条存量横幅永久卡死通知流（2026-09 实机复现：
+     清除才触发），满员 fail-closed 会让 16 条存量横幅永久卡死通知流（实机复现：
      第 16 条后设置页「发送测试通知」与事件通知全部返回 false，OS 无任何请求记录）。故
      满员按插入序 loud 淘汰最旧一条（close 退役）并继续登记——硬上界不变，仅最旧条目
      click 失效。该宿主预算不读取 session roster（控制面/主进程仍不成为 session consumer）；
@@ -294,7 +293,7 @@ interface ChamberSettings {
 **设置 UI**（`packages/dsh-chamber-client-ui-settings-bridge`）：
 
 - 决策（用户拍板，实现以此为准）：**并入 `__general`（客户端 / Desktop 页；
-  2026-09-11 由「通用」改名，见 design 15 §D1）**，新增
+  由「通用」改名，见 design 15 §D1）**，新增
   「通知」控制组（不新增设置壳固定入口——设计 15 平铺形态的入口数保持
   2 个不变）；客户端页各控制组之间用**分割线**（`.generalGroup + …` hairline，
   `--dsw-alias-border-l2`）分隔，通知组插在「运行/会话待办区」与「更新」之间。
@@ -334,7 +333,7 @@ interface ChamberSettings {
   complete 通知（与官方 Rows / 侧边栏优先级一致；抑制在去重之前、不记账）。补发语义依赖
   vendor 武装 completed 的时序，均为文档化行为：vendor **晚武装**（子代理全部结束后才武装）→ completed 边沿届时正常补发横幅；vendor **早武装**（官方 manager 在父 idle 边沿武装，子代理存活
   期间 completed 已为 true）→ 滤除的边沿不记账、子代理结束后无新 completed 边沿，该完成不再有
-  横幅补发（窗口内完成点与未读徽标不受影响）。未读徽标（§3.7）应用同一压制——蓝点账本保持武装（与官方「completed 保持武装、subagents 分支优先呈现」同构），徽标投影同一并集（App 账本武装 ∪ vendor 自武装，且未被运行环压制；2026-12 收口为单一权威——此前「点/待办有、徽标无」的分工已消除）；呈现边界见
+  横幅补发（窗口内完成点与未读徽标不受影响）。未读徽标（§3.7）应用同一压制——蓝点账本保持武装（与官方「completed 保持武装、subagents 分支优先呈现」同构），徽标投影同一并集（App 账本武装 ∪ vendor 自武装，且未被运行环压制；收口为单一权威——此前「点/待办有、徽标无」的分工已消除）；呈现边界见
   §3.7 计数语义。
 - 通知失败（isSupported false / 系统权限拒绝）**静默降级不误报**：会话业务不受影响，
   蓝点照常。
@@ -435,7 +434,7 @@ completedBySource（App 完成未读蓝点集，06 §4.1，只读复用——徽
 打包态三形态（关窗/托盘/后台）+ 点击打开会话 + 窗口重建；徽标 macOS Dock 打包态
 三态（武装/解除/退役 + 重载与退出清零）；Windows 任务栏 overlay 门控（design 23 排期）。
 
-### 4.1 2026-09 修订：拒绝态的可见性与恢复入口（含被否决方案）
+### 4.1 修订：拒绝态的可见性与恢复入口（含被否决方案）
 
 现象：macOS 通知权限一旦落到 denied，系统**不再允许 App 弹出授权框**
 （`UNUserNotificationCenter.requestAuthorization` 只在 `.notDetermined` 弹），用户
@@ -455,7 +454,7 @@ completedBySource（App 完成未读蓝点集，06 §4.1，只读复用——徽
 - 设置页失败态展示：原因原文（不翻译）+ 权限提示 + 「打开系统设置」按钮；打开失败也
   loud 展示。
 
-**Rejected alternatives**（审议于 2026-09）：
+**Rejected alternatives**（审议于 ）：
 
 1. **只在 Swift 侧加日志/对话框**：Electron 侧同一失败面同样静默，会造出一条未登记的
    双端差异（deviations S 行），且原因已在 sidecar 算出、只在 IPC 边界被丢掉——修错层。
