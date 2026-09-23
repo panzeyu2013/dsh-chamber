@@ -43,10 +43,10 @@ import {
 import type { RuntimeDiskProjection } from '../runtime-disk-projection.ts'
 import {
   applyNowNotRunningRefusal,
-  envPinnedRefusal,
   recoveryRetryRequiredRefusal,
   refusalError,
 } from '../runtime-refusals.ts'
+import { refuseOnEnvPinned, refuseRuntimeMutationOnWindows } from './guards.ts'
 import { sanitizeRouteError } from '../sanitize-route-error.ts'
 import { readRegistryOrigin } from './registry-source.ts'
 import type { StartupTransactionRunner } from './startup-transaction.ts'
@@ -224,9 +224,9 @@ export function createRuntimeVersionActions(deps: RuntimeVersionActionsDeps): Ru
   }
 
   async function select(version: string): Promise<{ accepted: boolean; version: string }> {
-    if (platform === 'win32') throw Object.assign(new Error('windows runtime mutations are read-only'), { code: 'platform_read_only' })
+    refuseRuntimeMutationOnWindows(platform)
     assertMutationIdle()
-    if (envPath !== null) throw refusalError(envPinnedRefusal('version mutations'))
+    refuseOnEnvPinned(envPath, 'version mutations')
     assertNoPending()
 
     // The version selector always places the active version first. Selecting
@@ -360,9 +360,9 @@ export function createRuntimeVersionActions(deps: RuntimeVersionActionsDeps): Ru
   }
 
   async function apply(): Promise<{ pending: boolean }> {
-    if (platform === 'win32') throw Object.assign(new Error('windows runtime mutations are read-only'), { code: 'platform_read_only' })
+    refuseRuntimeMutationOnWindows(platform)
     assertMutationIdle()
-    if (envPath !== null) throw refusalError(envPinnedRefusal('version mutations'))
+    refuseOnEnvPinned(envPath, 'version mutations')
     assertNoPending()
 
     const record: OverrideRecord = readOverride(baseDir) ?? {
@@ -426,9 +426,9 @@ export function createRuntimeVersionActions(deps: RuntimeVersionActionsDeps): Ru
   }
 
   async function rollback(version: string): Promise<{ accepted: boolean }> {
-    if (platform === 'win32') throw Object.assign(new Error('windows runtime mutations are read-only'), { code: 'platform_read_only' })
+    refuseRuntimeMutationOnWindows(platform)
     assertMutationIdle()
-    if (envPath !== null) throw refusalError(envPinnedRefusal('version mutations'))
+    refuseOnEnvPinned(envPath, 'version mutations')
     assertNoPending()
 
     if (!listValidVersionTrees(baseDir).includes(version)) {
@@ -510,9 +510,9 @@ export function createRuntimeVersionActions(deps: RuntimeVersionActionsDeps): Ru
    *  supersedes a stale operation error (desktop resets the disk-gate error
    *  phase the same way). */
   async function cleanupVersion(version: string): Promise<{ version: string; removed: boolean }> {
-    if (platform === 'win32') throw Object.assign(new Error('windows runtime mutations are read-only'), { code: 'platform_read_only' })
+    refuseRuntimeMutationOnWindows(platform)
     assertMutationIdle()
-    if (envPath !== null) throw refusalError(envPinnedRefusal('version mutations'))
+    refuseOnEnvPinned(envPath, 'version mutations')
     assertNoPending()
     if (getStartupBlockReason() !== null) {
       throw Object.assign(new Error(`runtime recovery ${getStartupBlockReason()} is required before cleanup`), { code: 'runtime_recovery_required' })
@@ -535,9 +535,9 @@ export function createRuntimeVersionActions(deps: RuntimeVersionActionsDeps): Ru
   }
 
   async function restoreBuiltin(): Promise<{ accepted: boolean }> {
-    if (platform === 'win32') throw Object.assign(new Error('windows runtime mutations are read-only'), { code: 'platform_read_only' })
+    refuseRuntimeMutationOnWindows(platform)
     assertMutationIdle()
-    if (envPath !== null) throw refusalError(envPinnedRefusal('version mutations'))
+    refuseOnEnvPinned(envPath, 'version mutations')
     // Desktop parity: reset-builtin without an override is a pointless
     // stop → snapshot → probe cycle (the anchor is already authoritative and
     // there is nothing to clear) — the desktop only offers the action when
@@ -651,9 +651,9 @@ export function createRuntimeVersionActions(deps: RuntimeVersionActionsDeps): Ru
    * Returns the resolved target version.
    */
   function applyNowPreflight(): string {
-    if (platform === 'win32') throw Object.assign(new Error('windows runtime mutations are read-only'), { code: 'platform_read_only' })
+    refuseRuntimeMutationOnWindows(platform)
     assertMutationIdle()
-    if (envPath !== null) throw refusalError(envPinnedRefusal('version mutations'))
+    refuseOnEnvPinned(envPath, 'version mutations')
 
     // A corrupt activation journal must fail closed BEFORE
     // any 202/stop can go out. The startup transaction cannot read it either

@@ -19,11 +19,10 @@ import {
 } from '@dsh-chamber/dsh-runtime'
 import { syncedHostDomainProbeNames } from '../plugins.ts'
 import {
-  envPinnedRefusal,
   RECOVERABLE_METADATA_BLOCKS,
-  refusalError,
   RETRY_RESTORE_REASONS,
 } from '../runtime-refusals.ts'
+import { refuseOnEnvPinned, refuseRuntimeMutationOnWindows } from './guards.ts'
 import { sanitizeRouteError } from '../sanitize-route-error.ts'
 import type { StartupTransactionRunner } from './startup-transaction.ts'
 import type { RuntimeModuleContext } from './context.ts'
@@ -91,9 +90,9 @@ export function createRuntimeRecoveryActions(deps: RuntimeRecoveryActionsDeps): 
    *  probe gate, and only then finalizes access. The shared engine owns the
    *  crash-safe transaction (stash/evidence/probe-required checkpoints). */
   async function recoverMetadata(): Promise<{ accepted: true }> {
-    if (platform === 'win32') throw Object.assign(new Error('windows runtime mutations are read-only'), { code: 'platform_read_only' })
+    refuseRuntimeMutationOnWindows(platform)
     assertMutationIdle()
-    if (envPath !== null) throw refusalError(envPinnedRefusal('metadata recovery'))
+    refuseOnEnvPinned(envPath, 'metadata recovery')
     const builtin = facts.requireBuiltinVersion()
     if (builtin === null || !isSafeVersion(builtin)) {
       throw Object.assign(new Error('gateway builtin dsh anchor does not expose a stable version; metadata recovery refused'), { code: 'invalid_target' })
@@ -210,7 +209,7 @@ export function createRuntimeRecoveryActions(deps: RuntimeRecoveryActionsDeps): 
    *  resume/blocked projection. env stays allowed (data recovery is
    *  source-independent, design 18 §3.6); win32 read-only refuses. */
   async function restorePreRollbackStash(stashName: string): Promise<{ accepted: true }> {
-    if (platform === 'win32') throw Object.assign(new Error('windows runtime mutations are read-only'), { code: 'platform_read_only' })
+    refuseRuntimeMutationOnWindows(platform)
     assertMutationIdle()
     if (!/^\d{13}-[0-9a-f]{8}$/.test(stashName)) {
       throw Object.assign(new Error('invalid pre-rollback stash name'), { code: 'invalid_target' })
@@ -294,9 +293,9 @@ export function createRuntimeRecoveryActions(deps: RuntimeRecoveryActionsDeps): 
   }
 
   async function retryApply(): Promise<{ accepted: boolean; blockedReason: string | null }> {
-    if (platform === 'win32') throw Object.assign(new Error('windows runtime mutations are read-only'), { code: 'platform_read_only' })
+    refuseRuntimeMutationOnWindows(platform)
     assertMutationIdle()
-    if (envPath !== null) throw refusalError(envPinnedRefusal('version mutations'))
+    refuseOnEnvPinned(envPath, 'version mutations')
     assertNoOrdinaryPending()
     const record = readOverride(baseDir)
     const interrupted = record !== null && (record.swapAttempted === true || record.lastOutcome === 'snapshot-failed')
@@ -315,7 +314,7 @@ export function createRuntimeRecoveryActions(deps: RuntimeRecoveryActionsDeps): 
   }
 
   async function retryRestore(): Promise<{ accepted: boolean; blockedReason: string | null }> {
-    if (platform === 'win32') throw Object.assign(new Error('windows runtime mutations are read-only'), { code: 'platform_read_only' })
+    refuseRuntimeMutationOnWindows(platform)
     assertMutationIdle()
     // Interrupted data-restore continuation is source-independent — the desktop
     // never refuses env here, so neither does the gateway (retry-apply stays

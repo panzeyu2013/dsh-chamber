@@ -54,10 +54,7 @@ import type { GatewayConfig } from './config.ts'
 // pre-gates in runtime-routes.ts comes from runtime-refusals.ts; canonical
 // recovery reason sets (incl. RECOVERABLE_METADATA_BLOCKS) live there and are
 // consumed by both runtime layers.
-import {
-  envPinnedRefusal,
-  refusalError,
-} from './runtime-refusals.ts'
+import { refuseOnEnvPinned, refuseRuntimeMutationOnWindows } from './runtime/guards.ts'
 
 import { readRegistryOrigin, writeRegistryOrigin } from './runtime/registry-source.ts'
 import { createRuntimeWorkspaceFacts, type ResolvedWorkspace } from './runtime/workspace-facts.ts'
@@ -494,9 +491,9 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
   }
 
   async function setRegistry(origin: string): Promise<{ origin: string }> {
-    if (platform === 'win32') throw Object.assign(new Error('windows runtime mutations are read-only'), { code: 'platform_read_only' })
+    refuseRuntimeMutationOnWindows(platform)
     assertMutationIdle()
-    if (envPath !== null) throw refusalError(envPinnedRefusal('registry mutation'))
+    refuseOnEnvPinned(envPath, 'registry mutation')
     assertNoPending()
     const canonical = canonicalRegistryOrigin(origin)
     if (canonical === null) throw Object.assign(new Error('invalid registry origin'), { code: 'bad_registry_origin' })
