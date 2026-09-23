@@ -49,6 +49,6 @@
     "lib/types/**/*.d.ts"
   ],
   "scripts": {
-    "test": "node test/boot-tolerance.test.ts && node test/boot-rows.test.ts && node --import ../../scripts/dev/test-client-web-register.mjs test/configure-context.test.ts"
+    "test": "node ./scripts/test.mjs"
   }
 }

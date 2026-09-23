@@ -16,7 +16,11 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { MODES, pnpmInvocation, requestedMode, runMode, stepInvocation } from './run-checks.mjs'
+import {
+  MODES, directManifestInvocation, directNodeInvocation, directTscInvocation, packageManifestDirs,
+  pnpmInvocation, requestedJobs, requestedMode, resolvePackageTestPlan, rootScripts, roundRobinSchedule,
+  runMode, stepInvocation, totalJobs,
+} from './run-checks.mjs'
 import { ARTIFACTS, ensureArtifacts, formatMissingArtifacts, missingArtifacts } from '../dev/ensure-artifacts.mjs'
 import { ciUnclassifiedGateCommands, jobBlock, staticGateParityProblems } from './static-gate-parity.mjs'
 import { judgeSwiftTestReport, parseSwiftTestReport, swiftTestArgs, swiftTestEnvironment } from './run-swift-tests.mjs'
@@ -64,14 +68,231 @@ test('mode names are recognised and unknown names are rejected', () => {
   assert.equal(requestedMode(['nonsense']), undefined)
   assert.equal(requestedMode(['--list']), undefined)
 })
-test('an unknown mode reports a failure instead of a silent pass', () => {
-  const { failed, ran } = runMode('nope', { log: () => {} })
+test('--jobs consumes its value: the mode is still recognised and the override is validated', () => {
+  assert.equal(requestedMode(['--jobs', '8', 'tests']), 'tests')
+  assert.equal(requestedMode(['tests', '--jobs', '8']), 'tests')
+  assert.deepEqual(requestedJobs(['tests']), {})
+  assert.deepEqual(requestedJobs(['tests', '--jobs', '8']), { jobs: 8 })
+  assert.deepEqual(requestedJobs(['--jobs=2']), { jobs: 2 })
+  assert.match(requestedJobs(['--jobs', '0']).error, /positive integer/)
+  assert.match(requestedJobs(['--jobs', 'nope']).error, /positive integer/)
+  assert.match(requestedJobs(['tests', '--jobs']).error, /needs a concurrency value/)
+})
+test('static/typecheck steps are command entries on the gate pool with a bounded child env', async () => {
+  const seen = []
+  const run = await runMode('typecheck', {
+    log: () => {},
+    jobs: 3,
+    ensureArtifacts: () => ({ ok: true, missing: [], built: false }),
+    runner: (entry) => {
+      seen.push(entry)
+      return { promise: Promise.resolve({ status: 0, signal: null, stdout: '', stderr: '' }), kill() {} }
+    },
+  })
+  assert.deepEqual(run.failed, [])
+  assert.equal(run.ran, MODES.typecheck.length)
+  assert.equal(seen.length, MODES.typecheck.length)
+  for (const entry of seen) {
+    assert.equal(entry.env.DSH_TEST_JOBS, '1', 'a gate that fans out must not multiply the pool')
+    assert.equal(entry.rawStatus, true)
+    assert.equal(entry.group, '')
+    assert.equal(typeof entry.command, 'string')
+    assert.ok(Array.isArray(entry.args))
+  }
+  const clientWebEntry = seen.find(entry => entry.file === 'typecheck:client-web')
+  assert.equal(clientWebEntry.command, process.execPath, 'a plain node step runs without a pnpm startup')
+  assert.ok(clientWebEntry.env.PATH.includes('node_modules'), 'the direct route keeps node_modules/.bin on PATH')
+  const tscEntry = seen.find(entry => entry.file === 'typecheck')
+  assert.equal(tscEntry.command, process.execPath, 'a tsc step runs the local compiler without a pnpm startup')
+  assert.match(tscEntry.args[0], /typescript[\\/]bin[\\/]tsc$/, 'and it executes the pinned compiler entry')
+  assert.equal(tscEntry.cwd, REPO_ROOT, 'root-relative tsc projects need the repository root as cwd')
+})
+test('directNodeInvocation resolves plain node root scripts and refuses flags/others', () => {
+  const facts = {
+    scripts: {
+      'verify:x': 'node scripts/gates/x.mjs',
+      'test:scripts': 'node scripts/gates/run-script-tests.mjs --group gates',
+      'verify:flag': 'node --experimental-strip-types scripts/y.mjs',
+      typecheck: 'tsc -p packages/x/tsconfig.json --noEmit',
+      'verify:y': 'pnpm run verify:i18n',
+    },
+  }
+  assert.deepEqual(directNodeInvocation('verify:x', facts),
+    { command: process.execPath, args: ['scripts/gates/x.mjs'], cwd: REPO_ROOT })
+  assert.deepEqual(directNodeInvocation('test:scripts', facts),
+    { command: process.execPath, args: ['scripts/gates/run-script-tests.mjs', '--group', 'gates'], cwd: REPO_ROOT })
+  assert.equal(directNodeInvocation('verify:flag', facts), null, 'a node flag is not a script path')
+  assert.equal(directNodeInvocation('typecheck', facts), null)
+  assert.equal(directNodeInvocation('verify:y', facts), null)
+  assert.equal(directNodeInvocation('unknown', facts), null)
+})
+test('directTscInvocation maps tsc steps to the pinned local compiler and refuses others', () => {
+  const facts = {
+    scripts: {
+      typecheck: 'tsc -p packages/x/tsconfig.json --noEmit',
+      'verify:x': 'node scripts/gates/x.mjs',
+      'verify:y': 'pnpm run verify:i18n',
+    },
+    binPath: fileURLToPath(import.meta.url),
+  }
+  assert.deepEqual(directTscInvocation('typecheck', facts), {
+    command: process.execPath,
+    args: [fileURLToPath(import.meta.url), '-p', 'packages/x/tsconfig.json', '--noEmit'],
+    cwd: REPO_ROOT,
+  })
+  assert.equal(directTscInvocation('verify:x', facts), null)
+  assert.equal(directTscInvocation('verify:y', facts), null)
+  assert.equal(directTscInvocation('typecheck', { ...facts, binPath: resolve(REPO_ROOT, 'missing', 'tsc') }), null,
+    'a missing compiler falls back to the declared pnpm step')
+})
+test('lockstep: every package test step resolves to the shared manifest, never a silent chain', () => {
+  const scripts = rootScripts()
+  const packageSteps = MODES.tests.filter(step =>
+    typeof scripts[step] === 'string' && /^pnpm --filter \S+ run test$/u.test(scripts[step]))
+  assert.ok(packageSteps.length >= 20, 'the tests mode must cover the workspace packages (got ' + packageSteps.length + ')')
+  assert.equal(packageSteps.length, packageManifestDirs().size,
+    'every package with a test script must have exactly one tests-mode step')
+  for (const step of packageSteps) {
+    const direct = directManifestInvocation(step)
+    assert.notEqual(direct, null, step + ' must resolve to the shared manifest; a new && chain needs an explicit allowlist here')
+    assert.ok(existsSync(resolve(direct.cwd, 'scripts', 'test.mjs')), step + ' must point at a real manifest file')
+  }
+})
+test('roundRobinSchedule interleaves steps and stays a permutation', () => {
+  const entries = [
+    { label: 'a' }, { label: 'a' }, { label: 'a' },
+    { label: 'b' }, { label: 'b' },
+    { label: 'c' },
+  ]
+  const schedule = roundRobinSchedule(entries)
+  assert.deepEqual(schedule, [0, 3, 5, 1, 4, 2])
+  assert.equal(new Set(schedule).size, entries.length)
+  assert.deepEqual(roundRobinSchedule([]), [])
+})
+test('directManifestInvocation resolves exact manifest scripts and refuses anything else', () => {
+  const facts = {
+    packages: new Map([
+      ['@x/manifest', { dir: '/packages/manifest', test: 'node ./scripts/test.mjs' }],
+      ['@x/ensure', { dir: '/packages/ensure', test: 'node ../../scripts/dev/ensure-artifacts.mjs && node ./scripts/test.mjs' }],
+      ['@x/chain', { dir: '/packages/chain', test: 'node a.test.ts && node b.test.ts' }],
+    ]),
+    scripts: {
+      'test:manifest': 'pnpm --filter @x/manifest run test',
+      'test:ensure': 'pnpm --filter @x/ensure run test',
+      'test:chain': 'pnpm --filter @x/chain run test',
+      'test:missing': 'pnpm --filter @x/missing run test',
+    },
+  }
+  assert.deepEqual(directManifestInvocation('test:manifest', facts),
+    { command: process.execPath, args: ['scripts/test.mjs'], cwd: '/packages/manifest' })
+  assert.deepEqual(directManifestInvocation('test:ensure', facts),
+    { command: process.execPath, args: ['scripts/test.mjs'], cwd: '/packages/ensure' })
+  assert.equal(directManifestInvocation('test:chain', facts), null, 'an && chain has no single manifest')
+  assert.equal(directManifestInvocation('test:missing', facts), null)
+  assert.equal(directManifestInvocation('verify:i18n', facts), null)
+  assert.equal(directManifestInvocation('unknown', facts), null)
+})
+test('the shipped map covers every package and no step is left on a chain', () => {
+  assert.ok(packageManifestDirs().size >= 20, 'the package map must cover the chamber packages')
+  assert.notEqual(directManifestInvocation('test:runtime'), null, 'runtime is a direct manifest')
+  assert.notEqual(directManifestInvocation('test:client-web'), null, 'the last && chain is now a shared manifest')
+  assert.notEqual(directManifestInvocation('test:host-open-in'), null, 'the seed fork is a direct manifest')
+})
+test('tests mode drives one global pool over every resolved package manifest', async () => {
+  const logged = []
+  const packageSteps = MODES.tests.filter(step => step !== 'node scripts/gates/verify-artifact-freshness.mjs')
+  const run = await runMode('tests', {
+    log: line => logged.push(line),
+    jobs: 2,
+    ensureArtifacts: () => ({ ok: true, missing: [], built: false }),
+    launchStep: async step => ({
+      status: 0, signal: null, stderr: '',
+      stdout: '__DSH_TEST_MANIFEST_DUMP__' + JSON.stringify({
+        label: step, packageRoot: '/pkg', guard: 'executed', timeoutMs: null,
+        requireNoSkips: false, zeroTestAllowlist: [],
+        entries: [{ group: 'g', file: step + '.test.ts', nodeArgs: [] }],
+      }),
+    }),
+    runner: entry => ({
+      promise: Promise.resolve(entry.file === 'test:runtime.test.ts'
+        ? { status: 1, signal: null, stdout: 'ℹ tests 1\nℹ pass 0\nℹ fail 1\n', stderr: '' }
+        : { status: 0, signal: null, stdout: 'ℹ tests 1\nℹ pass 1\n', stderr: '' }),
+      kill() {},
+    }),
+    writeStdout: () => {},
+    writeStderr: () => {},
+  })
+  assert.deepEqual(run.failed, ['test:runtime'], 'the failing file is reported by its owning step')
+  assert.equal(run.ran, packageSteps.length, 'the serial freshness step must not run after a failure')
+  assert.ok(logged.some(line => line.includes(`${packageSteps.length} package step(s) resolved`)))
+})
+test('totalJobs: --jobs wins, then DSH_TEST_JOBS, then the bounded default', () => {
+  assert.equal(totalJobs(9), 9)
+  assert.equal(totalJobs(undefined, { DSH_TEST_JOBS: '6' }), 6)
+  const fallback = totalJobs(undefined, {})
+  assert.ok(fallback >= 1 && fallback <= 8, 'the default stays inside 1..8')
+  assert.equal(totalJobs(7, { DSH_TEST_JOBS: 'bogus' }), 7, 'an explicit --jobs wins over the environment')
+  assert.throws(() => totalJobs(undefined, { DSH_TEST_JOBS: 'bogus' }), /DSH_TEST_JOBS/,
+    'a bogus env value must fail loudly instead of silently changing the pool width')
+})
+test('resolvePackageTestPlan: a dump expands to entries; a chain step stays one ordered pre-run section', async () => {
+  const dump = {
+    label: 'test:manifest', packageRoot: '/pkg', leg: null, guard: 'executed', timeoutMs: null,
+    requireNoSkips: false, zeroTestAllowlist: [], entries: [{ group: 'g', file: 'a.test.ts', nodeArgs: [] }],
+  }
+  const launch = async step => step === 'test:manifest' ? {
+    status: 0, signal: null, stderr: '',
+    stdout: 'noise\n__DSH_TEST_MANIFEST_DUMP__' + JSON.stringify(dump) + '\n',
+  } : { status: 0, signal: null, stderr: '', stdout: 'chain transcript' }
+  const plan = await resolvePackageTestPlan(['test:manifest', 'test:chain'], { launch, concurrency: 2 })
+  assert.equal(plan.resolved, 2)
+  assert.deepEqual(plan.skipped, [], 'a clean resolve skips nothing')
+  assert.equal(plan.entries.length, 2)
+  assert.deepEqual(plan.entries[0], {
+    group: 'g', file: 'a.test.ts', nodeArgs: [],
+    label: 'test:manifest', packageRoot: '/pkg', guard: 'executed',
+    timeoutMs: undefined, zeroTestAllowlist: [], requireNoSkips: false,
+  })
+  assert.equal(plan.entries[1].rawStatus, true)
+  assert.equal(plan.entries[1].preResult.stdout, 'chain transcript')
+  assert.equal(plan.entries[1].label, 'test:chain')
+})
+test('resolvePackageTestPlan: a manifest step whose dump is missing fails loudly instead of skipping its files', async () => {
+  const launch = async step => ({
+    status: 0, signal: null, stderr: '', stdout: '',
+    ...(step === 'test:manifest' ? { requireDump: true } : {}),
+  })
+  const plan = await resolvePackageTestPlan(['test:manifest', 'test:chain'], { launch, concurrency: 1 })
+  assert.equal(plan.resolved, 1, 'a missing dump stops the phase unless --continue')
+  assert.deepEqual(plan.skipped, ['test:chain'])
+  assert.equal(plan.entries.length, 1)
+  const failed = plan.entries[0]
+  assert.equal(failed.file, 'test:manifest')
+  assert.equal(failed.rawStatus, true)
+  assert.equal(failed.preResult.status, 1, 'a missing dump is a failed section, never a green pre-run')
+  assert.match(failed.preResult.stderr, /manifest dump missing/)
+  const continued = await resolvePackageTestPlan(['test:manifest'], { launch, concurrency: 1, keepGoing: true })
+  assert.equal(continued.entries[0].preResult.status, 1)
+})
+test('resolvePackageTestPlan: a non-zero step stops the resolve phase unless --continue', async () => {
+  const steps = ['test:a', 'test:b', 'test:c']
+  const failFirst = async step => ({ status: step === 'test:a' ? 1 : 0, signal: null, stderr: '', stdout: '' })
+  const stopped = await resolvePackageTestPlan(steps, { launch: failFirst, concurrency: 1 })
+  assert.equal(stopped.resolved, 1, 'serial resolve stops at the first failure')
+  assert.deepEqual(stopped.skipped, ['test:b', 'test:c'], 'the plan must name the steps a resolve failure skipped')
+  const continued = await resolvePackageTestPlan(steps, { launch: failFirst, concurrency: 1, keepGoing: true })
+  assert.equal(continued.resolved, 3)
+  assert.deepEqual(continued.skipped, [])
+  assert.equal(continued.entries.filter(entry => entry.rawStatus === true).length, 3)
+})
+test('an unknown mode reports a failure instead of a silent pass', async () => {
+  const { failed, ran } = await runMode('nope', { log: () => {} })
   assert.deepEqual(failed, ['mode nope has no steps'])
   assert.equal(ran, 0)
 })
-test('listing a mode runs nothing', () => {
+test('listing a mode runs nothing', async () => {
   const lines = []
-  const { failed, ran } = runMode('static', { list: true, log: line => lines.push(line) })
+  const { failed, ran } = await runMode('static', { list: true, log: line => lines.push(line) })
   assert.deepEqual(failed, [])
   assert.equal(ran, 0)
   assert.equal(lines.length, MODES.static.length + 1)
@@ -529,10 +750,10 @@ test('ensure-artifacts: an empty fixture root reports every manifest entry and n
     rmSync(empty, { recursive: true, force: true })
   }
 })
-test('run-checks static fails loudly on missing artifacts; tests/typecheck/full self-bootstrap', () => {
+test('run-checks static fails loudly on missing artifacts; tests/typecheck/full self-bootstrap', async () => {
   const refusal = () => ({ ok: false, missing: [{ id: 'x', path: 'x', build: 'y' }], built: false })
   const staticLogs = []
-  const staticRun = runMode('static', {
+  const staticRun = await runMode('static', {
     log: line => staticLogs.push(line),
     ensureArtifacts: options => {
       assert.equal(options.build, false, 'static is read-only: it must never build')
@@ -545,7 +766,7 @@ test('run-checks static fails loudly on missing artifacts; tests/typecheck/full 
     'the static failure must name the build command')
   for (const mode of ['typecheck', 'tests', 'full']) {
     let requested
-    const run = runMode(mode, {
+    const run = await runMode(mode, {
       log: () => {},
       ensureArtifacts: options => { requested = options.build; return refusal() },
     })
@@ -553,10 +774,10 @@ test('run-checks static fails loudly on missing artifacts; tests/typecheck/full 
     assert.equal(run.ran, 0, mode + ' must not run steps when the artifacts cannot be ensured')
   }
 })
-test('run-checks --list never runs the artifact pre-step', () => {
+test('run-checks --list never runs the artifact pre-step', async () => {
   let called = false
   const lines = []
-  runMode('tests', {
+  await runMode('tests', {
     list: true,
     log: line => lines.push(line),
     ensureArtifacts: () => { called = true; return { ok: false, missing: [], built: false } },

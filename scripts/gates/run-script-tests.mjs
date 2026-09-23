@@ -19,15 +19,19 @@
  *   node scripts/gates/run-script-tests.mjs                     # every group
  *   node scripts/gates/run-script-tests.mjs --group upstream    # repeatable
  *   node scripts/gates/run-script-tests.mjs --list
+ *   node scripts/gates/run-script-tests.mjs --jobs 8            # file-level pool
  *
  * Exit codes (scripts/README.md §分类规则 2): 0 pass · 1 failure · 2 usage error.
  */
 import { existsSync } from 'node:fs'
 import { dirname, join, relative, resolve, sep } from 'node:path'
-import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
 import { walkFiles } from '../lib/walk.mjs'
+// The shared bounded-pool runner: the scripts suite uses the same file-level
+// concurrency knob (--jobs / DSH_TEST_JOBS) the package manifests use, so one
+// DSH_TEST_JOBS budget governs the whole tests mode.
+import { resolveJobs, spawnCaptured } from '../lib/test-manifest.mjs'
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 
@@ -126,6 +130,9 @@ const SCRIPT_TEST_IGNORED_DIRECTORIES = ['node_modules', 'dist', '.git']
 
 /**
  * Resolve the command line into a selection.
+ * `--jobs` is recognized (and its value consumed) here but validated by
+ * {@link resolveJobs}; leaving it out of `problems` keeps one concurrency parser
+ * shared with the package manifests.
  * @param {string[]} argv - arguments after the script name.
  * @returns {{ groups: string[], list: boolean, problems: string[] }} the groups to run (all when none was named).
  */
@@ -136,6 +143,12 @@ export function resolveSelection(argv) {
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index]
     if (argument === '--list') { list = true; continue }
+    if (argument === '--jobs') {
+      if (argv[index + 1] === undefined) { problems.push('--jobs needs a concurrency value'); break }
+      index += 1
+      continue
+    }
+    if (argument.startsWith('--jobs=')) continue
     if (argument === '--group') {
       const name = argv[index + 1]
       if (name === undefined) { problems.push('--group needs a group name'); break }
@@ -198,7 +211,7 @@ export function collectScriptTests() {
     .sort()
 }
 
-function main() {
+async function main() {
   const selection = resolveSelection(process.argv.slice(2))
   if (selection.problems.length > 0) {
     for (const problem of selection.problems) console.error(`[script-tests] ${problem}`)
@@ -225,14 +238,65 @@ function main() {
     }
     return
   }
-  for (const file of selected) {
-    console.log(`[script-tests] ${file}`)
-    const result = spawnSync(process.execPath, [file], { cwd: REPO_ROOT, stdio: 'inherit' })
-    if (result.status !== 0) {
-      console.error(`[script-tests] ${file} failed (exit ${result.status ?? `signal ${result.signal}`})`)
-      process.exit(1)
+
+  const jobResolution = resolveJobs(process.argv.slice(2))
+  if ('error' in jobResolution) {
+    console.error('[script-tests] ' + jobResolution.error)
+    process.exit(2)
+  }
+
+  // Bounded pool with manifest-order flush: transcripts never interleave and
+  // the first failure in declaration order is the one reported. A failure stops
+  // new launches and cancels the rest once it reaches the flush.
+  const results = new Array(selected.length)
+  const handles = new Map()
+  let next = 0
+  let active = 0
+  let stopped = false
+  let flushPointer = 0
+  let failed = null
+  let resolveDone
+  const done = new Promise(resolvePromise => { resolveDone = resolvePromise })
+  const limit = Math.max(1, Math.min(jobResolution.jobs, Math.max(1, selected.length)))
+  const flush = () => {
+    if (failed !== null) return
+    while (flushPointer < selected.length) {
+      const outcome = results[flushPointer]
+      if (outcome === undefined) return
+      console.log(`[script-tests] ${selected[flushPointer]}`)
+      if (outcome.stdout !== '') process.stdout.write(outcome.stdout)
+      if (outcome.stderr !== '') process.stderr.write(outcome.stderr)
+      if (outcome.status !== 0) {
+        console.error(`[script-tests] ${selected[flushPointer]} failed (exit ${outcome.status ?? `signal ${outcome.signal}`})`)
+        failed = selected[flushPointer]
+        stopped = true
+        for (const handle of handles.values()) handle.kill()
+        return
+      }
+      flushPointer += 1
     }
   }
+  const pump = () => {
+    while (!stopped && active < limit && next < selected.length) {
+      const index = next
+      next += 1
+      const handle = spawnCaptured(process.execPath, [selected[index]], { cwd: REPO_ROOT })
+      handles.set(index, handle)
+      active += 1
+      handle.promise.then(result => {
+        active -= 1
+        handles.delete(index)
+        results[index] = result
+        if (result.status !== 0) stopped = true
+        flush()
+        pump()
+      })
+    }
+    if (active === 0) resolveDone()
+  }
+  pump()
+  await done
+  if (failed !== null) process.exit(1)
   console.log(`[script-tests] ${selected.length} file(s) passed`)
 }
 

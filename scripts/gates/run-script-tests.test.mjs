@@ -22,6 +22,11 @@ test('--group selects one group, repeats dedupe, and unknown names are usage err
   assert.deepEqual(resolveSelection(['--verbose']).problems, [`unknown argument '--verbose'`])
   assert.equal(resolveSelection(['--list']).list, true)
 })
+test('--jobs / --jobs=<n> are consumed without becoming unknown arguments', () => {
+  assert.deepEqual(resolveSelection(['--jobs', '8', '--group', 'gates']).problems, [])
+  assert.deepEqual(resolveSelection(['--group', 'gates', '--jobs=4']).problems, [])
+  assert.deepEqual(resolveSelection(['--jobs']).problems, ['--jobs needs a concurrency value'])
+})
 test('a manifest that matches the tree reports nothing', () => {
   const problems = manifestProblems({
     listed: [{ group: 'gates', path: 'scripts/gates/a.test.mjs' }],
