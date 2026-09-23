@@ -72,6 +72,10 @@ const PACKAGE_TESTS = [
  */
 const CLIENT_TYPECHECKS = [
   'typecheck',
+  // ci.yml already runs the runtime project's compiler face on both paths
+  // (push + release validation); the local mode mirrors it so a type defect in
+  // packages/dsh-runtime cannot pass every local gate while CI is the first to see it.
+  'typecheck:runtime',
   'typecheck:sidebar',
   'typecheck:git',
   'typecheck:layout',

@@ -72,17 +72,21 @@ test('win32 policy: transient retries, exhaustion rethrows, permanent fails fast
 
 test('sync schedule mirrors the async policy: plain off win32, bounded retries on win32', () => {
   let syncCalls = 0
-  const sleeps: number[] = []
+  // Sink closure: the direct sleeps.push(ms) inside the nested drive() below
+  // loses the array's type in this file's closure analysis, while the sink
+  // parameter stays number[].
+  const sleepSink: number[] = []
+  const recordSleep = (sink: number[]) => (ms: number): void => { sink.push(ms) }
   renameWithWindowsRetrySync('a', 'b', {
     isWindows: false,
     renameSyncFn: () => { syncCalls += 1 },
-    sleepSync: (ms) => { sleeps.push(ms) },
+    sleepSync: recordSleep(sleepSink),
   })
   assert.equal(syncCalls, 1)
-  assert.deepEqual(sleeps, [])
+  assert.deepEqual(sleepSink, [])
 
   let attempts = 0
-  const drive = (failures: number) => {
+  const drive = (failures: number): void => {
     attempts = 0
     renameWithWindowsRetrySync('a', 'b', {
       isWindows: true,
@@ -90,12 +94,12 @@ test('sync schedule mirrors the async policy: plain off win32, bounded retries o
         attempts += 1
         if (attempts <= failures) throw errWithCode('EPERM')
       },
-      sleepSync: (ms) => { sleeps.push(ms) },
+      sleepSync: recordSleep(sleepSink),
     })
   }
   drive(2)
   assert.equal(attempts, 3)
-  assert.deepEqual(sleeps, [WINDOWS_RENAME_RETRY_DELAYS_MS[0], WINDOWS_RENAME_RETRY_DELAYS_MS[1]])
+  assert.deepEqual(sleepSink, [WINDOWS_RENAME_RETRY_DELAYS_MS[0], WINDOWS_RENAME_RETRY_DELAYS_MS[1]])
 
   let exhaustedSleeps = 0
   assert.throws(() => renameWithWindowsRetrySync('a', 'b', {

@@ -334,15 +334,6 @@ export function readCurrentPointerState(baseDir: string): CurrentPointerState {
   }
 }
 
-/** Compatibility projection. Security-sensitive startup/resolution code must
- * consume readCurrentPointerState so corrupt never aliases builtin. The
- * projection is lossy for 'unknown' too (an unreadable leaf is not a builtin
- * fallback), so fail-closed consumers stay on the state API. */
-export function readCurrentPointer(baseDir: string): string | null {
-  const state = readCurrentPointerState(baseDir)
-  return state.kind === 'valid' ? state.version : null
-}
-
 export function writeCurrentPointer(baseDir: string, version: string): void {
   atomicWriteJson(baseDir, currentPointerPath(baseDir), { version: assertSafeVersion(version) })
 }
@@ -436,15 +427,6 @@ export function readOverrideState(baseDir: string): OverrideState {
     return { kind: 'corrupt' }
   }
   return { kind: 'valid', record }
-}
-
-/** Compatibility projection. Security-sensitive startup/resolution code must
- * consume readOverrideState so corruption never aliases no override. The
- * projection is lossy for 'unknown' too (an unreadable leaf is not "no
- * override"), so fail-closed consumers stay on the state API. */
-export function readOverride(baseDir: string): OverrideRecord | null {
-  const state = readOverrideState(baseDir)
-  return state.kind === 'valid' ? state.record : null
 }
 
 function assertOptionalText(value: string | null | undefined, field: string): void {
@@ -1079,23 +1061,6 @@ export function listKnownGoodVersionsState(baseDir: string): KnownGoodVersionsSt
   }
 }
 
-/** Compatibility projection over listKnownGoodVersionsState: a corrupt or
- *  unreadable ledger projects to an empty list here, which is exactly why
- *  retention/prune decisions read the state form instead. */
-export function listKnownGoodVersions(baseDir: string): string[] {
-  const state = listKnownGoodVersionsState(baseDir)
-  return state.kind === 'ok' ? state.versions : []
-}
-
-export function latestKnownGood(
-  baseDir: string,
-  excludeVersion: string | null = null,
-  platform = `${process.platform}-${process.arch}`,
-): string | null {
-  return listKnownGoodVersions(baseDir)
-    .find((version) => version !== excludeVersion && validateVersionTree(baseDir, version, platform).ok) ?? null
-}
-
 export function markKnownGood(
   baseDir: string,
   version: string,
@@ -1166,18 +1131,6 @@ export function readRuntimeFailureState(baseDir: string, version: string): Runti
   return record === null
     ? { kind: 'corrupt', identity: read.value.identity }
     : { kind: 'valid', record }
-}
-
-/** Compatibility projection; 'unknown' projects to null here — fail-closed
- *  callers read readRuntimeFailureState instead. */
-export function readRuntimeFailure(baseDir: string, version: string): RuntimeFailureRecord | null {
-  const safe = assertSafeVersion(version)
-  const state = readRuntimeFailureState(baseDir, safe)
-  if (state.kind === 'corrupt') {
-    preserveSafeCorruptAuthority(baseDir, failurePath(baseDir, safe), state.identity)
-    return null
-  }
-  return state.kind === 'valid' ? state.record : null
 }
 
 export function recordRuntimeFailure(baseDir: string, input: RuntimeFailureInput, now = new Date()): RuntimeFailureRecord {
