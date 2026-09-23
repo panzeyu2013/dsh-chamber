@@ -1083,15 +1083,26 @@ export function runtimeReportSignature(
  * consumer of this identity).
  */
 export function gapSignature(gap: ServerBootGap | undefined): string | null {
-  if (gap === undefined) return null
-  const encode = (value: unknown): string | null => {
-    if (value === undefined || value === null || value === '') return null
-    if (Array.isArray(value)) return value.length === 0 ? null : `[${value.map(item => String(item)).join('\u0000')}]`
-    return JSON.stringify(value)
-  }
-  return Object.entries(gap)
+  return gap === undefined ? null : factRecordSignature(gap)
+}
+
+function encodeFactValue(value: unknown): string | null {
+  if (value === undefined || value === null || value === '') return null
+  if (Array.isArray(value)) return value.length === 0 ? null : `[${value.map(item => String(item)).join('\u0000')}]`
+  return JSON.stringify(value)
+}
+
+/**
+ * The `key=value` identity of a fact record: components sorted, `\u0001`-joined,
+ * empty values dropped, and `omit` keys never entering. The single source of the
+ * encoder above for every settled-boot signature (the renderer's boot-gap seam
+ * reuses it and omits the producer's sentence).
+ */
+export function factRecordSignature(record: object, omit: readonly string[] = []): string {
+  return Object.entries(record)
+    .filter(([key]) => !omit.includes(key))
     .flatMap(([key, value]) => {
-      const encoded = encode(value)
+      const encoded = encodeFactValue(value)
       return encoded === null ? [] : [`${key}=${encoded}`]
     })
     .sort()
