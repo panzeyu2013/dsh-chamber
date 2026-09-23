@@ -2,7 +2,7 @@ import {
   RUNTIME_FAMILY_CORE,
   RUNTIME_FAMILY_FORBIDDEN,
   familyNamesFromLockfileClosure,
-} from '../../packages/control-plane/src/protected-plugins.ts'
+} from '../../packages/control-plane/src/runtime-family.ts'
 
 /**
  * plugin-protection-gate.mjs — C11–C14 的纯判据（docs/checklists/upstream-touchpoints.md
@@ -14,8 +14,9 @@ import {
  * 拿回 `{violations, notes}`，再由调用方决定 fail/warn。于是每条判据都能用合成
  * 夹具做**负例**测试（改坏派生来源/契约/播种/镜像 → 必须变红）。
  *
- * 判据的**单一来源**：C11 的核心锚/禁名判据与锁文件解析器都直接 import 运行时模块
- * `packages/control-plane/src/protected-plugins.ts`（node 24 直接跑 TS，零依赖），
+ * 判据的**单一来源**：C11 的核心锚/禁名判据与锁文件解析器都直接 import 运行时 leaf
+ * `packages/control-plane/src/runtime-family.ts`（node 24 直接跑 TS，零 workspace
+ * 裸依赖——本门在 CI 的 `pnpm install` 之前运行，必须不触达 wire 等裸包名），
  * 所以"门禁判据"与"运行时判据"不可能再漂移。
  *
  * 四门的语义（design 21 §6.11）：

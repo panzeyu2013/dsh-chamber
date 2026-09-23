@@ -1,13 +1,15 @@
 // verify-upstream-touchpoints.mjs sibling tests: parse surface + guard wiring (no
-// C1/C3–C16 gate or rebuild before the argument guard) + the C15 hover-port verdict
+// C1/C3–C16 gate or rebuild before the argument guard) + the pre-install module-graph
+// lock (the entry runs before pnpm install) + the C15 hover-port verdict
 // (`verify-upstream-touchpoints-hover.mjs`) + the C16 vendor-source verdict
 // (`verify-upstream-touchpoints-vendor.mjs`); `test:upgrade-tools` lists its test files explicitly.
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { existsSync, readFileSync, statSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { USAGE_EXIT_CODE, VERIFY_USAGE, parseVerifyArgs } from './verify-upstream-touchpoints-args.mjs'
 import {
@@ -791,5 +793,70 @@ test('C16 wiring: the real host-graph vendor import is exactly the registered pa
   assert.deepEqual(imports[0].symbols, ['optionalStringArray', 'stripClientSuffix'])
   const verdict = c16(imports, registry.vendorSourceConsumers)
   assert.equal(verdict.ok, true, verdict.failures.join('\n'))
+})
+
+// ── pre-install 可运行性锁 ────────────────────────────────────────────────
+// CI 在 `pnpm install` 之前就跑本入口（ci.yml 的 test/test-windows、release.yml 的
+// validation）：入口模块图必须只含 `node:` 与相对 specifier，触达的 packages/ 源文件
+// 也不得出现裸包名。回归史：入口 → plugin-protection-gate.mjs →
+// control-plane/src/protected-plugins.ts 的 wire 值导入 ⇒ install 前
+// ERR_MODULE_NOT_FOUND。运行时判据因此住在 leaf runtime-family.ts。
+function moduleGraphProblems(root, entry) {
+  const reached = new Set()
+  const problems = []
+  const visit = (file) => {
+    if (reached.has(file)) return
+    reached.add(file)
+    for (const { specifier } of sourceModuleSpecifiers(readFileSync(file, 'utf8'))) {
+      if (specifier.startsWith('node:')) continue
+      if (specifier.startsWith('.')) { visit(resolve(dirname(file), specifier)); continue }
+      problems.push(relative(root, file) + ' -> ' + specifier)
+    }
+  }
+  visit(entry)
+  return { reached: [...reached], problems }
+}
+
+// The six entries the CI/release jobs run before the frozen install (ci.yml test +
+// test-windows, release.yml validation; test-macos has no touchpoint gate).
+const PREINSTALL_ENTRIES = [
+  'scripts/gates/classify-ci-changes.mjs',
+  'scripts/gates/verify-workflow-action-pins.mjs',
+  'scripts/gates/verify-workflow-yaml-scalars.mjs',
+  'scripts/dev/ensure-harness-vendor.mjs',
+  'scripts/upstream/verify-upstream-touchpoints.mjs',
+  'scripts/release/verify-release-ci-proof.mjs',
+  'scripts/release/release-semver.mjs',
+  'scripts/release/release-preflight.mjs',
+]
+
+test('pre-install: every pre-install entry graph never needs node_modules', () => {
+  const root = join(here, '..', '..')
+  const problems = []
+  const packageSources = new Set()
+  for (const entry of PREINSTALL_ENTRIES) {
+    const graph = moduleGraphProblems(root, join(root, entry))
+    problems.push(...graph.problems)
+    for (const file of graph.reached) {
+      const rel = relative(root, file).split('\\').join('/')
+      if (rel.startsWith('packages/')) packageSources.add(rel)
+    }
+  }
+  assert.deepEqual(problems, [], 'these entries run before the frozen install: only node:/relative specifiers')
+  assert.deepEqual([...packageSources].sort(), ['packages/control-plane/src/runtime-family.ts'],
+    'the runtime judgment may enter a pre-install graph only through its leaf module')
+})
+
+test('pre-install lock self-test: a synthetic bare specifier is caught', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-preinstall-graph-'))
+  try {
+    writeFileSync(join(dir, 'entry.mjs'), "import { mid } from './mid.mjs'\nimport 'bare-side-effect'\n")
+    writeFileSync(join(dir, 'mid.mjs'), "export const mid = (await import('bare-dynamic')).x\n")
+    const { reached, problems } = moduleGraphProblems(dir, join(dir, 'entry.mjs'))
+    assert.equal(reached.length, 2)
+    assert.deepEqual(problems.sort(), ['entry.mjs -> bare-side-effect', 'mid.mjs -> bare-dynamic'])
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 })
 

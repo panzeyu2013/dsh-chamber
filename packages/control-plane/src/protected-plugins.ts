@@ -32,47 +32,20 @@ import type { PluginRow, PluginRowRole } from '@dsh-chamber/dsh-chamber-wire/plu
 import { errorMessage } from './error-text.ts'
 import { MAX_PLUGIN_SPEC_CHARS } from './plugin-spec.ts'
 
-/**
- * 运行时线闭包的**核心锚**：F 少了任何一个都说明取错了来源（源码线/裁剪过的树/外来锁文件）。
- * 与 C11 门禁同源——门禁直接 import 本模块，不再自己抄一份。
- */
-export const RUNTIME_FAMILY_CORE: readonly string[] = [
-  '@deepseek-ai/dsh',
-  '@deepseek-ai/dsh-base',
-  '@deepseek-ai/dsh-web-app',
-]
-
-/**
- * F 里**绝不允许**出现的包：opt-in 层（`dsh-experimental-*`）与 dev/test 段。出现即说明
- * 用了源码线闭包（design 21 §6.11.1 明确排除）。与 C11 同源。
- */
-export const RUNTIME_FAMILY_FORBIDDEN: readonly { pattern: RegExp; label: string; why: string }[] = [
-  {
-    pattern: /^@deepseek-ai\/dsh-experimental-/,
-    label: '官方 opt-in 段（experimental）',
-    why: 'opt-in layer belongs to the source line, not the runtime line',
-  },
-  {
-    pattern: /^@deepseek-ai\/dsh-.*(?:-testkit|-mock-server)$/,
-    label: 'dev/test 工具包',
-    why: 'dev/test tooling belongs to the source line',
-  },
-  {
-    pattern: /^@deepseek-ai\/dsh-(?:benchmarks|loader-smoke|llm-replay|client-test-runtime)$/,
-    label: 'dev/test 专用包',
-    why: 'dev/test package belongs to the source line',
-  },
-  {
-    pattern: /^@deepseek-ai\/dsh-(?:test|dev|e2e)-/,
-    label: 'dev/test 段',
-    why: 'dev/test package belongs to the source line',
-  },
-  {
-    pattern: /^@deepseek-ai\/harness-/,
-    label: '源码线 harness 段',
-    why: 'harness packages are the source line',
-  },
-]
+// 运行时线族锚（F）与锁文件名字解析的唯一实现在 leaf 模块 runtime-family.ts：CI 的
+// C11 门禁在 `pnpm install` 之前直接 import 它；本模块还会引入 wire 的 manifest 读算法
+// （裸 workspace 包名，install 前无法解析），所以那份实现不能住在这里。这里原样
+// re-export，P 的派生与门禁仍是同一份判据。
+import {
+  RUNTIME_FAMILY_CORE,
+  RUNTIME_FAMILY_FORBIDDEN,
+  familyNamesFromLockfileClosure,
+} from './runtime-family.ts'
+export {
+  RUNTIME_FAMILY_CORE,
+  RUNTIME_FAMILY_FORBIDDEN,
+  familyNamesFromLockfileClosure,
+} from './runtime-family.ts'
 
 /**
  * 闭包是否可信（核心锚齐全 + 无禁名）。运行时与 C11 门禁共用同一判据：不可信 ⇒ 调用方
@@ -436,19 +409,8 @@ export type RuntimeFamilyResolution =
   }
   | { ok: false; reason: string }
 
-/**
- * 从**运行时锁文件**（`pnpm-lock.yaml`，唯一权威，平台无关）解析 `@deepseek-ai/*` 名字集合。
- * 兼容 pnpm v9（`'@scope/name@version':`）与 v6（`/@scope/name/version:`）两种键形。
- */
-export function familyNamesFromLockfileClosure(lockfileText: string): string[] {
-  const names = new Set<string>()
-  const v9 = /^ {2}'?(@deepseek-ai\/[a-z0-9._-]+)@/gm
-  const v6 = /^ {2}\/(@deepseek-ai\/[a-z0-9._-]+)\//gm
-  for (const re of [v9, v6]) {
-    for (const match of lockfileText.matchAll(re)) names.add(match[1])
-  }
-  return [...names].sort()
-}
+// familyNamesFromLockfileClosure（C11 门禁与 P 的唯一名字权威）的实现在 leaf 模块
+// runtime-family.ts；本文件经上面的 re-export 读同一份。
 
 /**
  * 同一个锁文件的**版本事实**：族名字 → 该名字被 pin 的版本集合。
