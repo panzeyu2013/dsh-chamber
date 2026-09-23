@@ -23,14 +23,15 @@ export const MIN_REBUILD_SPACING_MS = 1_000
 export const IN_FLIGHT_GRACE_MS = 1_000
 
 /** Opening-item deadline per logical-stream episode, and its widening ladder.
- * Mirrors REMOTE_STREAM_OPENING_TIMEOUT_MS / `remoteStreamOpeningTimeoutMs`
- * (packages/dsh-api-gateway/src/client/remote-retry-policy.ts). Ladder index =
- * consecutive timeouts for ONE episode; the episode, not the endpoint digest,
- * owns the widening (DIVERGENCE D-4). */
+ * Sole owner: the fork copy (REMOTE_STREAM_OPENING_TIMEOUT_MS /
+ * remoteStreamOpeningTimeoutMs) was retired with the reducer-owned opening
+ * ledger. Ladder index = consecutive timeouts for ONE episode; the episode,
+ * not the endpoint digest, owns the widening (DIVERGENCE D-4). */
 export const OPENING_TIMEOUT_LADDER_MS: readonly number[] = [30_000, 60_000, 120_000, 240_000, 300_000]
 
 /** A logical stream must have lived at least this long before its teardown may
- * judge the socket silent (mirrors REMOTE_STREAM_SILENT_TEARDOWN_MIN_MS). */
+ * judge the socket silent. Sole owner: the fork-side copy
+ * (REMOTE_STREAM_SILENT_TEARDOWN_MIN_MS) is retired. */
 export const SILENT_TEARDOWN_MIN_MS = 15_000
 
 /** Consecutive unanswered opening deadlines for ONE episode before the carrier is
@@ -47,11 +48,10 @@ export const OPENING_STALL_STREAK = 2
  * only resets a key's widening; it never changes a decision already made. */
 const OPENING_EPISODE_KEYS_MAX = 256
 
-/** Deadline for one WebSocket handshake (provenance:
- * REMOTE_STREAM_HANDSHAKE_TIMEOUT_MS). A socket that never fires open/error/close
- * must fail the attempt, not park every open() until the connection lane's own
- * readiness timeout. G-G locks the fork-side constant to this value until P3
- * moves the decision into the carrier reducer. */
+/** Deadline for one WebSocket handshake (the fork-side
+ * REMOTE_STREAM_HANDSHAKE_TIMEOUT_MS is retired; this table is the owner). A
+ * socket that never fires open/error/close must fail the attempt, not park
+ * every open() until the connection lane's own readiness timeout. */
 export const HANDSHAKE_TIMEOUT_MS = 30_000
 
 /** Presentation-arbiter thresholds (provenance: source-readiness.ts

@@ -40,7 +40,7 @@ test('every module in scope still exists (a renamed file cannot leave silently)'
 test('the threshold count is a real count, not an empty set', () => {
   const names = thresholdNames()
   assert.ok(names.size >= 20, 'expected the chain to still carry dozens of thresholds, got ' + String(names.size))
-  assert.ok(names.has('REMOTE_STREAM_OPENING_TIMEOUT_MS'), 'the fork constants must be in scope')
+  assert.ok(names.has('OPENING_TIMEOUT_LADDER_MS'), 'the opening ladder table constant must be in scope')
 })
 
 test('the snapshot diff is directional: growth reads as positive', () => {

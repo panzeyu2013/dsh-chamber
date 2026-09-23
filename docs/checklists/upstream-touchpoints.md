@@ -115,7 +115,7 @@ pure 5（以脚本计数为准）。
 | `tsconfig.client.json` | [patch-mod] | chamber client 构面（files 表随新增 client 文件同步） |
 | `tsconfig.json` | [patch-mod] | chamber 构面（files 表随新增 client 文件同步） |
 | `scripts/test.mjs` | [own] | chamber 自有测试清单（按域分组的显式 manifest；verify:test-wiring 校验可达性） |
-| `src/client/remote-retry-policy.ts` | [own] | chamber 载波退避纯函数 + 可中止等待 + 静默 socket 替换判定 shouldReplaceSilentSocket（一帧未收 ⇒ 换物理 socket）+ mux 自查重连重排区间 1s/10s + WebSocket 握手期限 30s（零 import，可脱离 vendor 图行为单测）；首帧期限阶梯与 SILENT_TEARDOWN_MIN_MS 已单源于 @dsh-chamber/dsh-stream-state 的 tables.ts |
+| `src/client/remote-retry-policy.ts` | [own] | chamber 载波退避纯函数（retry first/base/max 与无世代等待上限）+ 可中止等待 + 开帧身份键 streamOpeningKey + mux 自查重连重排区间 1s/10s（零 import，可脱离 vendor 图行为单测）；首帧期限阶梯、静默 teardown 下限与 WebSocket 握手期限均已单源于 @dsh-chamber/dsh-stream-state 的 tables.ts，本文件不再持有副本 |
 | `src/client/stream-carrier-fact.ts` | [own] | chamber 载波故障页面事实（有界计数 + dsh-chamber:stream-carrier-failed；零 import，可注入 dispatch 单测） |
 | `src/client/stream-forensics.ts` | [own] | chamber 流生命周期取证事实（有界计数 + dsh-chamber:stream-forensics：socket lost/reconnect/disposed/silent、opening-timeout、generation ready/lost；零 import，可注入 dispatch 单测） |
 | `src/client/stream-stall-policy.ts` | [own] | chamber 静默看门狗纯决策（阈值 + probe/wait 判定；零 import，可脱离 vendor 图行为单测） |
