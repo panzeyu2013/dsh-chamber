@@ -29,9 +29,11 @@ const desktopPkg = JSON.parse(read('packages/desktop/package.json'))
 test('host 包清单五处同源：build-sidecar / control-plane 常量 / 构建链 / Electron 行集 / AppDelegate', () => {
   const names = HOST_PACKAGES.map((host) => host.name)
 
-  // ② control-plane 缺省源常量（dev/CI 与打包态注入的同一批包）。
+  // ② control-plane 缺省源常量（dev/CI 与打包态注入的同一批包）。W2 的 index
+  // 收窄把这四个常量降为包内实现细节（不再 export），锁步对象因此是「定义」
+  // 而不是「出口」：名称/值/包名集合仍必须与 HOST_PACKAGES 同集。
   const constants = [...read('packages/control-plane/src/index.ts').matchAll(
-    /export const DEFAULT_HOST_([A-Z_]+)_PACKAGE_SOURCE_DIR = join\(REPO_ROOT, 'packages', '([^']+)'\)/g,
+    /(?:export )?const DEFAULT_HOST_([A-Z_]+)_PACKAGE_SOURCE_DIR = join\(REPO_ROOT, 'packages', '([^']+)'\)/g,
   )].map((match) => match[2]).sort()
   assert.deepEqual(constants, [...names].sort(),
     'control-plane 的 DEFAULT_HOST_*_PACKAGE_SOURCE_DIR 必须与 HOST_PACKAGES 同集')

@@ -1349,7 +1349,7 @@ publish_staged_file() {
 # 字符的路径会让 unit 的 EnvironmentFile/ExecStart 指令被 systemd 静默丢弃
 # （与 EnvironmentFile 引号事故同型的无声故障）；把 BASE_DIR 指向 ${HOME}、
 # /tmp、/ 等宽泛根则会被 ensure_private_layout 整体 chmod 700 破坏——gateway
-# 侧对 stateDir 有 validateGatewayStateDirPath 同款纪律，安装器必须一致。
+# 侧对 stateDir 有 assertDedicatedStateRoot 同款纪律，安装器必须一致。
 validate_base_dir() {
   [[ "$BASE_DIR" == /* ]] \
     || die "BASE_DIR 必须是绝对路径：${BASE_DIR}（可用 DSH_CHAMBER_BASE_DIR 指定）"

@@ -1,6 +1,6 @@
 /**
  * plugin-protection-gate.test.mjs — C11–C14 纯判据单测（负例：改坏派生来源 / profile 契约 / 播种
- * 注册表 / manifest 镜像都必须变红；另对真实仓库文件做正向断言，锚点写错在这里先红而不是在 CI 里红）。
+ * 注册表 / manifest 镜像 / plugin-row 单源都必须变红；另对真实仓库文件做正向断言，锚点写错在这里先红而不是在 CI 里红）。
  * 跑法：`node --test scripts/upstream/plugin-protection-gate.test.mjs`（已挂进 `pnpm run test:upgrade-tools`）。
  */
 
@@ -14,6 +14,9 @@ import {
   familyFindings,
   interfaceFields,
   manifestMirrorFindings,
+  pluginRowSingleSourceFindings,
+  PLUGIN_ROW_CONSUMERS,
+  PLUGIN_ROW_SINGLE_SOURCE,
   profileContractFindings,
   runtimeFamilyNames,
   seedRegistryFindings,
@@ -193,7 +196,7 @@ test('C13 负例：包名越域（不在 @dsh-chamber/*）→ 红', () => {
   assert.ok(violations.some((v) => v.includes('不在 @dsh-chamber/* 域内')))
 })
 
-// C14 —— manifest 三方镜像
+// C14 —— manifest 宿主镜像（producer ↔ preload ↔ renderer）
 
 test('interfaceFields: 跳过注释与嵌套对象成员，保住可选字段', () => {
   const source = `
@@ -274,73 +277,112 @@ test('真实仓库：C13 播种注册表三面一致', () => {
   assert.deepEqual(violations, [], violations.join('; '))
 })
 
-test('C14 行类型负例：删 owner? / 收窄 role 字面量并集 / 行字段漂移 都必须红', () => {
-  // 合成三方行类型：producer（命名角色类型）与 wire 两处（字面量并集）——“宿主字段名一致但行内漂移”。
-  // The producer declares `role` through a NAMED alias, so that alias must be resolvable in the fixture
-  // too — the criterion reads it.
-  const producer = [
-    "export type PluginRowRole = 'composition' | 'seed' | 'layer' | 'third-party' | 'materialized' | 'unknown'",
-    'export interface PluginRow {',
-    '  name: string',
-    '  spec: string | null',
-    '  role: PluginRowRole',
-    '  owner?: \'installation\' | \'chamber\' | \'user\'',
-    '}',
-  ].join('\n')
-  const preload = [
-    'export interface PluginRowProjection {',
-    '  name: string',
-    '  spec: string | null',
-    '  role: \'composition\' | \'seed\' | \'layer\' | \'third-party\' | \'materialized\' | \'unknown\'',
-    '  owner?: \'installation\' | \'chamber\' | \'user\'',
-    '}',
-  ].join('\n')
-  // Both wire faces declare the same interface name, so the renderer fixture is a genuine copy of the preload text — not a self-replacing no-op; the mutations edit this copy, making the renderer arm real.
-  const renderer = `${preload}`
-  // 只取行类型相关的违规（合成夹具没有宿主 manifest 接口，那几条与本次断言无关）。
-  const rowViolations = (input) => manifestMirrorFindings(input).violations.filter(v => v.includes('PluginRow'))
-  const base = { producerSource: producer, preloadSource: preload, rendererSource: renderer, rowProducerSource: producer }
-  assert.deepEqual(rowViolations(base), [], rowViolations(base).join('; '))
-  // (a) wire 侧丢掉 `owner?`（宿主字段名不变 ⇒ 仅按字段名比较会 0 违规）
-  const lostOwner = rowViolations({ ...base, preloadSource: preload.replace("  owner?: 'installation' | 'chamber' | 'user'\n", '') })
-  assert.ok(lostOwner.some((v) => v.includes('owner')), lostOwner.join('; '))
-  // (b) role 字面量并集被收窄
-  const narrowed = rowViolations({ ...base, preloadSource: preload.replace(" | 'unknown'", '') })
-  assert.ok(narrowed.some((v) => v.includes('role')), narrowed.join('; '))
-  // (c) renderer 侧漏字段
-  const droppedField = rowViolations({ ...base, rendererSource: renderer.replace('  spec: string | null\n', '') })
-  assert.ok(droppedField.some((v) => v.includes('行字段漂移')), droppedField.join('; '))
+// C14 —— plugin-row 单源（wire ./plugin-row 唯一声明；五消费方只引用不重声明）
 
-  // (d) OWNER 单侧收窄：`owner?` 的 `?` 不得并入字段名，否则整条 owner 臂成为死代码（nameOf 保留 `?` ⇒ 查不到 producer 字段 ⇒ continue）。
-  const narrowedOwner = rowViolations({
-    ...base,
-    preloadSource: preload.replace("owner?: 'installation' | 'chamber' | 'user'", "owner?: 'installation' | 'chamber'"),
-  })
-  assert.ok(narrowedOwner.some((v) => v.includes('owner')), narrowedOwner.join('; '))
+/** 合成的健康单源文本：字段集与 role 并集都与 PLUGIN_ROW_SINGLE_SOURCE 预期一致。 */
+const ROW_SINGLE_OK = [
+  "export type PluginRowRole =",
+  "  | 'composition'",
+  "  | 'seed'",
+  "  | 'layer'",
+  "  | 'third-party'",
+  "  | 'materialized'",
+  "  | 'unknown'",
+  '',
+  'export interface PluginRow {',
+  '  name: string',
+  '  spec: string | null',
+  '  version: string | null',
+  '  role: PluginRowRole',
+  '  protected: boolean',
+  "  owner?: 'installation' | 'chamber' | 'user'",
+  '}',
+  '',
+].join('\n')
 
-  // (e)(f) PRODUCER 侧（命名别名）增/删一个字面量：producer 的并集不得因“解析不出字面量”被排除而
-  // 只剩 preload ↔ renderer 比较；`rowProducerSource` 是 ROW mirror 读的那份，夹具显式同时改两个键。
-  const withProducer = (mutated) => ({ ...base, producerSource: mutated, rowProducerSource: mutated })
-  const aliasGrew = rowViolations(withProducer(
-    producer.replace("'materialized' | 'unknown'", "'materialized' | 'unknown' | 'extra'"),
-  ))
-  assert.ok(aliasGrew.some((v) => v.includes('role')), aliasGrew.join('; '))
-  const aliasShrank = rowViolations(withProducer(producer.replace("'materialized' | ", '')))
-  assert.ok(aliasShrank.some((v) => v.includes('role')), aliasShrank.join('; '))
+/** 合成消费方：从指定引用面类型引用指定本地名（与 PLUGIN_ROW_CONSUMERS 的期待同形）。 */
+const ROW_CONSUMERS_OK = {
+  'control-plane': "import type { PluginRow, PluginRowRole } from '@dsh-chamber/dsh-chamber-wire/plugin-row'\nexport type { PluginRow, PluginRowRole }\n",
+  'client-core-face': "export type { PluginRow, PluginRowRole } from '@dsh-chamber/dsh-chamber-wire/plugin-row'\n",
+  preload: "import type { PluginRow as PluginRowProjection } from '@dsh-chamber/dsh-chamber-client-core/plugin-row'\nexport type { PluginRowProjection }\n",
+  renderer: "import type { PluginRow as PluginRowProjection } from '@dsh-chamber/dsh-chamber-client-core/plugin-row'\nexport type { PluginRowProjection }\n",
+  'settings-connections': "import type { PluginRow as PluginRowShape, PluginRowRole as PluginRowRoleShape } from '@dsh-chamber/dsh-chamber-client-core/plugin-row'\nexport type { PluginRowShape, PluginRowRoleShape }\n",
+}
 
-  // (g) PRODUCER 侧角色类型变成读不出并集的不透明类型：响亮失败，绝不静默跳过。
-  const opaque = rowViolations(withProducer(producer.replace('role: PluginRowRole', 'role: OpaqueRoleEnum')))
-  assert.ok(opaque.some((v) => v.includes('读不出来')), opaque.join('; '))
+test('C14 plugin-row 正例：单源字段集 = 预期、消费方只引用不重声明 → 零违规', () => {
+  const { violations, notes } = pluginRowSingleSourceFindings({ singleSource: ROW_SINGLE_OK, consumers: ROW_CONSUMERS_OK })
+  assert.deepEqual(violations, [], violations.join('; '))
+  assert.ok(notes.some((note) => note.includes('单源')), notes.join('; '))
 })
 
-test('真实仓库：C14 manifest 三方字段集 + rows 行类型一致', () => {
-  const producerSource = read('packages/desktop/plugin-sync.ts')
-  const preloadSource = read('packages/desktop/preload.cts')
-  const rendererSource = read('packages/renderer/src/global.d.ts')
-  const rowProducerSource = read('packages/control-plane/src/protected-plugins.ts')
-  const { violations, notes } = manifestMirrorFindings({ producerSource, preloadSource, rendererSource, rowProducerSource })
-  assert.deepEqual(violations, [], violations.join('; '))
-  assert.ok(notes.some(note => note.includes('行类型镜像')), notes.join('; '))
+test('C14 plugin-row 负控①本地重声明：任一消费方重新声明行形状/字段即红', () => {
+  const redeclared = {
+    ...ROW_CONSUMERS_OK,
+    renderer: ROW_CONSUMERS_OK.renderer
+      + "export interface PluginRowProjection {\n  name: string\n  spec: string | null\n  role: 'seed'\n}\n",
+  }
+  const { violations } = pluginRowSingleSourceFindings({ singleSource: ROW_SINGLE_OK, consumers: redeclared })
+  assert.ok(violations.some((v) => v.includes('本地重声明')), violations.join('; '))
+  // 本地 type 别名同样是字段集副本（export type X = { … } 不是引用面引用）。
+  const aliased = {
+    ...ROW_CONSUMERS_OK,
+    'settings-connections': ROW_CONSUMERS_OK['settings-connections'] + 'export type PluginRowShape = { name: string }\n',
+  }
+  assert.ok(pluginRowSingleSourceFindings({ singleSource: ROW_SINGLE_OK, consumers: aliased })
+    .violations.some((v) => v.includes('本地重声明')), 'a local type alias must be red too')
+})
+
+test('C14 plugin-row 负控②引用面漂移：specifier 改道 / 期待本地名缺失即红', () => {
+  const wrongFace = {
+    ...ROW_CONSUMERS_OK,
+    preload: ROW_CONSUMERS_OK.preload.replace('@dsh-chamber/dsh-chamber-client-core/plugin-row', './plugin-row'),
+  }
+  const drifted = pluginRowSingleSourceFindings({ singleSource: ROW_SINGLE_OK, consumers: wrongFace })
+  assert.ok(drifted.violations.some((v) => v.includes('引用面漂移')), drifted.violations.join('; '))
+  // 面还在但本地别名消失（settings-connections 直接绑原名）：同样红。
+  const missingName = {
+    ...ROW_CONSUMERS_OK,
+    'settings-connections': "import type { PluginRow } from '@dsh-chamber/dsh-chamber-client-core/plugin-row'\nexport type { PluginRow }\n",
+  }
+  assert.ok(pluginRowSingleSourceFindings({ singleSource: ROW_SINGLE_OK, consumers: missingName })
+    .violations.some((v) => v.includes('未绑定本地名 PluginRowShape')), 'the renamed binding must be required')
+})
+
+test('C14 plugin-row 负控③单源字段缺失 / role 并集漂移：单源文件即红', () => {
+  const lostOwner = pluginRowSingleSourceFindings({
+    singleSource: ROW_SINGLE_OK.split("  owner?: 'installation' | 'chamber' | 'user'\n").join(''),
+    consumers: ROW_CONSUMERS_OK,
+  })
+  assert.ok(lostOwner.violations.some((v) => v.includes('owner')), lostOwner.violations.join('; '))
+  const narrowed = pluginRowSingleSourceFindings({
+    singleSource: ROW_SINGLE_OK.replace(" | 'unknown'", ''),
+    consumers: ROW_CONSUMERS_OK,
+  })
+  assert.ok(narrowed.violations.some((v) => v.includes('PluginRowRole 并集')), narrowed.violations.join('; '))
+  // 字段类型改成不透明命名类型：字段集签名漂移同样红。
+  const opaque = pluginRowSingleSourceFindings({
+    singleSource: ROW_SINGLE_OK.replace('role: PluginRowRole', 'role: OpaqueRole'),
+    consumers: ROW_CONSUMERS_OK,
+  })
+  assert.ok(opaque.violations.some((v) => v.includes('字段集')), opaque.violations.join('; '))
+  // 单源文件被搬走/改名：读不到即红，绝不静默跳过。
+  const vanished = pluginRowSingleSourceFindings({ singleSource: '', consumers: ROW_CONSUMERS_OK })
+  assert.ok(vanished.violations.some((v) => v.includes('找不到 interface PluginRow')), vanished.violations.join('; '))
+})
+
+test('真实仓库：C14 manifest 三方字段集 + plugin-row 单源（消费方只引用不重声明）', () => {
+  const host = manifestMirrorFindings({
+    producerSource: read('packages/desktop/plugin-sync.ts'),
+    preloadSource: read('packages/desktop/preload.cts'),
+    rendererSource: read('packages/renderer/src/global.d.ts'),
+  })
+  const consumers = {}
+  for (const consumer of PLUGIN_ROW_CONSUMERS) consumers[consumer.side] = read(consumer.source)
+  const row = pluginRowSingleSourceFindings({ singleSource: read(PLUGIN_ROW_SINGLE_SOURCE.path), consumers })
+  assert.deepEqual(host.violations, [], host.violations.join('; '))
+  assert.deepEqual(row.violations, [], row.violations.join('; '))
+  assert.ok(host.notes.some((note) => note.includes('宿主字段集')), host.notes.join('; '))
+  assert.ok(row.notes.some((note) => note.includes('单源')), row.notes.join('; '))
 })
 
 test('真实仓库：C12 在上游子模块物化时零违规（未物化则跳过）', () => {

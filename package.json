@@ -55,6 +55,7 @@
     "verify:ladder-table-parity": "node scripts/gates/verify-ladder-table-parity.mjs",
     "verify:no-dead-exports": "node scripts/gates/verify-no-dead-exports.mjs",
     "verify:upstream-lifecycle-contract": "node scripts/gates/verify-upstream-lifecycle-contract.mjs",
+    "verify:package-boundaries": "node scripts/gates/verify-package-boundaries.mjs",
     "verify:registry": "node scripts/upstream/verify-registry.mjs",
     "verify:anchors": "node scripts/upstream/check-anchors.mjs",
     "check:static": "node scripts/gates/run-checks.mjs static",

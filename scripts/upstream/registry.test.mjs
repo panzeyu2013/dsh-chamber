@@ -20,8 +20,8 @@ const VERIFIER = readFileSync(join(HERE, 'verify-upstream-touchpoints.mjs'), 'ut
 const registry = loadRegistry()
 const clone = () => JSON.parse(JSON.stringify(registry))
 
-test('C1–C15 判据表恰好 15 个 id，且每个都出现在 verifier 源码里', () => {
-  assert.equal(CRITERIA_IDS.length, 15)
+test('C1–C16 判据表恰好 16 个 id，且每个都出现在 verifier 源码里', () => {
+  assert.equal(CRITERIA_IDS.length, 16)
   for (const id of CRITERIA_IDS) {
     // 词边界，不是子串：`includes('C1')` 会被 'C10'/'C15' 满足，删掉实现只剩文本也能绿。
     assert.match(VERIFIER, new RegExp('\\b' + id + '\\b', 'u'), '判据 ' + id + ' 在 verify-upstream-touchpoints.mjs 里没有独立出现（判据表与实现漂移）')
@@ -62,9 +62,11 @@ test('registry 值锁：分类桶形状 + 符号锚字符串（防"同计数下�
   // 值锁：api-gateway 桶按合并后的 registry 重算（载波重试纯函数 / 页面事实 / 静默看门狗策略 /
   // 生命周期取证事实 / journal 补丁 / 仓内测试清单）；形状变化必须同批改本哈希。
   // connection 的 dropped 含 src/client/fixture.ts（浏览器夹具不镜像）。
+  // layout（chamber-named 副本，seed.dsh-chamber-client-ui-layout）：patched 5 / own 4 /
+  // ownPrefix 1 / dropped 11（frame 面深引 vendor 源、不镜像；死 tsdown.config.ts 由 P6 删除后归 dropped）。
   assert.equal(
     createHash('sha256').update(JSON.stringify(shape)).digest('hex').slice(0, 16),
-    'feb294ff74c6f9e2',
+    '78e617aed40b5931',
     '分类桶形状变了（桶间搬家或增删文件）——必须同批改本断言的哈希；当前形状：' + JSON.stringify(shape),
   )
   assert.deepEqual(
@@ -72,14 +74,29 @@ test('registry 值锁：分类桶形状 + 符号锚字符串（防"同计数下�
     [
       'src/api-path.ts#resolveInstanceBasePath',
       'src/boot.ts#AppWebEntry',
+      'src/client/index.ts#apply',
+      'src/client/journal-stream.ts#RemoteJournalStream',
+      'src/client/remote-retry-policy.ts#remoteStreamRetryDelayMs',
+      'src/client/remote-retry-policy.ts#streamOpeningKey',
+      'src/client/remote-stream.ts#RemoteStream',
+      'src/client/stream-carrier-fact.ts#createCarrierFailureReporter',
       'src/client/stream-client.ts#RemoteStreamMuxClient',
+      'src/client/stream-forensics.ts#createStreamForensicsReporter',
+      'src/client/stream-stall-policy.ts#decideStreamStallAction',
       'src/core.ts#OpenInAppError',
+      'src/client/document-theme.ts#createDocumentThemeProjector',
+      'src/client/index.ts#LayoutFacts',
+      'src/client/index.ts#apply',
+      'src/client/store-core.ts#collapsedOf',
+      'src/client/store-core.ts#createLayoutStore',
+      'src/client/stores.ts#trackLayoutInstance',
+      'src/client/theme-cache.ts#resolveSourceThemeCache',
     ],
     '符号锚是逐条 golden：改指向必须同批改本断言',
   )
 })
 
-test('判据分区：entries.criteria ∪ criteriaCodeOnly == C1–C15，不重不漏', () => {
+test('判据分区：entries.criteria ∪ criteriaCodeOnly == C1–C16，不重不漏', () => {
   const { used, codeOnly } = criteriaPartition(registry)
   assert.deepEqual([...new Set([...used, ...codeOnly])].sort(), [...CRITERIA_IDS].sort())
   assert.equal(used.filter((id) => codeOnly.includes(id)).length, 0)
@@ -87,18 +104,20 @@ test('判据分区：entries.criteria ∪ criteriaCodeOnly == C1–C15，不重�
 
 test('verifierForks 与迁移前内嵌 FORKS 同形：顺序、路径、分类计数、版本锚', () => {
   const forks = verifierForks(registry)
-  assert.deepEqual(forks.map((fork) => fork.name), ['connection', 'client-web', 'api-gateway', 'seed-open-in'])
+  assert.deepEqual(forks.map((fork) => fork.name), ['connection', 'client-web', 'api-gateway', 'seed-open-in', 'layout'])
   assert.deepEqual(forks.map((fork) => fork.rel), [
     'packages/dsh-client-connection',
     'packages/dsh-client-web',
     'packages/dsh-api-gateway',
     'packages/dsh-chamber-seed-open-in',
+    'packages/dsh-chamber-client-ui-layout',
   ])
   assert.deepEqual(
     forks.map((fork) => [Object.keys(fork.patched).length, Object.keys(fork.own).length, fork.ownPrefix.length, fork.dropped.length]),
-    [[7, 4, 4, 3], [9, 2, 1, 2], [7, 7, 1, 9], [4, 3, 1, 6]],
+    [[7, 4, 4, 3], [9, 2, 1, 2], [7, 7, 1, 9], [4, 3, 1, 6], [5, 4, 1, 11]],
   )
   assert.equal(forks[3].versionAnchor, 'chamber')
+  assert.equal(forks[4].versionAnchor, 'chamber')
   for (const fork of forks.slice(0, 3)) assert.equal(fork.versionAnchor, undefined)
 })
 
@@ -130,11 +149,22 @@ test('校验器抓退化：未知判据 / 分区缺口 / accepted 缺理由 / up
 
   const seedAnchor = clone(); seedAnchor.entries[3].versionAnchor = 'upstream'
   assert.ok(validateRegistry(seedAnchor).some((item) => item.includes('type=seed 必须 versionAnchor=chamber')))
+
+  // C16 登记块自身不得被写坏：空符号 / 重复登记 / 非 vendor 目标必须在 schema 层红。
+  const emptySymbols = clone(); emptySymbols.vendorSourceConsumers[0].symbols = []
+  assert.ok(validateRegistry(emptySymbols).some((item) => item.includes('symbols 必须是非空字符串数组')))
+  const duplicateVendor = clone()
+  duplicateVendor.vendorSourceConsumers.push(JSON.parse(JSON.stringify(duplicateVendor.vendorSourceConsumers[0])))
+  assert.ok(validateRegistry(duplicateVendor).some((item) => item.includes('重复登记')))
+  const notVendor = clone(); notVendor.vendorSourceConsumers[0].vendorFile = 'packages/x/src/y.ts'
+  assert.ok(validateRegistry(notVendor).some((item) => item.includes('vendorFile 必须是 vendor/')))
+  const notPackaged = clone(); notPackaged.vendorSourceConsumers[0].consumer = 'vendor/x.ts'
+  assert.ok(validateRegistry(notPackaged).some((item) => item.includes('consumer 必须是 packages/')))
 })
 
 test('符号锚下限：每个 fork/seed 至少一条，且总数被 pin（清空探针 = 测试红）', () => {
   const total = registry.entries.reduce((sum, entry) => sum + (entry.symbols ?? []).length, 0)
-  assert.equal(total, 4, '符号锚总数是 golden：增删锚点必须同批改本断言（D15 机械化方向不可被清空）')
+  assert.equal(total, 19, '符号锚总数是 golden：增删锚点必须同批改本断言（D15 机械化方向不可被清空）')
   for (const entry of registry.entries) {
     if (entry.type === 'fork' || entry.type === 'seed') assert.ok(entry.symbols.length >= 1, entry.id + ' 缺符号锚')
   }

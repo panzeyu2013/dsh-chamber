@@ -1,5 +1,5 @@
 /**
- * touchpoint-criteria.mjs — C1–C15 判据 id 表（纯数据、无副作用）。
+ * touchpoint-criteria.mjs — C1–C16 判据 id 表（纯数据、无副作用）。
  *
  * 用途：`scripts/upstream/registry.json` 的 `criteria` 字段与
  * `docs/checklists/upstream-touchpoints.md` §6 共用同一份 id。判据的**实现**仍在
@@ -9,7 +9,7 @@
  * 漂移纪律：增删判据 = 同批改本表、verifier 头注与 checklist §6。id 与实现的漂移由
  * `scripts/upstream/registry.test.mjs` 兜住（每个 id 必须出现在 verifier 源码里），
  * id 与 registry 的关系由 `verify-registry.mjs` 兜住（`criteria` 并集 ∪
- * `criteriaCodeOnly` 必须恰为 C1–C15，不重不漏）。
+ * `criteriaCodeOnly` 必须恰为 C1–C16，不重不漏）。
  */
 export const CRITERIA = Object.freeze({
   C1: 'fork 纯文件字节恒等：未登记补丁的文件必须与上游锚逐字节一致',
@@ -25,8 +25,9 @@ export const CRITERIA = Object.freeze({
   C11: '运行时线族集合：受保护集合的 F 分量只认运行时锁文件闭包',
   C12: 'profile 契约锚：dsh.profile.bundles / dsh.bundle.patch / web 模板 / hoisted + 不自动装 peer',
   C13: '播种注册表结构：HOST_*_PACKAGE_NAME ↔ HOST_*_INSERT ↔ CHAMBER_HOST_PACKAGES',
-  C14: 'manifest 三方镜像 + rows 行类型（plugin-sync / preload / global.d.ts / protected-plugins）',
+  C14: 'plugin-row 单源（wire ./plugin-row 唯一声明；control-plane/client-core/preload/renderer/settings-connections 只引用不重声明）+ manifest 三方字段集镜像',
   C15: '悬停卡自持移植的上游退役门：竞态两侧形状仍在 + 时间常数锁步',
+  C16: 'vendor 源消费者清单与真实相对 import 双向一致：符号集合相等 + 导出仍是 export function',
 })
 
 export const CRITERIA_IDS = Object.freeze(Object.keys(CRITERIA))

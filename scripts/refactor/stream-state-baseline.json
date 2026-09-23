@@ -6,7 +6,7 @@
     "packages/dsh-api-gateway/src/client/journal-stream.ts": 732,
     "packages/dsh-api-gateway/src/client/remote-stream.ts": 295,
     "packages/dsh-stream-state/src/session-authority.ts": 243,
-    "packages/dsh-chamber-client-ui-sidebar/src/shared/session-fact-reconcile.ts": 304,
+    "packages/dsh-chamber-client-core/src/session-fact-reconcile.ts": 304,
     "packages/dsh-chamber-client-ui-open-in/src/client/session-stream-health.ts": 519,
     "packages/dsh-chamber-client-ui-open-in/src/client/session-stream-health-probe.ts": 376,
     "packages/dsh-chamber-client-ui-open-in/src/client/session-stream-health-seat.ts": 281,

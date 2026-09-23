@@ -12,6 +12,7 @@
     "upstream"
   ],
   "chamberNamedForks": [
+    "packages/dsh-chamber-client-ui-layout",
     "packages/dsh-chamber-seed-open-in"
   ],
   "excludedUpstreamDirs": [
@@ -26,15 +27,29 @@
     "C13",
     "C14",
     "C15",
+    "C16",
     "C4",
     "C7",
     "C8",
     "C9"
   ],
+  "vendorSourceConsumers": [
+    {
+      "consumer": "packages/renderer/src/host-graph.ts",
+      "vendorFile": "vendor/harness-packages/@deepseek-ai/dsh-client-modules/src/client/manifest.ts",
+      "symbols": [
+        "optionalStringArray",
+        "stripClientSuffix"
+      ],
+      "reason": "boot-graph wire validators are upstream's own (never a hand-rolled copy); plain-node tests cannot resolve @deepseek-ai/* and the module is browser-safe with zero runtime imports",
+      "retiresWhen": "dsh-client-modules exports optionalStringArray on its public ./client face"
+    }
+  ],
   "generatedBlocks": [
     "touchpoints.fork-mirror.api-gateway",
     "touchpoints.fork-mirror.client-web",
     "touchpoints.fork-mirror.connection",
+    "touchpoints.fork-mirror.layout",
     "touchpoints.fork-mirror.seed-open-in",
     "touchpoints.index"
   ],
@@ -48,7 +63,7 @@
       "versionAnchor": "upstream",
       "classify": {
         "patched": {
-          "package.json": "[patch-add] 仅追加 chamber test 脚本（其余与上游一致；版本行随上游推进）",
+          "package.json": "[patch-mod] 追加 chamber test 脚本 + 删除死发布面 files/main/types（本仓不构建 lib、无发布路径；exports 面保持上游 lib 目标供 renderer 按包名消费；版本行随上游推进）",
           "src/api-path.ts": "[patch-mod] 追加 resolveInstanceBasePath + 头部 chamber 说明（basePath 语义，design 05 §6）",
           "src/client/connection.ts": "[patch-mod] 仅 erasableSyntaxOnly 显式字段改写（两个构造参数属性）+ 顶部 chamber 说明；其余逐字节上游（Batch 2 重锚：loopEpoch 守卫与 CONNECTION_BACKOFF_MAX_MS 导出退役，改由原生 reconnect/setNetworkAvailable）",
           "src/client/index.ts": "[patch-mod] apply(ctx) 读 ctx.chamberBasePath → 载波装配（design 05 §6）+ SYSTEM_RESUME_EVENT/liveness 触发（design 14 D4）+ recovery-policy 转出（/client barrel）+ 移除上游 ?fixture 页面模式与夹具静态 import（src/client/fixture.ts 已 dropped）+ 头部 chamber 说明",
@@ -113,7 +128,7 @@
           "README.i18n.yaml": "[own-divergent] chamber README 对的哈希记录",
           "README.md": "[own-divergent] chamber 说明（boot kernel 差异/维护约定），非上游镜像",
           "README.zh.md": "[own-divergent] 同 README.md（中文镜像）",
-          "package.json": "[patch-mod] 描述/测试脚本/deps·peerDeps·files 面差异（版本行随上游推进）",
+          "package.json": "[patch-mod] 描述/测试脚本/deps·peerDeps 面差异 + 删除死发布面 files/main/types（本仓不构建 lib、无发布路径；exports 面保持上游 lib 目标供 renderer 按包名消费；版本行随上游推进）",
           "src/boot.ts": "[patch-mod] N-ctx boot kernel（extraRows / __ModuleLoader__ / configureContext / 异步 dispose）",
           "src/index.ts": "[patch-mod] 入口差异（module-system 宿主接线）",
           "src/platform.ts": "[patch-mod] PLATFORM_MODULES/静态表 chamber 接线（C3 偏差：ui-primitives 不 seed）",
@@ -161,9 +176,9 @@
       "versionAnchor": "upstream",
       "classify": {
         "patched": {
-          "package.json": "[patch-mod] description/peer 集裁剪（host 依赖 dropped）+ chamber test 脚本 + 版本行随上游推进",
-          "src/client/index.ts": "[patch-mod] apply(ctx) 读 ctx.chamberBasePath → /api/remote.mux 落到实例前缀 + start(sinks, recoveryOverridesForTransport(transport))（design 05 §6）+ $stream 工厂组合 carrierFailed 发布 dsh-chamber:stream-carrier-failed 页面事实（design 14 §D4）+ 生命周期取证通道 dsh-chamber:stream-forensics（generation 就绪/丢失；2026-09 卡死排查）",
-          "src/client/journal-stream.ts": "[patch-mod] 静默看门狗（design 14 §D4，2026-09 卡死排查）：已开启的 journal 静默 ≥45s 时开一条旁路 sibling follow、只比对 opening cursor，仅当宿主确已前进才替换物理世代（新 opening 以 replace 全窗口收敛）；不设盲空闲重启；探针节奏按无进展次数放宽至 90s 上限（探针自身失败/超时同样放宽）；prepend 用户读带 60s 期限",
+          "package.json": "[patch-mod] description/peer 集裁剪（host 依赖 dropped）+ chamber test 脚本 + 删除死发布面 files/main/types（本仓不构建 lib、无发布路径；exports 面保持上游 lib 目标供 renderer 按包名消费；版本行随上游推进）",
+          "src/client/index.ts": "[patch-mod] apply(ctx) 读 ctx.chamberBasePath → /api/remote.mux 落到实例前缀 + start(sinks, recoveryOverridesForTransport(transport))（design 05 §6）+ $stream 工厂组合 carrierFailed 发布 dsh-chamber:stream-carrier-failed 页面事实（design 14 §D4）+ 生命周期取证通道 dsh-chamber:stream-forensics（generation 就绪/丢失；卡死排查）",
+          "src/client/journal-stream.ts": "[patch-mod] 静默看门狗（design 14 §D4 卡死排查）：已开启的 journal 静默 ≥45s 时开一条旁路 sibling follow、只比对 opening cursor，仅当宿主确已前进才替换物理世代（新 opening 以 replace 全窗口收敛）；不设盲空闲重启；探针节奏按无进展次数放宽至 90s 上限（探针自身失败/超时同样放宽）；prepend 用户读带 60s 期限",
           "src/client/remote-stream.ts": "[patch-mod] 载波重试策略：活连接世代下的后续载波失败改走有界退避重开，不再逃逸为终局 gateway/internal（design 14 §D4；退避纯函数在同包 own 文件 remote-retry-policy.ts，patch 形状由 test/patch-lock 钉住）",
           "src/client/stream-client.ts": "[patch-mod] per-entry basePath（流载波 URL 拼装）+ 开帧发送前校验（socket 已被替换/正在关闭 ⇒ 载波失败，杜绝 RFC 6455 静默丢弃）+ 逻辑流首帧期限（30s 起、按 endpoint+payload 摘要分账、连续超时放宽至 300s（30→60→120→240→300），失败 inbox 走既有退避重开）+ 静默 socket 升级（首帧期限到期而当前 socket 本次尝试期间一帧未收 ⇒ replaceSocket() 换掉物理 socket，与连接泵 reconnect() 共用拆除道，不再在同一条静默载波上重发；放宽预算保留）+ socket 丢失后自行重排重连（1s 起、连接泵下令的重连不计失败、真实失败翻倍封顶 10s、成功即复位）+ WebSocket 握手期限 30s + socket 生命周期取证（lost/reconnect/attempt-failed/disposed/opening-timeout/socket-silent）+ teardown 分支：逻辑流在其整个生命期内该 socket 零帧且生命期 ≥ REMOTE_STREAM_SILENT_TEARDOWN_MIN_MS（15s）⇒ 同一条换 socket 升级（覆盖 20s 探针 abort 早于 30s 预算的已开启会话形态）",
           "tsconfig.client.json": "[patch-mod] chamber client 构面（files 表随新增 client 文件同步）",
@@ -171,7 +186,7 @@
         },
         "own": {
           "scripts/test.mjs": "chamber 自有测试清单（按域分组的显式 manifest；verify:test-wiring 校验可达性）",
-          "src/client/remote-retry-policy.ts": "chamber 载波退避纯函数 + 可中止等待 + 逻辑流首帧期限预算（endpoint+payload 摘要分账）+ 静默 socket 替换判定 shouldReplaceSilentSocket（一帧未收 ⇒ 换物理 socket）+ teardown 升级的最短生命界 REMOTE_STREAM_SILENT_TEARDOWN_MIN_MS（15s，须低于看门狗探针窗口）+ mux 自查重连重排区间 1s/10s + WebSocket 握手期限 30s（零 import，可脱离 vendor 图行为单测）",
+          "src/client/remote-retry-policy.ts": "chamber 载波退避纯函数 + 可中止等待 + 逻辑流首帧期限预算（endpoint+payload 摘要分账）+ mux 自查重连重排区间 1s/10s + WebSocket 握手期限 30s（零 import，可脱离 vendor 图行为单测）。静默 socket 替换判定与 teardown 最短生命界已迁出本文件：单一来源 = packages/dsh-stream-state/src/tables.ts 的 OPENING_STALL_STREAK / SILENT_TEARDOWN_MIN_MS（stream-client.ts 消费），test/retry-policy/remote-retry-policy.test.ts 反向断言本文件不再出现 shouldReplaceSilentSocket / framesReceivedSinceSend",
           "src/client/stream-carrier-fact.ts": "chamber 载波故障页面事实（有界计数 + dsh-chamber:stream-carrier-failed；零 import，可注入 dispatch 单测）",
           "src/client/stream-forensics.ts": "chamber 流生命周期取证事实（有界计数 + dsh-chamber:stream-forensics：socket lost/reconnect/disposed/silent、opening-timeout、generation ready/lost；零 import，可注入 dispatch 单测）",
           "src/client/stream-stall-policy.ts": "chamber 静默看门狗纯决策（阈值 + probe/wait 判定；零 import，可脱离 vendor 图行为单测）",
@@ -203,7 +218,7 @@
           "tsconfig.host.json": "host 构面不镜像"
         }
       },
-      "authority": "upstream",
+      "authority": "chamber",
       "criteria": [
         "C1",
         "C2",
@@ -211,13 +226,30 @@
         "C5",
         "C6"
       ],
-      "deviations": [],
-      "relatedGates": [],
+      "deviations": [
+        "G43"
+      ],
+      "relatedGates": [
+        "packages/dsh-api-gateway/test/patch-lock/journal-stall-watchdog-lock.test.ts",
+        "packages/dsh-api-gateway/test/patch-lock/remote-stream-carrier-retry-lock.test.ts",
+        "test:api-gateway",
+        "typecheck:api-gateway",
+        "typecheck:connection",
+        "verify:upstream-lifecycle-contract"
+      ],
       "symbols": [
-        "src/client/stream-client.ts#RemoteStreamMuxClient"
+        "src/client/index.ts#apply",
+        "src/client/journal-stream.ts#RemoteJournalStream",
+        "src/client/remote-retry-policy.ts#remoteStreamRetryDelayMs",
+        "src/client/remote-retry-policy.ts#streamOpeningKey",
+        "src/client/remote-stream.ts#RemoteStream",
+        "src/client/stream-carrier-fact.ts#createCarrierFailureReporter",
+        "src/client/stream-client.ts#RemoteStreamMuxClient",
+        "src/client/stream-forensics.ts#createStreamForensicsReporter",
+        "src/client/stream-stall-policy.ts#decideStreamStallAction"
       ],
       "evidence": "node scripts/upstream/verify-upstream-touchpoints.mjs",
-      "status": "aligned"
+      "status": "open"
     },
     {
       "id": "seed.dsh-chamber-seed-open-in",
@@ -270,6 +302,86 @@
       "relatedGates": [],
       "symbols": [
         "src/core.ts#OpenInAppError"
+      ],
+      "evidence": "node scripts/upstream/verify-upstream-touchpoints.mjs",
+      "status": "aligned"
+    },
+    {
+      "id": "seed.dsh-chamber-client-ui-layout",
+      "type": "seed",
+      "name": "layout",
+      "ours": "packages/dsh-chamber-client-ui-layout",
+      "upstream": "packages/client/ui-layout",
+      "versionAnchor": "chamber",
+      "classify": {
+        "patched": {
+          "README.md": "[own-divergent] chamber fork 说明（动机/形状/深引 frame 面），非上游镜像",
+          "package.json": "[patch-mod] chamber 自有包名/版本/测试脚本/deps·peerDeps 面（上游发布面与类型入口不复制；版本行不随上游）",
+          "src/client/index.ts": "[patch-mod] 上游 client index 逐字副本上的 chamber 增量：store 换本包 stores.ts（共享+持久侧栏宽度，design 06）+ SIDEBAR_AUTO_COLLAPSE/collapsedOf 派生 + ctx.layoutFacts 服务面（design 17 §18）+ 根 standard prop chamberFileApiBase（design 09 §3.6）+ 活动视图门控的文档级 theme 投影；frame/service/columns/theme-presenter 深引 vendor 源，inject 面、注册顺序与 priority 不变",
+          "src/client/stores.ts": "[patch-mod] vendor 每 boot 未持久 store → 本包共享/持久 store：view-prefs 播种与写回（150ms 尾随去抖）+ 跨 boot 订阅采纳（关闭态不回开/同值不循环）；右栏与窄屏覆盖保持 transient（design 06）",
+          "tsconfig.json": "[patch-mod] chamber 构面：extends ../../tsconfig.json + rootDir ../.. + 排除 vendor；上游 project references 不镜像"
+        },
+        "own": {
+          "src/client/document-theme.ts": "chamber 活动视图门控的文档级主题投影（design 06 §4.6；teardown 不回撤、未知活动源 fail-open）",
+          "src/client/store-core.ts": "chamber 布局 store 纯核心工厂（注入式 env；八动作 + collapsedOf 派生，node 可直测）",
+          "src/client/theme-cache.ts": "chamber 页面级按源主题快照缓存 + 冷切换 prime 决策（design 06 §4.6）",
+          "src/vendor-modules.d.ts": "chamber ambient vendor 面（本包全部 dsh specifier；vendor 源树无构建类型输出）"
+        },
+        "ownPrefix": [
+          "test/"
+        ],
+        "ownNotes": {
+          "test/": "chamber 自有测试（layout-store：共享/持久/采纳/去抖；document-theme：活动视图门控与 prime 决策）"
+        },
+        "dropped": [
+          "README.i18n.yaml",
+          "README.zh.md",
+          "src/client/AppFrame.module.css",
+          "src/client/AppFrame.tsx",
+          "src/client/DocumentTitle.tsx",
+          "src/client/columns.ts",
+          "src/client/service.ts",
+          "src/client/theme-presenter.ts",
+          "src/css-modules.d.ts",
+          "tests/",
+          "tsdown.config.ts"
+        ],
+        "droppedNotes": {
+          "README.i18n.yaml": "上游 README 对的哈希记录不携带（fork 说明在 README.md/package.json）",
+          "README.zh.md": "中文 README 不镜像（chamber 说明只有一份）",
+          "src/client/AppFrame.module.css": "frame 样式不镜像：深引 vendor 源",
+          "src/client/AppFrame.tsx": "frame 不镜像：深引 vendor 源（三列网格/拖拽/列解算仍是上游实现）",
+          "src/client/DocumentTitle.tsx": "上游同包文件，本 fork 不镜像（vendor 树内保留）",
+          "src/client/columns.ts": "列几何不镜像：深引 vendor 源并以其常数钉 clamp 范围",
+          "src/client/service.ts": "LayoutController/ILayout/PanelInfo 面深引 vendor 源",
+          "src/client/theme-presenter.ts": "文档级投影仍用 vendor ThemePresenter（本包只加活动视图门控）",
+          "src/css-modules.d.ts": "本包不编译 vendor CSS module；实际 specifier 的 ambient 面在 src/vendor-modules.d.ts",
+          "tests/": "上游 tsdown spec 不镜像（本包 test/ 覆盖 store 与 theme 决策）",
+          "tsdown.config.ts": "死配置：本仓不构建 lib、引用不存在的 tsdown.client.ts，已删除"
+        }
+      },
+      "authority": "upstream",
+      "criteria": [
+        "C1",
+        "C2",
+        "C3",
+        "C5"
+      ],
+      "deviations": [],
+      "relatedGates": [
+        "packages/dsh-chamber-client-ui-layout/test/document-theme.test.ts",
+        "packages/dsh-chamber-client-ui-layout/test/layout-store.test.ts",
+        "test:layout",
+        "typecheck:layout"
+      ],
+      "symbols": [
+        "src/client/document-theme.ts#createDocumentThemeProjector",
+        "src/client/index.ts#LayoutFacts",
+        "src/client/index.ts#apply",
+        "src/client/store-core.ts#collapsedOf",
+        "src/client/store-core.ts#createLayoutStore",
+        "src/client/stores.ts#trackLayoutInstance",
+        "src/client/theme-cache.ts#resolveSourceThemeCache"
       ],
       "evidence": "node scripts/upstream/verify-upstream-touchpoints.mjs",
       "status": "aligned"

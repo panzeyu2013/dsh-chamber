@@ -1,6 +1,7 @@
 // verify-upstream-touchpoints.mjs sibling tests: parse surface + guard wiring (no
-// C1/C3–C15 gate or rebuild before the argument guard) + the C15 hover-port verdict
-// (`verify-upstream-touchpoints-hover.mjs`); `test:upgrade-tools` lists its test files explicitly.
+// C1/C3–C16 gate or rebuild before the argument guard) + the C15 hover-port verdict
+// (`verify-upstream-touchpoints-hover.mjs`) + the C16 vendor-source verdict
+// (`verify-upstream-touchpoints-vendor.mjs`); `test:upgrade-tools` lists its test files explicitly.
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -14,6 +15,9 @@ import {
   racyGraceArmShape, racyOpenPathShape,
   stripComments,
 } from './verify-upstream-touchpoints-hover.mjs'
+import {
+  clauseSymbols, relativeVendorImports, sourceModuleSpecifiers, vendorSourceVerdict,
+} from './verify-upstream-touchpoints-vendor.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const scriptPath = join(here, 'verify-upstream-touchpoints.mjs')
@@ -674,3 +678,118 @@ export function HoverCard({ a }: { a: string }) {
   assert.match(body.text, /const nested/)
   assert.doesNotMatch(body.text, /function Other/)
 })
+
+// ---------------------------------------------------------------------------
+// C16 — vendor-source consumers: the registry list and the real relative
+// imports must agree in BOTH directions. The three negative controls are the
+// plan's: a renamed symbol, an unregistered import, a deleted registration.
+// ---------------------------------------------------------------------------
+
+const VENDOR_CONSUMER = 'packages/renderer/src/host-graph.ts'
+const VENDOR_FILE = 'vendor/harness-packages/@deepseek-ai/dsh-client-modules/src/client/manifest.ts'
+const VENDOR_SPECIFIER = '../../../vendor/harness-packages/@deepseek-ai/dsh-client-modules/src/client/manifest.ts'
+const VENDOR_ENTRY = {
+  consumer: VENDOR_CONSUMER,
+  vendorFile: VENDOR_FILE,
+  symbols: ['optionalStringArray', 'stripClientSuffix'],
+}
+const VENDOR_TEXT = [
+  'export function optionalStringArray(subject: string, field: string, value: unknown): string[] | undefined {',
+  '  return undefined',
+  '}',
+  'export function stripClientSuffix(spec: string): string { return spec }',
+  '',
+].join('\n')
+const vendorImport = (overrides = {}) => ({
+  consumer: VENDOR_CONSUMER,
+  vendorFile: VENDOR_FILE,
+  specifier: VENDOR_SPECIFIER,
+  symbols: [...VENDOR_ENTRY.symbols],
+  line: 63,
+  ...overrides,
+})
+const c16 = (imports, entries = [VENDOR_ENTRY]) => vendorSourceVerdict({
+  entries,
+  imports,
+  vendorSources: { [VENDOR_FILE]: VENDOR_TEXT },
+})
+
+test('C16: the registered pair with its exact symbol set passes', () => {
+  const verdict = c16([vendorImport()])
+  assert.equal(verdict.ok, true, verdict.failures.join('\n'))
+  assert.match(verdict.summary, /C16 vendor 源消费者/)
+})
+
+test('C16 negative control 1: a renamed consumer symbol fails (symbol set must be equal)', () => {
+  const verdict = c16([vendorImport({ symbols: ['optionalStringArray'] })])
+  assert.equal(verdict.ok, false)
+  assert.match(verdict.failures.join('\n'), /符号集合不一致/)
+  assert.match(verdict.failures.join('\n'), /stripClientSuffix/)
+})
+
+test('C16 negative control 2: an unregistered vendor-relative import fails', () => {
+  const verdict = c16([vendorImport(), vendorImport({ consumer: 'packages/renderer/src/other.ts', line: 9 })])
+  assert.equal(verdict.ok, false)
+  assert.match(verdict.failures.join('\n'), /未登记的 vendor 源相对 import/)
+  assert.match(verdict.failures.join('\n'), /packages\/renderer\/src\/other\.ts:9/)
+})
+
+test('C16 negative control 3: a registration whose import disappeared fails (no orphan entries)', () => {
+  const verdict = c16([])
+  assert.equal(verdict.ok, false)
+  assert.match(verdict.failures.join('\n'), /过期登记/)
+})
+
+test('C16: a vendor export that is renamed/removed as a function fails', () => {
+  const renamed = vendorSourceVerdict({
+    entries: [VENDOR_ENTRY],
+    imports: [vendorImport()],
+    vendorSources: { [VENDOR_FILE]: VENDOR_TEXT.replace('export function stripClientSuffix', 'export const stripClientSuffix') },
+  })
+  assert.equal(renamed.ok, false)
+  assert.match(renamed.failures.join('\n'), /不再以 export function stripClientSuffix 导出/)
+})
+
+test('C16: a missing registry block and an unreadable vendor file are hard failures', () => {
+  const noBlock = vendorSourceVerdict({ entries: undefined, imports: [], vendorSources: {} })
+  assert.equal(noBlock.ok, false)
+  assert.match(noBlock.failures.join('\n'), /缺 vendorSourceConsumers/)
+  const unreadable = vendorSourceVerdict({ entries: [VENDOR_ENTRY], imports: [vendorImport()], vendorSources: { [VENDOR_FILE]: null } })
+  assert.equal(unreadable.ok, false)
+  assert.match(unreadable.failures.join('\n'), /读不到 vendor 文件/)
+})
+
+test('C16: declaration symbols are read source-side and decoy literals are neutralized', () => {
+  assert.deepEqual(clauseSymbols('{ optionalStringArray, stripClientSuffix as strip }'), ['optionalStringArray', 'stripClientSuffix'])
+  assert.deepEqual(clauseSymbols('* as ns'), ['*'])
+  assert.deepEqual(clauseSymbols('import D, { G as H }'), ['G', 'default'])
+  const text = [
+    "// import { x } from '../../../vendor/harness-packages/x.ts'",
+    'const s = "import { y } from ' + "'../../../vendor/harness-packages/y.ts'" + '"',
+    'const r = /vendor\\/z\\.ts/',
+    "import { optionalStringArray } from '../../../vendor/harness-packages/@deepseek-ai/dsh-client-modules/src/client/manifest.ts'",
+    'const dyn = await import("../../../vendor/dyn.ts")',
+    'const req = require("../../../vendor/req.ts")',
+  ].join('\n')
+  assert.deepEqual(sourceModuleSpecifiers(text).map((item) => item.specifier), [
+    '../../../vendor/harness-packages/@deepseek-ai/dsh-client-modules/src/client/manifest.ts',
+    '../../../vendor/dyn.ts',
+    '../../../vendor/req.ts',
+  ])
+  const imports = relativeVendorImports('packages/renderer/src/probe.ts', text)
+  assert.equal(imports.length, 3)
+  assert.deepEqual(imports[0].symbols, ['optionalStringArray'])
+})
+
+test('C16 wiring: the real host-graph vendor import is exactly the registered pair', () => {
+  const root = join(here, '..', '..')
+  const registry = JSON.parse(readFileSync(join(root, 'scripts', 'upstream', 'registry.json'), 'utf8'))
+  const consumer = readFileSync(join(root, 'packages', 'renderer', 'src', 'host-graph.ts'), 'utf8')
+  const imports = relativeVendorImports(VENDOR_CONSUMER, consumer)
+  assert.equal(imports.length, 1, 'host-graph.ts must carry exactly one vendor-relative import')
+  assert.equal(imports[0].vendorFile, VENDOR_FILE)
+  assert.deepEqual(imports[0].symbols, ['optionalStringArray', 'stripClientSuffix'])
+  const verdict = c16(imports, registry.vendorSourceConsumers)
+  assert.equal(verdict.ok, true, verdict.failures.join('\n'))
+})
+

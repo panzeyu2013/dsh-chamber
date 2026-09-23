@@ -157,6 +157,12 @@ jobs:
         run: pnpm run verify:no-dead-exports
       - name: Upstream lifecycle contract (first-frame bound retirement tripwire)
         run: pnpm run verify:upstream-lifecycle-contract
+      # 包边界门（R4 P7）：生产面禁跨包相对 import（vendor 直穿按 registry 放行）+
+      # exports 面白名单。File-only（只读、离线、自带 --self-test 负控），故不挂
+      # classifier；与本地 run-checks.mjs static 的同一脚本名双向对齐
+      # （static-gate-parity 会因单侧缺失而红）。
+      - name: Package boundaries (cross-package relative imports + exports allowlist)
+        run: pnpm run verify:package-boundaries
       # Upstream design-token conformance: S1 未声明 --dsw-* 引用 / S2 命名空间越界 /
       # S3 0.5px 发丝线 / S4 字面量 fallback / S5 边框+阴影配对 / S6 死声明 /
       # S7 全圆角配对. Upstream enforces these with specs that scan ITS OWN

@@ -27,7 +27,7 @@ function withTempRepo(files, body) {
   }
 }
 test('slugify matches GitHub for punctuation, casing and spaces', () => {
-  assert.equal(slugify('Pre-flight: findings (2026-12)'), 'pre-flight-findings-2026-12')
+  assert.equal(slugify('Pre-flight: findings (note)'), 'pre-flight-findings-note')
   assert.equal(slugify('`code` and *emphasis*'), 'code-and-emphasis')
   assert.equal(slugify('[link](target) text'), 'link-text')
 })

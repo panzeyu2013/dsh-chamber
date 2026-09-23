@@ -2,7 +2,7 @@
  * Pure verdict for the C15 hover-port gate (design 06 §7).
  *
  * WHY THIS EXISTS: the chamber sidebar draws its row hover cards with its own
- * `RowHoverCard` + `shared/hover-intent.ts` instead of the pinned
+ * `RowHoverCard` + client-core `src/hover-intent.ts` instead of the pinned
  * `ui-primitives` HoverCard. The vendored atom arms its grace close against the
  * last COMMITTED `open` (its `onPointerLeave` is `if (open) armClose()`), so a
  * pointerleave handled while React's commit of the dwell open is still pending
@@ -66,7 +66,7 @@ export const HOVER_PORT_SOURCES = {
   /** Upstream grace constant + hook the racy shape is built from. */
   upstreamPointerGrace: 'packages/client/ui-primitives/src/pointer-grace.ts',
   /** Chamber port: the constants the upstream values must stay lockstep with. */
-  chamberHoverIntent: 'packages/dsh-chamber-client-ui-sidebar/src/shared/hover-intent.ts',
+  chamberHoverIntent: 'packages/dsh-chamber-client-core/src/hover-intent.ts',
 }
 
 /** The component whose close handler the shape check is scoped to. */

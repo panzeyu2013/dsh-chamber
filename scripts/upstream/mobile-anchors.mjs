@@ -382,11 +382,6 @@ export function slotSelectorPatterns(slot) {
   ]
 }
 
-/** 全形态并集（保留导出面：调用方要「有没有提到」时用它；判定走上面两级）。 */
-export function slotEvidencePatterns(slot) {
-  return [...slotEmissionPatterns(slot), ...slotSelectorPatterns(slot)]
-}
-
 /** slot 锚点：写入形 / 消费形两份证据。 */
 export function slotEvidence(files, slot) {
   return evidenceByStrength(files, () => slotEmissionPatterns(slot), slotSelectorPatterns(slot))
