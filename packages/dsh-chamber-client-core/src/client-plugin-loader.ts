@@ -26,6 +26,7 @@
  * table is typed structurally, the diagnostic shape is imported type-only.
  */
 import type { PluginGraphDiagnostic } from './aggregate-store.ts'
+import { errorMessage } from './error-text.ts'
 import { assertSingletonModule } from './singleton.ts'
 
 assertSingletonModule('client-plugin-loader')
@@ -125,9 +126,6 @@ export interface ClientRowLoadOptions {
   timeout: 'throw' | 'collect'
 }
 
-function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
-}
 
 /**
  * Load the given rows' bundles into the page module table, returning one
@@ -177,7 +175,7 @@ export async function loadClientPluginRows<T extends ClientPluginRow>(
         deps.reportDiagnostic?.(sourceId, {
           state: 'bundle-load-failed',
           pluginId: row.id,
-          message: messageOf(error),
+          message: errorMessage(error),
           updatedAt: Date.now(),
         })
         if (error instanceof BundleLoadTimeoutError && options.timeout === 'collect') {
@@ -243,7 +241,7 @@ export async function loadClientPluginRows<T extends ClientPluginRow>(
       deps.reportDiagnostic?.(sourceId, {
         state: 'bundle-load-failed',
         pluginId: row.id,
-        message: messageOf(error),
+        message: errorMessage(error),
         updatedAt: Date.now(),
       })
       if (options.timeout === 'collect') {

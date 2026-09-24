@@ -25,13 +25,11 @@
  * vendor-modules.d.ts ambient overlay.
  */
 import { DirectoryBrowseError } from './directory-browse-error.ts'
-// One derivation for the active-Schedule fact
-// (shared by this module's unary row build and derive.ts's mounted-store
-// projection). derive.ts type-imports this module only, so no runtime cycle.
-// The display-title ladder and its basename helper live in derive.ts for
-// the same reason (one resolver, no cycle); `basenameOf` is re-exported below
-// so existing importers (workspace-echo.ts) keep their import site.
-import { basenameOf, hasActiveScheduleOf, sessionDisplayTitle } from './derive.ts'
+// Display primitives live in the zero-import session-display leaf: this
+// module builds unary rows, derive.ts resolves mounted-store titles, and the
+// two must share one rule without value-importing each other (every remaining
+// edge between instance-api/derive/aggregate-store is type-only).
+import { basenameOf, hasActiveScheduleOf, sessionDisplayTitle } from './session-display.ts'
 import {
   decodeSessionCreateValue, decodeWorkspaceCreateValue, decodeWorkspaceDeleteValue,
 } from './instance-mutation-values.ts'
@@ -49,7 +47,7 @@ import {
   archiveCleanupEndpoint,
   archiveCleanupPurgeArgs,
 } from '@dsh-chamber/dsh-chamber-wire'
-export { basenameOf } from './derive.ts'
+export { basenameOf } from './session-display.ts'
 export { InstanceRpcError } from './instance-rpc-error.ts'
 
 /** One workspace row (WorkspaceView wire shape). */

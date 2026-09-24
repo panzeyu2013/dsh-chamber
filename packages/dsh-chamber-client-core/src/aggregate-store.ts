@@ -11,7 +11,7 @@
  * shared UNGROUPED_WORKSPACE_ID as its id.
  */
 import type { InstanceSnapshot } from './instance-api.ts'
-import type { ArchivedSessionMetaRow } from './derive.ts'
+import type { ArchivedSessionMetaRow } from './aggregate-types.ts'
 import type { SubagentActivity } from './session-row-state.ts'
 import type { SessionAuthoritySnapshot } from './session-fact-reconcile.ts'
 import { assertSingletonModule } from './singleton.ts'
@@ -403,7 +403,7 @@ export interface InstanceRuntimeReport {
     factAt?: number
   }>
   /**
-   * 会话事实单一权威（P2，docs/progress/todo/session-authority-refactor.md）的快照；
+   * 会话事实单一权威（P2）的快照；
    * 缺席 = 本记录内从未请求过。App 的升级 ladder 只读它的事实（runningSince /
    * stuckSince / progressStamp）决定 reconnect 与 notice——策略不在 App 侧。
    * 执行端是 shared/session-fact-reconcile.ts（reducer + probe ladder + I/O）。

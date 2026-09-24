@@ -1,6 +1,6 @@
 /**
  * Error-text projections for the browser-side chamber packages — the
- * repository's single implementation.
+ * browser-side single implementation.
  *
  * Two DISTINCT primitives, deliberately not collapsed into one:
  *
@@ -15,7 +15,8 @@
  * Two copies are deliberately NOT merged here: the desktop main process
  * (packages/desktop/describe-error.ts, which additionally appends an Error
  * cause chain) and the official dsh-client-web copy
- * (packages/dsh-client-web/src/boot.ts, upstream-diffable).
+ * (packages/dsh-client-web/src/boot.ts, upstream-diffable). The Node-side
+ * control plane keeps its documented twin (packages/control-plane/src/error-text.ts).
  *
  * Dependency-free on purpose: the consumers' plain-node tests import it.
  */

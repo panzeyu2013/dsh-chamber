@@ -27,14 +27,14 @@ import {
   GitSagaError, isProvenPreMutationRefusal, recoveryForFailure, runAdoptSessionSaga, runCreateSaga, runPreRemoveArchive,
   runRemoveSaga, runRollbackRecovery, runWorkspaceAdoptRecovery, runWorkspaceDeleteRecovery,
 } from './saga.ts'
-import { errorMessage as errorText } from '@dsh-chamber/dsh-chamber-client-core'
+import { basenameOf, createListenerSet, errorMessage as errorText } from '@dsh-chamber/dsh-chamber-client-core'
 import type { WorkspaceCreationPlacement } from '@dsh-chamber/dsh-chamber-client-core'
 import type {
   GitBusyState, GitRecovery, GitSourceError, GitSourceState, GitWorktreeInfo, GitWorktreeSnapshot, PreviewCreateInput, PreviewCreateResult, RemoveWorktreeResult, UnregisteredWorktreeInfo,
 } from './types.ts'
 
 const POLL_MS = 30_000
-const listeners = new Set<() => void>()
+const listeners = createListenerSet()
 const states = new Map<string, GitSourceState>()
 const refreshFlights = new SerializedRefreshes<GitSourceState>()
 const actionLedger = new GitActionLedger()
@@ -62,7 +62,7 @@ function nextId(prefix: string): string {
 
 function emit(): void {
   revision += 1
-  for (const listener of [...listeners]) listener()
+  listeners.notify()
 }
 
 function patchSource(sourceId: string, patch: Partial<GitSourceState>): GitSourceState {
@@ -86,12 +86,6 @@ function bumpSourceEpoch(sourceId: string): number {
 /** Publish per-workspace git flags to the sidebar's neutral registry
  *  (design 08 §3.2): which workspaces are worktrees / the main checkout.
  *  Workspaces with no git association get their flag cleared. */
-function pathBasename(path: string): string {
-  const trimmed = path.replace(/\/+$/u, '')
-  const index = trimmed.lastIndexOf('/')
-  return index >= 0 ? trimmed.slice(index + 1) : trimmed
-}
-
 function publishWorkspaceGitFlags(
   sourceId: string,
   snapshot: GitWorktreeSnapshot,
@@ -113,7 +107,7 @@ function publishWorkspaceGitFlags(
         // simply have no dsh workspace of its own.
         if (worktree.isMain) continue
         unregistered.push({
-          name: pathBasename(worktree.path) || worktree.path,
+          name: basenameOf(worktree.path) || worktree.path,
           worktreeId: worktree.worktreeId,
           branch: worktree.branch,
           status: worktree.status,
@@ -961,10 +955,7 @@ export const gitCoordinator = {
       if (retainCount === 0) stop()
     }
   },
-  subscribe(listener: () => void): () => void {
-    listeners.add(listener)
-    return () => { listeners.delete(listener) }
-  },
+  subscribe: listeners.subscribe,
   getVersion(): number {
     return revision
   },

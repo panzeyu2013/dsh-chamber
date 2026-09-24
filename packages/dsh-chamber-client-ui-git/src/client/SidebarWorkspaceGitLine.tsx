@@ -20,7 +20,7 @@ import {
   IconBranchOutline16, IconPlusOutline16, IconRefreshOutline16, IconTrashOutline16,
   RiskConfirmation, Tag,
 } from '@deepseek-ai/dsh-client-ui-primitives'
-import { chamberBridge } from '@dsh-chamber/dsh-chamber-client-core'
+import { basenameOf, chamberBridge } from '@dsh-chamber/dsh-chamber-client-core'
 import {
   clearActionError, createSessionHere, currentSessionIsBlank, gitCoordinator, removeUnregisteredWorktree, retryRecovery,
 } from '../shared/coordinator.ts'
@@ -32,12 +32,6 @@ import type { GitSidebarKey } from '../locales.ts'
 import { CreateWorktreeDialog } from './CreateWorktreeDialog.tsx'
 import { RemoveWorktreeDialog, type RemoveViewTarget } from './RemoveWorktreeDialog.tsx'
 import css from './SidebarGit.module.css'
-
-function pathName(path: string): string {
-  const trimmed = path.replace(/\/+$/u, '')
-  const index = trimmed.lastIndexOf('/')
-  return index >= 0 ? trimmed.slice(index + 1) : trimmed
-}
 
 /** Occurrence context the sidebar passes: source scope when workspaceId === ''
  *  (with an optional repoKey for the repository's UNREGISTERED worktree
@@ -193,12 +187,12 @@ export function SidebarWorkspaceGitLine({
                   : worktree.dirty === true
                     ? 'dirty'
                     : undefined
-          const rowName = pathName(worktree.path)
+          const rowName = basenameOf(worktree.path)
           return (
             <div className={css.unregisteredRow} key={worktree.worktreeId} role="group">
               <IconBranchOutline16 size={14} className={css.unregisteredIcon} />
               <span className={css.unregisteredName} title={worktree.path}>
-                {worktree.branch ?? pathName(worktree.path)}
+                {worktree.branch ?? basenameOf(worktree.path)}
               </span>
               {worktree.status !== 'ready' && (
                 // Upstream `Tag` (11px/17px capsule, 8 tones) instead of a

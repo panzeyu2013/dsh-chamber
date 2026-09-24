@@ -80,7 +80,7 @@
  * close it (an upstream keepalive, or the carrier-retry policy patch) — never a
  * blind timeout here.
  *
- * CLOCK DISCIPLINE (mirrors `session-liveness.ts` and the mobile stall
+ * CLOCK DISCIPLINE (mirrors the mobile stall
  * observer): every hold is "zero whenever the predicate breaks" and the whole
  * ladder is fail-closed — an observation that cannot be made produces no
  * action. A hidden surface produces no notice and no heal, and its hold does

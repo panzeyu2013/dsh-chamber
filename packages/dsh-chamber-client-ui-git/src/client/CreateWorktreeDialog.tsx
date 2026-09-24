@@ -9,6 +9,7 @@
  */
 import { useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { Button, IconChevronRightOutline14, Input, Menu, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
+import { basenameOf } from '@dsh-chamber/dsh-chamber-client-core'
 import { createFromPreview, gitCoordinator, previewCreate } from '../shared/coordinator.ts'
 import { gitActionErrorText } from '../shared/action-error.ts'
 import { createSourceOptions, sourceBranchChoices } from '../shared/git-facts.ts'
@@ -79,19 +80,13 @@ function takenNames(snapshot: GitWorktreeSnapshot | undefined): Set<string> {
       if (worktree.branch !== null) taken.add(worktree.branch)
       // The MAIN checkout lives outside the worktree root — its directory
       // basename is not a collision for the new worktree's directory.
-      if (!worktree.isMain) taken.add(lastPathSegment(worktree.path))
+      if (!worktree.isMain) taken.add(basenameOf(worktree.path))
     }
   }
   return taken
 }
 
 /** Last path segment, for same-repo directory-collision prechecks. */
-function lastPathSegment(path: string): string {
-  const trimmed = path.replace(/\/+$/u, '')
-  const index = trimmed.lastIndexOf('/')
-  return index >= 0 ? trimmed.slice(index + 1) : trimmed
-}
-
 /** Branch → directory slug ("feature/my-branch" → "my-branch"). */
 function slugifyBranchName(branch: string): string {
   const clean = branch.trim().split('/').at(-1) ?? branch
@@ -300,7 +295,7 @@ export function CreateWorktreeDialog({
     const sameRepoTaken = new Set<string>()
     if (sourceRepo !== undefined) {
       for (const worktree of sourceRepo.worktrees) {
-        if (!worktree.isMain) sameRepoTaken.add(lastPathSegment(worktree.path))
+        if (!worktree.isMain) sameRepoTaken.add(basenameOf(worktree.path))
       }
     }
     const finalDirectory = uniqueDirectoryName(cleanDirectory, sameRepoTaken)
@@ -331,7 +326,7 @@ export function CreateWorktreeDialog({
   const directoryConflict = sourceRepo !== undefined && directoryDraft.trim() !== ''
     && sourceRepo.worktrees
       .filter(worktree => !worktree.isMain)
-      .some(worktree => lastPathSegment(worktree.path) === directoryDraft.trim())
+      .some(worktree => basenameOf(worktree.path) === directoryDraft.trim())
   // Blur normalization on the branch name (new mode).
   const normalizeOnBlur = (): void => {
     const normalized = normalizeBranchName(branchName)

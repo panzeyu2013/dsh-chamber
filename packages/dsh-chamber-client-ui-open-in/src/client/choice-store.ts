@@ -20,6 +20,8 @@
  * just does not outlive the page).
  */
 
+import { createListenerSet } from '@dsh-chamber/dsh-chamber-client-core'
+
 /** Per-source storage key prefix. */
 export const OPEN_IN_CHOICE_STORAGE_PREFIX = 'dsh-chamber.open-in.choice.'
 
@@ -36,7 +38,7 @@ interface ChoiceStorage {
 
 const choices = new Map<string, string>()
 const loaded = new Set<string>()
-const listeners = new Set<() => void>()
+const listeners = createListenerSet()
 
 function storage(): ChoiceStorage | null {
   try {
@@ -103,7 +105,7 @@ export function setOpenInChoice(sourceId: string, appId: string): void {
   } catch {
     // Memory-only fallback: the current page keeps the choice.
   }
-  for (const listener of [...listeners]) listener()
+  listeners.notify()
 }
 
 /**
@@ -112,8 +114,7 @@ export function setOpenInChoice(sourceId: string, appId: string): void {
  * @returns the unsubscribe function.
  */
 export function subscribeOpenInChoice(listener: () => void): () => void {
-  listeners.add(listener)
-  return () => { listeners.delete(listener) }
+  return listeners.subscribe(listener)
 }
 
 /** Test-only: reset the module-level choice state for isolation. */

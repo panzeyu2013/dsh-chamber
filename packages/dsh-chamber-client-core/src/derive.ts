@@ -27,6 +27,11 @@ import type { SubagentActivity } from './session-row-state.ts'
 import type { ChamberServerAggregate, ChamberServerWorkspace, InstanceRuntimeReport, ServerBootGap } from './aggregate-store.ts'
 import { forgetMapSources } from './ledger.ts'
 import { assertSingletonModule } from './singleton.ts'
+import type { ArchivedSessionMetaRow } from './aggregate-types.ts'
+import { basenameOf, hasActiveScheduleOf, sessionDisplayTitle } from './session-display.ts'
+
+export { basenameOf, hasActiveScheduleOf, sessionDisplayTitle } from './session-display.ts'
+export type { ArchivedSessionMetaRow } from './aggregate-types.ts'
 
 // `blankGhostUntil` below is CROSS-BOUNDARY shared state — armed by the
 // sidebar bundle (armBlankGhost, at the transition click) and read by the
@@ -38,90 +43,6 @@ assertSingletonModule('derive')
 
 /** Synthetic id of the trailing group that collects sessions outside every workspace. */
 export const UNGROUPED_WORKSPACE_ID = '__ungrouped__'
-
-/**
- * Active-Schedule fact of one session.
- *
- * Mirrors the official derivation verbatim — upstream reads the session's
- * registered `schedule` projection and asks whether anything is active:
- * `(session.projectionValues?.schedule?.length ?? 0) > 0`
- * (vendor ui-workspace/src/client/tree.ts:161-163, consumed by
- * `{row.hasActiveSchedule && <ActiveScheduleIndicator/>}` at Rows.tsx:468).
- * The value is unknown-typed here (a wire projection bag), so the array test
- * replaces upstream's optional chaining on a typed `readonly ScheduleRecord[]`:
- * absent / not-an-array / empty all mean "no active schedule" — never a claim
- * about the future, only about the projection the list row carried.
- * @param projectionValues - the row's `projectionValues` bag (mounted store) or `projections.values` (unary wire), or undefined.
- * @returns true when the bag carries a non-empty `schedule` array.
- */
-export function hasActiveScheduleOf(
-  projectionValues: Readonly<Record<string, unknown>> | undefined,
-): boolean {
-  const schedule = projectionValues?.schedule
-  return Array.isArray(schedule) && schedule.length > 0
-}
-
-/**
- * Trailing path segment ('' for root); the cwd-derived group title. Lives HERE
- * (moved from shared/instance-api.ts) because the display-title resolver below
- * needs it and every snapshot builder must share one implementation:
- * instance-api value-imports this module, so this module may only type-import
- * instance-api — a value import the other way would be a runtime cycle.
- * instance-api re-exports `basenameOf` so existing importers keep their import
- * site.
- */
-export function basenameOf(cwd: string): string {
-  const trimmed = cwd.replace(/[\\/]+$/, '')
-  const separator = Math.max(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\'))
-  const base = separator === -1 ? trimmed : trimmed.slice(separator + 1)
-  return base === '' ? cwd : base
-}
-
-/**
- * THE session display-label resolver — one rule, official semantics.
- *
- * Upstream splits the rule across two places: the renderer localizes a blank
- * row (`blank ? t('session.new') : node.title`, vendor ui-workspace
- * rows/Rows.tsx:26-28) and the projection chain is `title ?? basename(cwd) ??
- * id` (`displayTitleOf`, vendor api-session-controller client
- * sessions/service.ts:146-153, applied at :587). The chamber carried only the
- * durable `title` half, so a row whose title the host could not read — a
- * predecessor cache record without a readable title projection — fell through
- * to 「未命名会话」 (`list.unnamed`) even though its official label is the
- * project directory name. This resolver is the missing half.
- *
- * Ordering is the official one with EMPTY treated as absent: durable title,
- * then the canonical cwd's basename, then the raw session id. It never returns
- * an empty string, so an unknown title can never be rendered as the untitled
- * copy again (invariant I3: a label never turns "unknown" into 「未命名」).
- *
- * `displayTitle` is a producer-resolved value that wins when present (the
- * mounted vendor store's `SessionSummary.displayTitle`, or the unary builder's
- * own chain); `cwdBasename` lets a caller that owns the cwd hand in the
- * basename without this module importing instance-api.
- *
- * @param source - candidate label facts; only `sessionId` is required.
- * @returns a non-empty display label.
- */
-export function sessionDisplayTitle(source: {
-  displayTitle?: string | undefined
-  title?: string | undefined
-  cwdBasename?: string | undefined
-  sessionId: string
-}): string {
-  const { displayTitle, title, cwdBasename } = source
-  // `typeof === 'string'` (not `!== undefined`) because a JSON producer can
-  // deliver `null`, which is not a label and must fall through the ladder.
-  if (typeof displayTitle === 'string' && displayTitle !== '') return displayTitle
-  if (typeof title === 'string' && title !== '') return title
-  // A separator-only basename is the ROOT path's spelling ('/' , '///'), where
-  // the official `workspaceTitleOf` answers '' and `displayTitleOf` therefore
-  // falls through to the session id — never render the raw separators.
-  if (typeof cwdBasename === 'string' && cwdBasename !== '' && !/^[/\\]+$/.test(cwdBasename)) {
-    return cwdBasename
-  }
-  return source.sessionId
-}
 
 /** Canonical-path equality key: trailing separators normalized only. No
  *  fs.realpath in the browser, so symlinked spellings (e.g. macOS /tmp →
@@ -1610,25 +1531,6 @@ export function increasedForkTitle(title: string): string {
     return `${fullWidth[1]}（${BigInt(fullWidth[2]) + 1n}）`
   }
   return `${title} (1)`
-}
-
-/** Archived-session metadata row carried to archive-manager surfaces
- *  (design 24 revision: the manager lists WHAT is archived; rows carry their
- *  workspace attribution for the grouped collapsible listing). */
-export interface ArchivedSessionMetaRow {
-  sessionId: string
-  /** Title projection when the session has one (untitled sessions omit it). */
-  title?: string
-  /** Canonical working directory (project label source). */
-  cwd?: string
-  /** Epoch ms of last activity; absent on the wire when unknown. */
-  updatedAt?: number
-  /** Workspace attribution: the host workspace whose
-   *  registry membership contains this session — or, failing that, whose
-   *  path equals the session's canonical cwd. Absent = the session is not
-   *  accounted by any live workspace (deleted-workspace orphans etc.); the
-   *  manager lists it in the trailing ungrouped bucket. */
-  workspace?: { id: string; title: string }
 }
 
 /**
