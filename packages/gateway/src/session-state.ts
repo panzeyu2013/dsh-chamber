@@ -97,7 +97,7 @@ import {
   type ReadAllRequest,
   type ReadRequest,
 } from '@dsh-chamber/control-plane'
-import { readBoundedBody } from './http-utils.ts'
+import { jsonResponse, readBoundedBody } from './http-utils.ts'
 
 // Gateway-owned limits. Protocol constants are
 // imported, never re-declared: session-state-protocol.ts is the single source.
@@ -1597,27 +1597,21 @@ export function createChamberSessionState(deps: ChamberSessionStateDeps): Chambe
     }
   }
 
-  function json(res: ApiResponse, status: number, body: unknown): true {
-    res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' })
-    res.end(JSON.stringify(body))
-    return true
-  }
-
   function methodNotAllowed(res: ApiResponse): true {
-    return json(res, 405, { error: 'method_not_allowed', code: 'method_not_allowed' })
+    return jsonResponse(res, 405, { error: 'method_not_allowed', code: 'method_not_allowed' })
   }
 
   async function handle(req: ApiRequest, res: ApiResponse, pathname: string): Promise<boolean> {
     if (!enabled) {
       // The desktop distinguishes 404 (gateway without this surface) from 503
       // session_state_disabled (classifySessionStateProbe reads exactly this body).
-      return json(res, 503, { error: 'session_state_disabled', code: 'session_state_disabled' })
+      return jsonResponse(res, 503, { error: 'session_state_disabled', code: 'session_state_disabled' })
     }
     if (pathname === SESSION_STATE_PATH) {
       if (req.method !== 'GET' && req.method !== 'HEAD') return methodNotAllowed(res)
       const client = readClientId(req)
-      if (!client.ok) return json(res, 400, { error: 'bad_request', code: 'bad_request' })
-      return json(res, 200, snapshot(client.clientId))
+      if (!client.ok) return jsonResponse(res, 400, { error: 'bad_request', code: 'bad_request' })
+      return jsonResponse(res, 200, snapshot(client.clientId))
     }
     if (pathname === SESSION_STATE_STREAM_PATH) {
       if (req.method !== 'GET') return methodNotAllowed(res)
@@ -1627,20 +1621,20 @@ export function createChamberSessionState(deps: ChamberSessionStateDeps): Chambe
       if (req.method !== 'POST') return methodNotAllowed(res)
       const body = await readJsonBody(req)
       if (body.kind === 'oversize') {
-        const result = json(res, 413, { error: 'body_too_large', code: 'body_too_large' })
+        const result = jsonResponse(res, 413, { error: 'body_too_large', code: 'body_too_large' })
         req.destroy?.()
         return result
       }
       if (body.kind === 'aborted') return true
-      if (body.kind === 'invalid') return json(res, 400, { error: 'bad_request', code: 'bad_request' })
+      if (body.kind === 'invalid') return jsonResponse(res, 400, { error: 'bad_request', code: 'bad_request' })
       if (pathname === SESSION_STATE_READ_PATH) {
         const parsed = parseReadRequestBody(body.value)
-        if (parsed === null) return json(res, 400, { error: 'bad_request', code: 'bad_request' })
+        if (parsed === null) return jsonResponse(res, 400, { error: 'bad_request', code: 'bad_request' })
         // Host-domain clamp (§10 clock skew): a client clock ahead of the host
         // must not buy it a permanent read mark in the host's future.
         const at = clock()
         const outcome = deps.store.markRead(parsed.clientId, parsed.sessionId, clampReadThrough(parsed.readThrough, at), at)
-        return json(res, 200, {
+        return jsonResponse(res, 200, {
           ok: true,
           clientId: parsed.clientId,
           sessionId: parsed.sessionId,
@@ -1650,10 +1644,10 @@ export function createChamberSessionState(deps: ChamberSessionStateDeps): Chambe
         })
       }
       const parsed = parseReadAllRequestBody(body.value)
-      if (parsed === null) return json(res, 400, { error: 'bad_request', code: 'bad_request' })
+      if (parsed === null) return jsonResponse(res, 400, { error: 'bad_request', code: 'bad_request' })
       const at = clock()
       const outcome = deps.store.markAllRead(parsed.clientId, clampReadThrough(parsed.through, at), at)
-      return json(res, 200, {
+      return jsonResponse(res, 200, {
         ok: true,
         clientId: parsed.clientId,
         through: outcome.through,
@@ -1662,7 +1656,7 @@ export function createChamberSessionState(deps: ChamberSessionStateDeps): Chambe
         updated: outcome.updated,
       })
     }
-    return json(res, 404, { error: 'not_found', code: 'not_found' })
+    return jsonResponse(res, 404, { error: 'not_found', code: 'not_found' })
   }
 
   return {
