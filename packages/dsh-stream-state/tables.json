@@ -49,7 +49,37 @@
         "healBudgetMax": 3,
         "healSettleMs": 20000,
         "carrierChurnMs": 10000
+      },
+      "delivery": {
+        "resyncGraceMs": 2000,
+        "resyncCooldownMs": 15000,
+        "resyncWindowMs": 300000,
+        "resyncMax": 2,
+        "scheduleProbe": {
+          "intervalMs": 5000,
+          "timeoutMs": 3000,
+          "strikes": 3,
+          "inputBlockRttMs": 1000
+        },
+        "rebootAfterMs": 90000,
+        "rebootCooldownMs": 120000,
+        "rebootWindowMs": 600000,
+        "rebootMax": 2,
+        "reloadAfterMs": 120000,
+        "reloadCooldownMs": 300000,
+        "reloadWindowMs": 600000,
+        "reloadMax": 3,
+        "unresolvedRetryBaseMs": 6000,
+        "unresolvedRetryMaxMs": 60000,
+        "unresolvedRetryMax": 5
       }
-    }
+    },
+    "deliveryEfficacy": [
+      { "tier": "journal-restart", "resets": "the physical socket and every logical window on it", "evidence": "zero-frame socket or a stalled live tail", "owner": "carrier" },
+      { "tier": "resync", "resets": "this session's event-stream window", "evidence": "open state is loading with no open in flight, or an error the header cannot heal, and no resync disposing", "owner": "delivery" },
+      { "tier": "instance-reboot", "resets": "one instance shell: component and React state", "evidence": "that instance is stalled while the document frame counter still advances", "owner": "delivery" },
+      { "tier": "document-reload", "resets": "module-level state and the whole JS context", "evidence": "the document frame counter is stalled", "owner": "delivery" },
+      { "tier": "webcontent-crash-recovery", "resets": "the WebContent process", "evidence": "the navigation process terminated", "owner": "shell" }
+    ]
   }
 }

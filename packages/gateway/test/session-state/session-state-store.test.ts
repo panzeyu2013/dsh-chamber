@@ -51,9 +51,9 @@ test('a false status without a running edge produces no edge', t => {
 test('completed arms completedAt with the observed source', t => {
   const store = storeFor(t)
   store.applyStatus('s1', true, 10)
-  store.applyStatus('s1', false, 20)
-  assert.equal(store.settleCompletion('s1', {
-    at: 20, turnEnd: { kind: 'completed', cause: null, at: 20, seq: 7 }, source: 'observed', unreadable: false,
+  const [edge] = store.applyStatus('s1', false, 20)
+  assert.equal(store.settleCompletion(edge!, {
+    at: 20, turnEnd: { kind: 'completed', cause: null, at: 20, seq: 7 }, unreadable: false,
   }), true)
   const row = store.snapshotFor(null, 'sse', store.host()).sessions[0]
   assert.equal(row.completedAt, 20)
@@ -64,9 +64,9 @@ test('completed arms completedAt with the observed source', t => {
 test('aborted + user never arms unread (R12) but records the fact', t => {
   const store = storeFor(t)
   store.applyStatus('s1', true, 10)
-  store.applyStatus('s1', false, 20)
-  store.settleCompletion('s1', {
-    at: 20, turnEnd: { kind: 'aborted', cause: 'user', at: 20, seq: 8 }, source: 'observed', unreadable: false,
+  const [edge] = store.applyStatus('s1', false, 20)
+  store.settleCompletion(edge!, {
+    at: 20, turnEnd: { kind: 'aborted', cause: 'user', at: 20, seq: 8 }, unreadable: false,
   })
   const row = store.snapshotFor(null, 'sse', store.host()).sessions[0]
   assert.equal(row.completedAt, null)
@@ -86,8 +86,8 @@ test('neutral turn-end kinds (blocked/error/max-tokens/interrupted, aborted non-
   ]) {
     const store = storeFor(t)
     store.applyStatus('s1', true, 10)
-    store.applyStatus('s1', false, 20)
-    store.settleCompletion('s1', {
+    const [edge] = store.applyStatus('s1', false, 20)
+    store.settleCompletion(edge!, {
       at: 20,
       turnEnd: {
         kind: reason.kind as 'blocked',
@@ -95,7 +95,6 @@ test('neutral turn-end kinds (blocked/error/max-tokens/interrupted, aborted non-
         at: 20,
         seq: 9,
       },
-      source: 'observed',
       unreadable: false,
     })
     const row = store.snapshotFor(null, 'sse', store.host()).sessions[0]
@@ -106,24 +105,76 @@ test('neutral turn-end kinds (blocked/error/max-tokens/interrupted, aborted non-
 test('an unreadable tail falls back to arming with a null lastTurnEnd marker', t => {
   const store = storeFor(t)
   store.applyStatus('s1', true, 10)
-  store.applyStatus('s1', false, 20)
-  store.settleCompletion('s1', { at: 20, turnEnd: null, source: 'observed', unreadable: true })
+  const [edge] = store.applyStatus('s1', false, 20)
+  store.settleCompletion(edge!, { at: 20, turnEnd: null, unreadable: true })
   const row = store.snapshotFor(null, 'sse', store.host()).sessions[0]
   assert.equal(row.completedAt, 20)
-  assert.equal(row.completedAtSource, 'observed')
+  assert.equal(row.completedAtSource, 'reconstructed')
   assert.equal(row.lastTurnEnd, null, 'the degraded marker is an absent fact, never a fabricated one')
 })
 
 test('a new running edge resolves the previous completion', t => {
   const store = storeFor(t)
   store.applyStatus('s1', true, 10)
-  store.applyStatus('s1', false, 20)
-  store.settleCompletion('s1', { at: 20, turnEnd: { kind: 'completed', cause: null, at: 20, seq: 7 }, source: 'observed', unreadable: false })
+  const [edge] = store.applyStatus('s1', false, 20)
+  store.settleCompletion(edge!, { at: 20, turnEnd: { kind: 'completed', cause: null, at: 20, seq: 7 }, unreadable: false })
   store.applyStatus('s1', true, 30)
   const row = store.snapshotFor(null, 'sse', store.host()).sessions[0]
   assert.equal(row.completedAt, null)
   assert.equal(row.completedAtSource, null)
   assert.equal(row.lastTurnEnd, null)
+})
+
+test('a stale follow cannot settle a newer run or a later prompt', t => {
+  const store = storeFor(t)
+  store.applyBaseline([baselineItem('s1', true, 100)], { at: 10 })
+  const [oldEdge] = store.applyStatus('s1', false, 20)
+  store.applyStatus('s1', true, 30)
+  assert.equal(store.settleCompletion(oldEdge!, {
+    at: 31, turnEnd: { kind: 'completed', cause: null, at: 31, seq: 1 }, unreadable: false,
+  }), false)
+  assert.equal(store.snapshotFor(null, 'sse', store.host()).sessions[0]?.running, true)
+
+  const [newEdge] = store.applyStatus('s1', false, 40)
+  assert.equal(store.applyActivity('s1', 200.5, 41), false,
+    'a fractional host watermark cannot revoke the pending edge')
+  store.applyActivity('s1', 200, 41)
+  assert.equal(store.settleCompletion(newEdge!, {
+    at: 42, turnEnd: { kind: 'completed', cause: null, at: 42, seq: 2 }, unreadable: false,
+  }), false)
+  const row = store.snapshotFor(null, 'sse', store.host()).sessions[0]
+  assert.equal(row?.completedAt, null)
+  assert.equal(row?.updatedAt, 200)
+})
+
+test('an unreadable outcome stays pending, then a classified tail settles the same edge', t => {
+  const store = storeFor(t)
+  store.applyBaseline([baselineItem('s1', true, 100)], { at: 10 })
+  const [edge] = store.applyStatus('s1', false, 20)
+  assert.equal(store.settleCompletion(edge!, { at: 21, turnEnd: null, unreadable: true }), true)
+  assert.equal(store.snapshotFor(null, 'sse', store.host()).sessions[0]?.completedAtSource, 'reconstructed')
+  const retry = store.applyBaseline([baselineItem('s1', false, 100)], { at: 30 })
+  assert.equal(retry[0], edge, 'the same edge must be retried, not replaced')
+  assert.equal(store.settleCompletion(edge!, { at: 31, turnEnd: null, unreadable: true }), false,
+    'a repeated timeout must not move the unread watermark')
+  assert.equal(store.snapshotFor(null, 'sse', store.host()).sessions[0]?.completedAt, 21)
+  assert.equal(store.settleCompletion(edge!, {
+    at: 40, turnEnd: { kind: 'completed', cause: null, at: 40, seq: 3 }, unreadable: false,
+  }), true)
+  assert.equal(store.snapshotFor(null, 'sse', store.host()).sessions[0]?.completedAtSource, 'observed')
+  assert.deepEqual(store.applyBaseline([baselineItem('s1', false, 100)], { at: 50 }), [])
+})
+
+test('a newer prompt clears an old completion without a false-to-false notification', t => {
+  const store = storeFor(t)
+  store.applyBaseline([baselineItem('s1', true, 100)], { at: 10 })
+  const [edge] = store.applyStatus('s1', false, 20)
+  store.settleCompletion(edge!, { at: 21, turnEnd: { kind: 'completed', cause: null, at: 21, seq: 1 }, unreadable: false })
+  assert.deepEqual(store.applyBaseline([baselineItem('s1', false, 200)], { at: 30 }), [])
+  const row = store.snapshotFor(null, 'sse', store.host()).sessions[0]
+  assert.equal(row?.completedAt, null)
+  assert.equal(row?.completedAtSource, null)
+  assert.equal(row?.updatedAt, 200)
 })
 
 // ---------------------------------------------------------------------------
@@ -162,7 +213,7 @@ test('a stored running row found stopped after restart is a reconstructed edge (
   const second = createSessionStateStore({ stateDir, logger: silentLogger, now: () => 200 })
   const edges = second.applyBaseline([baselineItem('s1', false, 5)], { at: 200 })
   assert.deepEqual(edges, [{ sessionId: 's1', source: 'reconstructed' }])
-  second.settleCompletion('s1', { at: 200, turnEnd: { kind: 'completed', cause: null, at: 200, seq: 3 }, source: 'reconstructed', unreadable: false })
+  second.settleCompletion(edges[0]!, { at: 200, turnEnd: { kind: 'completed', cause: null, at: 200, seq: 3 }, unreadable: false })
   const row = second.snapshotFor(null, 'sse', second.host()).sessions[0]
   assert.equal(row.completedAt, 200)
   assert.equal(row.completedAtSource, 'reconstructed', 'gap completions are notification-ineligible')
@@ -175,8 +226,8 @@ test('a stored running row found stopped after restart is a reconstructed edge (
 test('removed clears completion and never arms unread (R13)', t => {
   const store = storeFor(t)
   store.applyBaseline([baselineItem('s1', true, 5)], { at: 100 })
-  store.applyStatus('s1', false, 110)
-  store.settleCompletion('s1', { at: 110, turnEnd: { kind: 'completed', cause: null, at: 110, seq: 1 }, source: 'observed', unreadable: false })
+  const [edge] = store.applyStatus('s1', false, 110)
+  store.settleCompletion(edge!, { at: 110, turnEnd: { kind: 'completed', cause: null, at: 110, seq: 1 }, unreadable: false })
   assert.equal(store.applyRemoved('s1', 120), true)
   assert.equal(store.snapshotFor(null, 'sse', store.host()).sessions.length, 0)
   assert.equal(store.readStateFor(null).marks['s1'], undefined)

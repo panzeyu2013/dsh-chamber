@@ -144,7 +144,7 @@ function detectNotificationEdges(
   与 `planFactsNotifications`（observed 完成，host 域水位严格前进才通知，reconstructed 只出未读）
   共用 `complete-ledger` 的键空间与唯一 `emitSessionNotification` 出口。原 `usableFacts` 抑制
   分支与 App 内的第二完成循环已删除；有 usable facts 的来源 complete 只从 facts 入口发出，
-  无 facts 的来源只从壳边沿发出——同一完成恰好一条通知由水位/武装两轨在该模块内保证。
+  无 facts 的来源只从壳边沿发出。已有 host 水位严格前进时，即使运行时武装位未解除也视为新完成；武装位只能防同一运行时边沿重复，不能覆盖更高的 host 水位。
 
 ### 3.3 通知事件与 IPC
 
@@ -179,8 +179,8 @@ interface NotificationRequest {
   - request：「代理请求你的批准」/ `{来源 label} · {会话标题}`（`notification.awaitingApproval`）
   - 会话标题查 `aggregates[sourceId]`（无标题/空白会话回落「未命名会话」，
     即 `session.untitled`）。
-- 发送：`window.dshChamber?.notifications?.notify(payload)`；桥未就绪静默跳过 +
-  console.warn（同 desktopSsh 桥探测节奏，500ms 先例）。
+- 发送：`window.dshChamber?.notifications?.notify(payload)`；桥未就绪记为可重试失败，
+  待投递账本保留事件并退避重试（§6）。
 - `sourceFingerprint` 来自生产该份 runtime facts 的 ctx：local 固定 `local`，远程是主
   进程随 roster 投影的 64 位小写十六进制 opaque proof；App 只接受 proof 与当前权威来源代
   相等的 report，renderer 不从 registry 字段推导 proof。
@@ -334,8 +334,8 @@ interface ChamberSettings {
   期间 completed 已为 true）→ 滤除的边沿不记账、子代理结束后无新 completed 边沿，该完成不再有
   横幅补发（窗口内完成点与未读徽标不受影响）。未读徽标（§3.7）应用同一压制——蓝点账本保持武装（与官方「completed 保持武装、subagents 分支优先呈现」同构），徽标投影同一并集（App 账本武装 ∪ vendor 自武装，且未被运行环压制；收口为单一权威——此前「点/待办有、徽标无」的分工已消除）；呈现边界见
   §3.7 计数语义。
-- 通知失败（isSupported false / 系统权限拒绝）**静默降级不误报**：会话业务不受影响，
-  蓝点照常。
+- 通知失败（isSupported false / 系统权限拒绝）按永久或可重试结果保留在待投递账本，
+  不推进已通知水位；会话业务不受影响，蓝点照常。
 - notification-open 的可靠投递（`send()` 返回不等于消费成功、未 ACK replay、deliveryId/
   attempt ACK 坐标、FIFO、proof 隔离 same-id replacement）见 §3.3。
 - renderer 来源 ownership/producer 账本同样只保留 active Map 项，退役即删除；单调 serial
@@ -471,3 +471,25 @@ completedBySource（App 完成未读蓝点集，06 §4.1，只读复用——徽
 - 设计 15：settings 壳平铺入口形态（通知并入 `__general`，入口数不变）。
 - 设计 16：`pendingIntents` 队列 + drain（notification-open 重建竞态复用）。
 - 01 §4：通知中心为移出域；本设计仅桌面壳原生通知，控制面零改动。
+
+## 6. 投递账本与回执
+
+完成边沿先写入 renderer 的有界待投递账本，键包含来源化身、会话、类别与 host 水位；无水位的运行时边沿保留独立事件键，后到的可信 host 水位可补充该条记录。账本在重载后恢复；原生回执明确区分 `shown`、策略性 `suppressed`、`retryable` 与 `permanent`。只有前两类结算通知水位。暂时读不到 `turn/end` 的事实保持待分类，后续基线继续读尾；观察者时间只用于未读，不能伪装成 host 完成水位。主进程用稳定 `eventKey` 识别回执丢失后的重试；设置页 `test` 每次点击都是新请求，不进入已显示回执表。
+
+账本另为每次 renderer→原生尝试签发单调回执票据；`eventKey` 在重试间保持稳定供原生防重，回执票据只准结算当前在途尝试。记录被撤销后即使同键重新入队，旧回执也不能删除或封锁新记录。过期回执不计入投递诊断与通知水位。
+
+gateway 镜像与无壳观察者在**已观察到停止边沿**但读不到 `turn/end` 时只能报告 `reconstructed` 未读；只有后续读到可归属的新 `completed` 尾巴才升级到 `observed`，进入通知账本。若只知道最近用户提示水位前进，连运行和停止都没有观察到，就保留待分类且不凭该提示武装未读：它也可能只是排队的用户消息。提示水位前进时仍要撤销旧完成，避免 `max(updatedAt, completedAt)` 把旧完成伪装成新通知水位。
+
+无壳观察者在已经知道本轮最近用户提示的 host 时间时，也不得把 `session/follow` 返回的上一轮尾巴归给本轮：`turn/end.time` 必须严格晚于该提示水位。等于水位、缺少 host 时间或读尾失败均保留待分类并由独立基线再次读尾；观察者的 `pendingClassifications` 仪表显示待分类数量。`session/list` 的 `running=false`、authority 的 `episodeEnded` 只能证明停止，不能在缺少可归属 `turn/end.reason` 时生成完成通知。
+
+`session/list` 是 HTTP unary，`session/follow` 是同一 remote.mux 载波上的逻辑流：按独立 `streamId` 打开，只消费该流的 opening snapshot 与后续 event，读到 `turn/end` 即发 cancel；无尾巴的 snapshot 保持流至有界期限，载波替换和观察者停止也结算并取消在途流。把 follow 当作 HTTP unary 会使真实宿主拒绝读尾，完成永远只能降级为 reconstructed。`updatedAt` 来自最近用户消息的事件时间（空会话回退创建时间），与 `turn/end.time` 都是毫秒精度；两事件同毫秒无法仅凭时间比较区分先后，故保留待分类，不把等值尾巴用于通知。要消除该漏报边界，需要能关联用户消息和 turn/end 的序号或轮次键。
+
+无壳观察者的可信全量 `session.list` 连续两次缺席同一会话，才将该行退役；一次缺席保留原行，但暂停其在途读尾分类，期间收到该会话的 status/added/activity 会重置缺席计数。退役与显式 `removed` 走同一清理路径，删除不生成完成边沿。观察者 `stop()` 清除行、运行轮次及待分类读尾；同一对象再次 `start()` 必须从新基线建立事实，旧生命周期的读尾不能写入新行。
+
+待投递与事实水位按**同一次完成**匹配：旧水位的 `permanent` 记录留作失败证据，但不得压住同会话更高水位的新完成。运行时 armed 只代表边沿已经入队；无水位运行时边沿收到 `shown` / 策略性 `suppressed` 后，另记易失的已结算待归属位，后到的 host 水位才可据此播种已通知水位。观察到重新 running 即清除该位；单凭 armed 不得将新的 host 水位当成已投递。
+
+原生系统显示与 renderer 落盘之间没有原子事务。宿主进程在显示后、回执记录前崩溃时，静态测试不能证明跨进程恰好一次；该窗口由打包态故障注入验收。
+
+运行时边沿没有 host 运行轮次 ID。若旧运行时通知仍待投递，且新一轮运行的 true/false 两个状态都丢失，后到的 host 水位不能无歧义地归属旧或新完成。该混合证据窗口需端到端故障注入；要消除歧义须由宿主提供两通道共有的运行轮次键。
+
+**Rejected alternatives**：提前推进通知水位会把投递失败变成永久漏报；把所有原生 `shown:false` 当策略压制会吞掉暂时性权限、速率和 IPC 故障；把重试仅交给 5 秒去重窗会在其到期后重复显示；把同会话任一 pending 或 armed 当作已通知，会让旧永久失败吞掉新一轮完成。仅用稳定 `eventKey` 归属异步回执会让已撤销记录的旧结果结算同键新记录，因此投递尝试另有票据。无壳基线首次缺席就删除会把短暂不完整列表误判为删除；永不按基线缺席收敛则让丢失 `removed` 帧的旧 running 行永久存在。连续两次完整缺席与网关镜像的删除判据一致。把 `running=false` 或 authority 的纠偏边沿升级成 complete 会将用户停止误报为完成；把 `session/follow` 的最近尾巴无条件归给当前运行会复用旧 `turn/end`，因此必须按 host 提示时间校验。

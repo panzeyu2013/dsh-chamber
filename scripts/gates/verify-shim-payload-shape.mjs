@@ -47,16 +47,17 @@ export const INTERNAL_INVOKE_CHANNELS = new Set(['dsh-chamber:info'])
  * row. Counts are per `FACTORY_TO_NAMESPACE` namespace.
  */
 export const EXPECTED_SURFACE = {
-  namespaces: 9,
-  members: 67,
+  namespaces: 10,
+  members: 68,
   invoke: 59,
-  push: 8,
+  push: 9,
   perNamespace: {
     badge: 1,
     deepLink: 3,
     desktopSsh: 33,
     notifications: 5,
     openIn: 2,
+    rendererStall: 1,
     runtime: 13,
     settings: 3,
     systemResume: 1,
@@ -103,6 +104,7 @@ export const FACTORY_TO_NAMESPACE = {
   updateApi: 'update',
   settingsApi: 'settings',
   systemResumeApi: 'systemResume',
+  rendererStallApi: 'rendererStall',
   openInApi: 'openIn',
   deepLinkApi: 'deepLink',
   runtimeApi: 'runtime',
@@ -179,8 +181,10 @@ export function createShimHarness({ shimText, token = makeNativeToken(), onEnvel
     errors,
     sandbox,
     surface: () => (sandbox.dshChamber === undefined ? null : sandbox.dshChamber),
-    reply(id, result, error) {
-      sandbox.__dshChamberResolve(token, id, result === undefined ? null : result, error === undefined ? null : error)
+    reply(id, result, error, documentId) {
+      const posted = [...envelopes].reverse().find(message => message.id === id)
+      sandbox.__dshChamberResolve(token, documentId ?? posted?.documentId, id,
+        result === undefined ? null : result, error === undefined ? null : error)
     },
     emit(event, payload) {
       sandbox.__dshChamberEmit(token, event, payload === undefined ? null : payload)

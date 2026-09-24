@@ -1,5 +1,5 @@
 /**
- * 通知边沿的单一投影（P3，docs/progress/todo/session-authority-refactor.md）。
+ * 通知边沿的单一投影（P3，design 14 §D4「会话事实单一权威」）。
  *
  * WHY THIS EXISTS. Complete 通知此前有两条独立入口（壳 running 边沿 + facts observed
  * 完成），加上 `usableFacts` 抑制分支与两套去重（武装位与水位），规则散在
@@ -24,11 +24,16 @@ import {
   type NotificationKind,
   type SessionFacts,
 } from './notification-edges.ts'
-import { completionWatermark, nextNotifiedWatermark, shouldNotifyWatermark } from './watermark.ts'
+import type { SessionRunId } from '@dsh-chamber/dsh-stream-state'
+import { LEGACY_NOTIFIED_RUN_ID, isStaleRunIdentity, notificationRunId } from './notification-identity.ts'
+import { completionWatermark } from './watermark.ts'
 
-/** 一条待发通知；facts 入口带 host 域水位（壳边沿没有水位）。 */
+/** 一条待发通知；facts 入口带 host 域水位/事件序与运行身份（壳边沿可缺席）。 */
 export interface PlannedNotification extends NotificationEdge {
   readonly watermark?: number
+  readonly completionSeq?: number
+  /** 本次完成所属的运行身份；缺省 = 调用方入队时解析（壳边沿无 facts）。 */
+  readonly runId?: SessionRunId
 }
 
 /** facts 行的判定输入（unread-derivation 的同形子集）。 */
@@ -37,6 +42,7 @@ export interface NotificationFactsRow {
   readonly completedAtSource?: 'observed' | 'reconstructed' | null
   readonly updatedAt: number
   readonly subagentCount: number
+  readonly lastTurnEnd?: { readonly seq?: number | null } | null
 }
 
 export interface RuntimeNotificationPlan {
@@ -65,8 +71,12 @@ export function planRuntimeNotifications(input: {
     : edges.filter(edge =>
         !(edge.kind === 'complete'
           && (input.next[edge.sessionId]?.runningSubagents ?? 0) > 0))
+  // A running flag fences the armed memory ONLY when it is provably newer than the
+  // last observation: a late same-activity running=true (replayed after the run
+  // completed) is not a new run and must not re-arm the completed edge.
   const runningIds = Object.entries(input.next)
-    .filter(([, facts]) => facts?.running === true)
+    .filter(([sessionId, facts]) => facts?.running === true
+      && activityAdvanced(input.prev?.[sessionId], facts))
     .map(([sessionId]) => sessionId)
   const deduped = dedupeCompleteEdges(eligible, input.armed, runningIds)
   // 已离开列表的会话清除武装记忆（长活来源的记忆不得缓慢增长）。
@@ -76,10 +86,16 @@ export function planRuntimeNotifications(input: {
   return { edges: deduped.edges, armed: deduped.notified }
 }
 
+/** Undefined on either side means the ordering cannot be proven: keep current behavior. */
+function activityAdvanced(prev: SessionFacts | undefined, next: SessionFacts | undefined): boolean {
+  if (prev === undefined || prev.updatedAt === undefined || next?.updatedAt === undefined) return true
+  return next.updatedAt > prev.updatedAt
+}
+
 export interface FactsNotificationPlan {
   readonly edges: readonly PlannedNotification[]
-  /** 单调推进后的水位（每个 observed 行都记录，含首份播种）。 */
-  readonly watermarks: Readonly<Record<string, number>>
+  /** 本 tick 应记账的运行身份（首帧播种 / 迁移哨兵认领 / 已发边沿）。 */
+  readonly runs: Readonly<Record<string, SessionRunId>>
   readonly armed: Set<string>
 }
 
@@ -89,12 +105,19 @@ export interface FactsNotificationPlan {
  */
 export function planFactsNotifications(input: {
   readonly rows: Readonly<Record<string, NotificationFactsRow>>
-  /** false = 首份快照：只播种水位，绝不发事件（桌面关闭期间的完成不补发）。 */
+  /** 身份解析需要；与 facts 通道同源的来源代际。 */
+  readonly sourceFingerprint: string
+  /** false = 首份快照：只播种身份，绝不发事件（桌面关闭期间的完成不补发）。 */
   readonly seeded: boolean
-  readonly watermarks: Readonly<Record<string, number | undefined>>
+  /** 身份轨：该来源各会话最后一次已通知的运行身份（含迁移哨兵）。 */
+  readonly notifiedRuns?: Readonly<Record<string, SessionRunId | undefined>>
   readonly armed: ReadonlySet<string>
+  /** 正等待原生回执的会话；不能把运行时边沿当作已结算。 */
+  readonly pendingSessions?: ReadonlySet<string>
+  /** 无 host 身份的运行时完成已经获得原生 shown / policy suppressed 回执。 */
+  readonly runtimeSettled?: ReadonlyMap<string, number | undefined>
 }): FactsNotificationPlan {
-  const watermarks: Record<string, number> = {}
+  const runs: Record<string, SessionRunId> = {}
   const armed = new Set(input.armed)
   const edges: PlannedNotification[] = []
   for (const sessionId of Object.keys(input.rows).sort()) {
@@ -103,16 +126,51 @@ export function planFactsNotifications(input: {
     if (row.completedAtSource !== 'observed' || row.completedAt === null) continue
     const watermark = completionWatermark(row)
     if (watermark === undefined) continue
-    const previous = input.watermarks[sessionId]
-    const next = nextNotifiedWatermark(previous, watermark)
-    if (next !== undefined) watermarks[sessionId] = next
-    if (!input.seeded) continue
-    if (!shouldNotifyWatermark(previous, watermark)) continue
-    if (armed.has(sessionId)) continue
+    const seq = row.lastTurnEnd?.seq
+    const completionSeq = typeof seq === 'number' && Number.isSafeInteger(seq) && seq >= 0 ? seq : undefined
+    const runId = notificationRunId({ sourceFingerprint: input.sourceFingerprint, sessionId, completionSeq, watermark })
+    if (!input.seeded && input.pendingSessions?.has(sessionId)) continue
+    // Seeding (first snapshot after a boot): record the identity, never emit.
+    if (!input.seeded) {
+      runs[sessionId] = runId
+      continue
+    }
+    // A runtime edge already got a native settlement; it may adopt this facts
+    // completion ONLY when the facts row does not postdate the host state that edge
+    // covered (the runtime row's updatedAt is the ordering anchor). Otherwise the
+    // completion belongs to a LATER run and must notify - the old session-scoped
+    // marker silently swallowed that run's banner.
+    if (input.runtimeSettled?.has(sessionId) === true && !input.pendingSessions?.has(sessionId)) {
+      const anchor = input.runtimeSettled.get(sessionId)
+      // SAME-DOMAIN comparison: the anchor is the host `updatedAt` the runtime edge
+      // observed, and the facts row carries the same host field. completedAt is a
+      // DIFFERENT field and is normally LATER than the last message timestamp, so
+      // comparing it here re-notified an already-receipted completion.
+      if (anchor === undefined || row.updatedAt <= anchor) {
+        runs[sessionId] = runId
+        continue
+      }
+    }
+    if (input.pendingSessions?.has(sessionId)) continue
+    // IDENTITY IS THE TRIGGER (D1): one notification per run, however many
+    // snapshots re-observe it.
+    const previousRun = input.notifiedRuns?.[sessionId]
+    if (previousRun === runId) continue
+    // v4 migration: a pre-spine journal knew the session was notified but not the
+    // run. Adopt the live identity WITHOUT notifying. The sentinel lives only
+    // until this write (or the prune when the session leaves the list).
+    if (previousRun === LEGACY_NOTIFIED_RUN_ID) {
+      runs[sessionId] = runId
+      continue
+    }
+    // A regressed observation (stale list, host clock correction) is not a new run:
+    // monotonicity now derives from the persisted identity itself, not a table.
+    if (previousRun !== undefined && isStaleRunIdentity(previousRun, runId)) continue
     armed.add(sessionId)
-    edges.push({ sessionId, kind: 'complete', watermark })
+    edges.push({ sessionId, kind: 'complete', watermark, runId,
+      ...(completionSeq === undefined ? {} : { completionSeq }) })
   }
-  return { edges, watermarks, armed }
+  return { edges, runs, armed }
 }
 
 export type { NotificationKind }

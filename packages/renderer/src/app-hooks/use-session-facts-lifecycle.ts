@@ -10,7 +10,7 @@
 import { useCallback, useEffect, useMemo, useRef, type Dispatch, type SetStateAction } from 'react'
 import type { ChamberServerAggregate, InstanceRuntimeReport } from '@dsh-chamber/dsh-chamber-client-core'
 import { createSessionFactsSource, type SessionFactsSnapshot, type SessionFactsSource } from '../session-facts-source.ts'
-import { createSourceMuxFacts } from '../source-mux-facts.ts'
+import { createSourceMuxFacts, isMuxObservableSourceKind, type SourceMuxFacts } from '../source-mux-facts.ts'
 import { shouldDispatchRefreshHint } from '../source-refresh-hint.ts'
 
 export interface SessionFactsLifecycleDeps {
@@ -53,6 +53,16 @@ export function useSessionFactsLifecycle(deps: SessionFactsLifecycleDeps): void 
   /** servers 的渲染期镜像（facts effect 闭包不随每次 servers 重建）。 */
   const serversRef = useRef(servers)
   serversRef.current = servers
+  const sourceMuxObserversRef = useRef(new Map<string, SourceMuxFacts>())
+
+  useEffect(() => {
+    const reconcile = (): void => {
+      for (const source of sessionFactsSourcesRef.current.values()) source.reconcile()
+      for (const observer of sourceMuxObserversRef.current.values()) observer.reconcile()
+    }
+    window.addEventListener('dsh-chamber:sidecar-ready', reconcile)
+    return () => window.removeEventListener('dsh-chamber:sidecar-ready', reconcile)
+  }, [])
 
   /**
    * 行刷新提示：facts 的 session-added/removed/changed
@@ -125,14 +135,17 @@ export function useSessionFactsLifecycle(deps: SessionFactsLifecycleDeps): void 
   }, [gatewayFactsSpec, applySessionFacts, requestFactsRefresh])
 
   /**
-   * SSH / 其它 dsh 远端来源的**无壳观察者**。网关来源有只读镜像，这些来源没有——
-   * 关壳期间没有任何事实通道，完成会丢。观察者讲实例自己的远程协议（经控制面既有无鉴权
-   * 实例代理），产出的快照与 gateway 事实源**同形**，因此直接喂同一条 applySessionFacts
-   * 管线（同一份事实、同一套未读判定），不需要第二条判定路径。只观察：永不结算瀑布。
+   * dsh 协议来源（远端 SSH **与本地托管 profile**）的**无壳观察者**。网关来源有只读
+   * 镜像（/chamber/session-state），其它 dsh 来源没有——关壳期间没有任何事实通道，
+   * 完成会丢。观察者讲实例自己的协议（经控制面既有无鉴权实例代理，本地为
+   * /api/i/local/api/remote.mux），产出的快照与 gateway 事实源**同形**，因此直接喂
+   * 同一条 applySessionFacts 管线（同一份事实、同一套未读判定），不需要第二条判定路径。
+   * 覆盖规则单源于 isMuxObservableSourceKind：本地漏接曾让 local 会话既无内容证据、
+   * 也无关壳完成通道。只观察：永不结算瀑布。
    */
   const sourceMuxSpec = useMemo(
     () => servers
-      .filter(server => server.kind === 'dsh')
+      .filter(server => isMuxObservableSourceKind(server.kind))
       .map(server => server.id + ':' + server.sourceFingerprint + ':' + (server.connected ? '1' : '0'))
       .join('|'),
     [servers],
@@ -140,7 +153,7 @@ export function useSessionFactsLifecycle(deps: SessionFactsLifecycleDeps): void 
   useEffect(() => {
     const wanted = new Map<string, string>()
     for (const server of serversRef.current) {
-      if (server.kind !== 'dsh' || server.connected !== true) continue
+      if (!isMuxObservableSourceKind(server.kind) || server.connected !== true) continue
       wanted.set(server.id, server.sourceFingerprint)
     }
     for (const [sourceId, teardown] of [...sourceMuxTeardownRef.current]) {
@@ -149,6 +162,7 @@ export function useSessionFactsLifecycle(deps: SessionFactsLifecycleDeps): void 
       teardown()
       sourceMuxTeardownRef.current.delete(sourceId)
       sourceMuxIdentityRef.current.delete(sourceId)
+      sourceMuxObserversRef.current.delete(sourceId)
     }
     for (const [sourceId, fingerprint] of wanted) {
       if (sourceMuxTeardownRef.current.has(sourceId)) continue
@@ -158,7 +172,13 @@ export function useSessionFactsLifecycle(deps: SessionFactsLifecycleDeps): void 
         onSnapshot: snapshot => applySessionFacts(sourceId, snapshot),
       })
       observer.start()
-      sourceMuxTeardownRef.current.set(sourceId, () => observer.stop())
+      sourceMuxObserversRef.current.set(sourceId, observer)
+      // The mux observer registers NO content-stall evidence: source-level $events
+      // silence is not this session's content progress (see session-content-stall.ts).
+      sourceMuxTeardownRef.current.set(sourceId, () => {
+        observer.stop()
+        sourceMuxObserversRef.current.delete(sourceId)
+      })
       sourceMuxIdentityRef.current.set(sourceId, fingerprint)
     }
   }, [sourceMuxSpec, applySessionFacts])

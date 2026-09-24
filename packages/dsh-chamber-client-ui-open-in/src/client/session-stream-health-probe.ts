@@ -5,8 +5,8 @@
  * and rebuild THIS session's event stream through the concrete per-session
  * `resync()`.
  *
- * `resync()` has two entry points: the user's own click (always
- * available while the stall holds) and the ladder's automatic arm, which may only
+ * `resync()` has two entry points: the user's own click (available while the
+ * stall holds) and the renderer's page-level automatic arm, which may only
  * fire on POSITIVE evidence that no open is in flight (see
  * {@link sessionOpenInFlight}) — an in-flight open is a slow Host being waited on
  * and is never interrupted.
@@ -103,6 +103,7 @@ export interface SessionResyncLoose {
    * field degrades to "unknown" rather than to "nothing pending".
    */
   openPromise?: unknown
+  getSnapshot?(): { readonly openState?: unknown }
 }
 
 /**
@@ -284,6 +285,18 @@ export function sessionOpenInFlight(sessions: SessionsLoose | undefined, session
   }
 }
 
+/** Read the concrete current session's opening result for a page-level seat. */
+export function sessionOpenState(
+  sessions: SessionsLoose | undefined, sessionId: string,
+): 'cold' | 'loading' | 'open' | 'error' | undefined {
+  const session = readCurrentSession(sessions, sessionId)
+  try {
+    const value = session?.getSnapshot?.().openState
+    return value === 'cold' || value === 'loading' || value === 'open' || value === 'error'
+      ? value : undefined
+  } catch { return undefined }
+}
+
 /**
  * Does this build expose the per-session stream rebuild for the target? The
  * pure ladder's `resyncAvailable` observation comes from here, so a build
@@ -297,26 +310,56 @@ export function hasSessionStreamResync(sessions: SessionsLoose | undefined, targ
   return readSessionResyncFace(sessions, targetId) !== undefined
 }
 
+// Session.resync() waits for the old stream's dispose before starting open().
+// During that wait openPromise is still null, so it cannot guard a second
+// rebuild from the page or the conversation header.
+// The renderer shell and the host-loaded client plugin can bundle this module
+// separately. Share the guard through their one page realm, not module identity.
+const RESYNC_GUARD_KEY = Symbol.for('dsh-chamber:session-resync-in-flight')
+const resyncGuardRealm = globalThis as unknown as Record<symbol, unknown>
+const resyncingSessions: WeakSet<SessionResyncLoose> = resyncGuardRealm[RESYNC_GUARD_KEY] instanceof WeakSet
+  ? resyncGuardRealm[RESYNC_GUARD_KEY] as WeakSet<SessionResyncLoose>
+  : new WeakSet<SessionResyncLoose>()
+resyncGuardRealm[RESYNC_GUARD_KEY] = resyncingSessions
+
+export function sessionStreamResyncInFlight(sessions: SessionsLoose | undefined, targetId: string): boolean {
+  const session = readCurrentSession(sessions, targetId)
+  return session !== undefined && resyncingSessions.has(session)
+}
+
 /**
  * Rebuild one session's stream through the concrete vendor method.
  *
- * Called from the seat's automatic `'auto-resync'` arm (only after the plan
- * proved no open is in flight and the ledger allowed it) and from the user's own
- * control; the seat accounts each attempt against the per-session ledger.
+ * Called from the renderer's page-level automatic recovery arm (only after it
+ * proved no open is in flight) and from the user's own controls. Each owner
+ * accounts its attempts before calling this shared capability boundary.
  * `resync()` is async and may reject; the promise is settled with a no-op catch
  * because the chip has no error channel and this package may not log.
  *
  * @param sessions - the instance's session face (loose slice).
  * @param targetId - the session whose stream must be rebuilt.
- * @returns true only when the call was issued (the method existed and was invoked).
+ * @returns true when the call was issued or the same session already has one in flight.
  */
 export function resyncSessionStream(sessions: SessionsLoose | undefined, targetId: string): boolean {
+  let session: SessionResyncLoose | undefined
   try {
-    const session = readSessionResyncFace(sessions, targetId)
-    if (session === undefined || typeof session.resync !== 'function') return false
-    void Promise.resolve(session.resync()).catch(() => undefined)
+    session = readSessionResyncFace(sessions, targetId)
+    if (session === undefined) return false
+    // Capture the method after the check: narrowing a property does not survive
+    // aliasing, and the receiver must stay the session face.
+    const resync = session.resync
+    if (typeof resync !== 'function') return false
+    const face = session
+    if (resyncingSessions.has(face)) return true
+    resyncingSessions.add(face)
+    const pending = resync.call(face)
+    void Promise.resolve(pending).then(
+      () => { resyncingSessions.delete(face) },
+      () => { resyncingSessions.delete(face) },
+    )
     return true
   } catch {
+    if (session !== undefined) resyncingSessions.delete(session)
     // Fail closed, and silently: see the module header (ui-lock) and the
     // stage-move heal it mirrors.
     return false

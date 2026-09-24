@@ -421,9 +421,9 @@ export function createNodeEdges(deps: NodeEdgesDeps): NodeEdges {
           sourceId: clickRoute === null ? null : clickRoute.token.sourceId,
         })
         .then(
-          // 应答必须按 honest-show 语义折算——Swift 腿可以显式回
+          // 应答必须按 honest-show 语义折算——Swift 腿显式回 {shown:true} 或
           // {shown:false,error}（未授权/调度失败/超时），core 据此释放去重 claim；
-          // 只有显式成功（或旧协议的 null 应答）才记 shown:true。
+          // 没有显示回执（null/undefined）不得推断为已显示（P-06 修订）。
           (reply) => interpretNativeNotificationReply(reply),
           (err: unknown) => ({
             shown: false as const,

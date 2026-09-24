@@ -52,6 +52,11 @@ export const IPC_CHANNELS = {
 
   SYSTEM_RESUME: 'dsh-chamber:system-resume',
 
+  /** Renderer-stall evidence (frame-probe strikes / input-block RTT): main →
+   *  renderer. The page cannot observe its own stopped frame loop or blocked JS
+   *  thread; the shell's bounded reload stays the acting path. */
+  RENDERER_STALL_EVIDENCE: 'dsh-chamber:renderer-stall-evidence',
+
   SSH_INSTANCES_GET: 'desktop_ssh_instances_get',
   SSH_SAVE_CONNECTION: 'desktop_ssh_save_connection',
   SSH_DELETE_CONNECTION: 'desktop_ssh_delete_connection',

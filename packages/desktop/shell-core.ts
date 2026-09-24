@@ -184,7 +184,7 @@
  *
  */
 
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { ChamberHostPackageDescriptor } from './control-plane-module.ts';
 import { findFreePort } from './free-port.ts';
@@ -202,7 +202,7 @@ import { registerSshPluginHandlers } from './shell-ipc-plugins-ssh.ts';
 import { registerRuntimeHandlersA, registerRuntimeHandlersB, registerRuntimeHandlersC } from './shell-ipc-runtime.ts';
 import { registerSettingsHandlers } from './shell-ipc-settings.ts';
 import { registerUpdateHandlers } from './shell-ipc-update.ts';
-import type { NotificationOpenIntent, NotificationSourceToken } from './notifications.ts';
+import type { NotificationOpenIntent, NotificationSourceToken, ShownReceiptsSeam } from './notifications.ts';
 import { type TransportInstanceSpec } from './transport-provider.ts';
 import { getSshPassword } from './ssh-provider.ts';
 import { gatewaySecretStorageCrossFlavorUnreadable, gatewaySecretStorageMode, getGatewayPassword, getGatewayToken } from './gateway-provider.ts';
@@ -235,7 +235,7 @@ import type { UpdateController } from './updater.ts';
  *  URL，避免把 OPEN_RELEASE 的 URL 白名单纪律扩成任意打开面。 */
 export const MACOS_NOTIFICATION_SETTINGS_URL =
   'x-apple.systempreferences:com.apple.Notifications-Settings.extension';
-import { BoundedRateLimiter, MAX_PENDING_NOTIFICATION_OPENS, NotificationSourceIncarnations, NotificationSourceProofs } from './notifications.ts';
+import { BoundedRateLimiter, MAX_PENDING_NOTIFICATION_OPENS, NotificationSourceIncarnations, NotificationSourceProofs, advanceNotificationClaimGeneration } from './notifications.ts';
 import { readCurrentPointerState, readOverrideState, shouldInvalidate, validateVersionTree } from '@dsh-chamber/dsh-runtime';
 // J 组 6 注册体直 import 的 @dsh-chamber/dsh-runtime
 // 纯逻辑（electron-free 共享核）；控制器现实例与
@@ -496,6 +496,19 @@ export function shouldReloadAfterCrash(reason: string, quitRequested: boolean): 
   return reason !== 'clean-exit' && !quitRequested;
 }
 
+/**
+ * A dead GPU process freezes PAINTING while the renderer's JS keeps running: rAF
+ * is serviced through the renderer's own compositor proxy, so the frame probe
+ * still sees scheduled frames and the renderer never reports "unresponsive".
+ * Rebuilding the window is the only in-shell recovery, bounded by the same
+ * reload budget as a renderer crash. Only the GPU process qualifies: a dead
+ * utility/network process is restarted by Chromium without touching the surface,
+ * and a clean exit is normal teardown.
+ */
+export function shouldReloadAfterChildProcessGone(type: string, reason: string, quitRequested: boolean): boolean {
+  return type === 'GPU' && reason !== 'clean-exit' && !quitRequested;
+}
+
 /** Before the first load finishes, an unresponsive renderer is only logged --
  *  the dsh frontend's boot (dozens of plugin modules) legitimately blocks the
  *  main thread; reloading would interrupt a normal startup (gate on both
@@ -601,6 +614,32 @@ export function instancesFilePath(userData: string): string {
   return path.join(userData, 'ssh-instances.json');
 }
 
+/** <userData>/notification-receipts.json（design 19 §6 D2：已显示回执的持久去重表）。 */
+export function notificationReceiptsFilePath(userData: string): string {
+  return path.join(userData, 'notification-receipts.json');
+}
+
+/**
+ * 回执文件的宿主接缝：有界 JSON、0600、临时文件 + rename 原子替换。读失败 = 空表
+ * （最多重发一次横幅）；写失败只告警并降级为内存（已显示的横幅绝不因落盘失败而失败）。
+ */
+function notificationReceiptsSeam(file: string): ShownReceiptsSeam {
+  return {
+    load: () => {
+      try { return readFileSync(file, 'utf8') } catch { return null }
+    },
+    save: (text) => {
+      const temporary = file + '.tmp'
+      try {
+        writeFileSync(temporary, text, { mode: 0o600 })
+        renameSync(temporary, file)
+      } catch (error) {
+        console.warn('[dsh-chamber] 通知回执持久化失败（降级为内存）:', describeUnknownError(error))
+      }
+    },
+  }
+}
+
 /** <userData>/state（控制面 stateDir）。 */
 export function stateRootDir(userData: string): string {
   return path.join(userData, 'state');
@@ -696,7 +735,7 @@ export interface HostEdges {
   showNativeNotification(
     spec: NativeNotificationSpec,
     clickRoute: { token: NotificationSourceToken; onActivated(): void } | null,
-  ): { dispose(): void; shown: Promise<{ shown: true } | { shown: false; error: string }> }
+  ): { dispose(): void; shown: Promise<{ shown: true } | { shown: false; error: string; failureClass?: 'retryable' | 'permanent' }> }
   /** Notification.isSupported 平台探测（异常安全由实现侧保证）。 */
   notificationSupported(): boolean
   /** 未读徽标 apply 叶（design 19 §3.7；E5——平台门与 badgeEnabled 裁决留 core
@@ -1085,6 +1124,9 @@ export function onRendererLifecycle(event: RendererLifecycleEvent): void {
     deepLinkRendererReady = false;
     pendingNotificationOpens.requeueInFlight();
     pendingRendererIntents.requeueInFlight();
+    // 导航 generation 围栏：上一份文档铸造的通知 claim 永远无法诚实结算，
+    // 直接丢弃，避免它在 TTL 内吞掉新文档的同一事件（重载后完成被静默吞掉）。
+    advanceNotificationClaimGeneration();
     drainPendingNotificationOpens();
     return;
   }
@@ -1795,6 +1837,9 @@ export interface ShellIpcCtx {
   localProtectionFacts: () => PluginProtectionFacts;
   matchesNotificationSource: typeof matchesNotificationSource;
   nativeNotificationRateLimiter: typeof nativeNotificationRateLimiter;
+  /** Durable shown-receipt store seam bound to <userData> by the assembly;
+   *  an assembly without a real userData root degrades to the in-memory store. */
+  notificationReceiptsSeam?: ShownReceiptsSeam;
   notificationOpenDrainReady: typeof notificationOpenDrainReady;
   notificationSourceIncarnations: typeof notificationSourceIncarnations;
   openInCtx: OpenInLaunchContext;
@@ -2060,6 +2105,13 @@ export function installIpcHandlers(deps: {
    *  蓝点不受影响。 */
   // 域拆分上下文：单点构造，晚定义的 helper 以 getter 延迟解析，
   // 注册体经 shellIpcCtx 取共享 helper/模块状态（顺序/错误语义不变）。
+  // Durable notification receipts need a real <userData> root. An assembly that
+  // does not carry one (a settings-only harness stubs unrelated ctx keys) keeps
+  // the pre-D2 in-memory semantics instead of failing the whole registration.
+  const receiptsRoot = deps.ctx.runtimeBaseDir;
+  const notificationReceiptsSeamForAssembly = typeof receiptsRoot === 'string' && receiptsRoot.length > 0
+    ? notificationReceiptsSeam(notificationReceiptsFilePath(receiptsRoot))
+    : undefined;
   const shellIpcCtx = {
     deps,
     deliveryEdges,
@@ -2083,6 +2135,7 @@ export function installIpcHandlers(deps: {
     get localProtectionFacts() { return localProtectionFacts },
     get matchesNotificationSource() { return matchesNotificationSource },
     get nativeNotificationRateLimiter() { return nativeNotificationRateLimiter },
+    notificationReceiptsSeam: notificationReceiptsSeamForAssembly,
     get notificationOpenDrainReady() { return notificationOpenDrainReady },
     get notificationSourceIncarnations() { return notificationSourceIncarnations },
     get openInCtx() { return openInCtx },

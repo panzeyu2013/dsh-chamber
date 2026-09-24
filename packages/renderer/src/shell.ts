@@ -62,6 +62,11 @@ import { chamberBridge, describeThrown, type PluginGraphDiagnostic } from '@dsh-
 import {
   createMachineCatalog, type MachineCatalog,
 } from '@dsh-chamber/dsh-chamber-client-ui-open-in/machine-catalog'
+import {
+  hasHealRoute, hasSessionStreamResync, resyncSessionStream, sessionOpenInFlight, sessionOpenState,
+  sessionStreamResyncInFlight,
+  type SessionsLoose,
+} from '@dsh-chamber/dsh-chamber-client-ui-open-in/stream-health-probe'
 import { getInstanceClient } from '@dsh-chamber/dsh-chamber-client-core/instance-api'
 import { PendingOpenQueue } from './pending-open-queue.ts'
 import { PERF_MARKS, perfMark } from './perf-marks.ts'
@@ -1059,6 +1064,36 @@ export function openInstanceSession(instanceId: string, sessionId: string): Prom
   return pendingOpens.enqueue(instanceId, sessionId)
 }
 
+function currentSessionFace(instanceId: string): SessionsLoose | undefined {
+  try { return entries.get(instanceId)?.entry.runtimeCtx?.sessions as unknown as SessionsLoose | undefined }
+  catch { return undefined }
+}
+
+/** The page-level recovery seat reads the same concrete session as the header seat. */
+export function readInstanceSessionStreamHealth(instanceId: string, sessionId: string): {
+  openState: 'cold' | 'loading' | 'open' | 'error'
+  openInFlight: boolean | undefined
+  resyncInFlight: boolean
+  resyncAvailable: boolean
+  /** The header's stage move is usable: current, listed, and a listed neighbour. */
+  healRoute: boolean
+} | null {
+  const sessions = currentSessionFace(instanceId)
+  const openState = sessionOpenState(sessions, sessionId)
+  if (openState === undefined) return null
+  return {
+    openState,
+    openInFlight: sessionOpenInFlight(sessions, sessionId),
+    resyncInFlight: sessionStreamResyncInFlight(sessions, sessionId),
+    resyncAvailable: hasSessionStreamResync(sessions, sessionId),
+    healRoute: hasHealRoute(sessions, sessionId),
+  }
+}
+
+export function rebuildInstanceSessionStream(instanceId: string, sessionId: string): boolean {
+  return resyncSessionStream(currentSessionFace(instanceId), sessionId)
+}
+
 /** Boot settled: dispatch every queued open without resetting its original
  * 68s total deadline; only the remaining budget (capped at 8s) is available. */
 function flushPendingOpens(instanceId: string): void {
@@ -1375,4 +1410,3 @@ export function reconnectInstanceConnection(instanceId: string): boolean {
     return false
   }
 }
-

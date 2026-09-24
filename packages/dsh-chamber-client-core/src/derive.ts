@@ -22,6 +22,7 @@
  *
  * No React, no DOM — plain-node unit-testable (see test/session-rows/derive.test.ts).
  */
+import { chamberRunId } from '@dsh-chamber/dsh-stream-state'
 import type { InstanceSnapshot, SearchRow, SessionRow, WorkspaceRow } from './instance-api.ts'
 import type { SubagentActivity } from './session-row-state.ts'
 import type { ChamberServerAggregate, ChamberServerWorkspace, InstanceRuntimeReport, ServerBootGap } from './aggregate-store.ts'
@@ -618,10 +619,12 @@ export function projectRuntimeFacts(
       running?: boolean
       completed?: boolean
       origin?: 'subagent'
+      updatedAt?: number
     }>
   },
   subagentRunning?: ReadonlyMap<string, number>,
   pendingInteractions?: ReadonlyMap<string, { kind?: string }>,
+  runIds?: ReadonlyMap<string, string>,
 ): InstanceRuntimeReport {
   const sessions: InstanceRuntimeReport['sessions'] = {}
   for (const [id, facts] of Object.entries(snapshot.byId ?? {})) {
@@ -635,8 +638,13 @@ export function projectRuntimeFacts(
       pending?: 'approval' | 'plan-review' | 'question'
       runningSubagents?: number
       subagentActivity?: SubagentActivity
+      runId?: string
+      updatedAt?: number
     } = {
       running: facts?.running === true,
+    }
+    if (typeof facts?.updatedAt === 'number' && Number.isSafeInteger(facts.updatedAt) && facts.updatedAt >= 0) {
+      row.updatedAt = facts.updatedAt
     }
     if (facts?.completed === true) row.completed = true
     // pending rides the official ui-session registry (see header doc); unknown
@@ -650,11 +658,134 @@ export function projectRuntimeFacts(
     row.subagentActivity = subagentRunning === undefined
       ? 'unknown'
       : (runningSubagents !== undefined && runningSubagents > 0 ? 'running' : 'none')
+    const runId = runIds?.get(id)
+    if (runId !== undefined) row.runId = runId
     sessions[id] = row
   }
   const report: InstanceRuntimeReport = { sessions }
   if (snapshot.current !== undefined) report.current = snapshot.current
   return report
+}
+
+/** One observed run episode of a session (the producer's identity memory). */
+export interface RunIdentityObservation {
+  /** Host activity time of the LAST observed completion. The run's identity is
+   *  minted at the completion tick, where the run's own prompt time is available:
+   *  the host emits running=true BEFORE the prompt's activity frame, so a start-time
+   *  mint would anchor on the PREVIOUS run's timestamp and fold the next run. A
+   *  replayed completion with the same activity keeps the existing identity, which
+   *  is what lets the durable receipt suppress the duplicate. */
+  readonly completedActivityAt?: number
+  /** Episode counter, monotonic per session within the producer's lifetime. */
+  readonly episode: number
+  /** The chamber-family run id minted for this episode. */
+  readonly runId: string
+  /** Whether the row was running at the last observation. */
+  readonly running: boolean
+}
+
+/**
+ * Advance the producer's per-session run identities from the current store rows.
+ *
+ * - a row already running keeps its minted id (reports inside one run agree);
+ * - a row observed running after a non-running observation mints a NEW episode;
+ * - a row that stopped keeps its last id (its completion still belongs to it);
+ * - ids absent from `live` are dropped (bounded growth).
+ *
+ * The minting rule is the shared resolver's chamber fallback, executed by the one
+ * authority for this channel, so the App never mints a competing id (I1).
+ *
+ * `generation` MUST be unique per producer registration (see the sidebar's
+ * PRODUCER_GENERATION_BASE): episodes restart at 1 in every lifetime, so a shared
+ * generation would let two REAL runs of one session carry the same run id - the
+ * native receipt then treats the second completion as already shown (missed
+ * notification). A generation change is a new lifetime, never a stale episode.
+ */
+export interface RunIdentityAdvance {
+  readonly identities: Map<string, RunIdentityObservation>
+  /**
+   * Producer-lifetime episode high-water (sessionId → last minted episode). Callers
+   * MUST feed it back. Rebuilding episodes only from `live` let a session that left
+   * the snapshot restart at episode 1 in the SAME lifetime, so two real runs shared
+   * a run id and the native receipt suppressed the second banner.
+   *
+   * NEVER PRUNE this map inside a lifetime: dropping an entry is exactly the bug -
+   * a session that returns would re-mint an episode already used. It is bounded by
+   * the number of distinct session ids one page lifetime ever observed.
+   */
+  readonly episodes: Map<string, number>
+}
+
+export function advanceRunIdentities(input: {
+  readonly previous: ReadonlyMap<string, RunIdentityObservation>
+  readonly running: ReadonlySet<string>
+  readonly live: ReadonlySet<string>
+  readonly sourceFingerprint: string
+  /** Lifetime nonce from the producer; never re-used across registrations. */
+  readonly generation: number
+  /** Previous high-water, fed back from the last call. */
+  readonly episodes?: ReadonlyMap<string, number>
+  /** Host `updatedAt` per session; the run-start ordering key. */
+  readonly activity?: ReadonlyMap<string, number>
+}): RunIdentityAdvance {
+  const episodes = new Map(input.episodes ?? [])
+  const next = new Map<string, RunIdentityObservation>()
+  for (const sessionId of input.live) {
+    const previous = input.previous.get(sessionId)
+    const activityAt = input.activity?.get(sessionId)
+    if (input.running.has(sessionId)) {
+      if (previous !== undefined) {
+        // Carry the last completion anchor: the identity is minted on the completion
+        // tick, never at the start (the host emits running before the prompt).
+        next.set(sessionId, { ...previous, running: true })
+        continue
+      }
+      // First observed mid-run: a provisional identity so the row has a run id; the
+      // completion tick mints the one it notifies with.
+      const episode = Math.max(episodes.get(sessionId) ?? 0, 0) + 1
+      episodes.set(sessionId, episode)
+      next.set(sessionId, {
+        episode,
+        running: true,
+        runId: chamberRunId({
+          sourceFingerprint: input.sourceFingerprint,
+          generation: input.generation,
+          sessionId,
+          episode,
+        }),
+      })
+      continue
+    }
+    const lastCompleted = previous?.completedActivityAt
+    // With a completion anchor and a host time the ordering is exact. Without one of
+    // them only a real run transition (first observation or running->false) mints:
+    // repeated no-activity snapshots must not churn a new episode every tick.
+    const newCompletion = lastCompleted !== undefined && activityAt !== undefined
+      ? activityAt > lastCompleted
+      : previous === undefined || previous.running === true
+    if (!newCompletion && previous !== undefined) {
+      // A replay of the completion this identity already belongs to: keeping the id
+      // is what makes the durable receipt suppress the duplicate banner.
+      next.set(sessionId, { ...previous, running: false })
+      continue
+    }
+    // A live drop is not a new namespace: the episode must clear the high-water
+    // even when `previous` was already discarded.
+    const episode = Math.max(previous?.episode ?? 0, episodes.get(sessionId) ?? 0) + 1
+    episodes.set(sessionId, episode)
+    next.set(sessionId, {
+      episode,
+      running: false,
+      ...(activityAt === undefined ? {} : { completedActivityAt: activityAt }),
+      runId: chamberRunId({
+        sourceFingerprint: input.sourceFingerprint,
+        generation: input.generation,
+        sessionId,
+        episode,
+      }),
+    })
+  }
+  return { identities: next, episodes }
 }
 
 /** Official `visiblePendingKind` mirror (ui-workspace tree.ts): the three

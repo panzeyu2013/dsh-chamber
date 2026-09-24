@@ -65,6 +65,18 @@ export const PRESENTATION_THRESHOLDS = {
   surfaceAbsentFallbackMs: 2_000,
 } as const
 
+/** Recovery efficacy (semantic, not numeric): the state boundary each action resets,
+ * and the evidence required before it may run. Mirrored into tables.json, consumed by
+ * delivery-evidence.ts and locked by the parity gate - an executor may not substitute
+ * a cheaper action for a stronger one without editing this table. */
+export const DELIVERY_EFFICACY = [
+  { tier: 'journal-restart', resets: 'the physical socket and every logical window on it', evidence: 'zero-frame socket or a stalled live tail', owner: 'carrier' },
+  { tier: 'resync', resets: "this session's event-stream window", evidence: 'open state is loading with no open in flight, or an error the header cannot heal, and no resync disposing', owner: 'delivery' },
+  { tier: 'instance-reboot', resets: 'one instance shell: component and React state', evidence: 'that instance is stalled while the document frame counter still advances', owner: 'delivery' },
+  { tier: 'document-reload', resets: 'module-level state and the whole JS context', evidence: 'the document frame counter is stalled', owner: 'delivery' },
+  { tier: 'webcontent-crash-recovery', resets: 'the WebContent process', evidence: 'the navigation process terminated', owner: 'shell' },
+] as const
+
 /** Environment handed to the carrier reducer - tables, never literals at the
  * call site, so the executor cannot drift from the table. */
 export const CARRIER_ENV = {
@@ -110,7 +122,7 @@ export const LADDER_TABLES = {
     failedMs: 90_000,
   },
   /**
-   * The session-fact authority (docs/progress/todo/session-authority-refactor.md):
+   * The session-fact authority (design 14 §D4):
    * ONE set of numbers for two hosts of the same engine - the sidebar executor's
    * probe cadence and the App's reconnect/notice escalation. They replace the
    * former renderer-local SESSION_LIVENESS_DEFAULTS and the sidebar's 190 s
@@ -140,6 +152,40 @@ export const LADDER_TABLES = {
     healSettleMs: 20_000,
     carrierChurnMs: 10_000,
   },
+  /**
+   * The delivery owner: ONE ladder for every stall family (content / schedule /
+   * input / open / authority / unresolved). Tier budgets are the page-level
+   * recovery bounds; the carrier's own rebuild table stays separate because its
+   * action resets a different boundary (see DELIVERY_EFFICACY).
+   */
+  delivery: {
+    /** First automatic rebuild of a stuck opening. */
+    resyncGraceMs: 2_000,
+    resyncCooldownMs: 15_000,
+    resyncWindowMs: 300_000,
+    resyncMax: 2,
+    /** The visible-page frame probe both shells run (Electron and Swift watchdog). */
+    scheduleProbe: {
+      intervalMs: 5_000,
+      timeoutMs: 3_000,
+      strikes: 3,
+      /** Main-process probe round trip above which the JS thread is input-blocked. */
+      inputBlockRttMs: 1_000,
+    },
+    /** Stronger tiers: they need stuck evidence (a probe that could not conclude). */
+    rebootAfterMs: 90_000,
+    rebootCooldownMs: 120_000,
+    rebootWindowMs: 600_000,
+    rebootMax: 2,
+    reloadAfterMs: 120_000,
+    reloadCooldownMs: 300_000,
+    reloadWindowMs: 600_000,
+    reloadMax: 3,
+    /** An unresolved completion retries with this bounded backoff before becoming a fact. */
+    unresolvedRetryBaseMs: 6_000,
+    unresolvedRetryMaxMs: 60_000,
+    unresolvedRetryMax: 5,
+  },
 } as const
 
 /** The literal table as a value, for the tables.json lockstep assertion. */
@@ -155,4 +201,5 @@ export const TABLE_SNAPSHOT = {
   handshakeTimeoutMs: HANDSHAKE_TIMEOUT_MS,
   presentation: PRESENTATION_THRESHOLDS,
   ladders: LADDER_TABLES,
+  deliveryEfficacy: DELIVERY_EFFICACY,
 } as const

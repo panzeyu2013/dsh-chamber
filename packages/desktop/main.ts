@@ -49,6 +49,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { performance } from 'node:perf_hooks';
 import type { PlaneHandle } from '@dsh-chamber/control-plane';
 import { applyWindowsAclTightening } from './win-acl.ts';
 import { verifyRuntimeClientClosure } from './runtime-tree-check.ts';
@@ -69,9 +70,11 @@ import type { HostAssembly } from './host-assembly.ts';
 import { bundledPnpmEntryCandidates, firstExistingPnpmEntry } from './pnpm-launcher.ts';
 // 深链 scheme 的单一来源（协议注册字面量）。
 import { DEEP_LINK_SCHEME } from './deep-link-scheme.ts';
-import { RENDERER_CRASH_RELOAD_DELAY_MS, RENDERER_HANG_RELOAD_DELAY_MS, RENDERER_RECOVERY_MAX_RELOADS, noteRendererReload, auditLogFilePath, chamberSettingsFilePath, gatewaySecretsFilePath, QUIT_CLEANUP_TIMEOUT_MS, resolveControlPlanePort, scanDeepLinkUrls, sshPasswordsFilePath, stateRootDir, installIpcHandlers, clearBadgeIntentForQuit, drainDeepLinkLaunches, enqueueDeepLink, onRendererLifecycle, openExternally, resolveDevBuiltinDshWorkspace, shouldReloadAfterCrash, shouldScheduleHangReload } from './shell-core.ts';
+import { IPC_CHANNELS } from './ipc-events.ts';
+import { RENDERER_CRASH_RELOAD_DELAY_MS, RENDERER_HANG_RELOAD_DELAY_MS, RENDERER_RECOVERY_MAX_RELOADS, noteRendererReload, shouldReloadAfterChildProcessGone, auditLogFilePath, chamberSettingsFilePath, gatewaySecretsFilePath, QUIT_CLEANUP_TIMEOUT_MS, resolveControlPlanePort, scanDeepLinkUrls, sshPasswordsFilePath, stateRootDir, installIpcHandlers, clearBadgeIntentForQuit, drainDeepLinkLaunches, enqueueDeepLink, onRendererLifecycle, openExternally, resolveDevBuiltinDshWorkspace, shouldReloadAfterCrash, shouldScheduleHangReload } from './shell-core.ts';
 import type { RendererReloadBudgetState } from './shell-core.ts';
 import { createElectronEdges } from './electron-edges.ts';
+import { RendererFrameWatchdog, RENDERER_FRAME_PROGRESS_SCRIPT, RENDERER_INPUT_BLOCK_RTT_MS } from './renderer-frame-watchdog.ts';
 
 // Last-resort crash boundary. Expected socket/stream failures are handled at
 // their owners; an unknown uncaught exception means the privileged main
@@ -484,8 +487,23 @@ function installRendererRecovery(win: BrowserWindow): void {
   // 主线程长时间忙碌是合法的，unresponsive 只在"已成功加载过"之后才触发
   // 重载，避免打断正常启动。
   let loadedOnce = false;
+  let recoveryGaveUp = false;
   let unresponsiveTimer: NodeJS.Timeout | null = null;
   let crashReloadTimer: NodeJS.Timeout | null = null;
+  const frameWatchdog = new RendererFrameWatchdog();
+  // The page delivery owner consumes the same strike evidence the shell acts on
+  // (schedule stall / input block); the push is transient and re-emitted on every
+  // counter change, so a push lost while the renderer was replacing its listener is
+  // simply superseded by the next observation.
+  frameWatchdog.onChange = observation => {
+    if (quitRequested || win.isDestroyed() || win.webContents.isDestroyed()) return;
+    win.webContents.send(IPC_CHANNELS.RENDERER_STALL_EVIDENCE, {
+      scheduleStrikes: observation.scheduleStrikes,
+      inputBlockStrikes: observation.inputBlockStrikes,
+      at: Date.now(),
+    });
+  };
+  let frameProbeTimer: NodeJS.Timeout | null = null;
   const clearUnresponsiveTimer = (): void => {
     if (unresponsiveTimer === null) return;
     clearTimeout(unresponsiveTimer);
@@ -497,23 +515,34 @@ function installRendererRecovery(win: BrowserWindow): void {
     crashReloadTimer = null;
   };
   const reload = () => {
-    if (quitRequested || win.isDestroyed()) return;
+    if (quitRequested || win.isDestroyed() || recoveryGaveUp) return;
+    frameWatchdog.reset();
+    clearUnresponsiveTimer();
+    // A crash deferral inside the 500ms teardown window must not stack a second
+    // reload and burn a budget slot.
+    clearCrashReloadTimer();
     const { allowed, attempt } = noteRendererReload(reloadBudget, Date.now());
     if (allowed) {
-      console.warn(`[dsh-chamber] 渲染进程异常，尝试重载 (${attempt}/${RENDERER_RECOVERY_MAX_RELOADS})`);
+      console.warn(`[dsh-chamber] 渲染器异常或无进度，尝试重载 (${attempt}/${RENDERER_RECOVERY_MAX_RELOADS})`);
+      win.setTitle('dsh-chamber-electron — 正在恢复');
       win.webContents.reload();
     } else {
-      console.error('[dsh-chamber] 渲染进程反复异常退出，停止自动恢复');
-      dialog.showErrorBox('dsh-chamber 前端异常', '前端渲染进程反复崩溃，已停止自动恢复。请重新启动应用。');
+      recoveryGaveUp = true;
+      console.error('[dsh-chamber] 渲染器反复异常或无进度，停止自动恢复');
+      dialog.showErrorBox('dsh-chamber 前端异常', '前端渲染器反复异常或无进度，已停止自动恢复。请重新启动应用。');
     }
   };
   win.webContents.on('did-start-loading', () => {
     loadedOnce = false;
+    frameWatchdog.reset();
     clearUnresponsiveTimer();
     clearCrashReloadTimer();
   });
   win.webContents.on('did-finish-load', () => {
     loadedOnce = true;
+    recoveryGaveUp = false;
+    frameWatchdog.reset();
+    win.setTitle('dsh-chamber-electron');
     // ready() can run while late subresources still keep isLoading() true.
     // The first drain then correctly holds; finish is the deterministic replay
     // edge. Guard window identity so an old window cannot drain/reset a newer
@@ -524,6 +553,7 @@ function installRendererRecovery(win: BrowserWindow): void {
     }
   });
   win.webContents.on('render-process-gone', (_event, details) => {
+    frameWatchdog.reset();
     clearUnresponsiveTimer();
     clearCrashReloadTimer();
     // 用户关窗/退出等正常路径（判定单源 = shouldReloadAfterCrash）。
@@ -556,7 +586,71 @@ function installRendererRecovery(win: BrowserWindow): void {
     }, RENDERER_HANG_RELOAD_DELAY_MS);
   });
   win.webContents.on('responsive', clearUnresponsiveTimer);
+  const frameProbeAllowed = (): boolean => loadedOnce && !quitRequested && !recoveryGaveUp
+    && !win.isDestroyed() && !win.webContents.isDestroyed()
+    && win.isVisible() && !win.isMinimized() && win.isFocused()
+    && !win.webContents.isLoading() && crashReloadTimer === null;
+  const resolveFrameProbe = (id: number, result: unknown, failed: boolean, rttMs: number): void => {
+    if (!frameProbeAllowed()) { frameWatchdog.reset(); return; }
+    // The page may become hidden between the native visibility check and the
+    // JS read. `null` is an explicit suspension, not a failed frame. A stale
+    // callback is fenced by its probe id inside suspended().
+    if (!failed && result === null) { frameWatchdog.suspended(id); return; }
+    const action = failed || typeof result !== 'number' || !Number.isSafeInteger(result)
+      ? frameWatchdog.failed(id)
+      : frameWatchdog.succeeded(id, result, rttMs);
+    if (action.kind === 'reload') {
+      console.warn('[dsh-chamber] 可见页面 JS/rAF 连续无进度或 JS 线程连续延迟，执行有界重载');
+      reload();
+    } else if (action.kind === 'input-block') {
+      // 主进程 → 渲染器 → 主进程的往返延迟：JS 线程被长任务占住（rAF 可能仍在走）。
+      // 单次只作为证据记录并计数；连续超预算才升级重载（同一 strike 上界）。
+      console.warn(
+        `[dsh-chamber] 可见页面 JS 线程延迟证据：探针往返 ${action.rttMs}ms 超预算 ${RENDERER_INPUT_BLOCK_RTT_MS}ms`,
+      );
+    }
+  };
+  // Chromium's unresponsive event sees a blocked main thread. This probe also
+  // sees a page that can answer JS while its animation-frame loop is stopped.
+  // It runs only while the main window is focused and visible; background frame
+  // throttling is expected and cannot count as renderer failure.
+  frameProbeTimer = setInterval(() => {
+    if (!frameProbeAllowed()) { frameWatchdog.reset(); return; }
+    const action = frameWatchdog.tick(performance.now());
+    if (action.kind === 'reload') {
+      console.warn('[dsh-chamber] 可见页面 JS 探针连续超时，执行有界重载');
+      reload();
+    } else if (action.kind === 'probe') {
+      try {
+        const startedAt = Date.now();
+        void win.webContents.executeJavaScript(RENDERER_FRAME_PROGRESS_SCRIPT).then(
+          result => resolveFrameProbe(action.id, result, false, Date.now() - startedAt),
+          () => resolveFrameProbe(action.id, undefined, true, 0),
+        );
+      } catch {
+        resolveFrameProbe(action.id, undefined, true, 0);
+      }
+    }
+  }, 1_000);
+  // Paint freeze without a renderer stall: a crashed GPU process leaves the
+  // window surface frozen while the page keeps scheduling frames. The reload is
+  // the only in-shell recovery and stays inside the same bounded reload budget.
+  const onChildProcessGone = (
+    _event: unknown,
+    details: { readonly type: string; readonly reason: string; readonly exitCode: number },
+  ): void => {
+    if (!shouldReloadAfterChildProcessGone(details.type, details.reason, quitRequested)) return;
+    console.warn(
+      `[dsh-chamber] GPU 进程退出（reason=${details.reason} exitCode=${details.exitCode}）——画面合成已失效，执行有界重载`,
+    );
+    reload();
+  };
+  app.on('child-process-gone', onChildProcessGone);
   win.on('closed', () => {
+    app.off('child-process-gone', onChildProcessGone);
+    if (frameProbeTimer !== null) clearInterval(frameProbeTimer);
+    frameProbeTimer = null;
+    frameWatchdog.reset();
     clearUnresponsiveTimer();
     clearCrashReloadTimer();
   });

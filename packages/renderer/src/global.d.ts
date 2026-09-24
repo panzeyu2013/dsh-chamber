@@ -669,6 +669,7 @@ export interface NotificationRequest {
   /** 内容水位（host 域）：complete = completedAt ?? updatedAt；ask/request = updatedAt；
    *  缺省即旧调用方（主进程 claim 键退化为四元组，不做推测）。 */
   watermark?: number
+  eventKey?: string
 }
 
 /** window.dshChamber.notifications — 桌面原生通知（design 19 §3.3）。
@@ -676,7 +677,7 @@ export interface NotificationRequest {
 export interface NotificationSurface {
   /** invoke 'dsh-chamber:notify'；返回诚实结果 {shown, error?}——未显示时 error
    *  说明原因（裁决抑制 / 宿主或 OS 拒绝原文），设置页据此给出可操作提示。 */
-  notify(payload: NotificationRequest): Promise<{ shown: boolean; error?: string }>
+  notify(payload: NotificationRequest): Promise<{ shown: boolean; outcome: 'shown' | 'suppressed' | 'retryable' | 'permanent'; error?: string }>
   /** 就绪信号（invoke 'dsh-chamber:notifications-ready'）：onOpen 监听注册后
    *  调用——主进程只在就绪后放行 notification-open 推送（did-finish-load 早于
    *  监听注册，窗口重建路径的事件不能丢）。 */
@@ -760,6 +761,11 @@ export interface BadgeSurface {
  *  + system resume + open-in + deep-link + notifications + badge + dsh runtime
  *  management surfaces. */
 
+/** Desktop-observed renderer-stall evidence (frame-probe strikes / input-block RTT). */
+export interface RendererStallSurface {
+  onEvidence(callback: (observation: { scheduleStrikes: number; inputBlockStrikes: number; at: number }) => void): () => void
+}
+
 export interface DshChamberBridge {
   controlPlaneUrl: string | null
   dshVersion: string | null
@@ -769,6 +775,7 @@ export interface DshChamberBridge {
   update: UpdateSurface
   settings: SettingsSurface
   systemResume: SystemResumeSurface
+  rendererStall: RendererStallSurface
   openIn: OpenInSurface
   deepLink: DeepLinkSurface
   runtime: RuntimeSurface

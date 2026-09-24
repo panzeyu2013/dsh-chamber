@@ -395,6 +395,17 @@ export interface InstanceRuntimeReport {
     running?: boolean
     completed?: boolean
     pending?: 'approval' | 'plan-review' | 'question'
+    /**
+     * Run identity of this row's current/last episode (I1): the producer mints
+     * ONE chamber-family SessionRunId per observed run episode, so the App keys
+     * runtime-edge notifications by identity instead of a watermark guess. A row
+     * keeps its last run id after the run ends (the completion still belongs to
+     * it); a fresh run mints a new one.
+     */
+    runId?: string
+    /** Host-domain `updatedAt` of this row (read ordering anchor for the App's
+     *  runtime-completion adoption; never a read watermark). */
+    updatedAt?: number
     /** Running subagent descendants (vendor runningSubagentCount semantics); absent = 0. */
     runningSubagents?: number
     /** P5 子代理活动三值：none（索引在场且为零）| running | unknown（索引缺席或来源 stale）。 */
@@ -403,7 +414,7 @@ export interface InstanceRuntimeReport {
     factAt?: number
   }>
   /**
-   * 会话事实单一权威（P2，docs/progress/todo/session-authority-refactor.md）的快照；
+   * 会话事实单一权威（P2，design 14 §D4）的快照；
    * 缺席 = 本记录内从未请求过。App 的升级 ladder 只读它的事实（runningSince /
    * stuckSince / progressStamp）决定 reconnect 与 notice——策略不在 App 侧。
    * 执行端是 shared/session-fact-reconcile.ts（reducer + probe ladder + I/O）。

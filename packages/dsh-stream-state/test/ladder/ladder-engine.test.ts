@@ -39,6 +39,24 @@ function obs(overrides: Partial<LadderObservation> = {}): LadderObservation {
   }
 }
 
+test('a tier quota counts over its OWN window, not the ladder-level fallback', () => {
+  // The delivery table declares one window per tier; reading the ladder-level
+  // fallback for every tier made resyncWindowMs/reloadWindowMs dead leaves.
+  const scoped: Ladder = {
+    name: 'scoped',
+    quotaWindowMs: 600000,
+    tiers: [{ name: 'probe', afterMs: 0, cooldownMs: 0, quota: 1, quotaWindowMs: 100, requiresStuckEvidence: false }],
+  }
+  const first = planLadder(scoped, {}, { a: obs() }, 0)
+  assert.deepEqual(first.actions.map(action => action.tier), ['probe'])
+  const insideWindow = planLadder(scoped, first.records, { a: obs() }, 50)
+  assert.deepEqual(insideWindow.actions, [], 'the quota still holds inside the tier window')
+  const pastWindow = planLadder(scoped, insideWindow.records, { a: obs() }, 200)
+  assert.deepEqual(pastWindow.actions.map(action => action.tier), ['probe'],
+    'the tier window (100ms) frees the quota, the ladder fallback (600s) would not')
+  assert.equal(pastWindow.records.a?.dispatches.probe?.length, 1, 'the ledger prunes at the tier window')
+})
+
 test('the cheapest tier fires first, and only one tier per tick', () => {
   const r = planLadder(LADDER, {}, { a: obs() }, 60000)
   assert.deepEqual(r.actions, [{ sourceId: 'a', tier: 'probe', at: 60000 }])
@@ -120,13 +138,21 @@ test('progress resets the escalation clock even while the symptom persists', () 
   const later = planLadder(LADDER, advanced.records, {
     a: obs({ progressStamp: 5, symptomSinceMs: 60001, stuckEvidence: true }),
   }, 120001)
-  assert.deepEqual(later.actions, [{ sourceId: 'a', tier: 'probe', at: 120001 }])
+  // The dispatch LEDGER survives the streak reset, so the probe tier's quota (spent
+  // at the first dispatch) still applies: the re-based clock alone cannot re-fire it.
+  assert.deepEqual(later.actions, [], 'the probe quota survives the progress re-base')
+  assert.equal(later.records.a?.symptomSinceMs, 60001)
 })
 
-test('a symptom that stopped drops the record entirely', () => {
+test('a symptom that stopped ends the streak but keeps the dispatch ledger', () => {
   const records = planLadder(LADDER, {}, { a: obs() }, 60000).records
   const clean = planLadder(LADDER, records, { a: obs({ sticky: false }) }, 70000)
-  assert.equal(clean.records.a, undefined)
+  // The rate limit must survive an evidence gap; only the streak ended.
+  assert.equal(clean.records.a?.dispatches.probe?.length, 1, 'the dispatch ledger survives the gap')
+  assert.deepEqual(clean.actions, [])
+  // ... and it is pruned once every dispatch fell out of every tier window.
+  const aged = planLadder(LADDER, clean.records, {}, 700001)
+  assert.equal(aged.records.a, undefined, 'an aged, unobserved ledger carries no quota information')
 })
 
 test('exhaustion is reported only after every lever spent its quota', () => {
@@ -162,11 +188,10 @@ test('the instantiated ladders keep their owners values', () => {
   assert.ok(escalation.tiers[1]!.afterMs > escalation.tiers[0]!.afterMs, 'notice stays behind reconnect')
   assert.equal(escalation.quotaWindowMs, LADDER_TABLES.authority.probeWindowMs)
   const health = streamHealthLadder(LADDER_TABLES.streamHealth)
-  assert.deepEqual(health.tiers.map((tier) => tier.name), ['heal', 'auto-resync'])
+  assert.deepEqual(health.tiers.map((tier) => tier.name), ['heal'])
   assert.equal(health.tiers[0]?.afterMs, LADDER_TABLES.streamHealth.errorGraceMs)
   assert.equal(health.tiers[0]?.cooldownMs, LADDER_TABLES.streamHealth.healCooldownMs)
   assert.equal(health.tiers[0]?.quota, LADDER_TABLES.streamHealth.healBudgetMax)
-  assert.equal(health.tiers[1]?.afterMs, LADDER_TABLES.streamHealth.loadingStallMs)
   assert.equal(health.quotaWindowMs, LADDER_TABLES.streamHealth.healBudgetWindowMs)
   const mobile = mobileStallLadder({
     thresholdMs: LADDER_TABLES.mobile.thresholdMs,

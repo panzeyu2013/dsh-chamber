@@ -246,7 +246,9 @@ test('⑪ showNativeNotification edge 载荷含 {notificationId, spec, sourceId}
   const edges = createNodeEdges({
     sendEdge: async (method, payload) => {
       edgesSent.push({ method, payload: payload as Record<string, unknown> })
-      return null
+      // Swift 腿的成功回执是显式 {shown:true}（P-06）；null 会被诚实折算为失败
+      // 并即时注销 click 路由（见 ⑰）。
+      return method === 'showNativeNotification' ? { shown: true } : null
     },
     sendNotify: (event, payload) => notifies.push({ event, payload }),
   })
@@ -283,7 +285,7 @@ test('⑫ S2·F7 retireNotificationsForSources 返回真实驱逐数（不再是
   const notifies: Array<{ event: string; payload: unknown }> = []
   const activated: string[] = []
   const edges = createNodeEdges({
-    sendEdge: async () => null,
+    sendEdge: async () => ({ shown: true }),
     sendNotify: (event, payload) => notifies.push({ event, payload }),
   })
   const token = (sourceId: string) => ({ sourceId, fingerprint: 'f'.repeat(64), generation: 1 })
@@ -553,7 +555,7 @@ test('⑰ P-06：showNativeNotification 按 honest-show 应答折算；显式失
   // 注意：不能 deepEqual(activated, [])——node:assert 的断言签名会把数组窄化成
   // never[]，后续 push 会误报类型错误。长度断言表达同一事实。
   assert.equal(activated.length, 0, '失败通知不得保留 click 路由')
-  // 显式成功 / 旧协议 null 应答仍是 shown:true。
+  // 显式成功才是 shown:true。
   reply = { shown: true }
   const ok = edges.showNativeNotification({ title: 't', body: 'b' }, { token, onActivated: () => activated.push(2) })
   assert.deepEqual(await ok.shown, { shown: true })
@@ -561,7 +563,11 @@ test('⑰ P-06：showNativeNotification 按 honest-show 应答折算；显式失
   assert.deepEqual(activated, [2])
   reply = null
   const legacy = edges.showNativeNotification({ title: 't', body: 'b' }, null)
-  assert.deepEqual(await legacy.shown, { shown: true }, '旧线协议的 null 应答保持 shown:true')
+  assert.deepEqual(await legacy.shown, {
+    shown: false,
+    error: 'native notification leg returned no display receipt',
+    failureClass: 'retryable',
+  }, '没有显示回执不得推断为已显示（P-06 修订）')
   // 不认识的形状绝不采信为成功。
   reply = { ok: true }
   const weird = edges.showNativeNotification({ title: 't', body: 'b' }, null)
@@ -575,7 +581,7 @@ test('⑱ P-07：>16 淘汰逐条按 identifier 清横幅（retire payload 携�
   const notifies: Array<{ event: string; payload: unknown }> = []
   const activated: string[] = []
   const edges = createNodeEdges({
-    sendEdge: async () => null,
+    sendEdge: async () => ({ shown: true }),
     sendNotify: (event, payload) => notifies.push({ event, payload }),
   })
   const token = (sourceId: string) => ({ sourceId, fingerprint: 'f'.repeat(64), generation: 1 })

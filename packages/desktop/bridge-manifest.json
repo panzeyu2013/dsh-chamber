@@ -263,6 +263,10 @@
       "key": "SYSTEM_RESUME"
     },
     {
+      "channel": "dsh-chamber:renderer-stall-evidence",
+      "key": "RENDERER_STALL_EVIDENCE"
+    },
+    {
       "channel": "desktop_ssh_status_changed",
       "key": "SSH_STATUS_CHANGED"
     },
@@ -277,7 +281,7 @@
   ],
   "counts": {
     "invoke": 60,
-    "push": 8,
-    "total": 68
+    "push": 9,
+    "total": 69
   }
 }

@@ -1,11 +1,12 @@
 /**
- * 未读 v2 落盘存储。
+ * 未读 v4 落盘存储。
  *
- * v2 落盘载荷：
- *   - 键：dsh-chamber.unread.v2 = { v:2, read, edge, notified }（见 UnreadV2Payload）；
+ * v4 落盘载荷（旧的通知水位/事件序表已移除，只剩身份轨）：
+ *   - 键：dsh-chamber.unread.v4 = { v:4, read, edge, notifiedRuns }（见 UnreadV4Payload）；
  *   - read/sourceId/sessionId → host 域读水位（只升不降，max 合并）；
  *   - edge/sourceId/sessionId → true（边沿轨回退账本；重启后立即可渲染未读，不等网络）；
- *   - notified/sourceId/sessionId/kind → 已通知水位（第二入口去重）。
+ *   - notifiedRuns/sourceId/sessionId → 最后一次已通知的 SessionRunId（迁移哨兵由
+ *     v1/v2/v3 一次性读取时写入）。
  * 载荷**不得出现 title/cwd/消息内容**（隐私条）——键白名单锁在
  * test/session-state/unread-store.test.ts 里钉住。
  *
@@ -14,11 +15,11 @@
  *
  * 单例纪律：N 个 ctx 共享一个 localStorage，逐调用点
  * setItem 会 last-writer-wins 丢标记；App 侧只经本模块的 merge/prune/save
- * 三个可组合步骤写盘（App 持有内存权威，v2 是缓存）。
+ * 三个可组合步骤写盘（App 持有内存权威，v4 是缓存）。
  *
- * v1（dsh-chamber.unread.v1）在 HEAD **没有任何写入者**，因此 v1→v2 导入是
+ * v1（dsh-chamber.unread.v1）在 HEAD **没有任何写入者**，因此 v1 → v4 导入是
  * **防御性代码**（仍按「先写后删」顺序实现 + 单测，避免未来中间版本回退时
- * 丢账本），不是迁移承诺。
+ * 丢账本），不是迁移承诺；v2/v3 是真实的历史版本，按一次性迁移读取。
  *
  * `POST /read` / `/read-all` 的 ack 失败（网络错误 /
  * 5xx）进**有界内存待发表**（UNREAD_PENDING_MAX），facts 源每收到一帧服务端
@@ -29,8 +30,14 @@
 
 import { createBoundedMap } from './bounded-ledger.ts'
 import { isWatermark, maxWatermarkValue } from './watermark.ts'
+import { LEGACY_NOTIFIED_RUN_ID, isSessionRunId } from './notification-identity.ts'
+import { isPlainRecord } from './plain-record.ts'
 
-/** v2 落盘键（唯一被持续写入的未读键）。 */
+/** v4 落盘键（唯一被持续写入的未读键；只有 read / edge / 通知运行身份）。 */
+export const UNREAD_V4_KEY = 'dsh-chamber.unread.v4'
+/** v3 键：只读一次并迁移（v4 写入成功后删除）。 */
+export const UNREAD_V3_KEY = 'dsh-chamber.unread.v3'
+/** v2 键：只读一次并迁移（v4 写入成功后删除；v2 与 v3 的旧表同构）。 */
 export const UNREAD_V2_KEY = 'dsh-chamber.unread.v2'
 /** 防御性 v1 边沿账本键（HEAD 无写入者；只读一次 + 迁移后删）。 */
 export const UNREAD_V1_KEY = 'dsh-chamber.unread.v1'
@@ -41,16 +48,15 @@ export const UNREAD_MAX_SESSIONS_PER_SOURCE = 500
 /** client-install id 语法（与 control-plane SESSION_STATE_CLIENT_ID_PATTERN 同形）。 */
 export const CLIENT_INSTALL_ID_PATTERN = /^[A-Za-z0-9._:-]{1,64}$/
 
-export type UnreadKind = 'complete' | 'ask' | 'request'
-
-export interface UnreadV2Payload {
-  v: 2
+export interface UnreadV4Payload {
+  v: 4
   /** sourceId → sessionId → host 域读水位。 */
   read: Record<string, Record<string, number>>
   /** sourceId → sessionId → true（边沿轨回退账本 / 上次派生未读投影）。 */
   edge: Record<string, Record<string, boolean>>
-  /** sourceId → sessionId → kind → 已通知水位（第二入口去重）。 */
-  notified: Record<string, Record<string, Partial<Record<UnreadKind, number>>>>
+  /** 身份 spine：sourceId → sessionId → 最后一次已通知的 SessionRunId
+   *  （或 v4 迁移哨兵 LEGACY_NOTIFIED_RUN_ID，认领后即被真实身份覆盖）。 */
+  notifiedRuns: Record<string, Record<string, string>>
 }
 
 /** Storage 的结构子集（浏览器 localStorage 或测试假实现）。 */
@@ -60,8 +66,8 @@ export interface UnreadStorageLike {
   removeItem(key: string): void
 }
 
-export function emptyUnreadPayload(): UnreadV2Payload {
-  return { v: 2, read: {}, edge: {}, notified: {} }
+export function emptyUnreadPayload(): UnreadV4Payload {
+  return { v: 4, read: {}, edge: {}, notifiedRuns: {} }
 }
 
 /** 浏览器 localStorage 的安全访问器；不可用时 undefined（降级为纯内存）。 */
@@ -76,12 +82,6 @@ export function browserUnreadStorage(): UnreadStorageLike | undefined {
   }
 }
 
-function isPlainRecord(value: unknown): value is Record<string, unknown> {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
-  const prototype: unknown = Object.getPrototypeOf(value)
-  return prototype === Object.prototype || prototype === null
-}
-
 function warn(message: string, error?: unknown): void {
   console.warn('[unread] ' + message, error ?? '')
 }
@@ -89,7 +89,7 @@ function warn(message: string, error?: unknown): void {
 // ── 解析 / 清洗 ─────────────────────────────────────────────────────────────
 
 /** 宽松清洗：只留下合法键值，剥掉坏项（不整包丢弃）。 */
-export function sanitizeUnreadPayload(value: unknown): UnreadV2Payload {
+export function sanitizeUnreadPayload(value: unknown): UnreadV4Payload {
   const payload = emptyUnreadPayload()
   if (!isPlainRecord(value)) return payload
   const read = isPlainRecord(value.read) ? value.read : {}
@@ -110,25 +110,58 @@ export function sanitizeUnreadPayload(value: unknown): UnreadV2Payload {
     }
     if (Object.keys(table).length > 0) payload.edge[sourceId] = table
   }
+  const notifiedRuns = isPlainRecord(value.notifiedRuns) ? value.notifiedRuns : {}
+  for (const [sourceId, sessions] of Object.entries(notifiedRuns)) {
+    if (!isPlainRecord(sessions)) continue
+    const table: Record<string, string> = {}
+    for (const [sessionId, runId] of Object.entries(sessions)) {
+      // Parse/round-trip validation at the restore boundary: a corrupt identity
+      // (`host:%`, truncated chamber parts) must never reach the projection.
+      if (isSessionRunId(runId)) table[sessionId] = runId
+    }
+    if (Object.keys(table).length > 0) payload.notifiedRuns[sourceId] = table
+  }
+  return payload
+}
+
+/**
+ * v4 migration: every (source, session) the pre-v4 tables knew as notified gets
+ * the identity sentinel. The projection then adopts the live run id WITHOUT
+ * notifying, so no upgrade ever re-shows an already-delivered completion.
+ */
+function legacyNotifiedSessions(value: Record<string, unknown>): Record<string, Record<string, string>> {
+  const runs: Record<string, Record<string, string>> = {}
+  const mark = (sourceId: string, sessionId: string): void => {
+    runs[sourceId] = { ...(runs[sourceId] ?? {}), [sessionId]: LEGACY_NOTIFIED_RUN_ID }
+  }
   const notified = isPlainRecord(value.notified) ? value.notified : {}
   for (const [sourceId, sessions] of Object.entries(notified)) {
     if (!isPlainRecord(sessions)) continue
-    const table: Record<string, Partial<Record<UnreadKind, number>>> = {}
     for (const [sessionId, kinds] of Object.entries(sessions)) {
-      if (!isPlainRecord(kinds)) continue
-      const row: Partial<Record<UnreadKind, number>> = {}
-      for (const kind of ['complete', 'ask', 'request'] as const) {
-        if (isWatermark(kinds[kind])) row[kind] = kinds[kind]
-      }
-      if (Object.keys(row).length > 0) table[sessionId] = row
+      if (isPlainRecord(kinds) && isWatermark(kinds.complete)) mark(sourceId, sessionId)
     }
-    if (Object.keys(table).length > 0) payload.notified[sourceId] = table
+  }
+  const seqs = isPlainRecord(value.notifiedCompletionSeq) ? value.notifiedCompletionSeq : {}
+  for (const [sourceId, sessions] of Object.entries(seqs)) {
+    if (!isPlainRecord(sessions)) continue
+    for (const [sessionId, seq] of Object.entries(sessions)) {
+      if (isWatermark(seq)) mark(sourceId, sessionId)
+    }
+  }
+  return runs
+}
+
+/** One-shot v1/v2/v3 → v4 conversion (schema fields + sentinel identity). */
+function migrateLegacyPayload(value: Record<string, unknown>): UnreadV4Payload {
+  const payload = sanitizeUnreadPayload(value)
+  for (const [sourceId, sessions] of Object.entries(legacyNotifiedSessions(value))) {
+    payload.notifiedRuns[sourceId] = { ...(payload.notifiedRuns[sourceId] ?? {}), ...sessions }
   }
   return payload
 }
 
 /** 防御性 v1 导入：v1 = { sourceId: { sessionId: true } }（边沿账本）。 */
-function payloadFromV1(raw: string | null): UnreadV2Payload {
+function payloadFromV1(raw: string | null): UnreadV4Payload {
   const payload = emptyUnreadPayload()
   if (raw === null || raw === '') return payload
   try {
@@ -149,7 +182,7 @@ function payloadFromV1(raw: string | null): UnreadV2Payload {
 }
 
 /** 剪除空表（序列化前调用；保证载荷最小、无噪声键）。 */
-export function pruneEmptyUnreadTables(payload: UnreadV2Payload): UnreadV2Payload {
+export function pruneEmptyUnreadTables(payload: UnreadV4Payload): UnreadV4Payload {
   const next = emptyUnreadPayload()
   for (const [sourceId, table] of Object.entries(payload.read)) {
     if (Object.keys(table).length > 0) next.read[sourceId] = table
@@ -157,8 +190,8 @@ export function pruneEmptyUnreadTables(payload: UnreadV2Payload): UnreadV2Payloa
   for (const [sourceId, table] of Object.entries(payload.edge)) {
     if (Object.keys(table).length > 0) next.edge[sourceId] = table
   }
-  for (const [sourceId, table] of Object.entries(payload.notified)) {
-    if (Object.keys(table).length > 0) next.notified[sourceId] = table
+  for (const [sourceId, table] of Object.entries(payload.notifiedRuns)) {
+    if (Object.keys(table).length > 0) next.notifiedRuns[sourceId] = table
   }
   return next
 }
@@ -168,7 +201,7 @@ export function pruneEmptyUnreadTables(payload: UnreadV2Payload): UnreadV2Payloa
  * edge/notified 与 read 同界（先保留 read 里出现的会话，再按插入序补足）。
  * 返回新对象（调用方负责写盘）。
  */
-export function pruneUnreadPayload(payload: UnreadV2Payload, maxPerSource = UNREAD_MAX_SESSIONS_PER_SOURCE): UnreadV2Payload {
+export function pruneUnreadPayload(payload: UnreadV4Payload, maxPerSource = UNREAD_MAX_SESSIONS_PER_SOURCE): UnreadV4Payload {
   if (maxPerSource <= 0) return emptyUnreadPayload()
   const next = emptyUnreadPayload()
   for (const [sourceId, table] of Object.entries(payload.read)) {
@@ -197,10 +230,10 @@ export function pruneUnreadPayload(payload: UnreadV2Payload, maxPerSource = UNRE
     }
     if (Object.keys(kept).length > 0) next.edge[sourceId] = kept
   }
-  for (const [sourceId, table] of Object.entries(payload.notified)) {
+  for (const [sourceId, table] of Object.entries(payload.notifiedRuns)) {
     const read = next.read[sourceId] ?? {}
     const keys = Object.keys(table)
-    const kept: Record<string, Partial<Record<UnreadKind, number>>> = {}
+    const kept: Record<string, string> = {}
     for (const sessionId of keys) {
       if (Object.prototype.hasOwnProperty.call(read, sessionId)) kept[sessionId] = table[sessionId]
       if (Object.keys(kept).length >= maxPerSource) break
@@ -210,7 +243,7 @@ export function pruneUnreadPayload(payload: UnreadV2Payload, maxPerSource = UNRE
       if (kept[sessionId] !== undefined) continue
       kept[sessionId] = table[sessionId]
     }
-    if (Object.keys(kept).length > 0) next.notified[sourceId] = kept
+    if (Object.keys(kept).length > 0) next.notifiedRuns[sourceId] = kept
   }
   return next
 }
@@ -218,30 +251,42 @@ export function pruneUnreadPayload(payload: UnreadV2Payload, maxPerSource = UNRE
 // ── 载入 / 保存（先写后删是 v1 迁移的契约） ─────────────────────────────────
 
 /**
- * 载入 v2：
- *   1. v2 可解析且 v===2 ⇒ 逐字段清洗（坏字段就地剥掉），顺手清掉残留 v1；
- *   2. v2 缺失/整包损坏 ⇒ 若 v1 存在则防御性导入（只含 edge），**先写 v2 再删 v1**
- *      （写失败保留 v1，下次再试——不许先删后写）；
- *   3. 都没有 ⇒ 空载荷。
+ * 载入未读账本：
+ *   1. v4 可解析且 v===4 ⇒ 逐字段清洗（坏字段就地剥掉），顺手清掉残留 v1；
+ *   2. v4 缺失/损坏且 v3 或 v2 存在 ⇒ 一次性迁移：read/edge 携带，旧通知水位/
+ *      事件序表折成身份哨兵（认领后不重发）；**先写 v4 再删旧键**（写失败保留旧键）；
+ *   3. 都没有 ⇒ 若 v1 存在则防御性导入（只含 edge），同样先写 v4 再删 v1；
+ *   4. 全无 ⇒ 空载荷。
+ * 旧键读取器是升级路径本身；当任何受支持安装都不可能再带 v1/v2/v3 载荷时，
+ * 删除这些读取器与 legacyNotifiedSessions 辅助函数。
  */
-export function loadUnread(storage: UnreadStorageLike | undefined): UnreadV2Payload {
+export function loadUnread(storage: UnreadStorageLike | undefined): UnreadV4Payload {
   if (storage === undefined) return emptyUnreadPayload()
-  let raw2: string | null = null
-  try {
-    raw2 = storage.getItem(UNREAD_V2_KEY)
-  } catch {
-    raw2 = null
-  }
-  if (raw2 !== null && raw2 !== '') {
+  const version = (key: string, expected: number): Record<string, unknown> | null => {
     try {
-      const value: unknown = JSON.parse(raw2)
-      if (isPlainRecord(value) && value.v === 2) {
-        try { storage.removeItem(UNREAD_V1_KEY) } catch { /* defensive v1 leftover */ }
-        return sanitizeUnreadPayload(value)
-      }
-    } catch {
-      // 整包坏 = v2 缺失：继续走 v1 防御性导入。
+      const raw = storage.getItem(key)
+      if (raw === null || raw === '') return null
+      const value: unknown = JSON.parse(raw)
+      return isPlainRecord(value) && value.v === expected ? value : null
+    } catch { return null }
+  }
+  const current = version(UNREAD_V4_KEY, 4)
+  if (current !== null) {
+    try { storage.removeItem(UNREAD_V1_KEY) } catch { /* defensive v1 leftover */ }
+    return sanitizeUnreadPayload(current)
+  }
+  const previous = version(UNREAD_V3_KEY, 3) ?? version(UNREAD_V2_KEY, 2)
+  if (previous !== null) {
+    const migrated = migrateLegacyPayload(previous)
+    try {
+      storage.setItem(UNREAD_V4_KEY, JSON.stringify(pruneUnreadPayload(migrated)))
+      storage.removeItem(UNREAD_V3_KEY)
+      storage.removeItem(UNREAD_V2_KEY)
+      storage.removeItem(UNREAD_V1_KEY)
+    } catch (error) {
+      warn('v3/v2 → v4 migration failed; keeping the previous journal for a later attempt', error)
     }
+    return migrated
   }
   let raw1: string | null = null
   try {
@@ -253,23 +298,23 @@ export function loadUnread(storage: UnreadStorageLike | undefined): UnreadV2Payl
   if (raw1 !== null && raw1 !== '') {
     // 顺序是契约：先写后删。写失败必须原样保留 v1（下次再试）。
     try {
-      storage.setItem(UNREAD_V2_KEY, JSON.stringify(pruneUnreadPayload(imported)))
+      storage.setItem(UNREAD_V4_KEY, JSON.stringify(pruneUnreadPayload(imported)))
       storage.removeItem(UNREAD_V1_KEY)
     } catch (error) {
-      warn('v1 → v2 import failed; keeping v1 for a later attempt', error)
+      warn('v1 → v4 import failed; keeping v1 for a later attempt', error)
     }
   }
   return imported
 }
 
 /** 写盘（剪空表 + 有界化）；返回是否成功。never-throw。 */
-export function saveUnread(storage: UnreadStorageLike | undefined, payload: UnreadV2Payload): boolean {
+export function saveUnread(storage: UnreadStorageLike | undefined, payload: UnreadV4Payload): boolean {
   if (storage === undefined) return false
   try {
-    storage.setItem(UNREAD_V2_KEY, JSON.stringify(pruneUnreadPayload(pruneEmptyUnreadTables(payload))))
+    storage.setItem(UNREAD_V4_KEY, JSON.stringify(pruneUnreadPayload(pruneEmptyUnreadTables(payload))))
     return true
   } catch (error) {
-    warn('cannot persist unread v2', error)
+    warn('cannot persist unread v4', error)
     return false
   }
 }

@@ -72,7 +72,7 @@ export interface BridgeNotificationRequest {
 export interface BridgeSubscriptionsDeps {
   // 回调（App 侧既有实现）
   acknowledgeDeepLink: (delivery: RendererDeliveryCoordinates) => Promise<void>
-  emitSessionNotification: (request: BridgeNotificationRequest) => void
+  emitSessionNotification: (request: BridgeNotificationRequest) => boolean
   markSourceAllRead: (sourceId: string) => void
   openSession: (instanceId: string, sessionId: string) => Promise<unknown>
   recomputeSourceUnread: (sourceId: string) => void
@@ -756,20 +756,28 @@ export function useBridgeSubscriptions(deps: BridgeSubscriptionsDeps): void {
         factsUsable: usableFacts !== undefined,
         armed: completeLedgerRef.current.armed(sourceId),
       })
-      completeLedgerRef.current.setArmed(sourceId, plan.armed)
+      const armed = new Set(plan.armed)
       for (const edge of plan.edges) {
         const row = usableFacts?.rows[edge.sessionId]
         const watermark = edge.kind === 'complete'
           ? completionWatermark(row ?? {})
           : row !== undefined && row.updatedAt > 0 ? row.updatedAt : undefined
-        emitSessionNotification({
+        // I1：运行通道的完成边沿带上生产者铸的运行身份，App 不再用 0 号 episode
+        // 兜底；ask/request 仍按内容水位区分（同一 run 可以多次提问）。
+        const runId = edge.kind === 'complete' ? report.sessions[edge.sessionId]?.runId : undefined
+        const hostObservedAt = edge.kind === 'complete' ? report.sessions[edge.sessionId]?.updatedAt : undefined
+        const queued = emitSessionNotification({
           sourceId,
           sourceFingerprint,
           sessionId: edge.sessionId,
           kind: edge.kind,
           ...(watermark !== undefined ? { watermark } : {}),
+          ...(runId === undefined ? {} : { runId }),
+          ...(hostObservedAt === undefined ? {} : { hostObservedAt }),
         })
+        if (!queued && edge.kind === 'complete') armed.delete(edge.sessionId)
       }
+      completeLedgerRef.current.setArmed(sourceId, armed)
       // 派生账本重算：规则全在纯模块
       // unread-derivation.ts（4 参 deriveUnread + 通道边沿机）；「正在阅读」谓词
       // = paintedView ∩ 该来源 current ∩ hasFocus，listComplete 是唯一剪枝门。

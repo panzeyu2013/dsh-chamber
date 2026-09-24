@@ -7,9 +7,8 @@
 //  sidecar 就绪前的深链缓冲。
 //
 //  与 Electron 版的差异（有意，注释声明）：
-//  - 15s unresponsive 探测腿不可移植（WKWebView 无 unresponsive 事件，
-//    design 25 §0.1-B5/D5 已登记）——本策略只覆盖
-//    webViewWebContentProcessDidTerminate（render-process-gone 对应）。
+//  - WKWebView 无 unresponsive 事件；MainWindowController 以可见页 JS/rAF
+//    探针替代，与 webViewWebContentProcessDidTerminate 共用本策略的预算。
 //  - Electron 用「窗口起点 + 60s 后重置计数」；本策略用 60s 滚动窗口（等价
 //    上界：60s 内至多 3 次重载），实现更简且无跨窗口状态。
 //
@@ -57,10 +56,9 @@ public struct RendererRecoveryPolicy: Equatable {
     /// 窗口淘汰 / 上限判定 / 记账 = `RollingWindowLimiter` 单源；
     /// inout 数组契约保持不变（本策略是值类型，状态由调用方持有）。
     ///
-    /// 不拆分「判定 / 记账」：**两个调用点都在判定之前守卫**
-    /// （`MainWindowController.scheduleRecoveryReload` 的 `recoveryReloadWorkItem == nil`、
-    /// `SidecarSupervisor` 的崩溃分支守卫，配额消耗发生在崩溃路径内），
-    /// 不存在「判定后拒绝排程」的路径，拆分只会得到**无消费点的能力**。
+    /// 不拆分「判定 / 记账」：调用点在判定之前守卫，获准时立即排程。
+    /// 主窗若在延迟重载执行前开始导航，会取消排程并退还该次计数；
+    /// 已执行的重载仍占滚动窗口预算。
     public func decide(now: Double, attempts: inout [Double]) -> Decision {
         switch RollingWindowLimiter.decide(window: window, limit: maxReloads,
                                            now: now, events: &attempts) {

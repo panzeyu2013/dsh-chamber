@@ -3,8 +3,8 @@
  *
  * WHY. Every reducer in this package compares timestamps, and each had grown its own
  * opinion about NaN/Infinity/rollback: decideRebuild refused a non-finite clock,
- * planLadder dispatched its most expensive tier on it, loadIsLate read Infinity as
- * "late", and presentation re-derived elapsedSince locally. The I4 discipline is one
+ * planLadder dispatched its most expensive tier on it, and presentation
+ * re-derived elapsedSince locally. The I4 discipline is one
  * sentence - a clock we cannot compare may only hold, never release - so it lives
  * here once.
  *

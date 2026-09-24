@@ -62,7 +62,7 @@ export interface UnreadDerivationInput {
   listComplete: boolean
   /** 易失 running 转移记忆（上一份）。 */
   prevRunning: Readonly<Record<string, boolean>>
-  /** durable 未读回退账本（上一份投影；v2 edge 表）。 */
+  /** durable 未读回退账本（上一份投影；v4 edge 表）。 */
   prevLedger: Readonly<Record<string, boolean>>
   /** 该来源的 host 域读水位。 */
   readMarks: Readonly<Record<string, number>>
@@ -73,7 +73,7 @@ export interface UnreadDerivationInput {
 }
 
 export interface UnreadDerivationResult {
-  /** 完成未读投影（写 completedBySource[source]，并作为 v2 edge 表落盘）。 */
+  /** 完成未读投影（写 completedBySource[source]，并作为 v4 edge 表落盘）。 */
   unread: Record<string, boolean>
   /** 写回的易失 running 记忆。 */
   nextRunning: Record<string, boolean>

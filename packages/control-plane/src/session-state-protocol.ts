@@ -228,7 +228,8 @@ export interface SessionStateRow {
   /** Host-clock milliseconds (summary.updatedAt; on the current pin it only
    *  advances on user-authored durable messages). */
   updatedAt: number
-  /** Observer-clock milliseconds of the observed true→false edge (or null). */
+  /** Observer-clock milliseconds of the classified edge, or an unreadable
+   *  edge retained for unread only (or null). */
   completedAt: number | null
   completedAtSource: SessionStateCompletedAtSource | null
   /** Observer-clock milliseconds the session was last seen running. */

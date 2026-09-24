@@ -2,15 +2,14 @@
  * 水位（watermark）原语单一来源。
  *
  * WHY：同一套「host 域整数水位」契约必须在 unread-store / session-facts-source /
- * notification-dedupe 各消费点保持同解：isWatermark、完成水位的 max / 单调记忆 /
- * 递增判定都归口于此，「什么样的数是合法水位」「什么算更高」只有一处答案。
+ * notification 各消费点保持同解：isWatermark / max / 完成水位组合都归口于此，
+ * 「什么样的数是合法水位」只有一处答案。
  *
- * 通知身份键 = (sourceId, sourceFingerprint, sessionId, kind, watermark)：kind 与
- * fingerprint 必须保留（否则同水位的 ask 与 complete 互吞、同 id 换宿主继承旧
- * claim）；主进程 claim 键是同一五元组 + 5s TTL 兜底（packages/desktop/notifications.ts，
- * 本侧不复制其实现）。watermark 语义：complete = completedAt ?? updatedAt；
- * ask/request = updatedAt（host 域）。首见（prev === undefined）只播种不通知——桌面
- * 启动/来源重挂时，基线里已经完成的会话不得补发通知。
+ * 去重已改为**运行身份**（notification-identity.ts）：水位只作为身份的一部分
+ * （chamber 回退族的 episode）与未读游标，不再有单调水位比较表。主进程 claim 键
+ * 仍含 fingerprint/kind/watermark + 5s TTL（packages/desktop/notifications.ts，
+ * 本侧不复制其实现）。watermark 语义：complete = max(completedAt, updatedAt)；
+ * ask/request = updatedAt（host 域）。
  *
  * 契约：合法水位 = 非负安全整数（host 域毫秒/游标）。缺失/坏值不臆造，由调用方按
  * 各自语义决定「不改变 / 不通知 / 回落 0」。
@@ -28,20 +27,6 @@ export function maxWatermarkValue(...values: readonly (number | null | undefined
     if (isWatermark(value) && value > max) max = value
   }
   return max
-}
-
-/** 同一完成不重发：只有严格更高的水位才允许再通知（首见 = 只播种，返回 false）。 */
-export function shouldNotifyWatermark(prev: number | undefined, watermark: number | undefined): boolean {
-  if (!isWatermark(watermark)) return false
-  if (!isWatermark(prev)) return false
-  return watermark > prev
-}
-
-/** 已通知水位的单调记忆（回退不允许；坏值原样保留 prev）。 */
-export function nextNotifiedWatermark(prev: number | undefined, watermark: number | undefined): number | undefined {
-  if (!isWatermark(watermark)) return prev
-  if (!isWatermark(prev) || watermark > prev) return watermark
-  return prev
 }
 
 /** 完成边沿的内容水位 = max(completedAt, updatedAt)（两者皆无合法值 = undefined）。 */

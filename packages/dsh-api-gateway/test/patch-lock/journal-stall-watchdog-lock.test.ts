@@ -1,13 +1,15 @@
 /**
  * Source lock for the chamber journal silence watchdog (design 14 §D4).
  *
- * `src/client/journal-stream.ts` is upstream-verbatim plus this one patch, so an
+ * `src/client/journal-stream.ts` is upstream-verbatim plus chamber patches, so an
  * upstream re-sync replaces it wholesale and review alone cannot hold the change.
  * The lock fails loudly when the patched file loses:
  *
- *  - the watchdog arm/disarm wiring, or
+ *  - the watchdog arm/disarm wiring,
  *  - the hard rule that a restart happens ONLY after a probe proves the Host
- *    cursor advanced (a blind idle restart is exactly what design 14 §D4 rejected).
+ *    cursor advanced (a blind idle restart is exactly what design 14 §D4 rejected),
+ *  - the bounded user-initiated history read, or
+ *  - the total deadline on one logical open across its physical reopens.
  */
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
@@ -36,6 +38,20 @@ test('the watchdog is armed only after the opening window is published and disar
   assert.match(journal, /clearInterval\(this\.stallTimer\)/u)
 })
 
+test('the logical open carries a total deadline across physical reopens', () => {
+  // The per-episode opening budget bounds ONE physical attempt; the logical open
+  // retries generations. Without this bound the vendor's openPromise stayed pending
+  // forever with openState 'loading' and no lever could conclude the open.
+  assert.match(open, /const firstFrame = this\.takeNext\(iterator\)/u)
+  assert.match(open, /await withDeadline<IteratorResult<JournalStreamItem<Page, Entry, Cursor, Notification>> \| 'expired'>\(firstFrame, \{/u)
+  assert.match(open, /ms: this\.openDeadlineMs/u)
+  assert.match(open, /if \(bounded\.settled === 'deadline'\)/u)
+  assert.match(open, /delivered no opening item within/u)
+  // The bound's VALUE is the shared table's page-failure leaf, so the vendor face
+  // and the page hint flip in the same window instead of drifting copies.
+  assert.match(journal, /options\.openDeadlineMs \?\? LADDER_TABLES\.streamHealth\.loadingFailedMs/u)
+})
+
 test('the restart requires a probe-proven advance — no blind idle restart exists', () => {
   assert.match(checkStall, /const action = decideStreamStallAction\(/u)
   assert.match(checkStall, /if \(action !== 'probe'\) return/u)
@@ -48,6 +64,20 @@ test('the restart requires a probe-proven advance — no blind idle restart exis
   assert.doesNotMatch(checkStall.slice(advancedAt, restartAt), /\}/u, 'nothing may close the advanced branch before the restart')
   assert.match(checkStall, /this\.quietProbes \+= 1/u, 'no advance (or a failed probe) must widen the cadence')
   assert.doesNotMatch(checkStall, /if \(await this\.probeHostAdvance/u, 'the probe must not be read straight into the condition')
+  // The assistant stream advances under its own host revision while the durable
+  // cursor can stand still; dropping that signal leaves a stalled text stream
+  // un-rebuilt (the fork patch must keep BOTH advance proofs).
+  assert.match(probe, /const compared = this\.options\.compare\(next\.value\.cursor, applied\)/u)
+  assert.match(probe, /revision > this\.lastAssistantRevision/u)
+  assert.match(journal, /assistantStream\?: \{ revision\?: unknown \}/u)
+  // Removing the READ (keeping the type) left the suite green: pin the expression.
+  assert.match(journal, /assistantStream\?\.revision \?\? record\?\.revision/u)
+  // EVERY published value must advance the applied revision: a live stream delivers
+  // replace/notification without a new opening, and a stale applied revision made
+  // each probe claim an advance (periodic rebuild of a healthy long stream).
+  assert.match(journal, /this\.noteAssistantRevision\(change\.page, this\.generation\)/u)
+  assert.match(journal, /this\.noteAssistantRevision\(notification, this\.generation\)/u)
+  assert.match(journal, /this\.noteAssistantRevision\(page, this\.generation\)/u)
   assert.doesNotMatch(checkStall.slice(0, probeAt), /this\.stream\.restart\(\)/u, 'nothing before the probe may restart the stream')
 })
 
@@ -55,12 +85,18 @@ test('the user-initiated page read carries its own deadline', () => {
   const prepend = bodyOf(
     journal,
     '  async prepend(request: PageRequest): Promise<void> {',
-    '  /**\n   * chamber patch: bound one user-initiated page read.',
+    '  /** Replace the active physical generation while retaining the published window. */',
   )
-  assert.match(prepend, /this\.readPage\(request, this\.currentCursor\(\), this\.prependSignal\(\)\)/u)
-  assert.match(prepend, /this\.prependSignal\(\)/u, 'the read must not use the lifetime signal directly')
+  // The read owns a private AbortController composed with the lifetime signal and
+  // races the shared deadline primitive; the lifetime signal alone is never used.
+  assert.match(prepend, /const readAbort = new AbortController\(\)/u)
+  assert.match(prepend, /const signal = AbortSignal\.any\(\[this\.stream\.signal, readAbort\.signal\]\)/u)
+  assert.match(prepend, /this\.readPage\(request, this\.currentCursor\(\), signal\)/u)
+  assert.match(prepend, /await withDeadline\(reading, \{\n\s*ms: this\.stallTiming\.readDeadlineMs/u)
+  assert.match(prepend, /readAbort\.abort\(new Error\(/u)
+  assert.match(prepend, /history read deadline/u)
+  assert.match(prepend, /if \(bounded\.settled === 'deadline'\)/u)
   assert.doesNotMatch(prepend, /this\.readPage\(request, this\.currentCursor\(\), this\.stream\.signal\)/u, 'the read must not use the lifetime signal directly')
-  assert.match(journal, /return AbortSignal\.any\(\[this\.stream\.signal, AbortSignal\.timeout\(this\.stallTiming\.readDeadlineMs\)\]\)/u)
   assert.match(policy, /readDeadlineMs: 60_000/u)
 })
 
@@ -71,7 +107,7 @@ test('the probe compares the Host opening cursor against the applied one', () =>
   // restart arm silently — this lock plus the behavioral
   // probe test both pin the unwrapping.
   assert.match(probe, /next\.value\.type !== 'opened'/u)
-  assert.match(probe, /this\.options\.compare\(next\.value\.cursor, applied\) > 0/u)
+  assert.match(probe, /if \(compared > 0\) return true/u)
   assert.doesNotMatch(probe, /next\.value\.value/u)
   assert.match(probe, /deadline\.abort\(new Error\('journal stall probe deadline'\)\)/u)
   // (W2): the probe deadline moved to the shared deadline primitive, which owns
@@ -87,17 +123,19 @@ test('a dormancy backoff keeps a quiet stream from probing forever', () => {
   assert.match(checkStall, /quietProbes: this\.quietProbes/u)
   assert.match(checkStall, /this\.quietProbes \+= 1/u, 'a probe without advance must widen the cadence')
   assert.match(checkStall, /this\.quietProbes = 0/u, 'an advanced probe resets the cadence')
-  assert.match(journal, /this\.lastProgressAt = Date\.now\(\)\s*\n\s*this\.quietProbes = 0\s*\n\s*this\.options\.publish\(change\)/u)
+  assert.match(journal, /if \(change\.type === 'replace' \|\| change\.type === 'append'\) \{\s*\n\s*this\.lastProgressAt = elapsedClock\(\)\s*\n\s*this\.quietProbes = 0\s*\n\s*\}\s*\n\s*this\.options\.publish\(change\)/u)
   assert.match(policy, /export function streamStallProbeIntervalMs\(quietProbes: number, timing: StreamStallTiming\): number/u)
   assert.match(policy, /export const MAX_STREAM_STALL_PROBE_INTERVAL_MS = 90_000/u)
 })
 
-test('every published item advances the silence window', () => {
+test('only a replace/append publication advances the silence window', () => {
+  // Prepending old history and cursorless assistant frames reach the view but do
+  // NOT prove the durable tail advanced, so they must not postpone the probe.
   assert.match(
     journal,
-    /private publish\(change: RemoteJournalChange<Page, Entry, Notification>\): void \{\s*\n\s*this\.lastProgressAt = Date\.now\(\)\s*\n\s*this\.quietProbes = 0\s*\n\s*this\.options\.publish\(change\)/u,
+    /private publish\(change: RemoteJournalChange<Page, Entry, Notification>\): void \{\s*\n\s*if \(this\.disposed\) return\s*\n\s*if \(change\.type === 'replace' \|\| change\.type === 'append'\) \{\s*\n\s*this\.lastProgressAt = elapsedClock\(\)\s*\n\s*this\.quietProbes = 0\s*\n\s*\}\s*\n\s*this\.options\.publish\(change\)/u,
   )
-  assert.equal([...journal.matchAll(/this\.options\.publish\(/gu)].length, 1, 'publishing goes through the progress-marking wrapper')
+  assert.equal([...journal.matchAll(/this\.options\.publish\(/gu)].length, 1, 'publishing goes through the one progress-marking wrapper')
 })
 
 test('the watchdog timing stays a pure, import-free policy decision', () => {

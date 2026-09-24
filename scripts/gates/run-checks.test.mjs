@@ -607,7 +607,7 @@ test('the total-failure branch still exposes the surface with null scalars after
   const failure = await runShimFailureBranch({ shimText: SHIM_SOURCE })
   assert.equal(failure.attempts, 11, '1 + INFO_MAX_ATTEMPTS rejections must have been observed')
   assert.deepEqual(failure.scalars, { controlPlaneUrl: null, dshVersion: null, version: null, platform: null })
-  assert.equal(failure.namespaces.length, 9)
+  assert.equal(failure.namespaces.length, 10)
   assert.ok(failure.warnings.some((warning) => /info failed after 10 attempts/.test(warning)), 'the degradation must be loud')
 })
 test('re-injecting the installed shim is a no-op (P-19 marker) (G22)', async () => {

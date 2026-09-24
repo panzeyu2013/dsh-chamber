@@ -108,6 +108,7 @@
 /* ===== 渲染恢复放弃 ===== */
 "renderer.crashTitle" = "dsh-chamber 前端异常";
 "renderer.crashDetail" = "前端渲染进程反复无响应/崩溃，已停止自动恢复。请重新启动应用。";
+"renderer.recovering" = "页面正在恢复…";
 
 /* ===== sidecar 启动失败报告（SidecarStartupFailure） ===== */
 "sidecar.lockBusy" = "已有另一个 dsh-chamber 实例在运行";

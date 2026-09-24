@@ -32,6 +32,26 @@ struct CarrierTables: Equatable {
     let openingTimeoutLadderMs: [Double]
     let silentTeardownMinMs: Double
     let openingStallStreak: Int
+    /// The visible-page frame probe shared by both shells (delivery.scheduleProbe).
+    let scheduleProbeIntervalMs: Double
+    let scheduleProbeTimeoutMs: Double
+    let scheduleProbeStrikes: Int
+    let scheduleProbeInputBlockRttMs: Double
+    /// The delivery ladder's cheapest tier and its unresolved-retry bound.
+    let deliveryResyncGraceMs: Double
+    let deliveryResyncMax: Int
+    let deliveryUnresolvedRetryMax: Int
+    /// The delivery ladder's stuck-evidence tiers (instance reboot / document reload).
+    let deliveryRebootAfterMs: Double
+    let deliveryRebootCooldownMs: Double
+    let deliveryRebootMax: Int
+    let deliveryReloadAfterMs: Double
+    let deliveryReloadCooldownMs: Double
+    let deliveryReloadMax: Int
+    /// The carrier's own bounds: the WebSocket handshake deadline and the
+    /// opening-ledger key cap (top-level `tables` leaves).
+    let handshakeTimeoutMs: Double
+    let openingEpisodeKeysMax: Int
 
     /// Load from `tables.json`. Throws (never defaults) on a missing or malformed
     /// file: a shell running on an unchosen default is the failure mode this whole
@@ -53,6 +73,17 @@ struct CarrierTables: Equatable {
         guard let ladder = tables["openingTimeoutLadderMs"] as? [NSNumber], !ladder.isEmpty else {
             throw CarrierTableError.missingField("openingTimeoutLadderMs")
         }
+        guard let ladders = tables["ladders"] as? [String: Any],
+              let delivery = ladders["delivery"] as? [String: Any],
+              let scheduleProbe = delivery["scheduleProbe"] as? [String: Any] else {
+            throw CarrierTableError.missingField("ladders.delivery")
+        }
+        func nestedNumber(_ object: [String: Any], _ key: String) throws -> Double {
+            guard let value = object[key] as? NSNumber else {
+                throw CarrierTableError.missingField("ladders.delivery." + key)
+            }
+            return value.doubleValue
+        }
         return CarrierTables(
             rebuildWindowMs: try number("rebuildWindowMs"),
             maxRebuildsPerWindow: try integer("maxRebuildsPerWindow"),
@@ -60,7 +91,22 @@ struct CarrierTables: Equatable {
             inFlightGraceMs: try number("inFlightGraceMs"),
             openingTimeoutLadderMs: ladder.map(\.doubleValue),
             silentTeardownMinMs: try number("silentTeardownMinMs"),
-            openingStallStreak: try integer("openingStallStreak")
+            openingStallStreak: try integer("openingStallStreak"),
+            scheduleProbeIntervalMs: try nestedNumber(scheduleProbe, "intervalMs"),
+            scheduleProbeTimeoutMs: try nestedNumber(scheduleProbe, "timeoutMs"),
+            scheduleProbeStrikes: Int(try nestedNumber(scheduleProbe, "strikes")),
+            scheduleProbeInputBlockRttMs: try nestedNumber(scheduleProbe, "inputBlockRttMs"),
+            deliveryResyncGraceMs: try nestedNumber(delivery, "resyncGraceMs"),
+            deliveryResyncMax: Int(try nestedNumber(delivery, "resyncMax")),
+            deliveryUnresolvedRetryMax: Int(try nestedNumber(delivery, "unresolvedRetryMax")),
+            deliveryRebootAfterMs: try nestedNumber(delivery, "rebootAfterMs"),
+            deliveryRebootCooldownMs: try nestedNumber(delivery, "rebootCooldownMs"),
+            deliveryRebootMax: Int(try nestedNumber(delivery, "rebootMax")),
+            deliveryReloadAfterMs: try nestedNumber(delivery, "reloadAfterMs"),
+            deliveryReloadCooldownMs: try nestedNumber(delivery, "reloadCooldownMs"),
+            deliveryReloadMax: Int(try nestedNumber(delivery, "reloadMax")),
+            handshakeTimeoutMs: try number("handshakeTimeoutMs"),
+            openingEpisodeKeysMax: try integer("openingEpisodeKeysMax")
         )
     }
 }

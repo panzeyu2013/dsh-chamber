@@ -83,7 +83,6 @@ export function propertyLiterals(text: string, property: string): string[] {
 export function surfaces(): Surface[] {
   const state = sourceText('state.ts')
   const source = sourceText('source.ts')
-  const load = sourceText('load-state.ts')
   return [
     {
       name: 'CarrierEventKind',
@@ -94,8 +93,6 @@ export function surfaces(): Surface[] {
     { name: 'RecoveryEffect', file: 'state.ts', position: 'effect', literals: propertyLiterals(state, 'e') },
     { name: 'SourceEvent', file: 'source.ts', position: 'kind', literals: propertyLiterals(source, 'kind') },
     { name: 'SourceEffect', file: 'source.ts', position: 'effect', literals: propertyLiterals(source, 'e') },
-    { name: 'LoadEvent', file: 'load-state.ts', position: 'kind', literals: propertyLiterals(load, 'kind') },
-    { name: 'LoadEffect', file: 'load-state.ts', position: 'effect', literals: propertyLiterals(load, 'e') },
   ]
 }
 
@@ -153,12 +150,12 @@ export function staleExemptions(
 
 test('the declared surfaces are real and the corpus is non-empty', () => {
   const declared = surfaces()
-  assert.ok(declared.length >= 6, 'every lifecycle union must be declared')
+  assert.ok(declared.length >= 4, 'every lifecycle union must be declared')
   for (const surface of declared) {
     assert.ok(surface.literals.length >= 2, surface.name + ' parsed no literals - the extractor lost the union')
   }
   const corpus = productionCorpus()
-  assert.ok(corpus.includes('reduceCarrier') && corpus.includes('reduceLoadState'), 'the corpus must be the production sources')
+  assert.ok(corpus.includes('reduceCarrier') && corpus.includes('reduceSource'), 'the corpus must be the production sources')
 })
 
 test('every event kind and effect literal has a production producer or executor', () => {

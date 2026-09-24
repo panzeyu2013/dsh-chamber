@@ -105,9 +105,11 @@ export const GROUPS = {
     'bridge-manifest.test.ts',
     'bridge-shim.test.ts',
     'bridge-shim-surface.test.ts',
+    'test/ipc/bridge-shim-document.test.ts',
   ],
   // desktop-shell: OS-facing shell surfaces (deep links, open-in, notifications, badge) and the update lifecycle
   'desktop-shell': [
+    'test/desktop-shell/renderer-frame-watchdog.test.ts',
     'test/desktop-shell/notifications.test.ts',
     'test/desktop-shell/badge.test.ts',
     'test/desktop-shell/deep-link.test.ts',

@@ -83,7 +83,7 @@ final class ChamberMessageHandler: NSObject, WKScriptMessageHandler {
 
     /// invoke 上行回调（护栏全过后调用）：controller 在此转
     /// BridgeClient.invoke(method:payload:) → sidecar（语义校验在 sidecar）。
-    private let onInvoke: (Int, String, AnyCodable?) -> Void
+    private let onInvoke: (String, Int, String, AnyCodable?) -> Void
 
     /// 回写通道：controller 赋入（内部为 WKWebView.evaluateJavaScript，
     /// 主线程调用）。handler 只持闭包不持 webView（add 强持 handler，
@@ -106,7 +106,7 @@ final class ChamberMessageHandler: NSObject, WKScriptMessageHandler {
     init(whitelist: Set<String>,
          expectedOrigin: @escaping () -> String?,
          isQuitting: @escaping () -> Bool,
-         onInvoke: @escaping (Int, String, AnyCodable?) -> Void) {
+         onInvoke: @escaping (String, Int, String, AnyCodable?) -> Void) {
         self.whitelist = whitelist
         self.expectedOrigin = expectedOrigin
         self.isQuitting = isQuitting
@@ -140,12 +140,16 @@ final class ChamberMessageHandler: NSObject, WKScriptMessageHandler {
         case .accept(let id, let method, let payload):
             // 全过 → invoke 上行（controller → BridgeClient → sidecar；
             // 结果回写 __dshChamberResolve 属 controller/桥的职责，不在本文件）。
-            onInvoke(id, method, payload)
+            let documentId = (message.body as? [String: Any])?["documentId"] as? String
+            guard let documentId else { return } // fence already validated this field
+            onInvoke(documentId, id, method, payload)
         case .reject(let id, let code):
             // 仅当信封可解析出合法 id 时回执（否则无 Promise 可归因——静默
             // 丢弃，不向页面注入无法归因的 JS）。
             guard let id else { return }
-            reject(id: id, code: code)
+            guard let documentId = (message.body as? [String: Any])?["documentId"] as? String,
+                  UUID(uuidString: documentId) != nil else { return }
+            reject(documentId: documentId, id: id, code: code)
         case .drop:
             return
         }
@@ -211,7 +215,9 @@ final class ChamberMessageHandler: NSObject, WKScriptMessageHandler {
         if input.isQuitting {
             return .reject(id: addressableID, code: Self.codeAppQuitting)
         }
-        guard let envelope, let id = addressableID, let method = envelope["method"] as? String else {
+        guard let envelope, let id = addressableID, let method = envelope["method"] as? String,
+              let documentId = envelope["documentId"] as? String,
+              UUID(uuidString: documentId) != nil else {
             return .reject(id: addressableID, code: Self.codeMalformedEnvelope)
         }
         // 把「JSON 可表示性/深度/有限性预扫」与「payload → AnyCodable 转换」合成
@@ -278,12 +284,12 @@ final class ChamberMessageHandler: NSObject, WKScriptMessageHandler {
     static let codeAppQuitting = "app_quitting"
 
     /// 护栏不过 → 经 evaluateJavaScript 回 `__dshChamberResolve(id, null, 码)`。
-    private func reject(id: Int, code: String) {
+    private func reject(documentId: String, id: Int, code: String) {
         guard let token = nativeChannelToken else {
             shellLog("[shell] 原生通道令牌未注入，无法回执 \(code)（S-06）")
             return
         }
-        evaluateJavaScript?("__dshChamberResolve(\(Self.jsStringLiteral(token)), \(id), null, "
+        evaluateJavaScript?("__dshChamberResolve(\(Self.jsStringLiteral(token)), \(Self.jsStringLiteral(documentId)), \(id), null, "
             + "\(Self.jsStringLiteral(code)));")
     }
 

@@ -143,11 +143,10 @@ function gatewayFor(t: { after(fn: () => void): void }): GatewayHarness {
 /** Deterministic old-desktop state: one stopped session with an observed completion. */
 function seedOldDesktopState(store: ReturnType<typeof createSessionStateStore>): void {
   store.applyBaseline([baselineItem(LEGACY_SESSION, true, 5)], { at: 100 })
-  store.applyStatus(LEGACY_SESSION, false, 110)
-  store.settleCompletion(LEGACY_SESSION, {
+  const [edge] = store.applyStatus(LEGACY_SESSION, false, 110)
+  store.settleCompletion(edge!, {
     at: 110,
     turnEnd: { kind: 'completed', cause: null, at: 110, seq: 1 },
-    source: 'observed',
     unreadable: false,
   })
 }

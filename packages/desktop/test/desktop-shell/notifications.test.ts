@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { readFileSync } from 'node:fs';
 import { BoundedAckDeliveryQueue } from '../../deep-link.ts';
+import { notificationReceiptsFilePath } from '../../shell-core.ts';
 import { stripComments } from '../../../../scripts/dev/test-support/source-text.ts';
 import { hostileThrownValue } from './hostile.ts'
 import {
@@ -19,6 +20,7 @@ import {
   NOTIFICATION_DEDUPE_TTL_MS,
   MAX_PENDING_NOTIFICATION_OPENS,
   NotificationClaimWindow,
+  ShownNotificationReceipts,
   NotificationSourceIncarnations,
   NotificationSourceProofs,
   REMOTE_SOURCE_FINGERPRINT_PATTERN,
@@ -26,6 +28,7 @@ import {
   decideNotification,
   describeNativeNotificationFailure,
   interpretNativeNotificationReply,
+  notificationDeliveryKey,
   shouldFocusApplicationBeforeShowing,
   showNativeNotificationHonestly,
   validateNotificationRequest,
@@ -42,9 +45,107 @@ function makeRequest(overrides: Partial<NotificationRequest> = {}): Notification
     title: '会话已完成',
     body: 'local · 会话标题',
     requireHidden: false,
+    // Real complete/ask/request requests always carry a stable event key (the IPC
+    // boundary rejects them without one); the fixture models a real request.
+    eventKey: kindDefaultEventKey(overrides),
     ...overrides,
   };
 }
+
+/** 'test' banners have no identity; every other kind gets a stable fixture key. */
+function kindDefaultEventKey(overrides: Partial<NotificationRequest>): string | undefined {
+  return overrides.kind === 'test' ? undefined : 'run-1';
+}
+
+test('a shown receipt uses the stable event key across retries and isolates a later run', () => {
+  const receipts = new ShownNotificationReceipts(2)
+  const first = makeRequest({ eventKey: 'run-1' })
+  const retry = makeRequest({ eventKey: 'run-1', title: 'Retitled' })
+  const nextRun = makeRequest({ eventKey: 'run-2' })
+  receipts.record(first)
+  assert.equal(receipts.has(retry), true)
+  assert.equal(receipts.has(nextRun), false)
+  assert.notEqual(notificationDeliveryKey(first), notificationDeliveryKey(nextRun))
+  receipts.record(nextRun)
+  receipts.record(makeRequest({ eventKey: 'run-3' }))
+  assert.equal(receipts.has(first), false, 'bounded receipt table evicts the oldest delivery')
+})
+
+/** In-memory stand-in for the <userData> receipt file. */
+function memoryReceiptSeam(initial: string | null = null) {
+  let text = initial
+  return {
+    seam: { load: () => text, save: (next: string) => { text = next } },
+    read: () => text,
+  }
+}
+
+test('durable receipts: a host restart keeps the shown set, so a lost IPC reply cannot double-show', () => {
+  const disk = memoryReceiptSeam()
+  const first = new ShownNotificationReceipts(500, disk.seam)
+  first.record(makeRequest({ eventKey: 'run-1' }))
+  assert.ok((disk.read() ?? '').includes('run-1'))
+  const restarted = new ShownNotificationReceipts(500, disk.seam)
+  assert.equal(restarted.has(makeRequest({ eventKey: 'run-1' })), true)
+  assert.equal(restarted.has(makeRequest({ eventKey: 'run-2' })), false)
+})
+
+test('durable receipts: the persisted list is bounded with the newest entry last', () => {
+  const disk = memoryReceiptSeam()
+  const receipts = new ShownNotificationReceipts(2, disk.seam)
+  receipts.record(makeRequest({ eventKey: 'run-1' }))
+  receipts.record(makeRequest({ eventKey: 'run-2' }))
+  receipts.record(makeRequest({ eventKey: 'run-3' }))
+  const parsed = JSON.parse(disk.read()!) as { v: number; receipts: string[] }
+  assert.equal(parsed.v, 1)
+  assert.equal(parsed.receipts.length, 2)
+  assert.match(parsed.receipts[1]!, /run-3/)
+  const restarted = new ShownNotificationReceipts(2, disk.seam)
+  assert.equal(restarted.has(makeRequest({ eventKey: 'run-1' })), false, 'the evicted receipt never comes back')
+  assert.equal(restarted.has(makeRequest({ eventKey: 'run-3' })), true)
+})
+
+test('durable receipts: a corrupt payload starts empty and a failing save never throws', () => {
+  assert.equal(new ShownNotificationReceipts(500, memoryReceiptSeam('{not json').seam).has(makeRequest({ eventKey: 'run-1' })), false)
+  assert.equal(new ShownNotificationReceipts(500, memoryReceiptSeam(JSON.stringify({ v: 9, receipts: 'x' })).seam).has(makeRequest({ eventKey: 'run-1' })), false)
+  const failing = { load: () => null, save: () => { throw new Error('quota') } }
+  const receipts = new ShownNotificationReceipts(500, failing)
+  receipts.record(makeRequest({ eventKey: 'run-1' }))
+  assert.equal(receipts.has(makeRequest({ eventKey: 'run-1' })), true)
+})
+
+test('the receipt file is userData-scoped', () => {
+  assert.equal(notificationReceiptsFilePath('/tmp/ud'), '/tmp/ud/notification-receipts.json')
+})
+
+test('a renderer navigation drops claims the previous document can never settle', () => {
+  const claims = new NotificationClaimWindow()
+  const first = claims.claim(makeRequest({ eventKey: 'run-1' }), 1_000)
+  assert.equal(first.accepted, true)
+  assert.equal(claims.claim(makeRequest({ eventKey: 'run-1' }), 1_000).accepted, false, 'an in-flight claim dedupes')
+  claims.advanceGeneration()
+  assert.equal(claims.size, 0, 'the old document claim is dropped, not left to block the new one')
+  const second = claims.claim(makeRequest({ eventKey: 'run-1' }), 1_000)
+  assert.equal(second.accepted, true, 'the new document can claim the same event immediately')
+  if (first.accepted && second.accepted) {
+    claims.release(first.token)
+    assert.equal(claims.size, 1, 'a stale token cannot release the new claim')
+    claims.release(second.token)
+    assert.equal(claims.size, 0)
+  }
+})
+
+test('event keys are validated before entering the native notification path', () => {
+  assert.equal(validateNotificationRequest(makeRequest({ eventKey: '' })).ok, false)
+  assert.equal(validateNotificationRequest(makeRequest({ eventKey: 'x'.repeat(1_025) })).ok, false)
+  assert.equal(validateNotificationRequest(makeRequest({ eventKey: 'run-1' })).ok, true)
+  // Receipt-tracked events cannot fall back to watermark/null identity.
+  for (const kind of ['complete', 'ask', 'request'] as const) {
+    assert.equal(validateNotificationRequest(makeRequest({ kind, eventKey: undefined })).ok, false, kind + ' must carry an event key')
+  }
+  // The local probe banner is the only kind allowed to omit it.
+  assert.equal(validateNotificationRequest(makeRequest({ kind: 'test', eventKey: undefined, sessionId: '' })).ok, true)
+})
 
 function proofInstance(overrides: Partial<{
   id: string
@@ -311,7 +412,7 @@ test('claimNotificationDetailed: key space covers sourceId|sourceFingerprint|ses
 // 内容水位：claim 键的第五个分量
 // ---------------------------------------------------------------------------
 
-test('claimNotificationDetailed: watermark is event identity — same completion once, later completion not swallowed', () => {
+test('claimNotificationDetailed: the stable event key is event identity — same event once, later run not swallowed', () => {
   const now = 5_000_000;
   const firstCompletion = makeRequest({
     sourceId: 'gateway-a',
@@ -319,18 +420,20 @@ test('claimNotificationDetailed: watermark is event identity — same completion
     sessionId: 's1',
     kind: 'complete',
     watermark: 1_700_000_000_000,
+    eventKey: 'run-1',
   });
-  // 第二入口（gateway 事实源）对同一次完成必须传同一水位函数
-  // （complete = completedAt ?? updatedAt）⇒ 5s 内合并成一条横幅。
+  // Both notification entries derive eventKey from the SAME outbox identity for one
+  // completion, so a replay inside the TTL window merges into one banner.
   const sameCompletion = { ...firstCompletion };
-  // 同会话的下一次完成水位更高 ⇒ 新事件，不得被前一次的 claim 吞掉。
-  const nextCompletion = { ...firstCompletion, watermark: firstCompletion.watermark! + 60_000 };
+  // The next completion of that session mints a NEW identity (new eventKey) and must
+  // never be swallowed by the previous claim.
+  const nextCompletion = { ...firstCompletion, eventKey: 'run-2', watermark: firstCompletion.watermark! + 60_000 };
   assert.equal(claimNotificationDetailed(firstCompletion, now).accepted, true);
-  assert.equal(claimNotificationDetailed(sameCompletion, now + 100).accepted, false, '同一完成（同水位）不得被二次通知');
-  assert.equal(claimNotificationDetailed(nextCompletion, now + 200).accepted, true, '不同完成（水位更高）不得被吞');
+  assert.equal(claimNotificationDetailed(sameCompletion, now + 100).accepted, false, '同一事件（同 eventKey）不得被二次通知');
+  assert.equal(claimNotificationDetailed(nextCompletion, now + 200).accepted, true, '下一轮（新 eventKey）不得被吞');
 });
 
-test('claimNotificationDetailed: kind and fingerprint stay in the watermark-era key', () => {
+test('claimNotificationDetailed: kind and fingerprint stay in the identity key', () => {
   const now = 6_000_000;
   const complete = makeRequest({
     sourceId: 'gateway-a',
@@ -338,32 +441,33 @@ test('claimNotificationDetailed: kind and fingerprint stay in the watermark-era 
     sessionId: 's1',
     kind: 'complete',
     watermark: 42,
+    eventKey: 'run-1',
   });
-  const askAtSameWatermark = makeRequest({ ...complete, kind: 'ask' });
+  const askAtSameWatermark = makeRequest({ ...complete, kind: 'ask', eventKey: 'run-1-ask' });
   const freshHost = makeRequest({ ...complete, sourceFingerprint: 'b'.repeat(64) });
   assert.equal(claimNotificationDetailed(complete, now).accepted, true);
   assert.equal(claimNotificationDetailed(askAtSameWatermark, now + 1).accepted, true, '同水位的 ask 不得被 complete 吞并');
   assert.equal(claimNotificationDetailed(freshHost, now + 1).accepted, true, 'same-id 换宿主（新 fingerprint）不继承旧 claim');
 });
 
-test('NotificationClaimWindow: the claim key is the five-tuple with watermark ?? null (L13)', () => {
+test('NotificationClaimWindow: the claim key is the five-tuple with the stable event key (L13)', () => {
   const claims = new NotificationClaimWindow();
-  const stamped = claims.claim(makeRequest({ watermark: 123 }), 1_000);
+  const stamped = claims.claim(makeRequest({ watermark: 123, eventKey: 'run-1' }), 1_000);
   assert.equal(stamped.accepted, true);
   if (!stamped.accepted || stamped.token === null) throw new Error('expected a claim token');
-  assert.equal(stamped.token.key, JSON.stringify(['local', 'local', 's1', 'complete', 123]));
-  // 缺省水位序列化为 null：旧调用方的键是同一四元组 + 恒 null 的第五项，
-  // 行为与升级前逐字一致。
-  const legacy = claims.claim(makeRequest({ sessionId: 'legacy' }), 1_000);
-  assert.equal(legacy.accepted, true);
-  if (!legacy.accepted || legacy.token === null) throw new Error('expected a claim token');
-  assert.equal(legacy.token.key, JSON.stringify(['local', 'local', 'legacy', 'complete', null]));
-  // watermark: 0 是合法水位且不与缺省混淆（?? 只折叠 null/undefined，不折叠 0）。
-  const zero = claims.claim(makeRequest({ sessionId: 'zero', watermark: 0 }), 1_000);
-  assert.equal(zero.accepted, true);
-  if (!zero.accepted || zero.token === null) throw new Error('expected a claim token');
-  assert.equal(zero.token.key, JSON.stringify(['local', 'local', 'zero', 'complete', 0]));
-  assert.equal(legacy.token.key === zero.token.key, false, '缺省 null 与显式 0 是两个事件');
+  assert.equal(stamped.token.key, JSON.stringify(['local', 'local', 's1', 'complete', 'run-1']));
+  // A different run of the same session is a different key even at the same watermark.
+  const second = claims.claim(makeRequest({ sessionId: 'legacy', watermark: 123, eventKey: 'run-2' }), 1_000);
+  assert.equal(second.accepted, true);
+  if (!second.accepted || second.token === null) throw new Error('expected a claim token');
+  assert.equal(second.token.key, JSON.stringify(['local', 'local', 'legacy', 'complete', 'run-2']));
+  // The local 'test' banner has no identity: its fifth component is null, and it is
+  // not receipt-tracked anyway (decideNotification bypasses the claim for it).
+  const testBanner = claims.claim(makeRequest({ sessionId: 'probe', kind: 'test' }), 1_000);
+  assert.equal(testBanner.accepted, true);
+  assert.equal(testBanner.token, null, 'the local probe bypasses the claim window entirely');
+  assert.equal(notificationDeliveryKey(makeRequest({ sessionId: 'probe', kind: 'test' })),
+    JSON.stringify(['local', 'local', 'probe', 'test', null]));
 });
 
 test('NotificationClaimWindow has a hard cap, O(1) expiry queue, and conditional release', () => {
@@ -457,9 +561,15 @@ test('interpretNativeNotificationReply: explicit outcomes are authoritative; unk
     error: 'native notification was not shown',
   });
   assert.deepEqual(interpretNativeNotificationReply({ shown: true, error: 'ignored' }), { shown: true });
-  // 该线协议下 leg 只以 edge 错误报告失败，ok 的 null 应答保持 shown:true。
-  assert.deepEqual(interpretNativeNotificationReply(null), { shown: true });
-  assert.deepEqual(interpretNativeNotificationReply(undefined), { shown: true });
+  // 无显示回执（null/undefined）不得推断为已显示（P-06 修订）：回执按 retryable 结算，
+  // 投递账本以同一 eventKey 重试，宿主回执去重保证至多一次横幅。
+  const noReceipt = {
+    shown: false,
+    error: 'native notification leg returned no display receipt',
+    failureClass: 'retryable' as const,
+  };
+  assert.deepEqual(interpretNativeNotificationReply(null), noReceipt);
+  assert.deepEqual(interpretNativeNotificationReply(undefined), noReceipt);
   // 不认识的形状（数组/数字/无 shown 的对象）一律失败。
   for (const weird of [[], 0, 'ok', {}, { ok: true }]) {
     assert.equal(interpretNativeNotificationReply(weird).shown, false, `${JSON.stringify(weird)} 不得被采信为成功`);

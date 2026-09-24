@@ -169,7 +169,7 @@ test('P3：揭幕信号来自会话面 DOM 事实，窗口锚在本次持有起�
     '相位读取必须从 [data-conversation-scroll] 反查祖先（composer 也发 data-phase，first-match 不可靠）',
   )
   // App 侧接线锁：paint resolver 是纯接线、node 单测覆盖不到，
-  // 只能按本仓既有惯例（baseline-harvest/session-liveness-wiring 同款）读源码钉住——
+  // 只能按本仓既有惯例（baseline-harvest/session-authority-wiring 同款）读源码钉住——
   // 否则"改回静态 cut 或漏传第三参"会让命名组硬切静默消失。
   const app = read('../../src/App.tsx')
   assert.ok(

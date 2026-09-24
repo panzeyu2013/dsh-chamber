@@ -544,7 +544,7 @@ const P2_PAYLOAD_GOLDEN: Record<string, string[]> = {
   OpenInAppInfo: ['available: boolean', 'displayKind: string', 'id: string', 'remoteCapable: boolean'],
   DeepLinkIntent: ['attempt: number', 'deliveryId: number', 'instanceId: string', 'path: string', 'sourceFingerprint: string'],
   NotificationRequest: [
-    'body: string', "kind: 'complete' | 'ask' | 'request' | 'test'", 'requireHidden: boolean',
+    'body: string', 'eventKey?: string', "kind: 'complete' | 'ask' | 'request' | 'test'", 'requireHidden: boolean',
     'sessionId: string', 'sourceFingerprint: string', 'sourceId: string', 'title: string',
     // 内容水位：desktop 侧 notifications.ts 与 preload.cts 双侧
     // 可选字段；renderer global.d.ts 必须同步镜像。
@@ -961,14 +961,12 @@ function collectPreloadChannels(source: string, call: 'invoke' | 'on'): string[]
 }
 
 /** Send-side channels: webContents.send(...) text plus the rendererPush(IPC_CHANNELS.X)
- *  leaf calls (main.ts names the registry/status channels inline and forwards them
- *  to rendererPush; the 4.4b shell-assembly-shared funnel is not adopted);
- *  the union is what must equal the preload on-set. */
+ *  leaf calls (the committed-push helpers live in host-assembly.ts, which is part of
+ *  MAIN_SIDE_FILES); the union is what must equal the preload on-set. */
 function collectMainSendChannels(source: string): string[] {
   return [...new Set([
     ...collectMainChannels(source, 'webContents.send'),
     ...collectMainChannels(source, 'rendererPush'),
-    ...collectMainChannels(source, 'pushCommitted'),
   ])].sort()
 }
 

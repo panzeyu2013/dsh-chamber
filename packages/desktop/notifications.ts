@@ -41,6 +41,8 @@ export interface NotificationRequest {
    * 吞掉。**缺省** = 键里序列化为 `null`，即不含水位的四元组身份。
    */
   watermark?: number
+  /** Stable outbox identity; retries keep it unchanged even after a document reload. */
+  eventKey?: string
 }
 
 /** A native-notification click held until the renderer has installed its
@@ -270,11 +272,86 @@ export const NATIVE_NOTIFICATION_RATE_WINDOW_MS = 5_000;
 // Native notifications may outlive the rate window. Keep their Electron
 // object/OS-listener ownership separately bounded across successive windows.
 export const MAX_ACTIVE_NATIVE_NOTIFICATIONS = 16;
+/** Durable shown-receipt cap: one banner per completed run survives a host reload. */
+export const MAX_SHOWN_NOTIFICATION_RECEIPTS = 500;
 export const NATIVE_NOTIFICATION_OUTCOME_TIMEOUT_MS = 5_000;
 
 export interface NotificationClaimToken {
   readonly key: string
   readonly claimedAt: number
+  /** Renderer navigation generation that minted this claim. */
+  readonly generation: number
+}
+
+export function notificationDeliveryKey(request: NotificationRequest): string {
+  return JSON.stringify([
+    request.sourceId, request.sourceFingerprint, request.sessionId, request.kind,
+    // complete/ask/request carry a required eventKey (enforced at the IPC boundary);
+    // only the local 'test' banner has no identity, and it bypasses claim + receipts.
+    request.eventKey ?? null,
+  ])
+}
+
+/**
+ * Persistence seam for {@link ShownNotificationReceipts}. The host supplies the
+ * file; this pure module stays fs-free, and a failing seam degrades to the
+ * in-memory map (an already-shown banner must never fail on a receipt write).
+ */
+export interface ShownReceiptsSeam {
+  load(): string | null
+  save(text: string): void
+}
+
+/** Host-side shown receipts make a lost renderer IPC reply idempotent. With a
+ * seam they also survive a host restart (design 19 §6 D2); without one they are
+ * per-process only. */
+export class ShownNotificationReceipts {
+  readonly #shown = new Map<string, number>()
+  readonly #seam: ShownReceiptsSeam | undefined
+  readonly limit: number
+  constructor(limit = MAX_SHOWN_NOTIFICATION_RECEIPTS, seam?: ShownReceiptsSeam) {
+    this.limit = limit
+    this.#seam = seam
+    if (seam !== undefined) this.#restore(seam.load())
+  }
+  has(request: NotificationRequest): boolean { return this.#shown.has(notificationDeliveryKey(request)) }
+  record(request: NotificationRequest): void {
+    const key = notificationDeliveryKey(request)
+    this.#shown.delete(key)
+    this.#shown.set(key, Date.now())
+    while (this.#shown.size > this.limit) {
+      const oldest = this.#shown.keys().next().value
+      if (oldest === undefined) break
+      this.#shown.delete(oldest)
+    }
+    this.#flush()
+  }
+  /** Corrupt/foreign payloads are dropped whole: a lost receipt can re-show once,
+   * while a wrong one would suppress a real banner. Newest entry is last. */
+  #restore(raw: string | null): void {
+    if (raw === null || raw === '') return
+    try {
+      const parsed: unknown = JSON.parse(raw)
+      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return
+      const receipts = (parsed as { receipts?: unknown }).receipts
+      if (!Array.isArray(receipts)) return
+      for (const key of receipts) {
+        if (typeof key !== 'string' || key.length === 0 || key.length > 1_024) continue
+        this.#shown.delete(key)
+        this.#shown.set(key, 0)
+        while (this.#shown.size > this.limit) {
+          const oldest = this.#shown.keys().next().value
+          if (oldest === undefined) break
+          this.#shown.delete(oldest)
+        }
+      }
+    } catch { /* corrupt receipt file: start empty (at most one duplicate banner) */ }
+  }
+  #flush(): void {
+    if (this.#seam === undefined) return
+    try { this.#seam.save(JSON.stringify({ v: 1, receipts: [...this.#shown.keys()] })) }
+    catch { /* receipt persistence must never fail an already-shown banner */ }
+  }
 }
 
 export type NotificationClaimResult =
@@ -289,6 +366,7 @@ export class NotificationClaimWindow {
   readonly #claims = new Map<string, NotificationClaimToken>()
   #order: NotificationClaimToken[] = []
   #head = 0
+  #generation = 0
 
   constructor(limit = MAX_NOTIFICATION_CLAIMS, ttlMs = NOTIFICATION_DEDUPE_TTL_MS) {
     if (!Number.isInteger(limit) || limit < 1) throw new RangeError('notification claim limit must be a positive integer')
@@ -335,19 +413,13 @@ export class NotificationClaimWindow {
     // session is a new event. `kind` stays in the key — ask and complete at the
     // same watermark must not swallow each other. An omitted watermark
     // serializes as `null` — the four-tuple identity without it.
-    const key = JSON.stringify([
-      request.sourceId,
-      request.sourceFingerprint,
-      request.sessionId,
-      request.kind,
-      request.watermark ?? null,
-    ])
+    const key = notificationDeliveryKey(request)
     const existing = this.#claims.get(key)
     if (existing !== undefined && now - existing.claimedAt < this.#ttlMs) {
       return { accepted: false, reason: 'duplicate' }
     }
     if (this.#claims.size >= this.#limit) return { accepted: false, reason: 'saturated' }
-    const token = Object.freeze({ key, claimedAt: now })
+    const token = Object.freeze({ key, claimedAt: now, generation: this.#generation })
     this.#claims.set(key, token)
     this.#order.push(token)
     this.#compactIfNeeded()
@@ -360,6 +432,23 @@ export class NotificationClaimWindow {
   release(token: NotificationClaimToken | null): void {
     if (token === null || this.#claims.get(token.key) !== token) return
     this.#claims.delete(token.key)
+  }
+
+  /**
+   * Renderer navigation fence: a claim minted by the previous document can never
+   * settle honestly, so drop it instead of letting it block the new document's
+   * same-key claim for the whole TTL (a completion would be silently swallowed
+   * right after a reload). Stale tokens stay inert either way (object identity).
+   */
+  advanceGeneration(): void {
+    this.#generation += 1
+    for (const [key, token] of this.#claims) {
+      if (token.generation !== this.#generation) this.#claims.delete(key)
+    }
+  }
+
+  get generation(): number {
+    return this.#generation
   }
 
   get size(): number {
@@ -385,6 +474,11 @@ export function claimNotificationDetailed(request: NotificationRequest, now: num
 
 export function releaseNotificationClaim(token: NotificationClaimToken | null): void {
   notificationClaims.release(token)
+}
+
+/** Called on every renderer navigation start (shell-core onRendererLifecycle). */
+export function advanceNotificationClaimGeneration(): void {
+  notificationClaims.advanceGeneration()
 }
 
 /** Fixed-cap sliding window shared by all native show attempts, including
@@ -575,7 +669,7 @@ export function describeNativeNotificationFailure(
 
 /** 把 Swift 宿主腿的 showNativeNotification 应答折成 honest-show 结果
  *  （共享 node-edges/notifications 面）：
- *  - `null` / `undefined`：旧线协议（edge ok 即视为已调度）→ shown:true；
+ *  - `null` / `undefined`：没有显示回执，不得推断已显示；
  *  - `{shown:true}`：显式成功；
  *  - `{shown:false,error?}`：显式失败（未授权 / 调度失败）→ 回执 false，core
  *    据此释放 5s 去重 claim（shell-core maybeShowNativeNotification），
@@ -584,10 +678,12 @@ export function describeNativeNotificationFailure(
  *  Swift 侧须在授权检查失败/调度超时时回 {shown:false,error}。 */
 export function interpretNativeNotificationReply(
   reply: unknown,
-): { shown: true } | { shown: false; error: string } {
-  if (reply === null || reply === undefined) return { shown: true };
+): { shown: true } | { shown: false; error: string; failureClass?: 'retryable' | 'permanent' } {
+  if (reply === null || reply === undefined) {
+    return { shown: false, error: 'native notification leg returned no display receipt', failureClass: 'retryable' };
+  }
   if (typeof reply === 'object' && !Array.isArray(reply)) {
-    const record = reply as { shown?: unknown; error?: unknown };
+    const record = reply as { shown?: unknown; error?: unknown; failureClass?: unknown };
     if (record.shown === true) return { shown: true };
     if (record.shown === false) {
       return {
@@ -595,6 +691,8 @@ export function interpretNativeNotificationReply(
         error: typeof record.error === 'string' && record.error.length > 0
           ? record.error
           : 'native notification was not shown',
+        ...(record.failureClass === 'permanent' || record.failureClass === 'retryable'
+          ? { failureClass: record.failureClass } : {}),
       };
     }
   }
@@ -710,6 +808,17 @@ export function validateNotificationRequest(
     }
     watermark = record.watermark;
   }
+  // complete/ask/request are receipt-tracked events: their identity must be
+  // explicit, never inferred from a watermark (or null) that a later event can share.
+  // Only the local 'test' banner (no claim, no receipt) may omit it.
+  if (record.kind !== 'test') {
+    if (typeof record.eventKey !== 'string' || record.eventKey.length === 0 || record.eventKey.length > 1_024) {
+      return { ok: false, error: 'eventKey must be a non-empty string of at most 1024 characters for complete/ask/request' };
+    }
+  } else if (record.eventKey !== undefined && (typeof record.eventKey !== 'string'
+      || record.eventKey.length === 0 || record.eventKey.length > 1_024)) {
+    return { ok: false, error: 'eventKey must be a non-empty string of at most 1024 characters when present' };
+  }
   return {
     ok: true,
     request: {
@@ -721,6 +830,7 @@ export function validateNotificationRequest(
       body: record.body,
       requireHidden: record.requireHidden,
       ...(watermark === undefined ? {} : { watermark }),
+      ...(record.eventKey === undefined ? {} : { eventKey: record.eventKey as string }),
     },
   };
 }

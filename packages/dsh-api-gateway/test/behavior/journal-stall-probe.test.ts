@@ -97,30 +97,56 @@ const TIMING = {
   readDeadlineMs: 50,
 }
 
+function journalOptions(published: string[], openDeadlineMs?: number) {
+  return {
+    name: 'test journal',
+    emptyCursor: -1,
+    entries: (page: { entries: unknown[] }) => page.entries,
+    hasMore: () => false,
+    first: (entry: { seq: number }) => entry.seq,
+    last: (entry: { seq: number }) => entry.seq,
+    compare: (left: number, right: number) => left - right,
+    follows: (left: number, right: number) => right === left + 1,
+    publish: (change: { type: string }) => { published.push(change.type) },
+    failed: (error: unknown) => { throw error },
+    stall: TIMING,
+    ...(openDeadlineMs === undefined ? {} : { openDeadlineMs }),
+  }
+}
+
 function journal(cursors: number[], failProbes = false, stubborn = false) {
   const stream = fakeLogicalStream([{ type: 'opened', cursor: 5, page: { entries: [{ seq: 5 }] } }])
   const published: string[] = []
   const JournalClass = stubborn ? StubbornJournal : ScriptedJournal
   const journalStream = new JournalClass(
     { $stream: () => stream },
-    {
-      name: 'test journal',
-      emptyCursor: -1,
-      entries: (page: { entries: unknown[] }) => page.entries,
-      hasMore: () => false,
-      first: (entry: { seq: number }) => entry.seq,
-      last: (entry: { seq: number }) => entry.seq,
-      compare: (left: number, right: number) => left - right,
-      follows: (left: number, right: number) => right === left + 1,
-      publish: (change: { type: string }) => { published.push(change.type) },
-      failed: (error: unknown) => { throw error },
-      stall: TIMING,
-    },
+    journalOptions(published),
     cursors,
     failProbes,
   )
   journalStream.published = published
   return { journalStream, stream, published }
+}
+
+/** One logical stream whose opening frame never arrives, with a prompt dispose. */
+function silentLogicalStream() {
+  const controller = new AbortController()
+  const calls = { disposed: 0 }
+  const iterator = (async function* () {
+    await new Promise<void>((resolve) => {
+      controller.signal.addEventListener('abort', () => { resolve() }, { once: true })
+    })
+  })()
+  return {
+    calls,
+    get signal(): AbortSignal { return controller.signal },
+    restart(): void {},
+    async dispose(): Promise<void> {
+      calls.disposed += 1
+      controller.abort(new Error('disposed'))
+    },
+    [Symbol.asyncIterator]: () => iterator,
+  }
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => { setTimeout(resolve, ms) })
@@ -142,6 +168,29 @@ test('opening publishes the window and arms the watchdog', async () => {
   assert.deepEqual(published, ['replace'])
   assert.ok(await pollUntil(() => journalStream.probeCount >= 1, 1_000), 'a silent opened journal must start probing the Host')
   await journalStream.dispose()
+})
+
+test('a logical open with no opening frame fails at its total deadline and disposes', async () => {
+  // The carrier's per-episode opening budget bounds ONE physical attempt; the
+  // logical open retries generations. Without a total bound this promise stayed
+  // pending forever and the vendor Session stayed latched at 'loading'.
+  const stream = silentLogicalStream()
+  const published: string[] = []
+  const journalStream = new ScriptedJournal(
+    { $stream: () => stream },
+    journalOptions(published, 40),
+    [],
+    false,
+  )
+  await assert.rejects(
+    journalStream.open({ maxMessages: 10 }),
+    /delivered no opening item within 40ms/,
+    'the stuck open must reject with the domain failure, not await forever',
+  )
+  assert.ok(stream.calls.disposed >= 1, 'the stuck logical stream must be disposed, not left in flight')
+  assert.deepEqual(published, [], 'no opening window may be published for a frame that never arrived')
+  await assert.rejects(journalStream.open({ maxMessages: 10 }), /already opened/,
+    'a stuck open is not retried in place: recovery is a new stream/resync')
 })
 
 test('a probe that finds no Host advance never restarts the generation', async () => {

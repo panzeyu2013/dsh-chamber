@@ -12,10 +12,30 @@ import type {
   RemoteStreamItem,
   RemoteStreamOptions,
 } from './remote-stream.ts'
-import { withDeadline } from '@dsh-chamber/dsh-stream-state'
+import { LADDER_TABLES, withDeadline } from '@dsh-chamber/dsh-stream-state'
 
 function protocolViolation(message: string): RemoteError<'gateway/internal'> {
   return new RemoteError('gateway/internal', message, {})
+}
+
+/** Probe intervals measure elapsed time, never wall-clock adjustments. */
+function elapsedClock(): number {
+  return typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now()
+}
+
+/** Host assistant revision on any page or notification, read structurally: this
+ *  base class is generic, so a value without `assistantStream.revision` yields
+ *  undefined and the stall probe falls back to the cursor comparison alone. */
+function assistantRevisionOf(value: unknown): number | undefined {
+  const record = value as { revision?: unknown; assistantStream?: { revision?: unknown } } | null | undefined
+  // Pages carry it under assistantStream; a delivered SessionAssistantStreamFrame
+  // (the notification payload) carries it at the TOP level. Reading only the page
+  // shape made the notification note dead code and left a healthy long stream
+  // looking "advanced" on every probe.
+  const revision = record?.assistantStream?.revision ?? record?.revision
+  return typeof revision === 'number' && Number.isSafeInteger(revision) && revision >= 0 ? revision : undefined
 }
 
 /** Transport-neutral opening snapshot, durable entry, or cursorless notification. */
@@ -85,6 +105,17 @@ export interface RemoteJournalStreamOptions<Page, Entry, Cursor, Notification = 
    * every existing consumer, which takes {@link DEFAULT_STREAM_STALL_TIMING}.
    */
   readonly stall?: Partial<StreamStallTiming>
+  /**
+   * chamber patch (design 14 §D4): total deadline for ONE `open()` across every
+   * physical generation it retries. The carrier's per-episode opening budget bounds
+   * a single attempt only; a host that never answers would otherwise leave the
+   * logical open pending forever and the vendor Session latched at `loading`.
+   * Expiry rejects with a RemoteError, so the domain face reaches its own `error`
+   * state. Defaults to the page's own failing bound
+   * ({@link LADDER_TABLES.streamHealth.loadingFailedMs}), keeping both faces in one
+   * window.
+   */
+  readonly openDeadlineMs?: number
   /** Publish a terminal stream, page, or protocol failure after opening. */
   readonly failed: (error: unknown) => void
 }
@@ -106,15 +137,26 @@ export abstract class RemoteJournalStream<
   private generation = 0
   private firstCursor: Cursor | undefined
   private lastCursor: Cursor | undefined
+  /** Newest host assistant-stream revision observed on ANY published page or
+   *  notification. The session journal advances assistant output under its own
+   *  revision while the persisted event cursor can stand still (vendor
+   *  transport.ts:193). Tracking only openings left a live stream's applied
+   *  revision stale, so every probe reported an advance and a healthy long stream
+   *  was rebuilt periodically. */
+  private lastAssistantRevision: number | undefined
+  /** Generation the revision belongs to: a replacement host agent restarts frames at 1. */
+  private lastAssistantGeneration: number | undefined
+  /** Invalidate page reads that started against a replaced or prepended window. */
+  private windowRevision = 0
   private started = false
   private opened = false
   private disposed = false
   private done: Promise<void> | undefined
   private closing: Promise<void> | undefined
   private pendingNext: Promise<IteratorResult<JournalStreamItem<Page, Entry, Cursor, Notification>>> | undefined
-  // chamber patch (design 14 §D4): silence watchdog state. `lastProgressAt`
-  // advances on every published item, so a stream that keeps producing never
-  // reaches the probe window at all.
+  // The watchdog tracks the durable tail, not every publication. Cursorless
+  // assistant frames and older-page prepends do not prove that live records are
+  // still arriving, so they cannot postpone a sibling follow indefinitely.
   private readonly stallTiming: StreamStallTiming
   private stallTimer: ReturnType<typeof setInterval> | undefined
   private lastProgressAt: number
@@ -123,6 +165,8 @@ export abstract class RemoteJournalStream<
   private probing = false
   /** Consecutive probes that found no Host advance (widens the probe cadence). */
   private quietProbes = 0
+  /** Total deadline for one logical open's first frame (see options). */
+  private readonly openDeadlineMs: number
 
   /**
    * @param remote - Gateway factory for the reconnecting physical-generation stream.
@@ -132,8 +176,9 @@ export abstract class RemoteJournalStream<
     remote: RemoteStreamFactory,
     private readonly options: RemoteJournalStreamOptions<Page, Entry, Cursor, Notification>,
   ) {
+    this.openDeadlineMs = options.openDeadlineMs ?? LADDER_TABLES.streamHealth.loadingFailedMs
     this.stallTiming = { ...DEFAULT_STREAM_STALL_TIMING, ...options.stall }
-    this.lastProgressAt = Date.now()
+    this.lastProgressAt = elapsedClock()
     this.stream = remote.$stream<RemoteJournalFrame<Entry, Cursor, Page, Notification>>({
       name: options.name,
       open: signal => this.follow(this.initialRequest, signal),
@@ -190,8 +235,25 @@ export abstract class RemoteJournalStream<
     this.started = true
     this.initialRequest = request
     const iterator = this.stream[Symbol.asyncIterator]()
+    const firstFrame = this.takeNext(iterator)
     try {
-      const first = await this.takeNext(iterator)
+      // chamber patch (design 14 §D4): the carrier's opening budget bounds ONE
+      // physical attempt, while the logical open retries generations. Without this
+      // total bound a host that never answers leaves this promise pending and the
+      // vendor Session latched at 'loading' with no retry lever. Expiry rejects with
+      // a RemoteError, so the domain face reaches its own 'error' state; the bound is
+      // the page's failing bound, so both faces flip in the same window.
+      const bounded = await withDeadline<IteratorResult<JournalStreamItem<Page, Entry, Cursor, Notification>> | 'expired'>(firstFrame, {
+        ms: this.openDeadlineMs,
+        onExpire: () => 'expired' as const,
+        scheduler: UNREF_SCHEDULER,
+      })
+      if (bounded.settled === 'deadline') {
+        throw protocolViolation(
+          `${this.options.name} delivered no opening item within ${String(this.openDeadlineMs)}ms`,
+        )
+      }
+      const first = bounded.value as IteratorResult<JournalStreamItem<Page, Entry, Cursor, Notification>>
       if (first.done) throw protocolViolation(`${this.options.name} ended before its opening cursor`)
       this.replaceGeneration(first.value, false)
       this.opened = true
@@ -199,6 +261,9 @@ export abstract class RemoteJournalStream<
       this.done = this.consume(iterator)
     } catch (error) {
       await this.stream.dispose()
+      // The losing read settles with the disposed generation; its rejection must
+      // never surface as an unhandled rejection.
+      void firstFrame.catch(() => undefined)
       throw error
     }
   }
@@ -210,8 +275,27 @@ export abstract class RemoteJournalStream<
    */
   async prepend(request: PageRequest): Promise<void> {
     if (!this.opened || this.disposed) throw new Error(`${this.options.name} is not open`)
-    const page = await this.readPage(request, this.currentCursor(), this.prependSignal())
+    const revision = this.windowRevision
+    const readAbort = new AbortController()
+    const signal = AbortSignal.any([this.stream.signal, readAbort.signal])
+    const reading = this.readPage(request, this.currentCursor(), signal)
+    // AbortSignal.timeout alone is not a deadline: a transport that ignores it
+    // leaves the awaited promise pending forever. Race the read itself, then
+    // discard any late result through the window/lifetime fences below.
+    const bounded = await withDeadline(reading, {
+      ms: this.stallTiming.readDeadlineMs,
+      onExpire: () => {
+        readAbort.abort(new Error(`${this.options.name} history read deadline`))
+        return undefined as Page
+      },
+      scheduler: UNREF_SCHEDULER,
+    })
+    if (bounded.settled === 'deadline') {
+      throw protocolViolation(`${this.options.name} history read exceeded ${String(this.stallTiming.readDeadlineMs)}ms`)
+    }
+    const page = bounded.value as Page
     this.stream.signal.throwIfAborted()
+    if (revision !== this.windowRevision) return
     const entries = this.options.entries(page)
     this.assertPage(entries)
     const before = this.firstCursor
@@ -226,23 +310,13 @@ export abstract class RemoteJournalStream<
     }
     const first = accepted[0]
     if (first !== undefined) this.firstCursor = this.options.first(first)
+    this.windowRevision++
     this.publish({
       type: 'prepend',
       page,
       entries: accepted,
       hasMore: this.options.hasMore(page),
     })
-  }
-
-  /**
-   * chamber patch: bound one user-initiated page read. `prepend`
-   * reads on the stream's LIFETIME signal, so a generation restart cannot abort
-   * it — a hung page request would leave "load older" stuck forever with no
-   * error edge. The deadline turns that into an ordinary rejected read (the
-   * vendor `loadOlder()` catches it and clears its busy flag).
-   */
-  private prependSignal(): AbortSignal {
-    return AbortSignal.any([this.stream.signal, AbortSignal.timeout(this.stallTiming.readDeadlineMs)])
   }
 
   /** Replace the active physical generation while retaining the published window. */
@@ -268,14 +342,21 @@ export abstract class RemoteJournalStream<
   }
 
   /**
-   * chamber patch (design 14 §D4): publish one change and mark live
-   * progress for the silence watchdog (opening windows, appends, prepends and
-   * cursorless notifications all count — a streaming assistant keeps them coming).
+   * Publish one change. Only a fresh opening window or live append proves that
+   * the durable tail advanced. Prepending old history and receiving cursorless
+   * assistant frames may still update the view, but cannot clear evidence of a
+   * missing live record or postpone the independent Host cursor probe.
    */
   private publish(change: RemoteJournalChange<Page, Entry, Notification>): void {
-    this.lastProgressAt = Date.now()
-    this.quietProbes = 0
+    if (this.disposed) return
+    if (change.type === 'replace' || change.type === 'append') {
+      this.lastProgressAt = elapsedClock()
+      this.quietProbes = 0
+    }
     this.options.publish(change)
+    // AFTER the pinned progress/delivery body: every published page advances the
+    // applied assistant revision (replace/prepend carry a page; append does not).
+    if (change.type === 'replace' || change.type === 'prepend') this.noteAssistantRevision(change.page, this.generation)
   }
 
   /**
@@ -314,7 +395,7 @@ export abstract class RemoteJournalStream<
   private async checkStall(): Promise<void> {
     if (this.disposed || this.probing) return
     const action = decideStreamStallAction({
-      now: Date.now(),
+      now: elapsedClock(),
       lastProgressAt: this.lastProgressAt,
       lastProbeAt: this.lastProbeAt,
       lastRestartAt: this.lastRestartAt,
@@ -323,7 +404,7 @@ export abstract class RemoteJournalStream<
     }, this.stallTiming)
     if (action !== 'probe') return
     this.probing = true
-    this.lastProbeAt = Date.now()
+    this.lastProbeAt = elapsedClock()
     let advanced = false
     try {
       advanced = await this.probeHostAdvance()
@@ -335,9 +416,10 @@ export abstract class RemoteJournalStream<
     } finally {
       this.probing = false
     }
+    if (this.disposed) return
     if (advanced) {
-      this.lastRestartAt = Date.now()
-      this.lastProgressAt = Date.now()
+      this.lastRestartAt = elapsedClock()
+      this.lastProgressAt = elapsedClock()
       this.quietProbes = 0
       this.stream.restart()
       return
@@ -375,7 +457,16 @@ export abstract class RemoteJournalStream<
       if (next.done || next.value.type !== 'opened') return false
       const applied = this.lastCursor
       if (applied === undefined) return false
-      return this.options.compare(next.value.cursor, applied) > 0
+      const compared = this.options.compare(next.value.cursor, applied)
+      if (compared > 0) return true
+      // A cursor BEHIND the applied one is a replacement generation opening earlier:
+      // restarting on it trips the resumed-generation guard and kills the journal.
+      // The revision arm therefore applies only while the cursor stands still, where
+      // the host's assistant stream advances under its own revision.
+      if (compared < 0) return false
+      const revision = assistantRevisionOf(next.value.page)
+      return revision !== undefined && this.lastAssistantRevision !== undefined
+        && revision > this.lastAssistantRevision
     } finally {
       deadline.abort(new Error('journal stall probe finished'))
       // Bounded teardown: a follow whose return() ignores the
@@ -449,6 +540,22 @@ export abstract class RemoteJournalStream<
     return { cursor, page: item.value.page }
   }
 
+  /** Record the newest assistant revision carried by any published value. */
+  private noteAssistantRevision(value: unknown, generation: number): void {
+    const revision = assistantRevisionOf(value)
+    if (revision === undefined) return
+    // A replacement host agent restarts frame revision at one: keeping the old peak
+    // across generations would disable the revision arm forever.
+    if (generation !== this.lastAssistantGeneration) {
+      this.lastAssistantGeneration = generation
+      this.lastAssistantRevision = revision
+      return
+    }
+    if (this.lastAssistantRevision === undefined || revision > this.lastAssistantRevision) {
+      this.lastAssistantRevision = revision
+    }
+  }
+
   /** Publish a generation's opening page without issuing a second Remote call. */
   private replaceFromOpening(page: Page, cursor: Cursor): void {
     this.assertPageThrough(page, cursor)
@@ -457,7 +564,9 @@ export abstract class RemoteJournalStream<
     const first = entries[0]
     this.firstCursor = first === undefined ? undefined : this.options.first(first)
     this.lastCursor = cursor
+    this.noteAssistantRevision(page, this.generation)
     this.setResumeCursor(cursor)
+    this.windowRevision++
     this.publish({
       type: 'replace',
       page,
@@ -546,6 +655,7 @@ export abstract class RemoteJournalStream<
     this.firstCursor = first === undefined ? undefined : this.options.first(first)
     this.lastCursor = this.tailCursor(entries)
     this.setResumeCursor(this.lastCursor)
+    this.windowRevision++
     this.publish({
       type: 'replace',
       page,
@@ -688,6 +798,7 @@ export abstract class RemoteJournalStream<
   }
 
   private publishNotification(notification: Notification): void {
+    this.noteAssistantRevision(notification, this.generation)
     this.publish({
       type: 'notification',
       notification,

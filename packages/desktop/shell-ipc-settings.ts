@@ -6,18 +6,21 @@ import type { NotificationSettingsLike } from './notifications.ts'
 import { DEFAULT_CHAMBER_SETTINGS, validatePatch } from './chamber-settings.ts'
 import { IPC_CHANNELS } from './ipc-events.ts'
 import { adjudicateBadgeCount, validateBadgeRequest } from './badge.ts'
-import { claimNotificationDetailed, decideNotification, releaseNotificationClaim, validateNotificationRequest } from './notifications.ts'
+import { MAX_SHOWN_NOTIFICATION_RECEIPTS, ShownNotificationReceipts, claimNotificationDetailed, decideNotification, releaseNotificationClaim, validateNotificationRequest } from './notifications.ts'
 
 export function registerSettingsHandlers(ctx: ShellIpcCtx): void {
+  // Durable receipts (design 19 §6 D2): a host restart keeps the shown set, so a
+  // retried renderer edge cannot double-show a banner whose IPC reply was lost.
+  const shownReceipts = new ShownNotificationReceipts(MAX_SHOWN_NOTIFICATION_RECEIPTS, ctx.notificationReceiptsSeam)
   const { deps, state, version, applySettingsPatch, chamberSettingsStatus, pushSettingsChanged, applyBadgePresentation, reconcileBadgeCount, notificationSourceIncarnations, pendingNotificationOpens, pendingRendererIntents, nativeNotificationRateLimiter, enqueueNotificationOpen, drainPendingNotificationOpens, drainPendingRendererDeepLinkIntents } = ctx
   const { settingsIO, hostFacts, confirmRegistryOriginSwitch } = ctx.deps.ctx
   async function maybeShowNativeNotification(
     payload: unknown,
-  ): Promise<{ shown: boolean; error?: string }> {
+  ): Promise<{ shown: boolean; outcome: 'shown' | 'suppressed' | 'retryable' | 'permanent'; error?: string }> {
     const validated = validateNotificationRequest(payload);
     if (!validated.ok) {
       console.warn(`[dsh-chamber] 拒绝非法通知 payload：${validated.error}`);
-      return { shown: false, error: `invalid notification request: ${validated.error}` };
+      return { shown: false, outcome: 'permanent', error: `invalid notification request: ${validated.error}` };
     }
     const request = validated.request;
     // 设置权威在装配侧内存 holder（settingsIO.current——settings-set 即时更新）；
@@ -36,16 +39,16 @@ export function registerSettingsHandlers(ctx: ShellIpcCtx): void {
       anyWindowFocused,
     });
     if (decision.action === 'skip') {
-      return { shown: false, error: 'notification suppressed by settings or window focus' };
+      return { shown: false, outcome: 'suppressed', error: 'notification suppressed by settings or window focus' };
     }
     if (!notificationSourceIncarnations.matches(request.sourceId, request.sourceFingerprint)) {
       console.warn(`[dsh-chamber] 通知来源 fingerprint 已过期：${request.sourceId}`);
-      return { shown: false, error: 'notification source fingerprint is stale' };
+      return { shown: false, outcome: 'permanent', error: 'notification source fingerprint is stale' };
     }
     const sourceToken = request.kind === 'test' ? null : notificationSourceIncarnations.capture(request.sourceId);
     if (request.kind !== 'test' && sourceToken === null) {
       console.warn(`[dsh-chamber] 通知来源已不在当前 registry：${request.sourceId}`);
-      return { shown: false, error: 'notification source is no longer in the registry' };
+      return { shown: false, outcome: 'permanent', error: 'notification source is no longer in the registry' };
     }
     // A disabled/kind/focus decision is terminal before consulting the host.
     // Unsupported-platform logging should describe an actual show attempt, not
@@ -53,8 +56,11 @@ export function registerSettingsHandlers(ctx: ShellIpcCtx): void {
     // 与不支持同值——实现侧异常安全）。
     if (!deps.edges.notificationSupported()) {
       console.warn('[dsh-chamber] 通知裁决跳过：平台不支持原生通知');
-      return { shown: false, error: 'native notifications are not supported on this platform' };
+      return { shown: false, outcome: 'permanent', error: 'native notifications are not supported on this platform' };
     }
+    // The settings-page test button is a fresh explicit request on every click.
+    // It has no completion identity and must never inherit a prior shown receipt.
+    if (request.kind !== 'test' && shownReceipts.has(request)) return { shown: true, outcome: 'shown' };
     // 去重 claim（5s TTL）：防同一事件双路径/重放双发；'test' 不走 claim。
     // 顺序在裁决之后：被设置/焦点跳过的请求不消费去重槽（design 19 §3.3）。
     const claim = claimNotificationDetailed(request);
@@ -62,12 +68,12 @@ export function registerSettingsHandlers(ctx: ShellIpcCtx): void {
       if (claim.reason === 'saturated') {
         console.warn('[dsh-chamber] 通知去重窗口已达硬上限，拒绝新通知');
       }
-      return { shown: false, error: 'notification suppressed by the dedupe window' };
+      return { shown: false, outcome: 'retryable', error: 'notification suppressed by the dedupe window' };
     }
     if (!nativeNotificationRateLimiter.tryAcquire()) {
       releaseNotificationClaim(claim.token);
       console.warn('[dsh-chamber] 原生通知发送速率达到硬上限，拒绝新通知');
-      return { shown: false, error: 'native notification rate limit reached' };
+      return { shown: false, outcome: 'retryable', error: 'native notification rate limit reached' };
     }
     // 宿主腿（构造 + 有界登记/淘汰 + click 腿 + honest-show 结算全在实现侧，
     // B4——见 HostEdges.showNativeNotification 注释）：实现侧不 throw，shown 结
@@ -94,9 +100,10 @@ export function registerSettingsHandlers(ctx: ShellIpcCtx): void {
     if (!outcome.shown) {
       releaseNotificationClaim(claim.token);
       console.warn(`[dsh-chamber] 原生通知显示失败：${outcome.error}`);
-      return { shown: false, error: outcome.error };
+      return { shown: false, outcome: outcome.failureClass ?? 'retryable', error: outcome.error };
     }
-    return { shown: true };
+    if (request.kind !== 'test') shownReceipts.record(request);
+    return { shown: true, outcome: 'shown' };
   }
   deps.ipc.handle(IPC_CHANNELS.INFO, () => ({
     controlPlaneUrl: hostFacts.controlPlaneUrl,

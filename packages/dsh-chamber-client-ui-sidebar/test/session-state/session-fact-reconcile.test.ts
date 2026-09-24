@@ -9,14 +9,13 @@
  *  4. 失败（读失败/写回失败）⇒ stuck 证据（App 升级 ladder 的唯一输入）；
  *  5. 健康结论 ⇒ progressStamp 前进、stuckSince 清除；
  *  6. 代际变化重置 episode；
- *  7. 纯函数：isRunningNonSubagentRow / writeBackTargets。
+ *  7. 不完整官方列表保留 episode；写回目标只含仍声称 running 的行。
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
   SessionAuthorityReconciler,
-  isRunningNonSubagentRow,
   writeBackTargets,
   type AuthorityActionLogEntry,
   type SessionAuthoritySnapshot,
@@ -33,11 +32,17 @@ class Harness {
   correctResult = true
   warned: string[] = []
   records: AuthorityActionLogEntry[] = []
+  settles = 0
   private readonly reads: (AuthorityRead | undefined)[]
   private readonly resolvers: (() => void)[] = []
   readonly reconciler: SessionAuthorityReconciler
 
-  constructor(options: { reads?: (AuthorityRead | undefined)[]; correctResult?: boolean } = {}) {
+  constructor(options: {
+    reads?: (AuthorityRead | undefined)[]
+    correctResult?: boolean
+    readAuthority?: () => Promise<AuthorityRead | undefined>
+    correct?: (sessionIds: readonly string[]) => Promise<boolean>
+  } = {}) {
     this.reads = options.reads ?? []
     this.correctResult = options.correctResult ?? true
     this.reconciler = new SessionAuthorityReconciler({
@@ -47,15 +52,16 @@ class Harness {
       readAuthority: async () => {
         const next = this.reads[this.readCount]
         this.readCount += 1
-        return next
+        return options.readAuthority === undefined ? next : options.readAuthority()
       },
       correct: async (sessionIds) => {
         this.correctCalls.push([...sessionIds])
-        return this.correctResult
+        return options.correct === undefined ? this.correctResult : options.correct(sessionIds)
       },
       warn: (message) => { this.warned.push(message) },
       record: (entry) => { this.records.push(entry) },
       onSettled: () => {
+        this.settles += 1
         const resolve = this.resolvers.shift()
         if (resolve !== undefined) resolve()
       },
@@ -92,8 +98,8 @@ class Harness {
   }
 }
 
-const ALLOW: AuthorityRead = { ok: true, complete: true, rows: { s1: true } }
-const DENY: AuthorityRead = { ok: true, complete: true, rows: { s1: false } }
+const ALLOW: AuthorityRead = { ok: true, proof: { kind: 'asOfSeq', asOfSeq: 1 }, rows: { s1: true } }
+const DENY: AuthorityRead = { ok: true, proof: { kind: 'asOfSeq', asOfSeq: 1 }, rows: { s1: false } }
 
 test('nothing is read before the probe threshold, and a verdict advances progress', async () => {
   const h = new Harness({ reads: [ALLOW] })
@@ -143,6 +149,27 @@ test('a failed authority read is stuck evidence and never writes back', async ()
   assert.equal(h.snapshot()?.stuckSince, 60_000)
 })
 
+test('an incomplete authority list is unknown, not a healthy verdict', async () => {
+  const h = new Harness({ reads: [{ ok: true, proof: { kind: 'none' }, rows: { s1: true } }] })
+  await h.tick(0, { s1: { running: true }, s2: { running: true } })
+  await h.tick(60_000, { s1: { running: true }, s2: { running: true } })
+  assert.equal(h.snapshot()?.ok, false)
+  assert.equal(h.snapshot()?.stuckSince, 60_000)
+  assert.equal(h.snapshot()?.progressStamp, 0)
+  assert.match(h.records.find(entry => entry.kind === 'read-failed')?.detail ?? '', /s2/)
+})
+
+test('an incomplete official list cannot erase the active episode or its stuck evidence', async () => {
+  const h = new Harness({ reads: [undefined] })
+  await h.tick(0, { s1: { running: true } })
+  await h.tick(60_000, {}, false)
+  assert.equal(h.readCount, 1, 'the retained episode still drives the probe ladder')
+  assert.equal(h.snapshot()?.runningSince, 0)
+  assert.equal(h.snapshot()?.stuckSince, 60_000)
+  await h.tick(90_000, {}, false)
+  assert.equal(h.snapshot()?.stuckSince, 60_000, 'missing rows in an incomplete list cannot claim recovery')
+})
+
 test('a failed write-back keeps stuck evidence (the store never changed)', async () => {
   const h = new Harness({ reads: [DENY, DENY], correctResult: false })
   await h.tick(0, { s1: { running: true } })
@@ -167,6 +194,16 @@ test('a generation change re-bases the episode clock', async () => {
   await h.tick(30_000, { s1: { running: true } }, true, 'g2')
   assert.equal(h.snapshot()?.runningSince, 30_000)
   assert.equal(h.readCount, 0, 'the fresh episode has no probe age yet')
+})
+
+test('a generation change also resets the old source probe quota', async () => {
+  const h = new Harness({ reads: [ALLOW, ALLOW] })
+  await h.tick(0, { s1: { running: true } }, true, 'g1')
+  await h.tick(60_000, { s1: { running: true } }, true, 'g1')
+  assert.equal(h.readCount, 1)
+  await h.tick(100_000, { s1: { running: true } }, true, 'g2')
+  await h.tick(160_000, { s1: { running: true } }, true, 'g2')
+  assert.equal(h.readCount, 2, 'the g1 cooldown must not suppress the first g2 probe')
 })
 
 test('the probe ladder throttles a second read inside the coalesce window', async () => {
@@ -199,11 +236,74 @@ test('a second request while an attempt is in flight does not start a second rea
   assert.equal(h.readCount, 1)
 })
 
-test('the running-bit helpers keep the subagent exclusion and the minimal write surface', () => {
-  assert.equal(isRunningNonSubagentRow({ running: true }), true)
-  assert.equal(isRunningNonSubagentRow({ running: true, subagent: true }), false)
-  assert.equal(isRunningNonSubagentRow({ running: false }), false)
-  assert.equal(isRunningNonSubagentRow(undefined), false)
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>(done => { resolve = done })
+  return { promise, resolve }
+}
+
+test('a request during an authority read gets a fresh official tick before the snapshot settles', async () => {
+  const inFlight = deferred<AuthorityRead | undefined>()
+  const h = new Harness({ readAuthority: () => inFlight.promise })
+  await h.tick(0, { s1: { running: true } })
+  const settled = h.pending(60_000, { s1: { running: true } })
+  assert.equal(h.readCount, 1)
+  h.now = 60_001
+  h.official = { s1: { running: false } }
+  h.reconciler.request()
+  assert.equal(h.snapshot()?.settledAt, undefined)
+  inFlight.resolve(ALLOW)
+  await settled
+  assert.equal(h.snapshot()?.runningSince, undefined)
+  assert.equal(h.snapshot()?.settledAt, 60_001)
+  assert.equal(h.settles, 2, 'the initial seed and the latest request settle; the obsolete pass does not')
+  assert.equal(h.records.filter(entry => entry.kind === 'complete').length, 1)
+})
+
+test('a read from an old source generation cannot trigger a write in the new generation', async () => {
+  const inFlight = deferred<AuthorityRead | undefined>()
+  const h = new Harness({ readAuthority: () => inFlight.promise })
+  await h.tick(0, { s1: { running: true } }, true, 'g1')
+  const settled = h.pending(60_000, { s1: { running: true } }, true, 'g1')
+  h.generation = 'g2'
+  h.reconciler.request()
+  inFlight.resolve(DENY)
+  await settled
+  assert.equal(h.snapshot()?.runningSince, 60_000, 'the new generation starts a fresh episode')
+  assert.deepEqual(h.correctCalls, [])
+  assert.equal(h.readCount, 1)
+})
+
+test('disposing while a read is in flight prevents confirmation, correction and publishing', async () => {
+  const inFlight = deferred<AuthorityRead | undefined>()
+  const h = new Harness({ readAuthority: () => inFlight.promise })
+  await h.tick(0, { s1: { running: true } })
+  h.pending(60_000, { s1: { running: true } })
+  h.reconciler.dispose()
+  inFlight.resolve(DENY)
+  await Promise.resolve()
+  await Promise.resolve()
+  assert.equal(h.readCount, 1)
+  assert.deepEqual(h.correctCalls, [])
+  assert.equal(h.settles, 1)
+})
+
+test('separate confirmed groups in one probe both receive their own correction', async () => {
+  const h = new Harness({ reads: [
+    { ok: true, proof: { kind: 'asOfSeq', asOfSeq: 1 }, rows: { s1: false, s2: true } },
+    undefined,
+    { ok: true, proof: { kind: 'asOfSeq', asOfSeq: 1 }, rows: { s1: false, s2: false } },
+    { ok: true, proof: { kind: 'asOfSeq', asOfSeq: 1 }, rows: { s2: false } },
+  ] })
+  await h.tick(0, { s1: { running: true }, s2: { running: true } })
+  await h.tick(60_000, { s1: { running: true }, s2: { running: true } })
+  await h.tick(260_000, { s1: { running: true }, s2: { running: true } })
+  assert.deepEqual(h.correctCalls, [['s1'], ['s2']])
+  assert.equal(h.snapshot()?.corrections, 2)
+  assert.equal(h.snapshot()?.ok, true)
+})
+
+test('the write-back helper keeps the minimal write surface', () => {
   const targets = writeBackTargets(new Set(['a', 'b', 'c']), {
     a: { running: true },
     b: { running: false },

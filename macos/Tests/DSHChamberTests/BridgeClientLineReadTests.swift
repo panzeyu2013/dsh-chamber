@@ -32,13 +32,70 @@ final class BridgeClientLineReadTests: XCTestCase {
 
     /// 真实（但不应答）的子进程：exec 让 sh 被 sleep 替换，stop() 的 SIGTERM
     /// 直达 sleep，不会因 shell 等前台子进程而撑满 5s 宽限。
-    private func makeSilentBridge() throws -> BridgeClient {
+    private func makeSilentBridge(writerStallTimeout: TimeInterval = 20) throws -> BridgeClient {
         let bridge = BridgeClient(nodePath: "/bin/sh",
                                   arguments: ["-c", "exec sleep 30"],
-                                  environment: [:])
+                                  environment: [:],
+                                  writerStallTimeout: writerStallTimeout)
         try bridge.start()
         XCTAssertTrue(bridge.isRunning)
         return bridge
+    }
+
+    /// stdin 无消费者且首帧远大于管道缓冲时，写器线程会被内核背压占住。
+    /// 页面 invoke 的期限和 stdout edge 回调仍必须独立推进；独立写期限
+    /// 负责终止卡住的 sidecar，排队帧不得进入后续会话。
+    func testBackpressuredStdinDoesNotBlockDeadlineOrEdgeDispatch() async throws {
+        let bridge = try makeSilentBridge(writerStallTimeout: 1)
+        defer { bridge.stop() }
+        let largePayload = AnyCodable.string(String(repeating: "x", count: 2 * 1024 * 1024))
+        let started = Date()
+        let request = Task {
+            try await bridge.invoke(method: "blocked-write", payload: largePayload,
+                                    timeout: 0.3)
+        }
+        XCTAssertTrue(waitUntil { bridge.pendingRequestCount == 1 })
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        let edgeStarted = Date()
+        bridge.handleIncomingLine(#"{"edge":"unknown","edgeId":42,"payload":null}"#)
+        XCTAssertLessThan(Date().timeIntervalSince(edgeStarted), 1.0,
+                          "edge 回调不可等待已满的 stdin 管道")
+
+        do {
+            _ = try await request.value
+            XCTFail("stdin 背压期间 invoke 必须按登记时的期限失败")
+        } catch {
+            let failure = error as NSError
+            XCTAssertEqual(failure.domain, BridgeClient.errorDomain)
+            XCTAssertEqual(failure.code, BridgeClient.errorCodeTimedOut)
+        }
+        XCTAssertLessThan(Date().timeIntervalSince(started), 2.0,
+                          "期限必须覆盖 FileHandle.write 的阻塞时间")
+        XCTAssertEqual(bridge.pendingRequestCount, 0)
+        XCTAssertTrue(waitUntil(timeout: 3) { !bridge.isRunning },
+                      "存活但不读 stdin 的 sidecar 必须在写期限后被终止并交给 Supervisor 重建")
+    }
+
+    func testBrokenStdinTerminatesProtocolSession() async throws {
+        // 子进程存活却主动关 stdin；Swift 写入必须失败并结束整个会话。
+        // 否则 write 在半帧失败后继续写后续帧会破坏 NDJSON 边界。
+        let bridge = BridgeClient(nodePath: "/bin/sh",
+                                  arguments: ["-c", "exec 0<&-; exec sleep 30"],
+                                  environment: [:])
+        try bridge.start()
+        defer { bridge.stop() }
+        try await Task.sleep(nanoseconds: 100_000_000)
+        do {
+            _ = try await bridge.invoke(method: "broken-stdin", timeout: 2)
+            XCTFail("关闭 stdin 的 sidecar 不得得到成功应答")
+        } catch {
+            let failure = error as NSError
+            XCTAssertEqual(failure.domain, BridgeClient.errorDomain)
+            XCTAssertEqual(failure.code, BridgeClient.errorCodeWriteFailed)
+        }
+        XCTAssertTrue(waitUntil(timeout: 3) { !bridge.isRunning },
+                      "写错误后必须终止旧 sidecar，交给 Supervisor 重启")
     }
 
     /// 行字节 → 文本（断言便捷；LineReader 输出原始字节）。

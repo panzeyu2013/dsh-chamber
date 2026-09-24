@@ -839,12 +839,13 @@ test('a parked open is rebuilt automatically once, and the copy turns into the f
 
 /**
  * CROSS-TIER RECOVERY LOCKSTEP.
- * The mobile stall observer and the desktop open-in stream-health ladder
- * implement the SAME recovery contract (design 14 §D4) on two tiers. These
- * assertions import BOTH pure decision modules and pin the shared ledger, the
- * ONE intentional threshold deviation and the evidence rule: the automatic
- * rebuild fires on one tier exactly when it fires on the other, and an
- * unreadable face fails closed on both. Any drift on either side turns red.
+ * The mobile stall observer and the desktop open-in stream-health ladder share
+ * the ledger (cooldown/window/budget), the failure bound and the ONE documented
+ * threshold deviation. They differ in exactly one place: the desktop loading arm
+ * only ARMS the user's rebuild control (action 'resync', executed by the click),
+ * while mobile keeps the automatic arm and gates it on the open-in-flight
+ * evidence. An unreadable face fails closed on both. Any drift on either side
+ * turns red.
  */
 const PARITY_NOW = 1_000_000
 
@@ -868,23 +869,23 @@ test('parity: the notice threshold is the ONE documented deviation (mobile is DO
   assert.ok(mobileTable.thresholdMs < mobileTable.failedMs, 'the failure wording must not precede the notice')
 })
 
-test('parity: the automatic-rebuild evidence rule agrees on every in-flight value', () => {
-  const desktop = (openInFlight: boolean | undefined): boolean => planSessionStreamHealth(
+test('parity: the loading arm is manual on desktop and automatic (in-flight-gated) on mobile', () => {
+  const armed = planSessionStreamHealth(
     desktopLoadingHold(SESSION_STREAM_HEALTH_DEFAULTS.loadingStallMs),
-    { openState: 'loading', presented: true, neighborAvailable: false, resyncAvailable: true, openInFlight },
+    { openState: 'loading', presented: true, neighborAvailable: false, resyncAvailable: true },
     PARITY_NOW,
-  ).action === 'auto-resync'
-  const mobile = (openInFlight: boolean | undefined): boolean => decideStallNotice({
+  )
+  assert.equal(armed.action, 'resync', 'desktop only ARMS the user control; the click executes it')
+  assert.equal(armed.notice, 'loading-stall', 'the arm keeps its own notice')
+  const parked = {
     shape: true, pageVisible: true, since: PARITY_NOW - mobileTable.thresholdMs, now: PARITY_NOW,
-    dismissed: false, loading: true, openInFlight,
-  }).resync
-  for (const openInFlight of [false, true, undefined]) {
-    assert.equal(desktop(openInFlight), mobile(openInFlight),
-      'automatic rebuild verdict drifted for openInFlight=' + String(openInFlight))
+    dismissed: false, loading: true,
   }
-  assert.equal(desktop(false), true, 'a parked open is rebuilt automatically on both tiers')
-  assert.equal(desktop(true), false, 'an in-flight open is never interrupted')
-  assert.equal(desktop(undefined), false, 'an unreadable face fails closed')
+  assert.equal(decideStallNotice({ ...parked, openInFlight: false }).resync, true,
+    'mobile keeps the automatic arm: a parked open past the threshold is rebuilt')
+  assert.equal(decideStallNotice({ ...parked, openInFlight: true }).resync, false,
+    'an in-flight open is never interrupted')
+  assert.equal(decideStallNotice({ ...parked }).resync, false, 'an unreadable face fails closed')
 })
 
 test('parity: the loading evidence is required on both tiers (the shape alone is not enough)', () => {
@@ -898,9 +899,10 @@ test('parity: the loading evidence is required on both tiers (the shape alone is
   }).resync, false, 'an unreadable loading state fails closed')
   const errorArm = planSessionStreamHealth(
     createSessionStreamHealthState(),
-    { openState: 'error', presented: true, neighborAvailable: true, resyncAvailable: true, openInFlight: false },
+    { openState: 'error', presented: true, neighborAvailable: true, resyncAvailable: true },
     PARITY_NOW,
   )
-  assert.notEqual(errorArm.action, 'auto-resync', 'an error state may arm the manual control but never executes on its own')
+  assert.notEqual(errorArm.action, 'resync',
+    'an error state takes its own route/heal arm, never the loading rebuild')
 })
 

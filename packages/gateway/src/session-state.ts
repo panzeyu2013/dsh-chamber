@@ -22,14 +22,14 @@
  *
  * Track B (static+measured): the host summary updatedAt only advances on
  * user-authored messages, so a completion is the api-session/status
- * true->false edge plus ONE session/follow read of the tail turn/end.reason.
+ * true->false edge plus a bounded session/follow read of tail turn/end.reason.
  * completedAt is armed only when that reason classifies as
  * completed; aborted+user is a user stop; blocked/error/max-tokens/interrupted
  * are neutral (classifyTurnEnd in the protocol module). An unreadable tail is
- * the documented conservative fallback: the edge still arms completedAt (never
- * lose a real completion), the row carries lastTurnEnd: null as the degraded
- * marker, and the observer status reports it (R12 "old host / unreadable falls
- * back to the status quo ... mark degraded").
+ * the documented conservative fallback: the edge arms unread as reconstructed,
+ * never authorizes a native completion notification, retains its identity for
+ * a later baseline retry, and reports the unreadable attempt. A newer prompt
+ * or running edge revokes that identity before an old follow may write back.
  *
  * Gap reconstruction (R3): rows persisted with running=true are candidates
  * after an observer restart; a baseline that reports them stopped does NOT arm
@@ -257,7 +257,7 @@ export interface SessionStateStore {
   setHost(input: { state: SessionStateHostState; serviceable: boolean }): boolean
   mode(): SessionStateMode
   setMode(mode: SessionStateMode): boolean
-  /** Full baseline merge. Returns the true->false edges requiring classification. */
+  /** Full baseline merge. Returns new edges and pending unreadable edges to classify. */
   applyBaseline(items: readonly SessionListBaselineItem[], opts: { at: number }): CompletionEdge[]
   applyStatus(sessionId: string, running: boolean, at: number): CompletionEdge[]
   applyActivity(sessionId: string, updatedAt: number | null, at: number): boolean
@@ -265,11 +265,10 @@ export interface SessionStateStore {
   applyRemoved(sessionId: string, at: number): boolean
   applyPending(sessionId: string, kind: SessionStatePendingKind, at: number): boolean
   clearPending(sessionId: string, at: number): boolean
-  /** Settle one completion edge after its single follow read. */
-  settleCompletion(sessionId: string, input: {
+  /** Settle only the still-current completion edge after a bounded follow read. */
+  settleCompletion(edge: CompletionEdge, input: {
     at: number
     turnEnd: SessionTurnEnd | null
-    source: SessionStateCompletedAtSource
     unreadable: boolean
   }): boolean
   markRead(clientId: string, sessionId: string, readThrough: number, at: number): { changed: boolean; stored: boolean; readThrough: number }
@@ -350,6 +349,9 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
   const ring: SessionStateDelta[] = []
   const listeners = new Set<(delta: SessionStateDelta) => void>()
   const gapCandidates = new Set<string>()
+  // The edge object is an opaque per-run capability. An older follow cannot
+  // settle a newly running session, a later prompt, or a replacement edge.
+  const pendingEdges = new Map<string, CompletionEdge>()
   let firstBaselineDone = false
 
   let cursor = 0
@@ -713,6 +715,18 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
     return row
   }
 
+  function clearConclusion(row: StoredRow): void {
+    row.completedAt = null
+    row.completedAtSource = null
+    row.lastTurnEnd = null
+  }
+
+  function newCompletionEdge(sessionId: string, source: SessionStateCompletedAtSource): CompletionEdge {
+    const edge = { sessionId, source }
+    pendingEdges.set(sessionId, edge)
+    return edge
+  }
+
   return {
     status(): SessionStateStoreStatus {
       return {
@@ -770,9 +784,8 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
           const resolves = row.completedAt !== null || row.completedAtSource !== null || row.lastTurnEnd !== null
           row.running = true
           row.lastRunningAt = opts.at
-          row.completedAt = null
-          row.completedAtSource = null
-          row.lastTurnEnd = null
+          clearConclusion(row)
+          pendingEdges.delete(item.sessionId)
           gapCandidates.delete(item.sessionId)
           if (!wasPresent || !previousRunning || resolves || row.updatedAt !== previousUpdatedAt) {
             deltaSessions.set(item.sessionId, toWireRow(row))
@@ -783,9 +796,18 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
           row.running = false
           const source: SessionStateCompletedAtSource = gapCandidates.has(item.sessionId) ? 'reconstructed' : 'observed'
           gapCandidates.delete(item.sessionId)
-          edges.push({ sessionId: item.sessionId, source })
+          edges.push(newCompletionEdge(item.sessionId, source))
           deltaSessions.set(item.sessionId, toWireRow(row))
         } else {
+          if (row.updatedAt > previousUpdatedAt) {
+            // The official list watermark is lastPromptAt. A newer prompt
+            // invalidates the previous conclusion even when both list samples
+            // are stopped (the true/false pair may have been lost).
+            clearConclusion(row)
+            pendingEdges.delete(item.sessionId)
+          }
+          const pending = pendingEdges.get(item.sessionId)
+          if (pending !== undefined && row.updatedAt === previousUpdatedAt) edges.push(pending)
           if (!wasPresent || row.running !== false || row.updatedAt !== previousUpdatedAt) {
             row.running = false
             deltaSessions.set(item.sessionId, toWireRow(row))
@@ -799,18 +821,20 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
           // prune on the next complete baseline that still misses it.
           row.present = false
           row.running = false
+          pendingEdges.delete(row.sessionId)
           row.observedAt = opts.at
           deltaSessions.set(row.sessionId, toWireRow(row))
         } else {
           rows.delete(row.sessionId)
+          pendingEdges.delete(row.sessionId)
           deltaRemoved.add(row.sessionId)
           deltaSessions.delete(row.sessionId)
           for (const client of readClients.values()) client.marks.delete(row.sessionId)
         }
       }
       recomputeSubagentCounts()
-      // Every persisted candidate gets exactly one chance: the first complete
-      // baseline after load classifies them (R3); later edges are live.
+      // A persisted running candidate is recognized on the first complete
+      // baseline after load; an unreadable classification may still retry.
       if (!firstBaselineDone) {
         gapCandidates.clear()
         firstBaselineDone = true
@@ -831,9 +855,8 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
           || row.lastTurnEnd !== null || row.pendingKind !== null
         row.running = true
         row.lastRunningAt = at
-        row.completedAt = null
-        row.completedAtSource = null
-        row.lastTurnEnd = null
+        clearConclusion(row)
+        pendingEdges.delete(sessionId)
         row.pendingKind = null
         row.pendingSince = null
         gapCandidates.delete(sessionId)
@@ -847,7 +870,7 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
         gapCandidates.delete(sessionId)
         deltaSessions.set(sessionId, toWireRow(row))
         commitDelta()
-        return [{ sessionId, source }]
+        return [newCompletionEdge(sessionId, source)]
       }
       // Already stopped: only a row that just became present is a change (a
       // duplicate status(false) must not advance the SSE cursor).
@@ -857,12 +880,16 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
     },
 
     applyActivity(sessionId, updatedAt, at): boolean {
-      if (updatedAt === null) return false
+      if (!isWatermark(updatedAt)) return false
       const row = getOrCreate(sessionId, at)
       row.observedAt = at
       row.present = true
       if (updatedAt <= row.updatedAt) return false
       row.updatedAt = updatedAt
+      if (!row.running) {
+        clearConclusion(row)
+        pendingEdges.delete(sessionId)
+      }
       deltaSessions.set(sessionId, toWireRow(row))
       commitDelta()
       return true
@@ -874,13 +901,16 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
       row.present = true
       row.parentSessionId = item.parentSessionId
       row.origin = item.origin
+      const previousUpdatedAt = row.updatedAt
       row.updatedAt = Math.max(row.updatedAt, item.updatedAt)
       if (item.running) {
         row.running = true
         row.lastRunningAt = at
-        row.completedAt = null
-        row.completedAtSource = null
-        row.lastTurnEnd = null
+        clearConclusion(row)
+        pendingEdges.delete(item.sessionId)
+      } else if (row.updatedAt > previousUpdatedAt && !row.running) {
+        clearConclusion(row)
+        pendingEdges.delete(item.sessionId)
       }
       recomputeSubagentCounts()
       deltaSessions.set(item.sessionId, toWireRow(row))
@@ -891,6 +921,7 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
     applyRemoved(sessionId): boolean {
       if (!rows.has(sessionId)) return false
       rows.delete(sessionId)
+      pendingEdges.delete(sessionId)
       deltaSessions.delete(sessionId)
       deltaRemoved.add(sessionId)
       for (const client of readClients.values()) client.marks.delete(sessionId)
@@ -921,9 +952,10 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
       return true
     },
 
-    settleCompletion(sessionId, input): boolean {
-      const row = rows.get(sessionId)
-      if (row === undefined) return false
+    settleCompletion(edge, input): boolean {
+      const row = rows.get(edge.sessionId)
+      if (row === undefined || row.running || pendingEdges.get(edge.sessionId) !== edge) return false
+      if (!input.unreadable) pendingEdges.delete(edge.sessionId)
       const disposition = classifyTurnEnd(input.turnEnd)
       if (input.unreadable) turnEnds.unreadable += 1
       else if (disposition === 'completed') turnEnds.completed += 1
@@ -933,8 +965,14 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
       // An unreadable tail is the conservative fallback: arm (never lose a real
       // completion) with lastTurnEnd null as the degraded marker.
       const completed = disposition === 'completed' || input.unreadable
-      const nextCompletedAt = completed ? input.at : null
-      const nextSource = completed ? input.source : null
+      const nextCompletedAt = completed
+        ? input.unreadable && row.completedAtSource === 'reconstructed' && row.completedAt !== null
+          ? row.completedAt
+          : input.at
+        : null
+      // A missing turn/end proves only "stopped". Keep unread, but never
+      // present it as a classified completion eligible for a notification.
+      const nextSource = completed ? input.unreadable ? 'reconstructed' : edge.source : null
       const changed = row.completedAt !== nextCompletedAt
         || row.completedAtSource !== nextSource
         || row.lastTurnEnd !== input.turnEnd
@@ -943,7 +981,7 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
       row.lastTurnEnd = input.turnEnd
       row.observedAt = input.at
       if (!changed) return false
-      deltaSessions.set(sessionId, toWireRow(row))
+      deltaSessions.set(edge.sessionId, toWireRow(row))
       commitDelta()
       return true
     },
@@ -1189,7 +1227,9 @@ export function createSessionStateObserver(deps: SessionStateObserverDeps): Sess
         if (response.result.ok !== true) {
           throw new Error('session/list failed: ' + (response.result.error?.code ?? 'unknown'))
         }
-        applyBaseline(parseSessionListBaselineItems(response.result.value), now(), false)
+        const items = parseSessionListBaselineItems(response.result.value)
+        if (items === null) throw new Error('session/list returned a malformed baseline')
+        applyBaseline(items, now(), false)
       } catch (error) {
         onBaselineError(error, now())
       } finally {
@@ -1224,20 +1264,26 @@ export function createSessionStateObserver(deps: SessionStateObserverDeps): Sess
     for (const edge of edges) void probeCompletion(edge)
   }
 
+  const readingEdges = new Set<CompletionEdge>()
+
   async function probeCompletion(edge: CompletionEdge): Promise<void> {
+    if (readingEdges.has(edge)) return
+    readingEdges.add(edge)
     followReads += 1
     let turnEnd: SessionTurnEnd | null = null
     try {
       turnEnd = await mux.followTurnEndOnce(edge.sessionId)
     } catch {
       turnEnd = null
+    } finally {
+      readingEdges.delete(edge)
     }
     const unreadable = turnEnd === null
     if (unreadable) {
       followFailures += 1
       degraded = true
     }
-    store.settleCompletion(edge.sessionId, { at: now(), turnEnd, source: edge.source, unreadable })
+    store.settleCompletion(edge, { at: now(), turnEnd, unreadable })
   }
 
   const mux = deps.mux ?? createSessionMux({

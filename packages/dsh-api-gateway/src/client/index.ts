@@ -40,7 +40,8 @@ import {
   RemoteStream,
   type RemoteStreamOptions,
 } from './remote-stream.ts'
-import { createCarrierFailureReporter } from './stream-carrier-fact.ts'
+import { readInjectionHarness, wrapOpenWithInjection } from '@dsh-chamber/dsh-stream-state'
+import { createCarrierFailureReporter, reportStreamCarrierFailures } from './stream-carrier-fact.ts'
 import { createStreamForensicsReporter, installStreamForensicsSnapshotBridge } from './stream-forensics.ts'
 
 export { RemoteStreamCarrierError } from './stream-client.ts'
@@ -236,11 +237,20 @@ class ClientRemoteService extends Service implements ClientRemote {
     // chamber (design 14 §D4): compose the caller's carrier hook with the page
     // fact. Upstream plumbs `carrierFailed` but nothing consumes it, so with the
     // retry patch (no terminal escape) a sustained carrier fault inside a live
-    // generation would be invisible; this is the one seam that owns the
-    // construction, so the fact is published here.
+    // generation would be invisible. A generated stream nested inside this one
+    // reports at its own boundary too; the reporter dedupes per failure, so the
+    // fact is still published exactly once.
     const carrierFailed = options.carrierFailed
     return new RemoteStream(this.connection, {
       ...options,
+      // Acceptance injection seam (P1): no-op unless a harness is installed in the
+      // page. append-silent starves the consumer after bytes arrived; break-streams
+      // throws the retryable carrier error the retry lane already owns.
+      open: wrapOpenWithInjection(options.open, {
+        name: options.name,
+        harness: () => readInjectionHarness(globalThis),
+        makeBreakError: reason => new RemoteStreamCarrierError(reason),
+      }),
       carrierFailed: (error: RemoteStreamCarrierError): void => {
         carrierFailed?.(error)
         this.reportCarrierFailure(error)
@@ -276,7 +286,14 @@ class ClientRemoteService extends Service implements ClientRemote {
     return this.events.subscribe(this.ctx, event, listener)
   }
 
-  /** Open one Remote stream and normalize a worker-local carrier's structural failures. */
+  /**
+   * Open one Remote stream and normalize a worker-local carrier's structural failures.
+   * chamber (design 14 §D4): the streams opened here never pass through
+   * `$stream`'s RemoteStream, so their already-classified carrier failures are
+   * reported at THIS boundary through the client's one reporter. The reporter is
+   * idempotent per failure, so a generated stream nested inside a `$stream`
+   * RemoteStream still publishes exactly one page fact.
+   */
   private openRemoteStream(
     endpoint: string,
     payload: unknown,
@@ -286,9 +303,14 @@ class ClientRemoteService extends Service implements ClientRemote {
     const connection = this.ownerCtx.get('connection') as ConnectionHandle | undefined
     if (connection === undefined) throw new Error(noConnection)
     const local = connection.rpc.open?.('/api', endpoint, payload, signal)
-    return local === undefined
+    const source = local === undefined
       ? this.streams.open(endpoint, payload, signal)
       : normalizeConnectionStream(local)
+    return reportStreamCarrierFailures(
+      source,
+      error => error instanceof RemoteStreamCarrierError,
+      this.reportCarrierFailure,
+    )
   }
 
   private enqueue<T>(operation: () => T | Promise<T>): Promise<T> {

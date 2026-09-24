@@ -8,13 +8,15 @@
  *
  * Run directly: node test/session-state/source-mux-facts.test.ts
  */
-import { test } from 'node:test'
+import { mock, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
+import { TABLE_SNAPSHOT } from '@dsh-chamber/dsh-stream-state'
 import { fileURLToPath } from 'node:url'
 import {
   classifyTurnEndWire,
   createSourceMuxFacts,
+  isMuxObservableSourceKind,
   muxUrlFor,
   openEventsFrame,
   parseMuxFrame,
@@ -25,29 +27,455 @@ import {
 
 const SOURCE = readFileSync(fileURLToPath(new URL('../../src/source-mux-facts.ts', import.meta.url)), 'utf8')
 
+test('the observer covers every dsh-protocol source: local profile and remote instances, never gateway', () => {
+  // The hook filter once said kind === 'dsh' only: the LOCAL session then had no
+  // content evidence and no closed-shell fact channel at all.
+  assert.equal(isMuxObservableSourceKind('local'), true)
+  assert.equal(isMuxObservableSourceKind('dsh'), true)
+  assert.equal(isMuxObservableSourceKind('gateway'), false)
+  assert.equal(isMuxObservableSourceKind('unknown'), false)
+  assert.equal(muxUrlFor('http://127.0.0.1:17500', 'local'), 'ws://127.0.0.1:17500/api/i/local/api/remote.mux')
+  // The lifecycle hook must consume the predicate, not re-state a kind literal.
+  const hook = readFileSync(fileURLToPath(new URL('../../src/app-hooks/use-session-facts-lifecycle.ts', import.meta.url)), 'utf8')
+  assert.match(hook, /isMuxObservableSourceKind\(server\.kind\)/)
+  assert.doesNotMatch(hook, /server\.kind === 'dsh'|server\.kind !== 'dsh'/)
+})
+
+test('the mux silence watchdog is carrier recovery only, never content evidence', () => {
+  const source = SOURCE.replace(/\/\*[\s\S]*?\*\//gu, '')
+  // Source-level $events silence is NOT this session's content progress (assistant
+  // text travels its own session/follow stream), so the observer publishes no
+  // content-stall signal at all; page evidence comes from session-content-stall.ts.
+  assert.doesNotMatch(source, /contentSilenceSinceMs|contentStallElapsedMs|lastContentAt/)
+  assert.match(source, /reconnects \+= 1/, 'the watchdog still performs carrier recovery')
+  assert.doesNotMatch(source, /registerSourceContentStall/)
+})
+
+
 class FakeSocket implements MuxSocket {
   sent: string[] = []
+  followOpens: Array<{ streamId: string; payload: unknown }> = []
+  onFollowOpen: ((streamId: string, payload: unknown) => void) | null = null
   closed = false
   onopen: (() => void) | null = null
   onmessage: ((event: { data: unknown }) => void) | null = null
   onclose: ((event?: unknown) => void) | null = null
   onerror: ((event?: unknown) => void) | null = null
-  send(data: string): void { this.sent.push(data) }
+  send(data: string): void {
+    this.sent.push(data)
+    const frame = JSON.parse(data) as { type: string; streamId: string; endpoint?: string; payload?: unknown }
+    if (frame.type === 'open' && frame.endpoint === 'session/follow') {
+      this.followOpens.push({ streamId: frame.streamId, payload: frame.payload })
+      this.onFollowOpen?.(frame.streamId, frame.payload)
+    }
+  }
   close(): void { this.closed = true }
   open(): void { this.onopen?.() }
   item(value: unknown): void { this.onmessage?.({ data: JSON.stringify({ type: 'item', streamId: 'events', value }) }) }
+  followItem(streamId: string, value: unknown): void {
+    this.onmessage?.({ data: JSON.stringify({ type: 'item', streamId, value }) })
+  }
+  followEnd(streamId: string): void {
+    this.onmessage?.({ data: JSON.stringify({ type: 'end', streamId }) })
+  }
+  replyFollow(index: number, value: unknown): void {
+    const streamId = this.followOpens[index]?.streamId
+    assert.ok(streamId, 'follow stream was not opened')
+    this.followItem(streamId, value)
+  }
 }
 
 /** fetch 假件：按 rpcId 回显信封（envelope 校验要求 rpcId 一致）。 */
 function rpcFetch(handlers: Record<string, (payload: unknown) => unknown>) {
   return async (_url: string, init?: { body?: unknown }) => {
     const body = JSON.parse(String(init?.body ?? '{}')) as { rpcId: string; method: string; payload: unknown }
+    assert.notEqual(body.method, 'session/follow', 'follow must use the MUX stream')
     const handler = handlers[body.method]
     const value = handler === undefined ? null : handler(body.payload)
     const result = value === 'FAIL' ? { ok: false, error: { code: 'x' } } : { ok: true, value }
     return { ok: true, status: 200, json: async () => ({ type: 'server-response', rpcId: body.rpcId, result }) } as never
   }
 }
+
+function followSnapshot(reason: unknown, time?: number) {
+  return { type: 'snapshot', records: [{ type: 'event', event: {
+    type: 'turn/end', ...(time === undefined ? {} : { time }), data: { reason },
+  } }] }
+}
+
+async function waitFor(predicate: () => boolean, message: string): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (predicate()) return
+    await new Promise(resolve => setTimeout(resolve, 2))
+  }
+  assert.fail(message)
+}
+
+function deferredRpc() {
+  const lists: Array<(value: unknown) => void> = []
+  const fetchImpl = async (_url: string, init?: { body?: unknown }) => {
+    const body = JSON.parse(String(init?.body ?? '{}')) as { rpcId: string; method: string }
+    assert.equal(body.method, 'session/list', 'follow must use the MUX stream')
+    const value = await new Promise<unknown>(resolve => lists.push(resolve))
+    return { ok: true, status: 200, json: async () => ({
+      type: 'server-response', rpcId: body.rpcId,
+      result: value === 'FAIL' ? { ok: false, error: { code: 'x' } } : { ok: true, value },
+    }) } as never
+  }
+  return { lists, fetchImpl }
+}
+
+test('a socket ready frame cannot certify facts after a failed baseline', async () => {
+  const socket = new FakeSocket()
+  const snapshots: Array<{ verdict: string }> = []
+  const facts = createSourceMuxFacts({
+    sourceId: 'degraded', origin: 'http://cp', onSnapshot: snapshot => snapshots.push(snapshot),
+    openSocket: () => socket,
+    fetchImpl: rpcFetch({ 'session/list': () => 'FAIL' }) as never,
+  })
+  try {
+    facts.start()
+    socket.open()
+    socket.item({ type: 'ready', clientId: 'c' })
+    await waitFor(() => facts.status().baselineFailures === 1, 'baseline failure did not surface')
+    assert.equal(facts.status().ready, false)
+    assert.equal(snapshots.at(-1)?.verdict, 'degraded')
+  } finally { facts.stop() }
+})
+
+test('a malformed ready frame cannot certify facts or renew event liveness', async () => {
+  const sockets: FakeSocket[] = []
+  const facts = createSourceMuxFacts({
+    sourceId: 'bad-ready', origin: 'http://cp', onSnapshot: () => {}, silenceTimeoutMs: 20,
+    openSocket: () => { const socket = new FakeSocket(); sockets.push(socket); return socket },
+    fetchImpl: rpcFetch({ 'session/list': () => ({ items: [] }) }) as never,
+  })
+  try {
+    facts.start()
+    sockets[0]!.open()
+    sockets[0]!.item({ type: 'ready' })
+    await waitFor(() => facts.status().baselines === 1, 'baseline missing')
+    assert.equal(facts.status().ready, false, 'ready requires a nonempty clientId')
+    for (let i = 0; i < 4; i += 1) {
+      sockets[0]!.item({ type: 'emit', event: '' })
+      await new Promise(resolve => setTimeout(resolve, 6))
+    }
+    await waitFor(() => sockets.length === 2, 'malformed event frames renewed a dead subscription')
+  } finally { facts.stop() }
+})
+
+test('replacing a live socket degrades facts before the successor opens', async () => {
+  const sockets: FakeSocket[] = []
+  const verdicts: string[] = []
+  const facts = createSourceMuxFacts({
+    sourceId: 'replacing', origin: 'http://cp', silenceTimeoutMs: 20,
+    onSnapshot: snapshot => verdicts.push(snapshot.verdict),
+    openSocket: () => { const socket = new FakeSocket(); sockets.push(socket); return socket },
+    fetchImpl: rpcFetch({ 'session/list': () => ({ items: [] }) }) as never,
+  })
+  try {
+    facts.start()
+    sockets[0]!.open()
+    sockets[0]!.item({ type: 'ready', clientId: 'c' })
+    await waitFor(() => facts.status().ready, 'initial socket did not become ready')
+    await waitFor(() => sockets.length === 2, 'silence did not replace the socket')
+    assert.equal(facts.status().ready, false)
+    assert.equal(verdicts.at(-1), 'degraded')
+  } finally { facts.stop() }
+})
+
+test('an ended $events stream degrades immediately even when its socket stays open', async () => {
+  const socket = new FakeSocket()
+  const verdicts: string[] = []
+  const facts = createSourceMuxFacts({
+    sourceId: 'ended-events', origin: 'http://cp', onSnapshot: snapshot => verdicts.push(snapshot.verdict),
+    openSocket: () => socket,
+    fetchImpl: rpcFetch({ 'session/list': () => ({ items: [] }) }) as never,
+  })
+  try {
+    facts.start()
+    socket.open()
+    socket.item({ type: 'ready', clientId: 'c' })
+    await waitFor(() => facts.status().ready, 'initial facts did not become ready')
+    socket.onmessage?.({ data: JSON.stringify({ type: 'end', streamId: 'events' }) })
+    assert.equal(facts.status().ready, false)
+    assert.equal(verdicts.at(-1), 'degraded')
+    assert.equal(socket.closed, true)
+    assert.equal(facts.status().reconnects, 0, 'reconnect must use the scheduled backoff')
+  } finally { facts.stop() }
+})
+
+test('a late same-connection baseline cannot overwrite a newer result', async () => {
+  const socket = new FakeSocket()
+  const rpc = deferredRpc()
+  const snapshots: Array<{ rows: Record<string, { running: boolean }> }> = []
+  const facts = createSourceMuxFacts({
+    sourceId: 'ordered', origin: 'http://cp', onSnapshot: snapshot => snapshots.push(snapshot),
+    reconcileIntervalMs: 25,
+    openSocket: () => socket, fetchImpl: rpc.fetchImpl as never,
+  })
+  try {
+    facts.start()
+    socket.open()
+    socket.item({ type: 'ready', clientId: 'c' })
+    await waitFor(() => rpc.lists.length >= 1, 'initial list not requested')
+    rpc.lists[0]!({ items: [{ sessionId: 's1', running: true, updatedAt: 1 }] })
+    await waitFor(() => facts.status().ready, 'initial baseline did not settle')
+    await waitFor(() => rpc.lists.length >= 3, 'two periodic requests not made')
+    rpc.lists[2]!({ items: [{ sessionId: 's1', running: false, updatedAt: 2 }] })
+    await waitFor(() => socket.followOpens.length === 1, 'newer completion did not read tail')
+    socket.replyFollow(0, { type: 'snapshot', records: [{ event: { type: 'turn/end', data: { reason: { kind: 'completed' } } } }] })
+    rpc.lists[1]!({ items: [{ sessionId: 's1', running: true, updatedAt: 1 }] })
+    await new Promise(resolve => setTimeout(resolve, 2))
+    assert.equal(snapshots.at(-1)?.rows.s1?.running, false)
+    assert.equal(facts.status().edges, 1)
+  } finally { facts.stop() }
+})
+
+test('status observed during a baseline forces a new reconciliation', async () => {
+  const socket = new FakeSocket()
+  const rpc = deferredRpc()
+  const snapshots: Array<{ rows: Record<string, { running: boolean }> }> = []
+  const facts = createSourceMuxFacts({
+    sourceId: 'revision', origin: 'http://cp', onSnapshot: snapshot => snapshots.push(snapshot),
+    openSocket: () => socket, fetchImpl: rpc.fetchImpl as never,
+  })
+  try {
+    facts.start()
+    socket.open()
+    socket.item({ type: 'ready', clientId: 'c' })
+    await waitFor(() => rpc.lists.length === 1, 'initial list not requested')
+    socket.item({ type: 'emit', event: 'api-session/status', args: ['s1', true] })
+    rpc.lists[0]!({ items: [{ sessionId: 's1', running: false, updatedAt: 1 }] })
+    await waitFor(() => rpc.lists.length === 2, 'event revision did not trigger a new list')
+    assert.equal(snapshots.at(-1)?.rows.s1?.running, true)
+    rpc.lists[1]!({ items: [{ sessionId: 's1', running: true, updatedAt: 2 }] })
+    await waitFor(() => facts.status().ready, 'reconciled list did not certify facts')
+  } finally { facts.stop() }
+})
+
+test('a tail from an earlier run cannot arm a newly running session', async () => {
+  const socket = new FakeSocket()
+  const rpc = deferredRpc()
+  const snapshots: Array<{ rows: Record<string, { running: boolean; completedAt: number | null }> }> = []
+  const facts = createSourceMuxFacts({
+    sourceId: 'run', origin: 'http://cp', now: () => 1_700_000_000_000,
+    onSnapshot: snapshot => snapshots.push(snapshot),
+    openSocket: () => socket, fetchImpl: rpc.fetchImpl as never,
+  })
+  try {
+    facts.start()
+    socket.open()
+    socket.item({ type: 'ready', clientId: 'c' })
+    await waitFor(() => rpc.lists.length === 1, 'initial list not requested')
+    rpc.lists[0]!({ items: [{ sessionId: 's1', running: true, updatedAt: 1 }] })
+    await waitFor(() => facts.status().ready, 'initial baseline did not settle')
+    socket.item({ type: 'emit', event: 'api-session/status', args: ['s1', false] })
+    await waitFor(() => socket.followOpens.length === 1, 'tail not requested')
+    socket.item({ type: 'emit', event: 'api-session/status', args: ['s1', true] })
+    socket.replyFollow(0, { type: 'snapshot', records: [{ type: 'event', event: {
+      type: 'turn/end', time: 1_700_000_000_000, data: { reason: { kind: 'completed' } },
+    } }] })
+    await waitFor(() => facts.status().pendingReads === 0, 'old tail did not finish')
+    assert.deepEqual(snapshots.at(-1)?.rows.s1, { ...snapshots.at(-1)?.rows.s1, running: true, completedAt: null })
+  } finally { facts.stop() }
+})
+
+test('a newer host activity watermark invalidates an older tail from an unseen rerun', async () => {
+  const socket = new FakeSocket()
+  const rpc = deferredRpc()
+  const snapshots: Array<{ rows: Record<string, { completedAt: number | null }> }> = []
+  const facts = createSourceMuxFacts({
+    sourceId: 'tail-watermark', origin: 'http://cp', now: () => 1_700_000_000_500,
+    onSnapshot: snapshot => snapshots.push(snapshot),
+    openSocket: () => socket, fetchImpl: rpc.fetchImpl as never,
+  })
+  const completedTail = (time: number) => ({ type: 'snapshot', records: [{ type: 'event', event: {
+    type: 'turn/end', time, data: { reason: { kind: 'completed' } },
+  } }] })
+  try {
+    facts.start()
+    socket.open()
+    socket.item({ type: 'ready', clientId: 'c' })
+    await waitFor(() => rpc.lists.length === 1, 'initial list not requested')
+    rpc.lists[0]!({ items: [{ sessionId: 's1', running: true, updatedAt: 100 }] })
+    await waitFor(() => facts.status().ready, 'initial baseline did not settle')
+    socket.item({ type: 'emit', event: 'api-session/status', args: ['s1', false] })
+    await waitFor(() => socket.followOpens.length === 1, 'first tail not requested')
+    // Both true and false status frames from a quick rerun were lost; only the
+    // host's later updatedAt reveals that the held follow belongs to old data.
+    facts.reconcile()
+    await waitFor(() => rpc.lists.length === 2, 'new baseline not requested')
+    rpc.lists[1]!({ items: [{ sessionId: 's1', running: false, updatedAt: 200 }] })
+    await waitFor(() => socket.followOpens.length === 2, 'newer host watermark did not trigger a fresh tail')
+    socket.replyFollow(0, completedTail(1_700_000_000_100))
+    await new Promise(resolve => setTimeout(resolve, 2))
+    assert.equal(snapshots.at(-1)?.rows.s1?.completedAt, null, 'old tail must not write after a newer host watermark')
+    socket.replyFollow(1, completedTail(1_700_000_000_200))
+    await waitFor(() => snapshots.at(-1)?.rows.s1?.completedAt === 1_700_000_000_200, 'fresh tail did not settle')
+  } finally { facts.stop() }
+})
+
+test('periodic reconciliation finds a dropped status while the socket stays active', async () => {
+  const socket = new FakeSocket()
+  const snapshots: Array<{ rows: Record<string, { completedAt: number | null }> }> = []
+  let running = true
+  const facts = createSourceMuxFacts({
+    sourceId: 'dropped', origin: 'http://cp', now: () => 1_700_000_000_000,
+    reconcileIntervalMs: 20, silenceTimeoutMs: 1_000,
+    onSnapshot: snapshot => snapshots.push(snapshot), openSocket: () => socket,
+    fetchImpl: rpcFetch({ 'session/list': () => ({ items: [{ sessionId: 's1', running, updatedAt: 1 }] }) }) as never,
+  })
+  try {
+    socket.onFollowOpen = streamId => socket.followItem(streamId, followSnapshot({ kind: 'completed' }, 1_700_000_000_000))
+    facts.start()
+    socket.open()
+    socket.item({ type: 'ready', clientId: 'c' })
+    await waitFor(() => facts.status().ready, 'initial baseline did not settle')
+    running = false // the status frame is dropped; keep the transport healthy
+    socket.item({ type: 'cancel' })
+    await waitFor(() => facts.status().edges === 1, 'periodic list did not recover the edge')
+    await waitFor(() => snapshots.at(-1)?.rows.s1?.completedAt !== null, 'completion was not armed')
+  } finally { facts.stop() }
+})
+
+test('two lost status frames are recovered only from a turn/end newer than the prompt', async () => {
+  const socket = new FakeSocket()
+  const rpc = deferredRpc()
+  const snapshots: Array<{ rows: Record<string, { completedAt: number | null; completedAtSource: string | null }> }> = []
+  const promptAt = 1_700_000_001_000
+  const tail = (time: number, kind = 'completed') => ({ type: 'snapshot', records: [{
+    type: 'event', event: { type: 'turn/end', seq: time, time, data: { reason: { kind } } },
+  }] })
+  const facts = createSourceMuxFacts({
+    sourceId: 'lost-pair', origin: 'http://cp', now: () => promptAt + 500,
+    onSnapshot: snapshot => snapshots.push(snapshot), openSocket: () => socket,
+    fetchImpl: rpc.fetchImpl as never,
+  })
+  try {
+    facts.start()
+    socket.open()
+    socket.item({ type: 'ready', clientId: 'c' })
+    await waitFor(() => rpc.lists.length === 1, 'initial list not requested')
+    rpc.lists[0]!({ items: [{ sessionId: 's1', running: false, updatedAt: promptAt - 1_000 }] })
+    await waitFor(() => facts.status().ready, 'initial baseline did not settle')
+
+    facts.reconcile()
+    await waitFor(() => rpc.lists.length === 2, 'second list not requested')
+    rpc.lists[1]!({ items: [{ sessionId: 's1', running: false, updatedAt: promptAt }] })
+    await waitFor(() => socket.followOpens.length === 1, 'new prompt did not start a tail probe')
+    socket.replyFollow(0, tail(promptAt - 100))
+    await waitFor(() => facts.status().pendingReads === 0, 'old tail did not settle')
+    assert.equal(snapshots.at(-1)?.rows.s1?.completedAt, null, 'an earlier run must not be reused')
+    assert.equal(facts.status().edges, 0)
+
+    facts.reconcile()
+    await waitFor(() => rpc.lists.length === 3, 'retry list not requested')
+    rpc.lists[2]!({ items: [{ sessionId: 's1', running: false, updatedAt: promptAt }] })
+    await waitFor(() => socket.followOpens.length === 2, 'unknown outcome was not retried')
+    socket.replyFollow(1, tail(promptAt + 100))
+    await waitFor(() => snapshots.at(-1)?.rows.s1?.completedAtSource === 'observed', 'new turn/end was not classified')
+    assert.equal(snapshots.at(-1)?.rows.s1?.completedAt, promptAt + 100)
+    assert.equal(facts.status().edges, 1)
+  } finally { facts.stop() }
+})
+
+test('a later prompt clears the old completion before any new outcome is known', async () => {
+  const socket = new FakeSocket()
+  const snapshots: Array<{ rows: Record<string, { completedAt: number | null; completedAtSource: string | null; updatedAt: number }> }> = []
+  const promptAt = 1_700_000_002_000
+  let listedAt = promptAt - 1_000
+  let tailTime = promptAt - 500
+  const facts = createSourceMuxFacts({
+    sourceId: 'stale-complete', origin: 'http://cp', now: () => promptAt + 500,
+    onSnapshot: snapshot => snapshots.push(snapshot), openSocket: () => socket,
+    fetchImpl: rpcFetch({ 'session/list': () => ({ items: [{ sessionId: 's1', running: false, updatedAt: listedAt }] }) }) as never,
+  })
+  try {
+    socket.onFollowOpen = streamId => socket.followItem(streamId, followSnapshot({ kind: 'completed' }, tailTime))
+    facts.start()
+    socket.open()
+    socket.item({ type: 'ready', clientId: 'c' })
+    await waitFor(() => facts.status().ready, 'initial baseline did not settle')
+    socket.item({ type: 'emit', event: 'api-session/status', args: ['s1', true] })
+    socket.item({ type: 'emit', event: 'api-session/status', args: ['s1', false] })
+    await waitFor(() => snapshots.at(-1)?.rows.s1?.completedAtSource === 'observed', 'old completion missing')
+
+    // api-session/activity is emitted on a user prompt. The status pair for
+    // this new run is lost; the previous observed completion must not survive.
+    socket.item({ type: 'emit', event: 'api-session/activity', args: ['s1', promptAt + 0.5] })
+    assert.equal(snapshots.at(-1)?.rows.s1?.completedAtSource, 'observed',
+      'a malformed fractional activity watermark cannot revoke a completion')
+    socket.item({ type: 'emit', event: 'api-session/activity', args: ['s1', promptAt] })
+    assert.equal(snapshots.at(-1)?.rows.s1?.completedAt, null)
+    assert.equal(snapshots.at(-1)?.rows.s1?.updatedAt, promptAt)
+    listedAt = promptAt
+    facts.reconcile()
+    await waitFor(() => facts.status().followFailures === 1, 'old tail must remain an unknown outcome')
+    assert.equal(snapshots.at(-1)?.rows.s1?.completedAt, null)
+    tailTime = promptAt + 100
+    facts.reconcile()
+    await waitFor(() => snapshots.at(-1)?.rows.s1?.completedAt === tailTime, 'new completion not recovered')
+  } finally { facts.stop() }
+})
+
+test('an unreadable turn end stays pending classification until a later host tail is available', async () => {
+  const socket = new FakeSocket()
+  const snapshots: Array<{ rows: Record<string, { completedAtSource: string | null }> }> = []
+  let tailAvailable = false
+  let follows = 0
+  const facts = createSourceMuxFacts({
+    sourceId: 'tail-later', origin: 'http://cp', now: () => 1_700_000_000_000,
+    reconcileIntervalMs: 25,
+    onSnapshot: snapshot => snapshots.push(snapshot), openSocket: () => socket,
+    followTimeoutMs: 10,
+    fetchImpl: rpcFetch({ 'session/list': () => ({ items: [{ sessionId: 's1', running: false, updatedAt: 1 }] }) }) as never,
+  })
+  try {
+    socket.onFollowOpen = streamId => {
+      follows += 1
+      socket.followItem(streamId, tailAvailable ? followSnapshot({ kind: 'completed' }, 1_700_000_000_000) : { type: 'snapshot', records: [] })
+    }
+    facts.start()
+    socket.open()
+    socket.item({ type: 'ready', clientId: 'c' })
+    await waitFor(() => facts.status().ready, 'initial baseline did not settle')
+    socket.item({ type: 'emit', event: 'api-session/status', args: ['s1', true] })
+    socket.item({ type: 'emit', event: 'api-session/status', args: ['s1', false] })
+    await waitFor(() => follows === 1, 'first tail was not read')
+    await waitFor(() => snapshots.at(-1)?.rows.s1?.completedAtSource === 'reconstructed', 'unreadable fact not retained')
+    tailAvailable = true
+    await waitFor(() => snapshots.at(-1)?.rows.s1?.completedAtSource === 'observed', 'tail was not reclassified')
+    assert.ok(follows >= 2)
+  } finally { facts.stop() }
+})
+
+test('a follow snapshot without a turn end waits for a later event on the same stream', async () => {
+  const socket = new FakeSocket()
+  const snapshots: Array<{ rows: Record<string, { completedAtSource: string | null }> }> = []
+  const facts = createSourceMuxFacts({
+    sourceId: 'follow-event', origin: 'http://cp', now: () => 1_700_000_000_500,
+    followTimeoutMs: 50, onSnapshot: snapshot => snapshots.push(snapshot), openSocket: () => socket,
+    fetchImpl: rpcFetch({ 'session/list': () => ({ items: [{ sessionId: 's1', running: false, updatedAt: 1 }] }) }) as never,
+  })
+  try {
+    facts.start()
+    socket.open()
+    socket.item({ type: 'ready', clientId: 'c' })
+    await waitFor(() => facts.status().ready, 'baseline missing')
+    socket.item({ type: 'emit', event: 'api-session/status', args: ['s1', true] })
+    socket.item({ type: 'emit', event: 'api-session/status', args: ['s1', false] })
+    await waitFor(() => socket.followOpens.length === 1, 'follow stream missing')
+    const streamId = socket.followOpens[0]!.streamId
+    socket.followItem(streamId, { type: 'snapshot', records: [] })
+    assert.equal(facts.status().pendingReads, 1, 'empty snapshot must leave follow open')
+    socket.followItem(streamId, { type: 'event', event: {
+      type: 'turn/end', time: 1_700_000_000_100, data: { reason: { kind: 'completed' } },
+    } })
+    await waitFor(() => snapshots.at(-1)?.rows.s1?.completedAtSource === 'observed', 'later turn end did not settle')
+    assert.equal(socket.sent.some(payload => JSON.parse(payload).type === 'cancel' && JSON.parse(payload).streamId === streamId), true)
+  } finally { facts.stop() }
+})
 
 test('URLs and the opening frame match the frozen protocol', () => {
   assert.equal(muxUrlFor('http://127.0.0.1:17500', 'local'), 'ws://127.0.0.1:17500/api/i/local/api/remote.mux')
@@ -57,6 +485,63 @@ test('URLs and the opening frame match the frozen protocol', () => {
   assert.equal(parseMuxFrame('not json'), null)
   assert.equal(rowFromListItem({ sessionId: 'a', running: true, updatedAt: 5 })?.running, true)
   assert.equal(rowFromListItem({}), null)
+  assert.equal(rowFromListItem({ sessionId: 'a', updatedAt: 5 }), null)
+  assert.equal(rowFromListItem({ sessionId: 'a', running: false, updatedAt: '5' }), null)
+})
+
+test('a partial or malformed baseline cannot forge a completion or certify facts', async () => {
+  const socket = new FakeSocket()
+  let listValue: unknown = { items: [{ sessionId: 's1', running: true, updatedAt: 1 }] }
+  let follows = 0
+  const snapshots: Array<{ verdict: string; rows: Record<string, { running: boolean }> }> = []
+  const facts = createSourceMuxFacts({
+    sourceId: 'malformed-row', origin: 'http://cp', onSnapshot: snapshot => snapshots.push(snapshot),
+    openSocket: () => socket,
+    fetchImpl: rpcFetch({ 'session/list': () => listValue }) as never,
+  })
+  try {
+    socket.onFollowOpen = () => { follows += 1 }
+    facts.start()
+    socket.open()
+    socket.item({ type: 'ready', clientId: 'c' })
+    await waitFor(() => facts.status().ready, 'initial valid baseline missing')
+    listValue = { items: [
+      { sessionId: 's1', running: false, updatedAt: 2 },
+      { sessionId: 's2', updatedAt: 2 },
+    ] }
+    facts.reconcile()
+    await waitFor(() => facts.status().baselineFailures === 1, 'partial list was accepted')
+    assert.equal(facts.status().ready, false)
+    assert.equal(snapshots.at(-1)?.verdict, 'degraded')
+    assert.equal(snapshots.at(-1)?.rows.s1?.running, true, 'a partial baseline must apply no rows')
+    socket.item({ type: 'emit', event: 'api-session/status', args: ['s1', 'false'] })
+    assert.equal(facts.status().edges, 0, 'a malformed status must not close a running edge')
+    assert.equal(follows, 0)
+  } finally { facts.stop() }
+})
+
+test('a carrier that never opens is failed by the handshake deadline and retried', () => {
+  mock.timers.enable({ apis: ['setTimeout'] })
+  try {
+    const sockets: FakeSocket[] = []
+    const facts = createSourceMuxFacts({
+      sourceId: 'local', origin: 'http://cp', onSnapshot: () => {},
+      openSocket: () => { const s = new FakeSocket(); sockets.push(s); return s },
+      fetchImpl: rpcFetch({ 'session/list': () => ({ items: [] }) }) as never,
+    })
+    try {
+      facts.start()
+      assert.equal(sockets.length, 1)
+      assert.equal(sockets[0]?.closed, false)
+      // No open/error/close ever arrives. Without a deadline the observer would sit
+      // on a dead carrier with no silence evidence and no retry forever.
+      mock.timers.tick(TABLE_SNAPSHOT.handshakeTimeoutMs + 1)
+      assert.equal(sockets[0]?.closed, true, 'the silent carrier is closed')
+      assert.equal(facts.status().ready, false)
+      mock.timers.tick(2_000)
+      assert.equal(sockets.length, 2, 'the deadline feeds the bounded reconnect path')
+    } finally { facts.stop() }
+  } finally { mock.timers.reset() }
 })
 
 test('the observer opens only $events and never answers a waterfall', async () => {
@@ -66,20 +551,23 @@ test('the observer opens only $events and never answers a waterfall', async () =
     openSocket: () => { const s = new FakeSocket(); sockets.push(s); return s },
     fetchImpl: rpcFetch({ 'session/list': () => ({ items: [] }) }) as never,
   })
-  facts.start()
-  const socket = sockets[0]
-  socket.open()
-  assert.deepEqual(socket.sent, [openEventsFrame()])
-  // 瀑布帧只观察：不得产生任何 send（尤其不得回 $events/result）。
-  socket.item({ type: 'waterfall', event: 'approval/request', eventId: 'e1', request: {} })
-  socket.item({ type: 'waterfall', event: 'user-questions/request', eventId: 'e2', request: {} })
-  socket.item({ type: 'cancel', eventId: 'e3' })
-  assert.equal(socket.sent.length, 1, 'no frame was sent in response')
-  assert.equal(socket.sent.some(payload => payload.includes('result')), false)
-  // 源文本里也不得出现 result 的发送（注释里的纪律声明不算）。
-  const code = SOURCE.split('\n').filter(line => !line.trimStart().startsWith('*') && !line.trimStart().startsWith('//')).join('\n')
-  assert.equal(code.includes("$events/result"), false)
-  facts.stop()
+  try {
+    facts.start()
+    const socket = sockets[0]
+    socket.open()
+    assert.deepEqual(socket.sent, [openEventsFrame()])
+    // 瀑布帧只观察：不得产生任何 send（尤其不得回 $events/result）。
+    socket.item({ type: 'waterfall', event: 'approval/request', eventId: 'e1', request: {} })
+    socket.item({ type: 'waterfall', event: 'user-questions/request', eventId: 'e2', request: {} })
+    socket.item({ type: 'cancel', eventId: 'e3' })
+    assert.equal(socket.sent.length, 1, 'no frame was sent in response')
+    assert.equal(socket.sent.some(payload => payload.includes('result')), false)
+    // 源文本里也不得出现 result 的发送（注释里的纪律声明不算）。
+    const code = SOURCE.split('\n').filter(line => !line.trimStart().startsWith('*') && !line.trimStart().startsWith('//')).join('\n')
+    assert.equal(code.includes("$events/result"), false)
+  } finally {
+    facts.stop()
+  }
 })
 
 test('one true->false edge opens exactly one follow and completed arms the row', async () => {
@@ -89,32 +577,33 @@ test('one true->false edge opens exactly one follow and completed arms the row',
   const facts = createSourceMuxFacts({
     sourceId: 'ssh-a', origin: 'http://cp', now: () => 900, onSnapshot: s => snapshots.push(s),
     openSocket: () => { const s = new FakeSocket(); sockets.push(s); return s },
-    fetchImpl: rpcFetch({
-      'session/list': () => ({ items: [{ sessionId: 's1', running: false, updatedAt: 100 }] }),
-      'session/follow': payload => { follows.push(payload); return { snapshot: { tail: { turn: { reason: { kind: 'completed' } } } } } },
-    }) as never,
+    fetchImpl: rpcFetch({ 'session/list': () => ({ items: [{ sessionId: 's1', running: false, updatedAt: 100 }] }) }) as never,
   })
-  facts.start()
-  sockets[0].open()
-  await new Promise(resolve => setTimeout(resolve, 5))
-  sockets[0].item({ type: 'ready', clientId: 'c' })
-  sockets[0].item({ type: 'emit', event: 'api-session/status', args: { sessionId: 's1', running: true } })
-  sockets[0].item({ type: 'emit', event: 'api-session/status', args: { sessionId: 's1', running: false } })
-  await new Promise(resolve => setTimeout(resolve, 10))
-  assert.equal(follows.length, 1, 'exactly one follow per edge')
-  assert.equal(facts.status().edges, 1)
-  // A duplicate false (no new running edge) must not open a second follow.
-  sockets[0].item({ type: 'emit', event: 'api-session/status', args: { sessionId: 's1', running: false } })
-  await new Promise(resolve => setTimeout(resolve, 5))
-  assert.equal(follows.length, 1)
-  const last = snapshots.at(-1) as { rows: Record<string, Record<string, unknown>> }
-  const row = last.rows['s1']
-  assert.equal(row?.completedAt, 900)
-  // 本 fixture 的 tail 是 legacy 形、没有 host time ⇒ 观察者戳 + reconstructed 降级；
-  // host 时间的 observed 路径由下方 B5 用例钉住。
-  assert.equal(row?.completedAtSource, 'reconstructed')
-  assert.deepEqual(row?.lastTurnEnd, { kind: 'completed' })
-  facts.stop()
+  try {
+    facts.start()
+    sockets[0].open()
+    sockets[0].onFollowOpen = (streamId, payload) => { follows.push(payload); sockets[0].followItem(streamId, followSnapshot({ kind: 'completed' })) }
+    await new Promise(resolve => setTimeout(resolve, 5))
+    sockets[0].item({ type: 'ready', clientId: 'c' })
+    sockets[0].item({ type: 'emit', event: 'api-session/status', args: { sessionId: 's1', running: true } })
+    sockets[0].item({ type: 'emit', event: 'api-session/status', args: { sessionId: 's1', running: false } })
+    await new Promise(resolve => setTimeout(resolve, 10))
+    assert.equal(follows.length, 1, 'exactly one follow per edge')
+    assert.equal(facts.status().edges, 1)
+    // A duplicate false (no new running edge) must not open a second follow.
+    sockets[0].item({ type: 'emit', event: 'api-session/status', args: { sessionId: 's1', running: false } })
+    await new Promise(resolve => setTimeout(resolve, 5))
+    assert.equal(follows.length, 1)
+    const last = snapshots.at(-1) as { rows: Record<string, Record<string, unknown>> }
+    const row = last.rows['s1']
+    assert.equal(row?.completedAt, 900)
+    // 本 fixture 的记录没有 host time ⇒ 观察者戳 + reconstructed 降级；
+    // host 时间的 observed 路径由下方 B5 用例钉住。
+    assert.equal(row?.completedAtSource, 'reconstructed')
+    assert.deepEqual(row?.lastTurnEnd, { kind: 'completed', at: 0 })
+  } finally {
+    facts.stop()
+  }
 })
 
 test('a user stop and a neutral ending never arm; an unreadable tail degrades and arms', async () => {
@@ -130,30 +619,35 @@ test('a user stop and a neutral ending never arm; an unreadable tail degrades an
     const snapshots: unknown[] = []
     const facts = createSourceMuxFacts({
       sourceId: 'local', origin: 'http://cp', now: () => 1_000, onSnapshot: s => snapshots.push(s),
+      followTimeoutMs: 5,
       openSocket: () => { const s = new FakeSocket(); sockets.push(s); return s },
-      fetchImpl: rpcFetch({
-        'session/list': () => ({ items: [{ sessionId: 's1', running: false, updatedAt: 50 }] }),
-        'session/follow': () => (tail === 'FAIL' ? 'FAIL' : tail === 'EMPTY' ? {} : { snapshot: { tail: { turn: { reason: tail } } } }),
-      }) as never,
+      fetchImpl: rpcFetch({ 'session/list': () => ({ items: [{ sessionId: 's1', running: false, updatedAt: 50 }] }) }) as never,
     })
-    facts.start()
-    sockets[0].open()
-    await new Promise(resolve => setTimeout(resolve, 5))
-    sockets[0].item({ type: 'ready', clientId: 'c' })
-    sockets[0].item({ type: 'emit', event: 'api-session/status', args: { sessionId: 's1', running: true } })
-    sockets[0].item({ type: 'emit', event: 'api-session/status', args: { sessionId: 's1', running: false } })
-    await new Promise(resolve => setTimeout(resolve, 10))
-    const last = snapshots.at(-1) as { rows: Record<string, Record<string, unknown>> }
-    const row = last.rows['s1']
-    assert.equal(row?.completedAt !== null && row?.completedAt !== undefined, expectArmed, label)
-    if (tail !== 'FAIL' && tail !== 'EMPTY') assert.deepEqual(row?.lastTurnEnd, tail, label)
-    if (tail === 'FAIL' || tail === 'EMPTY') {
-      // 两种「读不到确定性尾巴」都要计数：否则分不清「没完成」与「观察者读不到」。
-      assert.equal(facts.status().followFailures, 1, label + '：读不出尾巴必须计数')
-      assert.equal(row?.completedAtDomain, 'observer', label + '：降级戳是观察者域')
-      assert.equal(row?.completedAtSource, 'reconstructed', label + '：降级戳不得冒充 observed')
+    try {
+      facts.start()
+      sockets[0].open()
+      sockets[0].onFollowOpen = streamId => {
+        if (tail === 'FAIL') sockets[0].followEnd(streamId)
+        else sockets[0].followItem(streamId, tail === 'EMPTY' ? { type: 'snapshot', records: [] } : followSnapshot(tail))
+      }
+      await new Promise(resolve => setTimeout(resolve, 5))
+      sockets[0].item({ type: 'ready', clientId: 'c' })
+      sockets[0].item({ type: 'emit', event: 'api-session/status', args: { sessionId: 's1', running: true } })
+      sockets[0].item({ type: 'emit', event: 'api-session/status', args: { sessionId: 's1', running: false } })
+      await waitFor(() => facts.status().pendingReads === 0, 'follow stream did not settle')
+      const last = snapshots.at(-1) as { rows: Record<string, Record<string, unknown>> }
+      const row = last.rows['s1']
+      assert.equal(row?.completedAt !== null && row?.completedAt !== undefined, expectArmed, label)
+      if (tail !== 'FAIL' && tail !== 'EMPTY') assert.deepEqual(row?.lastTurnEnd, { ...tail, at: 0 }, label)
+      if (tail === 'FAIL' || tail === 'EMPTY') {
+        // 两种「读不到确定性尾巴」都要计数：否则分不清「没完成」与「观察者读不到」。
+        assert.equal(facts.status().followFailures, 1, label + '：读不出尾巴必须计数')
+        assert.equal(row?.completedAtDomain, 'observer', label + '：降级戳是观察者域')
+        assert.equal(row?.completedAtSource, 'reconstructed', label + '：降级戳不得冒充 observed')
+      }
+    } finally {
+      facts.stop()
     }
-    facts.stop()
   }
 })
 
@@ -184,23 +678,24 @@ test('baseline, follow and socket failures are counted, not swallowed', async ()
   const facts = createSourceMuxFacts({
     sourceId: 'ssh-b', origin: 'http://cp', now: () => 777, onSnapshot: () => {},
     openSocket: () => { const s = new FakeSocket(); sockets.push(s); return s },
-    fetchImpl: rpcFetch({
-      'session/list': () => 'FAIL',
-      'session/follow': () => 'FAIL',
-    }) as never,
+    fetchImpl: rpcFetch({ 'session/list': () => 'FAIL' }) as never,
   })
-  facts.start()
-  sockets[0].open()
-  await new Promise(resolve => setTimeout(resolve, 5))
-  sockets[0].item({ type: 'ready', clientId: 'c' })
-  assert.ok(facts.status().baselineFailures >= 1, '基线失败必须计数（不能静默）')
-  sockets[0].item({ type: 'emit', event: 'api-session/status', args: { sessionId: 's1', running: true } })
-  sockets[0].item({ type: 'emit', event: 'api-session/status', args: { sessionId: 's1', running: false } })
-  await new Promise(resolve => setTimeout(resolve, 10))
-  assert.equal(facts.status().followFailures, 1, '尾巴读失败是降级武装路径，必须可数')
-  sockets[0].onerror?.({})
-  assert.equal(facts.status().socketErrors, 1, '套接字错误与 close 分开计数')
-  facts.stop()
+  try {
+    facts.start()
+    sockets[0].open()
+    sockets[0].onFollowOpen = streamId => sockets[0].followEnd(streamId)
+    await new Promise(resolve => setTimeout(resolve, 5))
+    sockets[0].item({ type: 'ready', clientId: 'c' })
+    assert.ok(facts.status().baselineFailures >= 1, '基线失败必须计数（不能静默）')
+    sockets[0].item({ type: 'emit', event: 'api-session/status', args: { sessionId: 's1', running: true } })
+    sockets[0].item({ type: 'emit', event: 'api-session/status', args: { sessionId: 's1', running: false } })
+    await new Promise(resolve => setTimeout(resolve, 10))
+    assert.equal(facts.status().followFailures, 1, '尾巴读失败是降级武装路径，必须可数')
+    sockets[0].onerror?.({})
+    assert.equal(facts.status().socketErrors, 1, '套接字错误与 close 分开计数')
+  } finally {
+    facts.stop()
+  }
 })
 
 /** 重连退避：源长时间不可达时不得变成每秒一次的重试洪流（首次延迟即为 1s）。 */
@@ -211,22 +706,25 @@ test('reconnect uses an exponential backoff instead of a fixed 1s hammer', async
     openSocket: () => { const s = new FakeSocket(); sockets.push(s); return s },
     fetchImpl: rpcFetch({ 'session/list': () => ({ items: [] }) }) as never,
   })
-  facts.start()
-  sockets[0].onclose?.({})
-  await new Promise(resolve => setTimeout(resolve, 250))
-  assert.equal(facts.status().reconnects, 0, '首次重连延迟 1s，250ms 内不得重连（固定 100ms 轮询会在此暴露）')
-  facts.stop()
+  try {
+    facts.start()
+    sockets[0].onclose?.({})
+    await new Promise(resolve => setTimeout(resolve, 250))
+    assert.equal(facts.status().reconnects, 0, '首次重连延迟 1s，250ms 内不得重连（固定 100ms 轮询会在此暴露）')
+  } finally {
+    facts.stop()
+  }
 })
 
 /** 仪器：每个来源的状态可由外部读取（函数视图，不产生周期性对象）。 */
 test('the per-source instrument exposes the live status', () => {
   const host: Record<string, unknown> = {}
-  publishSourceMuxInstrument('ssh-d', () => ({ ready: true, edges: 2, lastEventAt: 5, pendingReads: 0, reconnects: 0, baselines: 1, baselineFailures: 0, followFailures: 0, socketErrors: 0 }), host)
+  publishSourceMuxInstrument('ssh-d', () => ({ ready: true, edges: 2, lastEventAt: 5, pendingReads: 0, pendingClassifications: 0, reconnects: 0, baselines: 1, baselineFailures: 0, followFailures: 0, socketErrors: 0 }), host)
   const registry = host.__dshChamberSourceMux as Record<string, () => { edges: number }>
   assert.equal(registry['ssh-d']().edges, 2)
 })
-/** 基线形状防御：session/list 的 value 缺失（或没有 items）是空基线，不是崩溃。 */
-test('a value-less session/list response is an empty baseline, not a crash', async () => {
+/** 成功信封不等于可信列表；缺 items 不能伪装成零会话。 */
+test('a value-less session/list response remains degraded', async () => {
   const sockets: FakeSocket[] = []
   const facts = createSourceMuxFacts({
     sourceId: 'ssh-shape', origin: 'http://cp', onSnapshot: () => {},
@@ -237,11 +735,131 @@ test('a value-less session/list response is an empty baseline, not a crash', asy
     facts.start()
     sockets[0].open()
     await new Promise(resolve => setTimeout(resolve, 10))
-    assert.ok(facts.status().baselines >= 1, 'a value-less list is still a countable baseline')
-    assert.equal(facts.status().baselineFailures, 0)
+    assert.equal(facts.status().baselines, 0)
+    assert.equal(facts.status().baselineFailures, 1)
+    assert.equal(facts.status().ready, false)
   } finally {
     facts.stop()
   }
+})
+
+test('two complete baseline absences retire a row without forging a completion', async () => {
+  const socket = new FakeSocket()
+  const snapshots: Array<{ rows: Record<string, { running: boolean }> }> = []
+  let items: unknown[] = [{ sessionId: 's1', running: true, updatedAt: 1 }]
+  const facts = createSourceMuxFacts({
+    sourceId: 'baseline-removal', origin: 'http://cp', onSnapshot: snapshot => snapshots.push(snapshot),
+    openSocket: () => socket, reconcileIntervalMs: 1_000, silenceTimeoutMs: 1_000,
+    fetchImpl: rpcFetch({ 'session/list': () => ({ items }) }) as never,
+  })
+  try {
+    facts.start()
+    socket.open()
+    socket.item({ type: 'ready', clientId: 'c' })
+    await waitFor(() => facts.status().ready, 'initial baseline missing')
+    assert.equal(snapshots.at(-1)?.rows.s1?.running, true)
+    items = []
+    facts.reconcile()
+    await waitFor(() => facts.status().baselines === 2, 'first absence missing')
+    assert.equal(snapshots.at(-1)?.rows.s1?.running, true, 'one absence is not a deletion verdict')
+    facts.reconcile()
+    await waitFor(() => facts.status().baselines === 3, 'second absence missing')
+    assert.equal(snapshots.at(-1)?.rows.s1, undefined)
+    assert.equal(facts.status().edges, 0)
+    assert.equal(socket.followOpens.length, 0, 'deletion is not completion')
+  } finally { facts.stop() }
+})
+
+test('a live session event resets the baseline absence count', async () => {
+  const socket = new FakeSocket()
+  const snapshots: Array<{ rows: Record<string, { running: boolean }> }> = []
+  let items: unknown[] = [{ sessionId: 's1', running: true, updatedAt: 1 }]
+  const facts = createSourceMuxFacts({
+    sourceId: 'absence-reset', origin: 'http://cp', onSnapshot: snapshot => snapshots.push(snapshot),
+    openSocket: () => socket, reconcileIntervalMs: 1_000, silenceTimeoutMs: 1_000,
+    fetchImpl: rpcFetch({ 'session/list': () => ({ items }) }) as never,
+  })
+  try {
+    facts.start()
+    socket.open()
+    socket.item({ type: 'ready', clientId: 'c' })
+    await waitFor(() => facts.status().ready, 'initial baseline missing')
+    items = []
+    facts.reconcile()
+    await waitFor(() => facts.status().baselines === 2, 'first absence missing')
+    socket.item({ type: 'emit', event: 'api-session/status', args: ['s1', true] })
+    facts.reconcile()
+    await waitFor(() => facts.status().baselines === 3, 'post-event baseline missing')
+    assert.equal(snapshots.at(-1)?.rows.s1?.running, true)
+  } finally { facts.stop() }
+})
+
+test('stop/start discards an old follow reply before the new subscription can use its session id', async () => {
+  const sockets: FakeSocket[] = []
+  const rpc = deferredRpc()
+  const snapshots: Array<{ rows: Record<string, { completedAt: number | null }> }> = []
+  const facts = createSourceMuxFacts({
+    sourceId: 'restart', origin: 'http://cp', onSnapshot: snapshot => snapshots.push(snapshot),
+    openSocket: () => { const socket = new FakeSocket(); sockets.push(socket); return socket },
+    fetchImpl: rpc.fetchImpl as never, reconcileIntervalMs: 1_000, silenceTimeoutMs: 1_000,
+  })
+  try {
+    facts.start()
+    sockets[0]!.open()
+    sockets[0]!.item({ type: 'ready', clientId: 'c' })
+    await waitFor(() => rpc.lists.length === 1, 'first list missing')
+    rpc.lists[0]!({ items: [{ sessionId: 's1', running: true, updatedAt: 1 }] })
+    await waitFor(() => facts.status().ready, 'first baseline missing')
+    sockets[0]!.item({ type: 'emit', event: 'api-session/status', args: ['s1', false] })
+    await waitFor(() => sockets[0]!.followOpens.length === 1, 'old tail read missing')
+    facts.stop()
+    assert.equal(facts.status().pendingReads, 0)
+    facts.start()
+    sockets[1]!.open()
+    sockets[1]!.item({ type: 'ready', clientId: 'c' })
+    await waitFor(() => rpc.lists.length === 2, 'new list missing')
+    rpc.lists[1]!({ items: [{ sessionId: 's1', running: false, updatedAt: 1 }] })
+    await waitFor(() => facts.status().ready, 'new baseline missing')
+    sockets[0]!.replyFollow(0, { type: 'snapshot', records: [{ event: { type: 'turn/end', time: 1_700_000_000_000,
+      data: { reason: { kind: 'completed' } } } }] })
+    await new Promise(resolve => setTimeout(resolve, 0))
+    assert.equal(snapshots.at(-1)?.rows.s1?.completedAt, null)
+    assert.equal(facts.status().pendingReads, 0, 'the old reply cannot decrement the new lifetime counter')
+  } finally { facts.stop() }
+})
+
+test('a tail arriving during baseline-confirmed absence cannot turn deletion into completion', async () => {
+  const socket = new FakeSocket()
+  const rpc = deferredRpc()
+  const snapshots: Array<{ rows: Record<string, { completedAt: number | null }> }> = []
+  const facts = createSourceMuxFacts({
+    sourceId: 'absence-tail', origin: 'http://cp', onSnapshot: snapshot => snapshots.push(snapshot),
+    openSocket: () => socket, fetchImpl: rpc.fetchImpl as never,
+    reconcileIntervalMs: 1_000, silenceTimeoutMs: 1_000,
+  })
+  try {
+    facts.start()
+    socket.open()
+    socket.item({ type: 'ready', clientId: 'c' })
+    await waitFor(() => rpc.lists.length === 1, 'initial list missing')
+    rpc.lists[0]!({ items: [{ sessionId: 's1', running: true, updatedAt: 1 }] })
+    await waitFor(() => facts.status().ready, 'initial baseline missing')
+    socket.item({ type: 'emit', event: 'api-session/status', args: ['s1', false] })
+    await waitFor(() => socket.followOpens.length === 1, 'tail read missing')
+    facts.reconcile()
+    await waitFor(() => rpc.lists.length === 2, 'absence list missing')
+    rpc.lists[1]!({ items: [] })
+    await waitFor(() => facts.status().baselines === 2, 'first absence missing')
+    socket.replyFollow(0, { type: 'snapshot', records: [{ event: { type: 'turn/end', time: 1_700_000_000_000,
+      data: { reason: { kind: 'completed' } } } }] })
+    await new Promise(resolve => setTimeout(resolve, 0))
+    assert.equal(snapshots.at(-1)?.rows.s1?.completedAt, null)
+    facts.reconcile()
+    await waitFor(() => rpc.lists.length === 3, 'confirmation list missing')
+    rpc.lists[2]!({ items: [] })
+    await waitFor(() => facts.status().baselines === 3, 'second absence missing')
+    assert.equal(snapshots.at(-1)?.rows.s1, undefined)
+  } finally { facts.stop() }
 })
 
 /**
@@ -258,14 +876,13 @@ test('B1: a true->false baseline edge after resubscription reads the tail and ar
     sourceId: 'ssh-b1', origin: 'http://cp', now: () => 2_000, onSnapshot: s => snapshots.push(s),
     silenceTimeoutMs: 25,
     openSocket: () => { const s = new FakeSocket(); sockets.push(s); return s },
-    fetchImpl: rpcFetch({
-      'session/list': () => ({ items: [{ sessionId: 's1', running, updatedAt: 100 }] }),
-      'session/follow': payload => { follows.push(payload); return { snapshot: { tail: { turn: { reason: { kind: 'completed' } } } } } },
-    }) as never,
+    fetchImpl: rpcFetch({ 'session/list': () => ({ items: [{ sessionId: 's1', running, updatedAt: 100 }] }) }) as never,
   })
   try {
     facts.start()
     sockets[0].open()
+    const answer = (socket: FakeSocket) => { socket.onFollowOpen = (_streamId, payload) => { follows.push(payload); socket.replyFollow(socket.followOpens.length - 1, followSnapshot({ kind: 'completed' })) } }
+    answer(sockets[0])
     await new Promise(resolve => setTimeout(resolve, 5))
     sockets[0].item({ type: 'ready', clientId: 'c' })
     // 缺口：静默窗内会话完成；$events 不重放 status，只有下一次基线能看见。
@@ -273,6 +890,7 @@ test('B1: a true->false baseline edge after resubscription reads the tail and ar
     await new Promise(resolve => setTimeout(resolve, 60))
     assert.ok(sockets.length >= 2, 'silence must resubscribe (R21)')
     sockets.at(-1)!.open()
+    answer(sockets.at(-1)!)
     await new Promise(resolve => setTimeout(resolve, 10))
     assert.equal(follows.length, 1, 'a baseline true->false edge must open exactly one follow')
     assert.equal(facts.status().edges, 1, 'the baseline edge must count like a status edge')
@@ -295,12 +913,12 @@ test('B2: a re-baseline never clobbers an armed completion', async () => {
     fetchImpl: rpcFetch({
       // 第二次基线带更旧的 updatedAt 与 rowFromListItem 的空完成字段。
       'session/list': () => { listCall += 1; return { items: [{ sessionId: 's1', running: false, updatedAt: listCall === 1 ? 5 : 0 }] } },
-      'session/follow': () => ({ snapshot: { tail: { turn: { reason: { kind: 'completed' } } } } }),
     }) as never,
   })
   try {
     facts.start()
     sockets[0].open()
+    sockets[0].onFollowOpen = streamId => sockets[0].followItem(streamId, followSnapshot({ kind: 'completed' }))
     await new Promise(resolve => setTimeout(resolve, 5))
     sockets[0].item({ type: 'ready', clientId: 'c' })
     sockets[0].item({ type: 'emit', event: 'api-session/status', args: { sessionId: 's1', running: true } })
@@ -322,6 +940,7 @@ test('B2: a re-baseline never clobbers an armed completion', async () => {
     facts.stop()
   }
 })
+
 
 /** connect() 换代后，旧 socket 的 onclose 不得再改状态或调度重连。 */
 test('B3: a superseded socket cannot reschedule or mutate state', async () => {
@@ -368,14 +987,12 @@ test('B4: status opens an unknown row; added/activity/removed are handled', asyn
   const facts = createSourceMuxFacts({
     sourceId: 'ssh-b4', origin: 'http://cp', now: () => 400, onSnapshot: s => snapshots.push(s),
     openSocket: () => { const s = new FakeSocket(); sockets.push(s); return s },
-    fetchImpl: rpcFetch({
-      'session/list': () => ({ items: [] }),
-      'session/follow': () => ({ snapshot: { tail: { turn: { reason: { kind: 'completed' } } } } }),
-    }) as never,
+    fetchImpl: rpcFetch({ 'session/list': () => ({ items: [] }) }) as never,
   })
   try {
     facts.start()
     sockets[0].open()
+    sockets[0].onFollowOpen = streamId => sockets[0].followItem(streamId, followSnapshot({ kind: 'completed' }))
     await new Promise(resolve => setTimeout(resolve, 5))
     sockets[0].item({ type: 'ready', clientId: 'c' })
     // 冻结 wire 形：args = [sessionId, running]（对象形只用于测试）。
@@ -418,14 +1035,12 @@ test('B5: completedAt prefers the host turn/end time; a client stamp is reconstr
     const facts = createSourceMuxFacts({
       sourceId: 'ssh-b5', origin: 'http://cp', now: () => 5_000, onSnapshot: s => snapshots.push(s),
       openSocket: () => { const s = new FakeSocket(); sockets.push(s); return s },
-      fetchImpl: rpcFetch({
-        'session/list': () => ({ items: [{ sessionId: 's1', running: false, updatedAt: 1 }] }),
-        'session/follow': payload => { follows.push(payload); return tail },
-      }) as never,
+      fetchImpl: rpcFetch({ 'session/list': () => ({ items: [{ sessionId: 's1', running: false, updatedAt: 1 }] }) }) as never,
     })
     try {
       facts.start()
       sockets[0].open()
+      sockets[0].onFollowOpen = (streamId, payload) => { follows.push(payload); sockets[0].followItem(streamId, tail) }
       await new Promise(resolve => setTimeout(resolve, 5))
       sockets[0].item({ type: 'ready', clientId: 'c' })
       sockets[0].item({ type: 'emit', event: 'api-session/status', args: ['s1', true] })
@@ -477,6 +1092,8 @@ test('B7: baseline and follow rpc deadlines surface as failures instead of hangi
     await new Promise(resolve => setTimeout(resolve, 60))
     assert.equal(facts.status().followFailures, 1, 'a hung session/follow must degrade within its deadline')
     assert.equal(facts.status().pendingReads, 0, 'a timed-out read must not leak a pending read')
+    assert.equal(sockets[0].sent.some(payload => JSON.parse(payload).type === 'cancel'), true,
+      'a timed-out follow stream must be cancelled')
   } finally {
     facts.stop()
   }
@@ -519,4 +1136,3 @@ test('B10: stop() unpublishes the per-source instrument', () => {
   facts.stop()
   assert.equal(registry?.['ssh-b10-instrument'], undefined, 'stop() must remove the instrument entry')
 })
-

@@ -67,15 +67,6 @@ export const DEAD_EXPORT_EXEMPTIONS = [
   { package: 'dsh-stream-state', name: 'IN_FLIGHT_GRACE_MS', reason: 'table value consumed via CARRIER_ENV + parity gate' },
   { package: 'dsh-stream-state', name: 'OPENING_TIMEOUT_LADDER_MS', reason: 'table value consumed via openingBudgetMs + parity gate' },
   { package: 'dsh-stream-state', name: 'OPENING_STALL_STREAK', reason: 'table value consumed via CARRIER_ENV + parity gate' },
-  { package: 'dsh-stream-state', name: 'TABLE_SNAPSHOT', reason: 'tables.json lockstep projection (tables test)' },
-  // Cross-language reference implementations: mirrored field-for-field by the Swift
-  // mirror and exercised by the G-B/G-F gates. Retirement: when the renderer
-  // consumes the package for its load-state decisions, or the mirror is dropped
-  // (engine model extension, design 14 section D4 item 5).
-  { package: 'dsh-stream-state', name: 'initialLoadState', reason: 'Swift-mirror reference implementation (G-F); retires with the engine extension' },
-  { package: 'dsh-stream-state', name: 'contentIsBelievable', reason: 'Swift-mirror reference implementation (G-F); retires with the engine extension' },
-  { package: 'dsh-stream-state', name: 'loadIsLate', reason: 'Swift-mirror reference implementation (G-F); retires with the engine extension' },
-  { package: 'dsh-stream-state', name: 'reduceLoadState', reason: 'Swift-mirror reference implementation (G-F); retires with the engine extension' },
   // Differential-harness surface: imported by test/equivalence and
   // scripts/refactor/equivalence.mjs, not by a production module.
   { package: 'dsh-stream-state', name: 'reasonClassOf', reason: 'differential normalizer; consumed by the equivalence harness' },

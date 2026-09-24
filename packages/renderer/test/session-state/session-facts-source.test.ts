@@ -14,8 +14,8 @@ import {
   SESSION_FACTS_PROTOCOL_VERSION,
   SESSION_FACTS_READ_ALL_ROUTE,
   SESSION_FACTS_READ_ROUTE,
-  SESSION_FACTS_ROUTE,
   SESSION_FACTS_STREAM_ROUTE,
+  SESSION_FACTS_ROUTE,
   applySessionFactsDelta,
   classifySessionFactsProbe,
   createSessionFactsSource,
@@ -137,58 +137,73 @@ function sourceOver(
 
 test('F2: 404 publishes the classifier legacy-gateway verdict (and drives the sidebar legacy mode)', async () => {
   const { harness, source } = sourceOver([jsonResponse(404, { error: 'not found' })], { reconnectMs: 5 })
-  await waitFor(() => source.getSnapshot() !== undefined)
-  const snapshot = source.getSnapshot()
-  assert.equal(snapshot?.verdict, 'legacy-gateway')
-  assert.equal(snapshot?.degradation, 'legacy-gateway')
-  assert.equal(snapshot?.mode, null)
-  assert.equal(snapshot?.stale, false, 'legacy 走有界低频重探，快照持续刷新 ⇒ 按事实不标 stale')
-  assert.deepEqual(snapshot?.rows, {})
-  assert.equal(sourceSessionFactsMode(snapshot), 'legacy')
-  // 版本事实不拒绝重探：网关升级后必须被自动接回（有界低频，按 reconnectMs）。
-  await waitFor(() => harness.calls() >= 2, 1_000)
-  source.stop()
+  try {
+    await waitFor(() => source.getSnapshot() !== undefined)
+    const snapshot = source.getSnapshot()
+    assert.equal(snapshot?.verdict, 'legacy-gateway')
+    assert.equal(snapshot?.degradation, 'legacy-gateway')
+    assert.equal(snapshot?.mode, null)
+    assert.equal(snapshot?.stale, false, 'legacy 走有界低频重探，快照持续刷新 ⇒ 按事实不标 stale')
+    assert.deepEqual(snapshot?.rows, {})
+    assert.equal(sourceSessionFactsMode(snapshot), 'legacy')
+    // 版本事实不拒绝重探：网关升级后必须被自动接回（有界低频，按 reconnectMs）。
+    await waitFor(() => harness.calls() >= 2, 1_000)
+  } finally {
+    source.stop()
+  }
 })
 
 test('F2: 503 + session_state_disabled publishes watcher-disabled (and drives the sidebar disabled mode)', async () => {
   const { harness, source } = sourceOver([jsonResponse(503, { error: { code: SESSION_FACTS_DISABLED_CODE } })], { reconnectMs: 5 })
-  await waitFor(() => source.getSnapshot() !== undefined)
-  const snapshot = source.getSnapshot()
-  assert.equal(snapshot?.verdict, 'degraded')
-  assert.equal(snapshot?.degradation, 'watcher-disabled')
-  assert.equal(sourceSessionFactsMode(snapshot), 'disabled')
-  // 服务事实不重探（与 mode:'off' 同一语义，正是唯一分类器的等价口径）。
-  await new Promise(resolve => setTimeout(resolve, 60))
-  assert.equal(harness.calls(), 1)
-  source.stop()
+  try {
+    await waitFor(() => source.getSnapshot() !== undefined)
+    const snapshot = source.getSnapshot()
+    assert.equal(snapshot?.verdict, 'degraded')
+    assert.equal(snapshot?.degradation, 'watcher-disabled')
+    assert.equal(sourceSessionFactsMode(snapshot), 'disabled')
+    // 服务事实不重探（与 mode:'off' 同一语义，正是唯一分类器的等价口径）。
+    await new Promise(resolve => setTimeout(resolve, 60))
+    assert.equal(harness.calls(), 1)
+  } finally {
+    source.stop()
+  }
 })
 
 test('F2: a plain 5xx is unavailable (never legacy) and schedules a bounded reprobe', async () => {
   const { harness, source } = sourceOver([new Response('oops', { status: 502 })], { reconnectMs: 5 })
-  await waitFor(() => source.getSnapshot() !== undefined)
-  assert.equal(source.getSnapshot()?.verdict, 'degraded')
-  assert.equal(source.getSnapshot()?.degradation, 'unavailable')
-  await waitFor(() => harness.calls() >= 2, 1_000)
-  source.stop()
+  try {
+    await waitFor(() => source.getSnapshot() !== undefined)
+    assert.equal(source.getSnapshot()?.verdict, 'degraded')
+    assert.equal(source.getSnapshot()?.degradation, 'unavailable')
+    await waitFor(() => harness.calls() >= 2, 1_000)
+  } finally {
+    source.stop()
+  }
 })
 
 test('F2: protocol 2 is forward-skew; mode off is watcher-disabled; both are version/service facts and never retry', async () => {
   const skew = sourceOver([jsonResponse(200, { ...SNAPSHOT, protocol: 2 })], { reconnectMs: 5 })
-  await waitFor(() => skew.source.getSnapshot() !== undefined)
-  assert.equal(skew.source.getSnapshot()?.verdict, 'degraded')
-  assert.equal(skew.source.getSnapshot()?.degradation, 'forward-skew')
-  assert.equal(skew.source.getSnapshot()?.rows.s1.sessionId, 's1', 'forward-skew 与旧行为一致地保留镜像行')
-  await new Promise(resolve => setTimeout(resolve, 60))
-  assert.equal(skew.harness.calls(), 1, '版本事实不重探')
-  skew.source.stop()
+  try {
+    await waitFor(() => skew.source.getSnapshot() !== undefined)
+    assert.equal(skew.source.getSnapshot()?.verdict, 'degraded')
+    assert.equal(skew.source.getSnapshot()?.degradation, 'forward-skew')
+    assert.equal(skew.source.getSnapshot()?.rows.s1.sessionId, 's1', 'forward-skew 与旧行为一致地保留镜像行')
+    await new Promise(resolve => setTimeout(resolve, 60))
+    assert.equal(skew.harness.calls(), 1, '版本事实不重探')
+  } finally {
+    skew.source.stop()
+  }
 
   const off = sourceOver([jsonResponse(200, { ...SNAPSHOT, mode: 'off' })], { reconnectMs: 5 })
-  await waitFor(() => off.source.getSnapshot() !== undefined)
-  assert.equal(off.source.getSnapshot()?.degradation, 'watcher-disabled')
-  assert.equal(sourceSessionFactsMode(off.source.getSnapshot()), 'disabled')
-  await new Promise(resolve => setTimeout(resolve, 60))
-  assert.equal(off.harness.calls(), 1, '观察者关闭是服务事实，不重探')
-  off.source.stop()
+  try {
+    await waitFor(() => off.source.getSnapshot() !== undefined)
+    assert.equal(off.source.getSnapshot()?.degradation, 'watcher-disabled')
+    assert.equal(sourceSessionFactsMode(off.source.getSnapshot()), 'disabled')
+    await new Promise(resolve => setTimeout(resolve, 60))
+    assert.equal(off.harness.calls(), 1, '观察者关闭是服务事实，不重探')
+  } finally {
+    off.source.stop()
+  }
 })
 
 test('F2: a transport fault after a good mirror keeps the facts and marks them stale', async () => {
@@ -196,14 +211,17 @@ test('F2: a transport fault after a good mirror keeps the facts and marks them s
     jsonResponse(200, { ...SNAPSHOT, mode: 'poll', features: [] }),
     new Error('network down'),
   ], { pollIntervalMs: 10, reconnectMs: 5 })
-  await waitFor(() => source.getSnapshot()?.rows.s1 !== undefined)
-  await waitFor(() => source.getSnapshot()?.stale === true, 1_000)
-  const snapshot = source.getSnapshot()
-  assert.equal(snapshot?.verdict, 'ok', '传输层坏答案不擦除既有镜像事实')
-  assert.equal(snapshot?.degradation, null)
-  assert.equal(snapshot?.rows.s1.completedAt, 1_700_000_000_200)
-  assert.equal(sourceSessionFactsMode(snapshot), 'degraded', 'stale 事实呈现为受限，绝不冒充 full')
-  source.stop()
+  try {
+    await waitFor(() => source.getSnapshot()?.rows.s1 !== undefined)
+    await waitFor(() => source.getSnapshot()?.stale === true, 1_000)
+    const snapshot = source.getSnapshot()
+    assert.equal(snapshot?.verdict, 'ok', '传输层坏答案不擦除既有镜像事实')
+    assert.equal(snapshot?.degradation, null)
+    assert.equal(snapshot?.rows.s1.completedAt, 1_700_000_000_200)
+    assert.equal(sourceSessionFactsMode(snapshot), 'degraded', 'stale 事实呈现为受限，绝不冒充 full')
+  } finally {
+    source.stop()
+  }
 })
 
 test('F2: a 200 HTML fallback (unversioned) retries on the carrier backoff and recovers to ok', async () => {
@@ -213,13 +231,16 @@ test('F2: a 200 HTML fallback (unversioned) retries on the carrier backoff and r
     new Response('<html>spa fallback</html>', { status: 200, headers: { 'content-type': 'text/html' } }),
     jsonResponse(200, { ...SNAPSHOT, mode: 'poll', features: [] }),
   ], { reconnectMs: 5 })
-  await waitFor(() => source.getSnapshot()?.degradation === 'unversioned')
-  assert.equal(sourceSessionFactsMode(source.getSnapshot()), 'degraded')
-  await waitFor(() => source.getSnapshot()?.verdict === 'ok', 1_000)
-  assert.equal(source.getSnapshot()?.degradation, null)
-  assert.equal(source.getSnapshot()?.rows.s1.sessionId, 's1', '恢复后带回真实镜像行')
-  assert.ok(harness.calls() >= 2, '不可解析的 2xx 必须按 reconnectMs 有界重探')
-  source.stop()
+  try {
+    await waitFor(() => source.getSnapshot()?.degradation === 'unversioned')
+    assert.equal(sourceSessionFactsMode(source.getSnapshot()), 'degraded')
+    await waitFor(() => source.getSnapshot()?.verdict === 'ok', 1_000)
+    assert.equal(source.getSnapshot()?.degradation, null)
+    assert.equal(source.getSnapshot()?.rows.s1.sessionId, 's1', '恢复后带回真实镜像行')
+    assert.ok(harness.calls() >= 2, '不可解析的 2xx 必须按 reconnectMs 有界重探')
+  } finally {
+    source.stop()
+  }
 })
 
 test('F2: an unversioned refetch re-arms the stream instead of wedging', async () => {
@@ -250,13 +271,16 @@ test('F2: an unversioned refetch re-arms the stream instead of wedging', async (
     streamConnectTimeoutMs: 60_000,
     reconnectMs: 10,
   })
-  source.subscribe(() => {})
-  source.update({ fingerprint: 'f1', connected: true })
-  await waitFor(() => streams >= 1)
-  await waitFor(() => source.getSnapshot()?.degradation === 'unversioned', 2_000)
-  // 与 probe 共用 shouldRetryProbe：refetch 的恢复动作是重连流，不得静止降级。
-  await waitFor(() => streams >= 2, 2_000)
-  source.stop()
+  try {
+    source.subscribe(() => {})
+    source.update({ fingerprint: 'f1', connected: true })
+    await waitFor(() => streams >= 1)
+    await waitFor(() => source.getSnapshot()?.degradation === 'unversioned', 2_000)
+    // 与 probe 共用 shouldRetryProbe：refetch 的恢复动作是重连流，不得静止降级。
+    await waitFor(() => streams >= 2, 2_000)
+  } finally {
+    source.stop()
+  }
 })
 
 test('snapshot parser: rows, host gate, read state and unknown fields are defensive', () => {
@@ -392,7 +416,6 @@ test('lockstep: our route/protocol/disabled literals are pinned to the control-p
   assert.ok(protocolSource.includes('completedAtSource'))
   // 本侧常量逐字节相同。
   assert.equal(SESSION_FACTS_ROUTE, '/chamber/session-state')
-  assert.equal(SESSION_FACTS_STREAM_ROUTE, '/chamber/session-state/stream')
   assert.equal(SESSION_FACTS_READ_ROUTE, '/chamber/session-state/read')
   assert.equal(SESSION_FACTS_READ_ALL_ROUTE, '/chamber/session-state/read-all')
   assert.equal(SESSION_FACTS_PROTOCOL_VERSION, 1)
@@ -456,22 +479,25 @@ test('R22: a failed read ack is replayed on the next facts snapshot (existing ch
     pollIntervalMs: 10,
     silenceMs: 0,
   })
-  source.subscribe(() => {})
-  source.update({ fingerprint: 'f1', connected: true })
-  await waitFor(() => harness.gets.length >= 1)
-  source.ackRead('client-a', 's1', 42)
-  await waitFor(() => harness.acks.length >= 1)
-  assert.equal(harness.acks[0].url, '/api/i/gw-a/chamber/session-state/read')
-  assert.deepEqual(harness.acks[0].body, { clientId: 'client-a', sessionId: 's1', readThrough: 42 })
-  // 下一次 poll 快照到达 = 既有的「通道恢复」信号 ⇒ 重放。
-  await waitFor(() => harness.acks.length >= 2)
-  assert.deepEqual(harness.acks[1].body, harness.acks[0].body, '重放同值（服务端 max ⇒ 幂等）')
-  assert.equal(harness.server.get('s1'), 42, '服务端只升不降')
-  // 2xx 出队后：后续快照不得再重放。
-  await waitFor(() => harness.gets.length >= 4)
-  await new Promise(resolve => setTimeout(resolve, 30))
-  assert.equal(harness.acks.length, 2, '成功出队后不得重复上行')
-  source.stop()
+  try {
+    source.subscribe(() => {})
+    source.update({ fingerprint: 'f1', connected: true })
+    await waitFor(() => harness.gets.length >= 1)
+    source.ackRead('client-a', 's1', 42)
+    await waitFor(() => harness.acks.length >= 1)
+    assert.equal(harness.acks[0].url, '/api/i/gw-a/chamber/session-state/read')
+    assert.deepEqual(harness.acks[0].body, { clientId: 'client-a', sessionId: 's1', readThrough: 42 })
+    // 下一次 poll 快照到达 = 既有的「通道恢复」信号 ⇒ 重放。
+    await waitFor(() => harness.acks.length >= 2)
+    assert.deepEqual(harness.acks[1].body, harness.acks[0].body, '重放同值（服务端 max ⇒ 幂等）')
+    assert.equal(harness.server.get('s1'), 42, '服务端只升不降')
+    // 2xx 出队后：后续快照不得再重放。
+    await waitFor(() => harness.gets.length >= 4)
+    await new Promise(resolve => setTimeout(resolve, 30))
+    assert.equal(harness.acks.length, 2, '成功出队后不得重复上行')
+  } finally {
+    source.stop()
+  }
 })
 
 test('R22: a failed read-all floor replays on recovery and never regresses the server', async () => {
@@ -482,16 +508,19 @@ test('R22: a failed read-all floor replays on recovery and never regresses the s
     pollIntervalMs: 10,
     silenceMs: 0,
   })
-  source.subscribe(() => {})
-  source.update({ fingerprint: 'f1', connected: true })
-  await waitFor(() => harness.gets.length >= 1)
-  source.ackAllRead('client-a', 77)
-  await waitFor(() => harness.acks.length >= 1)
-  assert.equal(harness.acks[0].url, '/api/i/gw-b/chamber/session-state/read-all')
-  await waitFor(() => harness.acks.length >= 2)
-  assert.deepEqual(harness.acks[1].body, { clientId: 'client-a', through: 77 })
-  assert.equal(harness.server.get('__floor__'), 77, '同值重放不改变 floor')
-  source.stop()
+  try {
+    source.subscribe(() => {})
+    source.update({ fingerprint: 'f1', connected: true })
+    await waitFor(() => harness.gets.length >= 1)
+    source.ackAllRead('client-a', 77)
+    await waitFor(() => harness.acks.length >= 1)
+    assert.equal(harness.acks[0].url, '/api/i/gw-b/chamber/session-state/read-all')
+    await waitFor(() => harness.acks.length >= 2)
+    assert.deepEqual(harness.acks[1].body, { clientId: 'client-a', through: 77 })
+    assert.equal(harness.server.get('__floor__'), 77, '同值重放不改变 floor')
+  } finally {
+    source.stop()
+  }
 })
 
 test('R22: a hung ack POST never blocks snapshot delivery or the synchronous ack call', async () => {
@@ -512,18 +541,21 @@ test('R22: a hung ack POST never blocks snapshot delivery or the synchronous ack
     silenceMs: 0,
   })
   const snapshots: Array<unknown> = []
-  source.subscribe(snapshot => snapshots.push(snapshot))
-  source.update({ fingerprint: 'f1', connected: true })
-  await waitFor(() => snapshots.length >= 1)
-  assert.equal(source.ackRead('client-a', 's1', 42), undefined, 'ackRead 同步返回：读推进不等待网络')
-  assert.ok(hung >= 1)
-  // 待发表里有未决条目时，快照通道照常推进到第 3 帧（poll 不被阻塞）。
-  await waitFor(() => snapshots.length >= 3)
-  assert.notEqual(source.getSnapshot(), undefined, '读推进/快照投递不因待发表阻塞')
-  // 本地读水位推进是纯本地动作，不依赖任何队列。
-  assert.equal(advanceReadMark(undefined, 42), 42)
-  assert.equal(source.getSnapshot()?.rows.s1.updatedAt, 100)
-  source.stop()
+  try {
+    source.subscribe(snapshot => snapshots.push(snapshot))
+    source.update({ fingerprint: 'f1', connected: true })
+    await waitFor(() => snapshots.length >= 1)
+    assert.equal(source.ackRead('client-a', 's1', 42), undefined, 'ackRead 同步返回：读推进不等待网络')
+    assert.ok(hung >= 1)
+    // 待发表里有未决条目时，快照通道照常推进到第 3 帧（poll 不被阻塞）。
+    await waitFor(() => snapshots.length >= 3)
+    assert.notEqual(source.getSnapshot(), undefined, '读推进/快照投递不因待发表阻塞')
+    // 本地读水位推进是纯本地动作，不依赖任何队列。
+    assert.equal(advanceReadMark(undefined, 42), 42)
+    assert.equal(source.getSnapshot()?.rows.s1.updatedAt, 100)
+  } finally {
+    source.stop()
+  }
 })
 
 test('R22: the source-level queue honors the injected bound and reports overflow', async () => {
@@ -537,13 +569,16 @@ test('R22: the source-level queue honors the injected bound and reports overflow
     ackQueueMax: 1,
     onDiagnostic: (message, error) => diagnostics.push(message + ' ' + String(error)),
   })
-  source.update({ fingerprint: 'f1', connected: true })
-  await waitFor(() => harness.gets.length >= 1)
-  source.ackRead('client-a', 's1', 1)
-  source.ackRead('client-a', 's2', 1)
-  await waitFor(() => diagnostics.some(line => line.includes('overflow')))
-  assert.ok(diagnostics.some(line => line.includes('overflow')), '上限淘汰必须经诊断可见')
-  source.stop()
+  try {
+    source.update({ fingerprint: 'f1', connected: true })
+    await waitFor(() => harness.gets.length >= 1)
+    source.ackRead('client-a', 's1', 1)
+    source.ackRead('client-a', 's2', 1)
+    await waitFor(() => diagnostics.some(line => line.includes('overflow')))
+    assert.ok(diagnostics.some(line => line.includes('overflow')), '上限淘汰必须经诊断可见')
+  } finally {
+    source.stop()
+  }
 })
 
 // ── SSE 收口：建连 deadline 与「请求发起即武装」的静默看门狗 ───────────────
@@ -600,22 +635,26 @@ test('R21: a stream whose response headers never arrive hits the connect deadlin
     reconnectMs: 10,
     onDiagnostic: message => diagnostics.push(message),
   })
-  source.subscribe(() => {})
-  source.update({ fingerprint: 'f1', connected: true })
-  await waitFor(() => harness.streams.length >= 1)
-  // 关键回归：没有 deadline 时这条流永久停在 in-flight（第二个请求永不出现）。
-  await waitFor(() => harness.streams.length >= 2, 2_000)
-  assert.ok(harness.streams[0].aborted(), '建连超时必须 abort 在途 stream')
-  assert.ok(
-    diagnostics.some(line => line.includes('connect timed out')),
-    '建连超时必须响亮诊断（不许静默楔死）',
-  )
-  assert.equal(source.getSnapshot()?.stale, true, '收口后事实必须标 stale')
-  source.stop()
-  const settled = harness.streams.length
-  await new Promise(resolve => setTimeout(resolve, 60))
-  assert.equal(harness.streams.length, settled, 'stop 必须清掉重连定时器（不得再起新流）')
-  assert.ok(harness.streams[settled - 1].aborted(), 'stop 必须 abort 在途流')
+  try {
+    source.subscribe(() => {})
+    source.update({ fingerprint: 'f1', connected: true })
+    await waitFor(() => harness.streams.length >= 1)
+    // 关键回归：没有 deadline 时这条流永久停在 in-flight（第二个请求永不出现）。
+    await waitFor(() => harness.streams.length >= 2, 2_000)
+    assert.ok(harness.streams[0].aborted(), '建连超时必须 abort 在途 stream')
+    assert.ok(
+      diagnostics.some(line => line.includes('connect timed out')),
+      '建连超时必须响亮诊断（不许静默楔死）',
+    )
+    assert.equal(source.getSnapshot()?.stale, true, '收口后事实必须标 stale')
+    source.stop()
+    const settled = harness.streams.length
+    await new Promise(resolve => setTimeout(resolve, 60))
+    assert.equal(harness.streams.length, settled, 'stop 必须清掉重连定时器（不得再起新流）')
+    assert.ok(harness.streams[settled - 1].aborted(), 'stop 必须 abort 在途流')
+  } finally {
+    source.stop()
+  }
 })
 
 test('R21: a silent stream (headers arrived, no frames) is re-subscribed by the watchdog armed at request start', async () => {
@@ -630,16 +669,23 @@ test('R21: a silent stream (headers arrived, no frames) is re-subscribed by the 
     reconnectMs: 10,
     onDiagnostic: message => diagnostics.push(message),
   })
-  source.subscribe(() => {})
-  source.update({ fingerprint: 'f1', connected: true })
-  await waitFor(() => harness.streams.length >= 1)
-  await waitFor(() => diagnostics.some(line => line.includes('stream silent')), 3_000)
-  assert.ok(harness.streams[0].aborted(), '静默收口必须关掉旧流')
-  // 收口路径 = 整量重取（probe GET）+ 重订阅：都必须在有限时间内发生。
-  await waitFor(() => harness.probeGets.length >= 2, 2_000)
-  await waitFor(() => harness.streams.length >= 2, 2_000)
-  source.stop()
+  try {
+    source.subscribe(() => {})
+    source.update({ fingerprint: 'f1', connected: true })
+    await waitFor(() => harness.streams.length >= 1)
+    await waitFor(() => diagnostics.some(line => line.includes('stream silent')), 3_000)
+    assert.ok(harness.streams[0].aborted(), '静默收口必须关掉旧流')
+    // 收口路径 = 整量重取（probe GET）+ 重订阅：都必须在有限时间内发生。
+    await waitFor(() => harness.probeGets.length >= 2, 2_000)
+    await waitFor(() => harness.streams.length >= 2, 2_000)
+  } finally {
+    source.stop()
+  }
 })
+
+
+
+
 
 // ── 快照构造单一工厂（probe / SSE sync 帧 / refetch 同形状） ─────────────
 
@@ -669,17 +715,20 @@ test('snapshot factory: an SSE sync frame builds the same shape as the probe', a
     silenceMs: 0,
     streamConnectTimeoutMs: 60_000,
   })
-  source.update({ fingerprint: 'f1', connected: true })
-  await waitFor(() => source.getSnapshot()?.cursor === 9)
-  const snapshot = source.getSnapshot()
-  assert.equal(snapshot?.verdict, 'ok')
-  assert.equal(snapshot?.degradation, null)
-  assert.equal(snapshot?.hostState, 'stopped')
-  assert.equal(snapshot?.serviceable, false)
-  assert.equal(snapshot?.stale, false)
-  assert.deepEqual(snapshot?.rows, {})
-  assert.ok((snapshot?.lastEventAt ?? 0) > 0, '工厂必须盖 lastEventAt')
-  source.stop()
+  try {
+    source.update({ fingerprint: 'f1', connected: true })
+    await waitFor(() => source.getSnapshot()?.cursor === 9)
+    const snapshot = source.getSnapshot()
+    assert.equal(snapshot?.verdict, 'ok')
+    assert.equal(snapshot?.degradation, null)
+    assert.equal(snapshot?.hostState, 'stopped')
+    assert.equal(snapshot?.serviceable, false)
+    assert.equal(snapshot?.stale, false)
+    assert.deepEqual(snapshot?.rows, {})
+    assert.ok((snapshot?.lastEventAt ?? 0) > 0, '工厂必须盖 lastEventAt')
+  } finally {
+    source.stop()
+  }
 })
 
 test('snapshot factory negative: a malformed sync frame refetches instead of silently clearing the snapshot', async () => {
@@ -706,11 +755,14 @@ test('snapshot factory negative: a malformed sync frame refetches instead of sil
     silenceMs: 0,
     streamConnectTimeoutMs: 60_000,
   })
-  source.update({ fingerprint: 'f1', connected: true })
-  await waitFor(() => probeGets.length >= 1)
-  await waitFor(() => probeGets.length >= 2, 2_000)
-  assert.equal(source.getSnapshot()?.cursor, SSE_PROBE_BODY.cursor, '坏帧不得清空既有快照（走 refetch 收敛）')
-  source.stop()
+  try {
+    source.update({ fingerprint: 'f1', connected: true })
+    await waitFor(() => probeGets.length >= 1)
+    await waitFor(() => probeGets.length >= 2, 2_000)
+    assert.equal(source.getSnapshot()?.cursor, SSE_PROBE_BODY.cursor, '坏帧不得清空既有快照（走 refetch 收敛）')
+  } finally {
+    source.stop()
+  }
 })
 
 // ── probe outcome → 快照（2026-12 单源化：classifier 是唯一判定 owner） ─────────
@@ -773,17 +825,20 @@ test('a protocol-2 payload still delivers a degraded forward-skew snapshot witho
     silenceMs: 0,
     reconnectMs: 5,
   })
-  source.update({ fingerprint: 'f1', connected: true })
-  await waitFor(() => source.getSnapshot() !== undefined)
-  const snapshot = source.getSnapshot()
-  assert.equal(snapshot?.verdict, 'degraded')
-  assert.equal(snapshot?.degradation, 'forward-skew', '协议超前必须保留降级快照（不许静默清空或折成 legacy）')
-  assert.equal(snapshot?.mode, 'poll')
-  assert.equal(snapshot?.hostState, 'ready')
-  const settled = probeGets
-  await new Promise(resolve => setTimeout(resolve, 30))
-  assert.equal(probeGets, settled, '降级档不启动交付（不轮询）')
-  source.stop()
+  try {
+    source.update({ fingerprint: 'f1', connected: true })
+    await waitFor(() => source.getSnapshot() !== undefined)
+    const snapshot = source.getSnapshot()
+    assert.equal(snapshot?.verdict, 'degraded')
+    assert.equal(snapshot?.degradation, 'forward-skew', '协议超前必须保留降级快照（不许静默清空或折成 legacy）')
+    assert.equal(snapshot?.mode, 'poll')
+    assert.equal(snapshot?.hostState, 'ready')
+    const settled = probeGets
+    await new Promise(resolve => setTimeout(resolve, 30))
+    assert.equal(probeGets, settled, '降级档不启动交付（不轮询）')
+  } finally {
+    source.stop()
+  }
 })
 
 

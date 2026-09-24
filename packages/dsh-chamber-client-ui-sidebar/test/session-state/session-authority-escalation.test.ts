@@ -76,8 +76,8 @@ class Chain {
 }
 
 const RUNNING = { s1: { running: true } }
-const ALLOW: AuthorityRead = { ok: true, complete: true, rows: { s1: true } }
-const DENY: AuthorityRead = { ok: true, complete: true, rows: { s1: false } }
+const ALLOW: AuthorityRead = { ok: true, proof: { kind: 'asOfSeq', asOfSeq: 1 }, rows: { s1: true } }
+const DENY: AuthorityRead = { ok: true, proof: { kind: 'asOfSeq', asOfSeq: 1 }, rows: { s1: false } }
 
 test('a healthy long run never reconnects and never notices', async () => {
   const chain = new Chain([ALLOW, ALLOW, ALLOW])

@@ -6,11 +6,11 @@
  *
  * It mirrors the window.dshChamber surface of packages/desktop/preload.cts
  * (design 05 §7.4): 4 info scalars (controlPlaneUrl/dshVersion/version/
- * platform) + 9 namespaces (desktopSsh/update/settings/systemResume/openIn/
- * deepLink/runtime/notifications/badge)（全表面实现）：每个方法的通道、
- * payload 形状与返回映射逐字对齐 preload.cts（59 个 invoke-backed 方法 →
- * 60 manifest invoke 通道（含 info）+ 8 个 on* 订阅 → 8 manifest push
- * 通道），文件内零 poc-unimplemented 兜底。语义校验（payload schema、来源
+ * platform) + 10 namespaces (desktopSsh/update/settings/systemResume/
+ * rendererStall/openIn/deepLink/runtime/notifications/badge)（全表面实现）：
+ * 每个方法的通道、payload 形状与返回映射逐字对齐 preload.cts（59 个
+ * invoke-backed 方法 → 60 manifest invoke 通道（含 info）+ 9 个 on* 订阅 →
+ * 9 manifest push 通道），文件内零 poc-unimplemented 兜底。语义校验（payload schema、来源
  * 指纹、ACK 队列……）在 sidecar 原处理器（design 25 §4.4.1）；本文件是
  * 传输 + preload 逐字面。
  *
@@ -46,6 +46,7 @@
  *   settings（2 invoke + 1 订阅）→ dsh-chamber:settings-get / settings-set
  *     {patch}；onChanged → settings-changed
  *   systemResume（1 订阅）→ onResume → system-resume
+ *   rendererStall（1 订阅）→ onEvidence → renderer-stall-evidence
  *   openIn（2 invoke）→ open-in-apps（返回解包 {apps}）/
  *     open-in {appId,instanceId,path,sourceFingerprint}
  *   deepLink（2 invoke + 1 订阅）→ deep-link-ready / deep-link-ack
@@ -81,10 +82,10 @@
  * ——只有显式 DSH_CHAMBER_SIDECAR 指向它时才会被加载（届时须自行发 ready 帧）。
  *
  * A-bridge envelope (web → Swift, through the WKScriptMessageHandler named
- * "dshChamber"): postMessage({id, method, payload}) — payload is JSON or
+ * "dshChamber"): postMessage({documentId, id, method, payload}) — payload is JSON or
  * null. Swift answers by evaluating the page-world globals defined here:
- *   __dshChamberResolve(id, <jsonOrNull>, null)   → resolves the promise
- *   __dshChamberResolve(id, null, "<errorString>") → rejects with Error
+ *   __dshChamberResolve(token, documentId, id, <jsonOrNull>, null)   → resolves
+ *   __dshChamberResolve(token, documentId, id, null, "<errorString>") → rejects
  *   __dshChamberEmit("<eventName>", <payloadJsonOrNull>) → dispatches to the
  *     subscription table (payload null is passed to listeners as undefined).
  * When no native handler exists (the page opened outside WKWebView, e.g.
@@ -153,9 +154,10 @@
     return error
   }
 
-  /** The 8 push events the bridge can subscribe to — one constant per event
+  /** The 9 push events the bridge can subscribe to — one constant per event
    *  name so every method ↔ event mapping stays literal and reviewable. */
   var PUSH_EVENTS = {
+    RENDERER_STALL_EVIDENCE: 'dsh-chamber:renderer-stall-evidence',
     SSH_STATUS_CHANGED: 'desktop_ssh_status_changed',
     SSH_INSTANCES_CHANGED: 'desktop_ssh_instances_changed',
     SETTINGS_CHANGED: 'dsh-chamber:settings-changed',
@@ -193,6 +195,14 @@
   var nextRequestId = 1
   var pending = new Map() // id -> { resolve, reject }
   var warnedNoBridge = false
+  // A fresh identity for this document, echoed by Swift with every reply. A
+  // late result from a prior navigation can reuse request id 1 but never this id.
+  var documentId = (window.crypto && typeof window.crypto.randomUUID === 'function')
+    ? window.crypto.randomUUID()
+    : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (digit) {
+      var value = Math.floor(Math.random() * 16)
+      return (digit === 'x' ? value : (value & 3) | 8).toString(16)
+    })
 
   /** Resolve the native bridge only while invoking (covers an inject-before-
    *  register ordering in either direction) and call through the handler
@@ -230,7 +240,7 @@
       var id = nextRequestId
       nextRequestId += 1
       pending.set(id, { resolve: resolve, reject: reject })
-      var envelope = { id: id, method: method, payload: payload === undefined ? null : payload }
+      var envelope = { id: id, documentId: documentId, method: method, payload: payload === undefined ? null : payload }
       try {
         post(envelope)
       } catch (err) {
@@ -252,9 +262,10 @@
     }
   }
 
-  /** Called by Swift as window.__dshChamberResolve(token, id, result, err). */
-  function resolveInvocation(token, id, result, err) {
+  /** Called by Swift as window.__dshChamberResolve(token, documentId, id, result, err). */
+  function resolveInvocation(token, replyDocumentId, id, result, err) {
     requireNativeToken(token)
+    if (replyDocumentId !== documentId) return
     var entry = pending.get(id)
     // Unknown id = leftover from an earlier page generation (Swift replay /
     // reload race). The pending table is per-document; ignoring is safe.
@@ -265,6 +276,18 @@
     } else {
       entry.resolve(result)
     }
+  }
+
+  function resetPending(token) {
+    requireNativeToken(token)
+    var entries = Array.from(pending.values())
+    pending.clear()
+    for (var i = 0; i < entries.length; i += 1) entries[i].reject(errorFromRejection('ipc_not_ready'))
+  }
+
+  function sidecarReady(token) {
+    requireNativeToken(token)
+    window.dispatchEvent(new Event('dsh-chamber:sidecar-ready'))
   }
 
   // ---- push subscriptions ------------------------------------------------
@@ -504,6 +527,13 @@
     }
   }
 
+  /** rendererStall — 只有 onEvidence 订阅（preload 同形；无任何 invoke 方法）。 */
+  var rendererStall = {
+    onEvidence: function (callback) {
+      return subscribe(PUSH_EVENTS.RENDERER_STALL_EVIDENCE, makePassthroughListener(callback))
+    }
+  }
+
   /** openIn — apps() 解包 {apps}（preload 唯一返回变换）；open() 载荷四键
    *  逐字 preload。 */
   var openIn = {
@@ -587,6 +617,7 @@
     update: update,
     settings: settings,
     systemResume: systemResume,
+    rendererStall: rendererStall,
     openIn: openIn,
     deepLink: deepLink,
     runtime: runtime,
@@ -655,6 +686,8 @@
   // 内部管路（Swift 需要它们在任何时刻都能回执/推送）：立即定义。
   defineWindowGlobal('__dshChamberResolve', resolveInvocation)
   defineWindowGlobal('__dshChamberEmit', emitToListeners)
+  defineWindowGlobal('__dshChamberBridgeReset', resetPending)
+  defineWindowGlobal('__dshChamberSidecarReady', sidecarReady)
   defineWindowGlobal('__dshChamberRehydrateInfo', function (token) {
     requireNativeToken(token)
     // sidecar ready 后由 Swift 触发：重跑一次 info 水化（成功即暴露公开面）。

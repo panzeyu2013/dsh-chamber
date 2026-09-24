@@ -301,16 +301,18 @@ test('parseSessionListBaselineItems: privacy whitelist projection', () => {
         parent: 'p1', origin: 'subagent',
       },
       { sessionId: 's2', running: false, updatedAt: 7, parentSessionId: 'p2' },
-      { sessionId: '', running: true },
-      'junk',
     ],
   })
+  assert.ok(items !== null)
   assert.deepEqual(items, [
     { sessionId: 's1', running: true, updatedAt: 42, parentSessionId: 'p1', origin: 'subagent' },
     { sessionId: 's2', running: false, updatedAt: 7, parentSessionId: 'p2', origin: null },
   ])
   assert.deepEqual(Object.keys(items[0]), ['sessionId', 'running', 'updatedAt', 'parentSessionId', 'origin'])
-  assert.deepEqual(parseSessionListBaselineItems({ nope: true }), [])
+  assert.deepEqual(parseSessionListBaselineItems({ items: [] }), [])
+  assert.equal(parseSessionListBaselineItems({ nope: true }), null)
+  assert.equal(parseSessionListBaselineItems({ items: [{ sessionId: 's1', updatedAt: 42 }] }), null)
+  assert.equal(parseSessionListBaselineItems({ items: [{ sessionId: 's1', running: false, updatedAt: 42 }, 'junk'] }), null)
 })
 
 // ---------------------------------------------------------------------------
@@ -410,6 +412,22 @@ test('baseline failure surfaces onBaselineError and never fabricates rows', asyn
   assert.deepEqual(h.baselines, [])
   assert.equal(h.mux.status().baselineOk, false)
   assert.match(h.mux.status().lastError ?? '', /session\/list failed/)
+  h.mux.stop()
+})
+
+test('a successful RPC with a malformed list is a baseline failure', async () => {
+  const h = makeHarness({
+    callImpl: async () => ({ result: { ok: true, value: { items: [
+      { sessionId: 's1', running: false, updatedAt: 2 },
+      { sessionId: 's2', updatedAt: 2 },
+    ] } } }),
+  })
+  h.mux.start()
+  h.sockets[0].open()
+  h.sockets[0].deliver({ type: 'ready', clientId: 'client-1' })
+  await until(() => h.order.includes('baseline-error'))
+  assert.deepEqual(h.baselines, [])
+  assert.equal(h.mux.status().baselineOk, false)
   h.mux.stop()
 })
 

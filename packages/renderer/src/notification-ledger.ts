@@ -14,6 +14,7 @@
  * 只读全局（活视图，无周期性对象），供仪器/CDP 直接读。
  */
 import { createBoundedList } from './bounded-ledger.ts'
+import { recordIncident } from './incident.ts'
 
 export type NotificationDecision = 'sent' | 'suppressed' | 'skipped'
 
@@ -42,6 +43,19 @@ export function createNotificationLedger(options: { limit?: number } = {}) {
     record(entry: NotificationLedgerEntry): void {
       ring.push(entry)
       counts[entry.decision] += 1
+      // Unified instrument (P1): the same decision lands in the resident ring so a
+      // real incident reads renderer + carrier + main-process evidence together.
+      recordIncident({
+        at: entry.at,
+        source: 'renderer',
+        kind: 'notification-' + entry.decision,
+        sessionId: entry.sessionId,
+        sourceId: entry.sourceId,
+        symptom: entry.kind,
+        action: entry.decision,
+        detail: [entry.error, entry.watermark === undefined ? undefined : 'watermark=' + String(entry.watermark)]
+          .filter((part): part is string => part !== undefined).join(' '),
+      })
     },
     entries(): readonly NotificationLedgerEntry[] {
       return ring.toArray()

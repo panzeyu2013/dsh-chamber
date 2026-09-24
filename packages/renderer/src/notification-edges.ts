@@ -9,6 +9,8 @@ export interface SessionFacts {
    * （与官方 Rows 的 pending > runningSubagents > completed 呈现优先级一致）。
    */
   runningSubagents?: number
+  /** Host activity time of this row (the run-start ordering key). */
+  updatedAt?: number
 }
 export type NotificationKind = 'complete' | 'ask' | 'request'
 export interface NotificationEdge { sessionId: string; kind: NotificationKind }

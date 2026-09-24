@@ -323,7 +323,7 @@ function compare() {
   console.log('  App.tsx lifecycle marker hits: 115 -> ' + String(after.appLifecycleMarkerHits))
   // B7: the objective names "App.tsx 与 MWC 行数", so the shell's own sizes belong in this
   // table too - marker hits alone cannot show whether the shell's decision sites
-  // (LoadState/CarrierDecision mirrors, the probe-failure path, the give-up gate)
+  // (CarrierDecision mirror, the probe-failure path, the give-up gate)
   // grew the files.
   const SWIFT_SHELL = [
     'macos/Sources/DSHChamber/MainWindowController.swift',

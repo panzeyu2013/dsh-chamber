@@ -1,7 +1,7 @@
 /**
- * 未读 v2 落盘存储契约：键常量、宽松清洗、
- * v1 防御性导入（先写后删）、单调 max 合并、读水位推进、有界化 LRU、
- * client-install id、ack 请求、隐私键白名单。
+ * 未读 v4 落盘存储契约：键常量、宽松清洗、v3/v2 一次性迁移（旧通知表 →
+ * 身份哨兵）与 v1 防御性导入（先写后删）、单调 max 合并、读水位推进、
+ * 有界化 LRU、client-install id、ack 请求、隐私键白名单。
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -12,6 +12,8 @@ import {
   UNREAD_PENDING_MAX,
   UNREAD_V1_KEY,
   UNREAD_V2_KEY,
+  UNREAD_V3_KEY,
+  UNREAD_V4_KEY,
   advanceReadMark,
   createClientInstallId,
   createUnreadAckOutbox,
@@ -23,8 +25,9 @@ import {
   saveUnread,
   sendUnreadRequest,
   type UnreadStorageLike,
-  type UnreadV2Payload,
+  type UnreadV4Payload,
 } from '../../src/unread-store.ts'
+import { LEGACY_NOTIFIED_RUN_ID } from '../../src/notification-identity.ts'
 
 /** 记录调用顺序的假 storage（迁移顺序是契约：先写后删）。 */
 function fakeStorage(initial: Record<string, string> = {}) {
@@ -38,7 +41,9 @@ function fakeStorage(initial: Record<string, string> = {}) {
   return { storage, calls, data }
 }
 
-test('keys are the frozen localStorage names (v2 is the only written key)', () => {
+test('keys are the frozen localStorage names (v4 is the only written key; v1/v2/v3 are read-once)', () => {
+  assert.equal(UNREAD_V4_KEY, 'dsh-chamber.unread.v4')
+  assert.equal(UNREAD_V3_KEY, 'dsh-chamber.unread.v3')
   assert.equal(UNREAD_V2_KEY, 'dsh-chamber.unread.v2')
   assert.equal(UNREAD_V1_KEY, 'dsh-chamber.unread.v1')
   assert.equal(CLIENT_INSTALL_ID_KEY, 'dsh-chamber.client-install-id.v1')
@@ -47,43 +52,66 @@ test('keys are the frozen localStorage names (v2 is the only written key)', () =
 
 test('sanitize is lenient field-wise: bad entries are dropped, good ones survive', () => {
   const loaded = loadUnread(fakeStorage({
-    [UNREAD_V2_KEY]: JSON.stringify({
-      v: 2,
+    [UNREAD_V4_KEY]: JSON.stringify({
+      v: 4,
       read: { a: { s1: 5, s2: 'x', s3: -1 } },
       edge: { a: { s1: true, s2: false } },
-      notified: { a: { s1: { complete: 5, ask: 'x' }, s2: 'nope' } },
+      notifiedRuns: { a: { s1: 'host:turn%2F7', s2: 42, s3: '' } },
+      // Removed pre-v4 tables in a current payload are ignored, never resurrected.
+      notified: { a: { s1: { complete: 5 } } },
+      notifiedCompletionSeq: { a: { s1: 7 } },
     }),
   }).storage)
   assert.deepEqual(loaded.read, { a: { s1: 5 } })
   assert.deepEqual(loaded.edge, { a: { s1: true } })
-  assert.deepEqual(loaded.notified, { a: { s1: { complete: 5 } } })
+  assert.deepEqual(loaded.notifiedRuns, { a: { s1: 'host:turn%2F7' } })
 })
 
-test('a corrupt v2 whole-payload falls through to the defensive v1 import', () => {
+test('corrupt persisted identities are rejected at the restore boundary', () => {
+  const loaded = loadUnread(fakeStorage({
+    [UNREAD_V4_KEY]: JSON.stringify({
+      v: 4, read: {}, edge: {},
+      notifiedRuns: {
+        a: {
+          good: 'host:turn%2F7',
+          badEncoded: 'host:%',
+          truncated: 'chamber:fp:0:s1',
+          nonNumeric: 'chamber:fp:x:s1:1',
+          oversize: 'x'.repeat(300),
+          sentinel: LEGACY_NOTIFIED_RUN_ID,
+        },
+      },
+    }),
+  }).storage)
+  assert.deepEqual(loaded.notifiedRuns, { a: { good: 'host:turn%2F7', sentinel: LEGACY_NOTIFIED_RUN_ID } },
+    'a corrupt identity must never reach the projection (URIError / bogus comparison)')
+})
+
+test('a corrupt v4 whole-payload falls through to the defensive v1 import', () => {
   const { storage, data } = fakeStorage({
-    [UNREAD_V2_KEY]: '{not json',
+    [UNREAD_V4_KEY]: '{not json',
     [UNREAD_V1_KEY]: JSON.stringify({ a: { s1: true, s2: false } }),
   })
   const loaded = loadUnread(storage)
   assert.deepEqual(loaded.edge, { a: { s1: true } })
-  assert.equal(loaded.v, 2)
-  assert.ok(data.has(UNREAD_V2_KEY))
+  assert.equal(loaded.v, 4)
+  assert.ok(data.has(UNREAD_V4_KEY))
   assert.ok(!data.has(UNREAD_V1_KEY))
 })
 
-test('v1 -> v2 import writes BEFORE it removes v1 (contract order)', () => {
+test('v1 -> v4 import writes BEFORE it removes v1 (contract order)', () => {
   const { storage, calls, data } = fakeStorage({
     [UNREAD_V1_KEY]: JSON.stringify({ a: { s1: true } }),
   })
   const loaded = loadUnread(storage)
   assert.deepEqual(loaded.edge, { a: { s1: true } })
-  const setIndex = calls.indexOf('set:' + UNREAD_V2_KEY)
+  const setIndex = calls.indexOf('set:' + UNREAD_V4_KEY)
   const removeIndex = calls.indexOf('remove:' + UNREAD_V1_KEY)
   assert.ok(setIndex !== -1 && removeIndex !== -1 && setIndex < removeIndex)
-  assert.ok(data.has(UNREAD_V2_KEY))
+  assert.ok(data.has(UNREAD_V4_KEY))
 })
 
-test('a failing v1 -> v2 write keeps v1 for a later attempt', () => {
+test('a failing v1 -> v4 write keeps v1 for a later attempt', () => {
   const data = new Map<string, string>([[UNREAD_V1_KEY, JSON.stringify({ a: { s1: true } })]])
   const storage: UnreadStorageLike = {
     getItem: key => data.get(key) ?? null,
@@ -95,26 +123,73 @@ test('a failing v1 -> v2 write keeps v1 for a later attempt', () => {
   assert.ok(data.has(UNREAD_V1_KEY))
 })
 
-test('a valid v2 load clears a leftover v1 key and never re-imports', () => {
-  const { storage, data } = fakeStorage({
-    [UNREAD_V2_KEY]: JSON.stringify({ v: 2, read: { a: { s1: 9 } }, edge: {}, notified: {} }),
+test('a v3 payload migrates to v4: old notification tables become identity sentinels', () => {
+  const { storage, calls, data } = fakeStorage({
+    [UNREAD_V3_KEY]: JSON.stringify({
+      v: 3,
+      read: { a: { s1: 9 } },
+      edge: { a: { s1: true } },
+      notified: { a: { s1: { complete: 5 }, s2: { ask: 3 } } },
+      notifiedCompletionSeq: { a: { s1: 7 } },
+      notifiedRuns: { a: { s3: 'host:turn%2F3' } },
+    }),
     [UNREAD_V1_KEY]: JSON.stringify({ b: { s9: true } }),
   })
   const loaded = loadUnread(storage)
+  assert.equal(loaded.v, 4)
   assert.deepEqual(loaded.read, { a: { s1: 9 } })
+  assert.deepEqual(loaded.edge, { a: { s1: true } })
+  assert.deepEqual(loaded.notifiedRuns, {
+    a: {
+      // Only completion-notified sessions get the sentinel: the legacy ask/request
+      // watermark never carried a completion and must not invent an identity.
+      s1: LEGACY_NOTIFIED_RUN_ID,
+      s3: 'host:turn%2F3',
+    },
+  }, 'every completion-notified session keeps one sentinel; a real identity is preserved')
+  const setIndex = calls.indexOf('set:' + UNREAD_V4_KEY)
+  const removeIndex = calls.indexOf('remove:' + UNREAD_V3_KEY)
+  assert.ok(setIndex !== -1 && removeIndex !== -1 && setIndex < removeIndex, 'v4 is written before v3 is removed')
   assert.ok(!data.has(UNREAD_V1_KEY))
+  const onDisk = JSON.parse(data.get(UNREAD_V4_KEY)!) as Record<string, unknown>
+  assert.equal('notified' in onDisk, false, 'the removed tables are not written back')
+  assert.equal('notifiedCompletionSeq' in onDisk, false)
+})
+
+test('a v2 payload with the same legacy tables migrates identically', () => {
+  const { storage, data } = fakeStorage({
+    [UNREAD_V2_KEY]: JSON.stringify({
+      v: 2, read: { a: { s1: 9 } }, edge: {}, notified: { a: { s1: { complete: 5 } } }, notifiedCompletionSeq: { a: { s2: 7 } },
+    }),
+  })
+  const loaded = loadUnread(storage)
+  assert.equal(loaded.v, 4)
+  assert.deepEqual(loaded.notifiedRuns, { a: { s1: LEGACY_NOTIFIED_RUN_ID, s2: LEGACY_NOTIFIED_RUN_ID } })
+  assert.ok(!data.has(UNREAD_V2_KEY), 'the source journal is removed after the v4 write')
+})
+
+test('a failing v3 -> v4 write keeps v3 for a later attempt', () => {
+  const data = new Map<string, string>([[UNREAD_V3_KEY, JSON.stringify({ v: 3, read: { a: { s1: 9 } }, edge: {}, notified: {} })]])
+  const storage: UnreadStorageLike = {
+    getItem: key => data.get(key) ?? null,
+    setItem: () => { throw new Error('quota') },
+    removeItem: key => { data.delete(key) },
+  }
+  const loaded = loadUnread(storage)
+  assert.deepEqual(loaded.read, { a: { s1: 9 } })
+  assert.ok(data.has(UNREAD_V3_KEY), 'the source journal survives a failed migration')
 })
 
 test('saveUnread prunes empty tables and never throws', () => {
   const { storage, data } = fakeStorage()
-  assert.equal(saveUnread(storage, { v: 2, read: {}, edge: {}, notified: {} }), true)
-  assert.equal(data.get(UNREAD_V2_KEY), JSON.stringify({ v: 2, read: {}, edge: {}, notified: {} }))
+  assert.equal(saveUnread(storage, { v: 4, read: {}, edge: {}, notifiedRuns: {} }), true)
+  assert.equal(data.get(UNREAD_V4_KEY), JSON.stringify({ v: 4, read: {}, edge: {}, notifiedRuns: {} }))
   const throwing: UnreadStorageLike = {
     getItem: () => null,
     setItem: () => { throw new Error('private mode') },
     removeItem: () => undefined,
   }
-  assert.equal(saveUnread(throwing, { v: 2, read: {}, edge: {}, notified: {} }), false)
+  assert.equal(saveUnread(throwing, { v: 4, read: {}, edge: {}, notifiedRuns: {} }), false)
 })
 
 test('read marks merge monotonically (max) and never regress on an older remote', () => {
@@ -141,17 +216,17 @@ test('maxWatermark takes max(updatedAt, completedAt) across the table', () => {
 })
 
 test('bounded LRU: per-source read keeps the highest watermarks only', () => {
-  const payload: UnreadV2Payload = {
-    v: 2,
+  const payload: UnreadV4Payload = {
+    v: 4,
     read: { a: { s1: 1, s2: 5, s3: 3 } },
     edge: { a: { s1: true, s2: true, s3: true } },
-    notified: { a: { s1: { complete: 1 }, s2: { complete: 5 }, s3: { complete: 3 } } },
+    notifiedRuns: { a: { s1: 'host:turn%2F1', s2: 'host:turn%2F5', s3: 'host:turn%2F3' } },
   }
   const pruned = pruneUnreadPayload(payload, 2)
   assert.deepEqual(Object.keys(pruned.read.a).sort(), ['s2', 's3'])
   assert.deepEqual(Object.keys(pruned.edge.a).sort(), ['s2', 's3'])
-  assert.deepEqual(Object.keys(pruned.notified.a).sort(), ['s2', 's3'])
-  assert.deepEqual(pruneUnreadPayload(payload, 0), { v: 2, read: {}, edge: {}, notified: {} })
+  assert.deepEqual(Object.keys(pruned.notifiedRuns.a).sort(), ['s2', 's3'])
+  assert.deepEqual(pruneUnreadPayload(payload, 0), { v: 4, read: {}, edge: {}, notifiedRuns: {} })
 })
 
 test('client-install id: persisted id wins, absent/corrupt regenerates and persists', () => {
@@ -179,12 +254,12 @@ test('client-install id: persisted id wins, absent/corrupt regenerates and persi
 test('privacy whitelist: the serialized payload carries ids and watermarks only', () => {
   const { storage, data } = fakeStorage()
   saveUnread(storage, {
-    v: 2,
+    v: 4,
     read: { 'gateway-a': { s1: 5 } },
     edge: { 'gateway-a': { s1: true } },
-    notified: { 'gateway-a': { s1: { complete: 5 } } },
+    notifiedRuns: { 'gateway-a': { s1: 'host:turn%2F7' } },
   })
-  const raw = data.get(UNREAD_V2_KEY)!
+  const raw = data.get(UNREAD_V4_KEY)!
   for (const forbidden of ['title', 'cwd', 'content', 'prompt', 'message', 'body']) {
     assert.ok(!raw.includes(forbidden), 'payload must not carry ' + forbidden)
   }

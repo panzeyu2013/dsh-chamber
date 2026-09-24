@@ -45,6 +45,7 @@ import { Button } from '@deepseek-ai/dsh-client-ui-primitives/src/Button.tsx'
 import { dismissVisibleRowCard } from '@dsh-chamber/dsh-chamber-client-core'
 import {
   bootInstanceShell, INSTANCE_TAIL_WAIT_CAP_MS, shellStateIdle,
+  readInstanceSessionStreamHealth, rebuildInstanceSessionStream,
   type ChamberTransport, type ShellState,
   isSettledShellState,
 } from '../shell.ts'
@@ -60,18 +61,15 @@ import {
   type SessionSurfacePhase,
 } from '../session-surface.ts'
 import { frameText, type FrameLocale } from '../locales.ts'
-
-/**
- * 单调时基：持有时钟与相位计窗都只做差值比较，绝不能
- * 受墙钟步进影响——NTP 校时/休眠唤醒把 `Date.now()` 拉回 10 分钟，会让"70s 外层保险"
- * 的定时器到期后算出负 elapsed、判定拒绝释放，而一次性定时器不会重臂：那次持有的有界
- * 出口就此静默消失。`performance.now()` 在渲染器里恒在，缺失时退回墙钟（测试/异常环境）。
- */
-function monotonicNow(): number {
-  return typeof performance !== 'undefined' && typeof performance.now === 'function'
-    ? performance.now()
-    : Date.now()
-}
+import { monotonicNow } from '../monotonic-now.ts'
+import {
+  advanceSessionOpenHealth, presentedSessionOpenRecoveryPhase,
+  type SessionOpenHealth,
+} from '../session-open-recovery.ts'
+import { createSessionDeliveryOwner } from '../session-delivery-state.ts'
+import { activeSymptomSinceMs, advanceContentStallStreak, openStallSymptomActive, stuckEvidenceForStreak, type ContentStallStreak } from '../session-content-stall.ts'
+import { documentReloadBudgetStorage, shouldReloadDocument } from '../document-reload-budget.ts'
+import { readRendererStallStrikes } from '../renderer-stall-evidence.ts'
 
 interface InstanceViewProps {
   instanceId: string
@@ -110,6 +108,11 @@ interface InstanceViewProps {
    * dispose，重 boot 干净）。
    */
   retryToken?: number
+  /**
+   * 页面恢复阶梯的 instance-reboot 执行端：由 App 递增该视图的 boot 令牌，
+   * 走与失败覆盖层「重试」同一条干净重 boot 路径。缺省 = 不执行（仅记账）。
+   */
+  onRebootInstance?: (instanceId: string) => void
   /**
    * 来源就绪门：交给实例 shell 的取图重试——实例仍在启动时
    * （冷启动 / 重启跨越窗口）先等它就绪再取客户端插件图，而不是在固定预算用尽后
@@ -172,12 +175,17 @@ interface InstanceViewProps {
    * 再试 + 令牌递增），本组件绝不自己重写那条序列。
    */
   onRequestRetry?: () => void
+  /** App's current session in this instance; the shell probe verifies it is still on stage. */
+  currentSessionId?: string
+  /** Known blank sessions legitimately have no history window to recover. */
+  currentSessionKnownBlank?: boolean
 }
 
 export default function InstanceView({
   instanceId, basePath, sourceFingerprint, transport, active, label, locale, onSettled, onStateChange,
-  retryToken, waitForServing, holdVeil, openIntentId,
+  retryToken, waitForServing, holdVeil, openIntentId, onRebootInstance,
   sourcePhase, bootDeferred, failureOverlayVisible, switchTargets, onSwitchSource, onConnectSource, onRequestRetry,
+  currentSessionId, currentSessionKnownBlank,
 }: InstanceViewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const startedRef = useRef(false)
@@ -228,6 +236,177 @@ export default function InstanceView({
   const [absentSince, setAbsentSince] = useState<number | null>(null)
   /** 兜底释放窗到期后的重渲染触发器；决策本身仍是纯函数（可测）。 */
   const [surfaceFallbackTick, setSurfaceFallbackTick] = useState(0)
+  const [sessionOpenHealth, setSessionOpenHealth] = useState<SessionOpenHealth | null>(null)
+  // Sessions the ladder reports as host-stall exhausted. The map is a Set: the page
+  // has NO content-stall producer (the gateway facts cursor is not assistant
+  // content), so exhaustion over an open face is always a host-responsiveness fact
+  // and never earns the content copy.
+  const [hostStallSessions, setHostStallSessions] = useState<ReadonlySet<string>>(new Set())
+  const sessionOpenHealthRef = useRef<SessionOpenHealth | null>(null)
+  const deliveryOwnerRef = useRef(createSessionDeliveryOwner())
+  const deliveryEpisodeRef = useRef(new Map<string, { episode: number; state: string }>())
+  /** Desktop-observed stalls: the page never sees its own stopped frame loop. */
+  const scheduleStallRef = useRef<ContentStallStreak | null>(null)
+  const inputBlockStallRef = useRef<ContentStallStreak | null>(null)
+  /** The streak start a resync was already dispatched for ("tried, not concluded"). */
+  const resyncDispatchedForRef = useRef<number | undefined>(undefined)
+  useEffect(() => {
+    // The delivery ladder ledger is PAGE-lifetime, never boot-lifetime: an
+    // instance-reboot is one of its own levers, so recreating the owner here would
+    // hand every boot a fresh quota while the observer's cumulative silence keeps
+    // the streak old - one reboot per boot cycle, forever. Only the per-boot run
+    // episode state resets; quotas, cooldowns, streaks and the "tried" conclusion
+    // survive the reboot they authorized (a cleared symptom deletes the record on
+    // its own).
+    deliveryEpisodeRef.current.clear()
+  }, [retryToken])
+
+  // The ladder ledger is page-lifetime, but a record belongs to the session it was
+  // observed for: a switch must drop the previous session's cooldowns/quota, or a
+  // fresh streak on return is suppressed by a stale one (this is forget's only caller).
+  const observedSessionRef = useRef(currentSessionId)
+  useEffect(() => {
+    const previous = observedSessionRef.current
+    observedSessionRef.current = currentSessionId
+    if (previous !== undefined && previous !== currentSessionId) deliveryOwnerRef.current.forget(previous)
+  }, [currentSessionId])
+
+  // This seat belongs to the page frame, outside the vendor conversation
+  // header. A header that never renders cannot hide the recovery controls.
+  useEffect(() => {
+    if (!active || !isSettledShellState(shell) || currentSessionId === undefined) {
+      // One lifetime policy for every transient: evidence collected while this view
+      // was not the sampled seat is not usable after resume. Clearing only the open
+      // clock let a pre-gap content streak fire the ladder the moment it was painted.
+      sessionOpenHealthRef.current = null
+      scheduleStallRef.current = null
+      inputBlockStallRef.current = null
+      resyncDispatchedForRef.current = undefined
+      // The exhaustion map is per sampled seat: a stale entry would render a false
+      // banner for one commit when returning to that session.
+      setHostStallSessions(previous => (previous.size === 0 ? previous : new Set()))
+      setSessionOpenHealth(null)
+      return
+    }
+    const sample = (): void => {
+      const observed = readInstanceSessionStreamHealth(instanceId, currentSessionId)
+      const at = monotonicNow()
+      const health = advanceSessionOpenHealth(sessionOpenHealthRef.current, currentSessionId, observed, at)
+      sessionOpenHealthRef.current = health
+      setSessionOpenHealth(health)
+      if (document.visibilityState === 'hidden') {
+        // Hidden is a gap like a seat switch: evidence sampled before an arbitrary
+        // hidden period is not usable after resume, or the first visible sample can
+        // fire reboot/reload on pre-gap streaks. Re-anchor instead of freezing.
+        scheduleStallRef.current = null
+        inputBlockStallRef.current = null
+        resyncDispatchedForRef.current = undefined
+        return
+      }
+      if (health === null) return
+      // The episode ordinal mints the chamber-namespace run id until a host run
+      // key exists; the owner keys every stall decision on that identity.
+      const tracked = deliveryEpisodeRef.current.get(currentSessionId) ?? { episode: 0, state: 'cold' }
+      const observedState = observed?.openState ?? 'missing'
+      if (observedState === 'open' && tracked.state !== 'open') tracked.episode += 1
+      tracked.state = observedState
+      deliveryEpisodeRef.current.set(currentSessionId, tracked)
+      // The desktop probe reports strikes in WALL time; convert the age once into
+      // the page's monotonic streak (same duration-first rule as the observers).
+      const strikeNow = Date.now()
+      const strikes = readRendererStallStrikes(strikeNow)
+      const strikeAge = strikes.observedAt === undefined ? undefined : strikeNow - strikes.observedAt
+      scheduleStallRef.current = advanceContentStallStreak(
+        scheduleStallRef.current, currentSessionId,
+        strikes.scheduleStrikes > 0 && strikeAge !== undefined ? strikeAge : undefined, at)
+      inputBlockStallRef.current = advanceContentStallStreak(
+        inputBlockStallRef.current, currentSessionId,
+        strikes.inputBlockStrikes > 0 && strikeAge !== undefined ? strikeAge : undefined, at)
+      const scheduleStallStart = scheduleStallRef.current?.sessionId === currentSessionId
+        ? scheduleStallRef.current.start : undefined
+      const inputBlockStart = inputBlockStallRef.current?.sessionId === currentSessionId
+        ? inputBlockStallRef.current.start : undefined
+      // Only symptoms that are ACTIVE this tick contribute their streak. While the
+      // session is open the open-health streak is not a symptom at all (it has no
+      // age by construction), so a content stall must carry its own start.
+      const openEvidence = observed === null ? undefined : {
+        state: observed.openState,
+        openInFlight: observed.openInFlight,
+        resyncInFlight: observed.resyncInFlight,
+        resyncAvailable: observed.resyncAvailable,
+        // The header heals an error through the stage move; when that route is
+        // unusable (address-only target / masked gap), the page's own resync is
+        // the automatic lever the delivery owner may dispatch.
+        healRoute: observed.healRoute,
+      }
+      const openStallActive = openStallSymptomActive(openEvidence)
+      const symptomSinceMs = activeSymptomSinceMs({
+        openSince: health.since,
+        openStallActive,
+        scheduleStallStart,
+        inputBlockStart,
+      })
+      // The page tried a resync for this exact streak and the symptom survived it:
+      // that is the caller-owned conclusion the upper tiers require. The tiers'
+      // own afterMs gates (reboot 90s / reload 120s) still decide when they are due.
+      // DELIVERY_EFFICACY: instance-reboot requires "the instance is stalled while
+      // the frame counter still advances" and document-reload requires a stalled
+      // frame counter - a content-channel stall is not that evidence. Content-only
+      // stalls therefore stay at resync + the visible host-stall notice, while an
+      // unresolvable OPEN stall (loading, nothing in flight) may escalate.
+      const stuckEvidence = (openStallActive || scheduleStallStart !== undefined || inputBlockStart !== undefined)
+        && stuckEvidenceForStreak({
+          streakStart: symptomSinceMs,
+          resyncDispatchedFor: resyncDispatchedForRef.current,
+        })
+      const decision = deliveryOwnerRef.current.observe({
+        sessionId: currentSessionId,
+        chamberRun: { sourceFingerprint, generation: retryToken ?? 0, sessionId: currentSessionId, episode: tracked.episode },
+        evidence: {
+          symptomSinceMs,
+          ...(scheduleStallStart === undefined ? {} : { scheduleStalled: true }),
+          ...(inputBlockStart === undefined ? {} : { inputBlocked: true }),
+          ...(stuckEvidence ? { stuckEvidence: true } : {}),
+          ...(openEvidence === undefined ? {} : { open: openEvidence }),
+        },
+        escalationBlocked: observed?.resyncInFlight === true,
+      }, at, { commit: false })
+      setHostStallSessions(previous => {
+        const present = previous.has(currentSessionId)
+        if (decision.hostStall) {
+          if (present) return previous
+          const next = new Set(previous)
+          next.add(currentSessionId)
+          return next
+        }
+        if (present) {
+          const next = new Set(previous)
+          next.delete(currentSessionId)
+          return next
+        }
+        return previous
+      })
+      // The owner planned WITHOUT committing: each action is accounted only once it
+      // actually ran, so an unavailable resync never authorizes a stronger tier.
+      if (decision.action?.tier === 'resync') {
+        if (rebuildInstanceSessionStream(instanceId, currentSessionId)) {
+          deliveryOwnerRef.current.markDispatched(currentSessionId, 'resync', at)
+          resyncDispatchedForRef.current = symptomSinceMs
+        }
+      } else if (decision.action?.tier === 'instance-reboot') {
+        deliveryOwnerRef.current.markDispatched(currentSessionId, 'instance-reboot', at)
+        onRebootInstance?.(instanceId)
+      } else if (decision.action?.tier === 'document-reload') {
+        deliveryOwnerRef.current.markDispatched(currentSessionId, 'document-reload', at)
+        // The wall clock is deliberate: the budget must survive the reload, and the
+        // page's monotonic clock restarts with every document.
+        if (shouldReloadDocument(documentReloadBudgetStorage(), Date.now())) window.location.reload()
+      }
+    }
+    sample()
+    const timer = setInterval(sample, 1_000)
+    return () => clearInterval(timer)
+  }, [active, shell.booted, shell.error, currentSessionId, instanceId])
 
   useEffect(() => {
     // 来源未连接（手动断开）时绝不启动 shell——遮罩自身就是可操作态，
@@ -434,6 +613,15 @@ export default function InstanceView({
     && shouldAnnounceRetryQueue(queuedBehindPredecessorRef.current, settled)
   const waitedSeconds = String(Math.round(waitedMs / 1000))
   const retryQueueSeconds = String(Math.round(INSTANCE_TAIL_WAIT_CAP_MS / 1000))
+  // hostStallSessions is the delivery ladder's exhaustion fact. The ladder can run
+  // out of levers over an open, healthy face (schedule/input stalls are host
+  // responsiveness, not content): the generic failed copy is the correct one, and
+  // with no content producer there is no content-copy case at all.
+  const openRecovery = currentSessionId !== undefined && hostStallSessions.has(currentSessionId)
+    ? 'failed'
+    : presentedSessionOpenRecoveryPhase(
+      sessionOpenHealth, currentSessionId, currentSessionKnownBlank === true,
+    )
   const sourceFailed = isTerminalUnreadyPhase(sourcePhase)
   // 遮罩在**已 settle** 的壳上仍然可见，就是打开意图揭示门在持有它（boot 期
   // settled 为假）——这段时间遮罩是唯一可见面，租客整体不可见。隐藏判定耦合的是
@@ -473,6 +661,28 @@ export default function InstanceView({
           "一容器一 root" 不变量）。旧容器随 key 变更被 React 摘除，挂死尝试
           写进的是已脱离文档的节点。 */}
       <div key={retryToken ?? 0} ref={containerRef} className="instance-shell" />
+      {active && settled && !veilVisible && failureOverlayVisible !== true && openRecovery !== 'quiet' && (
+        <div className="instance-session-open-recovery" data-chamber-session-open-recovery={openRecovery}
+          role={openRecovery === 'waiting' ? 'status' : 'alert'}>
+          <span>{frameText(locale, openRecovery === 'failed' ? 'sessionOpen.failed' : 'sessionOpen.waiting')}</span>
+          {openRecovery === 'failed' && currentSessionId !== undefined && (
+            <div className="instance-session-open-actions">
+              {sessionOpenHealth?.resyncAvailable === true && sessionOpenHealth.resyncInFlight !== true && (
+                <Button variant="primary" onClick={() => {
+                  const current = readInstanceSessionStreamHealth(instanceId, currentSessionId)
+                  if (current?.resyncInFlight === true || current?.resyncAvailable !== true) return
+                  const now = monotonicNow()
+                  deliveryOwnerRef.current.markDispatched(currentSessionId, 'resync', now)
+                  rebuildInstanceSessionStream(instanceId, currentSessionId)
+                }}>{frameText(locale, 'sessionOpen.rebuild')}</Button>
+              )}
+              <Button variant="outline" onClick={() => window.location.reload()}>
+                {frameText(locale, 'sessionOpen.reload')}
+              </Button>
+            </div>
+          )}
+        </div>
+      )}
       {/* a11y：动作出现后遮罩不是"纯忙"区域——`aria-busy`
           会把区域的更新播报压后，正好盖住我们要用户看见的重试/连接/切换。
           （本节选位置必须是 JSX children，不能塞进 `{veilVisible && (…)}` 的

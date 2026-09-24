@@ -2,117 +2,119 @@
 //  RendererHangWatchdogTests.swift
 //  DSHChamberTests
 //
-//  渲染器卡死自愈的
-//  纯判据——首载门（didFinish 前只记录不探测）、空闲够久才 ping、连续 3 次超时
-//  才重载、任何键鼠输入都清零。
-//
 import XCTest
 @testable import DSHChamber
 
 final class RendererHangWatchdogTests: XCTestCase {
-    private let t0 = Date(timeIntervalSince1970: 1_000_000)
+    private let t0: TimeInterval = 1_000_000
 
-    /// 已过首载门（didFinish）的判定器——既有判定语义测试都以此为前置。
-    private func loadedWatchdog(now: Date) -> RendererHangWatchdog {
-        var watchdog = RendererHangWatchdog(now: now)
+    func testFirstLoadGateAndContinuousVisibleProbes() {
+        var watchdog = RendererHangWatchdog()
+        XCTAssertEqual(watchdog.tick(now: t0 + 60), .nothing)
         watchdog.noteFirstLoadFinished()
-        return watchdog
+        XCTAssertEqual(watchdog.tick(now: t0 + 61), .probe(1))
+        XCTAssertEqual(watchdog.noteProbeSucceeded(id: 1, frameCount: 0), .nothing)
+        XCTAssertEqual(watchdog.tick(now: t0 + 65), .nothing)
+        XCTAssertEqual(watchdog.tick(now: t0 + 66), .probe(2))
     }
 
-    // MARK: - 首载门
-
-    /// 首次成功加载前：即使空闲远超阈值也只记录，不 ping、不重载、不累计 strike。
-    func testNoProbeOrReloadBeforeFirstLoadFinishes() {
-        var watchdog = RendererHangWatchdog(now: t0)
-        XCTAssertFalse(watchdog.loadedOnce)
-        XCTAssertEqual(watchdog.tick(now: t0.addingTimeInterval(15)), .nothing)
-        XCTAssertEqual(watchdog.tick(now: t0.addingTimeInterval(60)), .nothing)
-        XCTAssertEqual(watchdog.strikes, 0, "门关期间绝不累计 strike")
-        // 门打开后照常探测（同一时钟继续）。
+    func testFrameProgressClearsStallsAndStaticFrameCounterReloads() {
+        var watchdog = RendererHangWatchdog()
         watchdog.noteFirstLoadFinished()
-        XCTAssertTrue(watchdog.loadedOnce)
-        XCTAssertEqual(watchdog.tick(now: t0.addingTimeInterval(61)), .probe)
-    }
-
-    /// 门打开前的键鼠输入照常记账：开门后从最后一次输入起算空闲（不打断输入）。
-    func testInputBeforeFirstLoadStillFeedsIdleTimer() {
-        var watchdog = RendererHangWatchdog(now: t0)
-        watchdog.noteUserInput(at: t0.addingTimeInterval(50))
-        XCTAssertEqual(watchdog.tick(now: t0.addingTimeInterval(60)), .nothing)
-        watchdog.noteFirstLoadFinished()
-        XCTAssertEqual(watchdog.tick(now: t0.addingTimeInterval(64)), .nothing,
-                       "距最后一次输入仅 14s")
-        XCTAssertEqual(watchdog.tick(now: t0.addingTimeInterval(65)), .probe)
-    }
-
-    // MARK: - 判定语义（门打开后）
-
-    func testNoProbeWhileUserIsActive() {
-        var watchdog = loadedWatchdog(now: t0)
-        // 空闲不足 15s：既不 ping 也不重载。
-        XCTAssertEqual(watchdog.tick(now: t0.addingTimeInterval(5)), .nothing)
-        XCTAssertEqual(watchdog.tick(now: t0.addingTimeInterval(14)), .nothing)
-        XCTAssertEqual(watchdog.strikes, 0)
-    }
-
-    func testProbesOnlyAfterIdleGraceAndThenRespectsInterval() {
-        var watchdog = loadedWatchdog(now: t0)
-        XCTAssertEqual(watchdog.tick(now: t0.addingTimeInterval(15)), .probe, "空闲满 15s 才 ping")
-        // 在飞期间不重复 ping。
-        XCTAssertEqual(watchdog.tick(now: t0.addingTimeInterval(16)), .nothing)
-        // ping 正常返回：清零。
-        watchdog.noteProbeSucceeded()
-        XCTAssertEqual(watchdog.tick(now: t0.addingTimeInterval(17)), .nothing, "距上次 ping 不足 5s")
-        XCTAssertEqual(watchdog.tick(now: t0.addingTimeInterval(21)), .probe)
-    }
-
-    func testReloadAfterThreeConsecutiveTimeouts() {
-        var watchdog = loadedWatchdog(now: t0)
-        var now = t0.addingTimeInterval(15)
-        // 第 1 次 ping + 超时 → strike 1。
-        XCTAssertEqual(watchdog.tick(now: now), .probe)
-        now = now.addingTimeInterval(3)
-        XCTAssertEqual(watchdog.tick(now: now), .nothing)
-        XCTAssertEqual(watchdog.strikes, 1)
-        // 第 2 次。
-        now = now.addingTimeInterval(2)
-        XCTAssertEqual(watchdog.tick(now: now), .probe)
-        now = now.addingTimeInterval(3)
-        XCTAssertEqual(watchdog.tick(now: now), .nothing)
-        XCTAssertEqual(watchdog.strikes, 2)
-        // 第 3 次超时 → 判定卡死并清零计数。
-        now = now.addingTimeInterval(2)
-        XCTAssertEqual(watchdog.tick(now: now), .probe)
-        now = now.addingTimeInterval(3)
-        XCTAssertEqual(watchdog.tick(now: now), .reload, "连续 3 次超时 ≈15s+ → 重载")
-        XCTAssertEqual(watchdog.strikes, 0)
-        XCTAssertEqual(watchdog.tick(now: now.addingTimeInterval(1)), .nothing, "重载后重新计时")
-    }
-
-    func testUserInputResetsStrikesAndTimer() {
-        var watchdog = loadedWatchdog(now: t0)
-        var now = t0.addingTimeInterval(15)
-        XCTAssertEqual(watchdog.tick(now: now), .probe)
-        now = now.addingTimeInterval(3)
-        XCTAssertEqual(watchdog.tick(now: now), .nothing)
-        XCTAssertEqual(watchdog.strikes, 1)
-        // 用户敲了下键盘：strike 清零、空闲计时重来（绝不打断输入）。
-        watchdog.noteUserInput(at: now)
-        XCTAssertEqual(watchdog.strikes, 0)
-        XCTAssertEqual(watchdog.tick(now: now.addingTimeInterval(14)), .nothing)
-        XCTAssertEqual(watchdog.tick(now: now.addingTimeInterval(15)), .probe)
-    }
-
-    func testHiccupDoesNotAccumulate() {
-        var watchdog = loadedWatchdog(now: t0)
-        var now = t0.addingTimeInterval(15)
-        for _ in 0..<2 {
-            XCTAssertEqual(watchdog.tick(now: now), .probe)
-            now = now.addingTimeInterval(3)
-            XCTAssertEqual(watchdog.tick(now: now), .nothing)
-            watchdog.noteProbeSucceeded()  // 下一次 ping 成功 → 清零
-            now = now.addingTimeInterval(5)
+        for (second, frame) in [(0.0, 0), (5.0, 0), (10.0, 1),
+                                (15.0, 1), (20.0, 1), (25.0, 1)].enumerated() {
+            let id = UInt64(second + 1)
+            XCTAssertEqual(watchdog.tick(now: t0 + frame.0), .probe(id))
+            let outcome = watchdog.noteProbeSucceeded(id: id, frameCount: frame.1)
+            XCTAssertEqual(outcome, id == 6 ? .reload : .nothing)
         }
-        XCTAssertEqual(watchdog.strikes, 0, "偶发慢响应不得累积成重载")
+    }
+
+    func testThreeTimeoutsAndLateCallbackCannotClearEvidence() {
+        var watchdog = RendererHangWatchdog()
+        watchdog.noteFirstLoadFinished()
+        for index in 0..<3 {
+            let start = t0 + Double(index) * 5
+            let id = UInt64(index + 1)
+            XCTAssertEqual(watchdog.tick(now: start), .probe(id))
+            XCTAssertEqual(watchdog.tick(now: start + 3),
+                           index == 2 ? .reload : .nothing)
+            XCTAssertEqual(watchdog.noteProbeSucceeded(id: id, frameCount: 100), .nothing)
+            XCTAssertEqual(watchdog.strikes, index == 2 ? 0 : index + 1)
+        }
+    }
+
+    func testNavigationResetInvalidatesOldProbe() {
+        var watchdog = RendererHangWatchdog()
+        watchdog.noteFirstLoadFinished()
+        XCTAssertEqual(watchdog.tick(now: t0), .probe(1))
+        watchdog.reset()
+        XCTAssertEqual(watchdog.noteProbeFailed(id: 1), .nothing)
+        XCTAssertEqual(watchdog.tick(now: t0 + 1), .probe(2))
+        XCTAssertEqual(watchdog.strikes, 0)
+    }
+
+    // MARK: - 输入阻塞往返（Electron main.ts 的 inputBlockRttMs 腿）
+
+    /// 超预算的往返是输入阻塞证据，不是帧 strike；但帧计数照样算进度
+    /// （Electron RendererFrameWatchdog.succeeded 同序：先记进度再判预算）。
+    func testSlowRoundTripIsInputBlockEvidenceNotAFrameStrike() {
+        var watchdog = RendererHangWatchdog()
+        watchdog.noteFirstLoadFinished()
+        XCTAssertEqual(watchdog.tick(now: t0), .probe(1))
+        let slow = RendererHangWatchdog.inputBlockRtt + 0.5
+        XCTAssertEqual(watchdog.noteProbeSucceeded(id: 1, frameCount: 10, rtt: slow),
+                       .inputBlock(rtt: slow))
+        XCTAssertEqual(watchdog.strikes, 0, "超预算是输入阻塞证据，不是帧 strike")
+        XCTAssertEqual(watchdog.inputBlockStrikes, 1)
+        // 帧计数仍然是进度：下一次静止样本才是第一次帧 strike。
+        XCTAssertEqual(watchdog.tick(now: t0 + 5), .probe(2))
+        XCTAssertEqual(watchdog.noteProbeSucceeded(id: 2, frameCount: 10), .nothing)
+        XCTAssertEqual(watchdog.strikes, 1)
+    }
+
+    /// 连续三次超预算 → 同一个 strike 上界触发有界重载，并清空证据窗口。
+    func testThreeOverBudgetRoundTripsReloadAtTheFrameStrikeBound() {
+        var watchdog = RendererHangWatchdog()
+        watchdog.noteFirstLoadFinished()
+        let slow = RendererHangWatchdog.inputBlockRtt + 0.5
+        var outcomes: [RendererHangWatchdog.Action] = []
+        for index in 0..<RendererHangWatchdog.maxStrikes {
+            let id = UInt64(index + 1)
+            XCTAssertEqual(watchdog.tick(now: t0 + Double(index) * 5), .probe(id))
+            outcomes.append(watchdog.noteProbeSucceeded(id: id, frameCount: index + 1, rtt: slow))
+        }
+        XCTAssertEqual(outcomes, [.inputBlock(rtt: slow), .inputBlock(rtt: slow), .reload])
+        XCTAssertEqual(watchdog.inputBlockStrikes, 0, "升级重载后证据窗口归零")
+        XCTAssertEqual(watchdog.strikes, 0)
+    }
+
+    /// 一次健康往返清空输入阻塞连击；其后重新从 1 计数。
+    func testHealthyRoundTripClearsTheInputBlockStreak() {
+        var watchdog = RendererHangWatchdog()
+        watchdog.noteFirstLoadFinished()
+        let slow = RendererHangWatchdog.inputBlockRtt + 0.5
+        var at = t0
+        var frames = 0
+        for index in 0..<(RendererHangWatchdog.maxStrikes - 1) {
+            let id = UInt64(index + 1)
+            XCTAssertEqual(watchdog.tick(now: at), .probe(id))
+            frames += 1
+            XCTAssertEqual(watchdog.noteProbeSucceeded(id: id, frameCount: frames, rtt: slow),
+                           .inputBlock(rtt: slow))
+            at += 5
+        }
+        let healthyID = UInt64(RendererHangWatchdog.maxStrikes)
+        XCTAssertEqual(watchdog.tick(now: at), .probe(healthyID))
+        frames += 1
+        XCTAssertEqual(watchdog.noteProbeSucceeded(id: healthyID, frameCount: frames, rtt: 0.001), .nothing)
+        XCTAssertEqual(watchdog.inputBlockStrikes, 0, "健康往返清空输入阻塞连击")
+        at += 5
+        let nextID = healthyID + 1
+        XCTAssertEqual(watchdog.tick(now: at), .probe(nextID))
+        frames += 1
+        XCTAssertEqual(watchdog.noteProbeSucceeded(id: nextID, frameCount: frames, rtt: slow),
+                       .inputBlock(rtt: slow), "健康样本后连击窗口重开")
+        XCTAssertEqual(watchdog.inputBlockStrikes, 1)
     }
 }

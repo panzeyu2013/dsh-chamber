@@ -16,6 +16,7 @@
       "default": "./src/client/index.ts"
     },
     "./machine-catalog": "./src/client/machine-catalog.ts",
+    "./stream-health-probe": "./src/client/session-stream-health-probe.ts",
     "./package.json": "./package.json"
   },
   "dsh": {

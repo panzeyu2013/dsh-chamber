@@ -152,13 +152,18 @@ export const zh = {
   'source.local': '本地实例',
   /** Session title fallback used by the notification body. */
   'session.untitled': '未命名会话',
+  'sessionOpen.waiting': '仍在载入会话内容。若主机迟迟没有响应，可继续等待。',
+  'sessionOpen.failed': '会话内容未载入。可以重建对话通道；若主机无响应，重建也无法生成缺失的历史内容。',
+  /** The conversation face is open; the content channel itself stopped updating. */
+  'sessionOpen.rebuild': '重建对话通道',
+  'sessionOpen.reload': '重新加载页面',
   /** Notification title: a session finished its turn. */
   'notification.sessionComplete': '会话已完成',
   /** Notification title: the agent is asking the user a question. */
   'notification.awaitingAnswer': '代理正在等待你的回答',
   /** Notification title: the agent requests approval. */
   'notification.awaitingApproval': '代理请求你的批准',
-  /** L3 of the session-liveness guard: the conversation stopped receiving facts. */
+  /** L3 of the runtime-liveness guard: the conversation stopped receiving facts. */
   // 判据是「拿不到权威结论」（不是「沉默很久」）：长工具/长推理的合法静默与
   // 真卡死在本层不可区分，文案必须只说「无法确认」，不得断言任务停了。
   'sessionStall.text': '无法确认 {sources} 的会话状态：连接可能已停滞。',
@@ -213,6 +218,10 @@ export const en: Record<FrameKey, string> = {
   'fatal.harvestTimeout': 'Instance boot timed out: no response within {seconds}s of mounting (retry or switch source)',
   'source.local': 'Local instance',
   'session.untitled': 'Untitled session',
+  'sessionOpen.waiting': 'Still loading this conversation. You can keep waiting for the host.',
+  'sessionOpen.failed': 'Conversation content did not load. Rebuild the stream, or reload the page. If the host is unresponsive, neither action can recreate missing history.',
+  'sessionOpen.rebuild': 'Rebuild conversation stream',
+  'sessionOpen.reload': 'Reload page',
   'notification.sessionComplete': 'Session complete',
   'notification.awaitingAnswer': 'The agent is waiting for your answer',
   'notification.awaitingApproval': 'The agent requests your approval',

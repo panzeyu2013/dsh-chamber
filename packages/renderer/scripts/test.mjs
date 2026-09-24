@@ -72,6 +72,9 @@ export const GROUPS = {
     'test/aggregate/notification-edges.test.ts',
     // 单通知投影：两条证据、一个策略、一个账本键空间。
     'test/aggregate/notification-projection.test.ts',
+    // 运行结算的 run 级归属（锚点 vs 后一轮完成）。
+    'test/aggregate/notification-run-scope.test.ts',
+    'test/aggregate/notification-outbox.test.ts',
     // 水位原语单一来源（同一完成不重发、坏值不臆造、max/完成水位负例）。
     'test/aggregate/watermark.test.ts',
     // complete 通知账本内核（两轨：水位 + 武装；撤回只清武装轨 / forget / prune）。
@@ -90,6 +93,11 @@ export const GROUPS = {
     'test/session-state/notification-ledger.test.ts',
     // SSH/dsh 远端的无壳观察者（$events + 每边沿一次 session/follow）。
     'test/session-state/source-mux-facts.test.ts',
+    'test/session-state/session-open-recovery.test.ts',
+'test/session-state/session-content-stall.test.ts',
+'test/session-state/document-reload-budget.test.ts',
+'test/session-state/renderer-stall-evidence.test.ts',
+    'test/session-state/session-delivery-state.test.ts',
     // 预热命中率（attempt/hit/cancelled 的定义与计数 + 全局仪器）。
     'test/session-state/prewarm-ledger.test.ts',
     // 有界集合内核（容量/FIFO 淘汰/同键替换裁决的负例）。
@@ -158,6 +166,9 @@ function main() {
     packageRoot: PACKAGE_ROOT,
     groups: GROUPS,
     platformFiles: { win32: WIN32_FILES },
+    // Belt-and-braces: a test that fails before its own stop()/finally must surface
+    // as a bounded red instead of pinning a check:tests slot forever.
+    timeoutMs: 120_000,
   })
 }
 

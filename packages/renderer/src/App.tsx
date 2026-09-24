@@ -76,6 +76,9 @@ import {
 } from '@dsh-chamber/dsh-chamber-client-core'
 import type { SessionFacts } from './notification-edges.ts'
 import { createCompleteLedger } from './complete-ledger.ts'
+import { publishRendererStallObservation } from './renderer-stall-evidence.ts'
+import { createNotificationOutbox } from './notification-outbox.ts'
+import { monotonicNow } from './monotonic-now.ts'
 // 预热命中率仪表（attempt/hit/cancelled）。
 import { recordPrewarm } from './prewarm-ledger.ts'
 // gateway session-state 只读事实源的快照/实例类型（装配在
@@ -534,18 +537,6 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, Error
   }
 }
 
-/**
- * 单调时基（揭示门；照 InstanceView.tsx:65-75 的既有理由与实现）：持有窗只做差值
- * 比较，绝不能受墙钟步进影响——NTP 校时/休眠唤醒把 `Date.now()` 拉回 10 分钟，会让
- * "已持有 1s"的算术算出负 elapsed，一次性到期定时器就可能不再重臂。`performance.now()`
- * 在渲染器里恒在，缺失时退回墙钟（测试/异常环境）。
- */
-function monotonicNow(): number {
-  return typeof performance !== 'undefined' && typeof performance.now === 'function'
-    ? performance.now()
-    : Date.now()
-}
-
 export default function App() {
   // The frame owns no `t` seat, so it
   // renders its own copy from the typed dictionary in locales.ts, in the locale
@@ -967,9 +958,17 @@ export default function App() {
   // 插件侧保持无状态（纯投影），避免在每 ctx 复制一套状态机。
   // facts wiring：completedBySource 是 deriveSourceUnread 的
   // **派生投影**；durable 回退账本
-  // （edgeLedgerRef）与读水位（readMarksRef）在首帧从 v2 落盘载入，
+  // （edgeLedgerRef）与读水位（readMarksRef）在首帧从 v4 落盘载入，
   // 撤回/同代重挂/重启后由事实重算。v1 导入是防御性代码
   // （无写入者，见 unread-store.ts 头注）。
+  // Desktop-observed stall evidence: the shell's frame/input probe pushes strike
+  // counters; the page registry feeds the delivery owner the same evidence.
+  useEffect(() => {
+    const unsubscribeStall = window.dshChamber?.rendererStall?.onEvidence(observation => {
+      publishRendererStallObservation(observation)
+    })
+    return () => { unsubscribeStall?.() }
+  }, [])
   const [unreadBoot] = useState(() => {
     const storage = browserUnreadStorage()
     const payload = loadUnread(storage)
@@ -978,10 +977,13 @@ export default function App() {
   const unreadStorageRef = useRef<UnreadStorageLike | undefined>(unreadBoot.storage)
   const readMarksRef = useRef<Record<string, Record<string, number>>>(unreadBoot.payload.read)
   const edgeLedgerRef = useRef<Record<string, Record<string, boolean>>>(unreadBoot.payload.edge)
-  // complete 通知账本（设计 19）：水位轨（facts 入口，
-  // 单调只升）与武装轨（壳边沿入口，直到重新 running）共用一个容器与键空间，规则
-  // 本体仍在 watermark.ts / notification-edges.ts；初始表来自 v2 落盘。
-  const completeLedgerRef = useRef(createCompleteLedger(unreadBoot.payload.notified))
+  // complete 通知账本（设计 19，v4 单表）：身份轨（facts 入口，运行身份唯一
+  // 判定）与武装轨（壳边沿入口，直到重新 running）共用一个容器与键空间，规则
+  // 本体在 notification-identity.ts / notification-projection.ts /
+  // notification-edges.ts；初始表来自 v4 落盘。
+  const completeLedgerRef = useRef(createCompleteLedger(unreadBoot.payload.notifiedRuns))
+  const [notificationOutbox] = useState(() => createNotificationOutbox(unreadBoot.storage))
+  const notificationOutboxRef = useRef(notificationOutbox)
   const clientInstallIdRef = useRef('')
   if (clientInstallIdRef.current === '') clientInstallIdRef.current = loadClientInstallId(unreadBoot.storage)
   const [completedBySource, setCompletedBySource] = useState<Record<string, Record<string, boolean>>>(
@@ -1353,7 +1355,12 @@ export default function App() {
     const prevRuntimeFactsNext = pruneSourceRecord(prevRuntimeFactsRef.current, live)
     if (prevRuntimeFactsNext !== null) prevRuntimeFactsRef.current = prevRuntimeFactsNext
     // complete 通知两轨（水位 + 武装）与注册表同拍收敛（一次调用覆盖两张表）。
-    completeLedgerRef.current.prune(live)
+    // Persisted notification identities must survive the boot window before the
+    // remote registry arrives; otherwise a reload silently drops pending delivery.
+    if (remoteRosterSettled) {
+      completeLedgerRef.current.prune(live)
+      notificationOutboxRef.current.pruneSources(live)
+    }
     // facts wiring 数据面：退役来源的读水位 / 回退账本 / 通知水位 /
     // 播种集 / 提示记账 / 在途计数与 facts state 一并清（same-id 重加 = 新来源代，
     // 不得继承上一代的已读/已通知判定）。
@@ -1380,7 +1387,7 @@ export default function App() {
       }
       return pruneSourceRecord(prev, liveRaw) ?? prev
     })
-  }, [servers, mountedViews])
+  }, [servers, mountedViews, remoteRosterSettled])
 
   const refreshConnections = useCallback(async () => {
     try {
@@ -1503,6 +1510,7 @@ export default function App() {
       delete prevRunningRef.current[sourceId]
       delete prevRuntimeFactsRef.current[sourceId]
       completeLedgerRef.current.forget(sourceId)
+      notificationOutboxRef.current.forgetSource(sourceId)
       // facts wiring：事实源实例与全部未读数据面键随退役同拍收敛（reclaimView
       // 刻意不碰这些——拆壳不等于来源消失）。
       sessionFactsTeardownRef.current.get(sourceId)?.()
@@ -1972,7 +1980,15 @@ export default function App() {
     if (unsubscribeNotifications !== undefined) {
       signalNotificationReady()
     }
+    const onSidecarReady = (): void => {
+      notificationReadyAttempts = 0
+      if (notificationReadyRetryTimer !== null) clearTimeout(notificationReadyRetryTimer)
+      notificationReadyRetryTimer = null
+      if (unsubscribeNotifications !== undefined) signalNotificationReady()
+    }
+    window.addEventListener('dsh-chamber:sidecar-ready', onSidecarReady)
     return () => {
+      window.removeEventListener('dsh-chamber:sidecar-ready', onSidecarReady)
       rosterListenerReadyRef.current = false
       notificationReadyCancelled = true
       if (notificationReadyRetryTimer !== null) clearTimeout(notificationReadyRetryTimer)
@@ -2307,7 +2323,7 @@ export default function App() {
   } = useUnreadNotifications({
     aggregates, serverLabels, paintedViewRef, runtimeFactsRef, liveServerIdsRef,
     sessionFactsRef, sessionFactsSourcesRef, sourceLifecyclesRef, prevRunningRef,
-    edgeLedgerRef, readMarksRef, completeLedgerRef, factsSeededRef,
+    edgeLedgerRef, readMarksRef, completeLedgerRef, notificationOutboxRef, factsSeededRef,
     unreadStorageRef, unreadSaveTimerRef, flushUnreadRef, clientInstallIdRef,
     setCompletedBySource, setSessionFacts,
   })
@@ -2906,8 +2922,9 @@ const HEALTH_ERROR_GRACE_MS = 10_000
            * real session needs no veil.
            */
           const currentSessionId = runtimeFacts[viewId]?.current
+          const currentSummary = aggregates[viewId]?.sessions.find(session => session.sessionId === currentSessionId)
           const blankCurrent = currentSessionId === undefined
-            || (aggregates[viewId]?.sessions.find(session => session.sessionId === currentSessionId)?.blank ?? true)
+            || (currentSummary?.blank ?? true)
           return (
             <InstanceView
               key={viewId}
@@ -2921,9 +2938,12 @@ const HEALTH_ERROR_GRACE_MS = 10_000
               active={paintedView === viewId}
               label={serverLabels[viewId] ?? (viewId === LOCAL_INSTANCE_ID ? t('source.local') : viewId)}
               locale={locale}
+              currentSessionId={currentSessionId}
+              currentSessionKnownBlank={currentSummary?.blank === true}
               onSettled={handleInstanceSettled}
               onStateChange={handleShellState}
               retryToken={retryTokens[viewId]}
+              onRebootInstance={retryView}
               waitForServing={waitForServing}
               // 遮罩的事实输入与动作（导航/回收顺序仍由 App 拥有）。
               sourcePhase={servers.find(server => server.id === viewId)?.phase}

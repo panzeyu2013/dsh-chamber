@@ -21,7 +21,7 @@
  * failure (vendor `refreshList()`), so it cannot serve as a second verdict carrier.
  *
  * ## Discipline
- * - single flight: a request while an attempt is in flight only advances `requestedAt`;
+ * - single flight: requests received in flight coalesce into one fresh attempt;
  * - fail-closed: every seam failure is a `warn` + stuck evidence, never a throw;
  * - the write-back is idempotent and self-verified; the reducer only ever asks for false.
  */
@@ -108,11 +108,6 @@ const CONFIG = { confirmReads: 2 } as const
 /** The probe cadence is a property of the one table, not of this module. */
 const PROBE_LADDER = sessionAuthorityProbeLadder(LADDER_TABLES.authority)
 
-/** One official-store row is reconcilable when it claims running and is not a subagent. */
-export function isRunningNonSubagentRow(row: AuthorityOfficialRow | undefined): boolean {
-  return row?.running === true && row.subagent !== true
-}
-
 /**
  * Write-back targets: only ids that are BOTH authority-denied and still claiming
  * running in the store (idempotent, minimal write surface). Empty = already converged.
@@ -135,6 +130,7 @@ export class SessionAuthorityReconciler {
   private progressStamp = 0
   private probes = 0
   private corrections = 0
+  private requestVersion = 0
   private running = false
   private disposed = false
   private readonly actionLog: AuthorityActionLogEntry[] = []
@@ -143,13 +139,15 @@ export class SessionAuthorityReconciler {
     this.deps = deps
   }
 
-  /** Request one authority tick. In flight: only `requestedAt` advances (single flight). */
+  /** Request one authority tick. In flight: schedule one fresh pass after this one. */
   request(): void {
     if (this.disposed) return
     this.requestedAt = this.deps.now()
+    this.settledAt = undefined
+    this.requestVersion += 1
     if (this.running) return
     this.running = true
-    void this.attempt()
+    void this.drain()
   }
 
   snapshot(): SessionAuthoritySnapshot | undefined {
@@ -170,7 +168,6 @@ export class SessionAuthorityReconciler {
 
   dispose(): void {
     this.disposed = true
-    this.running = false
   }
 
   /**
@@ -194,22 +191,54 @@ export class SessionAuthorityReconciler {
     return starts.length === 0 ? undefined : Math.min(...starts)
   }
 
+  private async drain(): Promise<void> {
+    while (!this.disposed) {
+      const version = this.requestVersion
+      await this.attempt()
+      if (this.disposed || version !== this.requestVersion) continue
+      this.settledAt = this.deps.now()
+      try {
+        this.deps.onSettled?.()
+      } catch (error) {
+        this.deps.warn('session authority onSettled failed: '
+          + (error instanceof Error ? error.message : String(error)))
+      }
+      if (version === this.requestVersion) break
+    }
+    this.running = false
+  }
+
+  private currentGeneration(expected: string): boolean {
+    if (this.disposed) return false
+    if (this.deps.generation() === expected) return true
+    this.request()
+    return false
+  }
+
   private async attempt(): Promise<void> {
+    let generation: string | undefined
     try {
       const now = this.deps.now()
+      generation = this.deps.generation()
       const official = this.deps.readOfficial()
+      if (this.authority.generation !== generation) {
+        this.probeRecords = {}
+        this.stuckSince = undefined
+      }
       const tick = reduceSessionAuthority(this.authority, {
         kind: 'tick',
         now,
-        generation: this.deps.generation(),
+        generation,
         official: official.rows,
         listComplete: official.listComplete,
       }, CONFIG)
       this.authority = tick.state
       for (const effect of tick.effects) {
-        if (effect.kind === 'complete') this.note(now, 'complete', effect.sessionId + (effect.notify ? '' : ' (removed)'))
+        if (effect.kind === 'episodeEnded') this.note(now, 'complete', effect.sessionId + ' (' + effect.cause + ')')
       }
-      const sticky = Object.values(official.rows).some(isRunningNonSubagentRow)
+      // The reducer retains episodes while the official list is incomplete;
+      // the ladder must consume that same projection, not a second raw-row view.
+      const sticky = Object.keys(this.authority.sessions).length > 0
       if (!sticky && this.stuckSince !== undefined) this.note(now, 'recovered', 'symptom gone')
       if (!sticky) this.stuckSince = undefined
       const runningSince = this.earliestRunningSince()
@@ -225,18 +254,16 @@ export class SessionAuthorityReconciler {
       if (sticky && plan.actions.some(action => action.tier === 'probe')) {
         this.probes += 1
         this.note(now, 'probe')
-        await this.probe()
+        if (!await this.probe(generation)) return
       }
-      this.settledOk = this.stuckSince === undefined
+      if (this.currentGeneration(generation)) this.settledOk = this.stuckSince === undefined
     } catch (error) {
+      if (generation !== undefined && !this.currentGeneration(generation)) return
+      if (this.disposed) return
       this.deps.warn('session authority attempt failed: '
         + (error instanceof Error ? error.message : String(error)))
       this.stuckSince ??= this.deps.now()
       this.settledOk = false
-    } finally {
-      this.running = false
-      this.settledAt = this.deps.now()
-      this.deps.onSettled?.()
     }
   }
 
@@ -244,58 +271,84 @@ export class SessionAuthorityReconciler {
    * One probe episode: an authority read, the reducer's N=2 confirmation read when it
    * asks for one, then the write-back when the denial is confirmed.
    */
-  private async probe(): Promise<void> {
-    const first = await this.deps.readAuthority()
-    if (first === undefined || !first.ok) {
-      this.stuckSince ??= this.deps.now()
-      this.note(this.deps.now(), 'read-failed')
-      return
-    }
-    let effects = this.consume(first)
-    if (effects.some(effect => effect.kind === 'probe')) {
-      const second = await this.deps.readAuthority()
-      if (second === undefined || !second.ok) {
-        this.stuckSince ??= this.deps.now()
-        this.note(this.deps.now(), 'read-failed', 'confirmation read')
-        return
+  private async probe(generation: string): Promise<boolean> {
+    const requested = reduceSessionAuthority(this.authority, { kind: 'readRequested' }, CONFIG)
+    this.authority = requested.state
+    let nextRead = requested.effects.find((effect): effect is Extract<SessionAuthorityEffect, { kind: 'probe' }> =>
+      effect.kind === 'probe')
+    const corrections: Extract<SessionAuthorityEffect, { kind: 'correct' }>[] = []
+    let failed = false
+    let confirmation = false
+    while (nextRead !== undefined) {
+      let read: AuthorityRead | undefined
+      try {
+        read = await this.deps.readAuthority()
+      } catch (error) {
+        this.deps.warn('session authority read failed: '
+          + (error instanceof Error ? error.message : String(error)))
       }
-      effects = effects.concat(this.consume(second))
+      if (!this.currentGeneration(generation)) return false
+      const reduction = reduceSessionAuthority(this.authority, {
+        kind: 'authorityRead',
+        now: this.deps.now(),
+        ticket: nextRead.ticket,
+        read: read ?? { ok: false, proof: { kind: 'none' }, rows: {} },
+      }, CONFIG)
+      this.authority = reduction.state
+      if (read === undefined || !read.ok) {
+        failed = true
+        this.stuckSince ??= this.deps.now()
+        this.note(this.deps.now(), 'read-failed', confirmation ? 'confirmation read' : undefined)
+        break
+      }
+      if (reduction.unresolved === undefined || reduction.unresolved.length > 0) {
+        failed = true
+        this.stuckSince ??= this.deps.now()
+        this.note(this.deps.now(), 'read-failed',
+          reduction.unresolved === undefined
+            ? 'obsolete authority read'
+            : 'incomplete authority verdict: ' + reduction.unresolved.join(','))
+      }
+      corrections.push(...reduction.effects.filter((effect): effect is Extract<SessionAuthorityEffect, { kind: 'correct' }> =>
+        effect.kind === 'correct'))
+      nextRead = reduction.effects.find((effect): effect is Extract<SessionAuthorityEffect, { kind: 'probe' }> =>
+        effect.kind === 'probe')
+      confirmation = true
     }
-    const correct = effects.find((effect): effect is Extract<SessionAuthorityEffect, { kind: 'correct' }> =>
-      effect.kind === 'correct')
-    if (correct !== undefined) {
-      const written = await this.deps.correct(correct.sessionIds)
+    for (const correct of corrections) {
+      if (!this.currentGeneration(generation)) return false
+      let written = false
+      try {
+        written = await this.deps.correct(correct.sessionIds)
+      } catch (error) {
+        this.deps.warn('session authority correction failed: '
+          + (error instanceof Error ? error.message : String(error)))
+      }
+      if (!this.currentGeneration(generation)) return false
       if (written) this.corrections += 1
       const result = reduceSessionAuthority(this.authority, {
         kind: 'correctionResult',
         now: this.deps.now(),
-        sessionIds: correct.sessionIds,
+        ticket: correct.ticket,
         ok: written,
       }, CONFIG)
       this.authority = result.state
-      // Chronology: the write settled first; the completion it produced is noted after it.
+      // Chronology: the write settled first; its diagnostic episode end follows.
       this.note(this.deps.now(), written ? 'correct' : 'correct-failed', correct.sessionIds.join(','))
       for (const effect of result.effects) {
-        if (effect.kind === 'complete') this.note(this.deps.now(), 'complete', effect.sessionId)
+        if (effect.kind === 'episodeEnded') this.note(this.deps.now(), 'complete', effect.sessionId + ' (' + effect.cause + ')')
       }
       if (!written) {
         this.stuckSince ??= this.deps.now()
-        return
+        failed = true
       }
     }
-    // A verdict was reached (converged, or corrected): the channel is not stuck.
-    if (this.stuckSince !== undefined) this.note(this.deps.now(), 'recovered', 'authority verdict')
-    this.stuckSince = undefined
-    this.progressStamp += 1
-  }
-
-  private consume(read: AuthorityRead): readonly SessionAuthorityEffect[] {
-    const reduction = reduceSessionAuthority(this.authority, {
-      kind: 'authorityRead',
-      now: this.deps.now(),
-      read,
-    }, CONFIG)
-    this.authority = reduction.state
-    return reduction.effects
+    if (!failed) {
+      // A verdict was reached (converged, or corrected): the channel is not stuck.
+      if (this.stuckSince !== undefined) this.note(this.deps.now(), 'recovered', 'authority verdict')
+      this.stuckSince = undefined
+      this.progressStamp += 1
+    }
+    return true
   }
 }

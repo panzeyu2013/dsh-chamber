@@ -373,6 +373,9 @@ interface HostEdges {
 - **保留入站 method（Swift → sidecar，不在 68 通道 manifest 内；单源 = `packages/desktop/node-edges.ts` `HOST_INBOUND`）**：`__host.hostFacts`、`__host.notifyClicked`、`__host.systemResume`、`__host.mainWindowShown`、`__host.deepLink {url}`（§4.5：`application(_:open:)` 冷/热启动统一入口 → core `enqueueDeepLink`）、`__host.rendererLifecycle {event}`（§5 E19 三事件映射：did-start-loading / did-finish-load / crashed / closed → core `onRendererLifecycle` 复位 ready 位 + in-flight requeue/drain）、`__host.quitFacts {quitRequested, recoveryAvailable}` → **决策投影**（§5 E1/E9/E20：core 依 chamber settings 的 `windowCloseBehavior`/`quitConfirmation` + `LOCAL_RUNNING_STATES × localProcessAlive` 用既有纯函数 `shouldHideToTray`/`computeQuitRisk` 合成，返回 `{hideOnClose, quitNeedsConfirm, quitReasons}`——判据单源在 core，Swift 只执行隐藏/退出链，绝不复制决策）。Swift 拼写单源 = `HostInboundMethod`，与 TS 表锁步由 `HostInboundMethodTests` 断言。
 - 退出纪律：清理后入站 invoke 一律回 `{error:'app is quitting', code:'app_quitting'}`（sidecar-entry.ts:396-400；与 renderer-trust 的 `createTrustedIpc` 同码同语义）；清理自身 4.5s 硬顶（`QUIT_CLEANUP_TIMEOUT_MS=5_000` − 500，早于宿主 5s SIGKILL grace 留 500ms 余量；shell-core.ts:691 / sidecar-entry.ts:691）。
 - 护栏：Swift 只接受自己 spawn 的进程 fd；帧长上限与超时；非协议帧 fail-loud。事件推送经 B 桥到 Swift → A 桥 emit，事件名清单 = manifest。
+- **出站写与期限**：Swift 的 invoke 和 edge 应答共用每个 sidecar 会话独立的串行写器；排队上限为 64 帧 / 16 MiB（另有正在写的单帧 ≤4 MiB）。edge 应答越过尚未写出的普通请求，满队列时可淘汰排队请求并将其明确结算为写失败。invoke 在登记 pending 时启动全程期限（缺省 60s，页面普通 45s、长交互 720s），涵盖排队、管道背压、sidecar 执行与响应读取；过期排队帧在真正写入前丢弃。单次物理写超过 20s 时重建 sidecar；stop / 自然退出立即作废旧写器，重启使用新写器。写抛错可能留下半帧，因此同样作废整条出站传输并终止本代 sidecar，由 Supervisor 建立新协议会话。已经进入内核的写不能撤回，超时后的远端副作用须靠宿主事实对账；sidecar 对未收到 edge 应答另设普通 30s / 交互 660s 期限。
+
+  **Rejected alternatives**：继续在 invoke / stdout 回调线程持锁直接写 stdin，会让满管道绕过 invoke 期限并堵住 edge 应答；只把同步写包进全局串行队列，会让旧会话的阻塞写占住新会话；写失败后继续使用同一 NDJSON 管道，可能把新帧拼到半帧后面。每会话有界写器把这些风险分别收敛到请求期限、会话代际和协议重建。
 
 #### 4.4.3 通道 manifest（防双份漂移）
 
@@ -417,7 +420,7 @@ interface HostEdges {
 | E16 | `session` 权限 handler：只放行 clipboard-sanitized-write（**写**） | WebKit：写 = 用户手势自动放行（无需弹窗）；**读走 NSPasteboard 用户授权** | P0 对拍加"粘贴（富文本/图片）与剪贴板读"（C3） |
 | E17 | `crashReporter.start` + `child-process-gone` 诊断（:287/:295-301） | 不移植（macOS 崩溃报告原生 + Supervisor 日志）；child-process-gone 留 electron-edges | — |
 | E18 | `requestSingleInstanceLock`/second-instance | NSRunningApplication 或锁文件二次激活（bundle id 相同时 LaunchServices 已保证） | 双 flavor 互斥见 §6.3 |
-| E19 | renderer 崩溃恢复（installRendererRecovery :1178-1267：500ms + 60s≤3 次 + 15s unresponsive + render-process-gone :1235-1240） | **三事件映射**：didStartProvisionalNavigation（复位 + requeue）/ didFinish（drain）/ webViewWebContentProcessDidTerminate（复位 + requeue + 500ms 有界重载，60s ≤3 次 + NSAlert） | **unresponsive 腿 v1 明示不可移植**（WKWebView 无该事件）→ 已按 S-02 以心跳探针替代（`RendererHangWatchdog`：didFinish 后武装，需 15s 无输入 + 3 次探测）；boot 死区收敛后，**前端 boot 不 settle 的逃生由页面侧拥有**（design 05 §4.1：可操作遮罩 + 相位感知就绪门 + ⌘R 提示），原生仍不观察/不超时前端 boot 状态——该探针覆盖不到"整页存活但前端卡住/首帧求值期冻结"，两条原生缺口登记在 STATUS（可选收口：didCommit 后武装首载超时；运行期 `/health` +「重启 sidecar」）。**崩溃归因轮**：崩溃日志行改为带「距上次加载完成 X.XXs（boot 窗口内/已稳定）+ 本窗口第 N 次崩溃」，恢复落地再记一条「崩溃后 X.XXs 重载完成」（`RendererCrashAttribution` 纯值 + `RendererRecoveryTests` 单测；`MainWindowController` 记 `lastLoadFinishedAt`/`crashesSinceLoad`/`recoveringFromCrash`）——本机 10 份 WebContent 崩溃报告中当前构建的 2 份都落在**加载完成后 21–34s**，符号化栈是 JSC 代码块替换/JIT tier-up（rAF 回调入口），而其余 8 份连 `crashed` 行都没有：**静默整页重载**正是"应用自己回到载入历史"的来源，归因量是唯一的事后判据。 |
+| E19 | renderer 崩溃/卡死恢复（installRendererRecovery：render-process-gone、unresponsive 与前台 JS/rAF 进度探针；共用有界重载预算） | **三事件映射**：didStartProvisionalNavigation（复位 + requeue）/ didFinish（drain）/ webViewWebContentProcessDidTerminate（复位 + requeue + 500ms 有界重载，60s ≤3 次 + NSAlert） | **unresponsive 腿 v1 明示不可移植**（WKWebView 无该事件）→ 已按 S-02 以心跳探针替代（`RendererHangWatchdog`：didFinish 后武装，前台可见且无导航时每 5s 取 JS 回执与主动 rAF 计数；连续 3 次 3s 超时/求值失败/帧计数不前进后共用有界重载；键鼠输入不清除证据，隐藏或导航复位，迟到回调按探针编号丢弃；期限使用单调系统 uptime，免受系统时钟调整影响；导航抢先发生时取消待执行重载并退还该次预算）；boot 死区收敛后，**前端 boot 不 settle 的逃生由页面侧拥有**（design 05 §4.1：可操作遮罩 + 相位感知就绪门 + ⌘R 提示），原生仍不观察/不超时前端 boot 状态——该探针覆盖不到"整页存活但前端卡住/首帧求值期冻结"，两条原生缺口登记在 STATUS（可选收口：didCommit 后武装首载超时；运行期 `/health` +「重启 sidecar」）。**崩溃归因轮**：崩溃日志行改为带「距上次加载完成 X.XXs（boot 窗口内/已稳定）+ 本窗口第 N 次崩溃」，恢复落地再记一条「崩溃后 X.XXs 重载完成」（`RendererCrashAttribution` 纯值 + `RendererRecoveryTests` 单测；`MainWindowController` 记 `lastLoadFinishedAt`/`crashesSinceLoad`/`recoveringFromCrash`）——本机 10 份 WebContent 崩溃报告中当前构建的 2 份都落在**加载完成后 21–34s**，符号化栈是 JSC 代码块替换/JIT tier-up（rAF 回调入口），而其余 8 份连 `crashed` 行都没有：**静默整页重载**正是"应用自己回到载入历史"的来源，归因量是唯一的事后判据。 |
 | E20 | `app.on('activate'/'window-all-closed')`（darwin 且 close-behavior='quit' 时也必须 quit :1510-1516） | `applicationShouldHandleReopen` 等 + windowShouldClose 判 close-behavior：'quit' → NSApp.terminate 走完整确认链，绝不无窗常驻 | 14 D1 语义 |
 
 ### 5.1 刷新率（ProMotion 120Hz，裁决）
@@ -975,3 +978,11 @@ loopback-http-test-server.ts 同款思路）**未实施——需 GUI 会话，�
 - **深链 scheme 放 shell-core、deep-link 反向 import**：否决——shell-core 顶层 `new BoundedVscodeIntentQueue(...)` 来自 deep-link.ts，反向 import 形成 ESM 值依赖环并命中 class TDZ；改为零依赖 leaf `deep-link-scheme.ts`，两侧比较收敛为 `isDeepLinkUrl`/`isDeepLinkProtocol`。
 - **state 根沿用三把锁**（gateway `.gateway.lock` + `dsh-runtime/owner.json` + serve/standalone 无锁入口）：否决——三处语义不同，且无锁入口可与运行中 gateway 双写同一 state 根；改为单一 `<stateRoot>/owner.json` 租约模块（`state-root-lease.ts`，§6.3 的 L2），L1 app 实例 flock 保持不动（不同文件、不同 scope）。
 - **把 Swift 布局锚点迁移与 R1/R2 同批做**：推迟——`PackagedLayoutTests.swift:156-205` 文本锁 sidecar-ctx 的七个助手与 `resolvePnpmEntry` 候选顺序，迁移属 macOS 实机门；本批保持锚点逐字成立（静态复核 17/17）。
+
+### A 桥导航与 sidecar 重启的时序契约
+
+每个注入文档生成独立 `documentId`，与请求 ID 一起进入信封并由 Swift 回显。页面只接受同文档回执，避免重载后旧文档的 `id=1` 结算新文档的 `id=1`。B 桥调用按方法设置期限；导航只需丢弃旧文档回执，sidecar 退出会作废全部在途调用。新 ready 帧触发 `info` 再水化、通知监听重新握手与会话事实对账。WebContent 自动重载期间窗口标题显示本地化恢复状态，导航完成后清除。
+
+**Rejected alternatives**：只用请求 ID 无法区分导航前后的重复编号；只重新读取 `info` 会让通知打开监听与事实基线保持在旧 sidecar 世代；把普通调用无限等待会让宿主重启后页面永久悬挂；用 `evaluateJavaScript("1")` 证明内容已绘制不成立，它只证明 JS 上下文应答。可见页的主动 rAF 心跳证明帧调度仍在前进，但 WKWebView 不向宿主暴露最终合成帧的提交游标；JS 与 rAF 同时正常而像素仍停滞时，宿主依旧无法单凭该探针自动重载。
+
+**Rejected alternatives（恢复预算）**：把排定后被新导航取消的重载仍计入 60s 配额，会让零次实际重载也耗尽三次预算；取消时退还该次计数，并用排程代际阻断取消后迟到执行的 work item。

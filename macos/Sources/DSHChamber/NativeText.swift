@@ -123,6 +123,7 @@ public enum NativeTextKey: String, CaseIterable {
     case fatalSidecarStartFailedDetail = "fatal.sidecarStartFailedDetail"
     case rendererCrashTitle = "renderer.crashTitle"
     case rendererCrashDetail = "renderer.crashDetail"
+    case rendererRecovering = "renderer.recovering"
     case sidecarLockBusy = "sidecar.lockBusy"
     case sidecarCheckConfig = "sidecar.checkConfig"
     case sidecarStartupExit = "sidecar.startupExit"

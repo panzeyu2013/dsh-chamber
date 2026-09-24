@@ -55,9 +55,7 @@ test('every notice renders its own label, marker and action set', () => {
   assert.deepEqual(faceOf('loading-stall', 'resync'), {
     label: 'loading-stall', reload: true, resync: true, marker: 'loading-stall',
   })
-  // The automatic arm renders the SAME manual control: the user's exit must never
-  // disappear behind a rebuild that is already running.
-  assert.deepEqual(faceOf('loading-failed', 'auto-resync'), {
+  assert.deepEqual(faceOf('loading-failed', 'resync'), {
     label: 'loading-failed', reload: true, resync: true, marker: 'loading-failed',
   })
   assert.deepEqual(faceOf('heal-failed', 'none'), {
@@ -69,10 +67,10 @@ test('every notice renders its own label, marker and action set', () => {
   })
 })
 
-test('the rebuild control follows exactly the two executing actions', () => {
-  for (const action of ['none', 'heal', 'resync', 'auto-resync'] as const) {
+test('the rebuild control follows only the manual resync action', () => {
+  for (const action of ['none', 'heal', 'resync'] as const) {
     const face = sessionStreamHealthChipFace(planOf('loading-hold', action, 'loading-stall'), 'loading')
-    assert.equal(face.resync, action === 'resync' || action === 'auto-resync', action)
+    assert.equal(face.resync, action === 'resync', action)
     assert.equal(face.reload, true, action)
   }
 })
@@ -108,7 +106,7 @@ test('a re-plan is skipped exactly when the visible surface is unchanged', () =>
     true,
     'the clock alone must not re-render the same surface',
   )
-  assert.equal(sameSessionStreamHealthPlan(base, planOf('loading-hold', 'auto-resync', 'loading-stall')), false)
+  assert.equal(sameSessionStreamHealthPlan(base, planOf('loading-hold', 'none', 'loading-stall')), false)
   assert.equal(sameSessionStreamHealthPlan(base, planOf('loading-hold', 'resync', 'loading-failed')), false)
   assert.equal(sameSessionStreamHealthPlan(base, planOf('healing', 'resync', 'loading-stall')), false)
 })

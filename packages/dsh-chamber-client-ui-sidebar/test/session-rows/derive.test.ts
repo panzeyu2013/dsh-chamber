@@ -17,6 +17,7 @@ import { fileURLToPath } from 'node:url'
 import { stripComments } from '../../../../scripts/dev/test-support/source-text.ts'
 import {
   armBlankGhost,
+  advanceRunIdentities,
   basenameOf,
   BLANK_GHOST_GRACE_MS,
   deriveArchivedSessions,
@@ -43,6 +44,7 @@ import {
   serversProjectionSignature,
   sessionDisplayTitle,
 } from '@dsh-chamber/dsh-chamber-client-core/derive'
+import { chamberRunId } from '@dsh-chamber/dsh-stream-state'
 import {
   armMembershipGrace,
   findReusableBlankSession,
@@ -642,6 +644,63 @@ test('projectRuntimeFacts: live bits, pending kinds, subagent and sparse lineage
     },
   }, 'subagent rows and unknown kinds never enter the report; zero counts stay sparse')
   assert.deepEqual(projectRuntimeFacts({}), { sessions: {} })
+})
+
+test('run identity: the producer mints one chamber id per observed COMPLETION', () => {
+  const fp = 'a'.repeat(64)
+  const generation = 7_000
+  const running1 = advanceRunIdentities({ previous: new Map(), running: new Set(['s1']), live: new Set(['s1']), sourceFingerprint: fp, generation })
+  // The completion tick mints the notified identity: the host emits running BEFORE
+  // the run's prompt activity, so a start-tick mint would anchor on the previous run.
+  const completed1 = advanceRunIdentities({ previous: running1.identities, running: new Set(), live: new Set(['s1']), sourceFingerprint: fp, generation, episodes: running1.episodes, activity: new Map([['s1', 5_000]]) })
+  const runOne = completed1.identities.get('s1')!.runId
+  assert.match(runOne, /^chamber:/)
+  assert.equal(completed1.identities.get('s1')?.running, false)
+  // A replayed completion with the SAME host activity keeps the identity; that is
+  // what lets the durable receipt suppress the duplicate banner.
+  const replay = advanceRunIdentities({ previous: completed1.identities, running: new Set(), live: new Set(['s1']), sourceFingerprint: fp, generation, episodes: completed1.episodes, activity: new Map([['s1', 5_000]]) })
+  assert.equal(replay.identities.get('s1')?.runId, runOne, 'the same completion is one identity')
+  // A genuinely later run: its prompt advances the activity, even though the
+  // running flag was observed first and carried the previous identity.
+  const running2 = advanceRunIdentities({ previous: replay.identities, running: new Set(['s1']), live: new Set(['s1']), sourceFingerprint: fp, generation, episodes: replay.episodes, activity: new Map([['s1', 5_000]]) })
+  assert.equal(running2.identities.get('s1')?.runId, runOne, 'a start tick carries the previous identity')
+  const completed2 = advanceRunIdentities({ previous: running2.identities, running: new Set(), live: new Set(['s1']), sourceFingerprint: fp, generation, episodes: running2.episodes, activity: new Map([['s1', 9_000]]) })
+  assert.notEqual(completed2.identities.get('s1')?.runId, runOne, 'a newer completion mints the next run')
+  const pruned = advanceRunIdentities({ previous: completed2.identities, running: new Set(), live: new Set(), sourceFingerprint: fp, generation, episodes: completed2.episodes })
+  assert.equal(pruned.identities.size, 0, 'ids that left the store are dropped (bounded growth)')
+  // The high-water survives the drop: re-adding the session must not restart at
+  // episode 1 with the same run id (two real runs would share one banner receipt).
+  const readded = advanceRunIdentities({ previous: pruned.identities, running: new Set(['s1']), live: new Set(['s1']), sourceFingerprint: fp, generation, episodes: pruned.episodes })
+  const readdedDone = advanceRunIdentities({ previous: readded.identities, running: new Set(), live: new Set(['s1']), sourceFingerprint: fp, generation, episodes: readded.episodes, activity: new Map([['s1', 12_000]]) })
+  assert.notEqual(readdedDone.identities.get('s1')?.runId, runOne, 'a live drop must not reset the episode namespace')
+})
+
+test('run identity: a producer remount can never re-mint a previous lifetime id (regression)', () => {
+  // The blocking review scenario: run 1 of s1 completes and is notified, the
+  // sidebar ctx remounts, run 2 of the SAME session completes. Episode numbers
+  // restart at 1 in the new lifetime, so the lifetime nonce is the only thing that
+  // keeps the two ids apart; a shared generation makes the native receipt treat
+  // run 2 as already shown (missed notification).
+  const fp = 'b'.repeat(64)
+  const lifetimeA = advanceRunIdentities({ previous: new Map(), running: new Set(['s1']), live: new Set(['s1']), sourceFingerprint: fp, generation: 11_000 })
+  const doneA = advanceRunIdentities({ previous: lifetimeA.identities, running: new Set(), live: new Set(['s1']), sourceFingerprint: fp, generation: 11_000, episodes: lifetimeA.episodes, activity: new Map([['s1', 1_000]]) })
+  const runOne = doneA.identities.get('s1')!.runId
+  const lifetimeB = advanceRunIdentities({ previous: new Map(), running: new Set(['s1']), live: new Set(['s1']), sourceFingerprint: fp, generation: 12_000 })
+  const doneB = advanceRunIdentities({ previous: lifetimeB.identities, running: new Set(), live: new Set(['s1']), sourceFingerprint: fp, generation: 12_000, episodes: lifetimeB.episodes, activity: new Map([['s1', 1_500]]) })
+  const runTwo = doneB.identities.get('s1')!.runId
+  assert.notEqual(runTwo, runOne, 'two real runs must never share a run id')
+  assert.notEqual(runTwo, chamberRunId({ sourceFingerprint: fp, generation: 11_000, sessionId: 's1', episode: 1 }))
+})
+
+test('run identity: projectRuntimeFacts carries the producer id sparsely', () => {
+  const report = projectRuntimeFacts(
+    { byId: { s1: { running: false }, s2: { running: false } } },
+    undefined,
+    undefined,
+    new Map([['s1', 'chamber:fp:0:s1:1']]),
+  )
+  assert.equal(report.sessions.s1?.runId, 'chamber:fp:0:s1:1')
+  assert.equal(report.sessions.s2?.runId, undefined)
 })
 
 test('P5: subagent activity is tri-state, and a stale report downgrades running to unknown', () => {

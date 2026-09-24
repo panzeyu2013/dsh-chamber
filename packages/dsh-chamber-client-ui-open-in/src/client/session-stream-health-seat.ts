@@ -21,14 +21,15 @@
  * WHY THE FACE IS A SINGLETON: the chip's effects depend on the injected
  * members; a fresh closure per render would re-run them for nothing.
  *
- * EXECUTION DISCIPLINE: `step` executes the two
- * automatic arms — the stage-move heal, and the per-session rebuild ONLY when the
- * plan could prove no open is in flight (`sessionOpenInFlight === false`) — and
- * accounts each against the session's ledger. The plan's `'resync'` action merely
+ * EXECUTION DISCIPLINE: `step` executes the stage-move heal for an error face.
+ * The renderer's page-level recovery seat owns the loading-state automatic
+ * rebuild, so it also runs when the conversation header never mounts. The
+ * plan's `'resync'` action merely
  * ARMS the chip's control; the click reaches `resync()` below, which is
- * deliberately NOT ledger-gated (the ledger bounds the AUTOMATIC arm; a human click
- * is its own bound, and the manual exit must survive an exhausted automatic
- * budget) while still stamping that ledger so it paces the automatic arm.
+ * deliberately NOT ledger-gated (the header ledger bounds the automatic error
+ * heal; a human click is its own bound, and the manual exit must survive an
+ * exhausted heal budget). Its stamp paces that error heal. The page's loading
+ * rebuild has a separate ledger owned by the page frame.
  *
  * The recovery chip is registered BEFORE the open-in gates and independently of
  * them: a source whose per-entry open-in id does not parse still gets the
@@ -48,7 +49,7 @@ import {
 } from './session-stream-health.ts'
 import {
   hasHealRoute, hasSessionStreamResync, healSessionStream, previousPresented, rememberPresented,
-  resyncSessionStream, sessionOpenInFlight, type SessionsLoose,
+  resyncSessionStream, sessionStreamResyncInFlight, type SessionsLoose,
 } from './session-stream-health-probe.ts'
 import { SessionStreamHealthChip, type SessionStreamHealthInjected } from './SessionStreamHealthChip.tsx'
 
@@ -198,9 +199,6 @@ export function registerSessionStreamHealthSeat(ctx: ClientContext, t: Translate
           // refused after spending the ledger. hasHealRoute() gates all three.
           neighborAvailable: hasHealRoute(sessions, sessionId),
           resyncAvailable: hasSessionStreamResync(sessions, sessionId),
-          // The automatic rebuild's evidence: tri-state, and only the
-          // explicit `false` (no open pending) unlocks it.
-          openInFlight: sessionOpenInFlight(sessions, sessionId),
           ...(carrierChurn === undefined ? {} : { carrierChurn }),
         },
         now,
@@ -213,13 +211,6 @@ export function registerSessionStreamHealthSeat(ctx: ClientContext, t: Translate
         // per tick, and the cooldown plus the rolling budget already bound the
         // attempts — the ladder reports 'heal-failed' once they run out.
         healSessionStream(sessions, sessionId, previousOf(sessionId))
-        state = markSessionStreamHeal(state, now)
-      } else if (plan.action === 'auto-resync') {
-        // The ONE automatic rebuild: the plan asked for it only after
-        // the concrete face reported that NO open is in flight, so it interrupts no
-        // request. Accounted whether or not the method performed anything, exactly
-        // like the heal, so the cooldown and the rolling budget bound it.
-        resyncSessionStream(sessions, sessionId)
         state = markSessionStreamHeal(state, now)
       }
       storeLadder(sessionId, state)
@@ -249,6 +240,8 @@ export function registerSessionStreamHealthSeat(ctx: ClientContext, t: Translate
     // stamped so it paces the automatic arm.
     resync: (sessionId) => {
       try {
+        const sessions = readSessions(ctx)
+        if (sessionStreamResyncInFlight(sessions, sessionId)) return
         const now = Date.now()
         // Double-click guard: a manual click is NOT ledger-gated,
         // so two clicks in the same second would call the concrete `resync()` twice
@@ -261,7 +254,7 @@ export function registerSessionStreamHealthSeat(ctx: ClientContext, t: Translate
         // same one-stamp-per-attempt rule the automatic arms follow): a face that
         // vanished between planning and clicking must not leave the control armed
         // for a retry loop.
-        resyncSessionStream(readSessions(ctx), sessionId)
+        resyncSessionStream(sessions, sessionId)
         storeLadder(sessionId, markSessionStreamHeal(current, now))
       } catch {
         // Never throws into React, and this package's client sources may not log.

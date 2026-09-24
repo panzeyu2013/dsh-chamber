@@ -99,6 +99,7 @@
 /* ===== 渲染恢复放弃 ===== */
 "renderer.crashTitle" = "dsh-chamber Frontend Error";
 "renderer.crashDetail" = "The frontend renderer has repeatedly stopped responding or crashed, so automatic recovery has been stopped. Please restart the app.";
+"renderer.recovering" = "Restoring the page…";
 
 /* ===== sidecar 启动失败报告（SidecarStartupFailure） ===== */
 "sidecar.lockBusy" = "Another dsh-chamber instance is already running";

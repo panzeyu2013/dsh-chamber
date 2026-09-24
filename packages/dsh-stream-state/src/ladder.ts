@@ -4,14 +4,14 @@
  * WHY. Four ladders implement one shape with four vocabularies:
  *   session-authority.ts       (running bit)       tiers: probe / reconnect / notice
  *   session-fact-reconcile.ts  (reconcile receipt) phases + single-flight retries
- *   session-stream-health.ts   (openState/phase)   tiers: heal / resync / auto-resync
+ *   session-stream-health.ts   (openState/phase)   tier: heal
  *   mobile session-stall.ts    (DOM phase)         a 975-line COPY of the above
  * They differ in their SIGNALS and their ACTION NAMES, not in their skeleton:
  * observe progress -> hold a bounded wait -> escalate only on evidence -> coalesce
  * -> quota -> surface. This module owns that skeleton once; each caller supplies
  * its signals, its tier table and its action mapping.
  *
- * THE LOAD-BEARING DISCIPLINE (as in session-liveness.ts:34-41): silence alone
+ * THE LOAD-BEARING DISCIPLINE: silence alone
  * must NOT escalate past the first tier. Long tool runs and long reasoning are
  * legitimate silences indistinguishable from a real stall at this layer, and every
  * escalation replays the baseline of every open session. So a tier is gated on
@@ -33,6 +33,9 @@ export interface LadderTier {
   readonly cooldownMs: number
   /** Maximum dispatches inside {@link Ladder.quotaWindowMs}; null = unbounded. */
   readonly quota: number | null
+  /** Per-tier quota window; absent = {@link Ladder.quotaWindowMs}. The delivery
+   *  table declares one window per tier, so a tier-specific value takes effect here. */
+  readonly quotaWindowMs?: number
   /** Whether dispatching this tier requires the caller to have reported that the
    *  previous tier could not conclude. `false` = time alone may dispatch it. */
   readonly requiresStuckEvidence: boolean
@@ -97,12 +100,14 @@ export interface CollapseResult {
 }
 
 /**
- * Drop the records whose streak is over. A record survives only while the symptom
- * stays present AND the watch reports no new progress.
+ * End the STREAK of every record whose symptom stopped or whose watch reported new
+ * progress, while KEEPING its dispatch ledger.
  *
- * Progress DROPS the record rather than stamping it: keeping a stamped record would
- * leave the symptom clock running, and the next tick would escalate on a stale
- * streak - exactly the "escalate on time alone" failure this engine forbids.
+ * The ledger is a rolling-window rate limit, not part of the streak: deleting it on
+ * a one-tick evidence gap let symptom flapping re-fire a tier forever without ever
+ * spending its quota or reaching the exhaustion notice. The streak itself still
+ * ends - the next symptom tick is `fresh`, so its clock is the caller's new start
+ * and never escalates on an inherited one.
  */
 export function collapseRecords(
   records: Readonly<Record<string, LadderRecord>>,
@@ -113,9 +118,14 @@ export function collapseRecords(
   let changed = false
   for (const [sourceId, record] of Object.entries(records)) {
     const observation = observations[sourceId]
-    if (observation === undefined || !observation.sticky || observation.progressStamp > record.progressStamp) {
+    const progressed = observation !== undefined && observation.sticky
+      && observation.progressStamp > record.progressStamp
+    if (observation === undefined || !observation.sticky || progressed) {
       changed = true
       fresh.add(sourceId)
+      next[sourceId] = progressed && observation !== undefined
+        ? { ...record, progressStamp: observation.progressStamp }
+        : record
       continue
     }
     next[sourceId] = record
@@ -143,13 +153,20 @@ export function planLadder(
   if (!isUsableAt(now)) return { records, actions: [], exhausted: [] }
 
   const collapsed = collapseRecords(records, observations)
-  const next: Record<string, LadderRecord> = { ...collapsed.records }
+  // A fresh streak re-bases its clock at NOW even when its record was kept for the
+  // dispatch ledger; inheriting the old streak's start would escalate on stale time.
+  const carriedRecords: Record<string, LadderRecord> = { ...collapsed.records }
+  for (const sourceId of collapsed.fresh) {
+    const record = carriedRecords[sourceId]
+    if (record !== undefined) carriedRecords[sourceId] = { ...record, symptomSinceMs: now }
+  }
+  const next: Record<string, LadderRecord> = { ...carriedRecords }
   const actions: LadderAction[] = []
   const exhausted: string[] = []
 
   for (const [sourceId, observation] of Object.entries(observations)) {
     if (observation === undefined || !observation.sticky) continue
-    const carried = collapsed.records[sourceId]
+    const carried = carriedRecords[sourceId]
     // A fresh streak is based at NOW: the caller's symptomSinceMs describes the
     // symptom that just reset, and inheriting it would re-arm every tier at once.
     const fresh = collapsed.fresh.has(sourceId)
@@ -177,7 +194,7 @@ export function planLadder(
       const history = previous.dispatches[tier.name] ?? []
       const last = history.length === 0 ? null : (history[history.length - 1] as number)
       if (last !== null && now - last < tier.cooldownMs) continue
-      if (tier.quota !== null && countWithin(history, now, ladder.quotaWindowMs) >= tier.quota) continue
+      if (tier.quota !== null && countWithin(history, now, tier.quotaWindowMs ?? ladder.quotaWindowMs) >= tier.quota) continue
       if (observation.escalationBlocked) {
         // Suppressed WITHOUT consuming quota: a dispatch the caller cannot execute
         // must not silently eat the lever.
@@ -190,7 +207,7 @@ export function planLadder(
         // The only writer of a dispatch ledger: pruning at write time keeps the
         // array inside its quota window (G-C) instead of growing for the process
         // lifetime.
-        dispatches: { ...previous.dispatches, [tier.name]: pushWindowed(history, now, now, ladder.quotaWindowMs) },
+        dispatches: { ...previous.dispatches, [tier.name]: pushWindowed(history, now, now, tier.quotaWindowMs ?? ladder.quotaWindowMs) },
       }
       dispatched = true
     }
@@ -208,10 +225,21 @@ export function planLadder(
         if (tier.requiresStuckEvidence && !observation.stuckEvidence) return false
         if (tier.quota === null) return true
         const history = (next[sourceId]?.dispatches[tier.name] ?? []) as readonly number[]
-        return countWithin(history, now, ladder.quotaWindowMs) < tier.quota
+        return countWithin(history, now, tier.quotaWindowMs ?? ladder.quotaWindowMs) < tier.quota
       })
       if (!anyLever) exhausted.push(sourceId)
     }
+  }
+
+  // Bounded memory: an unobserved record whose every dispatch already fell out of
+  // every tier window carries no rate-limit information.
+  const maxWindow = Math.max(ladder.quotaWindowMs,
+    ...ladder.tiers.map(tier => tier.quotaWindowMs ?? ladder.quotaWindowMs))
+  for (const [sourceId, record] of Object.entries(next)) {
+    if (observations[sourceId] !== undefined) continue
+    const newest = Object.values(record.dispatches)
+      .reduce((max, history) => Math.max(max, ...(history as readonly number[])), 0)
+    if (newest === 0 || now - newest > maxWindow) delete next[sourceId]
   }
 
   return { records: next, actions, exhausted }
@@ -266,13 +294,12 @@ export function sessionAuthorityEscalationLadder(config: {
 
 /**
  * Boundary: the same SCHEDULING-only mapping as the authority ladders above, for the
- * open-in stream-health ladder (tiers `heal` / `auto-resync`). The host module keeps its
+ * open-in stream-health ladder (the `heal` tier). The host module keeps its
  * phase machine, `healFailedLatched`, the healing settle window, the clock-rollback guard
  * and the notice projection - none of which this engine models.
  */
 export function streamHealthLadder(config: {
   readonly errorGraceMs: number
-  readonly loadingStallMs: number
   readonly healCooldownMs: number
   readonly healBudgetWindowMs: number
   readonly healBudgetMax: number
@@ -282,7 +309,6 @@ export function streamHealthLadder(config: {
     quotaWindowMs: config.healBudgetWindowMs,
     tiers: [
       { name: 'heal', afterMs: config.errorGraceMs, cooldownMs: config.healCooldownMs, quota: config.healBudgetMax, requiresStuckEvidence: false },
-      { name: 'auto-resync', afterMs: config.loadingStallMs, cooldownMs: config.healCooldownMs, quota: config.healBudgetMax, requiresStuckEvidence: true },
     ],
   }
 }

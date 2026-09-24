@@ -4,7 +4,7 @@
  * bridge-manifest.json invoke/push 集。
  *
  * 断言链（全部静态文本解析，不执行 shim）：
- *  ① 9 命名空间各自的方法名集合：preload（*Api 工厂返回对象）== shim
+ *  ① 10 命名空间各自的方法名集合：preload（*Api 工厂返回对象）== shim
  *     （var <ns> = {…} 块）——无缺无多（含 on* 订阅方法；update/runtime 的
  *     onStateChanged 等 preload 面外别名不得出现）；
  *  ② 方法→通道逐条映射：同 (命名空间, 方法) 下 preload 的
@@ -13,7 +13,7 @@
  *     的解包方法、ready/ack 的 {deliveryId,attempt} 类形状方法——本测试锁
  *     通道名，payload 键由实现注释与 Swift 集成测试覆盖）；
  *  ③ 顶层面：preload exposeInMainWorld('dshChamber', {…}) 的 13 个键
- *     （4 标量 + 9 命名空间）== shim dshChamberApi 键；
+ *     （4 标量 + 10 命名空间）== shim dshChamberApi 键；
  *  ④ invoke 通道集：preload 全部 invoke 字面量 == shim 全部 invoke 字面量
  *     == manifest invoke 集（60）；push 通道集：preload 全部
  *     ipcRenderer.on 字面量 == shim PUSH_EVENTS 值 == manifest push 集（8）；
@@ -45,6 +45,7 @@ const API_FACTORY_TO_NAMESPACE: Record<string, string> = {
   updateApi: 'update',
   settingsApi: 'settings',
   systemResumeApi: 'systemResume',
+  rendererStallApi: 'rendererStall',
   openInApi: 'openIn',
   deepLinkApi: 'deepLink',
   runtimeApi: 'runtime',
@@ -209,15 +210,15 @@ test('② 方法→通道映射逐条相等（preload 字面量 == shim 解析�
   }
 })
 
-test('③ 顶层面：preload expose 键 == shim dshChamberApi 键（4 标量 + 9 命名空间）', () => {
+test('③ 顶层面：preload expose 键 == shim dshChamberApi 键（4 标量 + 10 命名空间）', () => {
   const expected = new Set([...EXPECTED_SCALARS, ...NAMESPACES])
   const exposeKeys = extractExposeKeys(preloadSource)
-  assert.deepEqual(exposeKeys, expected, 'preload exposeInMainWorld 键应为 4 标量 + 9 命名空间')
+  assert.deepEqual(exposeKeys, expected, 'preload exposeInMainWorld 键应为 4 标量 + 10 命名空间')
   const shimKeys = extractShimTopKeys()
-  assert.deepEqual(shimKeys, expected, 'shim dshChamberApi 键应为 4 标量 + 9 命名空间')
+  assert.deepEqual(shimKeys, expected, 'shim dshChamberApi 键应为 4 标量 + 10 命名空间')
 })
 
-test('④ invoke/push 通道集：preload == shim == manifest（60 invoke / 8 push）', () => {
+test('④ invoke/push 通道集：preload == shim == manifest（60 invoke / 9 push）', () => {
   const preloadInvoke = new Set<string>()
   const preloadPush = new Set<string>()
   for (const namespace of NAMESPACES) {

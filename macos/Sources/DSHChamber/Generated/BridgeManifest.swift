@@ -1,7 +1,7 @@
 // BridgeManifest.swift — GENERATED, do not edit.
 //
 // 通道 manifest（design 25 §4.4.3）：Swift 侧 IPC 白名单单源
-// （68 通道 = 60 invoke + 8 push）。
+// （69 通道 = 60 invoke + 9 push）。
 // 重新生成（工作目录 packages/desktop）：node scripts/emit-bridge-manifest.mjs
 // 落位：macos/Sources/DSHChamber/Generated/ —— target 内随编译接线
 // （bridge-manifest.test.ts 守重生成 == 提交物）。
@@ -75,13 +75,14 @@ enum BridgeManifest {
         "dsh-chamber:runtime-restore-pre-rollback",
     ]
 
-    /// push 通道：main → renderer（webContents.send|rendererPush 推送面），共 8 条。
+    /// push 通道：main → renderer（webContents.send|rendererPush 推送面），共 9 条。
     static let pushChannels: Set<String> = [
         "dsh-chamber:settings-changed",
         "dsh-chamber:notification-open",
         "dsh-chamber:update-state-changed",
         "dsh-chamber:deep-link-intent",
         "dsh-chamber:system-resume",
+        "dsh-chamber:renderer-stall-evidence",
         "desktop_ssh_status_changed",
         "desktop_ssh_instances_changed",
         "dsh-chamber:runtime-state-changed",

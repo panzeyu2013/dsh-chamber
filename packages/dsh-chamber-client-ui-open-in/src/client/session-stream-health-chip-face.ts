@@ -21,7 +21,7 @@ export interface SessionStreamHealthChipFace {
   readonly label: 'healing' | SessionStreamNotice | null
   /** The page-reload control (never offered for the informational churn notice). */
   readonly reload: boolean
-  /** The per-session rebuild control: armed (`'resync'`) or already running (`'auto-resync'`). */
+  /** The user-triggered per-session rebuild control. */
   readonly resync: boolean
   /** The `data-chamber-stream-health` marker the chip publishes. */
   readonly marker: 'recovering' | SessionStreamNotice
@@ -48,7 +48,7 @@ export function sessionStreamHealthChipFace(
   return {
     label: plan.notice ?? 'healing',
     reload: actionable,
-    resync: actionable && (plan.action === 'resync' || plan.action === 'auto-resync'),
+    resync: actionable && plan.action === 'resync',
     marker: plan.notice ?? 'recovering',
   }
 }

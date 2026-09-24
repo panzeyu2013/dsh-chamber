@@ -16,9 +16,11 @@ import { startEarlyOpenArm } from './early-open.ts'
 import { en, zh, type SidebarKey } from './locales.ts'
 import { chamberBridge, isValidProducerSourceFingerprint } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
 import {
+  advanceRunIdentities,
   instanceSnapshotSignature,
   projectInstanceSnapshot,
   projectRuntimeFacts,
+  type RunIdentityObservation,
 } from '@dsh-chamber/dsh-chamber-client-core/derive'
 import { createPanelSource } from './panel-source.ts'
 import { createPurgeTracker } from '@dsh-chamber/dsh-chamber-client-core/purged-tracker'
@@ -52,6 +54,16 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 
 /** Dictionary namespace owned by this plugin (shell controls copy). */
 const NS = 'sidebar'
+
+/**
+ * Producer-lifetime identity nonce (I1). Module scope survives a ctx remount, so a
+ * new lifetime never re-mints a previous lifetime's run ids; the ms clock makes a
+ * page reload's first lifetime distinct as well. Multiplying by 1000 leaves room
+ * for the per-page-load registration counter without ever re-using a value
+ * (a reload cannot happen inside the same millisecond as the previous module load).
+ */
+const PRODUCER_GENERATION_BASE = Date.now() * 1_000
+let producerGenerationCounter = 0
 
 /** Services required by the sidebar plugin. */
 export const inject = ['slots', 'layout', 'sessions', 'workspaces', 'uiSession', 'uiWorkspace', 'locale']
@@ -310,15 +322,16 @@ export function apply(ctx: ClientContext): void {
     /**
      * 权威读（单一权威链，design 14 §D4）：控制面 HTTP 代理上的一次独立 unary
      * `session.list` —— 与被守卫的 WS 事实通道是**两条载体**，因此一次 502/代理重启
-     * 不会误伤事实判定。返回 `complete: true`：宿主 unary list 是全量列表，缺席因此
-     * 是证据；「缺席作证」由 reducer 的 N=2（两次独立读一致）把关。
+     * 不会误伤事实判定。宿主目前不返回完整性标记，因此 proof = none：缺席不再作证据
+     * （I5），显式 `running=false` 行仍是否定证据；等宿主给出 asOfSeq/游标后在此返回
+     * 对应 proof，「缺席作证」再由 reducer 的 N=2 把关。
      */
     const readAuthorityRunning = async (): Promise<AuthorityRead | undefined> => {
       try {
         const snapshot = await fetchInstanceSnapshot(getInstanceClient(chamberInstanceId))
         const rows: Record<string, boolean> = {}
         for (const row of snapshot.sessions) rows[row.sessionId] = row.running
-        return { ok: true, complete: true, rows }
+        return { ok: true, proof: { kind: 'none' }, rows }
       } catch (error) {
         console.warn(`[chamber] authority probe failed for ${chamberInstanceId} (no verdict this round):`,
           error instanceof Error ? error.message : String(error))
@@ -446,6 +459,15 @@ export function apply(ctx: ClientContext): void {
     let snapshotSignature = ''
     let snapshotQueued = false
     let disposed = false
+    // I1：本生产者的运行身份记忆（sessionId → 观察到的运行 episode）。App 侧的
+    // 通知边沿消费它，不再自行铸 run id。generation 是本 lifetime 独有的 nonce：
+    // 重挂后 episode 重新从 1 开始，但身份不会与上一 lifetime 的 id 相同。
+    const producerGeneration = PRODUCER_GENERATION_BASE + (producerGenerationCounter += 1)
+    let runIdentities: ReadonlyMap<string, RunIdentityObservation> = new Map()
+    // Episodes are lifetime high-water, not derived from the current snapshot: a
+    // session that briefly leaves the list must not restart at episode 1 (two real
+    // runs would share an id and the durable banner receipt would drop the second).
+    let runEpisodes: ReadonlyMap<string, number> = new Map()
     // 会话事实单一权威的执行端（P2）：策略在包内 reducer + ladder，本类只做 I/O。
     // 先声明后装配：sync() 要读它的快照，而它的 onSettled 又要回调 sync()。
     let sessionFacts: SessionAuthorityReconciler | undefined
@@ -506,7 +528,32 @@ export function apply(ctx: ClientContext): void {
       for (const [parentId, summary] of indexSubagentDescendants(snapshot.byId)) {
         if (summary.runningCount > 0) subagentRunning.set(parentId, summary.runningCount)
       }
-      const baseReport = projectRuntimeFacts(snapshot, subagentRunning, pendingInteractions.getSnapshot())
+      // I1 运行身份：生产者是运行通道的唯一身份权威——每个「非运行 → 运行」的
+      // 观察前沿铸一个新 episode，同一 run 的重复上报保持同一 id；运行结束的
+      // 行保留最后 id（它的完成仍属于那次运行）。App 只消费，不再自己铸。
+      const liveIds = new Set<string>()
+      const runningIds = new Set<string>()
+      const activity = new Map<string, number>()
+      for (const [id, facts] of Object.entries(snapshot.byId ?? {})) {
+        if (facts?.origin === 'subagent') continue
+        liveIds.add(id)
+        if (typeof facts?.updatedAt === 'number') activity.set(id, facts.updatedAt)
+        if (facts?.running === true) runningIds.add(id)
+      }
+      const advancedIdentities = advanceRunIdentities({
+        previous: runIdentities,
+        running: runningIds,
+        live: liveIds,
+        sourceFingerprint: chamberSourceFingerprint,
+        generation: producerGeneration,
+        episodes: runEpisodes,
+        activity,
+      })
+      runIdentities = advancedIdentities.identities
+      runEpisodes = advancedIdentities.episodes
+      const runIds = new Map<string, string>()
+      for (const [id, observed] of runIdentities) runIds.set(id, observed.runId)
+      const baseReport = projectRuntimeFacts(snapshot, subagentRunning, pendingInteractions.getSnapshot(), runIds)
       // listComplete：官方 session list 的 arrival phase 就是
       // 「本列表是否完整」的权威事实——listPhase 初值 'pending'，首次列表成功时置
       // 'ready'，此后出错不回退（vendor

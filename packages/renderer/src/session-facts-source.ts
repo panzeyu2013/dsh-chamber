@@ -67,6 +67,7 @@ export const SESSION_FACTS_POLL_MS = 30_000
 
 import { isWatermark } from './watermark.ts'
 import { createUnreadAckOutbox, type UnreadAckMethod } from './unread-store.ts'
+import { isPlainRecord } from './plain-record.ts'
 
 export type SessionFactsVerdict = 'ok' | 'legacy-gateway' | 'degraded'
 export type SessionFactsDegradation =
@@ -195,6 +196,7 @@ export interface SessionFactsSourceUpdate {
 
 export interface SessionFactsSource {
   update(input: SessionFactsSourceUpdate): void
+  reconcile(): void
   stop(): void
   /** undefined = 当前没有可用事实（legacy/degraded/未连接）。 */
   subscribe(listener: (snapshot: SessionFactsSnapshot | undefined) => void): () => void
@@ -207,12 +209,6 @@ export interface SessionFactsSource {
 }
 
 // ── 纯解析 / 判定（node:test 直测） ─────────────────────────────────────────
-
-function isPlainRecord(value: unknown): value is Record<string, unknown> {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
-  const prototype: unknown = Object.getPrototypeOf(value)
-  return prototype === Object.prototype || prototype === null
-}
 
 function stringOrNull(value: unknown): string | null {
   return typeof value === 'string' && value !== '' ? value : null
@@ -722,6 +718,11 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
     const is2xx = probe.status !== null && probe.status >= 200 && probe.status < 300
     const parsed = parseSessionFactsSnapshotValue(is2xx && outcome.kind === 'response' ? outcome.body : undefined)
     if (parsed !== null) {
+      // Content progress is a CURSOR ADVANCE, not a successful probe: a heartbeat
+      // returning the same cursor keeps the channel healthy while the conversation
+      // stands still, and refreshing lastFrameAt there hid the real silence age
+      // from the page ladder. The first observation stamps a baseline.
+      state.lastFrameAt = now()
       state.snapshot = buildSnapshot(parsed, probe.verdict, probe.degradation)
       state.lastEventId = parsed.cursor
       emit()
@@ -1003,6 +1004,7 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
 
   return {
     update,
+    reconcile() { void probeOnce() },
     stop,
     subscribe(listener) {
       listeners.add(listener)

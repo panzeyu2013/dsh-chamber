@@ -35,6 +35,32 @@ function entry(decision: 'sent' | 'suppressed' | 'skipped', extra: Partial<Recor
   return { at: 1, sourceId: 'local', sessionId: 's1', kind: 'complete', requireHidden: false, decision, ...extra } as never
 }
 
+test('every decision also lands in the one incident ring (run identity excluded when absent)', () => {
+  const ledger = createNotificationLedger()
+  ledger.record({
+    at: 5,
+    sourceId: 'gateway-a',
+    sessionId: 's1',
+    kind: 'complete',
+    watermark: 9,
+    requireHidden: true,
+    decision: 'suppressed',
+    error: 'on-screen',
+  } as never)
+  const view = Reflect.get(globalThis, '__dshChamberIncident') as {
+    entries(): readonly Record<string, unknown>[]
+  }
+  const last = view.entries().at(-1)
+  assert.equal(last?.source, 'renderer')
+  assert.equal(last?.kind, 'notification-suppressed')
+  assert.equal(last?.symptom, 'complete')
+  assert.equal(last?.action, 'suppressed')
+  assert.equal(last?.sessionId, 's1')
+  assert.equal(last?.sourceId, 'gateway-a')
+  assert.ok(String(last?.detail).includes('on-screen'))
+  assert.ok(String(last?.detail).includes('watermark=9'))
+})
+
 test('the ledger counts decisions and is bounded, and its snapshots are copies', () => {
   const ledger = createNotificationLedger({ limit: 3 })
   ledger.record(entry('sent'))
@@ -67,9 +93,10 @@ test('the badge hook publishes the dispatched count next to the projection', () 
 })
 
 test('every notification decision is recorded — including the no-bridge case', () => {
-  assert.match(FRAME, /if \(bridge === undefined\) \{[\s\S]{0,600}?decision: 'skipped'[\s\S]{0,200}?no-notification-bridge/)
-  assert.match(FRAME, /decision: result\.shown \? 'sent' : 'suppressed'/)
-  assert.match(FRAME, /catch\(err => \{[\s\S]{0,300}?decision: 'skipped'/)
+  assert.match(UNREAD_HOOK, /if \(bridge === undefined\) \{\s*settle\('retryable', 'no-notification-bridge'\)/)
+  assert.match(UNREAD_HOOK, /decision: outcome === 'shown' \? 'sent' : outcome === 'suppressed' \? 'suppressed' : 'skipped'/)
+  assert.match(UNREAD_HOOK, /error => settle\('retryable', String\(error\)\)/)
+  assert.match(UNREAD_HOOK, /notificationOutboxRef\.current\.settle\(attempt, outcome\)/)
   assert.match(FRAME, /publishNotificationInstrument\(\)/)
 })
 

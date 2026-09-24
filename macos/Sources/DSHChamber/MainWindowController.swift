@@ -125,6 +125,10 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     private var recoveryAttempts: [Double] = []
     /// 重载已排定（防同一崩溃回调重入排定）。
     private var recoveryReloadWorkItem: DispatchWorkItem?
+    /// 策略在排程时记账；若导航先发生，取消的重载须退还该次预算。
+    private var pendingRecoveryAttemptAt: Double?
+    /// 让已取消但仍被派发的 work item 无法重载新页面。
+    private var recoveryReloadGeneration: UInt64 = 0
     /// 退出中/已开始清理 → 抑制渲染恢复（Electron `reload()` 的 `quitRequested`
     /// 早退）。
     private var recoverySuppressed = false
@@ -141,10 +145,9 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     private var recoveringFromCrash = false
     private var lastCrashAt: Date?
 
-    /// 卡死自愈：空闲 ping 判定器 + 定时器 + 键鼠监听。
-    private var hangWatchdog = RendererHangWatchdog(now: Date())
+    /// 可见页面的 JS/rAF 进度判定器与定时器。
+    private var hangWatchdog = RendererHangWatchdog()
     private var hangProbeTimer: Timer?
-    private var userInputMonitor: Any?
     /// 自动恢复已放弃（超限后不再重载，只 loud/弹窗一次）。
 
 
@@ -257,7 +260,6 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
 
     deinit {
         hangProbeTimer?.invalidate()
-        if let monitor = userInputMonitor { NSEvent.removeMonitor(monitor) }
     }
 
     /// 构建 WKWebView（含 A 桥注入与消息通道）与主窗口
@@ -327,8 +329,8 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
             // 退出清理开始后 late invoke 回 app_quitting（renderer-trust
             // createTrustedIpc 同码），不向 shutdown 注入传输/运行时工作。
             isQuitting: { [weak self] in self?.quitting ?? false },
-            onInvoke: { [weak self] id, method, payload in
-                self?.handleInvoke(id: id, method: method, payload: payload)
+            onInvoke: { [weak self] documentId, id, method, payload in
+                self?.handleInvoke(documentId: documentId, id: id, method: method, payload: payload)
             }
         )
         handler.evaluateJavaScript = { [weak self] script in
@@ -995,7 +997,18 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     // MARK: - B 桥 invoke / sidecar 事件回写页面
 
     /// web → Swift invoke（经 handler 转发）：调 B 桥后把结果交回页面
-    private func handleInvoke(id: Int, method: String, payload: AnyCodable?) {
+    /// Interactive pickers and runtime installs may legitimately take minutes;
+    /// every ordinary page invoke has a short deadline and all are bounded.
+    private static func invokeDeadline(for method: String) -> TimeInterval {
+        if method.hasPrefix("dsh-chamber:runtime-") || method.hasPrefix("dsh-chamber:update-")
+            || method.contains("_pick") || method.contains("materialize")
+            || method == "desktop_local_plugin_add_file" {
+            return 720
+        }
+        return 45
+    }
+
+    private func handleInvoke(documentId: String, id: Int, method: String, payload: AnyCodable?) {
         // 计时戳仅在调试态取（生产零成本，注释与实现一致）。
         let started = ShellDebug.isEnabledCached ? Date() : nil
         if ShellDebug.isEnabledCached {
@@ -1003,14 +1016,15 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         }
         Task { @MainActor in
             do {
-                let result = try await bridge.invoke(method: method, payload: payload)
+                let result = try await bridge.invoke(method: method, payload: payload,
+                                                     timeout: Self.invokeDeadline(for: method))
                 if let started, ShellDebug.isEnabledCached {
                     // 单次 invoke 的端到端耗时（含 B 桥往返与结果编码），
                     // 仅调试态打印。
                     shellLog("[perf] invoke \(method) \(Int((Date().timeIntervalSince(started) * 1000).rounded()))ms")
                 }
                 let resultJSON = Self.jsonLiteral(of: result)
-                evaluateJS("__dshChamberResolve(\(nativeTokenLiteral), \(id), \(resultJSON), null)")
+                evaluateJS("__dshChamberResolve(\(nativeTokenLiteral), \(Self.jsonLiteral(of: .string(documentId))), \(id), \(resultJSON), null)")
             } catch {
                 // 失败：__dshChamberResolve(id, null, <errorString>)；errorString
                 // 经 JSON 序列化即为合法 JS 字符串字面量。
@@ -1031,7 +1045,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
                 // 故不设三级兜底（含 NativeText.bridgeErrorFallback）——那三级本就
                 // 不可达。
                 let errorJSON = Self.jsonLiteral(of: .string(message))
-                evaluateJS("__dshChamberResolve(\(nativeTokenLiteral), \(id), null, \(errorJSON))")
+                evaluateJS("__dshChamberResolve(\(nativeTokenLiteral), \(Self.jsonLiteral(of: .string(documentId))), \(id), null, \(errorJSON))")
             }
         }
     }
@@ -1546,19 +1560,20 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     }
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        hangWatchdog.reset()
         // provisional 导航开始（首载 / 退避重试 / 重载统一入口）→
         // webViewLoading:true（electron-edges webViewLoading = isLoading 的
         // 事件化等价；失败路径由 didFail* 推 false 收敛，见 navigationFacts）
         pushHostFacts(Self.navigationFacts(for: .started))
         // 导航开始即**取消已排定的崩溃重载**（Electron did-start-loading 里
         // clearCrashReloadTimer）并上报（core 复位 ready 位 + in-flight 重排）。
-        recoveryReloadWorkItem?.cancel()
-        recoveryReloadWorkItem = nil
+        cancelPendingRecoveryReload()
         sendRendererLifecycle("did-start-loading")
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         shellLog("[shell] 页面加载完成 \(webView.url?.absoluteString ?? "(未知)")")
+        window?.title = Self.displayName
         // 崩溃归因：记录本次加载完成时刻；若这次加载来自崩溃恢复，落地耗时是
         // "崩溃→重载→可用"这段用户可见空窗的直接量度。
         let previousLoad = lastLoadFinishedAt
@@ -1626,6 +1641,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     func webView(_ webView: WKWebView,
                  didFail navigation: WKNavigation!,
                  withError error: Error) {
+        window?.title = Self.displayName
         // 失败路径必须推 webViewLoading:false（无 didFinish 可收敛；
         // sidecar 侧同步门若保持 true，通知打开/深链 drain 会被永久 hold）。
         pushHostFacts(Self.navigationFacts(for: .failed))
@@ -1647,11 +1663,15 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     /// 就绪只由 ready 帧开启；形状未识别的自定义 DSH_CHAMBER_SHELL_SIDECAR 自负 ready 协议。
     func noteSidecarReady(_ ready: Bool = true) {
         sidecarReady = ready
+        if !ready {
+            evaluateJS("window.__dshChamberBridgeReset && window.__dshChamberBridgeReset(\(nativeTokenLiteral))")
+        }
         // ready 帧后让页面重跑一次 info 水化：shim 在 documentStart 就定义
         // surface，若首次 1+10 次水化都在 ready 前被就绪门拒掉，没有 re-kick
         // 就会让版本/平台整会话缺失。
         if ready {
             evaluateJS("window.__dshChamberRehydrateInfo && window.__dshChamberRehydrateInfo(\(nativeTokenLiteral))")
+            evaluateJS("window.__dshChamberSidecarReady && window.__dshChamberSidecarReady(\(nativeTokenLiteral))")
             // ready 才允许首载（打包态冷启动竞态的根治点；重启后再次
             // ready 也走这里，didStartLoading 去重）。
             startLoadingIfNeeded()
@@ -1667,8 +1687,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     /// 退出清理开始 → 抑制渲染恢复并取消已排定重载（AppDelegate 调用）。
     func suppressRendererRecovery() {
         recoverySuppressed = true
-        recoveryReloadWorkItem?.cancel()
-        recoveryReloadWorkItem = nil
+        cancelPendingRecoveryReload()
         // 退出在途也不排定首载退避重试（在途就绪探测同样取消）。
         navRetryWorkItem?.cancel()
         navRetryWorkItem = nil
@@ -1758,64 +1777,134 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         }
     }
 
-    // MARK: - 渲染器卡死自愈（空闲 ping）
+    // MARK: - 可见页面渲染进度探测
 
-    /// 启动卡死探测：定时器 + 键鼠监听（都在主线程）。
+    /// JS 求值确认事件循环能应答，rAF 计数确认可见页面仍在调度帧。
+    /// 静态 DOM 也会驱动这个主动 rAF 心跳；每帧后延迟约 1s 再申请下一帧，
+    /// 避免在与既有 JSC 崩溃相关的 rAF 路径上常驻高频循环。
+    /// 隐藏页面不作为故障证据。
+    private static let rendererProgressScript = """
+    (function () {
+      if (document.visibilityState !== 'visible') return null;
+      var name = '__dshChamberFrameProgress';
+      if (!window[name]) {
+        var state = { frames: 0 };
+        Object.defineProperty(window, name, { value: state });
+        function frame() {
+          state.frames += 1;
+          setTimeout(function () { requestAnimationFrame(frame); }, 1000);
+        }
+        requestAnimationFrame(frame);
+      }
+      return window[name].frames;
+    })()
+    """
+
+    /// 一秒 tick 使单次探针的三秒超时按真实期限生效。
     private func startHangWatchdog() {
         hangProbeTimer?.invalidate()
-        let timer = Timer.scheduledTimer(withTimeInterval: RendererHangWatchdog.probeInterval,
-                                         repeats: true) { [weak self] _ in
+        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
             self?.tickHangWatchdog()
         }
+        // Keep sampling during mouse tracking and scroll interactions too.
+        RunLoop.main.add(timer, forMode: .common)
         hangProbeTimer = timer
-        // 键鼠活动 = 渲染器服务的是人，不判定卡死。
-        userInputMonitor = NSEvent.addLocalMonitorForEvents(
-            matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown,
-                       .keyDown, .scrollWheel, .flagsChanged]) { [weak self] event in
-            self?.hangWatchdog.noteUserInput(at: Date())
-            return event
-        }
     }
 
-    /// 一次探测：空闲够久 → ping（3s 无回即记 strike）；连续 3 次 → 有界重载。
+    /// 活动且未被完全遮挡的窗口持续采样。WebKit 可以节流被其他本应用
+    /// 窗口遮挡的页面，即使 document.visibilityState 仍为 visible；导航、
+    /// 后台、遮挡或恢复在途均不累计故障证据。
     private func tickHangWatchdog() {
-        guard !recoverySuppressed, !quitting else { return }
-        switch hangWatchdog.tick(now: Date()) {
+        guard !recoverySuppressed, !quitting, !recoveryGaveUp else { return }
+        guard NSApp.isActive, window?.isVisible == true,
+              window?.isMiniaturized == false,
+              window?.occlusionState.contains(.visible) == true,
+              !webView.isLoading,
+              recoveryReloadWorkItem == nil else {
+            hangWatchdog.reset()
+            return
+        }
+        switch hangWatchdog.tick(now: ProcessInfo.processInfo.systemUptime) {
         case .nothing:
             return
-        case .probe:
-            webView.evaluateJavaScript("1") { [weak self] _, error in
+        case .probe(let id):
+            let probeStartedAt = ProcessInfo.processInfo.systemUptime
+            webView.evaluateJavaScript(Self.rendererProgressScript) { [weak self] result, error in
                 guard let self else { return }
-                // A probe ERROR is not health: a renderer that answers with an
-                // error (a dead JS context, a navigation in flight, a failed
-                // evaluation) must not be judged healthy. Both success and failure
-                // go through the machine, and a failure that reaches the strike
-                // limit reloads on the spot.
-                if error == nil {
-                    self.hangWatchdog.noteProbeSucceeded()
+                guard self.hangWatchdog.activeProbeID == id else { return }
+                guard !self.recoverySuppressed, !self.quitting else { return }
+                guard NSApp.isActive, self.window?.isVisible == true,
+                      self.window?.isMiniaturized == false,
+                      self.window?.occlusionState.contains(.visible) == true,
+                      !self.webView.isLoading else {
+                    self.hangWatchdog.reset()
                     return
                 }
-                if self.hangWatchdog.noteProbeFailed() == .reload {
-                    shellLog("[shell] 渲染器探针连续失败 (RendererHangWatchdog.maxStrikes) 次 → 有界重载")
+                let action: RendererHangWatchdog.Action
+                if error == nil, let frames = result as? Int {
+                    // 主进程 → JS 线程 → 主进程的往返（单调时钟）：JS 线程被长任务
+                    // 占住时 rAF 仍可能推进，超预算即输入阻塞证据（阈值 = 共享表
+                    // scheduleProbe.inputBlockRttMs，见 RendererHangWatchdog）。
+                    let rtt = ProcessInfo.processInfo.systemUptime - probeStartedAt
+                    action = self.hangWatchdog.noteProbeSucceeded(id: id, frameCount: frames, rtt: rtt)
+                } else if error == nil, result == nil || result is NSNull {
+                    // WebKit may suppress rAF in a document it marks hidden.
+                    self.hangWatchdog.reset()
+                    return
+                } else {
+                    action = self.hangWatchdog.noteProbeFailed(id: id)
+                }
+                switch action {
+                case .reload:
+                    shellLog("[shell] 可见页面 JS/rAF 连续无进度或 JS 线程连续延迟 \(RendererHangWatchdog.maxStrikes) 次 → 有界重载")
                     self.scheduleRecoveryReload(reason: "unresponsive")
+                case .inputBlock(let rtt):
+                    // 与 Electron main.ts 的 input-block 证据行同向：单次只记录并计数，
+                    // 连续超预算才在第三次走同一条有界重载道。
+                    shellLog("[shell] 可见页面 JS 线程延迟证据：探针往返 \(String(format: "%.3f", rtt))s 超预算 \(RendererHangWatchdog.inputBlockRtt)s")
+                case .nothing, .probe(_):
+                    break
                 }
             }
         case .reload:
-            shellLog("[shell] 渲染器疑似卡死（连续 \(RendererHangWatchdog.maxStrikes) 次 ping 超时且用户空闲 ≥\(Int(RendererHangWatchdog.idleGrace))s）→ 有界重载")
+            shellLog("[shell] 可见页面 JS 探针连续 \(RendererHangWatchdog.maxStrikes) 次超时 → 有界重载")
             scheduleRecoveryReload(reason: "unresponsive")
+        case .inputBlock(_):
+            // tick 只发探针或按超时升级；RTT 判定在回包回调里，不会从这里返回。
+            return
         }
     }
 
     /// 有界重载（崩溃与卡死共用同一份预算；差异只在文案与是否上报 crashed）。
+    private func cancelPendingRecoveryReload() {
+        guard let item = recoveryReloadWorkItem else { return }
+        item.cancel()
+        recoveryReloadWorkItem = nil
+        recoveryReloadGeneration &+= 1
+        if let attemptAt = pendingRecoveryAttemptAt,
+           let index = recoveryAttempts.lastIndex(of: attemptAt) {
+            recoveryAttempts.remove(at: index)
+        }
+        pendingRecoveryAttemptAt = nil
+    }
+
     private func scheduleRecoveryReload(reason: String) {
         guard recoveryReloadWorkItem == nil else { return }
+        hangWatchdog.reset()
         let now = Date().timeIntervalSince1970
         switch recoveryPolicy.decide(now: now, attempts: &recoveryAttempts) {
         case .reload(let delay, let attempt):
+            pendingRecoveryAttemptAt = now
+            recoveryReloadGeneration &+= 1
+            let generation = recoveryReloadGeneration
             shellLog("[shell] 渲染恢复（\(reason)），\(String(format: "%.2f", delay))s 后重载（\(attempt)/\(recoveryPolicy.maxReloads)）")
+            window?.title = Self.displayName + " — " + NativeText.string(.rendererRecovering)
             let item = DispatchWorkItem { [weak self] in
                 guard let self else { return }
+                guard self.recoveryReloadGeneration == generation,
+                      self.recoveryReloadWorkItem != nil else { return }
                 self.recoveryReloadWorkItem = nil
+                self.pendingRecoveryAttemptAt = nil
                 guard !self.recoverySuppressed else { return }
                 self.webView.reload()
             }
@@ -1828,6 +1917,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
             }
             recoveryGaveUp = true
             shellLog("[shell] 渲染恢复正常化放弃（\(reason)，\(attempts) 次），本次不重载")
+            window?.title = Self.displayName + " — " + NativeText.string(.rendererCrashTitle)
             let alert = NSAlert()
             alert.alertStyle = .critical
             alert.messageText = NativeText.string(.rendererCrashTitle)
@@ -1843,6 +1933,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     /// 500ms 延迟、60s 滚动窗口内至多 3 次；超限弹 NSAlert 并停止自动恢复）。
     /// 恢复导航成功由 didFinish 推回 alive:true 并 drain。
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        hangWatchdog.reset()
         crashesSinceLoad += 1
         let now = Date()
         let sinceLoad = lastLoadFinishedAt.map { now.timeIntervalSince($0) }

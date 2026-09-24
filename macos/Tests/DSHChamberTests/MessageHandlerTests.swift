@@ -50,7 +50,7 @@ final class MessageHandlerTests: XCTestCase {
 
     private func envelope(id: Any = 1, method: Any = "dsh-chamber:info",
                           payload: Any? = nil) -> [String: Any] {
-        var dict: [String: Any] = ["id": id, "method": method]
+        var dict: [String: Any] = ["id": id, "documentId": "eaf2edfe-7318-46c8-96b9-e9ff421e63d9", "method": method]
         if let payload { dict["payload"] = payload }
         return dict
     }

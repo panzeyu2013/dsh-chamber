@@ -17,10 +17,10 @@
  *
  * It renders at most one line of text plus up to two user actions: the page
  * reload every (non-churn) notice offers, and — while the pure plan arms it (a
- * parked `loading` open on a build that exposes the concrete face) or executes
- * its own evidence-gated automatic rebuild — the per-session stream rebuild.
+ * parked `loading` open on a build that exposes the concrete face) — the
+ * per-session stream rebuild.
  * Nothing here reloads, re-opens, rebuilds or navigates on its own: both controls
- * are the user's own click, and the plan's `'resync'` / `'auto-resync'` action only
+ * are the user's own click, and the plan's `'resync'` action only
  * decides whether the second control is rendered.
  */
 import { useEffect, useState, type ReactElement } from 'react'
@@ -168,11 +168,8 @@ export function SessionStreamHealthChip(props: SessionStreamHealthProps): ReactE
           <button type="button" className={styles.action} onClick={reload}>
             {t('streamHealth.reload')}
           </button>
-          {/* The per-session lever: rendered while the pure plan ARMS it (a
-              loading stall with the concrete face present) or while the plan is
-              executing its own evidence-gated automatic rebuild — the user's
-              manual exit must survive either way. The click is this path's only
-              invocation; the automatic arm is the plan's `'auto-resync'`. */}
+          {/* The per-session manual lever remains available after the page-level
+              seat has spent its bounded automatic rebuild attempts. */}
           {face.resync ? (
             <button type="button" className={styles.action} onClick={() => { resync(sessionId) }}>
               {t('streamHealth.resync')}

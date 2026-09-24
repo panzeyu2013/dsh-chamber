@@ -383,12 +383,13 @@ public final class SwiftEdgeHostLegs {
         /// 授权/调度失败的统一收敛：撤下登记（没有可退役的横幅）并回
         /// {shown:false,error}（**结果**而非 reject——core 的
         /// interpretNativeNotificationReply 按对象形状折算 honest-show）。
-        let fail: (String) -> Void = { [registry = notificationRegistry] message in
+        let fail: (String, Bool) -> Void = { [registry = notificationRegistry] message, permanent in
             _ = registry.finishDelivery(sourceId: dispatch.sourceId,
                                         identifier: identifier,
                                         delivered: false)
             guard replyGate.claim() else { return }
-            completion(.object(["shown": .bool(false), "error": .string(message)]), nil)
+            completion(.object(["shown": .bool(false), "error": .string(message),
+                                "failureClass": .string(permanent ? "permanent" : "retryable")]), nil)
         }
         let deliver: () -> Void = { [registry = notificationRegistry] in
             // 有界等待：超时先回失败；add 晚到的成功横幅由完成回调
@@ -436,19 +437,19 @@ public final class SwiftEdgeHostLegs {
             switch status {
             case .denied:
                 shellLog("[shell] 通知未授权（denied）——拒绝投递（P-06）")
-                fail("swift-edge-notification-not-authorized:denied")
+                fail("swift-edge-notification-not-authorized:denied", true)
             case .notDetermined:
                 if self.beginAuthorizationRequestIfNeeded() {
                     center.requestAuthorization { granted, error in
                         if let error {
                             shellLog("[shell] 通知授权请求错误：\(error.localizedDescription)")
-                            fail("swift-edge-notification-authorization-failed:\(error.localizedDescription)")
+                            fail("swift-edge-notification-authorization-failed:\(error.localizedDescription)", false)
                         } else {
                             shellLog("[shell] 通知授权 = \(granted)（首次通知时请求，S3·V1）")
                             if granted {
                                 deliver()
                             } else {
-                                fail("swift-edge-notification-not-authorized:denied")
+                                fail("swift-edge-notification-not-authorized:denied", true)
                             }
                         }
                     }

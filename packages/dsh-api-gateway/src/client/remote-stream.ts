@@ -28,6 +28,13 @@ const RETRY_SCHEDULER = {
   clearTimeout: (handle: unknown): void => { clearTimeout(handle as ReturnType<typeof setTimeout>) },
 }
 
+// A cancelled source can ignore AbortSignal and leave its pending next()/return()
+// unresolved. The logical stream must release Session.resync() even then; the
+// lifetime signal and revision fence below prevent a late source item from being
+// published after this bounded drain.
+const SOURCE_CANCEL_DRAIN_MS = 2_000
+const SOURCE_ABORTED = Symbol('remote stream source aborted')
+
 /** One item annotated with the physical Remote-stream generation that delivered it. */
 export interface RemoteStreamItem<Item> {
   /** Monotone physical generation number within this logical stream. */
@@ -131,13 +138,26 @@ export class RemoteStream<Item> implements AsyncIterable<RemoteStreamItem<Item>>
         const signal = AbortSignal.any([this.lifetime.signal, generationAbort.signal])
         const generationId = ++generation
         let accepted = false
+        let source: AsyncIterator<Item> | undefined
+        let sourceEnded = false
         try {
-          for await (const value of this.options.open(signal)) {
+          source = this.options.open(signal)[Symbol.asyncIterator]()
+          while (true) {
+            // A plain for-await waits forever if a source ignores abort while its
+            // next() is pending. Race that wait with this generation's signal so
+            // cancellation remains owned by RemoteStream rather than by every
+            // generated endpoint implementation.
+            const next = await sourceNextOrAbort(source, signal)
+            if (next === SOURCE_ABORTED) break
+            if (next.done) {
+              sourceEnded = true
+              break
+            }
             if (isAborted(this.lifetime.signal)) return
             if (revision !== this.revision) break
             yield {
               generation: generationId,
-              value,
+              value: next.value,
               signal,
               accept: () => {
                 if (this.generationAbort !== generationAbort || revision !== this.revision) return
@@ -181,6 +201,7 @@ export class RemoteStream<Item> implements AsyncIterable<RemoteStreamItem<Item>>
           if (!generationAbort.signal.aborted) {
             generationAbort.abort(new Error(`${this.options.name} generation ended`))
           }
+          if (source !== undefined && !sourceEnded) await closeRemoteSource(source)
         }
       }
     } finally {
@@ -190,6 +211,41 @@ export class RemoteStream<Item> implements AsyncIterable<RemoteStreamItem<Item>>
       this.generationAbort?.abort(this.lifetime.signal.reason)
       this.generationAbort = undefined
     }
+  }
+}
+
+/** One source read that settles when its generation is cancelled, even if the
+ * underlying async iterator ignores AbortSignal. Promise.race observes a late
+ * rejection from next(); no unhandled rejection escapes after cancellation. */
+async function sourceNextOrAbort<Item>(
+  source: AsyncIterator<Item>, signal: AbortSignal,
+): Promise<IteratorResult<Item> | typeof SOURCE_ABORTED> {
+  if (signal.aborted) return SOURCE_ABORTED
+  let onAbort: (() => void) | undefined
+  const aborted = new Promise<typeof SOURCE_ABORTED>((resolve) => {
+    onAbort = (): void => { resolve(SOURCE_ABORTED) }
+    signal.addEventListener('abort', onAbort, { once: true })
+    if (signal.aborted) onAbort()
+  })
+  try {
+    return await Promise.race([source.next(), aborted])
+  } finally {
+    if (onAbort !== undefined) signal.removeEventListener('abort', onAbort)
+  }
+}
+
+/** Abort was already signalled by the owner. A cooperative source drains fully;
+ * a stuck return() cannot hold the replacement generation or Session.resync(). */
+async function closeRemoteSource<Item>(source: AsyncIterator<Item>): Promise<void> {
+  try {
+    const closing = Promise.resolve().then(() => source.return?.())
+    await withDeadline(closing, {
+      ms: SOURCE_CANCEL_DRAIN_MS,
+      onExpire: () => undefined,
+      scheduler: RETRY_SCHEDULER,
+    })
+  } catch {
+    // The source has no remaining consumer after its generation is cancelled.
   }
 }
 

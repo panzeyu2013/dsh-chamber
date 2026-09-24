@@ -66,7 +66,7 @@ final class BridgeShimInjectorTests: XCTestCase {
         XCTAssertTrue(shim.contains("var NATIVE_CHANNEL_TOKEN = '\(BridgeShimInjector.nativeTokenPlaceholder)'"),
                       "shim 必须声明令牌占位符")
         XCTAssertTrue(shim.contains("function requireNativeToken(token)"))
-        for entry in ["function resolveInvocation(token, id, result, err)",
+        for entry in ["function resolveInvocation(token, replyDocumentId, id, result, err)",
                       "function emitToListeners(token, event, payload)",
                       "function (token) {"] {
             XCTAssertTrue(shim.contains(entry), "内部入口必须收令牌参数：\(entry)")

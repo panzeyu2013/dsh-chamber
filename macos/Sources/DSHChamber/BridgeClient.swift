@@ -20,7 +20,7 @@
 //     （node-edges.ts）会把 NOTIFY 类通道的宿主动作转成 B 桥线协议上的
 //     **edge 请求** {"edge":method,"payload":…,"edgeId":N}（期待应答
 //     {"edgeId":N,"ok":true,"result":…} | {"edgeId":N,"ok":false,"error":…}——
-//     sidecar 侧 pendingEdges 无超时，Swift 不应答 = 永久挂起）与 **notify
+//     sidecar 侧有 30s / 660s 分级超时，Swift 仍须及时应答）与 **notify
 //     单向帧** {"notify":event,"payload":…}（ready/rendererPush 等）。这两族
 //     帧既无 id 也无 event 键，FrameCodec.classify 按容忍语义归 nil——
 //     由本文件的 decodeOutboundFrame 在 BridgeClient 层先行分类（不改 FrameCodec，
@@ -33,11 +33,12 @@
 //   - id 自 1 起单调递增（NSLock 保护）；sidecar 原样 echo，pending 字典
 //     以 id 为键把响应配对回发起时的 continuation——**id 的所有权 = pending
 //     字典条目**：谁在锁内 removeValue 成功，谁负责 resume（恰好一次）。
-//   - 写帧 = **writeLock 串行**（否则并发 invoke / edge 应答可在同一 FileHandle 上
-//     交错；每次 write 都由独立 writeLock 包住，单帧 ≤4 MiB）。帧率低、sidecar
-//     readline 持续消费，背压罕见；极端背压会阻塞调用线程——缓解方向是专用串行
-//     写队列 + stop 前显式排空（design 25 §3.3 退出链 5s 硬顶前需可证明无
-//     in-flight 写）。
+//   - 写帧 = **每会话一个有界串行写器**（invoke / edge 共用；单帧 ≤4 MiB）。
+//     管道背压只会占住写器线程，不会阻塞页面 invoke 或 stdout edge 回调；
+//     invoke 期限从登记时起算；单次管道写超过 20s 会终止本代 sidecar。
+//     stop / 自然退出清空旧会话的排队帧，新会话使用独立写器，旧写任务
+//     绝不进入新 stdin。已进入内核的写无法撤回；
+//     超时后的远端副作用仍以宿主幂等性或读取事实对账判定。
 //   - **帧回调**（onEvent/onNotify/onReady/onEdgeRequest/响应分发）在**管道读取
 //     线程**（Foundation 内部队列）或**终止收尾线程**（handleTermination →
 //     finish*Reading 抽干残帧）回调，均为非主线程；两条路径的派发经 dispatchLock
@@ -214,6 +215,7 @@ public final class BridgeClient {
     public static let errorCodeAlreadyStarted = 5
     /// 6：生命周期过渡进行中（上一会话仍在终止收尾）——start 放弃，调用方可重试。
     public static let errorCodeLifecycleBusy = 6
+    public static let errorCodeTimedOut = 7
 
     // MARK: - 观测
 
@@ -318,6 +320,7 @@ public final class BridgeClient {
     private let nodePath: String
     private let arguments: [String]
     private let environment: [String: String]
+    private let writerStallTimeout: TimeInterval
 
     /// 构造（AppDelegate 按此签名调用，勿改名——第四参数带默认值）。
     /// - Parameters:
@@ -330,11 +333,14 @@ public final class BridgeClient {
     ///     分发层对「无自定义应答器」仍以 defaultEdgeResponse 兜底应答
     ///     （edge 必答不挂起是不变式，本参数只影响 onEdgeRequest 的初值形态，
     ///     不改变兜底行为）。
+    ///   - writerStallTimeout: 单次 stdin 写的上限（默认 20s）；超时会
+    ///     终止本代 sidecar，由 Supervisor 重建协议会话。
     public init(nodePath: String, arguments: [String], environment: [String: String],
-                defaultEdgeResponder: Bool = true) {
+                defaultEdgeResponder: Bool = true, writerStallTimeout: TimeInterval = 20) {
         self.nodePath = nodePath
         self.arguments = arguments
         self.environment = environment
+        self.writerStallTimeout = max(writerStallTimeout, 0.01)
         if defaultEdgeResponder {
             setDefaultEdgeResponder()
         }
@@ -352,8 +358,9 @@ public final class BridgeClient {
     /// 状态锁。两个 reader 之间无不变式，一个锁即可；锁序恒为
     /// lock → readerLock（start() 复位时持 lock 再取它，无反向路径）。
     private let readerLock = NSLock()
-    /// 写串行锁（管道写不与其他帧交错；见文件头「写帧」注释）。
-    private let writeLock = NSLock()
+    /// 当前会话的出站写器（lock 保护）。stop / 自然退出取走后失效，
+    /// start 总是新建；旧会话被背压占住的写线程不会挡住新会话。
+    private var outboundWriter: OutboundWriter?
     /// stdout 帧派发串行锁：`processStdoutOutcome` 全程持
     /// 它，故回调绝不并发进入；同时**不引入无界异步队列**——派发仍在读回调/收尾线程
     /// 同步执行，保留「读线程 = 消费者」的天然背压（慢消费者会阻塞读端，而不是让队列与
@@ -368,7 +375,6 @@ public final class BridgeClient {
     /// dispatchStdout 重入本锁。
     private let dispatchLock = NSRecursiveLock()
     private var process: Process?
-    private var inputPipe: Pipe?        // 子进程 stdin 写端
     private var outputPipe: Pipe?       // 子进程 stdout 读端（协议流）
     private var errorPipe: Pipe?        // 子进程 stderr 读端（日志流）
     private var outputReader = LineReader()
@@ -395,6 +401,183 @@ public final class BridgeClient {
         let generation: Int
     }
     private var pending: [Int: PendingEntry] = [:]
+
+    /// 一个 sidecar 会话只使用一个写器。队列按字节和帧数双重限流，避免
+    /// 不读 stdin 的子进程把页面请求积成无界闭包 / Data。只有 drain 线程做
+    /// FileHandle.write；所有调用方只做短临界区 enqueue。失效时立即摘走并
+    /// 结算排队帧，不等待可能已卡在内核管道上的单个写操作。
+    private final class OutboundWriter {
+        private struct Job {
+            let data: Data
+            let priority: Bool
+            let shouldWrite: () -> Bool
+            let complete: (Error?) -> Void
+        }
+
+        private static let maxQueuedFrames = 64
+        private static let maxQueuedBytes = 16 * 1024 * 1024
+        private let lock = NSLock()
+        private let handle: FileHandle
+        private let stallTimeout: TimeInterval
+        private let onFatalWrite: (Error) -> Void
+        private var jobs: [Job] = []
+        private var queuedBytes = 0
+        private var draining = false
+        private var invalidated = false
+        private var nextWriteSerial = 1
+        private var activeWriteSerial: Int?
+
+        init(handle: FileHandle, stallTimeout: TimeInterval,
+             onFatalWrite: @escaping (Error) -> Void) {
+            self.handle = handle
+            self.stallTimeout = stallTimeout
+            self.onFatalWrite = onFatalWrite
+        }
+
+        /// false 代表队列已关闭或满。队列预算只计算等候帧；执行中的帧
+        /// 最多再占一个 FrameCodec.maxFrameBytes。
+        func enqueue(data: Data, priority: Bool = false,
+                     shouldWrite: @escaping () -> Bool,
+                     complete: @escaping (Error?) -> Void) -> Bool {
+            lock.lock()
+            guard !invalidated else {
+                lock.unlock()
+                return false
+            }
+            // edge 应答可以越过尚未写出的 invoke：sidecar 可能正在等待
+            // 该应答才能继续处理新 invoke。满队列时只淘汰尚未写出的普通
+            // 请求，回调会结算其 pending；edge 之间仍按到达顺序写。
+            var evictIndices: [Int] = []
+            var reclaimedBytes = 0
+            if priority {
+                for index in jobs.indices.reversed() where !jobs[index].priority {
+                    if jobs.count + 1 - evictIndices.count <= Self.maxQueuedFrames,
+                       queuedBytes + data.count - reclaimedBytes <= Self.maxQueuedBytes { break }
+                    evictIndices.append(index)
+                    reclaimedBytes += jobs[index].data.count
+                }
+            }
+            guard jobs.count + 1 - evictIndices.count <= Self.maxQueuedFrames,
+                  queuedBytes + data.count - reclaimedBytes <= Self.maxQueuedBytes else {
+                lock.unlock()
+                return false
+            }
+            var evicted: [Job] = []
+            for index in evictIndices {
+                let old = jobs.remove(at: index)
+                queuedBytes -= old.data.count
+                evicted.append(old)
+            }
+            let job = Job(data: data, priority: priority,
+                          shouldWrite: shouldWrite, complete: complete)
+            if priority {
+                let index = jobs.firstIndex(where: { !$0.priority }) ?? jobs.count
+                jobs.insert(job, at: index)
+            } else {
+                jobs.append(job)
+            }
+            queuedBytes += data.count
+            let mustStart = !draining
+            if mustStart { draining = true }
+            lock.unlock()
+            let error = Self.writeError("sidecar edge 应答优先，排队请求被作废")
+            for old in evicted { old.complete(error) }
+            if mustStart {
+                DispatchQueue.global(qos: .utility).async { [self] in drain() }
+            }
+            return true
+        }
+
+        @discardableResult
+        func invalidate() -> Bool {
+            lock.lock()
+            let wasOpen = !invalidated
+            invalidated = true
+            let discarded = jobs
+            jobs.removeAll()
+            queuedBytes = 0
+            lock.unlock()
+            let error = Self.writeError("sidecar 会话已结束，排队帧作废")
+            for job in discarded { job.complete(error) }
+            return wasOpen
+        }
+
+        private func drain() {
+            while true {
+                lock.lock()
+                guard !jobs.isEmpty else {
+                    draining = false
+                    lock.unlock()
+                    return
+                }
+                let job = jobs.removeFirst()
+                queuedBytes -= job.data.count
+                let closed = invalidated
+                lock.unlock()
+
+                if closed || !job.shouldWrite() {
+                    job.complete(Self.writeError("sidecar 会话或请求已过期，排队帧未发送"))
+                    continue
+                }
+                lock.lock()
+                let cancelled = invalidated
+                let serial = nextWriteSerial
+                nextWriteSerial = nextWriteSerial == Int.max ? 1 : nextWriteSerial + 1
+                if !cancelled { activeWriteSerial = serial }
+                lock.unlock()
+                if cancelled {
+                    job.complete(Self.writeError("sidecar 会话已结束，排队帧未发送"))
+                    continue
+                }
+                DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + stallTimeout) { [weak self] in
+                    self?.expireWrite(serial: serial)
+                }
+                do {
+                    try handle.write(contentsOf: job.data)
+                    lock.lock()
+                    if activeWriteSerial == serial { activeWriteSerial = nil }
+                    let abandoned = invalidated
+                    lock.unlock()
+                    job.complete(abandoned ? Self.writeError("sidecar 会话已结束，写入结果不可用") : nil)
+                } catch {
+                    lock.lock()
+                    if activeWriteSerial == serial { activeWriteSerial = nil }
+                    lock.unlock()
+                    // write 可能已写出半帧。继续写后续 NDJSON 会让下一帧
+                    // 接在残帧后面，故整条传输必须作废并重启 sidecar。
+                    let wasOpen = invalidate()
+                    job.complete(error)
+                    if wasOpen { onFatalWrite(error) }
+                    return
+                }
+            }
+        }
+
+        private func expireWrite(serial: Int) {
+            lock.lock()
+            guard !invalidated, activeWriteSerial == serial else {
+                lock.unlock()
+                return
+            }
+            // 已进入内核的 write 不能安全取消；先废弃排队帧，再终止本代
+            // sidecar，使受阻写因读端关闭而返回。进程代际门在 onFatalWrite。
+            invalidated = true
+            activeWriteSerial = nil
+            let discarded = jobs
+            jobs.removeAll()
+            queuedBytes = 0
+            lock.unlock()
+            let error = Self.writeError("sidecar stdin 写入超过 \(stallTimeout)s，重建协议会话")
+            for job in discarded { job.complete(error) }
+            onFatalWrite(error)
+        }
+
+        private static func writeError(_ message: String) -> NSError {
+            NSError(domain: BridgeClient.errorDomain, code: BridgeClient.errorCodeWriteFailed,
+                    userInfo: [NSLocalizedDescriptionKey: message])
+        }
+    }
+
     private var sigpipeIgnored = false
     // —— 出站面状态 ——
     /// 已应答 edgeId 守卫（锁保护）：edge 应答恰好一次的守卫（与 pending 字典
@@ -452,8 +635,8 @@ public final class BridgeClient {
     // MARK: - 出站面（sidecar → Swift：edge 请求 / notify / ready）
 
     /// sidecar→Swift 的 edge 请求出口。NOTIFY 类通道的宿主腿在 sidecar 侧
-    /// await sendEdge 的应答（node-edges pendingEdges 无超时——不应答 =
-    /// 永久挂起，见文件头）。本回调（管道读取线程）**必须调用 reply 恰好
+    /// await sendEdge 的应答（sidecar-entry 对普通 / 交互 edge 分别设
+    /// 30s / 660s 期限）。本回调（管道读取线程）**必须调用 reply 恰好
     /// 一次**：
     ///   - reply(result, nil)      → 写 {"edgeId":N,"ok":true,"result":…}
     ///     （result 为 nil 时 result 键写 JSON null）；
@@ -510,8 +693,8 @@ public final class BridgeClient {
 
     // MARK: - 出站面默认 edge 应答策略
 
-    /// edge 应答兜底（Swift 必须应答、绝不挂起；sidecar 侧
-    /// sendEdge 无超时）。宿主腿非 nil 时先问 legs；legs 报
+    /// edge 应答兜底（Swift 必须应答；sidecar 侧也有分级期限）。
+    /// 宿主腿非 nil 时先问 legs；legs 报
     /// unimplemented 前缀（本壳没有该腿）才落到这里。
     /// 兜底**恒为** loud 拒绝
     /// {ok:false, error:"swift-edge-unimplemented:<method>"}——绝不假成功：
@@ -685,10 +868,19 @@ public final class BridgeClient {
             throw error
         }
 
+        // 父进程不消费 stdin 的读端；及时关掉它，确保子进程退出后
+        // 写器线程的受阻 write 能观察到 EPIPE 并退出。
+        try? input.fileHandleForReading.close()
+
         // 状态赋值在 run() 成功且仍持锁时完成：回调紧随 run() 返回触发时，
         // 经 readerLock 已能通过句柄身份守卫看到本次会话（发布已前置）。
         self.process = process
-        self.inputPipe = input
+        let writerGeneration = sessionGeneration
+        self.outboundWriter = OutboundWriter(handle: input.fileHandleForWriting,
+                                             stallTimeout: writerStallTimeout,
+                                             onFatalWrite: { [weak self] error in
+            self?.terminateAfterWriterFailure(generation: writerGeneration, error: error)
+        })
         self.outputPipe = output
         self.errorPipe = error
         // stderr 环形复位（新进程/重启只带自己的失败证据）：
@@ -711,6 +903,7 @@ public final class BridgeClient {
         var takenProcess: Process?
         var takenOutput: Pipe?
         var takenError: Pipe?
+        var takenWriter: OutboundWriter?
         var generation = 0
         lock.lock()
         guard process != nil else {
@@ -729,12 +922,17 @@ public final class BridgeClient {
         takenProcess = process
         takenOutput = outputPipe
         takenError = errorPipe
+        takenWriter = outboundWriter
         process = nil
-        inputPipe = nil
+        outboundWriter = nil
         outputPipe = nil
         errorPipe = nil
         lock.unlock()
         guard let takenProcess else { return }
+
+        // 排队帧立即作废；执行中的同步内核写只占后台写器线程，
+        // 不参与 stop 的锁或退出预算。杀掉旧 sidecar 后该写也会结束。
+        takenWriter?.invalidate()
 
         // 会话读状态作废：句柄身份守卫随之失效，迟到的旧会话读回调一律落空。
         invalidateReaderState(generation: generation)
@@ -796,6 +994,26 @@ public final class BridgeClient {
                            ifGeneration: generation)
     }
 
+    /// FileHandle.write 抛错时无法知道是否已写出半条 NDJSON。写器先停止
+    /// 后续帧，本方法终止该 sidecar，让 Supervisor 以新会话恢复协议边界。
+    /// 只针对仍存活的同一代进程；迟到的旧写错误不得杀新 sidecar。
+    private func terminateAfterWriterFailure(generation: Int, error: Error) {
+        lock.lock()
+        let target = sessionGeneration == generation && process?.isRunning == true ? process : nil
+        lock.unlock()
+        guard let target else { return }
+        log("sidecar stdin 写失败，重建协议会话：\(error.localizedDescription)")
+        _ = kill(target.processIdentifier, SIGTERM)
+        DispatchQueue.global().asyncAfter(deadline: .now() + Self.quitCleanupGracePeriod) { [weak self, weak target] in
+            guard let self, let target else { return }
+            self.lock.lock()
+            let stillCurrent = self.sessionGeneration == generation
+                && self.process === target && target.isRunning
+            if stillCurrent { _ = kill(target.processIdentifier, SIGKILL) }
+            self.lock.unlock()
+        }
+    }
+
     /// 自然退出收尾：sidecar 崩溃/自行 exit 时（SIGCHLD 回调线程）——置状态
     /// 为未运行、摘读回调、按 EOF 语义收尾行缓冲、未决请求全部作废（loud）。
     ///
@@ -817,6 +1035,7 @@ public final class BridgeClient {
         defer { lifecycleLock.unlock() }
         var takenOutput: Pipe?
         var takenError: Pipe?
+        var takenWriter: OutboundWriter?
         var generation = 0
         lock.lock()
         guard let current = process, current === triggered, !triggered.isRunning else {
@@ -826,12 +1045,15 @@ public final class BridgeClient {
         }
         takenOutput = outputPipe
         takenError = errorPipe
+        takenWriter = outboundWriter
         generation = sessionGeneration
         process = nil
-        inputPipe = nil
+        outboundWriter = nil
         outputPipe = nil
         errorPipe = nil
         lock.unlock()
+
+        takenWriter?.invalidate()
 
         // 会话读状态作废（本会话读回调此后一律落空；残帧由下面的 finish*Reading
         // 显式抽干）。必须带代际门，见 invalidateReaderState 注释。
@@ -1301,8 +1523,8 @@ public final class BridgeClient {
         }
     }
 
-    /// 单个 edge 请求的应答编排。sidecar 侧 sendEdge 在等应答（node-edges
-    /// pendingEdges 无超时）——本方法保证必答（恰好一次）：
+    /// 单个 edge 请求的应答编排。sidecar 侧 sendEdge 在等应答（有
+    /// 30s / 660s 兜底期限）——本方法保证一次应答意图：
     ///   - onEdgeRequest 已设置 → 交给自定义应答器（reply 可延后/跨线程；
     ///     恰好一次由 sendEdgeReply 的 edgeId 守卫保证；未处理的方法请回落
     ///     defaultEdgeResponse——自定义应答器不应答会造成挂起，注释声明）；
@@ -1363,9 +1585,8 @@ public final class BridgeClient {
         var error: String?
     }
 
-    /// edge 应答写回 sidecar：edgeId 原样回；单行原子写经既有 inputPipe
-    /// （锁内取句柄、锁外写——与 invoke 同款；stop 竞态由句柄缺失分支兜底，
-    /// loud 丢弃而不是 crash）。
+    /// edge 应答写回 sidecar：edgeId 原样回；与 invoke 共用本代际串行写器，
+    /// stdout 读回调只做入队，不在回调线程等待 stdin 管道。
     /// 恰好一次：已应答的 edgeId 重复应答 / 代际过期（stop 后重启的新会话）
     /// → loud 丢弃（与 deliverResponse 的 pending 所有权纪律同构）。
     private func sendEdgeReply(edgeId: Int64, generation: Int,
@@ -1391,18 +1612,18 @@ public final class BridgeClient {
         }
         data.append(0x0A)
 
-        var input: FileHandle?
+        var writer: OutboundWriter?
         var refused: String?
         lock.lock()
         if answeredEdgeIDs.contains(edgeId) {
             refused = "重复应答（edgeId=\(edgeId) 已应答过）"
         } else if generation != sessionGeneration {
             refused = "应答代际过期（edgeId=\(edgeId)，会话已重启）"
-        } else if let pipe = inputPipe, let process = process, process.isRunning {
-            // 与写入同锁区插入守卫（恰好一次的纪律）；写失败时**回滚守卫**（见下），
-            // 使同 id 的应答可重试，而不是被永久记成「重复应答」等对端超时。
+        } else if let currentWriter = outboundWriter,
+                  let process = process, process.isRunning {
+            // 与登记同锁插入守卫，失败时只回滚同代际的标记。
             _ = answeredEdgeIDs.firstInsert(edgeId)
-            input = pipe.fileHandleForWriting
+            writer = currentWriter
         } else {
             refused = "客户端未运行（未 start / 已 stop / sidecar 已退出）"
         }
@@ -1411,20 +1632,28 @@ public final class BridgeClient {
             log("edgeId=\(edgeId) 应答丢弃：\(refused)")
             return
         }
-        do {
-            writeLock.lock()
-            defer { writeLock.unlock() }
-            try input?.write(contentsOf: data)
-        } catch {
-            // 写失败回滚守卫：本 id 未被对端收到，撤销「已应答」
-            // 标记，使同 id 的再次 reply 不被误判为重复。带**代际门**——若写抛错到
-            // 回滚之间恰好完成 stop()+start()，新会话可能已为同号 edgeId 插入守卫，
-            // 此时回滚会误删新会话的标记。
-            lock.lock()
-            if generation == sessionGeneration { answeredEdgeIDs.remove(edgeId) }
-            lock.unlock()
-            log("edgeId=\(edgeId) 应答写失败（本代际守卫已回滚；同一 reply 再调用可重试——注意 replyGate 本身仍恰好一次）：\(error.localizedDescription)")
+        guard let writer else { return }
+        let enqueued = writer.enqueue(data: data, priority: true, shouldWrite: { [weak self] in
+            guard let self else { return false }
+            self.lock.lock()
+            defer { self.lock.unlock() }
+            return generation == self.sessionGeneration && self.process != nil
+        }, complete: { [weak self] error in
+            guard let error else { return }
+            self?.handleEdgeWriteFailure(edgeId: edgeId, generation: generation, error: error)
+        })
+        if !enqueued {
+            handleEdgeWriteFailure(edgeId: edgeId, generation: generation,
+                                   error: Self.makeError(code: Self.errorCodeWriteFailed,
+                                                         message: "sidecar 出站写队列已满或关闭"))
         }
+    }
+
+    private func handleEdgeWriteFailure(edgeId: Int64, generation: Int, error: Error) {
+        lock.lock()
+        if generation == sessionGeneration { answeredEdgeIDs.remove(edgeId) }
+        lock.unlock()
+        log("edgeId=\(edgeId) 应答写失败：\(error.localizedDescription)")
     }
 
     // MARK: - 请求/响应配对
@@ -1439,31 +1668,35 @@ public final class BridgeClient {
         return id
     }
 
-    /// 发起一次方法调用：编码帧 → 登记 continuation → 写入 stdin → 等响应。
+    /// 发起一次方法调用：编码帧 → 登记 continuation / 启动期限 → 有界入队
+    /// → 等响应。调用线程绝不直接写 stdin；默认期限 60s，页面可指定更长
+    /// 的交互操作期限。期限覆盖排队、管道写、sidecar 执行和响应读取。
     /// 成功返回 AnyCodable（ok=true；result 为 JSON null 时给 .null）；
     /// ok=false 抛 NSError(domain:"BridgeClient", code:1, userInfo 带 error
     /// 文案)；本地失败（未运行 code 2 / 写失败 code 3 / 进程退出 code 4 /
     /// 帧超限 FrameCodecError）对应抛出。可跨线程并发调用（内部锁保证 id
     /// 唯一、写串行、pending 安全）。
-    public func invoke(method: String, payload: AnyCodable? = nil) async throws -> AnyCodable {
+    public func invoke(method: String, payload: AnyCodable? = nil,
+                       timeout: TimeInterval? = nil) async throws -> AnyCodable {
         // 先占 id 后编码：编码失败（超限等）仅烧号、不登记、不悬挂——id
         // 单调语义不受影响。
         let id = allocateID()
         let data = try FrameCodec.encodeRequest(id: id, method: method, payload: payload)
         return try await withCheckedThrowingContinuation { continuation in
-            // 登记先于写入：sidecar 只可能收到帧后应答，“应答先到而登记未
-            // 就”的窗口不存在；写失败再回滚登记（见下），绝不留悬挂。
-            // 写句柄与登记在同一锁区间内取出：stop() 可能在解锁后立刻摘除
-            // inputPipe，若锁外再读会拿到 nil 而 continuation 已登记——后续
-            // 响应/作废会二次 resume。句柄本地强持有，写失败路径负责回滚。
-            var input: FileHandle?
+            // 登记先于入队：sidecar 只可能收到帧后应答；写器与登记在同一
+            // 锁段取出，stop 后旧写器会失效。所有终局路径以 pending 的移除
+            // 权决定谁 resume，超时与写失败 / sidecar 退出不会二次 resume。
+            var writer: OutboundWriter?
+            var requestGeneration: Int?
             lock.lock()
-            if let inputPipe = inputPipe, let process = process, process.isRunning {
+            if let currentWriter = outboundWriter,
+               let process = process, process.isRunning {
                 pending[id] = PendingEntry(continuation: continuation, generation: sessionGeneration)
-                input = inputPipe.fileHandleForWriting
+                requestGeneration = sessionGeneration
+                writer = currentWriter
             }
             lock.unlock()
-            guard let input else {
+            guard let writer, let requestGeneration else {
                 // 本地化：bridge.invokeFailed（invoke 失败随宿主腿回页面）。
                 continuation.resume(throwing: Self.makeError(
                     code: Self.errorCodeNotRunning,
@@ -1471,26 +1704,50 @@ public final class BridgeClient {
                 return
             }
 
-            do {
-                writeLock.lock()
-                defer { writeLock.unlock() }
-                try input.write(contentsOf: data)
-            } catch {
-                // 写失败（子进程已亡 / 管道破裂等）：回滚登记。回滚结果决定
-                // 谁 resume——stop()/退出路径可能已作废本 id（removeValue 返回
-                // nil → 不得二次 resume，续体恰好一次的纪律）。
-                lock.lock()
-                let removed = pending.removeValue(forKey: id)
-                lock.unlock()
-                if removed != nil {
-                    // 本地化：bridge.writeFailed（%d = 请求 id，%@ = 底层写错误）。
-                    continuation.resume(throwing: Self.makeError(
-                        code: Self.errorCodeWriteFailed,
-                        message: NativeText.format(.bridgeWriteFailed, Int32(id),
-                                                   error.localizedDescription)))
-                }
+            let effectiveTimeout = timeout.map { max($0, 0.01) } ?? 60.0
+            DispatchQueue.global().asyncAfter(deadline: .now() + effectiveTimeout) { [weak self] in
+                self?.expirePending(id: id, generation: requestGeneration)
+            }
+            let enqueued = writer.enqueue(data: data, shouldWrite: { [weak self] in
+                guard let self else { return false }
+                self.lock.lock()
+                defer { self.lock.unlock() }
+                return self.pending[id]?.generation == requestGeneration
+                    && self.sessionGeneration == requestGeneration
+                    && self.process != nil
+            }, complete: { [weak self] error in
+                guard let error else { return }
+                self?.failPendingWrite(id: id, generation: requestGeneration, error: error)
+            })
+            if !enqueued {
+                failPendingWrite(id: id, generation: requestGeneration,
+                                 error: Self.makeError(code: Self.errorCodeWriteFailed,
+                                                       message: "sidecar 出站写队列已满或关闭"))
             }
         }
+    }
+
+    private func failPendingWrite(id: Int, generation: Int, error: Error) {
+        lock.lock()
+        let entry = pending[id]
+        let removed = entry?.generation == generation && sessionGeneration == generation
+            && process != nil ? pending.removeValue(forKey: id) : nil
+        lock.unlock()
+        removed?.continuation.resume(throwing: Self.makeError(
+            code: Self.errorCodeWriteFailed,
+            message: NativeText.format(.bridgeWriteFailed, Int32(id),
+                                       error.localizedDescription)))
+    }
+
+    /// A-side invoke deadline. The pending map is the single continuation
+    /// owner, so response, stop and expiry race safely through one removal.
+    private func expirePending(id: Int, generation: Int) {
+        lock.lock()
+        let entry = pending[id]
+        let removed = entry?.generation == generation ? pending.removeValue(forKey: id) : nil
+        lock.unlock()
+        removed?.continuation.resume(throwing: Self.makeError(
+            code: Self.errorCodeTimedOut, message: "bridge invoke timed out"))
     }
 
     /// 响应分发：锁内取走 pending 条目（id 所有权转移），锁外 resume。

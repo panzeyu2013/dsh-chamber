@@ -359,14 +359,15 @@ export function parseRemoteEventFrame(value: unknown): RemoteEventFrame | null {
 export function parseSessionListBaselineItem(value: unknown): SessionListBaselineItem | null {
   if (!isRecord(value)) return null
   const sessionId = value.sessionId
-  if (typeof sessionId !== 'string' || sessionId.length === 0) return null
+  if (typeof sessionId !== 'string' || sessionId.length === 0
+      || typeof value.running !== 'boolean' || !isWatermark(value.updatedAt)) return null
   const parentSessionId = typeof value.parentSessionId === 'string' && value.parentSessionId.length > 0
     ? value.parentSessionId
     : typeof value.parent === 'string' && value.parent.length > 0 ? value.parent : null
   return {
     sessionId,
-    running: value.running === true,
-    updatedAt: isWatermark(value.updatedAt) ? value.updatedAt : 0,
+    running: value.running,
+    updatedAt: value.updatedAt,
     parentSessionId,
     origin: value.origin === 'subagent' ? 'subagent' : null,
   }
@@ -374,15 +375,16 @@ export function parseSessionListBaselineItem(value: unknown): SessionListBaselin
 
 /**
  * Parse a full `session/list` result value ({items:[...]}) through the
- * whitelist. A malformed envelope yields an empty list — a baseline of zero
- * rows is a legitimate state (no sessions), never a crash.
+ * whitelist. An empty items array is a valid empty source; a malformed envelope
+ * or row is an untrustworthy baseline and must not be certified as empty.
  */
-export function parseSessionListBaselineItems(value: unknown): SessionListBaselineItem[] {
-  if (!isRecord(value) || !Array.isArray(value.items)) return []
+export function parseSessionListBaselineItems(value: unknown): SessionListBaselineItem[] | null {
+  if (!isRecord(value) || !Array.isArray(value.items)) return null
   const items: SessionListBaselineItem[] = []
   for (const raw of value.items) {
     const item = parseSessionListBaselineItem(raw)
-    if (item !== null) items.push(item)
+    if (item === null) return null
+    items.push(item)
   }
   return items
 }
@@ -936,6 +938,7 @@ export function createSessionMux(deps: SessionMuxDeps): SessionMux {
           throw new Error(`session/list failed: ${response.result.error?.code ?? 'unknown'}`)
         }
         const items = parseSessionListBaselineItems(response.result.value)
+        if (items === null) throw new Error('session/list returned a malformed baseline')
         deps.onBaseline?.(items, { at: now(), reason })
         setStatus({ baselineOk: true, lastBaselineAt: now(), baselines: status.baselines + 1 })
       } catch (error) {

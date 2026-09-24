@@ -46,6 +46,17 @@ const GROUPS = {
     'test/retry-policy/stream-forensics.test.ts',
     'test/retry-policy/stream-stall-policy.test.ts',
   ],
+  // injection: cross-shell acceptance - the page harness drives the SHIPPED
+  // carrier composition ($stream's wrapper + RemoteStreamCarrierError) and the
+  // evidence lands in the one incident ring.
+  injection: [
+    {
+      // stream-client.ts is upstream-shaped (constructor parameter properties) and
+      // resolves vendor leaves, exactly like the behavior group.
+      file: 'test/injection/stream-injection.test.ts',
+      nodeArgs: ['--experimental-transform-types', '--import', './test/support/register-vendor-stubs.mjs'],
+    },
+  ],
   // patch-lock: the fork patch's shape, pinned against an upstream re-sync.
   'patch-lock': [
     'test/patch-lock/remote-stream-carrier-retry-lock.test.ts',

@@ -211,7 +211,7 @@ test('a neutral (blocked) tail arms nothing', async t => {
 })
 
 test('an unreadable follow falls back to arming with the degraded marker', async t => {
-  const harness = harnessFor(t, { items: [baselineItem('s1', true, 5)] })
+  const harness = harnessFor(t, { items: [baselineItem('s1', true, 5)], reconcileMs: 1 })
   await connect(harness)
   const socket = harness.sockets.sockets[0]
   socket.emitItem('events', { type: 'emit', event: 'api-session/status', args: ['s1', false] })
@@ -222,8 +222,41 @@ test('an unreadable follow falls back to arming with the degraded marker', async
   assert.ok((row.completedAt ?? 0) >= 1_000 && (row.completedAt ?? 0) <= harness.clock,
     `a real completion must not be lost（得到 ${row.completedAt}）`)
   assert.equal(row.lastTurnEnd, null, 'but it is never fabricated as a completed reason')
+  assert.equal(row.completedAtSource, 'reconstructed', 'without turn/end this cannot authorize a native notification')
   assert.equal(harness.observer.status().degraded, true)
   assert.equal(harness.observer.status().followFailures, 1)
+
+  harness.setItems([baselineItem('s1', false, 5)])
+  await delay(5)
+  harness.observer.kick('tick')
+  await settle()
+  assert.equal(followFrames(harness).length, 2, 'a later baseline retries the same pending classification')
+  socket.emitItem('follow-2', {
+    type: 'snapshot',
+    records: [{ type: 'event', event: { type: 'turn/end', seq: 9, time: 2,
+      data: { turn: 1, reason: { kind: 'completed' } } } }],
+  })
+  await settle()
+  assert.equal(harness.store.snapshotFor(null, 'sse', harness.observer.hostInfo()).sessions[0]?.completedAtSource,
+    'observed', 'only a classified tail may authorize the live completion')
+})
+
+test('a delayed old follow cannot write a completion into a newly running row', async t => {
+  const harness = harnessFor(t, { items: [baselineItem('s1', true, 5)] })
+  await connect(harness)
+  const socket = harness.sockets.sockets[0]
+  socket.emitItem('events', { type: 'emit', event: 'api-session/status', args: ['s1', false] })
+  assert.equal(followFrames(harness).length, 1)
+  socket.emitItem('events', { type: 'emit', event: 'api-session/status', args: ['s1', true] })
+  socket.emitItem('follow-1', {
+    type: 'snapshot',
+    records: [{ type: 'event', event: { type: 'turn/end', seq: 7, time: 1,
+      data: { turn: 1, reason: { kind: 'completed' } } } }],
+  })
+  await settle()
+  const row = harness.store.snapshotFor(null, 'sse', harness.observer.hostInfo()).sessions[0]
+  assert.equal(row?.running, true)
+  assert.equal(row?.completedAt, null)
 })
 
 test('a baseline-found stop after a restart is re-classified (gap reconstruction, R3)', async t => {
@@ -326,6 +359,22 @@ test('poll mode owns the unary baseline cadence while $events never becomes read
   assert.equal(harness.calls.calls.filter(entry => entry.method === 'session/list').length >= 1, true,
     'the observer polls session/list while the event stream is unavailable')
   assert.equal(harness.store.snapshotFor(null, 'poll', harness.observer.hostInfo()).sessions.length, 1)
+})
+
+test('poll mode rejects a partial baseline without changing a previously running row', async t => {
+  const harness = harnessFor(t, { items: [baselineItem('s1', true, 5)], tickMs: 10, pollMs: 20 })
+  harness.observer.start()
+  harness.sockets.sockets[0].emitOpen()
+  await delay(70)
+  assert.equal(harness.store.snapshotFor(null, 'poll', harness.observer.hostInfo()).sessions[0]?.running, true)
+  harness.setItems([
+    baselineItem('s1', false, 6),
+    { sessionId: 's2', updatedAt: 6 },
+  ])
+  await delay(70)
+  assert.equal(harness.store.snapshotFor(null, 'poll', harness.observer.hostInfo()).sessions[0]?.running, true,
+    'a partial response must not be applied as a successful baseline')
+  assert.equal(harness.observer.status().degraded, true)
 })
 
 test('a poll-mode running edge degrades to unknown instead of fabricating unread (R20)', async t => {

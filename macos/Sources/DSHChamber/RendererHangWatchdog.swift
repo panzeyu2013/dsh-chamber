@@ -2,110 +2,128 @@
 //  RendererHangWatchdog.swift
 //  DSHChamber
 //
-//  Electron 在渲染进程 unresponsive 15s 后重载窗口；WKWebView
-//  没有对应回调（只有进程终止有 webViewWebContentProcessDidTerminate），于是用「空闲时
-//  周期性 ping」逼近同一语义：用户至少 15s 无键鼠输入才 ping；连续 3 次 ping 超时（每次
-//  3s、间隔 5s）判定卡死；一次正常返回即清零。重载复用既有的有界恢复策略
-//  （RendererRecoveryPolicy：60s 窗口 ≤3 次），卡死与崩溃共享同一预算。
-//
-//  首载门：didFinish 前只记录键鼠活动，不 ping、不重载。
-//
-//  探针失败必须**记 strike**，不能当作成功：若 `evaluateJavaScript` 报错也走
-//  noteProbeSucceeded()，一个**卡住但报错**的渲染器会被永久判为健康——只有成功这一个
-//  入口时，纯逻辑这一侧分不清两者。失败有独立入口，判定器与 `LoadState`
-//  （packages/dsh-stream-state）的探针 strike 语义同名同义：失败累加、成功/输入清零、
-//  达上限交回调用方。
-//
-//  本类型是纯逻辑（注入时钟）：GUI 接线只负责定时 tick、发 ping、消费 Action。
+//  A live JS context does not prove that the page is producing frames. Probe
+//  both JS replies and a page-owned requestAnimationFrame counter while the
+//  window is visible. Input cannot reset the evidence: a frozen page can still
+//  receive native key and mouse events. A navigation or hidden window pauses
+//  the judgment because WebKit may legitimately suspend animation frames.
+//  A slow JS reply is its own evidence: a long task blocks the probe round trip
+//  while animation frames still advance (Electron's input-block leg, same table).
 //
 import Foundation
 
-/// 渲染器卡死的判定器（纯逻辑，无 WebKit 依赖）。
+/// Visible-page responsiveness judgment, independent of WebKit. The caller
+/// passes monotonic system uptime, so clock corrections cannot defer recovery.
 struct RendererHangWatchdog {
-    /// ping 间隔（秒）。
     static let probeInterval: TimeInterval = 5
-    /// 单次 ping 的超时（秒）：超过即记一次 strike。
     static let probeTimeout: TimeInterval = 3
-    /// 判定卡死所需的连续超时次数。
     static let maxStrikes = 3
-    /// 用户无输入的最小时间（秒）= Electron 的 15s unresponsive 阈值。
-    static let idleGrace: TimeInterval = 15
+    /// Input-block round-trip budget in seconds: the shared delivery ladder's
+    /// `scheduleProbe.inputBlockRttMs` (1000 ms), the same leaf the Electron
+    /// watchdog's `RENDERER_INPUT_BLOCK_RTT_MS` is locked to. The parity gate
+    /// compares this constant with that shared-table leaf on every run (and the
+    /// mirror decodes the leaf itself in CarrierDecision.swift), so the shell owns
+    /// no independent copy - do not inline the number.
+    static let inputBlockRtt: TimeInterval = 1
 
     enum Action: Equatable {
-        /// 什么都不做。
         case nothing
-        /// 发一次 ping；调用方完成后回调 noteProbeSucceeded() 或 noteProbeFailed()。
-        case probe
-        /// 判定卡死 → 走有界恢复策略重载。
+        case probe(UInt64)
+        /// The JS thread answered, but past the round-trip budget: evidence of an
+        /// input-blocked page, not (yet) a frame strike.
+        case inputBlock(rtt: TimeInterval)
         case reload
     }
 
     private(set) var strikes = 0
-    private var lastInputAt: Date
-    private var lastProbeAt: Date?
-    private var probeInFlightSince: Date?
-    /// 首载成功门：didFinish 前只记录键鼠活动，不 ping、不重载。
+    private(set) var inputBlockStrikes = 0
     private(set) var loadedOnce = false
+    private var lastProbeAt: TimeInterval?
+    private var probeInFlightSince: TimeInterval?
+    private(set) var activeProbeID: UInt64?
+    private var nextProbeID: UInt64 = 0
+    private var lastFrameCount: Int?
 
-    init(now: Date) {
-        lastInputAt = now
-    }
+    init() { }
 
-    /// 首次成功加载（WKNavigationDelegate.didFinish）→ 打开探测门。幂等。
     mutating func noteFirstLoadFinished() {
         loadedOnce = true
+        reset()
     }
 
-    /// 键鼠输入 → 重置判定并把「空闲计时」推到现在。
-    mutating func noteUserInput(at now: Date) {
-        lastInputAt = now
+    /// Navigation, suspension, and recovery each begin a new evidence window.
+    mutating func reset() {
         strikes = 0
-        probeInFlightSince = nil
+        inputBlockStrikes = 0
         lastProbeAt = nil
-    }
-
-    /// ping 正常返回 → 渲染器活着，清零。
-    mutating func noteProbeSucceeded() {
-        clearProbe()
-    }
-
-    /// ping **失败**（evaluateJavaScript 报错、超时、无结果）→ 记一次 strike。
-    /// 与 noteProbeSucceeded() 严格对称：这是「卡住但报错」不被误判为健康的唯一入口。
-    /// 达到上限时返回 .reload（并清零，与 tick 的超时路径同一语义）。
-    mutating func noteProbeFailed() -> Action {
         probeInFlightSince = nil
-        strikes += 1
-        guard strikes >= Self.maxStrikes else { return .nothing }
-        strikes = 0
-        return .reload
+        activeProbeID = nil
+        lastFrameCount = nil
     }
 
-    /// 定时 tick（调用方每 probeInterval 秒调用一次）。
-    mutating func tick(now: Date) -> Action {
-        // 首载门：didFinish 前只记录（noteUserInput 照常更新空闲计时），绝不 ping。
+    /// A late callback from an expired probe or a previous navigation is inert.
+    /// `rtt` (seconds) is the round trip the caller timed with the shell's
+    /// monotonic clock. Over budget is input-block evidence even when a frame
+    /// arrived: the frame count is still recorded as progress first, so a later
+    /// healthy probe cannot turn it into a frame strike (Electron
+    /// `RendererFrameWatchdog.succeeded`).
+    mutating func noteProbeSucceeded(
+        id: UInt64,
+        frameCount: Int,
+        rtt: TimeInterval? = nil
+    ) -> Action {
+        guard activeProbeID == id else { return .nothing }
+        probeInFlightSince = nil
+        activeProbeID = nil
+        let progressed: Bool
+        if let previous = lastFrameCount {
+            progressed = frameCount > previous
+        } else {
+            progressed = true
+        }
+        lastFrameCount = frameCount
+        if let rtt, rtt > Self.inputBlockRtt {
+            inputBlockStrikes += 1
+            if inputBlockStrikes >= Self.maxStrikes {
+                reset()
+                return .reload
+            }
+            return .inputBlock(rtt: rtt)
+        }
+        inputBlockStrikes = 0
+        strikes = progressed ? 0 : strikes + 1
+        return reachedLimit()
+    }
+
+    mutating func noteProbeFailed(id: UInt64) -> Action {
+        guard activeProbeID == id else { return .nothing }
+        probeInFlightSince = nil
+        activeProbeID = nil
+        strikes += 1
+        return reachedLimit()
+    }
+
+    /// A one-second timer observes the real three-second deadline even though
+    /// new probes are issued no more often than every five seconds.
+    mutating func tick(now: TimeInterval) -> Action {
         guard loadedOnce else { return .nothing }
-        // 有人刚动过键鼠：不 ping、不重载。
-        if now.timeIntervalSince(lastInputAt) < Self.idleGrace {
-            clearProbe()
-            return .nothing
-        }
-        // 在飞的 ping 超时 → 记一次 strike；满 3 次 → 重载（计数清零）。
         if let started = probeInFlightSince {
-            guard now.timeIntervalSince(started) >= Self.probeTimeout else { return .nothing }
-            return noteProbeFailed()
+            guard now - started >= Self.probeTimeout,
+                  let id = activeProbeID else { return .nothing }
+            return noteProbeFailed(id: id)
         }
-        // 距上次 ping 不足间隔 → 等下一轮。
-        if let last = lastProbeAt, now.timeIntervalSince(last) < Self.probeInterval {
-            return .nothing
-        }
+        if let last = lastProbeAt,
+           now - last < Self.probeInterval { return .nothing }
+        nextProbeID &+= 1
+        activeProbeID = nextProbeID
         lastProbeAt = now
         probeInFlightSince = now
-        return .probe
+        return .probe(nextProbeID)
     }
 
-    /// 一次「活着」的证据：清零 strike 与在飞状态。
-    private mutating func clearProbe() {
-        strikes = 0
-        probeInFlightSince = nil
+    private mutating func reachedLimit() -> Action {
+        guard strikes >= Self.maxStrikes else { return .nothing }
+        reset()
+        return .reload
     }
 }

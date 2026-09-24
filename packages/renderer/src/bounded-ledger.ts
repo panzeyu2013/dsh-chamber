@@ -6,7 +6,7 @@
  *   - unread-store 的 ack 待发表（Map + 同键水位替换 + FIFO 淘汰）；
  *   - notification-ledger 的决定环（数组尾部入队 + 头部淘汰）。
  *
- * 刻意不合并的族（语义不是容器问题）：session-liveness 的三级
+ * 刻意不合并的族（语义不是容器问题）：authority 的三级
  * 阶梯滚动窗、baseline-harvest 的 attempts/backoff 状态机、pending-open 的 deadline
  * 队列（状态机型）；prewarm-ledger 的每来源计数表（无淘汰、无上界问题）。
  */

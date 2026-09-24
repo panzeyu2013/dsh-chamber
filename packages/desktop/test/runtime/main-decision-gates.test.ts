@@ -10,12 +10,14 @@ import { readFileSync } from 'node:fs'
 import { stripComments } from '../../../../scripts/dev/test-support/source-text.ts'
 import { evaluateApplyNowGate, type ApplyNowGateInput } from '../../apply-now-gate.ts'
 import { DISK_SKIP_PROGRESS_PHASES, shouldSkipDiskRefresh } from '../../disk-evidence-gate.ts'
+import { RendererFrameWatchdog } from '../../renderer-frame-watchdog.ts'
 import {
   RENDERER_CRASH_RELOAD_DELAY_MS,
   RENDERER_HANG_RELOAD_DELAY_MS,
   RENDERER_RECOVERY_MAX_RELOADS,
   RENDERER_RECOVERY_WINDOW_MS,
   noteRendererReload,
+  shouldReloadAfterChildProcessGone,
   shouldReloadAfterCrash,
   shouldScheduleHangReload,
 } from '../../shell-core.ts'
@@ -200,6 +202,16 @@ test('G21 renderer recovery: crash and hang gates', () => {
     assert.equal(shouldReloadAfterCrash(reason, false), true, `${reason} must reload`)
     assert.equal(shouldReloadAfterCrash(reason, true), false, `${reason} while quitting must not reload`)
   }
+  // A dead GPU process freezes painting while the renderer keeps scheduling
+  // frames: the shell reloads, bounded by the same budget. Other child types are
+  // Chromium-restarted on their own, and clean exits are normal teardown.
+  assert.equal(shouldReloadAfterChildProcessGone('GPU', 'crashed', false), true)
+  assert.equal(shouldReloadAfterChildProcessGone('GPU', 'oom', false), true)
+  assert.equal(shouldReloadAfterChildProcessGone('GPU', 'clean-exit', false), false)
+  assert.equal(shouldReloadAfterChildProcessGone('GPU', 'crashed', true), false, 'quit in flight never reloads')
+  for (const type of ['Utility', 'Zygote', 'Sandbox helper', 'Pepper Plugin']) {
+    assert.equal(shouldReloadAfterChildProcessGone(type, 'crashed', false), false, `${type} must not reload the window`)
+  }
   // Before the first did-finish-load an unresponsive renderer is only
   // logged (boot is legitimately busy); afterwards the 15s hang timer applies.
   assert.equal(shouldScheduleHangReload(false), false)
@@ -213,11 +225,34 @@ test('G21 renderer recovery: main.ts routes every decision through the shared po
   const main = readFileSync(new URL('../../main.ts', import.meta.url), 'utf8')
   assert.match(main, /noteRendererReload\(reloadBudget, Date\.now\(\)\)/)
   assert.match(main, /shouldReloadAfterCrash\(details\.reason, quitRequested\)/)
+  assert.match(main, /shouldReloadAfterChildProcessGone\(details\.type, details\.reason, quitRequested\)/)
+  assert.match(main, /app\.on\('child-process-gone', onChildProcessGone\)/)
+  assert.match(main, /app\.off\('child-process-gone', onChildProcessGone\)/, 'the per-window listener must be removed on close')
   assert.match(main, /shouldScheduleHangReload\(loadedOnce\)/)
   assert.match(main, /RENDERER_CRASH_RELOAD_DELAY_MS/)
   assert.match(main, /RENDERER_HANG_RELOAD_DELAY_MS/)
   assert.match(main, /RENDERER_RECOVERY_MAX_RELOADS/)
   assert.doesNotMatch(main, /if \(now - reloadWindowStart > 60_000\)/, 'the inline budget must stay extracted')
+})
+
+test('the frame watchdog exposes strike counters for the page evidence push', () => {
+  const seen: Array<{ scheduleStrikes: number; inputBlockStrikes: number }> = []
+  const watchdog = new RendererFrameWatchdog()
+  watchdog.onChange = observation => seen.push({ ...observation })
+  const probeId = (action: { kind: string } & Record<string, unknown>): number => action.id as number
+  const first = watchdog.tick(0)
+  assert.equal(first.kind, 'probe')
+  watchdog.succeeded(probeId(first as never), 5)
+  assert.deepEqual(seen, [], 'the zero state is the initial state: no push, no traffic')
+  const second = watchdog.tick(5_000)
+  watchdog.succeeded(probeId(second as never), 5)
+  assert.deepEqual(seen.at(-1), { scheduleStrikes: 1, inputBlockStrikes: 0 }, 'no frame progress is a schedule strike')
+  const third = watchdog.tick(10_000)
+  watchdog.succeeded(probeId(third as never), 6, 1_500)
+  assert.deepEqual(seen.at(-1), { scheduleStrikes: 1, inputBlockStrikes: 1 }, 'an over-budget RTT is an input-block strike')
+  const fourth = watchdog.tick(15_000)
+  watchdog.succeeded(probeId(fourth as never), 7)
+  assert.deepEqual(seen.at(-1), { scheduleStrikes: 0, inputBlockStrikes: 0 }, 'a healthy answer clears the evidence')
 })
 // --- D7 disk-evidence skip set ---
 /** Full legal runtime phase set (typed — a typo/rename fails the typecheck). */

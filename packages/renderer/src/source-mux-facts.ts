@@ -10,19 +10,22 @@
  *   MUX = ws://<origin>/api/i/<id>/api/remote.mux
  *   → {type:'open', streamId, endpoint:'$events', payload:{args:{}}}
  *   ← {type:'item', streamId, value:{type:'ready'|'emit'|'waterfall'|'cancel'}}
- *   unary: POST <origin>/api/i/<id>/api/<method> {type:'client-request', rpcId, method, payload}
- *          → {type:'server-response', rpcId, result:{ok, value}}
+ *   unary session/list: POST <origin>/api/i/<id>/api/session/list
+ *          ← {type:'server-response', rpcId, result:{ok, value}}
+ *   session/follow: MUX {type:'open', streamId, endpoint:'session/follow', payload}
+ *          ← {type:'item', streamId, value:{type:'snapshot'|'event', ...}}
  *
  * 两条硬纪律：
  *   1. 观察者**绝不发** `$events/result`——那会把等待中的审批替所有客户端结算掉；
  *      瀑布帧只观察，不回答；
- *   2. 每条 true→false 边沿**恰好一次** `session/follow` 读尾巴 `turn/end.reason`，
+ *   2. 每条 true→false 边沿发起一次有界 `session/follow` 读尾巴 `turn/end.reason`，
  *      据此分类：completed ⇒ 武装；aborted+cause=user ⇒ 用户停止；其余 ⇒ 中立；
- *      读不到 ⇒ 降级（仍武装 + 标记 unreadable，与 watcher 同规）。
+ *      读不到 ⇒ 降级（只武装未读、不发通知）；后续基线重试分类。
  *
  * 基线与边沿纪律：
  *   - 基线 true→false（重订阅后唯一证据）走与 status 边沿同一条 readTail 路径；
- *   - 基线只合 running/updatedAt(max)/factAt，保留已武装的完成字段；
+ *   - 基线只合 running/updatedAt(max)/factAt；新提示水位撤销上一轮完成，
+ *     false→false 的新提示须读到严格晚于提示的 turn/end 才能认定新完成；
  *   - 连接代际（generation）——被换掉的 socket 的迟到回调不得改状态或调度重连；
  *   - status 为未知会话建档，added/activity/removed 都被消费；
  *   - completedAt 优先取 host 的 turn/end.time（>= 1e12 才算可用），拿不到就用
@@ -37,6 +40,8 @@ import { isRecord } from '@dsh-chamber/dsh-chamber-client-core'
 import type {
   SessionFactsCompletedAtSource, SessionFactsRow, SessionFactsSnapshot, SessionFactsTurnEnd,
 } from './session-facts-source.ts'
+import { isWatermark } from './watermark.ts'
+import { TABLE_SNAPSHOT } from '@dsh-chamber/dsh-stream-state'
 
 export interface MuxSocket {
   send(data: string): void
@@ -63,6 +68,8 @@ export interface SourceMuxDeps {
   baselineTimeoutMs?: number
   /** 每条边沿 session/follow 的 deadline（默认 2s，与 control-plane/session-mux.ts 同预算）。 */
   followTimeoutMs?: number
+  /** 与事件静默重连独立的低频对账；即使 socket 持续有帧也能修复丢失的 status。 */
+  reconcileIntervalMs?: number
 }
 
 export const MUX_PATH = '/api/remote.mux'
@@ -72,6 +79,7 @@ export const DEFAULT_FACTS_SILENCE_MS = 45_000
 export const DEFAULT_BASELINE_TIMEOUT_MS = 5_000
 /** 完成边沿读尾 deadline（对齐 control-plane/session-mux.ts 的 2s 预算）。 */
 export const DEFAULT_FOLLOW_TIMEOUT_MS = 2_000
+export const DEFAULT_RECONCILE_INTERVAL_MS = 30_000
 /** 可用 host 时间（epoch ms）的下界；小于它的数字不是 host 域观测，绝不臆造。 */
 export const HOST_EPOCH_MS_FLOOR = 1e12
 
@@ -86,6 +94,28 @@ export const HOST_EPOCH_MS_FLOOR = 1e12
 export type SessionMuxCompletedAtDomain = 'host' | 'observer'
 export interface SourceMuxRow extends SessionFactsRow {
   completedAtDomain?: SessionMuxCompletedAtDomain
+}
+
+/**
+ * An observed status edge can be classified from its tail. A prompt gap is
+ * weaker evidence: session/list's updatedAt is the last user prompt time, so
+ * only a turn/end strictly AFTER that prompt can establish a new conclusion.
+ * Object identity fences an older read when a newer prompt or run supersedes it.
+ */
+interface PendingTail {
+  readonly runVersion: number | undefined
+  readonly afterPromptAt: number | null
+}
+
+/**
+ * Which sources the no-shell observer covers. The mux path is the dsh host's own
+ * protocol (`/api/remote.mux`) reached through the instance proxy, so it applies to
+ * every dsh-protocol source: remote SSH instances AND the managed LOCAL profile
+ * (`/api/i/local/api/remote.mux`). Gateway sources have the read-only
+ * /chamber/session-state mirror instead and are excluded here.
+ */
+export function isMuxObservableSourceKind(kind: string): boolean {
+  return kind === 'local' || kind === 'dsh'
 }
 
 /** 实例代理基址（v1 /api/i/* 无鉴权边界，代理注入 host cookie）。 */
@@ -112,10 +142,11 @@ export function classifyTurnEndWire(reason: unknown): 'completed' | 'user-stoppe
 }
 
 interface ParsedFrame {
-  kind: 'ready' | 'emit' | 'waterfall' | 'cancel' | 'other'
+  kind: 'ready' | 'emit' | 'waterfall' | 'cancel' | 'other' | 'stream-end' | 'stream-error'
   streamId: string
   event?: string
   args?: unknown
+  value?: unknown
 }
 
 export function parseMuxFrame(raw: unknown): ParsedFrame | null {
@@ -129,16 +160,25 @@ export function parseMuxFrame(raw: unknown): ParsedFrame | null {
   }
   if (message === null || typeof message !== 'object') return null
   const frame = message as { type?: unknown; streamId?: unknown; value?: unknown }
-  if (frame.type !== 'item' || typeof frame.streamId !== 'string') return null
-  const value = frame.value as { type?: unknown; event?: unknown; args?: unknown } | null
+  if (typeof frame.streamId !== 'string') return null
+  if (frame.type === 'end') return { kind: 'stream-end', streamId: frame.streamId }
+  if (frame.type === 'error') return { kind: 'stream-error', streamId: frame.streamId }
+  if (frame.type !== 'item') return null
+  const value = frame.value as { type?: unknown; event?: unknown; args?: unknown; clientId?: unknown; eventId?: unknown; agentId?: unknown } | null
   if (value === null || typeof value !== 'object') return { kind: 'other', streamId: frame.streamId }
-  if (value.type === 'ready') return { kind: 'ready', streamId: frame.streamId }
-  if (value.type === 'emit') {
-    return { kind: 'emit', streamId: frame.streamId, event: typeof value.event === 'string' ? value.event : undefined, args: value.args }
+  if (value.type === 'ready' && typeof value.clientId === 'string'
+      && value.clientId.length > 0) return { kind: 'ready', streamId: frame.streamId }
+  if (value.type === 'emit' && typeof value.event === 'string' && value.event.length > 0) {
+    // args 原样透传：冻结 wire 是数组，但 handler 各自承诺兼容历史对象形
+    // （parseStatusArgs 的注释即契约）；在这里归一成 [] 会静默丢掉对象形边沿。
+    return { kind: 'emit', streamId: frame.streamId, event: value.event, args: value.args }
   }
-  if (value.type === 'waterfall') return { kind: 'waterfall', streamId: frame.streamId }
-  if (value.type === 'cancel') return { kind: 'cancel', streamId: frame.streamId }
-  return { kind: 'other', streamId: frame.streamId }
+  if (value.type === 'waterfall' && typeof value.event === 'string' && value.event.length > 0
+      && typeof value.eventId === 'string' && value.eventId.length > 0
+      && typeof value.agentId === 'string' && value.agentId.length > 0) return { kind: 'waterfall', streamId: frame.streamId }
+  if (value.type === 'cancel' && typeof value.eventId === 'string'
+      && value.eventId.length > 0) return { kind: 'cancel', streamId: frame.streamId }
+  return { kind: 'other', streamId: frame.streamId, value: frame.value }
 }
 
 /** host 域 epoch ms 校验（整数且 >= 1e12 才算可用）；不可用一律 null，绝不臆造。 */
@@ -169,8 +209,10 @@ export function rowFromListItem(item: unknown): SourceMuxRow | null {
   if (item === null || typeof item !== 'object') return null
   const value = item as { sessionId?: unknown; running?: unknown; updatedAt?: unknown }
   if (typeof value.sessionId !== 'string' || value.sessionId === '') return null
-  const updatedAt = typeof value.updatedAt === 'number' && Number.isFinite(value.updatedAt) ? value.updatedAt : 0
-  return emptyRow(value.sessionId, value.running === true, updatedAt)
+  // Official SessionSummary requires both fields. Missing `running` must not
+  // become false: that would forge a true→false completion during a baseline.
+  if (typeof value.running !== 'boolean' || !isWatermark(value.updatedAt)) return null
+  return emptyRow(value.sessionId, value.running, value.updatedAt)
 }
 
 /**
@@ -180,13 +222,13 @@ export function rowFromListItem(item: unknown): SourceMuxRow | null {
 export function parseStatusArgs(args: unknown): { sessionId: string; running: boolean } | null {
   if (Array.isArray(args)) {
     const sessionId = args[0]
-    if (typeof sessionId !== 'string' || sessionId === '') return null
-    return { sessionId, running: args[1] === true }
+    if (typeof sessionId !== 'string' || sessionId === '' || typeof args[1] !== 'boolean') return null
+    return { sessionId, running: args[1] }
   }
   if (isRecord(args)) {
     const sessionId = args.sessionId
-    if (typeof sessionId !== 'string' || sessionId === '') return null
-    return { sessionId, running: args.running === true }
+    if (typeof sessionId !== 'string' || sessionId === '' || typeof args.running !== 'boolean') return null
+    return { sessionId, running: args.running }
   }
   return null
 }
@@ -281,9 +323,8 @@ export function parseFollowTail(value: unknown): FollowTailRead {
 }
 
 /**
- * 基线行合并。只合 running / updatedAt(max) / factAt，保留既有完成字段
- * （rowFromListItem 的 completedAt=null 绝不能擦掉真未读）。running=true 的分支与
- * gateway applyBaseline 同规：新一轮运行结算旧完成（re-run disarms）。
+ * 基线行合并。普通对账保留既有完成字段；新运行或更新的用户提示
+ * 撤销上一轮完成。rowFromListItem 的空完成字段本身不能擦掉真未读。
  */
 export function mergeBaselineRow(previous: SourceMuxRow | undefined, row: SourceMuxRow, at: number): SourceMuxRow {
   if (previous === undefined) return { ...row, factAt: at }
@@ -302,6 +343,11 @@ export function mergeBaselineRow(previous: SourceMuxRow | undefined, row: Source
     ...previous,
     running: false,
     updatedAt: Math.max(previous.updatedAt, row.updatedAt),
+    // updatedAt is the host's lastPromptAt. A later prompt invalidates the
+    // previous completion even if both list samples say running=false.
+    ...(row.updatedAt > previous.updatedAt && !previous.running
+      ? { completedAt: null, completedAtSource: null, completedAtDomain: undefined, lastTurnEnd: null }
+      : {}),
     factAt: at,
   }
 }
@@ -341,6 +387,8 @@ export interface SourceMuxStatus {
   edges: number
   lastEventAt: number | null
   pendingReads: number
+  /** 已观察到停止、但仍缺可归属 turn/end 的会话数。 */
+  pendingClassifications: number
   reconnects: number
   /** 成功取到基线的次数（每次 (re)connect 都必须重新对账）。 */
   baselines: number
@@ -355,6 +403,7 @@ export interface SourceMuxStatus {
 export interface SourceMuxFacts {
   start(): void
   stop(): void
+  reconcile(): void
   status(): SourceMuxStatus
 }
 
@@ -370,11 +419,26 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
   const silenceMs = deps.silenceTimeoutMs ?? DEFAULT_FACTS_SILENCE_MS
   const baselineTimeoutMs = deps.baselineTimeoutMs ?? DEFAULT_BASELINE_TIMEOUT_MS
   const followTimeoutMs = deps.followTimeoutMs ?? DEFAULT_FOLLOW_TIMEOUT_MS
+  const reconcileIntervalMs = deps.reconcileIntervalMs ?? DEFAULT_RECONCILE_INTERVAL_MS
   const rows = new Map<string, SourceMuxRow>()
   const runningBefore = new Map<string, boolean>()
+  // 同一会话的运行轮次。读尾仅能结算它观察到的那次 true→false。
+  const runVersions = new Map<string, number>()
+  const pendingTails = new Map<string, PendingTail>()
+  const readingTails = new Map<string, PendingTail>()
+  const follows = new Map<string, { settle: (tail: FollowTailRead) => void; timer: ReturnType<typeof setTimeout>; carrier: MuxSocket }>()
+  let followSeq = 0
+  // A complete baseline can briefly miss a row during host churn. The gateway
+  // mirror also waits for a second complete absence before retiring it.
+  const missingBaselines = new Map<string, number>()
   let socket: MuxSocket | null = null
   let stopped = true
-  let ready = false
+  let lifetime = 0
+  let socketReady = false
+  let baselineTrusted = false
+  let eventRevision = 0
+  let baselineRequest = 0
+  let runVersion = 0
   let edges = 0
   let reconnects = 0
   let lastEventAt: number | null = null
@@ -384,7 +448,16 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
   let followFailures = 0
   let socketErrors = 0
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+let connectDeadlineTimer: ReturnType<typeof setTimeout> | null = null
+/** A carrier that never opens, errors or closes would leave the observer with no
+ *  silence evidence and no retry: the missing handshake is itself a carrier failure. */
+const clearConnectDeadline = (): void => {
+  if (connectDeadlineTimer !== null) clearTimeout(connectDeadlineTimer)
+  connectDeadlineTimer = null
+}
   let silenceTimer: ReturnType<typeof setTimeout> | null = null
+  let reconcileTimer: ReturnType<typeof setTimeout> | null = null
+  let stableTimer: ReturnType<typeof setTimeout> | null = null
   /**
    * 连接代际（照 control-plane/src/session-mux.ts 的 generation 纪律）。
    * connect() 主动换掉旧 socket / onclose 确认死亡时代际 +1；旧代际的一切回调
@@ -395,7 +468,9 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
   // 重连指数退避（1s 起、30s 封顶）：源长时间不可达时不得变成每秒一次的重试洪流。
   let reconnectDelayMs = 1_000
   const MAX_RECONNECT_DELAY_MS = 30_000
+  const RECONNECT_STABLE_MS = 30_000
   const instrument = (): SourceMuxStatus => currentStatus()
+  const ready = (): boolean => socketReady && baselineTrusted
 
   /** **与 gateway 事实源同形**的快照（同一套字段，App 因此走同一条管线）。 */
   function snapshot(): SessionFactsSnapshot {
@@ -409,12 +484,12 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
       // （2026-12 审计 §6.1.3）。快照的 mode 因此诚实报 null，而不是照抄一个
       // 它并不使用的传输档（唯一消费 mode 的 session-facts-source.startDelivery
       // 只读自己 payload 的 mode，不读这里）。
-      verdict: ready ? 'ok' : 'degraded',
-      degradation: ready ? null : 'unavailable',
+      verdict: ready() ? 'ok' : 'degraded',
+      degradation: ready() ? null : 'unavailable',
       mode: null,
-      hostState: ready ? 'ready' : 'unknown',
-      serviceable: ready,
-      stale: !ready,
+      hostState: ready() ? 'ready' : 'unknown',
+      serviceable: ready(),
+      stale: !ready(),
       cursor: 0,
       rows: record,
       read: null,
@@ -443,17 +518,19 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
       }, timeoutMs)
     })
     try {
-      const response = await Promise.race([
-        fetchImpl(base + '/api/' + method, {
+      const body = await Promise.race([
+        (async () => {
+          const response = await fetchImpl(base + '/api/' + method, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ type: 'client-request', rpcId, method, payload }),
           signal: controller.signal,
-        }),
+          })
+          if (!response.ok) throw new Error(method + ' http ' + response.status)
+          return response.json() as Promise<{ type?: unknown; rpcId?: unknown; result?: { ok?: unknown; value?: unknown } }>
+        })(),
         expired,
       ])
-      if (!response.ok) throw new Error(method + ' http ' + response.status)
-      const body = await response.json() as { type?: unknown; rpcId?: unknown; result?: { ok?: unknown; value?: unknown } }
       if (body.type !== 'server-response' || body.rpcId !== rpcId) throw new Error(method + ': envelope mismatch')
       if (body.result?.ok !== true) throw new Error(method + ': rpc failed')
       return body.result.value
@@ -469,59 +546,236 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
     }
   }
 
+  function clearReconcile(): void {
+    if (reconcileTimer !== null) clearTimeout(reconcileTimer)
+    reconcileTimer = null
+  }
+
+  function clearStable(): void {
+    if (stableTimer !== null) clearTimeout(stableTimer)
+    stableTimer = null
+  }
+
+  function armStableReconnectReset(): void {
+    if (!ready() || stableTimer !== null) return
+    const atGeneration = generation
+    stableTimer = setTimeout(() => {
+      stableTimer = null
+      if (!stopped && atGeneration === generation && ready()) reconnectDelayMs = 1_000
+    }, RECONNECT_STABLE_MS)
+  }
+
+  function armReconcile(): void {
+    clearReconcile()
+    const atGeneration = generation
+    reconcileTimer = setTimeout(() => {
+      reconcileTimer = null
+      if (stopped || generation !== atGeneration) return
+      void baseline()
+      armReconcile()
+    }, reconcileIntervalMs)
+  }
+
+  function nextRunVersion(sessionId: string): number {
+    const version = ++runVersion
+    runVersions.set(sessionId, version)
+    return version
+  }
+
+  function markPromptGap(sessionId: string, updatedAt: number): PendingTail {
+    const pending: PendingTail = { runVersion: runVersions.get(sessionId), afterPromptAt: updatedAt }
+    pendingTails.set(sessionId, pending)
+    return pending
+  }
+
+  function markObservedEdge(sessionId: string): PendingTail {
+    const pending: PendingTail = { runVersion: runVersions.get(sessionId), afterPromptAt: null }
+    pendingTails.set(sessionId, pending)
+    return pending
+  }
+
+  function settleFollow(streamId: string, tail: FollowTailRead): void {
+    const follow = follows.get(streamId)
+    if (follow === undefined) return
+    follows.delete(streamId)
+    clearTimeout(follow.timer)
+    if (socket === follow.carrier) {
+      try { follow.carrier.send(JSON.stringify({ type: 'cancel', streamId })) } catch { /* Carrier may already be closed. */ }
+    }
+    follow.settle(tail)
+  }
+
+  function cancelFollows(): void {
+    for (const streamId of [...follows.keys()]) settleFollow(streamId, EMPTY_FOLLOW_TAIL)
+  }
+
+  /** session/follow is a stream endpoint. The opening snapshot contains the durable tail. */
+  function followTail(sessionId: string): Promise<FollowTailRead> {
+    const carrier = socket
+    if (carrier === null) return Promise.resolve(EMPTY_FOLLOW_TAIL)
+    const streamId = 'chamber-follow-' + ++followSeq
+    return new Promise(resolve => {
+      const timer = setTimeout(() => settleFollow(streamId, EMPTY_FOLLOW_TAIL), followTimeoutMs)
+      follows.set(streamId, { settle: resolve, timer, carrier })
+      try {
+        carrier.send(JSON.stringify({ type: 'open', streamId, endpoint: 'session/follow', payload: followPayload(sessionId) }))
+      } catch {
+        settleFollow(streamId, EMPTY_FOLLOW_TAIL)
+      }
+    })
+  }
+
+  /** One retirement path for explicit removal and confirmed baseline absence. */
+  function retireSession(sessionId: string): boolean {
+    const hadRow = rows.delete(sessionId)
+    runningBefore.delete(sessionId)
+    runVersions.delete(sessionId)
+    pendingTails.delete(sessionId)
+    readingTails.delete(sessionId)
+    missingBaselines.delete(sessionId)
+    return hadRow
+  }
+
   /**
    * 基线对账。
-   * - 只合 running/updatedAt(max)/factAt，保留既有完成字段；
+   * - 普通基线保留完成字段；host 的新提示水位撤销旧完成；
    * - 基线里 previous.running===true && row.running===false 是重订阅后跨缺口完成的
    *   **唯一证据**（$events 开场不重放 status）⇒ 与 status 边沿同一条 readTail 路径；
    * - 基线也播种 runningBefore：它是缺口边沿的另一半证据。
    */
   async function baseline(): Promise<void> {
     const atGeneration = generation
+    const request = ++baselineRequest
+    const atRevision = eventRevision
     let value: unknown
     try {
       value = await rpc('session/list', { args: { _request: {} } }, baselineTimeoutMs)
     } catch {
       // 失败 = 本次连接事实不可信（不能静默：必须能区分「没完成」与「观察者坏了」）。
-      if (!stopped && atGeneration === generation) baselineFailures += 1
+      if (!stopped && atGeneration === generation && request === baselineRequest) {
+        baselineFailures += 1
+        baselineTrusted = false
+        clearStable()
+        emit()
+      }
       return
     }
-    if (stopped || atGeneration !== generation) return
+    if (stopped || atGeneration !== generation || request !== baselineRequest) return
+    if (atRevision !== eventRevision) {
+      // 列表的取样点未知；其间收到的事件可能比列表新。重新取样，不用旧列表覆写事件。
+      void baseline()
+      return
+    }
     const envelope = value as { items?: unknown } | null | undefined
-    const rawItems = envelope === null || envelope === undefined ? undefined : envelope.items
-    const items: unknown[] = Array.isArray(rawItems) ? rawItems : []
+    const rawItems = envelope?.items
+    if (!Array.isArray(rawItems)) {
+      // A successful RPC envelope is not a successful facts baseline when its
+      // required items list is absent. Treating null as [] would certify an
+      // unobserved source and suppress the runtime completion fallback.
+      baselineFailures += 1
+      baselineTrusted = false
+      clearStable()
+      emit()
+      return
+    }
+    const items = rawItems.map(rowFromListItem)
+    if (items.some(row => row === null)) {
+      // A partial list is not a trustworthy baseline. Reject it atomically so
+      // no earlier row in this response can change running state or start a tail.
+      baselineFailures += 1
+      baselineTrusted = false
+      clearStable()
+      emit()
+      return
+    }
     baselines += 1
     const at = now()
-    for (const item of items) {
-      const row = rowFromListItem(item)
+    const seen = new Set<string>()
+    for (const row of items) {
       if (row === null) continue
+      seen.add(row.sessionId)
+      missingBaselines.delete(row.sessionId)
       const previous = rows.get(row.sessionId)
+      if (row.running && previous?.running !== true) nextRunVersion(row.sessionId)
+      if (row.running) pendingTails.delete(row.sessionId)
       runningBefore.set(row.sessionId, row.running)
       rows.set(row.sessionId, mergeBaselineRow(previous, row, at))
       if (previous !== undefined && previous.running === true && row.running === false) {
         edges += 1
-        void readTail(row.sessionId)
+        void readTail(row.sessionId, markObservedEdge(row.sessionId))
+      } else if (!row.running && previous !== undefined && !previous.running
+          && row.updatedAt > previous.updatedAt) {
+        // Both status frames can fit between baselines. A newer lastPromptAt
+        // proves new activity, but only a newer turn/end may prove completion.
+        void readTail(row.sessionId, markPromptGap(row.sessionId, row.updatedAt))
+      } else if (!row.running && pendingTails.has(row.sessionId)) {
+        // A previously unreadable tail remains pending classification. A later
+        // periodic baseline gives it another bounded follow attempt.
+        void readTail(row.sessionId, pendingTails.get(row.sessionId)!)
       }
     }
+    for (const sessionId of [...rows.keys()]) {
+      if (seen.has(sessionId)) continue
+      const misses = (missingBaselines.get(sessionId) ?? 0) + 1
+      if (misses < 2) missingBaselines.set(sessionId, misses)
+      else retireSession(sessionId)
+    }
+    baselineTrusted = true
+    armStableReconnectReset()
     emit()
   }
 
   /**
-   * 每条 true→false 边沿（status 或基线）恰好一次 follow 读尾巴，然后分类。
+   * 对已观察到的 true→false 边沿和可能丢失两帧的提示水位读尾，然后分类。
    * completedAt 优先取 tail 的 host turn/end.time（epoch ms）；拿不到就用观察者戳，
    * 并把 completedAtSource 标为 reconstructed、completedAtDomain 标为 observer——
    * 这是**降级而不是等价**：该时间不在 host 域，绝不能当作 host 水位，App 也因此不发通知
    * （reconstructed = 只出未读，与 gateway 的缺口重建同规）。
    */
-  async function readTail(sessionId: string): Promise<void> {
+  async function readTail(sessionId: string, expected: PendingTail): Promise<void> {
+    const atLifetime = lifetime
+    // A dropped true/false pair can leave the visible run version unchanged.
+    // The host's newer activity watermark then invalidates an older follow
+    // result even though both snapshots currently say running=false.
+    const expectedUpdatedAt = rows.get(sessionId)?.updatedAt
+    if (readingTails.get(sessionId) === expected) return
+    readingTails.set(sessionId, expected)
+    const currentRow = (): SourceMuxRow | undefined => {
+      const row = rows.get(sessionId)
+      return row?.running === false && pendingTails.get(sessionId) === expected
+        && !missingBaselines.has(sessionId)
+        && runVersions.get(sessionId) === expected.runVersion
+        && row.updatedAt === expectedUpdatedAt ? row : undefined
+    }
     pendingReads += 1
     try {
-      const value = await rpc('session/follow', followPayload(sessionId), followTimeoutMs)
-      if (stopped) return
-      const tail = parseFollowTail(value)
-      const row = rows.get(sessionId)
+      const tail = await followTail(sessionId)
+      if (stopped || atLifetime !== lifetime) return
+      const row = currentRow()
       if (row === undefined) return
-      if (tail.turnEnd === null) {
+      // session/follow returns the most recent tail, which may belong to the
+      // preceding run. A status edge is no stronger than a prompt-gap probe
+      // when its host prompt watermark is known: the tail must be strictly
+      // newer before it can classify this run. A missing host timestamp may
+      // still arm reconstructed unread, but must never produce a notification.
+      const promptFloor = expected.afterPromptAt ??
+        (expectedUpdatedAt !== undefined && expectedUpdatedAt > 0 ? expectedUpdatedAt : null)
+      // Unreadable (no turn/end at all), stale (a host time at or below the prompt
+      // floor) and — for a prompt-gap probe only — unordered are the cases that must
+      // not classify this run. A **status edge** (afterPromptAt === null) saw the
+      // running→false transition directly, so a tail without a host time still
+      // classifies: a user stop / neutral ending must not arm a false completion,
+      // and a completed one stays reconstructed/observer (never a notification).
+      const staleByPrompt = promptFloor !== null && tail.hostTime !== null && tail.hostTime <= promptFloor
+      const unorderedPromptGap = expected.afterPromptAt !== null && tail.hostTime === null
+      if (tail.turnEnd === null || staleByPrompt || unorderedPromptGap) {
+        // A stale tail cannot classify this run. Keep the pending read for the
+        // next independent baseline instead of settling it as user-stopped or
+        // completed.
+        if (expected.afterPromptAt !== null) {
+          followFailures += 1
+          return
+        }
         // 期限内没有 turn/end ⇒ **读不到确定性尾巴**：与 gateway 的 followTurnEndOnce 同规判 unreadable 并武装，
         // 而不是判 neutral——后者会让「跨缺口完成」在唯一证据缺失时静默丢失。
         // 若该会话紧接着又开跑，status 的 running=true 分支会照 gateway applyBaseline 结算掉这条旧完成。
@@ -538,6 +792,8 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
         return
       }
       const disposition = classifyTurnEndWire(tail.turnEnd)
+      pendingTails.delete(sessionId)
+      if (expected.afterPromptAt !== null) edges += 1
       // 分类与 watcher 同规：completed 武装；用户停止/中立都不武装（但记录尾巴供诊断）。
       const completedAt = disposition === 'completed' ? tail.hostTime ?? now() : null
       const completedAtSource: SessionFactsCompletedAtSource | null = completedAt === null
@@ -555,12 +811,13 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
       })
       emit()
     } catch {
-      if (stopped) return
+      if (stopped || atLifetime !== lifetime) return
       // 读不到尾巴 = 降级：仍武装（绝不丢真完成），并标记 unreadable（与 watcher 同规）。
       // 计数而非静默：这是「观察者在跑但读不到尾巴」的唯一可观测信号。
-      followFailures += 1
-      const row = rows.get(sessionId)
+      const row = currentRow()
       if (row !== undefined) {
+        followFailures += 1
+        if (expected.afterPromptAt !== null) return
         // 没有 host 时间 ⇒ 观察者戳 + reconstructed/observer（诚实标注降级）。
         rows.set(sessionId, {
           ...row,
@@ -573,7 +830,8 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
         emit()
       }
     } finally {
-      pendingReads -= 1
+      if (atLifetime === lifetime) pendingReads -= 1
+      if (readingTails.get(sessionId) === expected) readingTails.delete(sessionId)
     }
   }
 
@@ -586,7 +844,10 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
     const parsed = parseStatusArgs(args)
     if (parsed === null) return
     const { sessionId, running } = parsed
+    missingBaselines.delete(sessionId)
     const previousRunning = runningBefore.get(sessionId)
+    if (running && previousRunning !== true) nextRunVersion(sessionId)
+    if (running) pendingTails.delete(sessionId)
     runningBefore.set(sessionId, running)
     const previous = rows.get(sessionId) ?? emptyRow(sessionId, running, 0)
     rows.set(sessionId, running
@@ -594,7 +855,7 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
       : { ...previous, running: false, factAt: now() })
     if (previousRunning === true && running === false) {
       edges += 1
-      void readTail(sessionId)
+      void readTail(sessionId, markObservedEdge(sessionId))
     } else {
       emit()
     }
@@ -605,9 +866,15 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
     const item = Array.isArray(args) ? args[0] : args
     const row = rowFromListItem(item)
     if (row === null) return
+    missingBaselines.delete(row.sessionId)
     const previous = rows.get(row.sessionId)
+    if (row.running && previous?.running !== true) nextRunVersion(row.sessionId)
+    if (row.running) pendingTails.delete(row.sessionId)
     runningBefore.set(row.sessionId, row.running)
     rows.set(row.sessionId, mergeBaselineRow(previous, row, now()))
+    if (previous !== undefined && !previous.running && !row.running && row.updatedAt > previous.updatedAt) {
+      markPromptGap(row.sessionId, row.updatedAt)
+    }
     emit()
   }
 
@@ -617,10 +884,18 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
     const sessionId = pair[0]
     const updatedAt = pair[1]
     if (typeof sessionId !== 'string' || sessionId === '') return
-    if (typeof updatedAt !== 'number' || !Number.isFinite(updatedAt) || updatedAt <= 0) return
-    const previous = rows.get(sessionId) ?? emptyRow(sessionId, false, 0)
-    if (updatedAt <= previous.updatedAt) return
-    rows.set(sessionId, { ...previous, updatedAt, factAt: now() })
+    if (!isWatermark(updatedAt) || updatedAt === 0) return
+    missingBaselines.delete(sessionId)
+    const previous = rows.get(sessionId)
+    const prior = previous ?? emptyRow(sessionId, false, 0)
+    if (updatedAt <= prior.updatedAt) return
+    if (previous !== undefined && !previous.running) markPromptGap(sessionId, updatedAt)
+    rows.set(sessionId, {
+      ...prior, updatedAt, factAt: now(),
+      ...(previous !== undefined && !previous.running
+        ? { completedAt: null, completedAtSource: null, completedAtDomain: undefined, lastTurnEnd: null }
+        : {}),
+    })
     emit()
   }
 
@@ -628,12 +903,12 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
   function handleRemoved(args: unknown): void {
     const sessionId = Array.isArray(args) ? args[0] : args
     if (typeof sessionId !== 'string' || sessionId === '') return
-    const hadRow = rows.delete(sessionId)
-    runningBefore.delete(sessionId)
+    const hadRow = retireSession(sessionId)
     if (hadRow) emit()
   }
 
   function handleEmit(event: string | undefined, args: unknown): void {
+    if (event?.startsWith('api-session/') === true) eventRevision += 1
     if (event === 'api-session/status') handleStatus(args)
     else if (event === 'api-session/added') handleAdded(args)
     else if (event === 'api-session/activity') handleActivity(args)
@@ -646,7 +921,10 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
     silenceTimer = setTimeout(() => {
       silenceTimer = null
       if (stopped || armedGeneration !== generation) return
-      // 连接在、事件停 ⇒ 重订阅 + 重取基线。
+      // 连接在、事件停 ⇒ 载波恢复：重订阅 + 重取基线。**不**发布内容停顿证据：
+      // 来源级 $events 静默不是本会话的内容进度（assistant 文本走独立 session/follow），
+      // 长生成与别的会话的事件都会让这个信号说谎。页面内容证据只来自真正观测会话
+      // 内容的观察者（gateway facts cursor），见 session-content-stall.ts 注册表。
       reconnects += 1
       connect()
     }, silenceMs)
@@ -667,12 +945,21 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
 
   function connect(): void {
     if (stopped) return
+    // Replacing the carrier invalidates its facts immediately. Waiting for the
+    // next onopen leaves a window where callers trust a dead connection.
+    socketReady = false
+    baselineTrusted = false
+    clearStable()
+    emit()
     if (socket !== null) {
       // 换代。先 +1 再 close——close 可能同步触发旧 socket 的 onclose。
       generation += 1
       const previous = socket
+      cancelFollows()
       socket = null
       clearSilence()
+      clearReconcile()
+      clearStable()
       try {
         previous.close()
       } catch {
@@ -690,50 +977,91 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
       return
     }
     socket = next
+    clearConnectDeadline()
+    connectDeadlineTimer = setTimeout(() => {
+      connectDeadlineTimer = null
+      if (stopped || connectGeneration !== generation || socketReady) return
+      socketErrors += 1
+      failCarrier()
+    }, TABLE_SNAPSHOT.handshakeTimeoutMs)
+    const failCarrier = (): void => {
+      if (stopped || connectGeneration !== generation) return
+      clearConnectDeadline()
+      generation += 1
+      cancelFollows()
+      socket = null
+      socketReady = false
+      baselineTrusted = false
+      clearSilence()
+      clearReconcile()
+      clearStable()
+      emit()
+      try { next.close() } catch { /* Already closed or broken. */ }
+      scheduleReconnect()
+    }
     next.onopen = () => {
       if (stopped || connectGeneration !== generation) return
-      ready = false
+      clearConnectDeadline()
       // 观察者开场：只开 $events；**永不**发 $events/result（不结算任何瀑布）。
-      next.send(openEventsFrame())
+      try { next.send(openEventsFrame()) } catch {
+        socketErrors += 1
+        failCarrier()
+        return
+      }
       armSilence()
+      armReconcile()
       void baseline()
     }
     next.onmessage = event => {
       if (stopped || connectGeneration !== generation) return
       const frame = parseMuxFrame(event?.data)
       if (frame === null) return
+      if (frame.streamId !== 'events') {
+        if (follows.has(frame.streamId)) {
+          if (frame.kind === 'stream-end' || frame.kind === 'stream-error'
+              || (isRecord(frame.value) && frame.value.type === 'error')) settleFollow(frame.streamId, EMPTY_FOLLOW_TAIL)
+          else {
+            const tail = parseFollowTail(frame.value)
+            if (tail.turnEnd !== null) settleFollow(frame.streamId, tail)
+          }
+        }
+        return
+      }
+      if (frame.kind === 'stream-end' || frame.kind === 'stream-error') {
+        // The physical socket can remain open after its $events logical stream
+        // ends. Degrade now, then use the carrier's bounded reconnect backoff.
+        failCarrier()
+        return
+      }
+      if (frame.kind === 'other') return
       lastEventAt = now()
       armSilence()
       if (frame.kind === 'ready') {
-        ready = true
-        // 连上并握手成功 ⇒ 退避复位（下一次断线仍从 1s 起）。
-        reconnectDelayMs = 1_000
+        socketReady = true
+        // A single ready frame is not a stable connection. Repeated logical
+        // stream failures must retain exponential backoff.
+        armStableReconnectReset()
+        // 握手只证明载波可用；事实基线成功前仍必须让运行时边沿负责完成。
         emit()
         return
       }
       // 瀑布只观察，不回答：这里没有任何 send。
       if (frame.kind === 'emit') handleEmit(frame.event, frame.args)
     }
-    next.onclose = () => {
-      if (stopped || connectGeneration !== generation) return
-      // 本代际死亡：+1 让一切迟到回调与在途基线作废，再由下一次连接重新对账。
-      generation += 1
-      socket = null
-      ready = false
-      clearSilence()
-      emit()
-      scheduleReconnect()
-    }
+    next.onclose = failCarrier
     next.onerror = () => {
       if (stopped || connectGeneration !== generation) return
-      // onclose 会跟着来（这里不重复调度），但错误要计数：否则「服务器拒绝」与
-      // 「网络抖」在仪表上长得一样。
+      // Some carriers never deliver onclose after onerror; fail this generation
+      // now and let a later close be ignored by the generation guard.
       socketErrors += 1
+      failCarrier()
     }
   }
 
   function currentStatus(): SourceMuxStatus {
-    return { ready, edges, lastEventAt, pendingReads, reconnects, baselines, baselineFailures, followFailures, socketErrors }
+    return { ready: ready(), edges, lastEventAt, pendingReads,
+      pendingClassifications: pendingTails.size, reconnects, baselines,
+      baselineFailures, followFailures, socketErrors }
   }
 
   return {
@@ -741,25 +1069,44 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
       if (!stopped) return
       stopped = false
       publishSourceMuxInstrument(deps.sourceId, instrument)
-      // 观察者必须先有行才能判定边沿：基线失败也继续（事件仍会带来状态帧）。
-      void baseline()
+      // 基线从连接 open 后取；连接失败时不得宣称已有可信事实。
       connect()
+    },
+    reconcile(): void {
+      if (!stopped) void baseline()
     },
     stop(): void {
       stopped = true
-      ready = false
+      lifetime += 1
+      socketReady = false
+      baselineTrusted = false
       // 代际 +1 作废在途回调；在途 baseline/readTail 的 emit 被 stopped 守卫拦下。
       generation += 1
       if (reconnectTimer !== null) clearTimeout(reconnectTimer)
+      clearConnectDeadline()
       clearSilence()
+      clearReconcile()
+      clearStable()
       reconnectTimer = null
       const current = socket
+      cancelFollows()
       socket = null
       try {
         current?.close()
       } catch {
         // 忽略关闭异常（幂等 stop）。
       }
+      // stop/start on the same observer object is a new subscription lifetime.
+      // Old unary follow replies must not classify rows belonging to it.
+      rows.clear()
+      runningBefore.clear()
+      runVersions.clear()
+      pendingTails.clear()
+      readingTails.clear()
+      missingBaselines.clear()
+      pendingReads = 0
+      lastEventAt = null
+      reconnectDelayMs = 1_000
       // 退役的观察者不得继续以本源的名义出现在观测仪器里。
       unpublishSourceMuxInstrument(deps.sourceId, globalThis, instrument)
     },
@@ -768,4 +1115,3 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
     },
   }
 }
-

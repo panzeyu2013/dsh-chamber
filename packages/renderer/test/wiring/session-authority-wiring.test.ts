@@ -74,6 +74,16 @@ test('completion notifications have one policy entry (P3)', () => {
   assert.match(projection, /export function planFactsNotifications/)
 })
 
+test('the notification association uses the facts host anchor, never the content watermark', () => {
+  // The outbox associates a pending runtime edge with a facts completion through the
+  // host `updatedAt` BOTH sides carry. Passing the content watermark (completedAt ??
+  // updatedAt) as that anchor was the double-banner defect; the API now requires the
+  // anchor object, and this lock pins the one caller's value and its single call.
+  assert.match(unreadHook, /hostUpdatedAt: row\.updatedAt/)
+  assert.match(unreadHook, /associateCompletion\(\s*\n?\s*sourceId, lifecycle\.fingerprint, row\.sessionId, observed,/)
+  assert.match(unreadHook, /pendingSessions\.add\(row\.sessionId\)/)
+})
+
 test('the retained-view unverified-running arm stays wired (design 05)', () => {
   assert.ok(frame.includes('shouldDropUnverifiedRunningFacts('), 'the 90s bound must stay wired to the drop decision')
   assert.ok(frame.includes('...new Set([...stalledSources, ...unverifiedSources])'), 'both banner sources share one visible set')

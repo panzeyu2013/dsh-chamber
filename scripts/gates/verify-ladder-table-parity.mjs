@@ -80,6 +80,29 @@ export const LOCKSTEP = [
     source: 'packages/dsh-chamber-client-ui-mobile/src/client/session-stall.ts',
     name: 'STALL_FAILED_MS',
   },
+  // The Electron frame watchdog cannot import the table (packages/desktop has no
+  // dependency edge to dsh-stream-state), so its constants stay locked to the same
+  // delivery.scheduleProbe leaves the Swift watchdog is locked to.
+  {
+    table: 'tables.ladders.delivery.scheduleProbe.intervalMs',
+    source: 'packages/desktop/renderer-frame-watchdog.ts',
+    name: 'RENDERER_FRAME_PROBE_INTERVAL_MS',
+  },
+  {
+    table: 'tables.ladders.delivery.scheduleProbe.timeoutMs',
+    source: 'packages/desktop/renderer-frame-watchdog.ts',
+    name: 'RENDERER_FRAME_PROBE_TIMEOUT_MS',
+  },
+  {
+    table: 'tables.ladders.delivery.scheduleProbe.strikes',
+    source: 'packages/desktop/renderer-frame-watchdog.ts',
+    name: 'RENDERER_FRAME_MAX_STRIKES',
+  },
+  {
+    table: 'tables.ladders.delivery.scheduleProbe.inputBlockRttMs',
+    source: 'packages/desktop/renderer-frame-watchdog.ts',
+    name: 'RENDERER_INPUT_BLOCK_RTT_MS',
+  },
   // The last surviving copies are retired: the authority probe ladder reads
   // LADDER_TABLES.authority directly, mobile reads LADDER_TABLES.mobile, and open-in
   // reads LADDER_TABLES.streamHealth. The list stays as the guard for any future
@@ -142,6 +165,21 @@ export const CONSUMERS = [
     table: 'tables.ladders.streamHealth',
     source: 'packages/dsh-chamber-client-ui-open-in/src/client/session-stream-health.ts',
     reference: 'LADDER_TABLES.streamHealth',
+    retiredNames: [],
+  },
+  {
+    // The renderer page-level opening recovery owns the loading rebuild; it reads
+    // the same streamHealth ladder, and a local numeric copy turns this gate red.
+    table: 'tables.ladders.streamHealth',
+    source: 'packages/renderer/src/session-open-recovery.ts',
+    reference: 'LADDER_TABLES.streamHealth',
+    retiredNames: [],
+  },
+  {
+    // The delivery ladder reads its tier budgets from the delivery table.
+    table: 'tables.ladders.delivery',
+    source: 'packages/dsh-stream-state/src/delivery-evidence.ts',
+    reference: 'LADDER_TABLES.delivery',
     retiredNames: [],
   },
 ]

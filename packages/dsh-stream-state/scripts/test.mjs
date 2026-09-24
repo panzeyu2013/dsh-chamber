@@ -74,8 +74,6 @@ export const GROUPS = {
     'test/source/source-container.test.ts',
     // session-authority: the single running-bit truth reducer + its scenario corpus.
     'test/authority/session-authority.test.ts',
-    // the shell's load state machine (generation fence).
-    'test/load-state/load-state.test.ts',
     // the prewarm ledgers' events (Set-shaped ledgers need methods, not views).
     'test/source/source-prewarm-ledger.test.ts',
     // G-D: one source id has one live incarnation - stale events are dropped and
@@ -94,6 +92,21 @@ export const GROUPS = {
   // (liveness / reconcile / stream-health / mobile stall) become instances of.
   ladder: [
     'test/ladder/ladder-engine.test.ts',
+  ],
+  // delivery: the identity spine (SessionRunId) and the ONE delivery ladder that
+  // every stall family feeds; the efficacy table records what each tier resets.
+  delivery: [
+    'test/delivery/delivery-evidence.test.ts',
+  ],
+  // injection: the cross-shell fault harness (frame-stop / append-silent /
+  // break-streams) and the carrier open-leg decorator it drives.
+  injection: [
+    'test/injection/injection.test.ts',
+  ],
+  // incident: the one resident incident ring every shell writes into and reads
+  // back through a single global view.
+  incident: [
+    'test/incident/incident.test.ts',
   ],
   // async-op: deadline / retry pacing / bounded wait / single-flight with an
   // injected scheduler - the five hand-written waiting shapes, once.

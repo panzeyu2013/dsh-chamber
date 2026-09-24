@@ -39,8 +39,8 @@ test('reload preserves the cursor, rows, completion classification and read mark
   const stateDir = scratch(t)
   const first = createSessionStateStore({ stateDir, logger: silentLogger, now: () => 100 })
   first.applyBaseline([baselineItem('s1', true, 5)], { at: 100 })
-  first.applyStatus('s1', false, 110)
-  first.settleCompletion('s1', { at: 110, turnEnd: { kind: 'completed', cause: null, at: 110, seq: 7 }, source: 'observed', unreadable: false })
+  const [edge] = first.applyStatus('s1', false, 110)
+  first.settleCompletion(edge!, { at: 110, turnEnd: { kind: 'completed', cause: null, at: 110, seq: 7 }, unreadable: false })
   first.markRead('install-1', 's1', 110, 120)
   first.markAllRead('install-1', 500, 121)
   const cursor = first.status().cursor

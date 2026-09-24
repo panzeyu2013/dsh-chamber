@@ -95,6 +95,8 @@
  *    module table's factory branch, upstream `system.ts` `makeRequire`).
  */
 
+import { monotonicNow } from './monotonic-now.ts'
+
 /**
  * One plugin the composite registered with `ctx.plugin()`, paired with the id
  * it was registered under. `inject` is that plugin namespace's exported cordis
@@ -231,9 +233,7 @@ export const REQUIRED_SERVICE_PROBE_RECHECK_WINDOW_MS = 30_000
  * @returns milliseconds from an arbitrary but non-jumping origin.
  */
 export function monotonicNowMs(source?: { now?(): number }): number {
-  const perf = source ?? (globalThis as { performance?: { now?: () => number } }).performance
-  if (perf !== undefined && typeof perf.now === 'function') return perf.now()
-  return Date.now()
+  return monotonicNow(source)
 }
 
 /**

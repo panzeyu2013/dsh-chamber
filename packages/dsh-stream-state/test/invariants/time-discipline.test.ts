@@ -20,7 +20,6 @@ import { initialCarrierState } from '../../src/state.ts'
 import { CARRIER_ENV } from '../../src/tables.ts'
 import { planLadder, type Ladder } from '../../src/ladder.ts'
 import { decidePresentation, planVeilTimer, type PresentationFacts, type PresentationThresholds } from '../../src/presentation.ts'
-import { initialLoadState, loadIsLate, reduceLoadState, type LoadEnv } from '../../src/load-state.ts'
 import { waitForCondition, withDeadline, type Scheduler } from '../../src/async-op.ts'
 
 const NON_FINITE = [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]
@@ -31,7 +30,6 @@ const THRESHOLDS: PresentationThresholds = {
   surfaceAbsentFallbackMs: 2_000,
 }
 
-const LOAD_ENV: LoadEnv = { probeStrikeLimit: 3, retryLimit: 2, progressSlaMs: 15_000 }
 
 const REAL_SCHEDULER: Scheduler = {
   setTimeout: (run, ms) => setTimeout(run, ms),
@@ -97,17 +95,6 @@ test('a non-finite presentation clock holds the veil with a finite deadline', ()
   assert.equal(nanWait.veil, 'held')
   assert.ok(Number.isFinite(nanWait.releaseAtMonoMs), 'a held frame must carry a finite release deadline')
   assert.ok(planVeilTimer(nanWait, 0) > 0, 'a held frame must never arm a 0 ms timer')
-})
-
-test('loadIsLate is false on a non-finite, rolled-back or terminal clock', () => {
-  let state = reduceLoadState(initialLoadState(), { kind: 'generationStarted', generation: 1, at: 0 }, LOAD_ENV).state
-  state = reduceLoadState(state, { kind: 'loadStarted', generation: 1, at: 1_000 }, LOAD_ENV).state
-  for (const now of NON_FINITE) {
-    assert.equal(loadIsLate(state, now, LOAD_ENV), false, 'loadIsLate(' + String(now) + ')')
-  }
-  assert.equal(loadIsLate(state, 0, LOAD_ENV), false, 'a clock that went backwards must not read late')
-  const loaded = reduceLoadState(state, { kind: 'contentAlive', generation: 1, at: 2_000 }, LOAD_ENV).state
-  assert.equal(loadIsLate(loaded, Number.MAX_SAFE_INTEGER, LOAD_ENV), false, 'a settled shell is never late')
 })
 
 test('withDeadline never arms a timer for a non-finite or negative bound', async () => {

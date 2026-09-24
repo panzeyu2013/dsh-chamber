@@ -480,6 +480,11 @@ export interface SystemResumeSurface {
   onResume(callback: (payload: { timestamp: number }) => void): () => void
 }
 
+/** Renderer-stall evidence push (frame-probe strikes / input-block RTT). */
+export interface RendererStallSurface {
+  onEvidence(callback: (observation: { scheduleStrikes: number; inputBlockStrikes: number; at: number }) => void): () => void
+}
+
 /**
  * The open-in surface (open-in.ts): apps() is the registry capability
  * negotiation — the full app list in fixed order with id / remoteCapable /
@@ -542,6 +547,7 @@ export interface NotificationRequest {
    *  事件必须传同一个值（主进程 5s 去重键含水位：同水位合并、不同水位是新事件）。
    *  缺省 = 旧调用方，主进程按四元组行为处理。 */
   watermark?: number
+  eventKey?: string
 }
 
 /** 通知点击打开事件的载荷（design 19 §3.3）：渲染端据此 openSession。 */
@@ -563,7 +569,7 @@ export interface NotificationOpenRequest {
  *  opens the macOS notification pane (recovery entry after a denied permission,
  *  the only remedy macOS offers once the status is denied). */
 export interface NotificationSurface {
-  notify(payload: NotificationRequest): Promise<{ shown: boolean; error?: string }>
+  notify(payload: NotificationRequest): Promise<{ shown: boolean; outcome: 'shown' | 'suppressed' | 'retryable' | 'permanent'; error?: string }>
   ready(): Promise<boolean>
   /** Commit only after App has accepted/queued this exact click. */
   ack(deliveryId: number, attempt: number): Promise<boolean>
@@ -593,6 +599,7 @@ export interface DshChamberBridge {
   update: UpdateSurface
   settings: SettingsSurface
   systemResume: SystemResumeSurface
+  rendererStall: RendererStallSurface
   openIn: OpenInSurface
   deepLink: DeepLinkSurface
   runtime: RuntimeSurface
@@ -744,6 +751,17 @@ function systemResumeApi(): SystemResumeSurface {
       const listener = (_event: IpcRendererEvent, payload: { timestamp: number }) => callback(payload);
       ipcRenderer.on('dsh-chamber:system-resume', listener);
       return () => ipcRenderer.removeListener('dsh-chamber:system-resume', listener);
+    },
+  };
+}
+
+function rendererStallApi(): RendererStallSurface {
+  return {
+    onEvidence: callback => {
+      if (typeof callback !== 'function') return () => {};
+      const listener = (_event: IpcRendererEvent, payload: { scheduleStrikes: number; inputBlockStrikes: number; at: number }) => callback(payload);
+      ipcRenderer.on('dsh-chamber:renderer-stall-evidence', listener);
+      return () => ipcRenderer.removeListener('dsh-chamber:renderer-stall-evidence', listener);
     },
   };
 }
@@ -923,6 +941,7 @@ requestAppInfo().then(
       update: updateApi(),
       settings: settingsApi(),
       systemResume: systemResumeApi(),
+      rendererStall: rendererStallApi(),
       openIn: openInApi(),
       deepLink: deepLinkApi(),
       runtime: runtimeApi(),
@@ -941,6 +960,7 @@ requestAppInfo().then(
       update: updateApi(),
       settings: settingsApi(),
       systemResume: systemResumeApi(),
+      rendererStall: rendererStallApi(),
       openIn: openInApi(),
       deepLink: deepLinkApi(),
       runtime: runtimeApi(),

@@ -201,7 +201,7 @@ test('the aligned launch semantics are unchanged (250ms busy dress, 2s error, in
   const chooseAt = pick[0].indexOf('choose(id)')
   const inFlightAt = pick[0].indexOf('if (inFlight.current) return')
   assert.ok(inFlightAt !== -1 && chooseAt > inFlightAt, 'a pick during an in-flight launch is still ignored whole')
-  assert.ok(button.includes('if (!result.ok)') || button.includes('if (result.ok)'), 'the launch result gate stays')
+  assert.ok(button.includes('if (result.ok)'), 'the launch result gate stays')
 })
 
 /**
@@ -233,16 +233,46 @@ test('stream-health seat: registered before the open-in gates, ladder state in t
   assert.match(seat, /previousOf = \(sessionId: string\): string \| undefined => previousPresented\(presented, sessionId\)/)
 })
 
-test('stream-health seat: only the evidence-gated auto rebuild, and the click is never ledger-gated', () => {
+test('stream-health seat: the page delivery owner owns the automatic rebuild, header retains the manual exit', () => {
   assert.match(seat, /resyncAvailable: hasSessionStreamResync\(sessions, sessionId\)/)
-  assert.match(seat, /openInFlight: sessionOpenInFlight\(sessions, sessionId\)/)
+  const policy = stripComments(source('../../src/client/session-stream-health.ts'))
+  assert.doesNotMatch(policy, /auto-resync/)
   assert.match(seat, /if \(plan\.action === 'heal'\) \{/)
-  assert.match(seat, /else if \(plan\.action === 'auto-resync'\) \{/)
+  assert.doesNotMatch(seat, /plan\.action === 'auto-resync'/)
   assert.doesNotMatch(seat, /plan\.action === 'resync'/)
-  assert.equal([...seat.matchAll(/resyncSessionStream\(/gu)].length, 2,
-    'two resync execution paths: the auto arm and the injected user action')
-  assert.match(seat, /resyncSessionStream\(sessions, sessionId\)\n\s*state = markSessionStreamHeal\(state, now\)/,
-    'the automatic rebuild must be accounted against the ledger')
+  assert.equal([...seat.matchAll(/resyncSessionStream\(/gu)].length, 1,
+    'the header retains only its injected user action')
+  const page = stripComments(source('../../../renderer/src/components/InstanceView.tsx'))
+  // The automatic rebuild moved to the page-level delivery owner (one ladder, one
+  // ledger); the retired planner must never return to the view.
+  assert.doesNotMatch(page, /planSessionOpenAutoRebuild\(/)
+  // Pin the FULL call, arguments included: dropping the monotonic `at` argument
+  // makes the streak NaN, which disables every afterMs gate while name-only locks
+  // and the pure-module tests stay green.
+  assert.match(page, /activeSymptomSinceMs\(\{/)
+  // Desktop-observed paint/schedule evidence must reach the same owner.
+  assert.match(page, /readRendererStallStrikes\(/)
+  assert.match(page, /scheduleStalled: true/)
+  assert.match(page, /inputBlocked: true/)
+  // The upper tiers must have real executors, or stuckEvidence only burns quota.
+  assert.match(page, /decision\.action\?\.tier === 'instance-reboot'/)
+  assert.match(page, /onRebootInstance\?\.\(instanceId\)/)
+  assert.match(page, /decision\.action\?\.tier === 'document-reload'/)
+  assert.match(page, /shouldReloadDocument\(documentReloadBudgetStorage\(\), Date\.now\(\)\)/)
+  // The ladder ledger must survive the reboot it authorized, or every boot gets a
+  // fresh quota and the page reboots forever (page-lifetime owner).
+  assert.doesNotMatch(page, /useEffect\(\(\) => \{\s*deliveryOwnerRef\.current = createSessionDeliveryOwner\(\)/)
+  assert.match(page, /const deliveryOwnerRef = useRef\(createSessionDeliveryOwner\(\)\)/)
+  assert.match(page, /deliveryOwnerRef\.current\.observe\(/)
+  // The error face the header cannot heal (an address-only subagent selection, a
+  // masked target) must reach the owner with the positive "no stage move" fact,
+  // which is what lets the page's own bounded resync recover it automatically.
+  assert.match(page, /healRoute: observed\.healRoute/)
+  const shellSource = stripComments(source('../../../renderer/src/shell.ts'))
+  assert.match(shellSource, /healRoute: hasHealRoute\(sessions, sessionId\)/,
+    'the page health read must derive the route from the guarded probe, never infer it')
+  assert.match(page, /decision\.action\?\.tier === 'resync'/)
+  assert.match(page, /rebuildInstanceSessionStream\(instanceId, currentSessionId\)/)
   assert.doesNotMatch(seat, /if \(!sessionStreamLeversAvailable\(current, now\)\) return/,
     'the manual exit must survive an exhausted automatic budget')
   assert.match(seat, /resync: \(sessionId\) => \{/)
