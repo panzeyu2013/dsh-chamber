@@ -4,7 +4,7 @@
  * state/helpers arrive through ShellIpcCtx, the assembly-side deps through
  * ctx.deps.ctx.
  */
-import type { ShellIpcCtx } from './shell-core.ts'
+import type { ShellIpcCtx } from './shell-ipc-ctx.ts'
 import type { ConnectionCredentialMutations } from './connection-save.ts'
 import type { GatewaySessionOrigin } from './gateway-session.ts'
 import type { TransportInstanceInput, TransportInstanceSpec } from './transport-provider.ts'

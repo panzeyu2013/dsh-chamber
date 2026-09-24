@@ -1,7 +1,7 @@
 /**
  * shell-ipc-plugins-gateway — domain IPC registrations
  */
-import type { ShellIpcCtx } from './shell-core.ts'
+import type { ShellIpcCtx } from './shell-ipc-ctx.ts'
 import { INSTANCE_ID_PATTERN } from './transport-manager.ts'
 import { IPC_CHANNELS } from './ipc-events.ts'
 import { buildApplyConfirmMessage, validateApplyPayload } from './gateway-ipc-shared.ts'

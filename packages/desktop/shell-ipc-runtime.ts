@@ -1,7 +1,7 @@
 /**
  * shell-ipc-runtime — domain IPC registrations
  */
-import type { ShellIpcCtx } from './shell-core.ts'
+import type { ShellIpcCtx } from './shell-ipc-ctx.ts'
 import type { StartupResult } from '@dsh-chamber/dsh-runtime'
 import { IPC_CHANNELS } from './ipc-events.ts'
 import { cleanupExplicitRuntimeVersion, clearRuntimeFailure, isSafeVersion, listExplicitlyInstalledVersions, listPreRollbackStashes, listRuntimeFailures, queueActivationIntent, readActivationJournalState, readOverrideState, restoreMarkerAuthorityStatus, restorePreRollback, writeActivationIntent, writeOverride } from '@dsh-chamber/dsh-runtime'

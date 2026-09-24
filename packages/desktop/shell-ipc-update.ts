@@ -1,7 +1,7 @@
 /**
  * shell-ipc-update — domain IPC registrations
  */
-import type { ShellIpcCtx } from './shell-core.ts'
+import type { ShellIpcCtx } from './shell-ipc-ctx.ts'
 import { IPC_CHANNELS } from './ipc-events.ts'
 import { attemptCommittedRegistryPush } from './transport-manager.ts'
 import { describeError } from './describe-error.ts'

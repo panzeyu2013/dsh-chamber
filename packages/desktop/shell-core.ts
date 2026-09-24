@@ -186,12 +186,12 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import type { ChamberHostPackageDescriptor } from './control-plane-module.ts';
 import { findFreePort } from './free-port.ts';
 import { computeSupported } from './chamber-settings.ts';
 import { createKeyedMemo, lockfileIdentityKey } from './lockfile-facts-memo.ts';
 import type { ChamberSettings, ChamberSettingsStatus } from './chamber-settings.ts';
-import { attemptCommittedRegistryPush, type TransportManager } from './transport-manager.ts';
+
+import { attemptCommittedRegistryPush } from './transport-manager.ts';
 import { IPC_CHANNELS } from './ipc-events.ts';
 // Domain registrars (order of the calls below is the registration order).
 import { registerConnectionHandlers } from './shell-ipc-connections.ts';
@@ -206,8 +206,6 @@ import type { NotificationOpenIntent, NotificationSourceToken } from './notifica
 import { type TransportInstanceSpec } from './transport-provider.ts';
 import { getSshPassword } from './ssh-provider.ts';
 import { gatewaySecretStorageCrossFlavorUnreadable, gatewaySecretStorageMode, getGatewayPassword, getGatewayToken } from './gateway-provider.ts';
-import { type GatewaySessionManager } from './gateway-session.ts';
-import type { AuditEvent } from './audit-log.ts';
 import { adjudicateBadgeCount, badgePlatformGate } from './badge.ts';
 import {
   BoundedAckDeliveryQueue,
@@ -228,7 +226,6 @@ import { isDeepLinkUrl } from './deep-link-scheme.ts';
 // 只调用纯 URL 白名单 + 宿主叶路径）。update 面只做**类型** import（UpdateController
 // 结构纯类型，无 electron 依赖——实例本体仍在 main 装配侧构造、经 ctx 注入）。
 import type { OpenInLaunchContext } from './open-in.ts';
-import type { UpdateController } from './updater.ts';
 
 /** macOS「系统设置 → 通知」面板深链（Ventura+ 的 Notifications 扩展）。
  *  固定常量、只由 OPEN_NOTIFICATION_SETTINGS 注册体使用——renderer 不能传
@@ -237,27 +234,6 @@ export const MACOS_NOTIFICATION_SETTINGS_URL =
   'x-apple.systempreferences:com.apple.Notifications-Settings.extension';
 import { BoundedRateLimiter, MAX_PENDING_NOTIFICATION_OPENS, NotificationSourceIncarnations, NotificationSourceProofs } from './notifications.ts';
 import { readCurrentPointerState, readOverrideState, shouldInvalidate, validateVersionTree } from '@dsh-chamber/dsh-runtime';
-// J 组 6 注册体直 import 的 @dsh-chamber/dsh-runtime
-// 纯逻辑（electron-free 共享核）；控制器现实例与
-// fence/门/宿主叶经 ctx 注入（实例态与装配期单写者归 main 装配侧）。
-import type { RuntimeAction, RuntimeOperationFence } from '@dsh-chamber/dsh-runtime';
-// K 组 6 注册体直 import 的 @dsh-chamber/dsh-runtime
-// 纯逻辑（electron-free 共享核——activation intent/journal/override 的持久化写与
-// pre-rollback stash 的只读/恢复、restore marker 权威读）；
-// StartupResult / ActivationJournalState 为类型面（ctx 宿主叶签名与 K 组
-// 段内联事务注解用）。启动事务宿主（runRuntimeStartup 等）与共享闭包经 ctx
-// 注入——实例态与装配期单写者归 main 装配侧。
-import type { ActivationJournalState, StartupResult } from '@dsh-chamber/dsh-runtime';
-// apply-now-gate.ts 为 electron-free 纯模块（主进程侧 RUNTIME_APPLY_NOW
-// 注册体的纯门矩阵——evaluateApplyNowGate 直 import；其输入构造 readApplyNowGateInput
-// 读 controlPlane/env/事务槽等装配侧状态，经 ctx 注入，见 ShellAssemblyCtx）。
-import type { ApplyNowGateInput } from './apply-now-gate.ts';
-// dsh-runtime-controller.ts 为 electron-free 纯编排模块（只 import
-// @dsh-chamber/dsh-runtime + sanitize-error，零 electron）——core 只做**类型**
-// import（DshRuntimeController / RuntimeLifecycleProjection 为结构纯类型面；
-// 注册体返回的 state 形状经控制器方法类型推断，无需另行具名）；
-// 控制器现实例在 main 装配侧构造、经 ctx.runtimeController 注入。
-import type { DshRuntimeController, RuntimeLifecycleProjection } from './dsh-runtime-controller.ts';
 // F 组编排纯模块直接 import——plugin-sync /
 // ssh-apply-rows / plugin-tarball 均为 electron-free 纯模块（无 electron、
 // 无 shell-core 反向依赖）。ssh-plugin-journal /
@@ -265,7 +241,7 @@ import type { DshRuntimeController, RuntimeLifecycleProjection } from './dsh-run
 // chamberHostPackageSeeds / 目标闭包束）经 ctx 注入——自动
 // seed/撤销路径与 F 组注册体必须共享同一实例（单写者/单飞语义不分叉）。
 import { portableChamberHostPackageSeeds, shouldPreferPinnedRuntimeLockfile, WEB_PROFILE } from './plugin-sync.ts';
-import type { ChamberHostPackageSeed, ExactOwnershipRegistry, ExecFn, PluginProtectionFacts, RemoteSpec, StatusFn } from './plugin-sync.ts';
+import type { ChamberHostPackageSeed, PluginProtectionFacts } from './plugin-sync.ts';
 // 插件受保护集合判定（design 21 §6.11）：F 来源解析与装后
 // 族一致性复验是 control-plane-module 的纯函数——core 直接 import；事实输入经
 // ctx（builtinDshWorkspacePath / pinnedRuntimeLockfilePath / bundledRuntimeVersion，
@@ -276,8 +252,16 @@ import {
   resolveRuntimeFamily,
   verifyProfileFamilyConsistency,
 } from './control-plane-module.ts';
-import type { SshPluginJournal } from './ssh-plugin-journal.ts';
 
+// —— Extracted seam types (R4 P7 type-cycle break; leaf headers carry the contract).
+import type { HostEdges } from './host-edges.ts';
+export type { HostEdges, HostMessageOptions, HostPluginSourcePick, HostSetBadgeResult, NativeNotificationSpec } from './host-edges.ts';
+export type { NotificationOpenIntent, NotificationSourceToken } from './notifications.ts';
+export type { IpcRegistrar, ShellAssemblyCtx, SshPluginTarget } from './shell-assembly-ctx.ts';
+import type { ShellIpcCtx, ShellIpcDeps } from './shell-ipc-ctx.ts';
+export type { ShellIpcCtx } from './shell-ipc-ctx.ts';
+import type { ProjectedRegistryInstance } from './registry-projection.ts';
+export type { ProjectedRegistryInstance } from './registry-projection.ts';
 // Control-plane port (design 05 §3.3): the packaged app keeps the documented
 // default 17500; the dev launcher (electron-dev.mjs) runs with an isolated
 // user-data dir, so its control plane must also avoid the packaged app's port.
@@ -611,198 +595,6 @@ export function localDshHomeDir(userData: string): string {
   return path.join(userData, 'state', 'dsh-home');
 }
 
-// HostEdges — the host side-effect seam (design 25 §4.1).
-// Core business code reaches every Electron/host side effect ONLY through
-// this injected interface. The Electron main process implements it in
-// electron-edges.ts (createElectronEdges — the rendererPush
-// leaf); the Swift-native
-// flavor will implement the same seam over the B bridge (node-edges.ts).
-// Electron-free by construction: member types are strings/numbers/booleans/
-// Promises/local structural types — never electron types,
-// and no IPC registration or bare channel literals live here. Member-level
-// deviations from the design 25 §4.1 draft are annotated per member (v2
-// field set per design 25 §0.1 rows A10/B1/B3/B4/B9/B11/D3).
-
-/** 原生通知 open intent / 来源代际 token（design 19 §3.3）——re-export 自纯逻辑
- *  模块 notifications.ts（electron-free，结构类型可直接跨 core/edges 使用）。 */
-export type { NotificationOpenIntent, NotificationSourceToken };
-
-/** 原生通知构造规格（§4.1 NativeNotificationSpec 的最小结构形态：通知叶
- *  new Notification({title, body, silent, sound…}) 所需字段；平台分支
- *  （macOS sound 等）属实现侧）。 */
-export interface NativeNotificationSpec {
-  title: string
-  body: string
-  silent?: boolean
-  sound?: string
-}
-
-/** dialog.showMessageBox 选项（最小结构形态：按现用调用点
- *  type/title/message/detail/buttons/defaultId/cancelId/noLink 收口）。 */
-export interface HostMessageOptions {
-  type?: 'none' | 'info' | 'error' | 'question' | 'warning'
-  title?: string
-  message: string
-  detail?: string
-  buttons?: string[]
-  defaultId?: number
-  cancelId?: number
-  noLink?: boolean
-}
-
-/** 插件源一体化 picker 结果（E8/A10：插件源 folder|.tgz，无 pickDirectory）。
- *  与 §4.1 草案 {kind:'folder'|'tgz';path}|null 的偏差：v2 以 status 判别
- *  cancelled/picked（path 非空即 picked；folder|tgz 的 kind 归实现/调用侧按
- *  design 21 §10 ⑧ 判定）。 */
-export type HostPluginSourcePick =
-  | { status: 'cancelled' }
-  | { status: 'picked'; path: string };
-
-/** badge 应用结果。与 §4.1 草案 setBadge(count): boolean 的偏差：v2 用判别
- *  形态区分「已应用」与「未应用 + 原因」（reason 取 string）。 */
-export type HostSetBadgeResult =
-  | { applied: true }
-  | { applied: false; reason: string };
-
-/** HostEdges — core 侧唯一可见的宿主边沿契约（design 25 §4.1 v2 字段集）。
- *  notifyClicked 与 resolveResource 两个**零消费者**成员不在契约内——Swift
- *  宿主对 notifyClicked（经 notify 到达）判为
- *  unexpected 并 loud 忽略、resolveResource 在两侧都恒不可达（core Pick 不含、
- *  无调用方），保留它们等于保留一条语义不同、无法锁步的死面。hostFacts 的
- *  resources 推送不被消费（Swift 侧可继续推送，未知事实键按前向兼容
- *  忽略）。
- *  electron-edges.ts 头注释列出已实现集合；每个成员标注其设计行来源，
- *  未实现前 core/main.ts 不得调用（Pick 收窄在编译期保证）。 */
-export interface HostEdges {
-  /** 主窗口渲染器 push 叶：channel 为 opaque
-   *  通道名（Electron 侧恒为 IPC_CHANNELS 常量值），payload 为纯非秘密投影；
-   *  返回 false = 当前无存活主窗（单窗身份），调用侧自行折算失败语义。 */
-  rendererPush(channel: string, payload: unknown): boolean
-  // —— 原生显示/系统集成 ——
-  /** 构造并显示原生通知（B4：宿主对象登记/淘汰/evict 全留实现侧私有）。clickRoute
-   *  携带 click 回灌路由——null = 'test'
-   *  通知（无会话上下文，原生 click 只恢复窗口）；否则宿主 click 腿在宿主内先
-   *  activate/restore/focus 主窗口（无窗则重建，showMainWindow 语义），成功后才
-   *  回调 onActivated（core 的 owns+入队闭包——来源代际校验在 core）。honest-show
-   *  结算（showNativeNotificationHonestly 语义）在实现侧内部执行；返回句柄的
-   *  shown 暴露结算结果（NOTIFY IPC 返回值与 claim 释放依赖它），dispose 注销
-   *  click 回执（注销后该通知的后续 click 只恢复窗口）。实现侧不 throw——构造/
-   *  登记/监听失败一律结算为 shown:false 且登记清理内部完成。
-   *  macOS 授权在 Electron 侧无可查询/可申请 API，实现
-   *  侧只能把 OS 拒绝投递（failed）与限时无回执（timeout）如实映成带原因文本
-   *  的 shown:false（notifications.describeNativeNotificationFailure）；预检
-   *  查询/申请面的缺失登记为精确残余（见 electron-edges showNativeNotification），
-   *  绝不冒充「已授权但普通失败」。 */
-  showNativeNotification(
-    spec: NativeNotificationSpec,
-    clickRoute: { token: NotificationSourceToken; onActivated(): void } | null,
-  ): { dispose(): void; shown: Promise<{ shown: true } | { shown: false; error: string }> }
-  /** Notification.isSupported 平台探测（异常安全由实现侧保证）。 */
-  notificationSupported(): boolean
-  /** 未读徽标 apply 叶（design 19 §3.7；E5——平台门与 badgeEnabled 裁决留 core
-   *  badge.ts：core 以 badgePlatformGate(platform, badgeCountApiAvailable())
-   *  先裁决、supported 后才调用本叶）：异常安全，绝不 throw。 */
-  setBadge(count: number): HostSetBadgeResult
-  /** app.setBadgeCount API 可用性事实（badgePlatformGate 第二参；win32 的平台
-   *  原因由 core 侧平台门区分）。 */
-  badgeCountApiAvailable(): boolean
-  /** 托盘可用性（design 14 D1 恢复入口判定）。 */
-  trayAvailable(): boolean
-  /** keep-awake（design 14 D5）：powerSaveBlocker prevent-app-suspension
-   *  start/stop（blocker id 属实现侧宿主态）。 */
-  setKeepAwake(on: boolean): void
-  /** 系统 resume 事件订阅（design 14 D4；held-resume 补发点在 core）。 */
-  onSystemResume(cb: (timestamp: number) => void): void
-  /** 主窗口 'show' 事件订阅（B9：held-resume/通知补发点）。 */
-  onMainWindowShown(cb: () => void): void
-  /** 任一窗口是否聚焦（通知裁决的窗口焦点事实）。 */
-  isFocused(): boolean
-  /** 通知 click 激活腿（D3）：restore+focus，无窗则重建，完成后 resolve。 */
-  focusMainWindow(): Promise<void>
-  /** 渲染器可用性门（B3）：webContents 是否仍在加载。实现侧窗口守卫：无主窗/
-   *  已销毁视同加载中（投递门恒不通过）。 */
-  webViewLoading(): boolean
-  /** 渲染器可用性门（B3）：webContents 是否存活（非 crashed/destroyed）。 */
-  webViewContentAlive(): boolean
-  /** 主窗口存在性门（B3 族）：win!=null 且未销毁——隐藏到
-   *  托盘/后台的窗口仍为 true（与 loading/alive 区分：窗口在但不一定可用）。
-   *  rendererPush 返回 false 与 mainWindowAlive() 为 false 语义等价。 */
-  mainWindowAlive(): boolean
-  /** 来源退役驱逐（B4 registry 私有）：注册表退役路径把
-   *  sourceId ∈ retiredSourceIds 的活跃原生通知关闭并注销（click 回执随对象
-   *  消亡），返回驱逐数。 */
-  retireNotificationsForSources(retiredSourceIds: ReadonlySet<string>): number
-  // —— 打开/拉起 ——
-  /** shell.openExternal 叶（B11：URL 白名单判定/预算/冷却/规范化留 core）。 */
-  openExternal(url: string): Promise<void>
-  /** shell.openPath 叶（打开本地路径，失败 loud）。 */
-  openPath(p: string): Promise<void>
-  /** shell.showItemInFolder 叶（Finder 揭示）。 */
-  showItemInFolder(p: string): void
-  /** open-in 原生拉起（design 25 §5 E12）。 */
-  launchApp(appId: string, path: string): Promise<boolean>
-  // —— 对话框 ——
-  /** 插件源一体化 picker（E8/A10：folder|.tgz；design 21 §10 ⑧）。 */
-  pickPluginSource(): Promise<HostPluginSourcePick>
-  /** dialog.showErrorBox 包装。 */
-  showError(title: string, detail: string): void
-  /** dialog.showMessageBox 包装（与草案 Promise<buttonId> 的偏差：buttonId
-   *  收敛为 number = showMessageBox response）。 */
-  showMessage(opts: HostMessageOptions): Promise<number>
-  // —— 系统/身份/资源 ——
-  /** 登录项开关（setLoginItemSettings）。 */
-  setLoginItem(enabled: boolean): void
-  /** app.isPackaged 能力位（B1）。 */
-  isPackaged: boolean
-}
-
-// Renderer delivery state machines.
-// 渲染器侧队列状态机（design 16 §4.2 / design 19 §3.3 /
-// design 14 D4）：pendingRendererIntents + deepLinkRendererReady + drain、
-// pendingNotificationOpens + notificationOpenDrainReady + drain、来源代际/
-// 证明实例（notificationSourceIncarnations / NotificationSourceProofs）、held
-// lastResume 补发、badge 意图 holder。本段是 core 业务状态（非宿主状态）——
-// 「状态一律参数化、绝不模块作用域读」的例外：装配侧窗口
-// glue / open-in IPC / 深链消费循环与 installIpcHandlers 必须共享同一实例。
-// 单装配不变式：installIpcHandlers 每进程恰一次、先于任何窗口/渲染器事件（
-// 调用点纪律：whenReady 内、createMainWindow 之前），装配时把 HostEdges 投递
-// 子集（deliveryEdges）与 quit 门（quittingLeaf）快照进本段——此后所有导出
-// 入口可用。Electron-free 不变式不变：本文件零 electron import，投递 send 叶
-// 一律 edges.rendererPush、窗口事实一律 edges 门。
-// 决策注记（逐条）：
-// - drainPendingRendererDeepLinkIntents / drainPendingNotificationOpens：
-//   send 叶 = edges.rendererPush(IPC_CHANNELS.DEEP_LINK_INTENT /
-//   NOTIFICATION_OPEN,…)，requeue/rollback/ACK/ready 位语义；窗口身份
-//   复查折算为「投递门只对当前主窗求值」——所有 drain
-//   触发点（glue 的 mainWindow===win 守卫 / trusted IPC = 当前主窗 / 入队调用）
-//   都锚定当前主窗，mid-drain 的 Electron 同步拆除竞态由每项 edges 门复检兜住；
-//   ready 位只在投递失败时复位（= 「仅发送失败的窗口失去握手」语义——单窗下
-//   该窗即当前主窗，且 ready 位只由当前主窗的 trusted IPC 置位，无条件复位安全）。
-// - enqueueRendererDeepLinkIntent：导出（main.ts 的 open-in IPC 与深链
-//   消费循环调用；签名与语义不变）。
-// - enqueueNotificationOpen：唯一调用方 = NOTIFY 流构造的 click 回灌
-//   闭包（见 installIpcHandlers；不导出）。
-// - captureVscodeSource：**在 main.ts**（依赖 transportManager registry 查
-//   找 = 装配侧所有物；代际捕获经导出的 captureNotificationSource 代理）。
-// - notificationSourceIncarnations / NotificationSourceProofs 实例（NOTIFY
-//   流、入队 owns 校验与 registry 退役共用；main.ts 侧经导出的 capture / owns /
-//   matches / project / sync 入口访问）。
-// - held lastResume 补发（handleSystemResume / handleMainWindowShown +
-//   pushHeldSystemResume 经 edges.rendererPush 推送 SYSTEM_RESUME——committed
-//   push 包装）；订阅点 = installIpcHandlers ① 段注册
-//   edges.onSystemResume / onMainWindowShown。传输层唤醒重探
-//   （reconnectStaleTransports）在 main 装配侧另挂 powerMonitor 监听。
-// - badge 意图 holder（BADGE_COUNT 注册体；平台门 = badgePlatformGate
-//   (platform, edges.badgeCountApiAvailable()) 在 core——E5「门控逻辑留
-//   core」）；quit 兜底清除经 clearBadgeIntentForQuit 导出（main will-quit
-//   调用，原生清除叶由调用侧注入）。
-// - ready 位挂钩收敛为 onRendererLifecycle(event) 单一入口：did-start-loading /
-//   did-finish-load / crashed / closed 由 main 窗口 glue 调用（每处先做
-//   mainWindow===win 身份守卫）；'show'（held-resume 补发点）经
-//   edges.onMainWindowShown → handleMainWindowShown，不占本入口。
-
-/** 投递状态机实际使用的 HostEdges 子集（装配时自 installIpcHandlers 的
- *  deps.edges 快照——见上「单装配不变式」）。 */
 type DeliveryEdgeSet = Pick<
   HostEdges,
   'rendererPush' | 'mainWindowAlive' | 'webViewLoading' | 'webViewContentAlive'
@@ -1137,25 +929,6 @@ export function projectNotificationSourceInstances(
   return notificationSourceProofs.replaceRemoteInstances(instances);
 }
 
-// registry 读时非秘密投影链。
-// sshPasswordSet/tokenSet/passwordSet 为凭据**存在性**布尔标记（读侧只判
-// null——写入口经 ssh/gateway-provider 模块直调，值绝不回读进载荷或日志）；
-// secretStorage 是凭据镜像的存储模式投影（'safeStorage' | 'plaintext'）。
-// main.ts 的 publishRegistryTransition（registry 生命周期 sidecar，经 ctx
-// 注入）沿用本模块导出——core→main 单向依赖：
-// 注册表投影先经 projectNotificationSourceInstances 挂来源证明，再经
-// projectInstanceSecrets 挂凭据存在性标记。
-export type ProjectedRegistryInstance = TransportInstanceSpec & {
-  sshPasswordSet: boolean
-  tokenSet: boolean
-  passwordSet: boolean
-  secretStorage: ReturnType<typeof gatewaySecretStorageMode>
-  /** 非秘密投影：凭据镜像由 Electron flavor 以 safeStorage 写出，本
-   *  Electron-free 进程无壳 Keychain 适配器、无法解密（文件原地保留、条目
-   *  fail closed）。renderer 据此给出「跨 flavor 凭据不可读」的精确提示。 */
-  secretStorageUnreadable?: boolean
-}
-
 /** 单行凭据存在性投影（设计 17 §2.3/§9.1/§13.4.1：registry 保持无凭据元数据；
  *  标记只在行当前使用的凭据维度上为 true——sshPasswordSet 仅对 SSH 传输行）。 */
 export function projectInstanceSecrets(instance: TransportInstanceSpec): ProjectedRegistryInstance {
@@ -1391,451 +1164,7 @@ export function runRuntimeCheckCycle(): void {
 //     dsh-runtime 纯逻辑与 evaluateApplyNowGate 直接 import，确认对话框复用 J 组段
 //     confirmRuntimeMutation）。
 
-/** IPC 注册面：core 经它注册处理器（channel 为 opaque 通道名；Electron 侧
- *  装配为 `(ch, h) => ipcMain.handle(ch, trustedIpc(h))`——trustedIpc 围栏在
- *  注入点包装，Swift sidecar flavor 注入同形 B 桥注册）。 */
-export interface IpcRegistrar {
-  handle(channel: string, handler: (payload: unknown) => Promise<unknown> | unknown): void
-}
-
-/** ssh 插件管理目标（F 组注册体的解析结果形状）：spec = plugin-sync
- *  RemoteSpec（registry id + remoteDshHome），fingerprint = main 装配侧
- *  operationalFingerprint（id 稳定编辑推进），sourceToken = 来源代际 token
- *  （F 组 owns 复验与 C 组来源证明同一代际面）。main.ts 的私有 RemoteTarget
- *  与此结构同形——ctx 闭包按结构赋值兼容。 */
-export interface SshPluginTarget {
-  spec: RemoteSpec
-  fingerprint: string
-  sourceToken: NotificationSourceToken
-}
-
-/** 元数据恢复可恢复状态联合（ctx 签名用）——与 main.ts whenReady 内
- *  同名局部类型同构（结构等价，宿主叶赋值兼容；core 不持有额外形状）。 */
-type RecoverableMetadataStatus = 'selection-corrupt' | 'recovery-in-progress' | 'recovery-marker-corrupt'
-
-/** ShellAssemblyCtx — installIpcHandlers 装配上下文。最小集原则：只放注册体
- *  实际引用的字段。核心字段：transportManager / audit / gatewaySessions /
- *  publishRegistryTransition（宿主生命周期权威在 main，见字段注释）；
- *  localDshHome / sshPluginJournal /
- *  hostPackageSeeding / chamberHostPackageSeeds / sshPluginTargets
- *  （F 组注册体的共享现实例/闭包束）+ transportManager Pick 扩 appendLog；
- *  syncGatewayChamberPluginsFor
- *  （G 组手动 sync 的执行闭包——main 装配侧 ready 自动 sync 共用同一执行路径，
- *  见字段注释）；runLocalPluginMutation（H 组本地插件
- *  注册体的宿主执行叶——main 装配侧 runtime writer fence/启动门编排，见字段注释）；
- *  runRuntimeStartup / publishBlockedStartup /
- *  setRuntimeGate / authoritativeMetadataRecoveryStatus / runUserMetadataRecovery /
- *  readApplyNowGateInput / selectedJournalIntent / stopLocalDsh / runtimeOperationSlot /
- *  bundledRuntimeVersion（启动事务宿主与共享闭包族在装配侧，见字段注释）。
- *  chamber
- *  settings 的内存 holder 归装配侧（main.ts 尚余直读点）；
- *  core 侧一律经 settingsIO 读写，权威单一。
- *  各副作用叶与其 HostEdges 成员（setKeepAwake / setLoginItem /
- *  setBadge…）同名同语义。 */
-export interface ShellAssemblyCtx {
-  /** INFO 载荷与 settings 平台投影的宿主事实。 */
-  hostFacts: {
-    /** 壳 flavor（E2）：'electron'（Electron 壳装配）| 'swift'
-     *  （Swift 原生壳 sidecar 装配）——INFO 载荷透传，renderer 侧据此分派
-     *  更新/通知等宿主机制语义。 */
-    flavor: 'electron' | 'swift'
-    /** 控制面 URL（INFO 载荷的 `http://127.0.0.1:${cp.port}`）。 */
-    controlPlaneUrl: string
-    /** 运行平台（process.platform——BADGE_COUNT 平台门 badgePlatformGate
-     *  第一参同源）。 */
-    platform: NodeJS.Platform
-    /** 托盘恢复面存在性（SETTINGS 投影 closeToTray 门）——invoke 时求值：
-     *  托盘在装配后才创建（main.ts maybeCreateTray），不得装配期定格。 */
-    trayPresent(): boolean
-  }
-  /** INFO.dshVersion 的 dsh 运行事实（可选：未提供时 INFO 返回 null）。 */
-  runtimeFacts?: {
-    /** 当前活动 dsh 运行时版本——invoke 时求值（INFO 每次
-     *  调用 resolveActiveRuntime(...).version：运行时重启/切换后返回新版本，
-     *  绝不返回装配期定格值）。 */
-    dshVersion(): string | null
-  }
-  /** chamber settings 状态与持久化 IO（装配侧注入现 chamber-settings 读写
-   *  函数，<userData> 路径已绑定）。 */
-  settingsIO: {
-    /** 当前内存 holder 值（设置权威 = 装配侧内存 holder）。 */
-    current(): ChamberSettings
-    /** 原子替换内存 holder（applySettingsPatch 全链成功尾部调用）。 */
-    commit(next: ChamberSettings): void
-    /** 持久化到 <userData>/chamber-settings.json（atomic 0600）；失败 throw，
-     *  由 applySettingsPatch 触发已应用副作用的回滚。 */
-    persist(next: ChamberSettings): void
-  }
-  /** quit 在途门（design 14 D2）：通知/深链
-   *  入队的 ignore 语义与通知投递循环的退出检查经它求值（装配侧注入
-   *  `() => quitRequested`）。 */
-  isQuitting(): boolean
-  /** keep-awake 副作用叶（装配侧注入 setKeepAwakeActive——HostEdges
-   *  setKeepAwake 的 main.ts 宿主腿；失败 throw，由 applySettingsPatch 的
-   *  catch 做 best-effort 回滚）。
-   *  返回 `void | Promise<void>`（双 flavor Promise 兼容）：Electron
-   *  宿主腿同步（成功 void / 失败 throw）；Swift flavor 宿主腿在 B 桥另一
-   *  侧——叶 await 桥应答后 resolve / leg 失败 reject——两条失败路径同汇于
-   *  applySettingsPatch 的 catch 回滚（同步 throw 与异步 reject = 同一路径；
-   *  await 吸收同步返回值，Electron 装配闭包无需 async 化）。 */
-  setKeepAwake(enabled: boolean): void | Promise<void>
-  /** 登录自启副作用叶（装配侧注入现 applyLaunchAtLogin——HostEdges
-   *  setLoginItem 的 main.ts 宿主腿；失败 {error} 返回，绝不 throw）。
-   *  返回 `{ok:true}|{ok:false;error:string}` 或其 Promise（双 flavor
-   *  同前：Electron 同步；Swift await B 桥应答后映射同形判别联合——leg
-   *  错误原样进 {error}，applySettingsPatch 两 flavor 收到同一形状）。 */
-  setLoginItem(
-    enabled: boolean,
-  ):
-    | { ok: true }
-    | { ok: false; error: string }
-    | Promise<{ ok: true } | { ok: false; error: string }>
-  /** registryOrigin 切换确认对话框叶（SETTINGS_SET dialog.showMessageBox
-   *  腿；文案与无窗判定留在实现侧）：
-   *  'confirmed' 放行；
-   *  'cancelled' = 用户取消（返回 { error: 'cancelled', code: 'cancelled' }）；
-   *  'unavailable' = 无存活主窗（返回 { error: 'native confirmation unavailable' }）。 */
-  confirmRegistryOriginSwitch(
-    currentOrigin: string,
-    nextOrigin: string,
-  ): Promise<'confirmed' | 'cancelled' | 'unavailable'>
-  // —— C 组注册体的装配依赖。registry
-  // 读写/投影句柄（transportManager）为现实例注入；audit / gatewaySessions /
-  // publishRegistryTransition 为宿主叶或宿主生命周期对象（定义在 main
-  // 装配侧——publishRegistryTransition 的插件 seed/journal 撤销与
-  // SSH_INSTANCES_CHANGED push 文本归装配侧）。D/E 组注册体复用
-  // transportManager（Pick 扩
-  // reverify/logs/clearLogs 与 exec，见字段注释）+ 纯模块 ssh-config.ts import。
-  // F 组
-  // 6 注册体的装配依赖（编排纯模块直接 import）——localDshHome /
-  // sshPluginJournal / hostPackageSeeding / chamberHostPackageSeeds /
-  // sshPluginTargets（自动 seed/撤销路径与 F 组共用同一现实例/
-  // 闭包族：journal 单写者、seed 单飞、目标指纹同一实现，语义不分叉），
-  // transportManager Pick 扩 appendLog（seed 结果入实例环形日志）。
-  /** registry 读写 + transport 状态/生命周期投影句柄（C/D/E/F 组注册体直接
-   *  读写面；装配侧注入 transport-manager 现实例——纯模块按引用共享；Pick 收窄
-   *  到实际调用的方法面（reverify/logs/clearLogs——D 组状态/日志/重验证通道；
-   *  exec——E 组 exec/systemd 执行通道；appendLog——F 组
-   *  host-graph seed 结果投影入实例环形日志），体内以 sm 名解构）。 */
-  transportManager: Pick<
-    TransportManager,
-    | 'listInstances'
-    | 'saveInstances'
-    | 'status'
-    | 'readyUrl'
-    | 'disconnect'
-    | 'connect'
-    | 'reverify'
-    | 'logs'
-    | 'clearLogs'
-    | 'exec'
-    | 'appendLog'
-  >
-  /** 非秘密审计叶（appendAuditEvent({ file:
-   *  auditLogPath })——装配侧绑定 <userData> 路径注入；JSONL append 只记非
-   *  秘密事实，凭据值绝不入日志）。 */
-  audit(event: AuditEvent): void
-  /** gateway 密码会话管理器（design 17 §7.1/§9.3——主进程内存持有；C 组注册体
-   *  invalidation 的直接面）。装配侧传模块级 `gatewaySessions` 的**装配期取
-   *  值**：该 let 仅在 will-quit 清理置 null（届时窗口已关、IPC 处理器不可
-   *  达），处理器可达期恒非空——null 分支判据（有界收敛注记：
-   *  同一 will-quit 竞态下直读闭包可见 null 而装配捕获不可见的路径不可达）。 */
-  gatewaySessions: GatewaySessionManager | null
-  /** registry 变更生命周期权威 sidecar（source-lifecycle
-   *  authority：来源证明/代际同步 + 插件 seed/journal 撤销 + 活跃通知退役驱逐
-   *  + SSH_INSTANCES_CHANGED committed push 编排）——main 装配侧经本叶
-   *  注入（其宿主对象 readySeedEdges/hostPackageSeeding/sshPluginJournal/
-   *  setGatewaySyncRegistration/startAutomaticHostSeed 归装配侧，push 文本被
-   *  renderer-trust 锚定），C 组 save/delete 注册体经它发布 committed 结果。 */
-  publishRegistryTransition(
-    before: readonly TransportInstanceSpec[],
-    after: readonly TransportInstanceSpec[],
-  ): ProjectedRegistryInstance[]
-  // —— F 组 6 注册体的装配依赖。编排纯模块
-  // （plugin-sync / ssh-apply-rows / plugin-tarball）在 core 直接 import；下列
-  // 共享现实例与闭包为 main 装配侧所有物（自动 seed/ready 撤销路径与 F 组
-  // 注册体共用——journal 单写者、seed 单飞、目标指纹同一实现，语义不分叉）。
-  /** 权威本地 dsh home 路径（<userData>/state/dsh-home——装配期解析值注入，
-   *  core 不碰 Electron paths；localPluginList / resolveLocalMaterializeDirectory
-   *  读它，与自动路径同一值）。 */
-  localDshHome: string
-  /** ssh 插件 undo journal 现实例（main 装配侧 createSshPluginJournal
-   *  (<userData>)——main 的 publishRegistryTransition 撤销清理（clear）与
-   *  F 组 undo/apply 注册体共享同一实例；类型定义在 ssh-plugin-journal.ts，
-   *  record 永不 throw）。 */
-  sshPluginJournal: SshPluginJournal
-  /** chamber host 包种子数组（main 装配侧构造——sourceDir 已按
-   *  app.isPackaged/pkgDir/repoRoot 解析；自动 seed 路径与手动 seed 注册体
-   *  共用同一数组）。 */
-  chamberHostPackageSeeds: readonly ChamberHostPackageSeed[]
-  /** host 包 seed 单飞注册表现实例（ExactOwnershipRegistry——main 自动 seed
-   *  路径与手动 seed 注册体共用同一注册表，跨路径并发单飞语义不变）。 */
-  hostPackageSeeding: ExactOwnershipRegistry
-  /** ssh 插件管理目标解析/所有权/执行/探针闭包束（main 装配侧定义——自动
-   *  seed 与 ready 边缘用同一族闭包；F 组注册体以原名
-   *  调用 findRemoteTarget / ownsRemoteTarget / scoped* 等）。目标结构
-   *  = SshPluginTarget（spec + operational fingerprint + 来源代际 token）。 */
-  sshPluginTargets: {
-    findRemoteTarget(id: string): SshPluginTarget | null
-    ownsRemoteTarget(target: SshPluginTarget): boolean
-    scopedExecForTarget(target: SshPluginTarget, extraOwner?: () => boolean): ExecFn
-    scopedStatusForTarget(target: SshPluginTarget): StatusFn
-    scopedProbeForTarget(
-      target: SshPluginTarget,
-      probe: (descriptor: ChamberHostPackageDescriptor) => Promise<boolean | null>,
-    ): (descriptor: ChamberHostPackageDescriptor) => Promise<boolean | null>
-    liveProbeFor(id: string): (descriptor: ChamberHostPackageDescriptor) => Promise<boolean | null>
-  }
-  // —— G 组 3 注册体的装配依赖。编排纯模块
-  // （gateway-ipc-shared / gateway-sync-registry / gateway-provider /
-  // plugin-tarball——classifyPluginPick/buildPluginTarball 亦 import）在
-  // core 直接 import；注册参数读取（getGatewaySyncRegistration）与 ready 位复验
-  // 在注册体侧。确认对话框复用上方 edges 版 confirmPluginAction 助手、
-  // 无存活主窗预检 = edges.mainWindowAlive、插件源 pick = edges.pickPluginSource。
-  /** 手动 gateway_plugin_sync 的上传执行闭包（main 装配侧定义——ready 注册自动
-   *  sync（sm.onStatusChanged ready 边缘）与手动 re-entry 注册体共用同一执行
-   *  路径与注册参数，语义不分叉）：把本地 chamber host 包种子缓存上传到注册
-   *  transport 来源；无实例/非 gateway → null。本地包源解析（app.isPackaged /
-   *  pkgDir/repoRoot）在闭包内，core 不碰 Electron paths。 */
-  syncGatewayChamberPluginsFor(
-    id: string,
-    url: string,
-    headers: Record<string, string>,
-    spkiPin: string | null,
-  ): Promise<{ uploaded: boolean; skipped: boolean; failed?: boolean; error?: string } | null>
-  // —— H 组 3 个本地插件注册体（LOCAL_PLUGIN_ADD /
-  // LOCAL_PLUGIN_ADD_FILE / LOCAL_PLUGIN_REMOVE）的本地执行叶。编排纯模块
-  // （plugin-sync：runLocalDshPlugin 等）在 core 直接 import；本叶只承载宿主
-  // 编排——本体定义在 main 装配侧（runtime writer fence（RuntimeOperationFence）
-  // 租约 + runtimeStartBlocked/runtimeStartBlockedReason 启动门 +
-  // resolveActiveRuntime(runtimeBaseDir, builtinDshWorkspace) workspace 解析均归
-  // 装配侧：fence/启动门是装配侧运行时事务状态，不是 core 状态；workspace 只在
-  // fence 租约内解析，绝不跨运行时 swap 保留）。注册体以原名
-  // 调用 runLocalPluginMutation（owner + mutate(dshWorkspace) 形状）；mutate 内
-  // 实际子进程执行 = plugin-sync runLocalDshPlugin（add
-  // 子进程 env 装配/白名单在纯模块内）。
-  runLocalPluginMutation<T>(
-    owner: string,
-    mutate: (dshWorkspace: string) => Promise<T>,
-  ): Promise<T | { ok: false; error: string }>
-  // —— I 组 7 注册体的装配依赖。open-in
-  // 面——wiredCtx/openInCtx 的宿主能力全部来自既有面（hostFacts.platform
-  // / settingsIO.current()（vscodeOpenInNewWindow 惰性读）/ transportManager
-  // （sm——lookupInstance 与来源捕获的实查）/ edges 打开叶）与纯模块 import
-  // （open-in.ts / deep-link.ts，见 I 组段注释）；update 面——updater
-  // 现实例（main 装配侧构造的 createUpdateController 包装：electron-updater 与
-  // autoInstallOnAppQuit 生命周期、设计 11 的静默检查/下载/quitAndInstall 编排
-  // 与设计 14 D2 的退出豁免状态读取（main 模块级 updateController ref）均归装配
-  // 侧）。I 组 UPDATE_* 注册体与状态 push 订阅共用同一实例；装配侧在
-  // installIpcHandlers 之后调 updater.start()（保持「先订阅后 start」序）。 */
-  updateController: UpdateController
-  // —— J 组 6 个 runtime 注册体（RUNTIME_STATE /
-  // RUNTIME_RESTART / RUNTIME_CHECK / RUNTIME_INSTALL / RUNTIME_CLEANUP_VERSION /
-  // RUNTIME_CLEAR_FAILURE）的装配依赖。控制器现实例、fence 现实例、动作门与
-  // 宿主叶全部由 main 装配侧定义并经 ctx 注入——main 侧 K 组注册体（RUNTIME_
-  // RECOVER_METADATA / RESET_BUILTIN / RETRY_APPLY / APPLY_NOW / RETRY_RESTORE /
-  // RESTORE_PRE_ROLLBACK——见本接口尾部）与启动/证据
-  // 路径共用同一实例/闭包：状态权威单一、单飞/串行化语义不分叉。注册体经
-  // 上方解构以原名调用（`runtimeOperation !== null` →
-  // `runtimeOperationBusy()` 与 `chamberSettings.registryOrigin` →
-  // `settingsIO.current().registryOrigin` 两处替换——见 J 组段注释）。
-  /** DshRuntimeController 现实例（main 装配侧 whenReady 构造——类型 import 自
-   *  dsh-runtime-controller.ts（electron-free 纯编排模块），core 只做类型面；
-   *  K 组注册体与启动/证据路径共用同一实例，状态权威单一）。 */
-  runtimeController: DshRuntimeController
-  /** runtime 事务槽在飞读门（`runtimeOperation !== null` 的读门——
-   *  槽位本体与单写者归 main：启动事务/自动回滚直接读写，K 组在飞事务的
-   *  登记/清槽/在飞值经 runtimeOperationSlot 叶（见本接口尾部），core
-   *  只经本叶做 busy 布尔读）。
-   *  J/K 组注册体中 `runtimeOperation !== null` 替换为
-   *  runtimeOperationBusy()。 */
-  runtimeOperationBusy(): boolean
-  /** runtime writer fence 现实例（whenReady runtimeWriterFence——启动事务
-   *  （runtime:startup / runtime:restart-exhausted 等 acquire）与 K 组路径共用；
-   *  busy 读与 tryAcquire 与调用点同一实例，跨 core/main 的 writer 串行化
-   *  语义不分叉；owner 名逐字一致）。 */
-  runtimeWriterFence: Pick<RuntimeOperationFence, 'busy' | 'tryAcquire'>
-  /** runtime 动作终态门（whenReady runtimeActionAllowed 闭包——K 组
-   *  注册体同用；单一实现经 ctx 注入 core，行为不分叉）。action 参数 = 共享核
-   *  RuntimeAction 联合（allowedActions 的可见动作集）。 */
-  runtimeActionAllowed(action: RuntimeAction): boolean
-  /** 权威 runtime base dir（装配期解析 <userData> 路径注入——core 不碰 Electron
-   *  paths；@dsh-chamber/dsh-runtime 纯 store 函数（listExplicitlyInstalledVersions /
-   *  cleanupExplicitRuntimeVersion / listRuntimeFailures / clearRuntimeFailure）
-   *  经它与 main 侧同一 baseDir 调用）。 */
-  runtimeBaseDir: string
-  /** 磁盘/快照/失败证据刷新叶（whenReady refreshRuntimeEvidence 闭包——
-   *  coalescer、lastDiskEvidence 与 projectMetadataHealth 宿主状态归装配侧；
-   *  K 组注册体与启动路径同用同一实现）。 */
-  refreshRuntimeEvidence(patch?: RuntimeLifecycleProjection): Promise<void>
-  /** pnpm store prune 叶（whenReady runStorePruneIfNeeded——storePruneOperation
-   *  单飞宿主状态归装配侧；清理路径与启动尾部共用同一实现）。 */
-  runStorePruneIfNeeded(): Promise<void>
-  /** 事务性 dsh 重启宿主叶（PlaneHandle 在 main——RUNTIME_RESTART 注册体的
-   *  `controlPlane === null` 门 + controlPlane.restartLocal() + resolve 后实时
-   *  connectionState 读封装在装配侧叶内）：controlPlane 未初始化 → throw
-   *  'control plane not initialized'（同文案）；resolve ≠ success——
-   *  restartLocal() 从 restart-exhausted/error 等终态 resolve 时由 core 注册体
-   *  按返回的 connectionState 白名单诚实拒绝。 */
-  restartLocalDsh(): Promise<string>
-  // —— K 组 6 个 runtime 注册体
-  // （RUNTIME_RECOVER_METADATA / RUNTIME_RESET_BUILTIN / RUNTIME_RETRY_APPLY /
-  // RUNTIME_APPLY_NOW / RUNTIME_RETRY_RESTORE / RUNTIME_RESTORE_PRE_ROLLBACK）的
-  // 装配依赖。启动事务本体与其
-  // 共享闭包族全部由 main 装配侧定义并经 ctx 注入——K 组注册体与启动/证据路径
-  // 共用同一实现、同一运行时事务槽（模块级 runtimeOperation）与同一 gate/fence，
-  // 语义不分叉（executeMetadataRecovery 等恢复事务腿、runtimeOperationAbort /
-  // runtimeStartBlocked / runtimeInternalStart / runtimeTransactionWorkspace 等
-  // 装配侧事务状态绝不进 core）。dsh-runtime 纯逻辑（queueActivationIntent /
-  // writeActivationIntent / restoreMarkerAuthorityStatus / readActivationJournalState /
-  // writeOverride / listPreRollbackStashes / restorePreRollback）与 apply-now-gate.ts
-  // 的 evaluateApplyNowGate 为纯模块直接 import。注册体中的
-  // 替换（`runtimeOperation !== null` → runtimeOperationBusy()、`quitRequested`
-  // → quittingLeaf()、`cp.stopLocal()` → stopLocalDsh()、槽登记/清槽/在飞值 →
-  // runtimeOperationSlot.*）注记于 K 组段注释。
-  /** 运行时启动事务宿主叶（装配侧事务本体 runRuntimeStartup；
-   *  K 组注册体与启动尾部（装配侧 refreshRuntimeEvidence().then(runRuntimeStartup)）
-   *  共用同一实现：内部 gate/fence/事务槽/abort 管理归装配侧，core 经本叶调用
-   *  （槽忙 → 返回在飞事务守卫）。 */
-  runRuntimeStartup(): Promise<StartupResult | null>
-  /** 启动阻塞发布叶（装配侧 publishBlockedStartup——setRuntimeGate(true) +
-   *  refreshRuntimeEvidence 的组合宿主叶；reason 经 sanitizeErrorText 归一，patch
-   *  追加到 failed 投影之上；K 组注册体与启动路径共用同一实现）。 */
-  publishBlockedStartup(reason: string, patch?: RuntimeLifecycleProjection): Promise<void>
-  /** 宿主启动门写叶（装配侧 setRuntimeGate——模块级 runtimeStartBlocked /
-   *  runtimeStartBlockedReason 槽与 cp.refreshLocalExposure 宿主刷新归装配侧；
-   *  K 组 RESET_BUILTIN 等注册体与启动事务共用同一门）。 */
-  setRuntimeGate(blocked: boolean, reason?: string | null): void
-  /** 元数据恢复资格投影叶（装配侧 authoritativeMetadataRecoveryStatus——
-   *  quit/写进程安全/本地 writers quiescent/bundled 版本等宿主事实归装配侧；K 组
-   *  RECOVER_METADATA 注册体与 runUserMetadataRecovery 共用同一实现，语义不分叉）。
-   *  'incomplete' 为永久恢复终态（journaled 快照缺失/不可信），'half' 为瞬时可重试
-   *  ——门语义保留。 */
-  authoritativeMetadataRecoveryStatus(): RecoverableMetadataStatus | null
-  /** 用户触发元数据恢复事务宿主叶（装配侧 runUserMetadataRecovery——恢复事务
-   *  在飞登记（事务槽/abort/workspace 写）与 executeMetadataRecovery 腿在装配侧；
-   *  K 组 RECOVER_METADATA 注册体经本叶启动同一事务）。
-   *  返回 null = 资格不符/已在飞（注册体原样返回当前 state）。 */
-  runUserMetadataRecovery(
-    expectedStatus: RecoverableMetadataStatus,
-  ): Promise<StartupResult | null> | null
-  /** APPLY_NOW 门输入构造叶（装配侧 readApplyNowGateInput——controlPlane
-   *  connectionState / envOverrideActive / 事务槽等装配侧宿主读在叶内；
-   *  evaluateApplyNowGate 纯门在 core 直接 import，同一输入形状（pending ??
-   *  journalTarget ?? overridePending 三源解析与目标树 preflight 保留）。 */
-  readApplyNowGateInput(): ApplyNowGateInput
-  /** activation journal intent 选择（selectedJournalIntent——main 启动
-   *  路径 readActivationFacts 与 K 组 RETRY_APPLY 注册体共用同一实现；core 侧只消费
-   *  targetVersion 投影，完整记录仍在装配侧闭包内使用）。 */
-  selectedJournalIntent(state: ActivationJournalState): { targetVersion: string | null } | null
-  /** 本机 dsh 宿主停止叶（PlaneHandle 在 main——`cp.stopLocal()`；K 组
-   *  RESTORE_PRE_ROLLBACK 事务的 stop 腿经本叶，与 runRuntimeStartup 内部的
-   *  同源 stop 语义一致；异常按调用点的 .catch 折算）。 */
-  stopLocalDsh(): Promise<void>
-  /** runtime 事务槽（main.ts 模块级 runtimeOperation——槽本体与单写者归装配
-   *  侧：启动事务/自动回滚/quit 路径直接读写同一槽）；core 的 busy 读经
-   *  runtimeOperationBusy()，K 组注册体的在飞值读与登记/清槽经本对象：
-   *  - begin：登记一个在飞事务（`runtimeOperation = operation`——RESET_BUILTIN
-   *    的 queue-behind-applying 与 RESTORE_PRE_ROLLBACK 事务登记）；
-   *  - end：清槽（finally `runtimeOperation = null`）；
-   *  - inFlight：在飞事务 promise 值读（`const inFlight = runtimeOperation`——
-   *    RESET_BUILTIN 需 await 在飞 applying 事务本体后再启动）。 */
-  runtimeOperationSlot: {
-    begin(operation: Promise<StartupResult | null>): void
-    end(): void
-    inFlight(): Promise<StartupResult | null> | null
-  }
-  /** 内建 dsh 版本（装配期解析值快照——main.ts bundledVersion 常量；
-   *  K 组 RESET_BUILTIN 注册体与启动路径同一事实；core 不自行解析内置 workspace）。 */
-  bundledRuntimeVersion: string | null
-  // —— 插件受保护集合判定（design 21 §6.11）与更新退出腿字段 ——
-  /** 内建 dsh 工作区路径（装配期解析值——main.ts 模块级 builtinDshWorkspace
-   *  常量 / sidecar inputs.builtinDshWorkspace）。localProtectionFacts 的
-   *  resolveActiveRuntime(runtimeBaseDir, builtinDshWorkspacePath) 第二参：
-   *  活动树解析需要它才能落到内建树；core 不自行解析 workspace 路径。 */
-  builtinDshWorkspacePath: string | null
-  /** 运行时线锚锁文件路径叶（design 21 §6.11.1 的 F 首选事实源）：装配侧解析
-   *  `vendor/dsh/pnpm-lock.yaml`（Electron = app.isPackaged ? <resources>/vendor/dsh
-   *  : <pkgDir>/vendor/dsh；Swift sidecar 装配 = <sidecar>/vendor/dsh，即
-   *  builtinDshWorkspacePath 同根）。读不到返回 null——core 侧据此退到活动树自己
-   *  的锁文件（跨线误判防护见 shouldPreferPinnedRuntimeLockfile）。 */
-  pinnedRuntimeLockfilePath(): string | null
-  /** 更新退出腿武装的回撤叶（可选；Electron 装配提供真叶）：I 组 update 状态
-   *  订阅在武装期间收到重启失败（restartFailureText）或相位离开 downloaded 时
-   *  调用——装配侧 hold updaterQuitArmed / 兜底计时器 / 关窗豁免（main.ts
-   *  armUpdaterQuit·disarmUpdaterQuit 同源；叶自身幂等，未武装时 no-op）。
-   *  Swift flavor v1 blocked-available 从不武装 ⇒ 不提供，订阅只做状态 push。 */
-  disarmUpdaterQuit?(reason: string): void
-}
-
-/** 装配 shell IPC 面（A–K 组注册体与辅助；各组顺序为注册顺序）。edges
- *  参数以 Pick 收窄到实际调用的成员（createElectronEdges 返回同形超集）；
- *  新成员实现时同步扩宽两侧。
- *  调用点纪律：whenReady 内、createMainWindow 之前（窗口加载前注册完毕）——
- *  本函数同时完成渲染器投递状态机的 edges/quit 快照（单装配不变式，见上段）。 */
-/** Context for the domain registrars: the ShellAssemblyCtx deps plus the
- *  shared local helpers/module state they close over.
- *  Local helpers defined after the context object are exposed as getters so the
- *  object can stay a single construction point (no forward references at build). */
-export interface ShellIpcCtx {
-  deps: Parameters<typeof installIpcHandlers>[0];
-  MACOS_NOTIFICATION_SETTINGS_URL: typeof MACOS_NOTIFICATION_SETTINGS_URL;
-  NPM_SEARCH_MAX_BODY_BYTES: typeof NPM_SEARCH_MAX_BODY_BYTES;
-  applyBadgePresentation: (count: number) => boolean;
-  applySettingsPatch: (patch: Partial<ChamberSettings>) => Promise<{ ok: true } | { ok: false; error: string }>;
-  captureVscodeSource: (instanceId: string) => NotificationSourceToken | null;
-  chamberSettingsStatus: () => ChamberSettingsStatus;
-  confirmPluginAction: (copy: { message: string; detail: string }) => Promise<{ ok: true } | { ok: false; error: string } | { cancelled: true }>;
-  confirmRuntimeMutation: (message: string, detail: string, confirmLabel: string) => Promise<boolean>;
-  deepLinkRendererReady: typeof deepLinkRendererReady;
-  drainPendingNotificationOpens: typeof drainPendingNotificationOpens;
-  drainPendingRendererDeepLinkIntents: typeof drainPendingRendererDeepLinkIntents;
-  enqueueNotificationOpen: typeof enqueueNotificationOpen;
-  enqueueRendererDeepLinkIntent: typeof enqueueRendererDeepLinkIntent;
-  localProtectionFacts: () => PluginProtectionFacts;
-  matchesNotificationSource: typeof matchesNotificationSource;
-  nativeNotificationRateLimiter: typeof nativeNotificationRateLimiter;
-  notificationOpenDrainReady: typeof notificationOpenDrainReady;
-  notificationSourceIncarnations: typeof notificationSourceIncarnations;
-  openInCtx: OpenInLaunchContext;
-  ownsNotificationSource: typeof ownsNotificationSource;
-  pendingBadgeCount: typeof pendingBadgeCount;
-  pendingNotificationOpens: typeof pendingNotificationOpens;
-  pendingRendererIntents: typeof pendingRendererIntents;
-  projectInstances: typeof projectInstances;
-  pushSettingsChanged: () => void;
-  quittingLeaf: () => boolean;
-  reconcileBadgeCount: () => void;
-  runRuntimeCheck: () => Promise<ReturnType<DshRuntimeController['getState']>>;
-  verifyLocalProfileFamily: (facts: PluginProtectionFacts) => { ok: true } | { ok: false; error: string };
-  portableHostSeeds: () => readonly ChamberHostPackageSeed[];
-  version: typeof version;
-  state: typeof shellMutableState;
-}
-export function installIpcHandlers(deps: {
-  ipc: IpcRegistrar
-  edges: Pick<
-    HostEdges,
-    | 'rendererPush'
-    | 'showNativeNotification'
-    | 'notificationSupported'
-    | 'setBadge'
-    | 'badgeCountApiAvailable'
-    | 'isFocused'
-    | 'onSystemResume'
-    | 'onMainWindowShown'
-    | 'mainWindowAlive'
-    | 'webViewLoading'
-    | 'webViewContentAlive'
-    | 'showMessage'
-    | 'pickPluginSource'
-    | 'openExternal'
-    | 'openPath'
-    | 'showItemInFolder'
-    | 'showError'
-  >
-  ctx: ShellAssemblyCtx
-}): void {
+export function installIpcHandlers(deps: ShellIpcDeps): void {
   // 单装配不变式（渲染器投递状态机段注释）：快照投递 edges 子集与 quit 门——
   // 本函数先于任何窗口/渲染器事件执行（调用点纪律见上），此后 onRendererLifecycle /
   // enqueueRendererDeepLinkIntent / handleSystemResume 等导出入口可用。

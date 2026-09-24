@@ -1,7 +1,7 @@
 /**
  * shell-ipc-open-in — domain IPC registrations
  */
-import type { ShellIpcCtx } from './shell-core.ts'
+import type { ShellIpcCtx } from './shell-ipc-ctx.ts'
 import type { OpenInLaunchContext, OpenInRequest } from './open-in.ts'
 import { IPC_CHANNELS } from './ipc-events.ts'
 import { isValidNotificationSourceFingerprint } from './notifications.ts'

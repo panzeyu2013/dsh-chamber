@@ -1,7 +1,7 @@
 /**
  * shell-ipc-settings — domain IPC registrations
  */
-import type { ShellIpcCtx } from './shell-core.ts'
+import type { ShellIpcCtx } from './shell-ipc-ctx.ts'
 import type { NotificationSettingsLike } from './notifications.ts'
 import { DEFAULT_CHAMBER_SETTINGS, validatePatch } from './chamber-settings.ts'
 import { IPC_CHANNELS } from './ipc-events.ts'

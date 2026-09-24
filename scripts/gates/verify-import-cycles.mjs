@@ -28,27 +28,15 @@ import { fileURLToPath } from 'node:url'
  * Type-level cycle allowance (RATCHET, never a target). Type cycles are erased
  * at compile time, so this set is a debt list, not a runtime hazard; the gate
  * fails when an allowance entry disappears (delete it in the same change) and
- * when any SCC outside this list appears. ShellIpcCtx names ~20 shell-core-owned
- * leaves (notification delivery, badge, settings) plus ShellAssemblyCtx /
- * HostEdges, so moving it out of shell-core requires the shell-core split
- * first (file budget ≤1,600).
+ * when any SCC outside this list appears.
+ *
+ * EMPTY (audit round): the shell-core ⇄ 8 shell-ipc-* type cycle was broken by
+ * extracting the seam types into leaf modules (host-edges.ts /
+ * shell-assembly-ctx.ts / shell-ipc-ctx.ts / registry-projection.ts); the
+ * registrars now depend on shell-ipc-ctx.ts, not on shell-core.ts. Keep it
+ * empty — a new entry needs the same documented reason + retirement condition.
  */
-const TYPE_CYCLE_ALLOWANCE = [
-  {
-    reason: 'ShellIpcCtx aggregates shell-core-owned notification/badge/settings leaves; unblocks with the shell-core split',
-    files: [
-      'packages/desktop/shell-core.ts',
-      'packages/desktop/shell-ipc-connections.ts',
-      'packages/desktop/shell-ipc-open-in.ts',
-      'packages/desktop/shell-ipc-plugins-gateway.ts',
-      'packages/desktop/shell-ipc-plugins-local.ts',
-      'packages/desktop/shell-ipc-plugins-ssh.ts',
-      'packages/desktop/shell-ipc-runtime.ts',
-      'packages/desktop/shell-ipc-settings.ts',
-      'packages/desktop/shell-ipc-update.ts',
-    ],
-  },
-]
+const TYPE_CYCLE_ALLOWANCE = []
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
 

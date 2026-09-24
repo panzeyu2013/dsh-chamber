@@ -15,7 +15,7 @@
     },
     {
       "path": "packages/desktop/shell-core.ts",
-      "lines": 2492,
+      "lines": 1821,
       "target": 1600,
       "note": "shell assembly + IPC ctx (blocks the shell-ipc type cycle)"
     },
