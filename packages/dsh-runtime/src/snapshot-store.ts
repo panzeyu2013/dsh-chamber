@@ -31,14 +31,10 @@ import {
   openPrivateNoFollowSync,
   readPrivateFileStateNoFollow,
 } from './private-fs.ts'
+import { sameIdentity } from './file-identity.ts'
 
 const PRIVATE_DIR_MODE = 0o700
 const MAX_RESTORE_MARKER_BYTES = 128 * 1024
-
-interface FileIdentity {
-  dev: number | bigint
-  ino: number | bigint
-}
 
 type RestoreMarkerAuthorityRead =
   | { kind: 'missing' }
@@ -48,9 +44,6 @@ type RestoreMarkerAuthorityRead =
 
 export type RestoreMarkerAuthorityStatus = 'missing' | 'present' | 'unsafe'
 
-function sameIdentity(left: FileIdentity, right: FileIdentity): boolean {
-  return left.dev === right.dev && left.ino === right.ino
-}
 
 /** Read the restore authority without following either its leaf or runtime dir.
  *  Delegates to the shared private-fs bounded no-follow reader; `tightenMode: false`

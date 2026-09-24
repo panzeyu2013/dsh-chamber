@@ -42,6 +42,7 @@ import {
   removeRuntimeFileNoFollow,
   type ArtifactReadState,
 } from './private-fs.ts'
+import { sameIdentity, type FileIdentity } from './file-identity.ts'
 
 const MAX_CURRENT_POINTER_BYTES = 16 * 1024
 const MAX_OVERRIDE_BYTES = 64 * 1024
@@ -255,16 +256,8 @@ function atomicWriteJson(baseDir: string, filePath: string, payload: unknown): v
   atomicWriteRuntimeFileNoFollow(baseDir, filePath, `${JSON.stringify(payload, null, 2)}\n`)
 }
 
-interface FileIdentity {
-  dev: number | bigint
-  ino: number | bigint
-}
-
 type AuthorityRead = ArtifactReadState<{ raw: string; identity: FileIdentity }>
 
-function sameIdentity(left: FileIdentity, right: FileIdentity): boolean {
-  return left.dev === right.dev && left.ino === right.ino
-}
 
 /**
  * Read one authority leaf without ever following the leaf itself. The runtime
@@ -1461,7 +1454,10 @@ export function evictVersions(baseDir: string, keep = 3): string[] {
   return evicted
 }
 
-function isPidAlive(pid: number, group = false): boolean {
+/** PID liveness: signal 0 probes existence; EPERM means "exists, not ours".
+ * Exported for the desktop plugin writer-reaper's default dep (one
+ * implementation workspace-wide). */
+export function isPidAlive(pid: number, group = false): boolean {
   try {
     process.kill(group && process.platform !== 'win32' ? -pid : pid, 0)
     return true

@@ -102,6 +102,9 @@ export {
   writeCurrentPointer,
   writeOverride,
 } from './dsh-runtime-store.ts'
+// PID liveness (process.kill(pid, 0); EPERM = alive) is also the desktop plugin
+// writer-reaper's default dep — one implementation for the workspace.
+export { isPidAlive } from './dsh-runtime-store.ts'
 export type {
   ActivationIntentInput,
   ActivationIntentKind,

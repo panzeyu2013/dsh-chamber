@@ -30,6 +30,7 @@ import {
 import { lstat as lstatAsync, open as openAsync, type FileHandle } from 'node:fs/promises'
 import { randomBytes } from 'node:crypto'
 import { basename, dirname, join, relative, sep } from 'node:path'
+import { sameIdentity } from './file-identity.ts'
 
 export const PRIVATE_RUNTIME_DIR_MODE = 0o700
 export const PRIVATE_RUNTIME_FILE_MODE = 0o600
@@ -108,10 +109,6 @@ interface PinnedDirectory {
   fd: number
   identity: RuntimeFileIdentity
   parentIdentity: RuntimeFileIdentity
-}
-
-function sameIdentity(left: RuntimeFileIdentity, right: RuntimeFileIdentity): boolean {
-  return left.dev === right.dev && left.ino === right.ino
 }
 
 function sameFileSnapshot(left: Stats, right: Stats): boolean {
