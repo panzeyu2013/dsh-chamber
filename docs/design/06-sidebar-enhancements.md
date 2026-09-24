@@ -37,7 +37,7 @@
 - **位置**：每来源分组头内搜索图标按钮（`sourceHeader` 内、状态徽标旁），
   点击在头下展开新行（胶囊 input + 清除按钮），wide 态专属（rail 不做）。
 - **状态（共享控制器）**：每来源搜索状态与防抖 job 整体移入
-  `shared/search-state.ts` 共享单例（vite shared chunk，所有 ctx 同一实例）
+  `packages/dsh-chamber-client-core/src/search-state.ts` 共享单例（vite shared chunk，所有 ctx 同一实例）
   ——`expandSearch`/`collapseSearch`/`setSearchQuery`/`clearSearch`/
   `getSearchStates`/`subscribeSearch`；组件只镜像渲染 + 持 DOM ref（outside-click
   包含判定与 focus）。视图切换后搜索仍存活（可见侧边栏换 shell，共享状态不换）；
@@ -66,7 +66,7 @@
 
 ### 1.3 代码落点
 
-- `shared/instance-api.ts`：包装 `searchSessions(client, query, signal)`
+- `packages/dsh-chamber-client-core/src/instance-api.ts`：包装 `searchSessions(client, query, signal)`
   （信号透传——现有 helper 不带 signal；复用 `resultError`）。
 - `SidebarRoot.tsx` + `sidebar-chamber.module.css` + `locales.ts`
   （`search.*` 键 zh/en 八组）。
@@ -178,7 +178,7 @@
 - `SidebarRoot.tsx`：拖拽状态 + 事件 + marker 渲染；渲染期按
   `reconciledSessionOrder`（§3 纯函数）对未分组会话排序。
 - `sidebar-chamber.module.css`：marker/指示线类。
-- `shared/derive.ts`：新增纯函数 `reconciledSessionOrder(stored, wireIds)`
+- `packages/dsh-chamber-client-core/src/derive.ts`：新增纯函数 `reconciledSessionOrder(stored, wireIds)`
   （stored 序优先、未知 id 按 wire 序追加——官方 `reconciledSessionOrder`/
   `orderedUngrouped` 移植），`test/session-rows/derive.test.ts` 补用例。
 
@@ -246,7 +246,7 @@
   **默认 `manual`**（保持既有 wire 序呈现）与官方默认 `updated` 不同——有意
   取舍：多来源列表下 wire 序即用户/宿主排好的序；该默认不因官方活动提升（updated 排序）
   而改变：updated = 手动序 + 活动置顶（§2），wire 序仍是默认第一。
-- `shared/view-prefs.ts`：`loadViewPrefs()`/`saveViewPrefs(prefs)`，JSON
+- `packages/dsh-chamber-client-core/src/view-prefs.ts`：`loadViewPrefs()`/`saveViewPrefs(prefs)`，JSON
   解析/写入 try/catch 兜底（非致命）、版本号不匹配即弃用重播种（官方 persist
   引擎纪律）；纯函数，可单测。
 - **共享实时存储（跨 ctx 实时联动）**：读写函数之上加
@@ -270,7 +270,7 @@
 
 ### 3.3 代码落点
 
-- `shared/view-prefs.ts` + `shared/index.ts` 再导出；`SidebarRoot.tsx`
+- `packages/dsh-chamber-client-core/src/view-prefs.ts` + `packages/dsh-chamber-client-core/src/index.ts` 再导出；`SidebarRoot.tsx`
   经 `getViewPrefs`/`subscribeViewPrefs`/`updateViewPrefs` 读写；
   `test/session-state/view-prefs.test.ts` 覆盖存储单例/通知/裁剪（node:test 风格）。
 
@@ -282,6 +282,15 @@
   `pendingInteraction?: 'approval'|'plan-review'|'question'`、`blank`、
   `updatedAt`；快照含 `current?: string`（当前会话 id）。（「蓝点」= 这条完成未读
   事实，渲染为 §4.3 的 chamber 品牌蓝点。）
+- **goal 三值事实**（design 19 §3.2.1，2026-12 落地）：行字段
+  `goal?: GoalFact | null`——**字段缺席 = unknown**（投影还没给出 goal 键）、`null` =
+  明确无 goal、对象 = 有 goal；
+  `GoalFact = { goalId, revision, phase: 'active'|'paused'|'blocked'|'complete',
+  activation?: 'armed'|'disarmed', updatedAt? }`。解析只读写
+  `projectionValues.goal` 的白名单字段（`objective`/`blockedReason` 永不读取），
+  形状不符 = unknown + warn-once（绝不折叠成 null）；生产者按来源代保留最后已知值
+  （`retainGoalFacts`），行消失即 drop，activation 由事件缓存绑定同一 goalId。两个门与
+  六面单源见 §4.3/§4.5；无壳来源的 facts overlay 见 §4.2。
 - 每实例 boot = 独立 ctx、独立 store；侧边栏插件在每个 ctx 都挂载，即每个来源都有
   一个可订阅自身运行时的事实生产者。
 - **插件 = 投影**：上报端只做快照投影——`current` + 每列出会话的实时 `running`
@@ -328,19 +337,39 @@
     `pollAggregates` 的 not-connected 分支清空该来源**上报事实**（断连即清，
     generation 级事实随断连失效）；App 自持蓝点与边沿记忆跨断连保留——重连后
     重新挂载，且能捕获断连期间完成的会话（prevRunning 持有断连前 running=true）。
-- 对账逻辑是**纯函数** `shared/derive.ts reconcileCompletedFacts`（单测见
+- 对账逻辑是**纯函数** `packages/dsh-chamber-client-core/src/derive.ts reconcileCompletedFacts`（单测见
   `test/session-rows/derive.test.ts`）：App 在 `setCompletedBySource` 的函数式
   updater 里调用，每份上报各自捕获 `prevRunning` 快照——同来源两次上报落在同一
   渲染周期时按序组合，不会互相覆盖丢蓝点。
 - **未读判定与事实携带（plan §3.2/§5-3/§5-13、W2）**：`runtimeFacts` 每条上报另带
   `listComplete?: boolean`（vendor list store `phase === 'ready'`，即本客户端至少成功拉过一次基线——
   蓝点缺席剪枝的唯一门控）与 `stale?: boolean`（断连/主机不可达时仍可附加的只读事实，R14）；
-  未读是**纯谓词** `shared/derive.ts deriveUnread(completedAt, lastTurnEnd, readThrough, updatedAt)`：
+  未读是**纯谓词** `packages/dsh-chamber-client-core/src/derive.ts deriveUnread(completedAt, lastTurnEnd, readThrough, updatedAt)`：
   `unread ⟺ max(updatedAt, completedAt) > readThrough`，`completedAt` 在 turn-end 分类为 `completed`
   **或分类缺失**（watcher 的降级标记，R12 回退现状）时计入，已知非完成（aborted 含 `user`、blocked、
   error、max-tokens、interrupted）抑制；全部比较都在 host 时间域，谓词不读账本、不读客户端墙钟。
   `mergeRuntimeFacts(runtime, completedBySource, overlay?, stale?)` 保留两参逐字节相容，第三/四参用于
   事实注入与 stale 附加；`todo-attention` 对断连来源只渲染 `runtime.stale === true` 的事实（R14 方案 A）。
+- **goal 事实过桥与身份签名**（v5 §2.1/§6 P2a；2026-12）：mounted 来源由插件生产者在
+  `sync()` 里先回填最后已知值、再合并 activation 缓存（`applyGoalActivation`，门读它）；
+  无壳来源的 goal 经 App 的 `factsOverlay` 走 `mergeRuntimeFacts` 的 overlay 行——通道行
+  已给对象/显式 null 即权威，overlay 只在通道 unknown 时填补（含显式 null），缺席 = unknown
+  **绝不伪造 null**。四处必须同批：`session-facts-source.ts` 行类型 + `RuntimeFactsOverlayRow.goal`
+  + `mergeRuntimeFacts` 的填补分支 + `use-badge-count` 的合并 runtime 入参（否则无壳源的
+  goal 到不了 `server.runtime`）。**签名**：goal 的五个字段
+  （`goalId/revision/phase/activation/updatedAt`）必须整体进 `runtimeReportSignature` 的**行编码**，
+  且**不得**落进 `includeRunning` 分支——activation 是易失缓存，不入签名会被 App 的身份
+  去重冻结在首见值（`goalFactSignature`）。
+- **facts 快照通道判定（`session-facts-source.ts` 单源，2026-12）**：
+  `classifySessionFactsProbe` 判 2xx 无 `protocol`（解析失败 / 非协议载荷）=
+  `degraded/unversioned`——通道**不可用（unknown）**：**保留既有行**（无既往行才给空行）
+  并标 `serviceable=false`/`stale=true`；消费侧按原始行键判在场、按 `factsUsable=false`
+  停判（不得当权威空行集，否则无壳来源整体遗忘）。404 = `legacy-gateway` 二分（2026-12）：
+  **首探**（从未探到协议载荷）给空权威快照（路由不存在的版本事实，侧栏 legacy 档由它可达）；
+  **曾探到协议载荷后转 404**（`protocolFactsSeen`，来源指纹换代清零）保留既有行/游标/read 并标
+  `serviceable=false`/`stale=true`（不可用但绝不当会话消失，held pending 不被清），404→ok 恢复权威。
+  **2xx unversioned、404、5xx/超时统一排一次有界重探**（`scheduleProbe(reconnectMs)`，幂等 guard）
+  ——unversioned 不再永久不可用，除非 connected false→true 或来源指纹变化才解围。
 
 ### 4.3 UI 语义（状态指示）
 
@@ -402,12 +431,22 @@
   会话）。（组件不直连 store，订阅在插件上报端；boot 首帧无上报前不高亮，随首次
   上报补齐。跨来源 pending/completed 状态点仍全来源呈现。）
 - **状态点优先级**：**pending 徽标 > runningSubagents 运行环 > completed 点 >
-  running 环**。completed/pending/runningSubagents 来自 runtime facts，
+  running 环**；goal 呈现门不新增档位，而是**整体压掉 completed 档**（相位 active，
+  含 activation unknown）。completed/pending/runningSubagents 来自 runtime facts，
   `running` 来自完整 aggregate snapshot；两者均由已挂载 ctx 的同一 sessions
   store 事件驱动，但独立 bridge state 可能相差一个 React commit。
   runningSubagents 同样压过 running 环与 completed 点（vendor 保证 completed 与
   running 互斥）。官方 sessionStatuses 的「有运行中子 agent 就显示 ongoing」语义
   原样对齐（chamber 为避免瞬时双通道错位把用户需处理状态前置）。
+- **goal 呈现门与压制后 state（v5 §2.3/§4 单源，2026-12）**：唯一派生入口是
+  `packages/dsh-chamber-client-core/src/session-row-state.ts` 的 `sessionRowState(facts)`（零依赖叶模块，同时是
+  `GoalFact` / `goalSuppressesPresentation` / `goalHoldsCompletion` 的类型家）；label/dot、
+  `data-chamber-session-state` / `data-chamber-state-source` 仪表属性、搜索结果行、待办条目
+  与徽标计数全部消费同一个结果（INV7）。`goalSuppressesPresentation(goal)` 生效时 `state` 必须落
+  `running`/`none`——**不得返回 completed**（否则仪表报一个用户看不到的完成点）；
+  可选落 `data-chamber-goal-active`；`suppressedBy` 区分 `'goal'`（activation 已知）与
+  `'unknown'`（activation 未知，静默窗口与通知层 unknown-hold 同态）。pending 档不标
+  suppressedBy（等待输入不是压制）。
 - **运行环 snapshot 单一权威（`runningRingVisible`）**：运行环只取完整
   aggregate snapshot 的 running 位，runtime facts 的 running 不参与渲染。已挂载
   来源的 snapshot 由自身 ctx store 在 host-frame 事件上即时上报；未挂载或
@@ -425,17 +464,21 @@
 
 ### 4.4 代码落点
 
-- `shared/aggregate-store.ts`（通道 + `ChamberServerAggregate.runtime?` +
+- `packages/dsh-chamber-client-core/src/aggregate-store.ts`（通道 + `ChamberServerAggregate.runtime?` +
   `runningSubagents` 行字段）、`client/index.ts`（订阅与投影上报 + design 24 §12
   墓碑抑制/收敛链 + `indexSubagentDescendants` 注入）、`App.tsx`（runtimeFacts +
   completedBySource 对账/合并/清理/激活兜底；runningSubagents 随事实行透传）、
   `SidebarRoot.tsx` + `sidebar-chamber.module.css`（dot 状态类 + 高亮 +
   runningSubagents 分支 + `.scheduleIndicator` + `.railDotButton`）、
-  `shared/derive.ts`（`hasActiveScheduleOf`；`hasActiveSchedule` 进
-  `instanceSnapshotSignature`）、`shared/instance-api.ts`（unary 兜底行读
-  `projections.values` 同一事实）、`shared/session-row-window.ts`
-  （`sessionRowWindow` + `sessionRowDisclosure`）、`locales.ts`
-  （`status.waitingApproval/planReview/waitingAnswer/completed` +
+  `packages/dsh-chamber-client-core/src/derive.ts`（`hasActiveScheduleOf`；`hasActiveSchedule` 进
+  `instanceSnapshotSignature`；goal 的 `parseGoalFact`/`retainGoalFacts`/
+  `applyGoalActivation`/`goalFactSignature` 与 overlay 填补）、
+  `packages/dsh-chamber-client-core/src/session-row-state.ts`（goal 三值 + 两个谓词 + `sessionRowState` 压制后 state 的
+  零依赖叶模块）、`client/goal-activation.ts`（事件制 activation 缓存 + 有界重试；缓存上限
+  `MAX_ACTIVATION_CACHE = 2000`，LRU 淘汰 + warn-once + `evictedCount` 诊断，B4-1；不调
+  `goals/get`）、`packages/dsh-chamber-client-core/src/instance-api.ts`（unary 兜底行读 `projections.values` 同一
+  事实）、`packages/dsh-chamber-client-core/src/session-row-window.ts`（`sessionRowWindow` + `sessionRowDisclosure`）、
+  `locales.ts`（`status.waitingApproval/planReview/waitingAnswer/completed` +
   `status.subagentsRunning.one/other`）。
 
 ### 4.5 运行中子 agent（runningSubagents 圆环）
@@ -459,7 +502,7 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
 - 插件（vendor 边界）在每次快照投影时调用 vendor 纯函数
   `indexSubagentDescendants(snapshot.byId)`，把每父会话的 runningCount
   （>0 稀疏）并入事实通道——与官方 tree.ts 的 `runningSubagentCount` 同一
-  算法同一输入，语义不可能漂移；`shared/derive.ts projectRuntimeFacts` 保持纯
+  算法同一输入，语义不可能漂移；`packages/dsh-chamber-client-core/src/derive.ts projectRuntimeFacts` 保持纯
   （计数经参数注入，import 图不引入未构建 vendor 包）。
 - 渲染优先级改为 **pending 徽标 > runningSubagents 运行环 > completed 点 >
   running 环**：子 agent 存活期间绝无完成蓝点（对齐官方 sessionStatuses）；
@@ -472,8 +515,15 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
   不是「正在干活」的证据。父行改带 `subagentActivity: none | running | unknown`：
   索引缺席或来源 stale（R14）时读数是 `unknown`，中性呈现——不点亮子代理圆环/播报，
   也不据此压制 completed/running 读数与待办条目；`runningSubagents` 保持稀疏计数供诊断。
-  守卫单源 = `shared/session-row-state.ts` 的 `subagentActivityOf`（行读数、圆点、待办共用）；
+  守卫单源 = `packages/dsh-chamber-client-core/src/session-row-state.ts` 的 `subagentActivityOf`（行读数、圆点、待办共用）；
   上游完整性信号落地后删除本地 fallback（见 `docs/progress/todo/upstream-proposals.md` §7）。
+- **facts-only 源的 `subagentCount` 不是 busy 证据（对 §4.5 的有意修正，R2-G，2026-12）**：
+  gateway/SSH facts 行的 `subagentCount` 是「在场子会话数」（宿主投影/谱系索引的
+  cross-section），不是「正在干活」的证据。`completion-observation.ts` 只把**壳通道**的
+  `runningSubagents + subagentActivity` 当运行证据；facts-only 行的 count>0 按 idle/unknown
+  处理，绝不据此压制完成（complete 通知延迟 G4 与徽标/待办压制同规——误判 busy 就是永久
+  hold）。goal 门的唯一出口同样是本模块的 `goalSuppressesPresentation`（§4.3），待办与徽标
+  只消费它的结果，不得各写一遍。
 
 **残留（记录）**：one-shot await 期间父回合与子 agent 同活，我们只显示子 agent
 计数文案（官方显示「运行中」主标签 + 计数次标签；圆环同形，仅 tooltip 单值取舍）；
@@ -497,7 +547,7 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
   归属」）——共用同一份「谁在屏上」权威与 producer+projector 模式；其余写入者见
   下方「同族残留」。App 是「谁在屏上」的唯一权威，经 page-wide chamberBridge
   发布（`setActiveSource`/`getActiveSource`/`onActiveSource`，
-  `shared/aggregate-store.ts`）；ui-layout fork 的 `document-theme.ts` 按
+  `packages/dsh-chamber-client-core/src/aggregate-store.ts`）；ui-layout fork 的 `document-theme.ts` 按
   `ctx.chamberInstanceId` 门控：非活动视图**不写**文档，变为活动视图时用最近
   快照重投影（无需新的 theme/change），teardown **永不回收**文档（全页单例
   presenter 交给下一个活动视图复用，retraction 集天然是"上一个 applier 的 token
@@ -508,7 +558,7 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
 - **代码落点**：`packages/dsh-chamber-client-ui-layout/src/client/document-theme.ts`
   （纯投影器 + 单测 `test/document-theme.test.ts`）、`src/client/index.ts`
   （全页单例 presenter + effect）、`packages/renderer/src/App.tsx`
-  （活动视图发布，`useLayoutEffect` 保证绘制前生效）、`shared/aggregate-store.ts`
+  （活动视图发布，`useLayoutEffect` 保证绘制前生效）、`packages/dsh-chamber-client-core/src/aggregate-store.ts`
   （活动来源事实 + 单测）、`packages/renderer/src/styles.css`（兜底值，
   源码级钉子 `packages/renderer/test/frame-chrome/theme-fallback.test.ts`）。
 - **页面语言（`<html lang>`）归属**：官方 locale 服务的
@@ -674,7 +724,7 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
   柔和色板）；未分组桶无 accent 回退 caption ink。来源首个 git 快照发布前
   accent 一律不渲染（默认 ink），`isSourceGitFlagsLoaded` 后整源一次性落定
   最终色；无用户自定义、无持久化、**与选中态无关**（纯函数
-  `workspaceAccentStyle`，shared/derive.ts；当前会话指示由 session 行官方
+  `workspaceAccentStyle`，`packages/dsh-chamber-client-core/src/derive.ts`；当前会话指示由 session 行官方
   selected tint 承担）。
 - **当前会话高亮（对齐官方 selected 处理）**：session 行 = 官方
   `.sessionRow.selected` 的浅 `interactive-bg-hover` 色调（无 inset 阴影、无
@@ -759,7 +809,7 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
   「关不掉 / 异常打开」。**它缓解的是排名第一的触发（日常从动作簇
   离开该行）**；无指针位移的触发（轮子/重排/插入、blur+dwell）与"极快甩动跨过恢复后
   的 ≈3px 带"仍在，根治需要不依赖 React 合成的投递通道（**未实现**，见 §7 悬停移植条
-  与 `src/shared/hover-intent.ts`）。代价：24px 目标尺寸重新成为本模块偏差
+  与 `packages/dsh-chamber-client-core/src/hover-intent.ts`）。代价：24px 目标尺寸重新成为本模块偏差
   （design 24 §13 第 17 条、design 08 §3.4）。**簇间距**：`.rowActions` 4px
   与 footer 4px 保留；`.sourceActions` 与 git 的
   `.headerGit` 回到 v0.2.4 的 2px（其 4px 只出自该 pass，`46b522c9` 没碰它们）。
@@ -784,7 +834,7 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
   描述 workspace 头卡片）。
   - **实现归属**：卡片由本包 `client/RowHoverCard.tsx` 渲染，
     不再直接用 vendor `ui-primitives HoverCard`；**开合状态机**在
-    `shared/hover-intent.ts`。原因：vendor 版
+    `packages/dsh-chamber-client-core/src/hover-intent.ts`。原因：vendor 版
     （`ui-primitives/HoverCard.tsx:183-188`：`onPointerLeave` = `clearTimer()` +
     `if (open) armClose()`，arm 宽限由**上一次已提交的 `open`** 决定）在 dwell
     到 React 提交之间落下的 pointerleave 什么都不 arm，卡片挂载后指针已离开，只能
@@ -893,7 +943,7 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
 
 ### 8.1 机制（镜子，非盒子）
 
-待办区是对 chamberBridge 投影的**纯派生视图**（`shared/todo-attention.ts`），不持有
+待办区是对 chamberBridge 投影的**纯派生视图**（`packages/dsh-chamber-client-core/src/todo-attention.ts`），不持有
 任何条目记忆：输入 = 每来源每会话的**合并运行时事实**（App `completedBySource` 蓝点
 ∪ vendor `completed` ∪ `pending` 注册表——与行尾指示同一事实源）；输出 =
 「此刻需要你注意」的条目（来源 + 会话 + kind：`approval / plan-review / question /
@@ -938,19 +988,19 @@ onRequest`），**默认全开**——被动呈现（空时零占用），区别
 三类事件开关（卡片内行，通知组同节奏）。持久化在主进程 chamber-settings.json（白名单
 + 嵌套校验 + 损坏保留纪律同 notifications；main `applySettingsPatch` 嵌套 deep-merge）；
 三处类型镜像（preload ↔ renderer 由 ipc-surface-mirror 守护；desktop store 手工镜像
-——与 notifications 同纪律同缺口）。侧边栏经 `shared/todo-prefs.ts` 只读订阅
+——与 notifications 同纪律同缺口）。侧边栏经 `packages/dsh-chamber-client-core/src/todo-prefs.ts` 只读订阅
 （get + onChanged；值域校验 + 未知键过滤 + 未水合回落默认——漂移最坏退化为默认，绝不假 off/假 on 之外的状态）。
 
 ### 8.4 代码落点
 
-- 派生：`packages/dsh-chamber-client-ui-sidebar/src/shared/todo-attention.ts`
+- 派生：`packages/dsh-chamber-client-core/src/todo-attention.ts`
   （纯函数 + `test/session-rows/todo-attention.test.ts`）；
-- 设置订阅：同包 `shared/todo-prefs.ts`（只读水合 + `test/session-state/todo-prefs.test.ts`）；
+- 设置订阅：`packages/dsh-chamber-client-core/src/todo-prefs.ts`（只读水合 + `test/session-state/todo-prefs.test.ts`）；
 - UI：同包 `client/SessionTodoArea.tsx` + `sidebar-chamber.module.css` `.todo*` 类；
   `SidebarRoot` 在 `regionArea` 内、滚动容器**外**渲染（`wide` 门控；rail 无待办区；
   在 `ChamberListBoundary` **之内**——region 渲染错误纪律覆盖待办区）。打开经
   SidebarRoot 守卫回调（拖拽尾随 click 抑制 + 同会话内联重命名保护），来源色点复用
-  `shared/derive.ts sourceAccentColor`（列表/rail/待办共用）；
+  `packages/dsh-chamber-client-core/src/derive.ts sourceAccentColor`（列表/rail/待办共用）；
 - 设置面：`desktop/chamber-settings.ts`（类型/默认/校验）、`desktop/main.ts`
   （deep-merge）、`desktop/preload.cts` + `renderer/src/global.d.ts`（镜像）、
   `settings-bridge`（`session-todo-settings.ts` 助手 + `GeneralView` 新组 +

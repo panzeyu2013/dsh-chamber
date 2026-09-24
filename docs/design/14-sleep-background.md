@@ -205,7 +205,7 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
 > 运行位/「静默完成」不再有第二套判定。纯 reducer `session-authority.ts` 持有每会话 episode、
 > N=2 权威确认与恰好一次的完成边沿；`ladder.ts` 的一个引擎以两个实例运行（producer 的 probe
 > ladder + App 的 reconnect/notice escalation）；producer 执行端
-> （`shared/session-fact-reconcile.ts`）只做官方 store 读、独立 unary 读与 tier-3 写回
+> （`packages/dsh-chamber-client-core/src/session-fact-reconcile.ts`）只做官方 store 读、独立 unary 读与 tier-3 写回
 > （只写 false、写后自校验）。旧 `renderer/src/session-liveness.ts` planner、190s 回执链
 > （官方 refresh 相位 + 有界重试）、`authority-decision.ts`、`usableFacts` 抑制与第二完成入口
 > 均已删除；完成通知由 `notification-projection.ts` 单点裁决（两条证据、一个账本键空间）。
@@ -332,7 +332,7 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
   OS 级事件：唤醒/网络/可见性；窗口可见且机器未睡时一个都不响）。
   修复 = **单一权威链**：决策半是纯包 reducer `packages/dsh-stream-state/src/session-authority.ts`，
   调度半是同一个 `ladder.ts` 引擎的两个实例（producer 的 probe ladder + App 的 escalation
-  ladder），执行端是 `dsh-chamber-client-ui-sidebar/src/shared/session-fact-reconcile.ts`
+  ladder），执行端是 `packages/dsh-chamber-client-core/src/session-fact-reconcile.ts`
   （只做 I/O），通知面是 `packages/renderer/src/notification-projection.ts`（单入口）。
   旧 `renderer/src/session-liveness.ts` planner、190s 回执链（官方 refresh 相位 +
   有界重试 + verdict 分支）与 `authority-decision.ts` 已删除。
@@ -589,7 +589,7 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
 | `packages/desktop/main.ts` | 关窗分支（hide vs quit，**托盘可用门控**）；隐藏态节流 = Chromium 默认（修订，见 D1）；`powerMonitor.on('resume')` → push；`powerSaveBlocker`；退出确认（仅本地实例实际 live process，远程隧道/连接不影响关闭；**含更新安装豁免 + 单飞**）；will-quit single-flight 并行等待 plugin-sync/本地插件子进程、transport、control-plane 与 runtime 工作；`chamber-settings.json` store + `dsh-chamber:settings-get/set` IPC + push |
 | `packages/desktop/preload.cts` | `settings` 面（get/set/onChanged，覆盖 chamber 级全部设置键）+ `systemResume` 订阅；`DshChamberBridge` 扩展 |
 | `packages/renderer` | App 层订阅 system-resume → 分发实例重连 + transport 即时重探；**D4 升级 ladder 的宿主与呈现**：30s tick 请求 producer 对账；`planLadder` + `sessionAuthorityEscalationLadder`（阈值读 `tables.json` 的 `ladders.authority`）决定 reconnect / notice；共享 per-source 重连账本；notice 横幅 + 忽略集合 |
-| `packages/dsh-chamber-client-ui-sidebar` | **D4 的执行端**：`shared/session-fact-reconcile.ts`（唯一 I/O：官方 store 读、独立 unary 读、tier-3 写回、probe ladder 单飞、有界动作 ring）；producer 订阅 App 的 tick 通道并驱动它，快照经 `InstanceRuntimeReport.sessionAuthority` 回流（05 §3） |
+| `packages/dsh-chamber-client-ui-sidebar` | **D4 的执行端**：`packages/dsh-chamber-client-core/src/session-fact-reconcile.ts`（唯一 I/O：官方 store 读、独立 unary 读、tier-3 写回、probe ladder 单飞、有界动作 ring）；producer 订阅 App 的 tick 通道并驱动它，快照经 `InstanceRuntimeReport.sessionAuthority` 回流（05 §3） |
 | `packages/dsh-chamber-client-ui-open-in` | **D4 对话流健康臂的座席宿主**：`src/client/session-stream-health.ts`（纯决策）+ `session-stream-health-probe.ts`（stage 迁移、具象 `Session.resync()` 与面形状，全部 fail-closed）+ `SessionStreamHealthChip.tsx`、`session-stream-health-seat.ts`（注册进 `conversation.session.header.actions`，list/session 作用域）；起含用户触发的「重建对话通道」控制 |
 | settings-bridge 壳 | 「通用」视图（见设计 15：固定入口 `__general` 平铺） |
 | 测试 | `test:desktop`（关窗行为/退出确认/设置 store 单测）、`typecheck`、`build:renderer`（§6 验证门） |

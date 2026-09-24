@@ -388,6 +388,27 @@
       ],
       "evidence": "node scripts/upstream/verify-upstream-touchpoints.mjs",
       "status": "aligned"
+    },
+    {
+      "id": "mirror.dsh-api-session-controller-goal",
+      "type": "mirror",
+      "ours": "packages/control-plane",
+      "upstream": "packages/api/session-controller",
+      "authority": "upstream",
+      "criteria": [],
+      "deviations": [],
+      "relatedGates": [
+        "packages/control-plane/test/protocol/session-mux.test.ts",
+        "packages/renderer/test/session-state/source-mux-facts-goal.test.ts"
+      ],
+      "symbols": [
+        "packages/renderer/src/source-mux-facts.ts#parseProjectedGoalFact",
+        "src/session-state-protocol.ts#SessionStateGoalActivationEvent",
+        "src/session-state-protocol.ts#SessionStateGoalFact"
+      ],
+      "evidence": "人工登记（无 C 编号门）：升级 pin 时按 docs/checklists/upstream-touchpoints.md §7 第 6 步对照 vendor 源复验",
+      "status": "accepted",
+      "rationale": "goal wire 无自动化 vendor 源锁步：语义漂移只会保持 unknown（不误报），但白名单字段必须重锚；接受人工复验而非新增 C 编号门"
     }
   ],
   "notes": "machine facts only; prose lives in docs/checklists/upstream-touchpoints.md"

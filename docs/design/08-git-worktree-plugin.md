@@ -219,7 +219,7 @@ Git 事实不加进 App 的 session aggregate，v1 徽标只在 Git 区内；普
 - **折叠区图标交换**：worktree（派生）workspace 的折叠按钮常态显示 **git-branch 图标**、
   hover 才换回折叠箭头（展开=向下/折叠=向右，旋转移至 chevron 元素以免旋转分支图标）；
   普通 workspace 常态 **folder 图标**、hover 换折叠箭头。侧栏经共享存储
-  （`shared/workspace-git-flags.ts`，插件发布、侧栏读布尔值——零 git 类型依赖）感知派生
+  （`packages/dsh-chamber-client-core/src/workspace-git-flags.ts`，插件发布、侧栏读布尔值——零 git 类型依赖）感知派生
   workspace。
 - **图标与字体层级**：两类图标 14px（project 行对等）；workspace 标题 **14px/600 主色**，
   **派生 workspace 标题降级次级色**——图标语言 + 墨色阶梯 + 会话行 26px 缩进构成三级视觉
@@ -244,7 +244,7 @@ Git 事实不加进 App 的 session aggregate，v1 徽标只在 Git 区内；普
 - **连续家族不变式**：主 checkout 与同仓库派生 workspace 构成**连续家族**（main 居首、派生
   随后；注册表顺序持久）。家族内外无按仓库分隔的 CSS 间距（各组一律 `.workspaceGroup` 4px
   组距）——分组完全由顺序不变式表达。
-- **单一纯裁决器** `shared/workspace-drag-order.ts`：marker 渲染 / onDragOver 门 / onDrop /
+- **单一纯裁决器** `packages/dsh-chamber-client-core/src/workspace-drag-order.ts`：marker 渲染 / onDragOver 门 / onDrop /
   提交四处同源（单测
   `packages/dsh-chamber-client-ui-sidebar/test/session-state/workspace-drag-order.test.ts`）：
   - 外部 workspace **不得落入连续家族的内部空隙**（after main / 两派生之间等全 blocked）；
@@ -342,7 +342,7 @@ preflight -> git-creating -> workspace-adopting -> session-creating
 - **创建永不提交会话**：`createSession: false` 显式传入；recovery 记录携带 `createSession` 标志，
   重试尊重原意图（无会话创建重试不建会话、不跳转）；existing tab 不得残留 new 模式的建议分支。
 - **创建后的可见性（design 05 §2.2.1 第二入口）**：注册 workspace 的 unary 调用必须走
-  `shared/workspace-mutations.ts` 唯一出口上报回声事实，并带 `afterWorkspaceId = 来源主 checkout`
+  `packages/dsh-chamber-client-core/src/workspace-mutations.ts` 唯一出口上报回声事实，并带 `afterWorkspaceId = 来源主 checkout`
   的位置锚点；否则未挂载来源上的这个 **0 会话**工作区没有读通道（unary 兜底按会话 cwd 反推
   分组），行只能等用户点开该服务器。worktree flag（`isWorktree`/`mainWorkspaceId`，与 §3.2 行
   形态同源）与 adopt 的未注册块收敛走唯一出口的 `beforePublish`——**事实发布之前**写好，使
@@ -648,7 +648,7 @@ pre-remove 归档**不**停止，仍由归档管理器的删除前停止兜底�
 
 ## 被否方案（重复实现单源化：`isRecord`）
 
-`isRecord`（untrusted 响应 → 记录的边界判定）的规范实现在 sidebar `shared/wire-common.ts`，
+`isRecord`（untrusted 响应 → 记录的边界判定）的规范实现在 `packages/dsh-chamber-client-core/src/wire-common.ts`，
 其注释本身即声明「B/C/D/E 副本与其边界语义逐字同形」。本次把 git 的 `snapshot.ts`、`git-api.ts`
 与 renderer 的 `source-mux-facts.ts` 三处私有副本改为复用该实现（ARCH-IMPL-024）。
 

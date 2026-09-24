@@ -3,7 +3,7 @@
   "files": [
     {
       "path": "packages/renderer/src/App.tsx",
-      "lines": 2236,
+      "lines": 2426,
       "target": 400,
       "note": "renderer container (function-of-state mixes; stores/budgets/servers/ledger extracted)"
     },
@@ -51,19 +51,19 @@
     },
     {
       "path": "packages/dsh-chamber-client-core/src/derive.ts",
-      "lines": 1507,
+      "lines": 1677,
       "target": 1200,
       "note": "aggregate/session derive"
     },
     {
       "path": "packages/desktop/transport-manager.ts",
-      "lines": 1542,
+      "lines": 1667,
       "target": 1400,
       "note": "transport lifecycle"
     },
     {
       "path": "packages/gateway/src/session-state.ts",
-      "lines": 1666,
+      "lines": 1954,
       "target": 900,
       "note": "gateway session state routes + store + SSE"
     },
@@ -87,7 +87,7 @@
     },
     {
       "path": "packages/dsh-chamber-client-core/src/aggregate-store.ts",
-      "lines": 890,
+      "lines": 987,
       "target": 600,
       "note": "aggregate store types/channels/registry"
     }

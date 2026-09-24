@@ -153,6 +153,7 @@ export const ENTRYLESS_PACKAGES = [
 export const ENTRYLESS_SEAMS = [
   { package: 'renderer', name: '__testShellLifecycleOwnerCounts', reason: 'shell lifecycle suite asserts the owner ledger count; the suite owns the seam' },
   { package: 'renderer', name: '__testLastRequestedSession', reason: 'shell suite reads the last requested session id; the suite owns the seam' },
+  { package: 'renderer', name: '__resetSessionFactsGoalWarningForTests', reason: 'session-facts-source suite re-arms the one-shot goal-shape warning; the suite owns the seam' },
   { package: 'desktop', name: 'clearGatewaySyncRegistrations', reason: 'gateway-sync-registry suite resets module state between cases' },
   { package: 'desktop', name: 'pluginNameFromFolder', reason: 'plugin-tarball suite pins the NAME-ONLY read bound (64 KiB) against the real reader' },
   { package: 'desktop', name: 'listTgzManifest', reason: 'plugin-tarball suite pins the tgz listing shape against the real parser' },

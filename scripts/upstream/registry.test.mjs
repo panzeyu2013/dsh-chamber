@@ -52,7 +52,10 @@ test('新增不变量：shadow/chamber-named 二选一、判据下限、退役�
 })
 
 test('registry 值锁：分类桶形状 + 符号锚字符串（防"同计数下桶间搬家 / 锚点改指他处"）', () => {
-  const shape = registry.entries.map((entry) => [
+  // mirror 条目不是文件级分类（无 classify）：值锁只覆盖 fork/seed 的桶形状。
+  const shape = registry.entries
+    .filter((entry) => entry.classify !== undefined)
+    .map((entry) => [
     entry.id,
     Object.keys(entry.classify.patched).sort(),
     Object.keys(entry.classify.own).sort(),
@@ -92,6 +95,9 @@ test('registry 值锁：分类桶形状 + 符号锚字符串（防"同计数下�
       'src/client/store-core.ts#createLayoutStore',
       'src/client/stores.ts#trackLayoutInstance',
       'src/client/theme-cache.ts#resolveSourceThemeCache',
+      'packages/renderer/src/source-mux-facts.ts#parseProjectedGoalFact',
+      'src/session-state-protocol.ts#SessionStateGoalActivationEvent',
+      'src/session-state-protocol.ts#SessionStateGoalFact',
     ],
     '符号锚是逐条 golden：改指向必须同批改本断言',
   )
@@ -165,7 +171,7 @@ test('校验器抓退化：未知判据 / 分区缺口 / accepted 缺理由 / up
 
 test('符号锚下限：每个 fork/seed 至少一条，且总数被 pin（清空探针 = 测试红）', () => {
   const total = registry.entries.reduce((sum, entry) => sum + (entry.symbols ?? []).length, 0)
-  assert.equal(total, 19, '符号锚总数是 golden：增删锚点必须同批改本断言（D15 机械化方向不可被清空）')
+  assert.equal(total, 22, '符号锚总数是 golden：增删锚点必须同批改本断言（D15 机械化方向不可被清空）')
   for (const entry of registry.entries) {
     if (entry.type === 'fork' || entry.type === 'seed') assert.ok(entry.symbols.length >= 1, entry.id + ' 缺符号锚')
   }
