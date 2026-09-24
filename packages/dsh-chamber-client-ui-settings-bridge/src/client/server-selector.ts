@@ -64,31 +64,6 @@ export function serverProjectionSignature(rows: readonly ServerProjectionRow[]):
   })))
 }
 
-/** Minimal ownership face for any source-bound settings child context. */
-export interface SourceOwnedSession {
-  sourceFingerprint: string
-}
-
-/** True only while the projected roster still owns this exact source incarnation. */
-export function sourceFingerprintIsCurrent(
-  rows: readonly Pick<ServerProjectionRow, 'id' | 'sourceFingerprint'>[],
-  sourceId: string,
-  sourceFingerprint: string,
-): boolean {
-  return rows.some(row => row.id === sourceId && row.sourceFingerprint === sourceFingerprint)
-}
-
-/** Cached child contexts whose source was deleted or replaced under the same id. */
-export function staleOwnedSessionIds(
-  sessions: Readonly<Record<string, SourceOwnedSession>>,
-  rows: readonly Pick<ServerProjectionRow, 'id' | 'sourceFingerprint'>[],
-): string[] {
-  const currentOwners = new Map(rows.map(row => [row.id, row.sourceFingerprint]))
-  return Object.entries(sessions)
-    .filter(([sourceId, session]) => currentOwners.get(sourceId) !== session.sourceFingerprint)
-    .map(([sourceId]) => sourceId)
-}
-
 export function filterServerRows<T extends ServerSelectorRow>(rows: readonly T[], query: string): T[] {
   const normalized = query.trim().toLocaleLowerCase()
   if (normalized === '') return [...rows]

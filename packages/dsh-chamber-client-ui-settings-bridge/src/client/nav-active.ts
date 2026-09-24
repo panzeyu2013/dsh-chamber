@@ -44,7 +44,7 @@ export function resolveActiveSection(
   activeId: string | undefined,
   rows: readonly SectionNavRow[],
 ): string | undefined {
-  if (activeId !== undefined && FIXED_SECTION_IDS.includes(activeId)) return activeId
+  if (isFixedSectionId(activeId)) return activeId
   return activeId !== undefined && rows.some(row => row.id === activeId) ? activeId : rows[0]?.id
 }
 

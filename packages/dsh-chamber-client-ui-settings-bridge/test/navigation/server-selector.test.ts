@@ -5,8 +5,6 @@ import {
   filterServerRows,
   serverDropdownPlacement,
   serverProjectionSignature,
-  sourceFingerprintIsCurrent,
-  staleOwnedSessionIds,
 } from '../../src/client/server-selector.ts'
 
 const rows = [
@@ -106,34 +104,6 @@ test('settings roster signature cannot collide through separator-like user text'
     serverProjectionSignature([row('a', 'b\u0000ssh\nnext')]),
     serverProjectionSignature([row('a\u0000b', 'ssh\nnext')]),
   )
-})
-
-test('source-owned settings sessions retire on replacement or deletion', () => {
-  const sessions = {
-    local: { sourceFingerprint: 'local' },
-    'ssh-stable': { sourceFingerprint: 'proof-stable' },
-    'ssh-replaced': { sourceFingerprint: 'proof-old' },
-    'ssh-deleted': { sourceFingerprint: 'proof-deleted' },
-  }
-  const roster = [
-    { id: 'local', sourceFingerprint: 'local' },
-    { id: 'ssh-stable', sourceFingerprint: 'proof-stable' },
-    { id: 'ssh-replaced', sourceFingerprint: 'proof-new' },
-  ]
-
-  assert.deepEqual(staleOwnedSessionIds(sessions, roster), ['ssh-replaced', 'ssh-deleted'])
-})
-
-test('a late mount can commit only while its captured source proof is still current', () => {
-  const roster = [
-    { id: 'local', sourceFingerprint: 'local' },
-    { id: 'ssh-stable', sourceFingerprint: 'proof-stable' },
-    { id: 'ssh-replaced', sourceFingerprint: 'proof-new' },
-  ]
-
-  assert.equal(sourceFingerprintIsCurrent(roster, 'ssh-stable', 'proof-stable'), true)
-  assert.equal(sourceFingerprintIsCurrent(roster, 'ssh-replaced', 'proof-old'), false)
-  assert.equal(sourceFingerprintIsCurrent(roster, 'ssh-deleted', 'proof-deleted'), false)
 })
 
 test('settings roster signature preserves target kind and transport as independent dimensions', () => {
