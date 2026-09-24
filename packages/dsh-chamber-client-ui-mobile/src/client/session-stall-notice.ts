@@ -1,10 +1,7 @@
 /**
  * The stall notice's presentation surface: its style tag, class names, geometry
- * and stylesheet.
- *
- * The ladder DECISION lives in @dsh-chamber/dsh-stream-state; this module owns
- * only the DOM face the decision is rendered through. Nothing here decides
- * anything.
+ * and stylesheet. The ladder DECISION lives in
+ * @dsh-chamber/dsh-stream-state; nothing here decides anything.
  */
 
 /** The notice's own marker (same naming family as the nav toggle/backdrop). */
@@ -23,17 +20,14 @@ export const STALL_NOTICE_MIN_VISIBLE_PX = 96
 
 import { TOUCH_TIER_QUERY } from './composer.ts'
 
-/** Double-install guard (the official-hover-card.ts pattern). B4: declared here with
- *  the rest of the notice surface and imported by the installer - the module that
- *  still needs it - so the symbol keeps one home. */
+/** Double-install guard (the official-hover-card.ts pattern); declared with the
+ *  notice surface and imported by the installer. */
 export const STALL_GUARD: unique symbol = Symbol.for('dsh-chamber.dsh-client-ui-mobile.session-stall')
 
 /**
- * The notice's CSS. Tiny and self-contained because styles.ts is not
- * extendable from this module (file ownership) — see the module header for
- * why a style tag beats JS inline styles here. The default (`display: none`)
- * is OUTSIDE the tier media query on purpose: it is the declarative half of
- * the PC-leak guard, byte-identical to the tier the JS installer rides.
+ * The notice's CSS (self-contained: styles.ts is not extendable from this
+ * module). The default display: none is OUTSIDE the tier media query on
+ * purpose — the declarative half of the PC-leak guard.
  */
 export const STALL_NOTICE_CSS = `
 /* Mobile-only surface: invisible outside the touch tier, the same default the

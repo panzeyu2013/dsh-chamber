@@ -11,8 +11,7 @@ export class SerializedRefreshes<T> {
     const queued = this.successors.get(sourceId)
     if (queued !== undefined) return queued
     const startSuccessor = (): Promise<T> => {
-      // A regular caller may have occupied the tiny completion→successor
-      // window. Its pull is already the desired successor, so join it.
+      // A regular caller may have occupied the tiny completion→successor window; its pull is already the desired successor.
       const latest = this.running.get(sourceId)
       if (latest !== undefined && latest !== current) return latest
       return this.launch(sourceId, task)

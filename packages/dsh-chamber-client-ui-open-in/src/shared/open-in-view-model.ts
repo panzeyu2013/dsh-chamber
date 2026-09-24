@@ -1,36 +1,24 @@
 /**
- * Per-source open-in view-model (design 20 §5):
- * the single pure decision surface over the TWO app pools the unified open-in
- * entry draws from —
+ * Per-source open-in view-model: the single pure decision surface over the TWO
+ * app pools the unified entry draws from — `local` (the INSTANCE-hosted catalog
+ * served by the chamber host domain `openInApp/*`) and `main` (the desktop
+ * main-process projection over trusted IPC: the VS Code override for every
+ * source, the remote deeplink carrier for SSH targets).
  *
- *  - `local` — the INSTANCE-hosted application catalog served by the chamber
- *    host domain `openInApp/*` (`packages/dsh-chamber-seed-open-in`, the fork
- *    of upstream's open-in host half, design 20 §6): the full local
- *    application picker (Finder/Explorer/Terminal/VS Code/…) reached over the
- *    instance's own RPC channel;
- *  - `main` — the desktop main-process provider projection (trusted IPC):
- *    the VS Code override used for every source, and the remote deeplink
- *    carrier for SSH targets.
+ * Fail-closed; every rejected candidate is REPORTED with an explicit reason
+ * (never silently dropped), so the button renders exactly the reachable set:
  *
- * The matrix is fail-closed and every rejected candidate is REPORTED with an
- * explicit reason (never silently dropped), so the button can render exactly
- * the reachable set and diagnostics/tests can pin why an app is absent:
- *
- * | source                          | local pool           | main pool            |
- * |---------------------------------|----------------------|----------------------|
- * | `local` (transport local)       | all available apps   | all available apps   |
+ * | source                          | local pool              | main pool           |
+ * | `local` (transport local)       | all available apps      | all available apps  |
  * | `dsh-*`/`gateway-*` + ssh       | none (source-not-local) | remote-capable only |
- * | http / malformed / inconsistent | none                 | none                 |
+ * | http / malformed / inconsistent | none                    | none                |
  *
- * Channel priority on a shared id (design 20 §5.1 "vscode 全家走 IPC 覆盖" +
- * "展示并集 + IPC 兜底"): the desktop main-process provider is the OVERRIDE —
- * when it reports the id AVAILABLE, the local entry is suppressed
- * (`duplicate-app-id`) and the app launches through the trusted IPC path (so
- * the chamber's `vscodeOpenInNewWindow` policy, the exact-boot source proof
- * and the renderer deep-link intent push stay in force). When the main
- * provider reports the id UNAVAILABLE, the local entry survives and
- * launches through the instance's own host domain instead — the union of both
- * detectors is shown, never a hidden installed app.
+ * Channel priority on a shared id: an AVAILABLE main-provider entry is the
+ * OVERRIDE — the local entry is suppressed (`duplicate-app-id`) and the app
+ * launches through trusted IPC (chamber policy, exact-boot proof and deeplink
+ * intent push stay in force). When the main provider reports the id UNAVAILABLE,
+ * the local entry survives and launches through the instance's own host domain:
+ * the union of both detectors is shown, never a hidden installed app.
  */
 import type { OpenInApp, OpenInSource } from './capabilities.ts'
 
@@ -43,16 +31,14 @@ export type OpenInSuppressionReason =
   | 'unknown-source'
   /** A non-local source whose transport cannot carry remote launches. */
   | 'transport-not-ssh'
-  /** A non-local source cannot launch the machine's own apps: the machine
-   *  catalog is read for every source (design 20 §4.2), but an app that opens
-   *  on THIS machine is only launchable from the source that owns it. */
+  /** A non-local source cannot launch the machine’s own apps. */
   | 'source-not-local'
   /** The app is not installed/available right now. */
   | 'app-unavailable'
   /** A remote source can only use apps with a remote carrier. */
   | 'app-not-remote-capable'
   /** The id is owned by another channel: an available main-provider override
-   *  outranks the local entry, and any remaining duplicate loses. */
+   *  wins, the rest lose. */
   | 'duplicate-app-id'
 
 export interface OpenInViewEntry {
@@ -90,8 +76,8 @@ export interface OpenInViewModelInput {
 type SourceClass = 'local' | 'remote-ssh' | 'unsupported'
 
 const SOURCE_PREFIXES = ['dsh-', 'gateway-', 'ssh-'] as const
-// Mirrors shared/capabilities.ts INSTANCE_ID (same grammar as the desktop
-// transport-provider and renderer transport-source authorities).
+// Mirrors shared/capabilities.ts INSTANCE_ID and the desktop/renderer transport
+// authorities (same grammar).
 const RAW_INSTANCE_ID = /^(?!local$)[A-Za-z0-9_-]{1,64}$/
 
 /** Classify the source against the presentation matrix, fail-closed. */
@@ -113,8 +99,8 @@ function unsupportedReason(source: OpenInSource): OpenInSuppressionReason {
 
 /**
  * Build the per-source view-model. Pure over plain data: the caller supplies
- * both pool projections (or null when unknown) and gets the rendered set plus
- * the explicit suppression record.
+ * both pool projections (or null) and gets the rendered set plus the explicit
+ * suppression record.
  */
 export function buildOpenInViewModel(input: OpenInViewModelInput): OpenInViewModel {
   const sourceClass = classifySource(input.source)
@@ -122,8 +108,7 @@ export function buildOpenInViewModel(input: OpenInViewModelInput): OpenInViewMod
   const suppressed: OpenInSuppressedApp[] = []
   const accepted = new Set<string>()
   const mainEntries = input.mainEntries ?? []
-  // An AVAILABLE main-provider entry owns its id (the IPC override); an
-  // unavailable one does not, so the local entry may serve as the fallback.
+  // An AVAILABLE main-provider entry owns its id (the IPC override); an unavailable one does not.
   const mainOverrideIds = new Set(mainEntries.filter(app => app.available).map(app => app.id))
   const consider = (app: OpenInApp, channel: OpenInChannel): void => {
     if (sourceClass === 'unsupported') {
@@ -143,8 +128,7 @@ export function buildOpenInViewModel(input: OpenInViewModelInput): OpenInViewMod
       return
     }
     // Availability outranks the duplicate check: an unavailable main entry
-    // that duplicates a rendered local entry is reported as unavailable
-    // (that is WHY the IPC override did not take the id), not as a duplicate.
+    // duplicating a rendered local entry is reported as unavailable, not duplicate.
     if (!app.available) {
       suppressed.push({ id: app.id, channel, reason: 'app-unavailable' })
       return

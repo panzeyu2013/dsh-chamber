@@ -1,12 +1,11 @@
 /**
- * Page-wide dsh runtime-management projection (design 18 §3.6).
+ * Page-wide dsh runtime-management projection.
  *
- * This module is deliberately browser-framework-free. It is the shared
- * contract used by the settings runtime block and the connections local-card
- * spawn gate, and it can be exercised with plain node:test. The main process
- * remains authoritative for every transition and action; this layer only
- * projects that state into visible actions/status and owns the single renderer
- * subscription to the preload bridge.
+ * Deliberately browser-framework-free: the shared contract used by the settings
+ * runtime block and the connections local-card spawn gate, exercisable with plain
+ * node:test. The main process remains authoritative for every transition and
+ * action; this layer only projects that state into visible actions/status and owns
+ * the single renderer subscription to the preload bridge.
  */
 
 import { compareSemver } from './semver.ts'
@@ -116,10 +115,8 @@ export interface RuntimeState {
   swapAttempted?: boolean
   failure?: RuntimeFailure | null
   /** Read-failure detail when the runtime failure ledger is unknowable
-   *  (EACCES/EIO/non-ENOENT readdir); null when the set is known. The
-   *  `failure` row stays null in that case — an unknowable set is never
-   *  projected as "no failures" (B1 §2.3, desktop RuntimeLifecycleProjection
-   *  `failureError` twin). */
+   *  (EACCES/EIO/non-ENOENT readdir); null when the set is known. An unknowable
+   *  set is never projected as "no failures", so `failure` stays null there. */
   failureError?: string | null
   /** Persistent shell-update fallback/reactivation record. */
   invalidationNotice?: RuntimeInvalidationNotice | null
@@ -137,8 +134,8 @@ export interface RuntimeState {
   /** Category-only evidence projection; never a filesystem basename/path. */
   metadataComponents?: RuntimeMetadataComponent[]
   canRecoverMetadata?: boolean
-  /** Live install progress (design 18 progress bar): download bytes + stage
-   * milestones while an install runs; null when idle. */
+  /** Live install progress: download bytes + stage milestones while an install
+   *  runs; null when idle. */
   progress?: RuntimeInstallProgress | null
 }
 
@@ -155,9 +152,9 @@ export interface RuntimeSurface {
   check(): Promise<RuntimeState>
   install(version: string): Promise<RuntimeState>
   resetBuiltin(): Promise<RuntimeState>
-  /** Apply the pending version in the current session (design 18 addendum
-   *  §2.1): runs the existing activation transaction immediately instead of
-   *  waiting for the next launch. Main gates + native confirmation apply. */
+  /** Apply the pending version in the current session: runs the existing
+   *  activation transaction immediately instead of waiting for the next launch.
+   *  Main gates + native confirmation apply. */
   applyNow(): Promise<RuntimeState>
   retryApply(): Promise<RuntimeState>
   retryRestore(): Promise<RuntimeState>
@@ -169,8 +166,8 @@ export interface RuntimeSurface {
   clearFailure(version: string): Promise<RuntimeState>
   /** Restore the newest pre-rollback stash over DSH_HOME (main-validated name). */
   restorePreRollback(stashName: string): Promise<RuntimeState>
-  /** Transactional managed-dsh restart (design 18 §3.6 项 8): refreshes mounted
-   *  plugins; the pointer/version tree is untouched. */
+  /** Transactional managed-dsh restart: refreshes mounted plugins; the
+   *  pointer/version tree is untouched. */
   restart(): Promise<RuntimeState>
   onChanged(callback: (state: RuntimeState) => void): () => void
 }
@@ -189,10 +186,10 @@ export type RuntimeAction =
   | 'restart-dsh'
 
 /**
- * The strict visible-action matrix. Busy phases expose no mutation; pending
- * exposes the immediate-apply action plus the reset escape hatch, applying
- * exposes only the escape hatch required by design 18. Retry actions are
- * added separately from explicit controller capability bits.
+ * The strict visible-action matrix: busy phases expose no mutation; pending
+ * exposes the immediate-apply action plus the reset escape hatch; applying
+ * exposes only the escape hatch. Retry actions are added separately from explicit
+ * controller capability bits.
  */
 const BASE_ACTIONS: Record<RuntimePhase, readonly RuntimeAction[]> = {
   idle: ['check', 'restore-pre-rollback', 'select-version', 'install', 'cleanup-version', 'reset-builtin', 'restart-dsh'],
@@ -209,9 +206,9 @@ const BASE_ACTIONS: Record<RuntimePhase, readonly RuntimeAction[]> = {
   error: ['check', 'select-version', 'install', 'cleanup-version', 'reset-builtin', 'restart-dsh'],
 }
 
-/** Restart-dsh gate (design 18 §3.6 项 8): usable only in a non-busy,
- *  non-pending/non-applying/non-installing state; the transactional control-plane restart is
- *  single-flight and re-seeds mounted plugins on every spawn. */
+/** Restart-dsh gate: usable only in a non-busy, non-pending/applying/installing
+ *  state; the transactional control-plane restart is single-flight and re-seeds
+ *  mounted plugins on every spawn. */
 export function runtimeRestartAllowed(state: RuntimeState | null): boolean {
   if (state === null) return false
   return runtimeAllowedActions(state).includes('restart-dsh')
@@ -222,15 +219,12 @@ export function runtimeAllowedActions(state: RuntimeState | null): readonly Runt
   const canRetryRestore = state.canRetryRestore === true
     && (state.phase === 'rollback' || state.phase === 'failed')
   // Unsupported platforms may still need to finish a crash-interrupted data
-  // restore. That recovery action is deliberately narrower than version-tree
-  // management and remains the sole escape hatch. 「重启 dsh」是来源/平台无关
-  // 的进程动作（design 18 §3.6 项 8 口径）：只读投影下仍可用（与 gateway
-  // win32 行为一致），仅 runtimeBlocked 与忙碌相位排除。
+  // restore: that recovery action stays the sole escape hatch (「重启 dsh」是来源/
+  // 平台无关的进程动作，只读投影下仍可用), excluded only by runtimeBlocked and busy.
   if (state.managementSupported === false) {
     const actions: RuntimeAction[] = canRetryRestore ? ['retry-restore'] : []
-    // This branch runs BEFORE the runtimeBlocked early return, so the blocked
-    // state must be checked here explicitly: blocked recovery phases never
-    // offer restart.
+    // This branch runs BEFORE the runtimeBlocked early return, so the blocked state
+    // must be checked here explicitly: blocked recovery phases never offer restart.
     if (state.runtimeBlocked !== true
       && (BASE_ACTIONS[state.phase] ?? []).includes('restart-dsh')) {
       actions.push('restart-dsh')
@@ -238,12 +232,10 @@ export function runtimeAllowedActions(state: RuntimeState | null): readonly Runt
     return actions
   }
   if (state.runtimeBlocked === true) {
-    // An interrupted DSH_HOME restore must complete before selection metadata
-    // can be archived. A retryable 'half' restore is therefore the sole
-    // visible action when present. A permanent 'incomplete' restore (the
-    // journaled snapshot is missing or untrustworthy — no retry can ever
-    // succeed) keeps the retry button and does not hide the terminal
-    // recover-metadata escape.
+    // An interrupted DSH_HOME restore must complete before selection metadata can
+    // be archived, so a retryable 'half' restore is the sole visible action when
+    // present (a permanent 'incomplete' keeps the retry and the recover-metadata
+    // escape).
     const permanentIncomplete = state.restoreOutcome === 'incomplete'
     if (canRetryRestore && !permanentIncomplete) return ['retry-restore']
     const metadataRecoveryEligible = state.canRecoverMetadata === true
@@ -267,10 +259,9 @@ export function runtimeAllowedActions(state: RuntimeState | null): readonly Runt
     }
     return actions
   }
-  // An env-selected tree outranks every persisted override. Version
-  // selection/reset/apply/registry stay disabled, but 检查更新与「重启 dsh」
-  // 是来源无关动作（design 18 §3.6 项 8：env 源不禁 restart），中断的数据
-  // 恢复仍可续作。
+  // An env-selected tree outranks every persisted override: version
+  // selection/reset/apply/registry stay disabled, but 检查更新与「重启 dsh」是来源
+  // 无关动作，且中断的数据恢复仍可续作。
   if (state.source === 'env') {
     const base = BASE_ACTIONS[state.phase] ?? []
     const actions: RuntimeAction[] = base.includes('check') ? ['check'] : []
@@ -282,25 +273,19 @@ export function runtimeAllowedActions(state: RuntimeState | null): readonly Runt
     }
     return actions
   }
-  // Unknown phases fail closed to the empty set instead of throwing through
-  // the app ErrorBoundary (a TypeError here would kill the whole shell).
+  // Unknown phases fail closed to the empty set instead of throwing through the app
+  // ErrorBoundary.
   const actions = [...(BASE_ACTIONS[state.phase] ?? [])]
-  // reset-builtin 只在确实存在 override 时有意义（main 对 hasOverride !== true
-  // 一律拒绝，UI 不得显示 main 会 no-op 的动作）。pending/applying/snapshot-failed
-  // 是持久化事务的逃生口（正常必有 pending override），但显式 hasOverride:false
-  // （override 被外部删除）时同样不得显示必然 no-op 的按钮；其余相位无 override
-  // 时移除该按钮——包括 error/failed/rollback/applied，而不只是 idle/available。
-  // apply-now 与 reset-builtin 同构：它同样依赖持久化 pending 事务，main 侧的 apply-now-gate
-  // no-pending 门在无 durable pending 时一律拒绝；显式
-  // hasOverride:false 时 UI 必须同样隐藏，否则出现 UI 显示而 main 拒绝的
-  // UI⊄main 方向违例（与 reset-builtin 的 hasOverride 过滤对称）。
+  // reset-builtin only matters when an override exists (main refuses hasOverride
+  // !== true); explicit hasOverride:false must hide it in every phase, or the UI
+  // would show a button main no-ops. apply-now is the same shape: hide it on
+  // hasOverride:false / missing durable pending (UI⊄main symmetry).
   if (state.hasOverride === false
     || (state.phase !== 'pending' && state.phase !== 'applying' && state.phase !== 'snapshot-failed'
       && !(state.hasOverride ?? state.source === 'user'))) {
     const resetIndex = actions.indexOf('reset-builtin')
     if (resetIndex >= 0) actions.splice(resetIndex, 1)
-    // apply-now 只出现在 pending 相位；此过滤对非 pending 相位是无操作，但保持
-    // 与 reset-builtin 同一处、同一条件的对称性。
+    // apply-now only appears in the pending phase; the filter is a no-op elsewhere.
     const applyNowIndex = actions.indexOf('apply-now')
     if (applyNowIndex >= 0) actions.splice(applyNowIndex, 1)
   }
@@ -310,12 +295,10 @@ export function runtimeAllowedActions(state: RuntimeState | null): readonly Runt
   if (canRetryRestore) {
     actions.unshift('retry-restore')
   }
-  // Apply-now connectionState mirror (UI⊄main): the main-side gate
-  // (apply-now-gate.ts) refuses every connectionState outside ready/degraded —
-  // a local dsh that is stopped/crashed would make main silently no-op while
-  // the durable pending remains. Only apply-now is gated: reset-builtin is the
-  // persistent-transaction escape hatch and stays visible regardless of
-  // connection state. Absence (older main without the projection) never gates.
+  // Apply-now connectionState mirror (UI⊄main): the main-side gate refuses every
+  // connectionState outside ready/degraded, so a stopped/crashed local dsh would
+  // make main no-op while the durable pending remains. Only apply-now is gated —
+  // reset-builtin stays visible regardless; absence never gates.
   if (state.connectionState !== undefined
     && state.connectionState !== 'ready'
     && state.connectionState !== 'degraded') {
@@ -361,16 +344,14 @@ export function projectRuntimeStatus(
 ): RuntimeStatusProjection {
   if (state === null) return { kind: 'not-checked', version: null, detail: null }
   const version = operationVersion(state, chosen)
-  // Main projects a persisted swap-attempted marker as the failed terminal
-  // state. Do not let stale history override a later live checking/installing
-  // phase after the user takes another action.
+  // Main projects a persisted swap-attempted marker as the failed terminal state;
+  // stale history must not override a later live checking/installing phase.
   if (state.swapAttempted === true && state.phase === 'failed') {
     return { kind: 'swap-attempted', version, detail: state.error }
   }
   switch (state.phase) {
     case 'idle':
-      // Cached versions can exist before registry metadata has been fetched;
-      // their presence alone does not justify an "up to date" claim.
+      // Cached versions alone do not justify an "up to date" claim before registry metadata is fetched.
       return { kind: state.latest !== null ? 'idle' : 'not-checked', version: state.active, detail: null }
     case 'checking':
       return { kind: 'checking', version: state.active, detail: null }
@@ -438,11 +419,9 @@ export function projectRuntimeSnapshot(state: RuntimeState | null): RuntimeSnaps
   return { kind: 'unknown', count: null, latestAt: null, detail: null }
 }
 
-/** Unified status-indicator vocabulary:
- *  a coloured pill beside the current-version row in BOTH the local and the
- *  gateway settings branches. The badge names the machine state only — it
- *  never claims "up to date" / "new version available" (a registry verdict
- *  could contradict the visible version list). */
+/** Unified status-indicator vocabulary: a coloured pill beside the current-version
+ *  row in BOTH settings branches. The badge names the machine state only — it never
+ *  claims "up to date" / "new version available". */
 export type RuntimeBadgeLabel =
   | 'ok'
   | 'checking'
@@ -479,10 +458,8 @@ function badgeRestoreState(state: RuntimeState): RuntimeBadgeView | null {
   return null
 }
 
-/** Local (main-process) status → badge. `null` = not hydrated (no badge).
- *  Blocked/metadata/failed/recovery states suppress the ok badge exactly like
- *  the gateway branch suppresses its phase chip on blocked views — a red
- *  state must never sit next to a green "runtime healthy" pill. */
+/** Local status → badge. `null` = not hydrated. Blocked/metadata/failed/recovery
+ *  states suppress the ok badge — a red state must never sit next to a green pill. */
 export function projectRuntimeBadge(state: RuntimeState | null): RuntimeBadgeView | null {
   if (state === null) return null
   // swap-attempted dominates the failed terminal (projectRuntimeStatus parity).
@@ -513,8 +490,7 @@ export function projectRuntimeBadge(state: RuntimeState | null): RuntimeBadgeVie
       case 'failed': {
         const restore = badgeRestoreState(state)
         if (restore !== null) return restore
-        // A terminal complete rollback (data restored) is a healthy end
-        // state — never a lingering 'rolling-back' warn pill.
+        // A terminal complete rollback (data restored) is a healthy end state — never a lingering 'rolling-back' warn pill.
         if (state.phase === 'rollback' && state.restoreOutcome === 'complete') return badgeOk
         return state.phase === 'rollback' ? badgeWarn('rolling-back') : badgeDanger('failed')
       }
@@ -524,8 +500,7 @@ export function projectRuntimeBadge(state: RuntimeState | null): RuntimeBadgeVie
         return badgeOk
     }
   })()
-  // A blocked projection without corrupt metadata or an interrupted restore
-  // (unknown future reason) must never sit next to the ok pill.
+  // A blocked projection (unknown future reason) must never sit next to the ok pill.
   if (state.runtimeBlocked === true && view.label === 'ok') {
     return badgeDanger('blocked')
   }
@@ -550,14 +525,10 @@ export function formatRuntimeBytes(bytes: number): string {
 export { compareSemver }
 
 /**
- * Preserve a still-valid explicit user choice. Before the user chooses, the
- * picker preselects the ACTIVE version — the dropdown always reflects what is
- * actually running, and the action button arms only after the user changes the
- * selection (the default state has no override,
- * so the active version IS the bundled one — "default follows the built-in").
- * When no active version exists yet, the bundled (built-in) version is the
- * safe default over the registry recommendation. The registry recommendation
- * is the last fallback before the list order.
+ * Preserve a still-valid explicit user choice. Before the user chooses, the picker
+ * preselects the ACTIVE version; the action button arms only after a change. With
+ * no active version the bundled (built-in) version is the safe default over the
+ * registry recommendation, which is the last fallback before list order.
  */
 export function preferredRuntimeVersion(
   current: string | null,
@@ -599,9 +570,9 @@ export interface RuntimeStoreOptions {
 }
 
 /**
- * Single page-wide external store. It subscribes before querying state, so a
- * push that races hydration always wins; the last React subscriber tears down
- * the IPC listener and invalidates late query results.
+ * Single page-wide external store. It subscribes before querying state, so a push
+ * that races hydration always wins; the last React subscriber tears down the IPC
+ * listener and invalidates late query results.
  */
 export class RuntimeStateStore {
   private readonly options: RuntimeStoreOptions
@@ -668,8 +639,8 @@ export class RuntimeStateStore {
       this.revision += 1
       this.publish(state)
     }).catch(() => {
-      // A transient invoke failure must not leave a permanently blank store.
-      // If a push already landed, it is authoritative and no retry is needed.
+      // A transient invoke failure must not leave a permanently blank store; if a
+      // push already landed it is authoritative.
       if (epoch === this.epoch && this.listeners.size > 0 && this.revision === hydrationRevision) {
         this.retryFailedAttachment(epoch, attempt)
       }
@@ -711,7 +682,7 @@ export class RuntimeStateStore {
       // React cleanup must remain non-throwing even if a bridge misbehaves.
     } finally {
       // A remount must never render a stale terminal state while the fresh
-      // query/subscription is being established.
+      // query/subscription is established.
       this.current = null
     }
   }

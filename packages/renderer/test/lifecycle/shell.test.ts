@@ -295,7 +295,7 @@ test('bootInstanceShell: a graph-less boot keeps its cause over a late lower-pri
     )
     // … while a HIGHER-priority kind replaces the single slot: deferred rank 1
     // outranks the recorded required-services rank 0. Lower kinds could not
-    // (both producers stay on console — the bound is registered in STATUS).
+    // (both producers stay on console).
     ctx.chamberReportBootDegraded?.({
       kind: 'deferred-registration-failed',
       message: 'deferred plugin registration failed for 1 id(s): ui-tool',

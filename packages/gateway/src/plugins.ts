@@ -1,34 +1,14 @@
 /**
- * Gateway seed-cache for desktop-synced chamber host packages (design 17
- * §9.3): the chamber host packages
- * (dsh-chamber-seed-client-graph, dsh-chamber-seed-git-worktree,
- * dsh-chamber-seed-archive-cleanup, design 24,
- * plus dsh-chamber-seed-open-in, design 20 §6) are not shipped inside
- * the gateway package — a connecting desktop uploads its own copies through
- * the authenticated `PUT /chamber/plugins` surface, and the gateway caches
- * them under `<stateDir>/chamber-plugins/<name>/` for the control-plane seed
- * registry (every spawn re-seeds from this cache, so runtime version switches
- * follow automatically).
- *
- * Version semantics: the cache holds the LAST-SYNCED desktop's copies. A
- * fresh gateway (no cache) hosts a plain dsh whose activation probe skips the
- * chamber host domains until the first desktop sync — the expected probe set
- * is derived from the ACTUAL cache contents (syncedHostDomainProbeNames →
- * activationProbeNamesForDomains; an empty cache yields the reduced base
- * set, not a binary hostDomains flag); the
- * syncing desktop then restarts dsh so the seeded profile picks the
- * packages up. The open-in row is `localOnly` in the registry: it stays in
- * the derived syncable map (the load-time pin compares that map with
- * `HOST_DOMAIN_PROBE_NAMES` wholesale) but the desktop never uploads it, so
- * its cache directory simply stays absent and the seed skips it.
- *
- * Security: package names are whitelisted (the registry-derived host packages
- * only); every
- * cache write is an atomic 0600 no-follow write under the 0700 stateDir
- * discipline; file sizes are bounded; package.json must parse and its `name`
- * must match the requested entry. The mobile client-plugin slot is NOT
- * syncable — it is packaged in the gateway distribution (mobile access is
- * bound to the gateway and has no desktop in the chain).
+ * Gateway seed-cache for desktop-synced chamber host packages: they are not
+ * shipped in the gateway, so a desktop uploads copies through the
+ * authenticated `PUT /chamber/plugins`; the gateway caches them under
+ * `<stateDir>/chamber-plugins/<name>/`, and every spawn re-seeds from this
+ * cache. The cache holds the LAST-SYNCED desktop's copies: a fresh gateway
+ * hosts a plain dsh whose activation probe derives from the ACTUAL cache
+ * contents (empty cache = reduced base set, not a hostDomains flag).
+ * Security: whitelisted registry-derived names only; package.json must parse
+ * with a matching `name`; atomic 0600 no-follow writes under 0700 stateDir.
+ * The mobile plugin slot ships with the gateway and is never synced.
  */
 
 import { existsSync, mkdirSync } from 'node:fs'
@@ -48,34 +28,21 @@ import { readPrivateTextOrNull } from './private-read.ts'
 export const SYNCED_PLUGIN_DIR = 'chamber-plugins'
 
 /** The syncable chamber host packages — DERIVED from the control-plane's
- *  authoritative registry (name + insert id + probe), so a new host package
- *  is covered here without editing this file (never a
- *  hand-maintained parallel list). */
+ *  authoritative registry, never a hand-maintained parallel list. */
 export const SYNCABLE_HOST_PACKAGES = CHAMBER_HOST_PACKAGES.map(descriptor => descriptor.insert)
 
-// Fail-fast naming pin: the syncable
-// list is a host-seed registry of its own (it gates PUT /chamber/plugins, the
-// cache slug and the probe derivation), so a non-canonical host package name
-// aborts the gateway at load instead of accepting a desktop sync into a
-// non-canonical slug. Same drift class as the probe-domain pin below.
+// Fail-fast naming pin: this list gates PUT /chamber/plugins, the cache slug
+// and the probe derivation, so a non-canonical name aborts the gateway at load.
 assertHostSeedInsertNaming(SYNCABLE_HOST_PACKAGES)
 
-/** The activation-probe domain each syncable host package backs (design 24
- *  §7 C: the probe expectation derives from the actually seeded packages —
- *  this map is the sync-cache side of HOST_DOMAIN_PROBE_NAMES). */
+/** The activation-probe domain each syncable host package backs (derived from the seeded set). */
 const HOST_PACKAGE_PROBE_DOMAINS: Readonly<Record<string, string>> = Object.fromEntries(
   CHAMBER_HOST_PACKAGES.map(descriptor => [descriptor.insert.name, descriptor.probe.method]),
 )
 
-// Fail-fast drift pin (design 24 §7 C): the map's domain VALUES must equal
-// the dsh-runtime authoritative set (HOST_DOMAIN_PROBE_NAMES) — a typo'd or
-// one-sided domain aborts the gateway at load instead of passing a mounted
-// chamber domain unprobed (same drift class as the map-miss throw below and
-// dsh-runtime's activationProbeNamesForDomains unknown-name throw). The
-// registry's own uniqueness pin (`assertChamberHostRegistry`, run at load in
-// control-plane's host-graph-seed.ts — the registry's owner, so every
-// consumer is covered by construction) guarantees the size comparison below
-// is meaningful: no two rows can collapse into one domain value.
+// Fail-fast drift pin: the map's domain VALUES must equal the dsh-runtime
+// authoritative set (HOST_DOMAIN_PROBE_NAMES), so a typo'd or one-sided domain
+// aborts the gateway at load instead of passing a mounted chamber domain unprobed.
 const mappedProbeDomains = new Set<string>(Object.values(HOST_PACKAGE_PROBE_DOMAINS))
 if (mappedProbeDomains.size !== HOST_DOMAIN_PROBE_NAMES.length
   || HOST_DOMAIN_PROBE_NAMES.some(domain => !mappedProbeDomains.has(domain))) {
@@ -91,35 +58,26 @@ export const SYNCED_VERSION_MAX_CHARS = 128
 
 /**
  * The upload/cache file set — DERIVED from the control-plane seed tuple
- * (`HOST_PACKAGE_SEED_FILES`, host-graph-seed.ts), never a hand-written pair:
- * the syncing desktop's PUT payload and this cache therefore speak one set.
+ * (`HOST_PACKAGE_SEED_FILES`), so desktop and cache speak one set.
  */
 export const SYNCED_PLUGIN_FILES: readonly HostPackageSeedFile[] = HOST_PACKAGE_SEED_FILES
 
-/** Wire shape of one upload: every declared seed file, keyed by its
- *  package-relative path. A mapped type over the shared union, so the
- *  `/chamber/plugins` route's upload object (and any other producer) fails to
- *  compile the moment the tuple gains a member it does not carry. */
+/** Wire shape of one upload, keyed by package-relative seed path (a new tuple member without a carrier fails to compile). */
 export type SyncedPluginFiles = { [K in HostPackageSeedFile]: string }
 
-/** Per-file cache size bound, keyed by the shared union: the manifest stays
- *  small, a built entry is a bundle. A new declared file with no bound here is
- *  a compile error instead of an unbounded cache write. */
+/** Per-file cache size bound: a new declared file with no bound here is a compile error. */
 const SYNCED_FILE_MAX_BYTES: Record<HostPackageSeedFile, number> = {
   'package.json': SYNCED_PACKAGE_MAX_BYTES,
   'dist/index.js': SYNCED_ARTIFACT_MAX_BYTES,
 }
 
-/** The declared member carrying the package manifest (the name/version anchor
- *  this cache validates). Typed by the shared union, so removing package.json
- *  from the seed set is a compile error rather than a silent validation skip. */
+/** The declared member carrying the manifest (name/version anchor); dropping package.json is a compile error. */
 const MANIFEST_SEED_FILE: HostPackageSeedFile = 'package.json'
 
 export interface ChamberPlugins {
   /** Non-secret cached projection: name + version per synced host package. */
   list(): Array<{ name: string; version: string | null }>
-  /** Validate + atomically cache one host package upload. Throws on invalid
-   * input (the route maps to 400) and on persistence failure (500). */
+  /** Validate + atomically cache one upload; throws on invalid input (route 400) or persistence failure (500). */
   put(name: string, files: SyncedPluginFiles): Promise<{ changed: boolean }>
 }
 
@@ -128,11 +86,8 @@ function slugFor(name: string): string | null {
   return entry === null || entry === undefined ? null : name.slice('@dsh-chamber/'.length)
 }
 
-/** Validation failure (route maps to 400). Persistence failures (fs errors)
- * carry no such code and must map to 500 — see the /chamber/plugins route.
- * `keep` hands the route's sanitizer the caller's own non-secret vocabulary
- * (sanitize-route-error.ts): a scoped package name would otherwise be redacted
- * into `[path]` by the path rules, losing the reason the 400 carries. */
+/** Validation failure (route 400); persistence failures map to 500. `keep` hands
+ * the route's sanitizer the caller's vocabulary so a scoped name is not redacted. */
 function invalidInput(message: string, keep: readonly string[] = []): Error & { code: 'invalid_input'; keep?: readonly string[] } {
   const error = new Error(message) as Error & { code: 'invalid_input'; keep?: readonly string[] }
   error.code = 'invalid_input'
@@ -140,9 +95,7 @@ function invalidInput(message: string, keep: readonly string[] = []): Error & { 
   return error
 }
 
-/** One shared unsyncable-package refusal message (the route echoes it back
- * sanitized — a syncing desktop meeting an OLDER gateway release must see
- * why its package was refused instead of a bare 400). */
+/** Shared unsyncable-package refusal message (echoed back sanitized, so an older gateway says why). */
 function unsyncableMessage(name: string): string {
   return `unsyncable package ${JSON.stringify(name)} (this gateway release cannot cache it — it may predate the package; update the gateway to match the connecting desktop)`
 }
@@ -181,9 +134,7 @@ export function createChamberPlugins(stateDir: string, logger: Logger): ChamberP
     async put(name, files) {
       const slug = slugFor(name)
       if (slug === null) throw invalidInput(unsyncableMessage(name), [name])
-      // Presence + size validation over the SHARED seed file set: every
-      // declared file must ride the upload. A missing member is refused here
-      // instead of being dropped while the route answers 200/changed:true.
+      // Presence + size validation over the SHARED seed file set: a missing member is refused, not dropped.
       const declared: Array<{ relative: HostPackageSeedFile; text: string }> = []
       for (const relative of SYNCED_PLUGIN_FILES) {
         const text = files[relative]
@@ -215,11 +166,8 @@ export function createChamberPlugins(stateDir: string, logger: Logger): ChamberP
       }
       const dir = packageDir(name)
       if (dir === null) throw invalidInput(unsyncableMessage(name), [name])
-      // Atomic 0600 publication under the 0700 cache root (no-follow
-      // discipline; a pnpm operation may prune the profile target, but never
-      // this gateway-owned cache). Every declared file's own final parent is
-      // materialized (dist/ for the built entry) as a real directory, never a
-      // symlink.
+      // Atomic 0600 publication under the 0700 cache root (no-follow; pnpm may
+      // prune the profile target, never this cache). Parents become real dirs.
       mkdirSync(cacheRoot, { recursive: true, mode: 0o700 })
       ensurePrivateDirectoryNoFollow(cacheRoot, 0o700, { existingMode: 'preserve' })
       ensurePrivateDirectoryNoFollow(dir, 0o700, { existingMode: 'preserve' })
@@ -247,21 +195,11 @@ export function createChamberPlugins(stateDir: string, logger: Logger): ChamberP
 }
 
 /** Chamber host domains whose synced package is actually present in the seed
- *  cache (design 24 §7 C): per-package presence for partial syncs (old
- *  desktop ↔ new gateway, interrupted syncs).
- *  An empty list = a plain dsh (reduced probe set); the full list = all
- *  chamber domains. Fail-loud drift check: a syncable host package with no
- *  domain in HOST_PACKAGE_PROBE_DOMAINS throws instead of being silently
- *  skipped — dropping its probe row would let a mounted chamber domain pass
- *  activation unprobed (the same drift class the dsh-runtime
- *  activationProbeNamesForDomains unknown-name throw guards; the map miss is
- *  source-level metadata drift). Must stay in sync with
- *  HOST_DOMAIN_PROBE_NAMES in packages/dsh-runtime (the same domain set).
- *  @param stateDir - gateway state root; presence is checked per package at
- *    <stateDir>/chamber-plugins/<scope-stripped name>/dist/index.js.
- *  @param packages - the syncable host package list to derive over (the
- *    module SYNCABLE_HOST_PACKAGES constant by default; injectable so tests
- *    can drive the fail-loud drift path — production callers never pass it). */
+ *  cache: per-package presence for partial syncs. Empty list = a plain dsh
+ *  (reduced probe set); the full list = all chamber domains. Fail-loud drift
+ *  check: a syncable package with no domain in HOST_PACKAGE_PROBE_DOMAINS throws
+ *  instead of being silently skipped, which would let a mounted chamber domain
+ *  pass activation unprobed. */
 export function syncedHostDomainProbeNames(
   stateDir: string,
   packages: readonly { id: string; name: string }[] = SYNCABLE_HOST_PACKAGES,

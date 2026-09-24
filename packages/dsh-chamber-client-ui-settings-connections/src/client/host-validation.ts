@@ -1,10 +1,9 @@
 /**
  * Renderer-side mirrors of the desktop transport metadata gates.
  *
- * These are UX guards only; packages/desktop remains the security/correctness
- * authority and rejects an entire invalid save atomically. The parity test
- * checks these exports against the desktop authority's source declarations
- * without crossing the client plugin's TypeScript rootDir/package boundary.
+ * These are UX guards only; packages/desktop remains the security/correctness authority and rejects
+ * an entire invalid save atomically. The parity test checks these exports against the desktop
+ * authority's source declarations without crossing the client plugin's TypeScript rootDir boundary.
  */
 
 export const INSTANCE_ID_PATTERN = /^(?!local$)[a-zA-Z0-9_-]{1,64}$/

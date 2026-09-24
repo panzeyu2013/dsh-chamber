@@ -1,31 +1,22 @@
 /**
- * 启动性能 User Timing 标记注册表。
+ * 启动性能 User Timing 标记注册表（renderer 侧直接 import 的埋点；boot 内核内联的
+ * `dsh:boot:*` 不在此登记）。名字必须稳定——性能工具与人工 trace 以本表为准，改名会破坏
+ * 跨版本的阶段对照。
  *
- * 本表注册 renderer 侧（shell.ts / App.tsx）直接 import 的启动埋点；boot 内核
- * （packages/dsh-client-web/src/boot.ts，独立包无法反向依赖本文件）的
- * `dsh:boot:*` 标记由该文件内联，不在此登记。名字必须保持稳定——scripts/perf
- * 工具与人工 Performance trace 以本表为准，改名会破坏跨版本的阶段对照。
- *
- * 语义约定：所有 mark 以 `dsh:` 为前缀；带实例维度的标记用
- * perfMark(name, instanceId) 生成 `<name>:<instanceId>` 后缀形式
- * （PerformanceObserver 按前缀过滤即可聚合）。每个命名标记全页面只由一个
- * 打点者发出（shell settle/failed 由 shell.ts 在 settle 返回点统一打点，
- * App 的 handleShellState 只消费状态、不重复打点）。
- *
- * 埋点只做观测、零业务语义：performance.mark 缺失/抛错一律静默，生产与测试
- * 环境同路径（见 perfMark 的守卫）。
+ * 所有 mark 以 `dsh:` 为前缀；带实例维度的标记用 perfMark(name, instanceId) 生成
+ * `<name>:<instanceId>` 后缀（按前缀过滤即可聚合）；每个命名标记全页面只由一个打点者发出
+ * （shell settle/failed 由 shell.ts 统一打点，App 只消费状态）。
+ * 埋点只做观测、零业务语义：performance.mark 缺失/抛错一律静默（生产与测试同路径）。
  */
 export const PERF_MARKS = {
   /** chamber App 首次挂载 effect（页面壳/veil 就绪，boot 链路即将开始）。 */
   appMount: 'dsh:app:mount',
   /** /health（或 SSE 健康流）首次报告本地实例 ready。 */
   appLocalReady: 'dsh:app:local-ready',
-  /** 一次来源切换意图被接受（selectView 提交选择）。带目标来源后缀；
-   *  与 appViewReveal 配对给出 switchFrameMs（scripts/perf/switch-frame-probe.mjs
-   *  消费；纯观测，零业务语义——注意它不是"首帧已绘制"的证明，只是 App 侧揭示时刻）。 */
+  /** 一次来源切换意图被接受（selectView 提交选择）。带目标来源后缀；与 appViewReveal 之差 =
+   *  switchFrameMs（App 侧揭示时刻，不是"首帧已绘制"的证明）。 */
   appViewRequest: 'dsh:app:view-request',
-  /** 揭示门把 painted 收敛到目标的那一提交。带目标来源后缀；
-   *  与 appViewRequest 之差 = switchFrameMs（p95 是温壳档位的判据之一）。 */
+  /** 揭示门把 painted 收敛到目标的那一提交。带目标来源后缀；与 appViewRequest 之差 = switchFrameMs。 */
   appViewReveal: 'dsh:app:view-reveal',
   /** bootInstanceShell 入口（含排队等待）。 */
   shellBootStart: 'dsh:shell:boot-start',
@@ -46,6 +37,5 @@ export function perfMark(name: PerfMarkName, detail?: string): void {
       performance.mark(detail === undefined ? name : `${name}:${detail}`)
     }
   } catch {
-    // User Timing 失败不影响任何业务路径。
   }
 }

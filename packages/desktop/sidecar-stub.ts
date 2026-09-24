@@ -1,51 +1,22 @@
 /**
- * sidecar-stub.ts — POC B-bridge service end (design 25 §4.4.2);
- * it stubs exactly the three slice topologies so the full chain can be proven:
+ * sidecar-stub.ts — POC B-bridge service end: stubs the three slice topologies
+ * (request/response, push, reverse edge) so the full chain can be proven.
  *
- *   1. request/response — dsh-chamber:info, settings get/set, the SSH
- *      instances roster and connect/disconnect/status;
- *   2. push — desktop_ssh_status_changed emitted after connect/disconnect
- *      (fabricated state, loud-marked `poc: true`);
- *   3. reverse edge — edge:notification-clicked (Swift notification-click
- *      stub) → logged here → dsh-chamber:notification-open pushed back to the
- *      web (design 25 §4.5 stub semantics: Swift stub → sidecar log → push).
- *
- * Transport (pure Node, zero dependencies):
- *   - spawned by the Swift BridgeClient as `node sidecar-stub.ts
- *     --instances <path>`; desktop package.json "type":"module" → this file
- *     is ESM; type annotations are erasable-only, so it runs directly under
- *     Node ≥22 type stripping (repo engines ≥24; on Node 22.6–22.17 pass
- *     --experimental-strip-types).
- *   - stdout is the NDJSON protocol stream and NOTHING else. console.log and
- *     console.info write to stdout in Node and are therefore forbidden here;
- *     every log line goes through console.error (stderr), which the Swift
- *     BridgeClient reads as the log channel.
- *   - frames: request  {"id":N,"method":"…","payload":…}
- *             response {"id":N,"ok":true,"result":…}
- *                      {"id":N,"ok":false,"error":"…"}
- *             event    {"event":"…","payload":…}
- *     Responses echo the request id (the Swift client owns id monotonicity;
- *     event frames carry no id, and this sidecar never originates a request
- *     in the POC). One frame = one write = one line; no interleaving.
- *   - stdin EOF and SIGTERM/SIGINT both exit 0 — the signal path is genuinely
- *     reachable in pure Node (design 25 §3.3(5); it is dead code under
- *     Electron) and must be explicit here.
- *   - every line is parsed under a per-frame guard: a malformed frame is
- *     logged on stderr and dropped — fail-loud means stderr, never a crash,
- *     never a reply the caller cannot pair with a request.
- *
- * POC honesty: every fabricated projection carries `poc: true` (comment on
- * connectHandler); POC payloads use {instanceId} on the desktop_ssh_* methods
- * — the POC A-bridge shim sends the same field. Result field names for info
- * (controlPlaneUrl/dshVersion/version/platform) match preload/main so the
- * renderer needs no POC-only branches.
+ * Pure Node, zero dependencies, ESM with erasable-only annotations. stdout is the NDJSON
+ * protocol stream and NOTHING else: console.log/info are forbidden; all logs go through
+ * console.error (stderr), which the Swift BridgeClient reads as the log channel. Frames:
+ * request {id,method,payload} / response {id,ok,result|error} / event {event,payload};
+ * responses echo the request id, events carry none, one frame = one write = one line.
+ * stdin EOF and SIGTERM/SIGINT exit 0. A malformed line is logged on stderr and dropped —
+ * fail-loud is stderr, never a crash or unpaired reply. POC honesty: fabricated
+ * projections carry `poc: true`; desktop_ssh_* payloads use {instanceId}; field names
+ * match preload/main.
  */
 
 import { readFileSync } from 'node:fs'
 import { describeError } from './describe-error.ts'
 import { createInterface } from 'node:readline'
 
-// ---- wire types ---------------------------------------------------------
 
 type Json = null | boolean | number | string | Json[] | { [k: string]: Json }
 
@@ -61,9 +32,9 @@ type OutboundFrame =
   | { event: string; payload: Json }
 
 function send(frame: OutboundFrame): void {
-  // One stringify + one write keeps every frame atomic on the pipe. A dead
-  // stdout must not crash the process (stdout 'error' listener below); the
-  // Swift side closing its read end surfaces as stdin EOF → graceful exit.
+  // One stringify + one write keeps every frame atomic on the pipe. A dead stdout must
+  // not crash the process (stdout error listener below); the Swift read end closing
+  // surfaces as stdin EOF → graceful exit.
   try {
     process.stdout.write(JSON.stringify(frame) + '\n')
   } catch (err) {
@@ -75,9 +46,8 @@ function pushEvent(event: string, payload: Json): void {
   send({ event: event, payload: payload })
 }
 
-/** Deliberate request failure → error frame carrying exactly this message.
- *  Any other throw inside a handler is a coding error and is answered with a
- *  generic error frame — never a crash, never a dangling request id. */
+/** Deliberate request failure → error frame with exactly this message; any other throw
+ * is answered with a generic error frame — never a crash, never a dangling request id. */
 class HandlerError extends Error {
   constructor(message: string) {
     super(message)
@@ -85,15 +55,13 @@ class HandlerError extends Error {
   }
 }
 
-// ---- line parsing --------------------------------------------------------
 
 function preview(rawLine: string): string {
   const line = rawLine.length > 160 ? rawLine.slice(0, 160) + '…' : rawLine
   return JSON.stringify(line)
 }
 
-/** JSON.parse wrapper: `undefined` is the sentinel for unparseable input —
- *  JSON.parse can never produce undefined, so the sentinel is unambiguous. */
+/** JSON.parse wrapper: undefined is the sentinel for unparseable input — JSON.parse can never produce it, so it is unambiguous. */
 function tryParseJson(rawLine: string): unknown {
   try {
     return JSON.parse(rawLine)
@@ -114,8 +82,7 @@ function parseRequestFrame(rawLine: string): RequestFrame | null {
   }
   const frame = parsed as Record<string, unknown>
   if (typeof frame.id !== 'number' || !Number.isSafeInteger(frame.id) || typeof frame.method !== 'string') {
-    // Also catches unsolicited response/event frames from the Swift side,
-    // which the POC never sends (no sidecar-originated requests yet).
+    // Also catches unsolicited response/event frames from the Swift side, which the POC never sends.
     console.error('[sidecar-stub] malformed frame (no numeric id + method string), ignored: ' + preview(rawLine))
     return null
   }
@@ -124,7 +91,6 @@ function parseRequestFrame(rawLine: string): RequestFrame | null {
   return { id: frame.id, method: frame.method, payload: payload }
 }
 
-// ---- startup state -------------------------------------------------------
 
 function instancesPathFromArgv(argv: string[]): string | null {
   const flagIndex = argv.indexOf('--instances')
@@ -134,30 +100,26 @@ function instancesPathFromArgv(argv: string[]): string | null {
 
 const INSTANCES_PATH: string | null = instancesPathFromArgv(process.argv)
 
-/** Last connect/disconnect outcome per instance — the memory behind
- *  desktop_ssh_status. */
+/** Last connect/disconnect outcome per instance — the memory behind desktop_ssh_status. */
 const phases = new Map<string, 'connected' | 'idle'>()
 
 function rememberPhase(instanceId: string, phase: 'connected' | 'idle'): void {
   phases.set(instanceId, phase)
 }
 
-/** desktop_ssh_* POC payloads carry {instanceId} (the POC A-bridge shim sends
- *  the same field on the web side); the official main-process handlers use
- *  {id} schemas. */
+/** desktop_ssh_* POC payloads carry {instanceId} (the A-bridge shim sends the same field);
+ * the official main-process handlers use {id} schemas. */
 function instanceIdFromPayload(payload: Json | null): string | null {
   if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) return null
   const instanceId = (payload as { [k: string]: Json }).instanceId
   return typeof instanceId === 'string' ? instanceId : null
 }
 
-// ---- channel handlers (the dispatch table; POC subset) -------------------
 
 type MethodHandler = (payload: Json | null) => Json | Promise<Json>
 
 function infoHandler(): Json {
-  // Field names mirror the main-process dsh-chamber:info handler and the
-  // preload scalars; DSH_CHAMBER_SHELL_CP_URL lets the Swift dev shell pin its port.
+  // Field names mirror the main-process dsh-chamber:info handler and preload scalars; DSH_CHAMBER_SHELL_CP_URL pins the dev shell port.
   return {
     controlPlaneUrl: process.env.DSH_CHAMBER_SHELL_CP_URL ?? 'http://127.0.0.1:17520',
     dshVersion: 'poc-stub',
@@ -167,10 +129,9 @@ function infoHandler(): Json {
 }
 
 function instancesGetHandler(): Json {
-  // Honest-error contract (design 25 §4.4.2): missing/unreadable/corrupt registry
-  // answers {error:'poc-no-registry'} on the wire — never a silent empty
-  // success (AGENTS proxy-honesty invariant; the renderer must tell "no
-  // instances" apart from "read failed"). Valid arrays pass through untouched.
+  // Honest-error contract: missing/unreadable/corrupt registry answers {error:poc-no-registry}
+  // on the wire, never a silent empty success — the renderer must tell no-instances apart
+  // from read-failed. Valid arrays pass through untouched.
   const instancesPath = INSTANCES_PATH
   if (instancesPath === null) throw new HandlerError('poc-no-registry')
   const rawText = readInstancesFile(instancesPath)
@@ -209,12 +170,10 @@ async function connectHandler(payload: Json | null): Promise<Json> {
     console.error('[sidecar-stub] desktop_ssh_connect: payload.instanceId must be a string')
     throw new HandlerError('invalid-payload')
   }
-  // Fake bring-up latency so the renderer observes the async shape of a real
-  // tunnel connect.
+  // Fake bring-up latency so the renderer observes the async shape of a real tunnel connect.
   await sleep(300)
   rememberPhase(instanceId, 'connected')
-  // POC semantics are stubbed and loud-marked: the status event is fabricated
-  // here (poc:true; design 25 §4.4.2).
+  // POC semantics are stubbed and loud-marked: the status event is fabricated (poc:true).
   pushEvent('desktop_ssh_status_changed', { id: instanceId, status: 'connected', poc: true })
   return { ok: true }
 }
@@ -252,19 +211,15 @@ function settingsSetHandler(payload: Json | null): Json {
 }
 
 function notificationClickedHandler(): Json {
-  // Notification click loopback (design 25 §4.5 stub semantics): the Swift
-  // shell stubs a click → edge:notification-clicked → this log line → push
-  // dsh-chamber:notification-open back to the web. poc:true marks the
-  // fabricated delivery (the real path carries the notification adjudication
-  // queue with deliveryId/attempt).
+  // Notification click loopback: Swift stub → edge:notification-clicked → this log line → push
+  // dsh-chamber:notification-open back to the web. poc:true marks the fabricated delivery.
   console.error('[sidecar-stub] edge:notification-clicked — Swift notification-click stub; pushing notification-open back to the web')
   pushEvent('dsh-chamber:notification-open', { sourceId: 'local', sessionId: 'poc', poc: true })
   return null
 }
 
-/** Dispatch table — the POC subset of the 60 main-process invoke handlers
- *  plus the one reverse edge. Anything absent is answered with a LOUD
- *  {error:'poc-unimplemented'} — never silence, never a fake success. */
+/** Dispatch table — the POC subset of the 60 main-process invoke handlers plus the one
+ * reverse edge. Anything absent is answered with a LOUD {error:poc-unimplemented}. */
 const handlers: { readonly [method: string]: MethodHandler | undefined } = {
   'dsh-chamber:info': infoHandler,
   'desktop_ssh_instances_get': instancesGetHandler,
@@ -279,8 +234,7 @@ const handlers: { readonly [method: string]: MethodHandler | undefined } = {
 async function dispatch(method: string, payload: Json | null, id: number): Promise<void> {
   const handler = handlers[method]
   if (handler === undefined) {
-    // Loud rejection for everything outside the POC subset — the same
-    // {error:'poc-unimplemented'} convention the A-bridge shim uses.
+    // Loud rejection for everything outside the POC subset — the same {error:poc-unimplemented} convention the A-bridge shim uses.
     send({ id: id, ok: false, error: 'poc-unimplemented' })
     return
   }
@@ -296,7 +250,6 @@ async function dispatch(method: string, payload: Json | null, id: number): Promi
   }
 }
 
-// ---- io + lifecycle ------------------------------------------------------
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
@@ -305,16 +258,16 @@ function sleep(ms: number): Promise<void> {
 }
 
 process.stdout.on('error', (err: Error): void => {
-  // The Swift side closed its read end: log and let stdin EOF / a signal take
-  // the graceful exit (an unhandled 'error' event would crash the process).
+  // The Swift side closed its read end: log and let stdin EOF / a signal take the graceful
+  // exit (an unhandled error event would crash the process).
   console.error('[sidecar-stub] stdout error: ' + describeError(err))
 })
 
 const rl = createInterface({ input: process.stdin, crlfDelay: Infinity })
 
 rl.on('line', (rawLine: string): void => {
-  // Per-frame top-level guard: a malformed line is logged on stderr and
-  // dropped (no reply the caller could not pair with a request; no crash).
+  // Per-frame top-level guard: a malformed line is logged on stderr and dropped — no
+  // unpaired reply, no crash.
   const frame = parseRequestFrame(rawLine)
   if (frame === null) return
   void dispatch(frame.method, frame.payload, frame.id)
@@ -327,9 +280,8 @@ rl.on('close', (): void => {
 })
 
 function onSignal(signal: NodeJS.Signals): void {
-  // SIGTERM/SIGINT are genuinely reachable under pure Node (dead code in the
-  // Electron flavor — design 25 §3.3(5)) — translate both to the graceful
-  // exit path.
+  // SIGTERM/SIGINT are genuinely reachable under pure Node (dead code in the Electron
+  // flavor) — translate both to the graceful exit path.
   console.error('[sidecar-stub] ' + signal + ' — exiting 0')
   process.exit(0)
 }

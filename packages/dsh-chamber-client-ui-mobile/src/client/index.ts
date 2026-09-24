@@ -1,26 +1,21 @@
 /**
- * Chamber mobile adaptation plugin, browser half (design 17 §18): adapts the
- * OFFICIAL dsh web shell to touch/narrow viewports. Zero code copied from
- * community plugins — the mechanisms (attribute stamping, enter-to-newline,
- * editability recovery, layout-source-driven drawer) are re-implemented
- * against the empirical dsh DOM on the chamber base (centre column
- * = keyed `main` slot, right column = `rightbar`; see markup.ts ROLE_SLOT_KEYS):
- *  - panel state comes from the two-tier layout source (layout-facts.ts):
- *    the chamber layout fork's `layoutFacts` service when present, the
- *    official `data-sidebar-collapsed` attribute observation otherwise —
- *    the gateway-hosted instance runs the OFFICIAL ui-layout (design 17
- *    §18.4 项 3 deployment-matrix exception);
- *  - frame stamping is per instance root (`[data-slot="root"]`),
- *    idempotent and remount-safe (项 2); the behavior effects are
- *    document-level single-instance BY DESIGN (the gateway deployment is
- *    single-shell; a future multi-shell renderer mount must scope them);
- *  - the mobile tier activates on `(max-width:1023px) and (pointer:coarse)`
- *    (项 5) — the CSS is fully media-query scoped, desktop untouched.
- *
- *  Anchor note: ROLE_SLOT_KEYS encodes the keyed `main` centre column and
- *  the `rightbar` right column. The dsh version actually injected into a
- *  gateway instance is decided by the dsh-runtime on the serving
- *  desktop/gateway — anchors must be re-audited when the vendored pin moves.
+ * Chamber mobile adaptation plugin, browser half: adapts the OFFICIAL dsh web
+ * shell to touch/narrow viewports. The mechanisms (attribute stamping,
+ * enter-to-newline, editability recovery, layout-source-driven drawer) are
+ * re-implemented against the dsh DOM on the chamber base (centre column =
+ * keyed main slot, right column = rightbar; see markup.ts ROLE_SLOT_KEYS).
+ *  - panel state comes from the two-tier layout source (layout-facts.ts): the
+ *    chamber layout fork's layoutFacts service when present, else the official
+ *    data-sidebar-collapsed attribute (the gateway-hosted instance runs the
+ *    OFFICIAL ui-layout).
+ *  - frame stamping is per instance root and remount-safe; the behavior
+ *    effects are document-level single-instance BY DESIGN (the gateway
+ *    deployment is single-shell; a future multi-shell renderer mount must
+ *    scope them).
+ *  - mobile tier = (max-width:1023px) and (pointer:coarse); CSS is fully
+ *    media-query scoped, desktop untouched.
+ *  - anchors (and ROLE_SLOT_KEYS) must be re-audited when the vendored dsh pin
+ *    moves.
  */
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
@@ -49,18 +44,12 @@ import {
 import { installSessionStallNotice, sessionStallFace } from './session-stall.ts'
 import { MobileNavToggle, type MobileNavToggleInjected } from './MobileNavToggle.tsx'
 
-// design 05 §4.2「文档级 SVG 资源 id 归属」: the OFFICIAL shell's icon components
-// hard-code their Figma resource ids and `url(#id)` resolves DOCUMENT-wide, so an
-// icon whose clipper/mask lands in a not-laid-out subtree is dropped at paint time
-// on WebKit and stays blank (the desktop N-ctx defect, real-machine measured). The
-// gateway-hosted mobile page renders the same official components, so it installs
-// the same scoper — mirroring `packages/renderer/src/main.tsx` (module scope,
-// BEFORE createRoot()). This module is evaluated by the client-module loader
-// before the shell applies, and the installer also processes the SVGs already in
-// the document, so the rename happens before the first paint. ONE implementation:
-// the module is IMPORTED from the renderer source (never copied), so the renderer
-// suite and the manual probe (`scripts/dev/svg-resource-probe.mjs`) keep covering
-// this deployment too.
+// The OFFICIAL shell's icon components hard-code their Figma resource ids and
+// url(#id) resolves DOCUMENT-wide, so an icon whose clipper/mask lands in a
+// not-laid-out subtree is dropped at paint time on WebKit and stays blank.
+// Installing the same scoper before the shell applies (module scope, before
+// createRoot()/first paint; ONE implementation imported from the renderer
+// source, never copied) renames the ids document-wide.
 // 同 main.tsx 的锚定赋值（同一套产物标记；未压缩的 committed bundle 也照此写）。
 ;(globalThis as unknown as { __chamberSvgScopeInstalled?: unknown }).__chamberSvgScopeInstalled =
   installSvgResourceScope()
@@ -77,14 +66,10 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 const NS = 'dsh-chamber.mobile'
 
 // Official services only — the gateway-hosted instance has NO chamber layout
-// fork, so `layoutFacts` (a chamber-only service) must NOT be a hard inject;
-// the layout source abstraction probes it at runtime and falls back to the
-// official frame attribute (layout-facts.ts).
-// `sessions` is the OFFICIAL session-list service (design 17 §18; the mobile DOM
-// carries no session-id anchor — markup.ts — so the official list is the only
-// authoritative source of "which session is the reader on"). It is provided by
-// the official ui-session client in every deployment shape of this page, so the
-// inject list stays official-services-only (layoutFacts' rule above).
+// fork, so layoutFacts must NOT be a hard inject (the layout source probes it
+// at runtime; layout-facts.ts). sessions is the OFFICIAL session-list service:
+// the mobile DOM carries no session-id anchor, so it is the only authoritative
+// "which session is the reader on" source.
 export const inject = ['slots', 'locale', 'layout', 'sessions']
 
 export function apply(ctx: ClientContext): void {
@@ -92,20 +77,19 @@ export function apply(ctx: ClientContext): void {
 
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'dsh-chamber: mobile dictionaries')
 
-  // ---- read watermark: reading a session on the phone teaches the
-  // gateway mirror the host-domain watermark, so the desktop's completed-unread
-  // dot clears for the same session. Fail-closed: absent service / missing row /
-  // rejected fetch are all silent no-ops (read-watermark.ts). ----
+  // ---- read watermark: reading a session on the phone teaches the gateway
+  // mirror the host-domain watermark, clearing the desktop unread dot.
+  // Fail-closed: absent service / missing row / rejected fetch are silent
+  // no-ops (read-watermark.ts). ----
   ctx.effect(() => installMobileReadWatermark(ctx), 'dsh-chamber: mobile read watermark')
 
   // ---- assets: viewport tokens + stylesheet (idempotent) ----
   ctx.effect(() => {
     const disposers: Array<() => void> = []
 
-    // Viewport tokens are touch-tier concerns only (interactive-widget for
-    // the Android keyboard, viewport-fit for iOS safe areas): a desktop
-    // browser on the gateway must keep the official viewport byte-identical
-    // (the PC-leak invariant applies to the meta surface too).
+    // Viewport tokens are touch-tier concerns (interactive-widget for the
+    // Android keyboard, viewport-fit for iOS safe areas); a desktop browser on
+    // the gateway keeps the official viewport byte-identical (PC-leak invariant).
     const touchTier = window.matchMedia(TOUCH_TIER_QUERY)
     if (touchTier.matches) {
       const meta = document.querySelector('meta[name="viewport"]')
@@ -133,10 +117,9 @@ export function apply(ctx: ClientContext): void {
       disposers.push(() => style.remove())
     }
 
-    // theme-color follows the official theme: read the alias surface
-    // token, re-synced when the official theme presenter flips the body
-    // attribute. The mobile surface has no theme of its own — it must
-    // mirror the shell's light/dark state for the browser chrome.
+    // theme-color mirrors the official theme: re-sync when the theme presenter
+    // flips the body attribute/dark class. The mobile surface has no theme of
+    // its own — it mirrors the shell's light/dark state for the browser chrome.
     const existingThemeMeta = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')
     const themeMeta = existingThemeMeta ?? document.createElement('meta')
     if (existingThemeMeta === null) {
@@ -156,40 +139,22 @@ export function apply(ctx: ClientContext): void {
     return () => { for (const dispose of disposers) dispose() }
   }, 'dsh-chamber: mobile assets')
 
-  // ---- markup: stamp the frame and its columns (N-ctx: every instance
-  // root, idempotent, survives frame remounts). The observer skips deep
-  // content mutations: only childList changes that can affect the
-  // stamp set (root slot / frame / column shell / session-gated slot outlet
-  // mounting inside a resident column shell — see isStructuralTarget in
-  // markup.ts) trigger a re-stamp; chat streaming and typing commit
-  // thousands of deep childList batches that never match. The batch
-  // decision is a pure function (shouldRestamp), unit-tested without a DOM.
-  // Anchor note: the official AppFrame renders the right
-  // column SHELL and its [data-slot="rightbar"] outlet wrapper from first
-  // paint (`[data-rightbar-col]`; the renderer emits the wrapper
-  // unconditionally) — only the docking surface inside is registration-gated.
-  // The childList channel below (a) covers late content mounting into the
-  // resident shells; a separate frame-attribute channel (b) covers
-  // attribute-only state flips and any deeper drift. The two channels are
-  // deliberately independent: attribute records never reach the childList
-  // batch decision.
+  // ---- markup: stamp the frame and its columns (N-ctx: every instance root,
+  // idempotent, survives frame remounts). The observer skips deep content
+  // mutations: only structural childList changes can affect the stamp set
+  // trigger a re-stamp (pure shouldRestamp, unit-tested); streaming/typing
+  // churn never matches. The frame-attribute channel below covers
+  // attribute-only state flips. ----
   ctx.effect(() => {
-    // stampFrame is idempotent (setAttribute on stable anchors), so repeated
+    // stampFrame is idempotent (setAttribute on stable anchors): repeated
     // stamps on remounts are harmless and need no dedup bookkeeping.
     let frameAttributeObserver: MutationObserver | null = null
     const stamp = (): void => {
       const roots = document.querySelectorAll(ROOT_SLOT_SELECTOR)
       for (const root of roots) stampFrame(root)
-      // (b) Frame state attributes (collapsed flags) drive the drawer
-      // geometry and can flip in the same commit as a session activation, or
-      // on attribute-only paths the childList observer never sees. Re-attach
-      // after every stamp so a remounted frame is observed; stampFrame never
-      // writes these attributes, so there is no self-trigger loop. Frequency
-      // is user-action level (drawer open/close, right surface open) — zero
-      // streaming noise. NOTE: this observer channel is wiring-only and has
-      // no unit test (no DOM/MutationObserver test base in this package) —
-      // verified on device (§18.6); the pure batch decision below is the
-      // unit-tested part.
+      // (b) Frame state attributes can flip on attribute-only paths the
+      // childList observer never sees; re-attach after every stamp so a
+      // remounted frame is observed. stampFrame never writes them — no loop.
       frameAttributeObserver?.disconnect()
       frameAttributeObserver = null
       const frames: Element[] = []
@@ -218,16 +183,11 @@ export function apply(ctx: ClientContext): void {
     }
   }, 'dsh-chamber: mobile frame stamping')
 
-  // ---- drawer body scroll lock (layout-source-driven; design 17 §18.4
-  // 项 3) — the official conversation scroll happens inside
-  // [data-conversation-scroll] (the AppFrame itself is overflow:hidden), so
-  // locking document.body does not stop the background from scrolling on
-  // iOS — the scroll containers are locked instead, plus body as an
-  // overscroll backstop. The drawer state comes from the two-tier layout
-  // source (chamber layoutFacts when present, official frame attribute
-  // otherwise) — the gateway-hosted official ui-layout has no layoutFacts.
-  // The source is created ONCE per apply and shared with the Escape effect
-  // (P1.5: no duplicated observers/matchMedia). ----
+  // ---- drawer body scroll lock — the official conversation scroll happens
+  // inside [data-conversation-scroll] (the AppFrame itself is overflow:hidden),
+  // so locking document.body alone does not stop iOS background scrolling: lock
+  // the scroll containers, body as an overscroll backstop. The drawer state
+  // comes from the shared layout source (created ONCE per apply). ----
   const layoutSource = createLayoutFactSource(ctx)
   ctx.effect(() => {
     let lastLocked = false
@@ -253,17 +213,15 @@ export function apply(ctx: ClientContext): void {
     }
   }, 'dsh-chamber: mobile drawer scroll lock')
 
-  // ---- Escape closes the open drawer (touch tier only — the PC-leak
-  // invariant applies to JS too: a desktop browser must keep the official
-  // behavior, where Escape closes the settings dialog, never the sidebar) ----
+  // ---- Escape closes the open drawer (touch tier only: a desktop browser must
+  // keep the official behavior, where Escape closes the settings dialog). ----
   ctx.effect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.key !== 'Escape') return
       if (!layoutSource.getNarrow()) return
       // A modal dialog (official settings opens inside the sidebar DOM, so
-      // drawer + dialog coexist) owns Escape: closing the drawer underneath
-      // an open modal would double-close on one keypress (the dialog's own
-      // handler fires right after ours). Yield to the modal.
+      // drawer + dialog coexist) owns Escape: closing the drawer underneath it
+      // would double-close on one keypress.
       const modalOpen = document.querySelector('[role="dialog"][aria-modal="true"]') !== null
       if (modalOpen) return
       if (!layoutSource.getCollapsed()) ctx.layout.toggleSidebar()
@@ -275,15 +233,14 @@ export function apply(ctx: ClientContext): void {
   // The shared layout source is released when the ctx dies.
   ctx.effect(() => () => layoutSource.dispose(), 'dsh-chamber: mobile layout source')
 
-  // ---- composer + drawer behavior (touch tier only — the "PC leak" guard
-  // applies to JS too: desktop must keep the official Enter=send convention
-  // and its native click delivery). Installed/uninstalled dynamically as
-  // the tier matches/unmatches. ----
+  // ---- composer + drawer behavior (touch tier only — the PC-leak guard
+  // applies to JS too: desktop keeps the official Enter=send convention and
+  // native click delivery). Installed/uninstalled as the tier flips. ----
   ctx.effect(() => {
     const touchTier = window.matchMedia(TOUCH_TIER_QUERY)
     // The settings sheet is PHONE-tier CSS; its scroll-reset behavior gates on
     // the same tier (a 769-1023px touch tablet keeps the official modal
-    // geometry and the official cross-section scroll behavior).
+    // geometry and cross-section scroll behavior).
     const phoneTier = window.matchMedia(PHONE_TIER_QUERY)
     let disposers: Array<() => void> = []
     const sync = (): void => {
@@ -295,12 +252,11 @@ export function apply(ctx: ClientContext): void {
             installEditabilityRecovery(),
             installComposerVisibilityGuard(),
             installComposerSelfHeal(),
-            // iOS suppresses the compatibility click for drawer taps (the
-            // hover-reveal layout shift) — heal the lost activation so one
-            // tap switches sessions (drawer-taps.ts).
+            // iOS suppresses the compatibility click for drawer taps: heal the
+            // lost activation so one tap switches sessions (drawer-taps.ts).
             installDrawerTapHeal(() => touchTier.matches),
-            // Phone-tier settings sheet: switching section chips must reset
-            // the shared options scroller (settings-sheet.ts).
+            // Phone-tier settings sheet: switching section chips resets the
+            // shared options scroller (settings-sheet.ts).
             installSettingsSheetScrollReset(() => phoneTier.matches),
             ladder.attach(),
           ]
@@ -318,18 +274,12 @@ export function apply(ctx: ClientContext): void {
     }
   }, 'dsh-chamber: mobile composer behavior')
 
-  // ---- stranded OFFICIAL hover-card watchdog (design 17 §18.4.5) ----
-  // This tier loads the OFFICIAL ui-primitives HoverCard (the chamber's own
-  // `RowHoverCard` exists only in the composite page), and the atom's close
-  // grace is armed from the last COMMITTED open — a leave inside the commit
-  // window arms nothing, and on touch no leave is delivered at all, so the
-  // card strands over the row. The watchdog drives the atom's own
-  // `onPointerLeave` through one bubbling `pointerout` on the matched wrapper;
-  // see official-hover-card.ts for the mechanism and every guard. It rides its
-  // own tier — the coarse-pointer chrome tier the stylesheet's sticky-tooltip
-  // rule already uses, NOT the width-capped touch tier: a landscape tablet
-  // taps too, while attaching a mouse flips `hover` and restores the official
-  // behavior. Installed/uninstalled dynamically as the tier flips.
+  // ---- stranded OFFICIAL hover-card watchdog ----: this tier loads the
+  // official HoverCard (the chamber RowHoverCard exists only on the composite
+  // page); the watchdog drives the atom's own onPointerLeave through one
+  // bubbling pointerout — see official-hover-card.ts for the mechanism and
+  // every guard. It rides the coarse-pointer chrome tier, NOT the width-capped
+  // touch tier. Installed/uninstalled as the tier flips. ----
   ctx.effect(() => {
     const coarseNoHover = window.matchMedia(COARSE_NO_HOVER_QUERY)
     let disposeWatchdog: (() => void) | null = null
@@ -350,16 +300,10 @@ export function apply(ctx: ClientContext): void {
     }
   }, 'dsh-chamber: stranded official hover-card watchdog')
 
-  // ---- session-load stall notice (design 17 §18) ----
-  // The official chat view can park on its loading-history face forever (no
-  // deadline on either side of the wire) and the official UI offers no way
-  // out; this plugin's notice is the page's only recovery lever. It rides the
-  // TOUCH tier (the same tier the mobile surface lives on) and, like the
-  // watchdog above, is installed/uninstalled dynamically as the tier flips —
-  // nothing is created at apply time. It shows a notice whose primary action is
-  // a user-initiated reload, and may itself call the pinned
-  // per-session resync on positive evidence that no open is in flight; see
-  // session-stall.ts for the shape, the threshold and every guard.
+  // ---- session-load stall notice ----: the official chat view can park on
+  // its loading-history face forever and offers no way out; this notice is the
+  // page's only recovery lever. Runs on the touch tier, installed/uninstalled
+  // dynamically; see session-stall.ts for shape, threshold and guards. ----
   ctx.effect(() => {
     const touchTier = window.matchMedia(TOUCH_TIER_QUERY)
     let disposeNotice: (() => void) | null = null

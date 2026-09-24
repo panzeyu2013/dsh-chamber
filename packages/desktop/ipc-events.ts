@@ -1,20 +1,16 @@
 /**
- * Desktop IPC channel names — the single source for MAIN-process senders and
- * handlers (main.ts + the ipc-*.ts wiring modules). `SYSTEM_RESUME_EVENT` is
- * also referenced (as the same literal) by preload.cts: the preload build
- * contract is a self-contained single file (build-preload.mjs), so it cannot
- * import this module — the duplication is deliberate and pinned by
- * test/ipc/ipc-surface-mirror.test.ts (which asserts the main-side handle/send literal
- * sets EQUAL the preload-side invoke/on literal sets).
+ * Desktop IPC channel names — the single source for MAIN-process senders and handlers
+ * (main.ts + the ipc-*.ts wiring modules).
  *
- * The renderer-side twin lives in
- * packages/dsh-client-connection/src/client/index.ts (same literal; the two
- * processes cannot share one module).
+ * `SYSTEM_RESUME_EVENT` is repeated as the same literal by preload.cts: the preload build
+ * contract is a self-contained single file, so it cannot import this module — the
+ * duplication is deliberate and the two literal sets must stay equal. The renderer-side
+ * twin lives in packages/dsh-client-connection/src/client/index.ts.
  */
 
 /** Every main-process IPC channel: request/response (ipcMain.handle) and
- *  main→renderer pushes (webContents.send). Value-object form so the surface
- *  mirror test can resolve the full channel set from one import. */
+ *  main→renderer pushes (webContents.send). Value-object form so the full
+ *  channel set resolves from one import. */
 export const IPC_CHANNELS = {
   INFO: 'dsh-chamber:info',
 
@@ -26,22 +22,22 @@ export const IPC_CHANNELS = {
   NOTIFICATIONS_READY: 'dsh-chamber:notifications-ready',
   NOTIFICATION_OPEN_ACK: 'dsh-chamber:notification-open-ack',
   NOTIFICATION_OPEN: 'dsh-chamber:notification-open',
-  /** Unread badge count (design 19 §3.7): renderer push → main adjudication
-   *  (badgeEnabled) + platform-gated app.setBadgeCount. */
+  /** Unread badge count: renderer push → main adjudication (badgeEnabled) +
+   *  platform-gated app.setBadgeCount. */
   BADGE_COUNT: 'dsh-chamber:badge-count',
 
   UPDATE_STATE: 'dsh-chamber:update-state',
   UPDATE_CHECK: 'dsh-chamber:update-check',
   UPDATE_DOWNLOAD: 'dsh-chamber:update-download',
-  /** User-triggered restart into the downloaded update (design 11 — the
-   *  settings「重启并安装」button; main-process updater.restartAndInstall →
-   *  electron-updater quitAndInstall: quit + install + relaunch). */
+  /** User-triggered restart into the downloaded update (settings「重启并安装」
+   *  button): main updater.restartAndInstall → electron-updater quitAndInstall
+   *  (quit + install + relaunch). */
   UPDATE_RESTART: 'dsh-chamber:update-restart',
   UPDATE_STATE_CHANGED: 'dsh-chamber:update-state-changed',
   OPEN_RELEASE: 'dsh-chamber:open-release',
-  /** 权限被拒后的恢复入口（design 19 §3.3/§4）：打开 macOS「系统设置 → 通知」
-   *  面板。renderer 不带 URL——目标地址固定在 main 侧（不把 OPEN_RELEASE 的
-   *  白名单语义扩成任意 URL 打开面）。 */
+  /** 权限被拒后的恢复入口：打开 macOS「系统设置 → 通知」面板。renderer 不带
+   *  URL——目标地址固定在 main 侧，不把 OPEN_RELEASE 的白名单语义扩成任意 URL
+   *  打开面。 */
   OPEN_NOTIFICATION_SETTINGS: 'dsh-chamber:open-notification-settings',
 
   OPEN_IN_APPS: 'dsh-chamber:open-in-apps',
@@ -58,22 +54,21 @@ export const IPC_CHANNELS = {
   SSH_SET_PASSWORD: 'desktop_ssh_set_password',
   GATEWAY_SET_TOKEN: 'desktop_gateway_set_token',
   GATEWAY_SET_PASSWORD: 'desktop_gateway_set_password',
-  /** Manual chamber-plugin seed-cache sync onto a gateway instance (design 21 §6.5). */
+  /** Manual chamber-plugin seed-cache sync onto a gateway instance. */
   GATEWAY_PLUGIN_SYNC: 'desktop_gateway_plugin_sync',
   /** Batch registry install/remove + restart-to-apply onto a gateway
-   *  instance (design 21 §6.5): main-process confirmation
-   *  (showMessageBox), serial per-op submissions over the registered
-   *  transport, bounded executor-settle + restart readiness polls. */
+   *  instance: main-process confirmation (showMessageBox), serial per-op
+   *  submissions over the registered transport, bounded executor-settle and
+   *  restart readiness polls. */
   GATEWAY_PLUGIN_APPLY: 'desktop_gateway_plugin_apply',
-  /** Folder pick → tarball upload onto a gateway instance (design 21 §6.5):
-   *  PICK-ONLY (main opens the folder dialog, no
-   *  renderer-supplied path). */
+  /** Folder pick → tarball upload onto a gateway instance: PICK-ONLY (main
+   *  opens the folder dialog, no renderer-supplied path). */
   GATEWAY_PLUGIN_MATERIALIZE: 'desktop_gateway_plugin_materialize',
   SSH_CONFIG_LIST: 'desktop_ssh_config_list',
   SSH_CONNECT: 'desktop_ssh_connect',
   SSH_DISCONNECT: 'desktop_ssh_disconnect',
   SSH_STATUS: 'desktop_ssh_status',
-  /** On-demand ready-state re-verification (user activation of a source/
+  /** On-demand ready-state re-verification (user activation of a source or
    *  session): main runs one identity probe for a READY transport. */
   SSH_REVERIFY: 'desktop_ssh_reverify',
   SSH_LOGS: 'desktop_ssh_logs',
@@ -85,8 +80,8 @@ export const IPC_CHANNELS = {
 
   SSH_PLUGIN_LIST: 'desktop_ssh_plugin_list',
   SSH_PLUGIN_APPLY: 'desktop_ssh_plugin_apply',
-  /** Undo the latest ok ssh plugin change (design 21 §6.4 undo journal:
-   *  main-process confirm → inverse row through the same ssh apply flow). */
+  /** Undo the latest ok ssh plugin change: main-process confirm → inverse row
+   *  through the same ssh apply flow. */
   SSH_PLUGIN_UNDO: 'desktop_ssh_plugin_undo',
   LOCAL_PLUGIN_LIST: 'desktop_local_plugin_list',
   NPM_SEARCH: 'desktop_npm_search',
@@ -115,6 +110,5 @@ export const IPC_CHANNELS = {
   RUNTIME_STATE_CHANGED: 'dsh-chamber:runtime-state-changed',
 } as const
 
-/** OS wake-from-sleep push channel (design 14 D4). Kept as a named export for
- *  its importers (main.ts / tests). */
+/** OS wake-from-sleep push channel; named export for its main.ts importer. */
 export const SYSTEM_RESUME_EVENT = IPC_CHANNELS.SYSTEM_RESUME

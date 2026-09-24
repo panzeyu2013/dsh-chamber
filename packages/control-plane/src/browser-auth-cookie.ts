@@ -1,24 +1,15 @@
 /**
  * Browser-auth cookie bootstrap for the web-profile wire.
  *
- * The upstream web-profile host enforces an unconditional browser-auth gate:
- * every `/api` request and every `/api/remote.mux` upgrade
- * must carry a signed cookie minted through the process launch-token exchange
- * (`GET /?token=<launchToken>` → Set-Cookie; browser-auth.ts). The web
- * profile prints `dsh web: <url>?token=<launchToken>` at readiness
- * (printUrl defaults true), so the control plane — which spawns the local
- * instance and proxies every renderer call through
- * `/api/i/local/<api-path>` — can:
- *
- *   1. parse the launch token from the spawned child's stdout line;
- *   2. perform the token exchange once per spawn;
- *   3. keep the resulting cookie IN MEMORY (never persisted, never logged,
- *      never returned to the renderer — AGENTS.md credential discipline) and
- *      inject it into every proxied request / upgrade and every direct probe
- *      call for that instance.
- *
- * Hosts with no auth gate print the URL line without a token — the bootstrap
- * then yields no cookie and operation continues without one.
+ * The upstream web-profile host enforces a browser-auth gate: every `/api`
+ * request and `/api/remote.mux` upgrade must carry a signed cookie minted
+ * through the launch-token exchange (`GET /?token=<launchToken>` →
+ * Set-Cookie). The control plane parses the launch token from the spawned
+ * child's `dsh web: <url>` readiness line, performs the exchange once per
+ * spawn, and keeps the resulting cookie IN MEMORY only — never persisted,
+ * never logged, never returned to the renderer — injecting it into every
+ * proxied request/upgrade and direct probe. Hosts with no auth gate print the
+ * URL without a token: no cookie, and operation continues without one.
  */
 
 /** In-memory per-instance browser-auth cookie registry (baseUrl → cookie). */
@@ -39,10 +30,8 @@ export function clearAuthCookie(baseUrl: string): void {
   AUTH_COOKIES.delete(baseUrl)
 }
 
-/**
- * Parse the first URL from one `dsh web: <url>...` readiness line. Returns
- * undefined for any other line shape (log noise, old layouts).
- */
+/** Parse the first URL from one `dsh web: <url>...` readiness line; undefined
+ *  for any other line shape (log noise, old layouts). */
 export function parseDshWebUrlLine(line: string): string | undefined {
   // Both http and https shapes; the URL run stops at whitespace, so a
   // `(LAN: …)` suffix (and any `?token=…` query) is part of the captured URL.
@@ -63,17 +52,12 @@ export function extractLaunchToken(url: string): string | undefined {
 /**
  * Perform the launch-token exchange: `GET /?token=<token>` with redirects
  * disabled. Only the upstream acceptance answer counts as a mint: a correct
- * token gets `303` + `location: '/'` + Set-Cookie, and every other index
- * request gets a plain-text 401 (browser-auth.ts authorizeIndex) — so any
- * other status, a missing/unusable Location, or a redirect that does not
- * normalize to the clean index path yields null instead of registering a
- * credential the host never issued. The cookie name derives from the request
- * authority, which is the same `127.0.0.1:<port>` authority the proxy
- * forwards as Host.
- * @param baseUrl - origin of the spawned host, e.g. http://127.0.0.1:17510.
- * @param token - launch token from the `dsh web:` readiness line.
- * @param signal - optional cancellation for the exchange request.
- * @returns the `name=value` cookie pair, or null when the host did not mint one.
+ * token gets 303 + `location: '/'` + Set-Cookie, every other index request a
+ * plain-text 401 — any other status, unusable Location, or a redirect that
+ * does not normalize to the clean index path yields null instead of
+ * registering a credential the host never issued. The cookie name derives from
+ * the request authority, the same `127.0.0.1:<port>` the proxy forwards as
+ * Host.
  */
 export async function exchangeLaunchToken(
   baseUrl: string,

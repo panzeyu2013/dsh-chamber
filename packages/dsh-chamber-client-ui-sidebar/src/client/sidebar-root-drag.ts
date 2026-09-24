@@ -1,9 +1,5 @@
-/**
- * In-source drag state machines and their commit helpers: session/workspace/
- * server drags, the native
- * drag acceptance, the drag-end trailing-click guard refs and the three
- * commits (wire/funnel calls with optimistic order overrides).
- */
+/** In-source drag state machines and their commit helpers: session/workspace/
+ *  server drags, native drag acceptance, trailing-click guards, wire commits. */
 
 import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react'
 import { chamberBridge, type ChamberServerAggregate } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
@@ -17,10 +13,9 @@ import {
 import type { RunAction } from './sidebar-root-actions.ts'
 
 /**
- * Accept the native drag at document level while any row drag is active (06
- * §2.2, official useNativeDragAcceptance port): row hover still owns the
- * insertion marker, and releasing outside the list must not be rendered as a
- * rejected drop before dragend commits that last marker.
+ * Accept the native drag at document level while any row drag is active: row
+ * hover still owns the insertion marker, and a release outside the list must not
+ * render as a rejected drop before dragend commits that marker.
  */
 function useNativeDragAcceptance(active: boolean): void {
   useEffect(() => {
@@ -48,41 +43,32 @@ export function useSidebarDrags({ servers, viewPrefs, sessionOrderOverride, setS
   setWorkspaceOrderOverride: Dispatch<SetStateAction<Record<string, string[]>>>
   runAction: RunAction
 }) {
-  // chamber (06 §2.2): in-source drag state. Cross-source drops are
-  // structurally impossible — every target handler is gated on the drag's
-  // sourceId matching the hovered group's source.
+  // In-source drag state: cross-source drops are structurally impossible (every
+  // target handler is gated on the drag's sourceId matching the hovered group).
   const [sessionDrag, setSessionDrag] = useState<SessionDragState | null>(null)
   const [workspaceDrag, setWorkspaceDrag] = useState<WorkspaceDragState | null>(null)
-  // chamber (06 §2.4): server-group drag state
-  // (display-order preference only — commit writes view-prefs, no wire).
+  // Server-group drag state (display-order preference only; commit writes view-prefs, no wire).
   const [serverDrag, setServerDrag] = useState<ServerDragState | null>(null)
   const sessionDropCommitted = useRef(false)
   const workspaceDropCommitted = useRef(false)
   const serverDropCommitted = useRef(false)
-  /** Per-source tail of the workspace ORDER commits (see commitWorkspaceDrag):
-   *  overlapping family-block moves must not interleave their per-member
-   *  wire inserts on the host. */
+  /** Per-source tail of workspace ORDER commits: overlapping family-block moves
+   *  must not interleave their per-member wire inserts on the host. */
   const orderCommitTail = useRef(new Map<string, Promise<void>>())
-  // Some browsers dispatch a trailing `click` after an aborted drag or a
-  // drop; the flag set on dragstart (and cleared a tick after dragend) keeps
-  // that click from opening the session the row no longer represents.
+  // A trailing `click` after an aborted drag/drop would open the session the row
+  // no longer represents; the flag is set on dragstart, cleared after dragend.
   const suppressClickRef = useRef(false)
-  // Whether the CURRENT pointer press started on a header BUTTON: dragstart's
-  // `target` is the drag SOURCE (the header), not the pressed element, so the
-  // press target is recorded on pointerdown and consulted on dragstart — a
-  // gesture that began on a button (fold / sort / add-workspace / search / +
-  // / kebab / git actions) must never initiate a header drag: a >4px
-  // micro-drag on the fold toggle would swallow its click.
+  // Whether the CURRENT press started on a header BUTTON: dragstart's `target` is
+  // the drag SOURCE (the header), not the pressed element, so the press target is
+  // recorded on pointerdown — a gesture begun on a button must never initiate a
+  // header drag (a >4px micro-drag on the fold toggle would swallow its click).
   const dragPressOnButtonRef = useRef(false)
   useNativeDragAcceptance(sessionDrag !== null || workspaceDrag !== null || serverDrag !== null)
 
-  // chamber (06 §2.4): while a SERVER drag
-  // is active, a pointer outside every source section clears the insert
-  // marker — releasing outside the list cancels instead of committing the
-  // last hovered marker. Session/workspace drags KEEP the §2.2 semantics
-  // (release-outside commits); the server drag moves a WHOLE group, so the
-  // blast radius warrants the stricter rule. Only the boolean flips the
-  // effect; the functional updater keeps the closure stale-free.
+  // While a SERVER drag is active, a pointer outside every source section clears
+  // the marker — releasing outside cancels instead of committing the last one.
+  // Session/workspace drags keep release-outside-commits; a whole-group move's
+  // blast radius warrants the stricter rule.
   useEffect(() => {
     if (serverDrag === null) return
     const clearMarkerOutsideSections = (event: DragEvent): void => {
@@ -94,14 +80,11 @@ export function useSidebarDrags({ servers, viewPrefs, sessionOrderOverride, setS
     return () => document.removeEventListener('dragover', clearMarkerOutsideSections)
   }, [serverDrag === null])
 
-  // chamber (06 §2.2): session-row drag commit. The anchor resolves from the
-  // CURRENT rendered order (mode-aware: updated = the shared updated-order
-  // account; manual = override-first), never the projection. Commit writes:
-  // updated mode persists the drag into the account order (shared view-prefs,
-  // NO wire — official「updated 下拖拽只落 account」, promotions stack on
-  // top); manual mode persists the ungrouped bucket through view prefs and
-  // real workspaces over the wire with an optimistic override that the next
-  // pull replaces.
+  // Session-row drag commit. The anchor resolves from the CURRENT rendered order
+  // (updated = the shared account order, manual = override-first), never the
+  // projection. Updated mode persists into the account order (no wire — 「updated
+  // 下拖拽只落 account」); manual mode persists the ungrouped bucket via view prefs
+  // and real workspaces over the wire with an optimistic override.
   const commitSessionDrag = (
     server: ChamberServerAggregate,
     activeDrag: SessionDragState,
@@ -110,36 +93,30 @@ export function useSidebarDrags({ servers, viewPrefs, sessionOrderOverride, setS
     if (sessionDropCommitted.current) return
     sessionDropCommitted.current = true
     setSessionDrag(null)
-    // Resolve by id AND the drag's ungrouped flag (see SessionDragState):
-    // a real workspace whose wire id ever equaled UNGROUPED_WORKSPACE_ID must
-    // not hijack a bucket drag's anchor into a wrong-workspace wire mutation.
+    // Resolve by id AND the drag's ungrouped flag: a real workspace whose wire id
+    // ever equaled UNGROUPED_WORKSPACE_ID must not hijack a bucket drag's anchor.
     const workspace = server.workspaces.find(candidate =>
       candidate.id === activeDrag.accountKey && (candidate.ungrouped === true) === activeDrag.ungrouped)
     if (workspace === undefined) return
     const orderBy = viewPrefs.orderBy?.[server.id] ?? 'manual'
     const wireIds = workspace.sessions.map(session => session.id)
     const accountKey = `${server.id}/${workspace.id}`
-    // Updated branch reads the LIVE store (like the derivation effect, not
-    // this render's viewPrefs snapshot): a promotion write can land between
-    // this render and the drop, and stale anchor math would then clobber the
-    // un-rendered promotion on the same account key.
-    // 先终刷防抖窗内 pending 的派生 order 再取锚点——否则窗末 flush 会用
-    // tick 前派生的旧 order 整体覆盖本次拖拽提交（静默回退且不自愈）。
+    // Updated branch reads the LIVE store (not this render's snapshot): a
+    // promotion can land between render and drop, and stale anchor math would
+    // clobber it. 先终刷防抖窗内 pending 的派生 order 再取锚点——否则窗末 flush
+    // 会用 tick 前派生的旧 order 覆盖本次提交（静默回退且不自愈）。
     if (orderBy === 'updated') flushScheduledActivityWrites()
     const renderedOrder = orderBy === 'updated'
       ? reconciledSessionOrder(getViewPrefs().updatedOrder?.[accountKey] ?? [], wireIds)
       : workspace.ungrouped === true
         ? reconciledSessionOrder(viewPrefs.ungroupedOrder[server.id] ?? [], wireIds)
         : sessionOrderOverride[accountKey] ?? wireIds
-    // The order math is the same pure drop resolver the server-group drag
-    // uses (nextServerOrder): null = no-op (vanished rows / already in
-    // place), the caller writes the returned order into its own account.
+    // Same pure drop resolver as the server-group drag: null = no-op (vanished rows / already in place).
     const nextOrder = nextServerOrder(renderedOrder, activeDrag.sessionId, over)
     if (nextOrder === null) return
     if (orderBy === 'updated') {
-      // Updated mode: the drag mutates the account order (shared + persisted,
-      // the ungrouped bucket included), no wire commit — the wire order is
-      // the manual baseline, the promotion re-applies on top.
+      // Updated mode mutates the account order (shared + persisted, bucket
+      // included), no wire commit — the wire order is the manual baseline.
       updateViewPrefs(prev => ({ ...prev, updatedOrder: { ...prev.updatedOrder, [accountKey]: nextOrder } }))
       return
     }
@@ -157,8 +134,7 @@ export function useSidebarDrags({ servers, viewPrefs, sessionOrderOverride, setS
         await insertSessionBefore(getInstanceClient(server.id), workspace.id, activeDrag.sessionId, anchor)
         chamberBridge.requestRefresh(server.id)
       } catch (error) {
-        // A failed commit must not keep masquerading as committed: drop the
-        // optimistic override immediately, the projection shows wire truth.
+        // A failed commit must not masquerade as committed: drop the override (wire truth shows).
         setSessionOrderOverride(prev => {
           const next = { ...prev }
           delete next[accountKey]
@@ -169,17 +145,11 @@ export function useSidebarDrags({ servers, viewPrefs, sessionOrderOverride, setS
     })
   }
 
-  // chamber (06 §2.2): real-workspace drag commit — the drop resolver
-  // (shared/workspace-drag-order.ts) is the single authority for the whole
-  // drag surface (marker, onDragOver gate, this commit): it returns the next
-  // full order, a no-op (vanished pieces / already in place) or blocked (a
-  // drop that would split a contiguous repo family — e.g. a foreign workspace
-  // into a worktree group's interior, or a worktree out of its own group;
-  // design 08 §3.3). A blocked/no-op verdict leaves the order untouched. A
-  // MOVE of a git family's main carries the whole family (moved = main first,
-  // then its worktrees): each member is re-anchored in order, one wire call
-  // per member (insertWorkspaceBefore is single-row; the optimistic override
-  // shows the final order while the calls land).
+  // Real-workspace drag commit: the drop resolver (shared/workspace-drag-order)
+  // is the single authority for the whole drag surface — it returns the next full
+  // order, a no-op (vanished pieces / already in place) or blocked (a drop that
+  // would split a contiguous repo family). A blocked/no-op verdict leaves the
+  // order untouched; a git family's main carries the whole family, one wire call per member.
   const commitWorkspaceDrag = (
     server: ChamberServerAggregate,
     activeDrag: WorkspaceDragState,
@@ -188,8 +158,7 @@ export function useSidebarDrags({ servers, viewPrefs, sessionOrderOverride, setS
     if (workspaceDropCommitted.current) return
     workspaceDropCommitted.current = true
     setWorkspaceDrag(null)
-    // Synthetic cwd-derived groups (`__cwd__:` ids) have no host workspace
-    // identity: they are neither draggable nor a drop target.
+    // Synthetic cwd-derived groups (`__cwd__:` ids) are neither draggable nor a target.
     const realWorkspaceIds = server.workspaces
       .filter(workspace => workspace.ungrouped !== true && workspace.synthetic !== true)
       .map(workspace => workspace.id)
@@ -197,20 +166,17 @@ export function useSidebarDrags({ servers, viewPrefs, sessionOrderOverride, setS
     const verdict = resolveWorkspaceDrop(env, activeDrag.workspaceId, over)
     if (verdict.kind !== 'move') return
     setWorkspaceOrderOverride(prev => ({ ...prev, [server.id]: verdict.order }))
-    // The wire anchor is the element the moved block lands BEFORE (undefined
-    // = append); every member is anchored on it in block order, so the host
-    // order ends up exactly `verdict.order`.
+    // The wire anchor is the element the moved block lands BEFORE (undefined =
+    // append); anchoring every member on it in block order yields `verdict.order`.
     const movedLast = verdict.moved[verdict.moved.length - 1]!
     const lastIndex = verdict.order.indexOf(movedLast)
     const wireAnchor = lastIndex === -1 || lastIndex + 1 >= verdict.order.length
       ? undefined
       : verdict.order[lastIndex + 1]
-    // Order commits serialize PER SOURCE: a family-block move is one wire
-    // insert per member, and two overlapping commits (a second drop while the
-    // first is still in flight) must not interleave their anchors on the host
-    // — that would split the family silently. The next commit waits for the
-    // previous one; each insert anchors by id, so a queued commit still
-    // converges to its own verdict order regardless of the earlier state.
+    // Order commits serialize PER SOURCE: a family-block move is one wire insert
+    // per member, and overlapping commits must not interleave their anchors on
+    // the host — that would split the family silently. Each insert anchors by id,
+    // so a queued commit still converges to its own verdict order.
     const tail = orderCommitTail.current.get(server.id) ?? Promise.resolve()
     const commit = runAction(`${server.id}/workspace-drag/${activeDrag.workspaceId}`, async () => {
       await tail
@@ -221,10 +187,8 @@ export function useSidebarDrags({ servers, viewPrefs, sessionOrderOverride, setS
         }
         chamberBridge.requestRefresh(server.id)
       } catch (error) {
-        // A failed commit must not keep masquerading as committed: drop the
-        // optimistic override immediately, the projection shows wire truth.
-        // The refresh also converges a PARTIAL multi-member failure (some of
-        // the family's rows moved before the error) to the host's real order.
+        // A failed commit must not masquerade as committed: drop the override,
+        // and refresh again to converge a PARTIAL multi-member failure.
         setWorkspaceOrderOverride(prev => {
           const next = { ...prev }
           delete next[server.id]
@@ -240,17 +204,11 @@ export function useSidebarDrags({ servers, viewPrefs, sessionOrderOverride, setS
     })
   }
 
-  // chamber (06 §2.4): server-group
-  // drag commit. Pure DISPLAY preference — persists the new order into the
-  // shared `serverOrder` view pref (cross-ctx live sync), NO wire, NO
-  // App-layer N-ctx/registry change (navigation is id-keyed, never
-  // order-keyed). The anchor math lives in the pure `nextServerOrder`
-  // (unit-tested); `null` = no-op (unchanged position / vanished target) —
-  // the write is skipped. The anchor math runs INSIDE
-  // the updateViewPrefs mutator against the FRESHEST stored order — another
-  // ctx's commit landing between this render and the drop must not be
-  // clobbered by a stale-render snapshot (the commitSessionDrag updated-mode
-  // branch reads the live store for the same reason).
+  // Server-group drag commit: a pure DISPLAY preference persisted into the shared
+  // `serverOrder` view pref (cross-ctx live sync), NO wire and no N-ctx/registry
+  // change (navigation is id-keyed). `null` from `nextServerOrder` = no-op, so
+  // the write is skipped. The anchor math runs INSIDE the updateViewPrefs mutator
+  // against the FRESHEST stored order — another ctx's commit must not be clobbered.
   const commitServerDrag = (
     activeDrag: ServerDragState,
     over: NonNullable<ServerDragState['over']>,

@@ -1,34 +1,13 @@
 /**
- * Design 18 activation probes. This module owns the real, read-only probe
- * list while keeping the control-plane wire injectable for hermetic tests.
+ * Activation probes: the real, read-only probe list with an injectable wire.
  *
- * Wire shape: the pinned upstream dsh tree. Unary endpoints use the slash form
- * (`session/list`, `settings/describe`) and typert remotes require
- * `payload.args`; the host-capability role is served by the fixed-size identity
- * probe `session/canOpenWorkspacePath` —
- * the zero-arg boolean Remote of the upstream SessionController's `session`
- * namespace, which never reads session data, never activates an Agent and
- * performs no IO, so the probe response is a constant-size boolean no matter
- * how many sessions exist. The identity probe deliberately never reads the
- * session list, so no session-readability row exists. Runtime trees that
- * predate the identity method answer HTTP 404; the probe layer then falls back
- * to the legacy `session/list` probe, keeping old-tree activation/rollback
- * behavior identical. A legacy fallback fires the caller's `warn` sink — a
- * REQUIRED RuntimeProbeOptions member since the 2026-12 audit found every
- * production caller had omitted the optional one, which made the downgrade
- * silent (the desktop control-plane's own identity probes warn on the same
- * condition via their logger — see control-plane dsh-client probeHostIdentity).
- *
- * commands/execute wire argument (the probe payload below carries it): the
- * third argument of the upstream projection `execute(agent, line,
- * submittedAttachments, signal)`; **`submittedAttachments` is the wire name on
- * every line in the pinned tree** (per-tag check of
- * `interaction/commands/src/index.ts`; the
- * tool-cordis `@Remote` catalog prints the same name). A drifted name is not a silent miss:
- * the typert gateway rejects unknown arg fields with
- * `gateway/arguments-invalid`, which fails this probe loud, and the fixture in
- * test/activation/runtime-probes.test.ts enforces the same exact key set while a
- * vendor-lockstep test pins the name to the upstream signature.
+ * Wire shape is the pinned upstream dsh tree: unary endpoints use the slash form
+ * (`session/list`, `settings/describe`) and typert remotes require `payload.args`. The
+ * host-capability role is the fixed-size identity probe `session/canOpenWorkspacePath` — a
+ * zero-arg boolean Remote that never reads session data, never activates an Agent and performs
+ * no IO. Pre-identity trees answer 404 and fall back to `session/list` (old-tree behavior
+ * unchanged, the REQUIRED `warn` sink fires); `commands/execute`'s third wire argument is
+ * `submittedAttachments`, and drift is rejected loud with `gateway/arguments-invalid`.
  */
 import { constants, type Stats } from 'node:fs'
 import type { FileHandle } from 'node:fs/promises'
@@ -50,20 +29,14 @@ import { sanitizeErrorText } from './sanitize-error.ts'
 export interface RuntimeProbeRpcOptions {
   signal?: AbortSignal
   timeoutMs?: number
-  /**
-   * Per-call response-body cap forwarded to the injected carrier (the
-   * control-plane unary client enforces it in readBoundedJson). The
-   * settings/describe probe passes SETTINGS_FILE_MAX_BYTES so a legitimately
-   * large settings response can never be mistaken for a misbehaving host.
-   */
+  /** Per-call response-body cap forwarded to the injected carrier. The settings/describe
+   *  probe passes SETTINGS_FILE_MAX_BYTES so a legitimately large response is never
+   *  mistaken for a misbehaving host. */
   maxResponseBytes?: number
 }
 
-/** Warning sink for the legacy identity-method fallback. Fired only
- *  AFTER the legacy session/list fallback succeeded (same timing as the
- *  control-plane probeHostIdentity): a successful legacy answer proves the
- *  runtime tree predates session/canOpenWorkspacePath, while a both-404 or a
- *  failing fallback stays quiet — the failure itself is already loud. */
+/** Warning sink for the legacy identity-method fallback, fired only AFTER the legacy
+ *  session/list fallback succeeded; a both-404 or a failing fallback stays quiet. */
 export type RuntimeProbeWarn = (line: string) => void
 
 export type RuntimeProbeCall = (
@@ -82,70 +55,46 @@ export interface RuntimeProbeOptions {
   windowMs?: number
   /** Per-RPC cap so one endpoint cannot consume the entire window. */
   rpcTimeoutMs?: number
-  /** Warning sink fired when the session probe's legacy session/list
-   *  fallback SUCCEEDS after an identity-method 404 (upstream method drift
-   *  must stay visible, never silent; a failing fallback is already loud).
-   *  REQUIRED (2026-12 audit): this layer is the only place the fallback is
-   *  observable, so omitting the sink silently degrades the host to the legacy
-   *  wire — the type rejects it now instead of the runtime. */
+  /** Warning sink fired when the legacy session/list fallback SUCCEEDS after an
+   *  identity-method 404. REQUIRED: this layer is the only place the fallback is observable,
+   *  so the type rejects omission up front instead of silently degrading the wire. */
   warn: RuntimeProbeWarn
   /**
-   * Legacy-fallback value predicate seam (2026-12 audit, 2.1). On an
-   * identity-method 404 the session/list value must prove the old-tree session
-   * shape; the default (defaultLegacyShape) demands an object carrying an items
-   * array — the pre-migration session row's own check. A host that owns a
-   * different canonical predicate (the control-plane's isLegacyHostProbeValue)
-   * injects it here instead of editing this core: dsh-runtime deliberately has
-   * no dependency on the control plane.
+   * Legacy-fallback value predicate seam: after an identity-method 404 the session/list value
+   * must prove the old-tree session shape. The default (defaultLegacyShape) demands an object
+   * carrying an `items` array; a host owning a different canonical predicate (the control
+   * plane's isLegacyHostProbeValue) injects it here instead of editing this core.
    */
   legacyShape?: (value: unknown) => boolean
   /**
-   * Design 24 §7 C: the EXACT chamber host domains this
-   * spawn actually carries, derived from the seeded host entries
-   * (desktop: every seeded domain; gateway: syncedHostDomainProbeNames).
-   * An empty list runs no chamber-domain probe (the reduced set), a partial
-   * list runs exactly those domains (2-of-3 partial syncs get a well-defined
-   * expectation instead of a binary all-or-none gate), and the full list
-   * equals the all-domains shape. The returned probe set and the verdict
-   * expectation are both derived from this list; callers that omit it keep
-   * the all-domains shape.
+   * The EXACT chamber host domains this spawn carries, derived from the seeded host entries. An
+   * empty list runs no chamber-domain probe (the reduced set), a partial list runs exactly those
+   * domains, and the full list equals the all-domains shape; the returned probe set and the
+   * verdict expectation both derive from this list.
    */
   hostDomainNames?: readonly string[]
   /**
-   * Deterministic no-follow fallback seam (private-fs.ts NoFollowConstantsLike
-   * precedent): win32 exports neither O_NOFOLLOW nor O_DIRECTORY, so the
-   * settings reader re-proves the leaf in user space instead. Tests pass a
-   * constants table without O_NOFOLLOW to exercise that branch on any host;
-   * production callers omit it.
+   * Deterministic no-follow fallback seam (private-fs.ts NoFollowConstantsLike): win32 exports
+   * neither O_NOFOLLOW nor O_DIRECTORY, so the settings reader re-proves the leaf in user space;
+   * tests pass a constants table without O_NOFOLLOW.
    */
   settingsNoFollowConstants?: NoFollowConstantsLike
 }
 
 /**
- * The fixed-size host-identity wire method. Mirrored from control-plane's
- * `rpc-envelope.ts` (cross-package single-sourcing): this package deliberately
- * has no dependency on the control
- * plane, so the two constants are kept textually identical and the gate
- * `verify-upstream-touchpoints` C10 flags any live version literal outside the
- * registered anchors.
+ * The fixed-size host-identity wire method, mirrored textually from the control-plane's
+ * `rpc-envelope.ts` (cross-package single-sourcing): this package must not depend on the
+ * control plane, so the two constants are kept identical by hand.
  */
 const HOST_IDENTITY_METHOD = 'session/canOpenWorkspacePath'
 const LEGACY_HOST_PROBE_METHOD = 'session/list'
 const HOST_IDENTITY_METHOD_SINCE = '0.1.2-rc.1'
 
 /**
- * Literals the probe engine can write into failure text that the shared path
- * sanitizer must NOT read as filesystem material: every required probe name
- * plus the legacy identity fallback method. The POSIX branch of
- * {@link sanitizeErrorText} matches `word/word` from inside a token, so a pass
- * WITHOUT this vocabulary republishes `commands/execute` as
- * `commands[path]` — and no later pass can undo it. Every sanitize pass on the
- * way to a renderer projection therefore passes this list as `keep` (desktop's
- * projection wrapper, the gateway's probe summary, and this package's own
- * failure text). The legacy entry is the one a `REQUIRED_ACTIVATION_PROBES`-only
- * list misses: the both-404 diagnosis names `session/list` while that method is
- * deliberately NOT required (a tree predating the identity method is a healthy
- * old tree, not a broken new one).
+ * Probe-engine failure-text literals the shared path sanitizer must NOT read as filesystem
+ * material. {@link sanitizeErrorText} matches `word/word` from inside a token, so without this
+ * vocabulary `commands/execute` is republished as `commands[path]`. The legacy method is
+ * included because the both-404 diagnosis names it while it is deliberately NOT required.
  */
 export const PROBE_TEXT_KEEP_TOKENS = [...REQUIRED_ACTIVATION_PROBES, LEGACY_HOST_PROBE_METHOD] as const
 
@@ -164,14 +113,9 @@ function renderError(error: unknown): string {
 }
 
 const resultError = (error: unknown, method = ''): string => {
-  // Strip quoted absolute paths first so spaces cannot defeat the shared
-  // token-oriented sanitizer; then apply the repository-wide fallback. The
-  // probe's own method name is declared as a kept token: it is RPC vocabulary,
-  // not path material, and the sanitizer would otherwise publish it as
-  // `commands[path]` and hide which probe failed.
-  // `method` is optional because the data.settings probe is not an RPC at all
-  // (it reads the profile's settings.yaml), so it has no method name to keep —
-  // its probe NAME would declare a literal that never appears in the text.
+  // Strip quoted absolute paths first so spaces cannot defeat the shared token-oriented
+  // sanitizer; the probe's method name is kept as RPC vocabulary, not path material.
+  // `method` is empty only for the data.settings probe, which holds no method name.
   const withoutQuotedPaths = renderError(error)
     .replace(/(['"])(?:[A-Za-z]:[\\/]|\/)[^'"\r\n]*\1/gu, '[path]')
   return sanitizeErrorText(withoutQuotedPaths, method === '' ? [] : [method]).slice(0, 2_000)
@@ -212,20 +156,13 @@ function safeFsCode(error: unknown): string {
 }
 
 /**
- * Read one regular, non-symlink UTF-8 file without ever allocating from an
- * attacker-controlled size. `fstat` happens before allocation; reads stop at
- * the validated size plus one byte, so growth races fail closed too.
+ * Read one regular, non-symlink UTF-8 file without allocating from an attacker-controlled size:
+ * `fstat` happens before allocation and reads stop at the validated size plus one byte, so
+ * growth races fail closed too.
  *
- * A host whose constants lack O_NOFOLLOW (win32) would otherwise open the bare
- * O_RDONLY meaning and silently follow a symlinked leaf. The async reader uses
- * the fallback strategy inline (private-fs.ts resolveNoFollowFlags /
- * openPrivateNoFollowSync semantics): the leaf is lstat-ed immediately before
- * the open, a symlink is refused, and after the open the path must still name
- * the exact (dev, ino) the descriptor returned. POSIX keeps the historical
- * O_RDONLY|O_NOFOLLOW and performs no extra syscall.
- *
- * @param constantsLike - deterministic fallback-path seam; production callers
- *   omit it (RuntimeProbeOptions.settingsNoFollowConstants is the test entry).
+ * Without O_NOFOLLOW (win32) the leaf is lstat-ed immediately before the open, a symlink is
+ * refused, and afterwards the path must still name the exact (dev, ino); POSIX keeps
+ * O_RDONLY|O_NOFOLLOW. The strategy itself is single-sourced in private-fs.ts.
  */
 async function readBoundedRegularUtf8File(
   filePath: string,
@@ -233,11 +170,8 @@ async function readBoundedRegularUtf8File(
   constantsLike: NoFollowConstantsLike = constants,
 ): Promise<void> {
   signal.throwIfAborted()
-  // The no-follow strategy itself is single-sourced in private-fs.ts (kernel
-  // O_NOFOLLOW where available, the win32 user-space identity fallback
-  // otherwise). This wrapper keeps the probe's sanitized settings messages:
-  // the OS error is never projected (it embeds the absolute userData path and
-  // generic regex redaction cannot perfectly cover quoted paths with spaces).
+  // The no-follow strategy is single-sourced in private-fs.ts; this wrapper keeps probe-local
+  // sanitized messages, since the OS error would embed the absolute userData path.
   let handle: FileHandle
   let info: Stats
   try {
@@ -263,8 +197,8 @@ async function readBoundedRegularUtf8File(
       throw new Error('settings.yaml is unexpectedly large')
     }
 
-    // One extra byte detects growth beyond the fstat snapshot. This allocation
-    // is bounded by SETTINGS_FILE_MAX_BYTES + 1, never by a later file size.
+    // One extra byte detects growth beyond the fstat snapshot; the allocation is bounded by
+    // SETTINGS_FILE_MAX_BYTES + 1, never by a later file size.
     const capacity = Math.min(SETTINGS_FILE_MAX_BYTES + 1, Math.max(1, info.size + 1))
     const bytes = Buffer.allocUnsafe(capacity)
     let offset = 0
@@ -314,12 +248,8 @@ function expectedGitValidationMiss(value: unknown): boolean {
   return (result.error as Record<string, unknown>).code === 'invalid-input'
 }
 
-/** archiveCleanup/probe accept predicate (design 24 §7 C): the method must
- *  answer a well-formed domain carrier — ok:true with an object value is
- *  healthy; a well-formed ok:false (binding-pending / registry-unreadable /
- *  busy) is present-but-abnormal and fails closed with a distinct message in
- *  the probe leg itself (a business answer on empty input is never a protocol
- *  success). */
+/** archiveCleanup/probe accept predicate: a well-formed carrier with ok:false is
+ *  present-but-abnormal and fails closed; a business answer on empty input is never a success. */
 function archiveCleanupProbeShape(value: unknown): 'ok' | 'business-failure' | 'malformed' {
   if (!objectValue(value)) return 'malformed'
   const domain = value as Record<string, unknown>
@@ -328,9 +258,8 @@ function archiveCleanupProbeShape(value: unknown): 'ok' | 'business-failure' | '
   return 'malformed'
 }
 
-/** openInApp/probe accept predicate (design 20 §4.1): the carrier must answer
- *  ok:true with the platform object; a well-formed ok:false is present-but-
- *  abnormal and fails closed with a distinct message (see the archive leg). */
+/** openInApp/probe accept predicate: ok:true with the platform object; a well-formed ok:false
+ *  is present-but-abnormal and fails closed with a distinct message. */
 function openInAppProbeShape(value: unknown): 'ok' | 'business-failure' | 'malformed' {
   if (!objectValue(value)) return 'malformed'
   const domain = value as Record<string, unknown>
@@ -344,12 +273,9 @@ function openInAppProbeShape(value: unknown): 'ok' | 'business-failure' | 'malfo
 }
 
 /**
- * The legacy-fallback signal: an injected carrier error carrying transport
- * status 404 (the control-plane unary client's RpcTransportError.status) —
- * the HTTP bridge answers 404 exactly when the runtime tree does not
- * register the identity method. Any other carrier failure (401 auth gate,
- * 5xx, timeout, malformed body) or business error fails loud and never
- * downgrades to the session-data probe.
+ * The legacy-fallback signal: an injected carrier error carrying transport status 404, which the
+ * HTTP bridge answers exactly when the runtime tree does not register the identity method. Any
+ * other carrier failure (401, 5xx, timeout, malformed body) or business error fails loud.
  */
 function identityMethodNotFound(error: unknown): boolean {
   if (typeof error !== 'object' || error === null) return false
@@ -357,15 +283,14 @@ function identityMethodNotFound(error: unknown): boolean {
 }
 
 /**
- * The default legacy-fallback value predicate: the pre-migration session/list
- * row demanded an object carrying an `items` array, and "old-tree activation
- * identical" includes exactly that check. Callers whose canonical predicate
- * differs inject it through RuntimeProbeOptions.legacyShape.
+ * The default legacy-fallback predicate: the pre-migration session/list row demanded an object
+ * carrying an `items` array, and "old-tree activation identical" includes that check. Differing
+ * canonical predicates are injected through RuntimeProbeOptions.legacyShape.
  */
 function defaultLegacyShape(value: unknown): boolean {
-  // Same predicate as the canonical control-plane `isLegacyHostProbeValue`:
-  // a plain record carrying an items array. The array exclusion matters — an
-  // ARRAY that happens to own an `items` property is not a legacy session row.
+  // Same predicate as the control-plane isLegacyHostProbeValue: a plain record carrying an
+  // items array. The array exclusion matters — an ARRAY owning an `items` property is not a
+  // legacy session row.
   return typeof value === 'object' && value !== null && !Array.isArray(value)
     && Array.isArray((value as { items?: unknown }).items)
 }
@@ -424,22 +349,14 @@ export async function runRuntimeActivationProbes(opts: RuntimeProbeOptions): Pro
     }
   }
 
-  // Design 24 §7 C: the chamber domains actually expected are
-  // `hostDomainNames`, derived by the caller from the spawned host entries
-  // (desktop: all seeded domains; gateway: synced/partial cache). An empty
-  // list is the reduced shape; omitting the option keeps all domains.
+  // hostDomainNames is the chamber domains the caller actually expects mounted;
+  // an empty list is the reduced shape, omitting the option keeps all domains.
   const hostDomainNames = opts.hostDomainNames ?? [...HOST_DOMAIN_PROBE_NAMES]
   const wantsDomain = (domain: string): boolean => hostDomainNames.includes(domain)
   const [sessions, graph, settings, git, archiveCleanup, openInApp] = await Promise.all([
-    // The fixed-size host-identity probe: session/canOpenWorkspacePath is a
-    // zero-arg boolean Remote of the upstream SessionController (`session`
-    // namespace). Value true AND value false are both
-    // healthy — only method presence / protocol correctness / controller
-    // assembly is under test. A runtime tree that predates the identity
-    // method answers HTTP 404 and is served by the legacy session/list probe,
-    // which keeps old-tree
-    // activation/rollback behavior identical; the fallback fires the warn
-    // sink so upstream method drift never goes silent.
+    // Both true and false values are healthy: only method presence, protocol
+    // correctness and controller assembly are under test. A pre-identity tree
+    // answers 404 here and is served by the legacy session/list probe below.
     (async (): Promise<ProbeResult> => {
       const name = HOST_IDENTITY_METHOD
       try {
@@ -451,30 +368,23 @@ export async function runRuntimeActivationProbes(opts: RuntimeProbeOptions): Pro
         if (identityMethodNotFound(error)) {
           try {
             const legacy = await call(LEGACY_HOST_PROBE_METHOD, { args: { _request: {} } })
-            // IDENTITY-LEG DIVERGENCE: the cp twin
-            // (dsh-client.ts probeHostIdentity) only requires an object; this
-            // core leg's DEFAULT demands Array.isArray(items) — alignment now
-            // rides the RuntimeProbeOptions.legacyShape injection seam
-            // (dsh-runtime cannot import cp); do not relax the default without
-            // a ruling.
-            // An ok:true legacy envelope
-            // carrying no {items} session list is a damaged host, not a healthy
-            // old tree —
-            // "old-tree activation identical" includes this check.
+            // This core leg's DEFAULT demands Array.isArray(items) — stricter than the
+            // control-plane twin's object-only check and not relaxed without a ruling
+            // (dsh-runtime cannot import the control plane); alignment rides the
+            // legacyShape injection seam. An ok:true legacy envelope without the items
+            // list is a damaged host, not a healthy old tree.
             const legacyValue = legacy.result?.value
             if (!(opts.legacyShape ?? defaultLegacyShape)(legacyValue)) {
               return { name, ok: false, error: 'malformed session list' }
             }
-            // Warn only after the fallback SUCCEEDED — same timing as the
-            // control-plane probeHostIdentity; a both-404 or failing legacy
-            // fallback is already loud on its own.
+            // Warn only after the fallback SUCCEEDED; a both-404 or failing fallback is
+            // already loud.
             opts.warn(`runtime activation session probe: ${name} answered HTTP 404 while the legacy ${LEGACY_HOST_PROBE_METHOD} probe succeeded — the runtime tree predates the identity method (dsh < ${HOST_IDENTITY_METHOD_SINCE}); the legacy probe response grows with session data`)
             return { name, ok: true }
           } catch (legacyError) {
             if (identityMethodNotFound(legacyError)) {
-              // Sanitized with the probe vocabulary: the diagnosis names BOTH
-              // methods, and a pass without it turns the legacy name into path
-              // material before any caller can see it.
+              // Sanitized with the probe vocabulary: the diagnosis names BOTH methods, and a
+              // pass without it republishes them as path material.
               return {
                 name,
                 ok: false,
@@ -494,17 +404,15 @@ export async function runRuntimeActivationProbes(opts: RuntimeProbeOptions): Pro
       ? probe('clientGraph/graph', 'clientGraph/graph', { args: {} }, graphValue)
       : Promise.resolve(null),
     (async () => {
-      // Per-call response cap aligned with SETTINGS_FILE_MAX_BYTES — a
-      // legitimately large settings response (a 16 MiB settings.yaml renders
-      // an equally large describe payload) must never be misread as a
-      // misbehaving host by the default 1 MiB unary cap.
+      // Cap aligned with SETTINGS_FILE_MAX_BYTES: a legitimately large settings response
+      // must never be misread as a misbehaving host.
       const outcome = await probe('settings/describe', 'settings/describe', { args: {} }, settingsValue, SETTINGS_FILE_MAX_BYTES)
       settingsRpcOk = outcome.ok
       return outcome
     })(),
-    // Empty input is rejected by domain validation before any git process or
-    // repository scan. Require that exact business miss; a success value would
-    // not prove the request stayed on the side-effect-free path.
+    // Empty input is rejected by domain validation before any git process or repository scan;
+    // require that exact business miss, since a success value would not prove the request stayed
+    // on the side-effect-free path.
     wantsDomain('gitWorktree/previewCreate')
       ? probe(
         'gitWorktree/previewCreate',
@@ -513,12 +421,9 @@ export async function runRuntimeActivationProbes(opts: RuntimeProbeOptions): Pro
         expectedGitValidationMiss,
       )
       : Promise.resolve(null),
-    // archiveCleanup/probe (design 24): zero-arg, no
-    // side effects. Presence = a well-formed domain carrier answer; a
-    // well-formed business failure means the domain IS mounted but abnormal
-    // (binding-pending / registry-unreadable / busy) → fail-closed. A
-    // success without an object value is malformed. No legacy fallback —
-    // chamber host domains never downgrade (gitWorktree parity).
+    // archiveCleanup/probe: zero-arg, no side effects. A well-formed business failure means the
+    // domain IS mounted but abnormal (binding-pending / registry-unreadable / busy) → fail-closed;
+    // a success without an object value is malformed. No legacy fallback.
     wantsDomain('archiveCleanup/probe')
       ? (async (): Promise<ProbeResult> => {
         const name = 'archiveCleanup/probe'
@@ -535,11 +440,9 @@ export async function runRuntimeActivationProbes(opts: RuntimeProbeOptions): Pro
         }
       })()
       : Promise.resolve(null),
-    // openInApp/probe (design 20 §4.1/§6.2 item 3): zero-arg and zero-cost
-    // (platform only — no detection, no spawn). Presence = a well-formed domain
-    // carrier; a well-formed business failure means the domain is mounted but
-    // abnormal → fail-closed; no legacy fallback (chamber host domains never
-    // downgrade).
+    // openInApp/probe: zero-arg and zero-cost (platform only — no detection, no spawn). A
+    // well-formed business failure = mounted but abnormal → fail-closed; no legacy fallback
+    // (chamber host domains never downgrade).
     wantsDomain('openInApp/probe')
       ? (async (): Promise<ProbeResult> => {
         const name = 'openInApp/probe'
@@ -560,17 +463,11 @@ export async function runRuntimeActivationProbes(opts: RuntimeProbeOptions): Pro
 
   let commands: ProbeResult
   try {
-    // Never address a real persisted session: Typert's Agent lookup may cold-
-    // resume it before CommandRuntime sees even a syntax-miss line. A fixed
-    // nonexistent identity must fail at the read-only persistence lookup with
-    // session/not-found, before Agent publication or command/run appends.
-    // The projection execute(agentId, line, submittedAttachments, signal): the
-    // Agent parameter is a typert lookup wired as `agentId`
-    // (session-controller resolveAgent) whose cold miss still surfaces
-    // session/not-found. The third argument is named `submittedAttachments` on
-    // the pinned line; the typert gateway rejects any other field name
-    // with `gateway/arguments-invalid` BEFORE the controller runs, so a stale
-    // name here degrades into a failed activation probe, not a silent miss.
+    // Never address a real persisted session: the Agent lookup may cold-resume it before
+    // CommandRuntime sees even a syntax-miss line, so a fixed nonexistent identity must fail at
+    // the read-only persistence lookup with session/not-found. The projection is
+    // execute(agentId, line, submittedAttachments, signal); the typert gateway rejects a drifted
+    // third field name with `gateway/arguments-invalid` BEFORE the controller runs.
     await call('commands/execute', {
       args: {
         agentId: COMMAND_MISSING_SESSION,
@@ -583,8 +480,8 @@ export async function runRuntimeActivationProbes(opts: RuntimeProbeOptions): Pro
     const code = typeof error === 'object' && error !== null
       ? (error as { code?: unknown }).code
       : undefined
-    // The exact domain miss proves the execute Remote decoded its Agent
-    // argument while guaranteeing CommandRuntime itself was never entered.
+    // The exact domain miss proves the execute Remote decoded its Agent argument while
+    // guaranteeing CommandRuntime itself was never entered.
     commands = code === 'session/not-found'
       ? { name: 'commands/execute', ok: true }
       : { name: 'commands/execute', ok: false, error: resultError(error, 'commands/execute') }
@@ -620,11 +517,9 @@ export async function runRuntimeActivationProbes(opts: RuntimeProbeOptions): Pro
   }
   byName.set(settings.name, settings)
   byName.set(dataSettings.name, dataSettings)
-  // Return in the contract order, making exact-set drift visible in tests.
-  // The expected set is derived from the ACTUALLY expected chamber domains
-  // (empty list = the reduced set; partial lists = base + listed domains),
-  // so a caller's probeExpectedNames must match activationProbeNamesForDomains
-  // of the same list (partial 2-of-3 syncs do not trip an exact-set miss).
+  // Return in contract order so exact-set drift is visible; the expected set derives from the
+  // actually expected chamber domains, matching a caller's probeExpectedNames to
+  // activationProbeNamesForDomains of the same list.
   const expected = activationProbeNamesForDomains(hostDomainNames)
   return expected.map(name => byName.get(name) ?? ({ name, ok: false, error: 'probe not wired' }))
 }

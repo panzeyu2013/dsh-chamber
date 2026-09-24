@@ -1,50 +1,13 @@
 /**
- * Durable third-party plugin-mutation journal + pre-mutation profile backups
- * (design 21 §6.2/§6.3).
+ * Durable third-party plugin-mutation journal + pre-mutation profile backups.
  *
- * Write order for every profile mutation (design 21 §6.3):
- *   ① appendPending — durable intent record (ts/kind/name/spec/initiator);
- *   ② the executor atomically copies `<stateDir>/dsh-home/profiles/web/
- *      package.json` (+ pnpm-lock.yaml when present) into
- *      backups/<op-id>/ and calls recordPreImage;
- *   ③ the mutation runs;
- *   ④ markTerminal — ok/failed/blocked (+ sanitized error + restart outcome).
+ * Write order per mutation: ① appendPending (durable intent), ② the executor
+ * places backups/<op-id>/ and calls recordPreImage, ③ the mutation runs,
+ * ④ markTerminal. `preImage` is null until that backup is durably recorded, so
+ * only ops whose preImage is set may be rolled back.
  *
- * preImage semantics: `preImage` is the op id of a backup directory
- * `<stateDir>/chamber-plugins/third-party/backups/<op-id>/` holding the
- * pre-mutation package.json and (when the profile had one) pnpm-lock.yaml.
- * It is null until the executor actually placed and durably recorded the
- * backup — a rollback/undo surface must only be offered for ops whose
- * preImage is set.
- *
- * Startup reconciliation (reconcile): ops still pending after a crash or
- * shutdown are marked failed — never silent, never crash-looping — and their
- * preImage is retained for the later undo/rollback surface. A pending op's
- * recorded childPid (crash-orphan reaping) rides the RETURNED copies so the
- * caller (plugins-tasks reconcileJournal) can kill the detached child; the
- * persisted failed record drops it.
- *
- * Retention: on every terminal mark the journal is pruned to the newest 50
- * ops and backup directories not referenced by any retained op are removed
- * (best effort).
- *
- * Security/hygiene: journal.json sits under the gateway-owned 0700
- * chamber-plugins/third-party tree and is written with the same owner-private
- * atomic no-follow primitives plugins.ts uses (0600 leaves); reads are
- * bounded (≤ 256 KiB); a corrupt/unreadable journal is renamed aside as
- * journal.json.corrupt-<ts> (evidence retained, warn logged) and a fresh
- * journal starts.
- *
- * Corruption ≠ emptiness: a present file that cannot be
- * read/parsed must never be answered as "no ops recorded". `integrity()`
- * distinguishes the two; a corrupt read makes the pending-op set UNKNOWN, so
- * (a) reconcileJournal refuses the "no pending operations carried over"
- * judgement (there is nothing to reap and nothing to trust), (b) no backup
- * directory is ever reclaimed while corruption or its aside evidence is
- * unresolved (an unreferenced preImage may be the only rollback material of
- * an op whose record was lost), and (c) a write never overwrites an
- * unreadable original that could not be moved aside — it fails closed
- * instead of destroying the evidence.
+ * Corruption ≠ emptiness: a present-but-unreadable journal is renamed aside
+ * (evidence kept) and its pending set is UNKNOWN.
  */
 
 import { existsSync, readdirSync, renameSync, rmSync } from 'node:fs'
@@ -57,40 +20,35 @@ import {
 import { readPrivateTextOrNull } from './private-read.ts'
 import { messageOf, newestFirst } from './util.ts'
 
-/** Third-party plugin state root (journal, backups, private pnpm env dirs),
- * relative to the gateway stateDir. */
+/** Third-party plugin state root (journal, backups, private pnpm env dirs) under the gateway stateDir. */
 export const THIRD_PARTY_REL = join('chamber-plugins', 'third-party')
 /** Journal file, relative to the gateway stateDir. */
 export const JOURNAL_FILE_REL = join(THIRD_PARTY_REL, 'journal.json')
 /** Backup dir root, relative to the gateway stateDir. */
 export const JOURNAL_BACKUPS_REL = join(THIRD_PARTY_REL, 'backups')
 
-/** Bounded-read ceiling for journal.json (design 21 §6.9: ≤50 ops retained). */
+/** Bounded-read ceiling for journal.json (well above the 50 retained ops). */
 export const JOURNAL_MAX_BYTES = 256 * 1024
 /** Retention: newest N terminal ops kept, with their backups. */
 export const JOURNAL_RETENTION_LIMIT = 50
 /** Aside-name prefix for corrupt-journal evidence. */
 export const CORRUPT_ASIDE_PREFIX = 'journal.json.corrupt-'
-/** The op kinds the journal can record. `undo` is a first-class mutation
- * kind (design 21 §6.3/§6.8 r2): the undo RESTORES the latest ok op's
- * preImage pair and is itself backed up + journaled, so the journal's
- * terminal-state and preImage-reference accounting stays complete. */
+/** The op kinds the journal can record. `undo` is first-class: it restores the
+ * latest ok op's preImage pair and is itself backed up + journaled. */
 export type JournalOpKind = 'install' | 'remove' | 'materialize' | 'undo'
 /** Lifecycle of one recorded op. */
 export type JournalOpStatus = 'pending' | 'ok' | 'failed' | 'blocked'
 /** Post-mutation restart outcome (recorded by the wiring layer, later). */
 export type JournalRestartOutcome = 'ok' | 'failed' | 'skipped'
 
-/** Journal read integrity: "nothing was ever recorded" and "the record could
- *  not be read" are different facts and must never collapse into one. */
+/** Journal read integrity: "nothing recorded" and "record unreadable" are different facts, never collapsed. */
 export type JournalIntegrity =
   | { state: 'ok' }
   | {
     state: 'corrupt'
     /** Why the journal was judged corrupt/unreadable (message only). */
     error: string
-    /** Where the raw bytes were moved aside; null when the move itself failed
-     *  (the original then stays in place and writes fail closed). */
+    /** Where the raw bytes were moved aside; null when the move failed (writes then fail closed). */
     asidePath: string | null
   }
 
@@ -103,25 +61,17 @@ export interface JournalOp {
   name: string
   /** Registry spec / materialized file path for install-materialize ops. */
   spec?: string
-  /** Declared package version (materialize carries it in the x-plugin-version
-   *  header rather than in the `file:` spec) — the submission-time generation
-   *  judgement needs it, and a deferred intent that lost it can never drain
-   *  (design 21 §6.11.3 R2). */
+  /** Declared package version (x-plugin-version header, not the `file:` spec): needed by the generation check. */
   version?: string
-  /** Reference to the pre-mutation backup dir: backups/<op-id>/ when the
-   * executor successfully placed one, null otherwise. */
+  /** Reference to the pre-mutation backup dir backups/<op-id>/, or null when none was placed. */
   preImage: string | null
-  /** For `kind: 'undo'` ops: the id of the op whose preImage pair this undo
-   * restored (design 21 §6.3). Absent for every other kind. */
+  /** For `kind: 'undo'`: id of the op whose preImage pair this undo restored. */
   undoOf?: string
   /** Human attribution label (desktop connection label) when known. */
   initiator?: string
-  /** Pid of the spawned `dsh plugin` child (the detached process-group
-   * leader) while the mutation runs; cleared when the op goes terminal.
-   * Written by the executor at spawn (design 21 §6.3 crash-orphan reaping):
-   * a gateway crash mid-mutation leaves this child alive and writing
-   * DSH_HOME — the next boot's reconcileJournal() kills the recorded pid
-   * before any new mutation can start. */
+  /** Pid of the spawned `dsh plugin` child (detached process-group leader) while
+   *  the mutation runs; cleared when the op goes terminal. A crash mid-mutation
+   *  leaves the child writing DSH_HOME: the next boot's reconcile kills the pid. */
   childPid?: number
   status: JournalOpStatus
   /** Failure/blocked reason (already sanitized by the executor). */
@@ -134,13 +84,10 @@ export interface JournalPending {
   kind: JournalOpKind
   name: string
   spec?: string
-  /** Declared package version (materialize uploads carry it in the
-   *  x-plugin-version header, not in the `file:` spec) — the generation check
-   *  (design 21 §6.11.3 R2) needs it for official-scope installs. */
+  /** Declared package version from the x-plugin-version header: needed by the generation check. */
   version?: string
   initiator?: string
-  /** For `kind: 'undo'` submissions: the id of the op to restore (bound at
-   * submit; the executor verifies it is still the undoable target). */
+  /** For `kind: 'undo'`: the id to restore; the executor re-verifies it is still undoable. */
   undoOf?: string
 }
 
@@ -157,34 +104,23 @@ export interface JournalLogger {
 }
 
 export interface PluginsJournal {
-  /** Write order step ①: durably record a pending op and return its id.
-   * Throws on persistence failure (the caller maps it). */
+  /** Write order step ①: durably record a pending op and return its id (throws on persistence failure). */
   appendPending(input: JournalPending): string
-  /** Write order step ②: durably record that backups/<op-id>/ now holds the
-   * pre-mutation profile files. Throws on persistence failure. */
+  /** Write order step ②: durably record that backups/<op-id>/ holds the pre-mutation files. */
   recordPreImage(opId: string): void
-  /** Crash-orphan reaping support: durably record the spawned child pid of a
-   * pending op (design 21 §6.3). Throws on persistence failure. */
+  /** Crash-orphan reaping support: durably record the spawned child pid of a pending op. */
   markChildPid(opId: string, pid: number): void
-  /** Write order step ④: terminal state for an op. No-op (null, no write)
-   * when no such op exists; a terminal op may be re-marked (e.g. to attach
-   * the restart outcome later). Clears the recorded childPid (the op's child
-   * no longer runs). Retention pruning runs on this path. */
+  /** Write order step ④: terminal state for an op; null when no such op exists.
+   *  A terminal op may be re-marked; clears childPid; retention pruning runs here. */
   markTerminal(opId: string, patch: JournalTerminalPatch): JournalOp | null
   /** Newest-first projection (default newest 50). */
   recent(limit?: number): JournalOp[]
-  /** Startup reconciliation: pending → failed ('interrupted before
-   * completion; preImage retained'), persisted once; idempotent (second call
-   * rewrites nothing and returns []). Returns the ops it transitioned. On a
-   * corrupt journal nothing is readable: the result is [] but integrity()
-   * reports 'corrupt' — the caller must never read that [] as "no pending
-   * operations". */
+  /** Startup reconciliation: pending → failed ('interrupted before completion;
+   *  preImage retained'), persisted once; idempotent. A corrupt journal yields []
+   *  but integrity() 'corrupt' — never read that [] as "no pending operations". */
   reconcile(): JournalOp[]
-  /** Integrity of the journal as of a real read, sticky for this instance:
-   *  'corrupt' from the moment a present file cannot be read/parsed (or
-   *  unresolved `journal.json.corrupt-*` evidence exists) until the operator
-   *  resolves it. While 'corrupt' the pending-op set is UNKNOWN: no orphan
-   *  pid may be judged and no preImage may be reclaimed. */
+  /** Sticky integrity as of a real read: 'corrupt' until the operator resolves a
+   *  present-unreadable file or unresolved aside evidence; pending set then UNKNOWN. */
   integrity(): JournalIntegrity
 }
 
@@ -213,9 +149,7 @@ export function createPluginsJournal(stateDir: string, logger: JournalLogger): P
   const filePath = journalFilePath(stateDir)
   const backupRoot = backupsRoot(stateDir)
 
-  /** Corruption observed by THIS instance. Sticky on purpose: once the bad file
-   * is moved aside and a fresh journal starts, "no pending op" is still not a
-   * fact about the records that were lost. */
+  /** Corruption observed by THIS instance; sticky: "no pending op" is still not a fact about lost records. */
   let corruption: { error: string; asidePath: string | null } | null = null
   /** Unresolved corrupt-journal evidence from earlier runs, scanned once. */
   let priorEvidence: string[] | null = null
@@ -226,15 +160,12 @@ export function createPluginsJournal(stateDir: string, logger: JournalLogger): P
   }
 
   function readFileText(): string | null {
-    // ENOENT (absent file or absent root) means an empty journal; every other
-    // failure is treated as corrupt evidence (see noteCorruption) — the shared
-    // wrapper rethrows everything but ENOENT.
+    // ENOENT (absent file or root) means an empty journal; every other failure
+    // is corrupt evidence (see noteCorruption) — the wrapper rethrows all but ENOENT.
     return readPrivateTextOrNull(filePath, { tightenMode: 0o600, requiredMode: 0o600, maxBytes: JOURNAL_MAX_BYTES })
   }
 
-  /** `journal.json.corrupt-*` asides left by earlier runs: unresolved evidence
-   * that the record set is incomplete. While one exists the journal must never
-   * be read as "empty" for cleanup purposes. */
+  /** `journal.json.corrupt-*` asides from earlier runs: while one exists the journal must never read as "empty". */
   function corruptEvidence(): string[] {
     if (priorEvidence === null) {
       try {
@@ -247,18 +178,13 @@ export function createPluginsJournal(stateDir: string, logger: JournalLogger): P
     return priorEvidence
   }
 
-  /** No backup cleanup may run while the journal's record set is unknown:
-   * a dir that "looks unreferenced" may be the only rollback material of an
-   * op whose record was lost. */
+  /** No backup cleanup while the record set is unknown: a "looks unreferenced" dir may be a lost op's only rollback material. */
   function cleanupBlocked(): boolean {
     return corruption !== null || corruptEvidence().length > 0
   }
 
-  /** Corrupt/unreadable journal → rename aside + warn + fresh start. Never
-   * silent, never crash-looping: the next write creates a clean journal and
-   * the aside keeps the evidence for the operator. Never the same answer as
-   * "empty": the caller reads integrity() and the lost-op consequences are
-   * suppressed (no cleanup, no write over the evidence). */
+  /** Corrupt journal → rename aside + warn + fresh start (never silent, never
+   * crash-looping), and never the same answer as "empty" for the caller. */
   function noteCorruption(cause: unknown): void {
     if (corruption !== null) return
     const aside = join(root, `${CORRUPT_ASIDE_PREFIX}${Date.now()}`)
@@ -277,8 +203,7 @@ export function createPluginsJournal(stateDir: string, logger: JournalLogger): P
     corruption = { error: messageOf(cause), asidePath }
   }
 
-  /** One read outcome: parsed ops, or "unreadable" (corruption already noted
-   * and made sticky). An absent file is a genuinely empty journal. */
+  /** One read outcome: parsed ops, or "unreadable" (corruption noted and sticky); absent file = empty journal. */
   function loadOps(): { ok: true; ops: JournalOp[] } | { ok: false } {
     let text: string | null
     try {
@@ -302,8 +227,7 @@ export function createPluginsJournal(stateDir: string, logger: JournalLogger): P
     return { ok: true, ops: (parsed as { ops: JournalOp[] }).ops }
   }
 
-  /** Op list for projections/writes; an unreadable journal yields none (its
-   * corruption is sticky and surfaced separately by integrity()). */
+  /** Op list for projections/writes; an unreadable journal yields none (surfaced by integrity()). */
   function loadOpsOrEmpty(): JournalOp[] {
     const loaded = loadOps()
     return loaded.ok ? loaded.ops : []
@@ -320,11 +244,8 @@ export function createPluginsJournal(stateDir: string, logger: JournalLogger): P
     atomicWritePrivateFileNoFollow(filePath, text, { mode: 0o600 })
   }
 
-  /** Prune to the newest RETENTION_LIMIT ops (file keeps oldest-first
-   * reading order) and drop backup dirs no retained op references. While the
-   * record set is unknown (corruption, or its unresolved aside evidence) the
-   * record pruning still runs but NOTHING is deleted: the ops' records are
-   * gone, so no dir can be proven unreferenced. */
+  /** Prune to the newest RETENTION_LIMIT ops and drop backup dirs no retained op
+   * references; while the record set is unknown NOTHING is deleted. */
   function pruneAndClean(ops: JournalOp[]): JournalOp[] {
     const retained = newestFirst(ops).slice(0, JOURNAL_RETENTION_LIMIT)
     if (cleanupBlocked()) {
@@ -397,8 +318,7 @@ export function createPluginsJournal(stateDir: string, logger: JournalLogger): P
       else op.error = patch.error
       if (patch.restarted === undefined) delete op.restarted
       else op.restarted = patch.restarted
-      // The op's child no longer runs once the op is terminal — a stale pid
-      // must never be reaped as an orphan by a later boot's reconcile.
+      // Terminal op: a stale pid must never be reaped as an orphan by a later boot.
       delete op.childPid
       const retained = pruneAndClean(ops)
       persistOps(retained)
@@ -416,10 +336,8 @@ export function createPluginsJournal(stateDir: string, logger: JournalLogger): P
         if (op.status !== 'pending') continue
         op.status = 'failed'
         op.error = 'interrupted before completion; preImage retained'
-        // The returned copy keeps the recorded childPid so the caller's
-        // crash-orphan kill step can reap the still-running child; the
-        // PERSISTED record drops it (the op is failed — a stale pid must
-        // never be reaped by a later run).
+        // The returned copy keeps childPid so the caller can reap the
+        // still-running child; the PERSISTED failed record drops it.
         reconciled.push({ ...op })
         delete op.childPid
       }
@@ -434,8 +352,7 @@ export function createPluginsJournal(stateDir: string, logger: JournalLogger): P
     },
 
     integrity() {
-      // Force one real read: an unread journal file must never report 'ok'
-      // merely because nothing has looked at it yet.
+      // Force one real read: an unread journal file must never report 'ok' unwatched.
       const loaded = loadOps()
       if (!loaded.ok || corruption !== null) {
         const known = corruption ?? { error: 'journal is unreadable', asidePath: null }

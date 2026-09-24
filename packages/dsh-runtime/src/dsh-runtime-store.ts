@@ -1,15 +1,12 @@
 /**
- * Design 18 runtime disk data plane. Pure Node, baseDir-injected, no Electron.
+ * Runtime disk data plane. Pure Node, baseDir-injected, no Electron.
  *
- * Security/data invariants:
- * - metadata writes are atomic, files 0600 and containing directories 0700;
- * - path-bearing versions are exact semver before use;
- * - a directory name alone never proves an installed runtime is usable;
- * - current / known-good / pending / failure fields and every explicitly
- *   installed version survive automatic eviction;
- * - corrupt retention metadata fails closed (trees are kept, not guessed);
- * - deleting hard-linked trees marks the pnpm store as needing prune, so the
- *   process runner can close the physical-disk loop.
+ * Security/data invariants: metadata writes are atomic (files 0600, containing directories
+ * 0700); path-bearing versions are exact semver before use and a directory name alone never
+ * proves an installed runtime usable; current / known-good / pending / failure fields and
+ * every explicitly installed version survive automatic eviction; corrupt retention metadata
+ * fails closed (trees kept, not guessed); deleting a hard-linked tree marks the pnpm store as
+ * needing prune, closing the physical-disk loop.
  */
 import {
   existsSync,
@@ -58,18 +55,14 @@ export interface OverrideRecord {
   resolvedVersion: string | null
   pending: string | null
   swapAttempted: boolean
-  /** Durable distinction for a version selected while builtin (no current
-   * pointer) remains active. Hosts that split select from apply (the gateway)
-   * may set this true only when selection started from builtin, and clear it
-   * before publishing pending. A selection staged from an active user tree
-   * must keep this false so later pointer loss still fails closed. Older
-   * five-field records remain valid but intentionally cannot weaken that
-   * pointer-loss check. */
+  /** Durable distinction for a version selected while builtin (no current pointer) remains
+   * active: a selection staged from an active user tree keeps it false so later pointer loss
+   * still fails closed; hosts that split select from apply clear it before publishing pending. */
   selectedOnly?: boolean
   invalidatedAt?: string | null
   invalidatedReason?: string | null
-  /** Durable user-visible invalidation history. Unlike invalidatedAt, this survives a
-   * failed builtin probe followed by automatic reactivation of the old tree. */
+  /** Durable user-visible invalidation history that survives a failed builtin probe followed
+   *  by automatic reactivation of the old tree. */
   lastInvalidatedAt?: string | null
   lastInvalidatedReason?: string | null
   lastInvalidatedFromVersion?: string | null
@@ -79,9 +72,8 @@ export interface OverrideRecord {
   restoreOutcome?: RestoreOutcomeRecord | null
 }
 
-/** Read-failure material is its own state: EACCES/EIO on the authority leaf
- *  proves neither absence nor corruption, so it can never alias 'missing'
- *  (builtin / no override) or 'corrupt' (quarantine evidence). */
+/** Read-failure material is its own state: EACCES/EIO proves neither absence nor corruption,
+ *  so it can never alias 'missing' (builtin / no override) or 'corrupt' (quarantine evidence). */
 export type CurrentPointerState =
   | { kind: 'missing' }
   | { kind: 'corrupt' }
@@ -115,8 +107,7 @@ export interface RuntimeFailureInput {
 }
 
 export interface RuntimeFailureSummary {
-  /** 'ok' when the failure set is fully known; 'unknown' when a read error
-   *  made it unknowable (count/latest are then not facts). */
+  /** 'ok' when the failure set is fully known; 'unknown' when a read error made it unknowable. */
   kind: 'ok' | 'unknown'
   /** Failure count; null — never a fabricated 0 — when kind === 'unknown'. */
   count: number | null
@@ -148,20 +139,14 @@ export interface RuntimeDiskSummary {
   snapshotBytes: number
   preRollbackBytes: number
   restoreBackupBytes: number
-  /** Deduped bytes inside the runtime root that belong to no known category
-   * (version trees / store / caches / work / failed trees / publish backups
-   * / failure family / snapshots / pre-rollback / metadata recovery family)
-   * — stray residue plus the small metadata authority files. */
+  /** Deduped bytes inside the runtime root that belong to no known category —
+   * stray residue plus the small metadata authority files. */
   unclassifiedBytes: number
   /**
-   * Real byte figure: the runtime root plus the dsh-home.old* restore
-   * backups are walked once and every entry is counted by (dev, ino)
-   * identity exactly once, so hard-linked tree/store entries are never
-   * double counted. Category fields keep per-path sums
-   * (a shared hard link is still charged to both categories).
-   * Honest boundary: (dev, ino) dedupe cannot see APFS clone/reflink copies
-   * (shared physical blocks, distinct inodes), so on APFS this remains an
-   * upper bound of allocated blocks — the same known approximation as `du`.
+   * Real byte figure: runtime root plus dsh-home.old* backups are walked once and every entry
+   * counted by (dev, ino) identity exactly once, so hard-linked entries are never double counted
+   * (category fields keep per-path sums). APFS clone/reflink copies are invisible to (dev, ino)
+   * dedupe, so on APFS this stays an upper bound of allocated blocks, as with `du`.
    */
   totalBytes: number
   storePruneNeeded: boolean
@@ -174,10 +159,8 @@ export interface ExplicitRuntimeCleanupResult {
 }
 
 /**
- * Durable activation transaction. `intent` may be written by the controller
- * while the selected version is merely pending. Every later phase contains
- * the immutable pre-swap facts and snapshot basename captured before the
- * current pointer is touched.
+ * Durable activation transaction: `intent` may be written while the selected version is merely
+ * pending, and every later phase contains the immutable pre-swap facts and snapshot basename.
  */
 const ACTIVATION_JOURNAL_PHASES = [
   'intent',
@@ -240,10 +223,8 @@ export interface ActivationIntentInput {
 }
 
 /**
- * The builtin/fallback identity token (gateway status/override terminology):
- * an activation intent targeting the builtin anchor may name exactly this
- * sentinel instead of a semver — the startup/apply phases only compare
- * targetVersion for non-builtin targets.
+ * The builtin/fallback identity token: an activation intent targeting the builtin anchor may name
+ * this sentinel instead of a semver; startup/apply compare targetVersion only for non-builtin targets.
  */
 export const BUILTIN_ANCHOR_VERSION_TOKEN = 'builtin-anchor'
 
@@ -260,11 +241,10 @@ type AuthorityRead = ArtifactReadState<{ raw: string; identity: FileIdentity }>
 
 
 /**
- * Read one authority leaf without ever following the leaf itself. The runtime
- * directory and leaf identities are checked around the operation, the file is
- * required to have a single link, and permission tightening happens through
- * the already-verified descriptor rather than a path lookup. The material
- * state keeps an OS-level read failure separate from corrupt content.
+ * Read one authority leaf without ever following it: runtime-directory and leaf identities are
+ * checked around the operation, the file must have a single link, and tightening goes through the
+ * already-verified descriptor rather than a path lookup. An OS-level read failure stays separate
+ * from corrupt content.
  */
 function readAuthorityMetadata(filePath: string, maxBytes: number): AuthorityRead {
   return readPrivateFileStateNoFollow(filePath, maxBytes)
@@ -286,8 +266,8 @@ function hasCorruptOverrideSentinel(filePath: string): boolean {
   }
 }
 
-/** Quarantine only the exact single-link inode that was safely read. Never
- * chmod the destination by path: the source fd was already tightened. */
+/** Quarantine only the exact single-link inode that was safely read; never chmod the destination
+ *  by path — the source fd was already tightened. */
 function preserveSafeCorruptAuthority(baseDir: string, filePath: string, expected: FileIdentity): boolean {
   try {
     const preferred = `${filePath}.corrupt`
@@ -306,9 +286,8 @@ export function currentPointerPath(baseDir: string): string {
   return join(runtimeDirPath(baseDir), 'current')
 }
 
-/** Missing means builtin. Corrupt is deliberately distinct and must block
- * runtime resolution; treating malformed metadata as builtin loses the only
- * pointer to user data without a snapshot transaction. */
+/** Missing means builtin. Corrupt is deliberately distinct and must block runtime resolution:
+ *  treating malformed metadata as builtin loses the only pointer to user data. */
 export function readCurrentPointerState(baseDir: string): CurrentPointerState {
   const filePath = currentPointerPath(baseDir)
   const read = readAuthorityMetadata(filePath, MAX_CURRENT_POINTER_BYTES)
@@ -331,8 +310,8 @@ export function writeCurrentPointer(baseDir: string, version: string): void {
   atomicWriteJson(baseDir, currentPointerPath(baseDir), { version: assertSafeVersion(version) })
 }
 
-/** Explicitly fall back to the builtin chain. Historical override metadata is
- * untouched; callers decide separately whether this is reset or invalidation. */
+/** Explicitly fall back to the builtin chain; historical override metadata is untouched and
+ *  callers decide separately whether this is reset or invalidation. */
 export function clearCurrentPointer(baseDir: string): void {
   removeRuntimeFileNoFollow(baseDir, currentPointerPath(baseDir))
 }
@@ -396,9 +375,8 @@ function parseOverrideRecord(parsed: unknown): OverrideRecord | null {
   return out
 }
 
-/** Corrupt override is preserved and represented as a durable fail-closed
- * state. The .corrupt sentinel keeps subsequent boots blocked after the first
- * read moves malformed content out of the active path. */
+/** Corrupt override is preserved and represented as a durable fail-closed state: the .corrupt
+ *  sentinel keeps subsequent boots blocked once the first read moves malformed content aside. */
 export function readOverrideState(baseDir: string): OverrideState {
   const filePath = overridePath(baseDir)
   const read = readAuthorityMetadata(filePath, MAX_OVERRIDE_BYTES)
@@ -485,8 +463,8 @@ export function writeOverride(baseDir: string, record: OverrideRecord): void {
   atomicWriteJson(baseDir, overridePath(baseDir), payload)
 }
 
-/** Explicit restore-builtin action. Invalidated history should be copied by the
- * caller first if it wants a separate audit log; this only removes override. */
+/** Explicit restore-builtin action; the caller must copy invalidated history first if it wants
+ *  a separate audit log — this only removes override. */
 export function deleteOverride(baseDir: string): void {
   removeRuntimeFileNoFollow(baseDir, overridePath(baseDir))
 }
@@ -530,9 +508,8 @@ function parseNullableSnapshotName(value: unknown): string | null | undefined {
 
 function parseNullablePreRollbackName(value: unknown): string | null | undefined {
   if (value === null) return null
-  // Same 13-digit-epoch shape snapshot-store's isStashName enforces (stashes
-  // are only ever created there); keeping the two patterns in lockstep
-  // prevents a drift where the store accepts a name the resolver rejects.
+  // Same 13-digit-epoch shape snapshot-store's isStashName enforces, kept in lockstep so the
+  // store never accepts a name the resolver rejects.
   return isSafeStoredBasename(value) && /^\d{13}-[0-9a-f]{8}$/.test(value) ? value : undefined
 }
 
@@ -554,8 +531,8 @@ function parseJournalIntent(value: unknown): ActivationJournalIntent | null | un
 }
 
 function parseIntentKind(value: unknown): ActivationIntentKind | null {
-  // Schema-1 journals written before intentKind existed were exclusively
-  // ordinary version switches. Never reinterpret them as reset/invalidation.
+  // Schema-1 journals predate intentKind and were exclusively version switches; never
+  // reinterpret them as reset/invalidation.
   if (value === undefined) return 'version-switch'
   return value === 'version-switch' || value === 'reset-builtin' || value === 'shell-invalidation'
     ? value
@@ -595,18 +572,17 @@ function parseActivationJournal(parsed: unknown): ActivationJournal | null {
     if (knownGoodVersion !== null || rollbackTarget !== null) return null
   } else {
     if (typeof record.sourceIsBuiltin !== 'boolean' || typeof record.sourceWasKnownGood !== 'boolean') return null
-    // Snapshot creation requires an exact real source version. A null/unknown
-    // source must fail before a pointer mutation and can never become prepared.
+    // Snapshot creation requires an exact real source version; a null/unknown source must fail
+    // before a pointer mutation and can never become prepared.
     if (sourceVersion === null || preSwapSnapshotName === null) return null
     if (record.manualRollback) {
       if ((manualDataSnapshotName === null) !== (preRollbackStashName === null)) return null
     } else if (manualDataSnapshotName !== null || preRollbackStashName !== null) {
       return null
     }
-    // A privileged action may be queued while any activation phase is in
-    // flight. The apply writer preserves this field at every phase boundary;
-    // startup converts it to a fresh intent only after the current transaction
-    // reaches a verified applied/safe-fallback verdict.
+    // A privileged action may be queued while any activation phase is in flight; the apply writer
+    // preserves this field at every boundary and startup converts it to a fresh intent only after a
+    // verified applied/safe-fallback verdict.
   }
 
   return {
@@ -630,15 +606,14 @@ function parseActivationJournal(parsed: unknown): ActivationJournal | null {
   }
 }
 
-/** Corruption is a fail-closed state. Unlike non-transactional metadata, the
- * journal is deliberately left in place until explicit recovery/reset so a
- * second launch cannot reinterpret corruption as "no activation in flight". */
+/** Corruption is a fail-closed state: the journal stays until explicit recovery/reset, so a
+ *  second launch cannot reinterpret corruption as "no activation in flight". */
 export function readActivationJournalState(baseDir: string): ActivationJournalState {
   const filePath = activationJournalPath(baseDir)
   const read = readAuthorityMetadata(filePath, MAX_ACTIVATION_JOURNAL_BYTES)
   if (read.kind === 'missing') return { kind: 'missing' }
-  // The journal has no 'unknown' state on purpose: an unreadable journal is
-  // exactly as fail-closed as corruption and must never alias "no journal".
+  // The journal has no 'unknown' state on purpose: an unreadable journal is exactly as
+  // fail-closed as corruption and must never alias "no journal".
   if (read.kind === 'unknown' || read.kind === 'corrupt') return { kind: 'corrupt' }
   try {
     const journal = parseActivationJournal(JSON.parse(read.value.raw) as unknown)
@@ -654,17 +629,15 @@ export function writeActivationJournal(baseDir: string, journal: ActivationJourn
   atomicWriteJson(baseDir, activationJournalPath(baseDir), parsed)
 }
 
-/** Create the controller-owned pending intent. An in-flight prepared journal
- * is never overwritten by a second selection. */
+/** Create the controller-owned pending intent; an in-flight prepared journal is never
+ *  overwritten by a second selection. */
 export function writeActivationIntent(
   baseDir: string,
   input: ActivationIntentInput,
   now = new Date(),
 ): ActivationJournal {
-  // Builtin targets may name the exact sentinel token ('builtin-anchor',
-  // the gateway's builtin/fallback identity) instead of a semver — the
-  // startup/apply phases only compare targetVersion for non-builtin targets.
-  // Anything else must still pass the strict path-safe semver gate.
+  // Builtin targets may name the exact sentinel token ('builtin-anchor') instead of a semver;
+  // anything else must still pass the strict path-safe semver gate.
   const targetVersion = input.targetIsBuiltin
     ? (input.targetVersion === BUILTIN_ANCHOR_VERSION_TOKEN
       ? input.targetVersion
@@ -730,8 +703,8 @@ export function writeActivationIntent(
   return journal
 }
 
-/** Durably enqueue a follow-up action without overwriting the active
- * transaction. Used by the public [恢复内建] escape hatch during applying. */
+/** Durably enqueue a follow-up action without overwriting the active transaction (used by the
+ *  public [恢复内建] escape hatch during applying). */
 export function queueActivationIntent(
   baseDir: string,
   input: ActivationIntentInput,
@@ -834,8 +807,8 @@ function validateCriticalRuntimeFiles(
       if (opened.kind === 'escapes-tree') return validationFailure('invalid', '版本树关键文件逃逸目录：' + relativePath)
       if (sha256FileDigest(opened.path) !== expected) return validationFailure('invalid', '版本树关键文件摘要不匹配：' + relativePath)
     } catch (error) {
-      // ENOENT and digest/shape drift mean damaged content; EACCES/EIO only
-      // means the bytes are unreadable and must be reported as unknown.
+      // ENOENT and digest/shape drift mean damaged content; EACCES/EIO only means the bytes are
+      // unreadable and must be reported as unknown.
       return validationFailure(
         isUnreadableFsError(error) ? 'unknown' : 'invalid',
         '版本树关键文件缺失或不可读：' + relativePath,
@@ -867,10 +840,8 @@ function validateCriticalRuntimeFiles(
   return null
 }
 
-/** Validate the complete immutable-tree contract, not merely its directory.
- *  'kind' distinguishes a proven-invalid tree from an unreadable one: the
- *  installer may replace an invalid tree but must never overwrite an unknown
- *  one. */
+/** Validate the complete immutable-tree contract, not merely its directory. 'kind' distinguishes
+ *  a proven-invalid tree from an unreadable one: invalid may be replaced, unknown never overwritten. */
 export function validateVersionTree(
   baseDir: string,
   version: string,
@@ -967,8 +938,8 @@ function readVersionTimestampMap(filePath: string): VersionTimestampMapState {
 
 function assertTimestampMapWritable(baseDir: string, filePath: string, state: VersionTimestampMapState): void {
   if (state.kind === 'unknown') {
-    // The ledger could not be read: overwriting would destroy bytes that were
-    // never proven illegal (e.g. a transient EIO), so writes fail closed.
+    // The ledger could not be read: overwriting would destroy bytes never proven illegal (e.g. a
+    // transient EIO), so writes fail closed.
     throw new Error('runtime 版本保留元数据不可读，拒绝覆盖：' + basename(filePath))
   }
   if (state.kind !== 'corrupt') return
@@ -979,9 +950,8 @@ function assertTimestampMapWritable(baseDir: string, filePath: string, state: Ve
 
 function seedExplicitInstalls(baseDir: string, state: VersionTimestampMapState): Record<string, string> {
   if (state.kind === 'valid') return { ...state.versions }
-  // With no retention ledger, every runtime installation counts as a user
-  // action; a missing/corrupt/unreadable ledger therefore preserves all existing
-  // trees rather than inventing an empty protected set.
+  // With no retention ledger every runtime installation counts as a user action, so a
+  // missing/corrupt/unreadable ledger preserves all existing trees.
   const timestamp = new Date().toISOString()
   return Object.fromEntries(listVersionTrees(baseDir).map((version) => [version, timestamp]))
 }
@@ -1010,8 +980,8 @@ export function recordExplicitInstall(
   atomicWriteJson(baseDir, filePath, { versions })
 }
 
-/** Explicit cleanup opt-out. The tree is not removed here; a later eviction
- * may remove it if no current/known-good/pending/failure protection remains. */
+/** Explicit cleanup opt-out: the tree is not removed here, but a later eviction may remove it
+ *  if no current/known-good/pending/failure protection remains. */
 export function forgetExplicitInstall(baseDir: string, version: string): void {
   ensureRuntimeRootNoFollow(baseDir)
   const safe = assertSafeVersion(version)
@@ -1038,9 +1008,8 @@ export type KnownGoodVersionsState =
   | { kind: 'corrupt'; detail: string }
   | { kind: 'unknown'; detail: string }
 
-/** Retention-facing known-good read. A corrupt or unreadable ledger returns
- *  an explicit reason instead of an empty list, so a prune decision can never
- *  read "unknown protection set" as "no protection". */
+/** Retention-facing known-good read: a corrupt or unreadable ledger returns an explicit reason
+ *  instead of an empty list, so a prune decision can never read "unknown" as "no protection". */
 export function listKnownGoodVersionsState(baseDir: string): KnownGoodVersionsState {
   const state = readVersionTimestampMap(knownGoodPath(baseDir))
   if (state.kind === 'missing') return { kind: 'ok', versions: [] }
@@ -1162,9 +1131,8 @@ export type RuntimeFailuresState =
   | { kind: 'ok'; failures: RuntimeFailureRecord[] }
   | { kind: 'unknown'; detail: string }
 
-/** Failure-set material. A non-ENOENT readdir error or an unreadable record
- *  makes the whole set unknowable; it must never project to an empty list.
- *  Corrupt records keep the historical quarantine-and-skip behavior. */
+/** Failure-set material: a non-ENOENT readdir error or an unreadable record makes the whole set
+ *  unknowable, never an empty list; corrupt records keep the quarantine-and-skip behavior. */
 export function listRuntimeFailuresState(baseDir: string): RuntimeFailuresState {
   const dir = join(runtimeDirPath(baseDir), 'failures')
   let entries
@@ -1208,9 +1176,8 @@ export function runtimeFailureSummary(baseDir: string): RuntimeFailureSummary {
   return { kind: 'ok', count: state.failures.length, latest: state.failures[0] ?? null, detail: null }
 }
 
-/** Fail-closed facts for snapshot pruning. This deliberately includes every
- * snapshot referenced by recovery/failure metadata and returns corrupt when
- * any protection class is unknowable. */
+/** Fail-closed facts for snapshot pruning: every snapshot referenced by recovery/failure metadata
+ *  counts, and any unknowable protection class returns corrupt. */
 export function runtimeSnapshotRetentionState(baseDir: string): RuntimeSnapshotRetentionState {
   const pointer = readCurrentPointerState(baseDir)
   const override = readOverrideState(baseDir)
@@ -1290,8 +1257,8 @@ export function clearRuntimeFailure(baseDir: string, version: string): void {
 
 function isKnownGoodProtected(baseDir: string, version: string): boolean {
   const state = readVersionTimestampMap(knownGoodPath(baseDir))
-  // Corruption or an unreadable ledger makes the protected set unknowable.
-  // Preserve all trees rather than evicting a possibly protected version.
+  // Corruption or an unreadable ledger makes the protected set unknowable: preserve all trees
+  // rather than evicting a possibly protected version.
   return state.kind === 'corrupt' || state.kind === 'unknown'
     || (state.kind === 'valid' && Object.prototype.hasOwnProperty.call(state.versions, version))
 }
@@ -1300,8 +1267,8 @@ function isKnownGoodCandidateProtected(baseDir: string, version: string): boolea
   const filePath = join(runtimeDirPath(baseDir), 'known-good-candidates.json')
   const read = readAuthorityMetadata(filePath, 256 * 1024)
   if (read.kind === 'missing') return false
-  // Corrupt or unreadable candidate evidence makes the set unknowable; keep
-  // every possibly candidate-referenced tree.
+  // Corrupt or unreadable candidate evidence makes the set unknowable: keep every possibly
+  // candidate-referenced tree.
   if (read.kind !== 'present') return true
   let parsed: unknown
   try { parsed = JSON.parse(read.value.raw) } catch { return true }
@@ -1316,9 +1283,8 @@ function hasFailureEvidence(baseDir: string, version: string): boolean {
   const failureDir = join(runtimeDirPath(baseDir), 'failures')
   try {
     const info = lstatSync(failureDir)
-    // A symlink/non-directory is not an empty evidence set. Treat the whole
-    // protection class as unknowable so cleanup and automatic eviction keep
-    // every possibly referenced runtime tree.
+    // A symlink/non-directory is not an empty evidence set: treat the whole protection class as
+    // unknowable so cleanup and eviction keep every possibly referenced runtime tree.
     if (info.isSymbolicLink() || !info.isDirectory()) return true
     return readdirSync(failureDir)
       .some((name) => name === prefix || name.startsWith(`${prefix}.corrupt`))
@@ -1336,8 +1302,8 @@ export function isProtectedVersion(
   if (!isSafeVersion(version)) return false
   const runtimeDir = runtimeDirPath(baseDir)
   const activation = readActivationJournalState(baseDir)
-  // Corrupt recovery metadata makes its protected set unknowable. Never evict
-  // a possibly unique source/target/rollback tree in that state.
+  // Corrupt recovery metadata makes its protected set unknowable: never evict a possibly unique
+  // source/target/rollback tree in that state.
   if (activation.kind === 'corrupt') return true
   if (activation.kind === 'valid') {
     const journal = activation.journal
@@ -1348,8 +1314,7 @@ export function isProtectedVersion(
       || journal.nextIntent?.targetVersion === version) return true
   }
   const pointer = readCurrentPointerState(baseDir)
-  // unknown is as protective as corrupt: bytes never proven absent/illegal must
-  // not be deleted (B1 acceptance residual R1).
+  // unknown is as protective as corrupt: bytes never proven absent/illegal must not be deleted.
   if (pointer.kind === 'corrupt' || pointer.kind === 'unknown') return true
   if (pointer.kind === 'valid' && pointer.version === version) return true
   if (isKnownGoodProtected(baseDir, version)) return true
@@ -1366,11 +1331,9 @@ export function isProtectedVersion(
   return false
 }
 
-/** User-authorized cleanup of one explicitly retained tree. Every recovery,
- * active, pending, known-good, candidate, and failure protection is re-read
- * at the deletion point. A protected tree is left byte-for-byte intact and
- * keeps its explicit retention record; a removal failure likewise never
- * silently drops that record. */
+/** User-authorized cleanup of one explicitly retained tree: every recovery, active, pending,
+ *  known-good, candidate and failure protection is re-read at the deletion point; a protected tree
+ *  is left byte-for-byte intact and keeps its retention record, and a removal failure never drops it. */
 export function cleanupExplicitRuntimeVersion(
   baseDir: string,
   version: string,
@@ -1389,8 +1352,8 @@ export function cleanupExplicitRuntimeVersion(
   forgetExplicitInstall(baseDir, safe)
   if (exists) {
     markStorePruneNeeded(baseDir, `explicit-cleanup:${safe}`)
-    // Removing a hard-linked tree orphans its package cache entries; ask the
-    // store prune to also reclaim the private .pnpm-cache/.xdg-cache content.
+    // Removing a hard-linked tree orphans its package cache entries; ask the store prune to also
+    // reclaim the private .pnpm-cache/.xdg-cache content.
     markStorePruneNeeded(baseDir, 'cache-reclaim')
   }
   return { removed: exists, retentionCleared: true, stillProtected: false }
@@ -1447,8 +1410,8 @@ export function evictVersions(baseDir: string, keep = 3): string[] {
   }
   if (evicted.length > 0) {
     markStorePruneNeeded(baseDir, `evicted:${evicted.join(',')}`)
-    // Evicted hard-linked trees orphan package cache entries the same way an
-    // explicit cleanup does; recycle the private caches after the prune.
+    // Evicted hard-linked trees orphan package cache entries the same way explicit cleanup does;
+    // recycle the private caches after the prune.
     markStorePruneNeeded(baseDir, 'cache-reclaim')
   }
   return evicted
@@ -1466,10 +1429,9 @@ export function isPidAlive(pid: number, group = false): boolean {
   }
 }
 
-/** Read the installer's work-dir lifecycle marker (see runtime-installer.ts).
- * Returns one of the known states, or null when absent/corrupt — null is
- * deliberately NOT reclaimable (legacy residue without the marker keeps the
- * fail-closed block). No-follow: a symlinked marker is never read. */
+/** Read the installer's work-dir lifecycle marker (see runtime-installer.ts). Null when
+ *  absent/corrupt is deliberately NOT reclaimable — legacy residue keeps the fail-closed block;
+ *  a symlinked marker is never read. */
 function readWorkStateMarker(workDir: string): 'preparing' | 'spawning' | 'spawned' | 'failed' | null {
   try {
     const info = lstatSync(join(workDir, 'state'))
@@ -1515,22 +1477,17 @@ export function cleanupStaleInstalls(baseDir: string): string[] {
     }
     if (pid === null) {
       const entries = readdirSync(workDir)
-      // A crash between mkdir(workDir) and publishing any install input is a
-      // proven pre-spawn scene and can be reclaimed. Once the directory has
-      // content, however, a hard crash may have landed between spawn() and the
-      // synchronous PID write. Missing/malformed evidence must not be erased.
+      // A crash between mkdir(workDir) and any install input is a proven pre-spawn scene and is
+      // reclaimable; once content exists a hard crash may have landed between spawn() and the PID
+      // write, so evidence is not erased.
       if (pidEvidence === 'missing' && entries.length === 0) {
         rmSync(workDir, { recursive: true, force: true })
         removed.push(entry.name)
         continue
       }
-      // The installer persists a `state` marker as its FIRST work-dir file:
-      // 'preparing' (or 'failed') proves no child ever existed — a crash
-      // during the (up-to-minutes) download window leaves exactly this scene
-      // and MUST be reclaimable, or startup blocks forever with no UI exit.
-      // 'spawning'/'spawned'/missing/corrupt markers stay fail-closed (a
-      // child may exist without PID evidence). Legacy work dirs without a
-      // marker keep the conservative block.
+      // The installer persists a `state` marker as its FIRST work-dir file: 'preparing'/'failed'
+      // proves no child ever existed, so a crash during the download window must be reclaimable or
+      // startup blocks forever; 'spawning'/'spawned'/missing/corrupt markers stay fail-closed.
       const workState = readWorkStateMarker(workDir)
       if (workState === 'preparing' || workState === 'failed') {
         rmSync(workDir, { recursive: true, force: true })
@@ -1540,9 +1497,8 @@ export function cleanupStaleInstalls(baseDir: string): string[] {
       throw new Error(`运行时安装现场的 PID/PGID 证据${pidEvidence === 'missing' ? '缺失' : '损坏'}（${entry.name}）；拒绝清理并阻止启动`)
     }
     if (pid !== null && (isPidAlive(pid, true) || isPidAlive(pid))) {
-      // A hard-crashed installer may leave a lifecycle descendant after the
-      // recorded group leader exits. Never delete its work/PID evidence or
-      // let startup touch DSH_HOME while either the PID or PGID is live.
+      // A hard-crashed installer may leave a lifecycle descendant after the group leader exits:
+      // never delete evidence while the PID or PGID is live.
       throw new Error(`运行时安装现场仍有活动写进程（pid/pgid ${pid}）；拒绝清理并阻止启动`)
     }
     rmSync(workDir, { recursive: true, force: true })
@@ -1556,37 +1512,26 @@ function isRuntimePublishBackupName(name: string): boolean {
   const match = PUBLISH_BACKUP_NAME.exec(name)
   if (!match) return false
   const version = match[1]
-  // Installer-owned backups use the exact, untrimmed version path component.
-  // Reusing the path safety predicate keeps lookalike/traversal names out of
-  // the owned category while still accounting prerelease/build versions.
+  // Installer-owned backups use the exact, untrimmed version path component; the
+  // safe-version predicate keeps lookalike/traversal names out while allowing prereleases.
   return version === version.trim() && isSafeVersion(version)
 }
 
-/** Logical runtime disk soft-limit (10 GiB, design 18) — shared single
- * source. Both owners project it as their `diskLimitBytes` and gate installs
- * against it (desktop dsh-runtime-controller / gateway runtime-manager; alias
- * exports keep their public constant names). */
+/** Logical runtime disk soft-limit (10 GiB) — shared single source. Both owners
+ *  project it as `diskLimitBytes` and gate installs against it; alias exports keep
+ *  their public constant names. */
 export const RUNTIME_LOGICAL_DISK_LIMIT_BYTES = 10 * 1024 ** 3
 
 /* ============================================================================
  * 磁盘核算：异步分批单遍遍历 + 节流/单飞/终态一次
  *
- * 每个 runtime 拥有的根只遍历**一遍**。单遍会计契约：
- *   - 类别字段保持"逐路径求和"语义（每处出现都计）；
- *   - unclassifiedBytes 在"未分类残渣"集合内去重（独立 identity 集）；
- *   - totalBytes 跨 runtime 根与 dsh-home.old* 恢复备份共享同一 identity
- *     集（硬链接树/store 字节只计一次）。
- * 遍历按 `yieldEvery` 个节点一批，向事件循环让渡（macrotask），超大 store
- * 不会冻结 owner 进程；调用方（desktop main / gateway runtime-manager）经
- * coalesced-refresh.ts 的 createCoalescedRefresher 叠加节流/单飞/终态一次。
+ * 每个 runtime 根只遍历一遍。类别字段逐路径求和；unclassifiedBytes 在未分类
+ * 残渣内去重；totalBytes 跨 runtime 根与 dsh-home.old* 备份共享 identity 集
+ * （硬链接字节只计一次）。按 yieldEvery 个节点一批让渡事件循环，超大 store
+ * 不冻结 owner；调用方经 coalesced-refresh.ts 叠加节流/单飞/终态一次。
  *
- * 并发残差（仅并发竞态/文件系统病理，稳定状态无差异）：
- * - 嵌套 lstat ENOENT（list 与 lstat 间并发删除）：抛错而非静默低估
- *   （宁失败不静默当 0），见 chargeNodeAsync 注；
- * - 版本名同名**非目录** dirent：单桶归 unclassified——仅两次列目录间
- *   dirent 类型翻转才触发；
- * - bind-mount/overlay 重复目录 inode：逐节点查重（和值恒等，仅多余遍历
- *   代价；实际运行时布局不存在）。
+ * 并发残差：嵌套 ENOENT 抛错而非静默低估；非目录 dirent 归 unclassified；
+ * 重复目录 inode 逐节点查重（和值恒等，仅多余遍历代价）。
  * ========================================================================== */
 
 export interface RuntimeDiskWalkOptions {
@@ -1636,8 +1581,7 @@ async function chargeNodeAsync(
   try {
     info = await lstatP(path)
   } catch (error) {
-    // 根级 ENOENT = 该根不存在；其余（含 list 与 lstat 之间目录被并发删除的
-    // 嵌套 ENOENT）一律抛错——绝不把并发删除静默计成 0（宁失败不静默低估）。
+    // 根级 ENOENT = 该根不存在；其余（含并发删除的嵌套 ENOENT）一律抛错——绝不静默计 0。
     if (rootMissingIsZero && (error as NodeJS.ErrnoException).code === 'ENOENT') return
     throw error
   }
@@ -1670,18 +1614,16 @@ async function chargeNodeAsync(
     acc.totalBytes += info.size
   }
   if (!info.isDirectory()) return
-  // readdir 竞态（lstat 与 readdir 之间目录消失）让错误直接向上传播：绝不把
-  // 并发删除静默计成 0。
+  // readdir 竞态（lstat 与 readdir 之间目录消失）让错误直接向上传播：绝不静默计 0。
   const names = await readdirP(path)
   for (const name of names) {
     await chargeNodeAsync(join(path, name), target, false, acc, opts)
   }
 }
 
-/** runtimeEntries 顶层条目 → 会计类别规则表。**单一来源**：known 判定与类别
- *  分类共用同一有序规则（按声明序取首个命中；无命中 = 'unclassified' 残渣），
- *  新增类别只改这一处——杜绝「谓词认了而 switch 漏分类」的双份维护陷阱。
- *  顺序：versionTree 最优先，.work-/.failed/备份名三类 failure 系先于固定名。 */
+/** runtimeEntries 顶层条目 → 会计类别规则表。单一来源：known 判定与分类共用同一
+ *  有序规则（声明序首个命中；无命中 = unclassified 残渣），新增类别只改这一处，
+ *  杜绝「谓词认了而 switch 漏分类」的双份维护陷阱。 */
 const ENTRY_TARGET_RULES: ReadonlyArray<{
   test: (name: string, isDirectory: boolean, treeSet: Set<string>) => boolean
   target: AsyncWalkTarget
@@ -1703,8 +1645,7 @@ const ENTRY_TARGET_RULES: ReadonlyArray<{
   { test: name => name === 'pre-rollback', target: 'preRollback' },
 ]
 
-/** runtimeEntries 顶层条目 → 会计类别（规则表驱动，是分类的唯一来源；
- *  返回 'unclassified' 表示条目属于"未分类残渣"）。 */
+/** runtimeEntries 顶层条目 → 会计类别（规则表驱动的唯一分类来源）。 */
 function asyncTargetForEntry(name: string, isDirectory: boolean, treeSet: Set<string>): AsyncWalkTarget {
   for (const rule of ENTRY_TARGET_RULES) {
     if (rule.test(name, isDirectory, treeSet)) return rule.target
@@ -1712,17 +1653,14 @@ function asyncTargetForEntry(name: string, isDirectory: boolean, treeSet: Set<st
   return 'unclassified'
 }
 
-/** 异步单遍磁盘统计——唯一的磁盘核算实现。会计契约与并发残差见上方段注释；
- *  真实布局 + 硬链接/符号链接
- *  fixture 的用例见 test/store/disk-accounting.test.ts。 */
+/** 异步单遍磁盘统计——唯一的磁盘核算实现。会计契约与并发残差见上方段注释。 */
 export async function runtimeDiskSummaryAsync(
   baseDir: string,
   dshHome: string = join(baseDir, 'state', 'dsh-home'),
   options: RuntimeDiskWalkOptions = {},
 ): Promise<RuntimeDiskSummary> {
   const opts = {
-    // yieldEvery ≤0 会让 visited % yieldEvery 恒为 NaN 而永不让渡（静默退化
-    // 为阻塞遍历）——钳制到 ≥1。
+    // yieldEvery ≤0 会让 visited % yieldEvery 恒为 NaN 而永不让渡（静默退化为阻塞遍历），钳制到 ≥1。
     yieldEvery: Math.max(1, Math.floor(options.yieldEvery ?? 512)),
     onVisited: options.onVisited ?? (() => undefined),
   }
@@ -1758,8 +1696,7 @@ export async function runtimeDiskSummaryAsync(
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
   }
-  // 单遍主循环：runtimeEntries（readdir 顺序）→ restore 备份。根级缺失为 0；
-  // 嵌套并发删除向上抛（与同步版一致）。
+  // 单遍主循环：runtimeEntries（readdir 顺序）→ restore 备份；根级缺失为 0，嵌套并发删除向上抛。
   for (const entry of runtimeEntries) {
     await chargeNodeAsync(
       join(runtime, entry.name),
@@ -1770,8 +1707,7 @@ export async function runtimeDiskSummaryAsync(
     )
   }
   for (const backup of restoreBackups) {
-    // backup 已是绝对路径（discovery 用 join(dshHomeParent, name) 构造）；
-    // path.join 对绝对第二参是拼接而非重定基，绝不能再次 join。
+    // backup 已是绝对路径；path.join 对绝对第二参是拼接而非重定基，绝不能再次 join。
     await chargeNodeAsync(backup, 'restoreBackup', true, acc, opts)
   }
   return {

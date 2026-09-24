@@ -31,8 +31,8 @@ test('isStableTap: beyond the slop is a pan/scroll intent (never healed)', () =>
 
 test('heal timing constants stay pinned at the documented values', () => {
   // 常量钉:grace 是「等真实 click 先到」的窗口,抑制窗覆盖 heal 之后的迟到
-  // click——两者的「行为」由下方 isSuppressedLateClick 边界测试与实机门禁
-  // 覆盖(installer 时序为 device-gated,仓库惯例),这里只防意外改值。
+  // click——两者的「行为」由下方 isSuppressedLateClick 边界测试覆盖
+  // (installer 时序为 device-gated,仓库惯例),这里只防意外改值。
   assert.equal(HEAL_GRACE_MS, 120)
   assert.equal(HEAL_SUPPRESS_MS, 150)
 })

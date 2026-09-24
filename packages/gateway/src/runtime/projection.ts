@@ -1,8 +1,7 @@
 /**
- * Gateway runtime status projection (design 18 §9.3): the read-only
- * `GET /chamber/runtime/status` shape, projected over the manager's live
- * handles. The module owns no state — every fact is read through a getter, so
- * a writer transition is visible on the next poll.
+ * Gateway runtime status projection: the read-only `GET /chamber/runtime/status`
+ * shape, projected over the manager's live handles. The module owns no state — every
+ * fact is read through a getter, so a writer transition shows on the next poll.
  */
 import {
   DEFAULT_REGISTRY_ORIGIN,
@@ -42,11 +41,10 @@ export type GatewayRuntimeStatus = RuntimeStatusProjection & {
   mutationsAllowed: boolean
   operationError: string | null
   restart: 'ok' | 'failed' | 'running' | null
-  /** Last explicit start outcome (design 21 decision 12 / §6.3), projected
-   * exactly like `restart`: 'running' from the moment a start is accepted
-   * until it settles; 'ok'/'failed' terminal. The settings poll uses this to
-   * distinguish a post-202 entry rejection (operationError set, connectionState
-   * still stopped) from a genuine start success. */
+  /** Last explicit start outcome, projected like `restart`: 'running' from
+   * acceptance until it settles, then 'ok'/'failed'. The settings poll uses it to tell
+   * a post-entry rejection (operationError set, connectionState stopped) from a
+   * genuine success. */
   start: 'ok' | 'failed' | 'running' | null
   restoreOutcome: string | null
   snapshotCount: number | null
@@ -56,8 +54,7 @@ export type GatewayRuntimeStatus = RuntimeStatusProjection & {
   preRollbackCount: number | null
   preRollbackLatestName: string | null
   failure: { version: string; at: string; reason: string } | null
-  /** Failure-ledger material: non-null exactly when the failure set could not
-   *  be read; `failure` is then null because a fabricated 0 is not a fact. */
+  /** Non-null exactly when the failure set could not be read; `failure` is then null because a fabricated 0 is not a fact. */
   failureError: string | null
   diskUsage: RuntimeDiskSummary | null
   diskError: string | null
@@ -109,8 +106,7 @@ export function createRuntimeStatusProjection(deps: RuntimeStatusProjectionDeps)
 
   async function status(): Promise<GatewayRuntimeStatus> {
     writeFence.assertManagerReadable()
-    // Desktop-shaped metadata health projection (recover-metadata parity):
-    // category-only components, never paths.
+    // Desktop-shaped metadata health projection (recover-metadata parity): category-only components, never paths.
     const metadata = metadataStatus.projection()
     if (platform === 'win32') {
       const resolved = facts.resolveWorkspace()
@@ -196,20 +192,16 @@ export function createRuntimeStatusProjection(deps: RuntimeStatusProjectionDeps)
       reason: failures.latest.error,
     }
     const failureError = failures.kind === 'unknown' ? failures.detail : null
-    // Full logical accounting is a batched async tree walk. Cache
-    // it so the authenticated 3s UI poll and gateway identity probes never
-    // turn status into a hot 10 GiB filesystem walk; mutations invalidate the
-    // cache.
+    // Full logical accounting is a batched async tree walk; cache it so the 3s UI poll
+    // and identity probes never turn status into a hot 10 GiB filesystem walk
+    // (mutations invalidate the cache).
     const { usage: diskUsage, error: diskError } = await diskCacheProjection.projection()
     const effectiveBlockedReason = getStartupBlockReason() ?? resolutionError
     const effectivePending = envPath === null && override !== null && !shouldInvalidate(override, shellVersion) && override.pending !== null
       ? override.pending : null
-    // A FATAL/RECOVERABLE metadata block must also suppress the
-    // ordinary-pending phase — journal-corrupt + stale pending would otherwise
-    // lock the only recovery surface behind the pending gate.
-    // Block-outranks-pending classification single source:
-    // startupBlockReasonOutranksPending — RECOVERABLE ∪ retry-apply ∪
-    // retry-restore reasons).
+    // A FATAL/RECOVERABLE metadata block must also suppress the ordinary-pending
+    // phase: journal-corrupt + stale pending would otherwise lock the only recovery
+    // surface behind the pending gate (block-outranks-pending single source).
     const blockOutranksPending = startupBlockReasonOutranksPending(getStartupBlockReason())
     const ordinaryPending = effectivePending !== null
       && override?.swapAttempted !== true
@@ -229,10 +221,9 @@ export function createRuntimeStatusProjection(deps: RuntimeStatusProjectionDeps)
           : resolved.source === 'env'
             ? 'env'
             : 'builtin-anchor',
-      // apply-now remains applying through its post-quarantine recovery and
-      // outcome-projection tail. activationDepth alone opens a false idle/ready
-      // poll window after the probe verdict but before startLocal/error state
-      // has settled.
+      // apply-now remains applying through its post-quarantine recovery tail:
+      // activationDepth alone would open a false idle window after the probe
+      // verdict but before startLocal/error state settles.
       phase: writeFence.activationInProgress() || writeFence.isApplyNowInFlight() || writeFence.isRestartExhaustedRollbackInFlight() ? 'applying'
         : writeFence.isInstallInFlight() ? 'installing'
         : getStartupBlockReason() === 'snapshot-failed' ? 'snapshot-failed'
@@ -240,8 +231,7 @@ export function createRuntimeStatusProjection(deps: RuntimeStatusProjectionDeps)
         : getStartupBlockReason() === 'restore-half' || getStartupBlockReason() === 'restore-incomplete' ? 'restore-blocked'
         : ordinaryPending ? 'pending'
         : 'idle',
-      // Blocked startups are projected so clients can see WHY the
-      // managed dsh is down and which resume route applies.
+      // Projected so clients can see WHY the managed dsh is down and which resume route applies.
       startupBlockedReason: effectiveBlockedReason,
       pending: effectivePending,
       connectionState: plane.connectionState,
@@ -250,11 +240,9 @@ export function createRuntimeStatusProjection(deps: RuntimeStatusProjectionDeps)
       platform,
       mutationsAllowed: true,
       operationError: getOperationError(),
-      // Last restart outcome (design 18 §9.3): 'running' from the
-      // moment a restart is accepted until it settles; 'ok'/'failed' terminal.
-      // The settings-bridge poll uses this to distinguish a post-202 entry
-      // rejection (operationError set, connectionState still 'ready') from a
-      // genuine success.
+      // Last restart outcome: 'running' from acceptance until it settles, then
+      // 'ok'/'failed'. The settings-bridge poll uses it to tell a post-entry
+      // rejection (operationError set, connectionState ready) from a genuine success.
       restart: getRestartOutcome(),
       start: getStartOutcome(),
       restoreOutcome: override?.restoreOutcome ?? null,

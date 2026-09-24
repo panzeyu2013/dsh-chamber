@@ -1,53 +1,16 @@
 /**
  * Web-profile dsh spawn + process lifecycle for the control plane.
  *
- * v4 (connection-manager shape, design 02 §3.1): the local host is dsh's
- * built-in web profile — no slim-profile directory, no glue plugin. The base
- * command line is:
+ * Base command line: `dsh --profile web --host 127.0.0.1 --port <P>
+ * --trusted-host 127.0.0.1:<P>`; an optional chamber-owned `--patch <path>` overlay
+ * is inserted right after `--profile web` (before the web app's own flags, which
+ * the launcher passes through verbatim). --trusted-host admits exactly the
+ * 127.0.0.1:<P> Host the reverse proxy forwards.
  *
- *   dsh --profile web --host 127.0.0.1 --port <P> --trusted-host 127.0.0.1:<P>
- *
- * An optional chamber-owned `--patch <path>` overlay (design 09 方案 A module B,
- * host-graph-seed.ts) is inserted right after `--profile web` when the plane
- * has seeded one: it mounts the chamber host package that exposes the host
- * boot graph (`clientModules.graph()`), the channel the chamber frontend uses
- * to load extra client plugins at runtime. The flag must precede the web
- * app's own flags (--host/--port/--trusted-host) — the dsh launcher passes
- * everything after its recognized flags through to the booted app verbatim
- * (@deepseek-ai/dsh args.ts).
- *
- * The browser trust fence (--trusted-host) admits requests whose Host header
- * is the instance's own 127.0.0.1:<P> — exactly what the per-instance reverse
- * proxy (design 03 §3.1) forwards.
- *
- * Port strategy: fixed base DEFAULT_DSH_START_PORT (17510), one attempt per
- * port; a failed attempt (process exit, or no TCP listener within 90s, or a
- * failed host-identity probe) advances port+1 and respawns, at most 5 attempts.
- * Spawn uses detached=true (own process group, design 02 §3.1: the host
- * survives a control-plane crash and the orphan reaper reclaims it, §3.4);
- * stdout/stderr are forwarded to the control-plane log and the per-port
- * rolling log. The node executable is resolved, not assumed on PATH
- * (resolveNodeExecutable: plain node → process.execPath; Electron main →
- * process.execPath + ELECTRON_RUN_AS_NODE=1 + --expose-internals; PATH/
- * known-root fallbacks) — a GUI-launched packaged app has a minimal PATH
- *  and `spawn('node', …)` would fail with ENOENT. The spawned environment
- *  is pinned (design 02 §3.1):
- *  DSH_TELEMETRY_DISABLED=1, DSH_PERMISSION_MODE=workspace-write, and
- *  SSH_CONNECTION=<loopback tuple> — the chamber-managed host is a local
- *  web profile whose directory-picker-auto (host/directory-picker-auto)
- *  resolves `browse` only when an SSH-launch marker is present (or the bind
- *  is non-loopback). The pin makes the managed host always serve the
- *  in-app `browse` interaction (directoryPicker.list / directoryPicker.createDirectory)
- *  so every instance — local and remote alike — uses the same in-app
- *  directory dialog (design 05 §4; the OS chooser is never surfaced to
- *  chamber users). Only directory-picker-auto reads SSH_CONNECTION in the
- *  dsh source; `bundle/web-app` also probes SSH_CONNECTION/SSH_TTY via
- *  `launchedThroughSsh` (browser auto-open suppression — harmless for
- *  chamber's own window), so the pin has no other effect.
- *  A pid
- *  record per design 02 §3.3 (pid/ownerPid/ownerInstanceId/port/binary/
- *  profile:'web'/source/startedAt) is atomically written under
- *  <stateDir>/managed-dsh/<pid>.json and cleaned up on exit.
+ * Ports: base DEFAULT_DSH_START_PORT (17510), port+1 per failed attempt (process
+ * exit / no listener in 90s / failed identity probe), at most MAX_SPAWN_ATTEMPTS.
+ * The child is detached in its own process group (it survives a control-plane
+ * crash; the orphan reaper reclaims it).
  */
 
 import { spawn } from 'node:child_process'
@@ -72,15 +35,13 @@ import { ensureInstanceId, isValidInstanceId } from './instance-id.ts'
 import { cimPidLiveness, hasWindowsResidualTree, treeKillWindows } from './win-probes.ts'
 
 /**
- * Default first port attempted for a managed local dsh host (the local
- * instance start port baseline; spawns advance +1 per retry). Distant from
- * DEFAULT_CONTROL_PLANE_PORT (17500) so the two surfaces never collide.
+ * Default first port for a managed local dsh host; spawns advance +1 per retry.
+ * Distant from DEFAULT_CONTROL_PLANE_PORT (17500) so the two surfaces never collide.
  */
 export const DEFAULT_DSH_START_PORT = 17510
 
-/** Gateway credentials belong to the outer authenticated boundary and must
- * never become ambient authority inside the managed dsh or its tools/plugins.
- * Keep this exported pure helper covered without spawning a process. */
+/** Gateway credentials belong to the outer authenticated boundary and must never
+ *  become ambient authority inside the managed dsh or its tools/plugins. */
 export function sanitizeManagedDshEnv(input: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const output = { ...input }
   for (const name of Object.keys(output)) {
@@ -96,22 +57,18 @@ export function sanitizeManagedDshEnv(input: NodeJS.ProcessEnv): NodeJS.ProcessE
 export const BASE_DHSPORT = DEFAULT_DSH_START_PORT
 
 /**
- * Validate a dsh port base: a positive integer in the port range. The base is
- * the first port attempted for a managed dsh host; spawn attempts walk upward
- * (base, base+1, …). Server gateway deployments override it via
- * `--dsh-port` / `DSH_GATEWAY_DSH_PORT` (design 17 §3; the installer wizard
- * defaults to 30800 so the gateway occupies 30801 next to the managed dsh).
+ * Validate a dsh port base: a positive integer in the port range; spawn attempts
+ * walk upward from it. Server gateway deployments override it via --dsh-port /
+ * DSH_GATEWAY_DSH_PORT.
  */
 export function isDshPortBaseValid(value: number): boolean {
   return Number.isInteger(value) && value >= 1 && value <= 65535
 }
 
 /**
- * Grace window between SIGTERM and SIGKILL when stopping a managed host
- * (design 02 §3.7). Kept short so app quit is fast: the host persists
- * session JSONL continuously, so a 1s window flushes the tail and a SIGKILL
- * then releases the port/fds deterministically — the "fast exit" half of the
- * speed-vs-reclamation balance.
+ * Grace window between SIGTERM and SIGKILL when stopping a managed host. Kept short
+ * so app quit is fast; the host persists session JSONL continuously, so 1s flushes
+ * the tail and SIGKILL then releases the port/fds deterministically.
  */
 export const TERMINATE_GRACE_MS = 1_000
 
@@ -120,33 +77,25 @@ export const MAX_SPAWN_ATTEMPTS = 5
 
 /** How long a spawned host gets to open its TCP listener. */
 export const LISTEN_WAIT_MS = 90_000
-/** Browser-auth: bounded wait for the `dsh web:` launch-token line (printUrl defaults true). One readiness attempt may consume TWO windows: a 401 that arrives before the line re-arms it once. */
+/** Bounded wait for the `dsh web:` launch-token line (one attempt may consume two windows: a 401 arriving before the line re-arms once). */
 const AUTH_BOOTSTRAP_WAIT_MS = 15_000
 
-/** Bound every loopback connect attempt so startup and shutdown cannot hang
- * behind a socket that neither connects nor errors (for example, a local
- * firewall rule that drops packets instead of rejecting them). */
+/** Bound every loopback connect attempt so startup/shutdown cannot hang behind a socket that neither connects nor errors. */
 export const PORT_PROBE_TIMEOUT_MS = 1_000
 
 /**
- * Ceiling for the INCOMPLETE-LINE carry of the child-output forward path. Child
- * stdout/stderr arrives as Buffer objects and is decoded raw (the readiness
- * scanner must see complete, untrimmed lines), so the bound lives on the tail
- * buffer a newline-less writer would otherwise grow without limit — see
- * forwardChildOutput. 64 KiB also leaves ample room below host-logs' 512 KiB
- * encoded-entry admission ceiling for worst-case JSON escaping.
+ * Ceiling for the INCOMPLETE-LINE carry of the child-output forward path: output is
+ * decoded raw so the readiness scanner sees complete lines, and this bounds the tail
+ * a newline-less writer could grow. 64 KiB also stays below host-logs' 512 KiB
+ * encoded-entry ceiling for worst-case JSON escaping.
  */
 export const MAX_CHILD_OUTPUT_CHUNK_BYTES = 64 * 1024
 
 /**
- * Mask credential-bearing query values in ONE COMPLETE child-output line —
- * the last gate before a managed host's stdout/stderr reaches the
- * control-plane log or the on-disk rolling log. The `?token=` launch token is
- * the only recoverable credential the host ever prints (the
- * browser-auth bootstrap reads it from the `dsh web: <url>?token=…` line), so
- * it must be redacted on the complete line, never on per-chunk fragments.
- * Exported as the single source for that rule so a test can
- * pin it without spawning a host.
+ * Mask credential-bearing query values in ONE COMPLETE child-output line — the last
+ * gate before a managed host's stdout/stderr reaches the logs. The `?token=` launch
+ * token is the only recoverable credential the host prints, so it must be redacted
+ * on the complete line, never on per-chunk fragments.
  */
 export function redactChildOutputLine(line: string): string {
   return line.replace(/([?&]token=)[^&\s)]+/g, '$1***')
@@ -178,10 +127,9 @@ interface PortProbeSocket {
 type PortProbeConnect = (options: { host: string; port: number }) => PortProbeSocket
 
 /**
- * Check whether a candidate loopback port is occupied. A connect timeout is
- * treated conservatively as busy: an inconclusive probe must not launch a
- * detached host on a port whose ownership is unknown. Abort always wins and
- * destroys the in-flight socket so LocalHostManager.stop() can settle.
+ * Check whether a candidate loopback port is occupied. A connect timeout counts as
+ * busy (an inconclusive probe must not launch a detached host on an unknown port);
+ * abort always wins and destroys the in-flight socket.
  */
 export function probePortBusy(
   port: number,
@@ -225,41 +173,28 @@ export function probePortBusy(
   })
 }
 
-/** The fixed web-profile flag set (design 02 §3.1/§3.5); --trusted-host and
- * --port always agree (127.0.0.1:<P>) so the trust fence and the forwarded
- * Host header never diverge. When `patchPath` is non-empty, `--patch <path>`
- * (the dsh launcher's repeatable overlay flag) is inserted right after
- * `--profile web` — it must precede the web app's own flags, which the
- * launcher passes through verbatim (see the module header). */
+/** The fixed web-profile flag set. --trusted-host and --port always agree
+ *  (127.0.0.1:<P>) so the trust fence and the forwarded Host never diverge; a
+ *  non-empty patchPath inserts `--patch <path>` right after `--profile web`. */
 export function webProfileArgs(port: number, patchPath?: string): string[] {
   const base = ['--profile', 'web', '--host', '127.0.0.1', '--port', String(port), '--trusted-host', `127.0.0.1:${port}`]
   if (patchPath === undefined || patchPath === '') return base
   return ['--profile', 'web', '--patch', patchPath, '--host', '127.0.0.1', '--port', String(port), '--trusted-host', `127.0.0.1:${port}`]
 }
 
+
 /** How the dsh CLI entry was resolved for one spawn (see resolveDshEntry). */
 export type DshEntryLayout = 'installed' | 'source'
 
 /**
- * The cwd for one managed-host spawn.
- *
- * An installed dsh entry lives in a runtime tree that an app install/update
- * replaces IN PLACE (packaged `vendor/dsh`). A process created with such a
- * directory as cwd keeps the old, unlinked inode as its working directory after
- * the replacement, and worker_threads share one process.cwd() — so every tool
- * call in the managed host then fails with `uv_cwd ENOENT` until the app
- * restarts. Installed layouts therefore run with the managed dsh home — a
- * stable, 0700, control-plane-owned directory that exists for the host's whole
- * lifetime — as cwd.
- *
- * Source layouts keep the workspace cwd: their loader (`--import tsx/esm`) is
- * resolved through the workspace's own node_modules, and a source checkout is
- * not replaced in place by an install/update. Changing that branch would
- * require absolutizing the tsx loader (fragile across tsx versions) for no
- * safety gain.
- *
- * The entry itself is always passed as an absolute path, so neither branch
- * depends on cwd to find the dsh CLI (design 02 §3.1).
+ * The cwd for one managed-host spawn: installed layouts use the managed dsh home —
+ * a stable, 0700, control-plane-owned directory — because an app install/update
+ * replaces the runtime tree IN PLACE, and a process whose cwd is that tree keeps the
+ * unlinked inode (worker_threads share process.cwd(), so every tool call would fail
+ * with `uv_cwd ENOENT` until restart). Source layouts keep the workspace cwd: their
+ * tsx loader resolves through the workspace node_modules and a checkout is not
+ * replaced in place. The entry itself is always absolute, so neither branch depends
+ * on cwd to find the CLI.
  */
 export function resolveSpawnCwd(input: {
   readonly layout: DshEntryLayout
@@ -270,17 +205,10 @@ export function resolveSpawnCwd(input: {
 }
 
 /**
- * Resolve the dsh CLI entry for a workspace, preferring the installed
- * artifact over the source checkout (runtime differences are intentional:
- * packaged runtimes ship the published @deepseek-ai/dsh npm package, dev
- * workspaces run the ref-dsh source tree — the tsx fallback is dev-only).
- * The web-profile flags ride the entry either way (design 02 §3.1). The
+ * Resolve the dsh CLI entry for a workspace, preferring the installed artifact over
+ * the source checkout (packaged runtimes ship the published npm package, dev
+ * workspaces run the ref-dsh source tree — the tsx fallback is dev-only). The
  * resolved layout also selects the child cwd (see resolveSpawnCwd).
- * @param dshWorkspacePath - the dsh installation root; the CLI entry and (for
- *   the source layout) the spawned process cwd are resolved from it.
- * @param port - the port the host is asked to serve.
- * @param patchPath - optional `--patch` overlay (design 09 module B); null/absent when none.
- * @returns {args, binary, layout} node arguments to spawn plus the resolved layout.
  */
 function resolveDshEntry(dshWorkspacePath: string, port: number, patchPath?: string | null): { args: string[]; binary: string; layout: DshEntryLayout } {
   const profileFlags = webProfileArgs(port, patchPath ?? undefined)
@@ -290,21 +218,18 @@ function resolveDshEntry(dshWorkspacePath: string, port: number, patchPath?: str
   }
   const source = join(dshWorkspacePath, 'apps', 'cli', 'src', 'bin.ts')
   if (existsSync(source)) {
-    // Use the absolute source entry in argv as well as in the pid record so
-    // the orphan reaper can re-verify one exact token without a cwd guess.
+    // Absolute source entry in argv as well as in the pid record, so the reaper can re-verify one exact token.
     return { args: ['--import', 'tsx/esm', source, ...profileFlags], binary: source, layout: 'source' }
   }
   throw new Error(`no dsh CLI entry found in ${dshWorkspacePath} (neither node_modules/@deepseek-ai/dsh/lib/bin.js nor apps/cli/src/bin.ts)`)
 }
 
 /**
- * One spawn attempt: launch the child with the web-profile flags for `port`
- * and wait for readiness (TCP listener, then a successful unified
- * host-identity probe — probeHostIdentity speaks the fixed-size
- * session/canOpenWorkspacePath boolean with a legacy session/list fallback
- * for runtime trees that predate the identity method). The
- * child is the dsh process itself — spawned directly, never via a pnpm
- * wrapper, so there is no grandchild to orphan when we terminate.
+ * One spawn attempt: launch the child with the web-profile flags for `port` and
+ * wait for readiness (TCP listener, then a successful unified host-identity probe —
+ * probeHostIdentity speaks the fixed-size session/canOpenWorkspacePath boolean with
+ * a legacy session/list fallback). The child is the dsh process itself — no pnpm
+ * wrapper, so there is no grandchild to orphan.
  */
 interface SpawnAttemptOptions {
   dshHome: string
@@ -352,9 +277,8 @@ function isNonRetryableSpawnError(error: unknown): error is Error & { code: Spaw
 }
 
 /**
- * Render any thrown value without ever producing the literal `undefined` or
- * `null`. Failure messages are user-facing (health/API/desktop log), so a
- * non-Error throw must still name that fact instead of printing a hole.
+ * Render any thrown value without ever producing the literal `undefined` or `null`:
+ * failure messages are user-facing, so a non-Error throw must still name that fact.
  */
 function describeThrownValue(value: unknown): string {
   if (value === undefined) return 'no error object was thrown'
@@ -375,10 +299,9 @@ function writerQuiescenceUnknown(child: ChildProcess, context: string, cause: un
 }
 
 /**
- * Why one spawn attempt failed. The exhausted-spawn error carries one typed
- * record per attempt, so the terminal message names the REAL cause — a port
- * collision, a listen timeout, a child exit code, or the child's own stderr
- * tail — never a bare `undefined`.
+ * Why one spawn attempt failed. The exhausted-spawn error carries one typed record
+ * per attempt so the terminal message names the REAL cause — port collision, listen
+ * timeout, exit code, or stderr tail — never a bare `undefined`.
  */
 export type SpawnAttemptFailureKind =
   | 'port-busy'
@@ -443,9 +366,8 @@ export class DshSpawnExhaustedError extends Error {
 }
 
 /**
- * Render the terminal message. Every attempt's reason is present, so the string
- * can never be (or contain) a bare `undefined`: a genuinely empty reason is
- * replaced by an explicit sentence ("attempt failed without an error message").
+ * Render the terminal message from every attempt's reason; a genuinely empty reason
+ * becomes an explicit sentence so the string never contains `undefined`.
  */
 function formatSpawnExhaustedMessage(basePort: number, attempts: readonly SpawnAttemptFailure[]): string {
   const range = attempts.length === 0
@@ -512,29 +434,14 @@ async function terminateAndProveQuiet(
 }
 
 /**
- * Resolve the node executable that runs the dsh CLI entry (the host is
- * spawned directly, never via a pnpm wrapper). The control plane may run
- * under plain node (standalone serve, tests) or inside the Electron main
- * process (desktop): a Finder-launched packaged app gets a minimal PATH
- * (`/usr/bin:/bin:/usr/sbin:/sbin`), so `spawn('node', …)` fails with
- * ENOENT. Resolution order:
- * - Electron (`process.versions.electron` set) → `process.execPath` plus
- *   `ELECTRON_RUN_AS_NODE=1` (Electron's documented production mechanism:
- *   the app binary starts as a normal node process; requires the
- *   `runAsNode` fuse, which electron-builder leaves enabled by default —
- *   the fuse must stay enabled). `--expose-internals` is prepended:
- *   dsh's loader resolves `internal/modules/esm/loader` via
- *   `node-addon-require-builtin`, whose V8-embedder probing does not work
- *   under Electron's patched Node ("no compatible
- *   GetAlignedPointerFromEmbedderData symbol"), while the documented
- *   `--expose-internals` require path does.
- * - plain node → `process.execPath` (the running node binary; the
- *   require-builtin addon path works there).
- * - fallback: `node` resolved from PATH, then well-known install roots,
- *   then the bare name (last-resort fallback).
- * @returns {file} the node executable, the node args to prepend to the
- * CLI entry, and the extra env entries (only the Electron case adds
- * ELECTRON_RUN_AS_NODE).
+ * Resolve the node executable that runs the dsh CLI entry (never a pnpm wrapper).
+ * The plane may run under plain node or inside the Electron main process: a
+ * Finder-launched packaged app has a minimal PATH, so `spawn('node', …)` fails with
+ * ENOENT. Electron → process.execPath + ELECTRON_RUN_AS_NODE=1 (requires the
+ * runAsNode fuse, which must stay enabled) and --expose-internals (dsh's loader
+ * resolves internal/modules/esm/loader through the require path, which Electron's
+ * patched Node requires). Plain node → process.execPath. Fallback: PATH, then
+ * well-known install roots, then the bare name.
  */
 export function resolveNodeExecutable(): { file: string; args: string[]; env: Record<string, string> } {
   if (process.versions.electron !== undefined) {
@@ -551,9 +458,7 @@ export function resolveNodeExecutable(): { file: string; args: string[]; env: Re
   return { file: 'node', args: [], env: {} }
 }
 
-/** Only a regular file with the execute bit counts as a node candidate — a
- *  same-named directory or non-executable file must not shadow a later valid
- *  entry (silent EACCES trap on the spawn). */
+/** Only a regular executable file counts as a node candidate (a same-named directory must not shadow a later valid entry). */
 function isExecutableFile(target: string): boolean {
   try {
     accessSync(target, constants.X_OK)
@@ -577,9 +482,7 @@ function searchPathForNode(): string | null {
   return null
 }
 
-/** Compare nvm version dir names (`v24.20.0`) numerically, descending — the
- *  most recently installed node is the best fallback (readdir order is
- *  filesystem-defined and must never decide the version). */
+/** Compare nvm version dir names (v24.20.0) numerically, descending — readdir order must never decide the version. */
 function compareNodeVersionsDesc(left: string, right: string): number {
   const parse = (value: string): number[] =>
     value.replace(/^v/, '').split('.').map(segment => Number.parseInt(segment, 10) || 0)
@@ -592,10 +495,8 @@ function compareNodeVersionsDesc(left: string, right: string): number {
   return 0
 }
 
-/** nvm-installed node binaries (darwin + linux share the nvm layout): the
- *  version named by ~/.nvm/alias/default first (nvm's own choice), then every
- *  ~/.nvm/versions/node/<v>/bin/node, newest first. Every fs access is
- *  guarded — this is a best-effort fallback and must never throw. */
+/** nvm-installed node binaries (darwin + linux share the layout): ~/.nvm/alias/default first,
+ *  then every ~/.nvm/versions/node/<v>/bin/node, newest first. Best-effort — never throws. */
 function nvmNodeCandidates(home: string): string[] {
   const versionsRoot = join(home, '.nvm', 'versions', 'node')
   if (!existsSync(versionsRoot)) return []
@@ -615,16 +516,13 @@ function nvmNodeCandidates(home: string): string[] {
       .sort(compareNodeVersionsDesc)
     for (const version of versions) candidates.push(join(versionsRoot, version, 'bin', 'node'))
   } catch {
-    // Unreadable nvm dir (0711 / NFS ESTALE / …) must not break the fallback:
-    // later candidates and the bare-name last resort stay reachable.
+    // An unreadable nvm dir must not break the fallback: later candidates and the bare-name last resort stay reachable.
   }
   return candidates
 }
 
-/** Well-known node install roots used as a fallback when PATH has no node,
- *  platform-adapted (design 21). nvm layout is identical on darwin and linux
- *  (`~/.nvm/current` only exists with NVM_SYMLINK_CURRENT=true — version
- *  scan + alias/default are the reliable shape on both). */
+/** Well-known node install roots used when PATH has no node, platform-adapted;
+ *  the nvm layout is identical on darwin and linux. */
 function knownNodeLocations(): string[] {
   const home = homedir()
   const nvmBins = nvmNodeCandidates(home)
@@ -638,9 +536,7 @@ function knownNodeLocations(): string[] {
     return ['/opt/homebrew/bin/node', ...systemBins, ...versionManagers, ...nvmBins]
   }
   if (process.platform === 'linux') {
-    // User-land nvm/pnpm/snap nodes come BEFORE the distro /usr/bin node —
-    // the distro copy is the last-resort system default (deliberate inversion
-    // of the darwin order, which keeps Homebrew first).
+    // User-land nvm/pnpm/snap nodes come BEFORE the distro /usr/bin node (Homebrew first on darwin).
     return [...nvmBins, join(home, '.local', 'bin', 'node'), '/snap/bin/node', ...systemBins, ...versionManagers]
   }
   return [...versionManagers, ...systemBins]
@@ -666,47 +562,37 @@ async function spawnAttempt({
   terminateChildFn,
   authBootstrapWaitMs,
 }: SpawnAttemptOptions): Promise<SpawnAttemptResult> {
-  // The caller performs an async port preflight. stop() may abort while that
-  // await is in flight, so re-check at the actual spawn boundary as well.
+  // The caller performs an async port preflight; stop() may abort while it is in
+  // flight, so re-check at the actual spawn boundary.
   if (signal?.aborted) throw new Error('spawn aborted')
   const baseUrl = `http://127.0.0.1:${port}`
-  // A fresh spawn carries a fresh process launch token — any cookie from a
-  // previous spawn on this port is invalid and must not leak into the probe.
+  // A fresh spawn carries a fresh launch token — any cookie from a previous spawn on this port must not leak into the probe.
   clearAuthCookie(baseUrl)
   const log = (line: string) => logger.log(`[dsh:${port}] ${line}`)
-  // Per-port rolling log (design 02 §3.8 / host-logs.ts): stdout/stderr go
-  // to the control-plane log AND to <stateDir>/host-logs/<port>.log (JSONL)
-  // so GET /api/host/logs can serve the recent lines without re-spawning.
+  // Per-port rolling log: stdout/stderr go to the control-plane log AND to
+  // <stateDir>/host-logs/<port>.log (JSONL) so GET /api/host/logs can serve recent lines.
   const hostLog = createHostLogWriter(stateDir, port, {
-    // A dropped host-log batch is diagnostic-only, but it must not be silent:
-    // the writer reports the first failure of each episode here, on the same
-    // logger as the live stdio forwarding.
+    // A dropped host-log batch is diagnostic-only but must not be silent: the writer
+    // reports the first failure of each episode on the live stdio logger.
     warn: message => logger.warn(message),
   })
   const entry = resolveDshEntry(dshWorkspacePath, port, patchPath)
-  // The cwd is never the installed runtime tree: an in-place app update
-  // replaces it and would leave the host with an unlinked working directory
-  // (worker_threads' shared process.cwd() then fails every tool call).
-  // See resolveSpawnCwd.
+  // The cwd is never the installed runtime tree (see resolveSpawnCwd): an in-place
+  // update would leave the host with an unlinked working directory.
   const spawnCwd = resolveSpawnCwd({ layout: entry.layout, dshWorkspacePath, dshHome })
   if (entry.layout === 'installed') {
-    // The stable cwd must exist before the spawn. createControlPlane creates
-    // dshHome for its own spawns; direct spawnDsh callers may not have.
+    // The stable cwd must exist before the spawn (direct spawnDsh callers may not have created it).
     ensurePrivateDirectoryNoFollow(dshHome, 0o700, { existingMode: 'preserve' })
   }
-  // The node executable is resolved, never assumed on PATH: the control
-  // plane may run inside the Electron main process, where a GUI-launched
-  // app has a minimal PATH (design 02 §3.1 — resolveNodeExecutable).
+  // The node executable is resolved, never assumed on PATH: under the Electron main
+  // process a GUI-launched app has a minimal PATH (resolveNodeExecutable).
   const nodeExec = resolveNodeExecutable()
   const child = spawn(nodeExec.file, [...nodeExec.args, ...entry.args], {
     cwd: spawnCwd,
-    // Deterministic, privacy-pinned environment (design 02 §3.1);
-    // the Electron branch additionally injects ELECTRON_RUN_AS_NODE=1
-    // so the app binary runs the CLI as a plain node process.
-    // SSH_CONNECTION is the browse-interaction pin (see the module header):
-    // the host's directory-picker-auto resolves `browse` under an
-    // SSH-launch marker, so the managed host serves directoryPicker.list /
-    // directoryPicker.createDirectory — one in-app dialog for every instance.
+    // Deterministic, privacy-pinned environment; the Electron branch also injects
+    // ELECTRON_RUN_AS_NODE=1. SSH_CONNECTION is the browse-interaction pin: under an
+    // SSH-launch marker directory-picker-auto serves directoryPicker.list /
+    // createDirectory, so every instance gets the same in-app dialog.
     env: sanitizeManagedDshEnv({
       ...process.env,
       ...nodeExec.env,
@@ -716,18 +602,14 @@ async function spawnAttempt({
       SSH_CONNECTION: '127.0.0.1 0 127.0.0.1 0',
     }),
     stdio: ['ignore', 'pipe', 'pipe'],
-    // Own process group: the host outlives a control-plane crash and the
-    // orphan reaper (design 02 §3.4) reclaims it. On Windows a detached
-    // child would otherwise get its own visible console window; windowsHide
-    // keeps the managed host headless (harmless no-op on POSIX).
+    // Own process group: the host outlives a control-plane crash and the orphan
+    // reaper reclaims it; windowsHide keeps a detached Windows child headless.
     detached: true,
     windowsHide: true,
   })
-  // A spawn failure (ENOENT/EACCES/Electron fuse) arrives as an async
-  // 'error' event. Attach a listener BEFORE the pid check: if the pid check
-  // throws, the pending event would otherwise be unhandled and crash the
-  // whole control plane with an uncaughtException. The listener converges
-  // into the outcome failure once the outcome promise exists.
+  // A spawn failure (ENOENT/EACCES/Electron fuse) arrives as an async 'error' event;
+  // attach the listener BEFORE the pid check, or a throwing pid check would leave it
+  // unhandled and crash the whole plane.
   let onSpawnError: ((error: Error) => void) | undefined
   child.on('error', error => onSpawnError?.(error))
   const pid = child.pid
@@ -735,22 +617,18 @@ async function spawnAttempt({
     child.kill('SIGKILL')
     throw new Error(`dsh spawn on port ${port} produced no pid`)
   }
-  // Line-buffered forward path: the readiness line may be split across stdio
-  // chunks — redaction must see the COMPLETE line, never per-chunk fragments.
-  // The token query values are the only redacted content.
+  // Line-buffered forward path: the readiness line may split across stdio chunks —
+  // redaction must see the COMPLETE line, never per-chunk fragments.
   let forwardLineTail = ''
-  // Bounded, redacted stderr digest: a failed attempt must be able to name
-  // what the child itself printed, not only that it exited.
+  // Bounded, redacted stderr digest: a failed attempt must name what the child printed.
   let stderrDigest = ''
   const forwardChildOutput = (chunk: Buffer, stream: 'stdout' | 'stderr') => {
-    // RAW bytes, never a trimmed form: the trailing newline must survive so
-    // line splitting works (trimEnd swallowed it and left every line stuck in
-    // the tail). The scanner has the same raw-bytes rule.
+    // RAW bytes, never trimmed: the trailing newline must survive so line splitting
+    // works; the scanner has the same raw-bytes rule.
     const text = chunk.toString('utf8')
     const segments = (forwardLineTail + text).split('\n')
-    // Bound the incomplete-line tail: a child that
-    // never emits newlines must not grow the buffer without limit — the
-    // module's own 64KiB chunk bound applies.
+    // Bound the incomplete-line tail so a child that never emits newlines cannot grow
+    // the buffer without limit.
     forwardLineTail = (segments.pop() ?? '').slice(-MAX_CHILD_OUTPUT_CHUNK_BYTES)
     for (const segment of segments) {
       const safeLine = redactChildOutputLine(segment)
@@ -762,19 +640,15 @@ async function spawnAttempt({
     }
   }
   // Browser-auth bootstrap: the web profile prints
-  // `dsh web: <url>?token=<launchToken>` at Loader settlement (printUrl
-  // defaults true); the launch token is process-memory random, so this stdout
-  // line is the ONLY recoverable carrier. Hosts that print the URL without a
-  // token yield no cookie and operation continues unchanged. The cookie
-  // itself never leaves this process's memory.
-  // Object property (never CFA-narrowed): the executor assigns it inside the
-  // promise, the readiness phase's finally reads it — TS control-flow analysis
-  // would narrow a plain `let` to its initializer at the later read.
+  // `dsh web: <url>?token=<launchToken>` at Loader settlement, and the launch token
+  // is process-memory random, so this stdout line is the ONLY recoverable carrier.
+  // Hosts that print no token yield no cookie and continue unchanged; the cookie
+  // never leaves this process. Held as an object property so the readiness phase's
+  // later read is not CFA-narrowed to the initializer.
   const dshWebScanner: { cleanup: (() => void) | null } = { cleanup: null }
-  // Whether the readiness line has settled (a URL line was seen, or stdout
-  // ended). An UNSETTLED scanner is the only state in which the line can still
-  // arrive, so it is the sole condition under which the bootstrap wait is
-  // re-armed by the host-identity probe's 401 answer.
+  // Whether the readiness line has settled (a URL line was seen, or stdout ended). An
+  // UNSETTLED scanner is the only state in which the line can still arrive, so it is
+  // the sole condition under which the bootstrap wait is re-armed by a 401.
   const dshWebLine: { settled: boolean } = { settled: false }
   const dshWebUrlPromise = new Promise<string | null>(resolve => {
     let stdoutTail = ''
@@ -783,13 +657,11 @@ async function spawnAttempt({
       resolve(value)
     }
     const onStdout = (chunk: Buffer) => {
-      // RAW bytes, never a trimmed form: trimming the chunk end would swallow
-      // the space before `(LAN: …)` at a chunk boundary and corrupt the token
-      // query.
+      // RAW bytes: trimming the chunk end would swallow the space before `(LAN: …)` at
+      // a chunk boundary and corrupt the token query.
       stdoutTail = (stdoutTail + chunk.toString('utf8')).slice(-8_192)
-      // Match only COMPLETE lines: the readiness line
-      // always ends with a newline; a chunk-split URL must never mint a
-      // truncated token from a partial line.
+      // Match only COMPLETE lines: the readiness line always ends with a newline, and a
+      // chunk-split URL must never mint a truncated token.
       if (stdoutTail.includes('\n')) {
         const url = parseDshWebUrlLine(stdoutTail)
         if (url !== undefined) {
@@ -813,21 +685,19 @@ async function spawnAttempt({
   })
   child.stdout.on('data', chunk => forwardChildOutput(chunk, 'stdout'))
   child.stderr.on('data', chunk => forwardChildOutput(chunk, 'stderr'))
-  // Unlike 'exit', 'close' fires only after both stdio pipes have closed, so
-  // every data event is enqueued before the writer is retired.
+  // 'close' fires only after both stdio pipes closed, so every data event is enqueued before retirement.
   child.once('close', () => { void hostLog.close() })
   try {
-    // The entry token rides the ledger so the reaper can re-verify the live
-    // process identity in BOTH layouts (installed bin.js path / dev source
-    // script) — design 02 §3.4.
+    // The entry token rides the ledger so the reaper can re-verify the live process
+    // identity in BOTH layouts (installed bin.js / dev source script).
     pidRecordWriter(stateDir, pid, port, process.pid, {
       ownerInstanceId,
       binary: entry.binary,
     }, entry.binary)
   } catch (ledgerError) {
-    // A detached writer must never continue without its durable reaper
-    // evidence. Reclaim it before surfacing the ledger failure, and make the
-    // attempt non-retryable so another port cannot create a second writer.
+    // A detached writer must never continue without its durable reaper evidence:
+    // reclaim it before surfacing the ledger failure, and make the attempt
+    // non-retryable so another port cannot create a second writer.
     try {
       await terminateAndProveQuiet(child, terminateChildFn, 'pid ledger publication failed and child cleanup did not prove quiescence')
     } catch (terminationError) {
@@ -837,8 +707,7 @@ async function spawnAttempt({
         terminationError,
       )
     }
-    // A custom/injected writer may have published and then thrown. Only erase
-    // possible evidence after the process group is positively absent.
+    // Only erase possible published evidence after the process group is positively absent.
     removePidRecord(stateDir, pid)
     throw new SpawnLifecycleError(
       DSH_SPAWN_NON_RETRYABLE_CODE,
@@ -876,8 +745,7 @@ async function spawnAttempt({
     if (signal?.aborted) onAbort()
     else signal?.addEventListener('abort', onAbort, { once: true })
     onSpawnError = error => {
-      // Converge into the regular non-tcp failure path: the caller's
-      // terminateAndProveQuiet cleanup + loud throw take over.
+      // Converge into the regular non-tcp failure path (terminateAndProveQuiet + loud throw).
       finish(`spawn-error: ${error.message}`)
     }
     const probe = () => {
@@ -910,36 +778,29 @@ async function spawnAttempt({
     if (onAbort !== undefined) signal?.removeEventListener('abort', onAbort)
   })
   if (outcome !== 'tcp') {
-    // stopLocal() uses the signal as a writer-quiescence barrier. Do not
-    // settle the spawn promise until the detached process group has really
-    // exited; merely delivering child.kill() would leave a snapshot race.
+    // stopLocal() uses the signal as a writer-quiescence barrier: do not settle the
+    // spawn promise until the detached process group has really exited.
     await terminateAndProveQuiet(child, terminateChildFn, `spawn attempt on port ${port} failed before TCP readiness`)
-    // The ledger is writer evidence: delete only after PGID quiescence was
-    // positively established above.
+    // The ledger is writer evidence: delete only after PGID quiescence was positively established.
     removePidRecord(stateDir, pid)
     throw readinessAttemptError(port, outcome, childExitFacts, stderrDigest)
   }
-  // Browser-auth bootstrap — CONCURRENT, never
-  // delaying the probe: wait for the `dsh web:` URL line, exchange the launch
-  // token for the session cookie and register it for this baseUrl. The probe
-  // loop runs immediately; a 401 answer (the new-wire gate) awaits this wait.
-  // Hosts with no token in the line (or no line) resolve without a cookie and
-  // the probe proceeds without one — the browser-auth gate is absent there.
-  // ONE readiness budget covers the whole phase: TCP listener, identity probe
-  // and both browser-auth windows (LISTEN_WAIT_MS).
+  // Browser-auth bootstrap runs CONCURRENTLY with the probe: wait for the URL line,
+  // exchange the launch token for the session cookie and register it for this baseUrl.
+  // A 401 answer (the new-wire gate) awaits this wait; hosts with no token resolve
+  // without a cookie. ONE readiness budget covers TCP listener, identity probe and both
+  // browser-auth windows.
   const controller = new AbortController()
   const onGenerationAbort = () => controller.abort()
   if (signal?.aborted) controller.abort()
   else signal?.addEventListener('abort', onGenerationAbort, { once: true })
   const probeTimer = setTimeout(() => controller.abort(), LISTEN_WAIT_MS)
   /**
-   * One bounded wait for the `dsh web:` launch-token line plus its exchange.
-   * Resolution: 'minted' | failure message. Re-armable: the host mounts
-   * its /api routes (401) before the loader settles and prints the line
-   * (client/connection + bundle/web-app boot order), so the probe's first 401
-   * can arrive with the line still outstanding — the caller may call this a
-   * second time with a fresh window instead of failing the attempt. A line
-   * that WAS seen is final and never re-armed.
+   * One bounded wait for the `dsh web:` launch-token line plus its exchange; resolves
+   * 'minted' or a failure message. Re-armable: the host mounts /api routes (401)
+   * before the loader prints the line, so the first 401 can arrive with the line
+   * outstanding and the caller may open a second window. A line that WAS seen is
+   * final and never re-armed.
    */
   const waitForLaunchToken = async (): Promise<'minted' | string> => {
     const bootstrapController = new AbortController()
@@ -949,14 +810,12 @@ async function spawnAttempt({
     else signal?.addEventListener('abort', onSpawnAbort, { once: true })
     const onChildExit = () => bootstrapController.abort()
     child.once('exit', onChildExit)
-    // The readiness budget outranks a window: an expired 90s budget must not
-    // leave a re-armed window waiting behind it.
+    // The readiness budget outranks a window: an expired budget must not leave a re-armed window waiting.
     const onBudgetAbort = () => bootstrapController.abort()
     if (controller.signal.aborted) bootstrapController.abort()
     else controller.signal.addEventListener('abort', onBudgetAbort, { once: true })
     try {
-      // A signal that is already aborted must settle the race immediately: a
-      // listener attached after the abort event never fires.
+      // An already-aborted signal must settle the race immediately (a listener attached after abort never fires).
       const whenAborted = (abortSignal: AbortSignal): Promise<string | null> => new Promise(resolve => {
         if (abortSignal.aborted) resolve(null)
         else abortSignal.addEventListener('abort', () => resolve(null), { once: true })
@@ -985,23 +844,16 @@ async function spawnAttempt({
     }
   }
   const authBootstrapPromise = waitForLaunchToken()
-  // The TCP listener comes up before the connection plugin's /api routes are
-  // mounted; a unary probe can 404 briefly. Retry until it succeeds or the
-  // listen window expires. Readiness speaks the unified host-identity probe
-  // (probeHostIdentity, rpc-envelope.ts single source): POST
-  // /api/session/canOpenWorkspacePath (zero-arg boolean Remote, 64 KiB cap);
-  // an HTTP 404 answer falls back to the legacy session/list probe inside
-  // probeHostIdentity (1 MiB cap, warn), so runtime trees without the
-  // identity method keep passing readiness through the legacy probe — the
-  // fixed-size identity answer never grows with session data.
+  // The TCP listener comes up before the connection plugin's /api routes, so a unary
+  // probe can 404 briefly; retry until success or the listen window expires. Readiness
+  // speaks probeHostIdentity: POST /api/session/canOpenWorkspacePath (zero-arg boolean
+  // Remote, 64 KiB cap), falling back to the legacy session/list probe for runtime trees
+  // that predate the identity method.
   let lastProbeError: unknown
   let bootstrapRearmed = false
-  // The LATEST bootstrap outcome, not the first window's: after a successful
-  // re-arm the original promise still holds the expired-window failure, and
-  // re-reading it would mislabel any later 401 as "bootstrap failed" even
-  // though a cookie was minted. A later 401 with a minted
-  // cookie now falls through to the retry loop and ends as the honest probe
-  // error when the readiness budget expires.
+  // The LATEST bootstrap outcome, not the first window's: after a re-arm the original
+  // promise still holds the expired-window failure, so re-reading it would mislabel a
+  // later 401 even though a cookie was minted.
   let lastAuthOutcome: 'minted' | string | null = null
   try {
     for (;;) {
@@ -1024,14 +876,10 @@ async function spawnAttempt({
         if (probeError instanceof RpcTransportError && probeError.status === 401) {
           if (lastAuthOutcome === null) lastAuthOutcome = await authBootstrapPromise
           let authOutcome: 'minted' | string = lastAuthOutcome
-          // The host answers /api with 401 as soon as the listener is up
-          // and prints `dsh web: <url>?token=…` only after its loader settles,
-          // so the FIRST 401 can arrive while the launch-token line is still
-          // outstanding. Re-arm ONE fresh bounded window inside the readiness
-          // budget instead of failing the attempt on that first answer. A host
-          // that HAS printed its line (with a token — refused exchange — or
-          // without one) is final: no re-arm, and a host that never prints one
-          // still fails loud below.
+          // The host answers /api with 401 as soon as the listener is up and prints the
+          // URL line only after its loader settles, so the FIRST 401 can arrive while the
+          // token line is outstanding: re-arm ONE fresh bounded window. A line that was
+          // seen (with or without a token) is final.
           if (authOutcome !== 'minted' && !bootstrapRearmed && !dshWebLine.settled) {
             bootstrapRearmed = true
             log('browser-auth: no launch token yet when the host answered 401 — re-arming the bootstrap window once')
@@ -1065,22 +913,16 @@ async function spawnAttempt({
   } finally {
     clearTimeout(probeTimer)
     signal?.removeEventListener('abort', onGenerationAbort)
-    // The URL line arrives once (or never), and no window can be re-armed
-    // after this readiness phase: the scanner listeners must not ride the
-    // whole instance lifetime.
+    // The URL line arrives once (or never), and no window can be re-armed after this
+    // phase: the scanner listeners must not ride the whole instance lifetime.
     dshWebScanner.cleanup?.()
   }
-  // Best-effort browse-capability probe (design 05 §4): the in-app directory
-  // dialog needs the host to serve `browse`. A native-capability host — a
-  // dsh version predating the SSH_CONNECTION resolver arm, or a deployment
-  // that overrides the spawn env — answers `directory-picker/unavailable`:
-  // loud in the log instead of a silent dialog failure. Never fails the
-  // spawn (the host is otherwise healthy); other failures are ignored.
+  // Best-effort browse-capability probe: the in-app directory dialog needs the host to
+  // serve `browse`. A native-capability host (older dsh, overridden spawn env) answers
+  // directory-picker/unavailable — loud in the log, never fatal.
   try {
-    // directoryPicker.list(path?, signal) is a Typert Remote (namespace
-    // `directoryPicker`); the minimal `{args:{}}` payload probes the browse
-    // capability (the host lists the home directory with the empty path —
-    // the result is discarded; only the availability verdict matters).
+    // directoryPicker.list is a Typert Remote; the minimal `{args:{}}` payload probes the
+    // browse capability (the empty path lists the home directory; the result is discarded).
     await call(baseUrl, 'directoryPicker/list', { args: {} }, { timeoutMs: 10_000, signal })
   } catch (probeError) {
     if (signal?.aborted) {
@@ -1106,10 +948,9 @@ async function spawnAttempt({
 /** Signal the whole process group of a detached child; fall back to the pid. */
 function signalManagedGroup(child: ChildProcess, pid: number, signal: NodeJS.Signals): void {
   if (process.platform === 'win32') {
-    // Windows has no POSIX group signals: force-terminate the whole managed
-    // tree with taskkill /T /F (design 02 §5.1 parity work — win-probes
-    // also reaps residual descendants of an already-dead leader). false
-    // (nothing existed) is the ESRCH equivalent; real failures throw loudly.
+    // Windows has no POSIX group signals: force-terminate the whole tree with
+    // taskkill /T /F (win-probes also reaps residual descendants of an already-dead
+    // leader). false = the ESRCH equivalent; real failures throw loudly.
     treeKillWindows(pid)
     return
   }
@@ -1117,9 +958,9 @@ function signalManagedGroup(child: ChildProcess, pid: number, signal: NodeJS.Sig
     process.kill(-pid, signal)
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error
-    // A detached Unix child is normally its process-group leader. Retain a
-    // direct-pid fallback for a platform/runtime that did not establish the
-    // group, but only while Node still considers this exact child live.
+    // A detached Unix child is normally its process-group leader; keep a direct-pid
+    // fallback for a runtime that did not establish the group, while Node still
+    // considers this exact child live.
     if (child.exitCode !== null || child.signalCode !== null) return
     try {
       process.kill(pid, signal)
@@ -1129,13 +970,10 @@ function signalManagedGroup(child: ChildProcess, pid: number, signal: NodeJS.Sig
   }
 }
 
-/** Whether the owned process group (or Windows direct child) still exists.
- * EPERM proves existence without permission; only ESRCH proves quiescence.
- * Residual (documented): the win32 branch is process.kill(pid, 0), an
- * OpenProcess probe that can read a terminated-but-held process object as
- * alive. It stays exported for synchronous callers and tests; the async
- * termination paths use managedTreeAliveProved, which proves absence from the
- * CIM table. */
+/** Whether the owned process group (or Windows direct child) still exists. EPERM
+ * proves existence; only ESRCH proves quiescence. The win32 branch is
+ * process.kill(pid, 0), which can read a terminated-but-held process as alive — the
+ * async termination paths use managedTreeAliveProved instead. */
 export function managedProcessGroupAlive(child: ChildProcess): boolean {
   const pid = child.pid
   if (pid === undefined) return false
@@ -1162,20 +1000,13 @@ export function managedProcessGroupAlive(child: ChildProcess): boolean {
 }
 
 /**
- * Awaitable tree-quiescence proof for the termination paths. POSIX
- * returns exactly managedProcessGroupAlive(). On win32 that helper is
- * process.kill(pid, 0) — an OpenProcess probe that still answers while a
- * terminated process object survives on an unreleased handle, so a successful
- * taskkill could read as "not quiesced" forever and keep the writer latch
- * closed. The CIM table only enumerates active processes: a readable table
- * without the pid is the absence proof, an unreadable table falls back to the
- * old kill(0) answer (unknown ⇒ fail closed), and a dead leader with residual
- * CIM descendants still counts as alive (the tree is the leader plus its
- * descendants, the same rule reaper.ts applies). The CIM absence proof is
- * re-proved against a FRESH table before it is trusted (cimPidLiveness): the
- * 500ms table cache can predate the pid, and this is the gate whose false
- * "dead" would let terminateChild return without signalling a live host while
- * its caller drops the pid record.
+ * Awaitable tree-quiescence proof for the termination paths. POSIX returns
+ * managedProcessGroupAlive(). On win32 that is an OpenProcess probe that can read a
+ * terminated-but-held process as alive forever; the CIM table enumerates only active
+ * processes, so a readable table without the pid proves absence, an unreadable table
+ * falls back to kill(0) (unknown ⇒ fail closed), and a dead leader with residual
+ * descendants still counts alive. The absence proof is re-proved against a FRESH
+ * table (the 500ms cache can predate the pid).
  */
 async function managedTreeAliveProved(child: ChildProcess): Promise<boolean> {
   if (process.platform !== 'win32') return managedProcessGroupAlive(child)
@@ -1200,10 +1031,9 @@ async function waitForManagedGroupExit(child: ChildProcess, timeoutMs: number): 
 }
 
 /**
- * Stop a managed child and prove the complete detached process group is gone.
- * The leader's `exit` event is insufficient: PTY/plugin descendants can keep
- * the PGID and continue writing DSH_HOME. The pid ledger is removed by the
- * caller only after this function returns successfully.
+ * Stop a managed child and prove the complete detached process group is gone. The
+ * leader's `exit` is insufficient: PTY/plugin descendants can keep the PGID and
+ * continue writing DSH_HOME. The caller removes the pid ledger only after success.
  */
 export async function terminateChild(child: ChildProcess, graceMs = TERMINATE_GRACE_MS): Promise<void> {
   const pid = child.pid
@@ -1226,8 +1056,7 @@ export async function terminateChild(child: ChildProcess, graceMs = TERMINATE_GR
 /** Options for spawnDsh. */
 export interface SpawnDshOptions {
   stateDir: string
-  /** Stable owner identity captured by createControlPlane. Direct callers may
-   * omit it; spawnDsh then safely resolves the durable stateDir identity. */
+  /** Stable owner identity captured by createControlPlane; direct callers may omit it. */
   ownerInstanceId?: string
   dshHome: string
   dshWorkspacePath: string
@@ -1237,9 +1066,7 @@ export interface SpawnDshOptions {
   /** First port attempted (default BASE_DHSPORT). Server gateway deployments
    *  set this via DSH_GATEWAY_DSH_PORT (design 17 §3). */
   dshPortBase?: number
-  /** Bounded wait for the `dsh web:` launch-token line (default
-   *  AUTH_BOOTSTRAP_WAIT_MS). Test seam — one attempt can consume two
-   *  windows (the 401 re-arm). */
+  /** Bounded wait for the `dsh web:` launch-token line (default AUTH_BOOTSTRAP_WAIT_MS). */
   authBootstrapWaitMs?: number
   signal?: AbortSignal
   /** Injectable ledger writer for deterministic lifecycle-failure tests. */
@@ -1256,12 +1083,7 @@ export interface SpawnedHost {
   stop(): Promise<void>
 }
 
-/**
- * Spawn a ready dsh host on a free port from DEFAULT_DSH_START_PORT upward.
- * @param options - {stateDir, dshHome, dshWorkspacePath, logger, patchPath?,
- *   signal}.
- * @returns {child, port, baseUrl, stop()}.
- */
+/** Spawn a ready dsh host on a free port from DEFAULT_DSH_START_PORT upward. */
 export async function spawnDsh({
   stateDir,
   ownerInstanceId,
@@ -1289,8 +1111,7 @@ export async function spawnDsh({
   for (let attempt = 0; attempt < MAX_SPAWN_ATTEMPTS; attempt++) {
     const port = basePort + attempt
     if (signal?.aborted) throw new Error('spawn aborted')
-    // Port pre-check: skip a port that is already taken (a stray process from
-    // an earlier run would otherwise make this attempt die with EADDRINUSE).
+    // Port pre-check: skip an occupied port (a stray process would otherwise die with EADDRINUSE).
     let busy: boolean
     try {
       busy = await probePortBusy(port, signal)
@@ -1310,8 +1131,7 @@ export async function spawnDsh({
       logger.log(`port ${port} already in use; skipping`)
       continue
     }
-    // stop() can win during the asynchronous port pre-check. Never create a
-    // detached child for a lifecycle generation that is already cancelled.
+    // stop() can win during the async port pre-check; never create a detached child for a cancelled generation.
     if (signal?.aborted) throw new Error('spawn aborted')
     try {
       const spawned = await spawnAttempt({
@@ -1334,8 +1154,8 @@ export async function spawnDsh({
           clearAuthCookie(spawned.baseUrl)
           await terminateAndProveQuiet(spawned.child, terminateChildFn, 'managed host stop failed')
           const pid = spawned.child.pid
-          // terminateChild rejects on residual group liveness, so a failed
-          // proof leaves this record for the startup reaper/fail-closed gate.
+          // terminateChild rejects on residual group liveness, so a failed proof leaves
+          // this record for the startup reaper/fail-closed gate.
           if (pid !== undefined) removePidRecord(stateDir, pid)
         },
       }
@@ -1343,12 +1163,11 @@ export async function spawnDsh({
       const failure = recordSpawnAttemptFailure(attempt + 1, port, error)
       failures.push(failure)
       logger.log(`spawn attempt ${attempt + 1}/${MAX_SPAWN_ATTEMPTS} on port ${port} failed: ${failure.message}`)
-      // Ledger publication and unknown-writer failures are lifecycle failures,
-      // not port collisions. Retrying would create a second DSH_HOME writer.
+      // Ledger publication and unknown-writer failures are lifecycle failures, not port
+      // collisions; retrying would create a second DSH_HOME writer.
       if (isNonRetryableSpawnError(error)) throw error
     }
   }
-  // Every iteration records exactly one failure, so this is always the full
-  // MAX_SPAWN_ATTEMPTS window; the typed error's message lists each reason.
+  // Every iteration records exactly one failure, so this is always the full window.
   throw new DshSpawnExhaustedError(basePort, failures)
 }

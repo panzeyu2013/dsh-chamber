@@ -2,63 +2,26 @@
  * Row hover-card intent: the dwell/grace state machine behind `RowHoverCard`.
  *
  * THE POINTER-INSIDE FLAG IS THE AUTHORITY, NEVER A COMMITTED RENDER. Two
- * separate defects come from letting React's last committed state decide:
+ * stranding defects come from letting React's last committed state decide:
+ *  1. OPEN — the vendored `HoverCard` arms its grace close only `if (open)` from
+ *     the last committed render. A shell is one large React root per instance, so
+ *     the commit can land tens of ms after the dwell timer; a pointerleave in that
+ *     window reads `open === false`, arms no close, and the card mounts with the
+ *     pointer gone — no later event targets it. The machine's dwell timer
+ *     re-checks `inside` when it fires, and `leave()` arms the grace close
+ *     UNCONDITIONALLY (closing is idempotent; an opened card is always closed).
+ *  2. CLOSE — a `press` or `setDisabled` handled while the dwell's open is in
+ *     flight can commit the close first and the stale open last, so the card mounts
+ *     while the machine believes it is closed and later closes no-op. Hence ONE
+ *     piece of state, rendered straight from a tiny store
+ *     (`useSyncExternalStore`): React re-checks the snapshot after commit, so a
+ *     visibility changed mid-render cannot be committed.
  *
- *  1. OPEN. The vendored `HoverCard` (ui-primitives) opens through
- *     `setTimeout(() => setOpen(true))` and arms its grace close only
- *     `if (open)` — read from the last COMMITTED render. A chamber shell is one
- *     large React root per instance (a streaming conversation plus the sidebar's
- *     poll and per-second `now` ticks, with the N-ctx shells sharing one
- *     scheduler), so React can commit that open tens of milliseconds after the
- *     dwell timer fired. A pointerleave handled inside that window reads
- *     `open === false`, arms no close, and the card then mounts with the
- *     pointer already gone: no later pointer event targets that wrapper, so the
- *     card stays on screen until the row is hovered and left again.
- *
- *     The vendored atom can strand a card on a small fraction of trials under
- *     load, always for a leave inside the dwell-to-paint window, while this
- *     module's machine strands none. The committed regression coverage is: the
- *     machine cases in `test/session-rows/hover-intent.test.ts` (a leave inside
- *     the window must still close) and the real-pointer acceptance leg
- *     `W-4b-race` (`scripts/gui-acceptance/walkthrough.mjs`, judged by
- *     `hoverRaceVerdict` in `checks.mjs`).
- *
- *  2. CLOSE. A state machine that keeps its own flag while React commits a
- *     separate one can diverge the other way: a press (`press`) or an owner
- *     gate (`setDisabled`) handled while the dwell's open is still in flight
- *     commits the close first and the stale open last, so the card mounts while
- *     the machine believes it is closed — and every later close starts by
- *     checking that flag and becomes a no-op. The card is stranded again.
- *
- * The machine is therefore a tiny store with ONE piece of state, and the
- * component renders straight from it (`useSyncExternalStore(intent.subscribe,
- * intent.isOpen)`): React re-checks the snapshot after commit, so a visibility
- * that changed mid-render cannot be committed, and no second copy of the fact
- * exists to drift.
- *
- * Decisions, all taken against the synchronous `inside` flag written by
- * `enter()`/`leave()`:
- *
- *  - the dwell timer re-checks `inside` when it fires, so a leave inside the
- *    commit window cancels the open outright (no card, not even a flash);
- *  - `leave()` arms the grace close UNCONDITIONALLY: closing is idempotent, so
- *    arming it for a closed card is a no-op, while a card that did open is
- *    always closed once the pointer is genuinely gone.
- *
- * Beyond the race, the machine closes the whole "card nobody can dismiss" class:
- *
- *  - ONE VISIBLE CARD PER DOCUMENT (the slot below): a pointer can only be in
- *    one region, so a second card opening dismisses the first. That is also the
- *    self-healing path for a leave that was never delivered at all — the window
- *    lost focus, the shell holding the row was hidden or occluded, the list
- *    moved under a stationary pointer. The next card anywhere in the document,
- *    including another N-ctx shell's sidebar, takes the slot and closes it.
- *  - window blur / hidden document dismisses the visible card, because a
- *    boundary event is not guaranteed when the pointer is parked on a row while
- *    the user switches away.
- *  - an N-ctx VIEW SWITCH dismisses it through {@link dismissVisibleRowCard}: the
- *    card is portaled to `document.body`, so CSS-hiding the view that owns it
- *    hides neither the card nor its hit testing.
+ * ONE VISIBLE CARD PER DOCUMENT (the slot below): a second card opening dismisses
+ * the first — also the self-healing path for a leave never delivered. Window blur /
+ * hidden document dismisses it, and an N-ctx VIEW SWITCH does so through
+ * {@link dismissVisibleRowCard}: the card is portaled to `document.body`, so
+ * CSS-hiding the owning view hides neither it nor its hit testing.
  */
 import { assertSingletonModule } from './singleton.ts'
 
@@ -66,11 +29,8 @@ assertSingletonModule('hover-intent')
 
 /**
  * The one visible row card in this document, as its own dismiss callback.
- *
- * Module-global for the same reason `shared/pending-click.ts` is: every N-ctx
- * shell mounts its own sidebar React tree, and only one card may be visible on
- * the page — a per-tree slot would let a stranded card in shell A survive while
- * the pointer works in shell B.
+ * Module-global for the same reason `shared/pending-click.ts` is: every N-ctx shell
+ * mounts its own sidebar tree, and only one card may be visible on the page.
  */
 let visibleCard: (() => void) | null = null
 
@@ -80,32 +40,25 @@ function dismissVisibleCard(): void {
 }
 
 /**
- * Close whatever row card currently holds the page-global slot.
- *
- * The N-ctx hidden-view closer. A card is portaled to `document.body`
- * (`RowHoverCard`), so it is NOT a descendant of the view that owns it: hiding
- * that view with `visibility: hidden; opacity: 0; pointer-events: none`
- * (`packages/renderer/src/styles.css`, `.instance-hidden` / `.instance-pending`)
- * neither hides the card nor delivers it the pointer event that would dismiss
- * it. A card open while the pointer rests on it therefore survived a view
- * switch, painted over the incoming view until the next pointer move.
- * The renderer's view-hide path calls this explicitly, in the same frame the
- * class lands.
- *
- * Reuses the slot machinery, so exactly one card can be affected and the caller
- * needs no handle on it. Safe at any time: a no-op when no card is open, and it
- * never touches a machine that does not hold the slot. After the call the
- * dismissed card behaves exactly as if the pointer had left it — a fresh
- * `enter()` opens it again.
+ * Close whatever row card currently holds the page-global slot — the N-ctx
+ * hidden-view closer. A card is portaled to `document.body`, so it is NOT a
+ * descendant of the view that owns it: hiding that view with
+ * `visibility: hidden; opacity: 0; pointer-events: none`
+ * (`.instance-hidden` / `.instance-pending`) neither hides the card nor delivers
+ * the pointer event that would dismiss it, so it survived a view switch painting
+ * over the incoming view. The renderer's view-hide path calls this in the same frame
+ * the class lands. Reuses the slot machinery (exactly one card, no handle needed);
+ * safe at any time — a no-op with no open card, and after the call the card behaves
+ * as if the pointer had left it.
  */
 export function dismissVisibleRowCard(): void {
   dismissVisibleCard()
 }
 
 /**
- * Page-level dismissal watch: bound lazily by the first card that opens and
- * never unbound — it owns no per-card state, only the slot. Guarded so the
- * module stays importable in the DOM-free node tests.
+ * Page-level dismissal watch: bound lazily by the first card that opens and never
+ * unbound — it owns no per-card state, only the slot. Guarded so the module stays
+ * importable in the DOM-free node tests.
  */
 let watchBound = false
 function bindDismissWatch(): void {
@@ -135,8 +88,8 @@ export interface HoverIntentOptions {
 }
 
 /**
- * Pointer-driven hover lifecycle for one card: the observable store the
- * component renders from.
+ * Pointer-driven hover lifecycle for one card: the observable store the component
+ * renders from.
  */
 export interface HoverIntent {
   /** The pointer entered the anchor+card region. */
@@ -151,18 +104,14 @@ export interface HoverIntent {
   dispose(): void
   /** Whether the card is visible right now — the render authority. */
   isOpen(): boolean
-  /**
-   * Subscribe to visibility changes.
-   * @param listener - called after every open/close transition.
-   * @returns the unsubscribe function.
-   */
+/**
+ * Subscribe to visibility changes. @returns the unsubscribe function.
+ */
   subscribe(listener: () => void): () => void
 }
 
 /**
- * Build the intent machine.
- * @param options - timing and the initial owner gate.
- * @returns the {@link HoverIntent} handle for one card.
+ * Build the intent machine for one card. @returns the {@link HoverIntent} handle.
  */
 export function createHoverIntent(options: HoverIntentOptions = {}): HoverIntent {
   const openDelayMs = options.openDelayMs ?? HOVER_OPEN_DELAY_MS
@@ -188,8 +137,7 @@ export function createHoverIntent(options: HoverIntentOptions = {}): HoverIntent
   /** Take the page slot, dismissing whichever card held it (see the header). */
   const claimSlot = (): void => {
     const previous = visibleCard
-    // Claim BEFORE dismissing: the previous card's release must not clear the
-    // slot we just took.
+    // Claim BEFORE dismissing: the previous card's release must not clear the slot we just took.
     visibleCard = dismissSelf
     if (previous !== null && previous !== dismissSelf) previous()
   }
@@ -218,17 +166,14 @@ export function createHoverIntent(options: HoverIntentOptions = {}): HoverIntent
       clearDwell()
       dwell = setTimeout(() => {
         dwell = null
-        // The pointer may have left inside the commit window: the flag — not a
-        // committed render — decides.
+        // The pointer may have left inside the commit window: the synchronous flag decides, not a render.
         if (!inside) return
         setOpen(true)
       }, openDelayMs)
     },
     leave(): void {
       inside = false
-      // The armed dwell is deliberately NOT cancelled here: the fire-time check
-      // above owns that decision, so no open can ever depend on a timer
-      // cancellation landing first.
+      // The armed dwell is deliberately NOT cancelled here: the fire-time check above owns the decision.
       clearGrace()
       grace = setTimeout(() => {
         grace = null
@@ -250,10 +195,8 @@ export function createHoverIntent(options: HoverIntentOptions = {}): HoverIntent
     dispose(): void {
       clearDwell()
       clearGrace()
-      // Free the page slot if this card held it: the owner is unmounting (the
-      // card goes with it), and a disposed machine must not keep dismissing
-      // future cards through a stale slot entry. No visibility transition is
-      // published — the subscription dies with the same unmount.
+      // Free the page slot: the owner is unmounting, and a disposed machine must not
+      // keep dismissing future cards through a stale slot entry.
       releaseSlot()
     },
     isOpen: () => open,

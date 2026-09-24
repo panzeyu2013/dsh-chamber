@@ -1,41 +1,14 @@
 /**
  * Gateway-side projection of the MANAGED web profile's plugin manifest
- * (design 21 §6.2 — the readManifest gateway implementation): parses
- * `<stateDir>/dsh-home/profiles/web/package.json` —
- * the profile manifest of the gateway-managed dsh instance, the same file the
- * desktop reads for its own instance (plugin-sync.ts localPluginList, whose
- * web profile lives at `<home>/profiles/web/package.json`).
+ * (`<stateDir>/dsh-home/profiles/web/package.json`).
  *
- * Outcome discipline (proxy honesty, never a silent empty list):
- *   - the manifest does not exist yet (fresh gateway, dsh never spawned, or
- *     the web profile was never initialized) → profile_absent;
- *   - the manifest exists but is unreadable/unsafe (permissions, symlinked
- *     leaf/directory, oversized) or does not parse (invalid JSON, non-object)
- *     → profile_corrupt with the evidence in `error`. A torn read caught by
- *     the private-file stable-snapshot discipline (a non-atomic in-place
- *     rewrite) also lands here. The design 21 §6.2 read/write fence is
- *     enforced by the executor, which serializes the gateway's own writers
- *     behind the runtime-manager profile-write lease; the read route consults
- *     that fence before reading (routes.ts `probePluginProfileWriteFence`:
- *     retryable 409 runtime_busy while a mutation is queued or running, and a
- *     loud retryable 503 write_fence_unavailable when the probe itself fails —
- *     the projection is never published unfenced). This read module stays a pure
- *     projection — it takes no lease and never blocks; the fence lives one
- *     layer up, at the route. A tear that still reaches here is therefore
- *     evidence of a writer OUTSIDE the gateway's fence (an operator-run
- *     `dsh plugin add` against the managed profile, or the managed dsh's own
- *     boot-time profile write during a spawn) and stays loud on purpose.
- *
- * Masking: dependency VALUES that are local paths (`file:`/`link:`/relative/
- * absolute/`~`) would name gateway-local paths and must never leave this read —
- * each is replaced with MATERIALIZED_VALUE_MASK by the shared mask ruler
- * (`isMaterializedValue`, single source = @dsh-chamber/dsh-chamber-wire/
- * plugin-manifest; design 21 §6.2/decision 18). The mask keeps the `file:`
- * prefix so both sides' spec classifiers still classify the value as a
- * materialize spec and the name-based diff keeps working. Scope filtering (official/chamber/reserved
- * domains) is deliberately NOT done here — the model layer owns it (design 21
- * §6.2/§6.7: the UI and the route are same-origin); the full masked map is
- * returned.
+ * Never a silent empty list: absent manifest → profile_absent; present but
+ * unreadable/unsafe (permissions, symlinked leaf/dir, oversized) or
+ * unparseable → profile_corrupt with evidence in `error` (a torn read lands
+ * here too). The write fence lives one layer up — the route probes it and
+ * answers a retryable 409 runtime_busy — so this module takes no lease and
+ * never blocks; a tear reaching here means a writer OUTSIDE the gateway's
+ * fence. Local-path values are masked by the shared ruler below.
  */
 
 import { join } from 'node:path'
@@ -47,9 +20,8 @@ import {
   resolveRuntimeFamily,
 } from '@dsh-chamber/control-plane'
 import type { FamilyVersions, PluginRow, ProtectedSet } from '@dsh-chamber/control-plane'
-// The manifest read algorithm + mask ruler: THE single definition in the
-// neutral wire package (design 21 §3 readManifest / §6.2 掩码纪律). This module
-// keeps only its byte read and the gateway-specific projection.
+// The manifest read algorithm + mask ruler lives in the neutral wire package;
+// this module keeps only its byte read and the gateway-specific projection.
 import {
   isMaterializedValue,
   maskMaterializedDependencies,
@@ -59,31 +31,23 @@ import {
 import type { PluginProfileRefusalCode } from '@dsh-chamber/dsh-chamber-wire/plugin-manifest'
 import { readPrivateTextOrNull } from './private-read.ts'
 
-/** Managed dsh home directory name under the gateway stateDir (the runtime
- * manager spawns the managed instance with DSH_HOME=<stateDir>/dsh-home). */
+/** Managed dsh home dir under stateDir (the managed instance runs with DSH_HOME=<stateDir>/dsh-home). */
 export const MANAGED_DSH_HOME_DIR = 'dsh-home'
 
-/** Profile-manifest layout relative to the managed dsh home (design 21 §6.2):
- * `<home>/profiles/web/package.json` — the gateway twin of the desktop's
- * WEB_PROFILE layout. */
+/** Profile-manifest layout relative to the managed home: `<home>/profiles/web/package.json`. */
 export const INSTALLED_PROFILE_DIR = join('profiles', 'web')
 
-/** Bounded manifest read cap (design 21 §6.2 read discipline; a profile
- * package.json is a few KiB — 1 MiB is a generous ceiling). */
+/** Bounded manifest read cap: a profile package.json is a few KiB; 1 MiB is generous. */
 export const INSTALLED_MANIFEST_MAX_BYTES = 1024 * 1024
 
 /**
- * Mask replacing local-path dependency VALUES in the read projection. Keeps the
- * `file:` prefix so the value's materialize classification survives the
- * projection. Single source = the wire package's
- * `PLUGIN_MATERIALIZED_VALUE_MASK` (control-plane re-exports the same constant
- * for the desktop facade; chamber-installed.test.ts pins the three faces
- * together).
+ * Mask replacing local-path dependency values in the read projection; keeps the
+ * `file:` prefix so the value's materialize classification survives. Single
+ * source = the wire package's PLUGIN_MATERIALIZED_VALUE_MASK.
  */
 export const MATERIALIZED_VALUE_MASK = PLUGIN_MATERIALIZED_VALUE_MASK
 
-/** Is this dependency spec a local-path `file:` value? Case-insensitive (kept for
- *  the narrow questions that really mean `file:`). */
+/** Is this dependency spec a local-path `file:` value? Case-insensitive. */
 export function isFileValue(spec: string): boolean {
   return /^file:/i.test(spec)
 }
@@ -93,78 +57,64 @@ export type InstalledResult =
     ok: true
     dependencies: Record<string, string>
     bundles: string[]
-    /** Read-face row projection (design 21 §6.11.5): one row per
-     *  declared dependency, each with role + the SERVER-computed `protected` flag
-     *  (the gateway is the authority for a gateway target — the family facts live
-     *  here, not in the desktop). B₀ and the seed registry only classify rows;
-     *  the managed profile's installation baseline is not part of this list. */
+    /** Read-face row projection: one row per dependency with role + the
+     *  SERVER-computed `protected` flag (the gateway is the authority — family
+     *  facts live here, not in the desktop). */
     rows: PluginRow[]
     profileExists: true
   }
   | { ok: false; code: PluginProfileRefusalCode; error?: string }
 
-/** Runtime facts the protected-set derivation needs (design 21 §6.11.1): the
- *  effective workspace path + its version, or null before the manager exists. */
+/** Workspace path + version the protected-set derivation needs; null before the manager exists. */
 export type GatewayRuntimeFacts = { path: string; version: string | null }
 
 /** S 分量：chamber 播种注册表名（与 desktop 同源，control-plane 单一来源）。 */
 const SEED_NAMES: readonly string[] = CHAMBER_HOST_PACKAGES.map(descriptor => descriptor.insert.name)
 
-/** B₀ ∪ S only (no family) — the degraded-ladder set (design 21 §6.11.3). */
+/** B₀ ∪ S only (no family) — the degraded-ladder set. */
 export function deriveBootProtectedSet(): ProtectedSet {
   const derived = deriveProtectedSet({ seedNames: SEED_NAMES, familyNames: null })
   if (!derived.ok) throw new Error(`chamber seed registry cannot form a protected set: ${derived.reason}`)
   return derived.set
 }
 
-/** The protected-set derivation for an ALREADY resolved family closure: the
- *  single step `gatewayProtectedSet` and `resolveJudgementInputs` share, so a
- *  judgement reads the runtime lockfile once. */
+/** The single protected-set derivation for an already resolved family closure,
+ *  shared so a judgement reads the runtime lockfile once. */
 function protectedSetFromFamily(family: ReturnType<typeof resolveRuntimeFamily> | null): ProtectedSet | null {
   if (family === null || !family.ok) return null
   const derived = deriveProtectedSet({ seedNames: SEED_NAMES, familyNames: family.names })
   return derived.ok ? derived.set : null
 }
 
-/**
- * Derive the server-side protected set from the ACTIVE runtime's lockfile
- * closure. F cannot be derived ⇒ null (the write faces fail closed; the read
- * face then conservatively marks official-scope rows read-only).
- */
+/** Server-side protected set from the ACTIVE runtime's lockfile closure. F
+ * underivable ⇒ null (write faces fail closed; the read face then marks
+ * official-scope rows read-only conservatively). */
 export function gatewayProtectedSet(facts: GatewayRuntimeFacts | null): ProtectedSet | null {
   if (facts === null) return null
   return protectedSetFromFamily(resolveRuntimeFamily(facts.path))
 }
 
-/** The facts one protected-set judgement needs (design 21 §6.11.3), resolved
- *  ONCE per judgement. Submit-time and execution-time judgements are
- *  DELIBERATELY different snapshots, so this is a returned bundle, never a
- *  module-level cache.
- *
- *  `resolve` must be a GUARDED accessor: it returns null instead of throwing
- *  (each caller owns its own warning and the degraded-ladder policy). */
+/** The facts one protected-set judgement needs, resolved ONCE per judgement —
+ * submit-time and execution-time judgements are DELIBERATELY different
+ * snapshots, so this is returned, never cached. `resolve` must be a GUARDED
+ * accessor returning null instead of throwing. */
 export interface JudgementInputs {
   /** The resolved runtime workspace facts, or null when unavailable. */
   facts: GatewayRuntimeFacts | null
   /** `facts.version`, or null when unavailable. */
   runtimeVersion: string | null
-  /** Never null: the full P when derivable, B₀ ∪ S otherwise — the decision
-   *  needs a set either way, and `familySource` names which ladder was used. */
+  /** Never null: full P when derivable, B₀ ∪ S otherwise; `familySource` names the ladder used. */
   derivation: { ok: true; set: ProtectedSet }
   familySource: 'runtime' | 'unavailable'
-  /** Active family closure names; null when the facts are unavailable or the
-   *  closure cannot be trusted (verification falls back to the generation arm). */
+  /** Active family closure names; null when unavailable or untrusted. */
   familyNames: readonly string[] | null
-  /** Version facts for the family names; null on the same conditions as
-   *  `familyNames`. */
+  /** Version facts for the family names; null under the same conditions. */
   familyVersions: FamilyVersions | null
 }
 
-/** Resolve the protected-set judgement inputs from one guarded facts accessor
- *  (2026-12 review): the protected set AND the family version facts come from
- *  the SAME lockfile resolution, so a write face reads runtime facts once per
- *  judgement instead of once per derived fact. F underivable ⇒ B₀ ∪ S with
- *  `familySource:'unavailable'` (fail closed, never a skip). */
+/** Resolve the judgement inputs from one guarded facts accessor: the protected
+ *  set and the family versions come from the SAME lockfile resolution. F
+ *  underivable ⇒ B₀ ∪ S with `familySource:'unavailable'` (fail closed). */
 export function resolveJudgementInputs(resolve: () => GatewayRuntimeFacts | null): JudgementInputs {
   const facts = resolve()
   const family = facts === null ? null : resolveRuntimeFamily(facts.path)
@@ -180,23 +130,21 @@ export function resolveJudgementInputs(resolve: () => GatewayRuntimeFacts | null
 }
 
 export interface ChamberInstalled {
-  /** Project the managed web profile's plugin manifest (design 21 §6.2). */
+  /** Project the managed web profile's plugin manifest. */
   read(): InstalledResult
 }
 
 /** Read the profile manifest (no-follow, tightened to 0600, bounded); null
- * when it does not exist yet — same private-file pattern plugins.ts uses for
- * the seed cache, minus requiredMode (this manifest is pnpm-written, not
- * 0600-owned by construction; requiring 0600 would misclassify a legit file). */
+ * when it does not exist yet — no requiredMode: the manifest is pnpm-written,
+ * not 0600-owned by construction, so requiring 0600 would misclassify it. */
 function readProfileManifest(path: string): string | null {
   return readPrivateTextOrNull(path, { tightenMode: 0o600, maxBytes: INSTALLED_MANIFEST_MAX_BYTES })
 }
 
 export function createChamberInstalled(
   stateDir: string,
-  /** Lazy runtime-facts accessor (the gateway wiring passes
-   *  `() => deps.manager()?.resolveWorkspace() ?? null`). Absent ⇒ the read
-   *  face conservatively marks official-scope rows read-only. */
+  /** Lazy runtime-facts accessor; absent ⇒ the read face conservatively marks
+   *  official-scope rows read-only. */
   runtimeFacts?: () => GatewayRuntimeFacts | null,
 ): ChamberInstalled {
   const manifestPath = join(stateDir, MANAGED_DSH_HOME_DIR, INSTALLED_PROFILE_DIR, 'package.json')
@@ -207,8 +155,7 @@ export function createChamberInstalled(
       try {
         const manifestText = readProfileManifest(manifestPath)
         if (manifestText === null) {
-          // ENOENT: no managed profile yet (fresh gateway / never initialized)
-          // — the client defers install intent until the profile exists.
+          // ENOENT: no managed profile yet — the client defers install until it exists.
           return { ok: false, code: 'profile_absent' }
         }
         text = manifestText
@@ -217,24 +164,20 @@ export function createChamberInstalled(
         // torn read) → corrupt, never a silent empty list.
         return { ok: false, code: 'profile_corrupt', error: `managed profile manifest is present but unreadable: ${String(error)}` }
       }
-      // The read algorithm — JSON fault classification, dependencies
-      // projection (string values only) and the dsh.profile.bundles walk — is
-      // the single definition in the wire package; this module keeps only its
-      // byte read above and the projection below.
+      // The read algorithm — JSON fault classification, dependencies projection
+      // (string values only), bundles walk — lives in the wire package.
       const parsed = parsePluginManifest(text)
       if (!parsed.ok) {
         return parsed.fault === 'invalid-json'
           ? { ok: false, code: 'profile_corrupt', error: `managed profile manifest is not valid JSON: ${parsed.detail}` }
           : { ok: false, code: 'profile_corrupt', error: 'managed profile manifest is not a JSON object' }
       }
-      // Local-path values name gateway-local paths and never leave this module
-      // through either channel — the shared mask ruler (design 21 §6.2).
+      // Local-path values never leave this module — the shared mask ruler.
       const dependencies = maskMaterializedDependencies(parsed.dependencies)
       const bundles = parsed.bundles
-      // The accessor resolves the runtime workspace, which THROWS on corrupt
-      // override/pointer metadata (design 18). The read face must survive that:
-      // a throwing projection would kill the §6.8 r1 recovery read with a
-      // generic 500. Null facts ⇒ B₀ ∪ S only.
+      // The accessor THROWS on corrupt override/pointer metadata; the read face
+      // must survive that (a throwing projection would kill the recovery read
+      // with a generic 500). Null facts ⇒ B₀ ∪ S only.
       let facts: GatewayRuntimeFacts | null = null
       if (runtimeFacts !== undefined) {
         try {
@@ -243,11 +186,10 @@ export function createChamberInstalled(
           facts = null
         }
       }
-      // F unknown (no wiring / no manager yet) ⇒ B₀ ∪ S is still a constant and is
-      // ALWAYS applied. `protected` stays exactly "name ∈ P": the official-scope
-      // INSTALL conservatism is a capability of the write face (refused with its own
-      // code), not a read-face protection fact — marking such rows protected would
-      // hide a remove the write face allows.
+      // F unknown (no wiring / no manager) ⇒ B₀ ∪ S is still ALWAYS applied.
+      // `protected` stays exactly "name ∈ P": official-scope INSTALL conservatism
+      // is a write-face capability, not a read-face fact — marking such rows
+      // protected would hide a remove the write face allows.
       const derived = gatewayProtectedSet(facts)
       const protectedSet = derived ?? deriveBootProtectedSet()
       const rows = derivePluginRows({
@@ -255,8 +197,7 @@ export function createChamberInstalled(
         bundles,
         protectedSet,
         seedNames: SEED_NAMES,
-        // Memoized per call (see the desktop twin): the rows derivation asks once
-        // per dependency, and a large profile must not pay one disk read per row.
+        // Memoized per call: the rows derivation asks once per dependency.
         installedVersion: (() => {
           const cache = new Map<string, string | null>()
           return (name: string) => {
@@ -264,9 +205,7 @@ export function createChamberInstalled(
             return cache.get(name) ?? null
           }
         })(),
-        // Same masking rule the `dependencies` projection above applies: a
-        // managed-profile local-path value must never reach the renderer
-        // through `rows` either (design 21 §6.2).
+        // Same masking rule as above: local-path values never reach the renderer via `rows` either.
         maskSpec: spec => (isMaterializedValue(spec) ? MATERIALIZED_VALUE_MASK : spec),
       })
       return { ok: true, dependencies, bundles, rows, profileExists: true }

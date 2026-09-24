@@ -45,10 +45,8 @@ export const CATALOG_FILE = 'catalog.json'
 /** Current catalog schema version. */
 export const CATALOG_SCHEMA_VERSION = 2
 
-/**
- * One persisted connection row. The wire response adds live runtime fields
- * separately; this type intentionally contains only durable catalog fields.
- */
+/** One persisted connection row; intentionally only durable catalog fields —
+ *  the wire response adds live runtime fields separately. */
 export interface CatalogConnectionRow {
   connectionId: string
   kind: string
@@ -56,7 +54,7 @@ export interface CatalogConnectionRow {
   accentColor?: string
 }
 
-/** The only caller-editable durable fields (design 03 §2.1.1). */
+/** The only caller-editable durable fields. */
 export interface CatalogEditableFields {
   label?: string
   accentColor?: string
@@ -99,10 +97,8 @@ export interface Catalog {
 }
 
 /**
- * Accepted connection kinds (v4: the catalog only ever holds the local
- * instance — remote instances live in the desktop main-process registry,
- * 03 §2.2). Rows with a kind outside this set are dropped and counted at
- * load, never silently kept.
+ * Accepted connection kinds: the catalog only ever holds the local instance;
+ * rows with a kind outside this set are dropped and counted at load.
  */
 export const CONNECTION_KINDS = new Set(['local'])
 
@@ -146,7 +142,6 @@ function persistedConnectionRow(row: Record<string, unknown>): CatalogConnection
  * @returns {doc, dropped} — the cleaned document and dropped counters; throws
  *   when the document is unusable as a whole.
  */
-// The store hands the hook a parsed document of unknown shape; internal use only.
 type RawCatalogDocument = any
 
 function validateCatalog(raw: RawCatalogDocument): JsonStoreValidateResult {
@@ -196,10 +191,8 @@ function validateEntries(doc: RawCatalogDocument): CatalogValidateResult {
 }
 
 /**
- * Create the registry.
- * @param options - {stateDir, logger}.
- * @returns {load(), getConnection(id), upsertConnection(row),
- *   updateConnectionFields(id, fields)}.
+ * Create the registry over {stateDir, logger} and return {load, getConnection,
+ * upsertConnection, updateConnectionFields}.
  */
 export function createCatalog({ stateDir, logger }: CatalogOptions): Catalog {
   const file = join(stateDir, CATALOG_FILE)
@@ -236,9 +229,8 @@ export function createCatalog({ stateDir, logger }: CatalogOptions): Catalog {
   }
 
   /**
-   * Insert or replace one connection row while preserving registration order.
-   * The input is cloned so callers can never mutate the live document before
-   * the write-through transaction commits.
+   * Insert or replace one connection row, preserving registration order. The
+   * input is cloned so callers cannot mutate the live document before commit.
    */
   function upsertConnection(row: CatalogConnectionRow): CatalogConnectionRow {
     const replacement = persistedConnectionRow(row as unknown as Record<string, unknown>)
@@ -253,11 +245,10 @@ export function createCatalog({ stateDir, logger }: CatalogOptions): Catalog {
   }
 
   /**
-   * Update selected fields of one connection row without touching the rest.
-   * A field whose value is `undefined` deletes the key.
-   * @returns {row, updated} or null when the row is absent. `updated` is
-   *   true when anything actually changed (a no-op change does not bump the
-   *   revision).
+   * Update selected fields of one row without touching the rest; a field whose
+   * value is `undefined` deletes the key. Returns {row, updated} or null when
+   * absent; `updated` is true only when something actually changed (a no-op
+   * does not bump the revision).
    */
   function updateConnectionFields(
     connectionId: string,

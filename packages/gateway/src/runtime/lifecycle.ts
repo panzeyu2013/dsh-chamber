@@ -1,14 +1,12 @@
 /**
- * Gateway runtime lifecycle owner (design 18 §9.3, design 17 §4.1/§12):
- * store-prune consumption, known-good observation/promotion, the F7
- * restart-exhausted automatic rollback, the restart/start primitives and
- * dispose (writer-epoch drain + ownership release).
+ * Gateway runtime lifecycle owner: store-prune consumption, known-good
+ * observation/promotion, restart-exhausted automatic rollback, the restart/start
+ * primitives and dispose (writer-epoch drain + ownership release).
  *
- * The module owns exactly three pieces of state — the known-good scheduler
- * cancel handle, the store-prune single flight and the dispose promise. Every
- * other input is an explicit handle: the write fence, the workspace facts, the
- * startup-transaction driver, the projection setters and the self-lease
- * release hook.
+ * The module owns exactly three pieces of state — the known-good scheduler cancel
+ * handle, the store-prune single flight and the dispose promise; every other input
+ * is an explicit handle (write fence, workspace facts, startup driver, projection
+ * setters, self-lease release hook).
  */
 import {
   clearStorePruneRequest,
@@ -98,15 +96,13 @@ export function createRuntimeLifecycle(deps: RuntimeLifecycleDeps): RuntimeLifec
       baseDir,
       pnpmEntry: pnpmEntry(),
       deps: {
-        // The gateway has no Electron-as-node branch: plain node (design 18
-        // §9.2: the gateway install chain is pure node).
+        // The gateway has no Electron-as-node branch: plain node.
         node: () => ({ file: process.execPath, args: [], env: {} }),
       },
     })
       .then(() => { clearStorePruneRequest(baseDir) })
       .catch((error: unknown) => {
-        // Retain the marker: the next safe cleanup/startup retries. Prune
-        // failure is disk hygiene, not permission to block a verified tree.
+        // Retain the marker: the next safe cleanup/startup retries; prune failure is disk hygiene, not permission to block a verified tree.
         logger.warn(`gateway runtime store prune failed: ${sanitizeRouteError(error instanceof Error ? error.message : String(error))}`)
       })
       .finally(() => {
@@ -117,21 +113,17 @@ export function createRuntimeLifecycle(deps: RuntimeLifecycleDeps): RuntimeLifec
   }
 
   /**
-   * Design 18 F7 is emitted by the control-plane restart loop, not by a
-   * runtime route. Arm a synchronous latch, then join the manager's existing
-   * writer epoch before re-reading every durable/host authority. The initial
-   * microtask is intentional: restartLocal() can synchronously publish its
-   * terminal edge before the public restart promise has reached
-   * trackOperation().
+   * Arm a synchronous latch, then join the manager's existing writer epoch before
+   * re-reading every durable/host authority. The initial microtask matters:
+   * restartLocal() can synchronously publish its terminal edge before the public
+   * restart promise has reached trackOperation().
    */
   function scheduleRestartExhaustedRollback(): void {
     if (writeFence.isDisposed() || platform === 'win32' || envPath !== null || writeFence.isRestartExhaustedRollbackInFlight()
       || plane.connectionState !== 'restart-exhausted') return
 
-    // Fast-path non-triggering sources before arming the writer latch. The
-    // durable state is still re-read after joining prior operations below;
-    // this check only guarantees builtin/env restart exhaustion remains a
-    // pure host-lifecycle fact with no runtime mutation epoch at all.
+    // Fast path: builtin/env restart exhaustion is a pure host-lifecycle fact with
+    // no runtime mutation epoch, so skip the latch and the durable re-read.
     try {
       const observed = facts.resolveWorkspace()
       if (observed.source !== 'override' || observed.version === null) return
@@ -146,35 +138,25 @@ export function createRuntimeLifecycle(deps: RuntimeLifecycleDeps): RuntimeLifec
     operation = (async () => {
       await Promise.resolve()
 
-      // A settling writer may enqueue another tracked tail. Drain all OTHER
-      // operations to a fixed point while the F7 latch refuses new mutations;
-      // exclude this operation itself to avoid a self-wait deadlock.
+      // Drain all OTHER operations to a fixed point while the latch refuses new
+      // mutations; exclude this operation to avoid a self-wait deadlock.
       await writeFence.drainOtherOperations(operation)
 
-      // Authority may have changed while an already-accepted writer settled.
-      // F7 is legal only for the still-active override at an authoritative
-      // restart-exhausted terminal state; builtin/env never mutate metadata.
+      // Authority may have changed while an accepted writer settled. F7 is legal
+      // only for the still-active override at an authoritative restart-exhausted
+      // terminal state; builtin/env never mutate metadata.
       if (writeFence.isDisposed() || writeFence.abortSignal.aborted || envPath !== null
         || plane.connectionState !== 'restart-exhausted') return
       const active = facts.resolveWorkspace()
       if (active.source !== 'override' || active.version === null) return
 
-      // Rollback-vs-lease serialization (design 21 §6.3 decision 6/17, F7
-      // gate): the transaction's restore step writes DSH_HOME BEFORE
-      // the only lease-aware point (the spawn checkpoint inside
-      // plane.startLocal) — a plugin mutation whose pnpm child is live under
-      // a held profile-write lease must drain first, or this rollback would
-      // write DSH_HOME under a concurrent writer. New leases cannot start
-      // while this latch is armed (beginProfileWrite refusal matrix below),
-      // so the wait only drains already-held leases. A lease that outlives
-      // the bound DEFERS the rollback with NO writes: the instance stays in
-      // restart-exhausted with its existing honest projection and
-      // start remains available; restore-builtin stays restricted to
-      // pending/healthy selections (recovery-marked states
-      // expose only their matching retry). The next restart-exhausted
-      // edge (or gateway restart) re-arms it. dispose() aborts the wait, so
-      // shutdown never stalls behind an undrained lease even though index.ts
-      // disposes the manager before the executor releases those leases.
+      // Rollback-vs-lease serialization: the transaction's restore step writes
+      // DSH_HOME before the only lease-aware point (the spawn checkpoint inside
+      // plane.startLocal), so a live plugin mutation under a held profile-write
+      // lease must drain first. New leases cannot start while this latch is armed,
+      // so only already-held leases are drained; one that outlives the bound DEFERS
+      // the rollback with NO writes (the next restart-exhausted edge re-arms it),
+      // and dispose aborts the wait so shutdown never stalls behind a lease.
       if (writeFence.profileWriteInFlight()) {
         const leaseOutcome = await writeFence.waitForProfileWriteIdle(rollbackLeaseWaitMs)
         if (writeFence.isDisposed() || writeFence.abortSignal.aborted) return
@@ -195,19 +177,15 @@ export function createRuntimeLifecycle(deps: RuntimeLifecycleDeps): RuntimeLifec
       if (plan.status === 'not-triggered') return
 
       if (plan.status === 'planned') {
-        // Exactly-once/crash-recovery latch: this durable rollback-needed
-        // record MUST precede candidate mutation, host stop, pointer switch,
-        // or DSH_HOME restore. Preserve a concurrently queued next intent so
-        // shared startup can re-arm it only after reaching a safe fallback.
+        // Exactly-once/crash-recovery: this durable rollback-needed record MUST
+        // precede candidate mutation, host stop, pointer switch or DSH_HOME restore.
         writeActivationJournal(baseDir, {
           ...plan.journal,
           nextIntent: plan.deferredIntent,
         })
       }
-      // `already-in-recovery` is itself durable proof; `planned` reaches here
-      // only after the write above succeeded. The catch path must not stop a
-      // host if creating the F7 latch failed — the shared planner explicitly
-      // forbids every rollback side effect before durable rollback-needed.
+      // 'already-in-recovery' is itself durable proof; 'planned' reaches here only
+      // after the write above. A failed F7 latch must not stop the host.
       rollbackDurablyLatched = true
 
       setRestartOutcome('failed')
@@ -216,9 +194,8 @@ export function createRuntimeLifecycle(deps: RuntimeLifecycleDeps): RuntimeLifec
       let result: Awaited<ReturnType<typeof runStartupPhase>>
       writeFence.beginActivation()
       try {
-        // A version that exhausted the authoritative host restart policy can
-        // no longer earn known-good promotion, even if the following restore
-        // itself needs an operator retry.
+        // A version that exhausted the authoritative host restart policy can no
+        // longer earn known-good promotion, even if the restore needs an operator retry.
         removeKnownGoodCandidate(baseDir, failedVersion)
         result = await startup.executeStartupTransaction(writeFence.abortSignal)
       } finally {
@@ -240,10 +217,8 @@ export function createRuntimeLifecycle(deps: RuntimeLifecycleDeps): RuntimeLifec
             : `restart-exhausted rollback ended with ${result.applyOutcome.status}`),
       ))
 
-      // Candidate/fallback probes may leave a process alive, but the normal
-      // host/exposure lifecycle is re-synchronized only after quarantine has
-      // closed. A dispose that raced the probe permanently suppresses this
-      // recovery start; dispose's final stop is the ownership-release proof.
+      // Probes may leave a process alive; re-sync host/exposure only after
+      // quarantine closed. A dispose race permanently suppresses this start.
       if (!writeFence.isDisposed() && result.blockedReason === null) {
         await plane.startLocal()
         if (!writeFence.isDisposed()) plane.refreshLocalExposure()
@@ -315,8 +290,7 @@ export function createRuntimeLifecycle(deps: RuntimeLifecycleDeps): RuntimeLifec
     }
   } catch (error) {
     // A scheduler may retain the callback and then throw before returning its
-    // cancel handle. Permanently fence this abandoned closure before releasing
-    // the self-acquired lease; any later queued tick becomes a pure no-op.
+    // cancel handle; fence this abandoned closure before releasing the self-lease.
     writeFence.markDisposed()
     writeFence.abortLifecycle()
     try {
@@ -336,16 +310,13 @@ export function createRuntimeLifecycle(deps: RuntimeLifecycleDeps): RuntimeLifec
     setStartOutcome(null)
     try {
       await plane.restartLocal()
-      // CONTRACT (design 18 §9.3): resolve ≠ success — restartLocal() also
-      // resolves from restart-exhausted / error / stopped (the shared window
-      // or a concurrent stop); project that honestly instead of a false 'ok'
-      // (the settings poll must not show「已重启」for a restart that never
-      // reached ready).
+      // CONTRACT: resolve ≠ success — restartLocal() also resolves from
+      // restart-exhausted / error / stopped; project that honestly rather than a
+      // false 'ok' (the settings poll must not show restarted for a non-ready run).
       const connectionState = plane.connectionState
-      // Whitelist: restartLocal() resolves from
-      // restart-exhausted / error / stopped AND can bail on an epoch bump
-      // while 'restarting' is still the live state — every non-ready settle
-      // is a failure; only ready/degraded (process alive) count as success.
+      // Whitelist: every non-ready settle (restart-exhausted / error / stopped,
+      // or an epoch bail while 'restarting' is live) is a failure; only
+      // ready/degraded with a live process counts as success.
       if (connectionState !== 'ready' && connectionState !== 'degraded') {
         const message = `dsh restart did not reach ready (${connectionState})`
         setOperationError(message)
@@ -366,59 +337,45 @@ export function createRuntimeLifecycle(deps: RuntimeLifecycleDeps): RuntimeLifec
   }
 
   /**
-   * Decision-12 start primitive (design 21 §6.3 r1): bring the managed dsh up
-   * from stopped/error/restart-exhausted through the plane's guarded
-   * startLocal path. Every synchronous refusal runs BEFORE any plane effect:
-   * a second start in flight, any runtime mutation/profile write in flight
-   * (assertMutationIdle), a recovery block or ordinary pending (the start
-   * surface never bypasses the recovery gate: retry / recover-metadata;
-   * restore-builtin applies to pending/healthy selections only), and a
-   * connection state
-   * outside the start window. 202 semantics — the route answers synchronously
-   * from these gates and the outcome is projected via status().start /
-   * operationError (resolve ≠ success: a resolve that did not reach ready is
-   * 'failed', exactly like restart()).
+   * Start primitive: bring the managed dsh up from stopped/error/restart-exhausted
+   * through the plane's guarded startLocal path. Every synchronous refusal runs
+   * BEFORE any plane effect: a start already in flight, any runtime mutation or
+   * profile write (assertMutationIdle), a recovery block or ordinary pending (the
+   * recovery gate is never bypassed), or a connection state outside the start
+   * window. The outcome is projected via status().start / operationError
+   * (resolve ≠ success: a resolve that did not reach ready is 'failed').
    */
   async function start(): Promise<void> {
     if (writeFence.isStartInFlight()) {
-      // Same code/message as the route /start pre-gate
-      // (startAlreadyInFlightRefusal).
+      // Same code/message as the route /start pre-gate.
       throw refusalError(startAlreadyInFlightRefusal())
     }
     assertMutationIdle()
-    // Recovery gate (decision 12: "恢复门不可绕过"): an in-memory startup
-    // block is the authoritative recovery verdict; only its matching retry
-    // (recover-metadata for FATAL) may run — restore-builtin applies to
-    // pending/healthy selections only (an armed reset is
-    // re-blocked by the shared core against durable recovery markers, so the
-    // recovery surface never includes it). F7's auto-rollback tail and
-    // gateway-boot blocks all land here, so a raw start can never skip the
-    // probe/restore gate.
+    // Recovery gate: an in-memory startup block is the authoritative recovery
+    // verdict — only its matching retry may run, and restore-builtin applies to
+    // pending/healthy selections only. F7's auto-rollback tail and gateway-boot
+    // blocks land here too, so a raw start cannot skip the probe/restore gate.
     const blockReason = getStartupBlockReason()
     if (blockReason !== null) {
       throw refusalError(recoveryRetryRequiredRefusal(blockReason))
     }
-    // Durable ordinary pending (mirror restart): the armed switch is consumed
-    // by the startup transaction, not by a bare spawn of the old workspace.
+    // Durable ordinary pending: the armed switch is consumed by the startup transaction, not by a bare spawn.
     assertNoPending()
     const connectionState = plane.connectionState
     if (connectionState !== 'stopped' && connectionState !== 'error' && connectionState !== 'restart-exhausted') {
-      // Same code/message as the route /start pre-gate
-      // (startNotApplicableRefusal).
+      // Same code/message as the route /start pre-gate.
       throw refusalError(startNotApplicableRefusal(connectionState))
     }
     writeFence.setStartInFlight(true)
     setStartOutcome('running')
     // A fresh start epoch supersedes any earlier restart verdict (e.g. an F7
-    // auto-rollback 'failed' marker) — the poll must not echo the old verdict
-    // while the r1 recovery is in progress.
+    // 'failed' marker); the poll must not echo the old verdict mid-recovery.
     setRestartOutcome(null)
     try {
       await plane.startLocal()
-      // CONTRACT (restart parity): resolve ≠ success — startLocal() resolves
-      // only after its spawn settles, but a concurrent stop/epoch bump can
-      // land the machine on stopped/error/restart-exhausted; only a live
-      // ready/degraded settle counts as 'ok'.
+      // CONTRACT (restart parity): resolve ≠ success — startLocal() resolves after
+      // its spawn settles, but a concurrent stop/epoch bump can land on
+      // stopped/error/restart-exhausted; only ready/degraded count as 'ok'.
       const reached = plane.connectionState
       if (reached !== 'ready' && reached !== 'degraded') {
         const message = `dsh start did not reach ready (${reached})`
@@ -446,16 +403,14 @@ export function createRuntimeLifecycle(deps: RuntimeLifecycleDeps): RuntimeLifec
     try {
       cancelKnownGoodPromotion()
     } catch (error) {
-      // The callback itself is fenced by `disposed`, so a scheduler adapter
-      // cancellation failure cannot retain runtime writer authority or skip
-      // the real abort/drain/final-stop proof.
+      // The callback itself is fenced by `disposed`, so a cancellation failure cannot
+      // retain runtime writer authority or skip the abort/drain/final-stop proof.
       logger.warn(`gateway runtime known-good scheduler cancellation failed: ${sanitizeErrorText(String(error))}`)
     }
     writeFence.abortLifecycle()
     disposePromise = (async () => {
-      // Epoch-fence any startLocal() that is currently waiting for readiness.
-      // A later rollback probe is allowed to finish honestly; the second stop
-      // below is the final process-quiescence proof.
+      // Epoch-fence any startLocal() waiting for readiness; the second stop below
+      // is the final process-quiescence proof.
       try {
         await plane.stopLocal()
       } catch (error) {
@@ -472,9 +427,8 @@ export function createRuntimeLifecycle(deps: RuntimeLifecycleDeps): RuntimeLifec
 
       await writeFence.drainOperations()
 
-      // Abort can intentionally hand an already-started rollback probe a fresh
-      // signal. Stop once more after every writer settles so no recovery spawn
-      // survives ownership release.
+      // Abort can hand an already-started rollback probe a fresh signal: stop once
+      // more after every writer settles so no recovery spawn survives ownership release.
       let finalStopError: unknown = null
       try {
         await plane.stopLocal()
@@ -487,9 +441,8 @@ export function createRuntimeLifecycle(deps: RuntimeLifecycleDeps): RuntimeLifec
         throw new AggregateError(reasons, 'gateway runtime writers could not be proven quiescent; state-root lease retained')
       }
 
-      // Only a directly constructed manager owns a lease to release; an
-      // adopted createGateway handle belongs to the gateway, which releases it
-      // in stop() after this dispose proved the runtime writers quiescent.
+      // Only a directly constructed manager owns a lease; an adopted createGateway
+      // handle belongs to the gateway, which releases it after this quiescence proof.
       releaseSelfLease()
     })()
     return disposePromise

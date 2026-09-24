@@ -1,64 +1,16 @@
 /**
  * Per-instance archived-session content cleanup host gateway (design 24).
- *
- * TRUST MODEL — this service runs inside each dsh host process. The browser
- * submits no path or command: `purge` deletes every member of the instance's
- * authoritative archived set (registry-global) plus its subagent-origin
- * descendants, children-first, skipping running subtrees whole. The only
- * caller-supplied session ids are purge's OPTIONAL subset filter
- * (`purge(sessionIds?)` for per-selection deletion) and its OPTIONAL protected
- * set (`protectSessionIds?` for the session the calling client is displaying):
- * the domain intersects the filter with the authoritative archived set at run
- * start and only ever REMOVES protected trees from the run, so neither input
- * can name a non-archived session nor widen the deletion set (fail-closed
- * invariant, enforced in core). The domain never RETURNS session content and
- * never touches non-archived sessions; its ONLY content read is the
- * registry-global orphan sweep's fail-closed existence probe
- * (`sessionPersistence.stat`), consumed solely as a boolean membership gate
- * and never projected, logged or persisted — the owner-approved exception
- * recorded in design 24 §2 boundary 1.
- *
- * Fixed wire namespace: `archiveCleanup/{purge,probe}` — the domain name, the
- * method names and purge's argument key order are single-sourced in
- * `./wire.ts`, which the sidebar client accessor imports as well; the
- * cross-package lockstep test pins the host method signature to that table.
- * `probe` is the ZERO-COST activation-probe method (presence + protocol only,
- * no session data, no IO — design 18 §3.4 probe contract). Purge takes an
- * OPTIONAL `sessionIds` JSON parameter (absent = delete the whole archived
- * set, unchanged semantics; the SRC descriptor treats a missing JSON field as
- * `undefined`, so old zero-arg clients keep working against new hosts).
- * Every method returns an explicit `{ok,value}|{ok:false,error}` domain
- * carrier because the generic dsh gateway does not preserve thrown
- * business-error fields; only unexpected internal failures escape as throws.
- *
- * HOST BINDING (design 24 §10): implemented in ./binding.ts —
- *  - archived set: `workspaceRegistry.archivedSessionIds` (public getter);
- *  - session states: the UNION by id of `sessionQuery.listSessions()` and
- *    `sessionPersistence.list()` + live `sessions/agents` — neither
- *    enumeration is authoritative alone (the live-preferred corpus answers
- *    live-only with no error when its optional persistence binding is absent;
- *    the jsonl list skips unparseable artifacts and answers [] for an absent
- *    root), so a narrowed leg can never make a content-bearing member look
- *    like an orphan;
- *  - content location: `sessionPersistence.locate(header)` (official
- *    absolute artifact path, no layout knowledge copied);
- *  - content EXISTENCE (the sweep's decisive gate): `sessionPersistence.
- *    stat(id)` — the official single-id observation resolves the artifact
- *    across all project dirs and generations with cwd unknown; only an
- *    `undefined` answer may mean "no content", every thrown failure fails
- *    closed to "has content";
- *  - archived-set member removal: NO public official primitive exists — the
- *    binding performs ONE single-state `setState` write INSIDE the official
- *    `enqueueOperation` chain (serialized; runtime-guarded; version-pinned;
- *    retired when upstream unarchive/delete wire lands — design 24 §11);
- *  - official events: none public in the pinned tree — projection refresh
- *    rides the client mutation-pull and the official startup header-index
- *    rebuild.
- *
- * Audit: purge lifecycle lines go through the instance logger (purge = the
- * product's only persistent content destruction primitive; local
- * anonymous-loopback hosts reach it — UI confirm is click-protection, the wire
- * itself is the trust boundary shared with the official archiveSession wire).
+ * TRUST MODEL: callers submit no path or command. The only caller-supplied ids are purge's
+ * OPTIONAL subset filter and protected set; the domain intersects the filter with the
+ * authoritative archived set read at run start, and a protected id only ever REMOVES trees
+ * (fail-closed invariant, enforced in core). It never returns session content and never
+ * touches non-archived sessions; its only content read is the orphan sweep's fail-closed
+ * existence probe (`sessionPersistence.stat`), consumed solely as a boolean membership gate.
+ * Fixed wire namespace `archiveCleanup/{purge,probe}` is single-sourced in `./wire.ts` (the
+ * sidebar client imports it); the lockstep test pins the host method signature to that table.
+ * `probe` is the zero-cost activation probe (presence + protocol only). Every method returns
+ * an explicit `{ok,value}|{ok:false,error}` carrier (thrown business-error fields survive no
+ * transport).
  */
 
 import type { Context } from '@deepseek-ai/cordis'
@@ -100,27 +52,22 @@ export class ArchiveCleanupGateway extends TypertRemoteService {
     this.logger = maybeLogger
   }
 
-  /** Delete the WHOLE archived set by default; with the optional `sessionIds`
-   *  filter only the listed archived-set members (each as a deletable tree
-   *  root). `force` additionally deletes subtrees that are
-   *  merely LOADED in this process (the caller cancels the run first); a
-   *  RUNNING member is still refused. `protectSessionIds` names the ids the
-   *  CALLING client may be displaying: any tree
-   *  whose closure contains one is skipped whole, ahead of `force`, and is
-   *  reported in `skippedProtected` — this is what lets a client delete
-   *  archived content safely WITHOUT a pre-flight "I must know my
-   *  current session" refusal, and it covers the full corpus (including
-   *  cwd-less cold records a client-side lineage walk cannot see). NOTE: the
-   *  generic gateway derives accepted arg names from this method's source
-   *  text, so the signature must stay plain identifiers without defaults or
-   *  rest; its names and order ARE the wire contract declared in ./wire.ts and
-   *  pinned by test/wire-lockstep.test.ts. */
+  /** Delete the WHOLE archived set by default; with `sessionIds` only the
+   *  listed archived-set members. `force` also deletes merely LOADED subtrees
+   *  (the caller cancels the run first); a RUNNING member is still refused.
+   *  `protectSessionIds` names ids the CALLING client may be displaying: any
+   *  tree whose closure contains one is skipped whole, ahead of `force`, and
+   *  reported in `skippedProtected` — this lets a client delete safely without
+   *  a pre-flight current-session refusal, covering the full corpus (including
+   *  cwd-less cold records a client-side walk cannot see). NOTE: the generic
+   *  gateway derives accepted arg names from this method's source text, so the
+   *  signature must stay plain identifiers without defaults or rest; its names
+   *  and order ARE the wire contract declared in ./wire.ts and pinned by
+   *  test/wire-lockstep.test.ts. */
   // @Remote takes the protocol's single SEGMENT name, never the client
-  // envelope path: the client calls `archiveCleanup/purge` (the domain comes
-  // from `super(ctx, ARCHIVE_CLEANUP_DOMAIN)`), while the decorator export name
-  // must satisfy the pinned protocol grammar [A-Za-z0-9_$.-]+ — a '/' here
-  // rejects the whole plugin tree at load. `archiveCleanupEndpoint()` builds
-  // the ENVELOPE path and is for the client call site only.
+  // envelope path: the client calls `archiveCleanup/purge`, while the decorator
+  // export name must satisfy the pinned grammar [A-Za-z0-9_$.-]+ — a '/' here
+  // rejects the whole plugin tree at load.
   @Remote(ARCHIVE_CLEANUP_PURGE_METHOD)
   purge(
     sessionIds?: readonly string[],
@@ -141,8 +88,7 @@ export class ArchiveCleanupGateway extends TypertRemoteService {
         skippedLoaded: value.skippedLoaded,
         skippedProtected: value.skippedProtected,
         forcedLoaded: value.forcedLoaded,
-        // 常驻保留：内容删了但会话仍活在本进程 ⇒ 成员关系保留、
-        // 行继续隐藏（直到该实例重启）。宿主审计必须能看到这条事实。
+        // 常驻保留：内容删了但会话仍活在本进程 ⇒ 成员关系保留、行继续隐藏；宿主审计必须可见。
         residentRetained: value.residentRetainedRoots?.length ?? 0,
         errorCount: value.errors.length,
       })
@@ -150,18 +96,13 @@ export class ArchiveCleanupGateway extends TypertRemoteService {
     }))
   }
 
-  /** Zero-cost activation-probe method: presence +
-   *  protocol only — NO session data, NO IO, never linear in the corpus.
-   *  Not routed through RunGate (never contends with purge). The
-   *  carrier is single-layer like every other domain method:
-   *  RPC value = {ok:true,value:{}}. */
+  /** Zero-cost activation-probe method: presence + protocol only — NO session
+   *  data, NO IO, never linear in the corpus. Not routed through RunGate. */
   @Remote(ARCHIVE_CLEANUP_PROBE_METHOD)
   probe(): Promise<ArchiveCleanupDomainResult<Record<string, never>>> {
-    // Presence AND surface health — zero IO (structural
-    // check only). A corrupt/unmounted registry surface answers ok:false →
-    // the activation probe treats a mounted-but-abnormal domain as a
-    // business failure (fail-closed), like the git-worktree deterministic
-    // refusal.
+    // Presence AND surface health, zero IO (structural check only): a
+    // corrupt/unmounted registry surface answers ok:false, so a mounted-but-abnormal
+    // domain is a business failure (fail-closed).
     try {
       assertHostSurface(this.hostCtx)
       return Promise.resolve({ ok: true, value: {} })

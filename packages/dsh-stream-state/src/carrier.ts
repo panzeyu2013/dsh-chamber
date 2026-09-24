@@ -1,22 +1,14 @@
 /**
  * The carrier lifecycle reducer.
  *
- * WHY THIS EXISTS. In the current wiring three different levers can replace the
- * same physical socket (open-frame silent-socket escalation, opening-stall
- * escalation, and the connection lane's reconnect), each with its own throttle;
- * `replaceSocket` also bypasses the mux's 1 s scheduling throttle. Whether two
- * replacements land in one window is therefore a property of the call graph
- * rather than of a rule. Here it is a property of a rule: every replacement,
- * whatever triggered it, passes through {@link decideRebuild}, and the reducer
- * permits exactly one at a time.
+ * Three levers can replace the same physical socket (open-frame silent-socket escalation,
+ * opening-stall escalation, the lane's reconnect), each with its own throttle. Here the
+ * rule owns it: every replacement passes through {@link decideRebuild}, which permits
+ * exactly one at a time, and an allowed request during an in-flight rebuild yields a
+ * `throttled` effect and NO second rebuild.
  *
- * The reducer is clockless (all times arrive on events) and total (any
- * (state, event) pair returns a state, unknown event kinds included). It never
- * imports anything: the executor owns sockets, the Swift mirror owns its own
- * copy of these tables.
- *
- * An allowed rebuild request during an in-flight rebuild produces a `throttled`
- * effect and NO second rebuild.
+ * Clockless (all times arrive on events) and total (any (state, event) pair returns a
+ * state); the executor owns sockets, the Swift mirror owns its own copy of these tables.
  */
 import { countWithin, isUsableAt, pushWindowed } from './time.ts'
 import { openingBudgetMs } from './tables.ts'
@@ -30,31 +22,23 @@ import type {
 } from './state.ts'
 
 /**
- * May a physical carrier be replaced at `at`?
- *
- * Pure and dependency-free so the bound is testable and so every call site -
- * today's three and any future one - shares it. Denies when:
- *  - the carrier is already closed (nothing to replace),
- *  - a rebuild is in flight inside the grace window (the "never stabilizes"
- *    hazard: a second replace cancels the connect the first one started),
- *  - the rolling window is full, or two allowed rebuilds sit closer than the
- *    minimum spacing.
+ * May a physical carrier be replaced at `at`? Pure and dependency-free so every call
+ * site shares it. Denies when the carrier is already closed, when a rebuild is in
+ * flight inside the grace window (a second replace would cancel the connect the first
+ * one started), or when the rolling window is full / two allowed rebuilds sit closer
+ * than the minimum spacing.
  */
 export function decideRebuild(state: CarrierState, env: CarrierEnv, at: number): boolean {
-  // A clock we cannot reason about NEVER authorizes a replacement. Every comparison
-  // below is a ratio against `at`, and NaN makes all of them false - so without this
-  // guard an unusable timestamp would SLIP THROUGH the throttle and rebuild on every
-  // call.
+  // A clock we cannot reason about NEVER authorizes a replacement: every comparison
+  // below is a ratio against `at`, and NaN would slip through the throttle.
   if (!isUsableAt(at)) return false
   if (state.phase === 'closed') return false
   const last = latestRebuildAt(state)
-  // A clock that went backwards is not evidence that the throttle window is empty.
-  // Holding is the only conservative answer: a rollback must never authorize a
-  // replacement (I4).
+  // A clock that went backwards is not evidence the window is empty; holding is the only
+  // conservative answer (a rollback must never authorize a replacement).
   if (Number.isFinite(last) && last >= 0 && at < last) return false
   if (state.pendingRebuild !== null && at - last < env.inFlightGraceMs) return false
-  // countWithin only counts stamps the window can still see; the ledger is pruned at
-  // every reduction, so this stays O(window) and never O(history).
+  // countWithin only counts stamps the window can still see; the ledger is pruned every reduction.
   if (countWithin(state.rebuildsAt, at, env.rebuildWindowMs) >= env.maxRebuildsPerWindow) return false
   if (Number.isFinite(last) && last >= 0 && at - last < env.minRebuildSpacingMs) return false
   return true
@@ -77,8 +61,7 @@ function withStreams(state: CarrierState, next: readonly string[]): CarrierState
 }
 
 /** Oldest-first eviction for the opening-ledger maps (insertion order is stable for
- * string keys). Returns the SAME record when nothing was evicted, so a no-op event
- * keeps state identity. */
+ * string keys). Returns the SAME record when nothing was evicted, so a no-op keeps state. */
 function boundOpeningKeys<T>(record: Readonly<Record<string, T>>, max: number): Readonly<Record<string, T>> {
   const keys = Object.keys(record)
   if (keys.length <= max) return record
@@ -88,12 +71,9 @@ function boundOpeningKeys<T>(record: Readonly<Record<string, T>>, max: number): 
 }
 
 /**
- * One reduction step. Total function: every event kind, matched or not,
- * returns a valid state; unmatched kinds add no effects.
- *
- * The rebuild ledger is pruned against EVERY event's timestamp before the step, not
- * only when an entry is admitted: otherwise a long denial streak leaves stamps that
- * fell out of the window sitting in memory (and in every read).
+ * One reduction step. Total function; unmatched kinds add no effects. The rebuild ledger
+ * is pruned against EVERY event's timestamp (not only when an entry is admitted), so a
+ * long denial streak cannot leave out-of-window stamps in memory.
  */
 export function reduceCarrier(state: CarrierState, event: CarrierEvent, env: CarrierEnv): CarrierReduction {
   return reduceCarrierStep(pruneCarrierLedger(state, event.at, env), event, env)
@@ -117,8 +97,7 @@ function reduceCarrierStep(state: CarrierState, event: CarrierEvent, env: Carrie
 
     case 'carrierClosed': {
       // Replacing a carrier fails EVERY logical stream on it, not only the one that
-      // noticed (mux-self-heal ":600"). Modelling it here keeps that socket-level
-      // semantics in the single owner instead of inside a call site.
+      // noticed; that socket-level semantics lives in the single owner, not a call site.
       const effects: RecoveryEffect[] = [{ e: 'forensic', name: 'carrier-closed', detail: String(event.at) }]
       return {
         state: { ...state, phase: 'closed', framesOnSocket: 0, pendingRebuild: null, openStreams: [] },
@@ -133,8 +112,7 @@ function reduceCarrierStep(state: CarrierState, event: CarrierEvent, env: Carrie
     }
 
     case 'streamFrame':
-      // Frames are the only in-band evidence that the socket is alive, so they
-      // also leave the `silent` phase.
+      // Frames are the only in-band evidence the socket is alive, so they leave `silent`.
       return {
         state: { ...state, framesOnSocket: state.framesOnSocket + 1, phase: state.phase === 'silent' ? 'open' : state.phase },
         effects: [],
@@ -169,9 +147,8 @@ function reduceCarrierStep(state: CarrierState, event: CarrierEvent, env: Carrie
     case 'openingExpired': {
       const key = event.requestKey
       if (key === undefined) return { state, effects: [] }
-      // The widening ledger is the ONLY thing this case owns. The verdict (silent
-      // carrier vs threshold-gated stall) and the rebuild gate are the rebuild
-      // path's, so it delegates: one rule, one place.
+      // The widening ledger is the ONLY thing this case owns; the verdict (silent vs
+      // threshold-gated stall) and the rebuild gate belong to the rebuild path.
       const streak = (state.openingStreaks[key] ?? 0) + 1
       const withStreak: CarrierState = {
         ...state,
@@ -194,20 +171,16 @@ function reduceCarrierStep(state: CarrierState, event: CarrierEvent, env: Carrie
 
     case 'rebuildRequested': {
       const requested: RebuildReason = event.reason ?? 'laneReconnect'
-      // INVARIANT (no exitless spinner): whatever the verdict, a rebuild request
-      // must produce a path forward for the calling episode. Denied requests reopen
-      // their logical stream, so "not escalating" is never "doing nothing".
+      // INVARIANT (no exitless spinner): whatever the verdict, a rebuild request must
+      // produce a path forward; denied requests reopen their logical stream.
       const reopen = (why: string): RecoveryEffect[] =>
         event.streamId === undefined
           ? []
           : [{ e: 'reopenLogicalStream', streamId: event.streamId, reason: why }]
-      // The silent-carrier VERDICT belongs here. When the caller reports the
-      // frame delta, a socket that delivered nothing across a whole
-      // budget is a dead carrier - the opening stall is really `socketNoFrame`,
-      // which the threshold must not gate. A socket that DID deliver can never
-      // prove silence, so an explicit silent reason is denied outright. An absent
-      // or non-finite delta keeps the caller's reason verbatim (pinned by the
-      // differential vectors).
+      // The silent-carrier VERDICT belongs here: with a caller-reported frame delta, a
+      // socket that delivered nothing across a whole budget is a dead carrier, so the
+      // stall is really `socketNoFrame` and the threshold must not gate it; a socket that
+      // DID deliver can never prove silence. An absent delta keeps the caller's reason.
       const frames = event.framesSinceSend
       const silent = frames !== undefined && Number.isFinite(frames) && frames <= 0
       const delivered = frames !== undefined && (!Number.isFinite(frames) || frames > 0)
@@ -221,11 +194,8 @@ function reduceCarrierStep(state: CarrierState, event: CarrierEvent, env: Carrie
         }
       }
       const reason: RebuildReason = requested === 'openingStall' && silent ? 'socketNoFrame' : requested
-      // A frame-answering socket is protected by the streak THRESHOLD, not by the
-      // throttle: a first-miss stall is not a rebuild request at all - it stays an
-      // episode-level reopen.
-      // An unusable streak must not clear the threshold either: NaN is neither below
-      // nor above it, so a bare `<` would let it through.
+      // A frame-answering socket is protected by the streak THRESHOLD: a first-miss stall
+      // stays an episode-level reopen. An unusable streak must not clear it either.
       if (reason === 'openingStall' && !isStallProven(event.streak, env.openingStallStreak)) {
         return {
           state,
@@ -236,8 +206,7 @@ function reduceCarrierStep(state: CarrierState, event: CarrierEvent, env: Carrie
         }
       }
       if (!decideRebuild(state, env, event.at)) {
-        // Denied: record it, never silently drop it, never act twice - and give the
-        // episode its exit back.
+        // Denied: record it (never silently drop), act once, and give the episode its exit back.
         return {
           state,
           effects: [{ e: 'throttled', reason, at: event.at }, ...reopen('rebuild-throttled')],
@@ -251,8 +220,7 @@ function reduceCarrierStep(state: CarrierState, event: CarrierEvent, env: Carrie
           framesOnSocket: 0,
           pendingRebuild: reason,
           pendingRebuildBy: event.episodeId ?? null,
-          // pushWindowed is the ledger's only writer: a new entry cannot outlive the
-          // window it is counted in.
+          // pushWindowed is the ledger's only writer: a new entry cannot outlive its window.
           rebuildsAt: pushWindowed(state.rebuildsAt, event.at, event.at, env.rebuildWindowMs),
         },
         effects,
@@ -260,14 +228,10 @@ function reduceCarrierStep(state: CarrierState, event: CarrierEvent, env: Carrie
     }
 
     case 'episodeClosed': {
-      // The episode's lifetime ends here. Two episode-scoped things are released:
-      // the in-flight rebuild claim (so a retired stream can never block its
-      // successor), and - unless this departure WAS the opening timeout - the
-      // widening streak, but only when no live sibling still owns the key. A
-      // timed-out stream keeps its widening for the retry lane's next attempt;
-      // a stream that ended through its consumer starts the next episode tight.
-      // A rebuild that is already connected is unaffected - only the in-flight
-      // marker is episode-scoped.
+      // The episode's lifetime ends here: release the in-flight rebuild claim (a retired
+      // stream must never block its successor) and - unless this departure WAS the opening
+      // timeout - the widening streak, but only when no live sibling still owns the key.
+      // An already-connected rebuild is unaffected; only the in-flight marker is scoped.
       const id = event.episodeId
       if (id === undefined) return { state, effects: [] }
       const key = state.streamRequestKeys[id] ?? event.requestKey
@@ -309,7 +273,6 @@ function reduceCarrierStep(state: CarrierState, event: CarrierEvent, env: Carrie
   }
 }
 
-/** Apply a sequence of events; returns the final state and the concatenated effects. */
 export function reduceCarrierSequence(
   state: CarrierState,
   events: readonly CarrierEvent[],

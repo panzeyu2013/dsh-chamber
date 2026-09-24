@@ -13,8 +13,7 @@
 //
 //  投递：由原生壳以 WKUserScript（公开 API）在 documentStart、仅主 frame 注入一条
 //  <style>，与 BridgeShimInjector 同一装配段（configuration 段，必须先于 WKWebView
-//  构造；崩溃/卡死恢复只 reload，注入随每次导航生效）。Electron flavor 未同步，
-//  双 flavor 差异登记见 docs/progress/deviations.md S-50。
+//  构造；崩溃/卡死恢复只 reload，注入随每次导航生效）。Electron flavor 未同步。
 //
 //  单一真源：规则文本、标记属性、注入源码都从这里取；效果判据归实机目检。
 

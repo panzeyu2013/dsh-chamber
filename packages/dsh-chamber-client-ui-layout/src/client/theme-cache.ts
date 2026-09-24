@@ -1,20 +1,16 @@
 /**
- * Page-wide per-source document-theme snapshot cache (design 06 §4.6).
+ * Page-wide per-source document-theme snapshot cache (design 06).
  *
- * Why: on a cold switch the target view has not produced a theme snapshot yet, so
- * the document keeps the PREVIOUS view palette (or dsh light default) while the
- * target boots — the veil/`.instance-loading` background reads
- * `--dsw-alias-bg-base` from the document, which is exactly how a dark server
- * shows a full-white boot. Priming the target with its own last-known palette
- * (or, for a never-seen source, the last palette actually applied anywhere)
- * removes that mismatch without adding CSS color rules.
- *
- * Uniqueness: one cache per document, held in a page-global slot (the same
- * discipline as page-language.ts) because every per-instance boot evaluates this
- * module separately.
+ * A cold-switch target has produced no snapshot yet, so the document keeps the
+ * PREVIOUS view's palette — or dsh's light default, which makes a dark server
+ * show a full-white boot veil reading `--dsw-alias-bg-base` from the document.
+ * Priming the target with its own last-known palette (never-seen source: the
+ * last palette applied anywhere) removes the mismatch without CSS color rules.
+ * One cache per document in a page-global slot because every per-instance boot
+ * evaluates this module separately.
  */
 
-/** One opaque theme snapshot, forwarded to the vendor ThemePresenter. */
+/** One snapshot forwarded verbatim to the vendor ThemePresenter. */
 export type CachedThemeSnapshot = unknown
 
 /** The page-wide cache face. Bounded least-recently-remembered eviction. */
@@ -32,7 +28,6 @@ export interface SourceThemeCache {
   clearPrimed(): void
 }
 
-/** Inputs of the pure priming decision. */
 export interface PrimeInput {
   active: string | undefined
   self: string | undefined
@@ -46,13 +41,10 @@ export type PrimeDecision = "self" | "cached" | "fallback" | "none"
 
 /**
  * Decide what one instance should project when the active source changes.
- * - `self`: unpublished active source, or this instance IS the active one — keep
- *   the vendor-equivalent behavior (re-project the remembered snapshot).
- * - `cached`: the target was seen before and is not mounted — prime its palette.
- * - `fallback`: the target is not mounted and never produced a palette — prime the
- *   last palette known to paint (never leave the document on an unknown state).
- * - `none`: nothing to do (already primed for this activation, or a mounted target
- *   whose own projector repaints on activation).
+ * - `self`: unpublished active source, or this instance IS the active one.
+ * - `cached`: target seen before and not mounted — prime its palette.
+ * - `fallback`: target never produced a palette — prime the last known one.
+ * - `none`: already primed, or a mounted target whose projector repaints itself.
  */
 export function decidePrime(input: PrimeInput): PrimeDecision {
   if (input.active === undefined || input.active === input.self) return "self"
@@ -96,13 +88,12 @@ export function createSourceThemeCache(limit: number = SOURCE_THEME_CACHE_LIMIT)
   }
 }
 
-/** Page-global slot holding the cache (one document, one cache). */
 const CACHE_SLOT = "__dshChamberSourceThemeCache__"
 
-/** The global object as a plain bag: the slot is intentionally page-scoped. */
+/** Page-scoped bag for the cache slot. */
 const pageGlobal = globalThis as unknown as Record<string, unknown>
 
-/** Structural check for a cache installed by another evaluation of this module. */
+/** Accepts a cache installed by another evaluation of this module. */
 function isSourceThemeCache(value: unknown): value is SourceThemeCache {
   if (typeof value !== "object" || value === null) return false
   const candidate = value as Partial<SourceThemeCache>
@@ -111,7 +102,7 @@ function isSourceThemeCache(value: unknown): value is SourceThemeCache {
     && typeof candidate.markPrimed === "function"
 }
 
-/** The page cache, whoever installed it (created on first use). */
+/** The page cache, created on first use. */
 export function resolveSourceThemeCache(): SourceThemeCache {
   const existing = pageGlobal[CACHE_SLOT]
   if (isSourceThemeCache(existing)) return existing

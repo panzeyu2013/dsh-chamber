@@ -1,28 +1,18 @@
 /**
  * `settings.onboarding` coordinator facts.
  *
- * Upstream's settings shell mounts exactly ONE ordered `settings.onboarding`
- * step while the current session is blank or absent
- * (ui-settings-general/src/client/SettingsRoot.tsx): the first ledger entry the
- * user has not completed, rendered with its own owner props
- * (`stepId` / `complete` / `openSection`) so the step's own component — which
- * lives in the SAME boot ctx — owns its ctx reads, its readiness gate and its
- * dialog chrome. The shell paints nothing of its own for this stage.
+ * Upstream's settings shell mounts exactly ONE ordered `settings.onboarding` step while
+ * the current session is blank or absent: the first uncompleted ledger entry, rendered
+ * with its own owner props (`stepId` / `complete` / `openSection`) so the step's own
+ * component — in the SAME boot ctx — owns its ctx reads, readiness gate and dialog
+ * chrome; the shell paints nothing.
  *
- * Chamber parity: the chamber shell IS that ctx's `sidebar.settings` occupant
- * (one per instance boot ctx), so it coordinates its OWN ctx's ledger and its
- * OWN sessions seat — the same two facts upstream reads, and both already
- * delivered to this component by the renderer (`props.useSessions`) and by the
- * bridge's own face publication (the ctx-side ledger, settings-source-face.ts).
- * No new fact channel is introduced, and the stage is never re-derived from the
- * panel's selected source: a foreign ctx's onboarding would have to be driven
- * through a foreign hook, and two mounted shells selecting the same source
- * would mount the same step twice (duplicate first-run dialogs).
- *
- * This module is the pure half (projection + readiness fact + seat narrowing) so
- * the coordinator's truth table is pinned by plain unit tests; the React wiring
- * lives in ./onboarding-hooks.ts (it imports the renderer's hook factory, which
- * only the bundle can resolve).
+ * Chamber parity: the shell IS that ctx's `sidebar.settings` occupant, so it coordinates
+ * its OWN ctx's ledger and sessions seat — the same two facts upstream reads, both
+ * already delivered (`props.useSessions`; the ctx-side ledger via
+ * settings-source-face.ts). Never re-derived from the panel's selected source: two shells
+ * selecting one source would mount the same step twice. This module is the pure half; the
+ * React wiring lives in ./onboarding-hooks.ts.
  */
 import type { SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
 
@@ -42,10 +32,7 @@ export interface OnboardingLedger {
   subscribe(key: string, fn: () => void): () => void
 }
 
-/**
- * Sessions-list state the coordinator selects over (the official
- * `SessionListState` fields upstream's readiness selector reads).
- */
+/** Sessions-list state the coordinator selects over (the official `SessionListState` fields upstream's readiness selector reads). */
 export interface OnboardingSessionsState {
   phase?: string
   /** Current session id; absent while the instance has no session at all. */
@@ -58,11 +45,9 @@ export interface OnboardingSessionsState {
 export type OnboardingSessionsSeat = SnapshotSelectorHook<OnboardingSessionsState>
 
 /**
- * Upstream's readiness fact, verbatim (SettingsRoot.tsx): the session store is
- * live AND the current session is absent or still blank — the state in which a
- * first-run user has contributed nothing yet.
- * @param state - the instance's session-list state.
- * @returns whether the onboarding stage owns the instance right now.
+ * Upstream's readiness fact, verbatim: the session store is live AND the current
+ * session is absent or still blank — the state in which a first-run user has
+ * contributed nothing yet.
  */
 export function onboardingActive(state: OnboardingSessionsState): boolean {
   return state.phase === 'ready'
@@ -71,7 +56,6 @@ export function onboardingActive(state: OnboardingSessionsState): boolean {
 
 /**
  * Project one ledger's onboarding entries into coordinator order.
- * @param ledger - that ctx's slot registry (read face).
  * @returns the steps, lowest `order` first (ties keep registration sequence).
  */
 export function onboardingSteps(ledger: OnboardingLedger): OnboardingStep[] {
@@ -82,8 +66,6 @@ export function onboardingSteps(ledger: OnboardingLedger): OnboardingStep[] {
 
 /**
  * The step the coordinator mounts: the first ordered entry not yet completed.
- * @param steps - ordered steps.
- * @param completed - step ids already completed in this active run.
  * @returns the step to mount, or undefined when every step is done.
  */
 export function nextOnboardingStep(
@@ -116,26 +98,16 @@ export interface OnboardingStage {
 /**
  * Derive the stage from its two independent facts.
  *
- * MOUNTING is their conjunction. Upstream mounts the step on the sessions fact
- * alone (SettingsRoot.tsx), and the chamber adds the App-published active-view
- * fact as the second coordinate: several instance shells are mounted at once and
- * the step's first-run dialog is document-global, so a hidden shell must never
- * pop another instance's stage over the view the user is looking at.
+ * MOUNTING is their conjunction: upstream mounts on the sessions fact alone, and the
+ * chamber adds the App-published active-view fact because several instance shells are
+ * mounted at once and the step's dialog is document-global — a hidden shell must never
+ * pop another instance's stage over the view on screen.
  *
- * The RESET is the sessions fact ALONE — upstream's own effect
- * (`if (onboardingActive) return; setCompletedOnboarding(new Set())`), where
- * `onboardingActive` IS the sessions selector. The reset must NOT fold in the
- * active-view gate: a plain VIEW SWITCH would then wipe every acknowledgement,
- * so the step the user had just completed (or explicitly deferred — both shipped
- * steps call `complete()` while the session stays blank) would re-mount the
- * moment the view came back.
- *
- * Residual, deliberately outside this projection: the completed set itself is
- * component-local, so a shell REMOUNT (the App reclaims and re-mounts the
- * instance) still starts a fresh run. Closing that needs per-instance state that
- * survives the mount (a new fact channel), not a different derivation here.
- * @param input - the two facts, the ledger steps and the run's completed set.
- * @returns the step to mount and whether the completed set must be reset.
+ * The RESET is the sessions fact ALONE (upstream's `if (onboardingActive) return;
+ * setCompletedOnboarding(new Set())`). It must NOT fold in the active-view gate: a plain
+ * VIEW SWITCH would then wipe every acknowledgement, so a step the user just completed
+ * or explicitly deferred would re-mount when the view came back. Residual: the completed
+ * set is component-local, so a shell REMOUNT still starts a fresh run.
  */
 export function onboardingStage({
   steps, completed, sessionsActive, inActiveView,
@@ -149,13 +121,10 @@ export function onboardingStage({
 }
 
 /**
- * Read the sessions seat the renderer handed this shell. The chamber's loose
- * ambient face erases `PropsRuntime` to `Record<string, unknown>`, so the
- * framework seat's selector signature (upstream `UseSessions`) is asserted here
- * — and only when the member really is a function, so an absent seat reads as
- * "no session fact" instead of crashing the shell.
- * @param props - the slot component's props share.
- * @returns the selector hook, or undefined when no seat was delivered.
+ * Read the sessions seat the renderer handed this shell. The chamber's loose ambient
+ * face erases `PropsRuntime` to `Record<string, unknown>`, so the framework seat's
+ * selector signature is asserted here — and only when the member really is a function,
+ * so an absent seat reads as "no session fact" instead of crashing the shell.
  */
 export function sessionsSeatOf(props: object): OnboardingSessionsSeat | undefined {
   const seat = (props as Record<string, unknown>)['useSessions']

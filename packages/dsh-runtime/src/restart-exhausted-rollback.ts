@@ -1,16 +1,13 @@
 /**
- * Design 18 §3.4 planner for a delayed crash (`restart-exhausted`).
+ * Planner for a delayed crash (`restart-exhausted`). This module performs no process,
+ * pointer, snapshot or store effect: it turns the durable `applied-monitoring` journal into a
+ * `rollback-needed` journal, which the main process MUST persist successfully before it stops
+ * a host, changes `current`, restores data, removes the failed candidate, or calls
+ * `applyPendingVersion`.
  *
- * This module deliberately performs no process, pointer, snapshot, or store
- * effect. It turns the durable `applied-monitoring` journal into a
- * `rollback-needed` journal. The main process MUST persist the returned
- * journal successfully before it stops a host, changes `current`, restores
- * data, removes the failed candidate, or calls `applyPendingVersion`.
- *
- * Once persisted, the journal phase is both the exactly-once latch and the
- * crash-recovery input: duplicate state notifications return
- * `already-in-recovery`, and startup can resume the existing apply-phase
- * rollback transaction even though override.pending has already been cleared.
+ * Once persisted, the journal phase is both the exactly-once latch and the crash-recovery
+ * input: duplicate state notifications return `already-in-recovery`, and startup resumes the
+ * existing rollback transaction even though override.pending has already been cleared.
  */
 import { basename } from 'node:path'
 import { shouldAutoRollback } from './activation-gate.ts'
@@ -60,10 +57,9 @@ export type RestartExhaustedRollbackPlan =
       journal: ActivationJournal
       rollbackTarget: string | null
       /**
-       * applied-monitoring may carry a later user selection. Current journal
-       * validation permits nextIntent only in that phase, so the rollback
-       * journal clears it and returns it explicitly for the owner to re-queue
-       * after the rollback reaches a safe terminal state.
+       * applied-monitoring may carry a later user selection. Journal validation permits
+       * nextIntent only in that phase, so the rollback journal clears it and returns it for the
+       * owner to re-queue after the rollback reaches a safe terminal state.
        */
       deferredIntent: ActivationJournalIntent | null
     }
@@ -88,24 +84,22 @@ function monitoringFactsAreUsable(journal: ActivationJournal): boolean {
 }
 
 function targetForDelayedRollback(journal: ActivationJournal, failedVersion: string): string | null {
-  // If builtin was the pre-swap runtime it is the authoritative previous
-  // target, represented by clearing `current`, not by writing its semver.
+  // If builtin was the pre-swap runtime it is the authoritative previous target, represented
+  // by clearing `current`, not by writing its semver.
   if (journal.sourceIsBuiltin === true) return null
 
   const selected = delayedRollbackTarget(journal)
 
-  // Corrupt/stale facts must never bounce back to the version which has just
-  // exhausted restarts. Prefer a distinct known-good tree, otherwise builtin.
+  // Corrupt/stale facts must never bounce back to the version that just exhausted restarts;
+  // prefer a distinct known-good tree, otherwise builtin.
   if (selected !== failedVersion) return selected
   return journal.knownGoodVersion !== null && journal.knownGoodVersion !== failedVersion
     ? journal.knownGoodVersion
     : null
 }
 
-/**
- * Produce the durable rollback intent. This function is pure: it neither
- * mutates the supplied journal nor performs an injected callback.
- */
+/** Produce the durable rollback intent. Pure: neither mutates the supplied journal nor
+ *  performs an injected callback. */
 export function planRestartExhaustedRollback(
   opts: RestartExhaustedRollbackPlanOptions,
 ): RestartExhaustedRollbackPlan {
@@ -156,9 +150,8 @@ export function planRestartExhaustedRollback(
     ...journal,
     phase: 'rollback-needed',
     rollbackTarget: target,
-    // Detach the deferred intent from the rollback journal: the owner re-queues
-    // it (main.ts runRestartExhaustedRollback) after the rollback lands safely,
-    // so a crash between plan and re-queue never replays the failed version.
+    // Detach the deferred intent from the rollback journal: the owner re-queues it after the
+    // rollback lands safely, so a crash between plan and re-queue never replays the failed version.
     nextIntent: null,
     updatedAt: now.toISOString(),
   }

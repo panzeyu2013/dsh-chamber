@@ -1,8 +1,7 @@
 /**
- * The per-source search surface of the chamber sidebar ServerSection subtree:
- * the capsule input row and the search-results tree (with the projection-label /
- * running-bit / active-schedule lookups it reads). The section owns the shared
- * search controller mirror and passes the resolved values in.
+ * Per-source search surface of the ServerSection subtree: the capsule input
+ * row and the search-results tree (projection-label / running-bit /
+ * active-schedule lookups); the section owns the shared controller mirror.
  */
 import { Fragment } from 'react'
 import type { RefObject } from 'react'
@@ -33,8 +32,7 @@ export function ServerSectionSearchCapsule({ server, search, searchRoot, searchI
                   <div
                     ref={searchRoot}
                     className={cc.searchCapsule}
-                    // 焦点归属必须**事件驱动**记录：effect 只在依赖变化时跑，采样
-                    // 到的 activeElement 早已回落。
+                    // 焦点归属必须事件驱动记录：effect 只在依赖变化时跑，采样到的 activeElement 早已回落。
                     onFocusCapture={() => { capsuleHeldFocus.current = true }}
                     onBlurCapture={() => { capsuleHeldFocus.current = false }}
                   >
@@ -45,9 +43,7 @@ export function ServerSectionSearchCapsule({ server, search, searchRoot, searchI
                       maxLength={SEARCH_QUERY_MAX_CODE_UNITS}
                       placeholder={t('search.placeholder')}
                       value={search?.query ?? ''}
-                      // 不用 autoFocus：胶囊会因断连/恢复而卸载重挂，autoFocus
-                      // 会在恢复时抢走用户当前焦点；用户主动展开的那条路径已由
-                      // 搜索按钮显式 focus()。
+                      // 不用 autoFocus：断连/恢复重挂时它会抢走用户当前焦点；主动展开路径已显式 focus()。
                       onChange={(event) => setSearchQuery(server.id, event.target.value)}
                       onKeyDown={(event) => {
                         if (event.key !== 'Escape') return
@@ -59,8 +55,7 @@ export function ServerSectionSearchCapsule({ server, search, searchRoot, searchI
                       className={cc.searchClear}
                       aria-label={t('search.clear')}
                       onClick={() => {
-                        // 拖拽尾随 click 守卫——dragend 后的合成 click
-                        // 落在清除钮上不得清掉在途搜索（守卫控件清单补齐）。
+                        // 拖拽尾随 click 守卫：dragend 后的合成 click 不得清掉在途搜索。
                         if (suppressClickRef.current) return
                         clearSearch(server.id)
                       }}
@@ -81,10 +76,8 @@ export interface ServerSectionSearchResultsProps {
 export function ServerSectionSearchResults({ server, merged, currentRemote, currentId }: ServerSectionSearchResultsProps) {
   const { t, rowErrors, openSession } = useSidebarSection()
   const { sessionStateLabel, sessionStatePending, sessionStateDot } = useServerSectionSessionState()
-              // Search-result labels resolve from the source aggregate (title
-              // may lag the latest snapshot by one poll — accepted, 06 §1.2).
-              // The official display label, not the durable title: a hit
-              // whose title the host could not read renders the directory name.
+              // 标签来自来源 aggregate（可能比最新快照滞后一轮 poll）；用官方
+              // display label——host 读不到标题时渲染目录名。
               const searchRowLabel = (sessionId: string): { title: string; workspaceLabel: string | undefined } => {
                 for (const workspace of server.workspaces) {
                   const session = workspace.sessions.find(candidate => candidate.id === sessionId)
@@ -94,15 +87,12 @@ export function ServerSectionSearchResults({ server, merged, currentRemote, curr
                     workspaceLabel: workspace.ungrouped === true ? t('list.ungrouped') : workspace.title,
                   }
                 }
-                // Defensive: a hit outside every projected row still has an
-                // honest label — the official ladder's last resort (id).
+                // 防御：不在任何投影行内的命中仍给诚实标签——官方阶梯最后一级（id）。
                 return { title: sessionId, workspaceLabel: undefined }
               }
-              // 搜索结果行的 running 位来自投影（mergeSearchResults
-              // 的 visibleIds 过滤保证命中行一定在投影内，查得到即用投影位；查
-              // 不到——防御——回落 false）。通道 running 不参与渲染（运行环
-              // wire 权威,见 sessionStateLabel 注释）——sessionStateDot/Label
-              // 直接使用此投影位。
+              // 结果行的 running 位来自投影（visibleIds 过滤保证命中行在投影内，
+              // 查不到——防御——回落 false）；运行环 wire 权威，通道 running 不
+              // 参与渲染，sessionStateDot/Label 直接用此投影位。
               const projectedRunning = (sessionId: string): boolean => {
                 for (const workspace of server.workspaces) {
                   const session = workspace.sessions.find(candidate => candidate.id === sessionId)
@@ -111,11 +101,8 @@ export function ServerSectionSearchResults({ server, merged, currentRemote, curr
                 }
                 return false
               }
-              // The same projection lookup for
-              // the active-Schedule fact — upstream's search row renders the
-              // marker too (vendor ui-workspace Rows.tsx:351). Not found ⇒
-              // false (defensive: a hit outside the visible projection is not a
-              // claim about that session's schedules).
+              // 同一投影查询给 active-Schedule 事实（上游搜索行同样渲染该标记）；
+              // 查不到 ⇒ false——不在可见投影内不构成对该会话日程的断言。
               const projectedHasActiveSchedule = (sessionId: string): boolean => {
                 for (const workspace of server.workspaces) {
                   const session = workspace.sessions.find(candidate => candidate.id === sessionId)
@@ -129,20 +116,13 @@ export function ServerSectionSearchResults({ server, merged, currentRemote, curr
                         <div className={cc.searchResults} role="tree" aria-label={t('search.results.aria')}>
                           {merged.items.map((item) => {
                             const resolved = searchRowLabel(item.sessionId)
-                            // 搜索行传投影 running 位（查不到回落
-                            // false）；运行环 wire 权威——sessionStateDot/Label
-                            // 直接使用此位,通道 running 不参与渲染（见
-                            // sessionStateLabel 注释）。
                             const running = projectedRunning(item.sessionId)
                             const stateDot = sessionStateDot(server, { id: item.sessionId, running })
                             const stateLabel = sessionStateLabel(server, { id: item.sessionId, running })
                             const openError = rowErrors[openErrorKey(server.id, item.sessionId)]
                             return (
-                              // chamber (打开失败可见性): the search tree replaces
-                              // the workspace tree, so an open failure must also
-                              // surface under the result row — Fragment keeps the
-                              // button keyboard-activatable (official
-                              // SearchResultItem 同款).
+                              // 搜索树替换工作区树，打开失败也必须在该结果行下可见；
+                              // Fragment 保持 button 可键盘激活（官方同款）。
                               <Fragment key={item.sessionId}>
                                 <button
                                   type="button"
@@ -156,28 +136,15 @@ export function ServerSectionSearchResults({ server, merged, currentRemote, curr
                                       className={clsx(cc.sessionStateSlot, sessionStatePending(server, { id: item.sessionId }) !== undefined && cc.sessionStateSlotPending)}
                                       title={stateLabel}
                                       aria-label={stateLabel}
-                                      // 空态不注册 live region（官方仅在有
-                                      // 状态时放隐藏标签）——role 条件化避免 SR 噪音。
+                                      // 空态不注册 live region：role 条件化避免 SR 噪音。
                                       role={stateDot !== null ? 'status' : undefined}
                                     >
                                       {stateDot}
                                     </span>
                                     <span className={cc.searchResultTitle}>{resolved.title}</span>
-                                    {/* Upstream's
-                                        search row carries the marker right after
-                                        the title, inside the heading (vendor
-                                        ui-workspace Rows.tsx:351), fed by
-                                        tree.ts:161-163. This row applies NO blank gate
-                                        of its own — the projection helper
-                                        (`projectedHasActiveSchedule`) is the only
-                                        gate, and it is false for a session the
-                                        projection does not list. Upstream's
-                                        SearchResultItem has no blank gate either
-                                        and SearchResultNode carries no `blank`
-                                        field: blank (provisional new-session)
-                                        rows are excluded from content search by
-                                        the query itself (vendor tree.ts:156-159),
-                                        so there is nothing to gate here. */}
+                                    {/* 上游在标题后、heading 内渲染该标记，本行没有
+                                        额外的 blank 门——blank（临时新会话）行已被查询
+                                        本身排除在内容搜索外。 */}
                                     {projectedHasActiveSchedule(item.sessionId) && (
                                       <SessionScheduleIndicator label={t('schedule.active')} />
                                     )}
@@ -210,9 +177,7 @@ export function ServerSectionSearchResults({ server, merged, currentRemote, curr
                             </div>
                           )}
                         </div>
-                        {/* 搜索进行中（query!==''）也在结果下方渲染
-                            aggregateError——结果优先，错误行在下面，与顶部
-                            注释声称的行为一致。 */}
+                        {/* query!=='' 时也在结果下方渲染 aggregateError：结果优先，错误行在下。 */}
                         {server.aggregateError !== undefined && (
                           <div className={cc.aggregateError} role="alert">{server.aggregateError}</div>
                         )}

@@ -1,16 +1,9 @@
 /**
- * Authority action log (P5 evidence surface, machine-persistent).
- *
- * WHY: the executor's bounded action ring travels in the runtime report and each act
- * emits one console line — neither survives a page reload, so a real-machine incident
- * could not answer "did a probe fire / did the bit drop / did the write-back run".
- * This module persists the same ring into the page's Local Storage (Chromium LevelDB
- * under the profile, shared by the Electron and Swift flavors because both run this web
- * renderer), bounded per source so the store cannot grow without limit.
- *
- * DISCIPLINE: diagnostics must never break the authority chain — every storage failure
- * (absent localStorage, quota, corrupt JSON, hostile shape) degrades to "no evidence",
- * never throws. The key is versioned; unknown shapes are dropped, not migrated.
+ * Authority action log persisted into the page's Local Storage (LevelDB under the profile, shared
+ * by both flavors since both run this web renderer), bounded per source so the executor's action
+ * ring cannot grow without limit. DISCIPLINE: diagnostics must never break the authority chain —
+ * every storage failure (absent localStorage, quota, corrupt JSON, hostile shape) degrades to "no
+ * evidence" and never throws; the versioned key drops unknown shapes rather than migrating.
  */
 export interface AuthorityLogStorage {
   getItem(key: string): string | null
@@ -99,10 +92,7 @@ function boundSources(table: Record<string, AuthorityLogEntry[]>): Record<string
   return result
 }
 
-/**
- * Append one act for a source (idempotent by (at, kind, detail) adjacency not required:
- * callers append each produced act exactly once).
- */
+/** Append one act; callers must append each produced act exactly once. */
 export function appendAuthorityLog(
   storage: AuthorityLogStorage,
   sourceId: string,

@@ -1,6 +1,4 @@
-/**
- * shell-ipc-plugins-local — domain IPC registrations
- */
+/** Domain IPC registrations：本地插件 list / npm search / add / remove。 */
 import type { ShellIpcCtx } from './shell-ipc-ctx.ts'
 import { IPC_CHANNELS } from './ipc-events.ts'
 import { classifyPluginPick, folderPluginIdentity } from './plugin-tarball.ts'
@@ -13,18 +11,12 @@ import { sanitizeErrorText } from './sanitize-error.ts'
 export function registerLocalPluginHandlers(ctx: ShellIpcCtx): void {
   const { deps, localProtectionFacts, verifyLocalProfileFamily, confirmPluginAction, NPM_SEARCH_MAX_BODY_BYTES } = ctx
   const { localDshHome, runLocalPluginMutation } = ctx.deps.ctx
-  // Local manifest read (design 13 local leg): the authoritative local dsh
-  // home manifest (<localDshHome>/… package.json 依赖投影 + bundle 激活层) —
-  // localPluginList is a pure plugin-sync read of the same home the mutation
-  // leaf writes; loud {error} on any unreadable/corrupt manifest, never a
-  // silent empty success.
-  // The IPC response is the redacted projection (design 13 §7.0): every
-  // materialize-class dependency VALUE (file:/link:/relative/absolute/`~/` —
-  // and the rows[].spec channel) becomes MATERIALIZED_VALUE_MASK before it
-  // crosses to the renderer, so a local absolute path can never reach a
-  // remote instance's bundle in the chamber page. The main-process-internal
-  // manifest stays full (resolveLocalMaterializeDirectory, the mutation leaf
-  // and the seed paths read the unredacted read).
+  // Local manifest read：localPluginList 读的是本机 dsh home（<localDshHome>/…
+  // package.json 依赖投影 + bundle 激活层）——与 mutation 叶写同一 home；不可读/损坏一律
+  // loud {error}，绝不静默空成功。
+  // IPC 响应是脱敏投影：所有 materialize 类依赖值（file:/link:/相对/绝对/`~/` 及
+  // rows[].spec）跨界前变成 MATERIALIZED_VALUE_MASK，本机绝对路径绝不进入远端实例的
+  // bundle；主进程内部读保持完整（resolveLocalMaterializeDirectory / mutation 叶 / seed 腿）。
   deps.ipc.handle(IPC_CHANNELS.LOCAL_PLUGIN_LIST, () => {
     try {
       return { ok: true, manifest: redactLocalPluginManifest(localPluginList(localDshHome, localProtectionFacts())) };
@@ -32,11 +24,9 @@ export function registerLocalPluginHandlers(ctx: ShellIpcCtx): void {
       return { ok: false, error: describeUnknownError(error) };
     }
   });
-  // npm search (design 13 contract B): BEST-EFFORT npm registry search —
-  // a main-process fetch (the renderer stays on 127.0.0.1), bounded in time and
-  // body size, refusing any non-whitelisted URL/redirect loudly. Always a loud
-  // {ok:false} on refusal/transport/parse failure — never a silent empty
-  // success, never an unhandled rejection.
+  // BEST-EFFORT npm registry search：main-process fetch（renderer 留在 127.0.0.1），
+  // 时间与响应体都有界，白名单外 URL/redirect 一律 loud 拒绝；任何拒绝/传输/解析失败都
+  // loud {ok:false}，绝不静默空成功、绝不 unhandled rejection。
   deps.ipc.handle(IPC_CHANNELS.NPM_SEARCH, async (payload: unknown) => {
     const { query } = payload as { query: unknown };
     if (typeof query !== 'string' || query.trim() === '') return { ok: false, error: 'empty search query' };
@@ -47,21 +37,18 @@ export function registerLocalPluginHandlers(ctx: ShellIpcCtx): void {
     timer.unref?.();
     try {
       const searchUrl = new URL(`https://registry.npmjs.org/-/v1/search?text=${encodeURIComponent(text)}&size=20`);
-      // The search endpoint shares the registry URL whitelist
-      // (origin + `/-/v1/search` path shape), never a raw hardcoded fetch.
+      // 搜索端点共用 registry URL 白名单（origin + `/-/v1/search` 路径形状），绝不裸 fetch。
       if (!isAllowedRegistryUrl(searchUrl.toString())) {
         return { ok: false, error: 'search URL is not whitelisted' };
       }
-      // redirect: 'manual' — the same per-hop discipline as
-      // fetchRegistryResponse: a redirected search answer is NOT accepted
-      // from an arbitrary origin, so any 3xx is an explicit failure here.
+      // redirect: 'manual' 与 fetchRegistryResponse 同一 per-hop 纪律：重定向的搜索结果
+      // 不接受任意 origin，任何 3xx 都是显式失败。
       const response = await fetch(searchUrl, {
         signal: controller.signal,
         redirect: 'manual',
       });
       if (!response.ok) return { ok: false, error: `npm search failed (HTTP ${response.status})` };
-      // Bounded read: an oversized or endless search response must never
-      // accumulate in main-process memory.
+      // 有界读取：超大/无尽的搜索响应绝不在主进程内存里累积。
       const reader = response.body?.getReader();
       let raw = '';
       if (reader !== undefined) {
@@ -100,27 +87,18 @@ export function registerLocalPluginHandlers(ctx: ShellIpcCtx): void {
 
   deps.ipc.handle(IPC_CHANNELS.LOCAL_PLUGIN_ADD_FILE, async () => {
     if (!deps.edges.mainWindowAlive()) return { ok: false, error: 'no main window' };
-    // Local same-machine install (design 13 §5.8 pick-only, design 21
-    // §10 archive-pick): the path was chosen through the
-    // MAIN-process picker — a plugin SOURCE FOLDER or a ready .tgz plugin
-    // archive — so the `file:` spec is main-chosen; pass allowFileSpec so
-    // runLocalDshPlugin admits it through isAllowedLocalFileSpec (absolute
-    // POSIX/Windows-drive/UNC path, no control characters, ≤ 4096 chars —
-    // nothing beyond the existing whitelist is relaxed). Every
-    // renderer-submitted spec channel (LOCAL_PLUGIN_ADD below) still
-    // refuses `file:` outright; no filesystem privilege boundary widens.
+    // 本机安装：路径来自 MAIN-process picker（源码目录或现成 .tgz），因此 `file:` spec 是
+    // 主进程选定的——传 allowFileSpec 让它经 isAllowedLocalFileSpec（绝对 POSIX/Windows-drive/
+    // UNC，无控制字符，≤4096 字符；不额外放宽白名单）。renderer 提交的 spec 通道
+    // （LOCAL_PLUGIN_ADD）仍一律拒绝 `file:`，文件系统权限边界不变。
     const picked = await deps.edges.pickPluginSource();
     if (picked.status === 'cancelled') return { ok: true, cancelled: true };
-    // Structural pre-check (extension + archive cap + parseable manifest);
-    // the local dsh CLI remains the authority for name/version semantics,
-    // exactly as with folder picks.
+    // 结构预检（扩展名 + 归档上限 + manifest 可解析）；name/version 语义仍以本地 dsh CLI 为准，
+    // 与目录选择一致。
     const classified = classifyPluginPick(picked.path);
     if (!classified.ok) return { ok: false, error: sanitizeErrorText(classified.error) };
-    // Protected-set judgement over the PICKED manifest (design 21 §6.11):
-    // a folder/archive pick is the one local path whose name is known only
-    // from the picked package.json, so it is judged here before the picker
-    // result can reach the CLI. `file:` specs carry no registry name, so
-    // runLocalDshPlugin's own guard deliberately skips them.
+    // 对 PICKED manifest 做 protected-set 判定：pick 的名字只能来自所选 package.json，故在
+    // 结果进入 CLI 前先判。`file:` spec 不带 registry 名，runLocalDshPlugin 自身的 guard 有意跳过。
     const pickedManifest = classified.source.kind === 'tgz'
       ? { ok: true as const, name: classified.source.name, version: classified.source.version as string | null }
       : folderPluginIdentity(classified.source.path);
@@ -136,14 +114,10 @@ export function registerLocalPluginHandlers(ctx: ShellIpcCtx): void {
       return { ok: false, error: describePluginDecision(pickedGuard) };
     }
     return runLocalPluginMutation('plugin:add-file', async (dshWorkspace) => {
-      // design 21 §10: the main-process picker
-      // IS the sanctioned file: source — pass the capability flag so
-      // the picked absolute path passes runLocalDshPlugin's gate (without it
-      // every file: pick is refused as an invalid add spec).
-      // Facts are re-resolved INSIDE the mutation: the guard
-      // above ran before the picker/fence lease, and a runtime switch in that
-      // window would make the inner guard and the post-install verification
-      // describe the PREVIOUS runtime.
+      // 主进程 picker 就是被认可的 file: 来源：传 capability flag 让所选绝对路径过
+      // runLocalDshPlugin 的门（否则每次 file: pick 都被当作非法 add spec 拒绝）。
+      // Facts 在 mutation 内部重新解析：上面的 guard 跑在 picker/fence lease 之前，期间切换
+      // runtime 会让内层 guard 与安装后校验描述上一个 runtime。
       const freshFacts = localProtectionFacts();
       const result = await runLocalDshPlugin(dshWorkspace, localDshHome, 'add', `file:${picked.path}`, { allowFileSpec: true, protection: freshFacts });
       if (!result.ok) return { ok: false, error: result.error ?? 'local add failed' };
@@ -153,17 +127,13 @@ export function registerLocalPluginHandlers(ctx: ShellIpcCtx): void {
   });
   deps.ipc.handle(IPC_CHANNELS.LOCAL_PLUGIN_ADD, async (payload: unknown) => {
     const { spec: specArg } = payload as { spec: string };
-    // `file:` imports must go through the main-process local import picker
-    // (desktop_local_plugin_add_file — a folder or a .tgz archive, design 21
-    // §10 ⑧); this spec channel only accepts registry specs so a compromised
-    // renderer can never drive the local install surface to an arbitrary
-    // path (design 13 §5.8 hardening).
+    // `file:` 导入必须走主进程 picker（目录或 .tgz）；本 spec 通道只接受 registry spec，
+    // 被攻陷的 renderer 不能把本机安装面指向任意路径。
     if (typeof specArg === 'string' && specArg.startsWith('file:')) {
       return { ok: false, error: 'local file imports must use the local import picker' };
     }
-    // Protected-set judgement FIRST (design 21 §6.11): never ask the user to
-    // confirm an install the write face would refuse (protected name, or an
-    // official-scope install without the instance's exact generation).
+    // protected-set 判定在前：绝不让用户确认一个写面本会拒绝的安装（受保护名，或缺实例
+    // 精确 generation 的官方 scope 安装）。
     const addFacts = localProtectionFacts();
     const addGuard = guardPluginMutation({
       op: 'install',
@@ -172,18 +142,15 @@ export function registerLocalPluginHandlers(ctx: ShellIpcCtx): void {
       facts: addFacts,
     });
     if (addGuard.kind === 'refuse') return { ok: false, error: describePluginDecision(addGuard) };
-    // User confirmation (design 09 §4 v1 mitigation): installing a registry
-    // package into the LOCAL profile creates a persistent execution surface
-    // on the next local boot — never a silent script action.
+    // 用户确认：向 LOCAL profile 安装 registry 包会在下次本地启动时形成持久执行面，
+    // 绝不静默执行脚本。
     const confirm = await confirmPluginAction(describeLocalPluginAddConfirmation(specArg));
     if ('cancelled' in confirm) return { ok: true, cancelled: true };
     if (!confirm.ok) return { ok: false, error: confirm.error };
     return runLocalPluginMutation('plugin:add', async (dshWorkspace) => {
-      // Re-resolve the facts INSIDE the mutation: the guard above ran before
-      // the confirmation dialog and before this fence/lease, and a runtime
-      // switch in that window would make both the inner guard and the
-      // post-install verification describe the PREVIOUS runtime. The pre-dialog
-      // guard stays as the user-facing fast refusal.
+      // Facts 在 mutation 内重新解析：上面的 guard 跑在确认对话框与 fence/lease 之前，期间
+      // 切换 runtime 会让内层 guard 与安装后校验描述上一个 runtime；对话框前的 guard 保留为
+      // 用户可见的快速拒绝。
       const freshFacts = localProtectionFacts();
       const result = await runLocalDshPlugin(dshWorkspace, localDshHome, 'add', specArg, { protection: freshFacts });
       if (!result.ok) return { ok: false, error: result.error ?? 'local add failed' };
@@ -194,15 +161,12 @@ export function registerLocalPluginHandlers(ctx: ShellIpcCtx): void {
   deps.ipc.handle(IPC_CHANNELS.LOCAL_PLUGIN_REMOVE, async (payload: unknown) => {
     const { name } = payload as { name: unknown };
     if (typeof name !== 'string' || name === '') return { ok: false, error: 'invalid plugin name' };
-    // Protected-set judgement first (design 21 §6.11): a composition member
-    // or chamber seed can never be removed through the plugin model — the
-    // refusal is honest and immediate, not a confirmed action that dies in
-    // the CLI. `remove` never judges a version.
+    // protected-set 判定在前：composition 成员或 chamber seed 绝不通过插件模型移除——
+    // 拒绝即时且诚实，而不是确认后在 CLI 里死掉；`remove` 不判版本。
     const removeFacts = localProtectionFacts();
     const removeGuard = guardPluginMutation({ op: 'remove', name, version: null, facts: removeFacts });
     if (removeGuard.kind === 'refuse') return { ok: false, error: describePluginDecision(removeGuard) };
-    // User confirmation (design 09 §4 v1 mitigation): removal is destructive
-    // — a page script must not be able to wipe the local profile silently.
+    // 用户确认：移除是破坏性操作，页面脚本不得静默清空本地 profile。
     const confirm = await confirmPluginAction(describeLocalPluginRemoveConfirmation(name));
     if ('cancelled' in confirm) return { ok: true, cancelled: true };
     if (!confirm.ok) return { ok: false, error: confirm.error };

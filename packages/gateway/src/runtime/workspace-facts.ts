@@ -1,9 +1,7 @@
 /**
- * Gateway runtime workspace resolution facts (design 18 §3.5/§9.3): the
- * read-only resolution chain — env → matching active override/current →
- * builtin anchor — plus the anchor version requirement and the activation
- * facts consumed by the startup transaction. Nothing here owns mutable state;
- * every function re-reads the durable core metadata at call time.
+ * Gateway runtime workspace resolution facts: the read-only chain env → matching
+ * active override/current → builtin anchor, plus the anchor version requirement
+ * and the activation facts. Nothing here owns mutable state.
  */
 import { join } from 'node:path'
 import {
@@ -23,8 +21,7 @@ import {
 
 export interface ResolvedWorkspace {
   path: string
-  /** Exact version read from the effective workspace/tree, or null when an
-   * external env workspace does not expose a readable exact manifest. */
+  /** Exact version from the effective tree; null when an external env workspace exposes none. */
   version: string | null
   source: 'env' | 'override' | 'builtin'
 }
@@ -57,10 +54,7 @@ export function createRuntimeWorkspaceFacts(deps: RuntimeWorkspaceFactsDeps): Ru
     return builtinVersion
   }
 
-  /** env → matching active override/current → builtin anchor (design 18
-   * §3.5/§9.3). Corrupt or contradictory selection metadata is never treated
-   * as an absent override; callers fail loud instead of spawning builtin over
-   * user-migrated DSH_HOME without a transaction. */
+  /** env → matching active override/current → builtin anchor; corrupt metadata is never treated as absent (callers fail loud). */
   function resolveWorkspace(): ResolvedWorkspace {
     const envPath = deps.getEnvPath()
     if (envPath !== null) return { path: envPath, version: readAnchorVersion(envPath), source: 'env' }
@@ -69,9 +63,7 @@ export function createRuntimeWorkspaceFacts(deps: RuntimeWorkspaceFactsDeps): Ru
     }
     const pointerState = readCurrentPointerState(baseDir)
     const overrideState = readOverrideState(baseDir)
-    // 2026-12 Phase B: 'unknown' (EACCES/EIO) proves neither absence nor
-    // corruption, so it blocks on exactly the corrupt path instead of falling
-    // through to builtin / "no override".
+    // 'unknown' (EACCES/EIO) proves neither absence nor corruption: block it.
     if (pointerState.kind === 'corrupt' || pointerState.kind === 'unknown') throw pointerMetadataRefusal(pointerState)
     if (overrideState.kind === 'corrupt' || overrideState.kind === 'unknown') throw overrideMetadataRefusal(overrideState)
     const pointer = pointerState.kind === 'valid' ? pointerState.version : null
@@ -87,11 +79,8 @@ export function createRuntimeWorkspaceFacts(deps: RuntimeWorkspaceFactsDeps): Ru
       throw new Error('gateway runtime current pointer has no matching active override')
     }
     if (overrideActive) {
-      // Gateway select and apply are separate actions. `selectedOnly` is the
-      // crash-durable proof that a valid cached/installed choice is merely
-      // staged while builtin remains active. Absence/false stays fail-closed:
-      // an applied user override whose current pointer disappeared must never
-      // silently boot builtin over potentially migrated DSH_HOME.
+      // Select and apply are separate actions: `selectedOnly` is the
+      // crash-durable proof of a merely staged choice; absence/false fails closed.
       const stagedSelection = override.selectedOnly === true
         && override.pending === null
         && override.chosenVersion !== null
@@ -112,12 +101,9 @@ export function createRuntimeWorkspaceFacts(deps: RuntimeWorkspaceFactsDeps): Ru
   }
 
   function activationFacts(): { sourceVersion: string | null; sourceIsBuiltin: boolean; sourceWasKnownGood: boolean; knownGoodVersion: string | null } {
-    // ACTIVATION-FACTS DIVERGENCE: desktop twin
-    // (main.ts readActivationFacts) excludes journalIntent.targetVersion ??
-    // override.pending and validates the tree; this side excludes the POINTER
-    // and the win32 shortcut below returns knownGoodVersion null. Unification
-    // needs one core helper + one exclusion rule (deferred: new dsh-runtime
-    // public export, dist locked).
+    // ACTIVATION-FACTS DIVERGENCE: the desktop twin excludes
+    // journalIntent.targetVersion ?? override.pending and validates the tree;
+    // this side excludes the POINTER and win32 returns null knownGoodVersion.
     if (platform === 'win32') {
       return {
         sourceVersion: builtinVersion,
@@ -137,15 +123,12 @@ export function createRuntimeWorkspaceFacts(deps: RuntimeWorkspaceFactsDeps): Ru
     const pointer = pointerState.kind === 'valid' ? pointerState.version : null
     const knownGood = knownGoodState.versions
     const record = overrideState.kind === 'valid' ? overrideState.record : null
-    // D5a: the retired latestKnownGood compatibility projection inlined against
-    // the authoritative ledger already read above — same ledger, order,
-    // exclusion and per-version validateVersionTree gate.
+    // D5a: the retired latestKnownGood projection, inlined against the ledger above.
     const knownGoodVersion = knownGood.find((version) => version !== pointer
       && validateVersionTree(baseDir, version, `${process.platform}-${process.arch}`).ok) ?? null
     return {
-      // The builtin anchor contributes its REAL semver as the snapshot source:
-      // apply-phase rejects a null sourceVersion as snapshot-failed, so
-      // the very first install from the anchor would otherwise never switch.
+      // The builtin anchor contributes its REAL semver: apply-phase rejects a
+      // null sourceVersion, so the first install from it would never switch.
       sourceVersion: pointer === null ? builtinVersion : pointer,
       sourceIsBuiltin: pointer === null,
       sourceWasKnownGood: pointer === null || knownGood.includes(pointer)
@@ -158,9 +141,8 @@ export function createRuntimeWorkspaceFacts(deps: RuntimeWorkspaceFactsDeps): Ru
     const state = readCurrentPointerState(baseDir)
     if (state.kind === 'valid') return state.version
     if (state.kind === 'missing') return null
-    // Corrupt/unreadable material is not "no pointer": callers use null as
-    // "builtin is active", which would bypass the downgrade guard and arm a
-    // switch over unverified authority. Fail closed instead.
+    // Corrupt/unreadable material is not "no pointer": callers read null as
+    // "builtin is active", bypassing the downgrade guard. Fail closed.
     throw pointerMetadataRefusal(state)
   }
 

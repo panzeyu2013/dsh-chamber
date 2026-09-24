@@ -1,23 +1,16 @@
 /**
- * state-root-lease.ts —— state 根写者唯一租约（R2；design 17 §12 / design 18 §9.3）。
+ * state-root-lease.ts —— state 根写者唯一租约。
  *
- * 契约：一个 state 根（control-plane 的 <stateDir>、gateway 的同名根、desktop 的
- * <userData> host root）在同一时刻只有一个写者进程。唯一判据是
- * `<stateRoot>/owner.json` 的 O_EXCL 创建与 token/inode：
+ * 契约：一个 state 根同一时刻只有一个写者，判据是 <stateRoot>/owner.json 的 O_EXCL
+ * 创建与 token/inode：
  *
- *   - 创建：private-file.ts 的 no-follow O_EXCL 原语 + 回读终验（bytes + inode）；
  *   - 活 pid：响亮拒绝（state_root_locked，携带 holder pid/flavor）；
- *   - 死 pid（ESRCH）：rename 到唯一 .stale-* 证据名，证明移动的正是「先前读到的
- *     精确字节 + inode」后重建；任何证明缺口 fail-closed（state_root_takeover_race）；
- *   - 撕裂/空记录：认领 + 告警（O_EXCL 创建中途崩溃，沿用 .gateway.lock 的既有语义）；
- *   - release：token + inode 精确删除，不匹配时 state_root_not_owner 且绝不删除；
- *   - 同进程同根第二个 acquire：state_root_duplicate（同进程只有一把锁）。
+ *   - 死 pid（ESRCH）：rename 到唯一 .stale-* 证据名，证明移动的正是先前读到的精确
+ *     字节 + inode 后重建；任何证明缺口 fail-closed（state_root_takeover_race）；
+ *   - 撕裂/空记录：认领 + 告警；release 只按 token + inode 精确删除，不匹配时
+ *     state_root_not_owner 且绝不删除；同进程同根第二个 acquire 为 state_root_duplicate。
  *
- * retireLegacyStateLocks() 是一次性 legacy 退役块（.gateway.lock /
- * dsh-runtime/owner.json），实现为独立函数 + 单一调用点；一个 minor 后整块删除。
- *
- * 本模块不 import electron、不 import dsh-runtime、不新增依赖。它是 control-plane
- * 包公共面的一部分（index.ts re-export）：createControlPlane 是它的生产 importer。
+ * 本模块不 import electron / dsh-runtime，是 control-plane 公共面的一部分。
  */
 import { randomBytes } from 'node:crypto'
 import { renameSync, realpathSync } from 'node:fs'
@@ -37,7 +30,7 @@ import {
 /** 唯一租约文件名（<stateRoot>/owner.json）。 */
 export const STATE_ROOT_LEASE_FILENAME = 'owner.json'
 
-/** 一次性 legacy 退役路径（相对 stateRoot；退役块删除时一并删除）。 */
+/** 一次性 legacy 退役路径（相对 stateRoot）。 */
 export const LEGACY_STATE_ROOT_LOCK_PATHS: readonly string[] = [
   '.gateway.lock',
   join('dsh-runtime', 'owner.json'),
@@ -46,9 +39,7 @@ export const LEGACY_STATE_ROOT_LOCK_PATHS: readonly string[] = [
 /** Default state root when no explicit path and no env override is set. */
 export const DEFAULT_STATE_DIR = join(homedir(), '.dsh-chamber')
 
-/** Options for {@link resolveStateRoot}. */
 export interface ResolveStateRootOptions {
-  /** Explicit --state-dir value (highest priority; empty/whitespace = absent). */
   explicit?: string | undefined
   /** Flavor-specific env var name, e.g. 'DSH_GATEWAY_STATE'; only the gateway sets one. */
   flavorEnv?: string | null | undefined
@@ -56,9 +47,8 @@ export interface ResolveStateRootOptions {
 }
 
 /**
- * The single state-root resolution: explicit > DSH_<FLAVOR>_STATE >
- * DSH_CHAMBER_STATE > DEFAULT_STATE_DIR. Empty/whitespace values are absent
- * (never resolved to the cwd) and the result is absolute.
+ * 唯一 state 根解析：explicit > DSH_<FLAVOR>_STATE > DSH_CHAMBER_STATE >
+ * DEFAULT_STATE_DIR。空/空白值视为缺省（绝不解析为 cwd），结果绝对路径。
  */
 export function resolveStateRoot(options: ResolveStateRootOptions = {}): string {
   const env = options.env ?? process.env
@@ -268,10 +258,9 @@ function staleEvidencePath(file: string): string {
 }
 
 /**
- * 一次性 legacy 退役：`.gateway.lock` 与 `dsh-runtime/owner.json`。
- * 活 pid → state_root_locked（升级窗口的正式 fence）；不安全 → state_root_unreadable；
- * 死 pid/空/不可解析 → rename 取证 + identity 精确删除。
- * 独立函数 + 单一调用点（claim()）；一个 minor 后整块删除。
+ * 一次性 legacy 退役：`.gateway.lock` 与 `dsh-runtime/owner.json`。活 pid →
+ * state_root_locked；不安全 → state_root_unreadable；死 pid/空/不可解析 → rename
+ * 取证 + identity 精确删除。独立函数 + 单一调用点（claim()）。
  */
 export function retireLegacyStateLocks(stateRoot: string, logger?: StateRootLeaseLogger): void {
   const root = resolve(stateRoot)
@@ -385,7 +374,7 @@ class StateRootLeaseHandle implements StateRootLease {
       )
     }
     this.#key = key
-    // 一次性 legacy 退役的唯一调用点（删除该块时只删这一行 + 函数 + 常量）。
+    // legacy 退役块的唯一调用点。
     retireLegacyStateLocks(this.stateRoot, this.#options.logger)
 
     const token = randomBytes(LEASE_TOKEN_BYTES).toString('hex')

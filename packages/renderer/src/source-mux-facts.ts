@@ -1,37 +1,16 @@
 /**
  * Source mux facts —— SSH / 本地 dsh 来源的**无壳观察者**。
  *
- * WHY：网关来源有只读镜像（/chamber/session-state），而 SSH/本地 dsh 来源没有——它们在
- * 没有挂载壳时**没有任何事实通道**，于是"关壳期间完成"仍会丢。出口判据是
- * 「无壳仍能观察完成；不依赖 gateway 版本」，本模块就是那条通道。
+ * 网关来源有只读镜像，而 SSH/本地 dsh 来源在没有挂载壳时没有任何事实通道，"关壳期间
+ * 完成"仍会丢；本模块经控制面既有无鉴权实例代理观察**实例自己的**远程协议：$events
+ * WebSocket（ws /api/i/<id>/api/remote.mux）+ unary（POST /api/i/<id>/api/<method>）。
  *
- * 讲的是**实例自己的**远程协议，经控制面既有无鉴权实例代理（v1 /api/i/*，代理注入
- * host 的 browser-auth cookie）——帧契约已实测冻结：
- *   MUX = ws://<origin>/api/i/<id>/api/remote.mux
- *   → {type:'open', streamId, endpoint:'$events', payload:{args:{}}}
- *   ← {type:'item', streamId, value:{type:'ready'|'emit'|'waterfall'|'cancel'}}
- *   unary: POST <origin>/api/i/<id>/api/<method> {type:'client-request', rpcId, method, payload}
- *          → {type:'server-response', rpcId, result:{ok, value}}
- *
- * 两条硬纪律：
- *   1. 观察者**绝不发** `$events/result`——那会把等待中的审批替所有客户端结算掉；
- *      瀑布帧只观察，不回答；
- *   2. 每条 true→false 边沿**恰好一次** `session/follow` 读尾巴 `turn/end.reason`，
- *      据此分类：completed ⇒ 武装；aborted+cause=user ⇒ 用户停止；其余 ⇒ 中立；
- *      读不到 ⇒ 降级（仍武装 + 标记 unreadable，与 watcher 同规）。
- *
- * 基线与边沿纪律：
- *   - 基线 true→false（重订阅后唯一证据）走与 status 边沿同一条 readTail 路径；
- *   - 基线只合 running/updatedAt(max)/factAt，保留已武装的完成字段；
- *   - 连接代际（generation）——被换掉的 socket 的迟到回调不得改状态或调度重连；
- *   - status 为未知会话建档，added/activity/removed 都被消费；
- *   - completedAt 优先取 host 的 turn/end.time（>= 1e12 才算可用），拿不到就用
- *         观察者戳并标 completedAtSource=reconstructed（诚实降级，不发通知）；
- *   - session/list 与 session/follow 各有 deadline，超时计失败并走既有降级；
- *   - stop() 后在途读取不再 emit，并摘下 __dshChamberSourceMux 本源项。
- *
- * 与 gateway 事实源的**同形**是刻意的：产出的快照直接喂 App 既有的 applySessionFacts
- * 管线，不需要第二条判定路径（同一份事实、同一套未读判定）。
+ * 硬纪律：①观察者**绝不发** `$events/result`（会替所有客户端结算等待中的审批），瀑布帧
+ * 只观察不回答；②每条 true→false 边沿**恰好一次** `session/follow` 读尾 `turn/end.reason`
+ * 分类（completed ⇒ 武装；aborted+user ⇒ 用户停止；其余 ⇒ 中立；读不到 ⇒ 降级仍武装）。
+ * 基线只合 running/updatedAt(max)/factAt 并保留已武装完成字段；连接代际纪律：被换掉
+ * socket 的迟到回调不得改状态或调度重连。快照与 gateway 事实源**同形**，直接喂 App
+ * 既有的 applySessionFacts 管线。
  */
 import { isRecord } from '@dsh-chamber/dsh-chamber-client-core'
 import type {
@@ -51,7 +30,6 @@ export interface SourceMuxDeps {
   sourceId: string
   /** 页面 origin（控制面窗口同源）——不是 host origin。 */
   origin: string
-  /** 测试缝：默认 new WebSocket(url)。 */
   openSocket?: (url: string) => MuxSocket
   fetchImpl?: typeof fetch
   now?: () => number
@@ -76,12 +54,10 @@ export const DEFAULT_FOLLOW_TIMEOUT_MS = 2_000
 export const HOST_EPOCH_MS_FLOOR = 1e12
 
 /**
- * 一行观察者事实。除 gateway SessionFactsRow 的字段外，多一个**客户端内部**的
- * 时间域标注（不进 wire）：
- *   - 'host'     = completedAt 取自 host 的 turn/end.time（epoch ms，可进 host 域水位）；
- *   - 'observer' = completedAt 是客户端观察者戳（拿不到 host 时间时的降级，只武装未读，
- *                  绝不推进 host 域读水位；见 unread-derivation.ts 的 factsWatermark）。
- * 未标注 = 非本源（gateway 事实源）的行，读水位照旧并入 completedAt。
+ * 一行观察者事实。除 gateway SessionFactsRow 字段外，多一个**客户端内部**的时间域
+ * 标注（不进 wire）：'host' = completedAt 取自 host turn/end.time（可进 host 域水位）；
+ * 'observer' = 客户端观察者戳（拿不到 host 时间时的降级，只武装未读，绝不推进 host 域
+ * 读水位）。未标注 = 非本源（gateway 事实源）的行。
  */
 export type SessionMuxCompletedAtDomain = 'host' | 'observer'
 export interface SourceMuxRow extends SessionFactsRow {
@@ -102,7 +78,7 @@ export function openEventsFrame(streamId = 'events'): string {
   return JSON.stringify({ type: 'open', streamId, endpoint: EVENTS_ENDPOINT, payload: { args: {} } })
 }
 
-/** turn/end 分类（与 gateway watcher 同规；源文本锁步见测试）。 */
+/** turn/end 分类（与 gateway watcher 同规）。 */
 export function classifyTurnEndWire(reason: unknown): 'completed' | 'user-stopped' | 'neutral' {
   if (reason === null || typeof reason !== 'object') return 'neutral'
   const value = reason as { kind?: unknown; cause?: unknown }
@@ -173,10 +149,7 @@ export function rowFromListItem(item: unknown): SourceMuxRow | null {
   return emptyRow(value.sessionId, value.running === true, updatedAt)
 }
 
-/**
- * api-session/status 的载荷。冻结 wire 是 [sessionId, running]；
- * 对象形 {sessionId, running} 是历史/测试形，一并接受（绝不因形状漂移丢边沿）。
- */
+/** api-session/status 载荷：冻结 wire 是 [sessionId, running]，对象形一并接受（不因形状漂移丢边沿）。 */
 export function parseStatusArgs(args: unknown): { sessionId: string; running: boolean } | null {
   if (Array.isArray(args)) {
     const sessionId = args[0]
@@ -194,11 +167,7 @@ export function parseStatusArgs(args: unknown): { sessionId: string; running: bo
 /** 完成边沿读尾一次取多少条尾记录（与 control-plane/session-mux.ts 的预算一致）。 */
 export const FOLLOW_MAX_MESSAGES = 8
 
-/**
- * session/follow 的载荷：Remote 形参名是 request（载荷写错会得到
- * gateway/arguments-invalid）。与 control-plane/src/session-mux.ts 的
- * buildSessionFollowPayload 同形。
- */
+/** session/follow 载荷：Remote 形参名是 request（写错会得到 gateway/arguments-invalid）。 */
 export function followPayload(sessionId: string, maxMessages = FOLLOW_MAX_MESSAGES): unknown {
   return { args: { request: { address: { kind: 'session', sessionId }, maxMessages } } }
 }
@@ -213,10 +182,9 @@ export interface FollowTailRead {
 const EMPTY_FOLLOW_TAIL: FollowTailRead = { turnEnd: null, hostTime: null }
 
 /**
- * 一条 records/event 记录 → tail。冻结 wire（control-plane/session-mux.ts）：
+ * 一条 records/event 记录 → tail。冻结 wire：
  *   { type:'event', event:{ type:'turn/end', seq, time, data:{ reason } } }
- * event.time 是 SessionEvent.time（host epoch ms）；嵌套的 aborted cause 拍平成
- * SessionFactsTurnEnd.cause（classifyTurnEndWire 读的字段）。
+ * event.time 是 host epoch ms；嵌套的 aborted cause 拍平成 SessionFactsTurnEnd.cause。
  */
 export function turnEndFromRecord(record: unknown): FollowTailRead | null {
   if (!isRecord(record)) return null
@@ -245,9 +213,8 @@ export function turnEndFromRecord(record: unknown): FollowTailRead | null {
 }
 
 /**
- * 解析 session/follow 的响应值，取最后一条 turn/end。
- * 支持冻结 wire（snapshot.records / event 帧）与历史/测试形
- * snapshot.tail.turn.reason（legacy 原样保存、不添字段）。
+ * 解析 session/follow 的响应值，取最后一条 turn/end；支持冻结 wire
+ * （snapshot.records / event 帧）与历史形 snapshot.tail.turn.reason。
  */
 export function parseFollowTail(value: unknown): FollowTailRead {
   if (!isRecord(value)) return EMPTY_FOLLOW_TAIL
@@ -281,9 +248,8 @@ export function parseFollowTail(value: unknown): FollowTailRead {
 }
 
 /**
- * 基线行合并。只合 running / updatedAt(max) / factAt，保留既有完成字段
- * （rowFromListItem 的 completedAt=null 绝不能擦掉真未读）。running=true 的分支与
- * gateway applyBaseline 同规：新一轮运行结算旧完成（re-run disarms）。
+ * 基线行合并：只合 running / updatedAt(max) / factAt，保留既有完成字段（completedAt=null
+ * 绝不能擦掉真未读）；running=true 与 gateway applyBaseline 同规：新一轮运行结算旧完成。
  */
 export function mergeBaselineRow(previous: SourceMuxRow | undefined, row: SourceMuxRow, at: number): SourceMuxRow {
   if (previous === undefined) return { ...row, factAt: at }
@@ -306,10 +272,7 @@ export function mergeBaselineRow(previous: SourceMuxRow | undefined, row: Source
   }
 }
 
-/**
- * 观测仪器：把每个来源的观察者状态发布成**函数视图**的页面全局，
- * 使「无壳观察者其实一直失败」在运行中可见，而不是表现为「这段时间没有完成」。
- */
+/** 观测仪器：把来源的观察者状态发布成**函数视图**的页面全局，使「观察者其实一直失败」在运行中可见。 */
 export function publishSourceMuxInstrument(
   sourceId: string,
   status: () => SourceMuxStatus,
@@ -321,8 +284,8 @@ export function publishSourceMuxInstrument(
 }
 
 /**
- * stop() 必须摘下本源仪器项（否则退役的观察者看起来仍在跑）。
- * expected 给定时只删本次发布的那个函数：同 id 的继任观察者不得被前任的 stop() 误摘。
+ * stop() 必须摘下本源仪器项；expected 给定时只删本次发布的函数，同 id 的继任观察者
+ * 不得被前任的 stop() 误摘。
  */
 export function unpublishSourceMuxInstrument(
   sourceId: string,
@@ -358,10 +321,7 @@ export interface SourceMuxFacts {
   status(): SourceMuxStatus
 }
 
-/**
- * 无壳观察者：一次 $events 订阅 + 每条完成边沿一次 session/follow。
- * 所有 I/O 都经注入缝（socket/fetch/now），因此纯 node 可测。
- */
+/** 无壳观察者：一次 $events 订阅 + 每条完成边沿一次 session/follow；I/O 全经注入缝。 */
 export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
   const now = deps.now ?? (() => Date.now())
   const fetchImpl = deps.fetchImpl ?? ((...args: Parameters<typeof fetch>) => fetch(...args))
@@ -386,10 +346,9 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null
   let silenceTimer: ReturnType<typeof setTimeout> | null = null
   /**
-   * 连接代际（照 control-plane/src/session-mux.ts 的 generation 纪律）。
-   * connect() 主动换掉旧 socket / onclose 确认死亡时代际 +1；旧代际的一切回调
-   * （onopen/onmessage/onclose/onerror 与在途基线）不得再改状态或调度重连——
-   * 否则旧 socket 的 onclose 会在每次静默重订阅后再排一次 1s 重连（自激洪泛）。
+   * 连接代际：connect() 换掉旧 socket / onclose 确认死亡时代际 +1；旧代际的一切回调
+   * （含在途基线）不得再改状态或调度重连——否则旧 socket 的 onclose 会在每次静默
+   * 重订阅后再排一次 1s 重连（自激洪泛）。
    */
   let generation = 0
   // 重连指数退避（1s 起、30s 封顶）：源长时间不可达时不得变成每秒一次的重试洪流。
@@ -402,13 +361,9 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
     const record: Record<string, SessionFactsRow> = {}
     for (const [sessionId, row] of rows) record[sessionId] = row
     return {
-      // 观察者自带通道：verdict=ok 表示"这条通道可用"，与网关镜像的版本协商无关
-      // （出口判据正是"不依赖 gateway 版本"）。这里是 $events WebSocket 观察者，
-      // 全程走 WS mux + unary、从不轮询——'sse'/'poll' 都是 gateway 平面的词，
-      // 在这里是谎报；新增 'ws' 需同步 gateway 镜像三处白名单，收益为 0
-      // （2026-12 审计 §6.1.3）。快照的 mode 因此诚实报 null，而不是照抄一个
-      // 它并不使用的传输档（唯一消费 mode 的 session-facts-source.startDelivery
-      // 只读自己 payload 的 mode，不读这里）。
+      // 观察者自带通道：verdict=ok 表示"这条通道可用"，与网关镜像的版本协商无关。
+      // 全程走 WS mux + unary、从不轮询，因此 mode 诚实报 null（'sse'/'poll' 是
+      // gateway 平面的词；唯一消费 mode 的 startDelivery 只读自己 payload 的 mode）。
       verdict: ready ? 'ok' : 'degraded',
       degradation: ready ? null : 'unavailable',
       mode: null,
@@ -429,8 +384,8 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
   }
 
   /**
-   * unary 带 deadline。半死隧道下 fetch 可能永不落定；到点 abort + reject，
-   * 调用方照既有降级路径计数（baselineFailures / followFailures），绝不永久挂起。
+   * unary 带 deadline：半死隧道下 fetch 可能永不落定，到点 abort + reject，调用方照
+   * 既有降级路径计数，绝不永久挂起。
    */
   async function rpc(method: string, payload: unknown, timeoutMs: number): Promise<unknown> {
     const rpcId = 'mux-' + Math.random().toString(36).slice(2, 12)
@@ -470,11 +425,9 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
   }
 
   /**
-   * 基线对账。
-   * - 只合 running/updatedAt(max)/factAt，保留既有完成字段；
-   * - 基线里 previous.running===true && row.running===false 是重订阅后跨缺口完成的
-   *   **唯一证据**（$events 开场不重放 status）⇒ 与 status 边沿同一条 readTail 路径；
-   * - 基线也播种 runningBefore：它是缺口边沿的另一半证据。
+   * 基线对账：只合 running/updatedAt(max)/factAt。previous.running===true &&
+   * row.running===false 是重订阅后跨缺口完成的**唯一证据**（$events 开场不重放
+   * status）⇒ 与 status 边沿同一条 readTail 路径；基线也播种 runningBefore。
    */
   async function baseline(): Promise<void> {
     const atGeneration = generation
@@ -507,11 +460,10 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
   }
 
   /**
-   * 每条 true→false 边沿（status 或基线）恰好一次 follow 读尾巴，然后分类。
-   * completedAt 优先取 tail 的 host turn/end.time（epoch ms）；拿不到就用观察者戳，
-   * 并把 completedAtSource 标为 reconstructed、completedAtDomain 标为 observer——
-   * 这是**降级而不是等价**：该时间不在 host 域，绝不能当作 host 水位，App 也因此不发通知
-   * （reconstructed = 只出未读，与 gateway 的缺口重建同规）。
+   * 每条 true→false 边沿（status 或基线）恰好一次 follow 读尾再分类。completedAt
+   * 优先取 tail 的 host turn/end.time；拿不到就用观察者戳并标 reconstructed/observer
+   * ——这是**降级而不是等价**：该时间不在 host 域，绝不能当作 host 水位，App 也因此
+   * 不发通知（reconstructed = 只出未读，与 gateway 的缺口重建同规）。
    */
   async function readTail(sessionId: string): Promise<void> {
     pendingReads += 1
@@ -522,9 +474,8 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
       const row = rows.get(sessionId)
       if (row === undefined) return
       if (tail.turnEnd === null) {
-        // 期限内没有 turn/end ⇒ **读不到确定性尾巴**：与 gateway 的 followTurnEndOnce 同规判 unreadable 并武装，
-        // 而不是判 neutral——后者会让「跨缺口完成」在唯一证据缺失时静默丢失。
-        // 若该会话紧接着又开跑，status 的 running=true 分支会照 gateway applyBaseline 结算掉这条旧完成。
+        // 期限内没有 turn/end ⇒ **读不到确定性尾巴**：判 unreadable 并武装（判 neutral
+        // 会让跨缺口完成在唯一证据缺失时静默丢失）；紧接着重跑由 running=true 结算。
         followFailures += 1
         rows.set(sessionId, {
           ...row,
@@ -556,8 +507,7 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
       emit()
     } catch {
       if (stopped) return
-      // 读不到尾巴 = 降级：仍武装（绝不丢真完成），并标记 unreadable（与 watcher 同规）。
-      // 计数而非静默：这是「观察者在跑但读不到尾巴」的唯一可观测信号。
+      // 读不到尾巴 = 降级：仍武装（绝不丢真完成）并计数——观察者在跑但读不到尾巴的唯一可观测信号。
       followFailures += 1
       const row = rows.get(sessionId)
       if (row !== undefined) {
@@ -578,9 +528,9 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
   }
 
   /**
-   * api-session/status：running 位边沿。未知会话用 emptyRow 建档（否则 readTail
-   * 因 row undefined 直接返回，基线后新建会话的完成永久不可见）。
-   * running=true 与 gateway applyStatus 同规：新一轮运行结算旧完成（re-run disarms）。
+   * api-session/status：running 位边沿。未知会话用 emptyRow 建档（否则 readTail 因
+   * row undefined 直接返回，基线后新建会话的完成永久不可见）；running=true 与
+   * gateway applyStatus 同规：新一轮运行结算旧完成。
    */
   function handleStatus(args: unknown): void {
     const parsed = parseStatusArgs(args)

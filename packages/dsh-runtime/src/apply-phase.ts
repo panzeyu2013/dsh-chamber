@@ -1,8 +1,7 @@
 /**
- * Design 18 activation transaction. The pre-swap snapshot and immutable
- * source facts are journaled before the current pointer is touched. Re-entry
- * resumes from that journal instead of creating a second, post-migration
- * snapshot.
+ * Activation transaction. The pre-swap snapshot and immutable source facts are
+ * journaled before the current pointer is touched; re-entry resumes from that
+ * journal instead of creating a second, post-migration snapshot.
  */
 import { basename } from 'node:path'
 import { decideVerdict } from './activation-gate.ts'
@@ -30,29 +29,19 @@ export interface ApplyDeps {
   validateTarget: (version: string, isBuiltin: boolean) => { ok: true } | { ok: false; error: string }
   switchPointer: (version: string | null) => void
   /**
-   * Probe the candidate tree. `signal` (apply-now) lets a host abort an
-   * in-flight activation probe; it is optional so existing two-argument
-   * implementers keep compiling unchanged. Host abort is transaction-level
-   * cancellation: candidate probes keep the passthrough signal (abort takes
-   * effect immediately), while rollback verification probes null an
+   * Probe the candidate tree. Host abort is transaction-level cancellation: candidate
+   * probes keep the passthrough signal, while rollback verification probes null an
    * already-aborted signal (see `rollbackProbeSignal`).
    */
   probe: (version: string, isBuiltin: boolean, signal?: AbortSignal) => Promise<ProbeResult[]>
   /**
-   * Resolves the exact probe-name set the verdict
-   * expects. Defaults to REQUIRED_ACTIVATION_PROBES when omitted; the gateway
-   * shape (no synced chamber host seed) resolves
-   * PROBE_NAMES_WITHOUT_HOST_DOMAINS.
-   *
-   * It is a FUNCTION on purpose: a host may refresh the domain
-   * table inside `probe` itself — desktop's probe closure runs
-   * `cp.startLocal()`, whose spawn thunk is the only writer of
-   * `seededProbeDomains`. A value captured while the transaction object is
-   * built (before that spawn) would freeze the cold-start empty table and make
-   * the verdict's exact-set check fail against the freshly seeded probe run,
-   * rolling back a healthy activation. The apply phase calls it only AFTER a
-   * probe attempt resolved, so expectation and result set share this
-   * transaction's seed snapshot.
+   * Resolves the exact probe-name set the verdict expects (defaults to
+   * REQUIRED_ACTIVATION_PROBES; the gateway shape resolves
+   * PROBE_NAMES_WITHOUT_HOST_DOMAINS). It is a FUNCTION on purpose: a host may refresh
+   * its domain table inside `probe`, and a value captured while the transaction object
+   * is built would freeze the cold-start empty table and fail the exact-set check
+   * against the freshly seeded run, rolling back a healthy activation. The apply phase
+   * calls it only AFTER a probe attempt resolved.
    */
   probeExpectedNames?: () => readonly string[]
   restore: (snapshotPath: string) => Promise<'complete' | 'half' | 'incomplete'>
@@ -108,9 +97,8 @@ export interface ApplyOptions {
   manualRollback?: boolean
   retryDelayMs?: number
   /**
-   * apply-now host abort: transaction-level cancellation. A pre-aborted
-   * signal at a transaction entry returns the abort outcome with zero side
-   * effects; rollback verification probes null an already-aborted signal.
+   * apply-now host abort: transaction-level cancellation. A pre-aborted signal at a
+   * transaction entry returns the abort outcome with zero side effects.
    */
   signal?: AbortSignal
   deps: ApplyDeps
@@ -122,10 +110,9 @@ function errorText(error: unknown): string {
 
 function currentPointer(deps: ApplyDeps): string | null {
   const state = deps.readCurrentPointerState()
-  // 'unknown' (EACCES/EIO) proves neither absence nor corruption; treating it
-  // as "no pointer" would silently activate builtin over an unreadable
-  // selection, so it fails closed exactly like corruption (parent-approved
-  // scope extension, 2026-12 B1).
+  // 'unknown' (EACCES/EIO) proves neither absence nor corruption; treating it as "no
+  // pointer" would silently activate builtin over an unreadable selection, so it fails
+  // closed exactly like corruption.
   if (state.kind === 'corrupt' || state.kind === 'unknown') {
     throw new Error('current pointer metadata 损坏或不可读；拒绝继续激活事务')
   }
@@ -156,12 +143,9 @@ async function safeProbe(probe: () => Promise<ProbeResult[]>): Promise<ProbeResu
 }
 
 /**
- * Run one probe attempt and resolve the expected name set only afterwards.
- * Ordering is a correctness property, not a style choice: the probe is the
- * landing site of the candidate spawn, and the desktop host publishes the
- * seeded chamber domains from inside that spawn (see
- * `ApplyDeps.probeExpectedNames`). Resolving the expectation lazily keeps the
- * verdict's exact-set check aligned with the probe run it judges.
+ * Run one probe attempt and resolve the expected name set only afterwards (a
+ * correctness ordering, not style): the probe is the landing site of the candidate
+ * spawn, from inside which the desktop host publishes the seeded chamber domains.
  */
 async function probeWithExpectedNames(
   probe: () => Promise<ProbeResult[]>,
@@ -173,14 +157,10 @@ async function probeWithExpectedNames(
 }
 
 /**
- * Names of the probes that came back failing. A non-pass verdict can also come
- * from the timing window with every probe healthy — then this is empty and the
- * message stays as it was. The point is that a REAL probe failure is never
- * reported without naming the probe: these verdict strings ride the runtime
- * projection verbatim, and "probe failed" with no name is an
- * invisible failure.
- * @param probes - the probe set the verdict was computed from.
- * @returns the failing probe names, in probe order.
+ * Names of the probes that came back failing. A non-pass verdict may also come from the
+ * timing window with every probe healthy — then this is empty. A REAL probe failure is
+ * never reported without naming the probe: these verdict strings ride the runtime
+ * projection verbatim, and "probe failed" with no name is an invisible failure.
  */
 function failedProbeNames(probes: readonly ProbeResult[]): string[] {
   return probes.filter((probe) => !probe.ok).map((probe) => probe.name)
@@ -192,11 +172,9 @@ function namedProbes(names: readonly string[]): string {
 }
 
 /**
- * Host abort (apply-now) = transaction-level cancellation. A pre-aborted
- * signal arriving at a transaction entry cancels the attempt: no new
- * candidate probe and no rollback verification is started, the durable
- * journal is left untouched so the next startup resumes idempotently (same
- * family as the crash semantics).
+ * Host abort = transaction-level cancellation: no new candidate probe and no rollback
+ * verification is started, and the durable journal is left untouched so the next startup
+ * resumes idempotently (same family as the crash semantics).
  */
 function abortedOutcome(): ApplyOutcome {
   return makeOutcome({
@@ -207,12 +185,9 @@ function abortedOutcome(): ApplyOutcome {
 }
 
 /**
- * Rollback verification probes another tree / data integrity and must be
- * completed honestly even when the candidate probe was host-aborted: a
- * pre-aborted signal is nulled here, never forwarded — the host abort only
- * cancels new candidate probes. An abort that happens *during* a rollback
- * verification probe is left to the probe implementation, which already
- * handles its own signal.
+ * Rollback verification must complete honestly even when the candidate probe was
+ * host-aborted: a pre-aborted signal is nulled here, never forwarded. An abort that
+ * happens during a verification probe is left to the probe implementation.
  */
 function rollbackProbeSignal(signal: AbortSignal | undefined): AbortSignal | undefined {
   return signal !== undefined && signal.aborted ? undefined : signal
@@ -242,9 +217,9 @@ function advance(
 }
 
 /**
- * Restart-exhausted rollback seam: persist rollback intent before stop/pointer/restore. Main must call
- * this first on restart-exhausted, then pass the returned journal back through
- * applyPendingVersion; a crash at any later instruction resumes rollback.
+ * Restart-exhausted rollback seam: persist rollback intent before stop/pointer/restore.
+ * Main calls this first on restart-exhausted, then passes the returned journal back
+ * through applyPendingVersion; a crash at any later instruction resumes rollback.
  */
 export function beginDelayedRollback(
   journal: ActivationJournal,
@@ -379,8 +354,8 @@ async function delayedVerdict(opts: ApplyOptions): Promise<'pass' | 'fail'> {
   if (verdict === 'observe') {
     const wait = opts.deps.waitBeforeRetry ?? (delayMs => new Promise<void>(resolve => setTimeout(resolve, delayMs)))
     await wait(opts.retryDelayMs ?? 2_000)
-    // The design's timeout bounds one probe attempt. Do not charge the first
-    // timeout or observation delay to a healthy confirmation attempt.
+    // The timeout bounds one probe attempt; do not charge the first timeout or
+    // observation delay to a healthy confirmation attempt.
     const secondStartedAt = nowMs()
     const second = await probeWithExpectedNames(probeTarget, opts.deps)
     verdict = decideVerdict(second.probes, {
@@ -407,11 +382,9 @@ async function restoreJournalSnapshot(
 }
 
 async function continueRollback(opts: ApplyOptions, initial: ActivationJournal): Promise<ApplyOutcome> {
-  // Defensive for direct calls: an already-aborted signal arriving at the
-  // rollback entry also cancels the attempt (the durable journal stays put
-  // for the next startup). Mid-transaction aborts — the candidate verdict
-  // already failed and the rollback committed — only null the signal for the
-  // verification probes below.
+  // Defensive for direct calls: an already-aborted signal cancels the rollback entry
+  // too, and the durable journal stays put for the next startup; the verification probes
+  // below only null the signal.
   if (opts.signal?.aborted) return abortedOutcome()
   const { deps } = opts
   let journal = initial
@@ -587,9 +560,8 @@ async function continueRollback(opts: ApplyOptions, initial: ActivationJournal):
 }
 
 async function runApplyTransaction(opts: ApplyOptions): Promise<ApplyOutcome> {
-  // Host abort (apply-now): check before prepareJournal so an aborted
-  // entry never even snapshots — zero side effects, the durable journal stays
-  // untouched, and the next startup resumes the pending activation.
+  // Host abort: check before prepareJournal so an aborted entry never even snapshots —
+  // the durable journal stays untouched for the next startup.
   if (opts.signal?.aborted) return abortedOutcome()
   const { deps, pendingVersion } = opts
   const prepared = await prepareJournal(opts)

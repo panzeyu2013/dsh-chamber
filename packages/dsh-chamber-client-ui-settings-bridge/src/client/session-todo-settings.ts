@@ -1,17 +1,15 @@
 /**
- * 会话待办区（sidebar todo area）settings helpers for the「通用」new control
- * group — pure logic only, no React/DOM, node:test-runnable (same role as
- * notifications-settings.ts for the notifications group).
+ * 会话待办区（sidebar todo area）settings helpers for the「通用」control group — pure
+ * logic only, no React/DOM, node:test-runnable (same role as
+ * notifications-settings.ts).
  *
- * Defaults are ALL ON: the todo area is a PASSIVE presentation (it renders
- * only while it has entries, zero footprint otherwise), unlike the desktop
- * notifications master switch which is opt-in.
+ * Defaults are ALL ON: the todo area is a PASSIVE presentation (renders only while it
+ * has entries), unlike the opt-in notifications master switch.
  */
 import type { ChamberSettings } from '../ambient/settings-bridge.d.ts'
 
-/** The sessionTodo settings block — mirrors the renderer
- *  ChamberSessionTodoSettings shape (global.d.ts) and the desktop store
- *  (packages/desktop/chamber-settings.ts ChamberSessionTodoSettings). */
+/** The sessionTodo settings block — mirrors the renderer shape and the desktop store
+ *  (chamber-settings.ts ChamberSessionTodoSettings). */
 export interface SessionTodoSettings {
   /** Master switch; default true (passive presentation — renders only while non-empty). */
   enabled: boolean
@@ -21,9 +19,8 @@ export interface SessionTodoSettings {
   onRequest: boolean
 }
 
-/** Design defaults — must stay in sync with the desktop
- *  DEFAULT_CHAMBER_SETTINGS.sessionTodo (chamber-settings.ts); the test file
- *  asserts the mirror. */
+/** Design defaults — must stay in sync with the desktop DEFAULT_CHAMBER_SETTINGS.sessionTodo
+ *  (chamber-settings.ts; test-asserted). */
 export const SESSION_TODO_DEFAULTS: SessionTodoSettings = {
   enabled: true,
   onComplete: true,
@@ -39,12 +36,10 @@ const KNOWN_KEYS: ReadonlyArray<keyof SessionTodoSettings> = [
 ]
 
 /** Read the sessionTodo block with defaults — optional chaining only, never a
- *  fabricated value (an absent block means "not yet stored": show the design
- *  defaults — here ALL ON, never a fake off). Unknown future keys are
- *  filtered out: the main-process validatePatch rejects unknown nested keys,
- *  and a stored block may carry forward-compat keys from a newer build.
- *  Array blocks are rejected up-front like the desktop normalizer
- *  (normalizeSessionTodoSettings) — guard parity, not behavior. */
+ *  fabricated value (an absent block means "not yet stored": show the design defaults
+ *  — here ALL ON, never a fake off). Unknown future keys are filtered out (a stored
+ *  block may carry forward-compat keys); array blocks are rejected up-front like the
+ *  desktop normalizer — guard parity, not behavior. */
 export function sessionTodoOf(settings: ChamberSettings | undefined): SessionTodoSettings {
   const value = settings?.sessionTodo
   const result: SessionTodoSettings = { ...SESSION_TODO_DEFAULTS }
@@ -57,11 +52,9 @@ export function sessionTodoOf(settings: ChamberSettings | undefined): SessionTod
   return result
 }
 
-/** Build a PARTIAL nested sessionTodo patch — the main-process validatePatch
- *  accepts partial nested keys and applySettingsPatch deep-merges them, so
- *  only the changed key rides the wire and sibling switches can never be
- *  clobbered by a stale full-object snapshot (N-ctx shells each own a
- *  settings panel in the same document). */
+/** Build a PARTIAL nested sessionTodo patch — validatePatch accepts partial nested
+ *  keys and applySettingsPatch deep-merges them, so only the changed key rides the wire
+ *  and sibling switches can never be clobbered by a stale full-object snapshot. */
 export function sessionTodoPatch(
   patch: Partial<SessionTodoSettings>,
 ): Partial<ChamberSettings> {

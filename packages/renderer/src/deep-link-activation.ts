@@ -1,13 +1,8 @@
 /**
- * Pure renderer-side roster gating for deep-link activation and notification
- * session opens.
- *
- * The main process validates and launches VS Code before it pushes an intent,
- * but on a cold renderer the first authoritative desktop instances roster can
- * still be in flight. Remote source activation must therefore wait for that
- * roster instead of being mistaken for a removed source. Only the latest
- * pending source matters: view switching is a last-intent-wins operation and
- * the renderer never consumes the path itself.
+ * Pure renderer-side roster gating for deep-link activation and notification session opens:
+ * on a cold renderer the first authoritative desktop instances roster can still be in flight, so
+ * remote activation must wait for it instead of being mistaken for a removed source. Only the latest
+ * pending source matters — view switching is last-intent-wins and the path itself is never consumed.
  */
 
 export interface DeepLinkActivationDecision {
@@ -42,12 +37,10 @@ export function enqueueBoundedRosterIntent<T>(
 }
 
 /**
- * Page-local serial tail for payload-bearing notification opens. Queue order
- * must cover the asynchronous `sessions.list` wait and the eventual
- * `sessions.open`, not merely the order in which App starts promises: otherwise
- * a later already-visible session can open before an earlier delayed one and
- * then be overwritten by that older click. One failed item is reported and
- * settled locally so it cannot poison the tail for subsequent clicks.
+ * Page-local serial tail for payload-bearing notification opens: queue order must cover the
+ * asynchronous `sessions.list` wait and the eventual `sessions.open`, not merely promise-start
+ * order (otherwise a later visible session opens before an earlier delayed one and is overwritten).
+ * One failed item is settled locally so it cannot poison the tail for subsequent clicks.
  */
 export class SerialIntentRunner<T> {
   #tail: Promise<void> = Promise.resolve()
@@ -70,9 +63,8 @@ export class SerialIntentRunner<T> {
   }
 }
 
-/** Exact renderer-local owner for one active source or async request. Object
- * identity is the authority; `serial` exists only for loud diagnostics/tests
- * and is never reused during this registry's lifetime. */
+/** Exact renderer-local owner for one active source or async request: object identity is the
+ *  authority, `serial` exists only for loud diagnostics and is never reused. */
 export interface SourceOwnershipToken {
   readonly sourceId: string
   readonly fingerprint: string
@@ -80,12 +72,9 @@ export interface SourceOwnershipToken {
 }
 
 /**
- * Active-only source ownership. Retiring a source deletes its current entry,
- * so a long-running page does not retain one tombstone per historical id.
- * Re-activation always mints a new frozen object; an old async closure can
- * therefore never regain ownership after remove -> same-id re-add. `renew`
- * additionally supersedes an active owner and is used for latest-request-wins
- * work such as unary aggregate pulls.
+ * Active-only source ownership: retiring deletes the entry (no tombstone per historical id);
+ * re-activation always mints a new frozen object, so an old async closure can never regain ownership
+ * after remove → same-id re-add. `renew` supersedes an active owner for latest-request-wins work.
  */
 export class SourceOwnershipRegistry {
   #nextSerial = 0
@@ -140,12 +129,10 @@ export interface AuthoritativeSourceFingerprint {
   fingerprint: string
 }
 
-/** Derive lifecycle retirements from an authoritative roster snapshot itself.
- * The desktop push is the earliest signal, but it is not the sole authority:
- * if that event is lost or sanitized, a later snapshot whose same id carries
- * a different transport fingerprint must still synchronously retire the old
- * shell before the replacement owner is activated. Sources without a current
- * owner are initial/re-added rows and need only activation. */
+/** Derive lifecycle retirements from an authoritative roster snapshot itself: if the desktop push
+ *  is lost, a later snapshot whose same id carries a different transport fingerprint must still
+ *  synchronously retire the old shell before the replacement owner activates. Sources without a
+ *  current owner are initial/re-added rows and need only activation. */
 export function authoritativeSourceRetirements(
   previousLiveSourceIds: ReadonlySet<string>,
   owners: SourceOwnershipRegistry,
@@ -162,19 +149,17 @@ export function authoritativeSourceRetirements(
   return retired
 }
 
-/** Validate the authoritative, non-persistent lifecycle proof minted by main.
- * Remote proofs are opaque 64-character lowercase hex values. The renderer
- * never derives or repairs them from editable transport fields: missing or
- * malformed authority fails closed. */
+/** Validate the non-persistent lifecycle proof minted by main: remote proofs are opaque
+ *  64-character lowercase hex, never derived/ repaired from editable transport fields; missing or
+ *  malformed authority fails closed. */
 export function parseAuthoritativeSourceFingerprint(sourceId: string, value: unknown): string | null {
   if (sourceId === 'local') return value === 'local' ? 'local' : null
   return typeof value === 'string' && /^[a-f0-9]{64}$/.test(value) ? value : null
 }
 
-/** A main→renderer delivery may already be inside Electron's IPC pipe when a
- * source is retired and re-added under the same id. Require the proof captured
- * by main to match the renderer's current authoritative owner before any view
- * activation or session-open side effect. */
+/** A delivery may already be inside Electron's IPC pipe when a source is retired and re-added
+ *  under the same id; the proof must match the current authoritative owner before any view
+ *  activation or session-open side effect. */
 export function deliveryMatchesCurrentSource(
   owners: SourceOwnershipRegistry,
   sourceId: string,
@@ -191,11 +176,10 @@ export interface RendererDeliveryCoordinates {
 }
 
 /**
- * Commit one main→renderer delivery with a bounded retry budget. IPC invoke
- * can reject transiently while the window is otherwise still alive; a single
- * fire-and-forget ACK would leave main's retained item in-flight forever and
- * eventually saturate the handoff queue. `false` is terminal because it means
- * this exact attempt is stale and a replacement renderer owns a newer one.
+ * Commit one main→renderer delivery with a bounded retry budget: IPC invoke can reject transiently,
+ * and a fire-and-forget ACK would leave main's retained item in-flight forever and saturate the
+ * handoff queue. `false` is terminal — this exact attempt is stale and a replacement renderer owns
+ * a newer one.
  */
 export async function acknowledgeRendererDelivery(
   delivery: RendererDeliveryCoordinates,
@@ -231,11 +215,9 @@ export async function acknowledgeRendererDelivery(
   throw lastError
 }
 
-/** Install the authoritative roster change listener before taking the initial
- * snapshot. Snapshot-before-listener has a lost-update window: a registry
- * mutation after instances_get resolves but before subscription leaves the
- * renderer's "settled" source set stale until the periodic poll. The same
- * refresh callback handles both the initial pull and every later event. */
+/** Install the roster change listener BEFORE the initial snapshot: snapshot-before-listener has a
+ *  lost-update window (a mutation after instances_get resolves but before subscription leaves the
+ *  "settled" source set stale until the periodic poll). One callback handles both. */
 export function subscribeRosterBeforeRefresh(
   subscribe: (onChanged: () => void) => () => void,
   refresh: () => void,

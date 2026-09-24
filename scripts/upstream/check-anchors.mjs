@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /**
- * check-anchors.mjs — 符号锚探针 + 遗留行号锚的预算棘轮（治 D15 的机械化形态）。
+ * check-anchors.mjs — 符号锚探针 + 遗留行号锚的预算棘轮。
  *
- * 背景：docs/** 里写死的 `文件:行` 锚点会随代码插入/删除大面积过期，且位移不均匀
- * （deviations.md D15：不批量按偏移刷）。本工具把退役动作拆成可增量执行的三件事：
+ * 背景：docs/** 里写死的 `文件:行` 锚点会随代码插入/删除大面积过期，且位移不均匀。
+ * 本工具把退役动作拆成可增量执行的三件事：
  *   ① registry 里的符号锚（`path#symbol` / `path#=literal:<唯一子串>`）默认必须可解析；
  *      锚点 path 先按 entry.ours 解析（与 classify 的键同一坐标系），再退回仓库根；
  *   ①′ docs 正文里手写的稳定锚（`path#symbol` / `path#=literal:<唯一子串>`）同样必须可

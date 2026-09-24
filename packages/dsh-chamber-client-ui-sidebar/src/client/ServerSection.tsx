@@ -1,18 +1,14 @@
 /**
- * Chamber sidebar per-source section (design 05 §2):
- * ONE server's subtree of the multi-source session list — the source header
- * (connection dot/spinner + hover status, server fold, sort menu, git alert,
- * add-workspace, per-source search capsule with results, design-24
- * archive-cleanup manager), the workspace groups and the session rows with their
- * in-source drag ordering and ghost rows.
- * Cross-cutting state/actions are consumed through useSidebarSection()
- * (sidebar-context.ts — the shell owns every store/effect/commit below and
- * provides ONE context value per render). This file owns the per-section
- * structure: the search-state mirror (shared controller), the capsule DOM
- * refs, the outside-click collapse effect, the workspace/session composition
- * and the sort-menu anchor-cleanup. The header, search surface, session rows
- * and the pure helpers live in the sibling ServerSection* /
- * server-section-* modules.
+ * Chamber sidebar per-source section: ONE server's subtree of the multi-source
+ * session list — source header (dot/spinner + hover status, server fold, sort
+ * menu, git alert, add-workspace, search capsule with results), workspace
+ * groups and session rows with in-source drag ordering and ghost rows.
+ * Cross-cutting state/actions come through useSidebarSection(): the shell owns
+ * every store/effect/commit below and provides ONE context value per render.
+ * This file owns the per-section structure — the shared-search mirror, capsule
+ * DOM refs, the outside-click collapse effect, the workspace/session
+ * composition and the sort-menu anchor-cleanup; the header, search surface,
+ * rows and pure helpers live in the sibling ServerSection* / server-section-*.
  */
 import { Fragment, useEffect, useRef, useState } from 'react'
 import clsx from 'clsx'
@@ -78,31 +74,28 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
     onDeleteWorkspace,
   } = useSidebarSection()
 
-  // chamber (06 §1.2): per-source search state (capsule/query/results) AND
-  // the debounced fetch jobs live in ONE shared controller
-  // (shared/search-state.ts) — a search survives view switches (the visible
-  // sidebar changes shell, the shared state does not), and a single owner
-  // arms the jobs, so shells never duplicate fetches. This section only
-  // mirrors the state for rendering and owns the DOM refs (capsule root /
-  // input / button for outside-click containment + focus).
+  // Per-source search state (capsule/query/results) and its debounced fetch
+  // jobs live in ONE shared controller, so a search survives view switches and
+  // shells never duplicate fetches. This section only mirrors the state for
+  // rendering and owns the capsule DOM refs (containment + focus).
   const [searchState, setSearchState] = useState<ReadonlyMap<string, SourceSearchState>>(() => getSearchStates())
   useEffect(() => subscribeSearch(() => { setSearchState(getSearchStates()) }), [])
   const searchRoot = useRef<HTMLDivElement | null>(null)
   const searchInput = useRef<HTMLInputElement | null>(null)
-  /** 用户展开搜索时把焦点送进输入框（必须在胶囊挂载后，见下方 effect）。 */
+  /** 展开搜索时聚焦输入框；必须在胶囊挂载后（见下方 effect）。 */
   const focusSearchOnMount = useRef(false)
-  // 断连导致搜索胶囊卸载时的焦点落点（见下方 focus-restore）。
+  // 搜索胶囊因断连卸载时的焦点落点（见下方 focus-restore）。
   const foldToggleRef = useRef<HTMLButtonElement | null>(null)
   const prevSearchCapsuleMounted = useRef(false)
-  /** 上一轮渲染时焦点是否在搜索胶囊内（卸载后 activeElement 会回落，必须提前记）。 */
+  /** 上次渲染时焦点是否在胶囊内——卸载后 activeElement 会回落，必须提前记。 */
   const capsuleHeldFocus = useRef(false)
   const searchButton = useRef<HTMLButtonElement | null>(null)
 
   /**
-   * 意图预热：**本来源头部** hover 的 120ms dwell 机器。
-   * 一台机器一个来源；首次指针进入才创建（非 hover 路径零成本）。`onIntent`
-   * 只经 chamberBridge 发一条单向请求——队列/预算/抑制纪律全在 App 消费端，
-   * 这一侧只回答"指针真的在这里停留了吗"（shared/prewarm-intent.ts 头注）。
+   * 意图预热：**本来源头部** hover 的 120ms dwell 机器，一台机器一个来源，
+   * 首次指针进入才创建（非 hover 路径零成本）。`onIntent` 只经 chamberBridge
+   * 发一条单向请求——队列/预算/抑制纪律全在 App 消费端，这一侧只回答指针
+   * 是否真的停留。
    */
   const prewarmIntentRef = useRef<PrewarmIntent | null>(null)
   const prewarmIntent = (): PrewarmIntent => {
@@ -120,16 +113,12 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
     prewarmIntentRef.current = null
   }, [])
 
-  // chamber：会话行渲染窗口的"已展开"标记——每工作区一
-  // 个本地浏览态布尔（不持久化、不跨 ctx 同步；窗口只在渲染层，见
-  // shared/session-row-window.ts）。
+  // 会话行渲染窗口的"已展开"标记：每工作区一个本地浏览态布尔（不持久化、不跨 ctx 同步）。
   const [sessionRowsExpanded, setSessionRowsExpanded] = useState<Record<string, boolean>>({})
 
-  // Outside-click closes an expanded capsule only while its query is empty
-  // (official semantics): a non-empty query must not silently drop the
-  // in-progress filter. The search button itself is outside the capsule root
-  // (it lives in the source header), so it is containment-checked too —
-  // otherwise a click on it would expand and immediately re-collapse.
+  // Outside-click closes an expanded capsule only while its query is empty — a
+  // non-empty query must not silently drop the filter. The header's search button
+  // is containment-checked too, or clicking it would expand then collapse.
   useEffect(() => {
     if (!wide) return
     const onClick = (event: MouseEvent): void => {
@@ -147,33 +136,27 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
     return () => { document.removeEventListener('click', onClick) }
   }, [wide, server.id, searchState])
 
-  // chamber (06): hover-card relative times share one render-time clock.
+  // Hover-card relative times share one render-time clock.
   const now = Date.now()
 
-              // chamber (06 §1.2): the state's query is the sanitized current
-              // value by construction; the loading fallback covers the
-              // expand-without-query render pass defensively.
+              // The query is sanitized by construction; the loading fallback covers expand-without-query.
               const search = searchState.get(server.id)
               const query = sanitizeSearchQuery(search?.query ?? '')
-              // 搜索胶囊的挂载条件含 `server.connected`：托管 dsh 停机时胶囊会被
-              // 卸载，焦点随之掉到 body（键盘用户迷路）。这里把焦点交还给折叠
-              // 按钮——该头部唯一恒在的键盘入口。
+              // 胶囊卸载（托管 dsh 停机）会让焦点掉到 body（键盘用户迷路）：把焦点
+              // 交还给折叠按钮——该头部唯一恒在的键盘入口。
               const searchCapsuleMounted = server.connected
                 && viewPrefs.sourceFolded?.[server.id] !== true
                 && search?.expanded === true
-              // 展开后聚焦输入框：挂载前 ref 为空，只能等这一轮提交后再聚焦
+              // 展开后聚焦输入框：挂载前 ref 为空，必须等这一轮提交后再聚焦
               if (searchCapsuleMounted && focusSearchOnMount.current) {
                 focusSearchOnMount.current = false
                 queueMicrotask(() => searchInput.current?.focus())
               }
               useEffect(() => {
-                // 仅当焦点确实落在胶囊里才回交给折叠按钮：任何断连都不该把用户
-                // 从别处（会话行等）抢回头部。判定必须发生
-                // 在卸载之后，此时 activeElement 已回落到 body——所以用卸载前
-                // 记录的"胶囊是否持有焦点"。
-                // 断连会让搜索状态在同一批里被清掉（search-state 只保留已连接来源），
-                // 所以判定条件必须是"连接事实"而不是 expanded；
-                // 折叠路径 connected 仍为 true，不会误抢焦点。
+                // 仅当焦点确实落在胶囊里才回交给折叠按钮：任何断连都不该把用户从
+                // 别处抢回头部。判定必须在卸载之后（activeElement 已回落到 body），
+                // 用卸载前记录的"胶囊是否持有焦点"。断连会在同一批清掉搜索状态，
+                // 判定条件必须是"连接事实"而不是 expanded——折叠路径不会误抢。
                 if (prevSearchCapsuleMounted.current && !searchCapsuleMounted
                   && capsuleHeldFocus.current && server.connected !== true) {
                   foldToggleRef.current?.focus()
@@ -184,14 +167,11 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
               const currentRemote = search !== undefined && search.query === query
                 ? search
                 : { query, status: 'loading' as const, items: [] as SearchRow[], hasMore: false }
-              // chamber (06 §1.2 render-side merge): merge the source
-              // aggregate's LOCAL metadata matches (title/workspace-label
-              // substring over the visible projection) with the remote
-              // content-search page — the official deriveSearchResults port.
-              // 远程腿按可见集过滤——投影已过滤 subagent/archived/
-              // blank-non-current，"在投影里"即"可见"（官方对 content 腿逐条
-              // sessionVisible，tree.ts L370-373）；空集（断连/未就绪）时
-              // mergeSearchResults 降级为不过滤。
+              // Render-side merge: the aggregate's LOCAL metadata matches
+              // (title/workspace-label substring over the visible projection)
+              // plus the remote content-search page. 远程腿按可见集过滤——投影已
+              // 过滤 subagent/archived/blank-non-current，"在投影里"即"可见"；
+              // 空集（断连/未就绪）时 mergeSearchResults 降级为不过滤。
               const visibleIds = new Set<string>()
               for (const workspace of server.workspaces) {
                 for (const session of workspace.sessions) visibleIds.add(session.id)
@@ -203,25 +183,18 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                 visibleIds,
                 server.aggregateReady === true,
               )
-              // chamber (06 §4): the current-session highlight is channel-based
-              // — no direct store subscription — and single-selection: only the
-              // source owning THIS visible ctx (the active view's shell) renders
-              // its current-session highlight; the other sources' last-opened
-              // sessions stay unhighlighted (one global selection marker).
+              // Current-session highlight is channel-based (no store subscription)
+              // and single-selection: only the source owning THIS visible ctx
+              // renders it — one global selection marker.
               const currentId = server.id === chamberInstanceId ? server.runtime?.current : undefined
-              // chamber (06 §2.4): server-level
-              // fold — hides the ENTIRE workspace list below the header. The
-              // per-workspace conversation folds are NOT touched (see
-              // toggleSourceFold), so expanding restores every workspace with
-              // its sessions as they were.
+              // Server-level fold hides the ENTIRE workspace list; per-workspace
+              // folds are untouched (see toggleSourceFold), so expand restores them.
               const sourceFolded = viewPrefs.sourceFolded?.[server.id] === true
-              // chamber (打开失败可见性): this server's open-failure rows
-              // currently held by the outcome channel (SidebarRoot writes
-              // rowErrors under shared/open-outcome.ts keys). Both key ends
-              // are anchored literals (`${server.id}/session/` … '/open'), so
-              // the slice recovers any embedded session id verbatim; the
-              // rename/archive/fork family shares the prefix but ends in its
-              // own suffix, and no other key family ends in '/open'.
+              // This server's open-failure rows from the outcome channel. Both
+              // key ends are anchored literals (`${server.id}/session/` … '/open'),
+              // so the slice recovers any embedded session id verbatim; the
+              // rename/archive/fork family shares the prefix but ends in its own
+              // suffix, and no other key family ends in '/open'.
               const serverOpenFailures: { sessionId: string; message: string }[] = []
               const openErrorPrefix = `${server.id}/session/`
               for (const [key, message] of Object.entries(rowErrors)) {
@@ -231,17 +204,13 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                   message,
                 })
               }
-              // chamber: the row-render ghost predicate is hoisted so the
-              // workspace header count reuses the SAME rule — a ghost is a
-              // blank "New Session" row that stopped being current (the
-              // projection still carries it as an invisible layout slot
-              // during BLANK_GHOST_GRACE_MS, see derive.ts
-              // armBlankGhost/sessionVisible); the count must not drift from
-              // what the rows render.
+              // The ghost predicate is hoisted so the header count reuses the SAME
+              // rule: a ghost is a blank "New Session" row that stopped being current
+              // (invisible layout slot during BLANK_GHOST_GRACE_MS). The count must
+              // not drift from what the rows render.
               const isGhostSession = (session: ChamberServerWorkspace['sessions'][number]): boolean =>
                 session.blank === true && session.id !== currentId
-              // chamber (06 §2.2): real workspaces render in wire order unless
-              // a transient drag override exists; the ungrouped bucket trails.
+              // Real workspaces render in wire order unless a transient drag override exists; the ungrouped bucket trails.
               const orderedWorkspaces = (() => {
                 const real = server.workspaces.filter(workspace => workspace.ungrouped !== true)
                 const ungrouped = server.workspaces.find(workspace => workspace.ungrouped === true)
@@ -265,12 +234,10 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                 }
                 return ungrouped === undefined ? ordered : [...ordered, ungrouped]
               })()
-              // The first insertion boundary of the workspace list draws a
-              // top indicator while the marker on the first real group is
-              // suppressed (official list-top drop treatment). The boundary
-              // is the first VISIBLE row of the DISPLAY order (override-aware
-              // and fold-aware — synthetic cwd-derived groups are never drop
-              // targets, so they never qualify either).
+              // The first insertion boundary of the list draws a top indicator while
+              // the marker on the first real group is suppressed. The boundary is the
+              // first VISIBLE row of the DISPLAY order (override- and fold-aware);
+              // synthetic cwd-derived groups are never drop targets.
               const realWorkspaceIds = server.workspaces
                 .filter(workspace => workspace.ungrouped !== true && workspace.synthetic !== true)
                 .map(workspace => workspace.id)
@@ -282,12 +249,10 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                 && workspaceDrag.over !== null
                 && workspaceDrag.over.id === firstDropRow
                 && workspaceDrag.over.half === 'before'
-              // The drop resolver (shared/workspace-drag-order.ts) is the
-              // single authority for every surface — the marker below, the
-              // onDragOver gate, the top indicator and the commit all ask
-              // the same verdict: blocked positions (a drop that would split
-              // a contiguous repo family, design 08 §3.3) never render a
-              // marker and never become the target.
+              // shared/workspace-drag-order.ts is the single authority every surface
+              // asks (marker, onDragOver gate, top indicator, commit): blocked
+              // positions — a drop splitting a contiguous repo family — never render
+              // a marker and never become the target.
               const workspaceDropBlocked = (targetId: string, half: 'before' | 'after'): boolean => {
                 if (workspaceDrag === null || workspaceDrag.sourceId !== server.id) return false
                 const verdict = resolveWorkspaceDrop(dropEnv, workspaceDrag.workspaceId, { id: targetId, half })
@@ -304,14 +269,11 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
               const sessionsOf = (workspace: ChamberServerWorkspace): ChamberServerWorkspace['sessions'] => {
                 const wire = workspace.sessions
                 const orderBy = viewPrefs.orderBy?.[server.id] ?? 'manual'
-                // updated = 手动序 + 活动置顶。渲染序
-                // 直接取共享的 updated-order account（推导 effect 已把 seeding/
-                // recency sort/promotion 写回，见上）；account 尚不存在时（切换
-                // 后首帧、effect 尚未落盘）回退 wire 序。**重入 updated**（account
-                // 已保留、簿记刚被清）时首帧渲染保留的旧 account 序，effect 的
-                // 整列 recency 排序下一帧才落——与官方同构（render-then-sort），
-                // 菜单关闭动画内不可感知。manual 模式：未分组桶用存储序，
-                // 真实工作区 override（拖拽乐观序）优先于 wire 序。
+                // updated = 手动序 + 活动置顶：渲染序取共享的 updated-order account
+                // （推导 effect 已写回 seeding/recency sort/promotion），account 不存在
+                // 时（切换后首帧、effect 尚未落盘）回退 wire 序。**重入 updated** 时
+                // 首帧保留旧 account 序，下一帧才整列重排（render-then-sort，菜单关闭
+                // 动画内不可感知）。manual 模式：未分组桶用存储序，工作区 override 优先。
                 if (orderBy === 'updated') {
                   const stored = viewPrefs.updatedOrder?.[`${server.id}/${workspace.id}`]
                   if (stored === undefined) return wire
@@ -336,22 +298,18 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                 key={server.id}
                 className={clsx(
                   cc.sourceGroup,
-                  // chamber (06 §2.4): the
-                  // server-group drag marker lives on the SECTION boundary
-                  // (before = above the header, after = below the whole
-                  // group) — mirroring the workspace-group marker.
+                  // Server-group drag marker on the SECTION boundary (before = above
+                  // the header, after = below the whole group).
                   serverDrag !== null && serverDrag.over?.id === server.id && serverDrag.over.half === 'before' && cc.dropBefore,
                   serverDrag !== null && serverDrag.over?.id === server.id && serverDrag.over.half === 'after' && cc.dropAfter,
                 )}
                 role="group"
                 aria-label={server.label}
-                // Identifies a source SECTION for the
-                // server-drag outside-list cancel (document dragover scope
-                // check) — any descendant counts as "inside the list".
+                // Marks a source SECTION for the server-drag outside-list
+                // cancel; any descendant counts as "inside the list".
                 data-chamber-section={server.id}
                 // The fold state's a11y surface is the fold BUTTON's own
-                // aria-expanded (the group carries no expand semantics — a
-                // focusable button is the operable, announced control).
+                // aria-expanded — the group carries no expand semantics.
                 onDragOver={serverDrag === null
                   ? undefined
                   : (event) => {
@@ -380,18 +338,16 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                   searchInput={searchInput}
                   focusSearchOnMount={focusSearchOnMount}
                 />
-                {/* chamber (06 §2.4): the
-                    server-level fold hides EVERYTHING below the header —
-                    search capsule, source-scope git alert and the workspace
-                    list (search results included). The search state itself is
-                    untouched (shared search-state store): expanding the
-                    server remounts the capsule with its query intact. */}
+                {/* The server-level fold hides EVERYTHING below the header —
+                    capsule, source-scope git alert and workspace list. The
+                    search state itself is untouched, so expanding remounts the
+                    capsule with its query intact. */}
                 {!sourceFolded && (
                 <>
-                {/* chamber (06 §1.2): the search capsule row beneath the header.
-                    Escape clears and collapses; the clear button does the same. */}
-                {/* 断连/托管停机的源不渲染搜索胶囊：结果
-                    与状态分支本就被 connected 门挡住，留一个活输入框是键盘死路。 */}
+                {/* The search capsule row beneath the header; Escape clears and
+                    collapses, the clear button does the same. */}
+                {/* 断连/托管停机的源不渲染搜索胶囊：留一个活输入框是键盘死路，
+                    结果与状态分支本就被 connected 门挡住。 */}
                 {server.connected && search?.expanded === true && (
                   <ServerSectionSearchCapsule
                     server={server}
@@ -402,58 +358,42 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                   />
                 )}
                 {server.connected ? (() => {
-                  // chamber (08 §11 Plan A): per-repo layouts drive the
-                  // unregistered-worktree blocks + the orphan badge.
+                  // Per-repo layouts drive the unregistered-worktree blocks and the orphan badge.
                   const repoLayouts = getSourceRepoLayouts(server.id)
                   return (
                   <>
-                  {/* chamber (08 §11): one source-level Git alert mount
-                      (workspaceId '' = source scope), OUTSIDE the list tree
-                      (a tree must not carry non-treeitem direct
-                      children). The chamber Git plugin renders the source's
-                      recovery/action errors here — visible even when no
-                      workspace has git rows so the source can never silently
-                      lock or lie. */}
+                  {/* Source-level Git alert mount (workspaceId '' = source
+                      scope), OUTSIDE the list tree (a tree must not carry
+                      non-treeitem direct children): the Git plugin renders the
+                      source's recovery/action errors here — visible even when
+                      no workspace has git rows, so the source can never
+                      silently lock or lie. */}
                   {renderWorkspaceGit('sidebar.workspace.git', { wide }, {
                     hookContext: { sourceId: server.id, workspaceId: '' },
                   })}
-                  {/* chamber (打开失败可见性): open failures whose session has
-                      NO row in the current projection (e.g. a fork/commit/new-
-                      session child that never surfaced while the runtime was
-                      wedged) — the row slot cannot render them, so they
-                      surface above the list, outside the tree (same
-                      discipline as the git alert above). Known bound:
-                      a failure whose session IS in the
-                      projection but whose only render anchor vanished — a
-                      worktree group hidden behind a folded git MAIN workspace,
-                      or an active search that no longer matches the session —
-                      stays invisible for the 10s window (the inline
-                      slot is suppressed identically). */}
+                  {/* Open failures whose session has NO row in the current
+                      projection (e.g. a child that never surfaced while the
+                      runtime was wedged) surface above the list, outside the
+                      tree. Known bound: a failure whose session IS in the
+                      projection but whose only render anchor vanished stays
+                      invisible for the 10s window (the inline slot is
+                      suppressed identically). */}
                   {serverOpenFailures.filter(failure => !visibleIds.has(failure.sessionId)).map(failure => (
                     <div key={failure.sessionId} className={cc.rowError} role="alert">{failure.message}</div>
                   ))}
                   <div
                     className={cc.workspaceList}
-                    // The browse list is one tree (official .list role="tree");
-                    // an active query replaces it with the search-results tree
-                    // (own role below), and the fetch-error branch renders no
-                    // tree at all. The browse
-                    // tree carries an accessible name like its search-results
-                    // sibling — upstream names this tree with `section.sessions`
-                    // (vendor ui-workspace WorkspaceBrowser.tsx:457-458).
+                    // The browse list is one tree; an active query replaces it with the
+                    // search-results tree and the fetch-error branch renders no tree.
+                    // The browse tree carries an accessible name like its sibling.
                     role={query === '' && server.aggregateError === undefined ? 'tree' : undefined}
                     aria-label={query === '' && server.aggregateError === undefined ? t('section.sessions') : undefined}
                   >
                     {query !== '' ? (
-                      // chamber (06 §1.2): an active query replaces the whole
-                      // workspace list (header/status stay; fold and the
-                      // add-workspace affordance are hidden while searching).
-                      // The results branch outranks the snapshot-fetch error
-                      // (06 §1.2): an open search keeps showing results even
-                      // when a later pull fails — the aggregateError line
-                      // renders BELOW the results, so a content-search
-                      // failure still shows the local metadata hits, with the
-                      // error banner below them.
+                      // An active query replaces the whole workspace list (header/status
+                      // stay; fold and add-workspace hidden). Results outrank the
+                      // snapshot-fetch error: a content-search failure still shows the
+                      // local metadata hits, with the error banner below them.
                       <ServerSectionSearchResults
                         server={server}
                         merged={merged}
@@ -469,25 +409,15 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                           <span className={cc.listTopDropIndicator} aria-hidden="true" />
                         )}
                         {(() => {
-                          // chamber (08 §11.7, user decision): folding
-                          // a git MAIN workspace folds the WHOLE repository
-                          // group — its derived (worktree) workspace rows
-                          // render hidden while the main's row is folded and
-                          // return on expand (each with its own saved state).
-                          // A derived row is a registered workspace whose git
-                          // flag carries mainWorkspaceId (workspace-git-flags
-                          // .ts); worktrees of an unregistered main (no main
-                          // row to fold) and non-git workspaces stay visible.
-                          // The main must still EXIST in the aggregate: once
-                          // its registration vanishes (external deletion),
-                          // the stale fold pref must not lock the derived
-                          // rows hidden with no expand control — they surface
-                          // again until the next git snapshot re-publish
-                          // drops the mainWorkspaceId association. Rows
-                          // carry no destructive in-flight state: git saga
-                          // progress/errors surface through the source-level
-                          // coordinator strip and rowErrors restore as-is on
-                          // expand, so hiding loses nothing.
+                          // Folding a git MAIN workspace folds the WHOLE repository
+                          // group: derived (worktree) rows — those whose git flag
+                          // carries mainWorkspaceId — hide while the main is folded
+                          // and return on expand; worktrees of an unregistered main
+                          // stay visible. Once the main's registration vanishes
+                          // (external deletion) the stale fold pref must not lock
+                          // derived rows hidden with no expand control. Rows carry
+                          // no destructive in-flight state (git saga surfaces at
+                          // source level, rowErrors restore on expand).
                           const visibleOrderedWorkspaces = (() => {
                             const liveWorkspaceIds = new Set(server.workspaces.map(row => row.id))
                             return orderedWorkspaces.filter(workspace => {
@@ -503,51 +433,36 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                           return visibleOrderedWorkspaces.map(workspace => {
                           const workspaceKey = `${server.id}/${workspace.id}`
                           const folded = viewPrefs.folded[workspaceKey] === true
-                          // chamber: while THIS workspace's inline rename is
-                          // active, the header row itself hosts the edit form
-                          // (title -> input in place, no added list row). The
-                          // flag gates every structural decision below: form
-                          // embedding, drag-off, double-click re-entry guard,
-                          // HoverCard off while typing, and the
-                          // .workspaceRenaming class (height relax + glyph
-                          // hover-swap suppression).
+                          // While THIS workspace's inline rename is active the header row
+                          // hosts the edit form in place (no added list row); the flag
+                          // gates form embedding, drag-off, double-click re-entry,
+                          // HoverCard off while typing and .workspaceRenaming.
                           const renamingThisWorkspace = renaming !== null
                             && renaming.sourceId === server.id
                             && renaming.kind === 'workspace' && renaming.id === workspace.id
-                          // chamber (08 §11): derived (worktree) workspaces
-                          // drop the kebab/rename — OpenChamber worktree
-                          // groups keep only delete + new-session. The flag
-                          // also seeds the per-workspace icon accent (family
-                          // hue for worktree/main workspaces).
+                          // Derived (worktree) workspaces drop the kebab and rename (only
+                          // delete + new-session remain) and seed the icon accent.
                           const gitFlag = getWorkspaceGitFlag(server.id, workspace.id)
-                          // design 06 §2.4: the accent
-                          // is gated on the source's git identity being
-                          // RESOLVED (first snapshot published) — until then
-                          // a git workspace would first render an independent
-                          // hue that later flips to its family hue (the
-                          // one-time startup flash). Default ink renders
-                          // instead; every workspace settles to its FINAL
-                          // color at the same identity-resolve moment.
+                          // The accent waits for the source's git identity to be RESOLVED
+                          // (first snapshot): until then a git workspace would flash an
+                          // independent hue before flipping to its family hue, so default
+                          // ink renders; every workspace settles at the resolve moment.
                           const workspaceAccent = isSourceGitFlagsLoaded(server.id)
                             ? workspaceAccentStyle(server.id, workspace.id, gitFlag)
                             : undefined
                           const isWorktree = gitFlag?.isWorktree === true
                           const sessions = sessionsOf(workspace)
-                          // chamber: sessionsOf
-                          // includes the projection's departed blank GHOST
-                          // row, so the header count would be +1 for up to
-                          // BLANK_GHOST_GRACE_MS. Count only non-ghost
-                          // sessions (the same predicate the rows use).
+                          // sessionsOf may include a departed blank GHOST row, so the count
+                          // would be +1 for up to BLANK_GHOST_GRACE_MS; count only
+                          // non-ghost sessions (the same predicate the rows use).
                           const visibleSessionCount = sessions.reduce(
                             (count, session) => count + (isGhostSession(session) ? 0 : 1),
                             0,
                           )
-                          // chamber：会话行渲染窗口——行
-                          // DOM 不随会话数无界膨胀。组头徽标（上方
-                          // visibleSessionCount）与一切数据面操作仍用全量
-                          // sessions；这里只决定渲染行数与展开条文案。当前
-                          // 会话行不被藏匿（窗口自动覆盖之，见
-                          // shared/session-row-window.ts）。
+                          // 会话行渲染窗口——行 DOM 不随会话数无界膨胀。组头
+                          // 徽标与一切数据面操作仍用全量 sessions；这里只决定
+                          // 渲染行数与展开条文案。当前会话行不被藏匿（窗口自动
+                          // 覆盖之）。
                           const rowsExpanded = sessionRowsExpanded[workspaceKey] === true
                           const currentSessionIndex = currentId === undefined
                             ? -1
@@ -561,19 +476,11 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                           const visibleSessions = sessionWindow.hiddenCount === 0
                             ? sessions
                             : sessions.slice(0, sessionWindow.renderCount)
-                          // 展开条文案按「可见（非 ghost）会话」计：
-                          // sessions 含短暂 blank-ghost 占位（≤
-                          // BLANK_GHOST_GRACE_MS，渲染期跳过），直接复用窗口
-                          // hiddenCount 会让「还有 N 个会话」在幽灵期内与组头
-                          // 徽标（visibleSessionCount 已去 ghost）漂移 ±幽灵数。
-                          // 窗口切片仍保留 ghost 行（占位防回流，见上），仅
-                          // 对外文案减去窗口内的 ghost 数。
-                          // The disclosure's
-                          // OWN window ignores the expansion flag (upstream's
-                          // collapsedSessionRows is expansion-independent,
-                          // vendor ui-workspace WorkspaceBrowser.tsx:46-57), so
-                          // the collapsed count stays known while expanded and
-                          // the SAME control can offer `sessions.collapse`.
+                          // 展开条文案按「可见（非 ghost）会话」计：直接复用窗口 hiddenCount
+                          // 会在幽灵期内与组头徽标（visibleSessionCount 已去 ghost）漂移
+                          // ±幽灵数；窗口切片仍保留 ghost 行（占位防回流），仅对外文案
+                          // 减去窗口内 ghost 数。disclosure 自己的窗口忽略展开标记，所以
+                          // 展开时仍知道折叠后的数量，同一控件可显示 `sessions.collapse`。
                           const disclosureWindow = sessionRowDisclosure({
                             total: sessions.length,
                             currentIndex: currentSessionIndex,
@@ -592,42 +499,32 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                             activeSessionDrag && sessionDrag.over !== null && sessionDrag.over.id === sessionId
                               ? sessionDrag.over.half
                               : null
-                          // Action-keyed errors (new/rename/delete share the
-                          // workspace's key family, suffixed per action kind).
+                          // Action-keyed errors (new/rename/delete share the workspace key family).
                           const workspaceError = rowErrors[`${server.id}/workspace/${workspace.id}/new`]
                             ?? rowErrors[`${server.id}/workspace/${workspace.id}/rename`]
                             ?? rowErrors[`${server.id}/workspace/${workspace.id}/delete`]
-                          // chamber (06): the workspace header row (hoisted
-                          // so real workspaces wrap it in a HoverCard; the
-                          // ungrouped bucket has no backing workspace, hence no
-                          // card). Double click enters inline rename — the edit
-                          // form then embeds INSIDE this row, replacing the
-                          // trailing content (title/orphan badge/count/git
-                          // occupant/hover actions; the ungrouped
-                          // bucket has no rename; a click on the inner
-                          // buttons never triggers it). Single clicks need no
-                          // delay — the header itself is not clickable (fold
-                          // lives on the chevron button).
+                          // The workspace header row, hoisted so real workspaces wrap it
+                          // in a HoverCard (the ungrouped bucket has no workspace and no
+                          // rename). Double click enters inline rename, whose form replaces
+                          // the trailing content INSIDE this row; inner-button clicks never
+                          // trigger it, and single clicks need no delay — the header itself
+                          // is not clickable (fold is on the chevron).
                           const workspaceHeader = (
                             <div
                               className={clsx(cc.workspaceHeader, renamingThisWorkspace && cc.workspaceRenaming)}
-                              // chamber: per-workspace icon accent —
-                              // deterministic, selection-independent (the
-                              // current-session row carries its own official
-                              // selected tint); undefined for the ungrouped
-                              // bucket, so CSS falls back to the default ink.
+                              // Per-workspace icon accent: deterministic and
+                              // selection-independent (the current-session row carries its
+                              // own selected tint); undefined for the ungrouped bucket, so
+                              // CSS falls back to the default ink.
                               style={workspaceAccent}
                               data-chamber-row={workspaceKey}
                               role="treeitem"
                               aria-expanded={!folded}
                               draggable={!renamingThisWorkspace
                                 && workspace.ungrouped !== true && workspace.synthetic !== true}
-                              // The git occupant
-                              // (create/remove buttons) cannot reach the
-                              // plugin's suppressClickRef, so the whole header
-                              // swallows clicks inside the drag-end trailing-
-                              // click window — mirroring the guarded controls
-                              // (fold / + / kebab / rename) in 06 §2.2.
+                              // The git occupant (create/remove) cannot reach
+                              // suppressClickRef, so the whole header swallows clicks in the
+                              // drag-end trailing-click window, like the guarded fold/+/kebab.
                               onClickCapture={(event) => {
                                 if (suppressClickRef.current) {
                                   event.preventDefault()
@@ -636,15 +533,12 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                               }}
                               onDoubleClick={(event) => {
                                 if (suppressClickRef.current) return
-                                // While this workspace's rename is already
-                                // active a second double click must not re-arm
-                                // from the stale title (that would wipe the
-                                // text being typed).
+                                // While this workspace's rename is active a second double
+                                // click must not re-arm from the stale title (it would wipe
+                                // the text being typed).
                                 if (renamingThisWorkspace) return
                                 if (menuOpen[workspaceKey] === true || workspace.ungrouped === true
                                   || workspace.synthetic === true) return
-                                // Derived (worktree) workspaces have no rename
-                                // (OpenChamber parity — kebab removed too).
                                 if (getWorkspaceGitFlag(server.id, workspace.id)?.isWorktree === true) return
                                 if (event.target instanceof HTMLElement && event.target.closest('button') !== null) return
                                 setRenaming({
@@ -657,13 +551,10 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                               onPointerDown={workspace.ungrouped === true || workspace.synthetic === true
                                 ? undefined
                                 : (event) => {
-                                  // Same press-target
-                                  // guard as the source header — a gesture
-                                  // that STARTED on a workspace-header button
-                                  // (fold / orphan badge / git actions / + /
-                                  // kebab) never initiates the workspace drag
-                                  // (a >4px micro-drag on the fold toggle must
-                                  // not swallow its click).
+                                  // Same press-target guard as the source header: a gesture
+                                  // that STARTED on a workspace-header button never initiates
+                                  // the drag (a >4px micro-drag on the fold toggle must not
+                                  // swallow its click).
                                   dragPressOnButtonRef.current = event.target instanceof Element && event.target.closest('button') !== null
                                 }}
                               onDragStart={workspace.ungrouped === true || workspace.synthetic === true
@@ -679,12 +570,9 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                                   dragPressOnButtonRef.current = false
                                   event.dataTransfer.effectAllowed = 'move'
                                   event.dataTransfer.setData('text/plain', workspace.id)
-                                  // Workspace-header drags must suppress the
-                                  // trailing click like session rows do (06 §2.2
-                                  // lists the fold chevron / + / kebab / source
-                                  // header among the guarded controls) — a drop
-                                  // ending over them must not fire a spurious
-                                  // toggle/open/menu.
+                                  // Suppress the trailing click like session rows do: a drop
+                                  // ending over the guarded controls (fold/+/kebab) must not
+                                  // fire a spurious toggle/menu.
                                   suppressClickRef.current = true
                                   workspaceDropCommitted.current = false
                                   setWorkspaceDrag({ sourceId: server.id, workspaceId: workspace.id, over: null })
@@ -698,11 +586,9 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                                     setWorkspaceDrag(null)
                                   }
                                   workspaceDropCommitted.current = false
-                                  // 镜像会话行复位——拖拽结束后一个 tick
-                                  // 清掉抑制位，否则本次 workspace 头拖拽后的
-                                  // 尾随 click 会永久短路来源切换/排序/加工作区/
-                                  // 搜索/折叠/新建/kebab/归档/会话打开（唯一复位
-                                  // 在会话行 onDragEnd，workspace 头漏了）。
+                                  // 镜像会话行复位：拖拽结束后一个 tick 清除抑制位，
+                                  // 否则尾随 click 会短路来源切换/排序/加工作区/搜索/
+                                  // 折叠/新建/kebab/归档/会话打开。
                                   window.setTimeout(() => { suppressClickRef.current = false }, 0)
                                 }}
                             >
@@ -711,12 +597,10 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                                 className={clsx(
                                   cc.foldToggle,
                                   folded && cc.foldToggleFolded,
-                                  // OpenChamber SessionGroupSection swap: a
-                                  // worktree (derived) workspace shows the
-                                  // git-branch glyph at rest and the collapse
-                                  // chevron on hover; a normal workspace shows
-                                  // a FOLDER glyph (project-row parity); the
-                                  // ungrouped bucket keeps the plain chevron.
+                                  // A worktree (derived) workspace shows the git-branch glyph
+                                  // at rest and the collapse chevron on hover; a normal
+                                  // workspace shows a FOLDER glyph; the ungrouped bucket
+                                  // keeps the plain chevron.
                                   isWorktree
                                     ? cc.foldToggleGit
                                     : (workspace.ungrouped !== true && cc.foldToggleFolder),
@@ -737,13 +621,9 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                                 )}
                               </button>
                               {renamingThisWorkspace ? (
-                                // In-place rename: the edit form replaces the
-                                // header's trailing content (title / orphan
-                                // badge / count / git occupant / hover
-                                // actions) INSIDE the header row — the fold
-                                // toggle + gutter stay, so the row keeps its
-                                // identity and position and no extra input
-                                // row is appended below it.
+                                // In-place rename: the form replaces the header's trailing
+                                // content INSIDE the row — fold toggle + gutter stay, so the
+                                // row keeps its identity and no input row is appended.
                                 <ServerSectionRenameForm placeholder={workspace.title} mode="workspaceHeader" />
                               ) : (
                                 <>
@@ -751,12 +631,10 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                                     {workspace.ungrouped ? t('list.ungrouped') : workspace.title}
                                   </span>
                                   {getWorkspaceGitFlag(server.id, workspace.id)?.orphaned === true && (
-                                    // The workspace's path no longer exists
-                                    // (externally deleted worktree left a ghost).
-                                    // The badge doubles as the cleanup entry — an
-                                    // orphaned WORKTREE keeps its worktree row
-                                    // (no kebab), so the badge click opens the
-                                    // dedicated delete confirm.
+                                    // The workspace's path no longer exists (externally
+                                    // deleted worktree left a ghost). The badge doubles as
+                                    // the cleanup entry: an orphaned WORKTREE keeps its row
+                                    // but has no kebab, so the badge opens the delete confirm.
                                     <button
                                       type="button"
                                       className={cc.orphanBadge}
@@ -770,13 +648,10 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                                     <span className={cc.workspaceCount}>{visibleSessionCount}</span>
                                   )}
                                   {workspace.ungrouped !== true && workspace.synthetic !== true && (
-                                    // chamber (08 §11): the per-workspace Git
-                                    // occupant lives INSIDE the workspace header
-                                    // row (OpenChamber-style: the worktree/branch
-                                    // surface is the row itself, not a separate
-                                    // line). It renders the worktree-workspace's
-                                    // branch chip plus the create/delete actions;
-                                    // non-git workspaces get an empty mount.
+                                    // The per-workspace Git occupant lives INSIDE the header
+                                    // row (the worktree/branch surface is the row itself):
+                                    // branch chip plus create/delete; non-git workspaces get
+                                    // an empty mount.
                                     renderWorkspaceGit('sidebar.workspace.git', { wide }, {
                                       hookContext: { sourceId: server.id, workspaceId: workspace.id },
                                     })
@@ -785,14 +660,11 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                                     <span
                                       className={clsx(cc.rowActions, menuOpen[workspaceKey] === true && cc.rowActionsVisible)}
                                       onClick={(event) => {
-                                        // INVARIANT (pending-click.ts header): any
-                                        // control that stops propagation MUST clear
-                                        // the pending itself —
-                                        // stopPropagation stops the native event, so
-                                        // the document-level listener never sees it,
-                                        // and a surviving pending would make a later
-                                        // click on the same session spuriously enter
-                                        // rename.
+                                        // INVARIANT (pending-click.ts): a control that stops
+                                        // propagation MUST clear the pending itself — the
+                                        // document-level listener never sees the native event,
+                                        // and a surviving pending makes a later click on the
+                                        // same session spuriously enter rename.
                                         event.stopPropagation()
                                         clearPendingClick()
                                       }}
@@ -800,10 +672,7 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                                       <button
                                         type="button"
                                         className={cc.actionIcon}
-                                        // The row
-                                        // name rides the accessible name (upstream
-                                        // `actions.newSession.aria`, vendor
-                                        // ui-workspace Rows.tsx:179) — a bare
+                                        // The row name rides the accessible name — a bare
                                         // "新建会话" repeated per row tells AT nothing.
                                         aria-label={t('action.newSession.aria', { name: workspace.title })}
                                         title={t('action.newSession.aria', { name: workspace.title })}
@@ -817,11 +686,9 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                                       </button>
                                       {!isWorktree && (
                                       <Menu
-                                        // `closeOnPointerLeave` is upstream
-                                        // behaviour (vendor ui-workspace
-                                        // Rows.tsx:174); `compact` keeps the rows
-                                        // at the 26px/12px density instead of the
-                                        // official default 40px/14px.
+                                        // `closeOnPointerLeave` matches upstream; `compact`
+                                        // keeps the 26px/12px density instead of the official
+                                        // 40px/14px.
                                         compact
                                         portal
                                         closeOnPointerLeave
@@ -849,9 +716,7 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                                           },
                                           {
                                             id: 'delete',
-                                            // Upstream's workspace menu entry copy
-                                            // (`delete.workspace`,
-                                            // vendor ui-workspace Rows.tsx:131).
+                                            // Upstream's copy for the workspace delete entry.
                                             label: t('delete.workspace'),
                                             danger: true,
                                             icon: <IconTrashOutline16 size={14} />,
@@ -902,8 +767,7 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                                   event.dataTransfer.dropEffect = 'move'
                                   const half = rowHalf(event)
                                   if (workspaceDropBlocked(workspace.id, half)) {
-                                    // A suppressed zone never becomes the
-                                    // target — the drop/commit no-ops there.
+                                    // A blocked zone never becomes the target.
                                     return
                                   }
                                   setWorkspaceDrag(current => dragOverState(current, workspace.id, half))
@@ -923,10 +787,8 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                               ) : (
                                 <RowHoverCard
                                   anchor={workspaceHeader}
-                                  // Read-only by design: the projection carries no
-                                  // cwd for a workspace, so there is nothing to
-                                  // copy — no `copyText` and therefore no copy
-                                  // props here (they could never render).
+                                  // Read-only: the projection carries no cwd, so there is
+                                  // nothing to copy and no copy props that could render.
                                   content={(
                                     <div className={cc.hoverContent}>
                                       <div className={cc.hoverTitle}>{workspace.title}</div>
@@ -940,11 +802,9 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                                 />
                               )}
                             {/* Workspace-scoped failures are hoisted OUT of the
-                                fold gate (both lines): a new-session/rename/
-                                delete/drag failure must surface even while the
-                                group is folded — rename (dblclick or kebab),
-                                delete (kebab/orphan badge), workspace drags
-                                and the header `+` are all reachable from a
+                                fold gate: new-session/rename/delete/drag
+                                failures must surface even while the group is
+                                folded, since all of those are reachable from a
                                 folded header. */}
                             {workspaceError !== undefined && (
                               <div className={cc.rowError} role="alert">{workspaceError}</div>
@@ -952,13 +812,10 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                             {rowErrors[`${server.id}/workspace-drag/${workspace.id}`] !== undefined && (
                               <div className={cc.rowError} role="alert">{rowErrors[`${server.id}/workspace-drag/${workspace.id}`]}</div>
                             )}
-                            {/* chamber (打开失败可见性): session open failures
-                                whose row this group's fold/window gate hides —
-                                hoisted like the workspace errors above, so a
-                                failure survives a mid-flight fold (or a row
-                                windowed out of the visible slice). Visible
-                                rows render the error inline below themselves
-                                instead. */}
+                            {/* Session open failures whose row the fold/window
+                                gate hides are hoisted the same way, so a
+                                failure survives a mid-flight fold; visible rows
+                                render the error inline below themselves. */}
                             {sessions
                               .filter(session => rowErrors[openErrorKey(server.id, session.id)] !== undefined
                                 && (folded || !visibleSessions.some(visible => visible.id === session.id)))
@@ -983,9 +840,7 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                                 <button
                                   type="button"
                                   className={cc.sessionRowsMore}
-                                  // A real
-                                  // two-way disclosure (upstream
-                                  // WorkspaceBrowser.tsx:598-609) — the control
+                                  // A real two-way disclosure: the control
                                   // reports its state and collapses again.
                                   aria-expanded={rowsExpanded}
                                   onClick={() => {
@@ -1005,15 +860,10 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                           })
                         })()}
                         {(() => {
-                          // chamber (08 §11 Plan A): ALL unregistered worktrees
-                          // render at the very end of the workspace list — one
-                          // block per repository (user decision: not
-                          // after the main checkout, not after the repo group).
-                          // The block must NOT beat the workspace list: the git
-                          // facts (fast snapshot) arrive before the aggregate
-                          // (workspace.list + sessions.list) — gate on the
-                          // aggregate having landed so the worktrees never
-                          // appear ahead of the workspaces.
+                          // ALL unregistered worktrees render at the very end of the list,
+                          // one block per repository. The block must NOT beat the workspace
+                          // list: git facts arrive before the aggregate, so gate on the
+                          // aggregate having landed.
                           if (server.aggregateReady !== true) return []
                           return repoLayouts
                             .filter(layout => layout.unregistered.length > 0)
@@ -1035,10 +885,8 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                   </>
                   )
                 })() : (
-                  // Disconnected source: header + status icon only (dot or
-                  // spinner — the phase lives on hover/aria; no status text
-                  // on the main surface, the connections settings page
-                  // carries the detailed logSummary).
+                  // Disconnected source: header + status icon only (phase on hover/aria);
+                  // the settings page carries the detailed logSummary.
                   null
                 )}
                 </>

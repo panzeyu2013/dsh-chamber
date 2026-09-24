@@ -1,26 +1,21 @@
 /**
- * RuntimeHostAdapter — the SKETCH host-adaptation interface of the shared dsh
- * runtime core (design 18 §9.1). The shared package owns all runtime
- * version-management decisions. NOTE: no production code implements this
- * interface — the desktop main process and the gateway server adapt the core
- * through the real DI seams `StartupDeps`/`ApplyDeps`/`InstallerDeps` (and the
- * desktop-side `ControllerDeps`); the pure-Node fixture
- * `test/support/fake-adapter.ts` is the only implementor, for host-agnostic tests.
- *
- * This interface is a SKETCH per design 18 §9.1: the concrete desktop
- * `StartupDeps`/`ApplyDeps` union plus gateway wiring must finalize it (clock
- * injection `now`/`nowMs`, the abort signal source, the outbound-proxy
- * environment for install-child env scrubbing, progress granularity via
- * `notify`, and `restartHost()`).
+ * RuntimeHostAdapter — the SKETCH host-adaptation interface of the shared dsh runtime core.
+ * The shared package owns all runtime version-management decisions. NOTE: no production code
+ * implements this interface — desktop and gateway adapt the core through the real DI seams
+ * `StartupDeps`/`ApplyDeps`/`InstallerDeps` (plus desktop's `ControllerDeps`), and the
+ * pure-Node fixture `test/support/fake-adapter.ts` is the only implementor used by
+ * host-agnostic tests. Finalizing it must cover clock injection `now`/`nowMs`, the abort
+ * signal source, the outbound-proxy environment for install-child env scrubbing, progress
+ * granularity via `notify`, and `restartHost()`.
  */
 import type { ChildProcess } from 'node:child_process'
 import type { ProbeResult } from './activation-gate.ts'
 
 /**
- * RuntimeStatusProjection — sketch (§9.1): the runtime status snapshot a host
- * adapter forwards to its management surface (desktop IPC / gateway SSE-poll).
- * It aligns with the desktop `RuntimeLifecycleProjection` and the gateway
- * `/chamber/runtime/status` payload; only the `notify` seam is pinned.
+ * RuntimeStatusProjection — sketch: the runtime status snapshot a host adapter forwards to its
+ * management surface (desktop IPC / gateway SSE-poll), aligned with the desktop
+ * `RuntimeLifecycleProjection` and the gateway `/chamber/runtime/status` payload; only the
+ * `notify` seam is pinned.
  */
 export type RuntimeStatusProjection = Record<string, unknown>
 
@@ -42,7 +37,7 @@ export interface RuntimeHostAdapter {
   /** Spawn the candidate tree and run the read-only activation probe list. */
   spawnAndProbe(version: string, isBuiltin: boolean, signal?: AbortSignal): Promise<ProbeResult[]>
   stopHost(): Promise<void>
-  /** Transactional restart: `plane.restartLocal()` (design 18 §9.3). */
+  /** Transactional restart of the managed host. */
   restartHost(): Promise<void>
   /** Register an install child for will-quit / gateway stop() reaping. */
   registerInstallChild(child: ChildProcess): void

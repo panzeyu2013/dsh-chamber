@@ -1,21 +1,13 @@
 /**
  * 通知边沿的单一投影（P3）。
  *
- * WHY THIS EXISTS. Complete 通知此前有两条独立入口（壳 running 边沿 + facts observed
- * 完成），加上 `usableFacts` 抑制分支与两套去重（武装位与水位），规则散在
- * notification-edges.ts / App.tsx / use-bridge-subscriptions.ts 三处。本模块把
- * **证据归一**为一个策略：
- *
- *  - 有可用 facts 的来源：完成事实由 facts 证据拥有（host 域水位，可跨端收敛）；
- *    壳 running 边沿只贡献 ask/request，不再发 complete（这就是原先的 useFacts 抑制）；
- *  - 无 facts 的来源：完成由壳 running true→false / vendor completed 边沿给出，
- *    以「武装位」去重（重新 running 即解除）；
- *  - facts 证据：`completedAtSource === 'observed'` 且水位严格前进才通知
- *    （reconstructed 只出未读）；首份快照只播种水位（design 19 §3.5），两轨共用
- *    complete-ledger 的键空间。
- *
- * 规则本体仍复用既有纯函数（detectNotificationEdges / dedupeCompleteEdges /
- * watermark.ts），本模块只做「哪条证据作数 + 统一去重」的裁决。
+ * 把「哪条证据作数 + 统一去重」归一为一个策略（规则本体仍复用 detectNotificationEdges /
+ * dedupeCompleteEdges / watermark.ts）：
+ *  - 有可用 facts 的来源：完成事实由 facts 证据拥有（host 域水位，可跨端收敛）；壳 running
+ *    边沿只贡献 ask/request，不再发 complete；
+ *  - 无 facts 的来源：完成由壳 running true→false / vendor completed 边沿给出，以「武装位」去重；
+ *  - facts 证据：`completedAtSource === 'observed'` 且水位严格前进才通知（reconstructed 只出未读）；
+ *    首份快照只播种水位，两轨共用 complete-ledger 的键空间。
  */
 import {
   detectNotificationEdges,
@@ -46,9 +38,8 @@ export interface RuntimeNotificationPlan {
 }
 
 /**
- * 壳边沿证据。`factsUsable` = 该来源此刻有可判的 facts 快照：此时 complete 归
- * facts 入口，本入口只保留 ask/request（并且 complete 边沿**不以任何形式**记账，
- * 否则 facts 水位相同的一次完成会被两条轨道各发一次）。
+ * 壳边沿证据：`factsUsable` = 该来源此刻有可判 facts，此时 complete 归 facts 入口，本入口只保留
+ * ask/request（complete 边沿**不以任何形式**记账，否则同水位的完成会被两轨各发一次）。
  */
 export function planRuntimeNotifications(input: {
   readonly prev: Readonly<Record<string, SessionFacts>> | undefined
@@ -84,8 +75,8 @@ export interface FactsNotificationPlan {
 }
 
 /**
- * facts 证据：每行单次裁决。水位轨是**唯一**的跨重挂去重依据；武装位用于
- * 「本轮已发」的即时去重（重新 running 时由壳入口解除）。
+ * facts 证据：每行单次裁决。水位轨是**唯一**跨重挂去重依据；武装位用于「本轮已发」的即时去重
+ * （重新 running 时由壳入口解除）。
  */
 export function planFactsNotifications(input: {
   readonly rows: Readonly<Record<string, NotificationFactsRow>>

@@ -1,8 +1,6 @@
 /**
- * core-constants.ts — Bundle constants and capacity limits.
- *
- * core.ts re-exports the public names so the package/test import surface
- * stays stable.
+ * Bundle constants and capacity limits; core.ts re-exports the public names so the
+ * package/test import surface stays stable.
  */
 
 /** Bounded read for the worktree `.git` pointer file (gitdir lines are tiny;
@@ -16,11 +14,9 @@ export const MUTATION_OUTPUT_CAP = 256 * 1024
 export const PREVIEW_TTL_MS = 5 * 60_000
 export const OPERATION_TTL_MS = 24 * 60 * 60_000
 export const SNAPSHOT_DEADLINE_MS = 20_000
-/** Discovery cache TTL (design 08 §2.1, OpenChamber parity): the per-workspace
- *  rev-parse and per-repository worktree-list/show-ref results are reused
- *  within this window when the workspace registry signature is unchanged, so
- *  unchanged sources skip the spawn storm on every 30s poll. Per-worktree
- *  STATUS (dirty) always runs fresh. Mutations clear the caches. */
+/** Discovery cache TTL: rev-parse / worktree-list / show-ref results are reused within
+ *  this window while the registry signature is unchanged; STATUS (dirty) always runs
+ *  fresh and mutations clear the caches. */
 export const DISCOVERY_TTL_MS = 30_000
 export const SNAPSHOT_WALL_TIMEOUT_MS = 25_000
 export const MAX_WORKSPACES = 128

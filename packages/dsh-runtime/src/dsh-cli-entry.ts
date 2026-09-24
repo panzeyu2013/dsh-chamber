@@ -3,9 +3,8 @@
  *
  * 一个 dsh 工作区只有两种入口形状：已安装 npm 产物
  * (node_modules/@deepseek-ai/dsh/lib/bin.js，直接 node 执行) 与 dev 源码
- * (apps/cli/src/bin.ts，经 tsx loader 执行)；两者都不存在即非工作区。
- * gateway 的 isDshWorkspace / plugins-tasks 启动都派生自本函数；
- * control-plane spawn-dsh.ts 的同逻辑副本由下一轮收敛（本轮不动）。
+ * (apps/cli/src/bin.ts，经 tsx loader)；两者都不存在即非工作区。gateway 的
+ * isDshWorkspace / plugins-tasks 启动都派生自本函数。
  */
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'

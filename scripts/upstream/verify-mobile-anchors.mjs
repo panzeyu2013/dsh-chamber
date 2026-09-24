@@ -233,8 +233,7 @@ function main() {
     process.exit(1)
   }
   // pin 身份：锚点树与仓内 pin 不是同一个上游时，这个门证明的是另一个版本。
-  // 注意身份是**版本级**的：同版本的本地重打树同样通过；内容级摘要需要仓内快照，
-  // 见 docs/progress/STATUS.md 的登记项。
+  // 注意身份是**版本级**的：同版本的本地重打树同样通过；内容级摘要需要仓内快照。
   const pin = compareAnchorPin(root)
   if (pin === null) {
     const detail = `[note] pin 身份无法判定：读不到 ${join(ROOT, 'packages', 'desktop', 'vendor', 'dsh', 'pnpm-lock.yaml')}`

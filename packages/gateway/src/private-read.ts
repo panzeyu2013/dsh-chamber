@@ -1,7 +1,6 @@
 /**
- * Shared private-file read wrappers: every gateway state
- * leaf is read through the control-plane no-follow/inode discipline, and an
- * absent file (ENOENT) is the only outcome callers may treat as "not there" —
+ * Shared private-file read wrappers: every gateway state leaf is read through the
+ * control-plane no-follow/inode discipline. ENOENT is the only "not there" outcome;
  * every other failure is rethrown loud, never flattened into a default.
  */
 import { readPrivateFileNoFollow, type PrivateFileIdentity, type PrivateFileReadOptions } from '@dsh-chamber/control-plane'

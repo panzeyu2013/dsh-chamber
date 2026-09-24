@@ -1,32 +1,14 @@
 /**
- * Row hover card (chamber-owned): the official ui-primitives `HoverCard`'s card
- * chrome, placement and copy affordance, driven by `createHoverIntent`
- * (../shared/hover-intent.ts) instead of the vendored atom's timer/state pair.
- *
- * Why the chamber owns this atom: the vendored HoverCard arms its grace close
+ * Row hover card (chamber-owned): the official ui-primitives HoverCard's chrome,
+ * placement and copy affordance, driven by `createHoverIntent` instead of the
+ * vendored atom's timer/state pair. The vendored atom arms its grace close
  * against the last COMMITTED `open`, so a pointerleave handled while React's
- * commit of the dwell timer is still pending strands a card on screen with no
- * pointer left to dismiss it. Vendor sources are read-only here (pinned
- * upstream), so the corrected machine lives in this package; the card box, the
- * 8px right-edge offset, the 200ms grace, the press-to-dismiss rule and the
- * copy-on-activation contract all mirror the vendored atom.
- * `docs/design/06-sidebar-enhancements.md` §7 records the port.
- *
- * Deliberate differences from the vendored atom, all pinned by
- * `test/session-rows/hover-card-wiring.test.ts`:
- *  - the close path bumps the copy epoch, so a clipboard write still in flight
- *    when the card closes can never make the NEXT card render `copiedLabel`
- *    (upstream does this in `close()`, `HoverCard.tsx:54-58`);
- *  - the vertical placement has no `EDGE_MARGIN` floor (upstream has none
- *    either): a fully off-screen anchor, or one that is not laid out at all (a
- *    zero-area / non-finite rect from a `display: none` ancestor or a detached
- *    node), CLOSES the card instead of pinning it at the viewport corner, while
- *    a partially visible anchor clamps to `top >= 0` so the card can never hang
- *    entirely above the viewport;
- *  - placement is recomputed on layout changes of the anchor (ResizeObserver),
- *    not only on open/scroll/resize;
- *  - the wrapper and the card carry `data-chamber-hovercard-anchor` /
- *    `data-chamber-hovercard` so the acceptance probes can locate them.
+ * commit is pending strands a card with no pointer left to dismiss it; vendor
+ * sources are read-only, so the corrected machine lives in this package.
+ * Deliberate differences: the close path bumps the copy epoch (an in-flight
+ * clipboard write cannot paint `copiedLabel` on the NEXT card); an off-screen or
+ * non-laid-out anchor CLOSES the card while a partially visible one clamps to
+ * `top >= 0`; placement follows the anchor's ResizeObserver.
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
@@ -43,30 +25,21 @@ const ANCHOR_GAP = 8
 
 /** Props: the vendored atom's used subset, so the call sites stay unchanged. */
 export interface RowHoverCardProps {
-  /** The hover target, rendered in place inside the wrapper span. */
   anchor: ReactNode
   /** Card body; the pointer may rest on it, so it is readable and selectable. */
   content: ReactNode
   /** Suppress opening and close an open card (menu open, drag, inline rename). */
   disabled?: boolean
-  /**
-   * Dwell before the card opens (default {@link HOVER_OPEN_DELAY_MS}, the
-   * official atom's value). Read once, when the card's machine is created.
-   */
+  /** Dwell before open (default {@link HOVER_OPEN_DELAY_MS}); read once at machine creation. */
   openDelayMs?: number
   /** Primary value copied by activation; omitted makes the card read-only. */
   copyText?: string | undefined
   /** Localized accessible activation-label prefix; required with `copyText`. */
   copyLabel?: string
-  /** Localized visible success label; required with `copyText`. */
   copiedLabel?: string
 }
 
-/**
- * Render an anchor with a hover-triggered preview card.
- * @param props - see {@link RowHoverCardProps}.
- * @returns the anchor wrapper plus the portaled card while open.
- */
+/** Render an anchor with a hover-triggered preview card. */
 export function RowHoverCard({
   anchor, content, disabled = false, openDelayMs = HOVER_OPEN_DELAY_MS, copyText, copyLabel, copiedLabel,
 }: RowHoverCardProps) {
@@ -89,20 +62,14 @@ export function RowHoverCard({
     setCopied(false)
   }, [])
 
-  // One machine per card, created on the first render (its options are plain
-  // values, so a later prop change cannot re-time a card already in flight) and
-  // reused across StrictMode's double-invoked effects. NOTE what `dispose`
-  // really does: it drops both timers AND releases the
-  // page-global slot. Reusing the machine is still safe there only because a
-  // remount happens with `open === false` (the dwell has not fired yet) — moving
-  // `dispose()` into an effect with changing deps would release the slot of a
-  // card that is still on screen, i.e. a card no other card can dismiss.
+  // 每张卡一个机器，首渲染创建（选项是普通值，之后改 prop 不会重新计时），
+  // StrictMode 双调用下复用。`dispose` 丢掉两个计时器并释放页面级槽位；复用仍安全
+  // 仅因重挂载时 open === false——挪进依赖变化的 effect 会释放仍在屏幕上的卡的槽位。
   const intentRef = useRef<HoverIntent | null>(null)
   if (intentRef.current === null) intentRef.current = createHoverIntent({ disabled, openDelayMs })
   const intent = intentRef.current
-  // Visibility is READ from the machine, never mirrored into component state:
-  // React re-checks this snapshot after commit, so a decision taken mid-render
-  // (leave, press, owner gate) can never be overridden by a stale open commit.
+  // 可见性从机器读取，绝不镜像进组件 state：React 在 commit 后会重新核对快照，
+  // 渲染中途做出的决定（leave/press/所有者门）不会被过期的 open commit 覆盖。
   const open = useSyncExternalStore(intent.subscribe, intent.isOpen)
 
   // Owner gating mid-hover (menu opened, drag started) closes immediately.
@@ -111,15 +78,9 @@ export function RowHoverCard({
   }, [intent, disabled])
 
   // The copy feedback belongs to one showing of the card. `open === false` is
-  // the ONE close funnel — grace close, press-dismiss and disability flip all
-  // publish it — so bumping the epoch here is what cancels a clipboard write
-  // still in flight when the card closes. Without it that write settles after
-  // close→reopen and paints `copiedLabel` on the NEW card for a second, armed
-  // with a timer nobody asked for; the same bump lives in the vendored atom's
-  // `close()` (upstream ui-primitives HoverCard.tsx:54-58). The order of the two
-  // statements below carries no meaning: both run synchronously, and the stale
-  // write's continuation is a microtask that cannot interleave them — the epoch
-  // only has to be stale by the time it resumes.
+  // 复制反馈属于一次展示。`open === false` 是唯一关闭漏斗（宽限关闭/按下即收/禁用），
+  // 在此自增 epoch 才能取消关闭时仍在飞行中的剪贴板写入——否则它会在关闭→重开后
+  // 落定，为新卡刷出 copiedLabel 并带上没人要求的计时器。两句顺序无意义。
   useEffect(() => {
     if (open) return
     copyEpochRef.current += 1
@@ -139,21 +100,10 @@ export function RowHoverCard({
     }
   }, [intent])
 
-  // Fixed-position from the anchor rect; track the anchor while open (the
-  // capture-phase scroll listener catches nested panes, the ResizeObserver
-  // catches layout changes that move the row without a scroll — a list reflow,
-  // a fold, a rename swapping the row for a form). The horizontal axis is
-  // clamped inside the viewport: the card is 244px wide and the sidebar sits at
-  // the left edge, so on a narrow window the official right-edge offset alone
-  // would push the card off screen. The vertical axis has no such `EDGE_MARGIN`
-  // floor (upstream has none either): a fully off-screen anchor, or one that is
-  // not laid out at all, closes the card instead of pinning it at the edge with
-  // nothing under it, and a partially visible anchor clamps to `top >= 0` so the
-  // card never hangs entirely above the viewport. Keyed on
-  // `open` alone (never on `content`, whose element identity changes every
-  // render) and identity-guarded, so placement cannot feed itself a render
-  // loop. The card stays `visibility: hidden` until the first measurement
-  // lands, so it can never paint at 0,0.
+  // 依锚点 rect 固定定位并在打开期间跟随（捕获阶段 scroll 监听嵌套面板，ResizeObserver
+  // 捕获不滚动就移动行的重排）。水平轴夹在视口内（卡片宽 244px，窄窗口下官方右缘偏移会出屏）；
+  // 竖直轴无 EDGE_MARGIN 下限：完全出屏/未布局的锚点关闭卡片而不是钉在边缘，部分可见的夹到 top >= 0。
+  // 只依赖 `open` 并做等值守卫（content 的元素标识每次渲染都变），首次测量前卡片 visibility: hidden。
   useLayoutEffect(() => {
     if (!open) { setPos(null); return }
     const place = (): void => {
@@ -162,14 +112,8 @@ export function RowHoverCard({
       /* v8 ignore next -- both refs are attached before this effect runs and the listeners die with them. */
       if (wrapper === null || card === null) return
       const r = wrapper.getBoundingClientRect()
-      // A rect with no area — or a non-finite one — means the anchor is not laid
-      // out at all: a row inside a `display: none` ancestor (its workspace group
-      // folded while the card was open) or a node detached from the document.
-      // Such an anchor reports the origin, so the off-screen test below sees it
-      // as neither above nor below the viewport and the card would stay pinned
-      // at the top-left corner with nothing under it. Close instead. The mobile
-      // watchdog guards the same shape (`isUsableAnchorRect`,
-      // dsh-chamber-client-ui-mobile/src/client/official-hover-card.ts:164-166).
+      // 无面积或非有限的 rect 表示锚点根本没布局（display:none 祖先里的行或已分离节点）：
+      // 它报告原点，出屏测试既不见上也不见下，卡片会钉在左上角底下什么都没有——改为关闭。
       if (!Number.isFinite(r.left) || !Number.isFinite(r.top)
         || !Number.isFinite(r.right) || !Number.isFinite(r.bottom)
         || !(r.right > r.left) || !(r.bottom > r.top)) {
@@ -178,38 +122,21 @@ export function RowHoverCard({
       }
       if (r.bottom < 0 || r.top > window.innerHeight
         || r.right < 0 || r.left > window.innerWidth) {
-        // The anchor itself is off screen (scrolled past, or the list moved
-        // under a stationary pointer): there is nothing to preview, and a
-        // clamped card would float at an edge with no anchor to explain it.
-        // Close through the machine — a plain render change could be
-        // re-committed in the wrong order.
-        // Both axes, deliberately: the vertical case is
-        // the reachable one (the sidebar only scrolls vertically), and the
-        // horizontal arms are defensive symmetry so "off-screen anchor ⇒ close"
-        // stays a two-axis contract instead of a one-axis special case.
+        // 锚点本体出屏（滚动越过，或列表在静止指针下移动）：无可预览，夹边浮起的
+        // 卡片没有锚点可解释。经机器关闭（普通渲染变更可能以错误顺序被重新 commit）；
+        // 两轴都判是对称契约（竖直可达，水平为防御性对称）。
         intent.press()
         return
       }
       const left = Math.max(EDGE_MARGIN, Math.min(r.right + ANCHOR_GAP, window.innerWidth - card.offsetWidth - EDGE_MARGIN))
-      // Bottom-clamped like upstream, and never above the viewport's top edge: a
-      // PARTIALLY visible anchor (the on-screen case, since the degenerate and
-      // off-screen rects returned above) can sit closer to the top than the card
-      // is tall, and the card must stay readable at y=0 instead of hanging
-      // entirely off-screen. Closing is not required here — the anchor is real.
+      // 底边夹紧同上游且不低于视口顶边：部分可见的锚点可能比卡片矮，卡片要留在 y=0 可读而不是整个挂到屏外。
       const top = Math.max(0, Math.min(r.top, window.innerHeight - card.offsetHeight - EDGE_MARGIN))
       setPos(prev => (prev !== null && prev.left === left && prev.top === top ? prev : { left, top }))
     }
     place()
-    // The wrapper's own box AND its containing block: a row inserted or removed
-    // above this one moves the anchor without resizing it, and the container's
-    // box is the closest observable signal for that reflow.
-    // Known bound (not reachable today): a reorder that
-    // swaps two same-size rows changes NEITHER box, and with no scroll/resize
-    // event there is nothing to observe — the card would keep the old
-    // coordinates until the next scroll or resize. Upstream has no observer at
-    // all, so this is strictly narrower than the vendored atom; fixing it
-    // would mean observing the list's child order, which is not worth a
-    // MutationObserver for a transient mis-anchor.
+    // 观察 wrapper 自身的盒与其包含块：在上方插入/移除行会移动锚点而不改变其尺寸，
+    // 容器盒是最接近的可观察信号。已知边界（今天不可达）：同尺寸两行互换时两个盒都不变，
+    // 无 scroll/resize 可观察，卡片保留旧坐标直到下次滚动/调整；上游根本没有观察器。
     const observer = new ResizeObserver(place)
     const wrapper = rootRef.current
     /* v8 ignore next -- both refs are attached before this effect runs (the same assumption `place` makes). */
@@ -246,8 +173,7 @@ export function RowHoverCard({
     ? (
       <div
         ref={cardRef}
-        // Acceptance-probe hook (exact name; acceptance probes locate the
-        // portaled card by it).
+        // 外部探针标记（精确名；按它定位传送出去的卡片）。
         data-chamber-hovercard=""
         className={`${cc.hoverCard}${copyable ? ` ${cc.hoverCardCopyable}` : ''}${copied ? ` ${cc.hoverCardFeedback}` : ''}`}
         style={{
@@ -286,16 +212,13 @@ export function RowHoverCard({
   return (
     <span
       ref={rootRef}
-      // Acceptance-probe hook (exact name; acceptance probes locate anchors by
-      // it). See the card's twin marker above.
+      // 外部探针标记（精确名），见卡片上的孪生标记。
       data-chamber-hovercard-anchor=""
       className={cc.hoverAnchor}
       onPointerEnter={() => { intent.enter() }}
       onPointerLeave={() => { intent.leave() }}
-      // A press inside the anchor (row click, menu trigger) dismisses the card
-      // immediately. Capture presses reach this handler from the card too — it
-      // is a React child of the wrapper — but a press there starts a selection,
-      // so the card must stay mounted under it.
+      // 锚点内的按下（行点击、菜单触发器）立即收卡；卡上的按下也会到达此处理器
+      // （卡是 wrapper 的 React 子节点），但那是在选文本，卡片必须保持挂载。
       onPointerDownCapture={(e) => {
         if (cardRef.current?.contains(e.target as Node)) return
         intent.press()

@@ -1,23 +1,11 @@
 /**
- * openInApp wire contract — the SINGLE SOURCE of truth for the typert Remote
- * namespace, its method names, the payload/result shapes and the domain
- * carrier every method answers with.
- *
- * ## chamber fork divergence (design 20 §6.1, fork & supersede)
- *
- * Upstream (`@deepseek-ai/dsh-host-open-in-app`)
- * publishes three `webServer` route paths and their HTTP payloads here, and the
- * official browser half imports them over the `./shared` subpath. The chamber
- * fork replaces that transport: the catalog, icons and launches are served over
- * the instance's own generic RPC channel (`/api/<endpoint>`) as a typert Remote
- * in the `openInApp` namespace, guarded by the instance's own connection /
- * gateway fence instead of a second, self-built route fence. These constants
- * therefore name METHODS, not paths, and there is no route to register.
- *
- * The chamber client plugin (`@dsh-chamber/dsh-chamber-client-ui-open-in`)
- * keeps its own mirror of the names below because it is a browser package and
- * cannot import this Node-side module; `test/…/open-in-wire-lockstep.test.ts`
- * reads THIS file and fails when the two sides drift.
+ * openInApp wire contract — SINGLE SOURCE of truth for the typert Remote namespace,
+ * method names, payload/result shapes and the domain carrier. The fork replaces
+ * upstream's three `webServer` route paths with the instance's own generic RPC channel
+ * behind its connection/gateway fence, so these constants name METHODS, not paths (there
+ * is no route to register). The chamber client plugin mirrors the names — it is a
+ * browser package and cannot import this Node-side module — and a lockstep test reads
+ * THIS file to catch drift.
  */
 
 /** Typert Remote namespace this host domain occupies. */
@@ -27,11 +15,8 @@ export const OPEN_IN_APP_METHODS = ['probe', 'apps', 'icon', 'open'] as const
 
 export type OpenInAppMethod = (typeof OPEN_IN_APP_METHODS)[number]
 
-/**
- * The cheap activation-probe method (`namespace/method` form — the shape
- * `HOST_DOMAIN_PROBE_NAMES` / the gateway probe map expect). Presence plus
- * protocol only: no catalog detection, no process spawn, no filesystem walk.
- */
+/** The cheap activation-probe method (`namespace/method` form). Presence plus
+ *  protocol only: no catalog detection, no spawn, no filesystem walk. */
 export const OPEN_IN_APP_PROBE_METHOD = `${OPEN_IN_APP_REMOTE_NAMESPACE}/probe`
 
 /** Availability read: catalog ids probed as installed, in menu order. */
@@ -53,11 +38,8 @@ export interface OpenInAppAppsValue {
   readonly apps: readonly string[]
 }
 
-/**
- * `icon()` result. `mime` mirrors the upstream `OpenInAppIcon.contentType`
- * union; `dataBase64` is the raw icon bytes so the browser can build a `data:`
- * URL without a second same-origin route (design 20 §4.1/§10).
- */
+/** `icon()` result: `mime` mirrors upstream's contentType union, `dataBase64` is the
+ *  raw bytes so the browser can build a `data:` URL without a second route. */
 export interface OpenInAppIconValue {
   readonly mime: string
   readonly dataBase64: string
@@ -89,12 +71,9 @@ export interface OpenInAppDomainError {
   readonly retryable?: boolean
 }
 
-/**
- * Explicit business carrier: the generic dsh gateway does not preserve thrown
- * error fields, so every method answers with this shape (git-worktree /
- * archive-cleanup parity) and only unexpected internal failures escape as
- * throws.
- */
+/** Explicit business carrier: the generic gateway does not preserve thrown error
+ *  fields, so every method answers this shape and only unexpected internal failures
+ *  escape as throws. */
 export type OpenInAppDomainResult<T> =
   | { readonly ok: true; readonly value: T }
   | { readonly ok: false; readonly error: OpenInAppDomainError }

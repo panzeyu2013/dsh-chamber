@@ -1,18 +1,14 @@
 /**
- * Client-side mirror of the `openInApp` wire (design 20 §4.1/§4.2).
+ * Client-side mirror of the `openInApp` wire.
  *
- * WHY A MIRROR: this is a browser package, while the host domain lives in the
- * Node-side seed package `@dsh-chamber/dsh-chamber-seed-open-in` — seeded INTO
- * the managed instance, never linked into the composite bundle. The two sides
- * are pinned to each other by `test/wire-protocol/open-in-wire-lockstep.test.ts`, which reads
- * the seed's `src/shared.ts` and `src/index.ts` and fails on any drift of the
- * namespace, a method name, the error-code set or the `@Remote` surface. The
- * protocol is chamber-owned on both halves (design 20 §8).
+ * WHY A MIRROR: this is a browser package while the host domain lives in the
+ * Node-side seed package seeded INTO the managed instance and never linked into
+ * the composite bundle. A lockstep test pins namespace, method names, error-code
+ * set and `@Remote` surface against the seed’s sources.
  *
- * The transport is the instance's own generic RPC channel — `ctx.connection.
- * rpc.call('/api', <method>, { args }, signal)` — so the per-entry base path,
- * the browser-auth cookie and the trust fence all come from the existing
- * connection carrier (design 20 §4.2); this package never builds a URL.
+ * The transport is the instance’s own generic RPC channel, so the per-entry base
+ * path, browser-auth cookie and trust fence all come from the existing
+ * connection carrier; this package never builds a URL.
  */
 
 /** Typert Remote namespace the host domain occupies. */
@@ -67,9 +63,7 @@ export interface OpenInAppIconValue {
 }
 
 /**
- * Media types this client will turn into a `data:` URL. The host answers
- * `image/png` today (its extractor emits PNG) and `image/svg+xml` for themed
- * Linux icons; a hostile or drifted host can therefore never hand the page an
- * arbitrary document type to render.
+ * Media types this client turns into a `data:` URL; a drifted or hostile host
+ * can never hand the page an arbitrary document type to render.
  */
 export const OPEN_IN_APP_ICON_MIME_ALLOWLIST: readonly string[] = ['image/png', 'image/svg+xml']

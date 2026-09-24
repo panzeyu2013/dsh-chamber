@@ -1,25 +1,17 @@
 /**
- * Shared control-plane REST client (design 04 §3 / 05 §3.1):
- * the browser half of the management REST surface — /health,
- * /api/connections (local), /api/host/logs — consumed by BOTH the renderer
- * App layer (packages/renderer/src/api.ts) and the connections settings
- * plugin (packages/dsh-chamber-client-ui-settings-connections control-plane.ts).
- * The wire contract here mirrors
- * packages/control-plane/src/api.ts (04 §3 verbatim) and is the single
- * frontend source.
+ * Shared control-plane REST client: the browser half of the management REST
+ * surface (/health, /api/connections, /api/host/logs), consumed by BOTH the
+ * renderer App layer and the connections settings plugin. The wire contract
+ * mirrors packages/control-plane/src/api.ts and is the single frontend source.
  *
- * PURE BROWSER implementation on purpose: this module also ships inside the
- * settings plugin bundles, which execute in the renderer page — no Node
- * imports, no Node globals. Every value is non-secret: tunnel URLs and SSH
- * material never cross this module.
- *
- * The page's own origin is authoritative: the shell itself is served by the
- * control plane, so REST and SSE must not wait for the asynchronous preload
- * bridge before learning a dev/overridden port. The injected URL and fixed
- * default remain fallbacks for non-page harnesses only.
+ * PURE BROWSER on purpose: it also ships inside settings-plugin bundles that
+ * execute in the renderer page — no Node imports or globals. Every value is
+ * non-secret (tunnel URLs and SSH material never cross this module); the page's
+ * own origin is authoritative, and the injected URL / fixed default are
+ * fallbacks for non-page harnesses only（桌面 dev 可用 `DSH_CHAMBER_CP_PORT` 覆盖）。
  */
 
-/** 统一错误形状（design 04 D1：{error, code?}）+ HTTP 状态 + 响应体 + 限流提示。 */
+/** 统一错误形状 {error, code?} + HTTP 状态 + 响应体 + 限流提示。 */
 export interface ApiErrorBody {
   error?: string
   code?: string
@@ -35,11 +27,7 @@ export interface ApiError extends Error {
 /** 控制面 loopback 默认端口（前端单源；桌面 dev 可用 `DSH_CHAMBER_CP_PORT` 覆盖）。 */
 const DEFAULT_CONTROL_PLANE_URL = 'http://127.0.0.1:17500'
 
-/**
- * The window.dshChamber page bridge slot this module reads (structural
- * subset of the renderer's authoritative global.d.ts DshChamberBridge —
- * self-contained so the sidebar package needs no renderer import).
- */
+/** The window.dshChamber box this module reads (structural subset of the renderer's DshChamberBridge, so the sidebar needs no renderer import). */
 interface ControlPlaneBridgeSlot {
   dshChamber?: { controlPlaneUrl?: string | null }
 }
@@ -74,11 +62,11 @@ export async function request<T = unknown>(path: string, options: RequestOptions
   try {
     data = await res.json()
   } catch {
-    // 非 JSON 响应（如 500 纯文本），下面按状态码兜底
+    // 非 JSON 响应（如 500 纯文本），按状态码兜底
   }
 
   if (!res.ok) {
-    // Unified error shape (design 04 D1): {error: string, code?: string}.
+    // Unified error shape {error, code?} (control-plane api.ts).
     const body = data as ApiErrorBody | null
     const code = body?.code
     const message = body?.error || body?.message
@@ -99,19 +87,14 @@ export function post<T = unknown>(path: string, body: unknown): Promise<T> {
   return request<T>(path, { method: 'POST', body: JSON.stringify(body ?? {}) })
 }
 
-/* ---- 控制面 REST 契约响应形状（04 §3；与 control-plane api.ts 对齐） ---- */
 
-/** GET /health → {ok, dsh:{status, port, error?}}（04 §3.1；port 0 = 未就绪）。 */
+/** GET /health → {ok, dsh:{status, port, error?}}（port 0 = 未就绪）。 */
 export interface HealthResponse {
   ok: boolean
   dsh: { status: string; port: number; error?: string | null }
 }
 
-/**
- * 写者静默诊断的 wire 形状（02 §3.4 / 04 §3.2）。
- * `GET /api/connections/local/writers` 的响应：本地实例为何起不来。`sticky`
- * 表示闩锁是被「写入期终止失败」关死的（扫描无法再证明），只能重启应用恢复。
- */
+/** `GET /api/connections/local/writers` 的 wire 形状：本地实例为何起不来。`sticky` 表示闩锁被「写入期终止失败」关死（扫描无法再证明），只能重启应用恢复。 */
 export interface LocalWriterBlockerWire {
   name: string
   status: 'reclaimed' | 'kept' | 'removed'
@@ -126,10 +109,8 @@ export interface LocalWriterDiagnosisWire {
   errors: string[]
 }
 
-/**
- * 规范化诊断响应：只保留 blocking（kept）条目，并把缺字段补成安全默认——
- * 旧控制面/其它形态不提供该路由时调用方拿到 null，页面就不渲染该块。
- */
+/** 规范化诊断响应：只保留 blocking（kept）条目并把缺字段补成安全默认；不提供该路由的
+ *  控制面让调用方拿到 null，页面就不渲染该块。 */
 export function toLocalWriterDiagnosis(wire: unknown): LocalWriterDiagnosisWire | null {
   if (wire === null || typeof wire !== 'object') return null
   const raw = wire as { quiescent?: unknown; writers?: unknown; errors?: unknown }
@@ -153,7 +134,7 @@ export function toLocalWriterDiagnosis(wire: unknown): LocalWriterDiagnosisWire 
   }
 }
 
-/** /api/connections 行的 wire 形状（04 §3.2；控制面为权威）。 */
+/** /api/connections 行的 wire 形状（控制面为权威）。 */
 export interface ConnectionRowWire {
   id: string
   label?: string
@@ -163,7 +144,7 @@ export interface ConnectionRowWire {
   error?: string
 }
 
-/** Connection row public projection（04 §3.2：kind:'local' 恒为本地行）。 */
+/** Connection row public projection（kind:'local' 恒为本地行）。 */
 export interface ConnectionSummary {
   connectionId: string
   kind: 'local'
@@ -184,14 +165,13 @@ export function toConnectionSummary(row: ConnectionRowWire): ConnectionSummary {
   return summary
 }
 
-/** 一行主机滚动日志（04 §3.3）。 */
 export interface HostLogLine {
   ts: number
   stream: 'stdout' | 'stderr'
   line: string
 }
 
-/** GET /api/host/logs 响应（04 §3.3）。 */
+/** GET /api/host/logs 响应。 */
 export interface HostLogsResponse {
   port: number
   lines: HostLogLine[]

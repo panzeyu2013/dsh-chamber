@@ -1,15 +1,13 @@
 /**
- * Chamber settings shell plugin, browser half:
- * registers the「设置 / Settings」shell into the `sidebar.settings` slot at a
- * LOWER priority than the official SettingsRoot registration, so the
- * official shell is shadowed (never conflicts — the official entry stays on
- * the ledger and its settings.* children declarations remain valid). The
- * shell itself (SettingsShell.tsx) renders the SELECTED source's OWN boot-ctx
- * `settings.section` ledger with the seats that ctx's own renderer bound —
- * nothing is mounted twice and no service is stubbed (design 05 §5) — and
- * renders the chamber-global connections surface as a
- * fixed nav entry. No chamber-side persistence, no new control-plane API;
- * every configuration fact stays on the target host.
+ * Chamber settings shell plugin, browser half: registers the「设置 / Settings」
+ * shell into the `sidebar.settings` slot at a LOWER priority than the official
+ * SettingsRoot, so the official shell is shadowed (never conflicts — the official
+ * entry stays on the ledger and its settings.* children declarations stay valid).
+ * The shell renders the SELECTED source's OWN boot-ctx `settings.section` ledger
+ * with the seats that ctx's own renderer bound, plus the chamber-global
+ * connections surface as a fixed nav entry (design 05 §5). No chamber-side
+ * persistence, no new control-plane API; every configuration fact stays on the
+ * target host.
  */
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 // Type-only: pulls the locale plugin's Context merge (ctx.locale).
@@ -48,13 +46,11 @@ const NS = 'dsh-chamber.settings.bridge'
 const CONNECTIONS_NS = 'dsh-chamber.settings.connections'
 
 /**
- * Shadow priority: the official SettingsRoot registers at the default 0; the
- * slot core's shadowing rule renders the LOWEST priority winner, so a lower
- * value replaces the official shell without touching its ledger entry. The
- * value is the documented RESERVED range (client-core face
- * `settings-shell.ts`) — the chamber sidebar watchdog reports any registrant
- * that goes below it, because the shell is the only renderer of the
- * connections/general pages and of every per-source plugin settings section.
+ * Shadow priority: the official SettingsRoot registers at the default 0, and the
+ * slot core renders the LOWEST priority winner, so a lower value replaces the
+ * official shell without touching its ledger entry. The value is the documented
+ * RESERVED range (client-core face `settings-shell.ts`); the sidebar watchdog
+ * reports any registrant that goes below it.
  */
 const SHADOW_PRIORITY = SETTINGS_SHELL_SHADOW_PRIORITY
 
@@ -62,17 +58,13 @@ const SHADOW_PRIORITY = SETTINGS_SHELL_SHADOW_PRIORITY
 export const inject = ['slots', 'locale']
 
 /**
- * The「dsh 运行时」`settings.section` id this package registers on the source's
- * own boot ctx (order 31, right after agent-presets; design 18 §3.6/§9.3).
- * Exported because it is the section's cross-module identity (design 05 §5).
+ * The「dsh 运行时」`settings.section` id this package registers on the source's own
+ * boot ctx (order 31, right after agent-presets). Exported because it is the
+ * section's cross-module identity.
  */
 export const RUNTIME_SECTION_ID = 'dsh-runtime'
 
-/**
- * Register the chamber settings shell once the `sidebar.settings` declaration
- * is on the ledger.
- * @param ctx - client root context.
- */
+/** Register the chamber settings shell once the `sidebar.settings` declaration is on the ledger. */
 export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'dsh-chamber: settings shell dictionaries')
 
@@ -80,17 +72,14 @@ export function apply(ctx: ClientContext): void {
   const connectionsT = ctx.locale.bind(CONNECTIONS_NS)
   const chamberInstanceId = (ctx as ClientContext & { chamberInstanceId?: string }).chamberInstanceId
   const sourceFingerprint = (ctx as ClientContext & { chamberSourceFingerprint?: string }).chamberSourceFingerprint
-  // Complete-bridge face publication (design 05 §5): this plugin
-  // runs once per instance boot ctx, so it is the ONE place that can hand the
-  // panel that source's own settings ledger and locale face. An invalid or
-  // absent instance id keeps the plugin inert (a ctx without the chamber boot
-  // fact is not a source).
+  // Complete-bridge face publication: this plugin runs once per instance boot ctx,
+  // so it is the ONE place that can hand the panel that source's own settings ledger
+  // and locale face. An invalid or absent instance id keeps the plugin inert.
   const validBinding = chamberInstanceId !== undefined
     && isValidProducerSourceFingerprint(chamberInstanceId, sourceFingerprint)
   if (validBinding) {
-    // The ambient cordis face this package compiles against declares only the
-    // WRITE half of these two services; the read halves the face publishes are
-    // the real registry/locale faces (same objects the plugins use).
+    // The ambient cordis face declares only the WRITE half of these two services;
+    // the read halves the face publishes are the real registry/locale faces.
     const slots = ctx.slots as unknown as SettingsSourceSlots
     const localeFace = ctx.locale as unknown as SettingsSourceLocale
     ctx.effect(() => publishSettingsSourceRuntime(chamberInstanceId, {
@@ -113,22 +102,18 @@ export function apply(ctx: ClientContext): void {
 }
 
 /**
- * Register this instance's own「dsh 运行时」settings section into its OWN
- * ledger (design 18 §3.6 / design 05 §5).
+ * Register this instance's own「dsh 运行时」settings section into its OWN ledger.
  *
- * WHY here and not per panel target: the panel renders the selected source's
- * own boot-ctx ledger, so a section that only exists because the CHAMBER adds
- * it must be registered by the ctx it belongs to. The capability matrix is
- * unchanged — local and gateway sources carry the section, a direct dsh target
- * carries none (no `/chamber` channel, no management surface).
+ * WHY here and not per panel target: the panel renders the selected source's own
+ * boot-ctx ledger, so a section that only exists because the CHAMBER adds it must be
+ * registered by the ctx it belongs to. The capability matrix is unchanged — local
+ * and gateway sources carry the section, a direct dsh target carries none.
  *
- * Failure policy: this runs INSIDE a source's own frontend boot, so a
- * malformed projection is reported and skipped instead of throwing — a
- * settings-section derivation must never take down the instance's UI. The
- * projection is reconciled on every roster publish, so a source that becomes
- * identifiable later still gets its section.
- * @param ctx - the instance's own client context.
- * @param instanceId - that instance's source id.
+ * Failure policy: this runs INSIDE a source's own frontend boot, so a malformed
+ * projection is reported and skipped instead of throwing — a settings-section
+ * derivation must never take down the instance's UI; the projection is reconciled
+ * on every roster publish, so a source that becomes identifiable later still gets
+ * its section.
  */
 function registerRuntimeSection(
   ctx: ClientContext,

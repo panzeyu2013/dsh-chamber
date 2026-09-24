@@ -1,43 +1,15 @@
 /**
- * The archiveCleanup host binding (design 24 §10) and the per-domain
- * single-flight gate — decorator-free module so the REAL factory and gate
- * run under plain node:test (the gateway class in index.ts keeps the TS
- * decorators and is exercised by typecheck + boot E2E).
- *
- * Trust model: this code runs inside each dsh host process. All capability
- * views are structural over the OFFICIAL ctx services (design 24 §10); an unavailable
- * surface refuses loudly with code `registry-unreadable`/`storage`, never a
- * guessed layout. Security invariants:
- *  - archived-set member removal runs INSIDE the registry's official
- *    `enqueueOperation` chain (serialized with create/delete/insertBefore/
- *    archiveSession and its pendingMutation recovery) — a plain out-of-chain
- *    setState could interleave with a two-phase delete and wipe its marker
- *    (a two-phase delete could otherwise wipe its marker);
- *  - filesystem failures (EACCES/EMFILE/EISDIR…) map to item code `storage`
- *    so per-item isolation holds; symlinked session
- *    dirs/artifacts fail closed;
- *  - per-delete live guard refuses sessions that turned running (contract);
- *    a merely LOADED (idle) session is refused with code `loaded` unless the
- *    caller authorized `force` (design 24 §3) — and every
- *    deletion reports the session's residency at that instant
- *    (`SessionContentDeletion.resident`) so the core can
- *    retain the archived membership of a session this process still serves;
- *    the facts read refuses loudly on ANY drifted shape (agent entry, agent
- *    status, live-store array/entry) because a silently dropped entry would
- *    fail OPEN in both the guard and that residency report;
- *  - COMPLETENESS UNION: neither official enumeration is
- *    authoritative alone — `SessionCorpus.listSessions` answers LIVE-ONLY with
- *    no error when its optional persistence binding is absent (vendor
- *    session-query/session-query/src/corpus.ts:68-87) and the jsonl
- *    `listArtifacts` skips unparseable/empty artifacts and returns [] for an
- *    absent sessions root (vendor session/session-persistence-jsonl/src/
- *    index.ts:507-544,893-904) — so `listHeaders` unions both surfaces by id
- *    and never drops a record either side reports;
- *  - AUTHORITATIVE EXISTENCE PROBE (`stat(id)`): `hasStoredContent` asks the official
- *    `sessionPersistence.stat(id)` — the jsonl backend resolves an id across
- *    ALL project directories and ALL format generations when cwd is unknown
- *    — and fails closed to `true` on every error except the official
- *    not-found carrier.
+ * The archiveCleanup host binding (design 24 §10) + per-domain single-flight gate —
+ * decorator-free so the real factory and gate run under plain node:test. Capability views
+ * are structural over the OFFICIAL ctx services; an unavailable/drifted surface refuses
+ * loudly, never guesses. Invariants: archived-set removal runs INSIDE the registry's
+ * official `enqueueOperation` chain (an out-of-chain setState could interleave with a
+ * two-phase delete and wipe its marker); fs failures map to item code `storage`; symlinked
+ * dirs/artifacts fail closed; the delete-time live guard refuses running/loaded sessions and
+ * reports residency, and a drifted liveness shape refuses the read (a dropped entry would
+ * fail OPEN); the two official enumerations are UNIONed by id — dropping a record is the
+ * unsafe direction; `hasStoredContent` fails closed to TRUE on every `stat` error except
+ * the official not-found carrier.
  */
 
 import { rm, rmdir, lstat, readdir } from 'node:fs/promises'
@@ -75,34 +47,20 @@ export function makeHostBinding(ctx: HostCtxServices): ArchiveCleanupHost {
   const requireRegistry = (): RegistryLike => requireRegistrySurface(registry)
 
   const listHeaders = async (): Promise<readonly SessionHeaderLike[]> => {
-    // COMPLETENESS UNION. Neither official enumeration
-    // is authoritative on its own, and the sweep's whole decision is "this id
-    // has no record":
-    //  - `sessionQuery.listSessions()` returns the LIVE-ONLY corpus with NO
-    //    error when its optional persistence binding is absent (vendor
-    //    session-query/session-query/src/corpus.ts:68-87 — `persisted = []`
-    //    when `_persistence === undefined`);
-    //  - the jsonl `listArtifacts` skips unparseable/empty artifacts and
-    //    returns `[]` when the sessions root is absent, also with NO error
-    //    (vendor session/session-persistence-jsonl/src/index.ts:507-544,
-    //    893-904).
-    // So when BOTH surfaces answer, the result is their UNION by id: an id
-    // either side still lists keeps its record and can therefore never look
-    // like an orphan. Dropping a record is the unsafe direction; adding one
-    // only makes the sweep more conservative. Every header from BOTH legs is
-    // shape-validated with the same loud policy before it enters the union
-    // (a drifted record refuses the whole read, never a silent per-item skip).
-    // A leg that THROWS is never silently dropped: the failure propagates and
-    // the caller maps it to `registry-unreadable` before mutating anything,
-    // because "one leg is broken" is indistinguishable from "the other leg is
-    // narrowed" — a partial corpus must never become the sweep's evidence.
+    // COMPLETENESS UNION: neither official enumeration is authoritative alone
+    // (a live-only query without its persistence binding; a jsonl list that
+    // skips unparseable/empty artifacts or an absent root), and dropping a
+    // record is the unsafe direction — an id either side still lists keeps its
+    // record and can never look like an orphan. Every header from both legs is
+    // shape-validated loudly; a leg that THROWS propagates (a partial corpus
+    // must never become the sweep's evidence). Adding a record only makes the
+    // sweep more conservative.
     const byId = new Map<string, SessionHeaderLike>()
     let sawEnumeration = false
     if (query?.listSessions !== undefined) {
       const records = await query.listSessions()
-      // A non-array answer is a drifted surface, NOT an empty corpus: taking
-      // it as "no sessions" would narrow the union silently and could clear a
-      // membership whose content still exists.
+      // A non-array answer is a drifted surface, NOT an empty corpus: taking it
+      // as "no sessions" would narrow the union silently.
       if (!Array.isArray(records)) {
         throw new ArchiveCleanupError(
           'registry-unreadable',
@@ -124,8 +82,7 @@ export function makeHostBinding(ctx: HostCtxServices): ArchiveCleanupHost {
           'archiveCleanup: sessionPersistence.list() did not answer an array — refusing the read (pinned-vendor surface drift)',
         )
       }
-      // list() answers SessionPersistenceSnapshot[] —
-      // the header is the snapshot's `header` field, not the record itself.
+      // list() answers SessionPersistenceSnapshot[] — the header is the snapshot's `header` field.
       const headers = snapshots.map(snapshot => (snapshot as { header?: unknown } | undefined)?.header)
       for (const header of headers) assertHeaderShape(header)
       for (const header of headers) {
@@ -153,9 +110,8 @@ export function makeHostBinding(ctx: HostCtxServices): ArchiveCleanupHost {
       const headers = await listHeaders()
       const byId = new Map<string, ArchivedSessionState>()
       for (const header of headers) {
-        // Intake already validated every header loudly — no silent skip
-        // of a drifted record (a vendor field rename must never empty the
-        // lineage/deletion cascade one record at a time).
+        // Intake already validated every header loudly — no silent skip of a
+        // drifted record (a vendor field rename must never empty the cascade).
         byId.set(header.id, headerToState(header))
       }
       return [...byId.values()]
@@ -167,34 +123,20 @@ export function makeHostBinding(ctx: HostCtxServices): ArchiveCleanupHost {
     },
 
     async hasStoredContent(sessionId: string) {
-      // DECISIVE per-candidate existence probe. The official
-      // `sessionPersistence.stat(id)`
-      // resolves the session through the backend's own id -> artifact lookup
-      // across every project directory and every immutable format generation,
-      // and answers `undefined` when the id has no materialized log — an
-      // unknown cwd is therefore NOT a reason to report "no content".
-      // Fail-closed mapping:
-      //  - a resolved snapshot => true (the id still materializes);
-      //  - `undefined` => false — the ONLY answer that may clear a membership.
-      //    Upstream (jsonl backend) answers undefined for an absent log
-      //    (ENOENT) and for a head it cannot materialize (unparseable JSON /
-      //    malformed header) — NOT for every unreadable artifact: a corrupt
-      //    zstd frame, a generation/header version mismatch, a too-new stored
-      //    format version, or a non-ENOENT IO error all THROW (design 24 §13
-      //    item 7). So this gate is fail-closed against
-      //    thrown errors, while an artifact upstream itself calls "no session"
-      //    clears the membership (its bytes are never deleted by this purge);
-      //  - ANY failure (corrupt zstd, unsupported/too-new format, transport/IO,
-      //    absent service, drifted method shape) => true;
-      //  - no stat surface at all => true (the sweep then skips entirely).
-      // A false negative here would clear the membership of a session whose
-      // content still exists.
+      // DECISIVE existence probe: the official `sessionPersistence.stat(id)`
+      // resolves the session across every project directory and format
+      // generation, answering `undefined` when it has no materialized log — an
+      // unknown cwd is NOT "no content". Fail-closed mapping: a resolved
+      // snapshot => true; `undefined` => false (the ONLY answer that may clear a
+      // membership — an absent or unmaterializable log upstream); ANY failure
+      // (corrupt zstd, unsupported/too-new format, IO, absent/drifted service)
+      // => true, and no stat surface at all => true (the sweep skips entirely).
+      // A false negative would clear a membership whose content still exists.
       const stat = persistence?.stat
       if (typeof stat !== 'function') return true
       try {
         // Call AS A METHOD on the service object: the official persistence
-        // implementations are instance-state classes (a destructured `locate`
-        // would lose `this`).
+        // implementations are instance-state classes (a detached call loses `this`).
         const snapshot = await stat.call(persistence, sessionId)
         return snapshot !== undefined && snapshot !== null
       } catch {
@@ -209,33 +151,25 @@ export function makeHostBinding(ctx: HostCtxServices): ArchiveCleanupHost {
       protectedIds?: ReadonlySet<string>,
     ): Promise<SessionContentDeletion> {
       try {
-        // INVARIANT GUARD: the core's plan
-        // already skips every tree whose closure contains a protected id, so
-        // this can only fire on a core bug — and then it MUST abort, never
-        // delete. It sits on the deletion primitive itself so no future caller
-        // can route around the skip.
+        // INVARIANT GUARD: the core's plan already skips such trees, so this
+        // can only fire on a core bug — and then it MUST abort, never delete.
         if (protectedIds?.has(sessionId) === true) {
           throw new ArchiveCleanupError(
             'protected',
             `archiveCleanup: refusing to delete ${sessionId}: it is in the run's protected set (client-displayed session)`,
           )
         }
-        // Live guard at deletion time (interface contract): never delete a
-        // session that is RUNNING; a merely loaded (idle) session is refused
-        // unless the caller authorized `force` (the caller
-        // cancelled the run first, so no live writer can recreate the
-        // artifact). This is the caller's per-member live gate — the core
-        // keeps only the per-tree recheck, so a mid-tree running
-        // flip is refused HERE as an item `running` error that aborts the
-        // remaining members of that tree.
+        // Delete-time live guard (interface contract): never delete a session that is
+        // RUNNING; a merely loaded (idle) session is refused unless the caller authorized
+        // `force` (the caller cancelled the run first, so no live writer can recreate the
+        // artifact). This is the caller's per-member live gate — the core keeps only the
+        // per-tree recheck, so a mid-tree running flip is refused HERE as an item `running`
+        // error that aborts the remaining members of that tree.
         const facts = liveSessionFacts(ctx)
-        // RESIDENCY AT THE DELETION INSTANT (design 24 §4 step 9). Read from
-        // the SAME facts the guards
-        // above use: a session the process still holds (attached store or live
-        // agent) keeps being served by the live-preferred session list after
-        // its files are gone, so the core must retain its archived membership
-        // instead of un-hiding it. Fail-closed direction: this is the union of
-        // running ∪ loaded, and running never reaches a return.
+        // RESIDENCY AT THE DELETION INSTANT, read from the SAME facts: a session
+        // the process still holds keeps being served after its files are gone,
+        // so the core must retain its archived membership. Fail-closed: the
+        // union of running ∪ loaded, and running never reaches a return.
         const resident = facts.loaded.has(sessionId)
         if (facts.running.has(sessionId)) {
           throw new ArchiveCleanupError('running', `archiveCleanup: ${sessionId} is running`)
@@ -254,24 +188,18 @@ export function makeHostBinding(ctx: HostCtxServices): ArchiveCleanupHost {
         }
         let header: SessionHeaderLike | undefined
         if (typeof cwd === 'string') {
-          // Snapshot path: the official jsonl locate needs
-          // only id + cwd (format.ts logPath) — no corpus re-enumeration.
+          // Snapshot path: the official jsonl locate needs only id + cwd — no corpus re-enumeration.
           header = { id: sessionId, cwd }
-          // This header is consumed by the OFFICIAL locate — shape-check
-          // it loudly too (guards a drifted sessionId/cwd instead of
-          // silently resolving nothing).
+          // This header feeds the OFFICIAL locate, so shape-check it loudly too.
           assertHeaderShape(header)
         } else {
           const headers = await listHeaders()
           header = headers.find(candidate => candidate.id === sessionId)
         }
         if (header === undefined) return { outcome: 'missing', resident }
-        // CRITICAL: call locate AS A METHOD on the service object. The
-        // official SessionPersistence implementations are instance-state
-        // classes (`locate` reads this.root / this.compression, format.ts
-        // logPath) — a destructured `const locate = persistence.locate` and
-        // detached invocation would lose `this` and crash every deletion
-        // with "Cannot read properties of undefined (reading 'root')".
+        // CRITICAL: call locate AS A METHOD on the service object — the official
+        // implementations are instance-state classes (a detached call loses
+        // `this` and crashes every deletion).
         const location = persistence.locate(header)
         const artifactPath = location?.path
         if (typeof artifactPath !== 'string' || artifactPath === '') {
@@ -279,39 +207,28 @@ export function makeHostBinding(ctx: HostCtxServices): ArchiveCleanupHost {
           return { outcome: 'missing', resident }
         }
         const dir = dirname(artifactPath)
-        // A session dir that is already gone is the idempotent 'missing'
-        // outcome (concurrent purge/race), never an error.
+        // A session dir already gone is the idempotent 'missing' outcome, never an error.
         const dirStat = await lstat(dir).catch((error: unknown) => {
           if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
           throw error
         })
         if (dirStat === undefined) return { outcome: 'missing', resident }
-        // Fail closed on symlinked session dirs/artifacts: the artifact path
-        // is resolved by the OFFICIAL backend under a
-        // root owned by the instance user; a symlink component would make a
-        // same-user writable redirection delete an unrelated file.
+        // Fail closed on symlinked session dirs/artifacts: a symlink component
+        // would let a same-user writable redirection delete an unrelated file.
         
         if (dirStat.isSymbolicLink() || !dirStat.isDirectory()) {
           throw new ArchiveCleanupError('storage', `archiveCleanup: refusing a non-directory/symlinked session path for ${sessionId}`)
         }
-        // CROSS-PROCESS NOTE (design 24 §4 step 10): removing `session.lock` forfeits
-        // the jsonl lease's cross-process exclusion (vendor lease.ts:17-19), so
-        // this purge must never run while another process is writing the
-        // session. The in-process live gate above covers RUNNING/LOADED agents;
-        // a second dsh process on the same sessions root is out of reach and is
-        // the caller's responsibility (the domain's contract says "stop the
-        // run first").
-        // dsh >= 0.1.3-alpha.1 keeps ONE FILE PER IMMUTABLE FORMAT GENERATION
-        // in this directory (`session.jsonl`, `session.vN.jsonl`, each with an
-        // optional `.zstd`) plus the write lease `session.lock`; `locate()`
-        // resolves only the CURRENT generation. Removing that single artifact
-        // would leave every older generation on disk while the session
-        // disappears from every official list — the opposite of a content
-        // purge. Delete every canonical generation file plus the lease and the
-        // two recognized temp classes (publish temp `<gen>.<12hex>.tmp`,
-        // migration staging `session.migration.<16hex>.jsonl[.zstd].tmp`), and
-        // refuse the whole operation on any OTHER entry so a drifted layout
-        // fails closed instead of half-deleting.
+        // CROSS-PROCESS NOTE: removing `session.lock` forfeits the jsonl lease's
+        // cross-process exclusion, so this purge must never run while another
+        // process writes the session — the in-process guard covers only THIS
+        // process; the caller's "stop the run first" contract covers the rest.
+        // dsh keeps ONE FILE PER IMMUTABLE FORMAT GENERATION (`session.jsonl`,
+        // `session.vN.jsonl`, optional `.zstd`) plus the lease; `locate()`
+        // resolves only the CURRENT generation, so the purge deletes every
+        // canonical generation plus the lease and the two recognized temp
+        // classes, refusing the whole operation on any OTHER entry (a drifted
+        // layout fails closed instead of half-deleting).
         const entries = await readdir(dir, { withFileTypes: true })
         const removable: string[] = []
         for (const entry of entries) {
@@ -336,30 +253,24 @@ export function makeHostBinding(ctx: HostCtxServices): ArchiveCleanupHost {
           try {
             await rm(path, { force: false })
           } catch (error) {
-            // The artifact vanished between the readdir
-            // above and this rm (TOCTOU race with a concurrent purge in
-            // another ctx shell, or an external deletion) — an already-gone
-            // generation is not an error; the directory is reclaimed below.
+            // The artifact vanished between readdir and rm (TOCTOU race with a
+            // concurrent purge or external deletion) — not an error.
             if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue
             throw error
           }
         }
         if (basename(dir) !== '' && basename(dir) !== '.' && basename(dir) !== '..') {
           try {
-            // rmdir removes ONLY an empty directory: leftover session-local
-            // files fail closed (ENOTEMPTY) and the directory stays.
+            // rmdir removes ONLY an empty directory: leftover files fail closed (ENOTEMPTY).
             await rmdir(dir)
           } catch {
-            // Non-empty leftover or race — fail closed by leaving the
-            // directory; every canonical artifact is already gone and the
-            // session no longer lists.
+            // Non-empty leftover or race — fail closed by leaving the directory.
           }
         }
         return { outcome: 'deleted', resident }
       } catch (error) {
-        // Item isolation: real filesystem/storage
-        // failures must surface as item code `storage` so the core keeps
-        // deleting the rest of the run instead of aborting wholesale.
+        // Item isolation: real filesystem/storage failures surface as item code
+        // `storage` so the core keeps deleting the rest of the run.
         if (error instanceof ArchiveCleanupError) throw error
         throw new ArchiveCleanupError(
           'storage',
@@ -376,21 +287,15 @@ export function makeHostBinding(ctx: HostCtxServices): ArchiveCleanupHost {
         const next = current.filter(id => !wanted.has(id))
         if (next.length === current.length) return
         const workspaceIds = reg.list!().map(workspace => String(workspace.id))
-        // ONE plain single-state write (instead of N per-tree fsyncs),
-        // mirroring the registry's own insertBefore mutation; official
-        // persistence + publication path (in-process, no out-of-process edit
-        // — todo-12-B risk does not apply). Guarded at runtime
-        // (design 24 §10/§11).
+        // ONE plain single-state write (instead of N per-tree fsyncs), mirroring
+        // the registry's own insertBefore mutation; runtime-guarded.
         await reg.setState!({ initialized: true, workspaceIds, archivedSessionIds: next })
       }
       try {
         // Run INSIDE the official mutation chain — serialized against every
-        // registry write AND its pendingMutation recovery, so the single-state
-        // write can never interleave with a two-phase create/delete and wipe
-        // its recovery marker. A host whose registry lacks the chain REFUSES
-        // LOUDLY: a silent fallback to an out-of-chain write would resurrect
-        // the exact interleave the chain seals. The chain is TS-private in the
-        // pinned tree but runtime-visible and version-guarded here.
+        // registry write AND its pendingMutation recovery, so the write can never
+        // interleave with a two-phase create/delete and wipe its marker. A
+        // registry lacking the chain REFUSES LOUDLY (no out-of-chain fallback).
         if (typeof reg.enqueueOperation !== 'function') {
           throw new ArchiveCleanupError(
             'registry-unreadable',
@@ -410,9 +315,7 @@ export function makeHostBinding(ctx: HostCtxServices): ArchiveCleanupHost {
   }
 }
 
-/* Single-flight gate (domain-level; the wire methods stay optional-arg — */
-/* purge takes an OPTIONAL sessionIds filter, probe is zero-arg and never */
-/* contends — so concurrency control is the host's job — design 24 §3).   */
+/* Single-flight gate (domain-level): concurrency control is the host's job. */
 
 export class RunGate {
   private inFlight = false

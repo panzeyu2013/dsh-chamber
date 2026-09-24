@@ -33,27 +33,23 @@ export interface OpenInLaunchRequest {
 
 const CAPABILITY_TOKEN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
 // Mirrors desktop transport-provider.ts INSTANCE_ID_PATTERN and renderer
-// transport-source.ts RAW_INSTANCE_ID_PATTERN (same grammar, design 17
-// §2.1). Browser packages cannot import the desktop/cp authorities; keep the
-// bytes equal — see the cross-package contract notes in transport-provider.
+// transport-source.ts RAW_INSTANCE_ID_PATTERN; browser packages cannot import
+// the desktop/cp authorities, so keep the bytes equal.
 const INSTANCE_ID = /^(?!local$)[A-Za-z0-9_-]{1,64}$/
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
 }
 
-/** Stable text for an IPC rejection — the hostile-value projection is the sidebar's
- *  shared `describeThrown` (single source): error formatting
- *  is itself an exception boundary, so hostile getters/proxies/toString values must
- *  never turn a catch handler into a new unhandled rejection. The open-in domain keeps
- *  its own call-site name; the implementation lives in exactly one place. */
+/** Stable text for an IPC rejection — the hostile-value projection is the
+ *  sidebar’s shared `describeThrown` (single source): error formatting is itself
+ *  an exception boundary, so hostile values never become a new unhandled rejection. */
 export { describeThrown as describeOpenInError } from '@dsh-chamber/dsh-chamber-client-core'
 
 /**
- * Validate the untyped IPC projection one entry at a time. Invalid entries are
- * discarded (fail-closed) without erasing unrelated valid apps. Duplicate ids
- * keep the first valid entry, matching the registry's first-match dispatch.
- * A non-array envelope is an unknown capability state and returns null.
+ * Validate the untyped IPC projection one entry at a time: invalid entries are
+ * discarded without erasing valid siblings. Duplicate ids keep the first valid
+ * entry; a non-array envelope is an unknown state and returns null.
  */
 export function parseOpenInApps(value: unknown): OpenInApp[] | null {
   let length: number
@@ -70,8 +66,7 @@ export function parseOpenInApps(value: unknown): OpenInApp[] | null {
     try {
       entry = value[index]
     } catch {
-      // A hostile array slot is one malformed entry, not a reason to erase
-      // valid siblings that were already projected.
+      // A hostile array slot is one malformed entry, not a reason to erase valid siblings.
       continue
     }
     if (!isRecord(entry)) continue
@@ -82,8 +77,7 @@ export function parseOpenInApps(value: unknown): OpenInApp[] | null {
     try {
       ;({ id, displayKind, remoteCapable, available } = entry)
     } catch {
-      // IPC normally yields plain structured-clone objects, but keep the
-      // validator's per-entry fail-closed promise even for hostile getters.
+      // Keep the validator's per-entry fail-closed promise even for hostile getters.
       continue
     }
     if (typeof id !== 'string' || !CAPABILITY_TOKEN.test(id) || seen.has(id)) continue
@@ -95,8 +89,7 @@ export function parseOpenInApps(value: unknown): OpenInApp[] | null {
   return parsed
 }
 
-/** Validate the untrusted async IPC result before the UI reads its error
- * field. Unknown/new shapes are reported as an invalid bridge response. */
+/** Validate the untrusted async IPC result before the UI reads its error field. */
 export function parseOpenInResult(value: unknown): OpenInResult | null {
   if (!isRecord(value)) return null
   try {
@@ -110,10 +103,8 @@ export function parseOpenInResult(value: unknown): OpenInResult | null {
   return null
 }
 
-/** Strict chamber view-id + transport parser. Canonical dsh/gateway targets
- * may each use ssh or http; the legacy `ssh-` source spelling is input-only.
- * In particular, `ssh-local` must not become the privileged local instance
- * after the renderer strips the view prefix. */
+/** Strict chamber view-id + transport parser. `ssh-local` must NOT become the
+ *  privileged local instance after the renderer strips the view prefix. */
 export function parseOpenInSource(value: unknown, transport: unknown): OpenInSource | null {
   if (value === 'local') {
     return transport === 'local'
@@ -128,18 +119,15 @@ export function parseOpenInSource(value: unknown, transport: unknown): OpenInSou
   return { sourceId: value, instanceId, local: false, transport }
 }
 
-/** Validate the immutable boot-bound source proof before a header button is
- * registered. The desktop performs the authoritative exact-current match for
- * the separately supplied source id; this client check pins the proof format
- * and rejects absent/renderer-derived transport identities. */
+/** Validate the immutable boot-bound source proof before a button is registered:
+ *  this check pins the proof format and rejects renderer-derived identities. */
 export function parseOpenInSourceFingerprint(source: OpenInSource, value: unknown): string | null {
   if (source.local) return value === 'local' ? 'local' : null
   return typeof value === 'string' && /^[a-f0-9]{64}$/.test(value) ? value : null
 }
 
-/** Preserve the fingerprint captured by THIS boot. A same-id identity edit
- * may update the page's latest roster, but an old header button must continue
- * sending its old fingerprint so main can reject it instead of retargeting. */
+/** Preserve the fingerprint captured by THIS boot: an old header button must keep
+ *  sending its old proof so main can reject it instead of retargeting. */
 export function buildOpenInLaunchRequest(
   appId: string,
   source: OpenInSource,

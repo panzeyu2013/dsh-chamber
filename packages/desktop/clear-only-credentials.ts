@@ -1,24 +1,18 @@
 /**
- * clear-only 凭据 IPC 的共享准入前奏。
- *
- * 三个 legacy 凭据 setter（desktop_ssh_set_password / desktop_gateway_set_token /
- * desktop_gateway_set_password）的**准入**逐字相同：payload 取值 → 注册表存在性 →
- * id 白名单 → 「非空写入一律拒绝」。各自的**清除体保持独立**——design 17 §2.3 明确
- * token 与 password 是相互独立的凭据，因此本模块刻意不提供布尔开关、不做 kind 分派：
- * 每个方法一个描述符，字段名与拒绝文案由调用侧显式给出（文案继续留在
- * `shell-ipc-connections.ts`，主进程面的文案锁按原样生效）。
+ * clear-only 凭据 IPC 的共享准入前奏：三个 legacy 凭据 setter 的**准入**逐字相同
+ * （payload 取值 → 注册表存在性 → id 白名单 → 非空写入一律拒绝），各自的**清除体
+ * 保持独立**——token 与 password 是相互独立的凭据，因此本模块刻意不提供布尔开关、
+ * 不做 kind 分派：每个方法一个描述符，字段名与拒绝文案由调用侧显式给出（文案继续
+ * 留在 `shell-ipc-connections.ts`，主进程面的文案锁按原样生效）。
  *
  * 本模块只做准入判定，绝不读写凭据存储。
  */
 import { INSTANCE_ID_PATTERN } from './transport-provider.ts'
 
-/** 一个 clear-only 方法自己的准入面。 */
+/** 一个 clear-only 方法自己的准入面（字段名/文案由调用侧描述符给出）。 */
 export interface ClearOnlyDescriptor<S> {
-  /** payload 里承载凭据取值的字段（token 与 password 各自独立）。 */
   field: 'password' | 'token'
-  /** 非空写入的拒绝文案（调用侧提供，保持主进程面的字面文案）。 */
   refusal: string
-  /** 读当前实例注册表（注入以便单测；主进程传 `() => sm.listInstances()`）。 */
   list: () => readonly S[]
 }
 
@@ -28,11 +22,7 @@ export type ClearOnlyAdmission<S> =
   | { ok: false; error: string }
 
 /**
- * 判定一次 clear-only 调用：只有 `null` / `''` 是清除，其余非空写入一律拒绝。
- * 校验顺序（先 id/存在性/取值类型，再 clear-only 文案）。
- * @param descriptor - 该方法自己的字段 / 文案 / 注册表读取。
- * @param payload - IPC payload。
- * @returns 放行（含 id 与注册表 spec）或 `{ error }`。
+ * 判定一次 clear-only 调用：只有 `null` / `''` 是清除，其余非空写入一律拒绝；校验顺序为先 id/存在性/取值类型，再 clear-only 文案；放行时回带 id 与注册表 spec。
  */
 export function admitClearOnly<S extends { id: string }>(
   descriptor: ClearOnlyDescriptor<S>,

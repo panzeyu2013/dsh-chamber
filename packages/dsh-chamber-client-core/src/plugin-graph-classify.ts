@@ -1,66 +1,30 @@
 /**
  * Single source of the host boot-graph CHANNEL classification: one
- * `clientGraph/graph` unary answer (HTTP status + server-response envelope) ->
- * the channel verdict and the exact Chinese diagnostic copy.
+ * `clientGraph/graph` unary answer (HTTP status + server-response envelope) -> the
+ * channel verdict and the exact Chinese diagnostic copy.
  *
- * WHY THIS MODULE EXISTS (audit arch-03 P2-2). The boot fetch
- * (`packages/renderer/src/host-graph.ts` fetchHostGraph) and the channel
- * self-heal recheck (`client-core/src/plugin-graph-recheck.ts`) answer the same
- * wire question for the same instance, and the recheck's whole write-back
- * discipline is that its verdict is word-for-word what the next shell boot
- * would report (design 09 section 3.5). Both used to carry their own
- * status/envelope branch tree and their own copies of every message literal,
- * kept in step only by a comment and two test files that each pinned their own
- * strings. This module is that branch tree, once: a consumer must classify
- * through `classifyPluginGraphOutcome` and take its copy from the returned
- * verdict; neither consumer may re-test a status code or re-spell a
- * `host-boot-graph` literal (locked by plugin-graph-classify.test.ts).
+ * WHY: the boot fetch (`renderer/src/host-graph.ts` fetchHostGraph) and the
+ * channel self-heal recheck (`plugin-graph-recheck.ts`) answer the same wire
+ * question for the same instance, and the recheck's write-back discipline is that
+ * its verdict is word-for-word what the next shell boot would report. Both used to
+ * carry their own branch tree and message literals; this module is that tree once.
+ * A consumer MUST classify through `classifyPluginGraphOutcome` and take its copy
+ * from the verdict — neither may re-test a status code or re-spell a
+ * `host-boot-graph` literal.
  *
- * EXPECTED CONSUMER MAPPING (each surface keeps its own post-processing; only
- * the wire classification and the copy are shared):
- * - `instance-unavailable`: the proxy answered 503 `instance_unavailable` (the
- *   expected pre-ready state). `fetchHostGraph` resolves null; the recheck
- *   writes nothing ("cannot judge").
- * - `channel`: an HTTP 404 (`not-injected`), another non-2xx
- *   (`graph-unreachable`), or a 2xx envelope whose `result.ok !== true` error
- *   copy classified into one of those two states. `fetchHostGraph` throws
- *   `HostGraphChannelError(state, message)`; the recheck reports
- *   `(state, message)`.
- * - `malformed`: a 2xx answer whose envelope or rows fail the wire contract.
- *   `fetchHostGraph` throws a plain `Error(message)`; the recheck reports
- *   `graph-unreachable` with the same message (a malformed graph must never be
- *   healed to ok). Each consumer may still run its OWN additional row
- *   validation: fetchHostGraph validates the optional `inject` / `external` /
- *   `immediately` fields through upstream's `optionalStringArray`, the recheck
- *   has no such pass.
- * - `ok`: the envelope and every row's base fields (`id` / `url` / `rev`
- *   strings) are valid; `entries` is that validated list.
+ * CONSUMER MAPPING: `instance-unavailable` = 503 `instance_unavailable` (expected
+ * pre-ready; fetchHostGraph resolves null, the recheck writes nothing); `channel` =
+ * 404 (`not-injected`), another non-2xx (`graph-unreachable`) or a 2xx error copy
+ * classified into one of those (fetchHostGraph throws
+ * `HostGraphChannelError(state, message)`); `malformed` = a 2xx answer whose
+ * envelope or rows fail the wire contract (fetchHostGraph throws a plain
+ * `Error(message)`; the recheck reports `graph-unreachable` — a malformed graph
+ * must never be healed to ok); `ok` = valid envelope + base fields, with `entries`.
  *
- * WIRE CONTRACT (the message literals are contract - verbatim):
- * - transport rejection    -> `host boot-graph unreachable: <error.message>`
- * - HTTP <status>          -> `host boot-graph unreachable: HTTP <status>`
- * - 2xx body not JSON      -> `host boot-graph: envelope is not valid JSON: <message>`
- * - no object `result`     -> `host boot-graph: envelope is missing result`
- * - `result.ok !== true`   -> `host boot-graph: graph call failed: <message ?? code ?? 'unknown'>`
- * - bad `value.entries`    -> `host boot-graph: result.value.entries must be an array`
- * - entry not an object    -> `host boot-graph: entry is not an object`
- * - entry base fields      -> `host boot-graph: entry <"id" | JSON> must carry string id/url/rev`
- *
- * The Chinese literals above are summarized in English here on purpose: the
- * module header must not become a second copy of the copy. The authoritative
- * literals are the template strings in classifyPluginGraphOutcome below.
- *
- * The base gate is the BOOT FETCH's own (renderer/src/host-graph.ts before this
- * extraction): the row check is `typeof raw !== 'object' || raw === null` (an
- * ARRAY row therefore falls into the field check and is reported with its JSON
- * label), and the fields message labels a string `id` compactly as `"id"` and
- * anything else as its JSON. Both consumers now agree on that one label; the
- * recheck's previous unconditional `JSON.stringify(raw)` is retired with its
- * local branch tree.
- *
- * The regex that maps the envelope's error copy (code + message) onto the two
- * channel states is `classifyGraphChannelFailure` in wire-common.ts - imported
- * here, never re-implemented per consumer.
+ * WIRE CONTRACT: the message literals are contract, verbatim in
+ * classifyPluginGraphOutcome below. The base gate is the BOOT FETCH's own: a row
+ * check of `typeof raw !== 'object' || raw === null` (an array row falls into the
+ * field check with its JSON label), and a string `id` labels compactly as `"id"`.
  */
 import { classifyGraphChannelFailure, isRecord, type UnaryPostOutcome } from './wire-common.ts'
 
@@ -95,17 +59,16 @@ export function graphHttpFailureMessage(status: number): string {
   return `宿主启动图不可达：HTTP ${status}`
 }
 
-/** Fold one transport rejection into the channel-failure copy (contract
- *  literal). The caller decides the carrier: `fetchHostGraph` wraps it in an
- *  `Error`, the recheck reports it as the `graph-unreachable` message. */
+/** Fold one transport rejection into the channel-failure copy (contract literal);
+ *  the caller decides the carrier (Error vs `graph-unreachable` message). */
 export function wrapGraphTransportFailure(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error)
   return `宿主启动图不可达：${message}`
 }
 
-/** The compact description of one graph row used in row-shape messages: a
- *  string `id` renders as a quoted id, anything else as its JSON (the boot
- *  fetch's own label). Also used as the optionalStringArray `subject` suffix. */
+/** The compact description of one graph row used in row-shape messages: a string
+ *  `id` as a quoted id, anything else as its JSON. Also the optionalStringArray
+ *  `subject` suffix. */
 export function graphEntryLabel(row: unknown): string {
   const record = isRecord(row) ? row : null
   return record !== null && typeof record.id === 'string' ? `"${record.id}"` : JSON.stringify(row)
@@ -120,14 +83,11 @@ export function graphEntryImmediatelyMessage(row: unknown): string {
 
 /**
  * Classify one `postUnary` answer of Remote `clientGraph/graph` into the shared
- * verdict (see the module header for the branch order and every literal). Pure:
- * no fetch, no store, no logging.
- * @param outcome - the collected unary answer from wire-common's postUnary.
+ * verdict (branch order and literals below). Pure: no fetch, no store, no logging.
  * @returns the verdict; consumers map it as documented in the module header.
  */
 export function classifyPluginGraphOutcome(outcome: UnaryPostOutcome): PluginGraphChannelVerdict {
-  // 503 pre-ready probe FIRST: only the explicit instance_unavailable code is
-  // `the instance is starting`; any other 503 is a channel failure.
+  // 503 pre-ready probe FIRST: only the explicit instance_unavailable code is 'the instance is starting'.
   if (outcome.status === 503 && isRecord(outcome.body) && outcome.body.code === 'instance_unavailable') {
     return { kind: 'instance-unavailable' }
   }
@@ -145,17 +105,14 @@ export function classifyPluginGraphOutcome(outcome: UnaryPostOutcome): PluginGra
       message: `宿主启动图：envelope 不是合法 JSON：${error instanceof Error ? error.message : String(error)}`,
     }
   }
-  // The server-response envelope gate is deliberately typeof-object: an ARRAY
-  // body has no object `result` and lands on the same message.
+  // The envelope gate is deliberately typeof-object: an array body has no object result and lands on the same message.
   const envelope = isRecord(outcome.body) ? outcome.body : null
   if (envelope === null || typeof envelope.result !== 'object' || envelope.result === null) {
     return { kind: 'malformed', message: '宿主启动图：envelope 缺少 result' }
   }
   const result = envelope.result as Record<string, unknown>
   if (result.ok !== true) {
-    // The host's own error copy: `message ?? code ?? 'unknown'` is verbatim
-    // (a present-but-empty message stays '', a truthy non-string value
-    // interpolates as-is; exotic shapes drift the message only, never the
+    // The host's own error copy: `message ?? code ?? 'unknown'` is verbatim (a present-but-empty message stays '', exotic shapes drift the message only).
     // state classification). The state regex is wire-common's shared one.
     const error = isRecord(result.error) ? result.error : {}
     const hostError = error.message ?? error.code ?? 'unknown'
@@ -167,16 +124,13 @@ export function classifyPluginGraphOutcome(outcome: UnaryPostOutcome): PluginGra
     }
   }
   const value = result.value
-  // Mirror the boot's combined gate: a non-object value, a missing entries
-  // array and a non-array entries field are the same message.
+  // Combined gate: a non-object value, a missing entries array and a non-array entries are the same message.
   if (typeof value !== 'object' || value === null
     || !Array.isArray((value as Record<string, unknown>).entries)) {
     return { kind: 'malformed', message: '宿主启动图：result.value.entries 必须是数组' }
   }
   const entries = (value as { entries: unknown[] }).entries
-  // Per-row base gate before an ok verdict: a host serving malformed rows must
-  // not be healed to ok when the next boot fails loud on exactly these rows
-  // (design 09 section 3.5 mirror contract).
+  // Per-row base gate before an ok verdict: a host serving malformed rows must not be healed to ok when the next boot fails loud on them.
   for (const raw of entries) {
     if (typeof raw !== 'object' || raw === null) {
       return { kind: 'malformed', message: '宿主启动图：entry 不是对象' }

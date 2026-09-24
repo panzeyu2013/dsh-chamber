@@ -7,20 +7,17 @@ interface PendingOpen {
   deadline: number
   resolve(): void
   reject(error: Error): void
-  /** Cancel this entry's own bound. Called by #take: a taken entry must never
-   *  settle by its own deadline. */
+  /** Cancel this entry's own bound: a taken entry must never settle by its own deadline. */
   cancel(): void
 }
 
-/** Normalize arbitrary synchronous dispatch failures without letting a
- * hostile thrown value's prototype/message/string traps throw a second time.
- * `flush()` has already removed the queue entry and cancelled its bound, so its
- * catch path must always return a real Error and settle the original promise. */
+/** Normalize arbitrary synchronous dispatch failures without letting a hostile thrown value's
+ *  prototype/message/string traps throw a second time; always returns a real Error so the catch
+ *  path can settle the original promise. */
 function safeDispatchError(reason: unknown): Error {
   try {
     if (reason instanceof Error) {
-      // Touch message while still inside the guard: an Error subclass or Proxy
-      // may expose a throwing accessor even though instanceof itself succeeds.
+      // Touch message inside the guard: an Error subclass/Proxy may expose a throwing accessor.
       if (typeof reason.message === 'string') return reason
     }
   } catch {
@@ -43,11 +40,9 @@ export class PendingOpenQueue {
   }
 
   enqueue(instanceId: string, sessionId: string): Promise<void> {
-    //  The bound is the shared primitive. One deadline is expressed as
-    // pollMs === boundMs (the first inspection equals the whole window), and
-    // cancellation is an AbortSignal - that separation is exactly why
-    // waitForCondition is the right primitive here and withDeadline is not:
-    // it exposes no cancel handle at all.
+    // One deadline expressed as pollMs === boundMs (first inspection = whole window), cancellation
+    // via AbortSignal — that separation is why waitForCondition is the right primitive here
+    // (withDeadline exposes no cancel handle).
     const controller = new AbortController()
     let entry: PendingOpen | undefined
     // The executor runs synchronously, so `entry` is assigned before the wait starts.

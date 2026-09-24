@@ -1,10 +1,6 @@
-/**
- * Gateway runtime action guards: the mutation fences (pending /
- * ordinary-pending / in-flight writer / profile-write lease) that every
- * transaction body consults. All mutable manager state is injected as
- * getters, so each refusal still observes the live writer/lifecycle state at
- * call time.
- */
+/** Gateway runtime action guards: the mutation fences (pending /
+ * ordinary-pending / in-flight writer / profile-write lease) every transaction
+ * body consults; mutable state arrives as getters, so refusals observe live state. */
 import { readOverrideState, shouldInvalidate } from '@dsh-chamber/dsh-runtime'
 import type { OverrideRecord } from '@dsh-chamber/dsh-runtime'
 import {
@@ -48,22 +44,14 @@ export interface RuntimeActionGuards {
 
 export function createRuntimeActionGuards(deps: RuntimeActionGuardDeps): RuntimeActionGuards {
   const { platform, baseDir, shellVersion } = deps
-  /**
-   * ONE authority read per guard call: both the pending projection and the
-   * recovery-phase classification below consume the SAME OverrideRecord. The
-   * former two-read shape (persistedPendingVersion then a second
-   * readOverrideState in ordinaryPendingVersion) let the durable override
-   * change between the two reads — a TOCTOU window in which a swapAttempted/
-   * lastOutcome transition could be observed by only one of them (B2 residual
-   * (b)). Returns null when there is no pending in force; a corrupt/unreadable
-   * leaf still throws the coded refusal.
-   */
+  /** ONE authority read per guard call: both projections consume the SAME
+   *  OverrideRecord, so a durable change cannot reach only one of them; null
+   *  means no pending in force. */
   function readPendingSelection(): { pending: string; record: OverrideRecord } | null {
     if (deps.getEnvPath() !== null || platform === 'win32') return null
     const state = readOverrideState(baseDir)
     if (state.kind === 'corrupt' || state.kind === 'unknown') {
-      // Coded refusal (B2 acceptance residual b): the route layer maps
-      // runtime_recovery_required to 409; a bare Error would surface as a 500.
+      // Coded refusal: runtime_recovery_required maps to 409 (a bare Error would be 500).
       throw Object.assign(
         new Error(state.kind === 'corrupt'
           ? 'gateway runtime override metadata is corrupt'
@@ -85,14 +73,9 @@ export function createRuntimeActionGuards(deps: RuntimeActionGuardDeps): Runtime
     const selection = readPendingSelection()
     if (selection === null) return null
     const { record, pending } = selection
-    // These are explicit recovery phases with their own Design 18 actions,
-    // not the normal installed/pending terminal state. The recovery-name
-    // classification is the route layer's canonical set
-    // (RETRY_APPLY_REASONS / RETRY_RESTORE_REASONS from runtime-refusals.ts).
-    // NOTE: only the interrupted-apply/restore reasons carve the pending out
-    // here — a FATAL metadata block does NOT (that suppression lives in
-    // status()'s startupBlockReasonOutranksPending, a deliberately wider
-    // predicate — see runtime-refusals.ts).
+    // Explicit recovery phases, not the normal installed/pending state: only
+    // the interrupted-apply/restore reasons carve the pending out here — a
+    // FATAL metadata block does NOT (startupBlockReasonOutranksPending is wider).
     if (record.swapAttempted === true || record.lastOutcome === 'snapshot-failed'
       || (startupBlockReason !== null
         && (RETRY_APPLY_REASONS.has(startupBlockReason) || RETRY_RESTORE_REASONS.has(startupBlockReason)))) {
@@ -104,8 +87,7 @@ export function createRuntimeActionGuards(deps: RuntimeActionGuardDeps): Runtime
   function assertNoOrdinaryPending(): void {
     const pending = ordinaryPendingVersion()
     if (pending !== null) {
-      // Same code/message as the route recovery gate and profileWriteRefusal
-      // (pendingOnlyRefusal).
+      // Same code/message as the route recovery gate and profileWriteRefusal.
       throw refusalError(pendingOnlyRefusal(pending))
     }
   }
@@ -132,37 +114,24 @@ export function createRuntimeActionGuards(deps: RuntimeActionGuardDeps): Runtime
   }
 
   function assertMutationIdle(): void {
-    // Shared in-flight writer matrix. Its last row is the
-    // design 21 §6.3 profile-write fence: a plugin add/remove pnpm child must
-    // never interleave a runtime transaction (every runtime writer is a
-    // DSH_HOME/profile writer too).
+    // Shared in-flight writer matrix; its profileWrite row is the plugin-write
+    // fence: every runtime writer is a DSH_HOME/profile writer too.
     const refusal = writerBusyRefusal(writerFlags(), 'runtime mutations')
     if (refusal !== null) throw codedError(refusal.code, refusal.error)
   }
 
-  /**
-   * Design 21 §6.3 profile-write gate (decision 6/17): the synchronous refusal
-   * matrix beginProfileWrite() answers with. Order mirrors assertMutationIdle
-   * (in-flight writers) → durable recovery/pending phases → live plane window,
-   * so the executor's 409 family stays consistent with the route table.
-   * Corrupt selection metadata is a hard recovery condition, never an
-   * acquisition: a plugin write must not land mid-recovery-authority work.
-   */
+  /** The synchronous refusal matrix beginProfileWrite() answers with, ordered
+   *  in-flight writers → recovery/pending → live window, matching the route
+   *  table; corrupt selection metadata is a hard recovery condition. */
   function profileWriteRefusal(): { code: ProfileWriteRefusalCode; error: string } | null {
     const startupBlockReason = deps.getStartupBlockReason()
-    // Shared in-flight writer matrix (runtime-gate.ts). The
-    // F7 rollback latch is armed SYNCHRONOUSLY before its async body drains/
-    // waits, so its row covers the whole rollback window (including the
-    // lease-drain wait): no new lease can start mid-rollback. This surface is
-    // the lease itself, so the profile-write flag is deliberately not part of
-    // its matrix (a nested acquire stays allowed).
+    // Shared in-flight writer matrix. The rollback latch is armed SYNCHRONOUSLY
+    // before its async body drains/waits, so its row covers the whole rollback
+    // window. This surface IS the lease, so its own flag is deliberately absent.
     const busy = writerBusyRefusal(writerFlags(), 'managed profile write')
     if (busy !== null) return busy
-    // Recovery states expose only their matching retry (recover-metadata for
-    // FATAL); restore-builtin applies to pending/healthy selections only — a
-    // plugin write is not on that surface and must not slip past it. Same
-    // code/message as start()/applyNowPreflight/restoreBuiltin
-    // (recoveryRetryRequiredRefusal).
+    // Recovery states expose only their matching retry; restore-builtin is for
+    // pending/healthy selections only, so a plugin write must not slip past it.
     if (startupBlockReason !== null) {
       return recoveryRetryRequiredRefusal(startupBlockReason)
     }
@@ -176,8 +145,7 @@ export function createRuntimeActionGuards(deps: RuntimeActionGuardDeps): Runtime
       }
     }
     if (pending !== null) {
-      // Same code/message as assertNoPending/assertNoOrdinaryPending and the
-      // route pending gate (pendingOnlyRefusal).
+      // Same code/message as assertNoPending/assertNoOrdinaryPending.
       return pendingOnlyRefusal(pending)
     }
     const connectionState = deps.getConnectionState()

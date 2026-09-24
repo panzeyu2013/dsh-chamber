@@ -1,20 +1,14 @@
 /**
  * N-CTX OWNER GUARD for the open-in menu.
  *
- * The menu itself is the official `Menu` primitive (`@deepseek-ai/dsh-client-ui-primitives`),
- * which already owns focus transfer (`autoFocus`), roving arrow/Home/End
- * navigation, Escape-to-anchor, outside-pointer dismissal, placement, row
- * density, fill selection and item icons.
- *
- * What the primitive cannot know is THIS shell's shape: one page holds one
- * `.instance-view` per attached source, inactive views are hidden through
- * `instance-hidden` / `instance-pending` classes (plus `hidden` /
- * `aria-hidden`), and the menu's open state lives in the component above the
- * primitive. A view can therefore lose its interaction surface while a menu
- * that belongs to it is still open — the leftover open state would be revealed
- * together with the view, and a keystroke aimed at the visible view could
- * still commit against the hidden one. Closing on owner loss is the one piece
- * of this menu that is genuinely N-ctx, so it is the only piece kept here.
+ * The menu itself is the official `Menu` primitive, which owns focus transfer,
+ * roving navigation, Escape-to-anchor, outside-pointer dismissal, placement and
+ * item icons. What it cannot know is this shell’s shape: one page holds one
+ * `.instance-view` per attached source, inactive views are hidden while the open
+ * state lives above the primitive — so a view can lose its interaction surface
+ * while its menu is still open, and a keystroke aimed at the visible view could
+ * commit against the hidden one. Closing on owner loss is the only genuinely
+ * N-ctx piece kept here.
  */
 
 import { useEffect, useRef } from 'react'
@@ -24,10 +18,9 @@ import type { RefObject } from 'react'
 const INSTANCE_VIEW_SELECTOR = '.instance-view'
 
 /**
- * DOM-independent snapshot of the trigger and its owning instance view. The
- * component reads these facts from the document; keeping the decision pure
- * makes the fail-closed rule deterministic to test even though this package
- * deliberately has no browser-DOM test dependency.
+ * DOM-independent snapshot of the trigger and its owning instance view: keeping
+ * the decision pure makes the fail-closed rule testable although this package
+ * has no browser-DOM test dependency.
  */
 export interface MenuOwnerSnapshot {
   triggerConnected: boolean
@@ -41,9 +34,8 @@ export interface MenuOwnerSnapshot {
 }
 
 /**
- * Decide whether the owning instance view may still host interaction.
- * @param snapshot - the facts read from the trigger and its owner.
- * @returns true only when every fact is positively satisfied (fail-closed).
+ * Decide whether the owning instance view may still host interaction. True only
+ * when every fact is positively satisfied (fail-closed).
  */
 export function menuOwnerAllowsInteraction(snapshot: MenuOwnerSnapshot): boolean {
   return snapshot.triggerConnected &&
@@ -56,8 +48,7 @@ export function menuOwnerAllowsInteraction(snapshot: MenuOwnerSnapshot): boolean
     snapshot.rendered
 }
 
-/** The owning `.instance-view` of a trigger, or null when the trigger is not
- *  inside one (a bare document cannot vouch for the trigger's liveness). */
+/** The owning `.instance-view` of a trigger, or null when the trigger is not inside one. */
 function owningInstanceView(trigger: HTMLElement | null): HTMLElement | null {
   return trigger?.closest<HTMLElement>(INSTANCE_VIEW_SELECTOR) ?? null
 }
@@ -85,7 +76,6 @@ function elementIsRendered(element: HTMLElement): boolean {
 
 /**
  * Read the owner snapshot for one trigger element.
- * @param trigger - the menu's anchor element inside the instance view.
  * @returns the snapshot fed to {@link menuOwnerAllowsInteraction}.
  */
 function ownerSnapshotFor(trigger: HTMLElement | null): MenuOwnerSnapshot {
@@ -104,12 +94,9 @@ function ownerSnapshotFor(trigger: HTMLElement | null): MenuOwnerSnapshot {
 }
 
 /**
- * Watch only the trigger's ancestor chain while the menu is open. This catches
- * the owning instance view's active/hidden class transition and every possible
- * disconnect point without observing unrelated streaming DOM.
- * @param trigger - the watched anchor.
- * @param onLost - invoked once the owner stops allowing interaction.
- * @returns the observer's disconnect function.
+ * Watch only the trigger’s ancestor chain while the menu is open: that catches
+ * the owner’s active/hidden class transition and every disconnect point without
+ * observing unrelated streaming DOM.
  */
 function observeOwnerLifetime(trigger: HTMLElement, onLost: () => void): () => void {
   const Observer = trigger.ownerDocument.defaultView?.MutationObserver
@@ -150,15 +137,10 @@ function observeOwnerLifetime(trigger: HTMLElement, onLost: () => void): () => v
 }
 
 /**
- * Close the menu as soon as its owning instance view stops allowing
- * interaction, and refuse to stay open in a view that is already inactive.
- *
- * Dismissal is a plain state removal: React flushes an update scheduled by the
- * observer callback in a microtask, which runs before the next input task, so
- * no pointerdown can reach a menu the owner has already lost.
- * @param open - whether the menu is currently open.
- * @param anchorRef - ref of the element the menu is anchored to.
- * @param onLost - close callback (state owner).
+ * Close the menu as soon as its owning instance view stops allowing interaction,
+ * and refuse to stay open in an already-inactive view. Dismissal is a plain state
+ * removal: React flushes the observer-scheduled update in a microtask, before the
+ * next input task, so no pointerdown reaches a menu the owner has lost.
  */
 export function useInstanceViewDismissal(
   open: boolean,

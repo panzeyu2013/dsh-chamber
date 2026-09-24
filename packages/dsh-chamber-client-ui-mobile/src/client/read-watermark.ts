@@ -1,28 +1,19 @@
 /**
- * Mobile read-watermark reporter (design 17 §18).
+ * Mobile read-watermark reporter.
  *
- * THE GAP. When the user reads a session on the gateway-hosted phone client,
- * the desktop must stop showing that session's completed-unread dot. The two
- * surfaces share ONE comparison domain — the gateway's session-state mirror —
- * but nothing on the phone ever told the mirror that the reader caught up, so
- * "phone read it, desktop still lights" was the documented asymmetry.
+ * Reading a session on the gateway-hosted phone client must clear the desktop's
+ * completed-unread dot for it. Both surfaces share ONE comparison domain — the
+ * gateway's session-state mirror — which the phone never told the reader caught
+ * up, so: the current session id comes from the OFFICIAL session list service
+ * (the mobile DOM carries no session-id anchor); the watermark comes from the
+ * GATEWAY MIRROR row (GET /chamber/session-state, max(updatedAt, completedAt)),
+ * NEVER the phone's wall clock (marks and the unread comparison live in the
+ * host domain only); the mark is POSTed to /chamber/session-state/read with a
+ * per-install client id, monotonically (same/lower dropped) and throttled.
  *
- * THIS MODULE closes it with three deliberately small pieces:
- *   1. the current session id comes from the OFFICIAL session list service
- *      (`ctx.sessions.list.getSnapshot()` — the only authoritative source; the
- *      mobile DOM carries no session-id anchor, see markup.ts), and the plugin
- *      therefore injects `sessions` (an official service, no new dependency);
- *   2. the read watermark comes from the GATEWAY MIRROR row
- *      (`GET /chamber/session-state` → `max(updatedAt, completedAt)`), NEVER
- *      from the phone's wall clock: read marks and the unread comparison live
- *      in the host domain only (§5-13);
- *   3. the mark is POSTed to `/chamber/session-state/read` with a per-install
- *      client id, monotonically (same/lower watermark is dropped) and throttled.
- *
- * FAIL-CLOSED, LIKE EVERYTHING ELSE IN THIS PACKAGE: an absent service, a
- * missing row, a rejected fetch or a non-2xx response is silently ignored —
- * read marks are an optimisation of the OTHER surface, never a dependency of
- * this one. Nothing here throws into the shell.
+ * FAIL-CLOSED: an absent service, missing row, rejected fetch or non-2xx is
+ * silently ignored — read marks are an optimisation of the OTHER surface, never
+ * a dependency of this one; nothing here throws into the shell.
  */
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 
@@ -80,9 +71,9 @@ export interface ReadReporter {
 }
 
 /**
- * Monotonic + throttled reporter. A session's watermark may only increase
- * (the mirror merges with max anyway — this just avoids pointless traffic),
- * and repeated reports of the same session inside `minIntervalMs` are dropped.
+ * Monotonic + throttled reporter: a session's watermark may only increase
+ * (the mirror merges with max anyway — this only avoids pointless traffic),
+ * and repeated reports inside minIntervalMs are dropped.
  */
 export function createReadWatermarkReporter(deps: {
   post: (sessionId: string, watermark: number) => void
@@ -174,9 +165,9 @@ export async function reportCurrentSession(deps: ReadWatermarkDeps): Promise<str
 }
 
 /**
- * Install the mobile read-watermark loop: it reconciles when the page becomes
- * visible/focused and whenever the official list changes (if it is observable).
- * Returns a disposer; every path is exception-safe.
+ * Install the mobile read-watermark loop: reconciles when the page becomes
+ * visible/focused and whenever the official list changes. Returns a disposer;
+ * every path is exception-safe.
  */
 export function installMobileReadWatermark(
   ctx: ClientContext,

@@ -3,23 +3,11 @@
  *
  * P1 of the session-authority refactor.
  *
- * WHY THIS EXISTS. The official store's \`running\` bit is delivered only by an emit-type
- * mux event with no retransmission, so losing one frame (or a silently half-dead carrier)
- * leaves it stuck at true forever - the sidebar never sees the running->idle edge and the
- * completion notification is never armed ("silent completion"). The chamber cannot fix the
- * upstream emitter; it CAN own a single reconciliation of that bit against independent
- * authority reads and write the conclusion back through the official store's public write
- * path. This module is that reconciliation, as a pure reducer.
+ * WHAT IT OWNS: per-session episode identity, official running, authority denials (N=2),
+ * correction in flight, and EXACTLY ONE completion edge per running episode. Cadence and
+ * escalation belong to the ladder engine (ladder.ts).
  *
- * WHAT IT OWNS (and what it deliberately does not):
- *  - truth: per-session episode identity, official running, authority denials (N=2),
- *    correction in flight, and EXACTLY ONE completion edge per running episode;
- *  - it does NOT own cadence or escalation: when to probe, when to reconnect and when to
- *    surface a stall belong to the one ladder engine (ladder.ts). The reducer only asks
- *    for the immediate confirmation read that N=2 needs.
- *
- * PURITY (enforced by the package test manifest): zero imports, no clock reads, no DOM.
- * Every time arrives on the observation; every threshold arrives via config.
+ * PURITY: zero imports, no clock reads, no DOM.
  */
 
 /** The official store's per-session projection - the bit that can go stale. */
@@ -27,17 +15,15 @@ export interface AuthorityOfficialRow {
   readonly running: boolean
   /** Vendor \`completed\` flag when the caller projects it. */
   readonly completed?: boolean
-  /**
-   * Subagent-origin rows are outside the fact channel (STATUS 4): they are never
-   * reconciled, corrected or notified - a parent's completion is the user-visible event.
-   */
+  /** Subagent-origin rows are outside the fact channel: never reconciled, corrected or
+   * notified - a parent's completion is the user-visible event. */
   readonly subagent?: boolean
 }
 
 /**
- * One independent authority read (chamber's own unary \`session.list\`, NOT the official
- * refresh). \`complete\` = the read returned a complete list, so ABSENCE of an id is a
- * denial; an incomplete read can only deny by an explicit \`false\`.
+ * One independent authority read (chamber's own unary `session.list`). `complete` = the
+ * read returned a complete list, so ABSENCE of an id is a denial; an incomplete read can
+ * only deny by an explicit `false`.
  */
 export interface AuthorityRead {
   /** false = the read itself failed: no evidence at all (neither confirm nor deny). */
@@ -92,7 +78,7 @@ export type SessionAuthorityObservation =
       readonly generation: string
       /** Every listed session (running and not running); absence = not listed. */
       readonly official: Readonly<Record<string, AuthorityOfficialRow>>
-      /** Official list arrival phase; false = absence is NOT evidence (STATUS 9). */
+      /** Official list arrival phase; false = absence is NOT evidence. */
       readonly listComplete: boolean
     }
   | {
@@ -127,13 +113,8 @@ function sorted(ids: readonly string[]): string[] {
   return [...ids].sort()
 }
 
-/**
- * Reduce one observation.
- * @param state - previous state (initialSessionAuthorityState to start).
- * @param observation - tick / authority read / correction result.
- * @param config - the confirmation depth.
- * @returns the new state and the effects to execute, in deterministic order.
- */
+/** Reduce one observation (tick / authority read / correction result) into the new state
+ * and the effects to execute, in deterministic order. */
 export function reduceSessionAuthority(
   state: SessionAuthorityState,
   observation: SessionAuthorityObservation,
@@ -225,13 +206,11 @@ export function reduceSessionAuthority(
   const effects: SessionAuthorityEffect[] = []
   for (const sessionId of sorted(observation.sessionIds)) {
     const record = sessions[sessionId]
-    // Only a result for a correction THIS episode still has in flight may settle it:
-    // a generation reset (or a tick that already completed the episode) drops the
-    // pending marker, and a late/abandoned write must never complete a new episode.
+    // Only a result for a correction THIS episode still has in flight may settle it: a
+    // generation reset or completed episode drops the marker, so a late write is ignored.
     if (record === undefined || !record.correctionPending) continue
     if (!observation.ok) {
-      // The write (or its self-verification) failed: this round may not claim a
-      // correction. Reset the denials so a later probe must confirm again.
+      // The write (or its self-verification) failed: reset the denials so a later probe must confirm again.
       sessions[sessionId] = { ...record, deniedReads: 0, correctionPending: false }
       continue
     }

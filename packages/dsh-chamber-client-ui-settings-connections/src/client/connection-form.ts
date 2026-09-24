@@ -6,30 +6,23 @@ import type {
 } from '../global.d.ts'
 import { formatGatewayUrl, parseGatewayUrl } from './gateway-url.ts'
 
-/** The field cluster rendered by a transport. Keeping this decision on the
- * transport schema is the design 17 §2.2 extension seam: adding a transport
- * extends this registry instead of adding another kind/transport cross-product
- * to the component. */
+/** The field cluster rendered by a transport — a transport-schema decision, so adding a transport
+ *  extends this registry instead of adding another kind/transport cross-product. */
 export type TransportFieldGroup = 'ssh' | 'url'
 
 export interface TransportFormSchema {
   method: TransportMethod
   fieldGroup: TransportFieldGroup
   targetKinds: readonly TransportKind[]
-  /** The value used by the SSH destination-port field when it has not been
-   * customized. HTTP ports remain URL-derived, but keeping its conventional
-   * fallback here lets a transport switch restore a sensible SSH default. */
+  /** The value used by the SSH destination-port field when not customized. HTTP ports remain
+   *  URL-derived; keeping the fallback lets a transport switch restore a sensible SSH default. */
   defaultRemotePort: Readonly<Record<TransportKind, number>>
 }
 
-/** Shipped transport schemas. The dsh×http combination is DISABLED:
- *  direct-attaching a dsh web profile over http is hard-blocked — its host
- *  answers 401 without the spawn-time browser-auth launch token, which is
- *  unrecoverable remotely (re-enable when upstream exposes token retrieval).
- *  ssh remains the only dsh transport; gateway
- *  keeps both transports. The main-process http provider refuses the
- *  combination at validateSpec (same flip point). Target semantics such as
- *  gateway authentication remain a separate decision below. */
+/** Shipped transport schemas. The dsh×http combination is DISABLED: direct-attaching a dsh web
+ *  profile over http is hard-blocked — its host answers 401 without the spawn-time browser-auth
+ *  launch token, which is unrecoverable remotely. ssh remains the only dsh transport; gateway keeps both.
+ *  The main-process provider refuses the combination at validateSpec. */
 export const TRANSPORT_FORM_SCHEMAS: Readonly<Record<TransportMethod, TransportFormSchema>> = {
   ssh: {
     method: 'ssh',
@@ -41,8 +34,7 @@ export const TRANSPORT_FORM_SCHEMAS: Readonly<Record<TransportMethod, TransportF
     method: 'http',
     fieldGroup: 'url',
     targetKinds: ['gateway'],
-    // Direct endpoints derive their actual port from the URL. These values
-    // are only draft fallbacks used when moving between form schemas.
+    // Direct endpoints derive their actual port from the URL; these are only draft fallbacks when moving between form schemas.
     defaultRemotePort: { dsh: 30800, gateway: 443 },
   },
 }
@@ -52,12 +44,10 @@ export const TRANSPORT_FORM_OPTIONS: readonly TransportFormSchema[] = [
   TRANSPORT_FORM_SCHEMAS.http,
 ]
 
-/** systemd unit-name input gate. A leading dash is never a unit name here:
- * it could otherwise be parsed as a systemctl option. Main repeats this gate
- * and inserts `--` before the unit, so renderer validation is UX rather than
- * the security boundary. The literal lives with the other desktop-gate mirrors
- * (host-validation.ts, byte-parity-locked by connection-form-contract.test.ts)
- * and is re-exported here so the form and the mirror cannot drift apart. */
+/** systemd unit-name input gate. A leading dash is never a unit name here (it could parse as a
+ *  systemctl option); MAIN repeats this gate and inserts `--` before the unit, so renderer
+ *  validation is UX, not the security boundary. The literal lives with the other desktop-gate
+ *  mirrors (host-validation.ts, byte-parity-locked). */
 export { SERVICE_NAME_PATTERN } from './host-validation.ts'
 
 export function transportFormSchema(method: TransportMethod): TransportFormSchema {
@@ -68,8 +58,7 @@ export function transportSupportsTarget(method: TransportMethod, kind: Transport
   return transportFormSchema(method).targetKinds.includes(kind)
 }
 
-/** Move a still-defaulted port across target/transport choices while
- * preserving every custom value. */
+/** Move a still-defaulted port across target/transport choices while preserving every custom value. */
 export function nextDefaultedRemotePort(
   current: string,
   previousKind: TransportKind,
@@ -83,9 +72,8 @@ export function nextDefaultedRemotePort(
     : current
 }
 
-/** Independent credential dimensions for one target/transport pair. Gateway
- * over SSH needs BOTH: SSH authenticates the tunnel and token/password
- * authenticates the gateway reached through it. */
+/** Independent credential dimensions for one target/transport pair. Gateway over SSH needs BOTH:
+ *  SSH authenticates the tunnel and token/password authenticates the gateway reached through it. */
 export interface CredentialCapabilities {
   sshPassword: boolean
   gatewayAuth: boolean
@@ -98,9 +86,8 @@ export function credentialCapabilitiesFor(kind: TransportKind, transport: Transp
   }
 }
 
-/** Add/edit form draft. Secret values are transient and never become members
- * of SshInstanceInput. The SPKI pin is intentionally different: it is
- * non-secret registry metadata and therefore is round-tripped on edit. */
+/** Add/edit form draft. Secret values are transient and never become members of SshInstanceInput.
+ *  The SPKI pin is different: non-secret registry metadata, so it is round-tripped on edit. */
 export interface HostDraft {
   kind: TransportKind
   transport: TransportMethod
@@ -139,8 +126,7 @@ export const EMPTY_DRAFT: HostDraft = {
   password: '',
 }
 
-/** Pin eligibility is deliberately narrow: only a gateway target reached by
- * the direct HTTP provider with an explicitly valid HTTPS origin. */
+/** Pin eligibility is deliberately narrow: only a gateway target reached by the direct HTTP provider with an explicitly valid HTTPS origin. */
 export function spkiPinEligible(draft: Pick<HostDraft, 'kind' | 'transport' | 'gatewayUrl'>): boolean {
   if (draft.kind !== 'gateway' || draft.transport !== 'http') return false
   const parsed = parseGatewayUrl(draft.gatewayUrl)
@@ -153,10 +139,9 @@ export function spkiPinValidationError(pin: string): 'format' | null {
   return /^[0-9a-fA-F]{64}$/.test(value) ? null : 'format'
 }
 
-/** Normalize a registry row into a form draft. Secret fields always start
- * empty, while a valid pin is prefilled so a label-only edit cannot
- * silently remove certificate verification. HTTP backfill is transport-
- * based, not kind-based, which is required for dsh+http. */
+/** Normalize a registry row into a form draft. Secret fields always start empty, while a valid pin
+ *  is prefilled so a label-only edit cannot silently remove certificate verification. HTTP backfill
+ *  is transport-based, not kind-based. */
 export function draftFromSpec(spec: SshInstanceSpec): HostDraft {
   const endpointUrl = spec.transport === 'http'
     ? formatGatewayUrl(spec.host, spec.remotePort, spec.insecureHttp)
@@ -181,10 +166,9 @@ export function draftFromSpec(spec: SshInstanceSpec): HostDraft {
   }
 }
 
-/** Derive non-secret registry input. Every combination follows its transport
- * schema. SPKI is emitted only for gateway+http+https and is normalized to
- * lowercase; stale hidden values can therefore never leak into dsh, SSH, or
- * plaintext HTTP saves. */
+/** Derive non-secret registry input. Every combination follows its transport schema. SPKI is
+ *  emitted only for gateway+http+https and normalized to lowercase, so stale hidden values can
+ *  never leak into dsh, SSH, or plaintext HTTP saves. */
 export function draftToInput(draft: HostDraft): SshInstanceInput {
   const input: SshInstanceInput = {
     kind: draft.kind,
@@ -217,11 +201,9 @@ export function draftToInput(draft: HostDraft): SshInstanceInput {
   return input
 }
 
-/** Target changes preserve the independently selected transport WHEN the new
- *  target supports it. The dsh×http combination is disabled, so a
- *  kind switch INTO dsh moves an http draft onto ssh (the only dsh transport)
- *  with the ssh port default. Transient credentials are cleared so switching
- *  away and back cannot accidentally submit a value typed for another target. */
+/** Target changes preserve the independently selected transport WHEN the new target supports it.
+ *  A kind switch INTO dsh moves an http draft onto ssh (the only dsh transport) with the ssh port
+ *  default; transient credentials are cleared so switching away and back cannot submit a stale value. */
 export function changeDraftKind(draft: HostDraft, kind: TransportKind): HostDraft {
   if (kind === draft.kind) return draft
   const transport = transportSupportsTarget(draft.transport, kind) ? draft.transport : 'ssh'
@@ -237,9 +219,8 @@ export function changeDraftKind(draft: HostDraft, kind: TransportKind): HostDraf
   }
 }
 
-/** Transport changes preserve the target kind and move only the field schema.
- * Target-owned gateway credentials remain valid across ssh/http; the SPKI pin
- * and dsh SSH password are cleared when their TLS/SSH surfaces disappear. */
+/** Transport changes preserve the target kind and move only the field schema. Gateway credentials
+ *  remain valid across ssh/http; the SPKI pin and dsh SSH password are cleared when their surfaces disappear. */
 export function changeDraftTransport(draft: HostDraft, transport: TransportMethod): HostDraft {
   if (transport === draft.transport) return draft
   return {
@@ -251,8 +232,7 @@ export function changeDraftTransport(draft: HostDraft, transport: TransportMetho
   }
 }
 
-/** URL editing clears a pin as soon as the endpoint is no longer valid HTTPS,
- * preventing a hidden value from surviving an explicit move to plaintext. */
+/** URL editing clears a pin as soon as the endpoint is no longer valid HTTPS, preventing a hidden value from surviving a move to plaintext. */
 export function changeDraftEndpointUrl(draft: HostDraft, gatewayUrl: string): HostDraft {
   const next = { ...draft, gatewayUrl }
   return spkiPinEligible(next) ? next : { ...next, spkiPin: '' }

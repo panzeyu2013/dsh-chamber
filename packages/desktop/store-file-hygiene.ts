@@ -18,9 +18,8 @@ export function isPlainRecord(value: unknown): value is Record<string, unknown> 
 
 /**
  * THE rename-aside primitive: one try/rename over the target file, returning
- * the actual aside path or the failure text.
- * Every corrupt/legacy preserve path (credential mirrors, chamber settings,
- * ssh plugin journal) builds on this instead of hand-writing the rename.
+ * the actual aside path or the failure text; every corrupt/legacy preserve path
+ * (credential mirrors, chamber settings, plugin journal) builds on this.
  */
 export function preserveFileAside(file: string, suffix: string): { ok: true; path: string } | { ok: false; error: string } {
   const aside = `${file}${suffix}`
@@ -33,10 +32,9 @@ export function preserveFileAside(file: string, suffix: string): { ok: true; pat
 }
 
 /**
- * Preserve an INVALID/UNREADABLE store file as `<file>.corrupt` (renamed
- * aside — reversible evidence, never silently treated as empty) and return
- * the loud notice string. `invalidFile` names the file in the notice
- * ('password file', 'gateway secrets file') — the only per-store variance.
+ * Preserve an INVALID/UNREADABLE store file as `<file>.corrupt` (renamed aside —
+ * reversible evidence, never silently treated as empty) and return the loud
+ * notice naming `invalidFile` — the only per-store variance.
  */
 export function preserveInvalidCredentialFile(file: string, invalidFile: string): string {
   const result = preserveFileAside(file, '.corrupt')
@@ -45,14 +43,13 @@ export function preserveInvalidCredentialFile(file: string, invalidFile: string)
     : `invalid ${invalidFile} at ${file}; preserve failed: ${result.error}`
 }
 
+
 /**
  * One-time crash-residue sweep: the legacy fixed-name `${file}.tmp` persist
  * (open 'w' + rename) can leave that exact-name 0600 residue behind after a
- * hard crash between the two steps. The atomic replace uses a random O_EXCL
- * temp and never reuses or removes that legacy name — sweep it once when the
- * store is configured/loaded. Best-effort only: `force` already swallows
- * ENOENT, and any other failure (permissions…) must not break store
- * configuration, so the remainder is swallowed too.
+ * hard crash between the two steps; the atomic replace uses a random O_EXCL
+ * temp and never reuses that legacy name. Best-effort only: `force` swallows
+ * ENOENT and any other failure (permissions…) must not break store configuration.
  */
 export function removeLegacyTmpResidue(file: string): void {
   try { rmSync(`${file}.tmp`, { force: true }) } catch { /* best-effort hygiene only */ }

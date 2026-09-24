@@ -1,15 +1,9 @@
 /**
- * Browser-side SemVer comparator for the /chamber dashboard:
- * ONE local source of the precedence rules, interpolated verbatim into the
- * dashboard script by routes.ts. It deliberately does NOT import the shared
- * dsh-runtime comparator — the dashboard script is a classic inline script, so
- * the rules must ship as source text (regex-free: a backslash escape inside the
- * template literal would be consumed). A lockstep test
- * (test/boundary/dashboard-semver-lockstep.test.ts) evaluates exactly these
- * bytes and pins the shared conclusion for valid semver, plus the documented
- * invalid-input policy difference (this comparator compares unparseable
- * versions equal so a stable sort keeps them at the tail; the shared
- * dsh-runtime comparator sorts invalid versions last).
+ * Browser-side SemVer comparator for the /chamber dashboard: ONE local source of
+ * the precedence rules, interpolated verbatim into the dashboard script. It does
+ * NOT import the shared dsh-runtime comparator (classic inline, regex-free — a
+ * backslash escape in the template literal would be consumed); unparseable
+ * versions compare EQUAL, so a stable sort keeps them at the tail.
  */
 export const DASHBOARD_SEMVER_JS = `
   function semverNumericCompare(a, b) {

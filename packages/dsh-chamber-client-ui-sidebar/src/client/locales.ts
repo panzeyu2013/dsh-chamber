@@ -6,10 +6,7 @@ export const zh = {
   'panels.label': '全局面板',
   'toggle.open': '打开侧边栏',
   'toggle.collapse': '收起侧边栏',
-  // 行级操作的无障碍名：上游行动作一律
-  // 参数化行名（vendor ui-workspace locales.ts `actions.newSession.aria` /
-  // `actions.workspace.aria` / `actions.session.aria`），泛化标签会让 AT 听到
-  // 一排无法区分的“新建会话/更多操作”。
+  // 行级操作的无障碍名：上游行动作一律用参数化行名（vendor ui-workspace locales.ts `actions.*.aria`）；泛化标签会让 AT 听到一排无法区分的“新建会话/更多操作”。
   'action.newSession.aria': '在“{name}”中新建会话',
   'action.rename': '重命名',
   'action.save': '保存',
@@ -26,12 +23,9 @@ export const zh = {
   'archive.manager.groupSelectAria': '全选 / 取消全选「{title}」下已归档会话',
   'archive.manager.rowDeleteAria': '删除「{title}」',
   'archive.manager.rowUntitled': '未命名会话',
-  // 已清理但仍在本进程内存中的行（design 24 §4 step 9）：
-  // 内容已删除、归档成员关系被保留（宿主仍供这一行），重启该实例后彻底消失。
+  // 已清理但仍在本进程内存中的行（design 24 §4 step 9）：内容已删除、归档成员关系保留（宿主仍供这一行），重启后彻底消失。
   'archive.manager.residentPurged': '内容已删除，待实例重启收敛',
-  // 行复选框的可访问名：标签文本是独立 span，只会在浏览
-  // 模式被读到；聚焦复选框时必须把「已删除/待重启」一并播报，否则读屏用户看到的
-  // 只是"这行还在"。
+  // 行复选框的可访问名：标签文本是独立 span、只在浏览模式被读到；聚焦时必须把「已删除/待重启」一并播报。
   'archive.manager.rowAriaResidentPurged': '「{title}」（内容已删除，待实例重启收敛）',
   'archive.manager.deleteSelected.one': '删除选中（{count}）',
   'archive.manager.deleteSelected.other': '删除选中（{count}）',
@@ -39,24 +33,20 @@ export const zh = {
   'archive.manager.confirmSelected.one': '将永久删除选中的 {count} 个已归档会话及其子代理内容，此操作不可恢复。',
   'archive.manager.confirmSelected.other': '将永久删除选中的 {count} 个已归档会话及其子代理内容，此操作不可恢复。',
   'archive.manager.confirmDelete': '确认删除',
-  // 本包的内联 zh 文案收进字典
-  // （上游 client/AGENTS.md：一切产品可见文案都在类型化字典里）。
+  // 本包内联 zh 文案收进字典（上游 client/AGENTS.md：产品可见文案都在类型化字典里）。
   'archive.manager.busyOther': '该实例正在执行另一处清理，请稍后重试。',
   'archive.manager.deleting': '正在删除…',
   'archive.manager.title': '删除已归档内容',
-  // 未保护提示：无法点名"正在查看的会话"时如实说明，而不是
-  // 禁用删除控件——运行中的会话仍不会被删除。
+  // 未保护提示：无法点名"正在查看的会话"时如实说明，而不是禁用删除控件——运行中的会话仍不会被删除。
   'archive.manager.unprotected': '无法确认你正在查看的会话：本次删除不排除任何会话（运行中的会话仍不会被删除）。',
-  // 归档清理的结果行（`./archive-purge.ts` 只返回 key+params，对话框用
-  // t() 渲染）。删除没有"拒绝"分支：客户端不以"证不出当前会话"为由拒绝删除。
+  // 归档清理的结果行（`./archive-purge.ts` 只返回 key+params，对话框用 t() 渲染）；删除没有"拒绝"分支：客户端不以"证不出当前会话"为由拒绝。
   'archive.purge.note.stopped': '已先停止 {count} 个运行中的会话。',
   'archive.purge.note.protected': '已跳过 {count} 个归档树：其中包含你正在查看的会话（未删除——切换会话后重试，或稍后重试：归档后选中可能尚未清空）。',
   'archive.purge.note.deleted': '清理完成：删除 {sessions} 个会话 / {subagents} 个子代理内容。',
   'archive.purge.note.orphanMembers': '顺带清理了 {count} 条无内容的归档集合残留成员。',
-  // 常驻保留：内容删了、但会话还活在实例进程里，宿主保留归档标记
-  // （行继续隐藏）——"强制删除"文案会让人以为列表里也没了。
-  // 自足文案：常驻成员在真实宿主上「重跑仍有记录」，此时本行会是
-  // 唯一一行（没有「清理完成：删除…」先行句），所以不得用「其中」指代前句。
+  // 常驻保留：内容删了、会话仍活在实例进程里，宿主保留归档标记（行继续隐藏）——
+  // "强制删除"文案会让人以为列表里也没了。自足文案：本行可能是唯一一行（没有
+  // 「清理完成：删除…」先行句），不得用「其中」指代前句。
   'archive.purge.note.residentRetained': '{count} 项会话的内容已删除，但会话本身仍在本实例内存中——它们继续保持隐藏，重启该实例后彻底消失。',
   'archive.purge.note.forcedLoaded': '其中 {count} 项为进程内已加载的会话（强制删除）。',
   'archive.purge.note.skippedRunning': '已跳过 {count} 项仍在运行的会话（停止未生效；可稍后重试）。',
@@ -77,15 +67,11 @@ export const zh = {
   'source.markAllRead': '全部已读',
   'menu.fork': '分叉会话',
   'menu.archiveSession': '归档会话',
-  // Workspace-delete confirm: the in-app Modal/Button dialog; the copy is
-  // upstream's (vendor ui-workspace locales.ts delete.workspace / delete.desc /
-  // delete.pending).
+  // Workspace-delete confirm: the in-app Modal/Button dialog; the copy is upstream's
+  // (vendor ui-workspace locales.ts delete.workspace / delete.desc / delete.pending).
   'delete.workspace': '删除工作区',
   'delete.desc': '将把“{name}”从工作区列表中移除。文件夹与会话记录会保留，其会话将显示在“未分组”下。',
-  // The orphan case's dialog DESCRIPTION —
-  // a statement, unlike `confirm.deleteOrphan` below, which is a question with
-  // a trailing "？" and stays the orphan badge's native
-  // `title` in the nav (ServerSection.tsx). Same fact, two registers.
+  // The orphan case's dialog DESCRIPTION — a statement; `confirm.deleteOrphan` below is the question form and the badge's native `title`.
   'delete.descOrphan': '将把“{name}”从工作区列表中移除：它的文件夹已不存在，因此只删除 workspace 注册；会话记录会保留，其会话将显示在“未分组”下。',
   'delete.pending': '正在删除工作区…',
   'confirm.deleteOrphan': '「{title}」的工作树已不存在，仅删除其 workspace 注册（会话保留并转未分组）？',
@@ -105,7 +91,6 @@ export const zh = {
   'status.restartExhausted': '启动失败',
   'status.idle': '未连接',
   'status.unknown': '未知',
-  // 两种"数据不可信"状态就地说明。
   'source.managedDown': '托管 dsh 不可用（{state}）：请在 设置 → 连接 中启动该实例后重试。',
   'source.baselinePending': '会话基线尚未就绪：当前为降级列表（已归档会话可能显示为普通行）。',
   // 能力一览：档位说明并入同一条 live region 级联的最低优先级。
@@ -113,9 +98,8 @@ export const zh = {
   'source.factsLegacy': '该网关未升级：本来源的完成/未读由本机观察得出，窗口关闭期间可能丢失。',
   'source.factsDisabled': '该网关的会话观察已被关闭（管理员配置）。',
   'source.managedStarting': '托管 dsh 正在启动（{state}）：就绪后自动恢复。',
-  // （05 §4「降级呈现」）：该来源的壳 boot 成功但已知缺口——事实是
-  // 结构化的（kind + 服务/插件 id），文案由本包自己出，不接收框架拼好的句子。
-  // 与上面三条共用同一个 sourceNote live region（一个来源只应有一个），按优先级取一条。
+  // 该来源的壳 boot 成功但已知缺口——事实是结构化的（kind + 服务/插件 id），文案由本包自己出、
+  // 不接收框架拼好的句子；与上面三条共用同一个 sourceNote live region，按优先级取一条。
   'source.bootGap.generic': '该服务器前端能力受限：部分界面可能缺席。',
   'source.bootGap.graphUnavailable': '该服务器前端能力受限：本次挂载没有加载它的前端插件（会话正文等界面可能缺席）。',
   'source.bootGap.localGraphNotInjected': '该服务器前端能力受限：本地实例没有注入客户端插件图（接口 404 或缺少该方法）——这是应用侧安装/seed 产物问题，本次挂载没有加载它的前端插件。',
@@ -125,8 +109,7 @@ export const zh = {
   'search.placeholder': '搜索会话…',
   'search.clear': '清除搜索',
   'search.results.aria': '搜索结果',
-  // 浏览树的可访问名：上游工作区树同样带名
-  // （vendor ui-workspace WorkspaceBrowser.tsx role="tree" aria-label=t('section.sessions')）。
+  // 浏览树的可访问名：上游工作区树同样带名（vendor ui-workspace WorkspaceBrowser.tsx，role="tree" 取 t('section.sessions')）。
   'section.sessions': '会话',
   'search.pending': '正在搜索会话历史…',
   'search.unavailable': '内容搜索暂不可用，仅显示名称匹配。',
@@ -136,8 +119,7 @@ export const zh = {
   'status.planReview': '计划待审',
   'status.waitingAnswer': '等待回答',
   'status.completed': '已完成',
-  // 活动定时任务标记：文案取上游
-  // ui-workspace locales.ts schedule.active，标记渲染在行标题之后。
+  // 活动定时任务标记：文案取上游 ui-workspace locales.ts schedule.active，标记渲染在行标题之后。
   'schedule.active': '有活动定时任务',
   'status.subagentsRunning.one': '{n} 个子代理运行中',
   'status.subagentsRunning.other': '{n} 个子代理运行中',
@@ -157,8 +139,7 @@ export const zh = {
   'time.ago': '{t}前',
   'workspace.expand': '展开',
   'workspace.collapse': '收起',
-  // 会话行窗口的展开条：双向 disclosure，
-  // 文案取自上游 ui-workspace locales.ts sessions.expand / sessions.collapse。
+  // 会话行窗口的展开条：双向 disclosure，文案取自上游 ui-workspace locales.ts sessions.expand / sessions.collapse。
   'sessions.expand': '展开其余 {n} 个会话',
   'sessions.collapse': '收起',
   'server.expand': '展开全部工作区',

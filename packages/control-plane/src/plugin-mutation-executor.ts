@@ -1,44 +1,26 @@
 /**
- * Restricted plugin-mutation child executor (design 21 §6.3) — the SINGLE
- * implementation of the bounded mutation-child protocol shared by the gateway
- * server and the desktop main process.
+ * Restricted plugin-mutation child executor — the SINGLE implementation of the bounded
+ * mutation-child protocol shared by the gateway server and the desktop main process.
  *
- * Contract (all callers, both hosts):
- *   - env discipline: the caller builds the child env through
- *     {@link scrubMutationEnv} with the canonical
- *     `INSTALL_ENV_WHITELIST` regex the dsh-runtime installer exports
- *     (PATH + the proxy family). Every other ambient variable — DSH_GATEWAY_*
- *     control vars, npm_config_* / NPM_* token carriers and any other secret
- *     carrier such as NODE_AUTH_TOKEN a lifecycle script or pnpm could read —
- *     is DROPPED. HOME is deliberately never pinned or re-added: pnpm derives
- *     its default store from the effective home, and the managed profile was
- *     provisioned under the same effective home (a pinned HOME silently moves
- *     the store and pnpm 11 then refuses every mutation against the
- *     provisioned profile). The whitelist regex is a REQUIRED parameter here
- *     because its single source (`@dsh-chamber/dsh-runtime`) is not a
- *     dependency of this package: each caller passes the same constant.
- *   - spawn: the default executor spawns a detached process-group leader
- *     (POSIX) and kills the GROUP on timeout/cancel (SIGTERM, then SIGKILL
- *     after {@link MUTATION_SIGNAL_GRACE_MS}); the returned outcome is mapped
- *     to the shared error vocabulary below. Callers that need stronger
- *     writer-safety supervision (the desktop's crash-safe writer ledger +
- *     process-group quiescence proof) inject their own
- *     {@link MutationChildExecutor}: the env/bounds/timeout/terminal
- *     semantics stay HERE, only the spawn/kill proof is parameterized.
- *   - output: stdout/stderr are captured with a bounded tail per stream
- *     ({@link MUTATION_OUTPUT_CAPTURE_LIMIT_DEFAULT_BYTES}) and the truncation
- *     marker is prepended when the head was dropped.
- *   - error text: every failure is sanitized through the caller-supplied
- *     `sanitize` function BEFORE it can reach a journal/task projection. The
- *     sanitizer's single source is `sanitizeInstallerOutput` in
- *     `@dsh-chamber/dsh-runtime` (design 21 §6.3); this package deliberately
- *     does not depend on that package, so the function is required rather
- *     than defaulted — there is no second sanitizer implementation here.
+ * Env discipline: the caller builds the child env through {@link scrubMutationEnv} with the
+ * canonical `INSTALL_ENV_WHITELIST` regex the dsh-runtime installer exports (PATH + the
+ * proxy family); every other ambient variable — DSH_GATEWAY_* control vars, npm/NPM token
+ * carriers and any other secret a lifecycle script or pnpm could read — is DROPPED. HOME is
+ * never pinned: pnpm derives its store from the effective home the managed profile was
+ * provisioned under (a pinned HOME silently moves the store and pnpm 11 then refuses every
+ * mutation). The regex is a REQUIRED parameter because its single source is not a dependency
+ * of this package.
  *
- * Never throws for its own failures: spawn errors, non-zero exits, signals
- * and timeouts all resolve {@link PluginMutationResult}. An INJECTED
- * `childExecutor` that throws propagates (the desktop writer-safety error
- * codes must never be masked as an ordinary command failure).
+ * Spawn/capture: the default executor spawns a detached process-group leader and kills the
+ * GROUP on timeout/cancel (SIGTERM, then SIGKILL after the grace); callers needing stronger
+ * writer-safety supervision inject their own {@link MutationChildExecutor} — env/bounds/
+ * timeout/terminal semantics stay here. stdout/stderr keep a bounded tail per stream with a
+ * truncation marker; every failure is sanitized through the caller-supplied `sanitize`
+ * BEFORE reaching a journal/task projection (its single source is dsh-runtime's
+ * sanitizeInstallerOutput — no second sanitizer exists here).
+ *
+ * Never throws for its own failures: spawn errors, non-zero exits, signals and timeouts
+ * resolve {@link PluginMutationResult}; an INJECTED executor that throws propagates.
  */
 
 import { spawn as spawnCommand } from 'node:child_process'
@@ -57,23 +39,13 @@ export const MUTATION_OUTPUT_TRUNCATION_MARKER = '\n...[output truncated]...\n'
 /** Timeout error text (shared by gateway journal errors and desktop notes). */
 export const ERROR_MUTATION_TIMED_OUT = 'mutation timed out'
 
-/** Env discipline (design 21 §6.3): ONLY the variables pnpm/network needs may
- * cross the process boundary — PATH + the proxy family, i.e. the canonical
- * `INSTALL_ENV_WHITELIST` from the shared dsh-runtime core. Everything else
- * (DSH_GATEWAY_* control variables, npm_config_* / NPM_* token carriers, and
- * any OTHER ambient secret such as NODE_AUTH_TOKEN, GITHUB_TOKEN,
- * SSH_AUTH_SOCK, … that an arbitrary third-party lifecycle script — allowed by
- * decision 13 — or pnpm could read) is DROPPED before the caller's pins apply
- * unconditionally. A denylist cannot enumerate every secret carrier; the
- * whitelist can.
- *
- * @param source - ambient environment (`process.env`).
- * @param pins - explicit values that must be present regardless of the
- *   whitelist (DSH_HOME, the private XDG dirs, the empty userconfig pair, the
- *   resolved pnpm PATH…). A pin overrides an ambient value of the same name.
- * @param whitelist - the shared `INSTALL_ENV_WHITELIST` regex; required (no
- *   local default) so the whitelist has exactly one source.
- */
+/** Env discipline: ONLY the variables pnpm/network needs may cross the process boundary —
+ *  PATH + the proxy family, i.e. the canonical `INSTALL_ENV_WHITELIST` from the shared
+ *  dsh-runtime core. Everything else (DSH_GATEWAY_* control variables, npm_config_* / NPM_*
+ *  token carriers and any other ambient secret a third-party lifecycle script or pnpm could
+ *  read) is DROPPED before the caller's pins apply. A denylist cannot enumerate every secret
+ *  carrier; the whitelist can. Pins override an ambient value of the same name; the
+ *  whitelist regex is required (no local default). */
 export function scrubMutationEnv(
   source: Record<string, string | undefined>,
   pins: Record<string, string>,
@@ -113,14 +85,12 @@ export interface MutationChildExecution {
   timeoutMs: number
   stdoutLimit: number
   stderrLimit: number
-  /** Pid hook for durable crash-orphan records (gateway journal childPid /
-   *  desktop writer ledger). A throwing hook fails the execution loudly. */
+  /** Pid hook for durable crash-orphan records; a throwing hook fails the execution loudly. */
   onSpawn?: (pid: number) => void
 }
 
-/** Raw outcome of one child execution. `error` is the supervision-level
- * failure (spawn error, timeout, quiescence failure); `code`/`signal`/
- * `stdout`/`stderr` describe a child that actually ran. */
+/** Raw outcome of one child execution. `error` is the supervision-level failure (spawn error,
+ *  timeout, quiescence); `code`/`signal`/`stdout`/`stderr` describe a child that ran. */
 export interface MutationChildOutcome {
   code: number | null
   signal: NodeJS.Signals | string | null
@@ -129,22 +99,18 @@ export interface MutationChildOutcome {
   error?: string
 }
 
-/** Injectable child executor (desktop: the RuntimeInstallerSupervisor adapter
- * with its writer-quiescence proof; default: the built-in group-kill spawn). */
+/** Injectable child executor (desktop: the supervisor adapter with its writer-quiescence proof). */
 export type MutationChildExecutor = (execution: MutationChildExecution) => Promise<MutationChildOutcome>
 
 export interface PluginMutationParams {
-  /** Executable to spawn (gateway: the resolved node executable; desktop:
-   *  `process.execPath`). */
+  /** Executable to spawn (gateway: the resolved node executable; desktop: `process.execPath`). */
   command: string
   /** Arguments after the optional prefix. */
   argv: string[]
-  /** Optional argv prefix spliced between the executable and `argv`
-   *  (gateway: node args + the resolved dsh CLI entry; tests omit it). */
+  /** Optional argv prefix spliced between the executable and `argv` (gateway: node args + CLI entry). */
   argvPrefix?: string[]
   env: Record<string, string>
-  /** Working directory for the spawned child (the active runtime workspace
-   *  root; absent inherits the host process cwd). */
+  /** Working directory for the child (the active runtime workspace root; absent inherits the host cwd). */
   cwd?: string
   timeoutMs?: number
   stdoutLimit?: number
@@ -153,8 +119,7 @@ export interface PluginMutationParams {
   sanitize: (text: string) => string
   /** Spawn seam (tests inject a fake); the default executor uses it. */
   spawn?: MutationSpawnFn
-  /** Child hook right after spawn (gateway records `childPid` and keeps the
-   *  handle for dispose kills). Default executor only. */
+  /** Child hook right after spawn (gateway records `childPid` for dispose kills). Default executor only. */
   onSpawn?: (child: MutationChild) => void
   /** Execution seam; when present the built-in spawn is not used. */
   childExecutor?: MutationChildExecutor
@@ -208,10 +173,8 @@ function lastNonEmptyLine(text: string): string | null {
 }
 
 
-/** Real spawn: detached child + process-group kill wrapper (POSIX), so a
- * hung install child can be reaped as a group. Exported because the gateway
- * wraps it to record the crash-orphan pid while KEEPING the group-kill
- * semantics. */
+/** Real spawn: detached child + process-group kill wrapper (POSIX), so a hung install child can
+ *  be reaped as a group. The gateway wraps it to record the crash-orphan pid. */
 export function spawnMutationChild(command: string, args: string[], options: SpawnOptions): MutationChild {
   const child = spawnCommand(command, args, { ...options, detached: process.platform !== 'win32' })
   return {
@@ -233,8 +196,7 @@ export function spawnMutationChild(command: string, args: string[], options: Spa
   }
 }
 
-/** The built-in executor: bounded capture + timeout, TERM→KILL on the process
- * group, deterministic outcome mapping. */
+/** The built-in executor: bounded capture + timeout, TERM→KILL on the process group, deterministic mapping. */
 function runDefaultMutationChild(
   execution: MutationChildExecution,
   spawnFn: MutationSpawnFn,
@@ -335,9 +297,8 @@ export function mutationOutcomeToResult(
   return { ok: false, error: sanitize(error) }
 }
 
-/** Run one restricted mutation child under the shared discipline. Never
- * throws for its own failures; an injected `childExecutor`'s rejection
- * propagates by design (desktop writer-safety codes). */
+/** Run one restricted mutation child under the shared discipline. Never throws for its own
+ * failures; an injected executor's rejection propagates by design. */
 export async function runPluginMutation(params: PluginMutationParams): Promise<PluginMutationResult> {
   const timeoutMs = params.timeoutMs ?? MUTATION_TIMEOUT_DEFAULT_MS
   const stdoutLimit = params.stdoutLimit ?? MUTATION_OUTPUT_CAPTURE_LIMIT_DEFAULT_BYTES

@@ -3,91 +3,91 @@
   "files": [
     {
       "path": "packages/renderer/src/App.tsx",
-      "lines": 2592,
+      "lines": 2236,
       "target": 400,
       "note": "renderer container (function-of-state mixes; stores/budgets/servers/ledger extracted)"
     },
     {
       "path": "packages/desktop/plugin-sync.ts",
-      "lines": 2578,
+      "lines": 2146,
       "target": 1200,
       "note": "plugin mutation pipeline (three surfaces share one file)"
     },
     {
       "path": "packages/desktop/shell-core.ts",
-      "lines": 1821,
+      "lines": 1268,
       "target": 1600,
       "note": "shell assembly + IPC ctx (blocks the shell-ipc type cycle)"
     },
     {
       "path": "packages/dsh-chamber-client-ui-settings-bridge/src/client/DshRuntimeSection.tsx",
-      "lines": 2450,
+      "lines": 2240,
       "target": 600,
       "note": "gateway + local runtime branches in one file"
     },
     {
       "path": "packages/dsh-chamber-client-ui-settings-connections/src/client/PluginDialog.tsx",
-      "lines": 2265,
+      "lines": 2085,
       "target": 700,
       "note": "plugin dialog controller/render mix"
     },
     {
       "path": "packages/desktop/gateway-provider.ts",
-      "lines": 1983,
+      "lines": 1683,
       "target": 1400,
       "note": "gateway transport provider"
     },
     {
       "path": "packages/desktop/ssh-provider.ts",
-      "lines": 1845,
+      "lines": 1454,
       "target": 1500,
       "note": "ssh transport provider"
     },
     {
       "path": "packages/dsh-chamber-client-ui-settings-connections/src/client/ConnectionsSection.tsx",
-      "lines": 1882,
+      "lines": 1725,
       "target": 900,
       "note": "connections page + form flow"
     },
     {
       "path": "packages/dsh-chamber-client-core/src/derive.ts",
-      "lines": 1829,
+      "lines": 1507,
       "target": 1200,
       "note": "aggregate/session derive"
     },
     {
       "path": "packages/desktop/transport-manager.ts",
-      "lines": 1808,
+      "lines": 1542,
       "target": 1400,
       "note": "transport lifecycle"
     },
     {
       "path": "packages/gateway/src/session-state.ts",
-      "lines": 1744,
+      "lines": 1666,
       "target": 900,
       "note": "gateway session state routes + store + SSE"
     },
     {
       "path": "packages/dsh-chamber-client-core/src/instance-api.ts",
-      "lines": 1550,
+      "lines": 1366,
       "target": 900,
       "note": "per-instance unary api surface"
     },
     {
       "path": "packages/desktop/runtime-startup-host.ts",
-      "lines": 1397,
+      "lines": 1294,
       "target": 500,
       "note": "createRuntimeStartupHost function budget (file proxy)"
     },
     {
       "path": "packages/desktop/host-assembly.ts",
-      "lines": 1271,
+      "lines": 1155,
       "target": 400,
       "note": "createHostAssembly function budget (file proxy)"
     },
     {
       "path": "packages/dsh-chamber-client-core/src/aggregate-store.ts",
-      "lines": 998,
+      "lines": 890,
       "target": 600,
       "note": "aggregate store types/channels/registry"
     }

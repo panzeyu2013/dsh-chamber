@@ -85,7 +85,7 @@ enum RefreshRatePolicy {
     }
 
     /// 启动日志：把「显示器刷新率 / 偏好状态 / 低电量模式 / 折算上限」写成一行，
-    /// 真机验收直接照这行对表（见 design 25 §5.1 / deviations S-48）。
+    /// 该行是实机对表的基准（见 design 25 §5.1）。
     static func startupLogLine(preference: RefreshRatePreference,
                                displayRefreshRate: Int?,
                                displayRefreshRateIsPanelMaximum: Bool,

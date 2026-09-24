@@ -1,15 +1,12 @@
 /**
- * Unified recovery ladder engine.
+ * Unified recovery ladder engine: observe progress -> bounded wait -> escalate only on
+ * evidence -> coalesce -> quota -> surface. Each caller supplies its signals, tier table
+ * and action mapping.
  *
- * WHY. Four ladders implement one shape with four vocabularies:
- *   session-authority.ts       (running bit)       tiers: probe / reconnect / notice
- *   session-fact-reconcile.ts  (reconcile receipt) phases + single-flight retries
- *   session-stream-health.ts   (openState/phase)   tiers: heal / resync / auto-resync
- *   mobile session-stall.ts    (DOM phase)         a 975-line COPY of the above
- * They differ in their SIGNALS and their ACTION NAMES, not in their skeleton:
- * observe progress -> hold a bounded wait -> escalate only on evidence -> coalesce
- * -> quota -> surface. This module owns that skeleton once; each caller supplies
- * its signals, its tier table and its action mapping.
+ * THE LOAD-BEARING DISCIPLINE: silence alone must NOT escalate past the first tier -
+ * long tool runs and long reasoning are legitimate silences indistinguishable from a
+ * real stall, and every escalation replays the baseline of every open session. A tier is
+ * gated on EVIDENCE (the reconciler could not conclude), not on elapsed silence.
  *
  * THE LOAD-BEARING DISCIPLINE (design 14 §D4): silence alone
  * must NOT escalate past the first tier. Long tool runs and long reasoning are
@@ -23,9 +20,8 @@
 
 import { countWithin, isUsableAt, pushWindowed } from './time.ts'
 
-/** One tier of a ladder. */
+
 export interface LadderTier {
-  /** Diagnostic name, used in actions and notes. */
   readonly name: string
   /** How long the symptom must persist before this tier may act. */
   readonly afterMs: number
@@ -33,8 +29,7 @@ export interface LadderTier {
   readonly cooldownMs: number
   /** Maximum dispatches inside {@link Ladder.quotaWindowMs}; null = unbounded. */
   readonly quota: number | null
-  /** Whether dispatching this tier requires the caller to have reported that the
-   *  previous tier could not conclude. `false` = time alone may dispatch it. */
+  /** Whether dispatch needs the caller's stuck report; `false` = time alone may dispatch. */
   readonly requiresStuckEvidence: boolean
 }
 
@@ -46,15 +41,13 @@ export interface Ladder {
   readonly quotaWindowMs: number
 }
 
-/** What the caller observed for one source this tick. */
+
 export interface LadderObservation {
-  /** The symptom is present (a session claims to be running, a stream claims to be
-   *  loading, a DOM phase claims to be settling...). Absent = the ladder is idle and
-   *  its record collapses. */
+  /** The symptom is present (a session claims running, a stream loading, a DOM phase
+   *  settling...). Absent = the ladder is idle and its record collapses. */
   readonly sticky: boolean
-  /** Timestamp the current symptom streak began (caller-owned: only the caller knows
-   *  whether a new spell started, e.g. the running-set overlap rule). Ignored when the
-   *  record had to be dropped this tick, because then a NEW streak starts now. */
+  /** Timestamp the current symptom streak began (caller-owned). Ignored when the record
+   *  had to be dropped this tick, because then a NEW streak starts now. */
   readonly symptomSinceMs: number
   /** The reconciler's last verdict availability: false = the caller tried and could
    *  not conclude. Only this unlocks tiers with `requiresStuckEvidence`. */
@@ -90,19 +83,16 @@ export interface LadderPlan {
 export interface CollapseResult {
   readonly records: Readonly<Record<string, LadderRecord>>
   readonly changed: boolean
-  /** Sources whose streak did NOT continue: the symptom stopped, or real progress
-   *  was observed, or the record was evicted. Their next record starts a FRESH
-   *  streak, so the escalation clock is re-based instead of inherited. */
+  /** Sources whose streak did NOT continue (symptom stopped, progress observed, or record
+   *  evicted). Their next record starts a FRESH streak, so the escalation clock re-bases. */
   readonly fresh: ReadonlySet<string>
 }
 
 /**
- * Drop the records whose streak is over. A record survives only while the symptom
- * stays present AND the watch reports no new progress.
- *
- * Progress DROPS the record rather than stamping it: keeping a stamped record would
- * leave the symptom clock running, and the next tick would escalate on a stale
- * streak - exactly the "escalate on time alone" failure this engine forbids.
+ * Drop the records whose streak is over: a record survives only while the symptom stays
+ * present AND the watch reports no new progress. Progress DROPS the record rather than
+ * stamping it - a stamped record would leave the symptom clock running and the next tick
+ * would escalate on a stale streak.
  */
 export function collapseRecords(
   records: Readonly<Record<string, LadderRecord>>,
@@ -124,13 +114,10 @@ export function collapseRecords(
 }
 
 /**
- * Decide one tick across all sources.
- *
- * For each sticky source, walk the tiers cheapest-first and dispatch the first one
- * that is (a) due, (b) allowed by its evidence gate, (c) not cooling down, (d) inside
- * its quota, and (e) executable (not blocked). At most ONE tier dispatches per source
- * per tick: escalating two levers at once would produce correlated
- * reconnects nobody asked for.
+ * Decide one tick across all sources. For each sticky source walk the tiers
+ * cheapest-first and dispatch the first one that is due, allowed by its evidence gate,
+ * not cooling down, inside its quota and executable. At most ONE tier dispatches per
+ * source per tick: escalating two levers at once would produce correlated reconnects.
  */
 export function planLadder(
   ladder: Ladder,
@@ -138,8 +125,7 @@ export function planLadder(
   observations: Readonly<Record<string, LadderObservation | undefined>>,
   now: number,
 ): LadderPlan {
-  // An unusable decision clock only ever holds: no action is authorized, and the
-  // records are returned untouched so the caller can retry once the clock is real.
+  // An unusable decision clock only ever holds: no action is authorized, records untouched.
   if (!isUsableAt(now)) return { records, actions: [], exhausted: [] }
 
   const collapsed = collapseRecords(records, observations)
@@ -150,8 +136,7 @@ export function planLadder(
   for (const [sourceId, observation] of Object.entries(observations)) {
     if (observation === undefined || !observation.sticky) continue
     const carried = collapsed.records[sourceId]
-    // A fresh streak is based at NOW: the caller's symptomSinceMs describes the
-    // symptom that just reset, and inheriting it would re-arm every tier at once.
+    // A fresh streak is based at NOW: inheriting the reset symptom's stamp would re-arm every tier.
     const fresh = collapsed.fresh.has(sourceId)
     const anchored = fresh || Number.isFinite(observation.symptomSinceMs)
     const symptomSinceMs = fresh ? now : observation.symptomSinceMs
@@ -161,8 +146,7 @@ export function planLadder(
       dispatches: {},
     }
     if (!anchored) {
-      // A non-finite anchor is not a streak: re-base it at NOW and dispatch nothing
-      // this tick. Reading NaN as "due" dispatched the most expensive tier (I4).
+      // A non-finite anchor is not a streak: re-base it at NOW and dispatch nothing this tick.
       next[sourceId] = { ...previous, symptomSinceMs: now }
       continue
     }
@@ -179,17 +163,14 @@ export function planLadder(
       if (last !== null && now - last < tier.cooldownMs) continue
       if (tier.quota !== null && countWithin(history, now, ladder.quotaWindowMs) >= tier.quota) continue
       if (observation.escalationBlocked) {
-        // Suppressed WITHOUT consuming quota: a dispatch the caller cannot execute
-        // must not silently eat the lever.
+        // Suppressed WITHOUT consuming quota: an unexecutable dispatch must not eat the lever.
         break
       }
       actions.push({ sourceId, tier: tier.name, at: now })
       next[sourceId] = {
         ...previous,
         symptomSinceMs,
-        // The only writer of a dispatch ledger: pruning at write time keeps the
-        // array inside its quota window (G-C) instead of growing for the process
-        // lifetime.
+        // Pruning at write time keeps the array inside its quota window.
         dispatches: { ...previous.dispatches, [tier.name]: pushWindowed(history, now, now, ladder.quotaWindowMs) },
       }
       dispatched = true
@@ -198,11 +179,8 @@ export function planLadder(
       next[sourceId] = { ...previous, symptomSinceMs }
     }
 
-    // Exhausted = no tier can act: every quota is spent OR its evidence gate cannot
-    // be satisfied with what the caller reports. Counting evidence-gated tiers as
-    // live levers kept the ladder from ever declaring exhaustion, so a caller whose
-    // reconciler never concludes parked forever with no notice. Blocked and
-    // cooling tiers still count - those are transient.
+    // Exhausted = no tier can act: every quota is spent OR its evidence gate cannot be
+    // satisfied by what the caller reports. Blocked and cooling tiers still count.
     if (!dispatched) {
       const anyLever = ladder.tiers.some((tier) => {
         if (tier.requiresStuckEvidence && !observation.stuckEvidence) return false
@@ -217,20 +195,15 @@ export function planLadder(
   return { records: next, actions, exhausted }
 }
 
-/** Instantiate the known ladders from one place, so their shapes can be compared
- * instead of discovered. Values come from the host modules and are the
- * wiring's input, not this file's policy. */
 /**
- * The session-fact authority's two engine instances - ONE engine, two hosts.
+ * Instantiate the known ladders from one place. Values come from the host modules and are
+ * the wiring's input, not this file's policy.
  *
- * The executor (sidebar producer) runs the PROBE ladder: a read-only probe of the
- * independent authority, dispatchable on time alone (requiresStuckEvidence=false) -
- * a read cannot harm the host, so it is the cheapest tier.
- *
- * The App runs the ESCALATION ladder: reconnect and notice, both gated on stuck
- * evidence (a probe that could not conclude) - never on silence alone. The ladder
- * breaks at the first not-yet-due tier, so `noticeAfterMs` must stay above
- * `reconnectAfterMs` to preserve the escalation order.
+ * The session-fact authority's two engine instances - ONE engine, two hosts. The executor
+ * runs the PROBE ladder: a read-only authority probe, dispatchable on time alone (a read
+ * cannot harm the host). The App runs the ESCALATION ladder: reconnect and notice, both
+ * gated on stuck evidence - never on silence alone. The ladder breaks at the first
+ * not-yet-due tier, so `noticeAfterMs` must stay above `reconnectAfterMs`.
  */
 export function sessionAuthorityProbeLadder(config: {
   readonly probeAfterMs: number
@@ -265,10 +238,8 @@ export function sessionAuthorityEscalationLadder(config: {
 }
 
 /**
- * Boundary: the same SCHEDULING-only mapping as the authority ladders above, for the
- * open-in stream-health ladder (tiers `heal` / `auto-resync`). The host module keeps its
- * phase machine, `healFailedLatched`, the healing settle window, the clock-rollback guard
- * and the notice projection - none of which this engine models.
+ * The same SCHEDULING-only mapping for the open-in stream-health ladder. The host keeps
+ * its phase machine, latch, settle window, rollback guard and notice projection.
  */
 export function streamHealthLadder(config: {
   readonly errorGraceMs: number
@@ -297,10 +268,8 @@ export function mobileStallLadder(config: {
     name: 'mobile-session-stall',
     quotaWindowMs: config.windowMs,
     tiers: [
-      // The mobile arm fires only on PROVEN loading-with-no-open: the host passes
-      // `stuckEvidence: loading === true && openInFlight === false`, so an unknown
-      // liveness bit or a session with nothing in flight fails closed here instead
-      // of in a host-private gate.
+      // Fires only on PROVEN loading-with-no-open; an unknown liveness bit or a session
+      // with nothing in flight fails closed here instead of in a host-private gate.
       { name: 'resync', afterMs: config.thresholdMs, cooldownMs: config.cooldownMs, quota: config.max, requiresStuckEvidence: true },
     ],
   }

@@ -1,128 +1,31 @@
 /**
- * Mobile adaptation stylesheet (design 17 §18.4.3/§18.4.5): a single global
- * sheet injected at apply() as `<style data-plugin="…">`. Anchors are the
- * OFFICIAL stable attributes confirmed against the dsh DOM (CDP empirical
- * audit: the centre column is the keyed `main` slot, the right column is
- * `rightbar`, and the frame carries `data-sidebar-collapsed` /
- * `data-rightbar-collapsed`) plus
- * the plugin's own `data-mobile-*` stamps — no hashed class names except the
- * documented local-name exception below.
- *
- * CROSS-PACKAGE STYLING HOOKS: anchors are attributes, never classes — a
- * class emitted by another package is hashed per bundle and cannot be targeted
- * from here. That rule is why the sidebar's git-action hook is the
- * `data-git-action` attribute rather than a global class; this header is the
- * package that states it.
- *
- * THE ONE CLASS-NAME EXCEPTION, AND BOTH NAMING SHAPES:
- * three ship-time anchors (the composer bar row, the settings Models row) target
- * a compiled local name, so the arms must cover BOTH shapes the same upstream
- * sources can be built with:
- *   - local-first `_<local>_<hash>_<idx>` — what the PINNED bundles actually
- *     emit today. Measured, not assumed: the official package that ships with
- *     the pin
- *     (`node_modules/@deepseek-ai/dsh-web-frontend/dist/assets/index-*.css`,
- *     0.1.5-rc.2) carries 251 unique names of this shape and ZERO of the other,
- *     and the chamber's own composite build (`packages/desktop/dist/web/
- *     assets/chamber-*.css`) is the same shape (904 unique);
- *   - hash-first `[hash]_[local]` (e.g. `JObwrW_row`) — kept as a suffix arm
- *     so a future build that emits this shape does not silently lose these
- *     rules.
- * The dual arm is therefore `:is([class$="_<local>"], [class*="_<local> "],
- * [class*="_<local>_"])`: suffix (single- and multi-class hash-first) plus
- * infix (every local-first form). The infix form must stay: with the pinned
- * bundles, dropping it leaves these rules matching nothing at all — a silent
- * desktop-geometry regression. The watchdog's own token query
- * (`official-hover-card.ts`) has always used the infix form for this reason.
- *
- * WHERE THE NAMES COME FROM (the arm shape is
- * evidenced by the two builds above, NOT by the examples): the composer row is
- * `_row_74m2c_240` (`flex-wrap:wrap; container-type:inline-size`) in the
- * chamber's composite build; the pinned official bundle has no composer row at
- * all (its whole sheet contains zero `flex-wrap:wrap` and zero
- * `container-type:inline-size`), and the `_row_*` names it does carry belong to
- * other modules (e.g. `_row_4qrvp_55` is a `.topLevelBracket` row,
- * `_row_luwio_16` a plain flex row). The Models row is `_modelRow_16d5a_459`,
- * also composite-build only. The model trigger is NOT class-matched any more:
- * the seat's `div[data-slot="conversation.input.model"]` wrapper is the anchor
- * (see the phone-tier rule below), because `_trigger_` names four different
- * modules in the composite build and the row's trailing cluster also holds
- * ContextMeter's 28px `flex:none` ring.
- *
- * VISUAL LANGUAGE: everything rides the official `--dsw-*`/`--ds-*` tokens
- * (no literal colors except token fallbacks); the drawer reuses the official
- * sidebar surface (no repainted background), the floating drawer toggle draws
- * the official `IconPanelLeftOutline16` glyph (the official sidebar toggle's
- * own control) in the official rail ink (`--dsw-alias-label-primary`, the
- * collapsed-sidebar icon ink, ui-sidebar SidebarRoot.module.css) with the
- * official interactive/hover tokens, motion uses the official ease/duration
- * tokens, and the drawer gets the official elevation shadow. Dark theme
- * follows automatically through the official token flip — the plugin never
- * touches color-scheme.
- *
- * Breakpoints (design 17 §18.4.2):
- *  - `(max-width: 1023px) and (pointer: coarse)` — the touch tier: the
- *    sidebar rail becomes an overlay drawer, a shown right panel is presented
- *    fullscreen (and the drawer yields to it), the conversation takes the
- *    full width, touch targets get the 44px floor. The `pointer: coarse`
- *    guard is the "PC leak" lesson (a desktop window narrower than 1024 must
- *    NOT get the mobile UI) — applied to BOTH tiers and mirrored in the JS
- *    behavior layer.
- *  - `(max-width: 768px) and (pointer: coarse)` — the phone tier: composer
- *    toolbar single line, popups constrained to the viewport, settings as a
- *    stacked full-screen sheet (nav strip + pinned close + scrolling
- *    options), the Models provider row degraded, editable fields ≥16px
- *    (iOS focus zoom), safe-area guarantees. Dialogs other than the settings
- *    sheet are NOT touched: every remaining official `aria-modal` producer
- *    already fits the viewport itself (see the phone-tier note at the
- *    popup rule).
- *  - `(pointer: coarse) and (hover: none)` — the width-independent CHROME
- *    tier: sticky-hover tooltip bubbles are a
- *    coarse-pointer artifact wherever the viewport is wide, so this one
- *    cosmetic rule is gated by pointer/hover alone (an iPad in landscape is
- *    1024px+ and still taps; attaching a mouse flips hover to `hover` and
- *    stands the rule down).
- * EVERY rule lives inside a media query — FINE-POINTER desktop widths are
- * byte-for-byte untouched (the official layout must not be affected), and the
- * drawer toggle has an explicit `display: none` default outside the touch tier.
- *
- * Empirical anchor notes (CDP audit):
- *  - `data-sidebar-collapsed` on the frame: present "true" when collapsed,
- *    REMOVED when expanded — `:not([data-sidebar-collapsed])` is the open
- *    drawer condition.
- *  - `data-rightbar-collapsed` is the details column flag, and it means
- *    "the column has NO retained track" —
- *    `cols.rightbar === 0`, AppFrame.tsx — NOT "the panel is hidden": the
- *    occupant only asks for a track at >= 768px (`track = shown &&
- *    !autoFullscreen`, SidebarRight.tsx), so a shown panel on the phone tier
- *    still reports track=false and the attribute IS present. Two different
- *    questions therefore use two different keys: the fullscreen PRESENTATION
- *    below is not gated at all (the panel's own `data-sidebar-right-panel`
- *    state is the anchor), while the DRAWER yield uses both shown signals —
- *    `:not([data-rightbar-collapsed])` for the pushed track and
- *    `[data-rightbar-fullscreen]` (set by `openRightbar`, cleared by
- *    `closeRightbar`) for the auto-fullscreen phone case. Keying the yield on
- *    the track flag alone silently leaves phones un-yielded.
- *  - STACKING SCOPE: this plugin's
- *    fixed layers (drawer 75, backdrop 74, toggle 76) are mounted inside the
- *    official `shell.overlay` layer, which is `position: absolute;
- *    z-index: 20` — a stacking context of its own. The tiers therefore order
- *    correctly among THEMSELVES and above the frame content / normal rightbar
- *    column (z-10), but they can never paint above a sibling stacking context:
- *    the official fullscreen rightbar (z-40) and the floating-panel host
- *    (z-60) cover them. Intentional — and since the right panel IS the
- *    fullscreen surface on this tier, the drawer now stands down explicitly
- *    while it is shown (hidden + out of the tab order) instead of staying
- *    focusable behind it. Escaping would require a body-level portal (not
- *    done).
- *  - ONBOARDING/directory dialogs portal to a body-level root
- *    (`div._root_15u5s_2`), but the SETTINGS dialog renders INSIDE the
- *    sidebar DOM (sidebar.settings slot, no body portal) — the drawer's
- *    open state therefore uses `transform: none` (an identity transform
- *    would still create a containing block and trap the settings sheet at
- *    the drawer's width).
- *  - The composer is a Lexical `div[contenteditable][data-composer-input]` —
- *    there is NO textarea.
+ * Mobile adaptation stylesheet: one global <style data-plugin="..."> injected
+ * at apply(). Anchors are OFFICIAL stable attributes (keyed main / rightbar
+ * columns; frame data-sidebar-collapsed|data-rightbar-collapsed) plus this
+ * plugin's data-mobile-* stamps. CROSS-PACKAGE RULE: hooks are attributes,
+ * never classes (classes are hashed per bundle). Exception: the composer bar
+ * row and settings Models row match a compiled local name in BOTH build shapes
+ * (local-first _<local>_<hash>_<idx> and hash-first [hash]_[local]) — the arm
+ * keeps a suffix AND an infix term, and dropping the infix matches nothing.
+ * The model trigger instead anchors on [data-slot="conversation.input.model"].
+ * Tokens are official --dsw-* / --ds-* only (no literal colors but fallbacks);
+ * dark theme follows the official flip. Every rule is inside a media query
+ * (fine-pointer desktop untouched): touch (max-width:1023px) and
+ * (pointer:coarse) = overlay drawer / fullscreen right panel / 44px targets;
+ * phone (max-width:768px) and (pointer:coarse) = one-line composer toolbar,
+ * viewport-constrained popups, stacked settings sheet, fields >=16px (iOS
+ * focus zoom); chrome (pointer:coarse) and (hover:none) = hover tooltips only.
+ * pointer:coarse is the PC-leak guard, mirrored in JS. data-sidebar-collapsed
+ * is PRESENT when collapsed and REMOVED when expanded, so
+ * :not([data-sidebar-collapsed]) is the open condition;
+ * data-rightbar-collapsed means "no retained track", NOT "hidden", so the
+ * drawer yield also uses [data-rightbar-fullscreen] for the auto-fullscreen
+ * phone case. The fixed layers (drawer/backdrop/toggle inside shell.overlay,
+ * z-index 20) never paint above the fullscreen rightbar (z-40) or floating
+ * host (z-60); the SETTINGS dialog renders inside the sidebar DOM, so the
+ * drawer's open state uses transform: none (an identity transform would trap
+ * it). The composer is a Lexical div[contenteditable][data-composer-input] —
+ * there is NO textarea.
  */
 
 export const MOBILE_CSS = `
@@ -581,7 +484,7 @@ export const MOBILE_CSS = `
      header-actions arm is left as shipped, so the header row keeps its verified
      geometry (its floor therefore lands on the CONTENT
      box: padded icon buttons render ~56px, and the header row grows with
-     them — a device-judged tradeoff, see STATUS). */
+      them). */
   [data-sidebar-right-panel] [data-dockkit-strip] {
     height: auto;
     min-height: 44px;
@@ -998,12 +901,11 @@ export const MOBILE_CSS = `
 }
 `
 
-/** The canonical viewport meta tokens the plugin ensures are present
- *  (design 17 §18.4.3): `viewport-fit=cover` for safe-area insets and
- *  `interactive-widget=resizes-content` (Android Chrome 108+) so the
- *  keyboard squeezes the layout viewport and the sticky composer floats
- *  above it. user-scalable is NOT locked (WCAG 1.4.4) — the focus-zoom
- *  prevention lives in the CSS above. */
+/** The canonical viewport meta tokens the plugin ensures are present:
+ *  viewport-fit=cover for safe-area insets and interactive-widget=
+ *  resizes-content (Android Chrome 108+) so the keyboard squeezes the layout
+ *  viewport and the sticky composer floats above it. user-scalable is NOT
+ *  locked (WCAG 1.4.4) — focus-zoom prevention lives in the CSS above. */
 export const VIEWPORT_TOKENS = ['viewport-fit=cover', 'interactive-widget=resizes-content']
 
 /** The plugin's style-tag identity (matches the inject guard). */

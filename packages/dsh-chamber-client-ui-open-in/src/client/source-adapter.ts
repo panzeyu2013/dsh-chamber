@@ -1,26 +1,19 @@
 /**
- * Per-source open-in adapter (design 20 §5) — the single owner of
+ * Per-source open-in adapter — the single owner of
  *
- *  - **the rendered set**: the page's machine application catalog (the LOCAL
- *    instance's `openInApp/*` host domain, read once per page by
- *    `machine-catalog.ts` and injected into every entry) merged with the
- *    page-wide desktop main-process pool through the pure view-model. The
- *    machine half describes the MACHINE, so every source sees it; which of
- *    those apps a source may use is decided by the view-model (a remote-ssh
- *    source keeps only what the main provider declares `remoteCapable`, which
- *    is why its VS Code mark is the machine's real icon);
+ *  - **the rendered set**: the page’s machine catalog (LOCAL instance’s
+ *    `openInApp/*` host domain, read once per page and injected into every
+ *    entry) merged with the page-wide main-process pool through the pure
+ *    view-model. A remote-ssh source keeps only what the main provider declares
+ *    `remoteCapable`;
  *  - **per-entry channel routing**: local entries call the host domain over the
- *    machine catalog's transport (the page-level instance client for `local` —
- *    same wire, cookie and trust fence as the local source's own entry); main
- *    entries ride the trusted preload IPC with the exact-boot source proof;
+ *    machine catalog’s transport (same wire and trust fence as the local
+ *    source’s own entry); main entries ride trusted preload IPC with the
+ *    exact-boot source proof;
  *  - the persisted app choice.
  *
- * Icons are NOT cached here: the machine catalog owns the page-level boot cache
- * for ids and icons, because they are machine facts — a per-source copy would
- * re-fetch the same pixels once per attached source.
- *
- * The React entry only consumes the resulting view-model plus this face, so the
- * routing rules are unit-testable without React, the DOM or a real instance.
+ * Icons are NOT cached here: ids and icons are machine facts, owned by the
+ * page-level catalog — a per-source copy would re-fetch the same pixels.
  */
 import {
   buildOpenInLaunchRequest,
@@ -58,10 +51,9 @@ export interface OpenInSourceAdapterDeps {
   readonly sourceFingerprint: string
   readonly translate: Translate
   /**
-   * The page's machine catalog (`ctx.chamberMachineCatalog`, built once by the
-   * renderer shell for the LOCAL instance and shared by every entry). Absent =
-   * this page has no machine reader, so the local pool stays empty instead of
-   * the button breaking.
+   * The page’s machine catalog, built once by the renderer shell for the LOCAL
+   * instance and shared by every entry. Absent = no machine reader on this page,
+   * so the local pool stays empty instead of the button breaking.
    */
   readonly machineCatalog?: MachineCatalog | null
   readonly mainPool: OpenInMainPool
@@ -79,8 +71,7 @@ export interface OpenInSourceAdapter {
   subscribe(listener: () => void): () => void
   refresh(): Promise<void>
   launch(entry: OpenInViewEntry, path: string): Promise<OpenInResult>
-  /** Cached machine icon `data:` URL for an app id; null while unknown or when
-   *  the host serves none (the mark then uses its own fallback). */
+  /** Cached machine icon `data:` URL for an app id; null while unknown or unserved. */
   iconUrl(appId: string): string | null
   getChoice(): string
   choose(appId: string): void
@@ -88,11 +79,7 @@ export interface OpenInSourceAdapter {
   dispose(): void
 }
 
-/**
- * Build the per-source adapter.
- * @param deps - per-entry source facts, the shared pools and test seams.
- * @returns the adapter face consumed by the header entry.
- */
+/** Build the per-source adapter: per-entry source facts, shared pools and test seams. */
 export function createOpenInSourceAdapter(deps: OpenInSourceAdapterDeps): OpenInSourceAdapter {
   const machine = deps.machineCatalog ?? null
 
@@ -111,8 +98,8 @@ export function createOpenInSourceAdapter(deps: OpenInSourceAdapterDeps): OpenIn
   const unsubscribeMain = deps.mainPool.subscribe(emit)
   const unsubscribeChoice = deps.choice.subscribe(emit)
   const unsubscribeMachine = machine === null ? null : machine.subscribe(emit)
-  // Initial probe: the main pool's own single-flight probe may already be warm;
-  // the machine catalog's is shared by every entry and coalesced there.
+  // Initial probe: the main pool’s single-flight probe may already be warm;
+  // the machine catalog’s is shared by every entry and coalesced there.
   void refresh()
 
   const getViewModel = (): OpenInViewModel => buildOpenInViewModel({

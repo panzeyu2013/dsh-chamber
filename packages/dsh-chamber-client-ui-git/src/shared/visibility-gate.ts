@@ -1,15 +1,10 @@
 /**
- * Hidden-tab polling gate + injectable visibility face.
- *
- * Dependency-free on purpose: the git coordinator imports this module (not
- * the other way around), so the node test suite can cover the gate and the
- * seam mechanics without pulling the sidebar bridge (which imports
- * @deepseek-ai/dsh-client-connection's compiled entry and cannot load under
- * plain node).
+ * Hidden-tab polling gate + injectable visibility face. Dependency-free on
+ * purpose: the coordinator imports this module (not the reverse), so the node
+ * suite can cover the gate and seam mechanics without pulling the sidebar bridge.
  */
 
-/** Pure hidden-tab polling gate: the 30s refresh only runs while the page is
- *  visible — a backgrounded window has no consumer for the facts. */
+/** Pure hidden-tab polling gate: the 30s refresh only runs while the page is visible. */
 export function isPollEligible(visibility: DocumentVisibilityState): boolean {
   return visibility !== 'hidden'
 }
@@ -29,8 +24,7 @@ export const browserVisibility: VisibilityEvents = {
   },
 }
 
-/** Injectable visibility face (default = browser; tests swap a fake and
- *  restore by passing undefined — see test/shared/visibility-gate.test.ts). */
+/** Injectable visibility face (default = browser; tests swap a fake and restore by passing undefined). */
 export let visibilityEvents: VisibilityEvents = browserVisibility
 
 export function __setVisibilityEventsForTests(events: VisibilityEvents | undefined): void {

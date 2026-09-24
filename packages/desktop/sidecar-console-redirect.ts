@@ -1,15 +1,12 @@
 /**
- * sidecar-console-redirect.ts —— Swift flavor sidecar 的 stdout 纪律叶
- * （design 25 §3.1「stdout = B 桥协议流，stderr = 日志」）
+ * sidecar-console-redirect —— Swift flavor sidecar 的 stdout 纪律叶：
+ * stdout 只允许协议写（sidecar-entry 的 writeProtocolLine），其余 console
+ * 输出一律走 stderr，绝不污染 B 桥协议流。
  *
- * 硬约束：stdout 只允许协议写（sidecar-entry 的 writeProtocolLine）。本模块
  * 在任何模块体求值时把 console.log/info/debug 覆盖为带 [sidecar] 前缀的
- * stderr 写；warn/error 保持原去向（stderr）。
- *
- * **必须在 sidecar-entry.ts 的第一条 import 位置被求值**：ESM 按 import 顺序
- * 先求值依赖模块体，而本模块自身零 import——因此它的重定向先于 sidecar-entry
- * 的其余依赖（shell-core / control-plane facade / dsh-runtime / …）生效，被
- * bundle 的任何模块的顶层 console 输出也一律走 stderr，绝不污染 B 桥协议流。
+ * stderr 写；warn/error 保持 stderr 原去向。**必须在 sidecar-entry.ts 的
+ * 第一条 import 位置被求值**：本模块零 import，重定向先于其余依赖的模块体
+ * 生效，被 bundle 模块的顶层 console 输出同样走 stderr。
  *
  * 导出 safeStringify 供 sidecar-entry 的协议行序列化复用（单一实现）。
  */
@@ -33,18 +30,15 @@ function stderrLine(prefix: string, args: readonly unknown[]): void {
   )
 }
 
-// warn/error 原样保留（Node 的 console.warn/error 本就写 stderr；这里显式绑定
-// 原始实现，防未来有人替换 console 时的递归覆盖）。
+// warn/error 保持 stderr；显式绑定原始实现，防未来替换 console 时递归覆盖。
 const originalWarn = console.warn.bind(console)
 const originalError = console.error.bind(console)
 console.log = (...args: unknown[]) => stderrLine('console:', args)
 console.info = (...args: unknown[]) => stderrLine('console:', args)
 console.debug = (...args: unknown[]) => stderrLine('console:', args)
-// stdout 纪律要对**所有**会写 stdout 的方法成立——Node 的
-// console.dir/table/count/countReset/group/groupEnd/time/timeLog/timeEnd/trace
-// 默认都写 stdout（dir 走 util.inspect），这里一并钉到 stderr。
-// 取舍：count/group*/time* 退化为普通日志行（不维护计数/计时/缩进状态）——仓内无
-// 调用点，且 stdout 纪律优先；将来要用这些方法时需改为带状态实现（见 STATUS 登记）。
+// Node 的 dir/table/count/countReset/group/groupEnd/time*/trace 默认写 stdout，
+// 这里一并钉到 stderr；取舍：count/group*/time* 退化为普通日志行（不维护状态），
+// 仓内无调用点，stdout 纪律优先。
 console.dir = (...args: unknown[]) => stderrLine('console:', args)
 console.table = (...args: unknown[]) => stderrLine('console:', args)
 console.count = (...args: unknown[]) => stderrLine('console:', args)
@@ -56,8 +50,7 @@ console.time = (...args: unknown[]) => stderrLine('console:', args)
 console.timeLog = (...args: unknown[]) => stderrLine('console:', args)
 console.timeEnd = (...args: unknown[]) => stderrLine('console:', args)
 console.trace = (...args: unknown[]) => stderrLine('console:', args)
-// assert 遵循 Node 语义：**仅当首参为假**才打印；无条件打印会把每次 assert
-// 都变成噪声（Node 只在断言失败时输出并带前缀）。
+// assert 遵循 Node 语义：仅当首参为假才打印（无条件打印会把每次断言变成噪声）。
 console.assert = (condition?: unknown, ...args: unknown[]) => {
   if (condition) return
   stderrLine('console:', ['Assertion failed:', ...args])

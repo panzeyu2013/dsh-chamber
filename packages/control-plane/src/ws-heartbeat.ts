@@ -1,50 +1,16 @@
 /**
  * WebSocket liveness heartbeat (RFC 6455 §5.5.2/§5.5.3) for the instance-proxy
- * event-stream splices (design 14 extension — sleep/wake stuck-deep-diving).
+ * event-stream splices.
  *
- * ## Why
+ * The host mux already pings and terminates on two missed pongs; this is a
+ * redundant fallback for the browser leg across OS sleep/wake, where it can go
+ * half-open with no local 'error'/'close'. Each interval the proxy injects an
+ * unmasked ping downstream; a passive scanner marks the leg alive from pongs
+ * without consuming bytes, and after `missesBeforeTeardown` pong-less cycles
+ * `onDead` fires for the caller to tear the splice down.
  *
- * `/api/remote.mux` is the Typert Remote stream WebSocket (0.1.2). The 0.1.2
- * mux HOST pings every downstream socket every
- * `websocketHeartbeatIntervalMs` (default 2s) and terminates it after two
- * missed pongs (~6s) — so a healthy mux leg already carries regular host
- * pings and browser auto-pongs. The remaining gap this proxy heartbeat
- * covers is the OS sleep/wake case: during sleep the host's pings simply
- * fail (no pongs) and the host terminates the leg, but after wake the
- * BROWSER leg of the splice can be half-open in a way that fires no
- * 'error'/'close' locally — the proxy would hold the stream open while the
- * browser's pump stays "connected" but receives nothing (stuck "Deep
- * diving..." UI, backend still processing). The proxy-side downstream ping
- * is therefore a REDUNDANT FALLBACK for the browser leg across sleep/wake,
- * not the primary liveness signal (that is the host's 2s/2miss heartbeat).
- *
- * The proxy owns the DOWNSTREAM leg's liveness (it is the one point that sees
- * it, and neither the browser nor the host can probe it):
- *
- *  - every `intervalMs`, an unmasked ping frame is injected downstream (the
- *    proxy is the ws server to the browser; the browser auto-pongs per RFC,
- *    transparently, no app code);
- *  - a passive pong scanner on the browser socket's 'data' stream marks the
- *    leg alive (the scanner never consumes bytes, so the existing pipe is
- *    untouched — only the browser→proxy direction carries pongs);
- *  - after `missesBeforeTeardown` consecutive ping cycles without a pong,
- *    `onDead` fires — the caller tears the splice down, the browser's
- *    WebSocket closes, and the renderer pump reconnects (fresh stream → host
- *    baseline replay → the runtime re-syncs session state).
- *
- * The UPSTREAM (host) leg deliberately has NO heartbeat here: its death is
- * covered by the existing industry-standard mechanisms — SSH keepalive for
- * remote tunnels (`ServerAliveInterval=30 × CountMax=3` ≈ 90s, ssh-provider),
- * socket 'error'/'close' for local host death/restart, and the host's own
- * send-failure detection (its ws server closes on write errors). A proxy-side
- * upstream ping would only race SSH keepalive into a reconnect flap against a
- * half-open tunnel (strict tolerance) or fire later than it (lenient
- * tolerance — useless), so it is intentionally not implemented.
- *
- * Defaults follow the canonical `ws` README heartbeat example (30s interval,
- * one unanswered ping cycle → terminate): `WS_PING_INTERVAL_MS` /
- * `WS_PING_MISSES_BEFORE_TEARDOWN` in instance-proxy.ts. The interval is
- * unref'd so it can never block app exit, and stop() clears it.
+ * The upstream (host) leg deliberately has NO heartbeat: SSH keepalive, socket
+ * 'error'/'close' and the host's own send-failure detection already cover it.
  */
 
 import { encodePingFrame, PongScanner } from './ws-frames.ts'
@@ -62,11 +28,9 @@ export interface WsHeartbeatOptions {
   /** Ping cadence. */
   intervalMs: number
   /**
-   * Missed browser pong cycles before onDead fires (the same bound as
-   * WS_PING_MISSES_BEFORE_TEARDOWN; the default follows the ws README
-   * heartbeat example: 1 — a single unanswered ping cycle means the leg is
-   * dead; the pong round-trip is loopback so a full cycle without one cannot
-   * be scheduler noise).
+   * Missed browser pong cycles before onDead fires (the default follows the ws
+   * README heartbeat example: 1 — a pong round-trip is loopback, so a full
+   * cycle without one cannot be scheduler noise).
    */
   missesBeforeTeardown: number
   /** Fired once when the leg is judged dead (caller tears the splice down). */
@@ -85,10 +49,8 @@ function defaultPingPayload(): Buffer {
   return payload
 }
 
-/**
- * Start the heartbeat for one spliced stream. Returns a stop handle
- * (idempotent; clears the interval and removes the data listener).
- */
+/** Start the heartbeat for one spliced stream. Returns an idempotent stop
+ *  handle that clears the interval and removes the data listener. */
 export function startWsHeartbeat(options: WsHeartbeatOptions): WsHeartbeatHandle {
   const { downstream, intervalMs, missesBeforeTeardown, onDead } = options
   const pingPayload = options.pingPayload ?? defaultPingPayload
@@ -102,9 +64,8 @@ export function startWsHeartbeat(options: WsHeartbeatOptions): WsHeartbeatHandle
   }
   downstream.on('data', onData)
 
-  // `timer` is assigned before the first tick() runs, so stop() — which
-  // clears it — can never hit the TDZ (tick() is also the onDead entry
-  // point, and stop() must be safe from inside the very first tick).
+  // `timer` is assigned before the first tick(), so stop() can never hit the
+  // TDZ — note tick() is also the onDead entry point.
   const stop = (): void => {
     if (stopped) return
     stopped = true
@@ -140,8 +101,7 @@ export function startWsHeartbeat(options: WsHeartbeatOptions): WsHeartbeatHandle
   const timer: ReturnType<typeof setInterval> = setInterval(tick, intervalMs)
   timer.unref?.()
   // First ping immediately so a healthy connection answers before the first
-  // interval check; misses only start counting once a ping has had a full
-  // cycle to be answered.
+  // interval check; misses only count after a ping has had a full cycle.
   tick()
   return { stop }
 }

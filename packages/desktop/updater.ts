@@ -1,81 +1,14 @@
 /**
- * dsh-chamber desktop update controller (design 11 — 桌面端更新提示，无弹窗、
- * 低打扰：settings 部分展示，用户确认后下载、退出时安装，双平台一致)。
- *
- * Wraps electron-updater's autoUpdater (github provider, feed =
- * panzeyu2013/dsh-chamber releases) behind a small state machine that the
- * renderer consumes through the `dsh-chamber:update-state` IPC (query +
- * push). Contract:
- *
- * - Silent check on a startup delay and a 6h interval; failures are silent
- *   (main-process logs only) and never block startup.
- * - autoDownload = false: checking never downloads anything — the download
- *   starts ONLY after the user explicitly clicks「更新」in the settings
- *   update section (download()).
- * - autoInstallOnAppQuit = true: a completed download installs on quit —
- *   no dialog, no mid-session interruption (connection-manager courtesy).
- * - The settings section ALSO offers a user-triggered
- *   「重启并安装」action (restartAndInstall → electron-updater quitAndInstall)
- *   once the download completed — the quit-install leg alone is not a
- *   controllable flow (a plain quit may not install/relaunch on every
- *   platform/shape), so the user gets the deterministic restart right in the
- *   UI: quit + install + relaunch, still through the normal before-quit /
- *   will-quit cleanup path (the update-downloaded quit exemption passes).
- *   Offered on macOS + Windows only: on Linux AppImage
- *   electron-updater swaps the file and spawns the new instance BEFORE this
- *   process quits, which structurally cannot survive the single-instance
- *   lock — Linux keeps the quit-install leg and no restart button.
- *   WINDOW-CLOSE ORDER: quitAndInstall does NOT
- *   go through the app's normal quit sequence first — it CLOSES EVERY WINDOW
- *   FIRST and only quits once they are all closed (Electron 43.4.0 typings,
- *   AutoUpdater#before-quit-for-update: "the `before-quit` event is not
- *   emitted before all windows are closed"; a 43.4.0/darwin probe confirmed
- *   the autoUpdater `before-quit-for-update` event and the window `close`
- *   both happen INSIDE the quitAndInstall() call). Two host duties ride on
- *   that signal, both wired from here: options.onQuitAndInstallArmed (fired
- *   synchronously right before the call → main.ts arms its close-to-tray
- *   exception; a close hidden instead of closed aborts the whole
- *   install/relaunch and strands the process) and
- *   options.onNativeUpdaterQuitting (Electron's native updater is closing the
- *   windows right now → main.ts re-arms on every occurrence and bounds the
- *   quit itself, because the native macOS leg does not reliably reach
- *   app.quit() after closing the windows).
- * - macOS: Squirrel.Mac (electron-updater's mac installer) requires a valid
- *   Developer ID signature. Without it the INSTALL step is blocked — that is
- *   a hard prerequisite, not a UX fork (design 11 §3.1/§6): the state
- *   carries installBlockedReason so the settings section can say「已下载
- *   （安装不可用，请手动安装）」loudly instead of pretending an install
- *   happened.
- * - Startup hygiene: electron-updater never deletes its downloaded
- *   update files after a successful install (its clear() only runs on failed
- *   re-downloads) — a finished update leaves ~150-300 MB in the updater cache
- *   per cycle. On startup the controller resolves that cache dir the same way
- *   electron-updater does (platform cache root + the updaterCacheDirName
- *   baked into app-update.yml) and removes it when the pending update's
- *   version is NOT newer than the running version (already installed /
- *   obsolete); a genuinely newer pending update is never touched.
- *   Whole-directory deletion (update.zip + pending/) is SAFE because the
- *   chamber feeds never publish blockmaps: the
- *   release workflow deletes the mac .zip.blockmap from the draft before
- *   finalize and Windows builds with differentialPackage=false, so
- *   electron-updater never runs its differential path and update.zip is never
- *   a differential base — deleting it reclaims ~300MB/round with no
- *   functional cost. LATENT COUPLING: if a future release ever publishes
- *   blockmaps, update.zip becomes a differential base again and this cleanup
- *   must preserve it (see the stale-cache delete call, cleanupStaleUpdateCache
- *   + the startup site below) — re-read this before any such publishing change.
- *   Best-effort only: any resolution/read failure skips silently — cache
- *   hygiene never blocks startup and never fabricates success.
- * - The state projection is non-secret only: versions, channel, a release
- *   page URL, a short error text. Never credentials, never paths.
- *
- * Linux coverage is SHAPE-gated (design 21): electron-updater's AppImage
- * updater replaces the running .AppImage file, so updates are possible only
- * when the packaged app was started from a writable AppImage
- * (process.env.APPIMAGE — absolute, regular file, W_OK). Any other Linux
- * shape (dev, unpacked dir, deb) keeps the inert state — same
- * installBlockedReason string, so the settings「检查更新」gate (keyed on that
- * exact reason) never offers a pointless button.
+ * dsh-chamber desktop update controller: silent startup/6h checks (failures are log-only,
+ * never block startup), autoDownload = false (a check downloads nothing; the download starts
+ * only on the user's「更新」click), autoInstallOnAppQuit = true (installs on quit, no dialog).
+ * Once downloaded the settings section also offers「重启并安装」(quitAndInstall → quit + install
+ * + relaunch through the normal before-quit/will-quit cleanup; the update-downloaded exemption
+ * passes) — macOS + Windows only: on Linux AppImage electron-updater swaps the file and spawns
+ * the new instance BEFORE quitting (single-instance lock cannot survive it). quitAndInstall
+ * CLOSES EVERY WINDOW FIRST, so main.ts arms its close-to-tray exception via
+ * onQuitAndInstallArmed/onNativeUpdaterQuitting. macOS install needs a Developer ID signature;
+ * Linux is SHAPE-gated (only a writable AppImage updates). State projection is non-secret only.
  */
 import { execFile } from 'node:child_process'
 import { describeError } from './describe-error.ts'
@@ -96,42 +29,26 @@ import {
   GITHUB_REPO,
 } from './update-discovery.ts'
 
-// electron-updater's CJS main exposes `autoUpdater` through an
-// Object.defineProperty getter — cjs-module-lexer cannot detect it, so an ESM
-// named import (`import { autoUpdater }`) would typecheck but resolve to
-// undefined at runtime. require() preserves the getter; the cast keeps the
-// package's own d.ts types. Resolved LAZILY (first real use only): the
-// factory must not touch it when an injected fake is provided (design 11
-// §3.2 testability — see UpdateControllerDeps).
+// electron-updater's CJS main exposes `autoUpdater` via an Object.defineProperty
+// getter — an ESM named import would resolve to undefined at runtime, require()
+// preserves it. Resolved LAZILY (first real use only): an injected fake is never touched.
 const require = createRequire(import.meta.url)
 let realAutoUpdater: AutoUpdaterLike | null = null
 function getRealAutoUpdater(): AutoUpdaterLike {
   if (realAutoUpdater === null) {
-    // Same hard guard as getRealApp: electron-updater's main reads the real
-    // electron app at load time, so loading it outside the Electron runtime
-    // can only go wrong (see realElectronUnavailable).
+    // Same hard guard as getRealApp: electron-updater's main reads the real electron app
+    // at load time, so loading it outside the Electron runtime can only go wrong.
     if (process.versions.electron === undefined) throw realElectronUnavailable('electron-updater autoUpdater')
     realAutoUpdater = (require('electron-updater') as typeof import('electron-updater')).autoUpdater
   }
   return realAutoUpdater
 }
 
-// electron's package main is CJS and exports the binary path STRING under
-// plain node — a static `import { app } from 'electron'` would fail to LINK
-// this module there (the named export does not exist) and a dynamic one
-// yields undefined; require() returns the real electron module in the
-// Electron runtime and the path string under plain node (`app` → undefined)
-// — require() itself never throws on either path. (The HARD GUARD below is a
-// deliberate throw of OUR OWN, not a property of resolving the specifier.)
-// Also resolved LAZILY: an injected test never
-// touches the real app.
-// HARD GUARD: the `electron` SPECIFIER must never be required
-// outside the Electron runtime. Under plain node it resolves to the npm
-// package, whose index.js — when its `dist/` is absent, exactly the shape of
-// a git worktree sharing one platform dist — SPAWNS A ~100MB BINARY DOWNLOAD
-// on load. Tests always inject these deps;
-// reaching the real branch outside Electron is a wiring bug, so it fails
-// loudly instead of downloading.
+// electron's package main is CJS: under plain node it exports the binary path STRING,
+// so an ESM named import would fail to LINK; require() works on both paths. HARD GUARD:
+// the `electron` specifier must never be required outside the Electron runtime — under
+// plain node its index.js can SPAWN A ~100MB BINARY DOWNLOAD on load. Resolved LAZILY;
+// reaching the real branch outside Electron fails loudly instead of downloading.
 function realElectronUnavailable(what: string): Error {
   return new Error(`the real ${what} is unavailable outside the Electron runtime; inject UpdateControllerDeps instead`)
 }
@@ -145,18 +62,15 @@ function getRealApp(): ElectronAppLike {
   return realApp
 }
 
-/** The slice of Electron's NATIVE `autoUpdater` this module subscribes to
- *  (mac/win binding; electron-updater drives the same instance internally).
- *  Only the quit-order signal is read — never a download/install action. */
+/** The slice of Electron's NATIVE `autoUpdater` this module subscribes to (mac/win
+ *  binding); only the quit-order signal is read — never a download/install action. */
 export interface NativeAutoUpdaterLike {
   on(event: string, listener: (...args: unknown[]) => void): unknown
 }
 
-// Electron's native autoUpdater is not available on every platform shape
-// (Linux has no native updater at all) and the access can throw — resolved
-// LAZILY, defensively, and at most once: a missing binding (or a non-Electron
-// runtime) is a permanent null (no retry storms, no binary download), never a
-// startup failure. Injected tests never reach this path.
+// Electron's native autoUpdater is absent on some platform shapes (Linux has none) and
+// access can throw: resolved LAZILY, defensively, at most once — a missing binding (or
+// non-Electron runtime) is a permanent null (no retry storms, no binary download).
 let realNativeAutoUpdater: NativeAutoUpdaterLike | null = null
 let realNativeAutoUpdaterResolved = false
 function getRealNativeAutoUpdater(): NativeAutoUpdaterLike | null {
@@ -175,12 +89,9 @@ function getRealNativeAutoUpdater(): NativeAutoUpdaterLike | null {
   return realNativeAutoUpdater
 }
 
-/** Update lifecycle phase (design 11 §3.2). `up-to-date` = a check ran and
- *  found nothing newer (distinct from `idle`, which means not checked yet).
- *  `installing` is the NATIVE (Swift/Sparkle) install-in-progress phase:
- *  the Electron controller never emits it, but it must stay in the
- *  shared projection so both flavors render from one Union (update-headless's
- *  applyNativePhase maps __host.nativeUpdatePhase 'installing' onto it). */
+/** Update lifecycle phase. `up-to-date` = a check ran and found nothing newer (distinct
+ *  from `idle` = not checked yet). `installing` is the NATIVE (Swift/Sparkle) phase:
+ *  the Electron controller never emits it, but both flavors render from this one Union. */
 export type UpdatePhase = 'idle' | 'checking' | 'up-to-date' | 'available' | 'downloading' | 'downloaded' | 'installing' | 'error'
 
 /** Non-secret update state projection (preload + renderer mirror this shape). */
@@ -196,19 +107,15 @@ export interface UpdateState {
   downloadPercent: number | null
   /** GitHub release page for the latest version (manual-install path). */
   releaseUrl: string | null
-  /** Why automatic installation cannot run (platform / mac signing / Linux
-   *  non-AppImage shape — evaluated ONCE at controller creation; fixing the
-   *  environment at runtime requires an app restart to re-probe); null = OK. */
+  /** Why automatic installation cannot run (platform / mac signing / Linux non-AppImage
+   *  shape — evaluated ONCE at creation; fixing the env needs an app restart); null = OK. */
   installBlockedReason: string | null
   /** Non-secret error text (check/download failure); null = none. */
   error: string | null
-  /** ONE-SHOT carry: a RESTART (「重启并安装」)
-   *  failure surfaced while the phase stayed `downloaded` — arming refused
-   *  (sync throw / falsy quitAndInstall return), an electron-updater 'error'
-   *  event after an armed restart, or the no-event stall watchdog. Sanitized
-   *  like `error`; absent (undefined) = no restart failure. Clearing rule:
-   *  every subsequent state push resets it UNLESS that push itself carries
-   *  the field (the failure push, or an explicit undefined clear). */
+  /** ONE-SHOT carry: a RESTART failure surfaced while the phase stayed `downloaded` —
+   *  refused arming, an 'error' event after an armed restart, or the stall watchdog.
+   *  Sanitized like `error`; absent = none. Clearing rule: every subsequent push resets
+   *  it UNLESS that push itself carries the field. */
   restartFailureText?: string
 }
 
@@ -217,9 +124,8 @@ export interface ElectronAppLike {
   isPackaged: boolean
 }
 
-/** Linux blocked reason (design 21): any non-AppImage Linux shape keeps this
- *  exact string — the renderer「检查更新」button gate keys on it, so a dev /
- *  unpacked-dir / deb install never offers a check that could not install. */
+/** Linux blocked reason: any non-AppImage Linux shape keeps this exact string — the
+ *  renderer「检查更新」gate keys on it, so dev/unpacked/deb never offers a check. */
 export const LINUX_UPDATE_UNSUPPORTED_REASON = 'auto-update is not supported on this platform'
 
 /** Result of the Linux AppImage capability probe; null = updates impossible. */
@@ -244,23 +150,18 @@ function realProbeAccess(path: string, mode: number): void {
   accessSync(path, mode)
 }
 
-/** The AppImage runtime launches the inner binary from a per-launch squashfs
- *  mount (`/tmp/.mount_*`) or extraction (`/tmp/appimage_extracted_*`). Only
- *  those launch shapes may hold a REAL APPIMAGE; an unpacked-dir/dev process
- *  with a stale inherited APPIMAGE env must never open the update gate (its
- *  quit-install would unlink an unrelated foreign file). */
+/** The AppImage runtime launches the inner binary from a per-launch squashfs mount
+ *  (`/tmp/.mount_*`) or extraction (`/tmp/appimage_extracted_*`); only those shapes may
+ *  hold a REAL APPIMAGE — a stale inherited APPIMAGE must never open the update gate. */
 function launchedFromAppImage(execPath: string): boolean {
   const parent = basename(dirname(execPath))
   return parent.startsWith('.mount') || parent.startsWith('appimage_extracted_')
 }
 
-/** Linux AppImage update capability (design 21 / 11 §3.1 shape gate):
- *  electron-updater's AppImageUpdater replaces the RUNNING file on quit
- *  (`unlink` + move — both parent-directory operations), so updates are
- *  possible only when the app really was started from an AppImage
- *  (launch-shape check + absolute APPIMAGE that is a regular file inside a
- *  writable parent directory). Any probe failure is a loud-null (updates
- *  stay off; never a silent partial enable). */
+/** Linux AppImage update capability: electron-updater's AppImageUpdater replaces the
+ *  RUNNING file on quit (unlink + move), so updates are possible only when the app
+ *  really started from an AppImage (launch-shape check + absolute APPIMAGE that is a
+ *  regular file in a writable parent). Any probe failure = loud-null (updates stay off). */
 export function probeLinuxAppImage(deps: LinuxAppImageProbeDeps = {}): LinuxAppImageProbe {
   const env = deps.env ?? process.env
   const stat = deps.stat ?? realProbeStat
@@ -284,48 +185,19 @@ export function probeLinuxAppImage(deps: LinuxAppImageProbeDeps = {}): LinuxAppI
 }
 
 /**
- * --- Startup stale-download-cache cleanup (design 11) ---
- *
- * electron-updater 6.x NEVER deletes its downloaded update files after a
- * successful install: `DownloadedUpdateHelper.clear()` (the only cleanup
- * path) is invoked only when a re-download FAILS. A finished update therefore
- * leaves the downloaded zip + `pending/` + differential blockmap artifacts in
- * the updater cache (~150-300 MB per cycle on this app) until a later cycle
- * overwrites them. The controller cleans that up at startup — but only when
- * the cache provably belongs to an update that is NOT newer than the running
- * version (already installed / superseded). Everything is fail-conservative:
- * an unresolvable dir name, missing metadata or an unparsable version keeps
- * the cache untouched.
- *
- * WHY whole-directory deletion is safe: update.zip
- * is not "waste that might as well be kept" — it is the electron-updater
- * FULL download, and its only OTHER role would be as the BASE of a
- * differential download. That role never happens on chamber feeds: the
- * release workflow deletes the mac .zip.blockmap from the draft release
- * before finalize and asserts no .blockmap among the outputs, and Windows
- * builds with `differentialPackage: false` (electron-builder config) — so the
- * feeds never reference blockmaps, electron-updater never runs the
- * differential path, and update.zip can never be reused as a differential
- * base. Deleting the whole dir (zip + pending/) after the update is installed
- * is therefore CORRECT and reclaims ~300MB per cycle.
- * LATENT COUPLING: the safety of whole-dir deletion rests entirely on the
- * feeds never publishing blockmaps. If a future release shape ever publishes
- * them (mac .zip.blockmap kept, or Windows differentialPackage back on),
- * update.zip becomes a differential base again and the stale-cache delete
- * call (cleanupStaleUpdateCache's removeTree(cacheDir)) must PRESERVE it —
- * re-verify this comment and that site before any such publishing change.
- *
- * Cache dir derivation mirrors electron-updater exactly (verified against
- * 6.8.9): cacheDir = join(<platform cache root>, updaterCacheDirName), where
- * the root is `~/Library/Caches` (darwin), `%LOCALAPPDATA%` (win32) or
- * `$XDG_CACHE_HOME`/`~/.cache` (linux), and updaterCacheDirName is baked by
- * electron-builder into the packaged app's app-update.yml (e.g.
- * `@dsh-chamberdesktop-updater`). Only the PACKAGED shape resolves (dev runs
- * cannot install anything on mac anyway and have no baked yml).
+ * --- Startup stale-download-cache cleanup ---
+ * electron-updater never deletes downloaded update files after a successful install,
+ * leaving zip + pending/ (~150-300MB/cycle); the controller cleans that at startup only
+ * when the cached pending version is NOT newer than the running one, fail-conservative
+ * (unresolvable dir/meta/version → cache untouched).
+ * WHY whole-dir deletion is safe: chamber feeds never publish blockmaps (mac
+ * .zip.blockmap dropped before finalize; Windows differentialPackage=false), so
+ * update.zip is never a differential base. LATENT COUPLING: if a future release ever
+ * publishes blockmaps, the stale-cache removal must preserve that base. Cache dir =
+ * join(<platform cache root>, updaterCacheDirName from packaged app-update.yml).
  */
 
-/** Real fs seams (tests inject their own — no real filesystem in unit tests
- *  beyond explicit temp dirs). */
+/** Real fs seams (flavor/test injection points). */
 function realReadFileUtf8(path: string): Promise<string> {
   return readFile(path, 'utf8')
 }
@@ -333,11 +205,9 @@ function realRemoveTree(path: string): Promise<void> {
   return rm(path, { recursive: true, force: true })
 }
 
-/** Parse `updaterCacheDirName` from electron-builder's baked app-update.yml
- *  (plain YAML scalar scan — electron-builder emits only flat scalars here).
- *  Null when absent/unreadable. The value must be a bare directory NAME:
- *  separators or dot-names would escape the cache root, so they are refused
- *  (the yml ships inside our own bundle, but the guard is free). */
+/** Parse `updaterCacheDirName` from the baked app-update.yml (flat YAML scalar scan).
+ *  Null when absent/unreadable; the value must be a bare directory NAME — separators
+ *  or dot-names would escape the cache root and are refused. */
 export function updaterCacheDirNameFromYaml(content: string): string | null {
   const match = /^updaterCacheDirName:[ \t]*("[^"]*"|'[^']*'|[^#\r\n]*)/m.exec(content)
   if (match === null) return null
@@ -354,8 +224,7 @@ export function updaterCacheDirNameFromYaml(content: string): string | null {
   return value
 }
 
-/** The platform cache root electron-updater derives its cacheDir from
- *  (getAppCacheDir, verified against 6.8.9). Pure; tests inject platform/env. */
+/** The platform cache root electron-updater derives its cacheDir from (getAppCacheDir); pure. */
 export function updaterCacheRoot(
   platform: NodeJS.Platform = process.platform,
   env: Record<string, string | undefined> = process.env,
@@ -377,15 +246,10 @@ export interface ResolveUpdaterCacheDirDeps {
   readFile?: (path: string) => Promise<string>
 }
 
-/** Resolve electron-updater's cache dir for the CURRENT app, or null when it
- *  cannot be derived safely (dev/unpacked shape, missing yml, refused name, or
- *  a resolved path that is not ABSOLUTE on the target platform — a relative
- *  XDG_CACHE_HOME / LOCALAPPDATA / home would make the derived dir relative
- *  too, and no deletion may ever run against a relative path — conservative
- *  like the dev/unresolvable cases). The absoluteness
- *  verdict uses the TARGET platform's path rules (win32 roots vs POSIX roots)
- *  so injected-platform tests see what the real runner would see.
- *  Never throws — cleanup is best-effort hygiene. */
+/** Resolve electron-updater's cache dir for the CURRENT app, or null when it cannot be
+ *  derived safely (dev/unpacked, missing yml, refused name, or a path that is not
+ *  ABSOLUTE on the target platform — no deletion may ever run against a relative path);
+ *  the absoluteness verdict uses the TARGET platform's path rules. Never throws. */
 export async function resolveUpdaterCacheDir(deps: ResolveUpdaterCacheDirDeps = {}): Promise<string | null> {
   const isPackaged = deps.isPackaged ?? true
   const platform = deps.platform ?? process.platform
@@ -404,23 +268,11 @@ export async function resolveUpdaterCacheDir(deps: ResolveUpdaterCacheDirDeps = 
   }
 }
 
-/** First canonical chamber version (X.Y.Z or X.Y.Z-beta.N) inside an
- *  electron-updater cache file name (e.g. `dsh-chamber-electron-0.2.2-arm64-mac.zip`
- *  → `0.2.2`). Null when none. Numeric groups are greedy, so a glued digit
- *  run parses as one (possibly longer) canonical version; the digit-
- *  adjacency guard only rejects a fragment that would START right after a
- *  digit the engine could not extend (not our artifact naming — treated as
- *  absent, conservatively).
- *
- *  NAMING CONTRACT this parser is pinned to: chamber
- *  release artifacts are canonically `X.Y.Z` or `X.Y.Z-beta.N` — no fourth
- *  segment (0.2.2.1 does not exist), no other prerelease spellings (-rc,
- *  -alpha, -beta.1 without the dot, …). The greedy digit-adjacency parse is
- *  only safe under that contract (e.g. `dsh-chamber-0.2.2-beta.1-…` yields
- *  exactly `0.2.2-beta.1`, and a hypothetical `0.2.2.1` cannot silently read
- *  as the four-part version `0.2.2` + extra tail). ANY future naming change
- *  (fourth segment, new prerelease suffix, leading-v, …) must revisit this
- *  parser and compareChamberVersions together. */
+/** First canonical chamber version (X.Y.Z / X.Y.Z-beta.N) inside an electron-updater
+ *  cache file name (`dsh-chamber-electron-0.2.2-arm64-mac.zip` → `0.2.2`); null when
+ *  none. The greedy digit-adjacency parse is safe only under the artifact naming
+ *  contract (no fourth segment, no other prerelease spellings): ANY future naming
+ *  change must revisit this parser and compareChamberVersions together. */
 export function cachedUpdateVersion(fileName: unknown): string | null {
   if (typeof fileName !== 'string') return null
   const match = /(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-beta\.(0|[1-9]\d*))?/.exec(fileName)
@@ -434,10 +286,8 @@ export function cachedUpdateVersion(fileName: unknown): string | null {
 
 const CANONICAL_VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-beta\.(0|[1-9]\d*))?$/
 
-/** Compare two canonical chamber versions (X.Y.Z / X.Y.Z-beta.N): negative /
- *  zero / positive; null when either side is not canonical (callers must
- *  treat null as "do not act" — never guess). A stable version is newer than
- *  the same base with a beta suffix; beta.N compares numerically. */
+/** Compare two canonical chamber versions: negative/zero/positive, or null when either
+ *  side is not canonical (callers must treat null as "do not act"). stable > same-base beta. */
 export function compareChamberVersions(left: string, right: string): number | null {
   const a = CANONICAL_VERSION.exec(left)
   const b = CANONICAL_VERSION.exec(right)
@@ -459,20 +309,11 @@ export interface CleanupStaleUpdateCacheDeps {
   removeTree?: (path: string) => Promise<void>
 }
 
-/** Remove electron-updater's whole download cache dir when the cached pending
- *  update is NOT newer than `currentVersion` (installed / obsolete). Returns
- *  true only when something was removed. Conservatively keeps the cache when:
- *  the dir/meta is absent or unreadable, the file name carries no canonical
- *  version, the version cannot be compared, or the pending update is still
- *  NEWER than the running version (a legit installable download must never be
- *  deleted). Never throws (best-effort hygiene).
- *  Whole-dir removal incl. update.zip is safe because the chamber feeds never
- *  publish blockmaps (release workflow drops the
- *  mac .zip.blockmap before finalize; Windows differentialPackage=false), so
- *  update.zip is never a differential base. LATENT COUPLING: the delete call
- *  below is the stale-cache site that MUST change if a future release ever
- *  publishes blockmaps — update.zip would then be a live differential base
- *  and must be preserved (only the pending/ metadata would be stale-cleanable). */
+/** Remove electron-updater's whole download cache dir when the cached pending update is
+ *  NOT newer than `currentVersion` (installed/obsolete); true only when something was
+ *  removed. Conservatively keeps the cache when dir/meta is absent or unreadable, the
+ *  file name carries no canonical version, the comparison is null, or the pending update
+ *  is still newer (a legit installable download must never be deleted). Never throws. */
 export async function cleanupStaleUpdateCache(
   cacheDir: string,
   currentVersion: string,
@@ -486,11 +327,8 @@ export async function cleanupStaleUpdateCache(
   } catch {
     return false // absent/unreadable → nothing provably stale
   }
-  // Shape-guard the parsed content: `null` / arrays / scalars are all valid
-  // JSON that JSON.parse happily returns — reading `.fileName` off them would
-  // throw and break the "never throws" contract of this hygiene path
-  // Anything that is not an object with a string fileName
-  // keeps the cache untouched.
+  // Shape-guard the parsed content: `null` / arrays / scalars are all valid JSON —
+  // anything that is not an object with a string fileName keeps the cache untouched.
   let parsed: unknown
   try {
     parsed = JSON.parse(raw)
@@ -512,11 +350,10 @@ export async function cleanupStaleUpdateCache(
 }
 
 /**
- * Open-external allowlist for the settings「前往下载页」link (design 11 §7):
- * only this repo's GitHub pages may ever be opened. Parsed with URL (not a
- * startsWith string check) so scheme/host/path-root are pinned exactly.
- * Encoded traversal is decoded and normalized before the path check, and
- * credentialed URLs are refused even though URL.origin ignores userinfo.
+ * Open-external allowlist for the settings「前往下载页」link: only this repo's GitHub
+ * pages may be opened. Parsed with URL (not startsWith) so scheme/host/path-root are
+ * pinned; encoded traversal is decoded/normalized, nested encoding (`%25…`) is refused
+ * outright, and credentialed URLs are rejected even though URL.origin ignores userinfo.
  */
 export function isAllowedReleaseUrl(raw: unknown): raw is string {
   if (typeof raw !== 'string') return false
@@ -524,10 +361,9 @@ export function isAllowedReleaseUrl(raw: unknown): raw is string {
     const url = new URL(raw)
     if (url.origin !== 'https://github.com') return false
     if (url.username !== '' || url.password !== '') return false
-    // One decode is sufficient only when the original path does not contain
-    // an encoded percent. Reject nested encoding outright: `%252f` can become
-    // `%2f` at one layer and `/` at another, defeating a single-pass
-    // traversal check in downstream URL/server stacks.
+    // One decode suffices only when the original path has no encoded percent; reject
+    // nested encoding outright (`%252f` can become `%2f` at one layer and `/` at another,
+    // defeating a single-pass traversal check downstream).
     if (/%25/i.test(url.pathname)) return false
     const normalized = new URL(`https://github.com${decodeURIComponent(url.pathname)}`).pathname
     return normalized.startsWith('/panzeyu2013/dsh-chamber/')
@@ -550,8 +386,7 @@ export async function openReleasePage(
   }
 }
 
-/** The subset of electron-updater's `AppUpdater` surface the controller uses
- *  (test-injectable; the real autoUpdater is structurally compatible). */
+/** The subset of electron-updater's `AppUpdater` surface the controller uses. */
 export interface AutoUpdaterLike {
   on(event: string, listener: (...args: any[]) => void): unknown
   autoDownload: boolean
@@ -560,36 +395,23 @@ export interface AutoUpdaterLike {
   allowDowngrade: boolean
   channel: string | null
   forceDevUpdateConfig: boolean
-  /** `any` (not `Record<string, unknown>`): the real AppUpdater's parameter
-   *  is `PublishConfiguration | AllPublishOptions` and a narrower interface
-   *  type would break the structural assignment of the real autoUpdater. */
+  /** `any` (not `Record<string, unknown>`): the real AppUpdater's parameter is
+   *  `PublishConfiguration | AllPublishOptions`, so a narrower type breaks structural assignment. */
   setFeedURL(options: any): void
   checkForUpdates(): Promise<unknown>
   downloadUpdate(): Promise<unknown>
-  /** electron-updater's restart-into-the-downloaded-update (quitAndInstall):
-   *  quits the app (through before-quit/will-quit) and installs + relaunches.
-   *  Fire-and-forget from the controller's perspective — the process is on
-   *  its way out when it succeeds.
-   *
-   *  REAL 6.8.9 SHAPE: quitAndInstall is declared `void` and does NOT throw
-   *  on a sync failure — BaseUpdater.install() DISPATCHES an 'error' event
-   *  and returns false (missing update file, doInstall throw), after which
-   *  quitAndInstall returns without arming the quit; MacUpdater only registers
-   *  a native staging listener and can return with nothing armed yet (ok
-   *  means "armed", quit comes later). A synchronous throw remains possible
-   *  only from OUR own seams around the call. The declared return type is
-   *  therefore `unknown`: the real updater yields undefined (an armed quit),
-   *  while an injected fake may signal a refused arming with an explicit
-   *  `false` — the controller must treat `false` as "nothing was armed"
-   *  without mistaking the real undefined for a failure. */
+  /** electron-updater's restart-into-the-downloaded-update: quits (through
+   *  before-quit/will-quit), installs and relaunches; fire-and-forget from the caller.
+   *  REAL 6.8.9 SHAPE: quitAndInstall is declared void and does NOT throw on a sync
+   *  failure — BaseUpdater.install() DISPATCHES 'error' and returns false (after which
+   *  quitAndInstall returns without arming); MacUpdater may return with staging not yet
+   *  armed (ok = "armed", quit later). Declared `unknown`: the real updater yields
+   *  undefined (armed) while a fake may signal a refused arming with `false`. */
   quitAndInstall(isSilent?: boolean, isForceRunAfter?: boolean): unknown
 }
 
-/** Test-injection seam (design 11 §3.2 testability): each member falls back
- *  to the real value — the electron `app`, the require'd electron-updater
- *  `autoUpdater`, `process.platform` — resolved LAZILY inside the factory and
- *  only when the member is absent; an injected value is never touched by the
- *  real path (the module stays loadable under plain node for unit tests). */
+/** Test-injection seam: each member falls back to the real value, resolved LAZILY inside
+ *  the factory only when the member is absent (the module stays loadable under plain node). */
 export interface UpdateControllerDeps {
   /** Electron `app` (only `isPackaged` is read); default: the real app. */
   app?: { isPackaged: boolean }
@@ -597,37 +419,23 @@ export interface UpdateControllerDeps {
   autoUpdater?: AutoUpdaterLike
   /** `process.platform`; default: the real platform. */
   platform?: NodeJS.Platform
-  /** Linux AppImage capability (design 21 shape gate). Default: probed from
-   *  the real process.env.APPIMAGE + fs; tests inject to stay pure. */
+  /** Linux AppImage capability (shape gate). Default: probed from real process.env.APPIMAGE + fs. */
   linuxAppImage?: LinuxAppImageProbe
-  /** Resolve the exact GitHub release download base for beta checks. The
-   * default uses the bounded public releases-list API; tests inject this so
-   * no network is touched. A rejection fails closed before electron-updater
-   * can invoke its GitHub provider's unsafe latest-channel fallback. */
+  /** Resolve the exact GitHub release download base for beta checks (default = bounded releases API); a rejection fails closed before electron-updater's unsafe latest-channel fallback. */
   resolveBetaFeed?: () => Promise<string>
-  /** Startup stale-download-cache override (design 11 — see
-   *  cleanupStaleUpdateCache). Absent → resolved at runtime from the real
-   *  packaged shape (resources app-update.yml + platform cache root); tests
-   *  inject `{ cacheDir: null }` to disable or a temp dir to assert the
-   *  behavior through the controller. */
+  /** Startup stale-download-cache override (see cleanupStaleUpdateCache). Absent →
+   *  resolved at runtime from the packaged shape (resources app-update.yml + platform
+   *  cache root); `{ cacheDir: null }` disables. */
   staleCache?: { cacheDir: string | null }
-  /** Restart stall watchdog grace: after an armed
-   *  quitAndInstall returns ok, the single-flight is released again when the
-   *  process is still alive after this many ms (a no-event mac stall — the
-   *  native staging handoff neither quits nor errors). 0 / undefined = the
-   *  default 60s; tests inject a tiny ms and use real timers. */
+  /** Restart stall watchdog grace: after an armed quitAndInstall returns ok, the
+   *  single-flight is released again when the process is still alive after this many ms
+   *  (a no-event mac stall). 0/undefined = default 60s. */
   restartWatchdogMs?: number
-  /** macOS Developer ID signature probe (default: the real codesign probe).
-   *  Tests inject a deterministic verdict: the real probe reads the RUNNING
-   *  process.execPath, which under plain node is never a Developer ID-signed
-   *  app binary — without the seam a packaged-darwin restart arm (and with
-   *  it the darwin stall-retry path) is untestable. */
+  /** macOS Developer ID signature probe (default: real codesign). Injectable so the
+   *  darwin restart arm and stall-retry paths are testable. */
   probeMacSignature?: () => Promise<boolean>
-  /** Electron's NATIVE `autoUpdater` (the mac/win binding electron-updater
-   *  drives internally), read only for its `before-quit-for-update` signal —
-   *  see onNativeUpdaterQuitting. Default: resolved lazily and defensively
-   *  (the binding is absent on shapes without a native updater, e.g. Linux);
-   *  tests inject a fake EventEmitter so no real electron is touched. */
+  /** Electron's NATIVE `autoUpdater` (mac/win binding electron-updater drives
+   *  internally), read only for `before-quit-for-update` — see onNativeUpdaterQuitting. */
   nativeAutoUpdater?: NativeAutoUpdaterLike | null
 }
 
@@ -639,50 +447,34 @@ export interface UpdateController {
   start(): void
   /** User-confirmed download (the「更新」button): resolve {ok} or {error}. */
   download(): Promise<{ ok: true } | { ok: false; error: string }>
-  /** User-initiated check (the「检查更新」button in the settings update
-   *  section): the SAME check path as the silent periodic check
-   *  (autoDownload stays off — a check never downloads). */
+  /** User-initiated check (the「检查更新」button): the SAME check path as the silent check (autoDownload stays off). */
   checkNow(): Promise<{ ok: true } | { ok: false; error: string }>
-  /** User-triggered restart into the downloaded update (the「重启并安装」
-   *  button): electron-updater quitAndInstall —
-   *  quit + install + relaunch through the normal quit path (before-quit's
-   *  update-downloaded exemption passes; will-quit still disposes transports
-   *  and the local dsh instance first). Only a COMPLETED download on a
-   *  shape where automatic installation is possible may start it — same
-   *  core-logic enforcement as download(), never just UI hiding. */
+  /** User-triggered restart into the downloaded update (quitAndInstall: quit + install +
+   *  relaunch through the normal quit path; will-quit disposes transports/dsh first).
+   *  Only a COMPLETED download on an install-capable shape may start it — core-logic enforced. */
   restartAndInstall(): { ok: true } | { ok: false; error: string }
-  /** 原生更新器（Swift flavor）的异步「重启并安装」：
-   *  语义与 restartAndInstall 相同，但结果必须跨进程等（转发给壳内的 Sparkle
-   *  标准更新窗口）。省略 = 该 flavor 没有原生安装腿；IPC 面优先用它，
-   *  Electron 的同步实现保持原样。 */
+  /** 原生更新器（Swift flavor）的异步「重启并安装」：语义同 restartAndInstall，但结果跨进程等
+   *  （转发给壳内 Sparkle 标准更新窗口）；省略 = 该 flavor 无原生安装腿。 */
   restartAndInstallAsync?(): Promise<{ ok: true } | { ok: false; error: string }>
 }
 
-/** The update feed repository (release.yml uploads the same repo's artifacts).
- *  Single source: update-discovery.ts (shared with the headless flavor). */
+/** The update feed repository (single source: update-discovery.ts). */
 export { GITHUB_OWNER, GITHUB_REPO } from './update-discovery.ts'
 
 /** Startup delay before the first silent check (let the app settle). */
 const CHECK_DELAY_MS = 15_000
 /** Periodic silent re-check. */
 const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000
-/** Default restart stall-watchdog grace: the armed quit (win: setImmediate
- *  app.quit; mac: native Squirrel staging handoff) is normally imminent; if
- *  the process is still alive after this window with no error either, the
- *  restart is stalled and the single-flight must not stay armed forever. */
+/** Restart stall-watchdog grace: the armed quit (win: setImmediate app.quit; mac: native
+ *  staging) is normally imminent; after this window the single-flight must not stay armed. */
 const RESTART_WATCHDOG_DEFAULT_MS = 60_000
-/** Honest surface text for the watchdog stall / a silent falsy-return
- *  arming refusal with no dispatched error text. Constant, sanitized. */
+/** Honest text for the watchdog stall / a silent falsy arming refusal. Constant, sanitized. */
 const RESTART_NOT_ARMED_TEXT = 'the app restart did not proceed (quitAndInstall returned without arming); the restart button is re-enabled — try again'
-/** Watchdog-stall text: an armed restart produced no quit AND no error event
- *  within the grace window. */
+/** Watchdog-stall text: armed restart produced no quit AND no error within the grace window. */
 const RESTART_STALL_TEXT = 'the app restart stalled (no quit and no error within the grace period); the restart button is re-enabled — try again'
-/** win32 post-stall refusal text: the previous armed
- *  attempt's quit never completed, so re-entering quitAndInstall cannot arm
- *  anything (real 6.8.9's internal quit latch is still set — BaseUpdater.js)
- *  and could eventually re-spawn a duplicate installer. Constant, sanitized;
- *  the per-boot restartStalled latch keeps this refusal in place until a real
- *  quit/install. */
+/** win32 post-stall refusal text: the previous armed attempt's quit never completed, so
+ *  re-entering quitAndInstall cannot arm anything (BaseUpdater's internal quit latch is
+ *  still set) and could re-spawn a duplicate installer; the per-boot latch keeps the refusal. */
 const RESTART_STALLED_REFUSAL_TEXT = 'the app quit from the previous restart did not complete; close the app to finish the install, then retry'
 
 function isBetaVersion(version: string): boolean {
@@ -690,18 +482,15 @@ function isBetaVersion(version: string): boolean {
 }
 
 function resolveChannel(version: string): 'stable' | 'beta' {
-  // A packaged beta prerelease is intrinsically a beta installation. Requiring an
-  // environment override would make a real beta silently query stable.
+  // A packaged beta prerelease is intrinsically a beta install; requiring an env override would make a real beta silently query stable.
   return isBetaVersion(version) || process.env.DSH_CHAMBER_UPDATE_CHANNEL === 'beta'
     ? 'beta'
     : 'stable'
 }
 
-/** Select an exact prerelease asset base. The returned URL never contains a
- * `latest` path and a malformed/draft/stable release can never become a feed.
- * Selection + the bounded-list shape check come from the shared electron-free
- * update-discovery.ts; only the no-candidate failure stays updater-specific
- * (the headless selector returns null and its call site decides). */
+/** Select an exact prerelease asset base: never contains a `latest` path and a
+ *  malformed/draft/stable release can never become a feed; shared selection comes from
+ *  update-discovery.ts, only the no-candidate failure is updater-specific. */
 export function betaReleaseDownloadBase(releases: unknown): string {
   if (!isBoundedReleasesList(releases)) throw new Error('invalid GitHub releases response')
   const selected = selectReleaseCandidate(releases, 'beta')
@@ -709,10 +498,9 @@ export function betaReleaseDownloadBase(releases: unknown): string {
   return releaseDownloadBase(selected.tag)
 }
 
-/** Public GitHub discovery used only for beta. It deliberately queries the
- * bounded releases collection (shared implementation: update-discovery.ts),
- * then switches electron-updater to a generic exact-tag feed; the
- * GitHubProvider never gets a chance to fall back from beta.yml to latest.yml. */
+/** Public GitHub discovery used only for beta: query the bounded releases collection,
+ *  then switch electron-updater to an exact-tag GenericProvider so GitHubProvider can
+ *  never fall back from beta.yml to latest.yml. */
 export async function resolveGithubBetaFeed(
   request: typeof fetch = globalThis.fetch,
   timeoutMs = 10_000,
@@ -726,12 +514,9 @@ export async function resolveGithubBetaFeed(
 }
 
 function resolveRuntimeBetaFeed(): Promise<string> {
-  // Electron net.fetch inherits the app's proxy/session policy. Resolve it
-  // lazily so pure-Node tests with an injected resolver never load Electron.
-  // HARD GUARD (4.5, same as getRealApp/getRealAutoUpdater): requiring the
-  // `electron` specifier outside the Electron runtime can spawn a ~100MB
-  // binary download, and this seam has no injected resolver to fall back to
-  // — reaching it under plain node is a wiring bug, so fail loudly.
+  // Electron net.fetch inherits the app's proxy/session policy; resolved lazily so
+  // injected tests never load Electron. HARD GUARD: requiring `electron` outside the
+  // Electron runtime can spawn a ~100MB binary download, so fail loudly here.
   if (process.versions.electron === undefined) throw realElectronUnavailable('electron net.fetch')
   const electron = require('electron') as typeof import('electron')
   const request = typeof electron === 'object' && typeof electron.net?.fetch === 'function'
@@ -740,10 +525,8 @@ function resolveRuntimeBetaFeed(): Promise<string> {
   return resolveGithubBetaFeed(request)
 }
 
-/** Build the release-page projection from the FEED's version string — feed
- * data is untrusted input, so a version that is not semver-shaped yields
- * null (no fabricated URL) instead of an openable link; the open action is
- * additionally gated by isAllowedReleaseUrl. */
+/** Build the release-page projection from the FEED's version — untrusted, so a
+ *  non-semver-shaped version yields null (no fabricated URL); opening is gated by isAllowedReleaseUrl. */
 export function releaseUrlFor(version: string): string | null {
   if (typeof version !== 'string' || version === '' || version.length > 128
     || !/^[0-9A-Za-z][0-9A-Za-z.+-]*$/.test(version)) {
@@ -753,13 +536,10 @@ export function releaseUrlFor(version: string): string | null {
 }
 
 /**
- * Platform/install-shape-level install-block reason that is known WITHOUT
- * probing (linux non-AppImage / dev mac). macOS packaged is probed
- * asynchronously (signature); until the probe resolves it stays blocked. The
- * security decision is fail-closed: a renderer call racing startup cannot
- * begin a download before the Developer ID verdict exists. Linux packaged
- * AppImage builds pass the gate (shape probe, see probeLinuxAppImage); every
- * other Linux shape keeps LINUX_UPDATE_UNSUPPORTED_REASON.
+ * Platform/install-shape-level install-block reason known WITHOUT probing (linux
+ * non-AppImage / dev mac). macOS packaged is probed asynchronously (signature); until it
+ * resolves it stays blocked — fail-closed, so a renderer call racing startup cannot begin
+ * a download before the Developer ID verdict exists. Linux AppImage passes the shape gate.
  */
 function platformBlockedReason(platform: NodeJS.Platform, app: ElectronAppLike, linuxAppImage: LinuxAppImageProbe): string | null {
   if (platform === 'linux') {
@@ -771,10 +551,9 @@ function platformBlockedReason(platform: NodeJS.Platform, app: ElectronAppLike, 
 }
 
 /**
- * Whether the running macOS app carries a Developer ID signature. Squirrel.Mac
- * (electron-updater's mac installer) requires one for auto-install; ad-hoc
- * signed builds cannot install automatically. `codesign -dv` writes its
- * verdict to STDERR, so both streams are read.
+ * Whether the running macOS app carries a Developer ID signature. Squirrel.Mac requires
+ * one for auto-install (ad-hoc builds cannot); `codesign -dv` writes its verdict to
+ * STDERR, so both streams are read.
  */
 function probeMacDeveloperIdSignature(): Promise<boolean> {
   return new Promise((resolve) => {
@@ -796,47 +575,27 @@ export interface UpdateControllerOptions {
     warn: (...args: unknown[]) => void
     error: (...args: unknown[]) => void
   }
-  /** User-triggered「重启并安装」arming hook:
-   *  called SYNCHRONOUSLY by restartAndInstall() immediately BEFORE it invokes
-   *  electron-updater's quitAndInstall() — the exact moment the updater starts
-   *  shutting the app down. On macOS that call CLOSES EVERY WINDOW FIRST and
-   *  only quits once they are all closed (Electron 43.4.0 typings,
-   *  AutoUpdater#before-quit-for-update: `before-quit` is not emitted before
-   *  all windows are closed; verified on 43.4.0/darwin: the autoUpdater
-   *  'before-quit-for-update' event and the window 'close' both arrive inside
-   *  the call, before it returns). The host uses this to arm its close-to-tray
-   *  exception so those closes can never be swallowed/hidden — a hidden close
-   *  aborts the install+relaunch and strands the process with no window.
-   *  Never called on a refusal path (nothing armed), so the host never has to
-   *  roll an arming back; failures after arming are published as the one-shot
-   *  restartFailureText carry, which releases it. */
+  /** User-triggered「重启并安装」arming hook, called SYNCHRONOUSLY immediately before
+   *  quitAndInstall — the moment the updater starts shutting the app down. On macOS that
+   *  call CLOSES EVERY WINDOW FIRST (before-quit then runs only once they are closed), so
+   *  the host arms its close-to-tray exception here: a hidden close aborts the
+   *  install/relaunch and strands the process. Never called on a refusal path (nothing
+   *  armed); after arming, failures publish the one-shot restartFailureText carry. */
   onQuitAndInstallArmed?: () => void
   /** Electron's NATIVE updater is shutting the app down right now (its
-   *  `before-quit-for-update` event, emitted inside `quitAndInstall()` before
-   *  it closes every window — verified on Electron 43.4.0/darwin). Two host
-   *  duties ride on it:
-   *  1. the close-to-tray exception must be armed for THIS close too, even if
-   *     an earlier arming was released (a stall, or a restart armed long
-   *     before a late staging completion) — the windows are being closed for
-   *     an install and must not be hidden;
-   *  2. the host may bound the quit itself: the native macOS leg closes the
-   *     windows and does NOT reliably reach `app.quit()` (43.4.0 probe: no
-   *     `before-quit` ever followed the window close), so a process left with
-   *     no windows must be driven to a real quit — safe to do here, because
-   *     this event only fires once Squirrel has the update STAGED (MacUpdater
-   *     calls the native quitAndInstall either right after `update-downloaded`
-   *     or from that listener), so terminating installs it.
-   *  Called on every occurrence — never gated on a prior click. */
+   *  `before-quit-for-update`, emitted inside quitAndInstall before it closes every
+   *  window). Two host duties: (1) arm the close-to-tray exception for THIS close too,
+   *  even if an earlier arming was released; (2) bound the quit — the native macOS leg
+   *  closes the windows and does NOT reliably reach app.quit(), and this event only fires
+   *  once Squirrel has the update STAGED, so terminating installs it. Called every
+   *  occurrence, never gated on a prior click. */
   onNativeUpdaterQuitting?: () => void
 }
 
 export function createUpdateController(options: UpdateControllerOptions, deps?: UpdateControllerDeps): UpdateController {
   const { version, logger } = options
-  // Real values are resolved LAZILY inside the factory and only when the
-  // corresponding dep is absent (design 11 §3.2 testability): an injected
-  // test never touches the real electron app, the real electron-updater
-  // instance, or process.platform — and the module itself stays loadable
-  // under plain node (no electron named imports at module top).
+  // Real values resolved LAZILY only when the corresponding dep is absent: an injected
+  // test never touches the real electron app/updater or process.platform.
   const app = deps?.app ?? getRealApp()
   const autoUpdater = deps?.autoUpdater ?? getRealAutoUpdater()
   const platform = deps?.platform ?? process.platform
@@ -844,44 +603,27 @@ export function createUpdateController(options: UpdateControllerOptions, deps?: 
   const channel = resolveChannel(version)
   const resolveBetaFeed = deps?.resolveBetaFeed ?? resolveRuntimeBetaFeed
   const probeMacSignature = deps?.probeMacSignature ?? probeMacDeveloperIdSignature
-  // Resolved ONLY when the host asked for the native quit bridge: a controller
-  // without that callback must not touch electron at all (see
-  // getRealNativeAutoUpdater — outside the Electron runtime the `electron`
-  // specifier is a package whose load can trigger a binary download).
+  // Resolved ONLY when the host asked for the native quit bridge: a controller without
+  // that callback must not touch electron at all (the specifier's load can download a binary).
   const nativeAutoUpdater = options.onNativeUpdaterQuitting === undefined
     ? null
     : deps?.nativeAutoUpdater !== undefined ? deps.nativeAutoUpdater : getRealNativeAutoUpdater()
 
-  // Native quit-order bridge: Electron's native updater
-  // emits `before-quit-for-update` INSIDE `quitAndInstall()` — before it closes
-  // every window, and long before any `before-quit` (which on this path only
-  // runs once all windows are closed). The host needs that instant to (a) keep
-  // those closes from being hidden to tray and (b) drive a real quit when the
-  // native leg stops after closing the windows. On Windows electron-updater
-  // emits the same event on the same native object right before its own
-  // app.quit(), so the bridge is platform-honest there too. Subscription
+  // Native quit-order bridge: the native updater emits `before-quit-for-update` INSIDE
+  // quitAndInstall — before it closes every window and long before any `before-quit`; the
+  // host needs that instant to keep closes from hiding and to drive a real quit. Subscription
   // failures are loud-but-harmless: the arming hook still covers the click.
   if (nativeAutoUpdater !== null) {
     try {
       nativeAutoUpdater.on('before-quit-for-update', () => {
-        // The quit leg is REAL: the native updater is closing the windows on its
-        // way out, so the no-event stall watchdog must not fire DURING it. Its
-        // deadline is anchored on the CLICK while the host's quit fallback is
-        // anchored on THIS event, so a slow native staging (e.g. the event
-        // arriving 56s after the click) would otherwise let the watchdog fire
-        // mid-exit, publish a stall, and make the host release the arming — which
-        // cancels the only thing that finishes the quit.
-        // RE-ANCHOR, never disable: this watchdog is the
-        // ONLY release for `restartInFlight` when the native leg neither quits
-        // nor errors — the `error` listener needs an event the macOS leg never
-        // emits. Clearing it outright would leave the single-flight armed
-        // forever whenever the leg stops with the window alive (or the host
-        // declines to take over): the restart button would answer "restart
-        // already in progress" for the rest of the process, with no stall text
-        // and no retry.
-        // Restarting the same grace keeps both properties: it cannot fire inside
-        // the quit window, and a leg that never completes still ends in the
-        // honest stall surface with an in-place retry.
+        // The quit leg is REAL: the native updater is closing the windows, so the no-event
+        // stall watchdog must not fire DURING it — its deadline is anchored on the CLICK
+        // while the host fallback is anchored on THIS event. RE-ANCHOR, never disable: this
+        // watchdog is the ONLY release for restartInFlight when the native leg neither quits
+        // nor errors; clearing it would leave the single-flight armed forever (the restart
+        // button answering "in progress" with no stall text and no retry). Re-arming the same
+        // grace keeps both properties: it cannot fire inside the quit window, yet a leg that
+        // never completes still ends in the honest stall surface with an in-place retry.
         armRestartWatchdog()
         options.onNativeUpdaterQuitting?.()
       })
@@ -903,19 +645,15 @@ export function createUpdateController(options: UpdateControllerOptions, deps?: 
   }
   const listeners = new Set<(state: UpdateState) => void>()
   const setState = (patch: Partial<UpdateState>): void => {
-    // Clearing rule for the one-shot restartFailureText carry: EVERY push
-    // resets it UNLESS that push itself carries the
-    // field — the restart-failure push (and an explicit undefined clear)
-    // keeps it, every other push (a fresh check/download/phase transition)
-    // drops it. A stale restart failure can therefore never leak into a
-    // later phase's projection.
+    // restartFailureText clearing rule: EVERY push resets it UNLESS the push itself carries
+    // the field (failure push or explicit undefined clear); a stale restart failure can
+    // never leak into a later phase's projection.
     const next = { ...state, ...patch }
     if (!('restartFailureText' in patch)) next.restartFailureText = undefined
     state = next
     for (const listener of listeners) listener(state)
   }
-  // macOS packaged: probe asynchronously without blocking startup, but keep
-  // download fail-closed until a valid Developer ID verdict clears the gate.
+  // macOS packaged: probe asynchronously without blocking startup, but keep download fail-closed until a valid Developer ID verdict.
   if (platform === 'darwin' && app.isPackaged) {
     void probeMacSignature().then((hasDeveloperId) => {
       setState({ installBlockedReason: hasDeveloperId ? null : 'missing Developer ID signature' })
@@ -924,53 +662,32 @@ export function createUpdateController(options: UpdateControllerOptions, deps?: 
 
   autoUpdater.autoDownload = false
   autoUpdater.autoInstallOnAppQuit = true
-  // Beta channel (design 11 §4): without allowPrerelease, electron-updater's
-  // GitHub provider resolves the latest NON-PRERELEASE release and looks for
-  // the channel yml there — a beta build (version 0.2.0-beta.1) would 404 on
-  // beta.yml and never find updates. Enable the Atom-feed channel lookup when
-  // the running version is itself a prerelease (packaged beta builds) or the
-  // env opt-in is set (dev).
+  // Beta channel: without allowPrerelease, electron-updater's GitHub provider resolves the
+  // latest NON-PRERELEASE release and looks for the channel yml there — a beta build would
+  // 404 on beta.yml and never find updates; enable it for prerelease builds or env opt-in.
   autoUpdater.allowPrerelease = channel === 'beta'
-  // A packaged `-beta.N` build is pinned to beta from its own version; the env
-  // remains a dev/stable-build opt-in. Before every beta check runCheck below
-  // replaces the baked GitHub provider with an exact-tag GenericProvider so
-  // electron-updater cannot fall back from beta.yml to latest.yml. In dev the
-  // initial GitHub feed keeps the normal injected seam; the same exact beta
-  // replacement happens before the first network check.
+  // A packaged `-beta.N` build is pinned to beta from its own version. Before every beta
+  // check runCheck replaces the baked GitHub provider with an exact-tag GenericProvider so
+  // electron-updater cannot fall back from beta.yml to latest.yml.
   if (channel === 'beta') autoUpdater.channel = 'beta'
   if (!app.isPackaged) {
     autoUpdater.forceDevUpdateConfig = true
     autoUpdater.setFeedURL({ provider: 'github', owner: GITHUB_OWNER, repo: GITHUB_REPO })
   }
-  // electron-updater's channel setter RESETS allowDowngrade to true — the
-  // design's no-silent-downgrade invariant (design 11 §5) must be re-asserted
-  // AFTER any channel assignment.
+  // electron-updater's channel setter RESETS allowDowngrade: the no-silent-downgrade invariant must be re-asserted AFTER any channel assignment.
   autoUpdater.allowDowngrade = false
 
-  // The「重启并安装」action is fire-and-forget: a successful quitAndInstall
-  // means the process is quitting — the flag is deliberately NOT reset on
-  // success (a second restart click after the first one armed the quit would
-  // otherwise re-enter electron-updater while the app is already on its way
-  // out). Only a FAILURE path resets it so the user can retry in place.
+  // The「重启并安装」action is fire-and-forget: on success the flag is deliberately NOT
+  // reset (the process is quitting); only a FAILURE path resets it for an in-place retry.
   let restartInFlight = false
-  // win32 stall latch: set when the no-event stall
-  // watchdog fires, i.e. an ARMED quit never completed. electron-updater's
-  // OWN quit latch (BaseUpdater.quitAndInstallCalled) is still set while this
-  // process is alive, so a win32 re-entry of quitAndInstall cannot arm
-  // anything (install() returns false WITHOUT dispatching — BaseUpdater.js),
-  // and a retry must not even be attempted: restartAndInstall refuses it on
-  // win32 before the call. NEVER cleared in-process — only a real
-  // quit/install (an app restart) can reset it, and the controller is
-  // per-boot. mac/linux never consult it (a mac retry re-registers the
-  // staging listener harmlessly — see restartAndInstall; linux has no
-  // restart action at all).
+  // win32 stall latch: set when the watchdog fires, i.e. an ARMED quit never completed.
+  // electron-updater's own quit latch is still set while this process is alive, so a win32
+  // re-entry of quitAndInstall cannot arm anything and must not even be attempted.
+  // NEVER cleared in-process — only a real quit/install (per-boot controller) can reset it.
   let restartStalled = false
-  // No-event stall watchdog: armed on every
-  // successful restart arming; fires once if the process is still alive after
-  // the grace — a mac staging handoff that neither quits NOR errors must not
-  // leave the single-flight armed forever. Dies with the process on a real
-  // quit (timer is unref'd); cleared on every release / re-arm so a stale
-  // deadline can never kill a LATER attempt (the fire checks the flag again).
+  // No-event stall watchdog: armed on every successful restart arming; fires once if the
+  // process is still alive after the grace; unref'd, cleared on every release/re-arm so a
+  // stale deadline can never kill a LATER attempt (the fire re-checks the flag).
   let restartWatchdog: ReturnType<typeof setTimeout> | null = null
   const restartWatchdogMs = deps?.restartWatchdogMs !== undefined && deps.restartWatchdogMs > 0
     ? deps.restartWatchdogMs
@@ -989,13 +706,10 @@ export function createUpdateController(options: UpdateControllerOptions, deps?: 
     clearRestartWatchdog()
     restartWatchdog = setTimeout(() => {
       restartWatchdog = null
-      // Only act when THIS attempt is still the one in flight — a release /
-      // re-arm in between (another failure path, a retry) invalidates the
-      // stale deadline.
+      // Only act when THIS attempt is still in flight — a release/re-arm invalidates the stale deadline.
       if (!restartInFlight) return
-      // Record the stall BEFORE releasing — from here on a win32 retry is
-      // refused at restartAndInstall's gate (electron-updater 6.8.9's own
-      // quit latch is still set after the stalled arm; see restartStalled).
+      // Record the stall BEFORE releasing — a win32 retry is then refused at
+      // restartAndInstall's gate (electron-updater's own quit latch is still set).
       restartStalled = true
       releaseRestartFlight()
       logger.warn('[updater] 重启停滞：宽限期内既未退出也未报错，已释放重启单飞（可重试）')
@@ -1018,51 +732,23 @@ export function createUpdateController(options: UpdateControllerOptions, deps?: 
     setState({ phase: 'up-to-date', latestVersion: null, downloadPercent: null, releaseUrl: null, error: null })
   })
   autoUpdater.on('download-progress', (progress) => {
-    // `downloaded` is terminal (the checkNow/download phase gates rely on
-    // it): a progress event racing AFTER update-downloaded (electron-updater
-    // normally never emits one, but an out-of-order delivery costs nothing to
-    // guard) must not regress the phase back to `downloading`.
+    // `downloaded` is terminal (the phase gates rely on it): a progress event racing
+    // AFTER update-downloaded must not regress the phase back to `downloading`.
     if (state.phase === 'downloaded') return
     setState({ phase: 'downloading', downloadPercent: progress.percent })
   })
   autoUpdater.on('update-downloaded', (info: UpdateInfo) => {
     setState({ phase: 'downloaded', latestVersion: info.version, downloadPercent: 100, error: null })
   })
-  // Single error path for check AND download failures. latestVersion is kept:
-  // a check error leaves it null (settings:「无法检查更新」), a download error
-  // keeps it (settings:「更新下载失败」+ retry).
-  // An error while the「重启并安装」single-flight is
-  // ARMED is a RESTART failure, not a download/check failure — the phase must
-  // stay `downloaded` (never regress to 'error', which the settings section
-  // would misread as a DOWNLOAD failure and offer the wrong retry) and the
-  // sanitized failure rides the one-shot restartFailureText carry instead.
-  // This covers the async paths that never reach restartAndInstall's
-  // synchronous call: the mac staging-window click (the native Squirrel fetch
-  // errors later) and BaseUpdater.install() dispatching 'error' + returning
-  // false INSIDE quitAndInstall (real 6.8.9 does not throw there — the
-  // listener then runs synchronously mid-call and the caller observes the
-  // released single-flight below). Releasing here also unblocks an in-place
-  // retry: without the reset the flag would stay armed forever and every
-  // later click would be silently refused ('restart already in progress').
-  // The branch keys on the PHASE as well as the flight —
-  // an 'error' arriving while phase is `downloaded` but nothing is armed must
-  // ride the SAME restart-failure channel. Nothing else can error at phase
-  // `downloaded`: runCheck() and download() both gate on earlier phases, so
-  // no check/download can be in flight there — an error in that state is
-  // quit/staging-related by construction. Two late shapes land on the
-  // not-armed half of the branch today: MacUpdater's constructor-registered
-  // native-error bridge re-emits native staging failures long after the
-  // flight was released (verified in the installed 6.8.9 sources), and an
-  // error can arrive after the 60s stall watchdog already released an armed
-  // attempt. Without the phase test those would hit the phase-'error' branch,
-  // regressing `downloaded` and WIPING the very restart-failure text. Routing
-  // them through the restart channel (the
-  // release below is a no-op when the flight is already released) keeps the
-  // phase `downloaded`, keeps `error` null, and REPLACES the stale
-  // stall/not-armed text with the real sanitized error.
-  // Errors at any other phase (a check/download while nothing is armed — the
-  // flight can only ever be armed at phase `downloaded`) keep the
-  // phase-'error' behavior exactly.
+  // Single error path for check AND download failures. LatestVersion is kept: a check
+  // error leaves it null, a download error keeps it (settings shows the retry kind).
+  // An error while the restart single-flight is ARMED — or at phase `downloaded` with
+  // nothing armed — is a RESTART failure, not a download/check failure: the phase stays
+  // `downloaded` (never regress to 'error', which settings would misread as a DOWNLOAD
+  // failure) and the sanitized text rides the one-shot restartFailureText carry. Covers
+  // the async shapes (mac staging-window click; BaseUpdater dispatching 'error' + false
+  // inside quitAndInstall) and the late native re-emit; releasing here unblocks in-place
+  // retry. Nothing else can error at `downloaded` — runCheck()/download() gate earlier.
   autoUpdater.on('error', (error) => {
     const message = describeError(error)
     logger.warn('[updater]', message)
@@ -1074,20 +760,15 @@ export function createUpdateController(options: UpdateControllerOptions, deps?: 
     setState({ phase: 'error', downloadPercent: null, error: sanitizeErrorText(message) })
   })
 
-  // Startup hygiene (design 11): electron-updater keeps downloaded
-  // update files forever after a successful install (see
-  // cleanupStaleUpdateCache). Fire-and-forget best-effort cleanup — it only
-  // deletes when the cached pending version is NOT newer than this run's
-  // version, resolves nothing in dev, and never blocks or throws into boot.
+  // Startup hygiene: fire-and-forget best-effort cleanup — deletes only when the cached
+  // pending version is NOT newer than this run's, resolves nothing in dev, never blocks boot.
   if (deps?.staleCache !== undefined) {
     const cacheDir = deps.staleCache.cacheDir
     if (cacheDir !== null) {
       void cleanupStaleUpdateCache(cacheDir, version).then((removed) => {
         if (removed) logger.log('[updater] 已清理已安装版本的更新缓存：', cacheDir)
-        // Guarded catch mirroring the real-branch hygiene below: cleanup never
-        // throws by contract, but an injected
-        // seam or logger must not turn best-effort hygiene into an unhandled
-        // rejection either.
+        // Guarded catch mirroring the real-branch hygiene: cleanup never throws by
+        // contract, but a seam/logger must not turn it into an unhandled rejection.
       }).catch((error) => {
         const message = describeError(error)
         logger.warn('[updater] 更新缓存清理失败（已忽略）：', message)
@@ -1112,48 +793,34 @@ export function createUpdateController(options: UpdateControllerOptions, deps?: 
   }
 
   let checking = false
-  // A download in flight keeps phase `available` until the
-  // first progress event (or `downloaded` on completion) — a periodic re-check
-  // started in that window would pass the phase gate below and, resolving
-  // after the download, clobber `downloaded` back to `available`/`up-to-date`
-  // (losing the settings「已下载，退出时安装」row AND the before-quit
-  // exemption while electron-updater still installs on quit). The flag makes
-  // the download exclusion explicit and covers the whole in-flight window.
+  // A download in flight keeps phase `available` until the first progress event: a
+  // periodic re-check started in that window would pass the phase gate and, resolving
+  // after the download, clobber `downloaded` back (losing the row AND the quit exemption).
   let downloadInFlight = false
-  // The single check path shared by the silent periodic checks (start / 6h
-  // interval) and the user-initiated「检查更新」action (checkNow()). The phase
-  // gates make it idempotent: an in-flight check/download or a completed
-  // download is never clobbered.
+  // The single check path shared by the silent checks (start / 6h interval) and the
+  // user-initiated「检查更新」: the phase gates make it idempotent.
   async function runCheck(): Promise<void> {
     if (checking || downloadInFlight) return
-    // The「已下载，退出时安装」state is final for this version, and an
-    // in-flight download is mid-transition — a re-check must not clobber
-    // either back to `available`.
+    // The「已下载，退出时安装」state is final for this version, and an in-flight download is mid-transition — a re-check must not clobber either.
     if (state.phase === 'downloaded' || state.phase === 'downloading') return
     checking = true
     try {
       setState({ phase: 'checking', error: null })
       if (channel === 'beta') {
-        // electron-updater's GitHub provider deliberately falls back to
-        // latest.yml when a prerelease channel file is unavailable. Resolve a
-        // concrete beta tag first and use GenericProvider for this check so a
-        // missing beta feed fails closed and never emits a stable-feed query.
+        // electron-updater's GitHub provider falls back to latest.yml when a prerelease
+        // channel file is unavailable: resolve a concrete beta tag and use GenericProvider
+        // so a missing beta feed fails closed and never emits a stable-feed query.
         const betaFeed = await resolveBetaFeed()
         autoUpdater.setFeedURL({ provider: 'generic', url: betaFeed, channel: 'beta' })
         autoUpdater.channel = 'beta'
-        // Both channel and provider mutation may reset this in updater
-        // implementations; preserve the no-silent-downgrade invariant.
+        // Both channel and provider mutation may reset this; preserve the no-silent-downgrade invariant.
         autoUpdater.allowDowngrade = false
       }
       await autoUpdater.checkForUpdates()
     } catch (error) {
-      // A CHECK failure (a 6h re-check after a previous `available`, or the
-      // first check) must NOT keep the stale latestVersion: the settings
-      // section infers the failure kind from it (null →「无法检查更新」, set →
-      // 「更新下载失败」+ retry), and a retry must never download stale cached
-      // update info without a fresh successful check. The 'error' event above
-      // preserves latestVersion (download errors need it for retry); this
-      // catch clears it because we KNOW the failure was a check.
+      // A CHECK failure must NOT keep the stale latestVersion: the settings section infers
+      // the failure kind from it (null →「无法检查更新」, set →「更新下载失败」+ retry), and a
+      // retry must never download stale cached info without a fresh successful check.
       const message = describeError(error)
       logger.warn('[updater] check failed:', message)
       setState({ phase: 'error', latestVersion: null, downloadPercent: null, releaseUrl: null, error: sanitizeErrorText(message) })
@@ -1169,10 +836,9 @@ export function createUpdateController(options: UpdateControllerOptions, deps?: 
       return () => listeners.delete(listener)
     },
     start() {
-      // Linux shape gate (design 21): a packaged writable AppImage may
-      // schedule checks; every other Linux shape stays inert (no timers) —
-      // the renderer gate keys on the same installBlockedReason string, so
-      // nothing is offered that could not install.
+      // Linux shape gate: a packaged writable AppImage may schedule checks; every other
+      // Linux shape stays inert (no timers) — the renderer gate keys on the same
+      // installBlockedReason string.
       if (platform === 'linux' && state.installBlockedReason !== null) {
         logger.log('[updater] 跳过更新检查：当前 Linux 运行形态不支持自动更新（需从可写 AppImage 启动）');
         return
@@ -1184,42 +850,31 @@ export function createUpdateController(options: UpdateControllerOptions, deps?: 
       logger.log(`[updater] 更新检查已启动（channel=${channel}，${CHECK_DELAY_MS / 1000}s 后首次检查，之后每 ${CHECK_INTERVAL_MS / 3_600_000}h）`);
     },
     async checkNow() {
-      // Linux shape gate (design 21): refuse loudly for non-AppImage shapes
-      // instead of letting the feed lookup fail obscurely; an AppImage build
-      // (installBlockedReason === null) falls through to the shared check path.
+      // Linux shape gate: refuse loudly for non-AppImage shapes instead of letting the
+      // feed lookup fail obscurely; AppImage falls through to the shared check path.
       if (platform === 'linux' && state.installBlockedReason !== null) {
         logger.log('[updater] 手动检查更新被跳过：当前 Linux 运行形态不支持自动更新（需从可写 AppImage 启动）')
         return { ok: false, error: LINUX_UPDATE_UNSUPPORTED_REASON }
       }
-      // Same guarded path as the periodic check: a check/download already in
-      // flight or a completed download (phase gates in runCheck) are no-ops —
-      // the state push still tells the renderer what actually happened.
-      // Contract note: a gate no-op still resolves {ok:true}
-      // here — the renderer must judge the outcome from the `update-state`
-      // push (phase stays checking/downloaded/…), never from this return value.
+      // Same guarded path as the periodic check: an in-flight check/download or a completed
+      // download is a no-op — the state push still tells the renderer what happened.
+      // A gate no-op still resolves {ok:true}; the renderer judges from the update-state push.
       await runCheck()
       return { ok: true }
     },
     async download() {
-      // Only an update that was actually found (or a retry of a DOWNLOAD
-      // failure, which keeps latestVersion) may start a download — a check
-      // failure (latestVersion cleared) must never download stale cached
-      // update info without a fresh successful check.
+      // Only an update actually found (or a retry of a DOWNLOAD failure, which keeps
+      // latestVersion) may start a download; a check failure must never download stale info.
       if (state.latestVersion === null || (state.phase !== 'available' && state.phase !== 'error')) {
         return { ok: false, error: 'no update available' }
       }
-      // Core-logic enforcement (not just UI hiding — repo invariant): when
-      // automatic installation is blocked (mac without Developer ID, linux),
-      // a download is a doomed install path; refuse at the IPC handler too,
-      // even if a compromised/racy renderer calls inside the probe window.
+      // Core-logic enforcement (not just UI hiding): when installation is blocked (mac
+      // without Developer ID, linux), refuse at the IPC handler even against a racy renderer.
       if (state.installBlockedReason !== null) {
         return { ok: false, error: 'automatic installation blocked on this platform' }
       }
-      // Controller-level single-flight: a double click within
-      // the pre-progress window would otherwise start two downloads (phase is
-      // still `available` until the first progress event). electron-updater
-      // dedupes via its internal downloadPromise, but the controller must not
-      // rely on that — the flag also feeds the checkNow() exclusion above.
+      // Controller-level single-flight: a double click within the pre-progress window would
+      // start two downloads; electron-updater dedupes internally but we must not rely on it.
       if (downloadInFlight) {
         return { ok: false, error: 'download already in progress' }
       }
@@ -1237,22 +892,13 @@ export function createUpdateController(options: UpdateControllerOptions, deps?: 
       }
     },
     restartAndInstall() {
-      // Core-logic enforcement (same discipline as download()): the「重启并
-      // 安装」action is only meaningful for a COMPLETED download on a shape
-      // where automatic installation is possible. The gates are enforced here
-      // too — a compromised/racy renderer calling outside the rendered state
-      // must never arm electron-updater's quitAndInstall against a partial or
-      // doomed install.
-      // Linux is refused entirely: electron-updater's
-      // AppImageUpdater replaces the running file and SPAWNS the new instance
-      // synchronously at click time, BEFORE this app quits (BaseUpdater
-      // quitAndInstall → install() → app.quit()); the chamber quit path keeps
-      // the old process alive for its async cleanup (~1-2s), so the fresh
-      // instance collides with the still-running one under Electron's
-      // single-instance lock (main.ts requestSingleInstanceLock) and quits
-      // itself — the promised「自动重启」structurally cannot happen on
-      // AppImage. The quit-install leg stays (installs at exit; the app is
-      // relaunched manually). Renderer gate mirrors this (update-gate).
+      // Core-logic enforcement (same discipline as download()): only a COMPLETED download
+      // on an install-capable shape may arm quitAndInstall — never a partial/doomed install.
+      // Linux is refused entirely: AppImageUpdater replaces the running file and SPAWNS the
+      // new instance synchronously at click time BEFORE this app quits, while the chamber
+      // quit path keeps the old process alive for ~1-2s of async cleanup — the fresh
+      // instance collides with the single-instance lock and quits itself. The quit-install
+      // leg stays (installs at exit; relaunch manually).
       if (platform === 'linux') {
         return { ok: false, error: 'automatic restart is not supported on linux (single-instance race); the update installs on quit' }
       }
@@ -1265,19 +911,11 @@ export function createUpdateController(options: UpdateControllerOptions, deps?: 
       if (restartInFlight) {
         return { ok: false, error: 'restart already in progress' }
       }
-      // A win32 retry after a STALLED armed attempt must
-      // not re-enter quitAndInstall. Real 6.8.9 BaseUpdater.install() returns
-      // false WITHOUT dispatching while its internal quitAndInstallCalled
-      // latch is still set (BaseUpdater.js — the quit scheduled by the first
-      // armed attempt never completed, so the updater never cleared its own
-      // latch), and quitAndInstall then yields undefined: the arming proof
-      // below would misreport ok:true while nothing new arms — and that very
-      // refusal clears the updater latch, so a SECOND retry would re-spawn a
-      // duplicate NSIS installer. Refuse BEFORE the call with an honest text;
-      // the per-boot stall latch is never cleared in-process (only a real
-      // quit/install resets the world). mac retry stays allowed — re-entering
-      // MacUpdater.quitAndInstall only re-registers the native staging
-      // listener, harmlessly; linux has no restart action at all (above).
+      // A win32 retry after a STALLED armed attempt must not re-enter quitAndInstall:
+      // BaseUpdater.install() returns false WITHOUT dispatching while its quitAndInstallCalled
+      // latch is set, and quitAndInstall then yields undefined — the arming proof below would
+      // misreport ok:true, and that refusal clears the latch so a second retry re-spawns a
+      // duplicate NSIS installer. mac retry stays allowed; linux has no restart action.
       if (restartStalled && platform === 'win32') {
         releaseRestartFlight()
         setState({ restartFailureText: RESTART_STALLED_REFUSAL_TEXT })
@@ -1285,109 +923,46 @@ export function createUpdateController(options: UpdateControllerOptions, deps?: 
       }
       restartInFlight = true
       try {
-        // electron-updater quitAndInstall: Windows NSIS spawns the silent
-        // installer (/S --force-run, detached) and then app.quit() — the quit
-        // runs through before-quit (the update-downloaded exemption, design 14
-        // D2) and will-quit (transports and the local dsh instance are
-        // disposed first), the app exits with code 0, and the installer (which
-        // waits for this process) installs and relaunches the new version.
-        // isForceRunAfter=true makes that relaunch deterministic.
-        // macOS hands off to the NATIVE Squirrel.Mac updater
-        // (MacUpdater.quitAndInstall → autoUpdater.quitAndInstall, no
-        // app.quit() from electron-updater): Squirrel installs and relaunches.
-        // Whether the native termination sequence runs through Electron's
-        // before-quit/will-quit cleanup (so transports/dsh are disposed before
-        // the swap) is a REAL-MACHINE gate, not statically provable here —
-        // design 11 §9 lists the assertion checklist.
-        // VERIFIED WINDOW ORDER (Electron 43.4.0/darwin probe): the
-        // native call emits autoUpdater 'before-quit-for-update', then closes
-        // every window, and only quits once all of them are closed — the
-        // window 'close' event therefore arrives INSIDE this call, before it
-        // returns and long before 'before-quit'. The caller's close handling
-        // must already know the quit is in flight at that moment: the arming
-        // hook above fires right before this call, and main.ts arms
-        // updaterQuitArmed there (a hide-to-tray close here strands the
-        // process with no window and no install — the defect this invariant
-        // exists to prevent).
-        // Also: when the click lands before Squirrel finished its own staging
-        // fetch, the mac call only registers a listener and returns — the quit
-        // happens later when the native download completes (ok:true then means
-        // "armed", with a seconds-long window until the actual quit).
-        // REAL 6.8.9 SYNC-FAILURE SHAPE: a sync quit/install failure does NOT
-        // throw — BaseUpdater.install()
-        // DISPATCHES an 'error' event and returns false (missing update file,
-        // doInstall throw), after which quitAndInstall returns without arming
-        // the quit. Our 'error' listener above therefore runs SYNCHRONOUSLY
-        // inside this call for such a failure: it releases the single-flight
-        // and pushes restartFailureText while `phase` stays `downloaded` (no
-        // 'error'-phase regression — the downloaded row keeps its「重启并安装」
-        // button so the user retries the RESTART, never mislabeled as a
-        // download failure). A genuine synchronous throw remains possible only
-        // from our own seams around the call, and an injected fake may return
-        // an explicit `false` instead of dispatching. The proof of arming is
-        // therefore: the single-flight still held AND no explicit false
-        // return. THE ONE REAL 6.8.9 undefined-without-arming exception is the
-        // LATCH refusal above: a stalled win32 attempt
-        // leaves BaseUpdater's quitAndInstallCalled set, so a re-entry's
-        // install() returns false WITHOUT dispatching and quitAndInstall
-        // yields undefined — indistinguishable from an armed quit by return
-        // value alone. The win32 restartStalled gate refuses that retry
-        // BEFORE this call, so this proof can never read the latch refusal as
-        // an arm; mac re-entry never hits the latch (no install() there).
-        // THE ARMING HOOK runs here, not in the
-        // caller: it fires SYNCHRONOUSLY immediately before quitAndInstall and
-        // only on the path that really arms — gate refusals (no downloaded
-        // update, blocked platform, linux, an already-armed restart) never
-        // reach it, so the host's close-to-tray exception can never be armed
-        // for a restart that does not happen, and never has to be rolled back.
-        // Every refusal/failure AFTER this point is published as a
-        // restartFailureText push (not-armed text, dispatched error, stall
-        // watchdog), which is what tells the host to release it again.
+        // electron-updater quitAndInstall: Windows NSIS spawns the silent installer then
+        // app.quit() (through before-quit's update-downloaded exemption and will-quit, which
+        // disposes transports/dsh first); macOS hands off to native Squirrel.Mac. Window
+        // order: 'before-quit-for-update' fires, then every window closes, and only then the
+        // quit — window 'close' arrives INSIDE this call, so the arming hook (fired right
+        // before) keeps a close from hiding to tray, which would strand the process.
+        // REAL 6.8.9 SYNC FAILURE: no throw — BaseUpdater.install() DISPATCHES 'error' and
+        // returns false; our listener then runs synchronously (releases the flight,
+        // publishes the failure, phase stays `downloaded`). Arming proof = flight held AND
+        // no explicit false (the win32 latch refusal gated out before the call).
         options.onQuitAndInstallArmed?.()
-        // Snapshot for the not-armed proof below: a mid-call 'error' dispatch
-        // REPLACES this carry, and that replacement is what distinguishes "the
-        // failure was already published" from "this result still owes the host
-        // a push".
+        // Snapshot for the not-armed proof: a mid-call 'error' dispatch REPLACES this carry,
+        // which distinguishes "already published" from "this result still owes a push".
         const carryBeforeCall = state.restartFailureText
         const armed = autoUpdater.quitAndInstall(true, true)
         if (restartInFlight && armed !== false) {
-          // Armed — the quit is on its way (win: setImmediate app.quit; mac:
-          // native Squirrel staging may still take a while). Deliberately NOT
-          // released (fire-and-forget single-flight, see above). Clear a stale
-          // failure carry from an earlier failed attempt so the row can show
-          // the honest in-progress line while the quit window runs.
+          // Armed — the quit is on its way; deliberately NOT released (fire-and-forget
+          // single-flight). Clear a stale failure carry so the row shows in-progress.
           if (state.restartFailureText !== undefined) {
             setState({ restartFailureText: undefined })
           }
-          // No-event stall watchdog: if neither the quit nor an 'error'
-          // event happens within the grace, release the flight + surface the
-          // stall so the restart button recovers without an app reload.
+          // No-event stall watchdog: neither quit nor error within the grace releases the flight and surfaces the stall.
           armRestartWatchdog()
           return { ok: true }
         }
-        // NOT armed. When the mid-call 'error' dispatch already ran, the
-        // listener pushed the sanitized failure text; a silent falsy return
-        // (fake seam — the real 6.8.9 non-dispatching falsy path is ONLY the
-        // latch refusal above, which the win32 restartStalled gate stops
-        // before it ever reaches this proof) synthesizes the same surface.
-        // Either way the flight is released and the phase stays `downloaded`
-        // — the user retries the restart in place.
-        // The comparison is against the pre-call carry, NOT `undefined`: the
-        // hook already fired on this path, so the host armed its close-to-tray
-        // exception and only a restartFailureText PUSH can release it — a
-        // stale carry left over from an earlier attempt must not swallow this
-        // push (the mid-call dispatch is preserved because it replaced the
-        // carry during the call).
+        // NOT armed. When the mid-call 'error' dispatch already ran, the listener pushed the
+        // sanitized text; a silent falsy return (fake seam — the real non-dispatching falsy
+        // path is ONLY the latch refusal gated out above) synthesizes the same surface. The
+        // comparison is against the PRE-CALL carry, not undefined: the hook already fired, so
+        // the host armed its close-to-tray exception and only a restartFailureText PUSH can
+        // release it — a stale carry must not swallow this push.
         releaseRestartFlight()
         if (state.restartFailureText === carryBeforeCall) {
           setState({ restartFailureText: RESTART_NOT_ARMED_TEXT })
         }
         return { ok: false, error: state.restartFailureText ?? RESTART_NOT_ARMED_TEXT }
       } catch (error) {
-        // A synchronous throw means nothing was armed — release for an
-        // in-place retry and surface the sanitized failure on the same
-        // restartFailureText channel (phase deliberately stays `downloaded`;
-        // `error` stays null — a restart failure is never a download failure).
+        // A synchronous throw means nothing was armed — release for an in-place retry and
+        // surface the sanitized failure on the same restartFailureText channel (phase stays
+        // `downloaded`, `error` stays null: a restart failure is never a download failure).
         const message = describeError(error)
         logger.warn('[updater] restart failed (nothing armed):', message)
         releaseRestartFlight()

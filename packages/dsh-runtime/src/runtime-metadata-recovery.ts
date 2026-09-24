@@ -1,18 +1,15 @@
 /**
- * Design 18 corrupt runtime-selection metadata recovery.
+ * Corrupt runtime-selection metadata recovery.
  *
- * This module is deliberately Electron/IPC free. The only path inputs are the
- * main-process-owned userData base directory and DSH_HOME; evidence and stash
- * paths are derived below and are never accepted from a renderer payload.
+ * Deliberately Electron/IPC free: the only path inputs are the main-process-owned
+ * userData base directory and DSH_HOME; evidence and stash paths are derived here
+ * and never accepted from a renderer payload.
  *
- * Recovery is a durable, one-way transaction:
- *   stop writers -> complete an older restore -> copy/publish DSH_HOME stash
- *   -> rename every selection-metadata byte into evidence -> probe builtin
- *   -> finalize the marker.
- *
- * A published stash is the hard gate for metadata archival. Every phase and
- * evidence rename is restartable; probe failure leaves the marker, stash, and
- * evidence intact for a later retry.
+ * Recovery is a durable, one-way transaction: stop writers -> complete an older
+ * restore -> copy/publish DSH_HOME stash -> rename every selection-metadata byte
+ * into evidence -> probe builtin -> finalize the marker. A published stash is the
+ * hard gate for metadata archival; every phase and evidence rename is restartable,
+ * so a probe failure leaves marker, stash and evidence intact for a later retry.
  */
 import {
   chmodSync,
@@ -48,12 +45,10 @@ import {
 import { PROBE_TEXT_KEEP_TOKENS } from './runtime-probes.ts'
 import { sanitizeErrorText } from './sanitize-error.ts'
 /**
- * The snapshot restore marker (`dsh-runtime/restore-in-progress`) is
- * independently authoritative for DSH_HOME transactions. When a restore is
- * permanently stuck ('incomplete' — the journaled snapshot is missing or
- * untrustworthy), the metadata-recovery transaction archives the marker as
- * opaque evidence so the escape can complete; a retryable 'half' restore
- * still blocks metadata recovery before anything is archived.
+ * The snapshot restore marker is independently authoritative for DSH_HOME
+ * transactions. A permanently stuck ('incomplete' — journaled snapshot missing or
+ * untrustworthy) restore is archived as opaque evidence so the escape can complete;
+ * a retryable 'half' restore still blocks metadata recovery before anything is archived.
  */
 import { RESTORE_MARKER_BASENAME as RESTORE_MARKER_EVIDENCE } from './restore-marker.ts'
 import { ROLLBACK_CONTINUATION_PHASES } from './rollback-facts.ts'
@@ -109,8 +104,8 @@ export interface RuntimeMetadataRecoveryRecord {
   /** Generated internally; basename only. */
   id: string
   phase: RuntimeMetadataRecoveryPhase
-  /** Selects a core-owned transaction namespace. Old records omit this on disk
-   * and are normalized to `default` by the parser. */
+  /** Selects a core-owned transaction namespace; records that omit it on disk
+   *  normalize to `default`. */
   storageKind: RuntimeMetadataRecoveryStorageKind
   builtinVersion: string
   /** Hash of the canonical main-process-owned DSH_HOME path; never the path. */
@@ -196,8 +191,7 @@ export interface ResumeRuntimeMetadataRecoveryOptions {
   dshHome: string
   builtinVersion: string
   /** Current shell version, so the health projection mirrors the startup's
-   *  override-invalidation contract (runtime-startup.ts:349-364). Optional:
-   *  without it the invalidated-override mismatch is not detected. */
+   *  override-invalidation contract. Optional: without it the mismatch is not detected. */
   shellVersion?: string
   operations?: Partial<RuntimeMetadataRecoveryOperations>
 }
@@ -379,10 +373,8 @@ function assertExistingRealDirectory(path: string, label: string): void {
 
 function ensurePrivateDirectory(path: string, parentRoot: string): void {
   assertContained(parentRoot, path, 'private recovery directory')
-  // The no-follow creation/tightening strategy is owned by private-fs.ts
-  // (kernel O_NOFOLLOW where available, the win32 user-space identity fallback
-  // otherwise); this wrapper only adds the recovery-specific containment
-  // assertion.
+  // The no-follow creation/tightening strategy is owned by private-fs.ts (kernel
+  // O_NOFOLLOW where available, the win32 identity fallback); this only adds containment.
   ensurePrivateDirectoryNoFollow(path)
 }
 
@@ -543,11 +535,10 @@ function sameOpaqueBytes(
 }
 
 /**
- * Reads a regular file through one descriptor and verifies that the pathname
- * still names the same, unchanged inode after hashing it. Rescue evidence
- * requires O_NOFOLLOW; the read-only state reader may use the identity-checked
- * fallback on platforms that lack that flag. Content is retained only for
- * bounded recovery-marker parsing; evidence hashing streams.
+ * Reads a regular file through one descriptor and verifies the pathname still names
+ * the same, unchanged inode after hashing it. Rescue evidence requires O_NOFOLLOW;
+ * the read-only state reader may use the identity-checked fallback where the flag is
+ * absent. Content is retained only for bounded marker parsing.
  */
 function fingerprintRegularFile(
   filePath: string,
@@ -721,11 +712,9 @@ function defaultCopyFile(
 
 const DEFAULT_OPERATIONS: RuntimeMetadataRecoveryOperations = {
   copyFile: defaultCopyFile,
-  // All four recovery rename sites (stash publish, evidence rotation, marker
-  // publish, marker-rescue commit) publish through this seam: the synchronous
-  // bounded-retry variant absorbs a transient Windows third-party handle while
-  // keeping the sync RuntimeMetadataRecoveryOperations contract byte-identical
-  // off win32.
+  // All four recovery rename sites (stash publish, evidence rotation, marker publish,
+  // marker-rescue commit) publish through this seam: the sync bounded-retry variant
+  // absorbs a transient Windows third-party handle while keeping the operations contract.
   renamePath: (source, destination) => renameWithWindowsRetrySync(source, destination),
   now: () => new Date(),
   randomHex: () => randomBytes(8).toString('hex'),
@@ -753,9 +742,8 @@ function writePrivateJson(
 ): void {
   assertContained(runtimeRoot, filePath, 'metadata recovery JSON')
   const parent = dirname(filePath)
-  // Keep the "parent must already exist" precondition; the shared writer then owns
-  // tmp naming, fsync, rename identity
-  // re-verification and parent fsync (single private-fs implementation).
+  // Keep the "parent must already exist" precondition; the shared writer owns tmp
+  // naming, fsync, rename identity re-verification and parent fsync.
   assertExistingRealDirectory(parent, 'metadata recovery JSON parent')
   atomicWriteRuntimeFileNoFollow(dirname(runtimeRoot), filePath, `${JSON.stringify(payload, null, 2)}\n`, {
     // Publish stays injected: crash/failure tests reach the exact phase by kind.
@@ -815,10 +803,9 @@ export function readMetadataRecoveryState(baseDir: string): RuntimeMetadataRecov
 }
 
 /**
- * Returns whether an explicit second-order rescue can safely preserve the
- * active marker as opaque evidence. Paths and marker content never leave the
- * core. A symlink, special file, unreadable file, or already-valid marker is
- * deliberately not rescuable through this capability.
+ * Whether an explicit second-order rescue can safely preserve the active marker as
+ * opaque evidence. Paths and marker content never leave the core; a symlink, special
+ * file, unreadable file, or already-valid marker is deliberately not rescuable.
  */
 export function inspectCorruptMetadataRecoveryMarker(
   baseDir: string,
@@ -859,16 +846,13 @@ export function inspectCorruptMetadataRecoveryMarker(
 }
 
 /**
- * Detect selection-metadata health using the store's tri-state readers plus
- * every durable *.corrupt* sentinel. This function never accepts or returns a
- * stash/evidence path.
+ * Detect selection-metadata health using the store's tri-state readers plus every
+ * durable *.corrupt* sentinel; never accepts or returns a stash/evidence path.
  *
- * A semantically-inconsistent-but-parseable set (e.g. the activation journal's
- * target disagrees with override.pending, an app-update-invalidated override
- * mid-transaction, or a rollback journal whose restore snapshot is gone) is
- * reported as `selection-corrupt` so the "保留数据并恢复内建" escape stays
- * reachable — otherwise such states hard-block startup with no recovery
- * action.
+ * A parseable-but-inconsistent set (journal target disagreeing with override.pending,
+ * an app-update-invalidated override mid-transaction, a rollback journal whose restore
+ * snapshot is gone) reports `selection-corrupt` so the "保留数据并恢复内建" escape stays
+ * reachable instead of hard-blocking startup with no recovery action.
  */
 export function detectRuntimeMetadataHealth(baseDir: string, shellVersion?: string): RuntimeMetadataHealth {
   const { runtimeDir } = recoveryRootPaths(baseDir)
@@ -886,9 +870,8 @@ export function detectRuntimeMetadataHealth(baseDir: string, shellVersion?: stri
     : readActivationJournalState(baseDir)
   const corruptEvidence = corruptEvidenceBasenames(runtimeDir)
   const recovery = readMetadataRecoveryState(baseDir)
-  // An unreadable (EACCES/EIO) selection leaf is precisely as recoverable-
-  // escape-dependent as a corrupt one: it must offer selection-corrupt, never
-  // fall through to 'healthy'.
+  // An unreadable (EACCES/EIO) selection leaf is as escape-dependent as a corrupt
+  // one: it must offer selection-corrupt, never fall through to 'healthy'.
   const selectionCorrupt = current.kind === 'corrupt' || current.kind === 'unknown'
     || override.kind === 'corrupt' || override.kind === 'unknown'
     || activationJournal.kind === 'corrupt'
@@ -904,11 +887,10 @@ export function detectRuntimeMetadataHealth(baseDir: string, shellVersion?: stri
   return { status, current, override, activationJournal, corruptEvidence, recovery }
 }
 
-/** Phases that actively restore a snapshot on resume (apply-phase.ts). */
+/** Phases that actively restore a snapshot on resume. */
 const ACTIVE_RESTORE_PHASES = new Set(['rollback-needed', 'restoring', 'manual-restoring'])
 
-/** Whether the snapshot entry exists as a real, non-symlink directory (mirrors
- * snapshot-store's published-snapshot identity without following links). */
+/** Whether the snapshot entry exists as a real, non-symlink directory. */
 function publishedSnapshotEntryExists(baseDir: string, snapshotName: string): boolean {
   try {
     const info = lstatSync(join(snapshotPaths(baseDir).snapshotsDir, snapshotName))
@@ -919,16 +901,13 @@ function publishedSnapshotEntryExists(baseDir: string, snapshotName: string): bo
 }
 
 /**
- * A parseable-but-semantically-inconsistent selection-metadata set that the
- * startup replay cannot resolve. Mirrors runtime-startup.ts's blocked reasons,
- * conservatively:
+ * A parseable-but-inconsistent selection-metadata set the startup replay cannot
+ * resolve, mirroring runtime-startup's blocked reasons conservatively:
  * (a) a missing journal with the pointer already advanced to pending;
- * (b) a valid non-builtin, non-rollback journal whose expected target
- *     disagrees with a non-null pending (journal-mismatch);
- * (c) an app-update-invalidated override paired with a pre-verdict
- *     version-switch journal (journal-mismatch, runtime-startup.ts:349-364);
- * (d) an actively-restoring journal whose restore snapshot is gone —
- *     the startup blocks 'restore-incomplete' and no retry can succeed.
+ * (b) a valid non-builtin, non-rollback journal whose expected target disagrees
+ *     with a non-null pending; (c) an app-update-invalidated override paired with a
+ *     pre-verdict version-switch journal; (d) an actively-restoring journal whose
+ *     restore snapshot is gone, so startup blocks 'restore-incomplete' forever.
  */
 function detectSemanticMismatch(
   baseDir: string,
@@ -944,10 +923,8 @@ function detectSemanticMismatch(
   if (journal.kind !== 'valid') return false
   const j = journal.journal
 
-  // (d) A rollback in progress can never finish once its restore snapshot is
-  // gone: manual rollbacks restore manualDataSnapshotName, automatic
-  // rollbacks resolve preSwapSnapshotName (apply-phase.ts resolvePreSwap /
-  // manual-restoring branch).
+  // (d) A rollback in progress can never finish once its restore snapshot is gone:
+  // manual rollbacks restore manualDataSnapshotName, automatic ones preSwapSnapshotName.
   if (ACTIVE_RESTORE_PHASES.has(j.phase)) {
     const needed = j.phase === 'manual-restoring'
       ? j.manualDataSnapshotName
@@ -955,8 +932,8 @@ function detectSemanticMismatch(
     if (needed !== null && !publishedSnapshotEntryExists(baseDir, needed)) return true
   }
 
-  // (c) App update invalidates override + pending; a pre-verdict transaction
-  // from the old shell is never applied under the new contract.
+  // (c) App update invalidates override + pending; a pre-verdict transaction from the
+  // old shell is never applied under the new contract.
   if (shellVersion !== undefined
     && override.kind === 'valid'
     && (override.record.invalidatedAt != null || override.record.shellVersion !== shellVersion)
@@ -993,8 +970,8 @@ function sourcePathHash(
   }
   return {
     dshHome,
-    // Hash the stable expected path so a legitimately missing DSH_HOME can be
-    // created by the builtin probe without changing transaction identity.
+    // Hash the stable expected path so a legitimately missing DSH_HOME can be created
+    // by the builtin probe without changing transaction identity.
     hash: createHash('sha256').update(dshHome).digest('hex'),
     missing,
   }
@@ -1013,8 +990,8 @@ function collectEvidence(runtimeDir: string, requireSelectionEvidence = true): s
     }
   }
   const names = entries.map(entry => entry.name)
-  // Only selection evidence satisfies the corrupt-metadata report; a lone
-  // restore marker must never manufacture a recovery transaction.
+  // Only selection evidence satisfies a corrupt-metadata report; a lone restore marker
+  // must never manufacture a recovery transaction.
   if (requireSelectionEvidence && !names.some(isSelectionEvidenceBasename)) {
     throw new Error('corrupt metadata was reported but no archivable evidence file exists')
   }
@@ -1159,8 +1136,8 @@ function copySourceTree(
 function assertStashTreeSafe(path: string): void {
   const info = lstatSync(path)
   if (info.isSymbolicLink()) {
-    // Reading the link itself is safe and does not dereference a possibly
-    // dangling, unreadable, absolute, or out-of-tree target.
+    // Reading the link itself is safe and does not dereference a possibly dangling,
+    // unreadable, absolute, or out-of-tree target.
     readlinkSync(path)
     return
   }
@@ -1417,11 +1394,10 @@ function corruptMarkerSnapshotForRescue(marker: string): FileFingerprint {
 }
 
 /**
- * Explicitly bootstraps a second-order transaction for a corrupt active
- * recovery marker. Callers must have already stopped all writers and completed
- * any older restore. The active marker remains byte-for-byte untouched until a
- * full DSH_HOME stash and an independently verified opaque marker copy exist;
- * one rename then atomically commits the replacement marker.
+ * Explicitly bootstraps a second-order transaction for a corrupt active recovery
+ * marker. Callers must have already stopped all writers and completed any older
+ * restore. The active marker stays byte-for-byte untouched until a full DSH_HOME
+ * stash and an independently verified opaque marker copy exist; one rename commits it.
  */
 export function bootstrapCorruptMetadataRecoveryMarker(
   options: ResumeRuntimeMetadataRecoveryOptions,
@@ -1527,8 +1503,8 @@ export function bootstrapCorruptMetadataRecoveryMarker(
 }
 
 /**
- * Resume only the durable filesystem portion. It performs all phase writes
- * internally and returns once the caller must probe the builtin runtime.
+ * Resume only the durable filesystem portion: all phase writes happen internally,
+ * and it returns once the caller must probe the builtin runtime.
  */
 export function resumeMetadataRecoveryCore(
   options: ResumeRuntimeMetadataRecoveryOptions,
@@ -1552,8 +1528,8 @@ export function resumeMetadataRecoveryCore(
     ensureRecoveryDirectories(paths)
   } else {
     const health = detectRuntimeMetadataHealth(options.baseDir, options.shellVersion)
-    // `selection-corrupt` includes the semantic-mismatch classifications —
-    // the live (valid) metadata files are then the archivable evidence.
+    // `selection-corrupt` includes the semantic-mismatch classifications; the live
+    // (valid) metadata files are then the archivable evidence.
     if (health.status !== 'selection-corrupt') {
       return existing.kind === 'valid'
         ? { phase: 'finalized', record: existing.record }
@@ -1762,15 +1738,13 @@ async function probeAndFinalizeMetadataRecovery(
 }
 
 /**
- * Full lifecycle wrapper for the explicit corrupt-marker rescue. This is the
- * only high-level API that may replace a malformed regular marker. The ordinary
- * recovery orchestrator below intentionally continues to fail closed.
- *
- * A 'half' interrupted restore is transient (retry-restore is the only correct
- * action) and blocks the rescue before anything is archived. An 'incomplete'
- * restore — the journaled snapshot is missing or untrustworthy, so no retry
- * can ever succeed — does not block: the stale restore marker is archived as
- * opaque evidence with the selection metadata, and the transaction proceeds.
+ * Full lifecycle wrapper for the explicit corrupt-marker rescue — the only
+ * high-level API that may replace a malformed regular marker; the ordinary
+ * orchestrator below keeps failing closed. A 'half' interrupted restore is transient
+ * (retry-restore is the only correct action) and blocks the rescue before anything is
+ * archived. An 'incomplete' restore (snapshot missing or untrustworthy, so no retry
+ * can succeed) does not block: the stale restore marker is archived as opaque
+ * evidence with the selection metadata.
  */
 export async function rescueCorruptMetadataRecoveryMarker(
   options: RecoverRuntimeMetadataOptions,
@@ -1793,15 +1767,12 @@ export async function rescueCorruptMetadataRecoveryMarker(
 }
 
 /**
- * Main-process convenience orchestrator. The caller supplies lifecycle/probe
- * callbacks, but this module owns every durable phase transition.
- *
- * A 'half' interrupted restore is transient: the retry-restore action owns the
- * scene and the transaction must NOT be archived over it. An 'incomplete'
- * restore is permanent (the journaled snapshot is missing or untrustworthy, so
- * no retry can succeed); the transaction proceeds, archiving the stale restore
- * marker as opaque evidence alongside the selection metadata before the
- * builtin probe.
+ * Main-process convenience orchestrator: the caller supplies lifecycle/probe
+ * callbacks, but this module owns every durable phase transition. A 'half'
+ * interrupted restore is transient — the retry-restore action owns the scene and
+ * the transaction must NOT be archived over it. An 'incomplete' restore is
+ * permanent, so the transaction proceeds and archives the stale restore marker as
+ * opaque evidence alongside the selection metadata before the builtin probe.
  */
 export async function recoverRuntimeMetadata(
   options: RecoverRuntimeMetadataOptions,
@@ -1809,9 +1780,9 @@ export async function recoverRuntimeMetadata(
   assertSafeVersion(options.builtinVersion)
   const initial = detectRuntimeMetadataHealth(options.baseDir, options.shellVersion)
   if (initial.recovery.kind === 'corrupt') throw new Error(initial.recovery.error)
-  // `selection-corrupt` includes the semantic-mismatch classifications (a
-  // stuck restore, an invalidated override, a journal/pending disagreement) —
-  // those states have no corrupt FILE but still need the archiving escape.
+  // `selection-corrupt` includes semantic-mismatch states (stuck restore, invalidated
+  // override, journal/pending disagreement) that have no corrupt file but still need
+  // the archiving escape.
   if (initial.recovery.kind === 'missing' && initial.status !== 'selection-corrupt') {
     return { status: 'not-needed', phase: 'not-needed', record: null, restoreOutcome: 'none', error: null }
   }

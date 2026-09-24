@@ -1,17 +1,13 @@
 /**
  * Cell dispatch of a bridged slot ledger (keyed + list), mirroring the official
- * outlet's dispatch branches (dsh-client-ui-renderer/src/client/scoped-slots.tsx
- * `renderOutletContent`).
+ * outlet's dispatch branches (scoped-slots.tsx `renderOutletContent`).
  *
- * The distinction this module owns is the one the official outlet makes between
- * the RAW ledger (`SlotsService.entries`: every live registration, losers and
- * abdicated entries included) and the shadowing winners per cell
- * (`entriesOfSlot`). A cell whose registrations all abdicated (every candidate
- * crashed) has no winner but is still OCCUPIED — the official outlet renders an
- * addressable `<div data-slot-error="<key>">` there instead of the owner's
- * natural-empty fallback, so a broken registrant can never pass for "the owner
- * declared nothing". Both branches are pure functions of the two ledger views,
- * so the upstream contract is pinned by plain unit tests.
+ * The distinction this module owns is between the RAW ledger (every live
+ * registration, losers and abdicated entries included) and the shadowing winners per
+ * cell. A cell whose registrations all abdicated has no winner but is still OCCUPIED —
+ * the official outlet renders an addressable `<div data-slot-error>` there instead of
+ * the owner's natural-empty fallback, so a broken registrant can never pass for "the
+ * owner declared nothing". Both branches are pure functions of the two ledger views.
  */
 
 /** One registered entry as these projections read it (the registry's public read face). */
@@ -20,17 +16,14 @@ export interface DispatchEntry {
 }
 
 /**
- * Keyed dispatch outcome: the registered entry for the requested key, an
- * addressable dead cell (the key is occupied but every candidate abdicated), or
- * the owner's fallback (the key was never registered here).
+ * Keyed dispatch outcome: the registered entry for the requested key, an addressable
+ * dead cell (occupied but every candidate abdicated), or the owner's fallback (never
+ * registered).
  */
 export type KeyedCell<E> = { kind: 'entry'; entry: E } | { kind: 'dead' } | { kind: 'fallback' }
 
 /**
  * Dispatch one keyed cell.
- * @param all - the raw ledger view (`entries`).
- * @param winners - the shadowing winners (`entriesOfSlot`).
- * @param entryKey - the key the owner asked for.
  * @returns the winning entry, or the occupied-but-absent / never-registered outcome.
  */
 export function dispatchKeyedCell<E extends DispatchEntry>(
@@ -52,13 +45,9 @@ export interface ListCell<E> {
 }
 
 /**
- * Project one list slot's cells into display rows: winners first, then a dry
- * row for every occupied id whose winners all abdicated (the official outlet's
- * addressable crash face), refined by `order`, then filtered by `only`.
- * @param all - the raw ledger view (`entries`).
- * @param winners - the shadowing winners (`entriesOfSlot`).
- * @param only - the owner's id filter (`opts.only`), when given.
- * @returns the rows to render, in order.
+ * Project one list slot's cells into display rows: winners first, then a dry row for
+ * every occupied id whose winners all abdicated (the official addressable crash
+ * face), refined by `order`, then filtered by `only`.
  */
 export function dispatchListCells<E extends DispatchEntry>(
   all: readonly E[],

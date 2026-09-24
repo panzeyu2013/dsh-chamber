@@ -5,13 +5,11 @@ export type GatewayUrlResult =
   | { ok: false; error: GatewayUrlError }
 
 /**
- * Parse the user-facing gateway URL into the existing non-secret registry
- * shape (`host` + `remotePort`) plus the explicit scheme (design 17 §9.1:
- * `http://` is an explicit user decision, never pre-blocked — §13.1).
- * A credential-free `http://` or `https://` origin is accepted; ports default
- * https→443 / http→80; paths/query/fragments must never be silently
- * discarded. The `'https'` error code is retained for existing copy/callers but
- * is not produced (http is accepted) — the form never triggers it.
+ * Parse the user-facing gateway URL into the non-secret registry shape (`host` + `remotePort`) plus
+ * the explicit scheme: a credential-free `http://` or `https://` origin is accepted (http is an
+ * explicit user decision, never pre-blocked); ports default https→443 / http→80; paths/query/
+ * fragments must never be silently discarded. The `'https'` error code is retained for existing
+ * copy/callers but is not produced (http is accepted).
  */
 export function parseGatewayUrl(raw: string): GatewayUrlResult {
   const value = raw.trim()
@@ -39,9 +37,8 @@ export function parseGatewayUrl(raw: string): GatewayUrlResult {
   }
 }
 
-/** Renderer display projection; no secret is involved. `insecureHttp` picks
- * the http:// scheme (design 17 §9.1 — the honest 明文 display stays visible
- * after configuring, §13.1). */
+/** Renderer display projection; no secret is involved. `insecureHttp` picks the http:// scheme
+ *  (the honest 明文 display stays visible after configuring). */
 export function formatGatewayUrl(host: string, port: number, insecureHttp: boolean): string {
   const scheme = insecureHttp ? 'http' : 'https'
   const defaultPort = insecureHttp ? 80 : 443

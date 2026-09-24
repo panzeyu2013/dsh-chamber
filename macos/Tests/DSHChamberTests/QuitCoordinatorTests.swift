@@ -5,7 +5,7 @@
 //  关窗动作映射、确认文案（main.ts before-quit 逐字）、退出单飞/确认门
 //  （QuitGate 状态迁移）、退出确认框的 Enter/Esc 按键语义（真实
 //  runModal + 合成按键，无需人工交互，5s 兜底防挂死）。其余 AppKit 执行面
-//  （orderOut / terminate 链）属实机门禁，不在单测范围。
+//  （orderOut / terminate 链）不在单测范围。
 import XCTest
 @testable import DSHChamber
 

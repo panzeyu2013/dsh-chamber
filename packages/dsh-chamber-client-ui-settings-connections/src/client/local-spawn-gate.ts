@@ -1,28 +1,13 @@
 /**
- * Local-card runtime spawn gate (design 18 §3.6 「applying 相位门控」). Pure,
- * node-testable.
+ * Local-card runtime spawn gate. Pure, node-testable.
  *
- * WHY this module exists: the local connection card has TWO entries that spawn
- * the local instance —
- *
- * - 「启动」 (`startLocal`: POST /api/connections), and
- * - 「清理并接管」 (`reclaimLocal`: POST /api/connections/local/reclaim, which
- *   clears this state directory's own stale/orphaned writer records and then
- *   STARTS the local instance — control-plane/src/api.ts:26-28 answers
- *   `{reclaimed, connection, spawned}`).
- *
- * design 18:245-247 requires the gate to cover «「启动」按钮与任何实例 spawn
- * 入口» — EVERY spawn entry — because an instance spawned inside the
- * snapshot→switch→probe window races the 「未决切换前绝不 spawn」 rule; the
- * start button alone would leave 「清理并接管」 able to spawn during the
- * applying window.
- *
- * The AUTHORITATIVE gate itself stays where it is
- * (`@dsh-chamber/dsh-chamber-client-core/runtime-management` `runtimeBlocksLocalStart`: fail closed
- * while the bridge hydrates and for every phase with an unsafe DSH_HOME). This
- * module reads that verdict as an INPUT and owns only the projection the card
- * renders — one verdict for both entries plus the one visible reason row — so
- * the two entries cannot drift apart.
+ * The local card has TWO entries that spawn the local instance: 「启动」 (POST /api/connections)
+ * and 「清理并接管」 (POST /api/connections/local/reclaim, which clears this state directory's own
+ * stale/orphaned writer records and then STARTS the instance). The gate must cover EVERY spawn
+ * entry — an instance spawned inside the snapshot→switch→probe window races the 「未决切换前绝不
+ * spawn」 rule — so this module reads the AUTHORITATIVE verdict (`runtimeBlocksLocalStart` in the
+ * client-core runtime-management face) as an INPUT and owns only the projection the card renders:
+ * one verdict for both entries plus the one visible reason row, so the two cannot drift apart.
  */
 import type { SettingsConnectionsKey } from '../locales.ts'
 
@@ -39,8 +24,8 @@ export interface LocalSpawnGateFacts {
 }
 
 /**
- * One verdict for every local-card spawn entry: whether the entries are gated,
- * and the reason row the card renders while they are.
+ * One verdict for every local-card spawn entry: whether the entries are gated, and the reason row
+ * the card renders while they are.
  */
 export interface LocalSpawnGate {
   /** True while NO spawn entry (start or reclaim) may run. */
@@ -54,14 +39,10 @@ export interface LocalSpawnGate {
 /**
  * Project the runtime gate for the local card.
  *
- * Copy precedence: hydration → applying → every remaining gate reason. The
- * last branch is the point of this projection: `runtimeBlocksLocalStart` also
- * blocks on `canRetryRestore` and a half/incomplete restore, which would
- * otherwise disable the start button WITHOUT rendering any reason row — a
- * gated entry with no visible cause. Every blocked verdict therefore names
- * itself.
- *
- * @param facts - the card's runtime facts.
+ * Copy precedence: hydration → applying → every remaining gate reason. The last branch is the
+ * point of this projection: the authoritative verdict also blocks on `canRetryRestore` and a
+ * half/incomplete restore, which would otherwise disable the start button WITHOUT any reason
+ * row — every blocked verdict therefore names itself.
  * @returns the verdict: `blocked` plus at most one reason row.
  */
 export function localSpawnGate(facts: LocalSpawnGateFacts): LocalSpawnGate {

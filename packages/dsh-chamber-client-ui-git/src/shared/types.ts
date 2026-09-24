@@ -45,8 +45,7 @@ export interface GitWorktreeInfo {
   locked: boolean
   status: 'ready' | 'missing' | 'invalid' | 'not-a-repo'
   headState: 'branch' | 'detached' | 'unborn'
-  /** Local-ref upstream facts from the status branch header; null/0 when
-   *  there is no upstream or the host is older. */
+  /** Local-ref upstream facts from the status branch header; null/0 when absent or on an older host. */
   upstream: string | null
   ahead: number
   behind: number
@@ -54,11 +53,9 @@ export interface GitWorktreeInfo {
   workspaceId: string | null
   sessionIds: string[]
   runningSessionIds: string[]
-  /** The running sessions that actually BLOCK a removal: every
-   *  running session EXCEPT the INERT ones (archived, or under an archived
-   *  ancestor). ABSENT on an older host — callers then fall back to
-   *  `runningSessionIds`, which stays conservative (blocks on any running
-   *  session). */
+  /** Running sessions that actually BLOCK a removal: every running session
+   *  EXCEPT the INERT ones (archived, or under an archived ancestor). ABSENT on an
+   *  older host — callers fall back to `runningSessionIds` (conservative). */
   blockingRunningSessionIds?: string[]
 }
 
@@ -68,8 +65,7 @@ export interface GitRepoTopology {
   commonDir: string
   mainPath: string
   worktrees: GitWorktreeInfo[]
-  /** Local branch names for the existing-branch picker (host `show-ref
-   *  --heads`); empty when the host is older or the read failed. */
+  /** Local branch names for the existing-branch picker; empty when the host is older or the read failed. */
   branches: string[]
 }
 
@@ -174,9 +170,7 @@ export type GitRecovery =
       /** Whether the original create committed a session (the dialog creates
        *  worktrees WITHOUT sessions; a retry must not then open one). */
       createSession: boolean
-      /** The main-checkout workspace the new worktree should be positioned
-       *  after (best-effort `insertWorkspaceBefore`); retained across the
-       *  git-create recovery so a replay re-runs the positioning. */
+      /** The main-checkout workspace to position the new worktree after (best-effort replay). */
       sourceWorkspaceId?: string
     }
   | {
@@ -231,9 +225,8 @@ export type GitRecovery =
       message: string
       /** Optional local branch to delete after the worktree removal. */
       deleteBranch?: string
-      /** Original user authorization to discard uncommitted state — the
-       *  replay input MUST be byte-identical to the original (the host
-       *  fingerprints it), so a force removal retry re-sends it. */
+      /** Original authorization to discard uncommitted state — the replay input MUST
+       *  be byte-identical (the host fingerprints it), so a force retry re-sends it. */
       discardChanges?: boolean
     }
   | {
@@ -249,9 +242,8 @@ export type GitRecovery =
       }
       path: string
       message: string
-      /** The original removal's optional branch deletion — the replay input
-       *  MUST match the original byte-for-byte (host fingerprints it), or
-       *  recovery is permanently stuck. */
+      /** The original removal's branch deletion — the replay input MUST match the
+       *  original byte-for-byte (host fingerprints it), or recovery is stuck. */
       deleteBranch?: string
       /** Same byte-identity requirement for a force removal (design 08 §5.3
        *  amendment): the terminal replay re-sends the original flag. */
@@ -266,8 +258,7 @@ export interface GitSourceState {
   sourceError?: GitSourceError
   actionError?: string
   /** The failure code behind {@link GitSourceState.actionError}: the source-level
-   *  strip localizes it (shared/action-error.ts); absent on an unmapped/plain
-   *  failure, whose English message is then shown. */
+   *  strip localizes it; absent on an unmapped/plain failure (English message shown). */
   actionErrorCode?: string
   busy?: GitBusyState
   recovery?: GitRecovery

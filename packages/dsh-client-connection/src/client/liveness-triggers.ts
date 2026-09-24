@@ -1,35 +1,10 @@
 /**
- * chamber patch (design 14 D4):
- * window/document liveness triggers that force an immediate connection
- * reconnect.
- *
- * ## Why
- *
- * The push carrier (currently the api-gateway `/api/remote.mux` WebSocket)
- * has no client-side
- * heartbeat: after an OS sleep/wake or a network change the socket can
- * silently die (half-open TCP, flushed loopback state) WITHOUT ever firing
- * close/error — the generation loop then stays "connected" forever while
- * receiving nothing. The session UI freezes on its last known state (a stuck
- * "Deep diving..." row) although the backend keeps processing and the message
- * POST (a fresh HTTP connection) succeeds. A reconnect is the recovery: it
- * aborts the current generation immediately, the loop re-runs the readiness
- * handshake, the host replays baselines and the runtime re-syncs session state
- * (the stuck running bit converges).
- *
- * The chamber shell already reconnects on OS wake (`dsh-chamber:system-resume`,
- * design 14 D4). This module adds the fallbacks that cover wake/network cases
- * where that event is missed or never fires:
- *  - `online` — the network (e.g. Wi-Fi re-association after wake) returned;
- *  - the document becoming visible again after a hidden span of at least
- *    `hiddenReconnectThresholdMs` — covers hide-to-tray / long-backgrounded
- *    recovery (short alt-tabs never reconnect).
- *
- * All triggers share one `reconnect` and are gated on the browser's network
- * state (a reconnect while offline is pointless — the controller's own
- * `setNetworkAvailable` suspension covers that). Upstream `reconnect()` is
- * idempotent and aborts the in-flight generation in place, so overlapping
- * triggers are harmless.
+ * chamber patch: window/document liveness triggers that force an immediate
+ * connection reconnect. The push carrier has no heartbeat, so after OS
+ * sleep/wake or a network change the socket can silently die (half-open)
+ * without firing close/error and the loop stays "connected" forever. Triggers:
+ * `online` and a visible transition after a hidden span ≥ the threshold; all
+ * are gated on browser network state.
  */
 
 export interface LivenessWindow {
@@ -44,72 +19,36 @@ export interface LivenessDocument {
 }
 
 export interface LivenessTriggerOptions {
-  /** The shared reconnect (the connection controller's native `reconnect()`). */
   restart: () => void
-  /** Window events that force an immediate reconnect (system-resume, online). */
   windowEvents?: readonly string[]
-  /** A hidden span at least this long forces a reconnect when the page becomes visible again. */
   hiddenReconnectThresholdMs?: number
-  /**
-   * Minimum gap between reconnects: overlapping triggers (resume + online on
-   * one wake, or `online` flapping) must not churn the loop in a burst.
-   * Defaults to {@link DEFAULT_MIN_RESTART_INTERVAL_MS} — the pump's own
-   * slowest reconnect step — so ambient bursts never reconnect faster than the
-   * loop's native retry cadence could.
-   */
+  /** Minimum gap between reconnects; overlapping/flapping triggers must not churn the loop. */
   minRestartIntervalMs?: number
-  /**
-   * Browser network gate: a trigger is ignored while offline (the controller's
-   * own `setNetworkAvailable(false)` suspension already covers that state, and
-   * a reconnect would only abort the generation for nothing). Defaults to
-   * `navigator.onLine`; `undefined` (non-browser) counts as online.
-   */
+  /** Browser network gate: offline triggers are ignored (the controller already
+   *  suspends). Defaults to `navigator.onLine`; undefined counts as online. */
   isOnline?: () => boolean
   /**
-   * Window events that BYPASS {@link isOnline}: an OS
-   * wake is the one moment where the browser's offline flag is least
-   * trustworthy — a page frozen across a suspend/resume can miss the
-   * `online` event entirely and keep reporting `offline` while the link is
-   * back, which would leave the loop parked in the controller's offline
-   * suspension with no other chamber layer able to wake it (the controller's
-   * `reconnect()` sets `immediateRetry`, which skips the suspension branch
-   * and forces exactly one bounded attempt; a genuinely offline host fails
-   * that attempt fast and re-suspends). Keep this list to wake-class events
-   * only — an `online`/visibility trigger gains nothing from forcing an
-   * attempt while the browser says the link is down.
+   * Window events that BYPASS `isOnline`: a page frozen across suspend/resume can
+   * miss `online` and report offline while the link is back; `reconnect()` skips
+   * the suspension branch and forces one bounded attempt. Wake-class events only.
    */
   alwaysFireEvents?: readonly string[]
-  /** Injectable clock (tests). */
   now?: () => number
 }
 
 export const DEFAULT_HIDDEN_RECONNECT_THRESHOLD_MS = 30_000
-// Deliberate divergence note: OpenChamber reconnects on EVERY visible
-// transition, but a dsh reconnect re-baselines every open session
-// (conversation rebuild), so short alt-tabs must not churn the loop. 30s is
-// the shortest plausible OS suspend/hide-to-tray span: any hidden interval
-// shorter than that is an alt-tab, longer is a real sleep/background that
-// warrants a fresh connection. This is the one heuristic without an
-// industry-standard anchor; the value is tunable via
-// `hiddenReconnectThresholdMs`.
-/**
- * Default minimum gap between liveness reconnects. Equals the recovery-config
- * schema default `backoffMaxMs` (10_000, see `../recovery-config.ts`) — the
- * pump's own slowest retry step — so a trigger burst can never churn the loop
- * faster than its native backoff cadence would.
- */
+// Unlike upstream, a reconnect re-baselines every open session, so short
+// alt-tabs must not churn the loop: 30 s is the shortest real suspend/hide span.
+/** Default minimum gap between liveness reconnects (= recovery-config `backoffMaxMs` 10_000). */
 export const DEFAULT_MIN_RESTART_INTERVAL_MS = 10_000
 
-/** Browser network state, `undefined`/absent navigator counts as online. */
+
 function browserIsOnline(): boolean {
   const navigator_ = (globalThis as { navigator?: { onLine?: boolean } }).navigator
   return navigator_?.onLine !== false
 }
 
-/**
- * Attach the liveness triggers. Returns a detach function (idempotent).
- * `win`/`doc` may be undefined in non-browser contexts — the no-op result.
- */
+/** Attach the triggers; returns an idempotent detach (no-op without win/doc). */
 export function attachLivenessTriggers(
   win: LivenessWindow | undefined,
   doc: LivenessDocument | undefined,
@@ -121,10 +60,7 @@ export function attachLivenessTriggers(
   const isOnline = options.isOnline ?? browserIsOnline
   const alwaysFire = new Set(options.alwaysFireEvents ?? [])
   const now = options.now ?? Date.now
-  // De-dup overlapping triggers (system-resume + online on one wake, `online`
-  // flapping): a reconnect more often than every minRestartInterval is never
-  // useful — each reconnect re-runs the handshake and re-syncs every open
-  // session, so bursts must collapse into one.
+  // De-dup overlapping triggers: each reconnect re-runs the handshake and re-syncs every session.
   let lastRestart = Number.NEGATIVE_INFINITY
   const fireRestart = (event?: string): void => {
     if (event === undefined || !alwaysFire.has(event)) {
@@ -151,11 +87,7 @@ export function attachLivenessTriggers(
         hiddenSince = now()
         return
       }
-      // Visible again: reconnect only after a long hidden span (sleep,
-      // hide-to-tray, backgrounded) — a short alt-tab must not churn the loop.
-      // The hidden clock clears on ANY visible transition, so a stray visible
-      // event (impossible in a real browser without a preceding hide) can
-      // never trigger a late restart.
+      // Visible again: reconnect only after a long hidden span; a short alt-tab must not churn the loop.
       if (hiddenSince !== null) {
         const hiddenMs = now() - hiddenSince
         hiddenSince = null

@@ -1,24 +1,16 @@
 /**
- * Settings nav projection over a live `settings.section` ledger (design 15 v1
- * flat form).
+ * Settings nav projection over a live `settings.section` ledger.
  *
- * The ledger is the SELECTED SOURCE's own boot-ctx registry (design 05 §5):
- * official families register there through the chamber
- * composite, third-party plugins through their own bundles, and the chamber's
- * per-instance「dsh 运行时」section through the settings-bridge plugin running
- * in that same ctx. This module only projects those registrations into nav
- * rows — it mounts nothing and owns no lifecycle.
+ * The ledger is the SELECTED SOURCE's own boot-ctx registry: official families,
+ * third-party plugins and the chamber's per-instance「dsh 运行时」section all register
+ * there. This module only projects those registrations into nav rows — it mounts
+ * nothing and owns no lifecycle.
  *
  * A row carries id / order / label and NOTHING else, matching what the official
- * shell renders (`ui-settings-general` SettingsRoot: `navIcon(row.id)` + the
- * label). Upstream carries the registrant stamp for DIAGNOSTICS only and never
+ * shell renders. Upstream carries the registrant stamp for DIAGNOSTICS only and never
  * renders it, so neither do we: a plugin-provided section looks exactly like an
- * official one here, as it does in the instance's own frontend.
- *
- * The label fallback is upstream's EXPORTED `resolveSlotLabel`
- * (ui-slots/src/index.ts), the same projection upstream's own ledger→row code
- * uses (ui-settings-general/src/client/index.ts). This module only projects; it
- * mounts nothing and owns no lifecycle.
+ * official one. The label fallback is upstream's EXPORTED `resolveSlotLabel`, the same
+ * projection upstream's own ledger→row code uses.
  */
 import { resolveSlotLabel } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SectionNavRow } from './nav-active.ts'
@@ -32,7 +24,6 @@ export interface SectionLedger {
 
 /**
  * Project one source's `settings.section` ledger into ordered nav rows.
- * @param slots - that source's slot registry (read face).
  * @returns the nav rows, ledger order first then `order` (stable).
  */
 export function sectionRows(slots: SectionLedger): SectionNavRow[] {

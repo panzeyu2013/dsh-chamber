@@ -1,26 +1,10 @@
 /**
- * React-free decision rules behind the chamber version-tolerance seams
- * (design 09 §3.3): the boot kernel's extra-row degrade (boot.ts
- * assertEntriesActive / runPluginBoot). The shell does not install the slot
- * renderer (the composite-covered ui-renderer row does), so there is no
- * renderer-install adoption rule to apply.
- *
- * Why a separate module: boot.ts cannot load under plain
- * node (DOM), but the tolerance POLICY is the load-bearing contract — so the
- * rules live here, fully self-contained
- * (zero runtime imports), and are unit-tested under plain node by
- * `packages/dsh-client-web/test/boot-tolerance.test.ts` (node:test, run via
- * `pnpm run test:client-web`).
- *
- * The rules are the exact behavior contract (including the
- * failure-report strings); the split into this module is for testability only.
+ * React-free decision rules behind the version-tolerance seams: the boot kernel's
+ * extra-row degrade. Zero runtime imports, so the policy — the load-bearing contract,
+ * including the failure-report strings — is testable under plain node.
  */
 
-/**
- * One loader entry's projected fiber label (the STATE_LABELS face), or
- * undefined when the entry is fiberless (its import failed — Entry._init
- * logged and returned, so no status event ever fires for it).
- */
+/** One entry's projected fiber label, or undefined when fiberless (import failed). */
 export type SweepFiberLabel =
   | 'pending'
   | 'loading'
@@ -31,18 +15,12 @@ export type SweepFiberLabel =
   | undefined
 
 /**
- * Verdict for ONE loader entry in the post-await sweep (assertEntriesActive).
- *
- * - `ok` — the entry is usable. Manifest rows and the app-shell assembly
- *   must be ACTIVE; a tolerated (extra) row is OK whenever it RAN, because
- *   its features being present is all the shell promised.
- * - `degraded` — a tolerated extra row that did not activate: the status
- *   store marks it 'failed', the boot continues. Version skew = absent
- *   features, not corruption (design 09 §3.3) — a backend of a newer/older
- *   dsh may ship rows this shell cannot run.
- * - `fatal` — a manifest row or the app-shell assembly failed to activate:
- *   the boot fails loud, listing the exact reason (the sweep is also the
- *   fail-loud compensation for cordis inject waiting, which has no timeout).
+ * Verdict for ONE loader entry in the post-await sweep. `ok`: usable (manifest rows
+ * and the app-shell assembly must be ACTIVE; a tolerated extra row is OK whenever it
+ * RAN). `degraded`: a tolerated extra row did not activate — version skew, not
+ * corruption; marked 'failed', boot continues. `fatal`: a manifest row or the assembly
+ * failed — fail loud with the reason (the sweep compensates for cordis inject waiting
+ * having no timeout).
  */
 export type SweepVerdict =
   | { kind: 'ok' }
@@ -56,7 +34,6 @@ export function classifySweepEntry(
   pendingMissing: readonly string[],
 ): SweepVerdict {
   if (toleratedIds.has(name)) {
-    // Tolerated row: report, never fail the boot (see SweepVerdict).
     return fiberLabel === 'active' ? { kind: 'ok' } : { kind: 'degraded' }
   }
   if (fiberLabel === undefined) {
@@ -64,8 +41,7 @@ export function classifySweepEntry(
   }
   if (fiberLabel === 'active') return { kind: 'ok' }
   if (fiberLabel === 'pending') {
-    // A required service never arrived — cordis inject waiting has no
-    // timeout, so this sweep is the fail-loud compensation.
+    // A required service never arrived; inject waiting has no timeout, hence this sweep.
     return {
       kind: 'fatal',
       reason: `${name}: pending (waiting for service${pendingMissing.length === 1 ? '' : 's'}: ${pendingMissing.join(', ') || 'unknown'})`,

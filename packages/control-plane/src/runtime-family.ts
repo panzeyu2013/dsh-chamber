@@ -1,20 +1,12 @@
 /**
- * runtime-family.ts — 运行时线族闭包（F）的锚、禁名判据与锁文件名字解析：**leaf 模块**。
+ * runtime-family.ts — 运行时线族闭包的锚、禁名判据与锁文件名字解析：**leaf 模块**。
  *
- * 为什么单独成模块：C11 门禁（scripts/upstream/plugin-protection-gate.mjs，被
- * verify-upstream-touchpoints.mjs 调用）在 CI 的 `pnpm install` **之前**运行
- * （file-only fail-fast）。受保护集合的其余逻辑住在 protected-plugins.ts，那里会引入
- * wire 的 manifest 读算法（`@dsh-chamber/dsh-chamber-wire/plugin-manifest`）——install
- * 前裸 workspace 包名无法解析。锚与名字解析留在本 leaf 面，protected-plugins.ts 从这里
- * import 并原样 re-export，门禁判据与运行时判据因此仍是同一份。
- *
- * 本文件零 import（只用 RegExp），node 24 可直接运行 TS。
+ * 门禁在 `pnpm install` 之前运行，裸 workspace 包名尚不可解析，因此锚与名字解析必须零
+ * import（只用 RegExp，node 24 可直接运行 TS）；protected-plugins.ts 从这里 import 并原样
+ * re-export，门禁判据与运行时判据因此是同一份。
  */
 
-/**
- * 运行时线闭包的**核心锚**：F 少了任何一个都说明取错了来源（源码线/裁剪过的树/外来锁文件）。
- * 与 C11 门禁同源——门禁直接 import 本模块，不再自己抄一份。
- */
+/** 运行时线闭包的核心锚：F 少了任何一个都说明取错了来源（源码线/裁剪过的树/外来锁文件）。 */
 export const RUNTIME_FAMILY_CORE: readonly string[] = [
   '@deepseek-ai/dsh',
   '@deepseek-ai/dsh-base',
@@ -22,8 +14,7 @@ export const RUNTIME_FAMILY_CORE: readonly string[] = [
 ]
 
 /**
- * F 里**绝不允许**出现的包：opt-in 层（`dsh-experimental-*`）与 dev/test 段。出现即说明
- * 用了源码线闭包（design 21 §6.11.1 明确排除）。与 C11 同源。
+ * F 里**绝不允许**出现的包：opt-in 层（`dsh-experimental-*`）与 dev/test 段。
  */
 export const RUNTIME_FAMILY_FORBIDDEN: readonly { pattern: RegExp; label: string; why: string }[] = [
   {

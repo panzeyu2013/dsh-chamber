@@ -1,47 +1,38 @@
 /**
  * Canonical registry-kind ↔ chamber source-id mapping.
  *
- * Registry/status IPC keys stay raw (`id`); every browser-facing N-ctx and
- * reverse-proxy key is `<kind>-<id>`. v2 (design 17 §2.1): the canonical
- * source ids are `dsh-<id>` / `gateway-<id>`; `ssh-<id>` remains accepted as
- * the LEGACY spelling of the dsh kind (deep links and older persisted source
- * ids keep working, design 17 §2.2). Keeping the conversion in one pure
- * module prevents a legacy fallback from silently routing a gateway instance
- * through `/api/i/ssh-*`.
+ * Registry/status IPC keys stay raw (`id`); every browser-facing N-ctx and reverse-proxy key is
+ * `<kind>-<id>`: canonical `dsh-<id>` / `gateway-<id>`, with `ssh-<id>` accepted as the LEGACY
+ * spelling of the dsh kind (deep links and older persisted source ids keep working). Keeping the
+ * conversion in one pure module prevents a legacy fallback from silently routing a gateway
+ * instance through `/api/i/ssh-*`.
  */
 
 import type { HealthResponse } from './api.ts'
 import type { SshStatusProjection, TransportKind } from './global.d.ts'
 
-/** Canonical source-id prefixes (design 17 §2.1): `dsh-<id>` / `gateway-<id>`. */
+/** Canonical source-id prefixes: `dsh-<id>` / `gateway-<id>`. */
 const SOURCE_PREFIXES = ['dsh-', 'gateway-'] as const
 
-/** `ssh-<id>` — the legacy spelling of the dsh kind (design 17 §2.2): parsed
- *  for deep links and older persisted source ids, never produced for v2
- *  specs. */
+/** `ssh-<id>` — legacy spelling of the dsh kind: parsed for deep links and older persisted ids, never produced for v2 specs. */
 const LEGACY_SSH_PREFIX = 'ssh-'
 
-/** v2 target kinds (design 17 §2.1), mirroring the desktop TARGET_KINDS. */
+/** Target kinds, mirroring the desktop TARGET_KINDS. */
 const TARGET_KINDS = ['dsh', 'gateway'] as const
 
-/** Legacy source-id input remains parseable even though normalized registry
- * specs crossing IPC now use TransportKind (`dsh | gateway`) exclusively. */
+/** Legacy source-id input remains parseable even though normalized IPC specs use TransportKind exclusively. */
 type LegacyTransportKind = 'ssh'
 type KindedInstance = { id: string; kind: TransportKind | LegacyTransportKind }
 
-// Raw source-id grammar (dsh-<id>/gateway-<id>/ssh-<id>): the wire authority
-// is desktop transport-provider.ts INSTANCE_ID_PATTERN (single source of
-// truth per design 17 §2.1 — every provider validates through it);
+// Raw source-id grammar (dsh-<id>/gateway-<id>/ssh-<id>): the wire authority is desktop
+// transport-provider.ts INSTANCE_ID_PATTERN (every provider validates through it);
 // open-in capabilities.ts INSTANCE_ID mirrors the same bytes. Do not drift.
 const RAW_INSTANCE_ID_PATTERN = /^(?!local$)[a-zA-Z0-9_-]{1,64}$/
 
 export function sourceIdForTransport(kind: TransportKind | LegacyTransportKind, rawId: string): string {
-  // v2 (design 17 §2.1): the kind must be a TARGET_KINDS member. The legacy
-  // 'ssh' spelling — accepted only for legacy deep-link/source-id callers —
-  // is the one carve-out: it
-  // produces the legacy `ssh-<id>` source id, which the control plane still
-  // routes as a dsh-kind alias (design 17 §2.2). Anything else is refused
-  // loudly so a future unknown kind can never masquerade as a routable id.
+  // The kind must be a TARGET_KINDS member; the legacy 'ssh' carve-out (legacy deep-link callers)
+  // produces `ssh-<id>`, which the control plane still routes as a dsh-kind alias. Anything else is
+  // refused loudly so a future unknown kind can never masquerade as a routable id.
   if (kind !== 'ssh' && !(TARGET_KINDS as readonly string[]).includes(kind)) {
     throw new Error(`invalid transport kind ${JSON.stringify(kind)}`)
   }
@@ -55,9 +46,8 @@ export function sourceIdForInstance(instance: KindedInstance): string {
   return sourceIdForTransport(instance.kind, instance.id)
 }
 
-/** Raw registry id from a remote source id; null for local/malformed ids.
- *  Recognizes the canonical `dsh-`/`gateway-` prefixes AND the legacy `ssh-`
- *  spelling (design 17 §2.2 — deep links keep working). */
+/** Raw registry id from a remote source id; null for local/malformed. Recognizes the canonical
+ *  `dsh-`/`gateway-` prefixes AND the legacy `ssh-` spelling (deep links keep working). */
 export function rawInstanceIdFromSourceId(sourceId: string): string | null {
   for (const prefix of SOURCE_PREFIXES) {
     if (sourceId.startsWith(prefix)) {
@@ -86,20 +76,16 @@ export function isChamberSourceId(sourceId: string | undefined): boolean {
 }
 
 export function instanceBasePath(sourceId: string): string {
-  // `undefined` is valid only for the chamber boot knob (the vendor default
-  // boot). It is never a routable instance id; keep this runtime guard even
-  // though TypeScript callers already pass `string`.
+  // `undefined` is valid only for the chamber boot knob (vendor default boot), never a routable id;
+  // keep the runtime guard even though TypeScript callers already pass `string`.
   if (typeof sourceId !== 'string' || !isChamberSourceId(sourceId)) {
     throw new Error(`invalid chamber source id ${JSON.stringify(sourceId)}`)
   }
   return `/api/i/${sourceId}`
 }
 
-/**
- * 实例可被聚合轮询：对齐反代契约（03 §3.3）——只有 `ready` 才放行，否则
- * 显式 503。starting/degraded/connecting 期间轮询只会收获 503，故一律按
- * 未连接呈现（分组头 + 相位文本，不轮询、无错误刷屏）。
- */
+/** 实例可被聚合轮询：对齐反代契约——只有 `ready` 才放行，否则显式 503；
+ *  starting/degraded/connecting 期间轮询只会收获 503，故一律按未连接呈现（不轮询、无错误刷屏）。 */
 export function instanceConnected(
   kind: 'local' | TransportKind,
   health: HealthResponse | null,
@@ -111,8 +97,7 @@ export function instanceConnected(
     return status === 'ready'
   }
   const status = remoteStatus[instanceId]
-  // A registry kind switch and its IPC pushes are separate messages. Never
-  // treat a briefly-stale READY projection from the old provider as proof
-  // that the replacement provider is ready.
+  // A registry kind switch and its IPC pushes are separate messages: a briefly-stale READY
+  // projection from the old provider is not proof the replacement provider is ready.
   return status?.kind === kind && status.phase === 'ready'
 }

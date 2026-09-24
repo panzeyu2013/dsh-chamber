@@ -2,8 +2,7 @@
  * One source’s header row of the chamber sidebar ServerSection subtree: the
  * connection dot/spinner, fold toggle, sort menu, add-workspace/search/archive
  * actions, the single per-source source-note live region and the folded
- * open-failure hoist. Cross-cutting shell state comes from
- * useSidebarSection() and the section-local values are props.
+ * open-failure hoist. Shell state comes from useSidebarSection().
  */
 import type { RefObject } from 'react'
 import clsx from 'clsx'
@@ -54,32 +53,24 @@ export function ServerSectionHeader({ server, sourceFolded, search, query, serve
     sortMenuOpen,
     setSortMenuOpen,
   } = useSidebarSection()
-  // 头部是否为可激活入口，以及其
-  // title/aria 文案（托管 dsh 停机时说明原因，而不是"切换到该实例"）。
+  // 可激活入口判定与 title/aria 文案（托管 dsh 停机时说明原因，而不是"切换到该实例"）。
   const headerActivatable = sourceHeaderActivatable(server, chamberInstanceId)
   const headerTitle = sourceHeaderTitle(server, chamberInstanceId, t)
-  // The source-header controls carry the
-  // OFFICIAL Tooltip instead of the borrowed native title= (upstream wraps
-  // the same ViewOptionsMenu trigger in `<Tooltip side="bottom" delayMs={500}>`,
-  // vendor ui-workspace WorkspaceBrowser.tsx:198-203). The sort trigger names
-  // the active mode, so the bubble and the accessible name carry it.
+  // 头部控件用官方 Tooltip（不是借来的原生 title=）；排序触发器带上活动模式，
+  // 气泡与可访问名都承载它。
   const sortModeKey: SidebarKey = viewPrefs.orderBy?.[server.id] === 'updated' ? 'orderBy.updated' : 'orderBy.manual'
   const sortLabel = `${t('action.sort')} · ${t(sortModeKey)}`
-  // 来源级"数据不可信"说明：单一定居 live region（见下方 sourceNote 的渲染与
-  // CSS :empty）。一个来源只应有一个 live region，所以降级
-  // 说明也**并入同一条**，按优先级取一句：托管不可用 > 前端能力受限（boot 缺口）
-  // > 托管瞬态 > 基线未就绪。前两条不互斥（来源可能既停机、壳里又留着上一次挂载
-  // 的缺口事实），故顺序即优先级；缺口事实来自本来源当前挂载的壳，仅在挂载/预热过
-  // 的来源上存在（STATUS 已登记的覆盖边界）。
-  // 内容变化时既有的 live region 才可被 AT 播报（"插入即带内容"不会播报）。
-  // 托管瞬态：必须**按 kind 限定**——本地 /health 的词表同样含 starting/
-  // restarting，只判 phase 会给本地源挂上网关专属文案。
+  // 来源级"数据不可信"说明：单一定居 live region（见 sourceNote 的渲染与 CSS :empty），
+  // 按优先级取一句：托管不可用 > 前端能力受限（boot 缺口）> 托管瞬态 > 基线未就绪；
+  // 前两条不互斥（可能既停机、壳里又留着上次挂载的缺口事实），顺序即优先级；缺口事实
+  // 仅存在于挂载/预热过的来源。内容变化时既有 live region 才可被 AT 播报。
+  // 托管瞬态必须**按 kind 限定**：本地 /health 词表同样含 starting/restarting，
+  // 只判 phase 会给本地源挂上网关专属文案。
   const managedTransient = server.kind === 'gateway'
     && (server.phase === 'starting' || server.phase === 'restarting')
   const bootGapNote = sourceBootGapNote(server, t)
-  // The gap branch is selected by CONSTRUCTION (a boolean), never by comparing
-  // the rendered strings: the note text is dictionary copy and comparing it
-  // would silently mis-tone the line the day two branches share a sentence.
+  // 缺口分支按构造出的布尔选择，绝不比较渲染字符串：文案是词典拷贝，
+  // 两个分支共用句子时比较会静默误判。
   const noteIsBootGap = server.managedRuntimeDown !== true && bootGapNote !== ''
   const sourceNote = server.managedRuntimeDown === true
     ? t('source.managedDown', { state: t(sourceStatusLabelKey(server)) })
@@ -91,8 +82,7 @@ export function ServerSectionHeader({ server, sourceFolded, search, query, serve
         ? t('source.managedStarting', { state: t(sourceStatusLabelKey(server)) })
         : server.connected && server.aggregateReady === true && server.archiveSetKnown !== true
           ? t('source.baselinePending')
-          // 能力一览：最低优先级的一句「会话事实档位」说明。字段缺席时
-          // 桌面侧尚未投影 = 未知，绝不臆造为 full。
+          // 会话事实档位说明（最低优先级）：字段缺席 = 尚未投影 = 未知，绝不臆造为 full。
           : server.sessionFacts === 'degraded'
             ? t('source.factsDegraded')
             : server.sessionFacts === 'legacy'
@@ -100,21 +90,13 @@ export function ServerSectionHeader({ server, sourceFolded, search, query, serve
               : server.sessionFacts === 'disabled'
                 ? t('source.factsDisabled')
                 : ''
-  // 两个门必须分开（下方状态点注释即其判据）：
-  // ①**live region 角色**：任何说明行在场，点就让位（一个来源只应有一个 live
-  //   region——见渲染处的 `role={sourceNote === '' ? 'status' : undefined}`）；
-  // ②**状态词的承载**：只有把 `{state}` 写进句子的说明行才接管 aria-label——
-  //   目前只有 managedDown 与 managedStarting 携带 phase；baselinePending 与
-  //   降级说明（boot 缺口）都**不含** phase，点必须继续用 aria-label 承担它。
-  // 有降级说明的来源不能因此丢掉状态词：`sourceNote !== ''` 判据会让点既无 role
-  // 也无 label，故按"是否携带 phase"取值。
-  // …but "carries the state word" depends on WHICH note won the cascade above: a
-  // gateway source that is transient (starting/restarting) AND degraded renders
-  // the GAP sentence, so the dot must keep its aria-label there — the transient
-  // branch never gets to speak (folded in the gap branch).
+  // 两个门必须分开：① live region 角色——任何说明行在场，状态点就让位（一个来源只应
+  // 有一个 live region）；② 状态词承载——只有把 {state} 写进句子的说明行才接管
+  // aria-label。目前只有 managedDown 与 managedStarting 携带 phase；baselinePending
+  // 与降级说明不含 phase，点必须继续用 aria-label 承担。gateway 瞬态且降级时胜出的
+  // 是缺口句，该分支不说话，点同样保留 aria-label。
   const noteCarriesPhase = server.managedRuntimeDown === true || (managedTransient && !noteIsBootGap)
-  // 每个已挂载壳各有一份侧栏 DOM（同一来源会出现多份）：id 必须按壳限定，
-  // 否则 aria-describedby 可能解析到另一份（隐藏壳）的同名节点。
+  // 每个已挂载壳各有一份侧栏 DOM：id 必须按壳限定，否则 aria-describedby 可能解析到另一份同名节点。
   const sourceNoteId = `chamber-source-note-${chamberInstanceId ?? 'unknown'}-${server.id}`
   return (
     <>
@@ -125,7 +107,7 @@ export function ServerSectionHeader({ server, sourceFolded, search, query, serve
                     headerActivatable && cc.sourceHeaderClickable,
                   )}
                   data-chamber-row={server.id}
-                  // 能力档位的机器可读锚点（验收仪器/诊断读取；用户可见文案见下方 sourceNote 分支）。
+                  // 能力档位的机器可读锚点（用户可见文案见 sourceNote 分支）。
                   data-chamber-facts-mode={server.sessionFacts}
                   // 断连来源仍渲染的只读事实——来源级 stale 标记。
                   data-chamber-stale={server.runtime?.stale === true || undefined}
@@ -133,41 +115,27 @@ export function ServerSectionHeader({ server, sourceFolded, search, query, serve
                   title={headerTitle}
                   role={headerActivatable ? 'button' : undefined}
                   tabIndex={headerActivatable ? 0 : undefined}
-                  // 非交互形态（托管停机）不给 generic 角色加 aria-label（命名对
-                  // generic 无效）——改用 aria-describedby
-                  // 指向下方说明行。
+                  // 非交互形态（托管停机）不给 generic 角色加 aria-label，改用
+                  // aria-describedby 指向说明行。
                   aria-label={headerActivatable ? headerTitle : undefined}
                   aria-describedby={!headerActivatable && sourceNote !== '' ? sourceNoteId : undefined}
-                  // chamber (06 §2.4 — option
-                  // 1): the source header is the drag handle for the
-                  // server-group display-order drag. The same trailing-click
-                  // suppression as the workspace header: a drop ending over
-                  // the header (or its buttons) must not fire a spurious
-                  // activate/toggle/action.
+                  // 来源头部是服务器分组"显示顺序"拖拽的拖柄；与工作区头部同一尾随
+                  // click 抑制：拖拽结束落在头部（或其按钮）上不得误触发激活/切换/动作。
                   draggable
-                  // 来源头部 hover 的意图预热触点。React 的 pointerenter/leave
-                  // 不因指针移入子按钮而 leave（与 RowHoverCard 同款用法），移出
-                  // header 才 leave；真正的"是否值得优先"由 App 端既有纪律裁决。
+                  // 来源头部 hover 的意图预热触点：React 的 pointerenter/leave 不因指针
+                  // 移入子按钮而 leave（与 RowHoverCard 同款），移出 header 才 leave。
                   onPointerEnter={() => { prewarmIntent().enter() }}
                   onPointerLeave={() => { prewarmIntent().leave() }}
                   onPointerDown={(event) => {
-                    // Record whether the press started
-                    // on a header BUTTON. dragstart's target is the drag
-                    // SOURCE (the header itself), not the pressed element, so
-                    // the press target must be captured here, at pointerdown.
+                    // dragstart 的 target 是拖拽源（header 本身）而非按下的元素，
+                    // 故必须在此记录按压是否起于 header 按钮。
                     dragPressOnButtonRef.current = event.target instanceof Element && event.target.closest('button') !== null
                   }}
                   onDragStart={(event) => {
-                    // 拖动来源头部是"整理"而不是"前往"——它消费本次 hover
-                    // 周期，drag 期间不再补发预热意图（机器语义：一次 press）。
+                    // 拖来源头部是"整理"而非"前往"：消费本次 hover 周期，drag 期间不再补发预热意图。
                     prewarmIntent().press()
-                    // A gesture that STARTED on a header
-                    // button (fold / sort / add-workspace / search /
-                    // archive-cleanup manager) aborts the
-                    // drag initiation — buttons are click affordances, a >4px
-                    // micro-drag on the fold toggle must not swallow its click
-                    // (the click then fires normally on release). Dragging
-                    // from the header's non-button area is unaffected.
+                    // 起于 header 按钮的手势中止拖拽发起：按钮是点击设施，折叠钮上
+                    // >4px 的微拖不得吞掉它的 click（release 时正常触发）。
                     if (dragPressOnButtonRef.current) {
                       dragPressOnButtonRef.current = false
                       event.preventDefault()
@@ -181,14 +149,9 @@ export function ServerSectionHeader({ server, sourceFolded, search, query, serve
                     setServerDrag({ sourceId: server.id, over: null })
                   }}
                   onDragEnd={(event) => {
-                    // An ESC-cancelled drag must not persist the last marker —
-                    // dropEffect 'none' means the user explicitly cancelled.
-                    // A NULL dataTransfer at dragend (Safari has done
-                    // this) must also count as cancelled — with `?.` alone,
-                    // undefined !== 'none' would wrongly commit. The section
-                    // onDrop path is unaffected: a real drop commits there
-                    // first, and the serverDropCommitted guard makes this
-                    // no-op.
+                    // ESC 取消的拖拽不得落盘最后的标记：dropEffect 'none' 表示用户明确取消；
+                    // dragend 时 dataTransfer 为 null 同样算取消（只用 `?.` 会让
+                    // undefined !== 'none' 误提交）。真实 drop 已由节段的 onDrop 先行提交。
                     if (serverDrag !== null && serverDrag.over !== null
                       && event.dataTransfer !== null && event.dataTransfer.dropEffect !== 'none') {
                       commitServerDrag(serverDrag, serverDrag.over)
@@ -199,54 +162,38 @@ export function ServerSectionHeader({ server, sourceFolded, search, query, serve
                     window.setTimeout(() => { suppressClickRef.current = false }, 0)
                   }}
                   onClick={() => {
-                    // 点击（明确点开）消费本次 hover 周期——切换本身走既有的
-                    // requestActivateSource → selectView 原路，意图不得代行。
+                    // 点击（明确点开）消费本次 hover 周期；切换仍走 requestActivateSource，意图不得代行。
                     prewarmIntent().press()
                     if (suppressClickRef.current) return
-                    // A remote source's header switches the active N-ctx view
-                    // without opening a session (App layer owns the switch).
-                    // A managed-down gateway is NOT activatable: its boot is
-                    // guaranteed to fail (gateway 503), so the header must not
-                    // promise a switch the App itself refuses to prewarm/harvest
-                    // (the inline note explains why).
+                    // 远程来源头部切换活动 N-ctx 视图，不打开会话（切换归 App 层）。
+                    // 托管停机的 gateway 不可激活：boot 必然 503，头部不得承诺 App
+                    // 自身已拒绝预热/收割的切换（就地说明解释原因）。
                     if (headerActivatable) chamberBridge.requestActivateSource(server.id)
                   }}
                   onKeyDown={(event) => {
                     if (!headerActivatable) return
-                    // Only respond to the header's OWN focus. A keydown
-                    // bubbling from an inner button (fold toggle / sort /
-                    // add-workspace / search) must not be swallowed:
-                    // preventDefault here would cancel the button's native
-                    // Enter/Space activation AND switch the active N-ctx
-                    // view.
+                    // 只响应 header 自身的焦点：来自内部按钮的 keydown 若被处理，
+                    // preventDefault 会同时取消按钮的原生 Enter/Space 激活并切换视图。
                     if (event.target !== event.currentTarget) return
                     if (event.key === 'Enter' || event.key === ' ') {
                       event.preventDefault()
-                      // 键盘激活同样消费本次 hover 周期（与点击同义）。
+                      // 键盘激活同样消费本次 hover 周期。
                       prewarmIntent().press()
                       chamberBridge.requestActivateSource(server.id)
                     }
                   }}
                 >
-                  {/* chamber (06 §2.4): the server-level fold
-                      toggle — a MONITOR glyph at rest (server = machine, NOT
-                      the workspace folder glyph — the shared folder reads as
-                      a workspace and misleads), swapping to the collapse
-                      chevron on header hover/focus (same slot, nothing
-                      shifts). Clicking collapses/expands the source's ENTIRE
-                      workspace list without touching any workspace's own
-                      conversation fold state. stopPropagation keeps the
-                      header's activate click (and the pending-click
-                      discipline) out. */}
+                  {/* 来源级折叠钮：静息用 MONITOR 字形（server = machine；共用文件夹字形
+                      会被读成工作区而误导），hover/focus 换成折叠 chevron（同槽位、不位移）。
+                      点击折叠该来源的整个工作区列表，不触碰任何工作区自身的会话折叠态；
+                      stopPropagation 挡住头部的激活点击（及 pending-click 纪律）。 */}
                   <button
                     ref={foldToggleRef}
                     type="button"
                     className={clsx(cc.sourceFoldToggle, sourceFolded && cc.sourceFoldToggleFolded)}
                     aria-label={sourceFolded ? t('server.expand') : t('server.collapse')}
                     aria-expanded={!sourceFolded}
-                    // Own tooltip — without it the
-                    // header's inherited title ("切换到该实例") would show on
-                    // hover, semantically misleading for a fold toggle.
+                    // 自带 tooltip：否则会继承头部的"切换到该实例"，对折叠钮语义误导。
                     title={sourceFolded ? t('server.expand') : t('server.collapse')}
                     onClick={(event) => {
                       event.stopPropagation()
@@ -259,22 +206,13 @@ export function ServerSectionHeader({ server, sourceFolded, search, query, serve
                     <IconMonitorOutline16 size={15} className={cc.sourceFoldGlyph} />
                   </button>
                   <span className={cc.sourceLabel}>{server.label}</span>
-                  {/* chamber: the source-header plugin diagnostic marker was
-                      REMOVED per user decision: the plugin runtime
-                      diagnostic (states + plugin id + reason) is surfaced ONLY
-                      on the connections page / per-instance plugin dialog
-                      (design 09 §3.5 detail surface) — the sidebar never
-                      renders an exclamation for plugin-graph conditions,
-                      informational or abnormal. */}
-                  {/* chamber: connection status as a dot/spinner — the phase
-                      text is never rendered, only carried on hover/aria. */}
+                  {/* 插件运行诊断只在连接页/每实例插件对话框呈现；侧栏不为插件图条件渲染标记。 */}
+                  {/* 连接状态点/加载圈：phase 文本不渲染，只由 hover/aria 承载。 */}
                   <span
                     className={cc.sourceStatus}
                     title={t(sourceStatusLabelKey(server))}
-                    // 两个门要分开：live region 角色只要有说明行
-                    // 就让位（一个来源一个 live region），但**状态词的承载**只有携带
-                    // phase 的说明行才接管——baselinePending 不含 phase，点必须继续
-                    // 通过 aria-label 承担它。
+                    // 同上的两个门：live region 让位，但只有携带 phase 的说明行
+                    // 才接管状态词。
                     aria-label={noteCarriesPhase ? undefined : t(sourceStatusLabelKey(server))}
                     role={sourceNote === '' ? 'status' : undefined}
                   >
@@ -291,35 +229,24 @@ export function ServerSectionHeader({ server, sourceFolded, search, query, serve
                       />
                     )}
                   </span>
-                  {/* chamber: header actions (sort menu + add-workspace `+` +
-                      per-source search + archive-cleanup manager — design 24 §6)
-                      are hover-revealed like the session rows' actions: at rest the connection status occupies the
-                      right side; hovering the header swaps in the icon cluster
-                      (visibility swap, no reflow). While a search capsule is
-                      open OR the sort menu is open the cluster stays visible
-                      (.sourceActionsVisible) so the icon can collapse/close. */}
+                  {/* 头部动作（排序菜单 + 加工作区 + 来源搜索 + 归档清理）与会话行动作
+                      一样 hover 才显形：静息时右侧是连接状态，悬停换成图标簇（visibility
+                      切换，无重排）。搜索胶囊或排序菜单打开时图标簇常驻
+                      （.sourceActionsVisible），图标才能收起/关闭。 */}
                   <span
                     className={clsx(
                       cc.sourceActions,
                       (search?.expanded === true || sortMenuOpen === server.id) && cc.sourceActionsVisible,
                     )}
                   >
-                    {/* chamber (06 §3.1): per-source
-                        session sort MENU (official ViewOptionsMenu pattern —
-                        replaces the blind manual↔updated cycle). The menu
-                        shows both options with a checkmark on the current one
-                        (selectedIds), so the active order is visible the
-                        moment it opens; the title + aria-label + sortActive
-                        tint carry the current mode at rest (hover-revealed).
-                        Selecting a mode goes through setOrderBy (switch
-                        bookkeeping + override drop). */}
+                    {/* 每来源会话排序菜单（官方 ViewOptionsMenu 形态）：两个选项带当前项
+                        勾选（selectedIds），打开即可见活动排序；静息态由 title + aria-label
+                        + sortActive 着色承载（hover 才显形）。选择走 setOrderBy
+                        （切换记账 + 覆盖丢弃）。 */}
                     {server.connected && (server.aggregateError === undefined || search?.expanded === true) && (
                       <Menu
-                        // Menu density: `compact` (26px rows, 12px type)
-                        // instead of the primitive's `dense` variant that the
-                        // ViewOptionsMenu copies, whose menu rows are taller
-                        // than our own 26px list rows; the radius/background
-                        // stay the official ones the variant ships with.
+                        // Menu 密度用 `compact`（26px 行，12px 字）：原语 `dense`
+                        // 变体的菜单行比侧栏 26px 列表行更高。
                         compact
                         portal
                         align="end"
@@ -327,8 +254,7 @@ export function ServerSectionHeader({ server, sourceFolded, search, query, serve
                         onClose={() => { setSortMenuOpen(null) }}
                         onSelect={(id: string) => {
                           setSortMenuOpen(null)
-                          // 「全部已读」：只把意图发给 App（读水位与落盘在 App 手里），
-                          // 插件不自己写读数——同一份权威，两个载体不重复实现。
+                          // 「全部已读」只把意图发给 App（读水位与落盘归 App）：同一权威，插件不重复实现。
                           if (id === 'mark-all-read') {
                             chamberBridge.requestMarkAllRead(server.id)
                             return
@@ -353,12 +279,9 @@ export function ServerSectionHeader({ server, sourceFolded, search, query, serve
                               onClick={(event) => {
                                 event.stopPropagation()
                                 if (suppressClickRef.current) return
-                                // stopPropagation also stops the NATIVE event, so
-                                // the document-level pending-click listener never
-                                // sees this click — clear the pending here like
-                                // every other row-internal button (else a pending
-                                // survives and a later click on the same session
-                                // spuriously renames).
+                                // stopPropagation 也停掉原生事件，document 级 pending-click
+                                // 监听看不见本次点击，故必须在此 clearPendingClick——
+                                // 否则残留 pending 会让之后同会话的点击误入重命名。
                                 clearPendingClick()
                                 setSortMenuOpen(prev => (prev === server.id ? null : server.id))
                               }}
@@ -382,10 +305,8 @@ export function ServerSectionHeader({ server, sourceFolded, search, query, serve
                             openWorkspaceBrowser(server.id)
                           }}
                         >
-                          {/* chamber (design 05 §2.2): adding a WORKSPACE, not a
-                              session — the official project-add glyph
-                              (IconProjectAddOutline16, vendor ui-primitives
-                              icons/index.tsx), not the generic `+`. */}
+                          {/* 加的是 WORKSPACE 不是会话：用官方 project-add 字形，
+                              不用通用 `+`。 */}
                           <IconProjectAddOutline16 size={14} />
                         </button>
                       </Tooltip>
@@ -403,9 +324,8 @@ export function ServerSectionHeader({ server, sourceFolded, search, query, serve
                             if (suppressClickRef.current) return
                             clearPendingClick()
                             if (search?.expanded === true) {
-                              // Toggle: an open capsule's icon collapses it (empty
-                              // query) or just blurs the input (a non-empty query
-                              // must not silently drop the in-progress filter).
+                              // 开关：空查询折叠胶囊，非空查询只失焦
+                              //（不得静默丢弃进行中的过滤）。
                               if (query === '') {
                                 collapseSearch(server.id)
                               } else {
@@ -421,13 +341,9 @@ export function ServerSectionHeader({ server, sourceFolded, search, query, serve
                         </button>
                       </Tooltip>
                     )}
-                    {/* chamber (design 24 §6): server-row
-                        "archive manager" — same hover-reveal discipline and
-                        gating as the sibling actions; opens the manager
-                        dialog (list + per-row / multi-select delete; whole-set
-                        deletion only via explicit select-all — no standalone
-                        delete-all). All cleanup state lives INSIDE the
-                        dialog. */}
+                    {/* 来源行"归档管理器"：与同类动作同一 hover 显形纪律与门控；打开管理
+                        对话框（列表 + 单行/多选删除；整集删除只经显式全选，没有独立
+                        delete-all）。清理状态全在对话框内。 */}
                     {server.connected && (server.aggregateError === undefined || search?.expanded === true) && (
                       <Tooltip label={t('action.purgeArchived')} side="bottom" delayMs={500}>
                         <button
@@ -447,14 +363,12 @@ export function ServerSectionHeader({ server, sourceFolded, search, query, serve
                     )}
                   </span>
                 </header>
-                {/* 两种"数据不可信"
-                    状态就地说明——避免托管 dsh 停机时只剩"空面板 + 红点"，
-                    以及把 unary 兜底的降级列表当真实列表读。状态词复用既有
-                    `status.*` 文案，不引入新词。 */}
-                {/* 缺口说明是这条 live region 的一个分支；但**活动来源**（本壳就是它的
-                    侧栏）的同一事实已由框架面的 `.boot-gap` 横幅以 role="status" 播报，
-                    再播一次就是同一件事说两遍。故仅对"自己这一行"的缺口说明把区域降为
-                    aria-live="off"（文本仍可被浏览/读屏逐行读到，视觉警示不变）；
+                {/* 两种"数据不可信"状态就地说明——避免托管 dsh 停机时只剩"空面板 +
+                    红点"，也避免把 unary 兜底的降级列表当真实列表读；状态词复用既有
+                    `status.*` 文案。 */}
+                {/* 活动来源（本壳就是它的侧栏）的缺口事实已由框架面 `.boot-gap` 横幅
+                    以 role="status" 播报，同一件事不再播两遍：仅"自己这一行"的缺口说明
+                    降为 aria-live="off"（文本仍可浏览/读屏，视觉警示不变）；
                     其它行的缺口仍要播报——那些来源没有横幅，侧栏是唯一用户面。 */}
                 <div
                   id={sourceNoteId}
@@ -464,10 +378,8 @@ export function ServerSectionHeader({ server, sourceFolded, search, query, serve
                 >
                   {sourceNote}
                 </div>
-                {/* chamber (打开失败可见性): with the source folded no session
-                    row exists on screen (the fold gate hides the whole list),
-                    so open failures hoist under the header — the header is
-                    the one part that stays rendered. */}
+                {/* 来源折叠时屏幕上没有会话行（折叠门藏掉整个列表），打开失败上提到
+                    header 之下——header 是唯一保持渲染的部分。 */}
                 {sourceFolded && serverOpenFailures.map(failure => (
                   <div key={failure.sessionId} className={cc.rowError} role="alert">{failure.message}</div>
                 ))}

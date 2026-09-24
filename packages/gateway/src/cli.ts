@@ -1,14 +1,8 @@
 #!/usr/bin/env node
 /**
- * dsh-chamber gateway CLI (design 17 §3): the server-side access
- * shape's entry point. Mirrors the control-plane standalone.ts arg-parsing
- * style (strict flags, `--key value` / `--key=value`, exit 2 on config error).
- *
- * Usage:
- *   gateway serve [--host 0.0.0.0] [--port 3000]
- *       [--state-dir DIR] [--dsh-path PATH]
- *       [--ui-password PWD] [--api-token TOK] [--cors-origin ORIGIN ...]
- *       [--public-origin URL] [--trusted-proxy IP ...] [--no-warmup] [--no-auth]
+ * dsh-chamber gateway CLI: the server-side access shape's entry point. Mirrors
+ * the control-plane standalone.ts arg-parsing style (strict flags, `--key value`
+ * / `--key=value`, exit 2 on config error). Usage:
  *   gateway auth status [--state-dir DIR]
  *   gateway auth reset-password --new PASSWORD [--state-dir DIR]
  *   gateway auth clear [--state-dir DIR]
@@ -168,8 +162,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     if (arg === '-v' || arg === '--version') { args.version = true; continue }
     if (authMode && !subcommandSeen) {
       if (arg === 'status' || arg === 'reset-password' || arg === 'clear') { args.subcommand = arg; subcommandSeen = true; continue }
-      // Flags may precede the subcommand (same leniency as `serve`); anything
-      // else at the subcommand position is a usage error.
+      // Flags may precede the subcommand; anything else here is a usage error.
       if (!arg.startsWith('-')) throw new UsageError(`unknown auth subcommand: ${arg}`)
     }
     let name = arg
@@ -242,9 +235,8 @@ function createLogger(): Logger {
   }
 }
 
-/** `gateway auth <subcommand>`: offline credential management while the
- * gateway is stopped (auth-cli.ts owns the operations). Usage errors exit 2,
- * runtime failures (lock held by a live gateway / state errors) exit 1. */
+/** `gateway auth <subcommand>`: offline credential management while the gateway
+ * is stopped. Usage errors exit 2, runtime failures exit 1. */
 async function runAuth(args: ParsedArgs, logger: Logger): Promise<number> {
   if (args.subcommand === undefined) {
     logger.error('missing auth subcommand (status | reset-password | clear)')
@@ -292,8 +284,7 @@ async function main(): Promise<number | null> {
   } catch (error) {
     if (error instanceof UsageError) {
       logger.error(error.message)
-      // An auth-mode parse failure gets the auth help; everything else the
-      // serve help (same exit-2 convention).
+      // An auth-mode parse failure gets the auth help, everything else the serve help.
       console.error(argv.some(arg => arg === 'auth') ? AUTH_HELP : HELP)
       return 2
     }
@@ -315,10 +306,8 @@ async function main(): Promise<number | null> {
   if (args.command === 'auth') {
     return await runAuth(args, logger)
   }
-  // design 18 §9.3: the env override is the highest-priority runtime source,
-  // so validate it independently even when --dsh-path supplies a valid
-  // builtin anchor. Otherwise a bad env override would survive CLI validation
-  // and fail only after the gateway begins its startup transaction.
+  // The env override is the highest-priority runtime source, so validate it even
+  // when --dsh-path supplies a valid anchor; otherwise it fails only at startup.
   const envDshPath = process.env.DSH_GATEWAY_DSH_PATH?.trim()
   if (envDshPath !== undefined && envDshPath !== '' && !isDshWorkspace(envDshPath)) {
     logger.error(`dsh workspace has no supported CLI entry: ${envDshPath}`)
@@ -329,10 +318,8 @@ async function main(): Promise<number | null> {
     return 2
   }
   const stateDir = resolveStateRoot({ explicit: args.stateDir, flavorEnv: 'DSH_GATEWAY_STATE' })
-  // design 18 §9.3 anchor semantics: --dsh-path / findDshWorkspace is the
-  // BUILTIN ANCHOR; DSH_GATEWAY_DSH_PATH is the runtime env override (highest
-  // priority at resolve time). Compatibility: an env-only deployment stays
-  // valid — the env path is validated above and doubles as the anchor.
+  // --dsh-path / findDshWorkspace is the BUILTIN ANCHOR; DSH_GATEWAY_DSH_PATH is
+  // the runtime env override (highest priority; an env-only deployment is valid).
   const anchorPath = args.dshPath ?? findDshWorkspace(defaultDshWorkspacePath())
   const dshWorkspacePath = anchorPath ?? (envDshPath !== undefined && envDshPath !== '' ? envDshPath : null)
   if (dshWorkspacePath === null) {
@@ -351,17 +338,13 @@ async function main(): Promise<number | null> {
       trustedProxies: args.trustedProxies.length === 0 ? undefined : args.trustedProxies,
       corsOrigins: args.corsOrigins,
       allowAnonymousExternal: args.allowAnonymousExternal,
-      // `=== true ? true : undefined`: an absent flag must NOT pin the
-      // option to false, or the DSH_GATEWAY_MOBILE_UA_REDIRECT env fallback
-      // in parseGatewayConfig would be unreachable from the CLI (the same
-      // undefined-pass-through pattern every other env-backed option uses).
+      // `=== true ? true : undefined`: an absent flag must NOT pin the option to
+      // false, or the DSH_GATEWAY_MOBILE_UA_REDIRECT env fallback is unreachable.
       mobileUaRedirect: args.mobileUaRedirect === true ? true : undefined,
       mobileEntryPath: args.mobileEntryPath,
-      // Same undefined-pass-through as mobileUaRedirect: the default (ON)
-      // leaves DSH_GATEWAY_WARMUP reachable; --no-warmup pins false.
+      // Same undefined-pass-through: the default leaves DSH_GATEWAY_WARMUP reachable.
       warmup: args.warmup === true ? undefined : false,
-      // Same undefined-pass-through: the default (ON) leaves
-      // DSH_GATEWAY_SESSION_STATE reachable; --no-session-state pins false.
+      // Same undefined-pass-through: the default leaves DSH_GATEWAY_SESSION_STATE reachable.
       sessionState: args.sessionState === true ? undefined : false,
     }, stateDir, dshWorkspacePath)
   } catch (error) {
@@ -379,18 +362,15 @@ async function main(): Promise<number | null> {
     gateway = createGateway({ config, logger })
   } catch (error) {
     // A live writer on this state root is a startup failure (exit 1), never a
-    // configuration error: the message carries the holder pid/flavor and the
-    // explicit escape hatch.
+    // configuration error; the message names the holder and the escape hatch.
     if (error instanceof StateRootLeaseError) {
       logger.error(error.message)
       return 1
     }
     throw error
   }
-  // The effective auth kind AFTER config seeding (design 17 §7.4): a
-  // runtime-managed credential makes `authKind` differ from the deployment
-  // config kind — the boot line must not misreport `none` for an actually
-  // authenticated deployment.
+  // The effective auth kind AFTER config seeding: a runtime-managed credential
+  // differs from the deployment config kind, so the boot line stays honest.
   logger.log(`boot: bind ${config.plane.host}:${config.plane.port} auth=${gateway.authKind}`)
   let exiting = false
   async function shutdown(signal: string, code: number): Promise<void> {
@@ -407,8 +387,7 @@ async function main(): Promise<number | null> {
   process.on('SIGTERM', () => void shutdown('SIGTERM', 0))
   try {
     await gateway.start()
-    // Honest boot line: a blocked runtime startup (swap-attempted
-    // / restore-half / restore-incomplete) keeps the gateway up with the
+    // Honest boot line: a blocked runtime startup keeps the gateway up with the
     // managed dsh STOPPED — never print 'local dsh is ready' in that state.
     if (gateway.connectionState === 'ready' || gateway.connectionState === 'degraded') {
       logger.log('boot: gateway listening; local dsh is ready')

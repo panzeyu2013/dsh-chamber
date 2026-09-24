@@ -1,44 +1,14 @@
 /**
- * 会话待办区（sidebar todo area）— the pinned attention block
- * between the New Session control and the scroll region (wide only; absent on
- * the rail and while empty). Renders the pure derivation
- * deriveTodoAttention over the SAME chamberBridge projection the list rows
- * render, so it can never claim attention the row indicators do not show:
- * completed-but-unread sessions (blue-dot merged state) and sessions waiting
- * for an interaction (approval / plan-review / question).
- *
- * Interaction contract:
- * - Click = the SAME authoritative open path as a session-row click. The open
- *   itself is owned by the SidebarRoot (prop `requestOpen`), which applies
- *   the drag-end trailing-click guard (suppressClickRef) and the
- *   same-session inline-rename guard — a strip click can never fire an
- *   unintended navigation right after a list drag, nor open the session
- *   whose rename form is on screen. The App switches to the target source's
- *   shell if needed, opens the conversation, and — for completed entries —
- *   the App's read-state machine unarms the dot as soon as the session
- *   becomes the active source's current, so the entry disappears with the
- *   projection (authoritative removal; a failed open keeps the entry).
- *   Pending entries disappear only when the interaction is actually resolved
- *   (the official ui-session pending registry clears).
- * - No auto-expand/scroll of the list: the jump is content-level, and the
- *   strip never mutates the shared fold/view prefs.
- * - The session currently being read (this visible shell's source current)
- *   is excluded by derivation — the same single-selection rule as the
- *   current-session highlight.
- *
- * Geometry: cap 3 rows + a「还有 N 项」toggle; the expanded side is BOUNDED
- * (.todoRows internal scroll, ~8 rows) so a weekend backlog can never
- * squeeze the session list to zero or bury the collapse toggle. Expansion
- * state is local and auto-collapses whenever the entry count returns to the
- * cap or below (a regrowth after a lull starts collapsed again).
- *
- * Accepted risk (documented): the whole strip mounts when the first entry
- * arrives and pushes the scroll list down with no ghost grace (in-list state
- * changes never shift layout; this one does). A press in flight across the
- * mount can land its mouseup on a different row — the consequence is only an
- * extra open of a VALID session through the authoritative path (never a
- * destructive or wrong-source action), and the shift is a one-time per
- * attention-cycle event.
+ * 会话待办区（sidebar todo area）— pinned attention block between the New
+ * Session control and the scroll region (wide only; absent on the rail and
+ * while empty). Renders deriveTodoAttention over the SAME chamberBridge
+ * projection the list rows render: completed-but-unread plus pending
+ * interactions (approval / plan-review / question).
+ * 交互契约：click 走与 session-row 相同的权威 open 路径（SidebarRoot 的
+ * requestOpen 施加拖拽尾随 click 与途中 rename 守卫）；条目只随投影移除，
+ * 失败的 open 保留条目；当前阅读的 session 由推导排除。Geometry: cap 3 rows
+ * +「还有 N 项」toggle，展开侧 BOUNDED（.todoRows 内部滚动）不挤压列表。
+ * Accepted risk: mount 移动布局一次，在途按压可能多打开一个有效 session。
  */
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import clsx from 'clsx'
@@ -54,7 +24,6 @@ import { getTodoPrefs, subscribeTodoPrefs } from '@dsh-chamber/dsh-chamber-clien
 import type { SidebarKey } from './locales.ts'
 import cc from './sidebar-chamber.module.css'
 
-/** Visible rows before the「还有 N 项」toggle. */
 const TODO_CAP = 3
 
 /** Translate bound to this plugin's `sidebar` namespace (PropsLocale shape). */
@@ -66,21 +35,16 @@ export function SessionTodoArea({
   requestOpen,
   t,
 }: {
-  /** Display-ordered sources (the projection the shell renders). */
   servers: ChamberServerAggregate[]
   /** The instance id of THIS ctx — the source being viewed when visible. */
   chamberInstanceId: string
-  /**
-   * The guarded authoritative open (SidebarRoot-owned): applies the
-   * drag-end trailing-click suppression and the same-session rename guard,
-   * then chamberBridge.requestOpenSession. Removal is projection-driven —
-   * never optimistic.
-   */
+  /** The guarded authoritative open (SidebarRoot-owned): drag-end trailing
+   *  click + same-session rename guards, then requestOpenSession. Removal is
+   *  projection-driven — never optimistic. */
   requestOpen: (sourceId: string, sessionId: string) => void
   t: TodoTranslate
 }) {
-  // Read-only mirror of the chamber-global sessionTodo settings block
-  // (window.dshChamber.settings push; unhydrated = design defaults, all on).
+  // chamber-global sessionTodo 设置的只读镜像；未注水 = 默认全开。
   const prefs = useSyncExternalStore(subscribeTodoPrefs, getTodoPrefs, getTodoPrefs)
 
   const entries = useMemo(() => {
@@ -99,8 +63,7 @@ export function SessionTodoArea({
 
   const [expanded, setExpanded] = useState(false)
   const overCap = entries.length > TODO_CAP
-  // Auto-collapse whenever the backlog returns to the cap or below — a
-  // regrowth after a lull must start collapsed, not pop back fully expanded.
+  // 计数回到 cap 或以下即折叠：沉寂后重新增长必须重新折叠，而非弹回展开。
   useEffect(() => {
     if (expanded && !overCap) setExpanded(false)
   }, [expanded, overCap])
@@ -111,15 +74,13 @@ export function SessionTodoArea({
     servers.find(server => server.id === sourceId)?.label ?? sourceId
 
   return (
-    // Region name carries the live entry count ({n}) so a screen-reader user
-    // hears it without needing the aria-hidden pill.
+    // 区域名带实时条目数（{n}），屏幕阅读器无需依赖 aria-hidden 的计数 pill。
     <div className={cc.todoArea} role="region" aria-label={t('todo.region.aria', { n: entries.length })}>
       <div className={cc.todoHeader}>
         <span className={cc.todoTitle}>{t('todo.title')}</span>
         <span className={cc.todoCount} aria-hidden="true">{entries.length}</span>
       </div>
-      {/* The expanded backlog scrolls INSIDE this bounded box (never squeezes
-          the session list); the toggle below stays pinned and reachable. */}
+      {/* 展开的积压在盒内滚动，不挤压会话列表；下方切换钮保持固定可达。 */}
       <div className={cc.todoRows}>
         {shown.map(entry => (
           <TodoRow
@@ -145,7 +106,6 @@ export function SessionTodoArea({
   )
 }
 
-/** Status copy key per attention kind — the row indicators' vocabulary. */
 function kindStatusKey(kind: TodoAttentionKind): SidebarKey {
   switch (kind) {
     case 'approval': return 'status.waitingApproval'
@@ -155,10 +115,8 @@ function kindStatusKey(kind: TodoAttentionKind): SidebarKey {
   }
 }
 
-/** Official display label: the entry carries the resolved title, so the
- *  unnamed copy only survives as a defensive fallback for a pre-revision entry
- *  object — a session whose title the host could not read shows its project
- *  directory name, exactly like the session rows. */
+/** Official display label, with the unnamed copy as a defensive fallback for a
+ *  pre-revision entry object (host-unreadable titles show the directory name). */
 function titleOf(entry: TodoAttentionEntry, t: TodoTranslate): string {
   return entry.displayTitle !== undefined && entry.displayTitle !== ''
     ? entry.displayTitle
@@ -184,42 +142,27 @@ function TodoRow({
   const context = entry.workspaceTitle !== undefined
     ? `${status} · ${sourceLabel} · ${entry.workspaceTitle}`
     : `${status} · ${sourceLabel}`
-  // Remote sources carry their derived accent; the local source stays in the
-  // default ink — the source-header identity discipline (shared palette
-  // helper, derive.ts sourceAccentColor).
+  // 远端来源用派生的 accent，本地来源保持默认墨色（source-header 身份纪律）。
   const accent = showSourceDot ? sourceAccentColor(entry.sourceId) : undefined
   const dotStyle = accent === undefined
     ? undefined
     : { backgroundColor: accent, opacity: 1 }
 
-  // Tooltip shows the FULL title first (a truncated row title is otherwise
-  // unrecoverable — the ellipsized span holds it all) plus the state · source
-  // · workspace context; the hover card therefore mirrors a session row's
-  // title + meta hover card.
+  // Tooltip 先给完整标题（截断的行标题否则不可恢复），再接 state·source·workspace。
   const hoverLabel = `${title} · ${context}`
 
-  // Row anatomy: identity LEADING, state TRAILING — the same order a session
-  // row reads in the list (its source group/identity at the left, its state
-  // slot at the row end). The trailing slot reuses the session rows' own
-  // .sessionStateSlot geometry (10px slot, 14px while a pending interaction
-  // shows; the completed dot paints in the same band as the list's completed
-  // dots), so strip and list state marks line up in one column. The leading
-  // 16px source-dot slot occupies the source-header glyph column (and stays
-  // reserved without multiple sources, so the title column never shifts).
-  // Both slots are decorative (aria-hidden) — the button's aria-label carries
-  // state + title + source, so nothing is announced twice (the hover card
-  // itself is not announced: the vendor tooltip has no aria-describedby).
-  // Accepted (documented) a11y gap: unlike the list rows' conditional
-  // role="status", the strip adds no live announcements when entries
-  // appear/disappear (the strip is a pinned projection; live chatter on every
-  // projection change was judged worse — the unread state is still announced
-  // when a strip row is focused).
+  // Row anatomy mirrors a session row: identity LEADING, state TRAILING. The
+  // trailing slot reuses the rows' .sessionStateSlot geometry (10px, 14px while
+  // pending) so strip and list state marks line up; the 16px leading source-dot
+  // slot stays reserved even without multiple sources (title column never
+  // shifts). Both slots are aria-hidden — the button's aria-label carries
+  // state + title + source. Accepted a11y gap: no live announcements on entry
+  // change (pinned projection; only the focused row's unread state announces).
   return (
     <Tooltip label={hoverLabel} delayMs={400}>
       <button
         type="button"
         className={cc.todoRow}
-        // 条目身份与 stale 的机器可读标记，验收直接断言集合。
         data-chamber-todo={`${entry.sourceId}:${entry.sessionId}:${entry.kind}`}
         data-chamber-stale={entry.stale === true || undefined}
         aria-label={t('todo.row.aria', { state: status, title, source: sourceLabel })}
@@ -240,11 +183,8 @@ function TodoRow({
           {entry.kind === 'approval' && <IconWarningOutline16 className={cc.statePendingApproval} />}
           {entry.kind === 'plan-review' && <IconChecklistOutline14 className={cc.statePendingPlan} />}
           {entry.kind === 'question' && <IconQuestionOutline14 className={cc.statePendingQuestion} />}
-          {/* The strip reuses the list rows' state marks,
-              so its completed entry carries the same chamber brand-blue
-              `.stateCompleted` dot as the rows (the official StateDot `done`
-              green is not used: it equals the source header's connection dot
-              tone — see sidebar-chamber.module.css .stateCompleted). */}
+          {/* 复用列表行的状态标记：completed 用 chamber 品牌蓝
+              .stateCompleted（官方的 done 绿与 source header 的连接点同色）。 */}
           {entry.kind === 'completed' && <span className={cc.stateCompleted} />}
         </span>
       </button>

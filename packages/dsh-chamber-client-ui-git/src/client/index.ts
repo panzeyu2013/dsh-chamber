@@ -25,16 +25,14 @@ export const inject = ['slots', 'locale']
 
 export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'dsh-chamber: Git worktree dictionaries')
-  // Every N-ctx plugin instance retains the same module-level coordinator;
-  // its first/last retain owns the one bridge subscription and poll timer.
+  // Every N-ctx plugin instance retains the same module-level coordinator; its first/last retain owns the one bridge subscription and poll timer.
   ctx.effect(() => gitCoordinator.attach(), 'dsh-chamber: Git worktree coordinator')
 
   const t = ctx.locale.bind(NS)
 
-  // Per-workspace occupant (design 08 §3.1): the sidebar renders this seat
-  // once per source (workspaceId '' = source alert strip) and once per
-  // workspace group; the occurrence context arrives through the slot-inject
-  // `useWorkspaceGitContext` hook (factory owned by the sidebar, git-agnostic).
+  // Per-workspace occupant (design 08 §3.1): the sidebar renders this seat once per
+  // source ('' = source alert strip) and once per workspace group; the occurrence
+  // context arrives through the slot-inject hook (factory owned by the sidebar).
   const workspaceInjected = (): SidebarWorkspaceGitInjected => ({ t })
   ctx.slots.inject(GIT_WORKSPACE_SLOT, () => ctx.slots.register({
     name: GIT_WORKSPACE_SLOT,

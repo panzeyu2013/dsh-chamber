@@ -66,7 +66,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     /// 772（外框 800）两侧各偏 ~14pt，先收窄差异而不是单侧对齐；单侧对齐
     /// （原生取 772，或 Electron 开 useContentSize 后两端都取 800）仍未裁决。
     /// 本值只影响**高度**；内容列宽等宽度偏好是 per-flavor 页面存储
-    /// （deviation T-18），不随本值收敛。
+    /// 不随本值收敛。
     private static let windowSize = NSSize(width: 1280, height: 786)
 
     /// 原生壳**可见**产品名（dsh-chamber）：
@@ -294,8 +294,8 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         // 整页（含 position: fixed 层）会被整体平移再弹回。按 CSS Overscroll
         // Behavior 规范，视口越界效果由根元素的 overscroll-behavior 决定，故由
         // 壳以 WKUserScript（documentStart、仅主 frame）注入根规则，只落文档根、
-        // 不给上游滚动容器加 contain（design 25 §5.2；Electron 未同步见
-        // deviations S-50）。与 shim 同段：必须在 WKWebView 构造前生效。
+        // 不给上游滚动容器加 contain（design 25 §5.2；Electron flavor 未同步）。
+        // 与 shim 同段：必须在 WKWebView 构造前生效。
         ShellOverscrollPolicy.install(config: configuration)
         shellLog("[shell] 视口越界策略注入完成（\(ShellOverscrollPolicy.rootOverscrollCSS)）")
 

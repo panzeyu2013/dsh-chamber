@@ -1,102 +1,58 @@
 /**
- * The unified plugin-management MODEL layer (design 21 §6.6; design 21 §3
- * single-model matrix).
+ * The unified plugin-management MODEL layer (design 21 §3 / §6.6): the pure,
+ * UI-free and backend-free core of the model view PluginDialog renders —
+ * intent ordering (remove before add), the SINGLE batch failure policy, apply-result
+ * normalization for both backends, the gateway task projection, the undo derive and
+ * the protected-row / diff-apply boundary.
  *
- * This module is the pure, UI-free and backend-free core of the unified model
- * view PluginDialog renders (§6.6 direction): intent ordering
- * (remove before add), batch failure policy (the SINGLE definition shared by
- * the ssh and gateway flows), apply-result normalization for both backends,
- * the gateway task projection → row model, the v1 undo derive (撤销最近变更,
- * §6.4/§6.8 r2) and the protected-row projection + the diff/apply boundary
- * (§6.11.5).
- *
- * Discipline notes:
- * - PURE + LOCALE-FREE: no runtime imports (the wire faces it names are
- *   type-only), touches no window/ambient surface,
- *   returns no localized copy — plain node can run every function. Phase 5C
- *   owns the zh/en key table; only the doc-only batch-policy sentence keeps an
- *   unlocalized English constant here (§6.6 policy 文案如实呈现; zh wording in
- *   the comment, keyed in 5C).
- * - MIRROR DISCIPLINE: ambient types (src/global.d.ts re-export of the
- *   renderer's global.d.ts) own the WINDOW surface. This module never imports
- *   them — every IPC/wire shape it consumes is declared as a LOCAL structural
- *   twin below, named *Shape, with the authority cited in the comment (the
- *   ipc-surface-mirror test in packages/desktop pins the preload ↔ renderer
- *   sides; these twins pin the renderer → model read).
- * - NO PROTECTION MIRROR (design 21 §6.11.5): the protected set
- *   `P = B₀ ∪ S ∪ F` is derived and projected by the BACKEND — the side that
- *   can compute P (local/gateway = desktop main / gateway server; ssh =
- *   desktop main) — and the renderer only renders `rows[].protected` /
- *   `rows[].role`. This module holds NO isDeniedPluginName / filterDeniedRows
- *   hand mirror of the Node-side predicate; the sole survivor is
- *   `legacyProtectedName`, documented as the fallback policy for an UN-UPGRADED
- *   gateway (§6.11.7), never a mirror of a Node-side function.
+ * Discipline: PURE + LOCALE-FREE (no runtime imports, no window surface, no localized
+ * copy — plain node runs every function). Ambient types stay in src/global.d.ts; every
+ * IPC/wire shape consumed here is a LOCAL structural twin named *Shape with its authority
+ * cited. The protected set P = B₀ ∪ S ∪ F is derived and projected by the BACKEND — this
+ * module holds NO hand mirror of the Node-side predicate; the sole survivor is the
+ * legacyProtectedName fallback for an un-upgraded gateway.
  */
 
-/* ---------------------------------------------------------------------------
- * 1. Legacy protection fallback (design 21 §6.11.7 — version skew only)
- * 旧就地在场的 gateway 不返回 `rows`（§6.11.5 的加性字段），渲染端此时没有
- * 后端投影可消费，只能兜底：官方域（@deepseek-ai/*）与本仓 chamber 域
- * （@dsh-chamber/*）都从可操作行里滤掉——未升级服务端的写面拒绝它们，所以
- * 绝不能给出一个必然被拒的按钮/勾选。这是**对未升级服务端的回退策略**，不是
- * 任何 Node 侧函数的镜像；受保护集合 P 的判定权威在后端
- * `control-plane/src/protected-plugins.ts`，渲染端只消费投影（本回退路径的移除
- * 已登记为 §6.11.8 的偏差）。
- */
+/* ---- 1. Legacy protection fallback (version skew only) ----
+ * 旧 gateway 不返回 `rows`：官方域（@deepseek-ai/*）与本仓 chamber 域（@dsh-chamber/*）
+ * 都从可操作行滤掉——未升级服务端的写面拒绝它们，绝不能给出必然被拒的按钮/勾选。
+ * 这是**对未升级服务端的回退策略**，不是 Node 侧函数镜像；P 的判定权威在后端。 */
 export function legacyProtectedName(name: string): boolean {
   return name.startsWith('@deepseek-ai/') || name.startsWith('@dsh-chamber/')
 }
 
-/* ---------------------------------------------------------------------------
- * 2. Intent model (design 21 §3 matrix row: apply({add[], remove[], defer}))
- * The ordered intent a batch apply submits: removes FIRST, then adds
- * (decision 5 — remove releases the old layer before the new one installs),
- * input order preserved within each group, duplicates stripped (first
- * occurrence wins per group).
- */
+/* ---- 2. Intent model (apply({add[], remove[], defer})) ----
+ * The ordered intent a batch apply submits: removes FIRST, then adds (remove releases the
+ * old layer before the new installs), input order preserved within each group, duplicates
+ * stripped (first occurrence wins). */
 
-/** One registry add: name plus its registry spec (bare name = install
- *  latest; `name@range` = pinned). Materialize rows never ride the batch
- *  add — they submit per-row through the backend materialize verb. */
+/** One registry add: name plus its registry spec (bare = latest; `name@range` = pinned).
+ *  Materialize rows never ride the batch add — they submit per-row through the materialize verb. */
 export interface ModelPluginAdd {
   name: string
   spec: string
 }
 
-/* ---------------------------------------------------------------------------
- * 3. Apply-result normalization (both backends → one outcome)
- * The unified outcome the result surface renders (partial「已完成 n/m」、
- * cancelled、failed copy, §6.6). Per-name attribution: the gateway result
- * names its installed/removed ops; the ssh result reports COUNTS only (see
- * classifySshApplyResult), so its executed arm carries empty name lists and
- * the view attributes per-row outcomes from result.failed against its own
- * submitted rows. The ssh producer's fail-loud ok:true states (verified /
- * ready recheck, plugin-sync.ts applyPlugins ④/⑤) are PRESERVED as markers
- * on the executed summary — the ssh arm renders them loudly today
- * (PluginDialog.tsx) and the unified result surface must keep doing so
- * (ssh 等价 is the refactor's load-bearing wall); the gateway ok:true arm
- * carries no such members.
- */
+/* ---- 3. Apply-result normalization (both backends → one outcome) ----
+ * The unified outcome the result surface renders. Per-name attribution is backend-shaped: the
+ * gateway names its ops; the ssh result reports COUNTS only, so its executed arm carries empty
+ * name lists and the view attributes per-row outcomes from result.failed. The ssh producer's
+ * fail-loud ok:true states (verified / ready recheck) are PRESERVED as markers on the summary. */
 
-/** Local structural twin of the desktop gateway_plugin_apply IPC union
- *  (authority: renderer global.d.ts GatewayPluginApplyIpcResult / desktop
- *  preload.cts; mirror discipline — the window type stays ambient, the pure
- *  module reads its own twin). */
+/** Local structural twin of the desktop gateway_plugin_apply IPC union (authority:
+ *  renderer global.d.ts / desktop preload.cts — the window type stays ambient). */
 export type GatewayApplyShape =
   | { ok: true; cancelled: true }
   | { ok: true; installed: string[]; removed: string[]; restarted: boolean; deferred?: boolean }
   | { ok: false; error: string; partial?: { installed: string[]; removed: string[] } }
 
-/** Local structural twin of the ssh plugin_apply result projection
- *  (authority: renderer global.d.ts PluginApplyResult / desktop preload.cts
- *  SshPluginApplyResult — desktop plugin-sync.ts applyPlugins producer). */
+/** Local structural twin of the ssh plugin_apply result projection (authority:
+ *  renderer global.d.ts PluginApplyResult / desktop plugin-sync.ts applyPlugins). */
 export interface SshApplyResultShape {
   /** Ops that executed successfully (removes + adds). */
   applied: number
-  /** Ops never attempted (refused up front by whitelist/deny/skip policy —
-   *  never a user dismissal: ssh plugin_apply has no cancellation path; the
-   *  v1 producer always reports 0 here — whole-batch refusals surface as
-   *  ok:false, per-item failures land in failed[]). */
+  /** Ops never attempted (refused up front by whitelist/deny/skip policy — never a user
+   *  dismissal: ssh plugin_apply has no cancellation path). */
   skipped: number
   /** Per-item failures (single-item isolation — never blocks the rest). */
   failed: { spec: string; error: string }[]
@@ -107,51 +63,35 @@ export interface SshApplyResultShape {
   readyNote?: string
 }
 
-/** Local structural twin of the ssh plugin_apply IPC union (authority:
- *  renderer global.d.ts DesktopSshSurface.plugin_apply / desktop preload.cts
- *  SshPluginApplyIpcResult — ipc-surface-mirror.test.ts pins the producer
- *  union). NO `{ok:true,cancelled:true}` arm: the ssh apply handler has no
- *  confirmation dialog or picker to dismiss (design 21 §7 — the ssh apply
- *  confirm gap is a registered open item), so the twin carries no cancelled
- *  arm — the gateway twin keeps it (classifyGatewayApplyResult). */
+/** Local structural twin of the ssh plugin_apply IPC union (authority: renderer
+ *  global.d.ts / desktop preload.cts; ipc-surface-mirror.test.ts pins the producer union).
+ *  NO `{ok:true,cancelled:true}` arm: the ssh apply handler has no confirmation dialog or
+ *  picker to dismiss — the gateway twin keeps the cancelled arm. */
 export type SshApplyShape =
   | { ok: true; result: SshApplyResultShape }
   | { ok: false; error: string }
 
-/** What a fully executed batch reports (name attribution is backend-shaped:
- *  the gateway names its ops; the ssh result reports counts only → empty
- *  lists, see classifySshApplyResult). */
+/** What a fully executed batch reports (name attribution is backend-shaped: the gateway
+ *  names its ops; the ssh result reports counts only → empty lists). */
 export interface ApplyExecutedSummary {
   removed: string[]
   installed: string[]
   restarted: boolean
   deferred: boolean
-  /** ssh FAIL-LOUD markers (the ssh producer reports these INSIDE ok:true —
-   *  applyPlugins asserts and re-checks readiness itself, plugin-sync.ts
-   *  ④/⑤). The result surface MUST render any present marker (the ssh arm
-   *  equivalents are pluginsVerifyFailed / pluginsReadyFailed / the readyNote
-   *  verbatim, PluginDialog.tsx) — an executed summary with these
-   *  members absent is the only shape that may render as a clean success.
-   *  The gateway ok:true arm never carries them (its execution failures land
-   *  in the task journal as per-op rows, never inside the apply result).
-   *  Presence-based, mirroring the producer's loud set:
-   *  verified:false = the post-apply package.json assertion failed — loud,
-   *  no rollback; verified:true is omitted (clean).
-   *  ready:false = a restart executed but the bounded readiness recheck
-   *  failed. ready:null + readyNote = a restart executed but readiness was
-   *  NOT re-checked (the instance was not connected before restart) —
-   *  readyNote carries why; a bare ready:null without a note (nothing
-   *  attempted / deferred) is not loud and stays omitted. */
+  /** ssh FAIL-LOUD markers (the producer reports these INSIDE ok:true — it asserts and
+   *  re-checks readiness itself). The result surface MUST render any present marker; an executed
+   *  summary with these absent is the only shape that may render as clean success.
+   *  verified:false = the post-apply package.json assertion failed (loud, no rollback);
+   *  ready:false = restart executed but readiness recheck failed; ready:null + readyNote =
+   *  readiness not re-checked. */
   verified?: false
   ready?: false | null
   readyNote?: string
 }
 
-/** Normalized apply outcome. `cancelled` = the user dismissed the
- *  confirmation (nothing ran). `executed` = the batch ran (per-item failures
- *  included via `partial`); `partial.done/total` = executed ops out of the
- *  attempted batch. `failed` = the batch was refused/loudly failed before
- *  completing; partialDone/partialTotal carry what ran before it. */
+/** Normalized apply outcome. `cancelled` = user dismissed the confirmation (nothing ran);
+ *  `executed` = the batch ran (per-item failures via `partial`); `failed` = refused/loudly failed
+ *  before completing, with partialDone/partialTotal carrying what ran before it. */
 export type ApplyOutcome =
   | { cancelled: true }
   | {
@@ -160,13 +100,10 @@ export type ApplyOutcome =
   }
   | { failed: { error: string; partialDone: number; partialTotal: number } }
 
-/** Classify a gateway_plugin_apply IPC result. An ok:true gateway arm means
- *  the whole batch was accepted (execution failures surface in the task
- *  journal, never inside this result) → executed without partial; the
- *  optional `deferred` member defaults to false. An ok:false arm reports the
- *  partial ops the executor accepted before the failure; `attemptedOps`
- *  (adds + removes submitted) turns that into the honest n/m total — when
- *  omitted, the total degrades to the backend-reported count (n/n). */
+/** Classify a gateway_plugin_apply IPC result. ok:true = the whole batch was accepted
+ *  (execution failures surface in the task journal, never here) → executed without partial;
+ *  optional `deferred` defaults to false. ok:false = the partial ops the executor accepted
+ *  before the failure; `attemptedOps` turns that into the honest n/m total. */
 export function classifyGatewayApplyResult(result: GatewayApplyShape, attemptedOps?: number): ApplyOutcome {
   if (result.ok) {
     if ('cancelled' in result) return { cancelled: true }
@@ -191,26 +128,17 @@ export function classifyGatewayApplyResult(result: GatewayApplyShape, attemptedO
   }
 }
 
-/** Classify a plugin_apply (ssh) IPC result. ok:true with per-item failures
- *  is still an EXECUTED batch (single-item isolation, design 13 §3) with
- *  partial {done: applied, total: applied + failed} — skipped ops were never
- *  attempted and do not count toward the total. The ssh result carries no
- *  per-name success list, so the executed arm's removed/installed stay []
- *  (the view merges result.failed against its own submitted rows). The
- *  producer's fail-loud ok:true states are PRESERVED, never collapsed into a
- *  clean success: verified:false and ready:false/readyNote ride onto the
- *  executed summary as presence-based markers (ApplyExecutedSummary) the
- *  result surface must render. An ok:false arm is a wholesale refusal
- *  (single-flight / invalid input) — nothing of the registry batch ran;
- *  `attemptedOps` supplies the total when the caller wants an n/m frame
- *  (defaults to 0 = render no counts). */
+/** Classify a plugin_apply (ssh) IPC result. ok:true with per-item failures is still an
+ *  EXECUTED batch with partial {done: applied, total: applied + failed} — skipped ops were never
+ *  attempted. The ssh result carries no per-name success list (the view merges result.failed
+ *  against its own rows). The producer's fail-loud ok:true states are preserved as presence-based
+ *  markers. ok:false = a wholesale refusal; `attemptedOps` supplies the total. */
 export function classifySshApplyResult(result: SshApplyShape, attemptedOps?: number): Exclude<ApplyOutcome, { cancelled: true }> {
   if (!result.ok) {
     return { failed: { error: result.error, partialDone: 0, partialTotal: attemptedOps ?? 0 } }
   }
-  // No cancelled arm: plugin_apply has no cancellation path (the ssh apply
-  // confirm gap, design 21 §7) — the only cancelled producer is the gateway
-  // apply, classified by classifyGatewayApplyResult.
+  // No cancelled arm: plugin_apply has no cancellation path — the only cancelled producer
+  // is the gateway apply, classified by classifyGatewayApplyResult.
   const r = result.result
   const partial = r.failed.length > 0
     ? { done: r.applied, total: r.applied + r.failed.length }
@@ -221,10 +149,8 @@ export function classifySshApplyResult(result: SshApplyShape, attemptedOps?: num
     restarted: r.restarted,
     deferred: r.deferred,
   }
-  // Fail-loud markers (plugin-sync.ts applyPlugins ④ assertion + ⑤ ready
-  // recheck): presence mirrors exactly what the ssh modal renders loudly —
-  // verified false, a failed ready recheck (false), or a skipped recheck
-  // with its readyNote. Everything else stays absent (clean).
+  // Fail-loud markers (assertion + ready recheck): presence mirrors exactly what the ssh modal
+  // renders loudly — verified false, a failed ready recheck, or a skipped recheck with its readyNote.
   if (r.verified === false) executed.verified = false
   if (r.ready === false) executed.ready = false
   else if (r.readyNote !== undefined) {
@@ -234,9 +160,8 @@ export function classifySshApplyResult(result: SshApplyShape, attemptedOps?: num
   return partial === undefined ? { executed } : { executed, partial }
 }
 
-/** The n/m progress projection of an outcome: cancelled → null; executed →
- *  its partial (null when nothing was partial — full success); failed → the
- *  backend-reported done/total pair. */
+/** The n/m progress projection: cancelled → null; executed → its partial (null when nothing
+ *  was partial — full success); failed → the backend-reported done/total pair. */
 export function partialCounts(outcome: ApplyOutcome): { done: number; total: number } | null {
   if ('cancelled' in outcome) return null
   if ('failed' in outcome) {
@@ -245,9 +170,8 @@ export function partialCounts(outcome: ApplyOutcome): { done: number; total: num
   return outcome.partial ?? null
 }
 
-/** The n/m prefix for a partial outcome ('Completed 2 of 5: '), empty when
- *  nothing was partially done. Shared by the manage and add surfaces instead
- *  of spelling the interpolation twice. */
+/** The n/m prefix for a partial outcome ('Completed 2 of 5: '), empty when nothing was
+ *  partially done. Shared by the manage and add surfaces. */
 export function partialTextOf(
   counts: { done: number; total: number } | null,
   t: (key: 'partialNofM' | 'partialSep') => string,
@@ -256,26 +180,17 @@ export function partialTextOf(
   return `${t('partialNofM').replace('{done}', String(counts.done)).replace('{total}', String(counts.total))}${t('partialSep')}`
 }
 
-/* ---------------------------------------------------------------------------
- * 4. Batch failure policy — the SINGLE definition (design 21 §6.6)
- * 「失败即停」与逐行隔离的分界，模型层单一定义（zh 措辞 5C 键表落位）：
- * - 提交面 fail-fast：registry/remove 整批一次提交（一次确认）；任一提交/
- *   预检拒绝即停——整批不执行（gateway 提交面 queue_busy/invalid/reserved，
- *   ssh 预检 invalid/single-flight；分类的 failed 整批拒绝臂）；
- * - 进入执行后 ssh 逐行串行隔离（plugin-sync.ts applyPlugins ②）：单行失败
- *   不阻塞后续行、不吞没已执行行——如实 partial（executed+partial 臂）。即
- *   「失败即停」描述提交边界，不描述 ssh 执行期；
- * - materialize 恒逐行隔离（单实体失败不阻塞其余行，与 AGENTS「one failed
- *   entity must not block the rest」一致）。
- * describeBatchPolicy 仅 doc-only（无 key 的英文常句，UI 一律走键）。
- */
+/* ---- 4. Batch failure policy — the SINGLE definition ----
+ * 「失败即停」与逐行隔离的分界，模型层单一定义：
+ * - 提交面 fail-fast：registry/remove 整批一次提交；任一提交/预检拒绝即停，整批不执行；
+ * - 进入执行后 ssh 逐行串行隔离：单行失败不阻塞后续行、不吞没已执行行——如实 partial；
+ * - materialize 恒逐行隔离（单实体失败不阻塞其余行）。
+ * describeBatchPolicy 仅 doc-only（无 key 的英文常句，UI 一律走键）。 */
 
-/** Doc-only policy sentence (unlocalized; 5C key table owns the zh/en copy):
- *  the registry/remove batch submits as one fail-fast unit — a submission or
- *  pre-flight refusal aborts the whole batch — while accepted ssh executions
- *  run serially per-row isolated (executed rows report honestly as partial)
- *  and materialize rows stay isolated per row: a failed row never blocks the
- *  rest. */
+/** Doc-only policy sentence (unlocalized; the key table owns the zh/en copy): the
+ *  registry/remove batch submits as one fail-fast unit, while accepted ssh executions run
+ *  serially per-row isolated (executed rows report honestly as partial) and materialize rows
+ *  stay isolated per row: a failed row never blocks the rest. */
 export const BATCH_POLICY_SENTENCE =
   'The registry/remove batch submits as one unit and fails fast on any refusal (gateway submission surface / ssh pre-flight); accepted ssh executions run serially per-row isolated and report executed rows honestly as partial, and materialize rows stay isolated — a failed row never blocks the rest.'
 
@@ -283,32 +198,24 @@ export function describeBatchPolicy(): string {
   return BATCH_POLICY_SENTENCE
 }
 
-/* ---------------------------------------------------------------------------
- * 5. Gateway task projection → row model (design 21 §6.2/§6.3; GET
- * /chamber/plugins/tasks — read side of the 202 contract)
- * The task endpoint answers {ok:true, tasks: JournalOp[], deferred:
- * DeferredIntent[], busy} (packages/gateway/src/routes.ts 1146-1150):
- * journal ops newest-first (retention-capped) + durable deferred install
- * intents (awaiting a ready edge) + the executor busy flag. The projection
- * maps BOTH arrays into one row model — deferred intents first (they are the
- * future queue, not journal history), then the journal ops in wire order.
- */
+/* ---- 5. Gateway task projection → row model ----
+ * The task endpoint answers {ok:true, tasks: JournalOp[], deferred: DeferredIntent[], busy}:
+ * journal ops newest-first + durable deferred install intents + the executor busy flag. The
+ * projection maps BOTH arrays into one row model — deferred intents first (the future queue,
+ * not journal history), then the journal ops in wire order. */
 
 export type TaskStatus = 'pending' | 'ok' | 'failed' | 'blocked'
 
-/** The journal op kinds the gateway can record (`undo` is the design 21 §6.3
- *  restore op — it carries `undoOf`). */
+/** The journal op kinds the gateway can record (`undo` carries `undoOf`). */
 export type TaskKind = 'install' | 'remove' | 'materialize' | 'undo'
 
 /** One projected row: a journal op or a deferred intent. */
 export interface TaskRow {
-  /** Journal op id; '' for a deferred intent that has no journal op yet (the
-   *  drained op receives its own opId later). */
+  /** Journal op id; '' for a deferred intent that has no journal op yet (the drained op receives its own opId later). */
   opId: string
   kind: TaskKind
   name: string
-  /** Registry spec / materialized path; journaled for install/materialize
-   *  only — null for removes/undo and for unknown specs. */
+  /** Registry spec / materialized path; journaled for install/materialize only — null for removes/undo and unknown specs. */
   spec: string | null
   status: TaskStatus
   error: string | null
@@ -320,25 +227,22 @@ export interface TaskRow {
   deferred: boolean
   /** Deferred-intent id; null for journal-op rows. */
   intentId: string | null
-  /** The op's pre-mutation backup reference (`backups/<op-id>/`), or null.
-   *  This is the undo verb's restoring material: only an op that carries one
-   *  is undoable (design 21 §6.3 preImage semantics). */
+  /** The op's pre-mutation backup reference (`backups/<op-id>/`), or null. Only an op
+   *  carrying one is undoable. */
   preImage: string | null
   /** For `kind: 'undo'` rows: the op whose preImage this undo restored. */
   undoOf: string | null
 }
 
-/** Structural twin of the gateway JournalOp (authority:
- *  packages/gateway/src/plugins-journal.ts) — full fidelity so the projection
- *  cannot drift from the wire. */
+/** Structural twin of the gateway JournalOp (authority: packages/gateway/src/plugins-journal.ts) —
+ *  full fidelity so the projection cannot drift from the wire. */
 export interface GatewayJournalOpShape {
   id: string
   ts: number
   kind: TaskKind
   name: string
   spec?: string
-  /** Reference to the pre-mutation backup dir (backups/<op-id>/) when the
-   *  executor placed one, null otherwise. */
+  /** Reference to the pre-mutation backup dir (`backups/<op-id>/`) when the executor placed one, null otherwise. */
   preImage: string | null
   /** Present only for `kind: 'undo'` ops: the restored op's id. */
   undoOf?: string
@@ -348,9 +252,8 @@ export interface GatewayJournalOpShape {
   restarted?: 'ok' | 'failed' | 'skipped'
 }
 
-/** Structural twin of the gateway DeferredIntent (authority:
- *  packages/gateway/src/plugins-tasks.ts — install/materialize only; remove
- *  is never deferred). */
+/** Structural twin of the gateway DeferredIntent (authority: packages/gateway/src/plugins-tasks.ts —
+ *  install/materialize only; remove is never deferred). */
 export interface GatewayDeferredIntentShape {
   id: string
   ts: number
@@ -360,9 +263,8 @@ export interface GatewayDeferredIntentShape {
   initiator?: string
 }
 
-/** Structural twin of GET /chamber/plugins/tasks 200 body (authority:
- *  packages/gateway/src/routes.ts — {ok:true, ...tasksProjection} where
- *  tasksProjection = PluginTaskTasksProjection). */
+/** Structural twin of GET /chamber/plugins/tasks 200 body (authority: packages/gateway/src/routes.ts —
+ *  {ok:true, ...tasksProjection}). */
 export interface GatewayTasksShape {
   ok: true
   /** Journal ops, newest first (retention-capped). */
@@ -373,9 +275,8 @@ export interface GatewayTasksShape {
   busy: boolean
 }
 
-/** Project the gateway task shape into the row model. Group order contract:
- *  deferred-intent rows first (each pending, deferred:true, intentId set),
- *  then journal-op rows in wire order (newest first). */
+/** Project the gateway task shape into the row model. Group order contract: deferred-intent
+ *  rows first (pending, deferred:true, intentId set), then journal-op rows in wire order. */
 export function projectTasks(shape: GatewayTasksShape): { rows: TaskRow[]; busy: boolean } {
   const rows: TaskRow[] = []
   for (const intent of shape.deferred) {
@@ -413,40 +314,21 @@ export function projectTasks(shape: GatewayTasksShape): { rows: TaskRow[]; busy:
   return { rows, busy: shape.busy }
 }
 
-/* ---------------------------------------------------------------------------
- * 6. Undo derive for 「撤销最近变更」(design 21 §6.4/§6.8 r2) — gateway
- * implementation
- * V1 (UNDO_V1_POLICY = 'ok-only'): only ops that actually took effect are
- * undoable — a failed/blocked op never is (its recovery belongs to the r2-r4
- * 恢复阶梯 flows, driven backend-side from the journal + preImage backups).
- *
- * The gateway undo is 撤销=恢复 (the §6.4 ssh semantics, one model): the
- * backend RESTORES the latest ok op's preImage pair (package.json + lockfile,
- * byte-for-byte), which undoes an install, a materialize and a remove alike —
- * there is no synthesized remove/add action here and no remove-only shortcut.
- * The renderer's only job is to decide WHETHER the affordance is offered and
- * to carry the op identity for projection; the request itself is
- * `POST /chamber/plugins/undo` (id-only, main/backend picks the target from
- * the durable journal).
- *
- * The scan reads only journal-op rows (intentId === null; deferred intents
- * are pending, never executed) in list order and takes the NEWEST op with
- * status 'ok' — rows must be newest-first within the op group, which
- * projectTasks() guarantees. That op must ALSO carry a preImage reference
- * (the restoring material): an ok op with a lost/pruned backup is NOT
- * undoable, and the derive does NOT skip to an older ok op — a wholesale
- * preImage restore would revert the newer change too, so the honest answer is
- * 'no-preimage'. When no ok op exists: a failed/blocked terminal exists →
- * 'only-failed' (attempted, never succeeded); no terminal op at all (empty
- * journal / pending-only) → 'none-executed'. A newer failed/blocked op above
- * the newest ok op does not hide it in v1 (only successful changes are
- * undoable; the failed row owns its own surface). */
+/* ---- 6. Undo derive for 「撤销最近变更」 ----
+ * V1 (UNDO_V1_POLICY = 'ok-only'): only ops that actually took effect are undoable.
+ * The gateway undo is 撤销=恢复: the backend RESTORES the latest ok op's preImage pair
+ * (package.json + lockfile, byte-for-byte), undoing install, materialize and remove alike —
+ * no synthesized remove/add action, no remove-only shortcut. The renderer only decides WHETHER
+ * to offer the affordance; the request is id-only `POST /chamber/plugins/undo`.
+ * The scan reads only journal-op rows (deferred intents are pending) in list order and takes the
+ * NEWEST op with status 'ok'; that op must ALSO carry a preImage (an ok op with a lost/pruned
+ * backup is NOT undoable and the derive does NOT skip to an older ok op — a wholesale restore
+ * would revert the newer change too). No ok op: a failed/blocked terminal → 'only-failed'; no
+ * terminal at all (empty/pending-only journal) → 'none-executed'. */
 export const UNDO_V1_POLICY = 'ok-only' as const
 
-/** The undo the UI can offer: the op whose preImage the backend will restore.
- *  `opId`/name/kind ride the projection for the affordance and its copy;
- *  the request itself carries no id (the backend re-selects the latest
- *  undoable op under its single-flight fence). */
+/** The undo the UI can offer: the op whose preImage the backend will restore. opId/name/kind
+ *  ride the projection for the affordance and its copy; the request carries no id. */
 export interface UndoAction {
   kind: 'restore'
   /** The journal op the backend would restore (the newest ok op). */
@@ -466,8 +348,7 @@ export function undoForLatest(rows: readonly TaskRow[]): UndoLatest {
   const ops = rows.filter(row => row.intentId === null)
   for (const row of ops) {
     if (row.status !== 'ok') continue
-    // The newest ok op: only its own preImage may be restored (no skipping —
-    // see the section comment).
+    // The newest ok op: only its own preImage may be restored (no skipping — see the section comment).
     if (row.preImage === null) return { action: null, reason: 'no-preimage' }
     return { action: { kind: 'restore', opId: row.opId, name: row.name, opKind: row.kind } }
   }
@@ -477,31 +358,18 @@ export function undoForLatest(rows: readonly TaskRow[]): UndoLatest {
     : { action: null, reason: 'none-executed' }
 }
 
-/* ---------------------------------------------------------------------------
- * 7. Protected rows: read-side projection + the diff/apply boundary
- *    (design 21 §6.11.5)
- * 后端三端各投影 `rows: PluginRow[]`（加性字段；`dependencies` 语义不变），
- * 渲染端只消费。本节提供三件事：
- * - projectInstalledRows：已安装列表的行投影。**行集 = profile 的依赖表**：
- *   安装自带组合（B₀）与 chamber 播种物（S）不造行——
- *   chamber 组件有自己的表（探针状态 + 版本 + 手动重推），官方组合是运行时基线。
- *   受保护名若确实出现在依赖表里，仍只读可见（无移除按钮 + 角色徽标）。rows 缺失
- *   （旧 gateway，§6.11.7）时回退到 dependencies 过滤并置 legacy 标记。
- * - actionableDependencies：computePluginDiff 的输入收窄（**硬要求**）。若把
- *   受保护行并进 diff 输入，`missing` 行默认勾选 ⇒ 一次普通第三方对账会把
- *   `@deepseek-ai/dsh-base@…` 当 add 提交，后端整批拒绝（gateway 亦然）。
+/* ---- 7. Protected rows: read-side projection + the diff/apply boundary ----
+ * 后端三端各投影 `rows: PluginRow[]`（加性字段；`dependencies` 语义不变），渲染端只消费。
+ * - projectInstalledRows：已安装列表行投影。行集 = profile 的依赖表——安装自带组合（B₀）
+ *   与 chamber 播种物（S）不造行（chamber 组件有自己的表；官方组合是运行时基线）。受保护名若
+ *   出现在依赖表里仍只读可见。rows 缺失（旧 gateway）时回退到 dependencies 过滤并置 legacy。
+ * - actionableDependencies：computePluginDiff 的输入收窄（硬要求）——受保护行进输入会让
+ *   missing 行默认勾选，普通对账把官方包当 add 提交、后端整批拒绝。
  * - isActionableRow / legacyProtectedName：上面两条共用的行判据。
- *
- * 本模块**不重算保护集合**（`rows[].protected` 是后端判定）。唯一的域名前缀例外是
- * `OFFICIAL_SCOPE_PREFIX` / `sshSyncableDependencies`：那是 ssh **传输能力**过滤
- * （ssh 装面对官方 scope 整批拒绝），不是保护判定（§6.11.5/§6.11.3）。
- */
+ * 本模块不重算保护集合；唯一域名前缀例外是 ssh 传输能力过滤，不是保护判定。 */
 
-/** 行角色（wire 单源的字面量并集；渲染端只渲染，绝不推导）。
- *  一行已安装事实的**唯一声明**在 wire 的 `./plugin-row` 面，这里经
- *  client-core 的浏览器面（`@dsh-chamber/dsh-chamber-client-core/plugin-row`）
- *  只 import/再导出，**不重声明**字段（C14 断言：引用面 + 无本地重声明）。旧名
- *  `PluginRowShape` / `PluginRowRoleShape` 由 import 别名保持，其余模块引用不变。 */
+/** 行角色（wire 单源的字面量并集；渲染端只渲染，绝不推导）。一行已安装事实的唯一声明在
+ *  wire 的 `./plugin-row` 面，这里经 client-core 浏览器面只 import/再导出，不重声明字段。 */
 import type {
   PluginRow as PluginRowShape,
   PluginRowRole as PluginRowRoleShape,
@@ -513,30 +381,22 @@ export interface PluginRowsCarrierShape {
   rows?: readonly PluginRowShape[] | undefined
 }
 
-/** 读清单上的加性行投影；缺失/非数组 → null（调用方走 §6.11.7 回退路径）。
- *  返回浅拷贝：调用方可以自由遍历/排序而不动 IPC 载荷。 */
+/** 读清单上的加性行投影；缺失/非数组 → null（调用方走 legacy 回退路径）。返回浅拷贝，调用方可自由排序。 */
 export function pluginRowsOf(manifest: PluginRowsCarrierShape | null | undefined): PluginRowShape[] | null {
   if (manifest === null || manifest === undefined) return null
   const rows = manifest.rows
   return Array.isArray(rows) ? [...rows] : null
 }
 
-/** diff/apply 边界的行判据（§6.11.5 硬要求）：只要后端判它**非受保护**，它就能进
- *  对账面——`layer`（用户自己加的层）同样是用户内容，必须可同步；被排除的是组合/
- *  播种/线族/受保护行（`protected` 已由后端算好）。
- *
- *  注意角色**不**参与判据：按 `role ∈ {third-party, materialized}` 收窄会把用户
- *  后加的层从对账视图里静默抹掉。官方 scope 在 **ssh** 面上的不可装是
- *  **传输能力**问题，由 `sshSyncableDependencies` 单独处理，不混进保护判据。 */
+/** diff/apply 边界的行判据（硬要求）：只要后端判它非受保护，它就能进对账面——`layer`
+ *  同样是用户内容，必须可同步。角色不参与判据（按 role 收窄会把用户后加的层静默抹掉）；
+ *  官方 scope 在 ssh 面的不可装是传输能力问题，由 sshSyncableDependencies 单独处理。 */
 export function isActionableRow(row: PluginRowShape): boolean {
   return row.protected === false
 }
 
-/** ssh 对账面的输入收窄（§6.11.5 + §6.11.3 ssh 保守装面）：在
- *  `actionableDependencies` 之上再排除官方 scope。原因是**传输能力**而非保护判定——
- *  ssh 装面对官方 scope 一律整批拒绝（`familySource:'none'`），一个这样的行就会让
- *  一次普通对账整体失效；保护判定始终以后端 `rows[].protected` 为准。
- *  这是**传输能力**判据，不是保护判定：`protected` 始终等于「name ∈ P」（后端投影）；
+/** ssh 对账面的输入收窄：在 actionableDependencies 之上再排除官方 scope。原因是传输能力
+ *  而非保护判定——ssh 装面对官方 scope 一律整批拒绝，一个这样的行就会让普通对账整体失效。
  *  官方 scope 行若不在 P 内则仍可移除（remove 只判 B₀ ∪ S），只是装不进 ssh。 */
 export function sshSyncableDependencies(
   dependencies: Record<string, string>,
@@ -551,26 +411,19 @@ export function sshSyncableDependencies(
   return syncable
 }
 
-/** 官方 scope 前缀：**只**用于 ssh 对账面的传输能力过滤（见上），不是保护判定——
- *  保护判定唯一来源是后端投影的 `rows[].protected`（§6.11.5）。 */
+/** 官方 scope 前缀：只用于 ssh 对账面的传输能力过滤，不是保护判定——保护判定唯一来源是后端投影的 rows[].protected。 */
 export const OFFICIAL_SCOPE_PREFIX = '@deepseek-ai/'
 
 /**
- * 已安装行的移除动作判据：写面只按 `name ∈ P` 拒绝 remove（§6.11.3 R1，remove 永不
- * 判版本），所以非受保护行都能移除——与 `isActionableRow` **同一条判据**（按角色
- * 收窄 diff 会把用户内容静默抹掉，见 isActionableRow 注释）。
- * 保留名字是为了让调用点的语义自解释（移除按钮 vs 对账输入）。
+ * 已安装行的移除动作判据：写面只按 `name ∈ P` 拒绝 remove，所以非受保护行都能移除——与
+ * isActionableRow 同一条判据（按角色收窄会静默抹掉用户内容）；保留名字让调用点自解释。
  */
 export const isRemovableRow = isActionableRow
 
-/** 把清单的 `dependencies` 收窄成 diff/apply 边界可操作的行（§6.11.5 硬要求）。
- *  rows 可用时：只保留「存在对应行且 isActionableRow」的依赖项——严格是**过滤**
- *  （绝不凭行新增依赖项）；rows 缺失（旧 gateway）时按 legacyProtectedName 回退。
- *  依赖表的值逐字保留（与既有显示/提交值同源）。
- *
- *  **隐含前提**：rows 覆盖 dependencies（三端都由同一张依赖表派生，二者键集恒等；
- *  control-plane 单测有锁步断言）。缺行 = 静默跳过——失败方向是
- *  「少动作」（安全但不响亮），所以 producer 若哪天收窄成子集，必须在这里改成响亮拒绝。 */
+/** 把清单的 `dependencies` 收窄成 diff/apply 边界可操作的行。rows 可用时只保留「存在对应行
+ *  且 isActionableRow」的依赖项——严格是过滤，绝不凭行新增；rows 缺失时按 legacyProtectedName
+ *  回退。依赖表的值逐字保留。隐含前提：rows 覆盖 dependencies（键集恒等，有锁步断言）；
+ *  缺行 = 静默跳过，失败方向是「少动作」——producer 若收窄成子集，必须在这里改成响亮拒绝。 */
 export function actionableDependencies(
   dependencies: Record<string, string>,
   rows: readonly PluginRowShape[] | null,
@@ -591,13 +444,11 @@ export function actionableDependencies(
   return actionable
 }
 
-/** 已安装列表的一行视图（渲染端只读投影）。legacy 回退行的 role 为 'unknown'
- *  （没有后端投影可消费）；「gateway 版本较低」提示由投影级 legacy 标记驱动
- *  （projectInstalledRows 的返回值），行本身不携带该标记。 */
+/** 已安装列表的一行视图（渲染端只读投影）。legacy 回退行的 role 为 'unknown'；「gateway
+ *  版本较低」提示由投影级 legacy 标记驱动，行本身不携带该标记。 */
 export interface InstalledRowView {
   name: string
-  /** 依赖值（掩码后）；后端行没有依赖项且自身 spec 为 null 时为 null（后端不产出
-   *  这种行，保留为防御：渲染端落到版本格）。 */
+  /** 依赖值（掩码后）；后端行没有依赖项且自身 spec 为 null 时为 null（防御：渲染端落到版本格）。 */
   spec: string | null
   version: string | null
   role: PluginRowRoleShape
