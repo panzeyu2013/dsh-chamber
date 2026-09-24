@@ -39,6 +39,8 @@
  *   (parseLoaderRows only reads mappings under an `insert:` key).
  */
 
+import { escapeRegExp } from './regex-escape.ts'
+
 /** One loader insert row (`- insert:` → `- id` / `name`). */
 export interface CordisInsert {
   id: string
@@ -153,10 +155,6 @@ export function renderCordisOverlay(
     }
   }
   return (inserts.length > 0 ? renderCordisInserts(inserts) : '') + renderCordisDisablePatches(disables)
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
 /**

@@ -10,7 +10,7 @@
  * - 输出：人读表格；--json 时 JSON.stringify 原样输出。
  */
 
-import { createControlPlane, DEFAULT_CONTROL_PLANE_PORT, StateRootLeaseError } from '@dsh-chamber/control-plane'
+import { createControlPlane, DEFAULT_CONTROL_PLANE_PORT, installGracefulShutdown, StateRootLeaseError } from '@dsh-chamber/control-plane'
 import { followNewLines } from './follow-filter.ts'
 
 const DEFAULT_URL = `http://127.0.0.1:${DEFAULT_CONTROL_PLANE_PORT}`
@@ -251,19 +251,7 @@ async function serveCommand({ flags }: ParsedArgs) {
     error: (...args: unknown[]) => console.error('[control-plane]', ...args),
   }
   const plane = createControlPlane({ port, stateDir, dshWorkspacePath, logger })
-  let exiting = false
-  async function shutdown(signal: string, code: number) {
-    if (exiting) return
-    exiting = true
-    logger.log(`received ${signal}, stopping`)
-    try {
-      await plane.stop()
-    } finally {
-      process.exit(code)
-    }
-  }
-  process.on('SIGINT', () => void shutdown('SIGINT', 130))
-  process.on('SIGTERM', () => void shutdown('SIGTERM', 0))
+  installGracefulShutdown(plane, logger)
   try {
     await plane.start()
   } catch (error) {

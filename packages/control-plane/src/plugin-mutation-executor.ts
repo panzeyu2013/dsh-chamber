@@ -44,6 +44,8 @@
 import { spawn as spawnCommand } from 'node:child_process'
 import type { SpawnOptions } from 'node:child_process'
 
+import { errorMessage } from './error-text.ts'
+
 /** Default bounded capture ceiling per stream (tail kept). */
 export const MUTATION_OUTPUT_CAPTURE_LIMIT_DEFAULT_BYTES = 512 * 1024
 /** Default single-mutation timeout (design 21 §6.9: 10 minutes). */
@@ -205,9 +207,6 @@ function lastNonEmptyLine(text: string): string | null {
   return null
 }
 
-function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
-}
 
 /** Real spawn: detached child + process-group kill wrapper (POSIX), so a
  * hung install child can be reaped as a group. Exported because the gateway
@@ -266,7 +265,7 @@ function runDefaultMutationChild(
         stdio: ['ignore', 'pipe', 'pipe'],
       })
     } catch (error) {
-      finish({ code: null, signal: null, stdout: '', stderr: '', error: `failed to spawn dsh plugin command: ${messageOf(error)}` })
+      finish({ code: null, signal: null, stdout: '', stderr: '', error: `failed to spawn dsh plugin command: ${errorMessage(error)}` })
       return
     }
     const running = child
@@ -281,7 +280,7 @@ function runDefaultMutationChild(
       } catch {
         // best effort
       }
-      finish({ code: null, signal: null, stdout: '', stderr: '', error: `mutation child hook failed: ${messageOf(error)}` })
+      finish({ code: null, signal: null, stdout: '', stderr: '', error: `mutation child hook failed: ${errorMessage(error)}` })
       return
     }
 
@@ -303,7 +302,7 @@ function runDefaultMutationChild(
     }, execution.timeoutMs)
 
     running.once('error', error => {
-      finish({ code: null, signal: null, stdout: stdout.text(), stderr: stderr.text(), error: `failed to spawn dsh plugin command: ${messageOf(error)}` })
+      finish({ code: null, signal: null, stdout: stdout.text(), stderr: stderr.text(), error: `failed to spawn dsh plugin command: ${errorMessage(error)}` })
     })
     running.once('close', (code: number | null, signal: NodeJS.Signals | null) => {
       if (timedOut) {

@@ -35,6 +35,7 @@ import {
   windowsIdentity,
   windowsPortOwnedBy,
 } from './win-probes.ts'
+import { escapeRegExp } from './regex-escape.ts'
 
 const TERM_WAIT_MS = 1500
 const TERM_POLL_MS = 100
@@ -42,11 +43,6 @@ const REAPER_COMMAND_OUTPUT_MAX_BYTES = 256 * 1024
 
 const INSTALLED_ENTRY_SUFFIX = join('node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js')
 const SOURCE_ENTRY_SUFFIX = join('apps', 'cli', 'src', 'bin.ts')
-
-/** Escape a literal for a fail-closed command-line token regexp. */
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-}
 
 /**
  * Whether ps's rendered command contains one exact argv-like token. Quotes

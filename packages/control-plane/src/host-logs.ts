@@ -26,8 +26,7 @@ import { randomBytes } from 'node:crypto'
 import { lstat, mkdir, open, readdir, rename, unlink } from 'node:fs/promises'
 import type { FileHandle } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
-import { readPidRecord } from './spawn-dsh.ts'
-import type { PidRecord } from './spawn-dsh.ts'
+import { readPidRecord, type PidRecord } from './pid-record.ts'
 import {
   assertPrivateLeafStatNoFollow,
   noFollowOpenFlag,

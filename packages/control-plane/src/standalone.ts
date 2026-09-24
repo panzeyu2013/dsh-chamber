@@ -25,6 +25,7 @@ import {
   DEFAULT_CONTROL_PLANE_PORT,
   DEFAULT_STATE_DIR,
   defaultDshWorkspacePath,
+  installGracefulShutdown,
   resolveStateRoot,
   StateRootLeaseError,
 } from './index.ts'
@@ -199,19 +200,7 @@ async function main(): Promise<number | null> {
     throw error
   }
 
-  let exiting = false
-  async function shutdown(signal: string, code: number): Promise<void> {
-    if (exiting) return
-    exiting = true
-    logger.log(`received ${signal}, stopping`)
-    try {
-      await plane.stop()
-    } finally {
-      process.exit(code)
-    }
-  }
-  process.on('SIGINT', () => void shutdown('SIGINT', 130))
-  process.on('SIGTERM', () => void shutdown('SIGTERM', 0))
+  installGracefulShutdown(plane, logger)
 
   try {
     // start() runs the orphan reaper first, then binds the HTTP surface

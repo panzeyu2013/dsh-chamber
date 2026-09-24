@@ -48,6 +48,7 @@ import {
   type SessionTurnEndCause,
   type SessionTurnEndKind,
 } from './session-state-protocol.ts'
+import { errorMessage } from './error-text.ts'
 
 /**
  * Exact WebSocket route carrying every Typert Remote stream. The values below
@@ -552,12 +553,6 @@ function isWatermark(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
 }
 
-/** Fixed-string diagnostic for an unknown thrown value. */
-function errorText(error: unknown): string {
-  if (error instanceof Error) return error.message
-  return String(error)
-}
-
 /**
  * Create one session-state mux. It connects lazily (start/kick), reconciles a
  * full baseline on every ready frame, routes emit/waterfall/cancel frames and
@@ -685,7 +680,7 @@ export function createSessionMux(deps: SessionMuxDeps): SessionMux {
     })
     opened.onError((error) => {
       if (connectGeneration !== generation || stopped) return
-      status.lastError = errorText(error)
+      status.lastError = errorMessage(error)
     })
     opened.onClose(() => {
       if (connectGeneration !== generation || stopped) return
@@ -705,7 +700,7 @@ export function createSessionMux(deps: SessionMuxDeps): SessionMux {
   }
   const sendFrame = (frame: MuxOpenFrame | MuxCancelFrame): void => {
     if (socket === null || socket.readyState !== 'open') return
-    try { socket.send(JSON.stringify(frame)) } catch (error) { warn(`session-mux: stream send failed (${errorText(error)})`) }
+    try { socket.send(JSON.stringify(frame)) } catch (error) { warn(`session-mux: stream send failed (${errorMessage(error)})`) }
   }
   const handleServerText = (text: string): void => {
     const frame = parseMuxServerFrame(text)
@@ -872,7 +867,7 @@ export function createSessionMux(deps: SessionMuxDeps): SessionMux {
           emitStatus()
         })
         .catch((error: unknown) => {
-          warn(`session-mux: waterfall delegation failed (${errorText(error)})`)
+          warn(`session-mux: waterfall delegation failed (${errorMessage(error)})`)
           emitStatus()
         })
     }
@@ -941,7 +936,7 @@ export function createSessionMux(deps: SessionMuxDeps): SessionMux {
       } catch (error) {
         if (baselineGeneration !== generation) return
         status.baselineOk = false
-        setStatus({ lastError: `session/list failed (${errorText(error)})` })
+        setStatus({ lastError: `session/list failed (${errorMessage(error)})` })
         deps.onBaselineError?.(error, now())
       }
     })().finally(() => {

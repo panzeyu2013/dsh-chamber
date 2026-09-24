@@ -1242,6 +1242,7 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
 }
 
 export { resolveNodeExecutable, sanitizeManagedDshEnv, spawnDsh } from './spawn-dsh.ts'
+export { installGracefulShutdown, type GracefulShutdownPlane } from './graceful-shutdown.ts'
 // Unary RPC remains the ordinary control-plane client. Design 17's separately
 // invoked gateway composes the same unary client (runtime-manager.ts) — the
 // client-response/event-stream helpers (respond/openEventStream) belong to the

@@ -36,7 +36,8 @@ import {
   hostLogs, readLogTail, logPathFor, createHostLogWriter,
   DEFAULT_LIMIT, MAX_LIMIT, MAX_LOG_LINES, MAX_PENDING_LOG_BYTES, MAX_PENDING_LOG_ENTRIES,
 } from '../../src/host-logs.ts'
-import { writePidRecord, DEFAULT_DSH_START_PORT } from '../../src/spawn-dsh.ts'
+import { DEFAULT_DSH_START_PORT } from '../../src/spawn-dsh.ts'
+import { writePidRecord } from '../../src/pid-record.ts'
 import type { Logger } from '../../src/types.ts'
 import { tempDir } from '../support/utils.ts'
 
