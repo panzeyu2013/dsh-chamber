@@ -7,7 +7,7 @@
  * 不校验目标/内容），`measure-ui.mjs:88-100` 的帧采样器只记帧间隔（`{t,delta}`，
  * 无内容归属），遮罩层叠探针只在遮罩可见帧判 `elementFromPoint` 归属（证明"谁在命中
  * 测试里胜出"，不证明"画了像素"）。本脚本产出的**逐帧观测**交给纯判据
- * `packages/renderer/src/switch-frame-verdict.ts` 的三形态（无可见视图 / 平坦 #fff /
+ * `packages/renderer/scripts/switch-frame-verdict.ts` 的三形态（无可见视图 / 平坦 #fff /
  * 主题失配进度面）判定，判据本身进 CI（`packages/renderer/test/view-runtime/`）。
  *
  * 两条腿：
@@ -31,7 +31,7 @@ import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { CdpSession, discoverPageTarget } from '../gui-acceptance/cdp.mjs'
 import { decodePng, isFlat, regionStats } from '../lib/png-ink.mjs'
-import { applyRequireSwitch, switchFrameVerdict } from '../../packages/renderer/src/switch-frame-verdict.ts'
+import { applyRequireSwitch, switchFrameVerdict } from '../../packages/renderer/scripts/switch-frame-verdict.ts'
 
 /** 采样节奏：每 4 个 rAF 记一帧 ≈15Hz。 */
 const FRAME_SAMPLE_EVERY = 4
