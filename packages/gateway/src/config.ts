@@ -1,9 +1,7 @@
 /**
- * Gateway configuration (design 17 §5.1): the parsed config of the
- * server-side access shape — bind host/port, state/dsh roots, auth kind,
- * CORS origins, optional TLS. `parseGatewayConfig` enforces
- * the S1 exposure guard at config time: a non-loopback bind without auth is a
- * configuration error (the CLI surfaces it as exit 2).
+ * Gateway configuration of the server-side access shape (bind host/port,
+ * state/dsh roots, auth kind, CORS origins, TLS). `parseGatewayConfig` refuses
+ * a non-loopback bind without auth (exposure guard; CLI exit 2).
  */
 
 import { isIP } from 'node:net'
@@ -16,16 +14,13 @@ import {
 
 export type GatewayBindHost = '127.0.0.1' | '0.0.0.0'
 export type GatewayAuthKind = 'none' | 'password' | 'token' | 'password+token'
-// Credential bounds = the shared wire-protocol single source
-// (control-plane gateway-session-protocol.ts, design 17 §7.2/§7.1) — the
-// same values the proxy injection gate and the desktop client enforce.
-// Local names stay as aliases for CLI/config call sites and their tests.
+// Credential bounds come from the shared wire protocol (control-plane
+// gateway-session-protocol.ts), enforced by the proxy gate and the desktop too.
 export const MIN_GATEWAY_PASSWORD_CHARS = GATEWAY_PASSWORD_MIN_CHARS
 export const MAX_GATEWAY_PASSWORD_CHARS = GATEWAY_PASSWORD_MAX_CHARS
 export const MIN_GATEWAY_TOKEN_CHARS = GATEWAY_TOKEN_MIN_CHARS
 export const MAX_GATEWAY_TOKEN_CHARS = GATEWAY_TOKEN_MAX_CHARS
-/** Default target of the mobile UA experience shunting (design 17 §18): the
- * chamber surface's mobile entry placeholder. */
+/** Default target of the mobile UA shunting: the chamber mobile entry placeholder. */
 export const DEFAULT_MOBILE_ENTRY_PATH = '/chamber/mobile.html'
 
 export interface GatewayConfig {
@@ -34,60 +29,41 @@ export interface GatewayConfig {
     host: GatewayBindHost
     stateDir: string
     dshWorkspacePath: string
-    /** First port attempted for the managed dsh host (design 17 §3 server
-     *  deployments; default 17510). Server installs commonly set 30800 so the
-     *  gateway listens on 30801 right next to the managed dsh. */
+    /** First port attempted for the managed dsh host (default 17510; server installs commonly 30800). */
     dshPort?: number
   }
   auth: {
     kind: GatewayAuthKind
-    /** scrypt-verified browser credential (design 17 §5). */
+    /** scrypt-verified browser credential. */
     password?: string
-    /** shared bearer token (design 17 §7.2). May coexist with password. */
+    /** Shared bearer token; may coexist with password. */
     token?: string
   }
   corsOrigins: string[]
-  /** Exact proxy peer IPs whose Forwarded/X-Forwarded facts may be trusted.
-   * Empty by default: a direct client can never self-assert its address/TLS. */
+  /** Exact proxy peer IPs whose Forwarded/X-Forwarded facts may be trusted; empty = never self-asserted. */
   trustedProxies: string[]
-  /** The operator's expected public authority (design 17 §6 request policy /
-   * S3 族), e.g. `https://gateway.example.com`. When set, requests with an
-   * unrecognized Host are rejected (421). */
+  /** Operator's expected public authority (e.g. `https://gateway.example.com`); unrecognized Host → 421. */
   publicOrigin?: string
   tls?: { cert: string; key: string }
-  /** Explicit operator opt-in (design 17 §5.1 S1 deviation): bind externally
-   * with NO authentication. Default false — the S1 exposure guard stays hard.
-   * The CLI surfaces this as --no-auth. */
+  /** Explicit operator opt-in to bind externally with NO auth (default false; CLI --no-auth). */
   allowAnonymousExternal?: boolean
-  /** UA experience shunting (design 17 §18; default OFF): an authenticated
-   * mobile-browser GET/HEAD of `/` answers 302 → mobileEntryPath instead of
-   * the desktop frontend. UA sniffing is forgeable and carries NO security
-   * semantics — the auth gate stays the only boundary (S1/S2). */
+  /** UA experience shunting (default OFF): authenticated mobile-browser
+   * GET/HEAD of `/` answers 302 → mobileEntryPath; UA sniffing is not security. */
   mobileUaRedirect?: boolean
-  /** Origin-form target of the mobile UA redirect (default
-   * '/chamber/mobile.html' — validated, never absolute, never `/`). */
+  /** Origin-form target of the mobile UA redirect (default '/chamber/mobile.html'; never absolute, never '/'). */
   mobileEntryPath?: string
-  /** Login-phase background pre-warm (design 17 §10.6; default ON): the
-   * unauthenticated login page renders the REAL /plugins bundle URLs as
-   * `<link rel="prefetch">` and mints a short-lived HttpOnly capability cookie,
-   * so the post-login boot is served from the HTTP cache instead of paying the
-   * ~4.35 MiB gzip download on the critical path. The route serves only the two
-   * bundle shapes, only with a valid grant, and is rate- and budget-bounded.
-   * `false` (--no-warmup / DSH_GATEWAY_WARMUP=0) is the kill switch: no
-   * discovery, no links, no cookie, no route (those paths keep their normal
-   * 401/session verdict). */
+  /** Login-phase background pre-warm (default ON): the login page prefetches the
+   * REAL /plugins bundle URLs behind a short-lived HttpOnly capability cookie, so
+   * post-login boot comes from the HTTP cache; `false` (--no-warmup /
+   * DSH_GATEWAY_WARMUP=0) is the kill switch — no discovery, links, cookie or route. */
   warmup?: boolean
-  /** Read-only session-state watcher (default ON). false turns
-   * the whole observer off: every /chamber/session-state* route answers 503
-   * session_state_disabled, no mux socket to the local dsh is opened, and the
-   * desktop classifies the source as "gateway present, status face disabled"
-   * (never as an old gateway). Kill switch:
-   * DSH_GATEWAY_SESSION_STATE=0. */
+  /** Read-only session-state watcher (default ON). false kills the whole
+   * observer: every /chamber/session-state* route answers 503
+   * session_state_disabled and no mux socket to the local dsh is opened. */
   sessionState?: boolean
 }
 
-/** Raw config input (CLI flags already resolved by the CLI entry; env fallback
- * applied here). Every field is optional — defaults fill the rest. */
+/** Raw config input (CLI flags already resolved; env fallback applied here); every field optional. */
 export interface GatewayConfigInput {
   host?: string
   port?: number
@@ -124,9 +100,8 @@ function firstEnv(...names: string[]): string | undefined {
   return undefined
 }
 
-/** Lenient-but-loud env boolean (used for DSH_GATEWAY_MOBILE_UA_REDIRECT and
- * DSH_GATEWAY_WARMUP): an unrecognized value is a configuration error, never
- * a silent default. */
+/** Lenient-but-loud env boolean (DSH_GATEWAY_MOBILE_UA_REDIRECT,
+ * DSH_GATEWAY_WARMUP): an unrecognized value is a config error, never silent. */
 function envBoolean(name: string): boolean | undefined {
   const raw = firstEnv(name)
   if (raw === undefined) return undefined
@@ -136,14 +111,10 @@ function envBoolean(name: string): boolean | undefined {
   throw new GatewayConfigError(`${name} must be a boolean (1/true or 0/false), got ${JSON.stringify(raw)}`)
 }
 
-/** Origin-form path validation shared by parseGatewayConfig and the
- * materialized-config guard (design 17 §18): a same-origin target only —
- * starts with '/', no '//' prefix, no backslash, and never the bare root
- * (which would loop the shunting back onto itself). Control characters are
- * rejected outright (Node's writeHead would 500 per request on them), and
- * literal dot-segments that URL-normalize back to '/' are rejected too (a
- * `Location: /..` would be normalized by browsers to '/' and re-enter the
- * shunting loop). */
+/** Origin-form path validation; a same-origin target only — starts with '/',
+ * no '//' prefix, no backslash, never the bare root (which would loop the
+ * shunting). Control characters and dot-segments that URL-normalize back to
+ * '/' are rejected (browsers would re-enter the loop). */
 export function normalizeMobileEntryPath(value: string): string {
   if (!value.startsWith('/') || value.startsWith('//') || value.includes('\\') || value === '/') {
     throw new GatewayConfigError(`mobile entry path must be an origin-form path (starts with '/', no '//' prefix, no backslash, and not '/'), got ${JSON.stringify(value)}`)
@@ -180,9 +151,8 @@ function canonicalCorsOrigin(value: string): string {
   try {
     const parsed = new URL(value)
     if (parsed.protocol === 'http:' || parsed.protocol === 'https:') return canonicalOrigin(value, '--cors-origin')
-    // Packaged clients use opaque custom schemes (design 17 §6). URL.origin
-    // is the literal "null" for these, so validate the exact scheme+authority
-    // string instead of normalizing through `.origin`.
+    // Packaged clients use opaque custom schemes; URL.origin is the literal
+    // "null" for these, so validate the exact scheme+authority string.
     if ((parsed.protocol === 'capacitor:' || parsed.protocol === 'openchamber-ui:')
       && parsed.username === '' && parsed.password === ''
       && (parsed.pathname === '' || parsed.pathname === '/')
@@ -206,11 +176,9 @@ function trustedProxyList(input: string[] | undefined): string[] {
 }
 
 /**
- * Parse + validate the gateway config. Throws GatewayConfigError on any
- * invalid value (S1 exposure guard included). stateDir/dshWorkspacePath are
- * required here — the caller resolves them first (stateDir through the shared
- * resolveStateRoot(), dshWorkspacePath through defaultDshWorkspacePath(), both
- * from @dsh-chamber/control-plane) before calling.
+ * Parse + validate the gateway config; throws GatewayConfigError on any invalid
+ * value (exposure guard included). stateDir/dshWorkspacePath are required — the
+ * caller resolves them first (resolveStateRoot / defaultDshWorkspacePath).
  */
 export function parseGatewayConfig(input: GatewayConfigInput, stateDir: string, dshWorkspacePath: string): GatewayConfig {
   const host = input.host ?? firstEnv('DSH_GATEWAY_HOST') ?? '127.0.0.1'
@@ -229,8 +197,7 @@ export function parseGatewayConfig(input: GatewayConfigInput, stateDir: string, 
   }
   const password = input.uiPassword ?? firstEnv('DSH_GATEWAY_PASSWORD')
   const token = input.apiToken ?? firstEnv('DSH_GATEWAY_TOKEN')
-  // An empty credential is not auth (S1): reject loudly, never treat it as a
-  // satisfied password/token kind that would silently fail-closed.
+  // An empty credential is not auth (S1): reject loudly, never a satisfied kind.
   if (password === '') throw new GatewayConfigError('--ui-password must not be empty')
   if (token === '') throw new GatewayConfigError('--api-token must not be empty')
   if (password !== undefined && (password.length < MIN_GATEWAY_PASSWORD_CHARS || password.length > MAX_GATEWAY_PASSWORD_CHARS)) {
@@ -249,7 +216,7 @@ export function parseGatewayConfig(input: GatewayConfigInput, stateDir: string, 
     throw new GatewayConfigError('--tls-cert and --tls-key must be provided together')
   }
   // HTTPS server is not implemented: refuse rather than silently serving
-  // plaintext while the operator believes TLS is on (design 17 §5.1).
+  // plaintext while the operator believes TLS is on.
   if (tlsCert !== undefined && tlsKey !== undefined) {
     throw new GatewayConfigError('--tls-cert/--tls-key are not implemented yet (HTTPS server is pending); use a reverse proxy for TLS termination')
   }
@@ -258,24 +225,19 @@ export function parseGatewayConfig(input: GatewayConfigInput, stateDir: string, 
   const corsOrigins = [...new Set((input.corsOrigins ?? []).map(canonicalCorsOrigin))]
   const trustedProxies = trustedProxyList(input.trustedProxies)
   const allowAnonymousExternal = input.allowAnonymousExternal === true
-  // Design 17 §18 UA shunting (default OFF): the entry path is validated even
-  // when the redirect stays disabled, so a mistyped --mobile-entry cannot
-  // silently surface later as a misdirecting 302 once the flag is flipped.
+  // The entry path is validated even when the redirect stays disabled, so a
+  // mistyped --mobile-entry cannot surface later as a misdirecting 302.
   const mobileUaRedirect = input.mobileUaRedirect ?? envBoolean('DSH_GATEWAY_MOBILE_UA_REDIRECT') ?? false
   const mobileEntryPath = normalizeMobileEntryPath(input.mobileEntryPath ?? DEFAULT_MOBILE_ENTRY_PATH)
-  // Design 17 §10.6 login-phase pre-warm: ON by default (the feature is the
-  // point of the login page's prefetch; the kill switch exists for operators
-  // who do not want the pre-auth route at all).
+  // Login-phase pre-warm ON by default; the kill switch exists for operators
+  // who do not want the pre-auth route at all.
   const warmup = input.warmup ?? envBoolean('DSH_GATEWAY_WARMUP') ?? true
-  // The read-only session-state watcher is ON by default (its
-  // routes are additive and the observer is read-only); DSH_GATEWAY_SESSION_STATE=0
-  // disables the whole face for operators who do not want the mux connection.
+  // The read-only session-state watcher is ON by default (additive routes,
+  // read-only observer); DSH_GATEWAY_SESSION_STATE=0 disables the whole face.
   const sessionState = input.sessionState ?? envBoolean('DSH_GATEWAY_SESSION_STATE') ?? true
-  // S1 (design 17 §17 安全不变量摘要): exposure is a semantic deployment
-  // fact, not just the socket bind. A loopback listener behind an explicitly
-  // configured public origin or trusted reverse proxy is still public and
-  // therefore needs auth. --no-auth is an explicit, loudly-warned operator
-  // override (documented deviation) for trusted networks only.
+  // Exposure is a semantic deployment fact, not just the socket bind: a
+  // loopback listener behind a public origin or trusted proxy is still public
+  // and needs auth. --no-auth is an explicit, loudly-warned override.
   if ((host !== '127.0.0.1' || publicOrigin !== undefined || trustedProxies.length > 0)
     && kind === 'none' && !allowAnonymousExternal) {
     throw new GatewayConfigError('refusing externally reachable gateway configuration without authentication: pass --ui-password or --api-token (or --no-auth to override)')

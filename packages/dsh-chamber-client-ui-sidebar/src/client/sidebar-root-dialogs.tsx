@@ -1,8 +1,7 @@
 /**
- * Chamber dialog layers:
- * the add-workspace directory browser, the per-source archive manager and the
- * armed workspace-delete confirm. One hook owns the state, the openers and the
- * single-dialog-layer predicate; one component renders the three layers.
+ * Chamber dialog layers: add-workspace directory browser, per-source archive
+ * manager, armed workspace-delete confirm. One hook owns the state, the openers
+ * and the single-dialog-layer predicate; one component renders the three layers.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react'
@@ -18,16 +17,12 @@ import type { RunActionWithOutcome } from './sidebar-root-actions.ts'
 import cc from './sidebar-chamber.module.css'
 
 /**
- * One armed workspace-delete confirmation.
- * The subject is resolved at ARM time (the row may unmount while the
- * confirmation is up — upstream's own reason for keeping the delete dialog
- * separate from the row, vendor ui-workspace WorkspaceBrowser.tsx:1088-1090).
+ * One armed workspace-delete confirmation. The subject is resolved at ARM time:
+ * the row may unmount while the confirmation is up.
  */
 interface WorkspaceDeleteTarget {
-  /** Source owning the workspace row. */
   sourceId: string
   workspaceId: string
-  /** Row title, used in the dialog copy. */
   title: string
   /** The workspace's path is gone: only its registration is deleted. */
   orphaned: boolean
@@ -40,46 +35,23 @@ export function useSidebarDialogs({ servers, runActionWithOutcome, setRowErrors 
 }) {
   const [addingWorkspace, setAddingWorkspace] = useState<string | null>(null)
   const [addingWorkspaceBusy, setAddingWorkspaceBusy] = useState(false)
-  // chamber (design 24): the ARCHIVE MANAGER dialog — one
-  // per source. The manager lists the source's archived sessions (metadata
-  // rides ChamberServerAggregate.archivedSessions; the dialog issues NO
-  // session read of its own) and offers per-row and multi-select purges
-  // through the optional sessionIds purge filter. Whole-set deletion has NO
-  // standalone button: "delete everything" means
-  // ticking the select-all checkbox and confirming the counted
-  // delete-selected, so a purge never covers rows the dialog could not list.
-  // Destructive calls stay confirm-gated INSIDE the dialog.
+  // chamber (design 24): per-source ARCHIVE MANAGER dialog。列出该来源的归档会话（元数据来自
+  // ChamberServerAggregate.archivedSessions，对话框自身不发会话读），经可选 sessionIds 过滤器
+  // 提供逐行/多选 purge。整集删除没有独立按钮：勾选 select-all 再确认计数删除，purge 绝不覆盖
+  // 对话框列不出的行；破坏性调用在对话框内确认。
   const [archiveCleanupServerId, setArchiveCleanupServerId] = useState<string | null>(null)
-  // Focus restore: the manager's opener trash button
-  // regains focus when the dialog closes — keyboard users otherwise land on
-  // <body> after the dialog unmounts.
+  // Focus restore：对话框关闭时把焦点还给打开它的 trash 按钮，否则键盘用户会落到 <body>。
   const archiveCleanupOpenerRef = useRef<HTMLElement | null>(null)
 
   /**
-   * SYMMETRIC closure: at most ONE
-   * chamber-owned Modal layer may be up at a time, in whichever ORDER the user
-   * reaches it. The official Modal has no focus trap (vendor ui-primitives
-   * Modal.tsx: a mask + one document-level BUBBLE Escape listener per open
-   * instance), so every mask leaves the rest of the shell tabbable — the
-   * always-rendered orphan badge (ServerSection `cc.orphanBadge`, outside the
-   * hover cluster) and the source-header controls are all reachable behind any
-   * of them. Two open layers would each register their own document Escape
-   * listener and ONE Escape would close BOTH (design 24 §6 item 7 — the hazard
-   * the archive manager refuses a second layer for).
-   *
-   * ONE predicate owns the rule and EVERY opener consults it — gating only the
-   * delete arm would leave the reverse order open (Tab behind the delete confirm's
-   * mask → archive manager / add-workspace browser on top):
-   *   - `onDeleteWorkspace`     arms the workspace-delete confirm,
-   *   - `onOpenArchiveCleanup`  opens the archive manager,
-   *   - `openWorkspaceBrowser`  opens the add-workspace directory browser.
-   * Nothing is lost by refusing: each layer is dismissible (cancel / X / mask /
-   * Escape), so the refused control works again the moment it is gone.
-   *
-   * Declared as a hoisted `function` on purpose: the two openers below and the
-   * arm handler further down all consult ONE rule, and the `deleteTarget` state
-   * it reads is declared later in this component (function declarations hoist,
-   * so source order never decides whether the rule is in scope).
+   * SYMMETRIC closure：任何时刻至多一个 chamber 拥有的 Modal 层，与用户到达顺序无关。官方
+   * Modal 没有焦点陷阱（mask + 每实例一个 document 级冒泡 Escape 监听），mask 后其余 shell
+   * 仍可 Tab：常驻 orphan 徽标与来源头控件都在任一 mask 之后可达。两层同开则各自注册
+   * Escape，一次 Escape 关掉**两层**。
+   * 唯一谓词在此，每个打开方都必须查询（只闸 delete 会漏掉反向顺序）：`onDeleteWorkspace`
+   * 武装删除确认、`onOpenArchiveCleanup` 打开归档管理器、`openWorkspaceBrowser` 打开目录
+   * 浏览器。拒绝不丢功能：每层都可取消/X/mask/Escape 关闭，关闭后被拒控件立即可用。
+   * 刻意用 hoisted `function`：两个 opener 与下方 arm 处理器共用一条规则，而它读的 `deleteTarget` 声明在组件更后面（函数声明提升）。
    */
   function otherChamberDialogOpen(self: 'delete' | 'archive' | 'browser'): boolean {
     return (self !== 'delete' && deleteTarget !== null)
@@ -87,36 +59,28 @@ export function useSidebarDialogs({ servers, runActionWithOutcome, setRowErrors 
       || (self !== 'browser' && addingWorkspace !== null)
   }
 
-  /** Symmetric closure: the add-workspace
-   *  entry (the source header's `+`, ServerSection) goes through THIS opener
-   *  instead of exposing the raw setter to the section — the single
-   *  one-dialog-layer rule must be enforced where the layer is opened, not at
-   *  each call site. */
+  /** 添加工作区入口（来源头的 `+`）走本 opener 而不暴露原始 setter——单层规则必须在打开处
+   *  执行，而不是每个调用点。 */
   const openWorkspaceBrowser = (sourceId: string): void => {
     if (otherChamberDialogOpen('browser')) return
     setAddingWorkspace(sourceId)
   }
 
   const onOpenArchiveCleanup = (server: ChamberServerAggregate): void => {
-    // The reverse direction. Reachable from the
-    // source header while the delete confirm's mask is up (no focus trap), so
-    // it must refuse exactly like the other two openers.
+    // 反方向：删除确认 mask 之下仍可从来源头到达（无焦点陷阱），必须同样拒绝。
     if (otherChamberDialogOpen('archive')) return
     archiveCleanupOpenerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
     setArchiveCleanupServerId(server.id)
   }
   const closeArchiveCleanup = (): void => {
     setArchiveCleanupServerId(null)
-    // Focus after the close render commits (the opener may have unmounted —
-    // a collapsed rail or source removal — focus() is a safe no-op then).
+    // 关闭渲染提交后再聚焦（opener 可能已卸载——折叠 rail 或来源移除——focus() 此时是无害 no-op）。
     requestAnimationFrame(() => {
       archiveCleanupOpenerRef.current?.focus()
       archiveCleanupOpenerRef.current = null
     })
   }
-  // The manager may only stay open over a live source: a source that
-  // vanishes or disconnects mid-session closes it (a confirm against a dead
-  // instance would fail into the void). Mirrors the sort-menu cleanup.
+  // 管理器只能停留在活来源之上：会话中途消失/断连即关闭（对死实例的确认会失败进虚空）；同排序菜单清理。
   useEffect(() => {
     if (archiveCleanupServerId === null) return
     const server = servers.find(candidate => candidate.id === archiveCleanupServerId)
@@ -126,62 +90,36 @@ export function useSidebarDialogs({ servers, runActionWithOutcome, setRowErrors 
   }, [servers, archiveCleanupServerId])
 
   /**
-   * Best-effort workspace path for a withdraw fact. The
-   * sidebar projection (`ChamberServerWorkspace`) carries no path, so the only
-   * local source is the mounted ctx's own snapshot report on the bridge — read
-   * BEFORE the wire call, while the row is still listed. An unmounted source has
-   * none and needs none: `removePendingWorkspace` matches the echo by
-   * `workspaceId`, which the row's delete action carries.
+   * 撤销事实用的 best-effort 工作区路径：投影不带 path，唯一本地来源是桥上本 ctx 的快照，
+   * 必须在 wire 调用前读。未挂载来源没有也不需要：`removePendingWorkspace` 按 workspaceId 匹配回显。
    */
   const workspacePathForFact = (sourceId: string, workspaceId: string): string =>
     chamberBridge.getInstanceSnapshots()[sourceId]?.workspaces
       .find(row => row.workspaceId === workspaceId)?.path ?? ''
 
   /**
-   * The ARMED workspace-delete confirm.
-   * Upstream renders this as an in-app Modal (vendor ui-workspace
-   * WorkspaceBrowser.tsx:1393-1418 — outline cancel + outline destructive
-   * confirm, a description sentence, and a role="status" pending line), never
-   * as an OS-styled native confirm, which cannot ride the alias tokens. The
-   * state lives on the SHELL (not per row) for upstream's own reason: the
-   * deleted row may unmount while the confirmation is still in flight.
-   *
-   * The nav rows ARE reachable behind an open Modal's mask: the orphan badge
-   * is an always-rendered, tabbable button OUTSIDE the hover cluster
-   * (ServerSection.tsx `cc.orphanBadge`), and the official Modal has no focus
-   * trap (vendor ui-primitives Modal.tsx: mask + one document Escape listener
-   * only), so a keyboard user can Tab behind any open chamber dialog's mask
-   * and arm this confirm on top of it. Both layers would then register their
-   * own document Escape listener and ONE Escape would close BOTH (design 24
-   * §6 item 7 — the hazard the archive manager refuses a second layer for).
-   * The real invariant therefore lives in the openers, NOT in the mask:
-   * `otherChamberDialogOpen` is consulted by all three of them (this arm
-   * handler, the archive manager's opener, the add-workspace browser's opener),
-   * so at most one chamber Modal layer can ever be up in EITHER order.
+   * ARMED 工作区删除确认。上游以应用内 Modal 渲染（outline 取消 + outline 危险确认、描述句、
+   * role="status" pending 行），绝不是无法使用 alias token 的原生 confirm。状态在 SHELL 而非
+   * 每行：被删行可能在确认仍飞行时卸载。
+   * nav 行在打开的 Modal mask 之后可达（orphan 徽标是 hover 簇之外的常驻可 Tab 按钮，官方
+   * Modal 无焦点陷阱），键盘用户能在任一 chamber 对话框 mask 后 Tab 并武装本确认，两层随后
+   * 各注册 document Escape，一次 Escape 关掉**两层**。真正的不变量因此在打开方而非 mask：
+   * `otherChamberDialogOpen` 被全部三个打开方查询，任一顺序下至多一层。
    */
   const [deleteTarget, setDeleteTarget] = useState<WorkspaceDeleteTarget | null>(null)
   const [deletePending, setDeletePending] = useState(false)
-  /** The last failed delete's message, shown
-   *  INSIDE the dialog (role="alert", upstream WorkspaceBrowser.tsx:1418) —
-   *  the row-keyed rowErrors line has no surface once the deleted row has
-   *  unmounted, which is exactly why `deleteTarget` lives on the shell. */
+  /** 最后一次失败删除的消息，显示在对话框内（role="alert"）；被删行卸载后行级 rowErrors
+   *  已无表面——这正是 deleteTarget 放在 shell 上的原因。 */
   const [deleteError, setDeleteError] = useState<string | null>(null)
-  /** Keyboard focus lands inside the dialog on arm (the official Modal moves no
-   *  focus itself); the opener is remembered so closing hands focus back —
-   *  otherwise a keyboard user would be stranded behind the mask. */
+  /** 武装时键盘焦点落在对话框内（官方 Modal 不移动焦点）；记住 opener 以便关闭时归还焦点。 */
   const deleteBodyRef = useRef<HTMLDivElement | null>(null)
   const deleteOpenerRef = useRef<HTMLElement | null>(null)
   useEffect(() => {
     if (deleteTarget === null) return
     deleteBodyRef.current?.focus()
   }, [deleteTarget])
-  /** The confirm may only stay armed over a live source (mirrors the archive
-   *  manager's guard): a source that vanishes or disconnects drops it — a
-   *  delete against a dead instance would fail into the void. The auto-drop is
-   *  SUSPENDED while a reported failure
-   *  is on screen — a delete that failed because its source vanished must not
-   *  have its one visible explanation (the in-dialog `role="alert"`) unmounted
-   *  with it; that alert stays until the user dismisses the dialog. */
+  /** 确认只能停留在活来源之上（同归档管理器的守卫）；但当失败消息在屏时暂停自动丢弃——
+   *  因来源消失而失败的删除，其唯一可见解释（对话框内 `role="alert"`）不能被一起卸载。 */
   useEffect(() => {
     if (deleteTarget === null || deletePending || deleteError !== null) return
     const server = servers.find(candidate => candidate.id === deleteTarget.sourceId)
@@ -189,36 +127,24 @@ export function useSidebarDialogs({ servers, runActionWithOutcome, setRowErrors 
   }, [servers, deleteTarget, deletePending, deleteError])
 
   const onDeleteWorkspace = (server: ChamberServerAggregate, workspaceId: string, title: string): void => {
-    // Arming the confirm is the ONLY effect here — the wire call happens in
-    // confirmDeleteWorkspace, so nothing destructive can run before the user
-    // accepts the dialog.
+    // 武装确认是这里唯一的副作用——wire 调用在 confirmDeleteWorkspace，用户接受前不会有破坏性操作。
     if (deletePending) return
-    // Refuse to ARM over another chamber
-    // dialog. Both the archive manager and the add-workspace browser render the
-    // official Modal, which has no focus trap: this handler is reachable from
-    // the always-rendered orphan badge (tabbable behind either mask), and two
-    // open Modal layers each register a document Escape listener, so one
-    // Escape would close BOTH. The rule lives in `otherChamberDialogOpen` (the
-    // single predicate every opener consults, both directions).
+    // 拒绝在另一个 chamber 对话框之上武装：本处理器可从常驻 orphan 徽标（任一层 mask 后）到达，
+    // 两层各注册 Escape 会让一次 Escape 关掉两层。规则在 `otherChamberDialogOpen`（唯一谓词，双向）。
     if (otherChamberDialogOpen('delete')) return
     deleteOpenerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
-    // A failed run's message belongs to its own attempt: arming a new target
-    // must never show the previous failure inside the fresh dialog.
+    // 失败消息属于它自己的尝试：武装新目标绝不能把上次失败显示进新对话框。
     setDeleteError(null)
     setDeleteTarget({
       sourceId: server.id,
       workspaceId,
       title,
-      // An ORPHANED workspace (path gone) only loses its durable registration
-      // — its own description sentence states that, behind the same single
-      // confirm.
+      // ORPHANED 工作区（路径已消失）只丢持久注册——描述句会说明，仍在同一确认之后。
       orphaned: getWorkspaceGitFlag(server.id, workspaceId)?.orphaned === true,
     })
   }
 
-  /** Unconditional dismissal (the confirm path already cleared the pending
-   *  flag in the same batch, so it cannot consult the render-closure value).
-   *  Drops any reported failure with the dialog it was shown in. */
+  /** 无条件关闭（确认路径已在同一批清掉 pending 标志）；连同其显示过的失败一起丢弃。 */
   const dismissDeleteWorkspace = (): void => {
     setDeleteTarget(null)
     setDeleteError(null)
@@ -234,16 +160,10 @@ export function useSidebarDialogs({ servers, runActionWithOutcome, setRowErrors 
     dismissDeleteWorkspace()
   }
 
-  /** Accept the armed confirm: run the SAME keyed action (identical
-   *  rowErrors reporting), keep the dialog pending while the wire call is in
-   *  flight, and — on success — close it once the action settled. A FAILURE
-   *  does not close the dialog (upstream WorkspaceBrowser.tsx:1117-1120,
-   *  :1417-1418). The row-keyed rowErrors line stays
-   *  (harmless, and the only surface when the row is still mounted), but it has
-   *  no surface at all once the deleted row unmounted — precisely the case the
-   *  shell-level `deleteTarget` exists for — so the message is also rendered
-   *  inside the dialog as a `role="alert"` and the dialog stays up until the
-   *  user dismisses it (cancel / X / mask / Escape). */
+  /** 接受已武装确认：跑同一个 keyed action（rowErrors 上报一致），wire 在飞行时保持 pending，
+   *  成功且 action 落定后关闭。失败**不**关闭对话框：消息同时渲染在对话框内 role="alert"，
+   *  行级 rowErrors 在被删行卸载后已无表面（这正是 deleteTarget 放在 shell 上的原因），
+   *  对话框直到用户取消/X/mask/Escape 才关闭。 */
   const confirmDeleteWorkspace = (): void => {
     const target = deleteTarget
     if (target === null || deletePending) return
@@ -252,42 +172,29 @@ export function useSidebarDialogs({ servers, runActionWithOutcome, setRowErrors 
     void runActionWithOutcome(`${target.sourceId}/workspace/${target.workspaceId}/delete`, async () => {
       try {
         const path = workspacePathForFact(target.sourceId, target.workspaceId)
-        // chamber (design 05 §2.2.1): the
-        // WITHDRAW half of the workspace echo rides the single funnel — the
-        // wire call and the fact publish together, for the ROW's own source
-        // (never for the publishing shell). An unmounted source has no
-        // authoritative baseline listing this workspace, so
-        // `reconcilePendingWorkspaces` cannot retire the echoed row: without
-        // this fact a create → delete left a ghost row with real-id actions
-        // enabled until the TTL.
+        // chamber (design 05 §2.2.1): workspace echo 的 WITHDRAW 半边走单一漏斗——wire 与事实
+        // 一起发布，属于行自己的来源（绝不是发布壳的来源）。未挂载来源没有可退休该回显的权威基线
+        // （`reconcilePendingWorkspaces` 匹配不到），否则 create → delete 会留下带真 id 动作的
+        // 幽灵行直到 TTL。
         await deleteWorkspaceForSource(target.sourceId, target.workspaceId, path)
         chamberBridge.requestRefresh(target.sourceId)
       } catch (reason) {
-        // The dialog's own copy of the failure. Rethrown so the
-        // keyed rowErrors line keeps reporting it.
+        // 对话框自己的一份失败文案；重新抛出以保留行级 rowErrors 上报。
         setDeleteError(reason instanceof Error ? reason.message : String(reason))
         throw reason
       }
     }).then((ok) => {
       setDeletePending(false)
-      // Success: the removal fact + refresh already
-      // ran inside the action, and the dialog closes.
+      // 成功：移除事实 + refresh 已在 action 内完成，关闭对话框。
       if (ok) dismissDeleteWorkspace()
     })
   }
 
-  // Add-workspace directory browser (05 §4, unified in-app dialog): the
-  // dialog drives the browsing source's own unary client (directoryPicker.list
-  // / directoryPicker.createDirectory — the browse capability every managed
-  // host serves, v0.1.2-alpha.1 namespace). The browse calls are
-  // useCallback-stabilized: the vendor dialog
-  // resets its whole navigation on every change of its `navigate` closure,
-  // and this shell re-renders on chamberBridge publishes (status/snapshot
-  // pushes + fallback refreshes), so an inline arrow would wipe the user's
-  // browsing on refresh. A
-  // confirmed path commits workspace.create against that source; failures
-  // close the dialog and surface inline (never hidden behind the modal
-  // mask), never silently.
+  // 添加工作区目录浏览器（应用内 unified dialog）：驱动浏览来源自己的 unary client
+  // （directoryPicker.list / createDirectory——每个受管宿主都提供的 browse 能力）。browse
+  // 调用用 useCallback 稳定：vendor 对话框在 `navigate` 闭包每次变化时重置全部导航，而本壳
+  // 会因桥发布重渲染，内联箭头会在刷新时抹掉用户的浏览。确认路径对该来源提交
+  // workspace.create；失败关闭对话框并内联呈现，绝不静默。
   const browseClient = useMemo(
     () => (addingWorkspace === null ? null : getInstanceClient(addingWorkspace)),
     [addingWorkspace],
@@ -317,14 +224,10 @@ export function useSidebarDialogs({ servers, runActionWithOutcome, setRowErrors 
         delete next[key]
         return next
       })
-      // chamber (design 05 §2.2): the HOST workspace identity
-      // is published by the single funnel together with the wire call — the
-      // only trustworthy "this workspace exists on that host" fact reachable
-      // without a mounted shell. The unary fallback derives its groups from
-      // session cwds (a brand-new workspace has none yet) and a previously-
-      // pushed source keeps its workspace set frozen, so without the echo the
-      // row appears only after the user clicks that server. The App echoes it
-      // immediately; the mounted follow baseline converges later.
+      // chamber (design 05 §2.2): 宿主工作区身份由单一漏斗与 wire 调用一起发布——没有挂载壳
+      // 时唯一可信的「该宿主存在此工作区」事实；否则该行要等用户点击服务器才出现（unary 兜底
+      // 从 session cwd 派生分组，新工作区还没有；已推送来源的工作区集是冻结的）。App 立即回显，
+      // 挂载后的 follow 基线稍后收敛。
       createWorkspaceForSource(sourceId, path)
         .then(() => {
           setAddingWorkspace(null)
@@ -369,8 +272,7 @@ export function SidebarRootDialogs({ dialogs, servers, t, directoryBrowserT }: {
   } = dialogs
   return (
     <>
-      {/* Add-workspace directory browser (single instance; mounted only while
-          a target source is chosen — a fresh mount resets the dialog). */}
+      {/* 添加工作区目录浏览器（单实例；仅在选定来源时挂载——重新挂载即重置对话框）。 */}
       {addingWorkspace !== null && (
         <DirectoryBrowser
           open
@@ -382,11 +284,8 @@ export function SidebarRootDialogs({ dialogs, servers, t, directoryBrowserT }: {
           onClose={browseClose}
         />
       )}
-      {/* chamber (design 24): the per-source archive
-          manager — lists what is archived (grouped by workspace, §6) and
-          deletes per-row / selected rows (whole set only via the explicit
-          select-all checkbox — no standalone delete-all, §6). Mounted only
-          while a target source is chosen. */}
+      {/* chamber (design 24): per-source 归档管理器——列出归档（按工作区分组），支持逐行/
+          多选删除；整集只能经显式 select-all。仅在选定来源时挂载。 */}
       {archiveCleanupServerId !== null && (
         <ArchiveManagerDialog
           server={servers.find(candidate => candidate.id === archiveCleanupServerId) ?? null}
@@ -394,17 +293,10 @@ export function SidebarRootDialogs({ dialogs, servers, t, directoryBrowserT }: {
           onClose={closeArchiveCleanup}
         />
       )}
-      {/* chamber: the workspace-delete confirmation — the in-app Modal
-          (upstream chrome: outline cancel + outline destructive confirm, a
-          description sentence, a role="status" pending line and a role="alert"
-          failure line, vendor ui-workspace WorkspaceBrowser.tsx:1393-1418).
-          Mounted only
-          while a target is armed; the row that opened it may already be gone.
-          Single-dialog-layer invariant: this confirm is
-          never mounted over another chamber dialog and never under one — all
-          three openers (this arm handler, the archive manager's, the
-          add-workspace browser's) consult `otherChamberDialogOpen`, so only one
-          layer can be up whichever order the user reaches them in. */}
+      {/* chamber: 工作区删除确认——应用内 Modal（上游 chrome：outline 取消/危险确认、
+          描述句、role="status" pending 行、role="alert" 失败行）。仅在武装目标存在时挂载，
+          开启它的行可能已不在。单层不变量：本确认绝不在另一 chamber 对话框之上或之下——
+          三个打开方都查询 `otherChamberDialogOpen`，任一顺序下只有一层。 */}
       <Modal
         open={deleteTarget !== null}
         onClose={closeDeleteWorkspace}
@@ -414,11 +306,9 @@ export function SidebarRootDialogs({ dialogs, servers, t, directoryBrowserT }: {
           ? {}
           : {
             description: deleteTarget.orphaned
-              // The orphan case keeps its own
-              // copy, but the DIALOG needs a statement (the long-standing
-              // `confirm.deleteOrphan` question with its trailing "？" reads as a
-              // question under a "删除工作区" title, and that key is still the
-              // orphan badge's native title in the nav — unchanged there).
+              // orphan 情况有自己的一份文案，但对话框需要陈述句：`confirm.deleteOrphan`
+              // 带尾随「？」在「删除工作区」标题下读作疑问；该 key 仍是导航里 orphan 徽标的
+              // 原生 title。
               ? t('delete.descOrphan', { name: deleteTarget.title })
               : t('delete.desc', { name: deleteTarget.title }),
           }}
@@ -440,8 +330,7 @@ export function SidebarRootDialogs({ dialogs, servers, t, directoryBrowserT }: {
       >
         <div ref={deleteBodyRef} tabIndex={-1}>
           {deletePending && <div className={cc.deleteStatus} role="status">{t('delete.pending')}</div>}
-          {/* The failure stays INSIDE the dialog (and the dialog
-              stays open) — upstream WorkspaceBrowser.tsx:1418. */}
+          {/* 失败留在对话框内（对话框也保持打开）。 */}
           {deleteError !== null && <div className={cc.deleteError} role="alert">{deleteError}</div>}
         </div>
       </Modal>

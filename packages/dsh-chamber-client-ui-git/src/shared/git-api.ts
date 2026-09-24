@@ -8,8 +8,7 @@ import type {
 } from './types.ts'
 import { errorMessage, isRecord } from '@dsh-chamber/dsh-chamber-client-core'
 import { normalizeGitSnapshot } from './snapshot.ts'
-// The client leg of the three-layer git timeout ladder; the control-plane
-// lockstep test imports the same module as the client's REAL budget.
+// The client leg of the three-layer git timeout ladder; the control-plane lockstep test imports the same module as the client's REAL budget.
 import { RPC_TIMEOUT_MS } from './timeout-budget.ts'
 
 export class GitWorktreeRpcError extends Error {
@@ -28,10 +27,9 @@ export class GitWorktreeRpcError extends Error {
 
 /**
  * True when the browser cannot know whether the host committed the request.
- * Typert business errors are definitive; transport/timeout/invalid response
- * failures must retain the operation id for an idempotent retry. A missing
- * host package (404) is DEFINITIVE: retrying the same mutation cannot help
- * until the instance loads the Remote, so it must not mint recovery entries.
+ * Typert business errors are definitive; transport/timeout/invalid-response
+ * failures keep the operation id for an idempotent retry. A missing host package
+ * (404) is DEFINITIVE: replaying cannot help and must not mint recovery entries.
  */
 export function isAmbiguousGitRpcFailure(error: unknown): boolean {
   if (!(error instanceof GitWorktreeRpcError)) return true
@@ -45,17 +43,14 @@ export function isAmbiguousGitRpcFailure(error: unknown): boolean {
 
 /**
  * Preflight/deterministic rejections that can NEVER have committed a mutation:
- * surfacing them as an ambiguous recovery would replay the same failure
- * forever and lock the whole source. They become a plain
- * actionError instead — the user fixes the cause and retries.
+ * surfacing them as ambiguous recovery would replay the same failure forever and
+ * lock the whole source — they become a plain actionError instead.
  *
- * LOCKSTEP POINT (host classification): `RETRYABLE_CODES` in
- * `packages/dsh-chamber-seed-git-worktree/src/core.ts` is the codes the host
- * serializes with `retryable: true` (outcome unverified). This set must stay
- * disjoint from it except for {@link DETERMINISTIC_HOST_RETRYABLE_OVERRIDES},
- * and must cover every code the host proves to be a pre-mutation refusal. The
- * cross-package test `test/snapshot/host-client-lockstep.test.ts` fails on any other
- * divergence, so a code added or renamed on either side must be mirrored here.
+ * LOCKSTEP POINT: must stay disjoint from the host's `RETRYABLE_CODES`
+ * (`packages/dsh-chamber-seed-git-worktree/src/core.ts`) except for
+ * {@link DETERMINISTIC_HOST_RETRYABLE_OVERRIDES}, and cover every code the host
+ * proves to be a pre-mutation refusal; the cross-package lockstep test fails on
+ * any other divergence, so a code added or renamed must be mirrored here.
  */
 export const DETERMINISTIC_GIT_REJECTION_CODES: ReadonlySet<string> = new Set([
   'invalid-input',
@@ -78,28 +73,22 @@ export const DETERMINISTIC_GIT_REJECTION_CODES: ReadonlySet<string> = new Set([
 ])
 
 /**
- * Host-RETRYABLE codes this client deliberately classifies as deterministic
- * anyway: both come from the host's filesystem probe
- * (`existingPath`), so replaying the same operation re-runs the same failing
- * probe. Treating them as ambiguous replaces the actionable refusal with a
- * recovery entry that replays forever and wedges the source. The host keeps
- * them retryable because the same code can also surface from a post-mutation
- * reconcile, but the client's only actionable outcome is the refusal — and an
- * explicit host `retryable: false` (isProvenPreMutationRefusal) remains the
- * proof that clears a pending recovery.
+ * Host-RETRYABLE codes this client deliberately classifies as deterministic: both
+ * come from the host's filesystem probe (`existingPath`), so replaying re-runs
+ * the same failing probe and a recovery entry would replay forever and wedge the
+ * source. The host keeps them retryable because the same code can surface from a
+ * post-mutation reconcile; an explicit host `retryable: false` remains the proof
+ * that clears a pending recovery.
  *
- * LOCKSTEP POINT: `test/snapshot/host-client-lockstep.test.ts` asserts this set is
- * EXACTLY the overlap between {@link DETERMINISTIC_GIT_REJECTION_CODES} and the
- * host's `RETRYABLE_CODES` — an undeclared overlap (or a host code that stops
- * overlapping without this list being updated) fails the suite.
+ * LOCKSTEP POINT: the lockstep test asserts this set is EXACTLY the overlap
+ * between {@link DETERMINISTIC_GIT_REJECTION_CODES} and the host's `RETRYABLE_CODES`.
  */
 export const DETERMINISTIC_HOST_RETRYABLE_OVERRIDES: ReadonlySet<string> = new Set([
   'path-unavailable',
   'workspace-path-unavailable',
 ])
 
-/** True for a host code the browser refuses to replay (see
- *  {@link DETERMINISTIC_GIT_REJECTION_CODES}). */
+/** True for a host code the browser refuses to replay. */
 export function isDeterministicGitRejection(error: unknown): boolean {
   return error instanceof GitWorktreeRpcError && DETERMINISTIC_GIT_REJECTION_CODES.has(error.code)
 }
@@ -119,9 +108,7 @@ export interface RemoveWorktreeInput {
   /** Optional local branch to delete after the worktree removal (design 08 §5.3). */
   deleteBranch?: string
   /** Explicit user authorization to DISCARD the worktree's uncommitted state:
-   *  the host then removes a dirty worktree with `git worktree remove
-   *  --force` (branch/commits/HEAD untouched). Never set without a confirmed
-   *  dialog checkbox (design 08 §5.3 amendment). */
+   *  the host then removes a dirty worktree with `git worktree remove --force`. */
   discardChanges?: boolean
 }
 
@@ -310,8 +297,7 @@ export function decodeRemoveValue(
       ? true
       : invalidValue(method, 'branchPreserved must be true'),
   }
-  // Decode invariant: `next` and `workspaceId` must agree — a
-  // 'delete-workspace' without an id would call deleteWorkspace(undefined).
+  // Decode invariant: `next` and `workspaceId` must agree — a 'delete-workspace' without an id would call deleteWorkspace(undefined).
   if ((result.next === 'delete-workspace') !== (result.workspaceId !== undefined)) {
     return invalidValue(method, 'next does not agree with workspaceId')
   }
@@ -326,13 +312,11 @@ export function decodeRemoveValue(
 }
 
 /**
- * One gitWorktree call over the SIDEBAR's per-instance unary carrier — the ONE
+ * One gitWorktree call over the sidebar's per-instance unary carrier — the ONE
  * client-request envelope, rpcId correlation, timeout budget and error
- * classification in this repo (design 08 §7, design 20 §4.2). The carrier owns
- * the URL/base path, the browser-auth handling of the per-instance proxy, the
- * not-ready 503 class and the design 24 §5 404 domain-missing discrimination;
- * this module keeps only the git-specific two-layer domain decode and maps the
- * carrier's outcomes onto the codes THIS client's recovery rules consume.
+ * classification in this repo (design 08 §7, design 20 §4.2). The carrier owns the
+ * URL/base path, proxy auth, the not-ready 503 class and 404 domain-missing
+ * discrimination; this module keeps only the git-specific two-layer decode.
  */
 async function callGitRemote(sourceId: string, method: string, input?: unknown): Promise<unknown> {
   const endpoint = `gitWorktree/${method}`
@@ -340,46 +324,37 @@ async function callGitRemote(sourceId: string, method: string, input?: unknown):
   try {
     transport = await getInstanceClient(sourceId).callUnary(
       endpoint,
-      // Typert validates the named argument object exactly: snapshot() has no
-      // argument, while every mutating method has the single argument `input`.
+      // Typert validates the named argument object exactly: snapshot() has none, mutating methods take `input`.
       input === undefined ? {} : { input },
       undefined,
-      // The 60s budget must stay ABOVE the proxy's 45s upstream idle window
-      // and the host's 30s mutation budget, and the
-      // domain-missing opt-in keeps the design 24 §5 404 discrimination.
+      // The 60s budget must stay ABOVE the proxy's 45s upstream idle window and
+      // the host's 30s mutation budget; the opt-in keeps the 404 discrimination.
       { timeoutMs: RPC_TIMEOUT_MS, notFoundAsDomainMissing: true },
     )
   } catch (error) {
-    // The carrier's domain-missing class IS the definitive design 08 §6.3 404:
-    // the gitWorktree Remote is not mounted, so replaying the same mutation
-    // cannot help and a recovery entry must never be minted from it.
+    // The carrier's domain-missing class IS the definitive 404: the gitWorktree
+    // Remote is not mounted, so replaying cannot help — never mint a recovery.
     if (error instanceof InstanceDomainMissingError) {
       throw new GitWorktreeRpcError(
         'git-host-not-loaded',
-        // The user-facing guide is localized (locales.gitHostNotLoaded); this
-        // raw message is the unmapped/diagnostic fallback and stays English.
+        // The user-facing guide is localized; this raw message is the diagnostic fallback (English).
         'The Git plugin is not loaded in this instance (host package missing or inactive). Restart the desktop for a local instance, or re-send the chamber host package in the connection settings and restart to apply for a remote instance.',
       )
     }
     // Every other carrier outcome (not-ready 503, other non-2xx, envelope or
-    // rpcId failure, abort/timeout, network loss) keeps this client's existing
-    // ambiguous classification: a mutation may have committed, so the saga must
-    // retain its operation id for an idempotent replay. That includes the one
-    // carrier-owner nuance: a 404 whose body carries the control plane's own
-    // `instance_not_found` code is classified by the carrier as an
-    // instance-layer transport fact (design 24 §5), NOT as domain missing —
-    // adopting that classification is deliberate.
+    // rpcId failure, abort/timeout, network loss) stays ambiguous: a mutation may
+    // have committed, so the saga retains its operation id. A 404 carrying the
+    // control plane's `instance_not_found` code is an instance-layer transport fact,
+    // NOT domain missing — adopting that classification is deliberate.
     throw new GitWorktreeRpcError('http-error', carrierFailureMessage(error))
   }
   if (transport.ok !== true) {
     // RPC-layer refusal (the Remote threw or the gateway rejected the payload):
-    // the code is `rpc-failed`, and the classification (ambiguous → the
-    // recovery keeps its operation id) applies.
+    // ambiguous, so the recovery keeps its operation id.
     throw new GitWorktreeRpcError('rpc-failed', transport.error.message, transport.error.details)
   }
   // The host catches every known GitWorktreeError and returns a domain result
-  // inside the carrier result. Only this inner error has stable domain codes
-  // suitable for recovery decisions.
+  // inside the carrier result — only this inner error has stable domain codes.
   const domain = transport.value
   if (typeof domain !== 'object' || domain === null || typeof (domain as { ok?: unknown }).ok !== 'boolean') {
     throw new GitWorktreeRpcError('invalid-domain-result', 'The Git Remote is missing the domain-result envelope')

@@ -1,19 +1,13 @@
 /**
- * npm registry URL whitelist for the dsh runtime version channel (design 18
- * §4/§6). The main process only ever fetches from these registry domains —
- * metadata (`/{packageName}`), tarballs (`/{package}/-/{file}.tgz`) and the
- * search endpoint (`/-/v1/search`) — so the trust anchor stays explicit
- * (「切换源即切换信任边界」, design §3.6): a custom registry origin only
- * becomes reachable after it passes this same validation.
- *
- * The validation structure mirrors main.ts `isAllowedReleaseUrl` (new URL +
- * origin whitelist + userinfo rejection + decode-then-re-normalize); the
- * registry domain needs its own instance because the GitHub-hardcoded one is
- * not reusable (design 18 §6). `desktop_npm_search` is folded onto this same
- * gate; this module itself is pure logic with no IPC.
+ * npm registry URL whitelist for the dsh runtime version channel. The main process only
+ * ever fetches metadata (`/{packageName}`), tarballs (`/{package}/-/{file}.tgz`) and
+ * search (`/-/v1/search`) from these origins, so the trust anchor stays explicit
+ * (切换源即切换信任边界): a custom registry origin only becomes reachable after it passes
+ * this same validation. The structure mirrors main.ts `isAllowedReleaseUrl` (new URL +
+ * origin whitelist + userinfo rejection + decode-then-re-normalize); `desktop_npm_search`
+ * folds onto the same gate. Pure logic, no IPC.
  */
-/** npm 官方 registry origin —— 默认源与白名单首项的单一来源（gateway
- * runtime-manager 的 DEFAULT_REGISTRY_ORIGIN 也消费它，本轮起）。 */
+/** npm 官方 registry origin —— 默认源与白名单首项的单一来源（gateway 也消费它）。 */
 export const DEFAULT_REGISTRY_ORIGIN = 'https://registry.npmjs.org'
 
 export const ALLOWED_REGISTRY_ORIGINS: readonly string[] = [
@@ -21,17 +15,15 @@ export const ALLOWED_REGISTRY_ORIGINS: readonly string[] = [
   'https://registry.npmmirror.com',
 ]
 
-/** npmmirror's tarball CDN host (`registry.npmmirror.com` 302-redirects tarball
- * downloads here, at `/packages/[<@scope>/]<name>/<version>/<file>.tgz`). */
+/** npmmirror's tarball CDN host (its metadata host 302-redirects downloads here). */
 export const NPMIRROR_CDN_ORIGIN = 'https://cdn.npmmirror.com'
 
 /**
- * The origins a registry's tarball download may legitimately touch (the
- * registry itself plus any tarball CDN it redirects to). npmmirror serves
- * metadata from registry.npmmirror.com but 302-redirects tarball downloads to
- * its CDN cdn.npmmirror.com; the download's initial-URL check and per-hop
- * redirect gate must both allow that CDN. Tarball integrity is still enforced
- * by SRI after download, so the CDN cannot substitute bytes.
+ * The origins a registry's tarball download may legitimately touch (the registry itself
+ * plus any CDN it redirects to): npmmirror serves metadata from registry.npmmirror.com but
+ * 302-redirects tarballs to cdn.npmmirror.com, and both the initial-URL check and the
+ * per-hop gate must allow that CDN. SRI is still enforced after download, so the CDN
+ * cannot substitute bytes.
  */
 export function registryRedirectOrigins(origin: string): readonly string[] {
   if (origin === 'https://registry.npmmirror.com') {
@@ -58,16 +50,13 @@ export function canonicalRegistryOrigin(raw: unknown): string | null {
 }
 
 /**
- * Whether `raw` is a URL the dsh runtime channel may fetch: it parses with
- * `new URL`, its origin is in `origins` (defaults to
- * `ALLOWED_REGISTRY_ORIGINS`), it carries no userinfo, and its pathname —
- * after percent-decoding and re-normalizing through a fresh URL (the
- * encoding-traversal defense) — is one of the allowed registry shapes:
- * metadata `/@scope/name` or `/name`, tarball `/@scope/name/-/file.tgz` or
- * `/name/-/file.tgz`, or the search endpoint `/-/v1/search`; on
- * npmmirror's CDN origin the CDN tarball layout
- * `/packages/[<@scope>/]<name>/<version>/<file>.tgz` is additionally allowed.
- * Anything unparsable, off-origin, credentialed or off-shape returns false.
+ * Whether `raw` is a URL the dsh runtime channel may fetch: it parses, its origin is in
+ * `origins` (default ALLOWED_REGISTRY_ORIGINS), it carries no userinfo, and its pathname —
+ * after percent-decoding and re-normalizing through a fresh URL (the encoding-traversal
+ * defense) — is an allowed shape: metadata `/name` or `/@scope/name`, tarball
+ * `/name/-/file.tgz` (scoped too), search `/-/v1/search`, or the npmmirror CDN tarball
+ * layout on the CDN origin. Anything unparsable, off-origin, credentialed or off-shape
+ * returns false.
  */
 export function isAllowedRegistryUrl(raw: unknown, origins?: readonly string[]): boolean {
   if (typeof raw !== 'string') return false
@@ -75,32 +64,26 @@ export function isAllowedRegistryUrl(raw: unknown, origins?: readonly string[]):
   try {
     const url = new URL(raw)
     if (!allowed.includes(url.origin)) return false
-    // `new URL` ignores userinfo for `origin`; reject any credentialed URL so
-    // the whitelist can never be pointed at a user:pass@ registry URL.
+    // `new URL` ignores userinfo for `origin`; reject any credentialed URL so the
+    // whitelist can never be pointed at a user:pass@ registry URL.
     if (url.username !== '' || url.password !== '') return false
     // `new URL` does NOT decode percent-encoded path segments, so an encoded
-    // `..%2f..%2f` traversal would pass a raw pathname shape check yet land
-    // on an arbitrary path under the registry. Decode the pathname and
-    // re-normalize through a fresh URL — the traversal then resolves like a
-    // literal one and fails the shape check below.
+    // `..%2f..%2f` traversal would pass a raw shape check yet land on an arbitrary path.
+    // Decode and re-normalize through a fresh URL: it resolves like a literal one and
+    // fails the shape check below.
     const normalized = new URL(`${url.origin}${decodeURIComponent(url.pathname)}`).pathname
     return isAllowedRegistryPath(normalized, url.origin)
   } catch {
-    // Unparsable URL, malformed percent-encoding (decodeURIComponent throws),
-    // or a re-normalization failure — never allowed.
+    // Unparsable URL, malformed percent-encoding or a re-normalization failure — never allowed.
     return false
   }
 }
 
 /**
- * The allowed path shapes under a whitelisted origin:
- * - search endpoint: `/-/v1/search` (npm's `/-/v1/search?text=…` API);
- * - metadata: `/name` or `/@scope/name`;
- * - tarball: `/name/-/file.tgz` or `/@scope/name/-/file.tgz`;
- * - npmmirror CDN tarball layout, ONLY on the CDN origin:
- *   `/packages/[<@scope>/]<name>/<version>/<file>.tgz` (the path shape the
- *   registry's 302 redirect actually lands on).
- * Any other path (including one a traversal resolved to) is rejected.
+ * The allowed path shapes under a whitelisted origin: search `/-/v1/search`; metadata
+ * `/name` or `/@scope/name`; tarball `/name/-/file.tgz` (scoped too); and, ONLY on the
+ * npmmirror CDN origin, `/packages/[<@scope>/]<name>/<version>/<file>.tgz`. Any other
+ * path (including one a traversal resolved to) is rejected.
  */
 function isAllowedRegistryPath(pathname: string, origin: string): boolean {
   if (pathname === '/-/v1/search' || pathname.startsWith('/-/v1/search/')) return true

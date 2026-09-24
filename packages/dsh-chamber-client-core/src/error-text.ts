@@ -1,6 +1,6 @@
 /**
  * Error-text projections for the browser-side chamber packages — the
- * repository's single implementation.
+ * browser-side single implementation.
  *
  * Two DISTINCT primitives, deliberately not collapsed into one:
  *
@@ -15,24 +15,18 @@
  * Two copies are deliberately NOT merged here: the desktop main process
  * (packages/desktop/describe-error.ts, which additionally appends an Error
  * cause chain) and the official dsh-client-web copy
- * (packages/dsh-client-web/src/boot.ts, upstream-diffable).
+ * (packages/dsh-client-web/src/boot.ts, upstream-diffable). The Node-side
+ * control plane keeps its documented twin (packages/control-plane/src/error-text.ts).
  *
  * Dependency-free on purpose: the consumers' plain-node tests import it.
  */
 
-/** The message of an unknown throwable, verbatim (never a fabricated cause).
- * @param err - any thrown value.
- * @returns the Error message, or the String() projection of anything else. */
+/** The message of an unknown throwable, verbatim (never a fabricated cause). */
 export function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }
 
-/**
- * Hostile-safe stable text for one thrown value (never throws, never '').
- * @param value - any thrown value.
- * @param fallback - the text used when nothing readable can be extracted.
- * @returns a non-empty diagnostic string.
- */
+/** Hostile-safe stable text for one thrown value: never throws, never returns '' (empty Error message/name and a throwing String() fall back). */
 export function describeThrown(value: unknown, fallback = 'unknown error'): string {
   try {
     if (value instanceof Error) {

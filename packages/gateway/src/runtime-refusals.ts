@@ -1,58 +1,19 @@
 /**
- * Runtime refusal / recovery-gate single sources: the
- * `/chamber/runtime` surface is two defense layers — the route pre-gates in
- * runtime-routes.ts (answering 409/403 synchronously from the projected
- * /status) and the manager's own refusals in runtime-manager.ts (assertMutationIdle
- * and the per-action guards, authoritative for DIRECT manager calls). Both
- * layers answer the same operation × state matrix cells; this module is the
- * single home for:
+ * Runtime refusal / recovery-gate single sources for the /chamber/runtime surface's
+ * two defense layers: route pre-gates (synchronous 409/403 from the projected
+ * status) and the manager's own assertions (authoritative for direct calls). Both
+ * execute; only refusal construction and the shared classification formulas live here.
  *
- *  - every refusal TEXT that is shared by two or more sites across the two
- *    files (each builder documents its exact use sites), and
- *  - the canonical recovery-state name sets and the block-outranks-pending
- *    predicate both layers classify with.
- *
- * Both layers keep executing (defense in depth is the point — the route gate
- * still runs BEFORE the manager call); only the refusal construction and the
- * classification formulas come from here. Wire behavior at every cell must stay
- * fixed: builders reproduce the exact text bytes, codes and the {error, code}
- * serialization order must not change, and every decision formula that differs
- * between the layers (see "Preserved intentional differences") is deliberately
- * NOT unified.
- *
- * Preserved intentional differences (each documented at its site too):
- *  - platform read-only texts: the route answers `runtime mutations are
- *    read-only on this platform` while the manager throws `windows runtime
- *    mutations are read-only` — two wordings of the same 403 platform_read_only
- *    cell, both pinned by the suites; no builder unifies them.
- *  - blocked-startup wording: the ROUTE gate answers `runtime startup block
- *    <reason> requires recovery first; …` (it knows which recovery route is
- *    open, incl. the canRecoverMetadata drift classification), while the
- *    MANAGER surfaces answer `runtime recovery <reason> is required; resume via
- *    the matching retry route (restore-builtin applies to pending or healthy
- *    selections only)` — the manager's wording is shared across its own four
- *    sites via recoveryRetryRequiredRefusal below and is NOT the route's text.
- *  - cleanup-version / recover-metadata / apply-now preflight journal-corrupt
- *    and the route-only env-probe-failed / retry-gate messages are single-site
- *    texts (one layer only) and stay inline at their single consumer.
- *  - pending suppression scope: the durable-pending carve-outs in
- *    ordinaryPendingVersion() cover ONLY the recovery-phase reasons
- *    (RETRY_APPLY_REASONS ∪ RETRY_RESTORE_REASONS), while status()'s
- *    blockOutranksPending predicate additionally covers the FATAL
- *    RECOVERABLE_METADATA_BLOCKS. Both consume the shared name sets below, but
- *    the two formulas remain distinct — do not collapse them into one.
- *
- * The gate semantics — the block-branch-allowed early return (block outranks
- * pending), the pending branch applying only when blockedReason === null, and
- * the recover-metadata admission set — are NOT owned here: they live in the
- * route gate / manager projections and are preserved by the consumers of this
- * module.
+ * Builders reproduce exact text bytes, codes and {error, code} order. NOT unified
+ * on purpose: platform read-only and blocked-startup wordings differ per layer,
+ * single-site texts stay inline, and the pending-suppression scope (RETRY_* sets)
+ * differs from status()'s block-outranks-pending predicate.
  */
 import { codedError } from './http-utils.ts'
 import { FATAL_STARTUP_BLOCK_REASONS } from '@dsh-chamber/dsh-runtime'
 
-/** Wire codes emitted by the refusal builders below (a subset of the route
- *  codeToStatus table; single-site codes stay at their sites). */
+/** Wire codes emitted by the refusal builders below; single-site codes stay at
+ *  their sites. */
 export type RuntimeRefusalCode =
   | 'runtime_pending'
   | 'runtime_recovery_required'
@@ -60,28 +21,21 @@ export type RuntimeRefusalCode =
   | 'env_override_active'
 
 /** A refusal as it appears on the wire and in the manager's return/throw
- *  surfaces. Field order matters: route bodies serialize `{error, code}` —
- *  builders keep that order so the JSON bytes do not change. */
+ *  surfaces. Field order matters: route bodies serialize `{error, code}`. */
 export type RuntimeRefusal<C extends RuntimeRefusalCode = RuntimeRefusalCode> = {
   error: string
   code: C
 }
 
-/** The manager's throw shape: an Error carrying the wire `.code`, built like
- *  `Object.assign(new Error(text), {code})` (codedError). */
+/** The manager's throw shape: an Error carrying the wire `.code` (codedError). */
 export function refusalError(refusal: RuntimeRefusal): Error & { code: RuntimeRefusalCode } {
   return codedError(refusal.code, refusal.error) as Error & { code: RuntimeRefusalCode }
 }
 
-/**
- * Ordinary-pending terminal refusal (runtime_pending). Use sites:
- *  - runtime-routes.ts recoveryGateRefusal pending branch (version = the
- *    projected status.pending, else 'unknown' — interpolation unchanged),
- *  - runtime-manager.ts assertNoPending / assertNoOrdinaryPending throws,
- *  - runtime-manager.ts profileWriteRefusal pending branch.
- * Restore-builtin / apply-now remain the pending branch's escapes — that
- * decision lives in the route gate, not here.
- */
+/** Ordinary-pending terminal refusal (runtime_pending): the route's pending branch
+ *  (projected status.pending, else 'unknown') plus the manager's assertNoPending /
+ *  assertNoOrdinaryPending / profileWriteRefusal. Restore-builtin / apply-now escapes
+ *  are the route gate's decision, not here. */
 export function pendingOnlyRefusal(version: string): RuntimeRefusal<'runtime_pending'> {
   return {
     error: `runtime version ${version} is pending; only restore-builtin is allowed until the next startup`,
@@ -92,19 +46,12 @@ export function pendingOnlyRefusal(version: string): RuntimeRefusal<'runtime_pen
 /** The env-pinned operation refused. Each wording is preserved exactly. */
 export type EnvPinnedOperation = 'version mutations' | 'metadata recovery' | 'registry mutation'
 
-/**
- * DSH_GATEWAY_DSH_PATH pin refusal (env_override_active). Use sites:
- *  - 'version mutations': route /select + /apply-now pre-gates; manager
- *    select / apply / rollback / cleanupVersion / restoreBuiltin / retryApply /
- *    applyNowPreflight,
- *  - 'metadata recovery': manager recoverMetadata (env is refused for the
- *    recovery transaction but never for restore/retry-restore data recovery),
- *  - 'registry mutation': manager setRegistry.
- */
+/** DSH_GATEWAY_DSH_PATH pin refusal (env_override_active) for version mutations (route
+ *  /select + /apply-now and the manager's select/apply/rollback/cleanupVersion/
+ *  restoreBuiltin/retryApply/applyNowPreflight), recoverMetadata (restore/retry-restore
+ *  data recovery stays allowed) and setRegistry. */
 export function envPinnedRefusal(op: EnvPinnedOperation): RuntimeRefusal<'env_override_active'> {
-  // The tails differ in verb number ('version mutations ARE disabled' vs the
-  // singular 'metadata recovery IS disabled' / 'registry mutation IS
-  // disabled') — each variant reproduces its exact bytes.
+  // The tails differ in verb number; each variant reproduces its exact bytes.
   const error = op === 'version mutations'
     ? 'runtime is pinned by DSH_GATEWAY_DSH_PATH (env always wins); version mutations are disabled'
     : op === 'metadata recovery'
@@ -116,13 +63,9 @@ export function envPinnedRefusal(op: EnvPinnedOperation): RuntimeRefusal<'env_ov
 /** The refused operation's tail of the profile-write lease message. */
 export type ProfileWriteRefusedOperation = 'runtime mutations' | 'restart' | 'start'
 
-/**
- * Managed profile-write lease refusal while a lease is held (runtime_busy).
- * Use sites: route /select pre-gate ('runtime mutations'), route /restart and
- * /start pre-gates ('restart' / 'start'), and manager assertMutationIdle
- * ('runtime mutations'). The route /restart + /start wordings differ from the
- * route /select wording by their tail and are preserved exactly.
- */
+/** Managed profile-write lease refusal while a lease is held (runtime_busy) for route
+ *  /select, /restart, /start pre-gates and manager assertMutationIdle. Each tail is
+ *  preserved exactly. */
 export function profileWriteBusyRefusal(refused: ProfileWriteRefusedOperation): RuntimeRefusal<'runtime_busy'> {
   const error = refused === 'runtime mutations'
     ? 'managed profile write in flight (plugin mutation); runtime mutations are refused'
@@ -132,23 +75,17 @@ export function profileWriteBusyRefusal(refused: ProfileWriteRefusedOperation): 
   return { error, code: 'runtime_busy' }
 }
 
-/**
- * Generic single-flight mutation-busy refusal (runtime_busy). Use sites: the
- * route /select / /apply-now / /cleanup-version / /restore-pre-rollback /
- * /recover-metadata pre-gates answering on manager.mutationInProgress().
- * The manager's DIRECT-call wording is per-writer (assertMutationIdle) and
- * stays inline there — this route text is deliberately not merged into it.
- */
+/** Generic single-flight mutation-busy refusal (runtime_busy) for the route /select,
+ *  /apply-now, /cleanup-version, /restore-pre-rollback and /recover-metadata pre-gates
+ *  (manager.mutationInProgress()). The manager's per-writer direct-call wording stays
+ *  inline and is deliberately not merged. */
 export function mutationBusyRefusal(): RuntimeRefusal<'runtime_busy'> {
   return { error: 'another runtime mutation is in flight', code: 'runtime_busy' }
 }
 
-/**
- * Apply-now not-running refusal (runtime_busy): the managed dsh never reached
- * ready, so an in-session switch cannot be applied. Use sites: the route
- * /apply-now pre-gate (projected status.connectionState) and the manager
- * applyNowPreflight direct-call parity (plane.connectionState).
- */
+/** Apply-now not-running refusal (runtime_busy): the managed dsh never reached ready, so
+ *  an in-session switch cannot be applied. Shared by the route /apply-now pre-gate and
+ *  the manager applyNowPreflight direct-call parity. */
 export function applyNowNotRunningRefusal(connectionState: string): RuntimeRefusal<'runtime_busy'> {
   return {
     error: `managed dsh is not running (${connectionState}); restore the builtin or retry the interrupted apply/restore before applying now`,
@@ -156,18 +93,16 @@ export function applyNowNotRunningRefusal(connectionState: string): RuntimeRefus
   }
 }
 
-/**
- * Start single-flight refusal (runtime_busy). Use sites: the route /start
- * pre-gate and the manager start() head check.
- */
+/** Start single-flight refusal (runtime_busy) for the route /start pre-gate and
+ *  the manager start() head check. */
 export function startAlreadyInFlightRefusal(): RuntimeRefusal<'runtime_busy'> {
   return { error: 'a start is already in flight', code: 'runtime_busy' }
 }
 
 /**
  * Start-not-a-target refusal (runtime_busy): the managed dsh is already
- * running/starting, so the decision-12 start window does not apply. Use sites:
- * the route /start pre-gate and the manager start() connection gate.
+ * running/starting, so the start window does not apply. Shared by the route
+ * /start pre-gate and the manager start() connection gate.
  */
 export function startNotApplicableRefusal(connectionState: string): RuntimeRefusal<'runtime_busy'> {
   return {
@@ -176,14 +111,10 @@ export function startNotApplicableRefusal(connectionState: string): RuntimeRefus
   }
 }
 
-/**
- * In-memory/durable recovery-block refusal (runtime_recovery_required) in the
- * MANAGER's wording — the manager never labels which recovery route is open
- * (the route gate's `runtime startup block … requires recovery first` /
- * `only <retry-action> is allowed` texts do that and stay in the gate). Use
- * sites (manager only): start(), applyNowPreflight, profileWriteRefusal and
- * restoreBuiltin's durable pre-guard.
- */
+/** MANAGER wording for an in-memory/durable recovery block
+ *  (runtime_recovery_required): it never labels which recovery route is open — the
+ *  route gate's own texts do. Use sites (manager only): start(), applyNowPreflight,
+ *  profileWriteRefusal and restoreBuiltin's durable pre-guard. */
 export function recoveryRetryRequiredRefusal(reason: string): RuntimeRefusal<'runtime_recovery_required'> {
   return {
     error: `runtime recovery ${reason} is required; resume via the matching retry route (restore-builtin applies to pending or healthy selections only)`,
@@ -193,43 +124,33 @@ export function recoveryRetryRequiredRefusal(reason: string): RuntimeRefusal<'ru
 
 /**
  * Canonical interrupted-apply recovery names — durable override markers
- * (swapAttempted / lastOutcome 'snapshot-failed'), the in-memory
- * startupBlockReason values, and the projected status phase all use these
- * exact strings. Retry-apply is the ONLY recovery surface when one of these
- * is armed (restore-builtin is not offered inside an interrupted
- * apply/snapshot). Consumers: the route gate phase/reason
- * classification and the manager's pending-suppression + status projection.
+ * (swapAttempted / lastOutcome 'snapshot-failed'), in-memory
+ * startupBlockReason values and the projected phase all use these exact
+ * strings. Retry-apply is the ONLY recovery surface while one is armed
+ * (restore-builtin is not offered inside an interrupted apply/snapshot).
  */
 export const RETRY_APPLY_REASONS: ReadonlySet<string> = new Set(['snapshot-failed', 'swap-attempted'])
 
 /** Canonical interrupted-data-restore recovery names (restore-half /
- *  restore-incomplete; the projected phase is 'restore-blocked'). Retry-restore
- *  is the ONLY recovery surface when one of these is armed. */
+ *  restore-incomplete; projected phase 'restore-blocked'). Retry-restore is the
+ *  ONLY recovery surface while one is armed. */
 export const RETRY_RESTORE_REASONS: ReadonlySet<string> = new Set(['restore-half', 'restore-incomplete'])
 
-/** FATAL metadata blocks plus the recover-route probe-failed sentinels: the
- *  startup-block reasons the recover-metadata route may act on (the four FATAL
- *  reasons are the shared dsh-runtime set — dsh-runtime
- *  FATAL_STARTUP_BLOCK_REASONS, the same set index.ts and the desktop main
- *  block on — plus the two sentinels the manager sets after a failed builtin
- *  recovery probe/start). Everything else (restore-half/incomplete,
- *  swap-attempted…) must resume through its own retry first. Kept importable
- *  from both runtime layers. */
+/** Startup-block reasons the recover-metadata route may act on: the shared dsh-runtime
+ *  FATAL set (the same constant index.ts and the desktop main block on) plus the two
+ *  sentinels the manager sets after a failed builtin recovery probe/start. Everything
+ *  else must resume through its own retry first. Kept importable from both layers. */
 export const RECOVERABLE_METADATA_BLOCKS: ReadonlySet<string> = new Set([
   ...FATAL_STARTUP_BLOCK_REASONS,
   'metadata-probe-failed',
   'metadata-start-failed',
 ])
 
-/**
- * "Block outranks pending": a FATAL metadata block or an interrupted
- * apply/restore reason outranks a lingering durable pending value
- * (the recovery surface must not be locked behind the pending terminal gate).
- * Consumers: manager status() blockOutranksPending. NOTE the durable-pending
- * carve-outs in ordinaryPendingVersion() deliberately cover only
- * RETRY_APPLY_REASONS ∪ RETRY_RESTORE_REASONS (not the FATAL set) — that
- * formula stays at its site and must not call this predicate.
- */
+/** "Block outranks pending": a FATAL metadata block or an interrupted apply/restore
+ *  reason outranks a lingering durable pending value, so the recovery surface is not
+ *  locked behind the pending terminal gate. Manager status() only. NOTE
+ *  ordinaryPendingVersion() deliberately covers only the RETRY_* sets — its formula
+ *  stays at its site and must not call this predicate. */
 export function startupBlockReasonOutranksPending(reason: string | null): boolean {
   if (reason === null) return false
   return RECOVERABLE_METADATA_BLOCKS.has(reason)

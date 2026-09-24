@@ -9,3 +9,5 @@
  */
 export { chamberBridge } from '../../dsh-chamber-client-core/src/aggregate-store.ts'
 export { describeThrown } from '../../dsh-chamber-client-core/src/error-text.ts'
+// shell.ts → open-in stream-health-probe 的会话打开证据读取（abstract 侧单源化后新增）。
+export { sessionOpenPromiseInFlight } from '../../dsh-chamber-client-core/src/session-open.ts'

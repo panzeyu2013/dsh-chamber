@@ -13,7 +13,7 @@ import { join } from 'node:path'
 import type { SpawnOptions } from 'node:child_process'
 import { createTransportManager } from '../../transport-manager.ts'
 import type { TransportManagerOptions } from '../../transport-manager.ts'
-import type { TransportInstanceInput, TransportInstanceSpec, TransportProvider, TransportStatusProjection, TransportVerifyResult, SpawnedProcess } from '../../transport-provider.ts'
+import type { TransportInstanceInput, TransportInstanceSpec, TransportKind, TransportProvider, TransportStatusProjection, TransportVerifyResult, SpawnedProcess } from '../../transport-provider.ts'
 import { sshProvider } from '../../ssh-provider.ts'
 
 export const silentLogger = { log() {}, warn() {}, error() {} }
@@ -115,11 +115,18 @@ export function makeManager(t: TestContext, overrides: {
       ...overrides.options,
     },
   })
+  /** Fixture completion: kind+transport are required inputs since the pre-v2
+   *  normalization was removed; the harness fixtures are local-dsh-over-ssh. */
+  const completeInstance = (input: TransportInstanceInput): TransportInstanceInput => ({
+    ...input,
+    ...(input.kind === undefined ? { kind: 'dsh' as TransportKind } : {}),
+    ...(input.transport === undefined ? { transport: 'ssh' as const } : {}),
+  })
   manager.saveInstances([
     ...(overrides.includeDefault === false
       ? []
-      : [{ id: 's1', label: 'home-server', host: 'home.example.com', user: 'alice', remotePort: 2222 }]),
-    ...(overrides.instances ?? []),
+      : [completeInstance({ id: 's1', label: 'home-server', host: 'home.example.com', user: 'alice', remotePort: 2222 })]),
+    ...(overrides.instances ?? []).map(completeInstance),
   ])
   // Dispose after the test: ready-state heartbeat / reconnect timers are
   // unref'd, but a disposed manager cannot keep probing or emitting into
@@ -176,7 +183,6 @@ export async function waitFor(predicate: () => boolean, timeoutMs = 3000, what =
 
 /** A tunnel provider whose buildStartEnv injects an askpass-style env. */
 export const fakeEnvProvider: TransportProvider = {
-  kind: 'ssh',
   validateSpec(input: unknown): TransportInstanceSpec | null {
     if (input === null || typeof input !== 'object') return null
     const record = input as Record<string, unknown>

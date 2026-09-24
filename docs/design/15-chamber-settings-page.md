@@ -116,7 +116,7 @@ ChamberSettings.sessionTodo: {
 - 渲染端助手：`settings-bridge/src/client/session-todo-settings.ts`（`sessionTodoOf`/`sessionTodoPatch`/
   `SESSION_TODO_DEFAULTS`，partial 嵌套 patch 只带改动的键上 wire）；`settings-store.ts` 乐观 overlay 的
   `mergeSettings` 同步嵌套 deep-merge；
-- 消费者：侧边栏 `ui-sidebar/src/shared/todo-prefs.ts` 只读镜像（get + onChanged，未水合回落默认——本块默认值
+- 消费者：侧边栏经 `packages/dsh-chamber-client-core/src/todo-prefs.ts` 只读镜像（get + onChanged，未水合回落默认——本块默认值
   本身就是开，与「绝不假 off」占位纪律不冲突）。
 
 ## 3. 与既有设计的衔接

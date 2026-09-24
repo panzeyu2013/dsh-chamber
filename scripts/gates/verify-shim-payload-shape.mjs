@@ -4,7 +4,7 @@
  *
  * The existing locks stop one level short of the wire contract:
  *   - bridge-shim-surface.test.ts locks method names, channel names and the
- *     top-level 4+9 surface;
+ *     top-level 4+10 surface;
  *   - ipc-surface-mirror.test.ts locks two specific payloads (save/delete).
  * A payload drift between preload.cts (Electron) and bridge-shim.js (Swift)
  * is then invisible: the Swift side would send `{ id }` where main now expects
@@ -17,6 +17,11 @@
  * argument. The committed bridge-manifest.json is the channel authority: every
  * method channel must be in the manifest, and every manifest invoke channel
  * must be exposed by a method (except the internal hydration channel).
+ *
+ * Count semantics: EXPECTED_SURFACE's 60 invoke is the namespace-exposed
+ * surface (the internal `dsh-chamber:info` hydration channel is not counted);
+ * bridge-manifest.json counts.invoke=61 (info included) + 9 push = 70, and the
+ * desktopSsh namespace alone is 32 invoke + 2 push.
  *
  * It is static text parsing on purpose: no runtime dependency, no surface
  * execution, the same discipline as bridge-shim-surface.test.ts. Changing a
@@ -48,13 +53,13 @@ export const INTERNAL_INVOKE_CHANNELS = new Set(['dsh-chamber:info'])
  */
 export const EXPECTED_SURFACE = {
   namespaces: 10,
-  members: 68,
-  invoke: 59,
+  members: 69,
+  invoke: 60,
   push: 9,
   perNamespace: {
     badge: 1,
     deepLink: 3,
-    desktopSsh: 33,
+    desktopSsh: 34,
     notifications: 5,
     openIn: 2,
     rendererStall: 1,

@@ -1,41 +1,19 @@
 /**
- * App-global update-state store for the settings「更新」section (design 11).
+ * App-global update-state store for the settings「更新」section.
  *
- * Module-level singleton (the settings shell mounts per-ctx, but the update
- * state is app-global — one desktop main process): hydrates from
- * window.dshChamber.update (query + push), keeps ONE subscription across all
- * shell instances, and exposes a stable snapshot for useSyncExternalStore.
+ * Module-level singleton (the shell mounts per-ctx, but update state is app-global —
+ * one desktop main process): hydrates from window.dshChamber.update (query + push),
+ * keeps ONE subscription across all shell instances, and exposes a stable snapshot for
+ * useSyncExternalStore. The singleton/hydration/subscription skeleton is
+ * bridge-hydration.ts (the twin settings-store.ts runs the same).
  *
- * The singleton + hydration + subscription skeleton (bridge latch, the
- * 100ms×20 fast re-probe chain, push-wins query handling, module-load kick,
- * subscriber re-arm) is the shared bridge-hydration.ts machinery — the same
- * skeleton settings-store.ts runs with its own surface/policies; see that
- * module's file header for the shared design notes.
- *
- * Store-specific notes:
- * - getUpdateState() is PURE (no side effects) — it must stay that way:
- *   useSyncExternalStore's getSnapshot runs during the render phase. All
- *   hydration is triggered from subscribeUpdateState (commit phase) and from
- *   module load, never from getSnapshot.
- * - No slow re-probe chain (slowReProbe: false): after the fast chain
- *   exhausts or a one-shot state() failure the store stays quiet — its
- *   PERMANENT push listener keeps hydrating on later pushes, and the next
- *   subscriber re-arms a fresh fast chain (the bridge subscription is a
- *   permanent ipcRenderer listener for the page's lifetime; zero listeners
- *   while idle — the push only wakes subscribers; assumes one module
- *   instance per page/shared chunk).
- * - The push wins over a stale query snapshot (a push arriving between the
- *   state() invoke and its resolution is never overwritten by the older
- *   query result).
- * - Discovery single-source: this page never runs its own update
- *   discovery. In the native (Swift/Sparkle) flavor the shell advertises the
- *   Sparkle leg and the「检查更新」invoke lands on the frozen
- *   updateNativeAction kind=check edge inside the shell — the store just
- *   consumes the dsh-chamber:update-state-changed phases the shell reports
- *   (checking → available/up-to-date/error). The Electron flavor keeps its
- *   electron-updater feed behind the same invoke; either way the page only
- *   renders pushed phases. checkInFlight mirrors the other two actions'
- *   module single-flight so N-ctx shells can never emit a second check edge.
+ * Store-specific: getUpdateState() is PURE — getSnapshot runs during render, so
+ * hydration comes from subscribeUpdateState (commit phase) and module load only. No slow
+ * re-probe chain: after the fast chain exhausts or a one-shot state() failure the store
+ * stays quiet — its PERMANENT push listener keeps hydrating and the next subscriber
+ * re-arms. A push always wins over a stale query snapshot. Discovery is single-source:
+ * the flavor routes the「检查更新」invoke inside the shell and the page renders pushed
+ * phases only; checkInFlight's module single-flight keeps N-ctx shells from a second edge.
  */
 import type { UpdateState, UpdateSurface } from '../ambient/update-bridge.d.ts'
 import { createBridgeHydration } from './bridge-hydration.ts'
@@ -45,24 +23,21 @@ let downloadInFlight = false
 
 /** Module-wide check in-flight guard (N-ctx shells share one check).
  *
- * In the native flavor the inspect invoke is the frozen
- * updateNativeAction kind=check edge — the shell must see exactly ONE per
- * click across every shell instance. The guard covers the invoke round trip
- * only; the phase push is the visible authority for the outcome. */
+ * In the native flavor the inspect invoke is the frozen updateNativeAction
+ * kind=check edge — the shell must see exactly ONE per click across every shell
+ * instance. The guard covers the invoke round trip only; the phase push is the
+ * visible authority for the outcome. */
 let checkInFlight = false
 
 /** Module-wide restart in-flight guard (N-ctx shells share one restart).
  *
- * Two-layer single-flight contract: this module gate covers
- * the IPC round-trip only — it is deliberately NOT reset when the main
- * process ACCEPTED the restart, because acceptance means quitAndInstall was
- * armed and the app is on its way out (cleanup takes seconds); a re-click in
+ * Two-layer single-flight: this module gate covers the IPC round-trip only and is
+ * deliberately NOT reset when the main process ACCEPTED the restart — acceptance
+ * means quitAndInstall was armed and the app is on its way out, so a re-click in
  * that window must not fire a second invoke. The MAIN-process gate
- * (updater.restartAndInstall, also never reset on success) is the backstop
- * that covers the whole quit window regardless of what any page believes, so
- * this gate only needs to prevent pointless duplicate invokes from multiple
- * shells of the same page. Failure/refusal paths reset here so the user can
- * retry in place. */
+ * (updater.restartAndInstall, also never reset on success) is the backstop for the
+ * whole quit window, so this gate only prevents pointless duplicate invokes from
+ * multiple shells. Failure/refusal paths reset here so the user can retry. */
 let restartInFlight = false
 
 const hydration = createBridgeHydration<UpdateState, UpdateSurface>({
@@ -70,16 +45,13 @@ const hydration = createBridgeHydration<UpdateState, UpdateSurface>({
   onChanged: (api, listener) => api.onChanged(listener),
   query: (api) => api.state(),
   onPush: (state) => {
-    // Restart recovery rule: the module
-    // restart single-flight mirrors main and is deliberately NOT reset on an
-    // armed ok:true — but a push proving the restart FAILED must release it,
-    // or every later click would be silently refused ('restart already in
-    // progress') until an app reload. Failure proof = the pushed state
-    // carries restartFailureText (main keeps phase `downloaded` there), or
-    // the phase left {downloaded, downloading} toward 'error'/'up-to-date'
-    // (belt — normally unreachable while armed, harmless when not armed).
-    // A plain downloaded push without failure keeps the armed-forever-quit
-    // semantics (the single-flight stays held until the quit — by design).
+    // Restart recovery rule: the module restart single-flight mirrors main and is
+    // deliberately NOT reset on an armed ok:true — but a push proving the restart
+    // FAILED must release it, or every later click would be silently refused until an
+    // app reload. Failure proof = the pushed state carries restartFailureText (main
+    // keeps phase `downloaded`), or the phase left {downloaded, downloading} toward
+    // 'error'/'up-to-date' (belt — normally unreachable while armed). A plain
+    // downloaded push keeps the armed-forever-quit semantics (held until the quit).
     if (state.restartFailureText !== undefined
       || state.phase === 'error' || state.phase === 'up-to-date') {
       restartInFlight = false
@@ -87,14 +59,12 @@ const hydration = createBridgeHydration<UpdateState, UpdateSurface>({
   },
   onQuery: () => {
     // No extra shaping: a query result that wins the push-wins race is the
-    // authoritative snapshot as-is (the release rule above is push-only —
-    // only a PUSH can prove a restart failed).
+    // authoritative snapshot as-is (the release rule above is push-only — only a
+    // PUSH can prove a restart failed).
   },
-  // 保持设计值 false：这里不靠慢探针兜底——Swift shim 已与
-  // preload 同序（只有 info 成功才暴露 dshChamber），因此「surface 存在但 query 恒
-  // reject」的形态不会出现；surface 缺失时走的是与本 store 无关的外层重试链。
-  // 慢探针本身的收敛性另有加固（bridge-hydration：成功才重置背退 + 无订阅者即停），
-  // 供 settings-store 等仍然启用它的消费面使用。
+  // 保持设计值 false：这里不靠慢探针兜底——Swift shim 已与 preload 同序（只有 info
+  // 成功才暴露 dshChamber），「surface 存在但 query 恒 reject」的形态不会出现。慢探针
+  // 本身的收敛性加固（成功才重置背退 + 无订阅者即停）供 settings-store 等消费面使用。
   slowReProbe: false,
 })
 
@@ -109,11 +79,9 @@ export function subscribeUpdateState(listener: () => void): () => void {
   return hydration.subscribe(listener)
 }
 
-/** The「检查更新」button action: a user-initiated check (autoDownload stays
- *  off, a check never downloads). A check never triggers the page's own
- *  discovery — the flavor routes it inside the shell: native →
- *  updateNativeAction kind=check → Sparkle appcast; Electron → electron-updater
- *  feed. The result is rendered from the pushed phases, not this return value. */
+/** The「检查更新」button action: a user-initiated check (autoDownload stays off, a
+ *  check never downloads). It never triggers the page's own discovery — the flavor
+ *  routes it inside the shell; the result is rendered from the pushed phases. */
 export async function requestUpdateCheck(): Promise<{ ok: true } | { ok: false; error: string }> {
   if (checkInFlight) return { ok: false, error: 'check already in progress' }
   checkInFlight = true
@@ -144,13 +112,11 @@ export async function requestUpdateDownload(): Promise<{ ok: true } | { ok: fals
 }
 
 /**
- * The「重启并安装」button action: once the download
- * completed, restart the app into the update (main-process quitAndInstall —
- * quit + install + relaunch through the normal quit path; transports and the
- * local dsh instance are disposed during that quit). {ok:true} means the
- * restart was armed — the process is on its way out and the caller should
- * treat the action as terminal (keep busy/disabled); only a refused or
- * failed call releases the gate for an in-place retry.
+ * The「重启并安装」button action: restart the app into the completed update
+ * (main-process quitAndInstall — quit + install + relaunch through the normal quit
+ * path; transports and the local dsh instance are disposed during that quit).
+ * {ok:true} means the restart was armed and the caller should treat it as terminal
+ * (keep busy/disabled); only a refused or failed call releases the gate for retry.
  */
 export async function requestUpdateRestart(): Promise<{ ok: true } | { ok: false; error: string }> {
   if (restartInFlight) return { ok: false, error: 'restart already in progress' }

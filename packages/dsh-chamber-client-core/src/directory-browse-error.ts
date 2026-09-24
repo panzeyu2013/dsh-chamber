@@ -1,15 +1,9 @@
 /**
- * Local copy of the vendor `dsh-client-ui-workspace` `DirectoryBrowseError`
- * (ui-workspace/src/client/navigation.ts).
- *
- * WHY a local copy: importing the
- * vendor ui-workspace sources directly pulls them into chamber typecheck
- * programs, and those sources do not compile under chamber tsconfigs
- * (parameter properties violate `erasableSyntaxOnly`, subpath imports like
- * `@deepseek-ai/dsh-session/types` do not resolve without vendor path tables).
- * The class is tiny and stable; the vendor file also carries a
- * `constructor(readonly rpcError)` parameter property, which is written here
- * as an explicit field assignment to stay erasable-syntax-only clean.
+ * Local copy of the vendor `dsh-client-ui-workspace` `DirectoryBrowseError`: importing vendor
+ * sources directly pulls them into chamber typecheck programs that do not compile under chamber
+ * tsconfigs (`erasableSyntaxOnly` forbids parameter properties; vendor subpath imports do not
+ * resolve). The vendor's `constructor(readonly rpcError)` is written here as an explicit field
+ * assignment to stay erasable-syntax-only clean.
  */
 
 /** Host directory business failure (wire shape of a rejected Typert Remote). */
@@ -22,10 +16,8 @@ export interface RemoteFailure {
 export class DirectoryBrowseError extends Error {
   override readonly name = 'DirectoryBrowseError'
 
-  /** Host-reported directory business failure. */
   readonly rpcError: RemoteFailure
 
-  /** @param rpcError - Host directory business failure. */
   constructor(rpcError: RemoteFailure) {
     super(`directory browse failed: ${rpcError.code}: ${rpcError.message}`)
     this.rpcError = rpcError

@@ -1,35 +1,13 @@
 /**
- * VS Code deep-link core (design 16 §3/§4/§5, desktop main process).
+ * VS Code deep-link core (desktop main process; electron-free — node built-ins +
+ * INSTANCE_ID_PATTERN only).
  *
- * Electron-free by construction: this module imports only node built-ins
- * (node:fs / node:os / node:path / node:url) plus the INSTANCE_ID_PATTERN
- * constant from transport-provider.ts (which itself has no runtime imports),
- * so the pure-Node test suite (test/desktop-shell/deep-link.test.ts) runs without electron or
- * any third-party dependency.
- *
- * Responsibilities — all deep-link validation happens here (design 16 §8,
- * the deep link is OS-level untrusted input):
- * - parseOpenVscodeIntent: parse `dsh-chamber://open-vscode` into a
- *   normalized launch request — scheme / host / instance / path all
- *   validated, loud failures only (§3.1).
- * - buildVscodeRemoteUrl: construct the `vscode://vscode-remote/ssh-remote+`
- *   target from registry metadata, decoupled from SSH_HOST_PATTERN (§3.2) —
- *   IPv6 bracketing, `host:port` rejection, sshPort≠22 rejection,
- *   segment-wise path encoding, hardcoded `vscode:` scheme (§3.3).
- * - detectVscodeAvailability: pure fs + PATH scan (never spawns / never
- *   executes anything) for a STABLE VS Code install (§5).
- * - runVscodeLaunch: the single execution pipeline shared by the OS deep
- *   link and the renderer button IPC (§3.4) — registry lookup → authority
- *   construction → availability re-check → openExternal; every failure is
- *   loud, never a silent success.
- * - Linux desktop integration (design 21): XDG autostart and per-user
- *   protocol-handler .desktop entries that target the RUNNING AppImage
- *   ($APPIMAGE) instead of the per-launch squashfs mount, plus the Exec-field
- *   quoting/escaping they share.
- *
- * main.ts only wires this module (open-url / pendingIntents / second-instance
- * argv / protocol registration / Linux desktop entries / IPC handlers); it
- * holds no deep-link logic.
+ * ALL deep-link validation happens here — the OS deep link is untrusted input:
+ * parseOpenVscodeIntent (scheme/host/instance/path validated, loud failures),
+ * buildVscodeRemoteUrl (IPv6 bracketing, host:port and sshPort≠22 rejected, segment-wise
+ * encoding, hardcoded `vscode:` scheme), detectVscodeAvailability (pure fs + PATH scan,
+ * never spawns) and runVscodeLaunch (shared pipeline: registry → authority → availability
+ * re-check → openExternal, every failure loud). Linux desktop entries target $APPIMAGE.
  */
 
 import { accessSync, constants as fsConstants, existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs'
@@ -47,23 +25,17 @@ export interface VscodeLaunchRequest {
   path: string
 }
 
-/**
- * Dependencies main.ts injects into runVscodeLaunch (design 16 §4). The
- * registry lookup returns the non-secret metadata the authority construction
- * needs; `transport` must be `'ssh'` (runVscodeLaunch re-checks it — the
- * vscode-remote URL is an ssh-TRANSPORT feature, v2 semantics design 17 §2:
- * the spec's kind is the TARGET type, the transport decides the mechanism).
- */
+/** Dependencies main.ts injects into runVscodeLaunch. `transport` must be `ssh`:
+ * the vscode-remote URL is an ssh-transport feature — the spec kind is the target
+ * type, the transport decides the mechanism. The lookup returns non-secret metadata. */
 export interface VscodeLaunchContext {
-  /** Registry lookup; null = the instance does not exist. `transport` must be 'ssh'. */
+  /** Registry lookup; null = the instance does not exist. `transport` must be `ssh`. */
   lookupInstance(id: string): { id: string; host: string; user: string | null; sshPort: number | null; transport: string } | null
   /** VS Code availability (the main-process probe, see detectVscodeAvailability). */
   vscodeAvailable(): boolean
   openVscodeUrl(url: string): Promise<{ ok: true } | { ok: false; error: string }>
-  /** Chamber setting `vscodeOpenInNewWindow` (design 16 §3.3): read lazily
-   *  per launch like vscodeAvailable so a mid-session settings change applies
-   *  to the next launch. Absent/undefined → false (bare URL, VS Code's own
-   *  default reuse policy decides). */
+  /** Chamber setting `vscodeOpenInNewWindow`, read lazily per launch so a mid-session
+   * change applies to the next one; absent/undefined → false (bare URL). */
   vscodeOpenInNewWindow?(): boolean
 }
 
@@ -71,34 +43,25 @@ export interface VscodeLaunchContext {
 const MAX_REMOTE_PATH_CHARS = 4096
 
 /**
- * VS Code's own per-launch "open in a NEW window" directive on its
- * custom-protocol URL. While VS Code is already running its main process
- * (`handleProtocolUrl` in the shipped 1.135 bundle — and the long-standing
- * desktop/web URL convention) otherwise falls through to its DEFAULT reuse
- * policy for externally opened folder URLs: the last active window gets
- * unloaded and reloaded with the target folder (`window.openFoldersInNewWindow`
- * only overrides when set literally to on/off). `windowId=_blank` forces the
- * new-window branch BEFORE that decision — with the folder-already-open
- * dedupe still intact (VS Code focuses the existing window instead of
- * duplicating). Chamber gates the directive on its `vscodeOpenInNewWindow`
- * setting (default on, design 16 §3.3). A future VS Code that ignores or
- * renames the parameter degrades to today's reuse behavior — never to an
- * error, since it is only a query parameter on an otherwise valid URL.
+ * VS Code per-launch new-window directive on the custom-protocol URL. While VS Code
+ * is already running, an externally opened folder URL otherwise goes through the
+ * default reuse policy (the last active window reloads with the target folder);
+ * `windowId=_blank` forces the new-window branch before that decision, with the
+ * folder-already-open dedupe intact. Chamber gates it on `vscodeOpenInNewWindow`
+ * (default on). A VS Code that ignores the parameter degrades to today reuse, never
+ * to an error — it is only a query parameter on an otherwise valid URL.
  */
 export function appendVscodeNewWindowParam(url: string): string {
   return url.includes('?') ? `${url}&windowId=_blank` : `${url}?windowId=_blank`
 }
 
-/** Convert an arbitrary thrown value into a stable, non-empty diagnostic.
- * Single-sourced in describe-error.ts; this alias is
- * kept because notifications.ts / open-in.ts import it from here. */
+/** Convert an arbitrary thrown value into a stable, non-empty diagnostic; the alias
+ * is kept because notifications.ts / open-in.ts import it from here. */
 export const describeUnknownError = describeError
 
-/** A bounded, normalized single-flight queue for OS deep-link launches.
- * Keys remain tracked after shift() while the launch is in flight and are
- * released only by complete(), so argv/open-url duplicates cannot race past
- * each other. The hard limit covers pending + in-flight keys. Once complete,
- * a later deliberate invocation is accepted. */
+/** Bounded, normalized single-flight queue for OS deep-link launches. A key stays
+ * tracked after shift() until complete(), so duplicates cannot race each other; the
+ * hard limit covers pending + in-flight. A later deliberate invocation is accepted. */
 export class BoundedVscodeIntentQueue {
   readonly #limit: number
   readonly #trackedKeys = new Set<string>()
@@ -121,9 +84,8 @@ export class BoundedVscodeIntentQueue {
     if (this.#trackedKeys.has(key)) return { accepted: false, dropped: null, reason: 'duplicate' }
 
     let dropped: Readonly<VscodeLaunchRequest> | null = null
-    // Capacity covers pending + in-flight keys, not only the array. Prefer
-    // evicting the oldest pending item; an all-in-flight queue cannot safely
-    // evict ownership and therefore rejects the newcomer explicitly.
+    // Capacity covers pending + in-flight, not only the array. Evict the oldest pending
+    // item; an all-in-flight queue rejects the newcomer explicitly rather than evict ownership.
     if (this.#trackedKeys.size >= this.#limit) {
       dropped = this.#pending.shift() ?? null
       if (dropped === null) return { accepted: false, dropped: null, reason: 'saturated' }
@@ -134,8 +96,8 @@ export class BoundedVscodeIntentQueue {
     return { accepted: true, dropped }
   }
 
-  /** Removes the next pending item but deliberately retains its tracked key
-   * until complete() so an equivalent intent stays single-flight. */
+  /** Removes the next pending item but retains its tracked key until complete(), so an
+   * equivalent intent stays single-flight. */
   shift(): Readonly<VscodeLaunchRequest> | null {
     return this.#pending.shift() ?? null
   }
@@ -153,10 +115,9 @@ export class BoundedVscodeIntentQueue {
   }
 }
 
-/** A renderer delivery remains owned by the main process until the current
- * renderer explicitly acknowledges the exact send attempt. `deliveryId` is
- * stable across reloads; `attempt` increments on every replay so a late ACK
- * from a dying document cannot commit work sent to its replacement. */
+/** Renderer delivery stays owned until the current renderer ACKs the exact attempt:
+ * `deliveryId` is stable across reloads and `attempt` increments on every replay, so a
+ * dying document ACK cannot commit work sent to its replacement. */
 export interface AckDelivery<T> {
   deliveryId: number
   attempt: number
@@ -170,10 +131,9 @@ interface AckDeliveryRecord<T> {
   key: string | null
 }
 
-/** Bounded FIFO handoff queue with optional normalized single-flight keys.
- * Capacity covers pending plus sent-but-unacknowledged records. A renderer
- * generation change requeues the complete in-flight prefix before work that
- * arrived later, preserving global FIFO. */
+/** Bounded FIFO handoff queue with optional normalized single-flight keys; capacity
+ * covers pending plus sent-but-unacknowledged. On a renderer generation change the
+ * complete in-flight prefix is requeued before work that arrived later (global FIFO). */
 export class BoundedAckDeliveryQueue<T extends object> {
   readonly #limit: number
   readonly #keyOf: ((payload: Readonly<T>) => string) | null
@@ -222,9 +182,8 @@ export class BoundedAckDeliveryQueue<T extends object> {
     return { deliveryId: record.deliveryId, attempt: record.attempt, payload: record.payload }
   }
 
-  /** A synchronous send failure was not handed off. Restore only that record
-   * ahead of the still-pending suffix; earlier successful sends stay in-flight
-   * awaiting their own ACKs. */
+  // A synchronous send failure was not handed off: restore only that record ahead of
+  // the still-pending suffix; earlier successful sends stay in-flight awaiting their ACKs.
   rollback(delivery: Pick<AckDelivery<T>, 'deliveryId' | 'attempt'>): boolean {
     const index = this.#inFlight.findIndex(record =>
       record.deliveryId === delivery.deliveryId && record.attempt === delivery.attempt)
@@ -234,7 +193,7 @@ export class BoundedAckDeliveryQueue<T extends object> {
     return true
   }
 
-  /** Commit only the exact current attempt. A stale ACK is a harmless false. */
+  /** Commit only the exact current attempt; a stale ACK is a harmless false. */
   acknowledge(deliveryId: number, attempt: number): boolean {
     if (!Number.isSafeInteger(deliveryId) || deliveryId < 1 || !Number.isSafeInteger(attempt) || attempt < 1) return false
     const index = this.#inFlight.findIndex(record =>
@@ -245,9 +204,8 @@ export class BoundedAckDeliveryQueue<T extends object> {
     return true
   }
 
-  /** Renderer reload/crash: replay every unacknowledged send before newer
-   * pending work. Their stable ids remain tracked; the next shift increments
-   * attempt, invalidating any ACK still arriving from the old document. */
+  // Renderer reload/crash: replay every unacknowledged send before newer pending work;
+  // stable ids stay tracked and the next shift increments attempt, invalidating old ACKs.
   requeueInFlight(): number {
     if (this.#inFlight.length === 0) return 0
     const count = this.#inFlight.length
@@ -256,9 +214,8 @@ export class BoundedAckDeliveryQueue<T extends object> {
     return count
   }
 
-  /** Retire matching work from both pending and already-sent ownership. Used
-   * when an authoritative registry lifecycle edge invalidates a source; a
-   * same-id replacement must not inherit held work from the old incarnation. */
+  // Retire matching work from pending and sent ownership; used when a registry lifecycle
+  // edge invalidates a source — a same-id replacement must not inherit the old held work.
   discardWhere(predicate: (payload: Readonly<T>) => boolean): number {
     let discarded = 0
     const keep = (record: AckDeliveryRecord<T>) => {
@@ -285,23 +242,18 @@ export class BoundedAckDeliveryQueue<T extends object> {
   }
 }
 
-/** Runtime protocol registration is packaged-only in this app. A packaged
- * Linux launch must not persist argv[1]: on a cold protocol start argv[1] can
- * itself be the URL. Electron's executable+script args form is only for the
- * `process.defaultApp` development shape, which this app deliberately skips.
- * Windows (design 21 M4): packaged builds call Electron's no-args
- * setAsDefaultProtocolClient form; the NSIS installer may additionally write
- * HKCU\Software\Classes entries (electron-builder `protocols`) — same target,
- * idempotent. Dev builds never register on any platform. */
+// Protocol registration is packaged-only. On a cold Linux protocol start argv[1] can
+// itself be the URL, so it must not be persisted; Electron executable+script args form
+// is only for `process.defaultApp` (dev), which this app deliberately skips. Windows:
+// packaged builds use the no-args form (the NSIS installer may also write HKCU classes
+// entries — same target, idempotent). Dev builds never register.
 export function decideDeepLinkProtocolRegistration(input: {
   isPackaged: boolean
   platform: string
 }): { action: 'skip' } | { action: 'register' } {
-  // `platform` is intentionally NOT read yet: dev-skip is platform-independent
-  // and packaged registration is the no-args form everywhere. It stays as an
-  // explicit input contract so a future per-platform policy (e.g. installer
-  // vs runtime registration) can branch without changing the signature;
-  // callers keep passing process.platform.
+  // `platform` is intentionally NOT read: dev-skip is platform-independent and packaged
+  // registration is the no-args form everywhere; it stays an input contract so a future
+  // per-platform policy can branch without changing the signature.
   if (!input.isPackaged) return { action: 'skip' }
   return { action: 'register' }
 }
@@ -311,8 +263,8 @@ export function canRestoreMainWindow(quitRequested: boolean): boolean {
   return !quitRequested
 }
 
-/** Wrap Electron's boolean protocol-registration API in the same loud,
- * exception-safe result discipline as the launch pipeline. */
+/** Wrap Electron boolean registration API in the same loud, exception-safe result
+ * discipline as the launch pipeline. */
 export function attemptDeepLinkProtocolRegistration(register: () => boolean):
   { ok: true } | { ok: false; error: string } {
   try {
@@ -324,26 +276,21 @@ export function attemptDeepLinkProtocolRegistration(register: () => boolean):
   }
 }
 
-// Linux desktop integration (design 21): Linux distributes BOTH protocol
-// handlers and XDG autostart through .desktop files. A packaged AppImage's
-// process.execPath is the per-launch squashfs mount (/tmp/.mount-*), which
-// disappears on exit — every persistent Linux desktop entry MUST target the
-// running AppImage itself ($APPIMAGE) instead. These helpers are pure /
-// injectable so the plain-node suite can test them.
+// Linux distributes protocol handlers and XDG autostart via .desktop files. A packaged
+// AppImage runs from a per-launch squashfs mount that disappears on exit, so every
+// persistent entry MUST target the running AppImage ($APPIMAGE). Pure/injectable.
 
-/** Desktop Exec-field quoting (Desktop Entry Specification): a value is
- *  quoted only when it needs to be, and the spec-reserved characters are
- *  escaped inside the quotes. Literal `%` must be doubled (`%%`) so a path
- *  like `/opt/v2%beta/` can never be parsed as a field code (`%b`, `%c` …). */
+/** Desktop Exec-field quoting: quote only when needed and escape the spec-reserved
+ * characters inside; a literal `%` is doubled (`%%`) so a path like `/opt/v2%beta/`
+ * can never be parsed as a field code. */
 export function quoteDesktopExecValue(value: string): string {
   const escapedPercent = value.replace(/%/g, '%%')
   if (!/[ \t\n"\\]/.test(escapedPercent)) return escapedPercent
   return `"${escapedPercent.replace(/(["\\`$])/g, '\\$1')}"`
 }
 
-/** The launch target for persistent Linux desktop entries: the running
- *  AppImage when the app was started from one ($APPIMAGE, absolute path),
- *  otherwise the main-process binary (unpacked dir / deb / dev). */
+/** Launch target for persistent Linux entries: the running AppImage when started from
+ * one ($APPIMAGE, absolute), otherwise the main-process binary. */
 export function resolveLinuxLaunchExecutable(input: {
   env?: Record<string, string | undefined>
   execPath: string
@@ -354,9 +301,8 @@ export function resolveLinuxLaunchExecutable(input: {
   return input.execPath
 }
 
-/** XDG base-directory resolution: only an ABSOLUTE env value is honored —
- *  the XDG Base Dir Spec treats relative values as unset, and silently
- *  writing under the cwd would leave a .desktop the desktop never reads. */
+/** XDG base-dir resolution: only an ABSOLUTE env value counts — relative values are
+ * unset per spec, and writing under the cwd leaves an entry the desktop never reads. */
 function xdgBaseDirectory(envValue: string | undefined, fallback: string): string {
   if (typeof envValue === 'string' && envValue.trim() !== '' && path.isAbsolute(envValue.trim())) {
     return envValue.trim()
@@ -364,9 +310,8 @@ function xdgBaseDirectory(envValue: string | undefined, fallback: string): strin
   return fallback
 }
 
-/** Linux XDG autostart directory (design 14 D6 / 21): honors an absolute
- *  XDG_CONFIG_HOME; otherwise ~/.config/autostart. Shared by enable and
- *  disable so both always address the same file. */
+/** Linux XDG autostart directory: absolute XDG_CONFIG_HOME, else ~/.config/autostart;
+ * shared by enable and disable so both address the same file. */
 export function linuxAutostartDirectory(input: {
   env?: Record<string, string | undefined>
   homeDir?: string
@@ -376,9 +321,8 @@ export function linuxAutostartDirectory(input: {
   return path.join(xdgBaseDirectory(env.XDG_CONFIG_HOME, path.join(homeDir, '.config')), 'autostart')
 }
 
-/** XDG autostart .desktop content (design 14 D6 Linux branch / 21). Returns
- *  null when the executable is not an absolute path (never persist a
- *  mount-relative or bare launch target). */
+/** XDG autostart .desktop content; null when the executable is not an absolute path
+ * (never persist a mount-relative or bare launch target). */
 export function linuxAutostartDesktopEntry(input: {
   name?: string
   executable: string
@@ -401,10 +345,9 @@ export function linuxAutostartDesktopEntry(input: {
 
 const LINUX_SCHEME_PATTERN = /^[a-z][a-z0-9+.-]{0,63}$/
 
-/** Per-user protocol-handler .desktop content: declares the
- *  `x-scheme-handler/<scheme>` MimeType that makes `dsh-chamber://` URLs
- *  routable (design 16 §4.3 / 21). `%u` passes the full URL as argv. Returns
- *  null for an invalid scheme or a non-absolute executable. */
+/** Per-user protocol-handler .desktop content: the `x-scheme-handler/<scheme>` MimeType
+ * makes `dsh-chamber://` routable and `%u` passes the full URL as argv; null for an
+ * invalid scheme or a non-absolute executable. */
 export function linuxProtocolDesktopEntry(input: {
   name?: string
   scheme?: string
@@ -427,10 +370,9 @@ export function linuxProtocolDesktopEntry(input: {
   ].join('\n')
 }
 
-/** Write (or refresh) the per-user protocol-handler entry under
- *  $XDG_DATA_HOME/applications (default ~/.local/share/applications) —
- *  rewritten on every packaged-Linux launch so an upgraded AppImage with a
- *  new path keeps `dsh-chamber://` routable. Loud failure, never silent. */
+/** Write/refresh the per-user protocol-handler entry under $XDG_DATA_HOME/applications
+ * (default ~/.local/share/applications), rewritten on every packaged-Linux launch so an
+ * upgraded AppImage path stays routable. Loud failure, never silent. */
 export function ensureLinuxProtocolDesktopFile(input: {
   executable: string
   scheme?: string
@@ -456,9 +398,8 @@ export function ensureLinuxProtocolDesktopFile(input: {
   }
 }
 
-/** Pure readiness decision shared by the renderer hold/replay drain and its
- * race tests. A ready handshake may legally arrive before did-finish-load;
- * that state must hold (not drop) the intent until loading becomes false. */
+/** Readiness decision shared by the hold/replay drain and its race tests: a ready
+ * handshake may arrive before did-finish-load — hold the intent until loading is false. */
 export function canDeliverRendererDeepLink(state: {
   ready: boolean
   currentWindow: boolean
@@ -473,12 +414,9 @@ export function canDeliverRendererDeepLink(state: {
     && !state.crashed
 }
 
-/**
- * Remote path validation shared by both entry points (the parsed deep link
- * and the renderer-button IPC — the renderer path is equally untrusted,
- * design 16 §8). Must be absolute (leading `/`), ≤ 4096 chars, and free of
- * control characters / CR / LF / NUL.
- */
+/** Remote path validation shared by both entry points (parsed deep link and the equally
+ * untrusted renderer-button IPC): must be absolute, ≤ 4096 chars, and free of control
+ * chars / CR / LF / NUL. */
 export function validateRemotePath(path: string): { ok: true; path: string } | { ok: false; error: string } {
   if (typeof path !== 'string' || path.length === 0) {
     return { ok: false, error: 'path is required' }
@@ -489,8 +427,8 @@ export function validateRemotePath(path: string): { ok: true; path: string } | {
   if (path.length > MAX_REMOTE_PATH_CHARS) {
     return { ok: false, error: `path exceeds ${MAX_REMOTE_PATH_CHARS} characters` }
   }
-  // C0 control characters (incl. CR/LF/NUL) + DEL are never valid in a
-  // remote path and are a classic URI-smuggling / argv-injection vector.
+  // C0 controls (incl. CR/LF/NUL) + DEL are never valid in a remote path and are a
+  // classic URI-smuggling / argv-injection vector.
   // eslint-disable-next-line no-control-regex
   if (/[\u0000-\u001f\u007f]/.test(path)) {
     return { ok: false, error: 'path contains control characters' }
@@ -498,10 +436,8 @@ export function validateRemotePath(path: string): { ok: true; path: string } | {
   return { ok: true, path }
 }
 
-/** Local workspace path validation. Chamber ships on Windows as well as
- * POSIX platforms, so local paths accept POSIX absolute, drive-absolute and
- * UNC forms. Remote dsh paths continue to use validateRemotePath and remain
- * POSIX-only. */
+/** Local workspace path validation: POSIX absolute, drive-absolute and UNC accepted
+ * (Chamber ships on Windows too); remote dsh paths stay POSIX-only via validateRemotePath. */
 export function validateLocalPath(localPath: string): { ok: true; path: string } | { ok: false; error: string } {
   if (typeof localPath !== 'string' || localPath.length === 0) {
     return { ok: false, error: 'path is required' }
@@ -520,14 +456,9 @@ export function validateLocalPath(localPath: string): { ok: true; path: string }
   return { ok: true, path: localPath }
 }
 
-/**
- * Minimal IPv6 literal check (no node:net import — the module stays within
- * its sanctioned node built-ins). Accepts the standard 8-group,
- * `::`-compressed and embedded-IPv4 forms an SSH host field can carry. Zone
- * ids (`%eth0`) are rejected — never a valid SSH target literal. This is a
- * security guard against `host:port` ambiguity (design 16 §3.2), not a full
- * RFC 4291 parser.
- */
+/** Minimal IPv6 literal check (no node:net import), accepting the 8-group, `::`-compressed
+ * and embedded-IPv4 forms an SSH host can carry; zone ids (`%eth0`) are rejected. A
+ * security guard against `host:port` ambiguity, not a full RFC 4291 parser. */
 function isIpv6Literal(host: string): boolean {
   if (host.length === 0 || host.length > 45 || host.includes('%')) return false
   // Split off an optional embedded-IPv4 tail (after the LAST colon).
@@ -556,23 +487,17 @@ function isIpv6Literal(host: string): boolean {
   return left.length + right.length < maxHexGroups
 }
 
-/**
- * Encode a remote absolute path segment-by-segment (design 16 §3.3): the
- * leading `/` is preserved, each subsequent segment is `encodeURIComponent`-
- * encoded (space / CJK / `#` / `?` / `&` / `%` all covered). The `/`
- * separators stay literal so VS Code still sees the directory structure.
- */
+/** Encode a remote absolute path segment-by-segment: the leading `/` is preserved, each
+ * segment is `encodeURIComponent`-encoded (space / CJK / `#` / `?` / `&` / `%` covered),
+ * and `/` stays literal so VS Code still sees the directory structure. */
 function encodeRemotePath(remotePath: string): string {
   return '/' + remotePath.slice(1).split('/').map(segment => encodeURIComponent(segment)).join('/')
 }
 
-/**
- * Parse the OS-level deep link into a normalized launch request
- * (design 16 §3.1). `new URL()` parsing; scheme must be `dsh-chamber:` and
- * hostname must be exactly `open-vscode` (anything else is refused, never
- * guessed or normalized). `instance` passes INSTANCE_ID_PATTERN; `path` is
- * absolute / control-char-free / ≤ 4096. Every failure is loud.
- */
+/** Parse the OS deep link into a normalized launch request: `new URL()` parsing; scheme
+ * must be `dsh-chamber:` and hostname exactly `open-vscode` (anything else refused, never
+ * guessed); `instance` passes INSTANCE_ID_PATTERN and `path` is absolute, control-free,
+ * ≤ 4096. Every failure is loud. */
 export function parseOpenVscodeIntent(raw: string): { ok: true; intent: VscodeLaunchRequest } | { ok: false; error: string } {
   let url: URL
   try {
@@ -586,9 +511,8 @@ export function parseOpenVscodeIntent(raw: string): { ok: true; intent: VscodeLa
   if (url.hostname !== 'open-vscode') {
     return { ok: false, error: `unsupported deep-link host: ${url.hostname}` }
   }
-  // Strictness: userinfo and port are meaningless in
-  // our scheme — reject them like isAllowedReleaseUrl rejects credentialed
-  // URLs instead of silently discarding the fields.
+  // Strictness: userinfo and port are meaningless in our scheme — reject them rather than
+  // silently discarding the fields.
   if (url.username !== '' || url.password !== '') {
     return { ok: false, error: 'deep-link must not carry userinfo' }
   }
@@ -599,9 +523,8 @@ export function parseOpenVscodeIntent(raw: string): { ok: true; intent: VscodeLa
   if (instance === null) {
     return { ok: false, error: 'missing instance' }
   }
-  // 'local' is the reserved local-instance id (excluded from INSTANCE_ID_PATTERN
-  // because the ssh registry never holds it) — the deep link may target the
-  // local instance too (opens vscode://file/).
+  // `local` is the reserved local-instance id (not in the ssh registry) and may be
+  // targeted by the deep link too — it opens `vscode://file/`.
   if (instance !== 'local' && !INSTANCE_ID_PATTERN.test(instance)) {
     return { ok: false, error: 'invalid instance id' }
   }
@@ -617,20 +540,12 @@ export function parseOpenVscodeIntent(raw: string): { ok: true; intent: VscodeLa
 }
 
 /**
- * Construct the `vscode://vscode-remote/ssh-remote+` target from registry
- * metadata (design 16 §3.2/§3.3), decoupled from SSH_HOST_PATTERN.
- *
- * - authority = `[<user>@]<host>`; a null user is omitted (registry metadata
- *   is non-secret).
- * - a host with a colon must be a valid IPv6 literal and is (re-)bracketed;
- *   `host:port` ambiguity is rejected deterministically.
- * - `sshPort` other than null/22 is rejected with the ~/.ssh/config guidance
- *   (VS Code resolves `ssh-remote+` targets via ~/.ssh/config aliases — a URL
- *   cannot reliably carry a non-default port).
- * - the scheme is hardcoded `vscode:` — the raw deep-link URL is never
- *   passed through to shell.openExternal.
- * - host/user are still encodeURIComponent-encoded defensively; the path is
- *   encoded segment-wise.
+ * Construct the `vscode://vscode-remote/ssh-remote+` target from registry metadata,
+ * decoupled from SSH_HOST_PATTERN: authority = `[<user>@]<host>` (null user omitted);
+ * a colon-bearing host must be a valid IPv6 literal and is re-bracketed; `sshPort` other
+ * than null/22 is rejected (a URL cannot reliably carry a non-default port); the scheme
+ * is hardcoded `vscode:` — the raw deep-link URL never reaches shell.openExternal;
+ * host/user are encodeURIComponent-encoded and the path is encoded segment-wise.
  */
 export function buildVscodeRemoteUrl(
   host: string,
@@ -670,30 +585,23 @@ export function buildVscodeRemoteUrl(
   return { ok: true, url: newWindow ? appendVscodeNewWindowParam(url) : url }
 }
 
-/**
- * Build the `vscode://file/<path>` target for the LOCAL instance (the button
- * and deep link also work for the local source — its workspace paths live on
- * this machine, so VS Code opens them as local folders). Same
- * path discipline as the remote URL: absolute, control-char-free, ≤ 4096,
- * segment-wise encoded; the scheme is hardcoded `vscode:`.
- */
+/** Build the `vscode://file/<path>` target for the LOCAL instance (its workspace lives on
+ * this machine): same path discipline as the remote URL — absolute, control-free, ≤ 4096,
+ * segment-encoded — with the scheme hardcoded `vscode:`. */
 export function buildVscodeFileUrl(remotePath: string, newWindow = false): { ok: true; url: string } | { ok: false; error: string } {
   const validatedPath = validateLocalPath(remotePath)
   if (!validatedPath.ok) return validatedPath
   const windowsStyle = /^[a-zA-Z]:[\\/]/.test(validatedPath.path) || validatedPath.path.startsWith('\\\\')
   const normalized = windowsStyle ? validatedPath.path.replace(/\\/g, '/') : validatedPath.path
   const absolute = normalized.startsWith('/') ? normalized : `/${normalized}`
-  // VS Code documents drive targets as vscode://file/c:/...; keep only that
-  // drive colon literal while encoding every user-controlled segment.
+  // VS Code documents drive targets as vscode://file/c:/...; keep only that colon literal.
   const encoded = encodeRemotePath(absolute).replace(/^\/([a-zA-Z])%3A(?=\/|$)/i, '/$1:')
   const url = `vscode://file${encoded}`
   return { ok: true, url: newWindow ? appendVscodeNewWindowParam(url) : url }
 }
 
-/** Default executable-FILE check: access(X_OK) + isFile(). On POSIX a
- *  directory passes X_OK (execute/search bit), so the file check is what
- *  keeps a PATH entry named `code` that is actually a directory from being
- *  misdetected as VS Code). */
+/** Default executable-FILE check: access(X_OK) + isFile(); on POSIX a directory passes
+ * X_OK, so the file check keeps a PATH entry that is actually a directory from counting. */
 function defaultAccessX(target: string): boolean {
   try {
     accessSync(target, fsConstants.X_OK)
@@ -703,8 +611,7 @@ function defaultAccessX(target: string): boolean {
   }
 }
 
-/** Default regular-file check (Windows Code.exe branch; a same-named
- *  directory must not count as installed). */
+/** Default regular-file check (Windows Code.exe branch; a same-named directory must not count). */
 function defaultIsFile(target: string): boolean {
   try {
     return statSync(target).isFile()
@@ -713,8 +620,8 @@ function defaultIsFile(target: string): boolean {
   }
 }
 
-/** Scan a PATH-style string for an executable `name` (design 16 §5). Missing /
- *  empty PATH → false; empty entries are skipped. */
+/** Scan a PATH-style string for an executable `name`; missing/empty PATH → false, empty
+ * entries are skipped. */
 function hasExecutableInPath(
   name: string,
   pathEnv: string | undefined,
@@ -729,18 +636,10 @@ function hasExecutableInPath(
   return false
 }
 
-/**
- * VS Code availability probe (design 16 §5) — pure fs + PATH scan, never
- * spawns / never executes anything. Only the STABLE VS Code is recognized
- * (the binary is `code` / `Code.exe` / the `Visual Studio Code.app` bundle;
- * Insiders / Cursor / VSCodium are deliberately not probed).
- *
- * `platform` selects the probe shape (macOS app bundles + `code`; Linux PATH
- * `code` + common install paths; Windows `%LOCALAPPDATA%` Code.exe + PATH
- * `code.cmd`). The optional `deps` lets the pure-Node test suite inject the
- * PATH / LOCALAPPDATA environment and fs stubs (platform + fs injection —
- * design 16 §5.1 testability); production calls it with the platform alone.
- */
+/** VS Code availability probe: pure fs + PATH scan, never spawns. Only the STABLE VS Code
+ * is recognized (`code` / `Code.exe` / `Visual Studio Code.app`; Insiders/Cursor/VSCodium
+ * deliberately excluded). `platform` selects the probe shape and `deps` injects env/fs
+ * stubs for tests; production passes the platform alone. */
 export function detectVscodeAvailability(
   platform: string,
   deps: {
@@ -787,29 +686,21 @@ export function detectVscodeAvailability(
   return { available: false }
 }
 
-/**
- * The single deep-link execution pipeline (design 16 §3.4) — shared verbatim
- * by the OS deep link and the renderer-button IPC: registry lookup (unknown
- * instance or non-ssh transport → loud error) → authority construction
- * (buildVscodeRemoteUrl) → availability re-check (defense in depth, §5.2) →
- * openVscodeUrl. Every failure is loud; there is no silent success path.
- */
+/** The single deep-link execution pipeline shared by the OS deep link and the
+ * renderer-button IPC: registry lookup (unknown instance / non-ssh → loud error) →
+ * authority construction → availability re-check (defense in depth) → openVscode. Every
+ * failure is loud; there is no silent success path. */
 async function runVscodeLaunchUnchecked(req: VscodeLaunchRequest, ctx: VscodeLaunchContext): Promise<{ ok: true } | { ok: false; error: string }> {
-  // Symmetric validation for the renderer-button IPC path: the OS deep link
-  // already pattern-checks instance at parse time;
-  // the IPC carries an equally untrusted string and must not skip the gate.
-  // 'local' is the reserved local-instance id (not in the ssh registry).
+  // Symmetric validation for the renderer-button IPC path: its instance string is equally
+  // untrusted; `local` is the reserved local-instance id (not in the ssh registry).
   if (typeof req.instanceId !== 'string' || (req.instanceId !== 'local' && !INSTANCE_ID_PATTERN.test(req.instanceId))) {
     return { ok: false, error: 'invalid instance id' }
   }
-  // New-window directive (chamber setting vscodeOpenInNewWindow, design 16
-  // §3.3): read lazily per launch through the injected ctx like the
-  // availability probe; absent → bare URL, VS Code's own default reuse
-  // policy decides (a running instance replaces the last active window).
+  // New-window directive (chamber setting), read lazily per launch like availability:
+  // absent → bare URL, VS Code default reuse policy decides.
   const newWindow = ctx.vscodeOpenInNewWindow?.() === true
-  // Local instance branch: the workspace path lives on
-  // this machine — open it as a local folder (vscode://file/), no registry
-  // lookup, no sshPort/authority. Availability is still re-checked.
+  // Local instance: the workspace path lives here — open it as a local folder
+  // (vscode://file/), no registry lookup, no authority; availability is still re-checked.
   if (req.instanceId === 'local') {
     const built = buildVscodeFileUrl(req.path, newWindow)
     if (!built.ok) return built
@@ -843,9 +734,8 @@ async function runVscodeLaunchUnchecked(req: VscodeLaunchRequest, ctx: VscodeLau
   }
 }
 
-/** Public exception boundary for every host adapter and URI-construction step.
- * The OS deep-link path calls this function directly (without open-in's outer
- * provider boundary), so it must never reject on its own. */
+/** Public exception boundary for every host adapter and URI-construction step: the OS
+ * deep-link path calls it directly, so it must never reject on its own. */
 export async function runVscodeLaunch(req: VscodeLaunchRequest, ctx: VscodeLaunchContext): Promise<{ ok: true } | { ok: false; error: string }> {
   try {
     return await runVscodeLaunchUnchecked(req, ctx)

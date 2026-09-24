@@ -1,61 +1,41 @@
 /**
- * Minimal Typert Remote mux client (/api/remote.mux) for the read-only
- * session-state observer.
+ * Minimal Typert Remote mux client (/api/remote.mux) for the read-only session-state
+ * observer (the gateway imports it through this package root; `ws` is declared here).
  *
- * Why it lives in @dsh-chamber/control-plane: `ws` is declared by this
- * package only (packages/control-plane/package.json:19) and this package is
- * already the home of "the wire client that talks to a dsh host". The gateway
- * imports it through the package root (no manifest edge, no new dependency).
+ * ONE socket per host base URL. On open it sends one `$events` frame; every (re)connect
+ * is followed by a FULL unary `session/list` baseline reconciliation, because forwarded
+ * events have no retransmission and the open frame does not replay state (frames
+ * arriving during the baseline are queued and applied after it). It is an OBSERVER: it
+ * never sends `$events/result` unless the injected delegate says another downstream mux
+ * client is attached AND the waterfall aged past the grace window (answering with no
+ * browser shell attached would make the host settle the approval as "unavailable"). It
+ * exposes readiness/event-silence signals but owns no policy: never the gateway's sse/poll
+ * mode, never persisted state, never an authority on session facts.
  *
- * What it is (and is NOT):
- *
- *   - ONE socket per host base URL. On open it sends exactly one `$events`
- *     open frame; every (re)connect — no matter why — is followed by a FULL
- *     unary `session/list` baseline reconciliation, because emit-type
- *     forwarded events have no retransmission and the `$events` opening frame
- *     does not replay session state (「（重）连必须对账」).
- *     Frames that arrive while the baseline request is in flight are queued
- *     and applied after it (standard snapshot+replay).
- *   - An OBSERVER. It never sends `$events/result` unless the injected
- *     delegate says another downstream mux client is attached AND the
- *     waterfall frame has aged past the grace window. Otherwise it holds the
- *     frame and settles nothing — answering `next` while no browser shell is
- *     attached makes the host settle the approval as "unavailable"
- *     (observer-discipline hard rule).
- *   - A readiness/event-silence signal: `status()` exposes `ready`,
- *     `clientId`, `lastEventAt`, `lastReadyAt`, `reconnects`, and an optional
- *     `silenceTimeoutMs` turns "connection alive, events stopped" into a
- *     resubscribe + full re-baseline.
- *   - Not a policy owner: it never decides the gateway's mode (sse/poll), never
- *     persists state and never becomes an authority on session facts.
- *
- * Privacy: only session ids / booleans / counters leave this
- * module. The waterfall `request` payload is parsed past and deliberately NOT
- * retained (no field for it exists below); `api-session/error` emits are
- * dropped without reading their text; diagnostics carry fixed strings and
- * error codes only.
- *
- * Socket seam: tests inject `openSocket` (see MuxSocket) and never touch
- * `ws`; the real opener imports `ws` lazily so this module stays loadable
- * under a plain node type-strip (no node_modules).
+ * Privacy: only session ids / booleans / counters leave this module; the one
+ * addition is the goal sub-whitelist of `projections.values.goal`
+ * (goalId/revision/phase/updatedAt plus the activation edge) — the projector
+ * `objective` and `blockedReason` never enter the observer. The waterfall
+ * `request` payload and `api-session/error` text are dropped at parse time.
  */
 
 import { call as controlPlaneCall } from './dsh-client.ts'
 import {
   SESSION_STATE_HANDSHAKE_WINDOW_MS,
+  type SessionStateGoalActivationEvent,
+  type SessionStateGoalFact,
   type SessionStatePendingKind,
   type SessionTurnEnd,
   type SessionTurnEndCause,
   type SessionTurnEndKind,
 } from './session-state-protocol.ts'
+import { errorMessage } from './error-text.ts'
 
 /**
- * Exact WebSocket route carrying every Typert Remote stream. The values below
- * mirror packages/dsh-api-gateway/src/stream-protocol.ts:6-18 (the in-repo
- * copy of the pinned vendor wire) — this package does NOT depend on
- * @dsh-chamber/dsh-api-gateway and must not grow that manifest edge. The
- * session-mux test pins each literal against that source file, so a vendor
- * rename fails loud instead of silently opening nothing.
+ * Exact WebSocket route carrying every Typert Remote stream; the values mirror
+ * packages/dsh-api-gateway/src/stream-protocol.ts (the in-repo copy of the pinned vendor
+ * wire). This package must not depend on that package; the literals are pinned against its
+ * source so a vendor rename fails loud.
  */
 export const REMOTE_STREAM_MUX_PATH = '/api/remote.mux'
 /** Gateway-internal logical stream carrying the forwarded event family. */
@@ -69,8 +49,7 @@ export const REMOTE_EVENT_STREAM_PAYLOAD: { readonly args: Readonly<Record<strin
 /** Local stream id of the single `$events` subscription. */
 export const EVENTS_STREAM_ID = 'events'
 
-/** Waterfall hold window before an attached downstream client may be answered
- *  on our behalf (1.5s grace). */
+/** Waterfall hold window before an attached downstream client may be answered on our behalf. */
 export const DEFAULT_WATERFALL_GRACE_MS = 1_500
 
 /** Reconnect backoff floor. */
@@ -82,18 +61,14 @@ export const DEFAULT_MUX_RECONNECT_MAX_MS = 15_000
 export const DEFAULT_BASELINE_TIMEOUT_MS = 15_000
 /** One-shot follow deadline; the completion edge read must stay bounded. */
 export const DEFAULT_FOLLOW_TIMEOUT_MS = 2_000
-/** How many tail messages a completion-edge follow asks for (the turn/end
- *  record sits at the tail; the vendor wire's `follow` uses 4). */
+/** How many tail messages a completion-edge follow asks for. */
 export const FOLLOW_MAX_MESSAGES = 8
-/** Bound on frames queued behind an in-flight baseline before the queue is
- *  dropped and a fresh reconciliation is requested. */
+/** Bound on frames queued behind an in-flight baseline before the queue is dropped and a fresh reconciliation requested. */
 export const MAX_QUEUED_EVENTS_FRAMES = 256
-/** `session/list` response cap: a full baseline can exceed the 1 MiB unary
- *  default, so the baseline call raises it deliberately and stays bounded. */
+/** `session/list` response cap: a full baseline can exceed the 1 MiB unary default, so the baseline call raises it deliberately. */
 export const SESSION_LIST_MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 
-/** Zero-argument `session/list` payload (the Remote parameter name is
- *  `_request`; a wrong shape answers gateway/arguments-invalid). */
+/** Zero-argument `session/list` payload (the Remote parameter name is `_request`; a wrong shape answers gateway/arguments-invalid). */
 export const SESSION_LIST_PAYLOAD: { readonly args: { readonly _request: Readonly<Record<string, never>> } } =
   Object.freeze({ args: Object.freeze({ _request: Object.freeze({}) }) })
 
@@ -115,15 +90,21 @@ export type MuxUnaryCall = (
   options?: { signal?: AbortSignal; timeoutMs?: number | null; maxResponseBytes?: number },
 ) => Promise<MuxUnaryResult>
 
-/** One white-listed `session/list` row. A projection whitelist, not a
- *  convenience: title/cwd/agentPreset/todos/projections must never enter the
- *  observer (privacy whitelist). */
+/** One white-listed `session/list` row — a privacy whitelist, not a convenience:
+ *  title/cwd/agentPreset/todos and every other projection key must never enter
+ *  the observer. The one exception is `projections.values.goal`, projected down
+ *  to {@link SessionStateGoalFact}'s goalId/revision/phase/updatedAt — never its
+ *  `objective` or `blockedReason`. */
 export interface SessionListBaselineItem {
   sessionId: string
   running: boolean
   updatedAt: number
   parentSessionId: string | null
   origin: 'subagent' | null
+  /** Projected goal fact. The field is ABSENT when `projections.values.goal`
+   *  was absent or unparsable (unknown — never silently "no goal"); `null`
+   *  when the host explicitly reports no current goal; an object otherwise. */
+  goal?: SessionStateGoalFact | null
 }
 
 /** Client-to-host logical stream frame (mirrors stream-protocol.ts types). */
@@ -145,8 +126,7 @@ export type MuxServerFrame =
   | { readonly type: 'end'; readonly streamId: string }
   | { readonly type: 'error'; readonly streamId: string; readonly error: { readonly code?: string; readonly message?: string } }
 
-/** One parsed `$events` downlink frame. The waterfall `request` payload has
- *  NO field here — it is dropped at parse time, never retained. */
+/** One parsed `$events` downlink frame; the waterfall `request` payload has NO field here. */
 export type RemoteEventFrame =
   | { readonly type: 'ready'; readonly clientId: string }
   | { readonly type: 'emit'; readonly event: string; readonly args: readonly unknown[] }
@@ -158,9 +138,9 @@ export type RemoteEventFrame =
 export type MuxSocketReadyState = 'connecting' | 'open' | 'closed'
 
 /**
- * The socket seam. Production uses {@link openRemoteMuxSocket} (real `ws`);
- * tests inject a fake implementing this exact surface. `onOpen` is part of
- * the contract because `ws` throws when `send` runs while CONNECTING.
+ * The socket seam: production uses {@link openRemoteMuxSocket}, tests inject a fake with
+ * this exact surface. `onOpen` is part of the contract because `ws` throws when `send`
+ * runs while CONNECTING.
  */
 export interface MuxSocket {
   readonly readyState: MuxSocketReadyState
@@ -172,8 +152,7 @@ export interface MuxSocket {
   onError(listener: (error: Error) => void): () => void
 }
 
-/** Options of one real socket open. The cookie is fetched per connection by
- *  the caller and never cached here. */
+/** Options of one real socket open. The cookie is fetched per connection by the caller and never cached here. */
 export interface MuxSocketOpenOptions {
   cookie: string | undefined
   signal: AbortSignal
@@ -199,10 +178,9 @@ export function muxUrlFor(baseUrl: string): string {
 }
 
 /**
- * Open the host's /api/remote.mux socket with the real `ws` implementation
- * (lazy import: this module stays loadable without node_modules, and pure
- * tests never execute it). The caller owns the cookie and passes one per
- * connection (authCookieFor(baseUrl) — never cached across spawns).
+ * Open the host's /api/remote.mux socket with the real `ws` implementation (lazy import:
+ * this module stays loadable without node_modules). The caller owns the cookie and passes
+ * one per connection — never cached across spawns.
  */
 export function openRemoteMuxSocket(baseUrl: string, options: MuxSocketOpenOptions): MuxSocket {
   const { cookie, signal, handshakeTimeoutMs } = options
@@ -329,10 +307,8 @@ export function parseMuxServerFrame(text: string): MuxServerFrame | null {
 }
 
 /**
- * Parse one `$events` item value. Known fields are strict, unknown fields are
- * tolerated (upstream may add fields; this deliberately departs from the
- * vendor's exactKeys parser). The waterfall `request` is
- * dropped here.
+ * Parse one `$events` item value. Known fields are strict, unknown fields are tolerated
+ * (upstream may add fields). The waterfall `request` is dropped here.
  */
 export function parseRemoteEventFrame(value: unknown): RemoteEventFrame | null {
   if (!isRecord(value)) return null
@@ -355,6 +331,40 @@ export function parseRemoteEventFrame(value: unknown): RemoteEventFrame | null {
   return { type: 'unknown' }
 }
 
+/**
+ * Project the `goal` key out of one `session/list` item's projection block.
+ * The pinned host value is
+ * `{ goal: { id, revision, objective, phase, blockedReason?, maxGoalRounds }, roundsStarted, createdAt, updatedAt } | null`;
+ * ONLY id/revision/phase/updatedAt survive this projector — objective and
+ * blockedReason are dropped here by construction (privacy whitelist).
+ * @param value - one untrusted `session/list` item.
+ * @returns `undefined` = key absent or shape unparsable (unknown; never
+ *   silently "no goal"), `null` = explicit no current goal, an object = the
+ *   whitelisted fact.
+ */
+function parseProjectedGoalFact(value: Record<string, unknown>): SessionStateGoalFact | null | undefined {
+  const projections = value.projections
+  if (!isRecord(projections)) return undefined
+  const values = projections.values
+  if (!isRecord(values) || !Object.hasOwn(values, 'goal')) return undefined
+  const raw = values.goal
+  if (raw === null) return null
+  if (!isRecord(raw) || !isRecord(raw.goal)) return undefined
+  const id = raw.goal.id
+  const revision = raw.goal.revision
+  const phase = raw.goal.phase
+  if (typeof id !== 'string' || id.length === 0) return undefined
+  if (typeof revision !== 'number' || !Number.isSafeInteger(revision) || revision < 1) return undefined
+  if (typeof phase !== 'string' || !GOAL_PHASES.has(phase)) return undefined
+  const fact: SessionStateGoalFact = {
+    goalId: id,
+    revision,
+    phase: phase as SessionStateGoalFact['phase'],
+  }
+  if (isWatermark(raw.updatedAt)) fact.updatedAt = raw.updatedAt
+  return fact
+}
+
 /** Project one untrusted `session/list` item through the privacy whitelist. */
 export function parseSessionListBaselineItem(value: unknown): SessionListBaselineItem | null {
   if (!isRecord(value)) return null
@@ -364,19 +374,23 @@ export function parseSessionListBaselineItem(value: unknown): SessionListBaselin
   const parentSessionId = typeof value.parentSessionId === 'string' && value.parentSessionId.length > 0
     ? value.parentSessionId
     : typeof value.parent === 'string' && value.parent.length > 0 ? value.parent : null
-  return {
+  const item: SessionListBaselineItem = {
     sessionId,
     running: value.running,
     updatedAt: value.updatedAt,
     parentSessionId,
     origin: value.origin === 'subagent' ? 'subagent' : null,
   }
+  // The key stays ABSENT for unknown (never `goal: undefined`), so "unknown"
+  // and "explicitly no goal" remain distinguishable downstream.
+  const goal = parseProjectedGoalFact(value)
+  if (goal !== undefined) item.goal = goal
+  return item
 }
 
 /**
- * Parse a full `session/list` result value ({items:[...]}) through the
- * whitelist. An empty items array is a valid empty source; a malformed envelope
- * or row is an untrustworthy baseline and must not be certified as empty.
+ * Parse a full `session/list` result value through the whitelist. A malformed envelope
+ * yields an empty list — zero rows is a legitimate state, never a crash.
  */
 export function parseSessionListBaselineItems(value: unknown): SessionListBaselineItem[] | null {
   if (!isRecord(value) || !Array.isArray(value.items)) return null
@@ -429,14 +443,12 @@ export interface SessionMuxStatus {
   ready: boolean
   /** Generation-scoped client id from the ready frame. */
   clientId: string | null
-  /** Mux-clock ms of the last `$events` downlink frame (emit/waterfall/cancel
-   *  or ready) — the event-silence input. */
+  /** Mux-clock ms of the last `$events` downlink frame — the event-silence input. */
   lastEventAt: number | null
   /** Downlink frames received since start() (仪表 I6：丢帧可见，不靠沉默推断). */
   eventsReceived: number
-  /** Full `session/list` baselines applied since start() — every ready/reconnect
-   *  reconciles, so a baseline count above 1 is the visible form of
-   *  "we may have missed frames and re-read the authority". */
+  /** Full `session/list` baselines applied since start() — above 1 means frames may have
+   *  been missed and the authority was re-read. */
   baselines: number
   /** Mux-clock ms the current generation became ready. */
   lastReadyAt: number | null
@@ -446,8 +458,7 @@ export interface SessionMuxStatus {
   baselineOk: boolean
   lastBaselineAt: number | null
   heldWaterfalls: number
-  /** The socket opened but no ready frame arrived inside the handshake
-   *  window ⇒ the caller should degrade to poll. */
+  /** The socket opened but no ready frame arrived inside the handshake window ⇒ degrade to poll. */
   eventsDegraded: boolean
   /** Fixed-string/error-code diagnostic only; never a payload. */
   lastError: string | null
@@ -461,9 +472,7 @@ export interface SessionMuxDeps {
   authCookieFor?(baseUrl: string): string | undefined
   /** Unary carrier; defaults to the control-plane client. */
   call?: MuxUnaryCall
-  /** Whether ANOTHER downstream mux client is attached (gateway-proxy
-   *  getDiagnostics().activeStreams > 0). The mux's own direct socket must
-   *  never count itself. */
+  /** Whether ANOTHER downstream mux client is attached; the mux's own direct socket must never count itself. */
   otherMuxClientsAttached(): boolean
   /** A full baseline was reconciled; `reason` names the trigger. */
   onBaseline?(items: readonly SessionListBaselineItem[], info: { at: number; reason: MuxReconcileReason }): void
@@ -471,17 +480,21 @@ export interface SessionMuxDeps {
   onBaselineError?(error: unknown, at: number): void
   /** api-session/status emit (the running edge). */
   onStatus?(sessionId: string, running: boolean, at: number): void
-  /** api-session/activity emit; `updatedAt` only when the host event carried
-   *  a host-clock watermark. */
+  /** api-session/activity emit; `updatedAt` only when the host event carried a host-clock watermark. */
   onActivity?(sessionId: string, updatedAt: number | null, at: number): void
   /** api-session/added emit (whitelisted row). */
   onAdded?(item: SessionListBaselineItem, at: number): void
   /** api-session/removed emit. */
   onRemoved?(sessionId: string, at: number): void
+  /** Forwarded `goal/activation-changed`: the process-local goal activation
+   *  edge, carrying the exact `goal.id` it belongs to
+   *  ({@link SessionStateGoalActivationEvent}). A present-but-malformed
+   *  activation is dropped (never guessed); an absent `goal` is the host's
+   *  explicit "no current goal". */
+  onGoalActivation?(event: SessionStateGoalActivationEvent): void
   /** A request waterfall was received and is being held. */
   onPending?(sessionId: string, kind: SessionStatePendingKind, eventId: string, at: number): void
-  /** A previously held waterfall was cancelled (or was a foreign waterfall we
-   *  held but never classified). */
+  /** A previously held waterfall was cancelled (or a foreign waterfall we held but never classified). */
   onCancel?(eventId: string, at: number): void
   /** Status edge (observable signal). */
   onStatusChange?(status: SessionMuxStatus): void
@@ -502,8 +515,7 @@ export interface SessionMuxDeps {
   followTimeoutMs?: number
   /** Ready-frame deadline after socket open (default 5s, protocol constant). */
   handshakeTimeoutMs?: number
-  /** When set, event silence beyond this many ms triggers onSilence + a full
-   *  resubscribe/re-baseline. Undefined ⇒ no silence policy here. */
+  /** When set, event silence beyond this triggers onSilence + a full resubscribe/re-baseline. */
   silenceTimeoutMs?: number
 }
 
@@ -513,8 +525,7 @@ export interface SessionMux {
   stop(): void
   /** Host/observation edge: connect if needed, otherwise reconcile. */
   kick(reason: MuxKickReason): void
-  /** One-shot session/follow for a completion edge: resolves the tail
-   *  turn/end (or null) and cancels the stream immediately. */
+  /** One-shot session/follow for a completion edge: resolves the tail turn/end (or null) and cancels the stream. */
   followTurnEndOnce(sessionId: string): Promise<SessionTurnEnd | null>
   status(): SessionMuxStatus
 }
@@ -545,6 +556,11 @@ const TURN_END_CAUSES: ReadonlySet<string> = new Set<SessionTurnEndCause>([
 ])
 const APPROVAL_EVENT = 'approval/request'
 const USER_QUESTIONS_EVENT = 'user-questions/request'
+/** Forwarded goal activation edge (pinned dsh `GoalService.setActivation`):
+ *  `{ sessionId, goal?: { id, revision, activation } }`. Its emit-type delivery
+ *  has no replay, so a missed edge degrades activation to unknown. */
+const GOAL_ACTIVATION_CHANGED_EVENT = 'goal/activation-changed'
+const GOAL_PHASES: ReadonlySet<string> = new Set(['active', 'paused', 'blocked', 'complete'])
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -554,16 +570,10 @@ function isWatermark(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
 }
 
-/** Fixed-string diagnostic for an unknown thrown value. */
-function errorText(error: unknown): string {
-  if (error instanceof Error) return error.message
-  return String(error)
-}
-
 /**
- * Create one session-state mux. It connects lazily (start/kick), reconciles a
- * full baseline on every ready frame, routes emit/waterfall/cancel frames and
- * holds waterfalls until the delegate rule allows a `next` answer.
+ * Create one session-state mux. It connects lazily (start/kick), reconciles a full
+ * baseline on every ready frame, routes emit/waterfall/cancel frames and holds waterfalls
+ * until the delegate rule allows a `next` answer.
  */
 export function createSessionMux(deps: SessionMuxDeps): SessionMux {
   const now = deps.now ?? (() => Date.now())
@@ -643,6 +653,17 @@ export function createSessionMux(deps: SessionMuxDeps): SessionMux {
     handshakeTimer = null
     clearTimer(silenceTimer)
     silenceTimer = null
+    // The dropped socket owns its held waterfalls: the host removes this client
+    // from the deliveries when the socket closes, so a hold must never survive
+    // the drop. Release HERE, before close() can run the listeners: the onClose
+    // handler is generation-guarded (dropSocket already bumped `generation`)
+    // and would skip its own release, leaving the hold to be answered by a
+    // later generation. Falling ready/clientId back in the same step is what
+    // makes the release final — without it a sweep (kick/emit/grace timer)
+    // could still send `$events/result` for the dead generation's event with
+    // its stale clientId.
+    releaseHeldWaterfalls()
+    setStatus({ state: 'connecting', ready: false, clientId: null })
     if (current !== null) {
       try { current.close(code, reason) } catch { /* best-effort */ }
     }
@@ -687,7 +708,7 @@ export function createSessionMux(deps: SessionMuxDeps): SessionMux {
     })
     opened.onError((error) => {
       if (connectGeneration !== generation || stopped) return
-      status.lastError = errorText(error)
+      status.lastError = errorMessage(error)
     })
     opened.onClose(() => {
       if (connectGeneration !== generation || stopped) return
@@ -707,7 +728,7 @@ export function createSessionMux(deps: SessionMuxDeps): SessionMux {
   }
   const sendFrame = (frame: MuxOpenFrame | MuxCancelFrame): void => {
     if (socket === null || socket.readyState !== 'open') return
-    try { socket.send(JSON.stringify(frame)) } catch (error) { warn(`session-mux: stream send failed (${errorText(error)})`) }
+    try { socket.send(JSON.stringify(frame)) } catch (error) { warn(`session-mux: stream send failed (${errorMessage(error)})`) }
   }
   const handleServerText = (text: string): void => {
     const frame = parseMuxServerFrame(text)
@@ -821,8 +842,29 @@ export function createSessionMux(deps: SessionMuxDeps): SessionMux {
       if (typeof sessionId === 'string' && sessionId.length > 0) deps.onRemoved?.(sessionId, at)
       return
     }
-    // api-session/error and every other forwarded event are dropped without
-    // reading their payload (privacy: errorChain text must never be retained).
+    if (event === GOAL_ACTIVATION_CHANGED_EVENT) {
+      const payload = args[0]
+      if (!isRecord(payload)) return
+      const sessionId = payload.sessionId
+      if (typeof sessionId !== 'string' || sessionId.length === 0) return
+      // `goal` absent = the host reports no current goal; a present view carries
+      // the activation and the exact goal id it belongs to (identity binding).
+      const goal = payload.goal
+      if (goal === undefined) {
+        deps.onGoalActivation?.({ sessionId, goalId: null, activation: null })
+        return
+      }
+      if (!isRecord(goal)) return
+      const activation = goal.activation
+      if (activation !== 'armed' && activation !== 'disarmed') return
+      const id = goal.id
+      // A missing/empty id is an unbound edge (null); it may act on the row's
+      // current known goal, never guessed onto the previous goal's row.
+      const goalId = typeof id === 'string' && id.length > 0 ? id : null
+      deps.onGoalActivation?.({ sessionId, goalId, activation })
+      return
+    }
+    // api-session/error and every other forwarded event are dropped without reading their payload.
   }
   const holdWaterfall = (event: string, eventId: string, agentId: string): void => {
     if (heldWaterfalls.has(eventId)) return
@@ -848,11 +890,9 @@ export function createSessionMux(deps: SessionMuxDeps): SessionMux {
       if (held.delegated || held.attempts >= 2) continue
       const elapsed = at - held.at
       if (elapsed < graceMs) {
-        // The grace timer is a real timer while the elapsed check uses the mux
-        // clock, so its callback can observe elapsed = graceMs - 1 and reject
-        // the sweep. Re-arm for the remainder: without this the rejection is
-        // final until the next tick (5s default) and, when no further event
-        // arrives, the held waterfall never delegates at all.
+        // The grace timer is a real timer while the elapsed check uses the mux clock, so its
+        // callback can observe elapsed = graceMs - 1; re-arm for the remainder, else the held
+        // waterfall never delegates when no further event arrives.
         if (held.timer === null) {
           held.timer = setTimeout(() => {
             held.timer = null
@@ -862,8 +902,7 @@ export function createSessionMux(deps: SessionMuxDeps): SessionMux {
         }
         continue
       }
-      // HARD RULE: never answer unless another downstream mux client is
-      // attached AND the grace window has elapsed. Otherwise hold silently.
+      // HARD RULE: never answer unless another downstream mux client is attached AND the grace window elapsed.
       if (!deps.otherMuxClientsAttached()) continue
       held.attempts += 1
       void call(socketBaseUrl ?? deps.getBaseUrl() ?? '', REMOTE_EVENT_RESULT_ENDPOINT,
@@ -874,20 +913,16 @@ export function createSessionMux(deps: SessionMuxDeps): SessionMux {
           emitStatus()
         })
         .catch((error: unknown) => {
-          warn(`session-mux: waterfall delegation failed (${errorText(error)})`)
+          warn(`session-mux: waterfall delegation failed (${errorMessage(error)})`)
           emitStatus()
         })
     }
   }
-  /** Drop every held waterfall without settling anything (socket death,
-   *  stop). The host removes this client from the deliveries on close, so a
-   *  held frame must never survive into the next generation. A held PENDING
-   *  waterfall (kind !== null) also has a session-state pending entry keyed by
-   *  eventId; without this onCancel the entry stayed pending until an
-   *  unrelated waterfall or observer.stop. onCancel only clears the local
-   *  pending map (it never answers the host), so it is safe on every
-   *  non-answering release; a foreign waterfall (kind === null) never had an
-   *  entry and is deliberately not reported. */
+  /** Drop every held waterfall without settling anything (socket death, stop). The host
+   *  removes this client from deliveries on close, so a held frame must never survive into the
+   *  next generation; a held PENDING waterfall also has a session-state pending entry keyed by
+   *  eventId, cleared here. onCancel never answers the host, so it is safe on every
+   *  non-answering release; a foreign waterfall (kind === null) never had an entry. */
   const releaseHeldWaterfalls = (): void => {
     const at = now()
     for (const held of heldWaterfalls.values()) {
@@ -944,7 +979,7 @@ export function createSessionMux(deps: SessionMuxDeps): SessionMux {
       } catch (error) {
         if (baselineGeneration !== generation) return
         status.baselineOk = false
-        setStatus({ lastError: `session/list failed (${errorText(error)})` })
+        setStatus({ lastError: `session/list failed (${errorMessage(error)})` })
         deps.onBaselineError?.(error, now())
       }
     })().finally(() => {
@@ -960,8 +995,7 @@ export function createSessionMux(deps: SessionMuxDeps): SessionMux {
         reconcile('coalesced')
       }
     }).catch(() => {
-      // Caller-owned callbacks must never poison the reconcile chain: the
-      // failure was already surfaced through onBaselineError/onWarn.
+      // Caller-owned callbacks must never poison the reconcile chain; the failure was already surfaced.
     })
   }
   const handleFollowItem = (streamId: string, value: unknown): void => {

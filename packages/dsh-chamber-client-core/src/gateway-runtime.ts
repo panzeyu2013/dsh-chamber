@@ -1,47 +1,31 @@
 /**
- * Same-origin client core for the gateway dsh-runtime management surface
- * (design 18 §3.6/§9.3, design 17 §3): `/api/i/gateway-<id>/chamber/runtime/*`.
- * Pure module (no JSX) with injectable fetch/sleep so the node test harness
- * can cover the parsers, error classification, the action gates and the
- * settle poll.
+ * Same-origin client core for the gateway dsh-runtime management surface:
+ * `/api/i/gateway-<id>/chamber/runtime/*`. Pure module (no JSX) with injectable
+ * fetch/sleep so the node test harness can cover parsers, error classification,
+ * action gates and the settle poll.
  *
- * Design 21 §5.2 split: this file is the pure core of the runtime surface,
- * on the sidebar package's shared
- * face. It is consumed by the settings-bridge (and later the connections
- * plugin) through `@dsh-chamber/dsh-chamber-client-core`; the
- * render/view mapping (`remoteRuntimeStatusView` + `RemoteRuntimeStatusView`)
- * stays in settings-bridge because it carries the bridge's UI dictionary
- * keys. This file has NO locale/dictionary dependency of any kind.
+ * Consumed by the settings-bridge through `@dsh-chamber/dsh-chamber-client-core`
+ * (the render/view mapping stays there with the UI dictionary keys; this file has
+ * NO locale dependency). The renderer receives only the canonical instance id and
+ * derives the path locally — it never accepts a URL or a token.
  *
- * The renderer is given only the canonical chamber instance id and derives the
- * path locally — it never accepts a URL or a token (design 17 §7.2/§12
- * discipline; the desktop gateway transport injects Authorization after the
- * request has crossed the renderer boundary).
- *
- * Action failure classification:
- *   - 202/200 → accepted;
- *   - 409/400 → business rejection — the server's `error` text is ACTIONABLE
- *     copy and is passed through verbatim with its machine-readable `code`;
- *   - 401/403/5xx / network → generic classified copy (never secrets).
- *
- * Every projection here derives ONLY from fields the server actually projects
- * (status contract, design 18 §9.3): phase / restart / operationError /
- * startupBlockedReason / pending. Nothing is invented.
+ * Failures: 202/200 accepted; 409/400 = business rejection (the server's `error`
+ * text is ACTIONABLE copy, passed verbatim with its `code`); 401/403/5xx/network
+ * = generic classified copy (never secrets). Every projection derives only from
+ * fields the server projects.
  */
 
 import { pollUntil, sleepMs } from './poll.ts'
 import { isRecord } from './wire-common.ts'
 
 const REMOTE_STATUS_POLL_INTERVAL_MS = 2_000
-// The shared installer has one 10-minute wall-clock budget. A legitimate slow
-// install must not be reported as timed out while its background job is still
-// authoritative, so the settle poll leaves a one-minute delivery margin.
+// The shared installer has one 10-minute wall-clock budget; a slow install must
+// not be reported as timed out while its job is still authoritative.
 export const REMOTE_STATUS_POLL_TIMEOUT_MS = 11 * 60_000
 import { GATEWAY_RUNTIME_STATUS_KIND } from '@dsh-chamber/dsh-chamber-wire/runtime-status'
 
-// Re-exported under the historical name: every consumer keeps importing
-// GATEWAY_RUNTIME_STATUS_KIND from this module, but the literal has exactly
-// one source (the neutral wire contract).
+// Re-exported under the historical name; every consumer keeps importing
+// GATEWAY_RUNTIME_STATUS_KIND from this module (one wire-contract source).
 export { GATEWAY_RUNTIME_STATUS_KIND }
 
 export interface GatewayRuntimeApiDeps {
@@ -53,8 +37,8 @@ export interface GatewayRuntimeApiDeps {
 }
 
 /** Instance-scoped request owners used by the gateway runtime section. Kept
- * structural (rather than React-specific) so instance-switch cancellation is
- * covered by the pure node test harness. */
+ *  structural (not React-specific) so instance-switch cancellation is covered by
+ *  the pure node harness. */
 export interface RemoteRuntimeActivityOwners {
   actionController: { current: AbortController | null }
   actionInFlight: { current: boolean }
@@ -76,11 +60,10 @@ export function resetRemoteRuntimeActivityOwners(owners: RemoteRuntimeActivityOw
 }
 
 /** The two production callers have deliberately different terminal contracts:
- * `select` only waits for the asynchronous install job, while `apply-now`
- * must also observe the post-activation host recovery verdict from design 18
- * addendum §5.2. Keeping the expectation explicit prevents persistent
- * diagnostic history (`failure`) from turning an unrelated select into a
- * false failure. */
+ *  `select` waits only for the asynchronous install job, while `apply-now` must
+ *  also observe the post-activation host recovery verdict. Keeping the
+ *  expectation explicit prevents persistent diagnostic history (`failure`) from
+ *  turning an unrelated select into a false failure. */
 export type RemoteRuntimeSettleExpectation = 'select' | 'apply-now'
 
 export type RemoteRuntimePhase =
@@ -112,9 +95,8 @@ export interface RemoteRuntimeDiskUsage {
   snapshotBytes: number
   preRollbackBytes: number
   restoreBackupBytes: number
-  /** Deduped bytes inside the runtime root not owned by any known category
-   *  (D1-A real-byte accounting). Older servers omit it — parseDiskUsage
-   *  defaults to 0. */
+  /** Deduped bytes inside the runtime root not owned by any known category.
+   *  Older servers omit it — parseDiskUsage defaults to 0. */
   unclassifiedBytes: number
   totalBytes: number
   storePruneNeeded: boolean
@@ -126,7 +108,7 @@ export interface RemoteRuntimeProgress {
   total?: number | null
 }
 
-/** `GET /chamber/runtime/status` (design 18 §9.3) — verbatim projection. */
+/** `GET /chamber/runtime/status` — verbatim projection. */
 export interface RemoteRuntimeStatus {
   kind: typeof GATEWAY_RUNTIME_STATUS_KIND
   activeVersion: string | null
@@ -153,19 +135,17 @@ export interface RemoteRuntimeStatus {
   preRollbackCount: number | null
   preRollbackLatestName: string | null
   failure: RemoteRuntimeFailure | null
-  /** Failure-ledger read failure behind `failure` (B2 残余 c, the gateway
-   *  status twin of the desktop renderer's `failureError`): non-null means the
-   *  server could not read the failure ledger, so `failure` stays null — an
-   *  unreadable set is never projected as "no failures". Absent/null on older
-   *  servers and on every successful ledger read. */
+  /** Failure-ledger read failure behind `failure`: non-null means the server could
+   *  not read the ledger, so `failure` stays null — an unreadable set is never
+   *  projected as "no failures". Null on older servers / successful reads. */
   failureError: string | null
   diskUsage: RemoteRuntimeDiskUsage | null
   diskError: string | null
   diskLimitBytes: number | null
   diskLimitExceeded: boolean | null
   progress: RemoteRuntimeProgress | null
-  /** Desktop-shaped metadata health projection. Absent on pre-recovery
-   *  servers — UI rows stay hidden. */
+  /** Desktop-shaped metadata health projection; absent on pre-recovery servers
+   *  (rows stay hidden). */
   metadataHealth?: 'unknown' | 'healthy' | 'selection-corrupt' | 'recovery-in-progress' | 'recovery-finalized' | 'recovery-marker-corrupt' | null
   metadataComponents?: string[]
   canRecoverMetadata?: boolean
@@ -182,14 +162,12 @@ export interface RemoteVersionEntry {
 export interface RemoteVersions {
   registryOrigin: string
   versions: RemoteVersionEntry[]
-  /** Cleanup candidates (desktop parity): ledger entries the server
-   *  would actually delete. Absent on older servers → empty (UI row hidden). */
+  /** Cleanup candidates: ledger entries the server would actually delete.
+   *  Absent = empty (row hidden). */
   removableVersions: string[]
-  /** Ledger read failure behind `removableVersions` (2026-12, new servers):
-   *  non-null means the server could not read the explicit-install ledger.
-   *  The client then projects no candidates (the cleanup row stays hidden) and
-   *  carries the failure for the settings surface to render. Absent/null on
-   *  older servers and on every successful ledger read. */
+  /** Ledger read failure behind `removableVersions`: the client then projects no
+   *  candidates (cleanup row hidden) and carries the failure for the settings
+   *  surface. Null on older servers / successful reads. */
   removableVersionsError?: string | null
   error?: string
 }
@@ -285,7 +263,7 @@ function parseDiskUsage(value: unknown): RemoteRuntimeDiskUsage | null {
     if (parsed === null) throw new Error(`Gateway returned malformed runtime status.diskUsage.${key}`)
     return [key, parsed]
   })) as unknown as Omit<RemoteRuntimeDiskUsage, 'storePruneNeeded' | 'unclassifiedBytes'>
-  // Old servers (pre-D1-A) omit unclassifiedBytes — default the bucket to 0.
+  // Old servers omit unclassifiedBytes — default the bucket to 0.
   const unclassifiedBytes = nullableNumber(row, 'unclassifiedBytes', 'runtime status.diskUsage') ?? 0
   return { ...numbers, unclassifiedBytes, storePruneNeeded: booleanField(row, 'storePruneNeeded', 'runtime status.diskUsage') }
 }
@@ -303,10 +281,9 @@ function parseProgress(value: unknown): RemoteRuntimeProgress | null {
   }
 }
 
-/** Parse a safety-relevant status enum. Missing fields retain their explicit
- * backward-compatible fallback, but a newer unknown value fails closed: an
- * old client must not turn an unrecognised busy/recovery/source state into
- * idle and enable mutations. */
+/** Parse a safety-relevant status enum: missing fields keep their explicit
+ *  fallback, but a newer unknown value fails closed — an old client must not turn
+ *  an unrecognised busy/recovery state into idle and enable mutations. */
 function enumOr<T extends string>(
   row: Record<string, unknown>,
   key: string,
@@ -323,8 +300,8 @@ function enumOr<T extends string>(
   return value as T
 }
 
-/** Non-nullable enum field: the fallback is a real value, so the result is
- *  never null (phase in the status contract). */
+/** Non-nullable enum field: the fallback is a real value, so the result is never
+ *  null (phase in the status contract). */
 function enumField<T extends string>(
   row: Record<string, unknown>,
   key: string,
@@ -355,13 +332,11 @@ export function parseRemoteRuntimeStatus(value: unknown): RemoteRuntimeStatus {
     registry: nullableString(row, 'registry', 'runtime status'),
     registryError: nullableString(row, 'registryError', 'runtime status'),
     platform: nullableString(row, 'platform', 'runtime status'),
-    // A gateway predating the win32 read-only gate projects no field; version
-    // mutations were allowed then, so absence defaults to true — never a fake
-    // block against an older server.
+    // A gateway predating the win32 read-only gate projects no field; absence
+    // defaults to true — never a fake block against an older server.
     mutationsAllowed: booleanOr(row, 'mutationsAllowed', true, 'runtime status'),
     operationError: nullableString(row, 'operationError', 'runtime status'),
-    // Version-skew fallback: older gateways without the restart-outcome field
-    // project null; the restart poll keeps its connectionState contract.
+    // Version-skew fallback: older gateways project no restart-outcome field → null.
     restart: enumOr(row, 'restart', REMOTE_RESTART, null, 'runtime status'),
     restoreOutcome: nullableString(row, 'restoreOutcome', 'runtime status'),
     snapshotCount: nullableNumber(row, 'snapshotCount', 'runtime status'),
@@ -371,21 +346,18 @@ export function parseRemoteRuntimeStatus(value: unknown): RemoteRuntimeStatus {
     preRollbackCount: nullableNumber(row, 'preRollbackCount', 'runtime status'),
     preRollbackLatestName: nullableString(row, 'preRollbackLatestName', 'runtime status'),
     failure: parseFailure(row.failure),
-    // Ledger read failure (B2 残余 c): old servers project no field → null; a
-    // present non-string value is malformed like every sibling whitelist field.
-    // An empty string is not a usable reason: fold it to null so the UI never
-    // renders an empty alert row (the gateway only projects a real reason).
-    // `failure` stays null in that case — the read failure is carried here
-    // instead of being lost as a fabricated "no failures".
+    // Ledger read failure: old servers project no field → null.
+    // present non-string value is malformed like every sibling whitelist field. An
+    // empty string folds to null (never an empty alert row), and `failure` then
+    // stays null — the read failure is carried here.
     failureError: nullableString(row, 'failureError', 'runtime status') || null,
     diskUsage: parseDiskUsage(row.diskUsage),
     diskError: nullableString(row, 'diskError', 'runtime status'),
     diskLimitBytes: nullableNumber(row, 'diskLimitBytes', 'runtime status'),
     diskLimitExceeded: nullableBoolean(row, 'diskLimitExceeded', 'runtime status'),
     progress: parseProgress(row.progress),
-    // Metadata health: absent/unknown values are advisory — they
-    // only control the rescue rows, so an unrecognised future status fails
-    // closed to absent rather than to a mutable idle.
+    // Metadata health: unknown/absent values are advisory; unrecognised futures
+    // fail closed to absent.
     metadataHealth: enumOr(row, 'metadataHealth', METADATA_HEALTHS, null, 'runtime status'),
     metadataComponents: parseMetadataComponents(row.metadataComponents),
     canRecoverMetadata: booleanOr(row, 'canRecoverMetadata', false, 'runtime status'),
@@ -416,13 +388,11 @@ export function parseRemoteVersions(value: unknown): RemoteVersions {
     }
   })
   const error = nullableString(row, 'error', 'runtime versions')
-  // Ledger read failure: old servers project no field → null; a
-  // present non-string value is malformed like every sibling whitelist field.
-  // An empty string is not a usable reason: fold it to null so the UI never
-  // renders an empty alert row (the gateway only projects a real reason).
+  // Ledger read failure: old servers project no field → null.
+  // present non-string value is malformed like every sibling whitelist field; an empty string folds to null.
   const removableVersionsError = nullableString(row, 'removableVersionsError', 'runtime versions') || null
-  // Cleanup candidates: a pre-cleanup server projects no field →
-  // empty list (UI row hidden); a malformed present field fails closed.
+  // Cleanup candidates: a pre-cleanup server projects no field → empty list;
+  // malformed fails closed.
   const removable = row.removableVersions
   let candidates: string[] = []
   if (removable !== undefined && removable !== null) {
@@ -434,13 +404,9 @@ export function parseRemoteVersions(value: unknown): RemoteVersions {
     }
     candidates = removable as string[]
   }
-  // Settings-surface projection (2026-12): a ledger read failure means no
-  // candidate is trustworthy. The gateway's fail-closed branch already
-  // projects an empty list; enforcing it here as well keeps the cleanup row
-  // hidden — and the accept-time cleanup guard refusing — even if a server
-  // ever pairs a partial list with the error. An absent/null error keeps the
-  // old byte-exact output (no new key), so old servers and healthy ledgers are
-  // untouched.
+  // Settings-surface projection: a ledger read failure means no candidate is
+  // trustworthy, so the cleanup row hides even if a server ever pairs a partial
+  // list with the error; absent/null keeps the old byte-exact output.
   return {
     registryOrigin: stringField(row, 'registryOrigin', 'runtime versions'),
     versions,
@@ -450,9 +416,8 @@ export function parseRemoteVersions(value: unknown): RemoteVersions {
   }
 }
 
-/** Thrown for every remote runtime failure; `status` is the HTTP status when
- *  known (null for network errors), `code` the server's machine-readable code
- *  when one was projected. */
+/** Thrown for every remote runtime failure; `status` is the HTTP status when known
+ *  (null for network errors), `code` the server's machine-readable code. */
 export class RemoteRuntimeApiError extends Error {
   readonly status: number | null
   readonly code: string | undefined
@@ -496,7 +461,7 @@ function classifiedError(status: number, body: unknown, surface: string): Remote
 }
 
 /** Business rejection (409/400): the server's `error` is actionable copy and
- *  is passed through verbatim with its code (design 18 §9.3 refusal table). */
+ *  is passed through verbatim with its code. */
 function rejectionError(status: number, body: unknown): RemoteRuntimeApiError {
   const { error, code } = readErrorPayload(body)
   return new RemoteRuntimeApiError(error ?? `runtime request refused (${status})`, status, code)
@@ -641,34 +606,27 @@ export interface RemoteRuntimeActionGates {
   restoreBuiltinDisabled: boolean
   retryApplyDisabled: boolean
   retryRestoreDisabled: boolean
-  /** Recover-metadata: the ONLY action a FATAL metadata
-   *  block leaves open on the server (journal/current/override corrupt,
-   *  incl. mid-run drift where status reports canRecoverMetadata with a
-   *  free-text blocked reason). Enabled exactly when the status advertises
-   *  canRecoverMetadata and the instance is not busy/env/read-only — the
-   *  row must never be dead in the states it exists for. */
+  /** Recover-metadata: the ONLY action a FATAL metadata block leaves open on the
+   *  server. Enabled exactly when the status advertises canRecoverMetadata and the
+   *  instance is not busy/env/read-only — the row must never be dead in the states
+   *  it exists for. */
   recoverMetadataDisabled: boolean
   restartDisabled: boolean
-  /** Apply-now (design 18 addendum §5.1/§6.1): the pending immediate-switch
-   *  action mirrors the route's synchronous refusals — a plain pending with a
-   *  live instance is enabled; busy tasks, recovery phases, env sources,
-   *  read-only platforms and non-ready/degraded connection states disable it. */
+  /** Apply-now: mirrors the route's synchronous refusals — a plain pending with a
+   *  live instance is enabled; busy/recovery/env/read-only/non-ready disable it. */
   applyNowDisabled: boolean
 }
 
-/** Pure UI mirror of the gateway's authoritative mutation fences (server
- *  parity). A plain pending permits only restore-builtin
- *  and apply-now. A durable recovery phase permits only its exact retry —
- *  restore-builtin applies to pending/healthy selections only (an armed reset
- *  is re-blocked by the shared core against durable recovery markers), and
- *  the matching retry stays ENABLED in its phase: on the real wire the phase
- *  and startupBlockedReason co-project from the same in-memory block
- *  (swap-attempted → reason 'swap-attempted', …), so the reason must not
- *  re-disable the retry the phase advertises. Any PHASE-LESS
- *  projected startup block (FATAL metadata, env-probe-failed, resolution
- *  failure) locks every ordinary mutation and the restore escape; the only
- *  action it leaves open is recover-metadata when canRecoverMetadata is
- *  reported, and a lingering pending NEVER relabels a blocked
+/** Pure UI mirror of the gateway's authoritative mutation fences (server parity).
+ *  A plain pending permits only restore-builtin and apply-now. A durable recovery
+ *  phase permits only its exact retry — restore-builtin applies to pending/healthy
+ *  selections only (an armed reset is re-blocked by the shared core against
+ *  durable recovery markers), and the matching retry stays ENABLED in its phase:
+ *  on the wire the phase and startupBlockedReason co-project, so the reason must
+ *  not re-disable the retry the phase advertises. Any PHASE-LESS projected startup
+ *  block (FATAL metadata, env-probe-failed, resolution failure) locks every
+ *  ordinary mutation and the restore escape, leaving only recover-metadata when
+ *  canRecoverMetadata is reported; a lingering pending never relabels a blocked
  *  startup. Installing/applying/restart-in-flight permit no runtime action. */
 export function remoteRuntimeActionGates(
   status: RemoteRuntimeStatus | null,
@@ -685,8 +643,7 @@ export function remoteRuntimeActionGates(
       applyNowDisabled: true,
     }
   }
-  // Defense in depth for callers constructing a status object without the
-  // wire parser: unknown future enums are never interpreted as an idle,
+  // Defense in depth: unknown future enums are never interpreted as an idle,
   // mutable state.
   const knownPhase = (REMOTE_PHASES as readonly string[]).includes(status.phase)
   const knownSource = status.source === null || (REMOTE_SOURCES as readonly string[]).includes(status.source)
@@ -698,33 +655,28 @@ export function remoteRuntimeActionGates(
     || status.restart === 'running'
   const startupBlocked = status.startupBlockedReason !== null && status.startupBlockedReason !== ''
   const versionBaseBlocked = taskBusy || !status.mutationsAllowed || status.source === 'env' || startupBlocked
-  // Busy/env/read-only only — deliberately WITHOUT startupBlocked: recovery
-  // phases co-project their reason on the wire, and the phase (not the
-  // reason) is the authoritative selector for the matching retry.
+  // Busy/env/read-only only — deliberately WITHOUT startupBlocked: the phase is the
+  // authoritative selector for the matching retry.
   const recoveryBaseBlocked = taskBusy || !status.mutationsAllowed || status.source === 'env'
   const applyRecovery = status.phase === 'swap-attempted' || status.phase === 'snapshot-failed'
   const restoreRecovery = status.phase === 'restore-blocked'
   const recovery = applyRecovery || restoreRecovery
-  // Recovery phase wins over a lingering pending value, matching the route's
-  // explicit-recovery precedence (design 18 §9.3); a startup block likewise
-  // outranks pending (the gate itself honors
-  // blockOutranksPending, never relabeling a blocked startup as pending).
+  // Recovery phase wins over a lingering pending (the route's explicit-recovery
+  // precedence), and a startup block outranks pending — never relabeling a blocked
+  // startup as pending.
   const pending = !recovery && !startupBlocked && (status.phase === 'pending' || status.pending !== null)
   return {
     mutationDisabled: versionBaseBlocked || pending || recovery,
-    // Server parity: restore-builtin stays enabled ONLY for a plain
-    // pending or a healthy selection — recovery phases and every projected
-    // startup block disable it (the server refuses those with
-    // runtime_recovery_required; a plain pending keeps it as its sole escape).
+    // restore-builtin stays enabled ONLY for a plain pending or a healthy
+    // selection; recovery phases and every projected startup block disable it.
     restoreBuiltinDisabled: versionBaseBlocked || recovery,
     retryApplyDisabled: recoveryBaseBlocked || !applyRecovery,
     retryRestoreDisabled: recoveryBaseBlocked || !restoreRecovery,
     recoverMetadataDisabled: recoveryBaseBlocked || status.canRecoverMetadata !== true,
     restartDisabled: taskBusy || pending || recovery || startupBlocked
       || (status.connectionState !== 'ready' && status.connectionState !== 'degraded'),
-    // The route refuses apply-now with 409 connection_busy while the managed
-    // dsh is not live; the UI mirrors the same ready/degraded check as
-    // restart (design 18 addendum §5.1).
+    // The route refuses apply-now with 409 connection_busy while the managed dsh
+    // is not live.
     applyNowDisabled: versionBaseBlocked || !pending
       || (status.connectionState !== 'ready' && status.connectionState !== 'degraded'),
   }
@@ -733,16 +685,15 @@ export function remoteRuntimeActionGates(
 /** Poll `status` after a 202 action until the requested job settles.
  *
  * `select` preserves the install contract: once the generic busy markers have
- * cleared, only the action's operation/restart outcome can fail the poll.
- * Historical activation diagnostics are deliberately ignored.
+ * cleared, only the action's operation/restart outcome can fail the poll —
+ * historical activation diagnostics are deliberately ignored.
  *
- * `apply-now` follows design 18 addendum §5.2: leaving `applying` is not by
- * itself success because the manager closes activation quarantine before its
- * recovery `startLocal()` finishes. Success additionally requires a live
- * ready/degraded connection and no current operation/startup block;
- * half/incomplete (or an unknown non-success) restore outcome is terminal
- * failure. Historical `failure` records are diagnostics, not the outcome of
- * this accepted action. The poll keeps waiting through the honest
+ * `apply-now` leaving `applying` is not by itself success (the manager closes
+ * activation quarantine before its recovery `startLocal()` finishes): success
+ * additionally requires a live ready/degraded connection and no current
+ * operation/startup block; half/incomplete (or an unknown non-success) restore
+ * outcome is terminal failure. Historical `failure` records are diagnostics, not
+ * this action's outcome, and the poll keeps waiting through the honest
  * stopped/starting recovery window.
  *
  * Interval/timeout are parameters (defaults 2s / 11min, matching the shared
@@ -836,4 +787,3 @@ export async function pollRemoteRuntimeUntilSettled(
   }
   throw new RemoteRuntimeApiError('runtime action accepted but the gateway did not settle in time', null)
 }
-

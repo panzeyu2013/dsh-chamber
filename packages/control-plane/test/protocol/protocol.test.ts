@@ -34,8 +34,8 @@ import {
   managedProcessGroupAlive,
   spawnDsh,
   terminateChild,
-  writePidRecord,
 } from '../../src/spawn-dsh.ts'
+import { writePidRecord } from '../../src/pid-record.ts'
 import { runReaper } from '../../src/reaper.ts'
 import { absentConnection, jsonResponse, mockIdentityProbe, quietLogger, waitFor } from '../support/utils.ts'
 

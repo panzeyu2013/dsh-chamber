@@ -5,9 +5,9 @@ import {
   DARK_SURFACE_MAX_LUMA,
   switchFrameVerdict,
   type SwitchFrameSample,
-} from '../../src/switch-frame-verdict.ts'
+} from '../../scripts/switch-frame-verdict.ts'
 
-// 无白帧判据（见 src/switch-frame-verdict.ts 头注）：三形态 + 温壳进度面。
+// 无白帧判据（见 scripts/switch-frame-verdict.ts 头注）：三形态 + 温壳进度面。
 // 判据只判采集到的事实：未演练/探针坏/零帧一律 INFO（ok === null），严格档才升 FAIL。
 // 本文件是 CI 里的主判据面（采集腿 = scripts/perf/switch-frame-probe.mjs，需 GUI）。
 

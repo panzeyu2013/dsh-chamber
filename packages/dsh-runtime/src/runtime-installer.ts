@@ -1,12 +1,10 @@
 /**
- * dsh runtime installer (design 18 §4).
+ * dsh runtime installer.
  *
- * The top-level package is downloaded exactly once from the source-bound
- * registry resolution, streamed through SRI verification, and handed to pnpm
- * as a local tarball. pnpm therefore cannot re-resolve the top-level package
- * from newer registry metadata between check and install. Transitive
- * dependencies remain pinned to the same explicit registry and their own npm
- * integrity records.
+ * The top-level package is downloaded exactly once from the source-bound registry resolution,
+ * streamed through SRI verification, and handed to pnpm as a local tarball, so pnpm cannot
+ * re-resolve it from newer registry metadata between check and install; transitive dependencies
+ * stay pinned to the same explicit registry and their own integrity records.
  */
 import { randomBytes } from 'node:crypto'
 import { spawn, type ChildProcess } from 'node:child_process'
@@ -50,11 +48,8 @@ import {
   isUnreadableFsError,
 } from './private-fs.ts'
 
-/**
- * Version written into the synthetic install workdir's package.json. The
- * stub is private and never published or resolved by version, so it only has
- * to be a valid exact semver — named here so no bare literal floats in code.
- */
+/** Version written into the synthetic install workdir's package.json: private and never
+ *  published or resolved by version, so a valid exact semver is all it has to be. */
 const INSTALL_STUB_VERSION = '0.0.0'
 
 export const DEFAULT_INSTALL_TIMEOUT_MS = 10 * 60 * 1000
@@ -89,17 +84,14 @@ export interface SmokeContext {
   onSpawn: (pid: number) => void
 }
 
-/** Live install progress (design 18 renderer progress bar): byte progress
- * during 'download' (total = content-length when the registry declares it),
- * stage-only milestones afterwards. The terminal 'done' clears the bar. */
+/** Live install progress: byte progress during 'download' (total = content-length when
+ *  declared), stage-only milestones afterwards; 'done' clears. */
 export type RuntimeInstallProgress =
   | { stage: 'download'; received: number; total: number | null }
   | { stage: 'install' | 'prune' | 'smoke' | 'publish' | 'done' }
 
 export interface InstallerDeps {
-  /** Node executable used to run pnpm + the smoke check. */
   node: () => { file: string; args: string[]; env: Record<string, string> }
-  /** Spawn a command to completion. */
   run: (args: string[], opts: RunOptions) => Promise<RunResult>
   /** Download and verify the already-bound top-level package tarball. */
   download: (
@@ -107,13 +99,12 @@ export interface InstallerDeps {
     destination: string,
     opts: { signal: AbortSignal; onProgress?: (received: number, total: number | null) => void },
   ) => Promise<void>
-  /** Prune the installed tree (prune-runtime semantics, design 18 §4). */
+  /** Prune the installed tree. */
   prune: (root: string) => Promise<PruneResult>
   /** Smoke: assert the installed CLI reports exactly `version`. */
   smoke: (workDir: string, version: string, context: SmokeContext) => Promise<void>
-  /** Filesystem seams keep the publish transaction fault-injectable. The
-   *  default routes through renameWithWindowsRetry (design 21) and callers
-   *  await every rename, so an injected async seam is honoured too. */
+  /** Filesystem seams keep the publish transaction fault-injectable: the default route is
+   *  renameWithWindowsRetry and callers await every rename. */
   rename: (source: string, destination: string) => void | Promise<void>
   makeReadOnly: (root: string) => void
   verifyPublished: (root: string, version: string) => void
@@ -130,8 +121,7 @@ export interface InstallOptions {
   signal?: AbortSignal
   /** One wall-clock budget across download, both install attempts, prune and smoke. */
   timeoutMs?: number
-  /** Live progress callback (design 18): the controller forwards it to
-   * the renderer projection, throttled. */
+  /** Live progress callback; the controller forwards it to the renderer, throttled. */
   onProgress?: (progress: RuntimeInstallProgress) => void
   deps?: Partial<InstallerDeps>
 }
@@ -145,10 +135,8 @@ type InstallFailureStage = 'prepare' | 'download' | 'install' | 'prune' | 'smoke
 
 const FAILED_ERROR_LIMIT = 2_000
 
-/** Only variables pnpm/network needs may cross the process boundary. Shared
- * (design 21 §6.3 env discipline): the desktop runtime installer AND the
- * gateway plugin executor apply this same canonical whitelist to their
- * install children. */
+/** Only variables pnpm/network needs may cross the process boundary. Shared with the gateway
+ *  plugin executor, which applies this same canonical whitelist to its install children. */
 export const INSTALL_ENV_WHITELIST = /^(PATH|HTTP_PROXY|HTTPS_PROXY|NO_PROXY|http_proxy|https_proxy|no_proxy)$/
 
 export function scrubInstallEnv(base: NodeJS.ProcessEnv): Record<string, string> {
@@ -159,19 +147,16 @@ export function scrubInstallEnv(base: NodeJS.ProcessEnv): Record<string, string>
   return out
 }
 
-/** Sanitize installer/executor child output for durable projections: URLs
- * are reduced to their origin (userinfo/query/path capability tokens
- * removed), named secrets redacted, absolute paths removed, then
- * byte-bounded. Shared (design 21 §6.3): the desktop runtime installer and
- * the gateway plugin executor apply the same sanitizer family to child
- * stderr before it can land in a journal/task projection served verbatim to
- * clients. */
+/** Sanitize installer/executor child output for durable projections: URLs are reduced to their
+ *  origin (userinfo/query/path capability tokens removed), named secrets redacted, absolute paths
+ *  removed, then byte-bounded. The gateway plugin executor applies the same sanitizer family to
+ *  child stderr before it can land in a journal/task projection served verbatim to clients. */
 export function sanitizeInstallerOutput(raw: string, limit: number): string {
   const withoutUrlSecrets = raw.replace(/https?:\/\/[^\s"'<>]+/gi, (token) => {
     try {
       const url = new URL(token)
-      // Signed registry URLs can carry a capability in userinfo, query, or a
-      // path segment. The origin is enough for a renderer-facing diagnosis.
+      // Signed registry URLs can carry a capability in userinfo, query, or a path segment;
+      // the origin is enough for a renderer-facing diagnosis.
       return `${url.protocol}//${url.host}/[redacted]`
     } catch {
       return '[url]'
@@ -228,9 +213,8 @@ function computeCriticalDigests(root: string, version: string): Record<typeof CR
   return Object.fromEntries(CRITICAL_RUNTIME_FILES.map((relativePath) => [relativePath, sha256File(root, relativePath)])) as Record<typeof CRITICAL_RUNTIME_FILES[number], string>
 }
 
-/** Re-read the published manifest and its execution-critical files. This is
- * deliberately exported so startup validation can adopt the same check
- * without changing the install format. */
+/** Re-read the published manifest and its execution-critical files; exported so startup
+ *  validation adopts the same check. */
 export function verifyRuntimeTreeCriticalFiles(root: string, version: string): void {
   const safeVersion = assertSafeVersion(version)
   let rootManifest: unknown
@@ -268,9 +252,8 @@ export function verifyRuntimeTreeCriticalFiles(root: string, version: string): v
   }
 }
 
-/** Remove write bits without following symlinks. The runtime root lives below
- * an owner-only directory, so preserving existing read/execute bits is both
- * sufficient and safer for native executables than inventing modes. */
+/** Remove write bits without following symlinks; the root lives below an owner-only directory,
+ *  so preserving read/execute bits is safer for native executables than inventing modes. */
 function makeRuntimeTreeReadOnly(root: string): void {
   const visit = (entryPath: string): void => {
     const info = lstatSync(entryPath)
@@ -298,14 +281,9 @@ function failedScenePath(runtimeDir: string, version: string): string {
   return join(runtimeDir, `${assertSafeVersion(version)}.failed`)
 }
 
-/** Keep exactly one compact, path-free scene per failed version. Partial
- * node_modules/tarballs/PIDs are intentionally excluded, bounding both disk
- * use and accidental capability leakage. Failure recording is best effort and
- * never masks the installation error. The publish rename goes through the
- * caller's rename seam (production: renameWithWindowsRetry, design 21) so
- * a Windows third-party handle cannot silently drop the scene.
- * @param renameFn - InstallerDeps.rename (source, destination) => void|Promise.
- */
+/** Keep exactly one compact, path-free scene per failed version: partial node_modules/tarballs/
+ *  PIDs are excluded, bounding disk use and capability leakage. Recording is best effort and
+ *  never masks the installation error; the publish rename goes through the caller's seam. */
 async function writeFailedScene(
   runtimeDir: string,
   version: string,
@@ -333,11 +311,9 @@ async function writeFailedScene(
   }
 }
 
-/** Material classification of an existing version tree. 'valid' keeps the
- * historical never-overwritten verdict, 'invalid' allows the backup→publish
- * replacement, and 'unknown' (EACCES/EIO/unreadable digest) refuses to touch
- * the tree at all — an unreadable tree may be the only working copy.
- * Legacy/partial trees are 'invalid' and are replaced through the transaction. */
+/** Material classification of an existing version tree. 'valid' is the never-overwritten
+ *  verdict, 'invalid' allows the backup→publish replacement, and 'unknown' (EACCES/EIO or an
+ *  unreadable digest) refuses to touch the tree — it may be the only working copy. */
 type ExistingRuntimeTreeState = 'valid' | 'invalid' | 'unknown'
 
 function existingRuntimeTreeIsValid(baseDir: string, version: string): ExistingRuntimeTreeState {
@@ -384,8 +360,8 @@ class BoundedOutput {
 
 interface TrackedChild {
   child: ChildProcess
-  /** Stable process-group id. `child.pid` may no longer describe a live
-   * leader after pnpm exits while a lifecycle descendant keeps the group. */
+  /** Stable process-group id: `child.pid` may no longer describe a live leader after pnpm
+   *  exits while a lifecycle descendant keeps the group. */
   pid: number | null
   closed: Promise<void>
   resolveClosed: () => void
@@ -402,8 +378,8 @@ function abortError(signal: AbortSignal): Error {
 }
 
 function delay(ms: number): Promise<void> {
-  // Reaping is a correctness barrier. A detached lifecycle descendant must
-  // not outlive the process merely because no other handle keeps the loop up.
+  // Reaping is a correctness barrier: a detached descendant must not outlive the process merely
+  // because no other handle keeps the loop up.
   return new Promise((resolve) => { setTimeout(resolve, ms) })
 }
 
@@ -429,8 +405,8 @@ export function isRuntimeInstallerWriterSafetyError(error: unknown): boolean {
 }
 
 /**
- * Owns every installer child. Unix children are process-group leaders so
- * TERM→KILL reaches lifecycle-script descendants as well as pnpm itself.
+ * Owns every installer child. Unix children are process-group leaders so TERM→KILL reaches
+ * lifecycle-script descendants as well as pnpm itself.
  */
 export class RuntimeInstallerSupervisor {
   private readonly active = new Set<TrackedChild>()
@@ -447,11 +423,9 @@ export class RuntimeInstallerSupervisor {
     return this.active.size
   }
 
-  /** Signal the whole Unix group. ESRCH alone proves that there is no writer;
-   * EPERM means the group is alive but not signalable and must remain fenced.
-   * On Windows every signal maps to the same bounded taskkill /T /F tree kill
-   * (no POSIX signals exist); a dead leader's residual descendants are killed
-   * individually so a daemonized lifecycle script cannot outlive the reap. */
+  /** Signal the whole Unix group. ESRCH alone proves there is no writer; EPERM means the group is
+   * alive but not signalable and stays fenced. On Windows every signal maps to the same bounded
+   * taskkill /T /F tree kill, and residual descendants are killed individually. */
   private sendSignal(tracked: TrackedChild, signal: NodeJS.Signals): 'sent' | 'quiet' | 'alive' {
     const pid = tracked.pid
     if (pid === null) return tracked.childClosed ? 'quiet' : 'alive'
@@ -473,11 +447,9 @@ export class RuntimeInstallerSupervisor {
     }
   }
 
-  /** Probe writer liveness without treating an unknown failure as absence.
-   * `kill(..., 0)` success and EPERM both mean alive; only ESRCH means quiet.
-   * On Windows a dead leader is not proof of quiescence: stale ParentProcessId
-   * descendants can keep writing the install tree, so the CIM table is
-   * consulted before reporting quiet (fail closed on probe doubt). */
+  /** Probe writer liveness without treating an unknown failure as absence: `kill(..., 0)`
+   * success and EPERM both mean alive, only ESRCH means quiet. On Windows a dead leader is not
+   * proof of quiescence (stale ParentProcessId descendants keep writing), so CIM is consulted. */
   private processGroupState(tracked: TrackedChild): 'alive' | 'quiet' {
     const pid = tracked.pid
     if (pid === null) return tracked.childClosed ? 'quiet' : 'alive'
@@ -501,8 +473,8 @@ export class RuntimeInstallerSupervisor {
       if (this.processGroupState(tracked) === 'quiet') return true
       const remaining = deadline - Date.now()
       if (remaining <= 0) return false
-      // Never race a resolved direct-child `close` promise: a daemonized
-      // descendant can keep the PGID alive after the leader is gone.
+      // Never race a resolved direct-child `close` promise: a daemonized descendant can keep the
+      // PGID alive after the leader is gone.
       await delay(Math.min(25, remaining))
     }
   }
@@ -519,8 +491,8 @@ export class RuntimeInstallerSupervisor {
     throw residualProcessGroupError()
   }
 
-  /** Coalesce concurrent abort/close/dispose reapers. A failed proof is not
-   * cached: dispose may retry, but the tracked writer remains fenced. */
+  /** Coalesce concurrent abort/close/dispose reapers; a failed proof is not cached — dispose may
+   *  retry, but the tracked writer remains fenced. */
   private async ensureProcessGroupQuiet(tracked: TrackedChild): Promise<void> {
     if (tracked.settled) return
     if (tracked.quiescence !== null) return await tracked.quiescence
@@ -544,8 +516,8 @@ export class RuntimeInstallerSupervisor {
     this.finishTracked(tracked)
   }
 
-  /** A lifecycle script may outlive a successfully-exited pnpm parent. Reap
-   * the detached group before reporting completion or forgetting its pgid. */
+  /** A lifecycle script may outlive a successfully-exited pnpm parent: reap the detached group
+   *  before reporting completion or forgetting its pgid. */
   private async reapResidualGroup(tracked: TrackedChild): Promise<void> {
     await this.ensureProcessGroupQuiet(tracked)
     this.finishTracked(tracked)
@@ -555,8 +527,8 @@ export class RuntimeInstallerSupervisor {
     try {
       await this.terminate(tracked)
     } catch (error) {
-      // Never translate a stable quiescence failure into a generic disposal
-      // error: callers use this code to preserve work/PID or plugin ledgers.
+      // Never translate a stable quiescence failure into a generic disposal error: callers use
+      // this code to preserve work/PID or plugin ledgers.
       if (isRuntimeInstallerWriterSafetyError(error)) throw error
       throw writerUnsafeError('runtime installer could not prove writer quiescence during disposal', error)
     }
@@ -564,15 +536,13 @@ export class RuntimeInstallerSupervisor {
 
   async run(args: string[], opts: RunOptions): Promise<RunResult> {
     if (this.disposing) {
-      // Classified as a writer-safety failure: a disposal that
-      // could not prove quiescence must refuse new work with the stable code,
-      // so owners can distinguish 'closed because a writer is unproven' from
-      // a benign shutdown.
+      // A disposal that could not prove quiescence must refuse new work with the stable code, so
+      // owners can tell 'closed because a writer is unproven' from a benign shutdown.
       throw writerUnsafeError('runtime installer is shutting down')
     }
     if (this.active.size > 0) {
-      // This supervisor is a single-writer boundary. In particular, a prior
-      // residual group must poison new work until dispose proves it quiet.
+      // Single-writer boundary: a prior residual group poisons new work until dispose proves it
+      // quiet.
       throw writerUnsafeError('runtime installer still has an unverified active writer')
     }
     const [file, ...rest] = args
@@ -617,10 +587,9 @@ export class RuntimeInstallerSupervisor {
       }
       const terminateFor = (reason: Error): void => {
         forcedError = reason
-        // A failed TERM/KILL proof is itself the terminal result. Waiting for
-        // the direct child's `close` event can hang forever precisely when a
-        // process-group writer is still unverified. Keep the tracked entry
-        // active/evidence intact and reject as soon as quiescence is decided.
+        // A failed TERM/KILL proof is itself the terminal result: waiting for the direct child's
+        // `close` can hang forever while the group writer is unverified, so the tracked entry keeps
+        // its evidence and rejects once quiescence is decided.
         void this.terminate(tracked).then(() => {
           cleanup()
           reject(reason)
@@ -675,14 +644,13 @@ export class RuntimeInstallerSupervisor {
       try {
         await this.terminate(tracked)
       } catch (quiescenceError) {
-        // Durable PID/ledger recording failed and the writer could not be
-        // proven gone. Preserve the stable safety code and all caller-owned
-        // crash evidence; never let the writer fence observe normal success.
+        // Durable PID/ledger recording failed and the writer could not be proven gone: preserve
+        // the stable safety code and all caller-owned crash evidence.
         if (isRuntimeInstallerWriterSafetyError(quiescenceError)) throw quiescenceError
         throw writerUnsafeError('runtime installer onSpawn failed and writer quiescence is unknown', quiescenceError)
       }
-      // Drain the completion path after the ESRCH proof. If it independently
-      // discovers a safety failure, that failure still outranks onSpawn.
+      // Drain the completion path after the ESRCH proof; an independently discovered safety
+      // failure still outranks onSpawn.
       const completionError = await completion.then(() => null, error => error)
       if (isRuntimeInstallerWriterSafetyError(completionError)) throw completionError
       throw onSpawnError
@@ -708,12 +676,9 @@ export class RuntimeInstallerSupervisor {
     }
   }
 
-  /** Reopen the supervisor after a disposal that PROVED writer quiescence
-   * (same-process host restart, e.g. gateway stop → start). Only a fully
-   * settled disposal may reset: while any writer is still tracked, the
-   * shutting-down latch must stay so an unproven writer never gets
-   * concurrent work; the reset must clear the supervisor's own latch, or
-   * every later install/prune in the same process is rejected. */
+  /** Reopen the supervisor after a disposal that PROVED writer quiescence (e.g. gateway stop →
+   * start). While any writer is tracked the shutting-down latch stays, and reset must clear the
+   * supervisor's own latch, or every later install/prune in the process is rejected. */
   reset(): void {
     if (this.active.size > 0) throw writerUnsafeError('runtime installer cannot reset while writers are still tracked')
     this.disposing = false
@@ -733,12 +698,10 @@ let runtimeInstallerDisposing = false
 let runtimeInstallerPoisoned = false
 let runtimeInstallerDisposePromise: Promise<void> | null = null
 
-/** Narrow lifecycle seam for deterministic failed-proof tests. Runtime hosts
- * omit it and always dispose/reset the module-owned supervisor. */
+/** Narrow lifecycle seam for deterministic failed-proof tests; runtime hosts omit it. */
 export interface RuntimeInstallerDisposalDeps {
-  /** Deterministic failure seam after the real supervisor and operation drain
-   * have succeeded but before reset. It can only make disposal stricter; it
-   * cannot replace or fake either writer proof. */
+  /** Deterministic failure seam after the real supervisor and operation drain succeeded but
+   *  before reset; it can only make disposal stricter. */
   beforeReset?: () => void
 }
 
@@ -746,17 +709,15 @@ export interface RuntimeInstallerDisposalDeps {
 export function disposeRuntimeInstaller(deps: RuntimeInstallerDisposalDeps = {}): Promise<void> {
   if (runtimeInstallerDisposePromise !== null) return runtimeInstallerDisposePromise
   runtimeInstallerDisposing = true
-  // Poison before any async boundary. A failed writer proof must survive this
-  // call and reject every later default OR injected runner until a subsequent
-  // disposal proves the complete operation set quiet and resets successfully.
+  // Poison before any async boundary: a failed writer proof must survive this call and reject
+  // every later default OR injected runner until a later disposal proves quiet and resets.
   runtimeInstallerPoisoned = true
 
   const proof = (async () => {
     const supervisorProof = Promise.allSettled([defaultSupervisor.dispose()])
 
-    // Existing operations can be at download, injected-runner, or default
-    // child phases. Abort and drain to a fixed point: a settling operation can
-    // finish registering its cleanup tail after the first snapshot.
+    // Operations can be at download, injected-runner, or default child phases: abort and drain to
+    // a fixed point, since a settling operation can register its cleanup tail after the first snapshot.
     while (activeInstallerOperations.size > 0) {
       const operations = [...activeInstallerOperations]
       for (const operation of operations) {
@@ -765,16 +726,14 @@ export function disposeRuntimeInstaller(deps: RuntimeInstallerDisposalDeps = {})
       await Promise.allSettled(operations.map((operation) => operation.closed))
     }
 
-    // allSettled ordering is intentional: a supervisor proof failure must not
-    // skip the operation drain above, and no cleanup success may hide it.
+    // allSettled ordering is intentional: a supervisor proof failure must not skip the operation
+    // drain above, and no cleanup success may hide it.
     const [supervisorResult] = await supervisorProof
     if (supervisorResult.status === 'rejected') throw supervisorResult.reason
 
-    // The host may legitimately restart the manager in the same process
-    // (gateway stop → start). A disposal that PROVED writer quiescence
-    // reopens the supervisor for later installs/prunes; a FAILED disposal
-    // throws above and keeps the shutting-down latch, so an unproven writer
-    // never gets concurrent work.
+    // The host may restart the manager in the same process (gateway stop → start): a disposal that
+    // PROVED quiescence reopens the supervisor, while a failed disposal throws above and keeps the
+    // latch so an unproven writer never gets concurrent work.
     deps.beforeReset?.()
     defaultSupervisor.reset()
     runtimeInstallerPoisoned = false
@@ -788,8 +747,8 @@ export function disposeRuntimeInstaller(deps: RuntimeInstallerDisposalDeps = {})
     (error: unknown) => {
       runtimeInstallerDisposing = false
       runtimeInstallerDisposePromise = null
-      // runtimeInstallerPoisoned deliberately remains true. Only the success
-      // arm above can clear it after the reset proof.
+      // runtimeInstallerPoisoned deliberately remains true: only the success arm above can clear
+      // it after the reset proof.
       throw error
     },
   )
@@ -797,9 +756,8 @@ export function disposeRuntimeInstaller(deps: RuntimeInstallerDisposalDeps = {})
 }
 
 function resolveInstallerNodeExecutable(): { file: string; args: string[]; env: Record<string, string> } {
-  // Plain-node default (design 18 §9.1): the shared core carries NO Electron
-  // branch. The desktop host injects its Electron-as-node executor through
-  // `deps.node`; the gateway's plain-node path is this default.
+  // Plain-node default: the shared core carries NO Electron branch; desktop injects
+  // Electron-as-node via `deps.node`, and the gateway's plain-node path is this default.
   return { file: process.execPath, args: [], env: {} }
 }
 
@@ -869,7 +827,7 @@ export async function downloadVerifiedRegistryTarball(
         verifier.update(chunk.subarray(offset, offset + bytesWritten))
         offset += bytesWritten
         received += bytesWritten
-        // Byte progress for the design-18 bar; the controller throttles.
+        // Byte progress; the controller throttles.
         opts.onProgress?.(received, total)
       }
     }
@@ -896,9 +854,8 @@ function createOperationDeadline(external: AbortSignal | undefined, timeoutMs: n
   cleanup: () => void
 } {
   if (runtimeInstallerDisposing || runtimeInstallerPoisoned) {
-    // Same classification as the supervisor's disposing guard (round-3 fix):
-    // owners switching on ERR_DSH_WRITER_UNSAFE see one consistent code for
-    // every 'shutting down' refusal.
+    // Same classification as the supervisor's disposing guard: owners switching on
+    // ERR_DSH_WRITER_UNSAFE see one consistent code for every 'shutting down' refusal.
     throw writerUnsafeError(runtimeInstallerDisposing
       ? 'runtime installer is shutting down'
       : 'runtime installer writer quiescence is unproven')
@@ -941,13 +898,10 @@ export interface PruneRuntimeStoreOptions {
   deps?: Partial<Pick<InstallerDeps, 'node' | 'run'>>
 }
 
-/** Bounded cache reclamation after a successful store prune (settings polish):
- * only the CONTENT of the two private cache dirs is removed — the dirs
- * themselves stay (installers re-create state inside them on the next run).
- * Every entry is lstat'd (never followed) before deletion, so a symlink is
- * removed as the link itself and can never drag an external target in; the
- * removal set is exactly the direct children of `.pnpm-cache`/`.xdg-cache`
- * and never reaches outside those two directories. */
+/** Bounded cache reclamation after a successful store prune: only the CONTENT of the two private
+ * cache dirs is removed (installers re-create state inside them). Every entry is lstat'd, so a
+ * symlink is removed as the link itself and can never drag an external target in; the removal set
+ * is exactly the direct children. */
 function reclaimRuntimeCacheContents(baseDir: string): void {
   ensureRuntimeRootNoFollow(baseDir)
   for (const segment of ['.pnpm-cache', '.xdg-cache'] as const) {
@@ -968,23 +922,20 @@ function reclaimRuntimeCacheContents(baseDir: string): void {
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue
         throw error
       }
-      // No-follow removal: a symlink (even to a directory) is unlinked as the
-      // link; only a real directory is removed recursively.
+      // No-follow removal: a symlink is unlinked as the link; only a real directory is removed
+      // recursively.
       rmSync(entryPath, { recursive: info.isDirectory() && !info.isSymbolicLink(), force: true })
     }
   }
 }
 
 /**
- * Reclaim unreferenced pnpm content after version eviction. The caller owns
- * the durable `store-prune-needed` marker and must clear it only after this
- * promise resolves. The command shares the install supervisor, bounded
- * output, source-scrubbed environment and shell-managed empty userconfig.
- * After a successful store prune, a `cache-reclaim` reason in the durable
- * request additionally recycles the private .pnpm-cache/.xdg-cache content
- * (cleanup/eviction of hard-linked trees is what orphans those entries);
- * a reclaim failure rejects like the prune itself so the caller keeps the
- * marker and retries instead of silently leaking the cache dirs. */
+ * Reclaim unreferenced pnpm content after version eviction. The caller owns the durable
+ * `store-prune-needed` marker and clears it only after this promise resolves. After a successful
+ * prune, a `cache-reclaim` reason additionally recycles the private .pnpm-cache/.xdg-cache
+ * content; a reclaim failure rejects like the prune itself, so the caller keeps the marker and
+ * retries instead of silently leaking the cache dirs.
+ */
 export async function pruneRuntimeStore(opts: PruneRuntimeStoreOptions): Promise<void> {
   const runtimeDir = ensureRuntimeRootNoFollow(opts.baseDir)
   const deadline = createOperationDeadline(opts.signal, opts.timeoutMs ?? DEFAULT_INSTALL_TIMEOUT_MS)
@@ -1065,8 +1016,8 @@ export async function installRuntimeVersion(opts: InstallOptions): Promise<Insta
       throw new Error('dsh runtime ' + version + ' is already installed and valid; refusing to overwrite it')
     }
     if (existing === 'unknown') {
-      // The existing tree could not be read: replacing it would destroy bytes
-      // that were never proven invalid. Writer-unsafe keeps the work dir too.
+      // An unreadable tree was never proven invalid: replacing it would destroy bytes; writer-unsafe
+      // keeps the work dir too.
       throw writerUnsafeError('dsh runtime ' + version + ' exists but its tree is unreadable; refusing to overwrite it')
     }
   }
@@ -1107,21 +1058,18 @@ export async function installRuntimeVersion(opts: InstallOptions): Promise<Insta
     const npmrc = join(runtimeDir, '.npmrc')
     const pidPath = join(workDir, 'pid')
     const tarballPath = join(workDir, 'dsh-runtime-package.tgz')
-    // Work-dir lifecycle marker consumed by startup stale-work cleanup:
-    // 'preparing' proves no child ever existed (a hard crash during the long
-    // download window is reclaimable), 'spawning'/'spawned' mean a child may
-    // exist even without PID evidence (startup must fail closed), 'failed' is
-    // a spawn error with no child (reclaimable). The marker is the FIRST file
-    // written into the work dir; without it, non-empty work + missing pid is
-    // indistinguishable from a post-spawn scene and blocks startup forever.
+    // Work-dir lifecycle marker consumed by startup stale-work cleanup: 'preparing'/'failed' prove
+    // no child ever existed (reclaimable); 'spawning'/'spawned' mean a child may exist without PID
+    // evidence (startup fails closed). The marker is the FIRST file written, or a post-spawn scene
+    // is indistinguishable.
     const statePath = join(workDir, 'state')
     const writeState = (value: 'preparing' | 'spawning' | 'spawned' | 'failed'): void => {
       atomicWriteRuntimeFileNoFollow(opts.baseDir, statePath, `${value}\n`)
     }
     const noteChildPid = (pid: number): void => {
       atomicWriteRuntimeFileNoFollow(opts.baseDir, pidPath, String(pid))
-      // PID evidence is written BEFORE the marker flips to 'spawned' — the
-      // marker alone never authorizes cleanup.
+      // PID evidence is written BEFORE the marker flips to 'spawned': the marker alone never
+      // authorizes cleanup.
       writeState('spawned')
     }
     const runCommand = async (args: string[], runOpts: Omit<RunOptions, 'signal' | 'onSpawn'>): Promise<RunResult> => {
@@ -1133,8 +1081,8 @@ export async function installRuntimeVersion(opts: InstallOptions): Promise<Insta
           onSpawn: noteChildPid,
         })
       } catch (error) {
-        // A failed spawn must not strand a 'spawning' marker that would
-        // block startup cleanup as if a child might exist.
+        // A failed spawn must not strand a 'spawning' marker that would block startup cleanup as
+        // if a child might exist.
         writeState('failed')
         throw error
       }
@@ -1181,9 +1129,8 @@ export async function installRuntimeVersion(opts: InstallOptions): Promise<Insta
 
     stage = 'download'
     deadline.signal.throwIfAborted()
-    // Byte progress rides the default downloader's per-chunk callback; the
-    // controller throttles the renderer pushes. Stage-only milestones follow
-    // for install/prune/smoke/publish (no reliable byte source).
+    // Byte progress rides the default downloader's per-chunk callback; stage-only milestones
+    // follow for install/prune/smoke/publish.
     const reportStage = (next: RuntimeInstallProgress): void => opts.onProgress?.(next)
     reportStage({ stage: 'download', received: 0, total: null })
     await downloadFn(resolution, tarballPath, {
@@ -1232,8 +1179,8 @@ export async function installRuntimeVersion(opts: InstallOptions): Promise<Insta
     stage = 'publish'
     reportStage({ stage: 'publish' })
     assertRuntimeRootNoFollow(opts.baseDir)
-    // Re-check at the commit point: a concurrent installer may have published
-    // after our early refusal check. Valid trees are never replaced or reused.
+    // Re-check at the commit point: a concurrent installer may have published after the early
+    // refusal; valid trees are never replaced or reused.
     if (existsSync(versionTreeDir)) {
       const existing = existingRuntimeTreeIsValid(opts.baseDir, version)
       if (existing === 'valid') {
@@ -1283,9 +1230,8 @@ export async function installRuntimeVersion(opts: InstallOptions): Promise<Insta
   } catch (error) {
     preserveWorkDir = isRuntimeInstallerWriterSafetyError(error)
     if (!completed) {
-      // `restorePreviousTree` is normally performed at the exact failure site
-      // so its error can be reported. This covers unexpected exceptions after
-      // backup/publish without hiding the original failure.
+      // restorePreviousTree normally runs at the exact failure site so its error can be reported;
+      // this covers unexpected exceptions after backup/publish without hiding the original failure.
       if (previousTreeBackedUp || workPublished) {
         const renameFn = opts.deps?.rename ?? renameWithWindowsRetry
         try { await restorePreviousTree(renameFn) } catch { /* backup remains durable for manual recovery */ }

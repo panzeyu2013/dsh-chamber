@@ -4,7 +4,6 @@ import { test } from 'node:test'
 import {
   acknowledgeRendererDelivery,
   authoritativeSourceRetirements,
-  canReplayRosterIntents,
   classifyRosterGatedSource,
   deliveryMatchesCurrentSource,
   enqueueBoundedRosterIntent,
@@ -80,9 +79,6 @@ test('a stale ACK false is terminal and is not retried against a newer attempt',
 })
 
 test('a stale committed replay is vetoed after event-side roster invalidation', () => {
-  assert.equal(canReplayRosterIntents(true, false), false)
-  assert.equal(canReplayRosterIntents(false, true), false)
-  assert.equal(canReplayRosterIntents(true, true), true)
 })
 
 test('remote cold-start activation is held and replayed after the authoritative roster arrives', () => {

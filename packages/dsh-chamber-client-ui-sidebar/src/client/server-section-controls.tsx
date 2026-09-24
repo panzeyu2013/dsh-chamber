@@ -1,8 +1,6 @@
-/**
- * Small shared JSX leaves of the chamber sidebar ServerSection subtree: the
- * non-interactive active-Schedule marker and the inline rename form shared by
- * the workspace header and the session rows.
- */
+/** Small shared JSX leaves of the chamber sidebar ServerSection subtree: the
+ *  active-Schedule marker and the inline rename form shared by the workspace
+ *  header and the session rows. */
 import clsx from 'clsx'
 import { IconAlarmClockOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
 import { clearPendingClick } from '@dsh-chamber/dsh-chamber-client-core/pending-click'
@@ -10,19 +8,11 @@ import { useSidebarSection } from './sidebar-context.ts'
 import cc from './sidebar-chamber.module.css'
 
 /**
- * Non-interactive active-Schedule marker.
- *
- * Mirrors the official `ActiveScheduleIndicator` verbatim (vendor ui-workspace
- * Rows.tsx:284-296): a `role="img"` span carrying the localized
- * `schedule.active` copy as both its accessible name and its native title,
- * wrapping the 16px alarm-clock glyph — the enclosing row stays the only
- * action. Upstream keeps that component module-local (it is NOT exported from
- * the vendor package), so this is a markup/token mirror of it, not a second
- * behaviour: it renders only where the fact says so
- * (`ChamberServerWorkspace.sessions[].hasActiveSchedule`, projected from the
- * session's `schedule` projection — see `hasActiveScheduleOf`).
- * @param props.label - the localized `schedule.active` copy.
- * @returns the marker element.
+ * Non-interactive active-Schedule marker: a markup/token mirror of the official
+ * `ActiveScheduleIndicator` (module-local upstream, NOT exported) — a `role="img"`
+ * span carrying the localized `schedule.active` copy as both accessible name and
+ * native title around the 16px alarm-clock glyph; the enclosing row stays the only
+ * action. Renders only where `hasActiveSchedule` says so.
  */
 export function SessionScheduleIndicator({ label }: { label: string }) {
   return (
@@ -32,13 +22,10 @@ export function SessionScheduleIndicator({ label }: { label: string }) {
   )
 }
 
-  // The rename edit UI, rendered in place at the renamed entity:
-  // 'sessionRow' swaps a session row's slot (row replaced by the form,
-  // indented at the session level); 'workspaceHeader' embeds the form
-  // INSIDE the workspace header row in place of the title/orphan-badge/count/git
-  // occupant/hover actions (行内编辑 — no extra list row
-  // appears; the header keeps its fold toggle/gutter). Enter commits;
-  // Escape cancels from anywhere inside the form; 取消 always cancels.
+  // The rename edit UI, rendered in place at the renamed entity: 'sessionRow'
+  // swaps a session row's slot; 'workspaceHeader' embeds the form INSIDE the header
+  // row in place of the title/orphan-badge/count/git/occupant/hover actions (no extra
+  // list row; the header keeps its fold toggle/gutter). Enter commits; Escape cancels from anywhere in the form.
 export function ServerSectionRenameForm({ placeholder, mode }: { placeholder: string; mode: 'sessionRow' | 'workspaceHeader' }) {
   const { t, renaming, setRenaming, commitRename } = useSidebarSection()
   return (
@@ -49,16 +36,13 @@ export function ServerSectionRenameForm({ placeholder, mode }: { placeholder: st
         mode === 'workspaceHeader' && cc.workspaceInlineForm,
       )}
       onClick={(event) => {
-        // stopPropagation also stops the native event, so the document-level
-        // pending-click canceller never sees this click — every
-        // propagation-stopping control clears the pending itself
-        // (pending-click.ts INVARIANT).
+        // stopPropagation also stops the native event, so the document-level pending-click
+        // canceller never sees this click — every propagation-stopping control clears the pending itself (pending-click.ts INVARIANT).
         event.stopPropagation()
         clearPendingClick()
       }}
       onSubmit={(event) => { event.preventDefault(); commitRename() }}
-      // Escape cancels wherever the focus sits inside the form (input, or
-      // the save/cancel buttons) — not only while the input is focused.
+      // Escape cancels wherever focus sits inside the form (input or the save/cancel buttons), not only on the input.
       onKeyDown={(event) => {
         if (event.key !== 'Escape') return
         event.preventDefault()
@@ -68,9 +52,8 @@ export function ServerSectionRenameForm({ placeholder, mode }: { placeholder: st
       <input
         className={cc.inlineInput}
         autoFocus
-        // The treeitem label (title span) is swapped out while editing, so
-        // the input itself carries the rename action as its accessible name
-        // (both the session-row and the workspace-header form share this).
+        // The treeitem label (title span) is swapped out while editing, so the input
+        // carries the rename action as its accessible name (shared by both form modes).
         aria-label={t('action.rename')}
         placeholder={placeholder}
         value={renaming?.value ?? ''}

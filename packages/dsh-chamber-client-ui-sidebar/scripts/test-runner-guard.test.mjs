@@ -14,37 +14,15 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, readFileSync, readdirSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { GROUPS, WIN32_FILES } from './test.mjs'
 import {
-  collectEntries, evaluateChildRun, parseReportedTotals, selectManifest,
+  collectEntries, evaluateChildRun, manifestLockstepProblems, parseReportedTotals, selectManifest,
 } from '../../../scripts/lib/test-manifest.mjs'
 
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-
-/** 与 scripts/gates/verify-test-wiring.mjs 同款忽略目录（vendor/dist 里的测试
- *  不属于本包清单的扫描面）。 */
-const IGNORED_DIRECTORIES = new Set(['node_modules', 'vendor', 'dist', 'lib', 'release', '.git', '.desktop-build', 'coverage'])
-
-function discoverTestFiles(root) {
-  const found = []
-  const visit = directory => {
-    for (const entry of readdirSync(directory, { withFileTypes: true })) {
-      if (entry.isDirectory()) {
-        if (IGNORED_DIRECTORIES.has(entry.name)) continue
-        visit(path.join(directory, entry.name))
-        continue
-      }
-      if (entry.isFile() && /\.test\.(ts|mjs)$/.test(entry.name)) {
-        found.push(path.relative(root, path.join(directory, entry.name)).split(path.sep).join('/'))
-      }
-    }
-  }
-  visit(root)
-  return found.sort()
-}
 
 /** 清单条目可以是路径串，也可以是 { file, nodeArgs }。 */
 const fileOf = entry => (typeof entry === 'string' ? entry : entry.file)
@@ -61,25 +39,15 @@ test('① 共享判定（本包档：executed）：零测试体（无汇总 / te
 })
 
 test('② 清单锁步：盘上测试文件全部接线、清单文件都存在、WIN32_FILES ⊆ GROUPS', () => {
-  for (const [group, files] of Object.entries(GROUPS)) {
-    const names = files.map(fileOf)
-    assert.deepEqual(names.filter((name, index) => names.indexOf(name) !== index), [], group + ' 组内重复列出测试文件')
-  }
-  const win32Names = WIN32_FILES.map(fileOf)
-  assert.deepEqual(win32Names.filter((name, index) => win32Names.indexOf(name) !== index), [], 'WIN32_FILES 组内重复列出测试文件')
-
-  const listed = [...Object.values(GROUPS).flat().map(fileOf), ...win32Names]
-  const discovered = discoverTestFiles(PACKAGE_ROOT)
-  assert.ok(discovered.length > 0, '发现集为空 —— 锁步断言被空集骗过')
-  assert.deepEqual(discovered.filter(file => !listed.includes(file)), [], '盘上的测试文件必须显式列进 GROUPS/WIN32_FILES')
-  assert.deepEqual(listed.filter(file => !discovered.includes(file)), [], '清单列出的文件必须在盘上存在')
   assert.deepEqual(
-    listed.filter(file => !existsSync(path.join(PACKAGE_ROOT, file))),
+    manifestLockstepProblems({
+      packageRoot: PACKAGE_ROOT,
+      groups: GROUPS,
+      platformFiles: { win32: WIN32_FILES },
+      platformSubsetsOfGroups: ['win32'],
+    }),
     [],
-    '清单列出的路径必须真实存在',
   )
-  const fullNames = Object.values(GROUPS).flat().map(fileOf)
-  assert.deepEqual(win32Names.filter(name => !fullNames.includes(name)), [], 'WIN32_FILES 必须是 GROUPS 的子集')
 })
 
 test('③ 平台腿：--win32 只选 WIN32_FILES（在 GROUPS 查表），默认腿展开全部非空组', () => {

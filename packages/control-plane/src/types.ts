@@ -1,10 +1,6 @@
 /**
- * Shared control-plane type surface.
- *
- * `Logger` is the console-like sink every control-plane module accepts
- * ({log, warn, error}); it is shared by the remaining modules (spawn-dsh,
- * host-logs, reaper, local-connection, api, index, standalone) so they
- * share one definition.
+ * Shared control-plane type surface: the console-like logger sink
+ * ({log, warn, error}) accepted by every control-plane module.
  */
 
 /** Console-like logger sink accepted by every control-plane module. */

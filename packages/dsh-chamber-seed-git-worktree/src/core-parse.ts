@@ -1,8 +1,7 @@
 /**
- * core-parse.ts — Git output parsing, attention probes and DSH_HOME resolution.
- *
+ * Git output parsing, attention probes and DSH_HOME resolution.
  */
-import { MAX_PATH_LENGTH } from './core-constants.ts'
+import { GIT_DIR_POINTER_MAX_BYTES, MAX_PATH_LENGTH } from './core-constants.ts'
 import { GitWorktreeError } from './core-errors.ts'
 import type { RawWorktree } from './core-internals.ts'
 import type { GitAttentionReason, WorktreeFileSystem } from './core-types.ts'
@@ -10,8 +9,7 @@ import { fail } from './core-validation.ts'
 import { homedir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
 
-/** Parse the `--branch` status header (`## branch...upstream [ahead N, behind
- *  M]`). The numbers come from LOCAL refs — honest, never fetched. */
+/** Parse the `--branch` status header; numbers come from LOCAL refs - honest, never fetched. */
 export function parseBranchLine(line: string): { upstream: string | null; ahead: number; behind: number } {
   if (!line.startsWith('## ')) return { upstream: null, ahead: 0, behind: 0 }
   const rest = line.slice(3)
@@ -26,8 +24,7 @@ export function parseBranchLine(line: string): { upstream: string | null; ahead:
     if (aheadMatch !== null) ahead = Number(aheadMatch[1])
     if (behindMatch !== null) behind = Number(behindMatch[1])
   }
-  // Git rejects ref names containing '..', so '...' cannot appear inside a
-  // branch name — the separator is unambiguous (do not "fix").
+  // Git rejects ref names containing '..', so '...' cannot appear inside a branch name.
   const sep = namePart.indexOf('...')
   return {
     upstream: sep >= 0 ? (namePart.slice(sep + 3) || null) : null,
@@ -37,10 +34,9 @@ export function parseBranchLine(line: string): { upstream: string | null; ahead:
 }
 
 /**
- * Parse `git worktree list --porcelain` output in either NUL-delimited
- * (`-z`, Git 2.47+) or newline-delimited form. The record grammar is
- * identical across both: fields are delimiter-separated and a blank field
- * closes the current record.
+ * Parse `git worktree list --porcelain` in either NUL-delimited (`-z`, Git 2.47+) or
+ * newline-delimited form. The record grammar is identical: fields are delimiter-separated
+ * and a blank field closes the current record.
  */
 export function parseWorktreePorcelain(output: string, delimiter: '\0' | '\n' = '\0'): RawWorktree[] {
   const records: RawWorktree[] = []
@@ -90,9 +86,6 @@ export function parseWorktreePorcelain(output: string, delimiter: '\0' | '\n' = 
 
 export const ZERO_HEAD = /^0+$/u
 
-/** Bounded read for the worktree `.git` pointer; gitdir lines are tiny. */
-export const GIT_DIR_POINTER_MAX_BYTES = 4096
-
 /** git-dir state files that mark an in-progress Git operation (best-effort). */
 export const ATTENTION_PROBES: ReadonlyArray<{ readonly name: string; readonly reason: GitAttentionReason }> = [
   { name: 'MERGE_HEAD', reason: 'merge' },
@@ -109,9 +102,9 @@ export function isNotARepositoryError(error: unknown): boolean {
 }
 
 /**
- * The worktree's git dir: `<path>/.git` when it is a directory (main
- * checkout), otherwise the target of its `gitdir:` pointer file (linked
- * worktrees). Resolved against the worktree path when relative.
+ * The worktree's git dir: `<path>/.git` when it is a directory, otherwise the target of
+ * its `gitdir:` pointer file (linked worktrees), resolved against the worktree path when
+ * relative.
  */
 export async function worktreeGitDir(path: string, fs: WorktreeFileSystem): Promise<string | null> {
   const dotGit = join(path, '.git')
@@ -146,8 +139,7 @@ export async function detectAttention(
   return [...new Set(found)]
 }
 
-/** Environment variable naming the single DeepSeek Harness home (upstream
- *  `@deepseek-ai/dsh-home-paths` `DSH_HOME_ENV`). */
+/** Environment variable naming the single DeepSeek Harness home. */
 export const DSH_HOME_ENV = 'DSH_HOME'
 
 /** The default harness home under the OS home (`~/.dsh`). */
@@ -155,22 +147,17 @@ export function defaultDshHome(): string {
   return join(homedir(), '.dsh')
 }
 
-/** Expand `~`, `~/` and `~\` against the OS home; any other value is returned
- *  unchanged. Mirrors upstream `expandHomePath`. */
+/** Expand `~`, `~/` and `~\\` against the OS home; anything else is returned unchanged. */
 export function expandHomePath(path: string): string {
   if (path === '~') return homedir()
   if (path.startsWith('~/') || path.startsWith('~\\')) return join(homedir(), path.slice(2))
   return path
 }
 
-/** Local mirror of upstream `resolveDshHome`
- *  (`vendor/harness-checkout/packages/util/home-paths/src/index.ts`), which this
- *  in-instance plugin cannot import: it ships as one esbuild bundle with only
- *  `@deepseek-ai/*` externals. Precedence, highest first: an explicit
- *  `configured` value, `$DSH_HOME`, then `~/.dsh`. An empty or whitespace-only
- *  `$DSH_HOME` counts as UNSET, so a blank override never resolves the home to
- *  the process working directory. LOCKSTEP: keep this behavior identical to the
- *  upstream function (a change there must be mirrored here). */
+/** Local mirror of upstream `resolveDshHome` (it ships as one esbuild bundle, so this
+ *  in-instance plugin cannot import it). Precedence: explicit `configured`, then
+ *  `$DSH_HOME`, then `~/.dsh`; an empty/whitespace-only `$DSH_HOME` counts as UNSET.
+ *  LOCKSTEP: keep this behavior identical to the upstream function. */
 export function resolveDshHome(configured?: string, env: NodeJS.ProcessEnv = process.env): string {
   const fromEnv = env[DSH_HOME_ENV]
   const selected = configured ?? (fromEnv !== undefined && fromEnv.trim().length > 0 ? fromEnv : defaultDshHome())

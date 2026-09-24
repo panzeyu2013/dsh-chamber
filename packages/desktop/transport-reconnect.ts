@@ -1,17 +1,14 @@
 /**
- * OS-resume immediate re-probe (design 14 D4), shared by the Electron main
- * process and the Swift sidecar assembly (each caller binds only its own
- * facts to one implementation).
+ * OS-resume immediate re-probe, shared by the Electron main process and the
+ * Swift sidecar assembly.
  *
- * Judgement (05 §7.6 discipline): touch ONLY transient failures —
- * phase error/degraded AND not terminal (requiresUserAction === true means a
- * deterministic auth/verifyUp failure that must never auto-retry); NEVER idle
- * (manual disconnect semantics); connect() is idempotent for connecting/ready.
- * Early gates: a quit in flight must not spawn new transports (an orphan ssh
- * child could outlive dispose), and a missing manager (before assembly) is a
- * no-op. A per-instance connect throw is loud and never breaks the resume
- * frame; the caller supplies the flavor's log label so its exact wording is
- * preserved.
+ * Only transient failures are touched: phase error/degraded AND not terminal
+ * (requiresUserAction === true is a deterministic auth/verifyUp failure that
+ * must never auto-retry); never idle (manual disconnect semantics); connect()
+ * is idempotent for connecting/ready. A quit in flight must not spawn new
+ * transports (an orphan ssh child could outlive dispose); a missing manager is
+ * a no-op. A per-instance throw stays loud without breaking the resume frame;
+ * the caller supplies its flavor's log label.
  */
 import type { TransportManager } from './transport-manager.ts'
 

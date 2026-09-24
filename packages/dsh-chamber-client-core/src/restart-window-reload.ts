@@ -1,70 +1,53 @@
 /**
  * Window reload completing a user-initiated dsh restart.
  *
- * SHARED FACE (sidebar `shared`, design 21 §5.2 precedent): the completion is
- * consumed by two client plugins that must not value-import each other — the
- * settings bridge's 「dsh 运行时」 section (local + gateway restart) and the
- * connections package (gateway card restart/start, ssh card restart, plugin
- * dialog restart-to-apply). Page-level state lives here so both surfaces arm the
- * SAME completion per key.
+ * SHARED FACE: consumed by two client plugins that must not value-import each
+ * other — the settings bridge's 「dsh 运行时」 section and the connections package
+ * (gateway/ssh card restart, plugin dialog restart-to-apply); page-level state
+ * lives here so both surfaces arm the SAME completion per key.
  *
- * WHY THIS EXISTS: the chamber window's client-plugin set is fixed at each
- * instance shell boot — the host boot graph is fetched once per boot and the
- * `dsh.client` bundles it carries are executed then
- * (`packages/renderer/src/host-graph.ts`). Restarting the dsh process refreshes
- * the HOST side only (loader rows, tools, MCP connections). A newly installed or
- * rebuilt `dsh.client` contribution — a settings section, for example — cannot
- * appear until the window boots again, so the user-facing "restart dsh to
- * refresh mounted plugins" action (design 18 §3.6 item 8) is not complete
- * without one page reload. A window reload is the honest scope: the page-level
- * module table is first-load-wins per plugin id, so only a fresh page can also
- * switch an ALREADY-LOADED plugin's implementation (design 09 §3.2/§3.5).
+ * WHY: the client-plugin set is fixed at each instance shell boot (the host boot
+ * graph is fetched once per boot and its `dsh.client` bundles execute then), and
+ * restarting the dsh process refreshes the HOST side only. A newly installed or
+ * rebuilt `dsh.client` contribution (a settings section, say) cannot appear until
+ * the window boots again, and the page-level module table is first-load-wins per
+ * plugin id, so only a fresh page can switch an ALREADY-LOADED plugin's
+ * implementation. A window reload is the honest scope of "restart dsh to refresh
+ * mounted plugins".
  *
- * PAGE-OWNED, NOT COMPONENT-OWNED: the restart itself is a host-side fact that
- * proceeds whether or not the button that started it is still on screen, so the
- * reload is armed on the PAGE (one entry per key) instead of living in the
- * caller's promise chain. Unmounting the settings panel mid-restart therefore
- * cannot cancel the completion (the panel's own abort
- * controller stays authoritative only for the POST it issued).
+ * PAGE-OWNED, NOT COMPONENT-OWNED: the restart is a host-side fact that proceeds
+ * whether or not the button that started it is still on screen, so the reload is
+ * armed on the PAGE (one entry per key) and unmounting the panel cannot cancel it
+ * (the panel's abort controller stays authoritative only for the POST it issued).
  *
- * POLICY:
- * - the waiter owns its own readiness protocol and budget; the arm's
- *   `budgetMs` is only the page-level safety net (it aborts the waiter's
- *   signal, whose contract is to resolve false promptly);
- * - 'not-served' never reloads — reloading onto an instance that is not serving
- *   would hide the failure behind a fresh boot, so the caller keeps its error
- *   surface;
- * - a waiter that rejects is "not serving yet"; this module never throws;
- * - the same key re-armed while pending shares one promise (no double polls, and
- *   shutting/reopening the panel cannot arm a second reload).
+ * POLICY: the waiter owns its own readiness protocol and budget — the arm's
+ * `budgetMs` is only the page-level safety net (it aborts the waiter's signal,
+ * whose contract is to resolve false promptly); 'not-served' never reloads
+ * (reloading onto a non-serving instance would hide the failure behind a fresh
+ * boot) and a rejecting waiter is "not serving yet"; this module never throws; the
+ * same key re-armed while pending shares one promise.
  */
 
 import { assertSingletonModule } from './singleton.ts'
 
-// The armed map is page-wide state: a duplicated module copy would arm a second
-// completion (two reloads). Same drift diagnostic the other shared singletons use.
+// Page-wide armed map: a duplicated module copy would arm a second completion (two reloads).
 assertSingletonModule('restart-window-reload')
 
-/** GET /health → {ok, dsh:{status, port, error?}} (design 04 §3.1; the same row
- *  the connections card renders). Serving = 'ready' | 'degraded' — the card's own
- *  `healthy` definition: a probe-failing instance can still serve the root
- *  document / boot graph, and refusing to reload it would report a stalled
- *  restart for a restart that actually worked.
- *
- *  KNOWN TRADE-OFF: this wire shape is re-declared here
- *  rather than imported from the client-core REST client, because this module
- *  is imported by plain-node tests and the client-core `.` face links the
- *  page-global stores in with it. The shape is two fields and stays pinned to
- *  design 04 §3.1. */
+/** GET /health → {ok, dsh:{status, port, error?}} (the same row the connections
+ *  card renders). Serving = 'ready' | 'degraded' — the card's own `healthy`
+ *  definition: a probe-failing instance can still serve the root document / boot
+ *  graph, and refusing to reload it would report a stalled restart for a restart
+ *  that worked. Re-declared here (not imported from the client-core REST client)
+ *  because this module is imported by plain-node tests; two fields, pinned to the
+ *  health wire. */
 interface HealthWire {
   ok?: boolean
   dsh?: { status?: unknown }
 }
 
-/** Local wait poll cadence + page-level arm budgets. A local restart settles in
- *  a few seconds ({@link SERVING_RELOAD_BUDGET_MS}); every other source's arm
- *  runs under {@link RESTART_RELOAD_BUDGET_MS}, whose waiter owns its own inner
- *  budget (the gateway readiness poll's 120s; the ssh serving gate's 120s). */
+/** Local wait poll cadence + page-level arm budgets: a local restart settles in a
+ *  few seconds; every other source runs under RESTART_RELOAD_BUDGET_MS, whose
+ *  waiter owns its own inner budget (the gateway/ssh readiness polls' 120s). */
 const SERVING_RELOAD_POLL_MS = 250
 const SERVING_RELOAD_BUDGET_MS = 30_000
 export const RESTART_RELOAD_BUDGET_MS = 180_000
@@ -80,8 +63,8 @@ export type ServingReloadOutcome =
   | 'not-served'
 
 /**
- * A blocking readiness waiter: resolves true once the restarted instance
- * serves, false when it gives up or its signal aborts. The waiter owns its own
+ * A blocking readiness waiter: resolves true once the restarted instance serves,
+ * false when it gives up or its signal aborts. The waiter owns its own
  * protocol/ceiling; the arm's budget is the outer safety net.
  */
 export type ServingWaiter = (signal: AbortSignal) => Promise<boolean>
@@ -109,13 +92,9 @@ function abortableSleep(signal: AbortSignal, ms: number): Promise<void> {
 
 /**
  * Arm the page-level completion: wait for the instance to serve, then reload the
- * window once. Single-flight per key: an identical key already pending returns
- * that same promise (a second click, or reopening the panel, must not poll or
- * reload twice). The entry clears on settle, so a later retry can re-arm.
- *
- * @param key - page-level identity of the completion ('local' | 'gateway-<id>' | ...).
- * @param waiter - the source's readiness waiter (owns its own protocol).
- * @param options - page-level safety net.
+ * window once. Single-flight per key (a second click or reopening the panel must
+ * not poll or reload twice); the entry clears on settle so a later retry can
+ * re-arm.
  * @returns 'reloaded' once the reload was issued, 'not-served' otherwise.
  */
 export function armWindowReloadWhenServed(
@@ -128,8 +107,8 @@ export function armWindowReloadWhenServed(
   const budgetMs = options.budgetMs ?? SERVING_RELOAD_BUDGET_MS
   const controller = new AbortController()
   const timer = setTimeout(() => { controller.abort() }, budgetMs)
-  // The wrapper object keeps the self-reference inside the settle handler free
-  // of a use-before-declaration dance.
+  // The wrapper object keeps the self-reference inside the settle handler free of a
+  // use-before-declaration dance.
   const entry: { promise: Promise<ServingReloadOutcome> } = {
     promise: Promise.resolve<ServingReloadOutcome>('not-served'),
   }
@@ -155,10 +134,9 @@ export function armWindowReloadWhenServed(
 }
 
 /**
- * Reload the page. Guarded for non-browser hosts (this module is imported by
- * plain-node tests); a failed navigation cannot be detected and is swallowed —
- * the reload is a best-effort completion of the restart, never a way to fail the
- * action (design 18 §3.6 item 8).
+ * Reload the page. Guarded for non-browser hosts (plain-node tests); a failed
+ * navigation cannot be detected and is swallowed — the reload is a best-effort
+ * completion of the restart, never a way to fail the action.
  */
 export function reloadWindow(): void {
   if (typeof window === 'undefined') return
@@ -183,8 +161,6 @@ export interface LocalServingDeps {
  * Wait for the LOCAL instance to serve again: poll the control plane's /health
  * until `dsh.status` is 'ready' or 'degraded' (the connections card's own
  * `healthy` definition), bounded by `budgetMs` and by the signal.
- * @param signal - the arm's page-level signal; abort resolves false promptly.
- * @param deps - fetch/poll/budget seams.
  * @returns true once the instance serves, false on abort/budget exhaustion.
  */
 export async function waitForLocalDshServing(
@@ -220,9 +196,7 @@ export async function waitForLocalDshServing(
  * The production entry for the local 「重启 dsh」/「启动」: wait for the restarted
  * instance to serve, then reload the window. Page-owned (see the module header):
  * closing the settings panel does not cancel it.
- * @param options - page-level safety net override (tests).
- * @returns the {@link ServingReloadOutcome}; 'not-served' means the caller must
- *   report the stalled restart instead of reloading.
+ * @returns 'not-served' means the caller must report the stalled restart.
  */
 export function armLocalDshRestartCompletion(
   options: ArmWindowReloadOptions = {},

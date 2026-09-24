@@ -1,18 +1,12 @@
 /**
  * Trailing frame coalescer.
  *
- * WHY THIS EXISTS. Renderer hot paths drive "sample the DOM after a mutation,
- * but at most once per frame" loops. The per-frame shape is exactly the JS entry
- * the WebContent process was executing when it died (Apple symbolication:
- * \`JSRequestAnimationFrameCallback::invoke\` → OSR entry → JSC code-block
- * replacement trap), and during the boot window those loops run for tens of
- * seconds while every source shell compiles. Coalescing the storm into a bounded
- * sample rate with a guaranteed trailing sample keeps the semantics the callers
- * need (the LAST state is always observed) while cutting the work by ~6-10x.
+ * Renderer hot paths drive "sample the DOM after a mutation, but at most once per frame" loops;
+ * coalescing the storm into a bounded sample rate with a GUARANTEED trailing sample keeps the
+ * semantics the callers need (the LAST state is always observed) while cutting work by ~6-10x.
  *
- * The scheduler is injected so the contract is unit-testable in plain node:
- * \`scheduleFrame\` models requestAnimationFrame, \`scheduleDelay\` models the
- * trailing timer. Dependency-free, no DOM, no React.
+ * The scheduler is injected so the contract is unit-testable in plain node (`scheduleFrame` models
+ * requestAnimationFrame, `scheduleDelay` the trailing timer). Dependency-free, no DOM, no React.
  */
 
 export interface FrameCoalescerOptions {
@@ -36,9 +30,8 @@ export interface FrameCoalescer {
 }
 
 /**
- * One request in flight at a time: the first request after an idle gap runs on
- * the next frame, requests arriving inside \`minIntervalMs\` of the last sample
- * collapse into a single trailing run.
+ * One request in flight at a time: the first request after an idle gap runs on the next frame,
+ * requests arriving inside `minIntervalMs` of the last sample collapse into a single trailing run.
  */
 export function createFrameCoalescer(options: FrameCoalescerOptions): FrameCoalescer {
   const now = options.now ?? ((): number => Date.now())

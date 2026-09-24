@@ -1,6 +1,5 @@
 /**
- * core-types.ts — Wire/domain/type surface of the git worktree core.
- *
+ * Wire/domain/type surface of the git worktree core.
  */
 
 export type MaybePromise<T> = T | Promise<T>
@@ -15,29 +14,23 @@ export interface AgentFact {
   readonly sessionId: string
   readonly status: 'idle' | 'running'
   readonly cwd?: string
-  /** The recorded parent session (`session.header.parentSession`). Loaded for
-   *  EVERY agent (any status), because the archived-aware running guard walks
-   *  the chain from a running descendant up to an archived ancestor (design 08
-   *  §6 amendment). The edge MEANS one of two things and only
-   *  `origin` tells them apart — see below. */
+  /** The recorded parent session (`session.header.parentSession`). Loaded for EVERY
+   *  agent (any status): the archived-aware running guard walks the chain from a running
+   *  descendant up to an archived ancestor. */
   readonly parentSessionId?: string
-  /** Coarse durable child origin (`session.header.origin`). `'subagent'` marks
-   *  a DELEGATION child (`packages/subagent/subagent` sets it); ABSENT means
-   *  the `parentSessionId` edge is FORK lineage (upstream `session/fork` and
-   *  `SessionStore.fork` set `parentSession` with NO origin). Only
-   *  subagent-origin edges are lineage for the archived-aware running guard —
-   *  a fork edge TERMINATES the walk, because a fork is an independent session
-   *  whose run must never be treated as inert (design 08 §5.2 amendment). */
+  /** Coarse durable child origin (`session.header.origin`). `'subagent'` marks a
+   *  DELEGATION child; ABSENT means the `parentSessionId` edge is FORK lineage. Only
+   *  subagent-origin edges are lineage for the archived-aware running guard - a fork edge
+   *  TERMINATES the walk (an independent session must never be treated as inert). */
   readonly origin?: 'subagent'
 }
 
 export interface WorktreeStateSource {
   listWorkspaces(): MaybePromise<readonly WorkspaceFact[]>
   listAgents(): MaybePromise<readonly AgentFact[]>
-  /** The authoritative archived-session set (`workspaceRegistry.
-   *  archivedSessionIds`). A missing/invalid surface must THROW — never read
-   *  as an empty set, which would silently turn every archived session back
-   *  into a blocking one. */
+  /** The authoritative archived-session set (`workspaceRegistry.archivedSessionIds`).
+   *  A missing/invalid surface must THROW - never read as an empty set, which would
+   *  silently turn every archived session back into a blocking one. */
   listArchivedSessionIds(): MaybePromise<readonly string[]>
 }
 
@@ -97,10 +90,8 @@ export interface GitWorktreeCoreOptions {
   readonly operationCapacity?: number
   /** Test seam for the non-cancelling snapshot response deadline. */
   readonly snapshotWallTimeoutMs?: number
-  /** Unified worktree root (design 08 §2.2): all chamber checkouts live under
-   *  the dsh home (`$DSH_HOME/worktrees`, one subdirectory per repository) —
-   *  outside any working tree so git status stays clean. Defaults from the
-   *  instance's DSH_HOME (fallback: ~/.dsh). */
+  /** Unified worktree root: all chamber checkouts live under the dsh home
+   *  (`$DSH_HOME/worktrees`, one subdirectory per repository), outside any working tree. */
   readonly worktreesRoot?: string
 }
 
@@ -112,9 +103,8 @@ export interface PreviewCreateInput {
   readonly sourceWorkspaceId: string
   readonly basename: string
   readonly branch: CreateBranch
-  /** Optional start point for a NEW branch (OpenChamber sourceBranch):
-   *  the new branch is created from this local branch's head instead of the
-   *  main checkout HEAD. Ignored for existing branches. */
+  /** Optional start point for a NEW branch: created from this local branch's head
+   *  instead of the main checkout HEAD. Ignored for existing branches. */
   readonly startRef?: string
 }
 
@@ -168,12 +158,11 @@ export interface RollbackCreateResult {
 
 export interface RemoveInput {
   readonly operationId: string
-  /** Optional: an UNREGISTERED worktree (no dsh workspace) is removed with
-   *  this absent — the git-first removal then returns `next: 'none'` and the
-   *  client skips workspace.delete (design 08 §3.4, Plan A). */
+  /** Optional: an UNREGISTERED worktree (no dsh workspace) is removed with this
+   *  absent - git-first removal then returns `next: 'none'`. */
   readonly workspaceId?: string
-  /** Required when `workspaceId` is absent (UNREGISTERED removal): the exact
-   *  worktree path — the workspace-based discovery cannot derive it. */
+  /** Required when `workspaceId` is absent (unregistered removal): the exact worktree
+   *  path, which workspace-based discovery cannot derive. */
   readonly path?: string
   readonly expected: {
     readonly repoId: string
@@ -181,16 +170,12 @@ export interface RemoveInput {
     readonly branch: string | null
     readonly head: string
   }
-  /** Optional local branch to delete AFTER the worktree removal (design 08
-   *  §5.3 user decision): best-effort — a failure is reported honestly on the
-   *  result and never rolls back the (already gone) worktree. */
+  /** Optional local branch to delete AFTER the worktree removal: best-effort - a failure
+   *  is reported on the result and never rolls back the (already gone) worktree. */
   readonly deleteBranch?: string
-  /** Explicit user authorization to DISCARD the worktree's uncommitted state
-   *  (dirty/untracked files). When true, a dirty worktree is removed with
-   *  `git worktree remove --force` instead of being rejected. The branch,
-   *  commits and HEAD are never touched — only the working tree files are
-   *  discarded. Locked/running/identity guards are unchanged. (design 08 §5.3
-   *  amendment) */
+  /** Explicit user authorization to DISCARD uncommitted state (dirty/untracked files):
+   *  a dirty worktree is removed with `git worktree remove --force` instead of being
+   *  rejected. Branch, commits and HEAD are never touched; other guards are unchanged. */
   readonly discardChanges?: boolean
 }
 
@@ -211,15 +196,12 @@ export interface RemoveResult {
   /** The caller may now delete only this durable workspace registration.
    *  'none' when the removed worktree was UNREGISTERED (no workspace). */
   readonly next: 'delete-workspace' | 'none'
-  /** The host never deletes a branch on its own: `branchPreserved` means
-   *  "preserved unless the caller explicitly requested deletion" — when
-   *  `deleteBranch` was requested, the branchDelete* flags below report the
-   *  outcome of that explicit best-effort step. */
+  /** The host never deletes a branch on its own: `branchPreserved` means "preserved
+   *  unless the caller explicitly requested deletion", whose outcome the flags report. */
   readonly branchPreserved: true
   /** Set when `deleteBranch` was requested and deleted successfully. */
   readonly branchDeleted?: boolean
-  /** Set when `deleteBranch` was requested but the branch delete failed —
-   *  the worktree removal still stands. */
+  /** Set when `deleteBranch` was requested but failed - the worktree removal still stands. */
   readonly branchDeleteFailed?: boolean
   /** Why the optional branch deletion failed (safe, bounded text). */
   readonly branchDeleteError?: string
@@ -260,9 +242,8 @@ export interface SnapshotWorktree {
   readonly sessionIds: readonly string[]
   /** ALL running associated sessions (display fact). */
   readonly runningSessionIds: readonly string[]
-  /** The running sessions that actually BLOCK a removal — runningSessionIds
-   *  minus the INERT ones (archived, or under an archived ancestor). An old
-   *  client that only knows runningSessionIds stays conservative. */
+  /** The running sessions that actually BLOCK a removal - runningSessionIds minus the
+   *  INERT ones (archived, or under an archived ancestor). */
   readonly blockingRunningSessionIds: readonly string[]
 }
 
@@ -271,9 +252,7 @@ export interface SnapshotRepository {
   readonly commonDir: string
   readonly mainPath: string
   readonly worktrees: readonly SnapshotWorktree[]
-  /** Local branch names (`git show-ref --heads`); a convenience for the
-   *  create dialog's existing-branch picker. Empty on failure — never a
-   *  snapshot error. */
+  /** Local branch names (`git show-ref --heads`) for the create dialog; empty on failure. */
   readonly branches: readonly string[]
 }
 
@@ -300,12 +279,8 @@ export type GitWorktreeDomainResult<T> =
   | { readonly ok: false; readonly error: GitWorktreeDomainError }
 
 /** Stable action error code; Typert transports the Error message to clients.
- *  INVARIANT: an explicit `retryable: false` is a host-proven
- *  PRE-MUTATION refusal — the mutation provably did not commit (the
- *  worktree-submodules gate and the commitBoundRemove reclassification are
- *  the only emitters, both after proving the target still exists). Never
- *  throw with explicit `retryable: false` from a path that may have mutated:
- *  the client clears a pending "uncertain outcome" recovery on that signal.
- *  An explicit `retryable: true` and an absent flag (code in RETRYABLE_CODES
- *  ⇒ serialized true) both mean "outcome unverified — same-operation replay
- *  is the safe route". */
+ *  INVARIANT: an explicit `retryable: false` is a host-proven PRE-MUTATION refusal (the
+ *  only emitters prove the target still exists first). Never throw it from a path that
+ *  may have mutated: the client clears its pending "uncertain outcome" recovery on it.
+ *  An explicit true, or an absent flag with a code in RETRYABLE_CODES, means
+ *  "outcome unverified - same-operation replay is the safe route". */

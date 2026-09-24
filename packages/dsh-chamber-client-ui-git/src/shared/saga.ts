@@ -32,16 +32,13 @@ export class GitSagaError extends Error {
 }
 
 /** True when a remove failure is a host-PROVEN pre-mutation refusal: the host
- *  serializes an explicit `retryable: false` only after proving the target
- *  still exists and nothing was removed (host core commitBoundRemove — the
- *  typed `worktree-submodules` gate and the reclassified `git-command-failed`
- *  both carry it). Such a refusal resolves a pending git-remove recovery that
- *  replays the SAME removal as "not removed", so the recovery may be cleared
- *  instead of retrying the same refusal forever (design 08 §6.2 bounded
- *  exception). Saga-minted recoveries (e.g. workspace-delete, which
- *  exists only after a git-removal receipt) are never pre-mutation proofs and
- *  are excluded by the `recovery === undefined` guard — a future host path
- *  must never emit explicit `retryable: false` from a mutated path. */
+ *  serializes explicit `retryable: false` only after proving the target still
+ *  exists and nothing was removed, so a pending git-remove recovery replaying this
+ *  same removal may be CLEARED instead of retried forever (design 08 §6.2 bounded
+ *  exception). Saga-minted recoveries (e.g. workspace-delete, which exists only
+ *  after a git-removal receipt) are excluded by the `recovery === undefined` guard
+ *  — a future host path must never emit `retryable: false` from a mutated path. */
+
 export function isProvenPreMutationRefusal(error: GitSagaError): boolean {
   return error.recovery === undefined
     && error.original instanceof GitWorktreeRpcError
@@ -84,15 +81,11 @@ function assertCreateCorrelation(
 }
 
 /** Structural correlation of a workspace.create response. NOTE: the returned
- *  `path` is NOT compared against the requested path — the workspace registry
- *  canonicalizes every path through `fs.realpath` (dsh-workspace paths.ts),
- *  while the caller's path may be a lexical spelling (e.g. the git host's
- *  targetPath under a symlinked $DSH_HOME, or a browser-picked directory).
- *  The host guarantees the returned entity IS the workspace at the requested
- *  path (resolveByPath || create), and the official client never compares —
- *  the same tolerance as the sidebar's decodeWorkspaceCreateValue.
- *  Validation stays structural: non-empty workspaceId plus the created
- *  boolean. */
+ *  `path` is NOT compared against the requested path — the registry canonicalizes
+ *  through `fs.realpath` (dsh-workspace paths.ts) while the caller's path may be
+ *  lexical (symlinked $DSH_HOME, browser-picked dir). The host guarantees the
+ *  returned entity IS the workspace at the requested path; validation stays
+ *  structural: non-empty workspaceId + created boolean. */
 function assertWorkspaceCorrelation(
   workspace: { workspaceId: string; path: string; created: boolean },
 ): void {
@@ -113,10 +106,9 @@ async function createExactSession(
 }
 
 /**
- * Create policy boundary:
- * - workspace adoption failure may rollback only this host operation;
- * - once session.create is attempted, no durable entity is compensated;
- * - the caller opens the committed session separately (opening has no ack).
+ * Create policy boundary: workspace adoption failure may rollback only this host
+ * operation; once session.create is attempted no durable entity is compensated;
+ * the caller opens the committed session separately (opening has no ack).
  */
 export async function runCreateSaga(
   deps: CreateSagaDeps,
@@ -176,12 +168,10 @@ export async function runCreateSaga(
     throw new GitSagaError(workspaceError, undefined, true, false)
   }
 
-  // OpenChamber-aligned create (design 08 §4.2): an ordinary create registers
-  // the worktree workspace WITHOUT committing a session — the workspace
-  // appears immediately (0 sessions) and the user starts sessions in it
-  // afterwards. `createSession: false` skips the session step entirely (and
-  // the caller then skips the open); the preallocated session id is simply
-  // unused. The session step, when taken, keeps its never-compensate boundary.
+  // OpenChamber-aligned create (design 08 §4.2): an ordinary create registers the
+  // workspace WITHOUT committing a session; `createSession: false` skips the
+  // session step and the preallocated id is unused. The session step, when taken,
+  // keeps its never-compensate boundary.
   if (options.createSession !== false) {
     try {
       await createExactSession(deps.sessionCreate, workspace.workspaceId, ids.sessionId)
@@ -209,9 +199,9 @@ export interface RollbackRecoveryDeps {
 }
 
 /**
- * Resolve a failed pre-session compensation. If rollback says a workspace
- * already adopted the path, reacquire that idempotent workspace and finish
- * the original session commit with the same preallocated id.
+ * Resolve a failed pre-session compensation: if rollback says a workspace already
+ * adopted the path, reacquire that idempotent workspace and finish the original
+ * session commit with the same preallocated id.
  */
 export async function runRollbackRecovery(
   deps: RollbackRecoveryDeps,
@@ -286,8 +276,8 @@ export interface AdoptSessionSagaDeps {
 /**
  * Session-only adoption of an EXISTING worktree (no Git mutation): register or
  * reuse the workspace at `path`, then commit a preallocated session. Once
- * session.create is attempted nothing is compensated (no session-delete wire);
- * the caller retries the same preallocated session id.
+ * session.create is attempted nothing is compensated; the caller retries with the
+ * same preallocated id.
  */
 export async function runAdoptSessionSaga(
   deps: AdoptSessionSagaDeps,
@@ -329,8 +319,7 @@ export interface RemoveSagaDeps {
    *  workspace-delete recovery so a replay fingerprint matches. */
   deleteBranch?: string
   /** The original removal's discard-changes authorization — echoed onto the
-   *  workspace-delete recovery so a force-removal replay stays byte-identical
-   *  (design 08 §5.3 amendment). */
+   *  workspace-delete recovery so a force-removal replay stays byte-identical. */
   discardChanges?: boolean
   ambiguousRecovery(error: unknown): Extract<GitRecovery, { kind: 'git-remove' }> | undefined
 }
@@ -347,9 +336,8 @@ export interface PreRemoveArchiveDeps {
 /**
  * Optional soft-archive of the whole session tree BEFORE any Git mutation.
  * Returns the archived closure (roots + transitive subsessions via
- * parentSessionId, minus already-archived ids). A fetch or archive failure
- * throws with nothing removed; earlier archives in the same run are already
- * committed (per-session ops).
+ * parentSessionId, minus already-archived ids); a failure throws with nothing
+ * removed, while earlier archives in the same run are already committed.
  */
 export async function runPreRemoveArchive(
   deps: PreRemoveArchiveDeps,
@@ -367,11 +355,10 @@ export async function runPreRemoveArchive(
 
 /**
  * NO STOP-THEN-REMOVE HERE (design 08 §5.2): a worktree removal never stops,
- * cancels or deletes a session. What blocks is the host's archived-aware
- * running fact (an archived session, or one under an archived ancestor, is
- * inert), so the git plugin needs no cancel loop at all. The only cancel/wait
- * implementation in the repo belongs to the archive manager
- * (`stopSessionsForPurge`, design 24 §5).
+ * cancels or deletes a session — what blocks is the host's archived-aware running
+ * fact (an archived session, or one under an archived ancestor, is inert), so the
+ * git plugin needs no cancel loop. The only cancel/wait implementation belongs to
+ * the archive manager (`stopSessionsForPurge`, design 24 §5).
  */
 
 /** Git-first removal. A registry failure is retry-only; Git is never recreated. */
@@ -401,10 +388,8 @@ export async function runRemoveSaga(deps: RemoveSagaDeps): Promise<RemoveWorktre
     message: '',
   }
   try {
-    // The mutation receipt is not authority to delete a registry row. Replay
-    // it once more immediately before the cross-domain step so the host can
-    // reject a reappeared target, recycled workspace or membership/liveness
-    // drift. Every later retry follows the same rule below.
+    // The mutation receipt is not authority to delete a registry row: replay it
+    // once more so the host can reject a reappeared target or drifted identity.
     await deps.verifyTerminalRemove()
   } catch (verifyError) {
     throw new GitSagaError(verifyError, {
@@ -429,9 +414,8 @@ export async function runWorkspaceDeleteRecovery(
   removeWorkspace: () => Promise<void>,
   isAlreadyDeleted: (error: unknown) => boolean,
 ): Promise<'deleted' | 'already-deleted'> {
-  // A prior Git receipt is not enough authority to mutate the registry: the
-  // host must freshly prove that the target is still absent and that this
-  // workspace identity/membership has not drifted since the operation.
+  // A prior Git receipt is not enough authority to mutate the registry: the host
+  // must freshly prove the target absent and the identity/membership undrifted.
   await verifyTerminalRemove()
   try {
     await removeWorkspace()

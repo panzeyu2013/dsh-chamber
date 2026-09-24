@@ -1,45 +1,14 @@
 /**
- * Web boot kernel. It owns only the module system, Cordis loader, and a
- * framework-free boot page. The dynamic UI renderer receives the mount
- * point after every client entry activates.
- * @module @deepseek-ai/dsh-client-web/src/boot
+ * Web boot kernel: owns only the module system, Cordis loader, and a framework-free
+ * boot page; the dynamic UI renderer receives the mount point after every entry activates.
  *
- * > Chamber N-ctx sharing seam (design 05 §6 / design 09):
- * > the N-ctx sharing seam in {@link AppWebEntry.run} — one page hosts multiple
- * > shells (one per dsh instance); every boot after the first reuses the
- * > page-level module system from `window.__DSH_MODULES__` (see
- * > {@link ensureWebModuleSystem}). The per-instance host-graph extra rows
- * > (`extraRows`) merge into the boot rows, and the whole boot chain runs the
- * > chamber version-tolerance decision rules (`boot-tolerance.ts`).
- *
- * AppWebEntry.run(), module face first, then plugin face: adopt (or install)
- * the shared module system over `window.__DSH_BOOT__` (wire boundary — the
- * modules bundle owns parsing/projection, see `@deepseek-ai/dsh-client-modules`)
- * → render the loading page → prefetch every `immediately` row in parallel
- * with mounting the vendored cordis Loader (`internal` contract injection
- * BEFORE any entry exists — the bare-import fallback in tree.import must never
- * run in a browser) → await the prefetch tier, THEN create one loader entry
- * per plugin-view row plus the chamber extra rows → loader.await() + a full
- * fiber sweep (all ACTIVE, else fail listing who/what/which service; chamber:
- * extra rows degrade instead of failing — `classifySweepEntry`) → mount the
- * real UI through the uiRenderer service.
- *
- * Entry creation waits for the whole immediately tier: materialization runs
- * synchronous cross-package require edges (e.g. client stores →
- * @deepseek-ai/dsh-client-store) that fiber inject waiting cannot protect — a
- * bundle's factory must be registered before any dependent entry materializes.
- * Per-row prefetch failures still resolve silently (the create-side import
- * reloads and owns the loud failure), so the barrier never turns one bad
- * bundle into a boot-wide fail-fast.
- *
- * Composition lives in the host graph; the shell makes zero composition
- * decisions. The renderer is a client-plugin row in the official graph; the
- * chamber shell kernel ADOPTS it instead (page-own covered id — chamber
- * entry never imports it): its client half is shell-static, registered on the
- * shared module table next to the modules bootstrap, and its loader entry is
- * created by the kernel (sweep-checked) so the boot mounts through the
- * `uiRenderer` service it provides. The shell itself never installs the slot
- * renderer (that lives in the renderer row).
+ * Chamber N-ctx sharing seam: one page hosts multiple shells (one per dsh instance);
+ * boots after the first reuse the page-level module system from `window.__DSH_MODULES__`,
+ * extra rows merge into the boot rows, and the chain runs the version-tolerance rules.
+ * run() is module face first: adopt/install the shared module system → draw the loading
+ * page → prefetch the `immediately` tier while mounting the Loader (`internal` injected
+ * BEFORE any entry exists) → await the tier and create the entries → sweep for ACTIVE
+ * (extras degrade) → mount through `uiRenderer`.
  */
 import { Context } from '@deepseek-ai/cordis'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
@@ -48,10 +17,9 @@ import type {
   BootManifest, BootModuleRow, ClientBundleRegistration, ClientModuleCreateOptions,
   ClientModuleLoaderTarget, ClientModuleSystem, DshWindow,
 } from '@deepseek-ai/dsh-client-modules/client'
-// Value-imported by the kernel (bootstrap identity — the same exception as the
-// modules package): the ui-renderer client half is shell-static, adopted as a
-// module-table factory and mounted as a kernel loader entry. The import also
-// pulls its Context augmentation (`ctx.uiRenderer`) into this program.
+// Value-imported by the kernel (bootstrap identity): the ui-renderer client half is
+// shell-static, adopted as a module-table factory and mounted as a kernel entry;
+// the import also pulls its Context augmentation (`ctx.uiRenderer`) in.
 import * as UiRenderer from '@deepseek-ai/dsh-client-ui-renderer/client'
 import { BootPage } from './boot-page.ts'
 import { MODULES_ID, UI_RENDERER_ID, composeBootRows } from './boot-rows.ts'
@@ -63,11 +31,9 @@ import './base.css'
 /** Module transport hook replaced by jsdom tests. */
 export type BootSeams = Pick<ClientModuleCreateOptions, 'loadBundle'>
 
-/**
- * 启动性能 User Timing 埋点守卫。本包无法反向
- * 依赖 renderer，故内联同名守卫；标记名注册表（唯一规范，改名须同步）：
- * packages/renderer/src/perf-marks.ts。只做观测、零业务语义：缺失/抛错静默。
- */
+/** Boot perf-mark guard, inlined because this package cannot depend on the renderer
+ *  (the renderer owns the mark-name registry). Observational only: missing API or
+ *  throw is silent. */
 function perfMark(name: string): void {
   try {
     if (typeof performance !== 'undefined' && typeof performance.mark === 'function') {
@@ -78,10 +44,8 @@ function perfMark(name: string): void {
   }
 }
 
-/** Stable boot diagnostics for arbitrary thrown values. The configureContext
- * seam and plugin/runtime graph are external execution boundaries; their
- * catch handler must not itself reject when reflection or String coercion on
- * a hostile Error-like value throws. */
+/** Stable boot diagnostics for arbitrary thrown values: the catch handler must not
+ *  itself throw when reflection/String coercion on a hostile value throws. */
 function describeBootError(reason: unknown): string {
   try {
     if (reason instanceof Error) {
@@ -101,42 +65,28 @@ function describeBootError(reason: unknown): string {
   }
 }
 
-/**
- * AppWebEntry construction options: the module-transport seams plus the
- * chamber's per-instance extra boot rows. Backward compatible with callers
- * that pass a bare `BootSeams` (extraRows is optional).
- */
+/** Construction options: module-transport seams plus the per-instance extra boot rows. */
 export interface AppWebEntryOptions extends BootSeams {
   /**
-   * ## Chamber extra rows (design 05 §6)
-   *
-   * Extra client-plugin rows from THIS instance's host boot graph
-   * (per-instance: local and remote hosts compose different plugin sets —
-   * design 09). The chamber shell pre-loads these bundles before constructing
-   * the entry, so their factories are already registered on the shared module
-   * table via `window.__ModuleLoader__.load`; this seam only merges their ids
-   * into the boot rows, it never fetches them (the modules view / graphRows
-   * has no row for them), and it does not prefetch them (the chamber side
-   * pre-loads the whole extra set uniformly).
+   * Extra client-plugin rows from THIS instance's host boot graph. The shell
+   * pre-loads these bundles, so their factories are already on the shared module
+   * table; this seam only merges their ids into the boot rows — it never fetches
+   * or prefetches them.
    */
   extraRows?: BootModuleRow[]
   /**
-   * ## Chamber context seam (design 05 §4)
-   *
-   * Per-entry context initializer. N-ctx boots may overlap after the shell's
-   * bounded queue timeout, so instance identity and connection base paths must
-   * never ride page-global mutable knobs. The shell supplies a closure bound to
-   * THIS entry; run() invokes it synchronously immediately after constructing
-   * the Context and before any loader/plugin work can suspend.
+   * Per-entry context initializer. N-ctx boots may overlap, so instance identity
+   * and connection base paths must never ride page-global mutable knobs: the shell
+   * supplies a closure bound to THIS entry, invoked synchronously right after the
+   * Context is constructed and before any loader/plugin work can suspend.
    */
   configureContext?: (ctx: Context) => void
 }
 
 /**
- * The web shell kernel: draws the loading page into a DOM element and runs
- * the two-stage boot over the host graph. Fields hold only what must exist
- * before cordis does — the parsed manifest, the module system, and the
- * loading-page UI handles; everything else lives in plugins.
+ * The web shell kernel: draws the loading page into a DOM element and runs the
+ * two-stage boot over the host graph. Fields hold only what must exist before cordis
+ * does (manifest, module system, page handles); everything else lives in plugins.
  */
 export class AppWebEntry {
   private readonly container: HTMLElement
@@ -144,21 +94,14 @@ export class AppWebEntry {
   private readonly extraRows: BootModuleRow[] | undefined
   private readonly configureContext: ((ctx: Context) => void) | undefined
   private readonly page: BootPage
-  // Assigned by run() before any private method reads them; dispose() nulls
-  // ctx, and reads must handle the pre-run / post-dispose state.
+  // Assigned by run(); dispose() nulls ctx, so reads handle pre-run/post-dispose state.
   private ctx: Context | undefined
   private modules!: ClientModuleSystem
   private manifest!: BootManifest
   private bootFailure: string | undefined
 
-  /**
-   * Draw the boot page; {@link run} starts the loader.
-   * @param container - Application mount point.
-   * @param options - Optional construction options: module transport overrides
-   *   for test environments plus the chamber's per-instance extra boot
-   *   rows (bundles already pre-loaded by the chamber shell — see
-   *   {@link AppWebEntryOptions.extraRows}).
-   */
+  /** Draw the boot page; {@link run} starts the loader. `options` carries test
+   *  transport overrides plus the pre-loaded per-instance extra rows. */
   constructor(container: HTMLElement, options?: AppWebEntryOptions) {
     this.container = container
     this.seams = options
@@ -167,18 +110,13 @@ export class AppWebEntry {
     this.page = new BootPage(container)
   }
 
-  /**
-   * Load and activate every client entry, then hand the mount point to the
-   * UI renderer. Plugin failures remain visible on the boot page.
-   * @returns Resolves after application mount or failure rendering.
-   */
+  /** Load and activate every client entry, then hand the mount point to the UI
+   *  renderer; failures remain visible on the boot page. */
   async run(): Promise<void> {
     try {
-      // (design 05 §4): install-or-reuse the page-level module
-      // system. The chamber shell installs it BEFORE preloading any host-graph
-      // bundle (ensureWebModuleSystem — first-boot race guard), so run() must
-      // adopt the parked instance instead of re-installing; the reuse branch
-      // also skips the duplicate bootstrap registration.
+      // Install-or-reuse the page-level module system: the shell installs it BEFORE
+      // preloading any bundle, so run() adopts the parked instance (which also skips
+      // the duplicate bootstrap registration).
       this.modules = ensureWebModuleSystem(this.seams)
       this.manifest = this.modules.manifest
       perfMark('dsh:boot:run-start')
@@ -186,10 +124,8 @@ export class AppWebEntry {
       const prefetching = this.prefetchImmediateTier()
       const ctx = new Context()
       this.ctx = ctx
-      // Per-entry facts are installed before the first await/plugin
-      // materialization. A previous boot that settles after the shell queue's
-      // timeout therefore keeps its own immutable closure values even while a
-      // later instance is booting concurrently.
+      // Per-entry facts are installed before the first await/materialization, so an
+      // earlier boot that settles late keeps its own immutable closure values.
       this.configureContext?.(ctx)
       await this.runPluginBoot(ctx, prefetching)
       await this.mountApp(ctx)
@@ -203,25 +139,17 @@ export class AppWebEntry {
     }
   }
 
-  /**
-   * Dispose the client plugin tree and whichever page owns the mount point.
-   * Resolves once the teardown settled (never rejects — teardown errors are
-   * logged). Shell lifecycle paths await/fold this Promise into the source's
-   * per-id teardown barrier; unload-only callers may invoke it fire-and-forget.
-   */
+  /** Dispose the client plugin tree and the page owning the mount point. Never
+   *  rejects (teardown errors are logged); shell lifecycle paths may await it. */
   async dispose(): Promise<void> {
     const ctx = this.ctx
-    // Drop the handle so a second dispose is a no-op and late runtimeCtx
-    // reads observe a dead context.
+    // Drop the handle so a second dispose is a no-op and late runtimeCtx reads see a dead ctx.
     this.ctx = undefined
     if (ctx !== undefined) {
       try {
-        // Root-fiber dispose cascades through every loader entry fiber and
-        // the mount inject fiber (each child fiber's disposer is collected on
-        // its parent's effect list), releasing what React unmount alone never
-        // would: the connection stream loop, reconnect timers, session /
-        // conversation stores, and the chamber sidebar / runtime-facts
-        // producers.
+        // Root-fiber dispose cascades through every loader entry fiber and the mount
+        // inject fiber, releasing what React unmount alone never would (connection
+        // loop, timers, stores, producers).
         await ctx.fiber.dispose()
       } catch (error) {
         console.error('[web-shell] ctx teardown failed:', error)
@@ -230,48 +158,30 @@ export class AppWebEntry {
     this.page.dispose()
   }
 
-  /**
-   * ## Chamber runtime context handle (design 05 §6)
-   *
-   * Public read handle on the settled runtime context: the chamber shell
-   * dispatches per-instance session opens through `ctx.sessions` (the
-   * @deepseek-ai/dsh-api-session-controller ISessions face) after boot
-   * settlement. The handle is
-   * `undefined` once dispose() ran (the ctx is torn down) — callers must
-   * guard with `?.` (shell.ts dispatchOpen does).
-   */
+  /** Public read handle on the settled runtime context (the shell dispatches
+   *  per-instance session opens through `ctx.sessions`). `undefined` once
+   *  dispose() ran, so callers must guard with `?.`. */
   get runtimeCtx(): Context | undefined {
     return this.ctx
   }
 
-  /**
-   * ## Chamber boot failure report (design 05 §4)
-   *
-   * The boot failure report (undefined while loading or after a clean settle).
-   * run() resolves on boot-chain failures by design — the loading page stays
-   * up and renders the in-shell report (the fail-loud surface the kernel
-   * owns) — but the chamber shell must SEE the failure to present its own
-   * per-instance fallback (retry + server switching) instead of the dead-end
-   * in-shell report trapping the active view. Public read handle, same
-   * pattern as runtimeCtx; valid once run() settled (the report is set before
-   * run() resolves).
-   */
+  /** Boot failure report (undefined while loading or after a clean settle). run()
+   *  resolves on failure by design, so the shell needs this read handle to present
+   *  its per-instance fallback; valid once run() settled. */
   get bootError(): string | undefined {
     return this.bootFailure
   }
 
   /** Prefetch stage-one bundles; their import path owns any eventual failure. */
   private async prefetchImmediateTier(): Promise<void> {
-    // A transport that carries `loadBundle` supplies the bundle bytes itself
-    // (not over HTTP), so skip the immediately-tier prefetch.
+    // A transport carrying `loadBundle` supplies the bytes itself, so skip prefetch.
     const transport = (globalThis as { __DSH_TRANSPORT__?: { loadBundle?: unknown } }).__DSH_TRANSPORT__
     if (transport?.loadBundle !== undefined) return
     await Promise.all(this.manifest.plugins
       .filter(row => row.immediately)
       .map(row => this.modules.prefetch(row.id).catch((_prefetchError: unknown) => {
-        // Prefetch only starts transport early; the Loader import retries and
-        // reports this bundle failure. Extra rows are NOT prefetched here:
-        // the chamber side pre-loads the whole extra set uniformly.
+        // Prefetch only starts transport early; the Loader import retries and reports
+        // the failure. Extra rows are not prefetched (the shell pre-loads them).
       })))
   }
 
@@ -279,67 +189,45 @@ export class AppWebEntry {
   private async runPluginBoot(ctx: Context, prefetching: Promise<void>): Promise<void> {
     await ctx.plugin(Loader)
     const loader = ctx.loader
-    // Inject the module system BEFORE any entry exists: tree.import falls back
-    // to a bare dynamic import when internal is undefined, which in a browser
-    // is a guaranteed loud failure — correct as a tripwire, never as a path.
+    // Inject the module system BEFORE any entry exists: tree.import falls back to a
+    // bare dynamic import when internal is undefined, which in a browser is a loud failure.
     loader.internal = this.modules as never
 
-    // Status projection: the boot page displays fiber truth. Every
-    // internal/status transition under an entry re-projects that entry's row
-    // from its ROOT fiber (child plugin fibers share the same entry).
+    // Status projection from fiber truth: every internal/status transition
+    // re-projects the entry's row from its ROOT fiber.
     ctx.on('internal/status', (fiber) => {
       const entry = fiber.entry
       if (entry === undefined || entry.fiber === undefined) return
       this.page.setState(entry.options.name, STATE_LABELS[entry.fiber.state])
     })
 
-    // The kernel adopts the modules entry itself (its record is pre-materialized
-    // as the module-system bootstrap — see ensureWebModuleSystem) and the
-    // ui-renderer entry (its factory is shell-static, registered on the shared
-    // module table in ensureWebModuleSystem), then the manifest rows, then
-    // (design 05 §6 / design 09) the per-instance extra client-plugin rows from
-    // the host boot graph. The extra bundles were already executed by the chamber shell, so
-    // their factories are registered on the shared module table — loader.create
-    // resolves them through internal.import's factories branch without a graph
-    // row (the modules view / graphRows has no entry for them;
-    // duplicate-registration protection is __ModuleLoader__.load's own check).
-    // No prefetch here: the chamber side pre-loads the whole extra set
-    // uniformly, and the kernel-adopted entries are never fetched at all.
+    // Row order: the kernel-adopted modules and ui-renderer entries first (both
+    // pre-materialized/shell-static), then the manifest rows, then the per-instance
+    // extra rows. Extra bundles were already executed by the shell, so loader.create
+    // resolves them through internal.import's factories branch without a graph row;
+    // nothing here is prefetched.
     const rows = composeBootRows(
       this.manifest.plugins.map(row => row.id),
       this.extraRows?.map(row => row.id) ?? [],
     )
     this.page.setTotal(rows.length)
-    // Barrier before any entry exists: entry creation materializes bundles,
-    // and materialization runs synchronous cross-package require edges that
-    // need every immediately-tier factory already registered (module
-    // comment). Resolves even when individual prefetches failed.
+    // Barrier before any entry exists: materialization runs synchronous cross-package
+    // require edges needing every immediately-tier factory registered. Resolves even
+    // when individual prefetches failed.
     await prefetching
     perfMark('dsh:boot:prefetch')
 
-    // Entry creation order carries no semantics (fiber inject waiting owns
-    // activation order); creating concurrently lets non-prefetched bundle
-    // loads parallelize.
-    // Version tolerance: EXTRA rows (the per-instance
-    // host-graph rows this shell does not cover) degrade instead of failing
-    // the boot. The composite bundles ONE dsh client version; a backend of a
-    // NEWER/older dsh can ship rows the shell cannot run — a row whose id is
-    // also a shell seed word (the module system resolves seed before factory,
-    // so the entry materializes the static namespace — "invalid plugin"), a
-    // row registering into slots this shell's ui-* does not declare, or a row
-    // re-installing a service the shell already provides. Those are version
-    // skew, not corruption: the row's features are simply absent from this
-    // shell. The instance must keep booting. Fail-loud stays for the MANIFEST
-    // rows and the kernel-adopted modules entry (corruption there is fatal by
-    // design); extra-row failures are logged loud and marked 'failed' on the
-    // boot page.
+    // Entry creation order carries no semantics; creating concurrently lets
+    // non-prefetched loads parallelize. Version tolerance: EXTRA rows degrade instead
+    // of failing the boot (a newer/older backend can ship rows this shell cannot run —
+    // seed-word ids, unknown slots, already-provided services), because that is version
+    // skew, not corruption; fail-loud stays for MANIFEST rows and kernel-adopted entries.
     const toleratedIds = new Set(this.extraRows?.map(row => row.id) ?? [])
     await Promise.all(rows.map(async (name) => {
       this.page.setState(name, 'loading')
       try {
         const id = await loader.create({ name })
-        // A failed import leaves the entry fiberless (Entry._init logs and
-        // returns); project it as failed — no fiber means no status event.
+        // A failed import leaves the entry fiberless, so project it as failed (no status event).
         if (loader.resolve(id).fiber === undefined) {
           this.page.setState(name, 'failed')
         }
@@ -358,15 +246,8 @@ export class AppWebEntry {
 
   /**
    * Reject entries that failed import/apply or still wait on missing services.
-   *
-   * ## Version tolerance
-   *
-   * `toleratedIds` (the per-instance EXTRA rows) are swept but never fail the
-   * boot: a version-skewed foreign row simply marks 'failed' on the boot page
-   * (and its apply error was already logged by the loader). Only the manifest
-   * rows and the kernel-adopted entries (modules + ui-renderer) are fatal. The
-   * per-entry decision rules live in boot-tolerance.ts (pure + unit-tested);
-   * this loop only drives the verdicts into the page / failure list.
+   * `toleratedIds` (extra rows) are swept but never fail the boot — they only mark
+   * 'failed'. The decision rules live in boot-tolerance.ts; this loop drives them.
    */
   private assertEntriesActive(toleratedIds: ReadonlySet<string> = new Set()): void {
     const ctx = this.ctx!
@@ -379,8 +260,7 @@ export class AppWebEntry {
         name,
         fiberLabel,
         toleratedIds,
-        // The missing-service list is only meaningful for a PENDING fiber
-        // (fiber defined); computing it for any other state is dead work.
+        // The missing-service list is only meaningful for a PENDING fiber.
         fiberLabel === 'pending' && fiber !== undefined
           ? Object.keys(fiber.inject).filter(service => ctx.get(service) === undefined)
           : [],
@@ -398,20 +278,11 @@ export class AppWebEntry {
   }
 
   /**
-   * Mount through a dependency fiber so replacing uiRenderer remounts the
-   * application.
-   *
-   * ## Bounded uiRenderer wait
-   *
-   * The `uiRenderer` service arrives from the kernel-adopted ui-renderer
-   * entry (sweep-checked like the modules entry — a renderer that fails to
-   * activate fails the boot loudly in assertEntriesActive BEFORE this runs).
-   * The bounded wait below is a backstop for the residual pathological case
-   * (an entry that reports ACTIVE but whose provide was rolled back): cordis
-   * inject waiting has no timeout, so without it the boot page would spin
-   * until the chamber shell's boot timeout — a silent hang, not a loud
-   * failure. 15s is far beyond any legitimate activation delay (the renderer
-   * is shell-static local code, its inject set is composite-covered runtime).
+   * Mount through a dependency fiber so replacing uiRenderer remounts the app. The
+   * bounded wait is a backstop for the pathological case (ACTIVE entry whose provide
+   * was rolled back): cordis inject waiting has no timeout, so without it the boot
+   * page would spin until the shell's boot timeout. 15 s is far beyond any legitimate
+   * activation delay for shell-static local code.
    */
   private async mountApp(ctx: Context): Promise<void> {
     const mounted = ctx.inject(['uiRenderer'], (scope) => {
@@ -436,56 +307,26 @@ export class AppWebEntry {
 const MOUNT_TIMEOUT_MS = 15_000
 
 /**
- * The page-level module table + registration sink (design 05 §4 / first-boot
- * race guard).
- *
- * The module system cannot arrive through itself: the HTML-installed
- * `window.__ModuleLoader__` facade (queue-mode pending registration sink +
- * `create()`) materializes the modules bootstrap and delegates construction
- * to the modules bundle. The chamber control-plane index.html does NOT
- * install that facade (there are no parser-preloaded ordinary bundles), so
- * this helper installs the same queue-mode facade — the chamber mirror of the
- * official host injection — and hands it the SHELL-STATIC modules client half
- * as the bootstrap registration (the modules package is shell-bundled in
- * chamber, never fetched).
- *
- * The chamber shell (shell.ts bootInstanceShell) calls this BEFORE preloading
- * any host-graph bundle: an extra bundle's script EVALUATES at load (the
- * script load event fires after evaluation) and its top level registers the
- * factory through the sink — so the sink must exist first. Preloading first
- * would let a first-ever boot's extra scripts evaluate
- * before the sink exists; the official bundles' unguarded top-level handoff
- * (`window.__ModuleLoader__.load(...)`) throws, the factory is never
- * registered, and the boot fails with a confusing "cannot resolve".
- *
- * Idempotent: the first call installs the facade, creates the module system
- * (switching the facade to live-registration mode) and parks it on
- * `window.__DSH_MODULES__`; every later call — including every
- * `AppWebEntry.run()` — returns the parked instance (the module system
- * constructor refuses a second create). The shared table is safe across ctxs:
- * materialized exports are stateless plugin definitions applied per-ctx by
- * each entry's own cordis loader.
+ * The page-level module table + registration sink (first-boot race guard): the module system
+ * cannot arrive through itself, so this installs the queue-mode `window.__ModuleLoader__`
+ * facade (the chamber mirror of the official host injection) and hands it the shell-static
+ * modules client half as the bootstrap registration. The shell calls this BEFORE preloading
+ * any bundle: an extra script EVALUATES at load and registers through the sink, so the sink
+ * must exist first. Idempotent: the first call installs the facade, creates the module system
+ * and parks it on `window.__DSH_MODULES__`; later calls — including every run() — return the
+ * parked one (stateless plugin definitions applied per-ctx).
  */
 export function ensureWebModuleSystem(seams?: BootSeams): ClientModuleSystem {
   const win = globalThis as ChamberWindow
   const shared = win.__DSH_MODULES__
   if (shared !== undefined) return shared
 
-  // Install the stable registration facade if the host HTML has not already
-  // (the chamber control plane does not), mirroring the official queue-mode
-  // facade exactly.
+  // Install the registration facade if the host HTML has not (it does not).
   const target = win.__ModuleLoader__ ?? installModuleLoaderFacade(win)
-  // Hand the shell-static client halves to the facade as bootstrap
-  // registrations (chamber never fetches these bundles): the modules package
-  // (drained by the facade create — the bootstrap identity) and the
-  // kernel-adopted ui-renderer (replayed by the module-system constructor
-  // into live registration once create switches the facade). If a real
-  // preloaded registration exists (a future host preload), keep it — it is
-  // the same package's ordinary bundle and the facade materializes it.
-  // The facade contract carries a registration queue. A host that installed a
-  // LIVE-mode facade instead makes these reads an opaque TypeError, so state
-  // the requirement once with the reason (the composite cannot
-  // work in live mode, which is why the queue-mode facade is installed above).
+  // Hand the shell-static client halves to the facade as bootstrap registrations
+  // (chamber never fetches them): modules (the bootstrap identity) and the
+  // kernel-adopted ui-renderer. An existing real registration is kept. Queue mode is
+  // required — a LIVE-mode facade would make these reads an opaque TypeError.
   const pendingQueue = target.pendingQueue
   if (!Array.isArray(pendingQueue)) {
     throw new Error('dsh-chamber: the page module-loader facade has no registration queue — a live-mode facade was installed by the host, but the chamber composite requires queue mode')
@@ -497,10 +338,7 @@ export function ensureWebModuleSystem(seams?: BootSeams): ClientModuleSystem {
     target.load({ id: UI_RENDERER_ID, factory: () => UiRenderer })
   }
 
-  // A worker-preview transport may carry its own
-  // `loadBundle`; chamber has no such scenario, so this only keeps the
-  // structure consistent. The transport hook wins over the constructor seams
-  // only when the transport actually defines it.
+  // The transport hook wins over constructor seams only when the transport defines it.
   const transport = (globalThis as {
     __DSH_TRANSPORT__?: { loadBundle?: ClientModuleCreateOptions['loadBundle'] }
   }).__DSH_TRANSPORT__
@@ -514,22 +352,16 @@ export function ensureWebModuleSystem(seams?: BootSeams): ClientModuleSystem {
   return modules
 }
 
-/** The chamber N-ctx extension of the modules wire window: the shared module system slot. */
+/** The chamber extension of the modules wire window: the shared module-system slot. */
 interface ChamberWindow extends DshWindow {
-  /** Page-level shared module system (design 05 §4): installed once, reused by every shell boot. */
+  /** Installed once, reused by every shell boot. */
   __DSH_MODULES__?: ClientModuleSystem
 }
 
 /**
- * Install the queue-mode `window.__ModuleLoader__` facade — the chamber mirror
- * of the official host HTML injection (dsh-client-modules node half
- * `bootInjections`): a pending registration queue that `create()` drains
- * by materializing the modules bootstrap and delegating construction to
- * `createClientModuleSystem`. `create()` is called exactly once by
- * {@link ensureWebModuleSystem}; the resulting {@link ClientModuleSystem}
- * constructor switches the facade to live-registration mode.
- * @param win - the window object to install on.
- * @returns the installed facade.
+ * Install the queue-mode `window.__ModuleLoader__` facade: a pending registration
+ * queue that `create()` drains by materializing the modules bootstrap and delegating
+ * construction. Called exactly once by {@link ensureWebModuleSystem}.
  */
 function installModuleLoaderFacade(win: ChamberWindow): ClientModuleLoaderTarget {
   const pendingQueue: ClientBundleRegistration[] = []
@@ -550,9 +382,7 @@ function installModuleLoaderFacade(win: ChamberWindow): ClientModuleLoaderTarget
         )
       }
       pendingQueue.splice(index, 1)
-      // Materialize the bootstrap registration — the shell-static namespace or
-      // a real preloaded bundle — then delegate construction (the same flow
-      // the official HTML facade runs).
+      // Materialize the bootstrap registration, then delegate construction.
       const exports = registration.factory((specifier) => {
         throw new Error(`client-modules: ${MODULES_ID}/client.js requested external "${specifier}" before the module system existed`)
       })

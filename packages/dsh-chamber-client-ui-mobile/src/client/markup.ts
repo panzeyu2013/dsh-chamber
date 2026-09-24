@@ -1,61 +1,42 @@
 /**
- * Markup helpers (design 17 §18.4.4): stamp the official frame and its three
- * columns with the plugin's `data-mobile-*` attributes so the stylesheet can
- * anchor on stable attributes instead of hashed class names. Pure functions
- * — unit-testable under plain node with a minimal DOM shim.
+ * Markup helpers: stamp the official frame and its three columns with the
+ * plugin's data-mobile-* attributes so the stylesheet can anchor on stable
+ * attributes instead of hashed class names. Pure — unit-testable under plain
+ * node with a minimal DOM shim.
  *
- * Official DOM (dsh 0.1.5-alpha.2; the ui-layout AppFrame center column is
- * now the keyed `main` slot, the right column is `rightbar`):
- *   #root > div[data-slot="root"] > div.<frame>  (the AppFrame, inline grid)
- *     ├─ div.<sidebarCol> > div[data-slot="sidebar"]   (root scope; outlet
- *     │    present from first paint)
- *     ├─ div.<centerCol>  > div[data-slot="main"]      (keyed main panel; the
- *     │    reserved `conversation` key renders
- *     │      div.root[data-phase] > div[data-slot="conversation.session.header"]
- *     │           └─ <header> (session-gated; children: titleRow [+ tabs]))
- *     ├─ div.<rightbarCol>[data-rightbar-col] (resident SHELL from first paint;
- *     │    its inner [data-slot="rightbar"] outlet is the docking surface)
- *     └─ div.<overlayLayer>[data-shell-overlay="true"] > div[data-slot="shell.overlay"]
+ * Official DOM shape: #root > div[data-slot="root"] > div.<frame>, whose
+ * children hold the sidebar column > [data-slot="sidebar"], the center column
+ * > keyed [data-slot="main"], the rightbar column [data-rightbar-col] with its
+ * docking [data-slot="rightbar"] outlet, and [data-slot="shell.overlay"]; the
+ * main key's conversation renders div[data-phase] >
+ * [data-slot="conversation.session.header"] > <header>.
  *
- * Re-stamp contract: stamping is idempotent and must converge whenever a
- * structural addition could have changed the stamp set — a root slot, a
- * frame, a column shell, or a slot OUTLET mounting inside a resident column
- * shell (two levels under the frame). The predicate below is the pure
- * decision; index.ts wires it to the MutationObserver. The session-header
- * chrome stamping (session-log capsule) needs no rule: upstream renders that
- * control as a 28x28 icon button in the header more-actions menu, so the
- * mobile plugin never needs to find it by copy.
+ * Re-stamp contract: idempotent, and must converge whenever a root slot, a
+ * frame, a column shell, or a slot OUTLET inside a resident column shell can
+ * have changed the stamp set; index.ts wires the pure predicate below to the
+ * MutationObserver.
  */
 
 export const ROOT_SLOT_SELECTOR = '[data-slot="root"]'
 export const MOBILE_FRAME_ATTR = 'data-mobile-frame'
 export const MOBILE_ROLE_ATTR = 'data-mobile-role'
-/** The roles the probe actually found on the stamped frame (space-separated,
- *  in the sidebar/conversation/details order). Diagnostics + the emergency
- *  brake for the grid lock: a frame carrying this attribute is guaranteed to
- *  carry the conversation role (see stampFrame). */
+/** The roles the probe found on the stamped frame (space-separated). A frame
+ *  carrying it always carries the conversation role (see stampFrame). */
 export const MOBILE_ROLES_ATTR = 'data-mobile-roles'
 
 export type MobileColumnRole = 'sidebar' | 'conversation' | 'details'
 
-/**
- * The official slot key each mobile role anchors on. The role vocabulary is
- * the plugin's own (drawer/nav/grid CSS reads `data-mobile-role`), while the
- * slot keys track the vendor frame: the centre column became the keyed
- * `main` slot at alpha.2 and the right column is `rightbar`. Keeping the two
- * vocabularies apart means a future vendor rename touches exactly this map.
- */
+/** The official slot key each mobile role anchors on: the role vocabulary is
+ *  the plugin's own (data-mobile-role), the slot keys track the vendor frame —
+ *  a vendor rename touches exactly this map. */
 export const ROLE_SLOT_KEYS: Record<MobileColumnRole, string> = {
   sidebar: 'sidebar',
   conversation: 'main',
   details: 'rightbar',
 }
 
-/**
- * The minimal element face the markup helpers need — satisfied by the real
- * DOM Element at runtime and by the plain-node test fakes. Kept structural
- * so the helpers stay unit-testable without a DOM shim.
- */
+/** The minimal element face the markup helpers need (real DOM Element and the
+ *  plain-node fakes); structural, so the helpers stay testable without a shim. */
 export interface ElementLike {
   children: ArrayLike<ElementLike> & Iterable<ElementLike>
   firstElementChild: ElementLike | null
@@ -65,11 +46,8 @@ export interface ElementLike {
   querySelectorAll(selector: string): ArrayLike<ElementLike>
 }
 
-/**
- * The element face the re-stamp predicate needs on top of ElementLike: a
- * parent chain and selector matching. Distinct so ElementLike stays minimal
- * (the stamp helpers never walk up or match).
- */
+/** The extra face the re-stamp predicate needs: a parent chain and selector
+ *  matching (ElementLike stays minimal). */
 export interface StructuralNodeLike {
   parentElement: StructuralNodeLike | null
   matches(selector: string): boolean
@@ -104,18 +82,11 @@ export function findColumn(frame: ElementLike, slot: string): ElementLike | null
  * Stamp the frame and columns (idempotent; returns the stamped frame, or null
  * when the frame is not adapted).
  *
- * ALL-OR-NOTHING: the mobile tier is an adaptation of the
- * CONVERSATION column, and the stylesheet's grid lock
- * (`grid-template-columns: 0 minmax(0,1fr) 0`) plus the fixed drawer are only
- * sound while that column is also pinned by its own `data-mobile-role`
- * attribute. If upstream ever renames the centre key (ROLE_SLOT_KEYS
- * .conversation) the lock would still apply, the column would lose its
- * `grid-column: 2` pin, and CSS Grid auto-placement would drop the whole
- * transcript into the 0px first track with the frame clipping it — a blank
- * conversation, silently. Refusing to stamp ANYTHING in that case degrades to
- * the official narrow layout instead (sidebar rail, squeezed but visible),
- * and the re-stamp predicate still converges: the added column shell matches
- * the root slot within its ancestor window.
+ * ALL-OR-NOTHING: the grid lock and fixed drawer are only sound while the
+ * conversation column is pinned by its own data-mobile-role. If upstream
+ * renames the centre key, the lock would still apply and CSS Grid would drop
+ * the transcript into the 0px first track — a silently blank conversation.
+ * Refusing to stamp anything degrades to the official narrow layout instead.
  */
 export function stampFrame(root: ElementLike): ElementLike | null {
   const frame = findFrame(root)
@@ -128,43 +99,27 @@ export function stampFrame(root: ElementLike): ElementLike | null {
   if (!columns.has('conversation')) return null
   for (const [role, column] of columns) column.setAttribute(MOBILE_ROLE_ATTR, role)
   frame.setAttribute(MOBILE_FRAME_ATTR, '')
-  // Recorded for real-device triage: which of the three probe targets the
-  // running vendor DOM actually exposed (the details shell is legitimately
-  // absent until its docking surface registers).
+  // Which of the three probe targets the running vendor DOM exposed.
   frame.setAttribute(MOBILE_ROLES_ATTR, [...columns.keys()].join(' '))
   return frame
 }
 
 /**
  * Is an added node a structural stamping target? Pure decision for the
- * childList observer (design 17 §18). The stamp set changes
- * when any of these mounts:
- *   1. a root slot itself, or a node directly under a root slot (the frame);
- *   2. an already-stamped frame or column re-appearing (remount recovery);
- *   3. a column shell directly under a stamped frame (the a3-era recorded
- *      shape);
- *   4. a slot OUTLET wrapper mounting inside a resident column shell — two
- *      levels under a stamped frame. Both column shells and their outlet
- *      wrappers are resident from first paint in the alpha.2 frame; this
- *      branch covers the transient/remount shapes (a shell appearing before
- *      its parent is stamped) so a late mount is never left unstamped under
- *      the mobile grid lock. NOTE (coupling): convergence depends on the
- *      empirical shape where the outlet IS the shell's direct child — the
- *      same one-level shape findColumn() searches. If upstream ever inserts
- *      a wrapper between shell and outlet (col > wrapper > [data-slot=…]),
- *      this branch fires but findColumn() cannot find the outlet and the
- *      column stays unstamped — re-audit the shape then.
- * Deep content mutations (chat streaming) sit deeper than two levels and
- * never match — the streaming filter is preserved.
+ * childList observer. The stamp set changes when any of these mounts: a root
+ * slot or a node directly under it (the frame); an already-stamped frame or
+ * column re-appearing; a column shell directly under a stamped frame; a slot
+ * OUTLET wrapper inside a resident column shell, two levels under a stamped
+ * frame (covers transient/remount shapes). COUPLING: convergence depends on
+ * the outlet being the shell's direct child — the shape findColumn() searches;
+ * a wrapper inserted between shell and outlet would fire this branch but never
+ * find the column. Deep content mutations sit deeper and never match.
  */
 export function isStructuralTarget(target: StructuralNodeLike | null | undefined): boolean {
   if (target === null || target === undefined) return false
-  // The walk covers the node AND its first four ancestors looking for the
-  // root slot / frame / column-role attributes. The bound keeps the streaming
-  // filter intact: real chat content mounts under [data-conversation-scroll]
-  // at >=6 hops from the frame, so a streaming batch never reaches the frame
-  // within the window. (The four-hop reach is cheap headroom for deeper
-  // resident shells.)
+  // Walk the node and its first four ancestors for the root slot / frame /
+  // role attributes. The bound keeps the streaming filter: chat content mounts
+  // >=6 hops from the frame, so a streaming batch never reaches the frame.
   let cursor: StructuralNodeLike | null | undefined = target
   for (let hop = 0; hop <= 4; hop += 1) {
     if (cursor === null || cursor === undefined) return false
@@ -179,17 +134,15 @@ export function isStructuralTarget(target: StructuralNodeLike | null | undefined
 }
 
 /** DOM-side guard: only element-like added nodes can be structural (text and
- * comment nodes never match selectors). Duck-typed so plain-node tests can
- * feed fakes without a MutationObserver shim. */
+ *  comment nodes never match selectors). Duck-typed so plain-node tests can
+ *  feed fakes without a MutationObserver shim. */
 export function isElementNode(node: unknown): node is StructuralNodeLike {
   return typeof node === 'object' && node !== null
     && typeof (node as { matches?: unknown }).matches === 'function'
 }
 
 /** The batch decision: does this childList batch contain a structural
- * addition? Attribute/characterData records never reach it (index.ts keeps
- * the attribute channel on a separate observer). Pure — index.ts only wires
- * it to the MutationObserver callback. */
+ *  addition? Attribute/characterData records never reach it. Pure. */
 export function shouldRestamp(mutations: readonly MutationLike[]): boolean {
   return mutations.some(mutation => {
     if (mutation.type !== 'childList') return false

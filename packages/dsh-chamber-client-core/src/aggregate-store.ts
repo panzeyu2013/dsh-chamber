@@ -3,7 +3,7 @@
  * chamber App layer (renderer main entry) publishes the merged multi-source
  * projection and consumes open-session requests; the sidebar plugin
  * subscribes to the projection and publishes open-session requests. Both
- * import this module through `@dsh-chamber/dsh-chamber-client-core`; a
+ * import this module through `@dsh-chamber/dsh-chamber-client-ui-sidebar/shared`; a
  * vite shared chunk keeps the runtime single instance.
  *
  * One workspace group in the sidebar projection (computed by shared/derive.ts).
@@ -11,8 +11,8 @@
  * shared UNGROUPED_WORKSPACE_ID as its id.
  */
 import type { InstanceSnapshot } from './instance-api.ts'
-import type { ArchivedSessionMetaRow } from './derive.ts'
-import type { SubagentActivity } from './session-row-state.ts'
+import type { ArchivedSessionMetaRow } from './aggregate-types.ts'
+import type { GoalFact, SubagentActivity } from './session-row-state.ts'
 import type { SessionAuthoritySnapshot } from './session-fact-reconcile.ts'
 import { assertSingletonModule } from './singleton.ts'
 import {
@@ -83,7 +83,7 @@ export interface ChamberServerWorkspace {
   reusableBlankSessionId?: string
 }
 
-/** 会话事实档位（能力一览；判定与展示分离，见 ChamberServerAggregate.sessionFacts）。 */
+/** 会话事实档位（判定与展示分离：判定只用事实本身）。 */
 export type SourceSessionFactsMode = 'full' | 'degraded' | 'legacy' | 'disabled'
 
 export interface ChamberServerAggregate {
@@ -91,7 +91,7 @@ export interface ChamberServerAggregate {
   id: string
   /** Opaque authoritative lifecycle proof for this exact source incarnation. */
   sourceFingerprint: string
-  /** Target semantics, independent from the transport mechanism (design 17 §2). */
+  /** Target semantics, independent from the transport mechanism. */
   kind: 'local' | 'dsh' | 'gateway'
   /** How this target is reached. Local has no remote transport. */
   transport: 'local' | 'ssh' | 'http'
@@ -123,14 +123,13 @@ export interface ChamberServerAggregate {
    */
   sessionFacts?: SourceSessionFactsMode
   workspaces: ChamberServerWorkspace[]
-  /** True when the per-instance aggregate snapshot has actually landed
-   *  (sessions; workspace groups derive from session cwd facts since
-   *  workspace.list was deleted upstream) — git-derived rows must not render
-   *  before the aggregate itself. Absent on older producers = not ready. */
+  /** True when the per-instance aggregate has actually landed (workspace groups
+   *  derive from session cwd facts since workspace.list was deleted upstream);
+   *  git-derived rows must not render before it. Absent = not ready. */
   aggregateReady?: boolean
   /** Snapshot-fetch error text from the last per-instance pull; absent = ok/not-connected. */
   aggregateError?: string
-  /** Runtime facts from the source's own ctx (design 06 §4); attached, never polled. */
+  /** Runtime facts from the source's own ctx; attached, never polled. */
   runtime?: InstanceRuntimeReport
   /**
    * Archived-session metadata rows of this source (design 24 revision —
@@ -212,10 +211,9 @@ export type PluginGraphDiagnosticState =
   | 'graph-unreachable'
   | 'bundle-load-failed'
   | 'restart-required'
-  /** Cross-instance dsh runtime version drift (design 09 §3.5): the same
-   *  plugin id was first claimed on this page by a DIFFERENT instance at
-   *  another rev — no app restart can switch it, the instances' dsh runtime
-   *  versions must be aligned instead. */
+  /** Cross-instance dsh runtime version drift: the same plugin id was first
+   *  claimed on this page by a DIFFERENT instance at another rev — no app
+   *  restart can switch it, the instances' runtime versions must be aligned. */
   | 'instance-version-conflict'
 
 export interface PluginGraphDiagnostic {
@@ -333,10 +331,8 @@ export interface SessionCreatedFact {
   sourceId: string
   /** HOST session id — the only trustworthy "this session now exists" proof. */
   sessionId: string
-  /**
-   * Host workspace id the session was created under. Absent for a fork: the
-   * child's workspace is resolved from {@link parentSessionId} by the App.
-   */
+  /** Host workspace id the session was created under; absent for a fork (the
+   *  child's workspace resolves from {@link parentSessionId}). */
   workspaceId?: string
   /** Parent session id (fork), for the App's membership resolution. */
   parentSessionId?: string
@@ -349,7 +345,7 @@ export interface SessionCreatedFact {
    * echo), false for a fork child, which inherits content.
    */
   blank: boolean
-  /** I10 归因：触发路径标签。缺席 = unknown（仪表覆盖缺口）。 */
+  /** 归因：触发路径标签；缺席 = unknown（仪表覆盖缺口）。 */
   origin?: SessionCreationOrigin
 }
 
@@ -408,13 +404,20 @@ export interface InstanceRuntimeReport {
     updatedAt?: number
     /** Running subagent descendants (vendor runningSubagentCount semantics); absent = 0. */
     runningSubagents?: number
-    /** P5 子代理活动三值：none（索引在场且为零）| running | unknown（索引缺席或来源 stale）。 */
+    /** 子代理活动三值：none（索引在场且为零）| running | unknown（索引缺席或来源 stale）。 */
     subagentActivity?: SubagentActivity
-    /** I5：观察者刷新这一行事实的 host 域毫秒（0/缺席 = 无观察者事实）。 */
+    /**
+     * Goal 三值事实（design 19 §3.2.1）：**字段缺席 = unknown**
+     * （投影还没给出 goal 键 / 形状不符），`null` = 明确无 goal，对象 = 有 goal。
+     * 生产者按来源代回填最后已知值并合并 §2.2 的 activation 事件缓存；
+     * 呈现门 `goalSuppressesPresentation` 只读相位（active 即压制，含 unknown）。
+     */
+    goal?: GoalFact | null
+    /** 观察者刷新这一行事实的 host 域毫秒（0/缺席 = 无观察者事实）。 */
     factAt?: number
   }>
   /**
-   * 会话事实单一权威（P2，design 14 §D4）的快照；
+   * 会话事实单一权威（P2，design 06 §4）的快照；
    * 缺席 = 本记录内从未请求过。App 的升级 ladder 只读它的事实（runningSince /
    * stuckSince / progressStamp）决定 reconnect 与 notice——策略不在 App 侧。
    * 执行端是 shared/session-fact-reconcile.ts（reducer + probe ladder + I/O）。
@@ -614,9 +617,8 @@ export const chamberBridge = {
     return openChannel.subscribe(listener)
   },
 
-  /** App-layer report that one requested open settled (failure carries the
-   *  loud terminal message). Every sidebar shell receives the report and
-   *  surfaces failures on the session row; success clears a stale failure. */
+  /** App-layer report that one requested open settled (failure carries the loud
+   *  terminal message, surfaced on the session row; success clears it). */
   reportOpenSessionOutcome(outcome: OpenSessionOutcome): void {
     openOutcomeChannel.emit(outcome)
   },
@@ -626,10 +628,8 @@ export const chamberBridge = {
     return openOutcomeChannel.subscribe(listener)
   },
 
-  /**
-   * 请 App 把一个**来源**整体标记为已读（单向：插件→App）。读标记与落盘都在
-   * App 手里，因此插件只发意图，不自己写读数。
-   */
+  /** 请 App 把一个来源整体标记为已读（单向：插件→App）。读标记与落盘都在 App
+   *  手里，插件只发意图。 */
   requestMarkAllRead(sourceId: string): void {
     markAllReadChannel.emit({ sourceId })
   },
@@ -639,12 +639,9 @@ export const chamberBridge = {
     return markAllReadChannel.subscribe(listener)
   },
 
-  /**
-   * 来源头部 hover dwell（shared/prewarm-intent.ts 的 120ms 机器）留驻后，
-   * 侧栏发出的单向优先级提示。它绝不挂载/打开任何东西——App 侧只把它折算成
-   * "既有预热队列里该来源优先"，是否 boot 由 App 的 eligible/抑制/收割纪律
-   * 与每会话计费共同决定。
-   */
+  /** 来源头部 hover dwell 留驻后，侧栏发出的单向优先级提示。绝不挂载/打开任何
+   *  东西：App 只把它折算成"既有预热队列里该来源优先"，是否 boot 由 App 的
+   *  eligible/抑制/收割纪律与每会话计费决定。 */
   requestIntentPrewarm(sourceId: string): void {
     intentPrewarmChannel.emit({ sourceId })
   },
@@ -664,18 +661,12 @@ export const chamberBridge = {
     return refreshChannel.subscribe(listener)
   },
 
-  /**
-   * Ask the MOUNTED ctx of `sourceId` to refresh its official session list
-   * (sidebar-plugin subscriber: only the plugin whose chamberInstanceId equals
-   * `sourceId` acts). See the SessionListRefreshListener note — the convergence
-   * net for rows of purged sessions lingering in the official client summaries.
-   * Unmounted sources have no subscriber and need none (their rows ride the
-   * unary list, which is authoritative per call).
-   */
+  /** Ask the MOUNTED ctx of `sourceId` to refresh its official session list
+   *  (only the plugin whose chamberInstanceId equals `sourceId` acts). See the
+   *  SessionListRefreshListener note. */
   requestSessionListRefresh(sourceId: string): void {
     // 逐监听器隔离（与 setActiveSource 同纪律）：这条广播同时驱动归档收敛链与
-    // 运行位活性守卫的 L1——一个抛错的监听器若中断整轮广播，守卫会拿不到对账请求并
-    // 把它误判成「对账通道无回执」而升级 L2。
+    // 运行位活性守卫的 L1，一个抛错的监听器不得中断整轮广播。
     sessionListRefreshChannel.emit(sourceId)
   },
 
@@ -743,8 +734,7 @@ export const chamberBridge = {
    * echo; the App remains the only writer of the projection.
    */
   reportSessionCreated(fact: SessionCreatedFact): void {
-    // I10：无论有没有订阅者，每次应用内创建都进归因账本（含 blank），并把只读
-    // 仪表挂到页面全局一次——验收脚本据此按标签聚合、并断言"无标签外来源"。
+    // I10：每次应用内创建都进归因账本（含 blank），只读仪表挂到页面全局一次。
     sessionCreationLedger.record({
       sourceId: fact.sourceId,
       sessionId: fact.sessionId,
@@ -852,9 +842,8 @@ export const chamberBridge = {
     delete instanceSnapshots[sourceId]
     runtimeReportChannel.emit(sourceId, undefined, runtimeFingerprint)
     snapshotReportChannel.emit(sourceId, undefined, snapshotFingerprint)
-    // Diagnostics are per-source renderer state too: roster retirement must
-    // drop them with the producers, or a deleted source keeps a stale
-    // pluginDiagnostic entry (and its settings-bridge card) forever.
+    // Diagnostics are per-source renderer state too: roster retirement must drop
+    // them or a deleted source keeps a stale pluginDiagnostic entry forever.
     if (pluginDiagnostics[sourceId] !== undefined) {
       delete pluginDiagnostics[sourceId]
       pluginDiagnosticChannel.emit(sourceId, undefined)
@@ -874,7 +863,7 @@ export const chamberBridge = {
     report: (report: InstanceRuntimeReport) => void
     clear: () => void
   } {
-    // 代际栅栏：更老的 boot 迟到注册一律作废（返回惰性句柄）。两者都无代
+    // 代际栅栏：更老的 boot 迟到注册一律作废（返回惰性句柄）；两者都无代
     // （测试/非 chamber 挂载）时保持原"后注册者胜"的语义。
     const currentGeneration = runtimeProducerGenerations[sourceId]
     if (bootGeneration !== undefined && currentGeneration !== undefined && bootGeneration < currentGeneration) {

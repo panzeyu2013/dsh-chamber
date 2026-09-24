@@ -50,12 +50,14 @@ function fakeDeps(options: FakeOptions = {}) {
   let connects = 0
   let invalidations = 0
   const calls: string[] = []
+  const provenances: Array<string | undefined> = []
   const deps: SaveConnectionTransactionDeps = {
     listInstances: () => instances.map(entry => ({ ...entry })),
     normalize,
-    saveInstances: next => {
+    saveInstances: (next, provenance) => {
       metadataWrites += 1
       calls.push(`metadata:${metadataWrites}`)
+      provenances.push(provenance)
       if (options.failMetadataWrite === metadataWrites) throw new Error(`metadata write ${metadataWrites} failed`)
       instances = next.map(entry => normalize(entry)!).filter(Boolean)
       if (options.failMetadataAfterWrite === metadataWrites) throw new Error(`metadata write ${metadataWrites} failed after commit`)
@@ -93,6 +95,7 @@ function fakeDeps(options: FakeOptions = {}) {
   return {
     deps,
     calls,
+    provenances: () => provenances,
     state: () => ({ instances, sshPassword, gatewayToken, gatewayPassword, active }),
     invalidations: () => invalidations,
   }
@@ -101,16 +104,25 @@ function fakeDeps(options: FakeOptions = {}) {
 /** Delete-transaction deps: call recording plus main-only secret snapshots. */
 function deleteFake(initial: TransportInstanceSpec[], options: {
   active?: boolean; ssh?: string | null; token?: string | null; password?: string | null
-  namesOnly?: boolean; quietGeneration?: boolean; failInvalidate?: boolean; failSshClearAt?: number
+  namesOnly?: boolean; quietGeneration?: boolean; failInvalidate?: boolean; failSshClearAt?: number; failMetadataWrite?: number
 } = {}) {
   let instances = [...initial]
   const secrets = { ssh: options.ssh ?? null, token: options.token ?? null, password: options.password ?? null }
   let active = options.active ?? false
   let sshWrites = 0
+  let metadataWrites = 0
   const calls: string[] = []
+  const provenances: Array<string | undefined> = []
   const deps: DeleteConnectionsTransactionDeps = {
     listInstances: () => [...instances],
-    saveInstances: next => { calls.push('metadata'); instances = [...next] as TransportInstanceSpec[]; return [...instances] },
+    saveInstances: (next, provenance) => {
+      metadataWrites += 1
+      calls.push('metadata')
+      provenances.push(provenance)
+      if (options.failMetadataWrite === metadataWrites) throw new Error(`metadata write ${metadataWrites} failed`)
+      instances = [...next] as TransportInstanceSpec[]
+      return [...instances]
+    },
     getSshPassword: () => secrets.ssh,
     getGatewayToken: () => secrets.token,
     getGatewayPassword: () => secrets.password,
@@ -133,7 +145,7 @@ function deleteFake(initial: TransportInstanceSpec[], options: {
     disconnect: () => { if (options.quietGeneration !== true) calls.push('disconnect'); active = false },
     connect: () => { if (options.quietGeneration !== true) calls.push('connect'); active = true },
   }
-  return { deps, calls, secrets, snapshot: () => ({ active, instances }) }
+  return { deps, calls, secrets, provenances: () => provenances, snapshot: () => ({ active, instances }) }
 }
 
 function addRequest(kind: 'dsh' | 'gateway', transport: 'ssh' | 'http'): SaveConnectionRequest {
@@ -532,6 +544,30 @@ test('metadata compensation failure is loud, scrubs all credentials, and never r
   assert.equal(fake.state().gatewayToken, null)
   assert.equal(fake.state().gatewayPassword, null)
   assert.equal(fake.state().active, false)
+})
+test('every registry write is labeled: the proposal authoritative, the rollback compensation', () => {
+  // A successful save proposal is real user intent → authoritative.
+  const added = fakeDeps()
+  assert.equal(saveConnectionTransaction(added.deps, addRequest('dsh', 'ssh')).ok, true)
+  assert.deepEqual(added.provenances(), ['authoritative'])
+
+  // A failed save rolls the registry back → compensation.
+  const saveFailed = fakeDeps({ initial: [spec()], failMetadataWrite: 1 })
+  assert.equal(saveConnectionTransaction(saveFailed.deps, {
+    previousId: 'one', input: { ...spec(), label: 'Renamed' }, credentials: {},
+  }).ok, false)
+  assert.deepEqual(saveFailed.provenances(), ['authoritative', 'compensation'])
+
+  // Same discipline on the delete transaction: id-addressed removal is
+  // authoritative, its rollback is compensation.
+  const deleted = deleteFake([spec()])
+  assert.equal(deleteConnectionTransaction(deleted.deps, 'one').ok, true)
+  assert.deepEqual(deleted.provenances(), ['authoritative'])
+
+  const deleteFailed = deleteFake([spec()], { failMetadataWrite: 1 })
+  const result = deleteConnectionTransaction(deleteFailed.deps, 'one')
+  assert.equal(result.ok, false)
+  assert.deepEqual(deleteFailed.provenances(), ['authoritative', 'compensation'])
 })
 test('delete transaction invalidates sessions and clears both bound stores before metadata deletion', () => {
   const fake = deleteFake([spec()], { ...OLD_SECRETS, active: true })

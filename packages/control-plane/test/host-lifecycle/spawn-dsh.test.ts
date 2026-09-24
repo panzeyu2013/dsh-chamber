@@ -23,16 +23,15 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import {
   probePortBusy,
-  readPidRecord,
   resolveSpawnCwd,
   spawnDsh,
-  writePidRecord,
   DEFAULT_DSH_START_PORT,
   DSH_SPAWN_ATTEMPTS_EXHAUSTED_CODE,
   DshSpawnExhaustedError,
   MAX_CHILD_OUTPUT_CHUNK_BYTES,
   MAX_SPAWN_ATTEMPTS,
 } from '../../src/spawn-dsh.ts'
+import { readPidRecord, writePidRecord } from '../../src/pid-record.ts'
 import { authCookieFor, clearAuthCookie, exchangeLaunchToken } from '../../src/browser-auth-cookie.ts'
 import { FAKE_DSH_PREAMBLE, freeDshPortBase, reapSpawned, spawnHost } from '../support/spawn-fixtures.ts'
 import { skipSymlinksUnavailable, tempDir } from '../support/utils.ts'

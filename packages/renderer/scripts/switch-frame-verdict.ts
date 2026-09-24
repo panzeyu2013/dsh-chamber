@@ -1,30 +1,17 @@
 /**
- * 切源「无白帧」判据：对**逐帧观测**做三形态判定。
+ * 切源「无白帧」判据：对逐帧观测做三形态判定（任一命中即 FAIL）：
+ *  (a) 无可见视图帧（`visibleView === null`）；
+ *  (b) 平坦 #fff 帧（可见面是无内容平面且颜色 = 设计系统默认浅色 #ffffff）；
+ *  (c) 主题失配进度面：可见面是进度面，其颜色既不是目标来源的精确期望色（cache 命中），
+ *      也不落在 chamber 暗色族（无 cache 时的回退）；
+ *  第 4 条：目标在切换前已 settle（温壳）时，切换窗口内不应出现任何进度面帧。
  *
- * 三形态（任一命中即 FAIL）：
- *  (a) **无可见视图帧**：`visibleView === null`——某一帧里没有任何 `.instance-view`
- *      处于可见态（选择器口径照遮罩探针：`.instance-view:not(.instance-hidden):not(.instance-pending)`）；
- *  (b) **平坦 #fff 帧**：可见面是无内容平面且颜色 = 设计系统默认浅色（#ffffff）；
- *  (c) **主题失配进度面**：可见面是进度面（遮罩 / 像素平面上成片的单色底），其颜色既不是
- *      目标来源的精确期望色（cache 命中），也不落在 chamber 暗色族（无 cache 时的回退）；
- *  另有第 4 条：目标在切换前**已 settle**（温壳）时，切换窗口内不应出现
- *  任何进度面帧——温壳互切本就该同帧揭示。
- *
- * 判据是**纯函数**：采集由两条腿完成（Leg A 页面内 rAF DOM 采样 = 探针侧注入的
- * `SWITCH_FRAME_PROBE_INSTALL/READ`；Leg B CDP `Page.startScreencast` PNG 像素采样），
- * 判定在这里、可 node 直跑并进 CI（`test/view-runtime/switch-frame-verdict.test.ts`）。
- * 判据只判**采集到的事实**：探针异常 / 未演练 / 未采到帧一律 `ok === null` = INFO——
- * 「没执行」绝不读成绿（仓库纪律，同 gui-acceptance/checks.mjs 的 `ok === null` 语义）；
- * `applyRequireSwitch` 把未演练的 INFO 升为 FAIL（`--require-switch` 严格旗标，
- * 照 `--require-hover` 先例）。
- *
- * 已知边界：Leg B 的像素采样率受 screencast 帧率限制，
- * 静止期可能没有帧；因此 Leg A（DOM 逐帧）是 CI 主判据、Leg B 是实机像素证据。
- * 本判据不声称「内容区有 ink」——那是更强的判据（与同主题稳定帧差分的
- * ink 阈值），需要基线帧，不在三形态内。
+ * 判据是纯函数，只判**采集到的事实**：探针异常 / 未演练 / 未采到帧一律 `ok === null` = INFO
+ * （"没执行"绝不读成绿）；`applyRequireSwitch` 在严格旗标下把未演练的 INFO 升为 FAIL。
+ * Leg B 像素采样率受 screencast 帧率限制（静止期可能没有帧），Leg A（DOM 逐帧）是主判据。
  */
 
-/** 无 cache 时进度面底色的回退族：相对亮度低于该值视为 chamber 暗色域（#151517≈21、#0f1115≈17）。 */
+/** 无 cache 时进度面底色的回退族：相对亮度低于该值视为 chamber 暗色域。 */
 export const DARK_SURFACE_MAX_LUMA = 64
 
 export interface SwitchFrameSample {
@@ -145,9 +132,7 @@ function info(evidence: string, counts: SwitchFrameCounts = EMPTY_COUNTS): Switc
   return { ok: null, counts, evidence }
 }
 
-/**
- * 三形态 + 温壳进度面判定（规则见文件头）。`ok === null` 是 INFO，不是通过。
- */
+/** 三形态 + 温壳进度面判定（规则见文件头）；`ok === null` 是 INFO，不是通过。 */
 export function switchFrameVerdict(input: SwitchFrameVerdictInput = {}): SwitchFrameVerdict {
   const error = input.error
   if (error !== null && error !== undefined && String(error) !== '') {
@@ -221,10 +206,7 @@ export function switchFrameVerdict(input: SwitchFrameVerdictInput = {}): SwitchF
   return { ok: true, counts, evidence: `${note}：无可见视图帧 0、平坦 #fff 帧 0、主题失配进度面 0、温壳进度面 0` }
 }
 
-/**
- * 严格旗标（`--require-switch`，照 gui-acceptance 的 `applyRequireHover` 先例）：
- * 未演练/探针坏掉而给出 INFO 时，严格档把它改判 FAIL——一次"没执行"的运行不得读成绿。
- */
+/** 严格旗标：未演练/探针坏掉给出 INFO 时改判 FAIL——一次"没执行"的运行不得读成绿。 */
 export function applyRequireSwitch(verdict: SwitchFrameVerdict, requireSwitch: boolean): SwitchFrameVerdict {
   if (requireSwitch !== true || verdict.ok !== null) return verdict
   return {

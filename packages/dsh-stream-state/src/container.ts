@@ -1,21 +1,13 @@
 /**
  * Per-source registry: ONE current generation per source id.
  *
- * WHY A REGISTRY AND NOT A KEYED RECORD. Keying records by the pair
- * (sourceId, fingerprint) makes a re-registration start a NEW record - but
- * nothing removes the old one, and every projection walks all records of the
- * id. Two incarnations of one source therefore show through as a merged,
- * contradictory view (a flag from one incarnation, a hidden window from another),
- * and an event dispatched with a stale fingerprint would still reduce the old
- * record and emit its effects. The invariant is one sentence: a source id
- * has exactly ONE live generation, and an event carrying any other generation is
- * dropped without an effect.
- *
- * The registry makes that structural: the key is the source id, the entry stores
- * its epoch, and {@link reincarnate} is the only way a new incarnation appears (it
- * bumps the epoch and starts the record clean, so no penalties are inherited).
- * Callers that arm a callback for one generation capture the epoch and pass it with
- * every event; a late callback from a superseded generation can only be dropped.
+ * Keying records by (sourceId, fingerprint) would leave the old record behind, so two
+ * incarnations of one source show through as a merged, contradictory view, and a stale
+ * fingerprint could still reduce the old record and emit its effects. The invariant: a
+ * source id has exactly ONE live generation, and an event carrying any other generation
+ * is dropped without an effect. The registry makes that structural - the key is the
+ * source id, the entry stores its epoch, and {@link reincarnate} is the only way a new
+ * incarnation appears. Callers capture the epoch and pass it with every event.
  *
  * PURITY: no imports beyond the sibling reducer; no clock, no DOM.
  */
@@ -53,9 +45,8 @@ export function epochOf(registry: SourceRegistry, sourceId: string): number | un
 }
 
 /**
- * Register (or re-register) a source incarnation. Same fingerprint = the SAME
- * generation and the same registry reference (a reclaim/re-mount cycle keeps its
- * history); a different fingerprint = a new epoch whose record starts clean.
+ * Register (or re-register) a source incarnation. Same fingerprint = the SAME generation
+ * and the same registry reference; a different fingerprint = a new epoch, clean record.
  */
 export function reincarnate(registry: SourceRegistry, incarnation: SourceIncarnation): SourceRegistry {
   const previous = registry[incarnation.sourceId]
@@ -71,11 +62,9 @@ export function reincarnate(registry: SourceRegistry, incarnation: SourceIncarna
 }
 
 /**
- * Dispatch one event for one source generation.
- *
- * The fence lives here: an unknown source and an event whose epoch is not the
- * entry's current epoch are dropped (accepted: false) with no effect. The event is
- * not reduced against a stale record, so a retired life cannot move anything.
+ * Dispatch one event for one source generation. The fence lives here: an unknown source
+ * and an event whose epoch is not the entry's current epoch are dropped (accepted: false)
+ * with no effect, so a retired life cannot move anything.
  */
 export function dispatchSource(
   registry: SourceRegistry,
@@ -95,8 +84,7 @@ export function dispatchSource(
   }
 }
 
-/** Drop entries whose source is no longer registered. Returns the same reference when
- * nothing changed, so a caller can use identity to skip a re-render. */
+/** Drop unregistered sources; same reference when nothing changed, so callers can skip a re-render. */
 export function retainSourceIds(
   registry: SourceRegistry,
   liveSourceIds: ReadonlySet<string>,
@@ -110,10 +98,8 @@ export function retainSourceIds(
   return changed ? next : registry
 }
 
-// ---------------------------------------------------------------------------
-// Projections: each one mirrors exactly one of the App's refs. Every projection
-// reads the CURRENT generation only - the registry cannot express another.
-// ---------------------------------------------------------------------------
+// Projections: each mirrors exactly one of the App's refs, reading the CURRENT
+// generation only - the registry cannot express another.
 
 /** App's hiddenSinceRef: source id -> hidden-window start (only hidden views appear). */
 export function projectHiddenSince(registry: SourceRegistry): Record<string, number> {
@@ -134,20 +120,12 @@ export function projectDegradedRetried(registry: SourceRegistry): Record<string,
 }
 
 /**
- * A Set-shaped ledger backed by the registry, for call sites that mutate a Set
- * through METHODS.
+ * A Set-shaped ledger backed by the registry, for call sites that mutate a Set through
+ * METHODS: `add`/`delete` cannot be intercepted by a property setter, so the adapter
+ * implements the read surface and turns each mutation into ONE event.
  *
- * WHY THIS SHAPE AND NOT A PROPERTY VIEW. A `Set` is mutated with `add`/`delete`,
- * which no property setter can intercept (the record-shaped ledgers could use an
- * assignment-translating view; these cannot). So the adapter implements the read
- * surface the call sites actually use - `has`, `size`, iteration, `new Set(view)`,
- * `[...view]` - from the projection, and turns each mutation into ONE event.
- *
- * ITERATION DURING MUTATION IS SAFE HERE. The App sweeps with
- * `for (const id of set) if (!live.has(id)) set.delete(id)`. A projection-backed
- * iterator walks a SNAPSHOT Set, so a dispatch during the loop cannot invalidate it;
- * the next read simply sees the new state. (Contrast a real Set, where deleting the
- * current entry mid-iteration is a generator hazard.)
+ * ITERATION DURING MUTATION IS SAFE: the projection-backed iterator walks a SNAPSHOT
+ * Set, so a dispatch inside a sweep loop cannot invalidate the iteration.
  */
 export interface SetLedgerView extends ReadonlySet<string> {
   add(id: string): unknown
@@ -195,11 +173,7 @@ export function projectAutoPrewarmed(registry: SourceRegistry): Set<string> {
   return out
 }
 
-/**
- * App's harvestStateRef: source id -> HarvestRecord. The registry entry's `harvest`
- * field is the SAME shape (its doc says so explicitly), so this projection is
- * lossless. A source with no record yet is simply ABSENT from the map.
- */
+/** App's harvestStateRef: source id -> HarvestState; a source with no record is ABSENT. */
 export function projectHarvest(registry: SourceRegistry): Record<string, HarvestState> {
   const out: Record<string, HarvestState> = {}
   for (const [sourceId, entry] of Object.entries(registry)) {
@@ -209,12 +183,9 @@ export function projectHarvest(registry: SourceRegistry): Record<string, Harvest
 }
 
 /**
- * A Record-shaped ledger view for the harvest slots, where the caller READS a whole
- * record, runs a PURE function over it (baseline-harvest's harvestAttemptStarted /
- * harvestSatisfied), and stores the RESULT back. Translating that assignment is not
- * possible losslessly (the reducer would have to reverse-engineer which function
- * ran), so the registry accepts the finished record instead: storage is owned,
- * the policy functions stay where they are.
+ * A Record-shaped ledger view for harvest slots: the caller reads a record, runs a pure
+ * policy function over it and stores the RESULT back. Translating that assignment is not
+ * possible losslessly, so the registry accepts the finished record instead.
  */
 export function createHarvestView(options: {
   readonly read: () => Readonly<Record<string, HarvestState>>
@@ -259,13 +230,9 @@ export function createHarvestView(options: {
 }
 
 /**
- * A Map-shaped ledger backed by the registry (the record-shaped views could
- * translate ASSIGNMENTS; Map/Set ledgers mutate through METHODS, so they need an
- * adapter that owns the read surface).
- *
- * Like {@link createSetLedgerView}, iteration walks a SNAPSHOT: the App's sweeps do
- * `for (const id of [...map.keys()])` and delete inside the loop, and a projection
- * iterator would otherwise be invalidated by the dispatch it triggers.
+ * A Map-shaped ledger backed by the registry. Like {@link createSetLedgerView}, the
+ * adapter owns the read surface and iteration walks a SNAPSHOT, so a sweep that deletes
+ * inside the loop cannot invalidate the iterator.
  */
 export interface MapLedgerView extends ReadonlyMap<string, string> {
   set(id: string, target: string): unknown

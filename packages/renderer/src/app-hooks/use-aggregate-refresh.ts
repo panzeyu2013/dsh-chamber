@@ -1,17 +1,10 @@
 /**
- * 聚合刷新簇（design 05/24）：App.tsx 原「unary 快照拉取 / 有界刷新波 /
- * 边沿轮询 / 陈旧 watchdog + 会话权威升级 ladder」整段抽出。
- *
- * 判定内核全部在既有纯模块（aggregate-refresh.ts / source-readiness.ts /
- * dsh-stream-state 的 ladder）；本 hook 只做装配与定时器生命周期：
- *  - refreshAggregate：按实例取序的 unary 快照拉取 + 有界失败重试；
- *  - runBoundedAggregateWave：至多 AGGREGATE_POLL_CONCURRENCY 并发的一波；
- *  - pollAggregates：连接事实 / 快照生产者变化时的边沿重估；
- *  - runStalenessWatchdogNow：30s 陈旧臂 + 直连 http 重连臂 + 会话权威 ladder。
- *
- * Hook 调用位置、useCallback 依赖数组、ref 身份与 effect 顺序与抽出前逐字一致
- * （aggregatePollRunningRef 仍由 App 持有并传入；升级 ladder 实例与
- * AGGREGATE_RECONNECT_BACKOFF_MS 也是 App 的模块级单一来源，经 deps 注入）。
+ * 聚合刷新簇：App.tsx 的「unary 快照拉取 / 有界刷新波 / 边沿轮询 / 陈旧 watchdog +
+ * 会话权威升级 ladder」整段抽出。判定内核全在既有纯模块（aggregate-refresh.ts /
+ * source-readiness.ts / dsh-stream-state 的 ladder）；本 hook 只做装配与定时器生命周期：
+ * refreshAggregate（按实例取序的拉取 + 有界重试）、runBoundedAggregateWave（至多
+ * AGGREGATE_POLL_CONCURRENCY 并发一波）、pollAggregates（连接/生产者变化的边沿重估）、
+ * runStalenessWatchdogNow（30s 陈旧臂 + http 重连臂 + 权威 ladder）。
  */
 import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react'
 import {
@@ -24,10 +17,12 @@ import {
   reconcilePendingSessions,
   refreshPendingArchives,
   type InstanceAggregate,
-  type InstanceRuntimeReport,
   type SessionArchiveLedger,
   type SessionEchoLedger,
 } from '@dsh-chamber/dsh-chamber-client-core'
+import type { EchoStore } from '../host/echo-store.ts'
+import type { FactsStore } from '../host/facts-store.ts'
+import type { MountedSourcesStore } from '../host/mounted-sources-store.ts'
 import {
   commitAggregateFailure,
   commitAggregatePull,
@@ -52,25 +47,17 @@ import { instanceConnected, sourceIdForInstance } from '../transport-source.ts'
 import type { SshInstanceSpec, SshStatusProjection } from '../global.d.ts'
 import { planLadder, type LadderObservation, type LadderRecord } from '@dsh-chamber/dsh-stream-state'
 
-/**
- * Staleness watchdog cadence for aggregate snapshots. Also the staleness
- * threshold: a ready source whose last PUSHED snapshot is older than this is
- * presumed to have a dead push channel and is re-pulled from the authority.
- */
+/** Staleness watchdog cadence, also the staleness threshold: a ready source
+ *  whose last PUSHED snapshot is older is re-pulled from the authority. */
 const AGGREGATE_FALLBACK_POLL_MS = 30_000
 /** Bounded wave over whatever edge-triggered refresh set a poll produces. */
 const AGGREGATE_POLL_CONCURRENCY = 4
-/** First-screen retry: a transient aggregate snapshot failure (the snapshot
- * derives from session/list cwd facts) is retried quickly (bounded), instead of
- * waiting out the 30s staleness watchdog. */
+/** First-screen retry: a transient snapshot failure is retried quickly (bounded), not after 30s. */
 const AGGREGATE_RETRY_MS = 3_000
 const AGGREGATE_RETRY_LIMIT = 5
 
-/**
- * The ready/not-ready partition of all known sources, driven solely by the
- * authoritative transport state. Shared by the edge-triggered aggregate poll
- * and the staleness watchdog.
- */
+/** The ready/not-ready partition of all known sources, driven solely by the
+ *  authoritative transport state. */
 function collectReadySourceIds(
   health: HealthResponse | null,
   remoteStatus: Record<string, SshStatusProjection>,
@@ -94,7 +81,6 @@ export interface AggregateRefreshDeps {
   health: HealthResponse | null
   remoteInstances: SshInstanceSpec[]
   remoteStatus: Record<string, SshStatusProjection>
-  runtimeFacts: Record<string, InstanceRuntimeReport | undefined>
   /** 生产者已推送过完整快照的来源集（边沿轮询 effect 的重估依赖）。 */
   snapshotSources: Record<string, true>
   /** 会话权威升级 ladder 实例（App 的模块级单一来源）。 */
@@ -104,7 +90,7 @@ export interface AggregateRefreshDeps {
   // setters
   setAggregates: Dispatch<SetStateAction<Record<string, InstanceAggregate>>>
   setHostFacts: Dispatch<SetStateAction<Record<string, { dshVersion?: string } | undefined>>>
-  setRuntimeFacts: Dispatch<SetStateAction<Record<string, InstanceRuntimeReport | undefined>>>
+  factsStore: FactsStore
   // callbacks
   clearAggregateRetry: (sourceId: string) => void
   refreshHealth: () => Promise<void>
@@ -126,10 +112,9 @@ export interface AggregateRefreshDeps {
   lastReconnectAtRef: { current: Record<string, number> }
   mutationRefreshSeqRef: { current: Record<string, number> }
   readyAggregateSourcesRef: { current: Set<string> }
-  sessionArchiveRef: { current: SessionArchiveLedger }
-  sessionEchoRef: { current: SessionEchoLedger }
+  echoStore: EchoStore
   snapshotAtRef: { current: Record<string, number> }
-  snapshotSourcesRef: { current: Record<string, true> }
+  mountedSources: MountedSourcesStore
   sourceLifecyclesRef: { current: SourceOwnershipRegistry | null }
 }
 
@@ -154,30 +139,28 @@ export interface AggregateRefresh {
 
 export function useAggregateRefresh(deps: AggregateRefreshDeps): AggregateRefresh {
   const {
-    aggregates, health, remoteInstances, remoteStatus, runtimeFacts, snapshotSources,
+    aggregates, health, remoteInstances, remoteStatus, snapshotSources,
     escalationLadder, reconnectBackoffMs,
-    setAggregates, setHostFacts, setRuntimeFacts,
+    setAggregates, setHostFacts, factsStore,
     clearAggregateRetry, refreshHealth, sweepSessionArchive, sweepSessionEcho,
     sweepWorkspaceEcho, updateSessionArchive, updateSessionEcho,
     aggregateFailuresRef, aggregatePollRunningRef, aggregatePollSeqRef,
     aggregateRefreshQueueRef, aggregateRequestOwnersRef, aggregateRetryTimersRef,
     authoritativeArchiveSetRef, factsAtRef, factsPullInFlightRef,
     lastReconnectAtRef, mutationRefreshSeqRef, readyAggregateSourcesRef,
-    sessionArchiveRef, sessionEchoRef, snapshotAtRef, snapshotSourcesRef,
+    echoStore, snapshotAtRef, mountedSources,
     sourceLifecyclesRef,
   } = deps
 
-  /**
-   * 拉取一个实例的 workspace/session 快照（失败落 error 态，由轮询重试）。
-   * 每次调用按实例取序并递增；resolve/reject 时仅当捕获的序号仍是最新才
-   * 落 state——避免慢轮询在拖拽提交后的即时刷新之后落地、用旧序覆盖新序
-   * （拖拽 commit 前的兜底快照可能晚于 refresh 拉取到达，造成陈旧排序）。
-   */
+/**
+ * 拉取一个实例的 workspace/session 快照（失败落 error 态，由轮询重试）。每次调用
+ * 按实例取序并递增；resolve/reject 时仅当捕获的序号仍是最新才落 state——避免慢轮询
+ * 覆盖拖拽提交后的即时刷新（陈旧排序）。
+ */
   const refreshAggregate = useCallback(async (instanceId: string, mutationTag?: number) => {
     const sourceOwner = sourceLifecyclesRef.current!.capture(instanceId)
     if (sourceOwner === null) return
-    // 行刷新提示的 inFlight 拒绝输入：计数而不是布尔，
-    // 并发波/提示/看门狗重叠时最后一个结束才归零。
+    // 行刷新提示的 inFlight 拒绝输入：计数而不是布尔，最后一个结束才归零。
     factsPullInFlightRef.current[instanceId] = (factsPullInFlightRef.current[instanceId] ?? 0) + 1
     try {
     const startedPollSeq = (aggregatePollSeqRef.current[instanceId] ?? 0) + 1
@@ -211,9 +194,7 @@ export function useAggregateRefresh(deps: AggregateRefreshDeps): AggregateRefres
         if (aggregateRetryTimersRef.current.get(instanceId) === retryTimer) {
           aggregateRetryTimersRef.current.delete(instanceId)
         }
-        // 窗口隐藏期不维持 3s 失败重试链——恢复可见由
-        // visibilitychange 的 watchdog 补偿拉取覆盖（stale 源会被重拉，
-        // 失败计数随成功路径清除）。
+        // 窗口隐藏期不维持 3s 失败重试链；恢复可见由 visibilitychange 的 watchdog 补偿。
         if (!shouldRunBackgroundPhase(document.visibilityState)) return
         const mayRetry = mutationTag === undefined
           ? stillCurrent()
@@ -227,45 +208,34 @@ export function useAggregateRefresh(deps: AggregateRefreshDeps): AggregateRefres
       if (!stillCurrent()) return
       delete aggregateFailuresRef.current[instanceId]
       clearAggregateRetry(instanceId)
-      // 工作区回声的 TTL 也挂在这条 unary 兜底链上：未挂载来源没有
-      // 挂载 push 可依，30s 兜底拉取是它唯一的周期时钟——否则一条永远不会被
-      // 权威列表覆盖的回声（例如工作区已在别处被删除）会一直留在投影里。
+      // 工作区回声 TTL 挂在同一条 unary 兜底链上：未挂载来源没有 push，30s 兜底是其
+      // 唯一周期时钟，否则永不被权威列表覆盖的回声会一直留在投影里。
       sweepWorkspaceEcho()
-      // 会话回声同理：TTL 挂同一条时钟，并且**未推送**来源（兜底提交
-      // 的合成 cwd 分组就是它的投影工作区）在列表归属到该会话时立即收敛。
-      // 已推送来源刻意不做这一步：commitAggregatePull 的 mounted merge 保留的是
-      // 权威工作区行，用兜底的合成行收敛会把行抛进未分组桶（位置跳动）。
+      // 会话回声同理；未推送来源在列表归属到该会话时立即收敛。已推送来源刻意不做：
+      // mounted merge 保留权威工作区行，用兜底合成行收敛会把行抛进未分组桶（位置跳动）。
       sweepSessionEcho()
-      if (snapshotSourcesRef.current[instanceId] !== true) {
-        const reconciled = reconcilePendingSessions(sessionEchoRef.current, instanceId, snapshot.workspaces)
-        if (reconciled !== sessionEchoRef.current) updateSessionEcho(reconciled)
+      if (mountedSources.getSnapshot()[instanceId] !== true) {
+        const reconciled = reconcilePendingSessions(echoStore.getSnapshot().session, instanceId, snapshot.workspaces)
+        updateSessionEcho(reconciled)
       }
-      // 归档墓碑：租约挂在同一条兜底时钟上——只要这份（冻结/降级）视图
-      // 还在列该会话，就继续藏着它；权威归档集只可能来自挂载 push，所以这里**绝不**
-      // 用兜底的空归档集收敛。
-      // 顺序是契约：**先续租、再回收**。回收是全账本的（任何来源的一次拉取都会清所有
-      // 过期租约），若先回收，一个离线超过租约窗的来源重连后首个列表还没续上租，墓碑
-      // 就被别的来源那次拉取清掉了，归档行随即回浮。反过来，只要列表仍列着该 id 就先
-      // 续租：TTL 只回收"列表里已经没有"的墓碑（没什么可藏了）。
+      // 归档墓碑租约挂同一条兜底时钟：只要视图还在列该会话就继续藏着；权威归档集只
+      // 可能来自挂载 push，这里绝不用兜底空集收敛。顺序是契约：**先续租、再回收**——
+      // 回收是全账本的，先回收会让离线来源重连后墓碑被别的来源清掉、归档行回浮。
       {
         const listed = new Set(snapshot.sessions.map(session => session.sessionId))
-        const leased = refreshPendingArchives(sessionArchiveRef.current, instanceId, listed, Date.now())
-        if (leased !== sessionArchiveRef.current) updateSessionArchive(leased)
+        const leased = refreshPendingArchives(echoStore.getSnapshot().archive, instanceId, listed, Date.now())
+        updateSessionArchive(leased)
       }
       sweepSessionArchive()
-      // identity-preserving：快照内容未变（兜底/手动刷新常态）则复用旧 state 对象
-      // ——避免恒新对象驱动 servers 重新派生并触发 publish 签名闸后面的全量
-      // 侧边栏重渲染。错误分支保持无条件覆盖（error 文本
-      // 是权威失败事实，不能因"看起来没变"而吞掉）。
-      // 其工作区分组/归档集/state，兜底只贡献 sessions——否则 watchdog 的 30s
-      // 空闲重拉会用空归档集替换聚合，全部已归档会话重新出现（archived-
-      // resurfacing）。签名比较针对合并结果：合并后内容与当前一致时依旧不换对象。
+      // identity-preserving：快照内容未变（兜底/手动刷新常态）则复用旧 state 对象，
+      // 避免恒新对象触发全量侧边栏重渲染；错误分支仍无条件覆盖。兜底只贡献 sessions，
+      // 工作区分组/归档集保持权威（否则 30s 空闲重拉会造成 archived-resurfacing）。
       setAggregates(prev => {
         const current = prev[instanceId]
         const next = commitAggregatePull(
           current,
           snapshot,
-          snapshotSourcesRef.current[instanceId] === true,
+          mountedSources.getSnapshot()[instanceId] === true,
           authoritativeArchiveSetRef.current[instanceId],
         )
         if (current !== undefined && current.state === 'ok'
@@ -279,34 +249,27 @@ export function useAggregateRefresh(deps: AggregateRefreshDeps): AggregateRefres
       setUnverified(prev => (prev.includes(instanceId) ? prev.filter(id => id !== instanceId) : prev))
     } catch (err) {
       if (!stillOwnsSource()) return
-      // A push/newer pull supersedes an error fact. Mutation success may cross
-      // an interim push, but a stale failure must never replace that healthy push.
+      // A push/newer pull supersedes an error fact: a stale failure must never replace a healthy push.
       if ((aggregatePollSeqRef.current[instanceId] ?? 0) !== startedPollSeq) {
         scheduleRetry()
         return
       }
       if (!stillCurrent()) return
-      // 失败说明不了推送通道，置空/置 error 只会隐藏权威推送状态（与 withdrawal
-      // 窗口保留最后视图同规）。未推送源维持原 error 态与快速重试。
-      // 已知取舍：若推送通道与 unary 探针同时死亡，视图静默冻结在最后推送状态
-      // （watchdog 每 30s 重探一次，503 仍触发 refreshHealth 翻转连接判定）——
-      // 无错误行可看，但比展示劣化/空态诚实；与官方前端同依赖的恢复路径
-      // （liveness 触发/整页刷新）一致。
+      // 失败说明不了推送通道，置 error 只会隐藏权威推送状态（与 withdrawal 窗口同规）；
+      // 未推送源维持原 error 态与快速重试。推送与 unary 同时死亡时视图静默冻结在最后
+      // 推送状态，比展示劣化/空态诚实。
       const failureAggregate = commitAggregateFailure(
-        snapshotSourcesRef.current[instanceId] === true,
+        mountedSources.getSnapshot()[instanceId] === true,
         errorMessage(err),
       )
       if (failureAggregate === null) {
         // 503 仍是权威"未就绪"信号：立即刷新使连接判定尽快翻转。
         if (isInstanceUnavailable(err)) void refreshHealth()
         clearAggregateRetry(instanceId)
-        // 卫生：mounted 失败不走 scheduleRetry，未推送期残留的失败计数
-        // 一并清掉（成功路径与 roster 移除也会清，这里提前清无副作用）。
+        // 卫生：mounted 失败不走 scheduleRetry，残留失败计数一并清掉。
         delete aggregateFailuresRef.current[instanceId]
-        // 保留视图有界化：事实读持续失败到界限后，
-        // 不保留**无法验证**的「运行中」断言 —— 只清 running 位（行/分组照旧保留，
-        // 不触发归档回流），并把该来源交给既有的会话停滞横幅（文案 = 「无法确认会话状态」）。
-        // 下一次成功读取（push 或 unary）立即恢复事实并撤下呈现。
+        // 保留视图有界化：读持续失败到界限后丢掉无法验证的 running 断言（只清 running
+        // 位，行/分组照旧保留），并交给会话停滞横幅；下一次成功读取立即恢复。
         const retained = watchdogAggregatesRef.current[instanceId]
         if (retained !== undefined && retained.state === 'ok'
           && retained.sessions.some(session => session.running === true)
@@ -332,14 +295,9 @@ export function useAggregateRefresh(deps: AggregateRefreshDeps): AggregateRefres
         return
       }
       setAggregates(prev => ({ ...prev, [instanceId]: failureAggregate }))
-      // 反代 503 = 权威"未就绪"信号（design 03）：本地 /health 可能还停留在
-      // 旧 ready（最多一个健康轮询周期的陈旧窗口），立即刷新使连接判定
-      // 尽快翻转（否则错误行要挂到下一个健康轮询才被 not-connected 替换）。
+      // 反代 503 = 权威"未就绪"信号：立即刷新使连接判定尽快翻转。
       if (isInstanceUnavailable(err)) void refreshHealth()
-      // 首屏加速：一次瞬时失败不等到 30s 兜底轮询——限次快速重试（工作区
-      // 单元冷启动期间快照获取可能短暂 503/超时；git 快照先到会让未注册块
-      // 抢在工作区列表前渲染；快照取自
-      // session/list cwd 事实）。
+      // 首屏加速：一次瞬时失败不等到 30s 兜底轮询，限次快速重试。
       scheduleRetry()
     }
     } finally {
@@ -352,11 +310,8 @@ export function useAggregateRefresh(deps: AggregateRefreshDeps): AggregateRefres
   const refreshAggregateRef = useRef(refreshAggregate)
   refreshAggregateRef.current = refreshAggregate
 
-  /**
-   * Run a bounded refresh wave: at most AGGREGATE_POLL_CONCURRENCY concurrent
-   * pulls, one wave at a time. Shared by the edge-triggered poll and the
-   * staleness watchdog so neither can burst N pulls or overlap each other.
-   */
+/** Run a bounded wave: at most AGGREGATE_POLL_CONCURRENCY concurrent pulls, one
+ *  wave at a time, shared by the edge poll and the watchdog. */
   const runBoundedAggregateWave = useCallback((sourceIds: string[]) => {
     aggregateRefreshQueueRef.current.enqueue(sourceIds)
     if (aggregateRefreshQueueRef.current.size === 0 || aggregatePollRunningRef.current) return
@@ -384,23 +339,20 @@ export function useAggregateRefresh(deps: AggregateRefreshDeps): AggregateRefres
     })()
   }, [refreshAggregate])
 
-  /** 刷新需要兜底/刚重连的就绪实例；未就绪实例落 not-connected——已推送过的
-   *  挂载来源除外（保留其最后推送视图）。 */
+/** 刷新需要兜底/刚重连的就绪实例；未就绪实例落 not-connected（已推送挂载来源除外）。 */
   const pollAggregates = useCallback(() => {
     const { ready, notReady } = collectReadySourceIds(health, remoteStatus, remoteInstances)
     const refreshPlan = planAggregateRefreshes(
       ready,
       readyAggregateSourcesRef.current,
-      snapshotSourcesRef.current,
+      mountedSources.getSnapshot(),
     )
-    // Commit the observed generation synchronously before starting pulls: an
-    // overlapping health/status callback must not mint duplicate reconnect pulls.
+    // Commit the observed generation synchronously: an overlapping callback must not mint duplicate pulls.
     readyAggregateSourcesRef.current = refreshPlan.nextReady
     runBoundedAggregateWave(refreshPlan.refreshSourceIds)
     if (notReady.length > 0) {
       aggregateRefreshQueueRef.current.delete(notReady)
-      // A pull started in the dying generation must never restore an `ok`
-      // aggregate after the authoritative transport state became not-ready.
+      // A pull started in the dying generation must never restore an `ok` aggregate.
       aggregateRequestOwnersRef.current!.retire(notReady)
       for (const sourceId of notReady) {
         aggregatePollSeqRef.current[sourceId] = (aggregatePollSeqRef.current[sourceId] ?? 0) + 1
@@ -415,19 +367,17 @@ export function useAggregateRefresh(deps: AggregateRefreshDeps): AggregateRefres
             next[id] = emptyAggregate('not-connected')
             changed = true
           } else if (current.state !== 'not-connected'
-            // 本就以 connected 为门（断连不显示任何行），保留它让重连后的
-            // ready-edge 拉取走 sessions-only merge（工作区/归档集不丢失）。
-            // 未推送/未挂载来源照旧落 not-connected（unary 兜底 = 其文档化
-            // 范围）。shouldRetainPushedAggregate 单测覆盖（aggregate-refresh.test.ts）。
-            && !shouldRetainPushedAggregate(snapshotSourcesRef.current[id] === true, current)) {
+            // 本就以 connected 为门，保留它让重连后的 ready-edge 拉取走 sessions-only
+            // merge；未推送/未挂载来源照旧落 not-connected。
+            && !shouldRetainPushedAggregate(mountedSources.getSnapshot()[id] === true, current)) {
             next[id] = emptyAggregate('not-connected')
             changed = true
           }
         }
         return changed ? next : prev
       })
-      // 断连即清该来源的运行时事实（design 06：generation 级事实随断连失效）
-      setRuntimeFacts(prev => {
+      // 断连即清该来源的运行时事实（generation 级事实随断连失效）
+      factsStore.setRuntime(prev => {
         let changed = false
         const next = { ...prev }
         for (const id of notReady) {
@@ -438,9 +388,7 @@ export function useAggregateRefresh(deps: AggregateRefreshDeps): AggregateRefres
         }
         return changed ? next : prev
       })
-      // Host facts are generation-scoped too: a disconnected source must
-      // not retain a version from the previous connection generation
-      // (the local instance's version comes from the desktop bridge).
+      // Host facts are generation-scoped too: a disconnected source keeps no version from the old generation.
       setHostFacts(prev => {
         let changed = false
         const next = { ...prev }
@@ -460,9 +408,7 @@ export function useAggregateRefresh(deps: AggregateRefreshDeps): AggregateRefres
     pollAggregatesRef.current = pollAggregates
   })
 
-  // 连接事实（health / 隧道相位 / 注册表）或快照生产者变化即重估聚合，
-  // tick：ready↔degraded 转换瞬间的错误行在下一次状态推送后立即被
-  // not-connected/正常数据替换，不残留到轮询周期。
+  // 连接事实或快照生产者变化即重估聚合，避免错误行残留到下一个轮询周期。
   useEffect(() => {
     pollAggregatesRef.current()
   }, [health, remoteStatus, remoteInstances, snapshotSources])
@@ -477,35 +423,28 @@ export function useAggregateRefresh(deps: AggregateRefreshDeps): AggregateRefres
   // unchanged state churn-free.
   // Render-phase mirror of the aggregates state for this interval (the timer
   // must stay stable across aggregate commits — re-creating it on every push
-  // would stretch the cadence under activity; same ref-mirror discipline as
-  // remoteStatusRef above).
+  // would stretch the cadence under activity; the same single-source discipline
+  // host/remotes-store.ts applies to the remote projection).
   const watchdogAggregatesRef = useRef(aggregates)
   watchdogAggregatesRef.current = aggregates
-  // 运行位活性守卫：运行时事实的
-  // render-phase 镜像（与上面的 aggregates 镜像同纪律：timer 稳定，不因每次
-  // 上报重建）+ 守卫状态 ref + 需要用户可见提示的来源。
-  const watchdogRuntimeFactsRef = useRef(runtimeFacts)
-  watchdogRuntimeFactsRef.current = runtimeFacts
-  // P2：App 只跑升级 ladder（reconnect/notice），probe cadence 与写回在执行端。
+  // 运行位活性守卫：运行时事实直接从 factsStore 快照读（timer 稳定，不因每次
+  // 上报重建；事实写入即刻对守卫可见，无渲染期镜像）。
   const escalationRecordsRef = useRef<Record<string, LadderRecord>>({})
   /** 已亮 notice 的来源 → 亮灯时的 progressStamp（健康进展即撤下）。 */
   const noticeProgressRef = useRef<Record<string, number>>({})
   const [stalledSources, setStalledSources] = useState<readonly string[]>([])
-  // 用户已经「忽略」过的停滞来源：同一停滞时段不再重复提示（与 mobile
-  // session-stall.ts 的 dismiss 语义一致——误报不得反复打扰），来源恢复
-  // （离开 stalled）时自动解除忽略。
+  // 用户已「忽略」的停滞来源：同一停滞时段不再重复提示，来源恢复（离开
+  // stalled）时自动解除忽略。
   const [dismissedStalls, setDismissedStalls] = useState<readonly string[]>([])
-  /** 事实已越界无法验证的来源：与 stalledSources 共用同一条
-   *  停滞横幅（文案本身即「无法确认会话状态」），下一次成功读取（push/unary）即移除。 */
+/** 事实已越界无法验证的来源：与 stalledSources 共用停滞横幅，下次成功读取即移除。 */
   const [unverifiedSources, setUnverifiedSources] = useState<readonly string[]>([])
   // 渲染期镜像（与 watchdogAggregatesRef 同纪律）：watchdog 回调不因它重建定时器。
   const unverifiedSourcesRef = useRef(unverifiedSources)
   unverifiedSourcesRef.current = unverifiedSources
-  /**
-   * 唯一的标记写入口：除 setState 外**同步**更新 ref ——
-   * 同一 tick 的 dismiss 剪枝与失败分支都读 ref，若只等下一次渲染，刚被判「无法确认」
-   * 的来源会被旧快照误判成已恢复（忽略被提前剪掉、横幅反复重现）。
-   */
+/**
+ * 唯一标记写入口：除 setState 外**同步**更新 ref——同 tick 的 dismiss 剪枝与失败
+ * 分支都读 ref，否则刚被判「无法确认」的来源会被旧快照误判成已恢复。
+ */
   const setUnverified = (updater: (prev: readonly string[]) => readonly string[]): void => {
     setUnverifiedSources(prev => {
       const next = updater(prev)
@@ -513,85 +452,54 @@ export function useAggregateRefresh(deps: AggregateRefreshDeps): AggregateRefres
       return next
     })
   }
-  // (对齐 ssh 断链自动恢复) a stale MOUNTED direct-http source (registry
-  // spec transport === 'http', whatever the target kind) additionally gets a
-  // lightweight connection reconnect (bounded by lastReconnectAtRef) so the
-  // ctx's own reconnect chain re-establishes the frozen workspace follow —
-  // the unary pull only refreshes session rows, it cannot heal the push
-  // channel. The reconnect is an ADDITION, never a replacement of the pull.
-  // Cadence (two distinct regimes): a HEALTHY-but-quiet
-  // source rebaselines after each reconnect, whose baseline push refreshes
-  // snapshotAt — the next reconnect fires one transport threshold later
-  // (this depends on the producer's withdraw→re-publish chain resurfacing the
-  // baseline; if that chain stays silent the regime degrades to the backoff
-  // gate below). A TRULY dead channel gets no push after a reconnect, so once
-  // stale it retries every AGGREGATE_RECONNECT_BACKOFF_MS — bounded churn
-  // that keeps probing until the channel heals or the source leaves ready.
-  // tick 主体抽成可即时调用的回调——周期 interval 与
-  // visibilitychange 恢复补偿（hidden→visible）共用，隐藏期跳过的 stale 拉取
-  // 在恢复后立即收敛（见下方 visibility effect）。
+  // A stale MOUNTED direct-http source additionally gets a lightweight connection
+  // reconnect (bounded by lastReconnectAtRef) so the ctx's own chain re-establishes
+  // the frozen workspace follow — the unary pull only refreshes session rows and
+  // cannot heal the push channel. Cadence: a healthy-but-quiet source rebaselines
+  // after each reconnect (refreshing snapshotAt, so the next reconnect is one
+  // transport threshold later); a truly dead channel retries every backoff window —
+  // bounded churn that keeps probing until the channel heals or the source leaves ready.
+  // tick 主体抽成可即时调用的回调：周期 interval 与 visibilitychange 恢复补偿共用。
   const runStalenessWatchdogNow = useCallback(() => {
     const now = Date.now()
     const ready = collectReadySourceIds(health, remoteStatus, remoteInstances).ready
     const staleIds = ready
       .filter(id => isSnapshotStale(snapshotAtRef.current[id], now, AGGREGATE_FALLBACK_POLL_MS))
     if (staleIds.length > 0) runBoundedAggregateWave(staleIds)
-    // The reconnect arm is scoped to DIRECT-HTTP sources (registry spec
-    // transport === 'http' — gateway-kind AND dsh-kind alike); ssh-transport
-    // targets (any kind) are excluded: the tunnel's ssh keepalive and
-    // loopback stability already protect them, so churning their ctxs would
-    // be pure cost (the axis is the transport, not the target
-    // kind). No host-loopback exclusion here — unlike the transport-keepalive arm (whose transport
-    // keepalive is pointless on a loopback leg that cannot half-open), this
-    // arm also heals ctx-level push-channel freezes that are NOT
-    // transport-caused (e.g. a dsh-restart rebaseline gap), so a
-    // loopback-host direct-http target (local gateway dev) stays covered; a
-    // healthy idle one there merely bounces every ~2min (bounded, dev form).
-    // Per-source transport decides the threshold: http
-    // keeps the 120s tight-heal cadence (no upstream heartbeat), ssh gets the
-    // 5min last-resort cadence (three independent tunnel detectors already
-    // cover transport-level death; this arm only heals an app-level freeze),
-    // and local/unknown sources are skipped entirely.
+    // The reconnect arm is scoped to DIRECT-HTTP sources (gateway- and dsh-kind
+    // alike); ssh-transport targets are excluded (tunnel keepalive/loopback
+    // stability already protect them), and there is no host-loopback exclusion —
+    // unlike the transport-keepalive arm, this one also heals ctx-level freezes
+    // (e.g. a dsh-restart rebaseline gap), so a local gateway dev target stays
+    // covered and merely bounces every ~2min. Threshold by transport: http 120s
+    // (no upstream heartbeat), ssh 5min last resort, local/unknown skipped.
     const transportBySourceId = new Map(
       remoteInstances.map(instance => [sourceIdForInstance(instance), instance.transport]),
     )
-    // 本 tick 内**真正执行过** reconnect 的来源（**三条臂**共享：陈旧臂、
-    // fallback-view 重建臂、运行位守卫的 L2）：用局部集合而不是墙钟窗口判断，
-    // 避免「先规划改状态、后因窗口命中而跳过」把已到期的 L2 推迟一个退避周期，
-    // 也避免时钟抖动带来的误判。**每条执行了 reconnect 的臂
-    // 都必须登记**——漏登记就会让后面的臂对同一来源再重连一次（每次都要重放
-    // 全部 baseline）。
+    // 本 tick 内真正执行过 reconnect 的来源（三条臂共享）：用局部集合而不是墙钟窗口
+    // 判断，避免把已到期的 L2 推迟一个退避周期。**每条执行了 reconnect 的臂都必须
+    // 登记**——漏登记会让后面的臂对同一来源再重连一次。
     const reconnectedThisTick = new Set<string>()
     for (const id of ready) {
       if (id === LOCAL_INSTANCE_ID) continue
       const stalenessMs = reconnectStalenessMsForTransport(transportBySourceId.get(id))
       if (stalenessMs === null) continue
-      // mounted here means "the ctx producer pushed at least one snapshot
-      // this generation" (snapshotSources) — the target class is a
-      // channel that worked and then went silent; a channel dead from its
-      // first boot never pushes and stays on the unary fallback, which
-      // already covers it (KNOWN DEGRADATION scope).
+      // mounted = "the ctx producer pushed at least one snapshot this generation":
+      // a channel dead from first boot never pushes and stays on the unary fallback.
       if (!shouldReconnectStaleMounted({
-        mounted: snapshotSourcesRef.current[id] === true,
+        mounted: mountedSources.getSnapshot()[id] === true,
         lastSnapshotAt: snapshotAtRef.current[id],
         lastReconnectAt: lastReconnectAtRef.current[id],
         now,
         stalenessMs,
         reconnectBackoffMs,
       })) continue
-      // Record the attempt synchronously with firing so overlapping
-      // ticks/effect re-arms cannot double-fire while a reconnect is in
-      // flight — but only when reconnect() was actually invoked: a no-op
-      // (shell not booted / ctx missing, e.g. a boot-failure retry window)
-      // must not consume the backoff window and delay the first effective
-      // reconnect.
-      // NOTE: each reconnect resets the ctx connection's
-      // official exponential backoff to an immediate retry (MANUAL_RECONNECT
-      // semantics) — while a target stays ready-but-dead this yields a
-      // fixed ~60s probe cadence instead of the official backoff ceiling.
-      // Bounded and intended (it is the healing probe); a long-dead target
-      // eventually flips to not-connected via the main-process reverify
-      // path, which removes it from this arm.
+      // Record the attempt synchronously with firing so overlapping ticks cannot
+      // double-fire — but only when reconnect() was actually invoked: a no-op must not
+      // consume the backoff window. NOTE: each reconnect resets the ctx's official
+      // exponential backoff to an immediate retry (MANUAL_RECONNECT), so a ready-but-dead
+      // target probes at a fixed ~60s cadence until the main-process reverify flips it to
+      // not-connected. Bounded and intended.
       if (reconnectInstanceConnection(id)) {
         lastReconnectAtRef.current[id] = now
         reconnectedThisTick.add(id)
@@ -600,7 +508,7 @@ export function useAggregateRefresh(deps: AggregateRefreshDeps): AggregateRefres
     for (const id of ready) {
       if (id === LOCAL_INSTANCE_ID) continue
       if (!shouldRebaselineFallbackView({
-        mounted: snapshotSourcesRef.current[id] === true,
+        mounted: mountedSources.getSnapshot()[id] === true,
         fallbackView: isFallbackDerivedView(watchdogAggregatesRef.current[id]),
         lastReconnectAt: lastReconnectAtRef.current[id],
         now,
@@ -611,15 +519,12 @@ export function useAggregateRefresh(deps: AggregateRefreshDeps): AggregateRefres
         reconnectedThisTick.add(id)
       }
     }
-    // 会话事实单一权威：producer 执行端持有 reducer（运行位真相 + N=2 + tier-3
-    // 写回）与 probe cadence，并把 `runningSince` / `stuckSince` / `progressStamp`
-    // 投影进运行时事实。这里只做两件事：给它一个 30s tick，以及在**拿不到权威结论**
-    // 的 stuck 证据上跑升级 ladder（reconnect → notice）。绝不按静默时长升级：长工具/
-    // 长推理的合法静默与真卡死在本层不可区分，误升级会重放全部 baseline
-    // （design 14 §D4 的核心取舍）。
+    // 会话事实单一权威：producer 执行端持有 reducer 与 probe cadence，这里只给它一个
+    // 30s tick，并在**拿不到权威结论**的 stuck 证据上跑升级 ladder（reconnect → notice）。
+    // 绝不按静默时长升级：合法静默与真卡死在本层不可区分，误升级会重放全部 baseline。
     const escalationObservations: Record<string, LadderObservation | undefined> = {}
     for (const id of ready) {
-      const report = watchdogRuntimeFactsRef.current[id]
+      const report = factsStore.getSnapshot().runtime[id]
       const sessions = report?.sessions ?? {}
       const sticky = Object.values(sessions).some(facts => facts?.running === true)
       if (sticky) chamberBridge.requestSessionListRefresh(id)
@@ -629,8 +534,7 @@ export function useAggregateRefresh(deps: AggregateRefreshDeps): AggregateRefres
         symptomSinceMs: authority?.runningSince ?? now,
         progressStamp: authority?.progressStamp ?? 0,
         stuckEvidence: authority?.stuckSince !== undefined,
-        // 共享重连账本（同一 tick 的 fallback 臂已经写过）：挡住时不派遣，
-        // 也不消耗 ladder 配额——被 App 丢弃的派遣不得静默吃掉杠杆。
+        // 共享重连账本：挡住时不派遣，也不消耗 ladder 配额。
         escalationBlocked: reconnectedThisTick.has(id)
           || (lastReconnectAtRef.current[id] !== undefined
             && now - lastReconnectAtRef.current[id] < reconnectBackoffMs),
@@ -643,8 +547,7 @@ export function useAggregateRefresh(deps: AggregateRefreshDeps): AggregateRefres
       // watchdog 绝不向 App 抛错；动作次数由 ladder 自身的冷却/配额封顶，日志有界。
       try {
         if (action.tier === 'reconnect') {
-          // 与既有臂共用同一份 per-source 账本：同一 tick 内已经重连过的来源不得
-          // 被多条臂各重连一次；跨 tick 也要看账本（fallback 可能刚重连过）。
+          // 与既有臂共用同一份 per-source 账本：同一 tick（或跨 tick）已重连过的不再重连。
           if (reconnectedThisTick.has(action.sourceId)) continue
           const lastReconnectAt = lastReconnectAtRef.current[action.sourceId]
           if (lastReconnectAt !== undefined && now - lastReconnectAt < reconnectBackoffMs) {
@@ -692,12 +595,8 @@ export function useAggregateRefresh(deps: AggregateRefreshDeps): AggregateRefres
     runStalenessWatchdogRef.current = runStalenessWatchdogNow
   })
 
-  // Staleness watchdog cadence + 文档可见性门控：窗口隐藏
-  // （Electron 最小化/隐藏到托盘）期跳过周期 unary 拉取与 reconnect 臂——
-  // 用户不可见期不维持 30s 轮询/重连链（含"已回收但仍 ready 的源"的兜底拉
-  // 取：隐藏期暂停、恢复可见立即补偿一轮，见 visibility effect；窗口可见时
-  // 该兜底照常维持 30s 周期——回收源的任务完成检测依赖它，design 05 语义不
-  // 变）。恢复补偿由下方 visibility effect 调 runStalenessWatchdogRef。
+  // Cadence + 文档可见性门控：窗口隐藏（最小化/托盘）期跳过周期 unary 拉取与
+  // reconnect 臂；恢复可见立即补偿一轮。回收但仍 ready 的源靠可见期的 30s 兜底检测任务完成。
   useEffect(() => {
     const timer = setInterval(() => {
       if (!shouldRunBackgroundPhase(document.visibilityState)) return

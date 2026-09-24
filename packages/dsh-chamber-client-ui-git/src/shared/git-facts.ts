@@ -13,10 +13,9 @@ function basename(path: string): string {
   return parts.at(-1) || path
 }
 
-/** One option per repository that currently has at least one registered
- *  workspace. The source is ALWAYS the repository's MAIN checkout (no
- *  second-level derivation — OpenChamber parity), falling back to the first
- *  registered workspace only when the main checkout has none. */
+/** One option per repository with at least one registered workspace; the source is
+ *  ALWAYS the repo's MAIN checkout (no second-level derivation), falling back to
+ *  the first registered workspace only when the main has none. */
 export function createSourceOptions(snapshot: GitWorktreeSnapshot): CreateSourceOption[] {
   const out: CreateSourceOption[] = []
   for (const repo of snapshot.repos) {
@@ -44,16 +43,13 @@ export function findWorktree(
 
 /**
  * Base-ref picker options for the create dialog: the host's branch list
- * (`git show-ref --heads`) when it has any, otherwise the selected
- * repository's own worktree branches, deduplicated in row order.
+ * (`git show-ref --heads`) when non-empty, otherwise the selected repository's
+ * worktree branches, deduplicated in row order.
  *
  * The main checkout's branch is deliberately INCLUDED: the host accepts it as
- * `startRef` (`localBranchHead` resolves it to that branch's HEAD commit), so
- * filtering it out as the implicit default would make it unreachable once any
- * other branch had been chosen and would leave a single-branch repository with
- * an empty picker.
- * @param repoBranches - Host branch list for the selected repository.
- * @param worktreeBranches - The same repository's worktree branches (fallback; `null` = detached).
+ * `startRef` (`localBranchHead` resolves it to that branch's HEAD), so filtering
+ * it out as the implicit default would make it unreachable once another branch had
+ * been chosen and would leave a single-branch repository with an empty picker.
  * @returns The picker options, never filtered against the main checkout branch.
  */
 export function sourceBranchChoices(
@@ -104,33 +100,19 @@ export type RemoveBlockReason =
   | undefined
 
 /**
- * Safe-remove guard: both fresh running facts and the aggregate current id
- * block removal. `runtimeKnown` is the fail-closed half: the
- * per-source `runtime` channel (which carries `current`) withdraws while its
- * shell reconnects/reloads — treating the resulting `undefined` current as
- * "not current" would silently open the removal of a worktree holding the
- * very session the user is viewing. When the runtime channel is absent AND
- * the worktree accounts sessions, removal is blocked ('runtime-unknown')
- * until the channel returns.
- *
- * The RUNNING reason reads the host's ARCHIVED-AWARE fact (design 08 §5.2
- * amendment): `blockingRunningSessionIds` names only
- * the running sessions that actually gate removal — archived sessions (and
- * sessions under an archived ancestor) are INERT and do not block. The field
- * is ABSENT on an older host, and the fallback to `runningSessionIds` keeps
- * that case conservative (any running session blocks). A removal never touches
- * a session either way.
- *
- * PRECEDENCE: `current` and `runtime-unknown` are
- * evaluated BEFORE `running`. The RUNNING reason is NOT a hard client block —
- * the row deliberately keeps the delete control enabled for it (the dialog
- * explains the running facts and the host re-checks with its `running-agent`
- * guard) — so letting it win would shadow the two fail-closed refusals: a
- * worktree whose STALE snapshot still lists running sessions (or whose running
- * set is non-blocking/archived) would then bypass the current-session guard
- * and the runtime-absent fail-closed guard in `coordinator.ts`'s fresh
- * preflight, and the removal could proceed while the current session's cwd is
- * unknown.
+ * Safe-remove guard: fresh running facts and the aggregate current id both block removal.
+ * `runtimeKnown` is the fail-closed half — the per-source `runtime` channel (carrying
+ * `current`) withdraws while its shell reconnects, and treating the resulting `undefined`
+ * as "not current" would open the removal of a worktree holding the very session being
+ * viewed; absent channel + accounted sessions ⇒ 'runtime-unknown'.
+ * The RUNNING reason reads the host's ARCHIVED-AWARE fact (design 08 §5.2):
+ * `blockingRunningSessionIds` names only sessions that actually gate removal — archived ones
+ * (and those under an archived ancestor) are INERT; ABSENT on an older host, where the
+ * `runningSessionIds` fallback stays conservative.
+ * PRECEDENCE: `current` and `runtime-unknown` are evaluated BEFORE `running`; the RUNNING
+ * reason is NOT a hard client block (the row keeps the delete control enabled and the host
+ * re-checks with its `running-agent` guard), so letting it win would shadow the two
+ * fail-closed refusals and removal could proceed while the current session's cwd is unknown.
  */
 export function removeBlockReason(
   worktree: GitWorktreeInfo,
@@ -140,12 +122,10 @@ export function removeBlockReason(
 ): RemoveBlockReason {
   if (worktree.isMain) return 'main'
   if (worktree.workspaceId === null) return 'unregistered'
-  // A BLANK (never-submitted) current session carries no content worth
-  // protecting, so it must not block removal.
+  // A BLANK (never-submitted) current session carries no content worth protecting.
   if (currentSessionId !== undefined && !currentSessionBlank && worktree.sessionIds.includes(currentSessionId)) return 'current'
-  // Fail-closed: the runtime channel is absent (withdrawn/not-yet-ready), so
-  // we cannot rule the current session out of this worktree. Blank-current
-  // leniency cannot apply — blankness is unknown too.
+  // Fail-closed: the runtime channel is absent, so the current session cannot be
+  // ruled out of this worktree; blankness is unknown too.
   if (!runtimeKnown && worktree.sessionIds.length > 0) return 'runtime-unknown'
   const blockingRunning = worktree.blockingRunningSessionIds ?? worktree.runningSessionIds
   if (blockingRunning.length > 0) return 'running'
@@ -162,30 +142,15 @@ export function canTargetSession(worktree: GitWorktreeInfo): boolean {
 }
 
 /**
- * Session closure over `parentSessionId`: the roots plus every session
- * transitively parented under them (cycle-safe, order stable). Used to
- * enumerate the full session tree a worktree removal would orphan.
- *
- * This is the FORK closure over the VISIBLE (non-subagent) session rows: the
- * caller's row source is `fetchInstanceSnapshot` (client-core
- * `src/instance-api.ts`), which DROPS subagent-origin rows upstream (it
- * filters `origin === 'subagent'`), so every edge this function can see is a
- * fork edge — and a fork IS a worktree session by construction, so it belongs
- * in the closure. Vendor evidence (dsh-api-session-controller/lib/index.js):
- * `fork()` copies the source header's cwd into the child
- * (`meta: { ...(source.header.cwd === undefined ? {} : { cwd: source.header.cwd }), parentSession: source.header.id, isSeeded: true }`,
- * ~:695-700) and attaches the child to the SOURCE's workspace through
- * `forkWorkspace(source.header)` (:683 → workspace lookup over
- * `workspaceRegistry.list()` by `sessionIds`, :872-883) plus
- * `workspace.attachSession(childId)` (:712-714). The fork therefore shares the
- * worktree cwd AND is a member of the same workspace, which is exactly why
- * archiving it is the intended semantics of 「归档工作区中会话」 (it is not an
- * unrelated session). Subagent-origin rows are NOT part of this closure by
- * construction; do NOT add an `origin === 'subagent'` filter here — it would
- * collapse the closure to the roots and silently drop the forks the option
- * must archive (the subagent-only purge/stop
- * closure lives in the sidebar's `sessionPurgeClosure`, which reads the raw
- * `session/list` rows instead).
+ * Session closure over `parentSessionId`: roots plus every session transitively parented
+ * under them (cycle-safe, order stable), used to enumerate the tree a worktree removal would
+ * orphan. This is the FORK closure over the VISIBLE (non-subagent) session rows: the caller's
+ * row source drops subagent-origin rows upstream, so every edge here is a fork edge — and a
+ * fork IS a worktree session by construction (it copies the source header's cwd and attaches
+ * to the SOURCE's workspace), which is why archiving it is the intended semantics of
+ * 「归档工作区中会话」. Do NOT add an `origin === 'subagent'` filter: it would collapse the
+ * closure to the roots and silently drop the forks this option must archive (the subagent
+ * closure lives in the sidebar's `sessionPurgeClosure`).
  */
 export function collectSessionClosure(
   sessions: ReadonlyArray<{ readonly sessionId: string; readonly parentSessionId?: string }>,

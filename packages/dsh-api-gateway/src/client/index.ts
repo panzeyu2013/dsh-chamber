@@ -1,15 +1,11 @@
 /**
- * Client projection of generated Typert Remote descriptors. Contributions
- * install traced `remote.<namespace>` services; no JavaScript Proxy
- * participates in method lookup, invocation, or type exposure.
+ * Client projection of generated Typert Remote descriptors: contributions install
+ * traced `remote.<namespace>` services; no JavaScript Proxy participates in method
+ * lookup, invocation, or type exposure.
  *
- * ## chamber fork: chamber copy of the upstream
- * `packages/api/gateway` client half with the per-entry base-path patch. The
- * Remote stream WebSocket route must land under the control-plane per-instance
- * proxy prefix (`/api/i/<id>`), so `apply(ctx)` reads the entry Context's
- * `chamberBasePath` (bound by the shell before plugin materialization, never a
- * page-global knob) and threads it into `RemoteStreamMuxClient`. Everything
- * else is verbatim upstream.
+ * chamber fork: per-entry base-path patch only — `apply(ctx)` reads the entry
+ * Context's `chamberBasePath` (never a page global) and threads it into
+ * `RemoteStreamMuxClient` so the stream socket lands under the proxy prefix.
  */
 
 import { Service } from '@deepseek-ai/cordis'
@@ -112,16 +108,11 @@ interface InstalledMethod {
 
 /** Typed Remote service augmented by generated direct namespaces and Gateway stream supervision. */
 export interface ClientRemote extends TypertClientRemote {
-  /**
-   * Create one independently cancellable, reconnecting logical stream.
-   * @param options - domain-owned opener and generation-end classification.
-   * @returns a single-consumer stream annotated with physical generation ids.
-   */
+  /** Create one independently cancellable, reconnecting logical stream. */
   $stream<Item>(options: RemoteStreamOptions<Item>): RemoteStream<Item>
   /**
-   * Fixed Host facts as plain reads: no store, no subscription, no generation
-   * counter. `home` stays undefined until the first ready frame and reflects
-   * the latest one afterwards.
+   * Fixed Host facts as plain reads: no store, subscription, or generation counter.
+   * `home` is undefined until the first ready frame, then reflects the latest one.
    */
   readonly $host: RemoteHostFacts
 }
@@ -144,10 +135,7 @@ declare module '@deepseek-ai/cordis' {
 /** Required Client services: the Typert registry and the existing Connection carrier. */
 export const inject = ['typert', 'connection']
 
-/**
- * Install the typed Client Remote service.
- * @param ctx - Client Cordis root (carries the per-entry `chamberBasePath`).
- */
+/** Install the typed Client Remote service. */
 export function apply(ctx: Context): void {
   new ClientRemoteService(ctx, chamberBasePathOf(ctx))
 }
@@ -175,15 +163,11 @@ class ClientRemoteService extends Service implements ClientRemote {
       // Same seam the sidebar/layout forks read (published by the shell per boot).
       instanceId: (ctx as { readonly chamberInstanceId?: string }).chamberInstanceId,
     })
-    // chamber patch (design 14 §D4): bounded lifecycle forensics. The
-    // local-source mux was observed closing and reopening every ~20 s while no
-    // durable surface recorded why; these facts (page events) name the transition
-    // and the caller, so the next investigation does not depend on renderer
-    // DevTools (the Swift shell exposes none).
+    // chamber patch: bounded lifecycle forensics — these page events name the
+    // transition and caller, so investigation does not depend on renderer DevTools.
     const chamberInstanceId = (ctx as { readonly chamberInstanceId?: string }).chamberInstanceId
     const forensics = createStreamForensicsReporter({ instanceId: chamberInstanceId })
-    // P5: a page probe can flush the retained tail through the snapshot sink; the
-    // bridge is a no-op outside a DOM, so plain-Node suites are unaffected.
+    // A page probe can flush the retained tail; the bridge is a no-op outside a DOM.
     installStreamForensicsSnapshotBridge(forensics, chamberInstanceId)
     this.streams = new RemoteStreamMuxClient(basePath, forensics)
     const connection = ctx.get('connection') as ConnectionHandle
@@ -203,11 +187,9 @@ class ClientRemoteService extends Service implements ClientRemote {
     if (connection.rpc.open === undefined) this.streams.start()
     let disposed = false
     let loop: ReturnType<ConnectionHandle['start']> | undefined
-    // chamber patch: the page-global
-    // `__DSH_CONNECTION_RECOVERY__` bootstrap is absent under the chamber shell
-    // (the page is served by the control plane), so remote sources would run
-    // the loopback-tuned 15 s readiness deadline. Pass the per-source override
-    // through upstream's supported `start(sinks, config)` seam instead.
+    // chamber patch: the `__DSH_CONNECTION_RECOVERY__` page global is absent under the
+    // chamber shell, so remote sources would run the loopback-tuned 15 s readiness
+    // deadline; pass the per-source override through `start(sinks, config)`.
     const recoveryOverrides = recoveryOverridesForTransport(
       (ctx as { readonly chamberTransport?: unknown }).chamberTransport,
     )
@@ -234,12 +216,8 @@ class ClientRemoteService extends Service implements ClientRemote {
   }
 
   $stream<Item>(options: RemoteStreamOptions<Item>): RemoteStream<Item> {
-    // chamber (design 14 §D4): compose the caller's carrier hook with the page
-    // fact. Upstream plumbs `carrierFailed` but nothing consumes it, so with the
-    // retry patch (no terminal escape) a sustained carrier fault inside a live
-    // generation would be invisible. A generated stream nested inside this one
-    // reports at its own boundary too; the reporter dedupes per failure, so the
-    // fact is still published exactly once.
+    // chamber patch: upstream plumbs `carrierFailed` but nothing consumes it, so with
+    // the retry patch a sustained carrier fault would be invisible; publish the fact here.
     const carrierFailed = options.carrierFailed
     return new RemoteStream(this.connection, {
       ...options,
@@ -259,9 +237,8 @@ class ClientRemoteService extends Service implements ClientRemote {
   }
 
   get $host(): RemoteHostFacts {
-    // Identity-stable: readers (useSyncExternalStore snapshots, memo inputs)
-    // compare by reference, so a fresh object is minted only when the fact
-    // itself changed. isLoopback is fixed for the page lifetime.
+    // Identity-stable: readers compare by reference, so a fresh object is minted only
+    // when the fact changed. isLoopback is fixed for the page lifetime.
     const home = this.connection.generation.getSnapshot()?.host.home
     if (this.hostFacts === undefined || this.hostFacts.home !== home) {
       this.hostFacts = { home, isLoopback: this.connection.isLoopback }
@@ -392,13 +369,10 @@ class ClientRemoteService extends Service implements ClientRemote {
   }
 
   /**
-   * Mount one namespace's descriptor group with no visibility gap: a fresh
-   * namespace installs its whole group synchronously inside its fiber's
-   * apply, so a plugin parked on the namespace service never observes it
-   * without the methods the same contribution carries; an existing namespace
-   * takes the group in one synchronous step.
-   * @param name - Remote namespace.
-   * @param descriptors - Every contribution descriptor naming that namespace.
+   * Mount one namespace's descriptor group with no visibility gap: a fresh namespace
+   * installs its whole group synchronously inside its fiber's apply (so a plugin
+   * parked on the service never observes it without those methods); an existing
+   * namespace takes the group in one synchronous step.
    * @returns disposer unmounting the group and the namespace once empty.
    */
   private async installNamespace(
@@ -440,8 +414,8 @@ class ClientRemoteService extends Service implements ClientRemote {
           name,
           (direct, scoped, caller, args) => this.invokeMethod(direct, scoped, caller, args),
         )
-        // Same synchronous window as the service registration: a dependent the
-        // new service unparks runs only after the methods exist.
+        // Same synchronous window as the service registration: dependents unparked by
+        // the service run only after the methods exist.
         installed = installMethods(service, descriptors)
       },
     })
@@ -528,10 +502,9 @@ class ClientRemoteService extends Service implements ClientRemote {
       if (!result.ok) return { ok: false, error: rebuiltFailure(result.error) }
       return { ok: true, value: result.value }
     } catch (error) {
-      // Carrier throws (offline or abort) are outcomes of the call, not assembly
-      // faults, so they join the same error branch. A caller-aborted call is a
-      // cancellation even when the local throw wins the race against the wire
-      // round-trip, so it gets the same code the Host would have produced.
+      // Carrier throws are call outcomes, not assembly faults, so they join the same
+      // branch; a caller-aborted call is a cancellation even when the local throw wins
+      // the race against the wire round-trip.
       if (prepared.signal.aborted) return cancelledFailure(endpoint, error)
       return carrierFailure(endpoint, error)
     }
@@ -695,10 +668,8 @@ class RemoteNamespaceService extends Service {
 }
 
 /**
- * Install one descriptor group on a namespace service, unwinding the partial
- * group when a descriptor is refused.
- * @param service - Namespace service taking the methods.
- * @param descriptors - Descriptor group of one contribution.
+ * Install one descriptor group on a namespace service, unwinding the partial group
+ * when a descriptor is refused.
  * @returns per-descriptor records for the group disposer.
  */
 function installMethods(
@@ -827,21 +798,18 @@ function internalFailure(message: string): Extract<RemoteResult<never>, { readon
 }
 
 /**
- * Whether a caught value is a Remote failure this face delivered or threw.
- * The one consumer-facing discrimination point: marked instances carry their
- * Host code; anything else is a local fault the caller should let crash.
- * @param error - a caught value.
- * @returns true when the value narrows to RemoteFailure.
+ * Whether a caught value is a Remote failure this face delivered or threw: marked
+ * instances carry their Host code; anything else is a local fault. The one
+ * consumer-facing discrimination point.
  */
 export function isRemoteFailure(error: unknown): error is RemoteFailure {
   return remoteErrorOf(error) !== undefined
 }
 
 /**
- * Rebuild the wire failure as a local RemoteError instance so the error branch
- * carries a real Error and `throw result.error` keeps throw semantics. The code
- * is passed through verbatim without runtime validation: a code outside this
- * Client's merged map still surfaces as-is, so a newer Host stays readable.
+ * Rebuild the wire failure as a local RemoteError so the error branch carries a real
+ * Error. The code passes through verbatim: one outside this Client's merged map still
+ * surfaces as-is, so a newer Host stays readable.
  */
 function rebuiltFailure(error: { code: string; message: string; details: object }): RemoteFailure {
   return new RemoteError(error.code as never, error.message, error.details as never)

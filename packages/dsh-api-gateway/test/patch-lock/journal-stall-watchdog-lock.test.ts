@@ -28,7 +28,7 @@ function bodyOf(sourceText: string, start: string, end: string): string {
 
 const checkStall = bodyOf(journal, 'private async checkStall(): Promise<void> {', '  /** Open one sibling follow')
 const probe = bodyOf(journal, 'private async probeHostAdvance(): Promise<boolean> {', '  private async consume(')
-const open = bodyOf(journal, '  async open(request: PageRequest): Promise<void> {', '  /**\n   * Read and prepend one older page')
+const open = bodyOf(journal, '  async open(request: PageRequest): Promise<void> {', '  async prepend(request: PageRequest): Promise<void> {')
 const dispose = bodyOf(journal, '  dispose(): Promise<void> {', '  private publish(')
 
 test('the watchdog is armed only after the opening window is published and disarmed on dispose', () => {

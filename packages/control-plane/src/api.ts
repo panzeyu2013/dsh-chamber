@@ -1,56 +1,22 @@
 /**
  * REST HTTP surface for renderer/desktop clients (v4 management plane).
  *
- * Contract (04-control-plane-api-data.md §3, verbatim for renderer/desktop):
- * - GET /health → {ok:true, dsh:{status:'stopped'|'starting'|'ready'|'degraded'|
- *   'restarting'|'restart-exhausted'|'error', port, error?}}
- * - HEAD /health → the no-body twin of GET (same 200 + JSON headers; the
- *   owning server suppresses the body on HEAD), so a monitoring HEAD /health
- *   never 404s the public liveness probe. The gateway auth gate exempts
- *   HEAD /health for the same reason (dispatch isPublicRequest), so both
- *   shapes answer it identically.
- * - GET /api/connections → {connection:{id:'local', label?, accentColor?,
- *   status, dshPort?}} — the single local connection row projection
- * - POST /api/connections {kind:'local', label?, accentColor?} → idempotent
- *   start {connection, spawned:boolean}; 400 connection_kind_unsupported
- *   for any other kind (remote instances live in the desktop registry, 04
- *   §2.2); 503 dsh_not_ready when the spawn failed
- * - PATCH /api/connections/local {label?, accentColor?} → {connection};
- *   400 connection_invalid_input; 404 when the row is absent
- * - DELETE /api/connections/local → {stopped:true} (graceful stop, the row
- *   stays); 409 connection_busy while restarting
- * - GET /api/connections/local/writers → {quiescent, writers[], errors[]} —
- *   the writer-quiescence diagnosis (02 §3.4): which managed-host
- *   records keep the local instance from starting, why, and whether the
- *   explicit takeover could clear them. Read-only.
- * - POST /api/connections/local/reclaim → 清理并接管: clear this state
- *   directory's own stale/orphaned writers and start the local connection
- *   {reclaimed:[pid], connection, spawned}; 409 connection_busy (with detail)
- *   when a writer whose control plane is still alive remains
- * - GET /api/host/logs?port=&limit=&offset= → {port, lines, truncated}
- *   (the managed-host rolling log, 02 §3.8)
- * - /api/i/<id>/* — per-instance reverse proxy (03 §3 / 04 §4), mounted
- *   here, directly reachable without any session.
+ * Routes: GET/HEAD /health (HEAD is the no-body twin so a monitoring probe never 404s);
+ * GET /api/connections → the single local row projection; POST /api/connections (kind
+ * 'local' only; idempotent start); PATCH/DELETE /api/connections/local; GET
+ * /api/connections/local/writers (read-only writer-quiescence diagnosis); POST
+ * /api/connections/local/reclaim (explicit takeover); GET /api/host/logs; /api/i/<id>/*
+ * per-instance reverse proxy.
  *
- * v1 has no authentication surface: every /api/* route and /health are
- * anonymous (no cookie/bearer gate, no passkey/audit routes). The CORS
- * decision is the only cross-origin control.
+ * v1 has no authentication surface: every /api/* route and /health are anonymous. No
+ * session-business routes — session business belongs to the dsh frontend runtime,
+ * consumed through the instance proxy.
  *
- * No session-business routes (05 §3.2): sessions/projects/session/
- * interactions/events(SSE)/config/external/project-sessions — session
- * business belongs to the dsh frontend runtime, consumed through the
- * instance proxy.
- *
- * Browser-origin fence (same-origin + explicit allowlist — the only
- * cross-origin control in v1): an Origin-bearing request must match this
- * request's own loopback authority or the configured `corsOrigins` allowlist.
- * Merely being another localhost port grants no authority. Opaque origins
- * (`Origin: null`) are always rejected because
- * they can be produced by untrusted sandboxed/file documents; every
- * other origin is rejected with 403 before routing (blocking reads and
- * simple-request side effects). Unknown
- * paths answer 404 {error:'not_found'}; a body that is not JSON answers 400
- * {error:'bad_request'}.
+ * Browser-origin fence (the only cross-origin control): an Origin-bearing request must
+ * match this request's own loopback authority or the configured corsOrigins allowlist;
+ * another localhost port grants no authority, opaque `null` origins are always rejected,
+ * and any other origin answers 403 before routing. Unknown paths answer 404
+ * {error:'not_found'}; a non-JSON body answers 400 {error:'bad_request'}.
  */
 
 import type { InstanceProxy } from './instance-proxy.ts'
@@ -66,17 +32,15 @@ const MAX_HEALTH_EVENT_STREAMS = 32
 const MAX_HEALTH_EVENT_PENDING_FRAMES = 32
 
 /**
- * The minimal request surface the HTTP layer reads. Structural on purpose:
- * both the node:http IncomingMessage (the real server) and the test doubles
- * satisfy it.
+ * The minimal request surface the HTTP layer reads. Structural on purpose: both
+ * node:http IncomingMessage and test doubles satisfy it.
  */
 export interface ApiRequest {
   url?: string
   method?: string
   headers: Record<string, string | string[] | undefined>
-  /** Node's live peer/TLS facts. Optional so existing structural test doubles
-   * remain valid; an externally-bound composer must fail closed when they are
-   * absent instead of trusting forwarded headers. */
+  /** Node's live peer/TLS facts. Optional so structural test doubles remain valid; an
+   *  externally-bound composer must fail closed when absent instead of trusting headers. */
   socket?: { remoteAddress?: string; encrypted?: boolean }
   /** Original header pairs, used by external boundaries to reject duplicate
    * authority/forwarding headers that the normalized map may hide. */
@@ -86,17 +50,14 @@ export interface ApiRequest {
   removeListener(event: string, listener: (...args: any[]) => void): unknown
   once(event: string, fn: () => void): unknown
   off(event: string, fn: () => void): unknown
-  /** Abort the request stream (IncomingMessage.destroy) — socket release used
-   * to drop an oversized, still-streaming body after the error response is
-   * written. Optional so structural test doubles remain valid. */
+  /** Abort the request stream — socket release after an error response for an oversized
+   *  body. Optional so structural test doubles remain valid. */
   destroy?(): unknown
 }
 
 /**
- * The minimal response surface the HTTP layer writes. Structural on purpose:
- * both the node:http ServerResponse and the test doubles satisfy it.
- * `_corsHeaders` is this module's private per-request channel: the handle
- * entry stores the CORS decision and every write site spreads it.
+ * The minimal response surface the HTTP layer writes (node:http ServerResponse and test
+ * doubles). `_corsHeaders` is this module's private per-request channel.
  */
 export interface ApiResponse {
   writeHead(statusCode: number, headers?: Record<string, string | number | string[] | undefined>): unknown
@@ -108,8 +69,7 @@ export interface ApiResponse {
   setHeader(name: string, value: unknown): unknown
   destroy(): unknown
   headersSent: boolean
-  /** True once end() has been called (Node's ServerResponse; distinguishes a
-   *  normal end from a mid-stream client disconnect on 'close'). */
+  /** True once end() has been called (distinguishes a normal end from a mid-stream disconnect). */
   writableEnded: boolean
   _corsHeaders?: Record<string, string>
   /** Per-response CSP nonce minted by the owning HTTP server. */
@@ -117,10 +77,8 @@ export interface ApiResponse {
 }
 
 /**
- * The thrown-error shape the surface reads: plain Errors carrying optional
- * wire fields (code/statusCode/httpStatus/status/details) or a structured
- * {error: {status, code, message}} result object. Casts from `unknown`
- * catch blocks are runtime no-ops.
+ * The thrown-error shape the surface reads: plain Errors carrying optional wire fields
+ * (code/statusCode/status/details) or a structured {error: {status, code, message}} result.
  */
 export interface ApiError extends Error {
   code?: string
@@ -148,9 +106,8 @@ interface RouteHandler {
 }
 
 /**
- * The createApi dependency contract. Fields are optional exactly where the
- * surface guards them with `=== undefined` — a missing dep is a 404 route,
- * never a crash.
+ * The createApi dependency contract. Fields are optional exactly where the surface guards
+ * them with `=== undefined` — a missing dep is a 404 route, never a crash.
  */
 export interface ApiDeps {
   logger: Logger
@@ -162,8 +119,7 @@ export interface ApiDeps {
   getHealth(): { ok: boolean; dsh: { status: string; port: number; error?: string } }
   getConnectionRow(): ConnectionRowView | null
   startConnection(input: { kind: string; label?: string; accentColor?: string }): Promise<{ connection: ConnectionRowView | null; spawned: boolean }>
-  /** Writer-quiescence diagnosis (design 02 §3.4); read-only. Absent ⇒ the
-   *  route answers 501 (a surface without managed local hosts). */
+  /** Writer-quiescence diagnosis, read-only. Absent ⇒ the route answers 501. */
   localWriterDiagnosis?(): { quiescent: boolean; writers: unknown[]; errors: string[] }
   /** Explicit 清理并接管 (design 02 §3.4 / 04 §3.2). Absent ⇒ 501. */
   reclaimConnection?(): Promise<{ reclaimed: number[]; connection: ConnectionRowView | null; spawned: boolean }>
@@ -172,9 +128,8 @@ export interface ApiDeps {
   hostLogs?(query: { port?: number; limit?: number; offset?: number }): Promise<unknown>
   instanceProxy?: InstanceProxy
   /**
-   * Health-event subscription (GET /api/host/health-events, design 05 §3):
-   * the renderer never polls for local status — every machine transition is
-   * pushed as the /health `dsh` snapshot. Returns the unsubscribe.
+   * Health-event subscription: the renderer never polls for local status — every machine
+   * transition is pushed as the /health `dsh` snapshot. Returns the unsubscribe.
    */
   subscribeHealthEvents?(listener: (snapshot: { status: string; port: number | null; error: string | null }) => void): () => void
 }
@@ -195,18 +150,14 @@ interface ApiCorsDecision {
 export type ApiCorsEvaluator = (req: ApiRequest) => ApiCorsDecision
 
 /**
- * The per-request CORS decision: {allowed, headers?}. Same-origin/CLI requests
- * (no Origin) need no CORS headers at all; allowed cross-origin requests get
- * the reflected origin + credentials; disallowed origins get neither and
- * are rejected by handle() before routing.
- * @param req - the request carrying the Origin header.
- * @param allowlist - configured explicit origins (deps.corsOrigins).
+ * The per-request CORS decision: {allowed, headers?}. Same-origin/CLI requests need no CORS
+ * headers; allowed cross-origin requests get the reflected origin + credentials; disallowed
+ * origins get neither and are rejected before routing.
  */
 function corsFor(req: ApiRequest, allowlist: string[]) {
-  // Bind the browser-visible authority to this loopback service as well as
-  // the initiator Origin. A DNS-rebound page is same-origin from the
-  // browser's perspective and may omit Origin on reads, but its Host still
-  // names the attacker's domain and cannot be forged by page script.
+  // Bind the browser-visible authority to this loopback service as well as the initiator
+  // Origin. A DNS-rebound page is same-origin to the browser and may omit Origin on reads,
+  // but its Host still names the attacker's domain and cannot be forged by page script.
   const host = req.headers.host
   if (typeof host !== 'string') return { allowed: false }
   let requestOrigin: string
@@ -221,15 +172,13 @@ function corsFor(req: ApiRequest, allowlist: string[]) {
   }
   const origin = req.headers.origin
   if (origin === undefined) return { allowed: true }
-  // A single Origin value in practice; a malformed multi-value header is
-  // treated as disallowed (never reflected).
+  // A single Origin value in practice; a malformed multi-value header is treated as disallowed.
   const originValue = typeof origin === 'string' ? origin : ''
   let allowed = false
   try {
     const parsed = new URL(originValue)
-    // Origin is an origin, not an arbitrary URL whose `.origin` happens to
-    // match. Reject paths, credentials and non-canonical spellings instead
-    // of reflecting them into Access-Control-Allow-Origin.
+    // Origin is an origin, not an arbitrary URL whose `.origin` happens to match: reject
+    // paths, credentials and non-canonical spellings instead of reflecting them.
     allowed = originValue === parsed.origin
       && (parsed.origin === requestOrigin || allowlist.includes(parsed.origin))
   } catch {
@@ -245,14 +194,8 @@ function corsFor(req: ApiRequest, allowlist: string[]) {
   }
 }
 
-/**
- * Create the HTTP surface.
- * @param deps - {logger, getHealth, getConnectionRow, startConnection,
- *   updateConnectionProfile, stopConnection, hostLogs?, instanceProxy?,
- *   corsOrigins?}. `corsOrigins` is the explicit cross-origin allowlist;
- *   every route is anonymous (v1 has no authentication surface).
- * @returns {handle(req, res), getCorsHeaders(req)}.
- */
+/** Create the HTTP surface (routes anonymous; `deps.corsOrigins` is the explicit
+ *  cross-origin allowlist). Returns {handle(req, res), getCorsHeaders(req)}. */
 export function createApi(deps: ApiDeps) {
   const corsOrigins = Array.isArray(deps.corsOrigins) ? deps.corsOrigins : []
   const corsEvaluator = deps.corsEvaluator
@@ -272,9 +215,9 @@ export function createApi(deps: ApiDeps) {
   }
 
   /**
-   * Send a plain-error body in the unified wire shape (design 04 D1):
-   * `{error: string, code?: string}` — 4xx carries a displayable message;
-   * 5xx never echoes upstream details (masked) except the safe dsh_not_ready.
+   * Send a plain-error body in the unified wire shape: `{error: string, code?: string}` —
+   * 4xx carries a displayable message; 5xx never echoes upstream details (masked) except the
+   * safe dsh_not_ready.
    */
   function jsonError(res: ApiResponse, status: number, errorBody: string | { code?: string; message?: string; detail?: unknown }) {
     let message: string
@@ -292,9 +235,7 @@ export function createApi(deps: ApiDeps) {
       message = 'Internal server error'
       if (code === undefined) code = 'internal'
     }
-    // A structured detail (the writer-quiescence blockers on a 409)
-    // rides along with the code; every error without one keeps the exact
-    // two-field shape.
+    // A structured detail (the writer-quiescence blockers on a 409) rides along with the code.
     const detail = typeof errorBody === 'object' && errorBody !== null && errorBody.detail !== undefined
       ? { detail: errorBody.detail }
       : {}
@@ -308,9 +249,8 @@ export function createApi(deps: ApiDeps) {
     let oversize = false
     let idleTimer: NodeJS.Timeout | undefined
     let idleExpired = false
-    // Per-chunk idle timeout: a slow body must not hold a
-    // connection slot for the whole 35s requestTimeout — management bodies
-    // are small JSON, 10s of silence means the client is gone.
+    // Per-chunk idle timeout: a slow body must not hold a connection slot for the whole request
+    // timeout — management bodies are small JSON, so 10s of silence means the client is gone.
     const armIdle = (): void => {
       if (idleTimer !== undefined) clearTimeout(idleTimer)
       idleTimer = setTimeout(() => {
@@ -326,9 +266,8 @@ export function createApi(deps: ApiDeps) {
         armIdle()
         size += chunk.length
         if (size > MAX_BODY_BYTES) {
-          // Keep draining the remainder so a keep-alive socket
-          // (maxRequestsPerSocket=1000) is not left with unread body bytes
-          // that would be misparsed as the next request line.
+          // Drain the remainder so a keep-alive socket is not left with unread body bytes that
+          // would be misparsed as the next request line.
           oversize = true
           continue
         }
@@ -349,11 +288,9 @@ export function createApi(deps: ApiDeps) {
 
   /** Resolve a route from {pathname, method}; returns {handler} or null. */
   function route(method: string | undefined, segments: string[], res: ApiResponse, req: ApiRequest): RouteHandler | null {
-    // /health is the public liveness probe (04 §3): HEAD is accepted as the
-    // no-body twin of GET (same 200 + JSON headers; the node:http owner
-    // suppresses the body on HEAD responses). An unmapped method would fall
-    // to the generic 404, which is why a monitoring HEAD /health must not be
-    // treated as unknown — the gateway auth gate exempts HEAD /health too.
+    // /health is the public liveness probe: HEAD is accepted as the no-body twin of GET (the
+    // node:http owner suppresses the body). An unmapped method would fall to the generic 404,
+    // so HEAD /health must not be treated as unknown; the gateway auth gate exempts it too.
     if (segments[0] === 'health' && segments.length === 1 && (method === 'GET' || method === 'HEAD')) {
       return async () => json(res, 200, deps.getHealth())
     }
@@ -365,12 +302,10 @@ export function createApi(deps: ApiDeps) {
             return jsonError(res, 503, { code: 'resource_exhausted', message: 'too many health-event streams' })
           }
           activeHealthEventStreams += 1
-          // SSE push channel (design 05 §3): current snapshot first, then
-          // every machine transition; keepalive keeps the stream alive
-          // through idle browsers. Backpressure is bounded per client and
-          // drained in order; write failures, overflow, or client close tear
-          // the subscription down (a slow/dead socket must never escape into
-          // the state machine or grow memory without bound).
+          // SSE push channel: current snapshot first, then every machine transition; keepalive
+          // through idle browsers. Backpressure is bounded per client and drained in order;
+          // write failures, overflow or client close tear the subscription down (a slow/dead
+          // socket must never escape into the state machine or grow memory without bound).
           res.writeHead(200, {
             'content-type': 'text/event-stream',
             'cache-control': 'no-store',
@@ -412,9 +347,8 @@ export function createApi(deps: ApiDeps) {
               return
             }
             try {
-              // Node accepted this frame even when write() returns false; do
-              // not enqueue it twice. Pause only subsequent frames until the
-              // socket drains.
+              // Node accepted this frame even when write() returns false; pause only subsequent
+              // frames until the socket drains.
               if (!res.write(frame)) {
                 backpressured = true
                 res.once('drain', flushPending)
@@ -438,13 +372,11 @@ export function createApi(deps: ApiDeps) {
             }
             writeFrame(`data: ${JSON.stringify(payload)}\n\n`)
           }
-          // Node 16+: IncomingMessage 'close' fires as soon as the request
-          // body is consumed (immediately for a bodyless GET) — not on client
-          // disconnect — so a req listener would tear this SSE stream down
-          // right after it opens. Detect real disconnects on the response
-          // leg: 'close' fires on connection teardown, and writableEnded
-          // separates a normal end() from an aborted one (teardown is
-          // idempotent via tornDown).
+          // IncomingMessage 'close' fires as soon as the request body is consumed (immediately
+          // for a bodyless GET), not on client disconnect, so a req listener would tear this SSE
+          // stream down right after it opens. Detect real disconnects on the response leg:
+          // 'close' fires on teardown and writableEnded separates a normal end from an abort
+          // (teardown is idempotent via tornDown).
           res.on('close', () => { if (!res.writableEnded) teardown() })
           const health = deps.getHealth()
           send({ status: health.dsh.status, port: health.dsh.port, error: health.dsh.error ?? null })
@@ -455,15 +387,13 @@ export function createApi(deps: ApiDeps) {
             teardown()
             return
           }
-          // A custom subscription seam may synchronously close the request.
-          // Do not strand a listener when teardown ran before assignment.
+          // A custom subscription seam may synchronously close the request; do not strand a listener.
           if (tornDown) {
             releaseSubscription()
             return
           }
           keepalive = setInterval(() => {
-            // A keepalive has no state value and must not consume the bounded
-            // queue while real state frames are waiting for drain.
+            // A keepalive has no state value and must not consume the bounded queue while state frames wait.
             if (!tornDown && !backpressured) writeFrame(': keepalive\n\n')
           }, 20_000)
         }
@@ -479,8 +409,7 @@ export function createApi(deps: ApiDeps) {
         if (b === undefined && method === 'POST') {
           return async (body: any) => {
             if (body === null || typeof body !== 'object') return jsonError(res, 400, 'bad_request')
-            // Design 04 §3.2: only kind:'local' is managed on this surface —
-            // remote instances live in the desktop main-process registry.
+            // Only kind:'local' is managed here — remote instances live in the desktop registry.
             if (body.kind !== 'local') {
               return jsonError(res, 400, { code: 'connection_kind_unsupported', message: 'only kind "local" is supported on this surface' })
             }
@@ -496,8 +425,7 @@ export function createApi(deps: ApiDeps) {
             } catch (error) {
               const err = error as ApiError
               if (err.code === 'connection_busy') {
-                // The structured blockers travel with the 409 so the UI can
-                // name the writer and offer the takeover.
+                // The structured blockers travel with the 409 so the UI can name the writer and offer the takeover.
                 return jsonError(res, 409, {
                   code: err.code,
                   message: err.message,
@@ -566,9 +494,8 @@ export function createApi(deps: ApiDeps) {
         return null
       }
       if (a === 'i' && typeof b === 'string') {
-        // Per-instance reverse proxy (03 §3 / 04 §4): raw body passthrough
-        // (ownBody — the carrier 10MiB reader is bypassed; the proxy enforces
-        // its own 300MiB cap), reachable without any session (v1).
+        // Per-instance reverse proxy: raw body passthrough (the carrier reader is bypassed; the
+        // proxy enforces its own cap), reachable without any session.
         if (deps.instanceProxy === undefined) return null
         const proxy = deps.instanceProxy
         const instanceHandler: RouteHandler = async () => {
@@ -613,8 +540,7 @@ export function createApi(deps: ApiDeps) {
             const err = error as ApiError
             if (err.code === 'not_found') return jsonError(res, 404, 'not_found')
             if (err.code === 'invalid_argument') return jsonError(res, 400, { code: err.code, message: err.message })
-            // 候选隔离（design 18 §3.4）：激活探针裁决前的本地别名读取是
-            // 内部事实，显式 503，绝不静默返回空日志。
+            // 候选隔离：激活探针裁决前的本地别名读取是内部事实，显式 503，绝不静默返回空日志。
             if (err.code === 'quarantined') return jsonError(res, 503, { code: err.code, message: err.message })
             return jsonError(res, 500, 'internal')
           }
@@ -628,18 +554,16 @@ export function createApi(deps: ApiDeps) {
   async function handle(req: ApiRequest, res: ApiResponse) {
     const cors = corsHeaders(req)
     res._corsHeaders = cors.headers
-    // Missing CORS response headers only prevents a hostile page from
-    // reading the result; it does not stop a safelisted POST from mutating
-    // the anonymous loopback API. Enforce the decision before routing/body
-    // handling so it is a trust boundary rather than a presentation hint.
+    // Missing CORS response headers only prevents a hostile page from reading the result; it
+    // does not stop a safelisted POST from mutating the anonymous loopback API. Enforce the
+    // decision before routing/body handling so it is a trust boundary, not a presentation hint.
     if (!cors.allowed) {
       jsonError(res, 403, { code: 'origin_forbidden', message: 'request origin is not allowed' })
       return
     }
     let url: URL
     try {
-      // Request targets are origin-form here; Host is a security input already
-      // handled by corsHeaders, never a parser base for routing.
+      // Request targets are origin-form here; Host is a security input already handled by corsHeaders.
       const rawTarget = req.url ?? '/'
       if (!rawTarget.startsWith('/') || rawTarget.startsWith('//')
         || rawTarget.includes('\\') || rawTarget.includes('#')) throw new Error('non-origin-form target')

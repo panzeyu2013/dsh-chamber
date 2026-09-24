@@ -12,7 +12,8 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { sourceSessionFactsMode } from '../../src/session-facts-mode.ts'
 
-const APP = readFileSync(fileURLToPath(new URL('../../src/App.tsx', import.meta.url)), 'utf8')
+// 投影本体（deriveServers/entry 字面量）已迁到 host/servers.ts；锁跟随实现落点。
+const SERVERS = readFileSync(fileURLToPath(new URL('../../src/host/servers.ts', import.meta.url)), 'utf8')
 const SIDEBAR = readFileSync(
   fileURLToPath(new URL('../../../dsh-chamber-client-core/src/aggregate-store.ts', import.meta.url)),
   'utf8',
@@ -42,24 +43,24 @@ test('stale or unserviceable facts can never be reported as full', () => {
   assert.equal(sourceSessionFactsMode(snapshot({ verdict: 'legacy-gateway', degradation: 'watcher-disabled' })), 'disabled')
 })
 
-test('the App projects the mode onto every aggregate entry, after the entry literal', () => {
-  assert.match(APP, /const factsMode = sourceSessionFactsMode\(sessionFacts\[id\]\)\n\s*if \(factsMode !== undefined\) entry\.sessionFacts = factsMode/)
+test('the source projection maps the mode onto every aggregate entry, after the entry literal', () => {
+  assert.match(SERVERS, /const factsMode = sourceSessionFactsMode\(sessionFacts\[id\]\)\n\s*if \(factsMode !== undefined\) entry\.sessionFacts = factsMode/)
   // 位置纪律：赋值必须在 entry 字面量之后（TDZ），且在 push 帮助函数内（local/远端/网关全覆盖）。
-  const entryLiteral = APP.indexOf('const entry: ChamberServerAggregate = {')
-  const assignment = APP.indexOf('entry.sessionFacts = factsMode')
+  const entryLiteral = SERVERS.indexOf('const entry: ChamberServerAggregate = {')
+  const assignment = SERVERS.indexOf('entry.sessionFacts = factsMode')
   assert.ok(entryLiteral > 0 && assignment > entryLiteral, 'assignment must come after the entry literal')
 })
 
 test('投影缺席不得折成 idle：App 必须发布侧栏的 SOURCE_PHASE_UNKNOWN（跨包单源）', () => {
   assert.match(SIDEBAR, /export const SOURCE_PHASE_UNKNOWN = 'unknown'/, '常量必须由侧栏 shared 单源导出')
-  assert.match(APP, /SOURCE_PHASE_UNKNOWN,/, 'App 必须 import 该常量，而不是本地再写一个字面量')
+  assert.match(SERVERS, /SOURCE_PHASE_UNKNOWN,/, '投影模块必须 import 该常量，而不是本地再写一个字面量')
   assert.match(
-    APP,
+    SERVERS,
     /remoteStatus\[statusKey\]\?\.phase \?\? SOURCE_PHASE_UNKNOWN/,
     '远端投影缺席必须发布 unknown——idle 是"手动断开"的合法事实，折叠会把未知说成未连接',
   )
   assert.equal(
-    /remoteStatus\[statusKey\]\?\.phase \?\? 'idle'/.test(APP),
+    /remoteStatus\[statusKey\]\?\.phase \?\? 'idle'/.test(SERVERS),
     false,
     "旧的 ?? 'idle' 折叠不得复活",
   )

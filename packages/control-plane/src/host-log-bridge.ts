@@ -1,66 +1,31 @@
 /**
  * Managed-dsh application-log bridge — opt-in forensic switch (control-plane half).
  *
- * THE GAP this module closes: the dsh application logs through the Cordis
- * built-in logger
- * (`ctx.logger.*`, 300+ call sites across the runtime), but the pinned runtime
- * registers NO exporter for it — `@deepseek-ai/cordis`'s LoggerService ships
- * only an in-memory ring buffer, and the upstream console exporter
- * (`@deepseek-ai/cordis-plugin-logger-console`) is an upstream devDependency
- * that is NOT installed in the chamber-managed runtime (chamber adds no
- * dependencies). So `ctx.logger` output never reaches stdout/stderr, and
- * `<stateDir>/host-logs/<port>.log` holds only readiness announcements —
- * exactly the "session opened and then nothing" blind spot.
+ * The dsh application logs through the Cordis built-in logger, but the pinned runtime
+ * registers no exporter for it (the upstream console exporter is a devDependency not
+ * installed in the chamber-managed runtime), so `ctx.logger` output never reaches
+ * stdout/stderr and host-logs/<port>.log holds only readiness announcements.
  *
- * THE BRIDGE: a tiny generated Cordis plugin (no imports — it uses the
- * documented `ctx.logger` invite/exporter API) that exports every accepted log
- * message to the host process's stderr. stderr is deliberate: the spawn path
- * already captures both child pipes, and stderr keeps application lines away
- * from the stdout-only `dsh web:` launch-token scanner (spawn-dsh.ts). Each
- * line therefore rides the EXISTING pipeline: line-buffered split →
- * `?token=` redaction → `{"ts","stream","line"}` JSONL in host-logs/<port>.log
- * (host-logs.ts, bounded by MAX_LOG_LINES/COMPACT_KEEP_LINES). That ring is
- * SHARED with the spawn diagnostics: enabling the bridge at the conservative
- * `warn` threshold exports error+info+warn, so ordinary application INFO traffic
- * evicts the `dsh web: <url>?token=…` readiness line from disk sooner. Nothing
- * breaks (the launch token is captured in memory by the stdout scanner, never
- * re-read from the log), but a post-hoc log read may no longer contain it.
+ * The bridge is a tiny generated Cordis plugin (no imports; documented `ctx.logger`
+ * invite API) that exports every accepted message to stderr: stderr keeps application
+ * lines away from the stdout-only `dsh web:` launch-token scanner, and each line rides
+ * the existing pipeline (line buffering → `?token=` redaction → JSONL in the shared
+ * host-logs ring). Enabling it at the conservative `warn` threshold means INFO traffic
+ * can evict the readiness line from disk sooner — the token itself is captured in memory
+ * by the scanner, never re-read from the log.
  *
- * The exporter is NOT mounted through `LoggerService.exporter()`. That helper is
- * itself `this.ctx.effect(...)`, and its disposer deletes
- * `exporters.delete(this._snExporter)` — the CURRENT counter, not its own id
- * (pinned logger.ts:232-237). Two consequences, both verified against the pinned
- * source: unloading ANY exporter's fiber removes whichever
- * exporter registered last, and unloading THIS plugin would remove an unrelated
- * exporter while possibly leaving ours installed. The generated module therefore
- * registers straight into the public `exporters` Map under a Symbol key (counter
- * keys are numbers, so neither side can touch the other's entry) and removes
- * exactly its own key on unload. `ctx.logger.exporter()` remains the fallback for
- * a host without that public Map. The vendor contract this depends on is pinned
- * by a test that reads the pinned Cordis source, not by an import that self-skips
- * in CI.
+ * The plugin is NOT mounted through `LoggerService.exporter()`: that helper's disposer
+ * deletes the CURRENT counter, not its own id, so unloading any exporter's fiber removes
+ * whichever registered last. It registers straight into the public `exporters` Map under
+ * a Symbol key (counter keys are numbers) and removes exactly its own key on unload;
+ * `ctx.logger.exporter()` remains the fallback without that Map.
  *
- * THE SWITCH: `DSH_CHAMBER_HOST_LOG_LEVEL` (HOST_LOG_BRIDGE_ENV). Unset/empty/
- * off/0/false/no ⇒ NO bridge row, NO generated file: the overlay stays
- * byte-identical to the bridge-disabled shape. A level name (error|info|warn|
- * debug — the Cordis verbosity thresholds, see HOST_LOG_BRIDGE_LEVELS) or an
- * enable token (on/true/1/yes, or any unrecognized value) mounts the bridge at
- * a CONSERVATIVE default level (`warn`, i.e. everything except debug) so a typo
- * cannot flood the disk. Debug/trace verbosity is never a default.
- *
- * WHY A GENERATED SEED ENTRY (and not a CHAMBER_HOST_PACKAGES row): the bridge
- * exposes no Typert Remote domain, so it must not join the host-package
- * registry — that registry's `probe.method` values are the activation-gate's
- * expected domain set, and a row without a live Remote would fail the
- * instance's activation probe. It is instead one more seed entry: the same
- * `ensureSeedPackage` copy discipline, the same `--patch` overlay renderer, the
- * same loader-id/name conflict checks — just not a managed plugin surface. The
- * loader id/package name still obey the canonical chamber seed namespace
- * (`dsh-chamber-seed-<loader-id>`), pinned fail-fast at module load.
- *
- * The generated source lives under <stateDir>/host-log-bridge-package (chamber
- * state, 0600 private writes) and is content-compared; a level change rewrites
- * it and the per-spawn seed refreshes the profile copy.
+ * `DSH_CHAMBER_HOST_LOG_LEVEL` switches it: unset/empty/off/0/false/no ⇒ no bridge row and
+ * no generated file (the overlay stays byte-identical to the disabled shape); a level name
+ * or enable token mounts at the conservative `warn` default so a typo cannot flood the
+ * disk. It is one more SEED ENTRY, not a CHAMBER_HOST_PACKAGES row — it exposes no Typert
+ * Remote domain, and such a row would fail the activation probe. The generated source
+ * lives under <stateDir>/host-log-bridge-package and is content-compared.
  */
 
 import { join } from 'node:path'
@@ -76,11 +41,9 @@ import {
 } from './private-file.ts'
 
 /**
- * The opt-in switch. Read from the control-plane process environment (the
- * spawned host inherits it) at every managed spawn; see the module header for
- * the accepted values. Deliberately NOT `DSH_GATEWAY_*`: that prefix is
- * stripped from the child environment on purpose (sanitizeManagedDshEnv), and
- * this value is not a credential.
+ * The opt-in switch. Read from the control-plane process environment (the spawned host
+ * inherits it) at every managed spawn. Deliberately NOT `DSH_GATEWAY_*`: that prefix is
+ * stripped from the child environment (sanitizeManagedDshEnv), and this is not a credential.
  */
 export const HOST_LOG_BRIDGE_ENV = 'DSH_CHAMBER_HOST_LOG_LEVEL'
 
@@ -96,16 +59,14 @@ export const HOST_LOG_BRIDGE_INSERT: HostPackageInsert = {
   name: HOST_LOG_BRIDGE_PACKAGE_NAME,
 }
 
-// Fail-fast naming pin, matching the seed registry's own load-time discipline:
-// a row whose name is not `dsh-chamber-seed-<id>` would seed a profile
+// Fail-fast naming pin: a row whose name is not `dsh-chamber-seed-<id>` would seed a profile
 // directory the overlay row cannot resolve.
 assertHostSeedInsertNaming([HOST_LOG_BRIDGE_INSERT])
 
 /**
- * Cordis logger verbosity thresholds (LoggerService `_method` levels): a
- * message is exported when `message.level <= configured`. So `error` (0) is
- * errors only, `info` (1) adds info, `warn` (2) adds warnings, `debug` (3) is
- * everything. The numeric value is what the generated plugin bakes in.
+ * Cordis logger verbosity thresholds (LoggerService `_method` levels): a message is
+ * exported when `message.level <= configured` — error(0) errors only, info(1), warn(2),
+ * debug(3) everything. The numeric value is baked into the generated plugin.
  */
 export const HOST_LOG_BRIDGE_LEVELS = {
   error: 0,
@@ -133,17 +94,14 @@ export interface HostLogBridgeSetting {
   readonly levelName: HostLogBridgeLevelName
   /** The effective Cordis threshold baked into the generated plugin. */
   readonly level: number
-  /** The raw value when it was neither a level name nor an enable token — the
-   *  caller warns loudly; the bridge still mounts at `levelName`. */
+  /** The raw value when it was neither a level name nor an enable token; the caller warns loudly. */
   readonly unrecognized?: string
 }
 
 /**
- * Parse the switch value. Absent/`off`-family ⇒ disabled; a level name ⇒ that
- * level; an enable token or an unrecognized non-empty value ⇒ enabled at
- * DEFAULT_HOST_LOG_BRIDGE_LEVEL (with `unrecognized` set for the loud warn).
- * @param raw - the environment value (or undefined).
- * @returns the setting; never throws — a bad value must not break a spawn.
+ * Parse the switch value. Absent/`off`-family ⇒ disabled; a level name ⇒ that level; an
+ * enable token or unrecognized non-empty value ⇒ enabled at
+ * DEFAULT_HOST_LOG_BRIDGE_LEVEL. Never throws — a bad value must not break a spawn.
  */
 export function parseHostLogBridgeEnv(raw: string | undefined): HostLogBridgeSetting {
   const value = typeof raw === 'string' ? raw.trim().toLowerCase() : ''
@@ -183,17 +141,11 @@ function hostLogBridgePackageManifest(): string {
 }
 
 /**
- * The generated Cordis plugin source.
- *
- * No imports: the module must resolve while loaded from the managed profile,
- * whose node_modules holds only the seeded chamber packages (bare
- * `@deepseek-ai/*` specifiers are NOT resolvable from there). Formatting is
- * delegated to the host's own `Logger.format` through the documented
- * `ctx.logger(name)` invite API, with a minimal fallback so a formatter change
- * degrades to plain text instead of dropping evidence.
- * @param level - the Cordis threshold baked in (see HOST_LOG_BRIDGE_LEVELS).
- * @param levelName - the level's name, for the mount announcement.
- * @returns the ESM source of the bridge plugin.
+ * The generated Cordis plugin source. No imports: the module must resolve while loaded
+ * from the managed profile, whose node_modules holds only the seeded chamber packages.
+ * Formatting delegates to the host's own `Logger.format` through the documented
+ * `ctx.logger(name)` API, with a minimal fallback so a formatter change degrades to plain
+ * text instead of dropping evidence.
  */
 export function hostLogBridgeModuleSource(level: number, levelName: HostLogBridgeLevelName): string {
   if (!Number.isInteger(level) || level < 0 || level > 3) {
@@ -323,13 +275,9 @@ function writeIfChanged(path: string, content: string): boolean {
 }
 
 /**
- * Materialize the generated bridge package under <stateDir> and return its
- * source directory (idempotent: unchanged files are left alone, so a spawn does
- * not churn inodes). The returned directory has the exact shape
- * `ensureSeedPackage` consumes (package.json + dist/index.js).
- * @param stateDir - the control-plane state root.
- * @param setting - the parsed switch value (already enabled).
- * @returns the generated package's source directory.
+ * Materialize the generated bridge package under <stateDir> and return its source
+ * directory (idempotent: unchanged files are left alone). The directory has the exact
+ * shape `ensureSeedPackage` consumes (package.json + dist/index.js).
  */
 export function ensureHostLogBridgeSource(stateDir: string, setting: HostLogBridgeSetting): string {
   const sourceDir = join(stateDir, HOST_LOG_BRIDGE_SOURCE_DIRNAME)
@@ -344,16 +292,10 @@ export function ensureHostLogBridgeSource(stateDir: string, setting: HostLogBrid
 }
 
 /**
- * Plan the bridge seed entry for one spawn: null while the switch is off (the
- * overlay then stays byte-identical to the bridge-disabled overlay), otherwise the
- * canonical seed entry whose source has just been (re)materialized.
- *
- * The environment is passed in explicitly — production passes `process.env`
- * from the plane's own spawn-thunk wiring, so a synthetic/test caller never
- * accidentally picks up the ambient shell.
- * @param input - {stateDir, env, warn}: state root, environment snapshot, and
- *   the loud sink for an unrecognized switch value.
- * @returns the seed entry, or null when the bridge is disabled.
+ * Plan the bridge seed entry for one spawn: null while the switch is off (the overlay then
+ * stays byte-identical to the disabled overlay), otherwise the canonical seed entry whose
+ * source has just been (re)materialized. The environment is passed in explicitly so a
+ * synthetic caller never picks up the ambient shell.
  */
 export function planHostLogBridge(input: {
   stateDir: string
@@ -373,8 +315,7 @@ export function planHostLogBridge(input: {
     kind: 'host',
     source: 'packaged',
     sourceDir: ensureHostLogBridgeSource(input.stateDir, setting),
-    // No Typert Remote domain: the bridge is chamber-internal diagnostics and
-    // deliberately carries no activation-probe coupling (see the module header).
+    // No Typert Remote domain: chamber-internal diagnostics with no activation-probe coupling.
     probeDomains: [],
   }
 }

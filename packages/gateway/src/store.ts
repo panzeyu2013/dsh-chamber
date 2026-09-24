@@ -1,33 +1,16 @@
 /**
- * Gateway persistence (design 17 §12): the gateway's OWN state, physically
- * separate from dsh's $DSH_HOME. Credentials (token hash, jwt-secret,
- * password verifier) go through a 0600 atomic-file discipline (never
- * plaintext in a store doc, S5/S8/S15).
+ * Gateway persistence: the gateway's OWN state, physically separate from dsh's
+ * $DSH_HOME; credentials follow a 0600 atomic-file discipline — never plaintext
+ * in a store doc.
  *
- * Credential model (runtime credential management):
- *
- *  - Credentials are SERVER STATE, not deployment config: config seeds them at
- *    startup, the runtime change API mutates them, and they persist across
- *    restarts. Each credential file is a schemaVersion-2 JSON envelope:
+ * Credentials are SERVER STATE, not deployment config: each file is a
+ * schemaVersion-2 JSON envelope
  *    `{schemaVersion:2, source:'config'|'runtime', updatedAt:<epoch ms>,
  *    verifier|hash:'scrypt$salt$hash'}`.
- *  - `source:'config'` records are re-asserted (or removed) by config seeding
- *    on every startup; `source:'runtime'` records are authoritative and config
- *    seeding never overwrites them (design 17 §7). The write primitives below
- *    never decide that policy — seeding/rotation policy lives in auth.ts
- *    (`seedCredentialsFromConfig`, rotate-first discipline). Legacy v1 files
- *    (bare `scrypt$salt$hash` for `password-credential`, `{"hash":...}` for
- *    `tokens.json`) read as `source:'config'` (updatedAt = file mtime) and
- *    migrate to v2 on the next write.
- *  - The state ROOT is owned by the caller's state-root writer lease (R2;
- *    control-plane/src/state-root-lease.ts): createGateway acquires
- *    `<stateDir>/owner.json` before the first store write and passes the same
- *    handle here. `createGatewayStore` only asserts the handle's root/scope
- *    and that it is still current — it never acquires, reacquires or releases
- *    a lease, and it is no longer a second state lock.
- *
- * The store owns credentials only, and is never authoritative over dsh facts.
- */
+ * `source:'config'` records are re-asserted by seeding on every startup;
+ * `source:'runtime'` records are authoritative and never overwritten (legacy v1
+ * files read as config-sourced and migrate on write). The state ROOT is the caller's
+ * writer lease — this module only asserts its root/scope. */
 
 import { lstatSync } from 'node:fs'
 import { join, resolve } from 'node:path'
@@ -43,24 +26,17 @@ import { readPrivateEntryOrNull } from './private-read.ts'
 
 export interface GatewayStoreLogger { log(...args: unknown[]): void; warn(...args: unknown[]): void; error(...args: unknown[]): void }
 
-/** Where the current credential came from: deployment-config seeding vs a
- * runtime API change. `config`-sourced credentials are re-asserted (or
- * removed) by seeding on every restart; `runtime`-sourced credentials are
- * authoritative server state that seeding never overwrites. */
+/** Credential provenance: `config` records are re-asserted by seeding; `runtime` records stay authoritative. */
 export type CredentialSource = 'config' | 'runtime'
 
-/** A persisted credential: the salted scrypt verifier plus its provenance and
- * last-write time (epoch ms). `verifier` is the raw `scrypt$salt$hash` value
- * for both the password-credential and tokens.json files. */
+/** A persisted credential: the raw `scrypt$salt$hash` verifier plus provenance and epoch-ms write time. */
 export interface CredentialRecord {
   verifier: string
   source: CredentialSource
   updatedAt: number
 }
 
-/** Non-secret per-dimension credential projection (S5): provenance +
- * last-write time ONLY — the verifier/hash never leaves the file. `null`
- * means the dimension currently has no credential. */
+/** Non-secret projection: provenance + last-write time ONLY; `null` means unset. The verifier/hash never leaves the file. */
 export interface CredentialProjection {
   password: { set: true; source: CredentialSource; updatedAt: number } | null
   token: { set: true; source: CredentialSource; updatedAt: number } | null
@@ -73,11 +49,9 @@ function readSecret(file: string): string | null {
   return readSecretFile(file).value
 }
 
-/** `readSecret` plus the stat mtime of the opened file (used to timestamp
- * legacy v1 credentials whose files carry no `updatedAt`). With
- * `migrateMode:false` skips the explicit legacy fchmod but still requires
- * 0600 — the lock-free auth-status projection is genuinely read-only and a
- * loose credential file is rejected rather than silently accepted. */
+/** `readSecret` plus the opened file's mtime (legacy v1 credentials carry no
+ * `updatedAt`). `migrateMode:false` skips the fchmod but still requires 0600 —
+ * a loose credential file is rejected, never silently accepted. */
 function readSecretFile(file: string, migrateMode = true): { value: string | null; mtimeMs: number; identity: PrivateFileIdentity | null } {
   let read: { value: string; mtimeMs: number; identity: PrivateFileIdentity } | null
   try {
@@ -97,19 +71,14 @@ function readSecretFile(file: string, migrateMode = true): { value: string | nul
   }
 }
 
-/** The single credential-document parse: the runtime readers and the
- * read-only CLI projection each carry the v2-envelope + legacy-v1 rules
- * through this one function. `corrupt-v2` and the legacy outcomes let each
- * caller keep its exact warning text while the parse itself exists once. */
+/** The single v2-envelope + legacy-v1 parse shared by the runtime readers and the CLI projection. */
 type CredentialParse =
   | { kind: 'record'; record: CredentialRecord }
   | { kind: 'absent' }
   | { kind: 'corrupt-v2' }
-  /** tokens.json: a document that is neither a valid v2 envelope nor a usable
-   * legacy `{"hash"}` object (unparseable JSON, non-object, or missing hash). */
+  /** tokens.json: neither a valid v2 envelope nor a usable legacy `{"hash"}`. */
   | { kind: 'legacy-unreadable' }
-  /** password-credential: a document that is neither a v2 envelope nor a bare
-   * legacy `scrypt$…` verifier. */
+  /** password-credential: neither a v2 envelope nor a bare legacy `scrypt$…`. */
   | { kind: 'unrecognized' }
 
 function parseCredential(text: string | null, field: 'verifier' | 'hash', mtimeMs: number): CredentialParse {
@@ -127,8 +96,7 @@ function parseCredential(text: string | null, field: 'verifier' | 'hash', mtimeM
   if (parsed === null || typeof parsed !== 'object') return { kind: 'corrupt-v2' }
   const doc = parsed as { schemaVersion?: unknown; source?: unknown; updatedAt?: unknown; verifier?: unknown; hash?: unknown }
   if (doc.schemaVersion !== 2) {
-    // Legacy v1 tokens.json `{"hash": …}` → config-sourced, file mtime as the
-    // write time; the password face never had a v1 JSON shape.
+    // Legacy v1 tokens.json `{"hash": …}` → config-sourced, mtime as write time.
     if (field === 'hash') {
       const hash = doc.hash
       if (typeof hash === 'string' && hash !== '') {
@@ -148,15 +116,11 @@ function parseCredential(text: string | null, field: 'verifier' | 'hash', mtimeM
 }
 
 /**
- * Read-only, LOCK-FREE credential projection for CLI/ops use (`gateway auth
- * status`): reads `password-credential` and `tokens.json` with the same
- * no-follow/inode/0600 read discipline as the store internals, but never
- * acquires the stateDir exclusive lock and never writes or migrates any
- * credential state. Legacy v1 files (bare `scrypt$…` password / `{"hash":…}`
- * token) project as `source:'config'` with the file mtime, exactly like the
- * store's own reads. Corrupt, unreadable, or missing files project as `null`
- * — this function never throws (a CLI status must not fail on a damaged
- * stateDir).
+ * Read-only, LOCK-FREE credential projection for CLI/ops use: the same
+ * no-follow/inode/0600 read discipline as the store internals, but no stateDir
+ * lock and no write or migration. Corrupt, unreadable or missing files project
+ * as `null` — this function never throws (a CLI status must not fail on a
+ * damaged stateDir).
  */
 export function readCredentialProjection(stateDir: string): CredentialProjection {
   return {
@@ -165,16 +129,12 @@ export function readCredentialProjection(stateDir: string): CredentialProjection
   }
 }
 
-/** Parse one credential file into its non-secret projection through the
- * shared {@link parseCredential} (the same v2-envelope + legacy-v1 rules the
- * store's runtime readers use). Returns null for missing/corrupt/unreadable
- * files — never throws. */
+/** Parse one credential file into its non-secret projection via the shared {@link parseCredential}; never throws. */
 function readProjectionRecord(file: string, field: 'verifier' | 'hash'): CredentialProjection['password'] {
   let text: string | null
   let mtimeMs: number
   try {
-    // migrateMode:false — the projection is a READ-ONLY path (`gateway auth
-    // status` never chmods; a non-0600 credential is rejected as unsafe).
+    // migrateMode:false — the projection is READ-ONLY (never chmods; non-0600 → rejected).
     const result = readSecretFile(file, false)
     text = result.value
     mtimeMs = result.mtimeMs
@@ -191,54 +151,44 @@ function writeSecret(file: string, value: string): void {
   atomicWritePrivateFileNoFollow(file, value, { mode: 0o600 })
 }
 
-/** Delete one credential file. Absence is idempotent; every other failure
- * must surface to the credential mutation so an API/CLI caller can never be
- * told that a still-present credential was removed. */
+/** Delete one credential file. Absence is idempotent; any other failure must
+ * surface so a caller is never told a still-present credential was removed. */
 function removeSecret(file: string): void {
   removePrivateFileNoFollow(file)
 }
 
 export interface GatewayStore {
-  /** tokens.json (0600, hash only, S5): the current token verifier hash, or
-   * null when no token is configured. Re-read from disk on every call so
-   * runtime changes take effect immediately. */
+  /** tokens.json (0600, hash only): the current token verifier hash, or null.
+   * Re-read from disk on every call so runtime changes take effect immediately. */
   getTokenHash(): string | null
-  /** tokens.json full record (verifier/source/updatedAt) for seeding
-   * decisions; null when no token is configured. */
+  /** tokens.json full record for seeding decisions; null when no token is configured. */
   getTokenCredential(): CredentialRecord | null
-  /** Persist the token hash as a v2 tokens.json document (source defaults to
-   * `'config'` for deployment seeding; runtime changes pass `'runtime'`), or
-   * delete the file when hash is null. Never rotates jwt-secret (token has no
-   * session-cookie association). */
+  /** Persist the token hash as a v2 document (source defaults to `'config'`;
+   * runtime changes pass `'runtime'`), or delete the file when null. Never
+   * rotates jwt-secret. */
   setTokenHash(hash: string | null, source?: CredentialSource): void
-  /** jwt-secret — the session signing key (0600, rotatable, S13). */
+  /** jwt-secret — the session signing key (0600, rotatable). */
   getJwtSecret(): string
   rotateJwtSecret(): string
-  /** password-credential (v2, 0600): the current password verifier hash, or
-   * null when no password is configured. Re-read from disk on every call so
-   * runtime changes take effect immediately. */
+  /** password-credential (v2, 0600): the current verifier hash, or null. Re-read
+   * from disk on every call so runtime changes take effect immediately. */
   getPasswordCredential(): string | null
-  /** password-credential full record (verifier/source/updatedAt) for seeding
-   * decisions; null when no password is configured. */
+  /** password-credential full record for seeding decisions; null when unset. */
   getPasswordCredentialRecord(): CredentialRecord | null
-  /** Persist the password verifier as a v2 password-credential document
-   * (source defaults to `'config'` for deployment seeding; runtime changes
-   * pass `'runtime'`), or delete the file when verifier is null. Never
-   * rotates jwt-secret — the rotate-first discipline is auth.ts's policy
-   * (rotate before persisting so a failed write never leaves a mixed state). */
+  /** Persist the password verifier as a v2 document (source defaults to
+   * `'config'`; runtime changes pass `'runtime'`), or delete when null. Never
+   * rotates jwt-secret — rotate-first discipline lives in auth.ts. */
   setPasswordCredential(verifier: string | null, source?: CredentialSource): void
 }
 
 const SCRYPT_SALT_LEN = 16
 
-/** Canonical scrypt verifier shape produced by hashCredential (16-byte salt +
- * 32-byte derived key, hex). v2 envelopes must match it — anything else is
- * treated as corrupt so a garbage verifier can never silently disable
- * authentication. */
+/** Canonical verifier shape produced by hashCredential (16-byte salt + 32-byte
+ * key, hex); anything else reads as corrupt, so a garbage verifier can never
+ * silently disable authentication. */
 const CREDENTIAL_VERIFIER_RE = /^scrypt\$[0-9a-f]{32}\$[0-9a-f]{64}$/i
 
-/** Corrupt/unreadable credential files are warned ONCE per process (they are
- * re-read on every request; a per-request warn would spam the log). */
+/** Corrupt/unreadable credential files are warned ONCE per process (re-read on every request). */
 const CREDENTIAL_WARN_ONCE = new Set<string>()
 function warnOnce(key: string, message: string, logger: GatewayStoreLogger): void {
   if (CREDENTIAL_WARN_ONCE.has(key)) return
@@ -246,7 +196,7 @@ function warnOnce(key: string, message: string, logger: GatewayStoreLogger): voi
   logger.warn(message)
 }
 
-/** Hash a plaintext token/password (scrypt, per design §5.1). */
+/** Hash a plaintext token/password (scrypt). */
 export function hashCredential(plain: string): string {
   const salt = randomBytes(SCRYPT_SALT_LEN).toString('hex')
   const derived = scryptSync(plain, salt, 32).toString('hex')
@@ -271,23 +221,18 @@ export function createGatewayStore(
   options: { stateLease?: StateRootLease } = {},
 ): GatewayStore {
   const root = join(stateDir, 'gateway')
-  // The state-root writer lease is the caller's handle (R2). Assert the same
-  // root/scope and that it is still current; the store never acquires,
-  // reacquires or releases a lease. Broad-root rejection belongs to the lease
-  // module (assertDedicatedStateRoot) and is not duplicated here.
+  // The state-root writer lease is the caller's handle: assert the same
+  // root/scope and that it is current; the store never acquires or releases one.
   if (options.stateLease !== undefined) {
     if (options.stateLease.scope !== 'state-root' || options.stateLease.stateRoot !== resolve(stateDir)) {
       throw new Error(`gateway store stateDir does not match the state-root lease: ${options.stateLease.stateRoot}`)
     }
     options.stateLease.assertCurrent()
   }
-  // State root converges to 0700 on POSIX: freshly created directories are
-  // created 0700; a pre-existing directory is tightened to 0700 via its pinned
-  // no-follow descriptor (auto-tighten instead of fail-closed 'require' —
-  // installers/upgrades from older layouts must not crash-loop on a legacy
-  // 0755 root).
-  // A loose pre-existing root is worth one loud warning (once per process):
-  // silent permission mutation confuses operators auditing who changed modes.
+  // State root converges to 0700 on POSIX: fresh directories are created 0700,
+  // a pre-existing one is tightened via its pinned no-follow descriptor
+  // (installers/upgrades must not crash-loop on a legacy 0755 root). One loud
+  // warning per process — silent permission mutation confuses audits.
   try {
     const stat = lstatSync(stateDir)
     if (stat.isDirectory() && (stat.mode & 0o777) !== 0o700) {

@@ -8,14 +8,14 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   DEFAULT_DRAIN_GRACE_MS, MANIFEST_DUMP_PREFIX, collectEntries, emptyManifestProblems, evaluateChildRun,
-  parseExecutedTestCount, parseManifestDump, parseReportedTotals, resolveJobs, runEntries, selectManifest,
-  spawnCaptured,
+  manifestLockstepProblems, parseExecutedTestCount, parseManifestDump, parseReportedTotals, resolveJobs,
+  runEntries, selectManifest, spawnCaptured,
 } from './test-manifest.mjs'
 
 test('parseExecutedTestCount: spec summary counts executed bodies (pass + fail)', () => {
@@ -391,6 +391,65 @@ test('runEntries: an unanswered child is killed at timeoutMs and fails as ETIMED
     assert.equal(failed?.entry.file, 'hang.test.mjs')
     assert.match(failed.reason, /ETIMEDOUT/u)
     assert.ok(Date.now() - started < 5_000, 'the per-file timeout must end the child, not the suite')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('manifestLockstepProblems: a whole manifest passes and every defect is named', () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-manifest-lockstep-'))
+  try {
+    mkdirSync(join(root, 'nested'))
+    writeFileSync(join(root, 'a.test.ts'), '')
+    writeFileSync(join(root, 'nested', 'b.test.mjs'), '')
+    assert.deepEqual(
+      manifestLockstepProblems({
+        packageRoot: root,
+        groups: { unit: ['a.test.ts'], nested: ['nested/b.test.mjs'] },
+      }),
+      [],
+    )
+    // An on-disk file that is not listed is a defect (a new test must be wired).
+    assert.deepEqual(
+      manifestLockstepProblems({ packageRoot: root, groups: { unit: ['a.test.ts'] } }),
+      ['on-disk test file is not listed: nested/b.test.mjs'],
+    )
+    // A listed file that is not on disk is a defect.
+    assert.deepEqual(
+      manifestLockstepProblems({ packageRoot: root, groups: { unit: ['a.test.ts', 'nested/b.test.mjs', 'ghost.test.ts'] } }),
+      ['listed test file is missing on disk: ghost.test.ts'],
+    )
+    // Duplicates and a platform leg outside GROUPS are defects.
+    const groupProblems = manifestLockstepProblems({
+      packageRoot: root,
+      groups: { unit: ['a.test.ts', 'nested/b.test.mjs', 'a.test.ts'] },
+      platformFiles: { win32: ['outside.test.ts'] },
+      platformSubsetsOfGroups: ['win32'],
+    })
+    assert.ok(groupProblems.some(problem => problem.includes('lists a file twice')), groupProblems.join('; '))
+    assert.ok(groupProblems.some(problem => problem.includes('win32 file is not in GROUPS')), groupProblems.join('; '))
+    // The allowlist must carry a reason and a real file.
+    assert.deepEqual(
+      manifestLockstepProblems({
+        packageRoot: root,
+        groups: { unit: ['a.test.ts', 'nested/b.test.mjs'] },
+        allowlist: [{ file: 'ghost.test.ts', reason: ' ' }],
+      }),
+      ['allowlist entry has no reason: ghost.test.ts'],
+    )
+    // Empty discovery cannot pass the lockstep silently.
+    const empty = mkdtempSync(join(tmpdir(), 'dsh-manifest-empty-'))
+    try {
+      assert.deepEqual(
+        manifestLockstepProblems({ packageRoot: empty, groups: { unit: ['a.test.ts'] } }),
+        [
+          'no test file was discovered — the lockstep assertion would be fooled by an empty set',
+          'listed test file is missing on disk: a.test.ts',
+        ],
+      )
+    } finally {
+      rmSync(empty, { recursive: true, force: true })
+    }
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

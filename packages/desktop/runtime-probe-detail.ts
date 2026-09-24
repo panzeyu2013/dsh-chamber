@@ -1,12 +1,8 @@
 /**
  * runtime-probe-detail.ts —— 运行时激活探针失败诊断（electron-free 纯模块）。
  *
- * 为什么单源：两种 flavor 必须对同一失败给出同一份可诊断明细。本模块把
- * 「列出失败探针 + 600 字符上限 + 统一前缀/兜底文案」抽成纯函数，
- * Electron 装配（main.ts）与 Swift 装配（sidecar-ctx.ts）共用同一实现。
- *
- * 输入只要求结构形状（name/ok/error），不耦合具体探针实现；`error` 已是
- * dsh-runtime 侧 sanitize 过的文本（sanitizeErrorText + 引号路径剥离 + 2000 上限）。
+ * 两种 flavor 必须对同一失败给出同一份明细，故失败清单、600 字符上限、
+ * 统一前缀/兜底文案同为单源；输入只要结构形状（name/ok/error），error 已脱敏。
  */
 import { sanitizeErrorText } from './sanitize-error.ts';
 
@@ -26,13 +22,13 @@ export function probeFailureDetail(probes: readonly ProbeFailureLike[]): string 
     .slice(0, 600)
 }
 
-/** 激活路径的统一失败文案：`<prefix> — <detail>`，无失败明细时 `no probe results`。 */
+/** 统一失败文案：`<prefix> — <detail>`；无明细时 `no probe results`。 */
 export function probeFailureMessage(prefix: string, probes: readonly ProbeFailureLike[]): string {
   const detail = probeFailureDetail(probes)
   return `${prefix} — ${detail === '' ? 'no probe results' : detail}`
 }
 
-/** 元数据恢复路径的文案（metadataProbeError 文案，含 600 字符上限）。 */
+/** 元数据恢复路径文案，经 sanitizeErrorText 脱敏，同样 600 字符上限。 */
 export function metadataProbeFailureMessage(probes: readonly ProbeFailureLike[]): string {
   const detail = probeFailureDetail(probes)
   return sanitizeErrorText(

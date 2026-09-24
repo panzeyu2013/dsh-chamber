@@ -2,30 +2,16 @@
  * @dsh-chamber/control-plane — the control-plane package root.
  *
  * createControlPlane assembles the v4 connection-manager core: the catalog
- * (single local connection row), the managed local dsh host (web profile
- * spawn + readiness + health + reaper), the management REST surface, the
- * per-instance reverse proxy, and the optional static frontend service. The
- * server and the connection are owned together: start() binds HTTP and
+ * (single local connection row), the managed local dsh host (web profile spawn +
+ * readiness + health + reaper), the management REST surface, the per-instance
+ * reverse proxy, and the optional static frontend service. start() binds HTTP and
  * stops() tears down the connection before the server.
  *
- * Options:
- * - stateDir: control-plane state root; defaults to $DSH_CHAMBER_STATE or
- *   ~/.dsh-chamber. Holds catalog.json and managed-dsh/ (pid records).
- * - dshWorkspacePath: the dsh installation root the spawned host's CLI entry
- *   is resolved from; defaults to $DSH_CHAMBER_DSH_PATH or <repo>/ref-dsh
- *   (falling back to the desktop vendor bundle when absent). It is the child
- *   cwd only for the source layout; the installed layout spawns with the
- *   managed dsh home as a stable cwd (spawn-dsh.ts resolveSpawnCwd — an
- *   in-place app update must never leave the host with an unlinked cwd).
- * - port/host: the control plane's own HTTP bind (standalone default
- *   DEFAULT_CONTROL_PLANE_PORT).
- * - webDistDir: optional static frontend dist directory (design 05 §7.3).
- *   When set, the plane serves / (index.html with the __DSH_BOOT__ manifest
- *   injected from <dist>/manifest.json) and the dist assets (index.html,
- *   /assets/*, /manifest.json, SPA fallback); when unset (standalone dev)
- *   those paths answer 404 and the plane runs API-only.
- * - logger: {log, warn, error} sink; defaults to console.
- * - corsOrigins: explicit cross-origin allowlist for the CORS decision.
+ * Options: stateDir ($DSH_CHAMBER_STATE or ~/.dsh-chamber); dshWorkspacePath
+ * (dsh install root, default $DSH_CHAMBER_DSH_PATH or <repo>/ref-dsh then the
+ * vendor bundle); port/host; webDistDir (optional static frontend dist, API-only
+ * when unset); logger; corsOrigins. The installed layout spawns with the managed
+ * dsh home as cwd — an in-place app update must never unlink the host's cwd.
  */
 
 import { createServer, type Server } from 'node:http'
@@ -69,18 +55,13 @@ import { withControlLogFile } from './log-file.ts'
 import type { Logger } from './types.ts'
 import type { ApiCorsEvaluator, ApiRequest, ApiResponse, ApiSurface } from './api.ts'
 
-/** Browser hardening shared by static, API, proxy, and error responses.
+/** Browser hardening shared by static, API, proxy and error responses.
  *
- * `referrer-policy` is `same-origin`, deliberately NOT `no-referrer`: per the
- * fetch spec "append a request Origin header" algorithm (2019; Chromium and
- * WebKit r259036/2020 — Safari — compliant), a document with no-referrer
- * policy serializes the Origin of same-origin HTML form submissions as `null`,
- * which the chamber origin fences (loopback API + gateway request policy)
- * reject fail-closed — a self-inflicted 403 on any same-origin form
- * (gateway login, /chamber/runtime actions). `same-origin` preserves the
- * privacy intent (referers never leave the origin; these surfaces have no
- * cross-site outbound document requests) without nulling the Origin of form
- * POSTs. JSON/fetch traffic is unaffected by the policy either way. */
+ * `referrer-policy` is `same-origin`, deliberately NOT `no-referrer`: under
+ * no-referrer a document serializes the Origin of same-origin form submissions as
+ * `null`, which the chamber origin fences reject fail-closed (self-inflicted 403
+ * on gateway login / runtime actions). `same-origin` keeps the privacy intent
+ * without nulling form-POST Origins; JSON/fetch traffic is unaffected. */
 const CONTROL_PLANE_SECURITY_HEADERS: Readonly<Record<string, string>> = Object.freeze({
   'cross-origin-opener-policy': 'same-origin',
   'referrer-policy': 'same-origin',
@@ -92,10 +73,9 @@ const CONTROL_PLANE_SECURITY_HEADERS: Readonly<Record<string, string>> = Object.
 // (the single source re-exported below) so every shape resolves one root alike.
 
 /**
- * Baseline default for the control plane's own HTTP bind: the port desktop
- * (main.ts), CLI (serve), and frontend URLs (renderer/settings connections)
- * all derive from as their default origin. Distant from
- * DEFAULT_DSH_START_PORT (17510) so the two surfaces never collide.
+ * Default for the control plane's own HTTP bind: desktop, CLI and frontend URLs
+ * derive their default origin from it; distant from DEFAULT_DSH_START_PORT (17510)
+ * so the two surfaces never collide.
  */
 export const DEFAULT_CONTROL_PLANE_PORT = 17500
 
@@ -103,36 +83,31 @@ export const DEFAULT_CONTROL_PLANE_PORT = 17500
 const REPO_ROOT = resolve(fileURLToPath(new URL('../../..', import.meta.url)))
 
 /**
- * Default module-A host package source dir (design 09 方案 A, module B): the
- * chamber host package whose dist/index.js + package.json the plane seeds
- * into the local profile so the spawned host exposes the boot graph. Dev and
- * CI layouts ship it at <repo>/packages/dsh-chamber-seed-client-graph; packaged
- * runtimes pass the bundled location through ControlPlaneOptions (an absent
- * source is skipped, never an error).
+ * Default module-A host package source dir: the chamber host package whose
+ * dist/index.js + package.json the plane seeds into the local profile. Dev and CI
+ * ship it at <repo>/packages/dsh-chamber-seed-client-graph; packaged runtimes pass
+ * the bundled location (an absent source is skipped, never an error).
  */
 const DEFAULT_HOST_GRAPH_PACKAGE_SOURCE_DIR = join(REPO_ROOT, 'packages', 'dsh-chamber-seed-client-graph')
 
 /** Default source for the chamber in-host Git worktree service package. */
 const DEFAULT_HOST_GIT_WORKTREE_PACKAGE_SOURCE_DIR = join(REPO_ROOT, 'packages', 'dsh-chamber-seed-git-worktree')
 
-/** Default source for the chamber in-host archived-session cleanup domain
- *  package (design 24; packaged runtimes pass the bundled location). */
+/** Default source for the chamber in-host archived-session cleanup domain package. */
 const DEFAULT_HOST_ARCHIVE_CLEANUP_PACKAGE_SOURCE_DIR = join(REPO_ROOT, 'packages', 'dsh-chamber-seed-archive-cleanup')
 
 /**
- * Default source for the chamber in-host open-in domain package (design 20 §6;
- * the fork of upstream's open-in host half — packaged runtimes pass the
- * bundled location). LOCAL shape only: the row is marked `localOnly` in the
- * registry, so no remote target and no gateway ever receives it.
+ * Default source for the chamber in-host open-in domain package (fork of
+ * upstream's open-in host half; packaged runtimes pass the bundled location).
+ * LOCAL shape only: the row is `localOnly`, so no remote target or gateway
+ * receives it.
  */
 const DEFAULT_HOST_OPEN_IN_PACKAGE_SOURCE_DIR = join(REPO_ROOT, 'packages', 'dsh-chamber-seed-open-in')
 
 /**
- * Default dsh workspace: <repo root>/ref-dsh when present, otherwise the
- * desktop vendor bundle <repo root>/packages/desktop/vendor/dsh (this package
- * lives at <root>/packages/control-plane). When neither exists, still returns
- * the ref-dsh path — the caller decides how to surface the absence
- * (main.ts passes null explicitly in that case).
+ * Default dsh workspace: <repo root>/ref-dsh when present, else the desktop vendor
+ * bundle. When neither exists it still returns the ref-dsh path — the caller
+ * decides how to surface the absence.
  */
 export function defaultDshWorkspacePath() {
   const refDsh = join(REPO_ROOT, 'ref-dsh')
@@ -144,19 +119,17 @@ export function defaultDshWorkspacePath() {
 
 /**
  * createControlPlane options (all optional; see the module docblock).
- * `corsOrigins` is the explicit cross-origin allowlist; `webDistDir`
- * enables the static frontend service (design 05 §7.3).
+ * `corsOrigins` is the explicit cross-origin allowlist.
  */
 export interface ControlPlaneOptions {
   port?: number
   host?: string
   stateDir?: string
   /**
-   * Caller-held state-root lease (the gateway shape acquires it before its
-   * first store write and passes the same handle here). When provided it is
-   * adopted — same root verified plus assertCurrent — and never released by the
-   * plane; when absent the plane acquires its own at construction, reacquires
-   * it in start() and releases it in stop() after the writer-quiescence proof.
+   * Caller-held state-root lease (the gateway acquires it before its first store
+   * write). When provided it is adopted — same root verified plus assertCurrent —
+   * and never released by the plane; when absent the plane acquires its own,
+   * reacquires it in start() and releases it in stop().
    */
   stateLease?: StateRootLease
   /** Diagnostic writer label for the plane-owned lease record. */
@@ -164,74 +137,54 @@ export interface ControlPlaneOptions {
   dshWorkspacePath?: string
   /** Resolve the workspace for each local spawn/restart (runtime switching). */
   getDshWorkspacePath?: () => string
-  /**
-   * Optional dynamic lifecycle gate. It is checked at management entry and
-   * again before every start/restart seed and process spawn.
-   */
+  /** Optional dynamic lifecycle gate, checked at management entry and again before every start/restart seed and spawn. */
   canStartLocal?: () => { ok: true } | { ok: false; reason: string }
   /** Dynamic public exposure gate. The desktop keeps this closed from spawn
    * through the full activation-probe verdict. */
   canExposeLocal?: () => boolean
-  /** First port attempted for the managed dsh host (design 17 §3 server
-   *  deployments; absent = BASE_DHSPORT 17510). */
+  /** First port attempted for the managed dsh host (absent = BASE_DHSPORT 17510). */
   dshPortBase?: number
   webDistDir?: string
   logger?: Logger
   corsOrigins?: string[]
-  /** Explicit request boundary for an authenticated external composer. Its
-   * presence is also the opt-in that permits a non-loopback bind; the normal
-   * anonymous control plane never supplies it and remains loopback-only. */
+  /** Explicit request boundary for an authenticated external composer; its
+   *  presence is also the opt-in permitting a non-loopback bind. */
   corsEvaluator?: ApiCorsEvaluator
   /** Injectable local-connection wire deps (test seams: fake spawn/probe). */
   localConnectionDeps?: LocalConnectionDeps
   /** Injectable orphan reaper (test seam for lifecycle interleavings). */
   reaper?: typeof runReaper
   /**
-   * Module-A host package source dir (design 09 方案 A, module B): the package
-   * seeded into the local profile so the spawned host resolves the
-   * client-graph row. Defaults to <repo>/packages/dsh-chamber-seed-client-graph;
-   * packaged runtimes pass the bundled location. An absent source — or a
-   * source without its built dist/index.js artifact (module A not built in
-   * this runtime) — is skipped (nothing to seed), never an error.
+   * Module-A host package source dir: seeded into the local profile so the spawned
+   * host resolves the client-graph row. Defaults to
+   * <repo>/packages/dsh-chamber-seed-client-graph; packaged runtimes pass the
+   * bundled location. An absent source or missing built dist/index.js is skipped,
+   * never an error.
    */
   hostGraphPackageSourceDir?: string
-  /**
-   * Chamber in-host Git worktree package source. It follows the same built-
-   * artifact gate and profile seed lifecycle as hostGraphPackageSourceDir.
-   */
+  /** Chamber in-host Git worktree package source; same built-artifact gate and profile seed lifecycle as hostGraphPackageSourceDir. */
   hostGitWorktreePackageSourceDir?: string
-  /**
-   * Chamber in-host archived-session cleanup domain package source (design
-   * 24). Same built-artifact gate and profile seed lifecycle as the other
-   * host packages; absent source (or no committed dist) = skipped.
-   */
+  /** Chamber in-host archived-session cleanup domain package source; same
+   *  built-artifact gate and seed lifecycle (absent source or dist = skipped). */
   hostArchiveCleanupPackageSourceDir?: string
-  /**
-   * Chamber in-host open-in domain package source (design 20 §6). Same
-   * built-artifact gate and profile seed lifecycle as the other host packages;
-   * absent source (or no committed dist) = skipped. This row is `localOnly`:
-   * the local profile is the only shape that ever receives it.
-   */
+  /** Chamber in-host open-in domain package source; same built-artifact gate and
+   *  seed lifecycle. This row is `localOnly`: the local profile is the only shape
+   *  that receives it. */
   hostOpenInPackageSourceDir?: string
   /**
-   * Seed registry: additional chamber seed entries beyond
-   * the four base host packages (client-graph / git-worktree /
-   * archive-cleanup / open-in) — the seam for browser-side chamber client plugins
-   * in hosted frontends (e.g. the gateway mobile slot). Every entry rides the
-   * same built-artifact gate, profile seed lifecycle and `--patch` overlay as
-   * the host packages; kind 'client' entries carry no probe coupling. A null/
-   * absent sourceDir is a warned stub skip (the mobile package ships on the
-   * mobile branch), never an error.
+   * Seed registry: additional chamber seed entries beyond the four base host
+   * packages — the seam for browser-side client plugins in hosted frontends (e.g.
+   * the gateway mobile slot). Every entry rides the same built-artifact gate,
+   * profile seed lifecycle and `--patch` overlay as the host packages; kind 'client'
+   * entries carry no probe coupling, and an absent sourceDir is a warned stub skip,
+   * never an error.
    */
   extraSeedEntries?: readonly SeedEntry[]
   /**
-   * Optional request middleware (design 17 §2.1): runs after the
-   * security headers + CSP + URL parse and BEFORE the default dispatch. A
-   * truthy return CLAIMS the request (the default dispatch is skipped); a
-   * falsy return falls through. The gateway uses it to inject its auth gate
-   * and route `/auth/*`, `/chamber/*`, `/plugins/*`, `/` and non-management
-   * `/api/*` to its own handlers while letting the management surface fall
-   * through to the default dispatch.
+   * Optional request middleware: runs after security headers + CSP + URL parse and
+   * BEFORE the default dispatch. A truthy return CLAIMS the request; falsy falls
+   * through. The gateway uses it for its auth gate and route handling while letting
+   * the management surface fall through.
    */
   middleware?: (
     req: ApiRequest,
@@ -239,10 +192,7 @@ export interface ControlPlaneOptions {
     url: URL,
     ctx: PlaneMiddlewareContext,
   ) => boolean | void | Promise<boolean | void>
-  /**
-   * Optional upgrade middleware: runs BEFORE the default origin fence +
-   * instance-proxy upgrade dispatch. A truthy return CLAIMS the upgrade.
-   */
+  /** Optional upgrade middleware running BEFORE the default origin fence + instance-proxy dispatch; a truthy return CLAIMS the upgrade. */
   upgradeMiddleware?: (
     req: ApiRequest,
     socket: Duplex,
@@ -251,8 +201,7 @@ export interface ControlPlaneOptions {
   ) => boolean | void | Promise<boolean | void>
 }
 
-/** The internal surfaces handed to a composing gateway's middleware (design 17
- * §2.1): the management REST handle + CORS decision + per-instance proxy. */
+/** Internal surfaces handed to a composing gateway's middleware: management REST + CORS decision + per-instance proxy. */
 export interface PlaneMiddlewareContext {
   api: ApiSurface
   instanceProxy: InstanceProxy
@@ -264,97 +213,75 @@ export interface PlaneHandle {
   stop(): Promise<void>
   readonly port: number | null
   readonly connectionState: string
-  /**
-   * Whether a real dsh process is currently alive under the local connection
-   * (state-string independent — see local-connection hasLiveProcess).
-   */
+  /** Whether a real dsh process is currently alive under the local connection (state-string independent). */
   readonly localProcessAlive: boolean
-  /** True only when startup reaping proved there are no kept/failed managed
-   * host records that could still be writing the shared DSH_HOME. */
+  /** True only when startup reaping proved no kept/failed managed host records could still write the shared DSH_HOME. */
   readonly localWritersQuiescent: boolean
   /** Live port of the managed local host; null while it is not serving. */
   readonly localDshPort: number | null
   readonly instanceId: string
   /**
-   * The activation-probe domains backed by the host packages **actually
-   * seeded** into the local profile：desktop 两个
-   * owner 在启动探针时按此派生期望集，避免 host 包缺失时仍按「全 3 域」做
-   * exact-set 裁决而误判激活失败并回滚。
+   * The activation-probe domains backed by the host packages actually seeded into
+   * the local profile: the desktop derives its expectation set from this, so a
+   * missing host package cannot cause an exact-set activation failure and rollback.
    */
   readonly seededProbeDomains: readonly string[]
-  /** The managed local dsh host's port, or null when not ready (design 17
-   * §2.1 改动①: exposed for the gateway-proxy's single-target resolution). */
+  /** The managed local dsh host's port, or null when not ready (used by the gateway-proxy's single-target resolution). */
   getLocalDshPort(): number | null
   /** The target kind lives in connectionId; `opts.transport` carries the
-   * independent SSH/HTTP dimension. TLS pin and Host authority remain
-   * gateway-only bounded capabilities. */
+   *  independent SSH/HTTP dimension. TLS pin and Host authority stay gateway-only. */
   registerInstanceTransport(connectionId: string, baseUrl: string, extraHeaders?: Record<string, string>, opts?: InstanceTransportRegistrationOptions): void
   unregisterInstanceTransport(connectionId: string): void
   /**
-   * Pre-start the local instance (desktop pre-spawn, 05 §7.5): idempotent —
-   * a running/starting instance resolves immediately; the renderer's own
-   * POST /api/connections rides the same path afterwards. The desktop main
-   * calls this before the window loads so the first screen finds the
-   * instance already ready.
+   * Pre-start the local instance (desktop pre-spawn): idempotent — a
+   * running/starting instance resolves immediately. Called before the window loads
+   * so the first screen finds the instance ready.
    */
   startLocal(): Promise<void>
-  /** Stop the managed local host without tearing down the control plane.
-   * Resolves only after queued/in-flight start and restart writers settle. */
+  /** Stop the managed local host without tearing down the control plane; resolves after queued/in-flight start and restart writers settle. */
   stopLocal(): Promise<void>
   /**
-   * Transactional user-triggered dsh restart (design 18 §9.3): refresh
-   * mounted plugins without a stopLocal()+startLocal() pairing. Shares the
-   * health state machine's restart single-flight; rejects (connection_busy)
-   * when the runtime gate (canStartLocal — applying/restore) is closed, when
-   * a stop is in progress, or from restart-exhausted.
+   * Transactional user-triggered dsh restart: refresh mounted plugins without a
+   * stopLocal()+startLocal() pairing. Shares the health state machine's restart
+   * single-flight; rejects (connection_busy) when the runtime gate is closed or a
+   * stop is in progress, or from restart-exhausted.
    */
   restartLocal(): Promise<void>
   /** Re-publish the public local lifecycle after canExposeLocal changes. */
   refreshLocalExposure(): void
   /**
-   * Writer-quiescence diagnosis (04 §3.2): the last scan's verdict
-   * plus per-record detail, WITHOUT acting. The connections page uses it to
-   * name what blocks the local instance; a stale view is refreshed by the
-   * re-proof the start path runs anyway.
+   * Writer-quiescence diagnosis: the last scan's verdict plus per-record detail,
+   * WITHOUT acting; the connections page uses it to name what blocks the local
+   * instance.
    */
   localWriterDiagnosis?(): { quiescent: boolean; writers: ReaperEntryOutcome[]; errors: string[] }
   /**
-   * Explicit takeover (清理并接管): clear THIS state directory's own stale or
-   * orphaned managed-host writers (runReaper takeover semantics — a writer
-   * whose control plane is still alive is never touched, no unverified process
-   * is signalled), then start the local connection. Resolves with the reclaim
-   * report; throws connection_busy (with detail) when a live writer remains.
+   * Explicit takeover: clear this state directory's own stale or orphaned managed
+   * host writers (a writer whose control plane is still alive is never touched, no
+   * unverified process is signalled), then start the local connection. Throws
+   * connection_busy (with detail) when a live writer remains.
    */
   reclaimLocal?(): Promise<{ reclaimed: number[]; connection: ConnectionRowView | null; spawned: boolean }>
-  /** Subscribe to authoritative local-host lifecycle transitions. Gateway
-   * consumers use this to attach only while the managed dsh is ready; the
-   * desktop also uses it for delayed rollback policy. */
+  /** Subscribe to authoritative local-host lifecycle transitions (gateway attaches
+   *  only while ready; the desktop uses it for delayed rollback policy). */
   onLocalStateChange(listener: (snapshot: { status: string; port: number | null; error: string | null }) => void): () => void
 }
 
-/**
- * Create the control plane.
- * @param options - {port?, host?, stateDir?, dshWorkspacePath?, webDistDir?,
- *   logger?, corsOrigins?}.
- * @returns {start(), stop(), port, connectionState, instanceId,
- *   registerInstanceTransport, unregisterInstanceTransport}.
- */
+/** Create the control plane; returns the assembled PlaneHandle. */
 export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHandle {
   const port = options.port ?? DEFAULT_CONTROL_PLANE_PORT
   const host = options.host ?? '127.0.0.1'
   if (host !== '127.0.0.1' && host !== '::1'
     && (options.corsEvaluator === undefined || options.middleware === undefined || options.upgradeMiddleware === undefined)) {
-    // loopback-only is a v1 invariant, not merely a default: a non-loopback
-    // bind would expose the anonymous management API + reverse proxy to the
-    // network, and the Host/Origin fence (api.ts corsFor) is browser-only.
+    // loopback-only is a v1 invariant: a non-loopback bind would expose the
+    // anonymous management API + reverse proxy, and the Host/Origin fence is browser-only.
     throw new Error(`control plane refuses non-loopback bind ${JSON.stringify(host)} without an external request-boundary evaluator plus HTTP/upgrade middleware; loopback-only is the anonymous v1 invariant`)
   }
   const stateDir = resolveStateRoot({ explicit: options.stateDir, env: process.env })
   // The state root has exactly one writer. A caller that already holds the lease
-  // (gateway shape: acquired before its first store write) passes it in and the
-  // plane adopts it — same root verified plus assertCurrent, never released here.
-  // Otherwise the plane takes its own, reacquires in start() and releases in
-  // stop() after the writer-quiescence proof.
+  // (gateway shape) passes it in and the plane adopts it — same root verified plus
+  // assertCurrent, never released here. Otherwise the plane takes its own,
+  // reacquires in start() and releases in stop() after the quiescence proof.
   const providedStateLease = options.stateLease
   const stateLease = providedStateLease ?? acquireStateRootLease(stateDir, {
     scope: 'state-root',
@@ -373,34 +300,25 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
   const defaultWorkspacePath = options.dshWorkspacePath ?? process.env.DSH_CHAMBER_DSH_PATH ?? defaultDshWorkspacePath()
   const getDshWorkspacePath = options.getDshWorkspacePath ?? (() => defaultWorkspacePath)
   const webDistDir = options.webDistDir === undefined ? undefined : options.webDistDir
-  // The console default satisfies every module's logger option ({log,warn,error}).
-  // 控制面自己的日志同时落盘 <stateDir>/logs/control-plane.log
-  // （有界轮转）——打包态从 Finder/Dock 启动时 stdout/stderr 不落盘，WS splice
-  // 的 'WebSocket stream <id> closed (<cause>, Nms)' / 'heartbeat lost …' 这两类
-  // 归因证据在两类 flavor 上都会丢失。控制面拥有 stateDir，故两 flavor
-  // 共用同一实现，不产生新的 flavor 偏差；写失败只降级不阻断。
+  // The console default satisfies every module's logger option. Control-plane logs
+  // also land in <stateDir>/logs/control-plane.log (bounded rotation) because
+  // packaged stdout/stderr is not persisted; a write failure only degrades.
   const logger = withControlLogFile((options.logger ?? console) as Logger, stateDir)
   // logger.reopen() 在 start() 里调用（stop 后重启必须重开句柄）。
   const reapManagedHosts = options.reaper ?? runReaper
   let localWritersQuiescent = false
   /**
-   * Why the writer-quiescence latch is closed, as of the last scan.
-   * Published to the connections page so a blocked local
-   * instance names its blocker (pid, what was verified, whether the explicit
-   * 清理并接管 action can clear it) instead of returning a bare 409 whose only
-   * advice is "restart the app".
+   * Why the writer-quiescence latch is closed, as of the last scan. Published so a
+   * blocked local instance names its blocker instead of a bare 409.
    */
   let writerScan: { quiescent: boolean; writers: ReaperEntryOutcome[]; errors: string[] } = {
     quiescent: false, writers: [], errors: [],
   }
   /**
-   * The latch has TWO distinct closure causes and only one of them is
-   * re-provable: a SCAN verdict (records kept / probes unavailable) is cleared
-   * by a fresh scan, while a live write-time termination failure means a
-   * process group could not be confirmed gone — no scan can prove that absent
-   * (its record may already be gone), so it stays closed for the plane's
-   * lifetime and only an app restart re-proves it. Sticky is set by
-   * onWriterQuiescenceUnknown and never cleared.
+   * The latch has TWO closure causes and only one is re-provable: a SCAN verdict is
+   * cleared by a fresh scan, while a write-time termination failure means a process
+   * group could not be confirmed gone — no scan can prove that absent, so it stays
+   * closed for this plane's lifetime and only an app restart re-proves it.
    */
   let writerLatchSticky = false
   /** In-session re-proof bookkeeping (single-flight + cooldown). */
@@ -409,10 +327,9 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
   const WRITER_REPROVE_COOLDOWN_MS = 2000
 
   /**
-   * Combine the external runtime-apply gate with the internal process-writer
-   * safety latch. The latch begins closed until startup reaping succeeds and
-   * closes permanently for this plane lifecycle if any termination cannot
-   * prove the detached process group is gone.
+   * Combine the external runtime-apply gate with the internal process-writer safety
+   * latch. The latch begins closed until startup reaping succeeds and closes
+   * permanently if any termination cannot prove the detached process group is gone.
    */
   function localStartGate(): { ok: true } | { ok: false; reason: string } {
     if (!localWritersQuiescent) {
@@ -431,8 +348,8 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
 
   /**
    * Run one writer-quiescence scan and publish its verdict + per-entry detail.
-   * `takeover` is the explicit user action (see runReaper); the automatic paths
-   * (startup, a refused start, the diagnosis read) stay fail-closed.
+   * `takeover` is the explicit user action; the automatic paths (startup, a
+   * refused start, the diagnosis read) stay fail-closed.
    */
   async function scanLocalWriters(takeover: boolean): Promise<ReaperEntryOutcome[]> {
     const writers: ReaperEntryOutcome[] = []
@@ -475,12 +392,10 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
   }
 
   /**
-   * Re-prove writer quiescence inside a running plane. The startup
-   * scan runs once; without this, a record that only BECOMES stale later (the
-   * orphan exited, or the ps identity probe was unavailable at startup) keeps
-   * the latch closed for the whole session — the local instance then answers
-   * 409 to every start and the in-app 启动/停止 buttons do nothing until the
-   * app restarts. Single-flight + a short cooldown bound the scan cost.
+   * Re-prove writer quiescence inside a running plane: the startup scan runs once,
+   * so a record that only BECOMES stale later would keep the latch closed for the
+   * whole session and every start would answer 409 until an app restart.
+   * Single-flight + a short cooldown bound the scan cost.
    */
   async function reproveLocalWriters(): Promise<void> {
     // A sticky latch is not a scan verdict: re-proving would only "clear" it by
@@ -498,8 +413,7 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
     return localWritersQuiescent && (options.canExposeLocal?.() ?? true)
   }
 
-  // Module-A host package source (design 09 module B); may be absent — the seed
-  // skips it gracefully and the plane keeps working without the host graph.
+  // Module-A host package source; may be absent — the seed skips it and the plane keeps working.
   const hostGraphPackageSourceDir = options.hostGraphPackageSourceDir ?? DEFAULT_HOST_GRAPH_PACKAGE_SOURCE_DIR
   const hostGitWorktreePackageSourceDir = options.hostGitWorktreePackageSourceDir
     ?? DEFAULT_HOST_GIT_WORKTREE_PACKAGE_SOURCE_DIR
@@ -507,19 +421,13 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
     ?? DEFAULT_HOST_ARCHIVE_CLEANUP_PACKAGE_SOURCE_DIR
   const hostOpenInPackageSourceDir = options.hostOpenInPackageSourceDir
     ?? DEFAULT_HOST_OPEN_IN_PACKAGE_SOURCE_DIR
-  // Seed registry: the base chamber host packages are DERIVED from
-  // the authoritative registry (CHAMBER_HOST_PACKAGES — insert row, package
-  // name and probe domain all come from that one list; a hand-written
-  // parallel row table here is the defect the registry exists to prevent).
-  // The ONLY per-package desktop input is its packaged source directory,
-  // looked up by insert id — the public option names are unchanged. Any extra
-  // entry (client-plugin slots like the gateway mobile stub) is appended; an
-  // extra entry that re-declares a base package's id WINS over the base entry
-  // (last-writer-wins by loader id): the gateway passes the host
-  // packages it has synced as desktop-synced extra entries, so once its seed cache is
-  // populated the synced copies replace the packaged defaults — the base
-  // rows exist only to preserve the legacy desktop shape (no
-  // extraSeedEntries → no shadowing).
+  // Seed registry: base chamber host packages are DERIVED from the authoritative
+  // registry (CHAMBER_HOST_PACKAGES — insert row, package name and probe domain all
+  // come from that one list; a hand-written parallel table is the defect the
+  // registry prevents). The only per-package desktop input is its packaged source
+  // dir, looked up by insert id. Any extra entry is appended; an extra that
+  // re-declares a base id WINS (the gateway passes its synced host packages as
+  // desktop-synced extras, replacing the packaged defaults).
   const hostPackageSourceDirs: ReadonlyMap<string, string> = new Map([
     [HOST_GRAPH_INSERT.id, hostGraphPackageSourceDir],
     [HOST_GIT_WORKTREE_INSERT.id, hostGitWorktreePackageSourceDir],
@@ -533,10 +441,8 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
     for (const descriptor of CHAMBER_HOST_PACKAGES) {
       const sourceDir = hostPackageSourceDirs.get(descriptor.insert.id)
       if (sourceDir === undefined) {
-        // A registry row with no packaged source mapped on this owner is a
-        // code defect (the registry grew without its desktop source option),
-        // never a runtime condition — fail loud rather than silently seeding
-        // a partial registry.
+        // A registry row with no packaged source mapped on this owner is a code
+        // defect, never a runtime condition — fail loud rather than seed partially.
         throw new Error(
           `chamber seed registry: no packaged sourceDir mapped for host package `
           + `'${descriptor.insert.name}' (insert id '${descriptor.insert.id}')`,
@@ -552,62 +458,39 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
     }
     for (const entry of options.extraSeedEntries ?? []) byId.set(entry.insert.id, entry)
     const entries = [...byId.values()]
-    // Fail-loud naming pin: every
-    // host-kind entry — base or extra — lives in the canonical
+    // Fail-loud naming pin: every host-kind entry lives in the canonical
     // `@dsh-chamber/dsh-chamber-seed-<loader-id>` namespace, so a rename that
     // forgets one call site cannot reach the profile seed at all.
     assertHostSeedEntryNaming(entries)
     return entries
   }
-  // The seed gate is the BUILT artifact (dist/index.js), not the package
-  // directory: the dir exists in any checkout of this repo, while the esbuild
-  // output is the shipped artifact — committed via the .gitignore negation
-  // (design 09 §3.5), so a fresh clone HAS it and absence here means the entry
-  // is not built/bundled in this runtime (packaged desktop without the bundle).
-  // MISSING is skipped gracefully (v4 base command line, no overlay); a
-  // PRESENT-but-damaged artifact is NOT skipped — it is seeded and the host
-  // boot fails loud if the overlay row cannot resolve (shipped-but-broken
-  // entries are a packaging bug: fail-loud on purpose; ensureSeedPackage
-  // throws on a missing declared file rather than silently skipping).
+  // The seed gate is the BUILT artifact (dist/index.js), not the package dir: the
+  // dir exists in any checkout, the esbuild output is the shipped artifact. MISSING
+  // is skipped gracefully; a PRESENT-but-damaged artifact is seeded and the host
+  // boot fails loud (shipped-but-broken is a packaging bug).
 
-  // Establish the durable plane identity before any other persisted module
-  // can write. The helper creates a new state root as 0700, but preserves the
-  // mode of an existing caller-selected root.
+  // Establish the durable plane identity before any other persisted module can
+  // write; a new state root is created 0700, an existing caller-selected root keeps its mode.
   const instanceId = ensureInstanceId(stateDir)
   const dshHome = join(stateDir, 'dsh-home')
   const catalog = createCatalog({ stateDir, logger })
   catalog.load()
 
-  // Explicit-origin allowlist: the API's CORS decision reads it; v1 keeps
-  // no other cross-origin control (loopback-only origins plus this list).
+  // Explicit-origin allowlist for the API's CORS decision (v1 has no other cross-origin control).
   const explicitOrigins = Array.isArray(options.corsOrigins) ? options.corsOrigins : []
 
-  // Health-events SSE subscribers (GET /api/host/health-events, design 05
-  // §3): the stream also snapshots on subscribe, so no transition is missed.
+  // Health-events SSE subscribers; the stream snapshots on subscribe too, so no transition is missed.
   const healthListeners = new Set<(snapshot: { status: string; port: number | null; error: string | null }) => void>()
 
   /**
-   * Idempotent host-graph seed, resolved at every spawn (design 09 module B).
-   * The local connection resolves this thunk at spawn time — initial spawns
-   * and restarts alike — so a seed that a profile-internal pnpm operation
-   * pruned is re-seeded right before the next spawn. The seeded package is
-   * extraneous to the web profile's dependency graph (it is not declared in
-   * profiles/web/package.json), and `dsh plugin add/remove` (runLocalDshPlugin
-   * included) re-links profile node_modules, which prunes
-   * such packages: without the per-spawn re-seed the next instance restart
-   * would boot with a --patch row that cannot resolve and fail loudly, the
-   * only self-heal being a desktop-app restart. This thunk is idempotent
-   * (content-hash skip in ensureSeedPackage, content-compare in
-   * buildPatchOverlay). Returns the --patch overlay path, or null when this
-   * spawn passes none (no built artifact, or every row already user-owned in
-   * the profile patch) — a leftover overlay file is removed on those paths so
-   * the file's presence keeps meaning "this spawn passes it", the invariant
-   * the desktop install probe reads (resolveLocalHostGraphOverlay). Failure
-   * semantics: a seed throw on the initial-spawn path lands the instance in
-   * error state (the next local start retries); on the restart path it rides
-   * the connection's existing bounded backoff loop and ends in
-   * restart-exhausted — the same fail-loud surface as any spawn failure (a
-   * broken shipped module A is a packaging bug, never silent).
+   * Idempotent host-graph seed, resolved at every spawn (initial and restart): the
+   * seeded package is extraneous to the web profile's dependency graph, and
+   * `dsh plugin add/remove` re-links profile node_modules and prunes it, so without
+   * the per-spawn re-seed the next restart would boot with an unresolvable --patch
+   * row. Returns the overlay path, or null when this spawn passes none (a leftover
+   * overlay is removed so the file's presence keeps meaning "this spawn passes
+   * it"). A seed throw lands the instance in error state on initial spawn, and in
+   * restart-exhausted after bounded retries.
    */
   function resolveHostGraphPatch(): string | null {
     return resolveLocalHostGraphOverlay({
@@ -617,29 +500,21 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
       log: message => logger.log(message),
       warn: message => logger.warn(message),
       error: message => logger.error(message),
-      // The opt-in host-log bridge switch is read from the plane's own
-      // environment at each spawn (the managed host inherits it, and the
-      // generated plugin needs nothing from the child env). Passing it here is
-      // the only production wiring; the resolver's own default stays "off".
+      // The opt-in host-log bridge switch is read from the plane's own environment at
+      // each spawn (the managed host inherits it); the resolver's default stays "off".
       env: process.env,
-      // 宿主期望集必须跟随本次实际 seed 的条目（host 包
-      // 缺失时 exact-set 裁决仍按全量域会误判激活失败并回滚）；见
-      // PlaneHandle.seededProbeDomains。
+      // 宿主期望集必须跟随本次实际 seed 的条目，否则 host 包缺失时 exact-set 裁决会误判激活失败。
       onSeededProbeDomains: domains => { seededProbeDomains = domains },
     })
   }
 
-  // The managed local connection adapter (design 02): spawn/health/reaper
-  // owner; readiness = TCP + unified host-identity probe inside spawn-dsh
-  // (probeHostIdentity speaks session/canOpenWorkspacePath with a legacy
-  // session/list fallback). Runtime state is process-local
-  // and is merged with durable catalog metadata only at the management/wire
-  // projection below (design 03 §2.1).
+  // The managed local connection adapter: spawn/health/reaper owner; readiness =
+  // TCP + unified host-identity probe inside spawn-dsh. Runtime state is
+  // process-local and is merged with durable catalog metadata only at the wire projection.
   const local = createLocalConnection({
     stateDir, dshHome, dshWorkspacePath: getDshWorkspacePath, logger,
-    // patchPath is a thunk resolved only behind the per-spawn fence. Re-read
-    // it for starts and restarts so a profile-internal prune self-heals
-    // without allowing a DSH_HOME write during runtime apply/restore.
+    // patchPath is a thunk resolved only behind the per-spawn fence. Re-read it for
+    // starts and restarts so a profile-internal prune self-heals without a DSH_HOME write during runtime apply/restore.
     options: {
       ...(options.dshPortBase === undefined ? {} : { dshPortBase: options.dshPortBase }),
       ownerInstanceId: instanceId,
@@ -658,9 +533,8 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
         logger.error(`local writer quiescence became unknown; further starts are blocked until an app restart re-proves it: ${writerError.message}`)
       },
       patchPath: () => {
-        // This thunk is reached only after local-connection's spawn fence.
-        // Keeping every DSH_HOME seed here prevents runtime snapshot/restore
-        // from racing a start that passed an earlier API-entry check.
+        // Reached only after local-connection's spawn fence; keeping every DSH_HOME
+        // seed here prevents snapshot/restore from racing a start that passed an earlier check.
         if (seedDshHomeDefaults(dshHome)) {
           logger.log('dsh-home: seeded default settings.yaml (locale: zh)')
         }
@@ -669,17 +543,11 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
     },
     deps: options.localConnectionDeps,
   })
-  // Candidate lifecycle is an internal fact until the desktop's full probe
-  // verdict opens exposure. A candidate can move from ready to degraded,
-  // restarting, or error while the full probe is still running; none of those
-  // states (nor its port/error detail) may escape through public REST/SSE.
-  // The ONE exception: a start attempt that terminally failed before this
-  // incarnation ever reached ready is not a quarantined candidate fact — it is
-  // the user-visible reason the local instance cannot start, and it projects
-  // the honest 'error' status plus its concrete reason (the spawn error
-  // already carries the per-port causes, exit codes and stderr digests). A
-  // candidate that DID reach ready and later failed keeps the quarantine
-  // above.
+  // Candidate lifecycle is an internal fact until the desktop's full probe verdict
+  // opens exposure: ready→degraded/restarting/error and the candidate port never
+  // escape public REST/SSE. One exception: a start that terminally failed before
+  // ever reaching ready projects the honest 'error' status with its concrete reason
+  // (spawn errors already carry per-port causes and stderr digests).
   const publicLocalSnapshot = (snapshot: { status: string; port: number | null; error: string | null }) => {
     if (!localExposureAllowed()) {
       const startFailure = local.getStartFailure()
@@ -699,27 +567,20 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
     const snapshot = currentPublicLocalSnapshot()
     for (const listener of healthListeners) listener(snapshot)
   }
-  // Health-events push fan-out (05 §3): the connection's lifecycle
-  // subscription reaches every SSE client through the same quarantine view.
+  // Health-events push fan-out reaches every SSE client through the same quarantine view.
   local.onStateChange((snapshot) => {
     const projected = publicLocalSnapshot(snapshot)
     for (const listener of healthListeners) listener(projected)
   })
 
-  // Managed-host rolling logs (design 02 §3.8): the read side of the
-  // per-port JSONL files written by spawn-dsh.ts / local-connection.ts.
-  // While the desktop activation verdict is pending, the 'local' alias
-  // resolves to the most recent spawn record — the quarantined candidate —
-  // and its rolling log contains the candidate port and a "ready" line.
-  // That is an internal fact like every other public surface, so the alias
-  // read is gated by the same exposure latch (an explicit port query is an
-  // internal/diagnostic read and stays available).
+  // Managed-host rolling logs: the read side of the per-port JSONL files. While the
+  // activation verdict is pending, the 'local' alias resolves to the most recent
+  // spawn record and its log contains the candidate port — an internal fact, so the
+  // alias read is gated by the same exposure latch (an explicit port query stays available).
   const hostLogsModule = hostLogs({ stateDir, logger })
 
-  // Per-instance reverse proxy (design 03 §3): /api/i/<id>/* HTTP/WS/SSE
-  // passthrough, reachable without any session (v1); ssh transports are
-  // registered by the desktop main process through the handle (design 05
-  // §7.3).
+  // Per-instance reverse proxy: /api/i/<id>/* HTTP/WS/SSE passthrough, reachable
+  // without any session; ssh transports are registered by the desktop main process.
   const instanceProxy = createInstanceProxy({
     logger,
     getLocalState: () => local.getState(),
@@ -727,11 +588,9 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
     canExposeLocal: localExposureAllowed,
   })
 
-  /** The connection-row projection on the wire (04 §3.2): status/dshPort/error
-   * are LIVE machine projections — liveness never rides persisted history (a
-   * stale persisted "ready" from a previous run must not masquerade as a
-   * running instance); label/accentColor are the persisted user-editable
-   * fields. */
+  /** The connection-row projection on the wire: status/dshPort/error are LIVE
+   *  projections (a stale persisted "ready" must not masquerade as running);
+   *  label/accentColor are the persisted user-editable fields. */
   function connectionRowView() {
     const row = catalog.getConnection('local')
     if (row === null) return null
@@ -749,13 +608,11 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
     return view
   }
 
-  /** Idempotent local start (04 §3.2): a running instance answers with the
-   * existing state — never a duplicate spawn. Shared by the POST route and
-   * the handle's startLocal pre-spawn. */
+  /** Idempotent local start: a running instance answers with the existing state,
+   *  never a duplicate spawn. Shared by the POST route and startLocal pre-spawn. */
   const startLocalConnection = async (label?: string, accentColor?: string) => {
     // A closed writer latch is re-proven before refusing: the usual cause is a
-    // managed-host record whose orphan has since exited, which the startup-only
-    // scan can never notice.
+    // managed-host record whose orphan has since exited, invisible to the startup scan.
     if (!localWritersQuiescent) await reproveLocalWriters()
     const gate = localStartGate()
     if (gate?.ok === false) {
@@ -777,11 +634,9 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
   }
 
   /**
-   * Explicit 清理并接管: one takeover scan (records that provably
-   * belong to this state directory and whose owning control plane is gone),
-   * then the ordinary start. Returning the reclaim report lets the UI say what
-   * was cleared; a still-live foreign writer surfaces as connection_busy with
-   * the structured detail the start path already produces.
+   * Explicit takeover: one takeover scan (records that provably belong to this state
+   * directory and whose owning control plane is gone), then the ordinary start. A
+   * still-live foreign writer surfaces as connection_busy with structured detail.
    */
   const reclaimLocalConnection = async () => {
     const before = new Set(writerScan.writers.filter(entry => entry.status === 'reclaimed').map(entry => entry.name))
@@ -852,8 +707,7 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
         error.code = 'not_found'
         throw error
       }
-      // 04 §3.2: a restart in flight rejects the stop with 409 connection_busy
-      // (the restart sequence owns the child until it settles).
+      // A restart in flight rejects the stop with 409 connection_busy.
       if (local.getState() === 'restarting') {
         const error = new Error('connection is restarting; wait for it to settle before stopping') as Error & { code: string }
         error.code = 'connection_busy'
@@ -863,11 +717,9 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
       // The row stays (03 §2.1: DELETE stops the instance, the row persists).
     },
     hostLogs: (query: { port?: number; limit?: number; offset?: number }) => {
-      // An explicit port is an internal/diagnostic read; the 'local' alias is
-      // the public surface and must not leak the quarantined candidate's
-      // port/ready state before the activation verdict (same latch as the
-      // proxy and health surfaces). Fail closed with a loud 503 rather than a
-      // silent empty log.
+      // An explicit port is an internal/diagnostic read; the 'local' alias is the
+      // public surface and must not leak the quarantined candidate's port/ready state
+      // before the activation verdict. Fail closed with a loud 503.
       if (query?.port === undefined && !localExposureAllowed()) {
         const error = new Error('local instance is quarantined behind activation probes') as Error & { code: string }
         error.code = 'quarantined'
@@ -884,16 +736,14 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
   let stopPromise: Promise<void> | null = null
   let lifecycleEpoch = 0
 
-  // Static frontend service (design 05 §7.3 / 04 §5): dist/ + __DSH_BOOT__,
-  // assembled in static-serving.ts. Anonymous like every other surface (v1
-  // has no authentication). Disabled when webDistDir is not configured.
+  // Static frontend service: dist/ + __DSH_BOOT__, assembled in static-serving.ts;
+  // anonymous like every other surface, disabled when webDistDir is unset.
 
   const staticServing = webDistDir === undefined
     ? null
     : createStaticServing({ webDistDir, logger })
 
-  /** Close one candidate/active server without letting long-lived proxy
-   * streams strand stop(). Candidate failures do not own proxy streams. */
+  /** Close one candidate/active server without letting long-lived proxy streams strand stop(). */
   async function closeHttpServer(srv: Server, closeProxyStreams: boolean): Promise<void> {
     if (closeProxyStreams) instanceProxy.closeAllStreams()
     if (!srv.listening) return
@@ -904,9 +754,8 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
         clearTimeout(force)
         resolveClose()
       })
-      // `close()` synchronously stops accepting new connections. Force-close
-      // only after that fence; Node documents the inverse order as racy because
-      // a new connection can arrive between closeAllConnections() and close().
+      // `close()` synchronously stops accepting new connections; force-close only
+      // after that fence (the inverse order is racy in Node).
       srv.closeAllConnections?.()
       srv.closeIdleConnections?.()
     })
@@ -919,11 +768,11 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
       if (stopPromise !== null) await stopPromise
       if (server !== null) return
       if (startPromise !== null) return startPromise
-      // stop() 在 writer 静止证明后释放 plane 自持的租约；stop→start 重启必须在
-      // 任何 state 写入之前重新证明写者权威（他者已接管时 fail-closed）。
+      // stop() releases the plane-owned lease after the quiescence proof; stop→start
+      // must re-prove writer authority before any state write (fail-closed on takeover).
       if (ownsStateLease && !stateLease.held()) stateLease.reacquire()
-      // stop() 会关闭日志句柄，而 start() 支持 stop→start 重启：不在这里重开，
-      // 重启后的控制面日志只转发不落盘（取证缺口以「看起来还在写」的方式复发）。
+      // stop() closes the log handle; a stop→start restart must reopen it here or the
+      // restarted plane silently forwards without persisting.
       logger.reopen()
 
       const epoch = ++lifecycleEpoch
@@ -932,9 +781,8 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
         try {
           ensurePrivateDirectoryNoFollow(join(stateDir, 'managed-dsh'), 0o700)
           ensurePrivateDirectoryNoFollow(dshHome, 0o700)
-          // DSH_HOME writes stay behind the per-spawn runtime gate. At plane
-          // startup only report unavailable optional packages; the spawn-time
-          // patch thunk seeds them after the reaper has proved quiescence.
+          // DSH_HOME writes stay behind the per-spawn runtime gate. At startup only
+          // report unavailable optional packages; the patch thunk seeds after reaper quiescence.
           for (const entry of seedEntries()) {
             const artifact = join(entry.sourceDir ?? '', 'dist', 'index.js')
             if (!existsSync(artifact)) {
@@ -968,8 +816,7 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
               return
             }
             if (staticServing !== null) {
-              // serve is async (fs/promises read + async zlib off the event
-              // loop): a rejection takes the same 500 fallback.
+              // serve is async (fs/promises + async zlib): a rejection takes the same 500 fallback.
               void staticServing.serve(req, res, url.pathname).catch((staticError: unknown) => {
                 logger.error(`static handler failure: ${String(staticError)}`)
                 if (!res.headersSent) {
@@ -993,18 +840,12 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
             ;(res as ApiResponse)._cspNonce = cspNonce
             res.setHeader(
               'content-security-policy',
-              // frame-src blob:（CSP）：文档预览把 HTML/PDF/图片内容注入
-              // blob: iframe（HtmlBody.tsx / pdf/runtime.ts / ImageBody.tsx）。
-              // 没有显式 frame-src 时 default-src 'self' 会把这类子 frame 一并拒掉
-              // （两种 flavor 同因）。范围收窄到消费点实际所需：只放行 blob:
-              // （不放 'self'/data:/http——非 blob 的 frame 继续被 default-src 兜住）。
-              // ⚠ style-src 'self' 'unsafe-inline' 是 macOS 原生壳视口越界策略的
-              // 运行时前提（design 25 §5.2 / deviations S-50，ShellOverscrollPolicy）：
-              // 壳注入的 <style> 没有 nonce 可挂。三种改法都会让它被拦、整页弹性回弹
-              // 静默复现：① 删掉 'unsafe-inline'；
-              // ② 在同一 style-src 里再加 'nonce-…'/'sha256-…'（CSP3：出现 nonce/hash 即
-              // 忽略 unsafe-inline）；③ 新增 style-src-elem（它覆盖 style-src 对 <style> 的管辖）。
-              // 改本行必须同时保持 S-50 成立；static-serving.test.ts 三条断言钉住这三种形态。
+              // frame-src blob: — document previews inject HTML/PDF/image content into
+              // blob: iframes; without an explicit frame-src, default-src 'self' rejects
+              // them (both flavors). Only blob: is opened.
+              // style-src 'unsafe-inline' is a runtime precondition for the macOS shell's
+              // overscroll policy: the injected <style> has no nonce, so removing it,
+              // adding a nonce/hash, or adding style-src-elem all re-break the policy silently.
               `default-src 'self'; base-uri 'none'; object-src 'none'; frame-src blob:; frame-ancestors 'none'; form-action 'none'; script-src 'self' 'unsafe-eval' 'nonce-${cspNonce}'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:`,
             )
             let url: URL
@@ -1134,8 +975,8 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
           await closeHttpServer(srv, true)
         }
         if (localStopError !== undefined) throw localStopError
-        // Only a proven-quiescent stop releases writer authority; a failed
-        // local stop retains the lease so no successor can write behind it.
+        // Only a proven-quiescent stop releases writer authority; a failed local stop
+        // retains the lease so no successor can write behind it.
         if (ownsStateLease) stateLease.release()
       })()
       stopPromise = pending
@@ -1180,10 +1021,7 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
       return local.getDshPort()
     },
 
-    /**
-     * The control-plane instance identity (design 02 §2.5); spawn records
-     * carry it for multi-instance diagnostics.
-     */
+    /** The control-plane instance identity; spawn records carry it for multi-instance diagnostics. */
     get instanceId() {
       return instanceId
     },
@@ -1194,13 +1032,11 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
     },
 
     /**
-     * Register a remote instance transport (design 05 §7.3 + design 17 §9.3):
-     * the desktop main process reports a ready target as connectionId
-     * `dsh:<id>` or `gateway:<id>` plus `opts.transport` (legacy
-     * `ssh:<id>` spelling remains SSH-only) — the
-     * /api/i/<kind>-<id>/* proxy target. `extraHeaders`/`opts.tls.spkiPin`
-     * ride through to the instance proxy's validated gateway record. Tunnel
-     * URLs never leave the main process / proxy.
+     * Register a remote instance transport: the desktop main process reports a ready
+     * target as connectionId `dsh:<id>`/`gateway:<id>` plus `opts.transport` — the
+     * /api/i/<kind>-<id>/* proxy target. `extraHeaders`/`opts.tls.spkiPin` ride into
+     * the proxy's validated gateway record; tunnel URLs never leave the main
+     * process / proxy.
      */
     registerInstanceTransport(connectionId: string, baseUrl: string, extraHeaders?: Record<string, string>, opts?: InstanceTransportRegistrationOptions) {
       instanceProxy.registerTransport(connectionId, baseUrl, extraHeaders, opts)
@@ -1242,19 +1078,14 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
 }
 
 export { resolveNodeExecutable, sanitizeManagedDshEnv, spawnDsh } from './spawn-dsh.ts'
-// Unary RPC remains the ordinary control-plane client. Design 17's separately
-// invoked gateway composes the same unary client (runtime-manager.ts) — the
-// client-response/event-stream helpers (respond/openEventStream) belong to the
-// removed control-plane session-runtime domain and are not part of this export
-// surface.
+export { installGracefulShutdown, type GracefulShutdownPlane } from './graceful-shutdown.ts'
+// Unary RPC remains the ordinary control-plane client; the gateway composes the
+// same client. The client-response/event-stream helpers belong to the removed
+// session-runtime domain and are not part of this export surface.
 export { call, probeHostIdentity, RpcBusinessError, RpcTransportError } from './dsh-client.ts'
-// The dsh RPC wire envelope single source (cross-package protocol
-// single-sourcing): envelope construction, server-response parse/validation
-// and the raw node:http unary carrier shared with the desktop probes
-// (ssh-provider.ts consumes them through desktop/control-plane-module.ts).
-// The unified host-identity probe contract constants/payload constructors
-// live here too (HOST_IDENTITY_METHOD / LEGACY_HOST_PROBE_METHOD /
-// HOST_PROBE_MAX_RESPONSE_BYTES) — every chamber probe speaks the same wire.
+// The dsh RPC wire envelope single source shared with the desktop probes; the
+// unified host-identity probe constants live here too (HOST_IDENTITY_METHOD /
+// LEGACY_HOST_PROBE_METHOD / HOST_PROBE_MAX_RESPONSE_BYTES).
 export {
   buildClientRequest,
   buildHostIdentityProbePayload,
@@ -1273,9 +1104,8 @@ export type {
   ServerResponseEnvelope,
   ServerResponseParse,
 } from './rpc-envelope.ts'
-// The cordis loader `insert` row render/parse/conflict single source:
-// shared with the desktop remote seed (plugin-sync.ts) and the local overlay
-// seed above (host-graph-seed.ts).
+// The cordis loader `insert` row render/parse/conflict single source, shared with
+// the desktop remote seed and the local overlay seed.
 export {
   fieldCount,
   hasExactInsert,
@@ -1297,12 +1127,8 @@ export {
   HOST_ARCHIVE_CLEANUP_INSERT,
   HOST_GIT_WORKTREE_INSERT,
   HOST_GRAPH_INSERT,
-  // The seeded file set + the local `--patch` overlay filename: forwarded so
-  // EVERY naming of either fact (desktop remote seed / install probes /
-  // gateway upload, overlay resolution) derives from host-graph-seed.ts
-  // instead of re-typing a literal (cross-package protocol
-  // single-sourcing). Cross-side equality is pinned by
-  // packages/desktop/test/ipc/cross-package-contract.test.ts.
+  // The seeded file set + overlay filename, forwarded so every naming of either fact
+  // derives from host-graph-seed.ts instead of re-typing a literal.
   HOST_GRAPH_PATCH_FILENAME,
   HOST_OPEN_IN_INSERT,
   HOST_PACKAGE_SEED_FILES,
@@ -1310,9 +1136,8 @@ export {
 } from './host-graph-seed.ts'
 export type { ChamberHostPackageDescriptor, HostPackageInsert, HostPackageSeedFile } from './host-graph-seed.ts'
 export type { ApiCorsEvaluator, ApiRequest, ApiResponse } from './api.ts'
-// Shared forwarding core (design 17 §8, 方案 A): the Host/Origin rewrite +
-// WS splice + limits/errors shared by instance-proxy.ts and
-// `gateway-proxy.ts` without forking.
+// Shared forwarding core: the Host/Origin rewrite + WS splice + limits/errors
+// shared by instance-proxy.ts and gateway-proxy.ts without forking.
 export {
   CLIENT_BODY_IDLE_TIMEOUT_MS,
   convergeLocation,
@@ -1347,8 +1172,7 @@ export type {
   ProxySocket,
 } from './proxy-forward.ts'
 // SPKI pin helpers live in spki-pin.ts and reach consumers through
-// proxy-forward.ts (which re-exports them); named here explicitly instead of
-// riding the star export.
+// proxy-forward.ts (which re-exports them).
 export {
   attachSpkiPinVerifier,
   spkiPinOfPeerCertificate,
@@ -1356,8 +1180,7 @@ export {
   SPKI_PIN_PATTERN,
 } from './spki-pin.ts'
 export * from './browser-auth-cookie.ts'
-// Node-side primitives shared with the desktop main process and the gateway
-// server (the browser-side twins live in the sidebar's shared face).
+// Node-side primitives shared with the desktop main process and the gateway server.
 export * from './error-text.ts'
 export { createJsonStore, JsonStorePersistError, JsonStoreRevisionConflictError } from './json-store.ts'
 export type { JsonStore, JsonStoreMutator } from './json-store.ts'
@@ -1374,17 +1197,13 @@ export type {
   PrivateFileRead,
   PrivateFileReadOptions,
 } from './private-file.ts'
-// The shared owner-only audit-trail core (design 17 §13.4.4): one
-// serializer + append/rotate implementation for the gateway server audit and
-// the desktop audit log.
+// The shared owner-only audit-trail core: one serializer + append/rotate
+// implementation for the gateway audit and the desktop audit log.
 export { AUDIT_TRAIL_MAX_BYTES, appendAuditTrailLine, serializeAuditEvent } from './audit-trail.ts'
 export type { AuditTrailEvent } from './audit-trail.ts'
-// The plugin spec/name whitelist family (the reserved-name DENY predicate
-// lives in `protected-plugins.ts`, which owns the judgement, design 21 §6.11)
-// (design 21 §6.2/§6.7 — single source for the desktop main via
-// control-plane-module.ts and the gateway executor). Renderer mirrors stay
-// hand-written and are pinned by the gateway lockstep test
-// (plugin-spec-lockstep.test.ts).
+// The plugin spec/name whitelist family (the reserved-name DENY predicate lives in
+// protected-plugins.ts) — single source for the desktop main and the gateway.
+// Renderer mirrors are hand-written and must stay in lockstep.
 export {
   extractSpecName,
   MATERIALIZE_FILE_SPEC_PATTERN,
@@ -1394,12 +1213,10 @@ export {
   RUN_STDOUT_MAX_BYTES,
   WRITE_FILE_MAX_BYTES,
 } from './plugin-spec.ts'
-// The restricted plugin-mutation child executor (plugin-mutation-executor.ts,
-// design 21 §6.3): the single env-scrubbed / bounded-output / timeout-killed
-// child protocol shared by the gateway server (direct import) and the desktop
-// main process (through control-plane-module.ts). The canonical
-// INSTALL_ENV_WHITELIST stays dsh-runtime's single source and is passed in by
-// each caller — this package deliberately does not depend on dsh-runtime.
+// The restricted plugin-mutation child executor: the single env-scrubbed /
+// bounded-output / timeout-killed child protocol shared by the gateway server and
+// the desktop main process. INSTALL_ENV_WHITELIST stays dsh-runtime's single source
+// and is passed in by each caller — this package deliberately does not depend on it.
 export { runPluginMutation, scrubMutationEnv, spawnMutationChild } from './plugin-mutation-executor.ts'
 export type {
   MutationChild,
@@ -1410,12 +1227,10 @@ export type {
   PluginMutationParams,
   PluginMutationResult,
 } from './plugin-mutation-executor.ts'
-// The protected-plugin set + generation coupling (design 21 §6.11, decision 19):
-// P = B₀ ∪ S ∪ F derivation, the op-phased write-face
-// decision (install/remove judge P alike; remove never judges a version;
-// official-scope installs must pin the instance's exact generation) and the
-// read-face row projection the three backends emit — single source for the
-// desktop main (control-plane-module.ts) and the gateway.
+// The protected-plugin set + generation coupling: P = B₀ ∪ S ∪ F derivation, the
+// op-phased write-face decision (install/remove judge P alike; remove never judges a
+// version; official-scope installs must pin the instance's exact generation) and the
+// read-face row projection — single source for the desktop main and the gateway.
 export {
   CHAMBER_SCOPE,
   decidePluginMutation,
@@ -1456,13 +1271,10 @@ export type {
   ProtectedSource,
   RuntimeFamilyResolution,
 } from './protected-plugins.ts'
-// The plugin-manifest read algorithm + materialize ruler (design 21 §6.2,
-// decision 18; single source = @dsh-chamber/dsh-chamber-wire/plugin-manifest).
-// Re-exported on this package surface because the desktop main must consume
-// them WITHOUT a bare wire specifier: the packaged asar loads the
-// esbuild-bundled dist/control-plane entry (node_modules .ts sources are not
-// type-strippable), so control-plane-module.ts reads them off this module —
-// dev (workspace source) and packaged (bundle) resolve the same definitions.
+// The plugin-manifest read algorithm + materialize ruler (single source =
+// @dsh-chamber/dsh-chamber-wire/plugin-manifest), re-exported because the packaged
+// desktop must consume them from the esbuild-bundled entry (bare wire specifiers are
+// not type-strippable), so dev source and packaged bundle resolve the same definitions.
 export {
   isMaterializedValue,
   parsePluginManifest,
@@ -1473,12 +1285,9 @@ export type {
   PluginManifestModel,
   PluginManifestParseResult,
 } from '@dsh-chamber/dsh-chamber-wire/plugin-manifest'
-// Gateway wire-protocol credential/session facts + SPKI pin helpers (design
-// 17 §7.1/§9.3/§13.4.2) — the single source shared by the gateway server
-// (auth.ts/config.ts), the proxy injection gate (instance-proxy.ts) and the
-// desktop client (gateway-session.ts / gateway-provider.ts through
-// control-plane-module.ts). spki-pin.ts exports ride the proxy-forward
-// `export *` above.
+// Gateway wire-protocol credential/session facts + SPKI pin helpers — single source
+// for the gateway server, the proxy injection gate and the desktop client;
+// spki-pin.ts exports ride the proxy-forward `export *` above.
 export {
   GATEWAY_PASSWORD_MAX_CHARS,
   GATEWAY_PASSWORD_MIN_CHARS,
@@ -1490,10 +1299,8 @@ export {
   GATEWAY_TOKEN_VISIBLE_ASCII_PATTERN,
 } from './gateway-session-protocol.ts'
 
-// Session-state wire contract (session-state-protocol.ts) — the single source
-// shared by the gateway watcher (packages/gateway/src/session-state.ts) and the
-// desktop probe (through control-plane-module.ts). The Typert mux client
-// (session-mux.ts) is the client half of the same contract.
+// Session-state wire contract — single source for the gateway watcher and the
+// desktop probe; the Typert mux client is the client half of the same contract.
 export {
   clampReadThrough,
   classifyTurnEnd,
@@ -1520,6 +1327,10 @@ export type {
   SessionStateDescriptor,
   SessionStateDiagnostics,
   SessionStateFeature,
+  SessionStateGoalActivation,
+  SessionStateGoalActivationEvent,
+  SessionStateGoalFact,
+  SessionStateGoalPhase,
   SessionStateHostInfo,
   SessionStateHostState,
   SessionStateMode,
@@ -1554,9 +1365,8 @@ export type {
   SessionMuxStatus,
 } from './session-mux.ts'
 
-// state-root writer lease (R2): createControlPlane is the production importer
-// (resolveStateRoot + acquireStateRootLease); the gateway/desktop shapes consume
-// the same contract through this package entry.
+// state-root writer lease: createControlPlane is the production importer; the
+// gateway/desktop shapes consume the same contract through this package entry.
 export {
   acquireStateRootLease,
   assertDedicatedStateRoot,

@@ -590,6 +590,62 @@ test('mergeRuntimeFacts: overlay-only content, channel precedence, stale and ant
   assert.deepEqual(merged?.sessions.s1, { pending: 'question', runningSubagents: 1 }, 'judgment fields never enter the projected row')
 })
 
+test('mergeRuntimeFacts: a stale channel report keeps its stale bit and the P5 subagent guard (M3)', () => {
+  // 通道报告自身的 stale 位（断连来源的只读事实）必须透传：调用方只透传第四参
+  // （App 的 connected 闸 / 观测的 shell.stale），在这里丢掉会让六面与徽标把断连
+  // 残留的子代理计数当新鲜事实（badge/sessionRowState 守卫失效）。
+  const staleRuntime: InstanceRuntimeReport = {
+    current: 'a',
+    sessions: {
+      a: { running: false, completed: true, runningSubagents: 2 },
+      b: { running: true },
+    },
+    stale: true,
+  }
+  assert.deepEqual(mergeRuntimeFacts(staleRuntime, undefined), {
+    current: 'a',
+    sessions: {
+      a: { running: false, completed: true, runningSubagents: 2, subagentActivity: 'unknown' },
+      b: { running: true },
+    },
+    stale: true,
+  })
+  // overlay 补进来的稀疏计数走同一守卫（不留旁路）。
+  assert.deepEqual(
+    mergeRuntimeFacts({ sessions: { a: { running: false } }, stale: true }, undefined, { a: { runningSubagents: 2 } })?.sessions.a,
+    { running: false, runningSubagents: 2, subagentActivity: 'unknown' },
+  )
+  // 显式第四参与报告位是 OR；报告无该位时两参/四参行为不变（兼容锁的另一半）。
+  assert.equal(mergeRuntimeFacts({ sessions: { a: { running: true } }, stale: true }, undefined, undefined, false)?.stale, true)
+  assert.equal(mergeRuntimeFacts(RUNTIME_FACTS, ARMED_DOTS)?.stale, undefined)
+  assert.equal(mergeRuntimeFacts({ sessions: { a: { running: true } } }, undefined, undefined, true)?.stale, true)
+})
+
+test('mergeRuntimeFacts: facts-overlay goal fills unknown channel rows and never overrides a known fact (P2a)', () => {
+  // 无壳来源（facts-only）唯一的 goal 通路：overlay 行本身必须成为可附加内容，
+  // 且仅填补通道行 goal **缺席**（unknown）的位置——显式 null 也照填，绝不折叠。
+  const goal = { goalId: 'g1', revision: 2, phase: 'active' as const }
+  assert.deepEqual(mergeRuntimeFacts(undefined, undefined, { s1: { goal } })?.sessions.s1, { goal },
+    'an overlay-only goal row is attachable content (no shell report needed)')
+  assert.deepEqual(mergeRuntimeFacts({ sessions: { s1: { running: false } } }, undefined, { s1: { goal } })?.sessions.s1,
+    { running: false, goal }, 'an absent channel goal is filled by the overlay')
+  assert.deepEqual(mergeRuntimeFacts({ sessions: { s1: { running: false } } }, undefined, { s1: { goal: null } })?.sessions.s1,
+    { running: false, goal: null }, 'an explicit overlay null fills an unknown channel row')
+  // 通道行已给出（对象或显式 null）= 权威；overlay 的已知值绝不覆盖。
+  const channelGoal = { goalId: 'g9', revision: 1, phase: 'complete' as const }
+  assert.deepEqual(mergeRuntimeFacts({ sessions: { s1: { goal: channelGoal } } }, undefined, { s1: { goal } })?.sessions.s1,
+    { goal: channelGoal }, 'the channel goal is authoritative')
+  assert.deepEqual(mergeRuntimeFacts({ sessions: { s1: { goal: null } } }, undefined, { s1: { goal } })?.sessions.s1,
+    { goal: null }, 'a channel explicit no-goal is authoritative too')
+  // overlay 缺席 = unknown：不写字段（绝不臆造 null）。
+  assert.deepEqual(mergeRuntimeFacts(undefined, undefined, { s1: {} })?.sessions.s1, {})
+  // stale 重建路径只降子代理运行证据，goal 呈现门的事实原样保留（断连不自愈）。
+  assert.deepEqual(
+    mergeRuntimeFacts({ sessions: { s1: { goal, runningSubagents: 2 } } }, undefined, undefined, true)?.sessions.s1,
+    { goal, runningSubagents: 2, subagentActivity: 'unknown' },
+  )
+})
+
 // ---- membership / un-grouped bucket / hidden rows ----
 
 test('deriveServerWorkspaces hides subagent and archived rows and trails one ungrouped bucket', () => {
@@ -1205,6 +1261,28 @@ test('round-3 restore: reconcile composition, replaced receipt variants and repo
   assert.equal(runtimeReportSignature({ current: 's1', sessions: { s1: { running: true } } }, undefined, false), runtimeReportSignature({ current: 's1', sessions: { s1: { running: false } } }, undefined, false), 'the projection path drops the running bit')
   assert.notEqual(runtimeReportSignature({ sessions: { s1: { completed: true } } }, undefined, false), runtimeReportSignature({ sessions: { s1: {} } }, undefined, false), 'rendered facts still matter in the projection path')
   assert.notEqual(runtimeReportSignature(a, new Set(['s1'])), runtimeReportSignature(a, new Set(['s2'])), 'different visible subsets differ')
+})
+
+test('F6 regression: report.stale is signed on BOTH paths so a stale-only flip is never deduped away', () => {
+  const live: InstanceRuntimeReport = { sessions: { s1: { running: false, completed: true } } }
+  const stale: InstanceRuntimeReport = { ...live, stale: true }
+  // 身份路径（App 的 runtimeFactsRef 去重守卫）：行不变、仅 stale 翻转必须移动签名，
+  // 否则 use-bridge-subscriptions 不提交新 report，mergeRuntimeFacts 的 stale OR
+  // 永远看不到断连标记（残留子代理计数被当 live）。
+  assert.notEqual(runtimeReportSignature(live), runtimeReportSignature(stale))
+  // 投影路径（侧栏 publish 去重）：server.runtime?.stale 是渲染事实
+  // （data-chamber-stale / sessionStateLabel 的离线读数），同样必须移动签名。
+  assert.notEqual(runtimeReportSignature(live, undefined, false), runtimeReportSignature(stale, undefined, false))
+  // false = 缺席（no-op 旗标），不得制造 churn。
+  assert.equal(runtimeReportSignature({ ...live, stale: false }), runtimeReportSignature(live))
+  assert.equal(runtimeReportSignature({ ...live, stale: false }, undefined, false), runtimeReportSignature(live, undefined, false))
+  // 只有 stale 的报告仍是内容（离线标记不得与「无 runtime」混同）；空报告的 '' 语义保留。
+  assert.notEqual(runtimeReportSignature({ sessions: {}, stale: true }), '')
+  assert.notEqual(runtimeReportSignature({ sessions: {}, stale: true }, undefined, false), '')
+  assert.equal(runtimeReportSignature({ sessions: {} }), '')
+  // 去重链端到端对拍：签名相同才吞——落地的 stale report 必须让 merge OR 到合并报告。
+  const committed = runtimeReportSignature(live) === runtimeReportSignature(stale) ? live : stale
+  assert.equal(mergeRuntimeFacts(committed, { s1: true })?.stale, true)
 })
 
 test('round-3 restore: serversProjectionSignature tracks render-relevant fields and ignores stamps', () => {

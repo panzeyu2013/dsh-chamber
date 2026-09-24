@@ -148,6 +148,32 @@ test('unreadable rows are dropped with a loud counter, never silently', async t 
   assert.equal(logger.lines.some(line => line.includes('dropped 1 unreadable session row')), true)
 })
 
+test('process-local dropped counters restart at 0 on reload (normalization, not a persisted read)', async t => {
+  const stateDir = scratch(t)
+  const { ensurePrivateDirectoryNoFollow } = await import('@dsh-chamber/control-plane')
+  const directory = join(stateDir, SESSION_STATE_DIR_NAME)
+  ensurePrivateDirectoryNoFollow(directory, 0o700)
+  // A document written by a previous run carries non-zero process-local counters
+  // (goalActivations counts retained edges that are deliberately never persisted).
+  writeFileSync(stateFile(stateDir), JSON.stringify({
+    schemaVersion: 1,
+    revision: 1,
+    cursor: 3,
+    watcherEpoch: 'e',
+    mode: 'poll',
+    host: { state: 'unknown', serviceable: false, since: 1, lastBaselineAt: null, baselineOk: false },
+    sessions: [{ sessionId: 's1', running: false, updatedAt: 4, present: true, observedAt: 5 }],
+    readMarks: {},
+    readFloor: 0,
+    dropped: { sessions: 0, readClients: 0, readMarks: 7, goalActivations: 9 },
+  }))
+  const store = createSessionStateStore({ stateDir, logger: silentLogger, now: () => 100 })
+  // 单一口径：validateDocument 把进程内累计计数归 0，adoptDocument 不从持久值读
+  // （否则就是一个永不产生非零值的死读分支）。四个键都在，形状不缩水。
+  assert.deepEqual(store.status().dropped, { sessions: 0, readClients: 0, readMarks: 0, goalActivations: 0 })
+  assert.equal(store.snapshotFor(null, 'sse', store.host()).sessions.length, 1)
+})
+
 test('the row cap evicts the oldest rows and counts the loss', async t => {
   const stateDir = scratch(t)
   const logger = capturingLogger()
@@ -158,6 +184,42 @@ test('the row cap evicts the oldest rows and counts the loss', async t => {
   assert.equal(store.status().sessions, MAX_SESSIONS)
   assert.equal(store.status().dropped.sessions, 1)
   assert.equal(logger.lines.some(line => line.includes('cap reached')), true)
+})
+
+test('a doubly-corrupt store still enforces the row cap on an oversized baseline (never silent)', async t => {
+  const stateDir = scratch(t)
+  const seed = createSessionStateStore({ stateDir, logger: silentLogger, now: () => 100 })
+  seed.applyBaseline([baselineItem('durable', false, 5)], { at: 100 })
+  await seed.flush()
+  seed.dispose()
+  writeFileSync(stateFile(stateDir), 'broken-main')
+  writeFileSync(stateFile(stateDir) + '.bak', 'broken-backup')
+  const evidence = readFileSync(stateFile(stateDir), 'utf8')
+
+  const logger = capturingLogger()
+  const corrupt = createSessionStateStore({ stateDir, logger, now: () => 200 })
+  assert.equal(corrupt.status().integrity, 'corrupt')
+  assert.equal(corrupt.status().loaded, false)
+
+  // 双损坏下 persistBlocked 早退不得变成"上限失效"：2005 行基线仍必须被裁到
+  // MAX_SESSIONS，且丢失在 dropped.sessions 里可见（快照是仅剩的证据）。
+  const items = Array.from({ length: MAX_SESSIONS + 5 }, (_, index) => baselineItem('s' + index, false, index + 1))
+  corrupt.applyBaseline(items, { at: 200 })
+  await corrupt.flush()
+  assert.equal(corrupt.status().sessions, MAX_SESSIONS)
+  assert.equal(corrupt.status().dropped.sessions, 5)
+  assert.equal(corrupt.snapshotFor(null, 'sse', corrupt.host()).sessions.length, MAX_SESSIONS)
+  assert.equal(logger.lines.some(line => line.includes('cap reached')), true, 'the loss is loud')
+
+  // 持久化仍被拒绝：损坏证据不被覆盖，flush 也没有偷偷写盘。
+  assert.equal(readFileSync(stateFile(stateDir), 'utf8'), evidence)
+  assert.equal(corrupt.status().persistedAt, null)
+
+  // flush 收敛：重复 flush 幂等，不二次计数。
+  await corrupt.flush()
+  assert.equal(corrupt.status().sessions, MAX_SESSIONS)
+  assert.equal(corrupt.status().dropped.sessions, 5)
+  corrupt.dispose()
 })
 
 test('read-mark clients expire on TTL and the drop is counted', async t => {
@@ -185,19 +247,55 @@ test('the persisted document carries only session ids and state metadata (privac
     todos: [{ text: 'TOP-SECRET-TODO' }],
     agentPreset: 'TOP-SECRET-PRESET',
     projections: { values: { secret: 'TOP-SECRET-PROJECTION' } },
+    // The projector never emits these fields; the store whitelist must drop
+    // them even when they arrive smuggled through the (typed) seam.
+    goal: {
+      goalId: 'goal-1', revision: 2, phase: 'active', updatedAt: 5, activation: 'armed',
+      objective: 'TOP-SECRET-OBJECTIVE', blockedReason: { code: 'x', message: 'TOP-SECRET-BLOCK' },
+    },
   })
   store.applyBaseline([hostile as never], { at: 100 })
   store.applyPending('s1', 'approval', 101)
   await store.flush()
   store.dispose()
   const text = readFileSync(stateFile(stateDir), 'utf8')
-  for (const secret of ['TOP-SECRET-TITLE', 'TOP-SECRET-CWD', 'TOP-SECRET-TODO', 'TOP-SECRET-PRESET', 'TOP-SECRET-PROJECTION']) {
+  for (const secret of [
+    'TOP-SECRET-TITLE', 'TOP-SECRET-CWD', 'TOP-SECRET-TODO', 'TOP-SECRET-PRESET', 'TOP-SECRET-PROJECTION',
+    'TOP-SECRET-OBJECTIVE', 'TOP-SECRET-BLOCK',
+  ]) {
     assert.equal(text.includes(secret), false, secret + ' must never reach the snapshot')
   }
+  assert.equal(text.includes('activation'), false, 'activation is process-local and never persisted')
   const document = JSON.parse(text) as { sessions: Array<Record<string, unknown>> }
   assert.deepEqual(Object.keys(document.sessions[0]).sort(), [
-    'completedAt', 'completedAtSource', 'error', 'lastRunningAt', 'lastTurnEnd', 'observedAt',
+    'completedAt', 'completedAtSource', 'error', 'goal', 'lastRunningAt', 'lastTurnEnd', 'observedAt',
     'origin', 'parentSessionId', 'pendingKind', 'pendingSince', 'present', 'running', 'sessionId',
     'subagentCount', 'updatedAt',
   ])
+  // The persisted goal carries ONLY the whitelisted durable fields.
+  assert.deepEqual(document.sessions[0].goal, { goalId: 'goal-1', revision: 2, phase: 'active', updatedAt: 5 })
+})
+
+test('a restart preserves the durable goal fact but clears the process-local activation', async t => {
+  const stateDir = scratch(t)
+  const first = createSessionStateStore({ stateDir, logger: silentLogger, now: () => 100 })
+  first.applyBaseline([baselineItem('s1', false, 5, {
+    goal: { goalId: 'g1', revision: 2, phase: 'active', updatedAt: 5 },
+  })], { at: 100 })
+  assert.equal(first.applyGoalActivation({ sessionId: 's1', goalId: 'g1', activation: 'armed' }, 101), true)
+  assert.equal(first.snapshotFor(null, 'sse', first.host()).sessions[0].goal?.activation, 'armed')
+  await first.flush()
+  first.dispose()
+
+  const persisted = JSON.parse(readFileSync(stateFile(stateDir), 'utf8')) as {
+    sessions: Array<{ goal: Record<string, unknown> }>
+  }
+  assert.deepEqual(persisted.sessions[0].goal, { goalId: 'g1', revision: 2, phase: 'active', updatedAt: 5 })
+
+  // A new store = a new watcher epoch: activation degrades to unknown, the
+  // durable phase/watermark survive.
+  const second = createSessionStateStore({ stateDir, logger: silentLogger, now: () => 200 })
+  const after = second.snapshotFor(null, 'sse', second.host()).sessions[0]
+  assert.deepEqual(after.goal, { goalId: 'g1', revision: 2, phase: 'active', updatedAt: 5 })
+  assert.equal(after.goal?.activation, undefined)
 })

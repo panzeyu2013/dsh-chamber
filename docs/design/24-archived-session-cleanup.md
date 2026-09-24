@@ -215,7 +215,7 @@ vendor 源码）+ 薄 Remote 门面（`index.ts`），编排逻辑：
    稀有路径（代码注释登记）；`resolveDeletableTree` 用显式栈迭代后序，消除递归深度
    = 链深的风险；
 2. **级联枚举**：对每个已归档顶层会话，按 `parentSessionId` 链枚举 subagent 起源后代
-   （等价于 `sidebar/shared/subagent-lineage.ts` 的 `indexSubagentDescendants`，但基于
+   （等价于 `packages/dsh-chamber-client-core/src/subagent-lineage.ts` 的 `indexSubagentDescendants`，但基于
    权威存储而非投影）；可枚举性（含 header 索引对归档行/子会话的可见性）见 §10。header
    读取走 `assertHeaderShape` **逐字段**（id/cwd/parentSession/origin）loud 校验：字段
    漂移记 fail-loud `registry-unreadable` 并点名会话与字段——**绝不逐条静默跳过**而把级联
@@ -327,7 +327,7 @@ vendor 源码）+ 薄 Remote 门面（`index.ts`），编排逻辑：
 
 ## 5. 客户端 wire 接入
 
-`packages/dsh-chamber-client-ui-sidebar/src/shared/instance-api.ts`（唯一客户端
+`packages/dsh-chamber-client-core/src/instance-api.ts`（唯一客户端
 接入点，sidebar 插件与 App 层共享）。**现状约束**：`call()` 私有；非 2xx 一律
 generic throw（无 status 透出）；503 `instance_unavailable` 有专类特判；默认超时
 `DEFAULT_TIMEOUT_MS = 30_000` 且**调用方传 signal 也压不住 30s 上限**
@@ -451,7 +451,7 @@ generic throw（无 status 透出）；503 `instance_unavailable` 有专类特�
   receipt / reconcile 重放腿），期间取消归档立即恢复阻塞。因此**归档管理器是唯一「先停止
   运行中的回合、再清理已归档内容」的入口**（归档动作本身也停一次）；工作树侧
   无任何停止编排，本域也不因工作树删除获得新执行权。
-- **i18n**：`shared/archive-purge.ts` 只返回**字典键 + 参数**（`PurgeNoteLine { key, params }`，
+- **i18n**：`packages/dsh-chamber-client-ui-sidebar/src/client/archive-purge.ts` 只返回**字典键 + 参数**（`PurgeNoteLine { key, params }`，
   `archivePurgeNote` 返回 `{ kind, lines }`），**不内联任何文案**；对话框用
   `t(key, params)` 渲染（`src/client/locales.ts` 的 zh/en 双字典，zh 为键集源、
   `en satisfies Record<SidebarKey, string>` 由 tsc 强制完整）。该模块与字典的唯一耦合
@@ -886,7 +886,7 @@ vendor/harness-packages（pinned submodule，当前 pin dsh-v0.1.5-rc.2 fb2c4b9e
   超时/网络/busy 亦可能已有宿主侧删除落地）均请求一次，覆盖「收缩推送到达前」的窗口，且对话
   框关闭也不丢请求。对话框请求不进 App 的冷却戳（跨包解耦）；与触发 1 在单次 purge 上重叠
   （≈2 次 session.list RPC，第二次通常空转）——purge 罕见、RPC 廉价，属有意双通道冗余。
-- **F1 墓碑抑制**（`shared/purged-rows.ts` 纯函数 + `shared/purged-tracker.ts` 状态机 +
+- **F1 墓碑抑制**（`packages/dsh-chamber-client-core/src/purged-rows.ts` 纯函数 + `packages/dsh-chamber-client-core/src/purged-tracker.ts` 状态机 +
   `client/index.ts` 接线）：生产端自己跟踪工作区 store 的权威归档集合（原始数组引用比对短路：
   官方 `installArchived` 仅在集合内容变化时安装新数组，稳态成本 = 一次引用比较）；发生**严格
   收缩**时把离开集合的 id 记为墓碑，并从**上报的 snapshot.sessions** 与**运行时事实通道**
@@ -897,7 +897,7 @@ vendor/harness-packages（pinned submodule，当前 pin dsh-v0.1.5-rc.2 fb2c4b9e
   返回同一数组引用。**与常驻保留的关系**：常驻保留的根**从不离开集合** ⇒ 不收缩、
   不布防墓碑；它们的行由归档过滤（`sessionVisible` / 官方导航同款）继续遮住。F1/F2 仍覆盖
   非常驻幽灵行（清标记 + 官方 summaries 滞留）。
-- **F2 校验式收敛链**（`shared/purged-convergence.ts`）：收缩与桥请求都触发链——**方法调用**
+- **F2 校验式收敛链**（`packages/dsh-chamber-client-core/src/purged-convergence.ts`）：收缩与桥请求都触发链——**方法调用**
   官方 `ctx.sessions.refresh()`，随后按 `ctx.sessions.list.byId` 校验墓碑 id 是否已消失：
   - resolve 且仍有残留 ⇒ 重试（官方 `refreshList` 单飞会把 purge 前的在途响应回给新调用者）；
   - reject ⇒ 重试（瞬时 RPC 失败且 summaries 未动）；

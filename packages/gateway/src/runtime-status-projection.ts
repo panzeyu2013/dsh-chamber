@@ -1,8 +1,6 @@
 /**
- * Gateway runtime status projection: the metadata health disk-facts cache and
- * the desktop-shaped projection. The in-memory recoverability gate is injected
- * as getters, so writer-busy / disposed transitions stay immediate on every
- * call.
+ * Gateway runtime status projection: the metadata health disk-facts cache plus the
+ * desktop-shaped projection; injected getters keep writer-busy / disposed immediate.
  */
 import { statSync } from 'node:fs'
 import { join } from 'node:path'
@@ -44,17 +42,16 @@ export interface MetadataStatusProjection {
 export function createMetadataStatusProjection(deps: MetadataStatusProjectionDeps): MetadataStatusProjection {
   const { platform, baseDir, shellVersion } = deps
   /** Disk-derived metadata health facts: detectRuntimeMetadataHealth scans
-   *  CURRENT/OVERRIDE/JOURNAL/recovery evidence on every /status call
-   *  (probed every 3s by the UI). Only the DISK facts are cached — the
-   *  in-memory recoverability gate is recomputed per call, so a writer becoming
-   *  busy still stops advertising recovery immediately. Every transaction
-   *  boundary invalidates through invalidateDiskCache(). */
+   *  CURRENT/OVERRIDE/JOURNAL/recovery evidence, so only the DISK facts are cached
+   *  (the UI probes /status every 3s). The in-memory recoverability gate is
+   *  recomputed per call, so a writer becoming busy stops advertising recovery
+   *  immediately; every transaction boundary invalidates through invalidateDiskCache(). */
   const METADATA_HEALTH_TTL_MS = 5_000
   let metadataHealthCache: {
     checkedAt: number
-    /** Cheap change detector: a direct on-disk corruption (fault injection,
-     *  operator repair) must be reflected on the NEXT status call, not after
-     *  the TTL — four stats replace the full scan in the common case. */
+    /** Cheap change detector: direct on-disk corruption (fault injection, operator
+     *  repair) must be visible on the NEXT status call, not after the TTL; four stats
+     *  replace the full scan. */
     fingerprint: string
     facts: {
       status: MetadataHealthStatus
@@ -63,7 +60,6 @@ export function createMetadataStatusProjection(deps: MetadataStatusProjectionDep
     } | null
   } | null = null
 
-  /** stat-only fingerprint of the metadata files + their directory. */
   function metadataFingerprint(): string {
     const parts: string[] = []
     for (const path of [
@@ -83,9 +79,8 @@ export function createMetadataStatusProjection(deps: MetadataStatusProjectionDep
   }
 
   /** Disk-derived metadata facts behind a short TTL: status + category-only
-   *  components + whether any recovery condition is on disk. null = unavailable
-   *  (win32 or unreadable). Cached ONLY here; invalidated by every writer
-   *  transaction. */
+   *  components + whether recovery is on disk; null = unavailable (win32 or
+   *  unreadable). Invalidated by every writer transaction. */
   function metadataHealthFacts(): {
     status: MetadataHealthStatus
     components: string[]
@@ -102,9 +97,8 @@ export function createMetadataStatusProjection(deps: MetadataStatusProjectionDep
     let facts: ReturnType<typeof metadataHealthFacts> = null
     try {
       const health = detectRuntimeMetadataHealth(baseDir, shellVersion)
-      // The component set and needsRecovery are the shared projection
-      // (dsh-runtime/src/metadata-health-projection.ts); the marker rescue
-      // stays here because it inspects THIS host's base directory.
+      // The component set and needsRecovery are the shared projection; the marker
+      // rescue stays here because it inspects THIS host's base directory.
       const projected = projectMetadataHealthFacts(health, {
         markerRescueAvailable: health.status === 'recovery-marker-corrupt'
           && inspectCorruptMetadataRecoveryMarker(baseDir).recoverable,
@@ -117,10 +111,8 @@ export function createMetadataStatusProjection(deps: MetadataStatusProjectionDep
     return facts
   }
 
-  /** Desktop-shaped metadata health projection (main.ts 3422-3470 mirror) for
-   *  /status: category-only components + explicit recover eligibility. The
-   *  disk facts are cached (TTL); the recoverability gate mixes them with LIVE
-   *  in-memory writer state on every call. */
+  /** Desktop-shaped metadata health projection for /status: category-only components
+   *  + explicit recover eligibility; the gate mixes disk facts with LIVE writer state. */
   function metadataProjection(): {
     metadataHealth: MetadataHealthStatus
     metadataComponents: string[]
@@ -131,14 +123,11 @@ export function createMetadataStatusProjection(deps: MetadataStatusProjectionDep
       return { metadataHealth: 'unknown', metadataComponents: [], canRecoverMetadata: false }
     }
     const startupBlockReason = deps.getStartupBlockReason()
-    // The recover route may act only on a FATAL metadata block (or a
-    // recovery attempt whose builtin probe failed and kept its durable
-    // record, or a finalized recovery whose resume start failed) —
-    // restore/swap recovery phases resume through their retry.
+    // The recover route may act only on a FATAL metadata block (or a recovery
+    // attempt that kept its durable record); restore/swap phases resume via retry.
     const recoverableBlock = startupBlockReason === null
       || RECOVERABLE_METADATA_BLOCKS.has(startupBlockReason)
-    // No busy-phase/task gate may advertise recovery while an
-    // activation/install/restart owns the writer.
+    // No gate may advertise recovery while an activation/install/restart owns the writer.
     const writerBusy = deps.isWriterBusy()
     const builtinVersion = deps.getBuiltinVersion()
     const canRecoverMetadata = (facts.needsRecovery || startupBlockReason === 'metadata-start-failed')

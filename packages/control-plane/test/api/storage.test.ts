@@ -3,9 +3,9 @@
  *
  * Covers json-store.ts + catalog.ts: backup-first atomic writes, recovery
  * from .bak with an explicit recovery state, double corruption throwing
- * (never a fake-empty), revision increments, If-Match conflicts, legacy
- * (schemaVersion-less) in-place migration, dropped-row counting, and the
- * write-through mutation serialization (parallel call sites never lose updates).
+ * (never a fake-empty), revision increments, If-Match conflicts, rejection of
+ * old/unknown schema versions, dropped-row counting, and the write-through
+ * mutation serialization (parallel call sites never lose updates).
  */
 
 import { test } from 'node:test'
@@ -14,7 +14,7 @@ import { spawn as spawnChild } from 'node:child_process'
 import fs, { chmodSync, existsSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { syncBuiltinESMExports } from 'node:module'
 import { join } from 'node:path'
-import { backupPathFor, createJsonStore, JsonStorePersistError, JsonStoreRevisionConflictError } from '../../src/json-store.ts'
+import { createJsonStore, JsonStorePersistError, JsonStoreRevisionConflictError } from '../../src/json-store.ts'
 import { createCatalog, CATALOG_FILE } from '../../src/catalog.ts'
 import type { CatalogConnectionRow } from '../../src/catalog.ts'
 import { ensureInstanceId } from '../../src/instance-id.ts'
@@ -382,31 +382,39 @@ test('mutateIfMatch throws a typed revision conflict on mismatch and passes on m
   assert.equal(snap.n, 2)
 })
 
-test('legacy schemaVersion-less catalog migrates in place with connections preserved and v1 kept as .bak', t => {
+test('a schemaVersion-less catalog is rejected, never migrated in place, and the file is left untouched', t => {
   const dir = tempDir(t)
   const file = join(dir, CATALOG_FILE)
-  const v1 = {
+  const old = {
     connections: [{
       connectionId: 'local', kind: 'local', label: 'Local dsh',
       status: 'ready', dshPort: 17510, error: 'legacy runtime detail',
     }],
-    // Thin-shell-era projects array: stripped at load (v4 has no project table).
     projects: [{ projectId: 'w1', connectionId: 'local', name: 'W', canonicalPath: '/tmp/w', sessionCount: 2 }],
   }
-  writeFileSync(file, `${JSON.stringify(v1, undefined, 2)}\n`)
+  writeFileSync(file, `${JSON.stringify(old, undefined, 2)}\n`)
   const catalog = createCatalog({ stateDir: dir, logger: silentLogger })
-  const { connections } = catalog.load()
-  assert.equal(connections.length, 1)
+  assert.throws(() => catalog.load(), /corrupt and no valid backup/, 'an old catalog fails loudly, never silently empty')
+  assert.deepEqual(readJson(file), old, 'the rejected file is never rewritten or migrated')
+})
+
+test('legacy projects/migration fields are stripped on the next durable catalog write', t => {
+  const dir = tempDir(t)
+  const file = join(dir, CATALOG_FILE)
+  writeFileSync(file, `${JSON.stringify({
+    schemaVersion: 2,
+    revision: 1,
+    connections: [{ connectionId: 'local', kind: 'local', label: 'Local dsh' }],
+    projects: [{ projectId: 'w1', connectionId: 'local' }],
+    migration: { legacyProjectsImported: false, pendingConnectionIds: [] },
+  }, undefined, 2)}\n`)
+  const catalog = createCatalog({ stateDir: dir, logger: silentLogger })
+  assert.equal(catalog.load().connections.length, 1)
+  catalog.upsertConnection({ connectionId: 'local', kind: 'local', label: 'Renamed' })
   const main = readJson(file)
-  assert.equal(main.schemaVersion, 2)
-  assert.equal(main.revision, 0)
-  assert.deepEqual(main.connections, [{ connectionId: 'local', kind: 'local', label: 'Local dsh' }])
-  assert.equal(main.projects, undefined)
-  assert.deepEqual(main.migration, { legacyProjectsImported: false, pendingConnectionIds: [] })
-  const backup = readJson(backupPathFor(join(dir, CATALOG_FILE)))
-  assert.equal(backup.schemaVersion, undefined)
-  assert.deepEqual(backup.connections, v1.connections)
-  assert.deepEqual(catalog.getConnection('local'), { connectionId: 'local', kind: 'local', label: 'Local dsh' })
+  assert.equal(main.projects, undefined, 'the thin-shell-era projects array does not round-trip')
+  assert.equal(main.migration, undefined, 'the v1→v2 migration block does not round-trip')
+  assert.equal(main.connections[0].label, 'Renamed')
 })
 
 test('invalid rows are dropped with counts surfaced in the recovery state', t => {

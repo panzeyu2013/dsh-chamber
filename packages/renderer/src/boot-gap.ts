@@ -1,48 +1,17 @@
 /**
- * Settled-boot gap facts and their presentation policy
- * 「降级呈现」/ design 09.
- * A shell can settle SUCCESSFULLY while a whole surface is missing. Three
- * producers know such a gap, and all three reach the App through the shell's
- * post-settle seam (`chamberReportBootDegraded`):
- *  - `graph-unavailable`: the source never served its client plugin graph
- *    inside the boot window, so this entry runs without the profile's client
- *    plugins;
- *  - `local-graph-not-injected`: the LOCAL instance's graph channel answered
- *    404 / method-missing. The chamber-managed local host always injects its
- *    graph (the seed row), so this is a chamber-side installation/seed fact —
- *    unlike a gateway/mobile shape, whose missing endpoint is legitimate and
- *    keeps producing no fact at all;
- *  - `required-services-missing`: the graph arrived but a service the
- *    composite's first screen injects never materialized (the classic one is
- *    `ui-chat` pending on `sidebarRight`, which leaves the conversation view
- *    unregistered while the boot still reports success);
- *  - `deferred-registration-failed`: a deferred plugin family's chunk never
- *    loaded or registered, so the slots/services it declares stay absent.
- * The gap reached `console` and the once-per-ready-epoch self-heal only, and the OTHER visible
- * channel (the connections page's `pluginDiagnostic`) legitimately reported
- * `ok` in the motivating case — the graph channel itself answered fine, it was
- * the service that never materialized. The user therefore saw a session title
- * next to an empty conversation body with no error anywhere.
- * Why this module is a LEAF (no runtime imports): `shell.ts` (fact carrier),
- * `chamber-entry.ts` (producers) and `App.tsx` (renderer) all need the fact
- * shape, and `shell.ts` already imports `host-graph.ts` — putting the type in
- * either would create a cycle. The TYPE-only import below is erased by the
- * type stripper, so plain-node tests still load this module standalone.
- * Two disciplines live here:
- *  - **Copy boundary** (STATUS「跨边界诊断文案」): the frame renders the
- *    sentence from its own typed dictionary (`locales.ts`); the producer's raw
- *    `message` is a DIAGNOSTIC line shown as detail, never the copy. The
- *    structured fields (`services`/`injectedBy`/`failedIds`) are the producer's
- *    facts; the frame never parses the message to recover them.
- *  - **Per-kind verdict table**: {@link BOOT_GAP_POLICY} is a `Record` over the
- *    kind union, so a new kind that does not declare its copy key AND its retry
- *    verdict fails the build instead of silently inheriting a wrong sentence or
- *    burning a futile cold re-mount (the self-heal container feeds
- *    {@link isRetryableBootGap} to the reducer as its retryability table).
- * The kind union itself is OWNED by the client-core shared bridge contract
- * (`ServerBootGapKind`, next to `PluginGraphDiagnostic`): the same vocabulary
- * crosses to the sidebar package and to the connections page, which render
- * their own copy — one definition, aliased here.
+ * Settled-boot gap facts and their presentation policy 「降级呈现」。
+ * Producers report through the shell's post-settle seam (`chamberReportBootDegraded`):
+ * `graph-unavailable` (graph never served in the boot window), `local-graph-not-injected`
+ * (LOCAL graph channel 404/method-missing — a chamber installation/seed fact, unlike a
+ * gateway/mobile shape whose missing endpoint is legitimate), `required-services-missing`
+ * (graph arrived but a first-screen injected service never materialized), and
+ * `deferred-registration-failed` (a deferred family never loaded/registered).
+ * LEAF (no runtime imports): the fact shape is needed by `shell.ts`, `chamber-entry.ts` and
+ * `App.tsx`, and `shell.ts` already imports `host-graph.ts`, so the type cannot live there (cycle).
+ * Copy boundary: the frame renders its own sentence from `locales.ts`; the producer's `message`
+ * is diagnostic detail, never copy, and the frame never parses it — structured fields are the facts.
+ * `BOOT_GAP_POLICY` is a `Record` over the kind union (a missing copy key or retry verdict fails
+ * the build); the union itself is owned by `ServerBootGapKind` in client-core, aliased here.
  */
 
 import type {
@@ -53,10 +22,7 @@ import { factRecordSignature } from '@dsh-chamber/dsh-chamber-client-core/derive
 
 /** Why a settled boot is known to be incomplete. */
 export type ShellDegradedKind = ServerBootGapKind
-/**
- * One settled-boot gap. Only the kind is semantic; the rest is structured
- * evidence, and every optional field belongs to exactly one kind.
- */
+/** One settled-boot gap. Only the kind is semantic; every optional field belongs to one kind. */
 export interface ShellDegradedFact {
   kind: ShellDegradedKind
   /** The producer's diagnostic line (below the frame): detail, never copy. */
@@ -85,11 +51,8 @@ export interface BootGapKindPolicy {
   bodyKey: BootGapBodyKey
   /**
    * Whether one cold re-mount per ready epoch can plausibly change the outcome.
-   * All four current kinds re-fetch the graph and re-apply the rows, so all
-   * four are worth exactly one attempt. A future kind whose cause a re-boot
-   * cannot touch (e.g. a hard graph-channel rejection) MUST declare `false`
-   * here: the self-heal container then leaves it alone instead of paying a cold
-   * re-mount per ready epoch for a guaranteed no-op.
+   * All current kinds re-fetch the graph and re-apply the rows (exactly one attempt is worth it);
+   * a future kind whose cause a re-boot cannot touch MUST declare `false` here.
    */
   retryable: boolean
 }
@@ -97,9 +60,7 @@ export interface BootGapKindPolicy {
 /** Per-kind verdict table (see the module header for why it is a `Record`). */
 export const BOOT_GAP_POLICY: Record<ShellDegradedKind, BootGapKindPolicy> = {
   'graph-unavailable': { bodyKey: 'bootGap.body.graphUnavailable', retryable: true },
-  // installation/seed fact. A re-mount re-runs the same graph fetch and journal
-  // state, which is the one cheap attempt that can clear a stale endpoint after
-  // a restart — worth the same single attempt as the channel-failure kind.
+  // installation/seed fact: a re-mount re-runs the same graph fetch + journal state — the one cheap attempt that can clear a stale endpoint after a restart.
   'local-graph-not-injected': { bodyKey: 'bootGap.body.localGraphNotInjected', retryable: true },
   'required-services-missing': { bodyKey: 'bootGap.body.requiredServicesMissing', retryable: true },
   'deferred-registration-failed': { bodyKey: 'bootGap.body.deferredRegistrationFailed', retryable: true },
@@ -107,28 +68,18 @@ export const BOOT_GAP_POLICY: Record<ShellDegradedKind, BootGapKindPolicy> = {
 
 /**
  * Whether a cold re-mount is worth attempting for this kind.
- * The policy table is indexed WITHOUT a fallback on purpose: the kind is a typed
- * union produced in this same bundle (never parsed from a wire payload), so an
- * unknown kind cannot occur — and if it somehow did, a loud boundary error beats
- * inventing a cause sentence. The two cross-package readers DO have generic
- * fallbacks (`source.bootGap.generic`, `bootGapGeneric`), because a bridge payload
- * from a differently-versioned build is a real possibility there.
+ * Indexed WITHOUT a fallback on purpose: the kind is a typed union produced in this same bundle
+ * (never parsed from a wire payload), so an unknown kind cannot occur — a loud boundary error beats
+ * inventing a cause sentence. Cross-package readers do have generic fallbacks.
  */
 export function isRetryableBootGap(kind: ShellDegradedKind): boolean {
   return BOOT_GAP_POLICY[kind].retryable
 }
 
 /**
- * Relative CAUSE strength of one kind. The probe's
- * `required-services-missing` is the CONSEQUENCE of a missing provider; the
- * three other kinds name a CAUSE the user can act on (the local graph endpoint
- * was never injected, the channel never answered, a deferred family never
- * registered). When both are known, the single banner slot must show the cause —
- * otherwise the actionable fact is replaced ~5s later by its own symptom — a
- * bare "缺少 sidebarRight" with no
- * hint that the local instance had no graph channel at all.
- * Distinct by construction (the shell compares with `>`/`>=`, never equality),
- * and exhaustive over the union so a new kind must declare its rank here.
+ * Relative CAUSE strength of one kind: `required-services-missing` is the CONSEQUENCE of a missing
+ * provider, while the other three name a cause the user can act on. When both are known the single
+ * banner slot must show the cause. Distinct by construction and exhaustive over the union.
  */
 export function bootGapPriority(kind: ShellDegradedKind): number {
   switch (kind) {
@@ -140,16 +91,9 @@ export function bootGapPriority(kind: ShellDegradedKind): number {
 }
 
 /**
- * Whether an incoming (non-clear) fact may replace the recorded one.
- * Same kind always replaces (its payload may have grown — the probe can name a
- * LARGER missing set). A strictly LOWER-priority kind never overwrites a
- * higher-priority one that is still current; an equal-or-higher kind replaces.
- * Retraction is unaffected: a clear must still match kind AND payload exactly
- * ({@link bootGapClearMatchesFact}), so the suppressed consequence cannot erase
- * the cause's fact either.
- * @param current - the fact currently recorded on the holder, or null.
- * @param incoming - the new non-clear fact.
- * @returns whether the holder should replace its recorded fact.
+ * Whether an incoming (non-clear) fact may replace the recorded one: same kind always replaces
+ * (its payload may have grown), a strictly lower-priority kind never overwrites a still-current
+ * higher-priority one. Retraction is unaffected: a clear must match kind AND payload exactly.
  */
 export function shouldReplaceBootGap(current: ShellDegradedFact | null, incoming: ShellDegradedFact): boolean {
   if (current === null) return true
@@ -158,42 +102,22 @@ export function shouldReplaceBootGap(current: ShellDegradedFact | null, incoming
 }
 
 /**
- * Identity of one fact: same kind AND same payload = the same fact. `shell.ts`
- * uses this instead of a kind-only comparison — the probe's re-armed pass can
- * name a LARGER missing set, so kind-only
- * dedup would silently drop the richer verdict.
- * Field-GENERIC on purpose: every payload field takes part, so a field added to
- * the fact later can neither freeze a subscription nor be mistaken for an equal
- * fact. Fields are order-normalized; ARRAY order is preserved because the roster
- * order is the producer's and meaningful (the first named service is the first
- * blocker). "No payload" is one thing — an absent field, an empty array, `null`
- * and an empty string all encode to nothing — so a producer that omits vs
- * materializes an empty field cannot churn the gate.
- * `message` is deliberately NOT part of the identity: both producers derive it
- * deterministically from the same payload (the probe from `missing` + instance,
- * the deferred cluster from the failed id set + instance), so an identical
- * payload cannot carry a different sentence — and the producers already dedup
- * their own repeats (the probe keeps a `reportedSignature`, the deferred cluster
- * reports once per boot). Non-deterministic host/network text belongs to the
- * diagnostic channel (`pluginDiagnostic`), never here.
- * @param fact - the reported fact.
- * @returns a stable signature string.
+ * Identity of one fact: same kind AND same payload. `shell.ts` uses this instead of a kind-only
+ * comparison, so a richer re-armed verdict is not silently dropped. Field-generic: every payload
+ * field takes part and "no payload" (absent / empty array / null / empty string) encodes to nothing.
+ * Array order is preserved (roster order is meaningful). `message` is deliberately excluded:
+ * both producers derive it deterministically from the same payload, so an identical payload cannot
+ * carry a different sentence; non-deterministic host/network text belongs to `pluginDiagnostic`.
  */
 export function bootGapSignature(fact: ShellDegradedFact): string {
-  // The producer's sentence is NOT part of the identity (see the doc above).
   return factRecordSignature(fact, ['message'])
 }
 
 /**
- * A producer's RETRACTION of a previously reported gap:
- * the condition the fact named no longer holds — the motivating producer is the
- * required-service probe, whose missing set can become empty when a provider
- * finally materializes after the 5s verdict. The shell must REMOVE the fact
- * instead of keeping a false banner for the rest of the mount.
- * It rides the SAME seam as the fact (`chamberReportBootDegraded`): one channel,
- * one boot-generation fence, one stash/replay path. The retraction names the
- * EXACT fact it removes (kind + {@link bootGapSignature}), so a newer/richer
- * verdict is never dropped by an older producer's late retraction.
+ * A producer's RETRACTION of a previously reported gap: the named condition no longer holds and the
+ * shell must REMOVE the fact instead of keeping a false banner. It rides the SAME seam as the fact
+ * (`chamberReportBootDegraded`) and names the EXACT fact it removes (kind + signature), so a
+ * richer verdict is never dropped by an older producer's late retraction.
  */
 export interface ShellDegradedClear {
   /** Discriminant: a retraction is not a fact (see {@link ShellDegradedReport}). */
@@ -213,15 +137,9 @@ export function isShellDegradedClear(report: ShellDegradedReport): report is She
 }
 
 /**
- * Whether `clear` retracts exactly `current` — the shell's whole retraction gate.
- * Both halves are load-bearing: the KIND stops one producer from clearing
- * another producer's fact (the slot is single, so a kind-blind clear would erase
- * an unrelated verdict), and the SIGNATURE stops a stale retraction from wiping
- * a newer verdict of the same kind (the probe's re-armed pass can name a larger
- * missing set, which is a different fact).
- * @param current - the fact currently recorded on the shell, if any.
- * @param clear - the retraction a producer reported.
- * @returns whether the recorded fact must be removed.
+ * Whether `clear` retracts exactly `current`: the KIND stops one producer from clearing another
+ * producer's fact (single slot), the SIGNATURE stops a stale retraction from wiping a newer verdict
+ * of the same kind.
  */
 export function bootGapClearMatchesFact(
   current: ShellDegradedFact | null,
@@ -237,11 +155,9 @@ export interface BootGapNoticeContext {
   /** The self-heal already re-mounted this source for the CURRENT ready epoch. */
   retried: boolean
   /**
-   * The source id the fact belongs to (`'local'` = the app-managed local
-   * instance). The manual next-step copy branches on this STRUCTURED fact, never
-   * on the diagnostic sentence: on Windows the local runtime is a READ-ONLY
-   * projection, so the local copy must not send the user to "upgrade the dsh
-   * runtime".
+   * The source id the fact belongs to (`'local'` = app-managed instance). The manual next-step copy
+   * branches on this STRUCTURED fact, never on the sentence: on Windows the local runtime is a
+   * READ-ONLY projection, so local copy must not send the user to "upgrade the dsh runtime".
    */
   instanceId?: string
 }
@@ -259,23 +175,15 @@ export interface BootGapNotice {
   /** A retry affordance is worth offering (see {@link BootGapKindPolicy.retryable}). */
   retryable: boolean
   /**
-   * The self-heal WILL re-mount this mount, so the copy may promise it. True
-   * only while the source is `ready` and the epoch has not retried yet —
-   * the self-heal container never fires for a source that is not ready, so
-   * promising an automatic re-mount there would be a lie.
+   * The self-heal WILL re-mount this mount, so the copy may promise it: true only while the source
+   * is `ready` and the epoch has not retried (the container never fires for a non-ready source).
    */
   autoRetryArmed: boolean
 }
 
 /**
- * Build the render decision for one fact.
- * Pure: the caller passes the two facts the App already holds (the source phase
- * and the self-heal mark for the current ready epoch). No copy is produced here
- * — only dictionary keys and structured facts — because the frame renders its
- * own sentences (see the module header).
- * @param fact - the settled-boot gap.
- * @param context - the source's phase and this epoch's self-heal mark.
- * @returns the render decision.
+ * Build the render decision for one fact. Pure: no copy is produced here — only dictionary keys and
+ * structured facts — because the frame renders its own sentences.
  */
 export function bootGapNotice(fact: ShellDegradedFact, context: BootGapNoticeContext): BootGapNotice {
   return {
@@ -286,24 +194,15 @@ export function bootGapNotice(fact: ShellDegradedFact, context: BootGapNoticeCon
     failedIds: fact.failedIds ?? [],
     retryable: isRetryableBootGap(fact.kind),
     autoRetryArmed: context.phase === 'ready' && !context.retried && isRetryableBootGap(fact.kind),
-    // projection on Windows (`runtimeManagementSupported=false`), so the local
-    // advice is restart/re-mount/report-diagnostics. Remote sources keep the
-    // runtime-alignment wording: their runtime is managed on that host.
+    // Windows local runtime is a read-only projection (`runtimeManagementSupported=false`): local advice is restart/re-mount/report-diagnostics; remote keeps runtime-alignment wording.
     manualKey: context.instanceId === 'local' ? 'bootGap.action.manualLocal' : 'bootGap.action.manual',
   }
 }
 
 /**
- * Project one shell fact onto the cross-package bridge contract.
- * Drops the producer's diagnostic sentence: the sidebar row and the connections
- * card write their own copy from the KIND and the ids, and the sentence is
- * frame-below text (STATUS「跨边界诊断文案」). Fields are always present as
- * arrays so a consumer never has to distinguish "absent" from "empty"; the
- * projection signature encodes fields in sorted FIELD order but keeps every
- * ARRAY's order (roster order is meaningful: the first service is the first
- * blocker), and treats "no payload" (absent / empty array / null) as one thing.
- * @param fact - the shell's settled-boot gap.
- * @returns the projected gap carried by `ChamberServerAggregate.bootGap`.
+ * Project one shell fact onto the cross-package bridge contract, dropping the diagnostic sentence.
+ * Fields are always arrays so a consumer never distinguishes absent from empty; the projection
+ * signature sorts FIELD order while each ARRAY keeps its meaningful roster order.
  */
 export function toServerBootGap(fact: ShellDegradedFact): ServerBootGap {
   return {

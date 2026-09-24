@@ -1,0 +1,95 @@
+{
+  "note": "God-file ratchet: lines may only go down; run the gate with --update-budget in the same change that shrinks a file. target = the refactor objective budget. Entries whose target names a FUNCTION (host-assembly/createRuntimeStartupHost) use the file as the closest available proxy.",
+  "files": [
+    {
+      "path": "packages/renderer/src/App.tsx",
+      "lines": 2450,
+      "target": 400,
+      "note": "renderer container (function-of-state mixes; stores/budgets/servers/ledger extracted)"
+    },
+    {
+      "path": "packages/desktop/plugin-sync.ts",
+      "lines": 2146,
+      "target": 1200,
+      "note": "plugin mutation pipeline (three surfaces share one file)"
+    },
+    {
+      "path": "packages/desktop/shell-core.ts",
+      "lines": 1318,
+      "target": 1600,
+      "note": "shell assembly + IPC ctx (blocks the shell-ipc type cycle)"
+    },
+    {
+      "path": "packages/dsh-chamber-client-ui-settings-bridge/src/client/DshRuntimeSection.tsx",
+      "lines": 2240,
+      "target": 600,
+      "note": "gateway + local runtime branches in one file"
+    },
+    {
+      "path": "packages/dsh-chamber-client-ui-settings-connections/src/client/PluginDialog.tsx",
+      "lines": 2085,
+      "target": 700,
+      "note": "plugin dialog controller/render mix"
+    },
+    {
+      "path": "packages/desktop/gateway-provider.ts",
+      "lines": 1683,
+      "target": 1400,
+      "note": "gateway transport provider"
+    },
+    {
+      "path": "packages/desktop/ssh-provider.ts",
+      "lines": 1454,
+      "target": 1500,
+      "note": "ssh transport provider"
+    },
+    {
+      "path": "packages/dsh-chamber-client-ui-settings-connections/src/client/ConnectionsSection.tsx",
+      "lines": 1725,
+      "target": 900,
+      "note": "connections page + form flow"
+    },
+    {
+      "path": "packages/dsh-chamber-client-core/src/derive.ts",
+      "lines": 1808,
+      "target": 1200,
+      "note": "aggregate/session derive"
+    },
+    {
+      "path": "packages/desktop/transport-manager.ts",
+      "lines": 1667,
+      "target": 1400,
+      "note": "transport lifecycle"
+    },
+    {
+      "path": "packages/gateway/src/session-state.ts",
+      "lines": 2003,
+      "target": 900,
+      "note": "gateway session state routes + store + SSE"
+    },
+    {
+      "path": "packages/dsh-chamber-client-core/src/instance-api.ts",
+      "lines": 1366,
+      "target": 900,
+      "note": "per-instance unary api surface"
+    },
+    {
+      "path": "packages/desktop/runtime-startup-host.ts",
+      "lines": 1294,
+      "target": 500,
+      "note": "createRuntimeStartupHost function budget (file proxy)"
+    },
+    {
+      "path": "packages/desktop/host-assembly.ts",
+      "lines": 1155,
+      "target": 400,
+      "note": "createHostAssembly function budget (file proxy)"
+    },
+    {
+      "path": "packages/dsh-chamber-client-core/src/aggregate-store.ts",
+      "lines": 998,
+      "target": 600,
+      "note": "aggregate store types/channels/registry"
+    }
+  ]
+}

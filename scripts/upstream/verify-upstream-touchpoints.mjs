@@ -966,7 +966,7 @@ for (const fork of FORKS) {
 // 决定是否 arm 宽限关闭（`HoverCard.tsx` 的 `onPointerLeave` =
 // `clearTimer()` + `if (open) armClose()`），dwell 定时器触发到 React 提交之间
 // 落下的 pointerleave 什么都不 arm，卡片随后挂载而指针已经离开 ⇒ 再无事件能关掉
-// 它。vendor 只读，故修正落在本包；这是一条**登记在案的偏差**，退役条件只有一个
+// 它。vendor 只读，故修正落在本包；退役条件只有一个
 // ——「上游修掉该竞态」。本门把该条件变成机器判据，读的是**冻结 pin**：
 //   ① 竞态形状仍在（arm 仍由已提交的 open 守卫；换成 ref/无条件 arm = 上游可能已
 //      修，硬失败要求人工裁决，绝不自动放行）；

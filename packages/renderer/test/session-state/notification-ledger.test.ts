@@ -12,6 +12,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import {
   createNotificationLedger,
+  notificationLedger,
   publishBadgeCount,
   publishNotificationInstrument,
 } from '../../src/notification-ledger.ts'
@@ -89,7 +90,9 @@ test('the instruments publish once and stay live views', () => {
 })
 
 test('the badge hook publishes the dispatched count next to the projection', () => {
-  assert.match(BADGE_HOOK, /const count = projectBadgeCount\(completedBySource, runtimeFacts\)[\s\S]{0,220}?publishBadgeCount\(count\)/)
+  // goal-aware v5 §4：投影输入是**合并后**的 runtime（badgeSuppressionFacts 把
+  // goalActive / subagentActivity 从行上归一），发布点仍必须紧邻同一次投影。
+  assert.match(BADGE_HOOK, /const count = projectBadgeCount\(completedBySource, badgeSuppressionFacts\(runtimeFacts\)\)[\s\S]{0,220}?publishBadgeCount\(count\)/)
 })
 
 test('every notification decision is recorded — including the no-bridge case', () => {
@@ -110,4 +113,39 @@ test('the ledger records the MAIN-PROCESS result, and notify is still called exa
     return !trimmed.startsWith('//') && !trimmed.startsWith('*') && line.includes('bridge.notify(')
   })
   assert.equal(calls.length, 1, calls.join(' | '))
+})
+test('the reconcile counters are independent from the three-value decision counts', () => {
+  const ledger = createNotificationLedger({ limit: 2 })
+  ledger.record(entry('sent', { origin: 'goal-outcome', pendingAge: 42 }))
+  ledger.countReconcile('held')
+  ledger.countReconcile('held')
+  ledger.countReconcile('flushed')
+  ledger.countReconcile('voided')
+  ledger.countReconcile('dropped')
+  ledger.countReconcile('deferred')
+  assert.deepEqual(
+    ledger.reconcileCounts(),
+    { held: 2, flushed: 1, voided: 1, dropped: 1, deferred: 1 },
+    '投影处置独立计数（v5 §6.5）',
+  )
+  assert.deepEqual(ledger.counts(), { sent: 1, suppressed: 0, skipped: 0 }, '三值计数不被处置计数污染')
+  assert.equal(ledger.total(), 1, 'total 契约不变')
+  assert.equal(ledger.entries()[0].origin, 'goal-outcome', '¤origin¤ 诊断随 entry 保留')
+  assert.equal(ledger.entries()[0].pendingAge, 42, 'pendingAge 诊断随 entry 保留')
+  const snapshot = ledger.reconcileCounts()
+  snapshot.held = 99
+  assert.equal(ledger.reconcileCounts().held, 2, '计数快照是副本')
+})
+
+test('the instrument exposes the held counter for the acceptance positive-control read-back', () => {
+  const host: Record<string, unknown> = {}
+  publishNotificationInstrument(host)
+  const instrument = host.__dshChamberNotifications as {
+    held(): number
+    reconcile(): { held: number }
+  }
+  const before = instrument.held()
+  notificationLedger.countReconcile('held')
+  assert.equal(instrument.held(), before + 1)
+  assert.equal(instrument.reconcile().held, before + 1)
 })

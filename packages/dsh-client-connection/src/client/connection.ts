@@ -1,12 +1,7 @@
 /** Connection generation readiness, cancellation, and continuous recovery.
- *
- * chamber patch: the upstream client, except the
- * `erasableSyntaxOnly` explicit-field rewrite in
- * the constructor below. The chamber liveness triggers drive the native
- * `reconnect()`/`setNetworkAvailable()` recovery control instead of
- * stop()+start(), so no second pump loop can be spawned and no epoch guard is
- * needed.
- */
+ *  chamber patch: explicit constructor field assignment (erasableSyntaxOnly);
+ *  liveness triggers drive native reconnect()/setNetworkAvailable() instead of
+ *  stop()+start(), so no second pump loop and no epoch guard. */
 import { resolveConnectionConfig, type ConnectionRecoveryConfig } from '../recovery-config.ts'
 
 export type { ConnectionRecoveryConfig } from '../recovery-config.ts'
@@ -16,9 +11,7 @@ export interface ConnectionHostInfo {
   readonly home: string
 }
 
-/** One successfully established Host generation. */
 export interface ConnectionGeneration {
-  /** Monotone generation number within this Client runtime. */
   readonly id: number
   /** Host facts carried by this generation's opening frame. */
   readonly host: ConnectionHostInfo
@@ -46,13 +39,11 @@ function waitForAbort(signal: AbortSignal): Promise<void> {
   })
 }
 
-/** Connection lifecycle state published after the first attempt has an outcome. */
 export type ConnectionState =
   | 'connected'
   | 'disconnected'
   | 'connecting'
 
-/** Connection-generation callbacks owned by API Gateway. */
 export interface ConnectionSinks {
   /** After the generation source reports ready, first connect included. */
   onConnected?: (host: ConnectionHostInfo) => void
@@ -62,25 +53,15 @@ export interface ConnectionSinks {
   onReconnectRequested?: () => void
 }
 
-/**
- * One long-lived source defining a Connection generation. The source must
- * attach its incremental listeners before calling `ready`, then remain pending
- * until the generation is lost or `signal` aborts. On abort it must stop
- * delivery, release its resources, and settle before a replacement can start.
- * @param signal - cancellation for the current generation.
- * @param ready - one-shot report that incremental delivery is attached.
- * @returns a promise settling only when this generation ends or fails.
- */
+/** One long-lived source defining a Connection generation: incremental listeners
+ *  must be attached before `ready`; abort must release resources before replacement. */
 export type ConnectionGenerationSource = (
   signal: AbortSignal,
   ready: (host: ConnectionHostInfo) => void,
 ) => Promise<void>
 
-/**
- * Opens the registered generation source, reconnecting with exponential backoff on loss.
- * State (generation/attempt) is instance-private, never in the store.
- * Sink exceptions do not kill the generation loop.
- */
+/** Opens the registered generation source; loss reconnects with exponential
+ *  backoff. State is instance-private; sink exceptions never kill the loop. */
 export class ConnectionController {
   private generation = 0
   private attempt = 0
@@ -91,9 +72,7 @@ export class ConnectionController {
   private networkAvailable = true
   private lastState: ConnectionState | undefined
   private readonly config: Required<ConnectionRecoveryConfig>
-  // chamber patch (erasableSyntaxOnly): upstream declares these two as
-  // parameter properties; the chamber copy assigns them explicitly so the file
-  // typechecks under the erasable-only config.
+  // chamber patch (erasableSyntaxOnly): explicit field assignment (upstream uses parameter properties).
   private readonly source: ConnectionGenerationSource
   private readonly sinks: ConnectionSinks
 
@@ -134,10 +113,7 @@ export class ConnectionController {
     this.retryDelay?.abort(MANUAL_RECONNECT)
   }
 
-  /**
-   * Suspend automatic retries while offline and restart backoff when the network returns.
-   * @param available - whether the browser reports network access.
-   */
+  /** Suspend automatic retries while offline; restart backoff when the network returns. */
   setNetworkAvailable(available: boolean): void {
     if (this.networkAvailable === available) return
     this.networkAvailable = available
@@ -281,7 +257,6 @@ export class ConnectionController {
     }
   }
 
-  /** Deduplicated state emission (sink isolation applies). */
   private emitState(state: ConnectionState): void {
     if (this.lastState === state) return
     this.lastState = state
@@ -298,7 +273,6 @@ export class ConnectionController {
   }
 }
 
-/** Report a slow handshake before the hard deadline ends its generation. */
 function waitForReady<T>(
   ready: Promise<T>,
   config: Required<ConnectionRecoveryConfig>,

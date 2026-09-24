@@ -1,14 +1,8 @@
-/** chamber client-core shared faces: the instance unary client, the chamberBridge singleton, the control-plane REST client, the gateway dsh-runtime core (design 21 §5.2), and the page-owned restart→reload completion (design 18 §3.6 item 8).
- *
- * The `.` face is the production-consumed surface list, not a barrel: each module
- * contributes all of its types (`export type *`) plus an explicit named list of the
- * runtime values a production importer names. That list is the face
- * `verify-no-dead-exports` judges — a runtime value only a test needs is not a
- * public face: the test imports the module package-locally through its source path
- * (`../../../dsh-chamber-client-core/src/<mod>.ts`) instead, and a new production
- * consumer adds its face here in the same change. `archive-purge.ts` is NOT here: it
- * belongs to the sidebar package (moved to `src/client/archive-purge.ts`) because its
- * only production consumer is the sidebar. */
+/** chamber client-core shared faces: the instance unary client, the chamberBridge singleton, the
+ * control-plane REST client, the gateway dsh-runtime core, and the page-owned restart→reload
+ * completion. The `.` face is the production-consumed surface list, not a barrel: a runtime value
+ * only a test needs is not a public face (judged by `verify-no-dead-exports`), and a new production
+ * consumer adds its face here in the same change. `archive-purge.ts` belongs to the sidebar. */
 
 export type * from './instance-api.ts'
 export type * from './instance-rpc-error.ts'
@@ -42,6 +36,7 @@ export type * from './session-echo.ts'
 export { forgetPendingArchives, forgetPendingSessions, reconcilePendingArchives, reconcilePendingSessions, recordPendingArchive, recordPendingSession, refreshPendingArchives, removePendingSession, sweepPendingArchives, sweepPendingSessions, withPendingArchives, withSessionEcho } from './session-echo.ts'
 export type * from './session-row-state.ts'
 export { sessionRowState, subagentActivityOf } from './session-row-state.ts'
+export { sessionOpenPromiseInFlight } from './session-open.ts'
 export type * from './session-create-ledger.ts'
 export { publishSessionCreationInstrument, sessionCreationLedger } from './session-create-ledger.ts'
 export type * from './session-mutations.ts'
@@ -58,6 +53,8 @@ export type * from './runtime-refusal.ts'
 export { classifyRuntimeRefusal, serverRefusalText } from './runtime-refusal.ts'
 export type * from './error-text.ts'
 export { describeThrown, errorMessage } from './error-text.ts'
+export type * from './listener-set.ts'
+export { createListenerSet } from './listener-set.ts'
 export type * from './boot-gap-shape.ts'
 export { bootGapShape } from './boot-gap-shape.ts'
 export type * from './view-prefs.ts'

@@ -155,6 +155,15 @@ jobs:
         run: pnpm run verify:ladder-table-parity
       - name: Dead-export gate (the stream-state surface has production consumers)
         run: pnpm run verify:no-dead-exports
+      # 引用环门：值 import 环必须为 0（模块求值顺序不得成为承重结构），类型环必须
+      # 命中脚本内显式 allowance（棘轮：allowance 过期或新环即红）。只读、离线、
+      # 自带 --self-test 负控，故不挂 classifier；与 run-checks.mjs static 双向对齐。
+      - name: Import-cycle gate (zero value cycles, allowlisted type cycles)
+        run: pnpm run verify:import-cycles
+      # God 文件预算棘轮：登记文件的行数只降不升（缩小须同改 --update-budget），
+      # target 列来自 refactor 目标。file-only（只读、离线），与 run-checks 双向对齐。
+      - name: God-file budget ratchet (budgeted files may only shrink)
+        run: pnpm run verify:file-budgets
       - name: Upstream lifecycle contract (first-frame bound retirement tripwire)
         run: pnpm run verify:upstream-lifecycle-contract
       # 包边界门（R4 P7）：生产面禁跨包相对 import（vendor 直穿按 registry 放行）+

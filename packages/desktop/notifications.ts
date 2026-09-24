@@ -1,13 +1,12 @@
 /**
  * Desktop notification decision logic (design 19 §3.3) — pure logic, no
- * electron, unit-testable with plain node:test (see test/desktop-shell/notifications.test.ts).
+ * electron, plain node tests.
  *
- * The main process (main.ts) is the authority for the decision chain: the
- * renderer only detects session edges and assembles a NotificationRequest,
- * then the desktop shell decides whether a native notification is actually
- * shown (settings from chamber-settings.json, dedupe claim, focus state).
- * The Electron side effects (new Notification / click → window focus /
- * notification-open push) live in main.ts.
+ * The main process is the authority for the decision chain: the renderer only
+ * detects session edges and assembles a NotificationRequest, then the shell
+ * decides whether a native notification is actually shown (settings from
+ * chamber-settings.json, dedupe claim, focus state). The Electron side effects
+ * (new Notification / click → window focus / notification-open push) are main.ts.
  */
 
 import { INSTANCE_ID_PATTERN } from './transport-provider.ts';
@@ -31,14 +30,11 @@ export interface NotificationRequest {
   /** 正在屏幕上查看的会话（渲染端 document.hasFocus 判定，主进程再查一次作为权威）。 */
   requireHidden: boolean
   /**
-   * 内容水位（来源 host 域毫秒：远端行取该来源 host 时钟，本地行取本地 dsh host
-   * 时钟；**不得**使用 renderer 墙钟——客户端墙钟不得进任何比较）：
-   * 同一次事件的两个通知入口（壳通道 / gateway 事实源）必须传同一个水位函数——
-   * complete = `completedAt ?? updatedAt`；ask/request = `updatedAt`。
-   *
-   * 它是 5s 去重身份的第五个分量：同一水位 = 同一事件
-   * → 两个入口合并成一条横幅；同会话的下一次完成水位不同 → 新事件，不得被前一次
-   * 吞掉。**缺省** = 键里序列化为 `null`，即不含水位的四元组身份。
+   * 内容水位（来源 host 域毫秒——远端取该来源 host 时钟、本地取本地 dsh host
+   * 时钟，**不得**用 renderer 墙钟）：同一次事件的两个通知入口必须传同一水位
+   * 函数——complete = `completedAt ?? updatedAt`；ask/request = `updatedAt`。
+   * 它是去重身份的第五个分量：同水位 = 同一事件合并成一条横幅，同会话下一次
+   * 完成水位不同 = 新事件；缺省序列化为 null（不含水位的四元组身份）。
    */
   watermark?: number
   /** Stable outbox identity; retries keep it unchanged even after a document reload. */
@@ -46,8 +42,7 @@ export interface NotificationRequest {
 }
 
 /** A native-notification click held until the renderer has installed its
- * listener. Kept separate from NotificationRequest because only the routing
- * coordinates cross back into the renderer. */
+ * listener; only the routing coordinates cross back into the renderer. */
 export interface NotificationOpenIntent {
   sourceId: string
   /** Exact source proof captured when the native notification was created. */
@@ -68,8 +63,7 @@ export interface NotificationSourceToken {
   readonly generation: number
 }
 
-/** Opaque, non-secret main-process lifecycle proof projected to the renderer.
- * It is intentionally unrelated to reusable registry fields. */
+/** Opaque, non-secret main-process lifecycle proof; intentionally unrelated to reusable registry fields. */
 export const REMOTE_SOURCE_FINGERPRINT_PATTERN = /^[a-f0-9]{64}$/
 
 export interface NotificationSourceProofInstance {
@@ -86,10 +80,9 @@ export type NotificationSourceProofProjection<T extends NotificationSourceProofI
 }
 
 /**
- * Main-memory source proof sidecar. A proof survives presentation/service/home
- * edits, but rotates when the renderer lifecycle retires (delete or transport
- * identity edit). Removing an id deletes its entry, so a byte-for-byte same-id
- * re-add still receives a fresh proof. The sidecar is never serialized.
+ * Main-memory source proof sidecar (never serialized): a proof survives
+ * presentation/service/home edits but rotates when the renderer lifecycle
+ * retires; removing an id deletes its entry, so a same-id re-add re-mints.
  */
 export class NotificationSourceProofs {
   readonly #current = new Map<string, { identity: string; proof: string }>()
@@ -100,8 +93,7 @@ export class NotificationSourceProofs {
       this.#mint = mint
       return
     }
-    // Acquire entropy once before any registry commit can occur. Per-proof
-    // generation thereafter cannot fail at a host RNG boundary.
+    // Acquire entropy once before any registry commit: per-proof minting thereafter cannot fail at a host RNG boundary.
     const namespace = randomBytes(24).toString('hex')
     let generation = 0n
     this.#mint = () => {
@@ -144,9 +136,8 @@ export class NotificationSourceProofs {
   }
 }
 
-/** Main-process source lifecycle authority. A removal or transport-identity
- * edit advances the generation, so native Notification click closures and
- * held opens cannot cross into a same-id replacement. */
+/** Main-process source lifecycle authority: a removal or transport-identity edit
+ * advances the generation, so click closures cannot cross into a same-id replacement. */
 export class NotificationSourceIncarnations {
   readonly #current = new Map<string, { fingerprint: string; token: NotificationSourceToken }>()
   #nextGeneration = 1
@@ -192,8 +183,7 @@ export class NotificationSourceIncarnations {
     return this.#current.get(sourceId)?.fingerprint === fingerprint
   }
 
-  /** Test seam for the hard ownership bound: retired unique ids leave no
-   * per-id generation tombstone behind. Includes the permanent local source. */
+  /** Hard ownership bound: retired unique ids leave no per-id generation tombstone (includes the permanent local source). */
   get activeCount(): number {
     return this.#current.size
   }
@@ -217,23 +207,15 @@ export interface NotificationSettingsLike {
 }
 
 /**
- * 裁决链（主进程门禁，design 19 §3.3 顺序）：
- * 1. kind==='test' 直接放行（绕过全部设置门禁——设置页「发送测试通知」）；
- * 2. enabled === false → skip 'disabled'；
- * 3. kind 对应事件开关（complete→onComplete / ask→onAsk / request→onRequest）
- *    关闭 → skip 'kind-off'；
- * 4. requireHidden === true 且窗口聚焦 → skip 'on-screen'（正在查看的会话不打扰）；
- * 5. mode === 'hidden-only' 且窗口聚焦 → skip 'focused-hidden-only'
- *    （'always' 放行聚焦状态）；
- * 6. 否则 'show'。
- * 'test' 不受 requireHidden 影响（绕过全部门禁）。
+ * 裁决链（主进程门禁，design 19 §3.3 顺序）：'test' 全部放行 → enabled=false
+ * → 'disabled' → kind 开关关闭 → 'kind-off' → requireHidden 且窗口聚焦
+ * → 'on-screen' → mode='hidden-only' 且窗口聚焦 → 'focused-hidden-only'
+ * → 否则 'show'。'test' 不受 requireHidden 影响。
  *
- * 信任切分：主进程的 anyWindowFocused 只回答「是否有窗口
- * 聚焦」，无法知道用户正在查看哪个会话——会话级焦点只有渲染端可见。因此在
- * 'always' 模式下（步骤 5 放行聚焦状态），「正在查看的会话不打扰」的豁免
- * 完全依赖渲染端上报的 requireHidden（步骤 4 的 on-screen 判定）；主进程
- * isAnyWindowFocused 不参与 'always' 的独立豁免。'hidden-only' 模式下两者
- * 叠加：步骤 4 保护被查看会话，步骤 5 保护任何聚焦状态下的打扰。
+ * 信任切分：主进程 anyWindowFocused 只回答「是否有窗口聚焦」，不知道用户正在
+ * 查看哪个会话——会话级焦点只有渲染端可见，因此 'always' 模式下「正在查看的
+ * 会话不打扰」完全依赖渲染端上报的 requireHidden；'hidden-only' 模式下两者
+ * 叠加。
  */
 export function decideNotification(input: {
   request: NotificationRequest
@@ -251,10 +233,8 @@ export function decideNotification(input: {
   if (!kindSwitch[request.kind]) return { action: 'skip', reason: 'kind-off' };
   if (request.requireHidden && anyWindowFocused) return { action: 'skip', reason: 'on-screen' };
   if (settings.mode === 'hidden-only' && anyWindowFocused) {
-    // 'always' 放行聚焦状态：此处不拦截。焦点豁免（正在查看的会话不打扰）
-    // 在 'always' 模式下完全依赖渲染端 requireHidden（上面的 on-screen 判定）
-    // ——主进程 isAnyWindowFocused 不参与 'always' 的独立豁免（信任切分见
-    // 模块头注释）。
+    // 'always' 放行聚焦状态：聚焦豁免（被查看会话不打扰）完全依赖渲染端
+    // requireHidden，主进程 isAnyWindowFocused 不参与（信任切分见上）。
     return { action: 'skip', reason: 'focused-hidden-only' };
   }
   return { action: 'show' };
@@ -264,13 +244,11 @@ export function decideNotification(input: {
 export const NOTIFICATION_DEDUPE_TTL_MS = 5_000;
 export const MAX_NOTIFICATION_CLAIMS = 64;
 // A reconnect may legitimately surface several independent sessions at once,
-// but native banners cease to be useful well before dozens per second. Eight
-// attempts per 5s preserves a modest multi-source burst while bounding a
-// compromised same-origin renderer to 1.6 show attempts/second.
+// but native banners stop being useful well before dozens per second: eight
+// attempts per 5s bounds a compromised same-origin renderer to 1.6/s.
 export const MAX_NATIVE_NOTIFICATION_SHOWS_PER_WINDOW = 8;
 export const NATIVE_NOTIFICATION_RATE_WINDOW_MS = 5_000;
-// Native notifications may outlive the rate window. Keep their Electron
-// object/OS-listener ownership separately bounded across successive windows.
+// Native notifications outlive the rate window; their Electron object/OS-listener ownership is bounded separately.
 export const MAX_ACTIVE_NATIVE_NOTIFICATIONS = 16;
 /** Durable shown-receipt cap: one banner per completed run survives a host reload. */
 export const MAX_SHOWN_NOTIFICATION_RECEIPTS = 500;
@@ -358,8 +336,7 @@ export type NotificationClaimResult =
   | { accepted: true; token: NotificationClaimToken | null }
   | { accepted: false; reason: 'duplicate' | 'saturated' }
 
-/** A hard-bounded, amortized-O(1) TTL claim table. The chronological queue is
- * compacted at a bounded threshold; no accepted request scans the whole Map. */
+/** Hard-bounded, amortized-O(1) TTL claim table: the chronological queue is compacted at a bounded threshold and no accept scans the whole Map. */
 export class NotificationClaimWindow {
   readonly #limit: number
   readonly #ttlMs: number
@@ -378,8 +355,7 @@ export class NotificationClaimWindow {
   #prune(now: number): void {
     while (this.#head < this.#order.length) {
       const oldest = this.#order[this.#head]
-      // Released/superseded tokens are tombstones. Skip them even before TTL;
-      // otherwise one live oldest claim could pin arbitrary churn behind it.
+      // Released/superseded tokens are tombstones: skip them even before TTL, or one live oldest claim pins arbitrary churn behind it.
       if (this.#claims.get(oldest.key) !== oldest) {
         this.#head += 1
         continue
@@ -390,9 +366,8 @@ export class NotificationClaimWindow {
     }
   }
 
-  /** Release is O(1), so middle tombstones can temporarily remain behind a
-   * live head. Compact at a fixed threshold: the scan is O(limit) and happens
-   * only after O(limit) churn, keeping amortized work O(1) and backing storage
+  /** Release is O(1), so middle tombstones can linger behind a live head. The
+   * fixed compaction threshold keeps the scan amortized O(1) and backing storage
    * below 2*limit between calls. */
   #compactIfNeeded(): void {
     if (this.#order.length < this.#limit * 2 && this.#head < this.#limit) return
@@ -405,14 +380,12 @@ export class NotificationClaimWindow {
   claim(request: NotificationRequest, now: number = Date.now()): NotificationClaimResult {
     if (request.kind === 'test') return { accepted: true, token: null }
     this.#prune(now)
-    // The opaque source proof is part of event identity: a newly-created
-    // same-id host must not inherit an old incarnation's 5s dedupe claim.
-    // The content watermark is the fifth identity component: the two
-    // notification entries (shell channel / gateway facts) collapse to one
-    // banner on the same completion while a later completion of the same
-    // session is a new event. `kind` stays in the key — ask and complete at the
-    // same watermark must not swallow each other. An omitted watermark
-    // serializes as `null` — the four-tuple identity without it.
+    // Identity = sourceId + source proof + sessionId + kind + eventKey: a
+    // newly-created same-id host must not inherit an old incarnation's dedupe
+    // claim, the two entries (shell channel / gateway facts) collapse to one
+    // banner on the same completion, and ask/complete at one event key must not
+    // swallow each other. An omitted eventKey (only 'test', which bypasses the
+    // claim) serializes as `null`.
     const key = notificationDeliveryKey(request)
     const existing = this.#claims.get(key)
     if (existing !== undefined && now - existing.claimedAt < this.#ttlMs) {
@@ -426,9 +399,8 @@ export class NotificationClaimWindow {
     return { accepted: true, token }
   }
 
-  /** O(1) release when native construction/show fails. Object identity—not a
-   * millisecond timestamp—prevents a delayed failure from erasing a newer
-   * same-key claim minted in the same clock tick. */
+  /** O(1) release when native construction/show fails. Object identity — not a
+   * timestamp — stops a delayed failure erasing a newer same-key claim. */
   release(token: NotificationClaimToken | null): void {
     if (token === null || this.#claims.get(token.key) !== token) return
     this.#claims.delete(token.key)
@@ -463,11 +435,7 @@ export class NotificationClaimWindow {
 
 const notificationClaims = new NotificationClaimWindow();
 
-/**
- * 去重 claim（与 OpenChamber 同款）：同 key 在 TTL 内第二次返回 false；
- * TTL 过后恢复可发；不同 key 互不影响。'test' 不走 claim（恒 true——测试按钮
- * 连点每次都应真实显示）。顺手清理过期条目，map 按 TTL 窗口保持有界。
- */
+/** 去重 claim（同 OpenChamber）：同 key 在 TTL 内第二次返回 false，TTL 过后恢复；'test' 不走 claim（恒 true）。 */
 export function claimNotificationDetailed(request: NotificationRequest, now: number = Date.now()): NotificationClaimResult {
   return notificationClaims.claim(request, now)
 }
@@ -481,8 +449,7 @@ export function advanceNotificationClaimGeneration(): void {
   notificationClaims.advanceGeneration()
 }
 
-/** Fixed-cap sliding window shared by all native show attempts, including
- * `kind:'test'`. It uses a bounded chronological array and never scans claims. */
+/** Fixed-cap sliding window shared by all native show attempts including 'test'; bounded chronological array, never scans. */
 export class BoundedRateLimiter {
   readonly #limit: number
   readonly #windowMs: number
@@ -513,12 +480,10 @@ export class BoundedRateLimiter {
 }
 
 /**
- * 活跃原生通知的有界登记（design 19 §3.3 项 7）。上界约束的是「为保住 click
- * 监听不被 GC 回收而持有的存活引用/OS 监听器」数量，不是投递配额。macOS 横幅
- * 进入通知中心后不触发 Electron close（通常只有用户手动清除才触发）——若满员
- * 即拒发，16 条未清除的存量横幅就会永久卡死通知流。因此满员时按插入序淘汰最旧
- * 一条并交还调用方退役（close），新通知照常登记显示：硬上界不变、通知流不被
- * 存量横幅卡死，仅最旧（价值最低）条目的 click 随之失效。
+ * 活跃原生通知的有界登记（design 19 §3.3 项 7）：上界约束的是为保住 click 监听
+ * 而持有的存活引用/OS 监听器，不是投递配额。满员不拒发——macOS 横幅进入通知
+ * 中心后不触发 close，拒发会让存量横幅永久卡死通知流；改为按插入序淘汰最旧一条
+ * 交调用方退役，硬上界不变，仅最旧条目的 click 随之失效。
  */
 export class BoundedActiveNotifications<T> {
   readonly #limit: number
@@ -531,9 +496,8 @@ export class BoundedActiveNotifications<T> {
     this.#limit = limit
   }
 
-  /** 登记一条活跃通知（携带 click 路由 token）。已满员时先按插入序淘汰最旧
-   *  一条并返回它（调用方负责退役，如 close()）——永不因满员拒发。同一 item
-   *  重复登记是 no-op（返回 null，不改变既有条目）。 */
+  /** 登记一条活跃通知；满员先按插入序淘汰最旧一条并返回它（调用方负责退役）
+   *  ——永不因满员拒发；同一 item 重复登记 no-op（返回 null）。 */
   add(item: T, token: NotificationSourceToken | null): T | null {
     if (this.#current.has(item)) return null
     let evicted: T | null = null
@@ -573,12 +537,9 @@ export interface NativeNotificationLike {
   close(): void
 }
 
-/** The machine-readable half of an honest-show failure. Only `failed`
- *  (the OS reported a scheduling error) and `timed-out` (the OS never confirmed
- *  delivery) are evidence about the host platform; `threw`/`closed` are local
- *  construction/eviction artifacts and must never be described as an OS
- *  refusal. Kept on the result so the platform leg can attach an honest
- *  authorization hint (describeNativeNotificationFailure). */
+/** The machine-readable half of an honest-show failure: only `failed` (OS
+ *  scheduling error) and `timed-out` are host-platform evidence; `threw`/
+ *  `closed` are local artifacts and must never be described as an OS refusal. */
 export type NativeNotificationFailureReason = 'threw' | 'failed' | 'closed' | 'timed-out'
 
 export interface NativeNotificationFailure {
@@ -639,17 +600,10 @@ export function showNativeNotificationHonestly(
 }
 
 /**
- * macOS 通知授权在 Electron 侧没有查询/申请 API。证据：
- * 固定的 Electron 43.4.0 typings 里 Notification 只有 isSupported/show/…、
- * systemPreferences.getMediaAccessStatus 只接受 'microphone' | 'camera' |
- * 'screen'（无 notifications），Electron 自己的 macOS 实现（cocoa_notification
- * .mm ScheduleNotification）从不调用 requestAuthorization——授权状态只通过
- * `addNotificationRequest` 的 completion handler 回话：非 nil error → 原生
- * failed 事件（拒绝/调度失败），成功 → show 事件。因此 Electron 唯一可得的
- * 诚实面就是本函数：把「OS 明确拒绝投递」与「限时内没有任何回执」表述为
- * 「可能未授权 / 可能被系统抑制」，保留 OS 原文；绝不把拒绝伪装成普通失败，
- * 也绝不冒充已授权（预检查询仍是 Electron 运行时不可达的残余）。
- * 非 darwin 平台原样返回（Windows 的 failed 是投递错误，不是授权语义）。
+ * macOS 授权状态在 Electron 侧只经通知投递的 completion handler 回话（error →
+ * failed 事件，成功 → show 事件），没有查询/申请 API。因此「OS 明确拒绝投递」
+ * 与「限时内无回执」只能表述为「可能未授权 / 可能被系统抑制」并保留 OS 原文，
+ * 绝不冒充已授权。非 darwin 原样返回（Windows 的 failed 是投递错误）。
  */
 export function describeNativeNotificationFailure(
   platform: string,
@@ -667,15 +621,11 @@ export function describeNativeNotificationFailure(
   return text
 }
 
-/** 把 Swift 宿主腿的 showNativeNotification 应答折成 honest-show 结果
- *  （共享 node-edges/notifications 面）：
- *  - `null` / `undefined`：没有显示回执，不得推断已显示；
- *  - `{shown:true}`：显式成功；
- *  - `{shown:false,error?}`：显式失败（未授权 / 调度失败）→ 回执 false，core
- *    据此释放 5s 去重 claim（shell-core maybeShowNativeNotification），
- *    不把「edge 传输成功」当成「横幅已显示」；
- *  - 其他形状（数组/数字/无 shown 的对象）：不予采信 → shown:false。
- *  Swift 侧须在授权检查失败/调度超时时回 {shown:false,error}。 */
+/** 把 Swift 宿主腿的 showNativeNotification 应答折成 honest-show 结果：
+ *  `null`/`undefined`（没有显示回执，不得推断已显示）→ shown:false（retryable）；
+ *  `{shown:true}` → 成功；`{shown:false,error?}` → false，core 据此释放 5s 去重
+ *  claim，不把「edge 传输成功」当「横幅已显示」；其他形状（数组/数字/无 shown）不予
+ *  采信 → shown:false。Swift 侧须在授权检查失败/调度超时时回 {shown:false,error}。 */
 export function interpretNativeNotificationReply(
   reply: unknown,
 ): { shown: true } | { shown: false; error: string; failureClass?: 'retryable' | 'permanent' } {
@@ -703,9 +653,8 @@ export function shouldFocusApplicationBeforeShowing(platform: string): boolean {
   return platform === 'darwin'
 }
 
-/** 字段长度上限（防异常 title/body 刷屏，design 19 §3.6）。sourceId 另受
- * local | dsh-<registry id> | gateway-<registry id>（及 legacy ssh- alias）
- * 语义白名单约束。 */
+/** 字段长度上限（防异常 title/body 刷屏）：sourceId 另受 local | dsh-<id> |
+ *  gateway-<id>（及 legacy ssh- alias）语义白名单约束。 */
 const MAX_SOURCE_ID_LENGTH = 256;
 const MAX_SESSION_ID_LENGTH = 256;
 const MAX_TITLE_LENGTH = 256;
@@ -713,10 +662,9 @@ const MAX_BODY_LENGTH = 512;
 
 const NOTIFICATION_KINDS: ReadonlySet<string> = new Set(['complete', 'ask', 'request', 'test']);
 
-/** Normalize the one documented v1 alias before lifecycle-proof lookup. This
- * is essential compatibility rather than a wider trust rule: `ssh-<id>` can
- * only name the canonical dsh target for the same validated raw registry id.
- * New/future prefixes remain fail-closed. */
+/** Normalize the one documented v1 alias before lifecycle-proof lookup:
+ *  `ssh-<id>` can only name the canonical dsh target for the same validated
+ *  registry id; new/future prefixes remain fail-closed. */
 function canonicalNotificationSourceId(sourceId: string): string | null {
   if (sourceId === 'local') return sourceId;
   for (const prefix of ['dsh-', 'gateway-'] as const) {
@@ -732,14 +680,11 @@ function canonicalNotificationSourceId(sourceId: string): string | null {
 }
 
 /**
- * IPC payload 白名单校验（design 19 §3.6）：sourceId/sessionId/title/body 必须
- * 为非空 string（前三个 ≤256、body ≤512），sourceId 只能是保留的 local 或
- * canonical `dsh-${registryId}` / `gateway-${registryId}`；输入
- * `ssh-${registryId}` 被规范化为 `dsh-${registryId}`（registryId 复用
- * INSTANCE_ID_PATTERN）。kind 四选一、requireHidden 为 boolean；可选
- * watermark（内容水位）必须是非负安全整数，缺省保持字段缺席
- * （兼容面——校验后的 request 与缺省输入逐字段一致）。未知/多余
- * 字段忽略（校验只做白名单必要字段，不做全等断言）。
+ * IPC payload 白名单校验：sourceId/sessionId/title/body 为非空 string（前三个
+ * ≤256、body ≤512），sourceId 只能是 local 或 canonical `dsh-<id>` /
+ * `gateway-<id>`（`ssh-<id>` 规范化为 `dsh-<id>`）；kind 四选一、requireHidden
+ * 为 boolean；watermark 为非负安全整数且缺省保持字段缺席（校验后的 request 与
+ * 缺省输入逐字段一致）；未知/多余字段忽略。
  */
 export function validateNotificationRequest(
   raw: unknown,
@@ -773,8 +718,7 @@ export function validateNotificationRequest(
   if (typeof record.kind !== 'string' || !NOTIFICATION_KINDS.has(record.kind)) {
     return { ok: false, error: 'kind must be one of "complete" | "ask" | "request" | "test"' };
   }
-  // sessionId 非空要求仅对真实会话事件生效：'test'（设置页测试按钮）没有会话
-  // 上下文，允许空串——但 click 处理必须跳过 test 的打开会话路径（main.ts）。
+  // sessionId 非空仅对真实会话事件生效：'test' 没有会话上下文，允许空串（click 处理必须跳过 test 的打开会话路径）。
   if (record.sessionId === '' && record.kind !== 'test') {
     return { ok: false, error: 'sessionId must be a non-empty string' };
   }
@@ -793,10 +737,8 @@ export function validateNotificationRequest(
   if (typeof record.requireHidden !== 'boolean') {
     return { ok: false, error: 'requireHidden must be a boolean' };
   }
-  // 可选内容水位：必须是非负安全整数（host 域毫秒；结构化克隆
-  // 可携带 NaN/Infinity/分数/字符串，一律响亮拒绝而不是强制归一——水位进的是
-  // 去重身份，悄悄改值会造出一个假事件）。缺省保持字段缺席，校验后的 request
-  // 与缺省输入逐字段一致（兼容面）。
+  // 可选内容水位：必须是非负安全整数（结构化克隆可携带 NaN/Infinity/分数/
+  // 字符串，一律响亮拒绝——水位进去重身份，悄悄归一反而造出假事件）。
   let watermark: number | undefined;
   if (record.watermark !== undefined) {
     if (

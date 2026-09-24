@@ -1,29 +1,13 @@
 /**
- * openInApp domain core — the chamber fork's platform logic and state machine
- * (design 20 §6; own file, upstream has no counterpart).
- *
- * This is upstream's `apply()` body (`@deepseek-ai/dsh-host-open-in-app`,
- * `src/index.ts:138-183,241-310`), without the two transport/trust
- * responsibilities:
- *
- *   - **no SSH dormancy gate**: upstream resolves an EMPTY catalog whenever the
- *     launcher's environment carries `SSH_CONNECTION`/`SSH_TTY`
- *     (`src/index.ts:139`, `resolver.ts:630,656-667`) — chamber pins that very
- *     marker on its managed local instance as the directory-picker pin
- *     (design 02 §3.1/§3.9), so the official host half can never serve this
- *     host. The fork simply never passes an `ssh` fact (upstream's
- *     `resolveInternals` defaults it to false) and does not import
- *     `@deepseek-ai/dsh-launch-environment` at all;
- *   - **no route fence**: upstream registers three `webServer` routes behind
- *     `ctx.connection.requestRejection` and parses HTTP bodies itself. The
- *     chamber fork is reached through the instance's own generic RPC channel,
- *     so the trust boundary is the instance's connection/gateway fence and the
- *     payload validation lives where the payload enters (below).
- *
- * Everything else is upstream semantics, deliberately preserved: the catalog
- * resolves lazily ONCE per plugin life into one map of verified launchers, the
- * apps read serves its keys in menu order, a launch whose executable is gone
- * (`ENOENT`) refreshes exactly that one entry and retries once, and icons are
+ * openInApp domain core — the fork's platform logic and state machine (no upstream
+ * counterpart): upstream's `apply()` body minus two transport/trust responsibilities.
+ * No SSH dormancy gate — upstream empties the catalog when the environment carries
+ * `SSH_CONNECTION`/`SSH_TTY`, but chamber pins that marker on its managed local instance
+ * as the directory-picker pin, so the fork never passes an `ssh` fact. No route fence —
+ * the fork is reached through the instance's own generic RPC channel, so its trust
+ * boundary is that fence and payload validation happens here. Everything else is upstream
+ * semantics: lazy once-per-life catalog resolution into one map of verified launchers,
+ * apps read in menu order, ENOENT launch refreshes that entry and retries once, icons
  * cached per application.
  */
 
@@ -43,24 +27,15 @@ import {
   type OpenInAppProbeValue,
 } from './shared.ts'
 
-/**
- * Per-command deadline for catalog-resolution host commands. Mirrors the value
- * upstream's default web composition deploys
- * (`packages/bundle/web-app/cordis.patch.yml:68`) — the fork keeps upstream's
- * knobs as constants instead of a required config schema, because a seed row
- * carries no config and a wrong/missing schema would fail the host boot.
- */
+/** Per-command deadline for catalog-resolution host commands (upstream's deployed
+ *  value, kept as a constant because a seed row carries no config). */
 export const OPEN_IN_APP_PROBE_TIMEOUT_MS = 10_000
 
-/** Per-command deadline for icon extraction (upstream: same patch, `:69`). */
+
 export const OPEN_IN_APP_ICON_TIMEOUT_MS = 10_000
 
-/**
- * Early-failure watch window per launch (upstream: same patch, `:70`). A
- * launcher still running when the window closes counts as launched and keeps
- * running, so this bounds how long a launch request is held — never how long
- * an application may live.
- */
+/** Early-failure watch window per launch: a launcher still running when it closes
+ *  counts as launched, so this bounds how long the request is held — never app lifetime. */
 export const OPEN_IN_APP_LAUNCH_WATCH_MS = 1_000
 
 /** One domain failure; only these cross the wire (see `domainResult`). */
@@ -76,13 +51,8 @@ export class OpenInAppError extends Error {
   }
 }
 
-/**
- * Convert only known domain failures into the wire carrier; unexpected
- * programming failures keep throwing (they are the host's problem, never the
- * caller's).
- * @param operation - the domain call.
- * @returns the explicit carrier.
- */
+/** Convert only known domain failures into the wire carrier; unexpected programming
+ *  failures keep throwing (the host's problem, never the caller's). */
 export async function domainResult<T>(operation: () => Promise<T>): Promise<OpenInAppDomainResult<T>> {
   try {
     return { ok: true, value: await operation() }
@@ -101,24 +71,18 @@ export async function domainResult<T>(operation: () => Promise<T>): Promise<Open
 
 /** Host facts this domain consumes, injected by the facade (never imported). */
 export interface OpenInAppHostFacts {
-  /** The platform the catalog is resolved for (`process.platform` at plugin init). */
+  /** The platform the catalog is resolved for. */
   readonly platform: NodeJS.Platform
-  /**
-   * PATH-name resolution through the composition's `subprocess` service.
-   * Answers null when the name is not on PATH; the facade swallows the
-   * provider's not-found rejection, because for detection a name that does not
-   * resolve has exactly one meaning — unavailable.
-   */
+  /** PATH-name resolution through the composition's `subprocess` service; null means
+   *  not on PATH (the provider's not-found rejection is swallowed — for detection,
+   *  nothing else is possible). */
   resolveExecutable(name: string): Promise<string | null>
 }
 
 /** Construction options. */
 export interface OpenInAppCoreOptions {
   readonly host: OpenInAppHostFacts
-  /**
-   * Platform/host seams merged LAST (deterministic tests: `platform`,
-   * `applicationRoots`, `env`, `home`, `run`, `launch`, `resolveExecutable`).
-   */
+  /** Platform/host seams merged LAST (deterministic tests). */
   readonly internals?: OpenInAppInternals
   readonly probeTimeoutMs?: number
   readonly iconTimeoutMs?: number
@@ -143,27 +107,17 @@ export class OpenInAppCore {
     this.launchWatchMs = options.launchWatchMs ?? OPEN_IN_APP_LAUNCH_WATCH_MS
   }
 
-  /**
-   * The cheap activation answer: platform plus protocol, no detection at all.
-   * @returns the probe value.
-   */
+  /** The cheap activation answer: platform plus protocol, no detection. */
   probe(): OpenInAppProbeValue {
     return { platform: String(this.internals().platform ?? this.options.host.platform) }
   }
 
-  /**
-   * Catalog ids probed as installed on this host, in menu order.
-   * @returns the apps value.
-   */
+  /** Catalog ids probed as installed on this host, in menu order. */
   async apps(): Promise<OpenInAppAppsValue> {
     return { apps: [...(await this.availability()).keys()] }
   }
 
-  /**
-   * One application's real bundle icon, base64-encoded.
-   * @param app - catalog id (untrusted wire input).
-   * @returns the icon value.
-   */
+  /** One application's real bundle icon, base64-encoded. `app` is untrusted wire input. */
   async icon(app: unknown): Promise<OpenInAppIconValue> {
     const { entry, resolved } = await this.resolvedEntry(app)
     const icon = await this.iconOf(entry, resolved)
@@ -173,12 +127,8 @@ export class OpenInAppCore {
     return { mime: icon.contentType, dataBase64: icon.bytes.toString('base64') }
   }
 
-  /**
-   * Launch one installed application on one absolute directory.
-   * @param app - catalog id (untrusted wire input).
-   * @param path - absolute directory (untrusted wire input).
-   * @returns after the host acknowledged the launch.
-   */
+  /** Launch one installed application on one absolute directory. Both arguments are
+   *  untrusted wire input; resolves after the host acknowledged the launch. */
   async open(app: unknown, path: unknown): Promise<void> {
     const { entry, resolved } = await this.resolvedEntry(app)
     if (typeof path !== 'string' || path === '' || !isAbsolute(path)) {
@@ -188,7 +138,6 @@ export class OpenInAppCore {
     try {
       directory = (await stat(path)).isDirectory()
     } catch {
-      // Swallows ENOENT/EACCES: both mean there is no directory to open.
       directory = false
     }
     if (!directory) {
@@ -196,8 +145,7 @@ export class OpenInAppCore {
     }
     let outcome = await launchResolved(resolved, path, this.launchWatchMs, this.internals())
     if (outcome === 'missing') {
-      // The verified launcher is gone (uninstalled since resolution): refresh
-      // this one entry and retry once with the fresh launcher.
+      // The verified launcher is gone: refresh this one entry and retry once.
       const fresh = await this.refreshResolution(entry)
       outcome = fresh === undefined
         ? 'failed'
@@ -251,11 +199,8 @@ export class OpenInAppCore {
     return cached
   }
 
-  /**
-   * Replace one stale resolution after a missing-executable launch: the entry
-   * (and its icon) re-resolves once; an entry that no longer resolves leaves
-   * the map and the next apps read no longer offers it.
-   */
+  /** Replace one stale resolution after a missing-executable launch: the entry (and
+   *  its icon) re-resolves once; one that no longer resolves leaves the map. */
   private async refreshResolution(app: OpenInAppApp): Promise<OpenInAppResolvedLaunch | undefined> {
     const map = await this.availability()
     const fresh = await resolveLaunch(app, this.probeTimeoutMs, this.internals())

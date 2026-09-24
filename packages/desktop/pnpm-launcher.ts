@@ -1,19 +1,14 @@
 /**
- * pnpm launcher resolution for the desktop main process (design 21 §6.3 /
- * design 23).
+ * pnpm launcher resolution for the desktop main process.
  *
- * The launcher never names a `.cmd`: Node >=18.20.2/20.12.2 refuses to spawn
- * `.cmd`/`.bat` without a `shell` option (CVE-2024-27980 hardening, EINVAL),
- * and the direct-spawn supervisor passes none. On win32 the pnpm SCRIPT entry
- * (`pnpm.cjs` — the bundled extraResources copy, else a dev/installer copy)
- * therefore runs through the current node/Electron binary, the same
- * `[process.execPath, pnpm.cjs]` shape main.ts injects into the runtime
- * installer; POSIX keeps the bare `pnpm` name (PATH lookup).
+ * The launcher never names a `.cmd`: Node refuses to spawn `.cmd`/`.bat` without a
+ * `shell` option (CVE-2024-27980 hardening, EINVAL) and the direct-spawn supervisor
+ * passes none. On win32 the pnpm script entry (`pnpm.cjs` — bundled extraResources
+ * copy, else dev/installer copy) therefore runs through the current node/Electron
+ * binary as `[process.execPath, pnpm.cjs]`; POSIX keeps the bare `pnpm` name (PATH).
  *
- * Pure module (no fs, no electron): every existence probe stays the caller's,
- * so the command/args shape is unit-testable per platform on every CI leg.
- * Path joins are chosen by the TARGET platform, not the host, which is what
- * makes that testing possible off-Windows.
+ * Pure module (no fs/electron): existence probes stay the caller's, and path joins
+ * follow the TARGET platform, not the host.
  */
 import { posix, win32 } from 'node:path'
 
@@ -41,11 +36,10 @@ function dirnameFor(platform: NodeJS.Platform, path: string): string {
 /**
  * Resolve the pnpm launcher for a DIRECT spawn (no shell).
  *
- * POSIX: the bare `pnpm` name. win32: `execPath` + the
- * pnpm.cjs script entry, or null when no script entry exists — the caller then
- * fails loud instead of falling back to the `pnpm.cmd` shim Node refuses.
- * `electron` adds ELECTRON_RUN_AS_NODE=1 so the Electron main binary executes
- * the script as node.
+ * POSIX: the bare `pnpm` name. win32: `execPath` + the pnpm.cjs script entry, or null when
+ * no script entry exists — the caller then fails loud instead of falling back to the
+ * `pnpm.cmd` shim Node refuses. `electron` adds ELECTRON_RUN_AS_NODE=1 so the Electron
+ * main binary executes the script as node.
  */
 export function resolvePnpmLauncher(input: {
   platform: NodeJS.Platform
@@ -68,17 +62,15 @@ export function resolvePnpmLauncher(input: {
 }
 
 /**
- * Absolute `pnpm.cjs` entries for the desktop's OWN bundled/dev launcher, in
- * preference order — the ONE candidate set every desktop consumer reads (the
- * runtime installer's pnpmEntry, the Swift sidecar assembly entry, the
- * `pnpm pack` script entry, the PATH bin-dir scan):
- *   1. `<resourcesPath>/pnpm/bin/pnpm.cjs`      packaged Electron extraResources
- *   2. `assemblyEntry`                          Swift sidecar assembly dir entry
- *   3. `legacyAssemblyEntry`                    legacy Swift sidecar assembly dir
- *   4. `<moduleDir>/node_modules/pnpm/bin/pnpm.cjs`  dev workspace tree
- * The sidecar's two layout spellings are passed in by sidecar-ctx (their Swift
- * layout-lockstep anchors); the resources/dev spellings live here. Pure: the
- * caller probes existence (firstExistingPnpmEntry).
+ * Absolute `pnpm.cjs` entries for the desktop's OWN bundled/dev launcher, in preference
+ * order — the ONE candidate set every desktop consumer reads (runtime installer pnpmEntry,
+ * Swift sidecar assembly, `pnpm pack`, PATH bin-dir scan):
+ *   1. `<resourcesPath>/pnpm/bin/pnpm.cjs`             packaged Electron extraResources
+ *   2. `assemblyEntry`                                 Swift sidecar assembly entry
+ *   3. `legacyAssemblyEntry`                           legacy sidecar assembly dir
+ *   4. `<moduleDir>/node_modules/pnpm/bin/pnpm.cjs`    dev workspace tree
+ * Sidecar layout spellings are passed in by sidecar-ctx (their Swift layout-lockstep
+ * anchors); pure, the caller probes existence (firstExistingPnpmEntry).
  */
 export function bundledPnpmEntryCandidates(input: {
   platform: NodeJS.Platform
@@ -105,8 +97,7 @@ export function bundledPnpmEntryCandidates(input: {
   return entries
 }
 
-/** First candidate that exists (the probe is the caller's — this module stays
- *  fs-free and per-platform unit-testable), or null when none exists. */
+/** First candidate that exists (the probe is the caller's), or null when none exists. */
 export function firstExistingPnpmEntry(
   candidates: readonly string[],
   exists: (entry: string) => boolean,
@@ -118,10 +109,9 @@ export function firstExistingPnpmEntry(
 }
 
 /**
- * `bundledPnpmEntryCandidates` plus the roots the official pnpm/npm installers
- * use (%LOCALAPPDATA%\pnpm standalone, %APPDATA%\npm shims, and the node install
- * dir for npm-global prefixes), in preference order. Pure: the caller probes
- * existence.
+ * `bundledPnpmEntryCandidates` plus the roots the official pnpm/npm installers use
+ * (%LOCALAPPDATA%\pnpm standalone, %APPDATA%\npm shims, node install dir for npm-global
+ * prefixes), in preference order. Pure: the caller probes existence.
  */
 export function pnpmScriptEntryCandidates(input: {
   platform: NodeJS.Platform
@@ -144,12 +134,11 @@ export function pnpmScriptEntryCandidates(input: {
 }
 
 /**
- * Windows directories the official pnpm/npm installers use, plus the app's own
- * bundled pnpm bin dir, in preference order (pure: the caller probes the
- * launcher file names). `%LOCALAPPDATA%\pnpm` is the standalone installer
- * (pnpm.exe); `%APPDATA%\npm` is the npm global prefix (pnpm.cmd shims); the
- * node install dir hosts the npm-global/corepack shims when node owns the
- * prefix. Always Windows joins — this list only exists on win32.
+ * Windows directories the official pnpm/npm installers use, plus the app's own bundled pnpm
+ * bin dir, in preference order (pure: the caller probes launcher file names).
+ * `%LOCALAPPDATA%\pnpm` = standalone installer (pnpm.exe); `%APPDATA%\npm` = npm global
+ * prefix (pnpm.cmd shims); the node install dir hosts npm-global/corepack shims when node
+ * owns the prefix. Always Windows joins — this list only exists on win32.
  */
 export function windowsPnpmSearchDirs(input: {
   env?: NodeJS.ProcessEnv
@@ -167,21 +156,17 @@ export function windowsPnpmSearchDirs(input: {
   return dirs
 }
 
-/** File names probed inside one directory for a runnable pnpm bin dir: win32
- *  accepts the bundled script form, POSIX the bare name. */
+/** File names probed inside one directory: win32 accepts the bundled script form, POSIX the bare name. */
 export function pnpmBinNames(platform: NodeJS.Platform): readonly string[] {
   return platform === 'win32' ? ['pnpm.cmd', 'pnpm.exe', 'pnpm.cjs'] : ['pnpm']
 }
 
 /**
- * Directories scanned for a runnable pnpm bin dir, in preference order (the
- * PATH prefix for a desktop-launched packaged app, whose PATH is minimal and
- * lacks pnpm): the PATH entries themselves, then the app's own bundled bin dir,
- * then the official installer roots — Windows: %LOCALAPPDATA%\pnpm standalone,
- * %APPDATA%\npm global prefix, the node install dir; POSIX: nvm version dirs,
- * volta, the Linux installer roots, homebrew and the standard bin dirs. Pure:
- * `nvmVersionDirs` is read by the caller and every existence probe stays with
- * the caller (pnpmBinNames probes the file names).
+ * Directories scanned for a runnable pnpm bin dir, in preference order (a desktop-launched
+ * packaged app has a minimal PATH lacking pnpm): PATH entries, the app's own bundled bin dir,
+ * then the official installer roots — Windows: %LOCALAPPDATA%\pnpm, %APPDATA%\npm, node
+ * install dir; POSIX: nvm version dirs, volta, Linux installer roots, homebrew and standard
+ * bin dirs. Pure: `nvmVersionDirs` is read and every existence probe stays with the caller.
  */
 export function pnpmBinDirCandidates(input: {
   platform: NodeJS.Platform

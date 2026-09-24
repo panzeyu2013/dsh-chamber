@@ -327,8 +327,30 @@ export interface NpmSearchPackage {
  *
  * Mirrors packages/desktop/preload.cts structurally (interface merging).
  */
+/** SSH instance-registry load health (degraded + roster-incomplete gates):
+ *  while degraded, an instances_get empty array is NOT an authoritative
+ *  roster; while rosterIncomplete, the load succeeded but dropped
+ *  invalid/duplicate persisted rows, so instances_get is a PARTIAL roster
+ *  (legal rows are still installed) and durable pruning stays vetoed. Both
+ *  gates keep the renderer's durable pruning gate closed. reason is the
+ *  non-secret failure text (absent while healthy); droppedCount is the number
+ *  of dropped rows and is present only with rosterIncomplete. Both flags are
+ *  optional so an older producer's {degraded} answer still type-checks (an
+ *  absent flag reads as false). Mirrors packages/desktop/preload.cts. */
+export interface SshInstancesHealth {
+  degraded: boolean
+  reason?: string
+  rosterIncomplete?: boolean
+  droppedCount?: number
+}
+
 export interface DesktopSshSurface {
   instances_get(): Promise<SshInstanceSpec[]>
+  /** Registry load health (degraded + roster-incomplete gates): a degraded
+   *  registry's empty roster must not settle the renderer's authoritative-
+   *  roster gate, and an incomplete (row-dropping) load's partial roster must
+   *  not retire its durable unread keys. */
+  instances_health(): Promise<SshInstancesHealth>
   /** Exact id-addressed main-owned delete; an absent id is an idempotent no-op. */
   delete_connection(id: string): Promise<SshInstanceSpec[]>
   /** Main-owned registry + all applicable credential dimensions transaction.

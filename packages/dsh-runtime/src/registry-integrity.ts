@@ -20,9 +20,8 @@ const DIGEST_LENGTH: Record<IntegrityAlgorithm, number> = {
 }
 
 /**
- * Parse an npm Subresource Integrity string and retain only the strongest
- * supported algorithm. This follows SRI downgrade resistance: a matching
- * weaker digest cannot rescue a mismatching stronger digest.
+ * Parse an npm Subresource Integrity string and retain only the strongest supported algorithm
+ * (downgrade resistance: a matching weaker digest cannot rescue a mismatching stronger one).
  */
 function parseIntegrity(raw: unknown): ParsedIntegrity | null {
   if (typeof raw !== 'string' || raw.trim() === '' || raw.length > 4096) return null
@@ -34,8 +33,8 @@ function parseIntegrity(raw: unknown): ParsedIntegrity | null {
     const encoded = match[2]
     const digest = Buffer.from(encoded, 'base64')
     if (digest.length !== DIGEST_LENGTH[algorithm]) continue
-    // Buffer.from(base64) is deliberately forgiving. Re-encode to reject
-    // malformed/truncated encodings that it would otherwise silently accept.
+    // Buffer.from(base64) is deliberately forgiving; re-encode to reject malformed/truncated
+    // encodings it would silently accept.
     if (digest.toString('base64').replace(/=+$/, '') !== encoded.replace(/=+$/, '')) continue
     parsed.push({ algorithm, digest })
   }

@@ -1,43 +1,30 @@
 /**
  * 会话行渲染窗口。
  *
- * chamber 自绘会话列表对单工作区（含合成"未分组"桶）的会话行数无上限，行
- * DOM 随会话数线性膨胀。本模块给渲染层一个纯函数窗口：默认只渲染前
- * SESSION_ROWS_VISIBLE_FIRST 行，尾部以"还有 N 个会话"展开条承接（ServerSection
- * 接线，展开状态为本地浏览态、不持久化）。
+ * chamber 自绘会话列表对单工作区（含合成"未分组"桶）的会话行数无上限，行 DOM 随会话数
+ * 线性膨胀。本模块给渲染层一个纯函数窗口：默认只渲染前 SESSION_ROWS_VISIBLE_FIRST 行，
+ * 尾部以"还有 N 个会话"展开条承接（展开状态为本地浏览态、不持久化）。
  *
- * 纪律：
- * - 窗口只在渲染层——数据面（shared/derive 投影、server.workspaces）保持全
- *   量：搜索、拖拽排序、todo 区、信息卡、折叠、归档、rowErrors 等一切消费
- *   完整投影的功能不受窗口影响（搜索结果有独立上限
- *   SESSION_SEARCH_RESULT_LIMIT，不经本窗口）；
- * - 当前会话行（树形 aria-selected 高亮）不得被窗口藏匿：currentIndex 在截
- *   断区外时窗口自动放大到覆盖它（大列表 + 老当前会话的罕见情形放宽渲染，
- *   会话浮顶后回落）；
- * - 纯函数、无 DOM 依赖，node 直跑单测。
+ * 纪律：窗口只在渲染层，数据面（derive 投影、server.workspaces）保持全量：搜索、拖拽排
+ * 序、todo 区、信息卡、折叠、归档、rowErrors 等消费完整投影的功能不受影响（搜索有独立
+ * 上限 SESSION_SEARCH_RESULT_LIMIT，不经本窗口）；当前会话行（aria-selected 高亮）不得
+ * 被藏匿——currentIndex 在截断区外时窗口自动放大到覆盖它。
  */
 
-/** 每工作区首屏渲染的会话行上限。取值理由：200 行 ≈
- *  6–8 屏（行高 ~32px），远超实际首屏（性能目标在此）又远小于大列表全量
- *  （~32px/行 × 1400 行 ≈ 45k px DOM 的线性膨胀段），展开条给出完整入口；
- *  值被单测/文档引用，调整须同步。 */
+/** 每工作区首屏渲染的会话行上限：200 行 ≈ 6–8 屏（行高 ~32px），远超实际首屏又远小于
+ *  大列表全量（~1400 行 ≈ 45k px DOM）的线性膨胀段；展开条给出完整入口。 */
 export const SESSION_ROWS_VISIBLE_FIRST = 200
 
 export interface SessionRowWindowParams {
-  /** 该工作区显示序（排序后）的会话行总数。 */
   total: number
   /** 当前会话行下标；-1 = 该工作区无当前会话（无保可见要求）。 */
   currentIndex: number
-  /** 用户已展开全部（"还有 N 个会话"条被点击）。 */
   expanded: boolean
-  /** 首屏行上限。 */
   visibleFirst: number
 }
 
 export interface SessionRowWindowResult {
-  /** 本次应渲染的行数（slice 上界）。 */
   renderCount: number
-  /** 被窗口截断的行数（展开条文案用）。 */
   hiddenCount: number
 }
 
@@ -51,15 +38,10 @@ export function sessionRowWindow(params: SessionRowWindowParams): SessionRowWind
 }
 
 /**
- * 展开条自己的窗口。
- *
- * 展开条的隐藏计数必须与「是否已展开」无关：展开后 `sessionRowWindow` 返回
- * hiddenCount 0，若展开条按它决定去留，点开一次就再无收起入口（一次性展开）。
- * 上游同构——`collapsedSessionRows` 完全不看 expanded，展开条的 `collapsed.hiddenCount > 0`
- * 门在展开态依然成立，于是同一个控件给出 `sessions.collapse`
- * （vendor ui-workspace WorkspaceBrowser.tsx:46-57,598-609）。
- * @param params - 同 {@link sessionRowWindow}，但不含 expanded（本函数的语义就是「未展开的窗口」）。
- * @returns 未展开窗口的渲染行数与隐藏行数。
+ * 展开条自己的窗口：隐藏计数必须与「是否已展开」无关，否则展开后 `sessionRowWindow`
+ * 返回 hiddenCount 0，点开一次就再无收起入口。与上游 vendor ui-workspace
+ * `collapsedSessionRows` 同构（同样不看 expanded），故同一个控件给出收起。
+ * @param params - 不含 expanded（本函数的语义即「未展开的窗口」）。
  */
 export function sessionRowDisclosure(
   params: Omit<SessionRowWindowParams, 'expanded'>,

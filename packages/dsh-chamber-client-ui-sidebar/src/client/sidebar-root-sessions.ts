@@ -1,7 +1,6 @@
 /**
- * Session row actions over the source unary API: the in-flight "+" guard,
- * fork/create/archive through the shared session-mutation funnels, plus their
- * refreshes.
+ * Session row actions over the source unary API: the in-flight "+" guard, and
+ * fork/create/archive through the shared session-mutation funnels.
  */
 
 import { useRef } from 'react'
@@ -13,26 +12,19 @@ import type { RunAction } from './sidebar-root-actions.ts'
 
 export function useSidebarSessionActions({ runAction }: { runAction: RunAction }) {
   /** Per-workspace in-flight "+" resolution (upstream `connectWorkspace`'s
-   *  `connecting` map): a second click joins the first instead of creating a
-   *  second empty session. Keyed like the row-error key
-   *  `<source>/workspace/<id>/new`. */
+   *  `connecting` map): a second click joins the first. Keyed like the
+   *  row-error key `<source>/workspace/<id>/new`. */
   const newSessionRef = useRef(new Map<string, Promise<void>>())
 
-  // chamber (06): fork a session at its last completed turn, refresh, and
-  // open the child — the official row-menu fork→open flow (现行契约见
-  // design 05 §2.2：行内 kebab 增加分叉入口).
-  // Wire session.fork 只收 { sessionId, atSeq? }（increaseTitle 非 wire
-  // 字段），子会话标题 = 源标题；chamber 侧按官方 runtime service 移植的
-  // increasedForkTitle 在 fork 成功后对子会话做标题递增 rename（经该来源
-  // unary client）。递增失败非致命：fork 已成功、子会话已创建并打开（下方
-  // requestRefresh/requestOpenSession 照常执行），仅标题不递增——inline
-  // rowErrors 不阻断（runAction 只吃 fork 自身的失败）。
+  // 分叉：在最后完成的 turn 处 fork，随后 refresh 并打开子会话。Wire
+  // session.fork 只收 { sessionId, atSeq? }，子会话标题先取源标题；成功后按
+  // 官方 runtime service 移植的 increasedForkTitle 做递增 rename，失败非致命
+  // （fork 已成功、子会话已创建并打开；runAction 只吃 fork 自身的失败）。
   const onForkSession = (server: ChamberServerAggregate, session: { id: string; title: string }): void => {
     runAction(`${server.id}/session/${session.id}/fork`, async () => {
       const client = getInstanceClient(server.id)
-      // 会话回声：子行与 "+" 的新建行走同一条唯一出口。意图标题（递增后
-      // 的父标题）随事实一起发布，权威行到达之前子行就渲染最终标签；随后的 rename
-      // 仍照旧执行（失败只告警，不阻断）。
+      // 会话回声：意图标题（递增后的父标题）随事实一起发布，权威行到达前
+      // 子行即渲染最终标签；随后的 rename 仍照旧执行（失败只告警，不阻断）。
       const intendedTitle = session.title === '' ? undefined : increasedForkTitle(session.title)
       const childId = await forkSessionForSource(
         server.id,
@@ -52,36 +44,26 @@ export function useSidebarSessionActions({ runAction }: { runAction: RunAction }
   }
 
   const onNewSession = (server: ChamberServerAggregate, workspaceId: string): void => {
-    // Upstream's `connectWorkspace` keeps a per-workspace in-flight map
-    // (`connecting`) and returns the SAME promise to a second caller, so a
-    // double click can never mint two sessions (vendor ui-workspace/src/client/
-    // navigation.ts:116-131). The sidebar needs the same guard: both clicks read
-    // the same pre-create snapshot, so without it each one issues
-    // `session/create` and one of the two empty rows is invisible garbage
-    // forever — the exact I2 defect this handler exists to remove.
+    // 与上游 connectWorkspace 的每工作区 in-flight map 同款：两次点击读到
+    // 同一创建前快照，没有守卫就会各发一次 session/create，多出的空行会
+    // 永远成为不可见垃圾。
     const key = `${server.id}/workspace/${workspaceId}/new`
     const inFlight = newSessionRef.current.get(key)
     if (inFlight !== undefined) return
     const task = runAction(key, async () => {
-      // Reuse first, EXACTLY like upstream: reopen an existing blank member of
-      // this workspace; only create when there is none. The candidate comes from
-      // the projection (`findReusableBlankSession` over the raw snapshot), which
-      // is why the projection signature above must move when it changes.
+      // 与上游一致：先复用该工作区已有的空会话，没有才创建；候选来自投影
+      // （findReusableBlankSession），因此投影变化必须让签名移动。
       const reusable = server.workspaces
         .find(workspace => workspace.id === workspaceId)?.reusableBlankSessionId
       if (reusable !== undefined) {
-        // No refresh needed: the row already exists in the projection; opening
-        // it makes it the current (and therefore visible) blank row.
+        // 无需 refresh：行已在投影里，打开即成为当前（可见）空行。
         chamberBridge.requestOpenSession(server.id, reusable)
         return
       }
-      // 05 §2.2：创建事实由唯一出口在 wire 成功后立即发布——App
-      // 把该行并入这个工作区并立即渲染；官方 summaries 看不见它时（unary 侧栏创建
-      // 的会话不在挂载壳的会话列表里），回声账本保证行不会在下一次挂载推送时消失。
-      // I10 归因：这是用户点「+」触发的创建（不是 boot 交接 / 预热兜底）。
+      // 创建事实由唯一出口在 wire 成功后立即发布：App 把该行并入该工作区并
+      // 立即渲染；官方 summaries 看不见它时，回声账本保证下一次挂载推送不丢行。
       const sessionId = await createSessionForSource(server.id, workspaceId, { origin: 'user' })
-      // The App layer re-pulls the snapshot so every OTHER row of that source
-      // converges; the created row itself rides the echo fact above.
+      // App 重拉快照让该来源其它行收敛；新建行本身走上面的回声事实。
       chamberBridge.requestRefresh(server.id)
       chamberBridge.requestOpenSession(server.id, sessionId)
     })
@@ -91,26 +73,18 @@ export function useSidebarSessionActions({ runAction }: { runAction: RunAction }
     })
   }
 
-  // chamber (06 §2.2): archive runs
-  // IMMEDIATELY — no confirmation dialog. Upstream states the reason
-  // explicitly: archiving only hides the row (the session log is never
-  // touched), so it is not destructive and needs no confirm (vendor
-  // ui-workspace Rows.tsx:412-421). The verb rides the session row MENU, not a
-  // second hover button (same reference); the action gating (drag-end trailing
-  // click suppression + pending-click clear at the call site) and the keyed
-  // rowErrors reporting are unchanged.
+  // 归档立即执行、无确认对话框：它只隐藏行、从不触碰会话日志（上游同款），
+  // 非破坏性；动作挂在行菜单上，drag-end 尾随 click 守卫与按行 rowErrors
+  // 归因不变。
   const onArchiveSession = (server: ChamberServerAggregate, sessionId: string): void => {
     runAction(`${server.id}/session/${sessionId}/archive`, async () => {
-      // 唯一出口：归档同时撤下该会话的待定回声——创建后立刻归档的行
-      // 不会留成幽灵。
+      // 唯一出口：归档同时撤下该会话的待定回声，创建后立即归档不留幽灵行。
       await archiveSessionForSource(server.id, sessionId)
-      // 归档即终止（「已归档的对话应该终止」，与删除侧同一
-      // 纪律）：归档成功后**就地**停止该会话及其 subagent 闭包。归档会把"正在
-      // 查看"的选中清空（vendor `clearArchivedCurrent`），卡在提问/权限的回合
-      // 因此永远等不到回答——不终止就会变成永久 running 的僵尸，之后任何一次
-      // 删除都会被 running 守卫整树跳过。停止是 advisory：归档已生效，停止失败
-      // 只告警（删除侧还会再停一次），绝不回滚归档——连同"停止腿自身抛错"也
-      // 一并吞掉并告警：归档动作已成功，它不得被一个建议性失败改判为失败。
+      // 归档即终止（与删除侧同一纪律）：归档成功后就地停止该会话及其
+      // subagent 闭包。归档清空"正在查看"的选中，卡在提问/权限的回合永远等
+      // 不到回答——不停止就是永久 running 僵尸，之后删除会被 running 守卫
+      // 整树跳过。停止是 advisory：归档已生效，停止失败（含停止腿自身抛错）
+      // 只告警、绝不回滚归档。
       try {
         const stop = await stopArchivedSubtree(getInstanceClient(server.id), sessionId)
         if (stop.unavailable || stop.stillRunning.length > 0) {

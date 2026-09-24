@@ -3,7 +3,7 @@
   "usage": {
     "who": "packages/gateway/test/session-state/session-state-old-desktop-matrix.test.ts (cross-version matrix cell B: OLD desktop x NEW gateway). The test replays every entry below against the REAL gateway /chamber/session-state* surface and checks status, key sets and the old parse path. Any future compat tooling that must speak as the v0.4.0-beta.1 client reads the same file.",
     "whenToUpdate": "Only when the INTERFACE major version changes (control-plane PROTOCOL_VERSION, i.e. the descriptor `protocol` field). A major bump adds a NEW file anchored at that major (for example route-table-2.0.0.fixture.json). This v0.4.0-beta.1 file then stays frozen forever: the old desktop it records can no longer be rebuilt from this repository, so rewriting it would destroy the only forward-compatibility evidence.",
-    "howToUpdate": "Append-only. NEVER rename, delete or rewrite an existing route / method / path / status / frozen key entry - those entries ARE the old-client record. A 0.4.x minor that adds a capability appends only: a new id to `features.addedAfterFreeze`, a new path to `routesAddedAfterFreeze`, or a new field to a route's `expect.additiveKeys` (with an entry in `anchor.postFreezeAdditions`). Features.clientRequired / features.addedAtFreeze, every frozenKeys and nested key list, the request bodies and the status codes are immutable.",
+    "howToUpdate": "Append-only. NEVER rename, delete or rewrite an existing route / method / path / status / frozen key entry - those entries ARE the old-client record. A 0.4.x minor that adds a capability appends only: a new id to `features.addedAfterFreeze`, a new path to `routesAddedAfterFreeze`, a new field to a route's `expect.additiveKeys`, or a new post-freeze nested key list under `expect.nested` (each with an entry in `anchor.postFreezeAdditions`). Features.clientRequired / features.addedAtFreeze and every EXISTING frozenKeys or nested key list are immutable; appended lists only record what this client never read anyway.",
     "whyFrozen": "Plan section 6 and protocol-compat-blueprint section 2.2/3.1: the old desktop cannot be produced in-repo, so the only executable evidence that a NEW gateway stays backward compatible is replaying this recorded call sequence. A test that re-derives its expectations from the current server can only prove the server equals itself.",
     "scope": "/chamber/session-state* only (snapshot / stream / read / read-all). Other old-desktop routes are outside this fixture."
   },
@@ -27,6 +27,18 @@
         "where": "session row",
         "instrument": "I5",
         "oldClient": "not read; ignored by construction"
+      },
+      {
+        "field": "goal",
+        "where": "session row",
+        "instrument": "P2a goal facts",
+        "oldClient": "not read; ignored by construction (goal is absent while unknown, null when the host reports no goal, and the old parser picks frozen keys only). The goal object also carries the process-local activation edge (goalId/revision/phase/updatedAt + activation); the old client never reads any of them, and the activation is identity-bound to the goal id it belongs to"
+      },
+      {
+        "field": "diagnostics.dropped.goalActivations",
+        "where": "snapshot top level -> diagnostics.dropped (and the SSE snapshot frame data)",
+        "instrument": "P2a retained goal-activation edge cap (nested additive key)",
+        "oldClient": "not read; the old client never enters diagnostics at all (the whole diagnostics object is top-level additive), so a nested counter inside it is doubly invisible"
       }
     ]
   },
@@ -43,7 +55,9 @@
       "session-state.dsh-events",
       "session-state.pending-graph"
     ],
-    "addedAfterFreeze": []
+    "addedAfterFreeze": [
+      "session-state.goal"
+    ]
   },
   "routesAddedAfterFreeze": [],
   "routes": [
@@ -97,13 +111,41 @@
             "lastTurnEnd"
           ],
           "sessionRowAdditive": [
-            "factAt"
+            "factAt",
+            "goal"
+          ],
+          "goal": [
+            "goalId",
+            "revision",
+            "phase",
+            "updatedAt",
+            "activation"
           ],
           "lastTurnEnd": [
             "kind",
             "cause",
             "at",
             "seq"
+          ],
+          "diagnostics": [
+            "eventsReceived",
+            "lastEventAt",
+            "baselines",
+            "reconnects",
+            "followReads",
+            "followFailures",
+            "heldWaterfalls",
+            "mode",
+            "degraded",
+            "turnEnds",
+            "dropped",
+            "cursor"
+          ],
+          "diagnosticsDropped": [
+            "sessions",
+            "readClients",
+            "readMarks",
+            "goalActivations"
           ]
         },
         "clientReads": [

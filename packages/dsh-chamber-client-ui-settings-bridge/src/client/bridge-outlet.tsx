@@ -1,31 +1,19 @@
 /**
- * Bridge outlet: a minimal re-implementation of the official slot render
- * pipeline (dsh-client-ui-renderer/src/client/scoped-slots.tsx) covering exactly the
- * root-scope LIST and KEYED slots the settings surface declares
- * (settings.section / settings.general.item / settings.plugins.tab list;
- * settings.plugin.item keyed). The ledger is the SELECTED source's own boot-ctx
- * registry, whose renderer is anchored on `renderRoot`
- * for its own root tree — so the bridge renders entries itself, with the
- * source's own renderer-bound seats: same kit synthesis (t seat /
- * useStore+actions / renderSlot binding / standard hooks), same inject face
- * normalization, same ledger-version subscription, same cell dispatch (winner /
- * occupied-but-absent dead cell / dry-cell crash face — ./cell-dispatch.ts).
- * Scope kinds other than root+list/keyed render nothing (the official outlet's
- * undeclared-empty branch) and a child slot an entry never declared throws
- * BridgeAssemblyError — a miswired delegation must fail loud, never render
- * empty by design. That fail-loud policy is scoped to the chamber's OWN wiring:
- * the settings shell wraps every bridged outlet in `<BridgeEntryBoundary
- * containAll>` (see the boundary below) so a foreign entry's assembly error is
- * contained at the host seam and can never abdicate the chamber-owned shell.
+ * Bridge outlet: a minimal re-implementation of the official slot render pipeline
+ * (scoped-slots.tsx) covering exactly the root-scope LIST and KEYED slots the settings
+ * surface declares. The ledger is the SELECTED source's own boot-ctx registry, so the
+ * bridge renders entries itself with that source's own renderer-bound seats: same kit
+ * synthesis, inject normalization, ledger-version subscription and cell dispatch. Other
+ * scope kinds render nothing; a child slot an entry never declared throws
+ * BridgeAssemblyError — a miswired delegation must fail loud. That policy is scoped to
+ * the chamber's OWN wiring: every bridged outlet is wrapped in
+ * `<BridgeEntryBoundary containAll>`, so a foreign assembly error stays at the host seam.
  */
 import { Component, useMemo, useSyncExternalStore, type FC, type ReactNode } from 'react'
-// The official observableHook, not a second copy of it. bindings.tsx also
-// creates three React contexts at module load (host / root binding / scope
-// binding) — the import is an edge inside the one renderer build graph the
-// bridge already shares. The bridge imports ONLY this module (the sibling
-// `bind` module it deep-imports is the VENDOR module's own edge —
-// `bindings.tsx` imports `./bind.ts` — and this package has no ambient
-// declaration for it, because nothing here imports it).
+// The official observableHook, not a second copy: bindings.tsx creates three React
+// contexts at module load (host / root binding / scope binding), an edge inside the one
+// renderer build graph the bridge already shares. The bridge imports ONLY this module —
+// the sibling `bind` module is the VENDOR's own edge, with no ambient declaration here.
 import { observableHook } from '@deepseek-ai/dsh-client-ui-renderer/src/client/bindings.tsx'
 import type {
   HostObservable, LocaleFace, RenderOpts, StoredEntry, StoreInstanceLike, Translate,
@@ -34,11 +22,9 @@ import { dispatchKeyedCell, dispatchListCells } from './cell-dispatch.ts'
 import type { SettingsSourceSlots } from './settings-source-face.ts'
 
 /**
- * The ledger read face the outlet drives. Structural on purpose: it is the
- * public read API of an `@deepseek-ai/dsh-client-ui-renderer` SlotRegistry
- * (entries / entriesOfSlot / getVersion / subscribe / spec / onEntryError), so
- * the outlet can render ANY source's registry — the selected instance's own
- * boot-ctx ledger.
+ * The ledger read face the outlet drives. Structural on purpose: the public read API of
+ * a SlotRegistry (entries / entriesOfSlot / getVersion / subscribe / spec /
+ * onEntryError), so the outlet can render ANY source's registry.
  */
 export type BridgeLedger = SettingsSourceSlots
 
@@ -46,14 +32,12 @@ export type BridgeLedger = SettingsSourceSlots
 type InjectedProps = Record<string, unknown>
 
 /**
- * Standard seats one source's entries are rendered with. They are the seats
- * the INSTANCE'S OWN renderer bound for its ctx's root scope — the settings
- * shell publishes the ones it received (settings-source-face.ts), so a
- * rendered section sees exactly the seats it would see in that instance's own
- * frontend: `useSessions` / `useWorkspaces` / `usePanelInfo` / `useResource`
- * / `useSessionPendingInteraction` plus the root `props` compartment
- * (`chamberFileApiBase`). Absent members stay absent — the panel never invents
- * a substitute observable for a source that did not provide one.
+ * Standard seats one source's entries are rendered with: the seats the INSTANCE'S
+ * OWN renderer bound for its ctx's root scope, published by the settings shell
+ * (settings-source-face.ts), so a section sees exactly the seats it would see in
+ * that instance's own frontend (`useSessions` / `useWorkspaces` / `usePanelInfo` /
+ * `useResource` / `useSessionPendingInteraction` plus root `props`). Absent members
+ * stay absent — the panel never invents a substitute observable.
  */
 export interface BridgeStandardSeats {
   useSessions?: unknown
@@ -212,11 +196,9 @@ function renderEntry(
   ownerProps: object,
 ): ReactNode {
   const Comp = entry.component as FC<InjectedProps>
-  // The seats come from the SOURCE'S OWN renderer binding: they are handed to
-  // this panel by that source's settings shell (settings-source-face.ts), so a
-  // section reads the same session/workspace/panel/resource seats it reads in
-  // that instance's own frontend. Missing members stay missing — inventing an
-  // empty observable would hide a genuinely absent source.
+  // The seats come from the SOURCE'S OWN renderer binding, handed to this panel by that
+  // source's settings shell, so a section reads the same seats as in its own frontend.
+  // Missing members stay missing — an invented observable would hide an absent source.
   const kit: InjectedProps = seatProps(standard)
   if (entry.locale !== undefined) {
     if (locale === undefined) {
@@ -241,33 +223,18 @@ function renderEntry(
 export class BridgeAssemblyError extends Error {}
 
 /**
- * One entry crash must not take down its siblings (mirror of the official
- * boundary). Assembly failures (missing locale face, undeclared children)
- * rethrow by default — a miswired shell must fail loud; ordinary
- * render/inject crashes are contained: the cell renders an addressable
- * crash face (same shape as the official `<div data-slot-error>`) so a
- * silent blank never passes for an empty section.
+ * One entry crash must not take down its siblings (mirror of the official boundary).
+ * Assembly failures (missing locale face, undeclared children) rethrow by default — a
+ * miswired shell must fail loud — while ordinary render/inject crashes are contained as an
+ * addressable crash face, so a silent blank never passes for an empty section.
  *
- * `containAll` flips the policy for the foreign-entry → host seam: the chamber
- * settings shell wraps every top-level `BridgeOutlet` it renders in
- * `<BridgeEntryBoundary containAll slotKey="…">` so NO foreign entry error —
- * assembly or ordinary — can escape the shell. The bridged content is a
- * DIFFERENT author (the plugins running in the SELECTED source's ctx): one
- * misbehaving entry (an entry calling renderSlot for an undeclared slot, a
- * missing locale face, …) must never be able to abdicate
- * the chamber-owned `sidebar.settings` shell to the hosting boot's
- * boundary, which would permanently fall the entry back to the official
- * SettingsRoot (no server dropdown). The chamber's OWN shell wiring stays
- * fail-loud: a BridgeAssemblyError raised by shell code (outside the
- * bridged outlets) still escapes.
- *
- * React invokes `getDerivedStateFromError` as a STATIC — no instance props
- * are reachable there — so the mode cannot be decided inside it. The caught
- * error is carried through the boundary state instead and `render()` (an
- * instance method) makes the call: containAll → crash face for EVERY error;
- * default → a BridgeAssemblyError rethrows from render, which propagates to
- * the next boundary up — the same escape as a getDerivedStateFromError
- * throw, keeping the per-entry default fail-loud.
+ * `containAll` flips the policy for the foreign-entry → host seam: every top-level
+ * `BridgeOutlet` is wrapped in `<BridgeEntryBoundary containAll>` so NO foreign entry
+ * error can escape and abdicate the chamber-owned `sidebar.settings` shell (which would
+ * fall back to the official SettingsRoot). The chamber's OWN wiring stays fail-loud.
+ * `getDerivedStateFromError` is a STATIC, so the mode cannot be decided there: the caught
+ * error rides the boundary state and `render()` makes the call — containAll → crash face
+ * for EVERY error; default → a BridgeAssemblyError rethrows to the next boundary up.
  */
 export class BridgeEntryBoundary extends Component<
   { slotKey: string; containAll?: boolean; children: ReactNode },
@@ -275,8 +242,7 @@ export class BridgeEntryBoundary extends Component<
 > {
   override state: { failed: boolean; error: unknown } = { failed: false, error: null }
   static getDerivedStateFromError(error: unknown): { failed: boolean; error: unknown } {
-    // Static (no props): the error rides the state and render() applies the
-    // mode — see the class doc above.
+    // Static (no props): the error rides the state and render() applies the mode — see the class doc.
     return { failed: true, error }
   }
   override componentDidCatch(error: unknown): void {
@@ -284,10 +250,9 @@ export class BridgeEntryBoundary extends Component<
   }
   override render(): ReactNode {
     if (this.state.failed) {
-      // containAll (child-ctx → host seam): contain EVERYTHING — the crash
-      // face renders and the chamber shell survives. Default (per-entry):
-      // BridgeAssemblyError rethrows so a miswired surface fails loud; the
-      // throw from render propagates to the next boundary up.
+      // containAll (host seam): contain EVERYTHING — the crash face renders and the
+      // chamber shell survives. Default (per-entry): BridgeAssemblyError rethrows
+      // from render, propagating to the next boundary up.
       if (this.props.containAll !== true && this.state.error instanceof BridgeAssemblyError) {
         throw this.state.error
       }
@@ -311,34 +276,24 @@ function entryKeyOf(entry: StoredEntry): number {
 }
 
 /**
- * Anchor style shared by every outlet wrapper: `display:contents` keeps the
- * wrapper out of layout (grid/flex parents see the slot's own children), so the
- * anchor is purely addressable surface. Module-level constant — a stable
- * reference so the wrapper never diffs its style prop (official ANCHOR_STYLE).
+ * Anchor style shared by every outlet wrapper: `display:contents` keeps the wrapper out
+ * of layout (grid/flex parents see the slot's own children), so the anchor is purely
+ * addressable surface. Module constant so the wrapper never diffs its style prop.
  */
 const ANCHOR_STYLE = { display: 'contents' } as const
 
 /**
- * Render one root-scope LIST or KEYED slot from a settings ledger:
- * ledger version subscription + locale revision + entries (shadowing
- * winners) in order, `only` id filter for the nav→section dispatch. KEYED
- * slots dispatch the single entry whose `options.key` matches
- * `opts.entryKey`, else the fallback. Subscribe/getVersion closures are
- * memoized per (slots, slotKey) — no resubscribe churn on unrelated
- * re-renders (official per-face cache pattern).
+ * Render one root-scope LIST or KEYED slot from a settings ledger: ledger version
+ * subscription + locale revision + entries (shadowing winners) in order, with an
+ * `only` id filter for the nav→section dispatch. KEYED slots dispatch the single entry
+ * whose `options.key` matches `opts.entryKey`, else the fallback. Subscribe/getVersion
+ * closures are memoized per (slots, slotKey) — no resubscribe churn. The ledger is the
+ * SELECTED SOURCE's own boot-ctx registry; `standard` carries its renderer-bound seats.
  *
- * The ledger is the SELECTED SOURCE's own boot-ctx registry and `standard`
- * carries that source's own renderer-bound seats, so an entry renders with
- * the props it would have in that instance's own frontend.
- *
- * The official anchor contract: every slot
- * render site exposes a stable `[data-slot="<key>"]` wrapper, because that is
- * the addressable seam the official stylesheets target
- * (`ui-settings-general/src/client/GeneralSection.module.css`:
- * `.section > :global([data-slot='settings.general.item']) > :last-child`).
- * The wrapper rides the OUTLET, not the dispatch outcome: the winning entry,
- * the fallback, the occupied-but-absent dead cell and an undeclared slot all
- * render inside it, so the anchor never flickers with registration churn.
+ * The official anchor contract: every slot render site exposes a stable
+ * `[data-slot="<key>"]` wrapper — the seam official stylesheets target. The wrapper
+ * rides the OUTLET, not the dispatch outcome: winner, fallback, dead cell and undeclared
+ * slot all render inside it, so the anchor never flickers with registration churn.
  */
 export function BridgeOutlet({
   slots, locale, standard, slotKey, ownerProps, opts,
@@ -363,7 +318,6 @@ export function BridgeOutlet({
   )
 }
 
-/** Kind dispatch behind the outlet anchor (keyed/list winners, fallbacks, addressable crash faces). */
 function renderOutletContent(
   slots: BridgeLedger,
   locale: LocaleFace | undefined,
@@ -373,15 +327,13 @@ function renderOutletContent(
   opts: RenderOpts | undefined,
 ): ReactNode {
   const spec = slots.spec(slotKey)
-  // Undeclared (or no-longer-declared) keys, and the scope/kind combinations
-  // the bridge does not dispatch, render empty: this is natural empty, not an
-  // ownership failure (official undeclared-empty branch).
+  // Undeclared (or no-longer-declared) keys and undispatched scope/kind combos
+  // render empty: natural empty, not an ownership failure.
   if (spec === undefined || (spec.kind !== 'list' && spec.kind !== 'keyed') || spec.scope !== 'root') return null
   if (spec.kind === 'keyed') {
-    // One card per key (official keyed dispatch). A cell whose registrations all
-    // abdicated is OCCUPIED but has no winner: it renders the addressable crash
-    // face instead of the fallback, so a crashed registrant is never mistaken
-    // for an unregistered key.
+    // One card per key. A cell whose registrations all abdicated is OCCUPIED but
+    // has no winner: it renders the addressable crash face instead of the fallback,
+    // so a crashed registrant is never mistaken for an unregistered key.
     const cell = dispatchKeyedCell(
       [...slots.entries(slotKey)],
       [...slots.entriesOfSlot(slotKey)],
@@ -395,16 +347,14 @@ function renderOutletContent(
       </BridgeEntryBoundary>
     )
   }
-  // One row per id cell — the cell's winner, or the crash face once every entry
-  // of the cell abdicated (a dry cell must not silently drop its row).
+  // One row per id cell — the winner, or the crash face once every entry of the cell abdicated.
   const rows = dispatchListCells(
     [...slots.entries(slotKey)],
     [...slots.entriesOfSlot(slotKey)],
     opts?.only,
   )
   if (rows.length === 0) return <>{opts?.fallback ?? null}</>
-  // Winner rows key by entry identity; dry-cell rows key by id — the disjoint
-  // prefixes keep the two namespaces from colliding (official row keys).
+  // Winner rows key by entry identity, dry-cell rows by id — disjoint prefixes keep the two namespaces apart.
   return (
     <>
       {rows.map((row, index) => row.entry !== undefined

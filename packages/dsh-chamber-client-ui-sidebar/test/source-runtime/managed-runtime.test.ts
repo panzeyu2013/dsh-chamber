@@ -93,6 +93,7 @@ const serverSection = [
 // keeps the invariant without pinning a file name.
 const appSource = [
   '../renderer/src/App.tsx',
+  '../renderer/src/host/servers.ts',
   '../renderer/src/app-hooks/use-view-scheduler.ts',
   '../renderer/src/app-hooks/use-bridge-subscriptions.ts',
 ].map(name => readFileSync(new URL(name, sidebarRoot), 'utf8')).join('\n')

@@ -1,27 +1,18 @@
 /**
- * @dsh-chamber/dsh-runtime — the shared, host-agnostic dsh runtime version
- * management core (design 18 §9.1). Pure Node 22+, no Electron/IPC/control-plane
- * dependency; the desktop main process and the gateway server adapt it through
- * the real DI seams `StartupDeps`/`ApplyDeps`/`InstallerDeps` (+ desktop-side
- * `ControllerDeps`).
+ * @dsh-chamber/dsh-runtime — the shared, host-agnostic dsh runtime version management core.
+ * Pure Node 22+, no Electron/IPC/control-plane dependency; desktop and gateway adapt it
+ * through the real DI seams `StartupDeps`/`ApplyDeps`/`InstallerDeps` (+ `ControllerDeps`).
  *
  * The entry is an EXPLICIT named surface, never a wholesale barrel:
  *
- * - Runtime values follow the consumer rule: every exported name has a
- *   production consumer (the workspace dead-export gate,
- *   scripts/gates/verify-no-dead-exports.mjs, judges this index). Internal
- *   helpers stay in their own modules for relative import; add a value face
- *   here only together with the production consumer that imports it.
- *   `pnpmEntryCandidates` is the current deliberate omission — its desktop
- *   consumer lands next round.
- * - Types are the ONE exception: types do not participate in the dead-export
- *   judgement, so every named type referenced by an exported runtime
- *   function/class signature (parameters and return types) and by the exported
- *   types themselves ships with them — hosts must be able to name and annotate
- *   the contract (`PnpmEntrySearch`, `DshCliEntryResolution`, `ApplyDeps`,
- *   `InstallerDeps`, the Deps/Result families). A type unrelated to any exported
- *   signature stays in its module (`RuntimeHostAdapter` is a documented sketch
- *   there, as are `WinProcessRow`, `CriticalRuntimeFile`, …).
+ * - Runtime values follow the consumer rule: every exported name has a production consumer
+ *   (the dead-export gate judges this index). Internal helpers stay in their modules; add a
+ *   value face here only together with its production consumer. `pnpmEntryCandidates` is the
+ *   current deliberate omission.
+ * - Types are the ONE exception: they do not participate in the dead-export judgement, so
+ *   every named type referenced by an exported runtime signature ships with it — hosts must be
+ *   able to name and annotate the contract. A type unrelated to any exported signature stays in
+ *   its module (`RuntimeHostAdapter` and `WinProcessRow` are documented sketches there).
  */
 export {
   HOST_DOMAIN_PROBE_NAMES,
@@ -102,6 +93,9 @@ export {
   writeCurrentPointer,
   writeOverride,
 } from './dsh-runtime-store.ts'
+// PID liveness (process.kill(pid, 0); EPERM = alive) is also the desktop plugin
+// writer-reaper's default dep — one implementation for the workspace.
+export { isPidAlive } from './dsh-runtime-store.ts'
 export type {
   ActivationIntentInput,
   ActivationIntentKind,

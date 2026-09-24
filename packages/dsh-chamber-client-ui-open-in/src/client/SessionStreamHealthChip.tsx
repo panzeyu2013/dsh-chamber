@@ -1,27 +1,18 @@
 /**
- * Session stream-health chip: the visible half of the ladder in
- * `session-stream-health.ts`. It sits in the official conversation header
- * actions row (`conversation.session.header.actions`, list + session scope), so
- * it shows exactly while a conversation is presented — never on the shell
- * overlay, never over the composer, and never for a session the user is not
- * looking at.
+ * Session stream-health chip: the visible half of the ladder. It sits in the
+ * official conversation header actions row (list + session scope), so it shows
+ * exactly while a conversation is presented.
  *
- * The component is deliberately thin: every decision and the ladder's whole
- * state live in the seat (`session-stream-health-seat.ts`), because a
- * session-scoped subtree is unmounted on every session switch and a component
- * ref would reset the cooldown/budget each time. This file owns the visibility
- * re-check, the React wiring and the markup; the VISIBLE surface (which notice,
- * which controls, whether to keep ticking, whether a re-plan changed anything)
- * is the pure projection in `session-stream-health-chip-face.ts`, so it can be
- * behaviour-tested without a DOM.
- *
- * It renders at most one line of text plus up to two user actions: the page
- * reload every (non-churn) notice offers, and — while the pure plan arms it (a
- * parked `loading` open on a build that exposes the concrete face) — the
- * per-session stream rebuild.
- * Nothing here reloads, re-opens, rebuilds or navigates on its own: both controls
- * are the user's own click, and the plan's `'resync'` action only
- * decides whether the second control is rendered.
+ * Deliberately thin: every decision and the whole ladder state live in the seat
+ * (a session-scoped subtree is unmounted on every switch, so a component ref
+ * would reset cooldown/budget). This file owns the visibility re-check, the
+ * React wiring and the markup; the visible surface (notice, controls, whether to
+ * keep ticking) is the pure projection in `session-stream-health-chip-face.ts`,
+ * so it can be behaviour-tested without a DOM. It renders at most one line of
+ * text plus up to two user actions: the page reload every non-churn notice
+ * offers, and — while the pure plan arms it — the per-session stream rebuild.
+ * Nothing here reloads, re-opens, rebuilds or navigates on its own: the plan's
+ * `'resync'` action only decides whether the second control is rendered.
  */
 import { useEffect, useState, type ReactElement } from 'react'
 import type { Translate } from '../shared/coordinator.ts'
@@ -43,43 +34,32 @@ export interface SessionStreamHealthInjected {
   /** Bound translator for the open-in namespace (the chip's copy lives there). */
   t: Translate
   /**
-   * Remember the session this seat is showing. The detour a heal performs is
-   * cheaper when it reuses a session whose scope is already materialized (the
-   * one the user just came from), so the seat keeps a short per-source recency
-   * list and passes its most recent OTHER entry to the heal.
+   * Remember the session this seat is showing; the heal reuses the most recent
+   * OTHER entry as its cheapest detour (an already-materialized scope).
    */
   note(sessionId: string): void
-  /**
-   * One ladder step: plans, executes a requested heal and accounts it. The
-   * seat owns the per-session state, so a remount cannot reset the cooldown or
-   * the rolling budget.
-   */
+  /** One ladder step: plans, executes a requested heal and accounts it. The seat
+   *  owns the state, so a remount cannot reset the cooldown or rolling budget. */
   step(sessionId: string, openState: SessionOpenState, presented: boolean, now: number): SessionStreamHealthPlan
   /**
-   * Subscribe to carrier-churn facts for this source.
-   * The fact itself stays in the seat's closure; the chip only learns that a new
-   * observation is due. Without this the churn notice could never be planned
-   * while the session kept `openState === 'open'` (the ticker is off then, so
-   * nothing re-ran the ladder when the event arrived).
-   * @returns unsubscribe for the effect's cleanup.
+   * Subscribe to carrier-churn facts for this source; the fact itself stays in
+   * the seat, the chip only learns a new observation is due. Without this the
+   * churn notice could never be planned while `openState === 'open'` (no ticker).
+   * @returns unsubscribe for the effect cleanup.
    */
   subscribe(listener: () => void): () => void
   /** The user's own reload action. */
   reload(): void
   /**
-   * The user's own per-session stream rebuild. Only ever invoked from the control
-   * the plan armed (the plan's automatic arm never routes through here); the seat
-   * stamps the per-session ledger so the attempt paces the automatic arm, and the
-   * concrete face's availability is re-checked inside the probe.
+   * The user’s own per-session rebuild, invoked only from the armed control; the
+   * seat stamps the ledger and the probe re-checks the concrete face.
    */
   resync(sessionId: string): void
 }
 
 /**
- * Slot props: the injected face plus the framework standard kit this header row
- * delivers — the per-header `sessionId` and the session selector hook. A
- * structural subset on purpose (the workspace symlink publishes no d.ts tree for
- * these runtime objects; see the same note on `OpenInProps`).
+ * Slot props: the injected face plus the framework standard kit (per-header
+ * `sessionId`, session selector hook). A structural subset on purpose.
  */
 export interface SessionStreamHealthProps extends SessionStreamHealthInjected {
   sessionId: string
@@ -102,8 +82,7 @@ export function SessionStreamHealthChip(props: SessionStreamHealthProps): ReactE
   const [visible, setVisible] = useState(() => typeof document === 'undefined' || document.visibilityState !== 'hidden')
 
   // Visibility is re-read on the event, not only on the tick: a page resumed
-  // from the tray may have had its timers throttled, and the mobile tier's
-  // stall observer does the same.
+  // from the tray may have had its timers throttled.
   useEffect(() => {
     if (typeof document === 'undefined') return
     const onVisibility = (): void => {
@@ -114,32 +93,29 @@ export function SessionStreamHealthChip(props: SessionStreamHealthProps): ReactE
     return () => { document.removeEventListener('visibilitychange', onVisibility) }
   }, [])
 
-  // Tell the seat which session is on screen (the heal's cheapest detour is the
-  // session the user came from). Keyed on the id, so a header remount on a
-  // session switch still records it.
+  // Tell the seat which session is on screen (the heal’s cheapest detour is the
+  // session the user came from); keyed on the id, so a header remount still records it.
   useEffect(() => {
     note(sessionId)
   }, [note, sessionId])
 
-  // Carrier-churn facts arrive as EVENTS — the seat's closure owns the fact, so
-  // no prop changes when one lands. Bump the tick to re-plan the ladder (the
-  // "reconnecting…" notice appears), and because a visible notice keeps the
-  // ticker alive it expires on its own afterwards.
+  // Carrier-churn facts arrive as EVENTS — the seat’s closure owns the fact, so a
+  // prop would never change. Bump the tick to re-plan (the notice appears), and a
+  // visible notice keeps the ticker alive so it expires on its own.
   useEffect(() => subscribe(() => setTick(value => value + 1)), [subscribe])
 
   // One ladder step per render-relevant change. The seat is where the state and
-  // the only side effects live (executing a requested heal, and the user's own
-  // resync click — which no effect here ever issues).
+  // the only side effects live (executing a heal, and the user’s resync click —
+  // which no effect here ever issues).
   useEffect(() => {
     const presented = visible && isConversationSurfacePresented(typeof document === 'undefined' ? null : document)
     const next = step(sessionId, openState, presented, Date.now())
     setPlan(previous => (sameSessionStreamHealthPlan(previous, next) ? previous : next))
   }, [openState, sessionId, tick, visible, note, step])
 
-  // Age the ladder only while an arm is actually holding and the page is
-  // visible: an idle session, an open stream, or a hidden page carries no timer.
-  // A visible NOTICE also ticks: the carrier-churn notice is derived from a fact
-  // timestamp, so it has to be re-planned to expire on its own.
+  // Age the ladder only while an arm is holding and the page is visible: an idle
+  // session, an open stream, or a hidden page carries no timer. A visible NOTICE
+  // also ticks — the churn notice is derived from a fact timestamp and must expire.
   useEffect(() => {
     if (!sessionStreamHealthChipHoldsTick(plan, openState, visible)) return
     const timer = window.setInterval(() => setTick(value => value + 1), TICK_MS)
@@ -147,22 +123,18 @@ export function SessionStreamHealthChip(props: SessionStreamHealthProps): ReactE
   }, [plan.state.phase, plan.notice, openState, visible])
 
   // The visible surface is the pure projection (behaviour-tested without a DOM):
-  // a null label means nothing renders — an idle ladder, or a held state that is
-  // not a recovery in flight. While the ladder holds an 'error' state it may still
-  // act on its own (the grace, then a retry after each cooldown), and the user must
-  // see that a repair is in flight rather than only the vendor's error line.
+  // a null label means nothing renders. While the ladder holds an 'error' state it
+  // may still act on its own, and the user must see that a repair is in flight
   const face = sessionStreamHealthChipFace(plan, openState)
   if (face.label === null) return null
 
   const label = face.label === 'healing' ? t('streamHealth.healing') : t(sessionStreamNoticeKey(face.label))
   return (
     <div className={styles.chip} data-chamber-stream-health={face.marker}>
-      {/* The live region is the LABEL only: a live region must not contain the
-          interactive control (assistive tech would announce the button as part
-          of every update). */}
+      {/* The live region is the LABEL only: it must not contain the interactive
+          control, which assistive tech would announce as part of every update. */}
       <span role="status" aria-live="polite">{label}</span>
-      {/* Churn is informational: the stream reopens on its own, so the chip
-          offers no action that would interrupt a recovery in flight. */}
+      {/* Churn is informational: the stream reopens on its own; no interrupting action. */}
       {face.reload ? (
         <>
           <button type="button" className={styles.action} onClick={reload}>

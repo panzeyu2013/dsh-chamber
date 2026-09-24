@@ -1,16 +1,15 @@
 import { PROBE_TEXT_KEEP_TOKENS, sanitizeErrorText as sanitizeRuntimeErrorText } from '@dsh-chamber/dsh-runtime'
 
 /**
- * Desktop updater errors commonly include a public release URL followed by a
- * local cache path. The shared runtime sanitizer correctly redacts paths but
- * treats the URL pathname as POSIX material. Protect bounded HTTP(S) tokens
- * while applying the shared redaction, then restore them verbatim.
+ * Updater errors carry a public release URL next to a local cache path; the
+ * shared runtime sanitizer redacts paths but treats the URL pathname as POSIX
+ * material. Protect bounded HTTP(S) tokens across the shared redaction, then
+ * restore them verbatim.
  *
- * The activation-probe vocabulary rides along as kept tokens: those method
- * names are RPC vocabulary rather than path material, and this pass would
- * otherwise republish a probe failure as `commands[path]` while losing the
- * failing method name (PROBE_TEXT_KEEP_TOKENS also covers the legacy fallback
- * method, which a required-set-only list misses).
+ * Probe method names ride along as kept tokens (PROBE_TEXT_KEEP_TOKENS): they
+ * are RPC vocabulary, not
+ * path material, and a required-set-only list would republish a probe failure
+ * as `commands[path]` while losing the failing method name.
  */
 export function sanitizeErrorText(message: string): string {
   const urls: string[] = []

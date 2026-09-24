@@ -1,27 +1,14 @@
 /**
- * The root entry's transient layout store: panel geometry as plain widths in
- * px (0 = closed) plus the root main-panel selection. Module level exports the
- * factory only — a module-level handle would pin the store's identity in the
- * module cache (a de-facto singleton surviving plugin reloads). The fork's
- * assembly (`client/index.ts`) mints ONE instance eagerly and shares it with
- * the registration, exactly like the upstream baseline, so `AppFrame` derives
- * its `PropsStore` share from the return type and the service face receives
- * the same bound actions.
- *
- * CHAMBER FORK (design 06 — sidebar width sharing): the vendor store is a
- * per-boot unpersisted preference, so a drag in one shell is invisible in
- * the others and every restart resets to SIDEBAR_DEFAULT. This fork seeds
- * `sidebar` from the chamber sidebar package's page-wide view-prefs store
- * (`@dsh-chamber/dsh-chamber-client-core` — ONE in-memory store shared
- * by every boot over the vite shared chunk, persisted under one versioned
- * localStorage key), writes every drag back into it, and has every live
- * instance subscribe to it so width changes propagate across boots live.
- * Only the sidebar width is shared/persisted: the right panel preference and
- * the narrow override stay per-boot transient (the vendor contract).
- *
- * THIS FILE is the production WIRING (the default injected environment); the
- * factory logic itself lives in `store-core.ts` as a pure, dependency-
- * injected module so `test/layout-store.test.ts` can run it under plain node.
+ * Production wiring for the root layout store (design 06 — sidebar width
+ * sharing): the factory only, because a module-level handle would pin the
+ * store's identity across plugin reloads; `client/index.ts` mints ONE instance
+ * eagerly and shares it with the registration.
+ * The vendor store keeps the preference per boot, so this fork seeds `sidebar`
+ * from the chamber page-wide view-prefs store (one in-memory store shared by
+ * every boot, persisted under one localStorage key), writes every drag back
+ * into it, and has every live instance subscribe so width changes propagate
+ * live. Only the sidebar width is shared: the right panel preference and the
+ * narrow override stay per-boot transient. Factory logic: `store-core.ts`.
  */
 import { defineStore, type EngineStoreHandle } from '@deepseek-ai/dsh-client-store'
 import {
@@ -37,8 +24,7 @@ import {
   type LayoutStoreEnvironment,
 } from './store-core.ts'
 
-/** The production environment: the real engine, the vendor columns contract
- *  and the real sidebar view-prefs store (shared across every boot). */
+/** Production environment: the real engine, vendor columns contract and shared view-prefs store. */
 const defaultEnvironment: LayoutStoreEnvironment = {
   defineStore,
   columns: {
@@ -55,11 +41,7 @@ const defaultEnvironment: LayoutStoreEnvironment = {
   initialViewportWidth: () => window.innerWidth,
 }
 
-/**
- * Create the layout panel store handle (see store-core.ts for the full
- * behavior contract). `env` is injectable for tests; production calls with no
- * argument and gets the real modules above.
- */
+/** Create the layout store handle (behavior contract in store-core.ts); `env` is injectable for tests. */
 export function createLayoutStore(
   env: LayoutStoreEnvironment = defaultEnvironment,
 ): EngineStoreHandle<LayoutState, LayoutActions> {
@@ -67,11 +49,8 @@ export function createLayoutStore(
 }
 
 /**
- * CHAMBER FORK (design 06 — shared width adoption): register the minted root
- * instance with the production environment so a drag in any shell propagates
- * to every live boot. The upstream baseline mints the instance inside `apply`
- * and shares it with the registration; this fork's assembly calls this once
- * with that same instance.
+ * Register the minted root instance with the production environment so a drag
+ * in any shell propagates to every live boot.
  * @param instance - the root store instance minted by `client/index.ts`.
  */
 export function trackLayoutInstance(instance: Parameters<typeof trackInstance>[1]): void {

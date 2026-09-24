@@ -1,16 +1,13 @@
 /**
- * Control-plane REST client for the connections section (design 04 §3 /
- * 05 §7.2): /health, /api/connections (the single local row), /api/host/logs
- * — plus the per-instance-proxy gateway host-logs endpoint (design 17 §9.3:
- * /api/i/gateway-<id>/api/host/logs, same control-plane host-logs shape).
+ * Control-plane REST client for the connections section (design 04 §3 / 05 §7.2):
+ * /health, /api/connections, /api/host/logs, plus the per-instance-proxy gateway
+ * host-logs endpoint (same control-plane shape).
  *
- * The REST transport + wire shapes are the SINGLE shared copy in the chamber
- * sidebar package (shared/control-plane-client.ts): both
- * this plugin and the renderer App layer consume it, so the two cannot
- * drift. This module keeps the plugin-side `cp`
- * method surface and the plugin-management IPC wrappers (design 13
- * §4.1/§3/§5), which stay local. Every value is non-secret: tunnel URLs
- * and SSH material never cross this module.
+ * The REST transport + wire shapes are the SINGLE shared copy in the chamber sidebar
+ * package (shared/control-plane-client.ts), consumed by both this plugin and the
+ * renderer App layer, so the two cannot drift. This module keeps the plugin-side `cp`
+ * method surface and the plugin-management IPC wrappers. Every value is non-secret:
+ * tunnel URLs and SSH material never cross this module.
  */
 
 import {
@@ -34,13 +31,12 @@ import type {
   GatewayPluginApplyIpcResult, GatewayPluginApplyInput, GatewayPluginMaterializeIpcResult, GatewayPluginSyncIpcResult, LocalPluginManifest, NpmSearchPackage, PluginApplyInput, PluginApplyResult, RemotePluginManifest,
   SshExecIpcResult, SshLocalPluginExecIpcResult, SshMaterializeResult, SshPluginUndoIpcResult, SshSeedHostGraphResult,
 } from '../global.d.ts'
-// The manifest projection model (dependencies + bundles) and the refusal-code
-// vocabulary are THE single definition in the neutral wire package, reached
-// through client-core's browser face (type-only: erased at build time).
+// The manifest projection model (dependencies + bundles) and the refusal-code vocabulary
+// are THE single definition in the neutral wire package, reached through client-core's browser face.
 import type { PluginManifestModel, PluginProfileRefusalCode } from '@dsh-chamber/dsh-chamber-client-core/plugin-manifest'
 import type { GatewayTasksShape, PluginRowShape } from './plugin-model.ts'
 
-/** 统一错误形状（design 04 D1：{error, code?}）+ HTTP 状态 + 响应体 + 限流提示。 */
+/** 统一错误形状（{error, code?}）+ HTTP 状态 + 响应体 + 限流提示。 */
 export type {
   ApiErrorBody, ApiError, HealthResponse, ConnectionSummary, HostLogLine, HostLogsResponse,
 }
@@ -49,7 +45,7 @@ export const cp = {
   /** GET /health → 本地 dsh 进程状态。 */
   health: (): Promise<HealthResponse> => request('/health'),
 
-  /** SSE push channel (设计 05 §3): 当前快照 + 每次状态迁移。 */
+  /** SSE push channel: 当前快照 + 每次状态迁移。 */
   healthEvents: (): EventSource => new EventSource(controlPlaneUrl() + '/api/host/health-events'),
 
   /** GET /api/connections → 本地连接行（无行 404 → null）。 */
@@ -70,10 +66,8 @@ export const cp = {
     return toConnectionSummary(body?.connection ?? { id: 'local', status: 'starting' })
   },
 
-  /**
-   * GET /api/connections/local/writers → 写者静默诊断（02 §3.4）。
-   * 没有该路由的形态（501/404）返回 null：页面不渲染该块。
-   */
+  /** GET /api/connections/local/writers → 写者静默诊断。没有该路由的形态（501/404）
+   *  返回 null：页面不渲染该块。 */
   localWriters: async (): Promise<LocalWriterDiagnosisWire | null> => {
     try {
       return toLocalWriterDiagnosis(await request<unknown>('/api/connections/local/writers'))
@@ -84,11 +78,8 @@ export const cp = {
     }
   },
 
-  /**
-   * POST /api/connections/local/reclaim → 清理并接管：清除本状态目录自己的
-   * 陈旧/孤儿托管写者记录后启动本地实例（仍在运行的其它应用实例不受影响）。
-   * 仍有活写者时 409 connection_busy（带结构化 detail）。
-   */
+  /** POST /api/connections/local/reclaim → 清理并接管：清除本状态目录自己的陈旧/孤儿
+   *  托管写者记录后启动本地实例（其它运行实例不受影响）。仍有活写者时 409 connection_busy（带结构化 detail）。 */
   reclaimLocal: async (): Promise<{ connection: ConnectionSummary; reclaimed: number[] }> => {
     const body = await post<{ connection?: ConnectionRowWire; reclaimed?: unknown }>(
       '/api/connections/local/reclaim', {})
@@ -100,11 +91,11 @@ export const cp = {
     }
   },
 
-  /** DELETE /api/connections/<id> → {stopped:true}（04 §3.2；本面上只有 local 行）。 */
+  /** DELETE /api/connections/<id> → {stopped:true}（本面上只有 local 行）。 */
   removeLocal: (connectionId: string): Promise<{ stopped: boolean }> =>
     request(`/api/connections/${encodeURIComponent(connectionId)}`, { method: 'DELETE' }),
 
-  /** GET /api/host/logs?limit=&offset=（04 §3.3；缺省 limit 200，上限 1000）。 */
+  /** GET /api/host/logs?limit=&offset=（缺省 limit 200，上限 1000）。 */
   hostLogs: (limit?: number, offset?: number): Promise<HostLogsResponse> => {
     const params: string[] = []
     if (typeof limit === 'number' && Number.isFinite(limit)) params.push(`limit=${limit}`)
@@ -112,15 +103,10 @@ export const cp = {
     return request(params.length === 0 ? '/api/host/logs' : `/api/host/logs?${params.join('&')}`)
   },
 
-  /** GET /api/i/gateway-<id>/api/host/logs?limit=&offset= → the GATEWAY's own
-   *  control-plane host logs (design 17 §9.3 / 03 §3): the desktop control
-   *  plane strips the /api/i/gateway-<id> prefix and forwards /api/host/logs
-   *  to the gateway (injecting its sanctioned Authorization/Cookie headers at
-   *  forward time — the renderer never holds the token); the gateway's
-   *  dispatch claims /api/host/* for its OWN api.handle, so the response is
-   *  the same control-plane host-logs shape ({port, lines, truncated}) the
-   *  local card parses — the managed dsh spawn logs of the gateway's
-   *  stateDir. */
+  /** GET /api/i/gateway-<id>/api/host/logs?limit=&offset= → the GATEWAY's own host logs:
+   *  the desktop strips the proxy prefix and forwards /api/host/logs with its sanctioned
+   *  Authorization/Cookie headers injected (the renderer never holds the token), so the response
+   *  is the same {port, lines, truncated} shape the local card parses. */
   gatewayHostLogs: (id: string, limit?: number, offset?: number): Promise<HostLogsResponse> => {
     const params: string[] = []
     if (typeof limit === 'number' && Number.isFinite(limit)) params.push(`limit=${limit}`)
@@ -131,72 +117,55 @@ export const cp = {
 }
 
 /**
- * Plugin-management IPC wrappers (design 13 §4.1/§3/§5). These ride the
- * desktop SSH surface (window.dshChamber.desktopSsh.*) — the main process is
- * the only authority for exec/whitelisting/materialization; the renderer only
- * computes the view (plugin-diff.ts) and forwards explicit user intents.
- * The bridge is exposed asynchronously after dsh-chamber:info; a null surface
- * is a loud error (never a silent no-op), matching ConnectionsSection's guard.
+ * Plugin-management IPC wrappers: they ride the desktop SSH surface
+ * (window.dshChamber.desktopSsh.*) — the main process is the only authority for
+ * exec/whitelisting/materialization; the renderer computes the view and forwards
+ * explicit user intents. The bridge appears after dsh-chamber:info; a null surface
+ * is a loud error, never a silent no-op.
  */
 
 /** The desktop SSH surface, or a loud throw when the bridge is not yet up. */
 function desktopSsh() {
   const surface = window.dshChamber?.desktopSsh
-  // English verbatim per the unlocalized-error convention (main-process /
-  // capability errors surface as-is in both locales).
+  // English verbatim per the unlocalized-error convention (main-process / capability errors surface as-is).
   if (surface == null) throw new Error('The desktop SSH surface is unavailable (desktopSsh not ready)')
   return surface
 }
 
 export type LocalPluginListResult = { ok: true; manifest: LocalPluginManifest } | { ok: false; error: string }
 export type RemotePluginListResult = { ok: true; manifest: RemotePluginManifest } | { ok: false; error: string }
-/** plugin_apply (ssh) result — exactly the main-process SSH_PLUGIN_APPLY
- *  union (renderer global.d.ts DesktopSshSurface.plugin_apply / preload
- *  SshPluginApplyIpcResult). NO `{ok:true,cancelled:true}` arm: the ssh apply
- *  handler has no confirmation dialog or picker to dismiss (design 21 §7 —
- *  the ssh apply confirm gap is a registered open item; the gateway apply
- *  union carries the cancelled arm instead), so this wrapper can never see a
- *  user-cancelled result (ipc-surface-mirror.test.ts pins the producer
- *  union). */
+/** plugin_apply (ssh) result — exactly the main-process SSH_PLUGIN_APPLY union (renderer
+ *  global.d.ts / preload SshPluginApplyIpcResult). NO `{ok:true,cancelled:true}` arm: the ssh
+ *  apply handler has no confirmation dialog or picker to dismiss (the gateway union carries it). */
 export type PluginApplyResult2 = { ok: true; result: PluginApplyResult } | { ok: false; error: string }
 export type NpmSearchResult = { ok: true; packages: NpmSearchPackage[] } | { ok: false; error: string }
 
-/** GET /chamber/plugins seed-cache projection (design 17 §9.3, unchanged):
- *  name + version per synced chamber host package; version null = that
- *  package was never synced onto the gateway yet. */
+/** GET /chamber/plugins seed-cache projection: name + version per synced chamber host
+ *  package; version null = never synced onto the gateway yet. */
 export interface ChamberSeedCacheProjection {
   name: string
   version: string | null
 }
 
-/** GET /chamber/plugins/installed projection (design 21 §6.2 readManifest —
- *  the gateway implementation of the model readManifest verb): the managed
- *  web profile's (already masked) dependency map + bundles + the additive
- *  §6.11.5 row projection; HTTP 404/500 map to the absent/corrupt codes, the
- *  §6.2 read/write fence's 409 maps to the retryable busy arm (see
- *  gatewayInstalled), every other refusal stays a loud ApiError.
- *  The manifest half (dependencies + bundles + profileExists) and the refusal
- *  codes come from the wire single source (`PluginManifestModel` /
- *  `PluginProfileRefusalCode`, design 21 §3 readManifest); this module owns
- *  only the HTTP-status mapping.
- *  `rows` is OPTIONAL on purpose: an in-place OLDER gateway answers without it
- *  (version skew, §6.11.7), and the dialog then falls back to the legacy
- *  dependencies filter + the "gateway is older" hint. */
+/** GET /chamber/plugins/installed projection: the managed web profile's (masked) dependency
+ *  map + bundles + the additive row projection; HTTP 404/500 map to absent/corrupt codes, the
+ *  read/write fence's 409 maps to the retryable busy arm, every other refusal stays a loud
+ *  ApiError. The manifest half and refusal codes come from the wire single source; this module
+ *  owns only the HTTP-status mapping.
+ *  `rows` is OPTIONAL on purpose: an older in-place gateway answers without it, and the dialog
+ *  then falls back to the legacy dependencies filter + the "gateway is older" hint. */
 export type GatewayInstalledProjection =
   | ({
     ok: true
-    /** Additive §6.11.5 row projection; absent on an OLDER gateway. */
+    /** Additive row projection; absent on an OLDER gateway. */
     rows?: readonly PluginRowShape[]
     profileExists: true
   } & PluginManifestModel)
   | { ok: false; code: PluginProfileRefusalCode }
-  /** The §6.2 读/写面共享栅栏: a plugin mutation held the
-   *  managed-profile write lease, so the gateway withheld the projection with
-   *  409 `runtime_busy` rather than publishing a torn one. NOT a read failure
-   *  and NOT a profile state: the caller renders the dedicated busy copy
-   *  (gatewayReadFenceText) and the dialog's own reload rhythm retries.
-   *  `refusalCode` is the server's own code — null when the refusal body
-   *  carried none (gateway routes.ts answers `{error, code:'runtime_busy'}`). */
+  /** The read/write fence: a plugin mutation held the managed-profile write lease, so the
+   *  gateway withheld the projection with 409 `runtime_busy` rather than publishing a torn one.
+   *  NOT a read failure and NOT a profile state — the caller renders the busy copy and retries.
+   *  `refusalCode` is the server's own code (null when the refusal body carried none). */
   | { ok: false; code: 'runtime_busy'; refusalCode: string | null }
 
 /** Local plugin manifest (main reads the authoritative local profile path). */
@@ -224,13 +193,12 @@ export function restartService(id: string): Promise<SshExecIpcResult> {
   return desktopSsh().restart_service(id)
 }
 
-/** Seed module A onto a remote instance (09 遗留 1). */
+/** Seed module A onto a remote instance. */
 export function seedHostGraph(id: string): Promise<SshSeedHostGraphResult> {
   return desktopSsh().seed_host_graph(id)
 }
 
-/** Pack/upload a user-picked local plugin source (dir or .tgz archive,
- *  design 21 §6.5 archive-pick) and install it remotely (pick-only). */
+/** Pack/upload a user-picked local plugin source (dir or .tgz archive) and install it remotely (pick-only). */
 export function pluginMaterializeAddPick(id: string): Promise<SshMaterializeResult> {
   return desktopSsh().plugin_materialize_add_pick(id)
 }
@@ -240,8 +208,7 @@ export function localPluginAdd(spec: string): Promise<SshLocalPluginExecIpcResul
   return desktopSsh().local_plugin_add(spec)
 }
 
-/** Pick a local plugin source (folder or .tgz archive) and install it into
- *  the LOCAL dsh profile (pick-only). */
+/** Pick a local plugin source (folder or .tgz archive) and install it into the LOCAL dsh profile (pick-only). */
 export function localPluginAddFile(): Promise<SshLocalPluginExecIpcResult> {
   return desktopSsh().local_plugin_add_file()
 }
@@ -251,50 +218,36 @@ export function localPluginRemove(name: string): Promise<SshLocalPluginExecIpcRe
   return desktopSsh().local_plugin_remove(name)
 }
 
-/** Undo the latest ok ssh plugin change of a remote instance (design 21
- *  §6.4 ssh 统一增量): the MAIN process consults its ssh
- *  journal, confirms with the user (cancelled = dismissed), and re-executes
- *  the inverse row through the same ssh plugin_apply flow (restart-to-apply,
- *  journaled). The renderer never supplies a spec — the id-only intent keeps
- *  the journal authoritative. */
+/** Undo the latest ok ssh plugin change: the MAIN process consults its ssh journal, confirms
+ *  with the user (cancelled = dismissed), and re-executes the inverse row through the same ssh
+ *  plugin_apply flow (restart-to-apply, journaled). The renderer never supplies a spec — the
+ *  id-only intent keeps the journal authoritative. */
 export function sshPluginUndo(id: string): Promise<SshPluginUndoIpcResult> {
   return desktopSsh().ssh_plugin_undo(id)
 }
 
-/* ---- Gateway A0 read side + manual chamber sync (design 21 §6.2/§6.5, plan
- * Phase 3) ----
- * The reads ride the per-instance proxy like gatewayHostLogs above
- * (`/api/i/gateway-<id>/…` — the shared request throws the unified ApiError
- * on any non-2xx); the sync IPC takes the RAW registry instance id (no
- * `gateway-` proxy prefix — the main process validates INSTANCE_ID_PATTERN
- * against the registry key, the same id `save_connection`/`connect` use).
- * Every value is non-secret: package names/versions and ok/code statuses,
- * plus an id-only sync intent — never a URL or credential. */
+/* ---- Gateway A0 read side + manual chamber sync ----
+ * The reads ride the per-instance proxy like gatewayHostLogs above; the sync IPC takes the RAW
+ * registry instance id (no `gateway-` proxy prefix — main validates INSTANCE_ID_PATTERN against
+ * the registry key). Every value is non-secret: package names/versions, statuses, and an id-only
+ * sync intent — never a URL or credential. */
 
-/** GET /chamber/plugins (design 17 §9.3 seed cache, unchanged): name+version
- *  per synced chamber host package (version null = never synced). A non-2xx
- *  answer throws the shared ApiError — never a silent empty list. */
+/** GET /chamber/plugins seed cache: name+version per synced chamber host package (version
+ *  null = never synced). A non-2xx answer throws the shared ApiError — never a silent empty list. */
 export async function gatewayChamberSeedCache(id: string): Promise<{ items: ChamberSeedCacheProjection[] }> {
   return request<{ items: ChamberSeedCacheProjection[] }>(`/api/i/gateway-${id}/chamber/plugins`)
 }
 
-/** The read fence's bounded retry budget (design 21 §6.2 fence / §7 接线): the
- *  fence is released at the mutation's terminal edge, which can trail the 202
- *  the caller just observed by a few hundred ms (the orchestrator writes the
- *  journal `pending` record before the worker runs), so ONE short-backoff
- *  re-read absorbs that window. A longer-lived fence — a real install running
- *  for seconds to minutes, or ANOTHER client's mutation — is never polled from
- *  here: the caller shows the busy state and the dialog's existing reload
- *  rhythm (open / post-op / 「刷新」) retries, so no request storm can build up
- *  behind a manual refresh or a competing writer. */
+/** The read fence's bounded retry budget: the fence is released at the mutation's terminal
+ *  edge, which can trail the 202 by a few hundred ms, so ONE short-backoff re-read absorbs that
+ *  window. A longer-lived fence (a real install running for seconds, or ANOTHER client's mutation)
+ *  is never polled from here — the caller shows the busy state and the dialog's reload rhythm retries. */
 const INSTALLED_FENCE_RETRIES = 1
 const INSTALLED_FENCE_BACKOFF_MS = 400
 
-/** Wait out the fence's backoff, cut short by the caller's signal: an aborted
- *  read (dialog reloaded / unmounted) must not fire its pending retry. The
- *  shared request() carries no signal (its RequestOptions is the converged
- *  cross-package transport face), so the in-flight fetch is not abortable
- *  here — the retry LOOP is, which is what bounds the request count. */
+/** Wait out the fence's backoff, cut short by the caller's signal: an aborted read must not
+ *  fire its pending retry. The shared request() carries no signal, so the retry LOOP is what is
+ *  abortable here — which is what bounds the request count. */
 function installedFenceBackoff(signal: AbortSignal | undefined): Promise<void> {
   return new Promise(resolve => {
     if (signal?.aborted === true) {
@@ -311,25 +264,19 @@ function installedFenceBackoff(signal: AbortSignal | undefined): Promise<void> {
   })
 }
 
-/** GET /chamber/plugins/installed (design 21 §6.2 readManifest): 200 ok
- *  projection / 404 profile_absent / 500 profile_corrupt map to the typed
- *  union; the read/write fence's 409 becomes the `runtime_busy` arm after a
- *  bounded re-read (it is a busy state, never a read failure — the caller
- *  localizes it via gatewayReadFenceText); any other refusal (network,
- *  401/403, proxy 503 …) rethrows the shared ApiError — a failure is never
- *  folded into an ok shape.
- * @param id - the RAW registry instance id (the proxy prefix is added here).
- * @param options.signal - bounds the fence retry loop; an already-aborted
- *   signal keeps the read single-shot (the first attempt still runs — the
- *   caller asked for it). */
+/** GET /chamber/plugins/installed: 200 ok / 404 profile_absent / 500 profile_corrupt map to
+ *  the typed union; the read/write fence's 409 becomes the `runtime_busy` arm after a bounded
+ *  re-read (a busy state, never a read failure); any other refusal (network, 401/403, proxy 503 …)
+ *  rethrows the shared ApiError — a failure is never folded into an ok shape.
+ *  @param id - the RAW registry instance id (the proxy prefix is added here).
+ *  @param options.signal - bounds the fence retry loop; an already-aborted signal keeps the read single-shot. */
 export async function gatewayInstalled(
   id: string,
   options: { signal?: AbortSignal } = {},
 ): Promise<GatewayInstalledProjection> {
   const path = `/api/i/gateway-${id}/chamber/plugins/installed`
   const signal = options.signal
-  // Re-read through a call: the abort state changes across the backoff await,
-  // and an inline `signal?.aborted` read would be narrowed to a constant.
+  // Re-read through a call: the abort state changes across the backoff await; an inline read would be narrowed to a constant.
   const readAborted = (): boolean => signal?.aborted === true
   for (let attempt = 0; ; attempt += 1) {
     try {
@@ -338,10 +285,8 @@ export async function gatewayInstalled(
       const status = (error as ApiError)?.status
       if (status === 404) return { ok: false, code: 'profile_absent' }
       if (status === 500) return { ok: false, code: 'profile_corrupt' }
-      // 409 = the §6.2 read/write fence, classified by the SHARED 409
-      // classifier (the /chamber/runtime lease family, managed-restart.ts):
-      // anything it does not classify is an ordinary read failure and stays
-      // loud.
+      // 409 = the read/write fence, classified by the SHARED 409 classifier; anything it does not
+      // classify is an ordinary read failure and stays loud.
       const fence = classifyGatewayReadFence((error as ApiError)?.body, status ?? 0)
       if (fence === null) throw error
       if (attempt < INSTALLED_FENCE_RETRIES && !readAborted()) {
@@ -353,48 +298,39 @@ export async function gatewayInstalled(
   }
 }
 
-/** GET /chamber/plugins/tasks (design 21 §6.2 task projection):
- *  journal ops (newest first, retention-capped) + durable deferred
- *  intents + the executor busy flag — the read side of the 202 contract.
- *  The wire type is the model layer's structural twin
- *  (plugin-model.ts GatewayTasksShape — single twin shared by the REST
- *  boundary and the row projection); a non-2xx answer throws the shared
- *  ApiError, never a silent empty list. */
+/** GET /chamber/plugins/tasks: journal ops (newest first, retention-capped) + durable deferred
+ *  intents + the executor busy flag — the read side of the 202 contract. The wire type is the model
+ *  layer's structural twin (plugin-model.ts GatewayTasksShape). A non-2xx throws the shared ApiError,
+ *  never a silent empty list. */
 export async function gatewayTasks(id: string): Promise<GatewayTasksShape> {
   return request<GatewayTasksShape>(`/api/i/gateway-${id}/chamber/plugins/tasks`)
 }
 
-/** Re-run the chamber host-package seed-cache sync on a gateway instance
- *  (design 21 §6.5): the ready registration's auto-sync on demand, over the
- *  main-process-owned registered transport — {uploaded, skipped} answers the
- *  awaited auto path, ok:false is loud (no registration / instance gone). */
+/** Re-run the chamber host-package seed-cache sync on a gateway instance: the ready
+ *  registration's auto-sync on demand, over the main-process-owned registered transport —
+ *  {uploaded, skipped} answers the awaited path; ok:false is loud (no registration / instance gone). */
 export function gatewayPluginSync(id: string): Promise<GatewayPluginSyncIpcResult> {
   return desktopSsh().gateway_plugin_sync(id)
 }
 
-/** Batch registry add/remove + restart-to-apply on a gateway instance
- *  (design 21 §6.5/§6.6): id-only (the main process validates every spec
- *  against the shared whitelist family), main-process confirmation first
- *  (cancelled = the user dismissed it), ok:true executed arm / ok:false
- *  loud with partial ops. Classified through the model layer
- *  (classifyGatewayApplyResult) by the callers. */
+/** Batch registry add/remove + restart-to-apply on a gateway instance: id-only (main validates
+ *  every spec against the shared whitelist family), main-process confirmation first (cancelled = the
+ *  user dismissed it), ok:true executed arm / ok:false loud with partial ops. Classified through the
+ *  model layer by the callers. */
 export function gatewayPluginApply(id: string, input: GatewayPluginApplyInput): Promise<GatewayPluginApplyIpcResult> {
   return desktopSsh().gateway_plugin_apply(id, input)
 }
 
-/** Pick a local plugin source (folder or .tgz archive) in MAIN and upload it
- *  to a gateway instance (pick-only, design 21 §6.5): cancelled = the
- *  picker was dismissed; ok:true deferred = the gateway cached the install
- *  intent for the next ready edge (false = accepted onto the executor queue). */
+/** Pick a local plugin source (folder or .tgz) in MAIN and upload it to a gateway instance:
+ *  cancelled = the picker was dismissed; ok:true deferred = the gateway cached the install intent
+ *  for the next ready edge (false = accepted onto the executor queue). */
 export function gatewayPluginMaterialize(id: string): Promise<GatewayPluginMaterializeIpcResult> {
   return desktopSsh().gateway_plugin_materialize(id)
 }
 
-/** POST /chamber/plugins/undo (design 21 §3 undoJournal / §6.8 r2): the
- *  gateway-side 撤销=恢复 verb — RESTORE the latest ok op's preImage pair.
- *  Id-only by design (the durable journal picks the target under the
- *  backend's single-flight fence); a non-2xx {error, code} refusal is
- *  projected verbatim, never folded into an ok shape. */
+/** POST /chamber/plugins/undo: the gateway-side 撤销=恢复 verb — RESTORE the latest ok op's
+ *  preImage pair. Id-only by design (the durable journal picks the target under the backend's
+ *  single-flight fence); a non-2xx {error, code} refusal is projected verbatim. */
 export type GatewayPluginUndoResult =
   | { ok: true; opId: string }
   | { ok: false; error: string; code: string | null }
@@ -416,18 +352,15 @@ export async function gatewayPluginUndo(id: string): Promise<GatewayPluginUndoRe
   }
 }
 
-/** Terminal state of one gateway mutation op, as the renderer can see it
- *  through GET /chamber/plugins/tasks. `timeout` means the op was accepted but
- *  did not settle inside the bounded window — the caller must render the busy
- *  state, never a success claim. */
+/** Terminal state of one gateway mutation op, as the renderer can see it through the task
+ *  projection. `timeout` means the op was accepted but did not settle inside the bounded window —
+ *  the caller must render the busy state, never a success claim. */
 export type GatewayOpTerminal =
   | { status: 'ok' | 'failed' | 'blocked'; error: string | null }
   | { status: 'timeout' }
 
-/** Wait for one accepted op (202 opId) to reach a terminal state by polling
- *  the SAME task projection the backend serves (1 s cadence, 120 s bound by
- *  default — the main-process gateway-provider settle discipline). Injectable
- *  sleep for the pure-node tests. */
+/** Wait for one accepted op to reach a terminal state by polling the SAME task projection the
+ *  backend serves (1 s cadence, 120 s bound by default). Injectable sleep for the pure-node tests. */
 export async function waitForGatewayOpTerminal(
   id: string,
   opId: string,

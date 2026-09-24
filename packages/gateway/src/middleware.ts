@@ -1,18 +1,10 @@
 /**
- * Frontend middleware (design 17 §9): the HTML injection points for the
- * proxied dsh frontend. Because the gateway streams dsh's HTML (no buffer/
- * rewrite), the injection surface is deliberately minimal:
- *
- *   - viewport: dsh's index.html already carries `<meta name="viewport">`
- *     (the design's own note), so injection is an idempotent no-op.
- *   - CSP (gateway-only proxy relaxation, no design-17 anchor): handled in
- *     dispatch.ts as the scoped GATEWAY_PROXY_CSP `script-src` relax — the
- *     proxy cannot backfill the per-response nonce into dsh's streamed HTML,
- *     so it MUST NOT send the nonce CSP (relax instead).
- *   - PWA link / theme-color / sw-register / shellNav: P4 (the design marks
- *     these 远期). The static assets they point to are served at /chamber/*
- *     (routes.ts); the HTML `<link>`/`<script>` injection itself is a buffer+
- *     rewrite on `</head>`/`</body>` anchors and is deferred with P4.
+ * Frontend middleware: the HTML injection points for the proxied dsh frontend.
+ * Because the gateway streams dsh's HTML (no buffer/rewrite), the surface is
+ * deliberately minimal: viewport injection is an idempotent no-op (dsh's
+ * index.html already carries the meta), CSP is relaxed in dispatch.ts as
+ * GATEWAY_PROXY_CSP `script-src` (a nonce CSP MUST NOT be sent — it cannot be
+ * backfilled into streamed HTML), and PWA link/shellNav injection stays deferred.
  */
 
 import { isIP } from 'node:net'
@@ -20,10 +12,8 @@ import type { ApiCorsEvaluator, ApiRequest } from '@dsh-chamber/control-plane'
 import type { GatewayConfig } from './config.ts'
 import { headerValueAnyCase } from './http-utils.ts'
 
-/** Non-secret facts about WHY a request failed the public boundary. Only the
- * request's own values (Host/Origin) are ever echoed — never configuration
- * beyond what the copy itself states. Consumed by dispatch.ts for the JSON
- * `detail` and the HTML boundary error page. */
+/** Non-secret facts about WHY a request failed the public boundary: only the
+ * request's own values (Host/Origin) are ever echoed, never configuration. */
 export type GatewayRejectionReason =
   | { kind: 'malformed_headers' }
   | { kind: 'host_rejected'; host?: string }
@@ -33,16 +23,14 @@ export type GatewayRejectionReason =
 
 export interface GatewayRequestDecision {
   allowed: boolean
-  /** Malformed raw headers are 400; Host/authority failures are 421;
-   * initiator-origin failures are 403. */
+  /** Malformed headers are 400; Host/authority failures 421; origin failures 403. */
   status: 200 | 400 | 403 | 421
   code: 'ok' | 'bad_request' | 'misdirected_request' | 'origin_forbidden'
   headers: Record<string, string>
   /** Boundary-derived facts consumed by auth. Never read XFF again downstream. */
   clientAddress: string
   secure: boolean
-  /** Present exactly when `allowed` is false: the failing check, for the
-   * dispatch layer's diagnostics. */
+  /** Present exactly when `allowed` is false: the failing check for diagnostics. */
   reason?: GatewayRejectionReason
 }
 
@@ -126,10 +114,8 @@ function canonicalOrigin(raw: string | undefined): string | null {
 }
 
 /** Build the one public request boundary shared by HTTP, OPTIONS and WS.
- * Forwarded facts are ignored unless the immediate socket peer is explicitly
- * configured as trusted. Private/loopback authorities are accepted only from
- * correspondingly private peers; public authorities must exactly match the
- * configured publicOrigin including scheme and port. */
+ * Forwarded facts are ignored unless the immediate peer is a trusted proxy;
+ * private/loopback authorities are accepted only from private peers. */
 export function createGatewayRequestPolicy(config: GatewayConfig): GatewayRequestPolicy {
   const allowedOrigins = new Set(config.corsOrigins)
   const explicitAuthorities = new Map<string, URL>()
@@ -143,11 +129,9 @@ export function createGatewayRequestPolicy(config: GatewayConfig): GatewayReques
   function evaluateUncached(req: ApiRequest): GatewayRequestDecision {
     const peerAddress = normalizeIp(req.socket?.remoteAddress)
     const trustedProxy = peerAddress !== '' && trustedProxies.has(peerAddress)
-    // Node intentionally keeps only one normalized Authorization value for
-    // duplicate field lines. Inspect the original pairs before any auth work
-    // so a valid first value can never mask a second attacker-controlled one.
-    // IncomingMessage.rawHeaders is present on every real HTTP and upgrade
-    // request; structural test doubles without it remain supported.
+    // Node keeps only one normalized Authorization value for duplicate field
+    // lines, so inspect the original pairs before any auth work: a valid first
+    // value must never mask a second attacker-controlled one.
     if (hasDuplicateRawHeader(req, 'authorization')) {
       return { allowed: false, status: 400, code: 'bad_request', headers: {}, clientAddress: '', secure: false, reason: { kind: 'malformed_headers' } }
     }
@@ -174,8 +158,8 @@ export function createGatewayRequestPolicy(config: GatewayConfig): GatewayReques
     const rawHost = forwardedHost ?? headerValueAnyCase(req.headers, 'host')
     const authority = parseAuthority(protocol, rawHost)
     const forwardedClient = normalizeIp(forwardedFor)
-    // Once a peer is declared a reverse proxy, its socket address is never a
-    // client identity. Missing XFF is unknown, not loopback/private fallback.
+    // A declared reverse proxy's socket address is never a client identity;
+    // missing XFF is unknown, not a loopback/private fallback.
     const clientAddress = trustedProxy ? forwardedClient : peerAddress
     if (authority === null) {
       return { allowed: false, status: 421, code: 'misdirected_request', headers: {}, clientAddress, secure: protocol === 'https:', reason: { kind: 'host_rejected', ...(rawHost !== undefined && rawHost !== '' ? { host: rawHost } : {}) } }
@@ -218,9 +202,8 @@ export function createGatewayRequestPolicy(config: GatewayConfig): GatewayReques
           : { kind: 'origin_mismatch', origin, authority: requestOrigin },
       }
     }
-    // A cross-site browser request without an Origin must not use a navigation
-    // or media load to bypass the Origin check. Explicitly allowlisted CORS
-    // calls carry Origin and were handled above.
+    // A cross-site browser request without an Origin must not bypass the Origin
+    // check via a navigation or media load; allowlisted CORS calls carry Origin.
     if (originHeader === undefined && headerValueAnyCase(req.headers, 'sec-fetch-site') === 'cross-site') {
       return { allowed: false, status: 403, code: 'origin_forbidden', headers: {}, clientAddress, secure: protocol === 'https:', reason: { kind: 'cross_site_no_origin' } }
     }

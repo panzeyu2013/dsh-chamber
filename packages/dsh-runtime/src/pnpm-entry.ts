@@ -1,16 +1,9 @@
 /**
- * pnpm 入口解析的单一来源（design 18 §9.2 D1 / design 21 §6.3）。
- *
- * 每个宿主都从一组候选里挑第一个存在的 `pnpm.cjs`：gateway 走
- * bundledDir → explicit package 解析；desktop 走 resourcesPath / moduleDir /
- * legacy packaged 装配位；官方安装器目录（%LOCALAPPDATA% / %APPDATA% / node
- * 安装目录）是最后的兜底。路径 join 按 search.platform 选择（而非宿主平台），
- * Windows 形状因此可在任意 CI 腿单测——与 desktop 既有
- * pnpmScriptEntryCandidates 同一纪律。
- *
- * 消费方：gateway/src/pnpm-entry.ts（本轮，resolvePnpmEntry 经 index.ts 导出）；
- * desktop 侧下一轮接线。pnpmEntryCandidates 只供包内测试与下一轮 desktop 消费，
- * 暂不从 index.ts 导出（避免无人消费的导出）。
+ * pnpm 入口解析的单一来源。每个宿主都从一组候选里挑第一个存在的 `pnpm.cjs`：gateway 走
+ * bundledDir → explicit package 解析；desktop 走 resourcesPath / moduleDir / legacy packaged
+ * 装配位；官方安装器目录（%LOCALAPPDATA% / %APPDATA% / node 安装目录）是最后兜底。路径 join
+ * 按 search.platform 选择（而非宿主平台），Windows 形状因此可在任意 CI 腿单测。消费方：
+ * gateway/src/pnpm-entry.ts；pnpmEntryCandidates 只供包内测试与后续 desktop 消费，暂不导出。
  */
 import { existsSync } from 'node:fs'
 import { posix, win32 } from 'node:path'
@@ -31,8 +24,7 @@ export interface PnpmEntrySearch {
   moduleDir?: string | null
   /** desktop 旧装配位：sidecar 目录（<legacyPackagedDir>/pnpm/bin/pnpm.cjs）。 */
   legacyPackagedDir?: string | null
-  /** 调用方自行解析的显式入口（如 gateway 的 pnpm package 解析结果），按序插在
-   * resourcesPath 之后、dev 形状之前。 */
+  /** 调用方自行解析的显式入口，按序插在 resourcesPath 之后、dev 形状之前。 */
   explicitEntries?: readonly string[]
 }
 
@@ -53,9 +45,8 @@ function usable(value: string | null | undefined): value is string {
 }
 
 /**
- * 候选入口，按优先级（存在性由调用方/resolvePnpmEntry 探测）：
- * bundledDir → resourcesPath → explicitEntries → moduleDir →
- * legacyPackagedDir → LOCALAPPDATA/APPDATA/dirname(execPath) 三个兜底根。
+ * 候选入口，按优先级：bundledDir → resourcesPath → explicitEntries → moduleDir →
+ * legacyPackagedDir → LOCALAPPDATA/APPDATA/dirname(execPath) 兜底。
  */
 export function pnpmEntryCandidates(search: PnpmEntrySearch): readonly string[] {
   const entries: string[] = []
@@ -83,8 +74,8 @@ export function pnpmEntryCandidates(search: PnpmEntrySearch): readonly string[] 
 }
 
 /**
- * 第一个 existsSync 命中的候选；全部缺失时返回 candidates[0]，让调用方按既有
- * loud 失败语义处理（spawn/显式读取时报错，绝不静默回退到别的 pnpm）。
+ * 第一个 existsSync 命中的候选；全部缺失时返回 candidates[0]，让调用方按既有 loud 失败语义
+ * 处理（spawn/显式读取时报错，绝不静默回退到别的 pnpm）。
  */
 export function resolvePnpmEntry(search: PnpmEntrySearch): string {
   const candidates = pnpmEntryCandidates(search)

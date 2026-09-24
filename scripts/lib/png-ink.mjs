@@ -7,7 +7,7 @@
  * 因此同一份解码在两处成立。**零新依赖**：`node:zlib` 的 `inflateSync/deflateSync`
  * 是 Node 内建；CRC32 自带实现（自测的编码器需要它）。
  *
- * 语义（对应 packages/renderer/src/switch-frame-verdict.ts 的输入）：
+ * 语义（对应 packages/renderer/scripts/switch-frame-verdict.ts 的输入）：
  *  - `modeColor`：区域内出现次数最多的颜色（`#rrggbb`，忽略 alpha）——平面帧的
  *    "那块单色"就是它。**不能用平均色**（内容可能恰好均值等于背景）。
  *  - `modeCoverage`：众数色像素占比（0..1）；≥ flatCoverage 判"平坦帧"。

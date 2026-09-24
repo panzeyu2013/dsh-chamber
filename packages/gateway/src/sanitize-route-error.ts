@@ -1,21 +1,12 @@
-/**
- * S19 error sanitization for the public runtime surface: path stripping from
- * the shared core PLUS URL userinfo/query and credential-pattern redaction.
- * (the installer's internal
- * sanitizer — sanitizeInstallerOutput — is exported from the shared
- * core and is consumed by the plugin executor; this route layer mirrors it.)
- */
+/** Error sanitization for the public runtime surface: shared-core path stripping PLUS URL
+ * userinfo/query and credential-pattern redaction. */
 import { sanitizeErrorText } from '@dsh-chamber/dsh-runtime'
 
 /**
- * @param message - the error text to redact.
- * @param keep - the caller's own non-secret vocabulary, preserved verbatim
- *   (forwarded to {@link sanitizeErrorText}). This exists because of the
- *   unknown-package refusal: a scoped package name (`@dsh-chamber/dsh-…`)
- *   reads as POSIX path material to the redactor, so without the token the
- *   400 answers `unsyncable package "@dsh-chamber[path]` — losing the single
- *   fact the message exists to carry. Paths and credentials in
- *   the rest of the message are still redacted.
+ * @param keep - the caller's own non-secret vocabulary, preserved verbatim and
+ *   forwarded to {@link sanitizeErrorText}. Needed for the unknown-package
+ *   refusal: without the scoped name (`@dsh-chamber/dsh-…`) the redactor eats it
+ *   as POSIX path material, losing the fact the 400 exists to carry.
  */
 export function sanitizeRouteError(message: string, keep: readonly string[] = []): string {
   const base = sanitizeErrorText(message, keep)

@@ -26,7 +26,7 @@
 | 12 | A 恢复原语 | `POST /chamber/runtime/start`（仅 stopped/error/restart-exhausted；202+poll；受守卫：canStartLocal/恢复门/单飞）——停机移除后回到可启动的 UI 入口 |
 | 13 | A 安装期脚本 | **默认允许**（与 ssh/桌面一致，不限制——避免用户困扰）；风险登记（安装代码=gateway 用户级）；二期提供 ignore-scripts/逐包放行配置与 OS 用户隔离（硬化） |
 | 14 | A 服务端 admission | **不加**——主进程确认是桌面通道纪律而非服务端门；服务端信任 = 全权 auth 直连（与既有 /chamber/runtime 动作面同级暴露，如实登记） |
-| 15 | C 共享模块 | gateway-runtime 纯核心（parse + poll）迁 `@dsh-chamber/dsh-chamber-client-ui-sidebar/shared`（split 边界，见 §5.2） |
+| 15 | C 共享模块 | gateway-runtime 纯核心（parse + poll）迁 `@dsh-chamber/dsh-chamber-client-core`（split 边界，见 §5.2） |
 | 16 | B 命名/图标 | 「连接日志」「网关主机日志」+ 图标去重；本地卡折叠区不改名 |
 | 17 | A 生命周期 writer barrier | gateway 后端 executor 挂入 runtime-manager tracked-writers（activeOperations/单飞门），dispose()/dispatch.quiesce() 排空、stop 杀安装子进程、锁释放前 writer 证明——见 §4.1/§12 与 design 18 §9.3 |
 | 18 | 掩码语义 | gateway readManifest 的远端**路径类值一律掩码**（`MATERIALIZED_VALUE_MASK`，单一来源 = `@dsh-chamber/dsh-chamber-wire` 的 `plugin-manifest`（`PLUGIN_MATERIALIZED_VALUE_MASK` + `isMaterializedValue`；control-plane 公开面为其 re-export，desktop 经 facade 消费），保留 `file:` 前缀供 name 基 diff 与分类器；判据是共享的 `isMaterializedValue`，不再只掩 `file:` —— `link:`/相对/绝对/`~` 同样会暴露机器本地路径）。ssh 与本地两通道均已接线同一判据：ssh 面 `redactRemotePluginManifest`，本地 LOCAL_PLUGIN_LIST 由 `shell-ipc-plugins-local.ts` 经 `redactLocalPluginManifest` 对 `dependencies` 与 §6.11 的 `rows[].spec` 两通道掩码（原「本地原样透传、`redactLocalPluginManifest` 零生产调用点」的已知偏差已闭合，STATUS 条目退役）|
@@ -98,12 +98,12 @@ connectionState ∈ {error, restart-exhausted, stopped} 失败；'ok' 或旧网�
 
 ### 5.2 共享模块迁移
 split 而非 move：`gateway-runtime-api.ts` 中仅 parse/action/gates/error 分类/poll 为纯核心；`remoteRuntimeStatusView` + `RemoteRuntimeStatusView` 引用 SettingsBridgeKey **留在 settings-bridge**（与 REMOTE_PHASES/BLOCKED_PHASES 共享部分以 shared 导出形式回引）。纯核心 + `gateway-runtime-poll.ts` 迁
-`@dsh-chamber/dsh-chamber-client-ui-sidebar/shared`（exports "./shared" → src，免构建；renderer/settings-bridge/
+`@dsh-chamber/dsh-chamber-client-core`（`exports` 具名面 → `src/*.ts`，免构建；renderer/settings-bridge/
 connections/layout/git 均为既有消费者；vite 共享单实例）。**不设手写 ambient 镜像**：消费者对**真源**做
-typecheck——root tsconfig `paths`（`@dsh-chamber/dsh-chamber-client-ui-sidebar/shared` → 真实
-`src/shared/index.ts`）供 git/layout/connections/renderer 继承（各 tsconfig 补 `rootDir: "../.."` 避免
-TS6059）；settings-bridge 保留自身 connections-section paths、经 workspace 链接 + sidebar
-`exports["./shared"]` 解析。`RemoteRuntimeStatus`（33 字段，30 必填+3 可选）/parse/gates/
+typecheck——root tsconfig 不为它声明 `paths`（workspace 链接 + client-core `exports` 直接解析到
+`packages/dsh-chamber-client-core/src/index.ts`）供 git/layout/connections/renderer 使用（各 tsconfig 补
+`rootDir: "../.."` 避免 TS6059）；settings-bridge 保留自身 connections-section paths、经 workspace 链接 +
+client-core `exports` 解析。`RemoteRuntimeStatus`（33 字段，30 必填+3 可选）/parse/gates/
 Error/poll 符号随 shared 真源直接可见，无需镜像同步。
 poll 的英文错误串随迁（connections 会显示未本地化文案，登记接受——见 §7）。**测试**：pollGatewayReady 用例驻 settings-bridge/test/runtime/runtime-management.test.ts；`gateway-runtime-api.test.ts` 按 split 拆（view 留 settings-bridge，核心随迁）；settings-bridge/sidebar 两个 test 清单同步；test:renderer-shell 无迁移文件（测试矩阵见 §9）。
 

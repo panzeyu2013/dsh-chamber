@@ -1,15 +1,14 @@
 /**
  * Owner-private runtime filesystem primitives.
  *
- * Node does not expose mkdirat/renameat, so every path operation is bracketed
- * by no-follow identity checks. In particular, an existing `dsh-runtime`
- * entry must be a real directory: callers never chmod, write through, or
- * recursively delete a symlinked runtime root.
+ * Node exposes no mkdirat/renameat, so every path operation is bracketed by
+ * no-follow identity checks; an existing `dsh-runtime` entry must be a real
+ * directory, and callers never chmod, write through, or recursively delete a
+ * symlinked runtime root.
  *
- * Platforms without O_NOFOLLOW/O_DIRECTORY (win32) resolve portable flags
- * through resolveNoFollowFlags() instead of refusing to start; every open then
- * carries the no-follow guarantee through lstat identity checks immediately
- * before and after the descriptor (see openPrivateNoFollowSync).
+ * Platforms without O_NOFOLLOW/O_DIRECTORY (win32) resolve portable flags through
+ * resolveNoFollowFlags() instead of refusing to start, and every open then carries
+ * the guarantee through lstat identity checks around the descriptor.
  */
 import {
   closeSync,
@@ -30,6 +29,7 @@ import {
 import { lstat as lstatAsync, open as openAsync, type FileHandle } from 'node:fs/promises'
 import { randomBytes } from 'node:crypto'
 import { basename, dirname, join, relative, sep } from 'node:path'
+import { sameIdentity } from './file-identity.ts'
 
 export const PRIVATE_RUNTIME_DIR_MODE = 0o700
 export const PRIVATE_RUNTIME_FILE_MODE = 0o600
@@ -41,10 +41,8 @@ export interface RuntimeFileIdentity {
 
 /**
  * 一次读操作的材质判定：成功读到、确认不存在、内容非法、读取失败（EACCES/EIO/未知）。
- *
- * `unknown` 与 `corrupt` 必须保持可区分：读失败时字节既未被证明不存在，也未被证明
- * 非法，调用方只能 fail closed（拒绝覆写/prune），不能把它当作"损坏可隔离"或
- * "缺失"处理。
+ * `unknown` 与 `corrupt` 必须保持可区分：读失败时字节既未被证明不存在也未被证明非法，
+ * 调用方只能 fail closed（拒绝覆写/prune）。
  */
 export type ArtifactReadState<T> =
   | { kind: 'present'; value: T }
@@ -52,10 +50,9 @@ export type ArtifactReadState<T> =
   | { kind: 'corrupt'; detail: string }
   | { kind: 'unknown'; detail: string }
 
-/** OS-level read-failure classification for {@link ArtifactReadState}: every
- *  errno besides ENOENT (EACCES/EIO/ESTALE/ELOOP/…) means the bytes were not
- *  proven absent or illegal, so the material is `unknown`, never `corrupt`.
- *  Our own structural/identity refusals carry no errno and stay `corrupt`. */
+/** OS-level read-failure classification: every errno besides ENOENT
+ *  (EACCES/EIO/ESTALE/ELOOP/…) means `unknown`, never `corrupt`; our own
+ *  structural/identity refusals carry no errno and stay `corrupt`. */
 export function isUnreadableFsError(error: unknown): boolean {
   const code = (error as NodeJS.ErrnoException | null)?.code
   return typeof code === 'string' && code !== 'ENOENT'
@@ -71,28 +68,24 @@ export type PrivateFileRead =
   | { kind: 'unsafe' }
   | { kind: 'valid'; raw: string; identity: RuntimeFileIdentity }
 
-/** Narrow durability seam for deterministic ordering/failure tests. Runtime
- * callers omit it and always reach the real fsyncSync implementation. */
+/** Narrow durability seam for deterministic ordering/failure tests; runtime callers omit it. */
 export interface PrivateFsDurabilityDeps {
   fsync?: (fd: number) => void
-  /** Namespace-commit seam: replaces the publish rename inside the atomic
-   *  writers so tests can inject a rename failure at a named phase without
-   *  faking the writer. Production callers omit it and reach renameSync. */
+  /** Namespace-commit seam replacing the publish rename inside the atomic writers so
+   *  tests can inject a failure at a named phase. Production reaches renameSync. */
   rename?: (source: string, destination: string) => void
 }
 
 export interface PrivateFileReadOptions {
-  /** Existing authority readers tighten legacy modes by default. Callers that
-   * have already surrendered writer ownership can opt into a side-effect-free
-   * read instead. */
+  /** Existing authority readers tighten legacy modes by default; callers that have
+   *  already surrendered writer ownership can opt into a side-effect-free read. */
   tightenMode?: boolean
   /** Narrow deterministic test seam; production callers omit it. */
   read?: (fd: number, buffer: Buffer, offset: number, length: number, position: null) => number
 }
 
 export interface PrivateFsRemoveDeps extends PrivateFsDurabilityDeps {
-  /** Optional ownership proof for leases. A replacement inode is never
-   * removed, even when it is otherwise a safe private file. */
+  /** Optional ownership proof for leases: a replacement inode is never removed. */
   expectedIdentity?: RuntimeFileIdentity
 }
 
@@ -108,10 +101,6 @@ interface PinnedDirectory {
   fd: number
   identity: RuntimeFileIdentity
   parentIdentity: RuntimeFileIdentity
-}
-
-function sameIdentity(left: RuntimeFileIdentity, right: RuntimeFileIdentity): boolean {
-  return left.dev === right.dev && left.ino === right.ino
 }
 
 function sameFileSnapshot(left: Stats, right: Stats): boolean {
@@ -137,9 +126,8 @@ function samePreciseFileSnapshot(left: BigIntStats, right: BigIntStats): boolean
     && left.ctimeNs === right.ctimeNs
 }
 
-/** The node:fs `constants` subset the no-follow strategy reads. Injectable
- *  so the POSIX branch (O_NOFOLLOW present) and the no-flag fallback branch are
- *  both unit-testable without a win32 host. */
+/** The node:fs `constants` subset the no-follow strategy reads, injectable so both
+ *  the POSIX and the no-flag fallback branch are testable without a win32 host. */
 export interface NoFollowConstantsLike {
   O_RDONLY?: number
   O_WRONLY?: number
@@ -152,27 +140,19 @@ export interface NoFollowConstantsLike {
 export type NoFollowOpenKind = 'read' | 'write' | 'directory'
 
 export interface ResolvedNoFollowFlags {
-  /** `open(2)` flags for the requested kind. */
   flags: number
-  /** True when the kernel itself refuses a symlinked final component because
-   *  O_NOFOLLOW rides in `flags`; false when the platform does not expose the
-   *  constant and the open helper below must re-prove identity in user space. */
+  /** True when the kernel refuses a symlinked final component because O_NOFOLLOW
+   *  rides in `flags`; false when the helper must re-prove identity in user space. */
   kernelNoFollow: boolean
 }
 
 /**
- * Platform-aware no-follow strategy.
- *
- * POSIX keeps the historical O_NOFOLLOW/O_DIRECTORY flags byte-for-byte. Windows
- * exposes neither constant (`typeof undefined`); hard-failing there is what
- * made an existing <userData>/dsh-runtime unreadable and killed the gated
- * runtime transaction. The gateway already treats win32 as a separate shape and
- * skips the POSIX primitives rather than throwing
- * (packages/gateway/src/runtime-manager.ts:632-648), and control-plane's
- * identity-only pin proves the same guarantee without a descriptor
- * (packages/control-plane/src/private-file.ts:85-107,182-209). The fallback
- * flags therefore drop O_NOFOLLOW/O_DIRECTORY and openPrivateNoFollowSync()
- * restores the guarantee with lstat identity checks around the open.
+ * Platform-aware no-follow strategy. POSIX keeps O_NOFOLLOW/O_DIRECTORY
+ * byte-for-byte; Windows exposes neither constant, and hard-failing there would make
+ * an existing <userData>/dsh-runtime unreadable and kill the gated runtime
+ * transaction. The fallback flags therefore drop both constants and
+ * openPrivateNoFollowSync() restores the guarantee with lstat identity checks
+ * around the open (the same identity-only pin the control plane proves).
  */
 export function resolveNoFollowFlags(
   kind: NoFollowOpenKind,
@@ -180,10 +160,8 @@ export function resolveNoFollowFlags(
 ): ResolvedNoFollowFlags {
   const noFollow = typeof constantsLike.O_NOFOLLOW === 'number' ? constantsLike.O_NOFOLLOW : 0
   if (kind === 'write') {
-    // O_WRONLY|O_CREAT|O_EXCL mirrors the historical writer flags. O_EXCL is
-    // also the fallback freshness proof: an already-present leaf (symlink or
-    // hard link included) fails the open itself with the raw EEXIST contention
-    // signal, so there is no final component left to follow.
+    // O_WRONLY|O_CREAT|O_EXCL mirrors the historical writer flags and is also the
+    // fallback freshness proof: an already-present leaf fails the open with raw EEXIST.
     return {
       flags: (constantsLike.O_WRONLY ?? 0)
         | (constantsLike.O_CREAT ?? 0)
@@ -210,13 +188,11 @@ export interface NoFollowOpenOptions {
 
 /**
  * Open one private path through the platform no-follow strategy. POSIX hands
- * O_NOFOLLOW to open(2) itself, exactly as before. Without it the guarantee is
- * re-established in user space, mirroring control-plane private-file.ts:85-107:
- * (a) the leaf is lstat-ed immediately before the open and a symlinked final
- * component is refused, and (b) after the open the path is lstat-ed again and
- * must still name the exact inode (dev/ino) the descriptor returned. Anything
- * the fallback cannot prove throws, and every caller's fail-closed wrapper
- * turns that into a refusal or 'unsafe'.
+ * O_NOFOLLOW to open(2) itself. Without it the guarantee is re-established in user
+ * space: the leaf is lstat-ed immediately before the open (a symlinked final
+ * component is refused), and after the open the path must still name the exact
+ * (dev/ino) the descriptor returned. Anything unprovable throws, and every
+ * fail-closed wrapper turns that into a refusal or 'unsafe'.
  */
 export function openPrivateNoFollowSync(
   path: string,
@@ -270,9 +246,8 @@ function verifyPinnedDirectory(pin: PinnedDirectory, message: string): Stats {
   return atPath
 }
 
-/** Hold the directory inode across a namespace mutation. Node has no
- * mkdirat/renameat/unlinkat seam, so the path is re-proved against this
- * O_NOFOLLOW fd immediately before and after the mutation and fsync. */
+/** Hold the directory inode across a namespace mutation: Node has no mkdirat/
+ *  renameat/unlinkat seam, so the path is re-proved against this fd around it. */
 function pinRealDirectory(path: string, tighten: boolean): PinnedDirectory {
   const parentPath = dirname(path)
   const parentBefore = lstatSync(parentPath)
@@ -314,15 +289,14 @@ function closePinnedDirectory(pin: PinnedDirectory): void {
   closeSync(pin.fd)
 }
 
-/** A namespace mutation is not reported successful until the exact parent
- * inode held across that mutation has been fsynced and re-verified. */
+/** A namespace mutation is not successful until the exact parent inode held across
+ *  it has been fsynced and re-verified. */
 function syncPinnedDirectory(pin: PinnedDirectory, deps?: PrivateFsDurabilityDeps): void {
   verifyPinnedDirectory(pin, `私有目录 fsync 前身份复验失败：${basename(pin.path)}`)
   syncFd(pin.fd, deps)
   verifyPinnedDirectory(pin, `私有目录 fsync 后身份复验失败：${basename(pin.path)}`)
 }
 
-/** Pin a real directory, optionally tightening the inode through its fd. */
 function inspectRealDirectory(path: string, tighten: boolean): Stats {
   const pin = pinRealDirectory(path, tighten)
   try {
@@ -345,9 +319,8 @@ export function ensurePrivateDirectoryNoFollow(path: string, deps?: PrivateFsDur
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
     }
     childPin = pinRealDirectory(path, true)
-    // Also fsync on the EEXIST retry path: a previous call may have completed
-    // mkdir but surfaced a parent-fsync failure. No later success may silently
-    // adopt that directory without re-establishing the durability proof.
+    // Also fsync on the EEXIST retry path: a previous call may have completed mkdir
+    // but surfaced a parent-fsync failure, and no later success may adopt it silently.
     syncPinnedDirectory(parentPin, deps)
     verifyPinnedDirectory(childPin, `私有目录创建后身份复验失败：${basename(path)}`)
   } finally {
@@ -432,9 +405,8 @@ function assertReplaceableLeaf(filePath: string): void {
   }
 }
 
-/** Best-effort cleanup may run only while the original parent and the exact
- * leaf created by this operation are still proved. In particular, never let
- * an error path traverse a parent symlink that appeared during the mutation. */
+/** Best-effort cleanup may run only while the original parent and the exact leaf created
+ *  by this operation are still proved — never traverse a new parent symlink. */
 function removePinnedLeafBestEffort(
   parentPin: PinnedDirectory,
   filePath: string,
@@ -451,9 +423,8 @@ function removePinnedLeafBestEffort(
     unlinkSync(filePath)
     verifyPinnedDirectory(parentPin, 'runtime 临时文件清理后父目录身份复验失败')
   } catch {
-    // The primary operation already failed. An unproved cleanup is skipped so
-    // it cannot mutate a replacement directory; stale private evidence is the
-    // fail-closed outcome.
+    // The primary operation already failed; an unproved cleanup is skipped so it cannot
+    // mutate a replacement directory, and stale private evidence stays the fail-closed outcome.
   }
 }
 
@@ -527,12 +498,10 @@ export function atomicWriteRuntimeFileNoFollow(
 }
 
 /**
- * Create a fresh owner-private file without a read-check-write race.
- *
- * This intentionally leaves a created leaf in place if a later write/fsync
- * step fails: callers cannot claim ownership, while the remaining O_EXCL
- * evidence prevents another writer from silently entering after an ambiguous
- * durable-commit outcome.
+ * Create a fresh owner-private file without a read-check-write race. A created leaf is
+ * intentionally left behind if a later write/fsync fails: callers cannot claim
+ * ownership, while the remaining O_EXCL evidence keeps another writer out after an
+ * ambiguous durable-commit outcome.
  */
 export function createRuntimeFileExclusiveNoFollow(
   baseDir: string,
@@ -547,8 +516,8 @@ export function createRuntimeFileExclusiveNoFollow(
   let identity: RuntimeFileIdentity | null = null
   try {
     verifyPinnedDirectory(parentPin, 'runtime 独占创建前父目录身份复验失败')
-    // Keep the raw EEXIST from O_EXCL: owners use it as the authoritative
-    // contention signal, including for existing symlink/hard-link leaves.
+    // Keep the raw EEXIST from O_EXCL: owners use it as the authoritative contention
+    // signal, including for existing symlink/hard-link leaves.
     fd = openPrivateNoFollowSync(filePath, 'write').fd
     const created = fstatSync(fd)
     if (!created.isFile() || created.nlink !== 1) {
@@ -669,10 +638,10 @@ function sameLeafKind(left: Stats, right: Stats): boolean {
 }
 
 /**
- * Durably move an untrusted authority leaf to a caller-chosen evidence name
- * in the same verified private directory. The source leaf is inspected with
- * lstat only, so a symlink or hard-link record can be preserved without ever
- * opening/chmodding its target. Directory leaves are refused.
+ * Durably move an untrusted authority leaf to a caller-chosen evidence name in the
+ * same verified private directory. The source is inspected with lstat only, so a
+ * symlink or hard-link record is preserved without opening/chmodding its target;
+ * directory leaves are refused.
  */
 export function quarantineRuntimeFileNoFollow(
   baseDir: string,
@@ -740,11 +709,10 @@ export interface PrivateFileArtifact {
 }
 
 /**
- * Read one bounded private leaf and classify the failure material. Unlike the
- * legacy readPrivateFileNoFollow projection this keeps an OS-level read
- * failure (EACCES/EIO/ESTALE/…) separate from a structurally illegal leaf:
- * the former is 'unknown', the latter 'corrupt'. Callers deciding on
- * destructive/selection actions must branch on all four kinds.
+ * Read one bounded private leaf and classify the failure material, keeping an OS-level
+ * read failure (EACCES/EIO/ESTALE/…) separate from a structurally illegal leaf: the
+ * former is 'unknown', the latter 'corrupt'. Callers deciding on destructive/selection
+ * actions must branch on all four kinds.
  */
 export function readPrivateFileStateNoFollow(
   filePath: string,
@@ -835,8 +803,8 @@ export function readPrivateFileStateNoFollow(
       },
     }
   } catch (error) {
-    // ENOENT here means the leaf vanished after lstat: fail closed as corrupt
-    // rather than aliasing the absence of a file we had already begun proving.
+    // ENOENT here means the leaf vanished after lstat: fail closed as corrupt rather
+    // than alias the absence of a file we had already begun proving.
     if (isUnreadableFsError(error)) {
       return { kind: 'unknown', detail: readFailureDetail(error, '私有文件读取失败：' + basename(filePath)) }
     }
@@ -849,11 +817,9 @@ export function readPrivateFileStateNoFollow(
 }
 
 /**
- * Legacy material projection: preserves the historical missing|unsafe|valid
- * vocabulary for the private-fs parity suite and secondary-metadata callers.
- * An unreadable leaf folds into 'unsafe' here; authority readers that must
- * tell an unreadable leaf from an illegal one consume
- * readPrivateFileStateNoFollow directly.
+ * Legacy material projection preserving the historical missing|unsafe|valid vocabulary;
+ * an unreadable leaf folds into 'unsafe' here, while authority readers that must tell
+ * unreadable from illegal consume readPrivateFileStateNoFollow directly.
  */
 export function readPrivateFileNoFollow(
   filePath: string,
@@ -866,9 +832,8 @@ export function readPrivateFileNoFollow(
 }
 
 /** Classify one leaf for destructive/selection decisions without following it:
- *  'regular' only for a uniquely-linked real file, 'missing' only for ENOENT;
- *  every other shape (symlink, directory, hard-linked, unreadable) is 'unsafe'
- *  so callers fail closed. */
+ *  'regular' only for a uniquely-linked real file, 'missing' only for ENOENT; every
+ *  other shape (symlink, directory, hard-linked, unreadable) is 'unsafe'. */
 export function classifyPrivateFileNoFollow(filePath: string): 'missing' | 'regular' | 'unsafe' {
   try {
     const info = lstatSync(filePath)
@@ -878,10 +843,8 @@ export function classifyPrivateFileNoFollow(filePath: string): 'missing' | 'regu
   }
 }
 
-/** Fsync one uniquely-linked private regular file, re-proving the leaf identity
- *  across the open (kernel O_NOFOLLOW where available, the win32 user-space
- *  fallback otherwise) and again after the sync. Symlinked, non-regular and
- *  multiply-linked leaves are refused. */
+/** Fsync one uniquely-linked private regular file, re-proving the leaf identity across
+ *  the open and again after the sync; symlink/non-regular/multi-link leaves are refused. */
 export function syncPrivateFileNoFollow(
   filePath: string,
   label = 'runtime 私有文件',
@@ -913,11 +876,9 @@ export function syncPrivateFileNoFollow(
   }
 }
 
-/** Fsync one real directory, re-proving the directory AND its parent identity
- *  across the sync (no mode tightening). Directory fsync is a filesystem
- *  property, not a platform one: NFS/CIFS/FUSE mounts may reject it with
- *  EINVAL/ENOTSUP on any platform, so exactly those two codes are tolerated —
- *  every other failure, and any identity drift, is thrown. */
+/** Fsync one real directory, re-proving directory and parent identity across the sync
+ *  (no mode tightening). NFS/CIFS/FUSE may reject directory fsync with EINVAL/ENOTSUP on
+ *  any platform, so exactly those two codes are tolerated; all else throws. */
 export function syncPrivateDirectoryNoFollow(
   dirPath: string,
   label = 'runtime 私有目录',
@@ -938,8 +899,8 @@ export function syncPrivateDirectoryNoFollow(
   }
 }
 
-/** Failure phase of {@link openPrivateNoFollowReadAsync}: callers map it onto
- *  their own error surface without re-implementing the fallback strategy. */
+/** Failure phase of {@link openPrivateNoFollowReadAsync}; callers map it onto their own
+ *  error surface without re-implementing the fallback strategy. */
 export type PrivateNoFollowOpenPhase =
   | 'symlink'
   | 'precheck-failed'
@@ -947,8 +908,7 @@ export type PrivateNoFollowOpenPhase =
   | 'inspect-failed'
   | 'identity-mismatch'
 
-/** Typed open failure of the async no-follow reader. `detail` carries the raw
- *  OS error for the caller's own sanitizer. */
+/** Typed open failure of the async no-follow reader; `detail` carries the raw OS error. */
 export class PrivateNoFollowOpenError extends Error {
   readonly phase: PrivateNoFollowOpenPhase
   readonly detail: unknown
@@ -962,12 +922,10 @@ export class PrivateNoFollowOpenError extends Error {
 }
 
 /**
- * Async sibling of openPrivateNoFollowSync for callers that must not block
- * (the activation probe reads settings.yaml inside a bounded transaction
- * window). Same platform strategy: the kernel O_NOFOLLOW where available, and
- * otherwise an lstat immediately before the open plus an lstat identity
- * re-proof (dev/ino) immediately after it. The returned handle is owned by the
- * caller; the accompanying stats are the post-open snapshot.
+ * Async sibling of openPrivateNoFollowSync for callers that must not block. Same
+ * strategy: kernel O_NOFOLLOW where available, otherwise lstat immediately before the
+ * open plus a (dev/ino) identity re-proof immediately after. The returned handle is
+ * owned by the caller; the accompanying stats are the post-open snapshot.
  */
 export async function openPrivateNoFollowReadAsync(
   filePath: string,

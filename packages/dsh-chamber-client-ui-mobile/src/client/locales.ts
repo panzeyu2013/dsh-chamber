@@ -1,7 +1,5 @@
-/**
- * Mobile adaptation plugin dictionaries. `zh` is the key-set source of
- * truth; `en` is type-forced to cover every key (family convention).
- */
+/** Mobile adaptation plugin dictionaries. zh is the key-set source of truth;
+ *  en is type-forced to cover every key (family convention). */
 export const zh = {
   'dsh-chamber.mobile.title': '移动视图',
   'dsh-chamber.mobile.drawer.open': '打开侧边栏',

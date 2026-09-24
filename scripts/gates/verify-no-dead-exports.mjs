@@ -43,7 +43,7 @@
  *   node scripts/gates/verify-no-dead-exports.mjs --self-test
  */
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
-import { dirname, join, relative, resolve, sep } from 'node:path'
+import { basename, dirname, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { walkFiles } from '../lib/walk.mjs'
@@ -120,6 +120,36 @@ export const RUNTIME_LOADED_PACKAGES = {
  * @type {Readonly<Record<string, { owner: string, reason: string, retiresWhen: string }>>}
  */
 export const PENDING_PACKAGES = {}
+
+/**
+ * Entryless first-party packages: no src/index.ts, so the judged surface is
+ * every runtime export of their production files. Both are entry-shaped (the
+ * Electron main process and the renderer app), and their exports are still a
+ * public surface: other packages and scripts import them. Loader/bundle entry
+ * files are skipped — their exports are consumed by Electron/Vite
+ * configuration, not by an import.
+ */
+export const ENTRYLESS_PACKAGES = [
+  { name: 'desktop', spec: '@dsh-chamber/desktop', ignoreFiles: ['main.ts', 'sidecar-entry.ts', 'gateway-ipc-shared.ts'] },
+  { name: 'renderer', spec: '@dsh-chamber/renderer', ignoreFiles: ['chamber-entry.ts', 'main.tsx'] },
+]
+
+/**
+ * Test-only seams of entryless packages: exports whose only consumers are the
+ * suites that own the behavior. Every entry must still be a real
+ * zero-production-consumer export (stale = red), and a NEW export with no
+ * production consumer fails the gate instead of growing this list silently.
+ * @type {readonly { package: string, name: string, reason: string }[]}
+ */
+export const ENTRYLESS_SEAMS = [
+  { package: 'renderer', name: '__testShellLifecycleOwnerCounts', reason: 'shell lifecycle suite asserts the owner ledger count; the suite owns the seam' },
+  { package: 'renderer', name: '__testLastRequestedSession', reason: 'shell suite reads the last requested session id; the suite owns the seam' },
+  { package: 'renderer', name: '__resetSessionFactsGoalWarningForTests', reason: 'session-facts-source suite re-arms the one-shot goal-shape warning; the suite owns the seam' },
+  { package: 'renderer', name: 'resetRendererStallEvidence', reason: 'renderer-stall-evidence suite resets the module singleton between cases; the suite owns the seam' },
+  { package: 'desktop', name: 'clearGatewaySyncRegistrations', reason: 'gateway-sync-registry suite resets module state between cases' },
+  { package: 'desktop', name: 'pluginNameFromFolder', reason: 'plugin-tarball suite pins the NAME-ONLY read bound (64 KiB) against the real reader' },
+  { package: 'desktop', name: 'listTgzManifest', reason: 'plugin-tarball suite pins the tgz listing shape against the real parser' },
+]
 
 /** Strip comments so an import/export parser never reads prose as code. */
 export function stripComments(sourceText) {
@@ -368,6 +398,34 @@ export function staleExemptions(modules, imported, exemptions = DEAD_EXPORT_EXEM
   return exemptions.filter((entry) => !dead.has((entry.package ?? '') + '\u0000' + entry.name))
 }
 
+/**
+ * Pure verdict for entryless packages: declared runtime exports with no
+ * production consumer and no seam entry.
+ * @returns {{ dead: { name: string, file: string }[], checked: number }}
+ */
+export function entrylessDeadExports(modules, imported, seams = ENTRYLESS_SEAMS) {
+  const allowed = new Set(seams.map((entry) => entry.name))
+  const dead = []
+  let checked = 0
+  for (const module of modules) {
+    const selfUsed = new Set(module.selfUsed ?? [])
+    for (const name of module.names) {
+      checked += 1
+      // An export its own module still reads is not dead — only unnecessarily
+      // exported. The judged surface is "nobody (outside or inside) reads it".
+      if (imported.has(name) || selfUsed.has(name) || allowed.has(name)) continue
+      dead.push({ name, file: module.file })
+    }
+  }
+  return { dead, checked }
+}
+
+/** Seam entries that no longer name a zero-consumer export (stale = red). */
+export function staleEntrylessSeams(modules, imported, seams = ENTRYLESS_SEAMS) {
+  const dead = new Set(entrylessDeadExports(modules, imported, []).dead.map((entry) => entry.name))
+  return seams.filter((entry) => !dead.has(entry.name))
+}
+
 function selfTest() {
   const modules = [
     { file: 'src/a.ts', names: ['used', 'orphan'] },
@@ -392,14 +450,19 @@ function selfTest() {
     && parsed[1].names.length === 2
     && parsed[1].names[0] === 'used'
     && parsed[1].names[1] === 'Face'
-  if (detected && exemptionWorks && staleDetected && commentsIgnored) {
+  const entrylessModules = [{ file: 'src/x.ts', names: ['used', 'seamOnly', 'orphan'] }]
+  const entrylessVerdict = entrylessDeadExports(entrylessModules, new Set(['used']), [{ name: 'seamOnly', reason: 'suite seam' }])
+  const entrylessDetected = entrylessVerdict.checked === 3 && entrylessVerdict.dead.length === 1 && entrylessVerdict.dead[0].name === 'orphan'
+  const entrylessStale = staleEntrylessSeams(entrylessModules, new Set(['used', 'seamOnly', 'orphan']), [{ name: 'seamOnly', reason: 'suite seam' }])
+  const entrylessStaleDetected = entrylessStale.length === 1
+  if (detected && exemptionWorks && staleDetected && commentsIgnored && entrylessDetected && entrylessStaleDetected) {
     console.log('no-dead-exports self-test: ok (an orphan is reported, an exemption silences it, a stale exemption is flagged, comments are not code)')
     return
   }
   console.error(
     'no-dead-exports self-test: FAIL (detected=' + String(detected) +
     ', exemptionWorks=' + String(exemptionWorks) + ', staleDetected=' + String(staleDetected) +
-    ', commentsIgnored=' + String(commentsIgnored) + ')',
+    ', commentsIgnored=' + String(commentsIgnored) + ', entryless=' + String(entrylessDetected) + '/' + String(entrylessStaleDetected) + ')',
   )
   process.exit(1)
 }
@@ -438,6 +501,47 @@ function main() {
     totalChecked += checked
     totalDead += dead.length
     perPackage.push({ pkg, declared, dead, stale })
+  }
+  let entrylessChecked = 0
+  let entrylessDead = 0
+  for (const pkg of ENTRYLESS_PACKAGES) {
+    const dir = join(REPO_ROOT, 'packages', pkg.name)
+    const files = walkFiles(dir, (file) => /\.(?:ts|tsx|mts|cts)$/u.test(file) && !/\.d\.(?:ts|mts|cts)$/u.test(file) && !pkg.ignoreFiles.includes(basename(file)), { extraIgnored: ['test', 'tests', 'test-fixtures', 'scripts', 'vendor', 'generated', 'lib'] })
+    const modules = []
+    for (const file of files) {
+      const text = readFileSync(file, 'utf8')
+      const names = extractRuntimeExports(text)
+      if (names.length === 0) continue
+      const isWordChar = (char) => /[A-Za-z0-9_$]/.test(char)
+      const selfUsed = []
+      for (const name of names) {
+        let count = 0
+        let at = text.indexOf(name)
+        while (at !== -1) {
+          const before = at === 0 ? '' : text[at - 1]
+          const after = text[at + name.length] ?? ''
+          if (!isWordChar(before) && !isWordChar(after)) count += 1
+          at = text.indexOf(name, at + name.length)
+        }
+        if (count > 1) selfUsed.push(name)
+      }
+      modules.push({ package: pkg.name, file: relative(REPO_ROOT, file).split(sep).join('/'), names, selfUsed })
+    }
+    const imported = collectPackageConsumers({ name: pkg.name, dir, spec: pkg.spec })
+    const seams = ENTRYLESS_SEAMS.filter((entry) => entry.package === pkg.name)
+    const { dead, checked } = entrylessDeadExports(modules, imported, seams)
+    entrylessChecked += checked
+    entrylessDead += dead.length
+    const stale = staleEntrylessSeams(modules, imported, seams)
+    if (stale.length > 0) {
+      failures.push(pkg.name + ': ' + String(stale.length) + ' stale entryless seam(s) - the export now has a production consumer or is gone: ' + stale.map((entry) => entry.name).join(', '))
+    }
+    if (dead.length > 0) {
+      failures.push(pkg.name + ': ' + String(dead.length) + ' runtime export(s) with no production consumer (entryless surface): ' + dead.map((entry) => entry.name + ' (' + entry.file + ')').join(', '))
+    }
+  }
+  if (entrylessChecked < 100) {
+    failures.push('the entryless scan parsed only ' + String(entrylessChecked) + ' runtime export(s) - below the sanity floor (100); refusing to read a parse failure as a clean surface')
   }
   if (totalChecked < 100) {
     failures.push('the workspace parsed only ' + String(totalChecked) + ' runtime export(s) - below the sanity floor (100); refusing to read a parse failure as a clean surface')
@@ -483,7 +587,7 @@ function main() {
     runtimeLoaded > 0 ? String(runtimeLoaded) + ' runtime-loaded package(s) not judged' : '',
     pendingSuppressed > 0 ? String(pendingSuppressed) + ' pending dead export(s) suppressed' : '',
   ].filter(Boolean).join('; ')
-  console.log('ok no-dead-exports: all ' + String(totalChecked - pendingSuppressed) + ' judged runtime export(s) have a production importer across ' + String(packages.length) + ' package(s)'
+  console.log('ok no-dead-exports: all ' + String(totalChecked - pendingSuppressed) + ' judged runtime export(s) have a production importer across ' + String(packages.length) + ' package(s), plus ' + String(entrylessChecked) + ' entryless export(s) across ' + String(ENTRYLESS_PACKAGES.length) + ' package(s)'
     + (suffix === '' ? '' : '（' + suffix + '）'))
 }
 

@@ -1,29 +1,20 @@
 /**
- * Neutral per-workspace Git flags (design 08 §3.2, OpenChamber sidebar
- * alignment): a tiny shared registry the chamber Git plugin publishes and
- * the sidebar reads — the sidebar stays free of Git types, it only consumes
- * booleans. Drives:
- *  - the workspace fold button: a worktree (derived) workspace shows the
- *    git-branch glyph at rest and the collapse chevron on hover
- *    (OpenChamber SessionGroupSection group-header swap);
- *  - create-from-main-only gating (no second-level derivation).
- *
- * The plugin clears a source's flags when it disconnects or its snapshot
- * no longer associates the workspace.
+ * Neutral per-workspace Git flags (OpenChamber sidebar alignment): a tiny shared
+ * registry the chamber Git plugin publishes and the sidebar reads — the sidebar
+ * stays free of Git types, it consumes booleans only. Drives the workspace fold
+ * button (worktree → branch glyph at rest, chevron on hover) and
+ * create-from-main-only gating. The plugin clears a source's flags when it
+ * disconnects or its snapshot no longer associates the workspace.
  */
 
 export interface WorkspaceGitFlag {
   isWorktree: boolean
   isMain: boolean
-  /** For a derived worktree: the MAIN checkout workspace id of the same
-   *  repository (drag boundary — a derived workspace cannot precede it). */
+  /** For a derived worktree: the MAIN checkout workspace id of the same repository (drag boundary — a derived workspace cannot precede it). */
   mainWorkspaceId?: string
-  /** True when the workspace's path no longer exists (externally deleted
-   *  worktree left an orphaned registration — Plan A). */
+  /** True when the workspace's path no longer exists (externally deleted worktree → orphaned registration; Plan A). */
   orphaned?: boolean
-  /** The repository's opaque identity (repoId) this workspace belongs to —
-   *  published directly so the sidebar can attribute even when the MAIN
-   *  checkout itself is unregistered. */
+  /** The repository's opaque identity (repoId) this workspace belongs to — published even when the MAIN checkout is unregistered. */
   repoKey?: string
 }
 
@@ -39,10 +30,8 @@ export interface UnregisteredWorktreeInfo {
   head: string
 }
 
-/** Per-repository layout: where the registered workspaces sit + which
- *  unregistered worktrees belong to the group (Plan A rendering). */
+/** Per-repository layout: where the registered workspaces sit + the group's unregistered worktrees (Plan A). */
 export interface RepoGitLayout {
-  /** The repository's opaque identity (the snapshot repoId). */
   repoKey: string
   /** The main checkout's workspace id (null when the main is unregistered). */
   mainWorkspaceId: string | null
@@ -50,15 +39,12 @@ export interface RepoGitLayout {
 }
 
 /**
- * (08 §11.7): the repo-group-collapse predicate — whether a derived
- * workspace row is hidden by its git MAIN workspace's fold. Pure, so the
- * sidebar's render filter and drag-anchor math share one verdict and cannot
- * drift. `mainPresent` guards the stale window after the main's workspace
- * registration vanishes from the aggregate while its git flags have not been
- * re-published yet: a missing main row offers no expand control, so its
- * derived rows must stay visible instead of being locked hidden behind a
- * fold pref nobody can toggle (the next git snapshot re-publish drops the
- * mainWorkspaceId association anyway).
+ * The repo-group-collapse predicate: whether a derived workspace row is hidden
+ * by its git MAIN workspace's fold. Pure, so the sidebar's render filter and
+ * drag-anchor math share one verdict. `mainPresent` guards the stale window
+ * after the main's registration vanished while its flags were not re-published:
+ * a missing main row offers no expand control, so its derived rows must stay
+ * visible instead of being locked behind a fold pref nobody can toggle.
  */
 export function hiddenByMainWorkspaceFold(
   flag: WorkspaceGitFlag | undefined,
@@ -70,16 +56,13 @@ export function hiddenByMainWorkspaceFold(
 
 const flags = new Map<string, WorkspaceGitFlag>()
 const repoLayouts = new Map<string, RepoGitLayout[]>()
-/** Sources whose FIRST git snapshot has been published (design 06 §2.4): a
- * source's git identity is UNKNOWN until then — the sidebar gates the
- * workspace accent on this so a git workspace never first renders an
- * independent hue that later flips to its family hue (the one-time startup
- * flash). Cleared on disconnect like the flags. */
+/** Sources whose FIRST git snapshot was published: a source's git identity is
+ *  UNKNOWN until then — the sidebar gates the workspace accent on this so a git
+ *  workspace never first renders an independent hue that later flips to its
+ *  family hue (the one-time startup flash). Cleared on disconnect. */
 const loadedSources = new Set<string>()
 const listeners = new Set<() => void>()
-/** Monotonic version — the sidebar subscribes via getSnapshot on THIS so a
- *  store change actually re-renders (a constant snapshot never triggers
- *  React). */
+/** Monotonic version — the sidebar subscribes via getSnapshot on THIS so a store change actually re-renders. */
 let version = 0
 
 function bump(): void {
@@ -124,8 +107,7 @@ export function clearWorkspaceGitFlags(sourceId: string): void {
     }
   }
   if (repoLayouts.delete(sourceId)) changed = true
-  // The source's identity is unknown again — a reconnect must re-gate the
-  // accent (no stale "loaded" past the disconnect).
+  // The source's identity is unknown again — a reconnect must re-gate the accent.
   if (loadedSources.delete(sourceId)) changed = true
   if (changed) bump()
 }
@@ -134,27 +116,21 @@ export function getWorkspaceGitFlag(sourceId: string, workspaceId: string): Work
   return flags.get(keyOf(sourceId, workspaceId))
 }
 
-/** Mark a source's git identity as resolved (its first snapshot has been
- *  published — even an empty one). Idempotent; bumps on the transition so
- *  the sidebar re-renders and the gated accent appears. */
+/** Mark a source's git identity resolved (its first snapshot, even empty, was published). Idempotent; bumps on the transition. */
 export function markSourceGitFlagsLoaded(sourceId: string): void {
   if (loadedSources.has(sourceId)) return
   loadedSources.add(sourceId)
   bump()
 }
 
-/** Whether the source's git identity is known (first snapshot published).
- *  Before that, every flag is UNKNOWN, not absent — consumers must not
- *  render a definitive state from the flag's undefined-ness alone. */
+/** Whether the source's git identity is known. Before that every flag is UNKNOWN, not absent — consumers must not render a definitive state from undefined-ness alone. */
 export function isSourceGitFlagsLoaded(sourceId: string): boolean {
   return loadedSources.has(sourceId)
 }
 
-/** Drop this source's flags EXCEPT the given workspace ids (keep). The
- *  refresh publishes fresh flags first, then prunes the stale ones — so a
- *  workspace that vanished from the worktree list (externally deleted
- *  worktree) keeps its PREVIOUS identity flag until the orphan merge runs
- *  on top of it (a full clear first would destroy it). */
+/** Drop this source's flags EXCEPT `keep`. The refresh publishes fresh flags first, then
+ *  prunes — a workspace missing from the worktree list keeps its PREVIOUS identity flag
+ *  until the orphan merge runs on top (a full clear would destroy it). */
 export function retainSourceWorkspaceFlags(sourceId: string, keep: ReadonlySet<string>): void {
   let changed = false
   for (const key of flags.keys()) {

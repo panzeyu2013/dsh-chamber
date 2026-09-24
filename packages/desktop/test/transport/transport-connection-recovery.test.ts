@@ -17,7 +17,7 @@ import { createTransportManager, jitteredBackoffMs, RING_BUFFER_LIMIT, RING_LOG_
 import { CHAMBER_HOST_PACKAGES } from '../../control-plane-module.ts'
 import { CHILD_LINE_MAX_CHARS } from '../../bounded-lines.ts'
 import { configureSshPasswordStore, probeChamberHostLive, purgeSshAuth, setSshPassword, sshProvider, verifyDshEndpoint } from '../../ssh-provider.ts'
-import type { TransportInstanceSpec, TransportProvider, TransportVerifyResult } from '../../transport-provider.ts'
+import type { TransportInstanceInput, TransportInstanceSpec, TransportKind, TransportProvider, TransportVerifyResult } from '../../transport-provider.ts'
 import { gatewayProvider } from '../../gateway-provider.ts'
 import { reconnectStaleTransports } from '../../transport-reconnect.ts'
 import { silentLogger, FakeChild, fakeEnvProvider, makeManager, tempDir, sleep, waitFor, readyThenDrop, EXEC_INSTANCE, type StatusWithNoUrlLeak, type ManagerHarness } from '../support/transport-manager-harness.ts'
@@ -78,6 +78,19 @@ function managerOn(dir: string, port: number) {
     options: { readyTimeoutMs: 100, probeIntervalMs: 5, retryBaseMs: 10, retryMaxMs: 40, maxRetryAttempts: 3 },
   })
 }
+/** kind+transport are required inputs since the pre-v2 normalization was
+ *  removed; the fixtures in this file are local-dsh-over-ssh. */
+function saveCompleted(
+  manager: ReturnType<typeof createTransportManager>,
+  inputs: TransportInstanceInput[],
+): TransportInstanceSpec[] {
+  return manager.saveInstances(inputs.map(input => ({
+    ...input,
+    ...(input.kind === undefined ? { kind: 'dsh' as TransportKind } : {}),
+    ...(input.transport === undefined ? { transport: 'ssh' as const } : {}),
+  })))
+}
+
 test('loadInstances fails loudly on corrupt files and drops invalid entries', () => {
   const dir = tempDir()
   const corrupt = join(dir, 'corrupt.json')
@@ -86,7 +99,7 @@ test('loadInstances fails loudly on corrupt files and drops invalid entries', ()
   assert.throws(() => corruptManager.loadInstances(), /corrupt/)
   const mixed = join(dir, 'mixed.json')
   writeFileSync(mixed, JSON.stringify([
-    { id: 'ok', label: 'fine', host: 'h.example.com', remotePort: 22 },
+    { id: 'ok', label: 'fine', kind: 'dsh', transport: 'ssh', host: 'h.example.com', remotePort: 22 },
     { id: 'bad id', label: 'x', host: 'h', remotePort: 22 },
   ]))
   const mixedManager = createTransportManager({ provider: sshProvider, instancesFile: mixed, logger: silentLogger })
@@ -97,11 +110,11 @@ test('loadInstances fails loudly on corrupt files and drops invalid entries', ()
   // whole-file path).
   const withNull = join(dir, 'with-null.json')
   writeFileSync(withNull, JSON.stringify([
-    { id: 'ok', label: 'fine', host: 'h.example.com', remotePort: 22 },
+    { id: 'ok', label: 'fine', kind: 'dsh', transport: 'ssh', host: 'h.example.com', remotePort: 22 },
     null,
     42,
     'stray',
-    { id: 'also-ok', label: 'fine', host: 'h.example.com', remotePort: 22 },
+    { id: 'also-ok', label: 'fine', kind: 'dsh', transport: 'ssh', host: 'h.example.com', remotePort: 22 },
   ]))
   const nullManager = createTransportManager({ provider: sshProvider, instancesFile: withNull, logger: silentLogger })
   const nullLoaded = nullManager.loadInstances()
@@ -110,7 +123,7 @@ test('loadInstances fails loudly on corrupt files and drops invalid entries', ()
 test('label-only edits keep the live tunnel untouched', async t => {
   const { manager, spawnCalls } = await readyManager(t)
   assert.equal(spawnCalls.length, 1)
-  manager.saveInstances([
+  saveCompleted(manager, [
     { id: 's1', label: 'renamed', host: 'home.example.com', user: 'alice', remotePort: 2222 },
   ])
   await sleep(60)
@@ -129,14 +142,14 @@ test('serviceName and remoteDshHome edits reset service projection and restart a
   manager.connect('s2')
   await waitFor(() => manager.status('s2')!.phase === 'ready')
   const originalTunnel = spawnCalls[1].child
-  manager.saveInstances([{ ...EXEC_INSTANCE, serviceName: 'other.service' }])
+  saveCompleted(manager, [{ ...EXEC_INSTANCE, serviceName: 'other.service' }])
   assert.ok(originalTunnel.killCalls.includes('SIGTERM'), 'service identity change tears down the old tunnel')
   assert.equal(manager.status('s2')!.serviceActive, null, 'a cached old-unit status never labels the replacement unit')
   await waitFor(() => spawnCalls.length === 3, 3_000, 'serviceName replacement tunnel')
   await waitFor(() => manager.status('s2')!.phase === 'ready', 3_000, 'serviceName replacement ready')
 
   const serviceTunnel = spawnCalls[2].child
-  manager.saveInstances([{ ...EXEC_INSTANCE, serviceName: 'other.service', remoteDshHome: '/srv/dsh' }])
+  saveCompleted(manager, [{ ...EXEC_INSTANCE, serviceName: 'other.service', remoteDshHome: '/srv/dsh' }])
   assert.ok(serviceTunnel.killCalls.includes('SIGTERM'), 'remote dsh home is part of the live exec generation')
   await waitFor(() => spawnCalls.length === 4, 3_000, 'remoteDshHome replacement tunnel')
 })
@@ -311,7 +324,7 @@ test('a real dsh identity handshake through the tunnel destination is required f
   // The tunnel's allocated local port IS the dsh server above, so the
   // runtime's identity probe (real sshProvider.verifyUp) reaches it.
   const manager = managerOn(dir, port)
-  manager.saveInstances([{ id: 's1', label: 'home', host: 'h.example.com', remotePort: 2222 }])
+  saveCompleted(manager, [{ id: 's1', label: 'home', host: 'h.example.com', remotePort: 2222 }])
   manager.connect('s1')
   await waitFor(() => manager.status('s1')!.phase === 'ready', 3000, 'ready after the dsh identity handshake')
   assert.equal(manager.readyUrl('s1'), `http://127.0.0.1:${port}`)
@@ -346,7 +359,7 @@ test('a session-list-heavy dsh destination attaches via the fixed-size identity 
     res.end()
   })
   const manager = managerOn(dir, port)
-  manager.saveInstances([{ id: 's1', label: 'home', host: 'h.example.com', remotePort: 2222 }])
+  saveCompleted(manager, [{ id: 's1', label: 'home', host: 'h.example.com', remotePort: 2222 }])
   manager.connect('s1')
   await waitFor(() => manager.status('s1')!.phase === 'ready', 3000, 'ready via the fixed-size identity probe')
   assert.equal(manager.readyUrl('s1'), `http://127.0.0.1:${port}`)
@@ -357,7 +370,7 @@ test('a tunnel destination that is not a dsh instance never becomes ready', asyn
   const dir = tempDir(t)
   const port = await listen(t, (_req, res) => { res.writeHead(404); res.end() })
   const manager = managerOn(dir, port)
-  manager.saveInstances([{ id: 's1', label: 'home', host: 'h.example.com', remotePort: 2222 }])
+  saveCompleted(manager, [{ id: 's1', label: 'home', host: 'h.example.com', remotePort: 2222 }])
   manager.connect('s1')
   await waitFor(() => manager.status('s1')!.phase === 'error', 3000, 'error after verification failures')
   assert.equal(manager.readyUrl('s1'), null, 'a non-dsh service never presents as connected')
@@ -603,7 +616,7 @@ test('an auth failure landing while the final probe is in flight stays terminal'
     portProbe: () => new Promise<boolean>(resolve => { resolveProbe = resolve }),
     options: { readyTimeoutMs: 100, probeIntervalMs: 5, retryBaseMs: 10, retryMaxMs: 40, maxRetryAttempts: 3 },
   })
-  manager.saveInstances([{ id: 's1', label: 'home', host: 'h.example.com', remotePort: 2222 }])
+  saveCompleted(manager, [{ id: 's1', label: 'home', host: 'h.example.com', remotePort: 2222 }])
   manager.connect('s1')
   await waitFor(() => spawnCalls.length === 1)
   spawnCalls[0].child.stderrWrite('Permission denied (publickey).\n')
@@ -722,7 +735,6 @@ function directSpec(record: Record<string, unknown>, kind: string): TransportIns
 /** A process-less provider: probe-driven ready, no child, optional dispose/exec hooks. */
 function endpointProvider(kind: string, events: string[] = []): TransportProvider {
   return {
-    kind,
     validateSpec(input: unknown): TransportInstanceSpec | null {
       if (input === null || typeof input !== 'object') return null
       const record = input as Record<string, unknown>
@@ -774,31 +786,31 @@ async function readyOn(t: TestContext, id: string, overrides: Parameters<typeof 
   return harness
 }
 
-test('kind switch disposes the old provider before the replacement starts and resolveProvider prefers transport keys', async t => {
+test('transport switch disposes the old provider before the replacement starts and resolveProvider prefers transport keys', async t => {
   const events: string[] = []
   const manager = createTransportManager({
-    provider: endpointProvider('old-kind', events),
-    providers: { 'new-kind': endpointProvider('new-kind', events) },
+    provider: endpointProvider('fallback', events),
+    providers: { ssh: endpointProvider('dsh', events), http: endpointProvider('gateway', events) },
     instancesFile: join(tempDir(t), 'instances.json'),
     logger: silentLogger,
     portProbe: async () => true,
     options: { readyTimeoutMs: 100, probeIntervalMs: 5 },
   })
-  manager.saveInstances([{ id: 'switch', label: 'switch', kind: 'old-kind', host: 'old.example.com', remotePort: 443 }])
+  saveCompleted(manager, [{ id: 'switch', label: 'switch', kind: 'dsh', transport: 'ssh', host: 'old.example.com', remotePort: 443 }])
   manager.onStatusChanged((_id, status) => { events.push(`status:${status.kind}:${status.phase}`) })
   manager.connect('switch')
   await waitFor(() => manager.status('switch')?.phase === 'ready', 3000, 'old provider ready')
   const oldExec = await manager.exec('switch', 'start')
   assert.equal(oldExec.ok, true)
   events.length = 0
-  manager.saveInstances([{ id: 'switch', label: 'switch', kind: 'new-kind', host: 'new.example.com', remotePort: 443 }])
+  saveCompleted(manager, [{ id: 'switch', label: 'switch', kind: 'gateway', transport: 'http', host: 'new.example.com', remotePort: 443 }])
   await waitFor(() => manager.status('switch')?.phase === 'ready', 3000, 'new provider ready')
-  assert.deepEqual(events.slice(0, 3), ['dispose:old-kind', 'status:old-kind:idle', 'status:new-kind:connecting'])
+  assert.deepEqual(events.slice(0, 3), ['dispose:dsh', 'status:dsh:idle', 'status:gateway:connecting'])
   assert.equal(manager.readyUrl('switch'), 'http://fake.local:443')
   assert.equal(manager.status('switch')?.serviceActive, null, 'old provider projections do not cross the kind boundary')
 
-  // Design 17 §2.2 registration: a provider keyed by TRANSPORT wins even when
-  // the kind key is absent; a spec without either key falls back to the default.
+  // Design 17 §2.2 registration: a provider keyed by TRANSPORT wins; a spec
+  // without a transport key falls back to the default provider.
   const dir = tempDir(t)
   const keyed = createTransportManager({
     provider: sshProvider,

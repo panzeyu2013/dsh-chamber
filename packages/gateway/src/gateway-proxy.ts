@@ -1,21 +1,13 @@
 /**
- * The gateway single-target reverse proxy (design 17 §6): the browser/desktop
- * entry point for ONE local dsh — forwards `/`, `/plugins/*` and every
- * non-management `/api/*` verbatim to `http://127.0.0.1:<localDshPort>` with
- * the SAME Host/Origin rewrite, WS splice, limits and error semantics as the
- * control-plane's per-instance proxy (shared `proxy-forward.ts`, design 17
- * §8 方案 A). Unlike instance-proxy, there is no `/api/i/<id>` prefix and no
- * transports table: the target is always the managed local dsh.
+ * The gateway single-target reverse proxy: the browser/desktop entry point for
+ * ONE local dsh — forwards `/`, `/plugins/*` and every non-management `/api/*`
+ * verbatim to `http://127.0.0.1:<localDshPort>` with the same Host/Origin
+ * rewrite, WS splice, limits and error semantics as the control-plane's
+ * per-instance proxy (shared `proxy-forward.ts`); no `/api/i/<id>` prefix and
+ * no transports table — the target is always the managed local dsh.
  *
- * Structural shape fact of this deployment: this root mount and the
- * control-plane `/api/i/local/*` alias (claimed by dispatch.ts after the auth
- * gate) are the TWO forwarding paths to the SAME managed dsh — the gateway
- * never registers instance transports, so dsh-/gateway-/ssh- prefixed
- * instance ids are a constant 503 'no transport is available for this
- * instance' here. The two paths are not document-equivalent for browsers:
- * this proxy carries GATEWAY_PROXY_CSP (unsafe-inline) plus the S0 trust
- * declaration, while /api/i/local/* keeps the control-plane shell's nonce CSP
- * and no trust injection (deliberate known divergence).
+ * This mount and the `/api/i/local/*` alias are the SAME dsh: this proxy carries
+ * GATEWAY_PROXY_CSP + the trust declaration, /api/i/local/* the nonce CSP.
  */
 
 import type { Duplex } from 'node:stream'
@@ -47,12 +39,10 @@ import {
 import { injectTrustDeclaration } from './html-inject.ts'
 
 /**
- * Content types a content-addressed asset of one extension may carry. The path
- * alone is not proof of the payload: an SPA fallback answers an asset URL with
+ * Content types a content-addressed asset of one extension may carry: the path
+ * alone is not proof of the payload — an SPA fallback answers an asset URL with
  * the rendered `text/html` index, and an immutable stamp on that answer would
  * cache HTML under a script URL for a year.
- * Each entry accepts the types a static host realistically sends for that
- * extension — including `application/octet-stream` for fonts — and nothing else.
  */
 const HASHED_ASSET_CONTENT_TYPES: ReadonlyArray<{ readonly extension: string; readonly pattern: RegExp }> = [
   { extension: '.js', pattern: /^(?:text|application)\/(?:javascript|ecmascript)\b/i },
@@ -65,17 +55,9 @@ const HASHED_ASSET_CONTENT_TYPES: ReadonlyArray<{ readonly extension: string; re
 
 /**
  * Whether a 200 response for a content-addressed asset path carries a content
- * type the extension can actually produce. Pure; exported so the cache-stamp
- * guard is testable without an upstream.
- *
- * The `application/octet-stream` arm is deliberate: a server that does not know
- * the font mime still serves the FONT bytes, and the case this guard exists for
- * is the opposite one — an SPA fallback answering with `text/html`, which no
- * extension/type row accepts. A mislabelled font stays a font; a mislabelled
- * document is what poisons the URL.
- * @param pathname - the resolved upstream pathname (already hash-matched).
- * @param contentType - the upstream `content-type` header value.
- * @returns true only for a matching extension/type pair.
+ * type the extension can actually produce. `application/octet-stream` is
+ * deliberately accepted — a mislabelled font stays a font, while an
+ * SPA-fallback `text/html` answer would poison the URL.
  */
 export function hashedAssetContentTypeMatches(pathname: string, contentType: string | string[] | undefined): boolean {
   const value = Array.isArray(contentType) ? contentType[0] : contentType
@@ -90,11 +72,8 @@ export interface GatewayProxyDeps {
   getLocalDshPort(): number | null
   /** The managed local dsh state ('ready' when serviceable). */
   getLocalState(): string
-  /** Activation-aware exposure gate (design 18 addendum D3/F4): false
-   * while an activation transaction is in flight, so an unverdict-candidate
-   * never serves online users. The gate covers the startup path and
-   * restore-builtin the same way it covers apply-now. Defaults to open for
-   * callers that do not compose a runtime manager. */
+  /** Activation-aware exposure gate: false while an activation transaction is in
+   * flight, so an unverdict-candidate never serves online users (default open). */
   canExposeLocal?: () => boolean
   /** Narrow forwarding seams used by deterministic lifecycle tests. */
   httpRequest?: HttpRequestFactory
@@ -135,9 +114,8 @@ export function createGatewayProxy(deps: GatewayProxyDeps): GatewayProxy {
   let activeHttpRequests = 0
   const pendingUpgrades = createPendingUpgradeTracker()
   const liveStreams = new Set<{ downstream: ProxySocket; upstream: Duplex }>()
-  // HTTP includes long-lived SSE. Keep the downstream response until the
-  // shared release callback fires so credential rotation can revoke requests
-  // that were authenticated only at entry, just like established WS splices.
+  // HTTP includes long-lived SSE: keep the downstream response until the shared
+  // release callback so credential rotation can revoke it like a WS splice.
   const liveHttpRequests = new Set<{ request: ProxyRequest; response: ProxyResponse }>()
 
   const forwardDeps: ProxyForwardDeps = {
@@ -152,44 +130,28 @@ export function createGatewayProxy(deps: GatewayProxyDeps): GatewayProxy {
     maxBufferedRequestBytes: MAX_BUFFERED_REQUEST_BYTES,
     httpRequest: deps.httpRequest,
     liveStreams,
-    // Root-mounted owner (design 17 §6): same-origin absolute redirects from
-    // the managed dsh are stripped to their path so a `Location:
-    // http://127.0.0.1:<port>/…` can never escape the public origin.
+    // Root-mounted owner: same-origin absolute redirects from the managed dsh
+    // are stripped to their path so a Location can never escape the public origin.
     responseBasePath: '',
-    // HTML trust injection (S0): the browser-facing official dsh frontend
-    // must reach host persistence when served through this proxy, so the
-    // small index document declares itself host-owned to the documented
-    // client hook (`__DSH_TRANSPORT__.ownsHost`, html-inject.ts). This rides
-    // the proxy CSP (dispatch.ts GATEWAY_PROXY_CSP allows 'unsafe-inline')
-    // and never weakens the auth gate — only authenticated viewers reach
-    // this proxy. The adapter maps the fail-soft HtmlInjectResult onto the
-    // shared seam (null = forward the upstream body untouched).
+    // HTML trust injection: the browser-facing official dsh frontend declares
+    // its index host-owned to the documented client hook
+    // (`__DSH_TRANSPORT__.ownsHost`); null = forward the upstream body untouched.
     injectHtmlDocument: html => {
       const result = injectTrustDeclaration(html)
       return result.injected ? result.html : null
     },
-    // Hashed static-asset caching: the official frontend is served by
-    // @deepseek-ai/dsh-host-frontend-static, which writes ONLY content-type —
-    // no Cache-Control/ETag/Last-Modified — so without this stamp the 1.24 MiB
-    // Vite shell is re-downloaded on every visit even though every asset name
-    // carries a Vite content hash. Add the immutable contract for exactly those
-    // names (the shared predicate is anchored on an EXACT 8-char hash so
-    // favicon.svg / manifest.webmanifest / index.html can never match), and
-    // only for a plain 200: a 206/304 or any range response keeps the upstream
-    // framing.
-    // Three guards keep the stamp from outliving its evidence:
-    // the upstream's own cache metadata wins (a `no-store`/ETag policy is the
-    // owner's statement, not ours); the response must actually BE an asset of
-    // that extension (a dsh whose frontend-static SPA-fell-back a miss to the
-    // rendered index answers an asset URL with `text/html` 200, and caching
-    // that immutably poisons the URL for a year, across rollbacks); and a range
-    // response never gets it at all. The seam
-    // itself re-applies the response whitelist after this callback, so framing
-    // is untouchable from here.
+    // Hashed static-asset caching: the official frontend writes ONLY
+    // content-type — no Cache-Control/ETag/Last-Modified — so without this stamp
+    // the Vite shell is re-downloaded on every visit despite its content-hashed
+    // names. The immutable contract covers exactly those names (an EXACT 8-char
+    // hash) and only a plain 200. Three guards keep it from outliving its
+    // evidence: the upstream's own cache metadata wins; the response must BE an
+    // asset of that extension (an SPA-fallback `text/html` 200 would poison the
+    // URL for a year); a range response never gets it. The seam re-applies the
+    // response whitelist.
     onUpstreamResponseHeaders: (pathname, status, headers) => {
       if (status !== 200 || !isHashedStaticAssetPath(pathname)) return
-      // (`%`-escaped and dot-segment paths are refused inside the predicate
-      // itself, so all three callers agree on what counts as an asset.)
+      // (`%`-escaped and dot-segment paths are refused inside the predicate.)
       if (headers['content-range'] !== undefined) return
       if (headers['cache-control'] !== undefined || headers['etag'] !== undefined || headers['expires'] !== undefined) return
       if (!hashedAssetContentTypeMatches(pathname, headers['content-type'])) return
@@ -197,10 +159,9 @@ export function createGatewayProxy(deps: GatewayProxyDeps): GatewayProxy {
     },
   }
 
-  /** Resolve the single target (the local dsh loopback origin). Loud 503 when
-   * the instance is not ready (proxy honesty — never a silent empty success)
-   * or while an activation transaction is in flight (D3/F4): the candidate
-   * tree must not serve online users before the probe verdict. */
+  /** Resolve the single target (the local dsh loopback origin): loud 503 when
+   * the instance is not ready (never a silent empty success) or an activation
+   * transaction is in flight — the candidate tree must not serve online users. */
   function resolveTarget(res: ProxyResponse | null): URL | null {
     const port = getLocalDshPort()
     if (getLocalState() === 'ready' && Number.isInteger(port) && (port ?? 0) > 0 && (deps.canExposeLocal?.() ?? true)) {
@@ -210,17 +171,13 @@ export function createGatewayProxy(deps: GatewayProxyDeps): GatewayProxy {
     return null
   }
 
-  /** Refuse non-origin-form request targets (SSRF guard): Node's parser
-   * accepts absolute-form (`GET http://evil/x`) and protocol-relative
-   * (`//evil/x`) request lines; `new URL(raw, target)` would silently discard
-   * `target` and forward to the attacker host. Only origin-form (leading `/`)
-   * may be forwarded. */
+  /** Refuse non-origin-form request targets (SSRF guard): Node's parser accepts
+   * absolute-form and protocol-relative lines, and `new URL(raw, target)` would
+   * discard `target` and forward to the attacker host. Only origin-form is safe. */
   function parsePathTarget(reqUrl: string | undefined, target: URL): URL | null {
     const raw = reqUrl ?? '/'
-    // Only origin-form may be forwarded: leading '/' but NOT '//' (a
-    // protocol-relative URL `//evil/x` starts with '/' yet resolves to
-    // `http://evil/x`), never an absolute-form `http://evil/x`, and no
-    // backslash. WHATWG treats `/\\evil/x` as an authority switch too.
+    // Only origin-form: leading '/' but NOT '//' (protocol-relative), never an
+    // absolute-form URL, and no backslash (`/\\evil/x` is an authority switch).
     if (!raw.startsWith('/') || raw.startsWith('//') || raw.includes('\\')) return null
     return new URL(raw, target)
   }
@@ -238,8 +195,7 @@ export function createGatewayProxy(deps: GatewayProxyDeps): GatewayProxy {
         counters.failures += 1
         return
       }
-      // Full passthrough: the target carries the ORIGINAL path+query (no
-      // /api/i/<id> prefix to strip — single instance).
+      // Full passthrough: the target carries the ORIGINAL path+query.
       const fullTarget = parsePathTarget(req.url, target)
       if (fullTarget === null) {
         counters.failures += 1
@@ -257,9 +213,8 @@ export function createGatewayProxy(deps: GatewayProxyDeps): GatewayProxy {
         activeHttpRequests = Math.max(0, activeHttpRequests - 1)
       }
       try {
-        // Browser-auth cookie: the gateway's own local-dsh proxy must pass the
-        // spawn-minted cookie exactly like the desktop instance proxy, or every
-        // /api forward 401s.
+        // Browser-auth cookie: the local-dsh proxy must pass the spawn-minted
+        // cookie exactly like the desktop instance proxy, or every /api 401s.
         const authCookie = authCookieFor(fullTarget.origin)
         const extraHeaders = authCookie === undefined ? undefined : { cookie: authCookie }
         await forwardHttp(req, res, fullTarget, releaseRequest, logger, counters, forwardDeps, extraHeaders)
@@ -273,20 +228,15 @@ export function createGatewayProxy(deps: GatewayProxyDeps): GatewayProxy {
     },
 
     async handleUpgrade(req: ProxyRequest, socket: ProxySocket, head: Buffer): Promise<void> {
-      // Hoisted SSRF guard (defense in depth): reject absolute-form
-      // (`http://evil/x`), protocol-relative (`//evil/x`) and backslash
-      // (`/\\evil/x`) request targets BEFORE any pathname normalization.
-      // `new URL()` silently normalizes those forms, so `/api\events.mux`
-      // would otherwise match WS_STREAM_PATHS with a normalized pathname and
-      // only be caught later by parsePathTarget. Same rejection semantics as
-      // the HTTP path; behavior for valid targets is unchanged.
+      // Hoisted SSRF guard (defense in depth): reject absolute-form,
+      // protocol-relative and backslash targets BEFORE normalization — `new URL()`
+      // would otherwise normalize `/api\events.mux` into a WS_STREAM_PATHS match.
       if (parsePathTarget(req.url, new URL('http://localhost')) === null) {
         counters.failures += 1
         rejectUpgrade(socket, 400, 'invalid_request', 'absolute request targets are not allowed', logger)
         return
       }
-      // Only the Remote stream mux path upgrades (dsh's wire exposes no
-      // events.mux / events.host downlinks).
+      // Only the Remote stream mux path upgrades.
       const pathname = new URL(req.url ?? '/', 'http://localhost').pathname
       if (!WS_STREAM_PATHS.has(pathname)) {
         rejectUpgrade(socket, 404, 'instance_not_found', 'unknown WebSocket path', logger)
@@ -306,8 +256,7 @@ export function createGatewayProxy(deps: GatewayProxyDeps): GatewayProxy {
       }
       const fullTarget = parsePathTarget(req.url, target)
       if (fullTarget === null) {
-        // Unreachable after the hoisted guard above — kept as defense in
-        // depth in case parsePathTarget's refusal set ever diverges.
+        // Unreachable after the hoisted guard — kept as defense in depth.
         counters.failures += 1
         rejectUpgrade(socket, 400, 'invalid_request', 'absolute request targets are not allowed', logger)
         return
@@ -341,10 +290,9 @@ export function createGatewayProxy(deps: GatewayProxyDeps): GatewayProxy {
     closeAllStreams(): void {
       pendingUpgrades.closeAll()
       for (const { request, response } of [...liveHttpRequests]) {
-        // IncomingMessage.destroy() terminates a still-uploading body iterator;
-        // response.destroy() tears down an established downstream/SSE leg.
-        // The ProxyRequest interface is transport-minimal, hence the guarded
-        // cast for Node's concrete request method.
+        // request.destroy() terminates a still-uploading body; response.destroy()
+        // tears down an established downstream/SSE leg (guarded cast: ProxyRequest
+        // is transport-minimal).
         try { (request as ProxyRequest & { destroy?: () => unknown }).destroy?.() } catch { /* already gone */ }
         try { response.destroy() } catch { /* already gone */ }
       }

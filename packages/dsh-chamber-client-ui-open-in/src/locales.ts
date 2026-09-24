@@ -1,14 +1,9 @@
 /**
- * Copy owned by the chamber open-in plugin (design 16 + design 20).
- *
- * The dictionaries are the official `open-in-app` client's copy and
- * product-label table, owned here rather than mirrored (fork & supersede,
- * design 20 §2.2): the official client never loads, and the `app.*` labels must
- * cover exactly the catalog ids our host domain can answer
- * (`packages/dsh-chamber-seed-open-in/src/catalog.ts`), which
- * `test/catalog/open-in-labels.test.ts` pins. Product names track upstream's
- * spelling where an id is shared, so a user sees the same application names the
- * official surface would show.
+ * Copy owned by the chamber open-in plugin: the official `open-in-app` client’s
+ * dictionaries and product-label table, owned here rather than mirrored (the
+ * official client never loads). `app.*` labels must cover exactly the catalog
+ * ids our host domain can answer (a label test pins that); product names track
+ * upstream’s spelling where an id is shared.
  */
 export const zh = {
   /** Neutral entry label (slot registrant diagnostics — not user-facing). */
@@ -142,12 +137,9 @@ export const en: Record<OpenInKey, string> = {
 export type OpenInKey = keyof typeof zh
 
 /**
- * Label key per catalog id — the table is OURS (design 20 §5): our host
- * domain's catalog (`packages/dsh-chamber-seed-open-in/src/catalog.ts`) is the
- * authority on which ids can appear, and `test/catalog/open-in-labels.test.ts` fails
- * when an id has no zh+en label. Ids outside this table still render through
- * `titleGeneric`, so a catalog extension degrades to a raw id instead of
- * disappearing.
+ * Label key per catalog id: the host domain’s catalog is the authority on which
+ * ids can appear (a label test fails when an id has no zh+en label). Ids outside
+ * this table still render through `titleGeneric`, so an extension stays visible.
  */
 export const OPEN_IN_APP_LABEL_KEY: Record<string, OpenInKey | undefined> = {
   finder: 'app.finder',

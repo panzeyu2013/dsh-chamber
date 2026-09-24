@@ -1,13 +1,12 @@
 /**
- * Page-wide open-in app-list coordinator (design 16 + open-in extension).
+ * Page-wide open-in app-list coordinator.
  *
- * The chamber composite imports this module once and mounts the plugin in N
- * cordis contexts, so every ctx shares ONE app-list probe — a main-process
- * fact over `window.dshChamber.openIn.apps()` (the renderer is sandboxed;
- * host capabilities are probed in the main process only).
+ * The composite imports this module once and mounts the plugin in N cordis
+ * contexts, so every ctx shares ONE app-list probe — a main-process fact over
+ * `window.dshChamber.openIn.apps()` (the renderer is sandboxed).
  *
- * Fail-closed (design 16 §6.3): an unknown, in-flight or failed probe resolves
- * to `null` — the button never renders on uncertainty.
+ * Fail-closed: an unknown, in-flight or failed probe resolves to `null` — the
+ * button never renders on uncertainty.
  */
 
 import { parseOpenInApps, type OpenInApp } from './capabilities.ts'
@@ -15,10 +14,8 @@ import { parseOpenInApps, type OpenInApp } from './capabilities.ts'
 export type { OpenInApp, OpenInSource } from './capabilities.ts'
 
 /** The window.dshChamber slice this plugin consumes (structural subset of the
- *  desktop preload bridge; local interface on purpose — the plugin stays out
- *  of the renderer's global Window augmentation merge). The preload's `apps()`
- *  already unwraps the IPC `{ apps: [...] }` envelope and resolves the bare
- *  array (preload contract), so this face matches the runtime shape. */
+ *  desktop preload bridge; `apps()` already resolves the bare array). Local
+ *  interface on purpose — the plugin stays out of the renderer’s Window merge. */
 export interface OpenInBridgeSurface {
   dshChamber?: {
     platform?: string | null
@@ -34,9 +31,8 @@ export type Translate = (key: string, params?: Record<string, unknown>) => strin
 
 let apps: OpenInApp[] | null = null
 let appsPromise: Promise<OpenInApp[] | null> | null = null
-/** Probe epoch: refreshApps() bumps it so a superseded in-flight probe can
- *  never overwrite the newer result (write-order guard for concurrent
- *  flights — see refreshApps). */
+/** Probe epoch: refreshApps() bumps it so a superseded in-flight probe can never
+ *  overwrite the newer result. */
 let probeEpoch = 0
 const listeners = new Set<() => void>()
 export const OPEN_IN_APP_PROBE_RETRY_LIMIT = 3
@@ -55,24 +51,17 @@ function emit(): void {
   for (const listener of [...listeners]) listener()
 }
 
-/** Current app list; null = not yet probed. The button renders only on a
- *  non-empty filtered list. */
+/** Current app list; null = not yet probed. The button renders only on a non-empty filtered list. */
 export function getOpenInApps(): OpenInApp[] | null {
   return apps
 }
 
 /** Single-flight app-list probe shared across N-ctx; resolves the shared list.
- *  A MISSING bridge is NOT memoized: the preload exposes the bridge only after
- *  an async `dsh-chamber:info` round-trip, so a probe that ran before hydration
- *  must be retryable. The bridge check therefore runs BEFORE the promise is
- *  cached — an absent bridge returns a fresh resolved null and leaves
- *  `appsPromise` untouched, so later callers re-probe. A real IPC rejection gets
- *  three delayed attempts inside the same page-wide flight; this recovers a
- *  transient first-call sender/handler race even while the fail-closed button is
- *  hidden and has no manual refresh affordance. Success or final exhaustion is
- *  memoized; an explicit lifecycle signal (window focus/menu opening) calls
- *  refreshApps() to release it. This recovers without turning N mounted buttons
- *  into an implicit retry loop. */
+ *  A MISSING bridge is NOT memoized (the preload exposes it only after an async
+ *  `dsh-chamber:info` round-trip), so a pre-hydration probe stays retryable; a
+ *  real IPC rejection gets three delayed attempts inside the same page-wide
+ *  flight. Success or final exhaustion is memoized until an explicit lifecycle
+ *  signal calls refreshApps(), so N buttons are not an implicit retry loop. */
 export function getApps(options: OpenInAppProbeOptions = {}): Promise<OpenInApp[] | null> {
   if (appsPromise !== null) return appsPromise
   const bridge = (window as unknown as OpenInBridgeSurface).dshChamber?.openIn
@@ -100,8 +89,8 @@ export function getApps(options: OpenInAppProbeOptions = {}): Promise<OpenInApp[
           if (epoch !== probeEpoch) return apps
           continue
         }
-        // Exhaustion remains fail-closed and memoized until refreshApps().
-        // This prevents staggered N-ctx mounts from starting repeated waves.
+        // Exhaustion stays fail-closed and memoized until refreshApps(), so
+        // staggered N-ctx mounts cannot start repeated waves.
         apps = null
       }
     }
@@ -111,21 +100,18 @@ export function getApps(options: OpenInAppProbeOptions = {}): Promise<OpenInApp[
   return appsPromise
 }
 
-/** Force a fresh probe bypassing the memo (menu-open/window-focus refresh): a mid-session
- *  app install/uninstall becomes visible without a page reload. The probe
- *  epoch is bumped so a still-in-flight older probe cannot overwrite the
- *  fresh result. NOTE the fail-closed failure path: a real probe failure
- *  clears the list to null (button hides, memoized) — the stale list is kept
- *  only while the fresh probe is in flight, not after it fails (getApps'
- *  documented fail-closed contract). */
+/** Force a fresh probe bypassing the memo (menu-open/window-focus refresh): a
+ *  mid-session install/uninstall becomes visible without a page reload, and the
+ *  bumped epoch stops an older in-flight probe from overwriting. A real probe
+ *  failure still clears the list to null (fail-closed, memoized). */
 export function refreshApps(): Promise<OpenInApp[] | null> {
   probeEpoch += 1
   appsPromise = null
   return getApps()
 }
 
-/** The host platform string ('darwin' | 'win32' | 'linux' | …) or null. Used
- *  for the platform-appropriate Finder/Explorer/file-manager wording. */
+/** The host platform string ('darwin' | 'win32' | 'linux' | …) or null, for the
+ *  platform-appropriate Finder/Explorer/file-manager wording. */
 export function bridgePlatform(): string | null {
   return (window as unknown as OpenInBridgeSurface).dshChamber?.platform ?? null
 }
@@ -139,8 +125,8 @@ export function subscribeOpenIn(listener: () => void): () => void {
   }
 }
 
-/** One page-level focus signal covers every N-ctx consumer and naturally
- * catches apps installed or removed while Chamber was in the background. */
+/** One page-level focus signal covers every N-ctx consumer and catches apps
+ *  installed or removed while Chamber was in the background. */
 function refreshAppsOnFocus(): void {
   void refreshApps()
 }

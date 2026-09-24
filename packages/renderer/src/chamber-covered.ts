@@ -1,104 +1,39 @@
 /**
- * The boot-graph entry ids the chamber page covers WITHOUT the host graph —
- * the dedupe set the per-instance host-graph merge filters against (design 09
- * §3.3, module C: `dedupeCoveredRows` in the client-core face; the host-graph merge calls it).
+ * The boot-graph entry ids the chamber page covers WITHOUT the host graph — the
+ * dedupe set the per-instance host-graph merge filters against (dedupeCoveredRows).
+ * Loading any of these again from the host graph would register the same plugin
+ * twice on one cordis ctx (duplicate provide / slot), so they are skipped, never
+ * loaded — mostly the client plugin packages the composite registers, plus the
+ * page-own rows (ui-sidebar / ui-modules / ui-renderer / ui-layout / ui-open-in-app
+ * / hmr / mobile / directory-picker-native) and the PLATFORM_MODULES words the
+ * composite answers.
  *
- * Mostly two families, plus a third, non-row class:
- *
- * - every client plugin package the chamber composite bundle registers
- *   (chamber-entry.ts import list — one entry per package name): the
- *   first-screen families via static import (including the provider group:
- *   the platform store word
- *   `@deepseek-ai/dsh-client-store`, the api session/workspace controllers,
- *   and the ui-session / ui-chat / ui-approval conversation families), the
- *   deferred families (ui-attachment / ui-brand-official / ui-reference)
- *   via the registerDeferred dynamic imports, and the C4 settings cluster
- *   (official settings sections + the chamber settings shell &
- *   connections — ui-settings itself stays first-screen, see its comments in
- *   both lists) via the same registerDeferred path. Loading any such row again
- *   from
- *   the host graph would register the same plugin twice on one cordis ctx
- *   (cordis rejects the duplicate provide / slot), so these rows must be
- *   skipped, never loaded;
- * - page-own rows that must never arrive as graph extras:
- *   `@deepseek-ai/dsh-client-ui-sidebar` — the official sidebar registration
- *   the chamber sidebar REPLACES (loading it would collide on the sidebar
- *   slot), `@deepseek-ai/dsh-client-modules` — the shell kernel adopts that
- *   entry itself (boot.ts MODULES_ID: statically registered, never fetched),
- *   so a second entry would provide `modules` twice, and
- *   `@deepseek-ai/dsh-client-ui-renderer` — the slot-renderer
- *   install lives in this row (the shell does not install it;
- *   the boot kernel mounts through the row's `ctx.uiRenderer`), so a
- *   host-graph row would install a second renderer / provide `uiRenderer`
- *   twice.
- *
- * Maintenance discipline: when a plugin import is added to chamber-entry.ts,
- * append its package name here in the same batch; when a row becomes
- * page-own (kernel-adopted, or replacing an official registration), append
- * it with a comment. Missing ids fail LOUD at boot (duplicate registration);
- * extra ids are harmless (a covered id absent from a host graph is never
- * filtered).
- *
- * Lockstep with the union-table factories (chamber-entry.ts COVERED_FACTORIES,
- * design 09 §3.2): every first-screen family the composite statically imports
- * registers a module-table factory under its package id — the id must be
- * covered here, or the composite's own factory registration collides with the
- * host-graph row's bundle (fail-loud assert at chamber-entry execution).
- *
- * `@deepseek-ai/cordis` is intentionally absent: it is a type-only import in
- * chamber-entry.ts, never a registered client plugin, and the host graph
- * cannot carry a row for it.
- *
- * Decision D6: `@deepseek-ai/dsh-client-ui-cordis` (the
- * debug-surface roster row) is intentionally absent too — the chamber
- * composite does not register it and never will; "no such plugin" is
- * behaviorally identical to "plugin absent" (the official row is an opt-in
- * debugger face), so it is absent from the chamber covered/factories tables;
- * the host-graph row still preloads through the same extra-rows mechanism as
- * any other roster entry — one extra combo preload at most, never a
- * duplicate registration.
- *
- * Roster rows without explicit coverage decisions:
- * `@deepseek-ai/dsh-client-ui-schedule` (the official row is
- * disabled and the modules loader skips disabled rows, so it never reaches
- * the host graph) and `@deepseek-ai/dsh-cordis-client-runner` (an active
- * official row the chamber composite leaves to the extra-rows preload, like
- * every non-covered active row) — both documented, no explicit exclusion
- * needed.
- *
- * This constant lives in its own module (re-exported by chamber-entry.ts) on
- * purpose: shell.ts must import it without pulling chamber-entry.ts's
- * top-level module-table handoff into the main chunk.
+ * Maintenance: a plugin import added to chamber-entry.ts must append its package
+ * name here in the same batch (missing ids fail LOUD at boot; extra ids are
+ * harmless). Lockstep with chamber-entry.ts COVERED_FACTORIES: every factory id
+ * must be covered here. Own module so shell.ts can import it without pulling
+ * chamber-entry.ts's module-table handoff into the main chunk.
  */
 
 export const CHAMBER_COVERED_IDS: readonly string[] = [
-  // ── chamber composite registration (chamber-entry.ts import list) ──
+  // chamber composite registration (chamber-entry.ts import list)
   '@deepseek-ai/dsh-client-connection',
   '@deepseek-ai/dsh-typert-registry',
   '@deepseek-ai/dsh-api-gateway',
   '@deepseek-ai/dsh-api-remotes',
-  // provider group: the platform store word (a PLATFORM_MODULES seed —
-  // every client bundle that value-imports the store engine emits a
-  // `require("@deepseek-ai/dsh-client-store")` edge), the two api
-  // controllers (ctx.sessions / ctx.workspaces), and the three conversation
-  // families the web roster carries (ui-session root source, ui-chat chat
-  // nodes, ui-approval approval surface). All six are composite-covered:
-  // loading any of them again from a host graph would double-register on
-  // one ctx (or split the store engine version).
+  // provider group: the platform store word (a PLATFORM_MODULES seed), the two
+  // api controllers (ctx.sessions / ctx.workspaces), and the three conversation
+  // families the web roster carries. All six are composite-covered: loading any
+  // again would double-register on one ctx (or split the store engine version).
   '@deepseek-ai/dsh-client-store',
-  // C3: ui-primitives is NOT a loader row (never a
-  // host-graph plugin) — it joins the covered + factory set so the composite
-  // answers the platform-word require edges of extra bundles after the seed
-  // dropped the word (dsh-client-web seed.ts/platform.ts deviation; the
-  // shell.ts C3 gate orders the chamber entry before any extra load). An id
-  // absent from a host graph is never filtered, so listing it is harmless —
-  // the union-table lockstep asserts demand it (factory id ∈ covered).
+  // C3: ui-primitives is NOT a loader row — it joins the covered + factory set so
+  // the composite answers the platform-word require edges of extra bundles after
+  // the seed dropped the word. An id absent from a host graph is never filtered,
+  // and the union-table lockstep demands it (factory id ∈ covered).
   '@deepseek-ai/dsh-client-ui-primitives',
-  // ui-dockkit is a PLATFORM_MODULES word answered by the composite's
-  // covered factory (the seed deliberately omits it — see chamber-entry.ts).
-  // It has no `dsh.client`, so it is never a host-graph row; listing it keeps
-  // the factory-id lockstep assert and the require edges of the right-sidebar
-  // rows satisfied.
+  // ui-dockkit is a PLATFORM_MODULES word answered by the composite's covered
+  // factory (the seed deliberately omits it). It has no `dsh.client`, so it is
+  // never a host-graph row; listing it keeps the factory-id lockstep assert.
   '@deepseek-ai/dsh-client-ui-dockkit',
   '@deepseek-ai/dsh-api-session-controller',
   '@deepseek-ai/dsh-api-workspace-controller',
@@ -108,10 +43,9 @@ export const CHAMBER_COVERED_IDS: readonly string[] = [
   '@dsh-chamber/dsh-chamber-client-ui-sidebar',
   '@dsh-chamber/dsh-chamber-client-ui-git',
   '@dsh-chamber/dsh-chamber-client-ui-open-in',
-  // ui-settings stays FIRST-SCREEN (C4): locale/ui-theme
-  // root-inject its settingsScope. Its section families + the chamber
-  // settings shell/connections are deferred — the ids stay covered (see the
-  // deferred group below).
+  // ui-settings stays FIRST-SCREEN (C4): locale/ui-theme root-inject its
+  // settingsScope; its section families + the chamber settings shell/connections
+  // are deferred (ids stay covered).
   '@deepseek-ai/dsh-client-ui-settings',
   '@deepseek-ai/dsh-client-ui-conversation',
   '@deepseek-ai/dsh-client-ui-commands',
@@ -130,133 +64,96 @@ export const CHAMBER_COVERED_IDS: readonly string[] = [
   '@deepseek-ai/dsh-client-ui-workflow-run',
   '@deepseek-ai/dsh-client-ui-agent-preset',
   '@deepseek-ai/dsh-client-ui-deliverables',
-  // ── conversation families (decision D6: into the
-  // ── composite; first-screen static imports, chamber-entry.ts):
+  // conversation families (first-screen static imports, chamber-entry.ts):
   '@deepseek-ai/dsh-client-ui-session',
   '@deepseek-ai/dsh-client-ui-chat',
   '@deepseek-ai/dsh-client-ui-approval',
-  // The background-upload client is composite-covered for TWO
-  // reasons — (1) `ui-conversation` and `api-session-controller` root-inject
-  // `fileUpload`, and (2) the vendor bundle builds a same-origin absolute
-  // upload URL (`location.origin + /api/session/uploadFileBinary`) that 404s
-  // under the N-ctx shell; only a composite-bundled copy can carry the
-  // registered vendor patch (design 09 §3.6), because an extra-row bundle is
-  // served by the instance and never passes our build.
+  // The background-upload client is composite-covered for two reasons: two
+  // packages root-inject `fileUpload`, and its vendor bundle builds a same-origin
+  // absolute upload URL that 404s under the N-ctx shell — only a composite-bundled
+  // copy can carry the registered vendor patch.
   '@deepseek-ai/dsh-client-file-upload',
-  // Directory picking: the composite pins the `browse` interaction (the host
-  // pins the same per spawn — chamber-entry.ts import comment), so the
-  // picker-auto-mounted browse row is composite-covered too.
+  // Directory picking: the composite pins the `browse` interaction (the host pins
+  // the same per spawn), so the picker-auto-mounted browse row is covered too.
   '@deepseek-ai/dsh-client-ui-directory-picker-browse',
   '@deepseek-ai/dsh-client-ui-permission-presets',
-  // The session-log export client is composite-covered (deferred)
-  // for the same reason as file-upload — its vendor bundle builds a same-origin
-  // absolute export URL (`/api/session.export`) that 404s under the N-ctx shell,
-  // and only a composite-bundled copy can carry the registered vendor patch.
+  // The session-log export client is composite-covered (deferred) for the same
+  // reason as file-upload: its vendor bundle builds a same-origin absolute export
+  // URL that 404s under the N-ctx shell.
   '@deepseek-ai/dsh-session-log-export',
   // chamber page-own skips (covered, no factory, never loaded into the chamber
-  // shell): the mobile adaptation is the GATEWAY deployment's single-shell
-  // surface — a desktop attached to a gateway-kind target must not preload it
-  // into the multi-shell page (its own header says its document-level effects
-  // are single-shell by design); the `native` directory-picker face can never
-  // win in the chamber shell because the host's picker interaction is pinned to
-  // `browse` (design 02 §3.9 / 05 §4) — loading it would double-register the
-  // same two single directoryFlow holes and fail the row.
+  // shell): mobile is the GATEWAY deployment's single-shell surface (its own
+  // header says its document-level effects are single-shell by design); the
+  // `native` directory-picker face can never win because the host's picker
+  // interaction is pinned to `browse`.
   '@dsh-chamber/dsh-client-ui-mobile',
   '@deepseek-ai/dsh-client-ui-directory-picker-native',
-  // ── deferred families (chamber-entry.ts registerDeferred dynamic
-  // imports, design 09 §4 baseline alignment): registered after the boot
-  // settles — composite-owned namespaces all the same, so a host-graph row
-  // for any of them would double-register the package on the same ctx.
+  // deferred families (registerDeferred dynamic imports): registered after the
+  // boot settles — composite-owned namespaces all the same, so a host-graph row
+  // would double-register the package on the same ctx.
   '@deepseek-ai/dsh-client-ui-attachment',
   '@deepseek-ai/dsh-client-ui-brand-official',
   '@deepseek-ai/dsh-client-ui-reference',
-  // ── C4 settings cluster (chamber-entry.ts
-  // ── registerDeferred): the official settings sections + the chamber
-  // ── settings shell & connections register after settle (official ui-settings
-  // ── itself stays first-screen — locale/ui-theme root-inject its
-  // ── settingsScope). Ids stay covered: loading any row again from the host
-  // ── graph would double-register once the deferred chunk registers it.
-  // ── 可观测瞬态仅「设置入口缺席 ≈1 chunk 往返」（页面首个实例首冷启一次
-  // ── 性；其后模块缓存同 tick 解析）；面板内容**就是**该来源 boot ctx 自己的
-  // ── settings.section 台账（完整桥接修订），因此受本簇时序门控：
-  // ── 未落地时面板显示「正在启动该实例的前端」中间态；簇级失败面见
-  // ── chamber-entry.ts registerDeferred 注释。
+  // C4 settings cluster (registerDeferred): the official settings sections + the
+  // chamber settings shell & connections register after settle; ui-settings itself
+  // stays first-screen. Ids stay covered: loading any row again would
+  // double-register once the deferred chunk registers it. The only observable
+  // transient is the settings entry being absent for ≈1 chunk round-trip; until
+  // it lands the panel shows the "starting that instance's frontend" state.
   '@deepseek-ai/dsh-client-ui-settings-general',
   '@deepseek-ai/dsh-client-ui-settings-models',
   '@deepseek-ai/dsh-client-ui-settings-plugins',
   '@deepseek-ai/dsh-client-ui-settings-plugin-inventory',
   '@dsh-chamber/dsh-chamber-client-ui-settings-connections',
   '@dsh-chamber/dsh-chamber-client-ui-settings-bridge',
-  // ── page-own rows (see header comment) ──
+  // page-own rows (see header comment)
   '@deepseek-ai/dsh-client-ui-sidebar',
-  // The official layout registration the chamber ui-layout fork REPLACES
-  // (design 06): the composite registers the fork into 'root', so loading
-  // the official bundle would register a second 'root' entry — a duplicate
-  // declaration of the same slot at the same priority, rejected by the
-  // one-declarer rule (ui-slots index.ts:800-803).
+  // The official layout registration the chamber ui-layout fork REPLACES: loading
+  // it would register a second 'root' entry — rejected by the one-declarer rule.
   '@deepseek-ai/dsh-client-ui-layout',
   '@deepseek-ai/dsh-client-modules',
-  // design 09 §4 baseline alignment: the renderer install lives in this row
-  // (the shell kernel adopts it — the boot mounts
-  // through the row's ctx.uiRenderer), so a second entry would install a
-  // second slot renderer / provide `uiRenderer` twice. NOT part of the
-  // composite: chamber-entry never imports it (page-own only, no factory).
+  // The renderer install lives in this row (the boot mounts through the row's
+  // ctx.uiRenderer), so a second entry would install a second slot renderer.
+  // Page-own only, no factory: chamber-entry never imports it.
   '@deepseek-ai/dsh-client-ui-renderer',
-  // The official dev-only HMR entry (dsh-client-hmr): its client fiber
-  // unconditionally opens `new EventSource('/plugins/events')` — an
-  // instance-origin-relative path the chamber page (control-plane origin)
-  // must never hit: the control plane's SPA fallback answers it with
-  // index.html (text/html), so every boot — and every EventSource
-  // reconnect, which never stops — logs the "MIME type is not
-  // text/event-stream" abort in the console. The chamber web profile has no
-  // usable hmr client channel (design 09; composite reloads are
-  // chamber-owned, chamber-entry.ts header), so the row is skipped, never
-  // loaded — page-own, no factory.
+  // The official dev-only HMR entry: its client fiber opens
+  // `new EventSource('/plugins/events')` on the instance-origin-relative path,
+  // which the control plane's SPA fallback answers as text/html — the chamber web
+  // profile has no usable hmr client channel, so the row is skipped, never loaded
+  // (page-own, no factory).
   '@deepseek-ai/dsh-client-hmr',
-  // The official open-in client row (ui-open-in-app).
-  // Fork & supersede (design 20 §2.2): our
-  // dsh-chamber-client-ui-open-in is a SUPERSET of this client and REPLACES
-  // its registration at the same conversation utility slot — an official row
-  // materialized from the host graph would add a second entry. Skipped like
-  // the other page-own official rows (ui-sidebar / ui-layout): our
-  // registration replaces the official one, and the local app catalog is
-  // served by our own instance host package
-  // (@dsh-chamber/dsh-chamber-seed-open-in), never by the official host half.
-  // Page-own, no factory.
+  // The official open-in client row: our dsh-chamber-client-ui-open-in is a
+  // SUPERSET of it and REPLACES its registration at the same conversation
+  // utility slot, so an official row from the host graph would add a second
+  // entry. Skipped like the other page-own official rows. Page-own, no factory.
   '@deepseek-ai/dsh-client-ui-open-in-app',
 ]
 
 /**
- * The first-screen families the chamber composite bundle statically imports
- * and registers a module-table factory for (design 09 §3.2 union table,
- * chamber-entry.ts COVERED_FACTORIES). This leaf list is the TESTABLE contract
- * behind the map (chamber-entry cannot be imported by the node test runner —
- * its namespaces resolve to source), kept in the covered module so the CI
- * lockstep test can assert every factory id is covered:
+ * The first-screen families the chamber composite statically imports and
+ * registers a module-table factory for (chamber-entry.ts COVERED_FACTORIES).
+ * This leaf list is the TESTABLE contract behind the map (chamber-entry cannot
+ * be imported by the node test runner):
  *
  *   every id here ∈ CHAMBER_COVERED_IDS (else the composite's own factory
  *   registration collides with the host-graph row's bundle — double register);
  *   chamber-entry asserts the map matches this list EXACTLY at execution.
  *
- * Maintenance: adding a first-screen family = one import + one map row in
- * chamber-entry.ts + one id here + one id in CHAMBER_COVERED_IDS (the header
- * discipline), in the same batch.
+ * Maintenance: one first-screen family = one import + one map row + one id here
+ * + one id in CHAMBER_COVERED_IDS, in the same batch.
  */
 export const CHAMBER_COVERED_FACTORY_IDS: readonly string[] = [
   '@deepseek-ai/dsh-client-connection',
   '@deepseek-ai/dsh-typert-registry',
   '@deepseek-ai/dsh-api-gateway',
   '@deepseek-ai/dsh-api-remotes',
-  // provider group: the
-  // store is a platform word (module-table seed — registered factory, no
-  // ctx.plugin: it is not a cordis plugin); the controllers and the three
-  // conversation families are first-screen plugins (chamber-entry.ts).
-  // C3: ui-primitives joins here — platform word the
-  // composite answers since the seed dropped it (see the CHAMBER_COVERED_IDS
-  // comment; factory only, never a ctx.plugin).
+  // provider group: the store is a platform word (registered factory, no
+  // ctx.plugin); the controllers and conversation families are first-screen
+  // plugins. C3: ui-primitives joins here — platform word the composite answers
+  // since the seed dropped it (factory only).
   '@deepseek-ai/dsh-client-store',
   '@deepseek-ai/dsh-client-ui-primitives',
-  // alpha.2: the docking-kit word answered by the composite factory.
+  // the docking-kit word answered by the composite factory.
   '@deepseek-ai/dsh-client-ui-dockkit',
   '@deepseek-ai/dsh-api-session-controller',
   '@deepseek-ai/dsh-api-workspace-controller',
@@ -266,22 +163,20 @@ export const CHAMBER_COVERED_FACTORY_IDS: readonly string[] = [
   '@dsh-chamber/dsh-chamber-client-ui-sidebar',
   '@dsh-chamber/dsh-chamber-client-ui-git',
   '@dsh-chamber/dsh-chamber-client-ui-open-in',
-  // ui-settings stays FIRST-SCREEN (C4 — locale/ui-theme
-  // root-inject its settingsScope); the C4-deferred settings sections + the
-  // chamber settings shell/connections have NO static factory (registered
-  // after settle from their deferred chunks — see CHAMBER_COVERED_IDS).
+  // ui-settings stays FIRST-SCREEN (C4 — locale/ui-theme root-inject its
+  // settingsScope); the deferred settings sections + chamber settings shell/
+  // connections have NO static factory (see CHAMBER_COVERED_IDS).
   '@deepseek-ai/dsh-client-ui-settings',
   '@deepseek-ai/dsh-client-ui-conversation',
-  // commands + input-trigger are first-screen covered factories:
-  // ui-model-selection's root inject requires commandUi from
-  // commands, commands requires inputTriggers from input-trigger — the three
-  // move as one (chamber-entry.ts import comments).
+  // commands + input-trigger are first-screen covered factories: model-selection
+  // needs commandUi from commands, commands needs inputTriggers from
+  // input-trigger — the three move as one.
   '@deepseek-ai/dsh-client-ui-commands',
   '@deepseek-ai/dsh-client-ui-input-trigger',
   '@deepseek-ai/dsh-client-ui-workspace',
   '@deepseek-ai/dsh-client-ui-model-selection',
-  // conversation families (decision D6: first-screen, so
-  // their factories must be registered before any loader entry materializes).
+  // conversation families (first-screen: factories must be registered before any
+  // loader entry materializes).
   '@deepseek-ai/dsh-client-ui-session',
   '@deepseek-ai/dsh-client-ui-chat',
   '@deepseek-ai/dsh-client-ui-approval',

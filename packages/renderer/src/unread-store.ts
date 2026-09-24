@@ -1,12 +1,14 @@
 /**
  * 未读 v4 落盘存储。
  *
- * v4 落盘载荷（旧的通知水位/事件序表已移除，只剩身份轨）：
- *   - 键：dsh-chamber.unread.v4 = { v:4, read, edge, notifiedRuns }（见 UnreadV4Payload）；
+ * v4 落盘载荷（身份轨 + goal 结算表）：
+ *   - 键：dsh-chamber.unread.v4 = { v:4, read, edge, notifiedRuns, pending, outcomes }；
  *   - read/sourceId/sessionId → host 域读水位（只升不降，max 合并）；
  *   - edge/sourceId/sessionId → true（边沿轨回退账本；重启后立即可渲染未读，不等网络）；
- *   - notifiedRuns/sourceId/sessionId → 最后一次已通知的 SessionRunId（迁移哨兵由
- *     v1/v2/v3 一次性读取时写入）。
+ *   - notifiedRuns/sourceId/sessionId → 最后一次已通知的 SessionRunId（v2 一次性迁移
+ *     对旧 notified/事件序表写哨兵 LEGACY_NOTIFIED_RUN_ID，认领后即被真实身份覆盖）；
+ *   - pending/sourceId/sessionId → 目标活跃期间被压制的完成结算位（complete-ledger v5）；
+ *   - outcomes/sourceId/goalId → 目标/中性标题的一次性身份水位。
  * 载荷**不得出现 title/cwd/消息内容**（隐私条）——键白名单锁在
  * test/session-state/unread-store.test.ts 里钉住。
  *
@@ -17,9 +19,7 @@
  * setItem 会 last-writer-wins 丢标记；App 侧只经本模块的 merge/prune/save
  * 三个可组合步骤写盘（App 持有内存权威，v4 是缓存）。
  *
- * v1（dsh-chamber.unread.v1）在 HEAD **没有任何写入者**，因此 v1 → v4 导入是
- * **防御性代码**（仍按「先写后删」顺序实现 + 单测，避免未来中间版本回退时
- * 丢账本），不是迁移承诺；v2/v3 是真实的历史版本，按一次性迁移读取。
+ * 迁移只保留 v2（main 已发布过的载荷）→ v4 的一次性读取；v1/v3 兼容分支已删除。
  *
  * `POST /read` / `/read-all` 的 ack 失败（网络错误 /
  * 5xx）进**有界内存待发表**（UNREAD_PENDING_MAX），facts 源每收到一帧服务端
@@ -32,18 +32,16 @@ import { createBoundedMap } from './bounded-ledger.ts'
 import { isWatermark, maxWatermarkValue } from './watermark.ts'
 import { LEGACY_NOTIFIED_RUN_ID, isSessionRunId } from './notification-identity.ts'
 import { isPlainRecord } from './plain-record.ts'
+import type { GoalOutcomeTable, PendingCompletion, PendingCompletionTable } from './complete-ledger.ts'
 
-/** v4 落盘键（唯一被持续写入的未读键；只有 read / edge / 通知运行身份）。 */
+/** v4 落盘键（唯一被持续写入的未读键；只有 read / edge / 通知运行身份 / goal 结算表）。 */
 export const UNREAD_V4_KEY = 'dsh-chamber.unread.v4'
-/** v3 键：只读一次并迁移（v4 写入成功后删除）。 */
-export const UNREAD_V3_KEY = 'dsh-chamber.unread.v3'
-/** v2 键：只读一次并迁移（v4 写入成功后删除；v2 与 v3 的旧表同构）。 */
+/** v2 键：唯一的历史读取键，一次性迁移到 v4 后删除（不再保留旧版本兼容分支）。 */
 export const UNREAD_V2_KEY = 'dsh-chamber.unread.v2'
-/** 防御性 v1 边沿账本键（HEAD 无写入者；只读一次 + 迁移后删）。 */
-export const UNREAD_V1_KEY = 'dsh-chamber.unread.v1'
+
 /** client-install id 键（首启生成一次；重装 = 新 id，旧标记由服务端 TTL 清理）。 */
 export const CLIENT_INSTALL_ID_KEY = 'dsh-chamber.client-install-id.v1'
-/** 每来源读标记上限（按水位 LRU；K3 有界增长）。 */
+/** 每来源读标记上限（按水位 LRU）。 */
 export const UNREAD_MAX_SESSIONS_PER_SOURCE = 500
 /** client-install id 语法（与 control-plane SESSION_STATE_CLIENT_ID_PATTERN 同形）。 */
 export const CLIENT_INSTALL_ID_PATTERN = /^[A-Za-z0-9._:-]{1,64}$/
@@ -55,8 +53,12 @@ export interface UnreadV4Payload {
   /** sourceId → sessionId → true（边沿轨回退账本 / 上次派生未读投影）。 */
   edge: Record<string, Record<string, boolean>>
   /** 身份 spine：sourceId → sessionId → 最后一次已通知的 SessionRunId
-   *  （或 v4 迁移哨兵 LEGACY_NOTIFIED_RUN_ID，认领后即被真实身份覆盖）。 */
+   *  （或 v2 迁移哨兵 LEGACY_NOTIFIED_RUN_ID，认领后即被真实身份覆盖）。 */
   notifiedRuns: Record<string, Record<string, string>>
+  /** sourceId → sessionId → 被压制的完成结算位（complete-ledger v5 的 durable 状态）。 */
+  pending: PendingCompletionTable
+  /** sourceId → goalId → 目标/中性标题一次性身份水位。 */
+  outcomes: GoalOutcomeTable
 }
 
 /** Storage 的结构子集（浏览器 localStorage 或测试假实现）。 */
@@ -67,7 +69,17 @@ export interface UnreadStorageLike {
 }
 
 export function emptyUnreadPayload(): UnreadV4Payload {
-  return { v: 4, read: {}, edge: {}, notifiedRuns: {} }
+  return { v: 4, read: {}, edge: {}, notifiedRuns: {}, pending: {}, outcomes: {} }
+}
+
+/** pending 表（缺字段 = 空表；sanitize 负责把坏项剥掉并 loud）。 */
+export function unreadPendingTable(payload: UnreadV4Payload): PendingCompletionTable {
+  return payload.pending ?? {}
+}
+
+/** outcomes 表（缺字段 = 空表）。 */
+export function unreadOutcomeTable(payload: UnreadV4Payload): GoalOutcomeTable {
+  return payload.outcomes ?? {}
 }
 
 /** 浏览器 localStorage 的安全访问器；不可用时 undefined（降级为纯内存）。 */
@@ -86,7 +98,6 @@ function warn(message: string, error?: unknown): void {
   console.warn('[unread] ' + message, error ?? '')
 }
 
-// ── 解析 / 清洗 ─────────────────────────────────────────────────────────────
 
 /** 宽松清洗：只留下合法键值，剥掉坏项（不整包丢弃）。 */
 export function sanitizeUnreadPayload(value: unknown): UnreadV4Payload {
@@ -121,7 +132,65 @@ export function sanitizeUnreadPayload(value: unknown): UnreadV4Payload {
     }
     if (Object.keys(table).length > 0) payload.notifiedRuns[sourceId] = table
   }
+  sanitizePendingTables(value, payload)
   return payload
+}
+
+/** pending / outcomes（v5 §3.1 增量）：缺字段 = 空 + loud；存在则逐字段校验。 */
+function sanitizePendingTables(value: Record<string, unknown>, payload: UnreadV4Payload): void {
+  if (value.pending === undefined) {
+    warn('unread payload has no pending table; treating it as empty')
+  } else if (!isPlainRecord(value.pending)) {
+    warn('unread payload.pending is not a table; treating it as empty')
+  } else {
+    for (const [sourceId, sessions] of Object.entries(value.pending)) {
+      if (!isPlainRecord(sessions)) {
+        warn('unread payload.pending[' + sourceId + '] is not a table; dropped')
+        continue
+      }
+      const table: Record<string, PendingCompletion> = {}
+      for (const [sessionId, entry] of Object.entries(sessions)) {
+        if (!isPlainRecord(entry)) {
+          warn('unread payload.pending entry ' + sourceId + '/' + sessionId + ' is not an object; dropped')
+          continue
+        }
+        if (typeof entry.at !== 'number' || !Number.isFinite(entry.at)) {
+          warn('unread payload.pending entry ' + sourceId + '/' + sessionId + ' has no finite at; dropped')
+          continue
+        }
+        const sanitized: PendingCompletion = { at: entry.at }
+        if (isWatermark(entry.watermark)) sanitized.watermark = entry.watermark
+        else if (entry.watermark !== undefined) warn('unread payload.pending entry ' + sourceId + '/' + sessionId + ' has an invalid watermark; field dropped')
+        if (typeof entry.goalId === 'string' && entry.goalId.length > 0) sanitized.goalId = entry.goalId
+        else if (entry.goalId !== undefined) warn('unread payload.pending entry ' + sourceId + '/' + sessionId + ' has an invalid goalId; field dropped')
+        // G4 延迟来源（评审 F5 阻断项 1）：deferred 是 pending 的 durable 身份，丢了它
+        // 同页 reload 后 busy 延迟的完成既不会中性释放、又可能被 #3 静默 drop——严格按
+        // 合法值拷贝；非法值只丢该字段，绝不整条丢弃（at 才是条目的成立条件）。
+        if (entry.deferred === 'subagent-busy') sanitized.deferred = 'subagent-busy'
+        else if (entry.deferred !== undefined) warn('unread payload.pending entry ' + sourceId + '/' + sessionId + ' has an invalid deferred; field dropped')
+        table[sessionId] = sanitized
+      }
+      if (Object.keys(table).length > 0) payload.pending[sourceId] = table
+    }
+  }
+  if (value.outcomes === undefined) {
+    warn('unread payload has no outcomes table; treating it as empty')
+  } else if (!isPlainRecord(value.outcomes)) {
+    warn('unread payload.outcomes is not a table; treating it as empty')
+  } else {
+    for (const [sourceId, goals] of Object.entries(value.outcomes)) {
+      if (!isPlainRecord(goals)) {
+        warn('unread payload.outcomes[' + sourceId + '] is not a table; dropped')
+        continue
+      }
+      const table: Record<string, number> = {}
+      for (const [goalId, watermark] of Object.entries(goals)) {
+        if (isWatermark(watermark)) table[goalId] = watermark
+        else warn('unread payload.outcomes entry ' + sourceId + '/' + goalId + ' is not a watermark; dropped')
+      }
+      if (Object.keys(table).length > 0) payload.outcomes[sourceId] = table
+    }
+  }
 }
 
 /**
@@ -151,32 +220,11 @@ function legacyNotifiedSessions(value: Record<string, unknown>): Record<string, 
   return runs
 }
 
-/** One-shot v1/v2/v3 → v4 conversion (schema fields + sentinel identity). */
+/** One-shot v2 → v4 conversion (identity sentinel + pending/outcomes tables). */
 function migrateLegacyPayload(value: Record<string, unknown>): UnreadV4Payload {
   const payload = sanitizeUnreadPayload(value)
   for (const [sourceId, sessions] of Object.entries(legacyNotifiedSessions(value))) {
     payload.notifiedRuns[sourceId] = { ...(payload.notifiedRuns[sourceId] ?? {}), ...sessions }
-  }
-  return payload
-}
-
-/** 防御性 v1 导入：v1 = { sourceId: { sessionId: true } }（边沿账本）。 */
-function payloadFromV1(raw: string | null): UnreadV4Payload {
-  const payload = emptyUnreadPayload()
-  if (raw === null || raw === '') return payload
-  try {
-    const value: unknown = JSON.parse(raw)
-    if (!isPlainRecord(value)) return payload
-    for (const [sourceId, sessions] of Object.entries(value)) {
-      if (!isPlainRecord(sessions)) continue
-      const table: Record<string, boolean> = {}
-      for (const [sessionId, armed] of Object.entries(sessions)) {
-        if (armed === true) table[sessionId] = true
-      }
-      if (Object.keys(table).length > 0) payload.edge[sourceId] = table
-    }
-  } catch {
-    return payload
   }
   return payload
 }
@@ -193,13 +241,19 @@ export function pruneEmptyUnreadTables(payload: UnreadV4Payload): UnreadV4Payloa
   for (const [sourceId, table] of Object.entries(payload.notifiedRuns)) {
     if (Object.keys(table).length > 0) next.notifiedRuns[sourceId] = table
   }
+  for (const [sourceId, table] of Object.entries(unreadPendingTable(payload))) {
+    if (Object.keys(table).length > 0) next.pending![sourceId] = table
+  }
+  for (const [sourceId, table] of Object.entries(unreadOutcomeTable(payload))) {
+    if (Object.keys(table).length > 0) next.outcomes![sourceId] = table
+  }
   return next
 }
 
 /**
- * 有界化（K3，按水位 LRU）：每来源 read 只保留水位最高的 maxPerSource 条；
- * edge/notified 与 read 同界（先保留 read 里出现的会话，再按插入序补足）。
- * 返回新对象（调用方负责写盘）。
+ * 有界化（按水位 LRU）：每来源 read 保留水位最高的 maxPerSource 条；edge/notifiedRuns
+ * 与 read 同界（先保留 read 里出现的会话，再按插入序补足），pending 同界，
+ * outcomes 按水位 LRU。返回新对象（调用方负责写盘）。
  */
 export function pruneUnreadPayload(payload: UnreadV4Payload, maxPerSource = UNREAD_MAX_SESSIONS_PER_SOURCE): UnreadV4Payload {
   if (maxPerSource <= 0) return emptyUnreadPayload()
@@ -245,20 +299,46 @@ export function pruneUnreadPayload(payload: UnreadV4Payload, maxPerSource = UNRE
     }
     if (Object.keys(kept).length > 0) next.notifiedRuns[sourceId] = kept
   }
+  // pending 与 read 同界：先保留 read 里出现的会话，再按插入序补足（同 edge/notified）。
+  for (const [sourceId, table] of Object.entries(unreadPendingTable(payload))) {
+    const read = next.read[sourceId] ?? {}
+    const keys = Object.keys(table)
+    const kept: Record<string, PendingCompletion> = {}
+    for (const sessionId of keys) {
+      if (Object.prototype.hasOwnProperty.call(read, sessionId)) kept[sessionId] = table[sessionId]
+      if (Object.keys(kept).length >= maxPerSource) break
+    }
+    for (const sessionId of keys) {
+      if (Object.keys(kept).length >= maxPerSource) break
+      if (kept[sessionId] !== undefined) continue
+      kept[sessionId] = table[sessionId]
+    }
+    if (Object.keys(kept).length > 0) next.pending![sourceId] = kept
+  }
+  // outcomes 以 goalId 为键（无法对齐 read 的 session 界）：每来源按水位 LRU 保留上限条。
+  for (const [sourceId, table] of Object.entries(unreadOutcomeTable(payload))) {
+    const entries = Object.entries(table)
+    if (entries.length <= maxPerSource) {
+      next.outcomes![sourceId] = { ...table }
+      continue
+    }
+    entries.sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
+    const kept: Record<string, number> = {}
+    for (const [goalId, watermark] of entries.slice(0, maxPerSource)) kept[goalId] = watermark
+    next.outcomes![sourceId] = kept
+  }
   return next
 }
 
-// ── 载入 / 保存（先写后删是 v1 迁移的契约） ─────────────────────────────────
+// ── 载入 / 保存 ────────────────────────────────────────────────────────────
 
 /**
  * 载入未读账本：
- *   1. v4 可解析且 v===4 ⇒ 逐字段清洗（坏字段就地剥掉），顺手清掉残留 v1；
- *   2. v4 缺失/损坏且 v3 或 v2 存在 ⇒ 一次性迁移：read/edge 携带，旧通知水位/
- *      事件序表折成身份哨兵（认领后不重发）；**先写 v4 再删旧键**（写失败保留旧键）；
- *   3. 都没有 ⇒ 若 v1 存在则防御性导入（只含 edge），同样先写 v4 再删 v1；
- *   4. 全无 ⇒ 空载荷。
- * 旧键读取器是升级路径本身；当任何受支持安装都不可能再带 v1/v2/v3 载荷时，
- * 删除这些读取器与 legacyNotifiedSessions 辅助函数。
+ *   1. v4 可解析且 v===4 ⇒ 逐字段清洗（坏字段就地剥掉）；
+ *   2. v4 缺失/损坏且 v2（main 已发布过的唯一历史载荷）存在 ⇒ 一次性迁移：
+ *      read/edge/pending/outcomes 携带，旧 notified / notifiedCompletionSeq 表折成
+ *      身份哨兵（认领后不重发）；**先写 v4 再删 v2**（写失败保留旧键，下次再试）；
+ *   3. 都没有 ⇒ 空载荷（本机内存仍是权威，App 由事实重算）。
  */
 export function loadUnread(storage: UnreadStorageLike | undefined): UnreadV4Payload {
   if (storage === undefined) return emptyUnreadPayload()
@@ -271,40 +351,19 @@ export function loadUnread(storage: UnreadStorageLike | undefined): UnreadV4Payl
     } catch { return null }
   }
   const current = version(UNREAD_V4_KEY, 4)
-  if (current !== null) {
-    try { storage.removeItem(UNREAD_V1_KEY) } catch { /* defensive v1 leftover */ }
-    return sanitizeUnreadPayload(current)
-  }
-  const previous = version(UNREAD_V3_KEY, 3) ?? version(UNREAD_V2_KEY, 2)
+  if (current !== null) return sanitizeUnreadPayload(current)
+  const previous = version(UNREAD_V2_KEY, 2)
   if (previous !== null) {
     const migrated = migrateLegacyPayload(previous)
     try {
       storage.setItem(UNREAD_V4_KEY, JSON.stringify(pruneUnreadPayload(migrated)))
-      storage.removeItem(UNREAD_V3_KEY)
       storage.removeItem(UNREAD_V2_KEY)
-      storage.removeItem(UNREAD_V1_KEY)
     } catch (error) {
-      warn('v3/v2 → v4 migration failed; keeping the previous journal for a later attempt', error)
+      warn('v2 → v4 migration failed; keeping the previous journal for a later attempt', error)
     }
     return migrated
   }
-  let raw1: string | null = null
-  try {
-    raw1 = storage.getItem(UNREAD_V1_KEY)
-  } catch {
-    raw1 = null
-  }
-  const imported = payloadFromV1(raw1)
-  if (raw1 !== null && raw1 !== '') {
-    // 顺序是契约：先写后删。写失败必须原样保留 v1（下次再试）。
-    try {
-      storage.setItem(UNREAD_V4_KEY, JSON.stringify(pruneUnreadPayload(imported)))
-      storage.removeItem(UNREAD_V1_KEY)
-    } catch (error) {
-      warn('v1 → v4 import failed; keeping v1 for a later attempt', error)
-    }
-  }
-  return imported
+  return emptyUnreadPayload()
 }
 
 /** 写盘（剪空表 + 有界化）；返回是否成功。never-throw。 */
@@ -319,12 +378,70 @@ export function saveUnread(storage: UnreadStorageLike | undefined, payload: Unre
   }
 }
 
-// ── 单调合并 / 推进 ─────────────────────────────────────────────────────────
+// ── immediate 落盘合并（热路径：同一 tick 多次 immediate ⇒ 一次全量写盘） ─────
 
 /**
- * 逐会话 max 合并（只升不降）。remote 缺席/坏值不改变本地；
- * 比较只用 host 域整数水位，客户端墙钟永不参与。
+ * immediate 落盘合并器（OPT P1 热路径）：voided / dropped / flushed 这类 durable 结算必须
+ * **立即**落盘（goal-aware v5 §3.5：1s 节流窗口内崩溃重放不得复活已作废的 pending），但
+ * 一批 reconcile 一拍内可产生多次 immediate，每次全量 prune + stringify（208KB 实测约
+ * 6.5ms）会钉住主线程；合并窗口取**微任务**（可注入以测试控时），同一 tick 的 N 次
+ * immediate 收敛成一次落盘，语义顺序由「落盘时读当时最新权威内存」保证（合并只推迟写，
+ * 不改变写内容）。flush 是**关键路径**（pagehide / visibilitychange hidden / unmount）：
+ * 取消待办并同步落盘一次——不丢、不重复；never-throw 由传入的 persist 负责（App 侧就是
+ * saveUnread 的 never-throw 出口）。
  */
+export interface UnreadSaveCoalescer {
+  /** 请求一次落盘；已有待办时合并（同一 tick 多次 request = 一次 persist）。 */
+  request(): void
+  /** 关键路径同步落盘：取消待办并立即 persist 一次（无待办也照常落盘）。 */
+  flush(): void
+  /** 取消待办（不落盘；teardown 用）。 */
+  cancel(): void
+  /** 是否有待办的合并窗口（诊断/测试）。 */
+  pending(): boolean
+}
+
+/** 合并窗口的调度器（默认微任务；测试注入手动队列）。 */
+export type UnreadSaveDefer = (run: () => void) => void
+
+/** 创建 immediate 落盘合并器；persist 必须是 never-throw 的落盘出口。 */
+export function createUnreadSaveCoalescer(
+  persist: () => void,
+  defer: UnreadSaveDefer = queueMicrotask,
+): UnreadSaveCoalescer {
+  let scheduled = false
+  let ticket = 0
+  /** 只执行仍属当前待办的那一次调度；flush/cancel 通过 ticket 使其作废。 */
+  const runScheduled = (at: number): void => {
+    if (!scheduled || at !== ticket) return
+    scheduled = false
+    persist()
+  }
+  return {
+    request(): void {
+      if (scheduled) return
+      scheduled = true
+      const at = ++ticket
+      defer(() => { runScheduled(at) })
+    },
+    flush(): void {
+      scheduled = false
+      ticket += 1
+      persist()
+    },
+    cancel(): void {
+      scheduled = false
+      ticket += 1
+    },
+    pending(): boolean {
+      return scheduled
+    },
+  }
+}
+
+// ── 单调合并 / 推进 ─────────────────────────────────────────────────────────
+
+/** 逐会话 max 合并（只升不降）：remote 缺席/坏值不改变本地；比较只用 host 域整数水位。 */
 export function mergeReadMarks(
   local: Readonly<Record<string, number>>,
   remote: Readonly<Record<string, number>> | undefined,
@@ -362,7 +479,6 @@ export function maxWatermark(
   return max
 }
 
-// ── client-install id ───────────────────────────────────────────────────────
 
 interface CryptoLike {
   randomUUID?: () => string
@@ -405,7 +521,6 @@ export function loadClientInstallId(
         }
       }
     } catch {
-      // 坏载荷 → 重新生成。
     }
   }
   const id = create()
@@ -419,21 +534,13 @@ export function loadClientInstallId(
   return id
 }
 
-// ── 上行 ack（POST /read、/read-all；只发 max，失败进有界待发表） ──────────
 
 /**
- * 待发 ack 队列上限（条目数；最坏内存 = 上限 × 单条 {clientId, sessionId, 水位}，
- * 不含任何会话内容）。为什么必须有界：离线 / 跨端竞态 / 网关重启期间每一次读
- * 推进都会产生一条 ack，不设界就是一个无界内存增长点。
- *
- * 淘汰策略（先合并、后 FIFO）：
- *   1. **同键合并**：键 = sourceId + 方法 + sessionId（read-all 无 sessionId）。
- *      同一键再次入队只保留水位更高的那条：服务端本身就是单调 max 合并
- *      （见 createUnreadAckOutbox 的幂等依据），更低的旧值被新值支配，
- *      因此合并不丢任何服务端可观察的信息；
- *   2. **FIFO 淘汰**：合并后仍超上限时，从**最久入队**的键开始丢，并报诊断。
- *      丢掉的只是"某会话某时刻的水位"：本机内存/落盘仍是权威，下次该会话读
- *      推进会重新入队。这是「内存有界优先于严格送达」的显式取舍，不是静默丢账。
+ * 待发 ack 队列上限（条目数；最坏内存 = 上限 × 单条 {sourceId, sessionId, 水位}，
+ * 不含任何会话内容）。必须有界：离线/跨端竞态/网关重启期间每次读推进都会产生一条 ack。
+ * 淘汰先同键合并（键 = sourceId + 方法 + sessionId；服务端本身单调 max 合并，只保留
+ * 水位更高的那条），再 FIFO 丢最久入队的键并报诊断。「内存有界优先于严格送达」的显式
+ * 取舍：本机内存/落盘仍是权威，下次读推进会重新入队。
  */
 export const UNREAD_PENDING_MAX = 64
 
@@ -442,23 +549,18 @@ export type UnreadAckMethod = 'read' | 'read-all'
 
 /** 一条待发 ack：url 与 payload 原样保存，重放与首次上行逐字节相同。 */
 export interface UnreadAckRequest {
-  /** 来源（归属 + 队列键的一半；facts 源每来源一个 outbox）。 */
   sourceId: string
   method: UnreadAckMethod
   url: string
   payload: Readonly<Record<string, unknown>>
-  /** 队列身份（同键合并 / 出队核对）。 */
   key: string
   /** 水位（read 的 readThrough / read-all 的 through）；同键比较与出队核对。 */
   watermark: number
 }
 
 /**
- * 单次上行结果：
- *   - `ok`：2xx（服务端已 max 合并；重复投递是 no-op）；
- *   - `retryable`：网络错误 / 5xx / 408 / 429——通道问题，重放有意义；
- *   - `permanent`：其余非 2xx（400/404/405/413…）——网关校验拒绝或路由不存在，
- *     重放不可能成功，出队并报诊断，避免毒条目永久占一个队位。
+ * 单次上行结果：`ok`=2xx（重复投递 no-op）；`retryable`=网络错误/5xx/408/429（重放有意义）；
+ * `permanent`=其余非 2xx（重放不可能成功，出队并报诊断，避免毒条目永久占位）。
  */
 export type UnreadAckOutcome = 'ok' | 'retryable' | 'permanent'
 
@@ -492,7 +594,7 @@ export async function sendUnreadRequest(
 
 export interface UnreadAckOutboxOptions {
   fetchImpl: typeof fetch
-  /** 队列上限（条目数）；默认 UNREAD_PENDING_MAX；测试注入小值。0 = 关闭队列。 */
+  /** 队列上限（条目数）；默认 UNREAD_PENDING_MAX，0 = 关闭队列。 */
   maxPending?: number
   /** 未确认 / 永久拒绝 / 溢出淘汰的诊断出口（warn 语义由调用方决定）。 */
   onError?: (error: unknown) => void
@@ -503,40 +605,23 @@ export interface UnreadAckOutbox {
   post(sourceId: string, method: UnreadAckMethod, url: string, payload: Record<string, unknown>): void
   /** 通道恢复钩子：FIFO 重放待发表；单飞（在途时返回同一 promise，绝不 reject）。 */
   replay(): Promise<number>
-  /** 待发条目数（诊断/测试）。 */
   size(): number
-  /** 待发表快照（副本；诊断/测试）。 */
   pending(): readonly UnreadAckRequest[]
 }
 
 /**
- * 有界待发 ack 队列（客户端待发请求的失败重放）。
+ * 有界待发 ack 队列（失败重放）。重放幂等安全：`POST /read` 与 `/read-all` 两侧都是逐条
+ * max 合并（同值重复写返回 changed:false，会话缺失也只回 200 + stored:false），上界由
+ * 服务端 host 时钟 clamp，因此重发同一或更落后的水位在任何顺序/次数下都不改变结果。
  *
- * **重放为什么幂等安全**（可核对的服务端依据，全部在仓内）：
- *   - `POST /read` → `mergeReadMark(existing, incoming) = max(existing, incoming)`
- *     （packages/control-plane/src/session-state-protocol.ts 的 mergeReadMark；
- *     gateway store.markRead 逐字使用它——同值重复写入返回 changed:false，
- *     会话不在服务端行表里也只回 200 + stored:false，不报错）；
- *   - `POST /read-all` → 源级 floor 同样 max 合并（protocol 的
- *     SESSION_STATE_READ_ALL_PATH 注释；gateway markAllRead 用 mergeReadMark，
- *     `next === readFloor` 直接返回 changed:false）；
- *   - 上界仍由服务端 host 时钟 clamp（clampReadThrough），重放旧值不会把未来读掉；
- *   - 因此"重发同一水位 / 重发落后的水位"在任何顺序 / 任何次数下都不改变服务端
- *     结果；队列可以放心地重复投递直到 2xx 出队。
- *
- * 出队用**对象身份**核对：发送/重放在途时同键可能已被更高水位替换（读水位只升
- * 不降），此时删除会丢新值，所以只在队列里仍是本次发送的那个对象时出队。
- * 入队先于发送（乐观入队）：在途请求即使丢失，条目仍在待发表里等下一次恢复信号。
+ * 出队用**对象身份**核对（在途时同键可能已被更高水位替换，删除会丢新值）；入队先于发送。
  */
 export function createUnreadAckOutbox(options: UnreadAckOutboxOptions): UnreadAckOutbox {
   const requested = options.maxPending
   const maxPending = requested === undefined || !Number.isSafeInteger(requested)
     ? UNREAD_PENDING_MAX
     : Math.max(0, requested)
-  /**
-   * 有界内核：Map 迭代序 = 入队序；同键覆盖走 delete+set ⇒ 该键
-   * 移到队尾（最近更新），FIFO 淘汰优先丢最久没更新的键；淘汰经 onEvict 报诊断。
-   */
+  /** 有界内核：Map 迭代序 = 入队序，同键覆盖移到队尾，FIFO 淘汰丢最久没更新的键并报诊断。 */
   const entries = createBoundedMap<UnreadAckRequest>({
     limit: maxPending,
     replace: (previous, next) => next.watermark > previous.watermark,
@@ -549,7 +634,6 @@ export function createUnreadAckOutbox(options: UnreadAckOutboxOptions): UnreadAc
     try {
       options.onError?.(error)
     } catch {
-      /* diagnostics are best-effort */
     }
   }
 
@@ -612,8 +696,7 @@ export function createUnreadAckOutbox(options: UnreadAckOutboxOptions): UnreadAc
       if (entries.size() === 0) return Promise.resolve(0)
       const run = (async (): Promise<number> => {
         let delivered = 0
-        // 快照迭代：重放期间新入队的条目留给下一次恢复信号，绝不为清空而自旋
-        // （通道仍坏时自旋只会在坏通道上打转）。
+        // 快照迭代：重放期间新入队的条目留给下一次恢复信号，绝不为清空而自旋。
         for (const request of [...entries.values()]) {
           if (entries.get(request.key) !== request) continue
           const result = await sendUnreadRequest(options.fetchImpl, request.url, { ...request.payload })

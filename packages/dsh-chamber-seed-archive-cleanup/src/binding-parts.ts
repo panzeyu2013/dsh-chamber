@@ -29,8 +29,7 @@ export interface RegistryWorkspaceLike {
 }
 
 /** The durable workspace domain state shape setState persists (registry
- *  `WorkspaceDomainState` minus the optional pendingMutation marker — the
- *  plain single-write shape its own `insertBefore` uses). */
+ *  WorkspaceDomainState minus the optional pendingMutation marker). */
 export interface RegistryDomainState {
   readonly initialized: boolean
   readonly workspaceIds: readonly string[]
@@ -42,8 +41,7 @@ export interface RegistryLike {
   list?(): readonly RegistryWorkspaceLike[]
   setState?(state: RegistryDomainState): Promise<unknown>
   /** Official per-instance mutation chain (private in the pinned tree but
-   *  runtime-guarded; running inside it serializes against every registry
-   *  write and its pendingMutation recovery). */
+   *  runtime-guarded; running inside it serializes against every registry write). */
   enqueueOperation?<T>(operation: () => Promise<T>): Promise<T>
 }
 
@@ -55,23 +53,19 @@ export interface HostCtxServices {
   readonly sessionPersistence?: {
     list?(signal?: unknown): Promise<readonly SessionHeaderLike[]>
     locate?(header: SessionHeaderLike): { kind?: string; path?: string } | undefined
-    /** Official single-session observation (`SessionPersistence.stat(id)`):
-     *  resolves the session across every project
-     *  directory and every immutable format generation, and answers
-     *  `undefined` when it does not exist — the sweep's DECISIVE
-     *  content-existence probe. Optional in this structural view so a
-     *  drifted/older host degrades to "never sweep" instead of crashing
-     *  (fail closed; see hasStoredContent below). */
+    /** Official single-session observation: resolves the session across every
+     *  project directory and every format generation, answering `undefined`
+     *  when it does not exist — the sweep's DECISIVE content-existence probe.
+     *  Optional so a drifted/older host degrades to "never sweep" instead of
+     *  crashing (fail closed). */
     stat?(id: string, options?: unknown): Promise<unknown>
   }
 }
 
-/** One official session header runtime shape check:
- *  every binding cascade keys on these fields through STRUCTURAL types — a
- *  vendor rename/retype (cwd/parentSession/origin) must fail the read LOUDLY
- *  with `registry-unreadable` (naming the session and field), never silently
- *  empty the lineage/deletion cascade. Absent OPTIONAL fields stay allowed
- *  (older records legitimately lack them). */
+/** One official session header runtime shape check: every binding cascade keys
+ *  on these fields through STRUCTURAL types, so a vendor rename/retype must
+ *  fail the read LOUDLY with `registry-unreadable`, never silently empty the
+ *  lineage/deletion cascade. Absent OPTIONAL fields stay allowed. */
 export function assertHeaderShape(header: unknown): void {
   if (header === null || typeof header !== 'object') {
     throw new ArchiveCleanupError(
@@ -100,12 +94,9 @@ export const LEASE_FILENAME = 'session.lock'
 
 /**
  * Is this version component canonical? Mirrors the vendor
- * `parseSessionFormatLogFilename` exactly: `[1-9][0-9]*` AND a safe integer
- * (vendor `Number.isSafeInteger` rejects an out-of-range version as
- * non-canonical). Without the upper bound the whitelist would call
- * `session.v99999999999999999999.jsonl` removable while the vendor calls it
- * non-canonical — the opposite of the fail-closed direction the surrounding
- * refusal relies on.
+ * `parseSessionFormatLogFilename`: `[1-9][0-9]*` AND a safe integer. Without
+ * the upper bound the whitelist would call an out-of-range version removable
+ * while the vendor calls it non-canonical — the opposite of fail-closed.
  */
 export function isCanonicalVersion(version: string | undefined): boolean {
   return version === undefined || Number.isSafeInteger(Number(version))
@@ -113,9 +104,9 @@ export function isCanonicalVersion(version: string | undefined): boolean {
 
 /**
  * Is this filename one canonical immutable generation artifact? Mirrors the
- * vendor `sessionFormatLogFilename` + compression suffix: `session.jsonl`,
- * `session.vN.jsonl` (N >= 1, no leading zero, safe integer) and either with a
- * trailing `.zstd`. Version-zero-tagged and non-canonical names do not match.
+ * vendor `sessionFormatLogFilename` + compression suffix: `session.jsonl` and
+ * `session.vN.jsonl` (N >= 1, no leading zero, safe integer), each optionally
+ * with `.zstd`. Version-zero-tagged and non-canonical names do not match.
  */
 export function isGenerationFilename(name: string): boolean {
   const match = /^session(?:\.v([1-9][0-9]*))?\.jsonl(?:\.zstd)?$/.exec(name)
@@ -123,12 +114,11 @@ export function isGenerationFilename(name: string): boolean {
 }
 
 /**
- * Is this filename a leftover generation temp file? The jsonl backend
- * publishes each generation via `link()`+`unlink()` from
- * `<generation>.<12 hex>.tmp` in the same directory, so an interrupted write
- * leaves one behind. It is this session's own artifact and belongs to the
- * purge; anything else in the directory still refuses the whole operation.
- * The version bound matches {@link isGenerationFilename}.
+ * Is this filename a leftover generation temp file? The jsonl backend publishes
+ * each generation via `link()`+`unlink()` from `<generation>.<12 hex>.tmp`, so
+ * an interrupted write leaves one behind — this session's own artifact, which
+ * belongs to the purge. The version bound matches {@link isGenerationFilename};
+ * anything else in the directory still refuses the whole operation.
  */
 export function isGenerationTempFilename(name: string): boolean {
   const match = /^session(?:\.v([1-9][0-9]*))?\.jsonl(?:\.zstd)?\.[0-9a-f]{12}\.tmp$/.exec(name)
@@ -136,12 +126,10 @@ export function isGenerationTempFilename(name: string): boolean {
 }
 
 /**
- * Is this filename a leftover MIGRATION staging file? The jsonl backend stages
- * a vN->vM migration as `session.migration.<16 hex>.jsonl[.zstd].tmp` in the
- * same Session directory (vendor `generation.ts` migration path; the token is
- * `randomBytes(8).toString('hex')`), so an interrupted migration leaves one
- * behind. It holds this session's own content (the migrated log), so the purge
- * removes it with the rest; anything else still refuses the whole operation.
+ * Is this filename a leftover MIGRATION staging file
+ * (`session.migration.<16 hex>.jsonl[.zstd].tmp`)? An interrupted migration
+ * leaves one behind; it holds this session's own content (the migrated log), so
+ * the purge removes it. Anything else still refuses the whole operation.
  */
 export function isMigrationTempFilename(name: string): boolean {
   return /^session\.migration\.[0-9a-f]{16}\.jsonl(?:\.zstd)?\.tmp$/.test(name)
@@ -150,9 +138,8 @@ export function isMigrationTempFilename(name: string): boolean {
 /* Binding implementation (design 24 §10: branch b, verified).     */
 
 export function headerToState(header: SessionHeaderLike): ArchivedSessionState {
-  // Standalone-entry shape guard — a drifted header must throw here too
-  // (listHeaders validates the raw intake; this keeps headerToState itself a
-  // loud boundary for any direct consumer).
+  // Standalone shape guard: a drifted header must throw here too, so
+  // headerToState stays a loud boundary for any direct consumer.
   assertHeaderShape(header)
   return {
     sessionId: header.id,
@@ -165,12 +152,10 @@ export function headerToState(header: SessionHeaderLike): ArchivedSessionState {
 }
 
 /**
- * Zero-IO structural surface check: the activation probe uses this so a
- * mounted-but-corrupt/missing
- * registry OR enumeration/storage surface fails the activation loudly
- * instead of passing presence while the first purge later
- * registry-unreadables/storages. Mirrors requireRegistry's checks; throws
- * ArchiveCleanupError('registry-unreadable', …) when a surface is wrong.
+ * Zero-IO structural surface check used by the activation probe: a
+ * mounted-but-corrupt/missing registry OR enumeration/storage surface fails
+ * activation loudly instead of passing presence and failing at the first purge.
+ * Mirrors requireRegistry's checks; throws `registry-unreadable`.
  */
 /** The registry surface the whole domain keys on: a missing/drifted shape refuses loudly. */
 export function requireRegistrySurface(registry: RegistryLike | undefined): RegistryLike {
@@ -187,25 +172,20 @@ export function requireRegistrySurface(registry: RegistryLike | undefined): Regi
 export function assertHostSurface(ctx: HostCtxServices): void {
   requireRegistrySurface(ctx.workspaceRegistry)
   // The liveness faces are load-bearing for the deletion guard: a
-  // mounted-but-methodless agents/sessions surface makes every later live read
-  // refuse (or silently read as idle), so the
-  // activation probe must fail HERE rather than at the first purge.
+  // mounted-but-methodless agents/sessions surface must fail HERE, not at the first purge.
   if (typeof ctx.agents?.list !== 'function' || typeof ctx.sessions?.list !== 'function') {
     throw new ArchiveCleanupError(
       'registry-unreadable',
       'archiveCleanup: the agents/sessions liveness surface is not mounted with list()',
     )
   }
-  // Surface health of the enumeration + storage legs too — a host whose
-  // registry is intact but whose session enumeration or
-  // locate surface is missing must not pass the probe. Zero-IO structural
+  // Surface health of the enumeration + storage legs too; zero-IO structural
   // checks only (no list call).
   const query = ctx.sessionQuery
   const persistence = ctx.sessionPersistence
   const canEnumerate = (query !== undefined && typeof query.listSessions === 'function')
     || (persistence !== undefined && typeof persistence.list === 'function')
-  // `locate` resolves the artifact directory and `stat` is the sweep's decisive
-  // existence probe; both are required by this domain (see hasStoredContent).
+  // `locate` resolves the artifact directory and `stat` is the decisive existence probe.
   if (!canEnumerate || persistence === undefined || typeof persistence.locate !== 'function'
     || typeof persistence.stat !== 'function') {
     throw new ArchiveCleanupError(
@@ -216,27 +196,19 @@ export function assertHostSurface(ctx: HostCtxServices): void {
 }
 
 /** Live-session facts (agents ∪ live store), split by WHY a session is live:
- *  `running` = the agent is executing a turn (never
- *  deletable); `loaded` = attached but idle (deletable only under `force`).
- *  A drifted agent status fails the read loudly instead of silently
- *  reclassifying a running agent as idle.
+ *  `running` = executing a turn (never deletable); `loaded` = attached but idle
+ *  (deletable only under `force`).
  *
- *  FAIL-CLOSED DRIFT POLICY (extended to the live-store leg):
- *  the same argument applies to `sessions.list()` — it is the LIVE LEG of the
- *  official session corpus (`SessionCorpus.listSessions` merges it with the
- *  durable scan), so an entry this read silently DROPS would (a) stop counting
- *  as `loaded` and (b) — since the residency report below is read from this
- *  very set — let the core clear the archived membership of a session the host
- *  still serves, i.e. un-hide a just-deleted row. A drifted shape therefore
- *  refuses the whole read (`registry-unreadable`, nothing deleted) exactly like
- *  a drifted agent entry, instead of degrading in the unsafe direction. */
+ *  FAIL-CLOSED DRIFT POLICY (both legs): a drifted agent status or an entry this
+ *  read silently DROPS would fail OPEN — reclassifying running as idle, removing
+ *  the loaded guard, and hiding an attached session from the residency report
+ *  (letting the core un-hide a just-deleted row). Any drift, or a missing face,
+ *  refuses the whole read (`registry-unreadable`, nothing deleted). */
 export function liveSessionFacts(ctx: HostCtxServices): { running: Set<string>; loaded: Set<string> } {
   const running = new Set<string>()
   const loaded = new Set<string>()
-  // Surface presence is part of the fail-closed policy: degrading a
-  // mounted-but-methodless face to "nobody is live" would silently remove BOTH
-  // the running/loaded guard and the residency report — fail-open on the
-  // destructive path. A missing face refuses exactly like a drifted entry shape.
+  // Surface presence is part of the policy: degrading a mounted-but-methodless
+  // face to "nobody is live" would silently fail-open on the destructive path.
   const listAgents = ctx.agents?.list
   if (typeof listAgents !== 'function') {
     throw new ArchiveCleanupError(
@@ -270,8 +242,7 @@ export function liveSessionFacts(ctx: HostCtxServices): { running: Set<string>; 
     if (status === 'running') running.add(id)
   }
   // A session attached to the live store is never a deletion candidate by
-  // default (it may be open/current even without a running agent); an
-  // explicit force purge may delete it after the caller stopped the run.
+  // default; an explicit force purge may delete it after the caller stopped the run.
   const listSessions = ctx.sessions?.list
   if (typeof listSessions !== 'function') {
     throw new ArchiveCleanupError(

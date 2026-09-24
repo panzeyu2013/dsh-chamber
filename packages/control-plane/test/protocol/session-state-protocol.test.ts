@@ -30,6 +30,7 @@ import {
   SESSION_STATE_STREAM_PATH,
   sessionStateFeatureSupport,
   sessionStateNoteKey,
+  type SessionStateDiagnostics,
   type SessionStateFeature,
   type SessionTurnEnd,
   type SessionTurnEndCause,
@@ -95,8 +96,55 @@ test('feature coverage net: every advertised feature is consciously listed', () 
     'session-state.host-clock',
     'session-state.dsh-events',
     'session-state.pending-graph',
+    'session-state.goal',
   ]
   assert.deepEqual([...SESSION_STATE_FEATURES].sort(), [...covered].sort())
+})
+
+// ---------------------------------------------------------------------------
+// Diagnostics shape（I6/I16 的加法面）
+// ---------------------------------------------------------------------------
+
+/**
+ * diagnostics.dropped 的键集单一来源：P2a 保留边的容量淘汰计数
+ * `goalActivations` 必须在协议声明里（gateway 发 4 键；旧端只读已知键）。
+ * 类型注解就是编译期断言——协议漏声明该键时 typecheck 直接红。
+ */
+const DIAGNOSTICS_DROPPED_KEYS = ['goalActivations', 'readClients', 'readMarks', 'sessions'] as const
+
+function assertDiagnosticsDroppedKeys(value: Record<string, number>, label: string): void {
+  assert.deepEqual(Object.keys(value).sort(), [...DIAGNOSTICS_DROPPED_KEYS], label + ': diagnostics.dropped key set drifted')
+}
+
+test('diagnostics dropped declares the additive goalActivations counter (P2a) and the tripwire can fail', () => {
+  const dropped: SessionStateDiagnostics['dropped'] = {
+    sessions: 1, readClients: 2, readMarks: 3, goalActivations: 4,
+  }
+  assertDiagnosticsDroppedKeys(dropped, 'declared shape')
+  // Negative control：同一键集闸门必须拒绝退回旧三键形状的 dropped。
+  assert.throws(
+    () => assertDiagnosticsDroppedKeys({ sessions: 1, readClients: 2, readMarks: 3 }, 'mutant old shape'),
+    /mutant old shape/,
+  )
+})
+
+test('classifier: session-state.goal is OPTIONAL — its absence never degrades', () => {
+  // The capability only promises the row.goal mirror (P2a). An older/newer
+  // descriptor that does not advertise it is still ok: the source simply has no
+  // goal facts (status quo). It must never join the required/base set.
+  assert.equal(
+    (SESSION_STATE_BASE_FEATURES as readonly string[]).includes('session-state.goal'),
+    false,
+    'session-state.goal must never be required',
+  )
+  const withoutGoal = SESSION_STATE_FEATURES.filter(feature => feature !== 'session-state.goal')
+  const verdict = probeOk({ ...OK_DESCRIPTOR, features: withoutGoal })
+  assert.equal(verdict.kind, 'ok')
+  assert.deepEqual(verdict.missingFeatures, [])
+  assert.equal(verdict.features.includes('session-state.goal'), false)
+  // The base set alone (no optional capability at all) still classifies ok.
+  const baseOnly = probeOk({ protocol: PROTOCOL_VERSION, features: [...SESSION_STATE_BASE_FEATURES], mode: 'poll', cursor: 1 })
+  assert.equal(baseOnly.kind, 'ok')
 })
 
 // ---------------------------------------------------------------------------

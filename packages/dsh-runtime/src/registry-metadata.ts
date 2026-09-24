@@ -1,17 +1,11 @@
 /**
- * npm registry metadata reader for the dsh runtime version channel (design 18
- * §4). Fetches the ABBREVIATED packument (`Accept:
- * application/vnd.npm.install-v1+json` — contains dist-tags.latest and
- * dist.{tarball,integrity,unpackedSize}) for a package and projects it into a
- * version list + latest recommendation.
- *
- * Pure logic (no IPC): `fetchRegistryMetadata` performs the fetch, the rest
- * is parsing. Network and JSON failures propagate to the caller (never
- * swallowed); missing/malformed `dist-tags.latest` falls back to the max
- * semver of the parsed versions, and a version entry without a usable
- * tarball plus supported SRI is excluded. The returned map is a runtime
- * read-only view (mutators throw)
- * typed ReadonlyMap, and each version entry is frozen: the metadata
+ * npm registry metadata reader for the dsh runtime version channel. Fetches the
+ * ABBREVIATED packument (`Accept: application/vnd.npm.install-v1+json` — dist-tags.latest
+ * and dist.{tarball,integrity,unpackedSize}) and projects it into a version list + latest
+ * recommendation. Pure logic: `fetchRegistryMetadata` performs the fetch, the rest is
+ * parsing; network/JSON failures propagate (never swallowed); a missing/malformed
+ * `dist-tags.latest` falls back to the max semver, and a version without a usable tarball
+ * plus supported SRI is excluded. The returned map and each entry are frozen — the
  * projection is immutable by contract.
  */
 export interface RegistryVersionInfo {
@@ -55,9 +49,8 @@ const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308])
 function safeUrlForError(raw: string): string {
   try {
     const url = new URL(raw)
-    // Renderer-visible errors need only identify the rejected origin — no path,
-    // which would otherwise be re-mangled by the shared path-redaction layer
-    // into a confusing `[path]` artifact.
+    // Renderer-visible errors identify only the rejected origin — no path, which the shared
+    // path-redaction layer would re-mangle into a confusing `[path]` artifact.
     return `${url.protocol}//${url.host}`
   } catch {
     return '<invalid registry URL>'
@@ -65,10 +58,10 @@ function safeUrlForError(raw: string): string {
 }
 
 /**
- * Fetch a registry resource without ever issuing an unvalidated redirect hop.
- * `fetch(..., redirect: 'manual')` is essential: validating `response.url`
- * after the default automatic redirect is too late to prevent an off-origin
- * request/SSRF. Every initial and redirected URL passes the same URL gate.
+ * Fetch a registry resource without ever issuing an unvalidated redirect hop:
+ * `redirect: 'manual'` is essential, since validating `response.url` after an automatic
+ * redirect is too late to prevent an off-origin request/SSRF. Every initial and redirected
+ * URL passes the same URL gate.
  */
 export async function fetchRegistryResponse(
   rawUrl: string,
@@ -160,12 +153,8 @@ export async function fetchRegistryMetadata(
   const origin = canonicalRegistryOrigin(rawOrigin)
   if (origin === null) throw new Error('invalid registry origin')
   const url = new URL(`/${packageName}`, origin)
-  // §6 URL whitelist: the request URL, the redirect's final origin, and every
-  // tarball must all pass the same gate (「切换源即切换信任边界」) — an
-  // off-origin/credentialed redirect or tarball is never fetched. Tarballs are
-  // pinned to the exact metadata origin plus the mirror's own tarball CDN
-  // (同源约束, §3.1): parseRegistryMetadata validates each tarball against the
-  // same allowedOrigins list, so a whitelisted mirror is only reachable when it
+  // §6 URL whitelist: the request URL, the redirect's final origin and every tarball pass
+  // the same gate (「切换源即切换信任边界」); a whitelisted mirror is only reachable when it
   // IS the configured source.
   if (!isAllowedRegistryUrl(url.toString(), [origin])) {
     throw new Error(`registry metadata URL 不在白名单：${url.toString()}`)
@@ -174,8 +163,8 @@ export async function fetchRegistryMetadata(
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error(`invalid registry timeout: ${timeoutMs}`)
   const deadline = createDeadline(opts?.signal, timeoutMs)
   try {
-    // Metadata is stricter than tarball delivery: a source selection is an
-    // exact trust anchor, so metadata redirects stay on that exact origin.
+    // Metadata is stricter than tarball delivery: a source selection is an exact trust
+    // anchor, so metadata redirects stay on that exact origin.
     const { response } = await fetchRegistryResponse(url.toString(), {
       allowedOrigins: [origin],
       signal: deadline.signal,
@@ -212,13 +201,11 @@ function parseRegistryMetadata(
   const rawVersions = packument.versions
   if (rawVersions !== null && typeof rawVersions === 'object' && !Array.isArray(rawVersions)) {
     for (const [version, entry] of Object.entries(rawVersions)) {
-      // Junk/非精确 semver 版本键（registry 受损或恶意响应）不得进入版本列表：
-      // 版本选择器只允许 registry 真实版本（§6），parse 期即排除，避免脏键
-      // 流入 UI 排序与 later 的安装路径。
+      // Junk/非精确 semver 版本键（registry 受损或恶意响应）不得进入版本列表或安装路径，
+      // parse 期即排除。
       if (!EXACT_SEMVER.test(version)) continue
-      // A version without a tarball/SRI (or an off-whitelist tarball — §6)
-      // cannot be installed — exclude it rather than recommending a version
-      // the installer must later reject.
+      // A version without a tarball/SRI (or an off-whitelist tarball) cannot be installed —
+      // exclude it rather than recommend one the installer must reject.
       const tarball = entry?.dist?.tarball
       if (typeof tarball !== 'string' || tarball === '' || tarball.length > 8192) continue
       if (!isAllowedRegistryUrl(tarball, allowedOrigins)) continue
@@ -232,10 +219,8 @@ function parseRegistryMetadata(
       byVersion.set(version, Object.freeze(info))
     }
   }
-  // Descending semver precedence from the package-wide comparator: the
-  // distance to version-safety.ts is what keeps the registry ordering, the
-  // selector ordering and the controller's downgrade predicate on one rule
-  // (build metadata ignored, numeric identifiers exact, release > prerelease).
+  // Descending semver precedence from the package-wide comparator keeps registry ordering,
+  // selector ordering and the controller's downgrade predicate on one rule.
   const versions = [...byVersion.keys()].sort((a, b) => compareSemverAsc(b, a))
   const latest = pickLatest(packument['dist-tags'], versions)
   return Object.freeze({
@@ -248,11 +233,9 @@ function parseRegistryMetadata(
 }
 
 /**
- * A runtime read-only view over a Map: `set` / `delete` / `clear` throw, all
- * other members delegate to the underlying map. `Object.freeze` alone cannot
- * protect a Map — its data lives in internal slots, not own properties, so a
- * frozen Map would still mutate silently. Methods are re-bound to the target
- * so the Map's internal-slot brand check keeps working through the proxy.
+ * A runtime read-only view over a Map: set/delete/clear throw, all other members delegate.
+ * `Object.freeze` cannot protect a Map — its data lives in internal slots, not own
+ * properties — and methods are re-bound to the target so the brand check keeps working.
  */
 function asReadonlyMap<K, V>(map: Map<K, V>): ReadonlyMap<K, V> {
   return new Proxy(map, {
@@ -262,9 +245,8 @@ function asReadonlyMap<K, V>(map: Map<K, V>): ReadonlyMap<K, V> {
           throw new TypeError('registry metadata is immutable')
         }
       }
-      // target as receiver so accessor properties (e.g. `size`, whose getter
-      // brand-checks `this`) run against the real Map; methods are re-bound to
-      // it so the internal-slot brand check keeps working through the proxy.
+      // target as receiver so accessor properties (e.g. `size`) brand-check the real Map;
+      // methods are re-bound so the internal-slot brand check works through the proxy.
       const value = Reflect.get(target, prop, target)
       return typeof value === 'function' ? value.bind(target) : value
     },
@@ -273,9 +255,8 @@ function asReadonlyMap<K, V>(map: Map<K, V>): ReadonlyMap<K, V> {
 
 function pickLatest(distTags: { latest?: unknown } | undefined, versions: readonly string[]): string | null {
   const latest = distTags?.latest
-  // Malformed = not a non-empty string, or a string that is not among the
-  // parsed versions (e.g. it points at an excluded tarball-less version) →
-  // fall back to the max semver; nothing parses at all → null.
+  // Malformed = not a non-empty string, or not among the parsed versions (e.g. it points at
+  // an excluded tarball-less version) → fall back to the max semver; nothing parses → null.
   if (typeof latest === 'string' && latest.length > 0 && versions.includes(latest)) {
     return latest
   }

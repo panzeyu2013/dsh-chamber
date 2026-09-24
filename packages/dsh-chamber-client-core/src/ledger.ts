@@ -1,24 +1,16 @@
 /**
- * Per-source ledger plumbing shared by the chamber echo/tombstone ledgers
- * (session echoes, archive tombstones, workspace echoes) and the membership
- * grace maps. A ledger is `Readonly<Record<sourceId, readonly T[]>>`.
- *
- * IDENTITY DISCIPLINE (why this module exists and what it must never break):
- * every helper is reference-preserving — an unchanged row set keeps the SAME
- * ledger object AND the same row array (the App's publish signature and
- * React's identity checks depend on it), a source whose rows become empty
- * loses its key (a ledger key must never linger as an empty array), and no
- * helper ever mutates its input. The concrete ledgers keep owning their row
- * shapes, TTLs and matching predicates; this module owns only the plumbing.
+ * Per-source ledger plumbing (`Readonly<Record<sourceId, readonly T[]>>`) shared by the chamber
+ * echo/tombstone ledgers and the membership grace maps. IDENTITY DISCIPLINE: every helper is
+ * reference-preserving — an unchanged row set keeps the SAME ledger object AND row array (React
+ * identity checks depend on it), an emptied source loses its key rather than lingering as `[]`,
+ * and no helper mutates its input. Row shapes, TTLs and predicates stay with the concrete ledgers.
  */
 
 /** One `sourceId -> rows` ledger. */
 export type Ledger<T> = Readonly<Record<string, readonly T[]>>
 
-/**
- * Replace one source's rows. An identical reference returns the ledger
- * unchanged; `undefined`/empty removes the key.
- */
+/** Replace one source's rows: an identical reference returns the ledger unchanged;
+ *  `undefined`/empty removes the key. */
 export function setLedgerRows<T>(ledger: Ledger<T>, sourceId: string, next: readonly T[] | undefined): Ledger<T> {
   const current = ledger[sourceId]
   if (next === current) return ledger
@@ -52,11 +44,8 @@ export function mapLedgerRows<T>(ledger: Ledger<T>, sourceId: string, map: (row:
   return changed ? setLedgerRows(ledger, sourceId, next) : ledger
 }
 
-/**
- * Drop expired rows from EVERY source (empty sources are removed).
- * `isExpired(row, sourceId)` is the ledger's TTL predicate.
- * Identity-preserving when nothing expires.
- */
+/** Drop expired rows from EVERY source (empty sources are removed); `isExpired(row, sourceId)`
+ *  is the TTL predicate. Identity-preserving when nothing expires. */
 export function sweepLedger<T>(ledger: Ledger<T>, isExpired: (row: T, sourceId: string) => boolean): Ledger<T> {
   let changed = false
   const next: Record<string, readonly T[]> = {}
@@ -84,11 +73,8 @@ export function forgetLedgerSources<T>(ledger: Ledger<T>, retired: ReadonlySet<s
   return changed ? next : ledger
 }
 
-/**
- * Forget Map keys whose source left `live` (the grace-map counterpart of
- * forgetLedgerSources; `sourceOf` extracts the source id from a key).
- * Mutates the caller-owned map and reports whether anything was removed.
- */
+/** Forget keys whose source left `live` (grace-map counterpart of {@link forgetLedgerSources});
+ *  mutates the caller-owned map and reports whether anything was removed. */
 export function forgetMapSources<K, V>(
   map: Map<K, V>,
   sourceOf: (key: K) => string,

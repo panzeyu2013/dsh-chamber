@@ -1,41 +1,14 @@
 /**
- * Boot-time early-open arm (design 05 §2.2). Runs inside ONE instance ctx,
- * driven by the sidebar
- * plugin's effect.
- *
- * Why it exists: a cold-booted shell runs the official workspace navigation
- * policy (`UiWorkspaceService.watchNavigation`), which — with no current
- * session, the normal case for an N-ctx shell — connects the most recent
- * workspace, REUSING or CREATING (host-side `session.create`) a blank session,
- * and opens it. The chamber App cannot compete from outside: its own dispatch
- * starts only after boot settlement. This arm runs inside the target ctx, so it
- * can act as early as the policy itself: it polls the page-wide open-intent slot
- * (arm/release owned by `App.openSession`) and opens the requested session the
- * moment it is addressable.
- *
- * Contract:
- * - NEVER reports an outcome: the App's dispatch owns the terminal report and
- *   the row-level error surface. The arm only preempts (`sessions.open` is
- *   idempotent) and gives up silently at its deadline.
- * - One open per arm, then done: after the preemption the shell is warm and the
- *   App's post-settle path is authoritative for every later request.
- * - A live-intent read (not a captured value): a newer click replaces the intent
- *   and a settled open clears it, so the arm always opens what the user last
- *   asked for and never opens a request the App already finished. An ABSENT
- *   slot is "not yet", not "never": the first attempt runs at plugin apply,
- *   before the user can click, so the arm keeps its cadence and retires at the
- *   deadline only (design 05 §2.2.1 gate 3) — see
- *   `attempt()`.
- * - A missing/throwing list face and a throwing probe retire the arm silently:
- *   the same ctx's runtime-facts producer already warns loudly for that defect,
- *   and the probe is best-effort by contract.
- *
- * The win condition is honest, not guaranteed: the policy needs BOTH baselines
- * (workspace follow + session list) while the arm only needs the session list,
- * so the arm wins whenever the workspace baseline lands later — common over a
- * tunnel, not certain. When the policy already resolved, the blank session
- * exists on the host and the chamber's view gates (projection + reveal) are
- * what keep it off screen.
+ * Boot-time early-open arm — one instance ctx, driven by the sidebar plugin's
+ * effect. The cold-booted shell's official workspace navigation policy REUSES
+ * or CREATES (host-side `session.create`) a blank session when no current
+ * session exists, and the App's dispatch starts only after boot settlement;
+ * this arm polls the page-wide open-intent slot (`App.openSession` owns
+ * arm/release) in the target ctx and preempts the policy as soon as the
+ * requested session is addressable. Contract: never reports an outcome (the
+ * App owns the terminal report and row-level error surface; `sessions.open`
+ * is idempotent); one open per arm; live-intent read (absent slot = "not
+ * yet"); a missing/throwing list face retires silently.
  */
 import {
   EARLY_OPEN_BUDGET_MS,
@@ -44,33 +17,26 @@ import {
 } from '@dsh-chamber/dsh-chamber-client-core/open-intent'
 
 export interface EarlyOpenArmDeps {
-  /** Chamber instance id of the ctx hosting this arm (log context). */
   instanceId: string
   /** Live intent read — never a captured value (see the contract above). */
   readIntent: () => string | undefined
   /**
-   * Whether one session id is addressable in this ctx. `undefined` means the
-   * list face is absent or hostile, or the probe itself threw (the arm retires
-   * silently); `false` means the face is readable but the session is not listed
-   * yet (keep polling).
-   * Deliberately a per-id probe rather than a materialized id set: the arm runs
-   * on a 50ms cadence and the session list can hold thousands of rows.
+   * `undefined` = the list face is absent/hostile or the probe threw (retire
+   * silently); `false` = readable but not listed yet (keep polling). A per-id
+   * probe rather than an id set: 50ms cadence, lists can hold thousands of rows.
    */
   isAddressable: (sessionId: string) => boolean | undefined
   /** Open on this ctx's OWN sessions service (method call, never a detached reference). */
   open: (sessionId: string) => void
   /** One loud line for a refused open (an unexpected state: the id was listed). */
   warn: (message: string) => void
-  /** Clock/timer seams (node tests drive them manually). */
   now?: () => number
   setTimer?: (callback: () => void, ms: number) => ReturnType<typeof setTimeout>
   clearTimer?: (handle: ReturnType<typeof setTimeout>) => void
 }
 
-/**
- * Start the arm: one immediate attempt, then the retry cadence until the
- * deadline. Returns the disposer (ctx teardown).
- */
+/** Start the arm: one immediate attempt, then the retry cadence until the
+ *  deadline. Returns the disposer (ctx teardown). */
 export function startEarlyOpenArm(deps: EarlyOpenArmDeps): () => void {
   const now = deps.now ?? (() => Date.now())
   const setTimer = deps.setTimer ?? ((callback, ms) => setTimeout(callback, ms))
@@ -96,13 +62,10 @@ export function startEarlyOpenArm(deps: EarlyOpenArmDeps): () => void {
       try {
         addressable = deps.isAddressable(intent)
       } catch {
-        // The probe is best-effort by contract, and this
-        // callback is a timer body — an escaped throw would kill the cadence
-        // silently (no further tick, no warning). Retire instead.
+        // 计时器回调里的逃逸异常会静默杀死节奏（无下一 tick、无告警），故退休。
         return finish()
       }
-      // Absent/hostile face ⇒ retire silently: this ctx's runtime-facts producer
-      // already warns loudly for the missing/hostile service face.
+      // 缺失/敌意面 ⇒ 静默退休：同 ctx 的 runtime-facts producer 已为此告警。
       if (addressable === undefined) return finish()
       if (shouldEarlyOpenSession(intent, addressable)) {
         try {
@@ -114,18 +77,10 @@ export function startEarlyOpenArm(deps: EarlyOpenArmDeps): () => void {
         return finish()
       }
     }
-    // An ABSENT intent is "not yet", never "never". The
-    // first attempt runs synchronously at plugin apply — BEFORE the user can
-    // click — and a background prewarm/harvest boot is the normal case there, so
-    // retiring on the first absent read would kill the arm for a boot already
-    // in flight when the user clicked: the official navigation policy would
-    // then create the blank session on the host, the exact cost this arm
-    // exists to avoid. Design 05 §2.2.1 gate 3 sanctions exactly TWO
-    // retirements — a successful open (above, or a refused one, whose outcome
-    // the App owns) and this 8s deadline — so an absent slot keeps the 50ms
-    // cadence. Cost: 160 cheap polls per boot
-    // (EARLY_OPEN_BUDGET_MS / EARLY_OPEN_RETRY_MS), each one a map read plus,
-    // only while an intent is live, one `byId` probe.
+    // 空意图是「尚未」而非「永不」：首次尝试在 plugin apply 时同步执行，早于
+    // 用户点击，预热/收割启动是常态；首次空读即退休会让已在飞行中的点击落空，
+    // 官方导航策略随后在 host 上创建空会话——正是本 arm 要避免的代价。只有
+    // 一次成功/被拒的 open 与 8s 截止时间终止本 arm，空槽保持 50ms 节奏。
     if (now() >= deadline) return finish()
     timer = setTimer(attempt, EARLY_OPEN_RETRY_MS)
   }

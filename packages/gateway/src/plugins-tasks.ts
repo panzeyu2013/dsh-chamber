@@ -1,52 +1,14 @@
 /**
- * A1 write-surface orchestrator (design 21 §6.2/§6.3): fuses the serial-queue
- * executor (plugins-exec.ts), the
- * durable journal (plugins-journal.ts) and the installed-profile
- * projection (plugins-installed.ts) behind the runtime-manager
- * single-writer lease (beginProfileWrite).
- *
- * Submit contract (install/remove/materialize):
- *   ① validate FIRST (whitelist family from the shared control-plane
- *      module + the shared protected-set/generation judgement (§6.11) +
- *      per-kind spec family + — for
- *      remove — membership in the CURRENT installed projection), then
- *   ② acquire the managed profile-write lease via the runtime manager; a
- *      refused lease maps to the existing /chamber/runtime 409 family, and
- *   ③ only with the lease held enqueue into the executor (its duplicate/full
- *      refusals pass through, releasing the lease again).
- *
- * Deferred intents: when the lease is refused because the runtime is busy or
- * pending (or the manager is not built yet, or the managed profile does not
- * exist yet), install/materialize submissions are PERSISTED as durable
- * deferred intents (<stateDir>/chamber-plugins/third-party/deferred.json —
- * same 0600 atomic no-follow discipline and corrupt-aside handling as the
- * journal, ≤ 64 KiB) and drained automatically on the next ready/degraded
- * edge (index.ts wiring). Remove is user-instant by design: it is NEVER
- * deferred, and recovery-phase refusals (runtime_recovery_required) are never
- * deferred either — only retry/restore are allowed there.
- *
- * Lease lifecycle: one lease per accepted op, held from enqueue acceptance
- * until the executor records the op's terminal state. The release rides the
- * executor's PER-OP terminal hook, registered at enqueue time — before the
- * worker can process the item — so a terminal that fires synchronously
- * inside enqueue (e.g. a pre-mutation backup failure) still releases the
- * lease exactly once. A lease count (not a bool) on the manager side lets
- * queued ops hold their leases concurrently; the executor's serial worker
- * keeps the actual DSH_HOME writes one at a time.
- *
- * dispose(): stops acceptance, kills the in-flight child and settles queued
- * ops as blocked (all terminals release their leases). The executor is
- * invalidated, not permanently destroyed: a later gateway start rebuilds it
- * lazily on the next successful lease (start-rollback retry shape).
- *
- * The dsh CLI launch is resolved PER SPAWN from the ACTIVE runtime workspace
- * (`resolveWorkspace()`, env → override → builtin anchor — the same source
- * control-plane spawns the managed instance from): node executable
- * (resolveNodeExecutable, shared with control-plane spawn-dsh) + the
- * workspace CLI entry (resolveDshCliEntry in @dsh-chamber/dsh-runtime
- * dsh-cli-entry.ts — the single home of the installed-entry/dev-source
- * markers). A runtime version switch
- * between ops can therefore never leave the queue spawning a stale entry.
+ * A1 write-surface orchestrator: serial-queue executor (plugins-exec.ts) +
+ * durable journal (plugins-journal.ts) + installed-profile projection
+ * (plugins-installed.ts), behind the runtime-manager single-writer lease.
+ * Submit order is validate -> lease -> enqueue (a refused lease maps to the
+ * /chamber/runtime 409 family); install/materialize refusals that could
+ * become acceptable later persist as deferred intents drained on the next
+ * ready/degraded edge, while remove and recovery-phase refusals never defer.
+ * One lease per accepted op is held until the executor records the terminal,
+ * and the dsh CLI is resolved PER SPAWN from the ACTIVE runtime workspace,
+ * never a stale entry.
  */
 
 import { existsSync, readdirSync, renameSync, rmSync } from 'node:fs'
@@ -82,32 +44,24 @@ import {
   type ChamberInstalled,
 } from './plugins-installed.ts'
 
-/** Deferred-intent store: file name under the third-party root. */
 export const DEFERRED_INTENTS_FILE = 'deferred.json'
-/** Bounded read/write ceiling for deferred.json (design 21 §6.9 discipline:
- * the store can never grow past ~64 KiB; appends beyond it are refused). */
+/** Bounded read/write ceiling for deferred.json: appends past it are refused. */
 export const DEFERRED_INTENTS_MAX_BYTES = 64 * 1024
 /** Materialize `file:` spec length cap (a staged absolute path plus prefix). */
 export const MATERIALIZE_FILE_SPEC_MAX_CHARS = 4096
 /** Maximum spec length on the registry install route (shared whitelist). */
 export const INSTALL_SPEC_MAX_CHARS = MAX_PLUGIN_SPEC_CHARS
-/** Drain-deadline bound (design 21 §6.9 default family): one drain run gives
- * up after this long and leaves the remaining intents to the next
+/** One drain run gives up after this long; leftovers wait for the next
  * ready/degraded edge (mirrors the single-op timeout). */
 export const DRAIN_DEADLINE_MS = 10 * 60 * 1000
 
 /**
  * Refusals that can never become acceptable by waiting: the drain drops the
- * intent (and records a failed op) instead of retrying it on every ready edge
- * forever. Everything else (queue/lease/runtime windows, missing manifest) is
- * retryable and stays deferred.
- *
- * `protected-set-unavailable` is deliberately NOT here: it means the gateway
- * could not derive the set yet — a runtime
- * lockfile that is momentarily unavailable, a workspace that does not resolve —
- * and both the HTTP mapping (`routes.ts`: 503, "the caller may retry once the
- * instance is up") and design 21 §6.11.3 call it a retryable gateway state.
- * Treating it as permanent would delete a queued install for good.
+ * intent (recording a failed op) instead of retrying forever; everything else
+ * (queue/lease/runtime windows, missing manifest) stays deferred.
+ * `protected-set-unavailable` is deliberately NOT here — the set may just not
+ * be derivable YET, and treating that as permanent would delete a queued
+ * install for good.
  */
 const PERMANENT_DRAIN_REFUSALS: ReadonlySet<PluginTaskRefusalCode> = new Set([
   'protected', 'needs-version', 'needs-exact-version', 'generation-mismatch',
@@ -115,8 +69,7 @@ const PERMANENT_DRAIN_REFUSALS: ReadonlySet<PluginTaskRefusalCode> = new Set([
   'not_installed',
 ])
 
-/** Durable deferred-install intent (install/materialize only; remove is
- * never deferred). */
+/** Durable deferred-install intent (install/materialize only). */
 export interface DeferredIntent {
   id: string
   ts: number
@@ -124,18 +77,15 @@ export interface DeferredIntent {
   name: string
   spec?: string
   /** Declared version (see JournalOp.version): without it a deferred
-   *  official-scope materialize is un-drainable — the submit gate answers
-   *  `needs-version` on every ready edge and the intent stays forever,
-   *  silently. */
+   *  official-scope materialize is un-drainable and stays forever. */
   version?: string
   initiator?: string
 }
 
 export type PluginTaskSubmitInput = JournalPending
 
-/** Refusals the orchestrator answers with (the route maps these to the
- * design 21 §6.2 HTTP family: invalid/reserved → 400, everything else 409;
- * runtime_* mirror the /chamber/runtime codes). */
+/** Refusals the orchestrator answers with (the route maps invalid/reserved to
+ * 400, everything else to 409; runtime_* mirror the /chamber/runtime codes). */
 export type PluginTaskRefusalCode =
   | 'queue_full'
   | 'queue_busy'
@@ -172,66 +122,48 @@ export interface PluginTaskTasksProjection {
 }
 
 /** The structural runtime-manager surface the orchestrator drives (kept
- * minimal so lifecycle fakes stay compatible; production is
- * GatewayRuntimeManager). */
+ * minimal so lifecycle fakes stay compatible). */
 export interface GatewayRuntimeManagerLike {
   beginProfileWrite(): ProfileWriteLease
   resolveWorkspace(): { path: string; version: string | null; source: string }
   profileWriteInFlight(): boolean
-  /** Runtime-mutation execution-window accessor (design 21 decision 6/7):
-   * true while a runtime mutation writer (activation/apply-now/rollback/
-   * restore/start/restart-exhausted rollback) is in flight. Wired as the
-   * executor's canRun gate. */
+  /** True while a runtime mutation writer is in flight (executor canRun gate). */
   mutationInFlight(): boolean
 }
 
 export interface ChamberPluginTasksDeps {
   stateDir: string
-  /** Lazy manager accessor: null before construction and after stop — a
-   * submission then defers (install/materialize) or refuses (remove). */
+  /** Lazy manager accessor; null before construction and after stop. */
   manager: () => GatewayRuntimeManagerLike | null
   /** Current connectionState projection ('starting'/'restarting' refuse). */
   statusProbe: () => string
   logger: JournalLogger
-  /** Installed-profile projection (remove membership + absent-profile
-   * deferral checks). */
+  /** Installed-profile projection (remove membership + deferral checks). */
   installed: ChamberInstalled
-  /** Injectable spawn seam (tests only; production spawns the real dsh CLI
-   * through the node executable resolution below). */
+  /** Injectable spawn seam (production spawns the real dsh CLI below). */
   spawn?: MutationSpawnFn
   timeoutMs?: number
-  /** Design 21 §6.3 "装完自动受控 restart 一次": after ≥1 drained intent's
-   * op ran to ok, the orchestrator asks the wiring layer for ONE controlled
-   * managed-dsh restart (mounts the freshly installed plugins). The wiring
-   * lambda owns every gate (ready/degraded, recovery/pending phases, lease
-   * and restart single-flight) and must NOT throw — a closed gate is a
-   * skip, never an error. Absent (unit harnesses) → no restart is asked. */
+  /** After ≥1 drained op ran to ok, asks for ONE controlled managed-dsh restart
+   * (mounts the freshly installed plugins). The wiring lambda owns every gate
+   * and must NOT throw — a closed gate is a skip, never an error. Absent →
+   * no restart is asked. */
   restartManaged?: () => Promise<void>
 }
 
 export interface ChamberPluginTasks {
-  /** Startup reconciliation: journal pending ops from a previous run →
-   * failed (preImage retained). Called once by the wiring layer at
-   * construction. A corrupt journal is NOT an empty one: the "no pending
-   * operations carried over" judgement is suppressed and the unknown pending
-   * set is reported loudly. */
+  /** Startup reconciliation: previous run's pending ops → failed (preImage
+   * retained). A corrupt journal is NOT empty: the "no pending operations
+   * carried over" judgement is suppressed and the pending set reported loudly. */
   reconcileJournal(): void
-  /** Boot-time staged-archive orphan sweep — called once by the wiring
-   * layer right AFTER reconcileJournal, when the executor is idle and no
-   * route can be staging concurrently. Executed materialize ops RETAIN
-   * their staged archive (the profile manifest keeps its file: spec), so
-   * re-materialize/remove cycles would otherwise leave archives nothing
-   * references; this reclaims *.tgz files under the third-party root that
-   * neither the managed profile manifest, a deferred intent, nor a live
-   * (non-terminal) journal op references. Growth stays bounded by manifest
-   * references + in-flight work; referenced files are never touched.
-   * Deletion is licensed ONLY by successfully read reference sources: an
-   * unreadable manifest (oversized/symlinked/permissions) or a corrupt
-   * journal leaves references unknown and skips the sweep entirely. */
+  /** Boot-time staged-archive orphan sweep, called once right AFTER
+   * reconcileJournal (executor idle, no concurrent staging). Reclaims *.tgz
+   * files under the third-party root that no manifest, deferred intent or live
+   * journal op references; executed materialize ops RETAIN their archive. Only
+   * successfully read sources license deletion — an unreadable manifest or a
+   * corrupt journal skips the whole sweep. */
   sweepOrphanedStagedArchives(): void
-  /** Validate → lease → enqueue (or defer), per the module header. Throws
-   * ONLY on deferred-store persistence failure (the route maps that to 500
-   * persistence_failed, mirroring the sync-upload convention); every input/
+  /** Validate → lease → enqueue (or defer). Throws ONLY on deferred-store
+   * persistence failure (mapped to 500 persistence_failed); every input or
    * runtime refusal is a result. */
   submit(input: PluginTaskSubmitInput, opts?: { defer?: boolean }): Promise<PluginTaskSubmitResult>
   /** Projection for GET /chamber/plugins/tasks. */
@@ -240,17 +172,12 @@ export interface ChamberPluginTasks {
   deferredIntents(): DeferredIntent[]
   /** Remove one deferred intent by id. Returns true when it existed. */
   clearIntent(intentId: string): boolean
-  /** Re-submit every deferred intent (ready-edge drain; index wiring).
-   * Deferral is bypassed — a refused lease leaves the intent in place.
-   * Serialized: concurrent calls collapse into the running drain. Drains in
-   * WAVES paced by the executor queue cap (queue_full refusals wait for a
-   * live-op slot before the next wave). Returns the number of intents
-   * cleared (accepted ops move from the deferred store into the journal as
-   * pending ops). When ≥1 drained op ran to ok, one controlled restart is
-   * requested through deps.restartManaged (design 21 §6.3). */
+  /** Re-submit every deferred intent (ready-edge drain); deferral is bypassed
+   * (a refused lease leaves the intent) and concurrent calls collapse into the
+   * running drain. Drains in WAVES paced by the queue cap, returning the number
+   * cleared; after ≥1 drained op ran ok, one restart is requested. */
   drainDeferred(): Promise<number>
-  /** Stop acceptance, kill the in-flight child, settle queued ops blocked,
-   * release every held lease. Idempotent; safe to call before any op ran. */
+  /** Stop acceptance, kill the in-flight child, settle queued ops blocked, release every held lease. Idempotent. */
   dispose(): Promise<void>
 }
 
@@ -276,26 +203,19 @@ function validateSubmission(input: PluginTaskSubmitInput, deps: ChamberPluginTas
   }
 
   /**
-   * Protected-set judgement (design 21 §6.11): the gateway is the AUTHORITY
-   * for a gateway target — the family facts live here (the desktop cannot
-   * derive them), the decision is op-phased (remove never judges a version)
-   * and an official-scope install must pin this instance's exact generation.
-   * The runtime version fact source is the same resolveWorkspace() the
-   * /chamber/runtime/status projection reports (design 18 §9.3).
+   * Protected-set judgement: the gateway is the AUTHORITY for a gateway target
+   * — family facts live here, the decision is op-phased (remove never judges a
+   * version) and an official-scope install must pin this instance's exact
+   * generation from the same resolveWorkspace() as /chamber/runtime/status.
    */
   const decide = (op: 'install' | 'remove', version: string | null): ValidationOutcome | null => {
     const manager = deps.manager()
-    // Gateway start window (no manager yet) and corrupt runtime metadata (the
-    // resolver throws): there are no family facts to be had. Judge with the
-    // DEGRADED ladder (B₀ ∪ S + official-scope installs refused) instead of
-    // skipping the judgement — a protected name must not sit in the deferred
-    // store until some later edge silently drops it.
-    // `manager.resolveWorkspace()` throws on corrupt override/pointer metadata
-    // (design 18), and that throw must not escape submit() as a 500: the
-    // resolution below runs behind a guarded accessor, so the throw is logged
-    // and degrades the ladder. One resolution per judgement
-    // (resolveJudgementInputs): the protected set and the runtime version fact
-    // come from the SAME snapshot.
+    // Gateway start window (no manager) and corrupt runtime metadata (the
+    // resolver throws): judge with the DEGRADED ladder (B₀ ∪ S + official-scope
+    // installs refused) rather than skip the judgement — a protected name must
+    // not sit in the deferred store until a later edge silently drops it. The
+    // resolver's throw must not escape as a 500, so it runs behind a guarded
+    // accessor; one resolution per judgement (resolveJudgementInputs).
     const inputs = resolveJudgementInputs(() => {
       if (manager === null) return null
       try {
@@ -306,10 +226,9 @@ function validateSubmission(input: PluginTaskSubmitInput, deps: ChamberPluginTas
         return null
       }
     })
-    // F underivable (missing/unparseable runtime lockfile+tree) ⇒ conservative
-    // ladder, not a blanket refusal: official-scope installs are refused
-    // (stronger than the generation check), B₀ ∪ S still protects, and
-    // third-party ops keep working (design 21 §6.11.3).
+    // F underivable ⇒ conservative ladder, not a blanket refusal:
+    // official-scope installs are refused (stronger than generation), B₀ ∪ S
+    // still protects, and third-party ops keep working.
     const decision = decidePluginMutation({
       op,
       name,
@@ -317,8 +236,7 @@ function validateSubmission(input: PluginTaskSubmitInput, deps: ChamberPluginTas
       runtimeVersion: inputs.runtimeVersion,
       derivation: inputs.derivation,
       // The profile-absent defer is decided by the callers' own projection
-      // checks (which also carry the corrupt/absent evidence); this judgement
-      // is about the NAME, so it runs with the profile assumed initialized.
+      // checks; this judgement is about the NAME, profile assumed ready.
       profileState: 'ready',
       familySource: inputs.familySource,
     })
@@ -332,10 +250,8 @@ function validateSubmission(input: PluginTaskSubmitInput, deps: ChamberPluginTas
       return { kind: 'refuse', code: 'invalid_spec', error: 'remove does not take a spec' }
     }
     // Membership is checked against the CURRENT installed projection: a
-    // manifest that cannot prove the plugin installed refuses removal
-    // (proxy honesty — never a silent no-op). Absent profile → no_manifest
-    // (nothing to verify); corrupt profile → no_manifest with the corrupt
-    // evidence (only the gateway log carries the detail).
+    // manifest that cannot prove the plugin installed refuses removal (never a
+    // silent no-op); absent/corrupt profile → no_manifest.
     const projection = installed.read()
     if (!projection.ok) {
       const error = projection.code === 'profile_absent'
@@ -343,12 +259,9 @@ function validateSubmission(input: PluginTaskSubmitInput, deps: ChamberPluginTas
         : 'managed profile is corrupted; cannot verify installed plugins'
       return { kind: 'refuse', code: 'no_manifest', error }
     }
-    // Removal is judged by P alone (never by a version): a protected
-    // composition/seed/family name cannot be removed through the plugin model,
-    // and a mismatched-generation official row can always be removed. This runs
-    // BEFORE the membership check so the refusal is the informative one: "this
-    // name can never be removed through this surface" outranks "it is not
-    // currently installed" (which is mutable profile state).
+    // Removal is judged by P alone (never by a version), and BEFORE the
+    // membership check: "this name can never be removed" outranks "not
+    // currently installed" (mutable profile state).
     const refused = decide('remove', null)
     if (refused !== null) return refused
     if (projection.dependencies[name] === undefined) {
@@ -376,10 +289,8 @@ function validateSubmission(input: PluginTaskSubmitInput, deps: ChamberPluginTas
     }
     const refused = decide('install', registrySpecVersion(spec))
     if (refused !== null) return refused
-    // The managed profile does not exist yet (fresh gateway, dsh never
-    // spawned): the mutation would fail against an absent manifest — defer
-    // the intent until a ready edge has created the profile (design 21
-    // §6.2: profile missing → deferred).
+    // The managed profile does not exist yet: the mutation would fail against
+    // an absent manifest — defer until a ready edge has created the profile.
     const projection = installed.read()
     if (!projection.ok && projection.code === 'profile_absent') return { kind: 'defer-profile-absent' }
     return { kind: 'ok' }
@@ -397,15 +308,13 @@ function validateSubmission(input: PluginTaskSubmitInput, deps: ChamberPluginTas
     return { kind: 'refuse', code: 'invalid_spec', error: 'materialize file: spec must be an absolute path' }
   }
   // Defense in depth: only gateway-staged paths under the third-party root
-  // may reach `dsh plugin add file:…` (the route stages under this root with
-  // the private-file discipline; submit callers cannot smuggle other paths).
+  // may reach `dsh plugin add file:…` — callers cannot smuggle others.
   const root = thirdPartyRoot(deps.stateDir)
   const check = relative(root, stagedPath)
   if (check === '' || check.startsWith('..') || isAbsolute(check)) {
     return { kind: 'refuse', code: 'invalid_spec', error: 'materialize file: spec must be under the gateway staging root' }
   }
-  // The staged archive's declared version rides the submit input (the route
-  // reads it from x-plugin-version; a `file:` spec carries no version).
+  // The staged archive's declared version rides the submit input (a `file:` spec carries none).
   const refused = decide('install', typeof input.version === 'string' && input.version !== '' ? input.version : null)
   if (refused !== null) return refused
   const projection = installed.read()
@@ -420,21 +329,16 @@ export function createChamberPluginTasks(deps: ChamberPluginTasksDeps): ChamberP
   const journal = createPluginsJournal(stateDir, logger)
   const deferredFilePath = (): string => join(thirdPartyRoot(stateDir), DEFERRED_INTENTS_FILE)
 
-  /** Single-flight guard for drainDeferred (see drain). */
   let drainInFlight: Promise<number> | null = null
-  /** Live executor; null between dispose() and the next lease-backed submit
-   * (lazy rebuild — see the module header). */
+  /** Live executor; null between dispose() and the next lease-backed submit. */
   let executor: PluginExec | null = null
 
-  // Deferred intent store (deferred.json; same 0700/0600 no-follow
-  // discipline as the journal, corrupt evidence renamed aside, ≤ 64 KiB)
+  // Deferred intent store: deferred.json, same 0700/0600 no-follow + corrupt-aside discipline as the journal, ≤ 64 KiB.
 
   /** Corruption observed on the deferred store by THIS instance (sticky): the
    * staged specs of the lost intents are unknown, so the boot sweep must not
-   * treat them as "nothing references those archives"
-   * (the same read-source discipline as the profile manifest). */
+   * read them as "nothing references those archives". */
   let deferredStoreCorrupt = false
-  /** Unresolved `deferred.json.corrupt-*` evidence from earlier runs. */
   let deferredPriorEvidence: string[] | null = null
   function deferredCorruptionEvidence(): string[] {
     if (deferredPriorEvidence === null) {
@@ -466,8 +370,7 @@ export function createChamberPluginTasks(deps: ChamberPluginTasksDeps): ChamberP
   function loadIntents(): DeferredIntent[] {
     let text: string | null
     try {
-      // Absent file (ENOENT) is the only empty answer; any other read failure
-      // is corrupt evidence handled below.
+      // Absent file (ENOENT) is the only empty answer; anything else is corrupt evidence.
       text = readPrivateTextOrNull(deferredFilePath(), {
         tightenMode: 0o600,
         requiredMode: 0o600,
@@ -513,8 +416,7 @@ export function createChamberPluginTasks(deps: ChamberPluginTasksDeps): ChamberP
     atomicWritePrivateFileNoFollow(deferredFilePath(), text, { mode: 0o600 })
   }
 
-  /** Append one durable intent; throws when the store is full or unwritable
-   * (the caller maps persistence failure to 500 persistence_failed). */
+  /** Append one durable intent; throws when the store is full or unwritable (caller maps to 500 persistence_failed). */
   function appendDeferredIntent(input: PluginTaskSubmitInput): DeferredIntent {
     const intent: DeferredIntent = { id: randomUUID(), ts: Date.now(), kind: input.kind as 'install' | 'materialize', name: input.name }
     if (input.spec !== undefined) intent.spec = input.spec
@@ -525,9 +427,8 @@ export function createChamberPluginTasks(deps: ChamberPluginTasksDeps): ChamberP
   }
 
   function recordRefusedIntent(intent: DeferredIntent, refusal: { code: string; error: string }): void {
-    // Best effort: the journal is the operator-visible record (GET
-    // /chamber/plugins/tasks). A journal write failure is logged, never thrown
-    // into the drain loop.
+    // Best effort: the journal is the operator-visible record; a write failure
+    // is logged, never thrown into the drain loop.
     try {
       const opId = journal.appendPending({
         kind: intent.kind,
@@ -550,11 +451,9 @@ export function createChamberPluginTasks(deps: ChamberPluginTasksDeps): ChamberP
     return true
   }
 
-  /** Projection masking (design 21 §6.2/decision 18): gateway-
-   * local `file:` spec values (the materialize staging path) must never
-   * leave this module toward the renderer — the readManifest discipline
-   * applies to the tasks/deferred projections too. The mask keeps the
-   * `file:` prefix so classifiers still recognise a materialize value. */
+  /** Gateway-local `file:` spec values (materialize staging paths) must never
+   * leave this module toward the renderer. The mask keeps the `file:` prefix so
+   * classifiers still recognise a materialize value. */
   function maskProjectedSpec(spec: string | undefined): string | undefined {
     if (spec === undefined) return undefined
     return isFileValue(spec) ? MATERIALIZED_VALUE_MASK : spec
@@ -562,17 +461,10 @@ export function createChamberPluginTasks(deps: ChamberPluginTasksDeps): ChamberP
 
   /** Remove a materialize op's staged archive ONLY when nothing can ever
    * consume it again: a cleared deferred intent never ran, so no manifest
-   * references its staged file (the dsh CLI writes the manifest only while
-   * executing). Terminal EXECUTED ops deliberately RETAIN their staged
-   * archive — the dsh CLI permanently records `file:<staged>` in the
-   * profile manifest + pnpm lockfile, and any later re-resolution (a
-   * profile reinstall after a runtime version switch, pnpm deciding the
-   * lockfile is stale, node_modules pruning) fetches that exact path again;
-   * deleting it at the terminal would leave the manifest pointing at a
-   * missing tarball (the same reason the desktop ssh flow keeps every
-   * uploaded archive under ~/.dsh-chamber/plugins — "kept, never cleaned").
-   * Best effort, guarded to the gateway staging root; the op itself is
-   * unaffected by a failed unlink. */
+   * references its file. Terminal EXECUTED ops deliberately RETAIN theirs — the
+   * manifest permanently records `file:<staged>` and a later re-resolution
+   * (reinstall, lockfile staleness, pruning) fetches that path again, so
+   * deleting it would leave a dangling tarball reference. Best effort. */
   function unlinkStagedArchive(spec: string | undefined): void {
     if (spec === undefined || !isFileValue(spec)) return
     const stagedPath = spec.slice('file:'.length)
@@ -586,11 +478,10 @@ export function createChamberPluginTasks(deps: ChamberPluginTasksDeps): ChamberP
     }
   }
 
-  /** Kill one crash-orphaned mutation child recorded on a pending journal op
-   * (design 21 §6.3): a gateway crash mid-mutation leaves the
-   * detached `dsh plugin`/pnpm process group writing DSH_HOME. The group
-   * (negative pid — the child is its leader) is killed first, then the pid
-   * itself. Best effort; the reconcile never fails over a kill. */
+  /** Kill one crash-orphaned mutation child recorded on a pending journal op:
+   * a crash mid-mutation leaves the detached `dsh plugin`/pnpm process group
+   * writing DSH_HOME. The group (negative pid — child is its leader) is killed
+   * first, then the pid itself. Best effort; never fails the reconcile. */
   function killOrphanedChild(pid: number): void {
     if (!Number.isInteger(pid) || pid <= 1) return
     for (const target of [-pid, pid]) {
@@ -607,41 +498,34 @@ export function createChamberPluginTasks(deps: ChamberPluginTasksDeps): ChamberP
 
   // Executor lifecycle + lease bookkeeping
 
-  /** Lazy executor construction (see the module header). The spawn command
-   * is the resolved NODE executable; the per-op argv prefix (node args +
-   * workspace CLI entry) and cwd come from cliLaunch, resolved per spawn so
-   * a runtime version switch between ops is always followed. */
+  /** Lazy executor construction. The spawn command is the resolved NODE
+   * executable; the per-op argv prefix (node args + workspace CLI entry) and
+   * cwd come from cliLaunch, resolved per spawn. */
   function getExecutor(): PluginExec {
     if (executor !== null) return executor
     const nodeExec = resolveNodeExecutable()
     executor = createPluginsExec({
       stateDir,
-      // The real command is the node executable (Electron-run gateway shapes
-      // are out of scope: the gateway server runs under plain node). The
-      // entry rides the per-op argv prefix below.
+      // The real command is the node executable (the gateway server runs under
+      // plain node); the entry rides the per-op argv prefix below.
       dshCliPath: nodeExec.file,
       journal,
       statusProbe: deps.statusProbe,
       logger,
       spawn: deps.spawn,
       timeoutMs: deps.timeoutMs,
-      // Execution-window gate (design 21 decision 6/7): a queued op is only
-      // dequeued into a spawn when NO runtime mutation writer is in flight.
-      // Ops already hold the profile-write lease; this guards the F7/
-      // activation windows so a queued op never spawns mid-transaction (the
-      // executor waits out the window within its bounded canRun poll before
-      // marking the op blocked — see plugins-exec.ts awaitRunWindow). A null
-      // manager (not built yet) has no runtime window to violate — submit
-      // already refused/deferred before anything reached the queue.
+      // Execution-window gate: a queued op dequeues into a spawn only when NO
+      // runtime mutation writer is in flight, so it never spawns mid-transaction
+      // (the executor waits out the window in its bounded canRun poll). A null
+      // manager has no window to violate — submit refused/deferred first.
       canRun: () => {
         const manager = deps.manager()
         return manager === null || !manager.mutationInFlight()
       },
-      // Per-op runtime facts (design 21 §6.11.3/§6.11.4): the same workspace the
-      // ops launch from, so both the execution-time re-judgement and the
-      // post-install verdict describe the tree the mutation actually touched.
-      // A throwing resolver (corrupt metadata) is the CALLER's contract to
-      // guard — plugins-exec catches it and degrades loudly.
+      // Per-op runtime facts: the same workspace the ops launch from, so both
+      // the execution-time re-judgement and the post-install verdict describe
+      // the tree the mutation actually touched. A throwing resolver (corrupt
+      // metadata) is the CALLER's contract to guard.
       runtimeFacts: () => {
         const manager = deps.manager()
         if (manager === null) return null
@@ -658,9 +542,8 @@ export function createChamberPluginTasks(deps: ChamberPluginTasksDeps): ChamberP
         if (resolved === null) {
           throw new Error(`no dsh CLI entry found in ${workspace.path}`)
         }
-        // nodeExec.args covers the Electron-run-node edge (--expose-internals;
-        // plain node adds nothing). The tsx loader rides --import for the dev
-        // source shape, exactly like control-plane spawn-dsh.
+        // nodeExec.args covers the Electron-run-node edge; the tsx loader
+        // rides --import for the dev source shape (as control-plane spawn-dsh).
         const prefix = [...nodeExec.args]
         if (resolved.viaTsx) prefix.push('--import', 'tsx/esm', resolved.entry)
         else prefix.push(resolved.entry)
@@ -676,14 +559,7 @@ export function createChamberPluginTasks(deps: ChamberPluginTasksDeps): ChamberP
     onTerminal?: (status: 'ok' | 'failed' | 'blocked') => void,
   ): Promise<PluginTaskSubmitResult> {
     // The lease release rides the op's terminal hook, registered BEFORE the
-    // worker can process the item — a terminal that fires synchronously
-    // inside enqueue (pre-mutation backup failure, CLI resolution failure)
-    // releases the lease exactly once; the queue's serial worker keeps
-    // DSH_HOME writes one at a time under the count-based manager fence.
-    // Executed materialize ops RETAIN their staged archive (the profile
-    // manifest keeps its file: spec — see unlinkStagedArchive); the drain
-    // path passes an extra terminal callback (design 21 §6.3 auto-restart
-    // once after drained installs).
+    // worker can process the item; even a synchronous terminal releases once.
     const result = await getExecutor().enqueue(input, (_op, status) => {
       try {
         release()
@@ -707,19 +583,16 @@ export function createChamberPluginTasks(deps: ChamberPluginTasksDeps): ChamberP
   }
 
   /**
-   * The undo verb's acceptance path (design 21 §6.3/§6.8 r2; the §6.2 route
-   * POST /chamber/plugins/undo): undo = RESTORE, never remove-only. Undo is
-   * NEVER deferred — the honest answers are the 4xx/409 family (nothing to
-   * undo / corrupt journal / writer in flight) or a queued 202. The target is
-   * selected here and bound to the journal op (`undoOf`); the executor
-   * re-verifies that binding at execution. */
+   * The undo verb's acceptance path: undo = RESTORE, never remove-only. Undo is
+   * NEVER deferred — the honest answers are the 4xx/409 family or a queued 202.
+   * The target is selected here and bound to the journal op (`undoOf`), which
+   * the executor re-verifies at execution. */
   async function submitUndo(
     input: PluginTaskSubmitInput,
     onTerminal?: (status: 'ok' | 'failed' | 'blocked') => void,
   ): Promise<PluginTaskSubmitResult> {
-    // Corruption ≠ emptiness (the journal module's rule): a corrupt record
-    // set cannot prove "nothing is undoable", so the answer is the gateway's
-    // own retryable 503, never a confident no_undoable_op.
+    // Corruption ≠ emptiness: a corrupt record set cannot prove "nothing is
+    // undoable", so the answer is the retryable 503, never no_undoable_op.
     const integrity = journal.integrity()
     if (integrity.state === 'corrupt') {
       return {
@@ -736,12 +609,10 @@ export function createChamberPluginTasks(deps: ChamberPluginTasksDeps): ChamberP
         error: 'gateway runtime manager is not initialized; retry when the managed instance is up',
       }
     }
-    // Single-flight FIRST (design 21 §6.3): an undo restores whole-file state,
-    // so it must never race another profile writer. A writer in flight is the
-    // retryable 409 family — the caller re-reads the task projection and
-    // retries after the running operation settles. The check precedes target
-    // selection on purpose: under a writer the target set is mid-change, so
-    // "busy" is the only honest answer (never a confident no_undoable_op).
+    // Single-flight FIRST: undo restores whole-file state, so it must never
+    // race another profile writer. The check precedes target selection on
+    // purpose — under a writer the target set is mid-change, so "busy" is the
+    // only honest answer (never a confident no_undoable_op).
     if (manager.profileWriteInFlight()) {
       return {
         ok: false,
@@ -779,8 +650,7 @@ export function createChamberPluginTasks(deps: ChamberPluginTasksDeps): ChamberP
     }
     if (outcome.kind === 'defer-profile-absent') {
       // The managed profile does not exist yet: defer install/materialize
-      // until a ready edge has created it (design 21 §6.2); the drain/retry
-      // path leaves the intent instead of looping.
+      // until a ready edge creates it; defer disabled answers no_manifest.
       if (!allowDefer) {
         return { ok: false, code: 'no_manifest', error: 'managed profile is not initialized' }
       }
@@ -791,9 +661,8 @@ export function createChamberPluginTasks(deps: ChamberPluginTasksDeps): ChamberP
 
     const manager = deps.manager()
     if (manager === null) {
-      // Runtime manager not built yet (gateway start window). install/
-      // materialize persist as deferred intents; remove is user-instant
-      // and refuses (never deferred).
+      // Runtime manager not built yet (gateway start window): install/
+      // materialize defer; remove refuses.
       if (allowDefer && input.kind !== 'remove') {
         const intent = appendDeferredIntent(input)
         log(`plugins-tasks: deferred ${input.kind} ${input.name} (${intent.id}); gateway runtime is starting`)
@@ -805,8 +674,7 @@ export function createChamberPluginTasks(deps: ChamberPluginTasksDeps): ChamberP
     const lease = manager.beginProfileWrite()
     if (!lease.ok) {
       if (lease.code === 'runtime_recovery_required' || input.kind === 'remove') {
-        // Recovery phases expose only their matching retry/restore; remove
-        // is user-instant. Neither is ever deferred.
+        // Recovery phases expose only retry/restore; remove is user-instant — neither defers.
         return { ok: false, code: lease.code, error: lease.error }
       }
       if (allowDefer) {
@@ -822,11 +690,9 @@ export function createChamberPluginTasks(deps: ChamberPluginTasksDeps): ChamberP
   return {
     reconcileJournal() {
       const reconciled = journal.reconcile()
-      // A corrupt journal answers [] from reconcile() exactly like an empty
-      // one, but its pending-operation set — and with it every recorded
-      // childPid — is UNKNOWN. Never claim "no pending operations carried
-      // over" for it: say so loudly, and skip every judgement that would
-      // rest on "nothing is pending".
+      // A corrupt journal answers [] exactly like an empty one, but its
+      // pending set — and every recorded childPid — is UNKNOWN. Never claim
+      // "no pending operations carried over" for it.
       const integrity = journal.integrity()
       const corrupt = integrity.state === 'corrupt'
       if (corrupt) {
@@ -843,28 +709,20 @@ export function createChamberPluginTasks(deps: ChamberPluginTasksDeps): ChamberP
       } else if (!corrupt) {
         log('plugins-tasks: journal reconciled; no pending operations carried over')
       }
-      // Crash-orphan reaping (design 21 §6.3): a pending op that
-      // recorded a spawned child pid means the previous gateway process died
-      // mid-mutation — its detached `dsh plugin`/pnpm child may still be
-      // writing DSH_HOME. Kill it before any new mutation can start. Only
-      // records that were actually READ are reaped: a corrupt journal carries
-      // no trustworthy pid at all.
+      // Crash-orphan reaping: a pending op with a spawned child pid means the
+      // previous process died mid-mutation and its detached `dsh plugin`/pnpm
+      // child may still be writing DSH_HOME — kill it before any new mutation.
+      // Only records actually READ are reaped; a corrupt journal has no pid.
       for (const op of reconciled) {
         if (op.childPid !== undefined) killOrphanedChild(op.childPid)
       }
     },
 
     sweepOrphanedStagedArchives() {
-      // Boot-only: after journal reconciliation the executor is idle and no
-      // route can stage concurrently, so the referenced-set below is stable.
-      // Collect every path something can still consume:
-      //  1. the managed profile manifest's file: dependency targets;
-      //  2. deferred intents' staged specs (they drain at the next ready
-      //     edge — their archives must survive);
-      //  3. live (non-terminal) journal ops' staged specs.
-      // A reference set is trustworthy only when every source was READ
-      // successfully — "could not read it" is never "nothing references it".
-      // Delete nothing when a source is unknown.
+      // Boot-only: the executor is idle and no route can stage concurrently, so
+      // the reference set below is stable. Referenced = manifest file: targets +
+      // deferred intents' staged specs + live journal ops' staged specs; a set
+      // is trustworthy only when every source was READ.
       const integrity = journal.integrity()
       if (integrity.state === 'corrupt') {
         warn(
@@ -877,18 +735,16 @@ export function createChamberPluginTasks(deps: ChamberPluginTasksDeps): ChamberP
       const manifestPath = join(stateDir, MANAGED_DSH_HOME_DIR, INSTALLED_PROFILE_DIR, 'package.json')
       let manifestText: string | null = null
       try {
-        // Absent manifest (fresh gateway before the first materialize) is the
-        // ONE empty answer the sweep trusts: nothing can be referenced through
-        // it — intents/ops below still protect their own. Any other failure is
-        // rethrown by the shared wrapper.
+        // Absent manifest (fresh gateway) is the ONE empty answer the sweep
+        // trusts; intents/ops below still protect their own. Any other failure
+        // is rethrown by the shared wrapper.
         manifestText = readPrivateTextOrNull(manifestPath, {
           tightenMode: 0o600,
           maxBytes: INSTALLED_MANIFEST_MAX_BYTES,
         })
       } catch (error) {
         // Present but unreadable/unsafe (permissions, symlinked dir/leaf,
-        // oversized): the read face calls this profile_corrupt, and a read
-        // failure must never license deletion.
+        // oversized): a read failure must never license deletion.
         warn(
           'plugins-tasks: staged-archive sweep skipped: the managed profile manifest is present but ' +
           `unreadable (${messageOf(error)}); refusing to read that as "nothing is referenced" — staged archives are retained`,
@@ -914,20 +770,17 @@ export function createChamberPluginTasks(deps: ChamberPluginTasksDeps): ChamberP
           return
         }
         const dependencies = (parsed as { dependencies?: unknown }).dependencies
-        // Read-face parse shape (plugins-installed.ts): a missing/non-object
-        // `dependencies` member means "no declared dependencies", not corrupt.
+        // Read-face parse shape: a missing/non-object `dependencies` member means "no declared dependencies", not corrupt.
         if (dependencies !== null && typeof dependencies === 'object' && !Array.isArray(dependencies)) {
           for (const spec of Object.values(dependencies as Record<string, unknown>)) {
             if (typeof spec === 'string' && isFileValue(spec)) referenced.add(spec.slice('file:'.length))
           }
         }
       }
-      // The deferred store is a reference source too, and its corrupt path
-      // collapses to "no intents" exactly like the manifest's did: read it
-      // FIRST (the read may move corrupt bytes aside), then refuse the whole
-      // sweep if this run or an earlier one observed corruption — deleting
-      // here could destroy the only archive a lost deferred materialize can
-      // still consume.
+      // The deferred store is a reference source too: read it FIRST (the read
+      // may move corrupt bytes aside), then refuse the whole sweep if this run
+      // or an earlier one observed corruption — a lost deferred materialize's
+      // archive may depend on it.
       const intents = loadIntents()
       if (deferredStoreCorrupt || deferredCorruptionEvidence().length > 0) {
         warn(
@@ -944,11 +797,9 @@ export function createChamberPluginTasks(deps: ChamberPluginTasksDeps): ChamberP
           referenced.add(op.spec.slice('file:'.length))
         }
       }
-      // Walk the staging root: *.tgz directly under each first-level dir
-      // (slug dirs from the materialize route; backups/ and deferred.json
-      // carry no archives and are left untouched by the .tgz filter). A
-      // fresh gateway has no staging root yet — that is a silent no-op, not
-      // a warning (boot hygiene: this runs on every boot).
+      // Walk the staging root: *.tgz directly under each first-level slug dir
+      // (backups/ and deferred.json carry no archives). A fresh gateway has no
+      // root yet — a silent no-op, not a warning.
       const root = thirdPartyRoot(stateDir)
       if (!existsSync(root)) return
       let removed = 0
@@ -988,10 +839,8 @@ export function createChamberPluginTasks(deps: ChamberPluginTasksDeps): ChamberP
     },
 
     tasks() {
-      // file: spec values are masked in the outward projection (gateway-local
-      // paths never reach the renderer — design 21 decision 18/§6.2) and
-      // childPid (a LIVE HOST PROCESS id of a pending mutation) never leaves
-      // this module either.
+      // file: spec values are masked in the outward projection and childPid
+      // (a LIVE HOST PROCESS id of a pending mutation) never leaves this module.
       const tasks = journal.recent().map(op => {
         const projected = { ...op }
         delete projected.childPid
@@ -1013,11 +862,9 @@ export function createChamberPluginTasks(deps: ChamberPluginTasksDeps): ChamberP
     },
 
     clearIntent(intentId) {
-      // A cleared intent NEVER executed, so its staged archive is the one
-      // case nothing can consume (no manifest references it — executed ops
-      // retain their archive, see unlinkStagedArchive); a persistence
-      // failure still answers false and leaves the archive for a later
-      // sweep.
+      // A cleared intent NEVER executed, so its staged archive is the one case
+      // nothing can consume; executed ops retain theirs. Persistence failure
+      // still answers false and leaves the archive for a later sweep.
       const dropped = loadIntents().find(intent => intent.id === intentId)
       try {
         if (!dropDeferredIntent(intentId)) return false
@@ -1030,22 +877,18 @@ export function createChamberPluginTasks(deps: ChamberPluginTasksDeps): ChamberP
     },
 
     async drainDeferred() {
-      // Single-flight: concurrent drains (overlapping ready edges) collapse
-      // into the running drain; each intent is re-submitted at most once per
-      // drain round and the lease serializes the executor anyway. When ≥1
-      // drained op ran to ok, one controlled restart is requested through
-      // deps.restartManaged (design 21 §6.3 "装完自动受控 restart 一次" — a
-      // plugin installed onto a RUNNING instance only mounts on the next
-      // spawn).
+      // Single-flight: concurrent drains collapse into the running one; each
+      // intent is re-submitted at most once per round and the lease serializes
+      // the executor anyway. A plugin installed onto a RUNNING instance only
+      // mounts on the next spawn, hence the one controlled restart when ≥1
+      // drained op ran to ok.
       if (drainInFlight !== null) return drainInFlight
       const run = (async (): Promise<number> => {
         let cleared = 0
-        // Restart-once semantics (design 21 §6.3 "装完自动受控 restart 一次"):
-        // the request fires only after EVERY drained op of this run went
-        // terminal AND at least one ran ok — requesting at the FIRST ok
-        // terminal would race the still-pending drained ops (their
-        // profile-write leases keep the wiring gate closed and the single
-        // attempt would be lost).
+        // Restart-once: the request fires only after EVERY drained op of this
+        // run went terminal AND at least one ran ok — requesting at the first
+        // ok terminal would race still-pending ops whose leases keep the
+        // wiring gate closed, losing the single attempt.
         let acceptedInRun = 0
         let anyOkInRun = false
         let restartRequested = false
@@ -1065,17 +908,14 @@ export function createChamberPluginTasks(deps: ChamberPluginTasksDeps): ChamberP
           if (status === 'ok') anyOkInRun = true
           acceptedInRun -= 1
           if (acceptedInRun <= 0 && anyOkInRun && !restartRequested) {
-            // All drained ops of this run settled — no plugin-write lease of
-            // this run can keep the restart gate closed anymore.
+            // All drained ops settled — no lease of this run holds the gate closed.
             requestRestartNow()
           }
         }
         // Wave pacing against the executor queue cap: a round submits every
-        // stored intent; queue_full refusals (cap reached by ops that are
-        // still pending/queued/running) wait for a live-op slot before the
-        // next wave. Bounded overall so a pathological backlog or a stalled
-        // op can never pin the drain forever — intents left behind retry on
-        // the next ready/degraded edge.
+        // stored intent; queue_full refusals wait for a live-op slot before
+        // the next wave. Bounded by the drain deadline so a pathological
+        // backlog can never pin the drain — leftovers retry on the next edge.
         const drainDeadline = Date.now() + DRAIN_DEADLINE_MS
         for (;;) {
           const snapshot = loadIntents()
@@ -1090,8 +930,7 @@ export function createChamberPluginTasks(deps: ChamberPluginTasksDeps): ChamberP
             if (deps.manager() === null) break
             if (Date.now() > drainDeadline) break
             try {
-              // defer:false — a refused lease leaves the intent for the next
-              // ready edge; success (op accepted) clears it.
+              // defer:false — a refused lease leaves the intent for the next edge.
               const result = await submitImpl(
                 {
                   kind: intent.kind,
@@ -1109,16 +948,14 @@ export function createChamberPluginTasks(deps: ChamberPluginTasksDeps): ChamberP
               } else if (!result.ok && result.code === 'queue_full') {
                 queueFull = true
               } else if (!result.ok && PERMANENT_DRAIN_REFUSALS.has(result.code as PluginTaskRefusalCode)) {
-                // A judgement that can never change (protected / needs-version /
-                // generation-mismatch / …) must not be retried forever in
-                // silence: drop the intent AND record the refusal as a failed op
-                // so the tasks projection tells the operator why.
+                // A permanent refusal must not be retried forever in silence:
+                // drop the intent AND record it as a failed op so the tasks
+                // projection tells the operator why.
                 dropDeferredIntent(intent.id)
                 warn(`plugins-tasks: deferred ${intent.kind} ${intent.name} was refused (${result.code}): ${result.error}`)
                 recordRefusedIntent(intent, result)
               } else if (!result.ok && result.code === 'persistence_failed') {
-                // The executor could not journal the op — a gateway write
-                // failure, not a busy window; do not spin on it.
+                // The executor could not journal the op — a write failure, not a busy window.
                 warn(`plugins-tasks: deferred intent ${intent.id} could not be journaled: ${result.error}`)
               }
             } catch (error) {
@@ -1129,8 +966,7 @@ export function createChamberPluginTasks(deps: ChamberPluginTasksDeps): ChamberP
           if (remaining.length === 0) break
           if (!queueFull) break // lease/state refusals left intents — next edge retries them
           // Wave pacing: wait for a queue slot (an op terminal) before the
-          // next wave — bounded by the drain deadline; intents still behind
-          // it retry on the next ready/degraded edge.
+          // next wave; leftovers retry on the next ready/degraded edge.
           for (;;) {
             if (deps.manager() === null) break
             if (Date.now() > drainDeadline) break
@@ -1153,9 +989,8 @@ export function createChamberPluginTasks(deps: ChamberPluginTasksDeps): ChamberP
     async dispose() {
       const exec = executor
       executor = null
-      // Every queued/in-flight op already carries its lease release (per-op
-      // terminal hook registered at enqueue), so dispose terminals release
-      // all leases; the executor idempotence covers double disposal.
+      // Every queued/in-flight op already carries its lease release, so the
+      // dispose terminals release all leases; disposal is idempotent.
       if (exec !== null) await exec.dispose()
     },
   }

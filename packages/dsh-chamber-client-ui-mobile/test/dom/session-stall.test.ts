@@ -839,13 +839,12 @@ test('a parked open is rebuilt automatically once, and the copy turns into the f
 
 /**
  * CROSS-TIER RECOVERY LOCKSTEP.
- * The mobile stall observer and the desktop open-in stream-health ladder share
- * the ledger (cooldown/window/budget), the failure bound and the ONE documented
- * threshold deviation. They differ in exactly one place: the desktop loading arm
- * only ARMS the user's rebuild control (action 'resync', executed by the click),
- * while mobile keeps the automatic arm and gates it on the open-in-flight
- * evidence. An unreadable face fails closed on both. Any drift on either side
- * turns red.
+ * The mobile stall observer and the desktop open-in stream-health ladder
+ * implement the SAME recovery contract (design 14 §D4) on two tiers. These
+ * assertions import BOTH pure decision modules and pin the shared ledger, the
+ * the one deliberate cross-tier threshold difference and the evidence rule: the automatic
+ * rebuild fires on one tier exactly when it fires on the other, and an
+ * unreadable face fails closed on both. Any drift on either side turns red.
  */
 const PARITY_NOW = 1_000_000
 

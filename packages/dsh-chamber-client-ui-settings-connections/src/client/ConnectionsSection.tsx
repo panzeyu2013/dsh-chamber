@@ -1,22 +1,15 @@
 /**
- * Connections settings section (design 05 §5): the local instance card —
- * /health status, the /api/connections row, graceful stop behind a confirm,
- * and the host rolling log — beside the remote connection roster: registry
- * CRUD (non-secret metadata only), connect/disconnect over the transport IPC,
- * and SSH-only systemd control plus the ring-buffer logs.
- *
- * Everything rides page-level surfaces: window.dshChamber.desktopSsh (IPC,
- * 05 §7.4) and the control-plane REST client (05 §7.2). No host frames and
- * no dsh runtime objects are consumed. SSH authentication defaults to the
- * system ssh-agent and default keys; an optional per-host password (design
- * 05 §8) is forwarded to the main process, which holds it in memory and
- * mirrors it to an owner-readable file (plaintext-file fallback) so
- * auto-connect works after restart — the form itself
- * never logs it, and the field is never prefilled (the stored value never
- * returns to the renderer). Gateway credentials follow the same write-only
- * renderer contract — the shared token (design 17 §7.2) and the login
- * password (§7.1) — stored in a separate owner-readable main-process mirror;
- * they are never placed in the registry or returned by IPC.
+ * Connections settings section (design 05 §5): the local instance card (/health
+ * status, /api/connections row, graceful stop behind a confirm, host rolling log)
+ * beside the remote connection roster: registry CRUD (non-secret metadata only),
+ * connect/disconnect over the transport IPC, SSH-only systemd control and logs.
+ * Everything rides page-level surfaces (window.dshChamber.desktopSsh IPC and the
+ * control-plane REST client); no host frames, no dsh runtime objects.
+ * Credentials are write-only and main-process-owned: an optional per-host SSH
+ * password, the gateway shared token and login password live in main memory and an
+ * owner-readable mirror (plaintext fallback) so auto-connect works after restart —
+ * the form never logs or prefills them, they never enter the registry and never
+ * return to the renderer.
  */
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from 'react'
@@ -41,9 +34,8 @@ import {
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 // Type-only: pulls the settings shell's SlotMap merge ('settings.section').
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
-// The page-owned restart→reload completion (design 18 §3.6 item 8, client-core
-// face): a restarted source's client-plugin set only changes on a window boot, so
-// every restart-to-apply entry point arms the same completion.
+// Page-owned restart→reload completion: a restarted source's client-plugin set only
+// changes on a window boot, so every restart-to-apply entry point arms it.
 import {
   RESTART_RELOAD_BUDGET_MS,
   armLocalDshRestartCompletion,
@@ -63,9 +55,8 @@ import { credentialReentryEdit, formatTime, gatewayUrlErrorText, localStatusKey,
 import { errorMessage } from './error-text.ts'
 import { CLEAR_GATEWAY_PASSWORD, CLEAR_GATEWAY_TOKEN, CLEAR_SSH_PASSWORD, clearCredential } from './clear-credential.ts'
 import { runManagedRestart } from './restart-action.ts'
-// The desktop-gate mirrors (and their byte-parity test) are the ONE copy of
-// these patterns/limits: the form validates with them instead of re-spelling
-// weaker inline regexes.
+// The desktop-gate mirrors (and their byte-parity test) are the ONE copy of these
+// patterns/limits: the form validates with them, never weaker inline regexes.
 import {
   INSTANCE_ID_PATTERN,
   MAX_INSTANCE_LABEL_CHARS,
@@ -121,7 +112,6 @@ export interface ConnectionsSectionInjected {
 }
 export type { PluginDiagnostic } from './plugin-diagnostic.ts'
 
-/** Full component props. */
 export type ConnectionsSectionProps =
   PropsRuntime<'settings.section'>
   & PropsLocale<'dsh-chamber.settings.connections'>
@@ -129,16 +119,13 @@ export type ConnectionsSectionProps =
   & {
     /** Per-instance diagnostics keyed by source id ('local' | '<kind>-<id>'); optional outside the chamber shell. */
     pluginDiagnostics?: Readonly<Record<string, PluginDiagnostic | undefined>>
-    /** Per-instance settled-boot gaps keyed EXACTLY like `pluginDiagnostics`
-     *  (design 05 §4 「降级呈现」). A separate fact from the plugin
-     *  diagnostic: the graph channel may answer `ok` while the page's own
-     *  surfaces never registered, so a card renders the gap INSTEAD of an `ok`
-     *  status line (see PluginDiagnosticLine). Absent outside the chamber shell. */
+    /** Per-instance settled-boot gaps keyed EXACTLY like `pluginDiagnostics`. A
+     *  separate fact from the plugin diagnostic: the graph channel may answer `ok`
+     *  while the page's own surfaces never registered. Absent outside the chamber shell. */
     bootGaps?: Readonly<Record<string, ServerBootGap | undefined>>
-    /** Self-heal recheck for CHANNEL-class diagnostics (design 09 §3.5):
-     *  the host owns the shared plugin-diagnostic store, so the write-back
-     *  comes from the host (settings-bridge) — this section only asks.
-     *  Absent outside the chamber shell. */
+    /** Self-heal recheck for CHANNEL-class diagnostics: the host owns the shared
+     *  plugin-diagnostic store, so the write-back comes from the host — this section
+     *  only asks. Absent outside the chamber shell. */
     onRecheckDiagnostic?: (sourceId: string) => void
   }
 
@@ -146,34 +133,27 @@ export type ConnectionsSectionProps =
 const HOST_LOG_LIMIT = 200
 const MIN_GATEWAY_TOKEN_CHARS = 32
 
-/** Gateway-card runtime-probe cadence (design 21 §6.8 r1): while the section
- *  is mounted, connected gateway cards re-read /chamber/runtime/status at
- *  this interval so the「启动实例」action appears/disappears with the managed
- *  dsh's own state (a host-side crash/restart-exhausted needs no user action
- *  on this desktop to surface). */
+/** Gateway-card runtime-probe cadence: while the section is mounted, connected gateway
+ *  cards re-read /chamber/runtime/status at this interval so the「启动实例」action tracks
+ *  the managed dsh's own state (a host-side crash needs no user action here). */
 const GATEWAY_RUNTIME_PROBE_INTERVAL_MS = 20_000
 
-/** Runtime connection states the「启动实例」action applies to (design 21
- *  §6.8 r1 / decision 12 — the /chamber/runtime/start route's own gate,
- *  runtime-routes.ts). */
+/** Runtime connection states the「启动实例」action applies to (the /chamber/runtime/start
+ *  route's own gate in runtime-routes.ts). */
 const STARTABLE_RUNTIME_STATES = new Set(['stopped', 'error', 'restart-exhausted'])
 
-/** 启动 409 拒绝的本地化键（managed-restart.ts 的 kind → 键）：启动只有一族
- *  （当前状态不可启动或运行时正忙）；重启那一族在 restart-action.ts
- *  （MANAGED_RESTART_REFUSAL_KEYS），两个入口共用。 */
+/** 启动 409 拒绝的本地化键：启动只有一族（当前状态不可启动或运行时正忙）；重启那一族
+ *  在 restart-action.ts（MANAGED_RESTART_REFUSAL_KEYS），两个入口共用。 */
 const START_REFUSAL_KEYS: { notRunning: RuntimeRefusalKey; busy: RuntimeRefusalKey } = {
   notRunning: 'startManagedDshRefused',
   busy: 'startManagedDshRefused',
 }
 
-/** 每卡受控重启/启动的结果行（design 21 §5.1/§6.8）：tone 'error' 以
- *  css.error + role="alert" 渲染（opError 同款红字），'ok' 以 css.hint +
- *  role="status"（P2-1：结果行必须带语气渲染，接受/完成 = ok，拒绝/失败/
- *  超时 = error）。 */
+/** 每卡受控重启/启动的结果行：'error' 以 css.error + role="alert" 渲染，'ok' 以
+ *  css.hint + role="status"（接受/完成 = ok，拒绝/失败/超时 = error）。 */
 type RestartNote = { tone: 'ok' | 'error'; text: string }
 
-/** Local-card connection-row poll cadence: 状态由 /api/host/health-events
- * 推送（05 §3），此处只兜底行字段（label/dshPort）与流异常收敛。 */
+/** Local-card connection-row poll cadence: 状态由 /api/host/health-events 推送，此处只兜底行字段与流异常收敛。 */
 const LOCAL_ROW_POLL_MS = 30_000
 
 /** Slugify a ~/.ssh/config alias into the id whitelist (^[a-zA-Z0-9_-]+$). */
@@ -181,31 +161,22 @@ function ssh(): DesktopSshSurface | null {
   return window.dshChamber?.desktopSsh ?? null
 }
 
-/**
- * Render the connections section content column.
- * @param props - composed slot props.
- * @returns the section.
- */
+/** Render the connections section content column. */
 export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
   const { t, pluginDiagnostics, bootGaps, onRecheckDiagnostic } = props
-  // 本组件只消费上图三个 prop：设置面不再二次装载插件，没有"装不上"可报，
-  // 每来源「设置组装诊断」块不在此渲染。仍然真实的诊断留在
-  // 该来源卡片上的「客户端插件状态」（pluginDiagnostics，boot/extra-row 通道）。
-  // Per-instance input ids (useId): the dialog renders inside N-ctx panels in
-  // the SAME document — static ids would alias across panels. One id per
-  // credential/pin field; the transport branches render one set at a time.
+  // 本组件只消费上图三个 prop：设置面不再二次装载插件，没有"装不上"可报，每来源
+  // 「设置组装诊断」块不在此渲染；仍然真实的诊断留在该来源卡片的「客户端插件状态」。
+  // Per-instance input ids (useId): the dialog renders inside N-ctx panels in the SAME
+  // document — static ids would alias; one id per credential/pin field.
   const gatewayTokenFieldId = useId()
   const gatewayPasswordFieldId = useId()
   const spkiFieldId = useId()
   const sshPasswordFieldId = useId()
   const runtimeState = useSyncExternalStore(subscribeRuntimeState, getRuntimeState)
   const runtimeSurfacePresent = currentRuntimeSurface() !== null
-  // Fail closed while the desktop runtime bridge hydrates; once hydrated,
-  // applying is the one design-18 phase that forbids every local spawn entry.
-  // The local card has TWO spawn entries — 「启动」(startLocal) and
-  // 「清理并接管」(reclaimLocal: it clears this state directory's own stale
-  // writers and then STARTS the instance, control-plane api.ts:26-28) — and
-  // design 18:245-247 gates EVERY spawn entry, so both read ONE verdict from
+  // Fail closed while the desktop runtime bridge hydrates; once hydrated, applying
+  // forbids every local spawn entry. The local card's TWO spawn entries (「启动」and
+  // 「清理并接管」, which clears stale writers and then STARTS) read ONE verdict from
   // ./local-spawn-gate.ts and render the same reason row.
   const spawnGate = localSpawnGate({
     blocked: runtimeBlocksLocalStart(runtimeState, runtimeSurfacePresent),
@@ -214,7 +185,6 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
     runtimeBlockedReason: runtimeState?.runtimeBlockedReason,
   })
 
-  // ---- local instance card ----
   const [health, setHealth] = useState<HealthResponse | null>(null)
   const [connection, setConnection] = useState<ConnectionSummary | null>(null)
   const [localBusy, setLocalBusy] = useState(false)
@@ -231,14 +201,12 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
   /** 主机日志默认折叠；首次展开时才拉取（避免无谓 REST 调用）。 */
   const [hostLogsOpen, setHostLogsOpen] = useState(false)
 
-  // ---- remote host roster ----
   const [instances, setInstances] = useState<SshInstanceSpec[]>([])
   const [statuses, setStatuses] = useState<Record<string, SshStatusProjection>>({})
   const [rosterError, setRosterError] = useState<string | null>(null)
   const [busy, setBusy] = useState<Record<string, boolean>>({})
   const [opError, setOpError] = useState<Record<string, string>>({})
 
-  // ---- dialogs ----
   const [editing, setEditing] = useState<SshInstanceSpec | 'new' | null>(null)
   const [draft, setDraft] = useState<HostDraft | null>(null)
   const [fieldErrors, setFieldErrors] = useState<Partial<Record<keyof HostDraft, string>>>({})
@@ -248,9 +216,8 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
   const [configHosts, setConfigHosts] = useState<SshConfigHost[] | null>(null)
   const [configError, setConfigError] = useState<string | null>(null)
   const [configLoading, setConfigLoading] = useState(false)
-  // The preload bridge is exposed asynchronously after dsh-chamber:info;
-  // while it is absent the SSH surface is inert — track its arrival so the
-  // mount-time loads retry once it appears (no permanent silent no-op).
+  // The preload bridge is exposed asynchronously after dsh-chamber:info; while absent
+  // the SSH surface is inert — track its arrival so the mount-time loads retry once.
   const [bridgeUp, setBridgeUp] = useState<boolean>(() => ssh() !== null)
   // Which instance the logs modal is currently loading (stale-response guard).
   const logsTargetRef = useRef<string | null>(null)
@@ -265,39 +232,30 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
   const [remoteLogsError, setRemoteLogsError] = useState<string | null>(null)
   const [logsBusy, setLogsBusy] = useState(false)
   const [confirmClear, setConfirmClear] = useState(false)
-  // Gateway 主机日志 Modal（design 17 §9.3）：经实例代理读 gateway 自身
-  // 控制面的 /api/host/logs（与本地卡同款 {port, lines, truncated} 形状）。
+  // Gateway 主机日志 Modal：经实例代理读 gateway 自身控制面的 /api/host/logs（与本地卡同款响应形状）。
   const [gatewayLogsFor, setGatewayLogsFor] = useState<SshInstanceSpec | null>(null)
   const [gatewayHostLogs, setGatewayHostLogs] = useState<HostLogsResponse | null>(null)
   const [gatewayHostLogsError, setGatewayHostLogsError] = useState<string | null>(null)
   const [gatewayHostLogsBusy, setGatewayHostLogsBusy] = useState(false)
-  /** 插件管理对话框（plan 24 D5-A / design 21 §6.6 勘误⑥ 收敛）：四类卡片
-   *  统一开 PluginDialog —— 分叉仅在 target 描述符（本地 / ssh+dsh spec /
-   *  gateway 源 / http 直连只读）；gateway 卡在托管 dsh 处于
-   *  stopped/error/restart-exhausted 时传 runtimeDown（恢复撤销面门控）。 */
+  /** 插件管理对话框：四类卡片统一开 PluginDialog —— 分叉仅在 target 描述符（本地 /
+   *  ssh+dsh spec / gateway 源 / http 直连只读）；gateway 在 runtimeDown 时传停机标志。 */
   const [pluginDialogFor, setPluginDialogFor] = useState<PluginDialogTarget | null>(null)
 
-  // ---- gateway 托管 dsh 受控重启（design 21 §5.1）----
   /** 哪个 gateway 卡的「重启 dsh」确认 Modal 开着。 */
   const [restartConfirmFor, setRestartConfirmFor] = useState<SshInstanceSpec | null>(null)
-  /** 每卡独立单飞（与 busy[id] 同款模型）：正在重启的 gateway 卡 id 集。
-   *  A 卡在飞不影响 B 卡按钮/Modal；收尾只清自己的 id，绝不静默关闭他卡。 */
+  /** 每卡独立单飞：正在重启的 gateway 卡 id 集。A 卡在飞不影响 B 卡；收尾只清自己的 id。 */
   const [restartingIds, setRestartingIds] = useState<Record<string, boolean>>({})
-  /** 每卡重启/启动结果行（成功/失败/超时/拒绝），按卡片 id 落独立行；tone
-   *  决定渲染：'error' = css.error + role="alert"（opError 同款红字），
-   *  'ok' = css.hint + role="status"。 */
+  /** 每卡重启/启动结果行（成功/失败/超时/拒绝），按卡片 id 落独立行；tone 决定渲染
+   *  （'error' = 红字 alert，'ok' = 灰字 status）。 */
   const [restartNotes, setRestartNotes] = useState<Record<string, RestartNote | null>>({})
-  // ---- gateway 托管 dsh 启动（design 21 §6.8 r1 / decision 12）----
-  /** 正在启动的 gateway 卡 id 集（与 restartingIds 同款每卡单飞；同卡
-   *  重启/启动互斥 —— 二者写同一 runtime）。 */
+  /** 正在启动的 gateway 卡 id 集（与 restartingIds 同款每卡单飞；同卡重启/启动互斥 ——
+   *  二者写同一 runtime）。 */
   const [startBusyIds, setStartBusyIds] = useState<Record<string, boolean>>({})
   /** 每卡在飞启动的 AbortController。 */
   const startAbortRefs = useRef<Record<string, AbortController>>({})
-  /** 每卡托管 dsh runtime connectionState（design 21 §6.8 r1 启动门控）：
-   *  隧道 phase 只证明 gateway 宿主可达 —— 托管 dsh 是否在跑由
-   *  /chamber/runtime/status 的 connectionState 投影回答；「启动实例」
-   *  仅在该状态 ∈ {stopped, error, restart-exhausted} 时出现。卡条目只在
-   *  宿主答 200 后写入。 */
+  /** 每卡托管 dsh runtime connectionState：「启动实例」仅在 ∈ {stopped, error,
+   *  restart-exhausted} 时出现。隧道 phase 只证明 gateway 宿主可达 —— 托管 dsh 是否在跑
+   *  由 /chamber/runtime/status 回答；卡条目只在宿主答 200 后写入。 */
   const [runtimeConnectionById, setRuntimeConnectionById] = useState<Record<string, string | undefined>>({})
 
   const clearOpError = useCallback((id: string): void => {
@@ -349,8 +307,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
     try {
       setConnection(await cp.createLocal())
       setLocalError(null)
-      // Starting the instance is a new host process: if a plugin was installed
-      // while it was stopped, only a window boot shows the new client half.
+      // Starting the instance is a new host process: a plugin installed while it was stopped only shows on a window boot.
       void armLocalDshRestartCompletion()
     } catch (err) {
       setLocalError(errorMessage(err))
@@ -360,14 +317,11 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
     void loadLocal()
   }, [loadLocal, spawnGate.blocked])
 
-  /**
-   * 清理并接管（POST /api/connections/local/reclaim）：清除本状态
-   * 目录自己的陈旧/孤儿托管写者记录，然后启动本地实例。仍在运行的其它应用实例
-   * 不会被影响（控制面拒绝）。失败时把控制面给出的阻塞原因原样呈现。
-   */
+  /** 清理并接管（POST /api/connections/local/reclaim）：清除本状态目录自己的陈旧/孤儿
+   *  托管写者记录，然后启动本地实例。其它运行中的应用实例不受影响（控制面拒绝）；失败时
+   *  原样呈现控制面给出的阻塞原因。 */
   const reclaimLocal = useCallback(async (): Promise<void> => {
-    // Same gate as startLocal: this route ends in a spawn (design 18:245-247
-    // covers every instance spawn entry, not just the start button).
+    // Same gate as startLocal: this route also ends in a spawn, and the gate covers every spawn entry.
     if (spawnGate.blocked) return
     setReclaiming(true)
     setReclaimError(null)
@@ -376,8 +330,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
       setConnection(outcome.connection)
       setReclaimOk(true)
       setLocalError(null)
-      // The reclaim starts the instance (new host process): same completion as
-      // the start button.
+      // The reclaim starts the instance (new host process): same completion as the start button.
       void armLocalDshRestartCompletion()
     } catch (err) {
       setReclaimError(errorMessage(err))
@@ -411,8 +364,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
       const specs = await bridge.instances_get()
       setInstances(specs)
       setRosterError(null)
-      // 背景刷新只更新投影，不清除行内错误（clearOpError 留给用户显式操作
-      // 与状态推送）——并发用户操作刚设置的错误不能被背景成功误清。
+      // 背景刷新只更新投影，不清除行内错误——并发用户操作刚设置的错误不能被背景成功误清。
       for (const spec of specs) {
         void bridge.status(spec.id)
           .then(projection => {
@@ -458,9 +410,8 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
     }
   }, [clearOpError])
 
-  /** systemd 起停/查询：结果投影合并进 statuses（serviceActive 随卡片显示）。
-   *  Returns whether the op succeeded — the source-restart leg arms the
-   *  page-owned completion only on a real success. */
+  /** systemd 起停/查询：结果投影合并进 statuses（serviceActive 随卡片显示）。Returns
+   *  whether the op succeeded — the restart leg arms the page-owned completion only on real success. */
   const runServiceOp = useCallback(async (id: string, op: 'start_service' | 'stop_service' | 'restart_service' | 'is_active'): Promise<boolean> => {
     const bridge = ssh()
     if (bridge === null) return false
@@ -483,11 +434,10 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
   }, [clearOpError])
 
   /**
-   * systemd restart of a dsh source (「重启实例」): a new host process = a new
-   * plugin set for that source, so the page-owned completion reloads the window
-   * once the source serves again. Gateway sources are deliberately NOT armed —
-   * 「重启网关服务」 restarts the gateway service, not the instance's plugin set
-   * (design 18 §3.6 item 8 covers the plugin-refresh actions only).
+   * systemd restart of a dsh source: a new host process = a new plugin set for that
+   * source, so the page-owned completion reloads the window once the source serves again.
+   * Gateway sources are deliberately NOT armed — 「重启网关服务」 does not restart the
+   * instance's plugin set.
    */
   const restartSourceService = useCallback(async (spec: SshInstanceSpec): Promise<void> => {
     const restarted = await runServiceOp(spec.id, 'restart_service')
@@ -501,15 +451,10 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
   }, [runServiceOp])
 
   /**
-   * 受控重启 gateway 托管的 dsh（design 21 §5.1）：POST
-   * /api/i/gateway-<id>/chamber/runtime/restart —— 仅 202 接受。409 拒绝按
-   * managed-restart.ts 判定映射为本地化文案（未在运行 → 指向「启动实例」；
-   * 其余 = 忙碌/恢复中），非 409 维持 serverRefusalText 的逐字投影。202 后按
-   * shared pollGatewayReady 语义轮询 /chamber/runtime/status（1s/120s；
-   * restart failed / 终态 / 401/403/404 快失败；超时诚实投影）。结果落在该卡
-   * 独立结果行（restartNotes：tone 分流渲染，error = 红字 alert、ok = 灰字
-   * status），成功顺带刷新卡片状态投影。桌面零改动：写走既有反代（auth 主进程
-   * 注入）。
+   * 受控重启 gateway 托管的 dsh：POST …/chamber/runtime/restart —— 仅 202 接受。409 拒绝按
+   * managed-restart.ts 映射为本地化文案（未在运行 → 指向「启动实例」；其余 = 忙碌/恢复中），
+   * 非 409 维持 serverRefusalText 的逐字投影。202 后按 shared pollGatewayReady 语义轮询
+   * （1s/120s；终态/401/403/404 快失败；超时诚实投影）。结果落该卡独立结果行，成功刷新卡片状态。
    */
   const restartManagedDsh = useCallback(async (spec: SshInstanceSpec): Promise<void> => {
     // 每卡独立单飞：同卡重复确认被门挡住；他卡在飞不受影响。
@@ -520,15 +465,12 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
       setRestartNotes(prev => ({ ...prev, [spec.id]: value }))
     }
     try {
-      // 传输 + 202 门 + page-owned 就绪轮询只有一份实现（restart-action.ts，
-      // 与 PluginDialog 共用）：409 走同一族本地化文案，超时/失败按 outcome
-      // 落到本卡的结果行。POST 不自带 controller —— 它控制不了任何东西
-      // （page-owned completion 拥有轮询 signal）。
+      // 传输 + 202 门 + page-owned 就绪轮询只有一份实现（restart-action.ts，与 PluginDialog
+      // 共用）：409 走同一族本地化文案，超时/失败按 outcome 落到本卡结果行；POST 不自带 controller。
       const outcome = await runManagedRestart(`gateway-${spec.id}`, t)
       if (outcome.kind === 'reloaded') {
         note({ tone: 'ok', text: t('restartManagedDshOk') })
-        // 成功刷新卡片状态投影（design 21 §5.1）：registry 不变，只重读
-        // 各实例 phase/service 激活态。
+        // 成功刷新卡片状态投影：registry 不变，只重读各实例 phase/service 激活态。
         void loadRemote()
       } else if (outcome.kind === 'accepted-timeout') {
         // 重启已接受、仍在恢复 → 本地化说明（ok 语气）。
@@ -550,16 +492,12 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
   }, [restartingIds, t, loadRemote])
 
   /**
-   * 托管 dsh runtime 探针（design 21 §6.8 r1）：GET /api/i/gateway-<id>/
-   *  chamber/runtime/status —— 只投影 connectionState（重启/启动动作的门控输入）。
-   *  /chamber 管理面挂宿主、非 ready-gated：托管 dsh 停机时宿主仍答 200，
-   *  所以隧道 'ready' 与 runtime 'stopped' 可以并存，二者都必须诚实呈现。
-   *  探针失败（非 200 / 缺字段 / 传输错误）= 状态不可知：**删除该来源的运行期
-   *  条目**（applyRuntimeProbe(…, null)），旧值一律作废——保留陈旧 'stopped'
-   *  会让「启动实例」常驻而每次点击注定 409。fail-open 语义不变：缺条目 ≠ 停机，
-   *  探针缺失绝不隐藏健康来源（重启门只在确有终态答案时才禁用），只是「启动
-   *  实例」不凭空出现（它要求确证的可启动态）。200 且值未变时不重写条目
-   *  （避免无谓渲染）。
+   * 托管 dsh runtime 探针：GET …/chamber/runtime/status —— 只投影 connectionState（重启/启动
+   * 动作的门控输入）。/chamber 管理面挂宿主、非 ready-gated：隧道 'ready' 与 runtime 'stopped'
+   * 可以并存，二者都如实呈现。探针失败（非 200 / 缺字段 / 传输错误）= 状态不可知：删除该来源的
+   * 运行期条目（applyRuntimeProbe(…, null)）——保留陈旧 'stopped' 会让「启动实例」常驻而每次点击
+   * 注定 409。缺条目 ≠ 停机：探针缺失绝不隐藏健康来源，只是「启动实例」不凭空出现；200 且值未变
+   * 时不重写条目。
    */
   const probeGatewayRuntime = useCallback(async (specId: string): Promise<void> => {
     let connectionState: string | null = null
@@ -575,17 +513,11 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
     setRuntimeConnectionById(prev => applyRuntimeProbe(prev, specId, connectionState))
   }, [])
 
-  /** 「启动实例」（design 21 §6.8 r1 / decision 12, start 原语）：POST
-   *  /api/i/gateway-<id>/chamber/runtime/start —— 与 restart 同一 202 + 轮询
-   *  语义，但轮询按 start 动作（{action:'start'}，读契约的 start 结果字段，见
-   *  gateway-runtime-poll.ts；停机态不会像 restart 那样被当作终态失败，因为启动
-   *  正是从 stopped 开始的）。仅 stopped/error/restart-exhausted 可启动，其余
-   *  409 按 classifyRuntimeRefusal 映射为本地化文案；start:'failed'/终态快失败、
-   *  超时 = 已接受仍在恢复（本地化，ok 语气）。每卡独立单飞（startBusyIds）+
-   *  与重启互斥；结果落 restartNotes 槽位（同一张卡同一时刻只允许一个 runtime
-   *  动作在飞）。成功刷新卡片投影并立即重探 runtime（按钮随 connectionState
-   *  收敛而消失）。
-   */
+  /** 「启动实例」：POST …/chamber/runtime/start —— 与 restart 同一 202 + 轮询语义，但轮询按
+   *  start 动作（停机态不会像 restart 那样被当作终态失败）。仅 stopped/error/restart-exhausted
+   *  可启动，其余 409 按 classifyRuntimeRefusal 本地化；start:'failed'/终态快失败/超时 = 已接受
+   *  仍在恢复（ok 语气）。每卡独立单飞 + 与重启互斥，结果落同一 restartNotes 槽位；成功刷新投影
+   *  并立即重探 runtime。 */
   const startManagedDsh = useCallback(async (spec: SshInstanceSpec): Promise<void> => {
     if (startBusyIds[spec.id] === true) return
     if (restartingIds[spec.id] === true) return
@@ -613,8 +545,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
         note({ tone: 'error', text: runtimeRefusalText(body, response.status, START_REFUSAL_KEYS, t) })
         return
       }
-      // Same page-owned completion as the restart leg: a started
-      // managed dsh boots a new plugin set, so the window reloads once it serves.
+      // Same page-owned completion as the restart leg: a started managed dsh boots a new plugin set.
       let pollFailure: unknown = null
       const outcome = await armWindowReloadWhenServed(
         id,
@@ -636,10 +567,8 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
       } else {
         const cls = classifyRestartError(pollFailure
           ?? new Error('start completion aborted before the readiness poll settled'))
-        // accepted-timeout = 启动已接受、仍在恢复（超时串已按 start 措辞，标记
-        // 与 restart 共用）→ 本地化说明，ok 语气：动作已被接受，仅提示仍在
-        // 恢复；其余 = 启动失败 + 轮询的 'start failed: …' detail（error 语气；
-        // 轮询侧的英文 detail 未本地化，design 21 §5.2 已登记）。
+        // accepted-timeout = 启动已接受、仍在恢复（标记与 restart 共用）→ 本地化说明，ok 语气；
+        // 其余 = 启动失败 + 轮询的英文 detail（error 语气，未本地化）。
         note(cls.kind === 'accepted-timeout'
           ? { tone: 'ok', text: t('startManagedDshAccepted') }
           : { tone: 'error', text: t('startManagedDshFailed').replace('{error}', cls.detail) })
@@ -717,8 +646,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
     }
   }, [logsFor])
 
-  /** Gateway 主机日志（design 17 §9.3）：经实例代理读 gateway 自身控制面
-   *  /api/host/logs；响应形状与本地卡一致，直接复用 HostLogsResponse 渲染。 */
+  /** Gateway 主机日志：经实例代理读 gateway 自身控制面 /api/host/logs；响应形状与本地卡一致，直接复用 HostLogsResponse。 */
   const openGatewayHostLogs = useCallback(async (spec: SshInstanceSpec): Promise<void> => {
     gatewayLogsTargetRef.current = spec.id
     setGatewayLogsFor(spec)
@@ -758,9 +686,8 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
     if (bridge === null || pendingDelete === null) return
     setDeleting(true)
     try {
-      // Exact id-addressed main transaction: never send a roster snapshot.
-      // A stale read-modify-write could otherwise delete a connection added
-      // concurrently after this dialog opened.
+      // Exact id-addressed main transaction: never send a roster snapshot — a stale
+      // read-modify-write could delete a connection added concurrently after this dialog opened.
       const saved = await bridge.delete_connection(pendingDelete.id)
       setInstances(saved)
       setPendingDelete(null)
@@ -769,9 +696,8 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
         delete copy[pendingDelete.id]
         return copy
       })
-      // Loud-failure invariant: delete_connection returns the authoritative
-      // current registry. If the
-      // deletion did not land, say so instead of a silent no-op.
+      // Loud-failure invariant: delete_connection returns the authoritative current
+      // registry — if the deletion did not land, say so instead of a silent no-op.
       if (saved.some(instance => instance.id === pendingDelete.id)) {
         setOpError(prev => ({ ...prev, [pendingDelete.id]: t('deleteNotEffective') }))
       } else {
@@ -785,11 +711,8 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
     }
   }, [pendingDelete, clearOpError])
 
-  /**
-   * Load the ~/.ssh/config host projections (non-secret metadata only; the
-   * main process never exposes keys/proxies/credentials). A missing config
-   * is an empty list; a read failure is a loud error.
-   */
+  /** Load the ~/.ssh/config host projections (non-secret metadata only; keys/proxies/
+   *  credentials never reach the renderer). A missing config is an empty list; a read failure is loud. */
   const loadConfigHosts = useCallback(async (): Promise<void> => {
     const bridge = ssh()
     if (bridge === null) return
@@ -811,12 +734,9 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
     }
   }, [])
 
-  /**
-   * Apply a discovered config host to the draft (host keeps the alias so the
-   * ssh config block — port, identity, proxy — applies as with plain ssh).
-   * Only empty fields are filled: a user's manual input is never overwritten,
-   * and only the errors of the fields that were actually filled are cleared.
-   */
+  /** Apply a discovered config host to the draft (the alias stays so the ssh config block
+   *  applies as with plain ssh). Only empty fields are filled — manual input is never
+   *  overwritten — and only the errors of fields actually filled are cleared. */
   const applyConfigHost = useCallback((host: SshConfigHost): void => {
     const filled: (keyof HostDraft)[] = []
     setDraft(prev => {
@@ -866,9 +786,8 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
 
   const openEdit = useCallback((spec: SshInstanceSpec): void => {
     setEditing(spec)
-    // Pure normalization covers all four target/transport combinations and
-    // preserves the non-secret SPKI pin. Credential fields remain empty by
-    // construction because their values never cross the IPC boundary.
+    // Pure normalization covers all four target/transport combinations and preserves the
+    // non-secret SPKI pin; credential fields remain empty by construction (they never cross IPC).
     setDraft(draftFromSpec(spec))
     setFieldErrors({})
     setFormError(null)
@@ -888,8 +807,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
     [editing],
   )
 
-  /** Clear a stored gateway login password (design 17 §7.1) without ever
-   *  reading it into the renderer. */
+  /** Clear a stored gateway login password without ever reading it into the renderer. */
   const clearGatewayPassword = useCallback(
     (): Promise<void> => clearCredential(CLEAR_GATEWAY_PASSWORD, { bridge: ssh(), editing, setDraft, setInstances, setEditing, setFormError }),
     [editing],
@@ -904,26 +822,22 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
   }, [saving])
 
   /**
-   * 表单只收非秘密元数据；id 格式 ^[a-zA-Z0-9_-]+$（新增时查重、'local'
-   * 为本地来源保留字）、端口十进制 1–65535、host/user 与主进程同源白名单
-   * （首字符不得为 '-'，防 ssh 选项注入）、serviceName 白名单
-   * ^[a-zA-Z0-9][a-zA-Z0-9_.-]*$（首字符必须为字母或数字）。
+   * 表单只收非秘密元数据；id 格式 ^[a-zA-Z0-9_-]+$（新增查重、'local' 为本地来源保留字）、
+   * 端口十进制 1–65535、host/user 与主进程同源白名单（首字符不得为 '-'，防 ssh 选项注入）、
+   * serviceName 白名单 ^[a-zA-Z0-9][a-zA-Z0-9_.-]*$（首字符必须为字母或数字）。
    */
   const validate = useCallback((value: HostDraft): Partial<Record<keyof HostDraft, string>> => {
     const errors: Partial<Record<keyof HostDraft, string>> = {}
     const id = value.id.trim()
     if (id === '') errors.id = t('validationIdRequired')
     else if (id === 'local') errors.id = t('validationIdReserved')
-    // The authoritative pattern already reserves 'local' (checked above
-    // with its own message) and caps the length at 64.
+    // The authoritative pattern already reserves 'local' (own message) and caps the length at 64.
     else if (!INSTANCE_ID_PATTERN.test(id)) errors.id = t('validationIdInvalid')
     else if (editing === 'new' && instances.some(instance => instance.id === id)) errors.id = t('validationIdDuplicate')
     if (value.label.trim() === '') errors.label = t('validationLabelRequired')
     else if (value.label.length > MAX_INSTANCE_LABEL_CHARS) errors.label = t('validationLabelTooLong')
-    // Credential dimensions are independent. Re-entry is driven by the main
-    // process's non-secret existence projections plus the exact retarget rule:
-    // gateway+ssh may require both its tunnel password and gateway auth, while
-    // key/agent and --no-auth rows remain unblocked.
+    // Credential dimensions are independent. Re-entry is driven by the main process's
+    // non-secret existence projections plus the retarget rule (gateway+ssh may need both layers).
     if (editing !== null && editing !== 'new') {
       const reentry = credentialReentryEdit(editing, value)
       if (reentry.gatewayToken && value.gatewayToken === '') errors.gatewayToken = t('validationGatewayCredentialsRequired')
@@ -933,30 +847,23 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
       }
     }
     if (value.kind === 'gateway') {
-      // The token is OPTIONAL (design 17 §2.3 — auth is never a mode; an
-      // empty token sends no auth header and the gateway decides, §7.3).
+      // The token is OPTIONAL (auth is never a mode; an empty token sends no auth header).
       // ASCII/length checks apply only when a value is present.
       if (value.gatewayToken !== '' && !/^[\x20-\x7e]+$/.test(value.gatewayToken)) {
-        // Mirror the main-process gate (gatewayTokenValidationError): a
-        // token with non-visible-ASCII bytes would pass the renderer but be
-        // rejected by the main process with a vague write failure.
+        // Mirror the main-process gate (gatewayTokenValidationError): non-visible-ASCII bytes
+        // would pass the renderer but be rejected by the main process with a vague write failure.
         errors.gatewayToken = t('validationGatewayTokenAscii')
       } else if (value.gatewayToken !== '' && value.gatewayToken.length < MIN_GATEWAY_TOKEN_CHARS) {
         errors.gatewayToken = t('validationGatewayTokenLength')
       }
-      // The login password (design 17 §7.1) is likewise optional; when a
-      // value IS present it mirrors the server config gate — 12–1024 JS
-      // characters, including Unicode. The shared helper returns a machine
-      // code that the dictionary localizes.
+      // The login password is likewise optional; when present it mirrors the server config
+      // gate — 12–1024 JS characters including Unicode; the shared helper returns a machine code.
       const passwordError = gatewayPasswordValidationError(value.gatewayPassword)
       if (passwordError === 'length') errors.gatewayPassword = t('validationGatewayPasswordLength')
     }
     if (transportFormSchema(value.transport).fieldGroup === 'url') {
-      // transport='http' validates/derives the URL for EVERY kind (P3-3): a
-      // defensive dsh+http row must not silently skip the URL gate (the
-      // target is URL-derived for http) nor fall through to host validation
-      // for fields the form does not render. A dsh+http draft has no auth
-      // surface (design 17 §2.1), but its URL is still validated loudly.
+      // transport='http' validates/derives the URL for EVERY kind: a defensive dsh+http row
+      // must not silently skip the URL gate nor fall through to host validation for unrendered fields.
       const parsed = parseGatewayUrl(value.gatewayUrl)
       if (!parsed.ok) errors.gatewayUrl = gatewayUrlErrorText(parsed, t)
       if (spkiPinEligible(value) && spkiPinValidationError(value.spkiPin) !== null) {
@@ -971,8 +878,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
       const user = value.user.trim()
       if (user.length > MAX_SSH_USER_CHARS || !SSH_USER_PATTERN.test(user)) errors.user = t('validationUserInvalid')
     }
-    // The ssh password is transient and write-only, but an over-long value
-    // would still be rejected by the main process with a vague write failure.
+    // The ssh password is transient and write-only, but an over-long value would still be rejected by main.
     if (value.password.length > MAX_SSH_PASSWORD_CHARS) errors.password = t('validationPasswordTooLong')
     const parsePort = (raw: string): number | null => {
       const trimmed = raw.trim()
@@ -989,9 +895,8 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
       errors.serviceName = t('validationServiceNameInvalid')
     }
     const remoteDshHome = value.remoteDshHome.trim()
-    // The authoritative mirror rejects '..', empty segments and a trailing
-    // slash (the inline regex this replaced accepted /srv/../tmp, /srv//dsh
-    // and /srv/dsh/ — renderer weaker than the desktop authority).
+    // The authoritative mirror rejects '..', empty segments and a trailing slash — never a
+    // weaker inline regex that accepts /srv/../tmp or /srv//dsh.
     if (remoteDshHome !== ''
       && (remoteDshHome.length > MAX_REMOTE_DSH_HOME_CHARS || !REMOTE_DSH_HOME_PATTERN.test(remoteDshHome))) {
       errors.remoteDshHome = t('validationRemoteDshHomeInvalid')
@@ -1009,11 +914,9 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
     setSaving(true)
     try {
       const input = draftToInput(draft)
-      // transport='http' derives the target from the URL for EVERY kind
-      // (P3-3 — defensive dsh+http rows included): validate() already
-      // rejected a malformed URL loudly; this re-check turns a parse failure
-      // at save time (draft mutated after validation) into an explicit field
-      // error instead of a silent no-op.
+      // transport='http' derives the target from the URL for EVERY kind: validate() already
+      // rejected a malformed URL loudly, and this re-check turns a parse failure at save time
+      // into an explicit field error instead of a silent no-op.
       if (draft.transport === 'http') {
         const parsed = parseGatewayUrl(draft.gatewayUrl)
         if (!parsed.ok) {
@@ -1021,17 +924,15 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
           return
         }
       }
-      // One main-owned transaction receives the replacement metadata and all
-      // applicable NEW write-only values. Old credentials never return to
-      // renderer; main snapshots and restores them on any registry/store
-      // failure. Empty fields leave their stored dimensions untouched.
+      // One main-owned transaction receives the replacement metadata and all applicable NEW
+      // write-only values; old credentials never return to the renderer (main snapshots and
+      // restores them on any failure). Empty fields leave their stored dimensions untouched.
       const result = await saveHostWithConnectionCredentials(
         bridge,
         editing === 'new' ? null : editing.id,
         editing === 'new' ? input : { ...input, id: editing.id },
-        // The save helper filters these values through the independent
-        // capability matrix. gateway+ssh can commit both credential layers;
-        // dsh+http commits none, even if stale component state were injected.
+        // The save helper filters these values through the independent capability matrix:
+        // gateway+ssh can commit both credential layers; dsh+http commits none.
         {
           sshPassword: draft.password,
           token: draft.gatewayToken,
@@ -1041,9 +942,8 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
       setInstances(result.instances)
       if (!result.ok) {
         setFormError(result.error)
-        // If rollback genuinely failed, turn a newly-created row into an edit
-        // target so retry cannot submit a duplicate id. The password field
-        // remains in the current draft for an explicit retry.
+        // If rollback genuinely failed, turn a newly-created row into an edit target so retry
+        // cannot submit a duplicate id; the password field stays for an explicit retry.
         if (result.metadataCommitted && editing === 'new') {
           const committed = result.instances.find(instance => instance.id === input.id)
           if (committed !== undefined) setEditing(committed)
@@ -1060,16 +960,14 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
     }
   }, [draft, editing, instances, validate])
 
-  // 挂载：装载本地卡 / 注册表；订阅隧道状态推送（实时更新徽标）。
-  // 主机日志默认折叠，首次展开时懒加载，挂载不拉取。
-  // bridgeUp 触发重跑：preload 的 dshChamber 暴露是异步的，桥出现后重载一次，
+  // 挂载：装载本地卡 / 注册表；订阅隧道状态推送（实时更新徽标）。主机日志默认折叠、首次
+  // 展开懒加载。bridgeUp 触发重跑：preload 的 dshChamber 暴露是异步的，桥出现后重载一次，
   // 避免 SSH 面永久静默失效。
   useEffect(() => {
     if (!bridgeUp) return
     void loadLocal()
     void loadRemote()
-    // 本地卡状态由推送流驱动（05 §3）：迁移即时可见；30s 行轮询只兜底
-    // 连接行字段（label/dshPort）与流异常收敛（远程卡走 live pushes）。
+    // 本地卡状态由推送流驱动：迁移即时可见；30s 轮询只兜底连接行字段与流异常收敛（远程卡走 live pushes）。
     const timer = setInterval(() => { void loadLocal() }, LOCAL_ROW_POLL_MS)
     const events = cp.healthEvents()
     events.onmessage = (event) => {
@@ -1102,8 +1000,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
       // A live status push is authoritative: clear the stale inline error.
       clearOpError(payload.id)
     })
-    // 注册表变更推送：设置页之外的增删改（renderer App 已订阅、本页曾缺失）
-    // 即刻重拉 roster——否则外部编辑要等重挂载才可见（roster 新鲜度修复）。
+    // 注册表变更推送：设置页之外的增删改即刻重拉 roster——否则外部编辑要等重挂载才可见。
     const unsubscribeInstances = bridge.onInstancesChanged(() => {
       void loadRemote()
     })
@@ -1113,8 +1010,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
     }
   }, [bridgeUp, clearOpError, loadRemote])
 
-  // Poll for the bridge while it is absent (preload exposes it after the
-  // async dsh-chamber:info round-trip).
+  // Poll for the bridge while it is absent (preload exposes it after the async dsh-chamber:info round-trip).
   useEffect(() => {
     if (bridgeUp) return
     const timer = setInterval(() => {
@@ -1123,25 +1019,19 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
     return () => { clearInterval(timer) }
   }, [bridgeUp])
 
-  // 卸载即中止在飞的「启动实例」POST（它自带 controller）。重启腿没有
-  // controller：就绪轮询的 signal 属于 page-owned completion，关闭面板不取消
-  // 它。
+  // 卸载即中止在飞的「启动实例」POST（它自带 controller）。重启腿没有 controller：就绪轮询的
+  // signal 属于 page-owned completion，关闭面板不取消它。
   useEffect(() => {
     return () => {
       for (const controller of Object.values(startAbortRefs.current)) controller.abort()
     }
   }, [])
 
-  // Gateway 卡 runtime 探针节奏（design 21 §6.8 r1）：注册表/状态变化时立即
-  // 探一次已连接 gateway 卡，此后按固定间隔维持（宿主侧自发停机/恢复无桌面
-  // 事件可依赖）；transport 断开（phase 非 ready/degraded）的卡不探 ——
-  // 启动动作本身以 connected 门控，未知/断连时绝不渲染。
-  // The probe re-arms on the CONNECTED gateway id SET, never on the whole
-  // `statuses` map: every per-source status push rewrites that map, so a
-  // whole-map dependency would rebuild this interval and fire an immediate
-  // probe at EVERY gateway card on every push (O(cards × pushes)). The id set
-  // is the only input that changes WHICH cards are probed; the filter below
-  // mirrors the card's stale-projection kind guard.
+  // Gateway 卡 runtime 探针：注册表/状态变化时立即探一次已连接 gateway 卡，此后按固定间隔
+  // 维持（宿主侧自发停机/恢复无桌面事件可依赖）；transport 断开的卡不探 —— 启动动作本身以
+  // connected 门控。探测依赖 CONNECTED gateway id SET，绝不依赖整个 statuses map：每次
+  // per-source 推送都会重写该 map，整 map 依赖会在每次推送时对所有 gateway 卡立即重探
+  // （O(cards × pushes)）。
   const connectedGatewayKey = useMemo(
     () => instances
       .filter(spec => spec.kind === 'gateway'
@@ -1153,9 +1043,8 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
     [instances, statuses],
   )
 
-  // Gateway 卡 runtime 探针节奏（design 21 §6.8 r1）：连接集合变化时立即探一次，
-  // 此后按固定间隔维持（宿主侧自发停机/恢复无桌面事件可依赖）；transport 断开
-  // （phase 非 ready/degraded）的卡不探 —— 启动动作本身以 connected 门控。
+  // Gateway 卡 runtime 探针：连接集合变化时立即探一次，此后按固定间隔维持（宿主侧自发
+  // 停机/恢复无桌面事件可依赖）；transport 断开的卡不探 —— 启动动作以 connected 门控。
   useEffect(() => {
     if (!bridgeUp) return
     const ids = connectedGatewayKey === '' ? [] : connectedGatewayKey.split(',')
@@ -1170,19 +1059,16 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
   const dsh = health?.dsh
   const healthy = dsh?.status === 'ready' || dsh?.status === 'degraded'
   const starting = dsh?.status === 'starting' || dsh?.status === 'restarting'
-  // 写者静默通知：诊断非静默时在本地卡片上点名阻塞写者并给出
-  // 「清理并接管」；纯判定在 writer-diagnosis.ts（有单测）。
+  // 写者静默通知：诊断非静默时在本地卡片上点名阻塞写者并给出「清理并接管」；判定在 writer-diagnosis.ts。
   const notice = writerNotice(writerDiagnosis)
   /** 确认 Modal 的目标卡是否正处「本卡重启」忙碌态（他卡在飞不影响本 Modal）。 */
   const restartConfirmBusy = restartConfirmFor !== null && restartingIds[restartConfirmFor.id] === true
 
-  // dsh 运行时版本（design 18 §3.6 B）：优先读同一个 runtime state；其完整
-  // 状态缺失时回退 info 投影，null/空串时不编造 chip。
+  // dsh 运行时版本：优先读同一个 runtime state；其完整状态缺失时回退 info 投影，null/空串时不编造 chip。
   const dshVersion = runtimeState?.active
     ?? (typeof window !== 'undefined' ? (window.dshChamber?.dshVersion ?? null) : null)
 
-  /** 虚线添加入口：有卡片时作为网格的最后一个单元格，与卡片
-   *  同宽；空名单时独立通栏显示。 */
+  /** 虚线添加入口：有卡片时作为网格的最后一个单元格；空名单时独立通栏显示。 */
   const creatorButton = (
     <button type="button" className={css.creatorButton} onClick={openAdd}>
       <IconPlusOutline16 size={14} />
@@ -1194,22 +1080,13 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
     <div className={css.section}>
       <h2 className={css.title}>{t('nav')}</h2>
       <p className={css.intro}>{t('sectionIntro')}</p>
-      {/* Plaintext-fallback visibility (design 17 §13.4.1): when the OS keychain is
-          unavailable the main process mirrors gateway credentials as the
-          documented 0600 plaintext fallback — the fallback path must be
-          visible on the settings page. The main process merges the
-          read-only secretStorage projection onto every instances_get row
-          (global per store), so any plaintext row shows the hint line. */}
+      {/* Plaintext-fallback visibility: when the OS keychain is unavailable main mirrors
+          gateway credentials as the documented 0600 plaintext fallback (read-only projection merged onto every instances_get row). */}
       {instances.some(spec => spec.secretStorage === 'plaintext')
         ? <p className={css.hint} role="status">{t('secretStoragePlaintextHint')}</p>
         : null}
-      {/* Cross-flavor credential residual (design 25 §6.4): the
-          secretStorageUnreadable projection is per-row (true only for rows
-          whose mirror bytes another flavor wrote with safeStorage), so this
-          dedicated hint renders exactly when at least one row carries it. It
-          must stay distinct from the plaintext hint: the preserved file is NOT
-          corruption, and the user has to re-enter those credentials (or go
-          back to the flavor that wrote them). */}
+      {/* Cross-flavor credential residual: secretStorageUnreadable is per-row (mirror bytes
+          another flavor wrote), so this hint renders exactly when at least one row carries it. It is NOT corruption: the user must re-enter those credentials. */}
       {instances.some(spec => spec.secretStorageUnreadable === true)
         ? <p className={css.hint} role="status">{t('secretStorageUnreadableHint')}</p>
         : null}
@@ -1315,9 +1192,8 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
               {reclaimOk ? <p className={css.writerReclaimOk}>{t('writerReclaimOk')}</p> : null}
             </div>
           ) : null}
-          {/* The one visible reason for BOTH gated spawn entries (start and
-              「清理并接管」): local-spawn-gate.ts guarantees every blocked verdict
-              names itself, so a disabled entry never appears without a cause. */}
+          {/* The one visible reason for BOTH gated spawn entries (start and 「清理并接管」):
+              local-spawn-gate.ts guarantees every blocked verdict names itself. */}
           {spawnGate.reasonKey !== null ? (
             <p className={css.hint}>{spawnGate.reasonDetail ?? t(spawnGate.reasonKey)}</p>
           ) : null}
@@ -1381,46 +1257,36 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
           : (
             <ul className={css.cards}>
               {instances.map(spec => {
-                // Registry and status pushes are independent. Suppress a
-                // stale old-provider projection during a kind switch instead
-                // of showing the replacement connection as falsely ready.
+                // Registry and status pushes are independent. Suppress a stale old-provider
+                // projection during a kind switch instead of showing the replacement as falsely ready.
                 const projectedStatus = statuses[spec.id]
                 const status = projectedStatus?.kind === spec.kind ? projectedStatus : undefined
                 const phase = status?.phase
                 const connected = phase === 'ready' || phase === 'degraded'
                 const specBusy = busy[spec.id] === true
-                // Gateway runtime startability (design 21 §6.8 r1): the
-                // tunnel phase proves the gateway HOST answers — the managed
-                // dsh's own state comes from the runtime probe
-                // (runtimeConnectionById). startBusy keeps the button
-                // rendered while the per-card start is in flight.
+                // Gateway runtime startability: the tunnel phase proves the gateway HOST answers;
+                // the managed dsh's own state comes from the runtime probe (startBusy keeps the button rendered).
                 const runtimeConnectionState = runtimeConnectionById[spec.id]
                 const runtimeStartable = runtimeConnectionState !== undefined
                   && STARTABLE_RUNTIME_STATES.has(runtimeConnectionState)
-                // 重启门（design 21 §6.3 / runtime-routes.ts /restart）：核心路由
-                // 只接受 ready/degraded，探针已给出其它终态时点击必然 409（停机态
-                // 的恢复面是「启动实例」）——按钮提前禁用，而不是放行一次注定被拒
-                // 的请求再把英文 body.error 抛给使用者。探针无答案（未探/已清条目）
-                // 不禁用：缺探针不得隐藏健康来源。
+                // 重启门：核心路由只接受 ready/degraded，探针已给出其它终态时点击必然 409（停机态
+                // 的恢复面是「启动实例」）——按钮提前禁用，而不是放行注定被拒的请求。探针无答案
+                // （未探/已清条目）不禁用：缺探针不得隐藏健康来源。
                 const restartBlocked = runtimeBlocksRestart(runtimeConnectionState)
                 const startBusy = startBusyIds[spec.id] === true
                 const serviceActive = status?.serviceActive
-                // systemd control rides the ssh transport (dsh or gateway
-                // over a tunnel both exec systemctl over ssh); http direct
-                // endpoints have no service channel.
+                // systemd control rides the ssh transport (dsh or gateway over a tunnel both
+                // exec systemctl over ssh); http direct endpoints have no service channel.
                 const serviceConfigured = spec.transport === 'ssh' && spec.serviceName !== null
-                // 终态失败提示按类别选择（action-hint.ts）：endpoint 类意味着
-                // SSH 隧道本身正常、问题在远端 dsh 实例——绝不展示 SSH 认证失败
-                // 提示（误导性信息修复）。
+                // 终态失败提示按类别选择（action-hint.ts）：endpoint 类意味着隧道正常、问题在
+                // 远端实例——绝不展示 SSH 认证失败提示。
                 const hintKey = actionHintKey(spec, status, phase)
                 // 本卡重启/启动结果行（null = 无）；tone 分流渲染（见下）。
                 const restartNote = restartNotes[spec.id]
                 return (
                   <li key={spec.id} className={css.card}>
                     <div className={css.cardHead}>
-                      {/* 两行布局：身份行（名称 + 类型）与徽标行（状态 +
-                          安全姿态）分开——单行 flex-wrap 在 268px 网格底线处
-                          换行不可预测，名称会被挤压成省略号。 */}
+                      {/* 两行布局：身份行与徽标行分开——单行 flex-wrap 在 268px 网格底线处换行不可预测，名称会被挤压成省略号。 */}
                       <div className={css.cardHeadIdentity}>
                         <span className={css.cardName} title={spec.label}>{spec.label}</span>
                         <span className={css.kindBadge}>{spec.kind === 'gateway' ? t('kindGateway') : t('kindDsh')}</span>
@@ -1433,17 +1299,9 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                         )}>
                           {t(phaseKey(phase))}
                         </span>
-                        {/* 诚实状态 (design 17 §13.1): the plaintext and no-auth
-                            postures stay visible on the card after configuring.
-                            「无认证」 only when NEITHER gateway credential is
-                            stored — the passwordSet projection is the
-                            authoritative SshInstanceSpec member (design 17
-                            §9.1, desktop gateway-secrets task).
-                            配色：姿态徽标统一为「描边 + 彩色文字」
-                            家族（.badgeWarn / .badgeSuccess），与状态徽标的
-                            填充区分——同类姿态同族同色，不按主观严重度分层；
-                            顺序按维度：传输层（HTTP 明文）→ 认证层（无认证）
-                            → 信任层（SPKI 已固定）。 */}
+                        {/* 诚实状态: the plaintext and no-auth postures stay visible after
+                            configuring. 「无认证」 only when NEITHER gateway credential is stored
+                            (passwordSet is authoritative). 配色：姿态徽标统一描边+彩色文字，与状态徽标填充区分。 */}
                         {spec.insecureHttp
                           ? <span className={clsx(css.badge, css.badgeWarn)}>{t('badgeHttpPlaintext')}</span>
                           : null}
@@ -1509,8 +1367,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                           variant="outline"
                           size="sm"
                           className={css.restartTip}
-                          // 此按钮不带 data-tip；aria-label 保留——busy/未连接/未运行时
-                          // 携带禁用原因，常态回退可见标签（restartManagedDsh）。
+                          // 此按钮不带 data-tip；aria-label 保留——busy/未连接/未运行时携带禁用原因，常态回退可见标签。
                           aria-label={restartingIds[spec.id] === true
                             ? t('restartManagedDshBusy')
                             : !connected
@@ -1523,16 +1380,14 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                         >
                           {restartingIds[spec.id] === true ? t('restartManagedDshBusy') : t('restartManagedDsh')}
                         </Button>
-                        {/* 「启动实例」（design 21 §6.8 r1）：托管 dsh 处于
-                            stopped/error/restart-exhausted（runtime 探针投影）
-                            且传输已连接时出现；在飞期间保持渲染（busy 标签）。 */}
+                        {/* 「启动实例」：托管 dsh 处于 stopped/error/restart-exhausted（runtime
+                            探针投影）且传输已连接时出现；在飞期间保持渲染（busy 标签）。 */}
                         {(runtimeStartable || startBusy) && (
                           <Button
                             variant="outline"
                             size="sm"
                             className={css.restartTip}
-                            // aria 配对：同款规则——tip 存在（禁用原因）即为
-                            // aria-label，否则回退可见标签（busy/常态）。
+                            // aria 配对：tip 存在（禁用原因）即为 aria-label，否则回退可见标签。
                             data-tip={!connected ? t('restartNotConnected') : undefined}
                             aria-label={!connected ? t('restartNotConnected') : startBusy ? t('startManagedDshBusy') : t('startManagedDsh')}
                             disabled={specBusy || !connected || startBusy || restartingIds[spec.id] === true}
@@ -1549,9 +1404,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                         size="sm"
                         className={css.restartTip}
                         disabled={specBusy || !serviceConfigured}
-                        // aria 配对：同款规则——tip 存在（未配置原因 /
-                        // gateway 的 systemd 重启说明）即为 aria-label，否则回退
-                        // 可见标签（dsh 实例的「重启实例」）。
+                        // aria 配对：tip 存在（未配置原因 / gateway 的 systemd 重启说明）即为 aria-label，否则回退可见标签。
                         data-tip={!serviceConfigured ? t('serviceUnconfigured') : spec.kind === 'gateway' ? t('restartServiceTip') : undefined}
                         aria-label={!serviceConfigured ? t('serviceUnconfigured') : spec.kind === 'gateway' ? t('restartServiceTip') : t('restartInstance')}
                         onClick={() => { void restartSourceService(spec) }}
@@ -1560,11 +1413,8 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                       </Button>
                       )}
                     <div className={css.cardFoot}>
-                      {/* 插件入口对每个连接渲染，统一开 PluginDialog（plan 24
-                          D5-A）：SSH 通道的 dsh 目标走 ssh 后端（desktopSsh 插
-                          件表面）；gateway（任意传输）走 gateway 后端（/chamber
-                          读面 + gateway IPC 写面，runtimeDown 门控恢复撤销面）；
-                          http 直连 dsh 目标无执行表面，只读 Loader 清单。 */}
+                      {/* 插件入口对每个连接渲染，统一开 PluginDialog：SSH 通道的 dsh 目标走 ssh
+                          后端；gateway（任意传输）走 gateway 后端；http 直连无执行表面，只读 Loader 清单。 */}
                       <button
                         type="button"
                         className={css.iconButton}
@@ -1683,10 +1533,8 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
         )}
       />
 
-      {/* 受控重启 gateway 托管的 dsh（design 21 §5.1）：确认含多用户中断文案；
-          运行期间保持弹窗 + busy 标签（与 stopConfirm 同款模态纪律）。忙碌判定
-          只看本 Modal 的目标卡（restartConfirmBusy）：他卡在飞不锁本卡确认，
-          本卡收尾也只关本卡 Modal —— 每卡独立单飞。 */}
+      {/* 受控重启 gateway 托管的 dsh：确认含多用户中断文案；运行期间保持弹窗 + busy 标签。
+          忙碌判定只看本 Modal 的目标卡（restartConfirmBusy）——每卡独立单飞。 */}
       <Modal
         open={restartConfirmFor !== null}
         onClose={() => { if (!restartConfirmBusy) setRestartConfirmFor(null) }}
@@ -1814,9 +1662,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
             <Button variant="ghost" icon={<IconRefreshOutline16 />} disabled={gatewayHostLogsBusy} onClick={() => { void refreshGatewayHostLogs() }}>
               {t('logsRefresh')}
             </Button>
-            {/* Footer close clears the stale-guard ref exactly like onClose —
-                a late gatewayHostLogs response must never repaint a closed
-                modal. */}
+            {/* Footer close clears the stale-guard ref exactly like onClose — a late gatewayHostLogs response must never repaint a closed modal. */}
             <Button variant="outline" onClick={() => { gatewayLogsTargetRef.current = null; setGatewayLogsFor(null) }}>
               {t('close')}
             </Button>
@@ -1844,17 +1690,14 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
 
       {pluginDialogFor !== null
         ? (() => {
-          // Diagnostic key: 'local' | '<kind>-<id>'; for ssh targets the
-          // registry key is the SPEC kind ('dsh'), not the dialog target
-          // kind; for gateway/http the target sourceId IS '<kind>-<id>' already.
+          // Diagnostic key: 'local' | '<kind>-<id>'; for ssh targets the registry key is the SPEC
+          // kind ('dsh'), not the dialog target kind; for gateway/http sourceId IS '<kind>-<id>' already.
           const sourceKey = pluginDialogFor.kind === 'local'
             ? 'local'
             : pluginDialogFor.kind === 'ssh'
               ? `${pluginDialogFor.spec.kind}-${pluginDialogFor.spec.id}`
               : pluginDialogFor.sourceId
-          // Gateway recovery gate (plan 24 B1.6): the card's existing
-          // runtime projection (runtimeConnectionById, stopped/error/
-          // restart-exhausted) becomes the dialog's runtimeDown signal.
+          // Gateway recovery gate: the card's runtime projection (stopped/error/restart-exhausted) becomes the dialog's runtimeDown signal.
           const runtimeDown = pluginDialogFor.kind === 'gateway'
             ? (() => {
               const rawId = pluginDialogFor.sourceId.slice('gateway-'.length)

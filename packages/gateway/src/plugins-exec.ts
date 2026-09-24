@@ -1,60 +1,14 @@
 /**
- * Serial-queue executor for gateway third-party plugin mutations (design 21
- * §6.2/§6.3).
- *
- * Enqueue contract: one op per profile mutation, durably journaled (write
- * order ① in plugins-journal.ts) before it is queued; a single worker drains
- * the queue serially — one mutation at a time. Duplicate ops (same kind+name
- * already pending or running) fast-fail with queue_busy; the queue depth is
- * capped (queue_full beyond 8). `canRun()` (the runtime single-writer fence /
- * execution window, design 21 decision 6/7) gates each dequeue: a closed
- * window is polled for up to CAN_RUN_WAIT_MAX_MS (a queued op must never be
- * dropped just because a runtime mutation was in flight at its dequeue
- * instant); only when the window stays closed past the bound is the op marked
- * blocked — never dropped.
- *
- * runMutation per op (design 21 §6.3 write order ②→④):
- *   (1) pre-mutation backup — `<stateDir>/dsh-home/profiles/web/package.json`
- *       (+ pnpm-lock.yaml when present) is copied atomically (0600) into
- *       backups/<op-id>/ and durably referenced via journal.recordPreImage,
- *       BEFORE anything mutates the profile;
- *   (2) statusProbe re-check — 'starting'/'restarting' refuses the mutation
- *       (skips the spawn; recorded failed with 'instance is
- *       starting/restarting');
- *   (3) env discipline (design 21 §6.3): argv is the managed
- *       dsh CLI `plugin --profile web add|remove …`; the child env keeps
- *       ONLY what pnpm/network needs — PATH + the proxy family (the same
- *       canonical whitelist the dsh-runtime installer uses,
- *       INSTALL_ENV_WHITELIST) — every other ambient variable (DSH_GATEWAY_*
- *       control vars, npm_config_* / NPM_* token carriers AND any other secret
- *       carrier such as NODE_AUTH_TOKEN that lifecycle scripts or pnpm could
- *       read) is DROPPED. DSH_HOME and the private XDG_CACHE_HOME /
- *       XDG_CONFIG_HOME dirs (0700) are pinned under stateDir, and both
- *       NPM_CONFIG_USERCONFIG casings (upper + lower) point at one empty
- *       0600 file — the operator's real ~/.npmrc and global pnpm config are
- *       never consulted by install children (profile .npmrc stays untrusted
- *       input; lifecycle scripts are allowed, design 21 decision 13 — no
- *       ignore-scripts). HOME is deliberately NOT pinned: pnpm derives its
- *       DEFAULT store from the effective home, and the managed profile was
- *       provisioned under the same effective home (see ensurePrivateRunEnv /
- *       §6.3 ⑨) — a pinned HOME silently moves the store and pnpm 11 refuses
- *       every mutation against the provisioned profile;
- *   (4) spawn through the SHARED control-plane restricted-mutation executor
- *       (plugin-mutation-executor.ts — the single implementation of the
- *       bounded stdout/stderr capture, timeout TERM→KILL on the process
- *       group and terminal-text vocabulary; design 21 §6.3), with the
- *       gateway's own sanitizer and the spawned child's pid durably journaled
- *       (markChildPid) so a gateway crash mid-mutation leaves a reapable
- *       record for the next boot's reconcile;
- *   (5) post-mutation probe re-check (design 21 §6.3 pre/post double check):
- *       a successful mutation is re-verified before it is recorded ok — an
- *       instance that entered 'starting'/'restarting' mid-mutation fails the
- *       op ('instance (re)started during the mutation; verify plugin state
- *       and retry') instead of pretending success.
- *
- * The spawn seam is injectable; production code never runs a real dsh CLI in
- * unit tests. dispose() stops acceptance, kills the in-flight child and
- * waits for the worker; workerBusy() reports an in-flight mutation.
+ * Serial-queue executor for gateway third-party plugin mutations: a single
+ * worker drains one at a time. Duplicate pending/running kind+name fast-fails
+ * queue_busy; depth past PLUGIN_QUEUE_CAP is queue_full. `canRun()` (the
+ * runtime single-writer window) gates each dequeue: a closed window is polled
+ * up to CAN_RUN_WAIT_MAX_MS, then marked blocked — never dropped.
+ * runMutation: pre-mutation backup (0600, journaled preImage) BEFORE anything
+ * mutates; probe refusal of 'starting'/'restarting' before AND after the spawn;
+ * a child env limited to PATH + INSTALL_ENV_WHITELIST (the operator's ~/.npmrc
+ * displaced, HOME deliberately NOT pinned so pnpm's default store stays the one
+ * the profile was provisioned against); a journaled child pid.
  */
 
 import { existsSync } from 'node:fs'
@@ -93,23 +47,18 @@ import { ensurePnpmOnPath, withPnpmOnPath } from './pnpm-entry.ts'
 import type { JournalLogger, JournalOp, JournalOpKind, JournalPending, JournalTerminalPatch, PluginsJournal } from './plugins-journal.ts'
 import type { PluginRefusalCode } from '@dsh-chamber/control-plane'
 
-/** Queue depth cap (design 21 §6.9: queue depth ≤ 8). */
 export const PLUGIN_QUEUE_CAP = 8
-/** Execution-window wait bound (design 21 decision 6/7): a dequeued op
- * whose canRun() gate is closed polls for the window
- * to open for up to this long before it is marked blocked ('runtime busy;
- * retry later') — a queued op must never be dropped just because a runtime
- * mutation happened to be in flight at its dequeue instant. */
+/** Execution-window wait bound: a dequeued op whose canRun() gate is closed
+ * polls this long before it is marked blocked ('runtime busy; retry later') —
+ * a queued op is never dropped just because a runtime mutation was in flight. */
 export const CAN_RUN_WAIT_MAX_MS = 120_000
 /** canRun() re-check cadence during the execution-window wait. */
 export const CAN_RUN_POLL_MS = 250
-/** Grace between SIGTERM and SIGKILL on dispose (the per-mutation timeout
- * grace belongs to the shared control-plane executor). */
+/** Grace between SIGTERM and SIGKILL on dispose. */
 export const SIGNAL_GRACE_MS = 1000
-/** Byte cap for op/journal error text (design 21 §6.3 sanitize discipline,
- * mirroring the dsh-runtime installer's FAILED_ERROR_LIMIT family): child
- * output and failure detail are sanitized AND bounded before they land in
- * the journal, whose tasks projection is served verbatim to clients. */
+/** Byte cap for op/journal error text: child output and failure detail are
+ * sanitized AND bounded before they land in the journal, whose tasks
+ * projection is served verbatim to clients. */
 export const JOURNAL_ERROR_TEXT_MAX_BYTES = 2_000
 
 /** StatusProbe states that refuse a mutation (skip spawn). */
@@ -118,37 +67,31 @@ export const REFUSED_PROBE_STATES = ['starting', 'restarting'] as const
 export const ERROR_RUNTIME_BUSY = 'runtime busy; retry later'
 export const ERROR_STARTING = 'instance is starting/restarting'
 export const ERROR_RESTARTED_DURING_MUTATION = 'instance (re)started during the mutation; verify plugin state and retry'
-/** Post-install family verification failure (design 21 §6.11.4). */
+/** Post-install family verification failure. */
 export const ERROR_FAMILY_DRIFT = 'installed, but the profile tree no longer matches the instance runtime'
 export const ERROR_DUPLICATE_PENDING = 'duplicate operation pending'
 /** The undo verb's honest refusal when the journal no longer carries the
- * bound target as an ok op with a preImage backup (design 21 §6.3/§6.8 r2). */
+ * bound target as an ok op with a preImage backup. */
 export const ERROR_NO_UNDOABLE_OP = 'no undoable plugin operation is recorded'
 
-/** StatusProbe states during which a mutation must neither start nor be
- * recorded as ok (design 21 §6.3 pre/post double check). */
+/** Probe states during which a mutation must neither start nor be recorded ok. */
 function isRefusedProbeState(state: string): boolean {
   return (REFUSED_PROBE_STATES as readonly string[]).includes(state)
 }
 
-/** Journal methods the executor drives. markChildPid is optional on the
- * surface so minimal fakes stay compatible; the real journal implements it. */
+/** Journal methods the executor drives (markChildPid optional for minimal fakes). */
 export type JournalSurface = Pick<PluginsJournal, 'appendPending' | 'recordPreImage' | 'markTerminal' | 'recent'> & {
   markChildPid?(opId: string, pid: number): void
 }
 
-/** Terminal callback invoked once per op after its journal terminal state
- * was recorded (including ops blocked by dispose()). Receives the recorded
- * op and the terminal status — the orchestrator releases its per-op
- * profile-write lease here (the executor has no other terminal seam). */
+/** Terminal callback invoked once per op after its journal terminal state was
+ * recorded (including dispose-time blocks): the orchestrator releases its
+ * per-op profile-write lease here (the executor has no other terminal seam). */
 export type OnOpTerminal = (op: JournalOp, terminalStatus: 'ok' | 'failed' | 'blocked') => void
 
-/** Default error-text sanitizer for every executor/journal error string
- * (design 21 §6.3): registry URLs are reduced to their origin (userinfo /
- * query / path capability tokens removed), named secrets redacted, absolute
- * paths removed, then byte-bounded — the dsh-runtime
- * sanitizeInstallerOutput family, applied before an error can reach the
- * journal (whose tasks projection is served verbatim to clients). */
+/** Default error-text sanitizer: registry URLs reduced to their origin, named
+ * secrets redacted, absolute paths removed, then byte-bounded — applied before
+ * an error can reach the journal (served verbatim to clients). */
 export const defaultSanitize = (text: string): string =>
   sanitizeInstallerOutput(text, JOURNAL_ERROR_TEXT_MAX_BYTES)
 
@@ -157,9 +100,8 @@ export type EnqueueResult = { ok: true; opId: string } | EnqueueRejection
 
 interface QueueItem extends JournalPending {
   opId: string
-  /** Per-op terminal callback (enqueue-time, BEFORE the worker can process
-   * the item — the orchestrator passes its lease release here so a
-   * terminal that fires synchronously inside enqueue can never be missed). */
+  /** Per-op terminal callback registered at enqueue time, BEFORE the worker can
+   * process the item, so a terminal that fires inside enqueue is never missed. */
   terminal?: OnOpTerminal
 }
 
@@ -173,54 +115,33 @@ export interface PluginExecDeps {
   logger: JournalLogger
   spawn?: MutationSpawnFn
   timeoutMs?: number
-  /** Execution-window gate (design 21 decision 6/7): while it answers false
-   * the worker polls it at canRunPollMs for up to canRunWaitMaxMs before the
-   * op is marked blocked — a window that opens in time lets the op run. A
-   * throwing gate is treated as closed. Defaults to allowing. */
+  /** Execution-window gate: while false the worker polls it at canRunPollMs up
+   * to canRunWaitMaxMs, then blocks the op; a throwing gate counts as closed. */
   canRun?: () => boolean
-  /** Execution-window wait bound (tests inject a short bound; production
-   * keeps CAN_RUN_WAIT_MAX_MS). */
   canRunWaitMaxMs?: number
-  /** Execution-window re-check cadence (tests inject a short cadence;
-   * production keeps CAN_RUN_POLL_MS). */
   canRunPollMs?: number
-  /** Shared terminal fallback: fires once per op (when enqueue was called
-   * without a per-op hook) AFTER its journal terminal state was recorded
-   * (ok/failed/blocked, including dispose-time blocks). The orchestrator
-   * passes its lease release PER OP via enqueue() — registration before the
-   * worker can process the item is race-free; this fallback serves
-   * standalone/test callers. */
+  /** Shared terminal fallback: fires once per op after its terminal state is
+   * recorded, when enqueue was called without a per-op hook. */
   onTerminal?: OnOpTerminal
-  /** Per-op runtime facts (design 21 §6.11.3/§6.11.4): the ACTIVE workspace path
-   *  + its effective version. Lazy (resolved per op) so a runtime switch between
-   *  ops is honored; the accessor may throw (corrupt override/pointer metadata)
-   *  and every call site guards it. Absent ⇒ no family facts (the decision
-   *  degrades conservatively, the verification is skipped loudly). */
+  /** Per-op runtime facts: the ACTIVE workspace path + its effective version,
+   *  resolved lazily so a runtime switch is honored. A thrown accessor is
+   *  guarded at every call site; absent ⇒ no family facts (skip is logged). */
   runtimeFacts?: () => { path: string; version: string | null } | null
-  /** Per-op real-CLI launch resolution (design 21 §6.3): the managed dsh
-   * CLI is spawned as `node <entry> plugin …` from the ACTIVE runtime
-   * workspace (`resolveWorkspace`). Resolved at every spawn so a runtime
-   * version switch between ops can never leave the queue launching a stale
-   * entry; null/absent keeps the bare `dshCliPath` argv (standalone use and
-   * tests). A throw fails the op loudly (never a silent fallback). */
+  /** Per-op CLI launch resolution (`node <entry> plugin …` from the ACTIVE
+   * runtime workspace), resolved at every spawn so a version switch cannot
+   * launch a stale entry; null/absent keeps the bare `dshCliPath` argv. */
   cliLaunch?: () => { argvPrefix: string[]; cwd?: string } | null
 }
 
 export interface PluginExec {
-  /** Journal (①) then queue one mutation. Rejects fast on duplicate ops
-   * (queue_busy) or a full queue (queue_full); never blocks on the worker.
-   * An optional per-op terminal callback fires exactly once after the op's
-   * journal terminal state was recorded (ok/failed/blocked, dispose-time
-   * blocks included); without one the shared deps.onTerminal fallback
-   * applies. */
+  /** Journal then queue one mutation. Rejects fast on a duplicate op
+   * (queue_busy) or full queue (queue_full); never blocks on the worker. The
+   * optional per-op terminal callback fires once after the terminal record. */
   enqueue(input: JournalPending, onTerminal?: OnOpTerminal): Promise<EnqueueResult>
-  /** Stop accepting ops, mark queued ops blocked, kill the in-flight child
-   * and wait for the worker to settle. Idempotent. */
+  /** Stop accepting ops, mark queued ops blocked, kill the in-flight child and wait for the worker. Idempotent. */
   dispose(): Promise<void>
-  /** True while a mutation is in flight (drain/status seams). */
   workerBusy(): boolean
-  /** Live op count (journaled, not yet terminal) — the drain seam uses it to
-   * pace multi-wave deferred-intent draining against the queue cap. */
+  /** Live op count (journaled, not yet terminal). */
   pendingCount(): number
 }
 
@@ -243,8 +164,7 @@ export function createPluginsExec(deps: PluginExecDeps): PluginExec {
   const liveOps = new Map<string, { kind: JournalOpKind; name: string }>()
   let workerPromise: Promise<void> | null = null
   let current: { item: QueueItem; child: MutationChild | null } | null = null
-  /** Wake handle for a pending execution-window poll (dispose() resolves it
-   * so shutdown never waits out the poll cadence). */
+  /** Wake handle for a pending execution-window poll (dispose() resolves it). */
   let pollWake: (() => void) | null = null
 
   function kickWorker(): void {
@@ -255,8 +175,6 @@ export function createPluginsExec(deps: PluginExecDeps): PluginExec {
     }
   }
 
-  /** Minimal terminal record synthesized when the journal could not record
-   * the real one (see complete) — enough for lease-release hooks to run. */
   function terminalOf(item: QueueItem, patch: JournalTerminalPatch): JournalOp {
     const op: JournalOp = {
       id: item.opId,
@@ -273,7 +191,6 @@ export function createPluginsExec(deps: PluginExecDeps): PluginExec {
     return op
   }
 
-  /** One op whose terminal state was recorded (or could not be). */
   function complete(item: QueueItem, patch: JournalTerminalPatch): void {
     const opId = item.opId
     let terminal: JournalOp | null = null
@@ -281,22 +198,15 @@ export function createPluginsExec(deps: PluginExecDeps): PluginExec {
       terminal = journal.markTerminal(opId, patch)
       log(`plugins-exec: op ${opId} ${patch.status}`)
     } catch (error) {
-      // The durable terminal record could not be written (ENOSPC/EACCES/
-      // …). The op is still TERMINAL in this process, and the terminal hook
-      // must fire regardless — a profile-write lease must never outlive its
-      // op (design 21 §6.3 decision 6/17). The hook receives a synthesized
-      // terminal record; the journal keeps the op pending, so the next
-      // boot's reconcile marks it failed with the preImage retained (never
-      // a silent success).
+      // The durable terminal record could not be written: the op is still
+      // TERMINAL here and the hook must fire — a lease never outlives its op.
+      // The journal keeps the op pending for the next boot's reconcile.
       warn(`plugins-exec: could not record terminal state for op ${opId}: ${messageOf(error)}`)
     } finally {
       liveOps.delete(opId)
     }
-    // The terminal hook fires even when the journal write failed AND when
-    // markTerminal answered null (the record was lost — e.g. the journal was
-    // renamed aside as corrupt between the append and the terminal): a lease
-    // must never outlive its op (the orchestrator maps the missing journal
-    // record to a failed op at the next boot's reconcile).
+    // The hook fires even when markTerminal answered null (the record was lost
+    // between append and terminal): a lease never outlives its op.
     const hook = item.terminal ?? deps.onTerminal
     if (hook !== undefined) {
       try {
@@ -319,8 +229,7 @@ export function createPluginsExec(deps: PluginExecDeps): PluginExec {
     }
   }
 
-  /** Interruptible poll sleep: resolves at the deadline or as soon as
-   * dispose() wakes it (whichever comes first). */
+  /** Interruptible poll sleep: resolves at the deadline or when dispose() wakes it. */
   function pollSleep(ms: number): Promise<void> {
     if (ms <= 0) return Promise.resolve()
     return new Promise(resolve => {
@@ -334,22 +243,17 @@ export function createPluginsExec(deps: PluginExecDeps): PluginExec {
     })
   }
 
-  /** One execution-window evaluation; a throwing gate is treated as closed. */
   function runWindowOpen(): boolean {
     try {
       return canRun() === true
     } catch {
-      // A throwing execution-window gate is treated as closed.
       return false
     }
   }
 
-  /**
-   * Execution-window dequeue gate (design 21 decision 6/7): reached only
-   * with a CLOSED window — the worker re-checks the gate every canRunPollMs
-   * until the window opens ('run'), the wait bound elapses ('blocked' — the
-   * op is marked blocked, never lost), or dispose() interrupts ('shutdown').
-   */
+  /** Execution-window dequeue gate, reached only with a CLOSED window: polls
+   * canRunPollMs until the window opens ('run'), the bound elapses ('blocked' —
+   * never lost), or dispose() interrupts ('shutdown'). */
   async function awaitRunWindow(): Promise<'run' | 'blocked' | 'shutdown'> {
     const waitMaxMs = deps.canRunWaitMaxMs ?? CAN_RUN_WAIT_MAX_MS
     const pollMs = Math.min(deps.canRunPollMs ?? CAN_RUN_POLL_MS, waitMaxMs)
@@ -370,8 +274,7 @@ export function createPluginsExec(deps: PluginExecDeps): PluginExec {
         if (disposed) return
         await new Promise<void>(resolve => {
           wakeResolve = resolve
-          // Re-check inside the executor so a dispose/enqueue that ran before
-          // this promise was created can never be lost.
+          // Re-check inside the executor: a dispose/enqueue racing this promise must not be lost.
           if (disposed || queue.length > 0) {
             wakeResolve = null
             resolve()
@@ -381,10 +284,9 @@ export function createPluginsExec(deps: PluginExecDeps): PluginExec {
       }
       current = { item, child: null }
       try {
-        // Dequeue gate: the OPEN-window fast path is synchronous so a worker
-        // wake → spawn stays race-free; a closed window is awaited within
-        // the bounded poll (never a spawn mid-transaction), then the op is
-        // marked blocked — dispose interrupts the wait and blocks the op.
+        // Dequeue gate: the OPEN-window fast path is synchronous (a wake →
+        // spawn stays race-free); a closed window is awaited within the bounded
+        // poll — never a spawn mid-transaction.
         if (runWindowOpen()) {
           await runMutation(item)
         } else {
@@ -406,16 +308,9 @@ export function createPluginsExec(deps: PluginExecDeps): PluginExec {
   }
 
   /** Private pnpm cache/xdg dirs (0700) + empty NPM_CONFIG_USERCONFIG file
-   * (0600); (re)created before every run. HOME is deliberately NOT pinned
-   * (and is dropped by the scrub whitelist): pnpm derives its DEFAULT store
-   * from the effective home, and the managed profile's node_modules was
-   * provisioned under the SAME effective home (the gateway spawns the dsh
-   * child without HOME; pnpm falls back to the passwd home). A pinned HOME
-   * silently moves pnpm's default store elsewhere, and pnpm 11 then refuses
-   * every mutation against the provisioned profile ("pnpm now wants to use
-   * the store at …"). Caches/config stay private via the XDG + userconfig
-   * pins; the store itself remains the operator-home store the profile was
-   * linked against. */
+   * (0600), (re)created before every run. HOME is deliberately NOT pinned: pnpm
+   * derives its default store from the effective home, and a pinned HOME moves
+   * it — pnpm 11 then refuses every mutation against the provisioned profile. */
   function ensurePrivateRunEnv(): void {
     const thirdParty = thirdPartyRoot(stateDir)
     ensurePrivateDirectoryNoFollow(thirdParty, 0o700)
@@ -427,11 +322,8 @@ export function createPluginsExec(deps: PluginExecDeps): PluginExec {
   }
 
   /** Executor-side spawn seam: captures the child for dispose() kills and
-   * durably records its pid on the pending journal op (design 21 §6.3
-   * crash-orphan reaping) — a gateway crash mid-mutation leaves the detached
-   * child writing DSH_HOME; the next boot's reconcileJournal() kills the
-   * recorded pid before any new mutation can start. Best effort: a pid that
-   * cannot be recorded only warns (the op itself is unaffected). */
+   * durably records its pid (crash-orphan reaping at the next boot's reconcile).
+   * Best effort: an unrecordable pid only warns. */
   const childSpawn: MutationSpawnFn = (command, args, options) => {
     const child = (deps.spawn ?? spawnMutationChild)(command, args, options)
     if (current !== null) current.child = child
@@ -443,8 +335,7 @@ export function createPluginsExec(deps: PluginExecDeps): PluginExec {
         warn(`plugins-exec: could not record child pid ${pid} for op ${current.item.opId}: ${messageOf(error)}`)
       }
     }
-    // A mutation that starts while dispose() is already draining must never
-    // outlive the shutdown: kill it the moment it appears.
+    // A mutation starting while dispose() drains must never outlive it: kill it on sight.
     if (killOnSpawn) {
       try {
         child.kill('SIGTERM')
@@ -455,7 +346,6 @@ export function createPluginsExec(deps: PluginExecDeps): PluginExec {
     return child
   }
 
-  /** Lazy, guarded runtime facts (see PluginExecDeps.runtimeFacts). */
   function readRuntimeFacts(): { path: string; version: string | null } | null {
     if (deps.runtimeFacts === undefined) return null
     try {
@@ -467,22 +357,17 @@ export function createPluginsExec(deps: PluginExecDeps): PluginExec {
   }
 
   /**
-   * Execution-time re-judgement (design 21 §6.11.3): the submission-time
-   * judgement used the facts of that moment, while the CLI launch below resolves
-   * the workspace PER OP — an op queued behind a `/chamber/runtime` switch would
-   * otherwise install a layer pinned to the OLD generation (its own direct dep
-   * is exempt from the verifier, so nothing else would catch it). The same
-   * single-source decision runs again here with the per-op facts; a refusal
-   * fails the op honestly, before the pre-mutation backup.
+   * Execution-time re-judgement: the CLI launch below resolves the workspace
+   * PER OP, so an op queued behind a `/chamber/runtime` switch would otherwise
+   * install a layer pinned to the OLD generation. The same single-source
+   * decision runs again with the per-op facts; a refusal fails the op before
+   * the pre-mutation backup.
    *
-   * Returns the refusal (null = allowed) AND the fact snapshot the
-   * post-mutation family verification must reuse — one resolveJudgementInputs
-   * per install op, so the judgement, the verification and its message all
-   * describe the SAME runtime (2026-12 review: this used to be three
-   * readRuntimeFacts calls, the last two racing a possible switch). A remove
-   * op judges no version and has no verification to feed, and an undo judges
-   * its own inverse direction inside runUndo: neither takes a snapshot
-   * (inputs null) nor reads the runtime facts. */
+   * Returns the refusal (null = allowed) AND the fact snapshot the post-mutation
+   * family verification reuses — one resolveJudgementInputs per install op, so
+   * judgement, verification and message describe the SAME runtime; remove/undo
+   * take no snapshot and read no facts.
+   */
   function judgeAtExecution(item: QueueItem): {
     refusal: { code: PluginRefusalCode; error: string } | null
     inputs: JudgementInputs | null
@@ -504,9 +389,8 @@ export function createPluginsExec(deps: PluginExecDeps): PluginExec {
     return { refusal, inputs }
   }
 
-  /** Write order step ② (design 21 §6.3): atomically copy the CURRENT
-   * profile pair into the op's backup dir and durably reference it. Returns
-   * the (unsanitized) failure message, or null on success. */
+  /** Atomically copy the CURRENT profile pair into the op's backup dir and
+   * durably reference it. Returns the (unsanitized) failure message, or null. */
   function backupProfile(opId: string): string | null {
     try {
       const backupDir = backupDirFor(stateDir, opId)
@@ -528,14 +412,13 @@ export function createPluginsExec(deps: PluginExecDeps): PluginExec {
   }
 
   /**
-   * The undo op (design 21 §6.3/§6.8 r2): undo = RESTORE. The target was
-   * bound at submit (`item.undoOf`); at execution it must still be an ok op
-   * with a preImage backup — when the queue ran other ops in between, the
-   * bound change is no longer the latest and the op fails loudly instead of
-   * silently restoring a different point in history. The inverse direction is
-   * re-judged with the same single decision implementation (protected set /
-   * generation coupling), then the CURRENT profile is backed up (the undo is
-   * itself undoable) and the pair is restored. */
+   * The undo op: undo = RESTORE. The target was bound at submit; at execution it
+   * must still be an ok op with a preImage backup — when the queue ran other ops
+   * in between it fails loudly instead of silently restoring a different point.
+   * The inverse direction is re-judged with the same single decision
+   * implementation, then the CURRENT profile is backed up (undo is undoable) and
+   * the pair is restored.
+   */
   async function runUndo(item: QueueItem): Promise<void> {
     if (item.undoOf === undefined) {
       complete(item, { status: 'failed', error: sanitize(ERROR_NO_UNDOABLE_OP) })
@@ -564,8 +447,7 @@ export function createPluginsExec(deps: PluginExecDeps): PluginExec {
       complete(item, { status: 'failed', error: sanitize(backupError) })
       return
     }
-    // Execution-window double check, exactly like install/remove (design 21
-    // §6.3): never restore while the managed instance is mid-(re)start.
+    // Execution-window double check, exactly like install/remove.
     if (isRefusedProbeState(statusProbe())) {
       complete(item, { status: 'failed', error: ERROR_STARTING })
       return
@@ -589,10 +471,9 @@ export function createPluginsExec(deps: PluginExecDeps): PluginExec {
       await runUndo(item)
       return
     }
-    // (0) Execution-time re-judgement (see judgeAtExecution). The snapshot it
-    // returns is the SAME one the post-mutation family verification below
-    // (step 6) consumes, so the execution-boundary facts are read once and the
-    // judgement, the verification and its message can never disagree.
+    // (0) Execution-time re-judgement (see judgeAtExecution); its snapshot is the
+    // SAME one the post-mutation verification below consumes, so the facts are
+    // read once and judgement/verification/message can never disagree.
     const { refusal: judged, inputs: judgementInputs } = judgeAtExecution(item)
     if (judged !== null) {
       complete(item, { status: 'failed', error: sanitize(`${judged.error} [${judged.code}]`) })
@@ -604,35 +485,29 @@ export function createPluginsExec(deps: PluginExecDeps): PluginExec {
       complete(item, { status: 'failed', error: sanitize(backupError) })
       return
     }
-    // (2) Execution-window pre-check: never start a mutation while the
-    // managed instance is starting/restarting (design 21 decision 7).
+    // (2) Execution-window pre-check: never mutate while the instance is (re)starting.
     const state = statusProbe()
     if (isRefusedProbeState(state)) {
       complete(item, { status: 'failed', error: ERROR_STARTING })
       return
     }
-    // (3) Strict env discipline + fixed argv (decision 13: scripts allowed).
-    // HOME is NOT pinned (see ensurePrivateRunEnv): pnpm's default store must
-    // stay the store the managed profile was provisioned against, or pnpm 11
-    // refuses every mutation with a store-mismatch error.
+    // (3) Strict env discipline + fixed argv (lifecycle scripts allowed).
+    // HOME is NOT pinned (see ensurePrivateRunEnv) so pnpm keeps the store the
+    // profile was provisioned against.
     let env: Record<string, string>
     try {
       ensurePrivateRunEnv()
       const thirdParty = thirdPartyRoot(stateDir)
-      // PATH carries the gateway's own pnpm shim (design 18 §9.2 D1): the
-      // managed `dsh plugin` CLI forwards to a literal `pnpm` on PATH, and a
-      // host provisioned with npm alone has none — the op would answer 127
-      // even though the gateway ships the pinned pnpm.
+      // PATH carries the gateway's own pnpm shim: the managed `dsh plugin`
+      // CLI forwards to a literal `pnpm` on PATH, absent on an npm-only host.
       env = withPnpmOnPath(
         scrubMutationEnv(process.env, {
           DSH_HOME: join(stateDir, MANAGED_DSH_HOME_DIR),
           XDG_CACHE_HOME: join(thirdParty, '.pnpm-cache'),
           XDG_CONFIG_HOME: join(thirdParty, '.pnpm-xdg'),
-          // Both casings pin one empty userconfig file: pnpm 11's config reader
-          // reads `npm_config_userconfig` OR `NPM_CONFIG_USERCONFIG` (exact-case
-          // property reads, no case folding), so the empty-file displacement of
-          // the operator's real ~/.npmrc must not depend on which casing a pnpm
-          // minor honors.
+          // Both casings pin one empty userconfig file: pnpm's config reader does
+          // exact-case reads, so displacing the operator's real ~/.npmrc must not
+          // depend on which casing it honors.
           NPM_CONFIG_USERCONFIG: join(thirdParty, '.npmrc-empty'),
           npm_config_userconfig: join(thirdParty, '.npmrc-empty'),
         }, INSTALL_ENV_WHITELIST),
@@ -645,9 +520,8 @@ export function createPluginsExec(deps: PluginExecDeps): PluginExec {
     const verb = kind === 'remove' ? 'remove' : 'add'
     const target = kind === 'remove' ? name : (spec ?? name)
     const argv = ['plugin', '--profile', 'web', verb, target]
-    // Per-op CLI launch (active runtime workspace → node + CLI entry); a
-    // resolution failure fails the op loudly — the preImage backup is
-    // retained for state verification/rollback.
+    // Per-op CLI launch (active runtime workspace → node + CLI entry); a failing
+    // resolution fails the op loudly, preImage retained.
     const launch = deps.cliLaunch === undefined ? null : deps.cliLaunch()
     const result = await runPluginMutation({
       command: deps.dshCliPath,
@@ -663,36 +537,29 @@ export function createPluginsExec(deps: PluginExecDeps): PluginExec {
       complete(item, { status: 'failed', error: result.error })
       return
     }
-    // (5) Post-mutation re-check (design 21 §6.3 pre/post double check): a
-    // spawn that returned 0 is only recorded ok if the instance is still in
-    // the execution window — a (re)start mid-mutation fails honestly, the
-    // preImage stays for state verification/rollback.
+    // (5) Post-mutation re-check: a 0 return is only recorded ok if the instance
+    // is still in the execution window — a (re)start fails honestly, preImage
+    // retained.
     const after = statusProbe()
     if (isRefusedProbeState(after)) {
       complete(item, { status: 'failed', error: ERROR_RESTARTED_DURING_MUTATION })
       return
     }
-    // (6) Post-install family verification (design 21 §6.11.4): R2 judges the
-    // direct spec only, but the resolved closure can hoist a runtime-family
-    // copy into the managed profile (an out-of-release name or another
-    // generation) — exactly the composition split no name-level rule can see.
-    // A violation fails the op LOUDLY; the preImage stays retained and the
-    // op's error carries the finding (design 21 §6.3 verification/rollback
-    // discipline).
+    // (6) Post-install family verification: the direct spec is judged, but the
+    // resolved closure can hoist a runtime-family copy into the profile (an
+    // out-of-release name or another generation) — a split no name-level rule can
+    // see. A violation fails the op LOUDLY, preImage retained.
     if (kind !== 'remove') {
       const familyNames = judgementInputs?.familyNames ?? null
       const familyVersions = judgementInputs?.familyVersions ?? null
-      // An EMPTY family is a fact too (the runtime provides no official-scope
-      // packages): the verification still runs and then flags every non-direct
-      // official copy as outside-family — the tight direction. Only an
-      // unavailable fact source (null) skips, and that skip is logged.
-      // Read the version from the SAME snapshot the judgement used (a runtime
-      // switch between the verdict and the message must not produce a
-      // mismatched report); judgeAtExecution resolves it for every non-remove op.
+      // An EMPTY family is a fact too: verification still runs and flags every
+      // non-direct official copy as outside-family — the tight direction. Only a
+      // null fact source skips, and that skip is logged.
+      // Version comes from the SAME snapshot the judgement used: a switch between
+      // verdict and message must not produce a mismatched report.
       const execRuntimeVersion = judgementInputs?.runtimeVersion ?? null
       if (familyNames !== null) {
-        // A verifier crash (unreadable tree, racing removal) is an honest
-        // failure of THIS op — never a silent pass and never an opaque one.
+        // A verifier crash is an honest failure of THIS op, never a silent pass.
         const verdict = (() => {
           try {
             return verifyProfileFamilyConsistency({
@@ -706,9 +573,8 @@ export function createPluginsExec(deps: PluginExecDeps): PluginExec {
           }
         })()
         if (verdict.ok && verdict.skipped !== undefined) {
-          // Not a pass: the verification could not run. Loud, and the op still
-          // succeeds (the mutation itself was fine) — but the log tells the
-          // operator the profile tree was never proven consistent.
+          // Not a pass: verification could not run. The op still succeeds (the
+          // mutation was fine) but the log says the tree was never proven.
           warn(`plugins-exec: family verification skipped for ${item.name}: ${verdict.skipped}`)
         }
         if (!verdict.ok) {
@@ -716,10 +582,8 @@ export function createPluginsExec(deps: PluginExecDeps): PluginExec {
             ? `verification could not run: ${verdict.crash}`
             : describeFamilyFindings(verdict.findings, execRuntimeVersion, familyVersions)
           // The finding NAMES are the actionable fact; a scoped package name is
-          // path-shaped and the generic sanitizer would redact it to `[path]`,
-          // erasing exactly that fact. Keep them explicitly (the same
-          // `error.keep` discipline the routes use) and log the raw names
-          // host-side so the operator can act on the journal entry.
+          // path-shaped and the sanitizer would redact it to `[path]`. Keep them
+          // explicitly via `error.keep` (the route discipline) and log them.
           warn(`${ERROR_FAMILY_DRIFT} for ${item.name}: ${detail}`)
           const error = new Error(`${ERROR_FAMILY_DRIFT}: ${detail}`)
           ;(error as { keep?: string[] }).keep = verdict.findings.map(finding => finding.name)
@@ -730,8 +594,7 @@ export function createPluginsExec(deps: PluginExecDeps): PluginExec {
           return
         }
       } else {
-        // No family facts on this wiring (tests/legacy): verification cannot
-        // run — recorded as a warning, never a silent pass.
+        // No family facts on this wiring: verification cannot run — a warning.
         warn('plugins-exec: family verification skipped (no runtime-family facts wired)')
       }
     }
@@ -754,9 +617,7 @@ export function createPluginsExec(deps: PluginExecDeps): PluginExec {
       try {
         opId = journal.appendPending(input)
       } catch (error) {
-        // Persistence failure (journal append threw) is NOT a queue-busy
-        // refusal — the client must tell "retry later" from "the gateway
-        // cannot write" (design 21 §6.2 persistence_failed 500 family).
+        // A journal append failure is NOT a queue-busy refusal: "retry later" vs "cannot write".
         return { ok: false, code: 'persistence_failed', error: sanitize(`cannot record operation in the journal: ${messageOf(error)}`) }
       }
       liveOps.set(opId, { kind: input.kind, name: input.name })
@@ -781,9 +642,8 @@ export function createPluginsExec(deps: PluginExecDeps): PluginExec {
           } catch {
             // best effort
           }
-          // Escalate children that ignore SIGTERM so dispose() never waits on
-          // the full per-op timeout. Unref'd: if the child already closed the
-          // kill is a harmless no-op.
+          // Escalate children that ignore SIGTERM, unref'd, so dispose() never
+          // waits on the full per-op timeout.
           setTimeout(() => {
             try {
               child.kill('SIGKILL')
@@ -793,8 +653,7 @@ export function createPluginsExec(deps: PluginExecDeps): PluginExec {
           }, SIGNAL_GRACE_MS).unref()
         }
         kickWorker()
-        // Wake a pending execution-window poll (the worker then observes
-        // `disposed` and blocks the dequeued op it was waiting on).
+        // Wake a pending execution-window poll; the worker then blocks the op.
         if (pollWake !== null) {
           const wake = pollWake
           pollWake = null

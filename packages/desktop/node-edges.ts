@@ -1,87 +1,14 @@
 /**
- * node-edges.ts —— HostEdges 的 Swift-flavor 实现（design 25 §4.4.2）
- *
- * 与 electron-edges.ts（Electron flavor）对偶：把 shell-core 业务经
- * HostEdges 调用的宿主动作转成 B 桥线协议上的 edge 请求/notify 发给 Swift
- * 壳执行（design 25 §3.1 进程模型：sidecar 无窗口/原生 UI——全部宿主腿在
- * Swift 侧）。本文件与 sidecar-entry.ts 同属 Electron-free core 家族
- * （electron-free-gate 面 A）：零 electron import、零 stdout 直写（协议写
- * 一律经 deps.sendEdge/sendNotify）。
- *
- * 语义策略（与 electron-edges 的差异逐条注记）：
- * - 往返类（异步方法）→ sendEdge(method, payload) 等应答；ok:false → 抛
- *   Error(error)（调用方 loud）；ok → 按方法返回形态折算。
- * - 同步门类（trayAvailable/isFocused/webViewLoading/webViewContentAlive/
- *   mainWindowAlive/badgeCountApiAvailable/notificationSupported）→ 缓存 +
- *   __host.hostFacts 刷新（Swift 侧在窗口/聚焦/加载事实变化时推送）；初始
- *   值经 deps.hostFacts 种子（缺省：trayAvailable true（mac Dock 语义）、
- *   isFocused false、webViewLoading false、webViewContentAlive true、
- *   mainWindowAlive true、badgeCountApiAvailable true、
- *   notificationSupported true）。缓存近似为 v1 语义——同步契约无法跨进程
- *   往返，事实推送在 Swift 侧实现。
- * - rendererPush → sendNotify('rendererPush', {channel,payload}) 并返回 true
- *   （fire-and-forget；Swift 侧 ACK 化前为尽力语义）。
- * - 非交互宿主腿（setBadge/showItemInFolder/showError）→ edge + 有界重试队列
- *   （主线程忙先等，窗口内仍忙则 loud 明确失败，绝不静默丢弃；setBadge 的同步
- *   契约返回值仍是乐观 applied:true——真应答在飞、失败 loud，见 createNodeEdges
- *   内两处注释；例外：已确证无主窗时同步回 applied:false，绝不假成功）。
- *   retireNotificationsForSources 返回本层真实驱逐的 click 路由数并携带
- *   notificationIds。
- * - 通知「已应用」回执：showNativeNotification 的 edge 应答按
- *   interpretNativeNotificationReply 折算——Swift 腿显式 {shown:false,error}
- *   （未授权/调度失败/有界超时）会让 core 释放 5s 去重 claim；传输 ok
- *   不等于横幅已显示。
- * - 通知 click 回灌 + 退役清除（D1a 线协议，Swift 侧按此消费）：
- *   showNativeNotification 为每条通知分配本地 notificationId，edge payload =
- *   {notificationId, spec, sourceId}——sourceId 取 clickRoute.token.sourceId
- *   （'test' 通知/无路由 = null）。Swift 侧按 sourceId 登记「已投递」通知的
- *   UNUserNotificationCenter identifier，使随后 notify retireNotifications
- *   {sourceIds, notificationIds} 能真正 removeDeliveredNotifications 清横幅
- *   （无登记表时只能 no-op；notificationIds = 逐条 identifier 清除，用于 >16
- *   淘汰与来源退役两个路径）；点击（先自行 activate/restore/focus，语义 = electron-edges 宿主
- *   click 腿）后以入站 __host.notifyClicked {notificationId} 通知本层，命中则
- *   调用该条 clickRoute.onActivated()（core 的 owns+入队闭包）。dispose 注销
- *   映射；来源退役时本层按 sourceId 注销 click 路由，横幅由 Swift 侧按同
- *   sourceId 清（两侧同用这一个标识）。
- *
- * 保留入站 host method（由 sidecar-entry 分派到 handleHostInbound）：
- *   __host.notifyClicked    {notificationId}
- *   __host.systemResume     {timestamp}
- *   __host.mainWindowShown  {}
- *   __host.hostFacts        {focused?, mainWindowAlive?, webViewLoading?,
- *                            webViewContentAlive?, trayAvailable?}
- *   __host.deepLink         {url}      → core enqueueDeepLink（design 25 §4.5：
- *                            Swift application(_:open:) 冷/热启动统一入口）
- *   __host.rendererLifecycle {event}   → core onRendererLifecycle（§5 E19 三事件
- *                            映射：did-start-loading / did-finish-load /
- *                            crashed / closed）
- *   __host.nativeUpdatePhase {phase, version, error} → 装配侧原生更新阶段汇
- *                            （sidecar-entry 接到 update-headless.applyNativePhase：
- *                            Sparkle 状态 → 同一 UpdateState 投影 → 既有
- *                            rendererPush/update-state 消费面。冻结接口；
- *                            缺汇 = loud 拒绝，绝不静默丢用户可见的更新阶段）
- *
- * settings 副作用叶 async 化：公开面 sendEdge 转发（NodeEdges
- * 附加成员，不改 HostEdges 契约）——sidecar-ctx 的 A 组设置副作用叶
- * （ShellAssemblyCtx.setKeepAwake/setLoginItem）经它 await B 桥应答，leg
- * 失败 = reject（与 Electron 同步失败同一回滚路径）；本文件内 HostEdges 的
- * 同步 setKeepAwake/setLoginItem（fire-and-forget + catch loud）不被 ctx
- * 设置叶调用（避免双写/乐观假成功），保留供后续 HostEdges 面直接使用——
- * 两叶职责分离注记见下方成员注释。
- *
- * - **共享契约面，core 当前不经 Pick 消费**：
- *   isPackaged / trayAvailable / focusMainWindow / launchApp 与同步
- *   setKeepAwake/setLoginItem——core 的 HostEdges Pick
- *   （shell-core.ts installIpcHandlers）未收窄到它们，本仓也暂无调用方；
- *   electron-edges 的返回 Pick 同样不含（Electron 侧这些动作在 main.ts 直做，
- *   见其「Retained HostEdges members」注记）。它们是 design 25 §4.1 v2 字段集这一共享契约面（本文件是
- *   当前唯一实现；focusMainWindow/launchApp/setKeepAwake/setLoginItem 的 Swift
- *   宿主腿已在 SwiftEdgeHostLegs 落位），删除会砍掉契约本身。语义仍须保持诚实
- *   （形状/失败语义与契约一致）；改这些成员时两侧同时核对。
- *   notifyClicked 与 resolveResource 是例外——两者零消费者
- *   且 Swift 宿主语义本就不同（notifyClicked 经 notify 到达被 loud 忽略、
- *   resolveResource 无缓存恒失败），不在共享契约内，hostFacts.resources 也不
- *   消费；见 shell-core.ts HostEdges 头注。
+ * node-edges.ts —— HostEdges 的 Swift-flavor 实现（sidecar 无窗口，宿主腿全在 Swift
+ * 侧），与 electron-edges.ts 对偶：把 shell-core 宿主动作折算成 B 桥 edge 请求/notify
+ * （electron-free：零 electron import、零 stdout 直写）。
+ * - 往返类经 sendEdge，ok:false → 抛 Error（loud）；同步门类只读缓存，__host.hostFacts
+ *   推送刷新，种子值能力类 true、交付门 false（未投递的 rendererPush 不发且返回 false）。
+ * - 非交互腿（setBadge/showItemInFolder/showError）走 edge + 有界重试：主线程忙先等、
+ *   仍忙则 loud 失败；setBadge 同步契约只在已确证无主窗时回 applied:false。
+ * - 通知按 interpretNativeNotificationReply 折算；notificationId/sourceId 登记须存活到退役，
+ *   显示成功不得注销 click 路由；入站 __host.* 未注入消费方一律 loud 拒绝。
+ * - 共享契约面（isPackaged/focusMainWindow/launchApp/同步 setKeepAwake/setLoginItem 等）core 未 Pick、暂无调用方，但删除会砍掉契约本身。
  */
 import type {
   HostEdges,
@@ -107,21 +34,16 @@ export const HOST_INBOUND = {
   nativeUpdatePhase: '__host.nativeUpdatePhase',
 } as const
 
-/** B 桥协议帧（行）字节上限，**双向**（入站门 / 出站门）。与 Swift 侧
- *  FrameCodec.maxFrameBytes / TrustGuard.maxMessageBytes 同值（4 MiB）——sidecar
- *  两侧门与跨语言锁步测试都读这一个常量；改值必须同步
- *  macos/Sources/DSHChamber/FrameCodec.swift。出站侧的意义：一个 >4 MiB 的结果帧
- *  会把 Swift 侧 LineReader 推入溢出重同步并 fail-closed 作废全部未决请求
- *  （BridgeClient.processStdoutOutcome），故在源头对称拒绝。 */
+/** B 桥协议帧（行）字节上限，**双向**：与 Swift 侧 FrameCodec.maxFrameBytes /
+ *  TrustGuard.maxMessageBytes 同值（4 MiB）——两侧门与跨语言锁步测试都读这一个
+ *  常量。出站侧一个超限结果帧会把 Swift LineReader 推入溢出重同步并 fail-closed
+ *  作废全部未决请求，故在源头对称拒绝。 */
 export const MAX_PROTOCOL_FRAME_BYTES = 4 * 1024 * 1024
 
-/** 入站门既有别名：与 MAX_PROTOCOL_FRAME_BYTES 同源，保留给既有引用。 */
 export const MAX_INBOUND_FRAME_BYTES = MAX_PROTOCOL_FRAME_BYTES
 
-/** 原生更新阶段（冻结接口）：Swift 壳报告 Sparkle 状态，sidecar
- *  映射进既有 UpdateState 投影。'installing' / 'failed' 是原生侧独有相位——
- *  sidecar 分别映射为 UpdateState 的 'installing' / 'error'（见
- *  update-headless.applyNativePhase）。 */
+/** 原生更新阶段（冻结接口）：'installing' / 'failed' 是原生侧独有相位，sidecar
+ *  映射为 UpdateState 的 'installing' / 'error'（update-headless.applyNativePhase）。 */
 export const NATIVE_UPDATE_PHASES = [
   'idle',
   'checking',
@@ -135,33 +57,28 @@ export const NATIVE_UPDATE_PHASES = [
 
 export type NativeUpdatePhase = (typeof NATIVE_UPDATE_PHASES)[number]
 
-/** __host.nativeUpdatePhase 的入站载荷（version/error 可为 null，非 string/null
- *  类型一律 loud 拒绝）。 */
+/** __host.nativeUpdatePhase 载荷（version/error 可为 null，非 string/null 一律 loud 拒绝）。 */
 export interface NativeUpdatePhaseInput {
   phase: NativeUpdatePhase
   version: string | null
   error: string | null
 }
 
-/** 可空字符串字段的线校验：null/undefined → null；string → 原样；
- *  其他类型 → undefined（非法，调用方 loud 拒绝）。 */
+/** 可空字符串字段的线校验：null/undefined → null；string 原样；其他 → undefined（非法）。 */
 function nullableWireString(value: unknown): string | null | undefined {
   if (value === null || value === undefined) return null
   return typeof value === 'string' ? value : undefined
 }
 
-/** 退出在途的入站拒绝形状（D1c）：与 Electron trustedIpc 退出围栏
- *  （renderer-trust.ts createTrustedIpc）抛出的错误逐字同形——message
- *  'app is quitting' + code 'app_quitting'。sidecar-entry 在 shuttingDown
- *  开始后对迟到的 invoke 帧回 {ok:false, ...QUIT_INBOUND_ERROR}，让两种
- *  flavor 的 renderer 拿到同一个可判别的退出错误（error 字段承载 message）。 */
+/** 退出在途的入站拒绝形状：与 Electron trustedIpc 退出围栏抛出的错误逐字同形
+ *  （message 'app is quitting' + code 'app_quitting'），让两种 flavor 的 renderer
+ *  拿到同一个可判别退出错误。 */
 export const QUIT_INBOUND_ERROR = {
   error: 'app is quitting',
   code: 'app_quitting',
 } as const
 
-/** 渲染器生命周期事件（core `RendererLifecycleEvent` 的 wire 子集；Swift 侧
- *  三事件映射见 design 25 §4.5/§5 E19）。 */
+/** 渲染器生命周期事件（core RendererLifecycleEvent 的 wire 子集）。 */
 export const HOST_RENDERER_LIFECYCLE_EVENTS = [
   'did-start-loading',
   'did-finish-load',
@@ -176,29 +93,21 @@ export interface NodeEdgesDeps {
   sendEdge(method: string, payload: unknown): Promise<unknown>
   /** 发单向 notify（不期待应答）。 */
   sendNotify(event: string, payload: unknown): void
-  /** 深链入站汇（design 25 §4.5：Swift application(_:open:) → core
-   *  enqueueDeepLink 原逻辑）。缺省未注入 → 入站 loud 拒绝（绝不静默丢弃）。 */
+  /** 深链入站汇；缺省未注入 → 入站 loud 拒绝（绝不静默丢弃）。 */
   onDeepLink?: (url: string) => void
-  /** 渲染器生命周期入站汇（design 25 §5 E19 三事件映射 → core
-   *  onRendererLifecycle：ready 位复位 + in-flight requeue/drain）。
-   *  缺省未注入 → 入站 loud 拒绝。 */
+  /** 渲染器生命周期入站汇 → core onRendererLifecycle；缺省未注入 → loud 拒绝。 */
   onRendererLifecycle?: (event: HostRendererLifecycleEvent) => void
-  /** 原生更新阶段入站汇（冻结接口）：装配侧把它接到更新控制器
-   *  （update-headless.applyNativePhase）——Swift 壳的 Sparkle 阶段/失败进与
-   *  Electron 同一 UpdateState 投影，页面呈现单一权威。缺省未注入 → 入站
-   *  loud 拒绝（绝不静默丢用户可见的更新阶段）。 */
+  /** 原生更新阶段入站汇（冻结接口）：接到 update-headless.applyNativePhase，使
+   *  Swift Sparkle 阶段与 Electron 走同一 UpdateState 投影；缺省 → loud 拒绝。 */
   nativeUpdatePhase?: (input: NativeUpdatePhaseInput) => void
-  /** 关窗/退出决策投影（design 25 §5 E1/E9/E20）：输入 = Swift 宿主侧事实
-   *  （退出在途 / 恢复入口可用），输出 = core 依据 chamber settings + 本地实例
-   *  在跑判据算出的决策。决策逻辑单源在 core（shouldHideToTray /
-   *  computeQuitRisk），Swift 不复制。缺省未注入 → 入站 loud 拒绝（宿主拿不到
-   *  决策时必须走保守路径，绝不静默放行退出）。 */
+  /** 关窗/退出决策投影：输入 Swift 宿主事实，输出 core 依 chamber settings +
+   *  本地实例在跑判据的决策（shouldHideToTray / computeQuitRisk 单源在 core）；
+   *  缺省未注入 → loud 拒绝（宿主必须走保守路径，绝不静默放行退出）。 */
   projectQuitFacts?: (input: {
     quitRequested: boolean
     recoveryAvailable: boolean
   }) => { hideOnClose: boolean; quitNeedsConfirm: boolean; quitReasons: string[] }
-  /** 测试注入：非交互宿主腿有界排队的重试间隔（缺省 5s；测试用短值
-   *  确定性覆盖「先等→仍忙→明确失败」与「忙后空出→成功」两分支）。 */
+  /** 测试注入：非交互腿有界排队的重试间隔（缺省 5s）。 */
   nonInteractiveRetryDelayMs?: number
   /** 同步门缓存初始种子（可选；hostFacts 推送会覆盖）。 */
   hostFacts?: {
@@ -220,8 +129,7 @@ interface PendingNotificationRoute {
 
 /** 非交互宿主腿有界排队的发送次数（首送 + 重试）。 */
 const NON_INTERACTIVE_LEG_ATTEMPTS = 6
-/** 有界排队的基础重试间隔——总窗 ≈ (attempts-1)×delay = 25s，落在
- *  非交互 edge 的 30s 预算内（先等主线程空出，仍忙才 loud 放弃）。 */
+/** 有界排队基础重试间隔——总窗 ≈ (attempts-1)×delay = 25s，落在非交互 edge 的 30s 预算内。 */
 const NON_INTERACTIVE_LEG_RETRY_DELAY_MS = 5_000
 
 /** 序列化安全化：非 JSON 可序列化值（如函数）剔除——edge payload 必须纯数据。 */
@@ -236,21 +144,16 @@ function jsonSafe(value: unknown): unknown {
 
 export type NodeEdges = HostEdges & {
   handleHostInbound(method: string, payload: unknown): { ok: boolean; result?: unknown; error?: string }
-  /** 公开 edge 转发（NodeEdges 附加成员，不改 HostEdges 契约）——把 B 桥
-   *  edge 请求面暴露给装配方（sidecar-entry → buildHeadlessCtx 的
-   *  HeadlessCtxEdges），使 sidecar-ctx 的 A 组设置副作用叶能 await 应答：
-   *  resolve = Swift leg 应答 ok；reject = transport {ok:false} / leg 错误
-   *  （sidecar-entry 应答分派把 ok:false 折算为 reject）。edgeId 关联由
+  /** 公开 edge 转发（NodeEdges 附加成员，不改 HostEdges 契约）：resolve = Swift
+   *  leg 应答 ok；reject = transport {ok:false} / leg 错误；edgeId 关联由
    *  deps.sendEdge 实现侧（sidecar-entry pendingEdges 表）保证。 */
   sendEdge(method: string, payload: unknown): Promise<unknown>
 }
 
 export function createNodeEdges(deps: NodeEdgesDeps): NodeEdges {
   // ---- 同步门缓存（v1 近似；hostFacts 刷新） ----
-  // 保守默认：**交付门**相关事实在收到 hostFacts
-  // 之前按「未知 = 不可交付」处理（Electron 无窗即 false 的同向语义），
-  // 否则 ready 前的 rendererPush 会被当成已投递。能力类事实（托盘/角标/
-  // 通知支持）保持乐观默认——它们描述平台能力而非实时存活。
+  // 保守默认：交付门相关事实在收到 hostFacts 前按「未知 = 不可交付」处理，
+  // 否则 ready 前的 rendererPush 会被当成已投递；能力类默认乐观（平台能力）。
   const facts = {
     focused: deps.hostFacts?.focused ?? false,
     mainWindowAlive: deps.hostFacts?.mainWindowAlive ?? false,
@@ -260,31 +163,22 @@ export function createNodeEdges(deps: NodeEdgesDeps): NodeEdges {
     badgeCountApiAvailable: deps.hostFacts?.badgeCountApiAvailable ?? true,
     notificationSupported: deps.hostFacts?.notificationSupported ?? true,
   }
-  // ---- 事件订阅槽（installIpcHandlers ① 段调用 onSystemResume/onMainWindowShown） ----
   let onSystemResumeCb: ((timestamp: number) => void) | null = null
   let onMainWindowShownCb: (() => void) | null = null
 
-  // ---- 通知 click 路由表（notificationId → clickRoute） ----
-  /** click 路由上限：与 electron-edges 的活跃原生通知上限同一数字（语义见
-   *  showNativeNotification——淘汰只丢路由，不动宿主横幅）。 */
+  /** click 路由上限与 electron-edges 的活跃原生通知上限同源（淘汰只丢路由，不动横幅）。 */
   const MAX_PENDING_NOTIFICATION_ROUTES = MAX_ACTIVE_NATIVE_NOTIFICATIONS
   const clickRoutes = new Map<number, { token: NotificationSourceToken; onActivated(): void }>()
   let nextNotificationId = 1
 
   // ---- 非交互宿主腿的有界排队 ----
-  // 模态（NSAlert/NSOpenPanel）在屏时 Swift 主线程忙，非交互腿经 performUI 的 1s
-  // 有界等待回 'swift-edge-ui-unavailable:<method>:main-thread-busy'
-  // （SwiftEdgeHostLegs.swift:203/541-573），模态结束前重发仍撞同一忙态。
-  // 这些腿若只走 notify（无回执——失败只在 Swift stderr）或一发即弃，用户操作
-  // 会静默丢失。本队列经 edge + 有界重试：同一 method 只保留**最新**载荷（单飞 +
-  // 合流——旧载荷绝不晚到覆盖新状态，badge 计数只应用最后一个），主线程空出即
-  // 应用；窗口内仍未空出则以明确文案 loud 失败一次，绝不静默丢弃。投递异步，
-  // 不阻塞任何调用方；交互腿（showMessage/pickPluginSource）不走本队列，语义不变。
+  // 模态（NSAlert/NSOpenPanel）在屏时 Swift 主线程忙，非交互腿经 performUI 的有界
+  // 等待回 'swift-edge-ui-unavailable:<method>:main-thread-busy'，模态结束前重发仍
+  // 撞同一忙态。只走 notify（无回执）或一发即弃会让用户操作静默丢失；本队列经
+  // edge + 有界重试：同一状态型 method 只保留最新载荷（单飞 + 合流），窗口内仍忙则
+  // loud 失败一次。交互腿（showMessage/pickPluginSource）不走本队列。
   interface QueuedLeg {
-    /** 待送载荷队列。状态型腿（setBadge）恒只保留最新一个（合流——旧值绝不
-     *  晚到覆盖新状态）；事件型腿（弹框 / 在 Finder 中显示）按到达顺序排队、
-     *  上限内逐条投递（Electron 每次调用都会发生，不能合流成
-     *  最后一次）。 */
+    /** 待送载荷队列（状态型恒只留最新；事件型按到达顺序排队、上限内逐条投递）。 */
     pending: unknown[]
     /** true = 状态型（只保留最新）；false = 事件型（逐条投递）。 */
     coalesce: boolean
@@ -296,8 +190,7 @@ export function createNodeEdges(deps: NodeEdgesDeps): NodeEdges {
   }
   const queuedLegs = new Map<string, QueuedLeg>()
 
-  /** 只对「主线程忙」这一瞬时失败重试；确定性失败（no-window/unimplemented/
-   *  参数错误/无 bundle）立即 loud 放弃，绝不空转等待。 */
+  /** 只对「主线程忙」这一瞬时失败重试；确定性失败（no-window/unimplemented/参数错误/无 bundle）立即 loud 放弃。 */
   function isRetryableLegError(message: string): boolean {
     return message.includes('main-thread-busy')
   }
@@ -339,8 +232,7 @@ export function createNodeEdges(deps: NodeEdgesDeps): NodeEdges {
       const payload = entry.pending[0]
       try {
         await deps.sendEdge(method, payload)
-        // 只弹出刚送出的这一条：在飞期间到达的新载荷（更新的 badge 计数 / 后续
-        // 事件调用）留在队首，下一轮继续送。
+        // 只弹出刚送出的这一条：在飞期间到达的新载荷留在队首，下一轮继续送。
         entry.pending.shift()
         if (entry.pending.length > 0) continue
         queuedLegs.delete(method)
@@ -358,9 +250,8 @@ export function createNodeEdges(deps: NodeEdgesDeps): NodeEdges {
           if (queuedLegs.get(method) !== entry) return // 已被清理/替换
           continue
         }
-        // 队首载荷没送达就放弃时，**绝不静默丢掉队列里的更新值**：
-        // 状态型腿的队首可能已被更新过（pending[0] !== payload），
-        // 事件型腿后面还排着别的调用——补发一次队首，再记账放弃。
+        // 队首没送达就放弃时绝不静默丢掉队列里的更新值：队首可能已被更新过
+        // （状态型）或后面还排着别的调用（事件型）——补发一次队首，再记账放弃。
         if (entry.pending[0] !== payload) {
           entry.attemptsLeft = Math.max(entry.attemptsLeft, 1)
           continue
@@ -379,15 +270,11 @@ export function createNodeEdges(deps: NodeEdgesDeps): NodeEdges {
 
   const edges: HostEdges = {
     rendererPush(channel, payload) {
-      // 交付信号必须诚实：electron-edges 在无窗
-      // 时返回 false，core 据此 hold/rollback/复位 ready 位；本 flavor 恒 true
-      // 会让通知打开/深链/唤醒事件静默丢失。这里按「渲染器存活」事实
-      // 返回（未收到 hostFacts 前为 false）。
-      // 交付门 = 共享 roundtrip 判定（两侧唯一实现，见 shell-core
-      // rendererPushDelivered）——crashed 渲染器上的 send 视为未投递。
+      // 交付信号必须诚实：无窗时必须返回 false，core 据此 hold/rollback/复位
+      // ready 位；恒 true 会让通知打开/深链/唤醒事件静默丢失。
+      // 交付门 = 共享 roundtrip 判定（rendererPushDelivered，两侧唯一实现）；
+      // 未投递就**不发**，否则隐藏/已死窗会收到重复投递。
       const delivered = rendererPushDelivered(facts.mainWindowAlive, facts.webViewContentAlive)
-      // 与 electron-edges 同向：**未投递就不发送**（返回 false 让 core hold 并在
-      // 下次生命周期事件重投；若这里仍发，隐藏/已死窗可能收到重复投递）。
       if (delivered) {
         deps.sendNotify('rendererPush', { channel, payload: jsonSafe(payload) })
       }
@@ -399,11 +286,9 @@ export function createNodeEdges(deps: NodeEdgesDeps): NodeEdges {
       nextNotificationId += 1
       if (clickRoute !== null) {
         clickRoutes.set(notificationId, clickRoute)
-        // 有界登记（上限与 electron-edges 的活跃原生通知同源，>16 淘汰最旧一条）。
-        // 淘汰必须**同时**丢 click 路由并把 identifier 下发宿主清横幅——
-        // 只删路由会让陈旧横幅继续留在系统通知中心，点开也不再打开会话。
-        // 淘汰是逐条语义（不按 sourceId 整源退役），故 sourceIds 为空、
-        // notificationIds 只带被淘汰的那一条；Swift 侧据 identifier 精确清除。
+        // 有界登记（上限与 electron-edges 活跃原生通知同源，>16 淘汰最旧一条）。
+        // 淘汰必须同时丢 click 路由并把 identifier 下发宿主清横幅——只删路由会让
+        // 陈旧横幅留在通知中心；淘汰是逐条语义（sourceIds 空，只带该条）。
         if (clickRoutes.size > MAX_PENDING_NOTIFICATION_ROUTES) {
           const oldest = clickRoutes.keys().next().value
           if (oldest !== undefined) {
@@ -416,14 +301,12 @@ export function createNodeEdges(deps: NodeEdgesDeps): NodeEdges {
         .sendEdge('showNativeNotification', {
           notificationId,
           spec: jsonSafe(spec),
-          // D1a：退役清横幅所需的来源标识（Swift 侧 sourceId→identifier 登记表）；
-          // 'test' 通知（clickRoute=null）无来源 → null（Swift 侧不登记、不退役）。
+          // D1a：退役清横幅所需来源标识（'test' 通知 clickRoute=null → null，Swift 侧不登记）。
           sourceId: clickRoute === null ? null : clickRoute.token.sourceId,
         })
         .then(
-          // 应答必须按 honest-show 语义折算——Swift 腿显式回 {shown:true} 或
-          // {shown:false,error}（未授权/调度失败/超时），core 据此释放去重 claim；
-          // 没有显示回执（null/undefined）不得推断为已显示（P-06 修订）。
+          // 应答必须按 honest-show 语义折算——Swift 腿可显式回 {shown:false,error}
+          // （未授权/调度失败/超时），core 据此释放去重 claim；旧协议 null 应答记 shown。
           (reply) => interpretNativeNotificationReply(reply),
           (err: unknown) => ({
             shown: false as const,
@@ -436,11 +319,9 @@ export function createNodeEdges(deps: NodeEdgesDeps): NodeEdges {
         },
         shown: result,
       }
-      // 路由存活到 dispose / 来源退役 / 被淘汰：**显示成功不得注销**——click 必然
-      // 晚于 shown 结算（Electron 同语义：通知对象的 click 监听持有 route 直到窗口/
-      // 来源生命周期结束，core 从不调 dispose）。只有显示失败（没有可点的横幅）
-      // 才即时注销；在 shown 结算即删除会让 Swift flavor 的通知点击命中不到
-      // 路由、静默返回 ok——「点横幅打开会话」整体失效。
+      // 路由存活到 dispose / 来源退役 / 被淘汰：显示成功不得注销——click 必然晚于
+      // shown 结算，若在结算即删除，Swift flavor 的点击将命中不到路由而静默返回
+      // ok，「点横幅打开会话」整体失效。只有显示失败才即时注销。
       void route.shown.then((outcome) => {
         if (!outcome.shown) clickRoutes.delete(notificationId)
       })
@@ -452,19 +333,11 @@ export function createNodeEdges(deps: NodeEdgesDeps): NodeEdges {
     },
 
     setBadge(count: number): HostSetBadgeResult {
-      // 回执面：Swift 侧 setBadge 是 **edge 可应答腿**
-      // （SwiftEdgeHostLegs.swift:328-350 performUI：dockTile 写失败/无窗/
-      // 主线程忙都回 ok:false + 错误串）。HostEdges.setBadge 却是**同步**契约
-      // （shell-core.ts:708/2045 立即读 {applied}）——跨进程应答无法同步取回，
-      // 因此本层只能：① 走 edge + 有界排队，真实失败 loud 落 stderr；② 返回值
-      // 保持 {applied:true}——这是同步契约限制下的乐观值，**不是伪造的成功
-      // 回执**：把未知当失败回 {applied:false, reason} 同样不诚实，且会误导 core
-      // 的 badge 状态机（applyBadgePresentation 以 !applied 记失败并降级）。
-      // 回执面要真正收窄必须先改 HostEdges 契约（异步化），本层不做契约变更，
-      // 只让失败可观察（loud）。
-      // **已确证无主窗**时 Swift 腿必以 no-window 拒绝（canShowUI
-      // 守卫），这里不乐观 applied:true——同步可知的失败必须如实回执，
-      // core 的 applyBadgePresentation 才会走失败降级而不是假成功。
+      // HostEdges.setBadge 是**同步**契约，而 Swift setBadge 是 edge 可应答腿（写失败/
+      // 无窗/主线程忙都回 ok:false）——跨进程应答无法同步取回。因此只能走 edge + 有界
+      // 排队让真实失败 loud 落 stderr，返回值保持 {applied:true} 的乐观值（不是伪造成功：
+      // 回 {applied:false} 同样不诚实，且会误导 core 的 badge 状态机降级）。
+      // 例外：**已确证无主窗**时如实回 applied:false，让 core 走失败降级。
       if (!facts.mainWindowAlive) {
         return { applied: false, reason: 'swift-edge-ui-unavailable:setBadge:no-window' }
       }
@@ -481,11 +354,9 @@ export function createNodeEdges(deps: NodeEdgesDeps): NodeEdges {
     },
 
     setKeepAwake(on: boolean) {
-      // HostEdges 同步面（fire-and-forget + 失败 loud；Swift 侧应答经
-      // sendEdge 回来）。S-E 职责分离：sidecar-ctx 的 A 组设置副作用叶（ctx
-      // 面）走公开 sendEdge await 应答——不经本成员（避免双写与乐观假
-      // 成功：settings-set 的失败回滚语义由 ctx 叶 await 决定）。本成员保留
-      // 供后续 HostEdges 面直接调用（core 不经 Pick 触碰前保持预留）。
+      // HostEdges 同步面（fire-and-forget + 失败 loud）。职责分离：ctx 设置叶走公开
+      // sendEdge await 应答（不经本成员——避免双写与乐观假成功），本成员保留供后续
+      // HostEdges 面直接调用。
       deps.sendEdge('setKeepAwake', { on }).catch((err: unknown) => {
         console.error('[node-edges] setKeepAwake edge 失败：' + String(err))
       })
@@ -520,15 +391,9 @@ export function createNodeEdges(deps: NodeEdgesDeps): NodeEdges {
     },
 
     retireNotificationsForSources(retiredSourceIds: ReadonlySet<string>): number {
-      // 已退役来源的 click 路由随对象消亡（electron-edges 的 close 腿同语义），
-      // 且本次退役经 notify 交给 Swift 宿主：宿主按 sourceId→已投递标识登记表
-      // 调 removeDeliveredNotifications 真正清横幅（NotificationDeliveryRegistry）。
-      // 返回值 = 本层**真实驱逐的 click 路由数**
-      // （electron-edges.ts:291-300 同款口径：注册表驱逐数；shell-core.ts:737
-      // 的契约注记也是「返回驱逐数」）。OS 横幅的实际清除条数只在 Swift 宿主
-      // 侧可观察，本层同步拿不到——返回真实可观察量而非把 0 假称成功；Swift
-      // 宿主清除失败在该侧 loud（MainWindowController.swift:526-543）。
-      // 两个调用方（main.ts / sidecar-ctx.ts）当前丢弃返回值，故无行为变更。
+      // 已退役来源的 click 路由随对象消亡，且经 notify 交 Swift 宿主按 sourceId 登记表
+      // 清横幅。返回值 = 本层**真实驱逐的 click 路由数**（OS 横幅实际清除数只有 Swift
+      // 侧可观察，本层同步拿不到——绝不把 0 假称成功）；两个调用方当前丢弃返回值。
       let retired = 0
       const retiredNotificationIds: number[] = []
       for (const [id, route] of clickRoutes) {
@@ -538,10 +403,8 @@ export function createNodeEdges(deps: NodeEdgesDeps): NodeEdges {
           retired += 1
         }
       }
-      // payload 同时携带 sourceIds（整源退役）与 notificationIds（逐条
-      // identifier 清除——本次退役实际驱逐的本地 notificationId，Swift 侧映射到
-      // 自己的 chamber-edge-* OS identifier）。两个字段并存：旧 Swift 消费端只读
-      // sourceIds（忽略多余键），新消费端两者并用。
+      // payload 同时携带 sourceIds（整源退役）与 notificationIds（逐条清——本次实际
+      // 驱逐的本地 id，Swift 侧映射到 chamber-edge-* OS identifier）；旧消费端只读前者。
       deps.sendNotify('retireNotifications', {
         sourceIds: [...retiredSourceIds],
         notificationIds: retiredNotificationIds,
@@ -561,8 +424,7 @@ export function createNodeEdges(deps: NodeEdgesDeps): NodeEdges {
     },
 
     showItemInFolder(p: string) {
-      // Finder 揭示腿同样经 edge + 有界排队（notify 无回执——Swift
-      // 主线程忙时失败只落在 Swift stderr，node 侧完全静默）。
+      // Finder 揭示腿同样经 edge + 有界排队（notify 无回执，主线程忙时失败会静默）。
       queueNonInteractiveLeg('showItemInFolder', { path: p })
     },
 
@@ -582,9 +444,8 @@ export function createNodeEdges(deps: NodeEdgesDeps): NodeEdges {
     },
 
     showError(title: string, detail: string) {
-      // 错误框是深链/更新失败路径的可见面——只把 leg 失败 catch 成一行 node
-      // stderr 会让主线程忙时错误框根本不弹。经有界排队：
-      // 模态在屏 = 主线程忙 → 先等，窗口内仍未空出则以明确文案 loud 放弃。
+      // 错误框是深链/更新失败路径的可见面：只把 leg 失败 catch 成一行 stderr 会让主线程
+      // 忙时错误框根本不弹，故经有界排队（先等，仍忙则 loud 放弃）。
       queueNonInteractiveLeg('showError', { title, detail })
     },
 
@@ -594,9 +455,8 @@ export function createNodeEdges(deps: NodeEdgesDeps): NodeEdges {
     },
 
     setLoginItem(enabled: boolean) {
-      // HostEdges 同步面（fire-and-forget + 失败 loud）。职责分离同
-      // setKeepAwake：ctx 设置叶走公开 sendEdge await（应答失败 → {ok:false,
-      // error} 回滚），不经本成员——本成员保留供后续 HostEdges 面使用。
+      // HostEdges 同步面（fire-and-forget + 失败 loud）；职责分离同 setKeepAwake：
+      // ctx 设置叶走公开 sendEdge await，本成员保留供后续 HostEdges 面使用。
       deps.sendEdge('setLoginItem', { enabled }).catch((err: unknown) => {
         console.error('[node-edges] setLoginItem edge 失败：' + String(err))
       })
@@ -605,8 +465,7 @@ export function createNodeEdges(deps: NodeEdgesDeps): NodeEdges {
     isPackaged: deps.hostFacts?.isPackaged ?? true,
   }
 
-  /** sidecar-entry 把 __host.* 入站 method 分派到这里。返回 ok/result/error
-   *  （result 仅对请求-应答型保留 method 有意义，如 __host.quitFacts）。 */
+  /** sidecar-entry 把 __host.* 入站 method 分派到这里（result 仅请求-应答型有意义）。 */
   function handleHostInbound(method: string, payload: unknown): { ok: boolean; result?: unknown; error?: string } {
     const p = (payload ?? {}) as Record<string, unknown>
     switch (method) {
@@ -666,8 +525,7 @@ export function createNodeEdges(deps: NodeEdgesDeps): NodeEdges {
         }
       }
       case HOST_INBOUND.nativeUpdatePhase: {
-        // 冻结接口校验：phase 必须是八值枚举；version/error 必须是
-        // string 或 null（缺省 = null）。任何非法形状 loud 拒绝，绝不猜测映射。
+        // 冻结接口校验：phase 必须八值枚举，version/error 必须 string/null（缺省 null）；非法形状 loud 拒绝。
         const phase = typeof p.phase === 'string' ? p.phase : ''
         if (!(NATIVE_UPDATE_PHASES as readonly string[]).includes(phase)) {
           // 回显截断（帧本身 <=4MiB）：拒绝文案不得把整段任意载荷放大成响应帧。
@@ -682,8 +540,7 @@ export function createNodeEdges(deps: NodeEdgesDeps): NodeEdges {
           return { ok: false, error: 'sidecar-edges:native-update-phase-invalid-error' }
         }
         if (deps.nativeUpdatePhase === undefined) {
-          // 未注入消费方（装配缺失）：loud 拒绝——阶段是用户可见的更新状态，
-          // 静默 ok 会让页面与 Sparkle 窗不一致。
+          // 未注入消费方（装配缺失）：loud 拒绝——静默 ok 会让页面与 Sparkle 窗不一致。
           return { ok: false, error: 'sidecar-edges:native-update-phase-sink-unavailable' }
         }
         try {
@@ -702,8 +559,7 @@ export function createNodeEdges(deps: NodeEdgesDeps): NodeEdges {
           facts.webViewContentAlive = p.webViewContentAlive
         }
         if (typeof p.trayAvailable === 'boolean') facts.trayAvailable = p.trayAvailable
-        // resources 事实键（resolveResource 死契约）不消费（未知
-        // 事实键按前向兼容忽略——Swift 侧继续推送不构成错误）。
+        // resources 事实键（resolveResource 死契约）不消费；未知事实键按前向兼容忽略。
         return { ok: true }
       }
       default:
@@ -711,8 +567,7 @@ export function createNodeEdges(deps: NodeEdgesDeps): NodeEdges {
     }
   }
 
-  /** 公开 edge 转发（见 NodeEdges.sendEdge 注释）——body = deps.sendEdge
-   *  直通（edgeId 关联在实现侧）。 */
+/** 公开 edge 转发（见 NodeEdges.sendEdge 注释）——body = deps.sendEdge 直通。 */
   function sendEdge(method: string, payload: unknown): Promise<unknown> {
     return deps.sendEdge(method, payload)
   }

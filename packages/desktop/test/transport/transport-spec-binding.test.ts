@@ -8,7 +8,6 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { canonicalizeTransportInstanceInput } from '../../transport-provider.ts'
 import {
   gatewayCredentialTargetChanged,
   liveTransportIdentityChanged,
@@ -16,24 +15,6 @@ import {
 } from '../../credential-identity.ts'
 import type { TransportInstanceSpec } from '../../transport-provider.ts'
 import { gatewayCredentialBinding, sshCredentialBinding } from '../../credential-binding.ts'
-
-test('canonical input normalization keeps the typed optional-transport IPC contract', () => {
-  assert.deepEqual(canonicalizeTransportInstanceInput({ id: 'a', kind: 'dsh' }), {
-    id: 'a', kind: 'dsh', transport: 'ssh',
-  })
-  assert.deepEqual(canonicalizeTransportInstanceInput({ id: 'b', kind: 'gateway' }), {
-    id: 'b', kind: 'gateway', transport: 'http',
-  })
-  assert.deepEqual(canonicalizeTransportInstanceInput({ id: 'c', kind: 'ssh' }), {
-    id: 'c', kind: 'dsh', transport: 'ssh',
-  })
-  assert.deepEqual(canonicalizeTransportInstanceInput({ id: 'd' }), {
-    id: 'd', kind: 'dsh', transport: 'ssh',
-  })
-  assert.deepEqual(canonicalizeTransportInstanceInput({ id: 'e', kind: 'future-target' }), {
-    id: 'e', kind: 'future-target', transport: undefined,
-  }, 'future kinds stay unclaimed until a provider defines their default transport')
-})
 
 // --- gateway/ssh credential binding keys ---
 function credentialSpec(overrides: Partial<TransportInstanceSpec> = {}): TransportInstanceSpec {

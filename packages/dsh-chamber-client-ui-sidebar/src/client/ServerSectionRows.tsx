@@ -1,6 +1,6 @@
 /**
- * One workspace group’s session-row list of the chamber sidebar ServerSection
- * subtree: the ghost-gated rows, their HoverCards, inline rename swap and the
+ * One workspace group's session-row list of the chamber sidebar ServerSection
+ * subtree: ghost-gated rows, their HoverCards, inline rename swap and the
  * per-row action-error slots. The section passes the windowed session list and
  * its resolved per-workspace values in.
  */
@@ -54,7 +54,7 @@ export function ServerSectionSessionRows({ server, workspace, sessions, currentI
     closeMenu,
   } = useSidebarSection()
   const { sessionStateLabel, sessionStatePending, sessionStateMarker, sessionStateDot } = useServerSectionSessionState()
-  /** chamber (06): localized hover-card relative time ("刚刚"/"5分钟前" zh; "now"/"5min ago" en). */
+  /** 悬停卡片的本地化相对时间（"刚刚"/"5分钟前"）。 */
   const hoverTimeLabel = (updatedAt: number, now: number): string => {
     const { unit, n } = relativeTimeBucket(updatedAt, now)
     return unit === 'now' ? t('time.now') : t('time.ago', { t: t(`time.${unit}`, { n }) })
@@ -67,48 +67,22 @@ export function ServerSectionSessionRows({ server, workspace, sessions, currentI
                                 const sessionActionError = rowErrors[`${server.id}/session/${session.id}/rename`]
                                   ?? rowErrors[`${server.id}/session/${session.id}/archive`]
                                   ?? rowErrors[`${server.id}/session/${session.id}/fork`]
-                                  // chamber (打开失败可见性): open failures land
-                                  // in the same slot (SidebarRoot reports the
-                                  // App-layer outcome; low precedence — a
-                                  // rename/archive/fork failure of the same row
-                                  // wins). Key template shared with the writer
-                                  // (shared/open-outcome.ts).
+                                  // 打开失败落在同一槽位（低优先级——同一行的
+                                  // rename/archive/fork 失败优先），key 模板与写入方共享。
                                   ?? rowErrors[openErrorKey(server.id, session.id)]
-                                // chamber (design 06 §2.2):
-                                // a blank row the projection still carries after
-                                // it stopped being current is a GHOST — the App
-                                // holds it for BLANK_GHOST_GRACE_MS so the list
-                                // cannot shift inside the double-click window.
-                                // The local expiry bounds the RENDER side: once
-                                // the grace passes, the invisible placeholder is
-                                // dropped even if the App has not re-derived yet
-                                // (the next publish drops it from the projection
-                                // for good — the row is invisible either way, so
-                                // skipping it never shows a stale row).
+                                // 空白行在不再 current 后仍被投影 = GHOST：App 按
+                                // BLANK_GHOST_GRACE_MS 保留它，使列表在双击窗口内不位移。
+                                // 本地过期在渲染侧兜底：宽限过后即使 App 还没重派生也丢弃该
+                                // 不可见占位（下次发布起从投影消失；两种情况都不显示陈旧行）。
                                 const ghost = isGhostSession(session)
                                 const ghostLive = ghost && (ghostExpiry.current.get(session.id) ?? 0) > Date.now()
                                 if (ghost && !ghostLive) return null
-                                // chamber (06): the session row
-                                // (hoisted so the HoverCard can wrap it). The
-                                // single click opens IMMEDIATELY — no
-                                // double-click-window delay (OpenChamber
-                                // model); the module-global pending click
-                                // (shared/pending-click.ts, keyed by
-                                // sessionId) only guards the SECOND click
-                                // within DOUBLE_CLICK_WINDOW_MS on the SAME
-                                // session, which enters inline rename.
-                                // suppressClickRef (drag-end trailing click)
-                                // is honored on the way in; a click outside
-                                // the pending row cancels it (document
-                                // listener). The row renders
-                                // data-session-id so the outside-click
-                                // containment check works across shells.
-                                // One row-title
-                                // resolution shared by the row label and the row
-                                // actions' accessible names (the blank label stays
-                                // rendered-only — a blank row carries no actions).
-                                // The OFFICIAL display label (never empty),
-                                // so "unknown title" can never render 「未命名会话」.
+                                // 会话行（上提以便 HoverCard 包裹）。单击立即打开、零延迟；
+                                // 模块级 pending（按 sessionId 记）只判定同一会话在
+                                // DOUBLE_CLICK_WINDOW_MS 内的第二次点击 → 内联重命名，其余点击记
+                                // pending 后立即打开。suppressClickRef（拖拽尾随 click）入口即生效，
+                                // 行外点击取消 pending（document 监听）；行渲染 data-session-id 供壳
+                                // 做包含判定；标题用官方 displayTitle（绝不渲染"未命名会话"）。
                                 const sessionTitleText = session.displayTitle
                                 const sessionRow = (
                                   <div
@@ -124,11 +98,8 @@ export function ServerSectionSessionRows({ server, workspace, sessions, currentI
                                     data-session-id={session.id}
                                     data-chamber-row={sessionKey}
                                     data-chamber-ghost={ghost ? '' : undefined}
-                                    // Synthetic cwd-derived groups are
-                                    // display-only: session rows inside them
-                                    // neither drag nor accept drops (a wire
-                                    // commit would fail
-                                    // workspace/not-found on the host).
+                                    // 合成的 cwd 派生分组仅用于显示：其中的会话行既不能拖也不能放
+                                    // （wire 提交会在宿主上以 workspace/not-found 失败）。
                                     draggable={!ghost && workspace.synthetic !== true}
                                     onDragStart={ghost || workspace.synthetic === true
                                       ? undefined
@@ -171,31 +142,16 @@ export function ServerSectionSessionRows({ server, workspace, sessions, currentI
                                       }}
                                     onClick={() => {
                                       if (suppressClickRef.current) return
-                                      // A ghost row is a non-interactive layout
-                                      // placeholder (visibility:hidden — clicks
-                                      // never reach it); guard defensively.
+                                      // ghost 行是不可交互的布局占位（visibility:hidden，点击到不了）；防御性守卫。
                                       if (ghost) return
-                                      // 菜单展开 / 本行重命名进行中：忽略整次点击
-                                      //（不 arm、不开会话）。
+                                      // 菜单展开或本行重命名进行中：忽略整次点击（不 arm、不开会话）。
                                       if (menuOpen[sessionKey] === true || (renaming !== null
                                         && renaming.sourceId === server.id && renaming.kind === 'session' && renaming.id === session.id)) return
-                                      // chamber (06): single
-                                      // click opens IMMEDIATELY — zero delay
-                                      // (OpenChamber model). The module-global
-                                      // pending (keyed by sessionId) only
-                                      // answers "is this the SECOND click of a
-                                      // double click on the same session within
-                                      // DOUBLE_CLICK_WINDOW_MS" — that one
-                                      // enters inline rename; any other click
-                                      // records the pending and opens right
-                                      // away. openSession is idempotent, so a
-                                      // misjudged slow second click just
-                                      // re-opens (no-op) and can NEVER
-                                      // accidentally rename.
+                                      // 单击立即打开（零延迟）：pending 只回答"是否同一会话在窗口内的
+                                      // 第二次点击"，那次进入内联重命名；其余记 pending 后立即打开。
+                                      // openSession 幂等，误判的慢第二次点击只重开（no-op），绝不可能误改名。
                                       if (noteSessionRowClick(server.id, session.id)) {
-                                        // 空白"新建会话"占位行无内容可
-                                        // 改名——双击不得进入内联重命名（否则会
-                                        // 把暂存会话的改名写到 wire 上）。
+                                        // 空白"新建会话"占位行无内容可改名——双击不得进入内联重命名（会把暂存会话改名写到 wire）。
                                         if (session.blank === true) return
                                         setRenaming({
                                           sourceId: server.id,
@@ -205,46 +161,29 @@ export function ServerSectionSessionRows({ server, workspace, sessions, currentI
                                         })
                                         return
                                       }
-                                      // 打开任何
-                                      // 真实会话都会把活动来源的 current 从空白
-                                      // 行切走，App 随后重派生——同步先 arm ghost
-                                      // 槽占住该行的布局位，列表在 350ms 双击窗口
-                                      // 内不位移，第二次点击仍落在目标行上。
+                                      // 打开真实会话会把活动 current 从空白行切走，App 随后重派生——同步先 arm
+                                      // ghost 槽占住布局位，列表在双击窗口内不位移，第二次点击仍落在目标行。
                                       armBlankGhostForClick()
                                       openSession(server.id, session.id)
                                     }}
                                   >
                                     <span className={cc.sessionTitle}>{session.blank === true ? t('session.new') : sessionTitleText}</span>
-                                    {/* The
-                                        active-Schedule marker sits exactly where
-                                        upstream puts it — between the row title
-                                        and the trailing cells (vendor
-                                        ui-workspace Rows.tsx:468). Renders only
-                                        for rows whose projection says so, so an
-                                        ordinary row's geometry/pitch is
-                                        untouched. */}
+                                    {/* 活动 Schedule 标记位于标题与尾部单元之间；只对有该投影的行渲染，普通行几何/间距不变。 */}
                                     {session.hasActiveSchedule === true && (
                                       <SessionScheduleIndicator label={t('schedule.active')} />
                                     )}
-                                    {/* blank（新建）行是临时占位——内容
-                                        不存在，kebab（含 fork/归档）作用于
-                                        不存在的内容，隐藏整簇（官方 Rows.tsx
-                                        `!row.blank && <rowActions>` L436-462）。 */}
+                                    {/* 空白（新建）行是临时占位：kebab（含 fork/归档）作用于不存在的内容，整簇隐藏。 */}
                                     {session.blank !== true && (
                                     <span
                                       className={clsx(cc.rowActions, menuOpen[sessionKey] === true && cc.rowActionsVisible)}
                                       onClick={(event) => {
-                                        // INVARIANT (pending-click.ts header):
-                                        // stopPropagation must be paired with
-                                        // clearPendingClick — see the workspace rowActions note.
+                                        // 不变量（见 pending-click.ts 头）：stopPropagation 必须与 clearPendingClick 成对。
                                         event.stopPropagation()
                                         clearPendingClick()
                                       }}
                                     >
                                       <Menu
-                                        // Same as the workspace menu above —
-                                        // `closeOnPointerLeave` kept (Rows.tsx:487),
-                                        // `compact`.
+                                        // 同上：保留 `closeOnPointerLeave`，用 `compact`。
                                         compact
                                         portal
                                         closeOnPointerLeave
@@ -263,8 +202,7 @@ export function ServerSectionSessionRows({ server, workspace, sessions, currentI
                                           } else if (id === 'fork') {
                                             onForkSession(server, session)
                                           } else if (id === 'archive') {
-                                            // No title argument — the verb runs
-                                            // immediately and nothing reads it.
+                                          // 不传标题：动词立即执行，无人读取它。
                                             onArchiveSession(server, session.id)
                                           }
                                         }}
@@ -280,21 +218,10 @@ export function ServerSectionSessionRows({ server, workspace, sessions, currentI
                                             icon: <IconBranchOutline16 size={14} />,
                                           },
                                           {
-                                            // The
-                                            // archive verb lives HERE, in the row
-                                            // menu — upstream keeps no second hover
-                                            // button because archiving only hides the
-                                            // row (it never touches the session log),
-                                            // so it is neither destructive nor
-                                            // confirm-gated (vendor ui-workspace
-                                            // Rows.tsx:412-421). Glyph size is a
-                                            // deliberate optical exception to the
-                                            // compact slot: `compact` shrinks the
-                                            // icon slot to 14px, but the 20-native
-                                            // archive glyph stays at 16 so it keeps
-                                            // the same visual weight as the
-                                            // 16-native glyphs drawn at 14 beside
-                                            // it (the flex slot tolerates +2px).
+                                          // 归档动词只在这里的行菜单：归档只隐藏行（不触碰会话日志），
+                                          // 故既不破坏性也无确认门控。字形尺寸是对 compact 槽位的刻意
+                                          // 光学例外：compact 把图标槽缩到 14px，但 20 原生的归档字形保持
+                                          // 16，才与旁边按 14 画的 16 原生字形同视觉重量（flex 槽容忍 +2px）。
                                             id: 'archive',
                                             label: t('menu.archiveSession'),
                                             icon: <IconArchiveOutline20 size={16} />,
@@ -304,10 +231,7 @@ export function ServerSectionSessionRows({ server, workspace, sessions, currentI
                                           <button
                                             type="button"
                                             className={cc.actionIcon}
-                                            // The row
-                                            // title is the accessible name (upstream
-                                            // `actions.session.aria`, vendor
-                                            // ui-workspace Rows.tsx:492).
+                                            // 行标题即无障碍名。
                                             aria-label={t('action.menu.session', { name: sessionTitleText })}
                                             aria-haspopup="menu"
                                             aria-expanded={menuOpen[sessionKey] === true}
@@ -324,22 +248,18 @@ export function ServerSectionSessionRows({ server, workspace, sessions, currentI
                                       />
                                     </span>
                                     )}
-                                    {/* Trailing state slot: the ring/dot at the
-                                        row's right edge. On hover the row action
-                                        cluster (the kebab menu) swaps in and this
-                                        slot swaps out (CSS hover replace, 06 §4.3
-                                        /§7) — the slot is a true replace, no
-                                        placeholder. role is conditional so an
-                                        empty (no-state) slot does not register a
-                                        live region (same rule
-                                        as the search-result rows). */}
+                                    {/* 尾部状态槽：行右缘的圆环/圆点。hover 时行动作簇换入、本槽换出
+                                        （真正的替换，无占位）；role 条件式，空槽不得注册 live region。 */}
                                     <span
                                       className={clsx(cc.sessionStateSlot, sessionStatePending(server, session) !== undefined && cc.sessionStateSlotPending)}
-                                      // 状态与出处（验收 DOM 判据；不参与渲染）。
+                                      // 状态与出处的机器可读镜像（不参与渲染）。
                                       data-chamber-session-state={sessionStateMarker(server, session).state}
-                                      // 这一行事实的观察时刻（host 域 ms；缺席 = 无观察者事实）。
+                                      // 该行事实的观察时刻（host 域 ms；缺席 = 无观察者事实）。
                                       data-chamber-fact-at={server.runtime?.sessions[session.id]?.factAt}
                                       data-chamber-state-source={sessionStateMarker(server, session).source}
+                                      // goal 呈现门生效标记（v5 §4 可选属性）：相位 active 即出现
+                                      // ——含 activation unknown；压制中 state 绝不报 completed。
+                                      data-chamber-goal-active={sessionStateMarker(server, session).goalActive ? '' : undefined}
                                       title={sessionStateLabel(server, session)}
                                       aria-label={sessionStateLabel(server, session)}
                                       role={sessionStateDot(server, session) !== null ? 'status' : undefined}

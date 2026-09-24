@@ -1,39 +1,15 @@
 /**
- * Gateway login page rendering (design 17 §7.1): the self-contained pre-auth
- * browser surface for `/auth/login`. Pure string builder — zero imports,
- * zero DOM, no runtime dependencies; the page ships inline with the gateway
- * (design 17 §7.1).
+ * Gateway login page rendering: the self-contained pre-auth browser surface
+ * for `/auth/login` and the request-boundary error page — pure string builders,
+ * zero imports, no DOM.
  *
- *   - No scripts (C1): the page CSP never allows script-src, so the output
- *     must never contain a `<script` element; all behavior is browser-native
- *     form submission (password managers provide their own reveal).
- *   - Credentials never echo (S5/C4): the render functions take no password
- *     and the output never contains a `value="` attribute.
- *   - Failure states keep the exact status-code matrix (401/429/503) with the
- *     form re-rendered in HTML for browsers; JSON clients are negotiated out
- *     via wantsHtmlLoginResponse and keep the existing JSON shape (design 17 §7.3).
- *   - `secure` mirrors the request policy's `decision.secure` (same fact as
- *     the conditional `; Secure` cookie attribute): plaintext connections get
- *     an honest warning, never a TLS claim (C8).
- *   - en/zh copy tables are kept in sync here; `{n}` is the
- *     server-ceiled retryAfterSec, substituted only for rate_limited.
- *
- * Request-boundary error page: dispatch.ts renders renderBoundaryErrorPage
- * when a request is rejected at the gateway request policy (400/403/421)
- * and the visitor is a browser (HTML Accept, GET/HEAD/POST). JSON/API
- * clients keep the plain JSON error + a non-secret `detail`. The page reuses
- * the same token layer/component styles and shares every invariant above:
- * no scripts, no echoed credentials (there are none), echoed request
- * values are HTML-escaped, and the copy tables stay in sync (en/zh).
- *
- * Appearance: the page follows the
- * browser display mode — a `prefers-color-scheme: light` palette override on
- * top of the dark design-token layer — plus autofill styling, focus rings,
- * reduced motion, and mobile viewport handling. Both palettes are sampled
- * from the official `@deepseek-ai/dsh-client-ui-theme` static scales/alias
- * maps (bluish neutrals + deepseek-blue brand/primary — the "dsh blue" look).
- * Self-declared so the pre-auth page depends on nothing beyond
- * this file (C5).
+ * Invariants: the page CSP never allows script-src, so the output must never
+ * contain a `<script` element; credentials never echo (no `value="` attribute);
+ * failure states keep the exact 401/429/503 matrix for browsers while JSON clients
+ * negotiate out via wantsHtmlLoginResponse; `secure` mirrors `decision.secure`
+ * (plaintext gets an honest warning, never a TLS claim); the en/zh copy tables
+ * stay in sync; `{n}` is the server-ceiled retryAfterSec for rate_limited only, and
+ * echoed request values are HTML-escaped and length-capped.
  */
 
 export interface LoginPageOptions {
@@ -41,36 +17,24 @@ export interface LoginPageOptions {
   secure: boolean
   error?: 'invalid' | 'rate_limited' | 'busy' | 'expired' | null
   retryAfterSec?: number // whole seconds, already ceiling'd; only meaningful when error === 'rate_limited'
-  /** The mobile-UA shunting escape (design 17 §18): true when the visitor
-   * arrived via /?desktop=1, carried through the login round-trip so the
-   * post-login redirect lands back on the desktop entry instead of being
-   * shunted again. Boolean marker only — no free-form return path (no
-   * open-redirect surface). */
+  /** The mobile-UA shunting escape: arrived via /?desktop=1, carried through the
+   * login round-trip so the post-login redirect lands back on the desktop entry.
+   * Boolean marker only — no free-form return path (no open-redirect surface). */
   desktop?: boolean
-  /** Login-phase background pre-warm (design 17 §10.6):
-   * the REAL discovered client-bundle URLs (`/plugins/??…`), each rendered
-   * as one `<link rel="prefetch" as="script">` inside <head>. No token
-   * wrapper and no `?u=` parameter: the URL must stay byte-identical to the
-   * one the app's own `<script src>` will request so the HTTP cache entry is
-   * shared, and the capability to fetch it pre-auth travels as the short-lived
-   * `dsh_gateway_warmup` cookie set on this response. Absent or empty leaves
-   * the output byte-identical (locked by
-   * warmup-login-page.test.ts). Values are HTML-escaped; the page stays
-   * script-free. */
+  /** Login-phase background pre-warm: the REAL discovered client-bundle URLs
+   * (`/plugins/??…`), each rendered as one `<link rel="prefetch" as="script">`
+   * in <head>. No token wrapper and no `?u=`: the URL must stay byte-identical
+   * to the app's own `<script src>` so the HTTP cache entry is shared, and the
+   * fetch capability travels as the short-lived `dsh_gateway_warmup` cookie.
+   * Absent or empty leaves the output byte-identical. */
   warmupUrls?: readonly string[]
 }
 
-/** Login-page CSP: two sanctioned increments over design 17 §7.1 —
- * `img-src data:` (the inline SVG favicon/brand marks) and `connect-src
- * 'self'` for the login-phase pre-warm (design 17 §10.6). The latter is
- * required because the page's <head> carries one same-origin
- * `<link rel="prefetch" as="script" href="/plugins/??…">` per discovered
- * client bundle: `default-src 'none'` would block the fetch (prefetch falls
- * back to default-src when connect-src is absent), so the pre-warm would
- * silently do nothing. 'self' is the narrowest value that permits exactly the
- * same-origin real bundle URLs; nothing else changes — `script-src` stays
- * absent (C1), so the page remains script-free. Shared by the boundary error
- * page (which never renders prefetch links). */
+/** Login-page CSP: `img-src data:` for the inline SVG favicon/brand marks, and
+ * `connect-src 'self'` for the login-phase pre-warm — prefetch falls back to
+ * default-src when connect-src is absent, so `default-src 'none'` alone would
+ * silently disable it. `script-src` stays absent, so the page is script-free.
+ * Shared by the boundary error page, which never renders prefetch links. */
 export const LOGIN_PAGE_CSP: string = "default-src 'none'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; style-src 'unsafe-inline'; img-src data:; connect-src 'self'"
 
 type Lang = 'en' | 'zh'
@@ -95,8 +59,7 @@ interface LoginPageCopy {
   tokenOnlyBodyNone: string
 }
 
-/** en/zh copy. Kept as one typed table so a missing key is a
- * compile error, never a silent mismatch between the two languages. */
+/** en/zh copy; one typed table so a missing key is a compile error, never a silent mismatch. */
 const COPY: Record<Lang, LoginPageCopy> = {
   en: {
     title: 'dsh gateway',
@@ -138,10 +101,10 @@ const COPY: Record<Lang, LoginPageCopy> = {
   },
 }
 
-/** Boundary error page copy (en/zh). The reason templates interpolate the
- * request's own non-secret values (Host/Origin) — never configuration or
- * credentials. The values are HTML-escaped by the renderer before
- * substitution. Kept as one typed table per language like COPY. */
+/** Boundary error page copy (en/zh); kept as one typed table per language like
+ * COPY. The reason templates interpolate the request's own non-secret values
+ * (Host/Origin) — never configuration or credentials — HTML-escaped by the
+ * renderer before substitution. */
 interface BoundaryCopy {
   deniedTitle: string
   explainMalformed: string
@@ -185,9 +148,8 @@ const BOUNDARY_COPY: Record<Lang, BoundaryCopy> = {
   },
 }
 
-/** The gateway reason kinds produced by middleware.ts's request policy. The
- * login page stays dependency-free, so dispatch maps the middleware's typed
- * reason onto this enum + optional values. */
+/** The reason kinds produced by middleware.ts's request policy; the login page
+ * stays dependency-free, so dispatch maps them onto this enum + values. */
 export type BoundaryReasonKind =
   | 'malformed_headers'
   | 'host_rejected'
@@ -208,25 +170,14 @@ export interface BoundaryErrorPageOptions {
 }
 
 /** dsh design-token layer: values sampled from the official
- * `@deepseek-ai/dsh-client-ui-theme` static scales and alias maps — the bluish
- * neutral ramp for surfaces/labels, the deepseek-blue ramp for brand and the
- * primary action, amber/red/green ramps for the semantic states. Self-declared
- * so the pre-auth page depends on nothing beyond this file (C5). The page
- * follows the browser display mode: `prefers-color-scheme: light` swaps in
- * the full light palette (same variable names) and flips `color-scheme` so
- * native widgets match. Browsers without media-query color-scheme support
- * keep the dark layer.
- *
- * Two namespaces, deliberately kept apart:
- *  - `--dsw-alias-*` — MIRRORS of real upstream aliases, spelled exactly as
- *    ui-theme spells them so the page reads as dsh. Only names the upstream
- *    token sheet actually declares belong here; the pre-auth page has no
- *    access to that sheet, which is why it re-declares them.
- *  - `--chamber-login-*` — chamber's OWN values, which have no upstream alias
- *    at all (glows, focus rings, the amber/red notice pairs, the code-chip
- *    fill, the card shadow). These carry the dsh-chamber prefix so they can
- *    never collide with a future upstream token, and so a reader can tell at
- *    a glance which values were sampled from dsh and which chamber chose. */
+ * `@deepseek-ai/dsh-client-ui-theme` static scales/alias maps (bluish neutrals,
+ * deepseek-blue brand, amber/red/green states). Self-declared, so the pre-auth
+ * page depends on nothing beyond this file; `prefers-color-scheme: light` swaps
+ * in the full light palette (same names) and flips `color-scheme`.
+ * `--dsw-alias-*` MIRRORS real upstream aliases spelled exactly as ui-theme
+ * spells them; `--chamber-login-*` are chamber's OWN values (glows, focus rings,
+ * notice pairs, code-chip fill, card shadow), the prefix preventing collision
+ * with a future upstream token. */
 const TOKEN_LAYER = `:root {
   color-scheme: dark;
   --dsw-alias-bg-base: #151517;
@@ -297,18 +248,14 @@ const TOKEN_LAYER = `:root {
 }`
 
 /** Inline SVG brand mark (data URI — the only sanctioned image source beyond
- * the favicon). Rounded tile with the dsh deepseek-blue gradient and a light
- * ring, echoing the favicon shape. */
+ * the favicon): rounded tile with the dsh deepseek-blue gradient and a ring. */
 const BRAND_MARK = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='b' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%23679efe'/%3E%3Cstop offset='1' stop-color='%234176e6'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='32' height='32' rx='9' fill='url(%23b)'/%3E%3Ccircle cx='16' cy='16' r='6.5' fill='none' stroke='%23f9fafb' stroke-opacity='0.95' stroke-width='2.6'/%3E%3C/svg%3E"
 
-/** Inline SVG mark for the boundary (denied) page: amber rounded tile with
- * an exclamation — neutral enough for both display modes. */
+/** Inline SVG mark for the boundary (denied) page: amber tile with an exclamation. */
 const DENIED_MARK = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='w' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%23f59e0b'/%3E%3Cstop offset='1' stop-color='%23dd8629'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='32' height='32' rx='9' fill='url(%23w)'/%3E%3Cpath d='M16 9.5v9.5' stroke='%23fff' stroke-width='3' stroke-linecap='round'/%3E%3Ccircle cx='16' cy='23.4' r='1.7' fill='%23fff'/%3E%3C/svg%3E"
 
-/** Component styles: card = .panel, input = .custom input,
- * button = button.primary equivalents over the dsh token layer, extended
- * with the light-mode palette variables, autofill theming, focus rings, the
- * brand header and the boundary-page elements. */
+/** Component styles: card/input/button equivalents over the dsh token layer,
+ * plus light-mode variables, autofill theming, focus rings and boundary elements. */
 const COMPONENT_STYLES = `*{box-sizing:border-box}
 body{margin:0;min-height:100vh;display:flex;padding:2rem 1.25rem;background-color:var(--dsw-alias-bg-base);background-image:radial-gradient(56rem 34rem at 50% -14rem,var(--chamber-login-glow-a),transparent 70%),radial-gradient(40rem 26rem at 88% 112%,var(--chamber-login-glow-b),transparent 72%);background-repeat:no-repeat;background-attachment:fixed;color:var(--dsw-alias-label-primary);font-family:ui-sans-serif,system-ui,-apple-system,sans-serif;-webkit-font-smoothing:antialiased}
 main.card{width:100%;max-width:24rem;margin:auto;display:flex;flex-direction:column;gap:1.05rem;padding:1.75rem;border:0.5px solid var(--dsw-alias-border-l2);border-radius:1rem;background:var(--dsw-alias-bg-layer-2);box-shadow:var(--chamber-login-card-shadow)}
@@ -343,20 +290,16 @@ code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:
 @media (max-height:560px){body{padding:1.25rem .75rem}}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}`
 
-/** Full self-contained document shell: charset, viewport, theme-color for
- * both display modes, title, inline SVG data: favicon (the `img-src data:`
- * CSP increment, design 17 §7.1), optional pre-warm prefetch links inside
- * <head> (design 17 §10.6), inline styles, and the given body. Never emits
- * external URLs or script elements. With no prefetch URLs the output is
- * byte-identical to the pre-warm template (locked by
- * warmup-login-page.test.ts). */
+/** Full self-contained document shell: charset, viewport, both theme-color
+ * modes, title, inline data: favicon, optional pre-warm prefetch links, inline
+ * styles and the body. Never emits external URLs or script elements; with no
+ * prefetch URLs the output is byte-identical to the pre-warm template. */
 function pageShell(lang: Lang, title: string, body: string, prefetchUrls: readonly string[] = []): string {
-  // One same-origin <link rel="prefetch"> per REAL bundle URL. These are the
-  // ONLY external element the pre-auth page ever emits; they stay inside the
-  // CSP's connect-src 'self' and carry no script. No crossorigin attribute is
-  // added: the app's own <script src> is a plain same-origin script load, and
-  // every difference from that request is a chance to split the HTTP cache
-  // entry the pre-warm exists to share.
+  // One same-origin <link rel="prefetch"> per REAL bundle URL — the ONLY
+  // external element the page emits, inside the CSP's connect-src 'self'. No
+  // crossorigin attribute: the app's own <script src> is a plain same-origin
+  // load, and any difference would split the HTTP cache entry the pre-warm
+  // exists to share.
   const prefetchLinks = prefetchUrls.length === 0
     ? ''
     : prefetchUrls.map(url => `  <link rel="prefetch" as="script" href="${escapeHtml(url)}">\n`).join('')
@@ -387,9 +330,8 @@ function indentLines(text: string, spaces: number): string {
   return text.split('\n').map(line => pad + line).join('\n')
 }
 
-/** Minimal HTML escaping for every echoed request value (Host/Origin). The
- * values originate from untrusted HTTP headers, so `&<>"'` must never reach
- * the output unescaped (an Origin value that looks like markup is text). */
+/** Minimal HTML escaping for every echoed request value (Host/Origin): these
+ * come from untrusted HTTP headers, so `&<>"'` must never reach output raw. */
 function escapeHtml(value: string): string {
   return value
     .replace(/&/g, '&amp;')
@@ -404,9 +346,8 @@ function shortValue(value: string, max = 160): string {
   return value.length <= max ? value : value.slice(0, max) + '…'
 }
 
-/** Error-banner copy for the three error states. The rate_limited template
- * carries the server-ceiled seconds; anything that is not a number >= 1 falls
- * back to the generic copy so NaN/undefined can never reach the output. */
+/** Error-banner copy; rate_limited carries the server-ceiled seconds and falls
+ * back to the generic copy for anything that is not a number >= 1. */
 function errorBannerCopy(opts: LoginPageOptions, copy: LoginPageCopy): string {
   if (opts.error === 'rate_limited') {
     const retryAfterSec = opts.retryAfterSec
@@ -418,15 +359,13 @@ function errorBannerCopy(opts: LoginPageOptions, copy: LoginPageCopy): string {
   return opts.error === 'busy' ? copy.errorBusy : copy.errorInvalid
 }
 
-/** The login form (design 17 §7.1/§7.3): browser-native POST to /auth/login,
- * autofocus on the single input, full credential-input hygiene, and the a11y
- * attributes wired to the error banner only when one is shown. The password
- * input is never pre-filled (S5). */
+/** The login form: browser-native POST to /auth/login, autofocus on the single
+ * input, credential-input hygiene, and a11y attributes wired to the error
+ * banner only when one is shown. The password input is never pre-filled. */
 function loginForm(opts: LoginPageOptions, copy: LoginPageCopy): string {
   const showError = opts.error === 'invalid' || opts.error === 'rate_limited' || opts.error === 'busy'
   const invalidAttrs = showError ? ' aria-invalid="true" aria-describedby="login-error"' : ''
-  // The action carries the desktop marker when present: the POST URL's query
-  // is what the dispatch success handler reads to redirect back to /?desktop=1.
+  // The action carries the desktop marker; the dispatch success handler reads the POST query to redirect back to /?desktop=1.
   const action = opts.desktop === true ? '/auth/login?desktop=1' : '/auth/login'
   return '<form method="post" action="' + action + '">\n'
     + '  <label class="field" for="password">' + copy.passwordLabel + '</label>\n'
@@ -437,8 +376,7 @@ function loginForm(opts: LoginPageOptions, copy: LoginPageCopy): string {
     + '</form>'
 }
 
-/** Brand header block (mark + wordmark) shared by the login and token-only
- * cards. The mark is decorative (alt="") — the h1 is the real label. */
+/** Brand header (mark + wordmark) shared by the login and token-only cards; the mark is decorative (alt="") — the h1 is the real label. */
 function brandHeader(inner: string, mark: string): string {
   return '<div class="brand">\n'
     + '  <img class="mark" src="' + mark + '" width="44" height="44" alt="">\n'
@@ -446,9 +384,8 @@ function brandHeader(inner: string, mark: string): string {
     + '</div>'
 }
 
-/** Render the pre-auth login page (design 17 §7.1). Stacking order: brand →
- * plaintext warning (secure=false) → error banner (invalid/rate_limited/busy)
- * → expired hint (expired) → form → secure badge (secure=true). */
+/** Render the pre-auth login page. Stacking order: brand → plaintext warning
+ * (secure=false) → error banner → expired hint → form → secure badge. */
 export function renderLoginPage(opts: LoginPageOptions): string {
   const copy = COPY[opts.lang]
   const showError = opts.error === 'invalid' || opts.error === 'rate_limited' || opts.error === 'busy'
@@ -474,15 +411,13 @@ export function renderLoginPage(opts: LoginPageOptions): string {
   }
 
   const body = '  <main class="card">\n' + indentLines(parts.join('\n'), 4) + '\n  </main>'
-  // Only the login GET path ever passes warm-up URLs; the boundary/token-only
-  // pages keep the default empty list and therefore the byte-identical output.
+  // Only the login GET path ever passes warm-up URLs; the boundary/token-only pages keep the default empty list (byte-identical output).
   return pageShell(opts.lang, copy.title, body, opts.warmupUrls ?? [])
 }
 
-/** Content negotiation for the login page (design 17 §7.3): a browser-native
- * form POST (form-urlencoded body) that advertises HTML in Accept. JSON
- * clients — including the desktop main process — never match and keep the
- * existing JSON error shape. */
+/** Content negotiation for the login page: a browser-native form POST
+ * (form-urlencoded body) that advertises HTML in Accept. JSON clients —
+ * including the desktop main process — never match and keep the JSON shape. */
 export function wantsHtmlLoginResponse(headers: Record<string, string | string[] | undefined>): boolean {
   const contentType = String(headers['content-type'] ?? '').split(';')[0].trim().toLowerCase()
   const rawAccept = headers['accept']
@@ -490,22 +425,20 @@ export function wantsHtmlLoginResponse(headers: Record<string, string | string[]
   return contentType === 'application/x-www-form-urlencoded' && accept.includes('text/html')
 }
 
-/** Accept-Language → render language: first comma-separated
- * tag; `zh`/`zh-*` (zh-CN, zh-TW, …) → 'zh', everything else (including a
- * missing header) → 'en'. */
+/** Accept-Language → render language: first comma-separated tag; `zh`/`zh-*`
+ * (zh-CN, zh-TW, …) → 'zh', everything else (including missing) → 'en'. */
 export function detectLoginLang(acceptLanguage: string | undefined): 'en' | 'zh' {
   if (acceptLanguage === undefined || acceptLanguage === '') return 'en'
   const first = acceptLanguage.split(',')[0].trim().toLowerCase()
   return first.startsWith('zh') ? 'zh' : 'en'
 }
 
-/** Token-only / no-auth deployments (design 17 §6): a minimal HTML
- * explanation page (no form) served with the same 404 status for browsers;
- * API clients still receive the JSON 404. The back link reuses the same-origin
- * `/`, whose reachability under token auth is unchanged. `variant` keeps the
- * copy honest per auth kind: 'token' deployments point at the shared token;
- * 'none' (`--no-auth`) deployments have no token and must not claim one
- * (design 17 §13.1 honest posture). */
+/** Token-only / no-auth deployments: a minimal HTML explanation page (no form)
+ * served with the same 404 status for browsers; API clients still receive JSON
+ * 404. The back link reuses the same-origin `/`, whose reachability under token
+ * auth is unchanged. `variant` keeps the copy honest per auth kind: 'token'
+ * points at the shared token; 'none' (`--no-auth`) has no token and must not
+ * claim one. */
 export function renderTokenOnlyPage(lang: 'en' | 'zh', variant: 'token' | 'none' = 'token'): string {
   const copy = COPY[lang]
   const title = variant === 'none' ? copy.tokenOnlyTitleNone : copy.tokenOnlyTitle
@@ -518,11 +451,9 @@ export function renderTokenOnlyPage(lang: 'en' | 'zh', variant: 'token' | 'none'
   return pageShell(lang, copy.title, pageBody)
 }
 
-/** Render the request-boundary error page (400/403/421) for browsers whose
- * request was rejected at the gateway request policy. Only request-supplied
- * non-secret values are echoed, HTML-escaped and length-capped; the page
- * carries the same no-script CSP and never contains a form or a value=
- * attribute. See dispatch.ts for the content negotiation that selects it. */
+/** Render the request-boundary error page (400/403/421) for browsers rejected at
+ * the gateway request policy. Only request-supplied non-secret values are
+ * echoed, HTML-escaped and length-capped; it never contains a form or value=. */
 export function renderBoundaryErrorPage(opts: BoundaryErrorPageOptions): string {
   const copy = COPY[opts.lang]
   const boundary = BOUNDARY_COPY[opts.lang]

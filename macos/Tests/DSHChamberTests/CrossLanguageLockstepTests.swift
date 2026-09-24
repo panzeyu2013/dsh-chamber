@@ -168,7 +168,7 @@ final class CrossLanguageLockstepTests: XCTestCase {
         XCTAssertEqual(SwiftEdgeHostLegs.uiLegTimeout, 1.0, "非交互腿保持 1s 短界")
     }
 
-    /// S16a：60 通道冒烟清单必须迭代生成物 BridgeManifest.invokeChannels，
+    /// S16a：61 通道冒烟清单必须迭代生成物 BridgeManifest.invokeChannels，
     /// 不得再手工转录（原 80 行静态数组删除）。
     func testSmokeListReferencesGeneratedManifest() throws {
         let text = try source("macos/Tests/DSHChamberTests/BridgeClientEdgeIntegrationTests.swift")

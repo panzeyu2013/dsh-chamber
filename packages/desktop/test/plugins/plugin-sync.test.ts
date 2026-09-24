@@ -11,11 +11,15 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdirSync, realpathSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { ARCHIVE_CLEANUP_PACKAGE_NAME, classifyDependencyValue, classifyLocalDependency, CLIENT_GRAPH_INSERT_ID, CLIENT_GRAPH_PACKAGE_NAME, computeCordisPatchUpdate, describeLocalPluginAddConfirmation, describeLocalPluginRemoveConfirmation, describeMaterializeConfirmation, describePluginApplyConfirmation, describeSeedConfirmation, GIT_WORKTREE_INSERT_ID, GIT_WORKTREE_PACKAGE_NAME, guardPluginMutation, hasXWildcardVersion, isAllowedLocalFileSpec, localPluginList, MATERIALIZED_VALUE_MASK, packageNameFromSpec, parseRemoteManifest, resolveLocalMaterializeDirectory, PLUGIN_SPEC_PATTERN, PLUGIN_NAME_PATTERN, CHAMBER_HOST_PACKAGES, redactLocalPluginManifest, redactRemotePluginManifest, remotePluginList, runLocalDshPlugin, seedRemoteChamberHostPackages, shouldPreferPinnedRuntimeLockfile, sshProtectionFacts } from '../../plugin-sync.ts'
+import { ARCHIVE_CLEANUP_PACKAGE_NAME, classifyDependencyValue, classifyLocalDependency, CLIENT_GRAPH_PACKAGE_NAME, computeCordisPatchUpdate, describeLocalPluginAddConfirmation, describeLocalPluginRemoveConfirmation, GIT_WORKTREE_PACKAGE_NAME, guardPluginMutation, hasXWildcardVersion, isAllowedLocalFileSpec, localPluginList, MATERIALIZED_VALUE_MASK, packageNameFromSpec, parseRemoteManifest, resolveLocalMaterializeDirectory, PLUGIN_SPEC_PATTERN, PLUGIN_NAME_PATTERN, CHAMBER_HOST_PACKAGES, redactLocalPluginManifest, redactRemotePluginManifest, remotePluginList, runLocalDshPlugin, seedRemoteChamberHostPackages, shouldPreferPinnedRuntimeLockfile, sshProtectionFacts } from '../../plugin-sync.ts'
 import type { ChamberHostPackageSeed, ExecFn } from '../../plugin-sync.ts'
-import { HOST_OPEN_IN_INSERT, isMaterializedValue, parsePluginManifest } from '../../control-plane-module.ts'
+import { HOST_GIT_WORKTREE_INSERT, HOST_GRAPH_INSERT, HOST_OPEN_IN_INSERT, isMaterializedValue, parsePluginManifest } from '../../control-plane-module.ts'
 import { chamberPackageOf, chamberFacts, chamberProjection, chamberStateOf } from '../support/chamber-projection.ts'
 import { chamberFact, err, expectedChamberFacts, ok, okBytes, SEED_SPEC, tempDir } from './plugin-sync-fixtures.ts'
+
+// Insert ids live in the authoritative seed registry (control-plane-module).
+const CLIENT_GRAPH_INSERT_ID = HOST_GRAPH_INSERT.id
+const GIT_WORKTREE_INSERT_ID = HOST_GIT_WORKTREE_INSERT.id
 
 function writeLocalProfile(root: string, dependencies: Record<string, string>, bundles: string[]): string {
   const profileDir = join(root, 'profiles', 'web')
@@ -825,28 +829,19 @@ test('remotePluginList: the loader insert and each row live state are judged ind
   }
 })
 
-// Confirmation copy: every mutating path must name its target and effect
-// before the action runs.
-test('confirmation copy: every mutating path names the target and its effect', () => {
-  const materialize = describeMaterializeConfirmation({ pluginName: '@scope/pkg', pluginPath: '/Users/x/pkg', targetLabel: 'prod-server', targetId: 'ssh-1' })
-  assert.match(materialize.message, /@scope\/pkg/)
-  assert.match(materialize.detail, /prod-server/)
+// Confirmation copy: every LIVE mutating path must name its target and effect
+// before the action runs. The retired direct ssh materialize/seed/apply copy
+// builders were removed with their (now unreachable) flows; the live gateway
+// and ssh-undo copy is pinned in their own suites.
+test('confirmation copy: the local mutating paths name their effect', () => {
   const add = describeLocalPluginAddConfirmation('some-pkg@^1.2.3')
   assert.match(add.message, /some-pkg@\^1\.2\.3/)
   const remove = describeLocalPluginRemoveConfirmation('some-pkg')
   assert.match(remove.message, /some-pkg/)
-  const apply = describePluginApplyConfirmation({ targetLabel: 'prod-server', targetId: 'ssh-1', add: ['pkg-a', 'pkg-b', 'pkg-c', 'pkg-d'], remove: ['old-pkg'], restart: true })
-  assert.match(apply.detail, /安装 4 个插件/)
-  assert.match(apply.detail, /移除 1 个插件/)
-  assert.match(apply.detail, /重启远端 dsh/)
-  const seed = describeSeedConfirmation({ targetLabel: null, targetId: 'ssh-2' })
-  assert.match(seed.message, /ssh-2/, 'the target falls back to the instance id')
-  assert.match(seed.detail, /写入 chamber host 包/)
 })
 
-// cordis.patch.yml seed merge: template rewrite / dedup / legacy fold /
-// append-without-clobber.
-test('seed: the init template is rewritten, an existing row deduped, and the pre-rename row folded, never refused', () => {
+// cordis.patch.yml seed merge: template rewrite / dedup / append-without-clobber.
+test('seed: the init template is rewritten, an existing row deduped, and a pre-rename row refused loud', () => {
   const inserts = [{ insertId: CLIENT_GRAPH_INSERT_ID, packageName: CLIENT_GRAPH_PACKAGE_NAME }]
   const rewritten = computeCordisPatchUpdate('# Your patch layer\n[]\n', inserts)
   assert.ok(!('error' in rewritten) && rewritten.write, 'the empty template is rewritten')
@@ -855,13 +850,13 @@ test('seed: the init template is rewritten, an existing row deduped, and the pre
     assert.ok(rewritten.content.includes("name: '" + CLIENT_GRAPH_PACKAGE_NAME + "'"))
     assert.deepEqual(computeCordisPatchUpdate(rewritten.content, inserts), { write: false }, 'a second pass is a no-op')
   }
+  // The pre-rename package name is gone with the fold: the same loader id
+  // bound to the old name is an id-bound conflict, refused loud (the old
+  // profile must be re-seeded explicitly, never guessed at).
   const legacy = "- insert:\n    - id: client-graph\n      name: '@dsh-chamber/dsh-host-client-graph'\n"
-  const folded = computeCordisPatchUpdate(legacy, inserts)
-  assert.ok(!('error' in folded) && folded.write, 'the pre-rename row folds instead of refusing')
-  if (!('error' in folded) && folded.write) {
-    assert.equal(folded.content, "- insert:\n    - id: client-graph\n      name: '@dsh-chamber/dsh-chamber-seed-client-graph'\n")
-    assert.deepEqual(computeCordisPatchUpdate(folded.content, inserts), { write: false })
-  }
+  const refused = computeCordisPatchUpdate(legacy, inserts)
+  assert.ok('error' in refused, 'the pre-rename row is refused, never silently rewritten')
+  if ('error' in refused) assert.match(refused.error, /already bound to a different package/)
   const appended = computeCordisPatchUpdate('- id: system-prompt\n  config:\n    persona: hi\n', inserts)
   assert.ok(!('error' in appended) && appended.write)
   if (!('error' in appended) && appended.write) {

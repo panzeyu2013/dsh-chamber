@@ -1,47 +1,29 @@
 /**
  * Structured Git action failures + the code→copy resolver (the i18n boundary).
- *
- * WHY THIS MODULE. Every user-reachable refusal of the Git client — the
- * coordinator's preflight guards and the host-domain refusals — crosses the
- * presentation layer (the two dialogs and the source-level alert strip) as an
- * error, and that layer owns no prose: copy lives in locales.ts keyed by a
- * GitSidebarKey (design 08 §5.4, design 16 §7.2). The logic layer therefore
- * mints GitActionError with a CODE from the closed union below, and
- * gitActionErrorText resolves it through the single code→key table
- * (removeFailureCopyKey). Only a genuinely unmapped failure keeps its raw
- * message — and every message this package mints is English by construction,
- * so the en dictionary can never fall back to Chinese
- * (test/shared/action-error.test.ts locks both halves).
- *
- * HOST CODES ride the same resolver: gitActionErrorCode walks the saga
- * 'original' chain (removeFailureCode), so a GitWorktreeRpcError wrapped by
- * GitSagaError still resolves to its localized copy.
- *
- * VOCABULARY. Where a client guard is the same condition as a host refusal the
- * code REUSES the host spelling (worktree-locked, worktree-dirty,
- * main-worktree), so the two halves share one code→copy entry instead of
- * growing parallel names for one user-facing situation.
+ * Every user-reachable refusal — coordinator preflight guards and host-domain refusals —
+ * reaches the presentation layer (dialogs, alert strip) as an error, and that layer owns no
+ * prose: copy lives in locales.ts keyed by GitSidebarKey (design 08 §5.4, design 16 §7.2). The
+ * logic layer mints GitActionError with a CODE from the closed union below and
+ * gitActionErrorText resolves it through the single code→key table; only an unmapped failure
+ * keeps its raw message, and every message this package mints is English by construction.
+ * HOST CODES ride the same resolver (gitActionErrorCode walks the saga 'original' chain), so a
+ * wrapped GitWorktreeRpcError still resolves. VOCABULARY: a client guard with the same condition
+ * as a host refusal REUSES the host spelling (worktree-locked, worktree-dirty, main-worktree).
  */
 import type { GitSidebarKey } from '../locales.ts'
 import { describeThrown } from '@dsh-chamber/dsh-chamber-client-core'
 import { removeFailureCode, removeFailureCopyKey } from './remove-notes.ts'
 
 /**
- * User-reachable Git action failures with dedicated localized copy. The union
- * is EXACTLY the code set removeFailureCopyKey answers for, so a new member
- * without copy fails test/shared/action-error.test.ts instead of rendering a
- * raw message.
+ * User-reachable Git action failures with dedicated localized copy. The union is
+ * EXACTLY the code set removeFailureCopyKey answers for, so a new member without
+ * copy fails the action-error test instead of rendering a raw message.
  */
 export type GitActionErrorCode =
-  /** Another Git mutation already holds this source's lease. */
   | 'action-in-progress'
-  /** A durable recovery item must be retried/completed before new actions. */
   | 'recovery-pending'
-  /** The fresh snapshot needed by the preflight could not be read. */
   | 'fresh-facts-unavailable'
-  /** The target worktree is no longer in the source's topology. */
   | 'worktree-not-found'
-  /** The main checkout can never be removed as a linked worktree. */
   | 'main-worktree'
   /** The row carries no dsh workspace (the unregistered path is required). */
   | 'worktree-unregistered'
@@ -56,13 +38,11 @@ export type GitActionErrorCode =
   | 'worktree-status-unknown'
   /** A session cannot target an unhealthy worktree (adopt preflight). */
   | 'unhealthy-target'
-  /** The optional pre-remove archive pass failed; no Git mutation was made. */
   | 'archive-failed'
-  /** The unregistered-removal fresh refresh failed. */
   | 'refresh-failed'
   /** The instance does not serve the gitWorktree Remote (404). */
   | 'git-host-not-loaded'
-  /** The shared carrier answered a business-level refusal (`rpc-failed`): its
+  /** The shared carrier answered a business-level refusal (`rpc-failed`); its
    *  message can come from the carrier's own fallback, so the code needs copy. */
   | 'rpc-failed'
   /** Host refusals with dedicated copy (they arrive as GitWorktreeRpcError). */
@@ -84,30 +64,23 @@ export class GitActionError extends Error {
 }
 
 /**
- * The code behind an action failure: the error's own code, or the first one
- * found along the saga 'original' chain (host refusals). Unmapped/plain
- * failures answer undefined and the caller keeps the raw message.
- * @param error - any thrown value.
- * @returns the failure code, when one is present.
+ * The code behind an action failure: the error's own code, or the first one found
+ * along the saga 'original' chain (host refusals). Unmapped/plain failures answer
+ * undefined and the caller keeps the raw message.
  */
 export function gitActionErrorCode(error: unknown): string | undefined {
   return removeFailureCode(error)
 }
 
-/** Stable text for a failure with no localized copy (hostile values safe).
- *  The shared projection with this package's fallback. */
+/** Stable text for a failure with no localized copy (hostile values safe). */
 function rawMessage(error: unknown): string {
   return describeThrown(error, 'unknown Git error')
 }
 
 /**
- * Resolve a failure code + raw message to user-facing copy: a mapped code uses
- * the localized string, anything else keeps the message (honest, and English
- * for every message this package mints).
- * @param code - the failure code, when known (GitActionError/GitWorktreeRpcError).
- * @param message - the raw failure message.
- * @param t - the bound translator for the git namespace.
- * @returns the text the presentation layer renders.
+ * Resolve a failure code + raw message to user-facing copy: a mapped code uses the
+ * localized string, anything else keeps the message (honest, and English for every
+ * message this package mints).
  */
 export function gitActionErrorTextFor(
   code: string | undefined,
@@ -120,11 +93,8 @@ export function gitActionErrorTextFor(
 }
 
 /**
- * Resolve an arbitrary thrown value to user-facing copy (the presentation
- * layer's single entry point).
- * @param error - the thrown value.
- * @param t - the bound translator for the git namespace.
- * @returns the localized copy for a mapped code, else the raw message.
+ * Resolve an arbitrary thrown value to user-facing copy (the presentation layer's
+ * single entry point).
  */
 export function gitActionErrorText(error: unknown, t: (key: GitSidebarKey) => string): string {
   return gitActionErrorTextFor(gitActionErrorCode(error), rawMessage(error), t)

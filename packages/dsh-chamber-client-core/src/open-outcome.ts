@@ -1,9 +1,6 @@
 /**
- * Shared row-error contract for session open outcomes (design 05 §3): the
- * App layer reports an open outcome over the chamberBridge, SidebarRoot
- * writes it into its rowErrors map, and ServerSection renders it under the
- * session row / search-result row. Both sides must derive the key from ONE
- * template — a drift would silently write failures that never render.
+ * Shared row-error contract for session open outcomes: writer and renderer must derive the key
+ * from ONE template — drift would silently write failures that never render.
  */
 
 /** rowErrors key of one session's open-outcome text (writer == reader). */

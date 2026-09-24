@@ -19,6 +19,9 @@ import {
   HOST_PACKAGE_SEED_FILES as facadeSeedFiles,
   isPackagedElectronRuntime,
   renderCordisInserts as desktopRenderCordisInserts,
+  HOST_ARCHIVE_CLEANUP_INSERT,
+  HOST_GIT_WORKTREE_INSERT,
+  HOST_GRAPH_INSERT,
 } from '../../control-plane-module.ts'
 // The control-plane authoritative package (the cross-package contract target).
 import {
@@ -29,12 +32,12 @@ import {
   renderCordisInserts as planeRenderCordisInserts,
 } from '@dsh-chamber/control-plane'
 import {
-  ARCHIVE_CLEANUP_INSERT_ID,
+
   ARCHIVE_CLEANUP_PACKAGE_NAME,
-  CLIENT_GRAPH_INSERT_ID,
+
   CLIENT_GRAPH_PACKAGE_NAME,
   computeCordisPatchUpdate,
-  GIT_WORKTREE_INSERT_ID,
+
   GIT_WORKTREE_PACKAGE_NAME,
   localPluginList,
   SEED_FILES,
@@ -55,6 +58,11 @@ import { REQUIRED_ACTIVATION_PROBES } from '@dsh-chamber/dsh-runtime'
 // The control-plane single-source host-identity constants (consumed through
 // the same facade the desktop probes use).
 import { HOST_IDENTITY_METHOD, LEGACY_HOST_PROBE_METHOD } from '../../control-plane-module.ts'
+
+// Insert ids live in the authoritative seed registry (control-plane-module).
+const CLIENT_GRAPH_INSERT_ID = HOST_GRAPH_INSERT.id
+const GIT_WORKTREE_INSERT_ID = HOST_GIT_WORKTREE_INSERT.id
+const ARCHIVE_CLEANUP_INSERT_ID = HOST_ARCHIVE_CLEANUP_INSERT.id
 
 const CLIENT_GRAPH = { id: CLIENT_GRAPH_INSERT_ID, name: CLIENT_GRAPH_PACKAGE_NAME }
 const GIT_WORKTREE = { id: GIT_WORKTREE_INSERT_ID, name: GIT_WORKTREE_PACKAGE_NAME }

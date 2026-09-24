@@ -1,44 +1,18 @@
 /**
- * dsh 运行时版本管理状态机（design 18 §3.6 状态转移表）——纯逻辑、零依赖、
- * 无 electron、无副作用。只有两个纯函数：`transition`
- * （状态 × 事件 → 状态）、`allowedActions`（终态门：该状态下可见动作）。
- * 不碰文件、不碰 IPC、不碰 UI：
- * 控制器（main 进程）注入事件、读相位；settings UI 用 `allowedActions` 渲染
- * 可见动作按钮。
+ * 运行时版本管理状态机——纯逻辑、零依赖、无 electron、无副作用。只有两个纯函数：
+ * `transition`（状态 × 事件 → 状态）与 `allowedActions`（终态门：该状态下可见动作）；
+ * 控制器注入事件并读相位，settings UI 用 allowedActions 渲染按钮。
  *
- * 权威转移表（§3.6）：
+ * 简化接线：available --install-confirm--> installing 一步合并 download+install
+ * （install-done → pending）；downloading 保留在相位集但公开事件不进入（控制器可自行
+ * 展示进度，本模块仍建模其退出边）；select-version 不是事件、仅作 allowedAction；
+ * restart-dsh 禁用于安装/激活窗口与 snapshot-failed。
  *
- *   idle → checking → available → downloading → installing → pending
- *     →（下次启动）applying → applied | rollback | failed
- *   pending → [立即应用]（当前会话执行同一激活事务，design 18 增补）→ applying
- *   pending → [恢复内建]（清 pending）→ idle
- *   applying → 回退连续失败 → failed（落内建树终态）
- *   applied → 下一周期 checking；rollback/failed → 终态（回滚后可再选）
- *   任意态 → error；error →(check) checking
- *
- * 本模块的简化接线（任务拍板，与 §3.6 的差异在此声明）：
- *   - `available →(install-confirm) installing` 一步到位——download+install 合
- *     并为 installing（install-confirm 同时承担下载触发与安装开始），
- *     `install-done` 从 installing → pending；
- *   - `downloading` 保留在相位集（§3.6「downloading → installing」），但公开
- *     事件不进入 downloading：控制器如要展示「下载中」进度可自行置 downloading
- *     相位，本模块仍为其建模退出边（install-done → pending、error → error），
- *     不会死锁；
- *   - `select-version` 不是事件、仅作为 allowedAction（选当前激活版本为无操作
- *     的 isNoopSelection 守卫是 controller 层语义，§3.6 不转移）；
- *   - `restart-dsh`（design 18 §3.6 项 8 / §9.3）：受控进程重启
- *     刷新插件挂载，非版本变更——出现在所有非忙相位（idle/available/applied/
- *     rollback/failed/error），禁用于 checking/downloading/installing/pending/
- *     applying/snapshot-failed（安装/激活窗口内不重启；快照失败存在未完成
- *     事务，重启不应绕过）。
- *
- * 无效 (state, event) 组合：吸收为原状态（不转移、不抛错）——可见动作由
- * `allowedActions` 门控，控制器对迟到/乱序事件（如 reset-builtin 后的残留
- * probe-pass）做防御性吸收，机器永不崩溃；「未建模边」因此仅指吸收不转移的
- * 组合（见文件尾注释）。
+ * 无效 (state, event) 组合吸收为原状态（不转移、不抛错），可见动作由 allowedActions
+ * 门控；完整转移一览见文件尾。
  */
 
-/** dsh 运行时相位（§3.6 状态集，含 downloading/installing 两段安装态）。 */
+/** dsh 运行时相位（含 downloading/installing 两段安装态）。 */
 export type RuntimePhase =
   | 'idle'
   | 'checking'
@@ -68,15 +42,11 @@ export type RuntimeEvent =
   | { type: 'reset-builtin' }       // 恢复内建（清 pending）
   | { type: 'error' };
 
-/**
- * 转移函数（§3.6 转移表逐条实现）。无效组合吸收为原状态；error 任意态可达。
- */
+/** 转移函数；无效组合吸收为原状态，error 任意态可达。 */
 export function transition(state: RuntimePhase, event: RuntimeEvent): RuntimePhase {
   switch (event.type) {
     case 'check':
-      // idle/available/applied/rollback/failed/error → checking；其余（checking
-      // 再查、单飞去重；downloading/installing/pending/applying 终态门挂起
-      // 周期/手动检查，§3.6「apply 期间挂起周期/手动检查」）吸收为原状态。
+      // 可再查的稳定态 → checking；checking 自身的再查去重与下载/安装/激活窗口内的检查吸收为原状态。
       switch (state) {
         case 'idle':
         case 'available':
@@ -92,8 +62,8 @@ export function transition(state: RuntimePhase, event: RuntimeEvent): RuntimePha
       if (state !== 'checking') return state;
       return event.available ? 'available' : 'idle';
     case 'install-confirm':
-      // Cached/offline rollback and an explicit install are valid from every
-      // non-busy phase that exposes the install action, not only available.
+      // Cached/offline rollback and an explicit install are valid from every non-busy
+      // phase that exposes the install action, not only available.
       return allowedActions(state).includes('install') ? 'installing' : state;
     case 'install-done':
       if (state === 'installing' || state === 'downloading') return 'pending';
@@ -114,14 +84,11 @@ export function transition(state: RuntimePhase, event: RuntimeEvent): RuntimePha
       if (state !== 'applying') return state;
       return 'snapshot-failed';
     case 'retry-apply':
-      // §3.6：快照失败后 [重试应用] 直接重入 applying（不重新
-      // check，不自动每启重试——必须用户显式触发）。
+      // 快照失败后 [重试应用] 直入 applying（不重新 check，必须用户显式触发）。
       if (state !== 'snapshot-failed') return state;
       return 'applying';
     case 'reset-builtin':
-      // 恢复内建（清 override/pending）→ idle。idle/checking/available 无可清
-      // 之物（无 override 可删），吸收；downloading/installing 在安装窗口内无
-      // 可见动作（allowedActions = ['none']，单飞守卫），同样吸收。
+      // 恢复内建（清 override/pending）→ idle；无可清之物或安装窗口内的状态吸收为原状态。
       switch (state) {
         case 'pending':
         case 'applying':
@@ -143,11 +110,10 @@ export function transition(state: RuntimePhase, event: RuntimeEvent): RuntimePha
 }
 
 /**
- * Privileged startup/rollback orchestration publishes lifecycle outcomes from
- * outside the controller's check/install event chain. Keep those edges
- * explicit: a stale async projection must not jump a concurrent check or
- * install directly into a rollback/failure story. Invalid edges are absorbed
- * as the current phase; DshRuntimeController rejects the accompanying patch.
+ * Privileged startup/rollback orchestration publishes lifecycle outcomes outside
+ * the controller's check/install chain: only these explicit edges are allowed, so a
+ * stale async projection cannot jump a concurrent check or install into a
+ * rollback/failure story. Invalid edges are absorbed and the controller rejects the patch.
  */
 const LIFECYCLE_PROJECTION_EDGES: Record<RuntimePhase, readonly RuntimePhase[]> = {
   idle: ['applying', 'failed'],
@@ -161,9 +127,8 @@ const LIFECYCLE_PROJECTION_EDGES: Record<RuntimePhase, readonly RuntimePhase[]> 
   rollback: ['applying', 'failed'],
   'snapshot-failed': ['applying', 'failed'],
   failed: ['applying'],
-  // `error → idle` is reserved for a successful writer-fenced maintenance
-  // action that clears the disk-accounting/quota error without changing the
-  // active runtime. Reset/switch transactions still go through applying.
+  // `error → idle` is reserved for a writer-fenced maintenance action that clears the
+  // disk/quota error without changing the active runtime; reset/switch go through applying.
   error: ['idle', 'applying', 'failed'],
 }
 
@@ -187,13 +152,10 @@ export type RuntimeAction =
   | 'restart-dsh';
 
 /**
- * 终态门（§3.6）：
- *   - pending 是待执行事务：主动作 [立即应用]（当前会话执行激活事务，design 18
- *     增补 §2.1）＋ 唯一逃生动作 [恢复内建]；
- *   - applying 是持久事务临界区，只允许唯一逃生动作“恢复内建”；
- *   - idle/available/applied/rollback/failed/error 提供其各自的稳定态动作；
- *     retry-apply/retry-restore/recover-metadata 只由显式 capability 增补；
- *   - checking/downloading/installing 在单飞窗口内无可见动作，UI 只显示进度；
+ * 终态门：pending 是待执行事务——[立即应用]（当前会话执行激活事务）＋唯一逃生
+ * [恢复内建]；applying 是持久事务临界区，只允许「恢复内建」逃生；idle/available/
+ * applied/rollback/failed/error 提供各自稳定态动作（retry-* 由显式 capability 增补）；
+ * checking/downloading/installing 在单飞窗口内无可见动作，UI 只显示进度。
  */
 export function allowedActions(
   state: RuntimePhase,
@@ -218,8 +180,7 @@ export function allowedActions(
     case 'installing':
       return [];
     case 'pending':
-      // design 18 增补：pending 是待执行事务——[立即应用]（当前会话执行激活
-      // 事务，与下次启动共用 apply-start 事件）+ [恢复内建]（逃生）。
+      // pending 是待执行事务：与下次启动共用 apply-start 事件 + [恢复内建]（逃生）。
       return ['apply-now', 'reset-builtin'];
     case 'applying':
       return ['reset-builtin'];
@@ -237,8 +198,7 @@ export function allowedActions(
       return base;
     }
     case 'snapshot-failed':
-      // 快照失败（当前树仍好，未切指针）：可 [重试应用]（直入 applying）或
-      // [恢复内建]；不自动每启重试（§3.6）。
+      // 快照失败（当前树仍好，未切指针）：[重试应用]（直入 applying）或 [恢复内建]；不自动每启重试。
       return capabilities.canRetryApply === true
         ? ['retry-apply', 'reset-builtin']
         : ['reset-builtin'];
@@ -248,26 +208,17 @@ export function allowedActions(
 }
 
 /*
- * 建模转移一览（覆盖 §3.6 全部边；其余组合吸收不转移）：
+ * 建模转移一览（其余组合吸收不转移）：
  *   idle --check--> checking
- *   checking --check-done{available:true}--> available
- *   checking --check-done{available:false}--> idle
- *   available --check--> checking                          （手动再查）
- *   available --install-confirm--> installing              （简化：合并 download+install）
- *   downloading --install-done--> pending                  （外部置相位后的退出边）
- *   installing --install-done--> pending
- *   pending --apply-start--> applying   （下次启动与 [立即应用] 共用同一事件；
- *                                       动作选择在控制器层）
- *   applying --probe-pass--> applied
- *   applying --probe-fail--> rollback
+ *   checking --check-done{available:true}--> available / {false}--> idle
+ *   available --check--> checking（手动再查） / --install-confirm--> installing
+ *   downloading|installing --install-done--> pending
+ *   pending --apply-start--> applying（下次启动与 [立即应用] 共用同一事件）
+ *   applying --probe-pass--> applied / --probe-fail--> rollback
  *   applying --rollback-exhausted--> failed
- *   applied --check--> checking                            （下一周期）
- *   rollback --check--> checking / --reset-builtin--> idle （回滚后可再选）
- *   failed --check--> checking / --reset-builtin--> idle
+ *   applied --check--> checking
+ *   rollback|failed --check--> checking / --reset-builtin--> idle
  *   pending/applied/rollback/failed/error --reset-builtin--> idle
- *   applying --reset-builtin--> idle is an internal transaction outcome only;
- *     the public reset action is durably queued and cannot interrupt the
- *     active critical section.
- *   error --check--> checking                              （retry-apply 即 check）
- *   任意态 --error--> error
+ *   applying --reset-builtin--> idle 仅内部事务结果；公开 reset 动作持久入队，不能打断临界区。
+ *   error --check--> checking（retry-apply 即 check）；任意态 --error--> error
  */

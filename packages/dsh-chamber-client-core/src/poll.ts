@@ -1,22 +1,14 @@
 /**
- * The chamber polling kernel (the single source for the package's four poll
- * loops): the gateway restart/start readiness poll, the remote dsh-runtime
- * settle poll, the source serving gate and the purge-time running-bit settle
- * wait.
- *
- * The kernel owns ONLY the loop shape — budget check, probe, verdict, wait —
- * and the one default sleep. Every caller keeps its own:
- *   - probe (what one round reads);
- *   - classify (what a round means: done / fail / retry / stop);
- *   - budget (an absolute `deadline` or a fixed `attempts` count) and the
- *     wording of its timeout error (the kernel returns `undefined` when the
- *     budget runs out and lets the caller phrase it).
- *
- * First-round semantics are explicit because the callers genuinely differ:
- * the deadline pollers check the budget BEFORE the first probe (timeout 0 =
- * no probe, no sleep), while the serving gate probes once and only then tests
- * its deadline; `probeFirstRound` + a classify that checks the deadline keep
- * that shape without a second loop.
+ * The chamber polling kernel — the single source for the package's four poll
+ * loops (gateway restart/start readiness, remote dsh-runtime settle, source
+ * serving gate, purge-time running-bit settle wait). It owns ONLY the loop
+ * shape (budget check, probe, verdict, wait) and the one default sleep; every
+ * caller keeps its own probe, classify (done / fail / retry / stop), budget
+ * (absolute `deadline` or fixed `attempts`) and timeout wording (the kernel
+ * returns `undefined` on budget exhaustion). First-round semantics are explicit:
+ * deadline pollers check the budget BEFORE the first probe (timeout 0 = no
+ * probe, no sleep), while the serving gate probes once and only then tests its
+ * deadline — `probeFirstRound` plus a deadline-checking classify keep that shape.
  */
 
 /** The one default sleep of the package (deps seams still override it). */
@@ -24,18 +16,14 @@ export const sleepMs = (ms: number): Promise<void> => new Promise<void>((resolve
 
 /** What one classified probe round means. */
 export type PollOutcome<T> =
-  /** The poll succeeded; stop with this value. */
   | { kind: 'done'; value: T }
   /** Terminal failure; the kernel throws this error. */
   | { kind: 'fail'; error: unknown }
   /** Budget-independent stop (e.g. the purge probe failed); resolve `undefined`. */
   | { kind: 'stop' }
-  /** Not settled yet; wait and probe again. */
   | { kind: 'retry' }
 
-/** Facts about the round being classified. */
 export interface PollRoundInfo {
-  /** 1-based probe round number. */
   round: number
   /** True when this is the last round the budget allows (attempts mode exact;
    *  deadline mode approximate — the deadline would pass before another round). */
@@ -47,7 +35,6 @@ export interface PollUntilOptions<Probe, Done = Probe> {
   probe: () => Promise<Probe> | Probe
   /** What this round's value means (`Done` may differ from the probe shape). */
   classify: (result: Probe, info: PollRoundInfo) => PollOutcome<Done>
-  /** Wait between probe rounds (ms). */
   intervalMs: number
   /** Absolute epoch-ms budget; the loop gives up once `now() >= deadline`. */
   deadline?: number
@@ -61,16 +48,11 @@ export interface PollUntilOptions<Probe, Done = Probe> {
   onProbeError?: (error: unknown) => PollOutcome<Done>
   /** Wait implementation (default {@link sleepMs}); abort-aware callers pass their own. */
   sleep?: (ms: number) => Promise<void>
-  /** Clock seam (tests). */
   now?: () => number
 }
 
-/**
- * Run the poll loop; resolve the classified value, or `undefined` when the
- * budget runs out (the caller owns the timeout wording).
- * @param options - probe/classify plus the budget and wait seams.
- * @returns the done value, or undefined on budget exhaustion / `stop`.
- */
+/** Run the poll loop; resolve the classified value, or `undefined` when the budget
+ *  runs out (the caller owns the timeout wording). */
 export async function pollUntil<Probe, Done = Probe>(options: PollUntilOptions<Probe, Done>): Promise<Done | undefined> {
   const now = options.now ?? (() => Date.now())
   const sleep = options.sleep ?? sleepMs

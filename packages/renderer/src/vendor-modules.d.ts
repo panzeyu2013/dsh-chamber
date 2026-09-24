@@ -87,7 +87,7 @@ declare module '@deepseek-ai/dsh-client-web' {
    * bundle so the extra bundles' scripts always evaluate against an installed
    * sink; idempotent, run() adopts the same instance.
    *
-   * C3: the return face mirrors the slice shell.ts
+   * The return face mirrors the slice shell.ts
    * consumes — `manifest` (the parsed boot graph rows) and `prefetch(id)` (the
    * kernel's immediately-tier preload path, module-cache deduped). Single
    * source of truth for the shape: packages/dsh-client-web/src/boot.ts
@@ -143,9 +143,8 @@ declare module '@deepseek-ai/dsh-client-connection/client'
 // the ui-session / ui-chat / ui-approval conversation families are first-screen
 // plugins (chamber-entry.ts import list + COVERED_FACTORIES).
 declare module '@deepseek-ai/dsh-client-store'
-// C3: the ui-primitives platform word imported BARE by
-// chamber-entry.ts (covered factory, never ctx.plugin — see the seed.ts /
-// platform.ts deviation notes in dsh-client-web). The frame's own use of this
+// The ui-primitives platform word is imported BARE by chamber-entry.ts
+// (covered factory, never ctx.plugin). The frame's own use of this
 // package (the official Button atom) goes through the deep `src/` specifier
 // declared below instead, so the barrel's markdown/highlight families stay out of
 // the main graph.

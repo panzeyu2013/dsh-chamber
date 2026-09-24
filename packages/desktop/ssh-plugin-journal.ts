@@ -1,68 +1,29 @@
 /**
- * Main-process ssh plugin undo journal (design 21 §6.4/§6.8 r2).
- * Pure Node — no Electron import — so the whole module is
- * unit-testable standalone; the desktop main passes `app.getPath('userData')`
- * as the directory and a console-like logger.
+ * Main-process ssh plugin undo journal (pure Node, unit-testable; desktop main passes
+ * `app.getPath('userData')` and a console-like logger).
  *
- * Purpose: every executed remote plugin change (the registry add/remove rows
- * applyPlugins executes) is durably recorded per instance so the UI can offer
- * 「撤销最近变更」(undo the latest ok change). The undoable fact per op is
- * `specBefore` — the UNMASKED remote manifest dependency spec of the touched
- * name BEFORE the change (captured by a pre-change remote `cat`, see
- * applyPlugins' journal wiring). Undo semantics (v1, decided in
- * ssh-apply-rows.ts buildSshUndoDecision — design 21 §6.4 「撤销=恢复」):
- *   - undoing an ok `add` whose name was ABSENT before (specBefore null) =
- *     remove that name again;
- *   - undoing an ok `add` that REPLACED an existing row (specBefore
- *     non-null, an in-place upgrade) = RESTORE the previous registry spec
- *     (re-add `name@specBefore`) — a plain remove would delete a plugin
- *     that existed before the change;
- *   - undoing an ok `remove` = re-add `name@specBefore` — locked registry
- *     version values only; a previous `file:` spec (a remote materialized
- *     tarball path) is not re-addable in v1 (`unavailable: 'file-backed'`)
- *     and x-wildcard/non-version values are refused (`unavailable: 'none'`).
- *
- * The journal never stores the pre-change manifest text beyond the touched
- * row (`specBefore`); the full pre-change remote package.json backup design
- * (design 21 §6.4 「变更前远端 package.json 备份」) is represented in v1 by
- * this per-row snapshot value (the mechanism is the same pre-change remote
- * read; the full-text backup for the r2 profile_corrupt recovery ladder is a
- * later phase).
- *
- * Hygiene (mirrors the gateway plugins-journal + the desktop private-file
- * discipline):
- *   - one journal file `<dir>/ssh-plugin-journal.json`, schema {version:1,
- *     ops:[…]} — ops are kept OLDEST-first, bounded to the newest
- *     SSH_PLUGIN_JOURNAL_RETENTION entries per file (a busy other instance
- *     can evict an old op of this instance — same global budget the gateway
- *     journal uses);
- *   - writes are atomic (tmp + fsync + rename) and 0600;
- *   - reads are no-follow, inode-checked, tightened to 0600 and bounded to
- *     ≤ SSH_PLUGIN_JOURNAL_MAX_BYTES;
- *   - a corrupt/unreadable journal is renamed aside as
- *     `ssh-plugin-journal.json.corrupt-<ts>` (evidence retained, warn logged)
- *     and a fresh journal starts — never silent, never crash-looping;
- *   - record() never throws (persistence failures are caught, warned and
- *     dropped) so journaling can never break an apply.
+ * Every executed remote plugin change (applyPlugins' add/remove rows) is recorded per instance. The
+ * undoable fact is `specBefore` — the UNMASKED remote manifest spec of the touched name BEFORE the
+ * change. Undo: absent-before add → remove again; replacing add → RESTORE the previous registry spec;
+ * remove → re-add `name@specBefore`, except `file:`/x-wildcard/non-version (unavailable in v1).
+ * Hygiene: `<dir>/ssh-plugin-journal.json` (`{version:1, ops:[…]}`, oldest-first, capped at
+ * SSH_PLUGIN_JOURNAL_RETENTION); atomic 0600 writes; no-follow/inode-checked bounded reads; corrupt
+ * journals are renamed aside `.corrupt-<ts>`; record() never throws.
  */
 
 import { randomUUID } from 'node:crypto'
 import { describeError } from './describe-error.ts'
 import { renameSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-// The owner-private file primitives are single-sourced in control-plane
-// (private-file.ts) and reached through the desktop dual-path facade
-// (packaged → compiled dist/control-plane, dev/tests → workspace source) —
-// the same mechanism the credential mirrors use.
+// The owner-private file primitives are single-sourced in control-plane (private-file.ts) and
+// reached through the desktop dual-path facade (packaged → compiled dist, dev → workspace source).
 import { atomicWritePrivateFileNoFollow, ensurePrivateDirectoryNoFollow, readPrivateFileNoFollow } from './control-plane-module.ts'
 import { removeLegacyTmpResidue } from './store-file-hygiene.ts'
 
-/** Journal file name (under the directory createSshPluginJournal receives —
- *  the desktop passes `app.getPath('userData')`). */
+/** Journal file name (under the directory createSshPluginJournal receives). */
 export const SSH_PLUGIN_JOURNAL_FILE = 'ssh-plugin-journal.json'
 
-/** Bounded-read ceiling for journal.json (each op is ~200 bytes; 64 KiB
- *  admits ~200 ops while the retention keeps the file far below that). */
+/** Bounded-read ceiling for journal.json (each op is ~200 bytes; 64 KiB admits ~200 ops). */
 export const SSH_PLUGIN_JOURNAL_MAX_BYTES = 64 * 1024
 
 /** Retention: the file keeps the newest N ops (per file, across instances). */
@@ -79,28 +40,19 @@ export interface SshJournalOp {
   ts: number
   /** The ssh instance (connection id) the change was executed on. */
   instanceId: string
-  /** The OPERATIONAL TARGET the change was executed on (main.ts
-   * operationalFingerprint: kind/transport/host/user/ports/serviceName/
-   * remoteDshHome). Undo must never replay an op onto a DIFFERENT target
-   * that happens to reuse the same instance id after a connection edit
-   * (design 21 §6.4): ops are undoable only when this fingerprint
-   * equals the CURRENT target's. null = recorded without a binding (legacy/
-   * unbound callers) — such ops are never undoable (the target cannot be
-   * proven). */
+  /** The OPERATIONAL TARGET the change was executed on (main.ts operationalFingerprint:
+   * name/kind/transport/host/user/ports/serviceName/remoteDshHome). Ops are undoable only when this
+   * fingerprint equals the CURRENT target's — undo must never replay onto a DIFFERENT target that
+   * reuses the same instance id after a connection edit. null = recorded unbound, never undoable. */
   fingerprint: string | null
   /** The touched plugin name. */
   name: string
   kind: SshJournalOpKind
-  /**
-   * The UNMASKED remote manifest dependency spec of `name` before the change
-   * (null when the name was absent before — the normal case for an add — or
-   * when the pre-change snapshot could not be read). Stored main-process-
-   * internally and never projected to the renderer; the undo IPC only ever
-   * re-submits a REGISTRY re-add spec derived from it.
-   */
+  /** The UNMASKED remote manifest spec of `name` before the change (null = absent before or the
+   *  snapshot could not be read). Stored main-process-internally, never projected; the undo IPC only
+   *  re-submits a REGISTRY re-add spec derived from it. */
   specBefore: string | null
-  /** Whether the remote change row itself succeeded. Failed rows are kept
-   *  (audit) but are never undoable — latestOk filters them. */
+  /** Whether the remote row succeeded; failed rows are kept for audit but never undoable. */
   ok: boolean
   /** Row failure reason (sanitized); present only when ok === false. */
   error?: string
@@ -114,8 +66,8 @@ export interface SshJournalLogger {
 
 export interface SshJournalEntry {
   instanceId: string
-  /** Operational target fingerprint at record time (see SshJournalOp).
-   *  Optional so unbound call sites/tests compile; main always passes it. */
+  /** Operational target fingerprint at record time (see SshJournalOp); optional only so unbound
+   *  call sites compile — main always passes it. */
   fingerprint?: string | null
   name: string
   kind: SshJournalOpKind
@@ -125,18 +77,14 @@ export interface SshJournalEntry {
 }
 
 export interface SshPluginJournal {
-  /**
-   * Durably record one executed remote plugin change. Never throws: a
-   * persistence failure is caught, warned and dropped (journaling is
-   * best-effort and must never break an apply).
-   */
+  /** Durably record one executed remote plugin change. Never throws: a persistence failure is
+   *  caught, warned and dropped (journaling must never break an apply). */
   record(entry: SshJournalEntry): void
   /** The newest OK op recorded for one instance, or null. */
   latestOk(instanceId: string): SshJournalOp | null
-  /** The newest OK op recorded for one instance ON THE GIVEN OPERATIONAL
-   * TARGET, or null. Ops whose recorded fingerprint differs (a connection
-   * edit under the same id) or is null (unbound/legacy) are never returned —
-   * undo must not replay a change onto the wrong host (design 21 §6.4). */
+  /** The newest OK op recorded for one instance ON THE GIVEN OPERATIONAL TARGET, or null. Ops whose
+   *  fingerprint differs (connection edit under the same id) or is null (unbound/legacy) are never
+   *  returned — undo must not replay a change onto the wrong host. */
   latestOkForTarget(instanceId: string, fingerprint: string): SshJournalOp | null
   /** Newest-first projection of the retained ops (default: all retained). */
   recent(limit?: number): SshJournalOp[]
@@ -149,21 +97,16 @@ export function sshPluginJournalFile(dir: string): string {
   return join(dir, SSH_PLUGIN_JOURNAL_FILE)
 }
 
-function messageOf(error: unknown): string {
-  return describeError(error)
-}
 
 function isErrno(error: unknown, code: string): boolean {
   return (error as NodeJS.ErrnoException).code === code
 }
 
 /**
- * Bounded no-follow read of the journal (the control-plane read primitive:
- * pinned real parent directory, regular single-link leaf only, opened-inode
- * compared, 0600-tightened before bytes enter memory, bounded to ≤
- * SSH_PLUGIN_JOURNAL_MAX_BYTES). Returns null when the file does not exist
- * (an empty journal — the native ENOENT of the missing leaf); throws on any
- * other failure (the caller treats it as corrupt evidence).
+ * Bounded no-follow read (control-plane read primitive: pinned real parent, single-link regular leaf
+ * only, opened-inode compared, 0600-tightened before bytes enter memory, ≤ SSH_PLUGIN_JOURNAL_MAX_BYTES).
+ * Returns null when the file does not exist (an empty journal); throws on any other failure (the
+ * caller treats it as corrupt evidence).
  */
 function readJournalText(file: string): string | null {
   try {
@@ -181,18 +124,17 @@ function readJournalText(file: string): string | null {
 function asideCorrupt(file: string, cause: unknown, logger: SshJournalLogger): void {
   const aside = `${file}.corrupt-${Date.now()}`
   logger.warn(
-    `ssh-plugin-journal: journal is corrupt or unreadable (${messageOf(cause)}); ` +
+    `ssh-plugin-journal: journal is corrupt or unreadable (${describeError(cause)}); ` +
     `moving it aside to ${aside} and starting a fresh journal`,
   )
   try {
     renameSync(file, aside)
   } catch (error) {
-    logger.warn(`ssh-plugin-journal: could not move corrupt journal aside: ${messageOf(error)}`)
+    logger.warn(`ssh-plugin-journal: could not move corrupt journal aside: ${describeError(error)}`)
   }
 }
 
-/** Keep entries our writer could produce; drop anything else defensively
- *  (a partial external edit must never crash a journal read). */
+/** Keep entries our writer could produce; drop anything else defensively (a partial external edit must never crash a read). */
 function sanitizeOps(parsed: unknown): SshJournalOp[] | null {
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return null
   const rawOps = (parsed as { ops?: unknown }).ops
@@ -227,8 +169,7 @@ function sanitizeOps(parsed: unknown): SshJournalOp[] | null {
 
 export function createSshPluginJournal(dir: string, logger: SshJournalLogger): SshPluginJournal {
   const file = sshPluginJournalFile(dir)
-  // One-time crash-residue sweep: the legacy FIXED `${file}.tmp` residue
-  // (see removeLegacyTmpResidue), swept at store creation.
+  // One-time crash-residue sweep of the legacy fixed `${file}.tmp` residue.
   removeLegacyTmpResidue(file)
 
   function loadOps(): SshJournalOp[] {
@@ -265,11 +206,9 @@ export function createSshPluginJournal(dir: string, logger: SshJournalLogger): S
   }
 
   function persistOps(ops: SshJournalOp[]): void {
-    // Atomic replace, 0600 — the control-plane private-file primitive
-    // (random O_EXCL tmp + fsync + rename + parent-directory fsync, explicit
-    // { mode: 0o600 }), the same mechanism the desktop credential mirrors
-    // use. The replace refuses a planted symlink / multi-link leaf fail-
-    // closed (record() never throws: the caller warns and drops).
+    // Atomic replace, 0600 — control-plane private-file primitive (random O_EXCL tmp + fsync +
+    // rename + parent fsync, explicit { mode: 0o600 }); refuses a planted symlink / multi-link leaf
+    // fail-closed. record() never throws (the caller warns and drops).
     ensurePrivateDirectoryNoFollow(dirname(file), 0o700)
     atomicWritePrivateFileNoFollow(file, `${JSON.stringify({ version: 1, ops }, undefined, 2)}\n`, { mode: 0o600 })
   }
@@ -311,7 +250,7 @@ export function createSshPluginJournal(dir: string, logger: SshJournalLogger): S
           `(${op.id}, ok=${String(entry.ok)})`,
         )
       } catch (error) {
-        logger.warn(`ssh-plugin-journal: could not persist record: ${messageOf(error)}`)
+        logger.warn(`ssh-plugin-journal: could not persist record: ${describeError(error)}`)
       }
     },
 
@@ -343,7 +282,7 @@ export function createSshPluginJournal(dir: string, logger: SshJournalLogger): S
         persistOps(retained)
         logger.log(`ssh-plugin-journal: cleared ops for ${instanceId}`)
       } catch (error) {
-        logger.warn(`ssh-plugin-journal: could not clear ops for ${instanceId}: ${messageOf(error)}`)
+        logger.warn(`ssh-plugin-journal: could not clear ops for ${instanceId}: ${describeError(error)}`)
       }
     },
   }

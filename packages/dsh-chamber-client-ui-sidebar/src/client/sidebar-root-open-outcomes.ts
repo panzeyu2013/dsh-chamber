@@ -1,29 +1,20 @@
-/**
- * App-layer session-open outcomes rendered as per-row errors: bounded
- * visibility and the early clear path (see shared/open-outcome.ts for the
- * key/delete semantics).
- */
+/** App-layer session-open outcomes rendered as per-row errors: bounded visibility
+ *  and the early clear path (key/delete semantics in shared/open-outcome.ts). */
 
 import { useCallback, useEffect, useRef, type Dispatch, type SetStateAction } from 'react'
 import { chamberBridge } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
 import { openErrorKey, withoutOpenError } from '@dsh-chamber/dsh-chamber-client-core/open-outcome'
 
-/**
- * How long a failed session open stays visible as the row's inline error.
- * The App-layer dispatch owns the failure (it pays the whole polling budget
- * before reporting), so the sidebar only presents it — bounded, then gone.
- * A later outcome for the same session (a fresh request or a success) clears
- * it early.
- */
+/** How long a failed session open stays visible as the row's inline error: the
+ *  App-layer dispatch owns the failure, so the sidebar presents it bounded, and a
+ *  later outcome for the same session clears it early. */
 const OPEN_FAILURE_VISIBLE_MS = 10_000
 
 export function useSidebarOpenOutcomes({ setRowErrors }: {
   setRowErrors: Dispatch<SetStateAction<Record<string, string>>>
 }) {
-  // chamber (打开失败可见性): the row-error key one failed/succeeded open
-  // reports into — ServerSection renders it in the session row's action-error
-  // slot. Key template and delete semantics live in shared/open-outcome.ts so
-  // the writer and the reader can never drift.
+  // The row-error key one open outcome reports into — ServerSection renders it in
+  // the session row's action-error slot; key/delete semantics live in shared/open-outcome.ts.
   const openErrorTimers = useRef<Map<string, number>>(new Map())
   /** Drop one session's open-failure row error (early clear paths only). */
   const clearOpenRowError = useCallback((serverId: string, sessionId: string) => {
@@ -35,19 +26,13 @@ export function useSidebarOpenOutcomes({ setRowErrors }: {
     }
     setRowErrors(prev => withoutOpenError(prev, key))
   }, [])
-  // chamber (打开失败可见性): every App-layer open outcome is reported back
-  // over the chamberBridge. Each sidebar shell renders the SAME aggregated
-  // rows, so once the target shell's tree is mounted (the open outcome can
-  // only settle after the shell that serves it mounted — the dispatch budget
-  // runs against its holder) the shell the user is looking at shows the
-  // failure on the very row that was clicked; a console-only report would
-  // leave every failure invisible while the user stares at the switched
-  // view with nothing selected. Failures appear for OPEN_FAILURE_VISIBLE_MS;
-  // success (or a fresh click, cleared in openSession) removes the error
-  // early. Outcomes settling before the target tree mounts are lost by
-  // design — those edges already surface elsewhere (registry-guard and
-  // replacement failures name the source; queue timeouts land on the boot
-  // failure overlay).
+  // Every App-layer open outcome is reported back over the chamberBridge: each
+  // sidebar shell renders the SAME aggregated rows, so once the target shell's tree
+  // is mounted (an outcome can only settle after the shell that serves it mounted)
+  // the failure shows on the very row clicked — a console-only report would leave it
+  // invisible. Failures appear for OPEN_FAILURE_VISIBLE_MS; success (or a fresh click)
+  // removes the error early. Outcomes settling before that mount are lost by design:
+  // those edges (registry-guard, replacement failures, queue timeouts) surface elsewhere.
   useEffect(() => {
     const armExpiry = (key: string): void => {
       const previous = openErrorTimers.current.get(key)

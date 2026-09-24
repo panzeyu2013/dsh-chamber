@@ -45,6 +45,12 @@ export const GROUPS = {
     'test/lifecycle/required-service-probe.test.ts',
     // per-source 注册表收敛内核（live 外删除 / 保序 / identity-preserving 负例）。
     'test/lifecycle/source-registry.test.ts',
+    // 注册表闸门单一权威（generation 语义 + 订阅通知 + 镜像/双权威助手不得复活）。
+    'test/lifecycle/roster-gate.test.ts',
+    // 注册表投影单一 store（同步快照/identity-preserving/镜像不得复活）。
+    'test/lifecycle/remotes-store.test.ts',
+    // mounted 来源表单一 store（mark/withdraw/retire/prune + 三处旧副本不得复活）。
+    'test/lifecycle/mounted-sources-store.test.ts',
     // The shell *.test.ts split is served from test/support/shell-harness.ts and needs the
     // dsh-client-web fixture loader (see scripts/dev/test-shell-loader.mjs); the --import
     // specifier resolves from the package root (spawn cwd).
@@ -79,25 +85,39 @@ export const GROUPS = {
     'test/aggregate/watermark.test.ts',
     // complete 通知账本内核（两轨：水位 + 武装；撤回只清武装轨 / forget / prune）。
     'test/aggregate/complete-ledger.test.ts',
+    // I2 回归（Wave6 收口）：#11 goal 未知的直发完成也必须 arm，
+    // 否则同一完成的延迟壳边沿会产生第二条 notification。
+    'test/aggregate/goal-unknown-arm.test.ts',
     'test/aggregate/badge-count.test.ts',
   ],
-  // session-state: gateway session-state 事实源 + 未读 v2 落盘 + 派生账本
+  // session-state: gateway session-state 事实源 + 未读 v4 落盘（v2 一次性迁移）+ 派生账本
   'session-state': [
     // 粗分类/快照/增量/SSE 帧 + 与 control-plane 协议模块的源文本锁步。
     'test/session-state/session-facts-source.test.ts',
-    // 未读 v2（键常量/清洗/v1 防御导入/单调 max/LRU/client id/ack/隐私白名单）。
+    // 未读 v4（键常量/清洗含 pending+outcomes/v2→v4 一次性迁移/单调 max/LRU/client id/ack/隐私白名单）。
     'test/session-state/unread-store.test.ts',
+    // 回声账本单一 store（同步快照/identity-preserving/三表独立/镜像不得复活）。
+    'test/session-state/echo-store.test.ts',
+    // facts 表单一 store（同步快照/幂等静默/唯一退役路径/渲染期镜像不得复活）。
+    'test/session-state/facts-store.test.ts',
+    // 完成未读账本单一 store（相等表静默/退役/prune + 旧 state+ref 对不得复活）。
+    'test/session-state/completed-store.test.ts',
     // 派生投影行为（deriveUnread + 通道边沿机 + listComplete 唯一剪枝门）。
     'test/session-state/unread-derivation.test.ts',
     // 仪器：徽标回读 + 通知决定账本（含「没有桥」这一次）与单组装点锁。
     'test/session-state/notification-ledger.test.ts',
     // SSH/dsh 远端的无壳观察者（$events + 每边沿一次 session/follow）。
     'test/session-state/source-mux-facts.test.ts',
+    // 页面级会话恢复：整页 reload 后的会话流健康座位与恢复入口（我方可靠性轮）。
     'test/session-state/session-open-recovery.test.ts',
-'test/session-state/session-content-stall.test.ts',
-'test/session-state/document-reload-budget.test.ts',
-'test/session-state/renderer-stall-evidence.test.ts',
+    'test/session-state/session-content-stall.test.ts',
+    'test/session-state/document-reload-budget.test.ts',
+    'test/session-state/renderer-stall-evidence.test.ts',
     'test/session-state/session-delivery-state.test.ts',
+    // SSH/dsh 观察者的 goal 三值投影 + activation 事件（P2b，v5 §6）。
+    'test/session-state/source-mux-facts-goal.test.ts',
+    // 观测组装：壳/facts 权威合并、候选归属、代际门与批次落盘（v5 §3.2–§3.5）。
+    'test/session-state/completion-observation.test.ts',
     // 预热命中率（attempt/hit/cancelled 的定义与计数 + 全局仪器）。
     'test/session-state/prewarm-ledger.test.ts',
     // 有界集合内核（容量/FIFO 淘汰/同键替换裁决的负例）。
@@ -118,6 +138,9 @@ export const GROUPS = {
     'test/wiring/veil-layering-invariants.test.ts',
     // P4 源注册表接线：指纹只在 roster 刷新处换代，事件只带 epoch，退役即出表。
     'test/wiring/source-registry-wiring.test.ts',
+    // F6 回归：durable 未读四类剪枝必须门控在权威 roster 水合后（源码锁 +
+    // 纯谓词/假存储双证据）。
+    'test/wiring/unread-prune-roster-gate.test.ts',
   ],
   // view-runtime: 视图运行时 —— 隐藏视图回收、视图过渡队列、侧栏滚动恢复、切源揭示
   'view-runtime': [
@@ -133,6 +156,10 @@ export const GROUPS = {
     'test/view-runtime/switch-frame-instruments.test.ts',
     // SemVer precedence 单一实现（build metadata 忽略 / prerelease 方向 / 非法 null）。
     'test/view-runtime/semver.test.ts',
+    // 截止时刻原语（纯判定 + App 的健康宽容窗不再用 1 Hz 计数）。
+    'test/view-runtime/deadline.test.ts',
+    // 视图对单一 store（select/paint 单字段 + 退役回落同拍 + 两条 ref 镜像不得复活）。
+    'test/view-runtime/view-store.test.ts',
   ],
   // svg-resource: 文档级 SVG 资源 id 归属（N-ctx 失绘不变量，design 05 §4.2）
   'svg-resource': [

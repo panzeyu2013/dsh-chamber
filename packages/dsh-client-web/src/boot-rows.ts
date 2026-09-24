@@ -1,40 +1,27 @@
 /**
- * Boot-row composition (chamber patch, design 09 module D) — pure so the
- * per-instance host-graph extraRows merge is unit-testable without a DOM or a
- * full boot (test:client-web boot-rows case). The kernel adopts two entries
- * itself: `modules` (its record is pre-materialized as the module-system
- * bootstrap) and `ui-renderer` (its factory is shell-static, registered on the
- * shared module table); the manifest rows follow
- * minus those two, then the per-instance extra client-plugin rows from the
- * host boot graph.
+ * Boot-row composition (chamber patch; pure, so the per-instance extraRows merge is
+ * testable without a DOM). The kernel adopts `modules` (record pre-materialized as
+ * the bootstrap) and `ui-renderer` (shell-static factory) itself; the manifest rows
+ * follow minus those two, then the per-instance extra rows from the host boot graph.
  */
 
 /** The modules package's own graph row id (kernel-adopted, never fetched). */
 export const MODULES_ID = '@deepseek-ai/dsh-client-modules'
 
-/** The ui-renderer package's own graph row id (kernel-adopted, never fetched).
- *  This row carries the slot-renderer install and the application mount; the
- *  chamber kernel adopts it (page-own covered id —
- *  the host-graph merge filters it, chamber-entry never imports it) and the
- *  boot mounts through the `uiRenderer` service its apply provides. */
+/** The ui-renderer graph row id (kernel-adopted, never fetched): it carries the
+ *  slot-renderer install and the app mount, which the boot reaches through the
+ *  `uiRenderer` service its apply provides. */
 export const UI_RENDERER_ID = '@deepseek-ai/dsh-client-ui-renderer'
 
-/**
- * Compose the loader rows in kernel order: the two kernel-adopted entries
- * first, then the manifest plugin ids minus those two, then the per-instance
- * extra ids. Pure — the caller owns the manifest/extra projections.
- * @param manifestIds - the boot manifest's plugin row ids.
- * @param extraIds - the per-instance host-graph extra row ids ([] when none).
- * @returns the ordered row id list the loader creates.
- */
+/** Compose the loader rows in kernel order (two adopted entries, then manifest ids
+ *  minus those, then extras); the caller owns the projections. */
 export function composeBootRows(
   manifestIds: readonly string[],
   extraIds: readonly string[] = [],
 ): string[] {
   const manifest = manifestIds.filter(id => id !== MODULES_ID && id !== UI_RENDERER_ID)
-  // Dedupe WITHIN extras: a duplicated extra id would be
-  // passed to loader.create twice. Kernel/manifest overlaps stay (union
-  // model — the loader creates kernel rows first, first wins).
+  // Dedupe WITHIN extras (a duplicate would reach loader.create twice); kernel/manifest
+  // overlaps stay — the loader creates kernel rows first, first wins.
   const extras = extraIds.filter((id, index) => extraIds.indexOf(id) === index)
   return [MODULES_ID, UI_RENDERER_ID, ...manifest, ...extras]
 }

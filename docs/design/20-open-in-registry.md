@@ -143,7 +143,7 @@
 - **机器目录是页级事实，读一次**：目录/图标/拉起描述**这台机器**而非屏幕来源；
   上游一页只有一个 host，故其 client 从 `location.origin` 读 `apps`/`icon/<id>`。本页挂 N 个实例：
   渲染壳（`packages/renderer/src/shell.ts` 的 `machineCatalogForPage()`）用**页级实例客户端**
-  `getInstanceClient('local').callUnary(...)`（`sidebar/shared/instance-api.ts`）对**本地实例**建
+  `getInstanceClient('local').callUnary(...)`（`packages/dsh-chamber-client-core/src/instance-api.ts`）对**本地实例**建
   **唯一一份** `createMachineCatalog(...)`，作为 per-entry 事实
   `ctx.provide('chamberMachineCatalog', …)` 注入**每一个** entry（本地与远程一视同仁）；
 - 传输面**零新增**：`callUnary(endpoint, args, signal)` 与各 entry 自己的连接载波共用同一条 URL
@@ -381,7 +381,7 @@ IPC 形状、载荷守卫、`sourceFingerprint` 来源代 proof、vscode deliver
   `client/{source-adapter,choice-store,index,open-in-gates,OpenInButton}.tsx?` 与
   `shared/{open-in-view-model,capabilities}.ts`、`src/locales.ts` 改写（§4.2/§5）；
 - 页级接线：`packages/renderer/src/shell.ts` 建唯一一份机器目录并
-  `ctx.provide('chamberMachineCatalog', …)`；传输复用 `packages/dsh-chamber-client-ui-sidebar/src/shared/instance-api.ts`
+  `ctx.provide('chamberMachineCatalog', …)`；传输复用 `packages/dsh-chamber-client-core/src/instance-api.ts`
   的公开 `getInstanceClient('local').callUnary(...)`（同一信封/路由/栅栏，零新增传输面）；
 - 接线面：§6.2 的八处 + 插件页的 `localOnly` 行集过滤（`plugin-inventory-text.ts` 的
   `applicableChamberPackages` + `global.d.ts`/`preload.cts` 的投影字段；该行只列在本地目标）。

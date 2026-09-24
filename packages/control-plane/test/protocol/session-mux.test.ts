@@ -142,6 +142,7 @@ interface Harness {
   activities: Array<{ sessionId: string; updatedAt: number | null; at: number }>
   added: Array<{ item: SessionListBaselineItem; at: number }>
   removed: Array<{ sessionId: string; at: number }>
+  activations: Array<{ sessionId: string; goalId: string | null; activation: 'armed' | 'disarmed' | null }>
   pending: Array<{ sessionId: string; kind: SessionStatePendingKind; eventId: string; at: number }>
   cancels: string[]
   silences: number[]
@@ -172,6 +173,7 @@ function makeHarness(options: {
   const activities: Harness['activities'] = []
   const added: Harness['added'] = []
   const removed: Harness['removed'] = []
+  const activations: Harness['activations'] = []
   const pending: Harness['pending'] = []
   const cancels: string[] = []
   const silences: number[] = []
@@ -200,6 +202,10 @@ function makeHarness(options: {
     onActivity: (sessionId, updatedAt, at) => { order.push('activity'); activities.push({ sessionId, updatedAt, at }) },
     onAdded: (item, at) => { order.push('added'); added.push({ item, at }) },
     onRemoved: (sessionId, at) => { order.push('removed'); removed.push({ sessionId, at }) },
+    onGoalActivation: (event) => {
+      order.push('goal-activation')
+      activations.push(event)
+    },
     onPending: (sessionId, kind, eventId, at) => { order.push('pending'); pending.push({ sessionId, kind, eventId, at }) },
     onCancel: (eventId) => { order.push('cancel'); cancels.push(eventId) },
     onStatusChange: (status) => { statusChanges.push(status) },
@@ -220,7 +226,7 @@ function makeHarness(options: {
   })
 
   return {
-    mux, sockets, calls, order, baselines, statuses, activities, added, removed, pending,
+    mux, sockets, calls, order, baselines, statuses, activities, added, removed, activations, pending,
     cancels, silences, warnings, statusChanges, results,
     setAttached: (value: boolean) => { attached = value },
   }
@@ -291,24 +297,56 @@ test('parseRemoteEventFrame: known frames parsed strictly, waterfall request dro
   assert.equal(parseRemoteEventFrame('nope'), null)
 })
 
-test('parseSessionListBaselineItems: privacy whitelist projection', () => {
+test('parseSessionListBaselineItems: privacy whitelist projection (goal sub-whitelist)', () => {
   const items = parseSessionListBaselineItems({
     items: [
       {
         sessionId: 's1', running: true, updatedAt: 42,
         title: 'SECRET TITLE', cwd: '/private', agentPreset: 'x',
-        projections: { values: { todos: ['SECRET'] } },
+        projections: {
+          values: {
+            todos: ['SECRET'],
+            title: 'SECRET PROJECTION TITLE',
+            goal: {
+              goal: {
+                id: 'goal-1', revision: 3, objective: 'SECRET OBJECTIVE', phase: 'active',
+                blockedReason: { code: 'why', message: 'SECRET BLOCK' }, maxGoalRounds: 256,
+              },
+              roundsStarted: 2,
+              createdAt: 1,
+              updatedAt: 41,
+            },
+          },
+        },
         parent: 'p1', origin: 'subagent',
       },
       { sessionId: 's2', running: false, updatedAt: 7, parentSessionId: 'p2' },
+      // Explicit 'no goal': the key exists and is null.
+      { sessionId: 's3', running: false, updatedAt: 3, projections: { values: { goal: null } } },
+      // Malformed shapes are UNKNOWN (field absent), never 'no goal'.
+      { sessionId: 's4', running: false, updatedAt: 2, projections: { values: { goal: { objective: 'SECRET' } } } },
+      { sessionId: 's5', running: false, updatedAt: 1, projections: { values: { goal: { goal: { id: '', revision: 0, phase: 'nope' }, updatedAt: 1 } } } },
     ],
   })
   assert.ok(items !== null)
   assert.deepEqual(items, [
-    { sessionId: 's1', running: true, updatedAt: 42, parentSessionId: 'p1', origin: 'subagent' },
+    {
+      sessionId: 's1', running: true, updatedAt: 42, parentSessionId: 'p1', origin: 'subagent',
+      goal: { goalId: 'goal-1', revision: 3, phase: 'active', updatedAt: 41 },
+    },
     { sessionId: 's2', running: false, updatedAt: 7, parentSessionId: 'p2', origin: null },
+    { sessionId: 's3', running: false, updatedAt: 3, parentSessionId: null, origin: null, goal: null },
+    { sessionId: 's4', running: false, updatedAt: 2, parentSessionId: null, origin: null },
+    { sessionId: 's5', running: false, updatedAt: 1, parentSessionId: null, origin: null },
   ])
-  assert.deepEqual(Object.keys(items[0]), ['sessionId', 'running', 'updatedAt', 'parentSessionId', 'origin'])
+  assert.deepEqual(Object.keys(items[0]), ['sessionId', 'running', 'updatedAt', 'parentSessionId', 'origin', 'goal'])
+  assert.deepEqual(Object.keys(items[0].goal as object).sort(), ['goalId', 'phase', 'revision', 'updatedAt'])
+  const text = JSON.stringify(items)
+  for (const secret of ['SECRET', 'objective', 'blockedReason', 'maxGoalRounds', 'roundsStarted']) {
+    assert.equal(text.includes(secret), false, secret + ' must never leave the whitelist projector')
+  }
+  assert.equal(items[3].goal, undefined, 'a malformed goal shape is unknown, not no-goal')
+  assert.equal(items[4].goal, undefined)
   assert.deepEqual(parseSessionListBaselineItems({ items: [] }), [])
   assert.equal(parseSessionListBaselineItems({ nope: true }), null)
   assert.equal(parseSessionListBaselineItems({ items: [{ sessionId: 's1', updatedAt: 42 }] }), null)
@@ -395,6 +433,55 @@ test('emit routing: status/activity/added/removed routed, error text and unknown
   ])
   assert.deepEqual(h.removed.map(entry => entry.sessionId), ['s3'])
   assert.equal(JSON.stringify([h.warnings, h.order, h.statuses, h.activities]).includes('SECRET'), false)
+  h.mux.stop()
+})
+
+test('goal/activation-changed: edges carry the exact goal id, goal-less and malformed payloads never guessed', async () => {
+  const h = makeHarness()
+  await startSession(h)
+  h.sockets[0].deliver({
+    type: 'emit', event: 'goal/activation-changed',
+    args: [{ sessionId: 's1', goal: { id: 'g1', revision: 2, activation: 'armed' } }],
+  })
+  h.sockets[0].deliver({
+    type: 'emit', event: 'goal/activation-changed',
+    args: [{ sessionId: 's1', goal: { id: 'g1', revision: 2, activation: 'disarmed' } }],
+  })
+  // A create racing the projection: the SAME session gets a NEW goal id. The
+  // id must travel with the edge (identity binding); dropping it is what let
+  // the new goal's armed corrupt the completed previous goal's row.
+  h.sockets[0].deliver({
+    type: 'emit', event: 'goal/activation-changed',
+    args: [{ sessionId: 's1', goal: { id: 'g2', revision: 1, activation: 'armed' } }],
+  })
+  // The host emit spreads 'goal' only when a current goal exists; absent means
+  // 'no current goal' and travels as null activation (distinct from unknown).
+  h.sockets[0].deliver({ type: 'emit', event: 'goal/activation-changed', args: [{ sessionId: 's2' }] })
+  // Malformed payloads (missing sessionId, bad activation, non-record, or a
+  // hostile extra field) are dropped, never guessed; a present goal without a
+  // usable id is an UNBOUND edge (goalId null), mirroring the renderer P2b
+  // parser, never a fabricated id.
+  h.sockets[0].deliver({ type: 'emit', event: 'goal/activation-changed', args: [{ goal: { id: 'g1', activation: 'armed' } }] })
+  h.sockets[0].deliver({ type: 'emit', event: 'goal/activation-changed', args: [{ sessionId: 's3', goal: { id: 'g1', activation: 'maybe' } }] })
+  h.sockets[0].deliver({ type: 'emit', event: 'goal/activation-changed', args: ['not-a-record'] })
+  h.sockets[0].deliver({
+    type: 'emit', event: 'goal/activation-changed',
+    args: [{ sessionId: 's3', goal: { revision: 1, activation: 'armed' } }],
+  })
+  h.sockets[0].deliver({
+    type: 'emit', event: 'goal/activation-changed',
+    args: [{ sessionId: 's4', goal: { id: 'g4', revision: 1, activation: 'armed', objective: 'SECRET-OBJECTIVE' } }],
+  })
+  await flush()
+  assert.deepEqual(h.activations, [
+    { sessionId: 's1', goalId: 'g1', activation: 'armed' },
+    { sessionId: 's1', goalId: 'g1', activation: 'disarmed' },
+    { sessionId: 's1', goalId: 'g2', activation: 'armed' },
+    { sessionId: 's2', goalId: null, activation: null },
+    { sessionId: 's3', goalId: null, activation: 'armed' },
+    { sessionId: 's4', goalId: 'g4', activation: 'armed' },
+  ])
+  assert.equal(JSON.stringify(h.activations).includes('SECRET'), false)
   h.mux.stop()
 })
 
@@ -517,6 +604,38 @@ test('waterfall release: a socket death cancels held pending waterfalls and neve
   assert.deepEqual(h.cancels, ['e1'])
   assert.equal(h.results.length, 0, 'a released waterfall is cancelled, never answered')
   assert.equal(h.mux.status().heldWaterfalls, 0)
+  h.mux.stop()
+})
+
+test('waterfall release: a host $events end cancels the hold and resets ready — never a cross-generation answer', async () => {
+  const h = makeHarness({ attached: false, graceMs: 0, reconnectMinMs: 5, reconnectMaxMs: 5 })
+  await startSession(h, 'client-1')
+  h.sockets[0].deliver(waterfallFrame('e1'))
+  await flush()
+  assert.equal(h.mux.status().heldWaterfalls, 1)
+  assert.equal(h.results.length, 0, 'held (no downstream mux client): nothing was answered')
+
+  // 宿主流结束 $events：该代已死。持有的 waterfall 必须本地 cancel 收尾，
+  // 且 ready/clientId 同步复位——否则 onClose 的代守卫会跳过释放，死亡窗口内
+  // 一次 sweep 仍可能带着旧 clientId 发出 $events/result（跨代作答/旧代作答）。
+  h.sockets[0].deliverFrame({ type: 'end', streamId: EVENTS_STREAM_ID })
+  h.setAttached(true)
+  h.mux.kick('tick')
+  await flush()
+  assert.deepEqual(h.cancels, ['e1'])
+  assert.equal(h.mux.status().heldWaterfalls, 0)
+  assert.equal(h.mux.status().ready, false)
+  assert.equal(h.mux.status().clientId, null)
+  assert.equal(h.results.length, 0, 'the dead generation is never answered with its stale clientId')
+
+  // 重连后的新代 ready(c2)：旧 hold 不得跨代补答。
+  await until(() => h.sockets.length >= 2)
+  h.sockets[1].open()
+  h.sockets[1].deliver({ type: 'ready', clientId: 'client-2' })
+  await flush()
+  h.mux.kick('tick')
+  await flush()
+  assert.equal(h.results.length, 0, 'a held waterfall never survives into the next generation')
   h.mux.stop()
 })
 

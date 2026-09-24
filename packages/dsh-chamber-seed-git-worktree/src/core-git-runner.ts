@@ -1,6 +1,5 @@
 /**
- * core-git-runner.ts — The bounded child_process git runner.
- *
+ * The bounded child_process git runner.
  */
 import { GitWorktreeError } from './core-errors.ts'
 import type { GitChildProcess, GitCommandResult, GitRunner, GitSpawner } from './core-types.ts'
@@ -28,11 +27,9 @@ export function createLocalGitRunner(spawnGit: GitSpawner = spawn as unknown as 
       return
     }
 
-    // Ambient GIT_DIR/GIT_WORK_TREE/etc. must not redirect an operation away
-    // from the freshly validated cwd. Retain the ordinary process environment
-    // but rebuild Git-specific variables from this gateway's policy. Required
-    // mutation locks remain available: GIT_OPTIONAL_LOCKS only suppresses locks
-    // Git itself documents as optional for read-mostly commands.
+    // Ambient GIT_DIR/GIT_WORK_TREE/etc. must not redirect an operation away from the
+    // validated cwd: rebuild Git-specific variables from policy while retaining the rest.
+    // GIT_OPTIONAL_LOCKS=0 suppresses only locks Git documents as optional.
     const environment = { ...process.env }
     for (const key of Object.keys(environment)) {
       if (key.startsWith('GIT_')) delete environment[key]
@@ -41,12 +38,9 @@ export function createLocalGitRunner(spawnGit: GitSpawner = spawn as unknown as 
       GIT_TERMINAL_PROMPT: '0',
       GIT_NO_LAZY_FETCH: '1',
       GIT_OPTIONAL_LOCKS: '0',
-      // `worktree add` runs post-checkout; hook suppression is injected via the
-      // argv `-c core.hooksPath=<nul>` guard (HOOK_GUARD) at spawn time, since
-      // GIT_CONFIG_* env entries are the lowest-priority source and a repo's own
-      // core.hooksPath would override them. Filters (clean/smudge/process) are
-      // intentionally NOT disabled: they remain inside the host OS user's
-      // trusted repository-config boundary.
+      // Hook suppression is injected via the argv -c core.hooksPath guard (HOOK_GUARD),
+      // not GIT_CONFIG_* env (lowest priority, overridden by a repo's own core.hooksPath).
+      // Filters intentionally remain inside the trusted repository-config boundary.
       GCM_INTERACTIVE: 'never',
       LC_ALL: 'C',
     })
@@ -81,15 +75,12 @@ export function createLocalGitRunner(spawnGit: GitSpawner = spawn as unknown as 
       if (settled || terminationError !== undefined) return
       terminationError = error
       if (timer !== undefined) clearTimeout(timer)
-      // Do not release the caller's common-dir mutex until close proves the
-      // Git process exited. Repository filters may have descendants which Git
-      // cannot portably process-group-kill; that remains a trusted-config edge,
-      // but overlapping a second chamber mutation with the parent is avoidable.
+      // Do not release the caller's common-dir mutex until close proves the Git process
+      // exited; filters may have descendants Git cannot portably group-kill.
       try {
         child.kill('SIGKILL')
       } catch {
-        // Keep waiting for close: releasing the repo lock while the process may
-        // still run is less safe than retaining an uncertain operation.
+        // Keep waiting for close: retaining an uncertain operation is safer than an unlocked repo.
       }
     }
     const append = (target: Buffer[], chunk: Buffer): void => {
@@ -103,8 +94,7 @@ export function createLocalGitRunner(spawnGit: GitSpawner = spawn as unknown as 
     }
     child.stdout.on('data', (chunk: Buffer) => append(stdout, chunk))
     child.stderr.on('data', (chunk: Buffer) => append(stderr, chunk))
-    // A spawn error may not be followed by close, and proves no Git operation
-    // was admitted, so it is the sole immediate-rejection path.
+    // A spawn error proves no Git operation was admitted, so it rejects immediately.
     child.on('error', (error) => {
       if (terminationError !== undefined) return
       rejectImmediately(new GitWorktreeError('git-spawn-failed', safeErrorMessage(error)))
@@ -130,6 +120,5 @@ export function createLocalGitRunner(spawnGit: GitSpawner = spawn as unknown as 
   })
 }
 
-/** One loaded agent row whose value drifted from what upstream declares: the
- *  row's `sessionId` plus the offending value, rendered for a loud snapshot
- *  diagnostic (the value is already bounded and stringified). */
+/** One loaded agent row whose value drifted from what upstream declares: the row's
+ *  `sessionId` plus the offending value, for a loud snapshot diagnostic. */

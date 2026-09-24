@@ -1,24 +1,16 @@
 /**
- * protected-plugins.ts — 受保护集合 P 的派生、写面判定与读面行投影（design 21 §6.11，
- * 决策 19）。
+ * protected-plugins.ts — 受保护集合 P 的派生、写面判定与读面行投影。
  *
- * 单一来源：本模块是「哪些名字不能装卸 / 官方 scope 的安装是否同代 / 每个已安装行是什么角色」
- * 的唯一实现。desktop 经 control-plane-module.ts 双路径 facade 消费，gateway 经
- * '@dsh-chamber/control-plane' 直引；渲染端**不镜像**本模块（它消费后端投影的
- * `rows[].role` / `rows[].protected`）。
+ * 单一来源：本模块是「哪些名字不能装卸 / 官方 scope 的安装是否同代 / 每个已安装行是什么
+ * 角色」的唯一实现。desktop 经 facade 双路径消费，gateway 直引；渲染端不镜像。
  *
- * 规则要点（与 design 21 §6.11 逐条对应）：
- * - `P = B₀ ∪ S ∪ F`：B₀ = profile 安装自带组合（模板默认快照，**不含**用户后加的层）、
- *   S = chamber 播种注册表名、F = 运行时线族（**运行时锁文件闭包**优先，实例树枚举兜底）。
- * - `decidePluginMutation`：install/remove **同判 P**；remove **永不判版本**；官方 scope 的
- *   install 另需**精确同代**（无版本、`^`/`~`/dist-tag 拒；预发布字符串全等）。
- * - `profile_absent` → defer（保留既有 first-install 语义，绝不 fail-closed；调用方把 defer
- *   当作"让 CLI 去创建 profile"，不是拒绝）。
- * - F 不可得 → **保守降级**（`familySource:'none'|'unavailable'`）：P 退到 B₀ ∪ S，
- *   官方 scope 的 install 一律拒（比同代校验更强），第三方与 remove 面照常。
- *   绝不退化成"没有保护"。
- *
- * 纯逻辑 + 两个只读 fs 探针（运行时树枚举 / 已装版本读取），无第三方依赖。
+ * 规则要点：
+ * - P = B₀ ∪ S ∪ F：B₀ = profile 安装自带组合（模板默认快照，不含用户后加的层）、
+ *   S = chamber 播种注册表名、F = 运行时线族（运行时锁文件闭包优先，实例树枚举兜底）。
+ * - decidePluginMutation：install/remove 同判 P；remove 永不判版本；官方 scope 的 install
+ *   另需精确同代（无版本、`^`/`~`/dist-tag 拒；预发布字符串全等）。
+ * - profile_absent → defer（保留 first-install 语义，绝不 fail-closed）。
+ * - F 不可得 → 保守降级（P 退到 B₀ ∪ S，官方 scope 的 install 一律拒），绝不退化成"没有保护"。
  */
 
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
@@ -32,10 +24,8 @@ import type { PluginRow, PluginRowRole } from '@dsh-chamber/dsh-chamber-wire/plu
 import { errorMessage } from './error-text.ts'
 import { MAX_PLUGIN_SPEC_CHARS } from './plugin-spec.ts'
 
-// 运行时线族锚（F）与锁文件名字解析的唯一实现在 leaf 模块 runtime-family.ts：CI 的
-// C11 门禁在 `pnpm install` 之前直接 import 它；本模块还会引入 wire 的 manifest 读算法
-// （裸 workspace 包名，install 前无法解析），所以那份实现不能住在这里。这里原样
-// re-export，P 的派生与门禁仍是同一份判据。
+// 运行时线族锚（F）与锁文件名字解析的唯一实现在 leaf 模块 runtime-family.ts：本模块还会
+// 引入 wire 的 manifest 读算法（install 前裸 workspace 包名无法解析），故原样 re-export。
 import {
   RUNTIME_FAMILY_CORE,
   RUNTIME_FAMILY_FORBIDDEN,
@@ -48,8 +38,8 @@ export {
 } from './runtime-family.ts'
 
 /**
- * 闭包是否可信（核心锚齐全 + 无禁名）。运行时与 C11 门禁共用同一判据：不可信 ⇒ 调用方
- * 走保守降级（官方 scope 装面全拒），绝不静默把它当 F。
+ * 闭包是否可信（核心锚齐全 + 无禁名）。运行时与 C11 门禁共用同一判据：不可信 ⇒ 调用方走
+ * 保守降级（官方 scope 装面全拒），绝不静默把它当 F。
  */
 export function runtimeFamilyFindings(names: readonly string[]): string[] {
   const findings: string[] = []
@@ -73,9 +63,8 @@ export const OFFICIAL_SCOPE = '@deepseek-ai/'
 export const CHAMBER_SCOPE = '@dsh-chamber/'
 
 /**
- * B₀ 快照：web profile 的安装自带组合（上游 `PROFILE_TEMPLATES.web.bundles` 的对拍对象，
- * 由 C12 保鲜门守住）。**不得**从 live `dsh.profile.bundles` 取——那是「按已安装状态重算」
- * 的结果，会把用户后加的层也变成受保护项（design 21 §6.11.2）。
+ * B₀ 快照：web profile 的安装自带组合（上游模板的对拍对象）。不得从 live
+ * `dsh.profile.bundles` 取——那是按已安装状态重算的结果，会把用户后加的层也变成受保护项。
  */
 export const PROFILE_BUNDLES_SNAPSHOT: readonly string[] = [
   '@deepseek-ai/dsh-base',
@@ -85,10 +74,8 @@ export const PROFILE_BUNDLES_SNAPSHOT: readonly string[] = [
 /** 受保护来源（用于文案与 tooltip；同一名字可能同时命中多个来源，取最先命中的）。 */
 export type ProtectedSource = 'installation' | 'chamber' | 'family'
 
-// 读面行形状（PluginRow / PluginRowRole）的**唯一声明**在 wire 的 ./plugin-row 面
-// （design 21 §6.11.5 单源；C14 断言本文件只有 import/type 再导出、无本地字段重声明）。
-// 名字原样再导出：gateway、桌面 main 与既有调用点的
-// `PluginRow` / `PluginRowRole` 引用逐字不变。
+// 读面行形状（PluginRow / PluginRowRole）的唯一声明在 wire 的 ./plugin-row 面；本文件只有
+// import/type 再导出、无本地字段重声明，名字原样再导出。
 export type { PluginRow, PluginRowRole }
 
 /** 派生后的受保护集合。 */
@@ -116,9 +103,9 @@ export type ProtectedDerivation =
   | { ok: false; reason: string }
 
 /**
- * 派生受保护集合。`familyNames === null` 表示该后端**没有**族事实源（ssh）——此时仍返回
- * `ok:true` 但只覆盖 B₀ ∪ S，由 `decidePluginMutation` 的 `familySource:'none'` 分支把
- * 官方 scope 的 install 一律拒掉（只收紧不放松）。
+ * 派生受保护集合。`familyNames === null` 表示该后端没有族事实源（ssh）——仍返回 `ok:true`
+ * 但只覆盖 B₀ ∪ S，由 `decidePluginMutation` 的 `familySource:'none'` 分支把官方 scope 的
+ * install 一律拒掉（只收紧不放松）。
  */
 export function deriveProtectedSet(facts: ProtectedFacts): ProtectedDerivation {
   const names = new Map<string, ProtectedSource>()
@@ -137,16 +124,10 @@ export function deriveProtectedSet(facts: ProtectedFacts): ProtectedDerivation {
       if (!names.has(name)) names.set(name, 'family')
     }
   }
-  // The set must never be EMPTY. `familyComplete`
-  // only says whether F contributed; it does not say whether P is non-empty, so an
-  // all-empty input (installationBundles: [], seedNames: [], familyNames: null)
-  // must not answer `ok:true` with zero names — `decidePluginMutation` would then
-  // allow a remove of a composition member such as `@deepseek-ai/dsh-base`.
-  // The three production call sites cannot reach this today (B₀ defaults to the
-  // non-empty snapshot, S comes from the non-empty registry), but a caller
-  // that reads the installation bundles from a profile can — and the failure mode
-  // is silent loss of protection, which is exactly what this module promises
-  // never to degrade into. Fail closed instead.
+  // The set must never be EMPTY: an all-empty input (installationBundles: [], seedNames: [],
+  // familyNames: null) must not answer ok:true with zero names, or decidePluginMutation could
+  // allow removing a composition member. A caller reading bundles from a profile can reach
+  // this, and the failure mode is silent loss of protection — fail closed instead.
   if (names.size === 0) {
     return { ok: false, reason: 'protected set derived empty (installation/seed/family facts all empty)' }
   }
@@ -186,8 +167,7 @@ export interface ParsedVersion {
 /** 解析精确版本；非精确形态返回 null。 */
 export function parseExactVersion(value: string | null | undefined): ParsedVersion | null {
   if (typeof value !== 'string') return null
-  // NO trim: ` 1.2.3 ` is not an exact version literal, and `suggestExactSpec` must never
-  // hand back a suggestion the spec whitelist would reject.
+  // NO trim: ` 1.2.3 ` is not an exact version literal, and suggestExactSpec must never hand back a suggestion the whitelist would reject.
   const match = EXACT_VERSION_RE.exec(value)
   if (match === null) return null
   return { major: match[1], minor: match[2], patch: match[3], prerelease: match[4] ?? null }
@@ -199,9 +179,8 @@ export function isExactVersion(value: string | null | undefined): boolean {
 }
 
 /**
- * 同代判定（design 21 §6.11.3）：
- * - 任一侧带预发布 ⇒ **字符串全等**（`0.1.5-rc.1 ≠ 0.1.5-rc.2`；tuple 相等不算通过）；
- * - 两侧都是稳定版 ⇒ 比较 `major.minor.patch`。
+ * 同代判定：任一侧带预发布 ⇒ 字符串全等（0.1.5-rc.1 ≠ 0.1.5-rc.2）；两侧都是稳定版 ⇒ 比较
+ * major.minor.patch。
  */
 export function sameGeneration(a: string | null | undefined, b: string | null | undefined): boolean {
   const left = parseExactVersion(a)
@@ -253,13 +232,9 @@ export interface DecidePluginMutationInput {
   /** profile 形态：absent = 尚未初始化（→ defer）。 */
   profileState?: 'ready' | 'absent'
   /**
-   * 族事实源：
-   * - `'runtime'`：完整 P（本后端能读运行时线 F）；
-   * - `'none'`：该后端**没有** F（ssh —— 远端无族事实源）；
-   * - `'unavailable'`：本该有 F 但**派生失败**（运行时树缺失/锁文件不可解析）。
-   *   `'none'` 与 `'unavailable'` 的**保护效果相同**（官方 scope 的 install 一律拒、
-   *   B₀∪S 照常保护、第三方不受影响），差别只在拒绝码与文案：后者响亮指出这是
-   *   事实缺失导致的降级，而不是"这个层被组合保护"。
+   * 族事实源：'runtime' = 完整 P；'none' = 该后端没有 F（ssh）；'unavailable' = 本该有 F 但
+   * 派生失败。'none' 与 'unavailable' 保护效果相同（官方 scope 的 install 一律拒、B₀∪S 照常
+   * 保护、第三方不受影响），差别只在拒绝码与文案：后者响亮指出这是事实缺失导致的降级。
    */
   familySource?: 'runtime' | 'none' | 'unavailable'
 }
@@ -291,10 +266,8 @@ function refusalCopy(code: PluginRefusalCode, name: string, suggest: string | nu
 }
 
 /**
- * 写面唯一判定入口（design 21 §6.11.3）。
- *
- * 调用方把结果映射到各自的后端语义：`defer` → 既有 profile_absent 路径（202 deferred）、
- * `refuse` → 400/拒绝并响亮报错、`allow` → 继续执行。
+ * 写面唯一判定入口。调用方把结果映射到各自后端语义：defer → 既有 profile_absent 路径、
+ * refuse → 400/拒绝并响亮报错、allow → 继续执行。
  */
 export function decidePluginMutation(input: DecidePluginMutationInput): PluginMutationDecision {
   const name = input.name
@@ -307,8 +280,7 @@ export function decidePluginMutation(input: DecidePluginMutationInput): PluginMu
   if (input.profileState === 'absent') {
     return { kind: 'defer', code: 'profile_absent', error: 'managed profile is not initialized; the intent is deferred until it is' }
   }
-  // `'none'` is an explicit backend fact; otherwise an incomplete set (no F) degrades to
-  // `'unavailable'` even if the caller forgot the flag — never a silent "runtime" default.
+  // `'none'` is an explicit backend fact; otherwise an incomplete set degrades to `'unavailable'` even if the caller forgot the flag — never a silent "runtime" default.
   const explicitSource = input.familySource ?? 'runtime'
   const familySource = explicitSource === 'none'
     ? 'none'
@@ -328,14 +300,11 @@ export function decidePluginMutation(input: DecidePluginMutationInput): PluginMu
     return { kind: 'refuse', code: 'protected', ...refusalCopy('protected', name, null) }
   }
 
-  // 保守形态（在 B₀ ∪ S 判名**之后**：那一份事实永远可得，官方 scope 的保守只是「F 不可得」）：
-  // 没有 F（ssh）或 F 派生失败（降级）⇒ 官方 scope 的 install 一律拒。
-  // 这是**只收紧不放松**的方向：官方 scope 全拒比"同代校验"更强，B₀∪S 仍照常保护，
-  // 第三方 install/remove 与 remove 面（B₀∪S 事实）不受影响。
+  // 保守形态（在 B₀ ∪ S 判名之后）：没有 F（ssh）或 F 派生失败 ⇒ 官方 scope 的 install
+  // 一律拒。只收紧不放松：官方 scope 全拒比同代校验更强，B₀∪S 与 remove 面不受影响。
   if ((familySource === 'none' || familySource === 'unavailable')
     && input.op === 'install' && officialScope(name)) {
-    // 码按设计表（ssh → `protected`，降级 → `protected-set-unavailable`），但**文案必须说真话**：
-    // 这不是"被组合保护"，而是"本后端无法约束官方 scope 的安装"。
+    // 码按设计表（ssh → protected，降级 → protected-set-unavailable），但文案必须说真话：这不是"被组合保护"。
     return familySource === 'none'
       ? {
         kind: 'refuse',
@@ -377,15 +346,11 @@ export function decidePluginMutation(input: DecidePluginMutationInput): PluginMu
 // 事实源：运行时线族集合
 
 /**
- * 运行时线为某个名字提供的**版本集合**（design 21 §6.11.3 的版本事实）。
+ * 运行时线为某个名字提供的版本集合。
  *
- * 名字集合 F 与版本事实是同一份来源的两面：F 决定"这个名字由运行时拥有"，版本集合决定
- * "运行时给它的版本是什么"。没有这一半，复验只能拿 installedVersion 去比 dsh **世代串**，
- * 而改域后的 vendored 包（`@deepseek-ai/cosmokit`、`@deepseek-ai/schemastery` 等保留上游
- * 版本号）永远不可能等于世代串 —— 它们会被判成跨代副本，尽管版本恰恰是运行时 pin 的那个。
- *
- * 键缺席或空数组 = 该来源没给出版本（回退世代比较，绝不猜）。
- * 锁文件可能同时 pin 同一名字的多个版本（同仓多消费方），故是集合而非单值。
+ * 没有这一半，复验只能拿 installedVersion 去比 dsh 世代串，而改域后的 vendored 包（保留上游
+ * 版本号）永远不可能等于世代串，会被判成跨代副本。键缺席或空数组 = 该来源没给出版本（回退
+ * 世代比较，绝不猜）；锁文件可能同时 pin 同一名字的多个版本，故是集合而非单值。
  */
 export type FamilyVersions = ReadonlyMap<string, readonly string[]>
 
@@ -409,20 +374,13 @@ export type RuntimeFamilyResolution =
   }
   | { ok: false; reason: string }
 
-// familyNamesFromLockfileClosure（C11 门禁与 P 的唯一名字权威）的实现在 leaf 模块
-// runtime-family.ts；本文件经上面的 re-export 读同一份。
+// familyNamesFromLockfileClosure 的实现在 leaf 模块 runtime-family.ts；本文件经上面的 re-export 读同一份。
 
 /**
- * 同一个锁文件的**版本事实**：族名字 → 该名字被 pin 的版本集合。
- *
- * 名字抽取刻意与 {@link familyNamesFromLockfileClosure} 分离（后者是 C11 门禁与 `P` 的
- * 唯一权威，逐字不变）：本函数只补充版本维度，正则单独写，键形兼容 pnpm v9
- * （`'@scope/name@version':`）与 v6（`/@scope/name/version:`）。**不在版本后锚定** `'`/`:`：
- * pnpm 的 snapshot 键会把 peer 解析结果缀在版本后（实测本仓运行时线有 234 个这类键，
- * 且括号可嵌套，如 `'@x/y@1.0.17(@z/w@1.1.4(@z/c@4.0.2))(...)'`），因此版本用严格字符集
- * 截断（以数字开头，遇 `'` / `:` / 空白 / `(` 即停），既不吞 peer 后缀也不会把后续键吃进来。
- * @param lockfileText - `pnpm-lock.yaml` 全文。
- * @returns 每个族名字的版本集合（去重并排序）。
+ * 同一个锁文件的版本事实：族名字 → 被 pin 的版本集合。名字抽取刻意与
+ * familyNamesFromLockfileClosure 分离（后者是 C11 门禁与 P 的唯一权威，逐字不变），键形兼容
+ * pnpm v9/v6。不在版本后锚定 ' / :：pnpm 的 snapshot 键会把 peer 解析结果缀在版本后（可嵌套），
+ * 因此版本用严格字符集截断（数字开头，遇 ' / : / 空白 / ( 即停）。
  */
 export function familyVersionsFromLockfileClosure(lockfileText: string): Map<string, string[]> {
   const versions = new Map<string, string[]>()
@@ -447,11 +405,8 @@ export function familyNamesFromRuntimeTree(workspacePath: string): string[] | nu
 }
 
 /**
- * 树枚举的名字 + 版本事实：目录名给名字，各包自己的 `package.json` 给版本（读不到就
- * **不登记**该名字的版本，回退世代比较 —— 绝不猜）。树是锁文件缺席时的兜底来源，所以
- * 只有这条路径额外花读清单的成本。
- * @param workspacePath - 活动运行时树的根。
- * @returns 名字（已排序）与版本集合；目录不存在或列不出时 null。
+ * 树枚举的名字 + 版本事实：目录名给名字，各包 package.json 给版本（读不到就不登记该名字的
+ * 版本，回退世代比较）。树是锁文件缺席时的兜底来源，只有这条路径额外花读清单的成本。
  */
 function familyFactsFromRuntimeTree(workspacePath: string): { names: string[]; versions: Map<string, string[]> } | null {
   const dir = join(workspacePath, 'node_modules', '@deepseek-ai')
@@ -487,17 +442,13 @@ function readPackageManifest(path: string): Record<string, unknown> | null {
 }
 
 /**
- * 解析运行时线族集合（design 21 §6.11.1 的事实源优先级）：
+ * 解析运行时线族集合（事实源优先级）：
+ * 1. 已提交的运行时线锚锁文件——唯一权威、平台无关，且正是 C11 门禁断言的文件；必须先试它，
+ *    因为 dev 形态的活动树可能是源码线（ref-dsh），其闭包含 opt-in 段；
+ * 2. 活动树自己的 pnpm-lock.yaml；
+ * 3. 无锁文件时退回 node_modules/@deepseek-ai/* 枚举（平台相关，仅兜底）。
  *
- * 1. **已提交的运行时线锚锁文件**（`opts.pinnedLockfilePath`）——唯一权威、平台无关，
- *    且正是 C11 门禁断言的那个文件（生产包把它随应用一起发；dev 形态它就是仓库里的
- *    `packages/desktop/vendor/dsh/pnpm-lock.yaml`）。**必须先试它**：活动树在 dev 形态
- *    可能是源码线（`ref-dsh`），其闭包含 opt-in 段，用它当 F 会让官方 opt-in 层永久受保护。
- * 2. 活动树自己的 `pnpm-lock.yaml`（用户另装的运行时树；与锚同源时结果相同）。
- * 3. 无锁文件时退回 `node_modules/@deepseek-ai/*` 枚举（平台相关，仅兜底）。
- *
- * 锁文件"存在即权威"：不做"名字太少就换来源"的启发式，空集交给 `deriveProtectedSet`
- * 判为派生失败 ⇒ 后端保守降级（只收紧不放松）。树枚举同时作为交叉校验事实返回。
+ * 锁文件"存在即权威"：不做"名字太少就换来源"的启发式，空集交给 deriveProtectedSet 判为派生失败。
  */
 export function resolveRuntimeFamily(
   workspacePath: string,
@@ -517,10 +468,8 @@ export function resolveRuntimeFamily(
       // 可信性判据（与 C11 同源）：核心锚缺失或含禁名 ⇒ 这个闭包**不是**运行时线的 F
       // （源码线/裁剪树/外来锁文件），拒绝它并继续找；全被拒则 ok:false（保守降级）。
       const findings = runtimeFamilyFindings(names)
-      // 第二条判据：名字解析得出来、版本一个都解析不出来 ⇒ 两个解析器对**同一批
-      // 键**互相矛盾（同一个键既给出名字也给出版本）。放行它就意味着 F 里每个名字都缺版本
-      // 事实、静默退回世代比较——vendored 包会被误判。宁可拒绝该来源、
-      // 让树兜底（树直接读各包清单），也不接受一份自相矛盾的事实。
+      // 第二条判据：名字解析得出来但版本一个都解析不出来 ⇒ 两个解析器对同一批键互相矛盾，
+      // 放行就意味着 F 里每个名字都缺版本事实、静默退回世代比较；宁可拒绝该来源、让树兜底。
       const parserDisagreement = names.length > 0 && versions.size === 0
       if (findings.length > 0) {
         rejected.push(`${candidate.path}: ${findings.join('; ')}`)
@@ -541,10 +490,8 @@ export function resolveRuntimeFamily(
     }
   }
   // 只有在没有可用锁文件时才枚举实例树（每次 IPC 都 readdir 不值得）；树同样过可信性判据。
-  // 树来源刻意**不**要求版本事实：枚举目录名本身就是这条兜底路径的用途（design 21 §6.11.1
-  // 的实例侧等价性交叉校验只吃名字），而清单读不出的名字会退回世代比较——方向是"响亮误报"
-  // 而非静默放行。反过来在这里拒绝，会让 `familyNames` 变成 null、写面进 `protected-set-unavailable`
-  // 降级态（官方 scope install 一律拒），把这条兜底路径的用户挡在门外，代价大于它要防的问题。
+  // 树来源刻意不要求版本事实：枚举目录名本身就是这条兜底路径的用途，而清单读不出的名字会
+  // 退回世代比较——方向是"响亮误报"而非静默放行。在这里拒绝反而会把用户挡在门外。
   const tree = familyFactsFromRuntimeTree(workspacePath)
   if (tree !== null && tree.names.length > 0) {
     const findings = runtimeFamilyFindings(tree.names)
@@ -571,11 +518,9 @@ export function resolveRuntimeFamily(
 // 读面行投影
 
 /**
- * 掩码与 materialize 判据的**单一来源** = 中立契约包
- * `@dsh-chamber/dsh-chamber-wire/plugin-manifest`（design 21 §6.2/决策 18）。
- * 本模块不重声明常量与路径文法：判据从单源导入，掩码常量经本模块的公开面透传
- * （desktop 经 control-plane-module.ts 双路径 facade 消费；打包态由
- * build-control-plane 的 esbuild bundle 内联 wire，产物无裸说明符——R6 第 2 阶段）。
+ * 掩码与 materialize 判据的单一来源 = 中立契约包
+ * `@dsh-chamber/dsh-chamber-wire/plugin-manifest`。本模块不重声明常量与路径文法：判据从单源
+ * 导入，掩码常量经本模块公开面透传（desktop 经 facade 消费；打包态由 esbuild bundle 内联 wire）。
  */
 export { PLUGIN_MATERIALIZED_VALUE_MASK } from '@dsh-chamber/dsh-chamber-wire/plugin-manifest'
 
@@ -597,29 +542,20 @@ export interface DerivePluginRowsInput {
   /** 已装版本读取（可选；按 name 返回版本或 null）。 */
   installedVersion?: (name: string) => string | null
   /**
-   * 可选：依赖值 → 投影值的掩码钩子。**缺省 = 原值**——行投影的 `spec` 必须与调用方自己的
-   * `dependencies` 掩码一致：gateway 与 ssh 的 manifest 都掩 `file:` 值（远端/受管 profile
-   * 的本地路径不进渲染端），local 的原样清单不掩，三者各自传自己的掩码器。
+   * 可选：依赖值 → 投影值的掩码钩子。缺省 = 原值——行投影的 `spec` 必须与调用方自己的
+   * `dependencies` 掩码一致：gateway 与 ssh 的 manifest 都掩 `file:` 值，local 的原样清单不掩。
    */
   maskSpec?: (spec: string) => string | null
 }
 
 /**
- * 把 profile 的**依赖表**投影成「已安装」行（design 21 §6.11.5）。
+ * 把 profile 的依赖表投影成「已安装」行。
  *
- * **行集 = `dependencies` 一行一条，仅此**：`bundles` / B₀ / S 只做 `role`/`owner` 分类器与
- * 「这个名字是否受保护」的输入，**不作行源**。
- *
- * 为什么：并集会让「安装自带」的东西出现在「已安装」
- * 里——官方组合（B₀）是运行时基线、chamber 播种物（S）在**「chamber 受管组件」表**里已有
- * 自己的行（探针状态 + 版本 + 手动重推），二者都不是「我们装进去的插件」。上游
- * `reconcilePlugins`（`apps/cli/src/plugin.ts`）也只把**依赖表**里的包按 `dsh.bundle.patch`
- * 并入 `dsh.profile.bundles`，并明说模板自带组合不是依赖、永不被触碰：所以依赖表就是「装
- * 进去的东西」的权威事实。裸依赖表还会带出自相矛盾的行：组合成员在
- * `profiles/web/node_modules` 里根本不存在（官方族被 hoist 到 `profiles/node_modules`），
- * 于是版本列只能显示 `—`。保护判定不受影响：`rows[].protected`
- * 仍由后端算，**若某个受保护名确实出现在依赖表里**（例如远端实例自己声明的官方依赖），它
- * 照样只读可见（无移除按钮 + 角色徽标），写面也照旧拒绝装卸。
+ * 行集 = dependencies 一行一条，仅此：bundles / B₀ / S 只做 role/owner 分类器与保护判定输入，
+ * 不作行源。并集会让「安装自带」的东西出现在「已安装」里——官方组合是运行时基线、chamber
+ * 播种物在「chamber 受管组件」表里已有自己的行。上游 reconcilePlugins 也只把依赖表里的包并入
+ * `dsh.profile.bundles`。裸依赖表还会带出自相矛盾的行（组合成员在 profiles/web/node_modules
+ * 里不存在，版本列只能显示 —）。保护判定不受影响：受保护名若出现在依赖表里照样只读可见。
  */
 export function derivePluginRows(input: DerivePluginRowsInput): PluginRow[] {
   const installation = new Set(input.installationBundles ?? PROFILE_BUNDLES_SNAPSHOT)
@@ -663,7 +599,7 @@ export function derivePluginRows(input: DerivePluginRowsInput): PluginRow[] {
 
 /**
  * `name@<value>` 形式里 pin 的 VERSION 值（裸名 / `file:` / 非 registry 值 → null）。
- * 三个后端的 install 判定都用它取「声明的版本」（design 21 §6.11.3 R2）。
+ * 三个后端的 install 判定都用它取「声明的版本」。
  */
 export function registrySpecVersion(spec: string | null | undefined): string | null {
   if (typeof spec !== 'string' || spec === '' || spec.startsWith('file:')) return null
@@ -687,21 +623,12 @@ export type FamilyConsistencyVerdict =
   | { ok: false; findings: FamilyConsistencyFinding[] }
 
 /**
- * 装后复验（design 21 §6.11.4）：R2 只看**直接 spec**，但官方层的依赖闭包也会落进
- * 实例树。这里读 profile 树顶层 `node_modules/@deepseek-ai/*`：
- *
- * - **直接依赖**（profile manifest 的 `dependencies` 里的名字）= 用户显式请求的安装，
- *   已由 R2 判定 ⇒ 跳过（层自己通常就是 `@deepseek-ai/dsh-experimental-*`，不在 F 内）；
- * - **F 提供的名字**（运行时线族成员）⇒ 必须与**运行时为该名字提供的版本**一致
- *   （`familyVersions`；该名字没有版本事实时退回与实例世代的 `sameGeneration` 比较）：
- *   不一致 = 异版本/跨代副本，会 shadow 运行时自己那一份；
- * - **F 不提供的官方 scope 名字** ⇒ 若属于**用户显式安装层的依赖闭包**，那是该层自己的
- *   实现（运行时并不提供这个名字，它无从 shadow 任何东西），豁免；否则 = 族外官方 scope
- *   影子副本。
- *
- * 判定顺序是"先版本、后闭包"：闭包归属不得掩盖真实版本歪斜。
- *
- * 只读；失败返回 findings（调用方决定回滚/响亮报错）。profile 树不存在 ⇒ ok。
+ * 装后复验：R2 只看直接 spec，但官方层的依赖闭包也会落进实例树。读 profile 树顶层
+ * `node_modules/@deepseek-ai/*`：直接依赖已由 R2 判定 ⇒ 跳过；F 提供的名字 ⇒ 必须与运行时为
+ * 该名字提供的版本一致（没有版本事实时退回 sameGeneration），不一致 = 异版本/跨代副本，会
+ * shadow 运行时那一份；F 不提供的官方 scope 名字 ⇒ 若属于用户显式安装层的依赖闭包则豁免，
+ * 否则 = 族外官方 scope 影子副本。判定顺序是"先版本、后闭包"：闭包归属不得掩盖真实版本歪斜。
+ * 只读；profile 树不存在 ⇒ ok。
  */
 export function verifyProfileFamilyConsistency(input: {
   profileDir: string
@@ -724,10 +651,9 @@ export function verifyProfileFamilyConsistency(input: {
       }
     }
   } catch (error) {
-    // The tree exists but cannot be classified (unreadable/corrupt/torn
-    // manifest). Skipping is the ONLY honest option (treating every entry as
-    // transitive would flag the user's own layer), so the reason travels with
-    // the verdict and the callers log it — never a silent pass.
+    // The tree exists but cannot be classified (unreadable/corrupt/torn manifest). Skipping is
+    // the ONLY honest option (treating every entry as transitive would flag the user's own
+    // layer), so the reason travels with the verdict and callers log it — never a silent pass.
     return { ok: true, checked: 0, skipped: `the profile manifest could not be read (${messageOfUnknown(error)})` }
   }
   const family = new Set(input.familyNames)
@@ -745,9 +671,8 @@ export function verifyProfileFamilyConsistency(input: {
   let checked = 0
   let familyEntries = 0
   /**
-   * 族名字里**一次臂都没跑成**的（既无版本事实、实例世代也未知）。按名字收集而不是
-   * 只记一个总布尔：否则"部分名字比对过、剩下的从未被比较"会聚合成一个无声的通过
-   * （跳过永远不等于通过）。
+   * 族名字里一次臂都没跑成的（既无版本事实、实例世代也未知）。按名字收集而不是只记一个总
+   * 布尔：否则"部分名字比对过、剩下的从未被比较"会聚合成一个无声的通过（跳过不是通过）。
    */
   const unverified: string[] = []
   for (const name of entries) {
@@ -778,14 +703,9 @@ export function verifyProfileFamilyConsistency(input: {
     findings.push({ name, version, kind: 'outside-family' })
   }
   if (findings.length > 0) return { ok: false, findings }
-  // 有族成员没能比对 ⇒ 如实报 skipped（响亮），绝不谎报"通过"。
-  // （R2 在同一状态下是拒装，复验不能反而放行。）
-  // 只有 runtimeVersion 未知才会进这里（代臂压根跑不成），所以 `unverified ⊆ family entries`
-  // 蕴含 `familyEntries ≥ 1` —— 不存在"0===0 空真"把空族树误报成跳过的路径。
-  // 注意**不能**把"调用方给了版本事实表、但这个名字不在表里"也改成 skipped：
-  // 那会让"没有版本事实的跨代副本"从**响亮失败**退化成**跳过放行**，
-  // 方向正是设计禁止的"静默放行拆组合"。缺事实时退回世代比较仍是设计口径（§6.11.4），
-  // 代价是改域 vendored 包在极窄的"树来源 + 清单读不出"场景下会响亮误报——保守方向可接受。
+  // 有族成员没能比对 ⇒ 如实报 skipped（响亮），绝不谎报"通过"（R2 在同一状态下是拒装）。
+  // 缺事实时退回世代比较仍是设计口径；不能把"调用方给了版本表但名字不在表里"也改成 skipped，
+  // 那会让没有版本事实的跨代副本从响亮失败退化成静默放行。
   if (unverified.length > 0) {
     const names = unverified.join(', ')
     return unverified.length === familyEntries
@@ -799,26 +719,14 @@ export function verifyProfileFamilyConsistency(input: {
 const MAX_PROFILE_CLOSURE_MANIFESTS = 4096
 
 /**
- * 用户显式安装层的**依赖闭包**（design 21 §6.11.4）：沿
- * `node_modules/<name>/package.json` 的 `dependencies` ∪ `optionalDependencies` 递归。
+ * 用户显式安装层的依赖闭包：沿 `node_modules/<name>/package.json` 的
+ * dependencies ∪ optionalDependencies 递归。
  *
- * **只从官方 scope 的直接依赖起步**：闭包豁免的唯一用途是解释
- * 「官方 scope 但运行时线不提供」的名字（循环只遍历 `node_modules/@deepseek-ai/*`），而
- * 这类名字的合法来源就是**用户显式安装的官方层**（bundle / opt-in 层）。若从**任意**直接
- * 依赖起步，一个普通第三方包只要在自己的 `dependencies` 里写一个官方 scope 名字，就能把
- * 它带进 profile 且**静默**通过复验——源线官方包 284 个、运行时线 F 244 个，差集 42
- * 里有 33 个连 opt-in 段的借口都没有（`dsh-tool-terminal`、`dsh-lsp`、`dsh-subagent-codex`
- * …）。第三方层夹带官方名属**未解释**，应当照旧报 `outside-family`。
- *
- * `peerDependencies` 同样**不纳入**：profile 的 workspace 固定为 `autoInstallPeers: false`
- * （design 21 §6.11.4 第 3 条既有前提，C12 守），peer 不会被物化，因此它既不会出现在顶层
- * 目录里，也不构成"这一层带来了它"的证据；把 peer 算进来只会无端放宽豁免面。
- *
- * 名字先过 {@link SAFE_PACKAGE_NAME}：清单里的名字来自任意包的 package.json，未过滤时
- * `../` 之类会逃出 `node_modules` 目录。
- * @param profileDir - 受管 profile 目录。
- * @param direct - manifest `dependencies` 里的名字（用户显式安装面）。
- * @returns 闭包内所有官方的、可解析的名字（含官方直接依赖自身）。
+ * 只从官方 scope 的直接依赖起步——闭包豁免的唯一用途是解释「官方 scope 但运行时线不提供」
+ * 的名字，而这类名字的合法来源就是用户显式安装的官方层；从任意直接依赖起步会让第三方包夹带
+ * 一个官方 scope 名字并静默通过。peerDependencies 同样不纳入：profile 固定
+ * `autoInstallPeers: false`，peer 不会被物化，也不构成"这一层带来了它"的证据。
+ * 名字先过 SAFE_PACKAGE_NAME，否则 `../` 之类会逃出 node_modules。
  */
 function profileLayerClosure(profileDir: string, direct: ReadonlySet<string>): Set<string> {
   const seen = new Set<string>()
@@ -828,12 +736,9 @@ function profileLayerClosure(profileDir: string, direct: ReadonlySet<string>): S
     const name = queue.pop() as string
     if (seen.has(name)) continue
     seen.add(name)
-    // Only OFFICIAL nodes expand the walk:
-    // the real closures carry third-party packages (zod, react), and letting one
-    // of them declare an official-scope dependency would explain an arbitrary
-    // official name — a third-party layer one hop further out would silently
-    // pass. The name itself stays in `seen` (the layer did bring it in), its
-    // manifest is simply not consulted.
+    // Only OFFICIAL nodes expand the walk: the real closures carry third-party packages, and
+    // letting one declare an official-scope dependency would explain an arbitrary official name.
+    // The name itself stays in `seen` (the layer did bring it in); its manifest is not consulted.
     if (!officialScope(name)) continue
     if (!SAFE_PACKAGE_NAME.test(name)) continue
     const manifest = readPackageManifest(join(profileDir, 'node_modules', name, 'package.json'))
@@ -850,19 +755,14 @@ function profileLayerClosure(profileDir: string, direct: ReadonlySet<string>): S
   return seen
 }
 
-/** 一个未知错误的简短文案（复验跳过理由用）。实现为共享叶子 error-text.ts；
- *  本地名保留以免改动调用点。 */
+/** 一个未知错误的简短文案（复验跳过理由用）；实现为共享叶子 error-text.ts，本地名保留以免改动调用点。 */
 function messageOfUnknown(error: unknown): string {
   return errorMessage(error)
 }
 
 /**
- * 违例 → 面向操作者的响亮文案（两端共用）。
- * @param findings - 复验产出的违例项。
- * @param runtimeVersion - 目标实例的运行时世代（无版本事实时的世代臂文案用）。
- * @param familyVersions - 可选版本事实；命中该名字时改述为"不是本实例运行时代为提供的版本"，
- *   因为对改域 vendored 包来说世代串本身就不是它的版本尺度。
- * @returns 分号连接的单行文案。
+ * 违例 → 面向操作者的响亮文案（两端共用）。命中版本事实时改述为"不是本实例运行时代为提供的
+ * 版本"，因为对改域 vendored 包来说世代串本身就不是它的版本尺度。
  */
 export function describeFamilyFindings(
   findings: readonly FamilyConsistencyFinding[],
@@ -882,8 +782,8 @@ export function describeFamilyFindings(
 }
 
 /**
- * 从已装清单读一个包的版本（可选辅助；name 必须已过 PLUGIN_NAME_PATTERN 类白名单）。
- * 返回 null 表示读不到（未装/无清单/读失败）——投影里就是 `version: null`，绝不让它成为判据。
+ * 从已装清单读一个包的版本（name 必须已过白名单）。null = 读不到（未装/无清单/读失败）——
+ * 投影里就是 `version: null`，绝不让它成为判据。
  */
 export function readInstalledVersion(profileDir: string, name: string): string | null {
   if (!SAFE_PACKAGE_NAME.test(name)) return null

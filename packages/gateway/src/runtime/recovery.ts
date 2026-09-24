@@ -1,9 +1,8 @@
 /**
- * Gateway runtime recovery actions (design 18 §3.6/§9.3): the metadata FATAL
- * rescue, the pre-rollback stash restore and the retry-apply/retry-restore
- * resumes. The module owns no mutable state; it receives the manager's guards,
- * fence, resolution facts, startup driver (for the shared resume tail) and the
- * projection-fact setters.
+ * Gateway runtime recovery actions: metadata FATAL rescue, pre-rollback stash
+ * restore and the retry-apply/retry-restore resumes. The module owns no mutable
+ * state; it receives the manager's guards, fence, facts, startup driver and
+ * projection setters.
  */
 import {
   completeInterruptedRestore,
@@ -68,20 +67,15 @@ export function createRuntimeRecoveryActions(deps: RuntimeRecoveryActionsDeps): 
   } = deps
   const { invalidateDiskCache, setStartupBlockReason, setOperationError, setRestartOutcome } = deps.hooks
 
-  /** True while a durable metadata-recovery transaction is
-   *  pending (engine record mid-flight) or the recovery marker is corrupt.
-   *  The boot path consults this BEFORE starting the managed dsh — an
-   *  archived/metadata-cleared state must never serve DSH_HOME through the
-   *  builtin anchor without the probe gate.
-   *
-   *  The predicate is the shared `projectMetadataRecoveryGate().startupMustBlock`
-   *  (2026-12 single-sourcing): its `needsRecovery` sibling carries the DIFFERENT
-   *  rule the recover-metadata eligibility uses (selection-corrupt and the
-   *  marker-rescue conjunction), so the boot gate must not reuse it.
-   *  2026-12 review (3.1): the answer is tri-state — a metadata READ failure is
-   *  'unknown', never false. The boot path is fail-closed on it (starting the
+  /** True while a durable metadata-recovery transaction is pending (engine record
+   *  mid-flight) or the recovery marker is corrupt. The boot path consults this
+   *  BEFORE starting the managed dsh — an archived/metadata-cleared state must
+   *  never serve DSH_HOME through the builtin anchor without the probe gate.
+   *  Tri-state: a metadata READ failure is 'unknown', never false — starting the
    *  managed dsh on an unreadable state directory is exactly the fail-open this
-   *  gate prevents, and the recover-metadata escape would fail on the same read). */
+   *  gate prevents, so the boot path is fail-closed on it. startupMustBlock is the
+   *  shared single source; the boot gate must NOT reuse its needsRecovery sibling,
+   *  which encodes the different recover-metadata rule. */
   function metadataRecoveryPending(): boolean | 'unknown' {
     if (platform === 'win32') return false
     try {
@@ -89,12 +83,9 @@ export function createRuntimeRecoveryActions(deps: RuntimeRecoveryActionsDeps): 
       const markerRescueAvailable = health.status === 'recovery-marker-corrupt'
         && inspectCorruptMetadataRecoveryMarker(baseDir).recoverable
       if (projectMetadataRecoveryGate(health, { markerRescueAvailable }).startupMustBlock) return true
-      // B2 acceptance residual (a): the shared startup transaction refuses to
-      // resolve a runtime when the known-good ledger is corrupt/unreadable
-      // (workspace-facts.ts activationFacts -> knownGoodMetadataRefusal). Without
-      // this preflight the throw would tear the whole gateway down and leave no
-      // recovery route; answering 'unknown' keeps the gateway up with the managed
-      // dsh stopped and the operator told to fix the state directory.
+      // A corrupt/unreadable known-good ledger makes the shared startup transaction
+      // throw; without this preflight that tear-down would leave no recovery route,
+      // so answer 'unknown' and keep the gateway up with the managed dsh stopped.
       if (listKnownGoodVersionsState(baseDir).kind !== 'ok') return 'unknown'
       return false
     } catch {
@@ -102,11 +93,9 @@ export function createRuntimeRecoveryActions(deps: RuntimeRecoveryActionsDeps): 
     }
   }
 
-  /** Metadata FATAL rescue (desktop parity, main.ts executeMetadataRecovery
-   *  mirror): archives corrupt selection metadata byte-for-byte while keeping a
-   *  full DSH_HOME copy, runs the builtin anchor through the full read-only
-   *  probe gate, and only then finalizes access. The shared engine owns the
-   *  crash-safe transaction (stash/evidence/probe-required checkpoints). */
+  /** Metadata FATAL rescue: archives corrupt selection metadata while keeping a
+   *  full DSH_HOME copy, runs the builtin anchor through the read-only probe gate,
+   *  and only then finalizes access (the shared engine owns crash safety). */
   async function recoverMetadata(): Promise<{ accepted: true }> {
     refuseRuntimeMutationOnWindows(platform)
     assertMutationIdle()
@@ -131,8 +120,7 @@ export function createRuntimeRecoveryActions(deps: RuntimeRecoveryActionsDeps): 
       || health.status === 'recovery-in-progress'
       || markerRescueAvailable
     if (getStartupBlockReason() === 'metadata-start-failed') {
-      // The metadata is healthy behind a failed resume start —
-      // recover simply retries the plain start of the builtin anchor.
+      // Metadata is healthy behind a failed resume start — recover retries the plain start.
       if (!writeFence.isDisposed()) {
         await plane.startLocal()
         plane.refreshLocalExposure()
@@ -166,15 +154,14 @@ export function createRuntimeRecoveryActions(deps: RuntimeRecoveryActionsDeps): 
     writeFence.beginActivation()
     try {
       await plane.stopLocal()
-      // engine requires failure-free? no: engine handles
+
       result = health.status === 'recovery-marker-corrupt'
         ? await rescueCorruptMetadataRecoveryMarker(engineOptions)
         : await recoverRuntimeMetadata(engineOptions)
     } catch (error) {
       setOperationError(sanitizeRouteError(error instanceof Error ? error.message : String(error)))
-      // Engine invariants throw without a code: keep the failure loud but
-      // mapped (409), never a bare 500 — the corrupt state remains readable
-      // and the route stays retryable.
+      // Engine invariants throw without a code: keep the failure loud but mapped
+      // (409), never a bare 500 — the corrupt state stays readable and retryable.
       const code = (error as { code?: unknown }).code
       if (typeof code !== 'string') {
         throw Object.assign(error instanceof Error ? error : new Error(String(error)), { code: 'runtime_activation_failed' })
@@ -192,9 +179,8 @@ export function createRuntimeRecoveryActions(deps: RuntimeRecoveryActionsDeps): 
           await plane.startLocal()
           plane.refreshLocalExposure()
         } catch (error) {
-          // A failed resume start must stay recoverable — the
-          // metadata is healthy now, so keep a dedicated sentinel the recover
-          // route resolves by retrying the plain start.
+          // A failed resume start must stay recoverable: the metadata is healthy
+          // now, so arm the 'metadata-start-failed' sentinel the recover route retries.
           setStartupBlockReason('metadata-start-failed')
           const resumeError = sanitizeRouteError(error instanceof Error ? error.message : String(error))
           setOperationError(resumeError)
@@ -208,24 +194,22 @@ export function createRuntimeRecoveryActions(deps: RuntimeRecoveryActionsDeps): 
       return { accepted: true }
     }
     if (result.status === 'restore-blocked') {
-      // Engine outcome name clash: this is a metadata-recovery transaction
-      // blocked on an interrupted SNAPSHOT restore — retry-restore resumes it.
+      // This metadata-recovery transaction is blocked on an interrupted SNAPSHOT
+      // restore (the engine's 'restore-blocked' name) — retry-restore resumes it.
       setStartupBlockReason(result.restoreOutcome === 'half' ? 'restore-half' : 'restore-incomplete')
       setOperationError(result.error)
       return { accepted: true }
     }
-    // probe-failed (or unexpected status): keep the durable record and the
-    // managed dsh stopped; the recover route stays eligible to resume.
+    // probe-failed (or unexpected status): keep the durable record and the managed
+    // dsh stopped; the recover route stays eligible to resume.
     setStartupBlockReason('metadata-probe-failed')
     setOperationError(sanitizeRouteError(result.error || 'metadata recovery probe failed'))
     return { accepted: true }
   }
 
-  /** Restore the newest pre-rollback stash over DSH_HOME (desktop parity,
-   *  main.ts RUNTIME_RESTORE_PRE_ROLLBACK): stash-name whitelist →
-   *  stop the managed dsh → shared crash-safe restorePreRollback →
-   *  resume/blocked projection. env stays allowed (data recovery is
-   *  source-independent, design 18 §3.6); win32 read-only refuses. */
+  /** Restore the newest pre-rollback stash over DSH_HOME: stash-name whitelist →
+   *  stop the managed dsh → shared crash-safe restorePreRollback → resume/blocked
+   *  projection. env stays allowed (data recovery is source-independent); win32 refuses. */
   async function restorePreRollbackStash(stashName: string): Promise<{ accepted: true }> {
     refuseRuntimeMutationOnWindows(platform)
     assertMutationIdle()
@@ -251,20 +235,17 @@ export function createRuntimeRecoveryActions(deps: RuntimeRecoveryActionsDeps): 
       invalidateDiskCache()
     }
     if (restoreError !== null) {
-      // Desktop parity: an errored restore is recorded, not hard-blocked —
-      // bring the managed dsh back up and surface the failure loudly.
+      // An errored restore is recorded, not hard-blocked: bring the managed dsh
+      // back up and surface the failure loudly.
       await resumeAfterBlockedStartup()
       throw Object.assign(new Error(`pre-rollback restore failed: ${restoreError}`), { code: 'restore_failed' })
     }
     switch (outcome) {
       case 'complete': {
-        // Resume the runtime through a full startup transaction. Only a CLEAN
-        // verdict may clear the blocked projection: the resume can surface its
-        // own terminal state (FATAL metadata discovered at startup, an
-        // env-override probe failure on the env boot path, swap-attempted…)
-        // and that verdict must stay visible for its own recovery surface —
-        // unconditionally clearing it here would leave the managed dsh
-        // stopped behind a clean status and re-open an unprobed start.
+        // Resume through a full startup transaction. Only a CLEAN verdict may clear
+        // the blocked projection: the resume can surface its own terminal state
+        // (FATAL metadata, an env-override probe failure, swap-attempted…), which
+        // must stay visible for its own recovery surface.
         const resumed = await resumeAfterBlockedStartup()
         if (resumed.blockedReason === null) {
           setStartupBlockReason(null)
@@ -273,28 +254,24 @@ export function createRuntimeRecoveryActions(deps: RuntimeRecoveryActionsDeps): 
         return { accepted: true }
       }
       case 'half':
-        // Desktop parity: the restore left a durable marker — keep the
-        // managed dsh down and project restore-blocked so retry-restore
-        // resumes the journaled transaction.
+        // The restore left a durable marker: keep the managed dsh down and project
+        // restore-half so retry-restore resumes the journaled transaction.
         setStartupBlockReason('restore-half')
         setOperationError(null)
         return { accepted: true }
       case 'incomplete':
       default:
-        // Untrustworthy/missing stash or unsupported marker: DSH_HOME was
-        // never touched — restart the instance and refuse loudly (desktop
-        // incomplete branch semantics).
+        // Untrustworthy/missing stash or unsupported marker: DSH_HOME was never
+        // touched — restart the instance and refuse loudly.
         await resumeAfterBlockedStartup()
         throw Object.assign(new Error('pre-rollback stash is missing or untrustworthy; restore refused'), { code: 'invalid_target' })
     }
   }
 
-  /** Shared tail of retry-apply / retry-restore: re-run the startup
-   * transaction and, on a clean verdict, bring the managed dsh up — the same
-   * pairing the gateway start() path performs after the first transaction.
-   * NOTE: if the transaction is clean but startLocal() then throws, the
-   * retry target marker was already cleared pre-transaction, so the same
-   * retry route answers 409 no_retry_target — recovery is a gateway restart;
+  /** Shared tail of retry-apply / retry-restore: re-run the startup transaction
+   * and, on a clean verdict, bring the managed dsh up. If the transaction is clean
+   * but startLocal() then throws, the retry marker was already cleared pre-transaction,
+   * so the same route answers 409 no_retry_target; recovery is a gateway restart and
    * the state stays honest (operationError set, connectionState not ready). */
   async function resumeAfterBlockedStartup(): Promise<{ blockedReason: string | null }> {
     const result = await startup.startupTransaction()
@@ -320,11 +297,9 @@ export function createRuntimeRecoveryActions(deps: RuntimeRecoveryActionsDeps): 
     if (!interrupted) {
       throw Object.assign(new Error('no interrupted apply to retry (swap-attempted or snapshot-failed)'), { code: 'no_retry_target' })
     }
-    // Mirror the desktop retry-apply (design 18 §3.6): clear the interrupted-
-    // switch markers, then re-run the startup transaction so the pending switch
-    // proceeds (snapshot → pointer switch → spawn → probe gate). snapshot-failed
-    // is included: the gateway must have a NON-destructive recovery
-    // from a snapshot failure, exactly like the desktop's canRetryApply.
+    // Clear the interrupted-switch markers, then re-run the startup transaction so
+    // the pending switch proceeds (snapshot → pointer switch → spawn → probe gate).
+    // snapshot-failed is included so a snapshot failure has a non-destructive recovery.
     writeOverride(baseDir, { ...record!, swapAttempted: false, lastOutcome: null, lastError: null })
     const result = await resumeAfterBlockedStartup()
     if (result.blockedReason === null) setOperationError(null)
@@ -334,17 +309,15 @@ export function createRuntimeRecoveryActions(deps: RuntimeRecoveryActionsDeps): 
   async function retryRestore(): Promise<{ accepted: boolean; blockedReason: string | null }> {
     refuseRuntimeMutationOnWindows(platform)
     assertMutationIdle()
-    // Interrupted data-restore continuation is source-independent — the desktop
-    // never refuses env here, so neither does the gateway (retry-apply stays
-    // env-refused: it resumes a VERSION switch).
+    // Interrupted data-restore continuation is source-independent — the desktop never
+    // refuses env here, so neither does the gateway (retry-apply stays env-refused).
     assertNoOrdinaryPending()
     const blockReason = getStartupBlockReason()
     if (blockReason === null || !RETRY_RESTORE_REASONS.has(blockReason)) {
       throw Object.assign(new Error('no interrupted restore to retry'), { code: 'no_retry_target' })
     }
     // The startup transaction itself performs the restore completion (its
-    // completeInterruptedRestore dep); re-running it continues the durable
-    // journal instead of starting a fresh snapshot.
+    // completeInterruptedRestore dep); re-running it continues the durable journal.
     return { accepted: true, blockedReason: (await resumeAfterBlockedStartup()).blockedReason }
   }  return { metadataRecoveryPending, recoverMetadata, restorePreRollbackStash, retryApply, retryRestore }
 }

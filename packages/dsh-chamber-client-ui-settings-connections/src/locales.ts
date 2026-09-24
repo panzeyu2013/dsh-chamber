@@ -1,4 +1,4 @@
-/** `dsh-chamber.settings.connections` namespace dictionaries: the connections settings section copy (design 05 §5). */
+/** `dsh-chamber.settings.connections` namespace dictionaries: the connections settings section copy. */
 
 export const zh = {
   nav: '连接',
@@ -65,9 +65,7 @@ export const zh = {
   serviceStop: '停止服务',
   serviceCheck: '查询服务状态',
   restartInstance: '重启实例',
-  /** Gateway rows restart the MANAGED dsh through the gateway's own runtime
-   *  controller (/chamber/runtime/restart, design 18 §9.3) — reachable only
-   *  while the transport is connected, hence the disabled hint. */
+  /** Gateway rows restart the MANAGED dsh through the gateway's own runtime controller — reachable only while the transport is connected, hence the disabled hint. */
   serviceUnconfigured: '未配置服务',
   logs: '连接日志',
   gatewayHostLogs: '网关主机日志',
@@ -79,8 +77,7 @@ export const zh = {
   restartManagedDshBusy: '重启中…',
   restartManagedDshOk: '已重启并恢复就绪',
   restartManagedDshAccepted: '重启已接受，实例仍在恢复中…',
-  // 409 拒绝的本地化投影（managed-restart.ts 的 classifyRuntimeRefusal）：核心
-  // 路由的英文 body.error 不逐字上屏，只保留 code 以维持可诊断性。
+  // 409 拒绝的本地化投影：核心路由的英文 body.error 不逐字上屏，只保留 code 以维持可诊断性。
   restartRefusedNotRunning: '重启被拒绝：托管 dsh 未在运行（409 {code}）——请改用「启动实例」',
   restartRefusedBusy: '重启被拒绝：运行时正忙或正在恢复（409 {code}），请稍后重试',
   restartNotConnected: '连接后可用',
@@ -92,9 +89,7 @@ export const zh = {
   delete: '删除',
   deleteTitle: '删除该连接？',
   deleteDescription: '连接将从注册表移除，当前传输随之断开，且本机保存的密码或令牌会被清除；远端内容不受影响。',
-  // 「删除」词族专用连接删除域；插件管理域统一为 移除（动作层）/卸载（技术
-  // 后果或复合恢复语境层）——插件域请用
-  // pluginsRemoveRow/pluginsConfirmRemove/pluginsRemoving。
+  // 「删除」词族专用连接删除域；插件管理域统一为 移除（动作层）/卸载（技术后果或复合恢复语境层）。
   deleteConfirm: '删除',
   deleting: '删除中…',
   deleteNotEffective: '删除未生效：主进程拒绝了该变更（连接状态变化或状态目录不可写？）',
@@ -192,19 +187,16 @@ export const zh = {
   pluginDiagnosticBundleFailed: 'bundle 加载失败',
   pluginDiagnosticRestartRequired: '需要重启',
   pluginDiagnosticInstanceVersionConflict: '实例间插件版本不同',
-  // 05 §4「降级呈现」：boot 成功但已知缺口（结构化事实来自
-  // chamberBridge 投影的 bootGap）。与上面的「客户端插件状态」是两条不同的事实
-  // ——图通道 ok 不代表服务都在，所以缺口在场时不渲染 ok 那一行。
+  // boot 成功但已知缺口（结构化事实来自 chamberBridge 投影的 bootGap）：与「客户端插件状态」是两条不同
+  // 事实——图通道 ok 不代表服务都在，缺口在场时不渲染 ok 那一行。
   bootGapLabel: '前端能力受限',
   bootGapGeneric: '部分界面可能缺席',
   bootGapGraphUnavailable: '本次挂载没有加载该实例的前端插件（会话正文等界面可能缺席）',
   bootGapLocalGraphNotInjected: '本地实例没有注入客户端插件图（接口 404 或缺少该方法）——这是应用侧安装/seed 产物不完整，本次挂载没有加载它的前端插件',
   bootGapRequiredServicesMissing: '没有提供本页所需的前端服务（{services}）；等待它们的界面不会注册',
   bootGapDeferredRegistrationFailed: '{n} 个前端插件家族没有注册成功（它们的界面与插槽本次缺失）',
-  // 本地实例的运行时管理在 win32 上是只读投影，所以本地分支
-  // 只给可执行动作（重启本地 dsh / 重新挂载 / 提交诊断）；"升级/对齐运行时"
-  // 只出现在远程来源分支。本组件拿不到来源种类（连接卡片与插件对话框共用），
-  // 因此这里把两个分支都写清楚，用户按自己的来源种类对号入座。
+  // 本地实例的运行时管理在 win32 上是只读投影，所以本地分支只给可执行动作；"升级/对齐运行时"只出现在
+  // 远程来源分支。本组件拿不到来源种类，故两个分支都写清楚，用户按自己的来源对号入座。
   bootGapHint: '本地实例：先在 设置 → 连接 中重启本地 dsh，再重新挂载该来源；仍不恢复时复制诊断信息反馈（本地实例的客户端插件图由应用自身注入，属于安装完整性问题）。远程来源：常见原因是该实例的 dsh 运行时与本次页面所需的前端插件不匹配——在该连接的设置中打开 dsh 运行时 分节，升级/对齐到一致版本，然后重新挂载该来源（就绪来源通常会自动重挂一次，也可以在该来源页面上用「重试」）。',
   pluginsOpen: '管理插件',
   pluginsTitle: '插件',
@@ -256,8 +248,7 @@ export const zh = {
   pluginsColName: '包名',
   pluginsColCategory: '类别',
   pluginsColStatus: '状态',
-  // 第三方已安装行的「生效状态」列头（Loader 快照派生；与 diff 表的
-  // pluginsColStatus 行类别列区分——本地/远端列表专用列头）。
+  // 第三方已安装行的「生效状态」列头（Loader 快照派生；与 diff 表的行类别列区分）。
   pluginsColLiveState: '生效状态',
   pluginsColAction: '操作',
   pluginsFilterAll: '全部',
@@ -273,22 +264,16 @@ export const zh = {
   pluginsAddSpecPlaceholder: '如 pkg 或 pkg@^1.2.3',
   pluginsAddSpecInvalid: '请输入合法的包名或 name@version（仅 registry 名 + 安全版本）。',
   pluginsAddInstall: '安装',
-  // 安装中短文案：busyTasks 是「正在执行变更…」全宽文案，
-  // 作安装按钮 busy 文案会导致按钮宽度跳动 ~80-100px；安装中专用短文案把
-  // 跳动压到 ~13-23px（busyTasks 保留给 footer/应用态）。
+  // 安装中短文案：busyTasks 全宽文案作按钮 busy 会导致宽度跳动，专用短文案避免（busyTasks 保留给 footer/应用态）。
   pluginsAddInstalling: '安装中…',
   pluginsAddSearch: '搜索',
   pluginsAddSearchPlaceholder: '搜索 npm registry…',
   pluginsAddFolder: '从本地导入',
-  // 本地导入 busy 短文案（与 pluginsAddInstalling 同族）：导入中按钮显示
-  // 「导入中…」，避免「安装」按钮误显「安装中…」。
-  // 导入源 = 插件源码文件夹或现成 .tgz 插件包（macOS
-  // 选择器可两者任选；按钮语义随之从「文件夹」放宽为「本地」）。
+  // 本地导入 busy 短文案（与 pluginsAddInstalling 同族）：导入中按钮显示「导入中…」，避免「安装」按钮误显
+  // 「安装中…」。导入源 = 插件源码文件夹或现成 .tgz 插件包（macOS 选择器两者皆可）。
   pluginsImporting: '导入中…',
   pluginsRemoveRow: '移除',
-  // 行级移除确认键：与共享键 deleteConfirm（「删除」，
-  // 连接删除沿用）区分——移除流程按钮与标题/描述动词一致，busy 用
-  // pluginsRemoving 而非 deleting。
+  // 行级移除确认键：与共享键 deleteConfirm（「删除」，连接删除沿用）区分，busy 用 pluginsRemoving。
   pluginsConfirmRemove: '移除',
   pluginsRemoving: '移除中…',
   pluginsLocalRemoveTitle: '移除本地插件？',
@@ -298,10 +283,9 @@ export const zh = {
   inventoryNoThirdParty: '没有第三方插件',
   chamberRemoteFailed: '远端：已注入（加载失败）',
   pluginDisabled: '已停用',
-  // 第三方行生效状态 chips（Loader 快照派生，local/gateway/http 行内状态）：
-  // 生效中（ok）/ 加载中（muted）；已停用复用 pluginDisabled，加载失败复用
-  // chamberBadgeFailed。快照无同名行时状态格中性（无「重启后生效」承诺 ——
-  // bundle 层的挂载行不带包名，无从判定，见 plugin-inventory-text.ts）。
+  // 第三方行生效状态 chips（Loader 快照派生，local/gateway/http 行内状态）：生效中（ok）/ 加载中（muted）；
+  // 已停用复用 pluginDisabled，加载失败复用 chamberBadgeFailed。快照无同名行时状态格中性
+  //（无「重启后生效」承诺——bundle 层的挂载行不带包名，无从判定）。
   thirdPartyLiveActive: '生效中',
   thirdPartyLiveStarting: '加载中',
   // gateway 本地导入（文件夹/.tgz）成功且受控重启已生效：插件已挂载在运行实例上。
@@ -315,36 +299,33 @@ export const zh = {
   chamberSeedCacheAbsent: '网关尚未同步 chamber 组件',
   chamberVersionDrift: '版本漂移',
   chamberNotSynced: '未同步',
-  // chamber 内建表 badge 标签（plan 24 B1.5）：短标签 + 色调由渲染层映射。
+  // chamber 内建表 badge 标签：短标签 + 色调由渲染层映射。
   chamberBadgeLive: '已生效',
   chamberBadgeInjected: '已注入',
   chamberBadgeNotInjected: '未注入',
   chamberBadgeUnknown: '未知',
   chamberBadgeFailed: '加载失败',
-  // 内建表「版本」列表头（plan 24 B1.5）。
+  // 内建表「版本」列表头。
   pluginsColVersion: '版本',
-  // Phase-5 A keys（design 21 §6.6 键表清单）：单一模型视图（已安装列表/恢复面）文案。
+  // 单一模型视图（已安装列表/恢复面）文案。
   partialNofM: '已完成 {done}/{total}',
   // 与 partialNofM 拼接的「部分结果」前缀分隔符（zh 全角冒号；en 冒号 + 空格）。
   partialSep: '：',
-  // plan 24 B1.6 恢复横幅（gateway 恢复面）：实例停机/错误/重启耗尽 + journal
-  // 存在可撤销的最近成功变更时，与 recoveryUninstallRestart 按钮同区渲染。
+  // 恢复横幅（gateway 恢复面）：实例停机/错误/重启耗尽且 journal 有可撤销的最近成功变更时渲染。
   recoveryUndoBanner: '实例当前未运行；最近一次成功的插件变更可能是原因——可撤销该变更，恢复到变更前的插件清单。',
   busyTasks: '正在执行变更…',
   deferredOfflineNote: '将缓存并在实例就绪后自动安装；可能在你断开后执行',
   profileAbsentBanner: '实例尚未初始化，将缓存安装意图，实例就绪后自动安装',
   profileCorruptBanner: '托管实例的插件清单损坏（profile_corrupt）。请在网关侧恢复或重试',
-  // design 21 §6.2 读/写面共享栅栏：读面 409 是「实例正在变更
-  // 插件」的可重试忙态——单独成键，既不与 profile_absent/profile_corrupt 同纹，
-  // 也不与「网关不可达/500」的读取失败同纹；{code} = 服务端拒绝码（无码回落 409）。
+  // 读/写面共享栅栏：读面 409 是「实例正在变更插件」的可重试忙态——单独成键，既不与
+  // profile_absent/profile_corrupt 同纹，也不与「网关不可达/500」的读取失败同纹；{code} = 服务端拒绝码。
   gatewayReadFencedBusy: '实例正在变更插件（409 {code}），插件清单暂不可读——请稍后点「刷新」重试',
   instanceNotReadyZone: '实例未就绪——chamber 区降级显示',
   installedFromMask: '本地副本',
   installedTab: '已安装',
   installedEmpty: '尚未安装第三方插件',
   installedAddHint: '在下方添加区按包名搜索安装，或从本地文件夹 / .tgz 插件包导入。',
-  // design 21 §6.11.5 受保护行投影（后端 rows 驱动，渲染端只渲染不推导）：
-  // 五个角色徽标 + 受保护行只读提示 + 旧 gateway 无 rows 的回退提示（§6.11.7）。
+  // 受保护行投影（后端 rows 驱动，渲染端只渲染不推导）：五个角色徽标 + 只读提示 + 旧 gateway 无 rows 的回退提示。
   pluginsRoleComposition: '安装组合',
   pluginsRoleSeed: 'chamber 播种',
   pluginsRoleLayer: '用户层',
@@ -368,7 +349,7 @@ export const zh = {
   startManagedDshFailed: '启动失败：{error}',
   startManagedDshRefused: '启动被拒绝：当前状态不可启动或运行时正忙（409 {code}），请刷新后重试',
   restartNeededHint: '变更已应用，重启实例后生效',
-  // UX 重构（design 21 §6.6 已登记；原 todo 落地后移出）：对账入口/事前警告/横幅指引/服务提示。
+  // 对账入口 / 事前警告 / 横幅指引 / 服务提示。
   pluginsDiffSummary: '与本地插件组合存在 {n} 处差异——展开对账',
   pluginsDiffCollapse: '收起对账',
   pluginsRestartUnconfiguredHint: '该实例未配置 systemd 服务：变更将只应用、不自动重启，需手动重启远端后才生效。',
@@ -445,9 +426,7 @@ export const en: Record<SettingsConnectionsKey, string> = {
   serviceStop: 'Stop service',
   serviceCheck: 'Check service status',
   restartInstance: 'Restart instance',
-  /** Gateway rows restart the MANAGED dsh through the gateway's own runtime
-   *  controller (/chamber/runtime/restart, design 18 §9.3) — reachable only
-   *  while the transport is connected, hence the disabled hint. */
+  /** Gateway rows restart the MANAGED dsh through the gateway's own runtime controller — reachable only while the transport is connected, hence the disabled hint. */
   serviceUnconfigured: 'No service configured',
   logs: 'Connection logs',
   gatewayHostLogs: 'Gateway host logs',
@@ -459,9 +438,8 @@ export const en: Record<SettingsConnectionsKey, string> = {
   restartManagedDshBusy: 'Restarting…',
   restartManagedDshOk: 'Restarted and ready',
   restartManagedDshAccepted: 'Restart accepted; the instance is still recovering…',
-  // Localized projection of the runtime routes' 409 refusals (managed-restart.ts
-  // classifyRuntimeRefusal): the core's English body.error is not shown
-  // verbatim — the code stays visible so a report is still diagnosable.
+  // Localized projection of the runtime routes' 409 refusals: the core's English body.error is
+  // not shown verbatim — the code stays visible so a report is still diagnosable.
   restartRefusedNotRunning: 'Restart refused: the managed dsh is not running (409 {code}) \u2014 use "Start instance" instead',
   restartRefusedBusy: 'Restart refused: the runtime is busy or recovering (409 {code}); retry shortly',
   restartNotConnected: 'Available after connecting',
@@ -473,10 +451,8 @@ export const en: Record<SettingsConnectionsKey, string> = {
   delete: 'Delete',
   deleteTitle: 'Delete this connection?',
   deleteDescription: 'The connection is removed from the registry, its transport disconnects, and its locally stored password or token is cleared; remote content is not touched.',
-  // The "Delete" word family is reserved for connection deletion; the plugin
-  // domain uses Remove (action layer) / Uninstall (consequence or composite
-  // recovery layer; see pluginsRemoveRow /
-  // pluginsConfirmRemove / pluginsRemoving).
+  // The "Delete" word family is reserved for connection deletion; the plugin domain uses Remove
+  // (action layer) / Uninstall (consequence or composite recovery layer).
   deleteConfirm: 'Delete',
   deleting: 'Deleting…',
   deleteNotEffective: 'Delete did not land: the main process refused the change (the connection state changed or the state directory is unwritable?)',
@@ -631,9 +607,7 @@ export const en: Record<SettingsConnectionsKey, string> = {
   pluginsColName: 'Name',
   pluginsColCategory: 'Category',
   pluginsColStatus: 'Status',
-  // Live-state column header for the third-party installed lists (Loader
-  // snapshot derived; distinct from the diff table's pluginsColStatus
-  // row-kind column — this header is for the local/remote list grids).
+  // Live-state column header for the third-party installed lists (Loader-derived; distinct from the diff table's row-kind column).
   pluginsColLiveState: 'Live state',
   pluginsColAction: 'Actions',
   pluginsFilterAll: 'All',
@@ -649,22 +623,19 @@ export const en: Record<SettingsConnectionsKey, string> = {
   pluginsAddSpecPlaceholder: 'e.g. pkg or pkg@^1.2.3',
   pluginsAddSpecInvalid: 'Enter a valid package name or name@version (registry name + safe version only).',
   pluginsAddInstall: 'Install',
-  // Short busy copy: busyTasks ("A change is running…")
-  // makes the install button jump ~80-100px wide while busy; this short key
-  // caps the jump at ~13-23px (busyTasks stays for footer/apply states).
+  // Short busy copy: busyTasks ("A change is running…") would make the install button jump wide while
+  // busy; this caps the jump (busyTasks stays for footer/apply states).
   pluginsAddInstalling: 'Installing…',
   pluginsAddSearch: 'Search',
   pluginsAddSearchPlaceholder: 'Search npm registry…',
   pluginsAddFolder: 'Import from local',
-  // Local-import busy copy (same family as pluginsAddInstalling): the import
-  // button shows "Importing…" while busy. The import source is a plugin source
-  // folder OR a ready .tgz plugin archive (macOS picker offers both; the label
-  // says "local" to cover both).
+  // Local-import busy copy (same family as pluginsAddInstalling): the import button shows
+  // "Importing…" while busy. The import source is a plugin source folder OR a ready .tgz archive
+  // (macOS picker offers both; the label says "local" to cover both).
   pluginsImporting: 'Importing…',
   pluginsRemoveRow: 'Remove',
-  // Row-remove confirm keys: distinct from the shared
-  // deleteConfirm ("Delete", kept for connection deletion) so the remove flow
-  // keeps one verb across button/title/description; busy uses pluginsRemoving.
+  // Row-remove confirm keys: distinct from the shared deleteConfirm ("Delete", kept for connection
+  // deletion) so the remove flow keeps one verb across button/title/description.
   pluginsConfirmRemove: 'Remove',
   pluginsRemoving: 'Removing…',
   pluginsLocalRemoveTitle: 'Remove this local plugin?',
@@ -674,16 +645,12 @@ export const en: Record<SettingsConnectionsKey, string> = {
   inventoryNoThirdParty: 'No third-party plugins',
   chamberRemoteFailed: 'Remote: injected (failed to load)',
   pluginDisabled: 'Disabled',
-  // Third-party row live-state chips (Loader-snapshot derived, in-row state
-  // for the local / gateway / http zones): Active (ok) / Starting (muted);
-  // Disabled reuses pluginDisabled, failed to load reuses chamberBadgeFailed.
-  // No matching snapshot entry leaves the cell neutral — no "activates on
-  // restart" promise is derivable for a bundle layer (see
-  // plugin-inventory-text.ts).
+  // Third-party row live-state chips (Loader-derived): Active (ok) / Starting (muted); Disabled reuses
+  // pluginDisabled, failed to load reuses chamberBadgeFailed. No matching snapshot entry leaves the cell
+  // neutral — no "activates on restart" promise is derivable for a bundle layer.
   thirdPartyLiveActive: 'Active',
   thirdPartyLiveStarting: 'Starting',
-  // Gateway local import (folder / .tgz) success with the controlled restart
-  // settled: the plugin is mounted on the running instance.
+  // Gateway local import (folder / .tgz) success with the controlled restart settled: the plugin is mounted on the running instance.
   materializeLive: 'Installed and live (restarted)',
   chamberSyncNow: 'Re-sync chamber components',
   chamberSyncBusy: 'Syncing…',
@@ -702,31 +669,26 @@ export const en: Record<SettingsConnectionsKey, string> = {
   chamberBadgeFailed: 'Failed to load',
   // Built-in table "version" column header (plan 24 B1.5).
   pluginsColVersion: 'Version',
-  // Phase-5 A keys (design 21 §6.6 key table): unified model view (installed list / recovery surface) copy.
+  // Unified model view (installed list / recovery surface) copy.
   partialNofM: 'Completed {done} of {total}',
   // Concatenated after partialNofM as the partial-result prefix separator (en: colon + space; zh: full-width colon).
   partialSep: ': ',
-  // plan 24 B1.6 recovery banner (gateway recovery surface): the instance is
-  // down (stopped/error/restart-exhausted) AND the journal holds an undoable
-  // latest success — rendered beside the recoveryUninstallRestart button.
+  // Recovery banner (gateway recovery surface): the instance is down AND the journal holds an undoable latest success.
   recoveryUndoBanner: 'The instance is not running; the most recent successful plugin change may be the cause \u2014 undo that change to restore the previous plugin set.',
   busyTasks: 'A change is running…',
   deferredOfflineNote: 'Will be cached and installed once the instance is ready \u2014 may run after you disconnect.',
   profileAbsentBanner: 'The instance is not initialized yet; the install intent will be cached and applied when it becomes ready.',
   profileCorruptBanner: 'The managed profile is corrupted (profile_corrupt). Restore or retry on the gateway.',
-  // design 21 §6.2 read/write fence: a 409 on a read is the
-  // retryable "the instance is changing plugins" busy state — its own key, so
-  // it never renders as profile_absent/profile_corrupt nor as the
-  // gateway-unreachable/500 read failure; {code} = the server's refusal code.
+  // Read/write fence: a 409 on a read is the retryable "the instance is changing plugins" busy state — its own key,
+  // so it never renders as profile_absent/profile_corrupt nor as the gateway-unreachable/500 read failure.
   gatewayReadFencedBusy: 'The instance is changing plugins (409 {code}); the plugin list is not readable right now \u2014 press Refresh to retry in a moment',
   instanceNotReadyZone: 'Instance not ready \u2014 chamber zone degraded',
   installedFromMask: 'Local copy',
   installedTab: 'Installed',
   installedEmpty: 'No third-party plugins installed yet',
   installedAddHint: 'Install by package name in the add area below, or import a local source folder / .tgz plugin archive.',
-  // design 21 §6.11.5 protected-row projection (backend rows drive it; the
-  // renderer only renders): five role badges + the protected-row read-only hint
-  // + the old-gateway no-rows fallback hint (§6.11.7).
+  // Protected-row projection (backend rows drive it; the renderer only renders): five role badges + the
+  // protected-row read-only hint + the old-gateway no-rows fallback hint.
   pluginsRoleComposition: 'Composition',
   pluginsRoleSeed: 'Chamber seed',
   pluginsRoleLayer: 'User layer',
@@ -750,7 +712,7 @@ export const en: Record<SettingsConnectionsKey, string> = {
   startManagedDshFailed: 'Start failed: {error}',
   startManagedDshRefused: 'Start refused: the current state is not startable or the runtime is busy (409 {code}); refresh and retry',
   restartNeededHint: 'Applied; restart the instance to activate',
-  // design 21 §6.6: reconcile entry / pre-warning / banner guidance / service hint.
+  // reconcile entry / pre-warning / banner guidance / service hint.
   pluginsDiffSummary: 'There are {n} differences vs the local plugin set \u2014 expand reconcile',
   pluginsDiffCollapse: 'Collapse reconcile',
   pluginsRestartUnconfiguredHint: 'No systemd service is configured on this instance: changes will be applied without an automatic restart \u2014 restart the remote manually for them to take effect.',

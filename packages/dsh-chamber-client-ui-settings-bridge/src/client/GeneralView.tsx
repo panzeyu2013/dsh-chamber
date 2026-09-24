@@ -1,61 +1,13 @@
 /**
- * Chamber-global「客户端」section (design 14 D7 / design 15 v1 flat form) — the
- * settings shell's `__general` fixed entry content, titled by the same
- * `clientNav` key as its nav cell (the official section is the one named
- * 通用设置/General). Organized in OpenChamber-
- * style control groups (group headings + flat rows), styled with the settings
- * panel's design language (`--dsw-alias-*` tokens).
- *
- * Layout: compact cards —「text left/top, control right/bottom」. Short
- * toggle groups (启动与关闭) are a two-column card grid
- * (.generalGrid + .generalCard, auto-fit collapses on narrow panels); the
- * 运行 group is the three-column variant (.generalGridTriple — its three
- * short toggle cards stay on one row), the
- * two radio pairs (关闭窗口时 / 通知时机) render as slider-style segmented
- * controls (SegmentedControl: dsh business-blue thumb + inverted selected text —
- * see SegmentedControl.tsx), the notification master
- * toggle as the shared `Switch`
- * primitive (36x20 track + round thumb, role=switch, required accessible name),
- * and the three notification-event toggles
- * share one line of borderless rows (.generalEventRow). The notifications
- * SUB-SETTINGS (通知时机 / 事件开关 / 测试通知) stay COLLAPSED while the master
- * switch is off — they unfold in a single bordered card (.generalNotifyCard)
- * only while notifications are enabled (the configuration itself is unchanged,
- * just hidden). The master switch itself is a BORDERLESS disclosure row
- * (.generalSwitchRow) — the sub-settings card is the group's only border, so
- * the whole group carries one card instead of five. Every control stays a
- * native checkbox/radio or the shared primitive underneath (no custom widgets).
- *
- * Groups (all chamber-GLOBAL, owned by the main process chamber-settings.json,
- * never any instance's dsh home — 01 §2 P2):
- * - 启动与关闭: 关闭窗口行为 (windowCloseBehavior: hide-to-tray / quit);
- *   登录自启 (launchAtLogin, darwin/win32/linux — design 21 M4);
- * - 运行: 保持唤醒 (keepAwake, default off); 退出确认 (quitConfirmation,
- *   confirm only while the LOCAL instance runs — remote tunnels
- *   never prompt; update-downloaded exempt); VS Code 新窗口 (vscodeOpenInNewWindow,
- *   design 16 §3.3, default on — 会话目录在 VS Code 新窗口打开，避免
- *   VS Code 默认策略复用并替换最近活动窗口);
- * - 会话待办区 (sidebar todo area): 主开关 + 三类事件开关（会话完成时 /
- *   代理提问时 / 审批请求时，与通知组共用同一组文案），
- *   默认全开——被动呈现（仅在有内容时出现，零占用）;
- * - 通知 (design 19, merged into General — no new nav entry): 主开关 + 未读
- *   徽标开关（design 19 §3.7，独立于主开关；平台能力门 design 23 M3——
- *   win32 无任务栏 overlay，badgeSupported=false 时禁用并给出原因）+ 启用后展开的子设置
- *   (通知时机 hidden-only / always + 事件开关 complete / ask / request +
- *   「发送测试通知」);
- * - 更新 (design 11, merged into General): current version +「检查更新」+
- *   low-key status (UpdateSection).
- *
- * （design 18 §3.6：dsh 运行时块是 per-server「dsh 运行时」settings.section，
- *  由 index.ts 的 registerRuntimeSection 注册在该实例自己的 boot ctx 台账上。）
- *
- * Every mutation goes through the main-process settings IPC (settings-store),
- * which overlays the patch OPTIMISTICALLY — the control reflects the click in
- * the same frame and never flashes a disabled/dimmed state while the IPC
- * round-trip is in flight (闪烁修复); failures surface LOUDLY (never a
- * silent fake success) and roll the overlay back. The closeToTray gate
- * (dev without tray) disables the hide-to-tray option — hiding a window the
- * user could not recover would strand the app.
+ * Chamber-global「客户端」section: the settings shell's `__general` content.
+ * Groups are all chamber-GLOBAL (main-process chamber-settings.json, never an
+ * instance's dsh home): 启动与关闭 / 运行 / 会话待办区 / 通知 / 更新
+ * (UpdateSection). Notification sub-settings stay COLLAPSED while the master
+ * switch is off (config unchanged, just hidden) in one bordered card, that switch
+ * itself a borderless disclosure row. Mutations go through the settings IPC
+ * (settings-store), which overlays OPTIMISTICALLY (no disabled/dimmed flash) and
+ * rolls back on failure with the error surfaced loudly; the closeToTray gate
+ * (dev without tray) disables hide-to-tray to avoid stranding a window.
  */
 import { useCallback, useId, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 import clsx from 'clsx'
@@ -75,20 +27,15 @@ import css from './SettingsShell.module.css'
 type GeneralTranslate = (key: SettingsBridgeKey, params?: Record<string, unknown>) => string
 
 /**
- * The platform-capability projection, with the unread-badge fact read as an
- * OPTIONAL field: the desktop main process sets `badgeSupported` (false on
- * win32, design 19 §3.7 / design 23 M3), while an older main process — or a
- * renderer contract without the field — omits it. Absent therefore means
- * "assume supported" (backward compatible); only an explicit false disables
- * the control.
+ * The platform-capability projection: `badgeSupported` is read as OPTIONAL — an older
+ * main process omits it, so absent means "assume supported" (backward compatible) and
+ * only an explicit false disables the control.
  */
 type SupportedGates = ChamberSettingsStatus['supported'] & { badgeSupported?: boolean }
 
-/** One checkbox toggle in a card (grid): title + optional hint left, native
- *  checkbox right; the WHOLE card is the label so the hit target is the card.
- *  Saves are optimistic (settings-store): the checkbox reflects the click in
- *  the same frame — no disabled/dimmed flash while the IPC round-trip is in
- *  flight. A card without a hint renders title-only. */
+/** One checkbox toggle in a card (grid): title + optional hint left, native checkbox
+ *  right; the WHOLE card is the label. Saves are optimistic (settings-store), so no
+ *  disabled/dimmed flash while the IPC round-trip is in flight. */
 function ToggleCard({
   label, hint, checked, disabled, onChange,
 }: {
@@ -119,9 +66,8 @@ function ToggleCard({
   )
 }
 
-/** One notification-event toggle (one line of three): short title left,
- *  checkbox right. Disabled (un-hydrated skeleton) dims like ToggleCard.
- *  Borderless row — the enclosing .generalNotifyCard is the only border. */
+/** One notification-event toggle (one line of three): short title left, checkbox right.
+ *  Disabled (un-hydrated skeleton) dims like ToggleCard; borderless row. */
 function ToggleEvent({
   label, checked, disabled, onChange,
 }: {
@@ -145,19 +91,13 @@ function ToggleEvent({
 }
 
 /**
- * Disclosure switch row control: the shared `Switch` primitive — the
- * official 36×20 track/thumb/transition/focus vocabulary — plus the
- * disclosure relationship the row carries, because this switch unfolds the
- * sub-settings card below it.
- *
- * WHERE the pair lives: the wrapper stays a pure layout box, and
- * `aria-expanded` / `aria-controls` are written onto the primitive's OWN control
- * node through `applyDisclosureAttributes` (that module records why no wrapper
- * role can carry them: the supported roles are all widgets, and a widget around
- * the switch would nest two interactive controls). The primitive keeps ownership
- * of `role="switch"`, `aria-checked` and the accessible name, so the control
- * itself is untouched for pointer and keyboard users and the row stays a
- * `<label>` (whole-row click → the labelled control, unchanged by this fix).
+ * Disclosure switch row control: the shared `Switch` primitive plus the disclosure
+ * relationship the row carries (this switch unfolds the sub-settings card below it).
+ * The wrapper stays a pure layout box: `aria-expanded` / `aria-controls` are written
+ * onto the primitive's OWN control node through `applyDisclosureAttributes` (no wrapper
+ * role can carry them, and a widget around the switch would nest two interactive
+ * controls), so the primitive keeps `role="switch"`, `aria-checked` and the accessible
+ * name, and the row stays a `<label>`.
  */
 function DisclosureSwitch({
   label, checked, disabled, expanded, controls, onChange,
@@ -170,9 +110,8 @@ function DisclosureSwitch({
   onChange: (next: boolean) => void
 }) {
   const box = useRef<HTMLSpanElement | null>(null)
-  // Applied before paint (and re-applied whenever the disclosure state or the
-  // card id changes, and on every mount), so the control never renders a frame in
-  // which the relationship it carries is missing.
+  // Applied before paint (and whenever the disclosure state or card id changes),
+  // so the control never renders a frame in which the relationship is missing.
   useLayoutEffect(() => {
     const control = box.current?.querySelector<HTMLElement>('[role="switch"]') ?? null
     applyDisclosureAttributes(control, expanded, controls)
@@ -184,9 +123,8 @@ function DisclosureSwitch({
   )
 }
 
-/** The live notify surface, or null while the bridge is absent (button gate).
- *  The ambient `window.dshChamber` type carries the notifications surface
- *  (renderer global.d.ts, re-exported via ambient/settings-bridge.d.ts). */
+/** The live notify surface, or null while the bridge is absent (button gate);
+ *  the ambient `window.dshChamber` type carries the notifications surface. */
 function testNotifySurface(): NotificationSurface | null {
   const notifications = typeof window !== 'undefined' ? window.dshChamber?.notifications : undefined
   return notifications !== undefined && notifications.notify !== undefined ? notifications : null
@@ -197,32 +135,25 @@ function isMacPlatform(): boolean {
   return typeof window !== 'undefined' && window.dshChamber?.platform === 'darwin'
 }
 
-/** The section content (rendered inside the settings options column). */
 export function GeneralView({ t }: { t: GeneralTranslate }) {
   const status = useSyncExternalStore(subscribeSettings, getSettingsStatus)
   const [saveError, setSaveError] = useState<string | null>(null)
-  // Per-instance labelledby (useId): N-ctx shells mount one settings panel
-  // each in the SAME document — a static id would alias across panels. The
-  // radio group name itself is generated inside SegmentedControl (also useId,
-  // same scoping reason).
+  // Per-instance labelledby (useId): N-ctx shells mount one settings panel each in the
+  // SAME document — a static id would alias. The radio group name is generated inside
+  // SegmentedControl (also useId).
   const closeBehaviorLabel = useId()
   // Same scoping for the notifications-mode field label.
   const notifyModeLabel = useId()
-  // Same scoping for the unfolded notifications sub-settings (the master
-  // switch's aria-controls target).
   const notifyBodyId = useId()
-  // Same scoping for the session-todo sub-settings card (aria-controls).
   const todoBodyId = useId()
   const [notifyBusy, setNotifyBusy] = useState(false)
   const [notifyResult, setNotifyResult] = useState<TestNotifyResult | null>(null)
   /** 「打开系统设置」的结果：失败必须可见（绝不静默什么也没发生）。 */
   const [openSettingsFailed, setOpenSettingsFailed] = useState(false)
 
-  // Serial save queue: settings-store overlays each patch optimistically (the
-  // control reflects the click immediately — no busy/disabled flash), so the
-  // queue only has to keep rapid successive saves from overlapping at the
-  // bridge; the main process applies them in order (atomic write + sequential
-  // IPC handling), and the store's save sequence lets a newer overlay win.
+  // Serial save queue: settings-store overlays each patch optimistically, so the queue
+  // only has to keep rapid successive saves from overlapping at the bridge; the main
+  // process applies them in order and a newer overlay wins.
   const saveQueue = useRef<Promise<void>>(Promise.resolve())
   const save = useCallback((patch: Parameters<typeof applySettingsPatch>[0]) => {
     setSaveError(null)
@@ -233,9 +164,8 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
       })
   }, [])
 
-  /** 「发送测试通知」— bypasses the settings gates in the main process (design
-       19 §3.3: kind 'test' skips the enabled/kind/mode checks). Inline feedback,
-       never a silent fake success. */
+  /** 「发送测试通知」— bypasses the settings gates in the main process (kind 'test'
+   *  skips the enabled/kind/mode checks); inline feedback, never a fake success. */
   const sendTestNotification = useCallback(() => {
     const surface = testNotifySurface()
     if (surface === null) return
@@ -250,15 +180,14 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
       body: t('generalNotificationsTestBody'),
       requireHidden: false,
     })
-      // 诚实结果必须带原因（design 19 §3.3/§4）：失败时把宿主/OS 原文交给
-      // 下面的提示区，用户才能知道要去系统设置里打开通知权限。
+      // 诚实结果必须带原因：失败时把宿主/OS 原文交给下面的提示区，用户才知道要去系统设置打开通知权限。
       .then((outcome) => setNotifyResult(testNotifyResult(outcome)))
       .catch((error: unknown) => setNotifyResult(testNotifyRejected(error)))
       .finally(() => setNotifyBusy(false))
   }, [t])
 
-  /** 权限被拒后的恢复入口（design 19 §4）：macOS 不再允许 App 主动弹授权框，
-   *  只能在「系统设置 → 通知」里打开。目标 URL 固定在主进程侧（无载荷）。 */
+  /** 权限被拒后的恢复入口：macOS 不再允许 App 主动弹授权框，只能在「系统设置 →
+   *  通知」打开；目标 URL 固定在主进程侧（无载荷）。 */
   const openNotificationSettings = useCallback(() => {
     const surface = testNotifySurface()
     if (surface === null) return
@@ -268,30 +197,24 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
       .catch(() => setOpenSettingsFailed(true))
   }, [])
 
-  // No bridge yet (or the main process does not expose settings): render the
-  // skeleton rows with placeholder values — never a fake "off". Controls stay
-  // disabled until hydrated (a click before hydration would save a value the
-  // UI never showed).
+  // No bridge yet (or no settings surface): render skeleton rows with placeholder
+  // values — never a fake "off". Controls stay disabled until hydrated (a click
+  // before hydration would save a value the UI never showed).
   const settings = status?.settings
   const supported: SupportedGates | undefined = status?.supported
   const hydrated = status !== null
-  // 未读徽标平台能力（design 19 §3.7 / design 23 M3）：win32 的任务栏 overlay
-  // v1 未接线，主进程能力事实为 false——开关禁用并显示短原因。字段缺失
-  // （旧主进程）按支持渲染，保持向后兼容。
+  // 未读徽标平台能力：win32 的任务栏 overlay v1 未接线，主进程能力事实为 false——
+  // 开关禁用并显示短原因；字段缺失（旧主进程）按支持渲染，保持向后兼容。
   const badgeSupported = supported?.badgeSupported !== false
-  // Notifications block (design 19 §3.4): design defaults while absent — never
-  // a fake off (unknown/future keys filtered in notificationsOf).
+  // Notifications block: design defaults while absent — never a fake off (unknown/future keys filtered in notificationsOf).
   const notifications = notificationsOf(settings)
-  // Session-todo block (sidebar todo area): design defaults (ALL ON) while
-  // absent — never a fake off.
+  // Session-todo block: design defaults (ALL ON) while absent — never a fake off.
   const sessionTodo = sessionTodoOf(settings)
   // 平台事实来自桥（design 25）：仅 macOS 需要「系统设置 → 通知」恢复入口。
   const isDarwin = isMacPlatform()
 
-  // The dsh runtime block is the per-server「dsh 运行时」settings.section
-  // (design 18 §3.6). The full group set rendered below (启动与
-  // 关闭 / 运行 / 会话待办区 / 通知 design 19 / 更新 design 11) is
-  // enumerated in this file's top doc block — keep that in sync, not here.
+  // The dsh runtime block is the per-server「dsh 运行时」settings.section; the full
+  // group set rendered below is enumerated in this file's top doc block.
 
   return (
     <div className={css.generalSection}>
@@ -301,9 +224,8 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
         <h3 className={css.generalGroupTitle}>{t('generalGroupLifecycle')}</h3>
 
         <div className={css.generalGrid}>
-          {/* 关闭窗口时: 滑块式分段单选（SegmentedControl），一行两个选项；
-              无托盘时禁用「隐藏到托盘」并改提示文案。hint 随选中值切换（选中
-              「退出应用」时给退出语义的提示，不描述后台运行）。 */}
+          {/* 关闭窗口时: 滑块式分段单选（SegmentedControl），一行两个选项；无托盘时
+              禁用「隐藏到托盘」并改提示文案。hint 随选中值切换（不描述后台运行）。 */}
           <div className={css.generalCard}>
             <div className={css.generalCardText}>
               <span className={css.generalFieldLabel} id={closeBehaviorLabel}>{t('generalCloseBehavior')}</span>
@@ -343,8 +265,7 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
       <div className={css.generalGroup}>
         <h3 className={css.generalGroupTitle}>{t('generalGroupRuntime')}</h3>
 
-        {/* 三列网格（.generalGridTriple）：保持唤醒 / 退出确认 / VS Code 新窗口
-            固定同一行——三张都是短开关卡，见 SettingsShell.module.css。 */}
+        {/* 三列网格（.generalGridTriple）：保持唤醒 / 退出确认 / VS Code 新窗口固定同一行。 */}
         <div className={clsx(css.generalGrid, css.generalGridTriple)}>
           <ToggleCard
             label={t('generalKeepAwake')}
@@ -354,9 +275,8 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
             onChange={(next) => save({ keepAwake: next })}
           />
 
-          {/* 退出确认：可设置开关；仅本地实例运行中时确认，
-              远程连接不影响关闭；更新已下载时豁免。未水合时按默认值 true
-              渲染（`!== false`），与「绝不假 off」的占位纪律一致。 */}
+          {/* 退出确认：仅本地实例运行中时确认，远程连接不影响关闭，更新已下载时豁免；
+              未水合时按默认 true 渲染（`!== false`），与「绝不假 off」一致。 */}
           <ToggleCard
             label={t('generalQuitConfirm')}
             hint={t('generalQuitConfirmDesc')}
@@ -365,13 +285,10 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
             onChange={(next) => save({ quitConfirmation: next })}
           />
 
-          {/* VS Code 会话目录打开策略（design 16 §3.3 / 20 §4.3）：
-              chamber 设置 vscodeOpenInNewWindow 默认 ON——会话头按钮与 OS 深链
-              （dsh-chamber://open-vscode）共用同一管线：从会话头部打开目录时在
-              VS Code 新窗口打开（URL 追加 ?windowId=_blank，VS Code 运行中也
-              先聚焦已打开的相同文件夹，不重复开）；关闭则交还 VS Code 自身
-              默认策略（运行中可能复用并替换最近活动窗口）。说明文字已移除，
-              开关本身即语义（默认开 = 新窗口打开）。 */}
+          {/* VS Code 会话目录打开策略：chamber 设置 vscodeOpenInNewWindow 默认 ON
+              ——会话头按钮与 OS 深链（dsh-chamber://open-vscode）共用同一管线，新窗口
+              打开（URL 追加 ?windowId=_blank，运行中也先聚焦同一文件夹）；关闭则交还
+              VS Code 自身策略（可能复用并替换最近活动窗口）。 */}
           <ToggleCard
             label={t('generalVscodeNewWindow')}
             checked={settings?.vscodeOpenInNewWindow !== false}
@@ -381,10 +298,8 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
         </div>
       </div>
 
-      {/* 会话待办区（sidebar todo area）：被动呈现开关组——主开关（默认开）
-          是无边框披露行，开启后展开子设置（三类事件开关收入唯一一张卡片，
-          与通知组同节奏）。默认全开：待办区仅在有条目时出现（零占用），
-          不是打扰型通知。 */}
+      {/* 会话待办区：主开关（默认开）是无边框披露行，开启后展开子设置（三类事件
+          开关收入唯一一张卡片，与通知组同节奏）；默认全开，待办区仅在有条目时出现。 */}
       <div className={css.generalGroup}>
         <h3 className={css.generalGroupTitle}>{t('generalGroupSessionTodo')}</h3>
 
@@ -428,20 +343,17 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
         )}
       </div>
 
-      {/* 通知 (design 19 — no new nav entry): 主开关 + 启用后才展开的子设置
-          （通知时机 hidden-only / always + 事件开关 complete / ask / request +
-          「发送测试通知」）。主开关关闭时子设置收起（不全部展开）——配置项仍在，
-          启用后按原始布局展开显示。
-          主开关是无边框披露行（.generalSwitchRow），子设置整体是唯一一张卡片
-          （.generalNotifyCard），内部行不自带边框——通知组只有一层边框。 */}
+      {/* 通知（no new nav entry）：主开关 + 启用后才展开的子设置（通知时机
+          hidden-only/always + 事件开关 complete/ask/request + 发送测试通知）；
+          主开关关闭时子设置收起，配置项仍在。主开关是无边框披露行，子设置是唯一
+          一张卡片——通知组只有一层边框。 */}
       <div className={css.generalGroup}>
         <h3 className={css.generalGroupTitle}>{t('generalGroupNotifications')}</h3>
 
-        {/* 主开关: 官方 Switch 原语（role=switch / aria-checked / 必需的可访问
-            名称），整行即 label（整行可点）；未水合骨架态整行变淡。
-            aria-expanded/aria-controls 由 DisclosureSwitch 写到原语自己的
-            role=switch 按钮上（无 role 的包装 span 上
-            这两个属性对辅助技术是无效的），指向展开的子设置卡。 */}
+        {/* 主开关: 官方 Switch 原语（role=switch / aria-checked / 必需可访问名称），
+            整行即 label；未水合骨架态整行变淡。aria-expanded/aria-controls 由
+            DisclosureSwitch 写到原语自己的 role=switch 按钮上（无 role 包装上这两个
+            属性对辅助技术无效），指向展开的子设置卡。 */}
         <label className={clsx(css.generalSwitchRow, !hydrated && css.generalDisabled)}>
           <div className={css.generalCardText}>
             <span className={css.generalFieldLabel}>{t('generalNotificationsEnabled')}</span>
@@ -456,13 +368,10 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
           />
         </label>
 
-        {/* 未读徽标（design 19 §3.7）：被动指示，独立于横幅主开关——默认开启，
-            Dock/任务栏应用图标上的红色数字气泡（未读会话数）。关闭时主进程
-            裁决强制清零（开关一切立即清除，行为诚实）。同样用无边框披露行
-            （.generalSwitchRow），与主开关同节奏，不增加边框层数——本行不展开
-            任何子设置，因此用原语本身（无披露属性）。平台能力门（design 23
-            M3）：win32 的任务栏 overlay 未接线，badgeSupported===false 时禁用
-            开关并给出短原因，绝不呈现一个永远无效的开关。 */}
+        {/* 未读徽标：被动指示，独立于横幅主开关——默认开启，Dock/任务栏图标上的
+            红色数字气泡（未读会话数）；关闭时主进程裁决强制清零。用无边框披露行，
+            本行不展开子设置，故用原语本身（无披露属性）。平台能力门：
+            badgeSupported===false（win32 overlay 未接线）时禁用并给出短原因。 */}
         <label className={clsx(css.generalSwitchRow, (!hydrated || !badgeSupported) && css.generalDisabled)}>
           <div className={css.generalCardText}>
             <span className={css.generalFieldLabel}>{t('generalNotificationsBadge')}</span>
@@ -535,10 +444,9 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
               )}
             </div>
 
-            {/* 失败原因 + 恢复入口（design 19 §4 未完成门禁的收口）：macOS 通知
-                权限一旦被拒，App 不能再弹授权框——只显示「发送失败」会把用户留在
-                黑箱里。原因原文如实展示（宿主/OS 文案不翻译），并给出「系统设置 →
-                通知」的直达入口；非 darwin 平台没有该面板，只展示原因。 */}
+            {/* 失败原因 + 恢复入口：macOS 通知权限被拒后 App 不能再弹授权框，只显示
+                「发送失败」会把用户留在黑箱里。原因原文如实展示（宿主/OS 文案不
+                翻译），并给出「系统设置 → 通知」直达入口；非 darwin 平台只展示原因。 */}
             {notifyResult?.kind === 'failed' && (
               <div className={css.generalNotifyHint} data-testid="notify-permission-hint">
                 {notifyResult.error !== undefined && (
@@ -569,8 +477,7 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
         )}
       </div>
 
-      {/* Chamber-global update status (design 11): merged into the General
-          section — the dedicated __update nav entry was folded in here. */}
+      {/* Chamber-global update status: merged into the General section (no dedicated nav entry). */}
       <UpdateSection t={t} />
 
       {saveError !== null && (

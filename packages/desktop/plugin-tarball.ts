@@ -1,37 +1,14 @@
 /**
- * Desktop plugin-source tarball builder + bounded tgz manifest reader +
- * picked-source classifier (design 21 §6.5 archive-pick —
- * `gateway_plugin_materialize`; folder pick → tarball upload, or a ready
- * `.tgz` plugin archive uploads verbatim).
+ * Desktop plugin-source tarball builder + bounded tgz manifest reader + picked-source classifier:
+ * builds a LOCAL plugin source folder into the gateway's materialize upload shape (raw gzip tarball;
+ * caps mirrored as TARBALL_MAX_*) and reads its package.json in the same pass so the upload headers
+ * always describe the archive actually sent. Pure Node; manifest whitelists come from the
+ * control-plane shared single source the gateway route also validates `x-plugin-name` against.
  *
- * The gateway's `PUT /chamber/plugins/materialize` route accepts a raw gzip
- * tarball (≤ 32 MiB body, ≤ 4096 entries, ≤ 256 MiB unpacked — the caps this
- * module mirrors as TARBALL_MAX_*; the textual lockstep test
- * test/plugins/plugin-tarball.test.ts pins them to the gateway's own constants so they can
- * never drift). This module builds that archive from a LOCAL plugin SOURCE
- * FOLDER in the npm-pack layout (`package/` root prefix — the layout pnpm
- * expects when the gateway stages the archive and runs `dsh plugin add
- * file:<path>`), and reads the folder's `package.json` in the SAME pass so
- * the uploaded `x-plugin-name`/`x-plugin-version` headers always describe
- * the archive that is actually sent.
- *
- * Deliberate v1 scope:
- * - ustar headers only; entry names are capped at 100 bytes and the 155-byte
- *   prefix field is NOT used — a longer relative path is an honest error
- *   (`path_too_long`) listing the offending file, never a silently
- *   different archive;
- * - symlinks are SKIPPED (recorded in `skipped`) — a plugin tarball must
- *   never carry a link target that could differ on the gateway;
- * - `node_modules/` and `.git/` subtrees are excluded at any depth (the same
- *   content `pnpm pack` would exclude; a registry-style tarball must not
- *   embed another install tree or history);
- * - modes are normalized (0o644 files / 0o755 directories) exactly like the
- *   plan states; mtime = now.
- *
- * Pure Node (node:fs / node:zlib) — no Electron imports, unit-testable
- * standalone. The folder-manifest whitelists are the control-plane shared
- * single source (plugin-spec.ts via control-plane-module.ts), the same
- * source the gateway route validates `x-plugin-name` against.
+ * v1 scope: ustar names capped at 100 BYTES and the 155-byte prefix field unused (longer =
+ * `path_too_long`, never a silently different archive); symlinks SKIPPED and recorded (never carry
+ * a machine-local link target); `node_modules/`/`.git/` excluded at any depth; modes normalized
+ * (0o644/0o755), mtime = now.
  */
 
 import { readFileSync, readdirSync, statSync } from 'node:fs'
@@ -42,42 +19,32 @@ import {
   PLUGIN_NAME_PATTERN,
 } from './control-plane-module.ts'
 
-// Caps — exact mirrors of the gateway route / tgz-scan ceilings (design 21
-// §6.2 / §6.9; routes.ts MATERIALIZE_MAX_BYTES + tgz-scan.ts TGZ_MAX_ENTRIES
-// / TGZ_MAX_UNPACKED_BYTES). test/plugins/plugin-tarball.test.ts pins the literals against
-// the gateway sources so the desktop archive can never exceed what the route
-// accepts.
+// Caps — exact mirrors of the gateway route / tgz-scan ceilings (routes.ts MATERIALIZE_MAX_BYTES,
+// tgz-scan.ts TGZ_MAX_ENTRIES / TGZ_MAX_UNPACKED_BYTES); the desktop archive may never exceed what
+// the route accepts.
 
 /** Entry-count cap (tar headers incl. directory entries). */
 export const TARBALL_MAX_ENTRIES = 4096
-/** Unpacked footprint cap (design 21 §6.9 default: 256 MiB, mirroring
- *  tgz-scan.ts TGZ_MAX_UNPACKED_BYTES). Accounting equals the gateway's
- *  ACTUAL-INFLATED-BYTES budget — 512-byte header + padded data
- *  (ceil(size/512)*512) per entry + the 1024-byte end-of-archive marker
- *  (which is real inflate output). The scan's declared `totalBytes` formula
- *  is the same per-entry arithmetic but stops at the end marker, so a
- *  builder archive within this budget passes BOTH the route's declared cap
- *  and its inflated guard. Raw-byte (unpadded) accounting could approve a
- *  folder whose real padded archive the route then refuses (the ~254–256 MiB
- *  acceptance window). */
+/** Unpacked footprint cap (256 MiB, mirroring tgz-scan.ts TGZ_MAX_UNPACKED_BYTES). Accounting equals
+ *  the gateway's ACTUAL-INFLATED-BYTES budget: 512-byte header + padded data (ceil(size/512)*512)
+ *  per entry + the 1024-byte end-of-archive marker (real inflate output), so a builder archive
+ *  inside this budget passes both the route's declared cap and its inflated guard. Raw-byte
+ *  (unpadded) accounting could approve a folder whose padded archive the route then refuses. */
 export const TARBALL_MAX_UNPACKED_BYTES = 256 * 1024 * 1024
-/** Classic end-of-archive marker: two all-zero 512-byte blocks. They are real
- *  inflated bytes on the gateway, so the builder reserves them inside the
- *  unpacked cap instead of hiding them from its own accounting. */
+/** Classic end-of-archive marker: two all-zero 512-byte blocks — real inflated bytes on the
+ *  gateway, so the builder reserves them inside the unpacked cap. */
 const TAR_END_MARKER_BYTES = 2 * 512
 /** Uploaded (gzip) archive cap — the route's MATERIALIZE_MAX_BYTES. */
 export const TARBALL_MAX_ARCHIVE_BYTES = 32 * 1024 * 1024
 /** package.json read cap for the folder manifest (bounded single file). */
 export const PLUGIN_MANIFEST_MAX_BYTES = 64 * 1024
 
-/** Strict exact-semver grammar of the gateway's `x-plugin-version` header
- *  (routes.ts PLUGIN_VERSION_PATTERN — module-local there; this is the
- *  desktop-side mirror pinned by test/plugins/plugin-tarball.test.ts). */
+/** Strict exact-semver grammar of the gateway's `x-plugin-version` header (routes.ts
+ *  PLUGIN_VERSION_PATTERN; this is the desktop-side mirror). */
 export const GATEWAY_PLUGIN_VERSION_PATTERN = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/
 
-/** Test/injection seam: per-build cap overrides (defaults = the mirrors
- *  above). Only ever smaller — the desktop builder is a friendly pre-check,
- *  the gateway route remains the authority. */
+/** Test/injection seam: per-build cap overrides (defaults = the mirrors above). Only ever smaller —
+ *  the desktop builder is a friendly pre-check, the gateway route remains the authority. */
 export interface PluginTarballLimits {
   maxEntries?: number
   maxUnpackedBytes?: number
@@ -94,8 +61,7 @@ export type PluginTarballErrorCode =
   | 'archive_too_large'
   | 'folder_changed'
 
-/** Folder `package.json` projection: ok:true carries the name/version that
- *  become the upload headers; ok:false is a loud honest reason. */
+/** Folder `package.json` projection: ok:true carries the upload-header name/version; ok:false a loud honest reason. */
 export type FolderPluginManifest =
   | { ok: true; name: string; version: string }
   | { ok: false; error: string }
@@ -105,21 +71,15 @@ export interface PluginTarballBuildResult {
   buffer: Buffer
   /** tar entry names in archive order (relative ustar paths). */
   entries: string[]
-  /** Honest notes for every path that was deliberately not packed
-   *  (symlink / node_modules / .git). */
+  /** Honest notes for every path deliberately not packed (symlink / node_modules / .git). */
   skipped: string[]
-  /** The folder package.json read on the same build pass — null-free
-   *  ok:false when absent/unreadable/invalid. */
+  /** The folder package.json read on the same build pass — ok:false when absent/unreadable/invalid. */
   manifest: FolderPluginManifest
 }
 
-// ustar header writer
-
-/** Width of the ustar `name` field (bytes 0-99). The bound is BYTES:
- *  `archivePath.length` measures UTF-16 code units, so a CJK path of 58 units
- *  / 138 bytes would pass such a check and then be silently truncated
- *  mid-character by `header.write` — an archive that no longer matches the
- *  `entries`/manifest the builder reports. */
+/** Width of the ustar `name` field (bytes 0-99). The bound is BYTES: `String.length` counts UTF-16
+ *  code units, so a CJK path of 58 units / 138 bytes would pass a unit check and then be silently
+ *  truncated mid-character by `header.write` — an archive that no longer matches the reported entries. */
 const USTAR_NAME_FIELD_BYTES = 100
 
 /** Write an octal field: `length-1` octal digits + NUL (ustar convention). */
@@ -134,8 +94,8 @@ function ustarHeader(name: string, mode: number, size: number, typeflag: '0' | '
   const header = Buffer.alloc(512)
   // name (bytes 0-99): the caller caps at 100 BYTES and refuses longer names.
   header.write(name, 0, 'utf8')
-  // mode (100-107), uid/gid (108-123) — uid/gid stay 0: the archive is
-  // unpacked by pnpm under the gateway user, ownership is not transferable.
+  // mode (100-107); uid/gid (108-123) stay 0 — the gateway unpacks under its own user, ownership
+  // is not transferable.
   writeOctalField(header, 100, 8, mode)
   writeOctalField(header, 108, 8, 0)
   writeOctalField(header, 116, 8, 0)
@@ -164,14 +124,11 @@ function paddedBlock(body: Buffer): Buffer {
   return padding === 0 ? body : Buffer.concat([body, Buffer.alloc(padding)])
 }
 
-// Folder manifest reading
-
 function manifestError(message: string): FolderPluginManifest {
   return { ok: false, error: message }
 }
 
-/** Read `<dir>/package.json` as UTF-8 text, bounded to 64 KiB. ok:false for
- *  absent/unreadable/oversized files — never a guessed default. */
+/** Read `<dir>/package.json` as UTF-8, bounded to 64 KiB; ok:false for absent/unreadable/oversized — never a guessed default. */
 function readFolderPackageJson(dirPath: string): { ok: true; text: string } | { ok: false; error: string } {
   const manifestPath = join(dirPath, 'package.json')
   let stat: ReturnType<typeof statSync>
@@ -196,17 +153,13 @@ function readFolderPackageJson(dirPath: string): { ok: true; text: string } | { 
 }
 
 /**
- * The picked folder's identity for the protected-set judgement (design 21
- * §6.11): a local folder pick has no registry spec, so its name (and, when
- * declared, its version) can only come from its own package.json.
+ * The picked folder's identity for the protected-set judgement: a local folder pick has no registry
+ * spec, so its name (and, when declared, version) can only come from its own package.json.
  *
- * The VERSION read is intentionally PERMISSIVE (`typeof version === 'string'`)
- * and does NOT apply the gateway's `x-plugin-version` exact-semver grammar: on
- * this path the local dsh CLI is the authority for version semantics (design 13
- * §5), and the ssh materialize path reads the same field permissively. The
- * strict grammar belongs to the upload routes (buildPluginTarball), where the
- * gateway binds the version to the archive identity. Applying that grammar
- * here would refuse folders the CLI accepts (`1.0`, `v1.0.0`, no version).
+ * The VERSION read is intentionally PERMISSIVE (`typeof version === 'string'`) and does NOT apply the
+ * gateway's exact-semver grammar: on this path the local dsh CLI is the authority for version
+ * semantics and the ssh materialize path reads the same field permissively; the strict grammar belongs
+ * to buildPluginTarball, where the gateway binds the version to the archive identity.
  */
 export function folderPluginIdentity(
   dirPath: string,
@@ -254,15 +207,9 @@ function readFolderPluginManifest(dirPath: string): FolderPluginManifest {
 }
 
 /**
- * Read the `name` field of `<folder>/package.json` (≤ 64 KiB); null when the
- * file is absent/unreadable or the name fails the shared registry-name
- * whitelist. The full (name + version + shape) form is what buildPluginTarball
- * validates internally; the protected-set judgement is a separate, later step.
- *
- * Callers today: the plugin-pick contract tests (this is the narrow NAME-ONLY
- * read they pin the 64 KiB bound with). The add flows themselves use
- * {@link folderPluginIdentity} / {@link classifyPluginPick}, which need the
- * version too — kept because a name-only read is a distinct, tested contract.
+ * Read the `name` field of `<folder>/package.json` (≤ 64 KiB); null when absent/unreadable or the
+ * name fails the shared registry-name whitelist. Kept as a distinct name-only contract alongside
+ * {@link folderPluginIdentity} / {@link classifyPluginPick}, which also need the version.
  */
 export function pluginNameFromFolder(folderPath: string): string | null {
   const raw = readFolderPackageJson(folderPath)
@@ -275,20 +222,15 @@ export function pluginNameFromFolder(folderPath: string): string | null {
   }
 }
 
-// Walk + archive build
-
-/** Directory subtrees deliberately excluded from a plugin source archive
- *  (same content pnpm pack would drop). */
+/** Directory subtrees deliberately excluded from a plugin source archive (same content pnpm pack would drop). */
 const EXCLUDED_DIRECTORY_NAMES = new Set(['node_modules', '.git'])
 
 function tarError(code: PluginTarballErrorCode, message: string): Error & { code: PluginTarballErrorCode } {
   return Object.assign(new Error(message), { code })
 }
 
-/** Refuse an archive entry path that does not fit the 100-byte ustar name
- *  field. The field is a BYTE field: `String.length` counts UTF-16 code units,
- *  so multibyte paths would pass through to `header.write`, which truncates
- *  them at byte 100 — archive bytes that no longer match `entries`. */
+/** Refuse an archive entry path that does not fit the 100-BYTE ustar name field: `String.length`
+ *  counts UTF-16 code units, so multibyte paths would be truncated mid-character at byte 100. */
 function assertUstarNameFits(archivePath: string): void {
   if (Buffer.byteLength(archivePath, 'utf8') > USTAR_NAME_FIELD_BYTES) {
     throw tarError('path_too_long', `archive entry path exceeds the ${USTAR_NAME_FIELD_BYTES}-byte ustar name field: ${archivePath}`)
@@ -296,20 +238,15 @@ function assertUstarNameFits(archivePath: string): void {
 }
 
 /**
- * Build a gzip-compressed ustar tarball of a local plugin source folder
- * (npm-pack `package/` layout). Rejects (Error.code ∈ PluginTarballErrorCode)
- * when the folder is not a directory, a file is unreadable, a relative entry
- * path exceeds the 100-byte ustar name field, or any cap (entries / unpacked
- * footprint / final archive bytes) is exceeded — never a silently truncated
- * or oversized archive.
+ * Build a gzip-compressed ustar tarball of a local plugin source folder (npm-pack `package/` layout).
+ * Rejects (Error.code ∈ PluginTarballErrorCode) when the folder is not a directory, a file is
+ * unreadable, a relative entry path exceeds the 100-byte ustar name field, or any cap (entries /
+ * unpacked footprint / final archive bytes) is exceeded — never a silently truncated archive.
  *
- * The walk emits directories before their contents (files ordered inside
- * each directory); symlinks and `node_modules`/`.git` subtrees are skipped
- * and recorded in `skipped`. The folder's package.json is read in the same
- * pass and returned as `manifest`; if its bytes change between that read and
- * the archive write the build fails with `folder_changed` (the upload
- * headers must always describe the archive actually sent).
- *
+ * The walk emits directories before their contents (files ordered inside each directory); symlinks
+ * and `node_modules`/`.git` subtrees are skipped and recorded in `skipped`. package.json is read
+ * in the same pass and returned as `manifest`; if its bytes change before the archive write the
+ * build fails with `folder_changed` (headers must describe the archive actually sent).
  * `opts.limits` lets tests inject smaller caps.
  */
 export function buildPluginTarball(
@@ -355,8 +292,7 @@ function buildSync(
     throw tarError('not_a_directory', `the picked path ${dirPath} is not a directory`)
   }
 
-  // Manifest read FIRST (single pass) — the walk below packs the same
-  // package.json it validated, or fails with folder_changed.
+  // Manifest read FIRST (single pass): the walk packs the same package.json it validated, or fails.
   const manifest = readFolderPluginManifest(dirPath)
   const manifestBytes = manifest.ok ? readFileSync(join(dirPath, 'package.json')) : null
 
@@ -364,14 +300,12 @@ function buildSync(
   const entries: string[] = []
   const skipped: string[] = []
   let entryCount = 0
-  // Padded-footprint accounting, byte-for-byte the gateway scan's formula:
-  // the two-block end-of-archive marker is reserved up front (it is part of
-  // the real inflated archive the route counts), each header adds 512, each
-  // file body adds its padded 512-boundary length.
+  // Padded-footprint accounting, byte-for-byte the gateway scan's formula: reserve the two-block
+  // end marker up front (part of the real inflated archive the route counts), then 512 per header
+  // and the padded 512-boundary length per file body.
   let unpackedBytes = TAR_END_MARKER_BYTES
-  /** Whether the validated `package/package.json` was actually packed as a
-   *  regular file (a symlinked/unreadable manifest must never produce an
-   *  archive that contradicts the upload headers). */
+  /** Whether the validated `package/package.json` was actually packed as a regular file (a
+   *  symlinked/unreadable manifest must never contradict the upload headers). */
   let manifestPacked = false
 
   const trackEntry = (headerName: string): void => {
@@ -390,10 +324,8 @@ function buildSync(
     assertUstarNameFits(archivePath)
     const header = ustarHeader(archivePath, 0o644, body.length, '0')
     trackEntry(archivePath)
-    // Padded data length — the ustar layout pads each body to a 512-byte
-    // boundary and the gateway scan counts the padded area, so the builder
-    // must count it too (raw-byte counting under-accounted by up to 511
-    // bytes per entry and let a desktop-OK archive fail the route's scan).
+    // Padded data length: the ustar layout pads each body to a 512-byte boundary and the gateway
+    // scan counts the padded area, so the builder must count it too (raw-byte counting under-counts).
     const padded = paddedBlock(body)
     unpackedBytes += padded.length
     if (unpackedBytes > limits.maxUnpackedBytes) {
@@ -408,8 +340,7 @@ function buildSync(
     blocks.push(ustarHeader(archivePath, 0o755, 0, '5'))
   }
 
-  /** Recursive emission: directory header first, then its children
-   *  (directories before files, each ordered by name). */
+  /** Recursive emission: directory header first, then children (directories before files, by name). */
   const emitDirectory = (diskDir: string, archiveDir: string): void => {
     let dirents: import('node:fs').Dirent[]
     try {
@@ -424,8 +355,8 @@ function buildSync(
       const childDisk = join(diskDir, dirent.name)
       const childArchive = `${archiveDir}${dirent.name}`
       if (dirent.isSymbolicLink()) {
-        // A symlink target is a machine-local fact — never transferable into
-        // a plugin tarball (the gateway would unpack whatever it points at).
+        // A symlink target is a machine-local fact, never transferable into a plugin tarball (the
+        // gateway would unpack whatever it points at).
         skipped.push(`${childArchive} (symbolic link, not packed)`)
         continue
       }
@@ -449,9 +380,8 @@ function buildSync(
       } catch (error) {
         throw tarError('unreadable', `cannot read ${childDisk}: ${String(error)}`)
       }
-      // The manifest bytes were captured before the walk; if the folder's
-      // package.json changed in between, the archive no longer matches the
-      // manifest that names the upload — honest failure, never a mismatch.
+      // The manifest bytes were captured before the walk: if package.json changed in between, the
+      // archive no longer matches the manifest that names the upload — honest failure.
       if (childArchive === 'package/package.json') {
         if (manifestBytes !== null && !body.equals(manifestBytes)) {
           throw tarError('folder_changed', 'the folder changed while it was being packed (package.json); re-run the materialize pick')
@@ -465,9 +395,8 @@ function buildSync(
   addDirectory('package/')
   emitDirectory(dirPath, 'package/')
   if (manifest.ok && !manifestPacked) {
-    // The manifest was readable through a symlink or a second read but the
-    // archive carries no regular package.json — the upload headers would
-    // describe a package the archive does not contain.
+    // The manifest was readable through a symlink or a second read, but the archive carries no
+    // regular package.json — the upload headers would describe a package it does not contain.
     throw tarError('folder_changed', 'the folder package.json is not a regular file that could be packed; re-run the materialize pick')
   }
 
@@ -476,18 +405,13 @@ function buildSync(
   return { tar: Buffer.concat(blocks), entries, skipped, manifest }
 }
 
-// Bounded tgz manifest reader (roundtrip verification + archive-pick
-// classification, see below): gunzip + locate the manifest pnpm actually
-// INSTALLS — `package/package.json` in npm-pack layout — and read ≤ 64 KiB of
-// its text. A root `package.json` is only a fallback for archives that carry
-// no installed-path manifest at all; when both exist and declare different
-// identities the archive is refused loudly (never a guessed manifest).
+// Bounded tgz manifest reader: gunzip + locate the manifest pnpm actually INSTALLS
+// (`package/package.json` in npm-pack layout), ≤ 64 KiB of text. A root `package.json` is only a
+// fallback when no installed-path manifest exists; disagreeing identities are refused loudly.
 
-/** The manifest path pnpm installs from an npm-pack archive (`pnpm add
- *  file:<archive>` extracts `package/*` into the dependency tree). */
+/** The manifest path pnpm installs from an npm-pack archive (`pnpm add file:<archive>` extracts `package/*`). */
 const TGZ_INSTALLED_MANIFEST_NAMES = ['package/package.json', './package/package.json']
-/** Tolerance fallback (NOT an install path): an archive whose only manifest
- *  sits at its root — accepted only when no installed-path manifest exists. */
+/** Tolerance fallback (NOT an install path): an archive whose only manifest sits at its root — accepted only when no installed-path manifest exists. */
 const TGZ_FALLBACK_MANIFEST_NAMES = ['package.json', './package.json']
 
 export interface TgzPackageManifest {
@@ -495,39 +419,30 @@ export interface TgzPackageManifest {
   version: string
 }
 
-/** Loud result of the bounded manifest read (design 21 §6.2/§6.5).
- *  `identity_mismatch` carries BOTH names so a caller can surface
- *  exactly which identity was claimed where. */
+/** Loud result of the bounded manifest read. `identity_mismatch` carries BOTH names so a caller can
+ *  surface exactly which identity was claimed where. */
 export type TgzManifestInspection =
   | { ok: true; manifest: TgzPackageManifest }
   | { ok: false; reason: 'missing' | 'invalid' }
   | { ok: false; reason: 'identity_mismatch'; installed: TgzPackageManifest; declared: TgzPackageManifest }
 
 /**
- * Parse a gzip tar archive and read its package manifest (npm-pack layout).
- * Bounded: gunzip is capped at TARBALL_MAX_UNPACKED_BYTES and the manifest
- * entry text at PLUGIN_MANIFEST_MAX_BYTES.
+ * Parse a gzip tar archive and read its package manifest (npm-pack layout). Bounded: gunzip at
+ * TARBALL_MAX_UNPACKED_BYTES and the manifest entry text at PLUGIN_MANIFEST_MAX_BYTES.
  *
- * Identity rules (pnpm installs the archive's `package/package.json`, so
- * THAT is the identity every downstream judgement
- * must see):
- * - the LAST entry at an installed-path candidate wins (tar extraction
- *   overwrite semantics: pnpm installs the last one);
- * - when an installed-path manifest exists but is unreadable (invalid JSON /
- *   > 64 KiB), the archive is `invalid` — the root fallback must NOT stand in
- *   for it, since pnpm would install the unreadable one;
- * - the root `package.json` fallback is used only when NO installed-path
- *   manifest exists at all, and a DISAGREEMENT between the two identities is
- *   `identity_mismatch` (both names returned).
+ * Identity rules (pnpm installs the archive's `package/package.json`, so THAT is the identity every
+ * downstream judgement must see): the LAST entry at an installed-path candidate wins (tar extraction
+ * overwrite semantics); an installed-path manifest that exists but is unreadable makes the archive
+ * `invalid` — the root fallback must NOT stand in, since pnpm would install the unreadable one; the
+ * root fallback applies only when NO installed-path manifest exists, and a disagreement between the
+ * two identities is `identity_mismatch` (both names returned).
  */
 export function inspectTgzManifest(archive: Buffer): TgzManifestInspection {
   let tar: Buffer
   try {
-    // Inflate bound: the desktop archive builder emits at most
-    // TARBALL_MAX_UNPACKED_BYTES of tar including the two-block end marker
-    // (padded-footprint accounting, gateway-scan parity) — the small margin
-    // keeps the largest legal desktop-built archive readable while still
-    // refusing zip-bomb growth.
+    // Inflate bound: the builder emits at most TARBALL_MAX_UNPACKED_BYTES of tar including the
+    // two-block end marker (gateway-scan parity); the margin keeps the largest legal archive
+    // readable while still refusing zip-bomb growth.
     tar = gunzipSync(archive, { maxOutputLength: TARBALL_MAX_UNPACKED_BYTES + 4 * 1024 * 1024 })
   } catch {
     return { ok: false, reason: 'missing' }
@@ -542,9 +457,8 @@ export function inspectTgzManifest(archive: Buffer): TgzManifestInspection {
     const header = tar.subarray(offset, offset + 512)
     offset += 512
     if (header.every(byte => byte === 0)) break
-    // ustar name field (bytes 0-99): NUL-terminated when shorter, the full
-    // 100 BYTES when exactly at the bound (never scan past the field — the
-    // mode bytes that follow are not part of the name).
+    // ustar name field (bytes 0-99): NUL-terminated when shorter, the full 100 BYTES when exactly at
+    // the bound — never scan past the field, the following mode bytes are not part of the name.
     const nameField = header.subarray(0, USTAR_NAME_FIELD_BYTES)
     const nameNul = nameField.indexOf(0)
     const name = nameField.subarray(0, nameNul === -1 ? USTAR_NAME_FIELD_BYTES : nameNul).toString('utf8')
@@ -559,8 +473,8 @@ export function inspectTgzManifest(archive: Buffer): TgzManifestInspection {
     if (typeflag !== '0' && typeflag !== '\0') continue
     const installedSlot = TGZ_INSTALLED_MANIFEST_NAMES.includes(name)
     if (!installedSlot && !TGZ_FALLBACK_MANIFEST_NAMES.includes(name)) continue
-    // An oversized entry is read no further: `null` records "present but not
-    // readable" without buffering 64 KiB+ of attacker-chosen bytes.
+    // An oversized entry is read no further: `null` records "present but not readable" without
+    // buffering 64 KiB+ of attacker-chosen bytes.
     const manifest = size > PLUGIN_MANIFEST_MAX_BYTES ? null : parseTgzManifestText(body.toString('utf8'))
     if (installedSlot) {
       installedSeen = true
@@ -585,9 +499,8 @@ export function inspectTgzManifest(archive: Buffer): TgzManifestInspection {
   return { ok: false, reason: 'missing' }
 }
 
-/** Bounded manifest read: the installed-path identity, or null when the
- *  archive has no coherent one (see {@link inspectTgzManifest} for the loud
- *  form carrying the mismatching names). */
+/** Bounded manifest read: the installed-path identity, or null when the archive has no coherent one
+ *  (see {@link inspectTgzManifest} for the loud form carrying the mismatching names). */
 export function listTgzManifest(archive: Buffer): TgzPackageManifest | null {
   const inspection = inspectTgzManifest(archive)
   return inspection.ok ? inspection.manifest : null
@@ -606,23 +519,17 @@ function parseTgzManifestText(text: string): TgzPackageManifest | null {
   return name === null || version === null ? null : { name, version }
 }
 
-// Picked-source classification (design 21 archive-pick flows): the materialize
-// pickers (local / ssh / gateway) accept a plugin SOURCE FOLDER (the existing
-// folder import) or a ready `.tgz` plugin ARCHIVE in npm-pack layout (e.g. a
-// `npm pack` / registry download of an already-built plugin — the exact
-// archive shape this module's builder emits and the gateway upload route
-// stages). Structural checks only: extension, archive cap, and a parseable
-// package manifest. Name/version whitelist + the protected-set judgement stay in
-// each flow (ssh/gateway validate before the remote install; the LOCAL dsh CLI
-// is the local authority) — the same split the folder flows already use.
+// Picked-source classification: the materialize pickers (local / ssh / gateway) accept a plugin
+// SOURCE FOLDER or a ready `.tgz` plugin ARCHIVE in npm-pack layout (e.g. `npm pack` / registry
+// download of an already-built plugin). Structural checks only — extension, archive cap, parseable
+// manifest; name/version whitelist and protected-set judgement stay in each flow (ssh/gateway
+// validate before the remote install; the LOCAL dsh CLI is the local authority).
 
-/** Archive filename suffix a pick must carry to be treated as a plugin
- *  package: npm-pack archives are always `<name>-<version>.tgz`. */
+/** Archive filename suffix a pick must carry: npm-pack archives are always `<name>-<version>.tgz`. */
 export const PLUGIN_PICK_ARCHIVE_SUFFIX = '.tgz'
 
-/** A main-process-picked local plugin source (design 21 archive-pick):
- *  `dir` = plugin source folder (packed by the flow), `tgz` = ready plugin
- *  archive with its bounded manifest projection and capped bytes. */
+/** A main-process-picked local plugin source: `dir` = source folder (packed by the flow),
+ *  `tgz` = ready archive with bounded manifest projection and capped bytes. */
 export type PickedPluginSource =
   | { kind: 'dir'; path: string }
   | { kind: 'tgz'; path: string; name: string; version: string; bytes: Buffer }
@@ -632,17 +539,13 @@ export type PluginPickClassification =
   | { ok: false; error: string }
 
 /**
- * Classify a main-process-picked path for the plugin materialize flows.
- * A directory becomes `{ kind: 'dir' }` (existing semantics). A file must
- * carry the `.tgz` suffix and be ≤ TARBALL_MAX_ARCHIVE_BYTES; its bytes are
- * read and its package manifest located with the bounded reader — a file
- * that is not a gzip/tar stream or has no parseable `package.json` entry is
- * an honest error, never a guessed name/version. The name/version projected
- * are the INSTALLED-path identity (`package/package.json`, what pnpm
- * installs); an archive whose root `package.json` declares a different
- * identity is refused with both names (`identity_mismatch`).
- * Errors are loud and carry the picked file's basename only (main never
- * echoes the full local path of a refused pick back into the renderer).
+ * Classify a main-process-picked path for the plugin materialize flows: a directory becomes
+ * `{ kind: 'dir' }`; a file must carry the `.tgz` suffix and be ≤ TARBALL_MAX_ARCHIVE_BYTES, then its
+ * bytes are read and the manifest located with the bounded reader — not a gzip/tar stream or no
+ * parseable `package.json` entry is an honest error, never a guessed name/version. The projected
+ * identity is the INSTALLED path (`package/package.json`, what pnpm installs); a disagreeing root
+ * manifest is refused with both names. Errors are loud and carry the picked file's basename only
+ * (the full local path of a refused pick never goes back into the renderer).
  */
 export function classifyPluginPick(pickedPath: string): PluginPickClassification {
   if (typeof pickedPath !== 'string' || pickedPath === '') {
@@ -677,17 +580,15 @@ export function classifyPluginPick(pickedPath: string): PluginPickClassification
   } catch {
     return { ok: false, error: `cannot read ${basename}` }
   }
-  // Post-read re-check (the stat above is a pre-read gate): a locally racing
-  // replacement that grows the file between stat and read must never slip an
-  // oversized archive past the cap into the upload/install chain.
+  // Post-read re-check (the stat above is a pre-read gate): a locally racing replacement that grows
+  // the file between stat and read must never slip an oversized archive past the cap.
   if (bytes.length > TARBALL_MAX_ARCHIVE_BYTES) {
     return { ok: false, error: `${basename} is ${bytes.length} bytes after reading — beyond the ${TARBALL_MAX_ARCHIVE_BYTES}-byte plugin archive cap` }
   }
   const inspection = inspectTgzManifest(bytes)
   if (!inspection.ok) {
     if (inspection.reason === 'identity_mismatch') {
-      // Loud, both identities named (design 21 §6.2 materialize identity
-      // binding): pnpm installs the archive's `package/package.json`, so a
+      // Loud, both identities named: pnpm installs the archive's `package/package.json`, so a
       // disagreeing root `package.json` must never become the judged name.
       return {
         ok: false,

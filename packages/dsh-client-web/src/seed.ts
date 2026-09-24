@@ -1,32 +1,14 @@
 /**
- * Platform-singleton module-table. These are the ONLY entities the shell
- * shares into the frozen module table — fetch bundles resolve their externals
- * against exactly this set through the loader's require. Keys come from the
- * platform constant module ({@link ./platform.ts}, the single source
- * of truth with the tsdown client externals); values stay shell-static
- * imports so every bundle sees the same instance.
+ * Platform-singleton module table: the ONLY entities the shell shares into the frozen
+ * table, so fetch bundles resolve their externals against exactly this set. Keys come
+ * from {@link ./platform.ts} (single source of truth with the tsdown client externals);
+ * values stay shell-static imports so every bundle sees the same instance.
  *
- * ## Chamber seed table
- *
- * A word here must NEVER be a package the host boot graph can emit as a plugin
- * row — seed resolves before factories in the module system, so a seed word
- * that is also a row materializes the static namespace as a loader entry and
- * the boot fails ("invalid plugin"). See platform.ts for the full invariant.
- *
- * `@deepseek-ai/dsh-client-ui-primitives` is
- * deliberately NOT seeded (platform.ts) — its wholesale namespace import would
- * pull the whole primitives package into the main-graph eval that precedes the App
- * mount. The word is answered by the composite's covered factory instead
- * (chamber-entry.ts COVERED_FACTORIES); the shell gates every extra-bundle load
- * behind the chamber entry evaluation (shell.ts "C3 gate"). Residual edge: if
- * the shell-side chamber prefetch fails, the create-side import retry can run
- * concurrently with extra loads — an extra requiring the word in that window
- * fails loud and degrades (retry self-heals), never silent. Do not restore the
- * word here without removing the factory path too.
- *
- * Upstream's platform table includes `@deepseek-ai/dsh-client-ui-dockkit`;
- * the chamber seed deliberately does NOT (the composite's covered
- * factory answers it — same chunk-budget reasoning as ui-primitives above).
+ * Here too a word must NEVER be a host-graph plugin row (seed resolves before
+ * factories, so it would materialize as an "invalid plugin"). ui-primitives and
+ * ui-dockkit are deliberately not seeded — the composite's covered factory answers
+ * them, and seeding would pull those packages into the main-graph eval preceding the
+ * App mount. Do not restore a word here without removing its factory path too.
  */
 import * as React from 'react'
 import * as ReactJsxRuntime from 'react/jsx-runtime'
@@ -37,14 +19,10 @@ import * as ClientStore from '@deepseek-ai/dsh-client-store'
 import * as UiSlots from '@deepseek-ai/dsh-client-ui-slots'
 import type { PlatformModule } from './platform.ts'
 
-/**
- * Build the static table handed to the module loader at boot.
- * @returns module specifier → exported entity (one entry per platform word).
- */
+/** Build the static table handed to the module loader at boot (one entry per word). */
 export function getStaticModules(): Record<string, unknown> {
-  // The satisfies pin is the projection contract: a word added to
-  // PLATFORM_MODULES without a static import here (or vice versa) fails to
-  // compile instead of drifting into a runtime require miss.
+  // The satisfies pin is the projection contract: a word without a static import here
+  // (or vice versa) fails to compile instead of drifting into a runtime require miss.
   return {
     'react': React,
     'react/jsx-runtime': ReactJsxRuntime,

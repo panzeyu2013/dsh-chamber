@@ -9,7 +9,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { acquireSshAuthLease, buildAskpassScript, chmodAskpassDirOwnerOnly, configureSshPasswordStore, cleanupStaleAskpassHelpers, createAskpassHelper, disposeSshAuth, purgeSshAuth, getSshPassword, setSshPassword, sshPasswordSupported, sshProvider, MAX_SSH_PASSWORD_CHARS } from '../../ssh-provider.ts'
@@ -305,9 +305,8 @@ test('password-store load tightens a broad mode before reading owner-bound secre
   try {
     writeFileSync(file, JSON.stringify({
       schemaVersion: 2,
-      passwords: {
-        't-owner-mode': { password: 'pw', host: 'h.example.com', user: 'u', sshPort: null },
-      },
+      passwords: { 't-owner-mode': 'pw' },
+      bindings: { 't-owner-mode': sshCredentialBinding(spec('t-owner-mode')) },
     }))
     chmodSync(file, 0o644)
     assert.equal(configureSshPasswordStore(file), null)
@@ -318,20 +317,14 @@ test('password-store load tightens a broad mode before reading owner-bound secre
     rmSync(dir, { recursive: true, force: true })
   }
 })
-test('schema v1 passwords are preserved but loudly retired because they have no endpoint owner', () => {
+test('an old-schema password file is preserved as corrupt and never auto-bound', () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-ssh-passwd-'))
   const file = join(dir, 'ssh-passwords.json')
   try {
     writeFileSync(file, JSON.stringify({ schemaVersion: 1, passwords: { 't-v1': 'pw' } }), { mode: 0o600 })
     const notice = configureSshPasswordStore(file)
-    assert.match(notice ?? '', /no endpoint bindings/)
-    assert.match(notice ?? '', /re-enter passwords/)
-    assert.equal(
-      readdirSync(dir).some(name => name.startsWith('ssh-passwords.json.unbound-')),
-      true,
-      'the old plaintext file is uniquely preserved for manual recovery',
-    )
-    assert.equal(getSshPassword(spec('t-v1')), null, 'an unowned legacy secret is never guessed onto the current registry')
+    assert.ok(notice !== null && notice.includes('.corrupt'), 'old-schema file is preserved for forensics')
+    assert.equal(getSshPassword(spec('t-v1')), null, 'an old secret is never guessed onto the current registry')
   } finally {
     configureSshPasswordStore(null)
     rmSync(dir, { recursive: true, force: true })
@@ -345,9 +338,8 @@ test('password-store load refuses symlinks instead of following them', t => {
   try {
     writeFileSync(target, JSON.stringify({
       schemaVersion: 2,
-      passwords: {
-        't-symlink': { password: 'pw', host: 'h.example.com', user: 'u', sshPort: null },
-      },
+      passwords: { 't-symlink': 'pw' },
+      bindings: { 't-symlink': sshCredentialBinding(spec('t-symlink')) },
     }), { mode: 0o600 })
     symlinkSync(target, file)
     assert.match(configureSshPasswordStore(file) ?? '', /cannot read|non-regular/)
@@ -372,21 +364,6 @@ test('SSH password binding fails closed across the secret-fsync → registry-fsy
     assert.equal(getSshPassword(oldSpec.id), null, 'restart after the crash remains fail-closed')
     current = newSpec
     assert.equal(getSshPassword(oldSpec.id), 'new-target-password', 'the binding becomes visible only under its exact SSH endpoint')
-  } finally {
-    configureSshPasswordStore(null)
-    rmSync(dir, { recursive: true, force: true })
-  }
-})
-test('non-empty legacy SSH password files are uniquely preserved and never auto-bound', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'dsh-ssh-passwd-legacy-'))
-  const file = join(dir, 'ssh-passwords.json')
-  try {
-    writeFileSync(file, JSON.stringify({ schemaVersion: 1, passwords: { legacy: 'password' } }))
-    const notice = configureSshPasswordStore(file, id => spec(id))
-    assert.match(notice ?? '', /no endpoint bindings|re-enter/)
-    assert.equal(getSshPassword('legacy'), null)
-    assert.equal(existsSync(file), false)
-    assert.equal(readdirSync(dir).some(name => name.startsWith('ssh-passwords.json.unbound-')), true)
   } finally {
     configureSshPasswordStore(null)
     rmSync(dir, { recursive: true, force: true })
@@ -538,27 +515,33 @@ test('setSshPassword refuses reserved ids; provider validation rejects malformed
 })
 test('password and instance metadata limits are enforced in the provider', () => {
   assert.throws(() => setSshPassword(spec('t-too-long'), 'x'.repeat(MAX_SSH_PASSWORD_CHARS + 1)), /longer/)
-  assert.equal(sshProvider.validateSpec({ id: 'x'.repeat(65), label: 'h', host: 'h', remotePort: 3080 }), null)
-  assert.equal(sshProvider.validateSpec({ id: 'valid', label: 'x'.repeat(129), host: 'h', remotePort: 3080 }), null)
-  assert.equal(sshProvider.validateSpec({ id: 'valid', label: 'h', host: 'x'.repeat(254), remotePort: 3080 }), null)
-  assert.equal(sshProvider.validateSpec({ id: 'valid', label: 'h', host: 'h', remotePort: 3080, serviceName: 'x'.repeat(256) }), null)
-  assert.equal(sshProvider.validateSpec({ id: 'dash-unit', label: 'h', host: 'h', remotePort: 3080, serviceName: '-x' }), null)
-  assert.equal(sshProvider.validateSpec({ id: 'option-unit', label: 'h', host: 'h', remotePort: 3080, serviceName: '--user' }), null)
-  assert.ok(sshProvider.validateSpec({ id: 'hyphen-unit', label: 'h', host: 'h', remotePort: 3080, serviceName: 'my-unit.service' }) !== null)
-  assert.ok(sshProvider.validateSpec({ id: 'valid', label: 'h', host: 'h', remotePort: 3080 }) !== null)
+  assert.equal(sshProvider.validateSpec({ id: 'x'.repeat(65), label: 'h', kind: 'dsh', transport: 'ssh', host: 'h', remotePort: 3080 }), null)
+  assert.equal(sshProvider.validateSpec({ id: 'valid', label: 'x'.repeat(129), kind: 'dsh', transport: 'ssh', host: 'h', remotePort: 3080 }), null)
+  assert.equal(sshProvider.validateSpec({ id: 'valid', label: 'h', kind: 'dsh', transport: 'ssh', host: 'x'.repeat(254), remotePort: 3080 }), null)
+  assert.equal(sshProvider.validateSpec({ id: 'valid', label: 'h', kind: 'dsh', transport: 'ssh', host: 'h', remotePort: 3080, serviceName: 'x'.repeat(256) }), null)
+  assert.equal(sshProvider.validateSpec({ id: 'dash-unit', label: 'h', kind: 'dsh', transport: 'ssh', host: 'h', remotePort: 3080, serviceName: '-x' }), null)
+  assert.equal(sshProvider.validateSpec({ id: 'option-unit', label: 'h', kind: 'dsh', transport: 'ssh', host: 'h', remotePort: 3080, serviceName: '--user' }), null)
+  assert.ok(sshProvider.validateSpec({ id: 'hyphen-unit', label: 'h', kind: 'dsh', transport: 'ssh', host: 'h', remotePort: 3080, serviceName: 'my-unit.service' }) !== null)
+  assert.ok(sshProvider.validateSpec({ id: 'valid', label: 'h', kind: 'dsh', transport: 'ssh', host: 'h', remotePort: 3080 }) !== null)
+  // kind and transport are REQUIRED: pre-v2 records are dropped loudly at
+  // registry load, never defaulted here (the legacy fill-ins are gone).
+  assert.equal(sshProvider.validateSpec({ id: 'legacy', label: 'h', host: 'h', remotePort: 3080 }), null)
 })
 test('the ssh provider serves both target kinds over the ssh transport (v2, design 17 §2)', () => {
   // Accepted v2 forms: kind 'dsh' / transport 'ssh' normalize into the
   // canonical { kind:'dsh', transport:'ssh', insecureHttp:false } spec.
-  const viaKind = sshProvider.validateSpec({ id: 'a', label: 'h', kind: 'dsh', host: 'h', remotePort: 3080 })
+  const viaKind = sshProvider.validateSpec({ id: 'a', label: 'h', kind: 'dsh', transport: 'ssh', host: 'h', remotePort: 3080 })
   assert.ok(viaKind !== null)
   if (viaKind !== null) {
     assert.equal(viaKind.kind, 'dsh')
     assert.equal(viaKind.transport, 'ssh')
     assert.equal(viaKind.insecureHttp, false)
   }
-  const viaTransport = sshProvider.validateSpec({ id: 'b', label: 'h', host: 'h', transport: 'ssh', remotePort: 3080 })
-  assert.ok(viaTransport !== null)
+  // A partial pre-v2 shape (kind or transport missing) is refused at this
+  // provider boundary; the registry loader canonicalizes before validating,
+  // and that input canonicalizer is the one remaining pre-v2 path (open).
+  assert.equal(sshProvider.validateSpec({ id: 'b', label: 'h', host: 'h', transport: 'ssh', remotePort: 3080 }), null)
+  assert.equal(sshProvider.validateSpec({ id: 'b2', label: 'h', host: 'h', kind: 'dsh', remotePort: 3080 }), null)
   // v2 (design 17 §2.1/§2.2): a GATEWAY target over the ssh transport is
   // served by this provider — the tunnel + exec machinery is transport-
   // specific, the kind only decides verifyUp/header semantics.
@@ -575,8 +558,8 @@ test('the ssh provider serves both target kinds over the ssh transport (v2, desi
   assert.equal(sshProvider.validateSpec({ id: 'd2', label: 'h', kind: 'gateway', transport: 'http', host: 'h', remotePort: 443 }), null)
   // insecureHttp is meaningless for a loopback tunnel: true is refused,
   // false/absent normalize to false.
-  assert.equal(sshProvider.validateSpec({ id: 'e', label: 'h', host: 'h', remotePort: 3080, insecureHttp: true }), null)
-  assert.equal(sshProvider.validateSpec({ id: 'e2', label: 'h', kind: 'gateway', host: 'h', remotePort: 30801, insecureHttp: true }), null)
+  assert.equal(sshProvider.validateSpec({ id: 'e', label: 'h', kind: 'dsh', transport: 'ssh', host: 'h', remotePort: 3080, insecureHttp: true }), null)
+  assert.equal(sshProvider.validateSpec({ id: 'e2', label: 'h', kind: 'gateway', transport: 'ssh', host: 'h', remotePort: 30801, insecureHttp: true }), null)
 })
 test('the ssh provider refuses an S23 pin instead of silently dropping an inapplicable trust anchor', () => {
   assert.equal(sshProvider.validateSpec({

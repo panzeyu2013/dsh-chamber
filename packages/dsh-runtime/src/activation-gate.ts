@@ -1,48 +1,29 @@
 /**
- * dsh 运行时激活门控裁决（design 18 §3.4）——纯逻辑、无 electron、无副作用。
- * 探针列表本身（commands/execute 冒烟 / 固定小体积身份方法
- * `session/canOpenWorkspacePath`（零参 boolean Remote，绝不读会话数据；老
- * runtime 树（dsh < 0.1.2-rc.1）对其答 404 时由 host 侧回退 legacy
- * session/list 探测）/ graph 通道 / settings RPC /
- * git-worktree 只读 / archive-cleanup 只读探测（design 24：
- * archiveCleanup/probe）/ 数据可读性探测）由 host 侧执行并汇成
- * `ProbeResult[]`；
- * 本模块只做裁决，不 spawn、不 fetch、不读盘：
+ * 运行时激活门控裁决——纯逻辑、无 electron、无副作用。探针列表由 host 侧执行并汇成
+ * `ProbeResult[]`（commands/execute 冒烟 / 固定小体积身份方法
+ * `session/canOpenWorkspacePath`（零参 boolean Remote，绝不读会话数据；老 runtime 树
+ * 答 404 时由 host 侧回退 legacy session/list）/ graph 通道 / settings RPC /
+ * git-worktree 只读 / archive-cleanup 只读 / 数据可读性）；本模块只做裁决，
+ * 不 spawn、不 fetch、不读盘。
  *
- *   1. `decideVerdict`    —— 探针裁决（pass / observe / fail），含「有界窗口 +
- *                           延迟裁决」语义（§3.4 探测窗口与裁决）；
- *   2. `rollbackTarget`   —— 自动回退目标选择（§3.4 回退目标统一口径，绝不在
- *                           两棵坏树间交替）；
- *   3. `shouldAutoRollback` —— 延迟崩溃分支谓词（§3.4）：restart-exhausted
- *                           且激活树是 override 才触发一次自动回退。
+ *  1. `decideVerdict` —— 探针裁决（pass / observe / fail），含「有界窗口 + 延迟裁决」；
+ *  2. `rollbackTarget` —— 自动回退目标选择（绝不在两棵坏树间交替）；
+ *  3. `shouldAutoRollback` —— restart-exhausted 且激活树是 override 时触发一次自动回退。
  *
- * 边界（诚实声明，§3.4 激活门控边界）：探针是 host 侧探测；渲染侧（chamber
- * 前端 boot 实例 web 资产）不在门控内。裁决所需的探针结果、elapsed、
- * observedOnce 全部由调用方注入——本模块无跨调用状态，可被 node:test 直接
- * 单测（activation-gate.test.ts）。
+ * 边界：探针是 host 侧探测，渲染侧不在门控内；裁决输入全部由调用方注入，本模块无跨调用状态。
  */
 
 /**
- * The activation contract is deliberately closed. An empty/partial probe
- * list must never become a vacuous success when a caller forgets to wire one
- * of the Design 18 compatibility checks.
+ * The activation contract is deliberately closed: an empty/partial probe list must
+ * never become a vacuous success when a caller forgets to wire a compatibility check.
  *
- * Wire baseline: the pinned upstream dsh tree (0.1.5-rc.2, session-controller).
- * All unary methods live on slash endpoints (`session.list` → `session/list`,
- * `settings.describe` → `settings/describe`), `host.describe` was deleted and
- * `workspace.list` became the `workspace/follow` stream, so the probe set
- * keeps only surviving read-only unaries. The host-capability/identity role
- * is served by the fixed-size `session/canOpenWorkspacePath` boolean Remote
- * (zero-arg, same `session` namespace as session/list; pure platform
- * detection — no session data, no Agent activation, no IO), so probe
- * responses never grow with session count; runtimes predating the identity
- * method (dsh < 0.1.2-rc.1) are served by the probe layer's legacy
- * session/list fallback (404), keeping old-tree activation/rollback exactly
- * as before. `data.sessions` is not part of the probe set: the
- * identity probe deliberately does not read session data, so there is no
- * session-list readability row — session storage health is not part of
- * the activation contract. Probe names mirror the wire endpoints (slash
- * form).
+ * Wire baseline: the pinned upstream tree's surviving read-only unaries (slash-form
+ * names; `host.describe` is deleted and `workspace.list` is now a stream). The
+ * host-capability role is the fixed-size `session/canOpenWorkspacePath` boolean
+ * Remote (pure platform detection, no session data, no Agent activation, no IO), so
+ * responses never grow with session count; pre-identity trees answer 404 and are
+ * served by the probe layer's legacy session/list fallback. `data.sessions` is
+ * deliberately not part of the set: session storage health is not in the contract.
  */
 export const REQUIRED_ACTIVATION_PROBES = [
   'commands/execute',
@@ -56,19 +37,12 @@ export const REQUIRED_ACTIVATION_PROBES = [
 ] as const;
 
 /** The chamber host domains (clientGraph/graph + gitWorktree/previewCreate +
- *  archiveCleanup/probe + openInApp/probe). The gateway shape only
- *  verifies them once a connecting desktop has synced its
- *  host packages into the seed cache — a fresh gateway hosts a plain dsh whose
- *  activation must pass without them. Design 24 §7 C: the expected
- *  domains are derived per spawn from the actually seeded entries
- *  (`activationProbeNamesForDomains`); the typed subtraction below keeps the
- *  reduced set in lockstep.
- *
- *  `openInApp/probe` backs a LOCAL-shape-only registry row (design 20 §6): the
- *  desktop never syncs that package to a remote target or a gateway, so there
- *  it is simply never part of the derived expectation. The name stays listed
- *  here because the gateway's load-time pin compares this set with its
- *  registry-derived (complete) probe map wholesale. */
+ *  archiveCleanup/probe + openInApp/probe). A fresh gateway hosts a plain dsh whose
+ *  activation must pass without them; expected domains are derived per spawn from the
+ *  actually seeded entries and the typed subtraction below keeps the reduced set in
+ *  lockstep. `openInApp/probe` backs a LOCAL-shape-only registry row, so it is never
+ *  part of a remote/gateway derived expectation, but stays listed here because the
+ *  gateway's load-time pin compares this set wholesale. */
 export const HOST_DOMAIN_PROBE_NAMES = [
   'clientGraph/graph',
   'gitWorktree/previewCreate',
@@ -76,39 +50,28 @@ export const HOST_DOMAIN_PROBE_NAMES = [
   'openInApp/probe',
 ] as const;
 
-// Typed subtraction: the filter keeps the literal-typed tuple elements, so a
-// typo'd domain name in HOST_DOMAIN_PROBE_NAMES fails to subtract and is
-// caught by the reduced-set exact-match checks instead of silently passing.
+// Typed subtraction keeps the literal-typed tuple elements, so a typo'd domain name
+// fails to subtract and is caught by the reduced-set exact-match checks.
 type RequiredProbeName = typeof REQUIRED_ACTIVATION_PROBES[number]
 type HostDomainProbeName = typeof HOST_DOMAIN_PROBE_NAMES[number]
 const HOST_DOMAIN_PROBE_NAME_SET = new Set<string>(HOST_DOMAIN_PROBE_NAMES)
 
-/** The reduced probe-name set for a shape that does not carry chamber host
- * domains (gateway without a synced seed cache). */
+/** The reduced probe-name set for a shape that does not carry chamber host domains. */
 export const PROBE_NAMES_WITHOUT_HOST_DOMAINS: readonly Exclude<RequiredProbeName, HostDomainProbeName>[] =
   REQUIRED_ACTIVATION_PROBES.filter(name => !HOST_DOMAIN_PROBE_NAME_SET.has(name)) as readonly Exclude<RequiredProbeName, HostDomainProbeName>[];
 
 /**
- * Expected activation set for a shape carrying EXACTLY the given chamber
- * host domains (design 24 §7 C / design 18 §3.4): the closed
- * base set plus every listed domain, in REQUIRED order. Unknown names FAIL
- * LOUD — the function throws instead of ignoring them (never fabricate a
- * probe row): silently dropping a listed domain would shrink its probe row
- * out of the expected set AND the run legs, and a dead/unmounted chamber
- * domain could then pass activation until the sidebar 404s (fail-open; the
- * listed names come from our own seed/probe metadata, so an unknown name is
- * cross-package drift and must surface). The full list equals
- * REQUIRED_ACTIVATION_PROBES and an empty list equals
- * PROBE_NAMES_WITHOUT_HOST_DOMAINS — partial syncs (2-of-3) now have a
- * well-defined expectation instead of the binary all-or-none gate.
+ * Expected activation set for a shape carrying EXACTLY the given chamber host domains:
+ * the closed base set plus every listed domain, in REQUIRED order. Unknown names FAIL
+ * LOUD — silently dropping a listed domain would shrink its probe row out of the
+ * expected set AND the run legs, letting a dead/unmounted chamber domain pass
+ * activation until the sidebar 404s (fail-open); unknown names come from our own
+ * seed/probe metadata, so they are cross-package drift and must surface. The full list
+ * equals REQUIRED_ACTIVATION_PROBES, an empty list equals PROBE_NAMES_WITHOUT_HOST_DOMAINS.
  */
 export function activationProbeNamesForDomains(domains: readonly string[]): readonly string[] {
-  // Fail LOUD on an unrecognized domain:
-  // silently ignoring a listed domain would drop its probe row from the
-  // expected set AND the run legs — a dead/unmounted chamber domain could
-  // then pass activation until the sidebar 404s (fail-open). The listed
-  // names come from our own seed/probe metadata, so an unknown name is a
-  // cross-package drift bug and must surface, never degrade to skip.
+  // Fail LOUD on an unrecognized domain: ignoring it would drop its probe row from the
+  // expected set and the run legs, letting a dead domain pass activation until the sidebar 404s.
   const unknown = domains.filter(name => !HOST_DOMAIN_PROBE_NAME_SET.has(name))
   if (unknown.length > 0) {
     throw new Error(`unknown chamber host probe domain(s): ${[...new Set(unknown)].join(', ')}`)
@@ -132,23 +95,14 @@ export interface ProbeResult {
 /** 激活裁决：pass = 探针全过；observe = 窗口内首次失败（延迟裁决）；fail = 回退。 */
 export type ActivationVerdict = 'pass' | 'fail' | 'observe';
 
-/** 默认探测窗口（§3.4「默认 ≤60s 超时」），毫秒。 */
+/** 默认探测窗口（≤60s），毫秒。 */
 export const DEFAULT_PROBE_WINDOW_MS = 60_000;
 
 /**
- * 探针裁决（§3.4「探测窗口与裁决」）：
- *
- *   - 全部探针 ok（含空列表，空真）→ 'pass'；
- *   - 任一 fail：
- *       · 已 observe 过一次（opts.observedOnce）仍 fail → 'fail'——延迟裁决后
- *         再失败才回退，observe 只给一次二次确认窗口；
- *       · 首次失败 → 'observe'——§3.4「超时不立即判失败，进入继续观察 + 延迟
- *         裁决（给慢迁移二次确认窗口），再失败才回退」；窗口只约束单次探针时长
- *         （调用方用 elapsedMs 判超时），不改变「首败必 observe」的口径。
- *
- * `observedOnce` 由调用方传入「本激活已裁决过一次 observe」（本函数纯函数、
- * 不维护跨调用状态）；观察一次后若探针恢复全 ok，仍 'pass'（只有「仍失败」
- * 才 fail）。
+ * 探针裁决：全部 ok（含空列表，空真）→ 'pass'；任一 fail 且已 observe 过一次
+ * （opts.observedOnce）→ 'fail'；首次失败 → 'observe'——超时不立即判失败，给慢迁移
+ * 一次二次确认窗口，再失败才回退。窗口只约束单次探针时长（调用方用 elapsedMs 判超时），
+ * 不改变「首败必 observe」的口径；观察一次后恢复全 ok 仍 'pass'。
  */
 export function decideVerdict(
   probes: ProbeResult[],
@@ -188,18 +142,12 @@ export interface RollbackTargetOptions {
 }
 
 /**
- * 自动回退目标（§3.4「回退目标（统一口径）」）：自动回退目标 = 切换前版本（若
- * 其曾探针通过或为 known-good），否则最近 known-good；都无 → null（落内建树 +
- * 响亮终态）。
+ * 自动回退目标：切换前版本（若其曾探针通过或为 known-good），否则最近 known-good；
+ * 都无 → null（落内建树 + 响亮终态）。
  *
- * 优先级：
- *   1. previousVersion 非空且（previousWasKnownGood 或 previousVersion ===
- *      knownGoodVersion）→ previousVersion；
- *   2. 否则 → knownGoodVersion；
- *   3. 都无 → null。
- *
- * 返回值只会是 previousVersion（当它可信任）或 knownGoodVersion 或 null，绝不
- * 会是别的树——绝不在两棵坏树间交替。
+ * 优先级：1. previousVersion 非空且（previousWasKnownGood 或 === knownGoodVersion）
+ * → previousVersion；2. 否则 knownGoodVersion；3. 都无 → null。返回值只会是
+ * previousVersion（当它可信任）或 knownGoodVersion 或 null——绝不在两棵坏树间交替。
  */
 export function rollbackTarget(opts: RollbackTargetOptions): string | null {
   const { previousVersion, previousWasKnownGood, knownGoodVersion } = opts;
@@ -210,13 +158,9 @@ export function rollbackTarget(opts: RollbackTargetOptions): string | null {
 }
 
 /**
- * 延迟崩溃分支（§3.4）谓词：restart-exhausted（窗口内 M=5 次重启，设计 02
- * §3.6；**注意与连续探活失败阈值 N=20 的宿主重启区分**——那是宿主重启，不是
- * 版本回退）且激活树是 override → 触发一次自动回退（复用本路径，作为状态机
- * 分支）。
- *
- * 纯谓词 = 两标志的合取；「触发一次」的幂等（回退后不再重复）由调用方状态机
- * 保证（回退后清除 override / 置位回退尝试标记）。
+ * 延迟崩溃分支谓词：restart-exhausted（窗口内 M=5 次重启；注意与连续探活失败阈值
+ * N=20 的宿主重启区分）且激活树是 override → 触发一次自动回退。纯谓词 = 两标志的
+ * 合取；「触发一次」的幂等（回退后不再重复）由调用方状态机保证。
  */
 export function shouldAutoRollback(restartExhausted: boolean, activeIsOverride: boolean): boolean {
   return restartExhausted && activeIsOverride;

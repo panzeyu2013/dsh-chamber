@@ -126,6 +126,7 @@ pnpm run dist:desktop
 |---|---|---|
 | `dsh-chamber:info` | invoke | `{controlPlaneUrl, dshVersion, version, platform}`（不向 renderer 暴露本机工作区/状态目录） |
 | `desktop_ssh_instances_get` | invoke | 实例列表 |
+| `desktop_ssh_instances_health` | invoke | 注册表**加载**健康位 `{degraded, reason?, rosterIncomplete, droppedCount?}`：损坏保留为 `*.corrupt` 后空启动（或 live 缺失而副本仍在）时 `{degraded:true, reason}`（F13）；JSON 数组内条目被丢弃（`validateSpec` 拒绝 / null 非对象行 / 重复 id 首胜）时 `{degraded:false, rosterIncomplete:true, droppedCount:N}`（V5-A，合法行照常安装/可见）；健康完整为 `{degraded:false, rosterIncomplete:false}`；`droppedCount` 仅随 incomplete 出现，旧生产者缺字段按 false/0 读。degraded 与 incomplete **同档**关死 renderer durable 剪枝门，incomplete 期间 `compensation` 也跳过落盘；一次无丢弃成功 load 或 `save_connection`（authoritative）重建后恢复 |
 | `desktop_ssh_save_connection` | invoke | add/edit/非空凭据写唯一入口；元数据 + 三类 write-only 凭据的主进程 crash-safe binding/补偿事务，旧值不返回 renderer |
 | `desktop_ssh_delete_connection` | invoke | 精确 id-addressed 删除；先断开/撤销 exact-scope session/清凭据，再删 metadata；不存在 id 为幂等 no-op |
 | `desktop_ssh_set_password` | invoke | legacy clear-only：仅接受 '' / null 清除 SSH 密码；非空写必须走 save_connection，未知 id → `{error}` |

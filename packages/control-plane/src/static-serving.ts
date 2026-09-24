@@ -1,17 +1,13 @@
 /**
- * Static frontend service (design 05 §7.3 / 04 §5): dist/ + __DSH_BOOT__.
+ * Static frontend service: dist/ + __DSH_BOOT__.
  *
  * createStaticServing assembles the pure static-serve surface over a
  * webDistDir: MIME resolution, on-the-fly gzip (with a tiny per-file cache),
- * the SPA fallback to the injected shell, and the __DSH_BOOT__ manifest
- * injection. Anonymous like every other surface (v1 has no authentication).
- *
- * The module owns no HTTP server and no security-header policy — those stay
- * with the control-plane request handler (index.ts), which mints the
- * per-response CSP nonce (`res._cspNonce`) and sets the browser boundary
- * headers before dispatch. It only reads the two private per-request
- * channels: `_cspNonce` (the __DSH_BOOT__ inline-script nonce) and
- * `_corsHeaders` (the CORS decision spread on every write).
+ * the SPA fallback to the injected shell, and __DSH_BOOT__ manifest injection.
+ * Anonymous like every other surface. It owns no HTTP server and no
+ * security-header policy — index.ts mints the per-response CSP nonce
+ * (`res._cspNonce`) and sets the browser boundary headers before dispatch; this
+ * module only reads `_cspNonce` and `_corsHeaders`.
  */
 
 import { extname, join, resolve, sep } from 'node:path'
@@ -39,11 +35,9 @@ const MIME_TYPES: Record<string, string> = {
 }
 
 /**
- * Static types gzip'd on the fly (text-like payloads where gzip helps —
- * html/css/js/map/json/svg; woff2 rides along for literal compliance, it is
- * already brotli-compressed so gzip gains nothing but costs ~nothing on a
- * loopback server, and each file is compressed once per relaunch). Binary
- * image formats are excluded (already compressed; gzip would waste CPU).
+ * Static types gzip'd on the fly (html/css/js/map/json/svg; woff2 rides along
+ * for literal compliance — already brotli-compressed, so gzip gains nothing).
+ * Binary image formats are excluded (already compressed).
  */
 const COMPRESSIBLE_TYPES = new Set(['.html', '.js', '.mjs', '.css', '.json', '.svg', '.map', '.woff2'])
 
@@ -72,39 +66,24 @@ export interface StaticServingOptions {
 export interface StaticServing {
   /**
    * Serve a static path (or the injected index.html SPA fallback) on the
-   * response. Rejects on a missing CSP nonce for the manifest-injected shell;
-   * the owning handler answers 500 for any rejection beyond the guarded races.
+   * response; rejects on a missing CSP nonce for the manifest-injected shell.
    */
   serve(req: ApiRequest, res: ApiResponse, pathname: string): Promise<void>
 }
 
-/**
- * Assemble the static frontend service over one dist directory.
- * @param options - {webDistDir, logger?}.
- * @returns {serve(req, res, pathname)} — the static dispatch.
- */
+/** Assemble the static frontend service over one dist directory; returns the
+ *  serve(req, res, pathname) dispatch. */
 export function createStaticServing({ webDistDir, logger }: StaticServingOptions): StaticServing {
   /**
-   * Tiny on-the-fly gzip cache keyed by path+mtime (LCP perf pass): immutable
-   * hash-named assets under /assets/ are gzipped once per build — the default
-   * Electron session keeps a disk HTTP cache, so the immutable policy below
-   * serves those assets from cache across relaunches and the server re-encodes
-   * one only when a request actually misses that cache; the path+mtime key
-   * makes that a single (async) gzip per file per server lifetime. FIFO cap
-   * bounds memory (each entry is one compressed asset). index.html is NOT
-   * served through this cache: its content is re-injected with __DSH_BOOT__
-   * per request (manifest rev can change without index.html's mtime moving),
-   * so it is gzipped per request from the in-memory (already-injected) buffer
-   * instead.
-   *
-   * The read+gzip runs off the event loop (fs/promises + async zlib). Every
-   * request still stats for itself (cheap) so the per-request cache key stays
-   * the freshness verdict; only the expensive read+gzip is single-flighted,
-   * keyed by that same path+mtime+size key, so concurrent cold misses of one
-   * snapshot share it while a request that observes a new key starts its own
-   * flight. A rejected flight is forgotten so the next request retries, and a
-   * failed gzip still falls back to the identity bytes exactly as before.
-  */
+   * Tiny on-the-fly gzip cache keyed by path+mtime: immutable hash-named assets
+   * under /assets/ are gzipped once per build snapshot, and the FIFO cap bounds
+   * memory. index.html is NOT served through this cache — its content is
+   * re-injected with __DSH_BOOT__ per request (the manifest rev can change
+   * without its mtime moving), so it is gzipped per request. Read+gzip runs off
+   * the event loop and cold misses of one snapshot are single-flighted by the
+   * same path+mtime+size key; a rejected flight is forgotten and a failed gzip
+   * falls back to identity bytes.
+   */
   const gzipCache = new Map<string, Buffer>()
   const gzipFlights = new Map<string, Promise<{ data: Buffer; encoded: boolean; error?: unknown }>>()
   async function readGzipCached(path: string): Promise<{ data: Buffer; encoded: boolean; error?: unknown }> {
@@ -137,10 +116,9 @@ export function createStaticServing({ webDistDir, logger }: StaticServingOptions
   }
 
   /**
-   * Whether the request's Accept-Encoding accepts gzip (RFC 9110 q-value
-   * aware): a bare `gzip` (or `gzip;q=0.5`) accepts it, `gzip;q=0` explicitly
-   * refuses it, and anything else (deflate/br-only, identity, absent) does not
-   * accept it.
+   * Whether the request's Accept-Encoding accepts gzip (RFC 9110 q-value aware):
+   * a bare `gzip` (or `gzip;q=0.5`) accepts, `gzip;q=0` explicitly refuses, and
+   * anything else (deflate/br-only, identity, absent) does not accept.
    */
   function acceptsGzip(req: ApiRequest): boolean {
     const header = req.headers['accept-encoding']
@@ -180,9 +158,8 @@ export function createStaticServing({ webDistDir, logger }: StaticServingOptions
   /** Serve a static file (or index.html fallback) on the response. */
   async function serveStatic(req: ApiRequest, res: ApiResponse, pathname: string): Promise<void> {
     let candidate = pathname === '/' ? '/index.html' : pathname
-    // SPA fallback: unknown paths render index.html (04 §5), except paths
-    // that look like real assets (missing assets answer 404 — a frontend
-    // build error must not masquerade as the shell).
+    // SPA fallback: unknown paths render index.html, except asset-looking paths
+    // (a missing asset answers 404 — a build error must not masquerade as the shell).
     const path = resolveStatic(candidate)
     if (path === null) {
       jsonStaticError(res, 404, 'not_found')
@@ -229,16 +206,14 @@ export function createStaticServing({ webDistDir, logger }: StaticServingOptions
     }
     const type = MIME_TYPES[extname(candidate).toLowerCase()] ?? 'application/octet-stream'
     if (candidate === '/index.html') {
-      // __DSH_BOOT__ injection (04 §5 / 05 §2): the manifest (rendered by
-      // the renderer build chain) becomes window.__DSH_BOOT__ inline —
-      // parseBootManifest contract, served from <dist>/manifest.json.
+      // __DSH_BOOT__ injection: the manifest becomes window.__DSH_BOOT__ inline,
+      // served from <dist>/manifest.json.
       const manifest = await readBootManifest()
       if (manifest !== null) {
         const nonce = res._cspNonce
         if (nonce === undefined) throw new Error('missing CSP nonce for static response')
-        // JSON is embedded in an HTML script data block: `<` must never form
-        // `</script>` (manifest values are build inputs, not trusted HTML).
-        // Escape JavaScript's two legacy line separators as well.
+        // JSON embedded in an HTML script block: `<` must never form `</script>`,
+        // and JavaScript's two legacy line separators are escaped too.
         const serializedManifest = JSON.stringify(manifest)
           .replace(/</g, '\\u003c')
           .replace(/\u2028/g, '\\u2028')
@@ -250,25 +225,19 @@ export function createStaticServing({ webDistDir, logger }: StaticServingOptions
       }
     }
     const headers: Record<string, string> = { 'content-type': type, ...(res._corsHeaders ?? {}) }
-    // Cache policy: hash-named build assets under /assets/
-    // are immutable — one year, no revalidation, so a relaunch serves them
-    // from the Electron HTTP cache instead of re-fetching several MB of
-    // renderer assets (sizes drift per build; measured totals live in
-    // dist/web/perf-sizes.json + scripts/perf/README.md). index.html
-    // keeps no-cache (the __DSH_BOOT__ manifest moves every build). Other
-    // paths (e.g. /manifest.json) get no cache-control header.
-    // The predicate is the SAME one the gateway's response-header seam uses
-    // (proxy-forward.ts `isHashedStaticAssetPath`): a bare `/assets/` prefix
-    // would pin a future UNhashed entry for a year, which is exactly the
-    // staleness the shared rule exists to prevent.
+    // Cache policy: hash-named build assets under /assets/ are immutable (one
+    // year, no revalidation) so a relaunch serves them from the Electron HTTP
+    // cache; index.html keeps no-cache (the __DSH_BOOT__ manifest moves every
+    // build); other paths get no cache-control header. The predicate is the SAME
+    // one proxy-forward.ts uses (isHashedStaticAssetPath): a bare `/assets/`
+    // prefix would pin a future unhashed entry for a year.
     if (candidate === '/index.html') {
       headers['cache-control'] = 'no-cache'
     } else if (isHashedStaticAssetPath(candidate)) {
       headers['cache-control'] = 'public, max-age=31536000, immutable'
     }
-    // On-the-fly gzip for text-like types (only when the client accepts it).
-    // Vary is set for every compressible response (gzip or not) so the HTTP
-    // cache never serves a negotiated variant to a mismatched client.
+    // On-the-fly gzip for text-like types; Vary is set for every compressible
+    // response so no cache serves a negotiated variant to a mismatched client.
     const compressible = COMPRESSIBLE_TYPES.has(extname(candidate).toLowerCase())
     if (compressible) headers['vary'] = 'accept-encoding'
     if (compressible && acceptsGzip(req)) {
@@ -279,15 +248,13 @@ export function createStaticServing({ webDistDir, logger }: StaticServingOptions
           data = await gzipAsync(data)
           headers['content-encoding'] = 'gzip'
         } catch (gzipError) {
-          // index.html is injected per request and cannot use the file cache.
-          // If that one compression fails, serve the already-read identity
-          // bytes so the shell remains available.
+          // index.html is injected per request and cannot use the file cache; if
+          // that compression fails, serve the already-read identity bytes.
           logger?.warn(`static gzip failed for ${candidate}: ${String(gzipError)}`)
         }
       }
     }
-    // Explicit Content-Length: keeps static responses non-chunked and gives
-    // HEAD requests a real length (the immutable-cache client relies on it).
+    // Explicit Content-Length: non-chunked static responses and a real length for HEAD.
     headers['content-length'] = String(data.length)
     res.writeHead(200, headers)
     res.end(data)

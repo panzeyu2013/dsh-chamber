@@ -1,4 +1,2 @@
-/** Host loader entry for the browser-only sidebar plugin. */
-
-/** Provides no host-side behavior. */
+/** Host loader entry for the browser-only sidebar plugin; provides no host-side behavior. */
 export function apply(): void {}

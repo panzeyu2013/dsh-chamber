@@ -1,23 +1,18 @@
 import type { InstanceAggregate, InstanceSnapshot } from '@dsh-chamber/dsh-chamber-client-core'
 
 /**
- * Decide which ready sources need an authoritative unary aggregate refresh.
- *
- * A mounted producer normally suppresses unary work. The exception is a
- * not-ready -> ready edge: the producer de-duplicates identical snapshots, so
- * it may have nothing new to publish after a reconnect (a previously-pushed
- * mounted source keeps its pushed view through the outage —
- * shouldRetainPushedAggregate — and only NEVER-pushed sources are replaced
- * with `not-connected`). One pull per connection generation restores the
- * aggregate without reintroducing a timer.
+ * Decide which ready sources need an authoritative unary aggregate refresh: a
+ * mounted producer normally suppresses unary work, but a not-ready -> ready
+ * edge must pull once (the producer de-duplicates identical snapshots and may
+ * have nothing new after a reconnect; previously-pushed sources keep their view
+ * through the outage, never-pushed ones are replaced with `not-connected`).
+ * One pull per connection generation restores the aggregate without a timer.
  */
 
 /**
  * Whether an aggregate is the DEGRADED unary-fallback view: ok state plus at
- * least one cwd-derived SYNTHETIC workspace row. Only the unary fallback ever
- * produces synthetic rows (a mounted push never does), so any synthetic row
- * means the last commit itself came from the fallback. An EMPTY workspace set
- * is never synthetic (a legitimate mounted fresh-instance state).
+ * least one cwd-derived SYNTHETIC workspace row (only the fallback produces
+ * them). An EMPTY workspace set is a legitimate mounted state, never synthetic.
  */
 export function isFallbackDerivedView(current: InstanceAggregate | undefined): boolean {
   return current !== undefined && current.state === 'ok'
@@ -29,20 +24,14 @@ export function isFallbackDerivedView(current: InstanceAggregate | undefined): b
  * Whether a not-ready source's current aggregate may be RETAINED through a
  * transport outage instead of being replaced by `not-connected`.
  *
- * A disconnect must retain an ok aggregate's last PUSHED view: replacing
- * EVERY ok aggregate with `not-connected` would make the not-ready -> ready edge
- * committed the FULL unary fallback view — which carries NO archive set and
- * cwd-derived synthetic groups. When the mounted ctx store then stayed
- * silent (nothing changed + producer signature dedupe suppresses an identical
- * rebaseline push), that degraded view became PERMANENT: archived sessions
- * resurfaced as openable rows and clicking one opened an archived current the
- * official runtime immediately clears (empty new-session view). Retaining the
- * last PUSHED view through the outage is safe for rendering (deriveServers
- * hides all rows while the transport is not ready) and makes the ready-edge
- * pull take the merge branch of {@link commitAggregatePull} — workspaces +
- * archive set stay authoritative, only session rows refresh from the unary.
- * Never-pushed / unmounted sources are NOT retainable (the unary fallback is
- * their documented scope).
+ * Retaining the last PUSHED view is safe (deriveServers hides rows while the
+ * transport is not ready) and makes the ready-edge pull take the merge branch
+ * of {@link commitAggregatePull} — workspaces + archive set stay authoritative,
+ * only session rows refresh. Replacing an ok view with `not-connected` would
+ * instead commit the FULL unary fallback (no archive set, cwd-derived synthetic
+ * groups); if the mounted store then stayed silent, that degraded view would be
+ * permanent and archived sessions would resurface as openable rows. Never-pushed
+ * / unmounted sources are NOT retainable (the fallback is their scope).
  */
 export function shouldRetainPushedAggregate(
   mounted: boolean,
@@ -55,17 +44,12 @@ export function shouldRetainPushedAggregate(
 }
 
 /**
- * Whether a MOUNTED source whose aggregate is STUCK on the degraded fallback
- * view (synthetic rows present) should get a lightweight ctx connection
- * reconnect, bounded by the same backoff as the stale-channel arm. The
- * reconnect replays the workspace follow baseline; the store withdrawal
- * clears the producer's content signature, so the identical recovered
- * baseline is re-published and replaces the fallback view (with its archive
- * set) — the heal for aggregates stuck on the degraded view (through any
- * residual full-commit path). Recording discipline（与重连臂一致）：仅在
- * reconnectInstanceConnection() 实际调用成功
- * （返回 true）时记录 lastReconnectAt——no-op 重连（无连接持有者，如已回收
- * 来源）不消耗退避窗，每可见 tick 的重试是廉价 no-op。
+ * Whether a MOUNTED source STUCK on the degraded fallback view (synthetic rows
+ * present) should get a lightweight ctx reconnect, bounded by the same backoff
+ * as the stale-channel arm: replaying the workspace follow baseline replaces the
+ * fallback with the recovered view (with its archive set). 记录纪律与重连臂一致：
+ * 仅在 reconnectInstanceConnection() 返回 true 时记录 lastReconnectAt——no-op 重连
+ * （无连接持有者）不消耗退避窗，重试是廉价 no-op。
  */
 export function shouldRebaselineFallbackView(opts: {
   mounted: boolean
@@ -82,38 +66,23 @@ export function shouldRebaselineFallbackView(opts: {
 /**
  * Watchdog reconnect threshold per source transport.
  *
- * The staleness watchdog cannot distinguish a FROZEN push channel from a
- * healthy-but-quiet one (mounted producers only push on content changes), so
- * every reconnect costs one baseline replay. The threshold is therefore chosen
- * per transport by how much INDEPENDENT liveness coverage the transport
- * already has:
- *
- * - `http` (direct remote host, no tunnel): the browser leg has the control
- *   plane's 30s WS ping, but the upstream leg has no application heartbeat and
- *   only ~10min OS TCP keepalive, so an app-level freeze can stay invisible
- *   for minutes. 120s is the tightest cadence that still lets a healthy idle
- *   source bounce at most once per two minutes.
- * - `ssh` (tunnel): the tunnel already has three independent detectors — the
- *   proxy's 30s browser-leg WS ping, the host mux's 2s/2-miss heartbeat, and
- *   the ssh client's `ServerAliveInterval=30 × CountMax=3` (~90s) — so this
- *   arm only adds a *last-resort* app-level freeze heal. A longer threshold
- *   (5min) keeps idle-healthy ssh sources from paying a baseline replay every
- *   two minutes while still healing a channel that survived every heartbeat
- *   but stopped pushing.
- * - `local` and unknown transports get `null`: the local aggregate is served
- *   authoritatively (no push channel to freeze) and unknown transports are
- *   already fail-closed elsewhere.
+ * The watchdog cannot distinguish a FROZEN push channel from a healthy-but-quiet
+ * one (mounted producers push only on content changes), and every reconnect
+ * costs one baseline replay, so the threshold follows how much INDEPENDENT
+ * liveness coverage each transport already has:
+ * - `http`: only the control plane's 30s WS ping and ~10min OS TCP keepalive, so
+ *   an app-level freeze can stay invisible for minutes — 120s.
+ * - `ssh`: the tunnel already has the 30s WS ping, the host mux's 2s/2-miss
+ *   heartbeat and ServerAliveInterval=30 × CountMax=3, so 5min is a last resort.
+ * - `local` / unknown: null (local is authoritative; unknown is fail-closed).
  */
 export const AGGREGATE_RECONNECT_HTTP_STALE_MS = 120_000
 /** Last-resort app-level freeze heal for tunnel sources (see above). */
 export const AGGREGATE_RECONNECT_SSH_STALE_MS = 300_000
 
 /**
- * The reconnect threshold for one source's transport, or null when this
- * arm must not touch it (local / unknown). Callers pass the authoritative
- * per-instance transport from the roster projection.
- * @param transport - `'http' | 'ssh' | 'local' | …` (untrusted shape).
- * @returns staleness threshold in ms, or null to skip the source.
+ * The reconnect threshold for one source's transport, or null when this arm must
+ * not touch it (local / unknown). `transport` is an untrusted shape.
  */
 export function reconnectStalenessMsForTransport(transport: unknown): number | null {
   if (transport === 'http') return AGGREGATE_RECONNECT_HTTP_STALE_MS
@@ -124,44 +93,21 @@ export function reconnectStalenessMsForTransport(transport: unknown): number | n
 /**
  * Commit one unary aggregate pull over the current per-source aggregate.
  *
- * The unary fallback cannot express workspace identity or the archive set
- * (the archive set exists
- * only on the workspace follow baseline, so `fetchInstanceSnapshot` returns
- * an EMPTY archive set plus cwd-derived synthetic groups). A source whose
- * mounted producer already pushed must therefore keep its pushed
- * groups/archive/state — the fallback contributes only its live session rows
- * (running bits, new sessions), exactly the documented "sessions-only
- * fallback never replaces a mounted source's groups/archive/state" contract
- * (derive.ts projectInstanceSnapshot doc). Without this, the staleness
- * watchdog's 30s re-pull of a healthy-but-idle mounted source would replace the
- * aggregate with the degraded fallback, resurfacing
- * every archived session together with synthetic workspace groups
- * ("archived-resurfacing"). Never-pushed / unmounted sources keep the full
- * fallback commit (pre-baseline window and unmounted sources are the
- * documented KNOWN DEGRADATION scope).
+ * The fallback cannot express workspace identity or the archive set (it carries
+ * an EMPTY archive set plus cwd-derived synthetic groups), so a source whose
+ * mounted producer already pushed keeps its pushed groups/archive/state — the
+ * fallback contributes only live session rows (running bits, new sessions).
+ * Without that merge, the watchdog's 30s re-pull of a healthy-but-idle mounted
+ * source would commit the degraded fallback, resurfacing archived sessions and
+ * synthetic groups. Never-pushed / unmounted sources keep the full fallback
+ * commit (first-boot window; KNOWN DEGRADATION scope).
  *
- * The merge applies only when the current aggregate's workspaces are REAL
- * (a mounted push never produces synthetic rows — only the fallback does).
- * ANY synthetic row means the last commit itself came from the fallback
- * (e.g. the not-connected → ready-edge full commit landed while the
- * post-restart follow baseline never arrived): freezing that degraded view
- * would keep cwd groups and new sessions stale, so such currents continue to
- * receive full commits (sessions AND cwd groups keep refreshing) until a real
- * push replaces them. An EMPTY workspace set is a legitimate mounted state
- * (fresh instance — everything renders ungrouped) and is never treated as
- * synthetic.
- *
- * Reachability of the full-commit degraded view: the
- * not-ready → ready-edge full commit only fires when the current aggregate
- * was NOT retained through the outage (see shouldRetainPushedAggregate — a
- * previously-pushed mounted source keeps its pushed view, so the ready-edge
- * pull takes the merge branch and archived sessions never resurface on
- * reconnect). The full commit remains the honest stopgap for never-pushed /
- * unmounted sources (first-boot window, KNOWN DEGRADATION scope) and for
- * previously-degraded currents — those keep receiving full commits until a
- * real push replaces them, and the App's fallback-view watchdog additionally
- * arms a ctx reconnect (shouldRebaselineFallbackView) so a silent mounted
- * channel heals instead of freezing the degraded view forever.
+ * The merge applies only when the current workspaces are REAL: ANY synthetic row
+ * means the last commit came from the fallback, and freezing that view would
+ * keep cwd groups and sessions stale — such currents keep receiving full commits
+ * until a real push replaces them, and the App's fallback watchdog arms a ctx
+ * reconnect (shouldRebaselineFallbackView). An EMPTY workspace set is never
+ * treated as synthetic.
  */
 export function commitAggregatePull(
   current: InstanceAggregate | undefined,
@@ -171,14 +117,10 @@ export function commitAggregatePull(
 ): InstanceAggregate {
   const currentIsFallbackDerived = isFallbackDerivedView(current)
   if (mounted && current !== undefined && current.state === 'ok' && !currentIsFallbackDerived) {
-    // The merge keeps every authoritative pushed field (workspaces +
-    // archivedSessionIds + archive-set PROVENANCE) and contributes only the
-    // unary's live session rows. archiveSetKnown must ride along: it is the
-    // manager's tri-state input ("[] = genuinely nothing archived"), and the
-    // unary fallback carries no archive wire source — dropping the flag here
-    // would flip an authoritative source into the degraded manager branch on
-    // the first mutation pull (a requestRefresh pull that lands before the
-    // producer push would otherwise show the degraded tri-state until a reload).
+    // Keeps every authoritative pushed field (workspaces + archivedSessionIds +
+    // archive-set PROVENANCE) and only the unary's live session rows.
+    // archiveSetKnown must ride along: it is the manager's tri-state input, and
+    // dropping it would flip an authoritative source into the degraded branch.
     return {
       state: 'ok',
       workspaces: current.workspaces,
@@ -188,14 +130,11 @@ export function commitAggregatePull(
       error: null,
     }
   }
-  // The unary fallback carries NO archive wire
-  // source, so a degraded commit would publish an EMPTY archive set — every
-  // archived row then renders as an ordinary row until the next authoritative
-  // push (design 24 §12). When the App has already seen an
-  // AUTHORITATIVE archive set for this source (remembered across the degraded
-  // window), publish that remembered set with `archiveSetKnown` still FALSE:
-  // the sidebar filters archived rows correctly, while the archive manager
-  // keeps its honest degraded branch (provenance is not claimed).
+  // The fallback carries no archive wire source, so a degraded commit would
+  // publish an EMPTY set and archived rows would render as ordinary ones until
+  // the next authoritative push. A remembered authoritative set is published
+  // with `archiveSetKnown` still FALSE (sidebar filters correctly, manager keeps
+  // its honest degraded branch — provenance is not claimed).
   const remembered = rememberedArchiveSet === undefined ? undefined : [...rememberedArchiveSet]
   return {
     state: 'ok',
@@ -206,16 +145,10 @@ export function commitAggregatePull(
 }
 
 /**
- * Decide the failure commit for one unary aggregate pull.
- *
- * A mounted source that already pushed keeps its last aggregate through pull
- * failures — the unary probe says nothing about the push channel, and
- * replacing authoritative pushed state with an error row would blank/hide it
- * (the same keep-last-view rule as the
- * withdrawal window). Returns `null` to signal "keep the current aggregate"
- * (the caller still runs the 503 health refresh and retry bookkeeping).
- * Never-pushed / unmounted sources keep the error state (first-boot error
- * surface, bounded quick retries).
+ * Decide the failure commit for one unary aggregate pull: a mounted source that
+ * already pushed keeps its last aggregate (an error row would blank it; the
+ * unary probe says nothing about the push channel) and `null` signals that.
+ * Never-pushed / unmounted sources keep the error state (first-boot surface).
  */
 export function commitAggregateFailure(mounted: boolean, errorText: string): InstanceAggregate | null {
   if (mounted) return null
@@ -223,24 +156,15 @@ export function commitAggregateFailure(mounted: boolean, errorText: string): Ins
 }
 
 /**
- * 保留视图的「无法验证」界限（design 05 §2.3）。
+ * 保留视图的「无法验证」界限。
  *
- * 已推送过的来源在每次 unary 拉取失败时**保留最后视图**（commitAggregateFailure
- * → null）：这避免了归档回流与整段空白，但也意味着「事实读持续失败」时视图会被
- * **无限**冻结——旧 running 位会一直渲染成「运行中」。本界限把保留有界化：距最后
- * 一次**成功验证**（push 或 unary 提交）超过 AGGREGATE_UNVERIFIED_FACTS_MS 后，App
- * 丢掉一个**无法验证**的「运行中」断言（只清 running 位，行/分组照旧保留，不触发
- * 归档回流），并把该来源交给既有的会话停滞横幅（文案 = 「无法确认会话状态」）；
- * 下一次成功读取（push 或 unary）立即恢复事实并撤下呈现。
- *
- * 为什么清位而不是只加标记：环是**断言**（「该会话正在跑」）。无法验证时保留断言就是
- * 在陈述一个没有证据的事实；而清位 + 可见提示是「不知道」的诚实表达，恢复路径（下一份
- * 权威读）无条件且幂等。已知残余：若宿主其实仍在跑、只是读路径坏掉，
- * 用户会暂时看到「无运行环」——由同一条横幅的「重新连接」出口收口。
- * @param factsAt - 最后一次成功验证事实的时刻；undefined = 从未验证（无断言可丢）。
- * @param now - 当前时刻。
- * @param budgetMs - 界限（默认 {@link AGGREGATE_UNVERIFIED_FACTS_MS}）。
- * @returns 是否应丢弃无法验证的 running 断言。
+ * 已推送来源在 unary 拉取失败时保留最后视图，这避免归档回流与整段空白，但也意味着
+ * 持续读失败时视图被无限冻结（旧 running 位一直渲染成「运行中」）。本界限把保留有界化：
+ * 距最后一次成功验证（push 或 unary 提交）超过 AGGREGATE_UNVERIFIED_FACTS_MS 后，丢掉
+ * 无法验证的 running 断言（只清 running 位，行/分组照旧保留），并把来源交给会话停滞
+ * 横幅；下一次成功读取立即恢复。环是断言，无法验证却保留等于陈述无证据事实，清位 +
+ * 可见提示才是诚实的「不知道」。已知残余：宿主仍在跑而读路径坏时用户会暂时看不到运行
+ * 环，由同一条横幅的「重新连接」出口收口。`factsAt === undefined` = 从未验证，无断言可丢。
  */
 export const AGGREGATE_UNVERIFIED_FACTS_MS = 90_000
 
@@ -255,24 +179,17 @@ export function shouldDropUnverifiedRunningFacts(opts: {
 }
 /**
  * Detect an archived-set SHRINK between the last committed aggregate and an
- * incoming snapshot (archive-cleanup convergence, design 24 §12). There is
- * NO unarchive wire, so the only host-side mutation that removes members from
- * the archived set is the cleanup purge's end-of-run removal — a strict shrink
- * is therefore the client's observable "a purge completed and those ids left
- * the set" signal. The baseline is the committed aggregate when it is
- * archive-set-authoritative (`state==='ok' && archiveSetKnown===true`),
- * otherwise the caller's `remembered` set — the last authoritative set the
- * App observed for this source (a shrink that completed while
- * the committed aggregate was degraded is otherwise invisible forever). []
- * when neither side is authoritative and for any non-authoritative `next`
- * (unknown provenance must never trigger — the unary fallback's empty set is a
- * known-degraded artifact, not a shrink fact).
- * Consumers (the App's mounted-push commit path) respond by requesting the
- * source's official session-list refresh: rows of the purged sessions may
- * still linger in the mounted ctx's official client summaries (they refresh
- * only on connection generations; purge events are documented no-ops) and
- * would otherwise resurface in the sidebar as ordinary rows once the archived
- * set no longer covers them — opening one fails with session/not-found.
+ * incoming snapshot. There is NO unarchive wire, so a strict shrink is the
+ * client's observable "a purge completed and those ids left the set" signal.
+ * The baseline is the committed aggregate when archive-set-authoritative
+ * (`state==='ok' && archiveSetKnown===true`), otherwise the caller's `remembered`
+ * set (the last authoritative set seen for this source) — otherwise a shrink
+ * completed during a degraded window is invisible forever. Returns [] for a
+ * non-authoritative `next` and when neither side is authoritative: the unary
+ * fallback's empty set is a known-degraded artifact, not a shrink fact.
+ * Consumers respond by requesting the source's official session-list refresh:
+ * purged rows may still linger in the mounted ctx's summaries and would
+ * otherwise resurface as ordinary rows whose opening fails with session/not-found.
  */
 export function archiveSetShrink(
   previous: InstanceAggregate | undefined,
@@ -280,11 +197,8 @@ export function archiveSetShrink(
   remembered?: readonly string[],
 ): string[] {
   if (next.archiveSetKnown !== true) return []
-  // When the committed aggregate lost archive-set
-  // provenance (degraded unary view / not-connected / never pushed), the App
-  // falls back to the last AUTHORITATIVE set it observed for this source —
-  // otherwise a purge that completed while the producer's first projection was
-  // still pending (workspace baseline already post-purge) is invisible forever.
+  // Lost provenance (degraded / not-connected / never pushed): fall back to the
+  // last AUTHORITATIVE set, or a purge during that window is invisible forever.
   const previousSet = previous !== undefined && previous.state === 'ok' && previous.archiveSetKnown === true
     ? previous.archivedSessionIds
     : remembered
@@ -294,13 +208,9 @@ export function archiveSetShrink(
 }
 
 /**
- * Decide whether a session-list refresh request may be DISPATCHED for a source
- * (bounded re-request floor for {@link planSessionListRefresh} consumers): a
- * request may go out when the source was never requested before (`undefined`
- * = never requested — dispatch) or the last request stamp is older than the
- * coalescing gap. NOTE: `0` is not "never requested" — it behaves as an
- * ancient stamp and suppresses for one full gap (Date.now() stamps can never
- * be 0, so this only matters for tests/typos; only `undefined` means never).
+ * Bounded re-request floor for {@link planSessionListRefresh} consumers: a
+ * request may go out when `lastRequestedAt` is `undefined` (never requested) or
+ * older than the coalescing gap. `0` is an ancient stamp, NOT "never requested".
  */
 export function shouldRequestSessionListRefresh(
   lastRequestedAt: number | undefined,
@@ -311,27 +221,18 @@ export function shouldRequestSessionListRefresh(
 }
 
 /**
- * One plan step of the App-side ghost-row convergence state machine (design 24
- * §12). Evaluated on EVERY ready mounted push of a source, BEFORE the aggregate
- * commit (against the last-committed aggregate via the render mirror):
- * - "removed" = the archived-set shrink of this push (archiveSetShrink — a
- *   strict shrink is the client-observable "a purge completed" signal; no
- *   unarchive wire exists);
- * - ghost candidates = removed ∪ previously-pending ids that are STILL LISTED
- *   as session rows of this push (rows already gone are converged — the id is
- *   dropped and no request is made for it);
- * - `request: true` means rows of purged sessions are still visible and the
- *   source's official session-list refresh is outstanding. The caller
- *   dispatches at most once per coalescing gap and re-evaluates on the next
- *   push, so a transiently failed refresh converges as soon as the channel
- *   heals or the rows vanish (the next push clears `pending`). A push whose
- *   rows no longer carry any candidate returns `pending: []` — the state
- *   machine is self-terminating. Push-only evaluation is COMPLETE: mounted
- *   pull commits preserve the current archived set (commitAggregatePull
- *   merge) and full-fallback commits are provenance-gated (archiveSetShrink),
- *   so a pull can never first observe a shrink. The
- *   shrink baseline may come from the caller's remembered authoritative set
- *   (see archiveSetShrink), which closes the degraded-view gap.
+ * One plan step of the App-side ghost-row convergence state machine, evaluated
+ * on EVERY ready mounted push BEFORE the aggregate commit (against the
+ * last-committed aggregate):
+ * - "removed" = the archived-set shrink of this push (the purge-completed signal);
+ * - ghost candidates = removed ∪ pending ids STILL listed as session rows
+ *   (already-gone ids are dropped and never requested);
+ * - `request: true` = purged rows are still visible and the official session-list
+ *   refresh is outstanding. The caller dispatches at most once per coalescing
+ *   gap and re-evaluates on the next push, whose rows clear `pending` — the
+ *   machine is self-terminating. Push-only evaluation is COMPLETE: mounted pulls
+ *   preserve the archived set and fallback commits are provenance-gated, so a
+ *   pull can never first observe a shrink.
  */
 export function planSessionListRefresh(
   previous: InstanceAggregate | undefined,
@@ -368,11 +269,8 @@ export function planAggregateRefreshes(
   return { refreshSourceIds, nextReady }
 }
 
-/**
- * Coalescing queue for aggregate refresh waves. A readiness edge that arrives
- * while another wave is running stays pending for the next drain instead of
- * being silently consumed by the edge-memory update in App.
- */
+/** Coalescing queue for aggregate refresh waves: an edge arriving mid-wave stays
+ *  pending for the next drain, not silently consumed by App's edge memory. */
 export class AggregateRefreshQueue {
   readonly #pending = new Set<string>()
 
@@ -395,13 +293,9 @@ export class AggregateRefreshQueue {
   }
 }
 
-/**
- * Staleness predicate for the aggregate watchdog (the fallback net for a
- * mounted producer whose push channel silently died). A source is stale when
- * it never pushed a snapshot or its last push is older than the threshold —
- * recency is the only liveness signal the App has, since the unary client
- * does not expose per-source connection state.
- */
+/** Staleness predicate for the aggregate watchdog: stale when a source never
+ *  pushed or its last push is older than the threshold — recency is the only
+ *  liveness signal, since the unary client exposes no connection state. */
 export function isSnapshotStale(
   lastSnapshotAt: number | undefined,
   now: number,
@@ -411,23 +305,15 @@ export function isSnapshotStale(
 }
 
 /**
- * Reconnect predicate for the staleness watchdog (对齐
- * ssh 断链自动恢复): a MOUNTED source whose push channel went silent — stale
- * per {@link isSnapshotStale} — gets a lightweight connection reconnect so
- * the ctx's own healthy reconnect chain re-establishes the workspace follow
- * (a half-open direct-http upstream leg fires no 'error'/'close', so nothing
- * else ever triggers it). Unmounted sources are excluded (no shell owns a
- * connection to reconnect — they stay on the unary fallback), and the
- * `lastReconnectAt` backoff bounds repeat attempts so a reconnect that did
- * not heal (or a healthy-but-quiet producer) is not retried on every tick.
- * The unary pull keeps running regardless — the reconnect is an additional
- * action, never a replacement.
- *
- * `mounted` is CALLER-DEFINED — the App passes "the ctx producer pushed at
- * least one snapshot this generation" (worked-then-went-silent); a channel
- * dead from its first boot never pushes and is covered by
- * the unary fallback instead (KNOWN DEGRADATION scope). Tests
- * exercise the predicate with explicit `mounted` values.
+ * Reconnect predicate for the staleness watchdog: a MOUNTED source whose push
+ * channel went silent gets a lightweight reconnect so the ctx's own reconnect
+ * chain re-establishes the workspace follow (a half-open direct-http upstream
+ * leg fires no 'error'/'close', so nothing else triggers it). Unmounted sources
+ * are excluded (no shell owns their connection), `lastReconnectAt` backoff
+ * bounds repeats, and the unary pull keeps running regardless — the reconnect is
+ * additional, never a replacement. `mounted` is CALLER-DEFINED: "pushed at least
+ * one snapshot this generation" (a channel dead from first boot never pushes and
+ * is covered by the unary fallback).
  */
 export function shouldReconnectStaleMounted(opts: {
   mounted: boolean
@@ -442,12 +328,9 @@ export function shouldReconnectStaleMounted(opts: {
     && (opts.lastReconnectAt === undefined || opts.now - opts.lastReconnectAt >= opts.reconnectBackoffMs)
 }
 
-/**
- * Decide whether an aggregate pull still owns its commit. Mutation-triggered
- * pulls use a dedicated sequence because a producer push can expose the
- * mutation's interim host-frame cross-section; ordinary pulls remain fenced
- * by the shared poll sequence so a newer push cannot be overwritten.
- */
+/** Whether an aggregate pull still owns its commit: mutation pulls use a
+ *  dedicated sequence (a push can expose the mutation's interim cross-section),
+ *  ordinary pulls are fenced by the shared poll sequence. */
 export function refreshPullStillCurrent(opts: {
   mutationTag?: number
   mutationSeq: number | undefined
@@ -458,14 +341,11 @@ export function refreshPullStillCurrent(opts: {
   return opts.pollSeq === opts.startedPollSeq
 }
 
-/** Renderer-local generation/ownership facts whose lifetime is exactly one
- * authoritative roster entry. Kept separate from React state so a roster
- * removal can invalidate an old unary result synchronously, before the render
- * that eventually removes the source row. */
+/** Renderer-local facts whose lifetime is one authoritative roster entry, kept
+ *  outside React state so a removal invalidates an old unary result synchronously. */
 export interface AggregateLifecycleState {
   failuresBySource: Record<string, number>
   snapshotAtBySource: Record<string, number>
-  snapshotSources: Record<string, true>
   readySources: Set<string>
 }
 
@@ -473,11 +353,8 @@ export interface AggregateLifecycleInvalidation extends AggregateLifecycleState 
   removedSourceIds: string[]
 }
 
-/**
- * Pure authoritative-roster transition for keyed aggregate facts. Async unary
- * ownership is retired separately through the active-only object-token
- * registry, so this state carries no historical sequence tombstones.
- */
+/** Pure authoritative-roster transition for keyed aggregate facts; async unary
+ *  ownership is retired separately, so no historical sequence tombstones here. */
 export function invalidateRemovedAggregateSources(
   previousLiveSourceIds: ReadonlySet<string>,
   nextLiveSourceIds: ReadonlySet<string>,
@@ -488,19 +365,16 @@ export function invalidateRemovedAggregateSources(
 
   const failuresBySource = { ...state.failuresBySource }
   const snapshotAtBySource = { ...state.snapshotAtBySource }
-  const snapshotSources = { ...state.snapshotSources }
   const readySources = new Set(state.readySources)
   for (const sourceId of removedSourceIds) {
     delete failuresBySource[sourceId]
     delete snapshotAtBySource[sourceId]
-    delete snapshotSources[sourceId]
     readySources.delete(sourceId)
   }
   return {
     removedSourceIds,
     failuresBySource,
     snapshotAtBySource,
-    snapshotSources,
     readySources,
   }
 }
@@ -515,8 +389,7 @@ export function withoutRemovedSourceIds(
   return next.length === sourceIds.length ? sourceIds : next
 }
 
-/** Identity-preserving keyed-state retirement. `hasOwn` also clears keys whose
- * value is explicitly undefined (plugin-diagnostic state has that shape). */
+/** Identity-preserving keyed-state retirement; `hasOwn` also clears keys explicitly set to undefined. */
 export function withoutRemovedSourceKeys<T>(
   state: Record<string, T>,
   removedSourceIds: ReadonlySet<string>,
@@ -530,9 +403,8 @@ export function withoutRemovedSourceKeys<T>(
   return next ?? state
 }
 
-/** Retire an active/pending source selection from the trusted lifecycle delta.
- * A presentation-only same-id edit carries no retired id and is therefore
- * preserved. `fallback` is local for active selection and null for pending. */
+/** Retire an active/pending selection from the trusted lifecycle delta; a
+ *  presentation-only same-id edit carries no retired id and is preserved. */
 export function retireSelectedSource<T extends string | null>(
   sourceId: T,
   removedSourceIds: ReadonlySet<string>,
@@ -541,9 +413,8 @@ export function retireSelectedSource<T extends string | null>(
   return sourceId !== null && removedSourceIds.has(sourceId) ? fallback : sourceId
 }
 
-/** Translate the trusted desktop registry delta into renderer source ids. The
- * delta, rather than a later roster snapshot, preserves a remove -> same-id
- * re-add edge when both overlapping pulls observe only the final roster. */
+/** Translate the trusted desktop registry delta into renderer source ids; using
+ *  the delta preserves a remove -> same-id re-add edge the final roster hides. */
 export function remoteRetiredSourceIds(retiredRawIds: readonly string[]): Set<string> {
   const retired = new Set<string>()
   for (const id of retiredRawIds) {

@@ -142,6 +142,9 @@ test('the last harvested shell is kept warm and yields as soon as another candid
 
 // ---- 源码级接线钉子 ----
 const appSource = readFileSync(new URL('../../src/App.tsx', import.meta.url), 'utf8')
+const serversSource = readFileSync(new URL('../../src/host/servers.ts', import.meta.url), 'utf8')
+// 托管 dsh 探针簇（状态 + 15s/前台/单飞/超时）已迁到 host/use-managed-runtime.ts。
+const runtimeHookSource = readFileSync(new URL('../../src/host/use-managed-runtime.ts', import.meta.url), 'utf8')
 // 收割/预热调度簇在 use-view-scheduler —— 该簇的接线锁钉在 hook 落点；
 // 投影侧（deriveServers/InstanceView/shell.ts）锁读原文件（下方分开断言）。
 const schedulerSource = readFileSync(
@@ -199,13 +202,13 @@ test('the App arms an absolute cap for the in-flight background mount', () => {
 test('the managed-runtime probe keeps its foreground cadence and single-flight seam', () => {
   // 探针是托管停机可见性的整个数据源：删掉轮询/可见性门控会让托管停机重新变成不可见，
   // 而其余门全绿。
-  assert.match(appSource, /setInterval\(\(\) => \{ void probe\(\) \}, MANAGED_RUNTIME_POLL_MS\)/,
+  assert.match(runtimeHookSource, /setInterval\(\(\) => \{ void probe\(\) \}, MANAGED_RUNTIME_POLL_MS\)/,
     'the probe must run on the documented foreground cadence')
-  assert.match(appSource, /probeManagedRuntimeRef\.current = probe/,
+  assert.match(runtimeHookSource, /probeManagedRuntimeRef\.current = probe/,
     'the compensation path must be able to await the current probe')
-  assert.match(appSource, /if \(inFlight !== null\) return inFlight/,
+  assert.match(runtimeHookSource, /if \(inFlight !== null\) return inFlight/,
     'single-flight must JOIN the in-flight probe, not no-op')
-  assert.match(appSource, /MANAGED_RUNTIME_PROBE_TIMEOUT_MS/, 'the probe must keep a timeout guard')
+  assert.match(runtimeHookSource, /MANAGED_RUNTIME_PROBE_TIMEOUT_MS/, 'the probe must keep a timeout guard')
 })
 
 test('the App excludes managed-down gateways from harvest/prewarm', () => {
@@ -214,12 +217,13 @@ test('the App excludes managed-down gateways from harvest/prewarm', () => {
     'a down/starting managed dsh can never boot a shell — it must not burn attempts/slots')
   assert.match(schedulerSource, /instance\.kind === 'gateway'\s*\n\s*&& managedRuntimeUnusable/,
     'the managed exclusion must stay kind-scoped to gateways')
-  assert.match(appSource,
+  // 投影本体已迁出 App（host/servers.ts）；断言跟随实现落点，语义不变。
+  assert.match(serversSource,
     /const managedDown = kind === 'gateway' && transportUsable && managedRuntimeDown\(runtimeState\)/,
     'the projection must gate the managed fact on a usable transport')
-  assert.match(appSource, /const phase = managedDown \|\| managedTransient \? runtimeState! : transportPhase/,
+  assert.match(serversSource, /const phase = managedDown \|\| managedTransient \? runtimeState! : transportPhase/,
     'both the terminal and the transient managed states must project into phase')
-  assert.match(appSource, /const connected = !managedDown && !managedTransient && instanceConnected\(/,
+  assert.match(serversSource, /const connected = !managedDown && !managedTransient && instanceConnected\(/,
     'connected must fold the managed facts (terminal and transient), which is what makes the two notes mutually exclusive')
 })
 

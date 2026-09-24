@@ -1,9 +1,8 @@
 /**
- * core-validation.ts — Untrusted-input validation helpers and the node filesystem adapter.
- *
+ * Untrusted-input validation helpers and the node filesystem adapter.
  */
 import { GitWorktreeError } from './core-errors.ts'
-import { GIT_DIR_POINTER_MAX_BYTES } from './core-parse.ts'
+import { GIT_DIR_POINTER_MAX_BYTES } from './core-constants.ts'
 import type { CreateInput, PreviewCreateInput, RemoveInput, RollbackCreateInput, WorktreeFileSystem } from './core-types.ts'
 import { createHash } from 'node:crypto'
 import { access, lstat, mkdir, open, realpath } from 'node:fs/promises'
@@ -21,9 +20,8 @@ export const nodeFileSystem: WorktreeFileSystem = {
       return false
     }
   },
-  // Bounded read: a hostile or corrupt `.git` pointer file must never be read
-  // whole into memory (gitdir lines are tiny; nothing beyond the prefix is
-  // used by worktreeGitDir's parse).
+  // Bounded read: a hostile or corrupt `.git` pointer must never be read whole into
+  // memory; only the prefix is used.
   readFile: async path => {
     const handle = await open(path, 'r')
     try {
@@ -131,8 +129,7 @@ export function expectedOpaqueId(value: unknown, kind: 'repo' | 'worktree'): str
 
 export function parsePreviewInput(value: PreviewCreateInput): PreviewCreateInput {
   assertRecord(value, 'input')
-  // startRef is OPTIONAL (assertExactKeys requires presence, so the allowed
-  // set + the required subset are checked inline, like deleteBranch in remove).
+  // startRef is OPTIONAL: the allowed set + required subset are checked inline.
   {
     const allowed = new Set(['sourceWorkspaceId', 'basename', 'branch', 'startRef'])
     for (const key of Object.keys(value)) {
@@ -154,9 +151,7 @@ export function parsePreviewInput(value: PreviewCreateInput): PreviewCreateInput
     sourceWorkspaceId,
     basename,
     branch: { kind: value.branch.kind, name },
-    // Same validation as the branch name: a control character or leading
-    // dash must never reach the localBranchHead argv (the allowlist would
-    // reject a leading dash, but input-layer validation is fail-closed).
+    // Same validation as the branch name: a control character or leading dash must never reach argv.
     ...(value.startRef === undefined ? {} : { startRef: safeBranchName(value.startRef, 'input.startRef') }),
   }
 }
@@ -175,8 +170,7 @@ export function parseRollbackInput(value: RollbackCreateInput): RollbackCreateIn
 
 export function parseRemoveInput(value: RemoveInput): RemoveInput {
   assertRecord(value, 'input')
-  // deleteBranch / discardChanges are OPTIONAL (assertExactKeys requires
-  // presence, so the allowed set + the required subset are checked inline).
+  // deleteBranch / discardChanges are OPTIONAL: allowed set + required subset checked inline.
   {
     const allowed = new Set(['operationId', 'workspaceId', 'path', 'expected', 'deleteBranch', 'discardChanges'])
     for (const key of Object.keys(value)) {
@@ -229,10 +223,9 @@ export function sameMembership(left: readonly string[], right: readonly string[]
 }
 
 /**
- * Defense in depth for the injected/default runner boundary. Any new Git
- * capability must be reviewed and added as an exact grammar here; network
- * verbs, arbitrary config, shell fragments, and caller-shaped flags cannot
- * pass through accidentally.
+ * Defense in depth for the injected/default runner boundary: any new Git capability must
+ * be reviewed and added as an exact grammar here. Network verbs, arbitrary config, shell
+ * fragments and caller-shaped flags cannot pass through accidentally.
  */
 export function assertSafeGitArgv(args: readonly string[]): void {
   const [verb, ...rest] = args
@@ -244,16 +237,13 @@ export function assertSafeGitArgv(args: readonly string[]): void {
   if (verb === 'check-ref-format' && rest.length === 2 && rest[0] === '--branch' && !rest[1]!.startsWith('-')) return
   if (verb === 'show-ref' && rest.length === 3 && rest[0] === '--hash' && rest[1] === '--verify'
     && rest[2]!.startsWith('refs/heads/') && !rest[2]!.slice('refs/heads/'.length).startsWith('-')) return
-  // Branch enumeration for the create dialog's existing-branch picker: a
-  // fixed flag only, no user input in argv.
+  // Branch enumeration for the create dialog: a fixed flag only, no user input.
   if (verb === 'show-ref' && exact('--heads')) return
-  // Optional branch deletion after worktree removal (design 08 §5.3 user
-  // decision): fixed flags + a validated local branch name (no leading dash).
+  // Optional branch deletion after removal: fixed flags + a validated local branch name.
   if (verb === 'branch' && rest.length === 2 && rest[0] === '-D'
     && !rest[1]!.startsWith('-') && !rest[1]!.startsWith('/')) return
   if (verb === 'status' && exact('--porcelain=v1', '-z', '--untracked-files=normal')) return
-  // Snapshot status with the branch header: local-ref upstream/ahead/behind
-  // facts (no network verb — the numbers reflect local refs only).
+  // Status with the branch header: local-ref upstream/ahead/behind facts (no network).
   if (verb === 'status' && exact('--porcelain=v1', '-z', '--branch', '--untracked-files=normal')) return
   if (verb === 'worktree' && exact('list', '--porcelain', '-z')) return
   // Newline-delimited --porcelain fallback (Git < 2.47, which predates `-z`).
@@ -265,10 +255,8 @@ export function assertSafeGitArgv(args: readonly string[]): void {
     && /^[0-9a-fA-F]{40,64}$/u.test(rest[5]!)) return
   if (verb === 'worktree' && rest.length === 3 && rest[0] === 'remove' && rest[1] === '--'
     && isAbsolute(rest[2]!)) return
-  // Explicit discard of uncommitted state (design 08 §5.3 amendment):
-  // `worktree remove --force` is authorized only by the
-  // `discardChanges` input flag — the fixed grammar here is the last line of
-  // defense (the git runner itself never passes --force otherwise).
+  // Explicit discard: `worktree remove --force` is authorized only by the
+  // `discardChanges` flag - this fixed grammar is the last line of defense.
   if (verb === 'worktree' && rest.length === 4 && rest[0] === 'remove' && rest[1] === '--force'
     && rest[2] === '--' && isAbsolute(rest[3]!)) return
 
@@ -276,8 +264,7 @@ export function assertSafeGitArgv(args: readonly string[]): void {
 }
 
 /**
- * Fixed `-c core.hooksPath=<nul>` guard prepended to every plugin git spawn.
- * Command-line `-c` is the highest-precedence config source, so a repository's
- * own `core.hooksPath` (which would otherwise re-enable `post-checkout` on
- * `worktree add`) cannot override it. Read commands ignore hooksPath.
+ * Fixed `-c core.hooksPath=<nul>` guard prepended to every plugin git spawn. Command-line
+ * `-c` is the highest-precedence config source, so a repository's own `core.hooksPath`
+ * cannot override it. Read commands ignore hooksPath.
  */

@@ -1,24 +1,14 @@
 /**
- * 会话变更的**唯一事实出口**（design 05 §2.2）——工作区出口
- * （shared/workspace-mutations.ts）的会话侧同构件。
- *
- * WHY 收口而不是每个调用点各发一次：会话回声（shared/session-echo.ts）是
- * 「本窗口刚建出来的会话行」的唯一非挂载读通道。unary 侧建出来的会话只有一条
- * 异步通道能进挂载壳的官方 summaries（宿主 `api-session/added` 广播），竞态窗
- * 内随后的挂载推送会用这份还不含它的 store 替换整份聚合；而未挂载来源（收割后的
- * 稳态，工作区行仍是真实推送行、"+" 仍可点）根本收不到该广播，unary 兜底又保不住
- * 已推送来源的工作区成员位——两条分支都刷不出这一行（新建的会话不出现，
- * 要切到那个服务器才刷新出来）。事实必须由**任何**应用内创建者发布：侧栏的
- * "+"、会话行菜单的 fork，以及 Git worktree 插件的会话创建（create/adopt/
- * recovery）——工作区回声的第二入口教训（漏发一个调用点，行就必须点开那个
- * 服务器才出现）在这里同样成立。
- *
- * 包装刻意保持薄：无状态、无重试、不是第二事实源；投影的唯一写者仍是 App 层，
- * 权威仍是该来源挂载壳的会话列表/工作区 follow 基线（收敛规则见
- * shared/session-echo.ts）。
- *
- * 归档（archive）是这条链的**撤下**半：单一回声没有退场机制，创建后立刻归档
- * 的行会留在投影里直到 TTL——与工作区回声的 remove 半同理。
+ * 会话变更的**唯一事实出口**——工作区出口（workspace-mutations.ts）的会话侧同构件。
+ * WHY 收口：会话回声（session-echo.ts）是「本窗口刚建出来的会话行」的唯一非挂载读
+ * 通道。unary 侧建出来的会话只有宿主 `api-session/added` 广播能进挂载壳的官方
+ * summaries，竞态窗内随后的挂载推送会用还不含它的 store 替换整份聚合；未挂载来源
+ * 根本收不到该广播。事实必须由**任何**应用内创建者发布——侧栏 "+"、会话行菜单
+ * fork、Git worktree 插件的创建（create/adopt/recovery）：漏发一个调用点，行就
+ * 必须点开那个服务器才出现。包装刻意保持薄：无状态、无重试、不是第二事实源；
+ * 投影的唯一写者仍是 App 层，权威仍是该来源挂载壳的会话列表 / 工作区 follow 基线。
+ * 归档（archive）是这条链的撤下半：创建后立刻归档的行靠它退场（与工作区回声的
+ * remove 半同理），而不是留到 TTL。
  */
 import { chamberBridge } from './aggregate-store.ts'
 import type { SessionCreationOrigin } from './session-create-ledger.ts'
@@ -27,22 +17,12 @@ import {
 } from './instance-api.ts'
 
 export interface SessionCreationOptions {
-  /**
-   * 调用方预分配的会话 id（多步 saga 重试时复用，避免宿主已提交但响应丢失后
-   * 再铸一个新会话）。缺省 = 宿主自铸。
-   */
+  /** 调用方预分配的会话 id（多步 saga 重试复用；缺省 = 宿主自铸）。 */
   sessionId?: string
-  /**
-   * 该次创建**意图**写入的显示标题（fork 的递增标题）。回声行因此生来就是
-   * 最终标签，不必先渲染成会话 id 再等一次 rename/title 投影翻转。缺省 =
-   * 官方 id 阶梯；权威行始终压过它。
-   */
+  /** 该次创建**意图**写入的显示标题（fork 的递增标题）：回声行生来就是最终标签，
+   *  不必先渲染会话 id 再等 rename 翻转。缺省 = 官方 id 阶梯；权威行始终压过它。 */
   title?: string
-  /**
-   * 归因：这次创建的**触发路径**。每个调用点都必须表态
-   * （默认 'unknown' 是仪表覆盖缺口的信号，不是可接受的常态——验收断言
-   * "无标签外来源"）。
-   */
+  /** 归因：这次创建的**触发路径**；每个调用点都必须表态（'unknown' 是仪表覆盖缺口的信号）。 */
   origin?: SessionCreationOrigin
 }
 
@@ -58,19 +38,15 @@ export async function createSessionForSource(
     sessionId,
     workspaceId,
     blank: true,
-    // 标签是加法字段——未表态的调用方**不发**该键（事实形状逐字节不变，旧
-    // 订阅者不受影响），桥在记账时把它计为 'unknown'（仪表覆盖缺口的信号）。
+    // 标签是加法字段——未表态的调用方**不发**该键（事实形状逐字节不变），桥按 'unknown' 记账。
     ...(options.origin === undefined ? {} : { origin: options.origin }),
     ...(options.title === undefined ? {} : { title: options.title }),
   })
   return sessionId
 }
 
-/**
- * 对 `sourceId` 执行 session.fork，并发布子会话的创建回声事实。
- * 子会话继承父会话的已有内容，因此不是官方临时（blank）行；其工作区成员位由
- * App 从父会话的归属解析（`parentSessionId`）。
- */
+/** 对 `sourceId` 执行 session.fork，并发布子会话的创建回声事实。子会话继承父内容，
+ *  不是 blank 行；工作区成员位由 App 从 `parentSessionId` 解析。 */
 export async function forkSessionForSource(
   sourceId: string,
   sessionId: string,
@@ -88,12 +64,9 @@ export async function forkSessionForSource(
   return childId
 }
 
-/**
- * 对 `sourceId` 执行 workspace.archiveSession，并发布撤下事实。App 端由这一条事实
- * 做两件事：退休该会话的待定创建回声（创建后立刻归档不留幽灵行），以及记一条本地
- * **归档墓碑**（未挂载来源上刚归档的行也必须立刻消失——那条来源没有任何活通道能带出
- * 新的归档集，见 shared/session-echo.ts 的 PendingArchive）。
- */
+/** 对 `sourceId` 执行 workspace.archiveSession，并发布撤下事实。App 据此退休该会话的
+ *  待定创建回声，并记一条本地**归档墓碑**（未挂载来源上刚归档的行也必须立刻消失——
+ *  那条来源没有任何活通道能带出新的归档集）。 */
 export async function archiveSessionForSource(sourceId: string, sessionId: string): Promise<void> {
   await archiveSession(getInstanceClient(sourceId), sessionId)
   chamberBridge.reportSessionRemoved({ sourceId, sessionId })

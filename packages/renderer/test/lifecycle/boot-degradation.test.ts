@@ -208,7 +208,7 @@ test('bootGapNotice: the deferred-cluster fact names its row ids, not services',
 test('toServerBootGap: structured facts cross the bridge, the diagnostic sentence does not', () => {
   // The sidebar row and the connections card write their own copy from these
   // fields; handing them the producer's sentence would cross the copy boundary
-  // (STATUS「跨边界诊断文案」) and make each package parse it for the ids.
+  // and make each package parse it for the ids.
   const projected = toServerBootGap({
     kind: 'required-services-missing',
     message: 'composite service(s) still unprovided after 5000ms: sidebarRight (injected by …)',

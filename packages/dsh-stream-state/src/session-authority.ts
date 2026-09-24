@@ -1,7 +1,7 @@
 /**
  * SessionFactAuthority - the SINGLE owner of "is this session actually running".
  *
- * P1 of the session-authority refactor (design 14 §D4, "会话事实单一权威").
+ * P1 of the session-fact authority refactor.
  *
  * WHY THIS EXISTS. The official store's \`running\` bit is delivered only by an emit-type
  * mux event with no retransmission, so losing one frame (or a silently half-dead carrier)
@@ -27,10 +27,8 @@ export interface AuthorityOfficialRow {
   readonly running: boolean
   /** Vendor \`completed\` flag when the caller projects it. */
   readonly completed?: boolean
-  /**
-   * Subagent-origin rows are outside the fact channel (STATUS 4): they are never
-   * reconciled, corrected or notified - a parent's completion is the user-visible event.
-   */
+  /** Subagent-origin rows are outside the fact channel: never reconciled, corrected or
+   * notified - a parent's completion is the user-visible event. */
   readonly subagent?: boolean
 }
 
@@ -117,7 +115,7 @@ export type SessionAuthorityObservation =
       readonly generation: string
       /** Every listed session (running and not running); absence = not listed. */
       readonly official: Readonly<Record<string, AuthorityOfficialRow>>
-      /** Official list arrival phase; false = absence is NOT evidence (STATUS 9). */
+      /** Official list arrival phase; false = absence is NOT evidence. */
       readonly listComplete: boolean
     }
   | {
@@ -176,13 +174,8 @@ function currentTicket(state: SessionAuthorityState, ticket: SessionAuthorityTic
   return ticket.generation === state.generation
 }
 
-/**
- * Reduce one observation.
- * @param state - previous state (initialSessionAuthorityState to start).
- * @param observation - tick / authority read / correction result.
- * @param config - the confirmation depth.
- * @returns the new state and the effects to execute, in deterministic order.
- */
+/** Reduce one observation (tick / authority read / correction result) into the new state
+ * and the effects to execute, in deterministic order. */
 export function reduceSessionAuthority(
   state: SessionAuthorityState,
   observation: SessionAuthorityObservation,

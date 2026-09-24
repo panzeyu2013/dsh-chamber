@@ -1,42 +1,15 @@
 /**
- * Gateway undo = RESTORE (design 21 §6.3 write order / §6.8 r2; the §3 model
- * verb `undoJournal`, gateway implementation).
+ * Gateway undo = RESTORE: the latest successful mutation is undone by restoring
+ * the managed profile's `package.json` and (when present) `pnpm-lock.yaml`
+ * byte-for-byte from that op's preImage backup, deliberately the ssh backend's
+ * 撤销=恢复 rather than a remove-only shortcut.
  *
- * Semantics (deliberately the SAME meaning as the ssh backend's 撤销=恢复, not
- * a remove-only shortcut): undoing the latest successful mutation restores the
- * managed profile's `package.json` and (when the pre-mutation profile had one)
- * `pnpm-lock.yaml` byte-for-byte from that op's preImage backup
- * (`chamber-plugins/third-party/backups/<op-id>/`). A fresh install is
- * therefore undone by returning the manifest to the state without the name; a
- * remove is undone by putting the removed declaration back; an in-place
- * upgrade returns to the prior spec. There is no per-op synthesized
- * add/remove verb — the backup pair IS the restoring material.
- *
- * The undo is itself a mutation (design 21 §6.3):
- *   - it is journaled as its own op (`kind: 'undo'`, `undoOf: <target op id>`),
- *     so GET /chamber/plugins/tasks projects a real terminal state;
- *   - it takes a pre-mutation backup of the CURRENT profile first (its own
- *     `preImage`), so an undo can itself be undone (redo) while the paired
- *     backup directories stay referenced by their ops (the journal's retention
- *     pruning only removes directories no retained op references);
- *   - it runs through the SAME serial executor queue, the SAME
- *     runtime-manager profile-write lease and the SAME read/write fence as
- *     install/remove, and the orchestrator refuses it while another profile
- *     write is in flight (single-flight at the route).
- *
- * Judgement (design 21 §6.11.3/§6.11.4): the inverse direction of the op is
- * re-judged at restore time with the SAME single `decidePluginMutation`
- * the install path uses — undoing an install/materialize removes a name
- * (`protected` refuses it), undoing a remove re-installs the preImage's prior
- * spec (official scope must still be exact-generation). The restore only ever
- * returns to a state that existed before, so the judgement is the conservative
- * "只收紧不放松" guard, never a new capability.
- *
- * Pair discipline ("两文件成对校验"): both backup files are read and validated
- * BEFORE anything is written; the manifest must exist and parse, the lockfile
- * (present in the backup) must be readable. Restore writes the lockfile first
- * (or removes it when the pre-mutation profile had none — an exact restore)
- * and the manifest last (the manifest is the commit point readers consume).
+ * The undo is itself a mutation: journaled as `kind: 'undo'` with its own preImage
+ * (so it can be undone) through the SAME serial executor queue, profile-write lease
+ * and fence as install/remove, single-flight at the route. The inverse direction
+ * re-judges with the SAME `decidePluginMutation` (conservative "只收紧不放松");
+ * both backup files are validated BEFORE any write, then the lockfile is restored first
+ * and the manifest last, the commit point readers consume.
  */
 
 import { existsSync, rmSync } from 'node:fs'
@@ -61,24 +34,19 @@ import type { JournalOp } from './plugins-journal.ts'
 import { messageOf } from './util.ts'
 
 /** Bounded read for the profile lockfile copy (manifest bound comes from
- * plugins-installed.ts). The executor's pre-mutation backup applies the same
- * bound; it lives here so the undo pair reader and the backup writer can
- * never disagree. */
+ * plugins-installed.ts), shared with the executor's backup so reader and writer agree. */
 export const PROFILE_LOCKFILE_MAX_BYTES = 64 * 1024 * 1024
 
-/** Refusals the undo path can answer in addition to the shared decision
- * codes. `journal_unavailable` is the gateway's own state (503, retryable
- * after the operator resolves the corrupt record); `no_undoable_op` and
- * `preimage_unavailable` are state conflicts over the journal/preImage set
- * (409, the caller re-reads the tasks projection and retries). */
+/** Refusals the undo path can answer besides the shared decision codes:
+ * `journal_unavailable` (503, retryable once the corrupt record is resolved) and
+ * `no_undoable_op` / `preimage_unavailable` (409 state conflicts — re-read the
+ * tasks projection and retry). */
 export type UndoRefusalCode = PluginRefusalCode | 'no_undoable_op' | 'journal_unavailable' | 'preimage_unavailable'
 
-/** The newest op the undo verb may consume: the latest `ok` op that carries a
- * preImage reference. NO skipping: when the newest ok op has no preImage (a
- * lost/pruned backup, or a record from an abnormal run), the answer is "no
- * undoable operation", never "silently undo an older change" — a wholesale
- * preImage restore would revert the newer change too. `ops` is newest-first
- * (`journal.recent()`). */
+/** The newest op the undo verb may consume: the latest `ok` op carrying a preImage
+ * reference. NO skipping — when the newest ok op has no preImage (a lost/pruned
+ * backup, or an abnormal run) the answer is "no undoable operation", never "silently
+ * undo an older change", which would revert the newer one too. `ops` must be newest-first. */
 export function latestUndoableOp(ops: readonly JournalOp[]): JournalOp | null {
   const newestOk = ops.find(op => op.status === 'ok')
   if (newestOk === undefined || newestOk.preImage === null) return null
@@ -89,7 +57,7 @@ export function latestUndoableOp(ops: readonly JournalOp[]): JournalOp | null {
 export interface UndoPreImage {
   target: JournalOp
   manifestText: string
-  /** null = the pre-mutation profile had no lockfile (exact restore removes
+  /** null = the pre-mutation profile had no lockfile (an exact restore removes
    * any current one). */
   lockText: string | null
   dependencies: Record<string, string>
@@ -148,20 +116,19 @@ export function readUndoPreImage(stateDir: string, target: JournalOp): UndoPrefl
   return { ok: true, preImage: { target, manifestText, lockText, dependencies: parsed.dependencies } }
 }
 
-/** Runtime facts consumed by the inverse judgement (same shape the executor's
- * family/decision wiring uses). */
+/** Runtime facts consumed by the inverse judgement. */
 export interface UndoRuntimeFacts { path: string; version: string | null }
 
-/** The inverse-direction judgement (design 21 §6.11.3), run with the SAME
- * single decision implementation as install/remove. */
+/** The inverse-direction judgement, run with the SAME single decision
+ * implementation as install/remove. */
 export function judgeUndo(
   preImage: UndoPreImage,
   facts: UndoRuntimeFacts | null,
 ): { ok: true } | { ok: false; code: UndoRefusalCode; error: string } {
   const target = preImage.target
-  // Undoing an install/materialize restores the manifest WITHOUT the name
-  // (the remove direction); undoing a remove restores the declaration with
-  // its prior spec (the install direction).
+  // Undoing an install/materialize restores the manifest WITHOUT the name (the
+  // remove direction); undoing a remove restores the declaration with its prior
+  // spec (the install direction).
   const op: 'install' | 'remove' = target.kind === 'remove' ? 'install' : 'remove'
   const priorSpec = preImage.dependencies[target.name]
   if (op === 'install' && priorSpec === undefined) {
@@ -185,10 +152,9 @@ export function judgeUndo(
   return { ok: false, code: decision.code, error: decision.error }
 }
 
-/** Restore the validated pair into the managed profile. The lockfile is
- * committed first (removed when the pre-mutation profile had none), the
- * manifest last: the manifest is what readers consume, so a crash can never
- * leave a restored manifest paired with a stale lockfile. */
+/** Restore the validated pair into the managed profile: lockfile first (removed
+ * when the pre-mutation profile had none), manifest last — the manifest is what
+ * readers consume, so a crash cannot leave it paired with a stale lockfile. */
 export function restoreUndoPreImage(stateDir: string, preImage: UndoPreImage): void {
   const profileDir = join(stateDir, MANAGED_DSH_HOME_DIR, INSTALLED_PROFILE_DIR)
   const lockPath = join(profileDir, 'pnpm-lock.yaml')

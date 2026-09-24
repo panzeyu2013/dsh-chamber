@@ -1,5 +1,5 @@
 /**
- * P1 scenario corpus for the session-fact authority (design 14 §D4).
+ * P1 scenario corpus for the session-fact authority.
  *
  * These vectors are the CONTRACT: a future requirement is a new vector here, never a new
  * repair function. They cover the silent-completion family (lost status frame, live but

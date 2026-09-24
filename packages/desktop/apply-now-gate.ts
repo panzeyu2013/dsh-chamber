@@ -1,61 +1,39 @@
 /**
- * Apply-now gate — the pure decision function behind the desktop
- * RUNTIME_APPLY_NOW IPC handler (main.ts, design 18 addendum §4.1).
+ * Apply-now gate — pure decision function behind RUNTIME_APPLY_NOW (design 18
+ * addendum §4.1): `ok` lets the caller confirm-dialog and run the activation
+ * transaction (runRuntimeStartup) from authoritative state it re-read itself.
  *
- * Extracted from the handler so the full gate matrix is unit-testable with
- * plain node:test. The gate is deliberately side-effect free:
- * the caller re-reads authoritative state and builds the input; `ok` means
- * the caller may show the native confirm dialog and run the activation
- * transaction (runRuntimeStartup).
- *
- * Semantics:
- *   - operationBusy || fenceBusy                 → 'busy'
- *   - source === 'env'                           → 'env'
- *   - !managementSupported || phase !== 'pending'→ 'not-allowed'
- *   - runtimeBlocked                             → 'blocked'
- *   - connectionState ∉ {ready, degraded}        → 'not-ready'
- *     (the caller projects a null control plane as a non-member value)
- *   - pending ?? journalTarget ?? overridePending is null → 'no-pending'
- *   - snapshotFailed                             → 'snapshot-failed'
- *   - !treeValid                                 → 'invalid-tree'
- *   - otherwise                                  → ok with the resolved target
- *
- * The caller preflights `treeValid` with
- * `validateVersionTree(runtimeBaseDir, target).ok` when a target resolves: a
- * corrupt target tree must never start a stop/respawn cycle that is doomed to
- * fail (design 18 addendum §2.2 gate list includes "target tree valid").
+ * First hit wins: busy (operation/fence) → env → not-allowed (unsupported
+ * management or non-pending phase) → blocked → not-ready (connectionState ∉
+ * {ready, degraded}; null control plane projects as non-member) → no-pending
+ * (pending ?? journalTarget ?? overridePending all null) → snapshot-failed →
+ * invalid-tree → ok(target). `treeValid` is the caller's validateVersionTree(...).ok
+ * preflight: a corrupt target must never start a doomed stop/respawn cycle.
  */
 
 export type ApplyNowGateInput = {
-  /** Runtime state-machine phase (RuntimePhase projected as a string). */
+  /** RuntimePhase projected as a string. */
   phase: string
-  /** 'bundled' | 'user' | 'env' — env outranks every persisted override. */
+  /** 'bundled' | 'user' | 'env'; env outranks every persisted override. */
   source: string
-  /** Authoritative main-process local-spawn gate (state.runtimeBlocked). */
   runtimeBlocked: boolean
   /** Version management is read-only on unsupported platforms. */
   managementSupported: boolean
-  /** Persisted override exists (projection; carried for caller parity, not
-   *  consulted by the gate — the durable target sources below are what the
-   *  target resolution requires). */
+  /** Carried for caller parity; the gate does not consult it. */
   hasOverride: boolean
-  /** state.pending — the durable pending version from the override record. */
+  /** Durable pending version from the override record. */
   pending: string | null
-  /** selectedJournalIntent(...)?.targetVersion — a durable journal intent. */
+  /** A durable journal intent target. */
   journalTarget: string | null
-  /** override.record.pending — the raw override fallback (second-gate parity:
-   *  the post-confirm gate must resolve the same three-source target). */
+  /** Raw override fallback; the post-confirm gate must resolve the same three sources. */
   overridePending: string | null
-  /** Control-plane connection state; anything outside ready/degraded rejects
-   *  (the handler maps a null control plane to a non-member projection). */
+  /** Non-member values (a null control plane) reject alongside anything outside ready/degraded. */
   connectionState: string
-  /** A runtime operation (startup/rollback/restore) is in flight. */
   operationBusy: boolean
-  /** Another writer holds the runtime writer fence. */
   fenceBusy: boolean
-  /** override.lastOutcome === 'snapshot-failed' — retry-apply owns that path. */
+  /** retry-apply owns that path. */
   snapshotFailed: boolean
-  /** Caller preflight: when a target resolves, validateVersionTree(...).ok. */
+  /** Caller preflight via validateVersionTree(...).ok. */
   treeValid: boolean
 }
 

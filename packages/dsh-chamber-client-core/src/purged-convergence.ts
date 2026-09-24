@@ -1,34 +1,23 @@
 /**
- * Bounded, verified convergence chain for purged-row suppression (design 24
- * §12). React-free and dependency-injected so the arm → verify → retry →
- * give-up behaviour is node-testable without a plugin host (the producer
- * itself imports React/CSS and cannot be imported by a node test).
+ * Bounded, verified convergence chain for purged-row suppression. React-free and
+ * dependency-injected so arm → verify → retry → give-up is node-testable without a
+ * plugin host.
  *
- * WHY A CHAIN AND NOT A SINGLE refresh() CALL:
- *   - the OFFICIAL refresh is single-flight (`SessionManager.refreshList`
- *     returns the in-flight promise), so a request that collides with a
- *     pre-purge pull resolves with the STALE response and schedules no
- *     trailing run → one call is not convergence;
- *   - a failed pull RESOLVES (the manager catches RemoteFailure, sets
- *     `listState='error'` and leaves the summaries untouched) while other
- *     failures reject → both outcomes must be retried;
- *   - a hung refresh promise would otherwise disable the seam forever (the
- *     official single-flight then hands the same hung promise to every later
- *     caller), so each attempt is raced with a watchdog.
+ * WHY A CHAIN, NOT A SINGLE refresh(): the OFFICIAL refresh is single-flight
+ * (`SessionManager.refreshList` returns the in-flight promise), so a request that
+ * collides with a pre-purge pull resolves with the STALE response and schedules no
+ * trailing run; a failed pull RESOLVES (the manager catches RemoteFailure, sets
+ * `listState='error'`, leaves the summaries untouched) while other failures reject —
+ * both must be retried; and a hung promise would otherwise disable the seam forever,
+ * so each attempt is raced with a watchdog.
  *
- * TERMINATION = AUTHORITATIVE PROBE, NOT "resolved":
- * `refreshList` resolving does NOT prove the summaries are authoritative — it
- * also resolves on a failed pull and for a joined stale single-flight caller —
- * so a resolve can never release a suppression. When the bounded
- * refresh attempts leave ids listed, the chain therefore consults an
- * INDEPENDENT authoritative row source (`probe`: the chamber's own unary
- * `session.list`, a fresh per-call disk rescan that has neither the official
- * single-flight nor its cache) and releases ONLY the ids that source still
- * contains; ids it does not contain stay suppressed (the content is gone, the
- * official client merely failed to converge). A probe that fails/times out
- * keeps the suppression and warns. This closes the non-purge-shrink residual
- * (future unarchive/delete wire, out-of-band archive-media rewrite) without
- * ever un-hiding a purged row.
+ * TERMINATION = AUTHORITATIVE PROBE, NOT "resolved": `refreshList` resolving does NOT
+ * prove the summaries are authoritative (it also resolves on a failed pull and for a
+ * joined stale single-flight caller), so the terminal step consults an INDEPENDENT row
+ * source (`probe`: the chamber's own unary `session.list`, a fresh per-call disk
+ * rescan) and releases ONLY the ids it still contains; the rest stay suppressed (the
+ * content is gone, the client merely failed to converge). A failing/timing-out probe
+ * keeps the suppression and warns.
  */
 import { PURGED_REFRESH_MAX_ATTEMPTS, PURGED_REFRESH_RETRY_MS } from './purged-rows.ts'
 
@@ -42,13 +31,9 @@ export type ConvergenceStep =
   | { action: 'verify' }
 
 /**
- * Pure one-attempt decision (see the module header for the rationale).
- * @param opts.attempt - 1-based attempt number just settled.
- * @param opts.maxAttempts - hard attempt bound (>= 1).
- * @param opts.lingering - suppressed ids the official summaries STILL list.
- * @returns the next step. `verify` is terminal: the caller consults the
- *   authoritative probe (and keeps the suppression for whatever the probe
- *   does not confirm).
+ * Pure one-attempt decision: `verify` is terminal — the caller then consults the
+ * authoritative probe and keeps the suppression for whatever it does not confirm.
+ * @returns the next step.
  */
 export function nextConvergenceStep(opts: {
   attempt: number
@@ -60,10 +45,8 @@ export function nextConvergenceStep(opts: {
 }
 
 /**
- * Pure release selection: ONLY ids an authoritative source confirmed still
- * exists may be un-suppressed. Everything else stays suppressed.
- * @param lingering - suppressed ids the official summaries still list.
- * @param present - ids the authoritative probe returned.
+ * Pure release selection: ONLY ids an authoritative source confirmed still exists may
+ * be un-suppressed.
  * @returns the subset of `lingering` present in `present` (order preserved).
  */
 export function releasableAfterProbe(
@@ -76,19 +59,17 @@ export function releasableAfterProbe(
 /** Injectable seams (tests pass fakes; the producer passes the real ones). */
 export interface PurgedConvergenceDeps {
   /**
-   * One official session-list refresh. MUST be invoked as a method on the
-   * service object (`service.refresh()`): `ClientSessions.refresh` is a
-   * prototype method reading `this.manager`, so a detached call throws
-   * TypeError.
-   * Returns undefined when the official client exposes no refresh face.
+   * One official session-list refresh. MUST be invoked as a method on the service
+   * object (`service.refresh()`): `ClientSessions.refresh` is a prototype method
+   * reading `this.manager`, so a detached call throws TypeError. Undefined when the
+   * client exposes no refresh face.
    */
   refresh: () => Promise<unknown> | undefined
   /** Suppressed ids still listed by the official summaries. */
   lingering: () => readonly string[]
   /**
-   * Independent authoritative row source (the chamber's own unary
-   * `session.list`: a fresh per-call disk rescan, no single-flight, no
-   * client cache). Resolves to the ids the instance still has; undefined or a
+   * Independent authoritative row source (the chamber's own unary `session.list`: a
+   * fresh per-call disk rescan, no single-flight, no client cache). Undefined or a
    * rejection means "no authoritative answer" (suppression is kept).
    */
   probe?: () => Promise<ReadonlySet<string> | undefined> | undefined
@@ -109,9 +90,8 @@ export interface PurgedConvergenceDeps {
 
 export interface PurgedConvergenceChain {
   /**
-   * Start (or join) the chain. A request arriving while the chain is running
-   * is coalesced into it — the attempt budget is per purge, not per request
-   * (a bridge request must not restart the bound).
+   * Start (or join) the chain. A request arriving while the chain runs is coalesced
+   * into it — the attempt budget is per purge, not per request.
    */
   converge(): void
   /** Cancel any pending timer; a settled attempt issues nothing further. */
@@ -121,10 +101,8 @@ export interface PurgedConvergenceChain {
 }
 
 /**
- * Build one source's convergence chain. PURE with respect to I/O: every
- * effect (refresh, timers, warn) arrives through `deps`.
- * @param deps - injectable seams.
- * @returns the chain handle.
+ * Build one source's convergence chain. PURE w.r.t. I/O: every effect (refresh,
+ * timers, warn) arrives through `deps`. @returns the chain handle.
  */
 export function createPurgedConvergence(deps: PurgedConvergenceDeps): PurgedConvergenceChain {
   const maxAttempts = Math.max(1, deps.maxAttempts ?? PURGED_REFRESH_MAX_ATTEMPTS)
@@ -138,9 +116,8 @@ export function createPurgedConvergence(deps: PurgedConvergenceDeps): PurgedConv
   let disposed = false
   let timer: unknown
   let watchdog: unknown
-  // Terminal probes own PER-PROBE watchdog handles (a set, not one shared
-  // slot): a single shared slot would let a probe that outlived its own
-  // watchdog clear a LATER attempt's — or a LATER PROBE's — watchdog, wedging
+  // Terminal probes own PER-PROBE watchdog handles (a set, not one shared slot): a
+  // shared slot would let a probe outliving its watchdog clear a LATER probe's and wedge
   // the chain active forever.
   const probeWatchdogs = new Set<unknown>()
 
@@ -171,18 +148,17 @@ export function createPurgedConvergence(deps: PurgedConvergenceDeps): PurgedConv
   }
 
   /**
-   * Terminal step: consult the INDEPENDENT authoritative probe and release
-   * ONLY ids it confirms. A probe that is absent, rejects or times out keeps
-   * every suppression (no authoritative answer ≠ "not purged").
+   * Terminal step: consult the INDEPENDENT authoritative probe and release ONLY ids it
+   * confirms. A probe that is absent, rejects or times out keeps every suppression (no
+   * answer ≠ "not purged").
    */
   const verifyAgainstProbe = (outcome: ConvergenceOutcome): void => {
     const noAnswer = (): string => outcome === 'resolved'
       ? `the official refresh kept listing them after ${attempt} attempt(s)`
       : `the official refresh produced no authoritative answer after ${attempt} attempt(s)`
-    // Snapshot the suppression set BEFORE the probe: an id tombstoned while
-    // the probe is in flight must NOT be judged against a probe answer that
-    // predates it (a stale probe could release a genuinely purged id and
-    // re-emit its row).
+    // Snapshot the suppression set BEFORE the probe: an id tombstoned while the probe is
+    // in flight must not be judged against a probe answer that predates it (a stale probe
+    // could release a genuinely purged id and re-emit its row).
     const lingering = deps.lingering()
     if (lingering.length === 0) {
       finish()
@@ -199,8 +175,7 @@ export function createPurgedConvergence(deps: PurgedConvergenceDeps): PurgedConv
       finish()
       return
     }
-    // One handle PER PROBE: a late settlement of THIS probe may only clear
-    // its own watchdog, never a later probe's.
+    // One handle PER PROBE: a late settlement of THIS probe may only clear its own watchdog.
     let probeHandle: unknown
     const clearThisProbe = (): void => { clearProbeWatchdog(probeHandle) }
     const probed: Promise<ReadonlySet<string> | undefined> = attemptTimeoutMs > 0
@@ -247,8 +222,8 @@ export function createPurgedConvergence(deps: PurgedConvergenceDeps): PurgedConv
   }
 
   /**
-   * Settle one attempt. `settledAttempt` fences late settlements: an attempt
-   * that already timed out must not be judged as — or terminate — a later one.
+   * Settle one attempt. `settledAttempt` fences late settlements: an attempt that
+   * already timed out must not be judged as — or terminate — a later one.
    */
   const settle = (settledAttempt: number, outcome: ConvergenceOutcome): void => {
     if (disposed || !running || settledAttempt !== attempt) return

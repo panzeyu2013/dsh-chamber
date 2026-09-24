@@ -71,11 +71,7 @@ type JournalStreamItem<Page, Entry, Cursor, Notification> = RemoteStreamItem<
 
 /** Gateway capability used to create one reconnecting Remote stream. */
 export interface RemoteStreamFactory {
-  /**
-   * Create one independently cancellable logical stream.
-   * @param options - domain-owned opener and generation-end classification.
-   * @returns a reconnecting single-consumer stream.
-   */
+  /** Create one independently cancellable logical stream. */
   $stream<Item>(options: RemoteStreamOptions<Item>): RemoteStream<Item>
 }
 
@@ -84,15 +80,11 @@ export interface RemoteJournalStreamOptions<Page, Entry, Cursor, Notification = 
   readonly name: string
   /** Cursor representing a journal with no entries. */
   readonly emptyCursor: Cursor
-  /** Read the ordered entries carried by a page. */
   readonly entries: (page: Page) => readonly Entry[]
-  /** Read whether an older page exists. */
   readonly hasMore: (page: Page) => boolean
-  /** Read the inclusive first durable cursor covered by one entry. */
   readonly first: (entry: Entry) => Cursor
-  /** Read the inclusive final cursor, which must not precede the first. */
+  /** Inclusive final cursor, which must not precede the first. */
   readonly last: (entry: Entry) => Cursor
-  /** Compare two cursors. */
   readonly compare: (left: Cursor, right: Cursor) => number
   /** Test whether the right cursor immediately follows the left cursor. */
   readonly follows: (left: Cursor, right: Cursor) => boolean
@@ -100,10 +92,7 @@ export interface RemoteJournalStreamOptions<Page, Entry, Cursor, Notification = 
   readonly publish: (change: RemoteJournalChange<Page, Entry, Notification>) => void
   /** Observe a retryable carrier loss before reconnection. */
   readonly carrierFailed?: (error: RemoteStreamCarrierError) => void
-  /**
-   * chamber patch (design 14 §D4): silence-watchdog timing. Omitted by
-   * every existing consumer, which takes {@link DEFAULT_STREAM_STALL_TIMING}.
-   */
+  /** chamber patch: silence-watchdog timing override. */
   readonly stall?: Partial<StreamStallTiming>
   /**
    * chamber patch (design 14 §D4): total deadline for ONE `open()` across every
@@ -121,11 +110,10 @@ export interface RemoteJournalStreamOptions<Page, Entry, Cursor, Notification = 
 }
 
 /**
- * Owns snapshot-first opening, ordered live delivery, pagination, and repair.
- *
- * The domain retains its published window during reconnection. A replacement is
- * published only after the opening page reaches the generation's cursor.
- * Notifications never change a cursor and wait behind an in-flight gap repair.
+ * Owns snapshot-first opening, ordered live delivery, pagination, and repair. The
+ * domain retains its published window during reconnection; a replacement is published
+ * only after the opening page reaches the generation's cursor. Notifications never
+ * change a cursor and wait behind an in-flight gap repair.
  */
 export abstract class RemoteJournalStream<
   Page, Entry, Cursor, PageRequest = void, Notification = never,
@@ -154,9 +142,8 @@ export abstract class RemoteJournalStream<
   private done: Promise<void> | undefined
   private closing: Promise<void> | undefined
   private pendingNext: Promise<IteratorResult<JournalStreamItem<Page, Entry, Cursor, Notification>>> | undefined
-  // The watchdog tracks the durable tail, not every publication. Cursorless
-  // assistant frames and older-page prepends do not prove that live records are
-  // still arriving, so they cannot postpone a sibling follow indefinitely.
+  // chamber patch: silence-watchdog state; `lastProgressAt` advances on every
+  // published item, so a producing stream never reaches the probe window.
   private readonly stallTiming: StreamStallTiming
   private stallTimer: ReturnType<typeof setInterval> | undefined
   private lastProgressAt: number
@@ -168,10 +155,7 @@ export abstract class RemoteJournalStream<
   /** Total deadline for one logical open's first frame (see options). */
   private readonly openDeadlineMs: number
 
-  /**
-   * @param remote - Gateway factory for the reconnecting physical-generation stream.
-   * @param options - cursor algebra and domain publication sinks.
-   */
+  /** @param remote - Gateway factory for the reconnecting physical-generation stream. */
   protected constructor(
     remote: RemoteStreamFactory,
     private readonly options: RemoteJournalStreamOptions<Page, Entry, Cursor, Notification>,
@@ -193,31 +177,18 @@ export abstract class RemoteJournalStream<
     })
   }
 
-  /**
-   * Open one physical journal generation with a complete current snapshot.
-   * @param request - opening-window request retained for later repair.
-   * @param signal - cancellation lifetime of the physical generation.
-   * @returns opening cursor followed by live entries.
-   */
+  /** Open one physical journal generation with a complete current snapshot; the
+   *  request is retained for later repair. */
   protected abstract follow(
     request: PageRequest,
     signal: AbortSignal,
   ): AsyncIterable<RemoteJournalFrame<Entry, Cursor, Page, Notification>>
 
-  /**
-   * Read one journal page through the addressed domain source.
-   * @param request - domain page request.
-   * @param through - inclusive journal cursor that fixes the source read.
-   * @param signal - cancellation lifetime shared with the logical stream.
-   * @returns the requested page, whose tail equals `through` unless the domain request selects older entries.
-   */
+  /** Read one journal page through the addressed domain source; its tail equals
+   *  `through` unless the request selects older entries. */
   protected abstract readPage(request: PageRequest, through: Cursor, signal: AbortSignal): Promise<Page>
 
-  /**
-   * Derive an unbounded-tail request from the initial page request.
-   * @param initial - request used to open the journal window.
-   * @returns request suitable for reconnect and gap repair.
-   */
+  /** Derive an unbounded-tail request from the initial page request. */
   protected abstract repairRequest(initial: PageRequest): PageRequest
 
   /** Cancellation lifetime shared by follow and page calls. */
@@ -225,11 +196,7 @@ export abstract class RemoteJournalStream<
     return this.stream.signal
   }
 
-  /**
-   * Establish follow and publish the opening snapshot carried by its first frame.
-   * @param request - initial tail-page request.
-   * @returns after the first complete window is published.
-   */
+  /** Establish follow and publish the opening snapshot carried by its first frame. */
   async open(request: PageRequest): Promise<void> {
     if (this.started) throw new Error(`${this.options.name} already opened`)
     this.started = true
@@ -268,11 +235,7 @@ export abstract class RemoteJournalStream<
     }
   }
 
-  /**
-   * Read and prepend one older page after a successful open.
-   * @param request - domain page request bound to this stream's address.
-   * @returns after the page is applied or rejected as discontinuous.
-   */
+  /** Read and prepend one older page after a successful open. */
   async prepend(request: PageRequest): Promise<void> {
     if (!this.opened || this.disposed) throw new Error(`${this.options.name} is not open`)
     const revision = this.windowRevision
@@ -324,10 +287,7 @@ export abstract class RemoteJournalStream<
     this.stream.restart()
   }
 
-  /**
-   * Permanently stop follow, page requests, and the background consumer.
-   * @returns when no stream work or publication callback can still run.
-   */
+  /** Permanently stop follow, page requests, and the background consumer. */
   dispose(): Promise<void> {
     if (this.closing !== undefined) return this.closing
     this.disposed = true
@@ -341,12 +301,8 @@ export abstract class RemoteJournalStream<
     return closing
   }
 
-  /**
-   * Publish one change. Only a fresh opening window or live append proves that
-   * the durable tail advanced. Prepending old history and receiving cursorless
-   * assistant frames may still update the view, but cannot clear evidence of a
-   * missing live record or postpone the independent Host cursor probe.
-   */
+  /** chamber patch: publish one change and mark live progress for the watchdog
+   *  (opening windows, appends, prepends and notifications all count). */
   private publish(change: RemoteJournalChange<Page, Entry, Notification>): void {
     if (this.disposed) return
     if (change.type === 'replace' || change.type === 'append') {
@@ -359,12 +315,7 @@ export abstract class RemoteJournalStream<
     if (change.type === 'replace' || change.type === 'prepend') this.noteAssistantRevision(change.page, this.generation)
   }
 
-  /**
-   * chamber patch (design 14 §D4): arm the silence watchdog once the
-   * opening window is published. A stream that goes silently dead while the Host
-   * keeps producing would otherwise freeze the transcript with no error edge for
-   * any chamber arm to react to.
-   */
+  /** chamber patch: arm the silence watchdog once the opening window is published. */
   private startStallWatchdog(): void {
     if (this.stallTimer !== undefined || this.disposed) return
     const timer = setInterval(() => { void this.checkStall() }, this.stallTiming.tickMs)
@@ -380,17 +331,10 @@ export abstract class RemoteJournalStream<
   }
 
   /**
-   * Run one watchdog tick. `'probe'` opens a SIBLING follow on the same request
-   * and reads only its opening cursor:
-   *
-   * - cursor AHEAD of the applied one ⇒ the Host has newer content and this
-   *   subscription is stale ⇒ replace the physical generation (the fresh opening
-   *   item is published as a `replace`, so the whole current window lands);
-   * - cursor EQUAL/absent ⇒ the silence is genuine (long tool run, TTFT) ⇒ do
-   *   nothing; there is no blind restart anywhere in this path.
-   *
-   * A failed or timed-out probe is "no evidence", never a reason to tear the
-   * subscription down; the physical carrier lane owns real transport failures.
+   * One watchdog tick. `'probe'` opens a SIBLING follow and reads only its opening
+   * cursor: AHEAD of the applied one ⇒ replace the physical generation (the fresh
+   * opening is published as a `replace`); EQUAL/absent ⇒ genuine silence, do nothing
+   * (no blind restart). A failed probe is "no evidence", never a teardown reason.
    */
   private async checkStall(): Promise<void> {
     if (this.disposed || this.probing) return
@@ -409,10 +353,8 @@ export abstract class RemoteJournalStream<
     try {
       advanced = await this.probeHostAdvance()
     } catch {
-      // Diagnostic read only: a probe failure must never escape into the journal —
-      // but it is NOT evidence of an advance, so it widens the cadence below like
-      // a clean "no advance" answer (a broken probe path otherwise keeps a
-      // sibling follow in flight every 45 s forever).
+      // Diagnostic only: a probe failure never escapes, and counts as "no advance"
+      // (a broken probe path must not keep a sibling follow in flight forever).
     } finally {
       this.probing = false
     }
@@ -433,13 +375,9 @@ export abstract class RemoteJournalStream<
     const signal = AbortSignal.any([this.stream.signal, deadline.signal])
     const iterator = this.follow(this.initialRequest, signal)[Symbol.asyncIterator]()
     try {
-      //  (W2): the deadline is the shared primitive, not a hand-written timer — one
-      // handle armed and ALWAYS cleared, so a probe that answers inside its window
-      // cannot leave a timer behind. Expiry still aborts the sibling follow (the mux
-      // then sends its cancel frame) and reports "no advance" instead of escaping.
-      // A sibling follow yields RemoteJournalFrame directly (see the comment
-      // below), so the deadline's generic is the frame iterator result — NOT the
-      // RemoteStreamItem wrapper used by consume().
+      // The deadline is the shared primitive: one handle, always cleared, so a probe
+      // that answers in time leaves no timer; expiry aborts the sibling follow (the mux
+      // sends its cancel frame) and reports "no advance" instead of escaping.
       const raced = await withDeadline<IteratorResult<RemoteJournalFrame<Entry, Cursor, Page, Notification>>>(iterator.next(), {
         ms: this.stallTiming.probeTimeoutMs,
         onExpire: () => {
@@ -450,10 +388,7 @@ export abstract class RemoteJournalStream<
       })
       if (raced.settled === 'deadline' || raced.value === undefined) return false
       const next = raced.value
-      // A sibling follow yields RemoteJournalFrame directly — the RemoteStreamItem
-      // wrapper only exists inside RemoteStream (that is why consume() reads
-      // item.value.type). Reading a double-wrapped frame here throws on every probe
-      // and silently kills the whole restart arm.
+      // A sibling follow yields RemoteJournalFrame directly, not the RemoteStreamItem wrapper.
       if (next.done || next.value.type !== 'opened') return false
       const applied = this.lastCursor
       if (applied === undefined) return false
@@ -469,16 +404,13 @@ export abstract class RemoteJournalStream<
         && revision > this.lastAssistantRevision
     } finally {
       deadline.abort(new Error('journal stall probe finished'))
-      // Bounded teardown: a follow whose return() ignores the
-      // aborted signal must not leave probing=true forever — that would silently
-      // disable this stream's silent-journal arm. The abort above already made the
-      // mux send its cancel frame, so the host-side follow is released regardless.
+      // Bounded teardown: a follow whose return() ignores the aborted signal must not
+      // leave probing=true forever; the abort above already released the host-side follow.
       const closing = Promise.resolve(iterator.return?.(undefined)).then(
         () => undefined,
         () => undefined,
       )
-      // Same primitive for the bound: it clears its own (unref'd) timer, so the
-      // retired hand-written one-shot and its clearTimeout bookkeeping are gone (1.5).
+      // Same primitive for the bound: it clears its own unref'd timer.
       await withDeadline(closing, {
         ms: this.stallTiming.probeTimeoutMs,
         onExpire: () => undefined,

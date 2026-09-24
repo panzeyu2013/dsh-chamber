@@ -1,41 +1,20 @@
 /**
- * Presentation arbiter - ONE decision for what the user sees.
+ * Presentation arbiter - ONE decision for what the user sees; {@link veilUpperBoundMs} is
+ * the only total-veil calculator and {@link presentationBoundWithinGoal} proves the 155s
+ * invariant.
  *
- * WHY. Four independent timers decide visibility today, in four files:
- *   - the App reveal gate holds the OLD view up to 1s (reveal-gate.ts:36);
- *   - InstanceView holds the veil while booting, upgrading to actions at 10s
- *     (source-readiness.ts:164-187);
- *   - the session-surface hold keeps it while the requested session is not on
- *     screen (session-surface.ts:76/82: 2s for a missing root, 70s for hero/settling);
- *   - the App's open lifecycle releases the intent (up to 68s queued).
- * Nothing computed the TOTAL bound, so 'is there a state the user can be parked in
- * forever?' was not answerable from the code. Here it is: {@link veilUpperBoundMs}
- * is the only calculator, and {@link presentationBoundWithinGoal} proves the goal's
- * 155s invariant holds for every phase.
+ * THE FRAME IS AN ABSOLUTE DEADLINE, NOT A DELAY: a delay cannot answer when the veil will
+ * be lifted. A frame carries mode, tenant coverage `veil` (held/actionable/released),
+ * whether recovery `actions` belong on screen, and `releaseAtMonoMs` - finite for every
+ * frame. {@link planVeilTimer} is the only translator to a timer delay.
  *
- * THE FRAME IS AN ABSOLUTE DEADLINE, NOT A DELAY. A delay cannot answer when the
- * veil will be lifted: a 0 ms re-arm leaves the tenant hidden with nothing saying
- * when it will be shown. A frame therefore carries:
- *   - `mode` - which face the shell renders;
- *   - `veil` - whether the TENANT is covered (`held`), released with an exit
- *     (`actionable`), or released (`released`);
- *   - `actions` - whether recovery controls belong on screen;
- *   - `releaseAtMonoMs` - the absolute monotonic moment the held veil must be
- *     re-evaluated, finite for every non-released frame.
- * {@link planVeilTimer} is the only translator from that absolute moment to a timer
- * delay, and it refuses to arm a 0 ms timer for a held frame.
- *
- * PURITY: zero imports beyond the sibling time helpers, no clock reads, no DOM. All
- * facts and all thresholds arrive as inputs, so this file is the single place the
- * composition is defined.
+ * PURITY: no clock reads, no DOM; facts and thresholds arrive as inputs.
  */
 
 import { elapsedSince, normalizeAt } from './time.ts'
 
-/** What the shell itself reports about the requested session (session-surface.ts).
- * `unknown` is a distinct state: an unreadable `data-phase` must not fold into
- * `hero`, because a version-skewed anchor would then hold the veil for the full
- * outer bound while looking exactly like 'no content yet'. */
+/** What the shell reports about the requested session. `unknown` is distinct: an
+ * unreadable `data-phase` must not fold into `hero`, which would hold the full bound. */
 export type SessionSurfacePhase = 'absent' | 'hero' | 'settling' | 'active' | 'unknown'
 
 export interface PresentationFacts {
@@ -84,10 +63,8 @@ export type VeilState =
 
 export interface PresentationFrame {
   readonly mode: PresentationMode
-  /** Coverage of the tenant, not of the boot face: a deferred source has no tenant
-   * and is `actionable` (the connect face IS the exit). */
+  /** Coverage of the TENANT, not the boot face: a deferred source has no tenant and is `actionable`. */
   readonly veil: VeilState
-  /** Whether the progress face must offer recovery actions. */
   readonly actions: boolean
   /** Absolute monotonic release/evaluation moment. Finite for every frame; for
    * `held` it is strictly in the future relative to the `nowMs` that produced it. */
@@ -95,9 +72,8 @@ export interface PresentationFrame {
 }
 
 /** The bound for one surface phase, from the threshold table. `unknown` shares the
- * absent bound on purpose: a phase this build cannot read is not evidence that the
- * session has content, and the shell's own loading surface plus the boot-gap banner
- * are a better answer than holding an opaque veil for a minute. */
+ * absent bound: a phase this build cannot read is not evidence of content, and the
+ * shell's own loading surface plus the boot-gap banner beat holding an opaque veil. */
 export function surfaceBoundMs(
   phase: SessionSurfacePhase,
   thresholds: PresentationThresholds,
@@ -116,9 +92,9 @@ export function surfaceBoundMs(
 }
 
 /**
- * A threshold set with every unusable value replaced by the largest finite one (0
- * when none is usable). An unusable threshold must not become a NaN deadline: a
- * held veil whose deadline is NaN can never be scheduled for release.
+ * A threshold set with every unusable value replaced by the largest finite one (0 when
+ * none is usable), so an unusable threshold never becomes a NaN deadline that can never
+ * be scheduled for release.
  */
 function usableThresholds(thresholds: PresentationThresholds): PresentationThresholds {
   const candidates = [thresholds.veilActionsAfterMs, thresholds.surfaceMaxHoldMs, thresholds.surfaceAbsentFallbackMs]
@@ -150,13 +126,11 @@ function heldFrame(mode: PresentationMode, actions: boolean, releaseAtMonoMs: nu
 }
 
 /**
- * Translate the frame's absolute deadline into the timer delay the caller arms.
- * - a non-held frame needs no timer (0);
- * - a held frame with a non-finite clock returns Infinity: the veil holds until the
- *   next state change re-evaluates it, but a broken clock can never arm an immediate
- *   (0 ms) re-arm;
- * - a held frame with a finite clock must release in the FUTURE, so a fabricated or
- *   stale frame is rejected loudly instead of covered up.
+ * Translate the frame's absolute deadline into the timer delay the caller arms: a
+ * non-held frame needs no timer (0); a held frame with a non-finite clock returns
+ * Infinity (the veil holds until the next state change, and a broken clock can never
+ * arm an immediate re-arm); a held frame with a finite clock must release in the
+ * FUTURE, so a fabricated or stale frame is rejected loudly.
  */
 export function planVeilTimer(frame: PresentationFrame, nowMonoMs: number): number {
   if (frame.veil !== 'held') return 0
@@ -175,21 +149,15 @@ export function planVeilTimer(frame: PresentationFrame, nowMonoMs: number): numb
 }
 
 /**
- * Decide the visible frame. Total function: every input combination returns a
- * mode, a coverage state, an actions flag and an absolute release moment.
+ * Decide the visible frame. Total function: every input combination returns a mode, a
+ * coverage state, an actions flag and an absolute release moment.
  *
  * Precedence (highest first): failure overlay, contents when the surface says so,
- * deferred, then the boot-veil ladder. The surface can only RELEASE - it never
- * invents a hold: `holdForOpenIntent === false` means the App has already decided
- * the session is not its business any more.
- *
- * Boundary semantics:
- * - hero/settling past `surfaceMaxHoldMs` are `actionable` (tenant visible, actions
- *   offered) - the b73bce74 70s reveal, not an opaque veil re-armed at 0 ms;
- * - absent/unknown past `surfaceAbsentFallbackMs` are `released`;
- * - a deferred source is `actionable` immediately (its connect face is the exit);
- * - an unanchored or rolled-back clock, and a non-finite `nowMs`, HOLD with a finite
- *   future deadline instead of releasing (I4) or re-arming at 0 ms.
+ * deferred, then the boot-veil ladder. The surface can only RELEASE - it never invents
+ * a hold. Past their bounds hero/settling turn `actionable` and absent/unknown
+ * `released`; a deferred source is `actionable` immediately; an unanchored or
+ * rolled-back clock HOLDs with a finite future deadline rather than releasing or
+ * re-arming at 0 ms.
  */
 export function decidePresentation(
   facts: PresentationFacts,
@@ -213,15 +181,14 @@ export function decidePresentation(
     return actionableFrame('loading-stuck', facts.nowMs)
   }
 
-  // Settled. The only reason to keep the veil is an open intent whose target is not
-  // on screen yet.
+  // Settled: the only reason to keep the veil is an open intent not on screen yet.
   if (!facts.holdForOpenIntent) {
     return releasedFrame('contents', false, facts.nowMs)
   }
   const phase = facts.surfacePhase
   if (phase === null) {
-    // No observation yet: hold, but with a finite outer deadline rather than a 0 ms
-    // re-arm - an unanchored clock must never keep the veil forever.
+    // No observation yet: hold with a finite outer deadline rather than a 0 ms re-arm -
+    // an unanchored clock must never keep the veil forever.
     return heldFrame('loading', false, anchorOf(facts.nowMs) + safe.surfaceMaxHoldMs)
   }
   if (phase === 'active') {
@@ -233,8 +200,7 @@ export function decidePresentation(
     : facts.holdStartedAtMs
   const elapsed = elapsedSince(base, facts.nowMs)
   if (elapsed === null) {
-    // Clock not anchored or rolled back: hold with a finite future deadline. The next
-    // evaluation either anchors or reveals at the bound; it never re-arms at 0 ms.
+    // Clock not anchored or rolled back: hold with a finite future deadline (never a 0 ms re-arm).
     return heldFrame('loading', false, anchorOf(facts.nowMs) + bound)
   }
   if (elapsed >= bound) {
@@ -245,12 +211,8 @@ export function decidePresentation(
   return heldFrame('loading', false, anchorOf(facts.nowMs) + (bound - elapsed))
 }
 
-/**
- * Upper bound of the veil for one attempt, in ms, from the threshold table alone.
- * This is the single answer to 'how long can the user be parked' - the invariant is
- * <= 155s including the boot budget and the abandonment sweep, which live in the
- * caller's tables and are passed in.
- */
+/** Upper bound of the veil for one attempt: the threshold table plus the two caller-owned
+ * budgets - the single answer to "how long can the user be parked". */
 export function veilUpperBoundMs(thresholds: PresentationThresholds, extra: {
   readonly bootTimeoutMs: number
   readonly reclaimSweepMs: number

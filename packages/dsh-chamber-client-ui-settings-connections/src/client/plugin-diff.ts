@@ -1,34 +1,24 @@
 /**
- * Plugin diff pure function (design 13 §6, derive style): local plugin
- * manifest projection + remote plugin manifest projection → the sync row set.
+ * Plugin diff pure function: local manifest projection + remote manifest projection →
+ * the sync row set. This package only computes the view — never executes, never reaches
+ * the network, never re-implements `dsh plugin`; the main process is the only authority
+ * for install/remove/restart.
  *
- * This package only computes the view — it never executes, never reaches the
- * network, never re-implements `dsh plugin`. The main process is the only
- * authority for install/remove/restart; here we classify each local spec into
- * a syncable shape and compare against the remote dependencies.
- *
- * Row categories (§5.3):
- *   missing      local has, remote lacks (registry spec, default-checked)
- *   update       both have but spec strings differ (registry rows only)
- *   extra        remote has, local lacks (the "remove" row, default-unchecked)
- *   materialize  local file:/link:/relative/absolute path → pack & transfer
- *   unsyncable   workspace:/git+/URL/range/alias → grayed, never passed
- *   consistent   both sides agree (registry spec equal, or materialized)
- *
- * The materialize rule is deliberately name-based, NOT string-based: a local
- * `file:../p` and a remote `file:/home/.../p.tgz` necessarily differ as
- * strings but are the same plugin once chamber materialized it (§4.5) — so a
- * local file: dep whose name is already a file: dep on the remote is judged
- * "materialized/consistent", never a phantom update.
+ * Row categories: missing (local has, remote lacks; default-checked), update (spec strings
+ * differ), extra (remote has, local lacks; the "remove" row, default-unchecked), materialize
+ * (local path → pack & transfer), unsyncable (workspace:/git+/URL/range/alias → grayed),
+ * consistent (both sides agree).
+ * The materialize rule is deliberately name-based, NOT string-based: a local `file:../p` and
+ * a remote `file:/home/.../p.tgz` differ as strings but are the same plugin once materialized
+ * — so a local file: dep whose name is already a file: dep on the remote is "consistent",
+ * never a phantom update.
  */
 
 import { hasXWildcard, isMaterializedValue } from '@dsh-chamber/dsh-chamber-client-core/plugin-manifest'
 import type { LocalPluginManifest, RemotePluginManifest } from '../global.d.ts'
 
-// The dependency-value grammars are THE single definition in the neutral wire
-// package (design 21 §3 readManifest / §6.2 掩码纪律), reached through
-// client-core's browser face because this package's dependency list is frozen
-// for this batch. Re-exported so this module's public surface is unchanged.
+// The dependency-value grammars are THE single definition in the neutral wire package, reached
+// through client-core's browser face; re-exported so this module's public surface is unchanged.
 export { hasXWildcard }
 
 /** Sync row kind (the actionable four + unsyncable + consistent). */
@@ -52,32 +42,26 @@ export interface PluginRow {
   reason: string | null
 }
 
-/** The full diff: the combined, ordered row set. Every row carries its own
- *  `kind` (§5.3), so a per-kind view is a filter over `rows`; pre-filtered
- *  arrays would be write-only and cost one extra full scan + allocation per
- *  kind. */
+/** The full diff: the combined, ordered row set. Every row carries its own `kind`, so a per-kind
+ *  view is a filter over `rows` (pre-filtered arrays would cost an extra full scan per kind). */
 export interface PluginDiff {
   rows: PluginRow[]
 }
 
-/** A safe registry version spec (§7.2): a pinned range (`^1.2.3`, `~1.2.3`,
- *  `1.2.3`, `1.2.3-beta.1`) or a floating tag (`latest`, `next`) — no
- *  `:`/`<`/`>`/`*`/`||`/space/comma. The dependency NAME is the map key; this
- *  matches only the VALUE. */
+/** A safe registry version spec: a pinned range (`^1.2.3`, `~1.2.3`, `1.2.3`, `1.2.3-beta.1`) or a
+ *  floating tag (`latest`, `next`) — no `:`/`<`/`>`/`*`/`||`/space/comma. The dependency NAME is
+ *  the map key; this matches only the VALUE. */
 const REGISTRY_SPEC = /^[~^]?[0-9A-Za-z][0-9A-Za-z._+-]*$/
 
-/** A pinned version (starts with an optional ^/~ then a digit, tolerating a
- *  `v` prefix: `1.2.3` / `^1.2.3` / `~1.2.3` / `v1.2.3` / `^v1.2.3` / `~v1.2.3`). */
+/** A pinned version (optional ^/~ then a digit, tolerating a `v` prefix). */
 const PINNED = /^[~^]?v?\d/
 
-// Local-path classification = the shared mask ruler `isMaterializedValue`
-// (wire): file:/link:, relative (./ ../ — including bare . / .. and backslash
-// separators), absolute (/ \\ C:\) and home-relative (~ ~/x ~\x) values all
-// name a machine-local path. A bare `.foo` is NOT a path, and a bare `~1.2.3`
-// is a tilde RANGE, not a home path — both stay unsyncable. The rule is
-// deliberately the WIDER shared ruler (design 21 decision 18): the desktop
-// main converges onto the same function in R6 phase 2, so the UI can never
-// offer a materialize row for a value the backend masks/classifies differently.
+// Local-path classification = the shared mask ruler `isMaterializedValue` (wire): file:/link:,
+// relative (./ ../ — including bare . / .. and backslash separators), absolute (/ \ C:\) and
+// home-relative (~ ~/x ~\x) values all name a machine-local path. A bare `.foo` is NOT a path and
+// a bare `~1.2.3` is a tilde RANGE, not a home path — both stay unsyncable. The rule is deliberately
+// the WIDER shared ruler: the desktop main converges onto the same function, so the UI can never offer
+// a materialize row for a value the backend masks/classifies differently.
 
 /** Human-readable reason for a refused spec (§7.2). */
 function unsyncableReason(spec: string): string {
@@ -112,8 +96,7 @@ function localCategory(name: string, local: LocalPluginManifest): PluginCategory
   return 'plain'
 }
 
-/** Remote-row display category: the active bundle layer is the only remote
- *  signal (client classification is local-only, §4.4). */
+/** Remote-row display category: the active bundle layer is the only remote signal (client classification is local-only). */
 function remoteCategory(name: string, remote: RemotePluginManifest): PluginCategory {
   return remote.bundles.includes(name) ? 'bundle' : 'plain'
 }
@@ -134,8 +117,6 @@ function compareRows(a: PluginRow, b: PluginRow): number {
 
 /**
  * Compute the plugin sync diff.
- * @param local - local manifest projection.
- * @param remote - remote manifest projection.
  * @returns categorized rows + the combined ordered list.
  */
 export function computePluginDiff(local: LocalPluginManifest, remote: RemotePluginManifest): PluginDiff {
@@ -155,9 +136,8 @@ export function computePluginDiff(local: LocalPluginManifest, remote: RemotePlug
     }
 
     if (cls.type === 'materialize') {
-      // Name-based match: remote already holds a local-path spec for this name
-      // (every masking backend projects the shared mask, which keeps a `file:`
-      // prefix) → done.
+      // Name-based match: remote already holds a local-path spec for this name (every masking
+      // backend projects the shared mask, keeping a `file:` prefix) → done.
       const materialized = remoteSpec !== undefined && isMaterializedValue(remoteSpec)
       rows.push({
         name,
@@ -203,22 +183,19 @@ export function computePluginDiff(local: LocalPluginManifest, remote: RemotePlug
   return { rows }
 }
 
-/** Whether a row participates in a diff (i.e. shown under the default
- *  "differences only" filter). */
+/** Whether a row participates in a diff (shown under the default "differences only" filter). */
 export function isDifferenceRow(kind: PluginRowKind): boolean {
   return kind === 'missing' || kind === 'update' || kind === 'extra' || kind === 'materialize'
 }
 
-/** Default checkbox state for an actionable row (§5.3): remove (extra) is
- *  unchecked; everything else the user can act on is checked. */
+/** Default checkbox state for an actionable row: remove (extra) is unchecked; everything else actionable is checked. */
 export function defaultChecked(kind: PluginRowKind): boolean {
   return kind === 'missing' || kind === 'update' || kind === 'materialize'
 }
 
-/** The `add` argument for one checked REGISTRY row (missing/update): pass
- *  name@spec to pin the local version; a bare-name spec passes just the name
- *  (install latest). Materialize rows never reach this — the renderer sends
- *  only the dependency name and MAIN resolves its authoritative path (§4.6). */
+/** The `add` argument for one checked REGISTRY row (missing/update): name@spec pins the local
+ *  version, a bare-name spec installs latest. Materialize rows never reach this — MAIN resolves
+ *  their authoritative path. */
 export function rowAddArg(row: PluginRow): string {
   if (row.unlocked || row.localSpec === null) return row.name
   return `${row.name}@${row.localSpec}`

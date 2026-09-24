@@ -1,8 +1,7 @@
 /**
  * /chamber/runtime controller (design 18 §9.3): the gateway-owned runtime
- * management surface. Mounted in the dispatch middleware BEFORE the feature
- * host and NOT ready-gated — dsh-down windows (restart/applying) must keep
- * `status` pollable, so this controller never detaches with the dsh-derived
+ * management surface, mounted BEFORE the feature host and NOT ready-gated —
+ * dsh-down windows must keep `status` pollable, so it never detaches with the
  * feature consumers.
  */
 import type { ApiRequest, ApiResponse, Logger } from '@dsh-chamber/control-plane'
@@ -19,16 +18,13 @@ import {
 import { recoveryGateRefusal, type RuntimeMutationAction } from './runtime-gate.ts'
 import { codedError, jsonResponse, readBoundedBody } from './http-utils.ts'
 
-/** Read a bounded JSON body (64 KiB cap). A completely empty body is a JSON
- * `undefined` (no body — the route's required-field checks answer 400); any
- * other parse failure is a 400. The oversized body is answered 413 by the
- * caller (fail() → codeToStatus) which destroys the socket only AFTER the
- * response is written (see the handle() catch). */
+/** Read a bounded JSON body (64 KiB cap): an empty body is a JSON `undefined`
+ * (no body), a parse failure is a 400, and an oversize body is answered 413 by
+ * the caller, which destroys the socket only AFTER writing the response. */
 async function readJsonBody(req: ApiRequest): Promise<unknown> {
   const outcome = await readBoundedBody(req, 64 * 1024)
   if (outcome.kind === 'oversize') throw codedError('body_too_large', 'request body too large')
-  // The kernel settles aborted/closed connections too (dispatch-parity); the
-  // stream error is forwarded unchanged.
+  // The kernel settles aborted/closed connections too; the stream error is forwarded unchanged.
   if (outcome.kind === 'aborted' || outcome.kind === 'closed') {
     throw codedError('request_aborted', 'request body aborted')
   }
@@ -91,8 +87,7 @@ export function createRuntimeRoutes(manager: () => GatewayRuntimeManager, logger
   }
 
   async function handle(req: ApiRequest, res: ApiResponse, pathname: string): Promise<boolean> {
-    // Exact-prefix boundary: /chamber/runtime and /chamber/runtime/<suffix>
-    // only; /chamber/runtimeevil falls through to the chamber surface.
+    // Exact-prefix boundary: /chamber/runtime and /chamber/runtime/<suffix> only; /chamber/runtimeevil falls through to the chamber surface.
     if (pathname !== '/chamber/runtime' && !pathname.startsWith('/chamber/runtime/')) return false
     const m = manager()
     const suffix = pathname.slice('/chamber/runtime'.length) || '/'
@@ -110,14 +105,9 @@ export function createRuntimeRoutes(manager: () => GatewayRuntimeManager, logger
         }
         const status = await m.status()
         if (rejectRecoveryGate(res, status, 'select')) return true
-        // Honest acceptance: synchronous refusals are answered
-        // synchronously, not swallowed behind a fake 202. A managed profile
-        // write is a lifecycle writer (design 21 §6.3 decision 6/17): the
-        // install window is refused here so select's 202 never precedes the
-        // manager fence throw.
+        // Honest acceptance: refusals are answered synchronously, never swallowed behind a fake 202; a held profile-write lease is refused before the 202.
         if (m.profileWriteInFlight?.()) {
-          // Same code/message as the manager's assertMutationIdle lease branch
-          // (profileWriteBusyRefusal).
+          // Same code/message as the manager's assertMutationIdle lease branch.
           return jsonResponse(res, 409, profileWriteBusyRefusal('runtime mutations'))
         }
         if (m.mutationInProgress()) {
@@ -129,8 +119,7 @@ export function createRuntimeRoutes(manager: () => GatewayRuntimeManager, logger
         if (status.mutationsAllowed === false) {
           return jsonResponse(res, 403, { error: 'runtime mutations are read-only on this platform', code: 'platform_read_only' })
         }
-        // Async install job: 202 immediately; progress/failure surfaces via
-        // /status (operationError).
+        // Async install job: 202 immediately; progress/failure via /status.
         void m.select(body.version).catch(error => logger.error(`runtime select failed: ${sanitizeRouteError(error instanceof Error ? error.message : String(error))}`))
         return jsonResponse(res, 202, { accepted: true, version: body.version })
       }
@@ -140,16 +129,10 @@ export function createRuntimeRoutes(manager: () => GatewayRuntimeManager, logger
         return jsonResponse(res, 200, await m.apply())
       }
       if (suffix === '/apply-now' && req.method === 'POST') {
-        // 202: apply-now accepts immediately (mirrors /restart) — the
-        // version-switch activation transaction runs in the background and
-        // progress is polled via /status (phase 'applying' + honest
-        // connectionState). Synchronous refusals are answered synchronously.
-        // The manager's synchronous preflight runs INSIDE this try so any
-        // throw (platform/env/busy/no_selection/invalid_target/noop_target)
-        // lands in the outer catch → fail() writes the 409/403 BEFORE a 202
-        // can ever go out (a preflight throw must project into the response,
-        // never be swallowed into a fake 202 whose status never settles). The
-        // preflight filters invalidated selections/trees itself.
+        // 202: apply-now accepts immediately (mirrors /restart); the version-switch
+        // activation transaction runs in the background, polled via /status. The
+        // manager's synchronous preflight runs INSIDE this try, so any throw lands in
+        // the outer catch and 409/403 is written BEFORE a 202.
         const status = await m.status()
         if (rejectRecoveryGate(res, status, 'apply-now')) return true
         if (m.mutationInProgress()) {
@@ -162,11 +145,9 @@ export function createRuntimeRoutes(manager: () => GatewayRuntimeManager, logger
           return jsonResponse(res, 403, { error: 'runtime mutations are read-only on this platform', code: 'platform_read_only' })
         }
         if (status.connectionState !== 'ready' && status.connectionState !== 'degraded') {
-          // Mirror /restart: a dsh that never reached ready cannot be switched
-          // in-session; recovery is restore-builtin / retry-apply / retry-restore.
-          // restart-exhausted is NOT a dedicated refusal (D2) — this gate covers it.
-          // Same code/message as the manager's applyNowPreflight direct-call
-          // parity (applyNowNotRunningRefusal).
+          // Mirror /restart: a never-ready dsh cannot be switched in-session
+          // (restart-exhausted included). Same code/message as the manager's
+          // applyNowPreflight parity.
           return jsonResponse(res, 409, applyNowNotRunningRefusal(status.connectionState))
         }
         if (m.applyNowInFlight()) {
@@ -186,10 +167,8 @@ export function createRuntimeRoutes(manager: () => GatewayRuntimeManager, logger
         return jsonResponse(res, 200, await m.rollback(body.version))
       }
       if (suffix === '/cleanup-version' && req.method === 'POST') {
-        // Desktop-parity cleanup: ledger-gated deletion of one
-        // explicitly installed version tree + store prune. Synchronous 200
-        // like /apply; refusals (pending/recovery/env/win32/busy/protected)
-        // answer their mapped status synchronously through the manager throw.
+        // Desktop-parity cleanup: ledger-gated deletion of one explicitly installed
+        // version tree + store prune. Synchronous 200 like /apply; throws map through.
         const body = (await readJsonBody(req)) as { version?: unknown } | undefined
         if (body === undefined || typeof body.version !== 'string' || body.version === '') {
           return jsonResponse(res, 400, { error: 'version is required', code: 'bad_request' })
@@ -202,8 +181,7 @@ export function createRuntimeRoutes(manager: () => GatewayRuntimeManager, logger
         return jsonResponse(res, 200, await m.cleanupVersion(body.version))
       }
       if (suffix === '/restore-pre-rollback' && req.method === 'POST') {
-        // Desktop-parity pre-rollback data restore: stash-name
-        // whitelist + re-listing live in the manager; env stays allowed.
+        // Desktop-parity pre-rollback data restore: stash-name whitelist + re-listing live in the manager; env stays allowed.
         const body = (await readJsonBody(req)) as { stashName?: unknown } | undefined
         if (body === undefined || typeof body.stashName !== 'string' || body.stashName === '') {
           return jsonResponse(res, 400, { error: 'stashName is required', code: 'bad_request' })
@@ -216,10 +194,9 @@ export function createRuntimeRoutes(manager: () => GatewayRuntimeManager, logger
         return jsonResponse(res, 200, await m.restorePreRollback(body.stashName))
       }
       if (suffix === '/recover-metadata' && req.method === 'POST') {
-        // Metadata FATAL rescue (desktop parity): archives corrupt
-        // selection metadata with a full DSH_HOME copy and runs the builtin
-        // anchor through the probe gate. Synchronous refusals come from the
-        // manager (platform/env/busy/wrong-recovery-phase/no-corruption).
+        // Metadata FATAL rescue (desktop parity): archives corrupt selection
+        // metadata with a full DSH_HOME copy and runs the builtin anchor through the
+        // probe gate; synchronous refusals come from the manager.
         const status = await m.status()
         if (rejectRecoveryGate(res, status, 'recover-metadata')) return true
         if (m.mutationInProgress()) {
@@ -229,58 +206,44 @@ export function createRuntimeRoutes(manager: () => GatewayRuntimeManager, logger
       }
       if (suffix === '/retry-apply' && req.method === 'POST') {
         // Resume an interrupted pointer switch (swap-attempted): the startup
-        // transaction re-runs and, on a clean verdict, the managed dsh comes
-        // up; a still-blocked retry reports the blockedReason honestly.
+        // transaction re-runs; a still-blocked retry reports the blockedReason.
         const status = await m.status()
         if (rejectRecoveryGate(res, status, 'retry-apply')) return true
         return jsonResponse(res, 200, await m.retryApply())
       }
       if (suffix === '/retry-restore' && req.method === 'POST') {
-        // Resume an interrupted snapshot restore (restore-half / restore-
-        // incomplete) from the durable journal.
+        // Resume an interrupted snapshot restore (restore-half / restore-incomplete) from the durable journal.
         const status = await m.status()
         if (rejectRecoveryGate(res, status, 'retry-restore')) return true
         return jsonResponse(res, 200, await m.retryRestore())
       }
       if (suffix === '/restore-builtin' && req.method === 'POST') {
-        // Route-level gate (desktop parity): restore-builtin is
-        // the escape for a PENDING selection or a HEALTHY selection with an
-        // override only. Inside an interrupted apply (swap-attempted /
-        // snapshot-failed) or data restore (restore-blocked) the shared core
-        // re-blocks an armed reset against the durable markers — the gate
-        // therefore exposes only the matching retry there (never a reset
-        // that would stop the dsh for nothing and leave an armed reset
-        // intent behind). A FATAL metadata block or an in-flight writer must
-        // resume through its own surface (recover-metadata / mutation
-        // completion). The manager adds the hasOverride preflight
-        // (runtime_no_override) and the durable-marker guard.
+        // Route-level gate (desktop parity): restore-builtin is the escape for a
+        // PENDING or HEALTHY-with-override selection only. Inside an interrupted
+        // apply/restore the shared core re-blocks an armed reset against the durable
+        // markers, so only the matching retry is exposed; a FATAL metadata block or
+        // in-flight writer resumes through its own surface (manager: hasOverride).
         const status = await m.status()
         if (rejectRecoveryGate(res, status, 'restore-builtin')) return true
         return jsonResponse(res, 200, await m.restoreBuiltin())
       }
       if (suffix === '/restart' && req.method === 'POST') {
-        // 202: restart acceptance never blocks on readiness (design 18 §9.3);
-        // the transactional restart runs in the background and progress is
-        // polled via /status. Synchronous refusals are answered synchronously:
-        // installing/applying/pending refuse 409; a dsh that never reached
-        // ready refuses 409 (an in-flight restart is single-flight merged by
-        // restartLocal).
+        // 202: restart acceptance never blocks on readiness; the transactional
+        // restart runs in the background, polled via /status. Installing/applying/
+        // pending and a never-ready dsh refuse 409 (restartLocal single-flight).
         const status = await m.status()
         if (rejectRecoveryGate(res, status, 'restart')) return true
         if (status.phase === 'applying' || status.phase === 'installing') {
           return jsonResponse(res, 409, { error: 'runtime mutation in progress; restart refused', code: 'runtime_busy' })
         }
         if (status.connectionState !== 'ready' && status.connectionState !== 'degraded') {
-          // restartLocal rejects every non-ready state — the r1 recovery
-          // surface for stopped/error/restart-exhausted is POST
-          // /chamber/runtime/start, while interrupted apply/restore windows
-          // keep their retry/restore routes.
+          // restartLocal rejects every non-ready state: the recovery surface for
+          // stopped/error/restart-exhausted is POST /chamber/runtime/start, while
+          // interrupted apply/restore windows keep their retry/restore routes.
           return jsonResponse(res, 409, { error: `managed dsh is not running (${status.connectionState}); start the managed dsh (start applies to stopped/error/restart-exhausted) or retry the interrupted apply/restore`, code: 'runtime_busy' })
         }
         if (m.profileWriteInFlight?.()) {
-          // design 21 §6.3 (decision 6/17): a restart respawns the managed dsh
-          // and its seed thunk writes DSH_HOME — never while a plugin pnpm
-          // child holds the profile-write lease.
+          // A restart respawns the managed dsh and its seed thunk writes DSH_HOME — never while a plugin pnpm child holds the profile-write lease.
           return jsonResponse(res, 409, profileWriteBusyRefusal('restart'))
         }
         if (m.restartInFlight()) {
@@ -290,18 +253,11 @@ export function createRuntimeRoutes(manager: () => GatewayRuntimeManager, logger
         return jsonResponse(res, 202, { accepted: true })
       }
       if (suffix === '/start' && req.method === 'POST') {
-        // Decision-12 start primitive (design 21 §6.3 r1): bring the managed
-        // dsh up from stopped/error/restart-exhausted. 202 semantics mirror
-        // /restart: the guarded startLocal runs in the background and progress
-        // is polled via /status (start running/ok/failed + operationError).
-        // Every synchronous refusal is answered synchronously before any 202:
-        // the recovery gate refuses every startupBlockedReason —
-        // phase-less FATAL metadata blocks (journal-corrupt / current-corrupt /
-        // override-corrupt / journal-mismatch) included — and recovery phases
-        // only expose their matching retry — restore-builtin applies to pending/healthy selections only, and a start never
-        // bypasses the recovery gate), installing/applying windows refuse
-        // busy, a held profile-write lease defers, a second start refuses, and
-        // a running/starting dsh is not a start target.
+        // Start primitive: bring the managed dsh up from stopped/error/
+        // restart-exhausted. 202 semantics mirror /restart, every synchronous refusal
+        // answered before any 202 — the recovery gate refuses every
+        // startupBlockedReason and exposes only the matching retry, while
+        // installing/applying, a held lease and a running/starting dsh refuse.
         const status = await m.status()
         if (rejectRecoveryGate(res, status, 'start')) return true
         if (status.phase === 'applying' || status.phase === 'installing') {
@@ -311,14 +267,12 @@ export function createRuntimeRoutes(manager: () => GatewayRuntimeManager, logger
           return jsonResponse(res, 409, profileWriteBusyRefusal('start'))
         }
         if (m.startInFlight?.()) {
-          // Same code/message as the manager start() head single-flight check
-          // (startAlreadyInFlightRefusal).
+          // Same code/message as the manager start() head single-flight check.
           return jsonResponse(res, 409, startAlreadyInFlightRefusal())
         }
         if (status.connectionState !== 'stopped' && status.connectionState !== 'error'
           && status.connectionState !== 'restart-exhausted') {
-          // Same code/message as the manager start() connection gate
-          // (startNotApplicableRefusal).
+          // Same code/message as the manager start() connection gate.
           return jsonResponse(res, 409, startNotApplicableRefusal(status.connectionState))
         }
         void m.start().catch(error => logger.error(`runtime start failed: ${sanitizeRouteError(error instanceof Error ? error.message : String(error))}`))
@@ -343,9 +297,8 @@ export function createRuntimeRoutes(manager: () => GatewayRuntimeManager, logger
     } catch (error) {
       fail(res, error)
       if ((error as Error & { code?: string }).code === 'body_too_large') {
-        // The 413 was written above; the oversized body may still be
-        // streaming — destroy the socket instead of draining it, exactly like
-        // dispatch's readBody path (response first, then destroy).
+        // The 413 was written above; the oversized body may still be streaming —
+        // destroy the socket instead of draining it, like dispatch's readBody path.
         try { req.destroy?.() } catch { /* socket already gone */ }
       }
       return true

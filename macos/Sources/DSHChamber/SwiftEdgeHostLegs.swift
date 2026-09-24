@@ -612,7 +612,7 @@ public final class SwiftEdgeHostLegs {
             // 成功——设置面语义 design 14 D6）。Swift = SMAppService.mainApp
             // （macOS 14.4+；Package 声明 .macOS(.v14)、精确下限由 Info.plist
             // 的 14.4 承担 → 旧系统 NSLoginItem/SMLoginItemSetEnabled 兜底分支
-            // 不可达且未实现，design 25 §5 E14 注记 / deviations T-26）。
+            // 不可达且未实现，design 25 §5 E14 注记）。
             // 守卫：canShowUI（headless 绝不触碰 ServiceManagement）→ app
             // bundle 注册形态（SMAppService.mainApp 需要 Info.plist——swift
             // run dev 态无 bundle → ui-unavailable:setLoginItem:no-bundle 诚实

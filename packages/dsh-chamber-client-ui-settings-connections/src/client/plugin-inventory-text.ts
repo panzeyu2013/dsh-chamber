@@ -1,51 +1,40 @@
 /**
- * Plugin-inventory display helpers (design 05 §5 / gateway 插件视图): the
- * pure, UI-free projections for the PluginDialog's inventory-backed zones
- * (plan 24 D5-A), mirroring the SSH plugin row semantics (plugin-diff.ts split).
- * Kept free of
- * .tsx so the plain-node test suite covers the projections.
+ * Plugin-inventory display helpers: pure, UI-free projections for PluginDialog's
+ * inventory-backed zones, mirroring the SSH plugin row semantics (plugin-diff.ts
+ * split). Kept free of .tsx so the plain-node test suite covers the projections.
  */
 
 import type { SettingsConnectionsKey } from '../locales.ts'
 import type { PluginFiberPhase, PluginInventorySnapshot } from './plugin-inventory-api.ts'
 
-/** The chamber-injected host package names (design 09 module A + design 08 +
- *  design 24 + design 20 §6): the registry-derived expected rows the plugin
- *  view surfaces. These constants are the CLIENT-side mirror of the
- *  control-plane registry (host-graph-seed.ts CHAMBER_HOST_PACKAGES) — a client
- *  package cannot import the Node-side module, so the drift test in
- *  test/plugin-inventory/chamber-rows.test.ts pins the NAME SET against the registry
- *  source text (a new registry row must fail there, never be silently
- *  ignored). */
+/** The chamber-injected host package names: the registry-derived expected rows the
+ *  plugin view surfaces. CLIENT-side mirror of the control-plane registry
+ *  (host-graph-seed.ts CHAMBER_HOST_PACKAGES) — a client package cannot import the
+ *  Node-side module, so the drift test pins the NAME SET against the registry source
+ *  text (a new registry row must fail there, never be silently ignored). */
 export const HOST_GRAPH_PACKAGE = '@dsh-chamber/dsh-chamber-seed-client-graph'
 export const GIT_WORKTREE_PACKAGE = '@dsh-chamber/dsh-chamber-seed-git-worktree'
-/** Archived-session cleanup host domain (design 24). */
+/** Archived-session cleanup host domain. */
 export const ARCHIVE_CLEANUP_PACKAGE = '@dsh-chamber/dsh-chamber-seed-archive-cleanup'
-/** Open-in host domain (design 20 §6) — the fork of upstream's
- *  open-in host half. It is `localOnly` in the registry: it exists for the
- *  local instance shape alone, so every non-local target's chamber table omits
- *  its row outright (`applicableChamberPackages`) — never a "not injected"
+/** Open-in host domain — the fork of upstream's open-in host half. It is
+ *  `localOnly` in the registry: it exists for the local instance shape alone, so every
+ *  non-local target's chamber table omits its row outright — never a "not injected"
  *  claim for a package that can never be seeded there. */
 export const OPEN_IN_PACKAGE = '@dsh-chamber/dsh-chamber-seed-open-in'
 
-/** The gateway-packaged mobile client entry (design 21 §6.2: the single
- *  packaged exception — mobile access is bound to the gateway and has no
- *  desktop in the chain). A chamber row, never a third-party row. */
+/** The gateway-packaged mobile client entry (the single packaged exception —
+ *  mobile access is bound to the gateway and has no desktop in the chain). */
 export const MOBILE_PACKAGE = '@dsh-chamber/dsh-client-ui-mobile'
 
 /** Official (built-in) package scope: never a third-party row. */
 const OFFICIAL_SCOPE = '@deepseek-ai/'
 
-/** Raw cordis patch-insert syntax prefix: the gateway's cordis.patch.yml
- *  insert rows (gateway index.ts hostPackages) are reported by the host
- *  plugin inventory under this prefix (the root include entry itself is
- *  named 'cordis:include'). Stripped before classification. */
+/** Raw cordis patch-insert syntax prefix: the gateway's cordis.patch.yml insert
+ *  rows are reported by the host inventory under this prefix. Stripped before classification. */
 const CORDIS_INCLUDE_PREFIX = 'cordis:include '
 
-/** One inventory entry's package class (design 05 §5 chamber rows + the
- *  design 21 §6.2 mobile packaged exception + design 24 archive-cleanup).
- *  `chamber-client` = a chamber CLIENT plugin that is not the packaged mobile
- *  entry: still a chamber row (never third-party), with no dedicated copy. */
+/** One inventory entry's package class. `chamber-client` = a chamber CLIENT plugin
+ *  that is not the packaged mobile entry: still a chamber row, with no dedicated copy. */
 export type InventoryEntryKind =
   | 'chamber-host-graph'
   | 'chamber-git-worktree'
@@ -56,28 +45,23 @@ export type InventoryEntryKind =
   | 'official'
   | 'third-party'
 
-/** Strip the raw patch-insert syntax the gateway's cordis.patch.yml rows are
- *  reported under ('cordis:include <name>'). */
+/** Strip the raw patch-insert syntax the gateway's cordis.patch.yml rows are reported under. */
 function stripCordisInclude(moduleName: string): string {
   return moduleName.startsWith(CORDIS_INCLUDE_PREFIX)
     ? moduleName.slice(CORDIS_INCLUDE_PREFIX.length)
     : moduleName
 }
 
-/** Chamber CLIENT plugin scope. The packaged mobile entry is the single
- *  exception today, but the classification is scope-based — never a literal
+/** Chamber CLIENT plugin scope: classification is scope-based — never a literal
  *  list — so a future chamber client plugin is a chamber row automatically. */
 const CHAMBER_CLIENT_PREFIX = '@dsh-chamber/dsh-client-ui-'
 
-/** Classification of a chamber CLIENT plugin: 'chamber-mobile' is the
- *  packaged gateway exception (dedicated localized copy), 'chamber-client' is
- *  any other chamber client plugin; null = not a chamber client plugin. */
+/** Classification of a chamber CLIENT plugin: 'chamber-mobile' is the packaged
+ *  gateway exception (dedicated localized copy), 'chamber-client' any other. */
 export type ChamberClientKind = 'chamber-mobile' | 'chamber-client'
 
 /** Classify a module specifier as a chamber CLIENT plugin (patch-insert prefix
- *  stripped first). The single source of truth for "is this a chamber client
- *  row" — the gateway table derives its client rows from it instead of naming
- *  a package. */
+ *  stripped first) — the single source of truth for "is this a chamber client row". */
 export function classifyChamberClientPlugin(moduleName: string): ChamberClientKind | null {
   const name = stripCordisInclude(moduleName)
   if (!name.startsWith(CHAMBER_CLIENT_PREFIX)) return null
@@ -85,11 +69,9 @@ export function classifyChamberClientPlugin(moduleName: string): ChamberClientKi
 }
 
 /**
- * Classify one inventory entry's module specifier. The raw patch-insert
- * prefix ('cordis:include <name>') is stripped first, then the plain name
- * decides: the chamber host packages, the chamber client plugins
- * (packaged mobile entry + any other), the official `@deepseek-ai/*` scope,
- * and everything else as third-party.
+ * Classify one inventory entry's module specifier: patch-insert prefix stripped first,
+ * then the plain name decides — chamber host package, chamber client plugin, official
+ * `@deepseek-ai/*` scope, or third-party.
  */
 export function classifyInventoryEntry(moduleName: string): InventoryEntryKind {
   const name = stripCordisInclude(moduleName)
@@ -104,21 +86,12 @@ export function classifyInventoryEntry(moduleName: string): InventoryEntryKind {
 }
 
 /**
- * Third-party projection: the instance's loaded entries that classify as
- * neither official (`@deepseek-ai/*`) nor any chamber row — the registry host
- * packages, the chamber client plugins (design 21 §6.2; the mobile row used
- * to leak in via its raw patch-syntax report) and every package name in
- * `expectedChamberNames` — the gateway view's analogue of the SSH dialog's
- * "third-party plugins" diff.
- *
- * `expectedChamberNames` is the REGISTRY-DERIVED expected list of the current
- * view (deriveChamberRows' rows, i.e. the desktop manifest projection). The
- * literal constants below only classify the four names this module knows by
- * name; a future registry package outside these literals is unknown to
- * them and would otherwise leak into this zone's third-party list — the
- * caller's expected list is what keeps the zone honest. It
- * defaults to [] so the pure tests can exercise the literal classification
- * alone.
+ * Third-party projection: loaded entries that classify as neither official
+ * (`@deepseek-ai/*`) nor any chamber row (registry host packages, chamber client
+ * plugins, or any name in `expectedChamberNames`).
+ * `expectedChamberNames` is the REGISTRY-DERIVED expected list of the current view: the
+ * literal constants only know four names, so the caller's list is what keeps a future
+ * registry package from leaking into this zone. Defaults to [] for the pure tests.
  */
 export function thirdPartyEntries(
   snapshot: Pick<PluginInventorySnapshot, 'entries'>,
@@ -132,20 +105,9 @@ export function thirdPartyEntries(
   })
 }
 
-/**
- * Remote-side label key for one chamber host package, derived from the
- * managed instance's LIVE Loader state (the inventory is more precise than
- * the SSH dialog's file probe: presence + enablement + root-fiber phase are
- * the actual load outcome, never a constant claim). A present-but-DISABLED
- * entry (the host's list() reports disabled Loader entries too) is never
- * claimed live.
- */
 /** Map a chamber package name to its inventory-entry kind: the reverse of
- *  classifyInventoryEntry, derived FROM it. classifyInventoryEntry answers
- *  'official' for any other @deepseek-ai/* name, while the reverse
- *  classification answers 'third-party' for everything that is not a fixed
- *  chamber name, and the caller keys its exact-name fallback on that answer —
- *  fold the two non-chamber answers back together. */
+ *  classifyInventoryEntry, derived FROM it. Its 'official'/'third-party' answers are
+ *  folded together so the caller's exact-name fallback keys on one non-chamber answer. */
 function chamberKindOf(packageName: string): InventoryEntryKind {
   const kind = classifyInventoryEntry(packageName)
   return kind === 'official' || kind === 'third-party' ? 'third-party' : kind
@@ -155,12 +117,8 @@ function chamberKindOf(packageName: string): InventoryEntryKind {
 export type LoaderLivenessFact = 'absent' | 'disabled' | 'active' | 'failed' | 'starting'
 
 /**
- * Classify one Loader entry by the actual load outcome — presence, enablement
- * and root-fiber phase are the only facts, never a constant claim. Every
- * projection (chamberRemoteKey, thirdPartyLiveState) reads THIS function so
- * the decision exists once; each keeps its own label
- * vocabulary.
- * @param entry - the matched Loader entry, or undefined when absent.
+ * Classify one Loader entry by the actual load outcome — presence, enablement and
+ * root-fiber phase only, never a constant claim; every projection reads THIS function.
  * @returns absent / disabled / active / failed / starting.
  */
 export function entryLiveness(
@@ -177,10 +135,8 @@ export function chamberRemoteKey(
   entries: readonly { moduleName: string; enabled: boolean; fiberPhase: PluginFiberPhase }[],
   packageName: string,
 ): SettingsConnectionsKey {
-  // Classification-aware match: the gateway's patch-insert rows (the mobile
-  // entry) are reported under the raw 'cordis:include <name>' prefix, so a
-  // plain moduleName equality would never find them (plan 24 D7-A).
-  // Non-chamber names keep the exact-name contract.
+  // Classification-aware match: gateway patch-insert rows (the mobile entry) are
+  // reported under the raw 'cordis:include <name>' prefix; non-chamber names keep exact-name equality.
   const kind = chamberKindOf(packageName)
   const entry = kind === 'third-party'
     ? entries.find(candidate => candidate.moduleName === packageName)
@@ -194,34 +150,23 @@ export function chamberRemoteKey(
   }
 }
 
-/* ---- Third-party row live state (Loader-derived, per-row 生效状态) ----
- * The installed-row lists (local / gateway / http zones) render each
- * third-party row's live state from the managed instance's Loader plugin
- * snapshot — the profile manifest alone can never claim liveness. Chamber
- * rows never reach this projection (the callers filter them out; their own
- * badges are remoteChamberBadge). */
+/* ---- Third-party row live state (Loader-derived) ----
+ * The installed-row lists render each third-party row's live state from the managed
+ * instance's Loader snapshot — the profile manifest alone can never claim liveness.
+ * Chamber rows never reach this projection (their badges are remoteChamberBadge). */
 
-/** One third-party row's live-state chip: a localized label plus the same
- *  badge tone vocabulary as the chamber rows. */
+/** One third-party row's live-state chip: a localized label plus the shared badge tone vocabulary. */
 export interface ThirdPartyLiveState {
   labelKey: SettingsConnectionsKey
   tone: ChamberBadgeTone
 }
 
 /**
- * Live-state for one INSTALLED row: a protected composition/seed row is part of
- * the installation baseline (a host-side boot layer), so it is never expected
- * to be a Loader client entry — asking for one would paint a false
- * "restart to take effect" warning on a row that is already active. Such rows
- * only reach this list when the profile itself declares them as dependencies
- * (§6.11.5's row set: the B₀ ∪ S baseline is not projected into the installed
- * list).
- * @param snapshot - the managed instance's Loader snapshot; null (read failed /
- *   instance not reachable) → null, never a state claim.
- * @param row - the installed row's name plus its backend-computed role /
- *   protection flags.
- * @returns the row's live-state chip, or null for a baseline row or when the
- *   snapshot answers nothing (thirdPartyLiveState).
+ * Live-state for one INSTALLED row: a protected composition/seed row is part of the
+ * installation baseline (a host-side boot layer), never a Loader client entry — asking
+ * for one would paint a false "restart to take effect" warning on an active row. Such
+ * rows reach this list only when the profile declares them as dependencies.
+ * @param snapshot - Loader snapshot; null (read failed / not reachable) → null, never a state claim.
  */
 export function installedRowLiveState(
   snapshot: Pick<PluginInventorySnapshot, 'entries'> | null,
@@ -232,45 +177,16 @@ export function installedRowLiveState(
 }
 
 /**
- * Live state of one installed package, derived from the managed instance's
- * Loader snapshot. Exact-name match (`moduleName === packageName` — the
- * historical exact-name contract for non-chamber names, mirroring
- * chamberRemoteKey): a profile dependency whose package mounts as a Loader
- * entry keeps the package name as its module name. Each state stays under its
- * honesty ceiling — a live claim only from an enabled + active fiber:
- *  - no matching entry → null: the state cell stays neutral. The running
- *    instance mounts nothing under this name, and no fact the view holds says
- *    whether one is still coming (the bundle note below);
- *  - matched but disabled → installed, explicitly disabled (已停用);
- *  - matched + enabled + active → mounted and live (生效中);
- *  - matched + enabled + failed → the load failed (加载失败);
- *  - matched + enabled in any other phase (pending / loading / unloading /
- *    null fiber) → still loading or between lifecycles (加载中).
- *
- * A missing entry is neutral for EVERY row, a `dsh.profile.bundles` layer
- * included — the layer mechanism mounts the rows the bundle's patch inserts,
- * never an entry named after the bundle itself. The profile
- * root `cordis.yml` is an empty entry list and each bundle contributes rows
- * through the `insert:` list of its own `dsh.bundle.patch` `cordis.patch.yml`
- * (app-boot's profile loader composes every layer over `[]`), so the bundle
- * package is never a composed row — only the packages its patch inserts are
- * (the reporting row `@deepseek-ai/dsh-experimental-agent-team-profile` inserts
- * `@deepseek-ai/dsh-experimental-agent-team` and
- * `@deepseek-ai/dsh-experimental-tool-agent-team`). A
- * "no entry + bundle layer → 重启后生效" branch would fire for EVERY bundle
- * layer of an already-restarted instance: a permanent false warning, never a
- * pending restart. Intersecting the bundle's own insert names with the snapshot
- * is the honest successor, but those names live only in
- * `<profile>/node_modules/<bundle>/cordis.patch.yml`, which no renderer fact
- * carries today — until a host fact supplies them, the neutral cell is the
- * ceiling.
- * @param snapshot - the Loader inventory snapshot; null (the read failed or
- *   the instance is not reachable, e.g. a stopped local instance) → null:
- *   the caller keeps the state cell neutral — an unreadable snapshot is
- *   never a state claim.
- * @param packageName - the installed row's package name.
- * @returns The chip {labelKey, tone}, or null when no snapshot is available or
- *   the snapshot has no entry under that name.
+ * Live state of one installed package, derived from the managed instance's Loader
+ * snapshot (exact-name match — a profile dependency that mounts as a Loader entry keeps
+ * the package name as its module name). Each state stays under its honesty ceiling, a
+ * live claim only from an enabled + active fiber: no entry → null (neutral cell);
+ * disabled → 已停用; enabled + active → 生效中; failed → 加载失败; any other phase → 加载中.
+ * A missing entry is neutral for EVERY row, a `dsh.profile.bundles` layer included: the
+ * layer mounts the rows its patch inserts, never an entry named after the bundle, so a
+ * "no entry + bundle layer → 重启后生效" branch would fire for every bundle layer of an
+ * already-restarted instance. The bundle's insert names live only in its cordis.patch.yml,
+ * which no renderer fact carries — until a host fact supplies them, neutral is the ceiling.
  */
 export function thirdPartyLiveState(
   snapshot: Pick<PluginInventorySnapshot, 'entries'> | null,
@@ -282,19 +198,16 @@ export function thirdPartyLiveState(
     case 'absent': return null
     case 'disabled': return { labelKey: 'pluginDisabled', tone: 'muted' }
     case 'active': return { labelKey: 'thirdPartyLiveActive', tone: 'ok' }
-    // The failed-load label is the shared badge copy (chamberBadgeFailed:
-    // 加载失败 / Failed to load) — the tone is what carries the danger color.
+    // The failed-load label is the shared badge copy; the tone carries the danger color.
     case 'failed': return { labelKey: 'chamberBadgeFailed', tone: 'danger' }
     default: return { labelKey: 'thirdPartyLiveStarting', tone: 'muted' }
   }
 }
 
-/* ---- Chamber row badges (plan 24 B1.5: the three-row chamber table is
- * badge-ized — a short label plus a tone the renderer colors) ---- */
+/* ---- Chamber row badges (short label + tone the renderer colors) ---- */
 
-/** Tone of one chamber row badge: 'ok' = injected and effective,
- *  'muted' = absent / not yet proven live / unknown, 'warn' = degraded
- *  (unreadable local side or version drift), 'danger' = load failure. */
+/** Tone of one chamber row badge: 'ok' = injected and effective, 'muted' = absent /
+ *  not proven live / unknown, 'warn' = degraded, 'danger' = load failure. */
 export type ChamberBadgeTone = 'ok' | 'muted' | 'warn' | 'danger'
 
 /** One chamber row badge: a localized label plus its tone. */
@@ -304,12 +217,10 @@ export interface ChamberBadge {
 }
 
 /**
- * Local-side badge for one chamber package: the desktop's own profile
- * manifest truth. `injected` = the boot row is installed and patched —
- * the strongest claim available locally, no separate live probe exists.
- * null = unknown: still loading (muted), or the local manifest was
- * unreadable (`failed` — a degradation, hence 'warn'; never a silent
- * "not injected").
+ * Local-side badge for one chamber package: the desktop's own profile manifest truth.
+ * `injected` = boot row installed and patched (the strongest local claim; no separate
+ * live probe exists). null = unknown: still loading (muted), or the local manifest was
+ * unreadable (`failed` → 'warn', never a silent "not injected").
  */
 export function localChamberBadge(injected: boolean | null, failed: boolean): ChamberBadge {
   if (injected === true) return { labelKey: 'chamberBadgeInjected', tone: 'ok' }
@@ -320,11 +231,9 @@ export function localChamberBadge(injected: boolean | null, failed: boolean): Ch
 }
 
 /**
- * Remote-side badge for one chamber package, reusing the exact
- * chamberRemoteKey live-Loader semantics: present + enabled + active =
- * live (ok); failed = danger; absent = not injected; anything else
- * (present but not proven live, or present-but-disabled) claims presence
- * only — muted, never a live claim.
+ * Remote-side badge for one chamber package, reusing chamberRemoteKey's live-Loader
+ * semantics: present + enabled + active = live (ok); failed = danger; absent = not
+ * injected; anything else claims presence only (muted, never a live claim).
  */
 export function remoteChamberBadge(
   entries: readonly { moduleName: string; enabled: boolean; fiberPhase: PluginFiberPhase }[],
@@ -343,31 +252,25 @@ export function remoteChamberBadge(
   }
 }
 
-/* ---- Gateway chamber seed-cache drift (design 21 §6.2/§6.5 A0 read side) ----
- * The gateway plugin view's manual chamber sync reads the desktop's own
- * local chamber versions (localPluginList chamber projection — the versions
- * the sync would upload) against the gateway's seed cache (GET
- * /chamber/plugins items). The comparison below is the pure drift the view
- * renders and the「立即同步」action resolves. */
+/* ---- Gateway chamber seed-cache drift (A0 read side) ----
+ * The manual chamber sync reads the desktop's own local chamber versions (the versions
+ * it would upload) against the gateway's seed cache; the comparison below is the pure
+ * drift the view renders and the「立即同步」action resolves. */
 
 /** Per-package local ↔ gateway-cache comparison state. */
 export type ChamberSeedDriftState = 'drift' | 'match' | 'absent-cache' | 'absent-local'
 
-/** One package's state: a cache missing the package/version is the dominant
- *  fact ('absent-cache' — the gateway is fresh or the sync never landed);
- *  an unknown LOCAL version next to a cached package ('absent-local' — the
- *  local manifest was unreadable) can never claim a version mismatch; only
- *  both-known inequality is a real drift. */
+/** One package's state: a cache missing the package/version dominates ('absent-cache');
+ *  an unknown LOCAL version next to a cached package is 'absent-local' (never a mismatch
+ *  claim); only both-known inequality is a real drift. */
 function chamberSeedState(localVersion: string | null, cachedVersion: string | null): ChamberSeedDriftState {
   if (cachedVersion === null) return 'absent-cache'
   if (localVersion === null) return 'absent-local'
   return localVersion === cachedVersion ? 'match' : 'drift'
 }
 
-/** Compare the local chamber versions against the gateway seed cache (the
- *  GET /chamber/plugins items keyed by package name). Cache entries the map
- *  does not name count as absent-cache; unknown (non-chamber) names in the
- *  map are ignored. */
+/** Compare the local chamber versions against the gateway seed cache (keyed by package
+ *  name). Cache entries the map does not name count as absent-cache; unknown names are ignored. */
 export function chamberSeedDrift(
   local: readonly { readonly name: string; readonly version: string | null }[],
   cached: Record<string, string | null>,
@@ -377,28 +280,22 @@ export function chamberSeedDrift(
   )
 }
 
-/* ---- Chamber table row derivation (plan 24 B1.5) ----
- * The「chamber 内置（注入）」table's rows are DERIVED here, never assembled
- * inline in the component: the derivation encodes the per-target data-source
- * matrix (which read feeds the expected list, the local column and the version
- * column), and an inline branch could read the wrong manifest source for the
- * LOCAL target. This module stays locale-free: rows carry label KEYS
- * and version STRINGS, never JSX and never localized text — PluginDialog.tsx
- * maps descriptors to elements with the badge classes. */
+/* ---- Chamber table row derivation ----
+ * The table's rows are DERIVED here, never assembled inline in the component: the
+ * derivation encodes the per-target data-source matrix (which read feeds the expected
+ * list, the local column and the version column). Locale-free: rows carry label KEYS and
+ * version STRINGS, never JSX or localized text. */
 
 /** The plugin dialog's four backends (plan 24 B1.1). */
 export type ChamberTarget = 'local' | 'ssh' | 'gateway' | 'http'
 
 /** One derived chamber table row. */
 export interface ChamberRowDescriptor {
-  /** Stable React key: the registry insert id, or the derived client row's
-   *  package name (`chamber-client-unknown` when the inventory is missing). */
+  /** Stable React key: the registry insert id, or the derived client row's package name. */
   readonly key: string
-  /** Package name; null ONLY for the inventory-unavailable client row — an
-   *  unknown state never renders a hardcoded package name. */
+  /** Package name; null ONLY for the inventory-unavailable client row — an unknown state never renders a hardcoded name. */
   readonly name: string | null
-  /** Name-cell label key rendered in front of the package name (derived
-   *  client rows only; registry rows show the bare package name). */
+  /** Name-cell label key rendered in front of the package name (derived client rows only). */
   readonly nameLabelKey: SettingsConnectionsKey | null
   readonly localBadge: ChamberBadge | null
   readonly remoteBadge: ChamberBadge | null
@@ -406,25 +303,19 @@ export interface ChamberRowDescriptor {
   readonly versionText: string | null
   /** Version-cell hint key for a derived client row (no version applies). */
   readonly versionHintKey: SettingsConnectionsKey | null
-  /** Gateway arm: the seed-cache version text (`v1.2.3`), null = the package
-   *  is not cached, or the cache was never read. */
+  /** Gateway arm: the seed-cache version text, null = not cached or cache never read. */
   readonly cacheVersionText: string | null
-  /** Gateway arm: the cache was read AND lacks this package (render 未同步) —
-   *  false while the whole cache is absent (the zone line speaks instead). */
+  /** Gateway arm: the cache was read AND lacks this package (render 未同步). */
   readonly cacheNotSynced: boolean
-  /** Gateway arm: the cache was read and holds NONE of the expected packages;
-   *  suppresses every per-row 未同步 marker and drives the zone status line.
-   *  Never true for an EMPTY expected list (an unreadable manifest must not
-   *  claim "nothing synced"). */
+  /** Gateway arm: the cache was read and holds NONE of the expected packages — suppresses
+   *  every per-row 未同步 marker. Never true for an EMPTY expected list. */
   readonly cacheAbsent: boolean
   /** Gateway arm: this package's local ↔ cache comparison (null = not read). */
   readonly driftState: ChamberSeedDriftState | null
 }
 
-/** One chamber host package's state as the desktop projects it (design 13
- *  §6; structural SUBSET of global.d.ts ChamberHostPackageState — `probe` is
- *  unused by this projection, and the omission keeps this module importable by
- *  the plain-node suite). */
+/** One chamber host package's state as the desktop projects it (structural SUBSET of
+ *  global.d.ts ChamberHostPackageState, kept importable by the plain-node suite). */
 export interface ChamberPackageState {
   readonly insertId: string
   readonly name: string
@@ -432,13 +323,10 @@ export interface ChamberPackageState {
   readonly patched: boolean
   readonly version: string | null
   readonly live: boolean | null
-  /** The registry row is meaningful for the LOCAL instance shape only (design
-   *  20 §6: the open-in host domain). The ssh PROBE reports it as
-   *  `installed:false`/`patched:false` without ever asking the remote ("not
-   *  asked", never "the target lacks it"), while the desktop's own projection
-   *  carries the real local state; whichever projection delivered the row,
-   *  every non-local chamber table omits it rather than rendering "not
-   *  injected" (see `applicableChamberPackages`). */
+  /** The registry row is meaningful for the LOCAL instance shape only. The ssh PROBE
+   *  reports it as installed:false/patched:false without ever asking the remote ("not
+   *  asked", never "the target lacks it"), so every non-local table omits it rather than
+   *  rendering "not injected". */
   readonly localOnly?: boolean
 }
 
@@ -455,12 +343,10 @@ export interface ChamberInventoryEntry {
 }
 
 /**
- * The ssh remote-side chamber badge: the probed ChamberPackageState tri-state
- * mapped onto the shared badge vocabulary — present + enabled + live = 已生效
- * (ok); present but not proven live = 已注入 (muted); present without the boot
- * layer = 已注入 (warn, the half-injected state); absent = 未注入; probe
- * failure/absent state = 未知 (warn/muted). Never a live claim from a file
- * probe (the same live-Loader semantics the gateway badge uses).
+ * The ssh remote-side chamber badge: the probed tri-state mapped onto the shared badge
+ * vocabulary — present + enabled + live = 已生效; present but not proven live = 已注入
+ * (muted); present without the boot layer = 已注入 (warn); absent = 未注入; failure = 未知.
+ * Never a live claim from a file probe.
  */
 export function sshChamberBadge(state: ChamberPackageState | null | undefined): ChamberBadge {
   if (state === undefined) return { labelKey: 'chamberBadgeUnknown', tone: 'muted' }
@@ -473,8 +359,7 @@ export function sshChamberBadge(state: ChamberPackageState | null | undefined): 
   return { labelKey: 'chamberBadgeNotInjected', tone: 'muted' }
 }
 
-/** A Loader entry's own badge: present + enabled + active = live; failed =
- *  danger; anything else claims presence only (remoteChamberBadge parity). */
+/** A Loader entry's own badge: present + enabled + active = live; failed = danger; anything else claims presence only. */
 function chamberEntryBadge(entry: ChamberInventoryEntry): ChamberBadge {
   if (!entry.enabled) return { labelKey: 'chamberBadgeInjected', tone: 'muted' }
   if (entry.fiberPhase === 'active') return { labelKey: 'chamberBadgeLive', tone: 'ok' }
@@ -482,9 +367,8 @@ function chamberEntryBadge(entry: ChamberInventoryEntry): ChamberBadge {
   return { labelKey: 'chamberBadgeInjected', tone: 'muted' }
 }
 
-/** The localized copy of a derived client row, keyed by its classification:
- *  only the packaged mobile entry has dedicated keys; any other chamber client
- *  plugin renders its package name with no invented label. */
+/** The localized copy of a derived client row, keyed by classification: only the
+ *  packaged mobile entry has dedicated keys; any other renders its package name. */
 function chamberClientCopy(kind: ChamberClientKind): {
   labelKey: SettingsConnectionsKey | null
   hintKey: SettingsConnectionsKey | null
@@ -495,18 +379,12 @@ function chamberClientCopy(kind: ChamberClientKind): {
 }
 
 /**
- * Gateway client-plugin rows, derived from the Loader inventory: every entry
- * whose moduleName classifies as a chamber CLIENT plugin
- * (classifyChamberClientPlugin), deduplicated by package name. Never a
- * hardcoded package name.
- *
- * Two fallbacks keep the row present and honest:
- *  - the inventory is UNAVAILABLE (null) → ONE unknown-state row (the gateway
- *    does package a chamber client plugin, but which one and whether it is
- *    live is unknown right now);
- *  - the inventory IS readable but carries no chamber-client entry → ONE
- *    muted 未注入 row: rendering NOTHING at all would let a dropped/disabled
- *    client package look like "no such row exists". Still no hardcoded name.
+ * Gateway client-plugin rows, derived from the Loader inventory: every entry whose
+ * moduleName classifies as a chamber CLIENT plugin, deduplicated by package name.
+ * Never a hardcoded package name. Two honest fallbacks keep the row present:
+ *  - inventory UNAVAILABLE (null) → ONE unknown-state row;
+ *  - inventory readable but no chamber-client entry → ONE muted 未注入 row (rendering
+ *    nothing would let a dropped/disabled client package look like "no such row exists").
  */
 function chamberClientRows(entries: readonly ChamberInventoryEntry[] | null): ChamberRowDescriptor[] {
   if (entries === null) {
@@ -566,29 +444,13 @@ function chamberClientRows(entries: readonly ChamberInventoryEntry[] | null): Ch
 }
 
 /**
- * The registry rows that APPLY to one target shape: a `localOnly` row (design
- * 20 §6: the open-in host domain) exists for the local instance alone, so a
- * remote/gateway/http target's chamber table does not list it at all — its rows
- * are the registry rows that can actually be seeded, probed and synced there
- * (row counts: local 4, ssh/gateway/http 3).
- *
- * Why DROP instead of badge: the table answers what THIS target has and what
- * it can be given. A row that can never exist there is not a state — rendering
- * it forces the reader to interpret a per-target table for a package that is
- * simply not part of that target's contract.
- *
- * The filter reads the REGISTRY flag, never the observed state: a not-yet-seeded
- * target must still list the rows it is missing — that 未注入 row IS the sync
- * action's justification. Applicability only ever removes rows that no action
- * could produce.
- *
- * Generic over the row shape on purpose: the rule needs nothing but the
- * registry's `localOnly` flag, so the desktop projection rows (and any future
- * row shape carrying the same flag) pass through it without a cast.
- * @param target - the dialog's backend.
- * @param packages - the target's expected registry rows (or the ssh probe's).
- * @returns the same list for the local target (identity, same array), or the
- *   non-`localOnly` rows in input order for every remote target.
+ * The registry rows that APPLY to one target shape: a `localOnly` row exists for the
+ * local instance alone, so a remote/gateway/http table does not list it at all. DROP, not
+ * badge: a row that can never exist there is not a state. The filter reads the REGISTRY
+ * flag, never observed state — a not-yet-seeded target must still list its missing rows
+ * (that 未注入 row justifies the sync action). Generic over the row shape: the rule needs
+ * nothing but the `localOnly` flag.
+ * @returns the same list for the local target, else the non-`localOnly` rows in input order.
  */
 export function applicableChamberPackages<T extends { readonly localOnly?: boolean }>(
   target: ChamberTarget,
@@ -597,36 +459,25 @@ export function applicableChamberPackages<T extends { readonly localOnly?: boole
   return target === 'local' ? packages : packages.filter(pkg => pkg.localOnly !== true)
 }
 
-/** The two ssh target-level gates derived from the remote probe (design 13
- *  §6, design 20 §6). The pair is a partition: a target either needs a seed or
- *  it is fully injected (some rows possibly not live yet). */
+/** The two ssh target-level gates from the remote probe. The pair is a partition: a
+ *  target either needs a seed or it is fully injected (some rows possibly not live). */
 export interface ChamberProbeGates {
-  /** At least one APPLICABLE registry row is not fully injected (or the probe
-   *  could not be read) — the 「注入」 action's justification. */
+  /** At least one APPLICABLE registry row is not fully injected (or the probe could not be read) — the 「注入」 action's justification. */
   readonly needsSeed: boolean
   /** Every applicable row IS injected and at least one is not live yet — the
-   *  restart-to-apply state. Never true together with `needsSeed`: a
-   *  half-injected target asks for a seed (restarting alone cannot add a
-   *  missing row), so a caller reading this flag ALONE can never show 重启生效
-   *  on a target that is missing a package. */
+   *  restart-to-apply state. Never true together with `needsSeed`: a half-injected target
+   *  asks for a seed (restarting alone cannot add a missing row). */
   readonly injectedNotLive: boolean
 }
 
 /**
- * Derive the two ssh gates from the remote probe in ONE place.
- *
- * Both are target-level decisions, so they read exactly the rows the chamber
- * table lists (`applicableChamberPackages`). A `localOnly` row is not part of a
- * remote instance's contract, and the probe reports it as a synthesized
- * `installed:false` WITHOUT ever asking the remote — folding it in would pin
- * `needsSeed` true forever, showing 「注入」 over a fully seeded remote and
- * making the restart branch unreachable.
- *
- * null/undefined = the probe has not answered (not an ssh target, still
- * loading, or the read has not happened): both gates stay false. `ok:false` is
- * an ANSWERED probe that could not be read — a re-seed may repair it, so that
- * arm asks for the seed and never claims a pending restart.
- * @param probe - the ssh remote probe state (null/undefined = unanswered).
+ * Derive the two ssh gates from the remote probe in ONE place. Both are target-level
+ * decisions over exactly the rows the table lists: a `localOnly` row is not part of a
+ * remote contract, and the probe reports it as a synthesized installed:false without
+ * asking the remote — folding it in would pin `needsSeed` true forever and make the
+ * restart branch unreachable. null/undefined = the probe has not answered (both gates
+ * false); ok:false is an ANSWERED but unreadable probe — a re-seed may repair it, so that
+ * arm asks for the seed, never a pending restart.
  * @returns the two gate booleans — never a claim beyond the probe's own.
  */
 export function sshChamberGates(probe: ChamberProbeState | null | undefined): ChamberProbeGates {
@@ -636,8 +487,7 @@ export function sshChamberGates(probe: ChamberProbeState | null | undefined): Ch
   const needsSeed = applicable.some(pkg => !(pkg.installed && pkg.patched))
   return {
     needsSeed,
-    // Strict on purpose (see ChamberProbeGates.injectedNotLive): the restart
-    // hint owns only the state where nothing is missing.
+    // Strict on purpose: the restart hint owns only the state where nothing is missing.
     injectedNotLive: !needsSeed && applicable.some(pkg => pkg.installed && pkg.patched && pkg.live === false),
   }
 }
@@ -645,44 +495,31 @@ export function sshChamberGates(probe: ChamberProbeState | null | undefined): Ch
 /** The full input matrix of the chamber table (see deriveChamberRows). */
 export interface ChamberRowsInput {
   readonly target: ChamberTarget
-  /** The TARGET's own expected registry list. LOCAL: its own profile manifest
-   *  (`localList.chamber.packages`). ssh/gateway/http: the desktop's local
-   *  manifest projection. null = unreadable / not loaded yet. */
+  /** The TARGET's own expected registry list (LOCAL: its own profile manifest;
+   *  ssh/gateway/http: the desktop's projection). null = unreadable / not loaded yet. */
   readonly expected: readonly ChamberPackageState[] | null
-  /** The DESKTOP's local manifest projection — the LOCAL side column of a
-   *  remote target. null = unreadable / not loaded yet. */
+  /** The DESKTOP's local manifest projection — the LOCAL side column of a remote target. null = unreadable / not loaded yet. */
   readonly localManifestChamber: readonly ChamberPackageState[] | null
   /** The ssh remote probe (design 13 §6); null for other targets. */
   readonly remoteChamber: ChamberProbeState | null
-  /** The managed instance's Loader inventory (gateway/http remote badge and
-   *  the gateway's derived client rows). null = not read yet / read failed. */
+  /** The managed instance's Loader inventory (remote badge + gateway client rows). null = not read yet / read failed. */
   readonly inventory: { readonly entries: readonly ChamberInventoryEntry[] } | null
   /** The gateway seed cache: package name → version | null. null = never read. */
   readonly seedCache: Record<string, string | null> | null
-  /** The LOCAL manifest read failed (a degradation → warn, never a silent
-   *  "not injected"). */
+  /** The LOCAL manifest read failed (a degradation → warn, never a silent "not injected"). */
   readonly localSideFailed: boolean
 }
 
 /**
- * Derive the chamber table's rows for one target. Data sources (the matrix
- * this function exists to pin — an untested inline copy once read the wrong
- * manifest for the LOCAL target):
- *  - expected list: ssh prefers the remote probe's own list when it succeeded,
- *    otherwise the caller's list (the desktop projection — a remote-only read
- *    failure must stay visible); local/gateway/http use the caller's list.
- *  - LOCAL column: the local target reads ITS OWN profile manifest (its
- *    expected rows); remote targets read the desktop's projection.
- *  - version: ssh reads the remote probe's version, everything else the local
- *    list's version (gateway additionally renders the seed-cache comparison).
- *  - a `localOnly` registry row (design 20 §6) is DROPPED on every non-local
- *    target before any state is derived (`applicableChamberPackages`): the row
- *    is not part of that target's contract, so no column, version or sync
- *    marker may speak about it there.
- *  - an EMPTY expected list yields no rows and can never claim a seed-cache
- *    state.
- * @returns the registry rows (one per expected package) plus, for the gateway,
- *   the inventory-derived chamber client rows.
+ * Derive the chamber table's rows for one target. Data sources (the matrix this function
+ * exists to pin): expected list — ssh prefers the remote probe's own list when it
+ * succeeded, otherwise the caller's (a remote-only read failure must stay visible);
+ * LOCAL column — the local target reads ITS OWN profile manifest, remote targets the
+ * desktop projection; version — ssh reads the probe's, everything else the local list's
+ * (gateway additionally renders the seed-cache comparison). A `localOnly` registry row is
+ * DROPPED on non-local targets before any state is derived; an EMPTY expected list yields
+ * no rows and can never claim a seed-cache state.
+ * @returns the registry rows plus, for the gateway, the inventory-derived client rows.
  */
 export function deriveChamberRows(input: ChamberRowsInput): ChamberRowDescriptor[] {
   const { target, expected, localManifestChamber, remoteChamber, inventory, seedCache, localSideFailed } = input
@@ -690,14 +527,10 @@ export function deriveChamberRows(input: ChamberRowsInput): ChamberRowDescriptor
   const isSsh = target === 'ssh'
   const isGateway = target === 'gateway'
   const remoteExpected = isSsh && remoteChamber?.ok === true ? remoteChamber.packages : null
-  // Applicability filter FIRST, so neither the row set nor any target-level
-  // state below can be influenced by a row that does not apply here (the ssh
-  // probe reports the local-only row as a synthesized installed:false WITHOUT
-  // asking the remote — counting it would read as "the remote is missing it").
+  // Applicability filter FIRST, so neither the row set nor any target-level state below
+  // can be influenced by a row that does not apply (the probe synthesizes installed:false without asking).
   const expectedList = applicableChamberPackages(target, remoteExpected ?? expected ?? [])
-  // The LOCAL column of a remote target reads the desktop's projection through
-  // the same filter (the gateway drift map is keyed by name); null keeps its
-  // meaning — the local manifest was unreadable.
+  // The LOCAL column of a remote target reads the desktop's projection through the same filter; null = unreadable.
   const localList = isLocal
     ? expectedList
     : localManifestChamber === null
@@ -706,11 +539,9 @@ export function deriveChamberRows(input: ChamberRowsInput): ChamberRowDescriptor
   const localByName = new Map((localList ?? []).map(pkg => [pkg.name, pkg]))
   const remoteByName = new Map((remoteExpected ?? []).map(pkg => [pkg.name, pkg]))
   const entries = inventory === null ? null : inventory.entries
-  // A KNOWN, non-empty expected set is a precondition: an unreadable manifest
-  // (empty list) must never claim "the gateway has nothing synced". Read over
-  // the APPLICABLE rows: a local-only row is never cached (the desktop uploads
-  // portable rows only), so a stray cache entry for one must not suppress this
-  // claim for the packages that do belong to the gateway.
+  // A KNOWN, non-empty expected set is a precondition: an unreadable manifest must never
+  // claim "the gateway has nothing synced". Read over the APPLICABLE rows — a local-only
+  // row is never cached, so a stray cache entry for one must not suppress this claim.
   const cacheAbsent = isGateway && seedCache !== null && expectedList.length > 0
     && expectedList.every(pkg => (seedCache[pkg.name] ?? null) === null)
   const driftStates = isGateway && seedCache !== null && localList !== null

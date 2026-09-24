@@ -1,22 +1,15 @@
 /**
  * Orphan reaper for managed dsh hosts.
  *
- * Design: docs/design/02-host-management-deployment.md §3.4 (reaper 判定序列)
- * with §3.3 (记录文件格式). The safety model follows the reference
- * implementation's managed-process-registry: a spawn record is only reclaimed when
- * all of "we recorded it", "identity re-verified (command line + port
- * listener)", and "orphaned (reparented to init or owner dead)" hold; any
- * doubt keeps the record and the process untouched. Corrupt records and
- * records whose pid is not an integer are KEPT (fail-closed): a managed-host record is the only durable
- * evidence for a detached process group after the owning control plane dies,
- * so malformed bytes must not be erased — startup's writer-quiescence latch
- * stays closed until the record is resolved. Claim records (claim-*.json)
- * are v2-era external-takeover records; nothing writes them in v4
- * (01 §4/§5), and they are never killed, only removed once their recorded
- * owner is dead. Run once at control-plane startup, before spawning hosts.
- *
- * Test seams: every external dependency (ps/lsof/ss/proc, process signalling,
- * liveness polling, wait timers) is injectable through `deps`.
+ * Safety model: a spawn record is only reclaimed when all of "we recorded it",
+ * "identity re-verified (command line + port listener)" and "orphaned (reparented to
+ * init or owner dead)" hold; any doubt keeps the record and the process untouched.
+ * Corrupt records and records whose pid is not an integer are KEPT (fail-closed): a
+ * managed-host record is the only durable evidence for a detached process group after
+ * the owning control plane dies, so malformed bytes must not be erased and the
+ * writer-quiescence latch stays closed until the record is resolved. v2-era claim
+ * records are never killed, only removed once their recorded owner is dead. Runs once
+ * at control-plane startup, before spawning hosts.
  */
 
 import { readdir, readFile, readlink } from 'node:fs/promises'
@@ -35,6 +28,7 @@ import {
   windowsIdentity,
   windowsPortOwnedBy,
 } from './win-probes.ts'
+import { escapeRegExp } from './regex-escape.ts'
 
 const TERM_WAIT_MS = 1500
 const TERM_POLL_MS = 100
@@ -43,16 +37,11 @@ const REAPER_COMMAND_OUTPUT_MAX_BYTES = 256 * 1024
 const INSTALLED_ENTRY_SUFFIX = join('node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js')
 const SOURCE_ENTRY_SUFFIX = join('apps', 'cli', 'src', 'bin.ts')
 
-/** Escape a literal for a fail-closed command-line token regexp. */
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-}
-
 /**
- * Whether ps's rendered command contains one exact argv-like token. Quotes
- * and whitespace are accepted as token boundaries; suffix matches such as
- * `/unrelated/bin.ts.backup` are not. If ps renders an unusual/ambiguous
- * form, this deliberately returns false and the reaper keeps the process.
+ * Whether ps's rendered command contains one exact argv-like token. Quotes and
+ * whitespace are token boundaries; suffix matches such as
+ * `/unrelated/bin.ts.backup` are not. An unusual/ambiguous rendering deliberately
+ * returns false and the reaper keeps the process.
  */
 function commandHasToken(command: string, token: string): boolean {
   if (token === '') return false
@@ -75,10 +64,7 @@ function recognizedDshEntry(binary: unknown): binary is string {
     || entry.endsWith(`${sep}${SOURCE_ENTRY_SUFFIX}`)
 }
 
-/**
- * Injectable reaper dependencies (test seams; all optional, defaults are the
- * real implementations). Defaults preserve production behavior exactly.
- */
+/** Injectable reaper dependencies (all optional; defaults are the real implementations). */
 export interface ReaperDeps {
   /** ps -p <pid> -o ppid=,command= → {ppid, command}; throws on failure. */
   psIdentity?: (pid: number) => { ppid: string; command: string }
@@ -92,9 +78,8 @@ export interface ReaperDeps {
   signal?: (pid: number, sig: NodeJS.Signals) => boolean
   /** Whether a pid is alive (kill(pid, 0) semantics; EPERM counts as alive). */
   alive?: (pid: number) => boolean
-  /** Whether the managed process group or its leader remains alive. May be
-   *  async: the win32 default proves a dead pid from the CIM table and
-   *  the callers await it, while POSIX/injected sync seams keep working. */
+  /** Whether the managed process group or its leader remains alive. May be async:
+   *  the win32 default proves a dead pid from the CIM table; POSIX/injected sync seams keep working. */
   managedTreeAlive?: (pid: number) => boolean | Promise<boolean>
   /** Sleep for the alive-poll interval. */
   sleep?: (ms: number) => Promise<void>
@@ -106,11 +91,9 @@ export interface ReaperDeps {
 
 const realSleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
 
-/** kill(0)-style liveness. Residual (documented): on win32 this is an
- *  OpenProcess probe that can read a terminated-but-held process object as
- *  alive; it stays the synchronous owner/claim-liveness seam, while the
- *  awaitable kill-confirmation path proves absence through the CIM table
- *  (realManagedTreeAlive → cimPidLiveness). */
+/** kill(0)-style liveness. Residual: on win32 this OpenProcess probe can read a
+ *  terminated-but-held process as alive; the awaitable kill-confirmation path proves
+ *  absence through the CIM table instead. */
 function realAlive(pid: number): boolean {
   try {
     process.kill(pid, 0)
@@ -137,15 +120,12 @@ function groupAlive(pid: number): boolean {
 
 function realManagedTreeAlive(pid: number): boolean {
   if (process.platform === 'win32') {
-    // Windows: no process groups — the leader pid + any CIM-discoverable
-    // residual descendants are the tree (design 02 §5.1 parity work).
-    // The leader's liveness comes from the CIM table, not from
-    // process.kill(pid, 0) — an OpenProcess probe that still answers while a
-    // terminated process object survives on an unreleased handle, which made
-    // a successful taskkill read as "not quiesced" and kept the writer latch
-    // closed. An unavailable table (null) keeps the old kill(0) answer, and
-    // the residual probe fails closed (true on doubt), so orphan evidence is
-    // never erased because PowerShell hiccupped.
+    // Windows: no process groups — the leader pid + any CIM-discoverable residual
+    // descendants are the tree. The leader's liveness comes from the CIM table, not
+    // process.kill(pid, 0) (an OpenProcess probe that still answers for a terminated
+    // object on an unreleased handle). An unavailable table keeps the old kill(0)
+    // answer and the residual probe fails closed, so evidence is never erased on a
+    // PowerShell hiccup.
     const verdict = cimPidLiveness(pid)
     if (verdict === true) return true
     if (verdict === false) return hasWindowsResidualTree(pid)
@@ -155,11 +135,10 @@ function realManagedTreeAlive(pid: number): boolean {
 }
 
 /**
- * Signal the whole process group of a managed dsh host (design 02 §3.4:
- * "进程组 SIGTERM → 轮询 1.5s → SIGKILL" — spawn-dsh's terminateChild does
- * the same group kill). A group can be absent even while the pid is alive
- * (pid not a group leader, or the leader already reparented) — fall back to
- * the single pid then. Returns false when nothing was signalled (gone).
+ * Signal the whole process group of a managed dsh host (SIGTERM → poll 1.5s →
+ * SIGKILL; spawn-dsh's terminateChild does the same group kill). A group can be
+ * absent even while the pid is alive — fall back to the single pid then. Returns
+ * false when nothing was signalled (gone).
  */
 function realSignal(pid: number, sig: NodeJS.Signals): boolean {
   try {
@@ -254,22 +233,18 @@ async function realProcPort(pid: number, port: number): Promise<boolean | null> 
   return false
 }
 
-/** taskkill maps every signal to the same bounded tree force-kill: Windows
- *  has no graceful signal for console-less processes (kill(pid, sig) is
- *  TerminateProcess), so the SIGTERM and SIGKILL stages of the Unix sequence
- *  share one shape. Returns false only when nothing existed (the ESRCH
- *  equivalent); every real failure throws (record kept). */
+/** taskkill maps every signal to the same bounded tree force-kill: Windows has no
+ *  graceful signal for console-less processes, so the SIGTERM and SIGKILL stages share
+ *  one shape. False only when nothing existed; every real failure throws (record kept). */
 function windowsTreeSignal(pid: number, _signal: NodeJS.Signals): boolean {
   return treeKillWindows(pid)
 }
 
 /**
- * Merge partial deps over the real defaults. Production behavior on POSIX is
- * unchanged; win32 defaults swap every probe for its Windows counterpart
- * (design 02 §5.1 parity work): ps → CIM identity (win-probes.ts),
- * lsof/ss/proc → netstat, process-group signals → taskkill /T /F tree
- * termination, group liveness → kill(0) + residual-descendant scan. A probe
- * that cannot prove absence still fails closed (record kept).
+ * Merge partial deps over the real defaults. Production POSIX behavior is unchanged;
+ * win32 defaults swap every probe for its Windows counterpart (ps → CIM identity,
+ * lsof/ss/proc → netstat, group signals → taskkill /T /F, group liveness → kill(0) +
+ * residual-descendant scan). A probe that cannot prove absence still fails closed.
  */
 function resolveDeps(deps?: ReaperDeps): Required<ReaperDeps> {
   const resolvedAlive = deps?.alive ?? realAlive
@@ -283,9 +258,8 @@ function resolveDeps(deps?: ReaperDeps): Required<ReaperDeps> {
     procPort: deps?.procPort ?? (isWindows ? unavailableAsyncPortProbe : realProcPort),
     signal: deps?.signal ?? (isWindows ? windowsTreeSignal : realSignal),
     alive: resolvedAlive,
-    // Existing focused tests inject a synthetic pid-liveness function. Use it
-    // for tree liveness too unless they explicitly model a residual group;
-    // production takes the exact process-group-aware implementation.
+    // Focused tests inject a synthetic pid-liveness function; use it for tree liveness
+    // too unless they explicitly model a residual group.
     managedTreeAlive: deps?.managedTreeAlive
       ?? (deps?.alive === undefined ? realManagedTreeAlive : resolvedAlive),
     sleep: deps?.sleep ?? realSleep,
@@ -318,10 +292,9 @@ async function killAndConfirm(pid: number, deps: Required<ReaperDeps>): Promise<
 }
 
 function assertRecordStillOwned(file: string, expected: PrivateFileIdentity, expectedValue: string): void {
-  // dev/ino normally identifies the ledger leaf, but a filesystem may reuse
-  // an inode after an unlink followed by an immediate replacement. Re-read
-  // the exact bytes as well as the identity so a successor record cannot be
-  // mistaken for the record we inspected earlier.
+  // dev/ino normally identifies the ledger leaf, but inodes can be reused after an
+  // unlink+replacement; re-read the exact bytes as well so a successor record cannot be
+  // mistaken for the one we inspected.
   const current = readPrivateFileNoFollow(file, { maxBytes: 64 * 1024 })
   if (current.value !== expectedValue
     || current.identity.dev !== expected.dev
@@ -333,8 +306,7 @@ function assertRecordStillOwned(file: string, expected: PrivateFileIdentity, exp
 async function removeFile(file: string, expected: PrivateFileIdentity, expectedValue: string): Promise<void> {
   try {
     assertRecordStillOwned(file, expected, expectedValue)
-    // removePrivateFileNoFollow repeats the identity check at the namespace
-    // operation itself, closing the final check/remove gap it can cover.
+    // removePrivateFileNoFollow repeats the identity check at the namespace operation itself.
     removePrivateFileNoFollow(file, expected)
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
@@ -345,11 +317,9 @@ async function removeFile(file: string, expected: PrivateFileIdentity, expectedV
 type EntryStatus = 'reclaimed' | 'kept' | 'removed'
 
 /**
- * Why one managed-host record ended up in its status (design 02
- * §3.4 takeover mode). Stable machine tokens: the control plane publishes them
- * to the connections page so a blocked local instance names its blocker
- * instead of reporting a bare 409, and so the explicit takeover action can say
- * what it did (and what it refuses to do).
+ * Why one managed-host record ended up in its status. Stable machine tokens published
+ * to the connections page so a blocked local instance names its blocker instead of a
+ * bare 409, and the takeover action can say what it did (and refused to do).
  */
 export type ReaperEntryReason =
   /** pid gone and no residual group: the record was dropped. */
@@ -395,9 +365,9 @@ interface ProcessEntryOptions {
 }
 
 /**
- * Match only one recorded absolute entry token from a supported dsh layout.
- * Basenames, substrings and relative paths are deliberately insufficient:
- * stale-ledger PID reuse must never signal an unrelated `bin.ts` process.
+ * Match only one recorded absolute entry token from a supported dsh layout. Basenames,
+ * substrings and relative paths are deliberately insufficient: stale-ledger PID reuse
+ * must never signal an unrelated `bin.ts` process.
  */
 export function commandMatchesEntry(command: string, entry: string | null, binary: string | null): boolean {
   const recordedEntry = recognizedDshEntry(entry)
@@ -424,21 +394,16 @@ async function processEntry(dir: string, name: string, log: LogFn, deps: Require
     record = JSON.parse(read.value)
   } catch (error) {
     if (name.startsWith('claim-')) {
-      // Corrupt claims are never deleted: a claim with a live owner must
-      // never be torn down by the reaper (that would let another instance
-      // take over a still-owned host). v4 writes no claims — these files
-      // can only survive from a v2-era installation — but the defensive
-      // handling stays.
+      // Corrupt claims are never deleted: a claim with a live owner must never be torn
+      // down by the reaper. v4 writes no claims, but the defensive handling stays.
       log(`reaper: ${label} corrupt claim kept (${String(error)})`)
       return done('kept', null, 'invalid-record')
     }
-    // A managed-host record is the only durable evidence for a detached
-    // process group after the owning control plane dies.  Malformed bytes do
-    // not prove that writer absent, so preserve the record and make startup's
-    // writer-quiescence latch fail closed. Even the explicit takeover action
-    // does not delete it: without a trustworthy pid there is nothing to verify,
-    // and dropping the record would re-open DSH_HOME writes while an
-    // unidentifiable writer may still hold them.
+    // A managed-host record is the only durable evidence for a detached process group
+    // after the owning control plane dies. Malformed bytes do not prove that writer
+    // absent, so preserve the record and keep the writer-quiescence latch closed — even
+    // the explicit takeover does not delete it: without a trustworthy pid there is
+    // nothing to verify, and dropping it would reopen DSH_HOME writes.
     log(`reaper: ${label} corrupt record kept (${String(error)})`)
     return done('kept', null, 'invalid-record')
   }
@@ -454,25 +419,21 @@ async function processEntry(dir: string, name: string, log: LogFn, deps: Require
   }
   const pid = record.pid
   if (!Number.isInteger(pid) || pid <= 0) {
-    // The filename/payload may have been torn while publishing the ledger.
-    // Without a trustworthy PGID there is no safe absence proof; deleting the
-    // file would erase the only recovery evidence and reopen DSH_HOME writes.
+    // Torn ledger publication: without a trustworthy PGID there is no safe absence
+    // proof, and deleting the file would erase the only recovery evidence.
     log(`reaper: ${label} invalid pid; record kept`)
     return done('kept', null, 'invalid-record')
   }
   const ownerPid = Number.isInteger(record.ownerPid) ? record.ownerPid : null
-  // kill(pid, 0) based, therefore ps-free: the takeover proof below must stay
-  // answerable even when process inspection is unavailable.
+  // kill(pid, 0) based, therefore ps-free: the takeover proof must stay answerable even without process inspection.
   const ownerAlive = ownerPid !== null && deps.alive(ownerPid)
-  // A record WITHOUT a usable ownerPid cannot prove orphanhood ps-free: only the
-  // record itself may be dropped on that, never a process (another live control
-  // plane could own the writer).
+  // A record WITHOUT a usable ownerPid cannot prove orphanhood ps-free: only the record
+  // itself may be dropped, never a process (another live control plane could own it).
   const ownerProvenGone = ownerPid !== null && !ownerAlive
   if (!deps.alive(pid)) {
-    // A crashed leader can leave PTY/plugin descendants in its detached
-    // group. We can no longer re-verify the leader identity safely, so keep
-    // the ledger and fail writer-quiescence closed instead of deleting the
-    // only evidence and racing a runtime snapshot.
+    // A crashed leader can leave PTY/plugin descendants in its detached group; the leader
+    // identity can no longer be re-verified safely, so keep the ledger and fail
+    // writer-quiescence closed instead of racing a runtime snapshot.
     if (await deps.managedTreeAlive(pid)) {
       log(`reaper: ${pid} leader dead but residual process group alive; record kept`)
       return done('kept', pid, 'residual-group')
@@ -481,8 +442,7 @@ async function processEntry(dir: string, name: string, log: LogFn, deps: Require
     log(`reaper: ${pid} dead; record removed`)
     return done('removed', pid, 'dead')
   }
-  // A new record can be published for a reused pid while this scan is in
-  // flight. Do not even inspect or signal the live process on stale evidence.
+  // A new record can be published for a reused pid while this scan is in flight; do not inspect or signal on stale evidence.
   assertRecordStillOwned(file, recordIdentity!, recordValue!)
   const portNum = Number(record.port)
   const portKnown = Number.isInteger(portNum) && portNum > 0
@@ -496,9 +456,8 @@ async function processEntry(dir: string, name: string, log: LogFn, deps: Require
   } catch (error) {
     probeError = error
   }
-  // Exact identity, not a basename heuristic: the record carries the
-  // absolute entry path that spawn-dsh actually passed to Node. Requiring
-  // that token plus the exact profile and port flags makes stale-record PID
+  // Exact identity: the record carries the absolute entry path spawn-dsh passed to Node.
+  // Requiring that token plus the exact profile and port flags makes stale-record PID
   // reuse fail closed even when the unrelated process also runs `bin.ts`.
   const commandOk = identity !== null
     && profile === 'web'
@@ -506,10 +465,9 @@ async function processEntry(dir: string, name: string, log: LogFn, deps: Require
     && commandMatchesEntry(identity.command, entry, binary)
     && commandHasFlagValue(identity.command, '--profile', profile)
     && commandHasFlagValue(identity.command, '--port', String(portNum))
-  // Missing/invalid port ⇒ cannot verify the listener belongs to this pid;
-  // fail-closed (kept) rather than fail-open. The raw
-  // verdict is kept as well: the takeover action distinguishes "no probe
-  // could answer" (null) from "the listener is not his" (false).
+  // Missing/invalid port ⇒ cannot verify the listener belongs to this pid: fail closed
+  // (kept). The raw verdict is kept too, so takeover can distinguish "no probe answered"
+  // (null) from "the listener is not his" (false).
   const listenerVerdict = portKnown ? await portVerdict(pid, portNum, deps) : false
   const portOk = listenerVerdict === true
   const orphan = (identity !== null && identity.ppid === '1')
@@ -531,8 +489,7 @@ async function processEntry(dir: string, name: string, log: LogFn, deps: Require
     return await reclaim('orphan', 'orphan-reclaimed')
   }
   if (commandOk) {
-    // ps proved this pid IS the recorded managed host; only the listener probe
-    // could not confirm (or contradicted) it.
+    // ps proved this pid IS the recorded managed host; only the listener probe could not confirm it.
     if (options.takeover && ownerProvenGone && listenerVerdict === null) {
       return await reclaim(`orphaned (owner ${String(ownerPid)} dead, listener unverifiable); takeover`,
         'takeover-reclaimed')
@@ -541,16 +498,11 @@ async function processEntry(dir: string, name: string, log: LogFn, deps: Require
     return done('kept', pid, 'port-unverified')
   }
   if (identity !== null) {
-    // ps answered, but "the command does not match" has two very different
-    // causes:
-    //  - the record carries a *recognizable* token (absolute bin.js/bin.ts) and
-    //    ps shows something else ⇒ the recorded writer is provably gone;
-    //  - the record's own token is unrecognizable (a legacy record may carry
-    //    binary "dsh" with no absolute entry) ⇒ ps proves nothing about our
-    //    host. "Provably not ours" must not be concluded from that: it would
-    //    delete the only durable evidence for a host that may still be running,
-    //    opening the writer latch and spawning a second host on one DSH_HOME.
-    //    Fail closed.
+    // ps answered, but "the command does not match" has two causes: a recognizable token
+    // (absolute bin.js/bin.ts) with something else shown ⇒ the recorded writer is provably
+    // gone; an UNRECOGNIZABLE record token (legacy binary "dsh") proves nothing about our
+    // host. Concluding "provably not ours" from the latter would delete the only durable
+    // evidence for a host that may still be running — fail closed.
     const recordedToken = recognizedDshEntry(entry)
       ? entry
       : (recognizedDshEntry(binary) ? binary : null)
@@ -566,11 +518,9 @@ async function processEntry(dir: string, name: string, log: LogFn, deps: Require
     log(`reaper: ${pid} identity mismatch; record kept`)
     return done('kept', pid, 'identity-mismatch', ownerProvenGone)
   }
-  // ps is unavailable (restricted environment, missing binary, hardened
-  // runtime): the identity cannot be re-verified. The record's own owning
-  // control plane must be provably dead, and the recorded pid must still own
-  // the recorded listener — same state directory ⇒ same DSH_HOME family ⇒ this
-  // is our own orphaned managed host. Nothing weaker is ever killed.
+  // ps is unavailable: the identity cannot be re-verified. The record's owning control
+  // plane must be provably dead AND the recorded pid must still own the recorded listener
+  // — same state directory ⇒ same DSH_HOME family ⇒ our own orphaned host.
   if (options.takeover && ownerProvenGone && portOk) {
     return await reclaim(`orphaned (owner ${String(ownerPid)} dead, listener ${String(portNum)} verified); takeover`,
       'takeover-reclaimed')
@@ -579,14 +529,9 @@ async function processEntry(dir: string, name: string, log: LogFn, deps: Require
   return done('kept', pid, 'identity-unverified', ownerProvenGone && portKnown)
 }
 /**
- * Scan <stateDir>/managed-dsh and reclaim orphaned managed dsh hosts per
- * design 02 §3.4. Safe under concurrent control-plane instances: entries
- * whose owner is still alive are never touched.
- * @param options - {stateDir, logger, deps?} (deps are test seams; default =
- *   the real ps/lsof/ss/proc/signal implementations).
- * @returns {reclaimed, kept, errors} — reclaimed: killed spawn records;
- * kept: records left in place (alive owner, identity mismatch, …); errors:
- * per-entry failures (files left in place).
+ * Scan <stateDir>/managed-dsh and reclaim orphaned managed dsh hosts. Safe under
+ * concurrent control-plane instances: entries whose owner is still alive are never
+ * touched. Returns {reclaimed (killed spawn records), kept (left in place), errors}.
  */
 export interface ReaperResult {
   reclaimed: number
@@ -605,13 +550,11 @@ export async function runReaper({
   logger?: Logger
   deps?: ReaperDeps
   /**
-   * Explicit takeover (design 02 §3.4): clear THIS state
-   * directory's own stale/orphaned writers that the fail-closed default keeps
-   * forever — a pid that provably no longer runs the recorded host, or an
-   * orphan whose control plane is demonstrably dead while the recorded
-   * listener still belongs to it. A writer whose owning control plane is still
-   * alive is never touched, and no unverified process is ever signalled. Only
-   * the user-facing 清理并接管 action passes true.
+   * Explicit takeover: clear THIS state directory's own stale/orphaned writers that
+   * the fail-closed default keeps forever — a pid that provably no longer runs the
+   * recorded host, or an orphan whose control plane is demonstrably dead while the
+   * recorded listener still belongs to it. A writer whose owning control plane is
+   * alive is never touched and no unverified process is signalled.
    */
   takeover?: boolean
   /** Per-entry classification sink (diagnostics / the takeover report). */

@@ -1,36 +1,24 @@
 /**
- * Bounded gateway HTTP request core (dedupe audit 4.1, 2026-12).
+ * Bounded gateway HTTP request core, shared by the plugin-sync adapters and the
+ * runtime-identity probe: the mechanics live here ONCE, and each caller maps
+ * `BoundedHttpOutcome` onto its own contract.
  *
- * Before this module the desktop gateway provider carried THREE hand-written
- * bounded request bodies: `gatewayJsonRequest` and `gatewayRawBodyPut` were
- * byte-identical (except their wording), and the runtime-identity probe had a
- * third shape with a configurable body bound, terminal oversize / bad-JSON
- * classification and the SPKI mismatch special case. The mechanics now live
- * here ONCE; callers map `BoundedHttpOutcome` onto their own contract (the two
- * plugin-sync adapters reject; the identity probe maps to its three-state
- * `TransportVerifyResult`).
- *
- * This module is deliberately electron-free (the W-14 gate scans every
- * non-whitelisted top-level desktop source): it speaks node:http(s) and the
- * shared control-plane SPKI pin helper only.
+ * Deliberately electron-free (W-14): it speaks node:http(s) and the shared
+ * control-plane SPKI pin helper only.
  *
  * The core NEVER rejects. A caller that wants throw-based semantics maps
- * `oversize`/`network` itself, because the THREE former callers disagreed on
- * exactly that: the plugin-sync pair rejected on oversize while the identity
- * probe classified it as a terminal answer, and settling uniformly would
- * silently change one of them.
+ * `oversize`/`network` itself — the former callers disagreed on exactly that,
+ * so settling uniformly would silently change one of them.
  */
 import { request as httpsRequest } from 'node:https'
 import { request as httpRequest } from 'node:http'
 import { attachSpkiPinVerifier, SPKI_PIN_MISMATCH_CODE } from './control-plane-module.ts'
 
-/** How a bounded request settled. `json` is the body classification the old
- * adapters implemented implicitly: `empty` = no bytes (payload null),
- * `invalid` = bytes that are not JSON (payload null), `ok` = parsed JSON.
- * `oversize` carries no status: the body bound was hit while reading, so the
- * caller's size-bound verdict wins (the identity probe maps it terminal).
- * `network` folds every transport-level failure, including the timeout
- * (destroy with an error) and the S23 SPKI pin mismatch. */
+/** How a bounded request settled. `json`: `empty` = no bytes (payload null),
+ *  `invalid` = bytes not JSON (payload null), `ok` = parsed JSON. `oversize`
+ *  carries no status — the body bound was hit while reading, so the caller's
+ *  size-bound verdict wins. `network` folds every transport-level failure,
+ *  including the timeout destroy and an SPKI pin mismatch. */
 export type BoundedHttpOutcome =
   | { kind: 'response'; status: number; payload: unknown; json: 'ok' | 'empty' | 'invalid' }
   | { kind: 'oversize' }
@@ -44,22 +32,19 @@ export interface BoundedGatewayRequestOptions {
   body?: unknown
   /** Plain http when true; https otherwise (testable without TLS). */
   insecure: boolean
-  /** S23 trust anchor; null = no pin gate (the legacy path). */
+  /** SPKI trust anchor; null = no pin gate. */
   spkiPin: string | null
   timeoutMs: number
   /** Response body bound, in bytes. On overflow the response is destroyed
    *  and the outcome is `oversize` (never a rejection). */
   maxBodyBytes: number
-  /** Error text the timeout destroy carries (adapters preserve their exact
-   *  former wording; the identity probe maps `timedOut` itself). */
+  /** Error text the timeout destroy carries; callers preserve their wording. */
   timeoutMessage?: string
   /** Return false to settle from the status line alone, draining the body
-   *  instead of buffering it. The identity probe uses this for non-200
-   *  answers: their classification keys on the status and must not wait for
-   *  (or bound) a body it never reads. */
+   *  instead of buffering it: classification keys on the status and must not
+   *  wait for (or bound) a body it never reads. */
   readBodyForStatus?: (status: number) => boolean
-  /** Destroy the request once settled (the identity probe never reused a
-   *  keep-alive socket; the plugin-sync adapters kept the default). */
+  /** Destroy the request once settled (no keep-alive reuse on this path). */
   destroyOnSettle?: boolean
 }
 
@@ -81,10 +66,10 @@ export function boundedGatewayRequest(
     const req = request(url, {
       method: options.method,
       headers: options.headers,
-      // S23: with a configured pin the request opens a FRESH https connection
-      // with the pin as its trust anchor (rejectUnauthorized false - the
-      // internal-CA case); dispatch stays gated until the peer key matches,
-      // so even credential headers are never queued early.
+      // With a configured pin the request opens a FRESH https connection whose
+      // trust anchor is the pin (rejectUnauthorized false — the internal-CA
+      // case); dispatch stays gated until the peer key matches, so credential
+      // headers are never queued early.
       ...(options.insecure || pin === null ? {} : { rejectUnauthorized: false, agent: false }),
     }, res => {
       const status = res.statusCode ?? 0

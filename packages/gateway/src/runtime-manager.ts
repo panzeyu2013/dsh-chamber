@@ -1,27 +1,12 @@
 /**
- * Gateway dsh runtime version management (design 18 §9.3): composes the
- * shared `@dsh-chamber/dsh-runtime` core through its StartupDeps/ApplyDeps/
- * InstallerDeps seams (RuntimeHostAdapter remains a documented sketch).
- *
- * Storage layout (design 18 §9.3 + design 17 §10): the shared core appends
- * `dsh-runtime` under its `baseDir`, so the gateway passes `stateDir` as
- * baseDir — version trees / current pointer / override / journal / snapshots
- * land in `<stateDir>/dsh-runtime/`, exactly like desktop's `<userData>/
- * dsh-runtime/`. The gateway's own registry.json lives in the same directory
- * (stateRoot == runtimeDirPath(stateDir)).
- *
- * - Resolution chain: DSH_GATEWAY_DSH_PATH (env, always highest) → override
- *   (valid tree) → builtin anchor (`--dsh-path` / findDshWorkspace).
- * - Startup transaction (design 17 §2.1 step 4) runs BEFORE the first
- *   startLocal(): cleanup → eviction → restore completion → (pending)
- *   snapshot → pointer switch → spawn candidate → probe gate → verdict.
- * - The `/chamber/runtime` controller consumes this manager; it stays mounted
- *   while dsh is down (not ready-gated) so restart/applying progress stays
- *   pollable (design 18 §9.3 mounting discipline).
- *
- * Single-writer invariant (R2): one writer per state root. The manager does
- * NOT own a second lock — production adopts the createGateway state-root
- * lease (root/scope check + assertCurrent only, never released here); a
+ * Gateway dsh runtime version management: composes the shared
+ * `@dsh-chamber/dsh-runtime` core through its StartupDeps/ApplyDeps/
+ * InstallerDeps seams, with runtime trees / pointer / override / journal /
+ * snapshots under `<stateDir>/dsh-runtime/` (and the gateway registry.json).
+ * Resolution chain: DSH_GATEWAY_DSH_PATH (highest) → override (valid tree) →
+ * builtin anchor (`--dsh-path`). Single-writer: one writer per state root; no
+ * second lock — production adopts the createGateway state-root lease
+ * (root/scope check + assertCurrent, never released here); a
  * directly constructed manager self-acquires the one
  * `<stateDir>/owner.json` lease and releases it on dispose.
  */
@@ -48,12 +33,9 @@ import { createRuntimeActionGuards, type ProfileWriteRefusalCode } from './runti
 import { createMetadataStatusProjection } from './runtime-status-projection.ts'
 import { resolvePnpmEntry } from './pnpm-entry.ts'
 import type { GatewayConfig } from './config.ts'
-// The in-flight writer matrix + mutation/profile-write fences live in
-// runtime-actions.ts. Refusal construction + recovery-name classification
-// single sources: every code/message this manager shares with the route
-// pre-gates in runtime-routes.ts comes from runtime-refusals.ts; canonical
-// recovery reason sets (incl. RECOVERABLE_METADATA_BLOCKS) live there and are
-// consumed by both runtime layers.
+// Single sources: the in-flight writer matrix + mutation/profile-write fences
+// live in runtime-actions.ts; every refusal code/message shared with the route
+// pre-gates comes from runtime-refusals.ts (recovery reason sets included).
 import { refuseOnEnvPinned, refuseRuntimeMutationOnWindows } from './runtime/guards.ts'
 
 import { readRegistryOrigin, writeRegistryOrigin } from './runtime/registry-source.ts'
@@ -70,37 +52,28 @@ const gatewayRequire = nodeCreateRequire(import.meta.url)
 
 const GATEWAY_PACKAGE_VERSION: string = gatewayRequire('../package.json').version as string
 const DSH_PACKAGE_NAME = '@deepseek-ai/dsh'
-/** 10 GiB logical disk soft-limit — shared core value (dsh-runtime
- * RUNTIME_LOGICAL_DISK_LIMIT_BYTES); the desktop owner projects the same
- * constant as its diskLimitBytes. */
+/** 10 GiB logical disk soft-limit — the shared core value; desktop projects the same constant. */
 const GATEWAY_RUNTIME_LOGICAL_DISK_LIMIT_BYTES = RUNTIME_LOGICAL_DISK_LIMIT_BYTES
 import { GATEWAY_RUNTIME_STATUS_KIND } from '@dsh-chamber/dsh-chamber-wire/runtime-status'
 
-/** Public re-export of the wire identity (single source:
- * @dsh-chamber/dsh-chamber-wire/runtime-status). */
+/** Public re-export of the wire identity. */
 export { GATEWAY_RUNTIME_STATUS_KIND }
 
-/**
- * Rollback-vs-lease serialization bound (design 21 §6.3 decision 6/17, F7
- * gate): the automatic restart-exhausted rollback waits at most this
- * long for the managed profile-write lease counter to drain before it DEFERS
- * — a DSH_HOME write must never interleave a live plugin pnpm child, and the
- * only lease-aware point inside the rollback transaction (the spawn
- * checkpoint) comes AFTER its restore step writes DSH_HOME.
- */
+/** Rollback-vs-lease serialization bound: the restart-exhausted rollback waits
+ * at most this long for the profile-write lease to drain, then DEFERS — a
+ * DSH_HOME write must never interleave a live plugin pnpm child, and the
+ * transaction's only lease-aware point comes AFTER its restore step. */
 export const ROLLBACK_LEASE_WAIT_MS = 15 * 60_000
 
 export type { ResolvedWorkspace } from './runtime/workspace-facts.ts'
 
 export type { GatewayRuntimeStatus } from './runtime/projection.ts'
 
-/** Managed profile-write lease refusal codes (design 21 §6.3 decision 6/17).
- * Every code maps to an existing /chamber/runtime 409 family. */
+/** Managed profile-write lease refusal codes; every code maps to an existing /chamber/runtime 409 family. */
 export type { ProfileWriteRefusalCode } from './runtime-actions.ts'
 
-/** The lease handed out by GatewayRuntimeManager.beginProfileWrite(). The
- * caller holds it across its complete `dsh plugin` write and MUST release it
- * in all paths; release is idempotence-free and underflow-guarded (fail-loud). */
+/** The lease from beginProfileWrite(): held across the caller's complete
+ * `dsh plugin` write, released on all paths, underflow-guarded (fail-loud). */
 export type ProfileWriteLease =
   | { ok: true; release: () => void }
   | { ok: false; code: ProfileWriteRefusalCode; error: string }
@@ -116,16 +89,13 @@ export interface GatewayRuntimeManager {
   /** All runtime writers are single-flight, but only activation transactions
    * quarantine the already-running dsh from proxy/feature exposure. */
   mutationInProgress(): boolean
-  /** Design 21 decision 6/7 execution-window accessor (wired as the A1
-   * executor's canRun gate): true while any runtime mutation writer —
-   * activation transaction (rollback/restore/retry), apply-now, install,
-   * restart, start or the automatic restart-exhausted rollback — is in
-   * flight. Same internal flag set as mutationInProgress(). */
+  /** Execution-window accessor (the plugin executor's canRun gate): true while
+   * any runtime mutation writer is in flight — same internal flag set as
+   * mutationInProgress(). */
   mutationInFlight(): boolean
   activationInProgress(): boolean
-  /** Sticky public-exposure fence. Unlike activationInProgress(), this remains
-   * true after an unsafe blocked verdict so recovery routes stay reachable
-   * without allowing the probe-failed runtime to serve users. */
+  /** Sticky public-exposure fence: stays true after an unsafe blocked verdict so
+   * recovery routes stay reachable without letting the failed runtime serve. */
   exposureQuarantined(): boolean
   internalSpawnActive(): boolean
   /** Feed authoritative local-host state edges into the sustained-health
@@ -134,67 +104,47 @@ export interface GatewayRuntimeManager {
   listVersions(): Promise<unknown>
   select(version: string): Promise<{ accepted: boolean; version: string }>
   apply(): Promise<{ pending: boolean }>
-  /** Immediately apply the pending/staged version switch inside the current
-   * session (design 18 addendum · apply-now): stop → activation transaction →
-   * resume. 202 semantics — the caller receives `{ accepted: true }`
-   * synchronously and the outcome is projected via status(). */
+  /** Immediately apply the pending/staged switch in the current session:
+   * stop → activation transaction → resume; 202 semantics via status(). */
   applyNow(): Promise<{ accepted: boolean }>
-  /** Synchronous apply-now gate: every manager refusal
-   * (platform / busy / env / target resolution / tree validation / no-op)
-   * runs here so the route answers a 409/403 BEFORE any 202 can go out —
-   * a preflight throw must never be swallowed into a fake 202 whose status
-   * never settles. Returns the resolved target version. */
+  /** Synchronous apply-now gate: every manager refusal runs here so the route
+   * answers a 409/403 BEFORE any 202 — a preflight throw must never become a
+   * fake 202. Returns the resolved target version. */
   applyNowPreflight(): string
   rollback(version: string): Promise<{ accepted: boolean }>
-  /** User-authorized cleanup of one explicitly installed version tree
-   *  (desktop parity): ledger-gated + protection-set re-read at the
-   *  deletion point; consumes the durable store-prune marker afterwards. */
+  /** User-authorized cleanup of one installed version tree: ledger-gated +
+   *  protection-set re-read at the deletion point; consumes the store-prune marker. */
   cleanupVersion(version: string): Promise<{ version: string; removed: boolean }>
-  /** Restore the newest pre-rollback stash over DSH_HOME (desktop parity);
-   *  half leaves restore-blocked for retry-restore to resume. */
+  /** Restore the newest pre-rollback stash over DSH_HOME; a half restore leaves
+   *  restore-blocked for retry-restore to resume. */
   restorePreRollback(stashName: string): Promise<{ accepted: true }>
-  /** Metadata FATAL rescue (desktop parity): archives corrupt
-   *  selection metadata with a full DSH_HOME copy and runs the builtin
-   *  anchor through the probe gate before restoring access. */
+  /** Metadata FATAL rescue: archives corrupt selection metadata with a full
+   *  DSH_HOME copy and runs the builtin anchor through the probe gate. */
   recoverMetadata(): Promise<{ accepted: true }>
-  /** True while a durable metadata-recovery transaction is pending or the
-   *  recovery marker is corrupt (boot preflight gate). The tri-state `'unknown'`
-   *  is the fail-closed answer when the metadata cannot be READ: the boot path
-   *  treats it exactly like `true`. */
+  /** True while a metadata-recovery transaction is pending or the marker is
+   *  corrupt. The tri-state `'unknown'` is the fail-closed answer when the
+   *  metadata cannot be READ; the boot path treats it exactly like `true`. */
   metadataRecoveryPending(): boolean | 'unknown'
-  /** Consume the durable store-prune marker if present (boot boundary);
-   *  single-flight, marker retained on failure. */
+  /** Consume the durable store-prune marker if present; single-flight, marker retained on failure. */
   pruneStoreIfNeeded(): Promise<void>
   restoreBuiltin(): Promise<{ accepted: boolean }>
-  /** Resume an interrupted pointer switch (swap-attempted) by re-running the
-   * startup transaction; brings the managed dsh up on a clean verdict. */
+  /** Resume an interrupted pointer switch by re-running the startup transaction. */
   retryApply(): Promise<{ accepted: boolean; blockedReason: string | null }>
-  /** Resume an interrupted snapshot restore (restore-half / restore-incomplete)
-   * by re-running the startup transaction; brings the managed dsh up on a
-   * clean verdict. */
+  /** Resume an interrupted snapshot restore by re-running the startup transaction. */
   retryRestore(): Promise<{ accepted: boolean; blockedReason: string | null }>
   restart(): Promise<void>
   restartInFlight(): boolean
-  /** Explicit start primitive (design 21 decision 12, §6.3 r1): bring the
-   * managed dsh up from stopped/error/restart-exhausted through the plane's
-   * guarded startLocal path. Refuses while any runtime mutation/profile write
-   * is in flight, while a recovery block or ordinary pending is armed, and
-   * while the managed dsh is already running. 202 semantics — the route
-   * answers synchronously from the refusal gates; the outcome is projected via
-   * status().start / operationError (resolve ≠ success). */
+  /** Explicit start primitive: bring the managed dsh up from stopped/error/
+   * restart-exhausted through the plane's guarded startLocal path; the refusal
+   * gates mirror the route. 202 semantics — outcome projected via status(). */
   start(): Promise<void>
   startInFlight(): boolean
-  /** Design 21 §6.3 lifecycle writer barrier (decision 6/17): true while a
-   * managed profile write lease is held. Runtime mutations (assertMutationIdle)
-   * and every spawn (beforeSpawnCheckpoint) refuse while a plugin write could
-   * interleave DSH_HOME/profile node_modules. */
+  /** Lifecycle writer barrier: true while a profile-write lease is held — runtime
+   * mutations and every spawn refuse while a plugin write could interleave. */
   profileWriteInFlight(): boolean
-  /** Acquire the managed profile-write lease. Synchronous: returns a refusal
-   * ({ ok:false }) when a runtime transaction/mutation is in flight, when a
-   * durable recovery/pending phase is armed, or while the managed dsh is
-   * starting/restarting — mirroring the executor's own 409 family. Success
-   * increments the write counter; the returned release() decrements it
-   * (underflow-guarded). New acquisitions refuse once dispose() has started. */
+  /** Acquire the managed profile-write lease. Synchronous refusal ({ ok:false })
+   * while a runtime mutation, durable recovery/pending phase or start/restart is
+   * active. Success increments the counter; release() decrements it. */
   beginProfileWrite(): ProfileWriteLease
   /** True while an apply-now transaction is running (route gate + status). */
   applyNowInFlight(): boolean
@@ -207,44 +157,35 @@ export interface GatewayRuntimeManagerOptions {
   config: GatewayConfig
   plane: PlaneHandle
   logger: Logger
-  /** Host-side probe seam. Production executes the complete shared probe
-   * list; tests may inject the resulting closed ProbeResult set without
-   * opening a real dsh socket. The activation decision remains shared-core. */
+  /** Host-side probe seam; production executes the complete shared probe list. */
   probeCandidate?: ProbeCandidate
   /** Registry fetch seam for deterministic offline/cache tests. */
   fetchMetadata?: typeof fetchRegistryMetadata
   /** Delayed-verdict seam; production keeps the shared two-second delay. */
   waitBeforeRetry?: StartupDeps['waitBeforeRetry']
-  /** Sustained-health clock/scheduler seams. Production uses wall clock plus
-   * an unref'ed hourly tick; tests can advance the full 24h policy exactly. */
+  /** Sustained-health clock/scheduler seams (production: wall clock + unref'ed hourly tick). */
   nowMs?: () => number
   scheduleKnownGoodPromotion?: (callback: () => void) => () => void
-  /** Platform adapter seam. Production omits this and uses process.platform;
-   * tests use it to prove Windows stays entirely outside POSIX writer paths. */
+  /** Platform adapter seam. Windows stays entirely outside POSIX writer paths;
+   * production omits this and uses process.platform. */
   platform?: NodeJS.Platform
-  /** Rollback-vs-lease drain bound override (tests only; production keeps
-   * ROLLBACK_LEASE_WAIT_MS = 15 minutes). */
+  /** Rollback-vs-lease drain bound override (tests only). */
   rollbackLeaseWaitMs?: number
-  /** The state-root writer lease held by createGateway (R2). When supplied the
-   * manager adopts it (same root/scope + assertCurrent) and never releases it;
-   * when absent (direct constructions/tests) the manager self-acquires one
-   * lease and releases it in dispose(). */
+  /** The state-root writer lease held by createGateway. When supplied the manager
+   * adopts it (assertCurrent) and never releases it; absent, it self-acquires. */
   stateLease?: StateRootLease
-  /** Host composition hook: detach dsh-derived consumers as soon as an
-   * activation quarantine opens, and explicitly resync them after the verdict.
-   * Candidate ready edges can otherwise be consumed before the probe decides. */
+  /** Host composition hook: detach dsh-derived consumers as a quarantine opens
+   * and resync them after the verdict (ready edges race the probe otherwise). */
   onActivationQuarantineChange?: (active: boolean) => void
 }
 
 export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOptions): GatewayRuntimeManager {
   const { config, plane, logger } = options
-  // baseDir feeds the shared core (which appends `dsh-runtime`); stateRoot is
-  // that same directory, used for gateway-owned files and tree paths.
+  // baseDir feeds the shared core (which appends `dsh-runtime`); stateRoot is it.
   const baseDir = config.plane.stateDir
   const platform = options.platform ?? process.platform
-  // Windows is an explicitly read-only projection. Do not even enter the
-  // POSIX O_NOFOLLOW/O_DIRECTORY writer primitives: Node does not expose
-  // equivalent open flags there and a read-only manager must still start.
+  // Windows is an explicitly read-only projection: do not enter the POSIX
+  // O_NOFOLLOW/O_DIRECTORY writer primitives (no equivalent Node open flags).
   const stateRoot = platform === 'win32'
     ? join(baseDir, 'dsh-runtime')
     : ensureRuntimeRootNoFollow(baseDir)
@@ -255,10 +196,8 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
   const builtinVersion = readAnchorVersion(anchor)
   const nowMs = options.nowMs ?? Date.now
 
-  // State-root writer lease (R2). Production adopts the createGateway handle
-  // (root/scope check + assertCurrent); a direct construction self-acquires
-  // exactly one lease and releases it in dispose(). The old second owner
-  // record (<stateDir>/dsh-runtime/owner.json) is gone.
+  // State-root writer lease: production adopts the createGateway handle
+  // (root/scope check + assertCurrent); a direct construction self-acquires.
   const adoptedLease = options.stateLease
   if (adoptedLease !== undefined) {
     if (adoptedLease.scope !== 'state-root' || adoptedLease.stateRoot !== resolve(baseDir)) {
@@ -270,33 +209,26 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     ? acquireStateRootLease(baseDir, { scope: 'state-root', flavor: 'gateway', logger })
     : null
 
-  // Projection facts: every runtime module writes through these handles; the
-  // manager is their single owner and status() reads them back.
+  // Projection facts: runtime modules write through these handles; status() reads them back.
   let startupBlockReason: string | null = null
-  /** Last select/restart failure, surfaced in status (async job failures must
-   *  stay observable; cleared by the next successful action). */
+  /** Last select/restart failure, surfaced in status; cleared by the next success. */
   let operationError: string | null = null
   let installProgress: RuntimeInstallProgress | null = null
-  /** Last restart outcome, projected in status(): the settings
-   * poll must be able to distinguish a post-202 entry rejection from success
-   * even when connectionState has already returned to 'ready'. */
+  /** Last restart outcome, projected in status(): the settings poll must tell a
+   * post-202 rejection from success even when connectionState is 'ready'. */
   let restartOutcome: 'ok' | 'failed' | 'running' | null = null
-  /** Decision-12 start primitive outcome (mirrors restart). */
+  /** Start primitive outcome (mirrors restart). */
   let startOutcome: 'ok' | 'failed' | 'running' | null = null
 
-  // Every synchronous writer latch (activation quarantine window, writer
-  // single-flight flags, managed profile-write lease, internal-spawn latch and
-  // the lifecycle writer epoch) lives in one fence module so the counters stay
-  // single-sourced and every derived predicate reads the live value.
+  // Every synchronous writer latch (quarantine, single-flight flags, lease,
+  // internal-spawn, lifecycle epoch) lives in one fence module.
   const writeFence = createRuntimeWriteFence({
     logger,
     getStartupBlockReason: () => startupBlockReason,
-    // The hook is read through `options` at call time, exactly like the
-    // original optional call (a host may install it after construction).
+    // Read through `options` at call time: a host may install the hook after construction.
     onQuarantineChange: (active) => { options.onActivationQuarantineChange?.(active) },
   })
 
-  // Read-only resolution-chain facts (design 18 §3.5/§9.3).
   const facts = createRuntimeWorkspaceFacts({
     anchor,
     stateRoot,
@@ -307,8 +239,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     getEnvPath: () => envPath,
   })
 
-  // Metadata health facts/projection live in their own module; the in-memory
-  // recover gate is injected as getters so writer transitions stay immediate.
+  // Injected as getters so writer transitions stay immediate.
   const metadataStatus = createMetadataStatusProjection({
     platform,
     baseDir,
@@ -320,8 +251,6 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     isDisposed: () => writeFence.isDisposed(),
   })
 
-  // Disk stats live in their own module; the cache and the coalesced walk keep
-  // the same semantics.
   const diskCacheProjection = createRuntimeDiskProjection({ baseDir, dshHome })
 
   function invalidateDiskCache(): void {
@@ -329,16 +258,12 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     metadataStatus.invalidate()
   }
 
-  // Single source with the plugin executor's PATH shim: pnpm-entry.ts owns the
-  // bundled-vs-dev resolution (design 18 §9.2 D1); the shim it generates points
-  // at exactly this entry.
+  // Single source with the executor's PATH shim: pnpm-entry.ts owns the resolution.
   const pnpmEntry = (): string => resolvePnpmEntry()
 
-  // /chamber/runtime actions (design 18 §9.3 route table)
+  // /chamber/runtime actions
 
-  // Action guards/resolution live in their own module:
-  // the pending fences, the in-flight writer matrix and the profile-write lease
-  // gates are shared by every transaction body below.
+  // The pending fences, writer matrix and lease gates are shared by every body below.
   const actionGuards = createRuntimeActionGuards({
     platform,
     baseDir,
@@ -364,12 +289,9 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     profileWriteRefusal,
   } = actionGuards
 
-  // Startup transaction driver (design 17 §4.1): candidate/env probe spawns,
-  // StartupDeps assembly, the F4/blocked projection and the candidate-
-  // workspace latch consulted by getDshWorkspacePath.
-  // One shared module context: the immutable construction facts plus the
-  // two cross-cluster handles (resolution facts, write fence). Every module
-  // call spreads this object and adds only its own narrow inputs.
+  // Startup transaction driver: candidate/env probe spawns, StartupDeps assembly,
+  // the blocked projection and the candidate-workspace latch; the shared module
+  // context is spread into every call, which adds only its own inputs.
   const runtimeContext: RuntimeModuleContext = { plane, platform, baseDir, envPath, facts, writeFence }
 
   const startup = createStartupTransactionRunner({
@@ -391,8 +313,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     },
   })
 
-  // Lifecycle owner (design 18 §9.3): store prune, known-good observation/
-  // promotion, the F7 restart-exhausted rollback, restart/start and dispose.
+  // Lifecycle owner: store prune, known-good promotion, rollback, restart/start, dispose.
   const lifecycle = createRuntimeLifecycle({
     ...runtimeContext,
     logger,
@@ -414,10 +335,8 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
       setStartOutcome: (value) => { startOutcome = value },
     },
   })
-  // Version selection/apply/rollback/cleanup and builtin restore (design 18
-  // §9.3). The mutation bodies live in versions.ts; this wiring passes the
-  // action guards, resolution facts, fence, startup driver and the manager-
-  // owned projection setters.
+  // Version selection/apply/rollback/cleanup and builtin restore: mutation bodies
+  // live in versions.ts; this wiring passes the guards, facts, fence and setters.
   const versions = createRuntimeVersionActions({
     ...runtimeContext,
     shellVersion,
@@ -444,8 +363,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     },
   })
 
-  // Recovery surface (design 18 §3.6/§9.3): metadata rescue, pre-rollback
-  // stash restore and the retry-apply/retry-restore resumes.
+  // Recovery surface: metadata rescue, pre-rollback stash restore, retries.
   const recovery = createRuntimeRecoveryActions({
     ...runtimeContext,
     dshHome,
@@ -463,7 +381,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
   })
 
 
-  // Status projection (design 18 §9.3): read-only over every module handle.
+  // Status projection: read-only over every module handle.
   const projection = createRuntimeStatusProjection({
     ...runtimeContext,
     shellVersion,
@@ -484,8 +402,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     return { ok: true, release: writeFence.acquireProfileWrite().release }
   }
 
-  // Promotion is based on a live in-process interval, never elapsed offline
-  // wall time. observeLocalState closes the window on every unhealthy edge.
+  // Promotion uses a live in-process interval, never elapsed offline wall time.
 
   function getRegistry(): { origin: string } {
     writeFence.assertManagerReadable()

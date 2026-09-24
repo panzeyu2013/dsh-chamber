@@ -1,50 +1,18 @@
 /**
- * Gateway-side session-state watcher.
+ * Gateway-side session-state watcher: a READ-ONLY mirror of dsh session facts
+ * over the control-plane mux client: per-session state machine with a monotonic
+ * cursor, one snapshot at <stateDir>/session-state/state.json, and the four
+ * /chamber/session-state routes inside the /chamber/* auth gate.
  *
- * The gateway is a READ-ONLY mirror of dsh session facts (the design 17
- * section 10 carve-out): it watches the local managed dsh through
- * the control-plane mux client (packages/control-plane/src/session-mux.ts),
- * keeps a per-session state machine with a monotonic cursor, persists one
- * snapshot at <stateDir>/session-state/state.json, and serves the four routes
- * of the frozen wire contract owned by
- * packages/control-plane/src/session-state-protocol.ts:
- *
- *   - GET  /chamber/session-state          -> SessionStateSnapshot
- *   - GET  /chamber/session-state/stream   -> SSE snapshot + SessionStateDelta
- *   - POST /chamber/session-state/read     -> per-session monotonic read mark
- *   - POST /chamber/session-state/read-all -> source-wide read floor
- *
- * All four sit inside the existing /chamber/* auth gate (dispatch.ts). The
- * watcher never writes to dsh, never answers a waterfall on its own (the mux
- * holds the frame until ANOTHER downstream mux client is attached AND the 1.5s
- * grace elapsed - observer discipline), and never stores
- * title/cwd/message/approval payloads (privacy whitelist).
- *
- * Track B (static+measured): the host summary updatedAt only advances on
- * user-authored messages, so a completion is the api-session/status
- * true->false edge plus a bounded session/follow read of tail turn/end.reason.
- * completedAt is armed only when that reason classifies as
- * completed; aborted+user is a user stop; blocked/error/max-tokens/interrupted
- * are neutral (classifyTurnEnd in the protocol module). An unreadable tail is
- * the documented conservative fallback: the edge arms unread as reconstructed,
- * never authorizes a native completion notification, retains its identity for
- * a later baseline retry, and reports the unreadable attempt. A newer prompt
- * or running edge revokes that identity before an old follow may write back.
- *
- * Gap reconstruction (R3): rows persisted with running=true are candidates
- * after an observer restart; a baseline that reports them stopped does NOT arm
- * completedAt raw - each candidate is re-classified through the same turn/end
- * read and only then settled, with completedAtSource='reconstructed'
- * (notification-ineligible on the desktop side).
- *
- * Persistence uses the control-plane createJsonStore protocol (main -> .bak ->
- * initial, corrupt is never a fake-empty, 0600 leaves under a 0700 directory).
- * There is NO JSONL: the SSE resume window is the in-memory cursor ring, and a
- * restart deliberately invalidates it (a Last-Event-ID that cannot be satisfied
- * makes the client refetch the snapshot). The ring is bounded
- * and the snapshot is written on a 1s debounce, on shutdown and on flush; an
- * abrupt process kill can lose at most the last debounce window.
- */
+ * It never writes to dsh, never answers a waterfall on its own (the mux holds the
+ * frame until ANOTHER downstream client attaches AND the grace elapses), and never
+ * stores title/cwd/message/approval payloads. A completion = the status true->false
+ * edge plus ONE follow read of turn/end.reason: completed arms completedAt; an
+ * unreadable tail arms unread with completedAtSource='reconstructed' (never a
+ * notifiable completion, and it retains its identity for a later baseline retry);
+ * restart-recovered rows also arm completedAtSource='reconstructed'; snapshots persist
+ * on a 1s debounce/shutdown/flush in a bounded delta ring that a restart invalidates
+ * (no JSONL). */
 
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
@@ -86,6 +54,9 @@ import {
   type SessionStateCompletedAtSource,
   type SessionStateDelta,
   type SessionStateFeature,
+  type SessionStateGoalActivation,
+  type SessionStateGoalActivationEvent,
+  type SessionStateGoalFact,
   type SessionStateHostInfo,
   type SessionStateHostState,
   type SessionStateMode,
@@ -97,34 +68,33 @@ import {
   type ReadAllRequest,
   type ReadRequest,
 } from '@dsh-chamber/control-plane'
-import { readBoundedBody } from './http-utils.ts'
+import { jsonResponse, readBoundedBody } from './http-utils.ts'
 
-// Gateway-owned limits. Protocol constants are
-// imported, never re-declared: session-state-protocol.ts is the single source.
+// Gateway-owned limits; protocol constants are imported, never re-declared.
 
-/** State root under the gateway stateDir. */
 export const SESSION_STATE_DIR_NAME = 'session-state'
-/** Snapshot document name inside SESSION_STATE_DIR_NAME. */
 export const SESSION_STATE_FILE_NAME = 'state.json'
-/** Document schema this gateway writes and reads. */
 export const SESSION_STATE_SCHEMA_VERSION = 1
 /** Hard row cap; the excess is evicted by observedAt and counted in dropped. */
 export const MAX_SESSIONS = 2_000
-/** Cap of known read-mark clients (LRU by last write). */
+/**
+ * Cap of process-local retained goal-activation edges (P2a). A host can emit
+ * edges for session ids no projection ever carries, so the map must stay
+ * bounded: eviction is oldest-first and counted in `dropped.goalActivations`.
+ */
+export const MAX_PENDING_GOAL_ACTIVATIONS = MAX_SESSIONS
 export const MAX_READ_CLIENTS = 64
-/** Cap of per-session marks retained for one client. */
 export const MAX_MARKS_PER_CLIENT = 5_000
 /** Read-mark client TTL (old marks are cleaned by the server). */
 export const READ_MARK_TTL_MS = 90 * 24 * 60 * 60 * 1000
 /** In-memory SSE resume window (deltas, not bytes). */
 export const SSE_RING_MAX = 1_024
-/** Concurrent SSE streams per surface (mirrors control-plane/api.ts:64). */
+/** Concurrent SSE streams per surface. */
 export const MAX_SSE_STREAMS = 32
-/** Queued frames for one backpressured SSE stream (api.ts:66). */
+/** Queued frames for one backpressured SSE stream. */
 export const MAX_SSE_PENDING_FRAMES = 32
-/** SSE keepalive cadence (api.ts:468). */
+/** SSE keepalive cadence. */
 export const SSE_KEEPALIVE_MS = 20_000
-/** Snapshot persist debounce. */
 export const PERSIST_DEBOUNCE_MS = 1_000
 /** Event-silence window handed to the mux (R21); the mux resubscribes. */
 export const DEFAULT_EVENT_SILENCE_MS = 45_000
@@ -132,14 +102,12 @@ export const DEFAULT_EVENT_SILENCE_MS = 45_000
 export const DEFAULT_RECONCILE_MS = 60_000
 /** Baseline cadence while the live event stream is unavailable (poll mode). */
 export const DEFAULT_POLL_MS = 15_000
-/** Observer tick granularity (schedules reconcile/poll work; 5s default). */
 export const DEFAULT_TICK_MS = 5_000
 
 const SESSION_STATE_DIR_MODE = 0o700
 const SESSION_STATE_FILE_MODE = 0o600
 
-/** Features that are unavailable when the live $events subscription is not
- *  ready (poll/connecting): the descriptor tells the truth per mode. */
+/** Features unavailable without the live $events subscription (the per-mode descriptor tells the truth). */
 const EVENT_ONLY_FEATURES: ReadonlySet<SessionStateFeature> = new Set<SessionStateFeature>([
   'session-state.dsh-events',
   'session-state.pending-graph',
@@ -168,18 +136,15 @@ export function normalizeHostState(state: string): SessionStateHostState {
   }
 }
 
-// Store model
 
-/** One completion edge the observer must classify with exactly one follow
- *  read. source: 'observed' = live true->false edge in this observer epoch;
- *  'reconstructed' = a stored running row found stopped after a restart. */
+/** One completion edge requiring exactly one follow read. source='observed' is a
+ *  live true->false edge in this observer epoch; 'reconstructed' is a post-restart recovery. */
 export interface CompletionEdge {
   sessionId: string
   source: SessionStateCompletedAtSource
 }
 
-/** Internal row: the wire row plus persistence/observer-only fields. The wire
- *  projection is toWireRow; nothing sensitive is ever added here. */
+/** Internal row = wire row + persistence/observer-only fields (toWireRow projects it; nothing sensitive is added). */
 interface StoredRow {
   sessionId: string
   running: boolean
@@ -199,6 +164,13 @@ interface StoredRow {
   /** Baseline bookkeeping for the parent/origin subagent count. */
   parentSessionId: string | null
   origin: 'subagent' | null
+  /**
+   * Projected goal fact (P2a). `undefined` = the projection key was never
+   * observed (unknown); `null` = the host explicitly reports no goal; an
+   * object = the current goal. `activation` inside it is PROCESS-LOCAL and is
+   * stripped before persistence, so a restart clears it back to unknown.
+   */
+  goal?: SessionStateGoalFact | null
 }
 
 /** Per-client read marks (stored per client, judged source-wide). */
@@ -227,7 +199,7 @@ export interface SessionStateDocument {
   sessions: StoredRow[]
   readMarks: Record<string, { at: number; marks: Record<string, { readThrough: number; at: number }> }>
   readFloor: number
-  dropped: { sessions: number; readClients: number; readMarks: number }
+  dropped: { sessions: number; readClients: number; readMarks: number; goalActivations: number }
   [key: string]: unknown
 }
 
@@ -240,8 +212,8 @@ export interface SessionStateStoreStatus {
   cursor: number
   sessions: number
   readClients: number
-  dropped: { sessions: number; readClients: number; readMarks: number }
-  /** I16：结算过的完成边沿按 turn/end 分类的构成（unreadable = 降级武装）。 */
+  dropped: { sessions: number; readClients: number; readMarks: number; goalActivations: number }
+  /** 已结算完成边沿的 turn/end 分类构成（unreadable = 降级武装）。 */
   turnEnds: { completed: number; userStopped: number; neutral: number; unreadable: number }
 }
 
@@ -263,6 +235,16 @@ export interface SessionStateStore {
   applyActivity(sessionId: string, updatedAt: number | null, at: number): boolean
   applyAdded(item: SessionListBaselineItem, at: number): boolean
   applyRemoved(sessionId: string, at: number): boolean
+  /** Forwarded `goal/activation-changed` edge, bound to its exact goal id
+   *  ({@link SessionStateGoalActivationEvent}). A bound edge whose id does not
+   *  match the row's projected goal is retained until a baseline/added carries
+   *  the matching identity; an `activation: null` edge resolves a known fact
+   *  to explicit no-goal. Process-local only — never persisted. */
+  applyGoalActivation(event: SessionStateGoalActivationEvent, at: number): boolean
+  /** Drop every process-local activation back to unknown (a fresh `$events`
+   *  ready after a gap: emit frames have no replay), including retained edges
+   *  that have not found their projection yet. */
+  clearGoalActivations(at: number): boolean
   applyPending(sessionId: string, kind: SessionStatePendingKind, at: number): boolean
   clearPending(sessionId: string, at: number): boolean
   /** Settle only the still-current completion edge after a bounded follow read. */
@@ -292,7 +274,68 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return prototype === Object.prototype || prototype === null
 }
 
-/** Wire projection of one internal row (exact frozen field set/order). */
+/** Whitelisted clone of one goal fact. Only the five contract fields can
+ *  survive, so a smuggled `objective`/`blockedReason` (or any future host
+ *  field) can never reach the wire or the persisted document. */
+function cloneGoalFact(goal: SessionStateGoalFact): SessionStateGoalFact {
+  const fact: SessionStateGoalFact = { goalId: goal.goalId, revision: goal.revision, phase: goal.phase }
+  if (goal.updatedAt !== undefined) fact.updatedAt = goal.updatedAt
+  if (goal.activation !== undefined) fact.activation = goal.activation
+  return fact
+}
+
+/** Persisted projection of one goal fact: `activation` is process-local and
+ *  must never reach the snapshot document (v5 §6 P2a: a restart clears it back
+ *  to unknown). */
+function persistedGoalFact(goal: SessionStateGoalFact): SessionStateGoalFact {
+  const fact: SessionStateGoalFact = { goalId: goal.goalId, revision: goal.revision, phase: goal.phase }
+  if (goal.updatedAt !== undefined) fact.updatedAt = goal.updatedAt
+  return fact
+}
+
+/** Exact equality of two goal facts (undefined/null are distinct values). */
+function sameGoalFact(
+  left: SessionStateGoalFact | null | undefined,
+  right: SessionStateGoalFact | null | undefined,
+): boolean {
+  if (left === null || left === undefined || right === null || right === undefined) return left === right
+  return left.goalId === right.goalId
+    && left.revision === right.revision
+    && left.phase === right.phase
+    && left.updatedAt === right.updatedAt
+    && left.activation === right.activation
+}
+
+/**
+ * Merge one baseline/add goal fact into a row.
+ *  - absent (`undefined`) keeps the last known fact: a missing projection key
+ *    is unknown and must never overwrite knowledge with ignorance;
+ *  - `null` clears the fact (the host explicitly reports no goal);
+ *  - an object refreshes identity/phase/watermark while PRESERVING the
+ *    process-local activation when the goalId is unchanged (the baseline never
+ *    carries activation; overwriting would erase what the event taught us).
+ * @returns whether the stored fact changed (delta emission input).
+ */
+function mergeGoalFact(row: StoredRow, goal: SessionStateGoalFact | null | undefined): boolean {
+  if (goal === undefined) return false
+  const previous = row.goal
+  if (goal === null) {
+    if (previous === null) return false
+    row.goal = null
+    return true
+  }
+  const activation = previous !== undefined && previous !== null && previous.goalId === goal.goalId
+    ? previous.activation
+    : undefined
+  const next = cloneGoalFact(goal)
+  if (activation !== undefined) next.activation = activation
+  if (sameGoalFact(previous, next)) return false
+  row.goal = next
+  return true
+}
+
+/** Wire projection of one internal row (exact frozen field set/order; `goal`
+ *  is a post-freeze additive field and stays ABSENT while unknown). */
 function toWireRow(row: StoredRow): SessionStateRow {
   return {
     sessionId: row.sessionId,
@@ -304,7 +347,10 @@ function toWireRow(row: StoredRow): SessionStateRow {
     completedAtSource: row.completedAtSource,
     lastRunningAt: row.lastRunningAt,
     lastTurnEnd: row.lastTurnEnd,
-    // I5：这一行事实的观察时刻（观察者时钟，host 域）。
+    ...(row.goal === undefined
+      ? {}
+      : { goal: row.goal === null ? null : cloneGoalFact(row.goal) }),
+    // 这一行事实的观察时刻（观察者时钟，host 域）。
     factAt: row.observedAt,
   }
 }
@@ -330,16 +376,23 @@ function createStoredRow(sessionId: string, at: number): StoredRow {
 }
 
 /**
- * Create the session-state store. Loading is loud (createJsonStore corrupt is
- * never empty): a corrupt main falls back to the backup with an explicit
- * recovery state; a double corruption leaves the store sticky
- * integrity='corrupt', starts cold and REFUSES to persist (the damaged
- * evidence is never overwritten - plugins-journal.ts:447-464 discipline).
+ * Create the session-state store. Loading is loud: a corrupt main falls back to
+ * the backup with an explicit recovery state; a double corruption stays sticky
+ * integrity='corrupt', starts cold and REFUSES to persist (the damaged evidence
+ * is never overwritten).
  */
 export function createSessionStateStore(deps: SessionStateStoreDeps): SessionStateStore {
   const now = deps.now ?? (() => Date.now())
   // Observer epoch id; a fresh one per process (gap reconstruction input).
   const epoch = randomUUID()
+
+  /** Persisted projection of one row: the goal fact is written without its
+   *  process-local `activation` (and without any unknown field). */
+  function persistedRow(row: StoredRow): StoredRow {
+    const goal = row.goal
+    if (goal === undefined || goal === null) return { ...row }
+    return { ...row, goal: persistedGoalFact(goal) }
+  }
   const sessionStateDir = join(deps.stateDir, SESSION_STATE_DIR_NAME)
   const filePath = join(sessionStateDir, SESSION_STATE_FILE_NAME)
   ensurePrivateDirectoryNoFollow(sessionStateDir, SESSION_STATE_DIR_MODE)
@@ -352,14 +405,44 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
   // The edge object is an opaque per-run capability. An older follow cannot
   // settle a newly running session, a later prompt, or a replacement edge.
   const pendingEdges = new Map<string, CompletionEdge>()
+  /**
+   * Process-local activation edges whose goal id has not matched a projected
+   * row yet (the create raced a lagging session/list projection) — P2a
+   * identity binding. At most one edge per session (the latest wins); never
+   * persisted, cleared with the epoch and with the row's removal/prune.
+   * Bounded by {@link MAX_PENDING_GOAL_ACTIVATIONS}: a host can emit edges for
+   * ids no baseline ever carries, so the oldest retained edge is evicted and
+   * counted in `dropped.goalActivations` (never silent).
+   */
+  const pendingGoalActivations = new Map<string, { goalId: string | null; activation: SessionStateGoalActivation }>()
+
+  /** Retain one edge (latest wins) under the map cap. */
+  function retainPendingGoalActivation(
+    sessionId: string,
+    edge: { goalId: string | null; activation: SessionStateGoalActivation },
+  ): void {
+    const retained = pendingGoalActivations.has(sessionId)
+    if (!retained && pendingGoalActivations.size >= MAX_PENDING_GOAL_ACTIVATIONS) {
+      const oldest = pendingGoalActivations.keys().next()
+      if (oldest.done !== true) pendingGoalActivations.delete(oldest.value)
+      dropped.goalActivations += 1
+      warn('pending goal-activation cap reached; dropped the oldest retained edge (never silent)')
+    }
+    // Map.set on an existing key does NOT move it to the end: an updated edge
+    // would keep its first-seen position and be evicted as "oldest" on the next
+    // overflow. Delete-then-set refreshes the retention order (LRU: eviction is
+    // least-recently-updated, never least-recently-first-seen).
+    if (retained) pendingGoalActivations.delete(sessionId)
+    pendingGoalActivations.set(sessionId, edge)
+  }
   let firstBaselineDone = false
 
   let cursor = 0
   let readFloor = 0
   let mode: SessionStateMode = 'poll'
   let host: StoredHost = { state: 'unknown', serviceable: false, since: now(), lastBaselineAt: null, baselineOk: false }
-  let dropped = { sessions: 0, readClients: 0, readMarks: 0 }
-  // 仪表 I16：每条完成边沿的 turn/end 分类构成（与 follow 读取一一对应）。
+  let dropped = { sessions: 0, readClients: 0, readMarks: 0, goalActivations: 0 }
+  // 每条完成边沿的 turn/end 分类构成（与 follow 读取一一对应）。
   const turnEnds = { completed: 0, userStopped: 0, neutral: 0, unreadable: 0 }
   let integrity: SessionStateStoreStatus['integrity'] = 'ok'
   let recoveryDetail: string | null = null
@@ -389,7 +472,7 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
       sessions: [],
       readMarks: {},
       readFloor: 0,
-      dropped: { sessions: 0, readClients: 0, readMarks: 0 },
+      dropped: { sessions: 0, readClients: 0, readMarks: 0, goalActivations: 0 },
     }
   }
 
@@ -397,7 +480,6 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
     deps.logger.warn('gateway session-state: ' + message)
   }
 
-  // --- document validation (onLoadValidate) --------------------------------
 
   function validateDocument(raw: Record<string, unknown>): { doc: SessionStateDocument; droppedSessions: number } {
     if (raw.schemaVersion !== SESSION_STATE_SCHEMA_VERSION) {
@@ -453,10 +535,11 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
       }
     }
     normalized.readMarks = marks
-    // Load-time losses ride the document itself: adoptDocument replaces the
-    // in-memory counters, so a closure-only increment would be silently lost
-    // (the never-silent discipline).
-    normalized.dropped = { sessions: droppedSessions, readClients: droppedClients, readMarks: 0 }
+    // Load-time losses ride the document itself (adoptDocument replaces the
+    // in-memory counters); a closure-only increment would be silently lost. The
+    // process-local readMarks/goalActivations counters load as 0: their retained
+    // state is never persisted, so adopting a stale value would be a lie.
+    normalized.dropped = { sessions: droppedSessions, readClients: droppedClients, readMarks: 0, goalActivations: 0 }
     return { doc: normalized, droppedSessions }
   }
 
@@ -483,7 +566,28 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
       observedAt: isWatermark(value.observedAt) ? value.observedAt : 0,
       parentSessionId: typeof value.parentSessionId === 'string' ? value.parentSessionId : null,
       origin: value.origin === 'subagent' ? 'subagent' : null,
+      goal: validateGoalFact(value.goal),
     }
+  }
+
+  /**
+   * Validate one persisted goal fact. A persisted `activation` is deliberately
+   * IGNORED: activation is a process-local value, so a restart must clear it
+   * back to unknown (never adopt a stale edge from disk). Unknown extra fields
+   * are dropped by construction (whitelist), matching the wire projector.
+   */
+  function validateGoalFact(value: unknown): SessionStateGoalFact | null | undefined {
+    if (value === null) return null
+    if (!isPlainRecord(value)) return undefined
+    const goalId = value.goalId
+    const revision = value.revision
+    const phase = value.phase
+    if (typeof goalId !== 'string' || goalId.length === 0) return undefined
+    if (!isWatermark(revision) || revision < 1) return undefined
+    if (phase !== 'active' && phase !== 'paused' && phase !== 'blocked' && phase !== 'complete') return undefined
+    const fact: SessionStateGoalFact = { goalId, revision, phase }
+    if (isWatermark(value.updatedAt)) fact.updatedAt = value.updatedAt
+    return fact
   }
 
   function validateTurnEnd(value: unknown): SessionTurnEnd | null {
@@ -500,7 +604,6 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
     }
   }
 
-  // --- load ----------------------------------------------------------------
 
   let jsonStore: JsonStore | null = null
   try {
@@ -529,8 +632,7 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
   } catch (error) {
     integrity = 'corrupt'
     recoveryDetail = error instanceof Error ? error.message : String(error)
-    // Corrupt is never a fake-empty AND never an overwrite: keep serving a cold
-    // in-memory state, refuse persistence, and stay loud.
+    // Corrupt is never a fake-empty AND never an overwrite: serve cold, refuse persistence, stay loud.
     warn('session-state snapshot is corrupt and will NOT be overwritten (' + recoveryDetail
       + '); starting cold - unread may be lost, never fabricated')
     doc = emptyDocument(now())
@@ -547,7 +649,11 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
     dropped = {
       sessions: isWatermark(doc.dropped?.sessions) ? doc.dropped.sessions : 0,
       readClients: isWatermark(doc.dropped?.readClients) ? doc.dropped.readClients : 0,
-      readMarks: isWatermark(doc.dropped?.readMarks) ? doc.dropped.readMarks : 0,
+      // readMarks / goalActivations 是进程内累计计数：validateDocument 在加载时
+      // 已按契约把它们归 0（保留边不落盘，重启本就不继承），这里从 0 起算。
+      // 绝不按持久值读——那是 validateDocument 永不产生非零值的死分支。
+      readMarks: 0,
+      goalActivations: 0,
     }
     revision = isWatermark(doc.revision) ? doc.revision : 0
     for (const row of doc.sessions) {
@@ -582,9 +688,15 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
     const ordered = [...rows.values()].sort((a, b) => a.observedAt - b.observedAt)
     for (const row of ordered.slice(0, rows.size - MAX_SESSIONS)) {
       rows.delete(row.sessionId)
+      // Eviction is a deletion, not a quiet field wipe: the client must be told
+      // (applyRemoved discipline), or an SSE client keeps a phantom row forever.
+      deltaSessions.delete(row.sessionId)
+      deltaRemoved.add(row.sessionId)
+      if (pendingGoalActivations.delete(row.sessionId)) dropped.goalActivations += 1
       dropped.sessions += 1
     }
     warn('session cap reached; dropped ' + dropped.sessions + ' oldest row(s) (never silent)')
+    commitDelta()
   }
 
   function trimReadClients(): void {
@@ -604,12 +716,18 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
   }
 
   async function flush(): Promise<void> {
-    if (persistBlocked) return
     if (flushing !== null) return flushing
     const run = (async () => {
       try {
+        // The row/read-client caps are in-memory invariants, NOT persistence
+        // concerns: they must hold even when persistence is refused (double
+        // corruption early-returns below). Enforce them BEFORE the
+        // persistBlocked gate, or a 2005-row baseline would be served over the
+        // cap with dropped.sessions stuck at 0 in exactly the state where the
+        // snapshot is the only evidence left.
         enforceLimits()
         trimReadClients()
+        if (persistBlocked) return
         revision += 1
         doc.schemaVersion = SESSION_STATE_SCHEMA_VERSION
         doc.revision = revision
@@ -617,7 +735,7 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
         doc.watcherEpoch = epoch
         doc.mode = mode
         doc.host = host
-        doc.sessions = [...rows.values()].map(row => ({ ...row }))
+        doc.sessions = [...rows.values()].map(persistedRow)
         const marks: SessionStateDocument['readMarks'] = {}
         for (const [clientId, client] of readClients) {
           const clientMarks: Record<string, { readThrough: number; at: number }> = {}
@@ -727,6 +845,30 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
     return edge
   }
 
+  /**
+   * Apply a retained activation edge after a baseline/added merged a goal fact
+   * into the row. The edge is consumed only when the projected goal identity
+   * matches (an unbound edge matches the current known goal); a mismatching edge
+   * stays retained for a later projection and never touches the previous goal's
+   * row. An absent/unknown/null projection keeps the edge too: the create may
+   * still be racing this baseline.
+   * @returns whether the row's fact changed (delta emission input).
+   */
+  function applyRetainedGoalActivation(row: StoredRow, at: number): boolean {
+    const goal = row.goal
+    if (goal === undefined || goal === null) return false
+    const edge = pendingGoalActivations.get(row.sessionId)
+    if (edge === undefined) return false
+    if (edge.goalId !== null && edge.goalId !== goal.goalId) return false
+    pendingGoalActivations.delete(row.sessionId)
+    if (goal.activation === edge.activation) return false
+    const next = cloneGoalFact(goal)
+    next.activation = edge.activation
+    row.goal = next
+    row.observedAt = at
+    return true
+  }
+
   return {
     status(): SessionStateStoreStatus {
       return {
@@ -780,6 +922,12 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
         row.observedAt = opts.at
         row.parentSessionId = item.parentSessionId
         row.origin = item.origin
+        // Baseline refresh is the phase/watermark authority; activation (if any)
+        // survives an unchanged goalId, and a retained edge for THIS goal id
+        // lands the moment the create reaches the projection.
+        const mergedGoal = mergeGoalFact(row, item.goal)
+        const retainedGoal = applyRetainedGoalActivation(row, opts.at)
+        const goalChanged = mergedGoal || retainedGoal
         if (item.running) {
           const resolves = row.completedAt !== null || row.completedAtSource !== null || row.lastTurnEnd !== null
           row.running = true
@@ -787,12 +935,11 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
           clearConclusion(row)
           pendingEdges.delete(item.sessionId)
           gapCandidates.delete(item.sessionId)
-          if (!wasPresent || !previousRunning || resolves || row.updatedAt !== previousUpdatedAt) {
+          if (!wasPresent || !previousRunning || resolves || row.updatedAt !== previousUpdatedAt || goalChanged) {
             deltaSessions.set(item.sessionId, toWireRow(row))
           }
         } else if (previousRunning) {
-          // The edge is armed by the observer after ONE classified follow read;
-          // the baseline never arms completedAt raw (R3/R12).
+          // The edge is armed by the observer after ONE classified follow read; the baseline never arms completedAt raw.
           row.running = false
           const source: SessionStateCompletedAtSource = gapCandidates.has(item.sessionId) ? 'reconstructed' : 'observed'
           gapCandidates.delete(item.sessionId)
@@ -808,7 +955,7 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
           }
           const pending = pendingEdges.get(item.sessionId)
           if (pending !== undefined && row.updatedAt === previousUpdatedAt) edges.push(pending)
-          if (!wasPresent || row.running !== false || row.updatedAt !== previousUpdatedAt) {
+          if (!wasPresent || row.running !== false || row.updatedAt !== previousUpdatedAt || goalChanged) {
             row.running = false
             deltaSessions.set(item.sessionId, toWireRow(row))
           }
@@ -817,8 +964,7 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
       for (const row of [...rows.values()]) {
         if (seen.has(row.sessionId)) continue
         if (row.present) {
-          // Deletion is not a completion (R13): mark absent, arm nothing, and
-          // prune on the next complete baseline that still misses it.
+          // Deletion is not a completion: mark absent, arm nothing, and prune on the next complete baseline that still misses it.
           row.present = false
           row.running = false
           pendingEdges.delete(row.sessionId)
@@ -827,6 +973,9 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
         } else {
           rows.delete(row.sessionId)
           pendingEdges.delete(row.sessionId)
+          // The retained edge dies with the pruned row: a re-listed session id
+          // must never inherit it (same rule as applyRemoved / the row cap).
+          pendingGoalActivations.delete(row.sessionId)
           deltaRemoved.add(row.sessionId)
           deltaSessions.delete(row.sessionId)
           for (const client of readClients.values()) client.marks.delete(row.sessionId)
@@ -872,8 +1021,7 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
         commitDelta()
         return [newCompletionEdge(sessionId, source)]
       }
-      // Already stopped: only a row that just became present is a change (a
-      // duplicate status(false) must not advance the SSE cursor).
+      // Already stopped: only a row that just became present is a change (a duplicate status(false) must not advance the cursor).
       if (!wasPresent) deltaSessions.set(sessionId, toWireRow(row))
       commitDelta()
       return []
@@ -903,6 +1051,10 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
       row.origin = item.origin
       const previousUpdatedAt = row.updatedAt
       row.updatedAt = Math.max(row.updatedAt, item.updatedAt)
+      mergeGoalFact(row, item.goal)
+      // An added frame can be the first projection that carries the new goal:
+      // the retained activation edge lands with the row itself.
+      applyRetainedGoalActivation(row, at)
       if (item.running) {
         row.running = true
         row.lastRunningAt = at
@@ -919,7 +1071,12 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
     },
 
     applyRemoved(sessionId): boolean {
+      // The retained edge dies with the session even when no row ever existed
+      // (an activation edge that outraced its create): a re-created session id
+      // must never inherit it. Delete BEFORE the early return.
+      pendingGoalActivations.delete(sessionId)
       if (!rows.has(sessionId)) return false
+      // The goal fact dies with the row.
       rows.delete(sessionId)
       pendingEdges.delete(sessionId)
       deltaSessions.delete(sessionId)
@@ -928,6 +1085,65 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
       recomputeSubagentCounts()
       commitDelta()
       return true
+    },
+
+    applyGoalActivation(event, at): boolean {
+      const { sessionId } = event
+      if (event.activation === null) {
+        // The host explicitly reports no current goal; a retained edge for a
+        // goal that no longer exists is dead information now.
+        pendingGoalActivations.delete(sessionId)
+        // Only a KNOWN fact is resolved to `null`: an unknown row stays unknown
+        // (we never fabricate "no goal" from an activation edge that may have
+        // outraced the baseline).
+        const row = rows.get(sessionId)
+        if (row === undefined || row.goal === undefined || row.goal === null) return false
+        row.goal = null
+        row.observedAt = at
+        deltaSessions.set(sessionId, toWireRow(row))
+        commitDelta()
+        return true
+      }
+      const row = rows.get(sessionId)
+      const goal = row === undefined ? undefined : row.goal
+      // Identity binding (P2a): a bound edge lands ONLY on the projected goal
+      // with the same id; an unbound edge acts on the current known goal
+      // (mirroring the renderer P2b parser). An unknown row, an unknown
+      // projection, or a create that outran the baseline retains the edge until
+      // a baseline/added brings the matching identity — never guessed onto the
+      // previous goal's row (that produced complete+armed).
+      if (row === undefined || goal === undefined || goal === null
+        || (event.goalId !== null && event.goalId !== goal.goalId)) {
+        retainPendingGoalActivation(sessionId, { goalId: event.goalId, activation: event.activation })
+        return false
+      }
+      // The latest event for this session supersedes any earlier retained edge.
+      pendingGoalActivations.delete(sessionId)
+      if (goal.activation === event.activation) return false
+      const next = cloneGoalFact(goal)
+      next.activation = event.activation
+      row.goal = next
+      row.observedAt = at
+      deltaSessions.set(sessionId, toWireRow(row))
+      commitDelta()
+      return true
+    },
+
+    clearGoalActivations(at): boolean {
+      // A new $events generation invalidates every process-local edge — both the
+      // applied values below and edges still waiting for their projection.
+      pendingGoalActivations.clear()
+      let changed = false
+      for (const row of rows.values()) {
+        const goal = row.goal
+        if (goal === undefined || goal === null || goal.activation === undefined) continue
+        row.goal = persistedGoalFact(goal)
+        row.observedAt = at
+        deltaSessions.set(row.sessionId, toWireRow(row))
+        changed = true
+      }
+      if (changed) commitDelta()
+      return changed
     },
 
     applyPending(sessionId, kind, at): boolean {
@@ -961,9 +1177,8 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
       else if (disposition === 'completed') turnEnds.completed += 1
       else if (disposition === 'user-stopped') turnEnds.userStopped += 1
       else turnEnds.neutral += 1
-      // completed arms unread; a user stop / neutral conclusion arms nothing.
-      // An unreadable tail is the conservative fallback: arm (never lose a real
-      // completion) with lastTurnEnd null as the degraded marker.
+      // completed arms unread; a user stop / neutral conclusion arms nothing. An
+      // unreadable tail arms with lastTurnEnd null as the degraded marker.
       const completed = disposition === 'completed' || input.unreadable
       const nextCompletedAt = completed
         ? input.unreadable && row.completedAtSource === 'reconstructed' && row.completedAt !== null
@@ -1022,9 +1237,8 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
       const next = mergeReadMark(readFloor, through)
       if (next === readFloor) return { changed: false, through: readFloor, updated: 0 }
       readFloor = next
-      // updated counts rows whose watermark is now inside the floor; the
-      // late-row guarantee itself comes from the source floor (R13), not from
-      // per-row marks.
+      // updated counts rows whose watermark is now inside the floor; the late-row
+      // guarantee comes from the source floor, not from per-row marks.
       let updated = 0
       for (const row of rows.values()) {
         if (!row.present) continue
@@ -1087,14 +1301,13 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
   }
 }
 
-// Observer
 
 export interface SessionStateObserverStatus {
   mode: SessionStateMode
   ready: boolean
   baselineAt: number | null
   lastEventAt: number | null
-  /** I6：下行帧计数与基线次数（丢帧/对账可见，不靠沉默推断）。 */
+  /** 下行帧计数与基线次数（丢帧/对账可见，不靠沉默推断）。 */
   eventsReceived: number
   baselines: number
   reconnects: number
@@ -1109,13 +1322,13 @@ export interface SessionStateObserverStatus {
 export interface SessionStateObserverDeps {
   logger: Logger
   store: SessionStateStore
-  /** Host origin when the local dsh may be observed (exposed + ready/degraded). */
+  /** Host origin when the local dsh may be observed (exposed + ready/degraded); null disables baselines. */
   getBaseUrl(): string | null
   /** Normalized plane connection state for the host projection. */
   getHostState(): SessionStateHostState
   /** Another downstream mux client is attached (the waterfall delegate gate). */
   otherMuxClientsAttached(): boolean
-  /** Test seam: replace the whole mux (the real one is createSessionMux). */
+  /** Replace the whole mux (the real one is createSessionMux). */
   mux?: SessionMux
   call?: Parameters<typeof createSessionMux>[0]['call']
   openSocket?: Parameters<typeof createSessionMux>[0]['openSocket']
@@ -1123,7 +1336,7 @@ export interface SessionStateObserverDeps {
   waterfallGraceMs?: number
   reconnectMinMs?: number
   reconnectMaxMs?: number
-  /** R21 event-silence window; the mux resubscribes + re-baselines. */
+  /** Event-silence window handed to the mux; the mux resubscribes and re-baselines. */
   silenceTimeoutMs?: number
   /** Periodic reconcile interval in sse mode (default 60s). */
   reconcileMs?: number
@@ -1172,10 +1385,9 @@ export function createSessionStateObserver(deps: SessionStateObserverDeps): Sess
   function refreshHost(): void {
     const state: SessionStateHostState = started ? deps.getHostState() : 'stopped'
     const serviceable = started && deps.getBaseUrl() !== null && (state === 'ready' || state === 'degraded')
-    // Latch BEFORE the kick, and never re-enter the kick: mux.kick may
-    // synchronously emit a status change that re-enters refreshHost (the mux
-    // publishes 'connecting' before its socket exists), which would otherwise
-    // open a second socket.
+    // Latch BEFORE the kick and never re-enter it: mux.kick may synchronously
+    // emit a status change that re-enters refreshHost (publishes 'connecting'
+    // before its socket exists), which would open a second socket.
     const wasServiceable = lastHostServiceable
     lastHostServiceable = serviceable
     store.setHost({ state, serviceable })
@@ -1189,17 +1401,33 @@ export function createSessionStateObserver(deps: SessionStateObserverDeps): Sess
     }
   }
 
+  // Ready-edge latch: EITHER transition of `ready` is a $events generation
+  // boundary (false -> true: first ready, reconnect, R21 resubscribe; true ->
+  // false: socket death, host end/error, handshake timeout). Emit-type frames
+  // have no replay, so the process-local activation learned from them is not
+  // trustworthy across either edge.
+  let lastReady = false
   function refreshMode(): void {
     if (!started) return
-    store.setMode(mux.status().ready ? 'sse' : 'poll')
+    const status = mux.status()
+    // ANY ready transition opens a NEW $events generation (first ready,
+    // reconnect, R21 resubscribe) — and equally closes one (socket death,
+    // host end/error, handshake timeout). Emit-type frames have no replay, so
+    // the process-local activation learned from them is not trustworthy on
+    // EITHER side of the edge: on false -> true the gap invalidates it, and on
+    // true -> false the poll window that follows serves stale armed/disarmed
+    // values from the dead generation (suppressing/prematurely flushing the
+    // renderer's armed semantics). Withdraw on every transition.
+    if (status.ready !== lastReady) store.clearGoalActivations(now())
+    lastReady = status.ready
+    store.setMode(status.ready ? 'sse' : 'poll')
   }
 
   function applyBaseline(items: readonly SessionListBaselineItem[], at: number, canClassify: boolean): void {
     const edges = store.applyBaseline(items, { at })
     refreshHost()
-    // Poll mode has no session/follow carrier: an unreadable tail there would
-    // fabricate unread on every user stop, so offline edges degrade to unknown
-    // instead of arming (R20 "读取失败降级 unknown").
+    // Poll mode has no follow carrier: an unreadable tail there would fabricate
+    // unread on every user stop, so offline edges degrade to unknown, not armed.
     if (!canClassify) {
       if (edges.length > 0) degraded = true
       return
@@ -1208,10 +1436,9 @@ export function createSessionStateObserver(deps: SessionStateObserverDeps): Sess
   }
 
   /**
-   * Poll-mode baseline: the mux reconciles only on a ready $events frame (its
-   * reconcile is ready-gated), so while the event stream is unavailable the
-   * observer owns the unary session/list cadence (R18/R20). Edges are NOT
-   * classified here (see applyBaseline).
+   * Poll-mode baseline: the mux reconciles only on a ready $events frame, so while
+   * the event stream is unavailable the observer owns the unary session/list cadence.
+   * Edges are NOT classified here (see applyBaseline).
    */
   async function pollBaseline(): Promise<void> {
     if (pollInFlight !== null) return pollInFlight
@@ -1243,8 +1470,7 @@ export function createSessionStateObserver(deps: SessionStateObserverDeps): Sess
     if (!started) return
     const muxStatus = mux.status()
     if (muxStatus.ready) {
-      // Periodic reconciliation is a correctness component, not an
-      // optimization: emit-type forwarded events have no retransmission.
+      // Periodic reconciliation is a correctness component: forwarded emit events have no retransmission.
       if (now() - (muxStatus.lastBaselineAt ?? 0) >= reconcileMs) mux.kick('tick')
       return
     }
@@ -1298,6 +1524,9 @@ export function createSessionStateObserver(deps: SessionStateObserverDeps): Sess
     onActivity: (sessionId, updatedAt, at) => { store.applyActivity(sessionId, updatedAt, at) },
     onAdded: (item, at) => { store.applyAdded(item, at) },
     onRemoved: (sessionId, at) => { store.applyRemoved(sessionId, at) },
+    onGoalActivation: (event) => {
+      store.applyGoalActivation(event, now())
+    },
     onPending: (sessionId, kind, eventId, at) => {
       pendingEvents.set(eventId, sessionId)
       store.applyPending(sessionId, kind, at)
@@ -1354,8 +1583,7 @@ export function createSessionStateObserver(deps: SessionStateObserverDeps): Sess
       if (!started) return
       mux.kick(reason)
       refreshMode()
-      // A host-ready kick may find the event stream still unavailable; start
-      // the degraded baseline immediately instead of waiting a full poll tick.
+      // A host-ready kick may find the event stream still unavailable; baseline once instead of waiting a tick.
       if (reason === 'host-ready' && !mux.status().ready) void pollBaseline()
     },
 
@@ -1387,8 +1615,6 @@ export function createSessionStateObserver(deps: SessionStateObserverDeps): Sess
     },
   }
 }
-
-// Routes: snapshot / SSE stream / read / read-all
 
 export interface ChamberSessionState {
   handle(req: ApiRequest, res: ApiResponse, pathname: string): Promise<boolean>
@@ -1426,8 +1652,7 @@ export function parseReadRequestBody(value: unknown): ReadRequest | null {
   return { clientId, sessionId, readThrough }
 }
 
-/** Parse one read-all body: through is REQUIRED (the server must never compute
- *  "now"; session-state-protocol.ts ReadAllRequest). */
+/** Parse a read-all body; `through` is REQUIRED — the server never computes "now". */
 export function parseReadAllRequestBody(value: unknown): ReadAllRequest | null {
   if (!isPlainRecord(value)) return null
   const clientId = value.clientId
@@ -1438,12 +1663,11 @@ export function parseReadAllRequestBody(value: unknown): ReadAllRequest | null {
 }
 
 /**
- * The /chamber/session-state surface. It mirrors the control-plane health-event
- * SSE discipline exactly (control-plane/src/api.ts:362-469): bounded per-stream
- * backpressure queue, 20s keepalive comments that never carry an id, close on
- * response teardown, a 32-stream cap and an idempotent closeAllStreams. The
- * SSE id is the store cursor: a satisfiable Last-Event-ID resumes from the
- * ring, anything else (expired, ahead, forged) falls back to a snapshot.
+ * The /chamber/session-state surface, mirroring the control-plane SSE discipline:
+ * a bounded per-stream backpressure queue, keepalive comments that never carry an
+ * id, close on response teardown, a 32-stream cap and an idempotent closeAllStreams.
+ * The SSE id is the store cursor: a satisfiable Last-Event-ID resumes from the ring,
+ * anything else (expired, ahead, forged) falls back to a snapshot.
  */
 export function createChamberSessionState(deps: ChamberSessionStateDeps): ChamberSessionState {
   const enabled = deps.enabled
@@ -1461,8 +1685,7 @@ export function createChamberSessionState(deps: ChamberSessionStateDeps): Chambe
     const base = deps.store.snapshotFor(clientId, mode(), deps.observer.hostInfo())
     const observer = deps.observer.status()
     const storeStatus = deps.store.status()
-    // 仪表 I6/I16：把只读自诊断放进描述符的加法字段——客户端与验收仪器
-    // 因此能"看见"丢帧、重连、follow 失败与分类构成，而不是从沉默里推断。
+    // 只读自诊断骑在描述符的加法字段上：丢帧/重连/follow 失败可见，不必从沉默推断。
     return {
       ...base,
       diagnostics: {
@@ -1547,7 +1770,7 @@ export function createChamberSessionState(deps: ChamberSessionStateDeps): Chambe
       }
       try {
         // Node accepted this frame even when write() returns false; pause only
-        // subsequent frames until drain (control-plane/api.ts:414-424).
+        // subsequent frames until drain.
         if (!res.write(frame)) {
           backpressured = true
           res.once('drain', flushPending)
@@ -1569,8 +1792,7 @@ export function createChamberSessionState(deps: ChamberSessionStateDeps): Chambe
       'id: ' + delta.cursor + '\nevent: delta\ndata: ' + JSON.stringify(delta) + '\n\n'
     const snapshotFrame = (body: SessionStateSnapshot): string =>
       'id: ' + body.cursor + '\nevent: snapshot\ndata: ' + JSON.stringify(body) + '\n\n'
-    // Subscribe BEFORE the snapshot/replay so no delta can fall between the
-    // two; buffered deltas newer than the delivered cursor flush afterwards.
+    // Subscribe BEFORE the snapshot/replay so no delta can fall between the two; newer buffered deltas flush after.
     release = deps.store.subscribe(delta => {
       if (live) {
         writeFrame(frameFor(delta))
@@ -1582,8 +1804,7 @@ export function createChamberSessionState(deps: ChamberSessionStateDeps): Chambe
       }
       buffered.push(delta)
     })
-    // Node 16+: the request close event fires as soon as the body is consumed,
-    // so detect real disconnects on the response leg (api.ts:441-448).
+    // Node 16+: the request close event fires once the body is consumed, so detect disconnects on the response leg.
     res.on('close', () => { if (!res.writableEnded) teardown() })
     const client = readClientId(req)
     if (!client.ok) {
@@ -1598,9 +1819,7 @@ export function createChamberSessionState(deps: ChamberSessionStateDeps): Chambe
         writeFrame(frameFor(delta))
         deliveredCursor = delta.cursor
       }
-      // In this branch replay !== null, so lastEventId is non-null (the replay
-      // call is skipped when the header is absent); the explicit guard keeps the
-      // narrowing local to this line.
+      // replay !== null implies lastEventId !== null; this guard only keeps the narrowing local.
       if (deliveredCursor < 0 && lastEventId !== null) deliveredCursor = lastEventId
     } else {
       const body = snapshot(client.clientId)
@@ -1621,8 +1840,7 @@ export function createChamberSessionState(deps: ChamberSessionStateDeps): Chambe
     live = true
     if (tornDown) return true
     keepalive = setInterval(() => {
-      // A keepalive has no state value and must not consume the bounded queue
-      // while real frames wait for drain (api.ts:464-468).
+      // Keepalives carry no state and must not consume the bounded queue while real frames wait for drain.
       if (!tornDown && !backpressured) writeFrame(': keepalive\n\n')
     }, keepaliveMs)
     keepalive.unref?.()
@@ -1643,27 +1861,20 @@ export function createChamberSessionState(deps: ChamberSessionStateDeps): Chambe
     }
   }
 
-  function json(res: ApiResponse, status: number, body: unknown): true {
-    res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' })
-    res.end(JSON.stringify(body))
-    return true
-  }
-
   function methodNotAllowed(res: ApiResponse): true {
-    return json(res, 405, { error: 'method_not_allowed', code: 'method_not_allowed' })
+    return jsonResponse(res, 405, { error: 'method_not_allowed', code: 'method_not_allowed' })
   }
 
   async function handle(req: ApiRequest, res: ApiResponse, pathname: string): Promise<boolean> {
     if (!enabled) {
-      // The desktop distinguishes 404 (gateway without this surface) from 503
-      // session_state_disabled (classifySessionStateProbe reads exactly this body).
-      return json(res, 503, { error: 'session_state_disabled', code: 'session_state_disabled' })
+      // The desktop distinguishes 404 (no surface) from 503 session_state_disabled (this exact body).
+      return jsonResponse(res, 503, { error: 'session_state_disabled', code: 'session_state_disabled' })
     }
     if (pathname === SESSION_STATE_PATH) {
       if (req.method !== 'GET' && req.method !== 'HEAD') return methodNotAllowed(res)
       const client = readClientId(req)
-      if (!client.ok) return json(res, 400, { error: 'bad_request', code: 'bad_request' })
-      return json(res, 200, snapshot(client.clientId))
+      if (!client.ok) return jsonResponse(res, 400, { error: 'bad_request', code: 'bad_request' })
+      return jsonResponse(res, 200, snapshot(client.clientId))
     }
     if (pathname === SESSION_STATE_STREAM_PATH) {
       if (req.method !== 'GET') return methodNotAllowed(res)
@@ -1673,20 +1884,19 @@ export function createChamberSessionState(deps: ChamberSessionStateDeps): Chambe
       if (req.method !== 'POST') return methodNotAllowed(res)
       const body = await readJsonBody(req)
       if (body.kind === 'oversize') {
-        const result = json(res, 413, { error: 'body_too_large', code: 'body_too_large' })
+        const result = jsonResponse(res, 413, { error: 'body_too_large', code: 'body_too_large' })
         req.destroy?.()
         return result
       }
       if (body.kind === 'aborted') return true
-      if (body.kind === 'invalid') return json(res, 400, { error: 'bad_request', code: 'bad_request' })
+      if (body.kind === 'invalid') return jsonResponse(res, 400, { error: 'bad_request', code: 'bad_request' })
       if (pathname === SESSION_STATE_READ_PATH) {
         const parsed = parseReadRequestBody(body.value)
-        if (parsed === null) return json(res, 400, { error: 'bad_request', code: 'bad_request' })
-        // Host-domain clamp (§10 clock skew): a client clock ahead of the host
-        // must not buy it a permanent read mark in the host's future.
+        if (parsed === null) return jsonResponse(res, 400, { error: 'bad_request', code: 'bad_request' })
+        // Clamp a client clock ahead of the host: it must not buy a permanent read mark in the host's future.
         const at = clock()
         const outcome = deps.store.markRead(parsed.clientId, parsed.sessionId, clampReadThrough(parsed.readThrough, at), at)
-        return json(res, 200, {
+        return jsonResponse(res, 200, {
           ok: true,
           clientId: parsed.clientId,
           sessionId: parsed.sessionId,
@@ -1696,10 +1906,10 @@ export function createChamberSessionState(deps: ChamberSessionStateDeps): Chambe
         })
       }
       const parsed = parseReadAllRequestBody(body.value)
-      if (parsed === null) return json(res, 400, { error: 'bad_request', code: 'bad_request' })
+      if (parsed === null) return jsonResponse(res, 400, { error: 'bad_request', code: 'bad_request' })
       const at = clock()
       const outcome = deps.store.markAllRead(parsed.clientId, clampReadThrough(parsed.through, at), at)
-      return json(res, 200, {
+      return jsonResponse(res, 200, {
         ok: true,
         clientId: parsed.clientId,
         through: outcome.through,
@@ -1708,7 +1918,7 @@ export function createChamberSessionState(deps: ChamberSessionStateDeps): Chambe
         updated: outcome.updated,
       })
     }
-    return json(res, 404, { error: 'not_found', code: 'not_found' })
+    return jsonResponse(res, 404, { error: 'not_found', code: 'not_found' })
   }
 
   return {
@@ -1718,8 +1928,6 @@ export function createChamberSessionState(deps: ChamberSessionStateDeps): Chambe
     },
   }
 }
-
-// Service assembly (index.ts wiring)
 
 export interface SessionStateServiceDeps {
   stateDir: string
@@ -1746,9 +1954,8 @@ export interface SessionStateService {
 }
 
 /**
- * Assemble store + observer + routes. start/stop follow the host readiness edge
- * (index.ts syncFeatures); shutdown is the gateway stop path and must run
- * BEFORE the gateway store closes (index.ts stop ordering).
+ * Assemble store + observer + routes. start/stop follow the host readiness edge;
+ * shutdown is the gateway stop path and must run BEFORE the gateway store closes.
  */
 export function createSessionStateService(deps: SessionStateServiceDeps): SessionStateService {
   const baseUrl = (): string | null => {

@@ -1,6 +1,5 @@
 /**
- * Gateway authentication / certificate-pin fields for the connection form
- * (design 17 §7); both render the same DOM anchors.
+ * Gateway authentication / certificate-pin fields for the connection form; both render the same DOM anchors.
  */
 import type { ReactNode } from 'react'
 import clsx from 'clsx'
@@ -9,9 +8,8 @@ import type { SettingsConnectionsKey } from '../locales.ts'
 import type { HostDraft } from './connection-form.ts'
 import css from './ConnectionsSection.module.css'
 
-/** 插件管理入口图标：primitives 无 cordis/插件候选，按 sidebar
- *  本地自绘先例自绘（16px，stroke 跟随 currentColor）。
- *  字形来源：lucide `plug`，ISC License，https://lucide.dev/license */
+/** 插件管理入口图标：primitives 无 cordis/插件候选，按 sidebar 本地自绘先例自绘（16px，stroke
+ *  跟随 currentColor）。字形来源：lucide `plug`，ISC License。 */
 export function PluginManageIcon16() {
   return (
     <svg
@@ -32,15 +30,12 @@ export function PluginManageIcon16() {
 }
 
 /**
- * The gateway authentication area (design 17 §7): BOTH write-only credentials
- * — the shared token (§7.2) and the login password (§7.1) — each optional and
- * independently committable. The hint copy distinguishes the three states:
- * NEW = "both empty sends the request without auth"; plain EDIT =
- * "leave empty keeps the stored credential"; TARGET-CHANGED edit = "the old
- * credential is cleared, re-enter" — the last also carries the top-of-form
- * warning and a required-credential validation. The explicit clear
- * button is the wipe path for plain edits. Rendered once for every gateway
- * transport (http direct and ssh tunnel).
+ * The gateway authentication area: BOTH write-only credentials — the shared token and the login
+ * password — each optional and independently committable. The hint copy distinguishes the three
+ * states: NEW = "both empty sends the request without auth"; plain EDIT = "leave empty keeps the
+ * stored credential"; TARGET-CHANGED edit = "the old credential is cleared, re-enter" (also
+ * carries the top-of-form warning and required-credential validation). The explicit clear button
+ * is the wipe path for plain edits. Rendered once for every gateway transport.
  */
 export function GatewayAuthFields({ draft, onChange, fieldErrors, editing, targetChanged, onClearToken, onClearPassword, tokenFieldId, passwordFieldId, t }: {
   draft: HostDraft
@@ -51,15 +46,13 @@ export function GatewayAuthFields({ draft, onChange, fieldErrors, editing, targe
   targetChanged: boolean
   onClearToken: () => void
   onClearPassword: () => void
-  /** Per-instance input ids (useId): the dialog can render in N-ctx panels in
-   *  the same document — static ids would alias across panels. */
+  /** Per-instance input ids (useId): the dialog can render in N-ctx panels in the same document — static ids would alias. */
   tokenFieldId: string
   passwordFieldId: string
   t: (key: SettingsConnectionsKey) => string
 }): ReactNode {
-  // Stored credentials never return to the renderer — clearing goes straight
-  // to the main process. The button only exists while EDITING a registry
-  // gateway row (a new row has nothing stored yet).
+  // Stored credentials never return to the renderer — clearing goes straight to the main process.
+  // The button only exists while EDITING a registry gateway row (a new row has nothing stored yet).
   const canClear = editing !== null && editing !== 'new' && editing.kind === 'gateway'
   const hint = editing === null || editing === 'new'
     ? t('gatewayCredentialsHintAdd')
@@ -68,9 +61,7 @@ export function GatewayAuthFields({ draft, onChange, fieldErrors, editing, targe
       : t('gatewayCredentialsHintEdit')
   return (
     <>
-      {/* HTML 规范：label 不得含 labeled control 之外的 labelable 元素——
-          「清除」按钮与输入框同处 label 会污染输入框的可访问名称。故外层用
-          div，字段名用 label htmlFor 关联。 */}
+      {/* HTML 规范：label 不得含 labeled control 之外的 labelable 元素——「清除」按钮与输入框同处 label 会污染输入框的可访问名称；故外层用 div，字段名用 label htmlFor 关联。 */}
       <div className={css.field}>
         <span className={css.fieldLabelRow}>
           <label className={css.fieldLabel} htmlFor={tokenFieldId}>{t('fieldGatewayToken')}</label>
@@ -132,9 +123,8 @@ export function GatewayAuthFields({ draft, onChange, fieldErrors, editing, targe
   )
 }
 
-/** Optional certificate pin. Unlike credentials this is non-secret
- * registry metadata, so edit prefill and ordinary input binding are required
- * to preserve it. The caller renders this only for gateway+http+https. */
+/** Optional certificate pin. Unlike credentials this is non-secret registry metadata, so edit
+ *  prefill and ordinary input binding are required to preserve it. Rendered only for gateway+http+https. */
 export function GatewaySpkiField({ draft, onChange, fieldError, fieldId, t }: {
   draft: HostDraft
   onChange: (spkiPin: string) => void

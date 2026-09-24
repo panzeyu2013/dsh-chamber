@@ -1,16 +1,14 @@
 /**
  * Gateway runtime write fence: every synchronous latch a runtime writer shares
- * with the rest of the manager — the activation quarantine window (design 18
- * §9.3), the writer single-flight flags, the managed profile-write lease
- * (design 21 §6.3 decision 6/17), the internal-spawn latch and the lifecycle
- * writer epoch (dispose / abort / tracked operations).
+ * with the manager — the activation quarantine window, the writer single-flight
+ * flags, the managed profile-write lease, the internal-spawn latch and the
+ * lifecycle writer epoch (dispose / abort / tracked operations).
  *
- * The manager holds exactly one instance and hands it to the other runtime
- * modules as an explicit handle: the counters and flags are single-sourced
- * here, and every derived predicate (activationInProgress, mutationInProgress,
+ * The manager holds one instance and hands it to the other runtime modules as an
+ * explicit handle: the counters and flags are single-sourced here, and every
+ * derived predicate (activationInProgress, mutationInProgress,
  * exposureQuarantined, the metadata projection's writer-busy gate) reads the
- * live value. The profile-write REFUSAL matrix stays in runtime-actions.ts —
- * beginProfileWrite() in the manager composes the two.
+ * live value. The profile-write REFUSAL matrix stays in runtime-actions.ts.
  */
 import type { Logger } from '@dsh-chamber/control-plane'
 import { sanitizeErrorText } from '@dsh-chamber/dsh-runtime'
@@ -20,35 +18,31 @@ export interface RuntimeWriteFenceDeps {
   /** Live in-memory startup verdict: exposureQuarantined() outlives the
    *  activation window on every startup block except snapshot-failed. */
   getStartupBlockReason(): string | null
-  /** Host composition hook: detach dsh-derived consumers as soon as an
-   *  activation quarantine opens, and explicitly resync them after the
-   *  verdict. A failure is logged, never rolled back (see below). */
+  /** Host composition hook: detach dsh-derived consumers as soon as a
+   *  quarantine opens, and explicitly resync after the verdict. A failure is
+   *  logged, never rolled back (see below). */
   onQuarantineChange?: ((active: boolean) => void) | undefined
 }
 
 export interface RuntimeWriteFence {
-  // --- lifecycle writer epoch (dispose / abort / tracked operations) ---
   markDisposed(): void
   isDisposed(): boolean
   abortLifecycle(): void
   readonly abortSignal: AbortSignal
   trackOperation<T>(operation: Promise<T>): Promise<T>
   drainOperations(): Promise<void>
-  /** Drain every tracked operation except `operation` to a fixed point (the
-   *  F7 rollback drains prior writers while its own latch refuses new ones). */
+  /** Drain every tracked operation except `operation` to a fixed point (a
+   *  rollback drains prior writers while its own latch refuses new ones). */
   drainOtherOperations(operation: Promise<unknown>): Promise<void>
   assertManagerReadable(): void
-  // --- activation quarantine window ---
   publishQuarantine(active: boolean): void
   beginActivation(): void
   endActivation(): void
   activationInProgress(): boolean
   exposureQuarantined(): boolean
-  // --- internal spawn latch ---
   beginInternalSpawn(): void
   endInternalSpawn(): void
   internalSpawnActive(): boolean
-  // --- writer single-flight flags ---
   setInstallInFlight(value: boolean): void
   isInstallInFlight(): boolean
   setRestartInFlight(value: boolean): void
@@ -60,18 +54,14 @@ export interface RuntimeWriteFence {
   setStartInFlight(value: boolean): void
   isStartInFlight(): boolean
   mutationInProgress(): boolean
-  /** Historical metadata-projection predicate: the same in-flight matrix
-   *  WITHOUT the start primitive (it postdates the recoverability gate). */
+  /** Metadata-projection predicate: the in-flight matrix WITHOUT start. */
   metadataWriterBusy(): boolean
-  // --- managed profile-write lease ---
   profileWriteInFlight(): boolean
-  /** Increment the lease counter. Refusals are the caller's gate
-   *  (runtime-actions profileWriteRefusal), so this can never fail. */
+  /** Increment the lease counter; refusals are the caller's gate, so this never fails. */
   acquireProfileWrite(): { release(): void }
   /** Resolve 'idle' the moment the counter hits zero, 'timeout' when
    *  timeoutMs elapses or the lifecycle abort fires. Never rejects. */
   waitForProfileWriteIdle(timeoutMs: number): Promise<'idle' | 'timeout'>
-  // --- known-good health window latch ---
   openHealthWindow(): void
   closeHealthWindow(): void
   healthWindowOpen(): boolean
@@ -80,23 +70,20 @@ export interface RuntimeWriteFence {
 export function createRuntimeWriteFence(deps: RuntimeWriteFenceDeps): RuntimeWriteFence {
   const { logger } = deps
 
-  // Lifecycle writer epoch. Every public mutation is tracked through its
-  // complete promise (including post-installer metadata writes), while the
-  // abort signal reaches candidate probes/install children. dispose() retains
-  // the self-acquired lease until both sets are demonstrably quiescent.
+  // Lifecycle writer epoch: every public mutation is tracked through its complete
+  // promise, while the abort signal reaches candidate probes/install children;
+  // dispose() keeps the lease until both sets are demonstrably quiescent.
   let disposed = false
   const lifecycleAbort = new AbortController()
   const activeOperations = new Set<Promise<unknown>>()
 
   let activationDepth = 0
-  /** Design 21 §6.3 managed profile-write lease counter (decision 6/17). A
-   * count (not a bool) lets the executor nest per-operation acquisitions
-   * inside a wider queue-drain lease; the barrier opens only at zero. Runtime
-   * writers refuse while it is non-zero and beginProfileWrite refuses while
-   * any runtime writer is live, so the two write families never interleave. */
+  /** Managed profile-write lease counter. A count (not a bool) lets the executor
+   * nest per-operation acquisitions inside a wider queue-drain lease; the barrier
+   * opens only at zero. Writers of the two families never interleave: runtime
+   * writers refuse while it is non-zero, beginProfileWrite while any is live. */
   let profileWriteCount = 0
-  /** Waiter set for the rollback-vs-lease drain (release() resolves waiters
-   * at zero; waiters are removed by their own completion). */
+  /** Waiters for the rollback-vs-lease drain; release() resolves them at zero. */
   const profileWriteIdleWaiters = new Set<() => void>()
 
   let internalSpawn = false
@@ -111,9 +98,8 @@ export function createRuntimeWriteFence(deps: RuntimeWriteFenceDeps): RuntimeWri
     try {
       deps.onQuarantineChange?.(active)
     } catch (error) {
-      // Runtime safety must not be rolled back because an optional derived
-      // feature consumer failed to resync. The gateway lifecycle logs and can
-      // retry attachment on the next authoritative local-state transition.
+      // Runtime safety must not be rolled back because an optional derived feature
+      // consumer failed to resync; the next local-state transition can retry.
       logger.warn(`gateway runtime activation resync failed: ${sanitizeErrorText(String(error))}`)
     }
   }
@@ -126,26 +112,23 @@ export function createRuntimeWriteFence(deps: RuntimeWriteFenceDeps): RuntimeWri
   function endActivation(): void {
     if (activationDepth <= 0) throw new Error('gateway runtime activation gate underflow')
     activationDepth -= 1
-    // Disposal is a permanent quarantine for this manager. A rollback probe
-    // may honestly finish after the lifecycle abort, but its endActivation()
-    // must never publish a false "open" edge while the final stop proof is
-    // still pending (or after an unsafe disposal retained ownership).
+    // Disposal is a permanent quarantine. A rollback probe may honestly finish
+    // after the lifecycle abort, but its endActivation() must never publish a
+    // false "open" edge while the final stop proof is pending.
     if (activationDepth === 0 && !disposed) publishQuarantine(false)
   }
 
   function activationInProgress(): boolean {
-    // `disposed` is intentionally sticky: once lifecycle quiescence starts,
-    // this manager can never expose or start the managed runtime again. This
-    // also keeps exposure closed when a rollback probe ends before dispose()'s
-    // final stopLocal() barrier.
+    // `disposed` is intentionally sticky: once lifecycle quiescence starts, this
+    // manager can never expose or start the managed runtime again, and exposure
+    // stays closed when a rollback probe ends before dispose()'s final barrier.
     return disposed || activationDepth > 0
   }
 
   function exposureQuarantined(): boolean {
-    // Snapshot failure happens before the pointer is touched; callers may
-    // safely restart the unchanged source after the activation window closes.
-    // Every other startup block is an unresolved recovery/authority verdict
-    // and must remain quarantined until a retry transaction clears it.
+    // Snapshot failure happens before the pointer is touched, so callers may
+    // safely restart the unchanged source after the activation window closes;
+    // every other startup block stays quarantined until a retry clears it.
     const startupBlockReason = deps.getStartupBlockReason()
     return activationInProgress()
       || (startupBlockReason !== null && startupBlockReason !== 'snapshot-failed')
@@ -168,9 +151,8 @@ export function createRuntimeWriteFence(deps: RuntimeWriteFenceDeps): RuntimeWri
   function releaseProfileWrite(): void {
     if (profileWriteCount <= 0) throw new Error('gateway runtime profile write lease underflow')
     profileWriteCount -= 1
-    // Release only decrements, so a release that lands after dispose() still
-    // opens the barrier and resolves waiters — dispose() additionally aborts
-    // any pending wait so shutdown never stalls behind an undrained lease.
+    // Release only decrements, so a release landing after dispose() still opens
+    // the barrier and resolves waiters; dispose() aborts any pending wait.
     if (profileWriteCount === 0 && profileWriteIdleWaiters.size > 0) {
       for (const wake of [...profileWriteIdleWaiters]) wake()
     }
@@ -215,9 +197,8 @@ export function createRuntimeWriteFence(deps: RuntimeWriteFenceDeps): RuntimeWri
   }
 
   async function drainOtherOperations(operation: Promise<unknown>): Promise<void> {
-    // A settling writer may enqueue another tracked tail. Drain all OTHER
-    // operations to a fixed point while the F7 latch refuses new mutations;
-    // exclude this operation itself to avoid a self-wait deadlock.
+    // A settling writer may enqueue another tracked tail: drain all OTHER
+    // operations to a fixed point (excluding this one, to avoid a self-wait).
     while (true) {
       const blockers = [...activeOperations].filter(candidate => candidate !== operation)
       if (blockers.length === 0) break

@@ -11,6 +11,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import {
   SESSION_FACTS_DISABLED_CODE,
+  __resetSessionFactsGoalWarningForTests,
   SESSION_FACTS_PROTOCOL_VERSION,
   SESSION_FACTS_READ_ALL_ROUTE,
   SESSION_FACTS_READ_ROUTE,
@@ -19,6 +20,8 @@ import {
   applySessionFactsDelta,
   classifySessionFactsProbe,
   createSessionFactsSource,
+  isFactsUsable,
+  parseSessionFactsGoalFact,
   parseSessionFactsReadState,
   parseSessionFactsRow,
   parseSessionFactsSnapshotValue,
@@ -26,6 +29,7 @@ import {
 } from '../../src/session-facts-source.ts'
 import { advanceReadMark } from '../../src/unread-store.ts'
 import { sourceSessionFactsMode } from '../../src/session-facts-mode.ts'
+import { factsChannelOf } from '../../src/completion-observation.ts'
 import { stripComments } from '../../../../scripts/dev/test-support/source-text.ts'
 
 const SNAPSHOT = {
@@ -304,6 +308,51 @@ test('snapshot parser: rows, host gate, read state and unknown fields are defens
   assert.equal(parseSessionFactsRow({ sessionId: 'x', updatedAt: -5 })?.updatedAt, 0)
   assert.equal(parseSessionFactsRow({}), null)
   assert.equal(parseSessionFactsReadState(null), null)
+})
+
+test('goal fact parser: revision must be a safe integer >= 1 and updatedAt a safe integer >= 0', () => {
+  __resetSessionFactsGoalWarningForTests()
+  const good = { goalId: 'g1', revision: 3, phase: 'active', updatedAt: 0, activation: 'armed' }
+  assert.deepEqual(parseSessionFactsGoalFact(good), good)
+  for (const revision of [-1, 0, 1.5, 2 ** 53, Number.NaN, Number.POSITIVE_INFINITY, '1', null, undefined]) {
+    assert.equal(
+      parseSessionFactsGoalFact({ goalId: 'g1', revision, phase: 'active' }),
+      undefined,
+      'revision=' + String(revision),
+    )
+  }
+  // The phase/id rules are unchanged.
+  assert.equal(parseSessionFactsGoalFact({ goalId: '', revision: 1, phase: 'active' }), undefined)
+  assert.equal(parseSessionFactsGoalFact({ goalId: 'g1', revision: 1, phase: 'running' }), undefined)
+  // A bad updatedAt drops only the watermark; the fact (with activation)
+  // survives because absence means "no usable watermark".
+  assert.deepEqual(
+    parseSessionFactsGoalFact({ goalId: 'g1', revision: 1, phase: 'active', updatedAt: -1 }),
+    { goalId: 'g1', revision: 1, phase: 'active' },
+  )
+  assert.equal(parseSessionFactsGoalFact({ goalId: 'g1', revision: 1, phase: 'active', updatedAt: 1.5 })?.updatedAt, undefined)
+  assert.equal(parseSessionFactsGoalFact({ goalId: 'g1', revision: 1, phase: 'active', updatedAt: 2 ** 53 })?.updatedAt, undefined)
+  // The row path collapses a bad fact to unknown (never to explicit null) and
+  // leaves the key ABSENT — writing an own `goal: undefined` would make the
+  // unknown indistinguishable from a present-but-broken field (Object.hasOwn).
+  const row = parseSessionFactsRow({ sessionId: 's', goal: { goalId: 'g1', revision: 0, phase: 'active' } })
+  assert.equal(row?.goal, undefined)
+  assert.equal(Object.hasOwn(row as object, 'goal'), false)
+  for (const bad of [
+    { goalId: '', revision: 1, phase: 'active' },
+    { goalId: 'g1', revision: 1, phase: 'running' },
+    'nope',
+    [],
+  ]) {
+    const badRow = parseSessionFactsRow({ sessionId: 's', goal: bad })
+    assert.equal(Object.hasOwn(badRow as object, 'goal'), false, 'bad shape must stay sparse: ' + JSON.stringify(bad))
+  }
+  const knownRow = parseSessionFactsRow({ sessionId: 's', goal: { goalId: 'g1', revision: 1, phase: 'active' } })
+  assert.equal(Object.hasOwn(knownRow as object, 'goal'), true, 'a known object fact is an own property')
+  assert.deepEqual(knownRow?.goal, { goalId: 'g1', revision: 1, phase: 'active' })
+  const none = parseSessionFactsRow({ sessionId: 's', goal: null })
+  assert.equal(none?.goal, null)
+  assert.equal(Object.hasOwn(none as object, 'goal'), true, 'an explicit no-goal is an own property too')
 })
 
 test('turn-end parser keeps only the known cause family (absent ≠ legacy)', () => {
@@ -769,11 +818,85 @@ test('snapshot factory negative: a malformed sync frame refetches instead of sil
 // 404 legacy 的成立面由上面的 F2 用例覆盖（verdict / degradation / mode null /
 // stale false / 有界重探），这里只留 unversioned 的发布契约。
 
-test('2xx without protocol (unversioned) publishes a degraded snapshot without faking a legacy row', async () => {
+test('404 after a good snapshot keeps the rows as presence evidence: unavailable legacy, never an authoritative empty set', async () => {
+  const good = {
+    protocol: 1,
+    features: [],
+    mode: 'poll',
+    cursor: 11,
+    host: { state: 'ready', serviceable: true },
+    sessions: [
+      { sessionId: 's1', running: false, updatedAt: 10, completedAt: 500, completedAtSource: 'observed' },
+      { sessionId: 's2', running: true, updatedAt: 11 },
+    ],
+    read: { clientId: 'client-a', marks: { s1: 400 }, floor: 7 },
+  }
+  let payload: unknown = good
+  let status = 200
   let probeGets = 0
   const fetchImpl = (async () => {
     probeGets += 1
-    return new Response(JSON.stringify({ oops: true }), {
+    return new Response(JSON.stringify(payload), {
+      status,
+      headers: { 'content-type': 'application/json' },
+    })
+  }) as unknown as typeof fetch
+  const source = createSessionFactsSource({
+    sourceId: 'gw-legacy-after-good',
+    fetchImpl,
+    pollIntervalMs: 10,
+    silenceMs: 0,
+    reconnectMs: 5,
+  })
+  source.update({ fingerprint: 'f1', connected: true })
+  await waitFor(() => source.getSnapshot()?.verdict === 'ok' && source.getSnapshot()?.rows.s1 !== undefined)
+  // 曾有历史（ok 已投递过行）后转 404：这不是「首探就没有协议」。
+  status = 404
+  payload = { error: 'not found' }
+  await waitFor(() => source.getSnapshot()?.verdict === 'legacy-gateway' && source.getSnapshot()?.stale === true)
+  const legacy = source.getSnapshot()
+  assert.equal(legacy?.degradation, 'legacy-gateway')
+  assert.equal(legacy?.serviceable, false, '404 后行只读作未知，必须显式标不可用')
+  assert.deepEqual(Object.keys(legacy?.rows ?? {}).sort(), ['s1', 's2'], '旧行是无壳来源的在场证据，404 不得清空')
+  assert.equal(legacy?.rows.s1?.updatedAt, 10, '行水位不得被推进/回退')
+  assert.equal(legacy?.rows.s2?.running, true)
+  assert.equal(legacy?.cursor, 11, '游标保留（旧行集仍被引用）；绝不被 404 降成 0')
+  assert.deepEqual(legacy?.read, good.read, 'read 权威状态同样保留')
+  assert.equal(sourceSessionFactsMode(legacy), 'legacy', '档位语义不变（legacy 可达，不是 degraded/无能力）')
+  // 「未可用」不得被消费侧读成「缺席」：observeSource 的遗忘门用的是原始行键，
+  // 因此可用位 false 但行集仍在 ⇒ 不触发遗忘结算、held pending 不被清。
+  const channel = factsChannelOf(legacy)
+  assert.equal(channel?.usable, false)
+  assert.deepEqual(Object.keys(channel?.rows ?? {}).sort(), ['s1', 's2'], '保留的行必须仍是 facts 通道的在场证据')
+  // 404 持续：第二次及以后不得把保留行丢成空权威集（曾有历史是持久事实）。
+  const beforeSecond404 = probeGets
+  await waitFor(() => probeGets > beforeSecond404, 1_000)
+  assert.deepEqual(Object.keys(source.getSnapshot()?.rows ?? {}).sort(), ['s1', 's2'], '持续 404 不得在第二轮清掉保留行')
+  assert.equal(source.getSnapshot()?.stale, true)
+  // 网关恢复协议载荷：新快照重新成为权威行集（404→ok 自愈）。
+  status = 200
+  payload = {
+    ...good,
+    cursor: 12,
+    sessions: [{ sessionId: 's1', running: false, updatedAt: 12 }],
+    read: { clientId: 'client-a', marks: { s1: 500 }, floor: 7 },
+  }
+  await waitFor(() => source.getSnapshot()?.verdict === 'ok', 1_000)
+  const healed = source.getSnapshot()
+  assert.equal(healed?.stale, false)
+  assert.equal(healed?.serviceable, true)
+  assert.equal(healed?.cursor, 12)
+  assert.equal(healed?.rows.s1?.updatedAt, 12)
+  assert.equal(healed?.rows.s2, undefined, '健康快照是权威行集（s2 已消失）')
+  source.stop()
+})
+
+test('unversioned on the very first probe answers "channel unavailable" (degraded), never legacy and never full', async () => {
+  let probeGets = 0
+  let payload: unknown = { oops: true }
+  const fetchImpl = (async () => {
+    probeGets += 1
+    return new Response(JSON.stringify(payload), {
       status: 200,
       headers: { 'content-type': 'application/json' },
     })
@@ -787,20 +910,98 @@ test('2xx without protocol (unversioned) publishes a degraded snapshot without f
   })
   source.update({ fingerprint: 'f1', connected: true })
   await waitFor(() => source.getSnapshot() !== undefined)
-  try {
-    const snapshot = source.getSnapshot()
-    assert.equal(snapshot?.verdict, 'degraded', '2xx 非协议载荷 ⇒ degraded 快照（不是 legacy，也不是静默 undefined）')
-    assert.equal(snapshot?.degradation, 'unversioned')
-    assert.deepEqual(snapshot?.rows, {}, '不得臆造 legacy 行')
-    assert.equal(sourceSessionFactsMode(snapshot), 'degraded')
-    // carrier 层按 reconnectMs 有界重探（反代回落是瞬态），等下一次显式 probe 不是唯一出路。
-    await waitFor(() => probeGets >= 2, 1_000)
-  } finally {
-    // 断言失败也必须停源：armed 的重探定时器会把失败变成文件级挂起。
-    source.stop()
+  const snapshot = source.getSnapshot()
+  assert.equal(snapshot?.verdict, 'degraded', '2xx 非协议载荷 = 通道不可用（unknown），不是"没有事实"')
+  assert.equal(snapshot?.degradation, 'unversioned')
+  assert.equal(snapshot?.stale, true)
+  assert.equal(snapshot?.serviceable, false)
+  assert.deepEqual(snapshot?.rows, {}, '没有既有行可保留 ⇒ 空行 + 降级标注（绝不是 legacy 或 full）')
+  assert.equal(sourceSessionFactsMode(snapshot), 'degraded')
+  // 与 404/5xx 同一有界重探纪律：坏载荷不是终态（没有轮询、也没有显式 probe 可依赖）。
+  const settled = probeGets
+  await waitFor(() => probeGets > settled, 1_000)
+  // 通道恢复 = 载荷恢复健康：有限时间内必须回到 ok（不需要 connected false→true
+  // 或指纹变化这类外部踢一脚）。
+  payload = {
+    protocol: 1,
+    features: [],
+    mode: 'poll',
+    cursor: 3,
+    host: { state: 'ready', serviceable: true },
+    sessions: [{ sessionId: 's1', running: true, updatedAt: 10 }],
+    read: { clientId: null, marks: {}, floor: 0 },
   }
+  await waitFor(() => source.getSnapshot()?.verdict === 'ok', 1_000)
+  const recovered = source.getSnapshot()
+  assert.equal(recovered?.degradation, null)
+  assert.equal(recovered?.stale, false)
+  assert.equal(recovered?.serviceable, true)
+  assert.equal(recovered?.rows.s1?.running, true)
+  assert.ok(probeGets >= 2, '恢复来自重探（不是轮询：pollIntervalMs=0）')
+  source.stop()
 })
 
+test('2xx without protocol (unversioned) after a good snapshot is channel-unavailable: rows stay as presence evidence', async () => {
+  let payload: unknown = {
+    protocol: 1,
+    features: [],
+    mode: 'poll',
+    cursor: 5,
+    host: { state: 'ready', serviceable: true },
+    sessions: [
+      { sessionId: 's1', running: true, updatedAt: 10 },
+      { sessionId: 's2', running: false, updatedAt: 11 },
+    ],
+  }
+  const fetchImpl = (async () => new Response(JSON.stringify(payload), {
+    status: 200,
+    headers: { 'content-type': 'application/json' },
+  })) as unknown as typeof fetch
+  const source = createSessionFactsSource({
+    sourceId: 'gw-unversioned-retain',
+    fetchImpl,
+    // 轮询刻意远大于重探：本用例只允许 scheduleProbe 驱动的自愈（若轮询兜底，
+    // 回退 scheduleProbe 也不会红）。
+    pollIntervalMs: 10_000,
+    silenceMs: 0,
+    reconnectMs: 5,
+  })
+  source.update({ fingerprint: 'f1', connected: true })
+  await waitFor(() => source.getSnapshot()?.verdict === 'ok' && source.getSnapshot()?.rows.s1 !== undefined)
+  // 协议载荷变成 2xx 非协议载荷：通道不可用（unknown），但行是**未知**不是**消失**。
+  payload = { oops: true }
+  // 借一次断连/重连触发这一份坏载荷（重连会清掉 10s 轮询）；此后不得再依赖
+  // connected 抖动或指纹变化，只剩 scheduleProbe 这条自愈通路。
+  source.update({ fingerprint: 'f1', connected: false })
+  source.update({ fingerprint: 'f1', connected: true })
+  await waitFor(() => source.getSnapshot()?.degradation === 'unversioned')
+  const snapshot = source.getSnapshot()
+  assert.equal(snapshot?.verdict, 'degraded')
+  assert.equal(snapshot?.stale, true)
+  assert.equal(snapshot?.serviceable, false)
+  assert.deepEqual(Object.keys(snapshot?.rows ?? {}).sort(), ['s1', 's2'], '既有行必须保留（无壳来源的在场证据）')
+  assert.equal(snapshot?.rows.s1?.running, true)
+  assert.equal(sourceSessionFactsMode(snapshot), 'degraded')
+  // 保留既有行这条出口同样排下一次探测：载荷恢复健康后必须自愈成 ok，
+  // 且既有行随新快照继续可用。
+  payload = {
+    protocol: 1,
+    features: [],
+    mode: 'poll',
+    cursor: 6,
+    host: { state: 'ready', serviceable: true },
+    sessions: [{ sessionId: 's1', running: false, updatedAt: 12 }],
+    read: { clientId: null, marks: {}, floor: 0 },
+  }
+  await waitFor(() => source.getSnapshot()?.verdict === 'ok', 1_000)
+  const healed = source.getSnapshot()
+  assert.equal(healed?.degradation, null)
+  assert.equal(healed?.stale, false)
+  assert.equal(healed?.cursor, 6)
+  assert.equal(healed?.rows.s1?.updatedAt, 12)
+  assert.equal(healed?.rows.s2, undefined, '健康快照是权威行集（s2 已消失）')
+  source.stop()
+})
 test('a protocol-2 payload still delivers a degraded forward-skew snapshot without starting delivery', async () => {
   let probeGets = 0
   const forward = {
@@ -839,6 +1040,18 @@ test('a protocol-2 payload still delivers a degraded forward-skew snapshot witho
   } finally {
     source.stop()
   }
+})
+
+test('isFactsUsable: verdict ok + serviceable false / non-ok / undefined are all unusable', () => {
+  const base = { verdict: 'ok', serviceable: true }
+  assert.equal(isFactsUsable(base as never), true)
+  assert.equal(
+    isFactsUsable({ ...base, serviceable: false } as never),
+    false,
+    'host 不可服务时行只读作未知，不得推进未读/通知',
+  )
+  assert.equal(isFactsUsable({ ...base, verdict: 'degraded' } as never), false)
+  assert.equal(isFactsUsable({ ...base, verdict: 'legacy-gateway' } as never), false)
 })
 
 

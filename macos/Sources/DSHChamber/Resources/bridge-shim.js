@@ -6,11 +6,11 @@
  *
  * It mirrors the window.dshChamber surface of packages/desktop/preload.cts
  * (design 05 §7.4): 4 info scalars (controlPlaneUrl/dshVersion/version/
- * platform) + 10 namespaces (desktopSsh/update/settings/systemResume/
- * rendererStall/openIn/deepLink/runtime/notifications/badge)（全表面实现）：
- * 每个方法的通道、payload 形状与返回映射逐字对齐 preload.cts（59 个
- * invoke-backed 方法 → 60 manifest invoke 通道（含 info）+ 9 个 on* 订阅 →
- * 9 manifest push 通道），文件内零 poc-unimplemented 兜底。语义校验（payload schema、来源
+ * platform) + 9 namespaces (desktopSsh/update/settings/systemResume/openIn/
+ * deepLink/runtime/notifications/badge)（全表面实现）：每个方法的通道、
+ * payload 形状与返回映射逐字对齐 preload.cts（59 个 invoke-backed 方法 →
+ * 61 manifest invoke 通道（含 info）+ 8 个 on* 订阅 → 8 manifest push
+ * 通道），文件内零 poc-unimplemented 兜底。语义校验（payload schema、来源
  * 指纹、ACK 队列……）在 sidecar 原处理器（design 25 §4.4.1）；本文件是
  * 传输 + preload 逐字面。
  *
@@ -77,7 +77,7 @@
  *     （不是任何宿主路径的缺省回退，见下），故 shim 不为其改形。
  *
  * 注意：Swift 的 dev 缺省侧车是 packages/desktop/sidecar-entry.ts
- * （60/60 语义、A 桥 ready 帧齐全）；sidecar-stub.ts 只注册 8 通道、
+ * （61/61 语义、A 桥 ready 帧齐全）；sidecar-stub.ts 只注册 8 通道、
  * 其余回 {error:'poc-unimplemented'}，不在缺省回退里
  * ——只有显式 DSH_CHAMBER_SIDECAR 指向它时才会被加载（届时须自行发 ready 帧）。
  *
@@ -444,11 +444,15 @@
   // Every method below invokes its real manifest channel with the exact
   // preload.cts payload shape; no poc-unimplemented stub remains.
 
-  /** desktopSsh — 全 31 invoke 方法接真实通道；载荷键逐字 preload（id 寻址
-   *  通道一律 {id}）。sidecar-stub.ts 读 {instanceId}（仅作集成测试 fixture，
-   *  见文件头注记），此处不迁就。 */
+  /** desktopSsh — 全 32 invoke 方法（含 instances_health）接真实通道；载荷键
+   *  逐字 preload（id 寻址通道一律 {id}）。instances_health 的应答
+   *  {degraded, reason?, rosterIncomplete?, droppedCount?} 原样透传给 renderer
+   *  （V5-A：行级丢弃的部分 roster 不得让 durable 剪枝门放行），shim 不加工。
+   *  sidecar-stub.ts 读 {instanceId}（仅作集成测试 fixture，见文件头注记），
+   *  此处不迁就。 */
   var desktopSsh = {
     instances_get: function () { return invoke('desktop_ssh_instances_get', null) },
+    instances_health: function () { return invoke('desktop_ssh_instances_health', null) },
     delete_connection: function (id) { return invoke('desktop_ssh_delete_connection', { id: id }) },
     save_connection: function (previousId, input, credentials) {
       return invoke('desktop_ssh_save_connection', { previousId: previousId, input: input, credentials: credentials })
@@ -547,7 +551,7 @@
     }
   }
 
-  /** deepLink — ready/ack 接真实通道（sidecar 60/60）。ack 载荷按 preload
+  /** deepLink — ready/ack 接真实通道（sidecar 61/61）。ack 载荷按 preload
    *  契约 {deliveryId, attempt}（core pendingRendererIntents.acknowledge
    *  同款）。onIntent 校验镜像 preload（malformed → loud drop）。 */
   var deepLink = {
@@ -561,7 +565,7 @@
   }
 
   /** runtime — 12 invoke 全接 dsh-chamber:runtime-* 真实通道（sidecar
-   *  60/60；payload 逐字 preload：install/cleanupVersion/clearFailure 带
+   *  61/61；payload 逐字 preload：install/cleanupVersion/clearFailure 带
    *  {version}、restorePreRollback 带 {stashName}、其余无载荷）。Swift flavor
    *  的 runtime 控制器腿（ctx）落地前 invoke 错误如实上抛。 */
   var runtime = {

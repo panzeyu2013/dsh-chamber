@@ -45,14 +45,10 @@ export interface PrivateFileReadOptions {
 }
 
 interface PrivateDirectoryOptions {
-  /** Existing directories historically converged to `mode`. Security
-   * boundaries may instead require the caller to provision the exact mode,
-   * or preserve an existing non-secret root without mutating it. Newly
-   * created directories converge to `mode` on POSIX. Windows exposes only a
-   * limited read-only attribute through chmod/stat, so directory modes there
-   * are left to inherited OS ACLs after identity/no-follow verification.
-   * `require` is legacy (fail-closed exact mode): no production caller uses
-   * it. */
+  /** Existing directories historically converged to `mode`; a security boundary may
+   *  instead require the caller to provision it. Newly created directories converge to
+   *  `mode` on POSIX; Windows exposes only a limited read-only attribute, so directory
+   *  modes there are left to inherited ACLs after identity/no-follow verification. */
   existingMode?: 'tighten' | 'require' | 'preserve'
 }
 
@@ -66,9 +62,8 @@ export function privateIdentityOf(stat: Stats): PrivateFileIdentity {
   return { dev: stat.dev, ino: stat.ino }
 }
 
-/** The platform O_NOFOLLOW flag, or 0 where the platform does not expose it
- *  (win32): every consumer uses this one probe so a missing guard is never
- *  silently compiled into a no-op. */
+/** The platform O_NOFOLLOW flag, or 0 where the platform does not expose it (win32):
+ *  every consumer uses this one probe so a missing guard is never silently a no-op. */
 export function noFollowOpenFlag(): number {
   return typeof constants.O_NOFOLLOW === 'number' ? constants.O_NOFOLLOW : 0
 }
@@ -82,9 +77,8 @@ function stableFileSnapshot(left: Stats, right: Stats): boolean {
     && left.ctimeMs === right.ctimeMs
 }
 
-/** POSIX owner fail-closed: a pre-existing leaf owned by a different uid is
- *  never adopted (root could otherwise chmod a foreign leaf into
- *  "compliance"); Windows exposes no comparable owner fact and is skipped. */
+/** POSIX owner fail-closed: a pre-existing leaf owned by a different uid is never adopted
+ *  (root could otherwise chmod a foreign leaf into "compliance"); Windows is skipped. */
 function assertPrivateLeafOwner(path: string, stat: Stats): void {
   if (process.platform === 'win32') return
   const effectiveUid = process.geteuid?.() ?? -1
@@ -102,10 +96,8 @@ export interface PrivateLeafFacts {
   uid: number
 }
 
-/** Validate one already-lstat'ed leaf: single-link regular file, optional
- *  expected identity, optional POSIX owner check. Single source of the
- *  "unsafe leaf" rule shared by audit-trail, host-logs, log-file and every
- *  private-file write path. */
+/** Validate one already-lstat'ed leaf: single-link regular file, optional expected
+ *  identity, optional POSIX owner check — the single source of the "unsafe leaf" rule. */
 export function assertPrivateLeafStatNoFollow(
   path: string,
   stat: Stats,
@@ -147,9 +139,8 @@ interface PinnedParent {
   fd: number | null
 }
 
-/** Pin a real final directory where the platform exposes a no-follow directory
- * descriptor. Windows lacks O_NOFOLLOW/O_DIRECTORY, so the same identity is
- * instead checked immediately before and after each namespace operation. */
+/** Pin a real final directory where the platform exposes a no-follow directory descriptor;
+ *  Windows instead checks the same identity before and after each namespace operation. */
 function pinParent(path: string): PinnedParent {
   const before = lstatSync(path)
   if (before.isSymbolicLink()) {
@@ -194,19 +185,15 @@ function closeParent(pin: PinnedParent): void {
 
 function syncParent(pin: PinnedParent): void {
   verifyParent(pin)
-  // Windows cannot open a directory through Node's portable fs flags. Rename
-  // durability there is delegated to CreateFile/MoveFile semantics; POSIX must
-  // fsync the exact pinned directory before success is reported.
+  // Windows cannot open a directory through portable fs flags (rename durability is left to
+  // CreateFile/MoveFile semantics); POSIX must fsync the exact pinned directory before success.
   if (pin.fd !== null) {
     try {
       fsyncSync(pin.fd)
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code
-      // Directory fsync is a filesystem property, not a Windows one: NFS /
-      // CIFS / FUSE mounts commonly reject an O_RDONLY directory fsync with
-      // EINVAL/ENOTSUP (e.g. Linux desktops with network/encrypted home
-      // directories). That is a durability fallback, never an identity
-      // failure — tolerate those two codes on every platform.
+      // NFS/CIFS/FUSE mounts commonly reject an O_RDONLY directory fsync (EINVAL/ENOTSUP):
+      // a durability fallback, never an identity failure — tolerate those codes everywhere.
       if (code !== 'EINVAL' && code !== 'ENOTSUP') throw error
     }
   }
@@ -225,9 +212,8 @@ function assertReplaceableLeaf(path: string): void {
   }
 }
 
-/** Create/verify a caller-owned final directory without following that final
- * component. Ancestor creation is intentionally allowed for ordinary symlinked
- * home layouts; callers invoke this once per directory they own. */
+/** Create/verify a caller-owned final directory without following that final component.
+ *  Ancestor creation is allowed for ordinary symlinked home layouts. */
 export function ensurePrivateDirectoryNoFollow(
   path: string,
   mode = 0o700,
@@ -248,11 +234,9 @@ export function ensurePrivateDirectoryNoFollow(
     const currentMode = existing.mode & 0o777
     const existingMode = options.existingMode ?? 'tighten'
     const posixModeSemantics = process.platform !== 'win32'
-    // Owner fail-closed: a pre-existing directory the current user does not
-    // own must never be adopted. Root could chmod a foreign loose directory
-    // into "compliance" and then read/execute its content as install input
-    // (design 18 runtime trees); a non-root fchmod would instead fail with a
-    // cryptic EPERM crash loop. Both directions fail loudly here.
+    // Owner fail-closed: a pre-existing directory the current user does not own must never
+    // be adopted — root could chmod a foreign loose directory into "compliance" and then read
+    // it as install input, while a non-root fchmod would fail with a cryptic EPERM crash loop.
     const effectiveUid = process.geteuid?.() ?? -1
     if (posixModeSemantics && !created && existingMode !== 'preserve' && existing.uid !== effectiveUid) {
       throw new Error(`private state directory is not owned by the current user (uid ${existing.uid}): ${path}`)
@@ -265,9 +249,8 @@ export function ensurePrivateDirectoryNoFollow(
     if (posixModeSemantics && currentMode !== mode && (created || existingMode === 'tighten')) {
       if (pin.fd !== null) {
         fchmodSync(pin.fd, mode)
-        // Mode re-verification: filesystems that silently ignore chmod
-        // (vfat/exfat/CIFS/FUSE) must not let a "tightened" directory stay
-        // loose while the gateway believes it is 0700.
+        // Filesystems that silently ignore chmod (vfat/exfat/CIFS/FUSE) must not leave a
+        // "tightened" directory loose while the gateway believes it is 0700.
         if (!created && (fstatSync(pin.fd).mode & 0o777) !== mode) {
           throw new Error(`cannot tighten private directory mode (filesystem ignored chmod): ${path}`)
         }
@@ -315,8 +298,7 @@ export function readPrivateFileNoFollow(path: string, options: PrivateFileReadOp
     if (options.tightenMode !== undefined && (opened.mode & 0o777) !== options.tightenMode) {
       fchmodSync(fd, options.tightenMode)
     }
-    // fchmod changes ctime, so capture the authoritative pre-read snapshot only
-    // after the optional one-time permission tightening.
+    // fchmod changes ctime, so capture the authoritative pre-read snapshot after the optional tightening.
     const beforeRead = fstatSync(fd)
     if (!beforeRead.isFile() || beforeRead.nlink !== 1 || beforeRead.size > maxBytes) {
       throw new Error(`private state leaf became unsafe before read: ${path}`)
@@ -342,10 +324,9 @@ export function readPrivateFileNoFollow(path: string, options: PrivateFileReadOp
   }
 }
 
-/** Exclusively create one final regular leaf and durably publish its initial
- * contents. The O_EXCL name becomes visible before the write is complete, so
- * readers of protocols using this primitive must treat a short-lived empty
- * or changing file as an in-progress competing create. */
+/** Exclusively create one final regular leaf and durably publish its initial contents. The
+ *  O_EXCL name becomes visible before the write completes, so readers of protocols using this
+ *  primitive must treat a short-lived empty or changing file as an in-progress competing create. */
 export function createPrivateFileExclusiveNoFollow(
   path: string,
   value: string | Buffer,
@@ -410,9 +391,8 @@ export interface PrivateAppendOpenOptions {
   verifyPathIdentity?: boolean
   /** POSIX mode enforced through the descriptor; null disables. Default 0o600. */
   tightenMode?: number | null
-  /** true = a mode that cannot be tightened is an error (audit trail);
-   *  false = best effort (the control-plane log keeps writing on filesystems
-   *  that ignore chmod). */
+  /** true = a mode that cannot be tightened is an error (audit trail); false = best effort
+   *  (the control-plane log keeps writing on filesystems that ignore chmod). */
   strictTighten?: boolean
   /** Extra open flags (log-file passes O_NONBLOCK so a FIFO leaf cannot block). */
   extraFlags?: number
@@ -427,9 +407,8 @@ export interface PrivateAppendHandle {
   created: boolean
 }
 
-/** Open an existing or append-or-created leaf under the shared no-follow +
- *  identity + mode-tightening discipline. Single source for audit-trail's
- *  per-append handle and log-file's persistent handle. */
+/** Open an existing or append-or-created leaf under the shared no-follow + identity +
+ *  mode-tightening discipline; single source for audit-trail's handle and log-file's. */
 export function openPrivateAppendNoFollow(path: string, options: PrivateAppendOpenOptions = {}): PrivateAppendHandle {
   const create = options.create ?? true
   const exclusive = options.exclusive ?? false
@@ -492,11 +471,9 @@ export function writePrivateFdAll(fd: number, value: string | Buffer): void {
  * never opens the destination or a predictable temp path for writing. */
 export function atomicWritePrivateFileNoFollow(path: string, value: string | Buffer, options: PrivateFileModeOptions = {}): void {
   const parent = pinParent(dirname(path))
-  // An omitted mode follows ordinary open(2) semantics: 0666 filtered by the
-  // process umask. Only an explicit owner policy (for example 0600 secrets)
-  // is allowed to override that result with fchmod. Unconditionally forcing
-  // 0666 here would undo the caller's umask and make generic JSON stores
-  // world-writable.
+  // An omitted mode follows ordinary open(2) semantics (0666 filtered by umask); only an
+  // explicit owner policy may fchmod over that. Forcing 0666 would undo the caller's umask and
+  // make generic JSON stores world-writable.
   const createMode = options.mode ?? 0o666
   const temp = join(dirname(path), `.${basename(path)}.tmp-${process.pid}-${randomBytes(8).toString('hex')}`)
   let tempIdentity: PrivateFileIdentity | null = null
@@ -557,12 +534,10 @@ export function atomicWritePrivateFileNoFollow(path: string, value: string | Buf
 
 /** Bounded ring rotation over `path` and its `.1 .. .<files-1>` archives.
  *
- *  Every existing slot is validated (single-link regular file, no symlink,
- *  optional POSIX owner check) BEFORE any namespace change, and re-validated
- *  immediately before it is touched, so a pre-planted symlink / multi-link /
- *  foreign file aborts the whole rotation as evidence instead of being
- *  deleted or renamed over. Missing slots are normal. Throws on any unsafe
- *  slot or failed rename; callers own the fail-soft policy. */
+ *  Every existing slot is validated (single-link regular file, no symlink, optional POSIX
+ *  owner check) BEFORE any namespace change, so a pre-planted symlink / multi-link / foreign
+ *  file aborts the whole rotation as evidence instead of being deleted or renamed over.
+ *  Missing slots are normal. Throws on any unsafe slot or failed rename. */
 export function rotatePrivateFileRingNoFollow(
   path: string,
   options: { files: number; requireOwner?: boolean },
@@ -612,8 +587,7 @@ export function removePrivateFileNoFollow(path: string, expected?: PrivateFileId
     try {
       leaf = lstatSync(path)
     } catch (error) {
-      // Idempotent absence made no namespace change, so a directory fsync
-      // here is both unnecessary and harmful on otherwise-readable media.
+      // Idempotent absence made no namespace change, so a directory fsync here is unnecessary.
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
       throw error
     }
