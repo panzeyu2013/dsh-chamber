@@ -139,7 +139,7 @@ export const PENDING_PACKAGES = {}
  * configuration, not by an import.
  */
 export const ENTRYLESS_PACKAGES = [
-  { name: 'desktop', spec: '@dsh-chamber/desktop', ignoreFiles: ['main.ts', 'preload.ts', 'sidecar-entry.ts', 'gateway-ipc-shared.ts'] },
+  { name: 'desktop', spec: '@dsh-chamber/desktop', ignoreFiles: ['main.ts', 'sidecar-entry.ts', 'gateway-ipc-shared.ts'] },
   { name: 'renderer', spec: '@dsh-chamber/renderer', ignoreFiles: ['chamber-entry.ts', 'main.tsx'] },
 ]
 
@@ -513,7 +513,7 @@ function main() {
   let entrylessDead = 0
   for (const pkg of ENTRYLESS_PACKAGES) {
     const dir = join(REPO_ROOT, 'packages', pkg.name)
-    const files = walkFiles(dir, (file) => /\.(?:ts|tsx|mts)$/u.test(file) && !/\.d\.(?:ts|mts|cts)$/u.test(file) && !pkg.ignoreFiles.includes(basename(file)), { extraIgnored: ['test', 'tests', 'test-fixtures', 'scripts', 'vendor', 'generated', 'lib'] })
+    const files = walkFiles(dir, (file) => /\.(?:ts|tsx|mts|cts)$/u.test(file) && !/\.d\.(?:ts|mts|cts)$/u.test(file) && !pkg.ignoreFiles.includes(basename(file)), { extraIgnored: ['test', 'tests', 'test-fixtures', 'scripts', 'vendor', 'generated', 'lib'] })
     const modules = []
     for (const file of files) {
       const text = readFileSync(file, 'utf8')
