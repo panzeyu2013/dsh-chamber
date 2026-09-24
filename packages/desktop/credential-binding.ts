@@ -23,7 +23,7 @@ export function gatewayCredentialBinding(spec: TransportInstanceSpec): string | 
 
 /** SSH password identity belongs only to the SSH endpoint. Target kind,
  * remote dsh port, service metadata and gateway protocol are irrelevant. */
-export function sshCredentialBindingForEndpoint(
+function sshCredentialBindingForEndpoint(
   host: string,
   user: string | null,
   sshPort: number | null,

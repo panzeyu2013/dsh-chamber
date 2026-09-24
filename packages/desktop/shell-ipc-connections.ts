@@ -11,7 +11,6 @@ import type { TransportInstanceInput, TransportInstanceSpec } from './transport-
 import { INSTANCE_ID_PATTERN, commitTransportCredentialUpdate } from './transport-manager.ts'
 import { IPC_CHANNELS } from './ipc-events.ts'
 import { MAX_SSH_PASSWORD_CHARS, getSshPassword, setSshPassword, sshPasswordSupported, sshProvider } from './ssh-provider.ts'
-import { canonicalizeTransportInstanceInput } from './transport-provider.ts'
 import { deleteConnectionTransaction, saveConnectionTransaction } from './connection-save.ts'
 import { describeError } from './describe-error.ts'
 import { admitClearOnly } from './clear-only-credentials.ts'
@@ -49,9 +48,8 @@ export function registerConnectionHandlers(ctx: ShellIpcCtx): void {
 
   const normalizeConnectionInput = (candidate: TransportInstanceInput): TransportInstanceSpec | null => {
     if (candidate === null || typeof candidate !== 'object') return null;
-    const canonical = canonicalizeTransportInstanceInput(candidate) as TransportInstanceInput;
-    if (canonical.transport === 'ssh') return sshProvider.validateSpec(canonical);
-    if (canonical.transport === 'http') return gatewayProvider.validateSpec(canonical);
+    if (candidate.transport === 'ssh') return sshProvider.validateSpec(candidate);
+    if (candidate.transport === 'http') return gatewayProvider.validateSpec(candidate);
     return null;
   };
 

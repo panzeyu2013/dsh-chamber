@@ -8,9 +8,8 @@
  * the server.close callback (a `finally` must always wait for the real close before a test ends).
  *
  * Bare helper file, not a test: the desktop test script enumerates suites
- * explicitly. Packaging note: package.json `files` excludes this helper
- * explicitly (`!loopback-http-test-server.ts`) — unlike `*.test.ts` there is
- * no built-in exclusion for bare test helpers, so keep that list in sync.
+ * explicitly. It lives under test/support/ (with the other desktop harnesses),
+ * so it is outside the package's shipped `files` surface by construction.
  */
 import type { Server } from 'node:net'
 

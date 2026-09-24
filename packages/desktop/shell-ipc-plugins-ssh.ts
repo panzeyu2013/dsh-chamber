@@ -289,19 +289,4 @@ export function registerSshPluginHandlers(ctx: ShellIpcCtx): void {
       }),
     );
   });
-
-  // gateway 插件 3 注册体（GATEWAY_PLUGIN_SYNC / GATEWAY_PLUGIN_APPLY /
-  // GATEWAY_PLUGIN_MATERIALIZE；全零 Electron，trustedIpc 围栏由装配侧注入
-  // registrar 包装）。编排纯模块直接 import（gateway-provider /
-  // gateway-sync-registry / gateway-ipc-shared / plugin-tarball）；注册参数
-  // 读取（getGatewaySyncRegistration 纯模块——main 装配侧的 ready 注册/离开
-  // ready/实例撤销路径（sm.onStatusChanged / publishRegistryTransition）经
-  // setGatewaySyncRegistration 写同一注册表，读写同表不分叉）与 ready 位复验
-  // 在注册体侧。手动 sync 的上传执行闭包经 ctx.syncGatewayChamberPluginsFor
-  // （main 装配侧定义——ready 自动 sync 与手动 re-entry 共用同一执行路径与
-  // 注册参数，语义不分叉）。确认对话框 = edges 版 confirmPluginAction
-  // 助手（单参 copy；无存活主窗 → 'native confirmation unavailable'；response
-  // ===1（'继续'）→ ok；否则 cancelled；异常 → loud）；无存活主窗预检 =
-  // edges.mainWindowAlive、插件源 pick = edges.pickPluginSource（宿主腿均在
-  // electron-edges.ts 实现）。
 }

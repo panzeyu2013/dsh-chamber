@@ -38,15 +38,13 @@
  * its base64 shape happens to pass the visible-ASCII/length gates.
  */
 
-import { rmSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { dirname } from 'node:path'
 import { INSTANCE_ID_PATTERN, MAX_INSTANCE_LABEL_CHARS } from './transport-provider.ts'
 import { gatewayCredentialBinding, isCredentialBinding } from './credential-binding.ts'
-// Shared corrupt/unbound preserve + legacy-`.tmp` sweep mechanics for the
-// owner-only store files (single source, used by the
-// providers/ssh-plugin-journal/chamber-settings).
-import { isPlainRecord, preserveInvalidCredentialFile, preserveUnboundCredentialFile, removeLegacyTmpResidue } from './store-file-hygiene.ts'
-import type { UnboundCredentialFileWording } from './store-file-hygiene.ts'
+// Shared corrupt preserve + legacy-`.tmp` sweep mechanics for the owner-only
+// store files (single source, used by the providers/ssh-plugin-journal/
+// chamber-settings).
+import { isPlainRecord, preserveInvalidCredentialFile, removeLegacyTmpResidue } from './store-file-hygiene.ts'
 import type {
   TransportInstanceSpec,
   TransportKind,
@@ -60,7 +58,6 @@ import { readOwnerOnlySecretFile } from './owner-only-secret-file.ts'
 import { parseSpecArg } from './gateway-ipc-shared.ts'
 import {
   atomicWritePrivateFileNoFollow,
-  attachSpkiPinVerifier,
   ensurePrivateDirectoryNoFollow,
   GATEWAY_PASSWORD_MAX_CHARS,
   GATEWAY_PASSWORD_MIN_CHARS,
@@ -69,9 +66,7 @@ import {
   GATEWAY_TOKEN_VISIBLE_ASCII_PATTERN,
   HOST_PACKAGE_SEED_FILES,
   PLUGIN_NAME_PATTERN,
-  SPKI_PIN_MISMATCH_CODE,
   SPKI_PIN_PATTERN,
-  spkiPinOfPeerCertificate,
   type HostPackageSeedFile,
 } from './control-plane-module.ts'
 import { GATEWAY_PLUGIN_VERSION_PATTERN, TARBALL_MAX_ARCHIVE_BYTES } from './plugin-tarball.ts'
@@ -109,10 +104,6 @@ const GATEWAY_CREDENTIAL_HEADER_PATTERN = GATEWAY_TOKEN_VISIBLE_ASCII_PATTERN
 // rejectUnauthorized:false + agent:false — a wrong-key peer sees zero HTTP
 // headers, credential bytes, or login body before this gate invokes
 // `dispatch`.
-
-// Re-exported for module consumers (gateway-session.ts login pinning, tests)
-// — the implementations above come from the shared single source.
-export { attachSpkiPinVerifier, spkiPinOfPeerCertificate, SPKI_PIN_MISMATCH_CODE, SPKI_PIN_PATTERN }
 
 /** Validate a token before any live transport is disconnected. */
 export function gatewayTokenValidationError(token: string | null): string | null {
@@ -217,22 +208,6 @@ let secretFile: string | null = null
 /** The active crypto adapter (defaults to plaintext). */
 let secretCrypto: SecretCryptoAdapter = plaintextSecretCrypto
 let secretSpecResolver: ((id: string) => TransportInstanceSpec | null) | null = null
-
-/** The legacy (schemaVersion 1) mirror file name. Non-empty values cannot be
- * auto-bound safely and therefore remain preserved + disabled. */
-const LEGACY_TOKEN_FILE_NAME = 'gateway-tokens.json'
-
-/** This store's unbound-preserve wording — the shared mechanics and message
- *  shapes live in store-file-hygiene.ts; only these sentences are
- *  store-specific. */
-const UNBOUND_SECRET_FILE_WORDING: UnboundCredentialFileWording = {
-  subject: 'legacy gateway secrets',
-  hasVerb: 'have',
-  disabledAuxiliary: 'are',
-  preservedAuxiliary: 'were',
-  bindingsNoun: 'target bindings',
-  reentryNoun: 'credentials',
-}
 
 type GatewaySecretFileStorage = 'safeStorage' | 'plaintext'
 
@@ -347,7 +322,7 @@ export function configureGatewaySecretStore(
   try {
     text = readOwnerOnlySecretFile(file)
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return migrateLegacyTokenFile(file)
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
     return `cannot read ${file}: ${String(error)}`
   }
   let parsed: unknown
@@ -357,23 +332,12 @@ export function configureGatewaySecretStore(
     return preserveInvalidCredentialFile(file, 'gateway secrets file')
   }
   if (!isPlainRecord(parsed)) return preserveInvalidCredentialFile(file, 'gateway secrets file')
-  if (parsed.schemaVersion === 1) {
-    if (!isPlainRecord(parsed.tokens)) return preserveInvalidCredentialFile(file, 'gateway secrets file')
-    const v1Tokens = loadCredentialTable(parsed.tokens, MIN_GATEWAY_TOKEN_CHARS, MAX_GATEWAY_TOKEN_CHARS, blob => blob)
-    if (v1Tokens === null) return preserveInvalidCredentialFile(file, 'gateway secrets file')
-    if (v1Tokens.size > 0) return preserveUnboundCredentialFile(file, UNBOUND_SECRET_FILE_WORDING)
-    persistGatewaySecrets(new Map(), new Map(), new Map(), new Map())
-    return null
-  }
-  if ((parsed.schemaVersion !== 2 && parsed.schemaVersion !== 3)
+  if (parsed.schemaVersion !== 3
     || !isPlainRecord(parsed.tokens) || !isPlainRecord(parsed.passwords)) {
     return preserveInvalidCredentialFile(file, 'gateway secrets file')
   }
   const storage = parsed.storage
-  const emptyLegacyV2 = parsed.schemaVersion === 2 && storage === undefined
-    && Object.keys(parsed.tokens).length === 0
-    && Object.keys(parsed.passwords).length === 0
-  if (storage !== 'safeStorage' && storage !== 'plaintext' && !emptyLegacyV2) {
+  if (storage !== 'safeStorage' && storage !== 'plaintext') {
     return preserveInvalidCredentialFile(file, 'gateway secrets file')
   }
   const effectiveStorage: GatewaySecretFileStorage = storage === 'safeStorage' ? 'safeStorage' : 'plaintext'
@@ -407,14 +371,6 @@ export function configureGatewaySecretStore(
     false,
   )
   if (loadedTokens === null || loadedPasswords === null) return preserveInvalidCredentialFile(file, 'gateway secrets file')
-  if (parsed.schemaVersion === 2) {
-    // No safe automatic adoption exists: this file may be the new-target
-    // credential half left by a crash before the registry commit. Empty is
-    // harmless; non-empty is preserved for explicit user recovery/re-entry.
-    if (loadedTokens.size > 0 || loadedPasswords.size > 0) return preserveUnboundCredentialFile(file, UNBOUND_SECRET_FILE_WORDING)
-    persistGatewaySecrets(new Map(), new Map(), new Map(), new Map())
-    return null
-  }
   if (!isPlainRecord(parsed.tokenBindings) || !isPlainRecord(parsed.passwordBindings)) {
     return preserveInvalidCredentialFile(file, 'gateway secrets file')
   }
@@ -455,52 +411,6 @@ export function configureGatewaySecretStore(
   for (const [id, value] of loadedPasswords) passwords.set(id, value)
   for (const [id, value] of loadedTokenBindings) tokenBindings.set(id, value)
   for (const [id, value] of loadedPasswordBindings) passwordBindings.set(id, value)
-  return null
-}
-
-/** Safely handle a schemaVersion 1 `gateway-tokens.json` beside the bound v3
- * file. Empty legacy state can converge automatically; non-empty values are
- * kept but disabled because no endpoint binding can be inferred safely. */
-function migrateLegacyTokenFile(file: string): string | null {
-  const legacyPath = join(dirname(file), LEGACY_TOKEN_FILE_NAME)
-  // If an embedding deliberately configures the legacy path itself, the v1
-  // in-place load above handles it; there is no sibling file to inspect.
-  if (legacyPath === file) return null
-  let text: string
-  try {
-    text = readOwnerOnlySecretFile(legacyPath)
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
-    return `cannot read legacy gateway token file ${legacyPath}: ${String(error)}; keeping it`
-  }
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(text)
-  } catch {
-    return `legacy gateway token file ${legacyPath} is corrupt; keeping it (no migration)`
-  }
-  if (!isPlainRecord(parsed) || parsed.schemaVersion !== 1 || !isPlainRecord(parsed.tokens)) {
-    return `legacy gateway token file ${legacyPath} is not a valid schemaVersion 1 token file; keeping it (no migration)`
-  }
-  // v1 values are always plaintext (schemaVersion 1 never encrypted) — the
-  // identity resolver applies, no blob detection.
-  const migrated = loadCredentialTable(parsed.tokens, MIN_GATEWAY_TOKEN_CHARS, MAX_GATEWAY_TOKEN_CHARS, blob => blob)
-  if (migrated === null) {
-    return `legacy gateway token file ${legacyPath} is not a valid schemaVersion 1 token file; keeping it (no migration)`
-  }
-  if (migrated.size > 0) {
-    return `legacy gateway token file ${legacyPath} has no target bindings and is disabled; re-enter credentials to migrate safely`
-  }
-  try {
-    persistGatewaySecrets(new Map(), new Map(), new Map(), new Map())
-  } catch (error) {
-    return `migrating the empty legacy gateway token file failed: ${String(error)}; the legacy file is kept at ${legacyPath}`
-  }
-  try {
-    rmSync(legacyPath)
-  } catch (error) {
-    return `migrated gateway tokens to ${file}, but could not remove the legacy file ${legacyPath}: ${String(error)}`
-  }
   return null
 }
 
@@ -1167,9 +1077,8 @@ export async function verifyGatewayPasswordSession(
  * over http is hard-blocked on the 0.1.2 line (its host answers 401 without
  * the spawn-time browser-auth launch token, which is unrecoverable remotely;
  * see the connection-form schema comment for the re-enable point). ssh is
- * the only dsh transport. `kind` stays the legacy registry key this provider
- * is registered under (main.ts `providers: { gateway: … }`; transport-keyed
- * `{ http: … }` also works). */
+ * the only dsh transport. `kind` is the target dimension of a spec; provider
+ * lookup is transport-keyed only (main.ts `providers: { http: … }`). */
 export const gatewayProvider: TransportProvider = {
   kind: 'gateway',
 

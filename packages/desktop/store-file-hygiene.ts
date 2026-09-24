@@ -5,12 +5,11 @@
  * §12), the chamber settings file (design 14 D7) and the ssh plugin journal
  * (design 21 §6.8). Pure Node — no Electron import. The mechanics are
  * shared here instead of duplicated inside each store module; each helper
- * documents its own contract (corrupt-aside preserve, unbound-legacy
- * preserve with unique `.unbound-<ts>-<pid>` recovery naming, and the legacy
+ * documents its own contract (corrupt-aside preserve and the legacy
  * FIXED-`.tmp` crash-residue sweep).
  */
 
-import { existsSync, renameSync, rmSync } from 'node:fs'
+import { renameSync, rmSync } from 'node:fs'
 
 /** Plain-object guard shared by the store validators. */
 export function isPlainRecord(value: unknown): value is Record<string, unknown> {
@@ -44,46 +43,6 @@ export function preserveInvalidCredentialFile(file: string, invalidFile: string)
   return result.ok
     ? `invalid ${invalidFile} preserved at ${result.path}`
     : `invalid ${invalidFile} at ${file}; preserve failed: ${result.error}`
-}
-
-/** Store-specific wording of an unbound-legacy preserve notice — the ONLY
- *  per-store variance (each mirror's legacy sentences differ in noun phrases
- *  and verb agreement; the unique-name loop, the rename and the message
- *  shapes are shared below). */
-export interface UnboundCredentialFileWording {
-  /** Sentence subject naming the legacy store, e.g. 'legacy SSH password
-   *  file' / 'legacy gateway secrets'. */
-  subject: string
-  /** Agreement verb, e.g. 'has' / 'have'. */
-  hasVerb: string
-  /** Disabled-state auxiliary, e.g. 'is' / 'are'. */
-  disabledAuxiliary: string
-  /** Preserved-state auxiliary, e.g. 'was' / 'were'. */
-  preservedAuxiliary: string
-  /** The binding kind the legacy values lack, e.g. 'endpoint bindings' /
-   *  'target bindings'. */
-  bindingsNoun: string
-  /** Re-entry hint noun, e.g. 'passwords' / 'credentials'. */
-  reentryNoun: string
-}
-
-/**
- * Preserve a non-empty LEGACY (unbound) store file under a unique
- * `.unbound-<ts>-<pid>` recovery name (a `-<n>` suffix disambiguates a
- * same-ms collision) and return the loud notice string; on rename failure
- * the store stays in place, disabled, with the failure reported. The store
- * passes its own `wording` only — everything else is shared.
- */
-export function preserveUnboundCredentialFile(file: string, wording: UnboundCredentialFileWording): string {
-  const stem = `${file}.unbound-${Date.now()}-${process.pid}`
-  let unboundPath = stem
-  for (let index = 1; existsSync(unboundPath); index += 1) unboundPath = `${stem}-${index}`
-  // The unique-name loop above only PICKS the path; the rename itself goes
-  // through the shared preserve primitive (one implementation for every store).
-  const result = preserveFileAside(file, unboundPath.slice(file.length))
-  return result.ok
-    ? `${wording.subject} ${wording.hasVerb} no ${wording.bindingsNoun} and ${wording.preservedAuxiliary} preserved at ${result.path}; re-enter ${wording.reentryNoun} to use them`
-    : `${wording.subject} at ${file} ${wording.hasVerb} no ${wording.bindingsNoun} and ${wording.disabledAuxiliary} disabled; preserve failed: ${result.error}`
 }
 
 /**

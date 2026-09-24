@@ -217,29 +217,29 @@ test('a corrupt gateway secrets file is preserved as *.corrupt and fails loudly,
     // Well-formed files with INVALID entries are equally corrupt — BOTH
     // tables are validated (design 17 §12 corrupt 检测按新 schema 扩展).
     const file2 = join(dir, 'gateway-secrets-2.json')
-    writeFileSync(file2, JSON.stringify({ schemaVersion: 2, storage: 'plaintext', tokens: { 't-bad': 'short' }, passwords: {} }))
+    writeFileSync(file2, JSON.stringify(boundPlaintextFile({ 't-bad': 'short' }, {})))
     assert.notEqual(configureGatewaySecretStore(file2), null)
     assert.ok(existsSync(`${file2}.corrupt`))
 
     const file3 = join(dir, 'gateway-secrets-3.json')
-    writeFileSync(file3, JSON.stringify({ schemaVersion: 2, storage: 'plaintext', tokens: {}, passwords: { 'p-bad': 'short' } }))
+    writeFileSync(file3, JSON.stringify(boundPlaintextFile({}, { 'p-bad': 'short' })))
     assert.notEqual(configureGatewaySecretStore(file3), null, 'an invalid password entry corrupts the whole file')
 
     const file4 = join(dir, 'gateway-secrets-4.json')
-    writeFileSync(file4, JSON.stringify({ schemaVersion: 2, storage: 'plaintext', tokens: { 't-bad': `${'a'.repeat(32)}中` }, passwords: {} }))
+    writeFileSync(file4, JSON.stringify(boundPlaintextFile({ 't-bad': `${'a'.repeat(32)}中` }, {})))
     assert.notEqual(configureGatewaySecretStore(file4), null, 'non-visible-ASCII tokens are refused on load')
 
     const file5 = join(dir, 'gateway-secrets-5.json')
-    writeFileSync(file5, JSON.stringify({ schemaVersion: 2, storage: 'plaintext', tokens: { 't-ok': 'a'.repeat(32) } }))
-    assert.notEqual(configureGatewaySecretStore(file5), null, 'a v2 file missing the passwords table is corrupt')
+    writeFileSync(file5, JSON.stringify({ schemaVersion: 3, storage: 'plaintext', tokens: {}, tokenBindings: {} }))
+    assert.notEqual(configureGatewaySecretStore(file5), null, 'a file missing the passwords table is corrupt')
 
     const file6 = join(dir, 'gateway-secrets-6.json')
-    writeFileSync(file6, JSON.stringify({ schemaVersion: 2, storage: 'plaintext', tokens: {}, passwords: { 'local': 'a'.repeat(12) } }))
+    writeFileSync(file6, JSON.stringify(boundPlaintextFile({}, { local: 'a'.repeat(12) })))
     assert.notEqual(configureGatewaySecretStore(file6), null, 'the reserved id "local" is refused in the passwords table too')
 
     const file7 = join(dir, 'gateway-secrets-7.json')
     writeFileSync(file7, JSON.stringify({ schemaVersion: 1, tokens: { 't-bad': 'short' } }))
-    assert.notEqual(configureGatewaySecretStore(file7), null, 'an invalid v1 file at the configured path is corrupt too')
+    assert.notEqual(configureGatewaySecretStore(file7), null, 'an old-schema file at the configured path is corrupt too')
   } finally {
     configureGatewaySecretStore(null)
     rmSync(dir, { recursive: true, force: true })
@@ -423,7 +423,7 @@ test('S22: a pure-alphanumeric safeStorage ciphertext is still never mistaken fo
   }
 })
 
-test('S22: a non-empty historical v2 file without a storage discriminator fails closed as ambiguous', () => {
+test('S22: an old-schema (v2) secrets file is preserved as corrupt, never guessed', () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-gw-secret-unlabeled-'))
   const file = join(dir, 'gateway-secrets.json')
   try {
@@ -501,48 +501,6 @@ test('gatewaySecretStorageMode reports the durable file honestly when a plaintex
   }
 })
 
-test('a non-empty legacy gateway-tokens.json is preserved and disabled until explicit credential re-entry', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'dsh-gw-migrate-'))
-  const dir2 = mkdtempSync(join(tmpdir(), 'dsh-gw-migrate-fail-'))
-  const dir3 = mkdtempSync(join(tmpdir(), 'dsh-gw-migrate-invalid-'))
-  const legacy = join(dir, 'gateway-tokens.json')
-  const file = join(dir, 'gateway-secrets.json')
-  const crypto = prefixedBase64Crypto()
-  try {
-    writeFileSync(legacy, JSON.stringify({ schemaVersion: 1, tokens: { 'm-token-1': TOKEN, 'm-token-2': `${TOKEN}2` } }))
-    const unboundNotice = configureGatewaySecretStore(file, crypto)
-    assert.match(unboundNotice ?? '', /no target bindings|re-enter/)
-    assert.equal(existsSync(file), false, 'no bound credential file is guessed from legacy values')
-    assert.equal(existsSync(legacy), true, 'legacy evidence is kept for explicit recovery')
-    assert.equal(getGatewayToken('m-token-1'), null, 'unbound legacy values are never live')
-
-    // Migration FAILURE: a corrupt legacy file is KEPT, reported loudly, and
-    // never blocks startup (empty store, no current credential file manufactured from garbage).
-    const legacy2 = join(dir2, 'gateway-tokens.json')
-    const file2 = join(dir2, 'gateway-secrets.json')
-    writeFileSync(legacy2, '{broken')
-    const notice = configureGatewaySecretStore(file2, crypto)
-    assert.notEqual(notice, null, 'a failed migration is loud')
-    assert.match(notice ?? '', /legacy gateway token file/)
-    assert.ok(existsSync(legacy2), 'the legacy file is kept for a later retry')
-    assert.equal(existsSync(file2), false, 'no current credential file is manufactured from garbage')
-    assert.equal(getGatewayToken('anything'), null, 'startup continues with an empty store')
-
-    // Migration REFUSAL: a well-formed legacy file with an invalid token
-    // entry is also kept (never migrated, never silently dropped).
-    const legacy3 = join(dir3, 'gateway-tokens.json')
-    writeFileSync(legacy3, JSON.stringify({ schemaVersion: 1, tokens: { 't-bad': 'short' } }))
-    const file3 = join(dir3, 'gateway-secrets.json')
-    assert.notEqual(configureGatewaySecretStore(file3, crypto), null)
-    assert.ok(existsSync(legacy3), 'an invalid legacy file is kept, not renamed or deleted')
-    assert.equal(existsSync(file3), false)
-  } finally {
-    configureGatewaySecretStore(null)
-    rmSync(dir, { recursive: true, force: true })
-    rmSync(dir2, { recursive: true, force: true })
-    rmSync(dir3, { recursive: true, force: true })
-  }
-})
 
 test('a legacy gateway-tokens.json beside a valid bound v3 file stays preserved and inert', () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-gw-migrate-retry-'))
@@ -567,8 +525,8 @@ test('a legacy gateway-tokens.json beside a valid bound v3 file stays preserved 
     assert.equal(getGatewayToken('r-token-2'), `${TOKEN}2`)
     assert.equal(existsSync(legacy), true)
 
-    // A CORRUPT current file does NOT trigger the legacy cleanup: the legacy tokens
-    // are the only recoverable copy and must survive until a clean load.
+    // Nothing ever touches the legacy sibling any more: a corrupt current file
+    // fails loudly and leaves the old copy in place (the only recoverable bytes).
     const legacy2 = join(dir2, 'gateway-tokens.json')
     const file2 = join(dir2, 'gateway-secrets.json')
     writeFileSync(legacy2, JSON.stringify({ schemaVersion: 1, tokens: { 'r-token-1': TOKEN } }))
@@ -593,14 +551,15 @@ test('the plaintext store writes bound schemaVersion 3 and moves a non-empty unb
     assert.equal(JSON.parse(readFileSync(file, 'utf8')).schemaVersion, 3, 'the store persists bound schemaVersion 3')
     assert.equal(configureGatewaySecretStore(file), null)
     assert.equal(getGatewayToken('a-token'), TOKEN)
-    // In-place v1 has no endpoint binding and cannot be adopted safely.
+    // An old-schema file cannot be adopted safely: it is preserved as
+    // *.corrupt, never loaded, never silently deleted.
     const v1file = join(dir, 'v1-in-place.json')
     writeFileSync(v1file, JSON.stringify({ schemaVersion: 1, tokens: { 'a-legacy': TOKEN } }))
     const notice = configureGatewaySecretStore(v1file)
-    assert.match(notice ?? '', /no target bindings|re-enter/)
+    assert.match(notice ?? '', /\.corrupt/)
     assert.equal(getGatewayToken('a-legacy'), null)
-    assert.equal(existsSync(v1file), false, 'the unbound file is moved aside under a unique recovery name')
-    assert.equal(readdirSync(dir).some(name => name.startsWith('v1-in-place.json.unbound-')), true)
+    assert.equal(existsSync(v1file), false, 'the old file is moved aside under the corrupt recovery name')
+    assert.equal(existsSync(`${v1file}.corrupt`), true)
   } finally {
     configureGatewaySecretStore(null)
     rmSync(dir, { recursive: true, force: true })

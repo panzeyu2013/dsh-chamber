@@ -125,6 +125,7 @@ import { bundledPnpmEntryCandidates, firstExistingPnpmEntry, pnpmBinDirCandidate
 import {
   INSTALL_ENV_WHITELIST,
   RuntimeInstallerSupervisor,
+  isPidAlive,
   isRuntimeInstallerWriterSafetyError,
 } from '@dsh-chamber/dsh-runtime'
 // Failure reasons this module returns to the main process are sanitized like
@@ -405,11 +406,8 @@ export const WEB_PROFILE = 'web'
 // cross-package tests import them from here; values can never drift from the
 // local profile seed (design 09 module A / design 13 §3).
 export const CLIENT_GRAPH_PACKAGE_NAME = HOST_GRAPH_INSERT.name
-export const CLIENT_GRAPH_INSERT_ID = HOST_GRAPH_INSERT.id
 export const GIT_WORKTREE_PACKAGE_NAME = HOST_GIT_WORKTREE_INSERT.name
-export const GIT_WORKTREE_INSERT_ID = HOST_GIT_WORKTREE_INSERT.id
 export const ARCHIVE_CLEANUP_PACKAGE_NAME = HOST_ARCHIVE_CLEANUP_INSERT.name
-export const ARCHIVE_CLEANUP_INSERT_ID = HOST_ARCHIVE_CLEANUP_INSERT.id
 /**
  * The module-A seed files (design 09 module A / design 13 §3): the
  * install-level flat fallback carries the SAME set the local seed
@@ -909,20 +907,6 @@ export function redactRemotePluginManifest(manifest: RemotePluginManifest): Remo
   return { ...manifest, dependencies }
 }
 
-/** Confirmation-dialog copy builder (pure, tested): pack-and-transfer. */
-export function describeMaterializeConfirmation(info: {
-  pluginName: string
-  pluginPath: string
-  targetLabel: string | null
-  targetId: string
-}): { message: string; detail: string } {
-  const target = info.targetLabel ?? info.targetId
-  return {
-    message: `将本地插件 ${info.pluginName} 发送到远程实例？`,
-    detail: `插件目录：${info.pluginPath}\n目标实例：${target}\n\n该插件的源码将被打包并上传到目标服务器。`,
-  }
-}
-
 /** Confirmation-dialog copy builder (pure, tested): local install. */
 export function describeLocalPluginAddConfirmation(spec: string): { message: string; detail: string } {
   return {
@@ -936,37 +920,6 @@ export function describeLocalPluginRemoveConfirmation(name: string): { message: 
   return {
     message: `从本地 dsh 移除插件 ${name}？`,
     detail: `将从本地 dsh profile 卸载 ${name}。`,
-  }
-}
-
-/** Confirmation-dialog copy builder (pure, tested): manual chamber host
- *  seed (persistent remote modification — packages + boot-layer merge). */
-export function describeSeedConfirmation(info: { targetLabel: string | null; targetId: string }): { message: string; detail: string } {
-  const target = info.targetLabel ?? info.targetId
-  return {
-    message: `向远程实例 ${target} 注入 chamber 宿主组件？`,
-    detail: `将在远端实例 ${target} 上写入 chamber host 包并挂载 boot 层（幂等，已是最新则跳过）。\n注入内容来自本机已构建的 chamber 包，重启远端 dsh 后生效。`,
-  }
-}
-
-/** Confirmation-dialog copy builder (pure, tested): remote plugin apply
- *  (registry add/remove on a remote instance — a persistent execution
- *  surface, same class as the local install). */
-export function describePluginApplyConfirmation(info: {
-  targetLabel: string | null
-  targetId: string
-  add: string[]
-  remove: string[]
-  restart: boolean
-}): { message: string; detail: string } {
-  const target = info.targetLabel ?? info.targetId
-  const parts: string[] = []
-  if (info.add.length > 0) parts.push(`安装 ${info.add.length} 个插件（${info.add.slice(0, 3).join('、')}${info.add.length > 3 ? ' 等' : ''}）`)
-  if (info.remove.length > 0) parts.push(`移除 ${info.remove.length} 个插件（${info.remove.slice(0, 3).join('、')}${info.remove.length > 3 ? ' 等' : ''}）`)
-  if (info.restart) parts.push('并重启远端 dsh 实例')
-  return {
-    message: `修改远程实例 ${target} 的插件？`,
-    detail: `将在远端实例 ${target} 上${parts.join('，')}。\n这些插件安装自 npm registry，将在远端以该实例用户身份执行。`,
   }
 }
 
@@ -1740,8 +1693,8 @@ export type CordisPatchUpdate =
  * block-sequence list (never overwriting user rows); fail-loud for a non-list.
  * The inserts are REQUIRED (the registry is the source of the rows, and a
  * silent client-graph fallback would seed a row the caller never asked for).
- * Pre-rename chamber rows (same loader id, `@dsh-chamber/dsh-host-*` name) are
- * folded to the canonical name first (foldLegacyHostInserts).
+ * A row whose loader id is already bound to a different package fails loud
+ * (the shared conflict classification).
  *
  * The insert render/parse/conflict classification is single-sourced in
  * control-plane (cordis-inserts.ts, consumed through control-plane-module.ts);
@@ -1763,51 +1716,6 @@ function cordisConflictMessage(conflict: InsertConflictKind, insert: ChamberHost
   return `cordis.patch.yml package '${insert.packageName}' is already mounted under a different loader id`
 }
 
-/**
- * Pre-rename chamber host package names keyed by loader id. The naming
- * unification maps `@dsh-chamber/dsh-host-<loader-id>` →
- * `@dsh-chamber/dsh-chamber-seed-<loader-id>` WITHOUT changing the loader ids,
- * so a remote profile seeded by an older desktop still carries the old name
- * bound to the same id. Without this fold the shared insertConflict
- * classification would reject every later seed as 'id-bound' forever — the
- * documented one-time transitional exception. The names are
- * frozen and must never be reused.
- */
-const LEGACY_HOST_PACKAGE_NAMES: Readonly<Record<string, string>> = {
-  [CLIENT_GRAPH_INSERT_ID]: '@dsh-chamber/dsh-host-client-graph',
-  [GIT_WORKTREE_INSERT_ID]: '@dsh-chamber/dsh-host-git-worktree',
-  [ARCHIVE_CLEANUP_INSERT_ID]: '@dsh-chamber/dsh-host-archive-cleanup',
-}
-
-/**
- * One-time fold of pre-rename chamber rows: a row whose
- * loader id is a desired insert's id but whose name is that id's legacy
- * chamber name is rewritten IN PLACE to the canonical name. Only the exact
- * rendered row bytes the chamber seed writer itself produces are folded — a
- * hand-written flow/inline variant keeps failing loud through the shared
- * conflict classification instead of being guessed at.
- *
- * @returns the (possibly) rewritten patch plus whether anything was folded;
- *   a fold is a write even when no row is missing.
- */
-export function foldLegacyHostInserts(
-  existing: string,
-  inserts: readonly ChamberHostInsert[],
-): { content: string; folded: boolean } {
-  let content = existing
-  let folded = false
-  for (const insert of inserts) {
-    const legacyName = LEGACY_HOST_PACKAGE_NAMES[insert.insertId]
-    if (legacyName === undefined) continue
-    const legacyRow = renderCordisInserts([{ id: insert.insertId, name: legacyName }])
-    if (!content.includes(legacyRow)) continue
-    const canonicalRow = renderCordisInserts([{ id: insert.insertId, name: insert.packageName }])
-    content = content.split(legacyRow).join(canonicalRow)
-    folded = true
-  }
-  return { content, folded }
-}
-
 export function computeCordisPatchUpdate(
   existing: string | null,
   inserts: readonly ChamberHostInsert[],
@@ -1815,16 +1723,13 @@ export function computeCordisPatchUpdate(
   if (existing === null) {
     return { error: 'remote profile is not initialized (cordis.patch.yml missing) — run a plugin add first' }
   }
-  // The one-time legacy fold runs BEFORE conflict classification: an old-name
-  // row under the same loader id is a rename to absorb, not an id-bound
-  // conflict to refuse.
-  const { content: foldedPatch, folded } = foldLegacyHostInserts(existing, inserts)
+  const foldedPatch = existing
   for (const insert of inserts) {
     const conflict = insertConflict(foldedPatch, toCordisInsert(insert))
     if (conflict !== null) return { error: cordisConflictMessage(conflict, insert) }
   }
   const missing = inserts.filter(insert => !hasExactInsert(foldedPatch, toCordisInsert(insert)))
-  if (missing.length === 0) return folded ? { write: true, content: foldedPatch } : { write: false }
+  if (missing.length === 0) return { write: false }
   const rendered = renderCordisInserts(missing.map(toCordisInsert))
   const significant = foldedPatch.split('\n')
     .map(line => line.trim())
@@ -2107,18 +2012,9 @@ function inspectProcess(pid: number): ProcessIdentity | null {
   }
 }
 
-function processAlive(pid: number, group: boolean): boolean {
-  try {
-    process.kill(group && process.platform !== 'win32' ? -pid : pid, 0)
-    return true
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === 'EPERM'
-  }
-}
-
 const defaultWriterReaperDeps: LocalPluginWriterReaperDeps = {
   inspectProcess,
-  processAlive,
+  processAlive: isPidAlive,
   signalGroup: (pid, signal) => {
     process.kill(process.platform === 'win32' ? pid : -pid, signal)
   },

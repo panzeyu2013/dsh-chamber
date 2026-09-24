@@ -19,6 +19,20 @@ import type { TransportInstanceInput, TransportInstanceSpec, TransportKind, Tran
 import { redactSshStderr, SERVER_ALIVE_COUNT_MAX, SERVER_ALIVE_INTERVAL_SECONDS, sshProvider } from '../../ssh-provider.ts'
 import { gatewayProvider } from '../../gateway-provider.ts'
 import { silentLogger, makeManager, tempDir, sleep, waitFor, EXEC_INSTANCE, fakeEnvProvider, type StatusWithNoUrlLeak } from '../support/transport-manager-harness.ts'
+/** kind+transport are required inputs since the pre-v2 normalization was
+ *  removed; the fixtures in this file are local-dsh-over-ssh. Raw manager
+ *  calls stay available for the strict-rejection test below. */
+function saveCompleted(
+  manager: ReturnType<typeof makeManager>['manager'],
+  inputs: TransportInstanceInput[],
+): TransportInstanceSpec[] {
+  return manager.saveInstances(inputs.map(input => ({
+    ...input,
+    ...(input.kind === undefined ? { kind: 'dsh' as TransportKind } : {}),
+    ...(input.transport === undefined ? { transport: 'ssh' as const } : {}),
+  })))
+}
+
 test('registry delta preserves removals while same-id edits are not tombstones', () => {
   assert.deepEqual(
     computeRemovedInstanceIds(
@@ -72,7 +86,7 @@ test('instances persistence round-trips through the atomic-write file', () => {
   const file = join(dir, 'ssh-instances.json')
   const manager = createTransportManager({ provider: sshProvider, instancesFile: file, logger: silentLogger })
   assert.deepEqual(manager.loadInstances(), [])
-  const saved = manager.saveInstances([
+  const saved = saveCompleted(manager, [
     { id: 's1', label: 'home', host: 'home.example.com', user: 'alice', remotePort: 2222 },
     { id: 's2', label: 'lab', host: '10.0.0.5', remotePort: 22 },
   ])
@@ -86,7 +100,7 @@ test('renderer lifecycle proofs are never accepted into or persisted with regist
   const dir = tempDir()
   const file = join(dir, 'ssh-instances.json')
   const manager = createTransportManager({ provider: sshProvider, instancesFile: file, logger: silentLogger })
-  const saved = manager.saveInstances([{
+  const saved = saveCompleted(manager, [{
     id: 'proofless',
     label: 'proofless',
     host: 'host.example.com',
@@ -99,7 +113,7 @@ test('renderer lifecycle proofs are never accepted into or persisted with regist
 test('saveInstances atomically replaces a valid set and disconnects removed instances', t => {
   const { manager } = makeManager(t)
   manager.connect('s1')
-  const saved = manager.saveInstances([{ id: 'other', label: 'x', host: 'h', remotePort: 22 }])
+  const saved = saveCompleted(manager, [{ id: 'other', label: 'x', host: 'h', remotePort: 22 }])
   assert.deepEqual(saved.map(entry => entry.id), ['other'])
   assert.equal(manager.status('s1'), null)
   assert.equal(manager.listInstances().length, 1)
@@ -110,10 +124,10 @@ test('unique-id registry churn retires every runtime state instead of retaining 
   const base = manager.listInstances()[0]
   for (let index = 0; index < 128; index += 1) {
     const id = `churn-${index}`
-    manager.saveInstances([base, { id, label: id, host: 'churn.example.com', remotePort: 22 }])
+    saveCompleted(manager, [base, { id, label: id, host: 'churn.example.com', remotePort: 22 }])
     assert.equal(manager.status(id)?.phase, 'idle', 'status materializes this incarnation')
     assert.equal(manager.appendLog(id, 'info', `old-${index}`), true)
-    manager.saveInstances([base])
+    saveCompleted(manager, [base])
     assert.equal(manager.clearLogs(id), false, `retired state ${id} is no longer retained`)
     assert.equal(manager.appendLog(id, 'info', 'zombie'), false)
   }
@@ -129,8 +143,8 @@ test('same-id re-add starts with fresh status, service projection, and logs', as
   assert.ok(manager.logs('s2').length > 0)
   assert.equal(manager.appendLog('s2', 'error', 'old incarnation marker'), true)
 
-  manager.saveInstances([base])
-  manager.saveInstances([base, { ...EXEC_INSTANCE, label: 're-added' }])
+  saveCompleted(manager, [base])
+  saveCompleted(manager, [base, { ...EXEC_INSTANCE, label: 're-added' }])
   assert.deepEqual(manager.status('s2'), {
     kind: 'dsh',
     transport: 'ssh',
@@ -154,9 +168,9 @@ test('a late exec from a removed incarnation cannot write into a same-id re-add'
   const oldExec = manager.exec('s2', 'start')
   const oldChild = spawnCalls[0].child
 
-  manager.saveInstances([base])
+  saveCompleted(manager, [base])
   assert.ok(oldChild.killCalls.includes('SIGTERM'), 'registry retirement terminates its exec child')
-  manager.saveInstances([base, { ...EXEC_INSTANCE, label: 'new incarnation' }])
+  saveCompleted(manager, [base, { ...EXEC_INSTANCE, label: 'new incarnation' }])
   assert.equal(manager.appendLog('s2', 'info', 'fresh incarnation marker'), false, 'state remains lazy before first projection')
   assert.equal(manager.status('s2')?.serviceActive, null)
   assert.equal(manager.appendLog('s2', 'info', 'fresh incarnation marker'), true)
@@ -176,7 +190,7 @@ test('a same-id transport edit retires old exec ownership and the next exec uses
   const oldExec = manager.exec('s2', 'start')
   const oldChild = spawnCalls[0].child
 
-  manager.saveInstances([
+  saveCompleted(manager, [
     base,
     { ...EXEC_INSTANCE, host: 'replacement.example.com', user: 'carol' },
   ])
@@ -206,7 +220,7 @@ test('saveInstances refuses an oversized registry before validation or persisten
     host: 'example.com',
     remotePort: 3080,
   }))
-  assert.throws(() => manager.saveInstances(entries), /instance limit/)
+  assert.throws(() => saveCompleted(manager, entries), /instance limit/)
   assert.equal(manager.listInstances().length, 0)
   assert.equal(existsSync(file), false)
 })
@@ -264,7 +278,7 @@ test('invalid sshPort rejects the whole save without creating a partial registry
   const dir = tempDir()
   const file = join(dir, 'ssh-instances.json')
   const manager = createTransportManager({ provider: sshProvider, instancesFile: file, logger: silentLogger })
-  assert.throws(() => manager.saveInstances([
+  assert.throws(() => saveCompleted(manager, [
     { id: 'zero', label: 'x', host: 'h', sshPort: 0, remotePort: 3080 },
     { id: 'huge', label: 'y', host: 'h2', sshPort: 70000, remotePort: 3080 },
     { id: 'float', label: 'z', host: 'h3', sshPort: 22.5, remotePort: 3080 },
@@ -277,11 +291,11 @@ test('an invalid edit cannot delete the existing host from memory or disk', () =
   const dir = tempDir()
   const file = join(dir, 'ssh-instances.json')
   const manager = createTransportManager({ provider: sshProvider, instancesFile: file, logger: silentLogger })
-  const before = manager.saveInstances([
+  const before = saveCompleted(manager, [
     { id: 's1', label: 'home', host: 'home.example.com', remotePort: 3080, remoteDshHome: '/srv/dsh' },
   ])
   assert.throws(
-    () => manager.saveInstances([{ ...before[0], remoteDshHome: '/srv/../tmp' }]),
+    () => saveCompleted(manager, [{ ...before[0], remoteDshHome: '/srv/../tmp' }]),
     /instance at index 0 is invalid/,
   )
   assert.deepEqual(manager.listInstances(), before)
@@ -291,7 +305,7 @@ test('option-injection guards: id/host/user must match the whitelists (no leadin
   const dir = tempDir()
   const file = join(dir, 'ssh-instances.json')
   const manager = createTransportManager({ provider: sshProvider, instancesFile: file, logger: silentLogger })
-  assert.throws(() => manager.saveInstances([
+  assert.throws(() => saveCompleted(manager, [
     { id: 'bad id', label: 'x', host: 'h', remotePort: 3080 },
     { id: 'slash/id', label: 'x', host: 'h', remotePort: 3080 },
     { id: 'local', label: 'x', host: 'h', remotePort: 3080 },
@@ -306,13 +320,13 @@ test('hyphenated hostnames and bracketed IPv6 literals are accepted', () => {
   const dir = tempDir()
   const file = join(dir, 'ssh-instances.json')
   const manager = createTransportManager({ provider: sshProvider, instancesFile: file, logger: silentLogger })
-  const saved = manager.saveInstances([
+  const saved = saveCompleted(manager, [
     { id: 'hy', label: 'x', host: 'my-server.example.com', remotePort: 3080 },
     { id: 'v6', label: 'y', host: '[::1]', remotePort: 3080 },
   ])
   assert.deepEqual(saved.map(entry => entry.id), ['hy', 'v6'])
   assert.throws(
-    () => manager.saveInstances([...saved, { id: 'v6zone', label: 'z', host: '[fe80::1%eth0]', remotePort: 3080 }]),
+    () => saveCompleted(manager, [...saved, { id: 'v6zone', label: 'z', host: '[fe80::1%eth0]', remotePort: 3080 }]),
     /instance at index 2 is invalid/,
   )
   assert.deepEqual(manager.listInstances(), saved)
@@ -388,7 +402,7 @@ test('editing tunnel parameters of a live instance restarts its tunnel', async t
   manager.connect('s4')
   await waitFor(() => manager.status('s4')!.phase === 'ready')
   assert.equal(spawnCalls.length, 1)
-  const saved = manager.saveInstances([
+  const saved = saveCompleted(manager, [
     { id: 's4', label: 'editable', host: 'second.example.com', user: 'amy', remotePort: 3080 },
   ])
   assert.equal(saved[0].host, 'second.example.com')
@@ -404,7 +418,7 @@ test('a delayed exit of the replaced tunnel never kills or degrades the fresh on
   setProbe(true)
   manager.connect('s5')
   await waitFor(() => manager.status('s5')!.phase === 'ready')
-  manager.saveInstances([
+  saveCompleted(manager, [
     { id: 's5', label: 'switch', host: 'new.example.com', remotePort: 3080 },
   ])
   await waitFor(() => spawnCalls.length === 2, 3000, 'restart spawn')
@@ -427,7 +441,7 @@ test('editing sshPort of a live instance restarts the tunnel with the new -p', a
   await waitFor(() => manager.status('s6')!.phase === 'ready')
   assert.equal(spawnCalls.length, 1)
   assert.ok(!spawnCalls[0].args.includes('-p'), 'first tunnel has no -p')
-  manager.saveInstances([
+  saveCompleted(manager, [
     { id: 's6', label: 'portswitch', host: 'box.example.com', user: 'carol', sshPort: 2202, remotePort: 3080 },
   ])
   await waitFor(() => spawnCalls.length === 2, 3000, 'restart spawn')
@@ -491,14 +505,14 @@ test('serviceName option-injection is refused atomically while a hyphenated unit
   const before = manager.listInstances()
   for (const serviceName of ['bad;rm -rf /', '--help', '-Hattacker.example', '-x', '--user']) {
     assert.throws(
-      () => manager.saveInstances([...before, { ...EXEC_INSTANCE, serviceName }]),
+      () => saveCompleted(manager, [...before, { ...EXEC_INSTANCE, serviceName }]),
       (error: unknown) => (error as { code?: string }).code === 'ssh_instances_invalid',
       serviceName,
     )
   }
   assert.deepEqual(manager.listInstances(), before)
   assert.equal(spawnCalls.length, 0, 'no ssh process may spawn for an unwhitelisted service name')
-  manager.saveInstances([...before, { ...EXEC_INSTANCE, id: 'good-unit', serviceName: 'my-unit.service' }])
+  saveCompleted(manager, [...before, { ...EXEC_INSTANCE, id: 'good-unit', serviceName: 'my-unit.service' }])
   const validPromise = manager.exec('good-unit', 'start')
   assert.deepEqual(spawnCalls[0].args, ['bob@lab.example.com', 'systemctl', 'start', '--', 'my-unit.service'])
   spawnCalls[0].child.simulateExit(0)
@@ -570,10 +584,10 @@ test('removing an instance cancels an in-flight exec and fences its late callbac
   const { manager, spawnCalls } = makeManager(t, { instances: [EXEC_INSTANCE] })
   const resultPromise = manager.exec('s2', 'start')
   const execChild = spawnCalls[0].child
-  manager.saveInstances([])
+  saveCompleted(manager, [])
   assert.ok(execChild.killCalls.includes('SIGTERM'), 'removal SIGTERMs the in-flight exec child')
   assert.equal(manager.status('s2'), null)
-  manager.saveInstances([EXEC_INSTANCE])
+  saveCompleted(manager, [EXEC_INSTANCE])
   assert.equal(manager.status('s2')!.serviceActive, null, 'a same-id reuse starts from a clean projection')
   assert.deepEqual(manager.logs('s2'), [], 'a same-id reuse starts from a clean ring buffer')
   execChild.simulateExit(0)
@@ -589,7 +603,7 @@ test('an idle-phase exec is torn down before a same-id retarget and cannot pollu
   const resultPromise = manager.exec('s2', 'start')
   assert.equal(manager.status('s2')!.phase, 'idle', 'exec does not imply a connected tunnel phase')
   const oldChild = spawnCalls[0].child
-  manager.saveInstances([{ ...EXEC_INSTANCE, host: 'replacement.example.com' }])
+  saveCompleted(manager, [{ ...EXEC_INSTANCE, host: 'replacement.example.com' }])
   assert.ok(oldChild.killCalls.includes('SIGTERM'), 'retarget tears down the old exec even while idle')
   assert.equal(spawnCalls.length, 1, 'an exec-only generation does not auto-connect the replacement')
   oldChild.simulateExit(0)
@@ -616,7 +630,7 @@ test('an exec callback between child stages is fenced by service identity even w
   }
   const { manager } = makeManager(t, { provider, instances: [EXEC_INSTANCE] })
   const resultPromise = manager.exec('s2', 'start')
-  manager.saveInstances([{ ...EXEC_INSTANCE, serviceName: 'replacement.service' }])
+  saveCompleted(manager, [{ ...EXEC_INSTANCE, serviceName: 'replacement.service' }])
   assert.equal(manager.status('s2')!.serviceActive, null)
   finishProvider()
   const result = await resultPromise
@@ -626,42 +640,33 @@ test('an exec callback between child stages is fenced by service identity even w
   assert.equal(manager.logs('s2').some(entry => entry.message === 'stale service callback'), false)
 })
 
-test('legacy v1 rows migrate to the v2 kind/transport contract on load and save', () => {
+test('pre-v2 rows are dropped loudly on load and refused on save (no in-place migration)', () => {
   const dir = tempDir()
   const file = join(dir, 'ssh-instances.json')
-  writeFileSync(file, JSON.stringify([
+  const rows = [
     { id: 'legacy-ssh', label: 'a', kind: 'ssh', host: 'a.example.com', user: 'u', remotePort: 22 },
     { id: 'legacy-gw', label: 'b', kind: 'gateway', host: 'gw.example.com', remotePort: 443 },
     { id: 'no-kind', label: 'c', host: 'c.example.com', remotePort: 3080 },
     { id: 'no-transport', label: 'd', kind: 'gateway', host: 'd.example.com', remotePort: 8443 },
-  ]))
+  ]
+  writeFileSync(file, JSON.stringify(rows))
   const manager = createTransportManager({
     provider: sshProvider, providers: { ssh: sshProvider, http: gatewayProvider }, instancesFile: file, logger: silentLogger,
   })
-  const byId = new Map(manager.loadInstances().map(instance => [instance.id, instance]))
-  assert.equal(byId.get('legacy-ssh')?.kind, 'dsh')
-  assert.equal(byId.get('legacy-ssh')?.transport, 'ssh')
-  assert.equal(byId.get('legacy-gw')?.kind, 'gateway')
-  assert.equal(byId.get('legacy-gw')?.transport, 'http')
-  assert.equal(byId.get('legacy-gw')?.insecureHttp, false)
-  assert.equal(byId.get('no-kind')?.kind, 'dsh')
-  assert.equal(byId.get('no-kind')?.transport, 'ssh')
-  assert.equal(byId.get('no-kind')?.serviceName, null, 'missing serviceName/sshPort migrate to null')
-  assert.equal(byId.get('no-kind')?.sshPort, null)
-  assert.equal(byId.get('no-transport')?.transport, 'http', 'transport missing is inferred from the kind')
-  const saved = manager.saveInstances([
-    { id: 'save-legacy', label: 'e', kind: 'ssh', host: 'e.example.com', remotePort: 22 },
-  ])
-  assert.equal(saved[0].kind, 'dsh')
-  assert.equal(saved[0].transport, 'ssh')
-  assert.equal(saved[0].insecureHttp, false)
+  assert.deepEqual(manager.loadInstances(), [], 'pre-v2 rows are dropped, never migrated')
+  assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')), rows, 'the rejected file is left untouched')
+  assert.throws(
+    () => manager.saveInstances([{ id: 'save-legacy', label: 'e', kind: 'ssh', host: 'e.example.com', remotePort: 22 } as unknown as TransportInstanceInput]),
+    /instance at index 0 is invalid/,
+    'a pre-v2 save input is refused at the boundary, never normalized',
+  )
 })
 
 test('duplicate ids reject the save atomically, load keeps the first row, and kind mismatch rejects', () => {
   const dir = tempDir()
   const file = join(dir, 'ssh-instances.json')
   const manager = createTransportManager({ provider: sshProvider, instancesFile: file, logger: silentLogger })
-  assert.throws(() => manager.saveInstances([
+  assert.throws(() => saveCompleted(manager, [
     { id: 's1', label: 'first', host: 'a.example.com', remotePort: 2222 },
     { id: 's1', label: 'second', host: 'b.example.com', remotePort: 2222 },
   ]), /duplicate instance id at index 1/)
@@ -669,8 +674,8 @@ test('duplicate ids reject the save atomically, load keeps the first row, and ki
   assert.equal(existsSync(file), false, 'a rejected save never writes the registry file')
 
   writeFileSync(file, JSON.stringify([
-    { id: 's1', label: 'first', host: 'a.example.com', remotePort: 2222 },
-    { id: 's1', label: 'second', host: 'b.example.com', remotePort: 2222 },
+    { id: 's1', label: 'first', kind: 'dsh', transport: 'ssh', host: 'a.example.com', remotePort: 2222 },
+    { id: 's1', label: 'second', kind: 'dsh', transport: 'ssh', host: 'b.example.com', remotePort: 2222 },
   ]))
   const reopened = createTransportManager({ provider: sshProvider, instancesFile: file, logger: silentLogger })
   const rows = reopened.loadInstances()
@@ -708,4 +713,15 @@ test("a replaced child's late spawn error never failTerminals the fresh transpor
   assert.notEqual(manager.status('s1')!.phase, 'error', 'a stale spawn error never failTerminals the fresh attempt')
   setProbe(true)
   await waitFor(() => manager.status('s1')!.phase === 'ready', 3000, 'fresh transport ready')
+})
+test('a pre-v2 input without kind/transport is refused, never defaulted', () => {
+  const dir = tempDir()
+  const manager = createTransportManager({ provider: sshProvider, instancesFile: join(dir, 'ssh-instances.json'), logger: silentLogger })
+  assert.throws(
+    () => manager.saveInstances([{ id: 'legacy', label: 'legacy', host: 'h.example.com', remotePort: 3080 }]),
+    /instance at index 0 is invalid/,
+    'the pre-v2 normalization is gone: callers must send the current kind+transport pair',
+  )
+  // The same fixture with the current pair is accepted.
+  assert.equal(saveCompleted(manager, [{ id: 'legacy', label: 'legacy', host: 'h.example.com', remotePort: 3080 }]).length, 1)
 })

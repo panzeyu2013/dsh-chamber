@@ -149,9 +149,6 @@ export function sshPluginJournalFile(dir: string): string {
   return join(dir, SSH_PLUGIN_JOURNAL_FILE)
 }
 
-function messageOf(error: unknown): string {
-  return describeError(error)
-}
 
 function isErrno(error: unknown, code: string): boolean {
   return (error as NodeJS.ErrnoException).code === code
@@ -181,13 +178,13 @@ function readJournalText(file: string): string | null {
 function asideCorrupt(file: string, cause: unknown, logger: SshJournalLogger): void {
   const aside = `${file}.corrupt-${Date.now()}`
   logger.warn(
-    `ssh-plugin-journal: journal is corrupt or unreadable (${messageOf(cause)}); ` +
+    `ssh-plugin-journal: journal is corrupt or unreadable (${describeError(cause)}); ` +
     `moving it aside to ${aside} and starting a fresh journal`,
   )
   try {
     renameSync(file, aside)
   } catch (error) {
-    logger.warn(`ssh-plugin-journal: could not move corrupt journal aside: ${messageOf(error)}`)
+    logger.warn(`ssh-plugin-journal: could not move corrupt journal aside: ${describeError(error)}`)
   }
 }
 
@@ -311,7 +308,7 @@ export function createSshPluginJournal(dir: string, logger: SshJournalLogger): S
           `(${op.id}, ok=${String(entry.ok)})`,
         )
       } catch (error) {
-        logger.warn(`ssh-plugin-journal: could not persist record: ${messageOf(error)}`)
+        logger.warn(`ssh-plugin-journal: could not persist record: ${describeError(error)}`)
       }
     },
 
@@ -343,7 +340,7 @@ export function createSshPluginJournal(dir: string, logger: SshJournalLogger): S
         persistOps(retained)
         logger.log(`ssh-plugin-journal: cleared ops for ${instanceId}`)
       } catch (error) {
-        logger.warn(`ssh-plugin-journal: could not clear ops for ${instanceId}: ${messageOf(error)}`)
+        logger.warn(`ssh-plugin-journal: could not clear ops for ${instanceId}: ${describeError(error)}`)
       }
     },
   }

@@ -102,9 +102,8 @@ import {
 import { CHILD_LINE_MAX_CHARS, createBoundedLineProcessor } from './bounded-lines.ts'
 import { getGatewayPassword, getGatewaySessionHooks, getGatewayToken, verifyGatewayPasswordSession, verifyGatewayRuntimeIdentity } from './gateway-provider.ts'
 import { INSTANCE_ID_PATTERN, MAX_INSTANCE_LABEL_CHARS, signalChild } from './transport-provider.ts'
-import { isCredentialBinding, sshCredentialBinding, sshCredentialBindingForEndpoint } from './credential-binding.ts'
-import { isPlainRecord, preserveInvalidCredentialFile, preserveUnboundCredentialFile, removeLegacyTmpResidue } from './store-file-hygiene.ts'
-import type { UnboundCredentialFileWording } from './store-file-hygiene.ts'
+import { isCredentialBinding, sshCredentialBinding } from './credential-binding.ts'
+import { isPlainRecord, preserveInvalidCredentialFile, removeLegacyTmpResidue } from './store-file-hygiene.ts'
 import type {
   SpawnedProcess,
   TransportExecAction,
@@ -655,10 +654,12 @@ export const CHAMBER_HOST_PROBE_MAX_BODY_BYTES = 1024 * 1024
  * line.
  *
  * v2 (design 17 §2): the ssh provider serves BOTH target kinds (`dsh` and
- * `gateway`) over the `ssh` transport only — a spec with transport 'http' is
- * refused (the direct-endpoint semantics belong to gateway-provider.ts), and
- * insecureHttp is meaningless for a loopback tunnel (normalized to false).
- * The provider's kind dimension (design 17 §2.1) is decided by the spec.
+ * `gateway`) over the `ssh` transport only — kind and transport are REQUIRED
+ * (pre-v2 records without them are dropped loudly at registry load, never
+ * defaulted), a spec with transport 'http' is refused (the direct-endpoint
+ * semantics belong to gateway-provider.ts), and insecureHttp is meaningless
+ * for a loopback tunnel (normalized to false). The provider's kind dimension
+ * (design 17 §2.1) is decided by the spec.
  */
 function isValidInstance(instance: unknown): instance is TransportInstanceSpec {
   if (instance === null || typeof instance !== 'object') return false
@@ -678,8 +679,8 @@ function isValidInstance(instance: unknown): instance is TransportInstanceSpec {
       || (typeof record.serviceName === 'string' && record.serviceName.length <= MAX_SERVICE_NAME_CHARS && SERVICE_NAME_PATTERN.test(record.serviceName)))
     && (record.remoteDshHome === undefined || record.remoteDshHome === null
       || (typeof record.remoteDshHome === 'string' && record.remoteDshHome.length <= MAX_REMOTE_DSH_HOME_CHARS && REMOTE_DSH_HOME_PATTERN.test(record.remoteDshHome)))
-    && (record.kind === undefined || record.kind === null || record.kind === 'dsh' || record.kind === 'gateway')
-    && (record.transport === undefined || record.transport === null || record.transport === 'ssh')
+    && (record.kind === 'dsh' || record.kind === 'gateway')
+    && record.transport === 'ssh'
     && (record.insecureHttp === undefined || record.insecureHttp === null || record.insecureHttp === false)
     // Pins apply only to direct gateway HTTPS. Silently dropping a pin
     // from an SSH spec would claim protection the tunnel provider never uses.
@@ -728,35 +729,6 @@ interface AskpassGeneration {
  */
 const askpassHelpers = new Map<string, Set<AskpassGeneration>>()
 
-const UNBOUND_PASSWORD_FILE_WORDING: UnboundCredentialFileWording = {
-  subject: 'legacy SSH password file',
-  hasVerb: 'has',
-  disabledAuxiliary: 'is',
-  preservedAuxiliary: 'was',
-  bindingsNoun: 'endpoint bindings',
-  reentryNoun: 'passwords',
-}
-
-function isLegacyOwnedPasswordEntry(id: string, value: unknown): value is {
-  password: string
-  host: string
-  user: string | null
-  sshPort: number | null
-} {
-  if (id === 'local' || !INSTANCE_ID_PATTERN.test(id) || !isPlainRecord(value)) return false
-  return typeof value.password === 'string'
-    && value.password !== ''
-    && value.password.length <= MAX_SSH_PASSWORD_CHARS
-    && typeof value.host === 'string'
-    && value.host.length <= MAX_SSH_HOST_CHARS
-    && SSH_HOST_PATTERN.test(value.host)
-    && (value.user === null
-      || (typeof value.user === 'string' && value.user.length <= MAX_SSH_USER_CHARS && SSH_USER_PATTERN.test(value.user)))
-    && (value.sshPort === null
-      || (typeof value.sshPort === 'number' && Number.isInteger(value.sshPort)
-        && value.sshPort >= 1 && value.sshPort <= 65535))
-}
-
 /**
  * Point the password store at its persistence file (main.ts, once at
  * startup) and load existing entries. Missing file = empty set (first run).
@@ -796,32 +768,6 @@ export function configureSshPasswordStore(
     return preserveInvalidCredentialFile(file, 'password file')
   }
   const entries = Object.entries(parsed.passwords)
-  if (parsed.schemaVersion === 1) {
-    // A non-empty legacy file cannot be bound safely from the current
-    // registry: it may be the new-target half of a pre-registry crash. Never
-    // guess. Preserve it for manual recovery and require explicit re-entry.
-    if (entries.length > 0) return preserveUnboundCredentialFile(file, UNBOUND_PASSWORD_FILE_WORDING)
-    persistSshPasswords(new Map(), new Map())
-    return null
-  }
-  // A schema-v2 shape with endpoint ownership embedded beside each password
-  // is already safely bound, so convert it in-place to the fingerprint
-  // representation instead of disabling credentials or guessing from the
-  // current registry.
-  if (parsed.schemaVersion === 2 && parsed.bindings === undefined
-    && entries.every(([id, value]) => isLegacyOwnedPasswordEntry(id, value))) {
-    const migratedPasswords = new Map<string, string>()
-    const migratedBindings = new Map<string, string>()
-    for (const [id, value] of entries) {
-      const owned = value as { password: string; host: string; user: string | null; sshPort: number | null }
-      migratedPasswords.set(id, owned.password)
-      migratedBindings.set(id, sshCredentialBindingForEndpoint(owned.host, owned.user, owned.sshPort))
-    }
-    persistSshPasswords(migratedPasswords, migratedBindings)
-    for (const [id, value] of migratedPasswords) passwords.set(id, value)
-    for (const [id, binding] of migratedBindings) passwordBindings.set(id, binding)
-    return null
-  }
   if (parsed.schemaVersion !== 2 || !isPlainRecord(parsed.bindings)) {
     return preserveInvalidCredentialFile(file, 'password file')
   }

@@ -472,8 +472,8 @@ test('main-owned connection transaction is wired through the preload without ret
     'save_connection result drifted across preload/renderer')
   assert.match(preload, /save_connection:\s*\(previousId, input, credentials\)\s*=>\s*ipcRenderer\.invoke\('desktop_ssh_save_connection',\s*\{ previousId, input, credentials \}\)/)
   assert.match(desktopMain, /(?:ipcMain|deps\.ipc)\.handle\(IPC_CHANNELS\.SSH_SAVE_CONNECTION/)
-  assert.match(desktopMain, /canonicalizeTransportInstanceInput\(candidate\)/,
-    'the save IPC must honor the typed optional transport through canonical v1/v2 normalization')
+  assert.match(desktopMain, /if \(candidate\.transport === 'ssh'\) return sshProvider\.validateSpec\(candidate\)/,
+    'the save IPC must validate the raw transport-keyed input — no pre-v2 normalization')
   assert.match(
     desktopMain,
     /gatewaySessionOriginForUrl\(\s*readyUrl,\s*spec\.spkiPin \?\? undefined,\s*spec\.transport === 'ssh' \? gatewayTunnelAuthority\(spec\.remotePort\) : undefined,\s*gatewaySessionScopeForConnection\(spec\),\s*\)/,

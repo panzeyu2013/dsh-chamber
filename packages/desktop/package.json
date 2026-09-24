@@ -50,7 +50,6 @@
       "*.cts",
       "*.mjs",
       "!*.test.ts",
-      "!loopback-http-test-server.ts",
       "!sidecar-stub.ts",
       "dist/**/*",
       "!dist/**/*.map",

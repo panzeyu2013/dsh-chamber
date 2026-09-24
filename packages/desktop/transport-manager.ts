@@ -62,7 +62,7 @@ import type { SpawnOptions } from 'node:child_process'
 import net from 'node:net'
 import { readFileSync } from 'node:fs'
 import { dirname } from 'node:path'
-import { canonicalizeTransportInstanceInput, MAX_TRANSPORT_INSTANCES, signalChild } from './transport-provider.ts'
+import { MAX_TRANSPORT_INSTANCES, signalChild } from './transport-provider.ts'
 import { liveTransportIdentityChanged } from './credential-identity.ts'
 // Failure text is single-sourced in describe-error.ts;
 // the export name stays for the state-machine call sites.
@@ -497,16 +497,12 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
   const doProbe = portProbe ?? defaultPortProbe
   /** Resolve the provider for a spec (design 17 §2.2): the TRANSPORT-keyed
    * override wins (`providers: { ssh, http }` — one provider per mechanism,
-   * serving both target kinds), then the legacy kind-keyed override
-   * (`providers: { gateway }`, v1 style), then the default provider. */
+   * serving both target kinds), else the default provider. The pre-v2
+   * kind-keyed override is gone. */
   const resolveProvider = (entry: { kind?: unknown; transport?: unknown }): TransportProvider => {
     if (typeof entry.transport === 'string') {
       const byTransport = providersByKey?.[entry.transport]
       if (byTransport !== undefined) return byTransport
-    }
-    if (typeof entry.kind === 'string') {
-      const byKind = providersByKey?.[entry.kind]
-      if (byKind !== undefined) return byKind
     }
     return provider
   }
@@ -1429,11 +1425,10 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
         dropped.push(entry)
         continue
       }
-      // v2 migration first (design 17 §2.2): legacy kinds normalize before
-      // provider selection so the provider is resolved by the v2 transport.
-      const migrated = canonicalizeTransportInstanceInput(entry)
-      const providerFor = resolveProvider(migrated as { kind?: unknown; transport?: unknown })
-      const normalized = providerFor.validateSpec(migrated)
+      // Provider selection is transport-keyed; the entry must already carry
+      // the current kind+transport pair (pre-v2 rows are dropped loudly).
+      const providerFor = resolveProvider(entry as { kind?: unknown; transport?: unknown })
+      const normalized = providerFor.validateSpec(entry)
       if (normalized === null) {
         dropped.push(entry)
         continue
@@ -1493,9 +1488,8 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
         error.code = 'ssh_instances_invalid'
         throw error
       }
-      const migrated = canonicalizeTransportInstanceInput(entry)
-      const providerFor = resolveProvider(migrated as { kind?: unknown; transport?: unknown })
-      const normalized = providerFor.validateSpec(migrated)
+      const providerFor = resolveProvider(entry as { kind?: unknown; transport?: unknown })
+      const normalized = providerFor.validateSpec(entry)
       if (normalized === null) {
         const error: CodedError = new Error(`instance at index ${index} is invalid for its transport provider`)
         error.code = 'ssh_instances_invalid'

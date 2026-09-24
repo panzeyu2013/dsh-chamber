@@ -24,11 +24,11 @@
  * ring-buffer logs, non-secret status projection, status pushes, child
  * supervision (SIGTERM → SIGKILL escalation) and the instance registry.
  *
- * v1 compat: the preload/renderer wire typings keep the `Ssh*` names (the
- * `SshInstanceInput`/`SshInstanceSpec`/`SshStatusProjection`/`SshLogEntry`
- * aliases below); desktop internals use the `Transport*` names. Legacy
- * persisted entries (`kind:'ssh'` conflating transport with target) migrate
- * in transport-manager.ts (design 17 §2.2/§9.1).
+ * v1 naming compat: the preload/renderer wire typings keep the `Ssh*` names
+ * (the `SshInstanceInput`/`SshInstanceSpec`/`SshStatusProjection`/`SshLogEntry`
+ * aliases below); desktop internals use the `Transport*` names. Persisted
+ * entries must already carry the current `kind`+`transport` pair — the pre-v2
+ * input normalization is gone (design 17 §2.2/§9.1).
  */
 
 /** Target kinds shipped (design 17 §2.1): the spec `kind` field — `dsh`
@@ -78,12 +78,13 @@ export type TransportPhase = 'idle' | 'connecting' | 'ready' | 'degraded' | 'err
 export interface TransportInstanceInput {
   id: string
   label: string
-  /** Target type (design 17 §2.1): 'dsh' | 'gateway'. Omitted / legacy
-   * entries migrate in transport-manager (kind:'ssh'→dsh, missing→dsh). */
+  /** Target type (design 17 §2.1): 'dsh' | 'gateway'. Required by every
+   * main-process validation path; pre-v2 entries without it are refused
+   * loudly (no defaulting). Optional only in the wire typing. */
   kind?: TransportKind
-  /** Transport method (design 17 §2.2): 'ssh' | 'http'. Optional input —
-   * inferred from kind when omitted (dsh→ssh, gateway→http); legacy kinds
-   * migrate. */
+  /** Transport method (design 17 §2.2): 'ssh' | 'http'. Required by every
+   * main-process validation path (provider lookup is transport-keyed); a
+   * missing value is refused, never inferred. */
   transport?: TransportMethod
   host: string
   user?: string | null
@@ -136,32 +137,6 @@ export interface TransportInstanceSpec {
    * pin (hex sha256 of the peer cert's SPKI DER); absent = no pinning. See
    * TransportInstanceInput.spkiPin. Non-secret, normalized optional. */
   spkiPin?: string
-}
-
-/** Canonical v1→v2 input normalization shared by registry load/save and the
- * authoritative save IPC. Keeping this in one place makes the optional
- * `transport` wire contract real instead of accepting it in TypeScript while
- * rejecting it at the main-process boundary. */
-export function canonicalizeTransportInstanceInput(entry: unknown): unknown {
-  if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) return entry
-  const record = entry as Record<string, unknown>
-  const kind = record.kind
-  const hasTransport = record.transport !== undefined && record.transport !== null
-  let nextKind: unknown = kind
-  let nextTransport: unknown = record.transport
-  if (kind === 'ssh') {
-    nextKind = 'dsh'
-    nextTransport = 'ssh'
-  } else if (kind === 'gateway') {
-    nextKind = 'gateway'
-    if (!hasTransport) nextTransport = 'http'
-  } else if (kind === undefined || kind === null) {
-    nextKind = 'dsh'
-    nextTransport = 'ssh'
-  } else if (!hasTransport) {
-    nextTransport = kind === 'dsh' ? 'ssh' : undefined
-  }
-  return { ...record, kind: nextKind, transport: nextTransport }
 }
 
 /** Best-effort signal to a spawned child (shared by the transport manager's

@@ -49,9 +49,10 @@ import { request as nodeHttpRequest } from 'node:http'
 import { request as nodeHttpsRequest } from 'node:https'
 import { createHash } from 'node:crypto'
 import type { ClientRequest, IncomingMessage } from 'node:http'
-import { attachSpkiPinVerifier, SPKI_PIN_MISMATCH_CODE } from './gateway-provider.ts'
 import type { TransportInstanceSpec } from './transport-provider.ts'
 import {
+  attachSpkiPinVerifier,
+  SPKI_PIN_MISMATCH_CODE,
   GATEWAY_SESSION_COOKIE_NAME as PROTO_SESSION_COOKIE_NAME,
   GATEWAY_SESSION_COOKIE_VALUE_MAX_CHARS as PROTO_SESSION_COOKIE_VALUE_MAX_CHARS,
   GATEWAY_SESSION_TTL_SECONDS as PROTO_SESSION_TTL_SECONDS,
