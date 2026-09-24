@@ -527,7 +527,7 @@ pnpm run test:swift     # UpdateStallWatchdogTests + UpdateAvailabilityTests
 - [ ] 取件来源 = tag `backup/v016-alpha1-pre-reset`（旧分支只读；按路径取、**不 cherry-pick**）。
 - [ ] `git switch main && git pull`；确认 `git show main:harness.commit` 仍是 `fb2c4b9e`（若 main 已动 pin，先按 §1 重新照面）。
 - [ ] `git switch -c upgrade/dsh-0.1.7`；本计划已在当前分支（重置时保留），可直接搬入新分支。
-- [ ] 记录基线：`node scripts/gates/run-checks.mjs static`、`typecheck`、`tests` 三条结果（作为「升级前绿」的证据）。
+- [ ] 先 `pnpm install`（重置后 `node_modules` 仍是旧树；否则 `bundle:dsh` 会因 `@dsh-chamber/dsh-runtime/dist` 缺失而报错），再记录基线：`node scripts/gates/run-checks.mjs static`（需先 `pnpm run build:artifacts`）、`typecheck`、`tests` 三条结果（作为「升级前绿」的证据）。
 
 ### 13.1 pin 双线（§4）
 
