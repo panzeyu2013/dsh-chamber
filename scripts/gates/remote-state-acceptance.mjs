@@ -7,12 +7,14 @@
  * vendor 未物化）。把「真失败」与「环境阻塞」混为一谈，就会得到「本地绿」的
  * 假结论。
  *
- * 本脚本因此做三件事：
+ * 本脚本因此做四件事：
  *   1. 按组跑**可跑的**测试文件（默认用 bundled node，可 --node 覆盖）；
  *   2. 逐文件分类：pass / fail / blocked（ERR_MODULE_NOT_FOUND、vendor 树未物化、
  *      或显式 skip 环境变量），blocked 一律列名并标注「CI 权威」；
  *   3. 打印验收表 + 写 JSON 报告；**只要存在真失败即 exit 1**，blocked 不判绿也
- *      不判红（单独一栏，绝不静默跳过）。
+ *      不判红（单独一栏，绝不静默跳过）；
+ *   4. 显式清单条目必须存在——文件被删/改名时**不得被 existsSync 静默吞成
+ *      「少跑一项」的假绿；发现死引用逐条打印并 exit 2（清单腐化 = 仪表腐化）。
  *
  * 用法：
  *   node scripts/gates/remote-state-acceptance.mjs [--json] [--out <path>]
@@ -48,6 +50,27 @@ function listFiles(dir, match = /.test.(ts|mjs)$/) {
   return readdirSync(abs).filter(f => match.test(f)).map(f => join(dir, f))
 }
 
+/**
+ * 显式清单条目必须存在。历史缺陷：`.filter(f => existsSync(...))` 把「文件已删」
+ * 静默吞成「少跑一项」的假绿——notification-dedupe.test.ts 被删后 renderer-state
+ * 组照常 exit 0。listFiles() 的条目由 readdirSync 产出（存在性由构造保证），
+ * 只有字面量需要校验：缺失项记入 DEAD_ENTRIES，main() 在跑任何用例前 loud 失败。
+ * @type {{ group: string, file: string }[]}
+ */
+const DEAD_ENTRIES = []
+
+/** 纯判据（--self-test 负控也用它）：返回不存在的登记文件。 */
+function deadEntries(files) {
+  return files.filter(file => !existsSync(join(ROOT, file)))
+}
+
+/** 显式条目的 loud 校验入口：返回存活项，缺失项留证到 DEAD_ENTRIES。 */
+function requiredEntries(group, files) {
+  const missing = deadEntries(files)
+  for (const file of missing) DEAD_ENTRIES.push({ group, file })
+  return files.filter(file => !missing.includes(file))
+}
+
 /** 组 = 一条验收面；env 为该组统一的进程环境（如 vendor 缺失显式 skip）。 */
 const GROUPS = [
   {
@@ -60,28 +83,38 @@ const GROUPS = [
   { id: 'sidebar-state', cwd: 'packages/dsh-chamber-client-ui-sidebar', env: { DSH_CHAMBER_VENDOR_ABSENT: 'skip' }, files: [...listFiles('packages/dsh-chamber-client-ui-sidebar/test/session-rows'), ...listFiles('packages/dsh-chamber-client-ui-sidebar/test/session-state')] },
   { id: 'layout-theme', cwd: 'packages/dsh-chamber-client-ui-layout', files: listFiles('packages/dsh-chamber-client-ui-layout/test') },
   { id: 'renderer-state', cwd: 'packages/renderer', files: [
-    'packages/renderer/test/aggregate/badge-count.test.ts',
-    'packages/renderer/test/aggregate/notification-edges.test.ts',
-    'packages/renderer/test/aggregate/notification-projection.test.ts',
-    'packages/renderer/test/aggregate/notification-dedupe.test.ts',
-    'packages/renderer/test/view-runtime/retention.test.ts',
-    'packages/renderer/test/view-runtime/reveal-gate.test.ts',
-    'packages/renderer/test/view-runtime/switch-frame-verdict.test.ts',
-    'packages/renderer/test/view-runtime/switch-frame-instruments.test.ts',
-    'packages/renderer/test/wiring/session-authority-wiring.test.ts',
-    'packages/renderer/test/lifecycle/source-readiness.test.ts',
-    'packages/renderer/test/lifecycle/source-refresh-hint.test.ts',
+    ...requiredEntries('renderer-state', [
+      'packages/renderer/test/aggregate/badge-count.test.ts',
+      'packages/renderer/test/aggregate/notification-edges.test.ts',
+      'packages/renderer/test/aggregate/notification-projection.test.ts',
+      // notification-dedupe.test.ts 已退役：完成边沿去重的等价覆盖在
+      // notification-edges（dedupe 用例）与 notification-projection 里，
+      // 去重账本/目标套件由 complete-ledger + goal-unknown-arm 承接。
+      'packages/renderer/test/aggregate/complete-ledger.test.ts',
+      'packages/renderer/test/aggregate/goal-unknown-arm.test.ts',
+      'packages/renderer/test/view-runtime/retention.test.ts',
+      'packages/renderer/test/view-runtime/reveal-gate.test.ts',
+      'packages/renderer/test/view-runtime/switch-frame-verdict.test.ts',
+      'packages/renderer/test/view-runtime/switch-frame-instruments.test.ts',
+      'packages/renderer/test/wiring/session-authority-wiring.test.ts',
+      'packages/renderer/test/lifecycle/source-readiness.test.ts',
+      'packages/renderer/test/lifecycle/source-refresh-hint.test.ts',
+    ]),
     // 事实接线（probe/SSE 源 + v2 未读落盘 + 派生）
     ...listFiles('packages/renderer/test/session-state'),
-  ].filter(f => existsSync(join(ROOT, f))) },
+  ] },
   { id: 'desktop-edges', cwd: 'packages/desktop', files: [
-    'packages/desktop/test/desktop-shell/notifications.test.ts',
-    'packages/desktop/test/desktop-shell/badge.test.ts',
-    'packages/desktop/test/ipc/ipc-surface-mirror.test.ts',
-  ].filter(f => existsSync(join(ROOT, f))) },
+    ...requiredEntries('desktop-edges', [
+      'packages/desktop/test/desktop-shell/notifications.test.ts',
+      'packages/desktop/test/desktop-shell/badge.test.ts',
+      'packages/desktop/test/ipc/ipc-surface-mirror.test.ts',
+    ]),
+  ] },
   { id: 'mobile-guards', cwd: 'packages/dsh-chamber-client-ui-mobile', files: [
-    'packages/dsh-chamber-client-ui-mobile/scripts/artifact-scope-marker.test.mjs',
-  ].filter(f => existsSync(join(ROOT, f))) },
+    ...requiredEntries('mobile-guards', [
+      'packages/dsh-chamber-client-ui-mobile/scripts/artifact-scope-marker.test.mjs',
+    ]),
+  ] },
   { id: 'instruments', cwd: '.', files: [], self: [
     { label: 'budget-check --self-test', args: ['scripts/perf/budget-check.mjs', '--self-test'] },
     { label: 'switch-frame-probe CLI fails loud on an unknown flag', args: ['scripts/perf/switch-frame-probe.mjs', '--definitely-not-a-flag'], expectExit: 'nonzero', marker: 'unknown argument' },
@@ -134,10 +167,14 @@ function selfTest(node) {
   writeFileSync(join(dir, 'synthetic-passes.test.mjs'), "import { test } from 'node:test'\nimport assert from 'node:assert/strict'\ntest('synthetic pass', () => { assert.equal(1, 1) })\n")
   const bad = runOne(node, '.tmp/acceptance/self-test', 'synthetic-fails.test.mjs')
   const good = runOne(node, '.tmp/acceptance/self-test', 'synthetic-passes.test.mjs')
-  const ok = bad.verdict === 'fail' && bad.exit !== 0 && good.verdict === 'pass'
+  // 死引用检测同样必须有负控：合成缺失路径必须被 deadEntries 抓到，
+  // 真实存在路径必须放行——否则「loud 校验」可能退化成「一律报死」。
+  const deadDetected = deadEntries(['packages/renderer/test/__deleted-for-self-test__.test.ts']).length === 1
+  const liveKept = deadEntries(['packages/renderer/test/session-state/unread-store.test.ts']).length === 0
+  const ok = bad.verdict === 'fail' && bad.exit !== 0 && good.verdict === 'pass' && deadDetected && liveKept
   console.log(ok
-    ? `acceptance self-test: ok（合成失败判 fail / exit ${bad.exit}；合成通过判 pass）`
-    : `acceptance self-test: FAIL（失败用例判 ${bad.verdict}/exit ${bad.exit}，通过用例判 ${good.verdict}）`)
+    ? `acceptance self-test: ok（合成失败判 fail / exit ${bad.exit}；合成通过判 pass；死引用负控 missing=1/live=0）`
+    : `acceptance self-test: FAIL（失败用例判 ${bad.verdict}/exit ${bad.exit}，通过用例判 ${good.verdict}，死引用负控 ${deadDetected}/${liveKept}）`)
   process.exit(ok ? 0 : 1)
 }
 
@@ -152,6 +189,14 @@ function main() {
   const groups = GROUPS.filter(g => only === undefined || g.id === only)
   if (only !== undefined && groups.length === 0) {
     console.error(`未知分组 ${only}；可用：${GROUPS.map(g => g.id).join(', ')}`)
+    process.exit(2)
+  }
+  // 显式清单的死引用先于一切执行 loud 失败（exit 2）：existsSync 过滤曾把它
+  // 静默吞成少跑一项的假绿。按 --only 选中的组过滤，与空组检查同口径。
+  const dead = DEAD_ENTRIES.filter(entry => only === undefined || entry.group === only)
+  if (dead.length > 0) {
+    for (const { group, file } of dead) console.error(`分组 ${group} 登记文件不存在（清单死引用）：${file}`)
+    console.error('死引用不得被 existsSync 静默吞掉——恢复文件或修正清单后重跑。')
     process.exit(2)
   }
   // 整组文件来自 listFiles/existsSync —— 目录改名或清空会让该组变成
@@ -211,5 +256,5 @@ function main() {
   process.exit(totals.fail > 0 ? 1 : 0)
 }
 
-if (process.argv.includes('--self-test')) selfTest(argValue('--node') ?? DEFAULT_NODE)
+if (process.argv.includes('--self-test')) selfTest(argValue('--node') ?? defaultNode())
 else main()

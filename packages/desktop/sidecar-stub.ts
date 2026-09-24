@@ -3,7 +3,8 @@
  * it stubs exactly the three slice topologies so the full chain can be proven:
  *
  *   1. request/response — dsh-chamber:info, settings get/set, the SSH
- *      instances roster and connect/disconnect/status;
+ *      instances roster (get + registry load health) and
+ *      connect/disconnect/status;
  *   2. push — desktop_ssh_status_changed emitted after connect/disconnect
  *      (fabricated state, loud-marked `poc: true`);
  *   3. reverse edge — edge:notification-clicked (Swift notification-click
@@ -203,6 +204,19 @@ function parseInstancesJson(instancesPath: string, rawText: string): Json | null
   }
 }
 
+function instancesHealthHandler(): Json {
+  // Fixture parity with the real desktop_ssh_instances_health channel: the
+  // renderer probes load health on every roster pull, so the POC stub must
+  // answer the shape instead of falling into {error:'poc-unimplemented'}. The
+  // stub keeps no persisted load-health bit, so it always answers the COMPLETE
+  // healthy shape. The degraded / roster-incomplete shapes are produced by the
+  // real transport-manager and pinned at the manager + IPC registrar level
+  // (packages/desktop/test/transport/transport-registry-health.test.ts); the
+  // flat sidecar-stdio.test.ts drives the real sidecar-entry stdio surface but
+  // does NOT exercise this health branch.
+  return { degraded: false, rosterIncomplete: false }
+}
+
 async function connectHandler(payload: Json | null): Promise<Json> {
   const instanceId = instanceIdFromPayload(payload)
   if (instanceId === null) {
@@ -262,12 +276,13 @@ function notificationClickedHandler(): Json {
   return null
 }
 
-/** Dispatch table — the POC subset of the 60 main-process invoke handlers
+/** Dispatch table — the POC subset of the 61 main-process invoke channels
  *  plus the one reverse edge. Anything absent is answered with a LOUD
  *  {error:'poc-unimplemented'} — never silence, never a fake success. */
 const handlers: { readonly [method: string]: MethodHandler | undefined } = {
   'dsh-chamber:info': infoHandler,
   'desktop_ssh_instances_get': instancesGetHandler,
+  'desktop_ssh_instances_health': instancesHealthHandler,
   'desktop_ssh_connect': connectHandler,
   'desktop_ssh_disconnect': disconnectHandler,
   'desktop_ssh_status': statusHandler,

@@ -12,7 +12,7 @@
  */
 import type { InstanceSnapshot } from './instance-api.ts'
 import type { ArchivedSessionMetaRow } from './derive.ts'
-import type { SubagentActivity } from './session-row-state.ts'
+import type { GoalFact, SubagentActivity } from './session-row-state.ts'
 import type { SessionAuthoritySnapshot } from './session-fact-reconcile.ts'
 import { assertSingletonModule } from './singleton.ts'
 import {
@@ -399,11 +399,18 @@ export interface InstanceRuntimeReport {
     runningSubagents?: number
     /** P5 子代理活动三值：none（索引在场且为零）| running | unknown（索引缺席或来源 stale）。 */
     subagentActivity?: SubagentActivity
+    /**
+     * Goal 三值事实（design 19 §3.2.1）：**字段缺席 = unknown**
+     * （投影还没给出 goal 键 / 形状不符），`null` = 明确无 goal，对象 = 有 goal。
+     * 生产者按来源代回填最后已知值并合并 §2.2 的 activation 事件缓存；
+     * 呈现门 `goalSuppressesPresentation` 只读相位（active 即压制，含 unknown）。
+     */
+    goal?: GoalFact | null
     /** I5：观察者刷新这一行事实的 host 域毫秒（0/缺席 = 无观察者事实）。 */
     factAt?: number
   }>
   /**
-   * 会话事实单一权威（P2，docs/progress/todo/session-authority-refactor.md）的快照；
+   * 会话事实单一权威（P2，design 06 §4）的快照；
    * 缺席 = 本记录内从未请求过。App 的升级 ladder 只读它的事实（runningSince /
    * stuckSince / progressStamp）决定 reconnect 与 notice——策略不在 App 侧。
    * 执行端是 shared/session-fact-reconcile.ts（reducer + probe ladder + I/O）。

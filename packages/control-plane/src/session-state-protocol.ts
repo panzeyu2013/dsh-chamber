@@ -100,6 +100,17 @@ export const SESSION_STATE_FEATURES = Object.freeze([
   'session-state.dsh-events',
   /** pendingKind is derived from the forwarded request waterfalls. */
   'session-state.pending-graph',
+  /**
+   * The row carries the projected goal fact ({@link SessionStateGoalFact} on
+   * {@link SessionStateRow.goal}) mirrored from the read-only `session/list`
+   * baseline plus the forwarded `goal/activation-changed` edge (P2a). An
+   * OPTIONAL capability: it must never join {@link SESSION_STATE_BASE_FEATURES},
+   * so a descriptor without it keeps classifying `ok` (the source simply has no
+   * goal facts — the status quo, never a degradation), and it is advertised in
+   * BOTH `sse` and `poll` modes because the read-only `session/list`
+   * baseline exists in both (it is not an event-only capability).
+   */
+  'session-state.goal',
 ] as const)
 
 /** Known feature id (derived union of the frozen tuple). */
@@ -186,6 +197,61 @@ export type SessionStateHostState =
 /** Pending interaction kind derived from the forwarded request waterfalls. */
 export type SessionStatePendingKind = 'approval' | 'question'
 
+/** Durable goal phase of the pinned dsh goal projection (v5 §2.1). */
+export type SessionStateGoalPhase = 'active' | 'paused' | 'blocked' | 'complete'
+
+/**
+ * Process-local continuation activation carried by `goal/activation-changed`
+ * (v5 §2.2). It is deliberately absent from persisted state: a restart clears
+ * it back to unknown, so a stale `armed` can never suppress a notification
+ * forever and a stale `disarmed` can never fabricate one.
+ */
+export type SessionStateGoalActivation = 'armed' | 'disarmed'
+
+/**
+ * One forwarded `goal/activation-changed` edge, normalized at the mux parse
+ * boundary (P2a). The pinned emit is
+ * `{ sessionId, goal?: { id, revision, activation } }`: `goal` absent = the
+ * host explicitly reports no current goal; a present `goal` carries the exact
+ * identity the edge belongs to.
+ *
+ * The three variants are the complete normalized alphabet:
+ *   - `{ goalId: string, activation }` — bound edge; applied only to a projected
+ *     goal with that exact id.
+ *   - `{ goalId: null, activation }` — the host carried no usable id (unbound);
+ *     applied to the row's current known goal, mirroring the renderer P2b parser.
+ *   - `{ goalId: null, activation: null }` — the host reports no current goal.
+ *
+ * A bound edge that does not match the row's projected goal id is retained, not
+ * guessed: a create may race a lagging `session/list` projection, and applying
+ * the new goal's activation to the previous goal's row is exactly the
+ * complete+armed corruption this identity exists to prevent.
+ */
+export type SessionStateGoalActivationEvent =
+  | { sessionId: string; goalId: string; activation: SessionStateGoalActivation }
+  | { sessionId: string; goalId: null; activation: SessionStateGoalActivation }
+  | { sessionId: string; goalId: null; activation: null }
+
+/**
+ * The projected goal fact mirrored into one session row (P2a).
+ *
+ * PRIVACY: only the fields below ever ride this fact — `objective`,
+ * `blockedReason`, `maxGoalRounds`, `roundsStarted` and every other
+ * projection value stay on the host (the mux whitelist drops them at parse
+ * time). `activation` is process-local and never persisted; a missing
+ * `goal` field on a row means unknown, `null` means explicitly no goal.
+ */
+export interface SessionStateGoalFact {
+  goalId: string
+  revision: number
+  phase: SessionStateGoalPhase
+  /** Host-clock ms of the goal projection (`projections.values.goal.updatedAt`);
+   *  absent = the source carried no usable watermark. */
+  updatedAt?: number
+  /** Process-local activation; absent = unknown (never persisted). */
+  activation?: SessionStateGoalActivation
+}
+
 /**
  * How a completion edge was obtained. `observed` = a live
  * api-session/status true→false edge (notification-eligible); `reconstructed`
@@ -234,6 +300,12 @@ export interface SessionStateRow {
   /** Observer-clock milliseconds the session was last seen running. */
   lastRunningAt: number | null
   lastTurnEnd: SessionTurnEnd | null
+  /**
+   * 目标投影事实（v5 §6 P2a，加法字段）。三值语义：字段**缺席** = 从未观察到
+   * 该投影键（unknown，客户端必须按未知处理）；`null` = 宿主明确报告当前无 goal；
+   * 对象 = 当前 goal 身份/相位（可带进程内 activation）。只允许白名单字段。
+   */
+  goal?: SessionStateGoalFact | null
   /**
    * 仪表 I5：观察者**刷新这一行事实**时的 host 域毫秒（0 = 从未观察）。
    * 它把「这一行有多新」变成可查询事实（前端落 data-chamber-fact-at），
@@ -290,8 +362,13 @@ export interface SessionStateDiagnostics {
   degraded: boolean
   /** turn/end classification mix of settled completions (I16/R12). */
   turnEnds: { completed: number; userStopped: number; neutral: number; unreadable: number }
-  /** Store-side losses: evicted rows / trimmed read clients / trimmed marks. */
-  dropped: { sessions: number; readClients: number; readMarks: number }
+  /**
+   * Store-side losses: evicted rows / trimmed read clients / trimmed marks /
+   * evicted retained goal-activation edges。goalActivations 是 P2a 的**加法**
+   * 嵌套键（gateway 与 P2b 同形；旧端只读已知键，不受影响）。它是**进程内**
+   * 累计计数：保留边不落盘，重启不继承（持久文档同形但加载时归 0）。
+   */
+  dropped: { sessions: number; readClients: number; readMarks: number; goalActivations: number }
   /** Cursor of the last committed delta batch (baseline-progress readback). */
   cursor: number
 }

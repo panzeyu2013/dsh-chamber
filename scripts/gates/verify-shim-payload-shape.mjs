@@ -18,6 +18,11 @@
  * method channel must be in the manifest, and every manifest invoke channel
  * must be exposed by a method (except the internal hydration channel).
  *
+ * Count semantics: EXPECTED_SURFACE's 60 invoke is the namespace-exposed
+ * surface (the internal `dsh-chamber:info` hydration channel is not counted);
+ * bridge-manifest.json counts.invoke=61 (info included) + 8 push = 69, and the
+ * desktopSsh namespace alone is 32 invoke + 2 push.
+ *
  * It is static text parsing on purpose: no runtime dependency, no surface
  * execution, the same discipline as bridge-shim-surface.test.ts. Changing a
  * payload shape on one side without the other fails here, and the failure names
@@ -48,13 +53,13 @@ export const INTERNAL_INVOKE_CHANNELS = new Set(['dsh-chamber:info'])
  */
 export const EXPECTED_SURFACE = {
   namespaces: 9,
-  members: 67,
-  invoke: 59,
+  members: 68,
+  invoke: 60,
   push: 8,
   perNamespace: {
     badge: 1,
     deepLink: 3,
-    desktopSsh: 33,
+    desktopSsh: 34,
     notifications: 5,
     openIn: 2,
     runtime: 13,

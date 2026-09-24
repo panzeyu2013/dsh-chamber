@@ -15,16 +15,21 @@ import {
   advanceReadMark,
   createClientInstallId,
   createUnreadAckOutbox,
+  createUnreadSaveCoalescer,
   loadClientInstallId,
   loadUnread,
   maxWatermark,
   mergeReadMarks,
+  pruneEmptyUnreadTables,
   pruneUnreadPayload,
+  sanitizeUnreadPayload,
   saveUnread,
   sendUnreadRequest,
   type UnreadStorageLike,
   type UnreadV2Payload,
 } from '../../src/unread-store.ts'
+import { createCompleteLedger, type PendingCompletionTable } from '../../src/complete-ledger.ts'
+import { BOOT_TOKEN_KEY, createBootToken, loadBootToken, type BootTokenStorageLike } from '../../src/boot-token.ts'
 
 /** 记录调用顺序的假 storage（迁移顺序是契约：先写后删）。 */
 function fakeStorage(initial: Record<string, string> = {}) {
@@ -108,13 +113,92 @@ test('a valid v2 load clears a leftover v1 key and never re-imports', () => {
 test('saveUnread prunes empty tables and never throws', () => {
   const { storage, data } = fakeStorage()
   assert.equal(saveUnread(storage, { v: 2, read: {}, edge: {}, notified: {} }), true)
-  assert.equal(data.get(UNREAD_V2_KEY), JSON.stringify({ v: 2, read: {}, edge: {}, notified: {} }))
+  assert.equal(
+    data.get(UNREAD_V2_KEY),
+    JSON.stringify({ v: 2, read: {}, edge: {}, notified: {}, pending: {}, outcomes: {} }),
+    'saveUnread 自动带上新表（v5 §3.1）',
+  )
   const throwing: UnreadStorageLike = {
     getItem: () => null,
     setItem: () => { throw new Error('private mode') },
     removeItem: () => undefined,
   }
   assert.equal(saveUnread(throwing, { v: 2, read: {}, edge: {}, notified: {} }), false)
+})
+
+// ── immediate 落盘合并（OPT P1 热路径：同一 tick 多次 immediate → 一次全量写盘） ──
+
+/** 手动控时的 defer：把合并窗口的微任务收集起来按需冲（不依赖宿主事件循环时序）。 */
+function deferredQueue() {
+  const queued: Array<() => void> = []
+  return {
+    defer: (run: () => void): void => { queued.push(run) },
+    drain: (): void => { for (const run of queued.splice(0)) run() },
+  }
+}
+
+test('P1: same-tick immediate requests coalesce into ONE save of the latest authoritative state', () => {
+  const { storage, calls, data } = fakeStorage()
+  let payload: UnreadV2Payload = { v: 2, read: { a: { s1: 1 } }, edge: {}, notified: {} }
+  const queue = deferredQueue()
+  const saves = createUnreadSaveCoalescer(() => { saveUnread(storage, payload) }, queue.defer)
+  // 一波 reconcile 的 voided/dropped/flushed：同一 tick 三次 immediate。
+  saves.request()
+  payload = { ...payload, notified: { a: { s1: { complete: 2 } } } }
+  saves.request()
+  payload = { ...payload, pending: { a: { s1: { at: 3 } } } }
+  saves.request()
+  assert.deepEqual(calls, [], '合并窗口内不写盘（同一 tick 三次 request 尚未落盘）')
+  assert.equal(saves.pending(), true, '待办合并窗口可见')
+  queue.drain()
+  assert.deepEqual(calls, ['set:' + UNREAD_V2_KEY], '同一 tick 三次 immediate 只落一次盘')
+  // 合并落盘读的是**最新**权威内存：先到的 durable 变更不会被后到的覆盖丢。
+  assert.deepEqual(JSON.parse(data.get(UNREAD_V2_KEY)!), {
+    v: 2,
+    read: { a: { s1: 1 } },
+    edge: {},
+    notified: { a: { s1: { complete: 2 } } },
+    pending: { a: { s1: { at: 3 } } },
+    outcomes: {},
+  })
+  // 合并窗口不吞后续 tick 的变更：下一次 request 开新窗口、再落一次。
+  saves.request()
+  queue.drain()
+  assert.deepEqual(calls, ['set:' + UNREAD_V2_KEY, 'set:' + UNREAD_V2_KEY], '下一 tick 重新合并并落盘')
+})
+
+test('P1: the default defer is a MICROTASK — it lands before a 0ms task, far earlier than the 1s throttle', async () => {
+  const order: string[] = []
+  const saves = createUnreadSaveCoalescer(() => { order.push('save') })
+  saves.request()
+  saves.request()
+  setTimeout(() => { order.push('timer') }, 0)
+  await tick()
+  assert.deepEqual(order, ['save', 'timer'], '微任务落盘先于 0ms 任务，且同一 tick 两次 request 只落一次')
+})
+
+test('P1: critical-path flush lands synchronously, cancels the pending microtask, and never double-writes', async () => {
+  const { storage, calls, data } = fakeStorage()
+  let payload: UnreadV2Payload = { v: 2, read: { a: { s1: 1 } }, edge: {}, notified: {} }
+  const queue = deferredQueue()
+  const saves = createUnreadSaveCoalescer(() => { saveUnread(storage, payload) }, queue.defer)
+  saves.request()
+  saves.request()
+  // pagehide / visibilitychange-hidden / unmount：同步落盘（最新状态）并取消待办。
+  payload = { ...payload, read: { a: { s1: 9 } } }
+  saves.flush()
+  assert.deepEqual(calls, ['set:' + UNREAD_V2_KEY], '关键路径同步落盘一次')
+  assert.equal(saves.pending(), false, 'flush 取消待办')
+  assert.deepEqual(JSON.parse(data.get(UNREAD_V2_KEY)!).read, { a: { s1: 9 } }, '写的是 flush 时刻的最新状态')
+  await Promise.resolve()
+  assert.deepEqual(calls, ['set:' + UNREAD_V2_KEY], '被取消的微任务不得二次写盘')
+  // 无待办也照常落盘（1s 节流窗口内可能仍有脏状态要落）。
+  saves.flush()
+  assert.equal(calls.length, 2, 'flush 不依赖待办：关键路径永远能落盘')
+  saves.request()
+  saves.cancel()
+  queue.drain()
+  assert.equal(calls.length, 2, 'cancel 丢弃待办且不写盘')
 })
 
 test('read marks merge monotonically (max) and never regress on an older remote', () => {
@@ -151,7 +235,7 @@ test('bounded LRU: per-source read keeps the highest watermarks only', () => {
   assert.deepEqual(Object.keys(pruned.read.a).sort(), ['s2', 's3'])
   assert.deepEqual(Object.keys(pruned.edge.a).sort(), ['s2', 's3'])
   assert.deepEqual(Object.keys(pruned.notified.a).sort(), ['s2', 's3'])
-  assert.deepEqual(pruneUnreadPayload(payload, 0), { v: 2, read: {}, edge: {}, notified: {} })
+  assert.deepEqual(pruneUnreadPayload(payload, 0), { v: 2, read: {}, edge: {}, notified: {}, pending: {}, outcomes: {} })
 })
 
 test('client-install id: persisted id wins, absent/corrupt regenerates and persists', () => {
@@ -176,18 +260,41 @@ test('client-install id: persisted id wins, absent/corrupt regenerates and persi
   assert.match(createClientInstallId(), CLIENT_INSTALL_ID_PATTERN)
 })
 
-test('privacy whitelist: the serialized payload carries ids and watermarks only', () => {
+test('privacy whitelist: the serialized payload carries ids, watermarks and timestamps only', () => {
   const { storage, data } = fakeStorage()
   saveUnread(storage, {
     v: 2,
     read: { 'gateway-a': { s1: 5 } },
     edge: { 'gateway-a': { s1: true } },
     notified: { 'gateway-a': { s1: { complete: 5 } } },
+    pending: { 'gateway-a': { s1: { watermark: 5, goalId: 'goal-1', at: 1_700_000_000_000 } } },
+    outcomes: { 'gateway-a': { 'goal-1': 5 } },
   })
   const raw = data.get(UNREAD_V2_KEY)!
-  for (const forbidden of ['title', 'cwd', 'content', 'prompt', 'message', 'body']) {
+  for (const forbidden of ['title', 'cwd', 'content', 'prompt', 'message', 'body', 'objective', 'blockedReason']) {
     assert.ok(!raw.includes(forbidden), 'payload must not carry ' + forbidden)
   }
+  // 键白名单：顶层只有五张表 + v；行内条目只允许 kind/水位/时间戳/id 字段
+  // （sourceId/sessionId/goalId 是动态键，由上面的 forbidden 子串检查兜底）。
+  const parsed = JSON.parse(raw) as Record<string, unknown>
+  assert.deepEqual(Object.keys(parsed).sort(), ['edge', 'notified', 'outcomes', 'pending', 'read', 'v'])
+  const unknownEntryKeys: string[] = []
+  // 叶子条目键（source 表 → session 行 → 条目对象）。
+  const checkLeafKeys = (table: unknown, allowed: readonly string[]): void => {
+    if (typeof table !== 'object' || table === null) return
+    for (const sessions of Object.values(table as Record<string, unknown>)) {
+      if (typeof sessions !== 'object' || sessions === null) continue
+      for (const entry of Object.values(sessions as Record<string, unknown>)) {
+        if (typeof entry !== 'object' || entry === null) continue
+        for (const key of Object.keys(entry as Record<string, unknown>)) {
+          if (!allowed.includes(key)) unknownEntryKeys.push(key)
+        }
+      }
+    }
+  }
+  checkLeafKeys(parsed.notified, ['complete', 'ask', 'request'])
+  checkLeafKeys(parsed.pending, ['watermark', 'goalId', 'deferred', 'at'])
+  assert.deepEqual(unknownEntryKeys, [], '未知键 ⇒ 可能是正文泄漏')
 })
 
 // ── 有界待发 ack 队列（失败重放） ──────────────────────────────────────────
@@ -339,5 +446,167 @@ test('R22 outbox: post() is synchronous and never throws, even when fetch throws
   await tick()
   assert.equal(outbox.size(), 1, '同步抛也算通道失败 ⇒ 进待发表')
   assert.ok(errors.some(message => message.includes('boom')))
+})
+
+// ── goal-aware v5 §3.1：pending / outcomes 增量（sanitize / prune / 隐私） ────
+
+test('pending/outcomes sanitize field-wise: bad fields drop, valid entries survive', () => {
+  const loaded = loadUnread(fakeStorage({
+    [UNREAD_V2_KEY]: JSON.stringify({
+      v: 2,
+      read: {},
+      edge: {},
+      notified: {},
+      pending: {
+        a: {
+          good: { watermark: 5, goalId: 'g1', at: 100 },
+          badWatermark: { watermark: 'x', goalId: 'g1', at: 100 },
+          badGoal: { watermark: 5, goalId: '', at: 100 },
+          badAt: { watermark: 5, goalId: 'g1', at: 'nope' },
+          notAnObject: 7,
+        },
+      },
+      outcomes: { a: { g1: 10, g2: 'x', g3: -1 } },
+    }),
+  }).storage)
+  assert.deepEqual(loaded.pending, {
+    a: {
+      good: { watermark: 5, goalId: 'g1', at: 100 },
+      badWatermark: { goalId: 'g1', at: 100 },
+      badGoal: { watermark: 5, at: 100 },
+    },
+  })
+  assert.deepEqual(loaded.outcomes, { a: { g1: 10 } })
+})
+
+test('REGRESSION(F5 阻断项 1): pending.deferred survives the saveUnread → loadUnread round-trip', () => {
+  // 反例：goal unknown + busy 完成 → pending{deferred} 落盘 → 同页 reload（boot same）
+  // → sanitize 只重建 at/watermark/goalId，丢 deferred → App 经 unreadPendingTable 回读后
+  // 释放标记消失：busy 结束零 emit、pending 永久留存（goal null/paused 时 #3 静默 drop）。
+  const { storage } = fakeStorage()
+  const payload: UnreadV2Payload = {
+    v: 2,
+    read: { a: { s1: 7 } },
+    edge: {},
+    notified: { a: { s1: { complete: 7 } } },
+    pending: {
+      a: {
+        s1: { at: 1_000, watermark: 7, goalId: 'g1', deferred: 'subagent-busy' },
+        s2: { at: 2_000 },
+      },
+    },
+    outcomes: { a: { g1: 7 } },
+  }
+  assert.equal(saveUnread(storage, payload), true)
+  const loaded = loadUnread(storage)
+  assert.deepEqual(loaded.pending, {
+    a: {
+      s1: { at: 1_000, watermark: 7, goalId: 'g1', deferred: 'subagent-busy' },
+      s2: { at: 2_000 },
+    },
+  }, 'deferred 是 durable 身份：落盘 → 回读必须原样保留')
+  // 二次往返同样稳定（写盘不吞标记）。
+  assert.equal(saveUnread(storage, loaded), true)
+  assert.equal(loadUnread(storage).pending?.a?.s1?.deferred, 'subagent-busy')
+})
+
+test('REGRESSION(F5 阻断项 1): an invalid pending.deferred drops only the field, never the entry', () => {
+  const warnings: string[] = []
+  const original = console.warn
+  console.warn = (...args: unknown[]) => { warnings.push(args.map(value => String(value)).join(' ')) }
+  try {
+    const loaded = loadUnread(fakeStorage({
+      [UNREAD_V2_KEY]: JSON.stringify({
+        v: 2, read: {}, edge: {}, notified: {},
+        pending: { a: { bad: { at: 3, deferred: 'nope' }, good: { at: 4, deferred: 'subagent-busy' } } },
+      }),
+    }).storage)
+    assert.deepEqual(loaded.pending, { a: { bad: { at: 3 }, good: { at: 4, deferred: 'subagent-busy' } } },
+      '非法 deferred 值只丢字段；at 成立时整条保留')
+    assert.ok(warnings.some(message => message.includes('invalid deferred')), warnings.join(' | '))
+  } finally {
+    console.warn = original
+  }
+})
+
+test('REGRESSION(A3-2): sanitizeUnreadPayload and createCompleteLedger agree on an invalid deferred (field-level)', () => {
+  // 同一份**原始**载荷（未经清洗）分别经两条加载路径（未读 v2 清洗 / complete 账本
+  // 卫生）必须给出同一结果：非法 deferred 只丢字段、条目保留（A3-2 的口径对齐）。
+  const raw = {
+    a: { bad: { at: 3, deferred: 'nope' }, good: { at: 4, deferred: 'subagent-busy' } },
+  } as unknown as PendingCompletionTable
+  const sanitized = sanitizeUnreadPayload({ v: 2, read: {}, edge: {}, notified: {}, pending: raw })
+  assert.deepEqual(sanitized.pending, { a: { bad: { at: 3 }, good: { at: 4, deferred: 'subagent-busy' } } })
+  const ledger = createCompleteLedger({}, { pending: raw, now: 10 })
+  assert.deepEqual(ledger.pendingEntry('a', 'bad'), sanitized.pending?.a?.bad, '账本路径不得整条丢弃（与 sanitize 同口径）')
+  assert.deepEqual(ledger.pendingEntry('a', 'good'), sanitized.pending?.a?.good)
+  assert.equal(ledger.pendingEntry('a', 'good')?.deferred, 'subagent-busy')
+})
+
+test('missing/corrupt pending/outcomes degrade to empty loudly and never throw', () => {
+  const warnings: string[] = []
+  const original = console.warn
+  console.warn = (...args: unknown[]) => { warnings.push(args.map(value => String(value)).join(' ')) }
+  try {
+    const missing = loadUnread(fakeStorage({
+      [UNREAD_V2_KEY]: JSON.stringify({ v: 2, read: {}, edge: {}, notified: {} }),
+    }).storage)
+    assert.deepEqual(missing.pending, {})
+    assert.deepEqual(missing.outcomes, {})
+    assert.ok(warnings.some(message => message.includes('pending')), warnings.join(' | '))
+    assert.ok(warnings.some(message => message.includes('outcomes')), warnings.join(' | '))
+    warnings.length = 0
+    const corrupt = loadUnread(fakeStorage({
+      [UNREAD_V2_KEY]: JSON.stringify({ v: 2, read: {}, edge: {}, notified: {}, pending: 'nope', outcomes: 42 }),
+    }).storage)
+    assert.deepEqual(corrupt.pending, {})
+    assert.deepEqual(corrupt.outcomes, {})
+    assert.equal(warnings.length, 2)
+  } finally {
+    console.warn = original
+  }
+})
+
+test('bounded LRU covers the new tables: pending aligns with read, outcomes keep the highest', () => {
+  const payload: UnreadV2Payload = {
+    v: 2,
+    read: { a: { s1: 1, s2: 5, s3: 3 } },
+    edge: { a: { s1: true, s2: true, s3: true } },
+    notified: { a: { s1: { complete: 1 }, s2: { complete: 5 }, s3: { complete: 3 } } },
+    pending: { a: { s1: { at: 1 }, s2: { at: 2 }, s3: { at: 3 }, s4: { at: 4 } } },
+    outcomes: { a: { g1: 1, g2: 9, g3: 5 } },
+  }
+  const pruned = pruneUnreadPayload(payload, 2)
+  assert.deepEqual(Object.keys(pruned.read.a).sort(), ['s2', 's3'])
+  assert.deepEqual(Object.keys(pruned.pending!.a).sort(), ['s2', 's3'], 'pending 与 read 同界')
+  assert.deepEqual(Object.keys(pruned.outcomes!.a).sort(), ['g2', 'g3'], 'outcomes 按水位保留最高')
+  assert.deepEqual(pruneEmptyUnreadTables(pruned).pending!.a, pruned.pending!.a)
+})
+
+// ── boot token（sessionStorage 页代；v5 §3.5 / R2-E） ───────────────────────
+
+test('boot token: the first load writes fresh, a reload reads the same token back', () => {
+  const { storage, data } = fakeStorage()
+  const created: string[] = []
+  const first = loadBootToken(storage, () => { created.push('x'); return 'page-token-1' })
+  assert.deepEqual(first, { token: 'page-token-1', verdict: 'fresh' })
+  assert.equal(created.length, 1)
+  assert.equal(data.get(BOOT_TOKEN_KEY), 'page-token-1', '首帧写入 sessionStorage')
+  const second = loadBootToken(storage, () => { throw new Error('reload must not rotate the token') })
+  assert.deepEqual(second, { token: 'page-token-1', verdict: 'same' })
+})
+
+test('boot token: absent/corrupt/throwing storage degrades to fresh and never throws', () => {
+  const absent = fakeStorage()
+  assert.deepEqual(loadBootToken(absent.storage, () => 't1'), { token: 't1', verdict: 'fresh' })
+  const corrupt = fakeStorage({ [BOOT_TOKEN_KEY]: '' })
+  assert.deepEqual(loadBootToken(corrupt.storage, () => 't2'), { token: 't2', verdict: 'fresh' })
+  const throwing: BootTokenStorageLike = {
+    getItem: () => { throw new Error('denied') },
+    setItem: () => { throw new Error('denied') },
+  }
+  assert.deepEqual(loadBootToken(throwing, () => 't3'), { token: 't3', verdict: 'fresh' })
+  assert.deepEqual(loadBootToken(undefined, () => 't4'), { token: 't4', verdict: 'fresh' })
+  assert.match(createBootToken(), /^[0-9a-f-]{8,}$/i, 'randomUUID/hex 形态，never-throw')
 })
 

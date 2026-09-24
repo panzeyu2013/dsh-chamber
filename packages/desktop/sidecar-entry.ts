@@ -8,7 +8,7 @@
  * [--host-open-in-dir …]）。
  * - stdout = B 桥协议流（NDJSON，唯一协议写面）；stderr = 日志（D2：入口把
  *   存量 console.* 重定向到 stderr）。
- * - 业务 = shell-core.installIpcHandlers（60/60 注册体，语义与 Electron 版
+ * - 业务 = shell-core.installIpcHandlers（61/61 注册体，语义与 Electron 版
  *   同一实现）；宿主边沿 = node-edges.ts（HostEdges → edge/notify → Swift）。
  * - 无头 ctx = sidecar-ctx.ts buildHeadlessCtx（C/D/E 组注册体依赖 +
  *   F/G/H/J/K 组注册体依赖 + runtime
@@ -374,7 +374,7 @@ const nodeEdges = createNodeEdges({
   },
 })
 
-/** 入站分派：edge 应答 → host 保留 method → 60 通道注册表。 */
+/** 入站分派：edge 应答 → host 保留 method → 61 invoke 通道注册表。 */
 async function handleInboundLine(line: string): Promise<void> {
   let frame: Record<string, unknown>
   try {
@@ -454,7 +454,7 @@ async function handleInboundLine(line: string): Promise<void> {
 }
 
 // 4. 装配启动（async bootstrap）：无头 ctx →
-//    shell-core 60/60 注册体（installIpcHandlers 恰一次、先于 ready）→
+//    shell-core 61/61 注册体（installIpcHandlers 恰一次、先于 ready）→
 //    control-plane 装配（本地 spawn 门 = headless.localSpawnGates——与 main
 //    同语义）→ bindPlane（plane 晚绑定）→ ready 帧 → 启动尾部。
 const moduleDir = path.dirname(fileURLToPath(import.meta.url))
@@ -528,7 +528,7 @@ const nativeUpdater: NativeUpdaterBridge | undefined = args.nativeUpdater === 's
   })
   ctx = headless.ctx
 
-  // shell-core 装配（60/60 注册体；installIpcHandlers 恰一次、先于 ready——
+  // shell-core 装配（61/61 注册体；installIpcHandlers 恰一次、先于 ready——
   // invoke 只能在 ready 帧之后到达，注册先于任何入站业务调用）。
   installIpcHandlers({ ipc: ipcRegistrar, edges: nodeEdges, ctx: headless.ctx })
   console.log('[sidecar] installIpcHandlers 完成：' + registry.size + ' 通道注册')

@@ -41,6 +41,8 @@ export const GROUPS = {
     'test/session-rows/derive-unread.test.ts',
     // 行/待办条的机器可读状态标记（纯分类器 + 属性锁）。
     'test/session-rows/session-row-state.test.ts',
+    // goal 三值事实：解析/最后已知/activation 合并/身份签名（design 19 §3.2.1）。
+    'test/session-rows/goal-facts.test.ts',
     'test/session-rows/session-row-window.test.ts',
     'test/session-rows/todo-attention.test.ts',
     'test/session-rows/hover-intent.test.ts',
@@ -51,6 +53,8 @@ export const GROUPS = {
   // session-state: the shared chamber store and the per-source view/search/todo state
   'session-state': [
     'test/session-state/aggregate-store.test.ts',
+    // goal activation tracker 状态机（事件制、有界重试、reset、触发矩阵；禁 goals/get）。
+    'test/session-state/goal-activation.test.ts',
     // 运行位对账链（官方 refresh + 权威判定 seam + 有界重试/单次尝试超时）。
     'test/session-state/session-fact-reconcile.test.ts',
     // 端到端语料：真实执行端快照驱动 App 升级 ladder（table 值下的 190s/310s 行为）。

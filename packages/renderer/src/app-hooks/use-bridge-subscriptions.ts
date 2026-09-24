@@ -14,11 +14,17 @@ import {
   type RendererDeliveryCoordinates,
 } from '../deep-link-activation.ts'
 import { LOCAL_INSTANCE_ID } from '../local-instance.ts'
-import { type SessionFacts } from '../notification-edges.ts'
-import { planRuntimeNotifications } from '../notification-projection.ts'
 import { errorMessage } from '../status.ts'
 import { sourceIdForRawInstance } from '../transport-source.ts'
-import { completionWatermark } from '../watermark.ts'
+import {
+  applyObservationBatch,
+  completionIdentity,
+  factsChannelOf,
+  observeSource,
+  type SourceObservationState,
+} from '../completion-observation.ts'
+import { notificationLedger } from '../notification-ledger.ts'
+import type { NotificationTitleId } from '../notification-projection.ts'
 import type { CompleteLedger } from '../complete-ledger.ts'
 import type { SessionFactsSnapshot } from '../session-facts-source.ts'
 import type { SshInstanceSpec } from '../global.d.ts'
@@ -53,6 +59,97 @@ import {
 /** 会话列表刷新合并窗（唯一消费者在本 hook）。 */
 const SESSION_LIST_REFRESH_COALESCE_MS = 5_000
 
+/**
+ * 桌面桥面探测判定（App 的 500ms 探测 effect 维护，见 App.tsx 的
+ * `bridgeVerdict`）：
+ * - `'pending'`：探测中——`window.dshChamber` 由桌面 preload 经异步 IPC 后
+ *   expose，首帧必然缺席，迟到窗口内无法区分「无桥」与「桥未就绪」；
+ * - `'present'`：`desktopSsh` 已 expose，存在远程来源，权威 roster 是异步事实；
+ * - `'absent'`：探测预算耗尽仍无 `desktopSsh` = 无桥形态（浏览器/dev 直开、
+ *   无桌面 preload）。该形态 `remoteInstances` 恒为 `[]`、`servers` 只含 local，
+ *   live={local} 本身就是完整权威集合。
+ */
+export type DesktopBridgeVerdict = 'pending' | 'present' | 'absent'
+
+/**
+ * Durable（v2 落盘）未读账本的剪枝门控。
+ *
+ * App 首帧**同步**从 localStorage 载入 read/edge（unread-store）与
+ * notified/pending/outcomes（complete-ledger），而权威远端 roster 是异步事实：
+ * 桥要等 `window.dshChamber` 暴露（500ms 探测），`instances_get` 还要一次 IPC
+ * 往返，期间 `remoteInstances` 仍是 `[]`、`servers` 只含 local。若此时按
+ * live={local} 剪枝，四类 durable 表里属于远端来源的键会被当成退役来源写盘删除
+ * ——pending/outcomes/notified 与 read/edge 全部不可恢复（这正是 F6 回归的写盘
+ * 丢失）。因此四类 durable 剪枝统一由本谓词放行：
+ * - 有桥（`'present'`）：只有权威 roster 结算
+ *   （`remoteRosterSettledRef`：refreshRemotes 成功结算后置位，见 App.tsx）
+ *   后 live 才完整；结算那一拍的 `remoteRosterSettled` state 变化使剪枝 effect
+ *   重跑，届时再按权威 live 收敛。
+ * - 无桥（`'absent'`）：没有远程来源，live={local} 安全，**视同已结算**放行；
+ *   否则门恒关，旧 durable 键（磁盘每来源 ≤500，非无限增长）永不收敛。
+ * - 探测中（`'pending'`）与有桥未结算同路：未知 ⇒ 关门。缺省参数等价
+ *   `'present'`（保持旧行为：假定有桥，只看结算位）。
+ * - 注册表降级（`registryDegraded`，F13）：持久化注册表加载失败（损坏保留为
+ *   `*.corrupt` 后空启动；或 live 文件缺失而 `.corrupt` 副本仍在）时，
+ *   `instances_get` 的空/缺行 roster 不是权威——文件内容未知，live 不完整。
+ *   此时**任何剪枝都不得放行**（含无桥形态的防御性组合），否则远端 durable
+ *   键会被当退役来源写盘删除；健康位恢复（saveInstances 重建注册表）后由
+ *   refreshRemotes 正常结算再收敛。
+ * - roster 行级丢弃（`rosterIncomplete`，V5-A）：JSON 数组解析成功但
+ *   transport-manager 丢弃了条目（provider validateSpec 拒绝／重复 id；典型
+ *   触发面是「新写旧读」的字段漂移）时，磁盘有内容而 roster 只是子集——合法
+ *   行仍安装（连接可见），但**任何剪枝同样不得放行**（与 degraded 同档否决，
+ *   含无桥形态与陈旧结算位的防御性组合），否则被丢弃来源的 durable 键会被当
+ *   退役来源删除；一次无丢弃的成功 load 或 authoritative 保存恢复完整后，
+ *   下一拍 `rosterIncomplete=false` 重跑本 effect 正常收敛。
+ * 易失轨（prevRunning / 观测状态 / 水位记账）不在此门内。
+ *
+ * 纯谓词、无副作用，便于存储假实现回归直测。
+ */
+export function durableUnreadPruneAllowed(
+  remoteRosterSettled: boolean,
+  bridgeVerdict: DesktopBridgeVerdict = 'present',
+  registryDegraded = false,
+  rosterIncomplete = false,
+): boolean {
+  // 注册表降级/roster 不完整 ⇒ 空/缺行 roster 不是权威，任何情况下都不放行
+  // （两档优先于结算位：结算只可能来自完整 roster，同真属防御性组合，按未知
+  // 处理）。两档保持可区分：诊断文案与来源各自单源（见下方两个纯函数）。
+  if (registryDegraded === true) return false
+  if (rosterIncomplete === true) return false
+  // 已结算 ⇒ live 必然完整，无论桥面判定为何（结算本身就是桥存在的证据）。
+  if (remoteRosterSettled === true) return true
+  // 未结算：只有确认无桥才能按 live={local} 收敛；'present'/'pending' 都关门。
+  return bridgeVerdict === 'absent'
+}
+
+/**
+ * V5-A（行级丢弃）：loadInstances() 解析出合法数组但丢弃了条目/重复 id 时，
+ * roster 是磁盘内容的子集——refreshRemotes 仍安装合法行并结算（连接不能不可
+ * 见），但 durable 剪枝门由 `rosterIncomplete` 维度关死。诊断单源，供 App 的
+ * warn-once 使用，与 `registryDegraded`、health-unavailable 三角可区分。
+ * @param droppedCount 本次 load 丢弃（含重复 id）的条目数。
+ */
+export function rosterIncompleteDiagnostic(droppedCount: number): string {
+  return `roster incomplete: ${droppedCount} persisted instance row(s) were dropped as invalid or duplicate`
+}
+
+/**
+ * F16/A4（health 探针不可用）：注册表健康位是权威 roster 的门。旧桥/旧 Swift
+ * shim 没有 `desktopSsh.instances_health` 方法，或探针 invoke 抛错（IPC/sidecar
+ * 未就绪、进程退出）时，**不得**把「读不到健康位」折叠成「健康」：
+ * refreshRemotes 保持 fail-closed（不安装 roster、不置结算位、不触发 durable
+ * 剪枝），并按下述诊断单源 warn-once——与「注册表降级」和「无桥」三角可区分。
+ * 纯函数：实现与 wiring 测试读同一文案，不复制字面量。
+ */
+export type HealthProbeUnavailableKind = 'missing-method' | 'invoke-failed'
+
+export function healthProbeUnavailableDiagnostic(kind: HealthProbeUnavailableKind): string {
+  return kind === 'missing-method'
+    ? 'health unavailable: desktopSsh.instances_health is not exposed by this bridge'
+    : 'health unavailable: desktopSsh.instances_health() rejected'
+}
+
 /** 深链归一化交付（与 App 的 `DeepLinkDelivery` 同形；结构兼容由调用点 tsc 保证）。 */
 export type DeepLinkDelivery = RendererDeliveryCoordinates & {
   rawInstanceId: string
@@ -67,6 +164,12 @@ export interface BridgeNotificationRequest {
   sessionId: string
   kind: 'complete' | 'ask' | 'request'
   watermark?: number
+  /** 标题身份（目标标题一次性；缺省 = 会话已完成）。 */
+  title?: NotificationTitleId
+  /** 收敛器 ¤origin¤ 诊断。 */
+  origin?: string
+  /** pending 存续毫秒诊断。 */
+  pendingAge?: number
 }
 
 export interface BridgeSubscriptionsDeps {
@@ -99,7 +202,15 @@ export interface BridgeSubscriptionsDeps {
   mutationRefreshSeqRef: { current: Record<string, number> }
   pendingDeepLinkDeliveryRef: { current: DeepLinkDelivery | null }
   prevRunningRef: { current: Record<string, Record<string, boolean>> }
-  prevRuntimeFactsRef: { current: Record<string, Record<string, SessionFacts>> }
+  /** 完成观测状态（v5 §3.2；与 App 的 facts 轨共用同一份 Map）。 */
+  completionObservationRef: { current: Map<string, SourceObservationState> }
+  /** runtime report 的同步权威镜像（App 事件回调/派生读它，不依赖渲染期赋值）。 */
+  runtimeFactsRef: { current: Record<string, InstanceRuntimeReport | undefined> }
+  /** reconcile 批次的落盘出口（immediate ⇒ 立即 flushUnread）。 */
+  persistCompletionLedger: (immediate: boolean) => void
+  /** 页代 token 与判定（§3.5；identity 与 reconcile 的 boot 都读它）。 */
+  bootToken: string
+  bootVerdict: 'same' | 'fresh'
   prewarmEligibleRef: { current: Set<string> }
   prewarmQueueRef: { current: string[] }
   prewarmSuppressedRef: { current: SetLedgerView }
@@ -140,13 +251,14 @@ export function useBridgeSubscriptions(deps: BridgeSubscriptionsDeps): void {
     aggregatePollSeqRef, aggregateRequestOwnersRef, authoritativeArchiveSetRef, autoPrewarmedRef,
     completeLedgerRef, drainPrewarmRef, factsAtRef, harvestCandidatesRef, harvestIntentRef,
     harvestStateRef, intentBudgetRef, intentPriorityRef, liveServerIdsRef, mutationRefreshSeqRef,
-    pendingDeepLinkDeliveryRef, prevRunningRef, prevRuntimeFactsRef, prewarmEligibleRef,
+    pendingDeepLinkDeliveryRef, prevRunningRef, prewarmEligibleRef,
     prewarmQueueRef, prewarmSuppressedRef, readyAggregateSourcesRef, reclaimViewRef,
     remoteInstancesRef, remoteRosterSettledRef, sessionArchiveRef, sessionEchoRef, sessionFactsRef,
     sessionListRefreshAtRef, sessionListRefreshPendingRef, settingsTargetRef, snapshotAtRef,
     snapshotSourcesRef, sourceLifecyclesRef, watchdogAggregatesRef, workspaceEchoRef,
     setAggregates, setHostFacts, setMountedViews, setPluginDiagnostics, setRuntimeFacts,
     setSnapshotSources, setUnverified,
+    completionObservationRef, runtimeFactsRef, persistCompletionLedger, bootToken, bootVerdict,
     sshBridgeReady, LISTENER_READY_RETRY_MS, LISTENER_READY_RETRY_LIMIT,
   } = deps
 
@@ -709,67 +821,70 @@ export function useBridgeSubscriptions(deps: BridgeSubscriptionsDeps): void {
       if (sourceId !== LOCAL_INSTANCE_ID && !liveServerIdsRef.current.has(sourceId)) return
       const currentSource = sourceLifecyclesRef.current!.capture(sourceId)
       if (currentSource === null || currentSource.fingerprint !== sourceFingerprint) return
-      setRuntimeFacts(prev => {
-        if (report === undefined) {
-          if (prev[sourceId] === undefined) return prev
-          const next = { ...prev }
-          delete next[sourceId]
-          return next
-        }
-        // identity-preserving：同内容上报（store 通知但事实未变的常态）不换
-        // state 对象——否则每次上报都触发 servers 重新派生与 publish。
-        const current = prev[sourceId]
-        if (current !== undefined && runtimeReportSignature(current) === runtimeReportSignature(report)) {
-          return prev
-        }
-        return { ...prev, [sourceId]: report }
-      })
       if (report === undefined) {
         // 通道撤回（shell 重连/重 boot 窗口，来源移除的 clear 已被上方的
-        // liveServerIds/指纹检查挡掉，不会到达这里）：清掉 UI 蓝点边沿与
-        // 通知边沿的 prev 记忆——恢复后的首份上报是纯播种（prev undefined
-        // 只记不发），与蓝点机的撤回语义一致：
-        // 记忆以补发撤回窗口内完成的会话，但 wire 只有 running 位、无法区分
-        // 手动停止与完成，窗口内被手动停止的会话会在恢复首报上误报
-        // 「完成」；删除记忆后窗口内的完成通知不补发——窗口仅持续到重连
-        // 完成，且会话完成状态在 UI 中可见。
+        // liveServerIds/指纹检查挡掉，不会到达这里）：清掉 UI 蓝点边沿、观测状态
+        // 与通知账本的易失轨（withdraw 清 armed + pending，notified/outcomes 保持
+        // durable，R2-D/§3.1）——恢复后首份上报按 G2 纯播种，撤回窗口内的完成
+        // 不补发；pending 清理必须立即落盘（§3.5 写点纪律）。
+        // 撤回不删来源账本（durable 由事实重算）；prevRunning 是「转移」不是
+        // 「状态」，持久化会伪造边沿。
+        if (runtimeFactsRef.current[sourceId] !== undefined) {
+          const next = { ...runtimeFactsRef.current }
+          delete next[sourceId]
+          runtimeFactsRef.current = next
+          setRuntimeFacts(next)
+        }
         delete prevRunningRef.current[sourceId]
-        delete prevRuntimeFactsRef.current[sourceId]
-        completeLedgerRef.current.forgetArmed(sourceId)
-        // 撤回不删来源账本，只清易失的转移记忆
-        // （prevRunning 是「转移」不是「状态」，持久化会伪造边沿）；durable 账本
-        // 由事实重算——同代重挂/撤回后未读仍在（派生投影，账本不是唯一来源）。
+        completionObservationRef.current.delete(sourceId)
+        completeLedgerRef.current.withdraw(sourceId)
+        persistCompletionLedger(true)
         recomputeSourceUnread(sourceId)
         return
       }
-      // 通知边沿（设计 19 单入口）：两条证据（壳 running 边沿 + facts 水位）的
-      // 裁决全部在 notification-projection.ts；本处只接线 + 唯一 emit。有可用 facts
-      // 的来源 complete 归 facts 入口（水位轨可跨端/跨重挂收敛），壳边沿只发
-      // ask/request；`usableFacts` 抑制只有这一处。
-      const prevFacts = prevRuntimeFactsRef.current[sourceId]
-      prevRuntimeFactsRef.current[sourceId] = report.sessions
-      const factsSnapshot = sessionFactsRef.current[sourceId]
-      const usableFacts = factsSnapshot !== undefined && factsSnapshot.verdict === 'ok' ? factsSnapshot : undefined
-      const plan = planRuntimeNotifications({
-        prev: prevFacts,
-        next: report.sessions,
-        factsUsable: usableFacts !== undefined,
-        armed: completeLedgerRef.current.armed(sourceId),
-      })
-      completeLedgerRef.current.setArmed(sourceId, plan.armed)
-      for (const edge of plan.edges) {
-        const row = usableFacts?.rows[edge.sessionId]
-        const watermark = edge.kind === 'complete'
-          ? completionWatermark(row ?? {})
-          : row !== undefined && row.updatedAt > 0 ? row.updatedAt : undefined
-        emitSessionNotification({
-          sourceId,
-          sourceFingerprint,
-          sessionId: edge.sessionId,
-          kind: edge.kind,
-          ...(watermark !== undefined ? { watermark } : {}),
-        })
+      // runtime report 的**同步**权威镜像（v5 §3.2）：先写 ref 再进 state——同一
+      // 事件轮里到达的 facts 快照/重算/收敛都读最新壳行，不依赖渲染期赋值。
+      const currentReport = runtimeFactsRef.current[sourceId]
+      if (currentReport === undefined || runtimeReportSignature(currentReport) !== runtimeReportSignature(report)) {
+        const next = { ...runtimeFactsRef.current, [sourceId]: report }
+        runtimeFactsRef.current = next
+        setRuntimeFacts(next)
       }
+      // 单入口收敛（设计 19 + goal-aware v5 §3.2–§3.4）：壳行与当前 facts 快照在
+      // observeSource 里做权威合并（新鲜壳行优先 / 非 stale facts / unknown），
+      // 候选（壳边沿、ask/request、facts 水位）交唯一 reconcile；本处只接线 + emit。
+      const factsSnapshot = sessionFactsRef.current[sourceId]
+      const batch = observeSource({
+        state: completionObservationRef.current.get(sourceId),
+        sourceId,
+        identity: completionIdentity(sourceFingerprint, bootToken),
+        pageBoot: bootVerdict,
+        shell: { rows: report.sessions, ...(report.stale === true ? { stale: true } : {}) },
+        shellReport: true,
+        facts: factsChannelOf(factsSnapshot),
+      })
+      completionObservationRef.current.set(sourceId, batch.state)
+      applyObservationBatch({
+        ledger: completeLedgerRef.current,
+        sourceId,
+        batch,
+        sink: {
+          emitNotification: (notification, result) => {
+            emitSessionNotification({
+              sourceId,
+              sourceFingerprint,
+              sessionId: notification.sessionId,
+              kind: notification.kind,
+              ...(notification.watermark === undefined ? {} : { watermark: notification.watermark }),
+              ...(notification.title === undefined ? {} : { title: notification.title }),
+              ...(notification.origin === undefined ? {} : { origin: notification.origin }),
+              ...(result.pendingAge === undefined ? {} : { pendingAge: result.pendingAge }),
+            })
+          },
+          countDisposition: outcome => notificationLedger.countReconcile(outcome),
+          persist: immediate => persistCompletionLedger(immediate),
+        },
+      })
       // 派生账本重算：规则全在纯模块
       // unread-derivation.ts（4 参 deriveUnread + 通道边沿机）；「正在阅读」谓词
       // = paintedView ∩ 该来源 current ∩ hasFocus，listComplete 是唯一剪枝门。

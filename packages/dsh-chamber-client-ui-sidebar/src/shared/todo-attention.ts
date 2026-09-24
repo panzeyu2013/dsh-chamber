@@ -31,7 +31,7 @@
  */
 import type { ChamberServerAggregate } from './aggregate-store.ts'
 import { sessionDisplayTitle } from './derive.ts'
-import { subagentActivityOf } from './session-row-state.ts'
+import { goalSuppressesPresentation, subagentActivityOf } from './session-row-state.ts'
 
 /** The attention kinds the todo area renders. `completed` = completed-but-
  *  unread (the blue-dot merged state); the other three are the vendor pending
@@ -143,6 +143,10 @@ export function deriveTodoAttention(
         // P5：只有确证在跑的子代理才压制「完成未读」条目；unknown（stale/索引缺席）
         // 不压制——用不可信的计数压掉用户可见面，正是这次要消除的形态。
         if (subagentActivityOf(facts, factsStale) === 'running') continue
+        // goal 呈现门（v5 §4）：相位 active（含 activation unknown）压制「完成未读」
+        // 条目——与行尾点/文案/仪表/搜索同一单源派生（INV7），否则待办区会为一条
+        // 用户看不到完成点的行宣称「完成」。三个 kind 开关语义不变。
+        if (goalSuppressesPresentation(facts.goal)) continue
         if (facts.completed !== true || !opts.filters.completed) continue
         const entry: TodoAttentionEntry = {
           sourceId: server.id,
@@ -173,6 +177,8 @@ export function deriveTodoAttention(
       const facts = runtime.sessions[sessionId]
       if (facts?.completed !== true || !opts.filters.completed) continue
       if (subagentActivityOf(facts, true) === 'running') continue
+      // 同一呈现门：行缺席分支也必须与其它五面同拍（active 即压制）。
+      if (goalSuppressesPresentation(facts?.goal)) continue
       completed.push({
         sourceId: server.id,
         sessionId,

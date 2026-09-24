@@ -891,6 +891,90 @@ inert；复核实测）——要让响应头也条件化需把「是否下发了
 **接口摘要**：`GET /chamber/session-state`（快照 + `protocol` / `features` / `cursor`）、
 `GET /chamber/session-state/stream`（SSE 增量，单调 `id`，`Last-Event-ID` 续传或快照兜底）、
 `POST /chamber/session-state/read` 与 `/read-all`（幂等、只升不降）。
+
+**P2a 增量面：goal 事实（2026-12 落地，design 19 §3.2.1）**
+
+- **`session/list` 白名单扩 goal**：`session-mux.ts` 从每行
+  `projections.values.goal` 只取 `goalId/revision/phase/updatedAt`（嵌套形
+  `{ goal: { id, revision, phase }, updatedAt }`，`id` 映射为 `goalId`）；
+  `objective`/`blockedReason`/`maxGoalRounds`/`roundsStarted` 与其余投影键
+  （title/cwd/todos/inbox…）在**解析处**即被丢弃，绝不进 observer/持久文档/wire。三值：
+  键缺席或形状不符 = 字段缺席（unknown，绝不臆造「无 goal」）；`null` = 宿主明确无
+  goal；对象 = 当前 goal。`session/list` 依旧不激活 agent（只读 unary，冷会话可见）。
+- **`$events` 的 activation（身份绑定，2026-12 收敛）**：`goal/activation-changed`
+  （emit 帧，无重放）在 mux 解析边界归一为 `SessionStateGoalActivationEvent` 三变体：
+  bound `{goalId, activation}` / unbound `{goalId: null, activation}` / no-goal
+  `{goalId: null, activation: null}`；形状漂移（`activation` 非词表）丢弃不猜。
+  gateway 进程内按 goalId **保留边**（`pendingGoalActivations`，每会话至多一条、最新
+  覆盖）：bound 边仅在行 `goal.goalId === 事件 goalId` 时落行；**绑定 id 与基线不符、
+  行尚未出现或投影仍 unknown/null 时一律保留待匹配（不直接 drop）**，由后续 baseline/added
+  携带匹配 identity 时消费，**换 id 不继承**旧 activation（把新 goal 的 armed 落到旧 goal
+  行上正是要防的 `complete+armed` 污染）；unbound 边作用于行当前已知 goal（镜像
+  renderer P2b 的宽松解析）。保留边纪律 P2b/P1 同规（2026-12/F14 统一）：绑定 id 与基线
+  不符一律保留待匹配、不直接 drop，不再设第三 goalId 出口——P1 有壳插件
+  （`goal-activation.ts`；每会话至多一条、新事件覆盖，只随会话/行离开、显式 no-goal、
+  reset/dispose 清除，绑定守卫绝不落到别的 goal 上，design 19 §3.2.2）、P2b
+  `source-mux-facts.ts` 的 `goalActivations`（design 19 §3.5）见各自文档。**no-goal 事件
+  只清已知对象 goal**：丢该会话保留边，行有**已知对象** goal 才清成 `null`；unknown 行
+  绝不因此被伪造成「无 goal」（activation 可能先于基线到达），行缺席也不新建行、不缓存到
+  迟到的行上。而 baseline/added 的显式 `goal:null` **不丢保留边**（create 可能仍在追这份
+  基线的在途快照竞态安全，刻意不对称）。**清边路径**（保留边是进程内易失信息，任何「行不再
+  可信」的收口都连边一起清）：`applyRemoved` **无条件清边**——在行存在性早退**之前**
+  删除（边可能跑在 create 之前、行从未存在；重建同 id 不得继承）；baseline **二次缺失**
+  prune 删行时随行清边（第一次缺失只标 absent）；行容量淘汰（`MAX_SESSIONS`，flush 时按
+  `observedAt` 最旧优先）删行时随行清边并计入 `dropped.goalActivations`（被淘汰行带边
+  时），`dropped.sessions` 照计；**该淘汰同时补发 delta**（`deltaRemoved` +
+  `commitDelta()`，进 replay ring）——淘汰是删除而不是静默抹掉，否则 SSE 客户端会永久
+  保留幻影行。`$events` ready 的**任意跳变**（`status.ready !== lastReady`）触发
+  `clearGoalActivations`，连同**尚未找到投影的保留边**一起清（F27：不能只看
+  false→true）。**容量与诊断**：
+  `MAX_PENDING_GOAL_ACTIVATIONS = MAX_SESSIONS`（2000）；同一会话的最新边覆盖旧边不算
+  淘汰，为新会话登记边而超限时淘汰**最久未更新**的一条（LRU：更新已有键用 delete+set
+  刷新保留序，不按首次登记序）并 warn，`dropped.goalActivations` 计数（绝不静默）。
+  **计数口径**：只有两处容量淘汰计数——保留边 cap 淘汰与行容量淘汰随行清边；
+  `applyRemoved`、baseline 二次缺失 prune、no-goal 事件与 `clearGoalActivations` 的清边
+  都**不计**（不是容量损失）。`dropped.goalActivations` 是**加法诊断键**（协议声明在
+  `packages/control-plane/src/session-state-protocol.ts` 的 `SessionStateDiagnostics.dropped`；
+  `status().dropped` 与持久文档 `dropped` 同形，旧客户端不进 diagnostics）：flush 把当时
+  的进程内累计值写进持久文档，但加载校验把 `readMarks`/`goalActivations` **一律归一为
+  0**（缺键/坏值与携带非零值同路，重启不继承）；保留边本身**不落盘**。旧端矩阵 fixture
+  （`support/compat/route-table-0.4.0.fixture.json`）把
+  `diagnostics.dropped.goalActivations` 以 dotted path 记进
+  `anchor.postFreezeAdditions` + `nested.diagnosticsDropped` 键表（负控制删/改名该键必红）。
+  路由级 `/chamber/session-state/stream` 的 delta 与
+  快照共用 wire row 投影，`sessions[]` 携带完整 goal（含进程内 activation）；旧客户端只读
+  冻结键、忽略该加法字段。
+- **activation 永不落盘**：它是进程内缓存，持久文档经 `persistedGoalFact` 剥掉
+  activation；进程重启后已知 goal 只有 identity/phase/水位，activation 回到 unknown。
+  `$events` ready 的**任意跳变**（`status.ready !== lastReady`）整体
+  `clearGoalActivations`——它连同**尚未找到投影的保留边**一起清。两个方向都是事件代边界
+  （F27）：false→true = 首连/重连/静默重订，间隙使旧边不可信；true→false = socket 死亡 /
+  host end/error / 握手超时，紧随其后的 poll 窗口会从死代取出陈旧 armed/disarmed。emit 帧
+  无重放，陈旧 armed/disarmed 不得跨任一侧存活（否则会永久压制或凭空补发）；换 goalId 时
+  基线刷新保留身份/相位但不得继承旧 activation。
+- **能力协商**：`session-state.goal` 是**可选** feature（`SESSION_STATE_FEATURES` 新增，
+  **绝不进** `SESSION_STATE_BASE_FEATURES`/required）：旧桌面或旧 gateway 缺它不降级，只是
+  该来源没有 goal 事实（现状）。它在 `sse` 与 `poll` 两种 mode 都宣告（只读
+  `session/list` 在两种 mode 都存在，不是 event-only）。旧桌面矩阵 fixture
+  （`support/compat/route-table-0.4.0.fixture.json`）按 additive 形状登记：
+  `features.addedAfterFreeze` + `sessionRowAdditive`（goal）+ 嵌套 `goal` 白名单键 +
+  `anchor.postFreezeAdditions`。`nested.goal` 键表已含 `activation`（进程内加法字段），
+  矩阵 seed 行带 bound activation 并断言其经 wire row 往返；negative control 删掉
+  `activation` 键必红（冻结键集 tripwire 的可失败性自证）。桌面侧
+  `session-facts-source.ts` 防御性解析该加法字段
+  （字段缺席 = unknown），**不按 capability 门控**（capability 只宣告能力，不改变解析）。
+- **只读边界不变**：仍是只读事实镜像，不写、不发命令；activation 的唯一来源是转发事件，
+  `goals/get` **永不调用**（其 lookup 覆写为 resolveAgent→resume，冷会话会被拉起 = 写面，
+  见 design 19 §3.2.2）；观察者纪律与隐私条（不存标题/cwd/消息/载荷）原样。
+- **P2b 不消费本镜像**：SSH/dsh 来源走 `packages/renderer/src/source-mux-facts.ts` 讲实例
+  **自己的**远程协议（`session/list` 投影 + `$events` + 每边沿一次 `session/follow`），
+  与 gateway 的 `/chamber/session-state` 无关；两条事实源只在 renderer 侧汇成同一份
+  `SessionFactsSnapshot` 形状（design 19 §3.5）。其 `goalActivations` 保留边同本节纪律：
+  绑定 id 与基线不符保留待匹配、no-goal 只清已知对象 goal（design 19 §3.2.2/§3.5）。
+- **验证与开放**：goal 白名单投影/activation 身份绑定路由/能力可选/旧端矩阵/持久化剥
+  activation 的定向用例由 `test:control-plane` / `test:gateway` 覆盖；实机/CI 权威验收
+  仍见 `docs/progress/STATUS.md` 的「远端完成未读 / 切源体验」条（本地环境伪象与轮次叙事不属设计契约）。
+
 ## 11. Git worktree：服务器侧范围外
 
 服务器侧 Git worktree saga（server 侧 `workspace.list`/`workspace.create`/

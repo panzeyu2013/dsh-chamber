@@ -8,7 +8,7 @@ import type { ShellIpcCtx } from './shell-core.ts'
 import type { ConnectionCredentialMutations } from './connection-save.ts'
 import type { GatewaySessionOrigin } from './gateway-session.ts'
 import type { TransportInstanceInput, TransportInstanceSpec } from './transport-provider.ts'
-import { INSTANCE_ID_PATTERN, commitTransportCredentialUpdate } from './transport-manager.ts'
+import { INSTANCE_ID_PATTERN, commitTransportCredentialUpdate, type TransportManager } from './transport-manager.ts'
 import { IPC_CHANNELS } from './ipc-events.ts'
 import { MAX_SSH_PASSWORD_CHARS, getSshPassword, setSshPassword, sshPasswordSupported, sshProvider } from './ssh-provider.ts'
 import { canonicalizeTransportInstanceInput } from './transport-provider.ts'
@@ -24,6 +24,13 @@ import { gatewaySessionScopeForConnection } from './gateway-session.ts'
 export function registerConnectionHandlers(ctx: ShellIpcCtx): void {
   const { deps, projectInstances } = ctx
   const { transportManager: sm, gatewaySessions, publishRegistryTransition, audit } = ctx.deps.ctx
+  /**
+   * V5-A：shell-core 的 transportManager Pick（其文件在本修复的清单外）早于
+   * roster-incomplete 两个只读诊断；装配侧注入的对象就是完整的
+   * createTransportManager 实例，因此这里经结构面读取，不去加宽共享 Pick。
+   * 运行时恒有实现（main.ts / sidecar-ctx.ts 同源注入）。
+   */
+  const rosterHealth = sm as unknown as Pick<TransportManager, 'registryIncomplete' | 'loadDroppedCount'>
   // —— C 组 ——
   // registry + 凭据 7 注册体（全零 Electron）。trustedIpc 围栏由装配侧在
   // registrar 注入点包装；事务（connection-save）/ canonicalize
@@ -58,6 +65,24 @@ export function registerConnectionHandlers(ctx: ShellIpcCtx): void {
   deps.ipc.handle(IPC_CHANNELS.SSH_INSTANCES_GET, () =>
     projectInstances(sm.listInstances())
   );
+  // Registry load health (degraded gate + roster-incomplete gate, narrow
+  // read-only channel): separate from instances_get so its array payload and
+  // every existing consumer stay untouched — a degraded registry answers an
+  // empty roster that must NOT settle the renderer's authoritative-roster
+  // gate, and a row-dropping load answers a PARTIAL roster whose legal rows
+  // still install while durable pruning stays vetoed (V5-A).
+  deps.ipc.handle(IPC_CHANNELS.SSH_INSTANCES_HEALTH, () => {
+    const reason = sm.loadFailure();
+    const rosterIncomplete = rosterHealth.registryIncomplete();
+    return {
+      degraded: reason !== null,
+      ...(reason === null ? {} : { reason }),
+      rosterIncomplete,
+      // Present only alongside the incomplete bit: the count has no meaning
+      // for a complete or a failed (degraded) load.
+      ...(rosterIncomplete ? { droppedCount: rosterHealth.loadDroppedCount() } : {}),
+    };
+  });
   /**
    * Main-owned ADD/EDIT transaction for registry metadata plus every
    * applicable write-only credential dimension. The renderer sends only

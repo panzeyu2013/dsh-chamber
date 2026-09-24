@@ -152,8 +152,18 @@ export const zh = {
   'source.local': '本地实例',
   /** Session title fallback used by the notification body. */
   'session.untitled': '未命名会话',
-  /** Notification title: a session finished its turn. */
+  /** Notification title: a session finished its turn (goal-aware v5: this is the
+   *  fallback title and the onComplete copy — the goal states below are separate
+   *  identities, each emitted at most once per goalId). */
   'notification.sessionComplete': '会话已完成',
+  /** Notification title: a held completion was flushed by its goal's outcome
+   *  (v5 §3.4 #2/#9; once per goal identity). */
+  'notification.goalCompleted': '目标已完成',
+  /** Notification title: the goal reached blocked and its held completion flushed. */
+  'notification.goalBlocked': '目标已受阻',
+  /** Notification title: a held completion was consumed while the goal was still
+   *  active but disarmed (v5 §3.4 #4) — a neutral "did not continue" notice. */
+  'notification.goalStopped': '目标未继续运行',
   /** Notification title: the agent is asking the user a question. */
   'notification.awaitingAnswer': '代理正在等待你的回答',
   /** Notification title: the agent requests approval. */
@@ -214,6 +224,9 @@ export const en: Record<FrameKey, string> = {
   'source.local': 'Local instance',
   'session.untitled': 'Untitled session',
   'notification.sessionComplete': 'Session complete',
+  'notification.goalCompleted': 'Goal completed',
+  'notification.goalBlocked': 'Goal blocked',
+  'notification.goalStopped': 'The goal did not continue running',
   'notification.awaitingAnswer': 'The agent is waiting for your answer',
   'notification.awaitingApproval': 'The agent requests your approval',
   'sessionStall.text': 'Cannot confirm the session state of {sources}: the connection may be stalled.',

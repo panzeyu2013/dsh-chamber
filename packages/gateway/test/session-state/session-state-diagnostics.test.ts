@@ -10,6 +10,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { PROTOCOL_VERSION } from '@dsh-chamber/control-plane'
 import {
+  MAX_PENDING_GOAL_ACTIVATIONS,
   createChamberSessionState,
   type SessionStateObserverStatus,
 } from '../../src/session-state.ts'
@@ -53,7 +54,7 @@ test('the descriptor carries the additive diagnostics field with the documented 
   assert.equal(diagnostics.heldWaterfalls, 1)
   assert.equal(diagnostics.degraded, true)
   assert.deepEqual(diagnostics.turnEnds, { completed: 0, userStopped: 0, neutral: 0, unreadable: 0 })
-  assert.deepEqual(diagnostics.dropped, { sessions: 0, readClients: 0, readMarks: 0 })
+  assert.deepEqual(diagnostics.dropped, { sessions: 0, readClients: 0, readMarks: 0, goalActivations: 0 })
   assert.equal(typeof diagnostics.cursor, 'number')
 })
 
@@ -81,6 +82,30 @@ test('store losses stay visible in the diagnostics (dropped counters pass throug
   activeSurface = harness.surface
   const diagnostics = (await get()).diagnostics as { dropped: Record<string, number> }
   // 未注入任何溢出时全 0（既不遗漏也不臆造）。
-  assert.deepEqual(diagnostics.dropped, { sessions: 0, readClients: 0, readMarks: 0 })
+  assert.deepEqual(diagnostics.dropped, { sessions: 0, readClients: 0, readMarks: 0, goalActivations: 0 })
   assert.ok(harness.store.status().dropped !== undefined)
+})
+
+test('the P2a retained-edge eviction counter rides diagnostics.dropped (sub-key + negative control)', async t => {
+  const harness = surfaceFor(t)
+  activeSurface = harness.surface
+  for (let index = 0; index <= MAX_PENDING_GOAL_ACTIVATIONS; index += 1) {
+    harness.store.applyGoalActivation({ sessionId: 'diag-' + String(index), goalId: 'goal-1', activation: 'armed' }, 100 + index)
+  }
+  const diagnostics = (await get()).diagnostics as { dropped: Record<string, number> }
+  assert.deepEqual(
+    Object.keys(diagnostics.dropped).sort(),
+    ['goalActivations', 'readClients', 'readMarks', 'sessions'],
+    'the additive P2a counter is part of the declared dropped shape',
+  )
+  assert.equal(diagnostics.dropped.goalActivations, 1, 'the cap eviction is visible on the wire, never silent')
+  // 负控制：同一子键闸门必须拒绝三键旧形状。
+  assert.throws(
+    () => assert.deepEqual(
+      Object.keys({ sessions: 0, readClients: 0, readMarks: 0 }).sort(),
+      Object.keys(diagnostics.dropped).sort(),
+      'mutant dropped without goalActivations',
+    ),
+    /mutant dropped without goalActivations/,
+  )
 })

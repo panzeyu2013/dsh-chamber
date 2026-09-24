@@ -110,7 +110,7 @@ export const LADDER_TABLES = {
     failedMs: 90_000,
   },
   /**
-   * The session-fact authority (docs/progress/todo/session-authority-refactor.md):
+   * The session-fact authority:
    * ONE set of numbers for two hosts of the same engine - the sidebar executor's
    * probe cadence and the App's reconnect/notice escalation. They replace the
    * former renderer-local SESSION_LIVENESS_DEFAULTS and the sidebar's 190 s

@@ -1,6 +1,6 @@
 //
 //  BridgeClientEdgeIntegrationTests.swift — B 桥 sidecar 出站 edge/notify 集成
-//  测试（60 通道无 GUI 全量冒烟 + Swift 侧 edge 应答）
+//  测试（61 通道无 GUI 全量冒烟 + Swift 侧 edge 应答）
 //
 //  覆盖对象：BridgeClient.swift 的出站面（design 25 §4.4.2 + sidecar-entry.ts/
 //  node-edges.ts 的 B 桥协议；无 GUI 下用真实 sidecar 全量冒烟，Swift harness
@@ -8,12 +8,12 @@
 //
 //  与既有 BridgeClientStubIntegrationTests（sidecar-stub.ts 桩）的差异：本文件
 //  拉起的 sidecar 是 **packages/desktop/sidecar-entry.ts**——真实 shell-core
-//  60/60 注册体 + 无头 ctx（未实现字段 loud 抛 'sidecar-ctx-unavailable:*'）+
+//  61/61 注册体 + 无头 ctx（未实现字段 loud 抛 'sidecar-ctx-unavailable:*'）+
 //  node-edges 宿主腿。其中 NOTIFY 类通道的宿主腿会把宿主动作经 B 桥 **edge
 //  出站帧** {"edge":…,"edgeId":N} 发给 Swift 并 await 应答（node-edges 的
 //  pendingEdges 无超时——Swift 不应答 = sidecar 永久挂起），UI push 面经
 //  **notify 出站帧** {"notify":…}（ready/rendererPush）。本文件验证：
-//    1. 60 通道逐个 invoke 全量冒烟：每通道 ≤5s 应答且 (ok==true) 或
+//    1. 61 通道逐个 invoke 全量冒烟：每通道 ≤5s 应答且 (ok==true) 或
 //       (ok=false 带 error 文案)——绝无挂起（Swift v1 默认 edge 应答策略兜底）；
 //       记录 ok/error 计数与任何超时；不止二值判定——按命名空间
 //       对代表通道断言具体 wire 形状（与 sidecar-stdio.test.ts 同形状），
@@ -41,12 +41,12 @@
 //      （swift test 的 cwd 是 macos/ 包根，上溯 1 层即仓库根）→ 找不到
 //      XCTSkip。spawn 参数 --user-data-dir <mkdtemp> --port 17920。
 //
-//  60 通道清单：直接迭代生成物 BridgeManifest.invokeChannels（由
+//  61 通道清单：直接迭代生成物 BridgeManifest.invokeChannels（由
 //  ipc-events.ts + main 侧注册事实生成；其余 8 个是主进程→渲染器单向 push
 //  通道，不在此列）。
 //
 //  超时纪律：onReady 30s；每通道 invoke 5s（侧car 全量应 <1s，5s 是「永不
-//  达」余量）；事件等待 10s；单用例心智上限 10s 级（60 通道全绿 ~1-3s）。
+//  达」余量）；事件等待 10s；单用例心智上限 10s 级（61 通道全绿 ~1-3s）。
 //  整文件心智上限 120s（5 次 spawn 各 ~1-2s + 冒烟 2 轮）。
 //
 import Foundation
@@ -166,7 +166,7 @@ final class BridgeClientEdgeIntegrationTests: XCTestCase {
     /// （dsh-chamber:*：设置/更新/通知/open-in/deep-link——update-check 是真实
     /// 网络探测，~2s）先跑；重的 desktop_*（SSH/插件）与 runtime-* 后跑——
     /// 原手工清单就是这个分组次序（update-check 第 9 个）；若按字典序把
-    /// update-check 排到第 57 个，前 56 个通道的累计负载会顶穿 5s 护栏。
+    /// update-check 排到第 58 个，前 57 个通道的累计负载会顶穿 5s 护栏。
     private static let invokeChannels: [String] = {
         let deferred = ["desktop_", "dsh-chamber:runtime-"]
         let isDeferred = { (channel: String) in deferred.contains { channel.hasPrefix($0) } }
@@ -344,7 +344,7 @@ final class BridgeClientEdgeIntegrationTests: XCTestCase {
         return (port, shellVersion)
     }
 
-    /// 60 通道逐个 invoke 的冒烟循环：返回 ok/error 计数与逐通道结果；
+    /// 61 通道逐个 invoke 的冒烟循环：返回 ok/error 计数与逐通道结果；
     /// 首个超时/桥失活即停（后续通道不再跑，避免叠 5s 超时拖时间）。
     private struct SmokeReport {
         var okCount = 0
@@ -359,7 +359,7 @@ final class BridgeClientEdgeIntegrationTests: XCTestCase {
         var summary: String {
             var text = "ok=\(okCount) error=\(errorCount)"
             if let timedOut {
-                text += "；第 \(timedOut.index + 1)/60「\(timedOut.channel)」未应答"
+                text += "；第 \(timedOut.index + 1)/61「\(timedOut.channel)」未应答"
             }
             return text
         }
@@ -369,7 +369,7 @@ final class BridgeClientEdgeIntegrationTests: XCTestCase {
     /// 探测（上游 releases/registry 查询），网络抖动下可能 >5s；runtime-restart
     /// 会停掉并重启一个**真实的本地 dsh 宿主**（实测冷启动 2–10s，套件里
     /// 前序用例留下的宿主还要先停），5s 紧界会在本机稳定误判为挂起——两者各给
-    /// 20s 余量；其余 58 通道保持 5s 紧界（挂起判定不被稀释）。
+    /// 20s 余量；其余 59 通道保持 5s 紧界（挂起判定不被稀释）。
     private static func invokeTimeout(for channel: String) -> TimeInterval {
         let realWork: Set<String> = ["dsh-chamber:update-check", "dsh-chamber:runtime-restart"]
         return realWork.contains(channel) ? 20 : invokeTimeout
@@ -406,7 +406,7 @@ final class BridgeClientEdgeIntegrationTests: XCTestCase {
         return report
     }
 
-    /// 60 通道冒烟必须不止「ok 或任意非空业务错误」的二值
+    /// 61 通道冒烟必须不止「ok 或任意非空业务错误」的二值
     /// 判定（一个对每个调用都回泛化错误的通道会照样全绿）。本助手按命名空间
     /// 对代表通道断言具体 wire 形状——形状集与
     /// sidecar-stdio.test.ts 逐条对应；形状漂移即失败。
@@ -552,7 +552,7 @@ final class BridgeClientEdgeIntegrationTests: XCTestCase {
 
     // MARK: - 用例
 
-    /// 全量冒烟 + 默认 edge 应答：60 通道逐个 invoke，每通道 ≤5s
+    /// 全量冒烟 + 默认 edge 应答：61 通道逐个 invoke，每通道 ≤5s
     /// 应答、ok 或带文案 loud 错误（无头 ctx 下未实现字段 loud 抛
     /// 'sidecar-ctx-unavailable:*'——绝大多数通道预期 loud 错误，绝无挂起）。
     /// Swift 侧用构造默认装入的 v1 默认应答器应答 sidecar 的一切 edge 出站帧。
@@ -574,13 +574,13 @@ final class BridgeClientEdgeIntegrationTests: XCTestCase {
 
         let channels = Self.invokeChannels
         // 通道数不在此硬编码：单一事实源是生成物（BridgeManifestConsistencyTests 钉
-        // 精确计数 60），这里只钉「非空 + 无重复 + 全部被 smoke 覆盖」。
+        // 精确计数 61），这里只钉「非空 + 无重复 + 全部被 smoke 覆盖」。
         XCTAssertFalse(channels.isEmpty, "BridgeManifest.invokeChannels 不得为空")
         XCTAssertEqual(Set(channels).count, channels.count, "清单不得含重复通道")
 
         let report = await runSmokeLoop(bridge, channels: channels)
         if let timedOut = report.timedOut {
-            XCTFail("60 通道冒烟存在挂起：第 \(timedOut.index + 1)/60「\(timedOut.channel)」5s 未应答"
+            XCTFail("61 通道冒烟存在挂起：第 \(timedOut.index + 1)/61「\(timedOut.channel)」5s 未应答"
                     + "（\(report.byChannel[timedOut.channel] ?? "")）；循环已中止，"
                     + "余下 \(channels.count - timedOut.index - 1) 通道未跑；\(report.summary)")
             return
@@ -646,10 +646,10 @@ final class BridgeClientEdgeIntegrationTests: XCTestCase {
         XCTAssertTrue(edgeRecorder.entries.contains("pickPluginSource"),
                       "自定义应答器应收到 pickPluginSource edge（记录：\(edgeRecorder.entries)）")
 
-        // 自定义应答器下 60 通道全量冒烟同样无挂起（回落覆盖未处理 edge）。
+        // 自定义应答器下 61 通道全量冒烟同样无挂起（回落覆盖未处理 edge）。
         let report = await runSmokeLoop(bridge, channels: Self.invokeChannels)
         if let timedOut = report.timedOut {
-            XCTFail("自定义应答器冒烟存在挂起：第 \(timedOut.index + 1)/60「\(timedOut.channel)」；"
+            XCTFail("自定义应答器冒烟存在挂起：第 \(timedOut.index + 1)/61「\(timedOut.channel)」；"
                     + "循环已中止，余下 \(Self.invokeChannels.count - timedOut.index - 1) 未跑")
             return
         }

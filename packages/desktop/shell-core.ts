@@ -1521,7 +1521,8 @@ export interface ShellAssemblyCtx {
    *  读写面；装配侧注入 transport-manager 现实例——纯模块按引用共享；Pick 收窄
    *  到实际调用的方法面（reverify/logs/clearLogs——D 组状态/日志/重验证通道；
    *  exec——E 组 exec/systemd 执行通道；appendLog——F 组
-   *  host-graph seed 结果投影入实例环形日志），体内以 sm 名解构）。 */
+   *  host-graph seed 结果投影入实例环形日志；loadFailure——C 组注册表健康
+   *  通道（desktop_ssh_instances_health 的降级原因读面）），体内以 sm 名解构）。 */
   transportManager: Pick<
     TransportManager,
     | 'listInstances'
@@ -1535,6 +1536,7 @@ export interface ShellAssemblyCtx {
     | 'clearLogs'
     | 'exec'
     | 'appendLog'
+    | 'loadFailure'
   >
   /** 非秘密审计叶（appendAuditEvent({ file:
    *  auditLogPath })——装配侧绑定 <userData> 路径注入；JSONL append 只记非

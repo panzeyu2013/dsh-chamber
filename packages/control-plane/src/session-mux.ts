@@ -30,8 +30,11 @@
  *     persists state and never becomes an authority on session facts.
  *
  * Privacy: only session ids / booleans / counters leave this
- * module. The waterfall `request` payload is parsed past and deliberately NOT
- * retained (no field for it exists below); `api-session/error` emits are
+ * module — plus, since P2a, the goal sub-whitelist of
+ * `projections.values.goal` (goalId/revision/phase/updatedAt and the
+ * activation edge): the projector `objective` and `blockedReason` never enter
+ * the observer. The waterfall `request` payload is parsed past and deliberately
+ * NOT retained (no field for it exists below); `api-session/error` emits are
  * dropped without reading their text; diagnostics carry fixed strings and
  * error codes only.
  *
@@ -43,6 +46,8 @@
 import { call as controlPlaneCall } from './dsh-client.ts'
 import {
   SESSION_STATE_HANDSHAKE_WINDOW_MS,
+  type SessionStateGoalActivationEvent,
+  type SessionStateGoalFact,
   type SessionStatePendingKind,
   type SessionTurnEnd,
   type SessionTurnEndCause,
@@ -116,14 +121,21 @@ export type MuxUnaryCall = (
 ) => Promise<MuxUnaryResult>
 
 /** One white-listed `session/list` row. A projection whitelist, not a
- *  convenience: title/cwd/agentPreset/todos/projections must never enter the
- *  observer (privacy whitelist). */
+ *  convenience: title/cwd/agentPreset/todos and every OTHER projection key must
+ *  never enter the observer (privacy whitelist). The single projection exception
+ *  is `projections.values.goal`, projected down to
+ *  {@link SessionStateGoalFact}'s goalId/revision/phase/updatedAt — never its
+ *  `objective` or `blockedReason` (v5 §2.1). */
 export interface SessionListBaselineItem {
   sessionId: string
   running: boolean
   updatedAt: number
   parentSessionId: string | null
   origin: 'subagent' | null
+  /** Projected goal fact. The field is ABSENT when `projections.values.goal`
+   *  was absent or unparsable (unknown — never silently "no goal"); `null`
+   *  when the host explicitly reports no current goal; an object otherwise. */
+  goal?: SessionStateGoalFact | null
 }
 
 /** Client-to-host logical stream frame (mirrors stream-protocol.ts types). */
@@ -355,6 +367,40 @@ export function parseRemoteEventFrame(value: unknown): RemoteEventFrame | null {
   return { type: 'unknown' }
 }
 
+/**
+ * Project the `goal` key out of one `session/list` item's projection block.
+ * The pinned host value is
+ * `{ goal: { id, revision, objective, phase, blockedReason?, maxGoalRounds }, roundsStarted, createdAt, updatedAt } | null`;
+ * ONLY id/revision/phase/updatedAt survive this projector — objective and
+ * blockedReason are dropped here by construction (privacy whitelist).
+ * @param value - one untrusted `session/list` item.
+ * @returns `undefined` = key absent or shape unparsable (unknown; never
+ *   silently "no goal"), `null` = explicit no current goal, an object = the
+ *   whitelisted fact.
+ */
+function parseProjectedGoalFact(value: Record<string, unknown>): SessionStateGoalFact | null | undefined {
+  const projections = value.projections
+  if (!isRecord(projections)) return undefined
+  const values = projections.values
+  if (!isRecord(values) || !Object.hasOwn(values, 'goal')) return undefined
+  const raw = values.goal
+  if (raw === null) return null
+  if (!isRecord(raw) || !isRecord(raw.goal)) return undefined
+  const id = raw.goal.id
+  const revision = raw.goal.revision
+  const phase = raw.goal.phase
+  if (typeof id !== 'string' || id.length === 0) return undefined
+  if (typeof revision !== 'number' || !Number.isSafeInteger(revision) || revision < 1) return undefined
+  if (typeof phase !== 'string' || !GOAL_PHASES.has(phase)) return undefined
+  const fact: SessionStateGoalFact = {
+    goalId: id,
+    revision,
+    phase: phase as SessionStateGoalFact['phase'],
+  }
+  if (isWatermark(raw.updatedAt)) fact.updatedAt = raw.updatedAt
+  return fact
+}
+
 /** Project one untrusted `session/list` item through the privacy whitelist. */
 export function parseSessionListBaselineItem(value: unknown): SessionListBaselineItem | null {
   if (!isRecord(value)) return null
@@ -363,13 +409,18 @@ export function parseSessionListBaselineItem(value: unknown): SessionListBaselin
   const parentSessionId = typeof value.parentSessionId === 'string' && value.parentSessionId.length > 0
     ? value.parentSessionId
     : typeof value.parent === 'string' && value.parent.length > 0 ? value.parent : null
-  return {
+  const item: SessionListBaselineItem = {
     sessionId,
     running: value.running === true,
     updatedAt: isWatermark(value.updatedAt) ? value.updatedAt : 0,
     parentSessionId,
     origin: value.origin === 'subagent' ? 'subagent' : null,
   }
+  // The key stays ABSENT for unknown (never `goal: undefined`), so "unknown"
+  // and "explicitly no goal" remain distinguishable downstream.
+  const goal = parseProjectedGoalFact(value)
+  if (goal !== undefined) item.goal = goal
+  return item
 }
 
 /**
@@ -476,6 +527,12 @@ export interface SessionMuxDeps {
   onAdded?(item: SessionListBaselineItem, at: number): void
   /** api-session/removed emit. */
   onRemoved?(sessionId: string, at: number): void
+  /** Forwarded `goal/activation-changed`: the process-local goal activation
+   *  edge, carrying the exact `goal.id` it belongs to
+   *  ({@link SessionStateGoalActivationEvent}). A present-but-malformed
+   *  activation is dropped (never guessed); an absent `goal` is the host's
+   *  explicit "no current goal". */
+  onGoalActivation?(event: SessionStateGoalActivationEvent): void
   /** A request waterfall was received and is being held. */
   onPending?(sessionId: string, kind: SessionStatePendingKind, eventId: string, at: number): void
   /** A previously held waterfall was cancelled (or was a foreign waterfall we
@@ -543,6 +600,11 @@ const TURN_END_CAUSES: ReadonlySet<string> = new Set<SessionTurnEndCause>([
 ])
 const APPROVAL_EVENT = 'approval/request'
 const USER_QUESTIONS_EVENT = 'user-questions/request'
+/** Forwarded goal activation edge (pinned dsh `GoalService.setActivation`):
+ *  `{ sessionId, goal?: { id, revision, activation } }`. Its emit-type delivery
+ *  has no replay, so a missed edge degrades activation to unknown. */
+const GOAL_ACTIVATION_CHANGED_EVENT = 'goal/activation-changed'
+const GOAL_PHASES: ReadonlySet<string> = new Set(['active', 'paused', 'blocked', 'complete'])
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -641,6 +703,17 @@ export function createSessionMux(deps: SessionMuxDeps): SessionMux {
     handshakeTimer = null
     clearTimer(silenceTimer)
     silenceTimer = null
+    // The dropped socket owns its held waterfalls: the host removes this client
+    // from the deliveries when the socket closes, so a hold must never survive
+    // the drop. Release HERE, before close() can run the listeners: the onClose
+    // handler is generation-guarded (dropSocket already bumped `generation`)
+    // and would skip its own release, leaving the hold to be answered by a
+    // later generation. Falling ready/clientId back in the same step is what
+    // makes the release final — without it a sweep (kick/emit/grace timer)
+    // could still send `$events/result` for the dead generation's event with
+    // its stale clientId.
+    releaseHeldWaterfalls()
+    setStatus({ state: 'connecting', ready: false, clientId: null })
     if (current !== null) {
       try { current.close(code, reason) } catch { /* best-effort */ }
     }
@@ -817,6 +890,30 @@ export function createSessionMux(deps: SessionMuxDeps): SessionMux {
     if (event === 'api-session/removed') {
       const sessionId = args[0]
       if (typeof sessionId === 'string' && sessionId.length > 0) deps.onRemoved?.(sessionId, at)
+      return
+    }
+    if (event === GOAL_ACTIVATION_CHANGED_EVENT) {
+      const payload = args[0]
+      if (!isRecord(payload)) return
+      const sessionId = payload.sessionId
+      if (typeof sessionId !== 'string' || sessionId.length === 0) return
+      // `goal` absent = the host's projection has no current goal (the emit
+      // spreads only a present view); a present view carries the activation
+      // AND the exact goal id the edge belongs to (identity binding: the
+      // observer must never apply a new goal's edge to the previous goal's row).
+      const goal = payload.goal
+      if (goal === undefined) {
+        deps.onGoalActivation?.({ sessionId, goalId: null, activation: null })
+        return
+      }
+      if (!isRecord(goal)) return
+      const activation = goal.activation
+      if (activation !== 'armed' && activation !== 'disarmed') return
+      const id = goal.id
+      // A missing/empty id is an unbound edge (null), mirroring the renderer
+      // P2b parser: it may act on the row's current known goal, never guessed.
+      const goalId = typeof id === 'string' && id.length > 0 ? id : null
+      deps.onGoalActivation?.({ sessionId, goalId, activation })
       return
     }
     // api-session/error and every other forwarded event are dropped without

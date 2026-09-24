@@ -8,7 +8,7 @@
 //  fixture（显式 DSH_CHAMBER_SHELL_SIDECAR 才会被壳加载）。类名
 //  BridgeClientStubIntegrationTests 明确桩身份；真入口的进程级覆盖见本文件
 //  末尾的 BridgeClientRealEntryIntegrationTests 与 BridgeClientEdgeIntegrationTests
-//  （60 通道 + edge/notify 全量）。
+//  （61 通道 + edge/notify 全量）。
 //
 //  覆盖对象：BridgeClient.swift 的进程/帧/配对面在 **POC 桩 fixture** 下的行为
 //  （design 25 §4.4.2 B 桥 Swift ↔ sidecar 进程客户端）。

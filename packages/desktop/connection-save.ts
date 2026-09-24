@@ -1,4 +1,5 @@
 import type { TransportInstanceInput, TransportInstanceSpec } from './transport-provider.ts'
+import type { SaveInstancesProvenance } from './transport-manager.ts'
 import { gatewayCredentialTargetChanged, liveTransportIdentityChanged, sshCredentialEndpointChanged } from './credential-identity.ts'
 import { describeError } from './describe-error.ts'
 
@@ -44,7 +45,11 @@ export type SaveConnectionTransactionResult =
 export interface SaveConnectionTransactionDeps {
   listInstances(): TransportInstanceSpec[]
   normalize(input: TransportInstanceInput): TransportInstanceSpec | null
-  saveInstances(instances: TransportInstanceInput[]): TransportInstanceSpec[]
+  /** `provenance` keeps the rollback write distinguishable from a real user
+   *  save: a compensation write must not clear the registry degraded gate and,
+   *  while that gate is closed, is an in-memory-only restore — transport-manager
+   *  skips its disk write so the unknown live file is not resurrected (F19). */
+  saveInstances(instances: TransportInstanceInput[], provenance?: SaveInstancesProvenance): TransportInstanceSpec[]
   getSshPassword(id: string): string | null
   getGatewayToken(id: string): string | null
   getGatewayPassword(id: string): string | null
@@ -61,7 +66,7 @@ export interface SaveConnectionTransactionDeps {
 
 export interface DeleteConnectionsTransactionDeps {
   listInstances(): TransportInstanceSpec[]
-  saveInstances(instances: TransportInstanceInput[]): TransportInstanceSpec[]
+  saveInstances(instances: TransportInstanceInput[], provenance?: SaveInstancesProvenance): TransportInstanceSpec[]
   getSshPassword(id: string): string | null
   getGatewayToken(id: string): string | null
   getGatewayPassword(id: string): string | null
@@ -93,7 +98,11 @@ function nonEmpty(value: string | undefined): string | undefined {
  * gateway token+password land in one store commit, SSH lands second, and the
  * registry lands last. Any failure restores metadata and every secret from
  * those main-only snapshots; a compensation failure is loud and the old
- * transport is not reconnected under an uncertain state.
+ * transport is not reconnected under an uncertain state. The registry
+ * proposal is written as `authoritative` and the rollback rewrite as
+ * `compensation`, so a rollback can never clear the registry-load degraded
+ * gate (F16/A4) and, while that gate is closed, never writes the live file
+ * (F19: an in-memory-only restore).
  */
 export function saveConnectionTransaction(
   deps: SaveConnectionTransactionDeps,
@@ -236,7 +245,8 @@ export function saveConnectionTransaction(
       deps.setSshPassword(id, nextSshPassword, normalized.transport === 'ssh' ? normalized : null)
     }
     metadataAttempted = true
-    const saved = deps.saveInstances(proposed)
+    // The proposal is the user's real registry replacement: authoritative.
+    const saved = deps.saveInstances(proposed, 'authoritative')
     if (!sameInstances(saved, proposed)) {
       throw new Error('connection registry refused or normalized the proposed replacement')
     }
@@ -254,7 +264,11 @@ export function saveConnectionTransaction(
     let metadataRestored = true
     if (metadataAttempted) {
       try {
-        const restored = deps.saveInstances(before)
+        // Rollback restores the pre-transaction snapshot; it is NOT a new
+        // registry truth and must leave the degraded gate untouched (while
+        // degraded, the manager skips the disk write so the unknown live file
+        // is not resurrected; F19).
+        const restored = deps.saveInstances(before, 'compensation')
         metadataRestored = sameInstances(restored, before)
         if (!metadataRestored) failures.push('restoring connection metadata returned a different registry')
       } catch (restoreError) {
@@ -349,7 +363,7 @@ function runDeleteConnectionsTransaction(
       deps.setSshPassword(snapshot.spec.id, null, null)
     }
     metadataAttempted = true
-    const saved = deps.saveInstances(retained)
+    const saved = deps.saveInstances(retained, 'authoritative')
     if (!sameInstances(saved, retained)) throw new Error('connection registry refused the delete-only replacement')
     return { ok: true, instances: saved, removed }
   } catch (error) {
@@ -357,7 +371,11 @@ function runDeleteConnectionsTransaction(
     let metadataRestored = true
     if (metadataAttempted) {
       try {
-        const restored = deps.saveInstances(before)
+        // Rollback restores the pre-transaction snapshot; it is NOT a new
+        // registry truth and must leave the degraded gate untouched (while
+        // degraded, the manager skips the disk write so the unknown live file
+        // is not resurrected; F19).
+        const restored = deps.saveInstances(before, 'compensation')
         metadataRestored = sameInstances(restored, before)
         if (!metadataRestored) failures.push('restoring connection metadata returned a different registry')
       } catch (restoreError) {

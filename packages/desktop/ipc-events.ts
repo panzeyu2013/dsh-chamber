@@ -53,6 +53,10 @@ export const IPC_CHANNELS = {
   SYSTEM_RESUME: 'dsh-chamber:system-resume',
 
   SSH_INSTANCES_GET: 'desktop_ssh_instances_get',
+  /** Registry load health (degraded gate): the renderer must NOT treat an
+   *  instances_get empty array as an authoritative roster while the persisted
+   *  registry failed to load. */
+  SSH_INSTANCES_HEALTH: 'desktop_ssh_instances_health',
   SSH_SAVE_CONNECTION: 'desktop_ssh_save_connection',
   SSH_DELETE_CONNECTION: 'desktop_ssh_delete_connection',
   SSH_SET_PASSWORD: 'desktop_ssh_set_password',

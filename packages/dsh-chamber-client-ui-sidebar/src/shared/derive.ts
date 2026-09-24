@@ -23,7 +23,7 @@
  * No React, no DOM — plain-node unit-testable (see test/session-rows/derive.test.ts).
  */
 import type { InstanceSnapshot, SearchRow, SessionRow, WorkspaceRow } from './instance-api.ts'
-import type { SubagentActivity } from './session-row-state.ts'
+import type { GoalFact, SubagentActivity } from './session-row-state.ts'
 import type { ChamberServerAggregate, ChamberServerWorkspace, InstanceRuntimeReport, ServerBootGap } from './aggregate-store.ts'
 import { forgetMapSources } from './ledger.ts'
 import { assertSingletonModule } from './singleton.ts'
@@ -59,6 +59,83 @@ export function hasActiveScheduleOf(
 ): boolean {
   const schedule = projectionValues?.schedule
   return Array.isArray(schedule) && schedule.length > 0
+}
+
+/**
+ * One-shot diagnostic flag for a malformed `goal` projection value (v5 §2.1):
+ * the value repeats on every store notification while the producing host stays
+ * broken, so the console warning fires once per page lifetime (same discipline
+ * as warnedCwdMembershipFallback below).
+ */
+let warnedGoalProjectionShape = false
+
+/** goal 相位白名单（v5 §2.1 的 wire 词表；未知词 = 形状不符）。 */
+const GOAL_PHASES = new Set<GoalFact['phase']>(['active', 'paused', 'blocked', 'complete'])
+
+/**
+ * Parse one row's `projectionValues.goal` into the chamber's three-valued goal
+ * fact (v5 §2.1). The wire value is NESTED:
+ *
+ *   `{ goal: { id, revision, phase }, roundsStarted, updatedAt } | null`
+ *
+ * Three-valued result, and the three values are NOT interchangeable:
+ * - `undefined` = **unknown** — the `goal` key is absent, the value is absent,
+ *   or the shape does not match. Unknown must never be folded into "no goal":
+ *   the notification ledger holds on unknown (§2.2/§3.4) while presentation
+ *   simply does not suppress, and the producer keeps the last known fact.
+ * - `null` = the projection explicitly said "no goal".
+ * - object = the projected goal (only id/revision/phase/updatedAt — objective
+ *   and blockedReason are deliberately NEVER read, §2.1 privacy).
+ *
+ * Malformed shapes warn once per page lifetime; they stay unknown (never a
+ * fabricated `null`, which would settle a pending completion).
+ *
+ * @param projectionValues - the session row's projection bag (mounted store's
+ *   `SessionSummary.projectionValues`), or undefined when the producer carried none.
+ */
+export function parseGoalFact(
+  projectionValues: Readonly<Record<string, unknown>> | undefined,
+): GoalFact | null | undefined {
+  if (projectionValues === undefined) return undefined
+  if (!Object.hasOwn(projectionValues, 'goal')) return undefined
+  const value = projectionValues.goal
+  if (value === undefined) return undefined
+  if (value === null) return null
+  if (typeof value !== 'object' || Array.isArray(value)) return warnGoalShape()
+  const record = value as Record<string, unknown>
+  const nested = record.goal
+  if (nested === null || typeof nested !== 'object' || Array.isArray(nested)) return warnGoalShape()
+  const goal = nested as Record<string, unknown>
+  const goalId = goal.id
+  const revision = goal.revision
+  const phase = goal.phase
+  if (typeof goalId !== 'string' || goalId === '') return warnGoalShape()
+  // 严格度与 P2a/P2b 对齐（source-mux-facts.parseProjectedGoalFact /
+  // control-plane parseProjectedGoalFact）：revision 是安全整数且 >= 1，
+  // updatedAt 是安全整数且 >= 0；浮点/负数/不安全整数 = 形状不符（unknown）。
+  if (typeof revision !== 'number' || !Number.isSafeInteger(revision) || revision < 1) return warnGoalShape()
+  if (typeof phase !== 'string' || !GOAL_PHASES.has(phase as GoalFact['phase'])) return warnGoalShape()
+  const fact: GoalFact = { goalId, revision, phase: phase as GoalFact['phase'] }
+  const updatedAt = record.updatedAt
+  if (typeof updatedAt === 'number' && Number.isSafeInteger(updatedAt) && updatedAt >= 0) fact.updatedAt = updatedAt
+  return fact
+}
+
+/** Warn once, then keep returning `undefined` (unknown) — never a fake `null`. */
+function warnGoalShape(): undefined {
+  if (!warnedGoalProjectionShape) {
+    warnedGoalProjectionShape = true
+    console.warn(
+      '[chamber] session goal projection has an unexpected shape — treating it as UNKNOWN '
+      + '(not as "no goal"); last-known goal facts stay in force',
+    )
+  }
+  return undefined
+}
+
+/** Test-only: re-arm the one-shot goal-shape warning (node tests share the module instance). */
+export function __resetGoalProjectionWarningForTests(): void {
+  warnedGoalProjectionShape = false
 }
 
 /**
@@ -610,6 +687,12 @@ export function deriveUnread(
  * The kind mapping mirrors the official `visiblePendingKind` verbatim so the
  * presentation can never drift from the official tree. The loose param
  * avoids importing runtime store types.
+ *
+ * The goal fact (design 19 §3.2.1) is parsed HERE from the row's
+ * projection bag and rides SPARSELY: a row whose `projectionValues.goal` parsed
+ * (object or explicit null) carries `goal`; an absent key means UNKNOWN and
+ * carries nothing — the PRODUCER (client/index.ts) restores the last known fact
+ * per source generation and merges the event-cached activation there.
  */
 export function projectRuntimeFacts(
   snapshot: {
@@ -618,6 +701,11 @@ export function projectRuntimeFacts(
       running?: boolean
       completed?: boolean
       origin?: 'subagent'
+      /**
+       * The mounted store's `SessionSummary.projectionValues` — read for the
+       * `goal` projection value (and, on the snapshot path above, schedule).
+       */
+      projectionValues?: Readonly<Record<string, unknown>>
     }>
   },
   subagentRunning?: ReadonlyMap<string, number>,
@@ -635,10 +723,15 @@ export function projectRuntimeFacts(
       pending?: 'approval' | 'plan-review' | 'question'
       runningSubagents?: number
       subagentActivity?: SubagentActivity
+      goal?: GoalFact | null
     } = {
       running: facts?.running === true,
     }
     if (facts?.completed === true) row.completed = true
+    // v5 §2.1 三值事实：解析成功（对象/null）才写字段；键缺席/形状不符 = unknown
+    // 保持稀疏（生产者按来源代回填最后已知值）。
+    const goal = parseGoalFact(facts?.projectionValues)
+    if (goal !== undefined) row.goal = goal
     // pending rides the official ui-session registry (see header doc); unknown
     // kinds stay undefined so a future upstream kind cannot leak into the UI.
     const pending = pendingKindOf(pendingInteractions?.get(id)?.kind)
@@ -839,6 +932,13 @@ export interface RuntimeFactsOverlayRow {
   runningSubagents?: number
   /** I5：观察者刷新这一行事实的 host 域毫秒（渲染字段，不参与任何判定）。 */
   factAt?: number
+  /**
+   * Goal 三值事实（design 19 §3.2.1 P2a/§3.5）：**无壳来源**（facts-only）
+   * 的 goal 行事实经 overlay 进投影——mounted 源的 goal 由它自己的生产者经通道
+   * 行给出，此处缺席 = unknown（绝不伪造 null）。null = 明确无 goal（可覆盖通道
+   * 行的 unknown）。
+   */
+  goal?: GoalFact | null
 }
 
 /** One source's render-field overlay, keyed by session id (see {@link RuntimeFactsOverlayRow}). */
@@ -856,8 +956,8 @@ export type RuntimeFactsOverlay = Readonly<Record<string, RuntimeFactsOverlayRow
  * dots); the caller attaches runtime only for CONNECTED sources, so a
  * not-connected source never carries facts.
  *
- * Two OPTIONAL inputs; a two-argument call stays byte-identical
- * (compatibility lock, test/session-rows/derive.test.ts):
+ * Two OPTIONAL inputs; a two-argument call whose report carries no `stale`
+ * bit stays byte-identical (compatibility lock, test/session-rows/derive.test.ts):
  * - `overlay`: render fields supplied by a facts source when the shell channel
  *   is absent. Per-field priority — pending: channel wins, overlay fills an
  *   absent kind; runningSubagents: channel ?? overlay; completed stays the
@@ -867,7 +967,11 @@ export type RuntimeFactsOverlay = Readonly<Record<string, RuntimeFactsOverlayRow
  *   (rows may still render; consumers label, never present them as live). It is
  *   a report-level flag and is no-op when false; it requires attachable content
  *   (an armed dot, an overlay row, or a report) — stale alone still returns
- *   undefined, because a marker with nothing to attach is not a fact.
+ *   undefined, because a marker with nothing to attach is not a fact. The
+ *   INPUT report's own `stale` bit is OR-ed in: callers forward it on the
+ *   channel (the shell report / observation carry `report.stale`), and dropping
+ *   it here would let the six-face guards (subagent activity, badge) read a
+ *   disconnected source's retained facts as live.
  */
 export function mergeRuntimeFacts(
   runtime: InstanceRuntimeReport | undefined,
@@ -878,7 +982,8 @@ export function mergeRuntimeFacts(
   const chamberCompleted = completedBySource
   const hasArmed = chamberCompleted !== undefined && Object.values(chamberCompleted).some(value => value === true)
   const hasOverlay = overlay !== undefined && Object.keys(overlay).length > 0
-  const hasStale = stale === true
+  // The report's own stale bit (channel) counts exactly like the explicit arg.
+  const hasStale = stale === true || runtime?.stale === true
   // `stale` alone is not content: with no report, no armed dot and no overlay
   // row there is nothing to attach, so the two-argument early return is
   // preserved verbatim (compatibility lock).
@@ -909,6 +1014,9 @@ export function mergeRuntimeFacts(
       // I5：事实时间戳只随观察者走（通道报告不带它），因此 overlay 直接写；
       // 它是渲染字段，不参与任何判定（与 updatedAt/completedAt 拒收的纪律不冲突）。
       if (extra.factAt !== undefined && extra.factAt > 0) next = { ...next, factAt: extra.factAt }
+      // goal（P2a）：通道行已给出（对象或显式 null）即权威；absent = unknown 由
+      // overlay 的已知值（含显式 null）填补——无壳来源的呈现门/徽标/待办读它。
+      if (next.goal === undefined && extra.goal !== undefined) next = { ...next, goal: extra.goal }
       sessions[sessionId] = next
     }
   }
@@ -929,6 +1037,62 @@ export function mergeRuntimeFacts(
   const report: InstanceRuntimeReport = { current: runtime?.current, sessions }
   if (hasStale) report.stale = true
   return report
+}
+
+/**
+ * v5 §2.1 last-known goal retention — the PRODUCER-side merge (client/index.ts
+ * owns one map per source generation; "generation/fingerprint 变化清空" falls
+ * out of the producer effect being re-created per mount, plus the caller's own
+ * reset on a fingerprint switch).
+ *
+ * The pure parse ({@link projectRuntimeFacts} / {@link parseGoalFact}) reports
+ * UNKNOWN as an absent row field; this merge restores the previous fact for
+ * exactly those rows and records the next last-known map:
+ * - parsed object/null → the new fact wins and enters the map;
+ * - parsed unknown → the previous fact (if any) is written back onto the row;
+ * - a session absent from THIS report leaves the map (行消失即 drop) — so the
+ *   map is bounded by the current report and a purged/archived session cannot
+ *   keep a stale goal alive.
+ *
+ * PURE except for the row-restoring write on the passed report (the producer's
+ * own object; no shared state). Returns the map for the next pass.
+ */
+export function retainGoalFacts(
+  report: InstanceRuntimeReport,
+  previous: ReadonlyMap<string, GoalFact | null>,
+): Map<string, GoalFact | null> {
+  const next = new Map<string, GoalFact | null>()
+  for (const [sessionId, row] of Object.entries(report.sessions)) {
+    if (row.goal !== undefined) {
+      next.set(sessionId, row.goal)
+      continue
+    }
+    const lastKnown = previous.get(sessionId)
+    if (lastKnown === undefined) continue
+    row.goal = lastKnown
+    next.set(sessionId, lastKnown)
+  }
+  return next
+}
+
+/**
+ * Merge the event-cached activation (§2.2) into the report's known goal facts —
+ * ONLY object facts (activation is meaningless for unknown/null), and only when
+ * the value actually changes, so an unchanged pass keeps the previous goal
+ * object identity (no churn). The cache itself is owned by
+ * client/goal-activation.ts; this function is the pure merge seam.
+ */
+export function applyGoalActivation(
+  report: InstanceRuntimeReport,
+  activationOf: (sessionId: string) => GoalFact['activation'],
+): void {
+  for (const [sessionId, row] of Object.entries(report.sessions)) {
+    const goal = row.goal
+    if (goal === undefined || goal === null) continue
+    const activation = activationOf(sessionId)
+    if (activation === undefined || goal.activation === activation) continue
+    row.goal = { ...goal, activation }
+  }
 }
 
 /**
@@ -1027,6 +1191,17 @@ export function runningRingVisible(_channelRunning: boolean | undefined, polledR
  * identity signature or a "facts unchanged, list became authoritative" report
  * would be deduplicated away and the pruning gate would freeze at its
  * first-seen value.
+ *
+ * GOAL RIDES THE ROW ENCODING — OUTSIDE the `includeRunning` branch (v5 §2.1/§4):
+ * goalId/revision/phase/activation/updatedAt are all encoded by
+ * `goalFactSignature` (below), and they must be encoded for BOTH consumers.
+ * The projection signature (includeRunning=false) re-publishes the sidebar
+ * whenever a goal fact moves (the row suppresses its completed dot from it),
+ * and the App identity path needs every activation transition — including a
+ * durable-state-free `armed` landing — because an activation-only report would
+ * otherwise be deduplicated away and the App identity would freeze the goal at
+ * its first-seen activation. Unknown (absent field), explicit `null` and an
+ * object are three DISTINCT encodings.
  */
 export function runtimeReportSignature(
   report: InstanceRuntimeReport | undefined,
@@ -1039,7 +1214,7 @@ export function runtimeReportSignature(
     .filter(([id]) => onlyIds === undefined || onlyIds.has(id))
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
     .map(([id, facts]) =>
-      `${id}:${includeRunning && facts.running === true ? 'r' : ''}${facts.completed === true ? 'c' : ''}${facts.pending ?? ''}:${facts.runningSubagents ?? 0}:${facts.subagentActivity ?? ''}`)
+      `${id}:${includeRunning && facts.running === true ? 'r' : ''}${facts.completed === true ? 'c' : ''}${facts.pending ?? ''}:${facts.runningSubagents ?? 0}:${facts.subagentActivity ?? ''}${goalFactSignature(facts.goal)}`)
   // L1 对账回执也是事实内容的一部分，必须进
   // 签名——App 的运行时事实提交按本签名去重，回执若不入签名，一次「事实没变、
   // 只有回执结算」的上报会被整个丢弃，守卫永远看不到结论（随后误判为「对账
@@ -1061,13 +1236,33 @@ export function runtimeReportSignature(
   const listComplete = !includeRunning || report.listComplete === undefined
     ? ''
     : `#l:${report.listComplete ? '1' : '0'}`
+  // `stale` 是**渲染事实**（侧栏 `server.runtime?.stale` → data-chamber-stale /
+  // sessionStateLabel 的离线读数；mergeRuntimeFacts 把它 OR 进合并报告并把残留
+  // 子代理计数降为 unknown），与回执/listComplete 这两类"只签在身份路径"的判定
+  // 输入不同：两条签名路径都必须签它——投影路径漏签会让「行不变、仅 stale 翻转」
+  // 的上报不重发布，身份路径漏签会让 App 的去重（use-bridge-subscriptions 的
+  // runtimeReportSignature 守卫）直接吞掉它，mergeRuntimeFacts 的 stale OR 永远
+  // 失效（断连来源的残留事实被当成 live）。false 与缺席同义（no-op 旗标），只签 true。
+  const stale = report.stale === true ? '#s:1' : ''
   // A report whose only rows were filtered out (no visible session, no current)
   // contributes nothing to the projection signature — it must be
   // indistinguishable from "no runtime attached" **unless** it carries a
-  // receipt or listComplete (回执/权威门本身就是内容：会话被清空那一瞬的回执
-  // 结算与首份 ready 列表都不得被去重吞掉).
-  if (rows.length === 0 && current === '' && receipt === '' && listComplete === '') return ''
-  return `${current}|${rows.join(',')}${receipt}${listComplete}`
+  // receipt, listComplete or a stale bit (回执/权威门/stale 标记本身就是内容：
+  // 会话被清空那一瞬的回执结算、首份 ready 列表与断连标记都不得被去重吞掉).
+  if (rows.length === 0 && current === '' && receipt === '' && listComplete === '' && stale === '') return ''
+  return `${current}|${rows.join(',')}${receipt}${listComplete}${stale}`
+}
+
+/**
+ * Goal row encoding of {@link runtimeReportSignature} (v5 §2.1): unknown
+ * (absent field), explicit `null` and an object are three distinct encodings,
+ * and every durable AND volatile field participates (a state-free `armed`
+ * landing must move the signature or the App identity freezes it).
+ */
+function goalFactSignature(goal: GoalFact | null | undefined): string {
+  if (goal === undefined) return ''
+  if (goal === null) return '|g:n'
+  return `|g:${JSON.stringify([goal.goalId, goal.revision, goal.phase, goal.activation ?? null, goal.updatedAt ?? null])}`
 }
 
 /**

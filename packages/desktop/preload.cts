@@ -48,6 +48,23 @@ export type SaveConnectionResult =
   | { ok: true; instances: SshInstanceSpec[] }
   | { ok: false; instances: SshInstanceSpec[]; error: string; metadataCommitted: boolean }
 
+/** SSH instance-registry load health (degraded + roster-incomplete gates):
+ *  while degraded, an instances_get empty array is NOT an authoritative
+ *  roster and the renderer keeps its durable pruning gate closed; while
+ *  rosterIncomplete (V5-A), the load succeeded but dropped invalid/duplicate
+ *  persisted rows, so instances_get is a PARTIAL roster — its legal rows are
+ *  installed, yet durable pruning stays vetoed. reason is the non-secret
+ *  failure text (absent while healthy); droppedCount is the number of dropped
+ *  rows and is present only with rosterIncomplete. Both flags are optional so
+ *  an older producer's {degraded} answer still type-checks (the renderer
+ *  treats an absent flag as false). */
+export interface SshInstancesHealth {
+  degraded: boolean
+  reason?: string
+  rosterIncomplete?: boolean
+  droppedCount?: number
+}
+
 /**
  * The window.dshChamber bridge contract (design 05 §7.4) — the typed
  * surface the renderer consumes. Its returns/events/projections are non-secret:
@@ -60,6 +77,11 @@ export type SaveConnectionResult =
  */
 export interface DesktopSshSurface {
   instances_get(): Promise<SshInstanceSpec[]>
+  /** Registry load health (degraded + roster-incomplete gates): a degraded
+   *  registry's empty roster must not settle the renderer's authoritative-
+   *  roster gate, and an incomplete (row-dropping) load's partial roster must
+   *  not retire its durable unread keys. */
+  instances_health(): Promise<SshInstancesHealth>
   /** Exact id-addressed main-owned delete; an absent id is an idempotent no-op. */
   delete_connection(id: string): Promise<SshInstanceSpec[]>
   /** Main-owned registry + write-only credential transaction. */
@@ -634,6 +656,7 @@ export interface RuntimeSurface {
 function desktopSshApi(): DesktopSshSurface {
   return {
     instances_get: () => ipcRenderer.invoke('desktop_ssh_instances_get'),
+    instances_health: () => ipcRenderer.invoke('desktop_ssh_instances_health'),
     delete_connection: id => ipcRenderer.invoke('desktop_ssh_delete_connection', { id }),
     save_connection: (previousId, input, credentials) => ipcRenderer.invoke('desktop_ssh_save_connection', { previousId, input, credentials }),
     set_password: (id, password) => ipcRenderer.invoke('desktop_ssh_set_password', { id, password }),

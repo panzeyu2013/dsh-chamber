@@ -2,8 +2,10 @@
  * 水位（watermark）原语单一来源。
  *
  * WHY：同一套「host 域整数水位」契约必须在 unread-store / session-facts-source /
- * notification-dedupe 各消费点保持同解：isWatermark、完成水位的 max / 单调记忆 /
- * 递增判定都归口于此，「什么样的数是合法水位」「什么算更高」只有一处答案。
+ * notification-projection / complete-ledger / completion-observation 各消费点保持
+ * 同解：isWatermark、完成水位的 max / 单调记忆 / 递增判定都归口于此，
+ * 「什么样的数是合法水位」「什么算更高」只有一处答案（直测见
+ * test/aggregate/watermark.test.ts）。
  *
  * 通知身份键 = (sourceId, sourceFingerprint, sessionId, kind, watermark)：kind 与
  * fingerprint 必须保留（否则同水位的 ask 与 complete 互吞、同 id 换宿主继承旧

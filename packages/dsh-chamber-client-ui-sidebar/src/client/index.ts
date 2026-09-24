@@ -16,10 +16,14 @@ import { startEarlyOpenArm } from './early-open.ts'
 import { en, zh, type SidebarKey } from './locales.ts'
 import { chamberBridge, isValidProducerSourceFingerprint } from '../shared/aggregate-store.ts'
 import {
+  applyGoalActivation,
   instanceSnapshotSignature,
   projectInstanceSnapshot,
   projectRuntimeFacts,
+  retainGoalFacts,
 } from '../shared/derive.ts'
+import type { GoalFact } from '../shared/session-row-state.ts'
+import { createGoalActivationTracker } from './goal-activation.ts'
 import { createPanelSource } from './panel-source.ts'
 import { createPurgeTracker } from '../shared/purged-tracker.ts'
 import { publishSessionCreationInstrument } from '../shared/session-create-ledger.ts'
@@ -452,6 +456,25 @@ export function apply(ctx: ClientContext): void {
     /** 写回能力缺失只告警一次（永久性失败，不重试）。 */
     let warnedMissingHandleSessionStatus = false
 
+    // design 19 §3.2.1/§3.2.2 (P1): the per-source-generation
+    // last-known goal facts (unknown rows are restored from here) and the
+    // event-only activation cache. Both live INSIDE this effect, so a ctx
+    // remount / source-fingerprint change starts them empty — that is the
+    // "generation/fingerprint 变化清空" half of the retention contract; the
+    // tracker additionally clears on `connection/reset`.
+    let lastKnownGoalFacts = new Map<string, GoalFact | null>()
+    const goalActivation = createGoalActivationTracker({
+      // NOT an added `inject` member: the service may be provided later than
+      // this plugin (or throw through the cordis service proxy) — the tracker
+      // try/catches and retries a bounded number of times.
+      getRemote: () => (ctx as unknown as { get(name: string): unknown }).get('remote'),
+      sync: () => { sync() },
+      warn: (message) => { console.warn(`[chamber] ${message} (${chamberInstanceId})`) },
+      onConnectionReset: (listener) => (ctx as unknown as {
+        on(event: string, handler: () => void): () => void
+      }).on('connection/reset', listener),
+    })
+
     const syncSnapshot = (): void => {
       snapshotQueued = false
       if (disposed) return
@@ -529,6 +552,16 @@ export function apply(ctx: ClientContext): void {
         for (const id of suppressed) delete report.sessions[id]
         if (report.current !== undefined && suppressed.has(report.current)) delete report.current
       }
+      // design 19 §3.2.1/§3.2.2 (P1): restore the last-known goal
+      // fact for rows whose projection key was absent (unknown), then refresh the
+      // activation cache against this pass (running bidirectional / goal
+      // projection changes are the tracker's refresh triggers — it prunes the
+      // cache in place, so the merge below carries the pruned result) and merge
+      // the event-cached activation into the known goal facts. All three are
+      // no-ops for a report whose rows carry no goal facts.
+      lastKnownGoalFacts = retainGoalFacts(report, lastKnownGoalFacts)
+      goalActivation.observe(report, lastKnownGoalFacts)
+      applyGoalActivation(report, sessionId => goalActivation.activationOf(sessionId))
       runtimeProducer.report(report)
       queueSnapshot()
     }
@@ -570,6 +603,10 @@ export function apply(ctx: ClientContext): void {
       // 只能通过它请求重跑官方 session.list）。
       sessionFacts?.request()
     })
+    // The subscription is started AFTER `sync` exists (a synchronous remote
+    // service can deliver before the const initializes otherwise), and before
+    // the first report so an already-armed event can land on the first pass.
+    goalActivation.start()
     sync()
     queueSnapshot()
     const unsubscribeSessions = sessionsList.subscribe(sync)
@@ -579,6 +616,7 @@ export function apply(ctx: ClientContext): void {
     const unsubscribePending = pendingInteractions.subscribe(sync)
     return () => {
       disposed = true
+      goalActivation.dispose()
       sessionFacts?.dispose()
       purgedRows.dispose()
       unsubscribeSessions()

@@ -282,6 +282,15 @@
   `pendingInteraction?: 'approval'|'plan-review'|'question'`、`blank`、
   `updatedAt`；快照含 `current?: string`（当前会话 id）。（「蓝点」= 这条完成未读
   事实，渲染为 §4.3 的 chamber 品牌蓝点。）
+- **goal 三值事实**（design 19 §3.2.1，2026-12 落地）：行字段
+  `goal?: GoalFact | null`——**字段缺席 = unknown**（投影还没给出 goal 键）、`null` =
+  明确无 goal、对象 = 有 goal；
+  `GoalFact = { goalId, revision, phase: 'active'|'paused'|'blocked'|'complete',
+  activation?: 'armed'|'disarmed', updatedAt? }`。解析只读写
+  `projectionValues.goal` 的白名单字段（`objective`/`blockedReason` 永不读取），
+  形状不符 = unknown + warn-once（绝不折叠成 null）；生产者按来源代保留最后已知值
+  （`retainGoalFacts`），行消失即 drop，activation 由事件缓存绑定同一 goalId。两个门与
+  六面单源见 §4.3/§4.5；无壳来源的 facts overlay 见 §4.2。
 - 每实例 boot = 独立 ctx、独立 store；侧边栏插件在每个 ctx 都挂载，即每个来源都有
   一个可订阅自身运行时的事实生产者。
 - **插件 = 投影**：上报端只做快照投影——`current` + 每列出会话的实时 `running`
@@ -341,6 +350,26 @@
   error、max-tokens、interrupted）抑制；全部比较都在 host 时间域，谓词不读账本、不读客户端墙钟。
   `mergeRuntimeFacts(runtime, completedBySource, overlay?, stale?)` 保留两参逐字节相容，第三/四参用于
   事实注入与 stale 附加；`todo-attention` 对断连来源只渲染 `runtime.stale === true` 的事实（R14 方案 A）。
+- **goal 事实过桥与身份签名**（v5 §2.1/§6 P2a；2026-12）：mounted 来源由插件生产者在
+  `sync()` 里先回填最后已知值、再合并 activation 缓存（`applyGoalActivation`，门读它）；
+  无壳来源的 goal 经 App 的 `factsOverlay` 走 `mergeRuntimeFacts` 的 overlay 行——通道行
+  已给对象/显式 null 即权威，overlay 只在通道 unknown 时填补（含显式 null），缺席 = unknown
+  **绝不伪造 null**。四处必须同批：`session-facts-source.ts` 行类型 + `RuntimeFactsOverlayRow.goal`
+  + `mergeRuntimeFacts` 的填补分支 + `use-badge-count` 的合并 runtime 入参（否则无壳源的
+  goal 到不了 `server.runtime`）。**签名**：goal 的五个字段
+  （`goalId/revision/phase/activation/updatedAt`）必须整体进 `runtimeReportSignature` 的**行编码**，
+  且**不得**落进 `includeRunning` 分支——activation 是易失缓存，不入签名会被 App 的身份
+  去重冻结在首见值（`goalFactSignature`）。
+- **facts 快照通道判定（`session-facts-source.ts` 单源，2026-12）**：
+  `classifySessionFactsProbe` 判 2xx 无 `protocol`（解析失败 / 非协议载荷）=
+  `degraded/unversioned`——通道**不可用（unknown）**：**保留既有行**（无既往行才给空行）
+  并标 `serviceable=false`/`stale=true`；消费侧按原始行键判在场、按 `factsUsable=false`
+  停判（不得当权威空行集，否则无壳来源整体遗忘）。404 = `legacy-gateway` 二分（2026-12）：
+  **首探**（从未探到协议载荷）给空权威快照（路由不存在的版本事实，侧栏 legacy 档由它可达）；
+  **曾探到协议载荷后转 404**（`protocolFactsSeen`，来源指纹换代清零）保留既有行/游标/read 并标
+  `serviceable=false`/`stale=true`（不可用但绝不当会话消失，held pending 不被清），404→ok 恢复权威。
+  **2xx unversioned、404、5xx/超时统一排一次有界重探**（`scheduleProbe(reconnectMs)`，幂等 guard）
+  ——unversioned 不再永久不可用，除非 connected false→true 或来源指纹变化才解围。
 
 ### 4.3 UI 语义（状态指示）
 
@@ -402,12 +431,22 @@
   会话）。（组件不直连 store，订阅在插件上报端；boot 首帧无上报前不高亮，随首次
   上报补齐。跨来源 pending/completed 状态点仍全来源呈现。）
 - **状态点优先级**：**pending 徽标 > runningSubagents 运行环 > completed 点 >
-  running 环**。completed/pending/runningSubagents 来自 runtime facts，
+  running 环**；goal 呈现门不新增档位，而是**整体压掉 completed 档**（相位 active，
+  含 activation unknown）。completed/pending/runningSubagents 来自 runtime facts，
   `running` 来自完整 aggregate snapshot；两者均由已挂载 ctx 的同一 sessions
   store 事件驱动，但独立 bridge state 可能相差一个 React commit。
   runningSubagents 同样压过 running 环与 completed 点（vendor 保证 completed 与
   running 互斥）。官方 sessionStatuses 的「有运行中子 agent 就显示 ongoing」语义
   原样对齐（chamber 为避免瞬时双通道错位把用户需处理状态前置）。
+- **goal 呈现门与压制后 state（v5 §2.3/§4 单源，2026-12）**：唯一派生入口是
+  `shared/session-row-state.ts` 的 `sessionRowState(facts)`（零依赖叶模块，同时是
+  `GoalFact` / `goalSuppressesPresentation` / `goalHoldsCompletion` 的类型家）；label/dot、
+  `data-chamber-session-state` / `data-chamber-state-source` 仪表属性、搜索结果行、待办条目
+  与徽标计数全部消费同一个结果（INV7）。`goalSuppressesPresentation(goal)` 生效时 `state` 必须落
+  `running`/`none`——**不得返回 completed**（否则仪表报一个用户看不到的完成点）；
+  可选落 `data-chamber-goal-active`；`suppressedBy` 区分 `'goal'`（activation 已知）与
+  `'unknown'`（activation 未知，静默窗口与通知层 unknown-hold 同态）。pending 档不标
+  suppressedBy（等待输入不是压制）。
 - **运行环 snapshot 单一权威（`runningRingVisible`）**：运行环只取完整
   aggregate snapshot 的 running 位，runtime facts 的 running 不参与渲染。已挂载
   来源的 snapshot 由自身 ctx store 在 host-frame 事件上即时上报；未挂载或
@@ -432,10 +471,14 @@
   `SidebarRoot.tsx` + `sidebar-chamber.module.css`（dot 状态类 + 高亮 +
   runningSubagents 分支 + `.scheduleIndicator` + `.railDotButton`）、
   `shared/derive.ts`（`hasActiveScheduleOf`；`hasActiveSchedule` 进
-  `instanceSnapshotSignature`）、`shared/instance-api.ts`（unary 兜底行读
-  `projections.values` 同一事实）、`shared/session-row-window.ts`
-  （`sessionRowWindow` + `sessionRowDisclosure`）、`locales.ts`
-  （`status.waitingApproval/planReview/waitingAnswer/completed` +
+  `instanceSnapshotSignature`；goal 的 `parseGoalFact`/`retainGoalFacts`/
+  `applyGoalActivation`/`goalFactSignature` 与 overlay 填补）、
+  `shared/session-row-state.ts`（goal 三值 + 两个谓词 + `sessionRowState` 压制后 state 的
+  零依赖叶模块）、`client/goal-activation.ts`（事件制 activation 缓存 + 有界重试；缓存上限
+  `MAX_ACTIVATION_CACHE = 2000`，LRU 淘汰 + warn-once + `evictedCount` 诊断，B4-1；不调
+  `goals/get`）、`shared/instance-api.ts`（unary 兜底行读 `projections.values` 同一
+  事实）、`shared/session-row-window.ts`（`sessionRowWindow` + `sessionRowDisclosure`）、
+  `locales.ts`（`status.waitingApproval/planReview/waitingAnswer/completed` +
   `status.subagentsRunning.one/other`）。
 
 ### 4.5 运行中子 agent（runningSubagents 圆环）
@@ -474,6 +517,13 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
   也不据此压制 completed/running 读数与待办条目；`runningSubagents` 保持稀疏计数供诊断。
   守卫单源 = `shared/session-row-state.ts` 的 `subagentActivityOf`（行读数、圆点、待办共用）；
   上游完整性信号落地后删除本地 fallback（见 `docs/progress/todo/upstream-proposals.md` §7）。
+- **facts-only 源的 `subagentCount` 不是 busy 证据（对 §4.5 的有意修正，R2-G，2026-12）**：
+  gateway/SSH facts 行的 `subagentCount` 是「在场子会话数」（宿主投影/谱系索引的
+  cross-section），不是「正在干活」的证据。`completion-observation.ts` 只把**壳通道**的
+  `runningSubagents + subagentActivity` 当运行证据；facts-only 行的 count>0 按 idle/unknown
+  处理，绝不据此压制完成（complete 通知延迟 G4 与徽标/待办压制同规——误判 busy 就是永久
+  hold）。goal 门的唯一出口同样是本模块的 `goalSuppressesPresentation`（§4.3），待办与徽标
+  只消费它的结果，不得各写一遍。
 
 **残留（记录）**：one-shot await 期间父回合与子 agent 同活，我们只显示子 agent
 计数文案（官方显示「运行中」主标签 + 计数次标签；圆环同形，仅 tooltip 单值取舍）；

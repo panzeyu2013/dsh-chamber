@@ -47,6 +47,8 @@ function harnessFor(
     reconcileMs?: number
     pollMs?: number
     tickMs?: number
+    reconnectMinMs?: number
+    reconnectMaxMs?: number
     items?: unknown[]
   } = {},
 ): ObserverHarness {
@@ -73,6 +75,8 @@ function harnessFor(
     reconcileMs: options.reconcileMs,
     pollMs: options.pollMs,
     tickMs: options.tickMs,
+    reconnectMinMs: options.reconnectMinMs,
+    reconnectMaxMs: options.reconnectMaxMs,
   })
   t.after(() => { observer.stop(); store.dispose() })
   return {
@@ -364,4 +368,197 @@ test('event silence triggers a resubscribe and a fresh baseline (R21)', async t 
   await settle()
   assert.equal(harness.calls.calls.filter(entry => entry.method === 'session/list').length >= 2, true,
     'full reconciliation on every (re)connect')
+})
+// ---------------------------------------------------------------------------
+// Goal facts (P2a): activation edges + epoch reset
+// ---------------------------------------------------------------------------
+
+test('goal activation edges reach the wire row and degrade to unknown on a fresh $events ready', async t => {
+  // The raw session/list row (the mux projector reads
+  // projections.values.goal, not the already-projected goal field).
+  const items = [{
+    sessionId: 's1', running: true, updatedAt: 5,
+    projections: {
+      values: {
+        title: 'SECRET-TITLE',
+        goal: {
+          goal: { id: 'g1', revision: 1, phase: 'active', objective: 'SECRET-OBJECTIVE', maxGoalRounds: 10 },
+          roundsStarted: 0, createdAt: 1, updatedAt: 5,
+        },
+      },
+    },
+  }]
+  const harness = harnessFor(t, { items, silenceTimeoutMs: 40 })
+  await connect(harness)
+  harness.sockets.sockets[0].emitItem('events', {
+    type: 'emit', event: 'goal/activation-changed',
+    args: [{ sessionId: 's1', goal: { id: 'g1', revision: 1, activation: 'armed' } }],
+  })
+  await settle()
+  let row = harness.store.snapshotFor(null, 'sse', harness.observer.hostInfo()).sessions[0]
+  assert.deepEqual(row.goal, { goalId: 'g1', revision: 1, phase: 'active', updatedAt: 5, activation: 'armed' })
+
+  // Silence resubscribe creates a NEW $events generation. Its emit frames have
+  // no replay, so the process-local activation can no longer be trusted; the
+  // durable phase/watermark come back from the fresh baseline.
+  await delay(120)
+  assert.equal(harness.sockets.sockets.length >= 2, true, 'silence resubscribes')
+  const second = harness.sockets.sockets[1]
+  second.emitOpen()
+  second.emitItem('events', { type: 'ready', clientId: 'mux-client-2' })
+  await settle()
+  row = harness.store.snapshotFor(null, 'sse', harness.observer.hostInfo()).sessions[0]
+  assert.deepEqual(row.goal, { goalId: 'g1', revision: 1, phase: 'active', updatedAt: 5 })
+  assert.equal(row.goal?.activation, undefined)
+})
+
+test('goal activation identity survives the mux end-to-end: complete then a new goal never reads complete+armed', async t => {
+  const rawItem = (goalId: string, updatedAt: number) => ({
+    sessionId: 's1', running: true, updatedAt,
+    projections: {
+      values: {
+        goal: {
+          goal: { id: goalId, revision: 1, phase: 'active' },
+          // Privacy: objective must never reach the row.
+          objective: 'SECRET-OBJECTIVE',
+          roundsStarted: 0, createdAt: 1, updatedAt,
+        },
+      },
+    },
+  })
+  const harness = harnessFor(t, { items: [rawItem('g1', 5)] })
+  await connect(harness)
+  const socket = harness.sockets.sockets[0]
+  // g1 completes (one follow read classifies the tail).
+  socket.emitItem('events', { type: 'emit', event: 'api-session/status', args: ['s1', false] })
+  socket.emitItem('follow-1', {
+    type: 'snapshot',
+    records: [{ type: 'event', event: { type: 'turn/end', seq: 3, time: 110, data: { turn: 1, reason: { kind: 'completed' } } } }],
+  })
+  await settle()
+
+  // The new goal's armed edge arrives BEFORE session/list projects it. Binding
+  // must keep it off the completed g1 row (no complete+armed wire row).
+  socket.emitItem('events', {
+    type: 'emit', event: 'goal/activation-changed',
+    args: [{ sessionId: 's1', goal: { id: 'g2', revision: 1, activation: 'armed' } }],
+  })
+  await settle()
+  let row = harness.store.snapshotFor(null, 'sse', harness.observer.hostInfo()).sessions[0]
+  assert.equal(row.goal?.goalId, 'g1')
+  assert.equal(row.goal?.activation, undefined, 'the previous goal never reads armed')
+  assert.notEqual(row.completedAt, null, 'the completion is still on the wire')
+
+  // The projection catches up (resync baseline): the retained edge lands on the
+  // matching identity, so the new goal is known and armed — never unknown forever.
+  harness.setItems([rawItem('g2', 7)])
+  harness.observer.kick('resync')
+  await settle()
+  row = harness.store.snapshotFor(null, 'sse', harness.observer.hostInfo()).sessions[0]
+  assert.deepEqual(row.goal, { goalId: 'g2', revision: 1, phase: 'active', updatedAt: 7, activation: 'armed' })
+  assert.equal(JSON.stringify(row).includes('SECRET-OBJECTIVE'), false)
+})
+
+test('a host $events end releases the held waterfall pending row and never answers across generations', async t => {
+  const stateDir = scratch(t)
+  const harness = harnessFor(t, {
+    stateDir,
+    items: [baselineItem('s1', false, 5)],
+    attached: false,
+    waterfallGraceMs: 0,
+    reconnectMinMs: 5,
+    reconnectMaxMs: 5,
+  })
+  await connect(harness)
+  harness.sockets.sockets[0].emitItem('events', {
+    type: 'waterfall', event: 'approval/request', eventId: 'w-end', agentId: 's1', request: { question: 'x' },
+  })
+  await settle()
+  assert.equal(harness.store.snapshotFor(null, 'sse', harness.observer.hostInfo()).sessions[0].pendingKind, 'approval')
+
+  // 宿主流结束 $events：该代已死。hold 必须本地 cancel 收尾，gateway 的
+  // pendingKind 不得滞留到下一代（否则该审批永远显示为待处理）。
+  harness.sockets.sockets[0].emitEnd('events')
+  await settle()
+  assert.equal(harness.store.snapshotFor(null, 'poll', harness.observer.hostInfo()).sessions[0].pendingKind, null)
+  assert.equal(harness.observer.status().ready, false)
+  assert.equal(harness.observer.status().clientId, null)
+  assert.equal(harness.calls.calls.some(entry => entry.method === '$events/result'), false)
+
+  // 新代 ready 后即使下游客户端已挂上，旧 hold 也不补答（否则会以新 clientId
+  // 定居一个已死的审批）。
+  harness.setAttached(true)
+  const deadline = Date.now() + 2_000
+  while (harness.sockets.sockets.length < 2 && Date.now() < deadline) await delay(5)
+  assert.equal(harness.sockets.sockets.length >= 2, true, 'the ended generation reconnects')
+  const second = harness.sockets.sockets[1]
+  second.emitOpen()
+  second.emitItem('events', { type: 'ready', clientId: 'mux-client-2' })
+  harness.observer.kick('tick')
+  await settle()
+  assert.equal(harness.calls.calls.some(entry => entry.method === '$events/result'), false)
+  assert.equal(harness.store.snapshotFor(null, 'sse', harness.observer.hostInfo()).sessions[0].pendingKind, null)
+})
+
+test('a $events death withdraws the process-local activation and never resurrects it in poll mode', async t => {
+  const rawItem = {
+    sessionId: 's1', running: true, updatedAt: 5,
+    projections: {
+      values: {
+        title: 'SECRET-TITLE',
+        goal: {
+          goal: { id: 'g1', revision: 1, phase: 'active', objective: 'SECRET-OBJECTIVE', maxGoalRounds: 10 },
+          roundsStarted: 0, createdAt: 1, updatedAt: 5,
+        },
+      },
+    },
+  }
+  const harness = harnessFor(t, {
+    items: [rawItem], attached: false,
+    reconnectMinMs: 5, reconnectMaxMs: 5, tickMs: 10, pollMs: 20,
+  })
+  await connect(harness)
+  const socket = harness.sockets.sockets[0]
+  socket.emitItem('events', {
+    type: 'emit', event: 'goal/activation-changed',
+    args: [{ sessionId: 's1', goal: { id: 'g1', revision: 1, activation: 'armed' } }],
+  })
+  await settle()
+  let row = harness.store.snapshotFor(null, 'sse', harness.observer.hostInfo()).sessions[0]
+  assert.deepEqual(row.goal, { goalId: 'g1', revision: 1, phase: 'active', updatedAt: 5, activation: 'armed' })
+
+  // ready true -> false 同样是一次代际切换：emit 帧没有重放，死亡窗口里的
+  // poll 基线不得继续携带上一代的 armed。撤回必须立即发生。
+  socket.emitEnd('events')
+  await settle()
+  assert.equal(harness.observer.status().ready, false)
+  assert.equal(harness.observer.status().mode, 'poll')
+  // serviceable 语义：死的是事件流而不是宿主，poll 模式仍可服务。
+  assert.equal(harness.observer.hostInfo().serviceable, true)
+  assert.equal(harness.observer.hostInfo().state, 'ready')
+  row = harness.store.snapshotFor(null, 'poll', harness.observer.hostInfo()).sessions[0]
+  assert.equal(row.goal?.goalId, 'g1')
+  assert.equal(row.goal?.activation, undefined)
+
+  // 死亡窗口内 poll 基线继续对账：陈旧 activation 不回流。
+  await delay(60)
+  row = harness.store.snapshotFor(null, 'poll', harness.observer.hostInfo()).sessions[0]
+  assert.equal(row.goal?.activation, undefined)
+  assert.equal(JSON.stringify(row).includes('SECRET-OBJECTIVE'), false)
+
+  // 新代 ready 是新的 $events 生命：host 的 emit 边沿重新建立 activation。
+  const deadline = Date.now() + 2_000
+  while (harness.sockets.sockets.length < 2 && Date.now() < deadline) await delay(5)
+  assert.equal(harness.sockets.sockets.length >= 2, true, 'the ended generation reconnects')
+  const second = harness.sockets.sockets[1]
+  second.emitOpen()
+  second.emitItem('events', { type: 'ready', clientId: 'mux-client-2' })
+  await settle()
+  second.emitItem('events', {
+    type: 'emit', event: 'goal/activation-changed',
+    args: [{ sessionId: 's1', goal: { id: 'g1', revision: 1, activation: 'disarmed' } }],
+  })
+  await settle()
+  row = harness.store.snapshotFor(null, 'sse', harness.observer.hostInfo()).sessions[0]
+  assert.deepEqual(row.goal, { goalId: 'g1', revision: 1, phase: 'active', updatedAt: 5, activation: 'disarmed' })
 })

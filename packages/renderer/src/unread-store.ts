@@ -2,11 +2,15 @@
  * 未读 v2 落盘存储。
  *
  * v2 落盘载荷：
- *   - 键：dsh-chamber.unread.v2 = { v:2, read, edge, notified }（见 UnreadV2Payload）；
+ *   - 键：dsh-chamber.unread.v2 = { v:2, read, edge, notified, pending, outcomes }
+ *     （见 UnreadV2Payload）；
  *   - read/sourceId/sessionId → host 域读水位（只升不降，max 合并）；
  *   - edge/sourceId/sessionId → true（边沿轨回退账本；重启后立即可渲染未读，不等网络）；
- *   - notified/sourceId/sessionId/kind → 已通知水位（第二入口去重）。
- * 载荷**不得出现 title/cwd/消息内容**（隐私条）——键白名单锁在
+ *   - notified/sourceId/sessionId/kind → 已通知水位（第二入口去重）；
+ *   - pending/sourceId/sessionId → 目标活跃期间被压制的完成结算位（goal-aware v5 §3.1：
+ *     watermark/goalId/at；durable，与 notified 同生命周期）；
+ *   - outcomes/sourceId/goalId → 目标/中性标题的一次性身份水位（R2-A/TL1）。
+ * 载荷**不得出现 title/cwd/消息内容**（隐私条）——只允许 id/水位/时间戳；键白名单锁在
  * test/session-state/unread-store.test.ts 里钉住。
  *
  * 存储访问器 lazy + never-throw（照 view-prefs.ts 的形状）：私有模式/配额
@@ -29,6 +33,7 @@
 
 import { createBoundedMap } from './bounded-ledger.ts'
 import { isWatermark, maxWatermarkValue } from './watermark.ts'
+import type { GoalOutcomeTable, PendingCompletion, PendingCompletionTable } from './complete-ledger.ts'
 
 /** v2 落盘键（唯一被持续写入的未读键）。 */
 export const UNREAD_V2_KEY = 'dsh-chamber.unread.v2'
@@ -51,6 +56,13 @@ export interface UnreadV2Payload {
   edge: Record<string, Record<string, boolean>>
   /** sourceId → sessionId → kind → 已通知水位（第二入口去重）。 */
   notified: Record<string, Record<string, Partial<Record<UnreadKind, number>>>>
+  /**
+   * sourceId → sessionId → 被压制的完成结算位（v5 §3.1）。字段可选以兼容旧写入点
+   * （App 未迁移前只写四表）：缺字段 = 空表 + loud（见 sanitizeUnreadPayload）。
+   */
+  pending?: PendingCompletionTable
+  /** sourceId → goalId → 目标/中性标题一次性身份水位。缺字段 = 空表 + loud。 */
+  outcomes?: GoalOutcomeTable
 }
 
 /** Storage 的结构子集（浏览器 localStorage 或测试假实现）。 */
@@ -61,7 +73,17 @@ export interface UnreadStorageLike {
 }
 
 export function emptyUnreadPayload(): UnreadV2Payload {
-  return { v: 2, read: {}, edge: {}, notified: {} }
+  return { v: 2, read: {}, edge: {}, notified: {}, pending: {}, outcomes: {} }
+}
+
+/** pending 表（缺字段 = 空表；sanitize 负责把坏项剥掉并 loud）。 */
+export function unreadPendingTable(payload: UnreadV2Payload): PendingCompletionTable {
+  return payload.pending ?? {}
+}
+
+/** outcomes 表（缺字段 = 空表）。 */
+export function unreadOutcomeTable(payload: UnreadV2Payload): GoalOutcomeTable {
+  return payload.outcomes ?? {}
 }
 
 /** 浏览器 localStorage 的安全访问器；不可用时 undefined（降级为纯内存）。 */
@@ -124,6 +146,60 @@ export function sanitizeUnreadPayload(value: unknown): UnreadV2Payload {
     }
     if (Object.keys(table).length > 0) payload.notified[sourceId] = table
   }
+  // pending / outcomes（v5 §3.1 增量）：缺字段 = 空 + loud；存在则逐字段校验。
+  if (value.pending === undefined) {
+    warn('v2 payload has no pending table; treating it as empty')
+  } else if (!isPlainRecord(value.pending)) {
+    warn('v2 payload.pending is not a table; treating it as empty')
+  } else {
+    for (const [sourceId, sessions] of Object.entries(value.pending)) {
+      if (!isPlainRecord(sessions)) {
+        warn('v2 payload.pending[' + sourceId + '] is not a table; dropped')
+        continue
+      }
+      const table: Record<string, PendingCompletion> = {}
+      for (const [sessionId, entry] of Object.entries(sessions)) {
+        if (!isPlainRecord(entry)) {
+          warn('v2 payload.pending entry ' + sourceId + '/' + sessionId + ' is not an object; dropped')
+          continue
+        }
+        if (typeof entry.at !== 'number' || !Number.isFinite(entry.at)) {
+          warn('v2 payload.pending entry ' + sourceId + '/' + sessionId + ' has no finite at; dropped')
+          continue
+        }
+        const sanitized: PendingCompletion = { at: entry.at }
+        if (isWatermark(entry.watermark)) sanitized.watermark = entry.watermark
+        else if (entry.watermark !== undefined) warn('v2 payload.pending entry ' + sourceId + '/' + sessionId + ' has an invalid watermark; field dropped')
+        if (typeof entry.goalId === 'string' && entry.goalId.length > 0) sanitized.goalId = entry.goalId
+        else if (entry.goalId !== undefined) warn('v2 payload.pending entry ' + sourceId + '/' + sessionId + ' has an invalid goalId; field dropped')
+        // G4 延迟来源（评审 F5 阻断项 1）：deferred 是 pending 的 durable 身份，丢了它
+        // 同页 reload 后 busy 延迟的完成既不会中性释放、又可能被 #3 静默 drop——严格按
+        // 合法值拷贝；非法值只丢该字段，绝不整条丢弃（at 才是条目的成立条件）。
+        if (entry.deferred === 'subagent-busy') sanitized.deferred = 'subagent-busy'
+        else if (entry.deferred !== undefined) warn('v2 payload.pending entry ' + sourceId + '/' + sessionId + ' has an invalid deferred; field dropped')
+        table[sessionId] = sanitized
+      }
+      if (Object.keys(table).length > 0) payload.pending![sourceId] = table
+    }
+  }
+  if (value.outcomes === undefined) {
+    warn('v2 payload has no outcomes table; treating it as empty')
+  } else if (!isPlainRecord(value.outcomes)) {
+    warn('v2 payload.outcomes is not a table; treating it as empty')
+  } else {
+    for (const [sourceId, goals] of Object.entries(value.outcomes)) {
+      if (!isPlainRecord(goals)) {
+        warn('v2 payload.outcomes[' + sourceId + '] is not a table; dropped')
+        continue
+      }
+      const table: Record<string, number> = {}
+      for (const [goalId, watermark] of Object.entries(goals)) {
+        if (isWatermark(watermark)) table[goalId] = watermark
+        else warn('v2 payload.outcomes entry ' + sourceId + '/' + goalId + ' is not a watermark; dropped')
+      }
+      if (Object.keys(table).length > 0) payload.outcomes![sourceId] = table
+    }
+  }
   return payload
 }
 
@@ -159,6 +235,12 @@ export function pruneEmptyUnreadTables(payload: UnreadV2Payload): UnreadV2Payloa
   }
   for (const [sourceId, table] of Object.entries(payload.notified)) {
     if (Object.keys(table).length > 0) next.notified[sourceId] = table
+  }
+  for (const [sourceId, table] of Object.entries(unreadPendingTable(payload))) {
+    if (Object.keys(table).length > 0) next.pending![sourceId] = table
+  }
+  for (const [sourceId, table] of Object.entries(unreadOutcomeTable(payload))) {
+    if (Object.keys(table).length > 0) next.outcomes![sourceId] = table
   }
   return next
 }
@@ -211,6 +293,34 @@ export function pruneUnreadPayload(payload: UnreadV2Payload, maxPerSource = UNRE
       kept[sessionId] = table[sessionId]
     }
     if (Object.keys(kept).length > 0) next.notified[sourceId] = kept
+  }
+  // pending 与 read 同界：先保留 read 里出现的会话，再按插入序补足（同 edge/notified）。
+  for (const [sourceId, table] of Object.entries(unreadPendingTable(payload))) {
+    const read = next.read[sourceId] ?? {}
+    const keys = Object.keys(table)
+    const kept: Record<string, PendingCompletion> = {}
+    for (const sessionId of keys) {
+      if (Object.prototype.hasOwnProperty.call(read, sessionId)) kept[sessionId] = table[sessionId]
+      if (Object.keys(kept).length >= maxPerSource) break
+    }
+    for (const sessionId of keys) {
+      if (Object.keys(kept).length >= maxPerSource) break
+      if (kept[sessionId] !== undefined) continue
+      kept[sessionId] = table[sessionId]
+    }
+    if (Object.keys(kept).length > 0) next.pending![sourceId] = kept
+  }
+  // outcomes 以 goalId 为键（无法对齐 read 的 session 界）：每来源按水位 LRU 保留上限条。
+  for (const [sourceId, table] of Object.entries(unreadOutcomeTable(payload))) {
+    const entries = Object.entries(table)
+    if (entries.length <= maxPerSource) {
+      next.outcomes![sourceId] = { ...table }
+      continue
+    }
+    entries.sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
+    const kept: Record<string, number> = {}
+    for (const [goalId, watermark] of entries.slice(0, maxPerSource)) kept[goalId] = watermark
+    next.outcomes![sourceId] = kept
   }
   return next
 }
@@ -271,6 +381,75 @@ export function saveUnread(storage: UnreadStorageLike | undefined, payload: Unre
   } catch (error) {
     warn('cannot persist unread v2', error)
     return false
+  }
+}
+
+// ── immediate 落盘合并（热路径：同一 tick 多次 immediate ⇒ 一次全量写盘） ─────
+
+/**
+ * immediate 落盘的合并器（OPT P1 热路径）。
+ *
+ * 为什么需要：voided / dropped / flushed 这类 durable 结算必须**立即**落盘
+ * （goal-aware v5 §3.5：1s 节流窗口内崩溃重放不得复活已作废的 pending），但
+ * 一批 reconcile 可以在一拍内产生多次 immediate——每次都是全量
+ * prune + JSON.stringify（208KB 实测约 6.5ms），逐次同步执行会把主线程钉住。
+ * 合并窗口取**微任务**（可注入以测试控时）：产生它的同步批次
+ * （reconcile → 多次 disposition/emit）一结束就跑，先于渲染与任何宏任务，
+ * 仍远早于 App 既有的 1s 落盘节流——同一 tick 的 N 次 immediate 收敛成一次
+ * 落盘；语义顺序由「落盘时读当时最新权威内存」保证（合并只推迟写，不改变
+ * 写内容）。
+ *
+ * flush 是**关键路径**（pagehide / visibilitychange hidden / unmount）：
+ * 取消待办并同步落盘一次——不丢（最新状态立即写盘）、不重复（被取消的微任务
+ * 不再写第二次）。never-throw 由传入的 persist 负责（App 侧就是 saveUnread 的
+ * never-throw 出口）。
+ */
+export interface UnreadSaveCoalescer {
+  /** 请求一次落盘；已有待办时合并（同一 tick 多次 request = 一次 persist）。 */
+  request(): void
+  /** 关键路径同步落盘：取消待办并立即 persist 一次（无待办也照常落盘）。 */
+  flush(): void
+  /** 取消待办（不落盘；teardown 用）。 */
+  cancel(): void
+  /** 是否有待办的合并窗口（诊断/测试）。 */
+  pending(): boolean
+}
+
+/** 合并窗口的调度器（默认微任务；测试注入手动队列）。 */
+export type UnreadSaveDefer = (run: () => void) => void
+
+/** 创建 immediate 落盘合并器；persist 必须是 never-throw 的落盘出口。 */
+export function createUnreadSaveCoalescer(
+  persist: () => void,
+  defer: UnreadSaveDefer = queueMicrotask,
+): UnreadSaveCoalescer {
+  let scheduled = false
+  let ticket = 0
+  /** 只执行仍属当前待办的那一次调度；flush/cancel 通过 ticket 使其作废。 */
+  const runScheduled = (at: number): void => {
+    if (!scheduled || at !== ticket) return
+    scheduled = false
+    persist()
+  }
+  return {
+    request(): void {
+      if (scheduled) return
+      scheduled = true
+      const at = ++ticket
+      defer(() => { runScheduled(at) })
+    },
+    flush(): void {
+      scheduled = false
+      ticket += 1
+      persist()
+    },
+    cancel(): void {
+      scheduled = false
+      ticket += 1
+    },
+    pending(): boolean {
+      return scheduled
+    },
   }
 }
 
