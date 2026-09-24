@@ -2,7 +2,7 @@
  * sidecar-stdio.test.ts —— B 桥 stdio 冒烟（假 Swift 驱动真 sidecar）
  *
  * design 25 §4.4.2。用 node:test 直接 spawn
- * packages/desktop/sidecar-entry.ts（真实 shell-core 60/60 注册体 + 无头 ctx +
+ * packages/desktop/sidecar-entry.ts（真实 shell-core 61/61 注册体 + 无头 ctx +
  * node-edges），以 NDJSON 协议驱动：
  *  1. ready 帧（最小化 {port, shellVersion}）；
  *  2. info 真实载荷（controlPlaneUrl/platform/flavor 面）；

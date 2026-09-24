@@ -50,7 +50,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     /// lazy 缓存（每个 invoke/emit 少一次字符串插值分配；访问恒在主线程）。
     private lazy var nativeTokenLiteral: String = "\"\(nativeChannelToken)\""
     /// 可 invoke 的 method 白名单 = BridgeManifest.invokeChannels 全集
-    /// （60/60 真实现都在 sidecar 侧，语义权威与护栏仍在 sidecar/TrustGuard；
+    /// （61/61 真实现都在 sidecar 侧，语义权威与护栏仍在 sidecar/TrustGuard；
     /// readiness/badge 等通道不被 POC 层拒绝）。与桥 shim 暴露面一致性问题：shim
     /// 只暴露其脚本内实现的方法，未暴露方法在页面层即 stub——两处均以 manifest
     /// 为准，全量 shim（chamber-bridge.stub.js）由生成物承载。
@@ -1200,7 +1200,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     /// expectedOrigin 完全相同；**不**要求 pathname == "/"、**不**要求无 query。
     ///
     /// 取舍：A 桥保留 TrustGuard.isTrustedDocument
-    /// 的严格壳文档判定——它承载 60 个 IPC 方法，同源非壳文档（/api/i/* 代理回传的
+    /// 的严格壳文档判定——它承载 61 个 IPC 方法，同源非壳文档（/api/i/* 代理回传的
     /// 远端 HTML）继承 shim 是真实风险。本通道只携带 lang/dark 两个非敏感事实，且与
     /// A 桥白名单/就绪门完全解耦（事实必须在 sidecar ready 前可用）；页面一旦采用
     /// history.pushState/replaceState（例如把地址改成 /api/i/1 或带 query 的 SPA

@@ -43,6 +43,8 @@ export const GROUPS = {
   transport: [
     'test/transport/transport-manager.test.ts',
     'test/transport/transport-connection-recovery.test.ts',
+    // F13：注册表加载降级信号（manager 只读健康位 + desktop_ssh_instances_health IPC）。
+    'test/transport/transport-registry-health.test.ts',
     'test/transport/transport-spec-binding.test.ts',
     'test/transport/connection-save.test.ts',
     'test/transport/ssh-provider.test.ts',

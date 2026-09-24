@@ -7,7 +7,7 @@ import type { ShellIpcCtx } from './shell-ipc-ctx.ts'
 import type { ConnectionCredentialMutations } from './connection-save.ts'
 import type { GatewaySessionOrigin } from './gateway-session.ts'
 import type { TransportInstanceInput, TransportInstanceSpec } from './transport-provider.ts'
-import { INSTANCE_ID_PATTERN, commitTransportCredentialUpdate } from './transport-manager.ts'
+import { INSTANCE_ID_PATTERN, commitTransportCredentialUpdate, type TransportManager } from './transport-manager.ts'
 import { IPC_CHANNELS } from './ipc-events.ts'
 import { MAX_SSH_PASSWORD_CHARS, getSshPassword, setSshPassword, sshPasswordSupported, sshProvider } from './ssh-provider.ts'
 import { deleteConnectionTransaction, saveConnectionTransaction } from './connection-save.ts'
@@ -26,6 +26,9 @@ export function registerConnectionHandlers(ctx: ShellIpcCtx): void {
   // 包装）。事务/canonicalize/凭据写入口为纯模块直接 import。凭据 write-only：读侧只判
   // 存在性（!== null），值绝不进入载荷/日志。装配依赖经 ctx：sm / audit /
   // gatewaySessions / publishRegistryTransition。
+  // V5-A：装配侧注入的是完整 createTransportManager，但共享 ShellAssemblyCtx Pick
+  // 只扩到 loadFailure——roster 两个只读诊断经结构面读取，不加宽 Pick。
+  const rosterHealth = sm as unknown as Pick<TransportManager, 'registryIncomplete' | 'loadDroppedCount'>
   /** 注册实例的 gateway-session origin（per-origin session key）：scheme 来自
    *  insecureHttp、端口显式——URL.origin 会省默认端口，缓存 key 必须与注册 baseUrl
    *  及探针 origin 一致。 */
@@ -47,6 +50,24 @@ export function registerConnectionHandlers(ctx: ShellIpcCtx): void {
   deps.ipc.handle(IPC_CHANNELS.SSH_INSTANCES_GET, () =>
     projectInstances(sm.listInstances())
   );
+  // Registry load health (degraded gate + roster-incomplete gate, narrow
+  // read-only channel): separate from instances_get so its array payload and
+  // every existing consumer stay untouched — a degraded registry answers an
+  // empty roster that must NOT settle the renderer's authoritative-roster
+  // gate, and a row-dropping load answers a PARTIAL roster whose legal rows
+  // still install while durable pruning stays vetoed (V5-A).
+  deps.ipc.handle(IPC_CHANNELS.SSH_INSTANCES_HEALTH, () => {
+    const reason = sm.loadFailure();
+    const rosterIncomplete = rosterHealth.registryIncomplete();
+    return {
+      degraded: reason !== null,
+      ...(reason === null ? {} : { reason }),
+      rosterIncomplete,
+      // Present only alongside the incomplete bit: the count has no meaning
+      // for a complete or a failed (degraded) load.
+      ...(rosterIncomplete ? { droppedCount: rosterHealth.loadDroppedCount() } : {}),
+    };
+  });
   /**
    * Main-owned ADD/EDIT transaction for registry metadata plus every applicable
    * write-only credential dimension: the renderer sends only NEW values, old values

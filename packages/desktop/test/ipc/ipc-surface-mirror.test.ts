@@ -424,6 +424,32 @@ test('DesktopSshSurface stays in lockstep across preload / renderer mirrors (L3)
   assert.deepEqual(interfaceMethodNames(renderer, 'DesktopSshSurface'), authoritative, 'renderer global.d.ts mirror drifted')
 })
 
+test('SshInstancesHealth is a type-identical preload/renderer mirror and instances_health stays declared in both surfaces (L3)', () => {
+  // instances_health 的载荷是注册表降级门（degraded/rosterIncomplete）的
+  // renderer 侧判定输入；此前它只被方法名锁覆盖，字段名/可选性/类型无守卫。
+  // preload.cts 是权威面，renderer global.d.ts 是手写镜像 —— 一个 '?' 的
+  // 漂移就会让「旧生产者缺字段按 false/0 读」的兼容断言在类型面失效。
+  const authoritative = interfaceFieldSignatures(preload, 'SshInstancesHealth')
+  assert.ok(
+    authoritative.includes('degraded:boolean'),
+    'preload SshInstancesHealth must keep the required degraded flag',
+  )
+  assert.deepEqual(
+    interfaceFieldSignatures(renderer, 'SshInstancesHealth'),
+    authoritative,
+    'renderer SshInstancesHealth mirror drifted from preload.cts (field name / optionality / type)',
+  )
+  // 两个 surface 都必须真的声明 instances_health（方法名锁之外再显式钉一次，
+  // 失败信息直接点名哪一侧丢了）。
+  const mirrors: Array<[string, string]> = [['preload.cts', preload], ['renderer global.d.ts', renderer]]
+  for (const [label, source] of mirrors) {
+    assert.ok(
+      interfaceMethodNames(source, 'DesktopSshSurface').includes('instances_health'),
+      label + ' DesktopSshSurface must declare instances_health',
+    )
+  }
+})
+
 test('UpdateSurface and SettingsSurface match their GOLDEN baselines (L3 golden guard)', () => {
   assert.deepEqual(interfaceMethodNames(preload, 'UpdateSurface'),
     ['check', 'download', 'onChanged', 'openReleasePage', 'restartAndInstall', 'state'].sort())
@@ -436,7 +462,7 @@ test('DesktopSshSurface matches the GOLDEN baseline — a method deleted from AL
   // stays green in the pairwise comparison above).
   const golden = [
     'config_list', 'connect', 'delete_connection', 'disconnect', 'gateway_plugin_apply', 'gateway_plugin_materialize', 'gateway_plugin_sync', 'instances_get',
-    'is_active', 'local_plugin_add', 'local_plugin_add_file', 'local_plugin_list',
+    'instances_health', 'is_active', 'local_plugin_add', 'local_plugin_add_file', 'local_plugin_list',
     'local_plugin_remove', 'logs', 'logs_clear', 'npm_search', 'onInstancesChanged',
     'onStatusChanged', 'plugin_apply', 'plugin_list', 'plugin_materialize_add',
     'plugin_materialize_add_pick', 'restart_service', 'reverify', 'seed_host_graph',
@@ -998,7 +1024,7 @@ test('every preload channel literal is a known IPC_CHANNELS value (B8 — consta
   }
 })
 
-test('no IPC_CHANNELS constant is dead or duplicated across the main-side files (B12/E8 — 68/68 恰用一次由事实变断言)', () => {
+test('no IPC_CHANNELS constant is dead or duplicated across the main-side files (B12/E8 — 69/69 恰用一次由事实变断言)', () => {
   // 每个 channel 常量必须在 MAIN_SIDE_FILES 的代码引用中各恰用一次：
   // 0 次 = 死 channel（注册/发送丢失），>1 次 = 意外双引用（镜像集合
   // 相等看不见）。计数只认 `IPC_CHANNELS.<KEY>` 拼写，注释剥离用下方单趟状态机

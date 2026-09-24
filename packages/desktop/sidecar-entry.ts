@@ -319,7 +319,7 @@ const nodeEdges = createNodeEdges({
   },
 })
 
-/** 入站分派：edge 应答 → host 保留 method → 60 通道注册表。 */
+/** 入站分派：edge 应答 → host 保留 method → 61 invoke 通道注册表。 */
 async function handleInboundLine(line: string): Promise<void> {
   let frame: Record<string, unknown>
   try {
@@ -470,7 +470,7 @@ const nativeUpdater: NativeUpdaterBridge | undefined = args.nativeUpdater === 's
   })
   ctx = headless.ctx
 
-  // shell-core 装配（60/60 注册体；installIpcHandlers 恰一次、先于 ready——invoke 只在 ready 帧后到达）。
+  // shell-core 装配（61/61 注册体；installIpcHandlers 恰一次、先于 ready——invoke 只在 ready 帧后到达）。
   installIpcHandlers({ ipc: ipcRegistrar, edges: nodeEdges, ctx: headless.ctx })
   console.log('[sidecar] installIpcHandlers 完成：' + registry.size + ' 通道注册')
 

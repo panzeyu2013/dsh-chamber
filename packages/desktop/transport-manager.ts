@@ -16,7 +16,7 @@ import { EventEmitter } from 'node:events'
 import { spawn } from 'node:child_process'
 import type { SpawnOptions } from 'node:child_process'
 import net from 'node:net'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { MAX_TRANSPORT_INSTANCES, signalChild } from './transport-provider.ts'
 import { liveTransportIdentityChanged } from './credential-identity.ts'
@@ -216,10 +216,61 @@ export function attemptCommittedRegistryPush(push: () => void):
   }
 }
 
+/** Registry-write provenance（F16/A4、F19）：`authoritative` = 真实用户
+ * 动作（add/edit/delete/导入）提交的注册表新真相，成功即重建 live 文件，
+ * 可以清零加载降级位；`compensation` = 事务失败后的回滚重写，只恢复事务前
+ * 的主进程快照——它不是关于 live 文件内容的新事实（降级启动时 `before` 是
+ * 内存里的空集，不是未知的磁盘内容），**绝不清零**降级位；且降级位仍非 null
+ * 时连磁盘写入也一并跳过（F19：一次成功的空快照写盘会让下次启动把「未知」
+ * 读成权威空注册表），只做内存回滚以维持调用方的 rollback 判定。V5-A 的
+ * rosterIncomplete 位同理：补偿回滚不清零，且 roster 不完整期间同样跳过写盘
+ * （把「行级丢弃后的部分快照」写回磁盘会让下次启动把「部分」读成「完整」）。 */
+export type SaveInstancesProvenance = 'authoritative' | 'compensation'
+
 /** The runtime surface returned by createTransportManager. */
 export interface TransportManager {
   loadInstances(): TransportInstanceSpec[]
-  saveInstances(next: TransportInstanceInput[]): TransportInstanceSpec[]
+  /**
+   * Read-only health of the persisted registry's LAST load. True when the last
+   * loadInstances() failed (corrupt/oversized file, or a missing live file
+   * whose preserved .corrupt sibling exists): the in-memory set is then NOT
+   * the file's contents, so a degraded empty roster must never be read as an
+   * authoritative empty registry. Cleared by a successful load or by an
+   * authoritative saveInstances() rebuild; a compensation rollback
+   * deliberately keeps it and, while it is set, skips the disk write entirely
+   * (see SaveInstancesProvenance).
+   *
+   * 诊断/测试面 (diagnostic/test-only): the production read face is
+   * loadFailure() — the {degraded, reason} projection behind
+   * desktop_ssh_instances_health. This predicate is equivalent to
+   * loadFailure() !== null and is kept for tests and diagnostics.
+   */
+  registryDegraded(): boolean
+  /** The failure text behind registryDegraded(); null while healthy. */
+  loadFailure(): string | null
+  /**
+   * True when the LAST loadInstances() succeeded but dropped one or more
+   * persisted rows (an entry its provider rejected, or a duplicate id): the
+   * file HAS content the in-memory roster does not represent, so
+   * listInstances() is a PARTIAL view. It must never be read as a complete
+   * authoritative roster for retirement — the renderer's durable pruning gate
+   * stays closed while this is true (same veto rank as registryDegraded()).
+   * Cleared by a successful load with no drops or by an AUTHORITATIVE
+   * saveInstances() rebuild; a compensation rollback deliberately keeps it
+   * and, while it is set, skips the disk write (see SaveInstancesProvenance).
+   *
+   * 诊断/测试面 (diagnostic/test-only): the production read face is the
+   * desktop_ssh_instances_health projection (rosterIncomplete/droppedCount).
+   */
+  registryIncomplete(): boolean
+  /** Rows the LAST load dropped (invalid entries + duplicate ids); 0 while
+   *  the last load was complete or failed. */
+  loadDroppedCount(): number
+  /** Persist a new instance set. `provenance` defaults to `'authoritative'`
+   *  (real user saves/imports); pass `'compensation'` for a transaction
+   *  rollback, which must NOT clear the registry-load degraded gate and, while
+   *  that gate is closed, must not write the live file at all (F19). */
+  saveInstances(next: TransportInstanceInput[], provenance?: SaveInstancesProvenance): TransportInstanceSpec[]
   listInstances(): TransportInstanceSpec[]
   connect(id: string): TransportStatusProjection | null
   disconnect(id: string): void
@@ -1180,27 +1231,63 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
     }
   }
 
+  /** Non-null exactly while the LAST registry load failed: the in-memory set
+   *  is then NOT the file's contents, so an empty list must never be read as
+   *  an authoritative empty registry. Cleared by a successful load or by an
+   *  AUTHORITATIVE saveInstances() rebuild; a COMPENSATION rollback write
+   *  deliberately keeps it (see SaveInstancesProvenance). Never credential
+   *  material. */
+  let registryLoadFailure: string | null = null
+
+  /** True while the LAST successful load dropped rows (invalid entry or
+   *  duplicate id): the file has content the in-memory roster does not
+   *  represent, so the roster is a PARTIAL authority. Cleared by a drop-free
+   *  successful load or an AUTHORITATIVE saveInstances() rebuild; a
+   *  COMPENSATION rollback keeps it and, while it is set, skips the disk write
+   *  (writing the partial snapshot back would make the next launch read a
+   *  partial file as complete). Never credential material. */
+  let registryIncomplete = false
+  /** Rows the LAST load dropped (invalid entries + duplicate ids). */
+  let registryDroppedCount = 0
+
   /** Load the persisted instance set; a missing file is an empty set. */
   function loadInstances(): TransportInstanceSpec[] {
     let parsed: unknown
     try {
       parsed = JSON.parse(readFileSync(instancesFile, 'utf8'))
     } catch (error: unknown) {
-      if ((error as CodedError | undefined)?.code === 'ENOENT') return listInstances()
+      if ((error as CodedError | undefined)?.code === 'ENOENT') {
+        // A missing live file is a healthy empty set only while no preserved
+        // .corrupt sibling exists: after a corrupt preservation the previous
+        // registry contents are unknown, never a healthy empty set.
+        const preservedCorrupt = existsSync(`${instancesFile}.corrupt`)
+        registryLoadFailure = preservedCorrupt
+          ? 'ssh-instances file is missing while its preserved .corrupt copy exists; registry contents unknown'
+          : null
+        if (!preservedCorrupt) {
+          // Drop-free successful load: the roster-incomplete bit clears too.
+          registryIncomplete = false
+          registryDroppedCount = 0
+        }
+        return listInstances()
+      }
       // Corrupt instance file: loud failure, never a fake-empty set; the caller
       // (desktop main) preserves the file before starting empty.
       const wrapped: CodedError = new Error(`ssh-instances file is corrupt: ${describeTransportError(error)}`)
       wrapped.code = 'ssh_instances_corrupt'
+      registryLoadFailure = wrapped.message
       throw wrapped
     }
     if (!Array.isArray(parsed)) {
       const wrapped: CodedError = new Error('ssh-instances file does not contain an array')
       wrapped.code = 'ssh_instances_corrupt'
+      registryLoadFailure = wrapped.message
       throw wrapped
     }
     if (parsed.length > MAX_TRANSPORT_INSTANCES) {
       const wrapped: CodedError = new Error(`ssh-instances file exceeds the ${MAX_TRANSPORT_INSTANCES}-instance limit`)
       wrapped.code = 'ssh_instances_too_many'
+      registryLoadFailure = wrapped.message
       throw wrapped
     }
     const dropped: unknown[] = []
@@ -1231,6 +1318,15 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
     }
     if (dropped.length > 0) warn(`transport-manager: dropped ${dropped.length} invalid instance(s) from ${instancesFile}`)
     if (duplicates > 0) warn(`transport-manager: dropped ${duplicates} duplicate id(s) from ${instancesFile} (first wins)`)
+    // V5-A: the parse succeeded, but rows were dropped — the disk file HAS
+    // content this process cannot represent (a provider-rejected entry, or a
+    // duplicate id), so the in-memory roster is a PARTIAL view. The health
+    // probe reports rosterIncomplete so the renderer refuses to retire durable
+    // unread keys from it (the typical trigger is a new-writer/old-reader
+    // field drift). A drop-free load or an authoritative save clears it.
+    registryDroppedCount = dropped.length + duplicates
+    registryIncomplete = registryDroppedCount > 0
+    registryLoadFailure = null
     return listInstances()
   }
 
@@ -1243,8 +1339,15 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
    * parameters changed revoke the old tunnel and exec generations before
    * publication, and teardown always runs while the OLD spec is still
    * authoritative so provider-owned resources observe the old kind.
+   * `provenance` defaults to `'authoritative'`; a `'compensation'` rollback keeps
+   * both registry health bits and skips the disk write while either is closed
+   * (F19/V5-A; see SaveInstancesProvenance). An AUTHORITATIVE write rebuilds the
+   * file and clears both bits.
    */
-  function saveInstances(next: TransportInstanceInput[]): TransportInstanceSpec[] {
+  function saveInstances(
+    next: TransportInstanceInput[],
+    provenance: SaveInstancesProvenance = 'authoritative',
+  ): TransportInstanceSpec[] {
     if (!Array.isArray(next)) {
       const error: CodedError = new Error('instances must be an array')
       error.code = 'ssh_instances_invalid'
@@ -1303,7 +1406,25 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
     // Persist BEFORE mutating the in-memory registry: a failed write throws while
     // the registry and every live transport stay untouched, so runtime and UI never
     // diverge; connection-save.ts coordinates the secondary stores and rollback.
-    writeFileAtomic(instancesFile, `${JSON.stringify(kept, undefined, 2)}\n`)
+    // F19/V5-A: a COMPENSATION rollback never writes while the degraded or
+    // incomplete gate is closed — an authoritative-looking empty/partial snapshot
+    // would make the next launch settle (and prune durable keys from) a roster it
+    // cannot trust. Memory still accepts `next` so connection-save.ts can verify
+    // the rollback against the pre-transaction snapshot.
+    if (provenance === 'compensation' && registryLoadFailure !== null) {
+      warn(`transport-manager: registry load is degraded; skipping the compensation write of ${kept.length} instance(s) (live file left untouched, degraded gate stays closed)`)
+    } else if (provenance === 'compensation' && registryIncomplete) {
+      warn(`transport-manager: registry roster is incomplete; skipping the compensation write of ${kept.length} instance(s) (live file left untouched, incomplete gate stays closed)`)
+    } else {
+      writeFileAtomic(instancesFile, `${JSON.stringify(kept, undefined, 2)}\n`)
+    }
+    // An AUTHORITATIVE write is new registry truth: the file was rebuilt, so both
+    // load-health bits clear here (a compensation keeps them closed).
+    if (provenance === 'authoritative') {
+      registryLoadFailure = null
+      registryIncomplete = false
+      registryDroppedCount = 0
+    }
     const nextIds = new Set(kept.map(entry => entry.id))
     for (const id of [...instances.keys()]) {
       if (!nextIds.has(id)) {
@@ -1523,6 +1644,10 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
 
   return {
     loadInstances,
+    registryDegraded: () => registryLoadFailure !== null,
+    loadFailure: () => registryLoadFailure,
+    registryIncomplete: () => registryIncomplete,
+    loadDroppedCount: () => registryDroppedCount,
     saveInstances,
     listInstances,
     connect,

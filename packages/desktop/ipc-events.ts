@@ -1,16 +1,20 @@
 /**
- * Desktop IPC channel names — the single source for MAIN-process senders and handlers
- * (main.ts + the ipc-*.ts wiring modules).
+ * Desktop IPC channel names — the single source for MAIN-process senders and
+ * handlers (main.ts + the ipc-*.ts wiring modules). `SYSTEM_RESUME_EVENT` is
+ * also referenced (as the same literal) by preload.cts: the preload build
+ * contract is a self-contained single file (build-preload.mjs), so it cannot
+ * import this module — the duplication is deliberate and pinned by
+ * test/ipc/ipc-surface-mirror.test.ts (which asserts the main-side handle/send literal
+ * sets EQUAL the preload-side invoke/on literal sets).
  *
- * `SYSTEM_RESUME_EVENT` is repeated as the same literal by preload.cts: the preload build
- * contract is a self-contained single file, so it cannot import this module — the
- * duplication is deliberate and the two literal sets must stay equal. The renderer-side
- * twin lives in packages/dsh-client-connection/src/client/index.ts.
+ * The renderer-side twin lives in
+ * packages/dsh-client-connection/src/client/index.ts (same literal; the two
+ * processes cannot share one module).
  */
 
 /** Every main-process IPC channel: request/response (ipcMain.handle) and
- *  main→renderer pushes (webContents.send). Value-object form so the full
- *  channel set resolves from one import. */
+ *  main→renderer pushes (webContents.send). Value-object form so the surface
+ *  mirror test can resolve the full channel set from one import. */
 export const IPC_CHANNELS = {
   INFO: 'dsh-chamber:info',
 
@@ -49,6 +53,10 @@ export const IPC_CHANNELS = {
   SYSTEM_RESUME: 'dsh-chamber:system-resume',
 
   SSH_INSTANCES_GET: 'desktop_ssh_instances_get',
+  /** Registry load health (degraded gate): the renderer must NOT treat an
+   *  instances_get empty array as an authoritative roster while the persisted
+   *  registry failed to load. */
+  SSH_INSTANCES_HEALTH: 'desktop_ssh_instances_health',
   SSH_SAVE_CONNECTION: 'desktop_ssh_save_connection',
   SSH_DELETE_CONNECTION: 'desktop_ssh_delete_connection',
   SSH_SET_PASSWORD: 'desktop_ssh_set_password',
@@ -57,9 +65,9 @@ export const IPC_CHANNELS = {
   /** Manual chamber-plugin seed-cache sync onto a gateway instance. */
   GATEWAY_PLUGIN_SYNC: 'desktop_gateway_plugin_sync',
   /** Batch registry install/remove + restart-to-apply onto a gateway
-   *  instance: main-process confirmation (showMessageBox), serial per-op
-   *  submissions over the registered transport, bounded executor-settle and
-   *  restart readiness polls. */
+   *  instance (design 21 §6.5): main-process confirmation
+   *  (showMessageBox), serial per-op submissions over the registered
+   *  transport, bounded executor-settle + restart readiness polls. */
   GATEWAY_PLUGIN_APPLY: 'desktop_gateway_plugin_apply',
   /** Folder pick → tarball upload onto a gateway instance: PICK-ONLY (main
    *  opens the folder dialog, no renderer-supplied path). */

@@ -1,16 +1,45 @@
 /**
- * sidecar-stub.ts — POC B-bridge service end: stubs the three slice topologies
- * (request/response, push, reverse edge) so the full chain can be proven.
+ * sidecar-stub.ts — POC B-bridge service end (design 25 §4.4.2);
+ * it stubs exactly the three slice topologies so the full chain can be proven:
  *
- * Pure Node, zero dependencies, ESM with erasable-only annotations. stdout is the NDJSON
- * protocol stream and NOTHING else: console.log/info are forbidden; all logs go through
- * console.error (stderr), which the Swift BridgeClient reads as the log channel. Frames:
- * request {id,method,payload} / response {id,ok,result|error} / event {event,payload};
- * responses echo the request id, events carry none, one frame = one write = one line.
- * stdin EOF and SIGTERM/SIGINT exit 0. A malformed line is logged on stderr and dropped —
- * fail-loud is stderr, never a crash or unpaired reply. POC honesty: fabricated
- * projections carry `poc: true`; desktop_ssh_* payloads use {instanceId}; field names
- * match preload/main.
+ *   1. request/response — dsh-chamber:info, settings get/set, the SSH
+ *      instances roster (get + registry load health) and
+ *      connect/disconnect/status;
+ *   2. push — desktop_ssh_status_changed emitted after connect/disconnect
+ *      (fabricated state, loud-marked `poc: true`);
+ *   3. reverse edge — edge:notification-clicked (Swift notification-click
+ *      stub) → logged here → dsh-chamber:notification-open pushed back to the
+ *      web (design 25 §4.5 stub semantics: Swift stub → sidecar log → push).
+ *
+ * Transport (pure Node, zero dependencies):
+ *   - spawned by the Swift BridgeClient as `node sidecar-stub.ts
+ *     --instances <path>`; desktop package.json "type":"module" → this file
+ *     is ESM; type annotations are erasable-only, so it runs directly under
+ *     Node ≥22 type stripping (repo engines ≥24; on Node 22.6–22.17 pass
+ *     --experimental-strip-types).
+ *   - stdout is the NDJSON protocol stream and NOTHING else. console.log and
+ *     console.info write to stdout in Node and are therefore forbidden here;
+ *     every log line goes through console.error (stderr), which the Swift
+ *     BridgeClient reads as the log channel.
+ *   - frames: request  {"id":N,"method":"…","payload":…}
+ *             response {"id":N,"ok":true,"result":…}
+ *                      {"id":N,"ok":false,"error":"…"}
+ *             event    {"event":"…","payload":…}
+ *     Responses echo the request id (the Swift client owns id monotonicity;
+ *     event frames carry no id, and this sidecar never originates a request
+ *     in the POC). One frame = one write = one line; no interleaving.
+ *   - stdin EOF and SIGTERM/SIGINT both exit 0 — the signal path is genuinely
+ *     reachable in pure Node (design 25 §3.3(5); it is dead code under
+ *     Electron) and must be explicit here.
+ *   - every line is parsed under a per-frame guard: a malformed frame is
+ *     logged on stderr and dropped — fail-loud means stderr, never a crash,
+ *     never a reply the caller cannot pair with a request.
+ *
+ * POC honesty: every fabricated projection carries `poc: true` (comment on
+ * connectHandler); POC payloads use {instanceId} on the desktop_ssh_* methods
+ * — the POC A-bridge shim sends the same field. Result field names for info
+ * (controlPlaneUrl/dshVersion/version/platform) match preload/main so the
+ * renderer needs no POC-only branches.
  */
 
 import { readFileSync } from 'node:fs'
@@ -164,6 +193,19 @@ function parseInstancesJson(instancesPath: string, rawText: string): Json | null
   }
 }
 
+function instancesHealthHandler(): Json {
+  // Fixture parity with the real desktop_ssh_instances_health channel: the
+  // renderer probes load health on every roster pull, so the POC stub must
+  // answer the shape instead of falling into {error:'poc-unimplemented'}. The
+  // stub keeps no persisted load-health bit, so it always answers the COMPLETE
+  // healthy shape. The degraded / roster-incomplete shapes are produced by the
+  // real transport-manager and pinned at the manager + IPC registrar level
+  // (packages/desktop/test/transport/transport-registry-health.test.ts); the
+  // flat sidecar-stdio.test.ts drives the real sidecar-entry stdio surface but
+  // does NOT exercise this health branch.
+  return { degraded: false, rosterIncomplete: false }
+}
+
 async function connectHandler(payload: Json | null): Promise<Json> {
   const instanceId = instanceIdFromPayload(payload)
   if (instanceId === null) {
@@ -218,11 +260,13 @@ function notificationClickedHandler(): Json {
   return null
 }
 
-/** Dispatch table — the POC subset of the 60 main-process invoke handlers plus the one
- * reverse edge. Anything absent is answered with a LOUD {error:poc-unimplemented}. */
+/** Dispatch table — the POC subset of the 61 main-process invoke channels
+ *  plus the one reverse edge. Anything absent is answered with a LOUD
+ *  {error:'poc-unimplemented'} — never silence, never a fake success. */
 const handlers: { readonly [method: string]: MethodHandler | undefined } = {
   'dsh-chamber:info': infoHandler,
   'desktop_ssh_instances_get': instancesGetHandler,
+  'desktop_ssh_instances_health': instancesHealthHandler,
   'desktop_ssh_connect': connectHandler,
   'desktop_ssh_disconnect': disconnectHandler,
   'desktop_ssh_status': statusHandler,
