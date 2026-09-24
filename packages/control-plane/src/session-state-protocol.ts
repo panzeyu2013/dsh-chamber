@@ -162,9 +162,6 @@ export const SESSION_STATE_CLIENT_ID_PATTERN = /^[A-Za-z0-9._:-]{1,64}$/
  *  by the route validator, not here). */
 export const SESSION_STATE_SESSION_ID_MAX_CHARS = 128
 
-/** One capability probe deadline: a single retry, then exponential backoff. */
-export const SESSION_STATE_PROBE_TIMEOUT_MS = 5_000
-
 /** Runtime dsh-events handshake window (5s ⇒ mode:poll +
  *  dsh-events-absent; no half-subscribed row may survive). */
 export const SESSION_STATE_HANDSHAKE_WINDOW_MS = 5_000
