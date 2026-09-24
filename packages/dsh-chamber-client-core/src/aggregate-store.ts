@@ -1,16 +1,18 @@
 /**
- * chamberBridge — the renderer-shared single instance: the App layer publishes
- * the merged multi-source projection and consumes open-session requests; the
- * sidebar plugin subscribes and publishes open requests. Both import this module
- * through `@dsh-chamber/dsh-chamber-client-core` (vite shared chunk keeps the
- * runtime single instance).
- * One workspace group in the sidebar projection (computed by derive.ts); the
- * synthetic trailing ungrouped bucket carries `ungrouped: true` and the shared
- * UNGROUPED_WORKSPACE_ID.
+ * chamberBridge — the renderer-shared single instance (design 05 §3). The
+ * chamber App layer (renderer main entry) publishes the merged multi-source
+ * projection and consumes open-session requests; the sidebar plugin
+ * subscribes to the projection and publishes open-session requests. Both
+ * import this module through `@dsh-chamber/dsh-chamber-client-ui-sidebar/shared`; a
+ * vite shared chunk keeps the runtime single instance.
+ *
+ * One workspace group in the sidebar projection (computed by shared/derive.ts).
+ * The synthetic trailing ungrouped bucket carries `ungrouped: true` and the
+ * shared UNGROUPED_WORKSPACE_ID as its id.
  */
 import type { InstanceSnapshot } from './instance-api.ts'
 import type { ArchivedSessionMetaRow } from './aggregate-types.ts'
-import type { SubagentActivity } from './session-row-state.ts'
+import type { GoalFact, SubagentActivity } from './session-row-state.ts'
 import type { SessionAuthoritySnapshot } from './session-fact-reconcile.ts'
 import { assertSingletonModule } from './singleton.ts'
 import {
@@ -20,9 +22,10 @@ import {
 assertSingletonModule('aggregate-store')
 
 /**
- * 事实未到（投影缺席）——**绝不折叠为 'idle'**：'idle' 是"手动断开"的合法事实，
- * 折叠会把一次投影延迟/拉取失败说成"未连接"。'unknown' 读作「状态未知」，
- * transportUsable 对二者同为 false。
+ * 事实未到（投影缺席）——**绝不折叠为 'idle'**（未连接）。App 的 deriveServers 在
+ * `remoteStatus[statusKey]` 缺席时发布本常量：'idle' 是"手动断开"的合法事实，折叠
+ * 会让 hover/aria 把一次投影延迟/拉取失败说成"未连接"；'unknown' 在侧栏读作
+ * 「状态未知」文案，而 transportUsable 对二者同为 false（行为面不变，只是不再撒谎）。
  */
 export const SOURCE_PHASE_UNKNOWN = 'unknown'
 
@@ -39,9 +42,10 @@ export interface ChamberServerWorkspace {
   /** True only for the synthetic trailing ungrouped bucket. */
   ungrouped?: boolean
   /**
-   * True only for the fallback's cwd-derived groups (`__cwd__:` ids): the host
-   * does not know these ids, so the sidebar must disable every workspace-scoped
-   * mutation on them.
+   * True only for the fallback's cwd-derived groups (`__cwd__:` ids,
+   * fetchInstanceSnapshot). Display-only: the host does not know these ids,
+   * so the sidebar must disable every workspace-scoped mutation on them
+   * (ungrouped-bucket parity).
    */
   synthetic?: boolean
   sessions: {
@@ -49,25 +53,32 @@ export interface ChamberServerWorkspace {
     /** Durable title projection — '' when the session has none. Rename/fork copy uses THIS. */
     title: string
     /**
-     * Official display label (`title ?? basename(cwd) ?? id`, never empty) —
-     * what row labels, hover copy, aria names and todo rows render.
+     * Official display label (I3): `title ?? basename(cwd) ?? id`, resolved by
+     * `derive.ts sessionDisplayTitle` and NEVER empty. This is what row labels,
+     * hover copy, aria names and todo rows render — a session whose title the
+     * host could not read shows its project directory name, never
+     * 「未命名会话」.
      */
     displayTitle: string
     running?: boolean
     updatedAt?: number
     blank?: boolean
     /**
-     * The session owns at least one active schedule (from the session's
-     * `schedule` projection), so the row can render the official marker.
-     * Sparse: absent means no active schedule.
+     * The session owns at least one active
+     * schedule — projected from the session's `schedule` projection
+     * (`derive.ts hasActiveScheduleOf`, upstream ui-workspace tree.ts:161-163)
+     * so the row can render the official active-Schedule marker. Sparse: absent
+     * means no active schedule.
      */
     hasActiveSchedule?: boolean
   }[]
   /**
-   * Official reuse-or-create resolution for this workspace's "+", computed over
-   * the RAW snapshot: a blank, non-archived member session in the workspace's own
-   * directory that upstream would reopen. Absent = create (no such row, or the
-   * archive set is unknown, where create is the honest degradation).
+   * Official reuse-or-create resolution for this workspace's "+" (I2), computed
+   * by `derive.ts findReusableBlankSession` over the RAW snapshot: a blank,
+   * non-archived member session in the workspace's own directory that upstream
+   * `connectWorkspace` would reopen instead of creating another one. Absent
+   * means "create" — either no such row, or the archive set is unknown
+   * (unary fallback), where create is the honest degradation.
    */
   reusableBlankSessionId?: string
 }
@@ -92,18 +103,23 @@ export interface ChamberServerAggregate {
   /** Status text (ready/connecting/… projection). */
   phase: string
   /**
-   * Gateway only: the managed dsh is terminal-down (`stopped`/`error`/
-   * `restart-exhausted`) while the TRANSPORT is up. A dedicated fact, never
-   * re-derived from `phase` (both vocabularies contain `error`, so classifying
-   * the merged string would misdiagnose a tunnel failure as a stopped managed
-   * dsh). Absent = not a gateway / transport down / healthy state (fail open).
+   * Gateway only: the managed dsh was probed into a terminal-down state while
+   * the TRANSPORT was up (`stopped`/`error`/`restart-exhausted`). A dedicated
+   * fact, never re-derived from `phase`: `phase` merges the managed state with
+   * the transport phase and both vocabularies contain `error`, so classifying
+   * the merged string would misdiagnose an SSH/tunnel failure as a stopped
+   * managed dsh. Absent = not a gateway, transport
+   * down, probe missing, or a healthy/transient managed state (fail open).
    */
   managedRuntimeDown?: boolean
   /**
-   * 能力一览：本来源的会话事实档位，只读展示，绝不参与判定。`full` = 镜像可用且
-   * 兼容；`degraded` = 镜像受限（尾巴不可读 / 事件静默 / 轮询模式 / 特性缺失）；
-   * `legacy` = 该网关未升级（路由 404）；`disabled` = 观察面关闭（503 或
-   * `mode:'off'`）。缺席 = 未知，绝不臆造为 full。
+   * 能力一览：本来源的**会话事实档位**，由桌面侧事实源
+   * 探测/观测得出，只读展示，绝不参与判定（判定只用事实本身）。
+   * - `full`：镜像可用且版本兼容，完成/未读是观测事实；
+   * - `degraded`：镜像可用但受限（尾巴不可读 / 事件静默 / 轮询模式 / 特性缺失）；
+   * - `legacy`：该网关未升级（路由 404，无镜像）；
+   * - `disabled`：该网关的观察面被关闭（503 或 `mode:'off'`）。
+   * 缺席 = 未知（未探测 / 该部署形态无此面）——绝不臆造为 full。
    */
   sessionFacts?: SourceSessionFactsMode
   workspaces: ChamberServerWorkspace[]
@@ -116,35 +132,49 @@ export interface ChamberServerAggregate {
   /** Runtime facts from the source's own ctx; attached, never polled. */
   runtime?: InstanceRuntimeReport
   /**
-   * Archived-session metadata rows of this source, with workspace attribution
-   * for the manager's grouped listing. `archiveSetKnown` says whether an EMPTY
-   * list is a true "nothing archived" fact: true = the mounted workspace
-   * baseline projected the registry archive set; absent = the snapshot has not
-   * landed or carries no archive-set metadata; false = the unary fallback's
-   * unknown set — [] must NEVER be read as "no archived sessions" (the manager
-   * shows a degraded branch with no destructive action).
+   * Archived-session metadata rows of this source (design 24 revision —
+   * the archive manager lists what is archived; rows additionally carry their
+   * workspace attribution for the manager's
+   * grouped listing — see ArchivedSessionMetaRow). Present when the
+   * per-instance aggregate snapshot has landed. `archiveSetKnown` says
+   * whether an EMPTY rows list is a true "nothing archived" fact:
+   * - known (true): the mounted workspace baseline projected the registry
+   *   archive set — [] means genuinely nothing archived;
+   * - absent/undefined: rows derive from a source whose snapshot has not
+   *   landed (aggregate not ok) or carries no archive-set metadata;
+   * - known (false): the unary-fallback view — its archive set is unknown
+   *   (documented KNOWN DEGRADATION) — [] must NEVER be read as "no archived
+   *   sessions"; the archive manager shows an honest degraded branch with no
+   *   destructive action (no list to select; no standalone delete-all).
    */
   archivedSessions?: ArchivedSessionMetaRow[]
   archiveSetKnown?: boolean
   /**
-   * dsh version fact: the LOCAL instance's version flows from the desktop
-   * bridge; remote instances stay unknown until control-plane `dsh --version`
-   * facts are projected through the chamber bridge.
+   * dsh version fact. The LOCAL instance's version flows straight from the
+   * desktop bridge
+   * (`window.dshChamber.dshVersion` → App hostFacts); remote instances stay
+   * unknown until the control-plane `dsh --version` facts are projected
+   * through the chamber bridge.
    */
   dshVersion?: string
   /** Renderer-local client-plugin boot health for this source. */
   pluginDiagnostic?: PluginGraphDiagnostic
   /**
-   * Settled-boot GAP of this source's mounted shell: the shell settled
-   * successfully while a whole surface is missing.
+   * Settled-boot GAP of this source's mounted shell (design 05 §4
+   * 「降级呈现」/ design 09 §3.2): the shell settled successfully while a whole
+   * surface is missing.
    *
-   * SEPARATE from {@link pluginDiagnostic} on purpose: that channel describes the
-   * host boot-GRAPH (`ok` means the graph was fetched and every arriving row
-   * applied), while a missing `ui-chat`/`sidebarRight` leaves it at `ok` though
-   * the conversation view never registers — overloading one channel would either
-   * lie ("正常" next to an empty conversation) or blur the recheck classification.
-   * Structured facts only (each package renders its own sentence from `kind` +
-   * ids). Absent = no gap reported.
+   * A SEPARATE fact from {@link pluginDiagnostic} on purpose. The diagnostic
+   * channel describes the host boot-GRAPH channel (`ok` legitimately means "the
+   * graph was fetched and every row that arrived applied"); the classic gap —
+   * the graph arrived but `ui-chat`'s `sidebarRight` was never provided — leaves
+   * that channel at `ok` while the conversation view never registers. Overloading
+   * one channel with both meanings would either lie ("正常" next to an empty
+   * conversation) or make the recheck/self-heal classification ambiguous.
+   *
+   * Structured facts only (never the producer's diagnostic sentence): each
+   * rendering package writes its own copy from `kind` + the ids (STATUS
+   * 「跨边界诊断文案」). Absent = no gap reported for the current mount.
    */
   bootGap?: ServerBootGap
   updatedAt: number
@@ -154,17 +184,18 @@ export interface ChamberServerAggregate {
 export type ServerBootGapKind =
   | 'graph-unavailable'
   /**
-   * The LOCAL instance's client-graph endpoint answered 404 / method-missing:
-   * a chamber-side installation/seed fact (the managed local host always injects
-   * its graph). Gateway/mobile shapes keep producing NO fact.
+   * The LOCAL instance's client-graph endpoint answered 404 / method-missing.
+   * The chamber-managed local host always injects its graph (the seed row), so
+   * this is a chamber-side installation/seed fact — the gateway/mobile shapes,
+   * whose missing endpoint is legitimate, keep producing NO fact.
    */
   | 'local-graph-not-injected'
   | 'required-services-missing'
   | 'deferred-registration-failed'
 
 /**
- * The cross-package face of one settled-boot gap. Producers hand these fields
- * over; consumers render their own sentences.
+ * The cross-package face of one settled-boot gap. Producers (the renderer's
+ * shell seam) hand these fields over; consumers render their own sentences.
  */
 export interface ServerBootGap {
   kind: ServerBootGapKind
@@ -199,8 +230,9 @@ export interface OpenSessionRequest {
 
 /**
  * Terminal outcome of one App-layer open attempt, published back to every
- * sidebar shell (the request channel is one-way; the App owns dispatch and
- * failure, the sidebar owns the row). Failure carries the loud report.
+ * sidebar shell (design 05 §3's request channel is one-way — the App layer
+ * owns the dispatch budget and the failure; the sidebar owns the row).
+ * Success carries no message; failure carries the dispatch's loud report.
  */
 export interface OpenSessionOutcome extends OpenSessionRequest {
   /** Present only on failure: the terminal error report (App-wrapped text). */
@@ -209,41 +241,52 @@ export interface OpenSessionOutcome extends OpenSessionRequest {
 
 /**
  * One successful in-app workspace creation for a source whose shell may not be
- * mounted. The unary `workspace.create` result is the ONLY trustworthy "this
- * workspace now exists on that host" fact available without a shell: the App
- * echoes the row into the projection immediately while the authoritative
- * `workspace/follow` baseline converges later (for an unmounted source the
- * unary fallback cannot express an empty workspace at all).
+ * mounted (design 05 §2.2 revision). The unary `workspace.create`
+ * result is the ONLY trustworthy "this workspace now exists on that host" fact
+ * available without a shell: the App layer echoes the row into the projection
+ * immediately (shared/workspace-echo.ts) while the authoritative
+ * `workspace/follow` baseline converges later — for an unmounted source the
+ * unary fallback cannot express an empty workspace at all (no session carries
+ * its cwd yet).
  *
  * Every in-app producer goes through shared/workspace-mutations.ts (the single
- * funnel: the sidebar's dialogs AND the Git plugin's create/adopt sagas).
+ * funnel: the sidebar's own dialogs AND the Git worktree plugin's create/adopt
+ * sagas). Publishing per call site is the failure mode this funnel removes.
  */
 export interface WorkspaceCreatedFact {
   sourceId: string
   workspaceId: string
   path: string
   /**
-   * Optional placement anchor: the host workspace id this creation sits
-   * immediately AFTER in the projection (the Git plugin registers a new worktree
-   * right below its main checkout, while the echo would otherwise be appended
-   * and jump once the source mounts). Absent = append at the tail.
+   * Optional placement anchor: the host
+   * workspace id this creation sits immediately AFTER in the projection — the
+   * Git plugin registers a new worktree right below its main checkout
+   * (workspace.insertBefore) while the projection would otherwise append the
+   * echoed row at the tail and make it jump once the source mounts. Absent =
+   * append at the tail (every sidebar-issued creation, whose host order is
+   * "last created is last").
    */
   afterWorkspaceId?: string
   /**
-   * Optional label this creation INTENDS for the row (the Git plugin's adopt
-   * renames to the branch right after the saga). Absent = the ledger's
-   * path-basename rule; the mounted baseline still wins over both.
+   * Optional label this creation INTENDS for the row: the Git
+   * plugin's adopt path renames the workspace to the branch right after the
+   * saga, and without the hint the echoed row would be born with the path
+   * basename and flip a few RPCs later. Absent = the ledger's path-basename
+   * rule; the mounted follow baseline still wins over both.
    */
   title?: string
 }
 
 /**
- * One successful sidebar-issued workspace deletion — the WITHDRAW half of the
- * workspace echo. Without it the echo has no way to retire: on a source whose
- * shell is not mounted no authoritative baseline lists the workspace yet, so
- * reconciliation cannot match it and the deleted row survives as a GHOST with
- * real-id actions until the TTL. `path` is best-effort; the ledger also matches
- * by `workspaceId`.
+ * One successful sidebar-issued workspace deletion —
+ * the WITHDRAW half of the workspace echo. The sidebar owns `workspace.delete`
+ * for the same sources it can create on, and without this fact the echo has no
+ * way to be retired: for a source whose shell is not mounted there is no
+ * authoritative baseline that lists the workspace yet, so
+ * `reconcilePendingWorkspaces` cannot match it, and the deleted row survives as
+ * a GHOST with real-id actions enabled until the 10-minute TTL. `path` is
+ * best-effort (empty when the source's mounted snapshot has not reported the
+ * workspace) — the ledger matches by `workspaceId` as well.
  */
 export interface WorkspaceRemovedFact {
   sourceId: string
@@ -252,9 +295,11 @@ export interface WorkspaceRemovedFact {
 }
 
 /**
- * One successful sidebar-issued workspace rename — the PATCH half of the echo.
- * An echo row's title is `basenameOf(path)`, so without this fact a rename
- * against a not-yet-mounted source looks like a no-op until the mount push.
+ * One successful sidebar-issued workspace rename — the
+ * PATCH half of the workspace echo. An echo row's title is `basenameOf(path)`,
+ * so a rename against a not-yet-mounted source would look like a no-op (the row
+ * keeps the path basename until the mount push lands). The sidebar owns
+ * `workspace.rename`, so it publishes the new title here.
  */
 export interface WorkspaceRenamedFact {
   sourceId: string
@@ -263,19 +308,24 @@ export interface WorkspaceRenamedFact {
 }
 
 /**
- * One successful in-app session creation — the session-side sibling of
- * {@link WorkspaceCreatedFact}, published by the single funnel
- * `shared/session-mutations.ts` (sidebar "+", row menu fork, Git plugin
- * creations).
+ * One successful in-app session creation (design 05 §2.2 revision) —
+ * the session-side sibling of {@link WorkspaceCreatedFact}, published by the
+ * single funnel `shared/session-mutations.ts` for the sidebar's "+", the
+ * session row menu's fork, and the Git plugin's own session creations.
  *
- * A session minted over the source's UNARY client reaches neither producer of
- * that source's projection in time: the mounted push carries the official
- * summary store whose only out-of-band update is the ASYNCHRONOUS
- * `api-session/added` broadcast, and an unmounted source never receives it; the
- * 30s fallback's merge keeps a pushed source's membership frozen, so the id
- * could only appear as an unaccounted stray. The App records the host id in its
- * session-echo ledger, projects the row immediately, and converges on the
- * authoritative view (the session-list refresh it triggers, or the next mount).
+ * WHY the fact exists: a session minted over the source's UNARY client reaches
+ * neither producer of that source's projection in time — the mounted ctx push
+ * carries the official session-summary store, whose only out-of-band update is
+ * the host's ASYNCHRONOUS `api-session/added` broadcast (in the race window the
+ * push replaces the aggregate from a store that does not list the id yet, and
+ * an UNMOUNTED source never receives the broadcast at all), while the 30s unary
+ * fallback's merge keeps a pushed source's workspace membership frozen, so the
+ * new id can only appear as an unaccounted stray (hidden while it is the
+ * provisional blank row of a non-current source). The App records the host id
+ * in its session-echo ledger, projects the row into its workspace immediately,
+ * and converges on the authoritative view (the official session-list refresh
+ * this fact triggers — the seam that forces the summaries to re-read the
+ * corpus — or the source's next mount).
  */
 export interface SessionCreatedFact {
   sourceId: string
@@ -290,8 +340,9 @@ export interface SessionCreatedFact {
   title?: string
   /**
    * Official provisional-row fact: true for `session.create` (blank until the
-   * first turn, so navigation surfaces it only while it is the source's CURRENT
-   * session), false for a fork child, which inherits content.
+   * first turn, so navigation surfaces it only while it is that source's
+   * CURRENT session — upstream semantics, deliberately not overridden by the
+   * echo), false for a fork child, which inherits content.
    */
   blank: boolean
   /** 归因：触发路径标签；缺席 = unknown（仪表覆盖缺口）。 */
@@ -299,12 +350,15 @@ export interface SessionCreatedFact {
 }
 
 /**
- * One successful sidebar-issued session ARCHIVE: the WITHDRAW half of the
- * creation echo (create → archive inside the echo window must not leave a
- * phantom row until the TTL) and the trigger of the local ARCHIVE TOMBSTONE.
- * For an unmounted source no channel carries the new archive set (the mounted
- * merge keeps the frozen pushed set, the unary fallback has no archive wire),
- * so the row would stay listed and open into the official empty view.
+ * One successful sidebar-issued session ARCHIVE. Two jobs, both local-fact
+ * keeping for a source whose shell may not be mounted:
+ * - the WITHDRAW half of the creation echo (a create → archive inside the same
+ *   echo window must not leave a phantom row until the TTL), and
+ * - the trigger of the local ARCHIVE TOMBSTONE (session-echo.ts
+ *   PendingArchive): for an unmounted source no channel carries the new archive
+ *   set at all — the mounted merge keeps the frozen pushed set and the unary
+ *   fallback has no archive wire — so the archived row would stay listed and
+ *   open into the official empty (archived-current-cleared) view.
  */
 export interface SessionRemovedFact {
   sourceId: string
@@ -313,20 +367,25 @@ export interface SessionRemovedFact {
 
 /**
  * Per-instance runtime facts projected by the sidebar plugin of the source's
- * own ctx: current session id plus per-session live rows. Every listed session
- * carries its live `running` bit (the App derives the completed-but-unread dot
- * from running→idle edges itself), completed/pending ride the vendor armed state
- * as sparse extras, and `runningSubagents` carries the vendor lineage index's
- * RUNNING descendant count per parent (a parent whose round ended while
- * background subagents work must show the subagent-live ring, not the completed
- * dot). Attached as a separate channel — never polled by the App.
+ * own ctx (design 06 §4): current session id plus per-session live rows. The
+ * plugin projects the source's session-list snapshot (minus the ids it has
+ * tombstoned as purged — design 24 §12) —
+ * every listed session carries its live `running` bit (the App layer derives
+ * the completed-but-unread dot from running→idle edges itself, see App.tsx),
+ * completed/pending ride the vendor armed state as sparse extras, and
+ * `runningSubagents` carries the vendor lineage index's RUNNING subagent
+ * descendant count per parent (06 §4.5 — a parent whose round ended while
+ * background subagents still work must not render its completed dot; the
+ * renderer shows the subagent-live ring instead). Attached to
+ * ChamberServerAggregate.runtime as a separate channel — never polled by the
+ * App layer.
  */
 export interface InstanceRuntimeReport {
   current?: string
   /**
-   * Every listed session (edge memory for the App's completed-dot derivation).
-   * completed/pending appear only when the vendor runtime armed them;
-   * runningSubagents only when non-zero.
+   * Every listed session (edge memory for the App's completed-dot
+   * derivation), carrying the live running bit; completed/pending appear only
+   * when the vendor runtime armed them, runningSubagents only when non-zero.
    */
   sessions: Record<string, {
     running?: boolean
@@ -336,31 +395,43 @@ export interface InstanceRuntimeReport {
     runningSubagents?: number
     /** 子代理活动三值：none（索引在场且为零）| running | unknown（索引缺席或来源 stale）。 */
     subagentActivity?: SubagentActivity
+    /**
+     * Goal 三值事实（design 19 §3.2.1）：**字段缺席 = unknown**
+     * （投影还没给出 goal 键 / 形状不符），`null` = 明确无 goal，对象 = 有 goal。
+     * 生产者按来源代回填最后已知值并合并 §2.2 的 activation 事件缓存；
+     * 呈现门 `goalSuppressesPresentation` 只读相位（active 即压制，含 unknown）。
+     */
+    goal?: GoalFact | null
     /** 观察者刷新这一行事实的 host 域毫秒（0/缺席 = 无观察者事实）。 */
     factAt?: number
   }>
   /**
-   * 会话事实单一权威（P2）的快照；
+   * 会话事实单一权威（P2，design 06 §4）的快照；
    * 缺席 = 本记录内从未请求过。App 的升级 ladder 只读它的事实（runningSince /
    * stuckSince / progressStamp）决定 reconnect 与 notice——策略不在 App 侧。
    * 执行端是 shared/session-fact-reconcile.ts（reducer + probe ladder + I/O）。
    */
   sessionAuthority?: SessionAuthoritySnapshot
   /**
-   * Whether `sessions` came from a COMPLETE session-list baseline: the mounted
-   * producer projects the official list store's arrival phase (ready only after
-   * the first successful list, never rolled back). Only `true` is an
-   * authoritative "a session absent here is GONE" gate for the App's unread
-   * pruning; absent means "not proven complete" and must retain state. A
-   * JUDGMENT input, not a rendered fact (the sidebar projection does not carry
-   * it).
+   * Whether `sessions` came from a COMPLETE session-list baseline:
+   * the mounted producer projects the official list store's arrival
+   * phase (`phase === 'ready'`, vendor
+   * dsh-api-session-controller/lib/types/client/sessions/manager.js:41,387 —
+   * pending until the first successful list, never rolled back by a later
+   * error). Only `true` is an authoritative "a session absent here is
+   * GONE" gate for the App's unread pruning; absent/undefined means "not
+   * proven complete" and must retain state (never prune on a shrinking list
+   * that is merely unverified). It is a JUDGMENT input, not a rendered fact —
+   * the sidebar projection does not carry it (shared/derive.ts
+   * runtimeReportSignature signs it on the identity path only).
    */
   listComplete?: boolean
   /**
-   * These are retained READ-ONLY facts of a source that is disconnected right now
-   * (the App attaches them past its `connected` gate and marks them stale).
-   * Consumers may render them but must label them stale/offline, never as live;
-   * absence keeps today's semantics exactly.
+   * These facts are retained READ-ONLY facts of a source that is
+   * disconnected right now (the App attaches them past its `connected` gate
+   * and marks them stale). Consumers may render them but must label them as
+   * stale / offline instead of presenting them as live; a report without the
+   * flag keeps today's semantics exactly (unknown ≠ attention).
    */
   stale?: boolean
 }
@@ -370,27 +441,33 @@ type OpenListener = (request: OpenSessionRequest) => void
 /** 「全部已读」请求（插件→App）：读水位是 App 的权威，插件不持有读标记。 */
 type MarkAllReadListener = (request: { sourceId: string }) => void
 /**
- * 意图预热（插件→App）：「指针在该来源头部停留过」的优先级提示。它不是打开/挂载
- * 请求：App 只把它折算成"既有后台预热队列里该来源优先"，是否 boot 仍由 App 的
- * eligible/抑制/收割纪律决定。
+ * 意图预热（插件→App）：「指针在该来源头部停留过」这一
+ * 优先级提示。它不是打开/挂载请求：App 侧只把它折算成"既有后台预热队列里
+ * 该来源优先"，是否真的 boot 仍由 App 的 eligible/抑制/收割纪律决定。
  */
 type IntentPrewarmListener = (request: { sourceId: string }) => void
 type OpenOutcomeListener = (outcome: OpenSessionOutcome) => void
 type RefreshListener = (sourceId: string) => void
 /**
- * Per-source session-list refresh request (archive-cleanup convergence): a
- * source's MOUNTED ctx session summaries are the official client's in-memory
- * rows, refreshed only on connection generations — content purged by the chamber
- * host domain triggers no official event, so deleted rows linger and resurface in
- * the sidebar once the host removes their ids from the archived set (opening one
- * then fails with session/not-found). The mounted ctx must re-run its OFFICIAL
- * `ctx.sessions.refresh()` (reconciles against the server corpus, drops the
- * deleted rows; MUST be invoked as a method on the service object — a detached
- * call loses `this`). Subscribers are the sidebar plugins of every mounted ctx,
- * each acting only when its own chamberInstanceId matches. Fired by the App's
- * ghost-row convergence machine, by the archive manager after every purge settle,
- * and directly by the producer's archive-set shrink observation (the channel is a
- * backstop).
+ * Per-source session-list refresh request (archive-cleanup convergence, design
+ * 24 §12): a source's MOUNTED ctx session summaries are the official client's
+ * in-memory rows, refreshed only on connection generations — content purged by
+ * the chamber host domain never triggers an official event (documented no-op),
+ * so the deleted rows linger in the summaries and resurface in the sidebar
+ * once the host removes their ids from the archived set (no filter covers them
+ * anymore; opening one fails with the official session/not-found). The mounted
+ * ctx of that source must re-run its OFFICIAL session-list refresh
+ * (`ctx.sessions.refresh()`), which reconciles the summaries against the
+ * server corpus (a per-call disk walk) and drops the deleted rows. Subscribers
+ * are the sidebar plugins of every mounted ctx; each plugin acts only when its
+ * own chamberInstanceId matches the requested source. Fired by the App's
+ * ghost-row convergence machine (planSessionListRefresh — every ready mounted
+ * push whose removed-archived rows are still listed) and by the archive
+ * manager after every purge settle — see design 24 §12 / App.tsx. Since §12
+ * the PRODUCER also triggers the same verified chain directly from its own
+ * archive-set shrink observation (the channel is a backstop, not the only
+ * trigger), and the official refresh MUST be invoked as a method on the
+ * service object (`ctx.sessions.refresh()` — a detached call loses `this`).
  */
 type SessionListRefreshListener = (sourceId: string) => void
 /** One successful sidebar-issued workspace creation (see WorkspaceCreatedFact). */
@@ -421,11 +498,13 @@ type PluginDiagnosticListener = (sourceId: string, diagnostic: PluginGraphDiagno
 
 /**
  * One fan-out channel: the chamberBridge subscriber plumbing, extracted so the
- * ~20 channels cannot drift and every channel shares one dispatch discipline — a
- * throwing listener is reported and the remaining listeners still run. Listeners
- * are snapshotted per emit, so subscribing/unsubscribing during dispatch never
- * affects the in-flight fan-out. `label` names the channel in the console
- * diagnostic.
+ * ~20 channels cannot drift and so EVERY channel shares one dispatch
+ * discipline — a throwing listener is reported and the remaining listeners
+ * still run (before this extraction only sessionListRefresh and activeSource
+ * isolated; one bad subscriber could starve its siblings on the other 18
+ * channels). Listeners are snapshotted per emit, so subscribing/unsubscribing
+ * during dispatch never affects the in-flight fan-out. `label` names the
+ * channel (and may use the emit arguments) in the console diagnostic.
  */
 function createChannel<Args extends unknown[]>(label: (args: Args) => string) {
   const listeners = new Set<(...args: Args) => void>()
@@ -472,9 +551,10 @@ let activeSourceId: string | undefined
 const runtimeReports: Record<string, InstanceRuntimeReport> = {}
 const runtimeProducerTokens: Record<string, number> = {}
 /** Boot generation of the ctx that currently owns each source's producers.
- *  Registration is order-gated by this: a hung earlier boot that resumes AFTER
- *  its successor registered must not steal the producer token — its teardown
- *  clear() would silence the healthy successor for good. */
+ *  Registration is order-gated by this (see registerInstanceRuntimeProducer):
+ *  a hung earlier boot that resumes AFTER its successor registered must not
+ *  steal the producer token — its teardown clear() would then silence the
+ *  healthy successor for good. */
 const runtimeProducerGenerations: Record<string, number> = {}
 const snapshotProducerGenerations: Record<string, number> = {}
 const runtimeProducerFingerprints: Record<string, string> = {}
@@ -499,13 +579,16 @@ export const chamberBridge = {
   /**
    * App-layer write: replace the projection and notify subscribers.
    *
-   * No microtask single-slot merge here: the App has a projection signature gate,
-   * the sidebar re-checks the signature before setState, and write paths are
-   * identity-preserving; React 19 batching already merges same-macrotask
-   * publishes, while async merging would open a getServers() mid-state race. Only
-   * a reference-equality guard remains: same-reference republish is silenced (an
-   * immutable snapshot means no content change). Any future in-place-mutation
-   * design MUST rewrite this note rather than bypass it.
+   * 调用面已有多重收口，本层无需再做微任务单槽合并
+   * ——App 发布前有 serversProjectionSignature 签名闸（等值不 publish），
+   * 订阅侧（SidebarRoot）在 setState 前再比一次签名，refreshAggregate 等
+   * 写路径 identity-preserving（同内容不换对象）。React 19 批处理已把同一
+   * macrotask 内的多次 publish 合并为一次渲染，异步合并反而会引入
+   * getServers() 读到中间态的竞态窗口。本入口只保留引用相等防御：publish
+   * 语义是"换快照 + 通知"，同引用重发无任何增量（快照本身不可变）。
+   * 不变式：同引用重发布被静默丢弃——不可变快照下同引用
+   * ≡ 无内容变化；若未来引入原地突变 + 同引用重发布（今日被不可变性禁止），
+   * 此守卫会吞掉它——任何此类改动必须先改写本注释，而非绕过守卫。
    */
   publish(next: ChamberServerAggregate[]): void {
     if (next === servers) return
@@ -582,10 +665,12 @@ export const chamberBridge = {
   },
 
   /**
-   * Call after a successful `workspace.create` (single funnel
+   * Call after a successful `workspace.create` (single funnel:
    * shared/workspace-mutations.ts): publish the host workspace identity so the
-   * App can echo the row into that source's projection without waiting for a
-   * mount. One-way fact, never a request to mutate the host.
+   * App layer can echo the row into that source's projection without waiting
+   * for a mount (`withWorkspaceEcho`). The App layer remains the only owner of
+   * the projection; this channel is a one-way fact, never a request to mutate
+   * the host.
    */
   reportWorkspaceCreated(fact: WorkspaceCreatedFact): void {
     workspaceCreatedChannel.emit(fact)
@@ -598,9 +683,12 @@ export const chamberBridge = {
 
   /**
    * Sidebar call after a successful `workspace.delete`: publish the fact so the
-   * App can retire the echo row. Same one-way shape as create, and the only
-   * retirement path for an echo whose source never mounted (no baseline lists the
-   * workspace yet, so reconciliation cannot match it).
+   * App layer can retire the echo row of that workspace
+   * (`removePendingWorkspace`). Same one-way shape as the create counterpart,
+   * and the only retirement path for an echo whose source never mounted: no
+   * authoritative baseline lists the workspace yet, so reconciliation cannot
+   * match it and the deleted row would stay visible with real-id actions
+   * enabled until the TTL.
    */
   reportWorkspaceRemoved(fact: WorkspaceRemovedFact): void {
     workspaceRemovedChannel.emit(fact)
@@ -612,9 +700,10 @@ export const chamberBridge = {
   },
 
   /**
-   * Sidebar call after a successful `workspace.rename`: publish the new title so
-   * the App can patch the echo row. An echo row's title derives from its path, so
-   * without this fact the rename looks like a no-op until mount.
+   * Sidebar call after a successful `workspace.rename`: publish the new title
+   * so the App layer can patch the echo row (`renamePendingWorkspace`). An echo
+   * row's title is derived from its path, so without this fact the rename
+   * looked like a no-op on an unmounted source until the mount push arrived.
    */
   reportWorkspaceRenamed(fact: WorkspaceRenamedFact): void {
     workspaceRenamedChannel.emit(fact)
@@ -626,10 +715,12 @@ export const chamberBridge = {
   },
 
   /**
-   * Call after a successful in-app session creation (single funnel
-   * shared/session-mutations.ts): publish the HOST session id so the App can
-   * project the row into that workspace immediately (session-echo ledger) instead
-   * of waiting for a producer that cannot see it. One-way fact.
+   * Call after a successful in-app session creation (single funnel:
+   * shared/session-mutations.ts): publish the HOST session id so the App layer
+   * can project the row into that source's workspace immediately
+   * (session-echo ledger) instead of waiting for a producer that cannot see it
+   * — see {@link SessionCreatedFact}. Same one-way fact shape as the workspace
+   * echo; the App remains the only writer of the projection.
    */
   reportSessionCreated(fact: SessionCreatedFact): void {
     // I10：每次应用内创建都进归因账本（含 blank），只读仪表挂到页面全局一次。
@@ -651,8 +742,9 @@ export const chamberBridge = {
 
   /**
    * Sidebar call after a successful `workspace.archiveSession`: retires that
-   * session's pending creation echo AND records the local archive tombstone.
-   * Published by the same funnel, fenced by the App like the create fact.
+   * session's pending creation echo AND records the local archive tombstone
+   * ({@link SessionRemovedFact}). Published by the same funnel, fenced by the
+   * App exactly like the create fact.
    */
   reportSessionRemoved(fact: SessionRemovedFact): void {
     sessionRemovedChannel.emit(fact)
@@ -675,10 +767,12 @@ export const chamberBridge = {
 
   /**
    * Settings-panel call: the source whose settings surface is on screen
-   * (`undefined` when closed). The App answers by MOUNTING that source's shell if
-   * needed and holding it out of the retention harvest while it stays the target
-   * — the panel renders that source's OWN boot-ctx ledger. Activation is
-   * deliberately not implied: the active view keeps following the user.
+   * (`undefined` when the panel closed). The App layer answers by MOUNTING
+   * that source's shell if it is not mounted yet and by holding it out of the
+   * retention harvest while it stays the target — the panel renders that
+   * source's OWN boot-ctx ledger (design 05 §5), so the
+   * mounted shell IS the surface. Activation is deliberately not implied: the
+   * active view keeps following the user, not the dropdown.
    */
   setSettingsTarget(sourceId: string | undefined): void {
     settingsTargetChannel.emit(sourceId)
@@ -690,11 +784,13 @@ export const chamberBridge = {
   },
 
   /**
-   * App-layer write: the source whose shell is currently on screen — the
-   * authoritative active-view fact of the shared document. Consumers that must
-   * act for ONE view only gate on it instead of guessing from DOM classes or
-   * mount order. Undefined means "not published": consumers fail OPEN, so a boot
-   * without the App layer keeps its previous unconditional behavior.
+   * App-layer write: the source whose shell is currently on screen. This is
+   * the authoritative active-view fact of the shared document — consumers that
+   * must act for ONE view only (the ui-layout document theme projection, which
+   * writes document-global `color-scheme`/palette state) gate on it instead of
+   * guessing from DOM classes or mount order. Undefined means "not published":
+   * consumers fail OPEN, so a boot without the App layer keeps its previous
+   * unconditional behavior.
    */
   setActiveSource(sourceId: string | undefined): void {
     if (sourceId === activeSourceId) return
@@ -715,11 +811,12 @@ export const chamberBridge = {
   },
 
   /**
-   * Synchronously revoke every producer owned by one registry incarnation. Shell
-   * disposal is async, so waiting for plugin cleanup leaves a window in which the
-   * old ctx can report after the authoritative roster re-added the same id.
-   * Delete tokens and caches now, then emit explicit withdrawals; old closures
-   * subsequently fail their token checks.
+   * Synchronously revoke every producer owned by one registry incarnation.
+   * Shell disposal is async, so waiting for plugin cleanup leaves a window in
+   * which the old ctx can report after the authoritative roster has already
+   * re-added the same id. Delete both current tokens and caches now, then emit
+   * explicit withdrawals. Old producer closures subsequently fail their
+   * token checks even before a replacement producer registers.
    */
   retireInstanceProducers(sourceId: string): void {
     const runtimeFingerprint = runtimeProducerFingerprints[sourceId]
@@ -743,9 +840,9 @@ export const chamberBridge = {
   },
 
   /**
-   * Register the runtime-facts producer owned by one mounted instance ctx. Token
-   * gating makes async teardown generation-safe: an old ctx's late clear/report
-   * can never erase the replacement's facts.
+   * Register the runtime-facts producer owned by one mounted instance ctx.
+   * Token gating makes async teardown generation-safe: an old ctx's late
+   * clear/report can never erase or overwrite the replacement ctx's facts.
    */
   registerInstanceRuntimeProducer(
     sourceId: string,
@@ -794,9 +891,9 @@ export const chamberBridge = {
   },
 
   /**
-   * Register the snapshot producer owned by one mounted instance ctx. The token
-   * makes teardown generation-safe: a late cleanup from an old shell cannot clear
-   * a newer shell's report for the same source.
+   * Register the snapshot producer owned by one mounted instance ctx. The
+   * token makes teardown generation-safe: a late cleanup from an old shell
+   * cannot clear a newer shell's report for the same source.
    */
   registerInstanceSnapshotProducer(
     sourceId: string,

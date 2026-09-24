@@ -93,6 +93,46 @@ test('completed-but-unread rides the merged dot state (vendor/App union) and its
   assert.deepEqual(run([withSubagents]), [])
 })
 
+test('goal-active completed facts are suppressed like the row dot (v5 §4 single source)', () => {
+  const active = { goalId: 'g1', revision: 1, phase: 'active' as const }
+  const activeRow = server('r1', [workspace('w', [session('s1')])], {
+    sessions: { s1: { completed: true, goal: active } },
+  })
+  assert.deepEqual(run([activeRow]), [], 'active 相位压制完成条目（activation unknown 也压制，与行尾点同门）')
+  // 离开 active 即自愈（paused/blocked/complete 都不压制呈现）。
+  for (const phase of ['paused', 'blocked', 'complete'] as const) {
+    const healed = server('r1', [workspace('w', [session('s1')])], {
+      sessions: { s1: { completed: true, goal: { ...active, phase } } },
+    })
+    assert.equal(run([healed]).length, 1, phase + ' 不再压制')
+  }
+  // 明确 null 与 unknown 都不压制（只有 active 压制）。
+  const none = server('r1', [workspace('w', [session('s1')])], { sessions: { s1: { completed: true, goal: null } } })
+  assert.equal(run([none]).length, 1)
+  const unknown = server('r1', [workspace('w', [session('s1')])], { sessions: { s1: { completed: true } } })
+  assert.equal(run([unknown]).length, 1)
+  // 等待输入条目不受 goal 相位影响（ask/request 面与完成面不同轨）。
+  const pending = server('r1', [workspace('w', [session('s1')])], { sessions: { s1: { pending: 'question', goal: active } } })
+  assert.equal(run([pending])[0]?.kind, 'question')
+  // sessionTodo 三开关语义不变：completed 开关关闭时，paused 条目照样消失。
+  assert.deepEqual(
+    run([server('r1', [workspace('w', [session('s1')])], { sessions: { s1: { completed: true, goal: { ...active, phase: 'paused' } } } })],
+      { filters: { completed: false, ask: true, request: true } }),
+    [],
+  )
+})
+
+test('goal-active suppression covers the offline-unread (row-absent) branch too', () => {
+  const noRows = server('r1', [], {
+    stale: true,
+    sessions: {
+      gone: { completed: true, goal: { goalId: 'g1', revision: 1, phase: 'active' } },
+      other: { completed: true },
+    },
+  }, { connected: false })
+  assert.deepEqual(run([noRows], { offlineUnread: true }).map(entry => entry.sessionId), ['other'])
+})
+
 test('per-kind filters gate entries independently', () => {
   const two = server('r1', [workspace('w', [session('done'), session('ask')])], {
     sessions: { done: { completed: true }, ask: { pending: 'question' } },

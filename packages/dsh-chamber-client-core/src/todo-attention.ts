@@ -1,18 +1,37 @@
 /**
- * 会话待办区派生（sidebar todo area）— chamberBridge 投影上的纯注意力视图：
- * 哪些会话当前需要用户（完成未读，或等待输入：approval / plan-review /
- * question）。无自有状态、无 DOM，输入与行级状态指示同源（mergeRuntimeFacts）。
+ * 会话待办区派生（sidebar todo area）— the chamberBridge projection's PURE
+ * attention view: which sessions currently need the user's attention
+ * (completed-but-unread, or an agent interaction waiting: approval /
+ * plan-review / question). No state of its own, no memory, no DOM — a plain
+ * node:test-runnable derivation over the SAME merged runtime facts the
+ * row-level state indicators render (06 §4; mergeRuntimeFacts union of the
+ * App's completed-unread dots and the vendor-armed `completed`).
  *
- * 镜像纪律：条目出现/消失与行指示完全同步（与 sessionStateDot 同序：
- * pending > 运行中子代理 > completed > running）——待办区绝不声称行本身不显示
- * 的状态。仅当会话行**在投影里**才产生条目；断连来源只放开 App 显式标 `stale`
- * 的事实（`offlineUnread` 选项进一步放开行已消失的未读事实）。正在查看的会话由
- * 调用方 viewing ids 排除。排序确定且跨 ctx 一致：等待类（阻塞 agent）在前、
- * 完成类在后，组内保持投影扫描序；上限由调用方切片。
+ * Mirror-of-the-mirror discipline: an entry appears/disappears exactly when
+ * the corresponding row indicator would — the rules below replicate the
+ * sessionStateDot priority (pending > runningSubagents > completed >
+ * running) so the strip can never claim attention the rows themselves do not
+ * show, and vice versa.
+ *
+ * - An entry exists only while its session row is IN the projection. A
+ *   disconnected source carries no LIVE runtime facts (unknown ≠ attention);
+ *   exactly one door is open: facts the App explicitly marked `stale: true`
+ *   ride a disconnected source too, and are rendered (labelled `stale`) while
+ *   the rows survive. With `offlineUnread` enabled, a disconnected stale
+ *   source whose ROWS ARE GONE still surfaces its completed-unread facts as an
+ *   "offline unread" group (sessionId fallback label) — the row-absent half of
+ *   the stale-facts branch, opt-in so no consumer is forced onto a new surface.
+ * - The session being read right now (the active view's current session) is
+ *   excluded by the caller-provided viewing ids — the same single-selection
+ *   rule as the current-session highlight (SidebarRoot chamberInstanceId).
+ * - Sorting is deterministic and cross-ctx identical: waiting entries first
+ *   (they block the agent), completed after; within each group the scan order
+ *   of the projected list (source display order → workspace order → session
+ *   order) is preserved. The caller slices the cap (3 +「还有 N 项」).
  */
 import type { ChamberServerAggregate } from './aggregate-store.ts'
 import { sessionDisplayTitle } from './derive.ts'
-import { subagentActivityOf } from './session-row-state.ts'
+import { goalSuppressesPresentation, subagentActivityOf } from './session-row-state.ts'
 
 /** The attention kinds the strip renders. `completed` = completed-but-unread; the other three are the vendor pending kinds. */
 export type TodoAttentionKind = 'approval' | 'plan-review' | 'question' | 'completed'
@@ -29,8 +48,10 @@ export interface TodoAttentionEntry {
   /** Last-activity epoch ms (row fact; absent when the wire gave none). */
   updatedAt?: number
   /**
-   * The entry comes from facts of a disconnected source (or the offline-unread
-   * group's row-less facts). Consumers must label it (`data-chamber-stale`); absent = live fact.
+   * The entry comes from facts of a source that is disconnected right now
+   * (the aggregate `runtime.stale` fact) — or, for the offline-unread group,
+   * from facts whose rows are gone. Consumers must label it (I13/I2
+   * `data-chamber-stale`); absent = live fact, today's semantics.
    */
   stale?: boolean
 }
@@ -98,6 +119,10 @@ export function deriveTodoAttention(
         // completed 与行尾蓝点同一条件：pending 无、子代理不存活、合并 completed 为真；vendor-completed
         // 与 wire running 错位窗口内不得漏报。只有**确证在跑**的子代理压制未读；unknown（stale/索引缺席）不压制。
         if (subagentActivityOf(facts, factsStale) === 'running') continue
+        // goal 呈现门（v5 §4）：相位 active（含 activation unknown）压制「完成未读」
+        // 条目——与行尾点/文案/仪表/搜索同一单源派生（INV7），否则待办区会为一条
+        // 用户看不到完成点的行宣称「完成」。三个 kind 开关语义不变。
+        if (goalSuppressesPresentation(facts.goal)) continue
         if (facts.completed !== true || !opts.filters.completed) continue
         const entry: TodoAttentionEntry = {
           sourceId: server.id,
@@ -124,6 +149,8 @@ export function deriveTodoAttention(
       const facts = runtime.sessions[sessionId]
       if (facts?.completed !== true || !opts.filters.completed) continue
       if (subagentActivityOf(facts, true) === 'running') continue
+      // 同一呈现门：行缺席分支也必须与其它五面同拍（active 即压制）。
+      if (goalSuppressesPresentation(facts?.goal)) continue
       completed.push({
         sourceId: server.id,
         sessionId,

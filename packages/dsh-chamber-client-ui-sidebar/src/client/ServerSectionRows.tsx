@@ -257,6 +257,9 @@ export function ServerSectionSessionRows({ server, workspace, sessions, currentI
                                       // 该行事实的观察时刻（host 域 ms；缺席 = 无观察者事实）。
                                       data-chamber-fact-at={server.runtime?.sessions[session.id]?.factAt}
                                       data-chamber-state-source={sessionStateMarker(server, session).source}
+                                      // goal 呈现门生效标记（v5 §4 可选属性）：相位 active 即出现
+                                      // ——含 activation unknown；压制中 state 绝不报 completed。
+                                      data-chamber-goal-active={sessionStateMarker(server, session).goalActive ? '' : undefined}
                                       title={sessionStateLabel(server, session)}
                                       aria-label={sessionStateLabel(server, session)}
                                       role={sessionStateDot(server, session) !== null ? 'status' : undefined}
