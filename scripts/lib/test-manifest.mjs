@@ -30,9 +30,9 @@
  */
 
 import { spawn } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { existsSync, readdirSync } from 'node:fs'
 import { availableParallelism } from 'node:os'
-import { join } from 'node:path'
+import { join, relative, sep } from 'node:path'
 
 /** node:test summary lines: spec (`ℹ tests N`) and TAP (`# tests N`). */
 const SUMMARY_LINE = /^(?:ℹ|#) (tests|pass|fail|skipped) (\d+)\s*$/gm
@@ -87,6 +87,88 @@ export const TIMING_ENV = 'DSH_TEST_TIMING'
  * @param {Record<string, string | undefined>} env - environment to read DSH_TEST_JOBS from.
  * @returns {{ jobs: number } | { error: string }}
  */
+/**
+ * Manifest lockstep gate — ONE implementation for every package guard.
+ *
+ * Each package's test-runner guard used to carry its own IGNORED_DIRECTORIES
+ * set and discoverTestFiles walk (three verbatim copies plus two near-copies),
+ * so a new package or a new evidence rule had to be added in every guard. The
+ * semantics are unchanged from those copies: every on-disk *.test.ts|*.test.mjs
+ * must be listed, every listed file must exist, no group lists a file twice, a
+ * platform leg that must be a subset of GROUPS is checked, and each zero-test
+ * allowlist entry carries a reason and a real file.
+ *
+ * 'lib' is ignored here (built bundles can echo test files); the repo-wide walk
+ * used by the gates deliberately does NOT ignore it — the two sets differ on
+ * purpose and neither is a copy of the other.
+ */
+export const MANIFEST_IGNORED_DIRECTORIES = new Set([
+  'node_modules', 'vendor', 'dist', 'lib', 'release', '.git', '.desktop-build', 'coverage', '.dev-user-data',
+])
+
+/**
+ * Package-relative sorted paths of every test file under `root`.
+ * @param {string} root - absolute package root.
+ * @param {Set<string>} [ignoredDirectories] - directory names never entered.
+ * @returns {string[]} sorted '/'-joined relative paths.
+ */
+export function discoverManifestTestFiles(root, ignoredDirectories = MANIFEST_IGNORED_DIRECTORIES) {
+  const found = []
+  const visit = (directory) => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      if (entry.isDirectory()) {
+        if (ignoredDirectories.has(entry.name)) continue
+        visit(join(directory, entry.name))
+        continue
+      }
+      if (entry.isFile() && /\.test\.(ts|mjs)$/.test(entry.name)) {
+        found.push(relative(root, join(directory, entry.name)).split(sep).join('/'))
+      }
+    }
+  }
+  visit(root)
+  return found.sort()
+}
+
+/**
+ * Verdict over one package's manifest tables; empty = the manifest is whole.
+ * @param {object} args - packageRoot, groups, platformFiles, allowlist,
+ *   platformSubsetsOfGroups and ignoredDirectories.
+ * @returns {string[]} one problem string per defect.
+ */
+export function manifestLockstepProblems({
+  packageRoot,
+  groups,
+  platformFiles = {},
+  allowlist = [],
+  platformSubsetsOfGroups = [],
+  ignoredDirectories = MANIFEST_IGNORED_DIRECTORIES,
+}) {
+  const problems = []
+  const fileOf = (entry) => (typeof entry === 'string' ? entry : entry.file)
+  for (const [label, files] of [...Object.entries(groups), ...Object.entries(platformFiles)]) {
+    const names = files.map(fileOf)
+    const duplicates = [...new Set(names.filter((name, index) => names.indexOf(name) !== index))]
+    if (duplicates.length > 0) problems.push(label + ' lists a file twice: ' + duplicates.join(', '))
+  }
+  const listed = [...Object.values(groups).flat().map(fileOf), ...Object.values(platformFiles).flat().map(fileOf)]
+  const discovered = discoverManifestTestFiles(packageRoot, ignoredDirectories)
+  if (discovered.length === 0) problems.push('no test file was discovered — the lockstep assertion would be fooled by an empty set')
+  for (const file of discovered) if (!listed.includes(file)) problems.push('on-disk test file is not listed: ' + file)
+  for (const file of new Set(listed)) if (!discovered.includes(file)) problems.push('listed test file is missing on disk: ' + file)
+  for (const leg of platformSubsetsOfGroups) {
+    const full = new Set(Object.values(groups).flat().map(fileOf))
+    for (const file of (platformFiles[leg] ?? []).map(fileOf)) {
+      if (!full.has(file)) problems.push(leg + ' file is not in GROUPS: ' + file)
+    }
+  }
+  for (const entry of allowlist) {
+    if (typeof entry.reason !== 'string' || entry.reason.trim() === '') problems.push('allowlist entry has no reason: ' + entry.file)
+    else if (!existsSync(join(packageRoot, entry.file))) problems.push('allowlist entry is missing on disk: ' + entry.file)
+  }
+  return problems
+}
+
 export function resolveJobs(argv = [], env = process.env) {
   let raw
   for (let index = 0; index < argv.length; index += 1) {

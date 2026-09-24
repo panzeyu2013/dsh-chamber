@@ -16,39 +16,14 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, readFileSync, readdirSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { GROUPS, WIN32_FILES, MACOS_FILES, ZERO_TEST_ALLOWLIST } from './test.mjs'
-import { evaluateChildRun } from '../../../scripts/lib/test-manifest.mjs'
+import { evaluateChildRun, manifestLockstepProblems } from '../../../scripts/lib/test-manifest.mjs'
 
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const RUNNER_SOURCE = readFileSync(new URL('./test.mjs', import.meta.url), 'utf8')
-
-/** 与 scripts/gates/verify-test-wiring.mjs 同款忽略目录（vendor/dist 里的
- *  测试不属于本包清单的扫描面）。 */
-const IGNORED_DIRECTORIES = new Set(['node_modules', 'vendor', 'dist', 'lib', 'release', '.git', '.desktop-build', 'coverage', '.dev-user-data'])
-
-function discoverTestFiles(root) {
-  const found = []
-  const visit = directory => {
-    for (const entry of readdirSync(directory, { withFileTypes: true })) {
-      if (entry.isDirectory()) {
-        if (IGNORED_DIRECTORIES.has(entry.name)) continue
-        visit(path.join(directory, entry.name))
-        continue
-      }
-      if (entry.isFile() && /\.test\.(ts|mjs)$/.test(entry.name)) {
-        found.push(path.relative(root, path.join(directory, entry.name)).split(path.sep).join('/'))
-      }
-    }
-  }
-  visit(root)
-  return found.sort()
-}
-
-/** 清单条目可以是路径串，也可以是 { file, nodeArgs }。 */
-const fileOf = entry => (typeof entry === 'string' ? entry : entry.file)
 
 test('② evaluateChildRun：零测试 / 无法 spawn 一律失败，例外须显式放行', () => {
   const pass = { status: 0, signal: null, stdout: 'ℹ tests 1\nℹ pass 1\n', stderr: '' }
@@ -102,30 +77,14 @@ test('③ 源码锁：本包把腿/allowlist/macOS 纪律交给共享引擎，�
 
 test('⑤ 清单锁步：盘上每个 desktop 测试文件都被接线、清单文件都存在、单表无重复', () => {
   // 单表内部不得重复（跨表重复——win-acl 同时属于全量与 win32 腿——按
-  // test.mjs 头注释是刻意的）。
-  for (const [group, files] of Object.entries(GROUPS)) {
-    const names = files.map(fileOf)
-    assert.deepEqual(names.filter((name, index) => names.indexOf(name) !== index), [], group + ' 组内重复列出测试文件')
-  }
-  for (const files of [WIN32_FILES, MACOS_FILES]) {
-    const names = files.map(fileOf)
-    assert.deepEqual(names.filter((name, index) => names.indexOf(name) !== index), [], '平台腿组内重复列出测试文件')
-  }
-
-  const listed = [
-    ...Object.values(GROUPS).flat().map(fileOf),
-    ...WIN32_FILES.map(fileOf),
-    ...MACOS_FILES.map(fileOf),
-  ]
-  const discovered = discoverTestFiles(PACKAGE_ROOT)
-  assert.ok(discovered.length > 0, '发现集为空 —— 锁步断言被空集骗过')
-  assert.deepEqual(discovered.filter(file => !listed.includes(file)), [], '盘上的测试文件必须显式列进 GROUPS/WIN32_FILES/MACOS_FILES')
-  assert.deepEqual(listed.filter(file => !discovered.includes(file)), [], '清单列出的文件必须在盘上存在')
+  // test.mjs 头注释是刻意的）；macOS 是独立集合（allowPlatformFilesOutsideGroups）。
   assert.deepEqual(
-    ZERO_TEST_ALLOWLIST
-      .filter(entry => entry.reason.trim() === '' || !existsSync(path.join(PACKAGE_ROOT, entry.file)))
-      .map(entry => entry.file),
+    manifestLockstepProblems({
+      packageRoot: PACKAGE_ROOT,
+      groups: GROUPS,
+      platformFiles: { win32: WIN32_FILES, macos: MACOS_FILES },
+      allowlist: ZERO_TEST_ALLOWLIST,
+    }),
     [],
-    'ZERO_TEST_ALLOWLIST 每个条目都必须有理由且指向真实文件',
   )
 })
