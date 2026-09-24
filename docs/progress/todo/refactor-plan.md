@@ -34,7 +34,7 @@
 | 2 | settings 两分支合流：DshRuntimeSection 的 Gateway/local 共享 controller | 未动 | runtime-management / 设置桥套件绿；先补 parity 测试再合并 |
 | 3 | 死补丁退役：A1 F2–F7、writer 闩锁死路、legacy 迁移块 | 第 18 轮按用户裁决删除：ssh 凭据 v1/v2 迁移、gateway-tokens v1/v2 + 旧兄弟文件迁移、catalog v1 迁移、json-store 就地迁移机件、`foldLegacyHostInserts`；安全清理（`.tmp` 残留/askpass 旧目录/autostart）保留 | 每个被删分支先有 regression test（旧文件→`*.corrupt` 断言已补） |
 | 4 | vendor 声明成员并集 | 未动（上界 ≈100 行，ROI 低） | 8 个包 typecheck 全绿；`verify:import-cycles` 不新增 |
-| 5 | shell-core 拆分 → 解掉最后一个类型环 | 未动 | allowance 条目删除；`verify:import-cycles` 类型环归 0 |
+| 5 | shell-core 拆分 → 解掉最后一个类型环 | **类型面已收口**（seam 类型迁往 host-edges / shell-assembly-ctx / shell-ipc-ctx / registry-projection；shell-core 2,492→1,821，棘轮已下调）；值面（投递状态机/路径解析/运行时解析，至 target 1,600）未动 | allowance 条目已删除；`verify:import-cycles` 类型环 0（已达成）；棘轮继续下降 |
 | 6 | 逐包收尾：derive/instance-api/aggregate-store/plugin-sync/gateway-provider/ssh-provider/transport-manager/session-state | 未动 | 见 `scripts/gates/file-budgets.json`；棘轮逐轮下降，`check:static`/`check:tests` 恒绿 |
 
 ### 3.1 state/ref 同步镜像清单（11 对全部收口 + 第 16 轮审计补充项）
@@ -172,3 +172,97 @@ useSyncExternalStore 的小 store（单源），事件回调读 store 的 getSna
 **新增的机械化守卫**（防止已达成分项回退）：verify:import-cycles（值环 0 + 类型环 allowance 棘轮）、
 verify:file-budgets（15 文件只降不升）、verify:no-dead-exports（20 个 index 包 + desktop/renderer
 796 个 entryless 导出、5 条 seam）。三者均登记于 package.json / run-checks / ci.yml / release.yml。
+
+## 7. 审计轮增补（本 worktree 实测）
+
+### 7.1 已落地
+
+- **最后一个类型环解除**：`ShellIpcCtx` / `ShellAssemblyCtx` / `HostEdges` / `ProjectedRegistryInstance`
+  迁往四个叶子模块（`host-edges.ts` 151 / `shell-assembly-ctx.ts` 396 / `shell-ipc-ctx.ts` 102 /
+  `registry-projection.ts` 20）；8 个 `shell-ipc-*.ts` 只依赖 `shell-ipc-ctx.ts`。
+  `verify-import-cycles.mjs` 的 `TYPE_CYCLE_ALLOWANCE` 清空（无环可匹配即失败），自测负控绿。
+- **God 文件棘轮**：`shell-core.ts` 2,492 → **1,821**（`file-budgets.json` 随之下调；target 1,600 未达，
+  剩余值面为投递状态机 / 路径模板 / 运行时解析 / renderer 深链队列）。
+- **验证**：`tsc --noEmit` 0 错误；desktop 套件绿；`run-checks.mjs static` 20/20、`tests` 21/21；
+  `verify:no-dead-exports` / `verify:package-boundaries` / `verify:file-budgets` 绿。回滚备份：
+  `.tmp/audit-backup/shell-core.ts.bak`（`.tmp/` 已 gitignore）。
+
+### 7.2 新一轮审计新增开放项（未动；供下一轮排期）
+
+- **renderer usable-facts 三处判定分叉**：`host/servers.ts`（要求 serviceable）vs
+  `use-bridge-subscriptions.ts` / `use-unread-notifications.ts/:261`（只看 verdict）；
+  verdict=ok + serviceable=false 可达 ⇒ 通知与读水位从未知行推进。收口 = 单一 `isFactsUsable`。
+- **renderer reconnect 记账第四份手抄**：`App.tsx` 复制 `use-aggregate-refresh.ts` 三臂
+  gate/backoff；`retireSources` 漏 `sessionListRefreshAt/Pending`、`authoritativeArchiveSet`
+  （同 id 换代泄漏）。收口 = 单一 `reconnectSource(id)` + 生命周期参与者注册表。
+- **session-state 语义三实现**：control-plane `session-state-protocol.ts`+`session-mux.ts`、
+  gateway `session-state.ts`、renderer `session-facts-source.ts`+`source-mux-facts.ts`；
+  `isWatermark`×3、`isPlainRecord`×3、`classifyTurnEndWire` 复制 `classifyTurnEnd`，
+  锁步只有源码文本测试。死面：`SESSION_STATE_PROBE_TIMEOUT_MS` / `effectiveReadMark` /
+  `sessionStateNoteKey` / `SESSION_STATE_ROUTES`。收口方向 = 共享协议叶子（或生成物）+ 删死面。
+- **插件三链路流水线**：local/ssh/gateway 各自 validate→confirm→remove/add→restart→verify；
+  `parseSpec*`×3、x-wildcard 门×2、ssh/gateway 凭据镜像两套手写、dsh CLI 入口解析×3
+  （`dsh-runtime/src/dsh-cli-entry.ts` 已是声明单源）。收口 = 一个 `PluginMutationPlan` + 三个薄执行器。
+- **未纳棘轮的 god 文件**：control-plane `index.ts`(1577)/`proxy-forward.ts`(1471)/
+  `spawn-dsh.ts`(1354)、gateway `plugins-tasks.ts`(1166)/`dispatch.ts`(1139)、dsh-runtime 5 文件
+  （合计 7,267）、desktop `updater.ts`(1399)/`main.ts`(1391)、Swift `MainWindowController`(2341)/
+  `AppDelegate`(1760)/`BridgeClient`(1676)、`install-gateway.sh`(3804)。下一轮按包逐个纳入棘轮。
+- **未判面的死面**：`TransportProvider.kind` 零读且两处注释过时；`ENTRYLESS_PACKAGES` 的
+  `ignoreFiles: ['preload.ts']` 应为 `preload.cts`（且 `.cts` 不在扫描面）；gateway
+  `plugins-tasks.ts` `deferredIntentsFilePath`、`dsh-client.ts` `pendingStats` 仅测试消费。
+- **load-state 镜像簇**：`packages/dsh-stream-state/swift/LoadState.swift` + 4 条 exemption
+  无 app 消费者（Swift 壳不编译该文件）。裁决「接线」或「删除镜像 + 门的一半」。
+- **STATUS 锚点漂移（复核后修）**：A1 F6 疑已实现（recheck 已用共享 `plugin-graph-classify`）、
+  S4 行号、Swift `RendererRecovery` 183 / `RendererHangWatchdog` 111 已超 `181→90`/`105→60` 且无门、
+  gateway runtime-manager「2,380 行单闭包」描述已不实。
+- **client UI / seed 面（同一轮审计）**：
+  - `DshRuntimeSection.tsx` 两分支可量化重复：gateway JSX 1006-1425 vs local 2024-2449，108 行逐字相同、
+    最长 19 行；`onApplyRegistry`/`onRetryApply`/`onRetryRestore` 成对手抄 —— 对应 §3 第 2 项，
+    收口 = 两个 hook + 一份共享行面板。
+  - `PluginDialog.tsx` 66 useState / 5 个各自手写 cancelled 位的加载 effect；`ConnectionsSection.tsx`
+    三份近似日志加载器（:330 / :658-699 / :722-754）；`ServerSection.tsx` 是 180 行缩进
+    14 空格的"JSX 内派生状态"机械搬迁残留，且顶格 useEffect 落在 hook 块之后。均已在棘轮内，按序做。
+  - **未纳棘轮的 client/seed god 文件**：`dsh-chamber-seed-git-worktree/src/core.ts` 2104（单类 60+ 方法、
+    4 条删除路径）、`seed-archive-cleanup/src/core.ts` 1178、`mobile/composer.ts` 1187、
+    `mobile/styles.ts` 1010、`sidebar/ServerSection.tsx` 1048。
+  - **死导出门的覆盖洞**：7 个 client-ui 包全在 `RUNTIME_LOADED_PACKAGES`（整包跳过），而
+    `src/index.ts` 只是 4 行 `apply()` 桩 ⇒ `./client/**` 从不受判。已知零消费者导出 6 个：
+    `isFixedSectionId`、`sourceFingerprintIsCurrent`、`staleOwnedSessionIds`、`orderApplyOps`、
+    `BATCH_FAILURE_POLICY`、`transportTargetChangedSpec`（另 `__resetOpenInChoiceForTests` 为显式测试缝）。
+  - **真实第二实现（无锁步）**：client `plugin-diff.ts` 的 spec 分类 vs desktop
+    `plugin-sync.ts`，两套语法/两套 reason 表；`openPromise` 三态证据在 mobile
+    `session-stall.ts` 与 open-in `session-stream-health-probe.ts` 逐字复制；
+    `safeStorage` 访问器手写 5 份。收口优先：openPromise → client-core；spec 分类 → 单一 verdict。
+
+### 7.3 §4/§5 清理落点（本轮，均以门禁/套件验证）
+
+**已删 / 已收口：**
+
+- 死代码：`SESSION_STATE_PROBE_TIMEOUT_MS`（假单源；renderer 的 5s 才是唯一现实）、
+  `sourceFingerprintIsCurrent` / `staleOwnedSessionIds` / `orderApplyOps`（含 `ApplyInput`/`OrderedApplyOps`）/
+  `BATCH_FAILURE_POLICY` 与其单测（零生产消费者；活的面判定在 `SettingsShell` 内联，apply 路径不产计划）；
+  `isFixedSectionId` 由内联改为接线（`resolveActiveSection` 复用同一谓词）。
+- 重复：`openPromise` 三态证据 → `client-core/src/session-open.ts` 单源（mobile/open-in 共用，删两段逐字复制）；
+  test-runner 清单锁步 → `scripts/lib/test-manifest.mjs` 的 `manifestLockstepProblems`（renderer/sidebar/desktop
+  三份本地 walk+ignore 删除；引擎自测 26/26 含新负控）；`switch-frame-verdict.ts` 移出生产 `src/` 到
+  `packages/renderer/scripts/`（perf 专用，脚本/测试为唯一消费者）。
+- 缺陷单源：renderer usable-facts → `isFactsUsable(snapshot)`；`host/servers.ts` /
+  `use-bridge-subscriptions.ts` / `use-unread-notifications.ts` 三处两答归一
+  （回归锁：`test/session-state/session-facts-source.test.ts`）。
+- 死字段：`TransportProvider.kind` 删除（ssh/gateway 字面量、接口文档与 `transport-manager` 的
+  过时 legacy-kind 注释同步修正）。
+- 判面覆盖：`verify-no-dead-exports` 的 entryless 扫描补 `.cts`，`preload.cts` 进入判面
+  （0 运行时导出，现绿）；`ENTRYLESS_PACKAGES` 里失效的 `preload.ts` 条目删除。
+
+**未删（有判面或锁步依据，非漏做）：**
+
+- `effectiveReadMark` / `sessionStateNoteKey` / `SESSION_STATE_ROUTES`：单测锁住读水位规则与路由字面量；
+  需先做 §3 的 session-state 协议单源，否则删除只减锁不减实现。
+- `pendingStats` / `deferredIntentsFilePath` / `transportTargetChangedSpec`：已注释的测试诊断/路径/镜像缝，
+  删除即失去 settle-once、持久化路径与跨端镜像覆盖（属 seam，不是未接线泄漏）。
+- load-state 镜像簇（`dsh-stream-state/swift/LoadState.swift` + 4 条 exemption）：需裁决「接线到 Swift 壳」
+  或「删除镜像 + parity 门的 load 半」；跨语言锁步，未单方面删。
+- client-ui `./client/**` 仍在死导出门判面之外（整包在 `RUNTIME_LOADED_PACKAGES`）：扩判面需逐包注册
+  客户端半 seam，独立一轮。
+- `safeStorage` 访问器 5 份 / spec 分类两套 / session-row 三转换 / reconnect 第四臂：属 §3 单源条目，
+  需各自先补跨端锁步测试。

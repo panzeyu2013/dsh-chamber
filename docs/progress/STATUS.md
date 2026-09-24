@@ -295,8 +295,9 @@
 
 - **结构性重构与清理（未闭合；计划与实测证据见 [todo/refactor-plan.md](todo/refactor-plan.md)）**：
   核心指标 = 消除补丁式修改；行数删减经用户裁决**不强制**（仅参考，原 −9,000 指标作废）。
-  机械化三门已落地：`verify:import-cycles`（值环 0；类型环仅 1 条显式 allowance =
-  desktop shell-core ⇄ shell-ipc-*，须先拆 shell-core）、`verify:file-budgets`（15 个 God 文件
+  机械化三门已落地：`verify:import-cycles`（值环 0；类型环 **0**——审计轮把 seam 类型下沉到
+  host-edges / shell-assembly-ctx / shell-ipc-ctx / registry-projection 后 allowance 已清空，
+  持续为 0 是本轮后的新不变量）、`verify:file-budgets`（15 个 God 文件
   只降不升）、`verify:no-dead-exports`（零消费者导出即红，含 desktop/renderer 的 entryless 面）。
   顶层 11 对 state/ref 镜像**全部收口**（roster/facts/echo/remotes/mounted/completed/view
   各为单源 store + 回归锁）；第 16 轮独立审计补掉 `watchdogRuntimeFactsRef`（第三个
@@ -392,7 +393,7 @@
 
 - 原生窗口高度折中待裁决：Swift内容区1280×786（外框~814）对Electron外框1280×800（视口772）各偏~14pt；单侧对齐（原生取772，或Electron开`useContentSize`后同取800）未决。登记deviations.md S-49；宽度偏好仍per-flavor页面存储（T-18）。
 
-- macOS Swift原生壳（design 25，路线A）开放门禁：D1–D7未走形式签核，M5未闭合。剩余：① **实机/GUI验收（打包`.app` +真实实例）**——打包态冷启动首载（宿主不占用17500）、同bundle二次启动的单实例流程、通知权限时机与点击激活会话、SMAppService登录项、LaunchServices深链冷/热启动、关窗隐藏与恢复、唤醒补发、ATS loopback、最小化/被完全覆盖与App Nap语义（S-10），及WKWebView无`backgroundThrottling:false`等价物下的SSE/WS心跳与恢复（design 25 §8.1 C1/C2、§8.5 W1–W7；判定标准见`todo/macos-swift-v1.md` §七）；② 凭据/ runner-only发布证明——Developer ID签名、公证、stapler、spctl各臂与arch（lipo）断言实跑，及首个正式`build-swift`发布腿（release.yml已fail-closed；缺Apple凭据=外部阻断，design 25 §7/companion A6）；③ M5实机矩阵——W-28（打包态全链矩阵）…W-32（R1–R13复盘+ D1–D7复核）未执行（W-29 W1–W7逐项判定、W-30双端性能/体积对比见companion §七/WBS）；双端harness未实施（`swift-harness-driver.test.ts`，需mac+GUI）；④ 零core消费者契约面有意保留——`resolveResource`/`isPackaged`/`notifyClicked`/`trayAvailable`/`focusMainWindow`/`launchApp`与HostEdges同步`setKeepAwake`/`setLoginItem`在`desktop/shell-core.ts:679-762`只有声明与doc、无调用点——flavor契约，非死代码；⑤ **`BridgeClient`事件帧入站面保留**——`onEvent`（`macos/Sources/DSHChamber/BridgeClient.swift`的`onEvent`声明、`processStdoutOutcome`→`handleIncomingLine`）无生产接线，仅为`BridgeClientIntegrationTests`夹具保留，删除前须先处理该测试；⑥ 通知音效平台等价物——Swift `silent → 无声`、否则系统默认声（`SwiftEdgeHostLegs.swift:219-222`），Electron darwin `Glass`，UNUserNotificationCenter无该资源。
+- macOS Swift原生壳（design 25，路线A）开放门禁：D1–D7未走形式签核，M5未闭合。剩余：① **实机/GUI验收（打包`.app` +真实实例）**——打包态冷启动首载（宿主不占用17500）、同bundle二次启动的单实例流程、通知权限时机与点击激活会话、SMAppService登录项、LaunchServices深链冷/热启动、关窗隐藏与恢复、唤醒补发、ATS loopback、最小化/被完全覆盖与App Nap语义（S-10），及WKWebView无`backgroundThrottling:false`等价物下的SSE/WS心跳与恢复（design 25 §8.1 C1/C2、§8.5 W1–W7；判定标准见`todo/macos-swift-v1.md` §七）；② 凭据/ runner-only发布证明——Developer ID签名、公证、stapler、spctl各臂与arch（lipo）断言实跑，及首个正式`build-swift`发布腿（release.yml已fail-closed；缺Apple凭据=外部阻断，design 25 §7/companion A6）；③ M5实机矩阵——W-28（打包态全链矩阵）…W-32（R1–R13复盘+ D1–D7复核）未执行（W-29 W1–W7逐项判定、W-30双端性能/体积对比见companion §七/WBS）；双端harness未实施（`swift-harness-driver.test.ts`，需mac+GUI）；④ 零core消费者契约面有意保留——`resolveResource`/`isPackaged`/`notifyClicked`/`trayAvailable`/`focusMainWindow`/`launchApp`与HostEdges同步`setKeepAwake`/`setLoginItem`在`desktop/host-edges.ts`（HostEdges 契约）只有声明与doc、无调用点——flavor契约，非死代码；⑤ **`BridgeClient`事件帧入站面保留**——`onEvent`（`macos/Sources/DSHChamber/BridgeClient.swift`的`onEvent`声明、`processStdoutOutcome`→`handleIncomingLine`）无生产接线，仅为`BridgeClientIntegrationTests`夹具保留，删除前须先处理该测试；⑥ 通知音效平台等价物——Swift `silent → 无声`、否则系统默认声（`SwiftEdgeHostLegs.swift:219-222`），Electron darwin `Glass`，UNUserNotificationCenter无该资源。
 
 - 起始端口偏移：本地默认17510、控制面默认17500；当前固定起始端口+ P+1重试+记录仲裁；开放配置未决。
 
