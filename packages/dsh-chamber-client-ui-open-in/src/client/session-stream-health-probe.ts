@@ -78,6 +78,7 @@
  * frontend's own retry policy (see the module header of `session-stream-health.ts`);
  * this file only recovers the view, it never touches the transport.
  */
+import { sessionOpenPromiseInFlight } from '@dsh-chamber/dsh-chamber-client-core'
 
 /** Structural slice of the official `ISessions` face this module calls. */
 export interface SessionsLoose {
@@ -269,19 +270,9 @@ function readSessionResyncFace(
 export function sessionOpenInFlight(sessions: SessionsLoose | undefined, sessionId: string): boolean | undefined {
   const session = readCurrentSession(sessions, sessionId)
   if (session === undefined) return undefined
-  try {
-    if (!Object.hasOwn(session, 'openPromise')) return undefined
-    const pending = session.openPromise
-    // ONLY an exactly-null own member is positive evidence of "nothing pending":
-    // an empty/undefined value is UNKNOWN and must fail closed, because the
-    // pinned vendor marks the empty slot with `null` — anything else
-    // (a renamed slot, a lazily initialized getter) cannot be read as "parked".
-    if (pending === null) return false
-    if (typeof pending === 'object' || typeof pending === 'function') return true
-    return undefined
-  } catch {
-    return undefined
-  }
+  // The tri-state read is single-sourced in client-core; the mobile ladder reads
+  // the same function, so the fail-closed rules cannot drift between tiers.
+  return sessionOpenPromiseInFlight(session)
 }
 
 /**

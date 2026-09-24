@@ -1,3 +1,4 @@
+import { sessionOpenPromiseInFlight } from '@dsh-chamber/dsh-chamber-client-core'
 import {
   LADDER_TABLES,
   mobileStallLadder,
@@ -405,19 +406,9 @@ export function sessionStallFace(
     openInFlight: (): boolean | undefined => {
       const session = currentStallSession(resolve())
       if (session === undefined) return undefined
-      try {
-        // The member MUST exist for FALSE to be reported: a build that renamed or
-        // removed `openPromise` degrades to "unknown", never to "nothing pending".
-        if (!Object.hasOwn(session, 'openPromise')) return undefined
-        const pending = session.openPromise
-        // Only an exactly-null own member is positive evidence (desktop parity);
-        // anything else non-thenable (e.g. undefined) is UNKNOWN and fails closed.
-        if (pending === null) return false
-        if (typeof pending === 'object' || typeof pending === 'function') return true
-        return undefined
-      } catch {
-        return undefined
-      }
+      // Tri-state evidence is single-sourced in client-core (the open-in probe
+      // reads the same function); fail-closed semantics live there.
+      return sessionOpenPromiseInFlight(session)
     },
     loading: (): boolean | undefined => {
       const session = currentStallSession(resolve())
