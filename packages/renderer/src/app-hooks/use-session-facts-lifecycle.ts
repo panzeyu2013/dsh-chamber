@@ -10,14 +10,15 @@ import type { FactsStore } from '../host/facts-store.ts'
 import { createSessionFactsSource, type SessionFactsSnapshot, type SessionFactsSource } from '../session-facts-source.ts'
 import { createSourceMuxFacts } from '../source-mux-facts.ts'
 import { shouldDispatchRefreshHint } from '../source-refresh-hint.ts'
+import type { UnreadSaveCoalescer } from '../unread-store.ts'
 
 export interface SessionFactsLifecycleDeps {
   /** deriveServers 的当前投影（签名与收敛都从最新 servers 读）。 */
   servers: ChamberServerAggregate[]
   applySessionFacts: (sourceId: string, snapshot: SessionFactsSnapshot | undefined) => void
   recomputeSourceUnread: (sourceId: string) => void
-  /** 未读落盘入口（focus/pagehide 两处监听读它，hook 只调用不拥有）。 */
-  flushUnreadRef: { current: () => void }
+  /** 未读落盘合并器（pagehide/hidden/unmount 走它的关键路径 flush；hook 只调用不拥有）。 */
+  unreadImmediateSave: UnreadSaveCoalescer
   /** 聚合簇的「无法确认」标记（行刷新提示的 unverified 拒绝输入）。 */
   unverifiedSourcesRef: { current: readonly string[] }
   /** 每来源在途 unary 拉取计数（提示的 inFlight 拒绝输入）。 */
@@ -40,7 +41,7 @@ export interface SessionFactsLifecycleDeps {
 /** 事实源生命周期装配；无对外返回值（调用面全在 App 的既有 ref/回调上）。 */
 export function useSessionFactsLifecycle(deps: SessionFactsLifecycleDeps): void {
   const {
-    servers, applySessionFacts, recomputeSourceUnread, flushUnreadRef,
+    servers, applySessionFacts, recomputeSourceUnread, unreadImmediateSave,
     unverifiedSourcesRef, factsPullInFlightRef, refreshHintAtRef, refreshAggregateRef,
     factsStore, sessionFactsSourcesRef, sessionFactsTeardownRef,
     sourceMuxTeardownRef, sourceMuxIdentityRef,
@@ -164,7 +165,8 @@ export function useSessionFactsLifecycle(deps: SessionFactsLifecycleDeps): void 
   }, [recomputeSourceUnread])
 
   useEffect(() => {
-    const flush = (): void => flushUnreadRef.current()
+    // 关键路径 = 合并器的 flush：取消待办的微任务 + 同步落最新状态（不丢、不重复）。
+    const flush = (): void => unreadImmediateSave.flush()
     const onVisibility = (): void => {
       if (document.visibilityState === 'hidden') flush()
     }
@@ -173,7 +175,7 @@ export function useSessionFactsLifecycle(deps: SessionFactsLifecycleDeps): void 
     return () => {
       window.removeEventListener('pagehide', flush)
       document.removeEventListener('visibilitychange', onVisibility)
-      flushUnreadRef.current()
+      unreadImmediateSave.flush()
     }
-  }, [])
+  }, [unreadImmediateSave])
 }

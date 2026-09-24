@@ -54,6 +54,8 @@ test('the frame dictionaries are complete, parallel and non-empty', () => {
     'fatal.boot.title', 'fatal.entries.title', 'fatal.controlPlane.title',
     'fatal.harvestTimeout', 'source.local', 'session.untitled',
     'notification.sessionComplete', 'notification.awaitingAnswer', 'notification.awaitingApproval',
+    // goal-aware v5 §4：目标/中性标题各有独立键（zh/en 齐备，App 的标题映射消费）。
+    'notification.goalCompleted', 'notification.goalBlocked', 'notification.goalStopped',
   ] as FrameKey[]) {
     assert.ok(key in zh && key in en, `${key} must exist in both dictionaries`)
   }
@@ -143,6 +145,8 @@ test('every audited frame string is dictionary-owned (no inline literals remain)
     "frameText(readDocumentLocale(), 'fatal.harvestTimeout'",
     "frameText(copyLocale, 'session.untitled')", "frameText(copyLocale, 'notification.sessionComplete')",
     "frameText(copyLocale, 'notification.awaitingAnswer')", "frameText(copyLocale, 'notification.awaitingApproval')",
+    "frameText(copyLocale, 'notification.goalCompleted')", "frameText(copyLocale, 'notification.goalBlocked')",
+    "frameText(copyLocale, 'notification.goalStopped')",
     // The derive has a render locale in
     // scope (its parameter) and uses it; the three thrown open-session texts are
     // assembled outside any render, so they read the document language at throw

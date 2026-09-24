@@ -1,19 +1,55 @@
 /**
  * App-frame copy.
  *
- * The FRAME around the mounted shells (App.tsx, InstanceView.tsx, the static
- * skeleton) hosts N ctxs and owns NO `t` seat, so its chrome copy needs this
- * ctx-free dictionary instead of inline literals. Same shape the client plugins
- * use (`zh` is the key-set source of truth, `en` is checked complete against it),
- * consumed by {@link frameText} (render time) and {@link readDocumentLocale}
- * (copy assembled outside a render).
+ * Upstream's rule for the client stack (`packages/client/AGENTS.md`, "Styling
+ * and localization"): EVERY product-visible string — text, accessibility names,
+ * tooltips, placeholders, status/unit formatters, primitive chrome — lives in a
+ * typed locale dictionary and reaches the component through the standard `t`
+ * seat or an already-localized prop. The chamber's own client plugins comply
+ * (each owns `src/locales.ts`, registered through `ctx.locale.register`). The
+ * FRAME around those shells (App.tsx, InstanceView.tsx, the static skeleton)
+ * does not: it hosts N ctxs and owns NO `t` seat, so its chrome copy needs a
+ * ctx-free dictionary instead of inline Chinese literals.
  *
- * Locale choice: only `document.documentElement.lang` is observed, never
- * `navigator.language` — in the N-ctx document every mounted shell's locale
- * service writes it, so `page-language.ts` sanctions only the ON-SCREEN source's
- * SETTLED language and restores every other write. An absent/empty tag falls back
- * to the served markup's own default (`zh-CN`, index.html) rather than the OS
- * locale, so a cold, un-booted page always shows the served copy.
+ * This module is that dictionary: the same shape the client plugins use (`zh`
+ * is the key-set source of truth, `en` is checked complete against it), consumed
+ * by two ctx-free readers —
+ *
+ *  - {@link frameText} for render-time copy, keyed by the {@link FrameLocale}
+ *    the module resolves for the reader;
+ *  - {@link readDocumentLocale} for copy assembled OUTSIDE a render (the
+ *    notification edge projection, whose effect holds no render-scope values).
+ *
+ * ## How the frame chooses the locale (it owns no `t` seat)
+ *
+ * The document language: `document.documentElement.lang`. The official locale
+ * service writes it (`syncDocumentLanguage`, vendor
+ * packages/client/locale/src/client/index.ts:149) — but in the chamber's N-ctx
+ * document EVERY mounted shell's service writes it, at activation and on every
+ * dictionary registration, so "the booted shell's locale" is not "the
+ * shell that wrote last" (which could be a prewarmed one's browser-derived
+ * provisional). The page-language
+ * owner: `page-language.ts` sanctions only the ON-SCREEN source's SETTLED
+ * language and restores every other write (design 06 §4.6「页面语言归属」), so
+ * the document language the readers below observe IS the on-screen instance's
+ * own language. This is the same mechanism, and the
+ * same fallback pin, the chamber's settings-bridge already uses for ctx-free
+ * copy (`DshRuntimeSection.tsx` `formatTimestamp`: "the served markup defaults
+ * to zh-CN, so an unset lang falls back to zh-CN rather than the OS locale") —
+ * the served markup's own default is `zh-CN` (index.html). Only the document is
+ * observed, never `navigator.language`: the user's choice inside dsh is
+ * authoritative, and an English document must produce English chrome.
+ *
+ * "An English document" only exists AFTER a
+ * shell booted — on a COLD load the served markup declares `lang="zh-CN"`
+ * (index.html:2) and no locale service has run yet, so every frame reader
+ * resolves zh and the first copy the user sees is always the served one (which
+ * is also what the static skeleton in index.html already carries, so the
+ * pre-mount rewrite in main.tsx is a no-op on that path). The dictionary takes
+ * over the moment the document language actually changes — the page-language
+ * owner letting the on-screen source's settled language land (main.tsx installs
+ * it before any shell boots), or a control-plane markup that declares another
+ * language — which is exactly the subscription below.
  */
 
 /** Languages this frame carries copy for. */
@@ -94,7 +130,18 @@ export const zh = {
   'source.local': '本地实例',
   /** Session title fallback used by the notification body. */
   'session.untitled': '未命名会话',
+  /** Notification title: a session finished its turn (goal-aware v5: this is the
+   *  fallback title and the onComplete copy — the goal states below are separate
+   *  identities, each emitted at most once per goalId). */
   'notification.sessionComplete': '会话已完成',
+  /** Notification title: a held completion was flushed by its goal's outcome
+   *  (v5 §3.4 #2/#9; once per goal identity). */
+  'notification.goalCompleted': '目标已完成',
+  /** Notification title: the goal reached blocked and its held completion flushed. */
+  'notification.goalBlocked': '目标已受阻',
+  /** Notification title: a held completion was consumed while the goal was still
+   *  active but disarmed (v5 §3.4 #4) — a neutral "did not continue" notice. */
+  'notification.goalStopped': '目标未继续运行',
   'notification.awaitingAnswer': '代理正在等待你的回答',
   'notification.awaitingApproval': '代理请求你的批准',
   /** L3 liveness guard. The copy must only say「无法确认」: legal silence (long tool/
@@ -150,6 +197,9 @@ export const en: Record<FrameKey, string> = {
   'source.local': 'Local instance',
   'session.untitled': 'Untitled session',
   'notification.sessionComplete': 'Session complete',
+  'notification.goalCompleted': 'Goal completed',
+  'notification.goalBlocked': 'Goal blocked',
+  'notification.goalStopped': 'The goal did not continue running',
   'notification.awaitingAnswer': 'The agent is waiting for your answer',
   'notification.awaitingApproval': 'The agent requests your approval',
   'sessionStall.text': 'Cannot confirm the session state of {sources}: the connection may be stalled.',
@@ -169,9 +219,15 @@ export const DOCUMENT_LANGUAGE_ATTRIBUTE = 'lang'
 export const FALLBACK_FRAME_LOCALE: FrameLocale = 'zh'
 
 /**
- * Resolve the frame locale from a document language tag: a `zh`-family tag is
- * Chinese, every other known tag is English; absent/empty falls back to the SERVED
- * MARKUP default rather than the OS locale.
+ * Resolve the frame locale from a document language tag.
+ *
+ * A `zh`-family tag (`zh`, `zh-CN`, `zh-Hans`, …) is Chinese; every other known
+ * tag is English (the frame carries exactly these two dictionaries, and the
+ * official locale service only ever writes a tag it has copy for); an absent or
+ * empty tag falls back to the SERVED MARKUP default rather than to the OS
+ * locale, so an un-booted page shows the copy its own markup declares.
+ * @param lang - the raw `document.documentElement.lang` value.
+ * @returns the locale to render with.
  */
 export function resolveFrameLocale(lang: string | undefined | null): FrameLocale {
   if (lang === undefined || lang === null) return FALLBACK_FRAME_LOCALE
@@ -193,8 +249,11 @@ export function readDocumentLocale(): FrameLocale {
 }
 
 /**
- * Subscribe to document-language changes; framework-free so React can bind it through
- * `useSyncExternalStore` and plain-node imports stay usable. Returns the unsubscribe.
+ * Subscribe to document-language changes (the shell's locale service rewriting
+ * `<html lang>`). Framework-free so the React side can bind it through
+ * `useSyncExternalStore` and so plain-node imports stay usable.
+ * @param onChange - called after every `lang` attribute change.
+ * @returns the unsubscribe function.
  */
 export function subscribeDocumentLocale(onChange: () => void): () => void {
   if (typeof document === 'undefined' || typeof MutationObserver === 'undefined') return () => {}

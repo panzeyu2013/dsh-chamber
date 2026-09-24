@@ -20,6 +20,7 @@ import {
   type InstanceRuntimeReport,
   type PluginGraphDiagnostic,
   type RuntimeFactsOverlay,
+  type RuntimeFactsOverlayRow,
   type SessionArchiveLedger,
   type SessionEchoLedger,
   type WorkspaceEchoLedger,
@@ -48,24 +49,28 @@ export type HostFacts = { dshVersion?: string }
 
 /**
  * facts 行 → 侧栏渲染字段 overlay：
- * 只过**渲染字段**（pending / runningSubagents），判定字段（updatedAt /
- * completedAt / lastTurnEnd）刻意不过桥（derive.ts 的反 churn 纪律）。
+ * 只过**渲染字段**（pending / runningSubagents / factAt / goal），判定字段
+ * （updatedAt / completedAt / lastTurnEnd）刻意不过桥（derive.ts 的反 churn 纪律）。
  * 只有 verdict ok 且 serviceable 的未读事实才参与——forward-skew / 停机 /
  * legacy 一律返回 undefined，回到 channel-only（不静默假装有事实）。
+ * goal（v5 §6 P2a）：无壳来源的 goal 行事实经 overlay 进投影（通道行优先，
+ * overlay 只在通道 Unknown 时填补，含显式 null）；字段缺席 = unknown，不写行。
  */
 function factsOverlay(snapshot: SessionFactsSnapshot | undefined): RuntimeFactsOverlay | undefined {
   if (snapshot === undefined || !isFactsUsable(snapshot)) return undefined
-  const overlay: Record<string, { pending?: 'approval' | 'plan-review' | 'question'; runningSubagents?: number; factAt?: number }> = {}
+  const overlay: Record<string, RuntimeFactsOverlayRow> = {}
   for (const row of Object.values(snapshot.rows)) {
     const pending = row.pendingKind === 'approval'
       ? 'approval' as const
       : row.pendingKind === 'question' ? 'question' as const : undefined
-    // I5：factAt 也是渲染字段（这一行有多新），因此只带它的行同样要过桥。
-    if (pending === undefined && row.subagentCount <= 0 && !(row.factAt > 0)) continue
+    // I5：factAt 也是渲染字段（这一行有多新），因此只带它的行同样要过桥；
+    // P2a 的 goal 事实同理（无壳来源唯一的 goal 通路）。
+    if (pending === undefined && row.subagentCount <= 0 && !(row.factAt > 0) && row.goal === undefined) continue
     overlay[row.sessionId] = {
       ...(pending !== undefined ? { pending } : {}),
       ...(row.subagentCount > 0 ? { runningSubagents: row.subagentCount } : {}),
       ...(row.factAt > 0 ? { factAt: row.factAt } : {}),
+      ...(row.goal !== undefined ? { goal: row.goal } : {}),
     }
   }
   return Object.keys(overlay).length > 0 ? overlay : undefined

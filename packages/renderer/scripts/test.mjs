@@ -82,6 +82,9 @@ export const GROUPS = {
     'test/aggregate/watermark.test.ts',
     // complete 通知账本内核（两轨：水位 + 武装；撤回只清武装轨 / forget / prune）。
     'test/aggregate/complete-ledger.test.ts',
+    // I2 回归（Wave6 收口）：#11 goal 未知的直发完成也必须 arm，
+    // 否则同一完成的延迟壳边沿会产生第二条 notification。
+    'test/aggregate/goal-unknown-arm.test.ts',
     'test/aggregate/badge-count.test.ts',
   ],
   // session-state: gateway session-state 事实源 + 未读 v2 落盘 + 派生账本
@@ -102,6 +105,10 @@ export const GROUPS = {
     'test/session-state/notification-ledger.test.ts',
     // SSH/dsh 远端的无壳观察者（$events + 每边沿一次 session/follow）。
     'test/session-state/source-mux-facts.test.ts',
+    // SSH/dsh 观察者的 goal 三值投影 + activation 事件（P2b，v5 §6）。
+    'test/session-state/source-mux-facts-goal.test.ts',
+    // 观测组装：壳/facts 权威合并、候选归属、代际门与批次落盘（v5 §3.2–§3.5）。
+    'test/session-state/completion-observation.test.ts',
     // 预热命中率（attempt/hit/cancelled 的定义与计数 + 全局仪器）。
     'test/session-state/prewarm-ledger.test.ts',
     // 有界集合内核（容量/FIFO 淘汰/同键替换裁决的负例）。
@@ -122,6 +129,9 @@ export const GROUPS = {
     'test/wiring/veil-layering-invariants.test.ts',
     // P4 源注册表接线：指纹只在 roster 刷新处换代，事件只带 epoch，退役即出表。
     'test/wiring/source-registry-wiring.test.ts',
+    // F6 回归：durable 未读四类剪枝必须门控在权威 roster 水合后（源码锁 +
+    // 纯谓词/假存储双证据）。
+    'test/wiring/unread-prune-roster-gate.test.ts',
   ],
   // view-runtime: 视图运行时 —— 隐藏视图回收、视图过渡队列、侧栏滚动恢复、切源揭示
   'view-runtime': [

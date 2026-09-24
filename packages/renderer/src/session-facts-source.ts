@@ -3,13 +3,16 @@
  * ReadableStream / 定时器）。分类**粗粒度且只有一份**：classifySessionFactsProbe 是本
  * 客户端唯一分类器（权威分类器在 control-plane 的 session-state-protocol，状态语义逐条
  * 对齐；本包不能 import 它）；probe 与流恢复重取都调用它，模块内不得再内联判定：
- * 404 ⇒ legacy-gateway；503 + session_state_disabled / mode off ⇒ watcher-disabled；
- * 其余非 ok ⇒ degraded；2xx 且 protocol 命中 ⇒ ok。共享字面量（route 路径 / protocol /
+ * 404 ⇒ legacy-gateway（首探从未有过协议行 = 空权威快照；曾有历史后 = 保留旧行 + 标
+ * 不可用）；503 + session_state_disabled / mode off ⇒ watcher-disabled；其余非 ok ⇒
+ * degraded；2xx 且 protocol 命中 ⇒ ok。共享字面量（route 路径 / protocol /
  * session_state_disabled / serviceable / completedAtSource）是跨包单一来源，不得本地改写。
  * mode === 'sse' 消费 SSE 增量（id 单调游标，重连带 Last-Event-ID；心跳只作活性）；
  * mode === 'poll' 按 pollIntervalMs 重取快照；静默超时 ⇒ 关流重订阅并整量重取，期间标
  * stale。ack 上行失败进 unread-store 有界待发表，通道恢复点重放，成功才出队（幂等，
- * 绝不阻塞读推进）。行数据只承载会话元数据，**绝不**带 title/cwd/消息。
+ * 绝不阻塞读推进）。行数据只承载会话元数据（goal 三值事实 = 白名单 {goalId, revision,
+ * phase, activation?, updatedAt?}，绝不含 objective/blockedReason），**绝不**带
+ * title/cwd/消息。
  */
 
 /** 快照路由后缀；与 control-plane 的 SESSION_STATE_PATH 逐字节相同（跨包锁步，不得本地改写）。 */
@@ -82,6 +85,19 @@ export interface SessionFactsTurnEnd {
   seq?: number
 }
 
+/**
+ * 一行的 goal 三值事实（v5 §6 P2a 的 wire 白名单：{goalId,revision,phase,
+ * activation?,updatedAt?}）。renderer 侧与 sidebar 的 GoalFact 同形但不 import
+ * （本模块保持低层、只吃 wire）；**绝不带 objective/blockedReason**。
+ */
+export interface SessionFactsGoalFact {
+  goalId: string
+  revision: number
+  phase: 'active' | 'paused' | 'blocked' | 'complete'
+  activation?: 'armed' | 'disarmed'
+  updatedAt?: number
+}
+
 /** 一行会话事实（wire SessionStateRow 的防御性投影）。 */
 export interface SessionFactsRow {
   sessionId: string
@@ -104,6 +120,13 @@ export interface SessionFactsRow {
    */
   completedAtDomain?: 'host' | 'observer' | null
   lastTurnEnd: SessionFactsTurnEnd | null
+  /**
+   * 目标投影事实（v5 §2.1/§6 P2a；加法字段，P2a 前的 wire 缺席）。三值语义：
+   * **字段缺席 = unknown**（该来源没有 goal 通路）；`null` = 宿主明确报告当前无
+   * goal；对象 = 当前 goal 身份/相位（可带进程内 activation）。形状不符 = unknown
+   * （warn-once，绝不折叠成 null）。
+   */
+  goal?: SessionFactsGoalFact | null
   /** 观察者刷新这一行事实的 host 域毫秒（0 = 未知）。 */
   factAt: number
 }
@@ -192,7 +215,7 @@ export interface SessionFactsSourceUpdate {
 export interface SessionFactsSource {
   update(input: SessionFactsSourceUpdate): void
   stop(): void
-  /** undefined = 当前没有可用事实（legacy/degraded/未连接）。 */
+  /** undefined = 当前没有可用事实（degraded/未连接；legacy 404 两分支均给快照，不在此列）。 */
   subscribe(listener: (snapshot: SessionFactsSnapshot | undefined) => void): () => void
   onRowHint(listener: (hint: SessionFactsRowHint) => void): () => void
   getSnapshot(): SessionFactsSnapshot | undefined
@@ -221,6 +244,56 @@ function nonNegativeInt(value: unknown): number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : 0
 }
 
+/**
+ * 本模块的一次性 goal 形状警告（与 derive.ts 的 warnGoalShape 同纪律）：生产端
+ * 持续吐坏形状时 console 不得刷屏；纯解析函数没有 logger 缝，故由模块级旗标承担。
+ */
+let warnedGoalRowShape = false
+
+/** Test-only: re-arm the one-shot goal-shape warning (node tests share the module instance). */
+export function __resetSessionFactsGoalWarningForTests(): void {
+  warnedGoalRowShape = false
+}
+
+const GOAL_ROW_PHASES: ReadonlySet<string> = new Set(['active', 'paused', 'blocked', 'complete'])
+
+/**
+ * 防御性解析一行的 goal 字段（v5 §6 P2a 白名单）：`undefined` = unknown（字段
+ * 缺席 / 形状不符 / 空串 id），对象只保留五个契约字段。**绝不**读 objective /
+ * blockedReason / roundsStarted 等其它字段。
+ *
+ * revision 与 gateway/control-plane/P2b 同规：安全整数且 ≥1（-1 / 0 / 小数 /
+ * 不安全整数一律 unknown）；updatedAt 只接受安全整数 ≥0（isWatermark）。
+ */
+export function parseSessionFactsGoalFact(value: unknown): SessionFactsGoalFact | undefined {
+  if (!isPlainRecord(value)) {
+    warnGoalRowShape()
+    return undefined
+  }
+  const goalId = value.goalId
+  const revision = value.revision
+  const phase = value.phase
+  if (typeof goalId !== 'string' || goalId === '') return warnGoalRowShape()
+  if (typeof revision !== 'number' || !Number.isSafeInteger(revision) || revision < 1) return warnGoalRowShape()
+  if (typeof phase !== 'string' || !GOAL_ROW_PHASES.has(phase)) return warnGoalRowShape()
+  const fact: SessionFactsGoalFact = { goalId, revision, phase: phase as SessionFactsGoalFact['phase'] }
+  const updatedAt = value.updatedAt
+  if (isWatermark(updatedAt)) fact.updatedAt = updatedAt
+  const activation = value.activation
+  if (activation === 'armed' || activation === 'disarmed') fact.activation = activation
+  return fact
+}
+
+function warnGoalRowShape(): undefined {
+  if (warnedGoalRowShape) return undefined
+  warnedGoalRowShape = true
+  console.warn(
+    '[session-facts] row goal has an unexpected shape — treating it as UNKNOWN '
+    + '(not as "no goal"); last-known goal facts stay in force',
+  )
+  return undefined
+}
+
 /** 防御性解析一行；无 sessionId 即 null（永不猜）。 */
 export function parseSessionFactsRow(value: unknown): SessionFactsRow | null {
   if (!isPlainRecord(value)) return null
@@ -245,6 +318,13 @@ export function parseSessionFactsRow(value: unknown): SessionFactsRow | null {
       ...(isWatermark(value.lastTurnEnd.seq) ? { seq: value.lastTurnEnd.seq } : {}),
     }
   }
+  // goal 三值（P2a 加法字段）：字段缺席 = unknown（保持稀疏）；null = 明确无
+  // goal（保留）；对象经白名单解析，坏形状 = unknown + warn-once。必须先解析再
+  // 决定写入：坏形状解析为 undefined 时**不得**写出 own property goal:undefined
+  // （那会让未知行带上一个假字段，绕过 Object.hasOwn 判定）。
+  const goal = value.goal === undefined
+    ? undefined
+    : value.goal === null ? null : parseSessionFactsGoalFact(value.goal)
   return {
     sessionId,
     running: value.running === true,
@@ -256,6 +336,7 @@ export function parseSessionFactsRow(value: unknown): SessionFactsRow | null {
     completedAt: isWatermark(value.completedAt) ? value.completedAt : null,
     completedAtSource,
     lastTurnEnd,
+    ...(goal === undefined ? {} : { goal }),
   }
 }
 
@@ -374,11 +455,19 @@ function bodyHasDisabledCode(body: unknown): boolean {
   return isPlainRecord(nested) && nested.code === SESSION_FACTS_DISABLED_CODE
 }
 
-/** 行内容签名（变更检测；字段顺序固定，JSON 串即可）。 */
+/**
+ * 行内容签名（变更检测；字段顺序固定，JSON 串即可）。goal 三值必须进签名：
+ * 只翻相位/activation 的一次增量也要产生 row hint，否则侧栏行与收敛器读不到
+ * 新相位（unknown/null/对象三态各自成码）。
+ */
 export function sessionFactsRowSignature(row: SessionFactsRow): string {
   return JSON.stringify([
     row.running, row.pendingKind, row.subagentCount, row.updatedAt,
     row.completedAt, row.completedAtSource, row.lastTurnEnd,
+    row.goal === undefined ? 'u' : row.goal === null ? 'n' : [
+      row.goal.goalId, row.goal.revision, row.goal.phase,
+      row.goal.activation ?? null, row.goal.updatedAt ?? null,
+    ],
   ])
 }
 
@@ -474,6 +563,12 @@ interface SourceState {
   connected: boolean
   running: boolean
   snapshot: SessionFactsSnapshot | undefined
+  /**
+   * 是否曾投递过协议快照（ok，或带协议载荷的降级档）——即网关曾答过镜像协议。
+   * 404 只在它为 false 时才是「首探从未有过行」的空权威快照；曾有历史后转 404
+   * 必须保留既有行/游标（在场证据），否则无壳来源被遗忘、held pending 被清。
+   */
+  protocolFactsSeen: boolean
   streamController: AbortController | null
   streamStarted: boolean
   /** 当前在途流的建连/首字节 deadline 定时器（正常收头或 closeStream 后必须清）。 */
@@ -504,6 +599,7 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
     connected: false,
     running: false,
     snapshot: undefined,
+    protocolFactsSeen: false,
     streamController: null,
     streamStarted: false,
     streamConnectTimer: null,
@@ -577,6 +673,8 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
    * 无载荷降级快照工厂（legacy / disabled / unversioned / 首次失败）：拿不到协议载荷时
    * 行/游标/read 全空是事实而不是猜测；mode 为 null。stale 默认 true（没有活载体在刷新，
    * 消费者据此降档）；legacy 例外——它按 reconnectMs 有界低频重探，快照会继续更新，按事实标 false。
+   * 曾有历史后的 404 / 已有行的 unversioned 走「保留既有行 + 标不可用」出口，**不得**走本工厂
+   * （那会把旧行清成权威空集）。
    */
   const buildEmptySnapshot = (
     verdict: SessionFactsVerdict,
@@ -674,10 +772,11 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
   /**
    * 一次探测 = classifier 的唯一生产消费者，分类 + 发布（全源唯一判定点）：探测与流恢复
    * 重取都经 classifySessionFactsProbe，快照只携带它的 verdict/degradation，模块内不再有
-   * 第二份内联分类。发布规则：2xx 且载荷可解析 ⇒ 带该载荷的行/读状态 + 分类判定；
-   * unavailable 且已有快照 ⇒ 保留行、标 stale（不擦除既有镜像事实）；其余无载荷结果
-   * （legacy / disabled / unversioned / 首次失败）⇒ 发布分类器判定的空快照，能力投影
-   * 仍能区分三者而不是静默 undefined。
+   * 第二份内联分类。发布规则：2xx 且载荷可解析 ⇒ 带该载荷的行/读状态 + 分类判定并记
+   * protocolFactsSeen；无载荷且已有行 ⇒ 保留旧行（在场证据不得清空）：unavailable / 曾有
+   * 协议历史后的 404 / unversioned 三档分别标 stale 或 serviceable=false；其余无载荷结果
+   * （legacy 首探 / disabled / 首次失败）⇒ 发布分类器判定的空快照，能力投影仍能区分三者
+   * 而不是静默 undefined。
    */
   const publishProbe = (
     outcome: SessionFactsProbeOutcome,
@@ -687,17 +786,55 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
     const parsed = parseSessionFactsSnapshotValue(is2xx && outcome.kind === 'response' ? outcome.body : undefined)
     if (parsed !== null) {
       state.snapshot = buildSnapshot(parsed, probe.verdict, probe.degradation)
+      state.protocolFactsSeen = true
       state.lastEventId = parsed.cursor
       emit()
       noteChannelAlive()
       return { probe, parsed }
     }
-    if (probe.degradation === 'unavailable' && state.snapshot !== undefined) {
+    const previous = state.snapshot
+    if (previous === undefined) {
+      // legacy 是唯一带活重探的 empty 结果：快照会继续刷新，按事实标 non-stale；其余保持 stale。
+      state.snapshot = buildEmptySnapshot(probe.verdict, probe.degradation, probe.verdict !== 'legacy-gateway')
+      emit()
+      return { probe, parsed: null }
+    }
+    if (probe.verdict === 'legacy-gateway') {
+      // 首探从未见过协议行 = 该网关没有镜像协议的权威空集；曾有历史后 404 = 保留旧行/游标/read
+      // 只标不可用（整体清空等于宣告全体会话消失，observeSource 触发遗忘结算、held pending 被清）。
+      state.snapshot = state.protocolFactsSeen
+        ? {
+            ...previous,
+            verdict: 'legacy-gateway',
+            degradation: 'legacy-gateway',
+            serviceable: false,
+            stale: true,
+          }
+        : buildEmptySnapshot('legacy-gateway', 'legacy-gateway')
+      emit()
+      return { probe, parsed: null }
+    }
+    if (probe.degradation === 'unavailable') {
       markStale()
       return { probe, parsed: null }
     }
-    // legacy 是唯一带活重探的 empty 结果：快照会继续刷新，按事实标 non-stale；其余保持 stale。
-    state.snapshot = buildEmptySnapshot(probe.verdict, probe.degradation, probe.verdict !== 'legacy-gateway')
+    if (probe.degradation === 'unversioned') {
+      // 2xx 非协议载荷：通道不可用（unknown），不是权威空行集；保留既有行 + stale，等有界重探。
+      if (previous.verdict === 'degraded' && previous.degradation === 'unversioned' && previous.stale) {
+        return { probe, parsed: null }
+      }
+      state.snapshot = {
+        ...previous,
+        verdict: 'degraded',
+        degradation: 'unversioned',
+        serviceable: false,
+        stale: true,
+      }
+      emit()
+      return { probe, parsed: null }
+    }
+    // disabled / forward-skew 等其余无载荷结果：空快照（无活载体刷新 ⇒ stale）。
+    state.snapshot = buildEmptySnapshot(probe.verdict, probe.degradation, true)
     emit()
     return { probe, parsed: null }
   }
@@ -906,6 +1043,7 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
     closeStream()
     clearTimers()
     state.snapshot = undefined
+    state.protocolFactsSeen = false
     state.lastEventId = null
     state.lastFrameAt = 0
     state.probing = false
