@@ -1,13 +1,25 @@
 /**
  * SessionFactAuthority - the SINGLE owner of "is this session actually running".
  *
- * P1 of the session-authority refactor.
+ * P1 of the session-fact authority refactor.
  *
- * WHAT IT OWNS: per-session episode identity, official running, authority denials (N=2),
- * correction in flight, and EXACTLY ONE completion edge per running episode. Cadence and
- * escalation belong to the ladder engine (ladder.ts).
+ * WHY THIS EXISTS. The official store's \`running\` bit is delivered only by an emit-type
+ * mux event with no retransmission, so losing one frame (or a silently half-dead carrier)
+ * leaves it stuck at true forever - the sidebar never sees the running->idle edge and the
+ * completion notification is never armed ("silent completion"). The chamber cannot fix the
+ * upstream emitter; it CAN own a single reconciliation of that bit against independent
+ * authority reads and write the conclusion back through the official store's public write
+ * path. This module is that reconciliation, as a pure reducer.
  *
- * PURITY: zero imports, no clock reads, no DOM.
+ * WHAT IT OWNS (and what it deliberately does not):
+ *  - truth: per-session episode identity, official running, authority denials (N=2),
+ *    correction in flight, and EXACTLY ONE completion edge per running episode;
+ *  - it does NOT own cadence or escalation: when to probe, when to reconnect and when to
+ *    surface a stall belong to the one ladder engine (ladder.ts). The reducer only asks
+ *    for the immediate confirmation read that N=2 needs.
+ *
+ * PURITY (enforced by the package test manifest): zero imports, no clock reads, no DOM.
+ * Every time arrives on the observation; every threshold arrives via config.
  */
 
 /** The official store's per-session projection - the bit that can go stale. */
@@ -21,9 +33,9 @@ export interface AuthorityOfficialRow {
 }
 
 /**
- * One independent authority read (chamber's own unary `session.list`). `complete` = the
- * read returned a complete list, so ABSENCE of an id is a denial; an incomplete read can
- * only deny by an explicit `false`.
+ * One independent authority read (chamber's own unary \`session.list\`, NOT the official
+ * refresh). \`complete\` = the read returned a complete list, so ABSENCE of an id is a
+ * denial; an incomplete read can only deny by an explicit \`false\`.
  */
 export interface AuthorityRead {
   /** false = the read itself failed: no evidence at all (neither confirm nor deny). */

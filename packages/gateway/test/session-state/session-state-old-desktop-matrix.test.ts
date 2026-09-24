@@ -14,7 +14,8 @@
  *   (b) the old client's visible key set is unchanged — extras are additive only
  *       (the live key set equals frozenKeys + the recorded additiveKeys, so a
  *       rename / deletion / unrecorded addition is red);
- *   (c) the recorded additive fields (diagnostics, row.factAt) ARE present in the
+ *   (c) the recorded additive fields (diagnostics, row.factAt, row.goal with its
+ *       identity-bound activation) ARE present in the
  *       live response while the old parse path — reading only the fixture key
  *       set — still projects the same facts: "ignore unknown keys" is proven,
  *       not assumed (including an x_future injection at every level and the real
@@ -68,7 +69,10 @@ interface RouteExpect {
     read?: string[]
     sessionRow?: string[]
     sessionRowAdditive?: string[]
+    goal?: string[]
     lastTurnEnd?: string[]
+    diagnostics?: string[]
+    diagnosticsDropped?: string[]
   }
   frameEnvelope?: string[]
   firstEvent?: string
@@ -140,9 +144,16 @@ function gatewayFor(t: { after(fn: () => void): void }): GatewayHarness {
   return { surface, store }
 }
 
-/** Deterministic old-desktop state: one stopped session with an observed completion. */
+/** Deterministic old-desktop state: one stopped session with an observed completion
+ *  and one projected goal fact (the post-freeze additive row key the replay must
+ *  keep ignoring). */
 function seedOldDesktopState(store: ReturnType<typeof createSessionStateStore>): void {
-  store.applyBaseline([baselineItem(LEGACY_SESSION, true, 5)], { at: 100 })
+  store.applyBaseline([baselineItem(LEGACY_SESSION, true, 5, {
+    goal: { goalId: 'legacy-goal-1', revision: 1, phase: 'active', updatedAt: 5 },
+  })], { at: 100 })
+  // The process-local activation edge is bound to its exact goal id (P2a); the
+  // replay below must see it round-trip on the wire row, never on another goal.
+  store.applyGoalActivation({ sessionId: LEGACY_SESSION, goalId: 'legacy-goal-1', activation: 'armed' }, 105)
   store.applyStatus(LEGACY_SESSION, false, 110)
   store.settleCompletion(LEGACY_SESSION, {
     at: 110,
@@ -262,6 +273,25 @@ function assertSnapshotContract(body: Record<string, unknown>, route: RouteFixtu
   const row = sessions[0] as Record<string, unknown>
   assert.notEqual(row.lastTurnEnd, null, route.id + ': the seeded row must carry a lastTurnEnd')
   assertFrozenKeySet(route.id + '.sessions[].lastTurnEnd', keysOf(row.lastTurnEnd), nested.lastTurnEnd ?? [])
+  if (nested.goal !== undefined) {
+    assert.notEqual(row.goal, null, route.id + ': the seeded row must carry a goal fact')
+    assertFrozenKeySet(route.id + '.sessions[].goal', keysOf(row.goal), nested.goal)
+    // The recorded activation must really round-trip: dropping the process-local
+    // edge (or mis-binding it) leaves the key absent and reds the key-set check
+    // above; this pins the value and its identity as well.
+    const goal = row.goal as Record<string, unknown>
+    assert.equal(goal.goalId, 'legacy-goal-1')
+    assert.equal(goal.activation, 'armed', route.id + ': the bound activation must ride the wire row')
+  }
+  // The nested additive counters are diagnosed too: a nested key rename /
+  // deletion inside the additive diagnostics object must red the same way a
+  // top-level change does (the old client never enters the object at all).
+  if (nested.diagnostics !== undefined) {
+    const diagnostics = body.diagnostics as Record<string, unknown>
+    assert.ok(diagnostics !== undefined && diagnostics !== null, route.id + ': recorded additive key diagnostics is missing')
+    assertFrozenKeySet(route.id + '.diagnostics', keysOf(diagnostics), nested.diagnostics)
+    assertFrozenKeySet(route.id + '.diagnostics.dropped', keysOf(diagnostics.dropped), nested.diagnosticsDropped ?? [])
+  }
   // Descriptor vocabulary: protocol 1, sse mode advertises the frozen full set,
   // and the old client's base set stays inside it.
   assert.equal(body.protocol, PROTOCOL_VERSION)
@@ -303,6 +333,12 @@ function assertUnknownKeysIgnored(body: Record<string, unknown>, route: RouteFix
   // The live response DOES carry the recorded post-freeze additions, so the
   // ignore test below is not vacuous.
   assert.ok(body.diagnostics !== undefined, route.id + ': recorded additive key diagnostics is missing')
+  const diagnostics = body.diagnostics as Record<string, unknown>
+  assert.ok(diagnostics.dropped !== undefined && diagnostics.dropped !== null, route.id + ': diagnostics.dropped is missing')
+  assert.ok(
+    Object.prototype.hasOwnProperty.call(diagnostics.dropped, 'goalActivations'),
+    route.id + ': the recorded nested diagnostics.dropped.goalActivations counter is missing',
+  )
   const rows = body.sessions as Array<Record<string, unknown>>
   assert.ok(rows[0].factAt !== undefined, route.id + ': recorded additive row key factAt is missing')
   // ...and the old parse path (fixture key set) neither carries nor reads them.
@@ -376,6 +412,20 @@ test('cell B: the frozen v0.4.0-beta.1 fixture pins the vocabulary and the route
       assert.ok(recordedAdditions.has(key), route.id + ': additive key ' + key + ' is missing from anchor.postFreezeAdditions')
     }
   }
+  // Nested post-freeze additions use the same log with their dotted field path
+  // and a dedicated nested key list. The P2a retained-edge cap counter is the
+  // first one; a nested rename/deletion without touching this list must be
+  // impossible to land silently.
+  const nested = routeById('snapshot').expect.nested ?? {}
+  assert.ok(
+    recordedAdditions.has('diagnostics.dropped.goalActivations'),
+    'the nested diagnostics.dropped.goalActivations addition is missing from anchor.postFreezeAdditions',
+  )
+  assert.ok((nested.diagnostics ?? []).includes('dropped'), 'the nested diagnostics list must record the dropped object')
+  assert.ok(
+    (nested.diagnosticsDropped ?? []).includes('goalActivations'),
+    'the nested diagnosticsDropped list must record goalActivations',
+  )
   // Route-table freeze: the live claimed table is the old table plus consciously
   // appended post-freeze routes (the old client keeps calling only the old four).
   const liveRoutes = [...SESSION_STATE_ROUTES].sort()
@@ -383,6 +433,12 @@ test('cell B: the frozen v0.4.0-beta.1 fixture pins the vocabulary and the route
   assert.deepEqual(liveRoutes, recordedRoutes, 'live route table changed: append the new path to routesAddedAfterFreeze (never edit a frozen entry)')
   // The old client's base set stays usable in the degraded poll shape too.
   for (const feature of SESSION_STATE_BASE_FEATURES) assert.ok(featuresForMode('poll').includes(feature))
+  // session-state.goal is OPTIONAL and NOT event-only: the read-only
+  // session/list baseline exists in poll mode too, so the capability is
+  // advertised in both live and degraded shapes (never in off).
+  assert.ok(featuresForMode('poll').includes('session-state.goal'))
+  assert.ok(featuresForMode('sse').includes('session-state.goal'))
+  assert.equal(featuresForMode('off').includes('session-state.goal'), false)
 })
 
 // ---------------------------------------------------------------------------
@@ -463,6 +519,30 @@ test('cell B negative control: the frozen key-set tripwire reds on rename, delet
   assert.throws(() => assertFrozenKeySet('mutant deletion', deleted, recorded), /mutant deletion/)
   const added = [...recorded, 'x_future'].sort()
   assert.throws(() => assertFrozenKeySet('mutant addition', added, recorded), /mutant addition/)
+  // The nested goal key table is live too: a missing activation (the field the
+  // matrix now seeds and asserts) must red.
+  const goalKeys = route.expect.nested?.goal ?? []
+  assert.ok(goalKeys.includes('activation'), 'the fixture must record the nested activation key')
+  assert.throws(
+    () => assertFrozenKeySet('mutant goal-without-activation', goalKeys.filter(key => key !== 'activation'), goalKeys),
+    /mutant goal-without-activation/,
+  )
+  // The nested additive counter table is live too: a deleted / renamed
+  // goalActivations key inside diagnostics.dropped must red.
+  const droppedKeys = route.expect.nested?.diagnosticsDropped ?? []
+  assert.ok(droppedKeys.includes('goalActivations'), 'the fixture must record the nested dropped goalActivations key')
+  assert.throws(
+    () => assertFrozenKeySet('mutant dropped-without-goalActivations', droppedKeys.filter(key => key !== 'goalActivations'), droppedKeys),
+    /mutant dropped-without-goalActivations/,
+  )
+  assert.throws(
+    () => assertFrozenKeySet(
+      'mutant diagnostics-dropped-renamed',
+      [...droppedKeys.filter(key => key !== 'goalActivations'), 'goalActivation'],
+      droppedKeys,
+    ),
+    /mutant diagnostics-dropped-renamed/,
+  )
   // The client-read resolver is live too: a renamed key stops resolving.
   assert.equal(resolves({ protocol: 1 }, 'protocol'), true)
   assert.equal(resolves({ protocolVersion: 1 }, 'protocol'), false)

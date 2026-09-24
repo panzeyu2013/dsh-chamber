@@ -9,7 +9,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { createChamberSessionState } from '../../src/session-state.ts'
+import { MAX_SESSIONS, createChamberSessionState } from '../../src/session-state.ts'
 import { FakeRequest, FakeResponse } from '../support/utils.ts'
 import { baselineItem, delay, sessionSurfaceFor, type SessionSurfaceHarness } from './harness.ts'
 
@@ -84,7 +84,11 @@ test('GET snapshot answers the frozen descriptor and the whitelisted rows', asyn
   const body = res.json()
   assert.equal(body.protocol, 1)
   assert.equal(body.mode, 'sse')
-  assert.equal(body.features.length, 8)
+  // 9 = the frozen 8 plus the OPTIONAL post-freeze session-state.goal
+  // capability (P2a); the row below carries no goal key, so the additive field
+  // stays absent while unknown.
+  assert.equal(body.features.length, 9)
+  assert.equal(body.features.includes('session-state.goal'), true)
   assert.equal(body.host.serviceable, true)
   assert.equal(body.host.state, 'ready')
   assert.equal(body.read.clientId, 'install-1')
@@ -117,6 +121,8 @@ test('poll mode advertises the reduced feature set and off mode advertises none'
   assert.equal(body.features.includes('session-state.dsh-events'), false)
   assert.equal(body.features.includes('session-state.pending-graph'), false)
   assert.equal(body.features.includes('session-state.snapshot'), true)
+  // session-state.goal is NOT event-only: session/list exists in poll mode.
+  assert.equal(body.features.includes('session-state.goal'), true)
   // The base set stays satisfied in poll mode: the mirror stays usable.
   for (const feature of ['session-state.snapshot', 'session-state.host-clock']) {
     assert.equal(body.features.includes(feature), true)
@@ -254,6 +260,53 @@ test('the stream opens with a snapshot frame and pushes monotonic delta ids', as
   assert.equal(events.length, 3)
   assert.equal(events[1].event, 'delta')
   assert.equal(events[2].id, events[1].id! + 1, 'ids are strictly monotonic')
+})
+
+test('an SSE delta carries the goal fact with its identity-bound activation', async t => {
+  const harness = surfaceFor(t)
+  harness.store.applyBaseline([baselineItem('s1', false, 5, {
+    goal: { goalId: 'g1', revision: 1, phase: 'active', updatedAt: 5 },
+  })], { at: 100 })
+  const { res } = await openStream(harness)
+  assert.equal(sseEvents(res)[0].event, 'snapshot')
+  // The activation edge for the matching goal commits a delta whose row carries
+  // the whole goal fact — not just an activation-only fragment.
+  harness.store.applyGoalActivation({ sessionId: 's1', goalId: 'g1', activation: 'armed' }, 110)
+  const events = sseEvents(res)
+  assert.equal(events.length, 2)
+  assert.equal(events[1].event, 'delta')
+  const sessions = (events[1].data as { sessions: Array<Record<string, unknown>> }).sessions
+  assert.equal(sessions.length, 1)
+  assert.deepEqual(sessions[0].goal, {
+    goalId: 'g1', revision: 1, phase: 'active', updatedAt: 5, activation: 'armed',
+  })
+  // The snapshot route agrees (same projection source).
+  activeSurface = harness.surface
+  const snapshot = (await json('GET', '/chamber/session-state')).json()
+  assert.deepEqual(snapshot.sessions[0].goal, sessions[0].goal)
+})
+
+test('the row-cap eviction reaches an SSE client as a removal delta (no phantom row)', async t => {
+  const harness = surfaceFor(t)
+  const items = Array.from({ length: MAX_SESSIONS + 1 }, (_, index) => baselineItem('cap-' + String(index), false, index + 1))
+  harness.store.applyBaseline(items, { at: 100 })
+  const { res } = await openStream(harness)
+  assert.equal(sseEvents(res)[0].event, 'snapshot')
+  assert.equal((sseEvents(res)[0].data as { sessions: unknown[] }).sessions.length, MAX_SESSIONS + 1)
+  // 容量淘汰发生在持久化冲刷时：客户端已见过 cap-0 的 upsert，必须再收到 removed。
+  await harness.store.flush()
+  const events = sseEvents(res)
+  assert.equal(events.length, 2)
+  assert.equal(events[1].event, 'delta')
+  const data = events[1].data as { sessions: unknown[]; removedSessionIds: string[] }
+  assert.deepEqual(data.sessions, [], 'the eviction is a removal, not a re-upsert')
+  assert.deepEqual(data.removedSessionIds, ['cap-0'])
+  assert.equal(harness.store.status().sessions, MAX_SESSIONS)
+  assert.equal(harness.store.status().dropped.sessions, 1)
+  activeSurface = harness.surface
+  const snapshot = (await json('GET', '/chamber/session-state')).json()
+  assert.equal(snapshot.sessions.length, MAX_SESSIONS)
+  assert.equal(snapshot.sessions.some((row: { sessionId: string }) => row.sessionId === 'cap-0'), false)
 })
 
 test('Last-Event-ID resumes from the ring without a snapshot', async t => {

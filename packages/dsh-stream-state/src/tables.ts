@@ -1,9 +1,15 @@
 /**
  * Threshold tables - the SINGLE source of the lifecycle numbers for the TS side.
  *
- * Imports NOTHING (not even `node:` builtins): consumed by browser code, and mirrored
- * read-only by `tables.json` for the Swift side. One source, two consumers; changing a
- * value here is a BEHAVIOR_CHANGES entry, never a free parameter.
+ * PURITY (enforced by scripts/test.mjs): this module imports NOTHING, not even
+ * node: builtins. It is consumed by browser code, so a `node:fs` read here would
+ * compile but fail at runtime in the page. The cross-language mirror
+ * (`tables.json`) is therefore a READ-ONLY projection of these literals:
+ * `test/tables/tables-parity.test.ts` fails if the two disagree, and the Swift
+ * mirror gate reads the JSON. One source (these literals), two consumers.
+ *
+ * Discipline: changing a value here is a
+ * BEHAVIOR_CHANGES entry (see DIVERGENCE.md), never a free parameter.
  */
 
 /** Rolling window of the physical-carrier rebuild throttle (three call sites share it). */
@@ -24,8 +30,11 @@ export const OPENING_TIMEOUT_LADDER_MS: readonly number[] = [30_000, 60_000, 120
 export const SILENT_TEARDOWN_MIN_MS = 15_000
 
 /** Consecutive unanswered opening deadlines for ONE episode before the carrier is
- * rebuilt while frames ARE arriving. A frame-answering socket is left alone on the
- * first timeout; only a second consecutive miss proves the request is stuck. */
+ * rebuilt while frames ARE arriving (mirrors
+ * REMOTE_STREAM_OPENING_ESCALATION_STREAK = 2). A frame-answering socket is left
+ * alone on the first timeout because a slow-but-working Host must keep its
+ * in-flight answer; only a second consecutive miss proves the request - not the
+ * socket - is stuck. */
 export const OPENING_STALL_STREAK = 2
 
 /** Bound on the reducer's opening-ledger maps: a page that times out on many sessions
@@ -64,11 +73,20 @@ export function openingBudgetMs(streak: number): number {
 }
 
 /**
- * The FOUR recovery ladders' thresholds, as the single table. Every ladder READS this
- * table instead of declaring its own literals: the mobile stall machine, the sidebar's
- * authority probe, the renderer's authority escalation and the open-in stream-health
- * chip. The numbers are measured from each module's own declarations; changing a value
- * is a BEHAVIOR_CHANGES entry, never a free parameter.
+ * The FOUR recovery ladders' thresholds, recorded here as the single table.
+ *
+ * Every ladder READS this table instead of declaring its own literals: the mobile
+ * stall machine (dsh-chamber-client-ui-mobile), the sidebar's authority probe (the
+ * former fact-reconcile receipt chain), the renderer's authority escalation (the
+ * former liveness guard) and the open-in stream-health chip.
+ * `scripts/gates/verify-ladder-table-parity.mjs` keeps the collection honest in both
+ * directions: each retired declaration/leaf literal must stay absent from its module
+ * (the table is the authority), and every named consumer must reference
+ * `LADDER_TABLES.<ladder>` in code - a module that starts carrying its own copy
+ * again turns the gate red instead of drifting silently.
+ *
+ * The numbers are measured from each module's own declarations, not chosen
+ * here. Changing a value is a BEHAVIOR_CHANGES entry, never a free parameter.
  */
 export const LADDER_TABLES = {
   /** The phone's stall ladder. */

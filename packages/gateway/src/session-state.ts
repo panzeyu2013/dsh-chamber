@@ -52,6 +52,9 @@ import {
   type SessionStateCompletedAtSource,
   type SessionStateDelta,
   type SessionStateFeature,
+  type SessionStateGoalActivation,
+  type SessionStateGoalActivationEvent,
+  type SessionStateGoalFact,
   type SessionStateHostInfo,
   type SessionStateHostState,
   type SessionStateMode,
@@ -72,6 +75,12 @@ export const SESSION_STATE_FILE_NAME = 'state.json'
 export const SESSION_STATE_SCHEMA_VERSION = 1
 /** Hard row cap; the excess is evicted by observedAt and counted in dropped. */
 export const MAX_SESSIONS = 2_000
+/**
+ * Cap of process-local retained goal-activation edges (P2a). A host can emit
+ * edges for session ids no projection ever carries, so the map must stay
+ * bounded: eviction is oldest-first and counted in `dropped.goalActivations`.
+ */
+export const MAX_PENDING_GOAL_ACTIVATIONS = MAX_SESSIONS
 export const MAX_READ_CLIENTS = 64
 export const MAX_MARKS_PER_CLIENT = 5_000
 /** Read-mark client TTL (old marks are cleaned by the server). */
@@ -153,6 +162,13 @@ interface StoredRow {
   /** Baseline bookkeeping for the parent/origin subagent count. */
   parentSessionId: string | null
   origin: 'subagent' | null
+  /**
+   * Projected goal fact (P2a). `undefined` = the projection key was never
+   * observed (unknown); `null` = the host explicitly reports no goal; an
+   * object = the current goal. `activation` inside it is PROCESS-LOCAL and is
+   * stripped before persistence, so a restart clears it back to unknown.
+   */
+  goal?: SessionStateGoalFact | null
 }
 
 /** Per-client read marks (stored per client, judged source-wide). */
@@ -181,7 +197,7 @@ export interface SessionStateDocument {
   sessions: StoredRow[]
   readMarks: Record<string, { at: number; marks: Record<string, { readThrough: number; at: number }> }>
   readFloor: number
-  dropped: { sessions: number; readClients: number; readMarks: number }
+  dropped: { sessions: number; readClients: number; readMarks: number; goalActivations: number }
   [key: string]: unknown
 }
 
@@ -194,7 +210,7 @@ export interface SessionStateStoreStatus {
   cursor: number
   sessions: number
   readClients: number
-  dropped: { sessions: number; readClients: number; readMarks: number }
+  dropped: { sessions: number; readClients: number; readMarks: number; goalActivations: number }
   /** 已结算完成边沿的 turn/end 分类构成（unreadable = 降级武装）。 */
   turnEnds: { completed: number; userStopped: number; neutral: number; unreadable: number }
 }
@@ -217,6 +233,16 @@ export interface SessionStateStore {
   applyActivity(sessionId: string, updatedAt: number | null, at: number): boolean
   applyAdded(item: SessionListBaselineItem, at: number): boolean
   applyRemoved(sessionId: string, at: number): boolean
+  /** Forwarded `goal/activation-changed` edge, bound to its exact goal id
+   *  ({@link SessionStateGoalActivationEvent}). A bound edge whose id does not
+   *  match the row's projected goal is retained until a baseline/added carries
+   *  the matching identity; an `activation: null` edge resolves a known fact
+   *  to explicit no-goal. Process-local only — never persisted. */
+  applyGoalActivation(event: SessionStateGoalActivationEvent, at: number): boolean
+  /** Drop every process-local activation back to unknown (a fresh `$events`
+   *  ready after a gap: emit frames have no replay), including retained edges
+   *  that have not found their projection yet. */
+  clearGoalActivations(at: number): boolean
   applyPending(sessionId: string, kind: SessionStatePendingKind, at: number): boolean
   clearPending(sessionId: string, at: number): boolean
   /** Settle one completion edge after its single follow read. */
@@ -247,7 +273,68 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return prototype === Object.prototype || prototype === null
 }
 
-/** Wire projection of one internal row (exact frozen field set/order). */
+/** Whitelisted clone of one goal fact. Only the five contract fields can
+ *  survive, so a smuggled `objective`/`blockedReason` (or any future host
+ *  field) can never reach the wire or the persisted document. */
+function cloneGoalFact(goal: SessionStateGoalFact): SessionStateGoalFact {
+  const fact: SessionStateGoalFact = { goalId: goal.goalId, revision: goal.revision, phase: goal.phase }
+  if (goal.updatedAt !== undefined) fact.updatedAt = goal.updatedAt
+  if (goal.activation !== undefined) fact.activation = goal.activation
+  return fact
+}
+
+/** Persisted projection of one goal fact: `activation` is process-local and
+ *  must never reach the snapshot document (v5 §6 P2a: a restart clears it back
+ *  to unknown). */
+function persistedGoalFact(goal: SessionStateGoalFact): SessionStateGoalFact {
+  const fact: SessionStateGoalFact = { goalId: goal.goalId, revision: goal.revision, phase: goal.phase }
+  if (goal.updatedAt !== undefined) fact.updatedAt = goal.updatedAt
+  return fact
+}
+
+/** Exact equality of two goal facts (undefined/null are distinct values). */
+function sameGoalFact(
+  left: SessionStateGoalFact | null | undefined,
+  right: SessionStateGoalFact | null | undefined,
+): boolean {
+  if (left === null || left === undefined || right === null || right === undefined) return left === right
+  return left.goalId === right.goalId
+    && left.revision === right.revision
+    && left.phase === right.phase
+    && left.updatedAt === right.updatedAt
+    && left.activation === right.activation
+}
+
+/**
+ * Merge one baseline/add goal fact into a row.
+ *  - absent (`undefined`) keeps the last known fact: a missing projection key
+ *    is unknown and must never overwrite knowledge with ignorance;
+ *  - `null` clears the fact (the host explicitly reports no goal);
+ *  - an object refreshes identity/phase/watermark while PRESERVING the
+ *    process-local activation when the goalId is unchanged (the baseline never
+ *    carries activation; overwriting would erase what the event taught us).
+ * @returns whether the stored fact changed (delta emission input).
+ */
+function mergeGoalFact(row: StoredRow, goal: SessionStateGoalFact | null | undefined): boolean {
+  if (goal === undefined) return false
+  const previous = row.goal
+  if (goal === null) {
+    if (previous === null) return false
+    row.goal = null
+    return true
+  }
+  const activation = previous !== undefined && previous !== null && previous.goalId === goal.goalId
+    ? previous.activation
+    : undefined
+  const next = cloneGoalFact(goal)
+  if (activation !== undefined) next.activation = activation
+  if (sameGoalFact(previous, next)) return false
+  row.goal = next
+  return true
+}
+
+/** Wire projection of one internal row (exact frozen field set/order; `goal`
+ *  is a post-freeze additive field and stays ABSENT while unknown). */
 function toWireRow(row: StoredRow): SessionStateRow {
   return {
     sessionId: row.sessionId,
@@ -259,6 +346,9 @@ function toWireRow(row: StoredRow): SessionStateRow {
     completedAtSource: row.completedAtSource,
     lastRunningAt: row.lastRunningAt,
     lastTurnEnd: row.lastTurnEnd,
+    ...(row.goal === undefined
+      ? {}
+      : { goal: row.goal === null ? null : cloneGoalFact(row.goal) }),
     // 这一行事实的观察时刻（观察者时钟，host 域）。
     factAt: row.observedAt,
   }
@@ -294,6 +384,14 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
   const now = deps.now ?? (() => Date.now())
   // Observer epoch id; a fresh one per process (gap reconstruction input).
   const epoch = randomUUID()
+
+  /** Persisted projection of one row: the goal fact is written without its
+   *  process-local `activation` (and without any unknown field). */
+  function persistedRow(row: StoredRow): StoredRow {
+    const goal = row.goal
+    if (goal === undefined || goal === null) return { ...row }
+    return { ...row, goal: persistedGoalFact(goal) }
+  }
   const sessionStateDir = join(deps.stateDir, SESSION_STATE_DIR_NAME)
   const filePath = join(sessionStateDir, SESSION_STATE_FILE_NAME)
   ensurePrivateDirectoryNoFollow(sessionStateDir, SESSION_STATE_DIR_MODE)
@@ -303,13 +401,43 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
   const ring: SessionStateDelta[] = []
   const listeners = new Set<(delta: SessionStateDelta) => void>()
   const gapCandidates = new Set<string>()
+  /**
+   * Process-local activation edges whose goal id has not matched a projected
+   * row yet (the create raced a lagging session/list projection) — P2a
+   * identity binding. At most one edge per session (the latest wins); never
+   * persisted, cleared with the epoch and with the row's removal/prune.
+   * Bounded by {@link MAX_PENDING_GOAL_ACTIVATIONS}: a host can emit edges for
+   * ids no baseline ever carries, so the oldest retained edge is evicted and
+   * counted in `dropped.goalActivations` (never silent).
+   */
+  const pendingGoalActivations = new Map<string, { goalId: string | null; activation: SessionStateGoalActivation }>()
+
+  /** Retain one edge (latest wins) under the map cap. */
+  function retainPendingGoalActivation(
+    sessionId: string,
+    edge: { goalId: string | null; activation: SessionStateGoalActivation },
+  ): void {
+    const retained = pendingGoalActivations.has(sessionId)
+    if (!retained && pendingGoalActivations.size >= MAX_PENDING_GOAL_ACTIVATIONS) {
+      const oldest = pendingGoalActivations.keys().next()
+      if (oldest.done !== true) pendingGoalActivations.delete(oldest.value)
+      dropped.goalActivations += 1
+      warn('pending goal-activation cap reached; dropped the oldest retained edge (never silent)')
+    }
+    // Map.set on an existing key does NOT move it to the end: an updated edge
+    // would keep its first-seen position and be evicted as "oldest" on the next
+    // overflow. Delete-then-set refreshes the retention order (LRU: eviction is
+    // least-recently-updated, never least-recently-first-seen).
+    if (retained) pendingGoalActivations.delete(sessionId)
+    pendingGoalActivations.set(sessionId, edge)
+  }
   let firstBaselineDone = false
 
   let cursor = 0
   let readFloor = 0
   let mode: SessionStateMode = 'poll'
   let host: StoredHost = { state: 'unknown', serviceable: false, since: now(), lastBaselineAt: null, baselineOk: false }
-  let dropped = { sessions: 0, readClients: 0, readMarks: 0 }
+  let dropped = { sessions: 0, readClients: 0, readMarks: 0, goalActivations: 0 }
   // 每条完成边沿的 turn/end 分类构成（与 follow 读取一一对应）。
   const turnEnds = { completed: 0, userStopped: 0, neutral: 0, unreadable: 0 }
   let integrity: SessionStateStoreStatus['integrity'] = 'ok'
@@ -340,7 +468,7 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
       sessions: [],
       readMarks: {},
       readFloor: 0,
-      dropped: { sessions: 0, readClients: 0, readMarks: 0 },
+      dropped: { sessions: 0, readClients: 0, readMarks: 0, goalActivations: 0 },
     }
   }
 
@@ -404,8 +532,10 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
     }
     normalized.readMarks = marks
     // Load-time losses ride the document itself (adoptDocument replaces the
-    // in-memory counters); a closure-only increment would be silently lost.
-    normalized.dropped = { sessions: droppedSessions, readClients: droppedClients, readMarks: 0 }
+    // in-memory counters); a closure-only increment would be silently lost. The
+    // process-local readMarks/goalActivations counters load as 0: their retained
+    // state is never persisted, so adopting a stale value would be a lie.
+    normalized.dropped = { sessions: droppedSessions, readClients: droppedClients, readMarks: 0, goalActivations: 0 }
     return { doc: normalized, droppedSessions }
   }
 
@@ -432,7 +562,28 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
       observedAt: isWatermark(value.observedAt) ? value.observedAt : 0,
       parentSessionId: typeof value.parentSessionId === 'string' ? value.parentSessionId : null,
       origin: value.origin === 'subagent' ? 'subagent' : null,
+      goal: validateGoalFact(value.goal),
     }
+  }
+
+  /**
+   * Validate one persisted goal fact. A persisted `activation` is deliberately
+   * IGNORED: activation is a process-local value, so a restart must clear it
+   * back to unknown (never adopt a stale edge from disk). Unknown extra fields
+   * are dropped by construction (whitelist), matching the wire projector.
+   */
+  function validateGoalFact(value: unknown): SessionStateGoalFact | null | undefined {
+    if (value === null) return null
+    if (!isPlainRecord(value)) return undefined
+    const goalId = value.goalId
+    const revision = value.revision
+    const phase = value.phase
+    if (typeof goalId !== 'string' || goalId.length === 0) return undefined
+    if (!isWatermark(revision) || revision < 1) return undefined
+    if (phase !== 'active' && phase !== 'paused' && phase !== 'blocked' && phase !== 'complete') return undefined
+    const fact: SessionStateGoalFact = { goalId, revision, phase }
+    if (isWatermark(value.updatedAt)) fact.updatedAt = value.updatedAt
+    return fact
   }
 
   function validateTurnEnd(value: unknown): SessionTurnEnd | null {
@@ -494,7 +645,11 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
     dropped = {
       sessions: isWatermark(doc.dropped?.sessions) ? doc.dropped.sessions : 0,
       readClients: isWatermark(doc.dropped?.readClients) ? doc.dropped.readClients : 0,
-      readMarks: isWatermark(doc.dropped?.readMarks) ? doc.dropped.readMarks : 0,
+      // readMarks / goalActivations 是进程内累计计数：validateDocument 在加载时
+      // 已按契约把它们归 0（保留边不落盘，重启本就不继承），这里从 0 起算。
+      // 绝不按持久值读——那是 validateDocument 永不产生非零值的死分支。
+      readMarks: 0,
+      goalActivations: 0,
     }
     revision = isWatermark(doc.revision) ? doc.revision : 0
     for (const row of doc.sessions) {
@@ -529,9 +684,15 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
     const ordered = [...rows.values()].sort((a, b) => a.observedAt - b.observedAt)
     for (const row of ordered.slice(0, rows.size - MAX_SESSIONS)) {
       rows.delete(row.sessionId)
+      // Eviction is a deletion, not a quiet field wipe: the client must be told
+      // (applyRemoved discipline), or an SSE client keeps a phantom row forever.
+      deltaSessions.delete(row.sessionId)
+      deltaRemoved.add(row.sessionId)
+      if (pendingGoalActivations.delete(row.sessionId)) dropped.goalActivations += 1
       dropped.sessions += 1
     }
     warn('session cap reached; dropped ' + dropped.sessions + ' oldest row(s) (never silent)')
+    commitDelta()
   }
 
   function trimReadClients(): void {
@@ -551,12 +712,18 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
   }
 
   async function flush(): Promise<void> {
-    if (persistBlocked) return
     if (flushing !== null) return flushing
     const run = (async () => {
       try {
+        // The row/read-client caps are in-memory invariants, NOT persistence
+        // concerns: they must hold even when persistence is refused (double
+        // corruption early-returns below). Enforce them BEFORE the
+        // persistBlocked gate, or a 2005-row baseline would be served over the
+        // cap with dropped.sessions stuck at 0 in exactly the state where the
+        // snapshot is the only evidence left.
         enforceLimits()
         trimReadClients()
+        if (persistBlocked) return
         revision += 1
         doc.schemaVersion = SESSION_STATE_SCHEMA_VERSION
         doc.revision = revision
@@ -564,7 +731,7 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
         doc.watcherEpoch = epoch
         doc.mode = mode
         doc.host = host
-        doc.sessions = [...rows.values()].map(row => ({ ...row }))
+        doc.sessions = [...rows.values()].map(persistedRow)
         const marks: SessionStateDocument['readMarks'] = {}
         for (const [clientId, client] of readClients) {
           const clientMarks: Record<string, { readThrough: number; at: number }> = {}
@@ -662,6 +829,30 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
     return row
   }
 
+  /**
+   * Apply a retained activation edge after a baseline/added merged a goal fact
+   * into the row. The edge is consumed only when the projected goal identity
+   * matches (an unbound edge matches the current known goal); a mismatching edge
+   * stays retained for a later projection and never touches the previous goal's
+   * row. An absent/unknown/null projection keeps the edge too: the create may
+   * still be racing this baseline.
+   * @returns whether the row's fact changed (delta emission input).
+   */
+  function applyRetainedGoalActivation(row: StoredRow, at: number): boolean {
+    const goal = row.goal
+    if (goal === undefined || goal === null) return false
+    const edge = pendingGoalActivations.get(row.sessionId)
+    if (edge === undefined) return false
+    if (edge.goalId !== null && edge.goalId !== goal.goalId) return false
+    pendingGoalActivations.delete(row.sessionId)
+    if (goal.activation === edge.activation) return false
+    const next = cloneGoalFact(goal)
+    next.activation = edge.activation
+    row.goal = next
+    row.observedAt = at
+    return true
+  }
+
   return {
     status(): SessionStateStoreStatus {
       return {
@@ -715,6 +906,12 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
         row.observedAt = opts.at
         row.parentSessionId = item.parentSessionId
         row.origin = item.origin
+        // Baseline refresh is the phase/watermark authority; activation (if any)
+        // survives an unchanged goalId, and a retained edge for THIS goal id
+        // lands the moment the create reaches the projection.
+        const mergedGoal = mergeGoalFact(row, item.goal)
+        const retainedGoal = applyRetainedGoalActivation(row, opts.at)
+        const goalChanged = mergedGoal || retainedGoal
         if (item.running) {
           const resolves = row.completedAt !== null || row.completedAtSource !== null || row.lastTurnEnd !== null
           row.running = true
@@ -723,7 +920,7 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
           row.completedAtSource = null
           row.lastTurnEnd = null
           gapCandidates.delete(item.sessionId)
-          if (!wasPresent || !previousRunning || resolves || row.updatedAt !== previousUpdatedAt) {
+          if (!wasPresent || !previousRunning || resolves || row.updatedAt !== previousUpdatedAt || goalChanged) {
             deltaSessions.set(item.sessionId, toWireRow(row))
           }
         } else if (previousRunning) {
@@ -734,7 +931,7 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
           edges.push({ sessionId: item.sessionId, source })
           deltaSessions.set(item.sessionId, toWireRow(row))
         } else {
-          if (!wasPresent || row.running !== false || row.updatedAt !== previousUpdatedAt) {
+          if (!wasPresent || row.running !== false || row.updatedAt !== previousUpdatedAt || goalChanged) {
             row.running = false
             deltaSessions.set(item.sessionId, toWireRow(row))
           }
@@ -750,6 +947,9 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
           deltaSessions.set(row.sessionId, toWireRow(row))
         } else {
           rows.delete(row.sessionId)
+          // The retained edge dies with the pruned row: a re-listed session id
+          // must never inherit it (same rule as applyRemoved / the row cap).
+          pendingGoalActivations.delete(row.sessionId)
           deltaRemoved.add(row.sessionId)
           deltaSessions.delete(row.sessionId)
           for (const client of readClients.values()) client.marks.delete(row.sessionId)
@@ -820,6 +1020,10 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
       row.parentSessionId = item.parentSessionId
       row.origin = item.origin
       row.updatedAt = Math.max(row.updatedAt, item.updatedAt)
+      mergeGoalFact(row, item.goal)
+      // An added frame can be the first projection that carries the new goal:
+      // the retained activation edge lands with the row itself.
+      applyRetainedGoalActivation(row, at)
       if (item.running) {
         row.running = true
         row.lastRunningAt = at
@@ -834,7 +1038,12 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
     },
 
     applyRemoved(sessionId): boolean {
+      // The retained edge dies with the session even when no row ever existed
+      // (an activation edge that outraced its create): a re-created session id
+      // must never inherit it. Delete BEFORE the early return.
+      pendingGoalActivations.delete(sessionId)
       if (!rows.has(sessionId)) return false
+      // The goal fact dies with the row.
       rows.delete(sessionId)
       deltaSessions.delete(sessionId)
       deltaRemoved.add(sessionId)
@@ -842,6 +1051,65 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
       recomputeSubagentCounts()
       commitDelta()
       return true
+    },
+
+    applyGoalActivation(event, at): boolean {
+      const { sessionId } = event
+      if (event.activation === null) {
+        // The host explicitly reports no current goal; a retained edge for a
+        // goal that no longer exists is dead information now.
+        pendingGoalActivations.delete(sessionId)
+        // Only a KNOWN fact is resolved to `null`: an unknown row stays unknown
+        // (we never fabricate "no goal" from an activation edge that may have
+        // outraced the baseline).
+        const row = rows.get(sessionId)
+        if (row === undefined || row.goal === undefined || row.goal === null) return false
+        row.goal = null
+        row.observedAt = at
+        deltaSessions.set(sessionId, toWireRow(row))
+        commitDelta()
+        return true
+      }
+      const row = rows.get(sessionId)
+      const goal = row === undefined ? undefined : row.goal
+      // Identity binding (P2a): a bound edge lands ONLY on the projected goal
+      // with the same id; an unbound edge acts on the current known goal
+      // (mirroring the renderer P2b parser). An unknown row, an unknown
+      // projection, or a create that outran the baseline retains the edge until
+      // a baseline/added brings the matching identity — never guessed onto the
+      // previous goal's row (that produced complete+armed).
+      if (row === undefined || goal === undefined || goal === null
+        || (event.goalId !== null && event.goalId !== goal.goalId)) {
+        retainPendingGoalActivation(sessionId, { goalId: event.goalId, activation: event.activation })
+        return false
+      }
+      // The latest event for this session supersedes any earlier retained edge.
+      pendingGoalActivations.delete(sessionId)
+      if (goal.activation === event.activation) return false
+      const next = cloneGoalFact(goal)
+      next.activation = event.activation
+      row.goal = next
+      row.observedAt = at
+      deltaSessions.set(sessionId, toWireRow(row))
+      commitDelta()
+      return true
+    },
+
+    clearGoalActivations(at): boolean {
+      // A new $events generation invalidates every process-local edge — both the
+      // applied values below and edges still waiting for their projection.
+      pendingGoalActivations.clear()
+      let changed = false
+      for (const row of rows.values()) {
+        const goal = row.goal
+        if (goal === undefined || goal === null || goal.activation === undefined) continue
+        row.goal = persistedGoalFact(goal)
+        row.observedAt = at
+        deltaSessions.set(row.sessionId, toWireRow(row))
+        changed = true
+      }
+      if (changed) commitDelta()
+      return changed
     },
 
     applyPending(sessionId, kind, at): boolean {
@@ -1092,9 +1360,26 @@ export function createSessionStateObserver(deps: SessionStateObserverDeps): Sess
     }
   }
 
+  // Ready-edge latch: EITHER transition of `ready` is a $events generation
+  // boundary (false -> true: first ready, reconnect, R21 resubscribe; true ->
+  // false: socket death, host end/error, handshake timeout). Emit-type frames
+  // have no replay, so the process-local activation learned from them is not
+  // trustworthy across either edge.
+  let lastReady = false
   function refreshMode(): void {
     if (!started) return
-    store.setMode(mux.status().ready ? 'sse' : 'poll')
+    const status = mux.status()
+    // ANY ready transition opens a NEW $events generation (first ready,
+    // reconnect, R21 resubscribe) — and equally closes one (socket death,
+    // host end/error, handshake timeout). Emit-type frames have no replay, so
+    // the process-local activation learned from them is not trustworthy on
+    // EITHER side of the edge: on false -> true the gap invalidates it, and on
+    // true -> false the poll window that follows serves stale armed/disarmed
+    // values from the dead generation (suppressing/prematurely flushing the
+    // renderer's armed semantics). Withdraw on every transition.
+    if (status.ready !== lastReady) store.clearGoalActivations(now())
+    lastReady = status.ready
+    store.setMode(status.ready ? 'sse' : 'poll')
   }
 
   function applyBaseline(items: readonly SessionListBaselineItem[], at: number, canClassify: boolean): void {
@@ -1190,6 +1475,9 @@ export function createSessionStateObserver(deps: SessionStateObserverDeps): Sess
     onActivity: (sessionId, updatedAt, at) => { store.applyActivity(sessionId, updatedAt, at) },
     onAdded: (item, at) => { store.applyAdded(item, at) },
     onRemoved: (sessionId, at) => { store.applyRemoved(sessionId, at) },
+    onGoalActivation: (event) => {
+      store.applyGoalActivation(event, now())
+    },
     onPending: (sessionId, kind, eventId, at) => {
       pendingEvents.set(eventId, sessionId)
       store.applyPending(sessionId, kind, at)
