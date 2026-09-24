@@ -7,6 +7,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, type Dispatch, type SetStateAction } from 'react'
 import { withoutRemovedSourceIds, withoutRemovedSourceKeys } from '../aggregate-refresh.ts'
+import type { ViewStore } from '../host/view-store.ts'
 import {
   HARVEST_ABANDON_MS, harvestAbandoned, harvestAttemptStarted, harvestDeadlinePassed, harvestParked,
   harvestParkedRecord, harvestPending, harvestRetryDue, pickPrewarmTarget, prewarmCandidates,
@@ -40,7 +41,6 @@ export interface ViewSchedulerDeps {
   setShellStates: Dispatch<SetStateAction<Record<string, ShellState>>>
   // refs
   abandonedViewsRef: { current: MapLedgerView }
-  activeViewRef: { current: string }
   autoPrewarmedRef: { current: SetLedgerView }
   deferredBootRef: { current: ReadonlySet<string> }
   degradedRetriedRef: { current: Record<string, boolean> }
@@ -51,10 +51,9 @@ export interface ViewSchedulerDeps {
   intentBudgetRef: { current: IntentPrewarmBudget }
   intentPriorityRef: { current: Set<string> }
   localSettledRef: { current: boolean }
-  paintedViewRef: { current: string }
+  viewStore: ViewStore
   pendingViewRef: { current: string | null }
   prewarmEligibleRef: { current: Set<string> }
-  prewarmInflightAtRef: { current: number }
   prewarmInflightRef: { current: string | null }
   prewarmQueueRef: { current: string[] }
   prewarmSuppressedRef: { current: SetLedgerView }
@@ -87,10 +86,10 @@ export function useViewScheduler(deps: ViewSchedulerDeps): ViewScheduler {
     activeView, health, liveServerIds, managedRuntime, mountedViews,
     remoteInstances, remoteStatus, shellStates,
     setMountedViews, setRetryTokens, setShellStates,
-    abandonedViewsRef, activeViewRef, autoPrewarmedRef, deferredBootRef, degradedRetriedRef,
+    abandonedViewsRef, viewStore, autoPrewarmedRef, deferredBootRef, degradedRetriedRef,
     harvestCandidatesRef, harvestIntentRef, harvestStateRef, hiddenSinceRef, intentBudgetRef,
-    intentPriorityRef, localSettledRef, paintedViewRef, pendingViewRef,
-    prewarmEligibleRef, prewarmInflightAtRef, prewarmInflightRef, prewarmQueueRef,
+    intentPriorityRef, localSettledRef, pendingViewRef,
+    prewarmEligibleRef, prewarmInflightRef, prewarmQueueRef,
     prewarmSuppressedRef, reclaimViewRef, settingsTargetRef, viewBootStartedAtRef,
     MAX_PREWARMED_REMOTE_VIEWS,
   } = deps
@@ -204,7 +203,6 @@ export function useViewScheduler(deps: ViewSchedulerDeps): ViewScheduler {
       harvestStateRef.current[next] = harvestAttemptStarted(harvestStateRef.current[next], now)
     }
     prewarmInflightRef.current = next
-    prewarmInflightAtRef.current = now
     autoPrewarmedRef.current.add(next)
     // 一次后台挂载真的开始。
     recordPrewarm('attempt', next)
@@ -216,13 +214,12 @@ export function useViewScheduler(deps: ViewSchedulerDeps): ViewScheduler {
     if (instanceId === LOCAL_INSTANCE_ID) localSettledRef.current = true
     if (prewarmInflightRef.current === instanceId) {
       prewarmInflightRef.current = null
-      prewarmInflightAtRef.current = 0
     }
     // 保留策略：settle 完成才起 60s 回收窗——隐藏视图（预热完成/切走后
     // settle）从此刻计"可回收时长"，boot 耗时不被白付；**屏上视图保持无键**
     // （判据是 paintedView，不是 activeView——持有窗内"已选中但还没画上屏"
     // 的视图仍是隐藏的，给它起表不会误拆，但屏上那个壳绝不能开始隐藏计时）。
-    if (instanceId === paintedViewRef.current) delete hiddenSinceRef.current[instanceId]
+    if (instanceId === viewStore.getSnapshot().painted) delete hiddenSinceRef.current[instanceId]
     else hiddenSinceRef.current[instanceId] = Date.now()
     // 无条件 drain：任何 settle 都可能是"在途预热完成"或"本地首次 settle"
     // 的触发器（后者在状态先于本地就绪时不会因依赖变化而触发队列推进）。
@@ -299,7 +296,7 @@ export function useViewScheduler(deps: ViewSchedulerDeps): ViewScheduler {
     // **屏上的壳永不被回收**——持有窗内 painted 仍是旧视图而 active 已是目标，
     // 只查 active/pending 会把用户正在看的那一屏拆掉（这是本函数
     // 唯一的拆除入口，守卫放这里覆盖推迟/放弃/retention/收割所有调用臂）。
-    if (id === activeViewRef.current || id === paintedViewRef.current || id === pendingViewRef.current) return
+    if (id === viewStore.getSnapshot().active || id === viewStore.getSnapshot().painted || id === pendingViewRef.current) return
     // 设置面板正在编辑的来源：拆壳 = 面板当前面消失（design 05 的面板 hold）。
     // 守卫放在**唯一拆除入口**上而不是逐个调用点：推迟臂与 retention 循环各有同名
     // 守卫，但 135s 放弃臂、收割失败/放弃与遮罩放弃落地臂都能到达本函数——任何一条
@@ -317,7 +314,6 @@ export function useViewScheduler(deps: ViewSchedulerDeps): ViewScheduler {
     // 再回收，否则 prewarmInflight 守卫会把自己挡回去（保留回收语义不变）。
     if (reason === 'harvest' && prewarmInflightRef.current === id) {
       prewarmInflightRef.current = null
-      prewarmInflightAtRef.current = 0
     }
     if (id === prewarmInflightRef.current) return
     harvestIntentRef.current.delete(id)
@@ -412,9 +408,8 @@ export function useViewScheduler(deps: ViewSchedulerDeps): ViewScheduler {
       }
       if (prewarmInflightRef.current === id) {
         prewarmInflightRef.current = null
-        prewarmInflightAtRef.current = 0
       }
-      if (id === activeViewRef.current || id === pendingViewRef.current) {
+      if (id === viewStore.getSnapshot().active || id === pendingViewRef.current) {
         // 活动/待开视图不可回收（reclaimView 会拒绝）。若不标记，用户会永久停在
         // boot 蒙层上（无错误、无重试）——标记为失败让既有失败覆盖层 + 重试出现。
         markAbandonedShellFailed(id)
@@ -427,7 +422,7 @@ export function useViewScheduler(deps: ViewSchedulerDeps): ViewScheduler {
       if (!isDeferredReclaimDue({
         deferred: deferredBootRef.current.has(id),
         settled: settledViewIds.has(id),
-        busy: id === activeViewRef.current || id === pendingViewRef.current,
+        busy: id === viewStore.getSnapshot().active || id === pendingViewRef.current,
         settingsTarget: id === settingsTargetRef.current,
         hiddenSinceMs: hiddenSinceRef.current[id],
         nowMs: now,
@@ -449,7 +444,7 @@ export function useViewScheduler(deps: ViewSchedulerDeps): ViewScheduler {
       mountedViews: retentionMountedViews,
       // 保留判定按 **painted**（"谁在屏上"）——持有窗内 active 已是目标，传它会把
       // 屏上的旧视图算成隐藏壳、并让 hiddenNonLocalCount 少算一个。
-      activeViewId: paintedViewRef.current,
+      activeViewId: viewStore.getSnapshot().painted,
       hiddenSince: hiddenSinceRef.current,
       settled: settledViewIds,
       pendingViewId: pendingViewRef.current,

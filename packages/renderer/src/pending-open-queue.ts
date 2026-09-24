@@ -1,10 +1,5 @@
 import { waitForCondition } from '@dsh-chamber/dsh-stream-state'
-
-/** The real clock, injected: the package itself imports nothing. */
-const WAIT_SCHEDULER = {
-  setTimeout: (run: () => void, ms: number): unknown => setTimeout(run, ms),
-  clearTimeout: (handle: unknown): void => { clearTimeout(handle as ReturnType<typeof setTimeout>) },
-}
+import { WAIT_SCHEDULER } from './wait-scheduler.ts'
 
 interface PendingOpen {
   sessionId: string

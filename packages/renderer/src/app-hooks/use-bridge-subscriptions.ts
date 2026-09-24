@@ -20,8 +20,6 @@ import { errorMessage } from '../status.ts'
 import { sourceIdForRawInstance } from '../transport-source.ts'
 import { completionWatermark } from '../watermark.ts'
 import type { CompleteLedger } from '../complete-ledger.ts'
-import type { SessionFactsSnapshot } from '../session-facts-source.ts'
-import type { SshInstanceSpec } from '../global.d.ts'
 import {
   chamberBridge,
   instanceSnapshotSignature,
@@ -41,7 +39,6 @@ import {
   sweepPendingSessions,
   sweepPendingWorkspaces,
   type InstanceAggregate,
-  type InstanceRuntimeReport,
   type InstanceSnapshot,
   type IntentPrewarmBudget,
   type PluginGraphDiagnostic,
@@ -49,6 +46,10 @@ import {
   type SessionEchoLedger,
   type WorkspaceEchoLedger,
 } from '@dsh-chamber/dsh-chamber-client-core'
+import type { EchoStore } from '../host/echo-store.ts'
+import type { FactsStore } from '../host/facts-store.ts'
+import type { MountedSourcesStore } from '../host/mounted-sources-store.ts'
+import type { RemotesStore } from '../host/remotes-store.ts'
 
 /** 会话列表刷新合并窗（唯一消费者在本 hook）。 */
 const SESSION_LIST_REFRESH_COALESCE_MS = 5_000
@@ -105,26 +106,22 @@ export interface BridgeSubscriptionsDeps {
   prewarmSuppressedRef: { current: SetLedgerView }
   readyAggregateSourcesRef: { current: Set<string> }
   reclaimViewRef: { current: (id: string, reason?: 'retention' | 'harvest') => void }
-  remoteInstancesRef: { current: SshInstanceSpec[] }
-  remoteRosterSettledRef: { current: boolean }
-  sessionArchiveRef: { current: SessionArchiveLedger }
-  sessionEchoRef: { current: SessionEchoLedger }
-  sessionFactsRef: { current: Record<string, SessionFactsSnapshot | undefined> }
+  remotesStore: RemotesStore
+  isRosterSettled: () => boolean
+  echoStore: EchoStore
+  factsStore: FactsStore
   sessionListRefreshAtRef: { current: Record<string, number> }
   sessionListRefreshPendingRef: { current: Record<string, string[]> }
   settingsTargetRef: { current: string | undefined }
   snapshotAtRef: { current: Record<string, number> }
-  snapshotSourcesRef: { current: Record<string, true> }
+  mountedSources: MountedSourcesStore
   sourceLifecyclesRef: { current: SourceOwnershipRegistry | null }
   watchdogAggregatesRef: { current: Record<string, InstanceAggregate> }
-  workspaceEchoRef: { current: WorkspaceEchoLedger }
   // state setters
   setAggregates: Dispatch<SetStateAction<Record<string, InstanceAggregate>>>
   setHostFacts: Dispatch<SetStateAction<Record<string, { dshVersion?: string } | undefined>>>
   setMountedViews: Dispatch<SetStateAction<string[]>>
   setPluginDiagnostics: Dispatch<SetStateAction<Record<string, PluginGraphDiagnostic | undefined>>>
-  setRuntimeFacts: Dispatch<SetStateAction<Record<string, InstanceRuntimeReport | undefined>>>
-  setSnapshotSources: Dispatch<SetStateAction<Record<string, true>>>
   setUnverified: (updater: (prev: readonly string[]) => readonly string[]) => void
   // 值 / 常量
   sshBridgeReady: boolean
@@ -142,11 +139,11 @@ export function useBridgeSubscriptions(deps: BridgeSubscriptionsDeps): void {
     harvestStateRef, intentBudgetRef, intentPriorityRef, liveServerIdsRef, mutationRefreshSeqRef,
     pendingDeepLinkDeliveryRef, prevRunningRef, prevRuntimeFactsRef, prewarmEligibleRef,
     prewarmQueueRef, prewarmSuppressedRef, readyAggregateSourcesRef, reclaimViewRef,
-    remoteInstancesRef, remoteRosterSettledRef, sessionArchiveRef, sessionEchoRef, sessionFactsRef,
+    remotesStore, isRosterSettled, echoStore, factsStore,
     sessionListRefreshAtRef, sessionListRefreshPendingRef, settingsTargetRef, snapshotAtRef,
-    snapshotSourcesRef, sourceLifecyclesRef, watchdogAggregatesRef, workspaceEchoRef,
-    setAggregates, setHostFacts, setMountedViews, setPluginDiagnostics, setRuntimeFacts,
-    setSnapshotSources, setUnverified,
+    mountedSources, sourceLifecyclesRef, watchdogAggregatesRef,
+    setAggregates, setHostFacts, setMountedViews, setPluginDiagnostics,
+    setUnverified,
     sshBridgeReady, LISTENER_READY_RETRY_MS, LISTENER_READY_RETRY_LIMIT,
   } = deps
 
@@ -249,10 +246,10 @@ export function useBridgeSubscriptions(deps: BridgeSubscriptionsDeps): void {
       }
       const sourceId = intent.instanceId === 'local'
         ? LOCAL_INSTANCE_ID
-        : remoteRosterSettledRef.current
-          ? sourceIdForRawInstance(intent.instanceId, remoteInstancesRef.current)
+        : isRosterSettled()
+          ? sourceIdForRawInstance(intent.instanceId, remotesStore.getSnapshot().instances)
           : null
-      if (intent.instanceId !== 'local' && remoteRosterSettledRef.current && sourceId === null) {
+      if (intent.instanceId !== 'local' && isRosterSettled() && sourceId === null) {
         console.warn(`[renderer] ignored deep-link raw source absent from the authoritative roster: ${intent.instanceId}`)
         void acknowledgeDeepLink(intent).catch(error => {
           reportDeepLinkAckFailure(intent, error)
@@ -297,7 +294,7 @@ export function useBridgeSubscriptions(deps: BridgeSubscriptionsDeps): void {
       }
       const decision = routeDeepLinkActivation(
         sourceId,
-        remoteRosterSettledRef.current,
+        isRosterSettled(),
         liveServerIdsRef.current,
         previous?.sourceId ?? null,
       )
@@ -394,7 +391,7 @@ export function useBridgeSubscriptions(deps: BridgeSubscriptionsDeps): void {
       const owner = sourceLifecyclesRef.current!.capture(sourceId)
       if (owner === null) return
       const now = Date.now()
-      let ledger = sweepPendingWorkspaces(workspaceEchoRef.current, now)
+      let ledger = sweepPendingWorkspaces(echoStore.getSnapshot().workspace, now)
       ledger = recordPendingWorkspace(ledger, sourceId, {
         workspaceId: fact.workspaceId,
         path: fact.path,
@@ -406,7 +403,7 @@ export function useBridgeSubscriptions(deps: BridgeSubscriptionsDeps): void {
         // 标签，不必先显示路径 basename、等那次 rename 落地再翻转。
         ...(fact.title === undefined ? {} : { title: fact.title }),
       }, now)
-      if (ledger !== workspaceEchoRef.current) updateWorkspaceEcho(ledger)
+      updateWorkspaceEcho(ledger)
     })
   }, [updateWorkspaceEcho])
   /**
@@ -432,9 +429,9 @@ export function useBridgeSubscriptions(deps: BridgeSubscriptionsDeps): void {
       // (whose doc enumerates these ticks): the retired entry itself is dropped
       // eagerly by removePendingWorkspace, the sweep covers the entries whose
       // convergence never came. Identity-preserving, so a no-op costs no render.
-      let ledger = sweepPendingWorkspaces(workspaceEchoRef.current, Date.now())
+      let ledger = sweepPendingWorkspaces(echoStore.getSnapshot().workspace, Date.now())
       ledger = removePendingWorkspace(ledger, sourceId, { workspaceId: fact.workspaceId, path: fact.path })
-      if (ledger !== workspaceEchoRef.current) updateWorkspaceEcho(ledger)
+      updateWorkspaceEcho(ledger)
     })
   }, [updateWorkspaceEcho])
   useEffect(() => {
@@ -444,12 +441,12 @@ export function useBridgeSubscriptions(deps: BridgeSubscriptionsDeps): void {
       const owner = sourceLifecyclesRef.current!.capture(sourceId)
       if (owner === null) return
       const next = renamePendingWorkspace(
-        workspaceEchoRef.current,
+        echoStore.getSnapshot().workspace,
         sourceId,
         fact.workspaceId,
         fact.title,
       )
-      if (next !== workspaceEchoRef.current) updateWorkspaceEcho(next)
+      updateWorkspaceEcho(next)
     })
   }, [updateWorkspaceEcho])
   /**
@@ -486,7 +483,7 @@ export function useBridgeSubscriptions(deps: BridgeSubscriptionsDeps): void {
       const target = byId ?? byParent
       const workspaceId = fact.workspaceId ?? target?.workspaceId
       const path = target?.path
-      let ledger = sweepPendingSessions(sessionEchoRef.current, now)
+      let ledger = sweepPendingSessions(echoStore.getSnapshot().session, now)
       ledger = recordPendingSession(ledger, sourceId, {
         sessionId: fact.sessionId,
         ...(workspaceId === undefined ? {} : { workspaceId }),
@@ -494,7 +491,7 @@ export function useBridgeSubscriptions(deps: BridgeSubscriptionsDeps): void {
         ...(fact.title === undefined ? {} : { title: fact.title }),
         blank: fact.blank,
       }, now)
-      if (ledger !== sessionEchoRef.current) updateSessionEcho(ledger)
+      updateSessionEcho(ledger)
       chamberBridge.requestSessionListRefresh(sourceId)
     })
   }, [updateSessionEcho])
@@ -512,11 +509,11 @@ export function useBridgeSubscriptions(deps: BridgeSubscriptionsDeps): void {
       const owner = sourceLifecyclesRef.current!.capture(sourceId)
       if (owner === null) return
       const now = Date.now()
-      const withoutPending = removePendingSession(sessionEchoRef.current, sourceId, fact.sessionId)
-      if (withoutPending !== sessionEchoRef.current) updateSessionEcho(withoutPending)
-      const swept = sweepPendingArchives(sessionArchiveRef.current, now)
+      const withoutPending = removePendingSession(echoStore.getSnapshot().session, sourceId, fact.sessionId)
+      updateSessionEcho(withoutPending)
+      const swept = sweepPendingArchives(echoStore.getSnapshot().archive, now)
       const archived = recordPendingArchive(swept, sourceId, fact.sessionId, now)
-      if (archived !== sessionArchiveRef.current) updateSessionArchive(archived)
+      updateSessionArchive(archived)
     })
   }, [updateSessionArchive, updateSessionEcho])
   /**
@@ -525,8 +522,8 @@ export function useBridgeSubscriptions(deps: BridgeSubscriptionsDeps): void {
    * 之前：权威归档集与聚合是否已提交无关）。
    */
   const reconcileArchiveEchoes = useCallback((sourceId: string, archivedSessionIds: readonly string[]): void => {
-    const next = reconcilePendingArchives(sessionArchiveRef.current, sourceId, archivedSessionIds)
-    if (next !== sessionArchiveRef.current) updateSessionArchive(next)
+    const next = reconcilePendingArchives(echoStore.getSnapshot().archive, sourceId, archivedSessionIds)
+    updateSessionArchive(next)
   }, [updateSessionArchive])
   useEffect(() => {
     return chamberBridge.onInstanceSnapshot((
@@ -544,35 +541,24 @@ export function useBridgeSubscriptions(deps: BridgeSubscriptionsDeps): void {
         // source with a last push keeps its mounted marker and recency so
         // planAggregateRefreshes never re-enables the unary fallback for it.
         if (snapshotAtRef.current[sourceId] === undefined) {
-          delete snapshotSourcesRef.current[sourceId]
+          mountedSources.withdraw(sourceId)
           delete snapshotAtRef.current[sourceId]
         }
       } else {
-        snapshotSourcesRef.current[sourceId] = true
+        mountedSources.mark(sourceId)
         snapshotAtRef.current[sourceId] = Date.now()
         // 成功验证：push 与 unary 提交同权，记水位并撤下呈现。
         factsAtRef.current[sourceId] = Date.now()
         setUnverified(prev => (prev.includes(sourceId) ? prev.filter(id => id !== sourceId) : prev))
       }
-      setSnapshotSources(prev => {
-        if (snapshot === undefined) {
-          if (snapshotAtRef.current[sourceId] !== undefined) return prev
-          if (prev[sourceId] === undefined) return prev
-          const next = { ...prev }
-          delete next[sourceId]
-          return next
-        }
-        if (prev[sourceId] === true) return prev
-        return { ...prev, [sourceId]: true }
-      })
       if (snapshot === undefined) return
       {
         // TTL first, then retire whatever the authoritative list now covers: the
         // mounted push is the echo's convergence signal, so an entry it lists has
         // no job left and must not survive as a duplicate.
-        const swept = sweepPendingWorkspaces(workspaceEchoRef.current, Date.now())
+        const swept = sweepPendingWorkspaces(echoStore.getSnapshot().workspace, Date.now())
         const reconciled = reconcilePendingWorkspaces(swept, sourceId, snapshot.workspaces)
-        if (reconciled !== workspaceEchoRef.current) updateWorkspaceEcho(reconciled)
+        updateWorkspaceEcho(reconciled)
       }
       // 会话创建回声的权威收敛点：挂载壳自己的
       // 会话列表 + 工作区 follow 基线一旦把该会话**归属**到某个工作区（成员位，
@@ -582,9 +568,9 @@ export function useBridgeSubscriptions(deps: BridgeSubscriptionsDeps): void {
       // 无关）。该收敛同时覆盖「官方 session-list 刷新后 id 回来了但基线尚未归
       // 属」的中间态：中间态里回声仍在，行不会消失。
       {
-        const swept = sweepPendingSessions(sessionEchoRef.current, Date.now())
+        const swept = sweepPendingSessions(echoStore.getSnapshot().session, Date.now())
         const reconciled = reconcilePendingSessions(swept, sourceId, snapshot.workspaces)
-        if (reconciled !== sessionEchoRef.current) updateSessionEcho(reconciled)
+        updateSessionEcho(reconciled)
       }
       // 归档墓碑的权威收敛：只有挂载壳的 workspace follow 基线才带得出
       // 「宿主归档集」这一事实（archiveSetKnown），因此只认这一条；degraded 视图的
@@ -709,7 +695,7 @@ export function useBridgeSubscriptions(deps: BridgeSubscriptionsDeps): void {
       if (sourceId !== LOCAL_INSTANCE_ID && !liveServerIdsRef.current.has(sourceId)) return
       const currentSource = sourceLifecyclesRef.current!.capture(sourceId)
       if (currentSource === null || currentSource.fingerprint !== sourceFingerprint) return
-      setRuntimeFacts(prev => {
+      factsStore.setRuntime(prev => {
         if (report === undefined) {
           if (prev[sourceId] === undefined) return prev
           const next = { ...prev }
@@ -748,7 +734,7 @@ export function useBridgeSubscriptions(deps: BridgeSubscriptionsDeps): void {
       // ask/request；`usableFacts` 抑制只有这一处。
       const prevFacts = prevRuntimeFactsRef.current[sourceId]
       prevRuntimeFactsRef.current[sourceId] = report.sessions
-      const factsSnapshot = sessionFactsRef.current[sourceId]
+      const factsSnapshot = factsStore.getSnapshot().session[sourceId]
       const usableFacts = factsSnapshot !== undefined && factsSnapshot.verdict === 'ok' ? factsSnapshot : undefined
       const plan = planRuntimeNotifications({
         prev: prevFacts,

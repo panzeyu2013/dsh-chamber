@@ -198,9 +198,10 @@ test('P4/W3：可见性由 paintedView 驱动，选择与绘制分离', () => {
   const app = read('../../src/App.tsx')
   assert.match(
     app,
-    /const \[paintedView, setPaintedView\] = useState<string>\(LOCAL_INSTANCE_ID\)/,
-    'paintedView 必须是与 activeView 并列的 App 事实（初始 = local）',
+    /const \[viewStore\] = useState\(\(\) => createViewStore\(LOCAL_INSTANCE_ID\)\)/,
+    '视图对必须由 host/view-store.ts 单一持有（初始 = local）',
   )
+  assert.match(app, /const paintedView = view\.painted/, 'paintedView 是与 activeView 并列的同一份 store 快照')
   assert.ok(app.includes('active={paintedView === viewId}'), 'InstanceView 的可见性必须绑定 paintedView')
   assert.equal(
     /active=\{activeView === viewId\}/.test(app),
@@ -210,11 +211,11 @@ test('P4/W3：可见性由 paintedView 驱动，选择与绘制分离', () => {
   // 揭示回调的重验：单槽队列里的揭示意图可能已过期（用户点了 B 又点回 A；来源退役）。
   // 没有这道守卫，一个过期揭示会把已撤销的目标画回屏上。
   assert.ok(
-    app.split('if (activeViewRef.current !== selected) return').length - 1 >= 2,
-    '揭示的 microtask 与 view 过渡 update 回调都必须重验 activeViewRef.current === selected',
+    app.split('if (viewStore.getSnapshot().active !== selected) return').length - 1 >= 2,
+    '揭示的 microtask 与 view 过渡 update 回调都必须重验 store 的 active === selected',
   )
   assert.ok(
-    app.includes('if (paintedViewRef.current === target) return'),
+    app.includes('if (viewStore.getSnapshot().painted === target) return'),
     '揭示前必须再确认屏上目标未变（排队期间的改写不得重复起节）',
   )
   const revealEffect = /useLayoutEffect\(\(\) => \{[\s\S]*?shouldReveal\(\{[\s\S]*?\}, \[activeView, paintedView, shellStates, mountedViews, revealTick\]\)/.exec(app)
@@ -231,19 +232,20 @@ test('P4/W3：可见性由 paintedView 驱动，选择与绘制分离', () => {
 })
 
 test('P4/W3：保留 / 回收 / 计时 / 侧栏高亮 / 退役都跟随 paintedView', () => {
-  // 回收/隐藏计时/candidates 判定在 use-view-scheduler —— 本测试对两个
-  // 落点取并集判 presence（App + scheduler），无负断言，断言强度不变。
-  const app = read('../../src/App.tsx') + '\n' + read('../../src/app-hooks/use-view-scheduler.ts')
+  // 回收/隐藏计时/candidates 判定在 use-view-scheduler；投影本体已迁出 App 到
+  // host/servers.ts —— 本测试对三个落点取并集判 presence（App + scheduler +
+  // servers），无负断言，断言强度不变。
+  const app = read('../../src/App.tsx') + '\n' + read('../../src/app-hooks/use-view-scheduler.ts') + '\n' + read('../../src/host/servers.ts')
   assert.ok(
-    app.includes('id === activeViewRef.current || id === paintedViewRef.current || id === pendingViewRef.current'),
+    app.includes('id === viewStore.getSnapshot().active || id === viewStore.getSnapshot().painted || id === pendingViewRef.current'),
     'reclaimView 守卫必须含 painted：屏上的壳永不被回收（唯一拆除入口）',
   )
   assert.ok(
-    app.includes('activeViewId: paintedViewRef.current'),
+    app.includes('activeViewId: viewStore.getSnapshot().painted'),
     'decideReclaimCandidates 的 activeViewId 必须是 painted（否则持有窗内屏上壳被算成隐藏壳）',
   )
   assert.ok(
-    app.includes('if (instanceId === paintedViewRef.current) delete hiddenSinceRef.current[instanceId]'),
+    app.includes('if (instanceId === viewStore.getSnapshot().painted) delete hiddenSinceRef.current[instanceId]'),
     'settle 起表必须按 painted：屏上壳不开始隐藏计时',
   )
   assert.ok(app.includes('}, [paintedView])'), 'hiddenSince 落地 effect 必须以 paintedView 为键')
@@ -252,7 +254,7 @@ test('P4/W3：保留 / 回收 / 计时 / 侧栏高亮 / 退役都跟随 paintedV
     'deriveServers 的 current 投影必须吃 paintedView（侧栏高亮跟随屏上来源）',
   )
   assert.ok(
-    app.includes('setPaintedView(prev => retireSelectedSource(prev, retired, LOCAL_INSTANCE_ID))'),
+    app.includes('viewStore.retire(retired, LOCAL_INSTANCE_ID)'),
     'painted 必须与 activeView 同帧随注册表退役回落 local（同帧回落 + 揭示门 unmountable 双保险）',
   )
   assert.ok(

@@ -109,6 +109,9 @@ test('the document readers are safe without a DOM (plain-node import) and never 
 test('every audited frame string is dictionary-owned (no inline literals remain)', () => {
   const frameSources = {
     'App.tsx': readCode('../../src/App.tsx'),
+    // 投影本体已迁到 host/servers.ts：它持有 render locale 并渲染 frame 文案，
+    // 因此同时纳入 inline 字面量审计与下方调用点 presence 的并集。
+    'host/servers.ts': readCode('../../src/host/servers.ts'),
     'InstanceView.tsx': readCode('../../src/components/InstanceView.tsx'),
     // 视图调度/桥订阅/通知投影簇的 hook 同样是 frame 文案的持有者；
     // 既纳入 inline 字面量审计（更强），也纳入下方调用点 presence 的并集。
@@ -132,7 +135,7 @@ test('every audited frame string is dictionary-owned (no inline literals remain)
     }
   }
   // …and the sites use the dictionary instead (each audited site, explicitly).
-  const app = frameSources['App.tsx'] + '\n' + frameSources['use-view-scheduler.ts'] + '\n' + frameSources['use-bridge-subscriptions.ts'] + '\n' + frameSources['use-unread-notifications.ts']
+  const app = frameSources['App.tsx'] + '\n' + frameSources['host/servers.ts'] + '\n' + frameSources['use-view-scheduler.ts'] + '\n' + frameSources['use-bridge-subscriptions.ts'] + '\n' + frameSources['use-unread-notifications.ts']
   for (const call of [
     "t('fatal.boot.title')", "t('fatal.controlPlane.title')", "t('action.retry')",
     "t('action.switchServer')", "t('fatal.entries.title')", "t('source.local')",

@@ -446,7 +446,6 @@ test('authoritative removal invalidates a deferred unary result and same-id re-a
   const original = {
     failuresBySource: { 'ssh-readd': 4, 'ssh-keep': 1 },
     snapshotAtBySource: { 'ssh-readd': 1_000, 'ssh-keep': 2_000 },
-    snapshotSources: { 'ssh-readd': true, 'ssh-keep': true } as Record<string, true>,
     readySources: new Set(['ssh-readd', 'ssh-keep']),
   }
 
@@ -462,14 +461,12 @@ test('authoritative removal invalidates a deferred unary result and same-id re-a
     'the old deferred pull no longer owns a resolve/reject write')
   assert.equal(invalidated.failuresBySource['ssh-readd'], undefined)
   assert.equal(invalidated.snapshotAtBySource['ssh-readd'], undefined)
-  assert.equal(invalidated.snapshotSources['ssh-readd'], undefined)
   assert.equal(invalidated.readySources.has('ssh-readd'), false)
 
   // Unrelated sources survive byte-for-byte, and the helper never mutates the
   // caller's snapshot while deriving the authoritative transition.
   assert.equal(invalidated.failuresBySource['ssh-keep'], 1)
   assert.equal(invalidated.snapshotAtBySource['ssh-keep'], 2_000)
-  assert.equal(invalidated.snapshotSources['ssh-keep'], true)
   assert.equal(invalidated.readySources.has('ssh-keep'), true)
   assert.equal(original.readySources.has('ssh-readd'), true)
 
@@ -548,12 +545,10 @@ test('authoritative removal delta survives two pulls that both observe the final
     {
       failuresBySource: { 'ssh-readd': 2 },
       snapshotAtBySource: { 'ssh-readd': 100 },
-      snapshotSources: { 'ssh-readd': true },
       readySources: new Set(['ssh-readd']),
     },
   )
   assert.deepEqual(invalidated.removedSourceIds, ['ssh-readd'])
-  assert.equal(invalidated.snapshotSources['ssh-readd'], undefined)
 
   // Presentation-only edits carry no retired ids and preserve the ctx.
   assert.equal(remoteRetiredSourceIds([]).size, 0)

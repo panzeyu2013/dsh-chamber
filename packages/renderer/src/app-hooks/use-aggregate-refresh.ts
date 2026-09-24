@@ -24,10 +24,12 @@ import {
   reconcilePendingSessions,
   refreshPendingArchives,
   type InstanceAggregate,
-  type InstanceRuntimeReport,
   type SessionArchiveLedger,
   type SessionEchoLedger,
 } from '@dsh-chamber/dsh-chamber-client-core'
+import type { EchoStore } from '../host/echo-store.ts'
+import type { FactsStore } from '../host/facts-store.ts'
+import type { MountedSourcesStore } from '../host/mounted-sources-store.ts'
 import {
   commitAggregateFailure,
   commitAggregatePull,
@@ -94,7 +96,6 @@ export interface AggregateRefreshDeps {
   health: HealthResponse | null
   remoteInstances: SshInstanceSpec[]
   remoteStatus: Record<string, SshStatusProjection>
-  runtimeFacts: Record<string, InstanceRuntimeReport | undefined>
   /** 生产者已推送过完整快照的来源集（边沿轮询 effect 的重估依赖）。 */
   snapshotSources: Record<string, true>
   /** 会话权威升级 ladder 实例（App 的模块级单一来源）。 */
@@ -104,7 +105,7 @@ export interface AggregateRefreshDeps {
   // setters
   setAggregates: Dispatch<SetStateAction<Record<string, InstanceAggregate>>>
   setHostFacts: Dispatch<SetStateAction<Record<string, { dshVersion?: string } | undefined>>>
-  setRuntimeFacts: Dispatch<SetStateAction<Record<string, InstanceRuntimeReport | undefined>>>
+  factsStore: FactsStore
   // callbacks
   clearAggregateRetry: (sourceId: string) => void
   refreshHealth: () => Promise<void>
@@ -126,10 +127,9 @@ export interface AggregateRefreshDeps {
   lastReconnectAtRef: { current: Record<string, number> }
   mutationRefreshSeqRef: { current: Record<string, number> }
   readyAggregateSourcesRef: { current: Set<string> }
-  sessionArchiveRef: { current: SessionArchiveLedger }
-  sessionEchoRef: { current: SessionEchoLedger }
+  echoStore: EchoStore
   snapshotAtRef: { current: Record<string, number> }
-  snapshotSourcesRef: { current: Record<string, true> }
+  mountedSources: MountedSourcesStore
   sourceLifecyclesRef: { current: SourceOwnershipRegistry | null }
 }
 
@@ -154,16 +154,16 @@ export interface AggregateRefresh {
 
 export function useAggregateRefresh(deps: AggregateRefreshDeps): AggregateRefresh {
   const {
-    aggregates, health, remoteInstances, remoteStatus, runtimeFacts, snapshotSources,
+    aggregates, health, remoteInstances, remoteStatus, snapshotSources,
     escalationLadder, reconnectBackoffMs,
-    setAggregates, setHostFacts, setRuntimeFacts,
+    setAggregates, setHostFacts, factsStore,
     clearAggregateRetry, refreshHealth, sweepSessionArchive, sweepSessionEcho,
     sweepWorkspaceEcho, updateSessionArchive, updateSessionEcho,
     aggregateFailuresRef, aggregatePollRunningRef, aggregatePollSeqRef,
     aggregateRefreshQueueRef, aggregateRequestOwnersRef, aggregateRetryTimersRef,
     authoritativeArchiveSetRef, factsAtRef, factsPullInFlightRef,
     lastReconnectAtRef, mutationRefreshSeqRef, readyAggregateSourcesRef,
-    sessionArchiveRef, sessionEchoRef, snapshotAtRef, snapshotSourcesRef,
+    echoStore, snapshotAtRef, mountedSources,
     sourceLifecyclesRef,
   } = deps
 
@@ -236,9 +236,9 @@ export function useAggregateRefresh(deps: AggregateRefreshDeps): AggregateRefres
       // 已推送来源刻意不做这一步：commitAggregatePull 的 mounted merge 保留的是
       // 权威工作区行，用兜底的合成行收敛会把行抛进未分组桶（位置跳动）。
       sweepSessionEcho()
-      if (snapshotSourcesRef.current[instanceId] !== true) {
-        const reconciled = reconcilePendingSessions(sessionEchoRef.current, instanceId, snapshot.workspaces)
-        if (reconciled !== sessionEchoRef.current) updateSessionEcho(reconciled)
+      if (mountedSources.getSnapshot()[instanceId] !== true) {
+        const reconciled = reconcilePendingSessions(echoStore.getSnapshot().session, instanceId, snapshot.workspaces)
+        updateSessionEcho(reconciled)
       }
       // 归档墓碑：租约挂在同一条兜底时钟上——只要这份（冻结/降级）视图
       // 还在列该会话，就继续藏着它；权威归档集只可能来自挂载 push，所以这里**绝不**
@@ -249,8 +249,8 @@ export function useAggregateRefresh(deps: AggregateRefreshDeps): AggregateRefres
       // 续租：TTL 只回收"列表里已经没有"的墓碑（没什么可藏了）。
       {
         const listed = new Set(snapshot.sessions.map(session => session.sessionId))
-        const leased = refreshPendingArchives(sessionArchiveRef.current, instanceId, listed, Date.now())
-        if (leased !== sessionArchiveRef.current) updateSessionArchive(leased)
+        const leased = refreshPendingArchives(echoStore.getSnapshot().archive, instanceId, listed, Date.now())
+        updateSessionArchive(leased)
       }
       sweepSessionArchive()
       // identity-preserving：快照内容未变（兜底/手动刷新常态）则复用旧 state 对象
@@ -265,7 +265,7 @@ export function useAggregateRefresh(deps: AggregateRefreshDeps): AggregateRefres
         const next = commitAggregatePull(
           current,
           snapshot,
-          snapshotSourcesRef.current[instanceId] === true,
+          mountedSources.getSnapshot()[instanceId] === true,
           authoritativeArchiveSetRef.current[instanceId],
         )
         if (current !== undefined && current.state === 'ok'
@@ -293,7 +293,7 @@ export function useAggregateRefresh(deps: AggregateRefreshDeps): AggregateRefres
       // 无错误行可看，但比展示劣化/空态诚实；与官方前端同依赖的恢复路径
       // （liveness 触发/整页刷新）一致。
       const failureAggregate = commitAggregateFailure(
-        snapshotSourcesRef.current[instanceId] === true,
+        mountedSources.getSnapshot()[instanceId] === true,
         errorMessage(err),
       )
       if (failureAggregate === null) {
@@ -391,7 +391,7 @@ export function useAggregateRefresh(deps: AggregateRefreshDeps): AggregateRefres
     const refreshPlan = planAggregateRefreshes(
       ready,
       readyAggregateSourcesRef.current,
-      snapshotSourcesRef.current,
+      mountedSources.getSnapshot(),
     )
     // Commit the observed generation synchronously before starting pulls: an
     // overlapping health/status callback must not mint duplicate reconnect pulls.
@@ -419,7 +419,7 @@ export function useAggregateRefresh(deps: AggregateRefreshDeps): AggregateRefres
             // ready-edge 拉取走 sessions-only merge（工作区/归档集不丢失）。
             // 未推送/未挂载来源照旧落 not-connected（unary 兜底 = 其文档化
             // 范围）。shouldRetainPushedAggregate 单测覆盖（aggregate-refresh.test.ts）。
-            && !shouldRetainPushedAggregate(snapshotSourcesRef.current[id] === true, current)) {
+            && !shouldRetainPushedAggregate(mountedSources.getSnapshot()[id] === true, current)) {
             next[id] = emptyAggregate('not-connected')
             changed = true
           }
@@ -427,7 +427,7 @@ export function useAggregateRefresh(deps: AggregateRefreshDeps): AggregateRefres
         return changed ? next : prev
       })
       // 断连即清该来源的运行时事实（design 06：generation 级事实随断连失效）
-      setRuntimeFacts(prev => {
+      factsStore.setRuntime(prev => {
         let changed = false
         const next = { ...prev }
         for (const id of notReady) {
@@ -477,15 +477,12 @@ export function useAggregateRefresh(deps: AggregateRefreshDeps): AggregateRefres
   // unchanged state churn-free.
   // Render-phase mirror of the aggregates state for this interval (the timer
   // must stay stable across aggregate commits — re-creating it on every push
-  // would stretch the cadence under activity; same ref-mirror discipline as
-  // remoteStatusRef above).
+  // would stretch the cadence under activity; the same single-source discipline
+  // host/remotes-store.ts applies to the remote projection).
   const watchdogAggregatesRef = useRef(aggregates)
   watchdogAggregatesRef.current = aggregates
-  // 运行位活性守卫：运行时事实的
-  // render-phase 镜像（与上面的 aggregates 镜像同纪律：timer 稳定，不因每次
-  // 上报重建）+ 守卫状态 ref + 需要用户可见提示的来源。
-  const watchdogRuntimeFactsRef = useRef(runtimeFacts)
-  watchdogRuntimeFactsRef.current = runtimeFacts
+  // 运行位活性守卫：运行时事实直接从 factsStore 快照读（timer 稳定，不因每次
+  // 上报重建；事实写入即刻对守卫可见，无渲染期镜像）。
   // P2：App 只跑升级 ladder（reconnect/notice），probe cadence 与写回在执行端。
   const escalationRecordsRef = useRef<Record<string, LadderRecord>>({})
   /** 已亮 notice 的来源 → 亮灯时的 progressStamp（健康进展即撤下）。 */
@@ -572,7 +569,7 @@ export function useAggregateRefresh(deps: AggregateRefreshDeps): AggregateRefres
       // first boot never pushes and stays on the unary fallback, which
       // already covers it (KNOWN DEGRADATION scope).
       if (!shouldReconnectStaleMounted({
-        mounted: snapshotSourcesRef.current[id] === true,
+        mounted: mountedSources.getSnapshot()[id] === true,
         lastSnapshotAt: snapshotAtRef.current[id],
         lastReconnectAt: lastReconnectAtRef.current[id],
         now,
@@ -600,7 +597,7 @@ export function useAggregateRefresh(deps: AggregateRefreshDeps): AggregateRefres
     for (const id of ready) {
       if (id === LOCAL_INSTANCE_ID) continue
       if (!shouldRebaselineFallbackView({
-        mounted: snapshotSourcesRef.current[id] === true,
+        mounted: mountedSources.getSnapshot()[id] === true,
         fallbackView: isFallbackDerivedView(watchdogAggregatesRef.current[id]),
         lastReconnectAt: lastReconnectAtRef.current[id],
         now,
@@ -619,7 +616,7 @@ export function useAggregateRefresh(deps: AggregateRefreshDeps): AggregateRefres
     // （design 14 §D4 的核心取舍）。
     const escalationObservations: Record<string, LadderObservation | undefined> = {}
     for (const id of ready) {
-      const report = watchdogRuntimeFactsRef.current[id]
+      const report = factsStore.getSnapshot().runtime[id]
       const sessions = report?.sessions ?? {}
       const sticky = Object.values(sessions).some(facts => facts?.running === true)
       if (sticky) chamberBridge.requestSessionListRefresh(id)

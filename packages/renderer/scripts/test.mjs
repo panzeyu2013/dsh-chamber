@@ -45,6 +45,12 @@ export const GROUPS = {
     'test/lifecycle/required-service-probe.test.ts',
     // per-source 注册表收敛内核（live 外删除 / 保序 / identity-preserving 负例）。
     'test/lifecycle/source-registry.test.ts',
+    // 注册表闸门单一权威（generation 语义 + 订阅通知 + 镜像/双权威助手不得复活）。
+    'test/lifecycle/roster-gate.test.ts',
+    // 注册表投影单一 store（同步快照/identity-preserving/镜像不得复活）。
+    'test/lifecycle/remotes-store.test.ts',
+    // mounted 来源表单一 store（mark/withdraw/retire/prune + 三处旧副本不得复活）。
+    'test/lifecycle/mounted-sources-store.test.ts',
     // The shell *.test.ts split is served from test/support/shell-harness.ts and needs the
     // dsh-client-web fixture loader (see scripts/dev/test-shell-loader.mjs); the --import
     // specifier resolves from the package root (spawn cwd).
@@ -82,8 +88,14 @@ export const GROUPS = {
   'session-state': [
     // 粗分类/快照/增量/SSE 帧 + 与 control-plane 协议模块的源文本锁步。
     'test/session-state/session-facts-source.test.ts',
-    // 未读 v2（键常量/清洗/v1 防御导入/单调 max/LRU/client id/ack/隐私白名单）。
+    // 未读 v2（键常量/清洗/v2 唯一读取键/单调 max/LRU/client id/ack/隐私白名单）。
     'test/session-state/unread-store.test.ts',
+    // 回声账本单一 store（同步快照/identity-preserving/三表独立/镜像不得复活）。
+    'test/session-state/echo-store.test.ts',
+    // facts 表单一 store（同步快照/幂等静默/唯一退役路径/渲染期镜像不得复活）。
+    'test/session-state/facts-store.test.ts',
+    // 完成未读账本单一 store（相等表静默/退役/prune + 旧 state+ref 对不得复活）。
+    'test/session-state/completed-store.test.ts',
     // 派生投影行为（deriveUnread + 通道边沿机 + listComplete 唯一剪枝门）。
     'test/session-state/unread-derivation.test.ts',
     // 仪器：徽标回读 + 通知决定账本（含「没有桥」这一次）与单组装点锁。
@@ -125,6 +137,10 @@ export const GROUPS = {
     'test/view-runtime/switch-frame-instruments.test.ts',
     // SemVer precedence 单一实现（build metadata 忽略 / prerelease 方向 / 非法 null）。
     'test/view-runtime/semver.test.ts',
+    // 截止时刻原语（纯判定 + App 的健康宽容窗不再用 1 Hz 计数）。
+    'test/view-runtime/deadline.test.ts',
+    // 视图对单一 store（select/paint 单字段 + 退役回落同拍 + 两条 ref 镜像不得复活）。
+    'test/view-runtime/view-store.test.ts',
   ],
   // svg-resource: 文档级 SVG 资源 id 归属（N-ctx 失绘不变量，design 05 §4.2）
   'svg-resource': [

@@ -465,7 +465,6 @@ export function refreshPullStillCurrent(opts: {
 export interface AggregateLifecycleState {
   failuresBySource: Record<string, number>
   snapshotAtBySource: Record<string, number>
-  snapshotSources: Record<string, true>
   readySources: Set<string>
 }
 
@@ -488,19 +487,16 @@ export function invalidateRemovedAggregateSources(
 
   const failuresBySource = { ...state.failuresBySource }
   const snapshotAtBySource = { ...state.snapshotAtBySource }
-  const snapshotSources = { ...state.snapshotSources }
   const readySources = new Set(state.readySources)
   for (const sourceId of removedSourceIds) {
     delete failuresBySource[sourceId]
     delete snapshotAtBySource[sourceId]
-    delete snapshotSources[sourceId]
     readySources.delete(sourceId)
   }
   return {
     removedSourceIds,
     failuresBySource,
     snapshotAtBySource,
-    snapshotSources,
     readySources,
   }
 }

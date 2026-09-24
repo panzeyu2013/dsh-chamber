@@ -1,7 +1,7 @@
 /**
- * 未读 v2 落盘存储契约：键常量、宽松清洗、
- * v1 防御性导入（先写后删）、单调 max 合并、读水位推进、有界化 LRU、
- * client-install id、ack 请求、隐私键白名单。
+ * 未读 v2 落盘存储契约：键常量、宽松清洗、v2 是唯一读取键、
+ * 单调 max 合并、读水位推进、有界化 LRU、client-install id、ack 请求、
+ * 隐私键白名单。
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -10,7 +10,6 @@ import {
   CLIENT_INSTALL_ID_PATTERN,
   UNREAD_MAX_SESSIONS_PER_SOURCE,
   UNREAD_PENDING_MAX,
-  UNREAD_V1_KEY,
   UNREAD_V2_KEY,
   advanceReadMark,
   createClientInstallId,
@@ -26,21 +25,18 @@ import {
   type UnreadV2Payload,
 } from '../../src/unread-store.ts'
 
-/** 记录调用顺序的假 storage（迁移顺序是契约：先写后删）。 */
 function fakeStorage(initial: Record<string, string> = {}) {
   const data = new Map<string, string>(Object.entries(initial))
-  const calls: string[] = []
   const storage: UnreadStorageLike = {
     getItem: key => (data.has(key) ? data.get(key)! : null),
-    setItem: (key, value) => { calls.push('set:' + key); data.set(key, value) },
-    removeItem: key => { calls.push('remove:' + key); data.delete(key) },
+    setItem: (key, value) => { data.set(key, value) },
+    removeItem: key => { data.delete(key) },
   }
-  return { storage, calls, data }
+  return { storage, data }
 }
 
 test('keys are the frozen localStorage names (v2 is the only written key)', () => {
   assert.equal(UNREAD_V2_KEY, 'dsh-chamber.unread.v2')
-  assert.equal(UNREAD_V1_KEY, 'dsh-chamber.unread.v1')
   assert.equal(CLIENT_INSTALL_ID_KEY, 'dsh-chamber.client-install-id.v1')
   assert.equal(UNREAD_MAX_SESSIONS_PER_SOURCE, 500)
 })
@@ -59,50 +55,18 @@ test('sanitize is lenient field-wise: bad entries are dropped, good ones survive
   assert.deepEqual(loaded.notified, { a: { s1: { complete: 5 } } })
 })
 
-test('a corrupt v2 whole-payload falls through to the defensive v1 import', () => {
-  const { storage, data } = fakeStorage({
+test('v2 is the only read key: a legacy v1 payload is never imported', () => {
+  // v1 从来没有写入者（unread-store.ts 头注）：防御性导入已删除。这条锁防止
+  // 有人把"兼容旧键"当成迁移承诺重新加回来——v1 数据即使存在也必须被忽略。
+  const corrupt = fakeStorage({
     [UNREAD_V2_KEY]: '{not json',
-    [UNREAD_V1_KEY]: JSON.stringify({ a: { s1: true, s2: false } }),
+    'dsh-chamber.unread.v1': JSON.stringify({ a: { s1: true, s2: false } }),
   })
-  const loaded = loadUnread(storage)
-  assert.deepEqual(loaded.edge, { a: { s1: true } })
-  assert.equal(loaded.v, 2)
-  assert.ok(data.has(UNREAD_V2_KEY))
-  assert.ok(!data.has(UNREAD_V1_KEY))
-})
-
-test('v1 -> v2 import writes BEFORE it removes v1 (contract order)', () => {
-  const { storage, calls, data } = fakeStorage({
-    [UNREAD_V1_KEY]: JSON.stringify({ a: { s1: true } }),
-  })
-  const loaded = loadUnread(storage)
-  assert.deepEqual(loaded.edge, { a: { s1: true } })
-  const setIndex = calls.indexOf('set:' + UNREAD_V2_KEY)
-  const removeIndex = calls.indexOf('remove:' + UNREAD_V1_KEY)
-  assert.ok(setIndex !== -1 && removeIndex !== -1 && setIndex < removeIndex)
-  assert.ok(data.has(UNREAD_V2_KEY))
-})
-
-test('a failing v1 -> v2 write keeps v1 for a later attempt', () => {
-  const data = new Map<string, string>([[UNREAD_V1_KEY, JSON.stringify({ a: { s1: true } })]])
-  const storage: UnreadStorageLike = {
-    getItem: key => data.get(key) ?? null,
-    setItem: () => { throw new Error('quota') },
-    removeItem: key => { data.delete(key) },
-  }
-  const loaded = loadUnread(storage)
-  assert.deepEqual(loaded.edge, { a: { s1: true } })
-  assert.ok(data.has(UNREAD_V1_KEY))
-})
-
-test('a valid v2 load clears a leftover v1 key and never re-imports', () => {
-  const { storage, data } = fakeStorage({
-    [UNREAD_V2_KEY]: JSON.stringify({ v: 2, read: { a: { s1: 9 } }, edge: {}, notified: {} }),
-    [UNREAD_V1_KEY]: JSON.stringify({ b: { s9: true } }),
-  })
-  const loaded = loadUnread(storage)
-  assert.deepEqual(loaded.read, { a: { s1: 9 } })
-  assert.ok(!data.has(UNREAD_V1_KEY))
+  const loadedCorrupt = loadUnread(corrupt.storage)
+  assert.deepEqual(loadedCorrupt.edge, {}, 'a corrupt v2 must not fall back to v1')
+  assert.deepEqual(loadedCorrupt.read, {})
+  const v1Only = fakeStorage({ 'dsh-chamber.unread.v1': JSON.stringify({ a: { s1: true } }) })
+  assert.deepEqual(loadUnread(v1Only.storage).edge, {}, 'a v1-only install starts empty')
 })
 
 test('saveUnread prunes empty tables and never throws', () => {

@@ -1,5 +1,5 @@
 /**
- * 通知边沿的单一投影（P3，docs/progress/todo/session-authority-refactor.md）。
+ * 通知边沿的单一投影（P3）。
  *
  * WHY THIS EXISTS. Complete 通知此前有两条独立入口（壳 running 边沿 + facts observed
  * 完成），加上 `usableFacts` 抑制分支与两套去重（武装位与水位），规则散在

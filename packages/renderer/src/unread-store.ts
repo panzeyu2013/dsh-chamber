@@ -16,10 +16,6 @@
  * setItem 会 last-writer-wins 丢标记；App 侧只经本模块的 merge/prune/save
  * 三个可组合步骤写盘（App 持有内存权威，v2 是缓存）。
  *
- * v1（dsh-chamber.unread.v1）在 HEAD **没有任何写入者**，因此 v1→v2 导入是
- * **防御性代码**（仍按「先写后删」顺序实现 + 单测，避免未来中间版本回退时
- * 丢账本），不是迁移承诺。
- *
  * `POST /read` / `/read-all` 的 ack 失败（网络错误 /
  * 5xx）进**有界内存待发表**（UNREAD_PENDING_MAX），facts 源每收到一帧服务端
  * 数据（probe 快照 / SSE sync·增量·心跳）就重放一次；幂等依据（服务端逐条
@@ -30,10 +26,8 @@
 import { createBoundedMap } from './bounded-ledger.ts'
 import { isWatermark, maxWatermarkValue } from './watermark.ts'
 
-/** v2 落盘键（唯一被持续写入的未读键）。 */
+/** v2 落盘键（唯一被读写的未读键）。 */
 export const UNREAD_V2_KEY = 'dsh-chamber.unread.v2'
-/** 防御性 v1 边沿账本键（HEAD 无写入者；只读一次 + 迁移后删）。 */
-export const UNREAD_V1_KEY = 'dsh-chamber.unread.v1'
 /** client-install id 键（首启生成一次；重装 = 新 id，旧标记由服务端 TTL 清理）。 */
 export const CLIENT_INSTALL_ID_KEY = 'dsh-chamber.client-install-id.v1'
 /** 每来源读标记上限（按水位 LRU；K3 有界增长）。 */
@@ -127,27 +121,6 @@ export function sanitizeUnreadPayload(value: unknown): UnreadV2Payload {
   return payload
 }
 
-/** 防御性 v1 导入：v1 = { sourceId: { sessionId: true } }（边沿账本）。 */
-function payloadFromV1(raw: string | null): UnreadV2Payload {
-  const payload = emptyUnreadPayload()
-  if (raw === null || raw === '') return payload
-  try {
-    const value: unknown = JSON.parse(raw)
-    if (!isPlainRecord(value)) return payload
-    for (const [sourceId, sessions] of Object.entries(value)) {
-      if (!isPlainRecord(sessions)) continue
-      const table: Record<string, boolean> = {}
-      for (const [sessionId, armed] of Object.entries(sessions)) {
-        if (armed === true) table[sessionId] = true
-      }
-      if (Object.keys(table).length > 0) payload.edge[sourceId] = table
-    }
-  } catch {
-    return payload
-  }
-  return payload
-}
-
 /** 剪除空表（序列化前调用；保证载荷最小、无噪声键）。 */
 export function pruneEmptyUnreadTables(payload: UnreadV2Payload): UnreadV2Payload {
   const next = emptyUnreadPayload()
@@ -215,14 +188,12 @@ export function pruneUnreadPayload(payload: UnreadV2Payload, maxPerSource = UNRE
   return next
 }
 
-// ── 载入 / 保存（先写后删是 v1 迁移的契约） ─────────────────────────────────
+// ── 载入 / 保存 ────────────────────────────────────────────────────────────
 
 /**
- * 载入 v2：
- *   1. v2 可解析且 v===2 ⇒ 逐字段清洗（坏字段就地剥掉），顺手清掉残留 v1；
- *   2. v2 缺失/整包损坏 ⇒ 若 v1 存在则防御性导入（只含 edge），**先写 v2 再删 v1**
- *      （写失败保留 v1，下次再试——不许先删后写）；
- *   3. 都没有 ⇒ 空载荷。
+ * 载入 v2：可解析且 v===2 ⇒ 逐字段清洗（坏字段就地剥掉）；缺失/整包损坏
+ * ⇒ 空载荷（不猜测、不部分解析）。v1 键从来没有写入者，其防御性导入已删除
+ * （见头注与 test/session-state/unread-store.test.ts 的"v2 是唯一读取键"锁）。
  */
 export function loadUnread(storage: UnreadStorageLike | undefined): UnreadV2Payload {
   if (storage === undefined) return emptyUnreadPayload()
@@ -232,34 +203,14 @@ export function loadUnread(storage: UnreadStorageLike | undefined): UnreadV2Payl
   } catch {
     raw2 = null
   }
-  if (raw2 !== null && raw2 !== '') {
-    try {
-      const value: unknown = JSON.parse(raw2)
-      if (isPlainRecord(value) && value.v === 2) {
-        try { storage.removeItem(UNREAD_V1_KEY) } catch { /* defensive v1 leftover */ }
-        return sanitizeUnreadPayload(value)
-      }
-    } catch {
-      // 整包坏 = v2 缺失：继续走 v1 防御性导入。
-    }
-  }
-  let raw1: string | null = null
+  if (raw2 === null || raw2 === '') return emptyUnreadPayload()
   try {
-    raw1 = storage.getItem(UNREAD_V1_KEY)
+    const value: unknown = JSON.parse(raw2)
+    if (isPlainRecord(value) && value.v === 2) return sanitizeUnreadPayload(value)
   } catch {
-    raw1 = null
+    // 整包坏 = 无 v2：空载荷（本机内存仍是权威，App 由事实重算）。
   }
-  const imported = payloadFromV1(raw1)
-  if (raw1 !== null && raw1 !== '') {
-    // 顺序是契约：先写后删。写失败必须原样保留 v1（下次再试）。
-    try {
-      storage.setItem(UNREAD_V2_KEY, JSON.stringify(pruneUnreadPayload(imported)))
-      storage.removeItem(UNREAD_V1_KEY)
-    } catch (error) {
-      warn('v1 → v2 import failed; keeping v1 for a later attempt', error)
-    }
-  }
-  return imported
+  return emptyUnreadPayload()
 }
 
 /** 写盘（剪空表 + 有界化）；返回是否成功。never-throw。 */

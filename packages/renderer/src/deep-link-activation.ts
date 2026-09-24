@@ -19,15 +19,6 @@ export interface DeepLinkActivationDecision {
   discarded: { sourceId: string; reason: 'superseded' | 'missing' } | null
 }
 
-/** A committed state edge schedules replay, while the imperative generation
- * ref vetoes a stale passive effect after an event-side invalidation. */
-export function canReplayRosterIntents(
-  committedRosterSettled: boolean,
-  authoritativeGenerationSettled: boolean,
-): boolean {
-  return committedRosterSettled && authoritativeGenerationSettled
-}
-
 /** Shared roster gate for deep-link activation and notification opens. */
 export function classifyRosterGatedSource(
   sourceId: string,

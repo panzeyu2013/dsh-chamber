@@ -7,8 +7,9 @@
  * 纯模块与 App 的 ref/state 容器里，本 hook 只做订阅生命周期装配。
  * Hook 调用位置、useMemo/useEffect 依赖数组与顺序与抽出前逐字一致。
  */
-import { useCallback, useEffect, useMemo, useRef, type Dispatch, type SetStateAction } from 'react'
-import type { ChamberServerAggregate, InstanceRuntimeReport } from '@dsh-chamber/dsh-chamber-client-core'
+import { useCallback, useEffect, useMemo, useRef } from 'react'
+import type { ChamberServerAggregate } from '@dsh-chamber/dsh-chamber-client-core'
+import type { FactsStore } from '../host/facts-store.ts'
 import { createSessionFactsSource, type SessionFactsSnapshot, type SessionFactsSource } from '../session-facts-source.ts'
 import { createSourceMuxFacts } from '../source-mux-facts.ts'
 import { shouldDispatchRefreshHint } from '../source-refresh-hint.ts'
@@ -29,8 +30,7 @@ export interface SessionFactsLifecycleDeps {
   /** 聚合拉取的稳定入口（lifecycle 闭包只创建一次，取最新 refreshAggregate）。 */
   refreshAggregateRef: { current: (sourceId: string) => Promise<unknown> }
   /** 已挂载来源的运行时事实（focus 重算的键空间之一）。 */
-  runtimeFactsRef: { current: Record<string, InstanceRuntimeReport | undefined> }
-  sessionFactsRef: { current: Record<string, SessionFactsSnapshot | undefined> }
+  factsStore: FactsStore
   /** 活跃事实源实例（gateway 来源；指纹变化 = 新化身重探）。 */
   sessionFactsSourcesRef: { current: Map<string, SessionFactsSource> }
   /** 每个实例的退订 + stop 合成器（来源退役/降级时调用一次）。 */
@@ -38,7 +38,6 @@ export interface SessionFactsLifecycleDeps {
   /** 非 gateway 来源的无壳观察者退订与身份表。 */
   sourceMuxTeardownRef: { current: Map<string, () => void> }
   sourceMuxIdentityRef: { current: Map<string, string> }
-  setSessionFacts: Dispatch<SetStateAction<Record<string, SessionFactsSnapshot | undefined>>>
 }
 
 /** 事实源生命周期装配；无对外返回值（调用面全在 App 的既有 ref/回调上）。 */
@@ -46,8 +45,8 @@ export function useSessionFactsLifecycle(deps: SessionFactsLifecycleDeps): void 
   const {
     servers, applySessionFacts, recomputeSourceUnread, flushUnreadRef,
     unverifiedSourcesRef, factsPullInFlightRef, refreshHintAtRef, refreshAggregateRef,
-    runtimeFactsRef, sessionFactsRef, sessionFactsSourcesRef, sessionFactsTeardownRef,
-    sourceMuxTeardownRef, sourceMuxIdentityRef, setSessionFacts,
+    factsStore, sessionFactsSourcesRef, sessionFactsTeardownRef,
+    sourceMuxTeardownRef, sourceMuxIdentityRef,
   } = deps
 
   /** servers 的渲染期镜像（facts effect 闭包不随每次 servers 重建）。 */
@@ -95,13 +94,7 @@ export function useSessionFactsLifecycle(deps: SessionFactsLifecycleDeps): void 
       teardown()
       sessionFactsTeardownRef.current.delete(sourceId)
       sessionFactsSourcesRef.current.delete(sourceId)
-      setSessionFacts(prev => {
-        if (prev[sourceId] === undefined) return prev
-        const next = { ...prev }
-        delete next[sourceId]
-        return next
-      })
-      delete sessionFactsRef.current[sourceId]
+      factsStore.dropSession(sourceId)
     }
     for (const [sourceId, input] of wanted) {
       let source = sessionFactsSourcesRef.current.get(sourceId)
@@ -167,7 +160,7 @@ export function useSessionFactsLifecycle(deps: SessionFactsLifecycleDeps): void 
   // 不回退读标记（「已读」是单向的）。
   useEffect(() => {
     const onFocusChange = (): void => {
-      const ids = new Set<string>([...sessionFactsSourcesRef.current.keys(), ...Object.keys(runtimeFactsRef.current)])
+      const ids = new Set<string>([...sessionFactsSourcesRef.current.keys(), ...Object.keys(factsStore.getSnapshot().runtime)])
       for (const sourceId of ids) recomputeSourceUnread(sourceId)
     }
     window.addEventListener('focus', onFocusChange)

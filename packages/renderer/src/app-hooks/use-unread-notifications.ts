@@ -10,13 +10,15 @@
  *   flushUnread（[]）、schedulePersistUnread（[]）、recomputeSourceUnread（[schedulePersistUnread]）、
  *   emitSessionNotification（[]）、applySessionFacts（[emitSessionNotification, recomputeSourceUnread, schedulePersistUnread]）。
  */
-import { useCallback, useRef, type Dispatch, type SetStateAction } from 'react'
+import { useCallback, useRef } from 'react'
 import {
   deriveUnread,
   reconcileCompletedFacts,
   type InstanceAggregate,
-  type InstanceRuntimeReport,
 } from '@dsh-chamber/dsh-chamber-client-core'
+import type { CompletedStore } from '../host/completed-store.ts'
+import type { ViewStore } from '../host/view-store.ts'
+import type { FactsStore } from '../host/facts-store.ts'
 import type { CompleteLedger } from '../complete-ledger.ts'
 import type { SourceOwnershipRegistry } from '../deep-link-activation.ts'
 import { LOCAL_INSTANCE_ID } from '../local-instance.ts'
@@ -30,11 +32,7 @@ import {
   saveUnread,
   type UnreadStorageLike,
 } from '../unread-store.ts'
-import {
-  deriveSourceUnread,
-  sameBooleanMap as sameBooleanLedger,
-  viewingReadWatermark,
-} from '../unread-derivation.ts'
+import { deriveSourceUnread, viewingReadWatermark } from '../unread-derivation.ts'
 
 /**
  * 通知组装请求（唯一组装点 emitSessionNotification 的入参）：
@@ -54,16 +52,15 @@ export interface UnreadNotificationsDeps {
   aggregates: Record<string, InstanceAggregate>
   serverLabels: Record<string, string>
   /** 唯一「正在阅读」谓词的屏上来源（paintedView 的渲染期镜像）。 */
-  paintedViewRef: { current: string }
+  viewStore: ViewStore
   /** 已挂载来源的运行时事实（渲染期镜像）。 */
-  runtimeFactsRef: { current: Record<string, InstanceRuntimeReport | undefined> }
   liveServerIdsRef: { current: ReadonlySet<string> }
-  sessionFactsRef: { current: Record<string, SessionFactsSnapshot | undefined> }
+  factsStore: FactsStore
   sessionFactsSourcesRef: { current: Map<string, SessionFactsSource> }
   sourceLifecyclesRef: { current: SourceOwnershipRegistry | null }
   /** 每来源每会话的上一份 channel running 位（蓝点机边沿记忆）。 */
   prevRunningRef: { current: Record<string, Record<string, boolean>> }
-  edgeLedgerRef: { current: Record<string, Record<string, boolean>> }
+  completedStore: CompletedStore
   readMarksRef: { current: Record<string, Record<string, number>> }
   completeLedgerRef: { current: CompleteLedger }
   factsSeededRef: { current: Set<string> }
@@ -72,8 +69,6 @@ export interface UnreadNotificationsDeps {
   /** 读标记落盘入口：hook 把最新 flushUnread 写进它（App 的 pagehide effect 读）。 */
   flushUnreadRef: { current: () => void }
   clientInstallIdRef: { current: string }
-  setCompletedBySource: Dispatch<SetStateAction<Record<string, Record<string, boolean>>>>
-  setSessionFacts: Dispatch<SetStateAction<Record<string, SessionFactsSnapshot | undefined>>>
 }
 
 export interface UnreadNotifications {
@@ -85,16 +80,15 @@ export interface UnreadNotifications {
 
 export function useUnreadNotifications(deps: UnreadNotificationsDeps): UnreadNotifications {
   const {
-    aggregates, serverLabels, paintedViewRef, runtimeFactsRef, liveServerIdsRef,
-    sessionFactsRef, sessionFactsSourcesRef, sourceLifecyclesRef, prevRunningRef,
-    edgeLedgerRef, readMarksRef, completeLedgerRef, factsSeededRef,
+    aggregates, serverLabels, viewStore, factsStore, liveServerIdsRef,
+    sessionFactsSourcesRef, sourceLifecyclesRef, prevRunningRef,
+    completedStore, readMarksRef, completeLedgerRef, factsSeededRef,
     unreadStorageRef, unreadSaveTimerRef, flushUnreadRef, clientInstallIdRef,
-    setCompletedBySource, setSessionFacts,
   } = deps
 
   // 通知事件组装镜像（设计 19）：onRuntimeReport effect（依赖 []）经 ref 读取最新
-  // aggregates/serverLabels——effect 闭包拿不到 state/useMemo，渲染期镜像纪律同
-  // remoteStatusRef（与 commit 同步，微任务/事件回调安全）。
+  // aggregates/serverLabels——effect 闭包拿不到 state/useMemo（与 commit 同步，
+  // 微任务/事件回调安全；注册表投影已由 host/remotes-store.ts 承担同一职责）。
   const aggregatesRef = useRef(aggregates)
   aggregatesRef.current = aggregates
   const serverLabelsRef = useRef(serverLabels)
@@ -112,7 +106,7 @@ export function useUnreadNotifications(deps: UnreadNotificationsDeps): UnreadNot
     saveUnread(unreadStorageRef.current, {
       v: 2,
       read: readMarksRef.current,
-      edge: edgeLedgerRef.current,
+      edge: completedStore.getSnapshot(),
       notified: completeLedgerRef.current.notifiedTable(),
     })
   }, [])
@@ -133,13 +127,13 @@ export function useUnreadNotifications(deps: UnreadNotificationsDeps): UnreadNot
    */
   const recomputeSourceUnread = useCallback((sourceId: string): void => {
     if (sourceId !== LOCAL_INSTANCE_ID && !liveServerIdsRef.current.has(sourceId)) return
-    const factsSnapshot = sessionFactsRef.current[sourceId]
+    const factsSnapshot = factsStore.getSnapshot().session[sourceId]
     const usableFacts = factsSnapshot !== undefined && factsSnapshot.verdict === 'ok' ? factsSnapshot : undefined
     const factsRows = usableFacts?.rows
-    const report = runtimeFactsRef.current[sourceId]
+    const report = factsStore.getSnapshot().runtime[sourceId]
     // 唯一「正在阅读」谓词：paintedView（屏上是谁，不是选择）
     // ∩ 该来源 current ∩ document.hasFocus()。失焦即视为未读。
-    const readingCurrent = paintedViewRef.current === sourceId && document.hasFocus()
+    const readingCurrent = viewStore.getSnapshot().painted === sourceId && document.hasFocus()
       ? report?.current
       : undefined
     if (readingCurrent !== undefined && factsRows !== undefined) {
@@ -161,7 +155,7 @@ export function useUnreadNotifications(deps: UnreadNotificationsDeps): UnreadNot
       // = 不剪（默认不剪——列表短暂收缩不得假清）。
       listComplete: report?.listComplete === true,
       prevRunning: prevRunningRef.current[sourceId] ?? {},
-      prevLedger: edgeLedgerRef.current[sourceId] ?? {},
+      prevLedger: completedStore.getSnapshot()[sourceId] ?? {},
       readMarks: readMarksRef.current[sourceId] ?? {},
       readingSessionId: readingCurrent,
       // 无 facts = channel-only 照常派生；有 facts 但 serviceable=false（host
@@ -170,14 +164,9 @@ export function useUnreadNotifications(deps: UnreadNotificationsDeps): UnreadNot
       factsVerified: usableFacts !== undefined ? usableFacts.serviceable !== false : true,
     }, { deriveUnread, reconcileCompletedFacts })
     prevRunningRef.current[sourceId] = result.nextRunning
-    edgeLedgerRef.current[sourceId] = result.unread
+    completedStore.setSource(sourceId, result.unread)
     if (!result.changed) return
     schedulePersistUnread()
-    setCompletedBySource(prev => {
-      const existing = prev[sourceId] ?? {}
-      if (sameBooleanLedger(existing, result.unread)) return prev
-      return { ...prev, [sourceId]: result.unread }
-    })
   }, [schedulePersistUnread])
 
   /**
@@ -221,8 +210,8 @@ export function useUnreadNotifications(deps: UnreadNotificationsDeps): UnreadNot
       // 正在屏幕上查看的会话豁免：**屏上**来源（paintedView，
       // 不是选择——持有窗内 active 已是目标而屏上仍是旧视图）∩ 该来源 current
       // ∩ 焦点；主进程再查一次窗口焦点作权威豁免。
-      const requireHidden = paintedViewRef.current === request.sourceId
-        && runtimeFactsRef.current[request.sourceId]?.current === request.sessionId
+      const requireHidden = viewStore.getSnapshot().painted === request.sourceId
+        && factsStore.getSnapshot().runtime[request.sourceId]?.current === request.sessionId
         && document.hasFocus()
       // 账本记的是**主进程回执**（shown / suppressed + error 原文），不是「我们调用了
       // 通知」——这是正对照能成立的前提。
@@ -265,13 +254,7 @@ export function useUnreadNotifications(deps: UnreadNotificationsDeps): UnreadNot
    */
   const applySessionFacts = useCallback((sourceId: string, snapshot: SessionFactsSnapshot | undefined): void => {
     if (snapshot === undefined) {
-      setSessionFacts(prev => {
-        if (prev[sourceId] === undefined) return prev
-        const next = { ...prev }
-        delete next[sourceId]
-        return next
-      })
-      delete sessionFactsRef.current[sourceId]
+      factsStore.dropSession(sourceId)
       recomputeSourceUnread(sourceId)
       return
     }
@@ -284,8 +267,7 @@ export function useUnreadNotifications(deps: UnreadNotificationsDeps): UnreadNot
         schedulePersistUnread()
       }
     }
-    setSessionFacts(prev => (prev[sourceId] === snapshot ? prev : { ...prev, [sourceId]: snapshot }))
-    sessionFactsRef.current = { ...sessionFactsRef.current, [sourceId]: snapshot }
+    factsStore.setSession(prev => (prev[sourceId] === snapshot ? prev : { ...prev, [sourceId]: snapshot }))
     if (usable) {
       // 单入口：facts 证据走同一投影。reconstructed 只出未读、不通知；
       // 首份快照只播种水位（桌面关闭期间的完成不得补发通知）。水位轨是跨重挂的
