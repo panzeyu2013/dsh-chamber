@@ -154,6 +154,13 @@ const STATIC_CHECKS = [
   'verify:md-links',
   'verify:registry',
   'verify:anchors',
+  // 引用环门：真环（值 import 环）= 0，类型环必须命中显式 allowance（棘轮，
+  // 新增环即红）。只读、离线、自带 --self-test 负控；新增门同时登记在根
+  // package.json 与 ci.yml 的 static 腿（static-gate-parity 双向校验）。
+  'verify:import-cycles',
+  // God 文件棘轮门：预算文件里的行数只许降不许升（--update-budget 同步降档），
+  // target 列是 refactor 目标。只读、离线；新增门三处登记（package.json / 本表 / ci.yml）。
+  'verify:file-budgets',
   // C1–C15 触点门：advisory 模式（只读，不重建产物）。必须是普通门——
   // 否则本地 static/full 可以在 C1/C3 失败（例如把 pure 文件挪进 patched）时全绿，
   // 与 AGENTS "本地 pass = CI 同证据" 的口径矛盾。CI 两处直接调用同一命令。

@@ -44,6 +44,8 @@
     "cli": "node packages/cli/src/index.ts",
     "smoke": "node packages/control-plane/test/smoke.test.ts",
     "verify:i18n": "node scripts/gates/verify-i18n.mjs",
+    "verify:import-cycles": "node scripts/gates/verify-import-cycles.mjs",
+    "verify:file-budgets": "node scripts/gates/verify-file-budgets.mjs",
     "verify:styles": "node scripts/gates/verify-style-tokens.mjs",
     "verify:workflows": "node scripts/gates/verify-workflow-action-pins.mjs",
     "verify:workflow-yaml": "node scripts/gates/verify-workflow-yaml-scalars.mjs",

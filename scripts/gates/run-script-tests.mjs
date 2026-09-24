@@ -51,6 +51,12 @@ export const GROUPS = {
     // dead-export gate's surface resolver (G-H negative control).
     'scripts/gates/verify-ladder-table-parity.test.mjs',
     'scripts/gates/verify-no-dead-exports.test.mjs',
+    // The god-file ratchet's schema/classifier/CLI controls and the
+    // import-cycle resolver's parser/graph controls — the two gate self-tests
+    // made automatic, so a malformed budget or a silently-matching resolver
+    // can never pass as a clean gate.
+    'scripts/gates/verify-file-budgets.test.mjs',
+    'scripts/gates/verify-import-cycles.test.mjs',
     'scripts/gates/verify-upstream-lifecycle-contract.test.mjs',
     'scripts/gates/verify-workflow-yaml-scalars.test.mjs',
     // 包边界门（R4 P7）：A/B 判据的负控与真实仓库正控。
