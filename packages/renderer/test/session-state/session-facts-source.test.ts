@@ -19,6 +19,7 @@ import {
   applySessionFactsDelta,
   classifySessionFactsProbe,
   createSessionFactsSource,
+  isFactsUsable,
   parseSessionFactsReadState,
   parseSessionFactsRow,
   parseSessionFactsSnapshotValue,
@@ -784,6 +785,18 @@ test('a protocol-2 payload still delivers a degraded forward-skew snapshot witho
   await new Promise(resolve => setTimeout(resolve, 30))
   assert.equal(probeGets, settled, '降级档不启动交付（不轮询）')
   source.stop()
+})
+
+test('isFactsUsable: verdict ok + serviceable false / non-ok / undefined are all unusable', () => {
+  const base = { verdict: 'ok', serviceable: true }
+  assert.equal(isFactsUsable(base as never), true)
+  assert.equal(
+    isFactsUsable({ ...base, serviceable: false } as never),
+    false,
+    'host 不可服务时行只读作未知，不得推进未读/通知',
+  )
+  assert.equal(isFactsUsable({ ...base, verdict: 'degraded' } as never), false)
+  assert.equal(isFactsUsable({ ...base, verdict: 'legacy-gateway' } as never), false)
 })
 
 

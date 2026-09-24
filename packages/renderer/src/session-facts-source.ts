@@ -39,7 +39,7 @@ export const SESSION_FACTS_PROTOCOL_VERSION = 1
 /** 503 kill-switch body 的稳定错误码（锁步字面量）。 */
 export const SESSION_FACTS_DISABLED_CODE = 'session_state_disabled'
 
-/** 探测超时（对齐协议模块 SESSION_STATE_PROBE_TIMEOUT_MS 的一次调用预算）。 */
+/** 探测超时（一次调用预算 5s；control-plane 的探测路由同预算，两侧各自持有字面量）。 */
 export const SESSION_FACTS_PROBE_TIMEOUT_MS = 5_000
 
 /**
@@ -150,6 +150,23 @@ export interface SessionFactsSnapshot {
   rows: Readonly<Record<string, SessionFactsRow>>
   read: SessionFactsReadState | null
   lastEventAt: number | null
+}
+
+/**
+ * The ONE usability rule every consumer of a session-facts snapshot shares:
+ * `verdict === 'ok'` AND the host's `serviceable !== false`.
+ *
+ * Why both: `verdict` is the HTTP/protocol classifier's answer, while
+ * `serviceable` is copied verbatim from the host's own lifecycle. `verdict ok +
+ * serviceable false` is reachable (host stopped / managed dsh stopped), and such
+ * a snapshot's rows are contractually read-only-unknown; treating them as usable
+ * advanced the unread watermarks from rows this module calls unknown, while the
+ * sidebar overlay suppressed them. The overlay demanded both; the notification
+ * and unread consumers checked only `verdict` — one rule, three sites, two
+ * answers.
+ */
+export function isFactsUsable(snapshot: SessionFactsSnapshot): boolean {
+  return snapshot.verdict === 'ok' && snapshot.serviceable !== false
 }
 
 /** 探测观测（只交事实，HTTP carrier 由本模块拥有）。 */

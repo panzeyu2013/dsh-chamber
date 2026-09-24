@@ -25,7 +25,7 @@ import {
   type WorkspaceEchoLedger,
 } from '@dsh-chamber/dsh-chamber-client-core'
 import type { ConnectionSummary, HealthResponse } from '../api.ts'
-import { type SessionFactsSnapshot } from '../session-facts-source.ts'
+import { isFactsUsable, type SessionFactsSnapshot } from '../session-facts-source.ts'
 import { sourceSessionFactsMode } from '../session-facts-mode.ts'
 import { LOCAL_INSTANCE_ID } from '../local-instance.ts'
 import { type ShellState } from '../shell.ts'
@@ -54,7 +54,7 @@ export type HostFacts = { dshVersion?: string }
  * legacy 一律返回 undefined，回到 channel-only（不静默假装有事实）。
  */
 function factsOverlay(snapshot: SessionFactsSnapshot | undefined): RuntimeFactsOverlay | undefined {
-  if (snapshot === undefined || snapshot.verdict !== 'ok' || snapshot.serviceable === false) return undefined
+  if (snapshot === undefined || !isFactsUsable(snapshot)) return undefined
   const overlay: Record<string, { pending?: 'approval' | 'plan-review' | 'question'; runningSubagents?: number; factAt?: number }> = {}
   for (const row of Object.values(snapshot.rows)) {
     const pending = row.pendingKind === 'approval'

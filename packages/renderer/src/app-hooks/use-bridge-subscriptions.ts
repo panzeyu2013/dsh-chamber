@@ -16,6 +16,7 @@ import {
 import { LOCAL_INSTANCE_ID } from '../local-instance.ts'
 import { type SessionFacts } from '../notification-edges.ts'
 import { planRuntimeNotifications } from '../notification-projection.ts'
+import { isFactsUsable } from '../session-facts-source.ts'
 import { errorMessage } from '../status.ts'
 import { sourceIdForRawInstance } from '../transport-source.ts'
 import { completionWatermark } from '../watermark.ts'
@@ -735,7 +736,7 @@ export function useBridgeSubscriptions(deps: BridgeSubscriptionsDeps): void {
       const prevFacts = prevRuntimeFactsRef.current[sourceId]
       prevRuntimeFactsRef.current[sourceId] = report.sessions
       const factsSnapshot = factsStore.getSnapshot().session[sourceId]
-      const usableFacts = factsSnapshot !== undefined && factsSnapshot.verdict === 'ok' ? factsSnapshot : undefined
+      const usableFacts = factsSnapshot !== undefined && isFactsUsable(factsSnapshot) ? factsSnapshot : undefined
       const plan = planRuntimeNotifications({
         prev: prevFacts,
         next: report.sessions,

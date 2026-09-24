@@ -25,7 +25,7 @@ import { LOCAL_INSTANCE_ID } from '../local-instance.ts'
 import { frameText, readDocumentLocale } from '../locales.ts'
 import { notificationLedger, publishNotificationInstrument } from '../notification-ledger.ts'
 import { planFactsNotifications } from '../notification-projection.ts'
-import type { SessionFactsSnapshot, SessionFactsSource } from '../session-facts-source.ts'
+import { isFactsUsable, type SessionFactsSnapshot, type SessionFactsSource } from '../session-facts-source.ts'
 import {
   advanceReadMark,
   mergeReadMarks,
@@ -128,7 +128,7 @@ export function useUnreadNotifications(deps: UnreadNotificationsDeps): UnreadNot
   const recomputeSourceUnread = useCallback((sourceId: string): void => {
     if (sourceId !== LOCAL_INSTANCE_ID && !liveServerIdsRef.current.has(sourceId)) return
     const factsSnapshot = factsStore.getSnapshot().session[sourceId]
-    const usableFacts = factsSnapshot !== undefined && factsSnapshot.verdict === 'ok' ? factsSnapshot : undefined
+    const usableFacts = factsSnapshot !== undefined && isFactsUsable(factsSnapshot) ? factsSnapshot : undefined
     const factsRows = usableFacts?.rows
     const report = factsStore.getSnapshot().runtime[sourceId]
     // 唯一「正在阅读」谓词：paintedView（屏上是谁，不是选择）
@@ -258,7 +258,7 @@ export function useUnreadNotifications(deps: UnreadNotificationsDeps): UnreadNot
       recomputeSourceUnread(sourceId)
       return
     }
-    const usable = snapshot.verdict === 'ok'
+    const usable = isFactsUsable(snapshot)
     if (usable && snapshot.read !== null) {
       const local = readMarksRef.current[sourceId] ?? {}
       const merged = mergeReadMarks(local, snapshot.read.marks)
