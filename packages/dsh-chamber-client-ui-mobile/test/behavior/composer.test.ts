@@ -40,7 +40,7 @@ test('keyboard heuristic: >120px AND >20% of layout height', () => {
 
 test('composer stuck threshold is pinned at 30 s (recovery fires only on a genuine stuck state)', () => {
   // 常量钉:值本身是防意外改值的回归钉;「30s 后 blur→恢复→refocus」的时序
-  // 行为属 device-gated installer(仓库惯例),在实机门禁覆盖。
+  // 行为属 device-gated installer（仓库惯例），不在单测范围。
   assert.equal(BUSY_STUCK_MS, 30_000)
 })
 

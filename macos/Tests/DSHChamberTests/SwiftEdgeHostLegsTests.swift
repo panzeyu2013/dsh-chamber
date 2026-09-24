@@ -99,7 +99,7 @@ final class SwiftEdgeHostLegsTests: XCTestCase {
         )
     }
 
-    // MARK: - setLoginItem 守卫（SMAppService 真机调用属签名实机门禁）
+    // MARK: - setLoginItem 守卫（SMAppService 真机调用不在单测范围）
 
     func testSetLoginItemDegradesWhenUnbundled() {
         // canShowUI=true + isAppBundled=false（swift run dev 态等价）：无 bundle

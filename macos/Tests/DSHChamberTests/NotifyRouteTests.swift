@@ -4,7 +4,7 @@
 //
 //  S-D：sidecar 出站 notify 消费路由的纯逻辑单测（MainWindowController.
 //  decodeNotify —— 只测解码/分发决策，不触 AppKit/UI；宿主腿执行与 GUI 侧
-//  消费属实机门禁）。载荷形状断言以 node-edges.ts sendNotify 出站族与
+//  消费不在单测范围）。载荷形状断言以 node-edges.ts sendNotify 出站族与
 //  BridgeClientEdgeIntegrationTests 的 notify 载荷断言为权威。
 //
 import XCTest

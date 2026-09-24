@@ -484,7 +484,7 @@ export const MOBILE_CSS = `
      header-actions arm is left as shipped, so the header row keeps its verified
      geometry (its floor therefore lands on the CONTENT
      box: padded icon buttons render ~56px, and the header row grows with
-     them — a device-judged tradeoff, see STATUS). */
+      them). */
   [data-sidebar-right-panel] [data-dockkit-strip] {
     height: auto;
     min-height: 44px;

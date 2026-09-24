@@ -275,7 +275,7 @@ test('行序列化：换行折叠、Error 取 stack、超长截断', () => {
 })
 
 test('默认保留规格被钉住（文档记录的 2 MiB × 3 份 = 6 MiB 不得静默漂移）', () => {
-  // 设计 02 §3.8 / 设计 25 §3.1 / T-25 都以这些数字作跨 flavor 对照（Electron 2 MiB×3
+  // 设计 02 §3.8 / 设计 25 §3.1 都以这些数字作跨 flavor 对照（Electron 2 MiB×3
   // vs 原生 256 KiB×2）；这些常量必须与文档保持一致，改小会让文档与实现脱钩而零告警。
   assert.equal(DEFAULT_CONTROL_LOG_MAX_BYTES, 2 * 1024 * 1024)
   assert.equal(DEFAULT_CONTROL_LOG_FILES, 3)

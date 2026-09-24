@@ -256,8 +256,8 @@ export function useAggregateRefresh(deps: AggregateRefreshDeps): AggregateRefres
       }
       if (!stillCurrent()) return
       // 失败说明不了推送通道，置 error 只会隐藏权威推送状态（与 withdrawal 窗口同规）；
-      // 未推送源维持原 error 态与快速重试。已知取舍：推送与 unary 同时死亡时视图静默
-      // 冻结在最后推送状态，比展示劣化/空态诚实。
+      // 未推送源维持原 error 态与快速重试。推送与 unary 同时死亡时视图静默冻结在最后
+      // 推送状态，比展示劣化/空态诚实。
       const failureAggregate = commitAggregateFailure(
         snapshotSourcesRef.current[instanceId] === true,
         errorMessage(err),

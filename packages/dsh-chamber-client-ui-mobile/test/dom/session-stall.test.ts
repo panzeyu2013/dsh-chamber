@@ -842,7 +842,7 @@ test('a parked open is rebuilt automatically once, and the copy turns into the f
  * The mobile stall observer and the desktop open-in stream-health ladder
  * implement the SAME recovery contract (design 14 §D4) on two tiers. These
  * assertions import BOTH pure decision modules and pin the shared ledger, the
- * ONE intentional threshold deviation and the evidence rule: the automatic
+ * the one deliberate cross-tier threshold difference and the evidence rule: the automatic
  * rebuild fires on one tier exactly when it fires on the other, and an
  * unreadable face fails closed on both. Any drift on either side turns red.
  */

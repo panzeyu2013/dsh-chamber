@@ -252,9 +252,8 @@ export function createLayoutStore(env: LayoutStoreEnvironment): EngineStoreHandl
       toggleSidebar: (d) => {
         d.layoutInfo.rightbarInstant = false
         if (d.layoutInfo.viewportWidth < columns.SIDEBAR_AUTO_COLLAPSE) d.layoutInfo.narrowExpanded = !d.layoutInfo.narrowExpanded
-        // Reopening expands to the SHARED persisted width (a vendor contract
-        // deviation: their default would fight the remembered width); closing
-        // writes 0 without persisting it.
+        // Reopening expands to the SHARED persisted width (the vendor default
+        // would fight the remembered width); closing writes 0 without persisting it.
         else d.layoutInfo.sidebar = d.layoutInfo.sidebar === 0 ? prefsSidebarWidth() : 0
       },
       // Crossing the breakpoint drops the override; the wide state is the preference.

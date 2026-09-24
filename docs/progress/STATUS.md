@@ -516,7 +516,7 @@
   触发：单会话响应体（DEFLATE后ZIP，含全部subagent代际）> 300MiB
   ⇒下载中断/413，无分片逃生口。不修：抬高上限同抬内存/带宽预算，待上游分片/可恢复下载。
 
-- 平台词偏差C3（性能审计，已登记platform.ts/seed.ts/chamber-entry.ts/shell.ts注释）：上游
+- 平台词偏差C3（性能审计；登记于本文与相关design，代码注释不重复登记）：上游
   `PLATFORM_MODULES` 仍列 `@deepseek-ai/dsh-client-ui-primitives`，chamber自建平台集不再seed
   该词，改由composite coveredfactory回答
   extra行同步require边，前置保证 = chamber入口先于任何extra bundle装载（shell.ts C3门 + host-graph.ts

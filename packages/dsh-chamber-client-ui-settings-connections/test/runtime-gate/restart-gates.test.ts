@@ -3,8 +3,8 @@
  * managed-restart.ts result/refusal classification plus the connections-card
  * RESTART gate / PROBE projection / 409 localization built on it. Plain node:test,
  * no dsh, no React — the poll errors under test are the English strings thrown by
- * the client-core pollGatewayReady (gateway-runtime-poll.ts); unlocalized copy
- * is a registered deviation (design 21 §5.2).
+ * the client-core pollGatewayReady (gateway-runtime-poll.ts); the unlocalized copy
+ * is the accepted projection (design 21 §7).
  */
 
 import { test } from 'node:test';
@@ -142,8 +142,8 @@ test('runtimeRefusalText: a 409 becomes localized copy with the code; every othe
   assert.equal(noCode, '重启被拒绝：运行时正忙或正在恢复（409 409），请稍后重试',
     'a body-less 409 still renders localized copy (the status stands in for the missing code)')
 
-  // Non-409 refusals keep the verbatim projection (English copy is a registered
-  // deviation, design 21 §5.2) — never the 409 copy.
+  // Non-409 refusals keep the verbatim projection (English copy is the accepted
+  // projection, design 21 §7) — never the 409 copy.
   assert.equal(runtimeRefusalText({ error: 'version is required' }, 400, keys, t), 'version is required')
   assert.equal(runtimeRefusalText(null, 400, keys, t), serverRefusalText(null, 400))
 })

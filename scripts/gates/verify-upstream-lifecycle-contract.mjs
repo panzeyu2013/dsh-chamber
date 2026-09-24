@@ -7,7 +7,7 @@
  * `doOpen` awaits it without one: a lost opening frame parks `openState='loading'`
  * forever. This gate pins both halves of that contract against the pinned vendor
  * tree, so the day upstream lands a bound the retirement is loud: delete the client
- * ladder (design 14 §D4 ①/③, STATUS ③) and update this gate.
+ * ladder (design 14 §D4 ①/③) and update this gate.
  *
  * Source text only (no build, no imports), like verify:anchors, so it runs in any
  * checkout with the vendor tree present.

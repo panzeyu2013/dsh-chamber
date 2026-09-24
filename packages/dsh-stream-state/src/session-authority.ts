@@ -81,7 +81,7 @@ export type SessionAuthorityObservation =
       readonly generation: string
       /** Every listed session (running and not running); absence = not listed. */
       readonly official: Readonly<Record<string, AuthorityOfficialRow>>
-      /** Official list arrival phase; false = absence is NOT evidence (STATUS 9). */
+      /** Official list arrival phase; false = absence is NOT evidence. */
       readonly listComplete: boolean
     }
   | {

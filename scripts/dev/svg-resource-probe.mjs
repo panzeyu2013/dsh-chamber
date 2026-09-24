@@ -22,7 +22,7 @@
  * 退出码：0 判据全过；1 判据失败/对照组未复现；2 环境不可用（非 macOS / 无 swiftc / 页面不响应）。
  *
  * 注意：这是一个**人工验收工具**，不是 CI 门禁（它要求一个活着的控制面）。所以它不注册测试
- * 清单；改动渲染器后请手动跑一次（STATUS 开放项①）。
+ * 清单；改动渲染器后请手动跑一次。
  */
 import { spawnSync } from 'node:child_process'
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'

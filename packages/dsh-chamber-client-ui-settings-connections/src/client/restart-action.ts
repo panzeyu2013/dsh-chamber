@@ -23,7 +23,7 @@ export type ManagedRestartOutcome =
   | { kind: 'accepted-timeout' }
   /** The route refused the action (409/400) — localized copy, ready to render. */
   | { kind: 'refused'; text: string }
-  /** Transport/poll failure with its own English detail (design 21 §5.2 deviation). */
+  /** Transport/poll failure with its own English detail. */
   | { kind: 'failed'; detail: string }
 
 /** The 409 families every restart entry renders with the same dictionary keys. */
