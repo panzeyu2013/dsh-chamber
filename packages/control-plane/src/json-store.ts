@@ -25,11 +25,8 @@
  *    silent.
  * 6. Load sequence: main → .bak → initial. Initial is permitted only when
  *    both leaves are absent; a present corrupt/unsafe backup is evidence and
- *    fails loudly even when main is absent. A schemaVersion-less legacy main
- *    is migrated in place by the onLoadValidate hook (its `migrated` flag);
- *    the migration persist writes the pre-migration document as the .bak so
- *    recovery re-runs the migration (design 03 §2.1: old file retained as an
- *    explicit backup).
+ *    fails loudly even when main is absent. A rejected main is never rewritten
+ *    and never migrated: the loader only recovers through .bak.
  *
  * Revision semantics: the store owns the counter; every changed mutation
  * bumps doc.revision by one. mutateIfMatch(expected, mutator) throws a typed
@@ -88,16 +85,11 @@ export type JsonStoreRecoveryState =
   | { source: 'main' | 'backup'; dropped: JsonStoreDroppedCounts }
   | null
 
-/**
- * Outcome of the onLoadValidate hook: the cleaned document, the dropped
- * counters, and optionally {migrated: true, backupDoc} for an in-place
- * schema migration (the pre-migration document becomes the .bak).
- */
+/** Outcome of the onLoadValidate hook: the cleaned document and its dropped
+ *  counters. */
 export interface JsonStoreValidateResult {
   doc: JsonStoreDocument
   dropped: JsonStoreDroppedCounts
-  migrated?: boolean
-  backupDoc?: unknown
 }
 
 /** createJsonStore options (see the module header for semantics). */
@@ -110,11 +102,6 @@ interface JsonStoreOptions {
    * Applied to existing files on load and after every open, so umask or a
    * legacy permissive mode cannot silently weaken a secret-bearing store. */
   fileMode?: number
-}
-
-/** persist() options; backupDoc overrides the .bak content (migrations). */
-export interface JsonStorePersistOptions {
-  backupDoc?: unknown
 }
 
 /** Diagnostics projection. */
@@ -149,7 +136,7 @@ export interface JsonStore {
     expectedRevision: number | undefined,
     mutator: JsonStoreMutator,
   ): Promise<JsonStoreMutateResult>
-  persist(doc?: JsonStoreDocument, options?: JsonStorePersistOptions): Promise<boolean>
+  persist(doc?: JsonStoreDocument): Promise<boolean>
   getStatus(): JsonStoreStatus
 }
 
@@ -202,11 +189,9 @@ export function backupPathFor(filePath: string): string {
  *   - logger: {warn(...)} sink for persist failures.
  *   - initial: the empty document used when neither main nor .bak exists.
  *   - onLoadValidate(doc): runtime validation/normalization; must return
- *     {doc, dropped: {connections, projects}}. May additionally return
- *     {migrated: true, backupDoc} to signal an in-place schema migration —
- *     the migrated doc is persisted immediately with the pre-migration
- *     document as the backup. Throwing marks the document as unusable at the
- *     document level and sends the loader down the .bak recovery path.
+ *     {doc, dropped: {connections, projects}}. Throwing marks the document as
+ *     unusable at the document level and sends the loader down the .bak
+ *     recovery path (the rejected main is left untouched).
  *   - fileMode: optional mode enforced on main/.bak during load and on every
  *     private temp/write; intended for owner-only stores that may contain
  *     sensitive data.
@@ -267,7 +252,7 @@ export function createJsonStore({
   /** Run the validation hook; a throw marks the document as unusable. */
   function validateParsed(parsed: JsonStoreDocument): JsonStoreValidateResult {
     if (typeof onLoadValidate !== 'function') {
-      return { doc: parsed, dropped: zeroDropped(), migrated: false }
+      return { doc: parsed, dropped: zeroDropped() }
     }
     const result = onLoadValidate(parsed)
     if (result === null || typeof result !== 'object' || !('doc' in result)) {
@@ -288,20 +273,15 @@ export function createJsonStore({
   /**
    * Backup-first persist: atomic .bak replacement → atomic main replacement.
    * lastPersistSucceededAt and recoveryState are only touched when both
-   * writes succeeded. `options.backupDoc` overrides the backup content (used
-   * by in-place migrations, so the backup holds the pre-migration document).
-   * Failures are logged and thrown. Callers must never report a mutation as
-   * successful when the durable commit failed.
+   * writes succeeded. Failures are logged and thrown. Callers must never report
+   * a mutation as successful when the durable commit failed.
    */
-  function persistSync(doc: JsonStoreDocument, options: JsonStorePersistOptions = {}): void {
+  function persistSync(doc: JsonStoreDocument): void {
     let text: string | null = null
     try {
       mkdirSync(dirname(filePath), { recursive: true, mode: 0o700 })
       text = `${JSON.stringify(doc, undefined, 2)}\n`
-      const backupText = options.backupDoc === undefined
-        ? text
-        : `${JSON.stringify(options.backupDoc, undefined, 2)}\n`
-      atomicWritePrivateFileNoFollow(backupPath, backupText, { mode: fileMode })
+      atomicWritePrivateFileNoFollow(backupPath, text, { mode: fileMode })
       atomicWritePrivateFileNoFollow(filePath, text, { mode: fileMode })
       lastPersistSucceededAt = Date.now()
       recoveryState = null
@@ -334,10 +314,7 @@ export function createJsonStore({
       /* corrupt or unusable → recovery path */
     }
     if (mainResult !== null) {
-      const { doc, dropped: droppedCounts, migrated, backupDoc } = mainResult
-      if (migrated) {
-        persistSync(doc, { backupDoc: backupDoc ?? readParsed(filePath) })
-      }
+      const { doc, dropped: droppedCounts } = mainResult
       return {
         doc,
         dropped: droppedCounts,
@@ -397,9 +374,7 @@ export function createJsonStore({
   return {
     /**
      * Load the document (main → .bak → initial). Returns the loaded document.
-     * Throws on double corruption. A hook-flagged in-place migration is
-     * persisted here (backup-first, pre-migration document as the backup);
-     * a backup-loaded document is never rewritten.
+     * Throws on double corruption. A backup-loaded document is never rewritten.
      */
     load(): JsonStoreDocument {
       const outcome = readDocument()
@@ -470,13 +445,12 @@ export function createJsonStore({
     },
 
     /**
-     * Run a backup-first persist. `doc` defaults to the current document;
-     * `options.backupDoc` overrides the .bak content (migrations).
+     * Run a backup-first persist. `doc` defaults to the current document.
      * @returns a promise resolving with whether both files were written.
      */
-    persist(doc: JsonStoreDocument = state ?? cloneInitial(), options: JsonStorePersistOptions = {}): Promise<boolean> {
+    persist(doc: JsonStoreDocument = state ?? cloneInitial()): Promise<boolean> {
       try {
-        persistSync(doc, options)
+        persistSync(doc)
         return Promise.resolve(true)
       } catch (error) {
         return Promise.reject(error)

@@ -10,10 +10,9 @@
  * "corrupt is never a fake-empty". (The store-level If-Match/409 protocol —
  * json-store mutateIfMatch — is not surfaced through the catalog row
  * APIs; the catalog mutates unconditionally, serialized only within this
- * store instance.) A schemaVersion-less file
- * is treated as v1 and migrated in place to v2 at load, with the original v1
- * document preserved as the .bak (the backup-first protocol handles the
- * ordering).
+ * store instance.) A document with a missing or unknown schemaVersion is
+ * rejected at load: the store fails loudly with the file left untouched (no
+ * in-place migration, never a silent empty).
  *
  * v4 narrowing (01 §4/§5): projects/bindings/adapters are gone — the dsh
  * frontend runtime owns session business and the desktop main process owns
@@ -68,7 +67,6 @@ export interface CatalogDocument {
   schemaVersion: number
   revision: number
   connections: CatalogConnectionRow[]
-  migration: Record<string, unknown>
   [key: string]: unknown
 }
 
@@ -113,7 +111,6 @@ function emptyDoc(): CatalogDocument {
     schemaVersion: CATALOG_SCHEMA_VERSION,
     revision: 0,
     connections: [],
-    migration: { legacyProjectsImported: false, pendingConnectionIds: [] },
   }
 }
 
@@ -138,37 +135,23 @@ function persistedConnectionRow(row: Record<string, unknown>): CatalogConnection
 }
 
 /**
- * Load-time validation + v1→v2 migration. Entry-level failures (missing
- * fields, duplicate ids, non-local kind) drop the row and count it — never
- * silent; document-level failures (bad schemaVersion, revision not a
- * non-negative integer, connections not an array) throw, sending the store
- * down the .bak recovery path. A schemaVersion-less document is v1:
- * migrated in place (schemaVersion 2, revision 0, migration block), with the
- * original v1 document returned as the backup content. v2 legacy documents
- * may still carry a `projects` array; it is stripped at
- * load — v4 has no project table (01 §4).
+ * Load-time validation. Entry-level failures (missing fields, duplicate ids,
+ * non-local kind) drop the row and count it — never silent; document-level
+ * failures (missing/unknown schemaVersion, revision not a non-negative
+ * integer, connections not an array) throw, sending the store down the .bak
+ * recovery path and leaving the rejected file untouched. Legacy `projects` /
+ * `migration` copies are stripped at load — v4 has no project table and the
+ * v1→v2 migration is gone (01 §4).
  * @param raw - the parsed document, read from disk.
- * @returns {doc, dropped, migrated, backupDoc?} — the cleaned document and
- *   dropped counters; throws when the document is unusable as a whole.
+ * @returns {doc, dropped} — the cleaned document and dropped counters; throws
+ *   when the document is unusable as a whole.
  */
 // The store hands the hook a parsed document of unknown shape; internal use only.
 type RawCatalogDocument = any
 
-function validateAndMigrate(raw: RawCatalogDocument): JsonStoreValidateResult {
+function validateCatalog(raw: RawCatalogDocument): JsonStoreValidateResult {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
     throw new Error('catalog: document is not an object')
-  }
-  if (raw.schemaVersion === undefined) {
-    if (!Array.isArray(raw.connections)) {
-      throw new Error('catalog: v1 document without connections array')
-    }
-    const next = {
-      ...raw,
-      schemaVersion: CATALOG_SCHEMA_VERSION,
-      revision: 0,
-      migration: { legacyProjectsImported: false, pendingConnectionIds: [] },
-    }
-    return { ...validateEntries(next), migrated: true, backupDoc: raw }
   }
   if (raw.schemaVersion !== CATALOG_SCHEMA_VERSION) {
     throw new Error(`catalog: unsupported schemaVersion ${String(raw.schemaVersion)}`)
@@ -179,10 +162,7 @@ function validateAndMigrate(raw: RawCatalogDocument): JsonStoreValidateResult {
   if (!Array.isArray(raw.connections)) {
     throw new Error('catalog: connections must be an array')
   }
-  const doc = raw.migration === undefined || raw.migration === null || typeof raw.migration !== 'object'
-    ? { ...raw, migration: { legacyProjectsImported: false, pendingConnectionIds: [] } }
-    : raw
-  return { ...validateEntries(doc), migrated: false }
+  return validateEntries(raw)
 }
 
 /**
@@ -190,9 +170,8 @@ function validateAndMigrate(raw: RawCatalogDocument): JsonStoreValidateResult {
  * counted; the counters surface through the store's recovery state. Rows
  * whose kind is not 'local' are dropped (v4: the catalog never holds remote
  * instances). Valid rows are narrowed to durable metadata, stripping legacy
- * status/dshPort/error projections. The legacy `projects` array is stripped
- * — v4 has no project table and the dsh frontend runtime owns session
- * business.
+ * status/dshPort/error projections. Legacy `projects`/`migration` fields are
+ * stripped — v4 has no project table and the v1→v2 migration is gone.
  */
 function validateEntries(doc: RawCatalogDocument): CatalogValidateResult {
   const dropped: JsonStoreDroppedCounts = { connections: 0, projects: 0 }
@@ -212,6 +191,7 @@ function validateEntries(doc: RawCatalogDocument): CatalogValidateResult {
   }
   const next: CatalogDocument = { ...doc, connections }
   delete next.projects
+  delete next.migration
   return { doc: next, dropped }
 }
 
@@ -227,7 +207,7 @@ export function createCatalog({ stateDir, logger }: CatalogOptions): Catalog {
     filePath: file,
     logger,
     initial: emptyDoc(),
-    onLoadValidate: validateAndMigrate,
+    onLoadValidate: validateCatalog,
   })
 
   /** Internal live document. Public row readers return clones. */
