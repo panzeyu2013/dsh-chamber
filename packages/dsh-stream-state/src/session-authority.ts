@@ -1,7 +1,7 @@
 /**
  * SessionFactAuthority - the SINGLE owner of "is this session actually running".
  *
- * P1 of the session-authority refactor (docs/progress/todo/session-authority-refactor.md).
+ * P1 of the session-authority refactor.
  *
  * WHY THIS EXISTS. The official store's \`running\` bit is delivered only by an emit-type
  * mux event with no retransmission, so losing one frame (or a silently half-dead carrier)

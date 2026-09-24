@@ -11,7 +11,7 @@
  * -> quota -> surface. This module owns that skeleton once; each caller supplies
  * its signals, its tier table and its action mapping.
  *
- * THE LOAD-BEARING DISCIPLINE (as in session-liveness.ts:34-41): silence alone
+ * THE LOAD-BEARING DISCIPLINE (design 14 §D4): silence alone
  * must NOT escalate past the first tier. Long tool runs and long reasoning are
  * legitimate silences indistinguishable from a real stall at this layer, and every
  * escalation replays the baseline of every open session. So a tier is gated on
